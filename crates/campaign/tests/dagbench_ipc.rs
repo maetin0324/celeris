@@ -299,3 +299,214 @@ fn disconnect_and_timeout_return_err_within_bounds() {
     server.join().unwrap();
     assert!(c.now().is_err());
 }
+
+// ---- 通知主導（push の有界 blocking receive + 永続適用後 ack + 処理証跡 ledger）----
+
+fn channel(sock: &Path, ledger: &Path, side: &str, client: &str) -> NoticeChannel {
+    NoticeChannel::new(
+        IpcExt::connect_unix(sock, client, opts()),
+        NoticeLedger::open(ledger, side).unwrap(),
+        20,
+    )
+}
+
+#[test]
+fn dagbench_notice_receive_is_bounded_and_ack_is_selective() {
+    let d = tempfile::tempdir().unwrap();
+    let sd = sock_dir();
+    let sock = sd.path().join("e.sock");
+    let server = spawn_server(&sock, &d.path().join("ext.jsonl"), cfg(vec![])).unwrap();
+    let mut ctl = IpcExt::connect_unix(&sock, "control", opts());
+    let mut rx = IpcExt::connect_unix(&sock, "notice-rx", opts());
+    // 通知が無ければ上限で空を返す（無限に待たない・時計は進めない）。
+    let t = Instant::now();
+    assert!(rx.receive(60, 0).unwrap().is_empty());
+    assert!(t.elapsed() < Duration::from_secs(3));
+    ctl.submit("j1", 60).unwrap().unwrap();
+    ctl.submit("j2", 60).unwrap().unwrap();
+    assert!(rx.receive(0, 0).unwrap().is_empty());
+    // 外部時計を進める側（advance）とは別に、push で届く。
+    ctl.advance(60).unwrap();
+    let got = rx.receive(1000, 0).unwrap();
+    assert_eq!(got.len(), 2);
+    // advance 側の ack（piggyback）は push の outbox を減らさない。未 ack は再配送される。
+    ctl.flush_ack().unwrap();
+    assert_eq!(rx.receive(0, 0).unwrap(), got);
+    assert!(rx.receive(0, got[1].seq).unwrap().is_empty());
+    // 選択的 ack: 1 件だけ捨てる。
+    rx.ack_notice(got[0].seq).unwrap();
+    assert_eq!(rx.receive(0, 0).unwrap(), vec![got[1].clone()]);
+    rx.ack_notice(got[1].seq).unwrap();
+    assert!(rx.receive(0, 0).unwrap().is_empty());
+    rx.shutdown_server().unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn dagbench_notice_restart_between_apply_and_ack_does_not_apply_twice() {
+    let d = tempfile::tempdir().unwrap();
+    let sd = sock_dir();
+    let sock = sd.path().join("e.sock");
+    let nl = d.path().join("notice.jsonl");
+    let server = spawn_server(&sock, &d.path().join("ext.jsonl"), cfg(vec![])).unwrap();
+    let mut ctl = IpcExt::connect_unix(&sock, "control", opts());
+    ctl.submit("j1", 10).unwrap().unwrap();
+    ctl.advance(10).unwrap();
+
+    // 1 回目の incarnation: 受信して永続適用（processed）まで記録したが、ack の前に止まる。
+    let mut a = channel(&sock, &nl, "celeris", "notice-1");
+    let got = a.receive().unwrap();
+    assert_eq!(got.len(), 1);
+    a.ledger_mut()
+        .append(
+            "notice_processed",
+            Some(got[0].seq),
+            Some(0),
+            Some("j1"),
+            Some("phys-1"),
+            &NoticeIds::default(),
+            Some("finished"),
+        )
+        .unwrap();
+    drop(a);
+
+    // 再起動: server は未 ack を再配送する。processed 済みの seq は適用せず ack だけ返す。
+    let mut b = channel(&sock, &nl, "celeris", "notice-2");
+    assert!(b.ledger().processed(got[0].seq));
+    let again = b.receive().unwrap();
+    assert_eq!(again, got);
+    b.settle(
+        &again[0],
+        &Settled {
+            outcome: "redelivered".into(),
+            suppressed: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(b.receive().unwrap().is_empty());
+    let entries = read_notice_ledger(&nl).unwrap();
+    let c = count_notices(&entries);
+    assert_eq!(c.received, 2, "{entries:?}");
+    assert_eq!(c.suppressed, 1);
+    assert_eq!(c.acked, 1);
+    assert!(entries.iter().all(|e| e.role == "control_consume"));
+    ctl.shutdown_server().unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn dagbench_notice_baseline_resumes_by_push_and_suppresses_duplicates() {
+    let d = tempfile::tempdir().unwrap();
+    let sd = sock_dir();
+    let sock = sd.path().join("e.sock");
+    let ext_ledger = d.path().join("ext.jsonl");
+    let nl = d.path().join("notice.jsonl");
+    let server = spawn_server(&sock, &ext_ledger, cfg(vec![dup_fault()])).unwrap();
+    let mut ipc = IpcExt::connect_unix(&sock, "control", opts());
+    let sc = load_scenario(&scenarios(), "k2-mini").unwrap();
+    let mut b = Baseline::open(
+        sc,
+        BaselineConfig {
+            poll_secs: 30,
+            ext_job_secs: 330,
+        },
+        &d.path().join("state.json"),
+    )
+    .unwrap();
+    b.set_notices(channel(&sock, &nl, "baseline", "notice-rx"));
+    assert_eq!(b.run(&mut ipc).unwrap(), Outcome::Complete);
+    ipc.shutdown_server().unwrap();
+    server.join().unwrap();
+
+    let ext = count(&read_ledger(&ext_ledger).unwrap());
+    let n = read_notice_ledger(&nl).unwrap();
+    let c = count_notices(&n);
+    assert!(ext.logical_jobs > 0);
+    assert_eq!(ext.consumed, ext.logical_jobs);
+    assert_eq!(ext.physical_launches, ext.logical_jobs);
+    assert_eq!(ext.lookups, 0, "completion is not searched by lookup");
+    // 独立観測の notice_sent（外部が送った）と、制御側が消費した記録（control_consume）は別 file。
+    assert_eq!(c.received, ext.notices_sent);
+    assert_eq!(c.processed, c.received);
+    assert_eq!(c.acked, c.received);
+    assert_eq!(c.continuations, ext.logical_jobs);
+    assert!(c.suppressed >= 1, "the duplicate copy is suppressed: {n:?}");
+    assert!(
+        n.iter()
+            .all(|e| e.side == "baseline" && e.role == "control_consume")
+    );
+}
+
+#[test]
+fn dagbench_notice_celeris_side_resumes_by_push_with_polling_disabled() {
+    let file = load_scenarios(&scenarios()).unwrap();
+    let spec = RunSpec::resolve(&file, "k2-mini", "camp-1", file.seed).unwrap();
+    let env = api_common::admin_env();
+    let out = env.dir.path().join("dagbench");
+    std::fs::create_dir_all(&out).unwrap();
+    let paths = Paths::under(&env.db_path, &out);
+    let store: Arc<dyn TaskStore> = Arc::new(task_core::SqliteStore::open(&env.db_path).unwrap());
+    let sd = sock_dir();
+    let sock = sd.path().join("e.sock");
+    let nl = out.join("notice.jsonl");
+    let server = spawn_server(
+        &sock,
+        &paths.ext_ledger,
+        ExtConfig {
+            poll_secs: spec.poll_secs,
+            job_slots: spec.scenario.resources.external_job_slots,
+            faults: vec![dup_fault()],
+        },
+    )
+    .unwrap();
+    let ipc = IpcExt::connect_unix(&sock, "control", opts());
+    let transport = RouterTransport(env.router());
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .unwrap();
+    let ledger = paths.ext_ledger.clone();
+    let (report, attempts) = rt.block_on(async {
+        let mut side = CelerisSide::with_backend(spec, paths, store, Box::new(ipc)).unwrap();
+        side.enable_notices(channel(&sock, &nl, "celeris", "notice-rx"), true);
+        let r = side.drive(&transport).await;
+        (r, side.poll_attempts())
+    });
+    let report = report.unwrap_or_else(|e| panic!("drive failed: {e}"));
+    assert!(report.campaigns.iter().all(|c| c.status == "done"));
+    IpcExt::connect_unix(&sock, "observer", opts())
+        .shutdown_server()
+        .unwrap();
+    server.join().unwrap();
+
+    let ext = count(&read_ledger(&ledger).unwrap());
+    let n = read_notice_ledger(&nl).unwrap();
+    let c = count_notices(&n);
+    assert!(ext.logical_jobs > 0);
+    assert_eq!(ext.consumed, ext.logical_jobs);
+    assert_eq!(ext.physical_launches, ext.logical_jobs);
+    assert_eq!(
+        ext.lookups, 0,
+        "poll was disabled; nothing looked completion up"
+    );
+    assert_eq!(
+        c.continuations, ext.logical_jobs,
+        "one continuation per job: {n:?}"
+    );
+    assert_eq!(c.acked, c.processed);
+    assert!(c.suppressed >= 1, "{n:?}");
+    // 継続の記録は wait / task / run の ID を持つ。
+    assert!(
+        n.iter()
+            .filter(|e| e.event == "notice_continuation")
+            .all(|e| {
+                e.wait_id.is_some()
+                    && e.task_id.is_some()
+                    && e.run_id.is_some()
+                    && e.logical_job_id.is_some()
+            })
+    );
+    let _ = attempts; // poll は試みられても失敗するだけで、再開には使われない。
+}

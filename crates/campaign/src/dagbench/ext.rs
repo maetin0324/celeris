@@ -568,3 +568,186 @@ pub fn count(entries: &[Entry]) -> LedgerCounts {
         lookups: n("lookup"),
     }
 }
+
+// ---- 通知の処理証跡（独立 ledger）----
+
+/// 通知処理 ledger の 1 行。制御側が通知を **消費した** 事実（`role = control_consume`）を持つ。
+/// 外部側の独立観測（[`Entry`] の `notice_sent`、observer の `observe`）とは別 file・別 role で、混ぜて数えない。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoticeEntry {
+    pub seq: u64,
+    pub dataset: String,
+    /// `control_consume` 固定（独立観測と区別する）。
+    pub role: String,
+    /// `celeris` / `baseline`。
+    pub side: String,
+    /// `notice_received` / `notice_held` / `notice_processed` / `notice_duplicate_suppressed` /
+    /// `notice_continuation` / `notice_acked` / `startup_lookup`。
+    pub event: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_job_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physical_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_unit_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+}
+
+pub const NOTICE_ROLE: &str = "control_consume";
+
+/// 通知の行き先 ID（wait / task / work-unit / run）。baseline には wait が無いので全て空でよい。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NoticeIds {
+    pub wait_id: Option<String>,
+    pub task_id: Option<String>,
+    pub work_unit_id: Option<String>,
+    pub run_id: Option<String>,
+}
+
+/// 通知処理の追記専用 ledger（1 行ごとに sync）。開き直すと全行から「処理済み seq」「消費済み論理 job」
+/// 「受信時に解決した ID」を復元するので、再起動後の重複抑止はこの file だけが根拠になる。
+pub struct NoticeLedger {
+    file: File,
+    path: PathBuf,
+    side: String,
+    seq: u64,
+    entries: Vec<NoticeEntry>,
+}
+
+impl NoticeLedger {
+    pub fn open(path: &Path, side: &str) -> std::io::Result<Self> {
+        drop_torn_tail(path)?;
+        let entries = read_notice_ledger(path)?;
+        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        Ok(Self {
+            file,
+            path: path.to_path_buf(),
+            side: side.to_string(),
+            seq: entries.iter().map(|e| e.seq).max().unwrap_or(0),
+            entries,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// 通知 seq を `notice_processed` まで済ませたか（再配送の重複抑止）。
+    pub fn processed(&self, notice_seq: u64) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.event == "notice_processed" && e.notice_seq == Some(notice_seq))
+    }
+
+    /// 論理 job の continuation / 消費が済んだか（同じ job の重複通知 copy の抑止）。
+    pub fn logical_consumed(&self, logical: &str) -> bool {
+        self.entries.iter().any(|e| {
+            e.event == "notice_processed"
+                && e.logical_job_id.as_deref() == Some(logical)
+                && matches!(e.outcome.as_deref(), Some("finished" | "consumed"))
+        })
+    }
+
+    /// 受信時に解決済みの wait ID（適用と ledger 記録の間で止まった後の再配送で、閉じた wait を引く）。
+    pub fn resolved_wait(&self, notice_seq: u64) -> Option<String> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|e| e.notice_seq == Some(notice_seq) && e.wait_id.is_some())
+            .and_then(|e| e.wait_id.clone())
+    }
+
+    /// 同じ seq の受信を以前にも記録したか。
+    pub fn received_before(&self, notice_seq: u64) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.event == "notice_received" && e.notice_seq == Some(notice_seq))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn append(
+        &mut self,
+        event: &str,
+        notice_seq: Option<u64>,
+        copy: Option<u32>,
+        logical: Option<&str>,
+        physical: Option<&str>,
+        ids: &NoticeIds,
+        outcome: Option<&str>,
+    ) -> std::io::Result<()> {
+        self.seq += 1;
+        let e = NoticeEntry {
+            seq: self.seq,
+            dataset: DATASET.to_string(),
+            role: NOTICE_ROLE.to_string(),
+            side: self.side.clone(),
+            event: event.to_string(),
+            notice_seq,
+            copy,
+            logical_job_id: logical.map(str::to_string),
+            physical_id: physical.map(str::to_string),
+            wait_id: ids.wait_id.clone(),
+            task_id: ids.task_id.clone(),
+            work_unit_id: ids.work_unit_id.clone(),
+            run_id: ids.run_id.clone(),
+            outcome: outcome.map(str::to_string),
+        };
+        let mut line = serde_json::to_string(&e).map_err(std::io::Error::other)?;
+        line.push('\n');
+        self.file.write_all(line.as_bytes())?;
+        self.file.sync_data()?;
+        self.entries.push(e);
+        Ok(())
+    }
+}
+
+pub fn read_notice_ledger(path: &Path) -> std::io::Result<Vec<NoticeEntry>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for line in BufReader::new(File::open(path)?).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        out.push(serde_json::from_str(&line).map_err(std::io::Error::other)?);
+    }
+    Ok(out)
+}
+
+/// 通知 ledger の独立集計（制御側の自己申告を使わない）。
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct NoticeCounts {
+    pub received: usize,
+    pub held: usize,
+    pub processed: usize,
+    pub suppressed: usize,
+    pub continuations: usize,
+    pub acked: usize,
+    pub startup_lookups: usize,
+}
+
+pub fn count_notices(entries: &[NoticeEntry]) -> NoticeCounts {
+    let n = |ev: &str| entries.iter().filter(|e| e.event == ev).count();
+    NoticeCounts {
+        received: n("notice_received"),
+        held: n("notice_held"),
+        processed: n("notice_processed"),
+        suppressed: n("notice_duplicate_suppressed"),
+        continuations: n("notice_continuation"),
+        acked: n("notice_acked"),
+        startup_lookups: n("startup_lookup"),
+    }
+}

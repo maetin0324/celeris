@@ -47,10 +47,10 @@ use std::{
     os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -90,6 +90,17 @@ pub enum Op {
     },
     /// 単独の ack（他の要求にも `ack` 欄が載る）。
     Ack,
+    /// 外部 push の有界 blocking receive（測定用の最小フック）。push 用 outbox に `seq > after_seq` の通知が
+    /// 来るまで最大 `wait_ms`（server 側で [`MAX_RECEIVE_WAIT_MS`] に切る）だけ待ち、無ければ空で返る。
+    /// 時計は進めず、`ack` 欄で outbox を捨てることもない。
+    Receive {
+        wait_ms: u64,
+        after_seq: u64,
+    },
+    /// push 用 outbox から `seq` の通知 1 件だけを捨てる（選択的 ack）。**永続適用の後で** 呼ぶ。
+    AckNotice {
+        seq: u64,
+    },
     /// server を止める。応答の後で全接続を閉じ、[`serve`] が戻る。
     Shutdown,
 }
@@ -136,6 +147,10 @@ pub enum Body {
         /// この応答の時点で ledger に sync 済みの最後の seq（= 完了 ledger の sync ack）。
         ledger_seq: u64,
     },
+    /// `Receive` の応答（push 用 outbox の `seq > after_seq` の通知。時間切れなら空）。
+    Pushed {
+        notices: Vec<SeqNotice>,
+    },
     Now {
         secs: u64,
     },
@@ -160,6 +175,8 @@ struct State {
     sim: ExtSim,
     next_seq: u64,
     outbox: Vec<SeqNotice>,
+    /// push 受信用の outbox（`Receive` / `AckNotice` だけが触る。`advance` の ack では減らない）。
+    pushbox: Vec<SeqNotice>,
     /// client ごとの直近の応答（同じ id の再送に返す）。
     last: BTreeMap<String, Response>,
     conns: Vec<UnixStream>,
@@ -210,10 +227,12 @@ pub fn serve(listener: UnixListener, sim: ExtSim) -> io::Result<()> {
         sim,
         next_seq: 0,
         outbox: Vec::new(),
+        pushbox: Vec::new(),
         last: BTreeMap::new(),
         conns: Vec::new(),
     }));
     let stop = Arc::new(AtomicBool::new(false));
+    let wake = Arc::new(Condvar::new());
     let mut workers = Vec::new();
     for conn in listener.incoming() {
         if stop.load(Ordering::SeqCst) {
@@ -224,8 +243,9 @@ pub fn serve(listener: UnixListener, sim: ExtSim) -> io::Result<()> {
             lock(&state).conns.push(c);
         }
         let (state, stop, path) = (Arc::clone(&state), Arc::clone(&stop), self_path.clone());
+        let wake = Arc::clone(&wake);
         workers.push(std::thread::spawn(move || {
-            handle_conn(conn, &state, &stop, path.as_deref())
+            handle_conn(conn, &state, &wake, &stop, path.as_deref())
         }));
     }
     for c in lock(&state).conns.drain(..) {
@@ -241,7 +261,16 @@ fn lock(s: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
     s.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn handle_conn(conn: UnixStream, state: &Mutex<State>, stop: &AtomicBool, wake: Option<&Path>) {
+/// `Receive` が 1 回に待つ上限（ms）。server の停止も遅らせないよう短い刻みで起きて確かめる。
+pub const MAX_RECEIVE_WAIT_MS: u64 = 5_000;
+
+fn handle_conn(
+    conn: UnixStream,
+    state: &Mutex<State>,
+    cv: &Condvar,
+    stop: &AtomicBool,
+    wake: Option<&Path>,
+) {
     let Ok(read) = conn.try_clone() else { return };
     let mut write = conn;
     for line in BufReader::new(read).lines() {
@@ -263,7 +292,15 @@ fn handle_conn(conn: UnixStream, state: &Mutex<State>, stop: &AtomicBool, wake: 
             }
             Ok(req) => {
                 shutdown = req.op == Op::Shutdown && req.v == PROTOCOL_VERSION;
-                respond(&mut lock(state), req)
+                if let (Op::Receive { wait_ms, after_seq }, true) =
+                    (&req.op, req.v == PROTOCOL_VERSION)
+                {
+                    receive(state, cv, stop, &req, *wait_ms, *after_seq)
+                } else {
+                    let r = respond(&mut lock(state), req);
+                    cv.notify_all();
+                    r
+                }
             }
         };
         let Ok(mut out) = serde_json::to_string(&resp) else {
@@ -282,6 +319,48 @@ fn handle_conn(conn: UnixStream, state: &Mutex<State>, stop: &AtomicBool, wake: 
             return;
         }
     }
+}
+
+/// 有界 blocking receive。重複要求（同じ `(client, id)`）には前回の応答を返す。
+fn receive(
+    state: &Mutex<State>,
+    cv: &Condvar,
+    stop: &AtomicBool,
+    req: &Request,
+    wait_ms: u64,
+    after_seq: u64,
+) -> Response {
+    let mut g = lock(state);
+    if let Some(prev) = g.last.get(&req.client)
+        && prev.id == req.id
+    {
+        return prev.clone();
+    }
+    let deadline = Instant::now() + Duration::from_millis(wait_ms.min(MAX_RECEIVE_WAIT_MS));
+    loop {
+        let fresh = g.pushbox.iter().any(|n| n.seq > after_seq);
+        let left = deadline.saturating_duration_since(Instant::now());
+        if fresh || left.is_zero() || stop.load(Ordering::SeqCst) {
+            break;
+        }
+        g = cv
+            .wait_timeout(g, left.min(Duration::from_millis(100)))
+            .unwrap_or_else(|e| e.into_inner())
+            .0;
+    }
+    let notices = g
+        .pushbox
+        .iter()
+        .filter(|n| n.seq > after_seq)
+        .cloned()
+        .collect();
+    let resp = Response {
+        v: PROTOCOL_VERSION,
+        id: req.id,
+        body: Body::Pushed { notices },
+    };
+    g.last.insert(req.client.clone(), resp.clone());
+    resp
 }
 
 fn respond(st: &mut State, req: Request) -> Response {
@@ -307,7 +386,10 @@ fn respond(st: &mut State, req: Request) -> Response {
         return prev.clone();
     }
     // observer の要求は ack を持たない（持っていても outbox を捨てない）。
-    if !matches!(req.op, Op::Observe { .. }) {
+    if !matches!(
+        req.op,
+        Op::Observe { .. } | Op::Receive { .. } | Op::AckNotice { .. }
+    ) {
         st.outbox.retain(|n| n.seq > req.ack);
     }
     let io_err = |e: io::Error| Body::Error {
@@ -329,6 +411,10 @@ fn respond(st: &mut State, req: Request) -> Response {
                 for notice in ready {
                     st.next_seq += 1;
                     let seq = st.next_seq;
+                    st.pushbox.push(SeqNotice {
+                        seq,
+                        notice: notice.clone(),
+                    });
                     st.outbox.push(SeqNotice { seq, notice });
                 }
                 Body::Advance {
@@ -342,6 +428,10 @@ fn respond(st: &mut State, req: Request) -> Response {
                 for notice in ready {
                     st.next_seq += 1;
                     let seq = st.next_seq;
+                    st.pushbox.push(SeqNotice {
+                        seq,
+                        notice: notice.clone(),
+                    });
                     st.outbox.push(SeqNotice { seq, notice });
                 }
                 Body::Observed {
@@ -361,7 +451,12 @@ fn respond(st: &mut State, req: Request) -> Response {
         Op::DueSecs { logical } => Body::DueSecs {
             secs: st.sim.due_secs(&logical),
         },
-        Op::Ack | Op::Shutdown => Body::Unit,
+        Op::AckNotice { seq } => {
+            st.pushbox.retain(|n| n.seq != seq);
+            Body::Unit
+        }
+        // `Receive` は handle_conn が先に処理する（ここへ来るのは版違いの時だけで、その時は上で弾かれている）。
+        Op::Ack | Op::Shutdown | Op::Receive { .. } => Body::Unit,
     };
     let resp = reply(req.id, body);
     st.last.insert(req.client, resp.clone());
@@ -445,6 +540,24 @@ impl IpcExt {
             } => Ok((now, high_seq, unacked, ledger_seq)),
             b => Err(unexpected(b)),
         }
+    }
+
+    /// 外部 push の有界 blocking receive。`after_seq` より新しい未 ack の通知を返す（最大 `wait_ms` 待つ。
+    /// `wait_ms` は `io_timeout` の半分に切るので、待ちは必ず client の期限より先に終わる）。
+    pub fn receive(&mut self, wait_ms: u64, after_seq: u64) -> io::Result<Vec<SeqNotice>> {
+        let cap = (self.opts.io_timeout.as_millis() / 2) as u64;
+        match self.call(Op::Receive {
+            wait_ms: wait_ms.min(cap),
+            after_seq,
+        })? {
+            Body::Pushed { notices } => Ok(notices),
+            b => Err(unexpected(b)),
+        }
+    }
+
+    /// push 用 outbox から `seq` を捨てる。永続適用の後でだけ呼ぶ。
+    pub fn ack_notice(&mut self, seq: u64) -> io::Result<()> {
+        self.call(Op::AckNotice { seq }).map(|_| ())
     }
 
     /// server を止める（応答を待つ。切断済みなら Err）。
@@ -599,5 +712,119 @@ impl ExtBackend for IpcExt {
             Body::DueSecs { secs } => Ok(secs),
             b => Err(unexpected(b)),
         }
+    }
+}
+
+// ---- 通知の受信側（制御側が通知を消費する窓口）----
+
+/// 通知 1 件の処理結果（[`NoticeChannel::settle`] に渡す）。
+#[derive(Debug, Clone, Default)]
+pub struct Settled {
+    /// `applied` / `finished` / `consumed` / `duplicate` / `unknown_job`。
+    pub outcome: String,
+    /// 重複・別 job などで何も消費しなかった（`notice_duplicate_suppressed` を残す）。
+    pub suppressed: bool,
+    /// この通知で continuation（wait の完了・消費）に入った（`notice_continuation` を残す）。
+    pub continuation: bool,
+    pub ids: super::ext::NoticeIds,
+}
+
+/// 外部 push の有界 blocking receive と、処理証跡 ledger、永続適用後の ack を束ねる。
+///
+/// - 受信は [`IpcExt::receive`]（時計は進めない・完了状態の polling ではない）。登録前到着などで [`NoticeChannel::hold`]
+///   された通知は ack せず手元に持ち、次の [`NoticeChannel::receive`] でもう一度渡す（server からは再配送されない）。
+/// - [`NoticeChannel::settle`] は `notice_processed` を ledger に sync してから ack する。適用と ack の間で止まっても、
+///   server は未 ack の通知を再配送し、`processed` 済みの seq は適用せずに ack だけ返す（重複抑止）。
+pub struct NoticeChannel {
+    rx: IpcExt,
+    ledger: super::ext::NoticeLedger,
+    wait_ms: u64,
+    after_seq: u64,
+    held: Vec<SeqNotice>,
+}
+
+impl NoticeChannel {
+    pub fn new(rx: IpcExt, ledger: super::ext::NoticeLedger, wait_ms: u64) -> Self {
+        Self {
+            rx,
+            ledger,
+            wait_ms,
+            after_seq: 0,
+            held: Vec::new(),
+        }
+    }
+
+    pub fn ledger(&self) -> &super::ext::NoticeLedger {
+        &self.ledger
+    }
+
+    pub fn ledger_mut(&mut self) -> &mut super::ext::NoticeLedger {
+        &mut self.ledger
+    }
+
+    /// 保留中の通知と、新しく届いた通知（最大 `wait_ms` 待つ）を返す。受信は ledger に残す。
+    pub fn receive(&mut self) -> io::Result<Vec<SeqNotice>> {
+        let wait = if self.held.is_empty() {
+            self.wait_ms
+        } else {
+            0
+        };
+        let fresh = self.rx.receive(wait, self.after_seq)?;
+        let mut out = std::mem::take(&mut self.held);
+        for sn in fresh {
+            self.after_seq = self.after_seq.max(sn.seq);
+            let again = self.ledger.received_before(sn.seq);
+            self.ledger.append(
+                "notice_received",
+                Some(sn.seq),
+                Some(sn.notice.copy),
+                Some(&sn.notice.logical_job_id),
+                Some(&sn.notice.physical_id),
+                &Default::default(),
+                again.then_some("redelivered"),
+            )?;
+            out.push(sn);
+        }
+        Ok(out)
+    }
+
+    /// 登録前到着など、まだ消費できない通知。ack せず次の [`Self::receive`] でもう一度渡す。
+    pub fn hold(&mut self, sn: SeqNotice) -> io::Result<()> {
+        self.ledger.append(
+            "notice_held",
+            Some(sn.seq),
+            Some(sn.notice.copy),
+            Some(&sn.notice.logical_job_id),
+            Some(&sn.notice.physical_id),
+            &Default::default(),
+            None,
+        )?;
+        self.held.push(sn);
+        Ok(())
+    }
+
+    /// 永続の適用が済んだ通知を記録し、**その後で** ack する。
+    pub fn settle(&mut self, sn: &SeqNotice, s: &Settled) -> io::Result<()> {
+        let n = &sn.notice;
+        let rec = |l: &mut super::ext::NoticeLedger, ev: &str, outcome: &str| {
+            l.append(
+                ev,
+                Some(sn.seq),
+                Some(n.copy),
+                Some(&n.logical_job_id),
+                Some(&n.physical_id),
+                &s.ids,
+                Some(outcome),
+            )
+        };
+        if s.continuation {
+            rec(&mut self.ledger, "notice_continuation", &s.outcome)?;
+        }
+        if s.suppressed {
+            rec(&mut self.ledger, "notice_duplicate_suppressed", &s.outcome)?;
+        }
+        rec(&mut self.ledger, "notice_processed", &s.outcome)?;
+        self.rx.ack_notice(sn.seq)?;
+        rec(&mut self.ledger, "notice_acked", &s.outcome)
     }
 }

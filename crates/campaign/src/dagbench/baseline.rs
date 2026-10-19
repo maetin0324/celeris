@@ -24,7 +24,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::ext::{ExtBackend, JobState, Lookup, SubmitError};
+use super::{
+    ext::{ExtBackend, JobState, Lookup, SubmitError},
+    ipc::{NoticeChannel, Settled},
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScenarioFile {
@@ -165,6 +168,8 @@ pub struct Baseline {
     stop_after_saves: Option<u64>,
     progress: Option<(File, u64)>,
     worker_log: Option<WorkerLog>,
+    /// 外部 push の通知窓口（測定用の最小フック）。あれば完了は通知だけで知り、poll の照会で探さない。
+    notices: Option<NoticeChannel>,
 }
 
 /// 作業の開始・終了の独立記録（metrics が生ログとして読む。`celeris_side` の worker ledger と同じ形）。
@@ -248,6 +253,7 @@ impl Baseline {
             stop_after_saves: None,
             progress: None,
             worker_log: None,
+            notices: None,
         };
         // 実行中だった作業は止まった時点で失われているので、最初からやり直す。
         for n in b.state.nodes.values_mut() {
@@ -270,6 +276,68 @@ impl Baseline {
             .open(path)?;
         self.worker_log = Some(WorkerLog { file, seq });
         Ok(())
+    }
+
+    /// 通知主導にする。`run` は完了を `ext.advance` の返す通知でも poll の `lookup` でも探さず、`channel` が
+    /// 受信した push 通知（同じ通知）だけで待機を再開する。復旧時の起動照会（`run` の先頭の 1 回）は残る。
+    pub fn set_notices(&mut self, channel: NoticeChannel) {
+        self.notices = Some(channel);
+    }
+
+    /// 通知を有界 blocking receive で受け、待機中の node を消費する。消費の保存（state）と ledger の後で ack する。
+    /// 停止点に達したら `true`。
+    fn pump_notices(&mut self, ext: &mut dyn ExtBackend, ids: &[String]) -> Result<bool, Error> {
+        let Some(mut ch) = self.notices.take() else {
+            return Ok(false);
+        };
+        let r = self.pump_with(&mut ch, ext, ids);
+        self.notices = Some(ch);
+        r
+    }
+
+    fn pump_with(
+        &mut self,
+        ch: &mut NoticeChannel,
+        ext: &mut dyn ExtBackend,
+        ids: &[String],
+    ) -> Result<bool, Error> {
+        for sn in ch.receive()? {
+            let l = &sn.notice.logical_job_id;
+            let hit = ids.iter().find(|i| &self.logical_id(i) == l).cloned();
+            let waiting = hit
+                .as_ref()
+                .is_some_and(|i| self.state.nodes[i].status == Status::Waiting);
+            let mut settled = Settled::default();
+            if ch.ledger().processed(sn.seq) {
+                // 適用と ack の間の再起動後の再配送。
+                settled.outcome = "redelivered".into();
+                settled.suppressed = true;
+            } else if let (true, Some(id)) = (waiting, hit.clone()) {
+                let stop = self.complete_wait(ext, &id)?;
+                settled.outcome = "consumed".into();
+                settled.continuation = true;
+                ch.settle(&sn, &settled)?;
+                if stop {
+                    return Ok(true);
+                }
+                continue;
+            } else if hit.as_ref().is_some_and(|i| {
+                matches!(
+                    self.state.nodes[i].status,
+                    Status::Submitted | Status::SubmitPending
+                )
+            }) {
+                // 登録前到着（投入の結果を保存する前に着いた）: ack せず待機が始まるまで保留する。
+                ch.hold(sn)?;
+                continue;
+            } else {
+                settled.outcome = "duplicate".into();
+                settled.suppressed = true;
+                self.state.duplicate_notices_ignored += 1;
+            }
+            ch.settle(&sn, &settled)?;
+        }
+        Ok(false)
     }
 
     fn log(&mut self, event: &str, id: &str) {
@@ -510,7 +578,12 @@ impl Baseline {
             };
             self.state.now = t.max(self.state.now);
             let notices = ext.advance(self.state.now)?;
-            for nt in notices {
+            // 通知主導: advance が返す通知は使わない（時計を進めるだけ）。完了は push の実受信で知る。
+            let by_push = self.notices.is_some();
+            if by_push && self.pump_notices(ext, &ids)? {
+                return Ok(Outcome::Interrupted);
+            }
+            for nt in notices.into_iter().filter(|_| !by_push) {
                 let hit = ids
                     .iter()
                     .find(|i| self.logical_id(i) == nt.logical_job_id)
@@ -527,7 +600,7 @@ impl Baseline {
             if poll == Some(t) {
                 self.state.next_poll = Some(t + self.cfg.poll_secs);
                 retry_submit = true;
-                for id in &ids {
+                for id in ids.iter().filter(|_| !by_push) {
                     if self.state.nodes[id].status == Status::Waiting {
                         let l = self.logical_id(id);
                         if matches!(

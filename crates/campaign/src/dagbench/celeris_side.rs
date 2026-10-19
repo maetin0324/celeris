@@ -37,16 +37,18 @@ use serde_json::{Value, json};
 use task_core::{Status, TaskId, TaskStore};
 use task_dispatch::{
     ClusterSpec, ContainersRuntimeConfig, DispatchConfig, Dispatcher, ExecutionConfig,
-    KnowledgeRuntimeConfig, dispatcher::ClusterJobPollRequest,
+    KnowledgeRuntimeConfig,
+    dispatcher::{ClusterJobNotice, ClusterJobNoticeOutcome, ClusterJobPollRequest},
 };
 use task_worker::{
     AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, Terminal, WorkerAdapter,
 };
 
 use super::ext::{
-    DATASET, ExtBackend, ExtConfig, ExtSim, FaultSpec, JobState, Lookup, StopHook, SubmitError,
-    read_ledger,
+    DATASET, ExtBackend, ExtConfig, ExtSim, FaultSpec, JobState, Lookup, NoticeIds, StopHook,
+    SubmitError, read_ledger,
 };
+use super::ipc::{NoticeChannel, Settled};
 use crate::celeris_exec::{Transport, idempotency_label};
 
 pub const SYSTEM: &str = "celeris";
@@ -408,6 +410,9 @@ struct Shared {
     campaigns: Mutex<HashMap<TaskId, String>>,
     /// qstat の job id → (論理 job ID, 期限の論理秒)。
     jobs: Mutex<HashMap<String, (String, u64)>>,
+    /// 通知主導の受入: true の間、poller は完了状態を見ずに失敗を返す（試行回数だけ数える）。
+    poll_disabled: std::sync::atomic::AtomicBool,
+    poll_attempts: std::sync::atomic::AtomicU64,
 }
 
 impl Shared {
@@ -615,6 +620,11 @@ impl WorkerAdapter for StubWorker {
 fn ext_poller(shared: Arc<Shared>) -> task_dispatch::dispatcher::ClusterJobPoller {
     Arc::new(move |req: &ClusterJobPollRequest| {
         let sh = &shared;
+        if sh.poll_disabled.load(std::sync::atomic::Ordering::SeqCst) {
+            sh.poll_attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            return Err("polling disabled: completion arrives by push notice only".to_string());
+        }
         sh.clock.lock().polls_active += 1;
         sh.clock.bump();
         let ids: Vec<String> = req
@@ -715,6 +725,8 @@ pub struct CelerisSide {
     store: Arc<dyn TaskStore>,
     dispatcher: Dispatcher,
     submitted: Vec<CampaignResult>,
+    /// 外部 push の通知窓口（測定用の最小フック。無ければ従来どおり poll）。
+    notices: Option<NoticeChannel>,
 }
 
 impl CelerisSide {
@@ -787,6 +799,8 @@ impl CelerisSide {
             }),
             campaigns: Mutex::new(resume.campaigns),
             jobs: Mutex::new(resume.jobs),
+            poll_disabled: Default::default(),
+            poll_attempts: Default::default(),
         });
         let mut dispatcher = build_dispatcher(&shared, &paths, store.clone());
         register_instance(&mut dispatcher, &store)?;
@@ -796,7 +810,124 @@ impl CelerisSide {
             store,
             dispatcher,
             submitted: resume.submitted,
+            notices: None,
         })
+    }
+
+    /// 通知主導にする: 完了は外部 push の実受信 → [`Dispatcher::apply_cluster_job_notice`]（poll と同じ完了判定・
+    /// `finish_cluster_job_wait`・continuation）で届く。`disable_poll` なら poller は常に失敗する
+    /// （通知なしでは再開しないことの検証用）。
+    pub fn enable_notices(&mut self, channel: NoticeChannel, disable_poll: bool) {
+        self.shared
+            .poll_disabled
+            .store(disable_poll, std::sync::atomic::Ordering::SeqCst);
+        self.notices = Some(channel);
+    }
+
+    /// 無効化された poller が呼ばれた回数。
+    pub fn poll_attempts(&self) -> u64 {
+        self.shared
+            .poll_attempts
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 有界 blocking receive を 1 回行い、届いた通知を hook に渡す。処理した件数（保留を除く）を返す。
+    /// 適用と ledger 記録が済んでから ack する。
+    pub fn pump_notices(&mut self) -> Result<usize, String> {
+        let Some(ch) = self.notices.as_mut() else {
+            return Ok(0);
+        };
+        let io = |e: std::io::Error| e.to_string();
+        let mut handled = 0;
+        for sn in ch.receive().map_err(io)? {
+            let n = sn.notice.clone();
+            let ids = |w: &task_core::cluster_job::ClusterJobWait| NoticeIds {
+                wait_id: Some(w.wait_id.clone()),
+                task_id: Some(w.task_id.to_string()),
+                work_unit_id: w.work_unit_id.clone(),
+                run_id: Some(w.run_id.clone()),
+            };
+            let dup = |outcome: &str, ids: NoticeIds| Settled {
+                outcome: outcome.into(),
+                suppressed: true,
+                continuation: false,
+                ids,
+            };
+            // 1. 再配送（処理済みの seq）・同じ論理 job の重複 copy: 適用せず ack だけ返す。
+            if ch.ledger().processed(sn.seq) {
+                ch.settle(&sn, &dup("redelivered", NoticeIds::default()))
+                    .map_err(io)?;
+                continue;
+            }
+            if ch.ledger().logical_consumed(&n.logical_job_id) {
+                ch.settle(&sn, &dup("duplicate", NoticeIds::default()))
+                    .map_err(io)?;
+                continue;
+            }
+            // 2. 通知の行き先 wait（受信時に解決済みならそれ。閉じた wait も引ける）。
+            let job = n.physical_id.trim_start_matches("phys-").to_string();
+            let wait = match ch.ledger().resolved_wait(sn.seq) {
+                Some(w) => self
+                    .store
+                    .cluster_job_wait_get(&w)
+                    .map_err(|e| e.to_string())?,
+                None => self
+                    .store
+                    .cluster_job_waits_waiting()
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .find(|w| w.jobs.contains(&job)),
+            };
+            let Some(wait) = wait else {
+                ch.hold(sn).map_err(io)?;
+                continue;
+            };
+            let wait_ids = ids(&wait);
+            ch.ledger_mut()
+                .append(
+                    "notice_resolved",
+                    Some(sn.seq),
+                    Some(n.copy),
+                    Some(&n.logical_job_id),
+                    Some(&n.physical_id),
+                    &wait_ids,
+                    None,
+                )
+                .map_err(io)?;
+            let out = self
+                .dispatcher
+                .apply_cluster_job_notice(&ClusterJobNotice {
+                    wait_id: wait.wait_id.clone(),
+                    job_id: job,
+                    notice_id: format!("{}#{}", n.logical_job_id, sn.seq),
+                    state: task_core::cluster_job::ClusterJobState::Finished,
+                    exit_status: Some(0),
+                })
+                .map_err(|e| e.to_string())?;
+            let settled = match out {
+                ClusterJobNoticeOutcome::Held => {
+                    ch.hold(sn).map_err(io)?;
+                    continue;
+                }
+                ClusterJobNoticeOutcome::Finished => Settled {
+                    outcome: "finished".into(),
+                    suppressed: false,
+                    continuation: true,
+                    ids: wait_ids,
+                },
+                ClusterJobNoticeOutcome::Applied => Settled {
+                    outcome: "applied".into(),
+                    suppressed: false,
+                    continuation: false,
+                    ids: wait_ids,
+                },
+                ClusterJobNoticeOutcome::Duplicate => dup("duplicate", wait_ids),
+                ClusterJobNoticeOutcome::UnknownJob => dup("unknown_job", wait_ids),
+            };
+            ch.settle(&sn, &settled).map_err(io)?;
+            handled += 1;
+        }
+        Ok(handled)
     }
 
     /// campaign の root task を通常 POST で作る（R6）。冪等キーは測定 ID と campaign。
@@ -894,6 +1025,11 @@ impl CelerisSide {
             }
             self.dispatcher.tick().map_err(|e| e.to_string())?;
             ticks += 1;
+            // 通知主導: 有界 blocking receive（この待ちが tick の間隔を兼ねる）。完了状態の polling ではない。
+            let pushed = self.pump_notices()?;
+            if pushed > 0 {
+                self.dispatcher.tick().map_err(|e| e.to_string())?;
+            }
             let statuses = self.statuses()?;
             if self.submitted.len() == n && statuses.iter().all(|s| s.is_terminal()) {
                 for (c, s) in self.submitted.iter_mut().zip(&statuses) {
@@ -911,7 +1047,23 @@ impl CelerisSide {
                 let next_sleeper = self.shared.clock.lock().sleepers.values().min().copied();
                 let next_arrival = (self.submitted.len() < n)
                     .then(|| self.shared.spec.arrival(self.submitted.len()));
-                match [next_sleeper, next_arrival].into_iter().flatten().min() {
+                // 通知主導では poll の sleeper が無いので、ext-sim の次の物理起動の期限が次の出来事になる。
+                let next_due = self.notices.is_some().then(|| {
+                    let now = self.shared.clock.now();
+                    self.shared
+                        .jobs
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .values()
+                        .map(|(_, due)| *due)
+                        .filter(|d| *d > now)
+                        .min()
+                });
+                match [next_sleeper, next_arrival, next_due.flatten()]
+                    .into_iter()
+                    .flatten()
+                    .min()
+                {
                     Some(next) => {
                         if next > cap_logical {
                             return Err(format!("logical cap {cap_logical} exceeded"));
@@ -940,7 +1092,9 @@ impl CelerisSide {
                 }
                 stable = 0;
             }
-            tokio::time::sleep(TICK_GAP).await;
+            if self.notices.is_none() {
+                tokio::time::sleep(TICK_GAP).await;
+            }
         }
         Ok(DriveReport {
             measurement_id: self.shared.spec.measurement_id(),

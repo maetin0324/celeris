@@ -270,7 +270,7 @@ fn template() -> Map<String, Value> {
 
 fn dispatch(f: &Fake, dir: &std::path::Path) -> ArmDispatch<DownA, CelerisExecutor<Fake>> {
     ArmDispatch {
-        a: DownA,
+        a: Some(DownA),
         bc: CelerisExecutor::new(f.clone(), template(), 1800, dir.join(CLUSTER_CANCEL_FILE)),
     }
 }

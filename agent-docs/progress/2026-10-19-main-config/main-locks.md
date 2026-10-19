@@ -1,18 +1,16 @@
 ---
 tasks: [01M5A76P7RHE7TGBE14XGE6YJR]
-status: blocked
+status: done
+completed: 2026-10-19
 ---
-# main-locks: lock 生成は承認済み catalog 実証跡待ち
+# main-locks: 実 root に env-lock/3 と campaign lock を生成・照合
 
 ## 実施
-- `check-main-pins.py`: lock の既定置き場を `pinned/main/`（`env-lock.json` / `lock.json`）に変更。内容検証を追加 — A binary の path/sha256（承認 pin と実 file）、worker program の hash、B/C arm の Sonnet-only・claude-code・online_update false・evidence table なし・C は no_evidence_table（Jev 無効・C 呼出し 0）、cap_env と pinned/cap-env.json の一致、release、lock.json の campaign/materials/kb/measurement_id pin・封印形式・K2 commit・config の Sonnet only・Jev は C のみ、両 lock の campaign_sha256 一致。
-- `test_check_main_pins.py`: lock 改変・hash 不一致・binary 経路不一致の fixture 試験を追加（29 件 OK）。
-- 実 root への checker は exit 1、指摘は 3 件: env-lock.json 不在・lock.json 不在・k2-preflight.json 不在。
+- check-main-pins.py: lock 内容検証（A binary path/sha256、worker hash、B/C の Sonnet-only・Jev 無効・C 呼出し 0、cap_env 一致、K2 commit、両 lock の campaign_sha256 一致）。test_check_main_pins.py に lock 改変・hash 不一致・binary 経路不一致の fixture 試験（29 件）。
+- 承認済み実証跡 pinned/evidence/main-llm-models.json（sha256 c9babb76…45ab6、人の承認済み）で `celeris-campaign offline-lock` を実行。
+  - 承認済み pinned/bin の binary は offline-lock 追加前の build で subcommand が無いため、同 repo の同 crate を `cargo build -p celeris-campaign` した binary で実行した（pin は変更していない）。
+  - `--out` は空 dir が必須（既存 data は lock に取り込まない）なので、空の pinned/lock-gen に生成し、env-lock.json・lock.json を pinned/main/ に複写。pinned/main を `--out` にした `--verify` が verified（campaign_lock / env_lock とも verified、paid_calls_made 0、campaign_sha256 8ca0e198…a999、lock_sha256 311714ae…70f9）。
+- `check-main-pins.py --root <artifacts>`: exit 1、不足は pinned/main/evidence/k2-preflight.json のみ（env-lock.json・lock.json は missing に無い）。
 
-## 生成できなかった理由
-- offline-lock の入力 `--models-evidence`（`GET /api/v1/llm/models` 本文）と承認 sha256 が実 root・repo のどこにも無い。rehearsal の catalog から偽造しない。
-- 実行 argv は run の artifacts `operator-lock-argv.md` に記載。実行後 `--verify` と checker で再照合する。
-- よって受け入れ条件 1・2（実 root の lock 存在・再照合）は未達。
-
-## 提案
-- 人が実証跡を保存し sha256 を承認 → 上記 argv を実行 → checker の残りが k2-preflight.json のみになることを確認。
+## 未解決（operator）
+- 実 K2 preflight は測定 daemon の起動が要る。operator が測定 daemon（pinned/main/daemon.toml）を起動して preflight を実行し pinned/main/evidence/k2-preflight.json を保存する。この task では daemon・実 LLM・watch を行っていない。

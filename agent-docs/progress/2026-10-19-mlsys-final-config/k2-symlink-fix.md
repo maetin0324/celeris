@@ -25,3 +25,8 @@ completed: 2026-10-19
 
 ## 提案
 - なし。
+
+## 再検証（attempt 3）
+- 前回 check の不合格原因: 別 WU の `agent-docs/progress/2026-10-19-cap-probe-ro-mount-kind.md` の front matter に `title`/`updated` が無く `progress-index.sh --check` が exit 1。front matter を補って解消（本文は不変）。
+- `cargo test -p celeris-campaign`: exit 0（全 test result ok、0 failed。inner_symlink・isolation 追加分を含む）。再利用 commit: d4f51cca。
+- `test -s … && check-doc-links.sh && check-adr-numbers.sh && progress-index.sh --check`: exit 0。

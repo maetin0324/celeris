@@ -600,7 +600,7 @@ fn matching_environment_runs_task_api_watch_grade_export_and_resumes_with_the_fi
     let (_, probes) = f.api("GET", "/api/v1/tasks?limit=50", None);
     let probes = probes["items"].as_array().or(probes.as_array()).unwrap();
     assert_eq!(probes.len(), 4, "{probes:?}");
-    assert!(probes.iter().all(|t| is_probe(t)), "{probes:?}");
+    assert!(probes.iter().all(is_probe), "{probes:?}");
 
     // 通常 API による task 投入 → watch が台帳を閉じるまで。
     let w = ok(&f, "watch");

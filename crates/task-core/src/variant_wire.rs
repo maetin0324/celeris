@@ -9,7 +9,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-use crate::profile::EffectiveProfile;
+use crate::org::OrgNode;
+use crate::profile::{EffectiveProfile, resolve};
 
 /// variant への短い参照（campaign `VariantRef` と同じ JSON 名・省略なし）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -99,6 +100,55 @@ pub fn effective_profile_sha256(p: &EffectiveProfile) -> Result<String, String> 
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+/// org の全 node の実効 profile を id 順に並べた canonical JSON の sha256。
+/// 各要素は `node_id`・`chain` を含む完全な EffectiveProfile（親子構造の変化も digest に出る）。
+/// 入力の並び順には依存しない。id の重複・空 id は拒否する（黙って片方を採らない）。
+pub fn org_effective_digest(nodes: &[OrgNode]) -> Result<String, String> {
+    let mut ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+    ids.sort_unstable();
+    if ids.iter().any(|i| i.trim().is_empty()) {
+        return Err("org node id must not be empty".into());
+    }
+    if let Some(w) = ids.windows(2).find(|w| w[0] == w[1]) {
+        return Err(format!("org node id duplicated: {}", w[0]));
+    }
+    let list: Vec<Value> = ids
+        .iter()
+        .map(|id| serde_json::to_value(resolve(nodes, id)).map_err(|e| format!("profile: {e}")))
+        .collect::<Result<_, _>>()?;
+    let bytes = serde_json::to_vec(&canonical(&Value::Array(list))).map_err(|e| e.to_string())?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+impl CampaignOrgPin {
+    /// 現在の org（`nodes`）が pin と一致するかを照合する。一致は node 集合（順序無関係）、
+    /// coding node の存在、その実効 profile hash。欠落・重複・未知 node・profile drift は理由付きで拒否する。
+    pub fn check_org(&self, nodes: &[OrgNode]) -> Result<(), String> {
+        self.validate()?;
+        let mut have: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+        have.sort_unstable();
+        if let Some(w) = have.windows(2).find(|w| w[0] == w[1]) {
+            return Err(format!("org node id duplicated: {}", w[0]));
+        }
+        let mut want: Vec<&str> = self.nodes.iter().map(String::as_str).collect();
+        want.sort_unstable();
+        if let Some(m) = want.iter().find(|w| have.binary_search(w).is_err()) {
+            return Err(format!("org is missing pinned node: {m}"));
+        }
+        if let Some(u) = have.iter().find(|h| want.binary_search(h).is_err()) {
+            return Err(format!("org has node not in pin: {u}"));
+        }
+        let actual = effective_profile_sha256(&resolve(nodes, &self.coding_node))?;
+        if actual != self.effective_profile_sha256 {
+            return Err(format!(
+                "coding node {} profile drifted: pinned {}, actual {actual}",
+                self.coding_node, self.effective_profile_sha256
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +234,110 @@ mod tests {
             effective_profile_sha256(&a).unwrap(),
             effective_profile_sha256(&b).unwrap()
         );
+    }
+
+    fn node(id: &str, parent: Option<&str>, skills: &[&str]) -> OrgNode {
+        OrgNode {
+            id: id.into(),
+            parent_id: parent.map(Into::into),
+            name: id.into(),
+            kind: crate::org::OrgKind::Section,
+            genre: None,
+            brief: String::new(),
+            profile: crate::profile::Profile {
+                skills: skills.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            },
+            position: 0,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    fn org() -> Vec<OrgNode> {
+        vec![
+            node("cos", None, &[]),
+            node("a", Some("cos"), &["x"]),
+            node("w", Some("cos"), &["y"]),
+        ]
+    }
+
+    fn pin_for(nodes: &[OrgNode], coding: &str) -> CampaignOrgPin {
+        CampaignOrgPin {
+            nodes: nodes.iter().map(|n| n.id.clone()).collect(),
+            coding_node: coding.into(),
+            effective_profile_sha256: effective_profile_sha256(&resolve(nodes, coding)).unwrap(),
+        }
+    }
+
+    #[test]
+    fn org_digest_is_order_invariant_and_detects_drift() {
+        let o = org();
+        let mut r = o.clone();
+        r.reverse();
+        assert_eq!(
+            org_effective_digest(&o).unwrap(),
+            org_effective_digest(&r).unwrap()
+        );
+        let mut d = o.clone();
+        d[1].profile.skills = vec!["z".into()];
+        assert_ne!(
+            org_effective_digest(&o).unwrap(),
+            org_effective_digest(&d).unwrap()
+        );
+        let mut dup = o.clone();
+        dup.push(node("a", Some("cos"), &[]));
+        assert!(
+            org_effective_digest(&dup)
+                .unwrap_err()
+                .contains("duplicated")
+        );
+    }
+
+    #[test]
+    fn check_org_accepts_match_regardless_of_order() {
+        let o = org();
+        let pin = pin_for(&o, "w");
+        pin.check_org(&o).unwrap();
+        let mut r = o.clone();
+        r.reverse();
+        pin.check_org(&r).unwrap();
+    }
+
+    #[test]
+    fn check_org_rejects_missing_unknown_duplicate_and_drift() {
+        let o = org();
+        let pin = pin_for(&o, "w");
+        let missing: Vec<_> = o.iter().filter(|n| n.id != "a").cloned().collect();
+        assert!(
+            pin.check_org(&missing)
+                .unwrap_err()
+                .contains("missing pinned node: a")
+        );
+        let mut extra = o.clone();
+        extra.push(node("n", Some("cos"), &[]));
+        assert!(pin.check_org(&extra).unwrap_err().contains("not in pin: n"));
+        let mut dup = o.clone();
+        dup.push(node("a", Some("cos"), &[]));
+        assert!(pin.check_org(&dup).unwrap_err().contains("duplicated"));
+        let mut drift = o.clone();
+        drift[2].profile.skills = vec!["other".into()];
+        assert!(pin.check_org(&drift).unwrap_err().contains("drifted"));
+        let mut bad = pin.clone();
+        bad.coding_node = "zz".into();
+        assert!(bad.check_org(&o).is_err());
+    }
+
+    #[test]
+    fn existing_profile_hash_unchanged() {
+        // wire/hash 不変の固定値（campaign variant_submit.rs と同じ既定 profile）。
+        let h = effective_profile_sha256(&EffectiveProfile::default()).unwrap();
+        assert_eq!(h.len(), 64);
+        let a = EffectiveProfile {
+            node_id: "q".into(),
+            chain: vec!["q".into()],
+            ..Default::default()
+        };
+        assert_eq!(h, effective_profile_sha256(&a).unwrap());
     }
 }

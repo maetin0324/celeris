@@ -1,7 +1,7 @@
 # 多軸評価の生記録: A/B 共通の人の操作・経過時間・やり直し（human-ops JSONL）の形式と identity・時計の規則
 
 - 日付: 2026-10-19
-- 状態: 採用（形式の固定のみ。実装は後続 WU: core → cli → join → runbook）
+- 状態: 採用（実装済み: `crates/campaign/src/human_ops.rs`・`human_ops_join.rs`、評価者 runbook は `docs/ops/eval-human-ops-runbook.md`）
 - tasks: [01M59KXY854W5C65GTG9GVQVAC]
 - 関連: 2026-10-15-decision-log-export、2026-10-16-campaign-identity-propagation、2026-10-16-campaign-repeats-denominator、
   2026-10-16-campaign-comm-failure-tracking、ADR-0090（cluster job wait）
@@ -59,9 +59,9 @@ MLSys 多軸評価（主比較 A0=直接 Claude Code+Sonnet / B0=Celeris+Sonnet�
 - D8（時間・やり直し）: 区間は submitted/started/ended/observation_cutoff を端点に、実行・ready_not_running・
   external_queue_wait・human_wait・retry/recovery を定義書 §5 で定義する。同じ論理作業の再実行は同じ `logical_op_id` で
   `attempt` を 1 から数える。observation_cutoff で終わっていない区間は打ち切り（censored）として null＋`open_at_cutoff`。
-- D9（範囲）: 本 ADR は形式と規則だけを固定し、コードは書かない。型・検証・冪等追記は core WU、CLI（record/list/validate）は
-  cli WU、event/run との結合は join WU、評価者 runbook は runbook WU が本 ADR に従って実装する。形式を変えるときは
-  `schema` の版を上げ、本 ADR に付記する。
+- D9（実装の置き場所）: 型・検証・冪等追記は `crates/campaign/src/human_ops.rs`、CLI（`celeris-campaign human-op` の record/list/validate）は
+  同 `mod cli`、event/run との結合は `human_ops_join.rs`、評価者の手順は `docs/ops/eval-human-ops-runbook.md` が本 ADR に従う。
+  形式を変えるときは `schema` の版を上げ、本 ADR に付記する。
 
 ## 結果
 - 既存の記録を二重に持たない。人の操作の所要時間と A の人の操作が、初めて B と同じ定義で数えられる。

@@ -49,9 +49,16 @@ $CC human-op record $ID --op-kind resubmit --actor eval1 --mode manual --intent 
   --started-at 2026-10-22T03:00:00Z
 ```
 
-- 終了が後で分かったら、**同じ identity・同じ `--started-at`** で `--ended-at`（と `--outcome ok|failed|abandoned`）を付けて再実行する。
-  開始行は同一なので増えず（`duplicate`）、`op_end` だけが足される。開始時刻を変えると conflict で exit 1（上書きしない）。
-  → 長い操作は開始時刻を控えるか、最初から明示時刻（`--started-at <ISO>`）で書く。`now` で書いた開始は `list` で時刻を確認できる。
+- 終了が後で分かったら、**同じ identity・同じ開始時刻**で `--ended-at`（と `--outcome ok|failed|abandoned`）を付けて再実行する。
+  開始行は同一なので増えず、`op_end` だけが足される。実際の開始時刻を変えると conflict で exit 1（上書きしない）。
+- `now` で始めた記録の再開（live 開始 → 明示終了）は次の順で行う。前段の試験（`human_ops_cli.rs`）と同じ手順:
+  1. live 開始: `$CC human-op record $ID ... --started-at now`（開始行は `time_basis=evaluator_live`、`recorded_at` は CLI の時計）。
+  2. `$CC human-op list --file $F --arm <arm> --case <case>` で開始時刻（`start`）を読んで控える。
+  3. 同じ identity で `--started-at <list に出た時刻> --ended-at <終了時刻>` を付けて再実行する（明示終了。`op_end` が 1 行足される）。
+  4. 同じ command をもう一度流しても行は増えない（`duplicate`）。開始時刻が違えば conflict のまま。
+  - 時計の保存規則: 開始行の `time_basis`/`time_precision` は**先に書いた行のものを保つ**（再送で `evaluator_live` →
+    `evaluator_reported` に変わっても拒否・書き換えはしない）。比較から外れるのは `recorded_at`/`clock_source`/`host`/
+    `time_basis`/`time_precision` だけで、開始・終了の時刻値と actor は比べ続ける。終了側の `time_basis` は終了行に別に残る。
 - `--outcome` だけ付けると op_end は書かれるが end 時刻は missing（`unknown`。`--missing-reason` で変更可）。
 - `--reason` は `resubmit`/`resume`/`system_adjustment`/`system_recovery`/`manual_handoff`/`unclassified` で必須（1〜3 文）。
 - `--target kind:ref`（kind は artifact/job/task/run/session/config、繰り返し可）、`--task-id`/`--run-id`/`--celeris-event-ref event:<task_id>:<seq>` は B で対応 event があるとき付ける。
@@ -127,15 +134,39 @@ Celeris の run（B の自動 retry・repair）は `runs.seq` から導出され
 
 ```sh
 $CC human-op validate --file $F                     # ok: N records / 壊れた行は line N: 付きで exit 1
-$CC human-op list --file $F --arm A0 --case <case>  # correction 適用後の行、op の duration_secs（端が欠ければ null）、redo_counts
-# 試行の台帳・Celeris event と結合（campaign out の trials.jsonl / ledger.jsonl、export の records.jsonl）
-$CC export --manifest <manifest> --out <out dir> ...  # export は既存の通常経路（--dest 既定は <out>/export）
-$CC human-op join --file $F --events <out dir>/export # out dir 直下でも file でも可
+$CC human-op list --file $F --arm A0 --case <case>  # correction 適用後の行、op の start/end、duration_secs（端が欠ければ null）、redo_counts
 ```
+
+join の入力は **別々の 2 つの出力**を合わせて読む。どちらも既存の通常経路の出力で、手で写さない・組み立て直さない。
+
+| 出力 | 出す command | 書かれる file | join での意味 |
+|---|---|---|---|
+| runner の out dir | `celeris-campaign run`/`watch`（`--out <out dir>`） | `trials.jsonl`・`ledger.jsonl` | 試行の台帳（wall_secs・started/submitted・run_ids）。A/B 両方 |
+| decision-log export | `celerisctl --db <DB> campaign export <campaign-id> --out <dir>` | `records.jsonl`・`summary.json` | B の Celeris event 由来（run・outcome・intervention） |
+| 集計の export（join には使わない） | `celeris-campaign export --manifest <m> --out <out dir>`（`--dest` 既定 `<out>/export`） | `table(.incomplete).json/csv`・任意の `final-accounting.json` | 表と総消費。`records.jsonl`・`trials.jsonl`・`ledger.jsonl` は**出さない** |
+
+`celeris-campaign export` の出力 dir を `--events` に渡しても入力無しエラーになる。join には上の 1・2 行目を使う。
+
+decision-log の取得: `celerisctl` は `--db` > 環境変数 `CELERIS_DB` > `CELERIS_RUN_DB` > `./celeris.sqlite3` の順で DB を選ぶ（接続設定は
+この既存の DB path だけで、token・URL は要らない。campaign export は DB を読むだけ）。本番 DB は直接読まず、写しに対して流す
+（手順は `docs/ops/measure-run-final.md` §8 と同じ）:
+
+```sh
+celerisctl db backup $TMPDIR/eval-db.sqlite3 --src <Celeris DB path>
+celerisctl --db $TMPDIR/eval-db.sqlite3 campaign export <campaign_id> --out <dl dir> --manifest-hash <manifest sha256>
+# <campaign_id> は record の --campaign と同じ値。<dl dir> に records.jsonl と summary.json が出る
+$CC human-op join --file $F --events <out dir> --events <dl dir>
+```
+
+- `--events` は繰り返せ、各入力は dir（`trials.jsonl`・`ledger.jsonl`・`records.jsonl` のうちあるもの）か file。runner の out dir と decision-log の dir を同時に渡す。
+- A 腕には Celeris の DB event が無い（`celerisctl` の export に A の行は出ない）ので、対応する event が無い欄は `missing` のまま保つ。
+  A の欄を trials/ledger やコピーで埋めない。
+- 成果物（export 出力・human-ops.jsonl）を手作業でコピーして join の前提にしない。上の command の出力 dir を直接指す。
+- 実 pilot でのこの経路の通し確認は未実施（試験は通常 runner の MockExecutor 出力→join と、`decision_log_export_campaign` の出力を使う）。
 
 - `join` は identity（manifest_sha256・case・arm・rep）ごとに 1 行の JSONL を出す。各欄は `{value, source}`、source は
   `event`（Celeris 由来: wall_secs・run_wall_ms・started/submitted・run_ids・介入の件数と区分）/ `evaluator`（人の操作・attempt・待ち・job 観測）/ `missing`。
-  `missing_fields` と `missing_count` が付く。A 腕は export に run 行が無いので event 由来の欄は missing のまま（正常）。
+  `missing_fields` と `missing_count` が付く。A 腕は decision-log export に run 行が無いので event 由来の欄は missing のまま（正常）。
 - 結べなかったものは捨てず `unjoined_event`（identity の無い task の介入）/ `unjoined_evaluator` 行に出る。0 件が理想だが、出たら理由を確認する。
 - 出力は決定的（再 export・再実行で byte 一致）。B の介入件数は生記録を正とし、projection は件数の照合にだけ使う（加算しない）。
 - 集計・表は本 task の範囲外（2b）。join までで「欠測のまま」「出所つき」が保たれることを確認する。
@@ -158,7 +189,7 @@ $CC human-op join --file $F --events <out dir>/export # out dir 直下でも fil
 
 - [ ] 評価者が §2 の command を A0・B0 で 1 回ずつ、試し用の out dir で通した（本番 out に試し行を入れない）。
 - [ ] `human-op validate` が ok、`list` で A0/B0 の行が同形式（`arm_label` だけ違う）。
-- [ ] `human-op join` を試し out（mock 実行の trials/ledger）で通し、A 腕の event 欄が missing、B 腕が event になることを見た。
+- [ ] `human-op join --events <out dir> --events <dl dir>` を試し out（mock 実行の trials/ledger）で通し、A 腕の event 欄が missing、B 腕が event になることを見た。
 - [ ] 実験セットごとに campaign_id・manifest・out が別（A0/B0 と B1/C1 を混ぜない、B0 と B1 も別 manifest）。
 - [ ] 評価者の仮名（actor id）を決めた。メール・本名を使わない。
 - [ ] 2 host（評価者端末・Celeris host）の `date -u` と NTP 同期を確認し、差と `clock_source` の方針を進捗ファイルに控えた。

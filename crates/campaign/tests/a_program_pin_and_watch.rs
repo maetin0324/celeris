@@ -334,10 +334,17 @@ fn watch_stop_and_restart_reattaches_without_resubmit_and_stops_at_the_cap() {
     let x1 = HarnessExecutor::new(out.join("harness-state"), Box::new(builder()));
     let r1 = watch(&m, &i, &x1, &opts, w(2), &StepClock::new()).expect("watch 1");
     assert_eq!(r1.end, WatchEnd::MaxIterations);
-    assert_eq!(count(&launches), 3, "one process per trial");
-    // 高負荷では起動が遅れ m0 の出力がまだ観測されていないことがある。
-    // 3 つとも m0 を出力するまで待ち（出来事待ち）、もう一度観測してから止める。
+    // 高負荷では子の起動自体が遅れ、launches への追記がまだ無いことがある。
+    // 3 つとも起動して m0 を出力するまで待ち（出来事待ち）、もう一度観測してから止める。
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while count(&launches) < 3 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "launches not recorded"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(count(&launches), 3, "one process per trial");
     while count(&printed) < 3 {
         assert!(std::time::Instant::now() < deadline, "m0 not printed");
         std::thread::sleep(Duration::from_millis(20));

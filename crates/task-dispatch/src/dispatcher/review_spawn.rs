@@ -1093,7 +1093,30 @@ impl Dispatcher {
                 .and_then(|v| v.as_str().map(str::to_string)),
             cos: false,
         };
-        let (outcome, trace) = self.select_route(&route_input);
+        // task 欄で routing を固定した task は、reviewer run も worker run と同じ根拠表の読み方で選び、
+        // 解決結果を判断 record に残す（campaign の check は review run にも resolved routing を求める）。
+        let routing_override = lane_assist::task_routing_override(self.store.as_ref(), task.id);
+        let (outcome, mut trace) = self.select_route_with(
+            &route_input,
+            &super::route_select::RouteContext {
+                evidence_mode: routing_override
+                    .as_ref()
+                    .map(|o| o.evidence_mode)
+                    .unwrap_or_default(),
+                evidence_version: routing_override
+                    .as_ref()
+                    .and_then(|o| o.evidence_table_id.clone()),
+                ..Default::default()
+            },
+        );
+        if routing_override.is_some()
+            && let Some(decision) = trace.decision.as_mut()
+        {
+            decision.routing_resolved = Some(task_core::route_select::resolve_routing(
+                self.routing_mode,
+                routing_override.as_ref(),
+            ));
+        }
         let launch = match &outcome {
             Ok(pick) => self
                 .route_adapter(pick)

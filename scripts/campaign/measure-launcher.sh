@@ -63,13 +63,16 @@ need() {
 }
 
 # A_ACCOUNT は必須にしない: A が有効な manifest では CLI の preflight が要求し、B/C のみの構成は要らない。
+# REPO_SRC も必須にしない: 初期 tree を固定する case（K2）を選んだ manifest では CLI の preflight（lock）が要求し、
+# 初期 tree の無い case だけ（K4 のみ）の構成では渡すと拒否される。
 for k in MANIFEST DAEMON_CONFIG NORMAL_CONFIG CANARIES OUT STATE_DIR TASK_TEMPLATE \
-    MATERIALS_SRC KB_SRC REPO_SRC INPUTS_SRC; do
+    MATERIALS_SRC KB_SRC INPUTS_SRC; do
     need "$k"
 done
 MANIFEST=$(abs "$MANIFEST") DAEMON_CONFIG=$(abs "$DAEMON_CONFIG") NORMAL_CONFIG=$(abs "$NORMAL_CONFIG")
 CANARIES=$(abs "$CANARIES") TASK_TEMPLATE=$(abs "$TASK_TEMPLATE") OUT=$(abs "$OUT") STATE_DIR=$(abs "$STATE_DIR")
-MATERIALS_SRC=$(abs "$MATERIALS_SRC") KB_SRC=$(abs "$KB_SRC") REPO_SRC=$(abs "$REPO_SRC") INPUTS_SRC=$(abs "$INPUTS_SRC")
+MATERIALS_SRC=$(abs "$MATERIALS_SRC") KB_SRC=$(abs "$KB_SRC") INPUTS_SRC=$(abs "$INPUTS_SRC")
+[ -z "$REPO_SRC" ] || REPO_SRC=$(abs "$REPO_SRC")
 [ -z "$CELERIS_BIN" ] || CELERIS_BIN=$(abs "$CELERIS_BIN")
 [ -z "$CASES_ROOT" ] || CASES_ROOT=$(abs "$CASES_ROOT")
 [ -z "$GRADER_ROOT" ] || GRADER_ROOT=$(abs "$GRADER_ROOT")
@@ -119,8 +122,10 @@ common_args() {
         --api-url "$API_URL" --token-env CELERIS_MEASURE_TOKEN \
         --task-template "$TASK_TEMPLATE" \
         --measure-config "$DAEMON_CONFIG" --normal-config "$NORMAL_CONFIG" --canaries "$CANARIES" \
-        --materials-src "$MATERIALS_SRC" --kb-src "$KB_SRC" --repo-src "$REPO_SRC" --inputs-src "$INPUTS_SRC" \
+        --materials-src "$MATERIALS_SRC" --kb-src "$KB_SRC" --inputs-src "$INPUTS_SRC" \
         --a-program "$A_PROGRAM"
+    # K2 の初期 tree。初期 tree を固定する case が無い構成（K4 のみ）では渡さない（渡すと lock 検査が拒否する）。
+    [ -z "$REPO_SRC" ] || set -- "$@" --repo-src "$REPO_SRC"
     # A のアカウントは A が有効な構成だけで渡す（無効 arm の認証を要求しない）。要否の判定は CLI（preflight・run）。
     [ -z "$A_ACCOUNT" ] || set -- "$@" --a-account "$A_ACCOUNT"
     # 共有承認の台帳。manifest が宣言した台帳と一致しなければ CLI が投入前に拒否する（省略も拒否）。
@@ -242,7 +247,7 @@ cmd_prepare() {
     for p in "$MANIFEST" "$NORMAL_CONFIG" "$CANARIES" "$TASK_TEMPLATE"; do
         [ -f "$p" ] || miss="$miss $p"
     done
-    for p in "$MATERIALS_SRC" "$KB_SRC" "$REPO_SRC" "$INPUTS_SRC"; do
+    for p in "$MATERIALS_SRC" "$KB_SRC" "$INPUTS_SRC" ${REPO_SRC:+"$REPO_SRC"}; do
         [ -d "$p" ] || miss="$miss $p"
     done
     [ -z "$miss" ] || die "required input missing:$miss"

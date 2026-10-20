@@ -1036,7 +1036,8 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
         let campaign_id = req(args, "--campaign")?;
         let manifest_sha256 = match (opt(args, "--manifest-sha256"), opt(args, "--manifest")) {
             (Some(h), _) => h,
-            (None, Some(p)) => CampaignManifest::load(Path::new(&p))?.sha256,
+            // runner・台帳・export と同じ campaign hash（正規化 JSON の sha256）。manifest の `sha256` 欄は読まない。
+            (None, Some(p)) => CampaignManifest::load(Path::new(&p))?.compute_sha256()?,
             _ => return Err(format!("--manifest-sha256 か --manifest が必要\n{USAGE}")),
         };
         let case = req(args, "--case")?;

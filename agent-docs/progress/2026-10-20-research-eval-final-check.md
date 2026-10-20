@@ -1,7 +1,7 @@
 ---
 title: 研究評価接続 3/P0・統合 — 修正後の同一構成での無 LLM 通し確認と最小実 pilot の可否
 tasks: [01M5BT8JYWTNTFXZHCYSFQHSEX]
-status: partial
+status: blocked
 updated: 2026-10-20
 ---
 # 研究評価接続 3/P0・統合

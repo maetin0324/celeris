@@ -37,6 +37,8 @@ struct RunFacts {
     wall_ms: Option<u64>,
     retries: Option<u32>,
     usage: Option<Usage>,
+    /// `llm_route_selected`（run 起動の直後に出る）の候補列と harness。`RoutingDecided` の無い run（reviewer）の提案元。
+    route_selected: Option<(Vec<CandidateRef>, String)>,
 }
 
 struct Verdict {
@@ -74,6 +76,23 @@ fn sum_usage(a: Option<Usage>, b: &Usage) -> Usage {
         Some(a) => a.accumulate(b),
         None => *b,
     }
+}
+
+/// `llm_route_selected.metadata` の `candidates`（順序つき）と `harness`。候補が空なら `None`。
+fn route_selected_candidates(metadata: &serde_json::Value) -> Option<(Vec<CandidateRef>, String)> {
+    let harness = metadata["harness"].as_str().unwrap_or_default().to_string();
+    let candidates: Vec<CandidateRef> = metadata["candidates"]
+        .as_array()?
+        .iter()
+        .filter_map(|c| {
+            Some(CandidateRef {
+                source_id: c["source"].as_str()?.to_string(),
+                model_id: c["model"].as_str()?.to_string(),
+                harness_id: harness.clone(),
+            })
+        })
+        .collect();
+    (!candidates.is_empty()).then_some((candidates, harness))
 }
 
 /// 提案の実値（route_select の判断 record から）。提案先頭 = 根拠表の score が最上位の候補
@@ -230,8 +249,15 @@ pub(super) fn project_decision_log(
 ) -> Vec<RunLog> {
     let mut order: Vec<String> = Vec::new();
     let mut runs: BTreeMap<String, RunFacts> = BTreeMap::new();
+    let mut last_started: Option<String> = None;
     for event in events {
         match event {
+            Event::LlmRouteSelected { metadata, .. } => {
+                // run_id を持たない event。直前に始まった run のものとして扱う。
+                if let Some(f) = last_started.as_ref().and_then(|r| runs.get_mut(r)) {
+                    f.route_selected = route_selected_candidates(metadata);
+                }
+            }
             Event::WorkerStarted {
                 run_id,
                 adapter,
@@ -244,6 +270,7 @@ pub(super) fn project_decision_log(
                 if !order.contains(run_id) {
                     order.push(run_id.clone());
                 }
+                last_started = Some(run_id.clone());
                 let f = runs.entry(run_id.clone()).or_default();
                 f.role = *role;
                 f.adapter = Some(adapter.clone());
@@ -330,6 +357,19 @@ pub(super) fn project_decision_log(
         proposal.attempt_no = f.retries;
         if let Some(record) = &f.routing {
             fill_proposal(&mut proposal, record);
+        } else if let Some((candidates, harness)) = &f.route_selected {
+            // RoutingDecided が無い run（reviewer）。llm_route_selected の候補列の先頭を提案の先頭にする。
+            proposal.proposed_first = candidates.first().map(|c| CandidateRef {
+                harness_id: harness.clone(),
+                ..c.clone()
+            });
+            proposal.proposed_candidates = candidates
+                .iter()
+                .map(|c| CandidateRef {
+                    harness_id: harness.clone(),
+                    ..c.clone()
+                })
+                .collect();
         }
         let mut execution = DecisionLogExecution {
             run_id: run_id.clone(),
@@ -1108,5 +1148,63 @@ mod tests {
         assert_eq!(inner_input, outer_input);
         assert!((inner_cost - outer_cost).abs() < 1e-9);
         assert_eq!(inner_input, 3 * (10 + 20 + 30 + 40));
+    }
+
+    fn route_selected(candidates: &[(&str, &str)], harness: &str) -> Event {
+        Event::LlmRouteSelected {
+            source_id: candidates[0].0.into(),
+            model_id: candidates[0].1.into(),
+            account_id: "acct".into(),
+            metadata: serde_json::json!({
+                "harness": harness,
+                "candidates": candidates
+                    .iter()
+                    .map(|(s, m)| serde_json::json!({"source": s, "model": m}))
+                    .collect::<Vec<_>>(),
+            }),
+        }
+    }
+
+    #[test]
+    fn reviewer_run_gets_proposed_first_from_llm_route_selected() {
+        let events = vec![
+            Event::WorkerStarted {
+                run_id: "rv".into(),
+                adapter: "claude-code".into(),
+                model: "m2".into(),
+                provider: Some("s".into()),
+                account: None,
+                role: Some(RunRole::Reviewer),
+                task_role: None,
+            },
+            route_selected(&[("s", "m1"), ("s", "m2")], "claude-code"),
+        ];
+        let logs = project_decision_log(&events, "t", None);
+        let p = &logs[0].proposal;
+        let first = p.proposed_first.as_ref().expect("proposed_first");
+        assert_eq!(
+            (
+                first.source_id.as_str(),
+                first.model_id.as_str(),
+                first.harness_id.as_str()
+            ),
+            ("s", "m1", "claude-code")
+        );
+        assert_eq!(p.proposed_candidates.len(), 2);
+    }
+
+    #[test]
+    fn llm_route_selected_without_candidates_leaves_proposed_first_missing() {
+        let events = vec![
+            started("r1", "s", "m"),
+            Event::LlmRouteSelected {
+                source_id: "s".into(),
+                model_id: "m".into(),
+                account_id: "a".into(),
+                metadata: serde_json::json!({"harness": "h", "candidates": []}),
+            },
+        ];
+        let logs = project_decision_log(&events, "t", None);
+        assert!(logs[0].proposal.proposed_first.is_none());
     }
 }

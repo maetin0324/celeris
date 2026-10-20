@@ -40,6 +40,8 @@ use serde_json::{Value, json};
 pub const STUB_FLAG: &str = "--ablation-stub";
 /// LLM CLI の罠（daemon の PATH 先頭）。どれかが起動されたら試験失敗。
 pub const TRAPPED_CLIS: &[&str] = &["claude", "codex", "opencode", "gemini", "aider"];
+/// スタブが artifacts と作業 dir に残す痕跡の file 名。
+pub const TRIAL_NOTES: &str = "trial-notes.md";
 /// 待ちの既定期限。
 pub const DEADLINE: Duration = Duration::from_secs(120);
 /// daemon の停止（TERM）を待つ期限。過ぎたら KILL。
@@ -165,6 +167,8 @@ fn stub_main(dir: &Path) -> Result<(), String> {
     let pid = std::process::id();
     let run_id = std::env::var("CELERIS_RUN_ID").unwrap_or_default();
     let log = dir.join("launches.jsonl");
+    // 受け取った RunRequest の全文（canary の流入検査が読む）。
+    append_line(&dir.join("requests.jsonl"), &req)?;
     append_line(
         &log,
         &json!({"phase": "start", "pid": pid, "ppid": ppid_of_self(), "run_id": run_id,
@@ -199,6 +203,21 @@ fn stub_main(dir: &Path) -> Result<(), String> {
     if planner && let Some(p) = spec.plans.iter().find(|p| p.title == title) {
         fs::write(artifacts.join("execution-plan.json"), p.plan.to_string())
             .map_err(|e| format!("execution-plan.json: {e}"))?;
+    }
+    // 試行が残す痕跡（objective の写し）を artifacts と作業 dir に置く。隣接 trial の canary 検査で、
+    // 先の trial が残した値が後の trial の入力・作業場所に流れ込まないことを見る材料になる。
+    let notes = format!(
+        "trial notes\n{}\n",
+        req["task"]["objective"].as_str().unwrap_or_default()
+    );
+    fs::write(artifacts.join(TRIAL_NOTES), &notes).map_err(|e| format!("{TRIAL_NOTES}: {e}"))?;
+    if let Some(w) = req["work_dir"]
+        .as_str()
+        .or(req["workspace"].as_str())
+        .filter(|w| Path::new(w).is_dir())
+    {
+        fs::write(Path::new(w).join(TRIAL_NOTES), &notes)
+            .map_err(|e| format!("{w}/{TRIAL_NOTES}: {e}"))?;
     }
     fs::write(artifacts.join("result.md"), result_md_body(&run_id, pid))
         .map_err(|e| format!("result.md: {e}"))?;
@@ -989,6 +1008,36 @@ pub fn read_launches(dir: &Path) -> Vec<Launch> {
                 }
             }
             other => panic!("unknown launch phase {other:?}"),
+        }
+    }
+    out
+}
+
+/// スタブが受け取った `RunRequest` の全文（起動順）。
+pub fn read_requests(dir: &Path) -> Vec<Value> {
+    fs::read_to_string(dir.join("stub/requests.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
+/// `root` 以下の通常 file のうち、中身（lossy）に `needle` を含むものの path。
+pub fn files_containing(root: &Path, needle: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            let p = e.path();
+            if ft.is_dir() {
+                stack.push(p);
+            } else if ft.is_file()
+                && fs::read(&p).is_ok_and(|b| String::from_utf8_lossy(&b).contains(needle))
+            {
+                out.push(p);
+            }
         }
     }
     out

@@ -52,6 +52,7 @@ fn side(i: &Input, version: &str, max_tokens: u64) -> CampaignManifest {
         campaign_id: "jev-b1c1-series".into(),
         version: version.into(),
         split: Split::Dev,
+        fault_scenarios: Default::default(),
         experiment_sets: Default::default(),
         selected_sets: Vec::new(),
         input: InputRef {

@@ -64,6 +64,7 @@ fn manifest() -> CampaignManifest {
         campaign_id: "jev-sidecomp-b1c1".into(),
         version: "v1".into(),
         split: Split::Final,
+        fault_scenarios: Default::default(),
         experiment_sets: Default::default(),
         selected_sets: Vec::new(),
         input: InputRef {

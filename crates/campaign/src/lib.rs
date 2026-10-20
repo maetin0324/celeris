@@ -15,6 +15,7 @@ pub mod env_check;
 pub mod env_lock;
 pub mod executor;
 pub mod export;
+pub mod faults;
 pub mod final_accounting;
 pub mod global_ledger;
 pub mod grade_case_gen;

@@ -71,6 +71,7 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
     // 固定分母 n の総合値（pass_rate = final_passed / n）と、不成功の原因別内訳は別に持つ。
     // grader_env_failure / grader_undetermined は再採点前の未確定で、モデルの失敗に混ぜない
     // （complete=false で最終表を止める）。
+    row["fault_breakdown"] = json!(t.fault_breakdown);
     row["failure_breakdown"] = json!({
         "model_failure": t.grader_failed,
         "grader_env_failure": t.grader_env_failure,
@@ -87,7 +88,7 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
     row
 }
 
-const COLUMNS: [&str; 40] = [
+const COLUMNS: [&str; 41] = [
     "config",
     "harness",
     "model",
@@ -128,6 +129,7 @@ const COLUMNS: [&str; 40] = [
     "cache_missing_trials",
     "cost_micro_usd_sum",
     "cost_status",
+    "fault_breakdown",
 ];
 
 fn cell(v: &Value, col: &str) -> String {
@@ -218,6 +220,8 @@ pub fn export_full(
         "notice": if real { Value::Null } else {
             json!("mock/unknown/lock-less evidence: these numbers are not real performance and must not be reported as measurements") },
         "configs": rows,
+        "fault_scenarios": m.fault_scenarios,
+        "fault_observations": rc.fault_observations,
         "comparisons": rc.pairs,
     });
     if let Some(a) = accounting {

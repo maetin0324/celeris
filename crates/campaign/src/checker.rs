@@ -17,6 +17,8 @@ use crate::{
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 pub struct Totals {
+    /// Independent exposure × result cross-tabulation; sums to n, not added to failures.
+    pub fault_breakdown: BTreeMap<String, BTreeMap<String, u64>>,
     pub n: u64,
     pub passed: u64,
     pub failed: u64,
@@ -86,6 +88,7 @@ pub struct Pair {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Recomputed {
+    pub fault_observations: Vec<crate::faults::FaultObservation>,
     pub totals: BTreeMap<ConfigId, Totals>,
     pub pairs: Vec<Pair>,
 }
@@ -107,7 +110,7 @@ fn read_json(path: &Path) -> Result<Value, String> {
 }
 
 /// 期待する (config → 問題集合)。有効 arm だけ（`planned_configs`）。未使用 arm は含めない。
-fn expected(m: &CampaignManifest) -> BTreeMap<ConfigId, BTreeSet<String>> {
+pub(crate) fn expected(m: &CampaignManifest) -> BTreeMap<ConfigId, BTreeSet<String>> {
     let mut out: BTreeMap<ConfigId, BTreeSet<String>> = m
         .active_arms()
         .into_iter()
@@ -885,7 +888,7 @@ pub fn check_expected(
         }
     }
     v.extend(binding.violations.iter().cloned());
-    let rc = recompute_graded(m, &recs, &binding.valid);
+    let mut rc = recompute_graded(m, &recs, &binding.valid);
     // runner の summary.json との突き合わせ（記録の欠落・数値の食い違いを検出する）。
     match read_json(&out.join(SUMMARY_FILE)) {
         Ok(s) => {
@@ -931,6 +934,7 @@ pub fn check_expected(
         Err(e) => v.push(format!("summary: {e}")),
     }
     let mut reasons = Vec::new();
+    crate::faults::reconcile(m, &recs, out, &binding.valid, &mut rc, &mut v, &mut reasons);
     for (c, t) in &rc.totals {
         if t.missing > 0 {
             reasons.push(format!("{c:?}: {} trials have no record", t.missing));
@@ -1111,5 +1115,9 @@ pub fn recompute_graded(
         }
         pairs.push(pr);
     }
-    Recomputed { totals, pairs }
+    Recomputed {
+        totals,
+        pairs,
+        fault_observations: vec![],
+    }
 }

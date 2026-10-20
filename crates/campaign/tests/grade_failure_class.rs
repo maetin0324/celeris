@@ -23,8 +23,18 @@ fn fx() -> PathBuf {
 }
 
 fn pilot_out(dir: &Path) -> (CampaignManifest, PathBuf) {
+    pilot_out_with_faults(dir, false)
+}
+
+fn pilot_out_with_faults(dir: &Path, faults: bool) -> (CampaignManifest, PathBuf) {
     let mp = fx().join("pilot.json");
-    let m = CampaignManifest::load(&mp).expect("pilot");
+    let mut m = CampaignManifest::load(&mp).expect("pilot");
+    if faults {
+        m.problems = m.secondary.subset.clone();
+        m.fault_scenarios
+            .insert(m.problems[0].clone(), "worker-stop/v1".into());
+    }
+    m.sha256 = m.compute_sha256().unwrap();
     let i = m.load_input(&mp, None).expect("input");
     let out = dir.join("out");
     let o = RunOptions {
@@ -226,4 +236,168 @@ fn real_grader_env_failure_is_not_a_model_failure_and_regrade_keeps_denominator_
     assert_eq!(hist.lines().count(), 2 * n, "2 回分の置き換え前の行");
     assert!(hist.contains("\"env_failure\"") && hist.contains("\"model_failure\""));
     let _ = json!(null);
+}
+
+fn fault_records(m: &CampaignManifest, out: &Path, status: &str) -> Vec<Value> {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::process::ExitStatusExt;
+    let status_log = if status == "injected" {
+        let exit = std::process::Command::new("/bin/sh")
+            .args(["-c", "kill -TERM $$"])
+            .status()
+            .unwrap();
+        assert_eq!(exit.signal(), Some(15));
+        format!(
+            "test injector: worker stopped; observed exit signal {:?}\n",
+            exit.signal()
+        )
+    } else {
+        "test injector: trigger not reached; no signal sent\n".into()
+    };
+    let log = status_log.as_bytes();
+    fs::write(out.join("injector.log"), log).unwrap();
+    fs::read_to_string(out.join("trials.jsonl")).unwrap().lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .filter(|r| m.fault_scenarios.contains_key(r["problem_id"].as_str().unwrap()))
+        .map(|r| json!({
+            "schema": "celeris.campaign-fault/1", "campaign_sha256": m.compute_sha256().unwrap(),
+            "config": r["config"], "problem_id": r["problem_id"], "rep": r["rep"], "trial_no": r["trial_no"],
+            "scenario": "worker-stop/v1", "status": status,
+            "evidence": "injector.log", "evidence_sha256": format!("{:x}", Sha256::digest(log)),
+        })).collect()
+}
+fn write_faults(out: &Path, rows: &[Value]) {
+    fs::write(
+        out.join("faults.jsonl"),
+        rows.iter().map(|v| format!("{v}\n")).collect::<String>(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn injected_fault_is_an_independent_axis_through_real_grader_check_and_export() {
+    let d = tempfile::tempdir().unwrap();
+    let (m, out) = pilot_out_with_faults(d.path(), true);
+    let observations = fault_records(&m, &out, "injected");
+    write_faults(&out, &observations);
+    let trials = fs::read(out.join("trials.jsonl")).unwrap();
+    let faults = fs::read(out.join("faults.jsonl")).unwrap();
+    let base = totals(&m, &out);
+    for (runner, complete, result) in [
+        (
+            canned(
+                101,
+                "",
+                "error: failed to run custom build command for `x`\nUnable to find libclang\n",
+            ),
+            false,
+            "grader_env_failure",
+        ),
+        (
+            canned(101, "test chunk_zero ... FAILED\n", ""),
+            true,
+            "model_failure",
+        ),
+        (canned(0, OK, ""), true, "final_passed"),
+    ] {
+        grade_out(&m, &out, &fx().join("grade-cases/pilot"), &runner).unwrap();
+        let rep = check(&m, &out);
+        assert!(rep.ok, "{:?}", rep.violations);
+        assert_eq!(rep.complete, complete, "{:?}", rep.incomplete_reasons);
+        let table = export(&m, &out, &out.join("ex")).unwrap();
+        assert_eq!(table["fault_observations"], json!(observations));
+        for row in table["configs"].as_array().unwrap() {
+            assert_eq!(row["fault_breakdown"]["injected"][result], 1);
+            let counts = row["fault_breakdown"].as_object().unwrap();
+            let sum: u64 = counts
+                .values()
+                .flat_map(|c| c.as_object().unwrap().values())
+                .map(|n| n.as_u64().unwrap())
+                .sum();
+            assert_eq!(sum, row["n"].as_u64().unwrap());
+            assert_eq!(
+                counts["injected"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .map(|n| n.as_u64().unwrap())
+                    .sum::<u64>(),
+                1
+            );
+            assert_eq!(
+                counts["not_planned"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .map(|n| n.as_u64().unwrap())
+                    .sum::<u64>(),
+                row["n"].as_u64().unwrap() - 1
+            );
+        }
+        assert_eq!(fs::read(out.join("trials.jsonl")).unwrap(), trials);
+        assert_eq!(fs::read(out.join("faults.jsonl")).unwrap(), faults);
+        let now = totals(&m, &out);
+        for key in [
+            "n",
+            "tokens_sum",
+            "cost_micro_usd_sum",
+            "ran_trials",
+            "wall_secs_sum",
+        ] {
+            assert_eq!(sum(&now, key), sum(&base, key));
+        }
+    }
+    let csv = fs::read_to_string(out.join("ex/table.csv")).unwrap();
+    assert!(csv.contains("fault_breakdown") && csv.contains("injected"));
+}
+
+#[test]
+fn fault_declaration_without_confirmed_injection_is_incomplete_and_bad_binding_is_rejected() {
+    let d = tempfile::tempdir().unwrap();
+    let (m, out) = pilot_out_with_faults(d.path(), true);
+    common::write_grades_classed(&m, &out, |_| None);
+    let rep = check(&m, &out);
+    assert!(rep.ok && !rep.complete);
+    assert!(
+        rep.incomplete_reasons
+            .iter()
+            .any(|r| r.contains("unobserved"))
+    );
+    let rows = fault_records(&m, &out, "not_injected");
+    write_faults(&out, &rows);
+    let table = export(&m, &out, &out.join("ex")).unwrap();
+    assert_eq!(table["complete"], false);
+    assert!(!out.join("ex/table.json").exists());
+    for (field, value) in [
+        ("campaign_sha256", json!("wrong")),
+        ("scenario", json!("undeclared")),
+        ("trial_no", json!(999)),
+        ("status", json!("unknown")),
+        ("evidence_sha256", json!("wrong")),
+        ("evidence", json!("../outside")),
+    ] {
+        let mut bad = rows.clone();
+        bad[0][field] = value;
+        write_faults(&out, &bad);
+        let rep = check(&m, &out);
+        assert!(!rep.ok, "{field}");
+        assert!(export(&m, &out, &out.join("ex")).is_err(), "{field}");
+    }
+    let mut duplicate = rows.clone();
+    duplicate.push(rows[0].clone());
+    write_faults(&out, &duplicate);
+    assert!(!check(&m, &out).ok);
+    write_faults(&out, &rows);
+    fs::write(out.join("injector.log"), "changed").unwrap();
+    assert!(!check(&m, &out).ok);
+    let mut invalid = m.clone();
+    invalid
+        .fault_scenarios
+        .insert("unknown-problem".into(), "fault/v1".into());
+    assert!(invalid.validate().is_err());
+    assert_ne!(m.compute_sha256().unwrap(), {
+        let mut normal = m.clone();
+        normal.fault_scenarios.clear();
+        normal.compute_sha256().unwrap()
+    });
 }

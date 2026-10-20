@@ -39,6 +39,7 @@ fn campaign(i: &Input, n: usize) -> CampaignManifest {
         campaign_id: "e2e".into(),
         version: "v1".into(),
         split: Split::Dev,
+        fault_scenarios: Default::default(),
         experiment_sets: Default::default(),
         selected_sets: Vec::new(),
         input: InputRef {

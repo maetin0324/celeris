@@ -461,6 +461,9 @@ pub struct CampaignManifest {
     /// 宣言があるとき `primary`/`secondary.pair` は読まず、有効 arm・比較組は選択セットから決める。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub experiment_sets: BTreeMap<String, ExperimentSet>,
+    /// Predeclared research fault scenario per problem, shared by all arms/repeats.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fault_scenarios: BTreeMap<String, String>,
     /// 今回の測定で使うセット名。空なら宣言した全セット。宣言が無ければ無視（従来互換）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selected_sets: Vec<String>,
@@ -840,6 +843,11 @@ impl CampaignManifest {
 
     /// 構造検査（入力 manifest なし）。
     pub fn validate(&self) -> Result<(), String> {
+        for (problem, scenario) in &self.fault_scenarios {
+            if !self.problems.contains(problem) || scenario.trim().is_empty() {
+                return Err("fault_scenarios: unknown problem or empty scenario".into());
+            }
+        }
         if self.schema != CAMPAIGN_SCHEMA && self.schema != SIDE_CAMPAIGN_SCHEMA {
             return Err(format!(
                 "schema must be {CAMPAIGN_SCHEMA} or {SIDE_CAMPAIGN_SCHEMA}"
@@ -1340,6 +1348,7 @@ pub(crate) mod fixtures {
                 materials_sha256: "def".into(),
                 kb_snapshot: "kb@1".into(),
             },
+            fault_scenarios: Default::default(),
             experiment_sets: BTreeMap::new(),
             selected_sets: Vec::new(),
             order: Default::default(),

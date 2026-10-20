@@ -592,6 +592,7 @@ fn campaign(i: &Input) -> CampaignManifest {
             cfg(ConfigId::B, None),
             cfg(ConfigId::C, Some(c_routing())),
         ],
+        fault_scenarios: Default::default(),
         experiment_sets: Default::default(),
         selected_sets: Vec::new(),
         primary: (ConfigId::A, ConfigId::B),

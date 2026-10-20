@@ -233,6 +233,7 @@ fn campaign(i: &Input, per_case: u64) -> CampaignManifest {
         },
         problems: vec!["p0".into()],
         configs: vec![cfg(ConfigId::A), cfg(ConfigId::B), cfg(ConfigId::C)],
+        fault_scenarios: Default::default(),
         experiment_sets: Default::default(),
         selected_sets: Vec::new(),
         primary: (ConfigId::A, ConfigId::B),

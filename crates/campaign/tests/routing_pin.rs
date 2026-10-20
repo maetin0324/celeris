@@ -221,6 +221,7 @@ fn campaign(i: &Input, n: usize, b: Option<ArmRouting>, c: Option<ArmRouting>) -
             cfg(ConfigId::B, b),
             cfg(ConfigId::C, c),
         ],
+        fault_scenarios: Default::default(),
         experiment_sets: Default::default(),
         selected_sets: Vec::new(),
         primary: (ConfigId::A, ConfigId::B),

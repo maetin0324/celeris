@@ -78,6 +78,7 @@ fn campaign(i: &Input, which: &str, n: usize, max_tokens: u64) -> CampaignManife
         },
         problems: problems.clone(),
         configs,
+        fault_scenarios: Default::default(),
         experiment_sets: BTreeMap::from([(which.to_string(), set(&arms, pair))]),
         selected_sets: vec![which.to_string()],
         primary: (ConfigId::A, ConfigId::B),

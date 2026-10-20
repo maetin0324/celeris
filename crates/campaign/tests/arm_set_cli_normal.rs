@@ -589,6 +589,7 @@ fn manifest(
         },
         problems: CASES.map(String::from).to_vec(),
         configs,
+        fault_scenarios: Default::default(),
         experiment_sets: BTreeMap::from([(
             which.to_string(),
             ExperimentSet {

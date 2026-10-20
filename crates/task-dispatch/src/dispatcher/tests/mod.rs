@@ -2933,6 +2933,10 @@ mod eval_trial_dispatch;
 /// （`src/dispatcher/tests/work_unit_dependency_base.rs`）。
 mod work_unit_dependency_base;
 
+/// ADR 2026-10-20-replan-dep-change-wu-rebase: replan で同じ段の依存先が変わった WU の作り直し
+/// （`src/dispatcher/tests/replan_rebase.rs`）。
+mod replan_rebase;
+
 /// ADR-0079 §7 R1b: plan/3 の kind task の unit から子 task を作り、状態を写し、段階の完了・
 /// 子待ち・subtree の中止・`review: human`（`src/dispatcher/tests/tree.rs`）。
 mod tree;

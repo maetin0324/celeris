@@ -117,6 +117,9 @@ pub struct NodeState {
     /// 再開で最初からやり直した回数。
     #[serde(default)]
     pub reruns: u32,
+    /// 独立検証（[`Baseline::set_verifier`]）が不合格にして、同じ node をやり直した回数。
+    #[serde(default)]
+    pub verify_failures: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,7 +173,14 @@ pub struct Baseline {
     worker_log: Option<WorkerLog>,
     /// 外部 push の通知窓口（測定用の最小フック）。あれば完了は通知だけで知り、poll の照会で探さない。
     notices: Option<NoticeChannel>,
+    /// 成果物の独立検証（Celeris 側の WorkUnit check に当たる）。不合格なら同じ node を最初から再実行する。
+    verifier: Option<Verifier>,
+    verify_max_attempts: u32,
 }
+
+/// node の完了を確定する前に呼ぶ独立検証: `(node id, 0 始まりの試行番号)` → Err(理由) で不合格。
+/// 検証は評価側の grader（作業者の自己申告ではない）。Celeris 側の WorkUnit check と同じ grader・同じ試行上限を渡す。
+pub type Verifier = Box<dyn FnMut(&str, u32) -> Result<(), String> + Send>;
 
 /// 作業の開始・終了の独立記録（metrics が生ログとして読む。`celeris_side` の worker ledger と同じ形）。
 /// node id は `<campaign>/<node>`（`/` が無ければ campaign は `c0`）。
@@ -231,6 +241,7 @@ impl Baseline {
                             done_at: None,
                             physical_id: None,
                             reruns: 0,
+                            verify_failures: 0,
                         },
                     )
                 })
@@ -253,6 +264,8 @@ impl Baseline {
             stop_after_saves: None,
             progress: None,
             worker_log: None,
+            verifier: None,
+            verify_max_attempts: 1,
             notices: None,
         };
         // 実行中だった作業は止まった時点で失われているので、最初からやり直す。
@@ -266,6 +279,12 @@ impl Baseline {
     }
 
     /// 作業の開始・終了を `path` に追記する（再開しても seq は続く）。
+    /// 独立検証を差す。`max_attempts` 回の試行（最初を含む）で合格しなければ [`Error::State`] で止める。
+    pub fn set_verifier(&mut self, v: Verifier, max_attempts: u32) {
+        self.verifier = Some(v);
+        self.verify_max_attempts = max_attempts;
+    }
+
     pub fn set_worker_log(&mut self, path: &Path) -> std::io::Result<()> {
         let seq = fs::read_to_string(path)
             .map(|t| t.lines().count() as u64)
@@ -637,6 +656,25 @@ impl Baseline {
                         return Ok(Outcome::Interrupted);
                     }
                 } else {
+                    let attempt = self.state.nodes[id].verify_failures;
+                    if let Some(v) = self.verifier.as_mut()
+                        && let Err(why) = v(id, attempt)
+                    {
+                        if attempt + 1 >= self.verify_max_attempts {
+                            return Err(Error::State(format!(
+                                "{id}: verification failed after {} attempts: {why}",
+                                attempt + 1
+                            )));
+                        }
+                        // 不合格: 完了にせず、同じ node を ready に戻して最初から再実行する。
+                        let n = self.state.nodes.get_mut(id).expect("node");
+                        n.verify_failures += 1;
+                        n.status = Status::Ready;
+                        n.ready_at = Some(now);
+                        n.phase_end = None;
+                        self.log("verify_failed", id);
+                        continue;
+                    }
                     let n = self.state.nodes.get_mut(id).expect("node");
                     n.status = Status::Done;
                     n.done_at = Some(now);

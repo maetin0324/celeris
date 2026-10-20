@@ -1,7 +1,7 @@
 # DAG・外部待機・障害復旧の比較ドライバ（dagbench）
 
 ---
-tasks: [01M59KY5FNM0K4XGPPS61D0CA2]
+tasks: [01M59KY5FNM0K4XGPPS61D0CA2, 01M5BT8CRNPJX1THX36XF4C7PZ]
 ---
 
 無 LLM で Celeris の通常経路と合理的な非同期 DAG baseline を比べる driver の公開仕様と、通常の実行・再生成手順。
@@ -97,6 +97,7 @@ cargo run -p celeris-campaign -- dagbench metrics --raw <raw dir> --out <表の�
 `--seed` を省くと scenarios.json の `seed`。別 process raw（/2）の要約は `dagbench process-metrics --raw <dir> --out <dir>`。
 
 Celeris（試験 harness）: `--arm celeris` は CLI 未対応（task-api の router が dev-dependency のため）。
+正式な反復入口は下の「反復実行入口」。
 `RunHeader::from_spec` + `CelerisSide::drive` を呼ぶ試験で流す（例は `tests/dagbench_metrics.rs` の
 `celeris_metrics_come_from_the_same_raw_format`、別 process 版は `tests/dagbench_process.rs` と `tests/dagbench_overhead.rs`）。
 どちらの方式も、同じ scenario・点・seed・資源枠・`poll_secs` を使う。
@@ -141,3 +142,65 @@ CPU を焼く負荷は掛けない。時間は論理時計と出来事待ちで�
 A0（直接 Claude Code+Sonnet）と B0（Celeris+Sonnet）の実 LLM 主比較の実行・pilot・最終報告は、この driver に**依存しない**。
 この driver の測定は別 dataset `control_measured` で、主比較 A0/B0 とは別、B1/C1 とも別である。機構（DAG・外部待機・障害復旧）の
 無 LLM 比較であり、結果を主比較の成功率・品質の主張に混ぜない。この driver の完了・未完了は、既存の主比較 task をブロックしない。
+
+## 反復実行入口（baseline と Celeris を同じ手順で）
+
+`crates/campaign/tests/dagbench_harness.rs`（正式な test-harness 入口。`--arm celeris` が CLI で使えない代わり）。
+case（scenario）・point・seed・故障条件・出力先を環境変数で与え、同じ手順で両方式を流して raw から指標を再生成する。
+
+```
+DAGBENCH_ARM=baseline|celeris DAGBENCH_SCENARIO=k2-mini DAGBENCH_POINT=camp-1 [DAGBENCH_SEED=<n>] \
+[DAGBENCH_FAULT=a1-restart-after-accept|a2-restart-after-wait|b-submit-response-lost|c-completion-duplicate] \
+DAGBENCH_OUT=<dir> \
+  cargo test -p celeris-campaign --test dagbench_harness -- --exact run_from_env --ignored --nocapture
+```
+
+出力: `<out>` の raw 一式（`run.json`・`ext.jsonl`・`worker.jsonl`・故障時は `fault.jsonl`・`control.jsonl`）と
+`<out>/metrics/control_measured_metrics.{json,tsv}`。資源枠は scenarios.json の値（両方式で同じ）。
+故障条件は camp-1 の点だけ（並行 campaign を評価対象にする場合は、fault runner の複数 campaign 化が別途要る。今回は拡張していない）。
+通常 run は camp-4 など複数 campaign の点でも流せる。試験 `both_arms_run_through_the_same_entry_and_regenerate` /
+`fault_condition_is_a_parameter_of_the_same_entry`（a1・a2 を両方式で）が入口を固定している。
+
+## stage 変換は依存を強めない
+
+Celeris 側の計画は位相レベルごとに 1 stage（`RunSpec::plan_json`）。stage の順序は「前の stage の node 全部」を待つので、
+DAG の祖先でない node を待たせると scenario に無い依存を足す。`RunSpec::stage_extra_precedence` はその対（a, b）を返し、
+`stage_conversion_does_not_add_dependencies` が固定 scenario × 全 point で空であること、レベルが揃わない DAG では
+検出器が空でないことを確かめる。
+
+## 独立 grader 付きの仕事（検証失敗 → 既存 repair → 完遂）
+
+`crates/campaign/src/dagbench/graded.rs` と `tests/dagbench_graded.rs`。scenario の 1 node（`analyze`）を、固定入力
+（生データ・評価側が取得した scheduler 記録・評価テスト）から作った実成果物の仕事にし、評価側 grader
+（`celeris-campaign grade`: 評価テストの実行・scheduler 記録との突き合わせ・raw からの数値再計算）が判定する。
+
+- 最初の試行は speedup を捏造した成果物。grader の `recompute` が不合格にする（負の対照を試験で固定）。
+- Celeris: WorkUnit の `checks` が grader。不合格 → 既存の check 不合格の経路（`previous_check_failures` を次の run へ）→
+  2 回目の run が正しい成果物 → 合格 → task Done。baseline: 同じ成果物の列を同じ grader で検査し、不合格なら同じ node を
+  最初から再実行（`Baseline::set_verifier`）。試行上限も同じ（`Grading::max_attempts`）。上限で合格しなければ完遂にしない。
+- 成功宣言だけの成果物は同じ grader が不合格にする。常に true の check は科学的成功の根拠にしない（判定付きでない node の
+  `true` は台本の node で、成功率の欄に入れない）。
+- 再作業は `lost_progress.rerun_node_starts`・`rerun_work_secs` に出る（両方式とも 1 回）。
+
+## 測定専用 controller の停止（既知 job ID・wait 永続化後）
+
+`a2-restart-after-wait`: 外部 job の物理 ID と wait を永続化（baseline は state.json、Celeris は SQLite の durable wait と
+worker ledger）した後、runner が握る制御 child だけへ SIGKILL → 同じ永続 state で再起動。外部 job は別 process の ext-sim
+（実 HPC job の代役）が持ち続け、再起動後は論理 ID で追跡して完遂する（物理起動数 = 論理 job 数）。本番サービスは止めない
+（測定側が起こした子 process だけ）。a1（受理直後）・b・c も同じ入口で流せる。
+
+## 指標の定義と、何が実測で何が未実施か
+
+| 項目 | 出どころ |
+|---|---|
+| 完遂/正しさ | `completed`（node 数・仕事秒）＋ 判定付き node は独立 grader の合否 |
+| 回復時間 | `recovery`（障害後の再確定までの論理秒・実時間） |
+| 再実行/重複 | `lost_progress`・`duplicates`（`extra_physical_launches`・`double_counted`） |
+| 追加消費 | `lost_progress.total_secs`（やり直した作業秒）。LLM 消費は 0 |
+| 人介入 | `interventions` |
+
+この driver の結果は全て `control_measured`（論理時計・台本 worker・ext-sim・grader は実走）で、実 LLM / 実 HPC
+campaign の完遂率とは別の dataset（`llm_campaign`）。**実 LLM・実 HPC での比較は未実施**。必要な最小枠は、
+独立 grader の case 1 件 × 2 方式 × 故障あり/なし（a2）で、各 1〜2 回（seed 固定）の実 HPC job（短時間・1〜2 node）と、
+LLM 比較をする場合の同一 model/harness・同一予算上限。既存承認の残枠で足りるかは人が確認する
+（新規枠・予算増額はこの task の範囲外）。

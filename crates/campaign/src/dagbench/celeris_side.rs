@@ -148,6 +148,8 @@ pub struct RunSpec {
     pub ext_job_secs: u64,
     pub arrival_interval_secs: u64,
     pub caps: Caps,
+    /// 独立 grader で判定する node（無ければ従来どおり台本だけ）。
+    pub grading: Option<std::sync::Arc<super::graded::Grading>>,
 }
 
 impl RunSpec {
@@ -195,6 +197,7 @@ impl RunSpec {
                 "arrival_interval_secs",
             )?,
             caps: file.observation_caps.clone(),
+            grading: None,
         })
     }
 
@@ -238,6 +241,42 @@ impl RunSpec {
         lv
     }
 
+    /// stage 変換が足してしまう順序制約: node `b` の stage より前の stage にある node `a` は、stage の順序で `b` より
+    /// 先に終わる必要があるが、DAG 上で `a` が `b` の（推移的な）祖先でなければ、それは scenario に無い余計な依存
+    /// （`(a, b)` を返す）。空なら stage 変換は依存を強めていない。
+    pub fn stage_extra_precedence(&self) -> Vec<(String, String)> {
+        let lv = self.levels();
+        let mut anc: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
+        // 定義順 = 位相順。
+        for n in &self.scenario.nodes {
+            let mut set = std::collections::BTreeSet::new();
+            for d in &n.deps {
+                set.insert(d.as_str());
+                if let Some(a) = anc.get(d.as_str()) {
+                    set.extend(a.iter().copied());
+                }
+            }
+            anc.insert(n.id.as_str(), set);
+        }
+        let mut extra = vec![];
+        for b in &self.scenario.nodes {
+            for a in &self.scenario.nodes {
+                if lv[&a.id] < lv[&b.id] && !anc[b.id.as_str()].contains(a.id.as_str()) {
+                    extra.push((a.id.clone(), b.id.clone()));
+                }
+            }
+        }
+        extra
+    }
+
+    /// WorkUnit の check: 判定付き node は独立 grader、それ以外は従来の `true`（科学的成功の根拠にしない node）。
+    fn unit_check(&self, campaign: &str, node: &str) -> String {
+        match &self.grading {
+            Some(g) if g.node == node => g.check_cmd(campaign),
+            _ => "true".into(),
+        }
+    }
+
     /// planner run が書く v3 計画。node → leaf WorkUnit。既存の計画検証（1 stage の unit 上限・stage 内の依存は
     /// 1 本まで）に合わせ、位相レベルごとに 1 stage とし、依存辺は stage の順序で表す（stage 内の depends_on は
     /// 作らない）。k2-mini / k2-wide は各レベルの node が前のレベルの node 全部に依存するので、DAG と同じ制約になる。
@@ -260,7 +299,7 @@ impl RunSpec {
                     "objective": format!("Run dagbench node {} of campaign {campaign} ({} work)", n.id, n.kind),
                     "depends_on": [],
                     "done_when": [format!("{} is done", n.id)],
-                    "checks": [{"cmd": "true", "expect_exit": 0}],
+                    "checks": [{"cmd": self.unit_check(campaign, &n.id), "expect_exit": 0}],
                 })
             })
             .collect();
@@ -413,6 +452,8 @@ struct Shared {
     /// 通知主導の受入: true の間、poller は完了状態を見ずに失敗を返す（試行回数だけ数える）。
     poll_disabled: std::sync::atomic::AtomicBool,
     poll_attempts: std::sync::atomic::AtomicU64,
+    /// 判定付き node の試行回数（campaign/node → 書いた回数）。
+    attempts: Mutex<HashMap<String, u32>>,
 }
 
 impl Shared {
@@ -607,6 +648,23 @@ impl WorkerAdapter for StubWorker {
             (None, _) => {
                 sh.record("node_started", &campaign, &key, None);
                 sh.work(node.work_secs).await;
+                // 判定付き node: 実成果物を書く。合否は WorkUnit の check（独立 grader）が決める。ここでは判定しない。
+                if let Some(g) = sh.spec.grading.as_ref().filter(|g| g.node == key) {
+                    let attempt = {
+                        let mut m = sh.attempts.lock().unwrap_or_else(|e| e.into_inner());
+                        let a = m.entry(format!("{campaign}/{key}")).or_insert(0);
+                        *a += 1;
+                        *a - 1
+                    };
+                    let dir = g.artifact_dir(&campaign);
+                    g.materialize(attempt, &dir).map_err(AdapterError::Io)?;
+                    sh.record(
+                        "artifact_written",
+                        &campaign,
+                        &key,
+                        Some(json!({"attempt": attempt, "dir": dir})),
+                    );
+                }
                 sh.record("node_finished", &campaign, &key, None);
                 done(format!("{key} done"))
             }
@@ -801,6 +859,7 @@ impl CelerisSide {
             jobs: Mutex::new(resume.jobs),
             poll_disabled: Default::default(),
             poll_attempts: Default::default(),
+            attempts: Default::default(),
         });
         let mut dispatcher = build_dispatcher(&shared, &paths, store.clone());
         register_instance(&mut dispatcher, &store)?;

@@ -64,3 +64,31 @@ updated: 2026-10-20
 - `bash scripts/dev/test-parallel.sh`: exit 0（6198 passed, 0 failed, 15 ignored。初回は上記 flaky 1 件で exit 100、修正後に再実行）
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo fmt --all -- --check`: exit 0
+
+## 追記（attempt 3）: 実 `celeris` daemon での無 LLM 通し（最新 code）
+同一構成（この branch の HEAD `8fe6c59a453d`。main `a1f33d76` + 本 task の試験修正）の実 binary で、通常 launcher の全段を通した。
+LLM・userns・本番 host・cluster は使っていない（A は claude stub、B は実 `claude_code` adapter に非 LLM の program を command として渡す、能力検査は実 `cap-worker`）。
+
+- 入口: `LAUNCHER_REAL_EVIDENCE=<dir> LAUNCHER_REAL_RELEASE=$(git rev-parse --short=12 HEAD) cargo test -p celeris-campaign --test launcher -- --ignored --exact real_daemon_main_set_runs_through_the_launcher_without_llm` → 1 passed（42.9 s）。証跡は run の成果物 `real-daemon-rehearsal/`（`steps.json`＝各段の exit と出力、`root/`＝測定 root 一式）。
+- pin: daemon `target/debug/celeris` sha256 `cf42f63e…c7cf809`（`/proc/<pid>/exe` が同じ実体）、`celeris-campaign` sha256 `c817bbc9…21281a3`、release `8fe6c59a453d`（一時 releases_dir の外＝unmanaged で起動）、campaign `research-eval-main-rehearsal-1`（`experiment_sets.s`＝A/B、`selected_sets`、`approved_trials 12`、`shared_ledger` 宣言、K4×1 rep）、campaign_sha256 `ffdc0b5e…7cfbe6`。input/grader/env は `preflight_setup` の固定（試験 case・grader-private・cap-env）。
+- 段ごとの結果: prepare 0 / start 0（`GET /api/v1/config` の identity.pid = launcher 所有 pid、release 一致）/ **preflight 0（`ok true`、`paid_calls_made 0`、`missing` 空。checked: manifest・versions・input-manifest・case-inputs・graders・case-time・inputs・capability・candidates・auth-env・snapshot-src・measure-env・env-check・trial-state・lock・budget）** / human-op record ×2（A0・B0、watch の前）0 / watch 0（settled、台帳 done 2、B は通常 `POST /api/v1/tasks` で実 dispatcher・実 worker 起動）/ stop 0 → start 0 → watch 0（再開: 台帳・投入数・A 起動数とも不変）/ collect 0（実験 case なし 2 件 skip）/ grade: 採点 2 件（`failure_class` model_failure ×2）、**check が非 0** / export 非 0（同じ check）/ 測定 DB の写し → `celerisctl campaign export` 0 / `human-op report` 0。
+- 通しで見つけて直したもの（本 commit）:
+  1. `human-op record --manifest <file>` が manifest の `sha256` 欄（実 manifest には無く空）を identity にして必ず拒否していた → runner・台帳・export と同じ `compute_sha256()` に（試験 `human_ops_cli::manifest_path_identity_uses_the_campaign_hash`）。
+  2. runbook どおり pilot 開始時（初回 watch の前）に `<OUT>/human-ops.jsonl` を書くと、watch が「out has data but no lock.json」で拒否していた → lock の新規判定で `human-ops.jsonl` を runner の data に数えない（`lock_exec::tests`）。
+  3. launcher が `REPO_SRC` を必須にして常に `--repo-src` を渡すため、K4 だけの最小 pilot が preflight の lock 検査で拒否されていた → 任意化（K2 を選べば従来どおり CLI が要求）。`docs/ops/measure-run-final.md` §2 を更新。
+- **未解決（実 pilot の前に要る）**: 実 daemon の B の reviewer run に resolved routing が記録されず、check が `no resolved routing recorded (fell back to the global config?)` で拒否する（export も同じ理由で非 0）。今回の構成（fake source・route_defaults）由来か Celeris 本体の欠落かは未切り分け。B の reviewer run が 12 回（stub の verdict 数と実 criterion 数の不一致で review が繰り返された可能性）、watch の `tokens_total` が A の 105 だけで B の usage が数えられていない点も未確認。いずれも実 pilot の B 結果の有効性に直結するので、別 task で切り分ける（提案）。
+
+## 枠と台帳の読取（attempt 3、読取のみ）
+- `/local/celeris/data/measure/` は `main` だけで、共有台帳（`*ledger*`）は無い。旧 pin（`01M58VFRBA6HG0SSF3CG5BKM91/artifacts/pinned/main/final.json`）に `shared_ledger`・`approved_trials` の宣言は無い（grep 0 件）。= 承認枠（試行 12・3,000,000 tokens）の共有台帳上の既消費は 0、旧 pilot-2（488k）は別台帳で未算入。
+- 最小実 pilot（A0/B0 × K4 × 1 rep、上限 600,000 tokens）は既存承認の内側で、追加承認は要らない。ただし上の「未解決」の check 拒否が残る間は B の結果が無効になるため、**実 pilot は未実施**（worker は LLM CLI を起動しない規則でもある）。raw 人操作の記録は、上の通しで watch の前から `<OUT>/human-ops.jsonl` に記録→report まで通ることを確認した（実 pilot での記録は未実施）。
+
+## 状態区分（attempt 3 時点）
+- 実装済: 研究評価接続 1・2・4（main）、本 task の修正 3 件＋flaky 試験の直し。
+- 無 LLM 検証済: 実 `celeris` daemon（最新 code）での launcher 全段（上記）。preflight は最新 code で取り直した（旧 c9654bff5633 の結果は流用していない）。
+- 実 pilot 実施済: なし。
+- 未検証: B reviewer run の routing 記録（check 拒否）、B の usage 集計、本番 release（c893c911 / a1f33d76）の昇格後の実 preflight、実 LLM の A0/B0、7 日使用率の読取。
+
+## 検査結果（attempt 3）
+- `bash scripts/dev/test-parallel.sh`: exit 0（6212 passed, 0 failed, 17 ignored）
+- `cargo clippy --workspace -- -D warnings`: exit 0
+- `cargo fmt --all -- --check`: exit 0

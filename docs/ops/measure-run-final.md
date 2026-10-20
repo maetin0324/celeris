@@ -36,7 +36,7 @@ R=/local/celeris/data/workspaces/01M58VFRBA6HG0SSF3CG5BKM91/artifacts   # 主比
 
 ## 2. env ファイル（唯一の設定源。`KEY=VALUE` の sh 形式、値に秘密を書かない）
 雛形: `$P/measure-launcher.example.env`（複製して `<operator 入力待ち: …>` を実値にする。残っていると `prepare`/`preflight` が拒否する）。
-必須（欠けると `prepare` が `<KEY> is required` で非 0）: `MANIFEST` `DAEMON_CONFIG` `NORMAL_CONFIG` `CANARIES` `OUT` `STATE_DIR` `TASK_TEMPLATE` `MATERIALS_SRC` `KB_SRC` `REPO_SRC` `INPUTS_SRC`。
+必須（欠けると `prepare` が `<KEY> is required` で非 0）: `MANIFEST` `DAEMON_CONFIG` `NORMAL_CONFIG` `CANARIES` `OUT` `STATE_DIR` `TASK_TEMPLATE` `MATERIALS_SRC` `KB_SRC` `INPUTS_SRC`。`REPO_SRC` は初期 tree を固定する case（K2）を選んだときだけ要る（無ければ preflight の lock 検査が拒否する。K4 だけの選択で渡すと逆に拒否される）。
 `A_ACCOUNT` は A が有効な構成（A/B・A/B/C）で要る。必須キーではなく、無いまま A が有効なら `preflight` が `--a-account` 欠落で拒否する。B/C のみの構成は A の認証も program も要らない（`--a-account` は渡されない）。
 `start` が加えて要る: `CELERIS_BIN`（測定 daemon の実行ファイル。`prepare` が sha256 を固定）`RELEASE`（B/C の sha12）。`CAP_ENV` は本測定では事実上必須（無いと preflight の cap-probe が拒否）。
 任意: `CAMPAIGN_BIN`（既定 `celeris-campaign`。`DAEMON_CONFIG` の `cap-probe-*` の command と同じ実体にする）`A_PROGRAM`（既定 `claude`）`RUN_PATH` `WORKER_PROGRAMS`（`name=path` を空白区切り。env-lock に固定）`MEASUREMENT_ID` `GLOBAL_LEDGER`（共有承認の台帳 dir。manifest の `shared_ledger` 宣言と同じ path。省略・別 path の watch は投入前に拒否される）`VARIANT_B0_SHA256`（manifest が variant を参照するとき、承認済み `variant-b0.json` の sha256。未指定・不一致は preflight が拒否）`INITIAL_TREES`（grade-out の `--initial-trees`。grader 側で組んだ初期 tree の置き場 `<dir>/<problem_id>`）`CASES_ROOT` `GRADER_ROOT` `GRADE_CASES_ROOT`（`grade` に必須）`RECORDS`（export で final_accounting）`EXECUTOR`（既定 `celeris`）`INTERVAL_SECS`（60）`MAX_ITERATIONS`（1440）`HEALTH_WAIT_SECS`（60）。

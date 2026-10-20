@@ -369,3 +369,58 @@ fn live_start_then_explicit_end_resumes_for_a0_and_b0() {
         assert_eq!(lines(&f).len(), 2);
     }
 }
+
+/// `--manifest <file>` は runner・台帳・export と同じ campaign hash（`compute_sha256`）で識別する。
+/// 実 manifest は `sha256` 欄を持たないので、欄の値（空）を使うと記録できない（2026-10-20 の通し確認で発見）。
+#[test]
+fn manifest_path_identity_uses_the_campaign_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("human-ops.jsonl");
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../agent-docs/progress/2026-10-16-mlsys-final/final.json");
+    let want = celeris_campaign::manifest::CampaignManifest::load(&manifest)
+        .unwrap()
+        .compute_sha256()
+        .unwrap();
+    let (code, out, err) = run(&[
+        "record",
+        "--file",
+        f.to_str().unwrap(),
+        "--campaign",
+        "camp",
+        "--manifest",
+        manifest.to_str().unwrap(),
+        "--case",
+        "case1",
+        "--arm",
+        "B0",
+        "--rep",
+        "1",
+        "--op-kind",
+        "status_check",
+        "--actor",
+        "eval1",
+        "--mode",
+        "manual",
+        "--intent",
+        "monitoring",
+        "--trigger",
+        "scheduled",
+        "--logical-op",
+        "p0/look",
+        "--started-at",
+        "now",
+        "--ended-at",
+        "now",
+    ]);
+    assert_eq!(code, 0, "{out}{err}");
+    let rows: Vec<Value> = fs::read_to_string(&f)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(!rows.is_empty());
+    for r in rows {
+        assert_eq!(r["manifest_sha256"], Value::from(want.clone()), "{r}");
+    }
+}

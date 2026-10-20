@@ -1305,3 +1305,428 @@ fn grade_collects_job_observations_bound_to_the_trial_and_rejects_every_mismatch
     assert!(!obs.exists());
     stop(&f);
 }
+
+// ---- 実 `celeris` daemon での通し（無 LLM。運用前の同一構成リハーサル） ----
+
+/// 能力検査 harness（kind=fake、`[adapters.fake] command`）の worker: 実 `cap-worker` に渡す。起動を記録する。
+const PROBE_WORKER_STUB: &str = r#"import json, os, subprocess, sys
+line = sys.stdin.readline()
+t = json.loads(line)["task"]
+with open(os.path.join("@LOG@", "worker-launches.jsonl"), "a") as f:
+    f.write(json.dumps({"adapter": "fake", "task": t["id"], "kind": t.get("kind"), "genre": t.get("genre")}) + "\n")
+p = subprocess.run(["@CAMPAIGN@", "cap-worker"], input=line, text=True, capture_output=True)
+sys.stdout.write(p.stdout)
+sys.exit(p.returncode)
+"#;
+
+/// B の実 harness（kind=claude_code）の `[adapters.claude_code] command` に置く非 LLM の program。実 adapter が渡す
+/// prompt（stdin と argv）から `result.json` / `review.json` の path を読み、試行は作業場所に stub の成果と
+/// `result.json` を、reviewer run は全 criterion pass の `review.json` を書いて、stream-json の usage を出す。
+const B_CLAUDE_STUB: &str = r#"#!/usr/bin/python3
+import json, os, re, sys
+args = sys.argv[1:]
+if args[:1] == ["--version"]:
+    print("2.1.0 (Claude Code)")
+    sys.exit(0)
+data = sys.stdin.read()
+text = data + "\n" + "\n".join(args)
+review = re.search(r"verdicts to `([^`]+)/review\.json`", text)
+with open(os.path.join("@LOG@", "worker-launches.jsonl"), "a") as f:
+    f.write(json.dumps({"adapter": "claude_code", "review": bool(review), "cwd": os.getcwd()}) + "\n")
+if review:
+    art = review.group(1)
+    os.makedirs(art, exist_ok=True)
+    v = [{"criterion": i, "pass": True, "reason": "stub reviewer (no LLM)"} for i in range(8)]
+    with open(os.path.join(art, "review.json"), "w") as f:
+        json.dump({"verdicts": v[:1]}, f)
+else:
+    m = re.search(r"([^\s`'\"]+/artifacts)/result\.json", text)
+    art = m.group(1) if m else os.path.join(os.getcwd(), "artifacts")
+    os.makedirs(art, exist_ok=True)
+    os.makedirs("analysis", exist_ok=True)
+    with open(os.path.join("analysis", "stub-report.md"), "w") as f:
+        f.write("stub worker output (no LLM)\n")
+    with open(os.path.join(art, "result.json"), "w") as f:
+        json.dump({"summary": "stub worker (no LLM)", "evidence": []}, f)
+u = {"input_tokens": 1000, "output_tokens": 50}
+print(json.dumps({"type": "assistant", "message": {"id": "m0", "usage": u, "content": [{"type": "text", "text": "stub"}]}}))
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "stub", "usage": u}))
+"#;
+
+/// 実 `celeris` binary（`celeris-campaign` と同じ出力 dir）。
+fn real_celeris_bin() -> PathBuf {
+    let p = Path::new(&campaign_bin()).parent().unwrap().join("celeris");
+    assert!(
+        p.exists(),
+        "{} was not built (cargo build -p celeris)",
+        p.display()
+    );
+    p
+}
+
+/// launcher の 1 手順の記録（evidence 用）。
+fn step(f: &Fx, log: &mut Vec<Value>, sub: &str) -> (bool, String) {
+    let o = launch(f, sub);
+    let t = text(&o);
+    assert!(!t.contains(TOKEN), "token leaked by {sub}");
+    log.push(json!({"step": sub, "exit": o.status.code(), "output": t}));
+    (o.status.success(), t)
+}
+
+fn cc(f: &Fx, log: &mut Vec<Value>, name: &str, args: &[String]) -> (bool, String) {
+    let o = Command::new(campaign_bin())
+        .args(args)
+        .env("CELERIS_MEASURE_TOKEN", TOKEN)
+        .current_dir(f.d())
+        .output()
+        .unwrap();
+    let t = text(&o);
+    log.push(json!({"step": name, "argv": args, "exit": o.status.code(), "output": t}));
+    (o.status.success(), t)
+}
+
+/// 主比較（A0/B0 の set、K4 × 1 rep）を、実 `celeris` daemon（この checkout の build、`--config` だけで launcher が起動）に
+/// 対して通常の launcher 入口で通す: prepare → start → preflight → raw 人操作の記録開始 → watch → 停止 → 再起動 → watch 再開
+/// （再投入なし）→ collect → grade → export → decision-log export → human-op join/report → stop。LLM・userns・本番は使わない
+/// （A は claude stub、B は fake harness の worker stub）。証跡は `LAUNCHER_REAL_EVIDENCE` の dir へ写す（運用前の確認用）。
+#[test]
+#[ignore = "real celeris daemon rehearsal; run with --ignored (LAUNCHER_REAL_EVIDENCE=<dir> keeps the evidence)"]
+fn real_daemon_main_set_runs_through_the_launcher_without_llm() {
+    let f = fixture();
+    let d = f.d().to_path_buf();
+    let ds = d.display().to_string();
+    let mut log: Vec<Value> = Vec::new();
+    let campaign = "research-eval-main-rehearsal-1";
+    // B の版 = 測定 daemon の release（この checkout の sha12）。
+    let release = std::env::var("LAUNCHER_REAL_RELEASE").unwrap_or_else(|_| "rehearsal0001".into());
+    edit_manifest(&f, |v| {
+        only_arms(
+            v,
+            &["A", "B"],
+            json!([["A", "B"]]),
+            json!({"approved_trials": 12, "shared_ledger": format!("{ds}/global-ledger")}),
+        );
+        v["campaign_id"] = json!(campaign);
+        v["problems"] = json!(["k4-cmp4-validity-analysis"]);
+        for c in v["configs"].as_array_mut().unwrap() {
+            if c["id"] != "A" {
+                c["harness_version"] = json!(release);
+            }
+        }
+    });
+    // 実 daemon の測定 config: fake の source・harness だけ（LLM CLI を起動できない）、releases_dir・repo は一時 dir、
+    // llm_proxy は無効、[[clusters]] なし（tunnel を張らない）。
+    fs::create_dir_all(d.join("releases")).unwrap();
+    fs::create_dir_all(d.join("measure/ws")).unwrap();
+    let worker = d.join("bin/probe-worker-stub.py");
+    fs::write(
+        &worker,
+        PROBE_WORKER_STUB
+            .replace("@LOG@", &ds)
+            .replace("@CAMPAIGN@", &campaign_bin()),
+    )
+    .unwrap();
+    let b_claude = d.join("bin/b-claude-stub");
+    write_exec(&b_claude, &B_CLAUDE_STUB.replace("@LOG@", &ds));
+    let measure = format!(
+        r#"db = "{n}/celeris.db"
+workspace_root = "{n}/ws"
+tick_ms = 100
+
+[knowledge]
+root = "{n}/kb"
+default_mounts = ["kb:trial"]
+
+[api]
+listen = "127.0.0.1:{port}"
+token_file = "{n}/token"
+
+[accounts]
+claude_dir = "{ds}/accounts"
+
+[selfdeploy]
+releases_dir = "{ds}/releases"
+repo = "{ds}/selfdeploy-repo"
+push = false
+
+[llm_proxy]
+enabled = false
+
+[adapters.fake]
+command = ["/usr/bin/python3", "{w}"]
+
+[llm_sources.measure]
+kind = "fake"
+accounts = ["measure"]
+models = ["claude-sonnet-5-5", "claude-sonnet-5-5-b"]
+
+[adapters.claude_code]
+command = "{bc}"
+
+[harnesses.claude-code]
+kind = "claude_code"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[harnesses.cap-probe-claude-code]
+kind = "fake"
+env_of = "claude-code"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[route_defaults.claude-code]
+candidates = [{{ source = "measure", model = "claude-sonnet-5-5" }}]
+
+[route_defaults.cap-probe-claude-code]
+candidates = [{{ source = "measure", model = "claude-sonnet-5-5" }}]
+
+[harness_selection]
+execution_class_defaults = {{}}
+rules = [
+  {{ genre = "cap-probe-claude-code", harness = "cap-probe-claude-code", required_capabilities = [] }},
+  {{ harness = "claude-code", required_capabilities = [] }},
+]
+"#,
+        n = d.join("measure").display(),
+        port = f.port,
+        w = worker.display(),
+        bc = b_claude.display(),
+    );
+    fs::write(f.measure(), measure).unwrap();
+    // 突き合わせ用の通常 config も cluster なし（この rehearsal は cluster に繋がない。K4 は job を投げない）。
+    let normal = fs::read_to_string(d.join("normal.toml")).unwrap();
+    let normal = normal.split("[[clusters]]").next().unwrap().to_string();
+    fs::write(d.join("normal.toml"), normal).unwrap();
+    let celeris = real_celeris_bin();
+    f.write_env(&format!(
+        "GLOBAL_LEDGER={ds}/global-ledger\nMEASUREMENT_ID={campaign}\nRELEASE={release}\nCELERIS_BIN={}\n",
+        celeris.display()
+    ));
+    // K4 だけの選択では初期 tree を固定する case が無いので REPO_SRC を渡さない（launcher は任意として扱う）。
+    env_without(&f, "REPO_SRC");
+    let keep = std::env::var_os("LAUNCHER_REAL_EVIDENCE").map(PathBuf::from);
+    let save = |log: &Vec<Value>| {
+        if let Some(k) = &keep {
+            let _ = fs::remove_dir_all(k.join("root"));
+            fs::create_dir_all(k).unwrap();
+            fs::write(
+                k.join("steps.json"),
+                serde_json::to_string_pretty(log).unwrap(),
+            )
+            .unwrap();
+            let _ = Command::new("cp")
+                .arg("-a")
+                .arg(format!("{ds}/."))
+                .arg(k.join("root"))
+                .status();
+        }
+    };
+
+    let (o, t) = step(&f, &mut log, "prepare");
+    save(&log);
+    assert!(o, "prepare: {t}");
+    {
+        // 測定 DB の model catalog（B の候補集合。fake source には発見が無いので、発見の結果と同じ store 経路で入れる）。
+        use task_core::{
+            ModelCatalogStore,
+            model_catalog::{CatalogSource, DiscoveredModel},
+        };
+        let store = task_core::SqliteStore::open(&d.join("measure/celeris.db")).unwrap();
+        store
+            .model_catalog_apply(
+                &CatalogSource::new("measure"),
+                &[
+                    DiscoveredModel::new("claude-sonnet-5-5"),
+                    DiscoveredModel::new("claude-sonnet-5-5-b"),
+                ],
+                1_700_000_000,
+            )
+            .unwrap();
+    }
+    let (o, t) = step(&f, &mut log, "start");
+    save(&log);
+    assert!(o, "start: {t}");
+    let pid = f.owned_pid().expect("launcher pid");
+    assert_eq!(
+        exe_of(pid),
+        celeris,
+        "the daemon is the real celeris binary"
+    );
+    let (st, cfg) = f.api("GET", "/api/v1/config", None);
+    assert_eq!(st, 200, "{cfg}");
+    assert_eq!(cfg["identity"]["pid"], json!(pid), "{cfg}");
+    log.push(json!({"step": "GET /api/v1/config identity", "identity": cfg["identity"]}));
+    // 案件と scratch repo は測定 daemon の正式 API で作る（測定 DB は新規）。
+    let repo = d.join("scratch-repo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(repo.join("README"), "measurement scratch\n").unwrap();
+    let (st, p) = f.api(
+        "POST",
+        "/api/v1/projects",
+        Some(&json!({"title": "research-eval rehearsal", "request": "no-LLM rehearsal"})),
+    );
+    assert_eq!(st, 201, "{p}");
+    let pid_s = p["id"].as_str().unwrap().to_string();
+    let (st, r) = f.api(
+        "POST",
+        &format!("/api/v1/projects/{pid_s}/repos"),
+        Some(&json!({"name": "scratch", "kind": "dir", "location": {"kind": "local", "path": repo}, "is_primary": true})),
+    );
+    assert_eq!(st, 201, "{r}");
+    fs::write(
+        d.join("task-template.json"),
+        json!({"project_id": pid_s, "repos": ["scratch"], "acceptance": [{"type": "reviewer", "text": "reviewed"}]})
+            .to_string(),
+    )
+    .unwrap();
+    let (o, t) = step(&f, &mut log, "preflight");
+    save(&log);
+    assert!(o, "preflight: {t}");
+
+    // raw 人操作の記録は試行の開始前から（runbook §2.1。B 腕の試行 identity に結ぶ）。
+    let hops = f.out().join("human-ops.jsonl");
+    fs::create_dir_all(f.out()).unwrap();
+    let manifest = f.s.inp.manifest_path.display().to_string();
+    let id_args = |arm: &str| -> Vec<String> {
+        [
+            "--file",
+            &hops.display().to_string(),
+            "--campaign",
+            campaign,
+            "--manifest",
+            &manifest,
+            "--case",
+            "k4-cmp4-validity-analysis",
+            "--arm",
+            arm,
+            "--rep",
+            "1",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+    };
+    for arm in ["A0", "B0"] {
+        let mut a = vec!["human-op".to_string(), "record".into()];
+        a.extend(id_args(arm));
+        a.extend(
+            [
+                "--op-kind",
+                "status_check",
+                "--actor",
+                "eval1",
+                "--mode",
+                "manual",
+                "--intent",
+                "monitoring",
+                "--trigger",
+                "scheduled",
+                "--logical-op",
+                "p0/start-check",
+                "--started-at",
+                "now",
+                "--ended-at",
+                "now",
+            ]
+            .iter()
+            .map(|s| s.to_string()),
+        );
+        let (o, t) = cc(&f, &mut log, "human-op record (before watch)", &a);
+        assert!(o, "human-op record: {t}");
+    }
+
+    let (o, t) = step(&f, &mut log, "watch");
+    save(&log);
+    assert!(o, "watch: {t}");
+    let line = t.lines().rev().find(|l| l.starts_with('{')).unwrap();
+    let rep: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("{e}: {t}"));
+    assert_eq!(rep["watch"]["end"], json!("settled"), "{t}");
+    let ledger_after = f.ledger();
+    let posts = f.task_posts();
+    let a_runs = f.a_launches();
+
+    // 停止 → 再起動 → 同じ watch で再開（台帳から再接続し、再投入しない）。
+    let (o, t) = step(&f, &mut log, "stop");
+    assert!(o, "stop: {t}");
+    assert!(!alive(pid));
+    let (o, t) = step(&f, &mut log, "start");
+    assert!(o, "restart: {t}");
+    let (o, t) = step(&f, &mut log, "watch");
+    save(&log);
+    assert!(o, "resume watch: {t}");
+    assert_eq!(f.ledger(), ledger_after, "resume must not add ledger rows");
+    assert_eq!(f.task_posts(), posts, "resume must not resubmit");
+    assert_eq!(f.a_launches(), a_runs, "resume must not relaunch A");
+
+    let (_, _) = step(&f, &mut log, "collect");
+    // grade = 評価側観測の収集 → 独立採点 → check。check の結果（violations）は証跡に残し、ここでは採点行だけ確かめる
+    // （2026-10-20 の通しでは B の reviewer run に resolved routing が無いと check が拒否した。進捗文書の未解決）。
+    let (_, t) = step(&f, &mut log, "grade");
+    save(&log);
+    let grades =
+        fs::read_to_string(f.out().join("grades.jsonl")).unwrap_or_else(|e| panic!("{e}: {t}"));
+    assert_eq!(grades.lines().count(), 2, "{grades}");
+    for l in grades.lines() {
+        let g: Value = serde_json::from_str(l).unwrap();
+        assert_eq!(g["graded"], json!(true), "{l}");
+        assert!(
+            g["failure_class"].is_string() || g["passed"] == json!(true),
+            "{l}"
+        );
+    }
+    let (_, _) = step(&f, &mut log, "export");
+    save(&log);
+
+    // decision-log（測定 DB の写し）→ human-op join / report。
+    let dl = d.join("dl");
+    let db_copy = d.join("measure-db-copy.sqlite3");
+    let celerisctl = Path::new(&campaign_bin())
+        .parent()
+        .unwrap()
+        .join("celerisctl");
+    let o = Command::new(&celerisctl)
+        .args(["db", "backup"])
+        .arg(&db_copy)
+        .arg("--src")
+        .arg(d.join("measure/celeris.db"))
+        .output()
+        .unwrap();
+    log.push(json!({"step": "celerisctl db backup (measure DB)", "exit": o.status.code(), "output": text(&o)}));
+    let msha = {
+        use sha2::Digest;
+        format!("{:x}", sha2::Sha256::digest(fs::read(&manifest).unwrap()))
+    };
+    let o = Command::new(&celerisctl)
+        .arg("--db")
+        .arg(&db_copy)
+        .args(["campaign", "export", campaign, "--out"])
+        .arg(&dl)
+        .args(["--manifest-hash", &msha])
+        .output()
+        .unwrap();
+    log.push(
+        json!({"step": "celerisctl campaign export", "exit": o.status.code(), "output": text(&o)}),
+    );
+    let mut a = vec![
+        "human-op".to_string(),
+        "report".into(),
+        "--file".into(),
+        hops.display().to_string(),
+    ];
+    a.extend(["--events".to_string(), f.out().display().to_string()]);
+    if dl.is_dir() {
+        a.extend(["--events".to_string(), dl.display().to_string()]);
+    }
+    a.extend([
+        "--out".to_string(),
+        d.join("human-ops-report").display().to_string(),
+    ]);
+    let (o, t) = cc(&f, &mut log, "human-op report", &a);
+    save(&log);
+    assert!(o, "human-op report: {t}");
+
+    let (o, t) = step(&f, &mut log, "stop");
+    save(&log);
+    assert!(o, "stop: {t}");
+    assert!(!alive(pid));
+}

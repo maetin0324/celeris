@@ -718,6 +718,34 @@ pub fn plan_replan(
                 let mut row = existing.clone();
                 row.plan_id = new_plan_id.clone();
                 row.seq = seq as u32;
+                // ADR 2026-10-20-replan-dep-change-wu-rebase D1/D2: 同じ段の依存先が変わった葉は、次の
+                // prepare が旧 WU ブランチを退避して新しい起点から作り直す（branch / base / head を消す）。
+                let rebase = existing.kind != task_core::WorkUnitKind::Task
+                    && task_core::same_phase_dependencies_changed(
+                        &existing.depends_on,
+                        existing.phase.as_deref(),
+                        &|k| {
+                            current
+                                .iter()
+                                .find(|u| u.key == k)
+                                .and_then(|u| u.phase.clone())
+                        },
+                        &wu_spec.depends_on,
+                        wu_spec.phase.as_deref(),
+                        &|k| {
+                            internal
+                                .work_units
+                                .iter()
+                                .find(|w| w.key == k)
+                                .and_then(|w| w.phase.clone())
+                        },
+                    );
+                if rebase {
+                    row.branch = None;
+                    row.base_commit = None;
+                    row.head_commit = None;
+                    row.rebase_pending = true;
+                }
                 row.depends_on = wu_spec.depends_on.clone();
                 // ADR-0079 R6-4: 段階（工程）を移した未完了の unit は `work_units.phase` も新しい版の段階に
                 // 書き換える（R4a から既知の食い違い。工程の障壁・統合 WU の依存・GUI の段階の束は行の `phase` を

@@ -1013,3 +1013,34 @@ pub fn dependents_to_block(units: &[WorkUnitRow], failed_key: &str) -> Vec<Strin
         .map(|u| u.id.clone())
         .collect()
 }
+
+/// ADR 2026-10-20-replan-dep-change-wu-rebase D1: 持ち越す unit の「同じ段の依存先の集合」が replan で
+/// 変わったか。旧い側は旧い行の段と旧い行の段の対応（`old_phase_of`）、新しい側は新しい版の段と
+/// 新しい版の段の対応（`new_phase_of`）で、自分と同じ段にある依存先だけを集めて比べる。依存の有無の
+/// 変化（あり→なし、なし→あり）も「変わった」。段を持たない（v1・atomic）unit は常に `false`。
+pub fn same_phase_dependencies_changed(
+    old_deps: &[String],
+    old_phase: Option<&str>,
+    old_phase_of: &dyn Fn(&str) -> Option<String>,
+    new_deps: &[String],
+    new_phase: Option<&str>,
+    new_phase_of: &dyn Fn(&str) -> Option<String>,
+) -> bool {
+    fn same_phase(
+        deps: &[String],
+        phase: Option<&str>,
+        phase_of: &dyn Fn(&str) -> Option<String>,
+    ) -> std::collections::BTreeSet<String> {
+        let Some(phase) = phase else {
+            return std::collections::BTreeSet::new();
+        };
+        deps.iter()
+            .filter(|d| phase_of(d).as_deref() == Some(phase))
+            .cloned()
+            .collect()
+    }
+    if new_phase.is_none() {
+        return false;
+    }
+    same_phase(old_deps, old_phase, old_phase_of) != same_phase(new_deps, new_phase, new_phase_of)
+}

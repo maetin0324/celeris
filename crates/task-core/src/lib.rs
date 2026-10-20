@@ -269,7 +269,7 @@ pub use execution_plan::{
     is_daemon_added_work_unit, materialize_work_units, materialized_order, new_id, newly_ready,
     newly_ready_with, next_work_unit, phase_leaves, phase_ranks, plan_awaits_final_review,
     plan_work_finished, reopened_integration, replan_done_work_units, runnable_work_units,
-    stale_stage_integrations, validate,
+    same_phase_dependencies_changed, stale_stage_integrations, validate,
 };
 // ---- ADR-0079（Phase R1a）: plan/3・木・決定の要求 ----
 pub use decision::{

@@ -627,6 +627,12 @@ fn apply_replan_step(
         .map(|u| u.key.clone())
         .collect();
 
+    // ADR 2026-10-20-replan-dep-change-wu-rebase D1: 旧い版の段の対応（行を書き換える前に写す）。
+    let old_phase_of: BTreeMap<String, Option<String>> = wu_rows
+        .values()
+        .filter(|u| introduced_before(&u.id) && u.status != WorkUnitStatus::Superseded)
+        .map(|u| (u.key.clone(), u.phase.clone()))
+        .collect();
     let mut new_ids: Vec<String> = Vec::new();
     for (id, row) in wu_rows.iter_mut() {
         let Some(&at) = introduced.get(id) else {
@@ -687,6 +693,22 @@ fn apply_replan_step(
             && row.status == WorkUnitStatus::Running
             && row.child_task_id.is_some();
         row.plan_id = new_plan_id.to_string();
+        // ADR 2026-10-20-replan-dep-change-wu-rebase D1/D2（`execution::replan` と同じ判定）。
+        if row.kind != task_core::WorkUnitKind::Task
+            && task_core::same_phase_dependencies_changed(
+                &row.depends_on,
+                row.phase.as_deref(),
+                &|k| old_phase_of.get(k).cloned().flatten(),
+                &new_spec.depends_on,
+                new_spec.phase.as_deref(),
+                &|k| spec_of.get(k).and_then(|w| w.phase.clone()),
+            )
+        {
+            row.branch = None;
+            row.base_commit = None;
+            row.head_commit = None;
+            row.rebase_pending = true;
+        }
         row.depends_on = new_spec.depends_on.clone();
         // ADR-0079 R6-4: replan は段階を移した未完了の行の `phase` を新しい版の段階に、`seq` を新しい版の
         // 並びに書き換える（store の `update_work_unit_tx` が `seq` も書く）。

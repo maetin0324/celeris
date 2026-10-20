@@ -342,11 +342,14 @@ pub enum Start {
 }
 
 /// 試行の data があるか。測定開始時の固定記録（`env-lock.json`。launcher が初回実行の直前に作る）は data に数えない。
+/// runner の data があるか。env-lock と、評価者の raw 人操作記録（`human-ops.jsonl`。pilot 開始時＝初回 watch の前から
+/// 同じ out に追記する。runbook §2）は runner の data ではないので数えない。
 fn out_has_data(out: &Path) -> Result<bool, String> {
     match fs::read_dir(out) {
-        Ok(d) => Ok(d
-            .filter_map(Result::ok)
-            .any(|e| e.file_name() != crate::env_lock::ENV_LOCK_FILE)),
+        Ok(d) => Ok(d.filter_map(Result::ok).any(|e| {
+            let n = e.file_name();
+            n != crate::env_lock::ENV_LOCK_FILE && n != crate::human_ops::HUMAN_OPS_FILE
+        })),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(format!("{}: {e}", out.display())),
     }
@@ -501,4 +504,21 @@ pub fn verify_grade_case(c: &LockedCase, path: &Path) -> Result<GradeCase, Strin
         ));
     }
     Ok(g)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 評価者の raw 人操作記録を初回 watch の前から out に置いても、新しい測定として始められる（runner の data だけ数える）。
+    #[test]
+    fn human_ops_record_written_before_the_first_watch_is_not_runner_data() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(!out_has_data(d.path()).unwrap());
+        fs::write(d.path().join(crate::human_ops::HUMAN_OPS_FILE), "{}\n").unwrap();
+        fs::write(d.path().join(crate::env_lock::ENV_LOCK_FILE), "{}").unwrap();
+        assert!(!out_has_data(d.path()).unwrap());
+        fs::write(d.path().join("ledger.jsonl"), "{}\n").unwrap();
+        assert!(out_has_data(d.path()).unwrap());
+    }
 }

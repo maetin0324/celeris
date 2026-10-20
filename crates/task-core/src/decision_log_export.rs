@@ -810,7 +810,7 @@ pub fn join_grades(export: &mut CampaignExport, grades_jsonl: &str) -> Result<us
 /// 接続確認（`campaign export --verify-connected`）。問題の一覧を返し、空なら接続できている。
 ///
 /// - export が空（run が 1 件も無い）
-/// - 試行ごとの必須欄の欠測（case・arm・repetition・manifest hash、推奨候補、実行 model、run 終了、最終 grader 判定）
+/// - 試行ごとの必須欄の欠測（case・arm・repetition・manifest hash、推奨候補（routing 判断の無い run は除く）、実行 model、run 終了、最終 grader 判定）
 /// - 消費未計上（run に観測できた消費が 1 つも無い、または campaign 全体で観測 0 件）
 ///
 /// 欠測は 0 や既定値で埋めない。`unscored` の grader 判定は「未採点」として欠測に数える。
@@ -833,7 +833,12 @@ pub fn verify_connected(export: &CampaignExport) -> Vec<String> {
     ];
     for t in &trials {
         let run = t["run_id"].as_str().unwrap_or("?");
+        // routing 判断（decision_id）の無い run（reviewer 等）には推奨候補が存在しない。仕様上欠けてよい。
+        let unrouted = t["decision_id"].is_null();
         for f in REQUIRED {
+            if f == "proposed_first" && unrouted {
+                continue;
+            }
             if t[f].is_null() {
                 problems.push(format!("run {run}: required field {f} is missing"));
             }

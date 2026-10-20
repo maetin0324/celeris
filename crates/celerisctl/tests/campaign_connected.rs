@@ -311,8 +311,8 @@ fn unobserved_usage_row_is_missing_not_zero() {
     assert!(u["input_tokens"].is_null());
 }
 
-/// B の run が worker 2 本と reviewer 1 本あっても、試行の grade 1 行が全 run に付く。reviewer の
-/// proposed_first は決定ログ側（llm_route_selected の投影）で埋まるので、ここでは欠けない run だけを見る。
+/// B の run が worker 2 本と reviewer 1 本あっても、試行の grade 1 行が全 run に付く。reviewer 相当（routing 判断なし）の
+/// run は proposed_first が無くても接続確認に通る（下の試験）。
 #[test]
 fn grade_row_joins_every_run_of_the_trial() {
     let (dir, db) = db_with(Some(Gap::default()));
@@ -346,4 +346,60 @@ fn verify_connected_requires_grades() {
     let r = verify_with(&db, CAMPAIGN, &dir.path().join("o"), None);
     assert!(!r.status.success());
     assert!(String::from_utf8_lossy(&r.stderr).contains("--grades"));
+}
+
+/// reviewer run は routing_decided を持たず推奨候補が無い。仕様上欠けてよいので --verify-connected は通る。
+#[test]
+fn run_without_routing_decision_may_lack_proposed_first() {
+    let (dir, db) = db_with(Some(Gap::default()));
+    let store = SqliteStore::open(&db).unwrap();
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let p = DecisionLogProposal {
+        run_id: "rv".into(),
+        campaign_id: Some(CAMPAIGN.into()),
+        arm: Some("assisted".into()),
+        case_id: Some("case-7".into()),
+        repetition: Some(2),
+        manifest_hash: Some("mh-abc".into()),
+        task_id: Some("t1".into()),
+        ..Default::default()
+    };
+    store.decision_log_record_proposal(&p, now).unwrap();
+    store
+        .decision_log_record_execution(
+            &DecisionLogExecution {
+                run_id: "rv".into(),
+                exec_source_id: Some("s".into()),
+                exec_model: Some("m".into()),
+                ..Default::default()
+            },
+            now,
+        )
+        .unwrap();
+    store
+        .decision_log_record_outcome(
+            &DecisionLogOutcome {
+                run_id: "rv".into(),
+                run_end: Some(RunEndLabel::Completed),
+                wall_ms: Some(10),
+                ..Default::default()
+            },
+            now,
+        )
+        .unwrap();
+    let mut u = DecisionLogUsage::new(
+        UsageKey::Run {
+            run_id: "rv".into(),
+            usage_source: "proxy".into(),
+        },
+        UsageRole::Reviewer,
+    );
+    u.run_id = Some("rv".into());
+    u.campaign_id = Some(CAMPAIGN.into());
+    u.input_tokens = Some(10);
+    store.decision_log_record_usage(&u, now).unwrap();
+    drop(store);
+    let g = grades_file(dir.path(), "mh-abc", true);
+    let r = verify_with(&db, CAMPAIGN, &dir.path().join("o"), Some(&g));
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
 }

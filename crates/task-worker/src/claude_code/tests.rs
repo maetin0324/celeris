@@ -3589,6 +3589,9 @@ fn planner_prompt_has_the_check_writing_section() {
         "scope checks use `$CELERIS_WU_BASE` instead.",
         "A negated grep (`! grep ...`) must not match text the unit itself writes",
         "a check that runs a script another unit creates belongs to a unit that `depends_on` the creating unit",
+        // 同じ段の兄弟の成果は段の統合まで worktree に入らない（task 01M5AC7DNX の ctl-worker-callsite）。
+        "sibling units of the same stage are merged only by the stage's integration step",
+        "or leave it to the stage's integration check",
         // ADR-0079 付記 R7-5 D5: check の走る所（git の worktree が無い task）と、unit 自身が作るスクリプトの呼び出し方。
         "or the task's directory (where `artifacts/` is) when the task has no git worktree",
         "write the exact invocation (the arguments the check passes) in the unit's objective",

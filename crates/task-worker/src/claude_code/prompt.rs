@@ -1799,6 +1799,12 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      - A check runs where the unit's worker starts: its own unit's worktree, or the task's directory \
      (where `artifacts/` is) when the task has no git worktree. It may only use files that exist there: a check \
      that runs a script another unit creates belongs to a unit that `depends_on` the creating unit.\n\
+     - A unit's worktree holds only its own stage dependency chain (the one unit it `depends_on`) on top of the \
+     stage base; sibling units of the same stage are merged only by the stage's integration step. So a check that \
+     needs code another unit of the same stage writes (for example `cargo check -p <crate>` that compiles only after a \
+     later unit fixes a caller) never passes there: give it to the unit that writes that code, put it in a later \
+     stage, or leave it to the stage's integration check (a unit whose only check needs other units' code is \
+     wrongly placed).\n\
      - When a check runs a script the unit itself creates, write the exact invocation (the arguments the check \
      passes) in the unit's objective so the unit writes the script to accept that form (a check passed a URL to \
      a script that took `[LAN_IP] [PORT]` and failed on every run although the work was done).\n\

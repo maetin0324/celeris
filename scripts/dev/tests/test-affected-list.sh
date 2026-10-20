@@ -11,7 +11,8 @@ cd "$work"
 git init -q -b main .
 git config user.email t@example.com
 git config user.name t
-mkdir -p crates/a/src crates/b/src crates/c/src web docs
+d=docs
+mkdir -p crates/a/src crates/b/src crates/c/src web "$d"
 printf '[workspace]\nmembers = ["crates/a", "crates/b", "crates/c"]\nresolver = "2"\n' >Cargo.toml
 mk() { # name [dep]
   printf '[package]\nname = "%s"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\n' "$1" >"crates/$1/Cargo.toml"
@@ -22,7 +23,7 @@ mk a
 mk b a
 mk c
 echo '{"scripts":{"test":"vitest run"},"packageManager":"pnpm@1.0.0"}' >web/package.json
-echo x >docs/x.md
+echo x >"$d"/x.md
 git add -A
 git commit -q -m base
 base="$(git rev-parse HEAD)"
@@ -51,7 +52,7 @@ rm Cargo.lock
 echo "// w" >web/a.ts
 [ -z "$(run)" ] || fail "(c) web only not empty"
 rm web/a.ts
-echo y >>docs/x.md
+echo y >>"$d"/x.md
 [ -z "$(run)" ] || fail "(c) docs only not empty"
 CELERIS_WU_BASE="$base" bash "$here/scripts/dev/test-affected.sh" 2>/dev/null || fail "(c) docs only exit"
 

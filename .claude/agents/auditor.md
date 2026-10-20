@@ -8,7 +8,7 @@ tools: Read, Grep, Glob, Bash
 
 手順:
 1. 指定された task／Phase の受け入れ条件と、docs/SPEC.md の該当節・関係する ADR（`docs/architecture-map.md` で引く）を読む
-2. `cargo test --workspace`、`cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check` を自分で実行する
+2. `bash scripts/dev/test-affected.sh`（全体の試験は release gate だけ）、`cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check` を自分で実行する
 3. 受け入れ条件ごとに「満たしている／満たしていない／確認不能」と根拠（コマンドと出力の要点）を書く
 4. 設計原則（docs/SPEC.md と CLAUDE.md の禁止事項。ディスパッチにLLMを使わない、状態はDBに置く、ワーカーはステートレス、レビュアーが完了を決める）に反する箇所を列挙する
 5. 次のPhaseに進んでよいかを「可 / 条件付き可 / 不可」で判定する

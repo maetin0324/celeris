@@ -4,8 +4,9 @@ release.sh の gate の `cargo-test` 段は `scripts/dev/test-parallel.sh` で�
 （`cargo nextest run --workspace` + `cargo test --doc --workspace`）。そのために release.sh を動かすホストに
 `cargo-nextest` が要る。**版は `tools/nextest/VERSION`（1 行）で固定**し、違う版が入っていると test-parallel.sh は止まる。
 
-開発者は従来どおり `cargo test --workspace` でよい（CLAUDE.md のとおり。gate の前提として両方とも通ることを保つ）。
-並列で回したいときは `scripts/dev/test-parallel.sh`（引数はそのまま `cargo nextest run` に渡る。例: `-p task-core`）。
+全体の試験（`test-parallel.sh`）は release gate だけで走らせる（`agent-docs/adr/2026-10-20-full-tests-at-release-only.md`）。
+開発・WU・phase 完了では `scripts/dev/test-affected.sh`（変更 crate と逆依存 crate だけ）を使う。
+手元で絞って並列に回したいときは `scripts/dev/test-parallel.sh`（引数はそのまま `cargo nextest run` に渡る。例: `-p task-core`）。
 
 ## 入れる（人・エージェントが 1 回だけ。ネットワークに出る）
 

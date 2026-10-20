@@ -964,3 +964,100 @@ fn b_passed_without_workspace_change_is_no_artifact() {
     assert_eq!(r.reason.as_deref(), Some("no_artifact"));
     assert!(v.iter().all(|x| !x.contains("no_artifact must")), "{v:?}");
 }
+
+// ---- per_case は task の token 予算として渡る（ADR 2026-10-20-mlsys-main2-fixes D1） ----
+
+#[test]
+fn celeris_body_sets_per_case_max_tokens() {
+    let dir = tempfile::tempdir().expect("dir");
+    let f = Fake::new();
+    let e = exec(&f, dir.path(), 1800);
+    let c = cfg(ConfigId::B, None);
+    let mut r = req(&c, dir.path());
+    r.budget.max_tokens = 1_500_000;
+    let b = e.body(&r, KEY).expect("body");
+    assert_eq!(b["max_tokens"], json!(1_500_000));
+}
+
+#[test]
+fn check_template_rejects_max_tokens() {
+    let mut t = template();
+    t.insert("max_tokens".into(), json!(1));
+    let e = celeris_campaign::celeris_exec::check_template(&t).expect_err("max_tokens");
+    assert!(e.contains("max_tokens"), "{e}");
+}
+
+#[test]
+fn per_case_overshoot_bounded_and_ledger_matches() {
+    let d = tempfile::tempdir().expect("dir");
+    let i = input();
+    let m = campaign(&i); // per_case 100_000
+    let opts = RunOptions {
+        global_ledger: None,
+        out: d.path().join("out"),
+        ..RunOptions::default()
+    };
+    let f = Fake::new();
+    let a = MockAsyncExecutor::new(0);
+    let bc = exec(&f, d.path(), 1800);
+    let by = ByArm { a: &a, bc: &bc };
+    run(&m, &i, &by, &opts).expect("submit");
+    let hash = m.compute_sha256().expect("hash");
+    let lg = Ledger::open(&opts.out).expect("ledger");
+    let key = |arm| TrialKey {
+        manifest_sha256: hash.clone(),
+        problem_id: "p0".into(),
+        arm,
+        trial_no: 1,
+        rep: 1,
+    };
+    let tid = lg
+        .get(&key(ConfigId::B))
+        .expect("b")
+        .task_id
+        .clone()
+        .expect("id");
+    // task の予算として per_case が渡っている。
+    assert_eq!(f.body(&tid)["max_tokens"], json!(100_000));
+    // Celeris は残り予算の内側で再開し、上限に達した応答で止める: 2 本の run の和が上限を 1 応答ぶん（1_000）だけ超える。
+    f.set(&tid, |t| {
+        t.status = "failed".into();
+        for (n, tok) in [(1, 60_000u64), (2, 41_000)] {
+            t.runs.push(
+                json!({"run_id": format!("r{n}"), "finished_at": "2026-10-16T00:10:00Z",
+                "usage": {"input_tokens": tok, "output_tokens": 0, "cost_usd": 0.1}}),
+            );
+        }
+    });
+    let ctid = lg
+        .get(&key(ConfigId::C))
+        .and_then(|r| r.task_id.clone())
+        .expect("c");
+    f.finish(&ctid, "done", 100);
+    let rep = run(&m, &i, &by, &opts).expect("finish");
+    assert!(
+        rep.max_overshoot_tokens <= 1_000,
+        "overshoot {}",
+        rep.max_overshoot_tokens
+    );
+    let b: celeris_campaign::record::TrialRecord =
+        fs::read_to_string(opts.out.join("trials.jsonl"))
+            .expect("trials")
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .find(|r: &celeris_campaign::record::TrialRecord| r.config == ConfigId::B)
+            .expect("B record");
+    let seen = b.tokens;
+    assert_eq!(seen, Some(101_000), "record tokens = sum of run usages");
+    // 台帳の課金は各試行の観測値の和（B は 101_000）と一致する。
+    let observed: u64 = fs::read_to_string(opts.out.join("trials.jsonl"))
+        .expect("trials")
+        .lines()
+        .filter_map(|l| serde_json::from_str::<celeris_campaign::record::TrialRecord>(l).ok())
+        .filter_map(|r| r.tokens)
+        .sum();
+    assert_eq!(
+        rep.tokens_charged_total, observed,
+        "ledger charge matches observed"
+    );
+}

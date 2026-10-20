@@ -99,6 +99,7 @@ pub fn check_template(t: &Map<String, Value>) -> Result<(), String> {
         "repos",
         "workspace_mode",
         "max_wall_secs",
+        "max_tokens",
         "routing_override",
         "campaign",
         "campaign_idempotency_key",
@@ -141,7 +142,7 @@ pub fn check_template(t: &Map<String, Value>) -> Result<(), String> {
 pub struct CelerisExecutor<T: Transport> {
     transport: T,
     /// `POST /tasks` 本文の雛形（acceptance・project_id・role 等）。title・objective・labels・
-    /// workspace・repos（空配列）・max_wall_secs・routing_override はこの実行器が埋める。
+    /// workspace・repos（空配列）・max_wall_secs・max_tokens・routing_override はこの実行器が埋める。
     template: Map<String, Value>,
     /// 試行の打ち切り（task 作成からの経過秒、server の時計で測る）。
     trial_timeout_secs: u64,
@@ -465,6 +466,9 @@ impl<T: Transport> CelerisExecutor<T> {
             "max_wall_secs".into(),
             json!(req.timeout_secs.min(req.budget.max_wall_secs)),
         );
+        // 試行の token 上限は task の予算として渡す。Celeris が run の途中で消費を観測し、上限後は再開しない
+        // （ADR 2026-10-20-mlsys-main2-fixes D1）。`req.budget` は `min(per_case, per_arm の残り)`。
+        b.insert("max_tokens".into(), json!(req.budget.max_tokens));
         let ro = routing_override(req.config)?;
         // 採点結果と同じ試行へ export できるよう、通常の作成 API に識別を載せる（task-api NewTaskBody）。
         // 冪等キーは label と同じ文字列。arm は A/B/C、case は問題 ID。

@@ -62,7 +62,7 @@ CAP_ENV=…/cap-env.json             # celeris.campaign-cap-env/1（cap-runbook 
 - B・C は同じ `routing.models=["claude-sonnet-5-5"]`・`routing.run_harnesses=["claude-code"]`・`lower_policy=mlsys-min-1`。方策だけが違う（B=fixed、C=jev-1）。A は claude-code / claude-sonnet-5-5 で集合の内側。`cap-probe-*` は run_harnesses に入れない。
 - C は `no_evidence_table=true`（根拠表なし。`effective_evidence_mode=none`）、B は根拠表欄なしで none。**`evidence_table_id` と `celerisctl routing evidence` の手順は無い（消した）。latest へ fallback しない。**
 - 比較: primary A vs B、secondary B vs C。subset は K2・K4。K2 `judged_scope=[implementation, experiment]`（analysis / review は `not_judged`。維持する。ADR 2026-10-18-k2-judged-scope）、K4 は analysis。
-- `$P/task-template.json`: `project_id=01M2WTS3DKNZBSZ2JMVB4CZMBW`、`repos:["scratch"]`、acceptance は reviewer。
+- `$P/task-template.json`: `project_id=01M2WTS3DKNZBSZ2JMVB4CZMBW`、acceptance は reviewer。`repos`・`workspace_mode`・`max_tokens` は書かない（拒否される。実行器が trial workspace を作業場所にし、`repos: []`・`max_tokens=per_case` を埋める。ADR 2026-10-20-mlsys-main2-fixes D1・D2）。
 - `budget.token_basis=all`。`lower_policy`/`online_update` は変えない。
 
 ## 3a. 主比較（測定 ID `mlsys-main-1`、A0 vs B0 のみ）の承認済み固定値
@@ -112,7 +112,7 @@ $B dry-run  --manifest $R/pinned/main/final.json      # within_budget true、tot
 - `[selfdeploy] releases_dir = "/local/celeris/state/releases"`（読むだけ）。無いと daemon が既定の `~/.local/celeris/releases` を見て `release … is not promoted` で exit 4 する。
 - `[accounts] claude_dir`（通常運用と同じ pool）と `[adapters.claude_code] command` / `env = { PKG_CONFIG_PATH = … }`。B/C の cap-probe は `env_of=claude-code` のこの adapter env を worker に渡し、CAP_ENV の `PKG_CONFIG_PATH` が無いと `claude-code/worker-env: worker env lacks PKG_CONFIG_PATH`。
 - CAP_ENV は K2 の `rustc-min` / `min-build-locusta` のため Rust toolchain を `ro_mounts` に、その `bin` を `PATH`（`:/usr/local/bin:/usr/bin:/bin` を後ろに足す。置換されるため）に入れる。launcher env に同じ `bin` を `RUN_PATH` として書く（daemon の PATH にも要る）。
-- 測定 DB は新規なので task-template の `project_id` の案件は存在しない。`start` 後に `POST /api/v1/projects`（title・request）→ `POST /api/v1/projects/{id}/repos`（`{"name":"scratch","kind":"dir","location":{"kind":"local","path":"<STATE_DIR>/scratch-repo"},"is_primary":true}`）で作り、返った id を task-template の `project_id` に書いて `preflight` を再実行する（token は `$STATE_DIR/token`、値は表示しない）。
+- 測定 DB は新規なので task-template の `project_id` の案件は存在しない。`start` 後に `POST /api/v1/projects`（title・request。repo は登録しない — 試行の task は trial workspace だけを作業場所にする）で作り、返った id を task-template の `project_id` に書いて `preflight` を再実行する（token は `$STATE_DIR/token`、値は表示しない）。
 - 副比較（`pinned/sub/`、測定 ID mlsys-sub-1）の `project_id` は sub の STATE_DIR の DB に属するので、主比較の id とは別に上の手順で sub の案件を作って `pinned/sub/task-template.json` に入れる（未設定の間 `check-sub-pins.py` は非0。旧 id は無効）。sub の preflight 証跡 `pinned/sub/evidence/k2-preflight.json` と campaign lock `pinned/sub/lock.json` も同様に必須で、取得は統合 01M58VG5C4XGK4E70M6WJ6MEX0。
 - 通常 config の `[[clusters]]` を複写すると測定 daemon も pegasus の forward（127.0.0.1:18000）の tunnel を張ろうとする。通常 daemon と重なる点に注意（人が判断）。
 

@@ -105,6 +105,8 @@ $B dry-run  --manifest $R/pinned/main/final.json      # within_budget true、tot
 ```
 以後 manifest・入力を変えない（変えるなら新 campaign_id と新しい決定）。
 
+補足（ADR 2026-10-20 mlsys-main2-fixes D2-4）: input manifest の各 problem の `prompt` は、公開 case 定義を試行 workspace の `materials/<case>/case.json` として参照する（repo 内の `crates/campaign/cases/final/<case>/case.json` は trial workspace に無いので、実行前検査が拒否する）。2026-10-16 の凍結済み入力は旧い参照なので、次の campaign は prompt を直した input manifest と新 campaign_id で再 freeze する。`MATERIALS_SRC` は `<case>/` dir を含むこと。
+
 ## 3b. 測定専用 daemon の宣言（人が配置。本番 config・release は触らない）
 `$P/measure-daemon.example.toml` を複製し `<...>` を実値にする（db・workspace・KB・memory・token_file・port は本番と別、NFS 外）。内容: 実 harness は `claude-code` だけ、`cap-probe-claude-code`（kind=fake・`env_of="claude-code"`・command=`CAMPAIGN_BIN`・args `cap-worker`）、`[llm_sources.cap-probe]`、`[route_defaults.cap-probe-claude-code]`、`harness_selection.rules` 先頭に分野 `cap-probe-claude-code` の規則。probe は分野 `cap-probe-*` の task にだけ結ばれ、実試行の候補に入らない。宣言を欠くと preflight の B/C cap-probe が投入前に `env_failure` で拒否する。`NORMAL_CONFIG` の `[[clusters]]` を複写する。
 

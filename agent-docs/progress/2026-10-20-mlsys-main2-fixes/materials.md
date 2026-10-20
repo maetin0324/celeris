@@ -19,3 +19,9 @@ status: done
 ## 本番への移行
 - 次の campaign の input manifest の problem prompt を `materials/<case>/case.json` 参照に直す（旧 `crates/campaign/cases/final/<case>/case.json` 参照は実行前検査で拒否される）。
 - 実行時の `--materials-src` は `<case>/` ディレクトリを含むこと（無いと配送が fail-closed）。
+- 凍結済みの `agent-docs/progress/2026-10-16-mlsys-final/final-input-manifest.json` は旧 prompt（`公開 case 定義は crates/campaign/cases/final/<case>/case.json`）のままで、書き換えない（過去の freeze の証跡）。そのまま次の pilot に使うと実行前検査（`check_prompt_reference`）が拒否する。
+- 次の campaign には、prompt を `materials/<case>/case.json` 参照に直した新しい input manifest を作り（problem の `sha256` と manifest の `sha256` を `manifest_hash` で作り直す）、それを `input.path`/`input.sha256` に持つ新しい campaign manifest を新 campaign id で作って再 freeze する（`validate`・`dry-run`・`offline-lock`・preflight をやり直し、campaign sha256 の承認も取り直す）。旧 campaign id の manifest・入力は変えない。
+- 試験は凍結済みの manifest の写しを組み立て時に直して使う（`crates/campaign/tests/preflight_setup/mod.rs` の `write_materials_prompt_manifest`）。実行用の新 manifest はこれとは別に作る。
+
+## build2 統合後の修正
+- `arm_set_cli_normal` の fixture の prompt と、`launcher`・`trial_state_cli_e2e` が使う `preflight_setup` の manifest 写しの prompt を、`materials/<case>/case.json` 参照に直した（検査は緩めていない）。

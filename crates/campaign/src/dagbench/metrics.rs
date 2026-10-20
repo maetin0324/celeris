@@ -1,4 +1,4 @@
-//! 生ログからの指標再生成（ADR 2026-10-19-dag-fault-comparison-driver D3/D6）。
+//! 生ログからの指標再生成（`docs/ops/dag-fault-comparison.md`）。
 //!
 //! 入力は raw dir の JSONL だけ。系の自己申告の集計値は読まない（R10 の原則）。
 //! - `run.json`: 測定の入力の写し（scenario の DAG・点・seed・枠。結果ではない）。

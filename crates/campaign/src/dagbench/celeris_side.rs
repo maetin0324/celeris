@@ -1,4 +1,4 @@
-//! Celeris 側の薄い driver（ADR 2026-10-19-dag-fault-comparison-driver D1 の `celeris-drv`）。
+//! Celeris 側の薄い driver（`docs/ops/dag-fault-comparison.md`）。
 //!
 //! scenarios.json の 1 点（scenario × fixed point × seed）を、既存 Celeris の通常経路でそのまま流す。
 //! 新しい scheduler・router・投入 API は作らない。再利用先（ADR D1 の表の番号）:

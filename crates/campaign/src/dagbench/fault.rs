@@ -1,4 +1,4 @@
-//! 障害注入 runner（ADR 2026-10-19-dag-fault-comparison-driver D4、faults WU）。
+//! 障害注入 runner（`docs/ops/dag-fault-comparison.md`）。
 //!
 //! 両方式（baseline / celeris-side）に同じ障害条件を与える。制御 process は呼び出し側が渡す command で
 //! この runner が子 process として起こし、`Child` を握る（測定側が所有する process だけ）。

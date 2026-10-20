@@ -1,7 +1,7 @@
 {
   "schema": "celeris.dagbench-scenarios/1",
   "schema_version": 1,
-  "adr": "agent-docs/adr/2026-10-19-dag-fault-comparison-driver.md",
+  "doc": "docs/ops/dag-fault-comparison.md",
   "dataset_label": "control_measured",
   "paid": {"llm_calls": 0, "cluster_jobs": 0, "note": "worker は台本 stub、外部 job は ext-sim stub。有料 LLM・実クラスタ job は 0"},
   "time": {

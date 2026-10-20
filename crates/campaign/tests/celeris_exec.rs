@@ -918,11 +918,7 @@ fn run_b_and_finish(write_artifact: bool) -> (celeris_campaign::record::TrialRec
             .expect("path")
             .to_string();
         fs::create_dir_all(Path::new(&ws).join("docs")).expect("docs");
-        fs::write(
-            Path::new(&ws).join("docs").join("analysis.md"),
-            "# analysis\n",
-        )
-        .expect("artifact");
+        fs::write(Path::new(&ws).join("docs/analysis.md"), "# analysis\n").expect("artifact");
     }
     f.finish(&tid, "done", 100);
     // C は何も書かずに done（B とは独立）。

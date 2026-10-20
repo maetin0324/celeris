@@ -678,10 +678,7 @@ fn lock_refusal_names_existing_entries() {
 /// runbook どおり、stdout の redirect 先は OUT の外（`$RUNS`）にあり、OUT 直下へ向けた redirect が無い。
 #[test]
 fn runbook_does_not_redirect_into_out() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("docs")
-        .join("ops");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/ops");
     let mut seen = 0;
     for e in fs::read_dir(&dir).unwrap().filter_map(Result::ok) {
         let n = e.file_name().to_string_lossy().into_owned();

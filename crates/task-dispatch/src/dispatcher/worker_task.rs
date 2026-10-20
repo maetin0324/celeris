@@ -668,6 +668,7 @@ pub(super) async fn run_worker(
     let genres_for_followups = genres.clone();
     let sink = StoreSink {
         auto_leaf: extras.auto_leaf,
+        token_budget: extras.token_budget,
         store,
         task_id,
         run_id: run_id.to_string(),
@@ -720,8 +721,10 @@ pub(super) async fn run_worker(
             limits,
             &sink,
         );
-        if let Some(watch) = &sink.auto_leaf {
-            let stopped = || {
+        // ADR-0079 auto leaf（compaction の超過）と ADR 2026-10-20-mlsys-main2-fixes D1-3（token 予算の到達）は
+        // 同じ停止経路を使う: どちらかの watch が鳴ったら process tree を止め、その watch の終端を返す。
+        if sink.auto_leaf.is_some() || sink.token_budget.is_some() {
+            let auto_leaf_stopped = || {
                 Ok(RunOutcome {
                     terminal: Terminal::Yielded {
                         checkpoint: serde_json::Value::Null,
@@ -730,27 +733,71 @@ pub(super) async fn run_worker(
                     exit_code: None,
                 })
             };
+            let token_stopped = |watch: &token_budget::TokenBudgetWatch| {
+                Ok(RunOutcome {
+                    terminal: watch.terminal(),
+                    exit_code: None,
+                })
+            };
+            let stopped = || {
+                if let Some(watch) = sink.token_budget.as_deref().filter(|w| w.exceeded()) {
+                    token_stopped(watch)
+                } else {
+                    auto_leaf_stopped()
+                }
+            };
+            let any_exceeded = || {
+                sink.auto_leaf.as_ref().is_some_and(|w| w.exceeded())
+                    || sink.token_budget.as_ref().is_some_and(|w| w.exceeded())
+            };
             // Keep the future (and its process-group registration) alive until the
             // shared stop path signals descendants and containers. Drop alone only
             // kills the direct child. Finish then saves a mechanical checkpoint.
             tokio::pin!(run);
-            let outcome = if watch.exceeded() {
+            let auto_leaf_wake = async {
+                match &sink.auto_leaf {
+                    Some(watch) => watch.wake.notified().await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            let token_wake = async {
+                match &sink.token_budget {
+                    Some(watch) => watch.wake.notified().await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            let kill = || async {
+                let container_stop = container_plan.as_ref().map(|p| {
+                    Arc::new(task_worker::ContainerStop::of(p))
+                        as Arc<dyn task_worker::ContainerStopper>
+                });
+                if task_worker::kill_tree_with(run_id, limits.kill_grace, container_stop) {
+                    tokio::time::sleep(limits.kill_grace).await;
+                }
+            };
+            let outcome = if any_exceeded() {
                 stopped()
             } else {
                 tokio::select! {
                     biased;
-                    _ = watch.wake.notified() => {
-                        let container_stop = container_plan.as_ref().map(|p|
-                            Arc::new(task_worker::ContainerStop::of(p)) as Arc<dyn task_worker::ContainerStopper>);
-                        if task_worker::kill_tree_with(run_id, limits.kill_grace, container_stop) {
-                            tokio::time::sleep(limits.kill_grace).await;
-                        }
+                    _ = auto_leaf_wake => {
+                        kill().await;
+                        stopped()
+                    },
+                    _ = token_wake => {
+                        kill().await;
                         stopped()
                     },
                     outcome = &mut run => outcome,
                 }
             };
-            if watch.exceeded() { stopped() } else { outcome }
+            // auto leaf は従来どおり、run が先に終わっても超過なら止めた扱いにする。token 予算は run が
+            // 自分で終わったならその終端（確定の usage）を残す（次の run・reviewer は worker_finish が止める）。
+            if sink.auto_leaf.as_ref().is_some_and(|w| w.exceeded()) {
+                auto_leaf_stopped()
+            } else {
+                outcome
+            }
         } else {
             run.await
         }

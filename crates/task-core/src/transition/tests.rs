@@ -225,6 +225,14 @@ fn expected_simple(kind: TaskKind, status: Status, trigger: &Trigger) -> Expecte
                 expect_err()
             }
         }
+        // ADR 2026-10-20-mlsys-main2-fixes D1-4: token 予算の到達は次の run・reviewer を起こさず failed へ。
+        Trigger::TokenBudgetExhausted => {
+            if matches!(status, Status::Ready | Status::Running | Status::Reviewing) {
+                expect_ok(Status::Failed)
+            } else {
+                expect_err()
+            }
+        }
         _ => unreachable!("handled by retry-aware helper"),
     }
 }
@@ -283,6 +291,8 @@ fn table_simple_triggers_full_cross_product() {
         // ADR 2026-10-08-browser-prod-enablement D2: browser の前提待ちと再開（attempts 据え置き）。
         Trigger::BrowserPrereqBlock,
         Trigger::BrowserPrereqResume,
+        // ADR 2026-10-20-mlsys-main2-fixes D1-4: token 予算の到達（attempts 据え置き）。
+        Trigger::TokenBudgetExhausted,
     ];
 
     let mut count = 0usize;
@@ -336,8 +346,9 @@ fn table_simple_triggers_full_cross_product() {
     // Phase F3 途中確認（ADR-0074 D2.2）で PhaseGate / PhaseResume、Phase R3b（ADR-0079 D8）で PlanGate、
     // F5-fix8（ADR-0074 付記）で PlanComplete、ブラウザ capability Phase 2（ADR-0080 D4）で
     // BrowserWait×2 / BrowserResume / BrowserFail×2、ADR-0090 D2 で ClusterJobWait / ClusterJobResume、
-    // ADR 2026-10-08-browser-prod-enablement D2 で BrowserPrereqBlock / BrowserPrereqResume を追加）
-    assert_eq!(count, 4 * 8 * 31);
+    // ADR 2026-10-08-browser-prod-enablement D2 で BrowserPrereqBlock / BrowserPrereqResume、
+    // ADR 2026-10-20-mlsys-main2-fixes D1-4 で TokenBudgetExhausted を追加）
+    assert_eq!(count, 4 * 8 * 32);
 }
 
 /// ADR-0072 D6（Phase E1）: `Trigger::Continue` の `reason` は `why` ごとに静的な名前になる

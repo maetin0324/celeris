@@ -776,6 +776,12 @@ impl Dispatcher {
         };
         let mut extras =
             self.run_extras(&task, worktree.as_ref(), account.as_deref(), &adapter_id)?;
+        // ADR 2026-10-20-mlsys-main2-fixes D1-3: task 木に token 予算があれば、この run 以外の消費を前置きに
+        // 途中の累積 usage を監視する（既に上限なら run は adapter を起こさずに `BudgetExhausted{Tokens}`）。
+        if let Some((root, max)) = token_budget::budget_scope(self.store.as_ref(), &task)? {
+            let prior = token_budget::tree_tokens_used(self.store.as_ref(), root, Some(&run_id))?;
+            extras.token_budget = Some(Arc::new(token_budget::TokenBudgetWatch::new(prior, max)));
+        }
         // ADR-0056 D3（Phase 79）: mount 名にあったが KB に見つからなかった skill を `status` の
         // 進行イベントで 1 行ずつ報告する（run は落とさない）。
         for name in &extras.missing_skills {

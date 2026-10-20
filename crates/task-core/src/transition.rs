@@ -127,6 +127,10 @@ pub enum Trigger {
     /// ADR 2026-10-08-browser-prod-enablement D2: 前提が揃った（dispatcher の tick の再評価）。
     /// `Blocked → Ready`、attempts 不変、`reason = "browser_prerequisite_resolved"`。
     BrowserPrereqResume,
+    /// ADR 2026-10-20-mlsys-main2-fixes D1-4: task 木の消費が `Budget.max_tokens` に達したので、continuation・
+    /// retry・reviewer を起こさずに終える。`Ready | Running | Reviewing → Failed`、attempts 不変、
+    /// `reason = "token_budget_exhausted"`（人に聞かない。campaign の試行は人の判断を待てない）。
+    TokenBudgetExhausted,
 }
 
 impl Trigger {
@@ -173,6 +177,7 @@ impl Trigger {
             Trigger::ClusterJobResume => crate::cluster_job::REASON_RESUME,
             Trigger::BrowserPrereqBlock => crate::browser_prerequisite::REASON_BLOCKED,
             Trigger::BrowserPrereqResume => crate::browser_prerequisite::REASON_RESOLVED,
+            Trigger::TokenBudgetExhausted => "token_budget_exhausted",
         }
     }
 
@@ -659,6 +664,20 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
             if s.status == Status::Blocked {
                 Ok(Outcome {
                     next: Status::Ready,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
+        Trigger::TokenBudgetExhausted => {
+            if matches!(
+                s.status,
+                Status::Ready | Status::Running | Status::Reviewing
+            ) {
+                Ok(Outcome {
+                    next: Status::Failed,
                     attempts: s.attempts,
                     reason: t.name(),
                 })

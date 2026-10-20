@@ -2919,6 +2919,7 @@ mod run_tmpdir;
 mod target_env;
 mod target_sync;
 mod tick_and_dispatch;
+mod token_budget;
 mod trial_context;
 mod ui_ux_skills;
 mod work_units;

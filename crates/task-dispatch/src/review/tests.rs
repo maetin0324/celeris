@@ -781,6 +781,7 @@ fn reviewer_run(adapter: Arc<StubReviewer>) -> ReviewerRun {
         subject_genre: None,
         session: None,
         session_diff: Vec::new(),
+        token_budget: None,
     }
 }
 
@@ -895,6 +896,7 @@ async fn reviewer_provider_failure_is_reported_instead_of_failing_criteria() {
         subject_genre: None,
         session: None,
         session_diff: Vec::new(),
+        token_budget: None,
     };
     let out = review_task(
         &task,

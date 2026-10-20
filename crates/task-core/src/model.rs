@@ -793,6 +793,15 @@ pub struct Usage {
 }
 
 impl Usage {
+    /// ADR 2026-10-20-mlsys-main2-fixes D1: `Budget.max_tokens` と比べる量（input+output+cache_read+
+    /// cache_creation。campaign の `token_basis = "all"` と同じ）。欠けた欄は 0。
+    pub fn budget_tokens(&self) -> u64 {
+        self.input_tokens.unwrap_or(0)
+            + self.output_tokens.unwrap_or(0)
+            + self.cache_read_tokens.unwrap_or(0)
+            + self.cache_creation_tokens.unwrap_or(0)
+    }
+
     /// 同じ run の複数の `WorkerFinished`（待機からの再開など）の消費を合算する。runs[].usage と決定ログの
     /// 消費行が同じ規則で数えるための唯一の合算（片方が欠測なら、もう片方を採る。0 は足さない）。
     pub fn accumulate(self, other: &Usage) -> Usage {

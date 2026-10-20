@@ -6,6 +6,8 @@ use super::*;
 /// run 途中のイベントをストアに追記するシンク。ワーカーの出力（heartbeat）があればリースを延長する（ADR-0010 D7）。
 pub(super) struct StoreSink {
     pub(super) auto_leaf: Option<auto_leaf::AutoLeafWatch>,
+    /// ADR 2026-10-20-mlsys-main2-fixes D1-3: 途中の累積 usage で run を止める watch（予算が無ければ `None`）。
+    pub(super) token_budget: Option<Arc<token_budget::TokenBudgetWatch>>,
     pub(super) store: Arc<dyn TaskStore>,
     pub(super) task_id: TaskId,
     pub(super) run_id: String,
@@ -394,6 +396,17 @@ impl EventSink for StoreSink {
         }
     }
 
+    /// ADR 2026-10-20-mlsys-main2-fixes D1-3: 途中の累積 usage で runs 索引の `usage_json` を上書きし
+    /// （events には書かない）、token 予算の watch に渡す。
+    fn usage_progress(&self, usage: &task_core::Usage) {
+        if let Err(e) = self.store.run_index_progress_usage(&self.run_id, usage) {
+            tracing::warn!(task_id = %self.task_id, run_id = %self.run_id, error = %e, "failed to record usage progress");
+        }
+        if let Some(watch) = &self.token_budget {
+            watch.observe(usage);
+        }
+    }
+
     fn delegate(&self, tasks: &[DelegateTask]) {
         if let Err(reason) = self.delegate_impl(tasks) {
             tracing::warn!(task_id = %self.task_id, run_id = %self.run_id, %reason, "delegate proposal ignored");
@@ -530,9 +543,24 @@ pub(super) struct ReviewerSink {
     /// Phase 67 の実装では**この配線が抜けていて**、Lead セッションの resume 拒否が一切 retire
     /// されなかった（ADR-0054 D1「失敗も同じ経路で作り直す」が Lead セッションには効いていなかった）。
     pub(super) session_key: Option<(String, task_core::SessionKind, Option<ProjectId>)>,
+    /// ADR 2026-10-20-mlsys-main2-fixes D1-3: reviewer run を途中で止める watch（`ReviewerRun.token_budget` と同じ）。
+    pub(super) token_budget: Option<Arc<token_budget::TokenBudgetWatch>>,
 }
 
 impl EventSink for ReviewerSink {
+    /// ADR 2026-10-20-mlsys-main2-fixes D1-3: reviewer run の途中値も runs 索引に入れる（campaign の poll と
+    /// 次の判定が実行中の消費を見られる）。
+    fn usage_progress(&self, usage: &task_core::Usage) {
+        if let Err(e) = self
+            .store
+            .run_index_progress_usage(&self.review_run_id, usage)
+        {
+            tracing::warn!(task_id = %self.task_id, run_id = %self.review_run_id, error = %e, "failed to record reviewer usage progress");
+        }
+        if let Some(watch) = &self.token_budget {
+            watch.observe(usage);
+        }
+    }
     fn progress(&self, msg: &str) {
         let ev = Event::worker_progress(
             self.subject_run_id.clone(),

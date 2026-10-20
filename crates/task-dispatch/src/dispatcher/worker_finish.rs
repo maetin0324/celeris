@@ -435,7 +435,9 @@ impl Dispatcher {
             Ok(RunOutcome {
                 terminal:
                     Terminal::Error {
-                        message, retryable, ..
+                        message,
+                        retryable,
+                        usage,
                     },
                 ..
             }) => {
@@ -450,10 +452,11 @@ impl Dispatcher {
                 if run_end.is_none() {
                     run_end = Some(task_core::RunEnd::Failed { retryable });
                 }
+                // ADR 2026-10-20-mlsys-main2-fixes D5: 失敗までに観測できた usage を残す（無ければ欠測のまま）。
                 (
                     Trigger::WorkerError { retryable },
                     format!("error(retryable={retryable}): {message}"),
-                    None,
+                    usage,
                     ProviderOutcome::Ok,
                 )
             }
@@ -1379,6 +1382,30 @@ impl Dispatcher {
             }
             v2_settle = Some(settle);
         }
+        // ADR 2026-10-20-mlsys-main2-fixes D1-4: 次の run（continuation・retry・requeue・次の unit・replan）や
+        // reviewer を起こす終わり方でも、task 木の消費（この run を含む）が `max_tokens` に達していたら起こさず、
+        // task を failed にする（人には聞かない）。兄弟の unit が走っている間（task を遷移させない）は最後の 1 本で決める。
+        let stays_running = matches!(
+            v2_settle,
+            Some(
+                crate::execution_scheduler::PhaseSettle::Wait
+                    | crate::execution_scheduler::PhaseSettle::Integrate(_)
+            )
+        );
+        if !stays_running
+            && trigger_starts_another_run(&trigger)
+            && let Some((root, max)) = token_budget::budget_scope(self.store.as_ref(), &task)?
+        {
+            let used = token_budget::tree_tokens_used(self.store.as_ref(), root, Some(&run_id))?
+                + usage.map(|u| u.budget_tokens()).unwrap_or(0);
+            if used >= max {
+                tracing::info!(%task_id, %run_id, used, max, previous = %outcome_str, "token budget reached; no continuation, retry or review (ADR 2026-10-20-mlsys-main2-fixes D1-4)");
+                trigger = Trigger::TokenBudgetExhausted;
+                outcome_str = token_budget::outcome(used, max);
+                questions.clear();
+                infra_requeue_n = None;
+            }
+        }
         let finished = Event::WorkerFinished {
             run_id: run_id.clone(),
             outcome: outcome_str.clone(),
@@ -1895,6 +1922,19 @@ pub(super) fn classify_budget_kind_from_text(message: &str) -> Option<task_core:
 }
 
 /// ADR-0072 D9（Phase E1）: `WorkerFinished.outcome` に載せる、人が読む 1 行の終わり方の説明。
+/// ADR 2026-10-20-mlsys-main2-fixes D1-4: この trigger の後に（人の操作なしで）次の run か reviewer が起きるか。
+/// `WorkerError{retryable:true}` は attempts が残れば retry になるので含める（残っていなければ failed で同じ終端）。
+pub(super) fn trigger_starts_another_run(trigger: &Trigger) -> bool {
+    matches!(
+        trigger,
+        Trigger::WorkerDone
+            | Trigger::Continue { .. }
+            | Trigger::WorkerError { retryable: true }
+            | Trigger::Requeue
+            | Trigger::InfraRequeue
+    )
+}
+
 pub(super) fn describe_run_end(end: task_core::RunEnd) -> String {
     match end {
         task_core::RunEnd::Completed => "completed".to_string(),

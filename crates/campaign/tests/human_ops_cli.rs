@@ -377,8 +377,7 @@ fn manifest_path_identity_uses_the_campaign_hash() {
     let dir = tempfile::tempdir().unwrap();
     let f = dir.path().join("human-ops.jsonl");
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("agent-docs/progress/2026-10-16-mlsys-final/final.json");
+        .join("../../agent-docs/progress/2026-10-16-mlsys-final/final.json");
     let want = celeris_campaign::manifest::CampaignManifest::load(&manifest)
         .unwrap()
         .compute_sha256()

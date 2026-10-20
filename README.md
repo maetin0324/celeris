@@ -175,7 +175,7 @@ scripts/cluster-check.sh pegasus /work/NBB/$USER/workspace/rust/benchfs
 ディスパッチャとストアには LLM 呼び出しを入れず、LLM を使う処理は run とアダプタの境界で扱います。
 
 ```sh
-cargo test --workspace
+bash scripts/dev/test-affected.sh   # 変更 crate と逆依存 crate の試験だけ。全体の試験は release gate だけ
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 

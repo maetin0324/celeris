@@ -16,7 +16,7 @@ mode = "host" # host（既定）または container
 
 [commands]
 setup = ["cargo fetch"]
-check = ["cargo test --workspace", "cargo clippy --workspace -- -D warnings"]
+check = ["bash scripts/dev/test-affected.sh", "cargo clippy --workspace -- -D warnings"]
 
 [outputs]
 docs = "docs"

@@ -12,7 +12,8 @@
 - cargo / nextest はローカル LVM の target-dir を使う（`.cargo/config.toml` を `scripts/dev/worktree-target-dir.sh` が生成。PreToolUse hook が自動で書く。NFS の worktree に `target/` を作らない）
 - 設計判断をしたら `agent-docs/adr/YYYY-MM-DD-<slug>.md`（日付+slug。番号は 0128 で止めた。ADR-0128 D5）を追加してから実装する
 - 各Phase完了時に必ず:
-  - `bash scripts/dev/test-parallel.sh`（nextest。`cargo test --workspace` と同じ範囲で、release gate と同じ）と `cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check`（release gate の cargo-fmt-check と同じ。落ちたら `cargo fmt --all` で直す）を実行し、出力の要点を報告に含める
+  - `bash scripts/dev/test-affected.sh`（変更 crate と逆依存 crate の試験だけ。web だけの変更は web の unit 試験。基準は `git merge-base HEAD main`、WU では `$CELERIS_WU_BASE`。`--list` で対象を確認）と `cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check`（release gate の cargo-fmt-check と同じ。落ちたら `cargo fmt --all` で直す）を実行し、出力の要点を報告に含める
+  - 全体の試験（`cargo nextest run --workspace` と doc test の一括・web の e2e・本物の browser/userns の試験）は release gate（`scripts/selfdeploy/release.sh`）だけで走らせる。WU・段の統合・task の受け入れ・review・Phase 完了では走らせない（`agent-docs/adr/2026-10-20-full-tests-at-release-only.md`）
   - task の進捗ファイル `agent-docs/progress/YYYY-MM-DD-<slug>.md` を更新（front matter と完了日、証拠コマンドと結果、未解決事項、提案。並列 WorkUnit は `agent-docs/progress/YYYY-MM-DD-<slug>/<wu-key>.md`。ADR-0128 D3）。共有の索引・`agent-docs/PROGRESS.md` には追記しない
   - `git add -A && git commit -m "phase N: <summary>"`
 - 仕様・設計の変更の提案は task の進捗ファイルの「提案」節に書く（ADR-0128 D3）

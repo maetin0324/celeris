@@ -132,7 +132,7 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   `Starting … across N binaries` / `Summary …` の行が読めない（全部走った証拠が無い）ときは段が落ちる。
   - `cargo-nextest` が要る（版は `tools/nextest/VERSION` で固定。入れ方は `docs/ops/nextest.md`）。無ければ作業ツリーを作る前に
     入れ方を示して落ちる。非常用に `SD_GATE_TEST_RUNNER=cargo-test` で従来の直列の `cargo test --workspace`（`runner: "cargo-test"`）。
-  - 開発者は従来どおり `cargo test --workspace` でよい（CLAUDE.md。両方が通ることを保つ）。並列で速く回すなら
+  - 開発・WU・phase 完了では全体の試験を回さない（`scripts/dev/test-affected.sh`。ADR 2026-10-20-full-tests-at-release-only）。並列で絞って回すなら
     `scripts/dev/test-parallel.sh [-p <crate> …]`。
 - 成功時は `bin/` と `web/app/`、web tarball、manifest.json、gate.json を梱包する。
   `web/app` では `pnpm install --prod --offline --frozen-lockfile` を実行し、node_modules の実在と

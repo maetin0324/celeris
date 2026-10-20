@@ -259,7 +259,9 @@ async fn non_zero_exit_is_retryable_error() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("exit=7"), "{message}");
         }
@@ -284,7 +286,9 @@ async fn missing_celeris_result_line_is_retryable_error() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("CELERIS_RESULT"), "{message}");
         }
@@ -308,7 +312,9 @@ async fn empty_report_is_retryable_error() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("empty report"), "{message}");
         }
@@ -343,7 +349,9 @@ while true; do sleep 0.1; done
     let outcome = adapter.run(req, "run-5", limits, &sink).await.unwrap();
     assert!(start.elapsed() < Duration::from_secs(5));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("wall clock exceeded"), "{message}");
         }
@@ -1596,7 +1604,9 @@ async fn gate_zero_search_results_keeps_the_distinct_message_even_when_that_thre
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("web search returned nothing"), "{message}");
         }
@@ -1617,7 +1627,9 @@ async fn gate_zero_search_results_uses_the_distinct_message_and_keeps_artifacts(
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("web search returned nothing"), "{message}");
         }
@@ -1648,7 +1660,9 @@ async fn gate_sources_below_minimum_is_retryable_with_actual_numbers() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(
                 message.starts_with("insufficient web evidence:"),
@@ -1680,7 +1694,9 @@ async fn gate_cited_below_minimum_is_retryable_with_actual_numbers() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("cited=1 (min 2)"), "{message}");
             assert!(!message.contains("sources="), "{message}");
@@ -1707,7 +1723,9 @@ async fn gate_single_domain_is_retryable_with_actual_numbers() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("domains=1 (min 2)"), "{message}");
             assert!(!message.contains("sources="), "{message}");
@@ -1789,7 +1807,9 @@ async fn gate_missing_counts_is_treated_as_all_zero_and_fails_with_default_thres
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("web search returned nothing"), "{message}");
         }

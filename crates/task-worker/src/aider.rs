@@ -259,6 +259,7 @@ async fn run_aider(
             timeout_terminal = Some(Terminal::Error {
                 message: "idle timeout".into(),
                 retryable: true,
+                usage: None,
             });
             force_kill = true;
             break;
@@ -351,6 +352,7 @@ async fn terminal_from_result(
             return Terminal::Error {
                 message: format!("aider exited without {artifacts_rel}/result.json"),
                 retryable: true,
+                usage: None,
             };
         }
     };
@@ -377,12 +379,14 @@ async fn terminal_from_result(
                         "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
                     ),
                     retryable: true,
+                    usage: None,
                 }
             }
         }
         Err(e) => Terminal::Error {
             message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
             retryable: true,
+            usage: None,
         },
     }
 }

@@ -1448,6 +1448,7 @@ pub(super) async fn run_registered(
                     terminal: crate::Terminal::Error {
                         message: "browser auth section could not be recorded".into(),
                         retryable: true,
+                        usage: None,
                     },
                     exit_code: None,
                 });
@@ -1658,6 +1659,7 @@ pub(super) async fn run_registered(
                     "browser session cleanup failed; inspect the launcher session before retrying"
                         .into(),
                 retryable: false,
+                usage: None,
             },
             exit_code: None,
         }),
@@ -1673,6 +1675,7 @@ pub(super) async fn run_registered(
                 terminal: crate::Terminal::Error {
                     message: "browser auth section could not be closed after session end".into(),
                     retryable: true,
+                    usage: None,
                 },
                 exit_code: None,
             });

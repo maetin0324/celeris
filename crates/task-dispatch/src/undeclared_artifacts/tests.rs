@@ -192,6 +192,7 @@ fn terminal_wants_scan_for_done_question_and_waiting_only() {
     assert!(!terminal_wants_scan(&Terminal::Error {
         message: "e".into(),
         retryable: false,
+        usage: None,
     }));
 }
 

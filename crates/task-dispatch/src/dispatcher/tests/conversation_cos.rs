@@ -173,6 +173,7 @@ async fn a_failed_conversation_run_says_it_could_not_answer() {
     let adapter = Arc::new(person_adapter(Terminal::Error {
         message: "harness died".into(),
         retryable: false,
+        usage: None,
     }));
     let mut d = person_dispatcher(store.clone(), adapter, workspace_root, None);
     run_until_idle(&mut d, 40).await;
@@ -274,6 +275,7 @@ async fn a_retried_conversation_run_answers_only_once() {
                     terminal: Terminal::Error {
                         message: "harness hiccup".into(),
                         retryable: true,
+                        usage: None,
                     },
                     exit_code: Some(1),
                 });

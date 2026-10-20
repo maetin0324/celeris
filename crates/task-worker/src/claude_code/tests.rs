@@ -22,9 +22,17 @@ struct RecordingSink {
     session_resume_failed: Mutex<Vec<String>>,
     /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `policy_violation` の呼び出し。
     violations: Mutex<Vec<crate::tool_policy::ToolPolicyViolation>>,
+    /// `usage_progress` に渡された累積 usage（順序どおり）。
+    usage_progress: Mutex<Vec<task_core::Usage>>,
 }
 
 impl EventSink for RecordingSink {
+    fn usage_progress(&self, usage: &task_core::Usage) {
+        self.usage_progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(*usage);
+    }
     fn policy_violation(&self, violation: &crate::tool_policy::ToolPolicyViolation) {
         self.violations
             .lock()
@@ -1029,6 +1037,7 @@ echo '{"type":"result","subtype":"success","is_error":false}'
         Terminal::Error {
             message,
             retryable: false,
+            ..
         } => {
             assert!(message.contains("result.json misplaced"), "{message}");
             assert!(
@@ -1066,6 +1075,7 @@ echo '{"type":"result","subtype":"success","is_error":false}'
         Terminal::Error {
             message,
             retryable: false,
+            ..
         } => {
             assert!(message.contains("result.json misplaced"), "{message}");
             assert!(
@@ -1273,7 +1283,9 @@ echo '{"type":"result","subtype":"success","is_error":false}'
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { message, retryable } => {
+        Terminal::Error {
+            message, retryable, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("invalid cluster job wait"), "{message}");
         }
@@ -1353,7 +1365,9 @@ echo '{"type":"result","subtype":"success","is_error":false}'
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("not valid JSON"), "{message}");
         }
@@ -1413,7 +1427,9 @@ sleep 30
     let outcome = adapter.run(req, "run-7", limits, &sink).await.unwrap();
     assert!(start.elapsed() < Duration::from_secs(5));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("idle timeout"), "{message}");
         }
@@ -1434,7 +1450,9 @@ async fn crash_without_result_message_is_retryable_error() {
         .unwrap();
     assert_eq!(outcome.exit_code, Some(9));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("exit=9"), "{message}");
         }
@@ -1464,7 +1482,9 @@ exit 9
         .unwrap();
     assert_eq!(outcome.exit_code, Some(9));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("exit=9"), "{message}");
         }
@@ -4359,4 +4379,89 @@ echo '{"type":"result","subtype":"success","is_error":false}'
     }
     assert!(dir.path().join("artifacts/result.json").exists());
     assert!(work_dir.join("artifacts/result.json").exists());
+}
+
+/// 2 つの main thread assistant message（同じ id の行は 1 件）と sub-agent の行を流す stub の stdout。
+const USAGE_STREAM_ASSISTANTS: &str = r#"echo '{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100,"cache_creation_input_tokens":20}}}'
+echo '{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":10,"output_tokens":7,"cache_read_input_tokens":100,"cache_creation_input_tokens":20}}}'
+echo '{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"id":"sub1","content":[{"type":"text","text":"sub"}],"usage":{"input_tokens":999,"output_tokens":999}}}'
+echo '{"type":"assistant","message":{"id":"m2","content":[{"type":"text","text":"c"}],"usage":{"input_tokens":3,"output_tokens":11,"cache_read_input_tokens":130,"cache_creation_input_tokens":0}}}'
+"#;
+
+/// 累積 usage は main thread の message ごとに単調に出て（sub-agent は数えない）、最終値は
+/// `result.usage` と一致する。
+#[tokio::test]
+async fn claude_code_emits_cumulative_usage_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = format!(
+        "mkdir -p artifacts\n{USAGE_STREAM_ASSISTANTS}printf '%s' '{{\"summary\":\"ok\",\"evidence\":[]}}' > artifacts/result.json\n\
+echo '{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"usage\":{{\"input_tokens\":13,\"output_tokens\":18,\"cache_read_input_tokens\":230,\"cache_creation_input_tokens\":20}}}}'\n"
+    );
+    let adapter = ClaudeCodeAdapter::new(stub_claude(dir.path(), &script));
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "run-usage-progress",
+            default_limits(),
+            &sink,
+        )
+        .await
+        .unwrap();
+    let Terminal::Done {
+        usage: Some(result_usage),
+        ..
+    } = outcome.terminal
+    else {
+        panic!("expected done with usage, got {:?}", outcome.terminal);
+    };
+    let progress = sink.usage_progress.lock().unwrap();
+    assert_eq!(progress.len(), 3, "{progress:?}");
+    let totals: Vec<u64> = progress
+        .iter()
+        .map(|u| {
+            u.input_tokens.unwrap_or(0)
+                + u.output_tokens.unwrap_or(0)
+                + u.cache_read_tokens.unwrap_or(0)
+                + u.cache_creation_tokens.unwrap_or(0)
+        })
+        .collect();
+    assert!(totals.windows(2).all(|w| w[0] < w[1]), "{totals:?}");
+    let last = progress.last().unwrap();
+    assert_eq!(last.input_tokens, result_usage.input_tokens);
+    assert_eq!(last.output_tokens, result_usage.output_tokens);
+    assert_eq!(last.cache_read_tokens, result_usage.cache_read_tokens);
+    assert_eq!(
+        last.cache_creation_tokens,
+        result_usage.cache_creation_tokens
+    );
+}
+
+/// result を観測できずに終わった失敗は、ここまでに観測した累積 usage を運ぶ。
+#[tokio::test]
+async fn claude_code_error_carries_observed_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = format!("mkdir -p artifacts\n{USAGE_STREAM_ASSISTANTS}exit 1\n");
+    let adapter = ClaudeCodeAdapter::new(stub_claude(dir.path(), &script));
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "run-usage-error",
+            default_limits(),
+            &sink,
+        )
+        .await;
+    let terminal = match outcome {
+        Ok(o) => o.terminal,
+        Err(e) => panic!("expected an Error terminal, got {e:?}"),
+    };
+    let Terminal::Error { usage, .. } = terminal else {
+        panic!("expected error, got {terminal:?}");
+    };
+    let usage = usage.expect("observed usage");
+    assert_eq!(usage.input_tokens, Some(13));
+    assert_eq!(usage.output_tokens, Some(18));
+    assert_eq!(usage.cache_read_tokens, Some(230));
+    assert_eq!(usage.cache_creation_tokens, Some(20));
 }

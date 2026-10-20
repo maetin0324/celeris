@@ -2244,6 +2244,7 @@ async fn run_with_executable_attempt(
                     terminal: Terminal::Error {
                         message: "browser auth section could not be recorded".into(),
                         retryable: true,
+                        usage: None,
                     },
                     exit_code: None,
                 });
@@ -2435,6 +2436,7 @@ async fn run_with_executable_attempt(
                     "browser session cleanup failed; inspect the managed session before retrying"
                         .into(),
                 retryable: false,
+                usage: None,
             },
             exit_code: None,
         });
@@ -2451,6 +2453,7 @@ async fn run_with_executable_attempt(
                 terminal: Terminal::Error {
                     message: "browser auth section could not be closed after session end".into(),
                     retryable: true,
+                    usage: None,
                 },
                 exit_code: None,
             });

@@ -68,7 +68,9 @@ pub(crate) fn terminal_report(result: &Result<RunOutcome, AdapterError>) -> Opti
             evidence: format_evidence(evidence),
         }),
         Ok(RunOutcome {
-            terminal: Terminal::Error { message, retryable },
+            terminal: Terminal::Error {
+                message, retryable, ..
+            },
             ..
         }) => Some(TerminalReport::Error {
             message: message.clone(),

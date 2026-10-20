@@ -485,6 +485,7 @@ fn cos_chat_run_sink_terminal_mapping() {
             terminal: Terminal::Error {
                 message: message.into(),
                 retryable: true,
+                usage: None,
             },
             exit_code: Some(1),
         })

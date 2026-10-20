@@ -104,6 +104,7 @@ pub async fn misplaced_result(
                 .join(", ")
         ),
         retryable: false,
+        usage: None,
     })
 }
 
@@ -167,6 +168,7 @@ mod tests {
         let Some(Terminal::Error {
             message,
             retryable: false,
+            ..
         }) = misplaced_result(&artifacts, &cwd, fresh).await
         else {
             panic!("misplacement must be permanent");

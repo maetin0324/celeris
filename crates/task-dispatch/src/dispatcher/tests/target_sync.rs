@@ -1015,6 +1015,7 @@ async fn integration_repair_exhausted_dirty_failed_stops_for_manual_inspection()
         terminal: Terminal::Error {
             message: "repair failed".into(),
             retryable: false,
+            usage: None,
         },
         delay: Duration::ZERO,
     });

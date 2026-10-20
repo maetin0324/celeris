@@ -2788,7 +2788,12 @@ fn terminal_from_run_dir(dir: &std::path::Path, run_id: &str) -> Option<Terminal
             message,
             retryable,
             provider_failure: None,
-        } => Some(Terminal::Error { message, retryable }),
+            usage,
+        } => Some(Terminal::Error {
+            message,
+            retryable,
+            usage,
+        }),
         WorkerMessage::Yielded { checkpoint, usage } => {
             Some(Terminal::Yielded { checkpoint, usage })
         }

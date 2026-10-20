@@ -135,6 +135,7 @@ impl Dispatcher {
                 terminal: terminal.unwrap_or(Terminal::Error {
                     message: String::new(),
                     retryable: true,
+                    usage: None,
                 }),
                 account,
                 account_adapter,
@@ -390,6 +391,7 @@ impl Dispatcher {
                 terminal: Terminal::Error {
                     message: format!("work unit {}", f.summary()),
                     retryable: true,
+                    usage: None,
                 },
                 exit_code: None,
             }),

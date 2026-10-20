@@ -1065,7 +1065,7 @@ async fn reviewer_run_failure_or_missing_verdict_fails_reviewer_criteria() {
     // 回数を知らないので、この関数はやり直しの回数に関わらず常にこの形を返す）。
     let adapter = Arc::new(StubReviewer {
         review_json: Some(r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"x"},{"criterion":1,"pass":true,"reason":"y"}]}"#.into()),
-        terminal: Terminal::Error { message: "boom".into(), retryable: true },
+        terminal: Terminal::Error { message: "boom".into(), retryable: true, usage: None, },
         seen: Mutex::new(vec![]),
     });
     let out = review_task(
@@ -1092,7 +1092,7 @@ async fn reviewer_run_failure_or_missing_verdict_fails_reviewer_criteria() {
     // reviewer 条件を不合格にする（やり直しても直らないので待たせない）。
     let adapter = Arc::new(StubReviewer {
         review_json: Some(r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"x"},{"criterion":1,"pass":true,"reason":"y"}]}"#.into()),
-        terminal: Terminal::Error { message: "settings not found".into(), retryable: false },
+        terminal: Terminal::Error { message: "settings not found".into(), retryable: false, usage: None, },
         seen: Mutex::new(vec![]),
     });
     let out = review_task(

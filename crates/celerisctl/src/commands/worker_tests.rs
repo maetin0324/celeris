@@ -24,6 +24,7 @@ fn normalize_outcome_maps_done_question_and_error_to_exit_codes() {
         terminal: Terminal::Error {
             message: "m".into(),
             retryable: false,
+            usage: None,
         },
         exit_code: Some(1),
     }));

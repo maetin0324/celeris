@@ -527,6 +527,7 @@ echo '{"type":"turn.completed"}'
         Terminal::Error {
             message,
             retryable: false,
+            ..
         } => {
             assert!(message.contains("result.json misplaced"), "{message}");
             assert!(
@@ -562,6 +563,7 @@ echo '{"type":"turn.completed"}'
         Terminal::Error {
             message,
             retryable: false,
+            ..
         } => {
             assert!(message.contains("result.json misplaced"), "{message}");
             assert!(
@@ -602,7 +604,9 @@ async fn turn_failed_is_retryable_error() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("sandbox denied write"), "{message}");
         }
@@ -627,7 +631,9 @@ async fn turn_failed_with_object_shaped_error_is_retryable_error() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("the model is not supported"), "{message}");
         }
@@ -724,7 +730,9 @@ async fn success_without_result_file_is_retryable_error() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("artifacts/result.json"), "{message}");
         }
@@ -768,7 +776,9 @@ async fn crash_without_turn_message_is_retryable_error() {
         .unwrap();
     assert_eq!(outcome.exit_code, Some(9));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("exit=9"), "{message}");
         }
@@ -797,7 +807,9 @@ exit 9
         .unwrap();
     assert_eq!(outcome.exit_code, Some(9));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("exit=9"), "{message}");
         }
@@ -824,7 +836,9 @@ async fn stale_result_file_from_previous_run_is_cleared_before_this_run() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("artifacts/result.json"), "{message}");
         }
@@ -907,7 +921,9 @@ sleep 30
     let outcome = adapter.run(req, "run-9", limits, &sink).await.unwrap();
     assert!(start.elapsed() < Duration::from_secs(5));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("idle timeout"), "{message}");
         }
@@ -962,7 +978,9 @@ echo '{"type":"turn.completed"}'
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("not valid JSON"), "{message}");
         }

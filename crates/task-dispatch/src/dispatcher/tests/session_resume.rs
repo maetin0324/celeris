@@ -183,6 +183,7 @@ impl WorkerAdapter for ClaudeScriptAdapter {
                 terminal: Terminal::Error {
                     message: "worker exited without a result message (exit=1)".into(),
                     retryable: true,
+                    usage: None,
                 },
                 exit_code: Some(1),
             });
@@ -508,6 +509,7 @@ async fn session_resume_session_reuse_rejected_resume_falls_back_to_checkpoint()
                     Terminal::Error {
                         message: "worker exited without a result message (exit=1)".into(),
                         retryable: true,
+                        usage: None,
                     },
                     Hook::RejectResume,
                 ),
@@ -1177,6 +1179,7 @@ async fn session_resume_remote_rejected_resume_falls_back_to_checkpoint() {
                     Terminal::Error {
                         message: "worker exited without a result message (exit=1)".into(),
                         retryable: true,
+                        usage: None,
                     },
                     Hook::RejectResume,
                 ),

@@ -254,6 +254,7 @@ fn an_error_run_becomes_bad_news_that_reaches_the_secretary() {
         terminal: Terminal::Error {
             message: "ビルドが壊れている".into(),
             retryable: true,
+            usage: None,
         },
         exit_code: Some(1),
     });

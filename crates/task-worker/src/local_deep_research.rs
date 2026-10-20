@@ -563,6 +563,7 @@ async fn run_ldr(
             timeout_terminal = Some(Terminal::Error {
                 message: "wall clock exceeded".into(),
                 retryable: true,
+                usage: None,
             });
             force_kill = true;
             break;
@@ -572,6 +573,7 @@ async fn run_ldr(
             timeout_terminal = Some(Terminal::Error {
                 message: "idle timeout".into(),
                 retryable: true,
+                usage: None,
             });
             force_kill = true;
             break;
@@ -662,6 +664,7 @@ async fn run_ldr(
                     "local-deep-research runner exited with a non-zero status (exit={exit_repr})"
                 ),
                 retryable: true,
+                usage: None,
             },
             pf,
         )
@@ -672,6 +675,7 @@ async fn run_ldr(
                 message: "local-deep-research runner did not print a CELERIS_RESULT line"
                     .to_string(),
                 retryable: true,
+                usage: None,
             },
             pf,
         )
@@ -681,6 +685,7 @@ async fn run_ldr(
             Terminal::Error {
                 message: "local-deep-research runner produced an empty report".to_string(),
                 retryable: true,
+                usage: None,
             },
             pf,
         )
@@ -807,6 +812,7 @@ async fn run_ldr(
                 Terminal::Error {
                     message,
                     retryable: true,
+                    usage: None,
                 },
                 None,
             )

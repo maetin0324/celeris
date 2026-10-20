@@ -4590,12 +4590,40 @@
             "type": {
               "const": "error",
               "type": "string"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Usage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "失敗までに観測できた usage（取れた値だけ。追加のみ）。"
             }
           },
           "required": [
             "type",
             "message",
             "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "非終端: run 内で累積した usage（累積値。単調に増える）。追加のみ\n（`PROTOCOL_VERSION` は変えない。この行を出さないワーカーはそのまま動く）。",
+          "properties": {
+            "type": {
+              "const": "usage_progress",
+              "type": "string"
+            },
+            "usage": {
+              "$ref": "#/$defs/Usage"
+            }
+          },
+          "required": [
+            "type",
+            "usage"
           ],
           "type": "object"
         },

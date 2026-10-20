@@ -1126,7 +1126,9 @@ async fn run_reviewer_inner(
                 "{tag}: reviewer asked a question instead of judging: {text}"
             ));
         }
-        Terminal::Error { message, retryable } => {
+        Terminal::Error {
+            message, retryable, ..
+        } => {
             run.sink
                 .progress(&format!("error(retryable={retryable}): {message}"));
             // ADR-0054 D2（Phase 113。実機障害 2026-09-23、タスク 01M35X86XTK84F97QW0CN5PGMR）:

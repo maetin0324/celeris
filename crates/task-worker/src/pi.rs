@@ -388,6 +388,7 @@ async fn run_pi(
             timeout_terminal = Some(Terminal::Error {
                 message: "idle timeout".into(),
                 retryable: true,
+                usage: None,
             });
             force_kill = true;
             break;
@@ -453,16 +454,19 @@ async fn run_pi(
         Terminal::Error {
             message: "pi Hashline extension failed".into(),
             retryable: false,
+            usage: None,
         }
     } else if let Some(message) = &stream.error {
         Terminal::Error {
             message: message.clone(),
             retryable: true,
+            usage: None,
         }
     } else if !exit_status.success() || !stream.ended {
         Terminal::Error {
             message: "pi exited unsuccessfully or without agent_end".into(),
             retryable: true,
+            usage: None,
         }
     } else if let Some(summary) = stream.last_reply.clone().filter(|_| {
         // ADR 2026-10-05 cos-chat-home（live-check 不具合 1）: a CoS chat run replies in its body.
@@ -506,6 +510,7 @@ async fn terminal_from_result(
             return Terminal::Error {
                 message: format!("pi exited without {artifacts_rel}/result.json"),
                 retryable: true,
+                usage: None,
             };
         }
     };
@@ -530,12 +535,14 @@ async fn terminal_from_result(
                         "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
                     ),
                     retryable: true,
+                    usage: None,
                 }
             }
         }
         Err(e) => Terminal::Error {
             message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
             retryable: true,
+            usage: None,
         },
     }
 }

@@ -1032,6 +1032,7 @@ async fn stream_child(
             timeout_terminal = Some(Terminal::Error {
                 message: "wall clock exceeded".into(),
                 retryable: true,
+                usage: None,
             });
             force_kill = true;
             break;
@@ -1041,6 +1042,7 @@ async fn stream_child(
             timeout_terminal = Some(Terminal::Error {
                 message: "idle timeout".into(),
                 retryable: true,
+                usage: None,
             });
             force_kill = true;
             break;
@@ -1556,6 +1558,7 @@ async fn run_paperqa(
                           (ADR-0063 Phase 109d C1)"
                     .to_string(),
                 retryable: false,
+                usage: None,
             },
             None,
         )
@@ -1579,6 +1582,7 @@ async fn run_paperqa(
             Terminal::Error {
                 message: format!("paperqa_ask.py could not start (exit=2): {message}"),
                 retryable: false,
+                usage: None,
             },
             None,
         )
@@ -1592,6 +1596,7 @@ async fn run_paperqa(
             Terminal::Error {
                 message: format!("paperqa_ask.py exited with a non-zero status (exit={exit_repr})"),
                 retryable: true,
+                usage: None,
             },
             pf,
         )
@@ -1765,6 +1770,7 @@ async fn run_paperqa(
                 Terminal::Error {
                     message,
                     retryable: true,
+                    usage: None,
                 },
                 None,
             )
@@ -1805,6 +1811,7 @@ async fn run_paperqa(
             Terminal::Error {
                 message: "paperqa_ask.py produced no answer".to_string(),
                 retryable: true,
+                usage: None,
             },
             pf,
         )

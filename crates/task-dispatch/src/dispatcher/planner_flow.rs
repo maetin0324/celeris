@@ -46,7 +46,7 @@ impl Dispatcher {
                 None,
             ),
             Ok(RunOutcome {
-                terminal: Terminal::Error { message, retryable },
+                terminal: Terminal::Error { message, retryable, .. },
                 ..
             }) => (
                 Some(task_core::RunEnd::Failed {

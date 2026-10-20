@@ -563,6 +563,7 @@ impl WorkerAdapter for ResumeRejectingThenSucceedingReviewAdapter {
                 terminal: Terminal::Error {
                     message: "claude result: error_during_execution".into(),
                     retryable: true,
+                    usage: None,
                 },
                 exit_code: Some(1),
             });
@@ -744,6 +745,7 @@ impl WorkerAdapter for AlwaysInfraFailingReviewAdapter {
             terminal: Terminal::Error {
                 message: "claude result: error_during_execution".into(),
                 retryable: true,
+                usage: None,
             },
             exit_code: Some(1),
         })

@@ -676,7 +676,9 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"refusal"}}}}'
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("refusal"), "{message}");
             assert!(message.contains("artifacts/result.json"), "{message}");
@@ -908,7 +910,9 @@ while true; do sleep 0.1; done
     let outcome = adapter.run(req, "run-9", limits, &sink).await.unwrap();
     assert!(start.elapsed() < Duration::from_secs(5));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("idle timeout"), "{message}");
         }

@@ -356,7 +356,7 @@ impl Dispatcher {
         // どちらも「報告するかどうか」は後で `outcome.next` を見て決める（run の終端ではなくタスクの終端状態）。
         let terminal_report = crate::reports::terminal_report(&result);
         let misplaced_result = matches!(&result, Ok(RunOutcome {
-            terminal: Terminal::Error { message, retryable: false }, ..
+            terminal: Terminal::Error { message, retryable: false, .. }, ..
         }) if message.starts_with(task_worker::result_location::MISPLACED_RESULT_MARKER));
         let adapter_error_text = result.as_ref().err().map(|e| e.to_string());
         // ADR-0033 D6（Phase 24）: 結果ファイルの `memory` を、この run の担当の記憶に追記する
@@ -433,7 +433,10 @@ impl Dispatcher {
                 )
             }
             Ok(RunOutcome {
-                terminal: Terminal::Error { message, retryable },
+                terminal:
+                    Terminal::Error {
+                        message, retryable, ..
+                    },
                 ..
             }) => {
                 // ADR-0072 D7: 二重の安全網。構造化されていない `Error` でも、予算切れの語彙なら

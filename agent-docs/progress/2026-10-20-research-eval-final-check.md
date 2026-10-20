@@ -55,6 +55,11 @@ updated: 2026-10-20
 - 最新 release（c893c911）の昇格後に、上の 3〜6 を人が実行すれば最小 pilot を回収できる。成功基準は 2 試行の終端、`failure_class` 付き grade、台帳と usage の照合一致、human-ops の join。
 - 提案: 旧 pilot の消費（488k）を共有台帳へ取り込む手順を 1 つ決める（取り込まないと 3M の残が過大に見える）。
 
+## 追記（attempt 2, 読取のみの再確認）
+- release `c893c911ff6f` は**出来ている**（`/local/celeris/state/releases/c893c911ff6f`、built_at 2026-10-20T05:58:53Z、schema_version 88、`bin/celeris` sha256 `f44d35502bdf251a5be0e6a197cc2344155e075b0960f1396adb5de600e51a94`）。ただし**昇格は人の操作（H1）**で、本 branch HEAD（ab11d799）はこの SHA より 11 commit 新しい（c893c911 は祖先）。測定は c893c911 の release を pin するか、HEAD の release を作り直して pin するかを人が決める。
+- `/local/celeris/data/measure/main/{daemon.toml,state}` は旧 mlsys-main-1 のまま（`CELERIS_BIN` が消えた c9654bff5633）。新 manifest・env-lock・lock の再生成と測定 daemon の起動は本番 host 操作（`/local` 配下の書換・daemon 起動）で worker の禁止範囲のため未実施。よって**最新構成の preflight・実 pilot・raw 人操作の記録は未取得**。手順は上記「3」。
+- 次の一手（人）: 上記 3 の 1〜4 を実行して preflight（無課金）を取る → 5〜6 で A0/B0 K4×1 の 2 試行 pilot。
+
 ## 検査結果
 - `bash scripts/dev/test-parallel.sh`: exit 0（6198 passed, 0 failed, 15 ignored。初回は上記 flaky 1 件で exit 100、修正後に再実行）
 - `cargo clippy --workspace -- -D warnings`: exit 0

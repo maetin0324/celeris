@@ -169,7 +169,24 @@ $CC human-op join --file $F --events <out dir> --events <dl dir>
   `missing_fields` と `missing_count` が付く。A 腕は decision-log export に run 行が無いので event 由来の欄は missing のまま（正常）。
 - 結べなかったものは捨てず `unjoined_event`（identity の無い task の介入）/ `unjoined_evaluator` 行に出る。0 件が理想だが、出たら理由を確認する。
 - 出力は決定的（再 export・再実行で byte 一致）。B の介入件数は生記録を正とし、projection は件数の照合にだけ使う（加算しない）。
-- 集計・表は本 task の範囲外（2b）。join までで「欠測のまま」「出所つき」が保たれることを確認する。
+- join は `outcome`・`failure_reason`・`tokens`・`cost_micro_usd`（TrialRecord 由来。未実行の 0 は欠測）も持つ。
+
+### 6.1 比較表・機械可読出力・タイムラインの再生成（`human-op report`）
+
+```sh
+$CC human-op report --file $F --events <out dir> --events <dl dir> --out <report dir>
+```
+
+`<report dir>` に `report.json`（機械可読。正本）・`report.md`（表。注意書き付き）・`timeline.jsonl`（区間 1 行ずつ）を書く。同じ入力は byte 一致で再生成される。
+表・集計値は手編集しない（直すときは生記録に訂正を足して再生成）。
+
+- 人の時間は `mode=manual` の op の区間の**和集合**（重なりの二重計上なし。`sum_secs` と `overlap_secs` を併記）。`protocol_step`・script の op は数えない。
+  終了不明は `open`、始点不明は `missing_start`、`end<start` は `inverted` に件数で残し、長さに入れない（`lower_bound: true`）。cutoff 以降は数えず、跨ぐ区間は cutoff で切る。
+- 待ち: `human_wait`（`wait_*`）、`external_queue_wait`（job の submit〜start）、`external_run`（start〜end）。同じ `job_ref` は 1 件。`internal_wait` は現在の入力に無く欠測。
+- 再作業: 同じ `logical_op` の attempt n+1 を再作業とし、原因は n+1 の op の intent（system→`infrastructure`、research/safety→`research`、他→`unclassified`）。失敗 attempt の所要時間も併記。
+- 完遂/失敗原因は TrialRecord の outcome・reason から。分類は **暫定 schema** `provisional-failure-cause/1`（分類 task 確定後に `failure_cause` の写像を合わせる）。
+- 記録された人の時間は観測範囲の下限で、総労働時間・認知負荷ではない。A/B の観測方法差（time_basis を併記）、case/arm/rep の無い共有 overhead（`shared_overhead` に別掲し配分しない）と欠測を `report.md` に併記する。
+- 実 pilot 記録（研究評価接続 3）との接続は未確認。試験は fixture（`crates/campaign/tests/human_ops_report.rs`）。
 
 ## 7. 記録できない指標と主張の限定
 

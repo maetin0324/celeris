@@ -71,6 +71,8 @@ struct EventSide {
     campaign_id: Option<String>,
     /// trial_no → wall_secs（TrialRecord。0 が欠測の試行は None）。
     wall: BTreeMap<u64, Option<u64>>,
+    /// trial_no → TrialRecord の結果（outcome・reason・tokens・cost_micro_usd）。未実行の試行の tokens/cost は欠測。
+    results: BTreeMap<u64, TrialResultFacts>,
     started_at: Option<u64>,
     submitted_at: Option<u64>,
     task_ids: BTreeSet<String>,
@@ -79,6 +81,13 @@ struct EventSide {
     run_wall_ms: BTreeMap<String, Option<u64>>,
     /// intervention_id → kind。
     interventions: BTreeMap<String, String>,
+}
+
+struct TrialResultFacts {
+    outcome: String,
+    reason: Option<String>,
+    tokens: Option<u64>,
+    cost_micro_usd: Option<u64>,
 }
 
 #[derive(Default)]
@@ -221,6 +230,19 @@ fn build_events(
                 let side = ev.by_key.entry((sha, case, cfg, rep)).or_default();
                 side.wall
                     .insert(trial_no, if unexecuted { None } else { wall });
+                side.results.insert(
+                    trial_no,
+                    TrialResultFacts {
+                        outcome: outcome.clone(),
+                        reason: s(&r, "reason"),
+                        tokens: if unexecuted { None } else { u(&r, "tokens") },
+                        cost_micro_usd: if unexecuted {
+                            None
+                        } else {
+                            u(&r, "cost_micro_usd")
+                        },
+                    },
+                );
             } else if name.starts_with("ledger") {
                 let (Some(sha), Some(case), Some(cfg)) = (
                     s(&r, "manifest_sha256"),
@@ -351,6 +373,10 @@ fn event_fields(side: Option<&EventSide>, row: &mut Map<String, Value>) {
     let Some(side) = side else {
         for f in [
             "wall_secs",
+            "outcome",
+            "failure_reason",
+            "tokens",
+            "cost_micro_usd",
             "started_at",
             "submitted_at",
             "run_ids",
@@ -374,6 +400,38 @@ fn event_fields(side: Option<&EventSide>, row: &mut Map<String, Value>) {
             )
         },
     );
+    // 結果は最後の trial_no（内部再試行の最終）。tokens・費用は観測できた試行の合計と欠測数。
+    let last = side.results.values().next_back();
+    row.insert(
+        "outcome".into(),
+        last.map_or_else(missing, |r| field(json!(r.outcome), EVENT)),
+    );
+    row.insert(
+        "failure_reason".into(),
+        last.and_then(|r| r.reason.as_ref())
+            .map_or_else(missing, |x| field(json!(x), EVENT)),
+    );
+    for (name, pick) in [
+        (
+            "tokens",
+            (|r: &TrialResultFacts| r.tokens) as fn(&TrialResultFacts) -> Option<u64>,
+        ),
+        ("cost_micro_usd", |r: &TrialResultFacts| r.cost_micro_usd),
+    ] {
+        let obs: Vec<u64> = side.results.values().filter_map(pick).collect();
+        row.insert(
+            name.into(),
+            if obs.is_empty() {
+                missing()
+            } else {
+                field(
+                    json!({"observed_sum": obs.iter().sum::<u64>(), "observed": obs.len(),
+                           "missing": side.results.len() - obs.len()}),
+                    EVENT,
+                )
+            },
+        );
+    }
     for (name, v) in [
         ("started_at", side.started_at),
         ("submitted_at", side.submitted_at),

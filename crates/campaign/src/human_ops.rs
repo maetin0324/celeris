@@ -245,7 +245,7 @@ impl DurationStat {
     }
 }
 
-fn parse_utc(s: &str) -> Result<OffsetDateTime, String> {
+pub(crate) fn parse_utc(s: &str) -> Result<OffsetDateTime, String> {
     if !s.ends_with('Z') {
         return Err(format!("{s:?}: UTC（Z 終わり）の RFC 3339 でない"));
     }
@@ -921,6 +921,7 @@ pub mod cli {
     };
 
     const USAGE: &str = "usage: celeris-campaign human-op <record|span|validate|list|join> --file <jsonl> ...\n\
+report --file F --events <dir|file>... --out <dir> (join から表 report.md・機械可読 report.json・timeline.jsonl を再生成)\n\
 join --file F --events <export dir|out dir|file> (event 由来/評価者記録/欠測の出所つき JSONL)\n\
 record --file F --campaign ID (--manifest-sha256 H | --manifest M) --case ID --arm A0|B0|B1|C1 --rep N --op-kind K --actor NAME --mode manual|automatic --intent I \
 [--actor-kind human|script] [--trigger T] [--logical-op ID] [--attempt N] [--started-at T|now] [--ended-at T|now] [--outcome ok|failed|abandoned] [--reason S] [--target kind:ref]... \
@@ -1375,6 +1376,7 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
             Some("validate") => validate(rest),
             Some("list") => list(rest),
             Some("join") => crate::human_ops_join::join_cli(rest),
+            Some("report") => crate::human_ops_report::report_cli(rest),
             _ => Err(USAGE.into()),
         }
     }

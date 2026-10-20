@@ -487,6 +487,7 @@ fn sample_task() -> task_core::Task {
             max_turns: 1,
             max_wall_secs: 30,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

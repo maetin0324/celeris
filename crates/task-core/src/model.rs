@@ -192,6 +192,10 @@ pub struct Budget {
     pub max_turns: u32,
     pub max_wall_secs: u64,
     pub max_retries: u32,
+    /// ADR 2026-10-20-mlsys-main2-fixes D1: task 木の全 run（reviewer を含む）の token 上限
+    /// （input+output+cache_read+cache_creation）。無ければ token の上限は無い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
 }
 
 /// DESIGN §4.1 の `Lease`。ADR-0002 D7: `expires_at` は

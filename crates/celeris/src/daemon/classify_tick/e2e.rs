@@ -120,6 +120,7 @@ fn new_task(dir: &std::path::Path, title: &str) -> Task {
             max_turns: 3,
             max_wall_secs: 60,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

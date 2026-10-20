@@ -1101,6 +1101,14 @@ impl TaskStore for SqliteStore {
         self.run_index_finish_impl(run_id, status, checkpoint, usage, metrics, finished_at)
     }
 
+    fn run_index_set_usage(
+        &self,
+        run_id: &str,
+        usage: crate::model::Usage,
+    ) -> Result<bool, StoreError> {
+        self.run_index_set_usage_impl(run_id, usage)
+    }
+
     fn run_index_get(&self, run_id: &str) -> Result<Option<RunRow>, StoreError> {
         self.run_index_get_impl(run_id)
     }

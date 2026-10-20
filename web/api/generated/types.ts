@@ -516,11 +516,12 @@ export type BrowserWaitState = "pending" | "denied" | "expired" | "cancelled" | 
 
 export type Budget = {
   "max_retries": number;
+  "max_tokens"?: number | null;
   "max_turns": number;
   "max_wall_secs": number;
 };
 
-export type BudgetKind = "turns" | "wall_clock" | "context";
+export type BudgetKind = "turns" | "wall_clock" | "context" | "tokens";
 
 export type BudgetPrefs = {
   "max_attempts"?: number | null;
@@ -3733,6 +3734,7 @@ export type NewTaskBody = {
   "kind"?: TaskKind;
   "labels"?: Array<string>;
   "max_retries"?: number;
+  "max_tokens"?: number | null;
   "max_turns"?: number | null;
   "max_wall_secs"?: number | null;
   "milestone_id"?: MilestoneId | null;

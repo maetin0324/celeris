@@ -107,6 +107,7 @@ fn ready_task(store: &SqliteStore, dir: &Path, project: Option<ProjectId>) -> Ta
             max_turns: 5,
             max_wall_secs: 60,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

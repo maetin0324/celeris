@@ -105,6 +105,9 @@ pub struct NewTaskSpec {
     /// 省略時は役割の既定 → 600。
     #[serde(default)]
     pub max_wall_secs: Option<u64>,
+    /// ADR 2026-10-20-mlsys-main2-fixes D1: task の token 上限（input+output+cache）。無ければ上限なし。
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
     /// ADR-0016 D1: 役割名（自由記述）。`[[roles]]` にあれば省略値の既定と run 時の指示文が効く。
@@ -787,6 +790,7 @@ fn build_task(
             .or(genre_role.and_then(|r| r.max_wall_secs))
             .unwrap_or(DEFAULT_MAX_WALL_SECS),
         max_retries: spec.max_retries,
+        max_tokens: spec.max_tokens,
     };
 
     // ADR-0069 D1 / D3: routing の出自（tier を誰が決めたか・捨てた担当・features の上書き）。

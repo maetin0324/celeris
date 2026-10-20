@@ -152,6 +152,7 @@ candidates = [{{ source = "fake", model = "fake" }}]
                 max_turns: 5,
                 max_wall_secs: 20,
                 max_retries,
+                max_tokens: None,
             },
             attempts: 0,
             lease: None,
@@ -487,6 +488,7 @@ fn expired_lease_is_reclaimed_and_task_completes() {
             max_turns: 5,
             max_wall_secs: 20,
             max_retries: 1,
+            max_tokens: None,
         },
         attempts: 0,
         lease: Some(Lease {

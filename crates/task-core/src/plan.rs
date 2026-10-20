@@ -597,6 +597,7 @@ pub fn materialize_logging(
                     max_turns: defaults.max_turns,
                     max_wall_secs: defaults.max_wall_secs,
                     max_retries: parent.budget.max_retries,
+                    max_tokens: None,
                 },
                 attempts: 0,
                 lease: None,

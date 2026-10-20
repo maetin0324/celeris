@@ -140,6 +140,10 @@ pub fn decide(
     }
     match end {
         RunEnd::Completed => complete(wu, run_id, all_units),
+        // ADR 2026-10-20-mlsys-main2-fixes D1: token 上限は続きを起こさない（retry もしない）。
+        RunEnd::BudgetExhausted {
+            kind: task_core::BudgetKind::Tokens,
+        } => failed(wu, all_units, false, limits),
         RunEnd::Yielded | RunEnd::BudgetExhausted { .. } => {
             continuation(wu, continuation_inputs, limits)
         }

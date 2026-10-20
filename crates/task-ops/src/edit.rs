@@ -474,6 +474,7 @@ pub fn plan_edit(
         max_turns: edit.max_turns.unwrap_or(task.budget.max_turns),
         max_wall_secs: edit.max_wall_secs.unwrap_or(task.budget.max_wall_secs),
         max_retries: edit.max_retries.unwrap_or(task.budget.max_retries),
+        max_tokens: None,
     };
     if budget != task.budget {
         task.budget = budget;

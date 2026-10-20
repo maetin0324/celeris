@@ -49,6 +49,7 @@ fn sample_task(status: Status, workspace: WorkspaceSpec) -> Task {
             max_turns: 10,
             max_wall_secs: 30,
             max_retries: 1,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

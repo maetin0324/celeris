@@ -366,6 +366,7 @@ fn create_task_action(
         depends_on: Vec::new(),
         max_turns: None,
         max_wall_secs: None,
+        max_tokens: None,
         max_retries: crate::add::DEFAULT_MAX_RETRIES,
         role: None,
         genre: harness.clone(),

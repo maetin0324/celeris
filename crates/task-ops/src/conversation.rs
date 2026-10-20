@@ -341,6 +341,7 @@ fn conversation_task(
             max_turns: CONVERSATION_MAX_TURNS,
             max_wall_secs: CONVERSATION_MAX_WALL_SECS,
             max_retries: CONVERSATION_MAX_RETRIES,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

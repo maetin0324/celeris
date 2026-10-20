@@ -413,6 +413,7 @@ fn sample_task(title: &str, attempts: u32) -> Task {
             max_turns: 1,
             max_wall_secs: 1,
             max_retries: 1,
+            max_tokens: None,
         },
         attempts,
         lease: None,

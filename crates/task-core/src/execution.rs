@@ -28,6 +28,9 @@ pub enum BudgetKind {
     Turns,
     WallClock,
     Context,
+    /// ADR 2026-10-20-mlsys-main2-fixes D1: `Budget.max_tokens`（task 木の token 上限）に達した。
+    /// continuation の対象にならない（[`RunEnd::is_continuable`] は `false`）。
+    Tokens,
 }
 
 /// D7: harness / 供給側都合の失敗の種類。
@@ -66,7 +69,12 @@ pub enum RunEnd {
 impl RunEnd {
     /// この Run の終わり方が continuation（D9/D11）の対象か（予算切れ、または自己申告の yield）。
     pub fn is_continuable(self) -> bool {
-        matches!(self, RunEnd::BudgetExhausted { .. } | RunEnd::Yielded)
+        matches!(
+            self,
+            RunEnd::BudgetExhausted {
+                kind: BudgetKind::Turns | BudgetKind::WallClock | BudgetKind::Context
+            } | RunEnd::Yielded
+        )
     }
 
     /// D8 の checkpoint の `end` 欄に写す（continuation 対象でなければ `None`）。

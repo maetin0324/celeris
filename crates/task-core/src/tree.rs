@@ -84,6 +84,7 @@ pub fn tree_child_budget(parent: &crate::model::Budget) -> crate::model::Budget 
         max_turns: parent.max_turns.max(TREE_CHILD_MIN_MAX_TURNS),
         max_wall_secs: parent.max_wall_secs.max(TREE_CHILD_MIN_MAX_WALL_SECS),
         max_retries: parent.max_retries,
+        max_tokens: None,
     }
 }
 

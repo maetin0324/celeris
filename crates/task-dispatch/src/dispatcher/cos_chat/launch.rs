@@ -490,6 +490,7 @@ impl CosChatLaunch {
             max_turns: cfg.max_turns,
             max_wall_secs: cfg.max_wall_secs,
             max_retries: 0,
+            max_tokens: None,
         };
         let capture = super::workspace_files::WorkspaceCapture {
             before: super::workspace_files::snapshot(&workspace),

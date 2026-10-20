@@ -223,6 +223,8 @@ pub trait EventSink: Send + Sync {
     /// ワーカーの stdout から 1 行読むたびにアダプタが呼ぶ生存通知。ディスパッチャはこれでリースを延長する
     /// （ADR-0010 D7, P-7）。既定は何もしない。
     fn heartbeat(&self) {}
+    /// ADR 2026-10-20-mlsys-main2-fixes D1: run の途中までの累積 usage（単調増加）。token 上限の観測用。
+    fn usage_progress(&self, _usage: &Usage) {}
     /// `delegate` メッセージ（LLM アダプタでは `artifacts/delegate.json`）の提案（ADR-0016 D2）。ディスパッチャが検証して
     /// 子タスクを挿入する。既定は何もしない（`celerisctl worker run` など DB を変えない文脈）。
     fn delegate(&self, _tasks: &[task_core::DelegateTask]) {}

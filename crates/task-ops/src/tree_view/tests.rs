@@ -49,6 +49,7 @@ fn task(title: &str, status: Status, parent: Option<(&Task, &str)>) -> Task {
             max_turns: 30,
             max_wall_secs: 900,
             max_retries: 2,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

@@ -120,6 +120,7 @@ fn notify_digest_phase_checkpoint_is_batched_as_inbox_new() {
                 max_turns: 1,
                 max_wall_secs: 1,
                 max_retries: 0,
+                max_tokens: None,
             },
             attempts: 0,
             lease: None,

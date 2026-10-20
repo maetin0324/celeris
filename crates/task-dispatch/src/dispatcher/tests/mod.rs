@@ -71,6 +71,7 @@ fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
             max_turns: 1,
             max_wall_secs: 30,
             max_retries,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

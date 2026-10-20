@@ -56,6 +56,7 @@ fn insert_done_task(store: &SqliteStore, updated_at: OffsetDateTime) -> TaskId {
             max_turns: 10,
             max_wall_secs: 60,
             max_retries: 1,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

@@ -856,6 +856,7 @@ impl Dispatcher {
                 max_turns: EVAL_MAX_TURNS as u32,
                 max_wall_secs: EVAL_MAX_WALL_SECS,
                 max_retries: 0,
+                max_tokens: None,
             },
             attempts: 0,
             lease: None,

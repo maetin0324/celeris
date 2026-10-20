@@ -631,6 +631,8 @@ async fn normal_tick_provenance_survives_reopen_export_and_reload() {
                         repetition: None,
                         manifest_hash: None,
                         routing_setting: None,
+                        variant: None,
+                        variant_org: None,
                     },
                     OffsetDateTime::now_utc(),
                 )

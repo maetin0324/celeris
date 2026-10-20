@@ -2566,7 +2566,7 @@
         },
         {
           "const": "tokens",
-          "description": "ADR 2026-10-20-mlsys-main2-fixes D1: `Budget.max_tokens`（task 木の token 上限）に達した。\ncontinuation の対象にならない（[`RunEnd::is_continuable`] は `false`）。",
+          "description": "ADR 2026-10-20-mlsys-main2-fixes D1: `Budget.max_tokens`（task 木の token 上限）に達した。",
           "type": "string"
         }
       ]

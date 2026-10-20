@@ -437,13 +437,6 @@ impl EventSink for StoreSink {
         }
     }
 
-    /// ADR 2026-10-20-mlsys-main2-fixes D1: 途中の累積 usage を `runs` 索引へ（events には書かない）。
-    fn usage_progress(&self, usage: &task_core::Usage) {
-        if let Err(e) = self.store.run_index_set_usage(&self.run_id, *usage) {
-            tracing::warn!(task_id = %self.task_id, error = %e, "failed to record the in-flight usage");
-        }
-    }
-
     /// ADR-0024 D4: run の途中でも観測値を `AccountBook` に記録する（`source = "run"`）。プールを使わない run では
     /// `account` が `None` なので no-op。
     fn rate_limit(&self, obs: RateLimitObservation) {

@@ -591,30 +591,6 @@ impl Dispatcher {
         };
         // ADR-0079 付記 R7-5 D4: checks の不合格で `Terminal::Error` にすり替えた run も、worker が返した usage を残す。
         let usage = usage.or_else(|| check_failure.as_ref().and_then(|f| f.usage));
-        // ADR 2026-10-20-mlsys-main2-fixes D1: task の token 上限に達していたら、この run の終わり方に関わらず
-        // 続き（continuation・retry・reviewer）を起こさない。task は failed（`token_budget_exhausted: used/max`）。
-        // 人に聞く（question）・取り消し・供給側の失敗は触らない。
-        if let Some(cap) = task.budget.max_tokens
-            && matches!(
-                run_end,
-                Some(
-                    task_core::RunEnd::Completed
-                        | task_core::RunEnd::Yielded
-                        | task_core::RunEnd::BudgetExhausted { .. }
-                        | task_core::RunEnd::Failed { retryable: true }
-                )
-            )
-        {
-            let used = tokens_used_by_other_runs(self.store.as_ref(), task_id, &run_id)
-                + usage.as_ref().map(usage_tokens).unwrap_or(0);
-            if used >= cap {
-                run_end = Some(task_core::RunEnd::BudgetExhausted {
-                    kind: task_core::BudgetKind::Tokens,
-                });
-                trigger = Trigger::WorkerError { retryable: false };
-                outcome_str = format!("token_budget_exhausted: {used}/{cap}");
-            }
-        }
         // ADR-0079 付記 R7-5 D2: outcome の文に足す不合格の要約（無ければ空）。
         let check_failure_suffix = check_failure
             .as_ref()
@@ -2052,29 +2028,4 @@ pub(super) fn build_continuation_context(
             None
         },
     })
-}
-
-/// ADR 2026-10-20-mlsys-main2-fixes D1: usage の token 合計（input+output+cache_read+cache_creation。campaign の
-/// `token_basis = "all"` と同じ数え方）。
-pub(super) fn usage_tokens(usage: &task_core::Usage) -> u64 {
-    usage.input_tokens.unwrap_or(0)
-        + usage.output_tokens.unwrap_or(0)
-        + usage.cache_read_tokens.unwrap_or(0)
-        + usage.cache_creation_tokens.unwrap_or(0)
-}
-
-/// `exclude_run` 以外の、この task の run（reviewer を含む）が使った token の和（`runs` 索引の `usage_json`）。
-pub(super) fn tokens_used_by_other_runs(
-    store: &dyn TaskStore,
-    task_id: TaskId,
-    exclude_run: &str,
-) -> u64 {
-    store
-        .runs_for_task(task_id)
-        .unwrap_or_default()
-        .iter()
-        .filter(|r| r.run_id != exclude_run)
-        .filter_map(|r| r.usage.as_ref())
-        .map(usage_tokens)
-        .sum()
 }

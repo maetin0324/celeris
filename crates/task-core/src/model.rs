@@ -2040,6 +2040,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn budget_max_tokens_round_trips_and_defaults_to_none() {
+        let b: Budget =
+            serde_json::from_str(r#"{"max_turns":1,"max_wall_secs":2,"max_retries":0}"#).unwrap();
+        assert_eq!(b.max_tokens, None);
+        assert!(!serde_json::to_string(&b).unwrap().contains("max_tokens"));
+        let b = Budget {
+            max_tokens: Some(300_000),
+            ..b
+        };
+        let back: Budget = serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap();
+        assert_eq!(back.max_tokens, Some(300_000));
+    }
+
+    #[test]
     fn target_sweep_event_round_trips() {
         let ev = Event::TargetSweepRan {
             mode: TargetSweepMode::DryRun,

@@ -983,13 +983,6 @@ pub trait TaskStore:
         metrics: Option<crate::model::RunMetrics>,
         finished_at: OffsetDateTime,
     ) -> Result<bool, StoreError>;
-    /// ADR 2026-10-20-mlsys-main2-fixes D1: 実行中の run の途中までの usage（累積値）を `runs.usage_json` に上書きする
-    /// （events には書かない。終了時の `run_index_finish` が確定値）。`running` でなければ `Ok(false)`。
-    fn run_index_set_usage(
-        &self,
-        run_id: &str,
-        usage: crate::model::Usage,
-    ) -> Result<bool, StoreError>;
     fn run_index_get(&self, run_id: &str) -> Result<Option<RunRow>, StoreError>;
     /// そのタスクの run（`started_at` 昇順）。
     fn runs_for_task(&self, task_id: TaskId) -> Result<Vec<RunRow>, StoreError>;

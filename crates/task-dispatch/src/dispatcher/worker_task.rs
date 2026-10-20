@@ -142,15 +142,6 @@ pub(super) async fn run_worker(
         .map_err(|e| AdapterError::Other(format!("store: {e}")))?
         .ok_or_else(|| AdapterError::Other("task vanished".into()))?;
     task.worker_hint.tier = execution_tier;
-    // ADR 2026-10-20-mlsys-main2-fixes D1: token 上限の残り（終わった run の消費を引く）。予算の写しの差し替えより前に、
-    // DB の task の `max_tokens` から取る。
-    let token_cap_remaining = task.budget.max_tokens.map(|cap| {
-        cap.saturating_sub(super::worker_finish::tokens_used_by_other_runs(
-            store.as_ref(),
-            task_id,
-            "",
-        ))
-    });
     // ADR-0072 D14（Phase E4b 項目3）: `extras` は後段で複数のフィールドが個別に消費されるので、
     // 使う値だけ先に取り出しておく。
     let planner_permission_mode = extras.planner_permission_mode.clone();
@@ -159,10 +150,7 @@ pub(super) async fn run_worker(
     // ADR-0074「R7-11 実装時の明確化」: dispatcher が決めたこの run の実効の予算（planner の `[execution.planner]`、
     // WU の D18 など）をワーカーに渡す写しに戻す（DB の task は変えない）。
     if let Some(budget) = extras.budget {
-        task.budget = task_core::Budget {
-            max_tokens: task.budget.max_tokens,
-            ..budget
-        };
+        task.budget = budget;
     }
     // ADR-0052 D2（Phase 64）: フォールバックした知識整理 run は、DB のタスクではなく**ワーカーに渡す
     // 写し**だけを書き換える（専用アダプタの固定を外し、予算を `max_turns = 8` / `max_wall_secs = 600` に）。
@@ -444,7 +432,6 @@ pub(super) async fn run_worker(
         context: RunContext {
             browser: None,
             browser_policy: browser_run_policy(store.as_ref(), &task)?,
-            token_cap_remaining,
             prior_review,
             inputs: task.inputs.clone(),
             answers: to_answers(answers_from_events(&events)),

@@ -423,10 +423,6 @@ pub struct RunContext {
     /// Browser-enabled runs without it are refused (`browser_policy_required`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_policy: Option<task_core::BrowserTaskPolicy>,
-    /// ADR 2026-10-20-mlsys-main2-fixes D1: この run が使える token の残り（`Budget.max_tokens` − 終わった run の和）。
-    /// adapter が run の途中で累積 usage と比べて止める。無ければ上限なし。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_cap_remaining: Option<u64>,
     pub prior_review: Vec<PriorReview>,
     pub inputs: Vec<ArtifactRef>,
     /// `celerisctl answer` で与えられた回答の履歴（時系列）。無ければ省略（ADR-0010 D3）。

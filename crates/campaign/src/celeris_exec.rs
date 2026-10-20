@@ -97,7 +97,6 @@ pub fn check_template(t: &Map<String, Value>) -> Result<(), String> {
         "objective",
         "workspace",
         "max_wall_secs",
-        "max_tokens",
         "routing_override",
         "campaign",
         "campaign_idempotency_key",
@@ -435,9 +434,6 @@ impl<T: Transport> CelerisExecutor<T> {
             "max_wall_secs".into(),
             json!(req.timeout_secs.min(req.budget.max_wall_secs)),
         );
-        // ADR 2026-10-20-mlsys-main2-fixes D1: 試行の token 上限を Celeris の task の予算として渡す。Celeris が run の途中で
-        // 消費を見て止め、上限に達した後は continuation・retry・reviewer を起こさない。
-        b.insert("max_tokens".into(), json!(req.budget.max_tokens));
         let ro = routing_override(req.config)?;
         // 採点結果と同じ試行へ export できるよう、通常の作成 API に識別を載せる（task-api NewTaskBody）。
         // 冪等キーは label と同じ文字列。arm は A/B/C、case は問題 ID。

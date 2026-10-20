@@ -716,6 +716,22 @@ async fn create_task_returns_201_with_location_and_cli_defaults() {
     );
 }
 
+/// ADR 2026-10-20-mlsys-main2-fixes D1: `POST /tasks` の `max_tokens` は task の budget に入る。
+#[tokio::test]
+async fn create_task_max_tokens_lands_in_the_budget() {
+    let env = admin_env();
+    let app = env.router();
+    let body = json!({
+        "title": "capped",
+        "objective": "x",
+        "max_tokens": 300000,
+        "acceptance": [{"type": "command", "cmd": "true"}]
+    });
+    let resp = send(&app, post_admin("/api/v1/tasks", &body)).await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+    assert_eq!(resp.json()["budget"]["max_tokens"], 300000);
+}
+
 #[tokio::test]
 async fn browser_allowed_domains_api_create_rejects_missing_empty_and_invalid() {
     let env = admin_env();

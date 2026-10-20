@@ -833,25 +833,3 @@ fn no_evidence_table_posts_evidence_mode_none_and_implicit_latest_is_rejected() 
     let err = routing_override(&cfg(ConfigId::C, Some(r))).unwrap_err();
     assert!(err.contains("implicit latest"), "{err}");
 }
-
-// ---- ADR 2026-10-20-mlsys-main2-fixes D1: 試行の token 上限を task の予算として渡す ----
-
-#[test]
-fn celeris_body_sets_per_case_max_tokens() {
-    let dir = tempfile::tempdir().expect("dir");
-    let f = Fake::new();
-    let e = exec(&f, dir.path(), 1800);
-    let c = cfg(ConfigId::B, None);
-    let mut r = req(&c, dir.path());
-    r.budget.max_tokens = 300_000;
-    let b = e.body(&r, KEY).expect("body");
-    assert_eq!(b["max_tokens"], json!(300_000));
-}
-
-#[test]
-fn check_template_rejects_max_tokens() {
-    let mut t = Map::new();
-    t.insert("max_tokens".into(), json!(1));
-    let err = celeris_campaign::celeris_exec::check_template(&t).unwrap_err();
-    assert!(err.contains("max_tokens"), "{err}");
-}

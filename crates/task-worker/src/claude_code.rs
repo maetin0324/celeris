@@ -366,64 +366,6 @@ fn normalize_path(path: &Path) -> std::path::PathBuf {
     out
 }
 
-/// ADR 2026-10-20-mlsys-main2-fixes D1: `assistant` 行の `message.usage` を run 内で累積する。
-/// 同じ `message.id` の行（content block ごとに分かれて出る）は最後の値で置き換える（二重に数えない）。
-#[derive(Default)]
-struct TokenMeter {
-    by_message: std::collections::HashMap<String, [u64; 4]>,
-    anonymous: [u64; 4],
-}
-
-impl TokenMeter {
-    /// 行が usage を持っていて累積が増えたら、累積値の `Usage` を返す。
-    fn observe(&mut self, line: &str) -> Option<Usage> {
-        let value: serde_json::Value = serde_json::from_str(line).ok()?;
-        if value.get("type").and_then(|t| t.as_str()) != Some("assistant") {
-            return None;
-        }
-        let u = value.pointer("/message/usage")?;
-        let field = |k: &str| u.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
-        let counts = [
-            field("input_tokens"),
-            field("output_tokens"),
-            field("cache_read_input_tokens"),
-            field("cache_creation_input_tokens"),
-        ];
-        match value.pointer("/message/id").and_then(|v| v.as_str()) {
-            Some(id) => {
-                self.by_message.insert(id.to_string(), counts);
-            }
-            None => {
-                for (a, c) in self.anonymous.iter_mut().zip(counts) {
-                    *a += c;
-                }
-            }
-        }
-        Some(self.usage())
-    }
-
-    fn total(&self) -> [u64; 4] {
-        let mut t = self.anonymous;
-        for c in self.by_message.values() {
-            for (a, v) in t.iter_mut().zip(c) {
-                *a += v;
-            }
-        }
-        t
-    }
-
-    fn usage(&self) -> Usage {
-        let t = self.total();
-        Usage {
-            input_tokens: Some(t[0]),
-            output_tokens: Some(t[1]),
-            cache_read_tokens: Some(t[2]),
-            cache_creation_tokens: Some(t[3]),
-            ..Usage::default()
-        }
-    }
-}
-
 /// `Terminal` が運ぶ usage（無い variant・`None` なら `None`）。
 fn terminal_usage_mut(terminal: &mut Terminal) -> Option<&mut Usage> {
     match terminal {
@@ -735,7 +677,6 @@ async fn run_claude_code(
     let mut last_result: Option<ResultMeta> = None;
     let mut background = BackgroundTasks::default();
     let mut exploration = ExplorationTracker::new(Some(req.cwd()), is_resuming);
-    let mut meter = TokenMeter::default();
     let mut force_kill = false;
     let mut timeout_terminal: Option<Terminal> = None;
     // ADR 2026-10-05 cos-chat-home（live-check 不具合 1）: a CoS chat run replies in its body, not in
@@ -806,22 +747,6 @@ async fn run_claude_code(
                         &mut exploration,
                         req.context.cos_chat.is_some(),
                     );
-                    // ADR 2026-10-20-mlsys-main2-fixes D1: 累積 usage を途中で報告し、token 上限に達したら止める。
-                    if let Some(progress) = meter.observe(trimmed) {
-                        sink.usage_progress(&progress);
-                        let used: u64 = meter.total().iter().sum();
-                        if let Some(cap) = req.context.token_cap_remaining
-                            && used >= cap
-                        {
-                            timeout_terminal = Some(Terminal::BudgetExhausted {
-                                kind: task_core::BudgetKind::Tokens,
-                                message: format!("token budget reached: {used}/{cap} in this run"),
-                                usage: Some(progress),
-                            });
-                            force_kill = true;
-                            break;
-                        }
-                    }
                 }
             }
         }

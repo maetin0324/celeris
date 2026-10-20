@@ -22,17 +22,9 @@ struct RecordingSink {
     session_resume_failed: Mutex<Vec<String>>,
     /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `policy_violation` の呼び出し。
     violations: Mutex<Vec<crate::tool_policy::ToolPolicyViolation>>,
-    /// ADR 2026-10-20-mlsys-main2-fixes D1: `usage_progress` に報告された累積 usage。
-    usages: Mutex<Vec<Usage>>,
 }
 
 impl EventSink for RecordingSink {
-    fn usage_progress(&self, usage: &Usage) {
-        self.usages
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(*usage);
-    }
     fn policy_violation(&self, violation: &crate::tool_policy::ToolPolicyViolation) {
         self.violations
             .lock()
@@ -4367,64 +4359,4 @@ echo '{"type":"result","subtype":"success","is_error":false}'
     }
     assert!(dir.path().join("artifacts/result.json").exists());
     assert!(work_dir.join("artifacts/result.json").exists());
-}
-
-/// ADR 2026-10-20-mlsys-main2-fixes D1: 累積 usage は単調に報告され（同じ `message.id` は二重に数えない）、
-/// `token_cap_remaining` に達した応答で run を止める（`BudgetExhausted{Tokens}`、usage は累積値）。
-#[tokio::test]
-async fn claude_code_emits_cumulative_usage_progress_and_stops_at_token_cap() {
-    let dir = tempfile::tempdir().unwrap();
-    let line = |id: &str| {
-        format!(
-            r#"echo '{{"type":"assistant","message":{{"id":"{id}","content":[],"usage":{{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":60000,"cache_creation_input_tokens":39970}}}}}}'"#
-        )
-    };
-    // m1 は 2 行（content block ごとに同じ id・同じ usage）。1 応答 = 100,000 token。
-    let script = format!(
-        "{}\n{}\n{}\n{}\nsleep 25\n",
-        line("m1"),
-        line("m1"),
-        line("m2"),
-        line("m3")
-    );
-    let config = stub_claude(dir.path(), &script);
-    let adapter = ClaudeCodeAdapter::new(config);
-    let mut req = sample_req(dir.path().to_path_buf());
-    req.context.token_cap_remaining = Some(250_000);
-    let sink = RecordingSink::default();
-    let started = std::time::Instant::now();
-    let outcome = adapter
-        .run(req, "run-cap", default_limits(), &sink)
-        .await
-        .unwrap();
-    assert!(
-        started.elapsed() < Duration::from_secs(20),
-        "run was not stopped"
-    );
-    match outcome.terminal {
-        Terminal::BudgetExhausted { kind, usage, .. } => {
-            assert_eq!(kind, task_core::BudgetKind::Tokens);
-            let u = usage.expect("cumulative usage");
-            let total = u.input_tokens.unwrap()
-                + u.output_tokens.unwrap()
-                + u.cache_read_tokens.unwrap()
-                + u.cache_creation_tokens.unwrap();
-            // 上限 250k に最初に達した応答（3 つ目）まで。超過は最後の 1 応答ぶん以内。
-            assert_eq!(total, 300_000);
-        }
-        other => panic!("expected token budget_exhausted, got {other:?}"),
-    }
-    let totals: Vec<u64> = sink
-        .usages
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|u| {
-            u.input_tokens.unwrap()
-                + u.output_tokens.unwrap()
-                + u.cache_read_tokens.unwrap()
-                + u.cache_creation_tokens.unwrap()
-        })
-        .collect();
-    assert_eq!(totals, vec![100_000, 100_000, 200_000, 300_000]);
 }

@@ -784,6 +784,7 @@ impl World {
             kb_src: inp.kb_src.clone(),
             inputs_src: inp.inputs_src.clone(),
             case_inputs: inputs::for_problems(&set, &m.problems),
+            public_cases: inputs::public_cases(&set, &m.problems)?,
             lock: Some(preflight::expected_lock(inp, &m)?),
         };
         let template = json!({"acceptance": [{"type": "artifact_exists", "name": "result.txt"}]})

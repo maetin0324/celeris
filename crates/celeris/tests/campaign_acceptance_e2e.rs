@@ -762,6 +762,7 @@ impl World {
             kb_src: Some(self.work.path().join("kb")),
             inputs_src: None,
             case_inputs: Default::default(),
+            public_cases: Default::default(),
             // 制御 fixture（実 case を持たない）。実 case の lock 経路は campaign の lock_execution 試験。
             lock: None,
         }

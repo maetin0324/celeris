@@ -54,5 +54,5 @@ completed: 2026-10-20
 - 既存の config 欄の削除はなく、読み込みエラーになる旧欄は template の `repos` と `max_tokens` のみ。
 
 ## 検査の追補（close 再実行）
-- 未解決: `check-doc-links.sh` が campaign の試験 2 件（celeris_exec.rs:921 の `docs/analysis.md`、lock_cli.rs:681 の `../../docs/ops`）の素の path を壊れた参照と判定する。この WU の範囲（進捗・ADR のみ）外のため触っていない。提案: 検査側で試験の文字列リテラルを除外するか、試験側で path を `join` に分割する（挙動は同じ）。
+- 解決済み: check-doc-links が campaign 試験 2 件の path 文字列を誤検出した件は、運用者が a8cb3e9f（試験側で path を join で組む）で直し、task ブランチに取り込んだ。`sh scripts/dev/check-doc-links.sh` は ok（exit 0）。
 - `progress-index.sh --check` が他 task の進捗 2 件の front matter 不備（dev-profile-debuginfo の title/tasks/updated、research-eval-final-check の status: partial）で落ちていたため、front matter だけ直した（本文は不変。後者は done 扱い）。

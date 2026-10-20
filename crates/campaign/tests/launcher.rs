@@ -1398,7 +1398,15 @@ fn real_daemon_main_set_runs_through_the_launcher_without_llm() {
     let mut log: Vec<Value> = Vec::new();
     let campaign = "research-eval-main-rehearsal-1";
     // B の版 = 測定 daemon の release（この checkout の sha12）。
-    let release = std::env::var("LAUNCHER_REAL_RELEASE").unwrap_or_else(|_| "rehearsal0001".into());
+    // 未指定なら checkout の HEAD の sha12（manifest は 12-hex の release sha しか受けない）。
+    let release = std::env::var("LAUNCHER_REAL_RELEASE").unwrap_or_else(|_| {
+        let o = Command::new("git")
+            .args(["rev-parse", "--short=12", "HEAD"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .unwrap();
+        String::from_utf8(o.stdout).unwrap().trim().to_string()
+    });
     edit_manifest(&f, |v| {
         only_arms(
             v,

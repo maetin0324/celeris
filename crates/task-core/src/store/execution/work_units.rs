@@ -21,9 +21,9 @@ impl SqliteStore {
              blocked_reason, depends_on_json, runs, continuations, retries, last_run_id, \
              last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
              lease_expires_at, branch, base_commit, head_commit, integrated_commit, \
-             child_task_id, needs_decisions_json) \
+             child_task_id, needs_decisions_json, rebase_pending) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,\
-             ?21,?22,?23,?24,?25,?26)",
+             ?21,?22,?23,?24,?25,?26,?27)",
             params![
                 wu.id,
                 wu.task_id,
@@ -51,6 +51,7 @@ impl SqliteStore {
                 wu.integrated_commit,
                 wu.child_task_id,
                 serde_json::to_string(&wu.needs_decisions)?,
+                wu.rebase_pending,
             ],
         )?;
         Ok(())
@@ -66,7 +67,7 @@ impl SqliteStore {
              last_run_id = ?8, last_checkpoint_run_id = ?9, json = ?10, updated_at = ?11, \
              phase = ?13, lease_run_id = ?14, lease_expires_at = ?15, branch = ?16, \
              base_commit = ?17, head_commit = ?18, integrated_commit = ?19, \
-             child_task_id = ?20, needs_decisions_json = ?21, seq = ?22 \
+             child_task_id = ?20, needs_decisions_json = ?21, seq = ?22, rebase_pending = ?23 \
              WHERE id = ?12",
             params![
                 wu.plan_id,
@@ -93,6 +94,7 @@ impl SqliteStore {
                 // ADR-0079 R6-4: replan は未完了の行の並び（`seq`）を新しい版の並びに直す（工程の障壁と
                 // scheduler の「今の工程 = seq 最小の行の工程」が読む）。他の書き手は読んだ行の値のまま渡す。
                 wu.seq,
+                wu.rebase_pending,
             ],
         )?;
         Ok(())
@@ -128,6 +130,8 @@ impl SqliteStore {
         // ADR-0079（migration 0031）。
         let child_task_id: Option<String> = row.get(24)?;
         let needs_decisions_json: String = row.get(25)?;
+        // ADR 2026-10-20-replan-dep-change-wu-rebase（migration 0089）。
+        let rebase_pending: bool = row.get(26)?;
         Ok((|| -> Result<WorkUnitRow, StoreError> {
             let Some(kind) = WorkUnitKind::parse(&kind_s) else {
                 return Err(StoreError::Invalid(format!(
@@ -176,6 +180,7 @@ impl SqliteStore {
                 integrated_commit,
                 child_task_id,
                 needs_decisions,
+                rebase_pending,
             })
         })())
     }
@@ -190,7 +195,7 @@ impl SqliteStore {
                  depends_on_json, runs, continuations, retries, last_run_id, \
                  last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
                  lease_expires_at, branch, base_commit, head_commit, integrated_commit, child_task_id, \
-                 needs_decisions_json FROM work_units \
+                 needs_decisions_json, rebase_pending FROM work_units \
                  WHERE task_id = ?1 ORDER BY seq ASC",
             )?;
             let rows = stmt.query_map(params![task_id.to_string()], Self::row_to_work_unit)?;
@@ -212,7 +217,7 @@ impl SqliteStore {
                  depends_on_json, runs, continuations, retries, last_run_id, \
                  last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
                  lease_expires_at, branch, base_commit, head_commit, integrated_commit, child_task_id, \
-                 needs_decisions_json FROM work_units WHERE id = ?1",
+                 needs_decisions_json, rebase_pending FROM work_units WHERE id = ?1",
                 params![id],
                 Self::row_to_work_unit,
             )
@@ -369,7 +374,7 @@ impl SqliteStore {
                  depends_on_json, runs, continuations, retries, last_run_id, \
                  last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
                  lease_expires_at, branch, base_commit, head_commit, integrated_commit, \
-                 child_task_id, needs_decisions_json \
+                 child_task_id, needs_decisions_json, rebase_pending \
                  FROM work_units WHERE id = ?1 AND task_id = ?2",
                 params![work_unit_id, task_id.to_string()],
                 Self::row_to_work_unit,

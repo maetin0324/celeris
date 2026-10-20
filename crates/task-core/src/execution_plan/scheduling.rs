@@ -355,6 +355,9 @@ pub struct WorkUnitRow {
     /// ADR-0079 D7（migration 0031）: この unit が回答を待つ決定の key（/3 の
     /// [`effective_needs_decisions`]。/1・/2 は空）。
     pub needs_decisions: Vec<String>,
+    /// ADR 2026-10-20-replan-dep-change-wu-rebase D2（migration 0089）: replan で同じ段の依存先が変わった。
+    /// 次の prepare が旧 WU ブランチを退避して新しい起点から作り直し、`WorkUnitBaseReset` で下ろす。
+    pub rebase_pending: bool,
 }
 
 impl WorkUnitRow {
@@ -394,6 +397,7 @@ impl WorkUnitRow {
             integrated_commit: None,
             child_task_id: None,
             needs_decisions: Vec::new(),
+            rebase_pending: false,
         }
     }
 

@@ -94,7 +94,7 @@ impl SqliteStore {
                  depends_on_json, runs, continuations, retries, last_run_id, \
                  last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
                  lease_expires_at, branch, base_commit, head_commit, integrated_commit, child_task_id, \
-                 needs_decisions_json FROM work_units WHERE id = ?1 AND task_id = ?2",
+                 needs_decisions_json, rebase_pending FROM work_units WHERE id = ?1 AND task_id = ?2",
                 params![unit.id, parent_id.to_string()],
                 Self::row_to_work_unit,
             )
@@ -230,7 +230,7 @@ impl SqliteStore {
                  depends_on_json, runs, continuations, retries, last_run_id, \
                  last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
                  lease_expires_at, branch, base_commit, head_commit, integrated_commit, child_task_id, \
-                 needs_decisions_json FROM work_units WHERE id = ?1 AND task_id = ?2",
+                 needs_decisions_json, rebase_pending FROM work_units WHERE id = ?1 AND task_id = ?2",
                 params![unit_id, owner_id.to_string()],
                 Self::row_to_work_unit,
             )

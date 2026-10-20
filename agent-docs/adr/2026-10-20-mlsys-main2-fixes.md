@@ -116,7 +116,7 @@ measurement 以外の task でも同じ仕組みで token 上限が効く（camp
   `lookup_rejects_task_with_foreign_workspace`。
 - `crates/task-api`（または task-dispatch）`task_with_empty_repos_runs_in_local_workspace_path`。
 
-## D3. decision-log `--verify-connected` の欠け: どちらも原因を直す（規則は変えない）
+## D3. decision-log `--verify-connected` の欠け: (a) は原因を直し、(b) は検査の規則を直す
 
 **(a) `grader_verdict`**: ADR 2026-10-15 は `campaign_verdict` を「独立 checker が問題単位で付ける」と決めたが、writer が無い。
 **決定**: 測定 daemon の DB には書き戻さず、`celerisctl campaign export` に `--grades <grades.jsonl>` を足して export 時に結合する。
@@ -131,15 +131,14 @@ measurement 以外の task でも同じ仕組みで token 上限が効く（camp
 - 試験: `crates/task-core` `export_joins_grader_verdict_to_every_run_of_trial`・`verify_connected_requires_grades`・
   `grade_with_foreign_manifest_hash_is_rejected`。
 
-**(b) reviewer run の `proposed_first`**: reviewer run には `routing_decided` が無いが、`llm_route_selected` の
-`metadata.candidates`（順序つきの候補）と `route_decision` はある。**決定**: `decision_log_wire::project_decision_log` が、
-`RoutingDecided` を持たない run について `LlmRouteSelected` から `proposed_first`（candidates の先頭 + `metadata.harness`）と
-`proposed_candidates` を埋める（`RoutingDecided` があればそちらを優先し、上書きしない）。検査の規則は変えない。
-- 根拠: reviewer も B の機構の一部で、消費の 28% を占める。model を選んだ記録はあり、記録の配線が無いだけ。規則側で reviewer を
-  免除すると「実行 model は提案の先頭か」の比較から reviewer が抜け、routing の評価が worker だけに偏る。
-- file: `crates/task-dispatch/src/dispatcher/decision_log_wire.rs`。
-- 試験: `crates/task-dispatch` `reviewer_run_gets_proposed_first_from_llm_route_selected`・
-  `routing_decided_wins_over_llm_route_selected`。
+**(b) reviewer run の `proposed_first`**: reviewer run には `routing_decided` が無く、したがって `decision_id` も推奨候補（`proposed_first`）も
+存在しない。**決定**: 記録の投影は変えず、検査の規則を直す。`task-core` の `verify_connected` は `decision_id` を持たない run
+（reviewer run 等、routing 判断を経ていない run）を `proposed_first` の必須検査から除外する。`decision_id` を持つ run は従来どおり
+`proposed_first` を必須とし、`grader_verdict`・`exec_model` など他の必須欄は全 run に求め続ける。
+- 根拠: 「実行 model は提案の先頭か」は routing 判断がある run にだけ意味を持つ。判断が無い run に `proposed_first` を捏造する
+  （`llm_route_selected` の候補から射影する等）と、存在しなかった提案を測定に混ぜる。欠けは仕様上の欠けであって記録の漏れではない。
+- file: `crates/task-core/src/decision_log_export.rs`（`verify_connected` の `unrouted` 判定）。
+- 試験: `crates/celerisctl/tests/campaign_connected.rs` の `run_without_routing_decision_may_lack_proposed_first`。
 
 ## D4. runbook と lock 判定: 出力先を OUT の外にする（lock 判定は変えない）
 
@@ -169,4 +168,4 @@ measurement 以外の task でも同じ仕組みで token 上限が効く（camp
 - 次の campaign の task-template から `repos` を外す（D2。`check_template` が拒否する）。scratch repo の登録手順は不要。
 - `per_case.max_tokens`（人が 1,500,000 まで許可）は manifest の値がそのまま task の `max_tokens` になる（D1）。
 - export は `--grades $OUT/grades.jsonl` を付ける（D3）。watch 等の出力は `$RUNS` へ（D4）。
-- 測定 daemon は D1・D2・D3(b)・D5 を含む release に替える（release sha12 は env-lock に入る）。
+- 測定 daemon は D1・D2・D5 を含む release に替える（release sha12 は env-lock に入る）。

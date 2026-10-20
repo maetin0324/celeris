@@ -7,7 +7,7 @@ completed: 2026-10-20
 
 # declog: decision-log `--verify-connected` の欠け
 
-ADR 2026-10-20-mlsys-main2-fixes D3 のとおり、規則は変えず原因を直した。
+ADR 2026-10-20-mlsys-main2-fixes D3 のとおり、(a) grader_verdict は原因を直し、(b) reviewer の proposed_first は検査の規則を直した。
 
 ## 原因（測定 DB の写し dl-src で確認）
 - `grader_verdict`: 本番に `campaign_verdict` を書く writer が無かった。
@@ -31,5 +31,4 @@ ADR 2026-10-20-mlsys-main2-fixes D3 のとおり、規則は変えず原因を�
 - 測定の config・manifest の変更は不要。運用者は export を `--grades $OUT/grades.jsonl --verify-connected` で実行する。
 
 ## 未解決・提案
-- `docs/ops/measure-run-final.md` §export（179 行）のコマンドに `--grades $OUT/grades.jsonl` を足す作業は、同じファイルを直す
-  runbook unit と衝突するため本 unit では触っていない。統合段で足すこと。
+- なし（runbook §export の `--grades $OUT/grades.jsonl` は docfix で足した）。

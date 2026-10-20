@@ -36,7 +36,7 @@ completed: 2026-10-20
 4. **runbook**: 出力先を `$RUNS`（OUT の外）にし、lock 判定は変えず、拒否に既存 entry 名を出す。
 
 ## 未解決・提案
-- `docs/ops/measure-run-final.md` §export（181 行付近）の `--verify-connected` 例に `--grades $OUT/grades.jsonl` が無い（`--verify-connected` は `--grades` 必須）。次の runbook 修正で足すこと（この close の範囲外）。
+- なし（runbook §export の `--grades $OUT/grades.jsonl` は docfix で足した）。
 - codex / opencode の adapter は途中 usage を出さないので、超過は 1 run ぶんまで（B/C は claude-code のみで許容、ADR D1-5）。
 - A の `model_failure`（出力契約を読めなかった）は materials 配送（D2-4）で対処。実 pilot での再確認は次の campaign で。
 

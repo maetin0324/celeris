@@ -178,7 +178,7 @@ sh $L export --env $ENVF   # export を $OUT/export へ。RECORDS があれば f
 - Celeris 側の消費・判断ログ（人。本番 DB は読むだけ、写しに対して）:
 ```sh
 celerisctl db backup $TMPDIR/final-db.sqlite3 --src <本番 DB path>
-celerisctl --db $TMPDIR/final-db.sqlite3 campaign export mlsys-main-1 --out $RUNS/exp-db --verify-connected --manifest-hash <§3 の campaign sha256>
+celerisctl --db $TMPDIR/final-db.sqlite3 campaign export mlsys-main-1 --out $RUNS/exp-db --grades $OUT/grades.jsonl --verify-connected --manifest-hash <§3 の campaign sha256>
 ```
 `summary.json` の `shared_overhead`・`elapsed_ms` と `run_wall_sum_ms`・`total.cash_cost_usd`（取れなければ null）・終了時の 7 日使用率を進捗に転記する。
 

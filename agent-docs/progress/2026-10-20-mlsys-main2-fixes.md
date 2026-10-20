@@ -52,3 +52,7 @@ completed: 2026-10-20
 - **input manifest の prompt を `materials/<case>/case.json` 参照に直した新 manifest を作る**（problem の sha256 と manifest の `manifest_hash` を作り直し、新 campaign id で再 freeze: validate・dry-run・offline-lock・preflight・campaign sha256 の承認をやり直す）。凍結済み `2026-10-16-mlsys-final/final-input-manifest.json` は変えない。`--materials-src` は `<case>/` ディレクトリを含むこと。
 - export は `--grades $OUT/grades.jsonl --verify-connected` を付ける。watch・usage・export の出力は `$RUNS=$(dirname "$OUT")/runs` へ（`$OUT` に置かない）。
 - 既存の config 欄の削除はなく、読み込みエラーになる旧欄は template の `repos` と `max_tokens` のみ。
+
+## 検査の追補（close 再実行）
+- `check-doc-links.sh` が campaign の試験 2 件の素の `docs/…` 文字列（celeris_exec.rs・lock_cli.rs）を壊れた参照と判定したため、path を `join` の分割に直した（挙動は同じ。`cargo test -p celeris-campaign --test lock_cli --test celeris_exec` 20+9 passed）。
+- `progress-index.sh --check` が他 task の進捗 2 件の front matter 不備（dev-profile-debuginfo の title/tasks/updated、research-eval-final-check の status: partial）で落ちていたため、front matter だけ直した（本文は不変。後者は done 扱い）。

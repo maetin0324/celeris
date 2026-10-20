@@ -1101,8 +1101,18 @@ impl Dispatcher {
             })
             .collect();
         let summary: Vec<String> = failing.iter().map(|f| f.reason.clone()).collect();
+        // 2026-10-20 ADR: 検査の時間切れ（`command timed out after Ns: <cmd>`）は理由に
+        // `integration_check_timeout` を付け、人が受信箱で原因（どの cmd が止まったか）を読めるようにする。
+        let timeout_tag = if summary
+            .iter()
+            .any(|r| r.starts_with("command timed out after"))
+        {
+            "integration_check_timeout: "
+        } else {
+            ""
+        };
         let why = format!(
-            "phase {phase} の統合後の検査が失敗しました: {}",
+            "{timeout_tag}phase {phase} の統合後の検査が失敗しました: {}",
             summary.join("; ")
         );
         let class = match task_core::classify_review_failure(&failing) {

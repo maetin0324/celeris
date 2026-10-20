@@ -10,6 +10,18 @@ fn fixture() -> (
     Task,
     Dispatcher,
 ) {
+    fixture_with_lease(Duration::from_secs(600))
+}
+
+fn fixture_with_lease(
+    ttl: Duration,
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    Arc<dyn TaskStore>,
+    Task,
+    Dispatcher,
+) {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
@@ -29,7 +41,7 @@ fn fixture() -> (
         .unwrap();
     assert!(
         store
-            .acquire_lease(task.id, "phase:test:build", Duration::from_secs(600))
+            .acquire_lease(task.id, "phase:test:build", ttl)
             .unwrap()
     );
     let task = store.get(task.id).unwrap().unwrap();
@@ -259,5 +271,65 @@ async fn integration_claim_rejects_changed_wu_and_duplicate_start() {
             .count(),
         1
     );
+    d.abort_all_runs();
+}
+
+/// 2026-10-20 ADR: 段の統合の検査が走っている間に lease が切れても、task を回収（failed 等）せず lease を延ばす。
+#[tokio::test]
+async fn expired_lease_during_stage_integration_is_extended_not_reclaimed() {
+    let (_repo, _root, store, task, mut d) = fixture_with_lease(Duration::from_millis(1));
+    // start_integration は lease を integration_ttl まで延ばす。それより検査が長引く状況にする。
+    d.config.review_timeout = Duration::from_millis(1);
+    d.config.lease_grace = Duration::ZERO;
+    let wu = integration(&store, task.id);
+    d.start_integration(&task, &wu.id).unwrap();
+    assert!(d.integrating.contains_key(&task.id));
+    std::thread::sleep(Duration::from_millis(20));
+    let before = store.get(task.id).unwrap().unwrap();
+    assert!(before.lease.as_ref().unwrap().expires_at <= OffsetDateTime::now_utc());
+    d.reclaim_expired_leases().unwrap();
+    let after = store.get(task.id).unwrap().unwrap();
+    assert_eq!(after.status, Status::Running);
+    assert!(after.lease.as_ref().unwrap().expires_at > OffsetDateTime::now_utc());
+    assert!(d.integrating.contains_key(&task.id));
+    run_until_idle(&mut d, 400).await;
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+}
+
+/// 検査の時間切れが replan 上限後に繰り返されたら、task は failed にならず、`integration_check_timeout` と
+/// 止まった cmd を含む理由で blocked の質問になる。
+#[tokio::test]
+async fn repeated_integration_check_timeout_blocks_with_a_readable_reason() {
+    let (_repo, _root, store, task, mut d) = fixture();
+    d.config.execution.max_replans = 0;
+    d.config.execution.max_repairs = 0;
+    let wu = integration(&store, task.id);
+    d.start_integration(&task, &wu.id).unwrap();
+    let cmd = "cargo test -p x 2>&1 | tail -20";
+    let run = IntegrationRun {
+        checks: vec![(
+            cmd.to_string(),
+            false,
+            format!("command timed out after 1800s: {cmd}"),
+        )],
+        ..Default::default()
+    };
+    d.on_integration_finished(task.id, &wu.id, Ok(run)).unwrap();
+    assert_eq!(
+        integration(&store, task.id).status,
+        task_core::WorkUnitStatus::Blocked
+    );
+    assert_ne!(store.get(task.id).unwrap().unwrap().status, Status::Failed);
+    let text = store
+        .events_for(task.id)
+        .unwrap()
+        .into_iter()
+        .find_map(|(_, e)| match e {
+            Event::QuestionRaised { text, .. } => Some(text),
+            _ => None,
+        })
+        .expect("a question is raised");
+    assert!(text.contains("integration_check_timeout"), "{text}");
+    assert!(text.contains(cmd), "{text}");
     d.abort_all_runs();
 }

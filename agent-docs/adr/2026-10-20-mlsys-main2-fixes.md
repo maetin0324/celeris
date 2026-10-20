@@ -128,7 +128,7 @@ measurement 以外の task でも同じ仕組みで token 上限が効く（camp
   export は DB の写し（`dl-src`）を読むので、写しと grades の結合で足りる。
 - file: `crates/task-core/src/decision_log_export.rs`（結合と verify）・`crates/celerisctl/src/commands/campaign.rs`
   （`--grades`）・`docs/ops/measure-run-final.md` §export の手順・launcher の export 段。
-- 試験: `crates/task-core` `export_joins_grader_verdict_to_every_run_of_trial`・`verify_connected_requires_grades`・
+- 試験: `crates/celerisctl/tests/campaign_connected.rs` の `grade_row_joins_every_run_of_the_trial`・`verify_connected_requires_grades`・
   `grade_with_foreign_manifest_hash_is_rejected`。
 
 **(b) reviewer run の `proposed_first`**: reviewer run には `routing_decided` が無く、したがって `decision_id` も推奨候補（`proposed_first`）も

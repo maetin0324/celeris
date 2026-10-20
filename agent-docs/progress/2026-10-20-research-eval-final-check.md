@@ -92,3 +92,9 @@ LLM・userns・本番 host・cluster は使っていない（A は claude stub�
 - `bash scripts/dev/test-parallel.sh`: exit 0（6212 passed, 0 failed, 17 ignored）
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo fmt --all -- --check`: exit 0
+
+## 後続 task 01M5C13NRT（B reviewer の routing 記録）— 途中経過
+- **原因（特定済み）**: 測定 config の fake source/route_defaults ではなく、Celeris 本体の欠落。`pick_reviewer`（crates/task-dispatch/src/dispatcher/review_spawn.rs）が task の `routing_override` を渡さずに `select_route` を呼んでいたため、reviewer run の `route_decision.routing_resolved` が null になっていた（worker run は dispatch_run.rs で記録済み）。証拠: 通し記録 01M5BT8JYW/artifacts/real-daemon-rehearsal/steps.json で grade/export が reviewer run だけを `no resolved routing recorded` で拒否し、worker run は拒否されていない。修正: reviewer も override 付きの `select_route_with` で選び、`routing_resolved` を記録する（commit 30f45688）。
+- **受け入れ試験**: `cargo test -p celeris-campaign --test launcher -- --ignored --exact real_daemon_main_set_runs_through_the_launcher_without_llm` → exit 0（1 passed, 42.7s）。試験の既定 release `rehearsal0001` が manifest の 12-hex 検査で落ちていたため、未指定時は checkout の HEAD sha12 を使うように直した（commit 3f1bd73d）。
+- **watch の tokens_total に B が入らない理由**: 旧通しの watch は `tokens_total:105, tokens_missing:1`。runner.rs は B の case の `counted` が None のとき tokens_total に足さず tokens_missing を数える（runner.rs:1172/1182）。つまり B の usage は 0 として数えられたのではなく「未取得」として扱われている。celeris executor が B の usage を取れていない経路の特定は未了（次 run で確認）。
+- **B reviewer run が 12 回の理由**: 未確認（仮説: stub reviewer が verdict を 1 件しか返さず criterion 数と合わないため review が不成立→再試行）。次 run で events を見て確定する。

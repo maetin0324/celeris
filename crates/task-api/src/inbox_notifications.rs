@@ -433,7 +433,11 @@ async fn answer(
                         .filter(|unit| {
                             task.status == Status::Blocked
                                 && unit.status == WorkUnitStatus::Blocked
-                                && unit.blocked_reason == Some(WorkUnitBlockedReason::Question)
+                                && matches!(
+                                    unit.blocked_reason,
+                                    Some(WorkUnitBlockedReason::Question)
+                                        | Some(WorkUnitBlockedReason::ContinuationCap)
+                                )
                         })
                 } else {
                     None

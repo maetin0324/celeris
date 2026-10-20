@@ -23052,6 +23052,13 @@
     },
     "RepoState": {
       "properties": {
+        "ahead": {
+          "default": 0,
+          "description": "`base..HEAD` の commit 数（continuation の固い上限の質問文で進捗として示す）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "base": {
           "type": "string"
         },
@@ -30746,6 +30753,11 @@
         {
           "const": "waiting_for_auth",
           "description": "ADR 2026-10-15-mlsys-min-decision-assisted D4: 外部 provider の credential が未登録で、登録・検証を待つ\n（`credential_waits`。task の Status は増やさない）。`Infra`・`ClusterJobs` と同じく工程の失敗に数えず、\n同じ段階の他の unit・兄弟は止めない。",
+          "type": "string"
+        },
+        {
+          "const": "continuation_cap",
+          "description": "2026-10-20-continuation-limit-by-progress D5: 進捗がある continuation が固い上限\n（`continuation_hard_limit`）に達した。失敗ではなく人の回答待ち（`Question` と同じ扱い）で、\nreplan には回さない。回答で `needs_continuation` に戻る。",
           "type": "string"
         }
       ]

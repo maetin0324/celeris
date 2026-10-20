@@ -568,6 +568,7 @@ fn checkpoint_saved(run_id: &str, completed: usize, remaining: usize, head: &str
                 head: head.into(),
                 uncommitted: true,
                 diff_stat: "1 file".into(),
+                ahead: 0,
             }),
             recent_activity: vec![],
             created_at: "2026-09-24T00:00:00Z".into(),

@@ -11,7 +11,7 @@ ADR: `agent-docs/adr/2026-10-20-continuation-limit-by-progress.md`
 ## 工程
 - [x] fix-docref（統合済み）
 - [x] adr-b: ADR を書く（2026-10-20。コードは触らない）
-- [ ] impl-b: 判定・config・試験の実装（ADR の D1〜D5 と「試験」節）
+- [x] impl-b: 判定・config・試験の実装（ADR の D1〜D5 と「試験」節。2026-10-20 完了）
 - [ ] 統合
 
 ## adr-b の結果（2026-10-20）
@@ -50,3 +50,26 @@ ADR: `agent-docs/adr/2026-10-20-continuation-limit-by-progress.md`
   - `2026-10-19-dev-profile-debuginfo.md`: `task:`/`completed:` の旧形式 → `title`/`tasks: [01M5AH1A1F6YMPCCJTCGBC84H5]`/`status: done`/`updated: 2026-10-19` に直した（本文は不変）。
   - `2026-10-20-research-eval-final-check.md`: `status: partial` は許可外 → 実 pilot が人の操作（H1 昇格等）待ちなので `blocked` に直した。
 - 証拠: `sh scripts/dev/check-doc-links.sh agent-docs/adr/2026-10-20-continuation-limit-by-progress.md agent-docs/progress && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0（`check-doc-links: ok` / `check-adr-numbers: ok (266 files)` / `progress-index --check: ok`）。
+
+## impl-b の結果（2026-10-20）
+- task 経路（`worker_finish.rs`）と WU 経路（`execution_scheduler::continuation`）を ADR D2 に置き換えた。進捗なし連続（`no_progress_limit`）を先に、
+  次に固い上限（`continuation_hard_limit`、既定 12、最後の `answer` 以降の continuation 回数）で聞く。文言は
+  `continuation_cap_question` / `no_progress_question`（`execution_scheduler.rs`）の 1 か所。
+- 固い上限の WU は新 `WorkUnitBlockedReason::ContinuationCap`（reason `continuation_cap`）。replan に回さず、回答で `needs_continuation` から再開。
+  `settle_phase`・`runnable_in_phase`・`resume_after_answer`・inbox/gate/inbox_notifications・liveness・replay の写像に追加。
+- `RepoState.ahead`（`base..HEAD` の commit 数、`#[serde(default)]`）を足し、checkpoint.rs が入れる。`task_ops::derive` に
+  `wu_continuations_since_answer`・`progress_checkpoints_since_answer`。
+- config: `max_continuations_per_work_unit` を削除（`deny_unknown_fields` で読み込みエラー）、`continuation_hard_limit`（0 は Invalid）を追加。
+  旧欄を使っていた既存試験の行（上限を逃がす設定）は消した。ADR-0072 の表・ADR-0090 に置換の付記。
+- schema 再生成: `UPDATE_SCHEMA=1`（task-core・task-api）→ `docs/api/v1`・`docs/protocol` と `web/api/generated`（`pnpm gen:types`）。
+
+## impl-b の証拠（コマンドと結果）
+- `cargo test -p task-dispatch -p task-ops -p task-core`（UPDATE_SCHEMA 後）→ 失敗 0。
+- 新しい試験（`crates/task-dispatch/src/dispatcher/tests/continuation_cap.rs`、`execution_scheduler/tests.rs`）→ 通過:
+  - 進捗ありなら旧上限 3 を超えて続き、固い上限（試験では 6）で初めて聞く（task・WU）。文言は「上限」「continuation 6 回」「進捗あり」を含み「進みません」を含まない。
+  - 進捗なしが 2 回続くと聞く（文言「進捗なしが 2 回続きました」）。
+  - 固い上限の WU は `blocked(continuation_cap)`、plan は 1 件のまま（replan しない）、回答後に窓が 0 から数え直される（`wu.continuations` 12、窓 6）。
+- `cargo test -p celeris --lib config` → 169 通過。`execution_continuation_hard_limit_default_validation_and_old_field_is_an_error`
+  が既定 12・0 は Invalid・旧欄 `unknown field` エラーを確かめる。
+- `cargo clippy --workspace --all-targets -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`sh scripts/dev/progress-index.sh --check` ok。
+- `cargo test -p task-api` のうち `browser_live_cross`（3 件）は `bind: path must be shorter than SUN_LEN`（作業ディレクトリのパスが長い環境要因。本変更と無関係）で落ちる。workspace 全体の試験は走らせていない（release 時のみ）。

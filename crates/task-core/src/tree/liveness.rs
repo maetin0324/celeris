@@ -270,6 +270,16 @@ fn classify_node(n: &NodeLivenessFacts) -> NodeLiveness {
                         format!("unit {} はクラスタ job の終了を待っている", u.key),
                     ));
                 }
+                // 2026-10-20-continuation-limit-by-progress D5: 固い上限での人の回答待ち（replan しない）。
+                Some(WorkUnitBlockedReason::ContinuationCap) => {
+                    waiting.get_or_insert((
+                        "continuation_cap",
+                        format!(
+                            "unit {} は continuation の上限での人の回答を待っている",
+                            u.key
+                        ),
+                    ));
+                }
                 // ADR 2026-10-15-mlsys-min D4: credential の登録・検証を待っている（名指しの待ち）。
                 Some(WorkUnitBlockedReason::WaitingForAuth) => {
                     waiting.get_or_insert((

@@ -2894,6 +2894,7 @@ mod build_cache;
 mod class_route;
 mod cleanup_and_disk;
 mod cluster_tunnel;
+mod continuation_cap;
 mod conversation_cos;
 mod cos_chat_attach_handoff;
 mod credential_e2e;

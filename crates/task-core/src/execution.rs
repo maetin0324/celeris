@@ -188,6 +188,9 @@ pub struct RepoState {
     pub head: String,
     pub uncommitted: bool,
     pub diff_stat: String,
+    /// `base..HEAD` の commit 数（continuation の固い上限の質問文で進捗として示す）。
+    #[serde(default)]
+    pub ahead: u64,
 }
 
 /// D8: daemon が確定させた checkpoint（`celeris.checkpoint/1`）。`CheckpointSaved` イベントと

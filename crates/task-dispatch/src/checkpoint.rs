@@ -67,6 +67,7 @@ pub fn gather_repo_facts_from(
             "{} files changed, {} insertions(+), {} deletions(-)",
             changes.stat.files, changes.stat.additions, changes.stat.deletions
         ),
+        ahead: changes.ahead,
     });
     (repo_state, files_changed)
 }

@@ -517,6 +517,7 @@ impl Dispatcher {
                                 u.blocked_reason,
                                 Some(task_core::WorkUnitBlockedReason::Question)
                                     | Some(task_core::WorkUnitBlockedReason::Limit)
+                                    | Some(task_core::WorkUnitBlockedReason::ContinuationCap)
                                     // ADR-0072 D17 3.（Phase E4b 項目2）: replan の上限を使い切った
                                     // plan_issue も、人の回答で（Question と同じく `Ready` から
                                     // やり直す形で）再開できる。
@@ -1229,7 +1230,11 @@ impl Dispatcher {
             .unwrap_or(last_outcome.as_str())
             .to_string();
         if wu.status == task_core::WorkUnitStatus::Blocked
-            && wu.blocked_reason == Some(task_core::WorkUnitBlockedReason::Question)
+            && matches!(
+                wu.blocked_reason,
+                Some(task_core::WorkUnitBlockedReason::Question)
+                    | Some(task_core::WorkUnitBlockedReason::ContinuationCap)
+            )
         {
             let text = if question_text.is_empty() {
                 format!("WorkUnit {} が質問しています", wu.key)

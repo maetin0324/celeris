@@ -12,7 +12,7 @@ fn a_waiting_run_blocks_the_unit_on_cluster_jobs() {
         std::slice::from_ref(&wu),
         ContinuationInputs::default(),
         WuLimits {
-            max_continuations: 1,
+            continuation_hard_limit: 1,
             no_progress_limit: 1,
             max_retries: 0,
         },
@@ -131,7 +131,7 @@ fn completing_a_unit_added_to_an_integrated_stage_does_not_complete_the_plan() {
         &units,
         ContinuationInputs::default(),
         WuLimits {
-            max_continuations: 1,
+            continuation_hard_limit: 1,
             no_progress_limit: 1,
             max_retries: 0,
         },
@@ -314,7 +314,7 @@ fn settle_advances_integrates_and_finishes() {
 
 fn limits() -> WuLimits {
     WuLimits {
-        max_continuations: 3,
+        continuation_hard_limit: 3,
         no_progress_limit: 2,
         max_retries: 2,
     }
@@ -475,6 +475,7 @@ fn a_plan_issue_in_the_checkpoint_blocks_the_work_unit_even_within_budget() {
             checkpoint: Some(&cp),
             prev_checkpoint: None,
             no_progress_before: 0,
+            ..ContinuationInputs::default()
         },
         limits(),
     );
@@ -505,6 +506,7 @@ fn budget_exhausted_within_limits_moves_to_needs_continuation() {
             checkpoint: Some(&cp),
             prev_checkpoint: None,
             no_progress_before: 0,
+            ..ContinuationInputs::default()
         },
         limits(),
     );
@@ -518,29 +520,125 @@ fn budget_exhausted_within_limits_moves_to_needs_continuation() {
     );
 }
 
+fn budget_end() -> RunEnd {
+    RunEnd::BudgetExhausted {
+        kind: task_core::BudgetKind::Turns,
+    }
+}
+
+/// 2026-10-20-continuation-limit-by-progress D1: 進捗がある間は、旧既定（3 回）を超えても回数で聞かない。
 #[test]
-fn hitting_the_continuation_limit_blocks_with_a_question() {
+fn progress_keeps_continuing_past_the_old_count_limit() {
     let mut a = row("a", WorkUnitStatus::Running, &[]);
-    a.continuations = 3; // at max_continuations
+    a.continuations = 5;
     let units = vec![a.clone()];
     let cp = checkpoint(1);
     let d = decide(
-        RunEnd::BudgetExhausted {
-            kind: task_core::BudgetKind::Turns,
-        },
+        budget_end(),
         "r1",
         &a,
         &units,
         ContinuationInputs {
             checkpoint: Some(&cp),
             prev_checkpoint: None,
-            no_progress_before: 0,
+            continuations_since_answer: 5,
+            progress_checkpoints: 5,
+            ..ContinuationInputs::default()
+        },
+        WuLimits {
+            continuation_hard_limit: 12,
+            ..limits()
+        },
+    );
+    assert_eq!(d.updated.status, WorkUnitStatus::NeedsContinuation);
+    assert_eq!(d.updated.continuations, 6);
+    assert_eq!(d.reason, "continue");
+}
+
+/// D2/D3/D5: 固い上限に達すると `blocked(continuation_cap)`。文言は上限に達した事実と進捗を示し、「進みません」を含まない。
+#[test]
+fn hitting_the_hard_limit_blocks_with_a_cap_question_that_shows_progress() {
+    let mut a = row("a", WorkUnitStatus::Running, &[]);
+    a.continuations = 3;
+    let units = vec![a.clone()];
+    let mut cp = checkpoint(1);
+    cp.repo_state = Some(task_core::RepoState {
+        branch: "b".into(),
+        base: "1234567890".into(),
+        head: "abcdefghij".into(),
+        uncommitted: false,
+        diff_stat: String::new(),
+        ahead: 4,
+    });
+    let d = decide(
+        budget_end(),
+        "r1",
+        &a,
+        &units,
+        ContinuationInputs {
+            checkpoint: Some(&cp),
+            prev_checkpoint: None,
+            continuations_since_answer: 3,
+            progress_checkpoints: 3,
+            ..ContinuationInputs::default()
         },
         limits(),
     );
     assert_eq!(d.updated.status, WorkUnitStatus::Blocked);
-    assert_eq!(d.updated.blocked_reason, Some(WorkUnitBlockedReason::Limit));
+    assert_eq!(
+        d.updated.blocked_reason,
+        Some(WorkUnitBlockedReason::ContinuationCap)
+    );
+    assert_eq!(d.reason, "continuation_cap");
     assert_eq!(d.trigger, Trigger::WorkerQuestion);
+    let q = d.outcome_override.unwrap();
+    assert!(!q.contains("進みません"), "{q}");
+    for needle in [
+        "上限",
+        "continuation 3 回",
+        "進捗あり 3 回",
+        "commit 4 件",
+        "1234567..abcdefg",
+    ] {
+        assert!(q.contains(needle), "{needle} not in {q}");
+    }
+    // replan に回らない（Failure ではなく Question として人の回答を待つ）。
+    assert_eq!(
+        settle_phase(std::slice::from_ref(&d.updated)),
+        PhaseSettle::Question(a.id.clone())
+    );
+    // 回答で needs_continuation に戻る。
+    assert_eq!(
+        resume_after_answer(&d.updated).status,
+        WorkUnitStatus::NeedsContinuation
+    );
+}
+
+/// 進捗なしの判定は固い上限より先で、文言は「進捗なしが N 回続きました」。
+#[test]
+fn no_progress_at_the_limit_blocks_with_the_limit_reason() {
+    let a = row("a", WorkUnitStatus::Running, &[]);
+    let units = vec![a.clone()];
+    let cp = checkpoint(1);
+    let prev = checkpoint(1);
+    let d = decide(
+        budget_end(),
+        "r1",
+        &a,
+        &units,
+        ContinuationInputs {
+            checkpoint: Some(&cp),
+            prev_checkpoint: Some(&prev),
+            no_progress_before: 1,
+            continuations_since_answer: 3,
+            ..ContinuationInputs::default()
+        },
+        limits(),
+    );
+    assert_eq!(d.updated.blocked_reason, Some(WorkUnitBlockedReason::Limit));
+    assert_eq!(d.reason, "limit");
+    let q = d.outcome_override.unwrap();
+    assert!(q.contains("進捗なしが 2 回続きました"), "{q}");
 }
 
 #[test]
@@ -561,6 +659,7 @@ fn no_progress_at_the_limit_blocks_even_under_the_continuation_cap() {
             prev_checkpoint: Some(&prev),
             // already 1 consecutive no-progress; this one makes 2 = the limit
             no_progress_before: 1,
+            ..ContinuationInputs::default()
         },
         limits(),
     );

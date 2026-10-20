@@ -6405,6 +6405,13 @@
     },
     "RepoState": {
       "properties": {
+        "ahead": {
+          "default": 0,
+          "description": "`base..HEAD` の commit 数（continuation の固い上限の質問文で進捗として示す）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "base": {
           "type": "string"
         },

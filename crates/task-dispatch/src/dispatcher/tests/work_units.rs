@@ -554,7 +554,6 @@ async fn exceeding_the_replan_limit_blocks_with_a_question_that_a_human_can_answ
     ]);
     let adapter = Arc::new(PlannerScriptAdapter::new(vec![Some(replanned)], wu_script));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.config.execution.max_continuations_per_work_unit = 100; // "limit" は進捗なしだけで起こす
     d.config.execution.no_progress_limit = 2;
     d.config.execution.max_replans = 1;
     let report = run_until_idle(&mut d, 400).await;

@@ -643,6 +643,8 @@ impl Dispatcher {
             let mut checkpoint_opt: Option<task_core::Checkpoint> = None;
             let mut prev_checkpoint_opt: Option<task_core::Checkpoint> = None;
             let mut no_progress_before = 0u32;
+            let mut continuations_since_answer = 0u32;
+            let mut progress_checkpoints = 0u32;
             // ADR-0090 D1: クラスタ job の wait も checkpoint を残す（`[execution] continuation` に依らない）。
             if (effective_end.is_continuable()
                 && (self.config.execution.continuation || auto_exceeded))
@@ -702,6 +704,12 @@ impl Dispatcher {
                 prev_checkpoint_opt =
                     task_ops::derive::latest_progress_checkpoint(&events_so_far, Some(&wu.id));
                 no_progress_before = no_progress_streak(&events_so_far, Some(&wu.id));
+                continuations_since_answer =
+                    task_ops::derive::wu_continuations_since_answer(&events_so_far, &wu.id);
+                progress_checkpoints = task_ops::derive::progress_checkpoints_since_answer(
+                    &events_so_far,
+                    Some(&wu.id),
+                );
                 checkpoint_event = Some(Event::CheckpointSaved {
                     run_id: run_id.clone(),
                     work_unit_id: Some(wu.id.clone()),
@@ -727,10 +735,10 @@ impl Dispatcher {
                 // The measured auto-leaf guard replaces the generic continuation /
                 // no-progress replan caps for this leaf. Failures and plan_issue remain unchanged.
                 let limits = crate::execution_scheduler::WuLimits {
-                    max_continuations: if auto_counts.is_some() {
+                    continuation_hard_limit: if auto_counts.is_some() {
                         u32::MAX
                     } else {
-                        self.config.execution.max_continuations_per_work_unit
+                        self.config.execution.continuation_hard_limit
                     },
                     no_progress_limit: if auto_counts.is_some() {
                         u32::MAX
@@ -748,6 +756,8 @@ impl Dispatcher {
                         checkpoint: checkpoint_opt.as_ref(),
                         prev_checkpoint: prev_checkpoint_opt.as_ref(),
                         no_progress_before,
+                        continuations_since_answer,
+                        progress_checkpoints,
                     },
                     limits,
                 );
@@ -794,7 +804,7 @@ impl Dispatcher {
                                 wu.key
                             );
                         }
-                        "limit" => {
+                        "limit" | "continuation_cap" => {
                             if let Some(question) = &decision.outcome_override {
                                 outcome_str = question.clone();
                             }
@@ -1086,18 +1096,34 @@ impl Dispatcher {
                     no_progress_streak(&events_so_far, None) + 1
                 };
                 checkpoint_for_index = Some(checkpoint.clone());
+                let cap_checkpoint = checkpoint.clone();
                 checkpoint_event = Some(Event::CheckpointSaved {
                     run_id: run_id.clone(),
                     work_unit_id: None,
                     checkpoint: Box::new(checkpoint),
                 });
-                if continuations_so_far >= self.config.execution.max_continuations_per_work_unit
-                    || no_progress >= self.config.execution.no_progress_limit
-                {
-                    // ADR-0072 D18: 上限到達・進捗なしは失敗にせず、人に聞く（blocked）。
+                // 2026-10-20-continuation-limit-by-progress D2: 進捗がある間は回数で聞かない。聞くのは進捗なしの連続と
+                // 固い上限（暴走止め）だけ。いずれも失敗にせず人に聞く（blocked）。
+                if no_progress >= self.config.execution.no_progress_limit {
                     trigger = Trigger::WorkerQuestion;
-                    outcome_str = format!(
-                        "question: 実行が進みません（continuation {continuations_so_far} 回 / 進捗なし {no_progress} 回）。予算を増やして続ける／分割し直す（replan）／中止のいずれかを選んでください。"
+                    outcome_str = crate::execution_scheduler::no_progress_question(
+                        None,
+                        no_progress,
+                        continuations_so_far,
+                    );
+                } else if continuations_so_far >= self.config.execution.continuation_hard_limit {
+                    trigger = Trigger::WorkerQuestion;
+                    outcome_str = crate::execution_scheduler::continuation_cap_question(
+                        None,
+                        self.config.execution.continuation_hard_limit,
+                        &crate::execution_scheduler::ContinuationFacts::new(
+                            continuations_so_far,
+                            task_ops::derive::progress_checkpoints_since_answer(
+                                &events_so_far,
+                                None,
+                            ),
+                            &cap_checkpoint,
+                        ),
                     );
                 } else {
                     trigger = Trigger::Continue {

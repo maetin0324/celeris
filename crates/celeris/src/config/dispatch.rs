@@ -203,7 +203,7 @@ impl Config {
             // ADR-0072 D18（Phase E1）/ D13・D14（Phase E3）: continuation・gate・planner。
             execution: task_dispatch::ExecutionConfig {
                 continuation: self.execution.continuation,
-                max_continuations_per_work_unit: self.execution.max_continuations_per_work_unit,
+                continuation_hard_limit: self.execution.continuation_hard_limit,
                 no_progress_limit: self.execution.no_progress_limit,
                 gate: task_core::GateMode::parse(&self.execution.gate).unwrap_or_default(),
                 planner: task_core::PlannerConfig {

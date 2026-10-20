@@ -568,9 +568,9 @@ pub struct ExecutionConfig {
     /// `[execution] continuation`（既定 `true`）。`false` なら E1 の continuation を無効にし、
     /// 予算切れ・yield を従来どおり `WorkerError{retryable:true}` として扱う（ADR-0072 §6 (f)）。
     pub continuation: bool,
-    /// `[execution] max_continuations_per_work_unit`（既定 3）。暗黙の WorkUnit では 1 タスクの
-    /// continuation の合計回数（1 つの WU の Run は最大 `continuation + 1` 回）。
-    pub max_continuations_per_work_unit: u32,
+    /// `[execution] continuation_hard_limit`（既定 12）。最後の人の回答以降の continuation 回数がこれに
+    /// 達したら、進捗があっても人に聞く（暴走止め。2026-10-20-continuation-limit-by-progress D2）。
+    pub continuation_hard_limit: u32,
     /// `[execution] no_progress_limit`（既定 2）。進捗なしの continuation が連続この回数で
     /// `blocked` にする。
     pub no_progress_limit: u32,
@@ -611,7 +611,7 @@ impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             continuation: true,
-            max_continuations_per_work_unit: 3,
+            continuation_hard_limit: 12,
             no_progress_limit: 2,
             gate: task_core::GateMode::default(),
             planner: task_core::PlannerConfig::default(),

@@ -86,6 +86,12 @@ if [ -n "$crates" ]; then
   args=()
   while IFS= read -r c; do args+=(-p "$c"); done <<<"$crates"
   echo "test-affected: crates: $(echo "$crates" | tr '\n' ' ')" >&2
+  # test-parallel.sh と同じく、試験の一時 dir を /tmp 直下の短い path に閉じ込める。Unix socket の sun_path は短く、
+  # 深い TMPDIR の下では credentiald・browser の IPC 試験が socket を bind できず起動待ちで時間切れになる。
+  tmproot="$(mktemp -d "/tmp/celeris-test-affected.XXXXXX")"
+  trap 'rm -f "$changed"; chmod -R u+w "$tmproot" 2>/dev/null || true; rm -rf "$tmproot" 2>/dev/null || true' EXIT
+  mkdir -p "$tmproot/tmp"
+  export TMPDIR="$tmproot/tmp"
   cargo nextest run "${args[@]}"
   cargo test --doc "${args[@]}"
   exit 0

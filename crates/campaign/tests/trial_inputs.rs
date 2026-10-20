@@ -51,6 +51,7 @@ fn every_arm_sees_the_same_trial_kb_and_nothing_else() {
     let i = m.load_input(&mp, None).expect("input");
     let out = d.path().join("out");
     let o = RunOptions {
+        public_cases: Default::default(),
         global_ledger: None,
         out: out.clone(),
         repo_src: Some(fx().join("repo")),
@@ -125,6 +126,7 @@ fn repo_that_already_has_kb_dir_collides_with_the_trial_kb() {
     let m = CampaignManifest::load(&mp).expect("pilot");
     let i = m.load_input(&mp, None).expect("input");
     let o = RunOptions {
+        public_cases: Default::default(),
         global_ledger: None,
         out: d.path().join("out"),
         repo_src: Some(repo),

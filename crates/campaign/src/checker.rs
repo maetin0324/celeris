@@ -701,15 +701,16 @@ pub fn check_expected(
             if r.token_usage.is_none() && r.tokens.is_some() {
                 v.push(format!("{tag}: tokens recorded without token_usage"));
             }
-            // 「変わっていない」は runner と同じ規則: 配った入力（`inputs/`）は成果物に数えない。初期 hash は入力を除いた値、
+            // 「変わっていない」は runner と同じ規則: 配った入力（`inputs/`）と公開 case 定義は成果物に数えない。初期 hash は入力を除いた値、
             // 最終 hash は入力込みの値なので、入力のある試行は workspace の現物を入力抜きで数え直して比べる。
             let unchanged = || {
-                if r.inputs.is_empty() {
+                let ws = out.join(&r.workspace);
+                let case_file = ws.join(crate::inputs::public_case_path(&r.problem_id));
+                if r.inputs.is_empty() && !case_file.is_file() {
                     return r.workspace_sha256_final == r.workspace_sha256_initial;
                 }
-                let ws = out.join(&r.workspace);
                 crate::snapshot::hash_tree(&ws).ok().as_ref() == Some(&r.workspace_sha256_final)
-                    && crate::snapshot::hash_tree_excluding(&ws, &[crate::inputs::INPUTS_DIR])
+                    && crate::inputs::artifact_hash(&ws, &r.problem_id)
                         .ok()
                         .as_ref()
                         == Some(&r.workspace_sha256_initial)

@@ -274,6 +274,7 @@ impl Fx {
     fn opts(&self) -> RunOptions {
         let set = CaseSet::load(&self.inp.cases_root, &self.inp.grader_root).unwrap();
         RunOptions {
+            public_cases: Default::default(),
             global_ledger: None,
             out: self.out(),
             repo_src: self.inp.repo_src.clone(),

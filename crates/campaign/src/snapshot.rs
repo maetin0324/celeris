@@ -17,10 +17,8 @@ fn entries(dir: &Path) -> Result<Vec<PathBuf>, String> {
 
 fn walk(root: &Path, dir: &Path, skip: &[&str], h: &mut Sha256) -> Result<(), String> {
     for p in entries(dir)? {
-        if dir == root
-            && p.file_name()
-                .is_some_and(|n| skip.iter().any(|s| n == std::ffi::OsStr::new(s)))
-        {
+        let rel_path = p.strip_prefix(root).map_err(|e| e.to_string())?;
+        if skip.iter().any(|s| rel_path == Path::new(s)) {
             continue;
         }
         let meta = fs::symlink_metadata(&p).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -132,7 +130,7 @@ pub fn hash_tree(root: &Path) -> Result<String, String> {
     hash_tree_excluding(root, &[])
 }
 
-/// `hash_tree` から、直下の `skip` の名前の file / dir を除いたもの（配った入力を成果物に数えないため）。
+/// `hash_tree` から、root からの相対 path が `skip` に一致する file / dir を除いたもの（配った入力・公開 case 定義を成果物に数えないため）。
 pub fn hash_tree_excluding(root: &Path, skip: &[&str]) -> Result<String, String> {
     let mut h = Sha256::new();
     walk(root, root, skip, &mut h)?;

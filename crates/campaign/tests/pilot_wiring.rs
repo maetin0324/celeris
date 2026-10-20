@@ -524,6 +524,7 @@ fn materials_are_distributed_into_every_trial_workspace() {
     m.snapshot.materials_sha256 = celeris_campaign::snapshot::hash_tree(&mat).unwrap();
     let out = d.path().join("out");
     let o = RunOptions {
+        public_cases: Default::default(),
         global_ledger: None,
         out: out.clone(),
         repo_src: Some(repo.clone()),
@@ -677,6 +678,7 @@ fn grade_out_grades_every_run_trial_and_reports_missing_cases() {
     let i = m.load_input(&mp, None).expect("input");
     let out = d.path().join("out");
     let o = RunOptions {
+        public_cases: Default::default(),
         global_ledger: None,
         out: out.clone(),
         repo_src: Some(fx().join("repo")),

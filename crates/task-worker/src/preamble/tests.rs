@@ -560,7 +560,7 @@ fn cos_conversations_show_active_projects_and_the_actions_instructions() {
     assert!(!out.contains("add_milestone"), "{out}");
     assert!(out.contains("ask_human"), "{out}");
     assert!(out.contains("mode: \"production\""), "{out}");
-    let web_docs_cargo_rule = "`web/` や `docs/` だけを変える task の acceptance では `cargo test --workspace` を必須にせず";
+    let web_docs_cargo_rule = "workspace 全体の試験（`bash scripts/dev/test-parallel.sh`、`cargo test --workspace`、web の e2e）は";
     let acceptance_scope_rule =
         "acceptance の範囲指定（差分範囲など）には、計画が要求する ADR や記録";
     assert_eq!(out.matches(web_docs_cargo_rule).count(), 1, "{out}");
@@ -1130,7 +1130,7 @@ fn f5_fix5_headless_run_note_forbids_background_tasks_and_waiting_for_notificati
         "`run_in_background`",
         "background task を使わない",
         "foreground で実行",
-        "`cargo test --workspace`",
+        "`bash scripts/dev/test-affected.sh`",
         "`timeout`",
         "「完了の通知を待つ」",
         "`result.json`",

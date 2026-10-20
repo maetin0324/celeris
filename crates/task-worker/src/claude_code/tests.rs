@@ -3598,7 +3598,9 @@ fn planner_prompt_has_the_check_writing_section() {
         "Checks run with `/bin/sh` (dash), so do not use bash-only syntax such as `${s:0:12}`, `[[ ]]`, or arrays.",
         "run them with CELERIS_USERNS_TESTS=1 in the daemon's integration check (release gate), not in a leaf.",
         "Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.",
-        "replace mandatory `cargo test --workspace` with a check that `crates/` has no diff",
+        "run only in the release gate (`release.sh`)",
+        "`bash scripts/dev/test-affected.sh` (changed crates and their reverse dependencies)",
+        "use a check that `crates/` has no diff",
         "Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.",
         "Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see agent-docs/guides/testing.md).",
     ];

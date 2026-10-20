@@ -1813,15 +1813,18 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      in WU checks: the worker sandbox cannot create one. They skip unless CELERIS_USERNS_TESTS=1; if they must run, \
      run them with CELERIS_USERNS_TESTS=1 in the daemon's integration check (release gate), not in a leaf.\n\
      - Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.\n\
-     - For a unit or task changing only `web/` or `docs/`, replace mandatory `cargo test --workspace` with a \
-     check that `crates/` has no diff (for example `git diff --quiet $(git merge-base HEAD main) -- crates/`); \
-     leave Cargo checks to the daemon's workspace check.\n\
+     - Whole-workspace tests (`bash scripts/dev/test-parallel.sh`, `cargo test --workspace`, web e2e, real \
+     browser/userns tests) run only in the release gate (`release.sh`). Never put them in a unit's check, a \
+     task's acceptance, a stage integration or a phase completion; for a unit that changes Rust use \
+     `bash scripts/dev/test-affected.sh` (changed crates and their reverse dependencies).\n\
+     - For a unit or task changing only `web/` or `docs/`, use a check that `crates/` has no diff (for example \
+     `git diff --quiet $(git merge-base HEAD main) -- crates/`) instead of any Cargo test.\n\
      - Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.\n\
      - Never make a unit or check run `release.sh`, `verify.sh` or `promote.sh`: they are operator procedures and a \
      worker sandbox cannot run them, so the unit always fails (the plan is rejected). Check the code, tests and \
      docs instead; write the release steps as a human procedure in the progress file.\n\
      - Every unit that changes Rust code must also keep `cargo fmt --all -- --check` passing (the release gate \
-     runs it); put it next to `bash scripts/dev/test-parallel.sh` and `cargo clippy --workspace -- -D warnings`.\n\
+     runs it); put it next to `bash scripts/dev/test-affected.sh` and `cargo clippy --workspace -- -D warnings`.\n\
      - Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or \
      acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, \
      SIGSTOP/SIGCONT, test-only delay hooks; see agent-docs/guides/testing.md).\n\n";

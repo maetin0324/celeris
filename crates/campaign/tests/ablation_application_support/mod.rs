@@ -11,7 +11,9 @@
 //! - LLM の実行先はスタブだけ: config の source / harness は全部 `kind = "fake"`。daemon の PATH の先頭には
 //!   `claude`・`codex`・`opencode`・`gemini`・`aider` の罠を置き、起動されたら `unexpected.log` に残す
 //!   （[`Fixture::assert_only_stub_launches`] が失敗にする）。
-//! - 同期は event の到着待ち＋期限（[`Fixture::wait_events`]）。固定時間の sleep で順序を作らない。
+//! - 同期は出来事の到着待ち＋期限。起動は daemon の stderr の「listening」行、event は SSE `GET /stream` の
+//!   frame（到着ごとに `GET /events` を読み直して判定）、停止は daemon の `wait` を、どれも channel の
+//!   `recv_timeout` で受ける（[`Fixture::wait_events`]）。固定時間の sleep・空回りの poll で順序を作らない。
 //! - 環境不備（binary が無い・daemon が上がらない・curl 等）は skip せず panic で失敗する。userns・本番権限は要らない。
 
 #![allow(dead_code)]
@@ -21,8 +23,12 @@ use std::{
     io::{BufRead, Read, Write},
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
-    sync::OnceLock,
+    process::{Command, ExitStatus, Stdio},
+    sync::{
+        OnceLock,
+        mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    },
+    thread,
     time::{Duration, Instant},
 };
 
@@ -36,8 +42,8 @@ pub const STUB_FLAG: &str = "--ablation-stub";
 pub const TRAPPED_CLIS: &[&str] = &["claude", "codex", "opencode", "gemini", "aider"];
 /// 待ちの既定期限。
 pub const DEADLINE: Duration = Duration::from_secs(120);
-/// event の再読みの間隔（同期は到着した event で判定し、この間隔は読み直しの頻度でしかない）。
-const POLL: Duration = Duration::from_millis(50);
+/// daemon の停止（TERM）を待つ期限。過ぎたら KILL。
+const STOP_DEADLINE: Duration = Duration::from_secs(20);
 
 // ---------------------------------------------------------------------------------------------
 // スタブ process
@@ -407,8 +413,24 @@ pub struct Owned {
     pub stub_pids: Vec<u32>,
 }
 
+/// daemon 由来の出来事（fixture の待ちはこれだけを受ける）。
+enum Signal {
+    /// daemon の stdout/stderr の 1 行（daemon.log にも書いた）。
+    Log(String),
+    /// SSE `GET /stream` の frame が 1 つ届いた（`task.event`・`heartbeat` など）。
+    Stream,
+    /// SSE の接続が閉じた。
+    StreamClosed,
+    /// daemon process が終わった（`wait` の結果）。
+    Exited(Option<ExitStatus>),
+}
+
 pub struct Fixture {
-    child: Option<Child>,
+    /// daemon の PID（`Child` は wait する thread が持つ）。
+    pid: Option<u32>,
+    exited: Option<Option<ExitStatus>>,
+    signals: Receiver<Signal>,
+    signal_tx: Sender<Signal>,
     dir: Option<tempfile::TempDir>,
     pub http: Http,
     pub label: String,
@@ -531,7 +553,6 @@ impl Fixture {
         assert_config_is_stub_only(&config);
         fs::write(h.join("config.toml"), &config).expect("config");
 
-        let log = fs::File::create(h.join("daemon.log")).expect("daemon.log");
         let mut c = Command::new(celeris_bin());
         c.arg("--config")
             .arg(h.join("config.toml"))
@@ -545,35 +566,115 @@ impl Fixture {
             .env("HOME", h.join("home"))
             .env("TMPDIR", h.join("home"))
             .stdin(Stdio::null())
-            .stdout(Stdio::from(log.try_clone().expect("log")))
-            .stderr(Stdio::from(log));
-        let child = c.spawn().expect("spawn celeris daemon");
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = c.spawn().expect("spawn celeris daemon");
+        let pid = child.id();
+        let (tx, rx) = mpsc::channel();
+        let log = fs::File::create(h.join("daemon.log")).expect("daemon.log");
+        let stdout = child.stdout.take().expect("daemon stdout");
+        let stderr = child.stderr.take().expect("daemon stderr");
+        tee_lines(stdout, log.try_clone().expect("log"), tx.clone());
+        tee_lines(stderr, log, tx.clone());
+        let exit_tx = tx.clone();
+        thread::spawn(move || {
+            let st = child.wait().ok();
+            let _ = exit_tx.send(Signal::Exited(st));
+        });
         let mut fx = Self {
-            child: Some(child),
+            pid: Some(pid),
+            exited: None,
+            signals: rx,
+            signal_tx: tx,
             dir: Some(dir),
             http: Http::new(addr, &token),
             label: spec.label,
             events: Vec::new(),
             last_event_id: 0,
         };
-        let start = Instant::now();
+        let up_by = Instant::now() + Duration::from_secs(60);
         loop {
-            if fx
-                .http
-                .request("GET", "/api/v1/health", None)
-                .is_ok_and(|r| r.status == 200)
-            {
-                return fx;
+            match fx.next_signal(up_by, "the API listening line") {
+                Signal::Log(line) if line.contains("celeris API listening") => break,
+                _ => {}
             }
-            if let Some(st) = fx.child.as_mut().and_then(|c| c.try_wait().ok().flatten()) {
-                panic!("daemon exited early ({st}):\n{}", fx.daemon_log());
+        }
+        let health = fx.http.get("/api/v1/health");
+        assert_eq!(
+            health.status,
+            200,
+            "health after listening: {}\n{}",
+            health.body,
+            fx.daemon_log()
+        );
+        fx.open_stream();
+        fx
+    }
+
+    /// SSE `GET /stream` を開き、frame の到着を [`Signal::Stream`] で知らせる thread を起こす
+    /// （daemon の停止で接続が閉じると thread も終わる）。
+    fn open_stream(&self) {
+        let mut s = TcpStream::connect_timeout(&self.http.addr, Duration::from_secs(10))
+            .unwrap_or_else(|e| panic!("connect stream: {e}"));
+        let req = format!(
+            "GET /api/v1/stream HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nAccept: text/event-stream\r\n\r\n",
+            self.http.addr, self.http.token
+        );
+        s.write_all(req.as_bytes()).expect("stream request");
+        let mut r = std::io::BufReader::new(s);
+        let mut status = String::new();
+        r.read_line(&mut status).expect("stream status line");
+        assert!(
+            status.split_whitespace().nth(1) == Some("200"),
+            "GET /stream: {status}"
+        );
+        let tx = self.signal_tx.clone();
+        thread::spawn(move || {
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match r.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) if line.starts_with("event:") => {
+                        if tx.send(Signal::Stream).is_err() {
+                            return;
+                        }
+                    }
+                    Ok(_) => {}
+                }
             }
-            assert!(
-                start.elapsed() < Duration::from_secs(60),
-                "daemon did not come up:\n{}",
-                fx.daemon_log()
+            let _ = tx.send(Signal::StreamClosed);
+        });
+    }
+
+    /// 次の出来事を `by` まで待つ。daemon が終わっていたら・期限を過ぎたら daemon.log 付きで失敗。
+    fn next_signal(&mut self, by: Instant, what: &str) -> Signal {
+        if let Some(st) = self.exited {
+            panic!(
+                "daemon exited ({st:?}) while waiting for {what}:\n{}",
+                self.daemon_log()
             );
-            std::thread::sleep(POLL);
+        }
+        let left = by.saturating_duration_since(Instant::now());
+        match self.signals.recv_timeout(left) {
+            Ok(Signal::Exited(st)) => {
+                self.exited = Some(st);
+                panic!(
+                    "daemon exited ({st:?}) while waiting for {what}:\n{}",
+                    self.daemon_log()
+                );
+            }
+            Ok(sig) => sig,
+            Err(RecvTimeoutError::Timeout) => panic!(
+                "timed out waiting for {what}; events:\n{}\ndaemon.log:\n{}",
+                self.events
+                    .iter()
+                    .map(Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                self.daemon_log()
+            ),
+            Err(RecvTimeoutError::Disconnected) => unreachable!("fixture holds a sender"),
         }
     }
 
@@ -582,7 +683,7 @@ impl Fixture {
     }
 
     pub fn daemon_pid(&self) -> u32 {
-        self.child.as_ref().expect("daemon").id()
+        self.pid.expect("daemon")
     }
 
     pub fn daemon_log(&self) -> String {
@@ -630,34 +731,20 @@ impl Fixture {
         &self.events
     }
 
-    /// 読んだ event の列が `pred` を満たすまで待つ（期限付き。過ぎたら event・daemon.log 付きで失敗）。
+    /// 読んだ event の列が `pred` を満たすまで待つ。SSE の frame（または daemon の出来事）が届くたびに
+    /// `GET /events` を読み直して判定する（期限付き。過ぎたら event・daemon.log 付きで失敗）。
     pub fn wait_events(&mut self, what: &str, deadline: Duration, pred: impl Fn(&[Value]) -> bool) {
-        let start = Instant::now();
+        let by = Instant::now() + deadline;
         loop {
             if pred(self.refresh_events()) {
                 return;
             }
-            if let Some(st) = self
-                .child
-                .as_mut()
-                .and_then(|c| c.try_wait().ok().flatten())
-            {
+            if let Signal::StreamClosed = self.next_signal(by, what) {
                 panic!(
-                    "daemon exited ({st}) while waiting for {what}:\n{}",
+                    "event stream closed while waiting for {what}:\n{}",
                     self.daemon_log()
                 );
             }
-            assert!(
-                start.elapsed() < deadline,
-                "timed out waiting for {what}; events:\n{}\ndaemon.log:\n{}",
-                self.events
-                    .iter()
-                    .map(Value::to_string)
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                self.daemon_log()
-            );
-            std::thread::sleep(POLL);
         }
     }
 
@@ -730,19 +817,33 @@ impl Fixture {
         } else {
             Vec::new()
         };
-        if let Some(mut c) = self.child.take() {
+        if let Some(pid) = self.pid.take()
+            && self.exited.is_none()
+        {
             let _ = Command::new("kill")
-                .args(["-TERM", &c.id().to_string()])
+                .args(["-TERM", &pid.to_string()])
                 .status();
-            let start = Instant::now();
-            while c.try_wait().ok().flatten().is_none() {
-                if start.elapsed() > Duration::from_secs(20) {
-                    let _ = c.kill();
-                    break;
+            let mut by = Instant::now() + STOP_DEADLINE;
+            let mut killed = false;
+            loop {
+                let left = by.saturating_duration_since(Instant::now());
+                match self.signals.recv_timeout(left) {
+                    Ok(Signal::Exited(st)) => {
+                        self.exited = Some(st);
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(_) if !killed => {
+                        // 期限内に止まらなければ KILL し、wait の結果をもう一度（期限付きで）待つ。
+                        let _ = Command::new("kill")
+                            .args(["-KILL", &pid.to_string()])
+                            .status();
+                        killed = true;
+                        by = Instant::now() + STOP_DEADLINE;
+                    }
+                    Err(_) => break,
                 }
-                std::thread::sleep(POLL);
             }
-            let _ = c.wait();
         }
         for pid in stubs {
             if pid_alive(pid) && is_our_stub(pid) {
@@ -760,6 +861,24 @@ impl Drop for Fixture {
         // TempDir の drop が DB・token・org・workspace・HOME・スタブ状態をまとめて消す。
         self.dir.take();
     }
+}
+
+/// `src` を 1 行ずつ `log` に写し、各行を [`Signal::Log`] で知らせる thread を起こす。
+fn tee_lines(src: impl Read + Send + 'static, mut log: fs::File, tx: Sender<Signal>) {
+    thread::spawn(move || {
+        let mut r = std::io::BufReader::new(src);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match r.read_line(&mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {
+                    let _ = log.write_all(line.as_bytes());
+                    let _ = tx.send(Signal::Log(line.clone()));
+                }
+            }
+        }
+    });
 }
 
 fn nonce() -> u128 {

@@ -1,7 +1,7 @@
 # replan で同じ段の依存先が変わった持ち越し WU を新しい起点から作り直す
 
 - 日付: 2026-10-20
-- 状態: 採用（実装中）
+- 状態: 採用
 - 関連: ADR-0074（同じ段の依存は依存先 WU ブランチの HEAD から切る）、ADR-0079 D9 / D17、ADR 2026-10-11（破壊的変更を是とする）
 - 実例: task 01M5AC7DNX の WU ctl-worker-callsite（計画 v7 で依存先を celeris-worker-callsite に変えたが、
   base_commit 5bc09a30 と旧ブランチが残り、再実行で同じ E0063）
@@ -21,14 +21,19 @@ WU ブランチがあれば `base_commit`（無ければブランチの HEAD）�
   依存の有無の変化（あり→なし、なし→あり）も含む。違う段の依存だけの変化は対象外（段の統合で入る）。
 - D2（記録）: 作り直しが要る行は replan で `base_commit` / `head_commit` を消し、`rebase_pending` を立てる
   （`work_units` に列を足す migration）。旧い挙動を残す切り替え flag は作らない。
-- D3（prepare）: `rebase_pending` の WU は、既存の WU ブランチを `<branch>-superseded-v<plan_version>` に
-  `git branch -m` で改名して退避する（reflog ごと残る。消さない）。WU の worktree は `git worktree remove
-  --force` で外してから、新しい起点で作り直す。新しい起点は同じ段の依存先の HEAD（`dependency_base`）、
-  依存が無ければ Task ブランチの HEAD。`CELERIS_WU_BASE` と `base_commit` はこの起点になる。
-- D4（範囲検査）: 範囲検査の snapshot はその WU について作り直す（古い起点の snapshot を消してから初回と
-  同じ手順で作る）。古い起点との差分で範囲を測らない。
-- D5（追跡）: 作り直しのたびに event `WorkUnitBaseReset { work_unit_id, key, old_head, archived_branch,
-  new_base }` を追記する。古い試行の commit は退避ブランチの reflog と event から追える。
+- D3（prepare）: `rebase_pending` の WU は、WU の worktree を `git worktree remove --force` で外し（`worktree
+  prune` も）、既存の WU ブランチを `<branch>-superseded-<旧 HEAD の先頭 12 桁>` に `git branch -M` で改名して
+  退避する（reflog ごと残る。消さない。同名の退避ブランチが同じ commit を指していれば元のブランチだけ消す）。
+  その後は従来の「ブランチが無い」経路で起点を決める: 同じ段の依存先の HEAD（`dependency_base`）、依存が
+  無ければ Task ブランチの HEAD。`CELERIS_WU_BASE` と `base_commit`（dispatch の lease 取得で記録）はこの
+  起点になる。`rebase_pending` は dispatch（`WorkUnitTransitioned{reason:"dispatch"}`）で下ろす（store と
+  replay の両方）。dispatch 前に prepare をやり直しても、作り直したばかりのブランチを退避するだけで害は無い。
+- D4（範囲検査）: 範囲検査の snapshot（`wu_base.rs`、worktree の git dir の下の `celeris-wu-bases/<id>`）は
+  worktree を外すと一緒に消え、作り直した worktree で初回と同じ手順で作られる。古い起点との差分で範囲を測らない。
+- D5（追跡）: 新しい event 型は足さない。旧い試行の commit は (1) 退避ブランチとその reflog、(2) 旧い試行の
+  `WorkUnitCommitted`（commit sha）、(3) replan の `ExecutionPlan` 版の depends_on の差、から追える。退避の
+  事実は daemon の log（`archived the work unit branch`、旧 HEAD と退避先）に出す。退避ブランチ名は旧 HEAD
+  から決まるので、`WorkUnitCommitted` の sha から引ける。
 - D6（変えないもの）: 同じ段の依存先が変わらない持ち越しは、従来どおりブランチと `base_commit` を使い回す。
   kind task の unit の既存の扱い（子の結び付けを外し、branch / base を消す）は変えない。
 

@@ -377,6 +377,8 @@ pub fn rebuild_work_units_and_runs(
                 match reason.as_str() {
                     "dispatch" => {
                         wu.runs += 1;
+                        // ADR 2026-10-20-replan-dep-change-wu-rebase D3（store の dispatch と同じ）。
+                        wu.rebase_pending = false;
                         wu.updated_at = er.ts.clone();
                         if let Some(rid) = run_id {
                             wu.last_run_id = Some(rid.clone());

@@ -216,6 +216,37 @@ pub fn is_ancestor(dir: &Path, ancestor: &str, descendant: &str) -> bool {
 }
 
 /// WU の worktree を切る（冪等。既にあれば使い回す。`LocalWorktree::ensure_blocking` と同じ規則）。
+/// ADR 2026-10-20-replan-dep-change-wu-rebase D3: replan で同じ段の依存先が変わった WU の旧い試行を
+/// 退避する。WU の worktree（`worktree_dir`）を外し、WU ブランチ `branch` を
+/// `<branch>-superseded-<旧 HEAD の先頭 12 桁>` へ改名する（reflog ごと残る。消さない）。同じ名前の退避
+/// ブランチが既に同じ commit を指していれば、元のブランチだけを消す。戻り値は `(旧 HEAD, 退避先)`。
+/// ブランチが無ければ `None`（worktree だけ外す）。
+pub fn archive_wu_branch(
+    repo: &Path,
+    worktree_dir: &Path,
+    branch: &str,
+) -> Result<Option<(String, String)>, String> {
+    if worktree_dir.exists() {
+        let dir = worktree_dir.to_string_lossy().to_string();
+        git_ok(repo, &["worktree", "remove", "--force", &dir])?;
+    }
+    git_ok(repo, &["worktree", "prune"])?;
+    let Some(old_head) = rev_parse(repo, &format!("refs/heads/{branch}")) else {
+        return Ok(None);
+    };
+    let short: String = old_head.chars().take(12).collect();
+    let archived = format!("{branch}-superseded-{short}");
+    match rev_parse(repo, &format!("refs/heads/{archived}")) {
+        Some(sha) if sha == old_head => {
+            git_ok(repo, &["branch", "-D", branch])?;
+        }
+        _ => {
+            git_ok(repo, &["branch", "-M", branch, &archived])?;
+        }
+    }
+    Ok(Some((old_head, archived)))
+}
+
 pub fn ensure_wu_worktree(worktree: &LocalWorktree) -> Result<(), String> {
     worktree
         .ensure_blocking()

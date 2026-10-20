@@ -406,6 +406,8 @@ impl SqliteStore {
         if base_commit.is_some() {
             updated.base_commit = base_commit;
         }
+        // ADR 2026-10-20-replan-dep-change-wu-rebase D3: prepare が新しい起点で作り直した後の dispatch で下ろす。
+        updated.rebase_pending = false;
         Self::update_work_unit_tx(&tx, &updated)?;
         Self::append_event_tx(
             &tx,

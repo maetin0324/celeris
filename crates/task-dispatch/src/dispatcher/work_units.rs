@@ -911,6 +911,20 @@ impl Dispatcher {
             let Some(task_wt) = &repo.worktree else {
                 continue;
             };
+            // ADR 2026-10-20-replan-dep-change-wu-rebase D3: replan で同じ段の依存先が変わった WU は、旧い
+            // WU ブランチを退避して worktree を外し、新しい起点（依存先の HEAD / Task ブランチの HEAD）から
+            // 作り直す。範囲検査の snapshot は worktree の git dir の下にあるので一緒に作り直しになる（D4）。
+            if wu.rebase_pending {
+                let wt_dir = wu_dir
+                    .join(task_worker::task_repos::REPOS_DIR_NAME)
+                    .join(&repo.name);
+                let archived =
+                    crate::integration::archive_wu_branch(&repo.source, &wt_dir, &branch)
+                        .map_err(WuPrepareError::transient)?;
+                if let Some((old_head, archived_branch)) = archived {
+                    tracing::info!(task_id = %task.id, work_unit = %wu.key, repo = %repo.name, %old_head, %archived_branch, "dependencies changed by replan; archived the work unit branch and rebuilding from the new base");
+                }
+            }
             let existing =
                 crate::integration::rev_parse(&repo.source, &format!("refs/heads/{branch}"));
             let base = match (&existing, intra_dep) {

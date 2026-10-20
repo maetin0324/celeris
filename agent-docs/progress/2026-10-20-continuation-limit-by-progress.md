@@ -44,3 +44,9 @@ ADR: `agent-docs/adr/2026-10-20-continuation-limit-by-progress.md`
 
 ## 提案
 - ADR-0072 D18 の表と ADR-0090 の `max_continuations_per_work_unit` への言及に、本 ADR で置き換えた旨の付記を impl-b で足す。
+
+## adr-b attempt 2: check 不合格の原因と修正
+- 原因: `sh scripts/dev/progress-index.sh --check` が base（main と同じ）から引き継いだ他 task の進捗ファイル 2 件の front matter で落ちていた（本 ADR・本進捗ファイルは無関係）。
+  - `2026-10-19-dev-profile-debuginfo.md`: `task:`/`completed:` の旧形式 → `title`/`tasks: [01M5AH1A1F6YMPCCJTCGBC84H5]`/`status: done`/`updated: 2026-10-19` に直した（本文は不変）。
+  - `2026-10-20-research-eval-final-check.md`: `status: partial` は許可外 → 実 pilot が人の操作（H1 昇格等）待ちなので `blocked` に直した。
+- 証拠: `sh scripts/dev/check-doc-links.sh agent-docs/adr/2026-10-20-continuation-limit-by-progress.md agent-docs/progress && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0（`check-doc-links: ok` / `check-adr-numbers: ok (266 files)` / `progress-index --check: ok`）。

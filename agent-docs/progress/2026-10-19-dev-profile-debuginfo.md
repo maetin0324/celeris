@@ -1,6 +1,8 @@
 ---
+title: dev/test profile の debuginfo 削減
+tasks: [01M5AH1A1F6YMPCCJTCGBC84H5]
 status: done
-task: 01M5AH1A1F6YMPCCJTCGBC84H5
+updated: 2026-10-19
 completed: 2026-10-19
 ---
 # dev/test profile の debuginfo 削減

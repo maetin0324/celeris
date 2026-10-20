@@ -82,6 +82,10 @@ pub struct Launch {
     pub request_task_id: String,
     pub title: String,
     pub planner: bool,
+    /// スタブが stdin で受け取った `RunRequest.context.campaign`（variant 付き run の pin。無ければ null）。
+    pub campaign: Value,
+    /// `RunRequest.artifacts_dir`（run ごとに別の dir）。
+    pub artifacts_dir: String,
     /// `end` 行の結果（`done` / `error`）。終わっていなければ `None`。
     pub outcome: Option<String>,
 }
@@ -165,7 +169,8 @@ fn stub_main(dir: &Path) -> Result<(), String> {
         &log,
         &json!({"phase": "start", "pid": pid, "ppid": ppid_of_self(), "run_id": run_id,
                 "task_id": std::env::var("CELERIS_TASK_ID").unwrap_or_default(),
-                "request_task_id": req["task"]["id"], "title": title, "planner": planner}),
+                "request_task_id": req["task"]["id"], "title": title, "planner": planner,
+                "campaign": req["context"]["campaign"], "artifacts_dir": artifacts}),
     )?;
     let end = |outcome: &str| {
         append_line(
@@ -195,7 +200,7 @@ fn stub_main(dir: &Path) -> Result<(), String> {
         fs::write(artifacts.join("execution-plan.json"), p.plan.to_string())
             .map_err(|e| format!("execution-plan.json: {e}"))?;
     }
-    fs::write(artifacts.join("result.md"), format!("stub run {run_id}\n"))
+    fs::write(artifacts.join("result.md"), result_md_body(&run_id, pid))
         .map_err(|e| format!("result.md: {e}"))?;
     end("done")?;
     println!(
@@ -203,6 +208,17 @@ fn stub_main(dir: &Path) -> Result<(), String> {
         json!({"type": "done", "summary": format!("ablation stub {title}"), "evidence": []})
     );
     Ok(())
+}
+
+/// スタブが書く `result.md` の中身。PID を含むので、daemon の `artifact_produced{run_id, sha256}` から
+/// run id と PID の対応が引ける（planner run には `CELERIS_RUN_ID` が渡らないため、こちらを正とする）。
+pub fn result_md_body(env_run_id: &str, pid: u32) -> String {
+    format!("ablation stub pid {pid} env-run {env_run_id}\n")
+}
+
+pub fn sha256_hex(b: &[u8]) -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(b))
 }
 
 fn hex(s: &str) -> String {
@@ -750,40 +766,66 @@ impl Fixture {
 
     /// スタブの起動記録（`start` と `end` を pid で合わせる）。
     pub fn launches(&self) -> Vec<Launch> {
-        let text = fs::read_to_string(self.dir().join("stub/launches.jsonl")).unwrap_or_default();
-        let mut out: Vec<Launch> = Vec::new();
-        // 書きかけの最後の行（改行で終わっていない）は読まない。
-        let complete = text.rfind('\n').map_or("", |i| &text[..i]);
-        for line in complete.lines().filter(|l| !l.trim().is_empty()) {
-            let v: Value = serde_json::from_str(line).expect("launch line");
-            let pid = v["pid"].as_u64().expect("pid") as u32;
-            match v["phase"].as_str() {
-                Some("start") => out.push(Launch {
-                    pid,
-                    ppid: v["ppid"].as_u64().unwrap_or(0) as u32,
-                    run_id: v["run_id"].as_str().unwrap_or_default().into(),
-                    task_id: v["task_id"].as_str().unwrap_or_default().into(),
-                    request_task_id: v["request_task_id"].as_str().unwrap_or_default().into(),
-                    title: v["title"].as_str().unwrap_or_default().into(),
-                    planner: v["planner"].as_bool().unwrap_or(false),
-                    outcome: None,
-                }),
-                Some("end") => {
-                    if let Some(l) = out.iter_mut().rev().find(|l| l.pid == pid) {
-                        l.outcome = v["outcome"].as_str().map(String::from);
+        read_launches(self.dir())
+    }
+
+    /// スタブの各起動を daemon の run id に対応付ける（daemon の記録だけから引く）。done の起動は、スタブが書いた
+    /// `result.md`（PID 入り）の sha256 と一致する `artifact_produced` event の run id。error の起動（result.md を
+    /// 書かない）は環境の `CELERIS_RUN_ID`。どちらも、その run の `worker_started` が起動の `RunRequest.task.id` の
+    /// task にあることを確かめる。対応しない起動があれば失敗。
+    pub fn launch_runs(&mut self) -> Vec<(Launch, String)> {
+        self.refresh_events();
+        let events = self.events.clone();
+        let produced = events_of(&events, "artifact_produced");
+        let started = events_of(&events, "worker_started");
+        self.launches()
+            .into_iter()
+            .map(|l| {
+                let run = match l.outcome.as_deref() {
+                    Some("done") => {
+                        let sha = sha256_hex(result_md_body(&l.run_id, l.pid).as_bytes());
+                        let hits: Vec<&str> = produced
+                            .iter()
+                            .filter(|e| {
+                                e["task_id"] == l.request_task_id.as_str()
+                                    && e["event"]["artifact"]["name"] == "result.md"
+                                    && e["event"]["artifact"]["sha256"] == sha.as_str()
+                            })
+                            .filter_map(|e| e["event"]["run_id"].as_str())
+                            .collect();
+                        assert_eq!(
+                            hits.len(),
+                            1,
+                            "launch pid {} has no unique result.md artifact event: {hits:?}",
+                            l.pid
+                        );
+                        hits[0].to_string()
                     }
+                    _ => l.run_id.clone(),
+                };
+                assert!(!run.is_empty(), "launch without a run id: {l:?}");
+                if !l.run_id.is_empty() {
+                    assert_eq!(l.run_id, run, "env run id differs from the daemon record");
                 }
-                other => panic!("unknown launch phase {other:?}"),
-            }
-        }
-        out
+                assert!(
+                    started
+                        .iter()
+                        .any(|e| e["task_id"] == l.request_task_id.as_str()
+                            && e["event"]["run_id"] == run.as_str()),
+                    "run {run} of launch pid {} has no worker_started on task {}",
+                    l.pid,
+                    l.request_task_id
+                );
+                (l, run)
+            })
+            .collect()
     }
 
     /// 罠の LLM CLI が 1 度も起動されていない・全 `worker_started` が `fake` adapter で、スタブの起動と 1 対 1。
     pub fn assert_only_stub_launches(&mut self) {
         let trap = fs::read_to_string(self.dir().join("unexpected.log")).unwrap_or_default();
         assert!(trap.is_empty(), "unexpected LLM CLI launches:\n{trap}");
-        self.refresh_events();
+        let runs = self.launch_runs();
         let started = events_of(&self.events, "worker_started");
         for e in &started {
             assert_eq!(
@@ -791,7 +833,6 @@ impl Fixture {
                 "worker started with a non-stub adapter: {e}"
             );
         }
-        let launches = self.launches();
         let mut ev_runs: Vec<String> = started
             .iter()
             .map(|e| {
@@ -801,7 +842,7 @@ impl Fixture {
                     .to_string()
             })
             .collect();
-        let mut stub_runs: Vec<String> = launches.iter().map(|l| l.run_id.clone()).collect();
+        let mut stub_runs: Vec<String> = runs.into_iter().map(|(_, r)| r).collect();
         ev_runs.sort();
         stub_runs.sort();
         assert_eq!(
@@ -918,4 +959,37 @@ pub fn event_rows(body: &Value) -> Vec<Value> {
 /// event の種類（`event.type`）で絞る。
 pub fn events_of<'a>(events: &'a [Value], ty: &str) -> Vec<&'a Value> {
     events.iter().filter(|e| e["event"]["type"] == ty).collect()
+}
+
+/// fixture dir の `stub/launches.jsonl` を読む（`start` と `end` を pid で合わせる。待ちの述語からも使う）。
+pub fn read_launches(dir: &Path) -> Vec<Launch> {
+    let text = fs::read_to_string(dir.join("stub/launches.jsonl")).unwrap_or_default();
+    let mut out: Vec<Launch> = Vec::new();
+    // 書きかけの最後の行（改行で終わっていない）は読まない。
+    let complete = text.rfind('\n').map_or("", |i| &text[..i]);
+    for line in complete.lines().filter(|l| !l.trim().is_empty()) {
+        let v: Value = serde_json::from_str(line).expect("launch line");
+        let pid = v["pid"].as_u64().expect("pid") as u32;
+        match v["phase"].as_str() {
+            Some("start") => out.push(Launch {
+                pid,
+                ppid: v["ppid"].as_u64().unwrap_or(0) as u32,
+                run_id: v["run_id"].as_str().unwrap_or_default().into(),
+                task_id: v["task_id"].as_str().unwrap_or_default().into(),
+                request_task_id: v["request_task_id"].as_str().unwrap_or_default().into(),
+                title: v["title"].as_str().unwrap_or_default().into(),
+                planner: v["planner"].as_bool().unwrap_or(false),
+                campaign: v["campaign"].clone(),
+                artifacts_dir: v["artifacts_dir"].as_str().unwrap_or_default().into(),
+                outcome: None,
+            }),
+            Some("end") => {
+                if let Some(l) = out.iter_mut().rev().find(|l| l.pid == pid) {
+                    l.outcome = v["outcome"].as_str().map(String::from);
+                }
+            }
+            other => panic!("unknown launch phase {other:?}"),
+        }
+    }
+    out
 }

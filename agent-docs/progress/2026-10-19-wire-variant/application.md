@@ -2,9 +2,10 @@
 task: 01M5B84ZY6H4001ZYPSGN9VR34
 tasks: [01M5B84ZY6H4001ZYPSGN9VR34]
 title: 実dispatcher・worker・processによる専門分担適用検証（application）
-work_unit: recheck
-status: running
-updated: 2026-10-19
+work_unit: record
+status: done
+completed: 2026-10-20
+updated: 2026-10-20
 ---
 # 実 dispatcher・worker・process による専門分担の適用検証（application）
 
@@ -85,3 +86,37 @@ wire-variant の前段で入った実装・試験（変更せず、重複もさ�
 
 ## 提案
 - `WorkerStarted` に任意欄 `pid` を足すと、process と run の対応を daemon 側の記録だけで示せる。ただし本 task の範囲（新しい仕組みは作らない）を超えるので、別 task とする。
+
+## 統合検証と確定（WU record、2026-10-20。実装変更なし）
+
+各葉の詳細は `infra.md`（fixture）、`scenario.md`（適用）、`negative.md`（負例・同一性・canary）。統合後 HEAD（`e040c2c7`）で次を実行した。
+
+### 受け入れ条件ごとの証拠
+- 条件 1「workspace 検査が通る」
+  - `bash scripts/dev/test-parallel.sh` → exit 0。`CELERIS_TEST_SUMMARY`: passed 5921 / failed 0 / ignored 15（nextest 258 binaries、doctest 含む）。`ablation_application` は 4 件（smoke 2・適用 1・負例 1）を含む。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。
+  - `cargo fmt --all -- --check` → exit 0。
+- 条件 0「application.md に証拠・未解決事項・提案」: 本節と上の各節。
+- 最終 review 条件（参考）の対応:
+  - 実 HTTP → 実 dispatcher/worker/process で子・孫・retry と off/on を検証: `spec_off_and_on_apply_through_real_dispatcher_and_worker`（通常 POST 1 件、計画の通常採用で 4 task、孫の retry は error→done、off は全て `coding`、on は `coding-spec` を含む 2 課）。スタブ PID・run id・events の対応を assert。
+  - hash 拒否と K2: `negative_paths_non_target_identity_and_canary_through_real_daemon`（改変・欠落・不一致は 409/4xx/Refused、K2 は `not_judged = [analysis, review]` のまま、review 検証済み主張は違反）。
+
+### 調査・配線・fixture・scenario・negative の証拠コマンド
+- recheck: 上の「調査」節（`git merge-tree`、`celerisctl show`、`cargo tree` ほか。読み取りのみ）。
+- daemon-obs: `cargo test -p celeris --test variant_propagation` → 6 passed。
+- infra: `cargo test -p celeris-campaign --test ablation_application` → smoke 2 passed。
+- scenario: 同 test → 3 passed（22.5s）。変異確認（on の期待値改変）で失敗を確認し戻した。
+- negative: 同 test → 4 passed（22.7s）。変異確認 2 件で失敗を確認し戻した。
+- `grep -nE 'thread::sleep|tokio::time::sleep\(' ` 対象 2 file → 該当なし（固定 sleep なし）。
+
+## 未解決事項（最終）
+- task branch が main（`cb0cd7b8`）に未追従。merge では 16 file が衝突する（§0）。final review の前に人または統合段で取り込む。
+- worker の PID は events/runs に無い。証拠はスタブ側ログと daemon の `Child::id()` の突き合わせ。
+- fake source は model discovery が無く `GET /llm/models` が空。実 catalog から env-lock を作る `fetch_catalog` は fixture で通していない。
+- root task の最終 review・統合までは待たない（子孫の割当・retry・pin が対象）。負例の run は worker のみ（planner run の封印照合は scenario の pin assert に依存）。
+- 試験 process が SIGKILL されると fixture dir が `$TMPDIR` に残る（process は残らない）。
+- K2 は not_judged のまま。内部 review は既定を維持し、品質向上は主張しない。
+
+## 提案
+- `WorkerStarted` に任意欄 `pid` を足す（別 task）。
+- 本番移行: 不要（コード・試験のみ。config 欄の削除なし）。main 取り込み後に本番へ出す場合は、人が `selfdeploy` の release/verify 手順で実施する（本 task は本番を操作しない）。

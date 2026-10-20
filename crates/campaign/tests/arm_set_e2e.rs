@@ -76,6 +76,7 @@ fn campaign(i: &Input, which: &str, n: usize, max_tokens: u64) -> CampaignManife
         })
         .collect();
     CampaignManifest {
+        variant: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: which.into(),
         version: "v1".into(),
@@ -311,6 +312,7 @@ fn post_body(arm: ConfigId, routing: Option<ArmRouting>) -> Value {
     );
     let c = cfg_of(arm, routing);
     let req = TrialRequest {
+        variant: None,
         campaign_id: "bc",
         manifest_sha256: "m",
         config: &c,
@@ -361,6 +363,7 @@ fn owned_stub_receives_b_and_c_payloads_and_never_an_a_post() {
     );
     let a = cfg_of(ConfigId::A, None);
     let req = TrialRequest {
+        variant: None,
         campaign_id: "ab",
         manifest_sha256: "m",
         config: &a,

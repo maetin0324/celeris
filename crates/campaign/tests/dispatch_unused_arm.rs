@@ -87,6 +87,7 @@ fn without_a_only_bc_is_called_and_a_tasks_are_refused() {
     let c = cfg(ConfigId::B);
     let p = Path::new("/nonexistent");
     let req = TrialRequest {
+        variant: None,
         campaign_id: "c",
         manifest_sha256: "s",
         config: &c,

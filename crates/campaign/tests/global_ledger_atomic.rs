@@ -473,6 +473,7 @@ fn campaign(i: &Input, mid: &str, c: &Cfg) -> CampaignManifest {
         routing: None,
     };
     CampaignManifest {
+        variant: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: mid.into(),
         version: "v1".into(),

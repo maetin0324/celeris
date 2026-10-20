@@ -578,6 +578,7 @@ fn manifest(
     };
     fs::write(d.join("input.json"), serde_json::to_vec(&i).expect("ser")).expect("input");
     let mut m = CampaignManifest {
+        variant: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: campaign_id_of(which, repeats),
         version: "v1".into(),

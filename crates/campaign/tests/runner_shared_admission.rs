@@ -41,6 +41,7 @@ fn campaign(i: &Input) -> CampaignManifest {
         routing: None,
     };
     CampaignManifest {
+        variant: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: MID.into(),
         version: "v1".into(),

@@ -47,6 +47,7 @@ fn cfg(id: ConfigId, policy: &str) -> Config {
 /// B1/C1 の別測定 manifest。`version` を変えると hash だけが変わる（同一系列 = 同じ campaign_id）。
 fn side(i: &Input, version: &str, max_tokens: u64) -> CampaignManifest {
     let mut m = CampaignManifest {
+        variant: None,
         schema: SIDE_CAMPAIGN_SCHEMA.into(),
         campaign_id: "jev-b1c1-series".into(),
         version: version.into(),

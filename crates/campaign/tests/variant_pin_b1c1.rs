@@ -59,6 +59,7 @@ fn cfg(id: ConfigId, policy: &str) -> Config {
 
 fn manifest() -> CampaignManifest {
     let mut m = CampaignManifest {
+        variant: None,
         schema: CAMPAIGN_SCHEMA.into(),
         campaign_id: "jev-sidecomp-b1c1".into(),
         version: "v1".into(),

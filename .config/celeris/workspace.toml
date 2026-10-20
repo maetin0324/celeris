@@ -13,7 +13,7 @@ mode = "host"
 # 実装者とレビュー担当が使う検査コマンド（CLAUDE.md の「各Phase完了時に必ず」と同じ 3 本）。
 # タスクに `acceptance` の検査コマンドが明示されていればそちらが勝つ。
 # 試験は変更 crate と逆依存 crate だけ（scripts/dev/test-affected.sh。web だけの変更は web の unit 試験）。
-# 全体の試験（test-parallel.sh・web e2e・本物の browser/userns）は release gate だけ
+# 全体の試験（workspace 全体の試験・web e2e・本物の browser/userns）は release gate だけ
 # （agent-docs/adr/2026-10-20-full-tests-at-release-only.md）。
 check = ["bash scripts/dev/test-affected.sh", "cargo clippy --workspace -- -D warnings", "cargo fmt --all -- --check"]
 

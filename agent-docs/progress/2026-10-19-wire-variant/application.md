@@ -75,6 +75,7 @@ wire-variant の前段で入った実装・試験（変更せず、重複もさ�
   - `normal_path`（spec-off/on）・org drift・foreign assignee の各試験は、手で与えていた `set_variant_observation("inst-1", …)` と素の `build_dispatcher` をやめ、`build_daemon_dispatcher` を使う。API の instance id も固定値ではなく、同じ `InstanceIdentity` の値にした。
   - `missing_daemon_observation_blocks_the_run`: sha256 の無い config で `build_daemon_dispatcher` を組み、`WorkerStarted` が無く「not available」の理由 event が出ることを確かめる（fail closed は残っている）。
 - 証拠: `cargo test -p celeris --test variant_propagation` → 6 passed / 0 failed。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`cargo test -p celeris --no-run` → exit 0。
+- retry（attempt 2）: 前回 run の check `cargo clippy -p celeris -p task-dispatch --all-targets -- -D warnings` が `crates/task-dispatch/src/dispatcher/tests/trial_context.rs` の `clippy::type_complexity`（既存試験の `runs_of`/`reviews_of` の戻り型、rust 1.98）で exit 101。型別名 `CapturedRun` を足して直した。再実行で同 check exit 0、`cargo test -p task-dispatch --lib trial_context` 2 passed、`variant_propagation` 6 passed、fmt check exit 0。
 - 実 `celeris` binary による確認は、葉 infra・scenario が `GET /health`・`/config` と run 証拠を突き合わせて行う。
 
 ## 未解決事項

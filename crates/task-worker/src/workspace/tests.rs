@@ -330,3 +330,46 @@ async fn exec_gives_the_command_a_private_tmpdir_removed_afterwards() {
         .unwrap();
     assert_eq!(r.exit, Some(0));
 }
+
+/// 2026-10-20 ADR: timeout で、止まった（SIGSTOP）孫を含む子孫が 1 つも残らず、log に打ち切りの記録が残る。
+#[tokio::test]
+async fn exec_timeout_kills_stopped_descendants_and_notes_the_log() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("check.log");
+    let pidfile = dir.path().join("child.pid");
+    let ws = LocalWorkspace::new(dir.path()).with_output_log(&log);
+    let cmd = format!(
+        "(sleep 300 & echo $! > {p}; kill -STOP $!; wait) | tail -5",
+        p = pidfile.display()
+    );
+    let result = ws
+        .exec(&cmd, Duration::from_millis(1500))
+        .await
+        .expect("exec");
+    assert!(result.timed_out);
+    let pid: i32 = std::fs::read_to_string(&pidfile)
+        .expect("pidfile")
+        .trim()
+        .parse()
+        .expect("pid");
+    // SIGKILL は届き次第（zombie になっても親が init へ移る）。/proc/<pid>/stat の state が Z か消えていれば良い。
+    let mut gone = false;
+    for _ in 0..50 {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Err(_) => gone = true,
+            Ok(s) => {
+                gone = s
+                    .rsplit(')')
+                    .next()
+                    .is_some_and(|r| r.trim_start().starts_with('Z'))
+            }
+        }
+        if gone {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(gone, "stopped descendant {pid} survived the timeout");
+    let text = std::fs::read_to_string(&log).expect("log");
+    assert!(text.contains("[celeris] timed out after"), "{text}");
+}

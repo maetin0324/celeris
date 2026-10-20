@@ -250,5 +250,59 @@ fn spawn_group_reaper(pgid: i32, grace: Duration, container: Option<Arc<dyn Cont
         .ok();
 }
 
+/// 2026-10-20 ADR（検査の孤児を残さない）: `root` の子孫（ppid を辿る）の pid と `/proc` 上の様子
+/// （`pid comm state wchan`）。`killpg` が届かない（別 group・別 session に移った）子孫も拾うため、
+/// root がまだ生きている間に取る。`/proc` が読めなければ空。
+pub fn descendants(root: i32) -> Vec<(i32, String)> {
+    let mut parent_of: Vec<(i32, i32, String)> = Vec::new();
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    for e in dir.flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else {
+            continue;
+        };
+        // `pid (comm) S ppid ...`。comm は括弧を含みうるので最後の ')' で切る。
+        let (Some(open), Some(close)) = (stat.find('('), stat.rfind(')')) else {
+            continue;
+        };
+        let comm = stat[open + 1..close].to_string();
+        let mut rest = stat[close + 1..].split_whitespace();
+        let state = rest.next().unwrap_or("?").to_string();
+        let Some(ppid) = rest.next().and_then(|v| v.parse::<i32>().ok()) else {
+            continue;
+        };
+        let wchan = std::fs::read_to_string(e.path().join("wchan")).unwrap_or_default();
+        parent_of.push((pid, ppid, format!("{pid} {comm} {state} {}", wchan.trim())));
+    }
+    let mut found: Vec<i32> = vec![root];
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < found.len() {
+        let cur = found[i];
+        i += 1;
+        for (pid, ppid, desc) in &parent_of {
+            if *ppid == cur && !found.contains(pid) {
+                found.push(*pid);
+                out.push((*pid, desc.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// `root` の group と子孫を SIGKILL する（先に子孫を数え、group → 子孫の順に撃つ）。止めた子孫の記述を返す。
+pub fn kill_group_and_descendants(root: i32) -> Vec<String> {
+    let tree = descendants(root);
+    signal_group(root, Signal::SIGKILL);
+    for (pid, _) in &tree {
+        let _ = signal::kill(Pid::from_raw(*pid), Signal::SIGKILL);
+    }
+    tree.into_iter().map(|(_, d)| d).collect()
+}
+
 #[cfg(test)]
 mod tests;

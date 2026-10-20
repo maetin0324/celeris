@@ -9,7 +9,7 @@ use std::{
 };
 
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use routing_eval::manifest::Manifest as InputManifest;
@@ -1031,14 +1031,10 @@ fn check_inputs(a: &mut Acc, m: &CampaignManifest, set: &CaseSet, inp: &Inputs) 
     }
 }
 
-/// `POST /tasks` が 422 になる組合せと、自動取り込みされる案件を、案件（`ProjectDetail`）・repo 一覧の JSON から判定する。
-/// executor は常に local の `workspace` を渡すので、選ばれる repo（template の `repos`、無ければ primary）に
-/// リモートが 1 つでもあれば task-ops `create` が拒否する。
-pub fn check_project_rules(
-    template: &Map<String, Value>,
-    detail: &Value,
-    repos: &Value,
-) -> Vec<String> {
+/// 自動取り込みされる案件を、案件（`ProjectDetail`）の JSON から判定する。executor は repos を選ばず
+/// trial workspace を cwd にする（`repos: []` + `workspace_mode: shared`。ADR 2026-10-20-mlsys-main2-fixes D2）ので、
+/// 案件の repo の場所（リモートなど）は投入の可否に関係しない。
+pub fn check_project_rules(detail: &Value) -> Vec<String> {
     let mut v = Vec::new();
     // 実 `GET /projects/{id}` は `ProjectDetail`（`{"project":{"auto_integrate":..},"repos":[..],..}`）。
     // 欠落・bool でない・project が無い場合も on 扱い（安全側）。
@@ -1050,41 +1046,6 @@ pub fn check_project_rules(
             "the project has auto_integrate on (or unknown); trial tasks could be merged into the repo's main. Use a dedicated campaign project with auto_integrate=false"
                 .into(),
         );
-    }
-    let items: Vec<&Value> = repos["items"]
-        .as_array()
-        .map(|a| a.iter().collect())
-        .unwrap_or_default();
-    let names: Vec<&str> = template
-        .get("repos")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
-    let selected: Vec<&Value> = if names.is_empty() {
-        items
-            .iter()
-            .copied()
-            .filter(|r| r["is_primary"].as_bool().unwrap_or(false))
-            .collect()
-    } else {
-        let mut sel = Vec::new();
-        for n in &names {
-            match items.iter().find(|r| r["name"] == *n) {
-                Some(r) => sel.push(*r),
-                None => v.push(format!(
-                    "template repos: {n:?} is not a repo of the project"
-                )),
-            }
-        }
-        sel
-    };
-    for r in selected {
-        if r["location"]["kind"] == "remote" {
-            v.push(format!(
-                "a local workspace cannot be combined with the remote repo {} (POST /tasks would answer 422); use a project whose selected repo is local, or no repo",
-                r["name"]
-            ));
-        }
     }
     v
 }
@@ -1316,18 +1277,13 @@ fn check_api_dependent(
         && let Some(pid) = t.get("project_id").and_then(Value::as_str)
     {
         let project = host.api_get(url, tok, &format!("/api/v1/projects/{pid}"));
-        let repos = host.api_get(url, tok, &format!("/api/v1/projects/{pid}/repos"));
-        match (project, repos) {
-            (Ok(p), Ok(r)) => {
-                for e in check_project_rules(t, &p, &r) {
+        match project {
+            Ok(p) => {
+                for e in check_project_rules(&p) {
                     a.miss("task-template", e);
                 }
             }
-            (p, r) => {
-                for e in [p.err(), r.err()].into_iter().flatten() {
-                    a.miss("task-template", format!("project {pid}: {e}"));
-                }
-            }
+            Err(e) => a.miss("task-template", format!("project {pid}: {e}")),
         }
     }
     // A: Celeris 管理アカウント（A が有効なときだけ。B/C のみの比較は A の account を要求しない）。

@@ -715,18 +715,17 @@ pub fn check_expected(
                         == Some(&r.workspace_sha256_initial)
             };
             if r.reason.as_deref() == Some(REASON_NO_ARTIFACT)
-                && (r.config != ConfigId::A || r.outcome != Outcome::Failed || !unchanged())
+                && (r.outcome != Outcome::Failed || !unchanged())
             {
                 v.push(format!(
-                    "{tag}: no_artifact must be an A trial, outcome failed, with an unchanged workspace"
+                    "{tag}: no_artifact must have outcome failed with an unchanged workspace"
                 ));
             }
-            if r.config == ConfigId::A
-                && r.outcome == Outcome::Passed
+            if r.outcome == Outcome::Passed
                 && r.workspace_sha256_final == r.workspace_sha256_initial
             {
                 v.push(format!(
-                    "{tag}: A passed without any artifact (workspace unchanged)"
+                    "{tag}: passed without any artifact (workspace unchanged)"
                 ));
             }
             let timeout = m.termination.trial_timeout_secs;

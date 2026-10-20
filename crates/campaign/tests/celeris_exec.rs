@@ -183,7 +183,8 @@ impl Transport for Fake {
                 resp(
                     200,
                     json!({"task": {"id": id, "status": t.status, "created_at": t.created_at,
-                        "labels": t.labels},
+                        "labels": t.labels, "workspace": {"kind": "local", "path": t.body["workspace"]},
+                        "repos": t.body["repos"]},
                         "children": children, "runs": t.runs, "timers": {"now": s.now},
                         "cluster_job_wait": t.cluster_job_wait}),
                 )
@@ -832,4 +833,134 @@ fn no_evidence_table_posts_evidence_mode_none_and_implicit_latest_is_rejected() 
     r.no_evidence_table = None;
     let err = routing_override(&cfg(ConfigId::C, Some(r))).unwrap_err();
     assert!(err.contains("implicit latest"), "{err}");
+}
+
+// ---- B の成果物は trial workspace に出る（ADR 2026-10-20-mlsys-main2-fixes D2） ----
+
+#[test]
+fn celeris_body_pins_trial_workspace_and_empty_repos() {
+    let dir = tempfile::tempdir().expect("dir");
+    let f = Fake::new();
+    let e = exec(&f, dir.path(), 1800);
+    let c = cfg(ConfigId::B, None);
+    let b = e.body(&req(&c, dir.path()), KEY).expect("body");
+    assert_eq!(b["workspace"], json!(dir.path().to_string_lossy()));
+    assert_eq!(b["repos"], json!([]));
+    // 空配列だけでは案件の primary repo が補われる（task-ops resolve_repos）。shared で補完を止める。
+    assert_eq!(b["workspace_mode"], json!("shared"));
+}
+
+#[test]
+fn check_template_rejects_repos() {
+    for k in ["repos", "workspace_mode"] {
+        let mut t = template();
+        t.insert(k.into(), json!(["scratch"]));
+        let e = celeris_campaign::celeris_exec::check_template(&t).expect_err(k);
+        assert!(e.contains(k), "{e}");
+    }
+}
+
+#[test]
+fn lookup_rejects_task_with_foreign_workspace() {
+    let dir = tempfile::tempdir().expect("dir");
+    let other = tempfile::tempdir().expect("other");
+    let f = Fake::new();
+    let e = exec(&f, dir.path(), 1800);
+    let c = cfg(ConfigId::B, None);
+    // 別の場所を作業場所にした既存 task は submit が採用しない。
+    let mut body = e.body(&req(&c, dir.path()), KEY).expect("body");
+    body["workspace"] = json!(other.path().to_string_lossy());
+    f.create(body.clone(), None);
+    let err = e
+        .submit(&req(&c, dir.path()), KEY)
+        .expect_err("foreign workspace");
+    assert!(err.to_string().contains("not the trial workspace"), "{err}");
+    // repos を持つ task は照会（lookup）も採用しない。
+    let g = Fake::new();
+    let e2 = exec(&g, dir.path(), 1800);
+    let mut body = e2.body(&req(&c, dir.path()), KEY).expect("body");
+    body["repos"] = json!([{"name": "scratch"}]);
+    g.create(body, None);
+    let err = e2.lookup(KEY).expect_err("repos");
+    assert!(err.to_string().contains("repos"), "{err}");
+}
+
+/// 試行 workspace に worker の代わりに成果物を書き（試験が cwd = task の workspace を再現する）、B の task を done にする。
+fn run_b_and_finish(write_artifact: bool) -> (celeris_campaign::record::TrialRecord, Vec<String>) {
+    let d = tempfile::tempdir().expect("dir");
+    let i = input();
+    let m = campaign(&i);
+    let opts = RunOptions {
+        global_ledger: None,
+        out: d.path().join("out"),
+        ..RunOptions::default()
+    };
+    let f = Fake::new();
+    let a = MockAsyncExecutor::new(0);
+    let bc = exec(&f, d.path(), 1800);
+    let by = ByArm { a: &a, bc: &bc };
+    let rep = run(&m, &i, &by, &opts).expect("submit");
+    assert_eq!(rep.waiting, 2, "B and C wait");
+    let hash = m.compute_sha256().expect("hash");
+    let key = TrialKey {
+        manifest_sha256: hash,
+        problem_id: "p0".into(),
+        arm: ConfigId::B,
+        trial_no: 1,
+        rep: 1,
+    };
+    let lg = Ledger::open(&opts.out).expect("ledger");
+    let tid = lg.get(&key).expect("b").task_id.clone().expect("task id");
+    if write_artifact {
+        // task の workspace.path（= trial workspace）に出力する。scratch repo など別の場所には出ない。
+        let ws = f.body(&tid)["workspace"]
+            .as_str()
+            .expect("path")
+            .to_string();
+        fs::create_dir_all(Path::new(&ws).join("docs")).expect("docs");
+        fs::write(Path::new(&ws).join("docs/analysis.md"), "# analysis\n").expect("artifact");
+    }
+    f.finish(&tid, "done", 100);
+    // C は何も書かずに done（B とは独立）。
+    let ctid = lg
+        .get(&TrialKey {
+            arm: ConfigId::C,
+            ..key.clone()
+        })
+        .and_then(|r| r.task_id.clone())
+        .expect("c task id");
+    f.finish(&ctid, "done", 100);
+    let rep = run(&m, &i, &by, &opts).expect("finish");
+    assert_eq!(rep.executed, 2);
+    let r = fs::read_to_string(opts.out.join("trials.jsonl"))
+        .expect("trials.jsonl")
+        .lines()
+        .filter_map(|l| serde_json::from_str::<celeris_campaign::record::TrialRecord>(l).ok())
+        .find(|r| r.config == ConfigId::B)
+        .expect("B record");
+    let v = celeris_campaign::checker::check(&m, &opts.out).violations;
+    (r, v)
+}
+
+#[test]
+fn b_done_artifact_lands_in_trial_workspace_and_is_graded() {
+    let (r, v) = run_b_and_finish(true);
+    assert_eq!(r.outcome, Outcome::Passed);
+    assert_eq!(
+        r.reason, None,
+        "an artifact in the trial workspace is not no_artifact"
+    );
+    assert_ne!(r.workspace_sha256_final, r.workspace_sha256_initial);
+    assert!(
+        v.iter().all(|x| !x.contains("without any artifact")),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn b_passed_without_workspace_change_is_no_artifact() {
+    let (r, v) = run_b_and_finish(false);
+    assert_eq!(r.outcome, Outcome::Failed);
+    assert_eq!(r.reason.as_deref(), Some("no_artifact"));
+    assert!(v.iter().all(|x| !x.contains("no_artifact must")), "{v:?}");
 }

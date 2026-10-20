@@ -242,7 +242,13 @@ fn a_exit_zero_without_any_artifact_is_failed_not_passed() {
     assert_eq!(a["workspace_sha256_final"], a["workspace_sha256_initial"]);
     assert_eq!(non_routing_violations(&m, &out), Vec::<String>::new());
     let s = json_file(&out.join("summary.json"));
-    assert_eq!(s["budget"]["no_artifact"], 1);
+    // B/C（mock は成果物を書かない）も同じ規則で数える。summary は記録の件数と一致する。
+    let n = records(&out)
+        .iter()
+        .filter(|r| r["reason"] == REASON_NO_ARTIFACT)
+        .count();
+    assert_eq!(s["budget"]["no_artifact"], n);
+    assert!(n >= 1);
 }
 
 #[test]
@@ -461,9 +467,10 @@ fn task_template_accepts_only_the_api_acceptance_shape() {
     assert!(check_template(&t(json!({"acceptance":[{"text":"x"}]}))).is_err());
     assert!(check_template(&t(json!({"tier":"standard"}))).is_err());
     assert!(check_template(&t(json!({"objective":"x"}))).is_err());
-    let ok =
-        t(json!({"project_id":"p","repos":["r"],"acceptance":[{"type":"reviewer","text":"x"}]}));
+    let ok = t(json!({"project_id":"p","acceptance":[{"type":"reviewer","text":"x"}]}));
     assert!(check_template(&ok).is_ok());
+    // repos は実行器が空配列で埋める（ADR 2026-10-20-mlsys-main2-fixes D2）。
+    assert!(check_template(&t(json!({"repos":["r"]}))).is_err());
 }
 
 fn bin() -> Command {

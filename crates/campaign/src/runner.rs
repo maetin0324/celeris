@@ -1126,10 +1126,10 @@ fn run_inner(
             }
             res.wall_secs = res.wall_secs.min(timeout);
             let ws_final = hash_tree(&ws)?;
-            // A の成果物は試行の workspace にしか出ない。exit 0 でも何も変わっていなければ合格にしない（fail-closed）。
+            // 成果物は A・B・C とも試行の workspace にしか出ない（B/C の task も workspace を cwd にする。ADR
+            // 2026-10-20-mlsys-main2-fixes D2）。終端が passed でも何も変わっていなければ合格にしない（fail-closed）。
             // 配った入力（と、その展開）は成果物に数えない。
-            if cid == ConfigId::A
-                && res.outcome == Outcome::Passed
+            if res.outcome == Outcome::Passed
                 && hash_tree_excluding(&ws, &[INPUTS_DIR])? == seed_sha
             {
                 res.outcome = Outcome::Failed;

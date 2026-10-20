@@ -355,6 +355,25 @@ fn out_has_data(out: &Path) -> Result<bool, String> {
     }
 }
 
+/// 拒否メッセージ用に、out にある entry 名を先頭 5 件まで挙げる。
+fn out_entry_names(out: &Path) -> String {
+    let mut names: Vec<String> = fs::read_dir(out)
+        .map(|d| {
+            d.filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    let more = names.len().saturating_sub(5);
+    names.truncate(5);
+    let mut s = names.join(", ");
+    if more > 0 {
+        s.push_str(&format!(" (+{more} more)"));
+    }
+    s
+}
+
 /// 配る入力（`RunOptions.case_inputs`）が lock の固定と同じか。足りない入力のまま始めない。
 pub fn check_delivery(
     l: &CampaignLock,
@@ -400,8 +419,9 @@ pub fn begin(
     }
     if out_has_data(out)? {
         return Err(format!(
-            "{} has data but no {LOCK_FILE}; existing data is not adopted into a new lock (use an empty dir for a new measurement)",
-            out.display()
+            "{} has data but no {LOCK_FILE} (existing entries: {}); existing data is not adopted into a new lock (use an empty dir for a new measurement; keep watch/usage stdout outside the out dir)",
+            out.display(),
+            out_entry_names(out)
         ));
     }
     verify_sources(expected, s, true)?;

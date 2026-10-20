@@ -147,12 +147,12 @@ sh $L watch     --env $ENVF   # daemon 実体照合 → preflight → env-lock�
 - env-lock（`$OUT/env-lock.json`）: A の絶対 path・sha256・`--version`、B/C の release sha12、arm ごとの lower_policy・evidence_mode（none）・models・run_harnesses と**接続先 daemon の `GET /api/v1/llm/models` から取った候補集合と階層（catalog）**、worker 実行ファイル（`WORKER_PROGRAMS`）、`campaign_sha256` の固定記録。再開時は現物から作り直して突き合わせ、追加・削除・階層移動を key 名で挙げて拒否する。秘密値は持たない。
 - account 状態（試行 identity 別）: A は `A_ACCOUNT` の認証材料 1 件（`.credentials.json`）だけを read-only で試行に重ね、`CLAUDE_CONFIG_DIR` は試行ごとに `$OUT/trial-state/<campaign_id>/A/<case>/rep<N>/` へ分ける。各 dir の `trial-identity.json`（campaign_id・manifest sha256・arm・case・rep・account_id）が identity marker で、別 identity の試行・別 lock・別 account は同じ dir を使えない。preflight（`trial-state` 検査）は、台帳に行がある試行は marker 一致、未開始の試行は dir が空（認証 mount 先の空 file と自分の marker だけ可）であることを要求し、CLAUDE.md・projects・transcripts・他試行の marker があれば拒否する。保存 lock が別 campaign のものでも拒否する。何も消さず、書き換えず、記憶も無効にしない。launcher は account を作らない・消さない・書き換えない。preflight は `GET /llm/accounts` でログイン済みと `account_dir_residue`（残留）も検査する。
 - 標準起動は `watch`（`run` の 1 回走査を台帳が閉じるまで繰り返す。出力 JSON の `watch.end` が `settled` なら終端、`max_iterations` なら未完了が残る）。`budget.max_parallel`（1）により 1 回の走査で投入する試行は 1 つ。`executor_errors>0` なら `$OUT` の `trials.jsonl` の `error` 欄を見る。
-- 出力 JSON（`executed / waiting / parallel_deferred / no_artifact / executor_errors / blocked / budget_cancelled / tokens_total / tokens_missing / max_overshoot_*`）は `sh $L watch … > $OUT/final-run-N.json`（N は実行回数）に保存する。
+- 出力 JSON（`executed / waiting / parallel_deferred / no_artifact / executor_errors / blocked / budget_cancelled / tokens_total / tokens_missing / max_overshoot_*`）は `RUNS=$(dirname "$OUT")/runs; mkdir -p "$RUNS"` で作る `$OUT` の外の dir に、`sh $L watch … > $RUNS/watch-N.json`（N は実行回数）として保存する。`$OUT` に空 file でも置くと「out has data but no lock.json」で拒否される（lock 判定は変えない。ADR 2026-10-20-mlsys-main2-fixes D4）。
 
 ## 6. 7 日使用率（run のたびに。launcher の subcommand に無いので CLI を直接。引数は launcher と同じ接続先）
 ```sh
 export CELERIS_MEASURE_TOKEN="$(cat <DAEMON_CONFIG の [api] token_file>)"   # 値は表示・記録しない
-$B usage --manifest $MANIFEST --out $OUT --api-url http://<DAEMON_CONFIG の [api] listen> --token-env CELERIS_MEASURE_TOKEN --a-account $A_ACCOUNT > $OUT/usage-N.json
+$B usage --manifest $MANIFEST --out $OUT --api-url http://<DAEMON_CONFIG の [api] listen> --token-env CELERIS_MEASURE_TOKEN --a-account $A_ACCOUNT > $RUNS/usage-N.json
 ```
 exit 0 = A のアカウントを含む claude が 45%・codex が 21% 以内（`--max-7d` / `--max-7d-codex`。承認枠を超える変更は新しい決定）。使用率が観測できない（null）ときは非 0。腕ごとの tokens は `campaign_tokens_by_arm`。
 
@@ -176,7 +176,7 @@ sh $L export --env $ENVF   # export を $OUT/export へ。RECORDS があれば f
 - Celeris 側の消費・判断ログ（人。本番 DB は読むだけ、写しに対して）:
 ```sh
 celerisctl db backup $TMPDIR/final-db.sqlite3 --src <本番 DB path>
-celerisctl --db $TMPDIR/final-db.sqlite3 campaign export mlsys-main-1 --out $OUT/exp-db --verify-connected --manifest-hash <§3 の campaign sha256>
+celerisctl --db $TMPDIR/final-db.sqlite3 campaign export mlsys-main-1 --out $RUNS/exp-db --verify-connected --manifest-hash <§3 の campaign sha256>
 ```
 `summary.json` の `shared_overhead`・`elapsed_ms` と `run_wall_sum_ms`・`total.cash_cost_usd`（取れなければ null）・終了時の 7 日使用率を進捗に転記する。
 

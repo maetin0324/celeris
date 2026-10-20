@@ -34,7 +34,7 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
             json!(s.iter().cloned().collect::<Vec<_>>().join("|"))
         }
     };
-    json!({
+    let mut row = json!({
         "config": format!("{c:?}"),
         "harness": seen(&t.observed_harnesses),
         "model": seen(&t.observed_models),
@@ -47,7 +47,9 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
         "model_version": cfg.map(|x| x.model_version.as_str()),
         "policy_version": cfg.map(|x| x.policy_version.as_str()),
         "n": t.n, "passed": t.passed, "final_passed": t.final_passed,
-        "ungraded": t.ungraded, "grader_failed": t.grader_failed, "failed": t.failed, "error": t.error,
+        "ungraded": t.ungraded, "grader_failed": t.grader_failed,
+        "grader_env_failure": t.grader_env_failure, "grader_undetermined": t.grader_undetermined,
+        "grader_control_only": t.grader_control_only, "failed": t.failed, "error": t.error,
         "timeout": t.timeout, "cancelled": t.cancelled, "blocked": t.blocked, "missing": t.missing,
         "failures": t.n - t.final_passed,
         "pass_rate": if t.n == 0 { Value::Null } else { json!(t.final_passed as f64 / t.n as f64) },
@@ -65,10 +67,27 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
         "cost_status": cs,
         "cost_micro_usd_sum": if cs == "missing" { Value::Null } else { json!(t.cost_micro_usd_sum) },
         "cost_missing_trials": t.cost_missing_trials,
-    })
+    });
+    // 固定分母 n の総合値（pass_rate = final_passed / n）と、不成功の原因別内訳は別に持つ。
+    // grader_env_failure / grader_undetermined は再採点前の未確定で、モデルの失敗に混ぜない
+    // （complete=false で最終表を止める）。
+    row["failure_breakdown"] = json!({
+        "model_failure": t.grader_failed,
+        "grader_env_failure": t.grader_env_failure,
+        "grader_undetermined": t.grader_undetermined,
+        "grader_control_only": t.grader_control_only,
+        "ungraded": t.ungraded,
+        "executor_failed": t.failed,
+        "executor_error": t.error,
+        "executor_timeout": t.timeout,
+        "executor_cancelled": t.cancelled,
+        "executor_blocked": t.blocked,
+        "missing": t.missing,
+    });
+    row
 }
 
-const COLUMNS: [&str; 37] = [
+const COLUMNS: [&str; 40] = [
     "config",
     "harness",
     "model",
@@ -85,6 +104,9 @@ const COLUMNS: [&str; 37] = [
     "final_passed",
     "ungraded",
     "grader_failed",
+    "grader_env_failure",
+    "grader_undetermined",
+    "grader_control_only",
     "failed",
     "error",
     "timeout",
@@ -191,7 +213,7 @@ pub fn export_full(
         "lock_verified": locked,
         "complete": complete,
         "incomplete_reasons": reasons,
-        "success_definition": "executor outcome passed AND independent grade final_pass (bound by campaign hash, case id, split, grader hash, artifact hash)",
+        "success_definition": "executor outcome passed AND independent grade final_pass (a failed grade keeps its failure_class: model_failure | env_failure | undetermined; the last two are unresolved until re-graded) (bound by campaign hash, case id, split, grader hash, artifact hash)",
         "real_performance": real && complete,
         "notice": if real { Value::Null } else {
             json!("mock/unknown/lock-less evidence: these numbers are not real performance and must not be reported as measurements") },

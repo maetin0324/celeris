@@ -252,7 +252,13 @@ fn initial_tree_compile_error_is_env_failure_not_model_failure() {
         ),
         None,
     );
-    assert_eq!(class(&rep), Some(FailureClass::EnvFailure));
+    assert_eq!(
+        class(&rep),
+        Some(FailureClass::Undetermined),
+        "初期 tree 未指定は環境不良とも成果物の失敗とも決めない"
+    );
+    assert!(!rep.checks.implementation.env_failure);
+    assert!(rep.checks.implementation.undetermined);
     assert!(
         rep.checks
             .implementation

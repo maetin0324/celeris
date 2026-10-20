@@ -35,6 +35,16 @@ pub struct Totals {
     pub ungraded: u64,
     /// 実行器は passed だが独立採点が不合格の cell（成果物が誤り）。
     pub grader_failed: u64,
+    /// 実行器は passed だが独立採点が採点基盤・初期資産の不良（env_failure）で不合格。成果物の失敗ではない。
+    /// 分母に残り、成功にも `grader_failed` にも数えない。再採点まで未確定で、`complete=false` にする。
+    #[serde(default)]
+    pub grader_env_failure: u64,
+    /// 実行器は passed だが独立採点の不合格の原因が決められない（初期 tree 未指定）。再採点まで未確定で `complete=false`。
+    #[serde(default)]
+    pub grader_undetermined: u64,
+    /// 実行器は passed だが採点した case が control（最終合格にならない）。
+    #[serde(default)]
+    pub grader_control_only: u64,
     /// 実行した全試行（再試行を含む）の token。欠測の試行は sum に入れず `*_missing_trials` に数える。
     pub tokens_sum: u64,
     pub tokens_missing_trials: u64,
@@ -937,6 +947,18 @@ pub fn check_expected(
                 t.ungraded
             ));
         }
+        if t.grader_env_failure > 0 {
+            reasons.push(format!(
+                "{c:?}: {} executor-passed trials failed grading for a grader/initial-asset defect (env_failure, not a model failure); fix the environment and re-grade",
+                t.grader_env_failure
+            ));
+        }
+        if t.grader_undetermined > 0 {
+            reasons.push(format!(
+                "{c:?}: {} executor-passed trials have an undetermined grade failure (no initial tree to attribute the compile error); re-grade with the initial tree",
+                t.grader_undetermined
+            ));
+        }
     }
     CheckReport {
         ok: v.is_empty(),
@@ -958,7 +980,7 @@ pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
 pub fn recompute_graded(
     m: &CampaignManifest,
     recs: &[TrialRecord],
-    grades: &BTreeMap<crate::grades::TrialKey, bool>,
+    grades: &BTreeMap<crate::grades::TrialKey, crate::grades::GradeOutcome>,
 ) -> Recomputed {
     let exp = expected(m);
     let mut totals: BTreeMap<ConfigId, Totals> = BTreeMap::new();
@@ -991,9 +1013,13 @@ pub fn recompute_graded(
                 Some(o) => match o {
                     crate::aggregate::Outcome::Passed => {
                         t.passed += 1;
+                        use crate::grades::GradeOutcome as G;
                         match cell.and_then(|r| grades.get(&crate::grades::key_of(r))) {
-                            Some(true) => t.final_passed += 1,
-                            Some(false) => t.grader_failed += 1,
+                            Some(G::Passed) => t.final_passed += 1,
+                            Some(G::ModelFailure) => t.grader_failed += 1,
+                            Some(G::EnvFailure) => t.grader_env_failure += 1,
+                            Some(G::Undetermined) => t.grader_undetermined += 1,
+                            Some(G::ControlOnly) => t.grader_control_only += 1,
                             None => t.ungraded += 1,
                         }
                     }
@@ -1049,7 +1075,8 @@ pub fn recompute_graded(
     let pass = |c: ConfigId, p: &str, rep: u32| {
         first.get(&(c, p, rep)).is_some_and(|r| {
             r.outcome == crate::aggregate::Outcome::Passed
-                && grades.get(&crate::grades::key_of(r)) == Some(&true)
+                && grades.get(&crate::grades::key_of(r))
+                    == Some(&crate::grades::GradeOutcome::Passed)
         })
     };
     let mut pairs = Vec::new();

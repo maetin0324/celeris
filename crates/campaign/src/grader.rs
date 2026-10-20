@@ -629,13 +629,17 @@ pub mod implementation {
     /// 初期 tree が `baseline` で build できないなら、その理由（env_failure）を返す。初期 tree が渡されて
     /// いなければ compile error の出どころを決められないので、モデルの失敗に数えず env_failure にする
     /// （初期 tree を渡して採点し直す）。
-    fn initial_tree_defect(baseline: &[String], opts: &GradeOptions) -> (Option<String>, Value) {
+    fn initial_tree_defect(
+        baseline: &[String],
+        opts: &GradeOptions,
+    ) -> (Option<(String, bool)>, Value) {
         let Some(init) = opts.initial_tree.as_deref().filter(|p| p.is_dir()) else {
             return (
-                Some(
+                Some((
                     "compile error cannot be attributed: the grader has no initial tree to run the baseline build on (re-grade with the initial tree; not counted as a model failure)"
                         .into(),
-                ),
+                    true,
+                )),
                 json!({"ran": false}),
             );
         };
@@ -648,9 +652,12 @@ pub mod implementation {
                 json!({"ran": true, "exit": o.exit, "initial_tree_builds": true}),
             ),
             Ok(o) => (
-                Some(format!(
-                    "initial tree does not build with the case's build settings (baseline exited with {:?}): case/asset defect, not a model failure",
-                    o.exit
+                Some((
+                    format!(
+                        "initial tree does not build with the case's build settings (baseline exited with {:?}): case/asset defect, not a model failure",
+                        o.exit
+                    ),
+                    false,
                 )),
                 json!({
                     "ran": true,
@@ -660,7 +667,7 @@ pub mod implementation {
                 }),
             ),
             Err(e) => (
-                Some(format!("baseline build could not run: {e}")),
+                Some((format!("baseline build could not run: {e}"), false)),
                 json!({"ran": false, "error": e}),
             ),
         }
@@ -838,6 +845,7 @@ pub mod implementation {
         // compile error は初期 tree 自体が build できない（case の build 設定・asset の不整合）こともある。
         // baseline を持つ case は、初期 tree で同じ build が通ることを確かめてからモデルの失敗に数える。
         let mut baseline = Value::Null;
+        let mut undetermined = false;
         if out.exit != Some(0)
             && !env_failed
             && output_is_compile_error(&out)
@@ -845,14 +853,20 @@ pub mod implementation {
         {
             let (defect, detail) = initial_tree_defect(cmd, opts);
             baseline = detail;
-            if let Some(why) = defect {
+            if let Some((why, unattributed)) = defect {
                 reasons.push(why);
-                env_failed = true;
+                if unattributed {
+                    undetermined = true;
+                } else {
+                    env_failed = true;
+                }
             }
         }
         let build = |reasons, details| {
             if env_failed {
                 CheckResult::env_failure(reasons, details)
+            } else if undetermined {
+                CheckResult::undetermined(reasons, details)
             } else {
                 CheckResult::from_reasons(reasons, details)
             }
@@ -1223,6 +1237,9 @@ pub struct CheckResult {
     pub details: Value,
     /// 不合格の原因が評価環境（ビルド/テスト環境の不良・grader 側 asset 欠落）で、成果物の出来ではない。
     pub env_failure: bool,
+    /// 不合格の原因が決められない（初期 tree が渡されず、compile error の出どころが不明）。成果物の失敗にも
+    /// 環境不良にも数えず、初期 tree を渡して採点し直すまで未確定にする。`env_failure` と同時には立たない。
+    pub undetermined: bool,
 }
 
 impl CheckResult {
@@ -1232,6 +1249,7 @@ impl CheckResult {
             reasons: vec!["case does not define this check".into()],
             details: Value::Null,
             env_failure: false,
+            undetermined: false,
         }
     }
 
@@ -1246,6 +1264,15 @@ impl CheckResult {
             reasons,
             details,
             env_failure: false,
+            undetermined: false,
+        }
+    }
+
+    /// 原因を決められない不合格（`reasons` は空でないこと）。
+    pub fn undetermined(reasons: Vec<String>, details: Value) -> Self {
+        CheckResult {
+            undetermined: !reasons.is_empty(),
+            ..Self::from_reasons(reasons, details)
         }
     }
 
@@ -1264,6 +1291,8 @@ impl CheckResult {
 pub enum FailureClass {
     ModelFailure,
     EnvFailure,
+    /// 原因未確定（初期 tree 未指定など）。再採点まで成果物の失敗にも環境不良にも数えない。
+    Undetermined,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -1365,6 +1394,8 @@ pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeRep
     let failure_class = (verdict == Verdict::Fail).then(|| {
         if all.iter().any(|c| c.env_failure) {
             FailureClass::EnvFailure
+        } else if all.iter().any(|c| c.undetermined) {
+            FailureClass::Undetermined
         } else {
             FailureClass::ModelFailure
         }

@@ -21,11 +21,33 @@ pub fn key_of(r: &TrialRecord) -> TrialKey {
     (r.config, r.problem_id.clone(), r.rep, r.trial_no)
 }
 
+/// 結合検査を通った独立採点の結果。`final_pass` の bool に潰さず、不合格の原因を保つ（checker・export まで届く）。
+/// 成功に数えるのは `Passed` だけ。残りは分母に残り、原因別に数える。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GradeOutcome {
+    Passed,
+    /// 成果物の不合格（初期 tree が健全で、モデルの変更が壊した）。
+    ModelFailure,
+    /// 採点基盤・初期資産の不良（成果物の出来ではない）。環境を直して再採点するまで未確定。
+    EnvFailure,
+    /// 原因未確定（初期 tree 未指定で compile error の出どころが決められない）。再採点するまで未確定。
+    Undetermined,
+    /// control（fixture/mock）case。検査が通っても最終合格ではない。
+    ControlOnly,
+}
+
+impl GradeOutcome {
+    /// 再採点（環境修復・初期 tree の指定）まで結論を出せない結果か。
+    pub fn needs_regrade(self) -> bool {
+        matches!(self, Self::EnvFailure | Self::Undetermined)
+    }
+}
+
 /// 取り込めた grade（結合検査を通ったもの）と、拒否した理由。
 #[derive(Debug, Default)]
 pub struct GradeBinding {
-    /// 試行 → 成果物の独立採点が final_pass か。
-    pub valid: BTreeMap<TrialKey, bool>,
+    /// 試行 → 成果物の独立採点の結果（合格と不合格の原因）。
+    pub valid: BTreeMap<TrialKey, GradeOutcome>,
     pub violations: Vec<String>,
 }
 
@@ -169,7 +191,26 @@ pub fn bind(
             rejected.push(key);
             continue;
         };
-        b.valid.insert(key, fp);
+        // 不合格は原因（failure_class）を必ず持つ。持たない行は原因を決められないので取り込まない。
+        let outcome = if fp {
+            GradeOutcome::Passed
+        } else if v["grade"]["verdict"] == "control_only" {
+            GradeOutcome::ControlOnly
+        } else {
+            match v["grade"]["failure_class"].as_str() {
+                Some("model_failure") => GradeOutcome::ModelFailure,
+                Some("env_failure") => GradeOutcome::EnvFailure,
+                Some("undetermined") => GradeOutcome::Undetermined,
+                other => {
+                    b.violations.push(format!(
+                        "{tag}: failed grade needs failure_class model_failure|env_failure|undetermined, got {other:?}"
+                    ));
+                    rejected.push(key);
+                    continue;
+                }
+            }
+        };
+        b.valid.insert(key, outcome);
     }
     b
 }

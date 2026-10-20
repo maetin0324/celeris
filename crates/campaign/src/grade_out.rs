@@ -39,6 +39,9 @@ pub(crate) fn resolve_case_path(
     flat
 }
 
+/// 再採点で置き換えられた過去の grade 行（追記専用）。
+pub const GRADES_HISTORY_FILE: &str = "grades.history.jsonl";
+
 pub fn grade_out(
     m: &CampaignManifest,
     out: &Path,
@@ -77,6 +80,7 @@ pub fn grade_out_with(
         .map_err(|e| format!("{}: {e}", out.join(TRIALS_FILE).display()))?;
     let mut lines = Vec::new();
     let (mut graded, mut final_pass) = (0u64, 0u64);
+    let mut by_class: std::collections::BTreeMap<String, u64> = Default::default();
     let mut missing_cases = Vec::new();
     let mut rejected: Vec<String> = Vec::new();
     for (i, l) in text.lines().enumerate() {
@@ -169,6 +173,16 @@ pub fn grade_out_with(
         let rep = grade(&case, &artifact, &opts);
         graded += 1;
         final_pass += u64::from(rep.final_pass);
+        if let Some(fc) = rep.failure_class {
+            *by_class
+                .entry(
+                    serde_json::to_value(fc)
+                        .ok()
+                        .and_then(|v| v.as_str().map(String::from))
+                        .unwrap_or_default(),
+                )
+                .or_insert(0u64) += 1;
+        }
         lines.push(json!({
             "schema": GRADE_LINE_SCHEMA,
             "campaign_sha256": hash,
@@ -188,7 +202,18 @@ pub fn grade_out_with(
             "grade": rep,
         }));
     }
-    let mut f = fs::File::create(out.join(GRADES_FILE)).map_err(|e| e.to_string())?;
+    // 再採点: 直前の grades.jsonl は捨てず grades.history.jsonl に追記する（履歴を失わない）。
+    // 結合・集計が読むのは常に最新の grades.jsonl だけで、試行記録（trials.jsonl の消費）は触らない。
+    let cur = out.join(GRADES_FILE);
+    if let Ok(prev) = fs::read_to_string(&cur) {
+        let mut h = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(out.join(GRADES_HISTORY_FILE))
+            .map_err(|e| e.to_string())?;
+        h.write_all(prev.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    let mut f = fs::File::create(&cur).map_err(|e| e.to_string())?;
     for l in &lines {
         writeln!(f, "{l}").map_err(|e| e.to_string())?;
     }
@@ -200,6 +225,8 @@ pub fn grade_out_with(
         "rejected": rejected,
         "graded": graded,
         "final_pass": final_pass,
+        // 不合格の原因別（model_failure / env_failure / undetermined）。
+        "failure_classes": by_class,
         "missing_cases": missing_cases,
         "grades": GRADES_FILE,
     }))

@@ -8,7 +8,7 @@
 #[path = "../../task-api/tests/common/mod.rs"]
 mod api_common;
 
-use std::{fs, path::Path, sync::Arc};
+use std::{fs, path::Path, process::Command, sync::Arc};
 
 use celeris_campaign::{
     celeris_exec::{HttpResponse, Transport},
@@ -254,8 +254,92 @@ fn fabricated_first_attempt_is_rejected_then_repaired_on_both_arms() {
         dir.path(),
         vec![("report.md".into(), FABRICATED_REPORT.into())],
     );
+    both_arms_reject_then_repair(dir.path(), g);
+}
+
+/// 既存の実 case（K3: Locusta A/B 解析）の固定 grade-case・固定の実 raw（Sirius の IOR 結果 tgz、sha256 固定）から
+/// 作った成果物を、同じ入口で両系に流す。最初の試行は報告の数値を 6% ずらした捏造で、実 grader（raw からの再計算）が
+/// 不合格にする。原票 tgz が無い環境では実行不能として飛ばす。
+#[test]
+fn real_k3_case_is_graded_independently_on_both_arms() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(g) = k3_grading(dir.path()) else {
+        eprintln!("SKIPPED(実行不能): K3 の原票 tgz が無い");
+        return;
+    };
+    both_arms_reject_then_repair(dir.path(), g);
+}
+
+fn k3_grading(root: &Path) -> Option<Grading> {
+    use celeris_campaign::grader::case::{Agg, Source};
+    let tgz = std::path::PathBuf::from(std::env::var("CAMPAIGN_K3_TGZ").unwrap_or_else(|_| {
+        "/local/celeris/data/workspaces/01M45ACZQWTW9BP8WVY8KAW9TC/artifacts/locusta-latency/raw/main-43223.tgz".into()
+    }));
+    if !tgz.is_file() {
+        return None;
+    }
+    assert_eq!(
+        sha(&fs::read(&tgz).unwrap()),
+        "bdb155d4c1690ae5743621d129c270fcc53c919751d62c56d0c4395b74d2e90f",
+        "原票の hash が case.json の固定とずれた"
+    );
+    let case = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/grade-cases/dev/k3-locusta-ab-analysis/k3-locusta-ab-analysis.json");
+    let g = GradeCase::load(&case).unwrap();
+    let good = root.join("good");
+    fs::create_dir_all(good.join("inputs")).unwrap();
+    assert!(
+        Command::new("tar")
+            .arg("-xzf")
+            .arg(&tgz)
+            .arg("-C")
+            .arg(good.join("inputs"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    // 報告は raw から素朴に（平均・件数だけで）計算する。捏造は最初の指標だけ 6% ずらす。
+    let (mut ok, mut bad) = (String::new(), String::new());
+    for (i, m) in g.recompute.as_ref().unwrap().metrics.iter().enumerate() {
+        let Source::Json { files, pointer } = &m.source else {
+            panic!("K3 は json 指標だけ")
+        };
+        let xs: Vec<f64> = files
+            .iter()
+            .map(|f| {
+                let v: Value = serde_json::from_slice(&fs::read(good.join(f)).unwrap()).unwrap();
+                v.pointer(pointer).and_then(Value::as_f64).unwrap()
+            })
+            .collect();
+        let x = match m.agg {
+            Agg::Mean => xs.iter().sum::<f64>() / xs.len() as f64,
+            Agg::Count => xs.len() as f64,
+            a => panic!("未対応 {a:?}"),
+        };
+        ok.push_str(&format!("metric {} = {x}\n", m.name));
+        let y = if i == 0 { x * 1.06 } else { x };
+        bad.push_str(&format!("metric {} = {y}\n", m.name));
+    }
+    write(&good.join("report.md"), &ok);
+    Some(Grading {
+        node: "analyze".into(),
+        grader_bin: std::env::var("CARGO_BIN_EXE_celeris-campaign")
+            .expect("binary path")
+            .into(),
+        case,
+        observed: None,
+        work: root.join("grade-work"),
+        stage_root: root.join("stage"),
+        good_artifact: good,
+        first_attempt_overrides: vec![("report.md".into(), bad)],
+        max_attempts: 3,
+    })
+}
+
+fn both_arms_reject_then_repair(root: &Path, g: Grading) {
+    let dir = root;
     // 負の対照: 捏造した成果物は同じ grader が不合格にする / 正しい成果物は合格にする。
-    let probe = dir.path().join("probe");
+    let probe = dir.join("probe");
     g.materialize(0, &probe).unwrap();
     let why = g.grade(&probe).unwrap_err();
     assert!(why.contains("\"recompute\""), "{why}");
@@ -263,7 +347,7 @@ fn fabricated_first_attempt_is_rejected_then_repaired_on_both_arms() {
     g.grade(&probe).unwrap();
 
     let s = spec(Some(g.clone()));
-    let (braw, craw) = (dir.path().join("braw"), dir.path().join("craw"));
+    let (braw, craw) = (dir.join("braw"), dir.join("craw"));
     run_baseline_graded(&s, &braw);
     let (cstatus, cstore) = run_celeris_graded(&s, &craw);
     assert_eq!((cstatus.as_str(), cstore), ("done", Status::Done));

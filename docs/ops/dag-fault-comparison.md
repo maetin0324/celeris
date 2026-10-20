@@ -178,6 +178,11 @@ DAG の祖先でない node を待たせると scenario に無い依存を足す
 - Celeris: WorkUnit の `checks` が grader。不合格 → 既存の check 不合格の経路（`previous_check_failures` を次の run へ）→
   2 回目の run が正しい成果物 → 合格 → task Done。baseline: 同じ成果物の列を同じ grader で検査し、不合格なら同じ node を
   最初から再実行（`Baseline::set_verifier`）。試行上限も同じ（`Grading::max_attempts`）。上限で合格しなければ完遂にしない。
+- 既存の実 case: `real_k3_case_is_graded_independently_on_both_arms` が K3（`k3-locusta-ab-analysis`）の固定 grade-case
+  （`fixtures/grade-cases/dev/k3-…json`、45 本の raw を sha256 固定）と、実 Sirius の IOR 結果 tgz（`main-43223.tgz`、hash 固定。
+  `CAMPAIGN_K3_TGZ` で差し替え可。無い環境は実行不能として飛ばす）から成果物を作り、最初の試行（報告の数値を 6% ずらす）を
+  実 grader が不合格 → repair/再実行 → 合格を両系で通す。玩具 fixture（`fabricated_first_attempt_…`）は scheduler 観測
+  （`--observed`）と実装検査の経路用に残す。K1/K2 は実装検査に実 build（BenchFS submodule・UCX）が要るので対象外。
 - 成功宣言だけの成果物は同じ grader が不合格にする。常に true の check は科学的成功の根拠にしない（判定付きでない node の
   `true` は台本の node で、成功率の欄に入れない）。
 - 再作業は `lost_progress.rerun_node_starts`・`rerun_work_secs` に出る（両方式とも 1 回）。

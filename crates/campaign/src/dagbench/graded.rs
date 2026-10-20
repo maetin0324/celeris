@@ -105,7 +105,11 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     for e in fs::read_dir(from)? {
         let e = e?;
         let dst = to.join(e.file_name());
-        if e.file_type()?.is_dir() {
+        let ft = e.file_type()?;
+        if ft.is_symlink() {
+            // 実 raw には dir への symlink（例 `run_0 -> server_0`）がある。そのまま作り直す。
+            std::os::unix::fs::symlink(fs::read_link(e.path())?, dst)?;
+        } else if ft.is_dir() {
             copy_dir(&e.path(), &dst)?;
         } else {
             fs::copy(e.path(), dst)?;

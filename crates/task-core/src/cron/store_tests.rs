@@ -307,6 +307,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
              DROP TRIGGER chat_node_session_thread_insert; \
              DROP TRIGGER chat_node_session_thread_update; \
              DROP INDEX idx_node_sessions_cos_chat_active; \
+             ALTER TABLE work_units DROP COLUMN rebase_pending; \
              ALTER TABLE node_sessions DROP COLUMN thread_id; \
              ALTER TABLE node_sessions DROP COLUMN llm_source; \
              ALTER TABLE node_sessions DROP COLUMN model; \

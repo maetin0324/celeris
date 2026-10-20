@@ -449,6 +449,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              ALTER TABLE runs DROP COLUMN selected_account_id; \
              ALTER TABLE runs DROP COLUMN selection_metadata_json; \
              DROP TABLE route_outcomes; DROP TABLE route_judgments; DROP TABLE route_decisions; DROP TABLE route_options; DROP TABLE route_features; \
+             ALTER TABLE work_units DROP COLUMN rebase_pending; \
              DELETE FROM schema_migrations WHERE version >= 34;",
         )
         .unwrap();

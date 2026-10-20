@@ -8,7 +8,7 @@ tasks: [01M52D2AM5K6GCFGEJZW4REWM2, 01M56HCNS9SYAS7TAEA7Z3E4CZ, 01M58VFRBA6HG0SS
 **値（token・鍵）はこのファイルに書かない。** token は測定専用 file（`[api] token_file`）に launcher が 0600 で作り、CLI には環境変数の**名前**（`CELERIS_MEASURE_TOKEN`）だけが渡る。
 承認枠: 試行 12 以内・tokens 全体 3,000,000・per_case 300,000・per_arm 1,300,000・`token_basis = all`・claude 7 日使用率 45% 以内（codex 21%）・fable 不使用（人の決定 2026-10-16）。枠を超える変更は新 campaign_id と新しい決定が要る。
 
-入口は 1 つ: `scripts/campaign/measure-launcher.sh <prepare|start|preflight|watch|grade|export|stop> --env <file>`。各 subcommand は再実行できる。
+入口は 1 つ: `scripts/campaign/measure-launcher.sh <prepare|start|preflight|watch|collect|grade|export|stop> --env <file>`。標準の流れは prepare → start → preflight → watch → grade（評価側の観測収集 → 独立採点 → check）→ export。各 subcommand は再実行できる。
 接続先（`--api-url`）・token・`--measure-config` 等の CLI 引数は、すべて env ファイル（と、その `DAEMON_CONFIG` の `[api] listen` / `token_file`）から launcher が 1 回だけ生成する。**手で `--api-url` や `--token-env` を書かない。**
 launcher がやらないこと: systemd / `systemctl` / `pkill` / 本番 config・本番 DB・本番 release の変更、昇格、cluster job の cancel、account の作成・削除・書換え。停止は launcher 自身が起動した daemon の pid 1 つだけ（§7）。
 
@@ -36,9 +36,10 @@ R=/local/celeris/data/workspaces/01M58VFRBA6HG0SSF3CG5BKM91/artifacts   # 主比
 
 ## 2. env ファイル（唯一の設定源。`KEY=VALUE` の sh 形式、値に秘密を書かない）
 雛形: `$P/measure-launcher.example.env`（複製して `<operator 入力待ち: …>` を実値にする。残っていると `prepare`/`preflight` が拒否する）。
-必須（欠けると `prepare` が `<KEY> is required` で非 0）: `MANIFEST` `DAEMON_CONFIG` `NORMAL_CONFIG` `CANARIES` `OUT` `STATE_DIR` `TASK_TEMPLATE` `A_ACCOUNT` `MATERIALS_SRC` `KB_SRC` `REPO_SRC` `INPUTS_SRC`。
+必須（欠けると `prepare` が `<KEY> is required` で非 0）: `MANIFEST` `DAEMON_CONFIG` `NORMAL_CONFIG` `CANARIES` `OUT` `STATE_DIR` `TASK_TEMPLATE` `MATERIALS_SRC` `KB_SRC` `REPO_SRC` `INPUTS_SRC`。
+`A_ACCOUNT` は A が有効な構成（A/B・A/B/C）で要る。必須キーではなく、無いまま A が有効なら `preflight` が `--a-account` 欠落で拒否する。B/C のみの構成は A の認証も program も要らない（`--a-account` は渡されない）。
 `start` が加えて要る: `CELERIS_BIN`（測定 daemon の実行ファイル。`prepare` が sha256 を固定）`RELEASE`（B/C の sha12）。`CAP_ENV` は本測定では事実上必須（無いと preflight の cap-probe が拒否）。
-任意: `CAMPAIGN_BIN`（既定 `celeris-campaign`。`DAEMON_CONFIG` の `cap-probe-*` の command と同じ実体にする）`A_PROGRAM`（既定 `claude`）`RUN_PATH` `WORKER_PROGRAMS`（`name=path` を空白区切り。env-lock に固定）`MEASUREMENT_ID` `CASES_ROOT` `GRADER_ROOT` `GRADE_CASES_ROOT`（`grade` に必須）`RECORDS`（export で final_accounting）`EXECUTOR`（既定 `celeris`）`INTERVAL_SECS`（60）`MAX_ITERATIONS`（1440）`HEALTH_WAIT_SECS`（60）。
+任意: `CAMPAIGN_BIN`（既定 `celeris-campaign`。`DAEMON_CONFIG` の `cap-probe-*` の command と同じ実体にする）`A_PROGRAM`（既定 `claude`）`RUN_PATH` `WORKER_PROGRAMS`（`name=path` を空白区切り。env-lock に固定）`MEASUREMENT_ID` `GLOBAL_LEDGER`（共有承認の台帳 dir。manifest の `shared_ledger` 宣言と同じ path。省略・別 path の watch は投入前に拒否される）`VARIANT_B0_SHA256`（manifest が variant を参照するとき、承認済み `variant-b0.json` の sha256。未指定・不一致は preflight が拒否）`INITIAL_TREES`（grade-out の `--initial-trees`。grader 側で組んだ初期 tree の置き場 `<dir>/<problem_id>`）`CASES_ROOT` `GRADER_ROOT` `GRADE_CASES_ROOT`（`grade` に必須）`RECORDS`（export で final_accounting）`EXECUTOR`（既定 `celeris`）`INTERVAL_SECS`（60）`MAX_ITERATIONS`（1440）`HEALTH_WAIT_SECS`（60）。
 ```sh
 MANIFEST=final.json                # §3 の確定済み manifest（$P/final.json の複製でなく、$P を env ファイルの dir にするなら相対でよい）
 DAEMON_CONFIG=/abs/measure/daemon.toml        # $P/measure-daemon.example.toml の複製（§3b）
@@ -163,10 +164,12 @@ exit 0 = A のアカウントを含む claude が 45%・codex が 21% 以内（`
 
 ## 8. 検査・独立採点・結果回収
 ```sh
-sh $L grade  --env $ENVF   # = `celeris-campaign grade-out --cases $GRADE_CASES_ROOT`（独立採点 → $OUT/grades.jsonl）+ `check`。主比較は GRADE_CASES_ROOT=$R/pinned/main/fixed/grade-cases
+sh $L collect --env $ENVF  # = `celeris-campaign collect-observed-out`（実験 case の trial ごとに評価側の job 終了記録を <OUT>/observed/ へ。単独でも実行できる）
+sh $L grade  --env $ENVF   # = collect-observed-out（失敗は警告のみ）+ `celeris-campaign grade-out --cases $GRADE_CASES_ROOT [--initial-trees $INITIAL_TREES]`（独立採点 → $OUT/grades.jsonl）+ `check`。主比較は GRADE_CASES_ROOT=$R/pinned/main/fixed/grade-cases
 sh $L export --env $ENVF   # export を $OUT/export へ。RECORDS があれば final_accounting（総消費量）も含める
 ```
 - `grade` は主比較の 4 試行（A・B × K2・K4）すべてに判定を付ける。失敗・timeout・cancelled・未完了も分母に残す。grade-case が無い problem（root 直下 `<problem_id>.json` か `final/<problem>/<problem>.json`）は `missing_cases` で非 0。`check` は `ok true`・violations 空。`complete=false` なら `incomplete_reasons` を読む。
+- 評価側の観測（`collect`）: 台帳に Celeris が残した job ID（`scheduler:cluster:job_id`、素の `<n>.<server>` は case の cluster の PBS とみなす）を `ssh <cluster> qstat -x -f`（read-only）で照会し、記録に campaign sha256・arm・problem・rep・trial_no（`trial`）と scheduler 応答の控え（`observed/<problem>/scheduler/`）の sha256 を結ぶ。job 未終了（`job_state` が `F` 以外）・台帳に job が無い・成果物が実行終了時の hash と違う、のどれでも記録は作られず `collect` は非 0（grade は警告のみで続き、その trial は観測なしの実験証拠として成功にならない）。`grade-out` は記録の `trial` が当該 trial と違う・job 集合が台帳と違う・控えが改変されている記録を拒否する（`graded:false`、非 0）。
 - `grade-out` 単体の再判定が要るときは `$B grade --case $R/pinned/main/fixed/grade-cases/final/<case-id>/<case-id>.json --artifact $OUT/trials/<A|B|C>/<case-id>/rep1/workspace`（`celeris-campaign grade`）。
 - final_accounting を単独で見る: `$B final-accounting --manifest $MANIFEST --out $OUT --records $RECORDS`。
 - 結果回収の固定 hash 一覧（§3a と同じ。回収前後で変わったら採点・export を無効として止める）: campaign_sha256 `8ca0e198…a999`、`pinned/main/lock.json` file sha256 `8ddc8384…2343`、`env-lock.json` `6c2275f3…986c`、daemon release `c9654bff5633` / binary `be62f43d…a3d2`、campaign binary `de339f1c…1394`、final.json sha256 `0aaa6a23…fa36`。確認は `python3 scripts/campaign/check-main-pins.py --root $R`。

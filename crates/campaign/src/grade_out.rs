@@ -16,6 +16,29 @@ use crate::{
 
 pub use crate::grades::GRADES_FILE;
 
+/// grade-case の path。`<cases>/<problem>.json`、locked な out では本番の配置 `<root>/<split>/<problem>/<problem>.json`
+/// （lock は split を固定している）も探す。
+pub(crate) fn resolve_case_path(
+    m: &CampaignManifest,
+    cases: &Path,
+    problem_id: &str,
+    locked: bool,
+) -> std::path::PathBuf {
+    let flat = cases.join(format!("{problem_id}.json"));
+    if locked && !flat.is_file() {
+        let split = if m.split == crate::manifest::Split::Final {
+            "final"
+        } else {
+            "dev"
+        };
+        return cases
+            .join(split)
+            .join(problem_id)
+            .join(format!("{problem_id}.json"));
+    }
+    flat
+}
+
 pub fn grade_out(
     m: &CampaignManifest,
     out: &Path,
@@ -49,6 +72,7 @@ pub fn grade_out_with(
 ) -> Result<Value, String> {
     let lock = crate::lock_exec::load_saved(m, out, expected)?;
     let hash = m.compute_sha256()?;
+    let ledger = crate::ledger::Ledger::open_readonly(out)?;
     let text = fs::read_to_string(out.join(TRIALS_FILE))
         .map_err(|e| format!("{}: {e}", out.join(TRIALS_FILE).display()))?;
     let mut lines = Vec::new();
@@ -73,19 +97,7 @@ pub fn grade_out_with(
             lines.push(json!({"trial": key, "graded": false, "why": "not run"}));
             continue;
         }
-        let mut case_path = cases.join(format!("{}.json", r.problem_id));
-        if lock.is_some() && !case_path.is_file() {
-            // 本番の配置 `<root>/<split>/<problem>/<problem>.json`（lock は split を固定している）。
-            let split = if m.split == crate::manifest::Split::Final {
-                "final"
-            } else {
-                "dev"
-            };
-            case_path = cases
-                .join(split)
-                .join(&r.problem_id)
-                .join(format!("{}.json", r.problem_id));
-        }
+        let case_path = resolve_case_path(m, cases, &r.problem_id, lock.is_some());
         if !case_path.is_file() {
             missing_cases.push(r.problem_id.clone());
             lines.push(json!({"trial": key, "graded": false, "why": format!("no grade-case {}", case_path.display())}));
@@ -129,6 +141,18 @@ pub fn grade_out_with(
             lines.push(json!({"trial": key, "graded": false, "why": "artifact hash differs from the recorded final workspace"}));
             continue;
         }
+        // 評価側の観測記録は、この trial の identity・台帳の job ID・scheduler 応答の hash に結ばれているものだけ使う。
+        let observed_path = out
+            .join("observed")
+            .join(&r.problem_id)
+            .join(format!("{:?}-rep{}.json", r.config, r.rep));
+        if observed_path.is_file()
+            && let Err(e) = crate::observe::verify_binding(out, &observed_path, &ledger, &r, &hash)
+        {
+            rejected.push(format!("{tag}: {e}"));
+            lines.push(json!({"trial": key, "graded": false, "why": "evaluator observation is not bound to this trial"}));
+            continue;
+        }
         let grader_sha = sha256_file(&case_path)?;
         let opts = GradeOptions {
             case_dir: case_path
@@ -138,12 +162,7 @@ pub fn grade_out_with(
             work_root: std::env::temp_dir(),
             runner,
             // 評価側の取得記録は out/observed/<problem>/<config>-rep<N>.json（成果物の外）。
-            observed_jobs: Some(
-                out.join("observed")
-                    .join(&r.problem_id)
-                    .join(format!("{:?}-rep{}.json", r.config, r.rep)),
-            )
-            .filter(|p| p.is_file()),
+            observed_jobs: Some(observed_path).filter(|p| p.is_file()),
             // grader 側で組んだ初期 tree は <initial_trees>/<problem_id>（compile error の出どころの判定に使う）。
             initial_tree: initial_trees.map(|d| d.join(&r.problem_id)),
         };

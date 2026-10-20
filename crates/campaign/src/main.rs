@@ -17,7 +17,7 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <human-op|jev-stages|dry-run|validate|collect-observed|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <human-op|jev-stages|dry-run|validate|collect-observed|collect-observed-out|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--variant-b0-sha256 <hex>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -348,6 +348,18 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let input = m.load_input(&manifest_path, arg(&args, "--input-manifest").as_deref())?;
             let v = celeris_campaign::dryrun::estimate(&m, &input)?;
             serde_json::to_string_pretty(&v).map_err(|e| e.to_string())
+        }
+        "collect-observed-out" => {
+            // 標準の評価側収集: 台帳の job ID・trial identity・成果物 hash に結んだ記録を <out>/observed に作る。
+            let pi = preflight_inputs(&args, &manifest_path);
+            let set = celeris_campaign::cases::CaseSet::load(&pi.cases_root, &pi.grader_root)?;
+            celeris_campaign::observe::collect_out(
+                &m,
+                &out()?,
+                &set,
+                &pi.grade_cases_root,
+                &celeris_campaign::ssh_qstat::SshQstat,
+            )
         }
         "series-init" => {
             // 副比較の系列台帳を作る（冪等）。--import-out は引継ぎ元の既存 out（消費を台帳へ追記する）。

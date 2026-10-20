@@ -256,6 +256,13 @@ fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
 const CLAUDE_STUB: &str = r#"#!/bin/sh
 echo "$*" >> @BIN@/claude.log
 if [ "$1" = --version ]; then echo claude-code@2.1.0; exit 0; fi
+# 実験 case の試行 workspace に、エージェントが申告する job 証拠と raw を残す（評価側の観測が照合する対象）。
+if [ ! -f evidence/jobs.json ]; then
+    mkdir -p evidence results
+    echo raw >results/out.csv
+    h=$(sha256sum results/out.csv | cut -d' ' -f1)
+    printf '{"jobs":[{"job_id":"4242.sirius","evidence_kind":"real","raw":[{"path":"results/out.csv","sha256":"%s"}]}]}' "$h" >evidence/jobs.json
+fi
 echo '{"type":"assistant","message":{"id":"m0","usage":{"input_tokens":100,"output_tokens":5}}}'
 exit 0
 "#;
@@ -852,7 +859,7 @@ fn a_version_mismatch_and_missing_inputs_are_rejected_with_zero_execution() {
     fs::rename(f.d().join("inputs-gone"), &ins).unwrap();
     // 必須の設定欠落（env ファイルの A_ACCOUNT）。
     f.write_env("A_ACCOUNT=\n");
-    assert_rejected(&f, "watch", "A_ACCOUNT is required");
+    assert_rejected(&f, "watch", "--a-account");
     f.write_env("");
     assert!(!f.out().exists());
     stop(&f);
@@ -995,4 +1002,306 @@ fn is_probe(t: &serde_json::Value) -> bool {
     t["genre"]
         .as_str()
         .is_some_and(|g| g.starts_with(celeris_campaign::cap_probe::PROBE_GENRE_PREFIX))
+}
+
+// ---- 研究評価接続: 共有台帳・arm 別の認証・variant 基準 hash・評価側観測の収集（無 LLM・標準 launcher 入口） ----
+
+fn edit_manifest(f: &Fx, g: impl FnOnce(&mut Value)) {
+    let p = &f.s.inp.manifest_path;
+    let mut v: Value = serde_json::from_slice(&fs::read(p).unwrap()).unwrap();
+    g(&mut v);
+    fs::write(p, v.to_string()).unwrap();
+}
+
+const B0_ROLES_SONNET: &str = r#"{"planner":"claude-sonnet-5-5","reviewer":"claude-sonnet-5-5","cos":"claude-sonnet-5-5","worker":"claude-sonnet-5-5"}"#;
+
+/// 有効 arm だけの configs・set 宣言にする（manifest は有効 arm の config をちょうど 1 件ずつ持つ）。
+fn only_arms(v: &mut Value, arms: &[&str], compare: Value, fixed: Value) {
+    v["configs"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|c| arms.contains(&c["id"].as_str().unwrap()));
+    // B/C が同じ有効 arm の set に入るときの B1/C1 共通条件（共通の候補モデル 2 つ以上）。
+    for c in v["configs"].as_array_mut().unwrap() {
+        if c["routing"].is_object() {
+            c["routing"]["models"] = json!(["claude-sonnet-5-5", "claude-sonnet-5-5-b"]);
+        }
+    }
+    if !arms.contains(&"C") {
+        v["secondary"]["subset"] = json!([]);
+    }
+    let mut fixed = fixed;
+    fixed["role_models"] = serde_json::from_str(B0_ROLES_SONNET).unwrap();
+    v["experiment_sets"] = json!({"s": {"arms": arms, "compare": compare, "fixed": fixed}});
+    v["selected_sets"] = json!(["s"]);
+}
+
+fn env_without(f: &Fx, key: &str) {
+    let t = fs::read_to_string(f.env()).unwrap();
+    let kept: String = t
+        .lines()
+        .filter(|l| !l.starts_with(&format!("{key}=")))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    fs::write(f.env(), kept).unwrap();
+}
+
+/// 共有承認の台帳を宣言した manifest の測定は、宣言した台帳を渡す launcher だけが走れる。
+/// 省略・別 path は投入前に拒否され（台帳・task 投入 0 件）、一致すれば通常どおり台帳が閉じる。
+#[test]
+fn shared_approval_runs_only_with_the_declared_global_ledger() {
+    let f = fixture();
+    let d = f.d().display().to_string();
+    let decl = format!("{d}/global-ledger");
+    edit_manifest(&f, |v| {
+        only_arms(
+            v,
+            &["A", "B", "C"],
+            json!([["A", "B"]]),
+            json!({"approved_trials": 100, "shared_ledger": decl}),
+        );
+    });
+    ok(&f, "prepare");
+    ok(&f, "start");
+    f.create_project();
+    ok(&f, "preflight");
+    // 省略。
+    assert_rejected(&f, "watch", "requires --global-ledger");
+    // 宣言と別 path。
+    f.write_env(&format!("GLOBAL_LEDGER={d}/other-ledger\n"));
+    assert_rejected(&f, "watch", "is not the declared shared ledger");
+    // 宣言どおり（相対 path は env ファイルの dir 基準）。
+    f.write_env("GLOBAL_LEDGER=global-ledger\n");
+    let w = ok(&f, "watch");
+    let line = w.lines().rev().find(|l| l.starts_with('{')).unwrap();
+    let rep: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("{e}: {w}"));
+    assert_eq!(rep["ledger"]["by_state"], json!({"done": 6}), "{w}");
+    assert!(
+        f.d().join("global-ledger").is_dir(),
+        "the shared ledger was written"
+    );
+    stop(&f);
+}
+
+/// B/C のみの構成は A の認証（A_ACCOUNT）も program も要求しない。A が有効なら A_ACCOUNT を要求する。
+#[test]
+fn b_c_only_needs_no_a_credentials_but_an_active_a_arm_does() {
+    let f = fixture();
+    edit_manifest(&f, |v| {
+        only_arms(v, &["B", "C"], json!([["B", "C"]]), json!({}));
+    });
+    env_without(&f, "A_ACCOUNT");
+    f.write_env("A_PROGRAM=/nonexistent/claude\n");
+    ok(&f, "prepare");
+    ok(&f, "start");
+    f.create_project();
+    ok(&f, "preflight");
+    let w = ok(&f, "watch");
+    let line = w.lines().rev().find(|l| l.starts_with('{')).unwrap();
+    let rep: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("{e}: {w}"));
+    assert_eq!(rep["ledger"]["by_state"], json!({"done": 4}), "{w}");
+    assert_eq!(f.a_launches(), 0, "A must not run in a B/C-only set");
+    stop(&f);
+
+    // A が有効（A/B）で A_ACCOUNT が無ければ、A の認証を求めて拒否する。C だけが無効でも B の worker は要る。
+    let g = fixture();
+    edit_manifest(&g, |v| {
+        only_arms(v, &["A", "B"], json!([["A", "B"]]), json!({}));
+    });
+    env_without(&g, "A_ACCOUNT");
+    ok(&g, "prepare");
+    ok(&g, "start");
+    g.create_project();
+    assert_rejected(&g, "preflight", "--a-account");
+    // A_ACCOUNT を与えれば A/B-only の preflight は通る（C の検査は要らない）。
+    g.write_env("A_ACCOUNT=lab\n");
+    ok(&g, "preflight");
+    stop(&g);
+}
+
+/// manifest が variant を参照する測定は、承認済み B0 の sha256（VARIANT_B0_SHA256）を launcher が preflight へ渡す。
+/// 未指定は拒否、誤った hash は sha256 不一致で拒否される（値が CLI まで届いている）。
+#[test]
+fn variant_b0_sha256_is_passed_to_preflight_and_a_wrong_hash_is_rejected() {
+    let f = fixture();
+    let d = f.d();
+    let b0 = json!({"coding_node": "coding", "role_models": {}, "org": {"items": [], "effective_profiles": []}});
+    fs::write(d.join("variant-b0.json"), b0.to_string()).unwrap();
+    edit_manifest(&f, |v| {
+        v["variant"] = json!({
+            "comparison_id": celeris_campaign::variant::COMPARISON_ID,
+            "id": "M1-spec-on",
+            "content_sha256": "0".repeat(64),
+            "selection_sha256": celeris_campaign::variant::selection_sha256(),
+        });
+    });
+    ok(&f, "prepare");
+    ok(&f, "start");
+    f.create_project();
+    assert_rejected(&f, "preflight", "--variant-b0-sha256");
+    f.write_env(&format!("VARIANT_B0_SHA256={}\n", "0".repeat(64)));
+    let o = launch(&f, "preflight");
+    let t = text(&o);
+    assert!(!o.status.success(), "{t}");
+    assert!(
+        !t.contains("--variant-b0-sha256 (approved sha256 of variant-b0.json) is required"),
+        "the launcher did not pass the hash: {t}"
+    );
+    assert!(t.contains("variant"), "{t}");
+    stop(&f);
+}
+
+/// 実験 case の試行について、標準の grade が評価側の観測を収集し、trial identity・台帳の job ID・scheduler 応答の控え・
+/// 成果物 hash に結ぶ。未終了・欠測・成果物改変・別 trial の記録・台帳に無い job・控えの改変は成功証拠にならない。
+#[test]
+fn grade_collects_job_observations_bound_to_the_trial_and_rejects_every_mismatch() {
+    let f = fixture();
+    ok(&f, "prepare");
+    ok(&f, "start");
+    f.create_project();
+    ok(&f, "preflight");
+    ok(&f, "watch");
+    let out = f.out();
+    // 実験 case（k2）の A 試行。Celeris が台帳に残した投入先（job ID）を、通常の台帳行の追記と同じ形で足す。
+    let trial: Value = fs::read_to_string(out.join("trials.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|r| r["config"] == "A" && r["problem_id"] == "k2-bf-xattr-restart-campaign")
+        .expect("A k2 trial");
+    let ws = out.join(trial["workspace"].as_str().unwrap());
+    assert!(ws.join("evidence/jobs.json").is_file());
+    let mut row: Value = fs::read_to_string(out.join("ledger.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .rfind(|r| r["arm"] == "A" && r["problem_id"] == trial["problem_id"])
+        .expect("ledger row");
+    row["cluster_job_ids"] = json!(["pbs:sirius:4242.sirius"]);
+    let mut l = fs::OpenOptions::new()
+        .append(true)
+        .open(out.join("ledger.jsonl"))
+        .unwrap();
+    std::io::Write::write_all(&mut l, format!("{row}\n").as_bytes()).unwrap();
+    // read-only の scheduler 照会（ssh qstat）の固定応答。
+    let qstat = f.d().join("bin/qstat.out");
+    // cap-tools の ssh stub（能力検査用）を、qstat の固定応答を返す stub に置き換える（PATH 上で先に当たる）。
+    write_exec(
+        &f.d().join("cap-tools/ssh"),
+        &format!("#!/bin/sh\ncat {}\n", qstat.display()),
+    );
+    let reply = |state: &str| {
+        fs::write(
+            &qstat,
+            format!("Job Id: 4242.sirius\n    job_state = {state}\n    Exit_status = 0\n    Resource_List.nodes = 3\n"),
+        )
+        .unwrap();
+    };
+    let obs = out.join("observed/k2-bf-xattr-restart-campaign/A-rep1.json");
+    let a_grade = |f: &Fx| -> String {
+        fs::read_to_string(f.out().join("grades.jsonl"))
+            .unwrap()
+            .lines()
+            .find(|l| l.contains("\"config\":\"A\"") && l.contains("k2-bf-xattr"))
+            .unwrap()
+            .to_string()
+    };
+
+    // 未終了（job_state=R）: 記録を作らず collect は非 0。grade は続き、その試行は観測なしとして成功にならない。
+    reply("R");
+    let o = launch(&f, "collect");
+    assert!(
+        !o.status.success() && text(&o).contains("not finished"),
+        "{}",
+        text(&o)
+    );
+    assert!(!obs.exists(), "no partial record");
+    let g = launch(&f, "grade");
+    assert!(text(&g).contains("not finished"), "{}", text(&g));
+    assert!(
+        a_grade(&f).contains("no evaluator-collected job records"),
+        "{}",
+        a_grade(&f)
+    );
+
+    // 終了: 収集でき、記録は trial identity・台帳の job ID に結ばれ、grade の実験証拠検査を通る。
+    reply("F");
+    // B/C は cluster job を投入していない（台帳に job が無い）ので収集の対象外として報告され、A の試行だけが収集される。
+    let o = launch(&f, "collect");
+    let t = text(&o);
+    assert!(!o.status.success(), "{t}");
+    assert!(
+        t.contains("\"A/k2-bf-xattr-restart-campaign/rep1#1\"")
+            && t.contains("no job was submitted by Celeris"),
+        "{t}"
+    );
+    let doc: Value = serde_json::from_slice(&fs::read(&obs).unwrap()).unwrap();
+    assert_eq!(
+        doc["trial"]["problem_id"],
+        json!("k2-bf-xattr-restart-campaign")
+    );
+    assert_eq!(doc["trial"]["config"], json!("A"));
+    assert_eq!(doc["trial"]["trial_no"], trial["trial_no"]);
+    assert_eq!(doc["trial"]["campaign_sha256"], trial["campaign_sha256"]);
+    assert_eq!(doc["jobs"][0]["job_id"], json!("4242.sirius"));
+    ok(&f, "grade");
+    let line = a_grade(&f);
+    assert!(
+        !line.contains("no evaluator-collected") && !line.contains("does not match"),
+        "{line}"
+    );
+    let good = fs::read(&obs).unwrap();
+
+    // 別 trial の記録（identity が違う）・台帳に無い job・scheduler 応答の控えの改変は grade-out が拒否する。
+    // （grade は先に収集し直すので、scheduler 照会を失敗させて、置いた記録がそのまま grade-out に届くようにする。）
+    fs::remove_file(&qstat).unwrap();
+    let mut other = doc.clone();
+    other["trial"]["rep"] = json!(2);
+    fs::write(&obs, other.to_string()).unwrap();
+    let g = launch(&f, "grade");
+    assert!(
+        !g.status.success() && text(&g).contains("not this trial"),
+        "{}",
+        text(&g)
+    );
+    assert!(a_grade(&f).contains("\"graded\":false"));
+    let mut foreign = doc.clone();
+    foreign["jobs"][0]["job_id"] = json!("9999.sirius");
+    fs::write(&obs, foreign.to_string()).unwrap();
+    let g = launch(&f, "grade");
+    assert!(
+        !g.status.success() && text(&g).contains("differ from the jobs Celeris submitted"),
+        "{}",
+        text(&g)
+    );
+    fs::write(&obs, &good).unwrap();
+    let rec = out.join("observed/k2-bf-xattr-restart-campaign/scheduler/A-rep1/4242.sirius.qstat");
+    let saved = fs::read(&rec).unwrap();
+    fs::write(
+        &rec,
+        "Job Id: 4242.sirius\n job_state = F\n Exit_status = 0\n",
+    )
+    .unwrap();
+    let g = launch(&f, "grade");
+    assert!(
+        !g.status.success() && text(&g).contains("altered"),
+        "{}",
+        text(&g)
+    );
+    fs::write(&rec, saved).unwrap();
+    let g = launch(&f, "grade");
+    assert!(g.status.success(), "{}", text(&g));
+    reply("F");
+
+    // 成果物の改変: 実行終了時の hash と違えば収集せず、grade も採点しない。
+    fs::remove_file(&obs).unwrap();
+    fs::write(ws.join("results/out.csv"), "tampered\n").unwrap();
+    let o = launch(&f, "collect");
+    assert!(
+        !o.status.success() && text(&o).contains("artifact hash differs"),
+        "{}",
+        text(&o)
+    );
+    assert!(!obs.exists());
+    stop(&f);
 }

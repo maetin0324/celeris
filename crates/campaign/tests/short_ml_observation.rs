@@ -114,6 +114,7 @@ fn run(fx: &Fx, t: &Fixed, r: &[JobRef], e: &Expect) -> Result<PathBuf, Vec<Stri
             config: ConfigId::B,
             rep: 1,
         },
+        &json!({"campaign_sha256": "t", "config": "B", "problem_id": "short-ml-campaign", "rep": 1, "trial_no": 1}),
         r,
         e,
         &fx.art,

@@ -3,8 +3,9 @@
 # 単一の設定ファイル（--env <file>、KEY=VALUE の sh 形式）から --api-url・--measure-config 等を生成する。
 # 本番 daemon・systemd・本番 config・本番 DB には触れない。停止は launcher が起動した pid（$STATE_DIR/launcher.pid）だけ。
 #
-#   measure-launcher.sh <prepare|start|preflight|watch|grade|export|stop> --env <file>
+#   measure-launcher.sh <prepare|start|preflight|watch|collect|grade|export|stop> --env <file>
 #
+# 標準の流れは prepare → start → preflight → watch → grade（評価側の job 観測の収集 → 独立採点 → 検査）→ export。
 # 各 subcommand は再実行できる。watch は台帳から再開し、毎回 daemon 実体の照合・preflight（env-check を含む）・
 # env-lock の照合を通ってから始まる。
 # start は daemon を起こす前に測定 config を検査し（config-check）、不適切なら起動しない。
@@ -13,7 +14,7 @@
 set -eu
 
 usage() {
-    echo "usage: $0 <prepare|start|preflight|watch|grade|export|stop> --env <measure-launcher.env>" >&2
+    echo "usage: $0 <prepare|start|preflight|watch|collect|grade|export|stop> --env <measure-launcher.env>" >&2
     exit 2
 }
 
@@ -41,6 +42,7 @@ CAMPAIGN_BIN=celeris-campaign
 CELERIS_BIN=
 MANIFEST= DAEMON_CONFIG= NORMAL_CONFIG= CANARIES= TASK_TEMPLATE= OUT= STATE_DIR=
 RELEASE= RUN_PATH= A_PROGRAM=claude A_ACCOUNT= WORKER_PROGRAMS= MEASUREMENT_ID=
+GLOBAL_LEDGER= VARIANT_B0_SHA256= INITIAL_TREES=
 MATERIALS_SRC= KB_SRC= REPO_SRC= INPUTS_SRC= CASES_ROOT= GRADER_ROOT= GRADE_CASES_ROOT=
 SERIES_ROOT= SERIES_IMPORT_OUTS=
 RECORDS= CAP_ENV= EXECUTOR=celeris INTERVAL_SECS=60 MAX_ITERATIONS=1440 HEALTH_WAIT_SECS=60
@@ -60,7 +62,8 @@ need() {
     [ -n "$v" ] || die "$1 is required in $ENV_FILE"
 }
 
-for k in MANIFEST DAEMON_CONFIG NORMAL_CONFIG CANARIES OUT STATE_DIR TASK_TEMPLATE A_ACCOUNT \
+# A_ACCOUNT は必須にしない: A が有効な manifest では CLI の preflight が要求し、B/C のみの構成は要らない。
+for k in MANIFEST DAEMON_CONFIG NORMAL_CONFIG CANARIES OUT STATE_DIR TASK_TEMPLATE \
     MATERIALS_SRC KB_SRC REPO_SRC INPUTS_SRC; do
     need "$k"
 done
@@ -73,6 +76,8 @@ MATERIALS_SRC=$(abs "$MATERIALS_SRC") KB_SRC=$(abs "$KB_SRC") REPO_SRC=$(abs "$R
 [ -z "$GRADE_CASES_ROOT" ] || GRADE_CASES_ROOT=$(abs "$GRADE_CASES_ROOT")
 [ -z "$SERIES_ROOT" ] || SERIES_ROOT=$(abs "$SERIES_ROOT")
 [ -z "$RECORDS" ] || RECORDS=$(abs "$RECORDS")
+[ -z "$GLOBAL_LEDGER" ] || GLOBAL_LEDGER=$(abs "$GLOBAL_LEDGER")
+[ -z "$INITIAL_TREES" ] || INITIAL_TREES=$(abs "$INITIAL_TREES")
 [ -z "$CAP_ENV" ] || CAP_ENV=$(abs "$CAP_ENV")
 case $CAMPAIGN_BIN in */*) CAMPAIGN_BIN=$(abs "$CAMPAIGN_BIN") ;; esac
 [ -z "$RUN_PATH" ] || PATH="$RUN_PATH:$PATH"
@@ -115,7 +120,13 @@ common_args() {
         --task-template "$TASK_TEMPLATE" \
         --measure-config "$DAEMON_CONFIG" --normal-config "$NORMAL_CONFIG" --canaries "$CANARIES" \
         --materials-src "$MATERIALS_SRC" --kb-src "$KB_SRC" --repo-src "$REPO_SRC" --inputs-src "$INPUTS_SRC" \
-        --a-account "$A_ACCOUNT" --a-program "$A_PROGRAM"
+        --a-program "$A_PROGRAM"
+    # A のアカウントは A が有効な構成だけで渡す（無効 arm の認証を要求しない）。要否の判定は CLI（preflight・run）。
+    [ -z "$A_ACCOUNT" ] || set -- "$@" --a-account "$A_ACCOUNT"
+    # 共有承認の台帳。manifest が宣言した台帳と一致しなければ CLI が投入前に拒否する（省略も拒否）。
+    [ -z "$GLOBAL_LEDGER" ] || set -- "$@" --global-ledger "$GLOBAL_LEDGER"
+    # 選択済み specialization の承認済み variant-b0.json の sha256（preflight が manifest の variant と照合する）。
+    [ -z "$VARIANT_B0_SHA256" ] || set -- "$@" --variant-b0-sha256 "$VARIANT_B0_SHA256"
     # 接続先が launcher 所有の daemon であることの照合（identity.pid）。生きていなければ付けず、検査側が拒否する。
     ! owned_alive || set -- "$@" --daemon-pid "$(cat "$LAUNCHER_PID")"
     [ -z "$CASES_ROOT" ] || set -- "$@" --cases-root "$CASES_ROOT"
@@ -380,11 +391,25 @@ cmd_watch() {
     campaign watch --executor "$EXECUTOR" --interval-secs "$INTERVAL_SECS" --max-iterations "$MAX_ITERATIONS"
 }
 
+# 評価側が scheduler から取る job の終了記録（<out>/observed）。台帳の job ID・trial identity・成果物の hash に結ぶ。
+# 未終了・欠測・成果物の改変は記録を作らず非 0（採点は grade が続けて行い、その trial を成功にしない）。
+cmd_collect() {
+    load_token
+    campaign collect-observed-out
+}
+
 cmd_grade() {
     load_token
     [ -n "$GRADE_CASES_ROOT" ] || die "GRADE_CASES_ROOT is required for grade"
-    campaign grade-out --cases "$GRADE_CASES_ROOT"
+    collect_rc=0
+    collect_out=$(campaign collect-observed-out 2>&1) || collect_rc=$?
+    printf '%s\n' "$collect_out"
+    set -- --cases "$GRADE_CASES_ROOT"
+    [ -z "$INITIAL_TREES" ] || set -- "$@" --initial-trees "$INITIAL_TREES"
+    campaign grade-out "$@"
     campaign check
+    # 収集できなかった trial（未終了・欠測・改変）は観測記録が無いまま grade-out が採点し、実験証拠の検査で成功にならない。
+    [ "$collect_rc" -eq 0 ] || echo "measure-launcher: warning: collect-observed-out reported trials without evaluator observations (see above); they are not success evidence" >&2
 }
 
 cmd_export() {
@@ -431,6 +456,7 @@ case $SUB in
     start) cmd_start ;;
     preflight) cmd_preflight ;;
     watch) cmd_watch ;;
+    collect) cmd_collect ;;
     grade) cmd_grade ;;
     export) cmd_export ;;
     stop) cmd_stop ;;

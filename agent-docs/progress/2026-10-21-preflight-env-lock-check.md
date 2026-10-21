@@ -1,6 +1,7 @@
 ---
 task: 01M5EKSPKAKTBEYD5RHGZ0S3AQ
-status: running
+status: done
+completed: 2026-10-21
 adr: agent-docs/adr/2026-10-21-preflight-env-lock-check.md
 ---
 # preflight に env-lock の照合を入れる・offline-lock のモデル一覧は測定 daemon から取る
@@ -13,7 +14,12 @@ adr: agent-docs/adr/2026-10-21-preflight-env-lock-check.md
 
 ## 証拠
 - `cargo nextest run -p celeris-campaign --test preflight` → 27 passed（新規 `preflight_rejects_an_env_lock_built_from_another_daemons_catalog`・`preflight_accepts_an_env_lock_built_from_the_measurement_daemon`、偽 Host・LLM なし）
-- test-affected / clippy / fmt: 下に追記
+- `bash scripts/dev/test-affected.sh` → exit 0（2533 tests run: 2533 passed, 4 skipped）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `cargo nextest run -p celeris-campaign --test arm_set_e2e --test arm_set_cli_normal --test launcher --test preflight --test env_lock` → 75 passed
+- 付随修正: launcher は `common_args` で全 subcommand に `--worker-program` を渡す（run・watch 内の preflight も env-lock と同値で照合）。`env_lock::observe` は catalog を closure で受け、A の解決を daemon 接続より先に行う。saved-lock gate を期待する試験は env-lock mismatch による先行拒否も許容
+- `grep -rn main-llm-models docs scripts crates` → 0 件（本番 daemon 一覧を使う旧手順は削除）
 
 ## 本番への移行
 - 本番 DB・config の変更なし。測定 root の既存 `pinned/main/env-lock.json` が本番一覧由来なら、人が測定 daemon を start した後 `LOCK_OUT=<新しい空 dir> scripts/campaign/measure-launcher.sh lock --env <launcher.env>` で作り直し、`pinned/main/` へ複写して `check-main-pins.py --root $R` を通す。確認: `measure-launcher.sh preflight` が ok true。

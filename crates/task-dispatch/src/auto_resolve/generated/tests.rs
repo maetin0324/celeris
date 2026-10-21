@@ -302,45 +302,45 @@ fn cargo(dir: &Path, args: &[&str]) {
 }
 
 fn member(repo: &Path, dir: &str, deps: &str) {
+    let name = dir.rsplit('/').next().unwrap_or(dir);
     write(
         repo,
         &format!("{dir}/Cargo.toml"),
         &format!(
-            "[package]\nname = \"{dir}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{deps}"
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{deps}"
         ),
     );
     write(repo, &format!("{dir}/src/lib.rs"), "");
 }
 
-/// path 依存だけの Cargo workspace を `sub`（"" なら repo 直下）に置き、target は app1 に dep_a、
-/// source は app2（`toml_conflict` なら app1）に dep_b を足して Cargo.lock を衝突させる。
+/// path 依存だけの Cargo workspace を `sub`（"" なら repo 直下）に置く。target は `crates/new_a`、
+/// source は `crates/new_b` を足して app の依存にし、両側の追加が Cargo.lock の同じ位置に入って
+/// 衝突する。`toml_conflict` なら app の Cargo.toml の同じ行も両側で変わる。
 fn cargo_conflict(repo: &Path, sub: &str, toml_conflict: bool) -> (String, String) {
-    let at = |p: &str| {
-        if sub.is_empty() {
-            p.to_string()
-        } else {
-            format!("{sub}/{p}")
-        }
-    };
+    let ws = repo.join(sub);
     write(
-        repo,
-        &at("Cargo.toml"),
-        "[workspace]\nresolver = \"2\"\nmembers = [\"app1\", \"app2\", \"dep_a\", \"dep_b\"]\n",
+        &ws,
+        "Cargo.toml",
+        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/*\"]\n",
     );
-    for (dir, deps) in [("app1", ""), ("app2", ""), ("dep_a", ""), ("dep_b", "")] {
-        member(&repo.join(sub), dir, deps);
-    }
-    cargo(&repo.join(sub), &["metadata", "--format-version", "1"]);
+    member(&ws, "crates/app", "");
+    cargo(&ws, &["metadata", "--format-version", "1"]);
     commit(repo, "base");
     command(repo, &["branch", "source"]);
-    member(&repo.join(sub), "app1", "dep_a = { path = \"../dep_a\" }\n");
-    cargo(&repo.join(sub), &["metadata", "--format-version", "1"]);
-    let target_sha = commit(repo, "target adds dep_a");
+    let side = |name: &str| {
+        member(&ws, &format!("crates/{name}"), "");
+        let deps = if toml_conflict {
+            format!("{name} = {{ path = \"../{name}\" }}\n")
+        } else {
+            String::new()
+        };
+        member(&ws, "crates/app", &deps);
+        cargo(&ws, &["metadata", "--format-version", "1"]);
+        commit(repo, &format!("add {name}"))
+    };
+    let target_sha = side("new_a");
     command(repo, &["checkout", "-q", "source"]);
-    let app = if toml_conflict { "app1" } else { "app2" };
-    member(&repo.join(sub), app, "dep_b = { path = \"../dep_b\" }\n");
-    cargo(&repo.join(sub), &["metadata", "--format-version", "1"]);
-    let source_sha = commit(repo, "source adds dep_b");
+    let source_sha = side("new_b");
     command(repo, &["checkout", "-q", "target"]);
     assert!(git(repo, &["merge", "--no-ff", "--no-edit", "source"]).is_err());
     (target_sha, source_sha)
@@ -376,14 +376,8 @@ fn cargo_lock_only_conflict_regenerates_with_both_deps() {
         assert_eq!(actions[0].kind, ConflictKind::Generated);
         command(repo, &["commit", "-q", "--no-edit"]);
         let body = command(repo, &["show", &format!("HEAD:{lock}")]);
-        assert!(body.contains("\"dep_a\""), "{body}");
-        assert!(body.contains("\"dep_b\""), "{body}");
-        assert!(
-            body.contains("name = \"app1\"\nversion = \"0.1.0\"\ndependencies = [\n \"dep_a\",")
-        );
-        assert!(
-            body.contains("name = \"app2\"\nversion = \"0.1.0\"\ndependencies = [\n \"dep_b\",")
-        );
+        assert!(body.contains("\"new_a\""), "{body}");
+        assert!(body.contains("\"new_b\""), "{body}");
         cargo(
             &repo.join(sub),
             &["metadata", "--format-version", "1", "--locked"],
@@ -403,7 +397,7 @@ fn cargo_lock_with_cargo_toml_conflict_needs_human() {
         request
             .conflict_files
             .iter()
-            .any(|f| f == "app1/Cargo.toml")
+            .any(|f| f.ends_with("crates/app/Cargo.toml"))
     );
 }
 
@@ -434,7 +428,7 @@ fn cargo_lock_regeneration_touching_other_files_needs_human() {
     let bin = tempfile::tempdir().unwrap();
     let (t, s) = cargo_conflict(repo, "", false);
     let mut rule = cargo_lock_rule();
-    rule.cmd = generator(bin.path(), "echo '// x' >> app1/src/lib.rs\n");
+    rule.cmd = generator(bin.path(), "echo '// x' >> crates/app/src/lib.rs\n");
     let ctx = ResolveContext {
         generated: vec![rule],
         ..ctx(t, s, None)
@@ -443,7 +437,7 @@ fn cargo_lock_regeneration_touching_other_files_needs_human() {
         panic!("regeneration outside Cargo.lock must go to a human");
     };
     assert!(
-        request.reason.contains("app1/src/lib.rs"),
+        request.reason.contains("crates/app/src/lib.rs"),
         "{}",
         request.reason
     );

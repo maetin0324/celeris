@@ -96,18 +96,44 @@ impl SqliteStore {
         &self,
         filter: Option<TaskRepoIntegrationStatus>,
     ) -> Result<Vec<TaskRepoIntegrationState>, StoreError> {
-        let ids: Vec<(String,String)> = self.with_read_conn(|c| { let mut s=c.prepare("SELECT task_id,repo_id FROM task_integrations WHERE (?1 IS NULL OR state=?1) ORDER BY updated_at DESC")?; let rows=s.query_map(params![filter.map(TaskRepoIntegrationStatus::as_str)],|r|Ok((r.get(0)?,r.get(1)?)))?; rows.collect::<rusqlite::Result<Vec<_>>>().map_err(StoreError::from) })?;
-        ids.into_iter()
-            .map(|(t, r)| {
-                let task_id = t
-                    .parse()
-                    .map_err(|e| StoreError::Invalid(format!("invalid task id: {e}")))?;
-                let repo_id = r
-                    .parse()
-                    .map_err(|e| StoreError::Invalid(format!("invalid repo id: {e}")))?;
-                self.task_integration_get_impl(task_id, repo_id)?
-                    .ok_or_else(|| StoreError::Invalid("task integration disappeared".into()))
-            })
+        type ListRow = (String, String, IntegrationStateRow);
+        let rows: Vec<ListRow> = self.with_read_conn(|c| {
+            let mut s = c.prepare("SELECT task_id,repo_id,branch,head_sha,state,reason,actor,checked_at,updated_at FROM task_integrations WHERE (?1 IS NULL OR state=?1) ORDER BY updated_at DESC")?;
+            let rows = s.query_map(params![filter.map(TaskRepoIntegrationStatus::as_str)], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    (r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?),
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(StoreError::from)
+        })?;
+        rows.into_iter()
+            .map(
+                |(t, r, (branch, head_sha, state, reason, actor, checked_at, updated_at))| {
+                    let task_id = t
+                        .parse()
+                        .map_err(|e| StoreError::Invalid(format!("invalid task id: {e}")))?;
+                    let repo_id = r
+                        .parse()
+                        .map_err(|e| StoreError::Invalid(format!("invalid repo id: {e}")))?;
+                    let state = TaskRepoIntegrationStatus::parse(&state).ok_or_else(|| {
+                        StoreError::Invalid("invalid task integration state".into())
+                    })?;
+                    Ok(TaskRepoIntegrationState {
+                        task_id,
+                        repo_id,
+                        branch,
+                        head_sha,
+                        state,
+                        reason,
+                        actor,
+                        checked_at: parse_rfc3339(&checked_at)?,
+                        updated_at: parse_rfc3339(&updated_at)?,
+                    })
+                },
+            )
             .collect()
     }
 }
@@ -160,5 +186,56 @@ mod tests {
         held.reason = Some("awaiting decision".into());
         store.task_integration_upsert(&held).expect("transition");
         assert_eq!(store.events_for(task_id).expect("events").len(), 2);
+    }
+
+    #[test]
+    fn task_integration_list_is_one_read_and_keeps_order_and_content() {
+        let store = SqliteStore::open_in_memory().expect("store");
+        let base = time::OffsetDateTime::now_utc();
+        let mut expected = Vec::new();
+        for i in 0..7i64 {
+            let value = TaskRepoIntegrationState {
+                task_id: TaskId::new(),
+                repo_id: RepoId::new(),
+                branch: format!("topic-{i}"),
+                head_sha: format!("sha{i}"),
+                state: if i % 2 == 0 {
+                    TaskRepoIntegrationStatus::Unintegrated
+                } else {
+                    TaskRepoIntegrationStatus::Integrated
+                },
+                reason: None,
+                actor: "sweep".into(),
+                checked_at: base,
+                updated_at: base + time::Duration::seconds(i),
+            };
+            store.task_integration_upsert(&value).expect("upsert");
+            expected.push(value);
+        }
+        // updated_at DESC
+        expected.reverse();
+        let before = store.lock_counts();
+        let all = store.task_integration_list(None).expect("list");
+        let used = store.lock_counts().since(before);
+        assert_eq!(used.reader + used.writer, 1, "one connection use, not N+1");
+        assert_eq!(all.len(), expected.len());
+        for (got, want) in all.iter().zip(&expected) {
+            assert_eq!(got.task_id, want.task_id);
+            assert_eq!(got.repo_id, want.repo_id);
+            assert_eq!(got.branch, want.branch);
+            assert_eq!(got.state, want.state);
+            assert_eq!(
+                got.updated_at.unix_timestamp(),
+                want.updated_at.unix_timestamp()
+            );
+        }
+        let only = store
+            .task_integration_list(Some(TaskRepoIntegrationStatus::Integrated))
+            .expect("filtered");
+        assert_eq!(only.len(), 3);
+        assert!(
+            only.iter()
+                .all(|v| v.state == TaskRepoIntegrationStatus::Integrated)
+        );
     }
 }

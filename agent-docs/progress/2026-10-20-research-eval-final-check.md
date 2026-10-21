@@ -149,3 +149,39 @@ sh $L grade --env $E; sh $L export --env $E      # RUNS は OUT の外
 
 ## campaign sha256 承認（人の決定 2026-10-21）
 `mlsys-main-3` / `043d5f52e4da26785395d3096ef8ea9c00a641dd84916d14d6999287da7becb0` を人が承認（A0/B0×K4 の 2 試行・各 1.5M・全体 3M・token_basis=all・fable 不使用。運用者が final.json・preflight.json と照合済み）。再承認は不要。実 pilot（watch→grade→export）は worker が LLM を起動しない規則のため運用者が上の手順で実行する。検査: test-parallel exit 0（6245 passed）、clippy 0、fmt 0。実 pilot 実施済: なし。
+
+## 実 pilot の結果（mlsys-main-3, 2026-10-21, 運用者 eval1）
+**結論: 試行 0 件。watch が投入前の env-lock 照合で拒否し、有料呼び出しは 0 件（tokens 0 / 3,000,000）。** 承認の指示どおり再試行・lock の作り直しはせず停止した。
+
+### 実行したコマンドと結果（証跡は `/local/celeris/data/measure/main-3/runs/`。`$OUT` の外）
+| 段 | コマンド | exit | 要点 |
+|---|---|---|---|
+| 時計 | `date -u`・`timedatectl` | 0 | 06:37:27Z。評価者端末と Celeris host は同じ host（home-dev）なので host 間差は 0。`System clock synchronized: yes`（NTP service 欄は inactive。LXC は host の時計に従う）→ `--clock-source system_utc_ntp_synced` |
+| start | `sh $L start --env $E` | 0 | 測定 daemon pid 1237072、`http://127.0.0.1:7733`（`start-1.out`）。本番 7710 は触っていない |
+| preflight（無課金） | `sh $L preflight --env $E` | 0 | `ok true`・`paid_calls_made 0`・`missing` 空・campaign_sha256 `043d5f52…7becb0`（承認値と一致）・A `2.1.303 (Claude Code)`・B probe release `641f334b6d64`（`preflight-1.json`） |
+| usage（開始値） | `celeris-campaign usage …` | 1 | `summary.json: No such file`（watch 前は `$OUT/summary.json` が無いので取れない。開始値 U0 は前段の読取 0.22 のまま）（`usage-0.*`） |
+| human-op（watch 前） | `human-op record … --op-kind protocol_step --logical-op pilot/trial-start`（A0・B0） | 0, 0 | 4 行 appended |
+| watch | `sh $L watch --env $E > $RUNS/watch-1.json` | **1** | 06:38:12Z→06:39:11Z。preflight は通過、続く `env-lock` 照合で `env-lock mismatch (refusing to run)` → `measure-launcher: env-lock mismatch: nothing was executed`（`watch-1.err`、`watch-1.json` は空） |
+| human-op | `human-op record … --op-kind status_check --trigger failure`（A0・B0）／`validate`／`list` | 0 / 0（`ok: 8 records`）/ 0 | `human-ops-list.json` |
+| stop | `sh $L stop --env $E` | 0 | `stopped pid 1237072`（開始前と同じ停止状態に戻した） |
+
+grade・export・decision-log export・join・report は、試行が無いため実行していない（実行しても全行が未実行になるだけで、意味のある証跡にならない）。
+
+### 有料呼び出しが 0 件である根拠
+- 共有台帳 `root/global-ledger/` は空（予約・消費行なし）。`$OUT` には `env-lock.json`・`lock.json`・`human-ops.jsonl` だけ（`ledger.jsonl`・`trials.jsonl`・`trials/` なし＝A の claude は起動していない）。
+- 測定 DB（`?mode=ro` で読取）の task は `B/C capability probe (no LLM)` 3 件だけ（前段 preflight・今回 preflight・watch 内 preflight）、run 3 件はすべて adapter `fake`・harness `cap-probe-claude-code`・usage null。
+- tokens: 試行ごと A0 0 / B0 0、腕ごと 0 / 0、全体 0（cap 3,000,000・per_arm 1,500,000・per_case 1,500,000 に対し超過なし）。outcome・grade・failure_class は試行が無いため無し。
+
+### 原因（配線の不備）
+- `$OUT/env-lock.json`（sha256 `3f0bc1d2…9806f`）の B 腕 `catalog` は 72 件・source 4 種（claude-oauth・codex-oauth・openai-compatible:qwen・opencode-go）。`offline-lock` に渡した `pinned/evidence/main-llm-models.json` が**本番 daemon** の `GET /api/v1/llm/models` だったため。
+- watch の `env-lock` 照合は**接続先の測定 daemon**（`[llm_sources]` は claude_oauth だけ）の catalog と比べる。測定 daemon の catalog は claude-oauth の 14 件（`runs/measure-llm-models.json`、14 件はすべて lock にも在る）で、lock だけに在る 58 件を key 名で挙げて拒否した。測定側の候補（`claude-sonnet-5-5`）自体は両方に在る。
+- preflight は env-lock を照合しない（`preflight.rs` に env-lock の検査が無く、launcher の `cmd_env_lock` は watch の中でだけ走る）ため、無課金 preflight が `ok true` でも watch で落ちた。freeze 時の確認（offline-lock の `--verify`）も同じ保存証跡どうしの照合なので検出できなかった。
+
+### 人の判断が要る点（運用者は実施していない）
+1. env-lock を測定 daemon の catalog（`runs/measure-llm-models.json`）から作り直すか、測定 daemon に本番と同じ source を宣言するか。どちらも承認時に照合した固定物（env-lock の hash、または daemon.toml の hash `pins.sha256`）が変わる。campaign_sha256（manifest）は変わらない見込みだが、固定物の差し替えとして再確認が要る。
+2. 作り直した後の再実行は今回の承認（2 試行・再実行なし）の内側か。今回は試行 0 件・消費 0 なので「試行のやり直し」には当たらないが、承認の文言上は人が決める。
+3. human-ops.jsonl には trial-start の `protocol_step` が A0・B0 で既に入っている（実際に行った操作として残した。cutoff は書いていない）。再実行時は同じ identity に新しい `protocol_step` を足す。
+
+### 提案
+- `preflight` に env-lock 照合（接続先 daemon の catalog と `$OUT/env-lock.json`）を入れ、無課金段で検出できるようにする。
+- `offline-lock --models-evidence` は測定 daemon の `GET /api/v1/llm/models` から取る（本番の保存証跡を使わない）と `measure-run-final.md` §3a に明記する。

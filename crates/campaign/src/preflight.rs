@@ -33,11 +33,11 @@ use crate::{
 
 pub const PREFLIGHT_SCHEMA: &str = "celeris.campaign-preflight/1";
 
-/// 人が承認した上限（2026-10-16: cache 込み全 token、全体 300 万・case 30 万・arm 130 万、並列 1）。
+/// 人が承認した上限（2026-10-21: cache 込み全 token、全体 300 万・case 150 万・arm 150 万、並列 1）。
 /// manifest がこれを超える、または token_basis が all でないと起動しない。枠の変更は新しい決定が要る。
 pub const APPROVED_MAX_TOKENS: u64 = 3_000_000;
-pub const APPROVED_PER_CASE_TOKENS: u64 = 300_000;
-pub const APPROVED_PER_ARM_TOKENS: u64 = 1_300_000;
+pub const APPROVED_PER_CASE_TOKENS: u64 = 1_500_000;
+pub const APPROVED_PER_ARM_TOKENS: u64 = 1_500_000;
 pub const APPROVED_PARALLEL: u32 = 1;
 
 /// 環境の問い合わせ。値は返さない（漏れようが無い）。

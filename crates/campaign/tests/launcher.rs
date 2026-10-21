@@ -1564,10 +1564,7 @@ rules = [
     assert_eq!(st, 200, "{cfg}");
     assert_eq!(cfg["identity"]["pid"], json!(pid), "{cfg}");
     log.push(json!({"step": "GET /api/v1/config identity", "identity": cfg["identity"]}));
-    // 案件と scratch repo は測定 daemon の正式 API で作る（測定 DB は新規）。
-    let repo = d.join("scratch-repo");
-    fs::create_dir_all(&repo).unwrap();
-    fs::write(repo.join("README"), "measurement scratch\n").unwrap();
+    // 案件は測定 daemon の正式 API で作る（測定 DB は新規）。試行の task は trial workspace だけを作業場所にし、repo は登録しない。
     let (st, p) = f.api(
         "POST",
         "/api/v1/projects",
@@ -1575,15 +1572,9 @@ rules = [
     );
     assert_eq!(st, 201, "{p}");
     let pid_s = p["id"].as_str().unwrap().to_string();
-    let (st, r) = f.api(
-        "POST",
-        &format!("/api/v1/projects/{pid_s}/repos"),
-        Some(&json!({"name": "scratch", "kind": "dir", "location": {"kind": "local", "path": repo}, "is_primary": true})),
-    );
-    assert_eq!(st, 201, "{r}");
     fs::write(
         d.join("task-template.json"),
-        json!({"project_id": pid_s, "repos": ["scratch"], "acceptance": [{"type": "reviewer", "text": "reviewed"}]})
+        json!({"project_id": pid_s, "acceptance": [{"type": "reviewer", "text": "reviewed"}]})
             .to_string(),
     )
     .unwrap();

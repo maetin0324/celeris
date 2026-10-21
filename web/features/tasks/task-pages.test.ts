@@ -27,7 +27,9 @@ describe("task list pagination", () => {
         { q: "GPU", status: ["ready", "blocked"], order: "dispatch", limit: "20", run_state: "waiting" },
         "next",
       ),
-    ).toBe("/api/tasks?q=GPU&status=ready&status=blocked&order=dispatch&limit=20&run_state=waiting&cursor=next&with=integrations");
+    ).toBe(
+      "/api/tasks?q=GPU&status=ready&status=blocked&order=dispatch&limit=20&run_state=waiting&cursor=next&with=integrations",
+    );
   });
 
   test("asks for integrations explicitly and keeps it in the query key", () => {

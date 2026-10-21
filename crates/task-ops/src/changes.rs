@@ -159,6 +159,7 @@ pub fn git_with_env(
     extra_env: &[(&str, &str)],
     timeout: Duration,
 ) -> Option<CmdOutput> {
+    count_git_spawn(dir);
     let mut cmd = Command::new("git");
     cmd.arg("-C")
         .arg(dir)
@@ -173,6 +174,30 @@ pub fn git_with_env(
         cmd.env(k, v);
     }
     run(cmd, timeout)
+}
+
+/// 試験用の注入点（ADR 2026-10-21-task-list-opt-in-integrations D4）: `git -C <dir>` を起こした回数を
+/// dir ごとに数える。試験は専用の一時 dir を使うので、並走する他の試験の git と混ざらない。
+fn git_spawn_counts() -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, usize>> {
+    static COUNTS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, usize>>,
+    > = std::sync::OnceLock::new();
+    COUNTS.get_or_init(Default::default)
+}
+
+fn count_git_spawn(dir: &Path) {
+    if let Ok(mut counts) = git_spawn_counts().lock() {
+        *counts.entry(dir.to_path_buf()).or_insert(0) += 1;
+    }
+}
+
+/// `dir` で `git` を起こした回数（process 開始からの累計。試験用）。
+pub fn git_spawns_in(dir: &Path) -> usize {
+    git_spawn_counts()
+        .lock()
+        .ok()
+        .and_then(|counts| counts.get(dir).copied())
+        .unwrap_or(0)
 }
 
 /// 任意の子プロセスを 1 つ起こす（上限つき）。`git` が無い環境での `grep` の代わりなど、

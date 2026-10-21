@@ -11,7 +11,18 @@ use time::OffsetDateTime;
 #[derive(Debug, Clone, PartialEq)]
 pub struct IntegrationContext {
     pub repositories: std::collections::HashMap<RepoId, IntegrationRepoContext>,
-    pub releases_dir: Option<std::path::PathBuf>,
+    /// 最新の promoted release。`None` なら promotion は付けない。要求ごとに 1 回だけ読む（ADR 2026-10-21）。
+    pub release: Option<NewestRelease>,
+}
+
+/// `releases_dir` を走査して得た最新の promoted release の sha（無ければ `None`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewestRelease(pub Option<String>);
+
+impl NewestRelease {
+    pub fn read(releases_dir: &Path) -> Self {
+        Self(newest_release_sha(releases_dir))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,13 +56,16 @@ pub fn promotion_view(
     branch_head: &str,
     releases_dir: &Path,
 ) -> PromotionView {
-    if repository != "agent-platform" {
-        return PromotionView {
-            status: PromotionStatus::NotApplicable,
-            release_sha: None,
-        };
-    }
-    let newest = std::fs::read_dir(releases_dir)
+    promotion_view_for(
+        repository,
+        repository_path,
+        branch_head,
+        &NewestRelease::read(releases_dir),
+    )
+}
+
+fn newest_release_sha(releases_dir: &Path) -> Option<String> {
+    std::fs::read_dir(releases_dir)
         .ok()
         .into_iter()
         .flatten()
@@ -66,8 +80,24 @@ pub fn promotion_view(
             let at = value.get("promoted_at")?.as_str()?.to_owned();
             Some((at, sha))
         })
-        .max_by(|a, b| a.0.cmp(&b.0));
-    let Some((_, release_sha)) = newest else {
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, sha)| sha)
+}
+
+/// `promotion_view` の本体。最新 release は呼び出し側が 1 回だけ読んで渡す。
+pub fn promotion_view_for(
+    repository: &str,
+    repository_path: &Path,
+    branch_head: &str,
+    newest: &NewestRelease,
+) -> PromotionView {
+    if repository != "agent-platform" {
+        return PromotionView {
+            status: PromotionStatus::NotApplicable,
+            release_sha: None,
+        };
+    }
+    let Some(release_sha) = newest.0.clone() else {
         return PromotionView {
             status: PromotionStatus::PromotionPending,
             release_sha: None,

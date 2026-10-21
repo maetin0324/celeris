@@ -25,64 +25,89 @@ use super::{ApiResult, Params, json_response, no_query, read_json};
 
 const TITLE_QUERY_MAX_CHARS: usize = 200;
 
-fn attach_task_integrations(
-    store: &dyn TaskStore,
-    id: task_core::TaskId,
-    integrations: &mut Option<Vec<task_ops::view::IntegrationView>>,
-    promotion: &mut Option<task_ops::stranded::PromotionView>,
-    releases_dir: Option<&std::path::Path>,
-) -> Result<(), ApiProblem> {
-    let Some(task) = store.get(id).map_err(crate::problem::store_problem)? else {
-        return Ok(());
-    };
-    let mut repos = match task.project_id {
-        Some(project_id) => store
-            .repo_list(project_id)
-            .map_err(crate::problem::store_problem)?,
-        None => Vec::new(),
-    };
-    // ADR 2026-10-11 D3: a task without a project names its repositories through the integration
-    // rows the sweep resolved from registered `celeris/<task id>` branches.
-    for state in store
-        .task_integration_list(None)
-        .map_err(crate::problem::store_problem)?
-    {
-        if state.task_id == id
-            && !repos.iter().any(|repo| repo.id == state.repo_id)
-            && let Some(repo) = store
-                .repo_get(state.repo_id)
-                .map_err(crate::problem::store_problem)?
+/// 取り込み状態の付加（ADR 2026-10-21-task-list-opt-in-integrations D2）。要求ごとに
+/// `task_integration_list` を 1 回だけ読み、repo の解決（`repo_get` と `resolve_default_branch`）は
+/// repo ごと、promotion の最新 release は要求ごとに 1 回だけ行う。付加は行数に比例して store・git を叩かない。
+struct IntegrationAttacher<'a> {
+    store: &'a dyn TaskStore,
+    states: HashMap<task_core::TaskId, Vec<task_core::TaskRepoIntegrationState>>,
+    repositories: HashMap<task_core::RepoId, Option<task_ops::stranded::IntegrationRepoContext>>,
+    release: Option<task_ops::stranded::NewestRelease>,
+}
+
+impl<'a> IntegrationAttacher<'a> {
+    fn new(
+        store: &'a dyn TaskStore,
+        releases_dir: Option<&std::path::Path>,
+    ) -> Result<Self, ApiProblem> {
+        let mut states: HashMap<_, Vec<_>> = HashMap::new();
+        for state in store
+            .task_integration_list(None)
+            .map_err(crate::problem::store_problem)?
         {
-            repos.push(repo);
+            states.entry(state.task_id).or_default().push(state);
         }
+        Ok(Self {
+            store,
+            states,
+            repositories: HashMap::new(),
+            release: releases_dir.map(task_ops::stranded::NewestRelease::read),
+        })
     }
-    let mut repositories = HashMap::new();
-    for repo in repos {
-        if let task_core::WorkspaceSpec::Local { path, .. } = repo.location {
-            // ADR 2026-10-11-stranded-done-branches F1: 解決できない repo は context に入れない。
-            match task_ops::changes::resolve_default_branch(&path, repo.default_branch.as_deref()) {
-                Ok(default_branch) => {
-                    repositories.insert(
-                        repo.id,
-                        task_ops::stranded::IntegrationRepoContext {
-                            name: repo.name,
-                            path,
-                            default_branch,
-                        },
-                    );
-                }
-                Err(error) => {
-                    tracing::warn!(repo = %repo.name, %error, "integration context skips repository");
-                }
+
+    fn attach(
+        &mut self,
+        id: task_core::TaskId,
+        integrations: &mut Option<Vec<task_ops::view::IntegrationView>>,
+        promotion: &mut Option<task_ops::stranded::PromotionView>,
+    ) -> Result<(), ApiProblem> {
+        let states = self.states.get(&id).cloned().unwrap_or_default();
+        // 状態の行が名指す repo だけが view になる。task の案件の repo を全部引く必要はない。
+        for state in &states {
+            if !self.repositories.contains_key(&state.repo_id) {
+                let context = self.resolve_repo(state.repo_id)?;
+                self.repositories.insert(state.repo_id, context);
+            }
+        }
+        let context = task_ops::stranded::IntegrationContext {
+            repositories: self
+                .repositories
+                .iter()
+                .filter_map(|(id, repo)| Some((*id, repo.clone()?)))
+                .collect(),
+            release: self.release.clone(),
+        };
+        task_ops::view::attach_integrations(states, integrations, promotion, &context);
+        Ok(())
+    }
+
+    fn resolve_repo(
+        &self,
+        repo_id: task_core::RepoId,
+    ) -> Result<Option<task_ops::stranded::IntegrationRepoContext>, ApiProblem> {
+        let Some(repo) = self
+            .store
+            .repo_get(repo_id)
+            .map_err(crate::problem::store_problem)?
+        else {
+            return Ok(None);
+        };
+        let task_core::WorkspaceSpec::Local { path, .. } = repo.location else {
+            return Ok(None);
+        };
+        // ADR 2026-10-11-stranded-done-branches F1: 解決できない repo は context に入れない。
+        match task_ops::changes::resolve_default_branch(&path, repo.default_branch.as_deref()) {
+            Ok(default_branch) => Ok(Some(task_ops::stranded::IntegrationRepoContext {
+                name: repo.name,
+                path,
+                default_branch,
+            })),
+            Err(error) => {
+                tracing::warn!(repo = %repo.name, %error, "integration context skips repository");
+                Ok(None)
             }
         }
     }
-    let context = task_ops::stranded::IntegrationContext {
-        repositories,
-        releases_dir: releases_dir.map(std::path::Path::to_path_buf),
-    };
-    task_ops::view::attach_integrations(store, id, integrations, promotion, Some(&context))
-        .map_err(|e| crate::problem::ops_problem(store, e, None))
 }
 
 /// POST /tasks accepts the task specification and an optional write path hint.
@@ -168,6 +193,8 @@ pub(super) async fn list_tasks(
             "archived",
             // ADR 2026-10-11-task-wait-reasons D5: 走れる／待ち。
             "run_state",
+            // ADR 2026-10-21-task-list-opt-in-integrations D1: 付加する欄（`integrations`）。
+            "with",
         ],
     )?;
     let mut filter = ListFilter::default();
@@ -268,6 +295,18 @@ pub(super) async fn list_tasks(
         .single("cursor")?
         .filter(|c| !c.is_empty())
         .map(str::to_string);
+    // ADR 2026-10-21-task-list-opt-in-integrations D1: 取り込み状態は `?with=integrations` のときだけ。
+    let mut with_integrations = false;
+    for value in query.list("with") {
+        match value {
+            "integrations" => with_integrations = true,
+            other => {
+                return Err(ApiProblem::bad_request(format!(
+                    "unknown with `{other}` (integrations)"
+                )));
+            }
+        }
+    }
     let ctx = state.inner.view.clone();
     let releases_dir = state.inner.integration_releases_dir.clone();
     let memory = state.memory_waits();
@@ -292,14 +331,11 @@ pub(super) async fn list_tasks(
                 }
                 other => ops_problem(store, other, None),
             })?;
-            for item in &mut list.items {
-                attach_task_integrations(
-                    store,
-                    item.id,
-                    &mut item.integrations,
-                    &mut item.promotion,
-                    releases_dir.as_deref(),
-                )?;
+            if with_integrations {
+                let mut attacher = IntegrationAttacher::new(store, releases_dir.as_deref())?;
+                for item in &mut list.items {
+                    attacher.attach(item.id, &mut item.integrations, &mut item.promotion)?;
+                }
             }
             Ok(list)
         })
@@ -604,12 +640,10 @@ pub(super) async fn task_detail(
             let mut detail =
                 task_ops::view::task_detail(store, id, &ctx, &memory, OffsetDateTime::now_utc())
                     .map_err(|e| ops_problem(store, e, None))?;
-            attach_task_integrations(
-                store,
+            IntegrationAttacher::new(store, releases_dir.as_deref())?.attach(
                 id,
                 &mut detail.integrations,
                 &mut detail.promotion,
-                releases_dir.as_deref(),
             )?;
             let dir = files::task_local_dir(store, &ctx.workspace_roots, &detail.task)?;
             for run in &mut detail.runs {

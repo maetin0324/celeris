@@ -50,6 +50,15 @@ fn variant_org_for(
     Ok(Some(spec.org))
 }
 
+/// `--worker-program <name>=<program>` の全指定（env-lock と preflight で同じ値を使う）。
+fn worker_program_args(args: &[String]) -> Vec<String> {
+    args.iter()
+        .enumerate()
+        .filter(|(_, a)| *a == "--worker-program")
+        .filter_map(|(i, _)| args.get(i + 1).cloned())
+        .collect()
+}
+
 fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs {
     let text = |n: &str| arg(args, n).map(|p| p.to_string_lossy().into_owned());
     let or = |n: &str, d: &str| arg(args, n).unwrap_or_else(|| PathBuf::from(d));
@@ -81,6 +90,7 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
         measurement_id: text("--measurement-id"),
         cap_env: arg(args, "--cap-env"),
         variant_b0_sha256: text("--variant-b0-sha256"),
+        worker_programs: worker_program_args(args),
     }
 }
 
@@ -381,52 +391,36 @@ fn run(args: Vec<String>) -> Result<String, String> {
         }
         "env-lock" | "offline-lock" => {
             use celeris_campaign::env_lock;
-            let path_var = std::env::var_os("PATH");
-            // A が有効なときだけ A の実行ファイルを固定する（B/C のみの測定は A を探さない）。
-            let a_program = if m.is_active(celeris_campaign::manifest::ConfigId::A) {
-                let p = arg(&args, "--a-program").unwrap_or_else(|| PathBuf::from("claude"));
-                Some(env_lock::pin_program(&p, path_var.as_deref())?)
-            } else {
-                None
-            };
-            let mut worker_programs = Vec::new();
-            for w in args
-                .iter()
-                .enumerate()
-                .filter(|(_, a)| *a == "--worker-program")
-                .filter_map(|(i, _)| args.get(i + 1))
-            {
-                let (name, p) = w
-                    .split_once('=')
-                    .ok_or("--worker-program expects <name>=<program>")?;
-                worker_programs.push(env_lock::WorkerProgram {
-                    name: name.into(),
-                    pin: env_lock::pin_program(std::path::Path::new(p), path_var.as_deref())?,
-                });
-            }
             let offline = cmd == "offline-lock";
             // B/C の候補集合・階層は実 daemon の `GET /api/v1/llm/models`（正式 DTO）から取る。空は固定しない。
             // offline-lock は daemon に接続せず、承認済み実証跡 file（sha256 明示）から同じ関数で取る。
-            let catalog = if offline {
-                let ev = arg(&args, "--models-evidence").ok_or("--models-evidence is required")?;
-                let sha = arg(&args, "--models-evidence-sha256")
-                    .ok_or("--models-evidence-sha256 is required")?;
-                celeris_campaign::offline_lock::catalog_from_evidence(&ev, &sha.to_string_lossy())?
-            } else {
-                let url = arg(&args, "--api-url").ok_or("--api-url is required")?;
-                let tok = arg(&args, "--token-env").ok_or("--token-env is required")?;
-                env_lock::fetch_catalog(&RealHost, &url.to_string_lossy(), &tok.to_string_lossy())?
+            let catalog = || -> Result<_, String> {
+                if offline {
+                    let ev =
+                        arg(&args, "--models-evidence").ok_or("--models-evidence is required")?;
+                    let sha = arg(&args, "--models-evidence-sha256")
+                        .ok_or("--models-evidence-sha256 is required")?;
+                    celeris_campaign::offline_lock::catalog_from_evidence(
+                        &ev,
+                        &sha.to_string_lossy(),
+                    )
+                } else {
+                    let url = arg(&args, "--api-url").ok_or("--api-url is required")?;
+                    let tok = arg(&args, "--token-env").ok_or("--token-env is required")?;
+                    env_lock::fetch_catalog(
+                        &RealHost,
+                        &url.to_string_lossy(),
+                        &tok.to_string_lossy(),
+                    )
+                }
             };
-            let cap_env = match arg(&args, "--cap-env") {
-                Some(p) => Some(celeris_campaign::cap_probe::CapEnv::load(&p)?.pin()?),
-                None => None,
-            };
-            let obs = env_lock::Observed {
-                a_program,
-                worker_programs,
+            let obs = env_lock::observe(
+                &m,
+                &arg(&args, "--a-program").unwrap_or_else(|| PathBuf::from("claude")),
+                &worker_program_args(&args),
+                arg(&args, "--cap-env").as_deref(),
                 catalog,
-                cap_env,
-            };
+            )?;
             let verify = args.iter().any(|a| a == "--verify");
             if offline {
                 let v = celeris_campaign::offline_lock::establish(

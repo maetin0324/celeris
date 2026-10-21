@@ -1386,7 +1386,8 @@ fn accounting(which: &'static str) {
         );
         assert!(!text(&o).contains(TOKEN_VALUE));
         assert!(
-            text(&o).contains("saved lock"),
+            // preflight の env-lock 照合（watch と共有）が先に拒否することもある。どちらも有料実行の前。
+            text(&o).contains("saved lock") || text(&o).contains("env-lock mismatch"),
             "{what}: rejected by the saved-lock gate, not by an unrelated error: {}",
             text(&o)
         );

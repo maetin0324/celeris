@@ -83,10 +83,14 @@ CAP_ENV=…/cap-env.json             # celeris.campaign-cap-env/1（cap-runbook 
 固定資産の整合は `python3 scripts/campaign/check-main-pins.py --root $R`（読むだけ。設定・実在 path・lock/hash・公開側への private 混入・実 K2 preflight 証跡を内容検証し、不足があれば非 0。**手順を始める前と、変えた後に必ず通す**）。
 
 ### env-lock/3 と campaign lock（通常の生成関数。watch 不要・無試行）
-実 root の `pinned/main/{env-lock.json,lock.json}` は `celeris-campaign offline-lock`（通常の `preflight::expected_lock` → `env_lock::establish` → `lock_exec::save` を呼ぶ最小入口。daemon・LLM に接続せず `paid_calls_made=0`）で、承認済み `GET /api/v1/llm/models` の保存証跡 `pinned/evidence/main-llm-models.json`（sha256 `c9babb76…45ab6`）から生成済み。再照合（何も書かない）:
+実 root の `pinned/main/{env-lock.json,lock.json}` は `celeris-campaign offline-lock`（通常の `preflight::expected_lock` → `env_lock::establish` → `lock_exec::save` を呼ぶ最小入口。LLM に接続せず `paid_calls_made=0`）で作る。**モデル一覧（`--models-evidence`）は launcher.env の測定 daemon の `GET /api/v1/llm/models` から取る。本番 daemon の一覧は使わない**（source が違えば watch と preflight の env-lock 照合で拒否される。2026-10-21 の mlsys-main-3 は本番一覧 72 件で作った lock が測定 daemon 14 件と食い違い watch で停止した。ADR `agent-docs/adr/2026-10-21-preflight-env-lock-check.md`）。生成は launcher の `lock` 段で行う（測定 daemon を start した後。保存→sha256→offline-lock を 1 段で行い、`<LOCK_OUT>.measure-llm-models.json` に証跡を残す）:
+```sh
+LOCK_OUT=$R/pinned/lock-gen-<日付> scripts/campaign/measure-launcher.sh lock --env $R/pinned/main/launcher.env
+```
+生成後、中身を `pinned/main/` へ複写し checker を通す。preflight は `<out>/env-lock.json` が在れば測定 daemon の一覧と照合し、不一致なら `missing[].check = "env-lock"`・`failure_class = "env_lock_mismatch"` で失敗する。再照合（何も書かない。証跡は lock 段が保存した測定 daemon 由来の file）:
 ```sh
 $B offline-lock --verify --manifest $R/pinned/main/final.json --out <生成時の out dir。`$R/pinned/lock-gen` と同内容> \
-  --a-program <claude 実体> --models-evidence $R/pinned/evidence/main-llm-models.json --models-evidence-sha256 <上記 sha256 の全桁> \
+  --a-program <claude 実体> --models-evidence <LOCK_OUT>.measure-llm-models.json --models-evidence-sha256 <lock 段が出した sha256> \
   --cap-env $R/pinned/cap-env.json --cases-root $R/pinned/main/fixed/cases --grader-root $R/pinned/main/fixed/grader-private \
   --grade-case-root $R/pinned/main/fixed/grade-cases --measurement-id mlsys-main-1 \
   --repo-src $R/measure-src/main/repo --materials-src $R/measure-src/main/materials --kb-src $R/measure-src/main/kb --inputs-src $R/measure-src/main/inputs

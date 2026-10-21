@@ -256,6 +256,7 @@ fn fx() -> Fx {
         measurement_id: None,
         cap_env: Some(preflight_setup::write_cap_env(d)),
         variant_b0_sha256: None,
+        worker_programs: Vec::new(),
     };
     Fx { dir, inp }
 }

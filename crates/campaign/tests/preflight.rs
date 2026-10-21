@@ -582,7 +582,7 @@ fn every_kind_of_gap_is_reported() {
     // task template の placeholder
     fs::write(
         s.dir.path().join("task-template.json"),
-        json!({"project_id":"<案件 id>","acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
+        json!({"project_id":"<案件 id>","max_turns": 100, "acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
     )
     .unwrap();
     assert!(missing_checks(&s.inp, &host()).contains(&"versions".into()));
@@ -931,7 +931,7 @@ fn remote_primary_repo_is_irrelevant_but_template_repos_are_rejected() {
     assert!(r.ok, "{:?}", r.missing);
     fs::write(
         s.dir.path().join("task-template.json"),
-        json!({"project_id":"01ABC","repos":["scratch"],"acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
+        json!({"project_id":"01ABC","repos":["scratch"],"max_turns": 100, "acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
     )
     .unwrap();
     let r = check(&s.inp, &remote);

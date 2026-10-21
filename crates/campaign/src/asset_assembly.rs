@@ -147,3 +147,19 @@ pub fn assemble_initial(
     lock_tree::verify_archive(lock, dest)
         .map_err(|e| EnvFailure(format!("assembled tree does not match the lock: {e}")))
 }
+
+/// 固定入力の tgz を `dest` へ展開する（grader の再計算検査用。grader 自身は子 process を起動しない）。
+pub fn extract_tgz(archive: &Path, dest: &Path) -> Result<(), String> {
+    let out = std::process::Command::new("tar")
+        .arg("-xzf")
+        .arg(archive)
+        .arg("-C")
+        .arg(dest)
+        .output()
+        .map_err(|e| format!("tar: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}

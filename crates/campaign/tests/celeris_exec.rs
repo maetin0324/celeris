@@ -234,7 +234,7 @@ fn c_routing() -> ArmRouting {
 }
 
 fn template() -> Map<String, Value> {
-    json!({"acceptance": [{"type": "reviewer"}], "labels": ["campaign"]})
+    json!({"max_turns": 100, "acceptance": [{"type": "reviewer"}], "labels": ["campaign"]})
         .as_object()
         .cloned()
         .expect("object")
@@ -311,6 +311,11 @@ fn submit_poll_and_requery_after_lost_response() {
     assert!(body["objective"].as_str().expect("obj").contains(KEY));
     assert_eq!(body["workspace"], json!(d.path().to_string_lossy()));
     assert_eq!(body["acceptance"], json!([{"type": "reviewer"}]));
+    assert_eq!(
+        body["max_turns"],
+        json!(100),
+        "the template max_turns reaches POST /tasks"
+    );
 
     // 走行中は Wait。作業ツリーは実行器が触らない（消さない）。
     fs::write(d.path().join("work.txt"), "x").expect("write");
@@ -848,6 +853,21 @@ fn celeris_body_pins_trial_workspace_and_empty_repos() {
     assert_eq!(b["repos"], json!([]));
     // 空配列だけでは案件の primary repo が補われる（task-ops resolve_repos）。shared で補完を止める。
     assert_eq!(b["workspace_mode"], json!("shared"));
+}
+
+#[test]
+fn check_template_requires_max_turns() {
+    use celeris_campaign::celeris_exec::check_template;
+    let mut t = template();
+    assert!(check_template(&t).is_ok());
+    for bad in [json!(0), json!("100"), json!(null), json!(-1)] {
+        t.insert("max_turns".into(), bad);
+        let e = check_template(&t).expect_err("bad max_turns");
+        assert!(e.contains("max_turns"), "{e}");
+    }
+    t.remove("max_turns");
+    let e = check_template(&t).expect_err("missing max_turns");
+    assert!(e.contains("max_turns") && e.contains("10"), "{e}");
 }
 
 #[test]

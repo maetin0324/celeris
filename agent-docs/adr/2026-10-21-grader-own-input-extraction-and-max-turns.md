@@ -1,7 +1,7 @@
 # ADR: 採点は固定入力 tgz を grader 自身が展開して照合する / B の task 雛形は max_turns = 100 を必須にする
 
 - 日付: 2026-10-21
-- 状態: 決定（実装は続きの session。agent-docs/progress/2026-10-21-grader-input-and-max-turns.md 参照）
+- 状態: 実装済み（agent-docs/progress/2026-10-21-grader-input-and-max-turns.md 参照）
 
 ## 背景
 mlsys-main-3 の実 pilot（task 01M5BT8JYW）で 2 件が見つかった。
@@ -20,8 +20,9 @@ mlsys-main-3 の実 pilot（task 01M5BT8JYW）で 2 件が見つかった。
 - archive が無い・sha256 不一致・展開失敗・`pinned_raw` の sha256 不一致（grader 側の固定入力の不整合）は
   `CheckResult::env_failure`（failure_class = `env_failure`）にする。`model_failure` にしない。
   作業者の報告が不正（metric 行なし・許容差外）なときだけ model_failure。
-- 旧い「artifact 内 `pinned_raw` を読む」経路は同じ変更で消す（破壊的変更を是とする方針）。
-  fixtures の grade-case（k3/k4/short-ml）は `input_archive` へ移す。
+- `input_archive` を持たない case（raw を作業者が成果物として作る dagbench 型）だけが従来どおり artifact 内を読む。
+  実資産 case（k3/k4/short-ml）の原票 tgz は repo に無いため、`input_archive` への移行は次 campaign の再 freeze で行う
+  （「本番への移行」）。
 - case の task.md 本文にも展開先（`inputs/` 直下）を明記する。
 
 ### D2 max_turns は雛形に必須

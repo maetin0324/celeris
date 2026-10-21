@@ -462,12 +462,15 @@ fn executor_error_body_is_recorded_and_a_missing_workspace_does_not_hide_it() {
 #[test]
 fn task_template_accepts_only_the_api_acceptance_shape() {
     let t = |v: Value| -> Map<String, Value> { v.as_object().cloned().expect("object") };
-    let nested = t(json!({"acceptance":[{"text":"x","check":{"type":"reviewer"}}]}));
+    let nested =
+        t(json!({"max_turns":100,"acceptance":[{"text":"x","check":{"type":"reviewer"}}]}));
     assert!(check_template(&nested).unwrap_err().contains("nested"));
     assert!(check_template(&t(json!({"acceptance":[{"text":"x"}]}))).is_err());
     assert!(check_template(&t(json!({"tier":"standard"}))).is_err());
     assert!(check_template(&t(json!({"objective":"x"}))).is_err());
-    let ok = t(json!({"project_id":"p","acceptance":[{"type":"reviewer","text":"x"}]}));
+    let ok = t(
+        json!({"project_id":"p","max_turns": 100, "acceptance":[{"type":"reviewer","text":"x"}]}),
+    );
     assert!(check_template(&ok).is_ok());
     // repos は実行器が空配列で埋める（ADR 2026-10-20-mlsys-main2-fixes D2）。
     assert!(check_template(&t(json!({"repos":["r"]}))).is_err());
@@ -486,7 +489,7 @@ fn cli_rejects_api_url_with_path_and_nested_template_before_any_request() {
     fs::write(d.path().join("c.json"), serde_json::to_vec(&m).unwrap()).unwrap();
     fs::write(
         d.path().join("tpl.json"),
-        r#"{"acceptance":[{"text":"x","check":{"type":"reviewer"}}]}"#,
+        r#"{"max_turns":100,"acceptance":[{"text":"x","check":{"type":"reviewer"}}]}"#,
     )
     .unwrap();
     let go = |url: &str, tpl: Option<&str>| {

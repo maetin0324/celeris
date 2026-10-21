@@ -698,7 +698,7 @@ fn fixture(which: &'static str, repeats: u32) -> Fx {
     .expect("canaries");
     fs::write(
         d.join("task-template.json"),
-        json!({"project_id":"01ABC","acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
+        json!({"project_id":"01ABC","max_turns": 100, "acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
     )
     .expect("template");
     // A のアカウント dir（認証材料の置き場。中身は空の使い捨て）。

@@ -2705,6 +2705,29 @@ fn captured_args(dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+/// 次 campaign の雛形（max_turns = 100）が task.budget に入ると、worker・reviewer など全ての run が
+/// 同じ経路で `--max-turns 100` を CLI に渡す（既定 10 に落ちない）。
+#[tokio::test]
+async fn task_budget_max_turns_reaches_the_cli_max_turns_argument() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = stub_claude(dir.path(), args_log_script());
+    let adapter = ClaudeCodeAdapter::new(config);
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.task.budget.max_turns = 100;
+    let _ = adapter
+        .run(
+            req,
+            "run-turns",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    let args = captured_args(dir.path());
+    let v = args.windows(2).find(|p| p[0] == "--max-turns").unwrap()[1].clone();
+    assert_eq!(v, "100");
+}
+
 /// ADR-0054 D1（Phase 67）: `context.session` が無ければ Phase 66 までと同じ
 /// `--no-session-persistence`。
 #[tokio::test]

@@ -92,6 +92,19 @@ pub fn routing_override(cfg: &Config) -> Result<Value, String> {
 /// 旧い入れ子（`{"text", "check": {"type": …}}`）は API が 400 を返すので、投入前に拒否する。
 /// 実行器が埋める欄（title・objective・labels 以外の上書き不可欄）を template に書くことも拒否する。
 pub fn check_template(t: &Map<String, Value>) -> Result<(), String> {
+    // max_turns を書かない雛形は task の既定（10）に黙って落ち、worker・reviewer が 10 turn で止まる
+    // （mlsys-main-3）。worker と reviewer は同じ task.budget.max_turns を --max-turns に渡す。
+    if !t
+        .get("max_turns")
+        .and_then(Value::as_u64)
+        .is_some_and(|n| n > 0)
+    {
+        return Err(
+            "--task-template must set max_turns to a positive integer (e.g. 100); \
+             without it the task silently falls back to the default of 10"
+                .to_string(),
+        );
+    }
     for k in [
         "title",
         "objective",

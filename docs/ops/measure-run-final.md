@@ -63,7 +63,7 @@ CAP_ENV=…/cap-env.json             # celeris.campaign-cap-env/1（cap-runbook 
 - B・C は同じ `routing.models=["claude-sonnet-5-5"]`・`routing.run_harnesses=["claude-code"]`・`lower_policy=mlsys-min-1`。方策だけが違う（B=fixed、C=jev-1）。A は claude-code / claude-sonnet-5-5 で集合の内側。`cap-probe-*` は run_harnesses に入れない。
 - C は `no_evidence_table=true`（根拠表なし。`effective_evidence_mode=none`）、B は根拠表欄なしで none。**`evidence_table_id` と `celerisctl routing evidence` の手順は無い（消した）。latest へ fallback しない。**
 - 比較: primary A vs B、secondary B vs C。subset は K2・K4。K2 `judged_scope=[implementation, experiment]`（analysis / review は `not_judged`。維持する。ADR 2026-10-18-k2-judged-scope）、K4 は analysis。
-- `$P/task-template.json`: `project_id=01M2WTS3DKNZBSZ2JMVB4CZMBW`、acceptance は reviewer。`repos`・`workspace_mode`・`max_tokens` は書かない（拒否される。実行器が trial workspace を作業場所にし、`repos: []`・`max_tokens=per_case` を埋める。ADR 2026-10-20-mlsys-main2-fixes D1・D2）。
+- `$P/task-template.json`: `project_id=01M2WTS3DKNZBSZ2JMVB4CZMBW`、acceptance は reviewer、`"max_turns": 100` を必ず書く（無い雛形は preflight・`--task-template` 読み込みで拒否される。書かないと task 既定の 10 に落ち、worker・reviewer が 10 turn で止まる。worker と reviewer は同じ task の max_turns を `--max-turns` に渡す。ADR 2026-10-21-grader-own-input-extraction-and-max-turns D2）。`repos`・`workspace_mode`・`max_tokens` は書かない（拒否される。実行器が trial workspace を作業場所にし、`repos: []`・`max_tokens=per_case` を埋める。ADR 2026-10-20-mlsys-main2-fixes D1・D2）。
 - `budget.token_basis=all`。`lower_policy`/`online_update` は変えない。
 
 ## 3a. 主比較（測定 ID `mlsys-main-1`、A0 vs B0 のみ）の承認済み固定値

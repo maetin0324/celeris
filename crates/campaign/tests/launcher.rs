@@ -431,7 +431,7 @@ impl Fx {
         assert_eq!(st, 201, "{r}");
         fs::write(
             self.d().join("task-template.json"),
-            json!({"project_id": id, "acceptance": [{"type": "reviewer", "text": "x"}]})
+            json!({"project_id": id, "max_turns": 100, "acceptance": [{"type": "reviewer", "text": "x"}]})
                 .to_string(),
         )
         .unwrap();
@@ -1574,7 +1574,7 @@ rules = [
     let pid_s = p["id"].as_str().unwrap().to_string();
     fs::write(
         d.join("task-template.json"),
-        json!({"project_id": pid_s, "acceptance": [{"type": "reviewer", "text": "reviewed"}]})
+        json!({"project_id": pid_s, "max_turns": 100, "acceptance": [{"type": "reviewer", "text": "reviewed"}]})
             .to_string(),
     )
     .unwrap();

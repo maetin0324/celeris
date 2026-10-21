@@ -146,3 +146,6 @@ sh $L preflight --env $E      # 無課金で再確認
 sh $L watch --env $E > $(dirname /local/celeris/data/measure/main-3/out)/runs/watch-1.json
 sh $L grade --env $E; sh $L export --env $E      # RUNS は OUT の外
 ```
+
+## campaign sha256 承認（人の決定 2026-10-21）
+`mlsys-main-3` / `043d5f52e4da26785395d3096ef8ea9c00a641dd84916d14d6999287da7becb0` を人が承認（A0/B0×K4 の 2 試行・各 1.5M・全体 3M・token_basis=all・fable 不使用。運用者が final.json・preflight.json と照合済み）。再承認は不要。実 pilot（watch→grade→export）は worker が LLM を起動しない規則のため運用者が上の手順で実行する。検査: test-parallel exit 0（6245 passed）、clippy 0、fmt 0。実 pilot 実施済: なし。

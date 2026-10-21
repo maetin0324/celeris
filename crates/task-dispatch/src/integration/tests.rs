@@ -619,3 +619,135 @@ fn candidate_check_precedes_record_auto_resolve_and_keeps_both_records() {
         Some(parent_head.as_str())
     );
 }
+
+fn cargo_metadata(dir: &Path, locked: bool) {
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.args(["metadata", "--format-version", "1"]);
+    if locked {
+        cmd.arg("--locked");
+    }
+    let out = cmd
+        .current_dir(dir)
+        .env("CARGO_NET_OFFLINE", "true")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn cargo_member(dir: &Path, name: &str, deps: &str) {
+    let crate_dir = dir.join("crates").join(name);
+    std::fs::create_dir_all(crate_dir.join("src")).unwrap();
+    std::fs::write(
+        crate_dir.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{deps}"
+        ),
+    )
+    .unwrap();
+    std::fs::write(crate_dir.join("src/lib.rs"), "").unwrap();
+}
+
+/// path 依存だけの Cargo workspace を Task ブランチに置く。
+fn cargo_base(task_tree: &Path) {
+    std::fs::write(
+        task_tree.join("Cargo.toml"),
+        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/*\"]\n",
+    )
+    .unwrap();
+    cargo_member(task_tree, "app", "");
+    cargo_metadata(task_tree, false);
+    commit_all(task_tree, "cargo base").unwrap();
+}
+
+/// 新しい crate を足して app の依存にする（`toml_dep` が偽なら依存は足さない）。
+fn cargo_add(dir: &Path, name: &str, toml_dep: bool) {
+    cargo_member(dir, name, "");
+    let dep = if toml_dep {
+        format!("{name} = {{ path = \"../{name}\" }}\n")
+    } else {
+        String::new()
+    };
+    cargo_member(dir, "app", &dep);
+    cargo_metadata(dir, false);
+    commit_all(dir, name).unwrap();
+}
+
+/// ADR 2026-10-21-cargo-lock-regenerate-on-integrate D4: WU の段の統合で Cargo.lock だけの衝突を
+/// target 採用 → cargo metadata で解く。
+#[test]
+fn wu_cargo_lock_only_conflict_is_regenerated() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, task_dir, task_tree) = setup(root.path());
+    cargo_base(&task_tree);
+    let mut items = Vec::new();
+    for key in ["new_a", "new_b"] {
+        let wt = make_wu(&repo, &task_dir, &task_tree, key, "HEAD");
+        cargo_add(&wt.dir, key, false);
+        items.push(MergeItem::work_unit(key, wu_branch("T1", key)));
+    }
+    let out = integrate(&task_tree, &items, "build").unwrap();
+    assert!(out.conflict.is_none(), "{:?}", out.conflict);
+    assert!(
+        out.actions
+            .iter()
+            .any(|a| a.path == "Cargo.lock"
+                && a.kind == crate::auto_resolve::ConflictKind::Generated)
+    );
+    let lock = std::fs::read_to_string(task_tree.join("Cargo.lock")).unwrap();
+    assert!(
+        lock.contains("\"new_a\"") && lock.contains("\"new_b\""),
+        "{lock}"
+    );
+    cargo_metadata(&task_tree, true);
+    assert!(status_clean(&task_tree));
+}
+
+/// 子 task を親へ統合する経路でも同じ規則が効く。Cargo.toml も衝突すれば人に回る。
+#[test]
+fn child_cargo_lock_conflict_is_regenerated_and_toml_conflict_needs_human() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, _task_dir, task_tree) = setup(root.path());
+    cargo_base(&task_tree);
+    let c1 = make_child(root.path(), &repo, &task_tree, "C1");
+    let c2 = make_child(root.path(), &repo, &task_tree, "C2");
+    cargo_add(&c1, "new_a", false);
+    cargo_add(&c2, "new_b", false);
+    let items = vec![
+        MergeItem::child_task("c1", "celeris/C1"),
+        MergeItem::child_task("c2", "celeris/C2"),
+    ];
+    let out = integrate(&task_tree, &items, "s1").unwrap();
+    assert!(out.conflict.is_none(), "{:?}", out.conflict);
+    assert!(out.actions.iter().any(|a| a.path == "Cargo.lock"));
+    let lock = std::fs::read_to_string(task_tree.join("Cargo.lock")).unwrap();
+    assert!(
+        lock.contains("\"new_a\"") && lock.contains("\"new_b\""),
+        "{lock}"
+    );
+    cargo_metadata(&task_tree, true);
+
+    let c3 = make_child(root.path(), &repo, &task_tree, "C3");
+    let c4 = make_child(root.path(), &repo, &task_tree, "C4");
+    cargo_add(&c3, "new_c", true);
+    cargo_add(&c4, "new_d", true);
+    let items = vec![
+        MergeItem::child_task("c3", "celeris/C3"),
+        MergeItem::child_task("c4", "celeris/C4"),
+    ];
+    let out = integrate(&task_tree, &items, "s2").unwrap();
+    let request = out.conflict.unwrap().request.unwrap();
+    assert!(
+        request
+            .conflict_files
+            .iter()
+            .any(|f| f == "crates/app/Cargo.toml"),
+        "{:?}",
+        request.conflict_files
+    );
+    assert!(rev_parse(&task_tree, "MERGE_HEAD").is_none());
+    assert!(status_clean(&task_tree));
+}

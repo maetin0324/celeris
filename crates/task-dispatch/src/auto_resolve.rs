@@ -20,8 +20,9 @@ pub struct ResolveContext {
     pub source_branch: String,
     pub source_sha: String,
     pub merge_base: Option<String>,
-    /// 生成物の再作成に使う argv。後続の resolver が解釈する。
-    pub generated_command: Option<Vec<String>>,
+    /// 生成物の再生成の規則（ADR 2026-10-21-cargo-lock-regenerate-on-integrate D1）。
+    /// 統合の経路は `generated::rules` で組む。
+    pub generated: Vec<generated::GeneratedRule>,
 }
 
 pub use task_core::integration_request::{

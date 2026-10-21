@@ -85,6 +85,8 @@ pub fn kind(path: &str) -> ConflictKind {
         ConflictKind::Adr
     } else if (path.starts_with("docs/protocol/") || path.starts_with("docs/api/v1/"))
         && path.ends_with(".schema.json")
+        || path == "Cargo.lock"
+        || path.ends_with("/Cargo.lock")
     {
         ConflictKind::Generated
     } else {

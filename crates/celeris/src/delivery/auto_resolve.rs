@@ -434,7 +434,7 @@ fn merge_in_scratch(
         source_branch: d.branch.clone(),
         source_sha: source_sha.clone(),
         merge_base,
-        generated_command,
+        generated: task_dispatch::auto_resolve::generated::rules(generated_command),
     };
     let resolution = task_dispatch::auto_resolve::resolve(dir, &ctx);
     let actions = match resolution {

@@ -39,7 +39,7 @@ fn conflicted_repo(base: &str, ours: &str, theirs: &str) -> (tempfile::TempDir, 
             source_branch: "source".into(),
             source_sha,
             merge_base: Some(base_sha),
-            generated_command: None,
+            generated: Vec::new(),
         },
     )
 }
@@ -169,7 +169,7 @@ fn agent_docs_progress_nested_both_side_appends_are_joined() {
         source_branch: "source".into(),
         source_sha,
         merge_base: Some(base_sha),
-        generated_command: None,
+        generated: Vec::new(),
     };
     let super::super::Resolution::Resolved { actions } = super::super::resolve(repo, &ctx).unwrap()
     else {

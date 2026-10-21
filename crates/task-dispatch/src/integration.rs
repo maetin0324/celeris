@@ -444,7 +444,7 @@ pub fn integrate(
             source_branch: item.branch.clone(),
             source_sha: commit.clone(),
             merge_base: Some(merge_base),
-            generated_command: None,
+            generated: crate::auto_resolve::generated::rules(None),
         };
         let out = git(
             task_tree,

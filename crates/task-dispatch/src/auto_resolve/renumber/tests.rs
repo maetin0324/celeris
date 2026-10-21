@@ -91,7 +91,7 @@ fn fixture_with(
             source_branch: "source".into(),
             source_sha,
             merge_base: Some(base_sha),
-            generated_command: None,
+            generated: Vec::new(),
         },
     }
 }

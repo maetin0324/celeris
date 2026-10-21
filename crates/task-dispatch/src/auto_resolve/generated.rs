@@ -17,6 +17,9 @@ use std::time::{Duration, Instant};
 /// `classify::kind` が `Generated` とする範囲。
 pub const DEFAULT_GLOBS: &[&str] = &["docs/protocol/*.schema.json", "docs/api/v1/*.schema.json"];
 
+/// 内蔵の `Cargo.lock` 規則が対象にする範囲（repo 内の任意の階層）。
+pub const CARGO_LOCK_GLOBS: &[&str] = &["Cargo.lock", "**/Cargo.lock"];
+
 /// 再生成コマンドの既定の上限。
 pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
 
@@ -29,19 +32,54 @@ pub struct GeneratedRule {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+    /// 真なら衝突 path のあるディレクトリで実行し、そこに `Cargo.toml` が無ければ扱わない
+    /// （ADR 2026-10-21-cargo-lock-regenerate-on-integrate D2）。
+    #[serde(default)]
+    pub cargo_workspace: bool,
 }
 
-impl GeneratedRule {
-    /// `DEFAULT_GLOBS` を対象にした規則。
-    pub fn with_default_globs(cmd: Vec<String>) -> Self {
-        Self {
+/// `Cargo.lock` を再生成する内蔵規則（ADR 2026-10-21-cargo-lock-regenerate-on-integrate D2）。
+pub fn cargo_lock_rule() -> GeneratedRule {
+    let mut env = BTreeMap::new();
+    // cargo metadata は build しないが、target-dir を作業場所の外に固定する。
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        env.insert(
+            "CARGO_TARGET_DIR".into(),
+            std::env::temp_dir()
+                .join("celeris-auto-resolve-target")
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    GeneratedRule {
+        globs: CARGO_LOCK_GLOBS.iter().map(|g| g.to_string()).collect(),
+        cmd: ["cargo", "metadata", "--format-version", "1"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        env,
+        timeout_secs: None,
+        cargo_workspace: true,
+    }
+}
+
+/// 統合の 3 経路（WU の段・子 task の親・delivery）が渡す規則の集合（D4）。`schema_cmd` は
+/// delivery の設定 `[delivery.auto_resolve.generated]` の command（D3）。
+pub fn rules(schema_cmd: Option<Vec<String>>) -> Vec<GeneratedRule> {
+    let mut rules = vec![cargo_lock_rule()];
+    if let Some(cmd) = schema_cmd {
+        rules.push(GeneratedRule {
             globs: DEFAULT_GLOBS.iter().map(|g| g.to_string()).collect(),
             cmd,
             env: BTreeMap::new(),
             timeout_secs: None,
-        }
+            cargo_workspace: false,
+        });
     }
+    rules
+}
 
+impl GeneratedRule {
     pub fn matches(&self, path: &str) -> bool {
         self.globs.iter().any(|glob| glob_match(glob, path))
     }
@@ -55,18 +93,18 @@ impl GeneratedRule {
     }
 }
 
-/// `ResolveContext::generated_command` を `DEFAULT_GLOBS` の規則として使う。
+/// `ResolveContext::generated` のうち衝突 path に一致する最初の規則で再生成する。
 pub fn resolve(
     repo: &Path,
     ctx: &ResolveContext,
     path: &ClassifiedPath,
 ) -> Result<ResolveAttempt, String> {
-    let Some(cmd) = &ctx.generated_command else {
+    let Some(rule) = ctx.generated.iter().find(|rule| rule.matches(&path.path)) else {
         return Ok(ResolveAttempt::NotHandled {
-            reason: "生成物の再生成コマンドが設定されていない".into(),
+            reason: "生成物の再生成の規則が無い".into(),
         });
     };
-    resolve_with_rule(repo, &GeneratedRule::with_default_globs(cmd.clone()), path)
+    resolve_with_rule(repo, rule, path)
 }
 
 /// merge 中の衝突 path を target（HEAD）側に戻し、再生成して対象の差分を index に載せる。
@@ -81,12 +119,16 @@ pub fn resolve_with_rule(
             reason: "生成物の対象範囲外".into(),
         });
     }
+    let workdir = match rule_workdir(repo, rule, &path.path) {
+        Ok(dir) => dir,
+        Err(reason) => return Ok(ResolveAttempt::NotHandled { reason }),
+    };
     if let Err(e) = git(repo, &["checkout", "--ours", "--", &path.path]) {
         return Ok(ResolveAttempt::NotHandled {
             reason: format!("target 側を採用できない: {e}"),
         });
     }
-    let changed = match regenerate(repo, rule) {
+    let changed = match regenerate(repo, &workdir, rule) {
         Ok(changed) => changed,
         Err(reason) => return Ok(ResolveAttempt::NotHandled { reason }),
     };
@@ -116,7 +158,7 @@ pub fn regenerate_if_drifted(
     ctx: &ResolveContext,
     rule: &GeneratedRule,
 ) -> Result<Resolution, String> {
-    let changed = match regenerate(repo, rule) {
+    let changed = match regenerate(repo, repo, rule) {
         Ok(changed) => changed,
         Err(reason) => return Ok(needs_human(ctx, reason, Vec::new())),
     };
@@ -163,10 +205,29 @@ fn needs_human(ctx: &ResolveContext, reason: String, conflict_files: Vec<String>
     }
 }
 
+/// 規則を走らせるディレクトリ。`cargo_workspace` の規則は衝突 path の親で、`Cargo.toml` が要る。
+fn rule_workdir(repo: &Path, rule: &GeneratedRule, path: &str) -> Result<PathBuf, String> {
+    if !rule.cargo_workspace {
+        return Ok(repo.to_path_buf());
+    }
+    let dir = match Path::new(path).parent() {
+        Some(parent) => repo.join(parent),
+        None => repo.to_path_buf(),
+    };
+    if !dir.join("Cargo.toml").is_file() {
+        return Err(format!("`{path}` と同じディレクトリに Cargo.toml が無い"));
+    }
+    Ok(dir)
+}
+
 /// コマンドを走らせ、変化した path（すべて `globs` の内側）を返す。失敗の理由は `Err`。
-fn regenerate(repo: &Path, rule: &GeneratedRule) -> Result<BTreeSet<String>, String> {
+fn regenerate(
+    repo: &Path,
+    workdir: &Path,
+    rule: &GeneratedRule,
+) -> Result<BTreeSet<String>, String> {
     let before = snapshot(repo)?;
-    run(repo, rule)?;
+    run(repo, workdir, rule)?;
     let after = snapshot(repo)?;
     let changed: BTreeSet<String> = before
         .keys()
@@ -208,7 +269,7 @@ fn snapshot(repo: &Path) -> Result<BTreeMap<String, Option<u64>>, String> {
     Ok(out)
 }
 
-fn run(repo: &Path, rule: &GeneratedRule) -> Result<(), String> {
+fn run(repo: &Path, workdir: &Path, rule: &GeneratedRule) -> Result<(), String> {
     let Some((program, args)) = rule.cmd.split_first() else {
         return Err("再生成コマンドが空".into());
     };
@@ -221,7 +282,7 @@ fn run(repo: &Path, rule: &GeneratedRule) -> Result<(), String> {
     let mut child = Command::new(&program_path)
         .args(args)
         .envs(&rule.env)
-        .current_dir(repo)
+        .current_dir(workdir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

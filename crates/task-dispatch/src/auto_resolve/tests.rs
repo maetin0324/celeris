@@ -53,7 +53,7 @@ fn code_conflict_requests_human_with_both_subjects_and_diffstats() {
         source_branch: "source".into(),
         source_sha,
         merge_base: Some(base),
-        generated_command: None,
+        generated: Vec::new(),
     };
     let Resolution::NeedsHuman { request } = resolve(repo, &ctx).unwrap() else {
         panic!("code conflict must need human");
@@ -186,7 +186,7 @@ fn front_matter_status_conflict_requests_human_and_is_not_silently_merged() {
         source_branch: "source".into(),
         source_sha,
         merge_base: Some(base),
-        generated_command: None,
+        generated: Vec::new(),
     };
     let Resolution::NeedsHuman { request } = resolve(repo, &ctx).unwrap() else {
         panic!("front matter changed on both sides must need human");
@@ -284,7 +284,7 @@ fn dated_adrs_added_on_both_sides_without_conflict_request_nothing() {
         source_branch: "source".into(),
         source_sha,
         merge_base: Some(merge_base),
-        generated_command: None,
+        generated: Vec::new(),
     };
     let resolution = resolve(repo, &ctx).unwrap();
     assert_eq!(
@@ -344,7 +344,7 @@ fn fast_forward_source_with_dated_adrs_requests_nothing() {
         source_branch: "source".into(),
         source_sha,
         merge_base: Some(merge_base),
-        generated_command: None,
+        generated: Vec::new(),
     };
     let resolution = resolve(repo, &ctx).unwrap();
     assert_eq!(
@@ -395,7 +395,7 @@ fn merge_clean(
         source_branch: "source".into(),
         source_sha,
         merge_base: Some(merge_base),
-        generated_command: None,
+        generated: Vec::new(),
     };
     (tmp, ctx)
 }

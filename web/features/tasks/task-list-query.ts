@@ -23,6 +23,8 @@ export function taskListPath(filters: TaskListFilters, cursor?: string | null): 
   if (filters.limit) params.set("limit", filters.limit);
   if (filters.run_state) params.set("run_state", filters.run_state);
   if (cursor) params.set("cursor", cursor);
+  // 取り込み状態（integrations / promotion）は一覧が表示するので明示して頼む（ADR 2026-10-21-task-list-opt-in-integrations D1）。
+  params.set("with", "integrations");
   return params.toString() === "" ? "/api/tasks" : `/api/tasks?${params.toString()}`;
 }
 
@@ -34,6 +36,7 @@ export function taskListQueryKey(filters: TaskListFilters) {
     order: filters.order,
     limit: filters.limit,
     run_state: filters.run_state,
+    with: "integrations",
   });
 }
 

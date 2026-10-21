@@ -40,6 +40,7 @@ describe("board grouping and URL filter", () => {
     expect(path).toContain("project=P1");
     expect(path).toContain("q=docs");
     expect(path).not.toContain("show_support");
+    expect(path).not.toContain("with=");
   });
 });
 

@@ -28597,6 +28597,7 @@
           "$ref": "#/$defs/TaskId"
         },
         "integrations": {
+          "description": "取り込み状態。`GET /tasks?with=integrations` のときだけ付く（既定は省略）。",
           "items": {
             "$ref": "#/$defs/IntegrationView"
           },

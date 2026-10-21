@@ -272,7 +272,7 @@ async fn env() -> Env {
     });
     fs::write(
         s.dir.path().join("task-template.json"),
-        json!({"project_id": project_id, "acceptance": [{"type": "reviewer", "text": "x"}]})
+        json!({"project_id": project_id, "max_turns": 100, "acceptance": [{"type": "reviewer", "text": "x"}]})
             .to_string(),
     )
     .unwrap();

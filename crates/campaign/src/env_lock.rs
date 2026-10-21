@@ -408,3 +408,51 @@ pub fn establish(
         }
     }
 }
+
+/// watch（`env-lock --verify`）・`env-lock`・`offline-lock`・preflight が共有する現物の観測の組み立て
+/// （ADR 2026-10-21-preflight-env-lock-check）。`worker_programs` は `<name>=<program>`。
+pub fn observe(
+    m: &CampaignManifest,
+    a_program: &Path,
+    worker_programs: &[String],
+    cap_env: Option<&Path>,
+    catalog: impl FnOnce() -> Result<Vec<CatalogRow>, String>,
+) -> Result<Observed, String> {
+    let path_var = std::env::var_os("PATH");
+    // A が有効なときだけ A の実行ファイルを固定する（B/C のみの測定は A を探さない）。
+    let a_program = if m.is_active(ConfigId::A) {
+        Some(pin_program(a_program, path_var.as_deref())?)
+    } else {
+        None
+    };
+    let mut workers = Vec::new();
+    for w in worker_programs {
+        let (name, p) = w
+            .split_once('=')
+            .ok_or("--worker-program expects <name>=<program>")?;
+        workers.push(WorkerProgram {
+            name: name.into(),
+            pin: pin_program(Path::new(p), path_var.as_deref())?,
+        });
+    }
+    // catalog は A の解決の後に取る（A の欠落を daemon 接続の失敗より先に報告する）。
+    let catalog = catalog()?;
+    let cap_env = match cap_env {
+        Some(p) => Some(crate::cap_probe::CapEnv::load(p)?.pin()?),
+        None => None,
+    };
+    Ok(Observed {
+        a_program,
+        worker_programs: workers,
+        catalog,
+        cap_env,
+    })
+}
+
+/// `<out>/env-lock.json` が在れば watch と同じ照合（`establish` の verify_only）をする。無ければ `Ok(false)`。
+pub fn verify_existing(m: &CampaignManifest, obs: &Observed, out: &Path) -> Result<bool, String> {
+    if !out.join(ENV_LOCK_FILE).exists() {
+        return Ok(false);
+    }
+    establish(m, obs, out, true).map(|_| true)
+}

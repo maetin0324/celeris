@@ -195,7 +195,7 @@ fn router_host(id: &str, detail: Value, repos: Value) -> RouterHost {
 fn with_project_id(s: &Setup, id: &str) -> Inputs {
     fs::write(
         s.dir.path().join("task-template.json"),
-        json!({"project_id": id, "acceptance": [{"type": "reviewer", "text": "x"}]}).to_string(),
+        json!({"project_id": id, "max_turns": 100, "acceptance": [{"type": "reviewer", "text": "x"}]}).to_string(),
     )
     .expect("template");
     s.inp.clone()

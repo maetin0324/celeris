@@ -7,6 +7,7 @@ tasks: [01M52D2AM5K6GCFGEJZW4REWM2, 01M56HCNS9SYAS7TAEA7Z3E4CZ, 01M58VFRBA6HG0SS
 根拠: ADR `agent-docs/adr/2026-10-18-measure-env-launcher.md`、条件 `agent-docs/progress/2026-10-16-mlsys-final/freeze-final.md`。実装は `scripts/campaign/measure-launcher.sh` と `crates/campaign/src/{env_check,env_lock,measure_env,preflight}.rs`。
 **値（token・鍵）はこのファイルに書かない。** token は測定専用 file（`[api] token_file`）に launcher が 0600 で作り、CLI には環境変数の**名前**（`CELERIS_MEASURE_TOKEN`）だけが渡る。
 承認枠: 試行 12 以内・tokens 全体 3,000,000・per_case 300,000・per_arm 1,300,000・`token_basis = all`・claude 7 日使用率 45% 以内（codex 21%）・fable 不使用（人の決定 2026-10-16）。枠を超える変更は新 campaign_id と新しい決定が要る。
+**2026-10-21 の決定（最小実 pilot `mlsys-main-3`）**: A0/B0 × K4 の 2 試行、`per_case.max_tokens`・`per_arm.max_tokens` 各 1,500,000、tokens 全体 3,000,000（`token_basis=all`、fable 不使用、trial 数 2）。preflight の承認上限定数（`preflight::APPROVED_*`）はこの値に更新済み。上の 300,000 / 1,300,000 は 2026-10-16 の旧枠。
 
 入口は 1 つ: `scripts/campaign/measure-launcher.sh <prepare|start|preflight|watch|collect|grade|export|stop> --env <file>`。標準の流れは prepare → start → preflight → watch → grade（評価側の観測収集 → 独立採点 → check）→ export。各 subcommand は再実行できる。
 接続先（`--api-url`）・token・`--measure-config` 等の CLI 引数は、すべて env ファイル（と、その `DAEMON_CONFIG` の `[api] listen` / `token_file`）から launcher が 1 回だけ生成する。**手で `--api-url` や `--token-env` を書かない。**
@@ -62,7 +63,7 @@ CAP_ENV=…/cap-env.json             # celeris.campaign-cap-env/1（cap-runbook 
 - B・C は同じ `routing.models=["claude-sonnet-5-5"]`・`routing.run_harnesses=["claude-code"]`・`lower_policy=mlsys-min-1`。方策だけが違う（B=fixed、C=jev-1）。A は claude-code / claude-sonnet-5-5 で集合の内側。`cap-probe-*` は run_harnesses に入れない。
 - C は `no_evidence_table=true`（根拠表なし。`effective_evidence_mode=none`）、B は根拠表欄なしで none。**`evidence_table_id` と `celerisctl routing evidence` の手順は無い（消した）。latest へ fallback しない。**
 - 比較: primary A vs B、secondary B vs C。subset は K2・K4。K2 `judged_scope=[implementation, experiment]`（analysis / review は `not_judged`。維持する。ADR 2026-10-18-k2-judged-scope）、K4 は analysis。
-- `$P/task-template.json`: `project_id=01M2WTS3DKNZBSZ2JMVB4CZMBW`、acceptance は reviewer。`repos`・`workspace_mode`・`max_tokens` は書かない（拒否される。実行器が trial workspace を作業場所にし、`repos: []`・`max_tokens=per_case` を埋める。ADR 2026-10-20-mlsys-main2-fixes D1・D2）。
+- `$P/task-template.json`: `project_id=01M2WTS3DKNZBSZ2JMVB4CZMBW`、acceptance は reviewer、`"max_turns": 100` を必ず書く（無い雛形は preflight・`--task-template` 読み込みで拒否される。書かないと task 既定の 10 に落ち、worker・reviewer が 10 turn で止まる。worker と reviewer は同じ task の max_turns を `--max-turns` に渡す。ADR 2026-10-21-grader-own-input-extraction-and-max-turns D2）。`repos`・`workspace_mode`・`max_tokens` は書かない（拒否される。実行器が trial workspace を作業場所にし、`repos: []`・`max_tokens=per_case` を埋める。ADR 2026-10-20-mlsys-main2-fixes D1・D2）。
 - `budget.token_basis=all`。`lower_policy`/`online_update` は変えない。
 
 ## 3a. 主比較（測定 ID `mlsys-main-1`、A0 vs B0 のみ）の承認済み固定値
@@ -82,10 +83,14 @@ CAP_ENV=…/cap-env.json             # celeris.campaign-cap-env/1（cap-runbook 
 固定資産の整合は `python3 scripts/campaign/check-main-pins.py --root $R`（読むだけ。設定・実在 path・lock/hash・公開側への private 混入・実 K2 preflight 証跡を内容検証し、不足があれば非 0。**手順を始める前と、変えた後に必ず通す**）。
 
 ### env-lock/3 と campaign lock（通常の生成関数。watch 不要・無試行）
-実 root の `pinned/main/{env-lock.json,lock.json}` は `celeris-campaign offline-lock`（通常の `preflight::expected_lock` → `env_lock::establish` → `lock_exec::save` を呼ぶ最小入口。daemon・LLM に接続せず `paid_calls_made=0`）で、承認済み `GET /api/v1/llm/models` の保存証跡 `pinned/evidence/main-llm-models.json`（sha256 `c9babb76…45ab6`）から生成済み。再照合（何も書かない）:
+実 root の `pinned/main/{env-lock.json,lock.json}` は `celeris-campaign offline-lock`（通常の `preflight::expected_lock` → `env_lock::establish` → `lock_exec::save` を呼ぶ最小入口。LLM に接続せず `paid_calls_made=0`）で作る。**モデル一覧（`--models-evidence`）は launcher.env の測定 daemon の `GET /api/v1/llm/models` から取る。本番 daemon の一覧は使わない**（source が違えば watch と preflight の env-lock 照合で拒否される。2026-10-21 の mlsys-main-3 は本番一覧 72 件で作った lock が測定 daemon 14 件と食い違い watch で停止した。ADR `agent-docs/adr/2026-10-21-preflight-env-lock-check.md`）。生成は launcher の `lock` 段で行う（測定 daemon を start した後。保存→sha256→offline-lock を 1 段で行い、`<LOCK_OUT>.measure-llm-models.json` に証跡を残す）:
+```sh
+LOCK_OUT=$R/pinned/lock-gen-<日付> scripts/campaign/measure-launcher.sh lock --env $R/pinned/main/launcher.env
+```
+生成後、中身を `pinned/main/` へ複写し checker を通す。preflight は `<out>/env-lock.json` が在れば測定 daemon の一覧と照合し、不一致なら `missing[].check = "env-lock"`・`failure_class = "env_lock_mismatch"` で失敗する。再照合（何も書かない。証跡は lock 段が保存した測定 daemon 由来の file）:
 ```sh
 $B offline-lock --verify --manifest $R/pinned/main/final.json --out <生成時の out dir。`$R/pinned/lock-gen` と同内容> \
-  --a-program <claude 実体> --models-evidence $R/pinned/evidence/main-llm-models.json --models-evidence-sha256 <上記 sha256 の全桁> \
+  --a-program <claude 実体> --models-evidence <LOCK_OUT>.measure-llm-models.json --models-evidence-sha256 <lock 段が出した sha256> \
   --cap-env $R/pinned/cap-env.json --cases-root $R/pinned/main/fixed/cases --grader-root $R/pinned/main/fixed/grader-private \
   --grade-case-root $R/pinned/main/fixed/grade-cases --measurement-id mlsys-main-1 \
   --repo-src $R/measure-src/main/repo --materials-src $R/measure-src/main/materials --kb-src $R/measure-src/main/kb --inputs-src $R/measure-src/main/inputs

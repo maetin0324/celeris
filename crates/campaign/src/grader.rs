@@ -142,7 +142,26 @@ pub mod case {
         /// 固定入力の sha256（成果物 dir 内の path → sha256）。
         #[serde(default)]
         pub pinned_raw: BTreeMap<String, String>,
+        /// sha256 固定済みの入力 tgz。あれば grader が自分の作業場所へ展開し、`pinned_raw`・metrics の
+        /// 生入力はその展開先から読む（作業者がどこに展開したかに依存しない）。
+        #[serde(default)]
+        pub input_archive: Option<InputArchive>,
         pub metrics: Vec<MetricSpec>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct InputArchive {
+        /// case file の dir からの相対 path。
+        pub path: String,
+        pub sha256: String,
+        /// 展開先（grader の作業 dir 内の相対 path）。`pinned_raw` の path はこの dir を含む形で書く。
+        #[serde(default = "default_extract_to")]
+        pub extract_to: String,
+    }
+
+    fn default_extract_to() -> String {
+        "inputs".into()
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -891,13 +910,17 @@ pub mod implementation {
 pub mod recompute {
     //! 検査 (3) 生データから指標を独立に再計算し、報告値と許容差で照合する。
     //! 報告は `metric <name> = <value>` 行（report.rs の `result` 行と同じく、行で宣言した数値だけを照合する）。
-    use std::{collections::BTreeMap, fs, path::Path};
+    use std::{
+        collections::BTreeMap,
+        fs,
+        path::{Path, PathBuf},
+    };
 
     use serde_json::{Value, json};
 
     use super::{
         CheckResult,
-        case::{Agg, MetricSpec, RecomputeSpec, Source},
+        case::{Agg, InputArchive, MetricSpec, RecomputeSpec, Source},
         read_json, safe_join, sha256_file,
     };
 
@@ -1037,10 +1060,72 @@ pub mod recompute {
         (vals, errs)
     }
 
-    pub fn check(spec: &RecomputeSpec, artifact: &Path) -> CheckResult {
+    static EXTRACT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// 固定入力 tgz の sha256 を照合し、grader の作業 dir に展開する。戻りは展開 root（要 cleanup）。
+    fn extract_inputs(
+        a: &InputArchive,
+        case_dir: &Path,
+        work_root: &Path,
+    ) -> Result<PathBuf, String> {
+        let arc = safe_join(case_dir, &a.path)?;
+        let got =
+            sha256_file(&arc).map_err(|_| format!("grader input archive {} is missing", a.path))?;
+        if got != a.sha256 {
+            return Err(format!(
+                "grader input archive {} does not match the pinned sha256 (grader-side asset altered)",
+                a.path
+            ));
+        }
+        let root = work_root.join(format!(
+            "recompute-inputs-{}-{}",
+            std::process::id(),
+            EXTRACT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let dest = safe_join(&root, &a.extract_to)?;
+        fs::create_dir_all(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+        match crate::asset_assembly::extract_tgz(&arc, &dest) {
+            Ok(()) => Ok(root),
+            Err(e) => {
+                let _ = fs::remove_dir_all(&root);
+                Err(format!(
+                    "grader input archive {} could not be extracted: {e}",
+                    a.path
+                ))
+            }
+        }
+    }
+
+    /// 再計算検査。固定入力 tgz があれば grader 自身が展開して読む。tgz の欠落・sha256 不一致・
+    /// 展開失敗と、展開した固定入力が `pinned_raw` と合わないことは grader/配線側の失敗（env_failure）。
+    pub fn check(
+        spec: &RecomputeSpec,
+        artifact: &Path,
+        case_dir: &Path,
+        work_root: &Path,
+    ) -> CheckResult {
+        let Some(a) = &spec.input_archive else {
+            return check_with(spec, artifact, artifact, false);
+        };
+        match extract_inputs(a, case_dir, work_root) {
+            Ok(root) => {
+                let r = check_with(spec, artifact, &root, true);
+                let _ = fs::remove_dir_all(&root);
+                r
+            }
+            Err(e) => CheckResult::env_failure(vec![e], json!({"metrics": []})),
+        }
+    }
+
+    fn check_with(
+        spec: &RecomputeSpec,
+        artifact: &Path,
+        raw: &Path,
+        env_pins: bool,
+    ) -> CheckResult {
         let mut reasons = Vec::new();
         for (rel, want) in &spec.pinned_raw {
-            match safe_join(artifact, rel).and_then(|p| sha256_file(&p)) {
+            match safe_join(raw, rel).and_then(|p| sha256_file(&p)) {
                 Ok(got) if &got == want => {}
                 Ok(_) => reasons.push(format!(
                     "raw input {rel} differs from the pinned snapshot (sha256 mismatch)"
@@ -1048,6 +1133,7 @@ pub mod recompute {
                 Err(_) => reasons.push(format!("raw input {rel} is missing")),
             }
         }
+        let pin_failed = !reasons.is_empty();
         let text = match safe_join(artifact, &spec.report).and_then(|p| {
             fs::read_to_string(&p).map_err(|_| format!("report {} is missing", spec.report))
         }) {
@@ -1062,7 +1148,7 @@ pub mod recompute {
         let mut done = BTreeMap::new();
         let mut rows = Vec::new();
         for m in &spec.metrics {
-            let rc = recompute_one(artifact, m, &done);
+            let rc = recompute_one(raw, m, &done);
             let rep = reported.get(&m.name);
             let mut row = json!({"name": m.name, "tolerance_rel": m.tolerance_rel});
             match &rc {
@@ -1100,7 +1186,11 @@ pub mod recompute {
             }
             rows.push(row);
         }
-        CheckResult::from_reasons(reasons, json!({"metrics": rows}))
+        if env_pins && pin_failed {
+            CheckResult::env_failure(reasons, json!({"metrics": rows}))
+        } else {
+            CheckResult::from_reasons(reasons, json!({"metrics": rows}))
+        }
     }
 }
 
@@ -1354,7 +1444,7 @@ pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeRep
             None => CheckResult::not_applicable(),
         },
         recompute: match &case.recompute {
-            Some(s) => recompute::check(s, artifact),
+            Some(s) => recompute::check(s, artifact, &opts.case_dir, &opts.work_root),
             None => CheckResult::not_applicable(),
         },
         review: match &case.review {

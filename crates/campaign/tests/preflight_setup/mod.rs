@@ -190,7 +190,7 @@ pub fn setup() -> Setup {
     let measure = write_configs(d, &measure_config(d, "measure"), &normal_config(d));
     fs::write(
         d.join("task-template.json"),
-        json!({"project_id":"01ABC","acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
+        json!({"project_id":"01ABC","max_turns": 100, "acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
     )
     .unwrap();
     let inp = Inputs {
@@ -212,6 +212,7 @@ pub fn setup() -> Setup {
         measurement_id: None,
         cap_env: Some(write_cap_env(d)),
         variant_b0_sha256: None,
+        worker_programs: Vec::new(),
     };
     Setup { dir, inp }
 }

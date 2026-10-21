@@ -698,7 +698,7 @@ fn fixture(which: &'static str, repeats: u32) -> Fx {
     .expect("canaries");
     fs::write(
         d.join("task-template.json"),
-        json!({"project_id":"01ABC","acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
+        json!({"project_id":"01ABC","max_turns": 100, "acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
     )
     .expect("template");
     // A のアカウント dir（認証材料の置き場。中身は空の使い捨て）。
@@ -1386,7 +1386,8 @@ fn accounting(which: &'static str) {
         );
         assert!(!text(&o).contains(TOKEN_VALUE));
         assert!(
-            text(&o).contains("saved lock"),
+            // preflight の env-lock 照合（watch と共有）が先に拒否することもある。どちらも有料実行の前。
+            text(&o).contains("saved lock") || text(&o).contains("env-lock mismatch"),
             "{what}: rejected by the saved-lock gate, not by an unrelated error: {}",
             text(&o)
         );

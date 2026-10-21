@@ -234,7 +234,7 @@ fn fx() -> Fx {
     );
     fs::write(
         d.join("task-template.json"),
-        json!({"project_id":"01ABC","acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
+        json!({"project_id":"01ABC","max_turns": 100, "acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
     )
     .unwrap();
     let inp = Inputs {
@@ -256,6 +256,7 @@ fn fx() -> Fx {
         measurement_id: None,
         cap_env: Some(preflight_setup::write_cap_env(d)),
         variant_b0_sha256: None,
+        worker_programs: Vec::new(),
     };
     Fx { dir, inp }
 }

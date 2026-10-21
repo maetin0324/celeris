@@ -104,3 +104,138 @@ LLM・userns・本番 host・cluster は使っていない（A は claude stub�
 - **watch の tokens_total に B の usage が入らない理由（確定）**: 同じ DB で B の worker run 3 本は `usage_json`（input 1000 / output 50）を持つが、reviewer run 12 本はすべて `usage: null`（harness_error/failed の run は usage を記録しない）。B task 自体が failed で終わったため、runner.rs:1139 の `res.tokens` が None になり、`counted` None → `tokens_missing += 1`（runner.rs:1172、`missing_tokens_policy` は「cap 判定では per_case.max_tokens を課金、0 とは数えない」）。つまり B の usage は 0 として隠れたのではなく「未取得」として明示されており、集計規則どおり。直さない（B が review を通れば tokens は数えられる。実 pilot では実 reviewer が result.json/review.json を書く）。
 - **検査（この run）**: `cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。受け入れ試験は前 run（3f1bd73d 以降）で exit 0（1 passed）。
 - **提案**: reviewer run の usage を harness_error/failed でも（adapter が取れた分は）記録すると、実 pilot の失敗試行の token 消費を台帳に正しく載せられる。別 task で検討。
+
+## 再開（2026-10-21, attempt 1 of 再開 run）: 新 campaign `mlsys-main-3` の再 freeze と最新 release の preflight
+人の決定（2026-10-21）: A0/B0 × K4 の 2 試行、`per_case.max_tokens`=1,500,000（`token_basis=all`）、この pilot 用に tokens 全体 3,000,000、fable 不使用。campaign sha256 の承認が出るまで有料呼び出しはしない（本 run は `paid_calls_made 0`、worker は LLM CLI を起動していない）。
+
+### 実装（本 run の変更）
+- main `641f334b6d64`（01M5C8KF8Y の修正入り）を取り込み（衝突 3 件は main 側を採用）。コード差分はこの 2 点のみ:
+  - `preflight::APPROVED_PER_CASE_TOKENS` 300,000→1,500,000、`APPROVED_PER_ARM_TOKENS` 1,300,000→1,500,000（上の決定。旧値だと preflight が `exceeds the approved` で拒否した。全体 3,000,000・並列 1・token_basis=all は不変）。`docs/ops/measure-run-final.md` 冒頭に決定を追記。
+  - `launcher.rs` の実 daemon 通し試験の task-template から `repos`・scratch repo を除去（D2 で template の `repos` は拒否されるため、main の試験が `auth-env` 拒否で落ちていた）。
+
+### 同一構成の pin（成果物 `artifacts/mlsys-main-3/`、測定 root は `/local/celeris/data/measure/main-3/{state,out}`）
+| 項目 | 値 |
+|---|---|
+| code SHA | main `641f334b6d64`（本番稼働中の release。`promoted.json` あり）。B の `harness_version`=`641f334b6d64`。campaign binary は本 branch の HEAD（main + 上記 2 点）から build、sha256 `01fedb88…562f1` |
+| daemon | `/local/celeris/state/releases/641f334b6d64/bin/celeris` sha256 `441e24a3…c14`。起動中の `/proc/<pid>/exe` と一致（launcher が照合）、release 識別 `641f334b6d64`、測定専用 config（port 7733、db/ws/kb は `/local/celeris/data/measure/main-3/state`） |
+| A | claude `2.1.303 (Claude Code)`、`A_ACCOUNT=claude_max_lab`（login 済み・7 日使用率 0.22 ＜ 45%、5 時間 0.07、2026-10-21T06:02Z の通常読取） |
+| manifest | `pinned/final.json`（campaign_id `mlsys-main-3`、`selected_sets=[main]`、arm A/B、K4 のみ、`approved_trials` 2、`shared_ledger`=`root/global-ledger`、`role_models` 全 `claude-sonnet-5-5`、budget: 全体 3,000,000 / per_case 1,500,000 / per_arm 1,500,000 / token_basis all）。file sha256 `3db5a3b7…7f84f`、**campaign_sha256 `043d5f52e4da26785395d3096ef8ea9c00a641dd84916d14d6999287da7becb0`**（validate exit 0、dry-run `llm_calls_made 0`・`total_trials 2`・within_budget） |
+| input | `pinned/final-input-manifest.json`（prompt を `materials/<case>/case.json` 参照に直し、`manifest_hash` を作り直した。内部 hash `62871a59…0b98`。旧 `6fa8f0ec…` と別物。K2 problem も入っているが選択は K4 のみ）。固定資産 `src/{materials,kb,inputs}` は旧 mlsys-main-1 の固定値の複写（materials_sha256 `dab3ca05…800d`、kb `741f2414…2fe0702`） |
+| grader / env | `pinned/fixed/{cases,grader-private,grade-cases}`（旧固定の複写）、`pinned/cap-env.json`（A と worker が同一 toolchain）、`launcher.env` / `daemon.toml`（sha256 は `pins.sha256`） |
+| lock | `offline-lock`（`paid_calls_made 0`）: lock.json `b353b4ee…108ef`、env-lock.json `3f0bc1d2…9806f`、モデル候補は本番 `GET /api/v1/llm/models` の保存（sha256 `1f060a51…bf19`）。`$OUT` へ複写済み |
+| 最新 preflight | `artifacts/mlsys-main-3/preflight.json`: `ok true`・`paid_calls_made 0`・`missing` 空・campaign_sha256 一致・B probe の daemon release `641f334b6d64`（pid・instance_id 付き）。checked は manifest・versions・input-manifest・case-inputs・graders・case-time・inputs・capability・candidates・auth-env・snapshot-src・measure-env・env-check・trial-state・lock・budget。旧 c9654bff5633 / 302e28550103 の preflight は流用していない |
+
+### 無 LLM 通し（最新 HEAD、実 `celeris` daemon）
+`LAUNCHER_REAL_EVIDENCE=… cargo test -p celeris-campaign --test launcher -- --ignored --exact real_daemon_main_set_runs_through_the_launcher_without_llm` → 1 passed（42.7s）。`real-daemon-rehearsal/steps.json` の全段が exit 0: prepare / start / preflight（ok・paid 0）/ human-op record ×2（watch 前）/ watch / stop→start→watch（再開で二重投入なし）/ collect / grade（check を含む）/ export / `celerisctl campaign export` / `human-op report`。前回 attempt で非 0 だった grade・export の check（B reviewer の routing 欠落）は 641f334b に入った修正で解消している。
+
+### 枠の確認
+- 枠は人の決定どおり: 3,000,000 tokens（旧 pilot 488k を保守的に算入した残 1,152,306 に 1,847,694 を追加）、per_case 1,500,000、2 試行、HPC 投入なし（K4 は cluster を使わない）、fable 不使用。共有台帳 `root/global-ledger` は新規（既消費 0、旧 main-2 台帳は別）。7 日使用率は上記 22%。
+
+### 状態区分
+- 実装済: 上記 2 点＋ 641f334b の修正群。
+- 無 LLM 検証済: 実 daemon 通し（上）、最新 release の preflight。
+- 実 pilot 実施済: **なし**（campaign sha256 の承認待ち。承認前は watch を起動しない）。
+- 未検証: 実 LLM の A0/B0、実 token の台帳照合、実 pilot の raw 人操作（手順は下）。CoS は測定に含めない（前記 §4 のまま）。
+
+### 承認後に人が行う手順
+```sh
+E=/local/celeris/data/workspaces/01M5BT8JYWTNTFXZHCYSFQHSEX/artifacts/mlsys-main-3/root/launcher.env; L=scripts/campaign/measure-launcher.sh
+sh $L start --env $E          # 止まっていれば（preflight 後に stop 済み）
+sh $L preflight --env $E      # 無課金で再確認
+# watch の前に raw 人操作を開始（docs/ops/eval-human-ops-runbook.md、<OUT>/human-ops.jsonl）
+sh $L watch --env $E > $(dirname /local/celeris/data/measure/main-3/out)/runs/watch-1.json
+sh $L grade --env $E; sh $L export --env $E      # RUNS は OUT の外
+```
+
+## campaign sha256 承認（人の決定 2026-10-21）
+`mlsys-main-3` / `043d5f52e4da26785395d3096ef8ea9c00a641dd84916d14d6999287da7becb0` を人が承認（A0/B0×K4 の 2 試行・各 1.5M・全体 3M・token_basis=all・fable 不使用。運用者が final.json・preflight.json と照合済み）。再承認は不要。実 pilot（watch→grade→export）は worker が LLM を起動しない規則のため運用者が上の手順で実行する。検査: test-parallel exit 0（6245 passed）、clippy 0、fmt 0。実 pilot 実施済: なし。
+
+## 実 pilot の結果（mlsys-main-3, 2026-10-21, 運用者 eval1）
+**結論: 試行 0 件。watch が投入前の env-lock 照合で拒否し、有料呼び出しは 0 件（tokens 0 / 3,000,000）。** 承認の指示どおり再試行・lock の作り直しはせず停止した。
+
+### 実行したコマンドと結果（証跡は `/local/celeris/data/measure/main-3/runs/`。`$OUT` の外）
+| 段 | コマンド | exit | 要点 |
+|---|---|---|---|
+| 時計 | `date -u`・`timedatectl` | 0 | 06:37:27Z。評価者端末と Celeris host は同じ host（home-dev）なので host 間差は 0。`System clock synchronized: yes`（NTP service 欄は inactive。LXC は host の時計に従う）→ `--clock-source system_utc_ntp_synced` |
+| start | `sh $L start --env $E` | 0 | 測定 daemon pid 1237072、`http://127.0.0.1:7733`（`start-1.out`）。本番 7710 は触っていない |
+| preflight（無課金） | `sh $L preflight --env $E` | 0 | `ok true`・`paid_calls_made 0`・`missing` 空・campaign_sha256 `043d5f52…7becb0`（承認値と一致）・A `2.1.303 (Claude Code)`・B probe release `641f334b6d64`（`preflight-1.json`） |
+| usage（開始値） | `celeris-campaign usage …` | 1 | `summary.json: No such file`（watch 前は `$OUT/summary.json` が無いので取れない。開始値 U0 は前段の読取 0.22 のまま）（`usage-0.*`） |
+| human-op（watch 前） | `human-op record … --op-kind protocol_step --logical-op pilot/trial-start`（A0・B0） | 0, 0 | 4 行 appended |
+| watch | `sh $L watch --env $E > $RUNS/watch-1.json` | **1** | 06:38:12Z→06:39:11Z。preflight は通過、続く `env-lock` 照合で `env-lock mismatch (refusing to run)` → `measure-launcher: env-lock mismatch: nothing was executed`（`watch-1.err`、`watch-1.json` は空） |
+| human-op | `human-op record … --op-kind status_check --trigger failure`（A0・B0）／`validate`／`list` | 0 / 0（`ok: 8 records`）/ 0 | `human-ops-list.json` |
+| stop | `sh $L stop --env $E` | 0 | `stopped pid 1237072`（開始前と同じ停止状態に戻した） |
+
+grade・export・decision-log export・join・report は、試行が無いため実行していない（実行しても全行が未実行になるだけで、意味のある証跡にならない）。
+
+### 有料呼び出しが 0 件である根拠
+- 共有台帳 `root/global-ledger/` は空（予約・消費行なし）。`$OUT` には `env-lock.json`・`lock.json`・`human-ops.jsonl` だけ（`ledger.jsonl`・`trials.jsonl`・`trials/` なし＝A の claude は起動していない）。
+- 測定 DB（`?mode=ro` で読取）の task は `B/C capability probe (no LLM)` 3 件だけ（前段 preflight・今回 preflight・watch 内 preflight）、run 3 件はすべて adapter `fake`・harness `cap-probe-claude-code`・usage null。
+- tokens: 試行ごと A0 0 / B0 0、腕ごと 0 / 0、全体 0（cap 3,000,000・per_arm 1,500,000・per_case 1,500,000 に対し超過なし）。outcome・grade・failure_class は試行が無いため無し。
+
+### 原因（配線の不備）
+- `$OUT/env-lock.json`（sha256 `3f0bc1d2…9806f`）の B 腕 `catalog` は 72 件・source 4 種（claude-oauth・codex-oauth・openai-compatible:qwen・opencode-go）。`offline-lock` に渡した `pinned/evidence/main-llm-models.json` が**本番 daemon** の `GET /api/v1/llm/models` だったため。
+- watch の `env-lock` 照合は**接続先の測定 daemon**（`[llm_sources]` は claude_oauth だけ）の catalog と比べる。測定 daemon の catalog は claude-oauth の 14 件（`runs/measure-llm-models.json`、14 件はすべて lock にも在る）で、lock だけに在る 58 件を key 名で挙げて拒否した。測定側の候補（`claude-sonnet-5-5`）自体は両方に在る。
+- preflight は env-lock を照合しない（`preflight.rs` に env-lock の検査が無く、launcher の `cmd_env_lock` は watch の中でだけ走る）ため、無課金 preflight が `ok true` でも watch で落ちた。freeze 時の確認（offline-lock の `--verify`）も同じ保存証跡どうしの照合なので検出できなかった。
+
+### 人の判断が要る点（運用者は実施していない）
+1. env-lock を測定 daemon の catalog（`runs/measure-llm-models.json`）から作り直すか、測定 daemon に本番と同じ source を宣言するか。どちらも承認時に照合した固定物（env-lock の hash、または daemon.toml の hash `pins.sha256`）が変わる。campaign_sha256（manifest）は変わらない見込みだが、固定物の差し替えとして再確認が要る。
+2. 作り直した後の再実行は今回の承認（2 試行・再実行なし）の内側か。今回は試行 0 件・消費 0 なので「試行のやり直し」には当たらないが、承認の文言上は人が決める。
+3. human-ops.jsonl には trial-start の `protocol_step` が A0・B0 で既に入っている（実際に行った操作として残した。cutoff は書いていない）。再実行時は同じ identity に新しい `protocol_step` を足す。
+
+### 提案
+- `preflight` に env-lock 照合（接続先 daemon の catalog と `$OUT/env-lock.json`）を入れ、無課金段で検出できるようにする。
+- `offline-lock --models-evidence` は測定 daemon の `GET /api/v1/llm/models` から取る（本番の保存証跡を使わない）と `measure-run-final.md` §3a に明記する。
+
+## 実 pilot の結果（mlsys-main-3, 再実行 attempt 2, 2026-10-21）
+人の承認（2026-10-21、同じ枠: A0/B0×K4 の 2 試行・各 1.5M・全体 3M・token_basis=all・fable 不使用）を受け、env-lock を測定 daemon のモデル一覧から作り直して実 pilot を回した。証跡は `/local/celeris/data/measure/main-3/runs/`（`$OUT` の外）。
+
+### env-lock の作り直し（無課金）
+- 旧 lock の退避（複製、上書きなし）: `artifacts/mlsys-main-3/superseded-lock-1/{out,lock-gen}/`（`SHA256SUMS`）。旧 env-lock `3f0bc1d2…9806f`、旧 lock `b353b4ee…108ef`。
+- 測定 daemon（pid 1249973、7733）の `GET /api/v1/llm/models` を `root/pinned/evidence/measure-llm-models.json`（14 件、claude-oauth のみ、sha256 `0616ac90db494bb0e25c57e07b14f439297cba3c3470fdcdd2a4e2eed0689419`）に保存し、空 dir `root/pinned/lock-gen-2/` へ `celeris-campaign offline-lock … --models-evidence <上> --models-evidence-sha256 <上>` → exit 0、`paid_calls_made 0`、campaign_sha256 `043d5f52…7becb0`（不変）。
+- 新 env-lock `5be679514eb264eb0df13d2bae31d58760037f5f94e46fe2e12d3dfb4f706b3a`（差分は B 腕 catalog 72→14 件だけ）、新 lock `b353b4ee…108ef`（旧と byte 一致）。`$OUT/{env-lock,lock}.json` を新しいものに置換。
+- 実行前の無課金照合: `celeris-campaign env-lock --verify --api-url http://127.0.0.1:7733 …` → exit 0 `{"env_lock":"verified"}`。
+
+### コマンドと結果
+| 段 | exit | 要点 |
+|---|---|---|
+| `sh $L start` | 0 | pid 1249973 |
+| `sh $L preflight` | 0 | `ok true`・`paid_calls_made 0`・`missing` 空・campaign_sha256 `043d5f52…7becb0` 一致・B release `641f334b6d64`（`preflight-2.json`） |
+| human-op（watch 前） | 0 ×4 | `system_adjustment`（env-lock 作り直し、reason 付き、06:54:09Z–06:55:20Z、evaluator_reported）＋ `protocol_step` `pilot/trial-start --attempt 2`（live）を A0・B0 に |
+| `sh $L watch > $RUNS/watch-2.json` | 0 | 06:55:48Z–07:06:12Z。`executed 1`・`resumed_skipped 1`・`case_budget_cancelled 1`・`executor_errors 0`・`tokens_total 2,703,333`・`tokens_missing 0`・`max_overshoot_tokens 10,571`・watch.end `settled`・ledger done 2 |
+| human-op status_check | 0 ×4 | watch 中（06:57:29Z）と終了後（07:07:06Z） |
+| `celeris-campaign usage` | 0 | claude_max_lab 7 日使用率 0.22（上限 0.45）、`campaign_tokens_by_arm` A 1,192,762 / B 1,510,571、violations 空（`usage-1.json`） |
+| human-op `protocol_step pilot/grade-launch` | 0 ×2 | |
+| `sh $L grade` | 0 | grade-out `ok true`・`missing_cases` 空・`rejected` 空、check `ok true`・violations 空・`complete true`（`grade-1.out`、`$OUT/grades.jsonl` sha256 `550c94fc…b252`） |
+| `sh $L export` | 0 | `$OUT/export/table.{json,csv}`、`lock_verified true`、`evidence_kind real`（launcher.env に `RECORDS` が無いので final-accounting は出していない） |
+| `celerisctl db backup`（測定 DB の写し） | 0 | `runs/measure-db-copy.sqlite3`（本番 DB は触っていない） |
+| `celerisctl --db <写し> campaign export mlsys-main-3 --out $RUNS/exp-db --grades $OUT/grades.jsonl --verify-connected --manifest-hash 043d5f52…` | 0 | 20 records、`connected: every run has the required fields and recorded consumption`。B の 4 run 合計 1,510,571（trial と一致）、`elapsed_ms` 208,674、`run_wall_sum_ms` 207,619、`shared_overhead` 0 行、`total.cash_cost_usd` null（4 run とも欠測）、list_cost 0.645 USD（推定 3） |
+| `human-op validate` / `join` / `report` | 0 / 0 / 0 | `ok: 28 records`、join は A・B 各 1 行（unjoined 0）、`runs/human-op-report/{report.json,report.md,timeline.jsonl}` |
+| `sh $L stop` | 0 | stopped pid 1249973 |
+
+### 試行ごとの結果
+| 試行 | tokens（all） | 内訳 in/out/cache_read/cache_creation | outcome（executor） | 独立 grade | failure_class |
+|---|---|---|---|---|---|
+| A0 × K4 rep1 | 1,192,762 | 40 / 15,583 / 1,093,204 / 83,935 | passed（135 s、cost 0.601 USD） | fail（recompute） | model_failure |
+| B0 × K4 rep1 | 1,510,571 | 72 / 13,932 / 1,351,644 / 144,923 | cancelled（`case_budget`、209 s） | fail（recompute） | model_failure |
+- 合計 2,703,333 / 3,000,000（残 296,667）。共有台帳 `root/global-ledger/global-ledger.jsonl` の measurement 行も consumed 2,703,333・trials 2。
+- **上限超過**: B は per_case・per_arm（各 1,500,000）を **10,571 tokens 超過**（`max_overshoot_tokens`）。上限は「観測した累積が超えたら止める」設計（§7）で、超過は reviewer run 2 本目の 1 run 分。全体 3M と試行数 2 は守られた。
+- primary pair: both_pass 0・neither 1。success（executor passed かつ grade final_pass）は A・B とも 0。
+
+### B の経過（測定 DB 写しの events）
+worker run 1 が `budget_exhausted(turns)`（416,576 tokens）→ 続きの run 2 で `report.md` を書き完了（476,483）→ reviewer run 1 が `error_max_turns` で harness_error（318,587）→ reviewer run 2 が task token 予算 `1510571/1500000` で停止（298,925）→ task `failed`（`token_budget_exhausted`）。B の 7 日使用率は 0.22 のまま。
+
+### 不具合・所見
+1. **grade の recompute が両腕とも入力の展開場所で落ちた**: grader は `workspace/inputs/runs/43706-…/cells/*/cell.json` を読むが、A は tgz を `workspace/ex/` に、B は `workspace/inputs/x/` に展開しており、どちらも `case.json` の指示（`cd inputs && tar -xzf …`）どおりでない。recompute の全 metric が `raw input … is missing` で、報告内容の正否は判定されていない。分類は `model_failure` だが、分析の質ではなく作業場所の規約違反による失敗。提案: grader が固定入力（sha256 照合済みの tgz）を自分で展開して照合する（作業者の展開場所に依存しない）か、task.md 本文に展開先を明記する。再採点はしていない。
+2. **B の reviewer が予算内に review を終えられない**: worker 2 run で 893k を使い、reviewer 1 本目が max_turns、2 本目で per_case 上限。K4 の B は per_case 1.5M では review を通せない（A は 1.19M で完遂）。
+3. human-op report の「完遂」は TrialRecord の outcome（A=completed）で、独立 grade（fail）とは別。読み違えない。
+4. 再作業は `pilot/trial-start` attempt 2 を `unclassified` として 1 件に数えた（n+1 の intent が protocol のため。runbook §6.1 の規則どおり）。`system_adjustment`（71 s）は A0・B0 の両方に記録したので人の時間が arm ごとに重複して見える（実際は 1 回の共有作業）。identity の無い共有 overhead として記録する CLI 経路が無いため、この形にした。
+5. 前回の不備（env-lock の catalog を本番 daemon から取っていた／preflight が env-lock を照合しない）は上の作り直しで回避したが、preflight への env-lock 照合の追加は未実装（提案のまま）。
+
+### human-ops の記録方針（選んだ理由）
+- 前回の `protocol_step pilot/trial-start`（attempt 1）は実際に行った操作なので訂正しない。今回の開始は同じ `logical_op` の `--attempt 2`（runbook §2.2「やり直しは同じ logical-op で attempt を増やす」）。attempt 1 は試行投入 0 件で拒否されたので、試行のやり直しではなく開始操作のやり直しとして扱った。
+- env-lock 作り直しは研究と無関係な設定の手直しで、失敗の後に行ったが daemon・workspace の回復ではないので `system_adjustment`（intent system、trigger failure、reason 必須）。時刻は退避 file と verify 出力の mtime（evaluator_reported、秒精度）。
+- 時計: 評価者端末と Celeris host は同じ host（home-dev）で差 0、`System clock synchronized: yes` → `--clock-source system_utc_ntp_synced`。
+
+### 状態区分
+- 実 pilot 実施済: A0/B0 × K4 × 1 rep の 2 試行（本節）。成功 0／2（A は executor passed・grade fail、B は予算停止）。
+- 未解決: 上の所見 1・2（grader の入力展開依存、B の予算）、preflight の env-lock 照合。

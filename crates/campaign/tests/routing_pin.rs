@@ -264,7 +264,7 @@ fn campaign(i: &Input, n: usize, b: Option<ArmRouting>, c: Option<ArmRouting>) -
 }
 
 fn template() -> Map<String, Value> {
-    json!({"acceptance": [{"type": "reviewer"}], "labels": ["campaign"]})
+    json!({"max_turns": 100, "acceptance": [{"type": "reviewer"}], "labels": ["campaign"]})
         .as_object()
         .cloned()
         .expect("object")

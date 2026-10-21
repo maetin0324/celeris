@@ -130,7 +130,7 @@ fn cfg() -> Config {
 }
 
 fn exec(f: &Fake, dir: &Path, v: Option<VariantRef>) -> CelerisExecutor<Fake> {
-    let t = json!({"acceptance": [{"type": "reviewer"}]})
+    let t = json!({"max_turns": 100, "acceptance": [{"type": "reviewer"}]})
         .as_object()
         .cloned()
         .unwrap_or_default();
@@ -398,7 +398,7 @@ fn post_carries_variant_org_and_the_executor_requires_it() {
     );
     // variant_org の無い executor は投入前に拒否（HTTP なし）。
     let f2 = Fake::default();
-    let t = json!({"acceptance": [{"type": "reviewer"}]})
+    let t = json!({"max_turns": 100, "acceptance": [{"type": "reviewer"}]})
         .as_object()
         .cloned()
         .unwrap_or_default();

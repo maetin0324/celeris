@@ -582,7 +582,7 @@ fn every_kind_of_gap_is_reported() {
     // task template の placeholder
     fs::write(
         s.dir.path().join("task-template.json"),
-        json!({"project_id":"<案件 id>","acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
+        json!({"project_id":"<案件 id>","max_turns": 100, "acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
     )
     .unwrap();
     assert!(missing_checks(&s.inp, &host()).contains(&"versions".into()));
@@ -931,7 +931,7 @@ fn remote_primary_repo_is_irrelevant_but_template_repos_are_rejected() {
     assert!(r.ok, "{:?}", r.missing);
     fs::write(
         s.dir.path().join("task-template.json"),
-        json!({"project_id":"01ABC","repos":["scratch"],"acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
+        json!({"project_id":"01ABC","repos":["scratch"],"max_turns": 100, "acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
     )
     .unwrap();
     let r = check(&s.inp, &remote);
@@ -1098,4 +1098,86 @@ fn active_arm_gap_still_fails_in_a_declared_set() {
         .retain(|c| c["id"] != "B");
     fs::write(&s.inp.manifest_path, v.to_string()).unwrap();
     assert!(!check(&s.inp, &host()).ok);
+}
+
+/// `GET /api/v1/llm/models` の本文（source ごとの model_id）。
+fn models_body(rows: &[(&str, &str)]) -> Value {
+    json!({"items": rows.iter().map(|(s, m)| json!({"source": s, "model_id": m})).collect::<Vec<_>>()})
+}
+
+/// B/C のみの集合で、`<out>/env-lock.json` を `lock_models` の一覧から watch と同じ関数で作り、
+/// 接続先の測定 daemon が `daemon_models` を返すときの preflight の結果を返す。
+fn preflight_with_env_lock(
+    lock_models: &[(&str, &str)],
+    daemon_models: &[(&str, &str)],
+) -> celeris_campaign::preflight::Report {
+    use celeris_campaign::env_lock;
+    let s = setup();
+    declare_set(&s, &["B", "C"], ("B", "C"));
+    let m = CampaignManifest::load(&s.inp.manifest_path).unwrap();
+    let out = s.dir.path().join("measure-out");
+    let obs = env_lock::observe(
+        &m,
+        Path::new("claude"),
+        &[],
+        s.inp.cap_env.as_deref(),
+        || env_lock::catalog_from_models(&models_body(lock_models)),
+    )
+    .unwrap();
+    env_lock::establish(&m, &obs, &out, false).unwrap();
+    let mut inp = s.inp.clone();
+    inp.a_account = None;
+    inp.measure.as_mut().unwrap().out = Some(out);
+    let h = FakeHost {
+        programs: vec![],
+        api: api(account_dir())
+            .into_iter()
+            .filter(|(p, _)| *p != "/api/v1/llm/accounts" && *p != "/api/v1/llm/models")
+            .chain([("/api/v1/llm/models", models_body(daemon_models))])
+            .collect(),
+        sandbox: false,
+        ..host()
+    };
+    let r = check(&inp, &h);
+    drop(s);
+    r
+}
+
+const MEASURE_DAEMON: &[(&str, &str)] = &[
+    ("claude-oauth", "claude-opus-5-5"),
+    ("claude-oauth", "claude-sonnet-5-5"),
+];
+
+/// 本番 daemon 相当の一覧（測定 daemon に無い source を含む）で作った env-lock は、測定 daemon の一覧と
+/// 食い違うので preflight が無課金のまま失敗する（watch が試行投入前に拒否するのと同じ照合）。
+#[test]
+fn preflight_rejects_an_env_lock_built_from_another_daemons_catalog() {
+    let production = [
+        ("claude-oauth", "claude-opus-5-5"),
+        ("claude-oauth", "claude-sonnet-5-5"),
+        ("opencode-go", "kimi-k2"),
+        ("openai-codex", "gpt-5"),
+    ];
+    let r = preflight_with_env_lock(&production, MEASURE_DAEMON);
+    assert!(!r.ok);
+    assert_eq!(r.paid_calls_made, 0);
+    let env: Vec<_> = r.missing.iter().filter(|m| m.check == "env-lock").collect();
+    assert!(
+        env.iter().any(|m| m.detail.contains("env-lock mismatch")),
+        "{:?}",
+        r.missing
+    );
+    assert_eq!(
+        r.failure_class,
+        Some(celeris_campaign::preflight::ENV_LOCK_MISMATCH)
+    );
+}
+
+/// 測定 daemon の一覧で作った env-lock は一致し、preflight は通る。
+#[test]
+fn preflight_accepts_an_env_lock_built_from_the_measurement_daemon() {
+    let r = preflight_with_env_lock(MEASURE_DAEMON, MEASURE_DAEMON);
+    assert!(r.ok, "{:?}", r.missing);
+    assert!(r.checked.contains(&"env-lock"));
+    assert_eq!(r.failure_class, None);
 }

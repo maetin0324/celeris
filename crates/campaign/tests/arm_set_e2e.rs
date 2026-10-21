@@ -304,7 +304,7 @@ fn post_body(arm: ConfigId, routing: Option<ArmRouting>) -> Value {
     let stub = Stub::default();
     let x = CelerisExecutor::new(
         stub.clone(),
-        json!({"acceptance": [{"type": "reviewer"}]})
+        json!({"max_turns": 100, "acceptance": [{"type": "reviewer"}]})
             .as_object()
             .cloned()
             .expect("o"),

@@ -132,7 +132,7 @@ async fn fixture() -> Fixture {
     let s = setup();
     fs::write(
         s.dir.path().join("task-template.json"),
-        json!({"project_id": project.0, "acceptance": [{"type": "reviewer", "text": "x"}]})
+        json!({"project_id": project.0, "max_turns": 100, "acceptance": [{"type": "reviewer", "text": "x"}]})
             .to_string(),
     )
     .expect("template");

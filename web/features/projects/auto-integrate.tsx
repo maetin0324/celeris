@@ -38,7 +38,8 @@ export function AutoIntegrateToggle({
         レビュー合格した task を既定ブランチへ自動で取り込む
       </label>
       <p className="text-label text-muted-foreground">
-        案件のリポジトリの既定ブランチへ fast-forward で取り込むだけで、release・本番への反映・push（remote があるときを除く）は行いません。
+        案件のリポジトリの既定ブランチへ fast-forward で取り込むだけで、release・本番への反映・push（remote
+        があるときを除く）は行いません。
       </p>
     </fieldset>
   );

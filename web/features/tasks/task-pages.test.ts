@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { TaskList, TaskSummary } from "../../api/generated/types";
 import { mergeTaskPages } from "./merge-pages";
-import { taskListPath } from "./task-list-query";
+import { taskListPath, taskListQueryKey } from "./task-list-query";
 
 const item = (id: string) => ({ id }) as TaskSummary;
 const page = (ids: string[], cursor: string | null): TaskList => ({
@@ -27,6 +27,13 @@ describe("task list pagination", () => {
         { q: "GPU", status: ["ready", "blocked"], order: "dispatch", limit: "20", run_state: "waiting" },
         "next",
       ),
-    ).toBe("/api/tasks?q=GPU&status=ready&status=blocked&order=dispatch&limit=20&run_state=waiting&cursor=next");
+    ).toBe(
+      "/api/tasks?q=GPU&status=ready&status=blocked&order=dispatch&limit=20&run_state=waiting&cursor=next&with=integrations",
+    );
+  });
+
+  test("asks for integrations explicitly and keeps it in the query key", () => {
+    expect(taskListPath({})).toBe("/api/tasks?with=integrations");
+    expect(JSON.stringify(taskListQueryKey({}))).toContain("integrations");
   });
 });

@@ -87,23 +87,24 @@ fn run(mut cmd: Command, timeout: Duration) -> Option<CmdOutput> {
     let err_pipe = child.stderr.take();
     let out_thread = std::thread::spawn(move || read_all(out_pipe));
     let err_thread = std::thread::spawn(move || read_all(err_pipe));
-    let deadline = Instant::now() + timeout;
+    // 終了待ちは専用 thread の `wait()`。固定間隔の poll はしない。
+    let pid = child.id();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let wait_thread = std::thread::spawn(move || {
+        let _ = tx.send(child.wait().ok());
+    });
     let mut timed_out = false;
-    let status = loop {
-        match child.try_wait() {
-            Err(_) => break None,
-            Ok(Some(status)) => break Some(status),
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    timed_out = true;
-                    kill_group(child.id());
-                    let _ = child.kill();
-                    break child.wait().ok();
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
+    let status = match rx.recv_timeout(timeout) {
+        Ok(status) => status,
+        Err(_) => {
+            timed_out = true;
+            kill_group(pid);
+            // グループへの kill が効かなかった場合の保険として子の pid にも送る。
+            kill_pid(pid);
+            rx.recv().ok().flatten()
         }
     };
+    let _ = wait_thread.join();
     let stdout = out_thread.join().unwrap_or_default();
     let stderr = err_thread.join().unwrap_or_default();
     let code = status.and_then(|s| s.code());
@@ -122,6 +123,15 @@ fn run(mut cmd: Command, timeout: Duration) -> Option<CmdOutput> {
 fn kill_group(pid: u32) {
     let _ = Command::new("kill")
         .args(["-KILL", "--", &format!("-{pid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn kill_pid(pid: u32) {
+    let _ = Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

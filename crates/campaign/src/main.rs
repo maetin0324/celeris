@@ -403,7 +403,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                     celeris_campaign::offline_lock::catalog_from_evidence(
                         &ev,
                         &sha.to_string_lossy(),
-                    )?
+                    )
                 } else {
                     let url = arg(&args, "--api-url").ok_or("--api-url is required")?;
                     let tok = arg(&args, "--token-env").ok_or("--token-env is required")?;
@@ -411,7 +411,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                         &RealHost,
                         &url.to_string_lossy(),
                         &tok.to_string_lossy(),
-                    )?
+                    )
                 }
             };
             let obs = env_lock::observe(

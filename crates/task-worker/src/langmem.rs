@@ -318,6 +318,7 @@ async fn run_langmem(
             timeout_terminal = Some(Terminal::Error {
                 message: "wall clock exceeded".into(),
                 retryable: true,
+                usage: None,
             });
             force_kill = true;
             break;
@@ -327,6 +328,7 @@ async fn run_langmem(
             timeout_terminal = Some(Terminal::Error {
                 message: "idle timeout".into(),
                 retryable: true,
+                usage: None,
             });
             force_kill = true;
             break;
@@ -407,6 +409,7 @@ async fn run_langmem(
                 stderr_tail.lines().next_back().unwrap_or("").trim()
             ),
             retryable: false,
+            usage: None,
         };
         write_result_json(&run_dir, &terminal, None).await?;
         return Ok(RunOutcome {
@@ -434,6 +437,7 @@ async fn run_langmem(
             Terminal::Error {
                 message: format!("langmem runner exited with a non-zero status (exit={exit_repr})"),
                 retryable: true,
+                usage: None,
             },
             pf,
         )
@@ -443,6 +447,7 @@ async fn run_langmem(
             Terminal::Error {
                 message: "langmem runner did not print a CELERIS_RESULT line".to_string(),
                 retryable: true,
+                usage: None,
             },
             pf,
         )
@@ -453,6 +458,7 @@ async fn run_langmem(
                 message: "langmem runner did not write artifacts/knowledge-candidates.json"
                     .to_string(),
                 retryable: true,
+                usage: None,
             },
             pf,
         )

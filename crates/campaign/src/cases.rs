@@ -135,6 +135,17 @@ pub struct Case {
 }
 
 impl Case {
+    /// worker に見せてよい公開の case 定義（`materials/<case>/case.json` に置く JSON）。grader だけが読む
+    /// `private_ref`・`grade_case_ref` は含めない（ADR 2026-10-20-mlsys-main2-fixes D2-4）。
+    pub fn public_json(&self) -> Result<String, String> {
+        let mut v = serde_json::to_value(self).map_err(|e| e.to_string())?;
+        if let Some(o) = v.as_object_mut() {
+            o.remove("private_ref");
+            o.remove("grade_case_ref");
+        }
+        serde_json::to_string_pretty(&v).map_err(|e| e.to_string())
+    }
+
     pub fn judged_scope(&self) -> Vec<String> {
         self.judged_scope
             .clone()

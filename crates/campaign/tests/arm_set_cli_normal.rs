@@ -401,7 +401,7 @@ struct Fx {
 fn input() -> Input {
     let problems: Vec<Value> = CASES
         .iter()
-        .map(|id| json!({"id":id,"task_id":"t","work_unit_id":"w","created_at":"","genre":"coding","kind":"leaf","command":"true","prompt":"fix","split":"dev","stratum":"s","subset_12":false,"head_commit":null,"base_commit":null,"features_sha256":"","features":{},"sha256":""}))
+        .map(|id| json!({"id":id,"task_id":"t","work_unit_id":"w","created_at":"","genre":"coding","kind":"leaf","command":"true","prompt":format!("task.md を読み、課題を実施せよ。公開 case 定義は materials/{id}/case.json。"),"split":"dev","stratum":"s","subset_12":false,"head_commit":null,"base_commit":null,"features_sha256":"","features":{},"sha256":""}))
         .collect();
     let mut m: Input = serde_json::from_value(json!({"schema":routing_eval::MANIFEST_SCHEMA,"version":"v","cutoff":"c","seed":1,"problems":problems,"sha256":""})).expect("input");
     m.sha256 = manifest_hash(&m).expect("hash");

@@ -6,8 +6,8 @@ use serde_json::Value;
 use std::process::{Command, Output};
 use task_core::SqliteStore;
 use task_core::decision_log::{
-    CampaignVerdict, CandidateRef, ClassifierRecord, DecisionLogExecution, DecisionLogOutcome,
-    DecisionLogProposal, DecisionLogUsage, RunEndLabel, UsageKey, UsageRole,
+    CandidateRef, ClassifierRecord, DecisionLogExecution, DecisionLogOutcome, DecisionLogProposal,
+    DecisionLogUsage, RunEndLabel, UsageKey, UsageRole,
 };
 use time::OffsetDateTime;
 
@@ -21,11 +21,42 @@ fn cand(m: &str) -> CandidateRef {
     }
 }
 
+/// 独立 grader の出力（`grades.jsonl`）。`mh` は trial の manifest hash。
+fn grades_file(dir: &std::path::Path, mh: &str, pass: bool) -> std::path::PathBuf {
+    grades_file_for(dir, mh, "case-7", pass)
+}
+
+fn grades_file_for(dir: &std::path::Path, mh: &str, case: &str, pass: bool) -> std::path::PathBuf {
+    let p = dir.join("grades.jsonl");
+    let row = serde_json::json!({
+        "schema": "celeris.campaign-grade/1",
+        "campaign_sha256": mh,
+        "case_id": case,
+        "trial": {"config": "assisted", "problem_id": case, "rep": 2, "trial_no": 1},
+        "grade": {"final_pass": pass},
+    });
+    std::fs::write(&p, format!("{row}\n")).unwrap();
+    p
+}
+
 fn verify(db: &std::path::Path, campaign: &str, out: &std::path::Path) -> Output {
-    Command::new(common::celerisctl_path())
-        .args(["--db", db.to_str().unwrap(), "campaign", "export", campaign])
-        .args(["--out", out.to_str().unwrap(), "--verify-connected"])
-        .env_remove("CELERIS_DB")
+    let grades = grades_file(db.parent().unwrap(), "mh-abc", true);
+    verify_with(db, campaign, out, Some(&grades))
+}
+
+fn verify_with(
+    db: &std::path::Path,
+    campaign: &str,
+    out: &std::path::Path,
+    grades: Option<&std::path::Path>,
+) -> Output {
+    let mut cmd = Command::new(common::celerisctl_path());
+    cmd.args(["--db", db.to_str().unwrap(), "campaign", "export", campaign])
+        .args(["--out", out.to_str().unwrap(), "--verify-connected"]);
+    if let Some(g) = grades {
+        cmd.args(["--grades", g.to_str().unwrap()]);
+    }
+    cmd.env_remove("CELERIS_DB")
         .env_remove("CELERIS_CONFIG")
         .env_remove("CELERIS_RUN_DB")
         .output()
@@ -78,7 +109,6 @@ fn seed(store: &SqliteStore, gap: Gap) {
     let o = DecisionLogOutcome {
         run_id: "r1".into(),
         run_end: Some(RunEndLabel::Completed),
-        campaign_verdict: (!gap.no_grader).then_some(CampaignVerdict::Pass),
         wall_ms: Some(1000),
         ..Default::default()
     };
@@ -215,7 +245,13 @@ fn missing_required_fields_or_unmetered_consumption_fail() {
         ),
     ] {
         let (dir, db) = db_with(Some(gap));
-        let r = verify(&db, CAMPAIGN, &dir.path().join("o"));
+        // grade 行の無い試行は grader_verdict が欠測のまま（既定値で埋めない）。
+        let r = if gap.no_grader {
+            let g = grades_file_for(dir.path(), "mh-abc", "other-case", true);
+            verify_with(&db, CAMPAIGN, &dir.path().join("o"), Some(&g))
+        } else {
+            verify(&db, CAMPAIGN, &dir.path().join("o"))
+        };
         assert!(!r.status.success(), "{needle}");
         let err = String::from_utf8_lossy(&r.stderr);
         assert!(err.contains(needle), "{needle}: {err}");
@@ -273,4 +309,97 @@ fn unobserved_usage_row_is_missing_not_zero() {
     let u = recs.iter().find(|v| v["record_type"] == "usage").unwrap();
     assert_eq!(u["usage_state"], "missing");
     assert!(u["input_tokens"].is_null());
+}
+
+/// B の run が worker 2 本と reviewer 1 本あっても、試行の grade 1 行が全 run に付く。reviewer 相当（routing 判断なし）の
+/// run は proposed_first が無くても接続確認に通る（下の試験）。
+#[test]
+fn grade_row_joins_every_run_of_the_trial() {
+    let (dir, db) = db_with(Some(Gap::default()));
+    let out = dir.path().join("o");
+    let g = grades_file(dir.path(), "mh-abc", false);
+    let r = verify_with(&db, CAMPAIGN, &out, Some(&g));
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    let rows = std::fs::read_to_string(out.join("records.jsonl")).unwrap();
+    let verdicts: Vec<Value> = rows
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .filter(|v| v["record_type"] == "trial")
+        .map(|v| v["grader_verdict"].clone())
+        .collect();
+    assert!(!verdicts.is_empty());
+    assert!(verdicts.iter().all(|v| v == "fail"), "{verdicts:?}");
+}
+
+#[test]
+fn grade_with_foreign_manifest_hash_is_rejected() {
+    let (dir, db) = db_with(Some(Gap::default()));
+    let g = grades_file(dir.path(), "other-hash", true);
+    let r = verify_with(&db, CAMPAIGN, &dir.path().join("o"), Some(&g));
+    assert!(!r.status.success());
+    assert!(String::from_utf8_lossy(&r.stderr).contains("other-hash"));
+}
+
+#[test]
+fn verify_connected_requires_grades() {
+    let (dir, db) = db_with(Some(Gap::default()));
+    let r = verify_with(&db, CAMPAIGN, &dir.path().join("o"), None);
+    assert!(!r.status.success());
+    assert!(String::from_utf8_lossy(&r.stderr).contains("--grades"));
+}
+
+/// reviewer run は routing_decided を持たず推奨候補が無い。仕様上欠けてよいので --verify-connected は通る。
+#[test]
+fn run_without_routing_decision_may_lack_proposed_first() {
+    let (dir, db) = db_with(Some(Gap::default()));
+    let store = SqliteStore::open(&db).unwrap();
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let p = DecisionLogProposal {
+        run_id: "rv".into(),
+        campaign_id: Some(CAMPAIGN.into()),
+        arm: Some("assisted".into()),
+        case_id: Some("case-7".into()),
+        repetition: Some(2),
+        manifest_hash: Some("mh-abc".into()),
+        task_id: Some("t1".into()),
+        ..Default::default()
+    };
+    store.decision_log_record_proposal(&p, now).unwrap();
+    store
+        .decision_log_record_execution(
+            &DecisionLogExecution {
+                run_id: "rv".into(),
+                exec_source_id: Some("s".into()),
+                exec_model: Some("m".into()),
+                ..Default::default()
+            },
+            now,
+        )
+        .unwrap();
+    store
+        .decision_log_record_outcome(
+            &DecisionLogOutcome {
+                run_id: "rv".into(),
+                run_end: Some(RunEndLabel::Completed),
+                wall_ms: Some(10),
+                ..Default::default()
+            },
+            now,
+        )
+        .unwrap();
+    let mut u = DecisionLogUsage::new(
+        UsageKey::Run {
+            run_id: "rv".into(),
+            usage_source: "proxy".into(),
+        },
+        UsageRole::Reviewer,
+    );
+    u.run_id = Some("rv".into());
+    u.campaign_id = Some(CAMPAIGN.into());
+    u.input_tokens = Some(10);
+    store.decision_log_record_usage(&u, now).unwrap();
+    drop(store);
+    let g = grades_file(dir.path(), "mh-abc", true);
+    let r = verify_with(&db, CAMPAIGN, &dir.path().join("o"), Some(&g));
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
 }

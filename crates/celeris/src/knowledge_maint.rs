@@ -196,6 +196,7 @@ fn build_run_spec(
             depends_on: Vec::new(),
             max_turns: Some(KNOWLEDGE_BUDGET_MAX_TURNS),
             max_wall_secs: Some(KNOWLEDGE_BUDGET_MAX_WALL_SECS),
+            max_tokens: None,
             max_retries: KNOWLEDGE_BUDGET_MAX_RETRIES,
             role: Some(report::KNOWLEDGE_ROLE.to_string()),
             genre: None,

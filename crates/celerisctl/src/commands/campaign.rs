@@ -32,8 +32,13 @@ pub struct CampaignExportArgs {
     /// 版情報として summary に載せる manifest の hash。
     #[arg(long)]
     pub manifest_hash: Option<String>,
-    /// 接続確認: export が空、試行の必須欄が欠測、消費が未計上のいずれかなら非 0 で終わる（出力は書く）。
+    /// 独立採点 `grades.jsonl`（`celeris.campaign-grade/1`）。試行の全 run の `grader_verdict` に結合する。
+    /// manifest hash の食い違う行は誤りとして非 0 で終わる。
     #[arg(long)]
+    pub grades: Option<PathBuf>,
+    /// 接続確認: export が空、試行の必須欄が欠測、消費が未計上のいずれかなら非 0 で終わる（出力は書く）。
+    /// grader 判定は `--grades` から来るので必須。
+    #[arg(long, requires = "grades")]
     pub verify_connected: bool,
 }
 
@@ -110,6 +115,12 @@ fn export(store: &SqliteStore, args: CampaignExportArgs) -> Result<ExitCode, Cli
         export_cursor: None,
     };
     let mut result = store.decision_log_export_campaign(&params)?;
+    if let Some(path) = &args.grades {
+        let text = fs::read_to_string(path)
+            .map_err(|e| CliError::msg(format!("read {}: {e}", path.display())))?;
+        task_core::decision_log_export::join_grades(&mut result, &text)
+            .map_err(|e| CliError::msg(format!("grades {}: {e}", path.display())))?;
+    }
     result.records.iter_mut().for_each(scrub_value);
     result.trials.iter_mut().for_each(scrub_value);
     let mut summary = serde_json::to_value(&result.summary)

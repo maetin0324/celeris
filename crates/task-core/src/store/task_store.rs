@@ -983,6 +983,14 @@ pub trait TaskStore:
         metrics: Option<crate::model::RunMetrics>,
         finished_at: OffsetDateTime,
     ) -> Result<bool, StoreError>;
+    /// ADR 2026-10-20-mlsys-main2-fixes D1-3: run の途中の累積 usage で `runs.usage_json` を上書きする
+    /// （`status = 'running'` の行だけ。events には書かない。確定値は `WorkerFinished.usage`）。
+    /// 書いた行が無ければ `Ok(false)`。
+    fn run_index_progress_usage(
+        &self,
+        run_id: &str,
+        usage: &crate::model::Usage,
+    ) -> Result<bool, StoreError>;
     fn run_index_get(&self, run_id: &str) -> Result<Option<RunRow>, StoreError>;
     /// そのタスクの run（`started_at` 昇順）。
     fn runs_for_task(&self, task_id: TaskId) -> Result<Vec<RunRow>, StoreError>;

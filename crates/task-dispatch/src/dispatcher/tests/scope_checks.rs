@@ -379,6 +379,7 @@ impl WorkerAdapter for WuBaseAdapter {
                 terminal = Terminal::Error {
                     message: "retry fixture".into(),
                     retryable: true,
+                    usage: None,
                 };
             }
             seen.push(env);

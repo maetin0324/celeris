@@ -190,7 +190,9 @@ async fn missing_result_json_is_a_retryable_error() {
         .await
         .expect("run itself does not error (no provider-failure text)");
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("result.json"));
         }

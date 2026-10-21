@@ -692,6 +692,7 @@ async fn run_codex_once(
             timeout_terminal = Some(Terminal::Error {
                 message: "idle timeout".into(),
                 retryable: true,
+                usage: None,
             });
             force_kill = true;
             break;
@@ -985,6 +986,7 @@ async fn run_codex(
                         "worker exited without a turn.completed/turn.failed message (exit={exit_repr})"
                     ),
                     retryable: true,
+                    usage: None,
                 },
                 pf,
             )
@@ -1010,6 +1012,7 @@ async fn run_codex(
                     Terminal::Error {
                         message: format!("codex turn failed: {message}"),
                         retryable: true,
+                        usage: None,
                     },
                     pf,
                 )
@@ -1413,6 +1416,7 @@ async fn terminal_from_result(
             return Terminal::Error {
                 message: format!("codex exited without {artifacts_rel}/result.json"),
                 retryable: true,
+                usage: None,
             };
         }
     };
@@ -1440,12 +1444,14 @@ async fn terminal_from_result(
                         "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
                     ),
                     retryable: true,
+                    usage: None,
                 }
             }
         }
         Err(e) => Terminal::Error {
             message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
             retryable: true,
+            usage: None,
         },
     }
 }

@@ -74,6 +74,7 @@ fn base_spec() -> NewTaskSpec {
         depends_on: vec![],
         max_turns: None,
         max_wall_secs: None,
+        max_tokens: None,
         max_retries: 2,
         role: None,
         genre: None,

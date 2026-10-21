@@ -385,7 +385,9 @@ async fn non_zero_exit_is_retryable_error() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("exit=7"), "{message}");
         }
@@ -412,7 +414,9 @@ async fn paperqa_not_importable_is_a_clear_non_retryable_error() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(
                 !retryable,
                 "installing paperqa fixes this, retrying alone does not"
@@ -443,7 +447,9 @@ async fn empty_output_is_retryable_error() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("no answer"), "{message}");
         }
@@ -478,7 +484,9 @@ while true; do sleep 0.1; done
     let outcome = adapter.run(req, "run-4", limits, &sink).await.unwrap();
     assert!(start.elapsed() < Duration::from_secs(5));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("wall clock exceeded"), "{message}");
         }
@@ -1549,7 +1557,9 @@ async fn gate_rejects_short_evidence_but_keeps_the_artifacts() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(
                 message.contains("insufficient literature evidence"),
@@ -1637,7 +1647,9 @@ async fn gate_zero_candidates_uses_the_distinct_message() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert_eq!(
                 message,
@@ -3903,7 +3915,9 @@ exit 2
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { message, retryable } => {
+        Terminal::Error {
+            message, retryable, ..
+        } => {
             assert!(!retryable, "{message}");
             assert!(message.contains("celeris-proxy"), "{message}");
         }

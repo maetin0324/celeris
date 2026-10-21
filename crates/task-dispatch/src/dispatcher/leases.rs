@@ -284,6 +284,23 @@ impl Dispatcher {
                     }
                 }
             }
+            // 2026-10-20 ADR: 段の統合の検査が走っている間は、lease が切れても回収しない（検査は
+            // 1 件ごとに時間切れで必ず終わる。繰り返す時間切れは検査の失敗として扱う）。
+            if self.integrating.contains_key(&task.id) {
+                match self
+                    .store
+                    .extend_task_lease(task.id, self.integration_ttl())
+                {
+                    Ok(_) => {
+                        tracing::warn!(task_id = %task.id, "lease expired while the stage integration is running; extended instead of reclaiming");
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!(task_id = %task.id, error = %e, "failed to extend the lease for the running integration; will retry next tick");
+                        continue;
+                    }
+                }
+            }
             // ADR-0061（Phase 104）: `entry` を消費する前に `since`（wall time 計算用）を取っておく。
             let mut run_since: Option<OffsetDateTime> = None;
             let keys: Vec<RunKey> = self

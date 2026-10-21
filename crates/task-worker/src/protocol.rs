@@ -1207,6 +1207,14 @@ pub enum WorkerMessage {
         /// 供給側の失敗なら種別を付ける（ADR-0010 D5）。付いていれば `retryable` に関わらず `requeue` になる。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_failure: Option<ProviderFailure>,
+        /// 失敗までに観測できた usage（取れた値だけ。追加のみ）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
+    },
+    /// 非終端: run 内で累積した usage（累積値。単調に増える）。追加のみ
+    /// （`PROTOCOL_VERSION` は変えない。この行を出さないワーカーはそのまま動く）。
+    UsageProgress {
+        usage: Usage,
     },
     /// ADR-0072 D9/D10（Phase E1）: graceful yield（`result.json` の `{"yield": {...}}`）。`checkpoint`
     /// は checkpoint の意味の欄を寛容に持つ生の JSON（`task_core::WorkerCheckpointInput` と同じ形）。
@@ -1369,6 +1377,7 @@ pub fn sample_task_for_tests() -> Task {
             max_turns: 10,
             max_wall_secs: 60,
             max_retries: 1,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

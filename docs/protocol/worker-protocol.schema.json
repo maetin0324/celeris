@@ -410,6 +410,15 @@
           "minimum": 0,
           "type": "integer"
         },
+        "max_tokens": {
+          "description": "ADR 2026-10-20-mlsys-main2-fixes D1: task 木の全 run（reviewer を含む）の token 上限\n（input+output+cache_read+cache_creation）。無ければ token の上限は無い。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_turns": {
           "format": "uint32",
           "minimum": 0,
@@ -430,12 +439,21 @@
     },
     "BudgetKind": {
       "description": "D7: 予算切れの種類。",
-      "enum": [
-        "turns",
-        "wall_clock",
-        "context"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "turns",
+            "wall_clock",
+            "context"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "tokens",
+          "description": "ADR 2026-10-20-mlsys-main2-fixes D1: `Budget.max_tokens`（task 木の token 上限）に達した。",
+          "type": "string"
+        }
+      ]
     },
     "CampaignIdentity": {
       "additionalProperties": false,
@@ -4590,12 +4608,40 @@
             "type": {
               "const": "error",
               "type": "string"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Usage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "失敗までに観測できた usage（取れた値だけ。追加のみ）。"
             }
           },
           "required": [
             "type",
             "message",
             "retryable"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "非終端: run 内で累積した usage（累積値。単調に増える）。追加のみ\n（`PROTOCOL_VERSION` は変えない。この行を出さないワーカーはそのまま動く）。",
+          "properties": {
+            "type": {
+              "const": "usage_progress",
+              "type": "string"
+            },
+            "usage": {
+              "$ref": "#/$defs/Usage"
+            }
+          },
+          "required": [
+            "type",
+            "usage"
           ],
           "type": "object"
         },

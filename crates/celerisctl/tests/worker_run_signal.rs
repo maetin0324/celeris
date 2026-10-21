@@ -118,6 +118,7 @@ fn sigterm_kills_the_worker_process_and_exits_130() {
             max_turns: 1,
             max_wall_secs: 600,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

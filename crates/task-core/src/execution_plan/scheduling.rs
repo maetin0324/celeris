@@ -105,6 +105,10 @@ pub enum WorkUnitBlockedReason {
     /// （`credential_waits`。task の Status は増やさない）。`Infra`・`ClusterJobs` と同じく工程の失敗に数えず、
     /// 同じ段階の他の unit・兄弟は止めない。
     WaitingForAuth,
+    /// 2026-10-20-continuation-limit-by-progress D5: 進捗がある continuation が固い上限
+    /// （`continuation_hard_limit`）に達した。失敗ではなく人の回答待ち（`Question` と同じ扱い）で、
+    /// replan には回さない。回答で `needs_continuation` に戻る。
+    ContinuationCap,
 }
 
 impl WorkUnitBlockedReason {
@@ -118,6 +122,7 @@ impl WorkUnitBlockedReason {
             WorkUnitBlockedReason::Infra => "infra",
             WorkUnitBlockedReason::ClusterJobs => "cluster_jobs",
             WorkUnitBlockedReason::WaitingForAuth => "waiting_for_auth",
+            WorkUnitBlockedReason::ContinuationCap => "continuation_cap",
         }
     }
 
@@ -131,6 +136,7 @@ impl WorkUnitBlockedReason {
             "infra" => Some(WorkUnitBlockedReason::Infra),
             "cluster_jobs" => Some(WorkUnitBlockedReason::ClusterJobs),
             "waiting_for_auth" => Some(WorkUnitBlockedReason::WaitingForAuth),
+            "continuation_cap" => Some(WorkUnitBlockedReason::ContinuationCap),
             _ => None,
         }
     }

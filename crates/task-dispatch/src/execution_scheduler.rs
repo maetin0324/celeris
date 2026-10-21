@@ -14,7 +14,8 @@ use task_core::{
 /// D18 の上限（呼び出し側が `[execution]` の設定または既定値から組み立てる）。
 #[derive(Debug, Clone, Copy)]
 pub struct WuLimits {
-    pub max_continuations: u32,
+    /// `[execution] continuation_hard_limit`（暴走止め。最後の人の回答以降の continuation 回数）。
+    pub continuation_hard_limit: u32,
     pub no_progress_limit: u32,
     pub max_retries: u32,
 }
@@ -48,6 +49,69 @@ pub struct ContinuationInputs<'a> {
     /// この WU の直前の checkpoint（進捗判定用。無ければ `None`）。
     pub prev_checkpoint: Option<&'a Checkpoint>,
     pub no_progress_before: u32,
+    /// 最後の `answer` 以降のこの WU の continuation 回数（固い上限の判定用）。
+    pub continuations_since_answer: u32,
+    /// 最後の `answer` 以降で進捗ありだった checkpoint の数（固い上限の質問文用）。
+    pub progress_checkpoints: u32,
+}
+
+/// 固い上限の質問文に示す進捗（2026-10-20-continuation-limit-by-progress D3）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContinuationFacts {
+    /// 最後の回答以降の continuation 回数。
+    pub continuations: u32,
+    /// そのうち進捗ありだった checkpoint の数。
+    pub progress_checkpoints: u32,
+    /// `(commit 数, base 7 文字, head 7 文字)`。`repo_state` が無ければ `None`。
+    pub commits: Option<(u64, String, String)>,
+    /// 今回の checkpoint の変更 file 数。
+    pub files_changed: usize,
+}
+
+impl ContinuationFacts {
+    pub fn new(continuations: u32, progress_checkpoints: u32, checkpoint: &Checkpoint) -> Self {
+        let short = |s: &str| s.chars().take(7).collect::<String>();
+        Self {
+            continuations,
+            progress_checkpoints,
+            commits: checkpoint
+                .repo_state
+                .as_ref()
+                .map(|r| (r.ahead, short(&r.base), short(&r.head))),
+            files_changed: checkpoint.files_changed.len(),
+        }
+    }
+}
+
+/// 固い上限に達したときの質問文（task は `key = None`、WU は `Some(key)`）。上限に達した事実と進捗を数で示す。
+pub fn continuation_cap_question(
+    key: Option<&str>,
+    limit: u32,
+    facts: &ContinuationFacts,
+) -> String {
+    let subject = match key {
+        Some(k) => format!("WorkUnit {k} の"),
+        None => String::new(),
+    };
+    let commits = match &facts.commits {
+        Some((n, base, head)) => format!("commit {n} 件（{base}..{head}）"),
+        None => "commit 不明".to_string(),
+    };
+    format!(
+        "question: {subject}continuation の上限（continuation_hard_limit = {limit} 回）に達しました。進捗は続いています: 前回の回答以降 continuation {} 回、うち進捗あり {} 回、{commits}、変更 file {} 件。続ける（上限まで再び数える）／分割し直す（replan）／中止のいずれかを選んでください。",
+        facts.continuations, facts.progress_checkpoints, facts.files_changed
+    )
+}
+
+/// 進捗なしが `no_progress_limit` 回続いたときの質問文（task は `key = None`、WU は `Some(key)`）。
+pub fn no_progress_question(key: Option<&str>, no_progress: u32, continuations: u32) -> String {
+    let subject = match key {
+        Some(k) => format!("WorkUnit {k} が"),
+        None => "実行が".to_string(),
+    };
+    format!(
+        "question: {subject}進みません（進捗なしが {no_progress} 回続きました。continuation {continuations} 回）。予算を増やして続ける／分割し直す（replan）／中止のいずれかを選んでください。"
+    )
 }
 
 /// D6: この WU の run が `end` で終わったとき、WU と Task がどうなるかを決める。
@@ -76,13 +140,9 @@ pub fn decide(
     }
     match end {
         RunEnd::Completed => complete(wu, run_id, all_units),
-        RunEnd::Yielded | RunEnd::BudgetExhausted { .. } => continuation(
-            wu,
-            continuation_inputs.checkpoint,
-            continuation_inputs.prev_checkpoint,
-            continuation_inputs.no_progress_before,
-            limits,
-        ),
+        RunEnd::Yielded | RunEnd::BudgetExhausted { .. } => {
+            continuation(wu, continuation_inputs, limits)
+        }
         RunEnd::Question => blocked(wu, WorkUnitBlockedReason::Question),
         RunEnd::Failed { retryable } => failed(wu, all_units, retryable, limits),
         // ADR-0072 D6 表: harness_error は「ready、checkpoint があれば needs_continuation」。
@@ -173,35 +233,51 @@ fn complete(wu: &WorkUnitRow, run_id: &str, all_units: &[WorkUnitRow]) -> WuDeci
     }
 }
 
-fn continuation(
-    wu: &WorkUnitRow,
-    checkpoint: Option<&Checkpoint>,
-    prev_checkpoint: Option<&Checkpoint>,
-    no_progress_before: u32,
-    limits: WuLimits,
-) -> WuDecision {
-    let progressed = checkpoint_shows_progress(
-        prev_checkpoint,
-        checkpoint.expect(
-            "continuation() is only called when RunEnd::is_continuable(); a checkpoint was merged",
-        ),
+fn continuation(wu: &WorkUnitRow, inputs: ContinuationInputs<'_>, limits: WuLimits) -> WuDecision {
+    let checkpoint = inputs.checkpoint.expect(
+        "continuation() is only called when RunEnd::is_continuable(); a checkpoint was merged",
     );
+    let progressed = checkpoint_shows_progress(inputs.prev_checkpoint, checkpoint);
     let no_progress = if progressed {
         0
     } else {
-        no_progress_before + 1
+        inputs.no_progress_before + 1
     };
 
-    if wu.continuations >= limits.max_continuations || no_progress >= limits.no_progress_limit {
+    // 2026-10-20-continuation-limit-by-progress D2: 進捗なしの連続（先に見る）と固い上限だけで人に聞く。
+    if no_progress >= limits.no_progress_limit {
         let mut updated = now_wu(wu.clone(), WorkUnitStatus::Blocked);
         updated.blocked_reason = Some(WorkUnitBlockedReason::Limit);
         return WuDecision {
             updated,
             reason: "limit",
             trigger: Trigger::WorkerQuestion,
-            outcome_override: Some(format!(
-                "question: WorkUnit {} が進みません（continuation {} 回 / 進捗なし {} 回）。予算を増やして続ける／分割し直す（replan）／中止のいずれかを選んでください。",
-                wu.key, wu.continuations, no_progress
+            outcome_override: Some(no_progress_question(
+                Some(&wu.key),
+                no_progress,
+                inputs.continuations_since_answer,
+            )),
+            newly_blocked: Vec::new(),
+            newly_ready: Vec::new(),
+            plan_complete: false,
+        };
+    }
+    if inputs.continuations_since_answer >= limits.continuation_hard_limit {
+        let mut updated = now_wu(wu.clone(), WorkUnitStatus::Blocked);
+        updated.blocked_reason = Some(WorkUnitBlockedReason::ContinuationCap);
+        let facts = ContinuationFacts::new(
+            inputs.continuations_since_answer,
+            inputs.progress_checkpoints,
+            checkpoint,
+        );
+        return WuDecision {
+            updated,
+            reason: "continuation_cap",
+            trigger: Trigger::WorkerQuestion,
+            outcome_override: Some(continuation_cap_question(
+                Some(&wu.key),
+                limits.continuation_hard_limit,
+                &facts,
             )),
             newly_blocked: Vec::new(),
             newly_ready: Vec::new(),
@@ -369,7 +445,11 @@ pub fn settle_phase(units: &[WorkUnitRow]) -> PhaseSettle {
     in_phase.sort_by_key(|u| u.seq);
     if let Some(q) = in_phase.iter().find(|u| {
         u.status == WorkUnitStatus::Blocked
-            && u.blocked_reason == Some(WorkUnitBlockedReason::Question)
+            && matches!(
+                u.blocked_reason,
+                Some(WorkUnitBlockedReason::Question)
+                    | Some(WorkUnitBlockedReason::ContinuationCap)
+            )
     }) {
         return PhaseSettle::Question(q.id.clone());
     }
@@ -442,7 +522,11 @@ pub fn runnable_in_phase(units: &[WorkUnitRow], in_flight: usize, limit: usize) 
         .collect();
     let question = in_phase.iter().any(|u| {
         u.status == WorkUnitStatus::Blocked
-            && u.blocked_reason == Some(WorkUnitBlockedReason::Question)
+            && matches!(
+                u.blocked_reason,
+                Some(WorkUnitBlockedReason::Question)
+                    | Some(WorkUnitBlockedReason::ContinuationCap)
+            )
     });
     let mut candidates: Vec<&WorkUnitRow> = in_phase
         .iter()
@@ -472,7 +556,9 @@ pub fn runnable_in_phase(units: &[WorkUnitRow], in_flight: usize, limit: usize) 
 /// 計画が直らない限り解消しない。E2 には該当しない: E2 の失敗した Task は即 `failed` になる）。
 pub fn resume_after_answer(wu: &WorkUnitRow) -> WorkUnitRow {
     match wu.blocked_reason {
-        Some(WorkUnitBlockedReason::Limit) => now_wu(wu.clone(), WorkUnitStatus::NeedsContinuation),
+        Some(WorkUnitBlockedReason::Limit) | Some(WorkUnitBlockedReason::ContinuationCap) => {
+            now_wu(wu.clone(), WorkUnitStatus::NeedsContinuation)
+        }
         _ => now_wu(wu.clone(), WorkUnitStatus::Ready),
     }
 }

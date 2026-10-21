@@ -240,6 +240,7 @@ impl WorkerAdapter for ScriptedEvalWorker {
                 terminal: Terminal::Error {
                     message: message.clone(),
                     retryable: false,
+                    usage: None,
                 },
                 exit_code: Some(1),
             });
@@ -260,6 +261,7 @@ impl WorkerAdapter for ScriptedEvalWorker {
                 terminal: Terminal::Error {
                     message: "worker exited without artifacts/result.json".into(),
                     retryable: false,
+                    usage: None,
                 },
                 exit_code: Some(0),
             });

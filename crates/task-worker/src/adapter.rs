@@ -28,6 +28,8 @@ pub enum Terminal {
     Error {
         message: String,
         retryable: bool,
+        /// run の途中までに観測できた usage（取れた値だけ。無ければ `None`）。
+        usage: Option<Usage>,
     },
     /// ADR-0072 D9/D10: result.json の `{"yield": {...}}`（graceful yield）。`checkpoint` は
     /// checkpoint の意味の欄（`task_core::WorkerCheckpointInput` と同じ形）を寛容に持つ生の JSON。
@@ -73,6 +75,7 @@ pub fn wait_terminal(value: &serde_json::Value, usage: Option<Usage>) -> Option<
         Err(reason) => Some(Terminal::Error {
             message: format!("result.json has an invalid cluster job wait: {reason}"),
             retryable: true,
+            usage: None,
         }),
     }
 }
@@ -230,6 +233,8 @@ pub trait EventSink: Send + Sync {
     /// `task_comments` に `author_kind = node` で残す。既定は何もしない（`celerisctl worker run` など
     /// DB を変えない文脈）。
     fn comment(&self, _body: &str) {}
+    /// run 内で累積した usage（累積値。非終端）。観測できる adapter だけが呼ぶ。
+    fn usage_progress(&self, _usage: &Usage) {}
     /// claude-code アダプタが stream-json の `rate_limit_event` を解析するたびに呼ぶ（ADR-0024 D4）。
     /// ディスパッチャはプールのアカウントで走っている run のシンクから、この値を `AccountBook` に記録する。
     /// 既定は何もしない（`fake` アダプタや `celerisctl worker run` の観測用途など）。

@@ -207,7 +207,9 @@ async fn unknown_type_is_protocol_violation() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(!retryable);
             assert!(message.contains("protocol violation"), "{message}");
         }
@@ -263,7 +265,9 @@ async fn exit_without_terminal_message_is_retryable_error() {
         .unwrap();
     assert_eq!(outcome.exit_code, Some(3));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("exit=3"), "{message}");
         }
@@ -288,7 +292,9 @@ async fn idle_timeout_kills_and_reports_error() {
         .unwrap();
     assert!(start.elapsed() < Duration::from_secs(5));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("idle timeout"), "{message}");
         }
@@ -316,7 +322,9 @@ async fn wall_clock_exceeded_kills_and_reports_error() {
         .unwrap();
     assert!(start.elapsed() < Duration::from_secs(5));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("wall clock exceeded"), "{message}");
         }

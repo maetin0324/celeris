@@ -671,7 +671,7 @@ harness ごとの可否:
 | 設定 | 既定 | 意味 | 超えたとき |
 |---|---|---|---|
 | `continuation` | `true` | E1 の continuation を有効にする（`false` で従来の挙動） | — |
-| `max_continuations_per_work_unit` | 3 | 1 つの WU の Run は最大 4 回 | blocked（limit）→ 人に聞く |
+| `max_continuations_per_work_unit` | 3 | 1 つの WU の Run は最大 4 回 | blocked（limit）→ 人に聞く（2026-10-20 付記: 回数だけの上限は `2026-10-20-continuation-limit-by-progress.md` で `continuation_hard_limit` へ置換。進捗がある間は聞かない） |
 | `no_progress_limit` | 2 | 進捗なしの continuation が連続 2 回で止める。進捗の定義は次の 3 つのどれも起きないこと: `files_changed` のパス集合か HEAD が変わる / `completed` が増える / `remaining` が減る | blocked（limit）→ replan が可能なら replan |
 | `max_work_units` | 8 | 1 つの計画の WU の数（repair を除く） | 計画の検証で拒否 |
 | `max_total_work_units` | 16 | Task の生涯で作る WU の数（repair と replan で足したものを含む） | replan を拒否 → blocked |

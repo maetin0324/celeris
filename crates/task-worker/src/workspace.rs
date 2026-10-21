@@ -279,6 +279,8 @@ impl Workspace for LocalWorkspace {
         }
 
         let mut child = command.spawn()?;
+        // 中断（future の drop）でも孤児を残さない: 直接の子だけでなく group と子孫ごと止める。
+        let _group_guard = child.id().map(|pid| GroupKillGuard(pid as i32));
         let mut stdout = child.stdout.take().ok_or_else(|| {
             WorkspaceError::Io(std::io::Error::other("child stdout not captured"))
         })?;
@@ -319,14 +321,13 @@ impl Workspace for LocalWorkspace {
                 })
             }
             Err(_elapsed) => {
-                if let Some(pid) = child.id() {
-                    #[cfg(unix)]
-                    {
-                        let _ = nix::sys::signal::killpg(
-                            nix::unistd::Pid::from_raw(pid as i32),
-                            nix::sys::signal::Signal::SIGKILL,
-                        );
-                    }
+                // 2026-10-20 ADR: 何が止まっていたかを log に残してから、group と子孫ごと殺す。
+                let killed = child
+                    .id()
+                    .map(|pid| crate::process_group::kill_group_and_descendants(pid as i32))
+                    .unwrap_or_default();
+                if let Some(path) = &self.output_log {
+                    append_timeout_note(path, timeout, &killed);
                 }
                 let _ = child.wait().await;
                 Ok(ExecResult {
@@ -393,6 +394,36 @@ fn collect_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Wor
         }
     }
     Ok(())
+}
+
+/// `exec` の間だけ持つ。drop（正常終了・timeout・中断）で、その group に残った process を SIGKILL する。
+struct GroupKillGuard(i32);
+
+impl Drop for GroupKillGuard {
+    fn drop(&mut self) {
+        crate::process_group::kill_group_and_descendants(self.0);
+    }
+}
+
+/// timeout のとき、`with_output_log` のファイルの末尾に打ち切りの理由と殺した process の様子を足す。
+fn append_timeout_note(path: &Path, timeout: Duration, killed: &[String]) {
+    use std::io::Write;
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+    else {
+        return;
+    };
+    let _ = writeln!(
+        f,
+        "\n[celeris] timed out after {}s; killed the process group and {} descendant(s) (pid comm state wchan):",
+        timeout.as_secs(),
+        killed.len()
+    );
+    for line in killed {
+        let _ = writeln!(f, "[celeris]   {line}");
+    }
 }
 
 #[async_trait]

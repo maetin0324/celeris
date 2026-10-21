@@ -1,7 +1,7 @@
 ---
 title: 研究評価接続 3/P0・統合 — 修正後の同一構成での無 LLM 通し確認と最小実 pilot の可否
 tasks: [01M5BT8JYWTNTFXZHCYSFQHSEX]
-status: partial
+status: blocked
 updated: 2026-10-20
 ---
 # 研究評価接続 3/P0・統合
@@ -92,3 +92,15 @@ LLM・userns・本番 host・cluster は使っていない（A は claude stub�
 - `bash scripts/dev/test-parallel.sh`: exit 0（6212 passed, 0 failed, 17 ignored）
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo fmt --all -- --check`: exit 0
+
+## 後続 task 01M5C13NRT（B reviewer の routing 記録）— 途中経過
+- **原因（特定済み）**: 測定 config の fake source/route_defaults ではなく、Celeris 本体の欠落。`pick_reviewer`（crates/task-dispatch/src/dispatcher/review_spawn.rs）が task の `routing_override` を渡さずに `select_route` を呼んでいたため、reviewer run の `route_decision.routing_resolved` が null になっていた（worker run は dispatch_run.rs で記録済み）。証拠: 通し記録 01M5BT8JYW/artifacts/real-daemon-rehearsal/steps.json で grade/export が reviewer run だけを `no resolved routing recorded` で拒否し、worker run は拒否されていない。修正: reviewer も override 付きの `select_route_with` で選び、`routing_resolved` を記録する（commit 30f45688）。
+- **受け入れ試験**: `cargo test -p celeris-campaign --test launcher -- --ignored --exact real_daemon_main_set_runs_through_the_launcher_without_llm` → exit 0（1 passed, 42.7s）。試験の既定 release `rehearsal0001` が manifest の 12-hex 検査で落ちていたため、未指定時は checkout の HEAD sha12 を使うように直した（commit 3f1bd73d）。
+- **watch の tokens_total に B が入らない理由**: 旧通しの watch は `tokens_total:105, tokens_missing:1`。runner.rs は B の case の `counted` が None のとき tokens_total に足さず tokens_missing を数える（runner.rs:1172/1182）。つまり B の usage は 0 として数えられたのではなく「未取得」として扱われている。celeris executor が B の usage を取れていない経路の特定は未了（次 run で確認）。
+- **B reviewer run が 12 回の理由**: 未確認（仮説: stub reviewer が verdict を 1 件しか返さず criterion 数と合わないため review が不成立→再試行）。次 run で events を見て確定する。
+
+## 後続 task 01M5C13NRT — 残り 2 点の確認（run 01M5C1WG）
+- **B reviewer run が 12 回の理由（確定）**: 旧通しの測定 DB の写し（01M5BT8JYW/artifacts/real-daemon-rehearsal/root/measure-db-copy.sqlite3、読取のみ）の `runs`・`events` で、B task `01M5C0A1ZEA1` は worker 3 回 × reviewer 4 回 = 12。各 worker 試行の後、reviewer run 3 回が `harness_error`（class infra、outcome `requeue: adapter: claude exited without artifacts/result.json`）、4 回目が `failed`（`reviewer infra failure ×3`）→ `review_fail` で ready に戻り、3 回目の試行の後 task は failed。つまり verdict 数の不一致ではなく、B の stub（実 claude_code adapter の command）が reviewer run の成果物（adapter が要求する `artifacts/result.json`）を書かなかったことによる infra 失敗の 3 回再試行 × worker 再試行 3 回。Celeris 本体の再試行規則（reviewer infra ×3、worker attempt 上限 3）どおりで、本体の不備ではないので直さない。測定構成の試験 stub 側の問題で、現行 HEAD の受け入れ試験は exit 0 で通る。
+- **watch の tokens_total に B の usage が入らない理由（確定）**: 同じ DB で B の worker run 3 本は `usage_json`（input 1000 / output 50）を持つが、reviewer run 12 本はすべて `usage: null`（harness_error/failed の run は usage を記録しない）。B task 自体が failed で終わったため、runner.rs:1139 の `res.tokens` が None になり、`counted` None → `tokens_missing += 1`（runner.rs:1172、`missing_tokens_policy` は「cap 判定では per_case.max_tokens を課金、0 とは数えない」）。つまり B の usage は 0 として隠れたのではなく「未取得」として明示されており、集計規則どおり。直さない（B が review を通れば tokens は数えられる。実 pilot では実 reviewer が result.json/review.json を書く）。
+- **検査（この run）**: `cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。受け入れ試験は前 run（3f1bd73d 以降）で exit 0（1 passed）。
+- **提案**: reviewer run の usage を harness_error/failed でも（adapter が取れた分は）記録すると、実 pilot の失敗試行の token 消費を台帳に正しく載せられる。別 task で検討。

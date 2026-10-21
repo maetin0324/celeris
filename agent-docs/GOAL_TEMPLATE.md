@@ -1,5 +1,5 @@
 docs/DESIGN.md の Phase __N__ の受け入れ条件が全て満たされ、次の証拠が会話に示されている:
-- `cargo test --workspace` が exit 0（テスト数を報告）
+- `bash scripts/dev/test-affected.sh` が exit 0（対象 crate と テスト数を報告。全体の試験は release gate だけ）
 - `cargo clippy --workspace -- -D warnings` が exit 0
 - `cargo fmt --all -- --check` が exit 0
 - auditor サブエージェントの監査報告が「可」または「条件付き可」で、「不可」の項目がゼロ

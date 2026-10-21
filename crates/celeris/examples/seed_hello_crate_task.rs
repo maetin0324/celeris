@@ -90,6 +90,7 @@ fn main() {
             max_turns: 30,
             max_wall_secs: 600,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

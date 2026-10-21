@@ -36,6 +36,7 @@ fn sample_task(status: Status) -> Task {
             max_turns: 1,
             max_wall_secs: 1,
             max_retries: 2,
+            max_tokens: None,
         },
         attempts: 1,
         lease: None,

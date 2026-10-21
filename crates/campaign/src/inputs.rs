@@ -47,6 +47,76 @@ pub fn for_problems(set: &CaseSet, problems: &[String]) -> BTreeMap<String, Vec<
         .collect()
 }
 
+/// 試行 workspace に置く公開 case 定義の file 名（`materials/<case>/case.json`）。
+pub const PUBLIC_CASE_FILE: &str = "case.json";
+
+/// 公開 case 定義の置き場（workspace からの相対 path）。objective はこの path を参照する。
+pub fn public_case_path(problem: &str) -> String {
+    format!("materials/{problem}/{PUBLIC_CASE_FILE}")
+}
+
+/// 問題ごとの公開 case 定義（`Case::public_json`）。
+pub fn public_cases(
+    set: &CaseSet,
+    problems: &[String],
+) -> Result<BTreeMap<String, String>, String> {
+    problems
+        .iter()
+        .filter_map(|id| set.get(id).map(|c| (id, c)))
+        .map(|(id, c)| Ok((id.clone(), c.case.public_json()?)))
+        .collect()
+}
+
+/// objective（問題の prompt）が、配る公開 case 定義の相対 path を参照していること。repo 内の
+/// `cases/final/…/case.json`（trial workspace に無い path）を指していれば Err。A・B・C は同じ prompt を使うので参照先も同じになる。
+pub fn check_prompt_reference(set: &CaseSet, problems: &[(String, String)]) -> Result<(), String> {
+    let mut errs = Vec::new();
+    for (id, prompt) in problems {
+        if set.get(id).is_none() {
+            continue;
+        }
+        let want = public_case_path(id);
+        if !prompt.contains(&want) {
+            errs.push(format!("{id}: prompt does not refer to {want}"));
+        }
+        if prompt.contains("cases/final/") || prompt.contains("cases/dev/") {
+            errs.push(format!(
+                "{id}: prompt refers to a repo path that the trial workspace does not have; use {want}"
+            ));
+        }
+    }
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(errs.join("; "))
+    }
+}
+
+/// workspace の `materials/<problem>/case.json` に公開 case 定義を置く。seed の materials に `<problem>/` が無い、
+/// または既に case.json がある場合は Err（混ぜない）。
+pub fn deliver_public_case(ws: &Path, problem: &str, json: &str) -> Result<(), String> {
+    let dir = ws.join("materials").join(problem);
+    if !dir.is_dir() {
+        return Err(format!(
+            "workspace has no materials/{problem}/; the public case definition cannot be delivered"
+        ));
+    }
+    let to = ws.join(public_case_path(problem));
+    if to.exists() {
+        return Err(format!(
+            "{} already exists; it would collide with the public case definition",
+            public_case_path(problem)
+        ));
+    }
+    fs::write(&to, json).map_err(|e| format!("{}: {e}", to.display()))
+}
+
+/// 配った物（`inputs/` と公開 case 定義）を除いた workspace の hash。「seed から変わったか」の判定に使う。
+pub fn artifact_hash(ws: &Path, problem: &str) -> Result<String, String> {
+    let case = public_case_path(problem);
+    crate::snapshot::hash_tree_excluding(ws, &[INPUTS_DIR, &case])
+}
+
 /// 全問題の入力を（名前で重ねて）1 つの一覧にする。同名で hash が違えば Err。
 pub fn unique(map: &BTreeMap<String, Vec<DeliveredInput>>) -> Result<Vec<DeliveredInput>, String> {
     let mut by: BTreeMap<&str, &str> = BTreeMap::new();
@@ -151,6 +221,8 @@ pub struct Seeder<'a> {
     pub repo_free: &'a std::collections::BTreeSet<String>,
     pub stage: PathBuf,
     pub inputs: &'a BTreeMap<String, Vec<DeliveredInput>>,
+    /// 問題ごとの公開 case 定義の JSON（無い問題は何も置かない）。
+    pub public_cases: &'a BTreeMap<String, String>,
 }
 
 impl Seeder<'_> {
@@ -170,6 +242,10 @@ impl Seeder<'_> {
 
     pub fn make(&self, problem: &str, ws: &Path) -> Result<(), String> {
         crate::snapshot::copy_tree(self.seed_for(problem)?, ws)?;
-        deliver(&self.stage, ws, self.specs(problem))
+        deliver(&self.stage, ws, self.specs(problem))?;
+        match self.public_cases.get(problem) {
+            Some(j) => deliver_public_case(ws, problem, j),
+            None => Ok(()),
+        }
     }
 }

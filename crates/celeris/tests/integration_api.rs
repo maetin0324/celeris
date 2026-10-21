@@ -240,6 +240,7 @@ fn done_task(id: TaskId, project: ProjectId, repo: RepoId) -> Task {
             max_turns: 1,
             max_wall_secs: 60,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

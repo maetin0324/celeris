@@ -62,7 +62,7 @@ CAP_ENV=…/cap-env.json             # celeris.campaign-cap-env/1（cap-runbook 
 - B・C は同じ `routing.models=["claude-sonnet-5-5"]`・`routing.run_harnesses=["claude-code"]`・`lower_policy=mlsys-min-1`。方策だけが違う（B=fixed、C=jev-1）。A は claude-code / claude-sonnet-5-5 で集合の内側。`cap-probe-*` は run_harnesses に入れない。
 - C は `no_evidence_table=true`（根拠表なし。`effective_evidence_mode=none`）、B は根拠表欄なしで none。**`evidence_table_id` と `celerisctl routing evidence` の手順は無い（消した）。latest へ fallback しない。**
 - 比較: primary A vs B、secondary B vs C。subset は K2・K4。K2 `judged_scope=[implementation, experiment]`（analysis / review は `not_judged`。維持する。ADR 2026-10-18-k2-judged-scope）、K4 は analysis。
-- `$P/task-template.json`: `project_id=01M2WTS3DKNZBSZ2JMVB4CZMBW`、`repos:["scratch"]`、acceptance は reviewer。
+- `$P/task-template.json`: `project_id=01M2WTS3DKNZBSZ2JMVB4CZMBW`、acceptance は reviewer。`repos`・`workspace_mode`・`max_tokens` は書かない（拒否される。実行器が trial workspace を作業場所にし、`repos: []`・`max_tokens=per_case` を埋める。ADR 2026-10-20-mlsys-main2-fixes D1・D2）。
 - `budget.token_basis=all`。`lower_policy`/`online_update` は変えない。
 
 ## 3a. 主比較（測定 ID `mlsys-main-1`、A0 vs B0 のみ）の承認済み固定値
@@ -105,6 +105,8 @@ $B dry-run  --manifest $R/pinned/main/final.json      # within_budget true、tot
 ```
 以後 manifest・入力を変えない（変えるなら新 campaign_id と新しい決定）。
 
+補足（ADR 2026-10-20 mlsys-main2-fixes D2-4）: input manifest の各 problem の `prompt` は、公開 case 定義を試行 workspace の `materials/<case>/case.json` として参照する（repo 内の `crates/campaign/cases/final/<case>/case.json` は trial workspace に無いので、実行前検査が拒否する）。2026-10-16 の凍結済み入力は旧い参照なので、次の campaign は prompt を直した input manifest と新 campaign_id で再 freeze する。`MATERIALS_SRC` は `<case>/` dir を含むこと。
+
 ## 3b. 測定専用 daemon の宣言（人が配置。本番 config・release は触らない）
 `$P/measure-daemon.example.toml` を複製し `<...>` を実値にする（db・workspace・KB・memory・token_file・port は本番と別、NFS 外）。内容: 実 harness は `claude-code` だけ、`cap-probe-claude-code`（kind=fake・`env_of="claude-code"`・command=`CAMPAIGN_BIN`・args `cap-worker`）、`[llm_sources.cap-probe]`、`[route_defaults.cap-probe-claude-code]`、`harness_selection.rules` 先頭に分野 `cap-probe-claude-code` の規則。probe は分野 `cap-probe-*` の task にだけ結ばれ、実試行の候補に入らない。宣言を欠くと preflight の B/C cap-probe が投入前に `env_failure` で拒否する。`NORMAL_CONFIG` の `[[clusters]]` を複写する。
 
@@ -112,7 +114,7 @@ $B dry-run  --manifest $R/pinned/main/final.json      # within_budget true、tot
 - `[selfdeploy] releases_dir = "/local/celeris/state/releases"`（読むだけ）。無いと daemon が既定の `~/.local/celeris/releases` を見て `release … is not promoted` で exit 4 する。
 - `[accounts] claude_dir`（通常運用と同じ pool）と `[adapters.claude_code] command` / `env = { PKG_CONFIG_PATH = … }`。B/C の cap-probe は `env_of=claude-code` のこの adapter env を worker に渡し、CAP_ENV の `PKG_CONFIG_PATH` が無いと `claude-code/worker-env: worker env lacks PKG_CONFIG_PATH`。
 - CAP_ENV は K2 の `rustc-min` / `min-build-locusta` のため Rust toolchain を `ro_mounts` に、その `bin` を `PATH`（`:/usr/local/bin:/usr/bin:/bin` を後ろに足す。置換されるため）に入れる。launcher env に同じ `bin` を `RUN_PATH` として書く（daemon の PATH にも要る）。
-- 測定 DB は新規なので task-template の `project_id` の案件は存在しない。`start` 後に `POST /api/v1/projects`（title・request）→ `POST /api/v1/projects/{id}/repos`（`{"name":"scratch","kind":"dir","location":{"kind":"local","path":"<STATE_DIR>/scratch-repo"},"is_primary":true}`）で作り、返った id を task-template の `project_id` に書いて `preflight` を再実行する（token は `$STATE_DIR/token`、値は表示しない）。
+- 測定 DB は新規なので task-template の `project_id` の案件は存在しない。`start` 後に `POST /api/v1/projects`（title・request。repo は登録しない — 試行の task は trial workspace だけを作業場所にする）で作り、返った id を task-template の `project_id` に書いて `preflight` を再実行する（token は `$STATE_DIR/token`、値は表示しない）。
 - 副比較（`pinned/sub/`、測定 ID mlsys-sub-1）の `project_id` は sub の STATE_DIR の DB に属するので、主比較の id とは別に上の手順で sub の案件を作って `pinned/sub/task-template.json` に入れる（未設定の間 `check-sub-pins.py` は非0。旧 id は無効）。sub の preflight 証跡 `pinned/sub/evidence/k2-preflight.json` と campaign lock `pinned/sub/lock.json` も同様に必須で、取得は統合 01M58VG5C4XGK4E70M6WJ6MEX0。
 - 通常 config の `[[clusters]]` を複写すると測定 daemon も pegasus の forward（127.0.0.1:18000）の tunnel を張ろうとする。通常 daemon と重なる点に注意（人が判断）。
 
@@ -147,12 +149,12 @@ sh $L watch     --env $ENVF   # daemon 実体照合 → preflight → env-lock�
 - env-lock（`$OUT/env-lock.json`）: A の絶対 path・sha256・`--version`、B/C の release sha12、arm ごとの lower_policy・evidence_mode（none）・models・run_harnesses と**接続先 daemon の `GET /api/v1/llm/models` から取った候補集合と階層（catalog）**、worker 実行ファイル（`WORKER_PROGRAMS`）、`campaign_sha256` の固定記録。再開時は現物から作り直して突き合わせ、追加・削除・階層移動を key 名で挙げて拒否する。秘密値は持たない。
 - account 状態（試行 identity 別）: A は `A_ACCOUNT` の認証材料 1 件（`.credentials.json`）だけを read-only で試行に重ね、`CLAUDE_CONFIG_DIR` は試行ごとに `$OUT/trial-state/<campaign_id>/A/<case>/rep<N>/` へ分ける。各 dir の `trial-identity.json`（campaign_id・manifest sha256・arm・case・rep・account_id）が identity marker で、別 identity の試行・別 lock・別 account は同じ dir を使えない。preflight（`trial-state` 検査）は、台帳に行がある試行は marker 一致、未開始の試行は dir が空（認証 mount 先の空 file と自分の marker だけ可）であることを要求し、CLAUDE.md・projects・transcripts・他試行の marker があれば拒否する。保存 lock が別 campaign のものでも拒否する。何も消さず、書き換えず、記憶も無効にしない。launcher は account を作らない・消さない・書き換えない。preflight は `GET /llm/accounts` でログイン済みと `account_dir_residue`（残留）も検査する。
 - 標準起動は `watch`（`run` の 1 回走査を台帳が閉じるまで繰り返す。出力 JSON の `watch.end` が `settled` なら終端、`max_iterations` なら未完了が残る）。`budget.max_parallel`（1）により 1 回の走査で投入する試行は 1 つ。`executor_errors>0` なら `$OUT` の `trials.jsonl` の `error` 欄を見る。
-- 出力 JSON（`executed / waiting / parallel_deferred / no_artifact / executor_errors / blocked / budget_cancelled / tokens_total / tokens_missing / max_overshoot_*`）は `sh $L watch … > $OUT/final-run-N.json`（N は実行回数）に保存する。
+- 出力 JSON（`executed / waiting / parallel_deferred / no_artifact / executor_errors / blocked / budget_cancelled / tokens_total / tokens_missing / max_overshoot_*`）は `RUNS=$(dirname "$OUT")/runs; mkdir -p "$RUNS"` で作る `$OUT` の外の dir に、`sh $L watch … > $RUNS/watch-N.json`（N は実行回数）として保存する。`$OUT` に空 file でも置くと「out has data but no lock.json」で拒否される（lock 判定は変えない。ADR 2026-10-20-mlsys-main2-fixes D4）。
 
 ## 6. 7 日使用率（run のたびに。launcher の subcommand に無いので CLI を直接。引数は launcher と同じ接続先）
 ```sh
 export CELERIS_MEASURE_TOKEN="$(cat <DAEMON_CONFIG の [api] token_file>)"   # 値は表示・記録しない
-$B usage --manifest $MANIFEST --out $OUT --api-url http://<DAEMON_CONFIG の [api] listen> --token-env CELERIS_MEASURE_TOKEN --a-account $A_ACCOUNT > $OUT/usage-N.json
+$B usage --manifest $MANIFEST --out $OUT --api-url http://<DAEMON_CONFIG の [api] listen> --token-env CELERIS_MEASURE_TOKEN --a-account $A_ACCOUNT > $RUNS/usage-N.json
 ```
 exit 0 = A のアカウントを含む claude が 45%・codex が 21% 以内（`--max-7d` / `--max-7d-codex`。承認枠を超える変更は新しい決定）。使用率が観測できない（null）ときは非 0。腕ごとの tokens は `campaign_tokens_by_arm`。
 
@@ -176,7 +178,7 @@ sh $L export --env $ENVF   # export を $OUT/export へ。RECORDS があれば f
 - Celeris 側の消費・判断ログ（人。本番 DB は読むだけ、写しに対して）:
 ```sh
 celerisctl db backup $TMPDIR/final-db.sqlite3 --src <本番 DB path>
-celerisctl --db $TMPDIR/final-db.sqlite3 campaign export mlsys-main-1 --out $OUT/exp-db --verify-connected --manifest-hash <§3 の campaign sha256>
+celerisctl --db $TMPDIR/final-db.sqlite3 campaign export mlsys-main-1 --out $RUNS/exp-db --grades $OUT/grades.jsonl --verify-connected --manifest-hash <§3 の campaign sha256>
 ```
 `summary.json` の `shared_overhead`・`elapsed_ms` と `run_wall_sum_ms`・`total.cash_cost_usd`（取れなければ null）・終了時の 7 日使用率を進捗に転記する。
 

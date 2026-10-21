@@ -578,7 +578,11 @@ fn build_questions(
             && store.work_units_for(t.id)?.iter().any(|wu| {
                 keys.contains(&wu.key)
                     && wu.status == task_core::WorkUnitStatus::Blocked
-                    && wu.blocked_reason == Some(task_core::WorkUnitBlockedReason::Question)
+                    && matches!(
+                        wu.blocked_reason,
+                        Some(task_core::WorkUnitBlockedReason::Question)
+                            | Some(task_core::WorkUnitBlockedReason::ContinuationCap)
+                    )
             })
         {
             continue;

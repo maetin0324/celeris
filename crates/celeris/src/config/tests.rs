@@ -912,6 +912,7 @@ fn routing_sample_task() -> task_core::Task {
             max_turns: 1,
             max_wall_secs: 1,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,
@@ -3048,6 +3049,29 @@ fn execution_max_cos_runs_default_and_validation() {
     let cfg: Config = toml::from_str(&format!("{base}[execution]\nmax_cos_runs = 9\n")).unwrap();
     let err = cfg.validate().unwrap_err().to_string();
     assert!(err.contains("max_cos_runs"), "{err}");
+}
+
+/// 2026-10-20-continuation-limit-by-progress D4: 固い上限の既定（12）・写し・0 は不正。旧欄
+/// `max_continuations_per_work_unit` は読み込みエラー。
+#[test]
+fn execution_continuation_hard_limit_default_validation_and_old_field_is_an_error() {
+    let cfg: Config = toml::from_str("").unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.execution.continuation_hard_limit, 12);
+    assert_eq!(cfg.dispatch_config().execution.continuation_hard_limit, 12);
+    let cfg: Config = toml::from_str("[execution]\ncontinuation_hard_limit = 5\n").unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.dispatch_config().execution.continuation_hard_limit, 5);
+    let cfg: Config = toml::from_str("[execution]\ncontinuation_hard_limit = 0\n").unwrap();
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("continuation_hard_limit"), "{err}");
+    let err = toml::from_str::<Config>("[execution]\nmax_continuations_per_work_unit = 3\n")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("unknown field") && err.contains("max_continuations_per_work_unit"),
+        "{err}"
+    );
 }
 
 /// ADR-0079 D3（Phase R1a）: `[execution.tree]` の既定（`enabled = false`・`max_depth = 3` 層・D3 / U-R4 の

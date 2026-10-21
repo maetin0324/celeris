@@ -84,6 +84,7 @@ pub fn create_plan(
         max_turns: spec.max_turns,
         max_wall_secs: spec.max_wall_secs,
         max_retries: spec.max_retries,
+        max_tokens: None,
     };
 
     let task = Task {

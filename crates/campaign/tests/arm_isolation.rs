@@ -329,7 +329,9 @@ fn async_a_submit_err_does_not_stop_b_and_c() {
         if r.config == ConfigId::A {
             assert_eq!(r.outcome, Outcome::Error);
         } else {
-            assert_eq!(r.outcome, Outcome::Passed);
+            // mock は成果物を書かない。B/C も A と同じく、変化の無い passed は no_artifact（A の Err に巻き込まれず走った証拠）。
+            assert_eq!(r.outcome, Outcome::Failed);
+            assert_eq!(r.reason.as_deref(), Some("no_artifact"));
         }
     }
     let _ = ExecResult {

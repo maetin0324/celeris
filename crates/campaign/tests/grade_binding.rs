@@ -26,6 +26,7 @@ fn pilot_out(dir: &Path) -> (CampaignManifest, PathBuf) {
     let i = m.load_input(&mp, None).expect("input");
     let out = dir.join("out");
     let o = RunOptions {
+        public_cases: Default::default(),
         global_ledger: None,
         out: out.clone(),
         repo_src: Some(fx().join("repo")),

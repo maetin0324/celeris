@@ -61,13 +61,6 @@ async fn real_project(env: &TestEnv, auto_integrate: bool) -> (String, Value, Va
     (id, detail.json(), repos.json())
 }
 
-fn template() -> Map<String, Value> {
-    json!({"project_id": "x", "acceptance": [{"type": "reviewer", "text": "x"}]})
-        .as_object()
-        .cloned()
-        .expect("object")
-}
-
 fn auto_integrate_rejected(v: &[String]) -> bool {
     v.iter().any(|m| m.contains("auto_integrate"))
 }
@@ -84,23 +77,23 @@ async fn real_project_detail_with_auto_integrate_false_passes() {
     );
     assert!(detail.get("auto_integrate").is_none(), "{detail}");
     assert!(repos["items"].is_array(), "{repos}");
-    let v = check_project_rules(&template(), &detail, &repos);
+    let v = check_project_rules(&detail);
     assert!(v.is_empty(), "{v:?}");
 }
 
 #[tokio::test]
 async fn real_project_detail_with_auto_integrate_true_is_rejected() {
     let env = admin_env();
-    let (_, detail, repos) = real_project(&env, true).await;
+    let (_, detail, _) = real_project(&env, true).await;
     assert_eq!(detail["project"]["auto_integrate"], json!(true), "{detail}");
-    let v = check_project_rules(&template(), &detail, &repos);
+    let v = check_project_rules(&detail);
     assert!(auto_integrate_rejected(&v), "{v:?}");
 }
 
 #[tokio::test]
 async fn missing_or_malformed_auto_integrate_is_rejected() {
     let env = admin_env();
-    let (_, detail, repos) = real_project(&env, false).await;
+    let (_, detail, _) = real_project(&env, false).await;
     let mut cases: Vec<(&str, Value)> = Vec::new();
     let mut d = detail.clone();
     d["project"]
@@ -123,7 +116,7 @@ async fn missing_or_malformed_auto_integrate_is_rejected() {
     cases.push(("flat legacy shape", json!({"auto_integrate": false})));
     cases.push(("null body", Value::Null));
     for (what, d) in cases {
-        let v = check_project_rules(&template(), &d, &repos);
+        let v = check_project_rules(&d);
         assert!(auto_integrate_rejected(&v), "{what}: {v:?}");
     }
 }

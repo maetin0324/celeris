@@ -325,6 +325,15 @@
           "minimum": 0,
           "type": "integer"
         },
+        "max_tokens": {
+          "description": "ADR 2026-10-20-mlsys-main2-fixes D1: task 木の全 run（reviewer を含む）の token 上限\n（input+output+cache_read+cache_creation）。無ければ token の上限は無い。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_turns": {
           "format": "uint32",
           "minimum": 0,
@@ -345,12 +354,21 @@
     },
     "BudgetKind": {
       "description": "D7: 予算切れの種類。",
-      "enum": [
-        "turns",
-        "wall_clock",
-        "context"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "turns",
+            "wall_clock",
+            "context"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "tokens",
+          "description": "ADR 2026-10-20-mlsys-main2-fixes D1: `Budget.max_tokens`（task 木の token 上限）に達した。",
+          "type": "string"
+        }
+      ]
     },
     "CandidateKey": {
       "properties": {
@@ -6405,6 +6423,13 @@
     },
     "RepoState": {
       "properties": {
+        "ahead": {
+          "default": 0,
+          "description": "`base..HEAD` の commit 数（continuation の固い上限の質問文で進捗として示す）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "base": {
           "type": "string"
         },

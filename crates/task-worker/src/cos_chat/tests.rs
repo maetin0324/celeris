@@ -99,6 +99,7 @@ fn request(workspace: &Path, cos_chat: Option<CosChatContext>) -> RunRequest {
                 max_turns: 70,
                 max_wall_secs: 900,
                 max_retries: 0,
+                max_tokens: None,
             },
             time::OffsetDateTime::now_utc(),
         ),

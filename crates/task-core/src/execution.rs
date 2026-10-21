@@ -28,6 +28,8 @@ pub enum BudgetKind {
     Turns,
     WallClock,
     Context,
+    /// ADR 2026-10-20-mlsys-main2-fixes D1: `Budget.max_tokens`（task 木の token 上限）に達した。
+    Tokens,
 }
 
 /// D7: harness / 供給側都合の失敗の種類。
@@ -188,6 +190,9 @@ pub struct RepoState {
     pub head: String,
     pub uncommitted: bool,
     pub diff_stat: String,
+    /// `base..HEAD` の commit 数（continuation の固い上限の質問文で進捗として示す）。
+    #[serde(default)]
+    pub ahead: u64,
 }
 
 /// D8: daemon が確定させた checkpoint（`celeris.checkpoint/1`）。`CheckpointSaved` イベントと

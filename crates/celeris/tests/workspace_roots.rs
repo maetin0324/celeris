@@ -260,6 +260,7 @@ fn local_task(id: TaskId, parent: Option<TaskId>, status: Status) -> Task {
             max_turns: 1,
             max_wall_secs: 60,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: (status == Status::Running).then(|| Lease {

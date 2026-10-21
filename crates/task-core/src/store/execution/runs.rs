@@ -196,6 +196,19 @@ impl SqliteStore {
         Ok(n > 0)
     }
 
+    pub(in crate::store) fn run_index_progress_usage_impl(
+        &self,
+        run_id: &str,
+        usage: &crate::model::Usage,
+    ) -> Result<bool, StoreError> {
+        let conn = self.lock()?;
+        let n = conn.execute(
+            "UPDATE runs SET usage_json = ?1 WHERE run_id = ?2 AND status = 'running'",
+            params![serde_json::to_string(usage)?, run_id],
+        )?;
+        Ok(n > 0)
+    }
+
     pub(in crate::store) fn run_index_get_impl(
         &self,
         run_id: &str,

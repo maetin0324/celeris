@@ -252,7 +252,9 @@ async fn missing_langmem_package_is_not_retryable() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(!retryable, "{message}");
             assert!(message.contains("langmem is not importable"), "{message}");
             assert!(message.contains("setup-langmem.sh"), "{message}");
@@ -274,7 +276,9 @@ async fn a_non_zero_exit_without_the_missing_marker_is_retryable() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("exit=7"), "{message}");
         }
@@ -298,7 +302,9 @@ async fn missing_candidates_file_is_retryable_error() {
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("knowledge-candidates.json"), "{message}");
         }
@@ -355,7 +361,9 @@ async fn wall_clock_exceeded_kills_the_process_group() {
     let outcome = adapter.run(req, "run-6", limits, &sink).await.unwrap();
     assert!(start.elapsed() < std::time::Duration::from_secs(5));
     match outcome.terminal {
-        Terminal::Error { retryable, message } => {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
             assert!(retryable);
             assert!(message.contains("wall clock exceeded"), "{message}");
         }

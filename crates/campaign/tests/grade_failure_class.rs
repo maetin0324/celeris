@@ -38,6 +38,7 @@ fn pilot_out_with_faults(dir: &Path, faults: bool) -> (CampaignManifest, PathBuf
     let i = m.load_input(&mp, None).expect("input");
     let out = dir.join("out");
     let o = RunOptions {
+        public_cases: Default::default(),
         global_ledger: None,
         out: out.clone(),
         repo_src: Some(fx().join("repo")),

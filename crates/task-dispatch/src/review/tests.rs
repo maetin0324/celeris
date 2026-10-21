@@ -43,6 +43,7 @@ fn task_with(checks: Vec<Check>, dir: &Path) -> Task {
             max_turns: 1,
             max_wall_secs: 10,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,
@@ -780,6 +781,7 @@ fn reviewer_run(adapter: Arc<StubReviewer>) -> ReviewerRun {
         subject_genre: None,
         session: None,
         session_diff: Vec::new(),
+        token_budget: None,
     }
 }
 
@@ -894,6 +896,7 @@ async fn reviewer_provider_failure_is_reported_instead_of_failing_criteria() {
         subject_genre: None,
         session: None,
         session_diff: Vec::new(),
+        token_budget: None,
     };
     let out = review_task(
         &task,
@@ -1064,7 +1067,7 @@ async fn reviewer_run_failure_or_missing_verdict_fails_reviewer_criteria() {
     // 回数を知らないので、この関数はやり直しの回数に関わらず常にこの形を返す）。
     let adapter = Arc::new(StubReviewer {
         review_json: Some(r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"x"},{"criterion":1,"pass":true,"reason":"y"}]}"#.into()),
-        terminal: Terminal::Error { message: "boom".into(), retryable: true },
+        terminal: Terminal::Error { message: "boom".into(), retryable: true, usage: None, },
         seen: Mutex::new(vec![]),
     });
     let out = review_task(
@@ -1091,7 +1094,7 @@ async fn reviewer_run_failure_or_missing_verdict_fails_reviewer_criteria() {
     // reviewer 条件を不合格にする（やり直しても直らないので待たせない）。
     let adapter = Arc::new(StubReviewer {
         review_json: Some(r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"x"},{"criterion":1,"pass":true,"reason":"y"}]}"#.into()),
-        terminal: Terminal::Error { message: "settings not found".into(), retryable: false },
+        terminal: Terminal::Error { message: "settings not found".into(), retryable: false, usage: None, },
         seen: Mutex::new(vec![]),
     });
     let out = review_task(

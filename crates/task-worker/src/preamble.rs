@@ -1178,8 +1178,10 @@ fn actions_instructions() -> String {
      `knowledge_page`（知識ベースのページ参照）の条件も添えてください。人が読む決定材料は登録済みの\
      artifacts か知識ベースのページに置き（GUI から見える場所）、対象リポジトリの `docs/` などの\
      追跡ファイルには置きません（ADR-0067）。\n\
-     `web/` や `docs/` だけを変える task の acceptance では `cargo test --workspace` を必須にせず、\
-     `crates/` に差分が無いことの検査に置き換えてください（Cargo の workspace check は daemon 側で行います）。\
+     workspace 全体の試験（`bash scripts/dev/test-parallel.sh`、`cargo test --workspace`、web の e2e）は\
+     release gate だけで走らせます。unit の check・task の acceptance・段の統合・phase 完了に入れず、\
+     Rust を変える unit は `bash scripts/dev/test-affected.sh`（変更 crate と逆依存）+ clippy + fmt にしてください。\
+     `web/` や `docs/` だけを変える task の acceptance は、`crates/` に差分が無いことの検査にしてください。\
      acceptance の範囲指定（差分範囲など）には、計画が要求する ADR や記録（`agent-docs/adr/`、\
      `agent-docs/progress/`）の置き場所を最初から含めてください（ADR-0079 R7-10。置き場所は ADR-0128）。\
      調査系（`literature` / `web-research`）の `create_task` を書くときは、`objective` の 1 行目を \
@@ -1285,7 +1287,7 @@ pub const HEADLESS_RUN_NOTE: &str = "\
 - background task を使わない: Bash の `run_in_background`、Agent / Task の background 実行、\
 Monitor・ScheduleWakeup・Cron など「後で通知が来る」「後で起こす」仕組みは、turn を終えた瞬間に殺され、\
 通知は二度と届かない（celeris はこの run の background task を無効にしている）。\n\
-- 長い command（`cargo test --workspace`、`cargo clippy`、ビルド、GUI の test など）も foreground で実行し、\
+- 長い command（`bash scripts/dev/test-affected.sh`、`cargo clippy`、ビルド、GUI の test など）も foreground で実行し、\
 終わるまで待って exit code と出力を確かめる。Bash の `timeout` 引数（ミリ秒）を明示して長めに取る\
 （既定の 2 分では打ち切られる。上限はこの run の壁時計）。\n\
 - 「完了の通知を待つ」「終わったら続ける」と書いて turn を終えてはいけない。turn を終えるのは、\

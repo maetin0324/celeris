@@ -504,10 +504,21 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let input = m.load_input(&manifest_path, arg(&args, "--input-manifest").as_deref())?;
             let out_dir = out()?;
             // 外部入力は case.json の宣言から引く（実行経路だけ。mock は case を読まない）。
-            let case_inputs = if matches!(which.as_str(), "harness" | "celeris") {
+            let (case_inputs, public_cases) = if matches!(which.as_str(), "harness" | "celeris") {
                 let pi = preflight_inputs(&args, &manifest_path);
                 let set = celeris_campaign::cases::CaseSet::load(&pi.cases_root, &pi.grader_root)?;
-                celeris_campaign::inputs::for_problems(&set, &m.problems)
+                celeris_campaign::inputs::check_prompt_reference(
+                    &set,
+                    &input
+                        .problems
+                        .iter()
+                        .map(|p| (p.id.clone(), p.prompt.clone()))
+                        .collect::<Vec<_>>(),
+                )?;
+                (
+                    celeris_campaign::inputs::for_problems(&set, &m.problems),
+                    celeris_campaign::inputs::public_cases(&set, &m.problems)?,
+                )
             } else {
                 Default::default()
             };
@@ -520,6 +531,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 kb_src: arg(&args, "--kb-src"),
                 inputs_src: arg(&args, "--inputs-src"),
                 case_inputs,
+                public_cases,
                 global_ledger: arg(&args, "--global-ledger"),
                 // 実行（有料）経路は、preflight・runner・再開で同じ期待 lock を使う。
                 lock: if matches!(which.as_str(), "harness" | "celeris") {

@@ -137,6 +137,7 @@ fn cos_req(workspace: &Path, chat: CosChatContext, session: Option<SessionHandle
                 max_turns: 10,
                 max_wall_secs: 60,
                 max_retries: 0,
+                max_tokens: None,
             },
             time::OffsetDateTime::UNIX_EPOCH,
         ),

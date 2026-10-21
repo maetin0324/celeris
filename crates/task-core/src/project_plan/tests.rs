@@ -204,6 +204,7 @@ fn is_milestones_plan_task_needs_the_kind_and_the_label() {
             max_turns: 1,
             max_wall_secs: 1,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

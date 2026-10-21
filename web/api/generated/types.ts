@@ -516,11 +516,12 @@ export type BrowserWaitState = "pending" | "denied" | "expired" | "cancelled" | 
 
 export type Budget = {
   "max_retries": number;
+  "max_tokens"?: number | null;
   "max_turns": number;
   "max_wall_secs": number;
 };
 
-export type BudgetKind = "turns" | "wall_clock" | "context";
+export type BudgetKind = "turns" | "wall_clock" | "context" | "tokens";
 
 export type BudgetPrefs = {
   "max_attempts"?: number | null;
@@ -3733,6 +3734,7 @@ export type NewTaskBody = {
   "kind"?: TaskKind;
   "labels"?: Array<string>;
   "max_retries"?: number;
+  "max_tokens"?: number | null;
   "max_turns"?: number | null;
   "max_wall_secs"?: number | null;
   "milestone_id"?: MilestoneId | null;
@@ -4620,6 +4622,7 @@ export type RepoRun = "auto" | "host" | "container";
 export type RepoSelector = string | Array<string>;
 
 export type RepoState = {
+  "ahead"?: number;
   "base": string;
   "branch": string;
   "diff_stat": string;
@@ -6078,7 +6081,7 @@ export type VerdictView = {
   "ts": string;
 };
 
-export type WorkUnitBlockedReason = "question" | "dependency_failed" | "limit" | "plan_issue" | "decision" | "infra" | "cluster_jobs" | "waiting_for_auth";
+export type WorkUnitBlockedReason = "question" | "dependency_failed" | "limit" | "plan_issue" | "decision" | "infra" | "cluster_jobs" | "waiting_for_auth" | "continuation_cap";
 
 export type WorkUnitBudget = {
   "max_turns"?: number | null;

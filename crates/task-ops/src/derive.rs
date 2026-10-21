@@ -254,6 +254,69 @@ pub fn no_progress_streak(events: &[(u64, Event)], work_unit_id: Option<&str>) -
     streak
 }
 
+/// 2026-10-20-continuation-limit-by-progress D2: その WU の、最後の `answer` 以降の continuation 回数
+/// （`WorkUnitTransitioned{reason:"continue"}`）。`work_units.continuations`（生涯の合計）は回答で戻らないので、
+/// 固い上限の判定はこちらで数える。
+pub fn wu_continuations_since_answer(events: &[(u64, Event)], work_unit_id: &str) -> u32 {
+    let mut n = 0;
+    for (_, ev) in events {
+        if let Event::WorkUnitTransitioned {
+            work_unit_id: id,
+            reason,
+            ..
+        } = ev
+            && id == work_unit_id
+        {
+            match reason.as_str() {
+                "answer" => n = 0,
+                "continue" => n += 1,
+                _ => {}
+            }
+        }
+    }
+    n
+}
+
+/// 2026-10-20-continuation-limit-by-progress D3: 最後の `answer` 以降の窓で、進捗ありだった checkpoint の数
+/// （[`no_progress_streak`] と同じ窓・同じ比較）。`work_unit_id` は [`latest_checkpoint`] と同じ。
+pub fn progress_checkpoints_since_answer(
+    events: &[(u64, Event)],
+    work_unit_id: Option<&str>,
+) -> u32 {
+    let mut window_start_seq: u64 = 0;
+    for (seq, ev) in events {
+        if let Event::Transitioned { reason, .. } = ev
+            && reason == "answer"
+        {
+            window_start_seq = *seq;
+        }
+    }
+    let mut count: u32 = 0;
+    let mut prev: Option<task_core::Checkpoint> = None;
+    let mut baseline_reset = false;
+    for (seq, ev) in events {
+        if let Event::CheckpointSaved {
+            work_unit_id: wu,
+            checkpoint,
+            ..
+        } = ev
+            && wu.as_deref() == work_unit_id
+            && checkpoint.end != task_core::CheckpointEnd::Waiting
+        {
+            let in_window = *seq >= window_start_seq;
+            if in_window && !baseline_reset {
+                prev = None;
+                baseline_reset = true;
+            }
+            if in_window && task_core::checkpoint_shows_progress(prev.as_ref(), checkpoint) {
+                count += 1;
+            }
+            prev = Some((**checkpoint).clone());
+        }
+    }
+    count
+}
+
 /// ADR-0070 D1（Phase 116）: `failed` の分類。`infra` はレース・切替・供給側都合、`work` はレビュー
 /// 不合格やワーカー自身の明示的な失敗（人が中身を見て判断すべきもの）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]

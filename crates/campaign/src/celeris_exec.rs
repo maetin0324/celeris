@@ -12,7 +12,7 @@ use std::{
     collections::BTreeSet,
     fs::{self, OpenOptions},
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use serde_json::{Map, Value, json};
@@ -96,7 +96,10 @@ pub fn check_template(t: &Map<String, Value>) -> Result<(), String> {
         "title",
         "objective",
         "workspace",
+        "repos",
+        "workspace_mode",
         "max_wall_secs",
+        "max_tokens",
         "routing_override",
         "campaign",
         "campaign_idempotency_key",
@@ -138,8 +141,8 @@ pub fn check_template(t: &Map<String, Value>) -> Result<(), String> {
 
 pub struct CelerisExecutor<T: Transport> {
     transport: T,
-    /// `POST /tasks` 本文の雛形（acceptance・project_id・repos・role 等）。title・objective・labels・
-    /// workspace・max_wall_secs・routing_override はこの実行器が埋める。
+    /// `POST /tasks` 本文の雛形（acceptance・project_id・role 等）。title・objective・labels・
+    /// workspace・repos（空配列）・max_wall_secs・max_tokens・routing_override はこの実行器が埋める。
     template: Map<String, Value>,
     /// 試行の打ち切り（task 作成からの経過秒、server の時計で測る）。
     trial_timeout_secs: u64,
@@ -279,6 +282,31 @@ impl<T: Transport> CelerisExecutor<T> {
     pub fn with_variant_org(mut self, org: Option<OrgPin>) -> Self {
         self.variant_org = org;
         self
+    }
+
+    /// 既存 task を採用してよいか（ADR 2026-10-20-mlsys-main2-fixes D2）: 案件のリポジトリを持たず（`repos` が空）、
+    /// 作業場所が試行の trial workspace そのものであること。違えば成果物が採点の場所に出ないので、採点しない
+    /// （Refused）。応答に欄が無いときは判定しない（旧い応答の形）。`req` が無い照会では repos だけを見る。
+    fn check_workspace(&self, id: &str, req: Option<&TrialRequest>) -> Result<(), ExecError> {
+        let detail = self
+            .get(&format!("/api/v1/tasks/{id}"))
+            .map_err(ExecError::interrupted)?;
+        let task = &detail["task"];
+        if task["repos"].as_array().is_some_and(|r| !r.is_empty()) {
+            return Err(ExecError::refused(format!(
+                "task {id}: repos {} is not empty; a campaign task runs in the trial workspace only; not reused",
+                task["repos"]
+            )));
+        }
+        if let (Some(req), Some(path)) = (req, task["workspace"]["path"].as_str())
+            && Path::new(path) != req.workspace
+        {
+            return Err(ExecError::refused(format!(
+                "task {id}: workspace {path:?} is not the trial workspace {:?}; not reused",
+                req.workspace
+            )));
+        }
+        Ok(())
     }
 
     /// 既存 task を冪等照会の結果として採用してよいか。variant があるときは task の記録と一致する場合だけ。
@@ -430,10 +458,17 @@ impl<T: Transport> CelerisExecutor<T> {
             "workspace".into(),
             json!(req.workspace.to_string_lossy().into_owned()),
         );
+        // 作業場所は trial workspace だけ。`repos: []` だけでは `project_id` があると案件の primary repo が補われる
+        // （task-ops `resolve_repos`）ので、補完を止める `workspace_mode: shared`（path をそのまま cwd にする）も送る。
+        b.insert("repos".into(), json!([]));
+        b.insert("workspace_mode".into(), json!("shared"));
         b.insert(
             "max_wall_secs".into(),
             json!(req.timeout_secs.min(req.budget.max_wall_secs)),
         );
+        // 試行の token 上限は task の予算として渡す。Celeris が run の途中で消費を観測し、上限後は再開しない
+        // （ADR 2026-10-20-mlsys-main2-fixes D1）。`req.budget` は `min(per_case, per_arm の残り)`。
+        b.insert("max_tokens".into(), json!(req.budget.max_tokens));
         let ro = routing_override(req.config)?;
         // 採点結果と同じ試行へ export できるよう、通常の作成 API に識別を載せる（task-api NewTaskBody）。
         // 冪等キーは label と同じ文字列。arm は A/B/C、case は問題 ID。
@@ -647,6 +682,7 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
             .into_iter()
             .next();
         if let Some(id) = &first {
+            self.check_workspace(id, None)?;
             self.check_existing(id, None)?;
         }
         Ok(first.map(|id| TaskRef {
@@ -662,6 +698,7 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
         match self.tasks_with_label(key) {
             Ok(ids) => {
                 if let Some(id) = ids.into_iter().next() {
+                    self.check_workspace(&id, Some(req))?;
                     self.check_existing(&id, Some(req))?;
                     return Ok(TaskRef {
                         task_id: id,
@@ -692,7 +729,13 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
         // 照会と投入の間に別の起動が投入していたら、古い方を正とし、新しい方を閉じる。
         let ids = self.tasks_with_label(key).map_err(ExecError::unknown)?;
         let first = ids.first().cloned().unwrap_or_else(|| created.clone());
-        if let Err(e) = self.check_existing(&first, Some(req)) {
+        // 自分が POST した task は送った値のまま（workspace・repos は照会しない）。別の起動が作った task だけ確かめる。
+        let adopted = if first == created {
+            Ok(())
+        } else {
+            self.check_workspace(&first, Some(req))
+        };
+        if let Err(e) = adopted.and_then(|()| self.check_existing(&first, Some(req))) {
             // 応答に variant が無い／違う task は適用済みとみなさない。自分が作った task なら閉じる。
             if first == created {
                 let _ = self.cancel_task(&created);

@@ -617,6 +617,7 @@ async fn wait_for_response(
             return Ok(WaitOutcome::TimedOut(Box::new(Terminal::Error {
                 message: "idle timeout".into(),
                 retryable: true,
+                usage: None,
             })));
         }
         let wait = (limits.wall_clock - wall_elapsed).min(limits.idle_timeout - idle_elapsed);
@@ -756,6 +757,7 @@ async fn finish_run(
                         "acp agent exited before responding to {context} (exit={exit_repr})"
                     ),
                     retryable: true,
+                    usage: None,
                 },
                 pf,
             )
@@ -771,6 +773,7 @@ async fn finish_run(
                 Terminal::Error {
                     message: format!("acp agent returned an error for {context}: {error_text}"),
                     retryable: true,
+                    usage: None,
                 },
                 pf,
             )
@@ -839,6 +842,7 @@ async fn terminal_from_result_file(
                     "acp agent stopped ({stop_reason}) without {artifacts_rel}/result.json"
                 ),
                 retryable: true,
+                usage: None,
             };
         }
     };
@@ -871,12 +875,14 @@ async fn terminal_from_result_file(
                         "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
                     ),
                     retryable: true,
+                    usage: None,
                 }
             }
         }
         Err(e) => Terminal::Error {
             message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
             retryable: true,
+            usage: None,
         },
     }
 }

@@ -99,6 +99,7 @@ fn parent_task(max_turns: u32) -> Task {
             max_turns,
             max_wall_secs: 1800,
             max_retries: 2,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

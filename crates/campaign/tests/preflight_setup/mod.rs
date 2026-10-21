@@ -39,6 +39,23 @@ pub fn copy(from: &Path, to: &Path) {
     }
 }
 
+/// 凍結済みの final 入力 manifest（過去の証跡。書き換えない）の prompt を、公開 case 定義の配送先
+/// `materials/<case>/case.json` を参照する形（ADR 2026-10-20 mlsys-main2-fixes D2-4）に直して `to` へ書き、
+/// 作り直した manifest の sha256 を返す。試験が使うのは写しだけ。
+pub fn write_materials_prompt_manifest(from: &Path, to: &Path) -> String {
+    let mut m: routing_eval::manifest::Manifest =
+        serde_json::from_slice(&fs::read(from).unwrap()).unwrap();
+    for p in &mut m.problems {
+        let repo_ref = format!("crates/campaign/cases/final/{}/case.json", p.id);
+        let want = celeris_campaign::inputs::public_case_path(&p.id);
+        assert!(p.prompt.contains(&repo_ref), "frozen prompt shape changed");
+        p.prompt = p.prompt.replace(&repo_ref, &want);
+    }
+    m.sha256 = celeris_campaign::manifest::manifest_hash(&m).unwrap();
+    fs::write(to, serde_json::to_vec_pretty(&m).unwrap()).unwrap();
+    m.sha256
+}
+
 pub fn resolved_manifest() -> Value {
     let p = root()
         .join("../../agent-docs")
@@ -135,12 +152,13 @@ pub fn setup() -> Setup {
     let pd = root()
         .join("../../agent-docs")
         .join("progress/2026-10-16-mlsys-final");
-    fs::copy(
-        pd.join("final-input-manifest.json"),
-        d.join("final-input-manifest.json"),
-    )
-    .unwrap();
-    fs::write(d.join("final.json"), resolved_manifest().to_string()).unwrap();
+    let input_sha = write_materials_prompt_manifest(
+        &pd.join("final-input-manifest.json"),
+        &d.join("final-input-manifest.json"),
+    );
+    let mut fin = resolved_manifest();
+    fin["input"]["sha256"] = json!(input_sha);
+    fs::write(d.join("final.json"), fin.to_string()).unwrap();
     let (m, k) = (d.join("materials"), d.join("kb"));
     // 外部入力: 実物（本番の asset）は無いので、case を写して k4 の宣言 sha256 を試験用の中身に合わせる。
     let (cases, ins) = (d.join("cases"), d.join("inputs-src"));

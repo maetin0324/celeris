@@ -203,6 +203,7 @@ pub async fn run_subprocess(
             terminal = Some(Terminal::Error {
                 message: "wall clock exceeded".into(),
                 retryable: true,
+                usage: None,
             });
             force_kill = true;
             break;
@@ -212,6 +213,7 @@ pub async fn run_subprocess(
             terminal = Some(Terminal::Error {
                 message: "idle timeout".into(),
                 retryable: true,
+                usage: None,
             });
             force_kill = true;
             break;
@@ -237,6 +239,7 @@ pub async fn run_subprocess(
                 terminal = Some(Terminal::Error {
                     message: "protocol violation: stdout line exceeds 1 MiB".into(),
                     retryable: false,
+                    usage: None,
                 });
                 force_kill = true;
                 break;
@@ -282,6 +285,7 @@ pub async fn run_subprocess(
                         }
                         // ADR-0044 D2（Phase 53）: 残る記録。run は止まらない。
                         WorkerMessage::Comment { body } => sink.comment(&body),
+                        WorkerMessage::UsageProgress { usage } => sink.usage_progress(&usage),
                         WorkerMessage::Delegate { tasks } => sink.delegate(&tasks),
                         WorkerMessage::Artifact { name, path, kind } => {
                             match crate::artifact::resolve(
@@ -316,10 +320,15 @@ pub async fn run_subprocess(
                             message,
                             retryable,
                             provider_failure: pf,
+                            usage,
                         } => {
                             terminal_raw = Some(trimmed.to_string());
                             provider_failure = pf;
-                            terminal = Some(Terminal::Error { message, retryable });
+                            terminal = Some(Terminal::Error {
+                                message,
+                                retryable,
+                                usage,
+                            });
                         }
                         // ADR-0072 D7/D9（Phase E1）: 外部ハーネスが直接プロトコルで yield /
                         // 予算切れを申告する経路（claude-code / codex / acp / aider は自前で終端を
@@ -355,6 +364,7 @@ pub async fn run_subprocess(
                             terminal = Some(Terminal::Error {
                                 message: format!("protocol violation: {parse_err}"),
                                 retryable: false,
+                                usage: None,
                             });
                             force_kill = true;
                         } else {
@@ -409,6 +419,7 @@ pub async fn run_subprocess(
         Terminal::Error {
             message: format!("worker exited without terminal message (exit={exit_repr})"),
             retryable: true,
+            usage: None,
         }
     });
 
@@ -437,10 +448,15 @@ pub(crate) async fn write_result_json(
             usage: *usage,
         },
         Terminal::Question { text } => WorkerMessage::Question { text: text.clone() },
-        Terminal::Error { message, retryable } => WorkerMessage::Error {
+        Terminal::Error {
+            message,
+            retryable,
+            usage,
+        } => WorkerMessage::Error {
             message: message.clone(),
             retryable: *retryable,
             provider_failure,
+            usage: *usage,
         },
         Terminal::Yielded { checkpoint, usage } => WorkerMessage::Yielded {
             checkpoint: checkpoint.clone(),

@@ -269,6 +269,7 @@ fn build_spec(mut args: AddArgs) -> Result<NewTaskSpec, CliError> {
         depends_on,
         max_turns: args.max_turns,
         max_wall_secs: args.max_wall_secs,
+        max_tokens: None,
         max_retries: args.max_retries,
         role: args.role,
         genre: args.genre,

@@ -754,10 +754,63 @@ fn trial_record(
     rec
 }
 
+/// 独立採点（`grades.jsonl`、schema `celeris.campaign-grade/1`）を試行 record の `grader_verdict` に結合する
+/// （ADR 2026-10-20-mlsys-main2-fixes D3a）。grade は試行単位なので、その試行の全 run（worker・continuation・
+/// reviewer）に同じ `pass` / `fail` を入れる。結合の鍵は `manifest_hash`・`case_id`・`arm`・`repetition`。
+/// grade 行の無い試行は欠測のまま（既定値で埋めない）。manifest hash の食い違う行・壊れた行は誤りとして `Err`。
+/// 結合した試行 record の数を返す。
+pub fn join_grades(export: &mut CampaignExport, grades_jsonl: &str) -> Result<usize, String> {
+    let mut by_key: std::collections::BTreeMap<(String, String, u64), (String, &'static str)> =
+        Default::default();
+    for (i, line) in grades_jsonl.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let tag = format!("grades line {}", i + 1);
+        let v: Value = serde_json::from_str(line).map_err(|e| format!("{tag}: {e}"))?;
+        let field = |name: &str, x: Option<&str>| {
+            x.map(str::to_string)
+                .ok_or_else(|| format!("{tag}: missing {name}"))
+        };
+        let hash = field("campaign_sha256", v["campaign_sha256"].as_str())?;
+        let case = field("case_id", v["case_id"].as_str())?;
+        let arm = field("trial.config", v["trial"]["config"].as_str())?;
+        let rep = v["trial"]["rep"]
+            .as_u64()
+            .ok_or_else(|| format!("{tag}: missing trial.rep"))?;
+        let verdict = match v["grade"]["final_pass"].as_bool() {
+            Some(true) => "pass",
+            Some(false) => "fail",
+            None => return Err(format!("{tag}: grade has no boolean final_pass")),
+        };
+        by_key.insert((case, arm, rep), (hash, verdict));
+    }
+    let mut joined = 0;
+    for t in &mut export.trials {
+        let key = (
+            t["case_id"].as_str().unwrap_or_default().to_string(),
+            t["arm"].as_str().unwrap_or_default().to_string(),
+            t["repetition"].as_u64().unwrap_or(u64::MAX),
+        );
+        let Some((hash, verdict)) = by_key.get(&key) else {
+            continue;
+        };
+        if t["manifest_hash"].as_str() != Some(hash.as_str()) {
+            return Err(format!(
+                "grade for {}/{}/rep{} has campaign_sha256 {hash}, trial has {}",
+                key.0, key.1, key.2, t["manifest_hash"]
+            ));
+        }
+        t["grader_verdict"] = Value::String((*verdict).to_string());
+        joined += 1;
+    }
+    Ok(joined)
+}
+
 /// 接続確認（`campaign export --verify-connected`）。問題の一覧を返し、空なら接続できている。
 ///
 /// - export が空（run が 1 件も無い）
-/// - 試行ごとの必須欄の欠測（case・arm・repetition・manifest hash、推奨候補、実行 model、run 終了、最終 grader 判定）
+/// - 試行ごとの必須欄の欠測（case・arm・repetition・manifest hash、推奨候補（routing 判断の無い run は除く）、実行 model、run 終了、最終 grader 判定）
 /// - 消費未計上（run に観測できた消費が 1 つも無い、または campaign 全体で観測 0 件）
 ///
 /// 欠測は 0 や既定値で埋めない。`unscored` の grader 判定は「未採点」として欠測に数える。
@@ -780,7 +833,12 @@ pub fn verify_connected(export: &CampaignExport) -> Vec<String> {
     ];
     for t in &trials {
         let run = t["run_id"].as_str().unwrap_or("?");
+        // routing 判断（decision_id）の無い run（reviewer 等）には推奨候補が存在しない。仕様上欠けてよい。
+        let unrouted = t["decision_id"].is_null();
         for f in REQUIRED {
+            if f == "proposed_first" && unrouted {
+                continue;
+            }
             if t[f].is_null() {
                 problems.push(format!("run {run}: required field {f} is missing"));
             }

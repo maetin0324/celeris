@@ -39,6 +39,7 @@ fn parent(repos: &[&str]) -> Task {
             max_turns: 30,
             max_wall_secs: 900,
             max_retries: 2,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,
@@ -148,6 +149,7 @@ fn build_child_task_inherits_from_the_parent_and_the_unit() {
             max_turns: 30,
             max_wall_secs: 1800,
             max_retries: 2,
+            max_tokens: None,
         }
     );
     assert_eq!(child.assignee, None);
@@ -294,6 +296,7 @@ fn child_budget_is_never_below_one_leaf_run() {
         max_turns: 10,
         max_wall_secs: 600,
         max_retries: 2,
+        max_tokens: None,
     };
     let child = build(&store, &p, "plan-1");
     assert_eq!(
@@ -302,12 +305,14 @@ fn child_budget_is_never_below_one_leaf_run() {
             max_turns: task_core::tree::TREE_CHILD_MIN_MAX_TURNS,
             max_wall_secs: task_core::tree::TREE_CHILD_MIN_MAX_WALL_SECS,
             max_retries: 2,
+            max_tokens: None,
         }
     );
     p.budget = Budget {
         max_turns: 60,
         max_wall_secs: 3600,
         max_retries: 1,
+        max_tokens: None,
     };
     assert_eq!(build(&store, &p, "plan-1").budget, p.budget);
 }

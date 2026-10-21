@@ -187,10 +187,12 @@ async fn a_failed_work_unit_triggers_a_replan_instead_of_failing_the_task() {
             Terminal::Error {
                 message: "boom".into(),
                 retryable: true,
+                usage: None,
             },
             Terminal::Error {
                 message: "boom again".into(),
                 retryable: true,
+                usage: None,
             },
             // replan 後（retries はリセットされる）の 1 回目で成功する。
             Terminal::Done {
@@ -316,10 +318,12 @@ async fn replan_delta_carries_done_units_without_restating_them() {
             Terminal::Error {
                 message: "boom".into(),
                 retryable: true,
+                usage: None,
             },
             Terminal::Error {
                 message: "boom again".into(),
                 retryable: true,
+                usage: None,
             },
             Terminal::Done {
                 summary: "b fixed".into(),
@@ -554,7 +558,6 @@ async fn exceeding_the_replan_limit_blocks_with_a_question_that_a_human_can_answ
     ]);
     let adapter = Arc::new(PlannerScriptAdapter::new(vec![Some(replanned)], wu_script));
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.config.execution.max_continuations_per_work_unit = 100; // "limit" は進捗なしだけで起こす
     d.config.execution.no_progress_limit = 2;
     d.config.execution.max_replans = 1;
     let report = run_until_idle(&mut d, 400).await;
@@ -625,10 +628,12 @@ async fn a_work_unit_failure_at_the_retry_limit_fails_the_task_and_blocks_depend
             Terminal::Error {
                 message: "boom".into(),
                 retryable: true,
+                usage: None,
             },
             Terminal::Error {
                 message: "boom again".into(),
                 retryable: true,
+                usage: None,
             },
         ],
     );
@@ -2006,6 +2011,7 @@ async fn replan_delta_after_an_integrated_phase_keeps_the_daemon_integration_uni
     let boom = || Terminal::Error {
         message: "E0609 no field runs_by_role".into(),
         retryable: true,
+        usage: None,
     };
     let adapter = Arc::new(
         ParallelWuAdapter::new(Duration::from_millis(5))
@@ -2583,6 +2589,7 @@ async fn sibling_failure_waits_for_in_flight_units_before_replan() {
                 vec![Terminal::Error {
                     message: "broken".into(),
                     retryable: false,
+                    usage: None,
                 }],
             ),
     );
@@ -3074,10 +3081,12 @@ async fn replan_exhaustion_on_a_non_tree_task_asks_a_human_and_the_answer_replan
             Terminal::Error {
                 message: "boom".into(),
                 retryable: true,
+                usage: None,
             },
             Terminal::Error {
                 message: "boom again".into(),
                 retryable: true,
+                usage: None,
             },
             Terminal::Done {
                 summary: "b fixed".into(),

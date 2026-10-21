@@ -24,6 +24,7 @@ fn normalize_outcome_maps_done_question_and_error_to_exit_codes() {
         terminal: Terminal::Error {
             message: "m".into(),
             retryable: false,
+            usage: None,
         },
         exit_code: Some(1),
     }));
@@ -207,6 +208,7 @@ fn task_fixture(status: Status, workspace: WorkspaceSpec) -> Task {
             max_turns: 1,
             max_wall_secs: 30,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

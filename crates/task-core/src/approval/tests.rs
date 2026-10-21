@@ -202,6 +202,7 @@ fn f7_task(status: Status, kind: crate::model::TaskKind) -> crate::model::Task {
             max_turns: 1,
             max_wall_secs: 1,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

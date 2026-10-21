@@ -71,6 +71,7 @@ fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
             max_turns: 1,
             max_wall_secs: 30,
             max_retries,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,
@@ -562,6 +563,7 @@ impl WorkerAdapter for ResumeRejectingThenSucceedingReviewAdapter {
                 terminal: Terminal::Error {
                     message: "claude result: error_during_execution".into(),
                     retryable: true,
+                    usage: None,
                 },
                 exit_code: Some(1),
             });
@@ -743,6 +745,7 @@ impl WorkerAdapter for AlwaysInfraFailingReviewAdapter {
             terminal: Terminal::Error {
                 message: "claude result: error_during_execution".into(),
                 retryable: true,
+                usage: None,
             },
             exit_code: Some(1),
         })
@@ -2894,6 +2897,7 @@ mod build_cache;
 mod class_route;
 mod cleanup_and_disk;
 mod cluster_tunnel;
+mod continuation_cap;
 mod conversation_cos;
 mod cos_chat_attach_handoff;
 mod credential_e2e;
@@ -2915,6 +2919,7 @@ mod run_tmpdir;
 mod target_env;
 mod target_sync;
 mod tick_and_dispatch;
+mod token_budget;
 mod trial_context;
 mod ui_ux_skills;
 mod work_units;

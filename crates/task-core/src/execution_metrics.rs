@@ -439,6 +439,7 @@ pub fn summarize(task: &Task, events: &[Event]) -> ExecutionMetrics {
                         BudgetKind::Turns => "turns",
                         BudgetKind::WallClock => "wall_clock",
                         BudgetKind::Context => "context",
+                        BudgetKind::Tokens => "tokens",
                     };
                     *budget_exhausted_by_kind
                         .entry(name.to_string())

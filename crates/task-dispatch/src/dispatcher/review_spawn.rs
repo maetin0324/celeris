@@ -327,6 +327,20 @@ impl Dispatcher {
         if task.status != Status::Reviewing {
             return Ok(true);
         }
+        // ADR 2026-10-20-mlsys-main2-fixes D1-4: task 木の消費が `max_tokens` に達していたら reviewer を起こさず
+        // failed にする（worker_finish の判定を通らずに reviewing に来た task — 計画の完了・再起動の回収 — も同じ）。
+        if let Some((used, max)) = token_budget::exhausted(self.store.as_ref(), &task)? {
+            tracing::info!(%task_id, used, max, "token budget reached; reviewer not started (ADR 2026-10-20-mlsys-main2-fixes D1-4)");
+            self.store.apply_transition(
+                task_id,
+                Trigger::TokenBudgetExhausted,
+                Some(Event::worker_progress(
+                    run_id.clone(),
+                    token_budget::outcome(used, max),
+                )),
+            )?;
+            return Ok(true);
+        }
         if self.target_resync_exhausted(task_id, &run_id)? {
             return Ok(false);
         }
@@ -1093,7 +1107,30 @@ impl Dispatcher {
                 .and_then(|v| v.as_str().map(str::to_string)),
             cos: false,
         };
-        let (outcome, trace) = self.select_route(&route_input);
+        // task 欄で routing を固定した task は、reviewer run も worker run と同じ根拠表の読み方で選び、
+        // 解決結果を判断 record に残す（campaign の check は review run にも resolved routing を求める）。
+        let routing_override = lane_assist::task_routing_override(self.store.as_ref(), task.id);
+        let (outcome, mut trace) = self.select_route_with(
+            &route_input,
+            &super::route_select::RouteContext {
+                evidence_mode: routing_override
+                    .as_ref()
+                    .map(|o| o.evidence_mode)
+                    .unwrap_or_default(),
+                evidence_version: routing_override
+                    .as_ref()
+                    .and_then(|o| o.evidence_table_id.clone()),
+                ..Default::default()
+            },
+        );
+        if routing_override.is_some()
+            && let Some(decision) = trace.decision.as_mut()
+        {
+            decision.routing_resolved = Some(task_core::route_select::resolve_routing(
+                self.routing_mode,
+                routing_override.as_ref(),
+            ));
+        }
         let launch = match &outcome {
             Ok(pick) => self
                 .route_adapter(pick)
@@ -1147,7 +1184,25 @@ impl Dispatcher {
         let session_key = department
             .clone()
             .map(|dept_id| (dept_id, task_core::SessionKind::Lead, None));
+        // ADR 2026-10-20-mlsys-main2-fixes D1-3: reviewer run も task 木の token 予算で途中停止する。
+        let token_budget = match token_budget::budget_scope(self.store.as_ref(), task) {
+            Ok(Some((root, max))) => {
+                match token_budget::tree_tokens_used(self.store.as_ref(), root, None) {
+                    Ok(prior) => Some(Arc::new(token_budget::TokenBudgetWatch::new(prior, max))),
+                    Err(e) => {
+                        tracing::warn!(task_id = %task.id, error = %e, "failed to read the token budget use; reviewing without the mid-run stop");
+                        None
+                    }
+                }
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "failed to read the token budget; reviewing without the mid-run stop");
+                None
+            }
+        };
         let sink = ReviewerSink {
+            token_budget: token_budget.clone(),
             store: self.store.clone(),
             task_id: task.id,
             subject_run_id: subject_run_id.to_string(),
@@ -1206,6 +1261,7 @@ impl Dispatcher {
                     .map(|g| GenreContext::from_spec(g, &self.config.roles)),
                 session,
                 session_diff,
+                token_budget,
             },
             pick,
         })

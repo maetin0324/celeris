@@ -698,6 +698,7 @@ auth = "publickey"
             max_turns: 3,
             max_wall_secs: 30,
             max_retries: 0,
+            max_tokens: None,
         },
         attempts: 0,
         lease: None,

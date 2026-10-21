@@ -13,9 +13,10 @@ pub struct ExecutionTomlConfig {
     /// `WorkerError{retryable:true}` に戻る。ADR-0072 §6 (f)）。
     #[serde(default = "default_execution_continuation")]
     pub continuation: bool,
-    /// 1 つの WorkUnit（E1 は暗黙の WorkUnit）が continuation できる回数の上限。
-    #[serde(default = "default_max_continuations_per_work_unit")]
-    pub max_continuations_per_work_unit: u32,
+    /// 2026-10-20-continuation-limit-by-progress D2: 暴走止めの固い上限。最後の人の回答以降の continuation が
+    /// この回数に達したら、進捗があっても人に聞く（1 以上）。進捗がある間は回数だけで聞かない。
+    #[serde(default = "default_continuation_hard_limit")]
+    pub continuation_hard_limit: u32,
     /// 進捗なしの continuation が連続この回数で `blocked` にする。
     #[serde(default = "default_no_progress_limit")]
     pub no_progress_limit: u32,
@@ -275,7 +276,7 @@ impl Default for ExecutionTomlConfig {
     fn default() -> Self {
         Self {
             continuation: default_execution_continuation(),
-            max_continuations_per_work_unit: default_max_continuations_per_work_unit(),
+            continuation_hard_limit: default_continuation_hard_limit(),
             no_progress_limit: default_no_progress_limit(),
             gate: default_execution_gate(),
             planner: ExecutionPlannerTomlConfig::default(),
@@ -298,8 +299,8 @@ fn default_cheap_local_first() -> bool {
 fn default_execution_continuation() -> bool {
     true
 }
-fn default_max_continuations_per_work_unit() -> u32 {
-    3
+fn default_continuation_hard_limit() -> u32 {
+    12
 }
 fn default_no_progress_limit() -> u32 {
     2
@@ -380,6 +381,11 @@ fn default_planner_max_wall_secs() -> u64 {
 
 impl ExecutionTomlConfig {
     pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.continuation_hard_limit == 0 {
+            return Err(ConfigError::Invalid(
+                "[execution] continuation_hard_limit must be at least 1".to_string(),
+            ));
+        }
         // ADR-0072 D13（Phase E3）: gate は 3 つだけ（綴り間違いで黙って shadow/off に倒れないように）。
         if task_core::GateMode::parse(&self.gate).is_none() {
             return Err(ConfigError::Invalid(format!(

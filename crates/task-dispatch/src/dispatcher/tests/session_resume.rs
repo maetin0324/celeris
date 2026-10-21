@@ -183,6 +183,7 @@ impl WorkerAdapter for ClaudeScriptAdapter {
                 terminal: Terminal::Error {
                     message: "worker exited without a result message (exit=1)".into(),
                     retryable: true,
+                    usage: None,
                 },
                 exit_code: Some(1),
             });
@@ -293,9 +294,7 @@ fn yielded() -> Terminal {
 }
 
 fn claude_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
-    let mut d = dispatcher_with_test_clock(store.clone(), adapter, 1, false);
-    d.config.execution.max_continuations_per_work_unit = 10;
-    d
+    dispatcher_with_test_clock(store.clone(), adapter, 1, false)
 }
 
 fn three_step_task(dir: &std::path::Path, store: &Arc<dyn TaskStore>) -> TaskId {
@@ -510,6 +509,7 @@ async fn session_resume_session_reuse_rejected_resume_falls_back_to_checkpoint()
                     Terminal::Error {
                         message: "worker exited without a result message (exit=1)".into(),
                         retryable: true,
+                        usage: None,
                     },
                     Hook::RejectResume,
                 ),
@@ -1179,6 +1179,7 @@ async fn session_resume_remote_rejected_resume_falls_back_to_checkpoint() {
                     Terminal::Error {
                         message: "worker exited without a result message (exit=1)".into(),
                         retryable: true,
+                        usage: None,
                     },
                     Hook::RejectResume,
                 ),
@@ -1232,9 +1233,7 @@ fn session_jsonl(config: &std::path::Path, cwd: &std::path::Path, session_id: &s
 
 /// 再起動を挟む試験の dispatcher。時計は注入した試験用の時計（`test_now`）。
 fn restart_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
-    let mut d = dispatcher_with_test_clock(store.clone(), adapter, 1, true);
-    d.config.execution.max_continuations_per_work_unit = 10;
-    d
+    dispatcher_with_test_clock(store.clone(), adapter, 1, true)
 }
 
 /// 再起動前の daemon が残したもの（DB の path・Task・WU `a` の session 行・session の jsonl）。
@@ -1747,7 +1746,6 @@ async fn session_resume_comment_interrupt_resumes_phase_work_unit_session() {
     d.config.workspace_roots =
         task_core::local_machine::WorkspaceRoots::new(root.path().to_path_buf(), None);
     d.config.execution.max_parallel_work_units = 2;
-    d.config.execution.max_continuations_per_work_unit = 10;
     let report = run_until_idle(&mut d, 700).await;
     assert!(report.idle, "{report:?}");
     assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);

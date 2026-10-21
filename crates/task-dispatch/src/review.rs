@@ -25,7 +25,7 @@ use crate::policy::ProviderOutcome;
 use task_worker::protocol::{ReviewCheckResult, ReviewDecision, ReviewPolicyViolation};
 use task_worker::{
     Answer, EventSink, Evidence, PROTOCOL_VERSION, ReviewOutput, ReviewRequest, RunContext,
-    RunLimits, RunRequest, Terminal, WorkerAdapter, Workspace,
+    RunLimits, RunOutcome, RunRequest, Terminal, WorkerAdapter, Workspace,
 };
 
 /// 条件 1 件の判定結果。`Event::ReviewVerdict` にそのまま写す。
@@ -73,6 +73,9 @@ pub struct ReviewerRun {
     /// ADR-0054 D1: `session` が継続中（`resume = true`）なら前回以降の差分、新規（`resume = false`）で
     /// 要約が要るときは前セッションの要約。どちらでもなければ空。
     pub session_diff: Vec<String>,
+    /// ADR 2026-10-20-mlsys-main2-fixes D1-3: 対象 task の木に token 予算があれば、この reviewer run を途中の
+    /// 累積 usage で止める watch（sink が同じ watch に `UsageProgress` を渡す）。予算が無ければ `None`。
+    pub(crate) token_budget: Option<Arc<crate::dispatcher::token_budget::TokenBudgetWatch>>,
 }
 
 /// `Plan` kind の検証パラメータ（ADR-0007 D2/D4, ADR-0028 D3）。
@@ -138,7 +141,7 @@ pub struct ReviewerRunRecord {
     pub run_id: String,
     /// `WorkerFinished.outcome` と同じ接頭辞の規則（`done: ` / `question: ` / `error(retryable=…): ` / `requeue: `）。
     pub outcome: String,
-    /// `done` の `usage`（それ以外は `None`）。
+    /// run の `usage`（`done` と、観測できた失敗・予算切れ・yield 等。無ければ `None`）。
     pub usage: Option<Usage>,
 }
 
@@ -1093,10 +1096,33 @@ async fn run_reviewer_inner(
     let (adapter, _run_tmp) = with_run_tmpdir(&run.adapter, workspace_dir, &run.run_id);
     run.sink
         .progress(&format!("started (adapter={})", adapter.id()));
-    let outcome = match adapter
-        .run(req, &run.run_id, run.limits, run.sink.as_ref())
-        .await
-    {
+    let running = adapter.run(req, &run.run_id, run.limits, run.sink.as_ref());
+    // ADR 2026-10-20-mlsys-main2-fixes D1-3: task 木の token 予算に途中で達したら process tree を止め、
+    // `BudgetExhausted{Tokens}`（usage は最後の累積値）として扱う（下の予算切れの経路 → 次の入口で failed）。
+    let result = match &run.token_budget {
+        Some(watch) if watch.exceeded() => Ok(RunOutcome {
+            terminal: watch.terminal(),
+            exit_code: None,
+        }),
+        Some(watch) => {
+            tokio::pin!(running);
+            tokio::select! {
+                biased;
+                _ = watch.wake.notified() => {
+                    if task_worker::kill_tree_with(&run.run_id, run.limits.kill_grace, None) {
+                        tokio::time::sleep(run.limits.kill_grace).await;
+                    }
+                    Ok(RunOutcome {
+                        terminal: watch.terminal(),
+                        exit_code: None,
+                    })
+                },
+                outcome = &mut running => outcome,
+            }
+        }
+        None => running.await,
+    };
+    let outcome = match result {
         Ok(o) => o,
         Err(e) => {
             // ADR-0054 D2（Phase 113）: アダプタが分類できた供給側失敗（Throttled/Exhausted/
@@ -1126,9 +1152,15 @@ async fn run_reviewer_inner(
                 "{tag}: reviewer asked a question instead of judging: {text}"
             ));
         }
-        Terminal::Error { message, retryable } => {
+        Terminal::Error {
+            message,
+            retryable,
+            usage,
+        } => {
             run.sink
                 .progress(&format!("error(retryable={retryable}): {message}"));
+            // ADR 2026-10-20-mlsys-main2-fixes D5: 失敗した reviewer run も観測できた usage を残す（無ければ欠測）。
+            record.usage = usage;
             // ADR-0054 D2（Phase 113。実機障害 2026-09-23、タスク 01M35X86XTK84F97QW0CN5PGMR）:
             // `is_error` の結果・プロセス失敗・resume 拒否・レート制限文言はここに来る
             // （`terminal_from_result`/`(None, None)` クラッシュ分類が `Terminal::Error` にする）。

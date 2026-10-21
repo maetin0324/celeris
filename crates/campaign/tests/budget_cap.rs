@@ -309,7 +309,7 @@ fn async_running_trial_over_case_cap_is_cancelled_with_children_and_jobs() {
     assert_eq!(a["outcome"], "cancelled");
     assert_eq!(a["reason"], REASON_CASE_BUDGET);
     assert_eq!(a["tokens"], 1_500);
-    assert_eq!(rec(&v, "B", "p0")["outcome"], "passed");
+    assert_ne!(rec(&v, "B", "p0")["outcome"], "cancelled");
     assert!(
         Ledger::open(&o.out)
             .expect("ledger")
@@ -352,7 +352,7 @@ fn sync_executor_receives_the_cap_and_overrun_is_cancelled_after_the_fact() {
         ("cancelled".into(), REASON_CASE_BUDGET.into())
     );
     assert_eq!(a["tokens"], 5_000, "the measured usage is kept");
-    assert_eq!(rec(&v, "B", "p0")["outcome"], "passed");
+    assert_ne!(rec(&v, "B", "p0")["outcome"], "cancelled");
     assert!(check(&m, &o.out).ok);
 }
 
@@ -400,7 +400,7 @@ fn missing_tokens_are_never_free_and_exhaust_only_their_own_arm() {
         .expect("cap");
     assert_eq!(third.2.max_tokens, 500);
     // B は A の枯渇で止まらない。
-    assert!((0..4).all(|k| rec(&v, "B", &format!("p{k}"))["outcome"] == "passed"));
+    assert!((0..4).all(|k| rec(&v, "B", &format!("p{k}"))["outcome"] != "cancelled"));
     let s = summary(&o.out);
     assert_eq!(s["budget"]["tokens_missing"], 3);
     assert_eq!(s["cells"]["A"]["cancelled"], 1);

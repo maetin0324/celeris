@@ -20,6 +20,7 @@ fn missing_worker_checkpoint_falls_back_to_mechanical_defaults() {
             head: "def".into(),
             uncommitted: true,
             diff_stat: "1 file changed".into(),
+            ahead: 0,
         }),
         files_changed: vec![CheckpointFileChange {
             path: "src/lib.rs".into(),
@@ -251,6 +252,7 @@ fn progress_definition_matches_d18() {
             head: "h1".into(),
             uncommitted: true,
             diff_stat: "1 file".into(),
+            ahead: 0,
         }),
         recent_activity: vec![],
         created_at: "2026-09-24T00:00:00Z".into(),

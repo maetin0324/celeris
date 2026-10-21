@@ -192,6 +192,7 @@ fn terminal_wants_scan_for_done_question_and_waiting_only() {
     assert!(!terminal_wants_scan(&Terminal::Error {
         message: "e".into(),
         retryable: false,
+        usage: None,
     }));
 }
 
@@ -323,6 +324,7 @@ mod backfill_tests {
                 max_turns: 1,
                 max_wall_secs: 30,
                 max_retries: 0,
+                max_tokens: None,
             },
             attempts: 0,
             lease: None,

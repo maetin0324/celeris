@@ -781,6 +781,7 @@ async fn a_compaction_task_does_not_get_a_worktree_even_when_its_project_has_a_p
         depends_on: Vec::new(),
         max_turns: Some(8),
         max_wall_secs: Some(600),
+        max_tokens: None,
         max_retries: 1,
         role: Some(task_core::report::COMPACTION_ROLE.to_string()),
         genre: None,

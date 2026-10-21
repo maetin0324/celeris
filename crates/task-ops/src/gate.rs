@@ -321,7 +321,11 @@ pub fn close_phase_integration_requests(
         .into_iter()
         .filter(|unit| {
             unit.kind == task_core::WorkUnitKind::Integrate
-                && unit.blocked_reason == Some(task_core::WorkUnitBlockedReason::Question)
+                && matches!(
+                    unit.blocked_reason,
+                    Some(task_core::WorkUnitBlockedReason::Question)
+                        | Some(task_core::WorkUnitBlockedReason::ContinuationCap)
+                )
         })
         .map(|unit| format!("phase:{}", unit.key))
         .collect();

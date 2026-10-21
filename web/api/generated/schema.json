@@ -2526,6 +2526,15 @@
           "minimum": 0,
           "type": "integer"
         },
+        "max_tokens": {
+          "description": "ADR 2026-10-20-mlsys-main2-fixes D1: task 木の全 run（reviewer を含む）の token 上限\n（input+output+cache_read+cache_creation）。無ければ token の上限は無い。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_turns": {
           "format": "uint32",
           "minimum": 0,
@@ -2546,12 +2555,21 @@
     },
     "BudgetKind": {
       "description": "D7: 予算切れの種類。",
-      "enum": [
-        "turns",
-        "wall_clock",
-        "context"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "turns",
+            "wall_clock",
+            "context"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "tokens",
+          "description": "ADR 2026-10-20-mlsys-main2-fixes D1: `Budget.max_tokens`（task 木の token 上限）に達した。",
+          "type": "string"
+        }
+      ]
     },
     "BudgetPrefs": {
       "additionalProperties": false,
@@ -18495,6 +18513,16 @@
           "minimum": 0,
           "type": "integer"
         },
+        "max_tokens": {
+          "default": null,
+          "description": "ADR 2026-10-20-mlsys-main2-fixes D1: task の token 上限（input+output+cache）。無ければ上限なし。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_turns": {
           "default": null,
           "description": "省略時は役割の既定 → 10。",
@@ -23052,6 +23080,13 @@
     },
     "RepoState": {
       "properties": {
+        "ahead": {
+          "default": 0,
+          "description": "`base..HEAD` の commit 数（continuation の固い上限の質問文で進捗として示す）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "base": {
           "type": "string"
         },
@@ -30746,6 +30781,11 @@
         {
           "const": "waiting_for_auth",
           "description": "ADR 2026-10-15-mlsys-min-decision-assisted D4: 外部 provider の credential が未登録で、登録・検証を待つ\n（`credential_waits`。task の Status は増やさない）。`Infra`・`ClusterJobs` と同じく工程の失敗に数えず、\n同じ段階の他の unit・兄弟は止めない。",
+          "type": "string"
+        },
+        {
+          "const": "continuation_cap",
+          "description": "2026-10-20-continuation-limit-by-progress D5: 進捗がある continuation が固い上限\n（`continuation_hard_limit`）に達した。失敗ではなく人の回答待ち（`Question` と同じ扱い）で、\nreplan には回さない。回答で `needs_continuation` に戻る。",
           "type": "string"
         }
       ]

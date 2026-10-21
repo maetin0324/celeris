@@ -111,6 +111,7 @@ impl WorkerAdapter for RefusingFake {
                 terminal: Terminal::Error {
                     message: "resume refused".into(),
                     retryable: false,
+                    usage: None,
                 },
                 exit_code: Some(1),
             });

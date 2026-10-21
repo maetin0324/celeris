@@ -330,6 +330,7 @@ impl WorkerAdapter for DeltaProbe {
                 terminal: Terminal::Error {
                     message: message.into(),
                     retryable: false,
+                    usage: None,
                 },
                 exit_code: Some(1),
             })

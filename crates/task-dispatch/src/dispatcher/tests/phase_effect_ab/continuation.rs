@@ -161,7 +161,6 @@ async fn run_variant(variant: Variant) -> AbMetric {
         },
     ]));
     let mut d = dispatcher_with_test_clock(store.clone(), adapter.clone(), 1, false);
-    d.config.execution.max_continuations_per_work_unit = 10;
     d.config.execution.continuation_session_resume = variant == Variant::On;
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");

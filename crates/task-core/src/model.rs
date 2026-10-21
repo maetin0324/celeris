@@ -192,6 +192,10 @@ pub struct Budget {
     pub max_turns: u32,
     pub max_wall_secs: u64,
     pub max_retries: u32,
+    /// ADR 2026-10-20-mlsys-main2-fixes D1: task 木の全 run（reviewer を含む）の token 上限
+    /// （input+output+cache_read+cache_creation）。無ければ token の上限は無い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
 }
 
 /// DESIGN §4.1 の `Lease`。ADR-0002 D7: `expires_at` は
@@ -789,6 +793,15 @@ pub struct Usage {
 }
 
 impl Usage {
+    /// ADR 2026-10-20-mlsys-main2-fixes D1: `Budget.max_tokens` と比べる量（input+output+cache_read+
+    /// cache_creation。campaign の `token_basis = "all"` と同じ）。欠けた欄は 0。
+    pub fn budget_tokens(&self) -> u64 {
+        self.input_tokens.unwrap_or(0)
+            + self.output_tokens.unwrap_or(0)
+            + self.cache_read_tokens.unwrap_or(0)
+            + self.cache_creation_tokens.unwrap_or(0)
+    }
+
     /// 同じ run の複数の `WorkerFinished`（待機からの再開など）の消費を合算する。runs[].usage と決定ログの
     /// 消費行が同じ規則で数えるための唯一の合算（片方が欠測なら、もう片方を採る。0 は足さない）。
     pub fn accumulate(self, other: &Usage) -> Usage {
@@ -2034,6 +2047,20 @@ impl Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn budget_max_tokens_round_trips_and_defaults_to_none() {
+        let b: Budget =
+            serde_json::from_str(r#"{"max_turns":1,"max_wall_secs":2,"max_retries":0}"#).unwrap();
+        assert_eq!(b.max_tokens, None);
+        assert!(!serde_json::to_string(&b).unwrap().contains("max_tokens"));
+        let b = Budget {
+            max_tokens: Some(300_000),
+            ..b
+        };
+        let back: Budget = serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap();
+        assert_eq!(back.max_tokens, Some(300_000));
+    }
 
     #[test]
     fn target_sweep_event_round_trips() {

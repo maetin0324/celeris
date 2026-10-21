@@ -253,6 +253,9 @@ struct ExplorationTracker {
     /// 最後に観測した main thread の assistant message の `input + cache_read + cache_creation`
     /// （context 占有。`result.usage` は run 内の合算なので占有にならない）。
     last_context: Option<u64>,
+    /// main thread の assistant message ごとの最新 usage `[input, output, cache_read, cache_creation]`。
+    /// 同じ `message.id` の行（content block ごとに出る）は後の行で置き換え、二重に数えない。
+    message_usage: std::collections::BTreeMap<String, [u64; 4]>,
 }
 
 impl ExplorationTracker {
@@ -323,6 +326,24 @@ impl ExplorationTracker {
         usage.context_tokens = self.last_context;
     }
 
+    /// この run でここまでに観測した main thread の累積 usage（assistant 行が無ければ `None`）。
+    /// sub-agent の行は数えない。`result.usage` と同じ欄を埋める（`cost_usd` は呼び出し元）。
+    fn cumulative_usage(&self) -> Option<Usage> {
+        if self.message_usage.is_empty() {
+            return None;
+        }
+        let sum = |i: usize| self.message_usage.values().map(|m| m[i]).sum::<u64>();
+        let mut usage = Usage {
+            input_tokens: Some(sum(0)),
+            output_tokens: Some(sum(1)),
+            cache_read_tokens: Some(sum(2)),
+            cache_creation_tokens: Some(sum(3)),
+            ..Usage::default()
+        };
+        self.annotate(&mut usage);
+        Some(usage)
+    }
+
     /// `assistant` 行の `message.usage` から context 占有を更新する。sub-agent の行
     /// （`parent_tool_use_id` が非 null）は別 context なので数えない。
     fn observe_assistant_usage(&mut self, line: &serde_json::Value) {
@@ -337,6 +358,23 @@ impl ExplorationTracker {
             field("input_tokens"),
             field("cache_read_input_tokens"),
             field("cache_creation_input_tokens"),
+        );
+        if input.is_none() && read.is_none() && create.is_none() && field("output_tokens").is_none()
+        {
+            return;
+        }
+        let key = match line.pointer("/message/id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => format!("#{}", self.message_usage.len()),
+        };
+        self.message_usage.insert(
+            key,
+            [
+                input.unwrap_or(0),
+                field("output_tokens").unwrap_or(0),
+                read.unwrap_or(0),
+                create.unwrap_or(0),
+            ],
         );
         if input.is_none() && read.is_none() && create.is_none() {
             return;
@@ -372,6 +410,7 @@ fn terminal_usage_mut(terminal: &mut Terminal) -> Option<&mut Usage> {
         Terminal::Done { usage, .. }
         | Terminal::Yielded { usage, .. }
         | Terminal::BudgetExhausted { usage, .. }
+        | Terminal::Error { usage, .. }
         | Terminal::Waiting { usage, .. } => usage.as_mut(),
         _ => None,
     }
@@ -703,6 +742,7 @@ async fn run_claude_code(
             timeout_terminal = Some(Terminal::Error {
                 message: "idle timeout".into(),
                 retryable: true,
+                usage: None,
             });
             force_kill = true;
             break;
@@ -792,6 +832,7 @@ async fn run_claude_code(
                 Terminal::Error {
                     message: format!("worker exited without a result message (exit={exit_repr})"),
                     retryable: true,
+                    usage: None,
                 },
                 pf,
             )
@@ -888,6 +929,7 @@ async fn run_claude_code(
                                      killed when the headless turn ended: {commands})"
                             ),
                             retryable: true,
+                            usage: None,
                         },
                         None,
                     );
@@ -918,6 +960,12 @@ async fn run_claude_code(
             outcome
         }
     };
+    // result を観測できずに終わった失敗（crash・idle timeout）も、ここまでに累積した usage を運ぶ。
+    if let Terminal::Error { usage, .. } = &mut terminal
+        && usage.is_none()
+    {
+        *usage = exploration.cumulative_usage();
+    }
 
     forward_delegate_file(&req.artifacts_dir, sink).await;
 
@@ -1086,7 +1134,13 @@ fn handle_line_for_run(
         // （`tool_use: <名前> <入力>` / 本文そのまま）で、構造化フィールドを**足すだけ**。
         // 本文（`text`）は 1 つの assistant メッセージ分をまとめて 1 件にする。
         "assistant" => {
+            let before = exploration.message_usage.clone();
             exploration.observe_assistant_usage(&value);
+            if exploration.message_usage != before
+                && let Some(usage) = exploration.cumulative_usage()
+            {
+                sink.usage_progress(&usage);
+            }
             if let Some(content) = value.pointer("/message/content").and_then(|c| c.as_array()) {
                 let mut texts: Vec<&str> = Vec::new();
                 let flush = |texts: &mut Vec<&str>, sink: &dyn EventSink| {
@@ -1344,6 +1398,7 @@ async fn terminal_from_result(
             Terminal::Error {
                 message,
                 retryable: true,
+                usage,
             },
             pf,
         );
@@ -1365,6 +1420,7 @@ async fn terminal_from_result(
                 Terminal::Error {
                     message: format!("{RESULT_JSON_MISSING_MARKER}{artifacts_rel}/result.json"),
                     retryable: true,
+                    usage: None,
                 },
                 None,
             );
@@ -1399,12 +1455,14 @@ async fn terminal_from_result(
                         "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
                     ),
                     retryable: true,
+                    usage: None,
                 }
             }
         }
         Err(e) => Terminal::Error {
             message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
             retryable: true,
+            usage: None,
         },
     };
     (terminal, None)

@@ -372,6 +372,7 @@ impl Dispatcher {
         };
         Ok(RunExtras {
             auto_leaf: None,
+            token_budget: None,
             role,
             children,
             available_genres,

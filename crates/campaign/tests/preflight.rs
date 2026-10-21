@@ -918,49 +918,29 @@ fn initial_repo_needs_repo_src() {
     );
 }
 
-/// pilot-2 の 422: local workspace とリモート repo の組合せ（案件の primary がリモート）を投入前に拒否する。
+/// executor は repos を選ばず trial workspace を cwd にする（ADR 2026-10-20-mlsys-main2-fixes D2）ので、案件の primary が
+/// リモートでも投入できる。template が repos を書くのは `check_template` が拒否する。
 #[test]
-fn template_that_would_422_is_rejected() {
+fn remote_primary_repo_is_irrelevant_but_template_repos_are_rejected() {
     let s = setup();
     let remote = with_api(vec![(
         "/api/v1/projects/01ABC/repos",
         json!({"items":[{"name":"benchfs","is_primary":true,"location":{"kind":"remote","cluster":"pegasus","path":"/w"}}]}),
     )]);
     let r = check(&s.inp, &remote);
-    assert!(!r.ok);
-    assert!(
-        r.missing
-            .iter()
-            .any(|m| m.check == "task-template" && m.detail.contains("remote repo")),
-        "{:?}",
-        r.missing
-    );
-    // template が repos で明示したリモート repo も同じ。
-    let mixed = with_api(vec![(
-        "/api/v1/projects/01ABC/repos",
-        json!({"items":[
-            {"name":"scratch","is_primary":true,"location":{"kind":"local","path":"/x"}},
-            {"name":"benchfs","is_primary":false,"location":{"kind":"remote","cluster":"pegasus","path":"/w"}}]}),
-    )]);
-    fs::write(
-        s.dir.path().join("task-template.json"),
-        json!({"project_id":"01ABC","repos":["benchfs"],"acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
-    )
-    .unwrap();
-    assert!(
-        check(&s.inp, &mixed)
-            .missing
-            .iter()
-            .any(|m| m.check == "task-template")
-    );
-    // 明示した local repo は通る。
+    assert!(r.ok, "{:?}", r.missing);
     fs::write(
         s.dir.path().join("task-template.json"),
         json!({"project_id":"01ABC","repos":["scratch"],"acceptance":[{"type":"reviewer","text":"x"}]}).to_string(),
     )
     .unwrap();
-    let r = check(&s.inp, &mixed);
-    assert!(r.ok, "{:?}", r.missing);
+    let r = check(&s.inp, &remote);
+    assert!(!r.ok);
+    assert!(
+        r.missing.iter().any(|m| m.detail.contains("repos")),
+        "{:?}",
+        r.missing
+    );
 }
 
 /// 自動取り込みが有効な案件は、試行 task が自己改善の main に入り得るので拒否する。

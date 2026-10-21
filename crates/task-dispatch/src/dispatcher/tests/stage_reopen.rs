@@ -173,6 +173,7 @@ async fn a_replan_adding_a_unit_to_an_integrated_stage_reintegrates_that_stage()
     let boom = || Terminal::Error {
         message: "b cannot work without a2".into(),
         retryable: true,
+        usage: None,
     };
     let adapter = Arc::new(
         ParallelWuAdapter::new(Duration::from_millis(5))

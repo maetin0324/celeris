@@ -25,7 +25,7 @@ use crate::{
     manifest::{Budget, CampaignManifest, ConfigId},
     record::*,
     series,
-    snapshot::{copy_tree, hash_tree, hash_tree_excluding},
+    snapshot::{copy_tree, hash_tree},
 };
 
 #[derive(Clone, Debug, Default)]
@@ -39,6 +39,8 @@ pub struct RunOptions {
     pub inputs_src: Option<PathBuf>,
     /// 問題ごとの宣言入力（case.json の `inputs[]`）。各試行の workspace の `inputs/` に配る。
     pub case_inputs: BTreeMap<String, Vec<DeliveredInput>>,
+    /// 問題ごとの公開 case 定義 JSON。各試行の workspace の `materials/<case>/case.json` に置く（private_ref は含まない）。
+    pub public_cases: BTreeMap<String, String>,
     /// 期待 campaign lock（`lock_exec::expected_lock`）。実行（有料）経路は必須。None は mock など無課金の制御用。
     /// 渡すと、executor 投入・台帳更新より前に実体を照合し、`<out>/lock.json` に保存・再照合する。
     pub lock: Option<CampaignLock>,
@@ -763,6 +765,7 @@ fn run_inner(
         repo_free: &repo_free,
         stage: out.join("snapshot").join(INPUTS_DIR),
         inputs: &opts.case_inputs,
+        public_cases: &opts.public_cases,
     };
     write_json(
         &out.join(CAMPAIGN_FILE),
@@ -997,7 +1000,7 @@ fn run_inner(
                 // 中断した試行の残骸があれば捨て、必ず初期 snapshot から作り直す。
                 let _ = fs::remove_dir_all(out.join(&rel));
                 seeder.make(&pid, &ws)?;
-                rec.workspace_sha256_initial = hash_tree_excluding(&ws, &[INPUTS_DIR])?;
+                rec.workspace_sha256_initial = inputs::artifact_hash(&ws, &pid)?;
                 rec.kb_sha256_initial = hash_tree(&kbd)?;
                 if rec.workspace_sha256_initial != seed_sha || rec.kb_sha256_initial != kb_sha {
                     return Err(format!(
@@ -1126,12 +1129,10 @@ fn run_inner(
             }
             res.wall_secs = res.wall_secs.min(timeout);
             let ws_final = hash_tree(&ws)?;
-            // A の成果物は試行の workspace にしか出ない。exit 0 でも何も変わっていなければ合格にしない（fail-closed）。
+            // 成果物は A・B・C とも試行の workspace にしか出ない（B/C の task も workspace を cwd にする。ADR
+            // 2026-10-20-mlsys-main2-fixes D2）。終端が passed でも何も変わっていなければ合格にしない（fail-closed）。
             // 配った入力（と、その展開）は成果物に数えない。
-            if cid == ConfigId::A
-                && res.outcome == Outcome::Passed
-                && hash_tree_excluding(&ws, &[INPUTS_DIR])? == seed_sha
-            {
+            if res.outcome == Outcome::Passed && inputs::artifact_hash(&ws, &pid)? == seed_sha {
                 res.outcome = Outcome::Failed;
                 rec.reason = Some(REASON_NO_ARTIFACT.into());
                 rep.no_artifact += 1;

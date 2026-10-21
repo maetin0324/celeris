@@ -26,6 +26,7 @@ const COMPACTION_BUDGET: Budget = Budget {
     max_turns: 8,
     max_wall_secs: 600,
     max_retries: 1,
+    max_tokens: None,
 };
 
 /// 開いているまとめタスクを探すときに見る件数の上限。
@@ -158,6 +159,7 @@ fn compaction_spec(
         depends_on: Vec::new(),
         max_turns: Some(COMPACTION_BUDGET.max_turns),
         max_wall_secs: Some(COMPACTION_BUDGET.max_wall_secs),
+        max_tokens: None,
         max_retries: COMPACTION_BUDGET.max_retries,
         role: Some(report::COMPACTION_ROLE.to_string()),
         genre: None,

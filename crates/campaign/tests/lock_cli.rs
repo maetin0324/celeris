@@ -267,6 +267,7 @@ impl Fx {
     fn opts(&self) -> RunOptions {
         let set = CaseSet::load(&self.inp.cases_root, &self.inp.grader_root).unwrap();
         RunOptions {
+            public_cases: Default::default(),
             global_ledger: None,
             out: self.out(),
             repo_src: self.inp.repo_src.clone(),
@@ -662,4 +663,36 @@ fn offline_lock_refuses_an_out_that_already_has_trial_data() {
         text(&r)
     );
     assert_eq!(o.files(), ["records.jsonl"]);
+}
+
+#[test]
+fn lock_refusal_names_existing_entries() {
+    let o = off();
+    fs::create_dir_all(o.f.out()).unwrap();
+    fs::write(o.f.out().join("final-run-1.json"), "").unwrap();
+    let r = o.run(&[]);
+    assert!(!r.status.success());
+    assert!(text(&r).contains("final-run-1.json"), "{}", text(&r));
+}
+
+/// runbook どおり、stdout の redirect 先は OUT の外（`$RUNS`）にあり、OUT 直下へ向けた redirect が無い。
+#[test]
+fn runbook_does_not_redirect_into_out() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("docs")
+        .join("ops");
+    let mut seen = 0;
+    for e in fs::read_dir(&dir).unwrap().filter_map(Result::ok) {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if !(n.starts_with("measure-run-") && n.ends_with(".md")) {
+            continue;
+        }
+        seen += 1;
+        let t = fs::read_to_string(e.path()).unwrap();
+        for pat in ["> $OUT/", ">$OUT/", "> \"$OUT/", ">\"$OUT/", "> ${OUT}/"] {
+            assert!(!t.contains(pat), "{n} redirects into OUT: {pat}");
+        }
+    }
+    assert!(seen > 0);
 }

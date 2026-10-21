@@ -570,6 +570,7 @@ fn unreachable_result(message: String) -> Result<ExitCode, CliError> {
         message,
         retryable: true,
         provider_failure: None,
+        usage: None,
     };
     let json = serde_json::to_string(&msg)
         .map_err(|e| CliError::msg(format!("failed to encode result: {e}")))?;
@@ -618,11 +619,14 @@ fn normalize_outcome(result: Result<RunOutcome, AdapterError>) -> (WorkerMessage
                 0,
             ),
             Terminal::Question { text } => (WorkerMessage::Question { text }, 3),
-            Terminal::Error { message, retryable } => (
+            Terminal::Error {
+                message, retryable, ..
+            } => (
                 WorkerMessage::Error {
                     message,
                     retryable,
                     provider_failure: None,
+                    usage: None,
                 },
                 4,
             ),
@@ -679,6 +683,7 @@ fn normalize_outcome(result: Result<RunOutcome, AdapterError>) -> (WorkerMessage
                     message: format!("adapter: {e}"),
                     retryable: true,
                     provider_failure,
+                    usage: None,
                 },
                 4,
             )

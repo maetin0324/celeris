@@ -120,3 +120,5 @@ task が終端（中止・連鎖の中止・失敗）になったら、同じト
 - `timed_out` の後の「延長」は、続きの run が再び `wait` を書くことで行う（daemon 側の延長操作は無い）。
 - PBS の job history（`qstat -x`）が無効なクラスタでは、終わった job は `Unknown Job Id` → `gone`（終了コード不明）になる。
 - Slurm は `sacct`（accounting）が前提。実機（Slurm のクラスタ）では未確認。
+
+> 付記（2026-10-20）: 本文の `max_continuations_per_work_unit` は `agent-docs/adr/2026-10-20-continuation-limit-by-progress.md` で `continuation_hard_limit` に置き換えた（旧欄は読み込みエラー）。

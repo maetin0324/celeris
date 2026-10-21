@@ -1507,3 +1507,37 @@ pub fn conflict_child_task(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod run_wait_tests {
+    use super::*;
+
+    /// 即終了する子は timeout を待たずに返り、終了コードと出力を返す。
+    #[test]
+    fn a_command_that_exits_at_once_returns_before_the_timeout() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo out; echo err >&2; exit 3"]);
+        let started = std::time::Instant::now();
+        let out = run(cmd, Duration::from_secs(60)).unwrap_or_else(|| panic!("spawn"));
+        assert!(started.elapsed() < Duration::from_secs(30));
+        assert!(!out.timed_out);
+        assert!(!out.ok);
+        assert_eq!(out.code, Some(3));
+        assert_eq!(out.stdout.trim(), "out");
+        assert_eq!(out.stderr.trim(), "err");
+    }
+
+    /// 出力がパイプの容量（64 KiB）を大きく超えても、読み切って詰まらない。
+    #[test]
+    fn a_command_with_large_output_does_not_deadlock() {
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            "head -c 1048576 /dev/zero | tr '\\0' a; head -c 1048576 /dev/zero | tr '\\0' b >&2",
+        ]);
+        let out = run(cmd, Duration::from_secs(60)).unwrap_or_else(|| panic!("spawn"));
+        assert!(out.ok, "{}", out.why());
+        assert_eq!(out.stdout.len(), 1 << 20);
+        assert_eq!(out.stderr.len(), 1 << 20);
+    }
+}

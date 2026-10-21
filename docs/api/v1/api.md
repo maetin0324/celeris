@@ -591,6 +591,7 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
 | `order` | `dispatch` / `updated_desc` / `created_desc` | `updated_desc` | `ListOrder` と同じ: `dispatch` = `priority DESC, created_at ASC, id ASC`（`ready_tasks` と同じ）。`updated_desc` = `updated_at DESC, id DESC`。`created_desc` = `created_at DESC, id DESC`。他は 400 |
 | `limit` | 1 以上の整数 | 100 | 0 は 400。500 を超える値は 500 に丸める |
 | `archived` | bool（`1`/`0`/`true`/`false`） | `false` | `true` なら**アーカイブされた案件のタスクも返す**。既定はそれらを隠す（`ListFilter.hide_archived`。ADR-0044 D6）。案件に属さないタスクは常に見える。`GET /tasks/{id}`（個別）は既定でもそのまま見える |
+| `with` | `integrations`（カンマ区切りの集合） | なし | 付けると各行に `integrations` と `promotion`（取り込み状態・release への到達）を付ける。既定は付けず、git も起動しない（ADR 2026-10-21-task-list-opt-in-integrations）。要求ごとに `task_integration_list` を 1 回、repo ごとに既定 branch の解決を 1 回、最新 release の走査を 1 回だけ行う。他の値は 400。`GET /tasks/{id}` は従来どおり常に付く |
 | `cursor` | 不透明文字列 | — | 前応答の `next_cursor`（`Page<T>.next_cursor` をそのまま）。解読できない cursor は 400 |
 
 - 知らないクエリキー、複数可でないキーの重複は 400。

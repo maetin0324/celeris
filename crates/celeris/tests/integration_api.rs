@@ -382,7 +382,7 @@ async fn integration_api_stranded_branch_round_trip_through_routes_and_events() 
         detail["promotion"]["status"], "promotion_pending",
         "{detail}"
     );
-    let (status, tasks) = daemon.get("/api/v1/tasks").await;
+    let (status, tasks) = daemon.get("/api/v1/tasks?with=integrations").await;
     assert_eq!(status, 200, "{tasks}");
     assert!(
         tasks["items"]
@@ -484,7 +484,7 @@ async fn integration_api_stranded_branch_round_trip_through_routes_and_events() 
         "{detail}"
     );
 
-    let (status, tasks) = daemon.get("/api/v1/tasks").await;
+    let (status, tasks) = daemon.get("/api/v1/tasks?with=integrations").await;
     assert_eq!(status, 200, "{tasks}");
     assert!(
         tasks["items"]

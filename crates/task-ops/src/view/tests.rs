@@ -108,7 +108,7 @@ fn integration_api_views_attach_store_state_to_summary_and_detail() {
         )]
         .into_iter()
         .collect(),
-        releases_dir: None,
+        release: None,
     };
     let mut summary = task_summary(
         &store,
@@ -120,13 +120,11 @@ fn integration_api_views_attach_store_state_to_summary_and_detail() {
     .expect("summary");
     let (mut integrations, mut promotion) = (None, None);
     attach_integrations(
-        &store,
-        task.id,
+        store.task_integration_list(None).expect("states"),
         &mut integrations,
         &mut promotion,
-        Some(&context),
-    )
-    .expect("attach summary");
+        &context,
+    );
     summary.integrations = integrations;
     summary.promotion = promotion;
     assert_eq!(summary.integrations.as_ref().unwrap()[0].repo, "sample");
@@ -144,13 +142,11 @@ fn integration_api_views_attach_store_state_to_summary_and_detail() {
     )
     .expect("detail");
     attach_integrations(
-        &store,
-        task.id,
+        store.task_integration_list(None).expect("states"),
         &mut detail.integrations,
         &mut detail.promotion,
-        Some(&context),
-    )
-    .expect("attach detail");
+        &context,
+    );
     assert_eq!(detail.integrations.as_ref().unwrap()[0].head, "abc123");
 }
 

@@ -127,6 +127,7 @@ pub struct TaskSummary {
     pub project_id: Option<task_core::ProjectId>,
     /// ADR-0033 D2 の `Task.milestone_id`（カードに途中目標を出すため）。
     pub milestone_id: Option<task_core::MilestoneId>,
+    /// 取り込み状態。`GET /tasks?with=integrations` のときだけ付く（既定は省略）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrations: Option<Vec<IntegrationView>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1610,35 +1611,28 @@ pub fn task_detail(
     })
 }
 
-/// Add durable integration records and (when configured) the independent release promotion state.
+/// Add durable integration records and (when a release was read) the independent promotion state.
+/// `states` are this task's integration rows, picked by the caller from one request-wide read
+/// (ADR 2026-10-21-task-list-opt-in-integrations D2); nothing here reads the store.
 pub fn attach_integrations(
-    store: &dyn TaskStore,
-    task_id: TaskId,
+    states: Vec<task_core::TaskRepoIntegrationState>,
     integrations: &mut Option<Vec<IntegrationView>>,
     promotion: &mut Option<PromotionView>,
-    context: Option<&crate::stranded::IntegrationContext>,
-) -> Result<(), OpsError> {
-    let Some(context) = context else {
-        return Ok(());
-    };
-    let states = store.task_integration_list(None)?;
-    let matching = states
-        .into_iter()
-        .filter(|state| state.task_id == task_id)
-        .collect::<Vec<_>>();
-    let mut views = Vec::with_capacity(matching.len());
-    for state in matching {
+    context: &crate::stranded::IntegrationContext,
+) {
+    let mut views = Vec::with_capacity(states.len());
+    for state in states {
         let Some(repo) = context.repositories.get(&state.repo_id) else {
             continue;
         };
         // ADR 2026-10-11-stranded-done-branches: promotion pending is shown independently of the
         // integration state, so an unintegrated head that no release contains is pending as well.
-        if let Some(releases_dir) = context.releases_dir.as_deref() {
-            *promotion = Some(crate::stranded::promotion_view(
+        if let Some(release) = context.release.as_ref() {
+            *promotion = Some(crate::stranded::promotion_view_for(
                 &repo.name,
                 &repo.path,
                 &state.head_sha,
-                releases_dir,
+                release,
             ));
         }
         views.push(IntegrationView {
@@ -1653,7 +1647,6 @@ pub fn attach_integrations(
         });
     }
     *integrations = Some(views);
-    Ok(())
 }
 
 /// ADR-0079 D13（Phase R5a）: `task` の dispatch を subtree の一時停止で止めている task（自分か、`paused_at` を持つ

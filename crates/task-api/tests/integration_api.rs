@@ -178,7 +178,21 @@ async fn integration_api_task_detail_and_list_include_unintegrated_state() {
     .await;
     assert_eq!(detail.status, 200, "{}", detail.text());
     assert_eq!(detail.json()["integrations"][0]["state"], "unintegrated");
-    let list = send(&env.router(), get_with("/api/v1/tasks", &admin())).await;
+    // ADR 2026-10-21: 既定の一覧は付けない。`with=integrations` のときだけ付く。
+    let plain = send(&env.router(), get_with("/api/v1/tasks", &admin())).await;
+    assert_eq!(plain.status, 200, "{}", plain.text());
+    assert!(
+        plain.json()["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item.get("integrations").is_none() && item.get("promotion").is_none())
+    );
+    let list = send(
+        &env.router(),
+        get_with("/api/v1/tasks?with=integrations", &admin()),
+    )
+    .await;
     assert_eq!(list.status, 200, "{}", list.text());
     assert!(list.json()["items"].as_array().unwrap().iter().any(|item| {
         item["id"] == task.id.to_string() && item["integrations"][0]["state"] == "unintegrated"

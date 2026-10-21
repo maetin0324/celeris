@@ -3,7 +3,7 @@
 # 単一の設定ファイル（--env <file>、KEY=VALUE の sh 形式）から --api-url・--measure-config 等を生成する。
 # 本番 daemon・systemd・本番 config・本番 DB には触れない。停止は launcher が起動した pid（$STATE_DIR/launcher.pid）だけ。
 #
-#   measure-launcher.sh <prepare|start|preflight|watch|collect|grade|export|stop> --env <file>
+#   measure-launcher.sh <prepare|start|preflight|lock|watch|collect|grade|export|stop> --env <file>
 #
 # 標準の流れは prepare → start → preflight → watch → grade（評価側の job 観測の収集 → 独立採点 → 検査）→ export。
 # 各 subcommand は再実行できる。watch は台帳から再開し、毎回 daemon 実体の照合・preflight（env-check を含む）・
@@ -14,7 +14,7 @@
 set -eu
 
 usage() {
-    echo "usage: $0 <prepare|start|preflight|watch|collect|grade|export|stop> --env <measure-launcher.env>" >&2
+    echo "usage: $0 <prepare|start|preflight|lock|watch|collect|grade|export|stop> --env <measure-launcher.env>" >&2
     exit 2
 }
 
@@ -359,7 +359,47 @@ cmd_start() {
 cmd_preflight() {
     verify_daemon
     load_token
-    campaign preflight
+    # watch と同じ env-lock の照合（<out>/env-lock.json が在れば接続先の測定 daemon の一覧と突き合わせる）も行う。
+    oldifs=$IFS
+    IFS='
+'
+    # shellcheck disable=SC2046
+    set -- $(worker_args)
+    IFS=$oldifs
+    campaign preflight "$@"
+}
+
+# offline-lock の入力（GET /api/v1/llm/models の保存）は launcher.env の測定 daemon から取る。本番 daemon の一覧は
+# 使わない（測定 daemon と source が違えば watch・preflight の env-lock 照合で拒否される。ADR 2026-10-21-preflight-env-lock-check）。
+cmd_lock() { # 生成先は環境変数 LOCK_OUT（空 dir か未作成）
+    gen=${LOCK_OUT:-}
+    [ -n "$gen" ] || die "lock: set LOCK_OUT=<empty dir> (env-lock.json / lock.json are written there)"
+    [ ! -e "$gen" ] || [ -z "$(ls -A "$gen")" ] || die "$gen: lock output dir must be empty"
+    verify_daemon
+    load_token
+    mkdir -p "$gen"
+    ev="$gen.measure-llm-models.json"
+    curl -fsS -H "Authorization: Bearer $CELERIS_MEASURE_TOKEN" "$API_URL/api/v1/llm/models" >"$ev" ||
+        die "GET $API_URL/api/v1/llm/models failed"
+    sha=$(sha256sum "$ev" | cut -d' ' -f1)
+    echo "models evidence: $ev sha256=$sha" >&2
+    oldifs=$IFS
+    IFS='
+'
+    # shellcheck disable=SC2046
+    set -- $(common_args) $(worker_args)
+    IFS=$oldifs
+    # common_args の --out（試行の out）を生成先に置き換える（後の指定が勝たない CLI もあるので取り除く）。
+    n=$#
+    i=0
+    skip=
+    for x in "$@"; do
+        i=$((i + 1))
+        if [ -n "$skip" ]; then skip=; elif [ "$x" = --out ]; then skip=1; else set -- "$@" "$x"; fi
+        [ $i -lt $n ] || break
+    done
+    shift "$n"
+    "$CAMPAIGN_BIN" offline-lock "$@" --out "$gen" --models-evidence "$ev" --models-evidence-sha256 "$sha"
 }
 
 worker_args() {
@@ -460,6 +500,7 @@ case $SUB in
     prepare) cmd_prepare ;;
     start) cmd_start ;;
     preflight) cmd_preflight ;;
+    lock) cmd_lock ;;
     watch) cmd_watch ;;
     collect) cmd_collect ;;
     grade) cmd_grade ;;

@@ -1121,7 +1121,7 @@ fn preflight_with_env_lock(
         Path::new("claude"),
         &[],
         s.inp.cap_env.as_deref(),
-        env_lock::catalog_from_models(&models_body(lock_models)).unwrap(),
+        || env_lock::catalog_from_models(&models_body(lock_models)),
     )
     .unwrap();
     env_lock::establish(&m, &obs, &out, false).unwrap();

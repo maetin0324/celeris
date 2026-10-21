@@ -143,6 +143,10 @@ common_args() {
     [ -z "$SERIES_ROOT" ] || set -- "$@" --series-root "$SERIES_ROOT"
     # 必要能力 probe と A の sandbox に足す toolchain（celeris.campaign-cap-env/1）。無ければ preflight が拒否する。
     [ -z "$CAP_ENV" ] || set -- "$@" --cap-env "$CAP_ENV"
+    # worker harness の実行ファイル。preflight（run・watch 内のものを含む）の env-lock 照合で env-lock と同じ値を使う。
+    for w in $WORKER_PROGRAMS; do
+        set -- "$@" --worker-program "$w"
+    done
     printf '%s\n' "$@"
 }
 
@@ -360,13 +364,7 @@ cmd_preflight() {
     verify_daemon
     load_token
     # watch と同じ env-lock の照合（<out>/env-lock.json が在れば接続先の測定 daemon の一覧と突き合わせる）も行う。
-    oldifs=$IFS
-    IFS='
-'
-    # shellcheck disable=SC2046
-    set -- $(worker_args)
-    IFS=$oldifs
-    campaign preflight "$@"
+    campaign preflight
 }
 
 # offline-lock の入力（GET /api/v1/llm/models の保存）は launcher.env の測定 daemon から取る。本番 daemon の一覧は
@@ -387,7 +385,7 @@ cmd_lock() { # 生成先は環境変数 LOCK_OUT（空 dir か未作成）
     IFS='
 '
     # shellcheck disable=SC2046
-    set -- $(common_args) $(worker_args)
+    set -- $(common_args)
     IFS=$oldifs
     # common_args の --out（試行の out）を生成先に置き換える（後の指定が勝たない CLI もあるので取り除く）。
     n=$#

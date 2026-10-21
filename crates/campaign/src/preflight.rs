@@ -609,17 +609,14 @@ fn check_env_lock(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Ho
         a.miss("env-lock", "env-lock check needs --api-url and --token-env");
         return;
     };
-    let r = crate::env_lock::fetch_catalog(host, url, tok)
-        .and_then(|catalog| {
-            crate::env_lock::observe(
-                m,
-                &inp.a_program,
-                &inp.worker_programs,
-                inp.cap_env.as_deref(),
-                catalog,
-            )
-        })
-        .and_then(|obs| crate::env_lock::verify_existing(m, &obs, out));
+    let r = crate::env_lock::observe(
+        m,
+        &inp.a_program,
+        &inp.worker_programs,
+        inp.cap_env.as_deref(),
+        || crate::env_lock::fetch_catalog(host, url, tok),
+    )
+    .and_then(|obs| crate::env_lock::verify_existing(m, &obs, out));
     let _ = a.res("env-lock", r);
 }
 

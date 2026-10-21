@@ -394,15 +394,25 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let offline = cmd == "offline-lock";
             // B/C の候補集合・階層は実 daemon の `GET /api/v1/llm/models`（正式 DTO）から取る。空は固定しない。
             // offline-lock は daemon に接続せず、承認済み実証跡 file（sha256 明示）から同じ関数で取る。
-            let catalog = if offline {
-                let ev = arg(&args, "--models-evidence").ok_or("--models-evidence is required")?;
-                let sha = arg(&args, "--models-evidence-sha256")
-                    .ok_or("--models-evidence-sha256 is required")?;
-                celeris_campaign::offline_lock::catalog_from_evidence(&ev, &sha.to_string_lossy())?
-            } else {
-                let url = arg(&args, "--api-url").ok_or("--api-url is required")?;
-                let tok = arg(&args, "--token-env").ok_or("--token-env is required")?;
-                env_lock::fetch_catalog(&RealHost, &url.to_string_lossy(), &tok.to_string_lossy())?
+            let catalog = || -> Result<_, String> {
+                if offline {
+                    let ev =
+                        arg(&args, "--models-evidence").ok_or("--models-evidence is required")?;
+                    let sha = arg(&args, "--models-evidence-sha256")
+                        .ok_or("--models-evidence-sha256 is required")?;
+                    celeris_campaign::offline_lock::catalog_from_evidence(
+                        &ev,
+                        &sha.to_string_lossy(),
+                    )?
+                } else {
+                    let url = arg(&args, "--api-url").ok_or("--api-url is required")?;
+                    let tok = arg(&args, "--token-env").ok_or("--token-env is required")?;
+                    env_lock::fetch_catalog(
+                        &RealHost,
+                        &url.to_string_lossy(),
+                        &tok.to_string_lossy(),
+                    )?
+                }
             };
             let obs = env_lock::observe(
                 &m,

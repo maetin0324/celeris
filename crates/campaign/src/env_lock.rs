@@ -416,7 +416,7 @@ pub fn observe(
     a_program: &Path,
     worker_programs: &[String],
     cap_env: Option<&Path>,
-    catalog: Vec<CatalogRow>,
+    catalog: impl FnOnce() -> Result<Vec<CatalogRow>, String>,
 ) -> Result<Observed, String> {
     let path_var = std::env::var_os("PATH");
     // A が有効なときだけ A の実行ファイルを固定する（B/C のみの測定は A を探さない）。
@@ -435,6 +435,8 @@ pub fn observe(
             pin: pin_program(Path::new(p), path_var.as_deref())?,
         });
     }
+    // catalog は A の解決の後に取る（A の欠落を daemon 接続の失敗より先に報告する）。
+    let catalog = catalog()?;
     let cap_env = match cap_env {
         Some(p) => Some(crate::cap_probe::CapEnv::load(p)?.pin()?),
         None => None,

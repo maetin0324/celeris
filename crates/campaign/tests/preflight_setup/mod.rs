@@ -212,6 +212,7 @@ pub fn setup() -> Setup {
         measurement_id: None,
         cap_env: Some(write_cap_env(d)),
         variant_b0_sha256: None,
+        worker_programs: Vec::new(),
     };
     Setup { dir, inp }
 }

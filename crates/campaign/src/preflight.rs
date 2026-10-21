@@ -211,6 +211,8 @@ pub struct Inputs {
     pub cap_env: Option<PathBuf>,
     /// `variant-b0.json` の承認済み sha256（呼び出し側が明示）。manifest が variant を参照するとき必須。
     pub variant_b0_sha256: Option<String>,
+    /// worker harness の実行ファイル（`<name>=<program>`）。env-lock の照合で watch と同じ値を使う。
+    pub worker_programs: Vec<String>,
 }
 
 /// 測定環境の汚染検査の入力。
@@ -393,11 +395,14 @@ pub fn check(inp: &Inputs, host: &dyn Host) -> Report {
         paid_calls_made: 0,
         campaign_sha256: sha,
         checked: a.checked,
-        failure_class: a
-            .missing
-            .iter()
-            .any(|x| x.check == "capability")
-            .then_some(crate::cap_probe::ENV_FAILURE),
+        failure_class: if a.missing.iter().any(|x| x.check == "env-lock") {
+            Some(ENV_LOCK_MISMATCH)
+        } else {
+            a.missing
+                .iter()
+                .any(|x| x.check == "capability")
+                .then_some(crate::cap_probe::ENV_FAILURE)
+        },
         missing: a.missing,
         a_program: a.a_program,
         probe_targets: a.probe_targets,
@@ -590,6 +595,34 @@ fn check_variant(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Hos
     }
 }
 
+/// env-lock の照合失敗の分類（watch が試行投入前に拒否するのと同じ理由を、無課金の preflight で出す）。
+pub const ENV_LOCK_MISMATCH: &str = "env_lock_mismatch";
+
+/// `<out>/env-lock.json` が在るとき、watch（`env-lock --verify`）と同じ `env_lock::observe` と
+/// `env_lock::verify_existing` で照合する。catalog は接続先の測定 daemon の `GET /api/v1/llm/models`。
+fn check_env_lock(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host, out: &Path) {
+    if !out.join(crate::env_lock::ENV_LOCK_FILE).exists() {
+        return;
+    }
+    a.checked.push("env-lock");
+    let (Some(url), Some(tok)) = (&inp.api_url, &inp.token_env) else {
+        a.miss("env-lock", "env-lock check needs --api-url and --token-env");
+        return;
+    };
+    let r = crate::env_lock::fetch_catalog(host, url, tok)
+        .and_then(|catalog| {
+            crate::env_lock::observe(
+                m,
+                &inp.a_program,
+                &inp.worker_programs,
+                inp.cap_env.as_deref(),
+                catalog,
+            )
+        })
+        .and_then(|obs| crate::env_lock::verify_existing(m, &obs, out));
+    let _ = a.res("env-lock", r);
+}
+
 /// P0-3: 測定専用構成・A/B/C の試行用 KB の同一性・canary。
 fn check_measure_env(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) {
     a.checked.push("measure-env");
@@ -610,6 +643,10 @@ fn check_measure_env(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn
         for e in es {
             a.miss("env-check", e);
         }
+    }
+    // 再開・投入前: `<out>/env-lock.json` が在れば watch と同じ照合（接続先の測定 daemon の一覧 vs env-lock）。
+    if let Some(out) = &me.out {
+        check_env_lock(a, m, inp, host, out);
     }
     let Some(can) = a.res("measure-env", measure_env::Canaries::load(&me.canaries)) else {
         return;

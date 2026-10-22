@@ -1,6 +1,7 @@
 ---
 tasks: [01M5GE1BGEJDRK1AQ1Y1TK85X0]
-status: running
+status: done
+completed: 2026-10-22
 updated: 2026-10-22
 ---
 # 統合の自動解決で Cargo.lock の衝突を再生成で解く
@@ -22,6 +23,10 @@ ADR: `agent-docs/adr/2026-10-21-cargo-lock-regenerate-on-integrate.md`
 - `cargo test -p task-dispatch --lib auto_resolve` → exit 0、40 passed
 - `cargo test -p task-dispatch --lib integration::tests::` → exit 0、15 passed
 - `cargo test -p celeris --lib auto_resolve` → exit 0、9 passed
+- `bash scripts/dev/test-affected.sh`（対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）→ exit 0、2545 tests run: 2545 passed, 4 skipped
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `grep -rn generated_command crates` → delivery の設定から渡す引数名だけ（`generated_command: None` の経路は無い）
 
 ## 本番への移行
 設定の書き換えは不要（Cargo.lock 規則は内蔵、`[delivery.auto_resolve.generated]` は従来の欄のまま）。release で入れ替わるだけ。

@@ -100,6 +100,7 @@ mod approvals;
 mod behind_targets;
 mod browser_policy_auto;
 mod cluster;
+mod config_events;
 mod decision_log;
 mod events;
 mod execution;
@@ -414,6 +415,30 @@ pub struct LocalSettingsEvent {
     pub actor: String,
     pub before: LocalSettingsOverrides,
     pub after: LocalSettingsOverrides,
+}
+
+/// ADR 2026-10-22-dynamic-config D4: `config_events` に足す 1 行（値は secret を伏せたもの）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewConfigEvent {
+    pub actor: String,
+    pub key: String,
+    pub class: String,
+    pub apply_unit: String,
+    pub before: serde_json::Value,
+    pub after: serde_json::Value,
+}
+
+/// `config_events` の 1 行（追記専用の履歴）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigEventRow {
+    pub id: i64,
+    pub ts: OffsetDateTime,
+    pub actor: String,
+    pub key: String,
+    pub class: String,
+    pub apply_unit: String,
+    pub before: serde_json::Value,
+    pub after: serde_json::Value,
 }
 
 /// ADR-0078 D5: `cluster_connection_log` の 1 行。`kind` / `method` / `cause` の値は

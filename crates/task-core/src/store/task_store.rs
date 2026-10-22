@@ -20,9 +20,9 @@ use crate::write_set::WriteSetRecord;
 
 use super::query::{ListFilter, ListOrder, Page};
 use super::{
-    ClusterConnectionRecord, ClusterSettings, EventRow, ExecutionMetricsTaskRow, LocalSettings,
-    LocalSettingsEvent, LocalSettingsOverrides, ProjectPlanApply, StoreError, TaskWithEvents,
-    TreeAdoption,
+    ClusterConnectionRecord, ClusterSettings, ConfigEventRow, EventRow, ExecutionMetricsTaskRow,
+    LocalSettings, LocalSettingsEvent, LocalSettingsOverrides, NewConfigEvent, ProjectPlanApply,
+    StoreError, TaskWithEvents, TreeAdoption,
 };
 
 /// ADR-0033 D3: 報告（`reports`）の読み書きは `crate::report::ReportStore` にあり、`TaskStore` はそれを
@@ -718,6 +718,14 @@ pub trait TaskStore:
         actor: &str,
         now: OffsetDateTime,
     ) -> Result<Option<LocalSettings>, StoreError>;
+    /// ADR 2026-10-22-dynamic-config D4: config の欄の変更を追記する（1 transaction）。
+    fn config_events_append(
+        &self,
+        events: &[NewConfigEvent],
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError>;
+    /// config の変更履歴（新しい順、最大 `limit` 件）。
+    fn config_events_recent(&self, limit: usize) -> Result<Vec<ConfigEventRow>, StoreError>;
     /// 監査の流れ（古い順）。
     fn local_settings_events(&self) -> Result<Vec<LocalSettingsEvent>, StoreError>;
     /// task の足回りの root を固定する（`INSERT OR IGNORE`、1 回だけ）。既に固定があれば

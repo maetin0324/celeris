@@ -34,8 +34,9 @@ use crate::project_plan::{
 use crate::types::{
     AccountCheckResponse, AccountList, AccountLoginResult, AccountLoginStart, AccountView,
     AnswerBody, ArtifactList, CancelBody, ClusterConnectResult, ClusterConnectStart,
-    ClusterSettingsPutBody, ClusterSettingsView, Clusters, CommentBody, CommentList, ConfigView,
-    DaemonView, DecisionBody, EventsPage, Health, LocalSettingsPutBody, MilestoneCreateBody,
+    ClusterSettingsPutBody, ClusterSettingsView, Clusters, CommentBody, CommentList,
+    ConfigEventList, ConfigFieldsView, ConfigPatchBody, ConfigPatchResult, ConfigView, DaemonView,
+    DecisionBody, EventsPage, Health, LocalSettingsPutBody, MilestoneCreateBody,
     MilestonePatchBody, OrgCreateBody, OrgList, OrgPatchBody, Problem, ProjectCreateBody,
     ProjectDetail, ProjectList, ProjectPatchBody, ReleasePromoteAccepted, Releases, ReloadResult,
     ReopenBody, RetryBody, RunList, SecretList, SecretPutResult, StreamHeartbeat, StreamHello,
@@ -97,6 +98,11 @@ pub struct ApiV1Schema {
     pub cluster_settings: ClusterSettingsView,
     /// ADR 2026-10-14-local-machine-settings D4: `PUT /clusters/local/settings` の要求本文（応答は `LocalMachineView`）。
     pub local_settings_put: LocalSettingsPutBody,
+    /// ADR 2026-10-22-dynamic-config: `GET/PATCH /config/fields` と `GET /config/events`。
+    pub config_fields: ConfigFieldsView,
+    pub config_patch: ConfigPatchBody,
+    pub config_patch_result: ConfigPatchResult,
+    pub config_events: ConfigEventList,
     /// Phase 20（ADR-0030）: GUI から預かる秘密（API キー等）。`GET /secrets` と `PUT /secrets/{id}` の応答。
     pub secrets: SecretList,
     pub secret_put: SecretPutResult,

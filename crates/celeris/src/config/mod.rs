@@ -28,7 +28,9 @@ mod db;
 mod delegation;
 mod delivery;
 mod dispatch;
+pub mod edit;
 mod execution;
+pub mod fields;
 mod github;
 mod harness;
 mod jev;
@@ -285,6 +287,10 @@ pub struct Config {
     /// `Config::load` が読んだファイルの bytes の sha256（16 進。`GET /config` の `identity.config_sha256`）。
     #[serde(skip)]
     pub source_sha256: Option<String>,
+    /// 起動時に読んだ設定ファイルの本文（`config::fields` が「起動時のみの欄の、稼働中の値」を引くのに使う。
+    /// reload・`PATCH /config/fields` は書き換えない）。
+    #[serde(skip)]
+    pub loaded_text: Option<String>,
     /// `apply_overrides` が適用した CLI 上書きの名前（`identity.overrides`）。
     #[serde(skip)]
     pub applied_overrides: Vec<String>,
@@ -481,7 +487,14 @@ impl Config {
             path: path.to_path_buf(),
             source,
         })?;
-        let mut cfg = Self::parse_with_delivery(&text)?;
+        Self::load_text(path, &text)
+    }
+
+    /// `load` の本体。`path` は相対パスの基準と `source_path` にだけ使い、`text` を設定として読む
+    /// （ADR 2026-10-22-dynamic-config: 書き戻す前に、編集後の本文を同じ検証に通す）。
+    pub fn load_text(path: &Path, text: &str) -> Result<Self, ConfigError> {
+        let mut cfg = Self::parse_with_delivery(text)?;
+        cfg.loaded_text = Some(text.to_string());
         let base = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())

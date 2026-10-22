@@ -95,6 +95,11 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     (
+        "PATCH",
+        "/api/v1/config/fields",
+        "human_only: ADR 2026-10-22-dynamic-config D5。config.toml の欄の変更（書き戻しと稼働中の差し替え）は人が設定画面で行う。",
+    ),
+    (
         "POST",
         "/api/v1/routing/stages",
         "human_only: ADR 2026-10-11-llm-source-model-routing-evaluation D3。enforce へ進めるのは人の承認だけ（戻すのは daemon）。",

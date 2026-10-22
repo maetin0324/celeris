@@ -1129,6 +1129,66 @@ export type CommitIntent = {
 
 export type Confidence = "high" | "medium" | "low";
 
+export type ConfigChangeView = {
+  "after"?: unknown;
+  "apply_unit": string;
+  "before"?: unknown;
+  "class": string;
+  "key": string;
+};
+
+export type ConfigEvent = {
+  "actor": string;
+  "after"?: unknown;
+  "apply_unit": string;
+  "before"?: unknown;
+  "class": string;
+  "id": number;
+  "key": string;
+  "ts": string;
+};
+
+export type ConfigEventList = {
+  "items": Array<ConfigEvent>;
+};
+
+export type ConfigFieldView = {
+  "apply_unit": string;
+  "class": string;
+  "key": string;
+  "pending_restart": boolean;
+  "reason": string;
+  "running"?: unknown;
+  "secret": boolean;
+  "value"?: unknown;
+};
+
+export type ConfigFieldsView = {
+  "config_path"?: string | null;
+  "fields": Array<ConfigFieldView>;
+  "rules": Array<ConfigRuleView>;
+};
+
+export type ConfigPatchBody = {
+  "changes": Array<ConfigPatchChange>;
+};
+
+export type ConfigPatchChange = {
+  "key": string;
+  "value": unknown;
+};
+
+export type ConfigPatchResult = {
+  "changes": Array<ConfigChangeView>;
+};
+
+export type ConfigRuleView = {
+  "apply_unit": string;
+  "class": string;
+  "key": string;
+  "reason": string;
+};
+
 export type ConfigView = {
   "api": ApiConfigView;
   "clusters"?: Array<ClusterConfigView>;

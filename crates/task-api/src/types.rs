@@ -319,6 +319,92 @@ pub struct ReloadResult {
     pub reloaded: bool,
 }
 
+/// config.toml の欄 1 つ（`GET /config/fields`。ADR 2026-10-22-dynamic-config D1）。`class` は
+/// `dynamic`（再起動なしに変えられる）・`startup`（起動時にしか決められない）・`seed`（DB が正）。
+/// `value` は設定ファイルの今の値、`running` は稼働中の daemon が使っている値（起動時のみの欄で、
+/// ファイルだけ書き換えて再起動していなければ `value` と違う）。secret の欄の値は伏せる。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigFieldView {
+    pub key: String,
+    pub class: String,
+    /// `next_tick` | `next_dispatch` | `next_request` | `restart` | `elsewhere`。
+    pub apply_unit: String,
+    pub reason: String,
+    pub secret: bool,
+    pub pending_restart: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running: Option<serde_json::Value>,
+}
+
+/// 分類表の 1 行（キーの前置き。最長一致）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigRuleView {
+    pub key: String,
+    pub class: String,
+    pub apply_unit: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigFieldsView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_path: Option<String>,
+    pub fields: Vec<ConfigFieldView>,
+    pub rules: Vec<ConfigRuleView>,
+}
+
+/// `PATCH /config/fields` の 1 変更。`value: null` は欄を消す（既定値に戻る）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigPatchChange {
+    pub key: String,
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigPatchBody {
+    pub changes: Vec<ConfigPatchChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigChangeView {
+    pub key: String,
+    pub class: String,
+    pub apply_unit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigPatchResult {
+    pub changes: Vec<ConfigChangeView>,
+}
+
+/// `GET /config/events` の 1 行（追記専用。ADR 2026-10-22-dynamic-config D4）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigEvent {
+    pub id: i64,
+    pub ts: String,
+    pub actor: String,
+    pub key: String,
+    pub class: String,
+    pub apply_unit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigEventList {
+    pub items: Vec<ConfigEvent>,
+}
+
 /// `GET /daemon`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DaemonView {

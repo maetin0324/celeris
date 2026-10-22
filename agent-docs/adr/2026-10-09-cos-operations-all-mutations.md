@@ -60,6 +60,7 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | PATCH | `/milestones/{id}` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/milestones/{id}/cancel` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/milestones/{id}/decide` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
+| PATCH | `/config/fields` | `human_only` | ADR 2026-10-22-dynamic-config D5。config.toml の欄の変更（書き戻しと稼働中の差し替え）は人が設定画面で行う。 |
 | POST | `/routing/stages` | `human_only` | ADR 2026-10-11-llm-source-model-routing-evaluation D3。enforce へ進めるのは人の承認だけ（戻すのは daemon）。 |
 | POST | `/milestones/{id}/pause` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/milestones/{id}/resume` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
@@ -242,6 +243,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/replay` | R | `handlers.rs` | 共通 |
 | DELETE | `/repos/{id}` | A | `repos.rs` | 共通 |
 | PATCH | `/repos/{id}` | A | `repos.rs` | 共通 |
+| PATCH | `/config/fields` | X: `human_only` | `handlers.rs` | 共通 |
 | POST | `/routing/stages` | X: `human_only` | `routing_stage.rs` | 共通 |
 | DELETE | `/secrets/{id}` | X: `secret_operations` | `handlers.rs` | 共通 |
 | PUT | `/secrets/{id}` | X: `secret_operations` | `handlers.rs` | 共通 |
@@ -447,3 +449,8 @@ D1 の「全変更を CoS の操作にする」に従い `account.limit_set`（�
 
 ADR 2026-10-11-llm-source-model-routing-evaluation D3 の `POST /routing/stages`（genre×harness の段階を人が変える）を
 `human_only` で除外した。`enforce` へ進めるのは人の承認だけで、CoS の operation からは変えられない（戻すのは daemon の guardrail）。
+
+## 付記: config の欄の変更は人だけ（2026-10-22）
+
+ADR 2026-10-22-dynamic-config の `PATCH /config/fields`（config.toml の動的な欄の書き戻しと稼働中の差し替え）を
+`human_only` で除外する。CoS は `daemon.reload`（人が書き換えたファイルの読み直し）だけを持つ。

@@ -56,6 +56,17 @@ pub enum AdminRequest {
         max_runs: Option<usize>,
         reply: oneshot::Sender<Result<(), AccountAdminError>>,
     },
+    /// ADR 2026-10-22-dynamic-config D2: `PATCH /config/fields`。検証してから config.toml へ書き戻し、
+    /// 稼働中の daemon に入れ、変更を `config_events` へ追記する。失敗したら何も変えない。
+    ConfigUpdate {
+        changes: Vec<crate::types::ConfigPatchChange>,
+        actor: String,
+        reply: oneshot::Sender<Result<crate::types::ConfigPatchResult, ConfigAdminError>>,
+    },
+    /// ADR 2026-10-22-dynamic-config D2: `GET /config/fields`（config.toml の欄と分類、稼働中の値）。
+    ConfigFields {
+        reply: oneshot::Sender<Result<crate::types::ConfigFieldsView, ConfigAdminError>>,
+    },
     /// ADR-0032 D5: `POST /clusters/{id}/connect`。コード無しで張れれば `kind = "connected"`、TOTP 等の
     /// プロンプトが要れば `kind = "needs_code"`。
     ClusterConnectStart {
@@ -186,4 +197,15 @@ pub enum ClusterAdminError {
     InvalidCode,
     /// 接続そのものの失敗（ssh の失敗、タイムアウト等）。
     Failed(String),
+}
+
+/// `ConfigUpdate` / `ConfigFields` の失敗（ADR 2026-10-22-dynamic-config）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigAdminError {
+    /// 値・欄の検証に落ちた（422。何も変えていない）。
+    Invalid(String),
+    /// 起動時にしか決められない欄、または secret の欄（422。再起動が要る旨を `detail` に持つ）。
+    RestartRequired(String),
+    /// 設定ファイルを読めない・書けない等（500）。
+    Internal(String),
 }

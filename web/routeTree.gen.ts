@@ -22,10 +22,11 @@ import { Route as HarnessesRouteImport } from './routes/harnesses'
 import { Route as HelpRouteImport } from './routes/help'
 import { Route as InboxRouteImport } from './routes/inbox'
 import { Route as LoginRouteImport } from './routes/login'
-import { Route as RoutingRouteImport } from './routes/routing'
 import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as ReleasesRouteImport } from './routes/releases'
 import { Route as ReportsRouteImport } from './routes/reports'
+import { Route as RoutingRouteImport } from './routes/routing'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as BrowserIndexRouteImport } from './routes/browser.index'
 import { Route as BrowserDevicesRouteImport } from './routes/browser.devices'
 import { Route as BrowserSettingsRouteImport } from './routes/browser.settings'
@@ -118,11 +119,6 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const RoutingRoute = RoutingRouteImport.update({
-  id: '/routing',
-  path: '/routing',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const NotificationsRoute = NotificationsRouteImport.update({
   id: '/notifications',
   path: '/notifications',
@@ -136,6 +132,16 @@ const ReleasesRoute = ReleasesRouteImport.update({
 const ReportsRoute = ReportsRouteImport.update({
   id: '/reports',
   path: '/reports',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RoutingRoute = RoutingRouteImport.update({
+  id: '/routing',
+  path: '/routing',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BrowserIndexRoute = BrowserIndexRouteImport.update({
@@ -285,10 +291,11 @@ export interface FileRoutesByFullPath {
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
-  '/routing': typeof RoutingRoute
   '/notifications': typeof NotificationsRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
+  '/routing': typeof RoutingRoute
+  '/settings': typeof SettingsRoute
   '/browser/devices': typeof BrowserDevicesRoute
   '/browser/settings': typeof BrowserSettingsRoute
   '/cron/$id': typeof CronIdRoute
@@ -330,10 +337,11 @@ export interface FileRoutesByTo {
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
-  '/routing': typeof RoutingRoute
   '/notifications': typeof NotificationsRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
+  '/routing': typeof RoutingRoute
+  '/settings': typeof SettingsRoute
   '/browser/devices': typeof BrowserDevicesRoute
   '/browser/settings': typeof BrowserSettingsRoute
   '/cron/$id': typeof CronIdRoute
@@ -376,10 +384,11 @@ export interface FileRoutesById {
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
-  '/routing': typeof RoutingRoute
   '/notifications': typeof NotificationsRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
+  '/routing': typeof RoutingRoute
+  '/settings': typeof SettingsRoute
   '/browser/devices': typeof BrowserDevicesRoute
   '/browser/settings': typeof BrowserSettingsRoute
   '/cron/$id': typeof CronIdRoute
@@ -423,10 +432,11 @@ export interface FileRouteTypes {
     | '/help'
     | '/inbox'
     | '/login'
-    | '/routing'
     | '/notifications'
     | '/releases'
     | '/reports'
+    | '/routing'
+    | '/settings'
     | '/browser/devices'
     | '/browser/settings'
     | '/cron/$id'
@@ -468,10 +478,11 @@ export interface FileRouteTypes {
     | '/help'
     | '/inbox'
     | '/login'
-    | '/routing'
     | '/notifications'
     | '/releases'
     | '/reports'
+    | '/routing'
+    | '/settings'
     | '/browser/devices'
     | '/browser/settings'
     | '/cron/$id'
@@ -513,10 +524,11 @@ export interface FileRouteTypes {
     | '/help'
     | '/inbox'
     | '/login'
-    | '/routing'
     | '/notifications'
     | '/releases'
     | '/reports'
+    | '/routing'
+    | '/settings'
     | '/browser/devices'
     | '/browser/settings'
     | '/cron/$id'
@@ -559,10 +571,11 @@ export interface RootRouteChildren {
   HelpRoute: typeof HelpRoute
   InboxRoute: typeof InboxRoute
   LoginRoute: typeof LoginRoute
-  RoutingRoute: typeof RoutingRoute
   NotificationsRoute: typeof NotificationsRoute
   ReleasesRoute: typeof ReleasesRoute
   ReportsRoute: typeof ReportsRoute
+  RoutingRoute: typeof RoutingRoute
+  SettingsRoute: typeof SettingsRoute
   BrowserDevicesRoute: typeof BrowserDevicesRoute
   BrowserSettingsRoute: typeof BrowserSettingsRoute
   CronIdRoute: typeof CronIdRoute
@@ -684,13 +697,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/routing': {
-      id: '/routing'
-      path: '/routing'
-      fullPath: '/routing'
-      preLoaderRoute: typeof RoutingRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/notifications': {
       id: '/notifications'
       path: '/notifications'
@@ -710,6 +716,20 @@ declare module '@tanstack/react-router' {
       path: '/reports'
       fullPath: '/reports'
       preLoaderRoute: typeof ReportsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/routing': {
+      id: '/routing'
+      path: '/routing'
+      fullPath: '/routing'
+      preLoaderRoute: typeof RoutingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/browser/': {
@@ -911,10 +931,11 @@ const rootRouteChildren: RootRouteChildren = {
   HelpRoute: HelpRoute,
   InboxRoute: InboxRoute,
   LoginRoute: LoginRoute,
-  RoutingRoute: RoutingRoute,
   NotificationsRoute: NotificationsRoute,
   ReleasesRoute: ReleasesRoute,
   ReportsRoute: ReportsRoute,
+  RoutingRoute: RoutingRoute,
+  SettingsRoute: SettingsRoute,
   BrowserDevicesRoute: BrowserDevicesRoute,
   BrowserSettingsRoute: BrowserSettingsRoute,
   CronIdRoute: CronIdRoute,

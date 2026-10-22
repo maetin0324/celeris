@@ -5331,6 +5331,206 @@
       ],
       "type": "string"
     },
+    "ConfigChangeView": {
+      "properties": {
+        "after": true,
+        "apply_unit": {
+          "type": "string"
+        },
+        "before": true,
+        "class": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "class",
+        "apply_unit"
+      ],
+      "type": "object"
+    },
+    "ConfigEvent": {
+      "description": "`GET /config/events` の 1 行（追記専用。ADR 2026-10-22-dynamic-config D4）。",
+      "properties": {
+        "actor": {
+          "type": "string"
+        },
+        "after": true,
+        "apply_unit": {
+          "type": "string"
+        },
+        "before": true,
+        "class": {
+          "type": "string"
+        },
+        "id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "key": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "ts",
+        "actor",
+        "key",
+        "class",
+        "apply_unit"
+      ],
+      "type": "object"
+    },
+    "ConfigEventList": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ConfigEvent"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "ConfigFieldView": {
+      "description": "config.toml の欄 1 つ（`GET /config/fields`。ADR 2026-10-22-dynamic-config D1）。`class` は\n`dynamic`（再起動なしに変えられる）・`startup`（起動時にしか決められない）・`seed`（DB が正）。\n`value` は設定ファイルの今の値、`running` は稼働中の daemon が使っている値（起動時のみの欄で、\nファイルだけ書き換えて再起動していなければ `value` と違う）。secret の欄の値は伏せる。",
+      "properties": {
+        "apply_unit": {
+          "description": "`next_tick` | `next_dispatch` | `next_request` | `restart` | `elsewhere`。",
+          "type": "string"
+        },
+        "class": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "pending_restart": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "running": true,
+        "secret": {
+          "type": "boolean"
+        },
+        "value": true
+      },
+      "required": [
+        "key",
+        "class",
+        "apply_unit",
+        "reason",
+        "secret",
+        "pending_restart"
+      ],
+      "type": "object"
+    },
+    "ConfigFieldsView": {
+      "properties": {
+        "config_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/ConfigFieldView"
+          },
+          "type": "array"
+        },
+        "rules": {
+          "items": {
+            "$ref": "#/$defs/ConfigRuleView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "fields",
+        "rules"
+      ],
+      "type": "object"
+    },
+    "ConfigPatchBody": {
+      "additionalProperties": false,
+      "properties": {
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/ConfigPatchChange"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "changes"
+      ],
+      "type": "object"
+    },
+    "ConfigPatchChange": {
+      "additionalProperties": false,
+      "description": "`PATCH /config/fields` の 1 変更。`value: null` は欄を消す（既定値に戻る）。",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": true
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    "ConfigPatchResult": {
+      "properties": {
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/ConfigChangeView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "changes"
+      ],
+      "type": "object"
+    },
+    "ConfigRuleView": {
+      "description": "分類表の 1 行（キーの前置き。最長一致）。",
+      "properties": {
+        "apply_unit": {
+          "type": "string"
+        },
+        "class": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "class",
+        "apply_unit",
+        "reason"
+      ],
+      "type": "object"
+    },
     "ConfigView": {
       "description": "`GET /config`: `config.toml` の要約。env の値・トークンは含めない。celeris が起動時に作る。",
       "properties": {
@@ -31614,6 +31814,19 @@
     "config": {
       "$ref": "#/$defs/ConfigView"
     },
+    "config_events": {
+      "$ref": "#/$defs/ConfigEventList"
+    },
+    "config_fields": {
+      "$ref": "#/$defs/ConfigFieldsView",
+      "description": "ADR 2026-10-22-dynamic-config: `GET/PATCH /config/fields` と `GET /config/events`。"
+    },
+    "config_patch": {
+      "$ref": "#/$defs/ConfigPatchBody"
+    },
+    "config_patch_result": {
+      "$ref": "#/$defs/ConfigPatchResult"
+    },
     "console": {
       "$ref": "#/$defs/ConsolePage",
       "description": "`GET /console` の応答と、その 1 ブロック（9 種）。"
@@ -32249,6 +32462,10 @@
     "cluster_settings_put",
     "cluster_settings",
     "local_settings_put",
+    "config_fields",
+    "config_patch",
+    "config_patch_result",
+    "config_events",
     "secrets",
     "secret_put",
     "account_list",

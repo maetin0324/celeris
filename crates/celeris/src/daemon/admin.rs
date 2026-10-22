@@ -4,7 +4,7 @@ use task_dispatch::Dispatcher;
 
 use super::adapters::build_harness_adapters;
 use super::clusters::ClusterMasters;
-use crate::{Config, accounts_admin, cluster_admin, config, notify};
+use crate::{Config, accounts_admin, cluster_admin, notify};
 
 /// ADR-0017 M2: API から委譲された `reload`/`check` を処理する。`reload` はその場で（`Dispatcher` を直接
 /// 差し替えるだけの軽い処理）、`check` は最大 30 秒かかりうるので tick をブロックしないよう `tokio::spawn` する。
@@ -140,6 +140,26 @@ pub(crate) async fn handle_admin_request(
         // を store から解き直し、次の tick から効かせる（走行中の run は止めない）。`workspace_root` は
         // 新しい task の足回りを用意するときに store から読むので、ここでは何もしない。
         task_api::AdminRequest::LocalSettingsChanged => local_settings_changed(dispatcher),
+        // ADR 2026-10-22-dynamic-config: config.toml の欄の閲覧と変更（検証 → 書き戻し → 反映 → 履歴）。
+        task_api::AdminRequest::ConfigFields { reply } => {
+            let _ = reply.send(super::config_admin::config_fields(config));
+        }
+        task_api::AdminRequest::ConfigUpdate {
+            changes,
+            actor,
+            reply,
+        } => {
+            let result = super::config_admin::config_update(dispatcher, config, changes, &actor);
+            if let Err(error) = &result {
+                tracing::warn!(
+                    who = "admin",
+                    op = "config_update",
+                    ?error,
+                    "config update rejected"
+                );
+            }
+            let _ = reply.send(result);
+        }
     }
 }
 
@@ -174,39 +194,27 @@ pub(crate) fn notify_test_outcome(
     }
 }
 
-/// `Config::load` を読み直し、稼働中のプロバイダ選定・アダプタ一式・次 tick のスナップショット提供元、
-/// および `[[roles]]` / `[[genres]]` / `[delegation]` / `[reports]` / `[notify]` / `[conversation]` / `[cos]` の
-/// 設定値を差し替える（Phase 44、実機 2026-09-18: `[[roles]] implementer` の `max_turns` を変えて
-/// reload しても、以前はプロバイダ・アダプタ・モデルしか差し替えなかったため、委譲された子の budget が
-/// 古い値のままだった）。失敗したら稼働中の状態には触れない（古い設定のまま動き続ける）。
-///
-/// S7: `[accounts]` は reload の対象外（`Dispatcher::accounts` はプロセス起動時に固定され、`AccountBook` の
-/// 保存先もそこから決まる）。`claude_dir` / `max_runs_per_account` / `check_model` のどれかが変わっていたら、
-/// 反映されない値のまま動き続けるより、エラーにしてタスクを止めずに知らせる（400。再起動が必要と伝える）。
-/// `[cos.attachments]` / `[cos] stream_retention_days` も API / GC に固定されるため変更を拒否する。
-/// `[[clusters]]` / `[api]` / `db` / `workspace_root` も同様に再起動が要る（reload では触れない。従来どおり）。
-/// `max_concurrency` は読み直すが、実効値は store の上書きが勝つ（ADR 2026-10-14-local-machine-settings D3）。
+/// 設定ファイルを読み直して稼働中の daemon に入れる（`POST /reload`・CoS `daemon.reload`）。
+/// 検証・反映は `PATCH /config/fields` と同じ `apply_config`（ADR 2026-10-22-dynamic-config D2）。
+/// 失敗したら稼働中の状態には触れない（古い設定のまま動き続ける）。
 pub fn reload_providers(dispatcher: &mut Dispatcher, config: &mut Config) -> Result<(), String> {
     let path = config
         .source_path
         .clone()
         .ok_or_else(|| "config was not loaded from a file; cannot reload".to_string())?;
     let new_config = Config::load(&path).map_err(|e| e.to_string())?;
-    if accounts_section_changed(&config.accounts, &new_config.accounts) {
-        return Err(
-            "[accounts] changed (claude_dir / max_runs_per_account / check_model); \
-             this section is not reloaded, restart celeris to apply the change"
-                .to_string(),
-        );
-    }
-    // Upload middleware and the background GC capture these values at startup.
-    if config.cos.attachments != new_config.cos.attachments
-        || config.cos.stream_retention_days != new_config.cos.stream_retention_days
-    {
-        return Err("[cos.attachments] or [cos] stream_retention_days changed; \
-             these settings are not reloaded, restart celeris to apply the change"
-            .to_string());
-    }
+    apply_config(dispatcher, config, new_config)
+}
+
+/// 読み直した `new_config` のうち動的な欄（`config::fields::RULES` の `dynamic`）を稼働中の daemon に入れる。
+/// 起動時にしか決められない欄（`[accounts]`・`[[clusters]]`・`[api]`・`db`・`workspace_root`・
+/// `[cos.attachments]` 等）は触らない（ファイルだけ変わっていれば設定画面が「再起動待ち」と出す）。
+/// 先に失敗しうる組み立てを全部済ませ、稼働中の状態を書き換えるのはそのあとだけにする。
+pub(crate) fn apply_config(
+    dispatcher: &mut Dispatcher,
+    config: &mut Config,
+    new_config: Config,
+) -> Result<(), String> {
     let cos_launch =
         super::cos_launch::build_cos_chat_launch(&new_config, &config.db.path, config.api.listen);
     let mut llm_route_registry = new_config.llm_route_registry().map_err(|e| e.to_string())?;
@@ -224,6 +232,7 @@ pub fn reload_providers(dispatcher: &mut Dispatcher, config: &mut Config) -> Res
         }
     }
     let harness_adapters = build_harness_adapters(&new_config).map_err(|e| e.to_string())?;
+    let credential_gates = new_config.credential_gates().map_err(|e| e.to_string())?;
     dispatcher
         .reload_account_limits()
         .map_err(|e| e.to_string())?;
@@ -231,65 +240,67 @@ pub fn reload_providers(dispatcher: &mut Dispatcher, config: &mut Config) -> Res
     // ADR 2026-10-11 llm-source-harness-selection: harness and source×model are chosen from these.
     dispatcher.set_llm_route_registry(llm_route_registry);
     dispatcher.set_harness_adapters(harness_adapters);
-    dispatcher.set_credential_gates(new_config.credential_gates().map_err(|e| e.to_string())?);
+    dispatcher.set_credential_gates(credential_gates);
     dispatcher.set_routing_mode(new_config.routing.mode);
     // ADR 2026-10-08 account-concurrency-limits §(d)(e): a stored implicit limit goes away when its
     // source is no longer declared without an account pool. Other stored limits survive.
     if let Err(error) = dispatcher.prune_implicit_account_limits() {
         tracing::warn!(%error, "cannot prune implicit account limits");
     }
-    // Phase 44: 役割・分野・委譲設定はディスパッチャ側（次に起動する run から効く）。
-    dispatcher.reload_config(
-        new_config.role_specs(),
-        new_config.genre_specs(),
-        new_config.delegation_limits(),
-    );
-    // Phase 44: `[reports]` / `[notify]` / `[conversation]` は celeris の tick ループが直接読むので、
-    // ここで `config` 自身を更新する（次 tick から効く）。他のフィールド（`[accounts]` / `[[clusters]]` /
-    // `[api]` / `db` / `workspace_root` 等）には触れない。
+    // ADR 2026-10-22-dynamic-config D2: dispatcher の動的な欄（役割・分野・委譲・execution・上限・待ち時間・
+    // 配送の既定の課…）は 1 つの `DispatchConfig` から入れる。実効の `max_concurrency` は store の上書きが勝つ。
+    dispatcher.apply_dispatch_config(new_config.dispatch_config());
+    dispatcher.refresh_max_concurrency();
+    // celeris の tick ループが直接読む欄は `config` 自身を更新する（次 tick から効く）。
+    // `[cos.attachments]` / `stream_retention_days` は upload の middleware と GC が起動時に持つので戻す。
+    let attachments = config.cos.attachments.clone();
+    let stream_retention_days = config.cos.stream_retention_days;
     config.roles = new_config.roles;
     config.genres = new_config.genres;
     config.delegation = new_config.delegation;
     config.reports = new_config.reports;
     config.notify = new_config.notify;
     config.cos = new_config.cos;
+    config.cos.attachments = attachments;
+    config.cos.stream_retention_days = stream_retention_days;
     config.conversation = new_config.conversation;
-    // tick_loop は `config.jev` が変わると分類段を作り直す。ここで書き戻さないと reload が効かない。
+    // tick_loop は `config.jev` が変わると分類段を作り直す。
     config.jev = new_config.jev;
+    config.routing = new_config.routing;
+    config.execution = new_config.execution;
+    config.plan = new_config.plan;
+    config.reviewer = new_config.reviewer;
+    config.review = new_config.review;
+    config.dispatch = new_config.dispatch;
+    config.error_cooldown_secs = new_config.error_cooldown_secs;
+    config.lease_grace_secs = new_config.lease_grace_secs;
+    config.idle_timeout_secs = new_config.idle_timeout_secs;
+    config.kill_grace_secs = new_config.kill_grace_secs;
+    config.review_timeout_secs = new_config.review_timeout_secs;
+    config.retry_backoff_base_secs = new_config.retry_backoff_base_secs;
+    config.retry_backoff_max_secs = new_config.retry_backoff_max_secs;
+    config.max_requeues = new_config.max_requeues;
+    config.sessions.rollover_tokens = new_config.sessions.rollover_tokens;
+    config.sessions.continuation_resume = new_config.sessions.continuation_resume;
+    config.routing_eval.reserved_runs = new_config.routing_eval.reserved_runs;
     config.selfdeploy.delivery_default_departments =
         new_config.selfdeploy.delivery_default_departments;
-    dispatcher.set_delivery_policy(task_ops::delivery::DeliveryPolicy {
-        default_departments: config.selfdeploy.delivery_default_departments.clone(),
-    });
-    // ADR 2026-10-07-build-tmp-hygiene D1.4: 掃除の roots と上限も reload で入れ替える。
+    // ADR 2026-10-07-build-tmp-hygiene D1.4: 掃除の roots と上限も入れ替える。
     config.maintenance = new_config.maintenance;
-    // ADR 2026-10-14-local-machine-settings D3: 設定ファイルの `max_concurrency` を入れ直す。store に上書きが
-    // あれば reload 後も store が勝つ（実効値は dispatcher が store と合わせて解く）。
     config.max_concurrency = new_config.max_concurrency;
-    dispatcher.set_config_max_concurrency(config.max_concurrency);
     dispatcher.set_target_sweep(config.target_sweep_params());
     dispatcher.set_target_sweep_scope(config.target_sweep_scope());
     // ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（tick の段 `disk_watch`）。
     dispatcher.set_disk_watch(config.disk_watch_entries());
+    config.llm_sources = new_config.llm_sources;
+    config.llm_routes = new_config.llm_routes;
+    config.route_defaults = new_config.route_defaults;
+    config.route_selection = new_config.route_selection;
+    config.harness_selection = new_config.harness_selection;
+    config.harness_declarations = new_config.harness_declarations;
+    config.harnesses = new_config.harnesses;
+    config.adapters = new_config.adapters;
     Ok(())
-}
-
-/// S7: `claude_dir` / `max_runs_per_account` / `check_model` のどれかが変わっていれば `true`
-/// （`None` ⇔ `Some` の変化も含む）。
-pub(crate) fn accounts_section_changed(
-    old: &Option<config::AccountsConfig>,
-    new: &Option<config::AccountsConfig>,
-) -> bool {
-    match (old, new) {
-        (None, None) => false,
-        (Some(o), Some(n)) => {
-            o.claude_dir != n.claude_dir
-                || o.codex_dir != n.codex_dir
-                || o.max_runs_per_account != n.max_runs_per_account
-                || o.check_model != n.check_model
-        }
-        _ => true,
-    }
 }
 
 #[cfg(test)]

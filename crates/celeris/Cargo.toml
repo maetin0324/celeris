@@ -37,6 +37,7 @@ serde_json = "1"
 # ADR-0064 D5（Phase 110a）: 背景チェックポイント（`db_maintenance.rs`）専用の接続を開くのに使う。
 rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 sha2 = "0.10"
+toml_edit = "0.22"
 
 [dev-dependencies]
 celeris-campaign = { path = "../campaign" }

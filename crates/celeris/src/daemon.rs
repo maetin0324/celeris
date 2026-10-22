@@ -27,6 +27,7 @@ pub(crate) mod classify_stage;
 pub(crate) mod classify_tick;
 pub(crate) mod clusters;
 pub(crate) mod completion_evidence_tick;
+pub(crate) mod config_admin;
 mod cos_launch;
 pub(crate) mod jev_key;
 pub(crate) mod routing_guardrail;

@@ -22,6 +22,7 @@ use crate::types::ValidationError;
 
 pub(crate) mod accounts;
 pub(crate) mod clusters;
+mod config_fields;
 pub(crate) mod org;
 pub(crate) mod projects;
 pub(crate) mod reload;
@@ -38,6 +39,10 @@ use accounts::{
 use clusters::{
     cancel_cluster_connect, clusters, put_cluster_settings, put_local_settings,
     start_cluster_connect, submit_cluster_connect_code,
+};
+use config_fields::{
+    get_events as config_events, get_fields as config_fields_get,
+    patch_fields as config_fields_patch,
 };
 use org::{create_org_node, delete_org_node, org_list, patch_browser_settings, patch_org_node};
 use projects::{
@@ -225,6 +230,11 @@ pub(crate) fn router(state: ApiState) -> Router {
         // ADR-0075 D6（Phase G1）: scratch pool の観測値（`celerisctl scratch status --json` と同じ schema）。
         .route("/api/v1/metrics/scratch", get(metrics_scratch))
         .route("/api/v1/config", get(config))
+        .route(
+            "/api/v1/config/fields",
+            get(config_fields_get).patch(config_fields_patch),
+        )
+        .route("/api/v1/config/events", get(config_events))
         .route("/api/v1/schema", get(schema))
         .fallback(fallback)
         .method_not_allowed_fallback(method_not_allowed)

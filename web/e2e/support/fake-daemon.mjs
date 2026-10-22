@@ -2476,6 +2476,54 @@ export function createFakeDaemon({
     ...cronFixtures,
     ...defaultFixtures,
     "/api/v1/tasks/T1/routing": routingAuditFixture,
+    "/api/v1/config/fields": {
+      config_path: "/home/u/.config/celeris/config.toml",
+      rules: [
+        {
+          key: "execution",
+          class: "dynamic",
+          apply_unit: "next_dispatch",
+          reason: "max_replans・continuation・並列度など",
+        },
+        { key: "db", class: "startup", apply_unit: "restart", reason: "DB の path と接続の設定" },
+      ],
+      fields: [
+        {
+          key: "execution.max_replans",
+          class: "dynamic",
+          apply_unit: "next_dispatch",
+          reason: "max_replans・continuation・並列度など",
+          secret: false,
+          value: 3,
+          running: 3,
+          pending_restart: false,
+        },
+        {
+          key: "db",
+          class: "startup",
+          apply_unit: "restart",
+          reason: "DB の path と接続の設定",
+          secret: false,
+          value: "celeris.db",
+          running: "celeris.db",
+          pending_restart: false,
+        },
+      ],
+    },
+    "/api/v1/config/events": {
+      items: [
+        {
+          id: 1,
+          ts: "2026-10-22T10:00:00Z",
+          actor: "admin",
+          key: "execution.max_replans",
+          class: "dynamic",
+          apply_unit: "next_dispatch",
+          before: 2,
+          after: 3,
+        },
+      ],
+    },
     "/api/v1/routing/stages": {
       stages: [
         {

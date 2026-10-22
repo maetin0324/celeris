@@ -1823,8 +1823,35 @@ impl Dispatcher {
                 .map_or(0, |chat| chat.running.len())
     }
 
-    pub fn set_delivery_policy(&mut self, policy: task_ops::delivery::DeliveryPolicy) {
-        self.config.delivery = policy;
+    /// ADR 2026-10-22-dynamic-config D2: 設定ファイルから組み直した `DispatchConfig` のうち、動的な欄を稼働中の
+    /// dispatcher に入れる。各判断点が `self.config` を読むので、反映の単位は欄ごとの次の tick・次の run から。
+    /// 起動時にしか決められない欄（`clusters`・`accounts`・`workspace_roots`・`memory_dir`・`releases_dir`・
+    /// `containers`・`knowledge`・build cache・scratch・worktree の接頭辞）は触らない。
+    pub fn apply_dispatch_config(&mut self, new: DispatchConfig) {
+        let c = &mut self.config;
+        c.delivery = new.delivery;
+        c.source_error_cooldown = new.source_error_cooldown;
+        c.config_max_concurrency = new.config_max_concurrency;
+        c.lease_grace = new.lease_grace;
+        c.idle_timeout = new.idle_timeout;
+        c.kill_grace = new.kill_grace;
+        c.review_timeout = new.review_timeout;
+        c.plan_auto_accept = new.plan_auto_accept;
+        c.retry_backoff_base = new.retry_backoff_base;
+        c.retry_backoff_max = new.retry_backoff_max;
+        c.reviewer_hint = new.reviewer_hint;
+        c.reviewer_tier_override = new.reviewer_tier_override;
+        c.cluster_cooldown = new.cluster_cooldown;
+        c.max_requeues = new.max_requeues;
+        c.max_reviewer_retries = new.max_reviewer_retries;
+        c.max_infra_retries = new.max_infra_retries;
+        c.min_free_disk_mb = new.min_free_disk_mb;
+        c.roles = new.roles;
+        c.genres = new.genres;
+        c.delegation = new.delegation;
+        c.session_rollover_tokens = new.session_rollover_tokens;
+        c.execution = new.execution;
+        c.eval = new.eval;
     }
 
     pub fn config(&self) -> &DispatchConfig {
@@ -1884,21 +1911,6 @@ impl Dispatcher {
     /// ADR-0013 D4: tick ごとにデーモンのスナップショットを `watch` に送るようにする。
     pub fn set_snapshot_publisher(&mut self, publisher: SnapshotPublisher) {
         self.publisher = Some(publisher);
-    }
-
-    /// Phase 44（実機 2026-09-18）: `POST /reload` で `[[roles]]` / `[[genres]]` / `[delegation]` も読み直す。
-    /// 実行中の run はそれぞれ `spawn_worker`
-    /// 時点でこれらの値の写しを既に掴んでいるので、反映されるのは**次に起動する run から**
-    /// （委譲で作られる子の budget を含む）。
-    pub fn reload_config(
-        &mut self,
-        roles: Vec<RoleSpec>,
-        genres: Vec<GenreSpec>,
-        delegation: DelegationLimits,
-    ) {
-        self.config.roles = roles;
-        self.config.genres = genres;
-        self.config.delegation = delegation;
     }
 
     /// reload で読み直した設定ファイルの `max_concurrency` を入れ、実効値を解き直す

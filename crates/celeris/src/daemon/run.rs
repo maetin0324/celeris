@@ -44,10 +44,8 @@ pub(crate) fn serves_llm_proxy(mode: DaemonMode) -> bool {
 /// ADR-0040 D4: 起動時に `daemon_instances` を見て役割を決める（同じ `release` の `active` がいれば
 /// 何もせず `Exit::DuplicateRelease`＝ exit 3）。
 pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> {
-    // Phase 44（実機 2026-09-18）: `POST /reload` が `[[roles]]` / `[[genres]]` / `[delegation]` /
-    // `[reports]` / `[notify]` / `[conversation]` の設定値も読み直せるよう、tick ループにはこの
-    // `Config` を `&mut` で渡す（`[accounts]` / `[[clusters]]` / `[api]` / `db` / `workspace_root` は
-    // 従来どおり再起動が要る。`reload_providers` がそれ以外のフィールドには触れない）。
+    // ADR 2026-10-22-dynamic-config: `POST /reload` と `PATCH /config/fields` は動的な欄（`config::fields::RULES`）を
+    // この `Config` と dispatcher に入れる（tick ループに `&mut` で渡す）。起動時にしか決められない欄は再起動が要る。
     let mut config = config;
     let verify = opts.mode == DaemonMode::Verify;
     // ADR-0041 D5（Phase 51）: verify の celeris は `genre = "smoke"` を 1 件だけ流せる。その llm source・harness・

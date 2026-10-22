@@ -518,6 +518,9 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 221 | GET | `/routing-eval/trials` | 評価試行の一覧（`?batch_id=` / `?status=`。`check_cmd` は返さない。§3.133.2） | `EvalTrialList` | store `eval_trials_list` |
 | 222 | POST | `/routing-eval/trials/{trial_id}/cancel` | 評価試行の取り消し（`queued` / `running` だけ。終端は 409。§3.133.3） | `EvalTrialView` | store `eval_trial_cancel` |
 | 223 | PUT | `/clusters/local/settings` | ローカルマシンの `workspace_root`・`max_concurrency` の上書きを全置換する（ADR 2026-10-14-local-machine-settings。§3.126.23）（**管理系**） | `LocalMachineView` | store `local_settings_set` + celeris（`AdminRequest::LocalSettingsChanged`） |
+| 224 | GET | `/config/fields` | config.toml の欄の一覧（分類・反映の単位・設定ファイルの値・稼働中の値・再起動待ち・分類表。secret の値は `<redacted>`。ADR 2026-10-22-dynamic-config D1。**管理系**） | `ConfigFieldsView` | celeris（設定ファイル + 起動時の本文） |
+| 225 | PATCH | `/config/fields` | 動的な欄を検証してから config.toml に書き戻し（コメント・並びは保つ）、稼働中の daemon に入れる。`{changes:[{key, value}]}`、`value: null` は欄を消す。起動時のみ・種・secret の欄、不正値は 422（`config_restart_required` / `config_invalid`）で何も変えない。人だけ（CoS の operation には無い。**管理系**） | 200 `ConfigPatchResult` | celeris + `config_events` |
+| 226 | GET | `/config/events` | config の変更履歴（新しい順、最大 200 件。誰が・いつ・どの欄を・前後の値。secret の値は出ない） | `ConfigEventList` | store `config_events`（追記専用） |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 

@@ -399,7 +399,7 @@ fn api_settings_carries_secrets_dir_and_usage() {
 /// S7: `[accounts]` は reload の対象外。`claude_dir` / `max_runs_per_account` / `check_model` のどれかが
 /// 変わっていたら `reload` はエラー（400 に写る文字列）を返し、稼働中の状態には触れない。
 #[test]
-fn reload_providers_rejects_changes_to_the_accounts_section() {
+fn reload_providers_keeps_the_startup_only_accounts_section_and_flags_a_pending_restart() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let accounts_dir = dir.path().join("accounts");
     std::fs::create_dir_all(&accounts_dir).unwrap_or_else(|e| panic!("{e}"));
@@ -433,11 +433,26 @@ fn reload_providers_rejects_changes_to_the_accounts_section() {
     assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
     assert_eq!(dispatcher.account_max_runs("claude-code", "a"), Some(4));
 
-    // max_runs_per_account を変えると、次の reload はエラーになる。
+    // max_runs_per_account は起動時にしか決められない欄（ADR 2026-10-22-dynamic-config）: reload は断らず、
+    // 稼働中の値は変えず、設定画面が「再起動待ち」と出す。
     write_config(3);
-    let err = reload_providers(&mut dispatcher, &mut config).unwrap_err();
-    assert!(err.contains("[accounts]"), "{err}");
-    assert!(err.contains("restart"), "{err}");
+    reload_providers(&mut dispatcher, &mut config).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        dispatcher
+            .config()
+            .accounts
+            .as_ref()
+            .map(|a| a.max_runs_per_account),
+        Some(2)
+    );
+    let view =
+        crate::daemon::config_admin::config_fields(&config).unwrap_or_else(|e| panic!("{e:?}"));
+    let field = view
+        .fields
+        .iter()
+        .find(|f| f.key == "accounts.max_runs_per_account")
+        .unwrap_or_else(|| panic!("field is listed"));
+    assert!(field.pending_restart);
 }
 
 /// ADR 2026-10-08 account-concurrency-limits §(d)(e)（人の決定 implicit-account）: a declared LLM source

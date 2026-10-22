@@ -91,7 +91,7 @@ pub mod types;
 pub use admin::{
     AccountAdminError, AccountCheckOutcome, AccountCheckResult, AccountLoginCodeOutcome,
     AccountLoginStartOutcome, AdminRequest, ClusterAdminError, ClusterConnectCodeOutcome,
-    ClusterConnectStartOutcome, NotifyAdminError, NotifyTestOutcome,
+    ClusterConnectStartOutcome, ConfigAdminError, NotifyAdminError, NotifyTestOutcome,
 };
 pub use approvals::{
     ApprovalDecideBody, ApprovalDecideResult, ApprovalList, StandingRuleCreateBody,
@@ -130,6 +130,10 @@ pub use types::{
     ReleasePromotionRelease, ReleaseRunning, ReleaseVerify, Releases, RetryBody,
     ReviewerConfigView, RoleConfigView, RunList, SecretList, SecretPutBody, SecretPutResult,
     SecretUse, SecretView, StreamHeartbeat, StreamHello, StreamReset, ValidationError,
+};
+pub use types::{
+    ConfigChangeView, ConfigEvent, ConfigEventList, ConfigFieldView, ConfigFieldsView,
+    ConfigPatchBody, ConfigPatchChange, ConfigPatchResult, ConfigRuleView,
 };
 pub use types::{HarnessCandidateView, HarnessRuleView, HarnessView};
 // ---- ADR-0043（Phase 52）: 案件のリポジトリとファイル閲覧 ----

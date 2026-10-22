@@ -20,9 +20,10 @@ use crate::transition::{Outcome, Trigger};
 use crate::write_set::WriteSetRecord;
 
 use super::{
-    ClusterConnectionRecord, ClusterSettings, EventRow, ExecutionMetricsTaskRow, ListFilter,
-    ListOrder, LocalSettings, LocalSettingsEvent, LocalSettingsOverrides, Page, ProjectPlanApply,
-    SqliteStore, StoreError, TaskStore, TaskWithEvents, TreeAdoption,
+    ClusterConnectionRecord, ClusterSettings, ConfigEventRow, EventRow, ExecutionMetricsTaskRow,
+    ListFilter, ListOrder, LocalSettings, LocalSettingsEvent, LocalSettingsOverrides,
+    NewConfigEvent, Page, ProjectPlanApply, SqliteStore, StoreError, TaskStore, TaskWithEvents,
+    TreeAdoption,
 };
 
 impl TaskStore for SqliteStore {
@@ -802,6 +803,18 @@ impl TaskStore for SqliteStore {
         now: OffsetDateTime,
     ) -> Result<Option<LocalSettings>, StoreError> {
         self.local_settings_set_impl(overrides, actor, now)
+    }
+
+    fn config_events_append(
+        &self,
+        events: &[NewConfigEvent],
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        self.config_events_append_impl(events, now)
+    }
+
+    fn config_events_recent(&self, limit: usize) -> Result<Vec<ConfigEventRow>, StoreError> {
+        self.config_events_recent_impl(limit)
     }
 
     fn local_settings_events(&self) -> Result<Vec<LocalSettingsEvent>, StoreError> {

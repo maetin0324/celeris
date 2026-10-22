@@ -6,19 +6,17 @@
 // /browser/runs が relay_unavailable に落ちて、本当の理由が見えなかった。
 import assert from "node:assert/strict";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { createApp } from "./app.js";
+import { makeSocketDir } from "./socket-path.js";
 
 const dir = mkdtempSync(path.join(tmpdir(), "celeris-browser-live-prod-"));
-const socketDir = mkdtempSync(
-  path.join(Buffer.byteLength(path.join(tmpdir(), "cbp-XXXXXX", "owner.sock")) <= 107 ? tmpdir() : "/tmp", "cbp-"),
-);
-chmodSync(socketDir, 0o700);
+const socketDir = makeSocketDir("cbp-", "owner.sock");
 const keyFile = path.join(dir, "key");
 const passwordFile = path.join(dir, "password");
 const tokenFile = path.join(dir, "token");
@@ -213,6 +211,8 @@ after(async () => {
     server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
   }
+  rmSync(dir, { recursive: true, force: true });
+  rmSync(socketDir, { recursive: true, force: true });
 });
 
 /** frame の WebSocket を開き、101 と `until` を含む frame、または拒否・切断までの応答を返す。 */

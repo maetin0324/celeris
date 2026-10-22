@@ -8,12 +8,11 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { createApp } from "./app.js";
 import { liveAvailability, parseLiveUpstream } from "./browser-live.js";
+import { makeSocketDir } from "./socket-path.js";
 
 const dir = mkdtempSync(path.join(tmpdir(), "celeris-browser-live-"));
-const socketDir = mkdtempSync(
-  path.join(Buffer.byteLength(path.join(tmpdir(), "cbl-XXXXXX", "owner.sock")) <= 107 ? tmpdir() : "/tmp", "cbl-"),
-);
-chmodSync(socketDir, 0o700);
+// startWeb は device-owner-<連番>.sock を作る。連番は 4 桁まで見込む。
+const socketDir = makeSocketDir("cbl-", "device-owner-9999.sock");
 const keyFile = path.join(dir, "key");
 const passwordFile = path.join(dir, "password");
 const tokenFile = path.join(dir, "token");
@@ -737,15 +736,25 @@ async function startWeb({ probe = false } = {}) {
     log: (entry) => webLogs.push(entry),
   });
   const server = webApp.listen(0, "127.0.0.1");
-  const url = await new Promise((resolve) =>
-    server.once("listening", () => resolve(`http://127.0.0.1:${server.address().port}`)),
-  );
-  const ownerServer = webApp.locals.browserLive.startSocket();
-  if (ownerServer) {
-    await new Promise((resolve, reject) => {
-      ownerServer.once("listening", resolve);
-      ownerServer.once("error", reject);
-    });
+  const url = await new Promise((resolve, reject) => {
+    server.once("listening", () => resolve(`http://127.0.0.1:${server.address().port}`));
+    server.once("error", reject);
+  });
+  // owner socket が開けなければ（path が長い・dir が私有でない・listen 失敗）即座に reject する。
+  // 宙づりにすると node --test が 'Promise resolution is still pending' のまま止まる。
+  let ownerServer;
+  try {
+    ownerServer = webApp.locals.browserLive.startSocket();
+    if (ownerServer) {
+      await new Promise((resolve, reject) => {
+        ownerServer.once("listening", resolve);
+        ownerServer.once("error", reject);
+      });
+    }
+  } catch (error) {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+    throw error;
   }
   return {
     url,

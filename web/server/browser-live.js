@@ -6,6 +6,7 @@ import { createServer as createSocketServer } from "node:net";
 import path from "node:path";
 import express from "express";
 import { parseUpstream, readTokenFile } from "./relay.js";
+import { assertSocketPath } from "./socket-path.js";
 
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const ENTRY = /^\/browser\/live\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9_-]{1,64})(\/.*)?$/;
@@ -552,6 +553,7 @@ export function createBrowserLive({
   function startSocket() {
     // probe の web は本番の owner socket を開かない（D7）。
     if (!ownerSocket || probe) return null;
+    assertSocketPath(ownerSocket);
     const dir = statSync(path.dirname(ownerSocket));
     if (dir.mode & 0o077 || dir.uid !== process.getuid())
       throw new Error("browser owner socket directory must be private");

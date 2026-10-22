@@ -7,7 +7,7 @@ import type { Page } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { type BrowserBackendOptions, createFakeDaemon, type FakeDaemonOptions } from "./fake-daemon.mjs";
 import { startGateway } from "./gateway";
-import { makeTmpDir } from "./tmp-dir";
+import { makeSocketTmpDir, makeTmpDir } from "./tmp-dir";
 
 // browser e2e 用の gateway（ADR 2026-10-05-browser-department-web-live-view D2）。一時 dir に password file・
 // 0600 の Ed25519 鍵・owner socket を用意し、偽 daemon（browser backend 付き）と偽 dashboard（loopback の
@@ -162,7 +162,8 @@ export async function startBrowserGateway(options: BrowserGatewayOptions = {}) {
   const passwordFile = path.join(dir, "password");
   const tokenFile = path.join(dir, "token");
   const keyFile = path.join(dir, "attestation.key");
-  const ownerSocket = path.join(dir, "owner.sock");
+  const socketDir = makeSocketTmpDir("cwb-", "owner.sock");
+  const ownerSocket = path.join(socketDir, "owner.sock");
   const keys = generateKeyPairSync("ed25519");
   writeFileSync(passwordFile, `${BROWSER_E2E_PASSWORD}\n`, { mode: 0o600 });
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`, { mode: 0o600 });
@@ -275,6 +276,7 @@ export async function startBrowserGateway(options: BrowserGatewayOptions = {}) {
       await dashboard.close();
       await daemon.close();
       rmSync(dir, { recursive: true, force: true });
+      rmSync(socketDir, { recursive: true, force: true });
     },
   };
 }

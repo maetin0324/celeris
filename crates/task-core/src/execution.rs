@@ -768,16 +768,17 @@ fn classify_command(cmd: &str, reason: &str) -> Option<RepairClass> {
     if MERGE_BASE_ANCESTOR_WORDS.iter().all(|w| c.contains(w)) {
         return Some(RepairClass::MergeBase);
     }
-    // ADR 2026-10-22-stalled-auto-replan D6: compile error は cmd の種類（`gradle test`・`cargo test` など）より先に
-    // 見る（test の数で分類すると Substantive になり、repair を作らずに replan を繰り返した）。
-    if is_compile_error(reason) {
-        return Some(RepairClass::Build);
-    }
     if FMT_COMMAND_WORDS.iter().any(|w| c.contains(w)) {
         return Some(RepairClass::Format);
     }
     if LINT_COMMAND_WORDS.iter().any(|w| c.contains(w)) {
         return Some(RepairClass::Lint);
+    }
+    // ADR 2026-10-22-stalled-auto-replan D6: compile error は test の cmd（`gradle test`・`cargo test` など）の
+    // 分類より先に見る（test の数で分類すると Substantive になり、repair を作らずに replan を繰り返した）。fmt・lint の
+    // cmd は上で決まる（clippy の失敗の出力にも `error: could not compile` が出るが、Lint のまま）。
+    if is_compile_error(reason) {
+        return Some(RepairClass::Build);
     }
     if TEST_COMMAND_WORDS.iter().any(|w| c.contains(w)) {
         return match failed_test_count(reason) {

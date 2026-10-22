@@ -38,10 +38,10 @@ check の書き方（`bash -c` の包み・`set -e`・`JAVA_HOME` の export）�
   `REPLAN_STALLED_QUESTION_PREFIX`（「同じ失敗で進展の無い replan が続いたので自動 replan を止めました」）。回答は
   上限を使い切った後の質問と同じく人の replan の依頼として扱い、上限に数えない（`answered_replan_exhausted` が両方の頭を
   認める）。統合の失敗では統合 WU を `blocked(question)` にし、`QuestionRaised` に本文を残す（上限切れと同じ形）。
-- D6（compile error の分類）: `classify_command` は cmd の種類より先に reason（stdout/stderr の tail）を見て、compile error
+- D6（compile error の分類）: `classify_command` は merge-base・fmt・lint の cmd の判定の後、test の cmd の判定（失敗数）より先に reason（stdout/stderr の tail）を見て、compile error
   （行頭の `e: file://`、`Compilation error`、`error[E`、`error: could not compile`）なら新しい `RepairClass::Build`
   （bucket `build`、予算 30 turn / 1800 秒）にする。統合の検査の失敗は repair WU（Task の worktree）になり、`max_repairs`・
-  同じ class の上限は今どおり。最終レビューの決定的 check の compile error も同じ分類で repair になる。repair が直せない
+  同じ class の上限は今どおり。fmt・lint の cmd（`cargo clippy` の失敗の出力にも `error: could not compile` が出る）は今どおり Format・Lint。最終レビューの決定的 check の compile error も同じ分類で repair になる。repair が直せない
   （環境の問題）なら repair WU は `plan_issue` / 失敗で終わる。repair WU の key は回ごとに違う（`repair-<phase>-<n>`）ので D4 の連なりにはならないが、回数は `max_repairs`・同じ class の上限（既定 2）で止まり、その後の統合の失敗は D4 / D7 で止まる（自動 replan は高々 repair の数 + 1）。
 - D7（done の check だけの計画）: 直前の自動 replan が `source: integration` で、その後に人の依頼が無いとき、planner の
   replan（`origin: planner`）が done の unit の `checks` しか変えない（done の unit の checks を前の版に戻すと、unit・段階が
@@ -54,6 +54,6 @@ check の書き方（`bash -c` の包み・`set -e`・`JAVA_HOME` の export）�
 - 人の `intent=replan`（ADR 2026-10-22-plan-issue-answer-replans）の replan を上限に数えない挙動は変えない。
 
 ## 影響
-- `Event` に `AutoReplanRequested` が増える（API の schema には出ない。events の種類名は `auto_replan_requested`）。
+- `Event` に `AutoReplanRequested` が増える（events の種類名は `auto_replan_requested`。API の schema（docs/api/v1・web/api/generated）に出るので、web の realtime の種類一覧 `web/api/realtime/event-kinds.ts` と無効化表 `invalidation-map.ts`（timeline と実行の欄 `T`・`E`）にも足す）。
 - `RepairClass` に `Build` が増える（`RepairScheduled.class` に `build` が出得る）。
 - 旧い挙動（同じ失敗でも `max_replans` まで回し続ける）は残さない。

@@ -27,6 +27,15 @@ tasks: [01M5HZ7JR0K9C9EN6BGE8T25XV]
   celeris の jev_key / classify_tick の 3 件が負荷下で落ちた（単独再実行 3 passed、2 回目の全体実行で pass。変更とは無関係）。
 - `cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
 
+## 再試行（attempt 2、レビューの差し戻し）
+- web の realtime: `web/api/realtime/event-kinds.ts`（EVENT_KINDS）と `invalidation-map.ts`（`auto_replan_requested: T・E`）に
+  新しい event を足した（足さないと invalidation-map.test.ts が 2 件落ち、SSE で届いた event で invalidator が例外）。
+  ADR の影響節の「API の schema には出ない」を直した。
+- 軽微: compile error の判定を fmt・lint の cmd の判定の後へ移した（clippy の失敗は Lint のまま。task-core の試験に追加）。
+- 証拠: `pnpm exec vitest run api/realtime`（web）3 files・61 passed。`bash scripts/dev/test-affected.sh` exit 0
+  （6274 passed, 16 skipped、ログは artifacts/test-affected.log）。`cargo clippy --workspace -- -D warnings` exit 0、
+  `cargo fmt --all -- --check` exit 0。
+
 ## 未解決事項
 - repair WU（`repair-<phase>-<n>`）の plan_issue からの replan は key が回ごとに違うので連なりにならない（`max_repairs_per_class`
   で止まる。自動 replan は高々 repair の数 + 1）。

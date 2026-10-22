@@ -370,6 +370,14 @@ fn classifies_a_compile_error_as_build() {
     assert!(!crate::execution::is_compile_error(
         "stderr_tail=\"unresolved reference: file:///x\""
     ));
+    // clippy の失敗の出力にも `error: could not compile` が出る。lint の cmd は Lint のまま。
+    assert_eq!(
+        classify_review_failure(&[command(
+            "cargo clippy --workspace -- -D warnings",
+            "stderr_tail=\"error: unused variable\\nerror: could not compile `x` (lib) due to 1 previous error\""
+        )]),
+        RepairDecision::Repairable(RepairClass::Lint)
+    );
 }
 
 #[test]

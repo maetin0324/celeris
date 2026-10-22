@@ -130,6 +130,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   execution_routed: { sets: ["T", "E"] },
   execution_hint_set: { sets: TLE },
   repair_scheduled: { sets: TLE },
+  // ADR 2026-10-22-stalled-auto-replan: 自動 replan の依頼の記録。timeline と実行の欄だけを古くする。
+  auto_replan_requested: { sets: ["T", "E"] },
   quota_estimated: { sets: ["T", "R", "E", "accounts", "metrics", "P"] },
   work_unit_committed: { sets: ["T", "E", "changes", "files", "artifacts", "P"] },
   phase_integrated: { sets: ["T", "E", "changes", "files", "artifacts", "P"] },

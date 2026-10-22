@@ -60,6 +60,7 @@ export const EVENT_KINDS = [
   "execution_routed",
   "execution_hint_set",
   "repair_scheduled",
+  "auto_replan_requested",
   "quota_estimated",
   "work_unit_committed",
   "phase_integrated",

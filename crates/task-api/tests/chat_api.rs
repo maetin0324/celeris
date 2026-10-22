@@ -8,14 +8,26 @@ use time::OffsetDateTime;
 
 const BASE: &str = "/api/v1/chat/threads";
 
-fn thread_body(key: &str, title: &str) -> Value {
-    json!({"title":title,"project_id":null,"client_thread_id":key})
+/// ADR 2026-10-22-cos-fixed-threads D2: the body only names the scope (a project or the general CoS).
+fn thread_body(project_id: Option<&str>) -> Value {
+    json!({ "project_id": project_id })
 }
 
-async fn create(app: &axum::Router, key: &str, title: &str) -> Value {
-    let response = send(app, post_admin(BASE, &thread_body(key, title))).await;
-    assert_eq!(response.status.as_u16(), 201, "{}", response.text());
+/// Opens the CoS thread of a new project titled `title` (one thread per project).
+async fn create(env: &TestEnv, app: &axum::Router, title: &str) -> Value {
+    let project = project_cos_thread(&env.store, title)
+        .project_id
+        .expect("project");
+    let response = send(app, post_admin(BASE, &thread_body(Some(&project)))).await;
+    assert_eq!(response.status.as_u16(), 200, "{}", response.text());
     response.json()["thread"].clone()
+}
+
+/// A legacy thread (migration 0092 keeps old conversations as legacy; only they can be archived).
+fn legacy(env: &TestEnv) -> String {
+    env.store
+        .chat_legacy_default_thread(None, OffsetDateTime::now_utc())
+        .expect("legacy thread")
 }
 
 fn message_body(key: &str, text: &str) -> Value {
@@ -26,21 +38,27 @@ fn message_body(key: &str, text: &str) -> Value {
 async fn chat_api_create_list_search_and_patch() {
     let env = admin_env();
     let app = env.router();
-    let first = create(&app, "key-one", "Alpha moon").await;
+    let first = create(&env, &app, "Alpha moon").await;
     let id = first["id"].as_str().expect("id");
+    assert_eq!(first["kind"], "project");
+    assert_eq!(first["title"], "CoS: Alpha moon");
     let again = send(
         &app,
-        post_admin(BASE, &thread_body("key-one", "Alpha moon")),
+        post_admin(BASE, &thread_body(first["project_id"].as_str())),
     )
     .await;
     assert_eq!(again.status.as_u16(), 200);
     assert_eq!(again.json()["thread"]["id"], id);
     assert_problem(
-        &send(&app, post_admin(BASE, &thread_body("key-one", "other"))).await,
-        409,
-        "chat_conflict",
+        &send(
+            &app,
+            post_admin(BASE, &thread_body(Some("no-such-project"))),
+        )
+        .await,
+        422,
+        "validation",
     );
-    create(&app, "key-two", "Beta sun").await;
+    create(&env, &app, "Beta sun").await;
     let page = send(&app, get_admin(&format!("{BASE}?limit=1")))
         .await
         .json();
@@ -83,23 +101,36 @@ async fn chat_api_create_list_search_and_patch() {
     let rev = changed.json()["thread"]["revision"]
         .as_u64()
         .expect("revision");
-    let archived = send(
+    // A CoS thread stays open (ADR 2026-10-22-cos-fixed-threads D1).
+    assert_problem(
+        &send(
+            &app,
+            patch_admin(
+                &format!("{BASE}/{id}"),
+                &json!({"status":"archived","expected_revision":rev}),
+            ),
+        )
+        .await,
+        409,
+        "chat_conflict",
+    );
+    let general = send(&app, post_admin(BASE, &thread_body(None))).await;
+    assert_eq!(general.status.as_u16(), 201);
+    assert_eq!(general.json()["thread"]["kind"], "general");
+    let read = send(
         &app,
-        patch_admin(
-            &format!("{BASE}/{id}"),
-            &json!({"status":"archived","expected_revision":rev}),
-        ),
+        post_admin(&format!("{BASE}/{id}/read"), &json!({"through_seq": 5})),
     )
     .await;
-    assert_eq!(archived.status.as_u16(), 200);
-    assert_eq!(archived.json()["thread"]["status"], "archived");
+    assert_eq!(read.status.as_u16(), 200, "{}", read.text());
+    assert_eq!(read.json()["thread"]["unread_count"], 0);
 }
 
 #[tokio::test]
 async fn chat_api_post_replay_limits_and_cancel() {
     let env = admin_env();
     let app = env.router();
-    let thread = create(&app, "message-thread", "Messages").await;
+    let thread = create(&env, &app, "Messages").await;
     let id = thread["id"].as_str().expect("id");
     let path = format!("{BASE}/{id}/messages");
     let body = message_body("one", "hello moon");
@@ -148,7 +179,7 @@ async fn chat_api_post_replay_limits_and_cancel() {
 async fn chat_api_queue_limit_and_run_stop_resume() {
     let env = admin_env();
     let app = env.router();
-    let thread = create(&app, "run-thread", "Run").await;
+    let thread = create(&env, &app, "Run").await;
     let id = thread["id"].as_str().expect("id").to_owned();
     let path = format!("{BASE}/{id}/messages");
     for n in 0..100 {
@@ -244,7 +275,7 @@ async fn chat_api_auth_and_input_errors() {
     let app = env.router();
     assert_problem(&send(&app, get(BASE)).await, 401, "unauthorized");
     assert_problem(
-        &send(&app, post_json(BASE, &thread_body("unauth", "Title"))).await,
+        &send(&app, post_json(BASE, &thread_body(None))).await,
         401,
         "unauthorized",
     );
@@ -253,7 +284,7 @@ async fn chat_api_auth_and_input_errors() {
             &app,
             post_json_with(
                 BASE,
-                &thread_body("cross-origin", "Title"),
+                &thread_body(None),
                 &[
                     ("authorization", "Bearer s3cret-token-value"),
                     ("origin", "https://example.invalid"),
@@ -264,7 +295,7 @@ async fn chat_api_auth_and_input_errors() {
         403,
         "origin_forbidden",
     );
-    let mut unknown = thread_body("key", "Title");
+    let mut unknown = thread_body(None);
     unknown["kind"] = json!("inbox");
     assert_problem(
         &send(&app, post_admin(BASE, &unknown)).await,
@@ -272,14 +303,7 @@ async fn chat_api_auth_and_input_errors() {
         "bad_request",
     );
     assert_problem(
-        &send(
-            &app,
-            post_admin(
-                BASE,
-                &json!({"title":3,"project_id":null,"client_thread_id":"key"}),
-            ),
-        )
-        .await,
+        &send(&app, post_admin(BASE, &json!({"project_id":"missing"}))).await,
         422,
         "validation",
     );
@@ -294,7 +318,7 @@ async fn chat_api_auth_and_input_errors() {
 async fn chat_api_disabled_send_is_unavailable() {
     let env = admin_env();
     let app = env.router();
-    let thread = create(&app, "disabled-thread", "Disabled").await;
+    let thread = create(&env, &app, "Disabled").await;
     let id = thread["id"].as_str().expect("id");
     let disabled = task_api::router(env.state.clone().with_cos_enabled(false));
     assert_problem(
@@ -315,9 +339,9 @@ async fn chat_api_disabled_send_is_unavailable() {
 async fn chat_api_list_status_filter() {
     let env = admin_env();
     let app = env.router();
-    let open = create(&app, "filter-open", "Open").await;
-    let archived = create(&app, "filter-archived", "Archived").await;
-    let id = archived["id"].as_str().expect("id");
+    let open = create(&env, &app, "Open").await;
+    let archived = legacy(&env);
+    let id = archived.as_str();
     let response = send(
         &app,
         patch_admin(
@@ -336,14 +360,14 @@ async fn chat_api_list_status_filter() {
         .await
         .json();
     assert_eq!(found["items"].as_array().map(Vec::len), Some(1));
-    assert_eq!(found["items"][0]["id"], archived["id"]);
+    assert_eq!(found["items"][0]["id"], archived.as_str());
 }
 
 #[tokio::test]
 async fn chat_api_search_message_body() {
     let env = admin_env();
     let app = env.router();
-    let thread = create(&app, "search-body", "Plain title").await;
+    let thread = create(&env, &app, "Plain title").await;
     let id = thread["id"].as_str().expect("id");
     assert_eq!(
         send(
@@ -369,7 +393,7 @@ async fn chat_api_search_message_body() {
 async fn chat_api_message_before_and_after_pages() {
     let env = admin_env();
     let app = env.router();
-    let thread = create(&app, "page-messages", "Pages").await;
+    let thread = create(&env, &app, "Pages").await;
     let id = thread["id"].as_str().expect("id");
     let path = format!("{BASE}/{id}/messages");
     for n in 1..=3 {
@@ -408,8 +432,8 @@ async fn chat_api_message_before_and_after_pages() {
 async fn chat_api_archived_thread_rejects_send() {
     let env = admin_env();
     let app = env.router();
-    let thread = create(&app, "archive-send", "Archived").await;
-    let id = thread["id"].as_str().expect("id");
+    let id = legacy(&env);
+    let id = id.as_str();
     assert_eq!(
         send(
             &app,
@@ -441,7 +465,7 @@ async fn chat_api_archived_thread_rejects_send() {
 async fn chat_api_resume_queue_stale_revision() {
     let env = admin_env();
     let app = env.router();
-    let thread = create(&app, "stale-resume", "Queue").await;
+    let thread = create(&env, &app, "Queue").await;
     let id = thread["id"].as_str().expect("id");
     let path = format!("{BASE}/{id}/resume-queue");
     assert_problem(
@@ -458,7 +482,7 @@ async fn chat_api_resume_queue_stale_revision() {
 async fn chat_api_blank_message_validation() {
     let env = admin_env();
     let app = env.router();
-    let thread = create(&app, "blank-message", "Blank").await;
+    let thread = create(&env, &app, "Blank").await;
     let id = thread["id"].as_str().expect("id");
     assert_problem(
         &send(
@@ -478,7 +502,7 @@ async fn chat_api_blank_message_validation() {
 async fn chat_api_query_validation() {
     let env = admin_env();
     let app = env.router();
-    let thread = create(&app, "query-errors", "Query").await;
+    let thread = create(&env, &app, "Query").await;
     let id = thread["id"].as_str().expect("id");
     for path in [
         format!("{BASE}?limit=0"),
@@ -501,7 +525,7 @@ async fn chat_api_query_validation() {
 async fn chat_api_write_unknown_fields() {
     let env = admin_env();
     let app = env.router();
-    let thread = create(&app, "unknown-fields", "Unknown").await;
+    let thread = create(&env, &app, "Unknown").await;
     let id = thread["id"].as_str().expect("id");
     let mut message = message_body("extra", "hello");
     message["unexpected"] = json!(true);
@@ -540,7 +564,7 @@ async fn chat_api_write_unknown_fields() {
 async fn chat_api_missing_resources() {
     let env = admin_env();
     let app = env.router();
-    let thread = create(&app, "missing-resources", "Missing").await;
+    let thread = create(&env, &app, "Missing").await;
     let id = thread["id"].as_str().expect("id");
     assert_problem(
         &send(&app, get_admin(&format!("{BASE}/{id}/runs/missing"))).await,
@@ -567,8 +591,8 @@ async fn chat_api_missing_resources() {
 async fn chat_api_cross_thread_cancel_is_not_found() {
     let env = admin_env();
     let app = env.router();
-    let first = create(&app, "cancel-owner", "Owner").await;
-    let second = create(&app, "cancel-other", "Other").await;
+    let first = create(&env, &app, "Owner").await;
+    let second = create(&env, &app, "Other").await;
     let owner = first["id"].as_str().expect("id");
     let other = second["id"].as_str().expect("id");
     let posted = send(
@@ -602,7 +626,7 @@ async fn chat_api_cross_thread_cancel_is_not_found() {
 async fn cos_chat_usage_api_detail_list_pagination_and_missing_usage() {
     let env = admin_env();
     let app = env.router();
-    let t = create(&app, "usage-thread", "usage").await;
+    let t = create(&env, &app, "usage").await;
     let t = t["id"].as_str().expect("thread");
     let start = OffsetDateTime::from_unix_timestamp(1_791_158_400).expect("clock");
     for (id, usage) in [

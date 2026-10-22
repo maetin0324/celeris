@@ -1,5 +1,7 @@
 # ADR 2026-10-06: CoS 受信箱の投入・通知 route・切替の永続化
 
+- 2026-10-22 付記: [2026-10-22-cos-fixed-threads](2026-10-22-cos-fixed-threads.md) により受信箱スレッド 1 本の前提は置き換え済み。項目は task の root の案件の CoS スレッド（無ければ統括 CoS）へ入り、triage run もスレッドごと。
+
 ---
 tasks: [01M47VN95D8QQ65ATZVGHFFXA7]
 ---

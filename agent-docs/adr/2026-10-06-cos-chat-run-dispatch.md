@@ -6,6 +6,7 @@ tasks: [01M47J2YNMZ14NQ4AXTNA355AA]
 
 - 日付: 2026-10-06
 - 状態: 実装済み（protocol・添付・session・sink・起動・停止・rollover を統合し、通し試験で検証）
+- 2026-10-22 付記（[2026-10-22-cos-fixed-threads](2026-10-22-cos-fixed-threads.md)）: session の DB 保持・resume・rollover は変えずに引き継ぐ。スレッドが統括 1 本・案件ごと 1 本に固定されたので session も CoS ごとに 1 本で続く。
 - 関連: [ADR 2026-10-05 cos-chat-home](2026-10-05-cos-chat-home.md) D2/D3/D4、[ADR-0003](0003-worker-protocol.md)（protocol は追加だけ）、[ADR-0054](0054-stateful-sessions-and-streaming-chat.md)、[ADR-0013](0013-taskd-api-and-gui-foundations.md) D11（秘密は request に載せない）
 
 ## 背景

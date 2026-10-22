@@ -8,9 +8,9 @@ use super::super::operations::{
 use crate::problem::ApiProblem;
 use serde_json::Value;
 use task_core::chat::{
-    self, ChatCreateThreadRequest, ChatError, ChatMessageResponse, ChatPatchThreadRequest,
-    ChatPostMessageRequest, ChatResumeQueueRequest, ChatStopRequest, ChatThreadResponse,
-    CosOperation,
+    self, ChatError, ChatMessageResponse, ChatOpenThreadRequest, ChatPatchThreadRequest,
+    ChatPostMessageRequest, ChatReadThreadRequest, ChatResumeQueueRequest, ChatStopRequest,
+    ChatThreadResponse, CosOperation,
 };
 use task_core::store::SqliteStore;
 
@@ -36,6 +36,7 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "chat.message_cancel",
     ),
     ("POST", "/api/v1/chat/threads/{t}/stop", "chat.run_stop"),
+    ("POST", "/api/v1/chat/threads/{t}/read", "chat.thread_read"),
     (
         "POST",
         "/api/v1/chat/threads/{t}/resume-queue",
@@ -315,14 +316,16 @@ pub(crate) fn dispatch(
             )
         }
         "chat.thread_create" => {
-            let req: ChatCreateThreadRequest = serde_json::from_value(body).map_err(decode)?;
+            // ADR 2026-10-22-cos-fixed-threads D2: opens the general or a project's CoS thread.
+            let req: ChatOpenThreadRequest = serde_json::from_value(body).map_err(decode)?;
+            let scope = req.project_id.clone().unwrap_or_else(|| "general".into());
             chat_apply(
                 store,
                 audit,
-                ("chat_thread", &req.client_thread_id),
+                ("chat_thread", &scope),
                 matched.action,
                 |tx| {
-                    let created = chat::chat_thread_create_tx(tx, "admin", &req, now)?;
+                    let created = chat::cos_thread_open_tx(tx, &req, now)?;
                     Ok(serde_json::json!({"thread": created.thread, "created": created.created}))
                 },
             )
@@ -384,6 +387,20 @@ pub(crate) fn dispatch(
                     Ok(
                         serde_json::json!({"accepted": outcome.accepted, "response": outcome.response}),
                     )
+                },
+            )
+        }
+        "chat.thread_read" => {
+            let thread = thread_of(path);
+            let req: ChatReadThreadRequest = serde_json::from_value(body).map_err(decode)?;
+            chat_apply(
+                store,
+                audit,
+                ("chat_thread", &thread),
+                matched.action,
+                |tx| {
+                    chat::chat_thread_mark_read_tx(tx, &thread, &req, now)
+                        .map(|thread| ChatThreadResponse { thread })
                 },
             )
         }

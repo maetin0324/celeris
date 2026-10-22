@@ -39,8 +39,8 @@ pub use store::{
     CHAT_MESSAGE_PAGE_MAX, CHAT_MESSAGE_TEXT_MAX_BYTES, CHAT_QUEUE_MAX, CHAT_THREAD_PAGE_DEFAULT,
     CHAT_THREAD_PAGE_MAX, CHAT_TITLE_MAX_CHARS, ChatError, ChatMessagePosted, ChatMessageQuery,
     ChatThreadCreated, ChatThreadQuery, chat_fts_literal, chat_message_cancel_tx,
-    chat_message_post_cos_tx, chat_thread_create_tx, chat_thread_patch_tx,
-    chat_thread_resume_queue_tx,
+    chat_message_post_cos_tx, chat_thread_mark_read_tx, chat_thread_patch_tx,
+    chat_thread_resume_queue_tx, cos_thread_ensure_tx, cos_thread_label, cos_thread_open_tx,
 };
 
 macro_rules! wire_enum {
@@ -50,9 +50,11 @@ macro_rules! wire_enum {
         pub enum $name { $($variant),+ }
     };
 }
+// ADR 2026-10-22-cos-fixed-threads D1: the general CoS (one), one CoS per project, and the
+// read-only threads kept by migration 0092.
 wire_enum!(ChatThreadKind {
-    Human,
-    Inbox,
+    General,
+    Project,
     Legacy
 });
 wire_enum!(ChatThreadStatus { Open, Archived });
@@ -129,6 +131,12 @@ pub struct ChatThread {
     pub active_run_id: Option<String>,
     pub queued_count: u32,
     pub revision: u64,
+    /// D5: highest seq the person has read (`POST /chat/threads/{t}/read`).
+    pub read_through_seq: u64,
+    /// D5: assistant/system messages after `read_through_seq`.
+    pub unread_count: u32,
+    /// D5: inbox items of this thread still waiting (pending/running/escalated/fallback).
+    pub attention_count: u32,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -292,10 +300,16 @@ pub struct ChatThreadData {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ChatCreateThreadRequest {
-    pub title: String,
+/// ADR 2026-10-22-cos-fixed-threads D2: open the general CoS (`project_id: null`) or the CoS of
+/// one project. Idempotent; nothing else creates a thread.
+pub struct ChatOpenThreadRequest {
     pub project_id: Option<String>,
-    pub client_thread_id: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+/// D5 `POST /chat/threads/{t}/read`: raise the read watermark (never lowers it).
+pub struct ChatReadThreadRequest {
+    pub through_seq: u64,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -400,3 +414,30 @@ pub struct ChatReferenceResponse {
 
 #[cfg(test)]
 mod tests;
+
+/// Test helper: the CoS thread of a project `key` (the project row is inserted if missing), so
+/// tests that need several threads get one per key (ADR 2026-10-22-cos-fixed-threads D1).
+#[cfg(test)]
+pub(crate) fn test_project_thread(
+    s: &crate::store::SqliteStore,
+    key: &str,
+    now: time::OffsetDateTime,
+) -> ChatThread {
+    let at = store::chat_ts(now);
+    s.lock()
+        .expect("lock")
+        .execute(
+            "INSERT OR IGNORE INTO projects(id,title,request,status,created_at,updated_at) \
+             VALUES(?1,?1,'','active',?2,?2)",
+            rusqlite::params![key, at],
+        )
+        .expect("project");
+    s.cos_thread_open(
+        &ChatOpenThreadRequest {
+            project_id: Some(key.to_owned()),
+        },
+        now,
+    )
+    .expect("project thread")
+    .thread
+}

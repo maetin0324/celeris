@@ -18,7 +18,7 @@ describe("chat threads browser", () => {
         await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "会話一覧を開く");
         expect(await trigger.evaluate((element) => element === document.activeElement)).toBe(true);
         await trigger.click();
-        await dialog.getByRole("button", { name: "作業の相談", exact: true }).click();
+        await dialog.getByRole("button", { name: /作業の相談/ }).click();
         await dialog.waitFor({ state: "hidden" });
         expect(await page.locator("body").getAttribute("data-selected")).toBe("human");
         await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "会話一覧を開く");

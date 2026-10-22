@@ -54,18 +54,8 @@ fn cos_chat_run_control_system_review_card_is_idempotent() {
     );
 }
 
-fn create(s: &SqliteStore, key: &str, title: &str, now: i64) -> ChatThread {
-    s.chat_thread_create(
-        "admin",
-        &ChatCreateThreadRequest {
-            title: title.into(),
-            project_id: None,
-            client_thread_id: key.into(),
-        },
-        at(now),
-    )
-    .expect("create thread")
-    .thread
+fn create(s: &SqliteStore, key: &str, _title: &str, now: i64) -> ChatThread {
+    crate::chat::test_project_thread(s, key, at(now))
 }
 
 fn req(key: &str, text: &str) -> ChatPostMessageRequest {
@@ -106,85 +96,87 @@ fn status(e: ChatError) -> u16 {
     e.http_status()
 }
 
+/// Legacy threads (kept by migration 0092) are the only archivable ones.
+fn make_legacy(s: &SqliteStore, id: &str) {
+    s.lock()
+        .expect("lock")
+        .execute("UPDATE chat_threads SET kind='legacy' WHERE id=?1", [id])
+        .expect("legacy");
+}
+
+/// ADR 2026-10-22-cos-fixed-threads D1/D2: one general thread and one thread per project;
+/// opening again returns the same thread.
 #[test]
-fn chat_store_thread_create_is_idempotent_per_client_key() {
+fn cos_thread_open_is_fixed_per_scope() {
     let s = store();
     let first = s
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "画面".into(),
-                project_id: None,
-                client_thread_id: "k1".into(),
-            },
-            at(0),
-        )
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, at(0))
         .expect("create");
     assert!(first.created);
-    assert_eq!(first.thread.kind, ChatThreadKind::Human);
+    assert_eq!(first.thread.kind, ChatThreadKind::General);
+    assert_eq!(first.thread.title, "統括 CoS");
     assert_eq!(first.thread.revision, 1);
     let again = s
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "画面".into(),
-                project_id: None,
-                client_thread_id: "k1".into(),
-            },
-            at(5),
-        )
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, at(5))
         .expect("replay");
     assert!(!again.created);
     assert_eq!(again.thread.id, first.thread.id);
-    let conflict = s
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "別".into(),
-                project_id: None,
-                client_thread_id: "k1".into(),
-            },
-            at(6),
-        )
-        .expect_err("different content");
-    assert_eq!(status(conflict), 409);
-    // Another scope may reuse the key.
-    let other = s
-        .chat_thread_create(
-            "other",
-            &ChatCreateThreadRequest {
-                title: "別".into(),
-                project_id: None,
-                client_thread_id: "k1".into(),
+    let project = crate::chat::test_project_thread(&s, "P1", at(6));
+    assert_eq!(project.kind, ChatThreadKind::Project);
+    assert_eq!(project.project_id.as_deref(), Some("P1"));
+    assert_eq!(project.title, "CoS: P1");
+    let project_again = s
+        .cos_thread_open(
+            &ChatOpenThreadRequest {
+                project_id: Some("P1".into()),
             },
             at(7),
         )
-        .expect("other scope");
-    assert_ne!(other.thread.id, first.thread.id);
+        .expect("project replay");
+    assert!(!project_again.created);
+    assert_eq!(project_again.thread.id, project.id);
     let missing_project = s
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "x".into(),
+        .cos_thread_open(
+            &ChatOpenThreadRequest {
                 project_id: Some("nope".into()),
-                client_thread_id: "k2".into(),
             },
             at(8),
         )
         .expect_err("project reference");
     assert_eq!(status(missing_project), 422);
-    let blank = s
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "  ".into(),
-                project_id: None,
-                client_thread_id: "k3".into(),
-            },
-            at(9),
-        )
-        .expect_err("blank title");
-    assert_eq!(status(blank), 422);
+    let all = s
+        .chat_thread_list(&ChatThreadQuery::default())
+        .expect("list");
+    assert_eq!(all.items.len(), 2);
+}
+
+/// D5: unread counts assistant/system messages after the read watermark; reading never lowers it.
+#[test]
+fn cos_thread_read_watermark_counts_unread() {
+    let s = store();
+    let t = s
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, at(0))
+        .expect("general")
+        .thread;
+    post(&s, &t.id, "u", "hi", 1);
+    s.chat_system_message_add(&t.id, "知らせ 1", &[], at(2))
+        .expect("system");
+    s.chat_system_message_add(&t.id, "知らせ 2", &[], at(3))
+        .expect("system");
+    let t = s.chat_thread_get(&t.id).expect("get").expect("thread");
+    assert_eq!(t.unread_count, 2);
+    let read = s
+        .chat_thread_mark_read(&t.id, &ChatReadThreadRequest { through_seq: 2 }, at(4))
+        .expect("read");
+    assert_eq!((read.read_through_seq, read.unread_count), (2, 1));
+    let lower = s
+        .chat_thread_mark_read(&t.id, &ChatReadThreadRequest { through_seq: 1 }, at(5))
+        .expect("read lower");
+    assert_eq!(lower.read_through_seq, 2);
+    let capped = s
+        .chat_thread_mark_read(&t.id, &ChatReadThreadRequest { through_seq: 99 }, at(6))
+        .expect("read all");
+    assert_eq!((capped.read_through_seq, capped.unread_count), (3, 0));
 }
 
 #[test]
@@ -194,6 +186,7 @@ fn chat_store_thread_list_pages_by_updated_desc_and_status() {
     let b = create(&s, "b", "B", 10);
     let c = create(&s, "c", "C", 20);
     post(&s, &a.id, "m", "touch a", 30); // a becomes newest
+    make_legacy(&s, &b.id);
     let page = s
         .chat_thread_list(&ChatThreadQuery {
             limit: Some(2),
@@ -308,6 +301,8 @@ fn chat_store_search_takes_fts_syntax_literally_and_dedups_threads() {
 fn chat_store_thread_patch_revision_and_archive_rules() {
     let s = store();
     let t = create(&s, "a", "A", 0);
+    let cos = create(&s, "cos", "CoS", 0);
+    make_legacy(&s, &t.id);
     let e = s
         .chat_thread_patch(
             &t.id,
@@ -384,18 +379,9 @@ fn chat_store_thread_patch_revision_and_archive_rules() {
         ),
         422
     );
-    {
-        let conn = s.lock().expect("lock");
-        conn.execute(
-            "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) \
-             VALUES('inbox','inbox','受信箱','open','x','x')",
-            [],
-        )
-        .expect("inbox");
-    }
     let e = s
         .chat_thread_patch(
-            "inbox",
+            &cos.id,
             &ChatPatchThreadRequest {
                 title: None,
                 status: Some(ChatThreadStatus::Archived),
@@ -403,7 +389,7 @@ fn chat_store_thread_patch_revision_and_archive_rules() {
             },
             at(12),
         )
-        .expect_err("inbox archive");
+        .expect_err("CoS thread archive");
     assert_eq!(status(e), 409);
     assert_eq!(
         status(
@@ -1250,7 +1236,7 @@ fn cos_chat_mcp_metadata_and_atomic_validation() {
 }
 
 #[test]
-fn cos_chat_mcp_title_truncates_unicode_without_truncating_input() {
+fn cos_chat_mcp_input_goes_to_the_general_cos_without_a_new_thread() {
     let s = store();
     let text = format!("{}\nsecond line", "調".repeat(80));
     let input = s
@@ -1259,8 +1245,12 @@ fn cos_chat_mcp_title_truncates_unicode_without_truncating_input() {
         .response
         .message;
     assert_eq!(input.text, text);
-    assert_eq!(
-        s.chat_thread_get(&input.thread_id).unwrap().unwrap().title,
-        format!("chatgpt: {}", "調".repeat(60))
-    );
+    let thread = s.chat_thread_get(&input.thread_id).unwrap().unwrap();
+    assert_eq!(thread.kind, ChatThreadKind::General);
+    let again = s
+        .chat_mcp_instruct("chatgpt", None, None, "next", at(1))
+        .unwrap()
+        .response
+        .message;
+    assert_eq!(again.thread_id, input.thread_id);
 }

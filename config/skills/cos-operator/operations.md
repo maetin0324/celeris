@@ -127,10 +127,11 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 操作 | `request` の method と path | action | celerisctl・本文の要点 |
 |---|---|---|---|
 | 添付の pin（既存の owner へ後から） | `POST /api/v1/chat/attachments/<id>/references` | attachment.reference | [attachments.md](attachments.md) |
-| chat thread の作成 | `POST /api/v1/chat/threads` | chat.thread_create | `{"title","project_id"?,"client_thread_id"}`。同じ client_thread_id・同じ内容は同じ thread |
-| chat thread の改名・アーカイブ | `PATCH /api/v1/chat/threads/<t>` | chat.thread_update | `{"title"?,"status"?:"open"\|"archived","expected_revision"}`。受信箱 thread はアーカイブ不可 |
+| CoS thread を開く | `POST /api/v1/chat/threads` | chat.thread_create | `{"project_id": <id\|null>}`。統括 CoS（null）か案件の CoS の thread を返す（無ければ作る）。新しい会話は作らない |
+| chat thread の改名・アーカイブ | `PATCH /api/v1/chat/threads/<t>` | chat.thread_update | `{"title"?,"status"?:"open"\|"archived","expected_revision"}`。アーカイブできるのは legacy thread だけ |
 | chat thread への書き込み | `POST /api/v1/chat/threads/<t>/messages` | chat.message_post | `{"client_message_id","text","attachment_ids":[],"reply_to_id":null,"mode":"queue","resume_queue":false}`。CoS の書き込みは完了済みの assistant 発言として入り、run を起こさない（`mode=interrupt`・`resume_queue=true` は 422） |
 | 待ち行列の入力の取消 | `DELETE /api/v1/chat/threads/<t>/messages/<m>` | chat.message_cancel | body なし。queued の user 入力だけ |
+| 既読の水位を上げる | `POST /api/v1/chat/threads/<t>/read` | chat.thread_read | `{"through_seq"}`。下げない |
 | chat run の停止 | `POST /api/v1/chat/threads/<t>/stop` | chat.run_stop | `{"run_id"}`。待ち行列は一時停止になる |
 | 待ち行列の再開 | `POST /api/v1/chat/threads/<t>/resume-queue` | chat.queue_resume | `{"expected_revision"}` |
 | chat 添付のアップロード | `POST /api/v1/chat/threads/<t>/attachments` | chat.attachment_upload | `{"client_upload_id","name","content_base64"}`。外部効果（file）。記録に中身は残らない |

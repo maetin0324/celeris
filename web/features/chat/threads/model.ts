@@ -1,19 +1,21 @@
 import { isApiError } from "../../../api/client";
 import type { ChatThread } from "../../../api/generated/types";
-import { randomId } from "../../../lib/random-id";
-import { createThread, listThreads, patchThread } from "../data/client";
+import { listThreads, openThread, patchThread, readThread } from "../data/client";
+
+// ADR 2026-10-22-cos-fixed-threads: the home lists the general CoS, one CoS per project and
+// read-only legacy threads. Nobody creates threads: `open` returns the fixed CoS thread of a scope.
 
 export type ThreadApi = {
   list: typeof listThreads;
-  create: typeof createThread;
+  open: typeof openThread;
+  read: typeof readThread;
   patch: typeof patchThread;
 };
 
-export const threadApi: ThreadApi = { list: listThreads, create: createThread, patch: patchThread };
+export const threadApi: ThreadApi = { list: listThreads, open: openThread, read: readThread, patch: patchThread };
 
 export type ThreadState = {
   items: ChatThread[];
-  inbox: ChatThread | null;
   query: string;
   loading: boolean;
   busy: boolean;
@@ -21,26 +23,33 @@ export type ThreadState = {
   nextCursor: string | null;
 };
 
-/** inbox を常に先頭に保ち、残りは API と同じ更新日時・id の降順。 */
-export function orderThreads(items: ChatThread[], inbox: ChatThread | null): ChatThread[] {
+const KIND_ORDER: Record<ChatThread["kind"], number> = { general: 0, project: 1, legacy: 2 };
+
+/** 統括 CoS を先頭に、案件 CoS、旧会話の順。同じ種類の中は API と同じ更新日時・id の降順。 */
+export function orderThreads(items: ChatThread[]): ChatThread[] {
   const unique = new Map<string, ChatThread>();
   for (const item of items) unique.set(item.id, item);
-  if (inbox) unique.set(inbox.id, inbox);
   const ordered = [...unique.values()].filter((item) => item.status === "open");
-  ordered.sort((a, b) => {
-    if (a.kind === "inbox" && b.kind !== "inbox") return -1;
-    if (b.kind === "inbox" && a.kind !== "inbox") return 1;
-    return b.updated_at.localeCompare(a.updated_at) || b.id.localeCompare(a.id);
-  });
+  ordered.sort(
+    (a, b) =>
+      KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || b.updated_at.localeCompare(a.updated_at) || b.id.localeCompare(a.id),
+  );
   return ordered;
 }
 
-export function threadError(error: unknown, operation: "rename" | "archive" | "create" | "list"): string {
-  if (isApiError(error) && error.status === 409) {
-    if (operation === "archive") return "実行中または待機中の発言があるため、会話をアーカイブできません。";
-    if (operation === "rename") return "会話が別の場所で更新されました。一覧を読み直してから再試行してください。";
-    return "会話が競合しました。一覧を読み直してから再試行してください。";
+/** 一覧の見出しに出す数: 未読と要対応（受信箱の未解決項目）の合計。 */
+export function threadTotals(items: ChatThread[]): { unread: number; attention: number } {
+  return items.reduce(
+    (acc, item) => ({ unread: acc.unread + item.unread_count, attention: acc.attention + item.attention_count }),
+    { unread: 0, attention: 0 },
+  );
+}
+
+export function threadError(error: unknown, operation: "archive" | "open" | "list"): string {
+  if (isApiError(error) && error.status === 409 && operation === "archive") {
+    return "実行中または待機中の発言があるため、会話をアーカイブできません。";
   }
+  if (operation === "open") return "CoS の会話を開けませんでした。接続を確認して再試行してください。";
   return "会話を操作できませんでした。接続を確認して再試行してください。";
 }
 
@@ -48,10 +57,8 @@ export class ThreadsModel {
   private api: ThreadApi;
   private listeners = new Set<() => void>();
   private request = 0;
-  private createId: string | null = null;
   state: ThreadState = {
     items: [],
-    inbox: null,
     query: "",
     loading: false,
     busy: false,
@@ -71,6 +78,14 @@ export class ThreadsModel {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
   }
+  private replace(thread: ChatThread) {
+    this.set({ items: orderThreads([...this.state.items.filter((item) => item.id !== thread.id), thread]) });
+  }
+
+  /** The general CoS thread when it is in the list. */
+  general(): ChatThread | null {
+    return this.state.items.find((item) => item.kind === "general") ?? null;
+  }
 
   async load(query = this.state.query): Promise<void> {
     const request = ++this.request;
@@ -78,15 +93,7 @@ export class ThreadsModel {
     try {
       const response = await this.api.list({ q: query || undefined, status: "open", limit: 100 });
       if (request !== this.request) return;
-      const inbox = !query
-        ? (response.items.find((item) => item.kind === "inbox") ?? this.state.inbox)
-        : this.state.inbox;
-      this.set({
-        items: orderThreads(response.items, inbox),
-        inbox,
-        loading: false,
-        nextCursor: response.next_cursor ?? null,
-      });
+      this.set({ items: orderThreads(response.items), loading: false, nextCursor: response.next_cursor ?? null });
     } catch (error) {
       if (request === this.request) this.set({ loading: false, error: threadError(error, "list") });
     }
@@ -106,7 +113,7 @@ export class ThreadsModel {
       });
       if (request !== this.request) return;
       this.set({
-        items: orderThreads([...this.state.items, ...response.items], this.state.inbox),
+        items: orderThreads([...this.state.items, ...response.items]),
         loading: false,
         nextCursor: response.next_cursor ?? null,
       });
@@ -115,46 +122,35 @@ export class ThreadsModel {
     }
   }
 
-  async create(onSelect: (id: string) => void): Promise<void> {
+  /** Open the general CoS (`projectId` null) or a project's CoS; idempotent on the server. */
+  async open(projectId: string | null, onSelect: (id: string) => void): Promise<void> {
     if (this.state.busy) return;
-    this.createId ??= randomId();
     this.set({ busy: true, error: null });
     try {
-      const response = await this.api.create({ client_thread_id: this.createId, title: "新しい会話" });
-      this.createId = null;
-      this.set({
-        busy: false,
-        query: "",
-        items: orderThreads([response.thread, ...this.state.items], this.state.inbox),
-      });
+      const response = await this.api.open({ project_id: projectId });
+      this.set({ busy: false });
+      this.replace(response.thread);
       onSelect(response.thread.id);
     } catch (error) {
-      this.set({ busy: false, error: threadError(error, "create") });
+      this.set({ busy: false, error: threadError(error, "open") });
     }
   }
 
-  async rename(item: ChatThread, title: string): Promise<boolean> {
-    const next = title.trim();
-    if (!next || next === item.title || this.state.busy) return false;
-    this.set({ busy: true, error: null });
+  /** Mark the thread read through `seq` when it is ahead of the stored watermark. */
+  async markRead(threadId: string, seq: number): Promise<void> {
+    const current = this.state.items.find((item) => item.id === threadId);
+    if (current && current.read_through_seq >= seq) return;
     try {
-      const response = await this.api.patch(item.id, { title: next, expected_revision: item.revision });
-      this.set({
-        busy: false,
-        items: orderThreads(
-          this.state.items.map((current) => (current.id === item.id ? response.thread : current)),
-          this.state.inbox,
-        ),
-      });
-      return true;
-    } catch (error) {
-      this.set({ busy: false, error: threadError(error, "rename") });
-      return false;
+      const response = await this.api.read(threadId, { through_seq: seq });
+      this.replace(response.thread);
+    } catch {
+      // 既読は次に開いたときに上げ直す。読めなかったことは会話の操作を妨げない。
     }
   }
 
+  /** Only legacy threads can be archived (CoS threads stay). */
   async archive(item: ChatThread): Promise<boolean> {
-    if (this.state.busy) return false;
+    if (this.state.busy || item.kind !== "legacy") return false;
     this.set({ busy: true, error: null });
     try {
       await this.api.patch(item.id, { status: "archived", expected_revision: item.revision });

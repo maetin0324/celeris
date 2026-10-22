@@ -20,12 +20,12 @@ export type ChatComposerProps = {
   session: ChatSession;
   snapshot: ChatSessionSnapshot;
   uploadApi?: UploadApi;
-  /** 入力欄の placeholder（受信箱 thread では件について聞く・指示する場所であることを示す）。 */
+  /** 入力欄の placeholder（CoS の会話では受信箱の件もここで聞く・指示する場所であることを示す）。 */
   placeholder?: string;
 };
 
-/** ADR 2026-10-07-cos-inbox-thread-conversation D5: 受信箱 thread の composer の placeholder。 */
-export const INBOX_COMPOSER_PLACEHOLDER = "受信箱の件について CoS に聞く・指示する";
+/** ADR 2026-10-22-cos-fixed-threads D3: 統括・案件の CoS の composer の placeholder。 */
+export const COS_COMPOSER_PLACEHOLDER = "この CoS に聞く・指示する（受信箱の件もここで）";
 
 function bytes(size: number) {
   return size < 1024 ? `${size} B` : `${(size / 1024).toFixed(1)} KiB`;

@@ -8,7 +8,7 @@ mod common;
 use common::*;
 use serde_json::{Value, json};
 use task_core::chat::triage::CosTriageSource;
-use task_core::chat::{ChatCreateThreadRequest, ChatPostMessageRequest, ChatSendMode};
+use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
@@ -27,18 +27,7 @@ fn at(secs: i64) -> OffsetDateTime {
 fn cos_bearer(env: &TestEnv, key: &str) -> (String, String, String) {
     let store = &env.store;
     let now = OffsetDateTime::now_utc();
-    let thread = store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: format!("thread {key}"),
-                project_id: None,
-                client_thread_id: key.into(),
-            },
-            now,
-        )
-        .expect("thread")
-        .thread;
+    let thread = common::project_cos_thread(&store, &task_core::ProjectId::new().to_string());
     store
         .chat_message_post(
             &thread.id,
@@ -122,6 +111,7 @@ fn ingest(env: &TestEnv, kind: &str, key: &str, revision: &str, secs: i64) -> St
         operation_id: None,
         summary: format!("{kind} {key}"),
         policy_version: "1".into(),
+        task_id: None,
     };
     env.store
         .cos_triage_ingest_batch(kind, &format!("{secs}"), &[source], at(secs))
@@ -790,9 +780,11 @@ async fn cos_live_fix_d3_confidence_out_of_range_is_422() {
 
 fn inbox_thread_id(env: &TestEnv) -> String {
     db(env)
-        .query_row("SELECT id FROM chat_threads WHERE kind='inbox'", [], |r| {
-            r.get(0)
-        })
+        .query_row(
+            "SELECT id FROM chat_threads WHERE kind='general'",
+            [],
+            |r| r.get(0),
+        )
         .expect("inbox thread")
 }
 
@@ -839,7 +831,18 @@ fn inbox_triage_run(env: &TestEnv, key: &str) -> (String, String, String) {
     let run = format!("run-{key}");
     let claim = env
         .store
-        .cos_triage_claim(&run, OffsetDateTime::now_utc())
+        .cos_triage_claim(
+            &env.store
+                .cos_thread_open(
+                    &task_core::chat::ChatOpenThreadRequest { project_id: None },
+                    OffsetDateTime::now_utc(),
+                )
+                .expect("general")
+                .thread
+                .id,
+            &run,
+            OffsetDateTime::now_utc(),
+        )
         .expect("claim")
         .expect("triage run");
     let bearer =
@@ -1026,8 +1029,15 @@ async fn cos_chat_inbox_thread_instructed_by_refuses_messages_the_run_does_not_a
     .await;
     refused(&resp, "k-earlier");
 
-    // (d) A message of another thread, and a human thread's own input, are refused too.
+    // (d) A message of another thread, and a legacy thread's own input, are refused too
+    // (ADR 2026-10-22-cos-fixed-threads D7: general/project CoS threads relay, legacy ones do not).
     let (other_thread, _other_run, other_bearer) = cos_bearer(&env, "other");
+    db(&env)
+        .execute(
+            "UPDATE chat_threads SET kind='legacy' WHERE id=?1",
+            [&other_thread],
+        )
+        .expect("legacy");
     let other_message: String = db(&env)
         .query_row(
             "SELECT id FROM chat_messages WHERE thread_id=?1 AND role='user'",

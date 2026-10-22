@@ -227,6 +227,7 @@ fn escalate(store: &SqliteStore, db: &std::path::Path, task: &Task, summary: &st
         operation_id: None,
         summary: summary.into(),
         policy_version: "1".into(),
+        task_id: None,
     };
     store
         .cos_triage_ingest_batch("events", &task.id.to_string(), &[source], at())

@@ -18,9 +18,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::Command;
 
-use task_core::chat::{
-    ChatCreateThreadRequest, ChatPostMessageRequest, ChatRunState, ChatSendMode,
-};
+use task_core::chat::{ChatPostMessageRequest, ChatRunState, ChatSendMode, cos_thread_label};
 use task_core::{
     DeliveryState, DeliveryStore, Event, NoticeStore, NotificationKind, NotificationStore,
     RootDoneState, RootDoneSummary, TaskId, TaskStore, WorkspaceSpec,
@@ -41,7 +39,6 @@ const DELIVERY_WAIT_SECS: i64 = 3600;
 const TEXT_MAX_CHARS: usize = 1900;
 /// 通知に載せる CoS のまとめの字数。
 const SUMMARY_MAX_CHARS: usize = 900;
-const THREAD_SCOPE: &str = "root-done";
 
 /// CoS への指示。事実だけを根拠にさせ、task を変更させない。
 const COS_INSTRUCTION: &str = "root task が完了しました。下は DB と進捗ファイルから決定的に集めた事実です。\
@@ -242,19 +239,12 @@ impl CosChatLaunch {
                     return self.root_done_fallback(row, &facts, None, now);
                 }
                 let key = message_key(row.task_id, row.done_seq);
+                // ADR 2026-10-22-cos-fixed-threads D3: the project's CoS thread (or the general
+                // CoS); the input's client_message_id keeps it idempotent. No new thread.
                 let thread = self
                     .store
-                    .chat_thread_create(
-                        THREAD_SCOPE,
-                        &ChatCreateThreadRequest {
-                            title: truncate(&format!("完了: {}", facts.title), 120),
-                            project_id: None,
-                            client_thread_id: key.clone(),
-                        },
-                        now,
-                    )
-                    .map_err(|e| e.to_string())?
-                    .thread;
+                    .cos_thread_for_task(&row.task_id.to_string(), now)
+                    .map_err(|e| e.to_string())?;
                 let text = format!(
                     "{COS_INSTRUCTION}\n\n{}",
                     root_done::facts_block(&facts, self.config.web_base_url.as_deref())
@@ -337,6 +327,17 @@ impl CosChatLaunch {
         }
     }
 
+    /// ADR 2026-10-22-cos-fixed-threads D3: 「[統括 CoS] 」「[CoS: <案件>] 」。引けなければ空。
+    fn thread_label_prefix(&self, thread_id: &str) -> String {
+        self.store
+            .chat_thread_get(thread_id)
+            .ok()
+            .flatten()
+            .and_then(|t| cos_thread_label(&t))
+            .map(|label| format!("{label} "))
+            .unwrap_or_default()
+    }
+
     /// D5: CoS の最終文がスレッドに書けた後に、本文を確定して通知の行を作る。リンクが作れなければ作らない。
     fn root_done_notify_summary(
         &mut self,
@@ -359,7 +360,11 @@ impl CosChatLaunch {
             root_done::task_url(base, row.task_id)
         );
         let budget = TEXT_MAX_CHARS.saturating_sub(tail.chars().count());
-        let head = format!("完了: {}\n", truncate(&facts.title, 120));
+        let head = format!(
+            "{}完了: {}\n",
+            self.thread_label_prefix(thread_id),
+            truncate(&facts.title, 120)
+        );
         let room = budget
             .saturating_sub(head.chars().count())
             .min(SUMMARY_MAX_CHARS);
@@ -378,6 +383,10 @@ impl CosChatLaunch {
         let base = self.config.web_base_url.clone().unwrap_or_default();
         let body = root_done::fallback_body(facts, &base, thread_id.map(String::as_str))
             .map_err(str::to_owned)?;
+        let body = format!(
+            "{}{body}",
+            thread_id.map_or_else(String::new, |t| self.thread_label_prefix(t))
+        );
         if let Some(thread) = thread_id {
             let key = format!(
                 "root-done-fallback:{}",

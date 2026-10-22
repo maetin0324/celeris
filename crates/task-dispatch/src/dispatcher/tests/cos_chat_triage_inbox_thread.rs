@@ -283,6 +283,7 @@ fn cos_chat_inbox_context_item_maps_the_report_and_answer_path() {
     use task_core::chat::triage::{CosTriageDecision, CosTriageItemReport, CosTriageOption};
     let report = CosTriageItemReport {
         item_id: "i1".into(),
+        thread_id: "t".into(),
         source_kind: "decision".into(),
         source_key: "decision-d1".into(),
         source_revision: "3".into(),
@@ -329,6 +330,7 @@ fn cos_chat_inbox_context_item_maps_the_report_and_answer_path() {
 fn ctx_report_seed() -> task_core::chat::triage::CosTriageItemReport {
     task_core::chat::triage::CosTriageItemReport {
         item_id: "n".into(),
+        thread_id: "t".into(),
         source_kind: "notice".into(),
         source_key: "n1".into(),
         source_revision: "1".into(),
@@ -359,13 +361,26 @@ impl Fixture {
                     operation_id: None,
                     summary: format!("知らせ {id}"),
                     policy_version: "1".into(),
+                    task_id: None,
                 }],
                 now,
             )
             .expect("ingest");
         let claim = self
             .store
-            .cos_triage_claim(id, now)
+            .cos_triage_claim(
+                &self
+                    .store
+                    .cos_thread_open(
+                        &task_core::chat::ChatOpenThreadRequest { project_id: None },
+                        now,
+                    )
+                    .expect("general")
+                    .thread
+                    .id,
+                id,
+                now,
+            )
             .expect("claim")
             .expect("run");
         if state == task_core::chat::ChatRunState::Completed {
@@ -478,9 +493,10 @@ async fn cos_chat_triage_digest_scan_failure_retries_on_normal_tick() {
     conn.execute_batch("ALTER TABLE cos_inbox_items RENAME TO hidden_items")
         .expect("hide table");
     f.tick();
-    assert!(f.digests().is_empty());
     conn.execute_batch("ALTER TABLE hidden_items RENAME TO cos_inbox_items")
         .expect("restore table");
+    // Read after the restore: thread reads count the thread's inbox items.
+    assert!(f.digests().is_empty());
     f.tick();
     assert_eq!(f.digests().len(), 1, "failed scan remains scheduled");
     f.tick();
@@ -499,7 +515,18 @@ async fn cos_chat_triage_digest_orphan_recovery_after_startup_is_scheduled() {
     f.tick();
     let claim = f
         .store
-        .cos_triage_claim("orphan", f.d.now_utc())
+        .cos_triage_claim(
+            &f.store
+                .cos_thread_open(
+                    &task_core::chat::ChatOpenThreadRequest { project_id: None },
+                    f.d.now_utc(),
+                )
+                .expect("general")
+                .thread
+                .id,
+            "orphan",
+            f.d.now_utc(),
+        )
         .expect("claim")
         .expect("run");
     f.escalate(&claim.item_ids[0], "人の判断");

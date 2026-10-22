@@ -10,9 +10,9 @@ fn roundtrip<T: DeserializeOwned + Serialize>(value: Value) {
 }
 
 fn thread() -> Value {
-    json!({"id":"t","kind":"human","title":"画面の修正","project_id":null,
+    json!({"id":"t","kind":"general","title":"統括 CoS","project_id":null,
       "status":"open","queue_paused":false,"active_run_id":null,"queued_count":0,
-      "revision":1,"created_at":"2026-10-05T00:00:00Z","updated_at":"2026-10-05T00:00:00Z"})
+      "revision":1,"read_through_seq":0,"unread_count":0,"attention_count":0,"created_at":"2026-10-05T00:00:00Z","updated_at":"2026-10-05T00:00:00Z"})
 }
 fn message() -> Value {
     json!({"id":"m","thread_id":"t","seq":1,"role":"user","text":"直して",
@@ -85,8 +85,9 @@ fn chat_model_requests_reject_unknown_fields() {
     bad["unexpected"] = json!(true);
     assert!(serde_json::from_value::<ChatPostMessageRequest>(bad).is_err());
     assert!(
-        serde_json::from_value::<ChatCreateThreadRequest>(json!({
-      "title":"t","project_id":null,"client_thread_id":"k","kind":"inbox"}))
+        serde_json::from_value::<ChatOpenThreadRequest>(
+            json!({"project_id":null,"title":"t","client_thread_id":"k"})
+        )
         .is_err()
     );
 }
@@ -128,14 +129,25 @@ fn chat_migration_new_database_has_all_tables_and_constraints() {
     }
     let now = "2026-10-05T00:00:00Z";
     let insert_thread = "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) VALUES(?1,?2,?3,'open',?4,?4)";
-    conn.execute(insert_thread, params!["t", "inbox", "受信箱", now])
-        .expect("inbox");
+    conn.execute(insert_thread, params!["t", "general", "統括 CoS", now])
+        .expect("general");
     assert!(
-        conn.execute(insert_thread, params!["t2", "inbox", "duplicate", now])
+        conn.execute(insert_thread, params!["t2", "general", "duplicate", now])
             .is_err()
     );
-    conn.execute(insert_thread, params!["t2", "human", "画面の修正", now])
-        .expect("human");
+    // ADR 2026-10-22-cos-fixed-threads D1: a project thread needs its project; human/inbox are gone.
+    assert!(
+        conn.execute(insert_thread, params!["p", "project", "CoS", now])
+            .is_err()
+    );
+    for old in ["human", "inbox"] {
+        assert!(
+            conn.execute(insert_thread, params![old, old, "old", now])
+                .is_err()
+        );
+    }
+    conn.execute(insert_thread, params!["t2", "legacy", "画面の修正", now])
+        .expect("legacy");
     assert!(
         conn.execute(insert_thread, params!["bad", "invalid", "bad", now])
             .is_err()
@@ -241,7 +253,7 @@ fn chat_migration_upgrade_from_47_preserves_existing_rows() {
     assert_eq!(row, ("conversation".into(), None, 0));
     assert!(has_table(&conn, "chat_search"));
     conn.execute(
-        "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) VALUES('upgraded','human','旧版からの会話','open','2026-10-05T00:00:00Z','2026-10-05T00:00:00Z')",
+        "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) VALUES('upgraded','legacy','旧版からの会話','open','2026-10-05T00:00:00Z','2026-10-05T00:00:00Z')",
         [],
     )
     .expect("thread after upgrade");
@@ -276,7 +288,7 @@ fn chat_migration_one_active_run_per_thread() {
     let conn = Connection::open(path).expect("open");
     let now = "2026-10-05T00:00:00Z";
     conn.execute(
-        "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) VALUES('t','human','test','open',?1,?1)",
+        "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) VALUES('t','general','test','open',?1,?1)",
         [now],
     )
     .expect("thread");
@@ -337,4 +349,80 @@ fn cos_chat_usage_migration_preserves_legacy_run_and_omits_unknown_usage() {
             .items,
         vec![run]
     );
+}
+
+/// ADR 2026-10-22-cos-fixed-threads D6: migration 0092 maps inbox → general (same id) and
+/// human → legacy without losing messages, runs, sessions, inbox items or search rows.
+#[test]
+fn chat_migration_0092_maps_threads_without_losing_data() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("v91.sqlite3");
+    let mut conn = Connection::open(&path).expect("open");
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
+    )
+    .expect("ledger");
+    for version in (1..=37).chain(41..=67).chain(70..=91) {
+        SqliteStore::apply_migration_version(&mut conn, version).expect("schema 91");
+    }
+    let now = "2026-10-21T00:00:00Z";
+    conn.execute_batch(&format!(
+        "INSERT INTO chat_threads(id,kind,title,status,next_seq,created_at,updated_at) \
+           VALUES('ib','inbox','受信箱','open',3,'{now}','{now}');
+         INSERT INTO chat_threads(id,kind,title,project_id,status,next_seq,created_at,updated_at,archived_at) \
+           VALUES('h','human','完了: 旧 root','P1','archived',2,'{now}','{now}','{now}');
+         INSERT INTO chat_messages(id,thread_id,seq,role,text,state,created_at,updated_at) \
+           VALUES('m1','ib',1,'system','受信箱の一次対応','completed','{now}','{now}'),
+                 ('m2','ib',2,'assistant','判断の要約','completed','{now}','{now}'),
+                 ('m3','h',1,'user','旧会話の本文','completed','{now}','{now}');
+         INSERT INTO node_sessions(id,node_id,kind,adapter,session_id,created_at,last_used_at,thread_id) \
+           VALUES('s1','cos','cos_chat','claude-code','sess-ib','{now}','{now}','ib');
+         INSERT INTO cos_inbox_items(id,source_kind,source_key,source_revision,thread_id,message_id,state,policy_version,created_at,updated_at) \
+           VALUES('i1','decision','d1','1','ib','','escalated','v1','{now}','{now}');"
+    ))
+    .expect("v91 rows");
+    drop(conn);
+
+    let store = SqliteStore::open(&path).expect("upgrade to 92");
+    let general = store.chat_thread_get("ib").expect("read").expect("general");
+    assert_eq!(general.kind, ChatThreadKind::General);
+    assert_eq!(general.title, "統括 CoS");
+    assert_eq!(general.status, ChatThreadStatus::Open);
+    // Messages before the migration are not unread; the escalated item still needs attention.
+    assert_eq!(general.read_through_seq, 2);
+    assert_eq!(general.unread_count, 0);
+    assert_eq!(general.attention_count, 1);
+    let legacy = store.chat_thread_get("h").expect("read").expect("legacy");
+    assert_eq!(legacy.kind, ChatThreadKind::Legacy);
+    assert_eq!(legacy.title, "完了: 旧 root");
+    assert_eq!(legacy.project_id.as_deref(), Some("P1"));
+    assert_eq!(legacy.status, ChatThreadStatus::Archived);
+    for (thread, n) in [("ib", 2), ("h", 1)] {
+        let messages = store
+            .chat_message_list(thread, &ChatMessageQuery::default())
+            .expect("messages");
+        assert_eq!(messages.items.len(), n, "{thread}");
+    }
+    let session = store
+        .chat_session_active("ib")
+        .expect("session")
+        .expect("kept");
+    assert_eq!(session.session_id, "sess-ib");
+    // The general CoS is the migrated inbox thread: opening it does not make a new one.
+    let opened = store
+        .cos_thread_open(
+            &ChatOpenThreadRequest { project_id: None },
+            time::OffsetDateTime::now_utc(),
+        )
+        .expect("open");
+    assert!(!opened.created);
+    assert_eq!(opened.thread.id, "ib");
+    let found = store
+        .chat_thread_list(&ChatThreadQuery {
+            q: Some("旧会話の本文".into()),
+            ..ChatThreadQuery::default()
+        })
+        .expect("search");
+    assert_eq!(found.items.len(), 1);
+    assert_eq!(found.items[0].id, "h");
 }

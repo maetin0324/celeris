@@ -4,12 +4,12 @@
 
 use schemars::JsonSchema;
 use task_core::chat::{
-    ChatAttachment, ChatAttachmentResponse, ChatCard, ChatCheckpointSaved, ChatCreateThreadRequest,
-    ChatEvent, ChatEventListResponse, ChatMessage, ChatMessageListResponse, ChatMessageResponse,
-    ChatPatchThreadRequest, ChatPostMessageRequest, ChatPostMessageResponse, ChatReferenceRequest,
-    ChatReferenceResponse, ChatResumeQueueRequest, ChatRun, ChatRunResponse, ChatStopRequest,
-    ChatStopResponse, ChatThread, ChatThreadDetailResponse, ChatThreadListResponse,
-    ChatThreadResponse, CosOperation,
+    ChatAttachment, ChatAttachmentResponse, ChatCard, ChatCheckpointSaved, ChatEvent,
+    ChatEventListResponse, ChatMessage, ChatMessageListResponse, ChatMessageResponse,
+    ChatOpenThreadRequest, ChatPatchThreadRequest, ChatPostMessageRequest, ChatPostMessageResponse,
+    ChatReadThreadRequest, ChatReferenceRequest, ChatReferenceResponse, ChatResumeQueueRequest,
+    ChatRun, ChatRunResponse, ChatStopRequest, ChatStopResponse, ChatThread,
+    ChatThreadDetailResponse, ChatThreadListResponse, ChatThreadResponse, CosOperation,
 };
 use task_core::{EventRow, Task};
 use task_ops::daemon::DaemonSnapshot;
@@ -319,7 +319,8 @@ pub struct ApiV1Schema {
     pub chat_attachment: ChatAttachment,
     pub chat_card: ChatCard,
     pub chat_event: ChatEvent,
-    pub chat_thread_create: ChatCreateThreadRequest,
+    pub chat_thread_open: ChatOpenThreadRequest,
+    pub chat_thread_read: ChatReadThreadRequest,
     pub chat_thread_patch: ChatPatchThreadRequest,
     pub chat_post_message: ChatPostMessageRequest,
     pub chat_stop: ChatStopRequest,

@@ -23,9 +23,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use task_core::chat::triage::{COS_TRIAGE_BATCH_MAX, CosTriageSource};
-use task_core::chat::{
-    ChatActor, ChatCard, ChatCardKind, ChatRun, ChatThreadKind, ChatThreadQuery,
-};
+use task_core::chat::{ChatCardKind, ChatRun};
 use task_core::{Event, EventRow, Notice, NoticeKind, NoticeQuery, NoticeStore, TaskId, TaskStore};
 use task_ops::human_inbox::{HumanInbox, InboxItem, InboxKind};
 use time::OffsetDateTime;
@@ -86,13 +84,11 @@ pub(crate) struct CosTriageState {
     reconciled: bool,
     /// Pending items may exist; try one claim when the inbox thread is idle.
     pub(super) dirty: bool,
-    /// Cached id of the single `kind=inbox` thread.
-    pub(super) inbox_thread: Option<String>,
     /// A run of the inbox thread finished (or the process started): write the digests
     /// of finished triage runs (ADR 2026-10-07-cos-inbox-thread-conversation D1).
     pub(crate) digest_due: bool,
-    /// A run of the inbox thread was started by this process and may have ended since.
-    pub(crate) inbox_run_live: bool,
+    /// Threads whose run this process started; when one leaves `running`, a digest may be due.
+    pub(crate) live_runs: HashSet<String>,
     /// Root-done steps that already logged a failure in this process (log once, retry every tick).
     pub(crate) root_done_warned: HashSet<String>,
 }
@@ -184,6 +180,7 @@ fn inbox_source(item: &InboxItem, policy_version: &str) -> CosTriageSource {
         operation_id: None,
         summary: item.title.clone(),
         policy_version: policy_version.to_owned(),
+        task_id: item_tasks(item).next().map(|t| t.to_string()),
     }
 }
 
@@ -224,7 +221,7 @@ pub(crate) fn sources_for_touched(
     inbox: &HumanInbox,
     touched: &TouchedTasks,
     policy_version: &str,
-) -> Vec<(CosTriageSource, Vec<TaskId>)> {
+) -> Vec<CosTriageSource> {
     let mut out = Vec::new();
     for item in inbox.items.iter().filter(|i| !is_direct(i)) {
         let hits: Vec<&Option<String>> = item_tasks(item)
@@ -238,7 +235,7 @@ pub(crate) fn sources_for_touched(
         if hits.iter().all(|op| op.is_some()) {
             source.operation_id = hits.iter().find_map(|op| (*op).clone());
         }
-        out.push((source, item.task.iter().map(|t| t.id).collect()));
+        out.push(source);
     }
     out
 }
@@ -279,6 +276,7 @@ pub(crate) fn notice_source(notice: &Notice, policy_version: &str) -> Option<Cos
         operation_id,
         summary: notice.title.clone(),
         policy_version: policy_version.to_owned(),
+        task_id: notice.task_id.clone(),
     })
 }
 
@@ -291,22 +289,6 @@ pub(super) fn card_kind(source_kind: &str) -> ChatCardKind {
         COS_TRIAGE_NOTICE_KIND => ChatCardKind::Notice,
         _ => ChatCardKind::Task,
     }
-}
-
-/// Stable, bounded idempotency key of the origin-thread reference card.
-fn card_key(source: &CosTriageSource) -> String {
-    // FNV-1a 64: deterministic across processes (unlike `DefaultHasher`).
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in format!(
-        "{}\u{1f}{}\u{1f}{}",
-        source.source_kind, source.source_key, source.source_revision
-    )
-    .bytes()
-    {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("cos-triage:{hash:016x}")
 }
 
 impl CosChatLaunch {
@@ -538,17 +520,13 @@ impl CosChatLaunch {
                     .map(|inbox| sources_for_touched(inbox, &touched, &policy))
                     .unwrap_or_default()
             };
-            let items: Vec<CosTriageSource> = sources.iter().map(|(s, _)| s.clone()).collect();
             let inserted = self
                 .store
-                .cos_triage_ingest_batch(COS_TRIAGE_EVENTS_SOURCE, &last.to_string(), &items, now)
+                .cos_triage_ingest_batch(COS_TRIAGE_EVENTS_SOURCE, &last.to_string(), &sources, now)
                 .map_err(|e| e.to_string())?;
             cursor = last;
             if inserted > 0 {
                 self.triage.dirty = true;
-                for (source, tasks) in sources.iter().filter(|(s, _)| s.operation_id.is_none()) {
-                    self.origin_card(source, tasks, now);
-                }
             }
             if rows.len() < EVENT_BATCH {
                 break;
@@ -606,108 +584,33 @@ impl CosChatLaunch {
             .map_err(|e| e.to_string())?;
         if inserted > 0 {
             self.triage.dirty = true;
-            let with_task: Vec<(CosTriageSource, Option<String>)> = newer
-                .iter()
-                .filter_map(|n| notice_source(n, &policy).map(|s| (s, n.task_id.clone())))
-                .collect();
-            for (source, task) in with_task {
-                if let Some(task) = task.and_then(|t| t.parse::<TaskId>().ok()) {
-                    self.origin_card(&source, &[task], now);
-                }
-            }
         }
         Ok(())
     }
 
-    pub(super) fn inbox_thread(&mut self) -> Result<Option<String>, String> {
-        if let Some(id) = &self.triage.inbox_thread {
-            return Ok(Some(id.clone()));
-        }
-        let mut before = None;
-        loop {
-            let page = self
-                .store
-                .chat_thread_list(&ChatThreadQuery {
-                    before: before.clone(),
-                    limit: Some(100),
-                    ..ChatThreadQuery::default()
-                })
-                .map_err(|e| e.to_string())?;
-            if let Some(thread) = page.items.iter().find(|t| t.kind == ChatThreadKind::Inbox) {
-                self.triage.inbox_thread = Some(thread.id.clone());
-                return Ok(Some(thread.id.clone()));
-            }
-            before = page.next_cursor;
-            if before.is_none() {
-                return Ok(None);
-            }
-        }
-    }
-
-    /// D3: a reference card in the origin thread of the item's task; triage
-    /// itself runs only in the inbox thread. Idempotent per source triple.
-    fn origin_card(&mut self, source: &CosTriageSource, tasks: &[TaskId], now: OffsetDateTime) {
-        let inbox = match self.inbox_thread() {
-            Ok(Some(id)) => id,
-            Ok(None) => return,
-            Err(error) => {
-                tracing::warn!(%error, "CoS triage inbox thread lookup failed");
-                return;
-            }
-        };
-        let mut origins: HashSet<String> = HashSet::new();
-        for task in tasks {
-            let events = match self.store.events_for(*task) {
-                Ok(events) => events,
-                Err(_) => continue,
-            };
-            // The first human thread whose CoS operation touched the task.
-            if let Some(thread) = events.iter().find_map(|(_, e)| match e {
-                Event::CosOperation { thread_id, .. } if *thread_id != inbox => {
-                    Some(thread_id.clone())
-                }
-                _ => None,
-            }) {
-                origins.insert(thread);
-            }
-        }
-        for origin in origins {
-            let card = ChatCard {
-                kind: card_kind(&source.source_kind),
-                id: source.source_key.clone(),
-                title: source.summary.clone(),
-                state: "pending".into(),
-                href: format!("/?thread={inbox}"),
-                actor: ChatActor::System,
-                reason: Some("受信箱で CoS が一次対応中".into()),
-                operation_id: None,
-            };
-            if let Err(error) = self.store.chat_system_message_add_once(
-                &origin,
-                &card_key(source),
-                "受信箱で一次対応中の項目",
-                &[card],
-                now,
-            ) {
-                tracing::warn!(%error, %origin, "CoS triage origin card failed");
-            }
-        }
-    }
-
-    /// Start one CoS run over up to twenty pending items when the inbox thread
-    /// is idle. While a run is live the items stay pending (durable queue).
+    /// Start one CoS run over up to twenty pending items in each idle CoS thread that has
+    /// pending items (ADR 2026-10-22-cos-fixed-threads D3). While a thread's run is live its
+    /// items stay pending (durable queue).
     pub(crate) fn triage_launch(&mut self, dispatcher: &mut Dispatcher) -> Result<(), String> {
-        let Some(thread) = self.inbox_thread()? else {
-            return Ok(());
-        };
-        if self.running.contains_key(&thread) {
+        if !self.triage.dirty {
             return Ok(());
         }
-        if !self.triage.dirty || !self.has_capacity(dispatcher) {
-            return Ok(());
+        let threads = self
+            .store
+            .cos_triage_pending_threads()
+            .map_err(|e| e.to_string())?;
+        // Busy threads keep their items for the next pass.
+        let mut more = false;
+        for thread in threads {
+            if self.running.contains_key(&thread) || !self.has_capacity(dispatcher) {
+                more = true;
+                continue;
+            }
+            self.start_thread(dispatcher, &thread, ClaimSource::Triage)?;
+            more |= self.triage.dirty;
         }
-        // `triage_claim` clears the flag unless a full batch leaves more items.
-        self.start_thread(dispatcher, &thread, ClaimSource::Triage)
+        self.triage.dirty = more;
+        Ok(())
     }
 
     /// `ClaimSource::Triage`: bind at most twenty items to a system message
@@ -720,15 +623,12 @@ impl CosChatLaunch {
     ) -> Result<Option<ChatRun>, String> {
         let Some(claim) = self
             .store
-            .cos_triage_claim(run_id, now)
+            .cos_triage_claim(thread_id, run_id, now)
             .map_err(|e| e.to_string())?
         else {
             self.triage.dirty = false;
             return Ok(None);
         };
-        if claim.thread_id != thread_id {
-            self.triage.inbox_thread = Some(claim.thread_id.clone());
-        }
         // More than a batch: claim the rest after this run.
         self.triage.dirty = claim.item_ids.len() >= COS_TRIAGE_BATCH_MAX;
         self.store

@@ -600,9 +600,7 @@ async fn console_call(
 
 #[tokio::test]
 async fn cos_chat_mcp_new_threads_continuation_and_reply() {
-    use task_core::chat::{
-        ChatMessageQuery, ChatPatchThreadRequest, ChatRunState, ChatThreadKind, ChatThreadStatus,
-    };
+    use task_core::chat::{ChatMessageQuery, ChatRunState, ChatThreadKind};
     let server = spawn_token_server(60).await;
     create_client(
         &server.store,
@@ -639,9 +637,10 @@ async fn cos_chat_mcp_new_threads_continuation_and_reply() {
     .await;
     let thread = first["thread_id"].as_str().unwrap();
     let t = server.store.chat_thread_get(thread).unwrap().unwrap();
-    assert_eq!(t.kind, ChatThreadKind::Human);
+    // ADR 2026-10-22-cos-fixed-threads D2: the input goes to the project's CoS thread.
+    assert_eq!(t.kind, ChatThreadKind::Project);
     assert_eq!(t.project_id, Some(project.id.to_string()));
-    assert_eq!(t.title, "chatgpt-rdc: 調査結果をタスクにして");
+    assert_eq!(t.title, format!("CoS: {}", project.title));
     assert_eq!(first["message_id"], first["task_id"]);
     assert!(
         server
@@ -672,7 +671,7 @@ async fn cos_chat_mcp_new_threads_continuation_and_reply() {
         listed
             .items
             .iter()
-            .any(|t| t.id == thread && t.kind == ChatThreadKind::Human)
+            .any(|t| t.id == thread && t.kind == ChatThreadKind::Project)
     );
     let second = console_call(
         &client,
@@ -779,20 +778,8 @@ async fn cos_chat_mcp_new_threads_continuation_and_reply() {
     }
     let mismatch = console_call(&client, &server, &session, "console_instruct", json!({"text":"invalid", "thread_id":second["thread_id"], "project_id":project.id.to_string()})).await;
     assert_eq!(mismatch["error"]["code"], -32602, "{mismatch}");
-    let t = server.store.chat_thread_get(thread).unwrap().unwrap();
-    server
-        .store
-        .chat_thread_patch(
-            thread,
-            &ChatPatchThreadRequest {
-                title: None,
-                status: Some(ChatThreadStatus::Archived),
-                expected_revision: t.revision,
-            },
-            OffsetDateTime::now_utc(),
-        )
-        .unwrap();
-    for id in [thread, "missing", legacy.as_str()] {
+    // ADR 2026-10-22-cos-fixed-threads D1: CoS threads are never archived; legacy ones refuse input.
+    for id in ["missing", legacy.as_str()] {
         let error = console_call(
             &client,
             &server,

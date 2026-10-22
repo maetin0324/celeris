@@ -273,6 +273,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/chat/threads/{t}/attachments` | A | `chat/attachments.rs` | 共通 |
 | POST | `/chat/threads/{t}/messages` | A | `chat/mod.rs` | 共通 |
 | DELETE | `/chat/threads/{t}/messages/{m}` | A | `chat/mod.rs` | 共通 |
+| POST | `/chat/threads/{t}/read` | A | `chat/mod.rs` | 共通 |
 | POST | `/chat/threads/{t}/resume-queue` | A | `chat/mod.rs` | 共通 |
 | POST | `/chat/threads/{t}/stop` | A | `chat/mod.rs` | 共通 |
 | POST | `/console/instruct` | X: `console_instruction_chain` | `console.rs` | 共通 |

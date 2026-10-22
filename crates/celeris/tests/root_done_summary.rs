@@ -260,10 +260,11 @@ impl Env {
     }
 
     fn cos_runs(&self) -> i64 {
-        // root 完了のスレッド（題名 `完了: …`）の run だけ。受信箱 triage の run（別経路）は数えない。
+        // root 完了の入力（client_message_id `root-done:…`）の run だけ。受信箱 triage の run は数えない。
+        // ADR 2026-10-22-cos-fixed-threads D3: 書き込み先は案件か統括の CoS スレッド。
         self.count(
-            "SELECT COUNT(*) FROM chat_runs WHERE thread_id IN \
-             (SELECT id FROM chat_threads WHERE title LIKE '完了: %')",
+            "SELECT COUNT(*) FROM chat_runs r JOIN chat_messages m ON m.id=r.input_message_id \
+             WHERE m.client_message_id LIKE 'root-done:%'",
         )
     }
 

@@ -1,9 +1,7 @@
 use std::sync::Mutex;
 
 use serde_json::json;
-use task_core::chat::{
-    ChatCreateThreadRequest, ChatPostMessageRequest, ChatRunState, ChatSendMode,
-};
+use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatRunState, ChatSendMode};
 
 use super::*;
 
@@ -26,15 +24,7 @@ fn fixture() -> Fixture {
     let db_path = dir.path().join("celeris.db");
     let store = SqliteStore::open(&db_path).expect("store");
     let thread_id = store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "gc".into(),
-                project_id: None,
-                client_thread_id: "gc".into(),
-            },
-            at(0),
-        )
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, at(0))
         .expect("thread")
         .thread
         .id;

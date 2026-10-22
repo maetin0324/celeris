@@ -1203,7 +1203,7 @@ mod tests {
             .expect("pin");
         let conn = Connection::open(temp.path().join("db.sqlite")).expect("db");
         conn.execute(
-            "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) VALUES('thread','human','t','open',?1,?1)",
+            "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) VALUES('thread','general','t','open',?1,?1)",
             [stamp(t).expect("time")],
         )
         .expect("thread");

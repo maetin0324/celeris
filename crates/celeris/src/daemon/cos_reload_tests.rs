@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use task_core::chat::{ChatCreateThreadRequest, ChatPostMessageRequest, ChatSendMode};
+use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
 use task_core::{InstanceRole, SqliteStore};
 use task_dispatch::Dispatcher;
 use task_worker::{AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter};
@@ -55,14 +55,9 @@ async fn launch(
 ) -> Seen {
     let now = OffsetDateTime::now_utc();
     let thread = store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: key.into(),
-                project_id: None,
-                client_thread_id: key.into(),
-            },
-            now,
+        .cos_thread_open(
+&ChatOpenThreadRequest { project_id: None },
+now,
         )
         .unwrap()
         .thread

@@ -704,9 +704,10 @@ fn instructed_message(
         Ok(Some(thread)) => thread,
         _ => return Err(format!("thread {thread_id} is not readable")),
     };
-    if thread.kind != task_core::chat::ChatThreadKind::Inbox {
+    // ADR 2026-10-22-cos-fixed-threads D7: any CoS thread (general or project), not legacy.
+    if thread.kind == task_core::chat::ChatThreadKind::Legacy {
         return Err(format!(
-            "instructed_by is accepted only in the inbox thread (thread {thread_id} is {:?})",
+            "instructed_by is accepted only in a CoS thread (thread {thread_id} is {:?})",
             thread.kind
         ));
     }

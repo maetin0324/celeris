@@ -6,6 +6,7 @@ tasks: [01M51B9AFNAQ8FVXM8WAJ5B3H4]
 
 - 日付: 2026-10-16
 - 状態: 採用・実装済み
+- 2026-10-22 付記（[2026-10-22-cos-fixed-threads](2026-10-22-cos-fixed-threads.md)）: `cos_notification_routes` は変更なし。escalation の通知本文に CoS の名（`cos`）を足した。
 - 関連: 2026-10-06-cos-inbox-triage-fallback、2026-10-15-credential-wait-skip-triage、2026-10-11-breaking-changes-by-default
 
 ## 背景

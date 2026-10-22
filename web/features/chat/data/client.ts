@@ -9,13 +9,14 @@ import type {
   ApprovalDecideResult,
   ChatAttachment,
   ChatAttachmentResponse,
-  ChatCreateThreadRequest,
   ChatEventListResponse,
   ChatMessageListResponse,
   ChatMessageResponse,
+  ChatOpenThreadRequest,
   ChatPatchThreadRequest,
   ChatPostMessageRequest,
   ChatPostMessageResponse,
+  ChatReadThreadRequest,
   ChatReferenceRequest,
   ChatReferenceResponse,
   ChatRunResponse,
@@ -53,6 +54,7 @@ export const chatPaths = {
   thread: (t: string) => `${API}/chat/threads/${seg(t)}`,
   messages: (t: string) => `${API}/chat/threads/${seg(t)}/messages`,
   message: (t: string, m: string) => `${API}/chat/threads/${seg(t)}/messages/${seg(m)}`,
+  read: (t: string) => `${API}/chat/threads/${seg(t)}/read`,
   stop: (t: string) => `${API}/chat/threads/${seg(t)}/stop`,
   resumeQueue: (t: string) => `${API}/chat/threads/${seg(t)}/resume-queue`,
   run: (t: string, r: string) => `${API}/chat/threads/${seg(t)}/runs/${seg(r)}`,
@@ -73,8 +75,14 @@ export function listThreads(params: ThreadListParams = {}, signal?: AbortSignal)
   return apiGet<ChatThreadListResponse>(`${chatPaths.threads()}${query(params)}`, signal);
 }
 
-export function createThread(body: ChatCreateThreadRequest, signal?: AbortSignal) {
+/** ADR 2026-10-22-cos-fixed-threads D2: open (or get) the general CoS (`project_id` null) or a project's CoS. */
+export function openThread(body: ChatOpenThreadRequest, signal?: AbortSignal) {
   return apiMutate<ChatThreadResponse>("POST", chatPaths.threads(), body, signal);
+}
+
+/** D5: raise the thread's read watermark (never lowers it). */
+export function readThread(threadId: string, body: ChatReadThreadRequest, signal?: AbortSignal) {
+  return apiMutate<ChatThreadResponse>("POST", chatPaths.read(threadId), body, signal);
 }
 
 export function getThread(threadId: string, signal?: AbortSignal) {

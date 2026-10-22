@@ -778,3 +778,38 @@ pub fn userns_available() -> bool {
     }
     available
 }
+
+/// The CoS thread of a new project titled `key` (ADR 2026-10-22-cos-fixed-threads D1): tests that
+/// need separate threads (one live run each) get one per project.
+#[allow(dead_code)]
+pub fn project_cos_thread(
+    store: &task_core::SqliteStore,
+    key: &str,
+) -> task_core::chat::ChatThread {
+    let now = time::OffsetDateTime::now_utc();
+    let project = task_core::Project {
+        id: task_core::ProjectId::new(),
+        title: key.into(),
+        request: key.into(),
+        status: task_core::ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        auto_advance: false,
+        auto_integrate: false,
+        slug: None,
+        created_at: now,
+        updated_at: now,
+    };
+    task_core::TaskStore::project_create(store, &project).expect("project");
+    store
+        .cos_thread_open(
+            &task_core::chat::ChatOpenThreadRequest {
+                project_id: Some(project.id.to_string()),
+            },
+            now,
+        )
+        .expect("project thread")
+        .thread
+}

@@ -1217,18 +1217,22 @@ function handleInboxNotifications(state, req, res, url, body, sendEvent) {
 // so tests can wait for a specific event instead of waiting for a timer.
 export function chatSeedFixture() {
   const at = "2026-10-05T12:00:00Z";
-  const thread = (id, title, kind = "human") => ({
+  // ADR 2026-10-22-cos-fixed-threads: one general CoS, one CoS per project, legacy history.
+  const thread = (id, title, kind, project_id = null) => ({
     id,
     title,
     kind,
     status: "open",
     revision: 1,
-    project_id: "P1",
+    project_id,
     created_at: at,
     updated_at: at,
     active_run_id: null,
     queue_paused: false,
     queued_count: 0,
+    unread_count: 0,
+    attention_count: 0,
+    read_through_seq: 0,
   });
   // カードの id は受信箱の項目 id（triage の source_key と同じ）を指し、回答は受信箱 API へ行く。
   // 詳細 link は実在画面（/tasks/<id>・/inbox・/?thread=<id>&operation=<id>）へ置く。
@@ -1305,24 +1309,24 @@ export function chatSeedFixture() {
   });
   return [
     {
-      thread: thread("chat-main", "CoS と相談"),
+      thread: thread("chat-main", "CoS と相談", "general"),
       messages: [
         message("chat-main", 1, "user", "進捗を教えて"),
         message("chat-main", 2, "assistant", "## 進捗\n作業を確認しました。\n\n```sh\npnpm test\n```", cards),
       ],
     },
     {
-      thread: thread("chat-history", "長い会話の確認"),
+      thread: thread("chat-history", "長い会話の確認", "project", "P1"),
       messages: Array.from({ length: 240 }, (_, i) =>
         message("chat-history", i + 1, i % 2 ? "assistant" : "user", `履歴 ${i + 1}`),
       ),
     },
     {
-      thread: thread("chat-inbox", "受信箱の一次対応", "inbox"),
+      thread: { ...thread("chat-inbox", "受信箱の一次対応", "project", "P2"), attention_count: 2 },
       messages: [message("chat-inbox", 1, "assistant", "決定を確認してください", inboxCards)],
     },
     {
-      thread: thread("chat-legacy", "旧 Console の会話", "legacy"),
+      thread: thread("chat-legacy", "旧 Console の会話", "legacy", "P1"),
       messages: [message("chat-legacy", 1, "user", "以前の相談")],
     },
   ];
@@ -1607,26 +1611,28 @@ function createChatFixture() {
           next_cursor: sorted[start + limit] ? `${items.at(-1).updated_at}|${items.at(-1).id}` : null,
         });
       } else if (method === "POST") {
+        // D2: opens the fixed CoS thread of a scope (general or one project); never a free thread.
+        const project = input.project_id ?? null;
         if (
-          typeof input.client_thread_id !== "string" ||
-          !input.client_thread_id ||
-          typeof input.title !== "string" ||
-          !input.title.trim() ||
-          input.title.length > 200
+          Object.keys(input).some((key) => key !== "project_id") ||
+          (project !== null && typeof project !== "string")
         ) {
-          error(res, 422, "invalid-thread");
+          error(res, 400, "invalid-thread");
           return true;
         }
-        const existing = [...rows.values()].find((r) => r.ids.get("thread") === input.client_thread_id);
-        if (existing && (existing.createTitle !== input.title || existing.createProject !== (input.project_id ?? null)))
-          error(res, 409, "idempotency-conflict");
-        else if (existing) json(res, 200, { thread: existing.thread });
+        const existing = [...rows.values()].find((r) =>
+          project === null
+            ? r.thread.kind === "general"
+            : r.thread.kind === "project" && r.thread.project_id === project,
+        );
+        if (existing) json(res, 200, { thread: existing.thread });
         else {
           const thread = chatSeedFixture()[0].thread;
           Object.assign(thread, {
             id: `chat-new-${nextThread++}`,
-            title: input.title ?? "",
-            project_id: input.project_id ?? null,
+            kind: project === null ? "general" : "project",
+            title: project === null ? "統括 CoS" : `CoS: ${project}`,
+            project_id: project,
           });
           const row = {
             thread,
@@ -1634,10 +1640,8 @@ function createChatFixture() {
             events: [],
             runs: new Map(),
             clients: new Set(),
-            ids: new Map([["thread", input.client_thread_id]]),
+            ids: new Map(),
             uploads: new Map(),
-            createTitle: input.title,
-            createProject: input.project_id ?? null,
             expiredBefore: 0,
             hold: false,
           };
@@ -1653,13 +1657,24 @@ function createChatFixture() {
       return true;
     }
     const thread = row.thread;
+    if (tail[2] === "read" && tail.length === 3) {
+      // D5: raise the read watermark; never lower it.
+      if (method !== "POST") error(res, 405, "method-not-allowed");
+      else if (!Number.isInteger(input.through_seq) || input.through_seq < 0) error(res, 400, "invalid-read");
+      else {
+        thread.read_through_seq = Math.max(thread.read_through_seq ?? 0, input.through_seq);
+        thread.unread_count = row.messages.filter((m) => m.seq > thread.read_through_seq && m.role !== "user").length;
+        json(res, 200, { thread });
+      }
+      return true;
+    }
     if (tail.length === 2) {
       if (method === "GET")
         json(res, 200, { thread, active_run: row.runs.get(thread.active_run_id) ?? null, last_event_id: lastId(row) });
       else if (method === "PATCH") {
         if (input.expected_revision !== thread.revision) error(res, 409, "revision-conflict");
         else if (input.title === undefined && input.status === undefined) error(res, 422, "empty-patch");
-        else if (input.status === "archived" && thread.kind === "inbox") error(res, 409, "inbox-thread");
+        else if (input.status === "archived" && thread.kind !== "legacy") error(res, 409, "cos-thread");
         else if (input.status === "archived" && (thread.active_run_id || queue(row).length))
           error(res, 409, "thread-busy");
         else {

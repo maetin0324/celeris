@@ -5,6 +5,7 @@ tasks: [01M4CAKADGDTZA7QKDJ9GX35MW]
 ---
 
 - 状態: 採用（実装済み）
+- 2026-10-22 付記: [2026-10-22-cos-fixed-threads](2026-10-22-cos-fixed-threads.md) により`kind='inbox'` は migration 0092 で `general`（統括 CoS）へ移した。origin card は消した。受信箱の件は統括・案件の CoS スレッドで話す。
 - 関係: [2026-10-05-cos-chat-home](2026-10-05-cos-chat-home.md) D3/D5/D6、[2026-10-06-cos-inbox-triage](2026-10-06-cos-inbox-triage.md)（store 契約）、[2026-10-06-cos-inbox-triage-fallback](2026-10-06-cos-inbox-triage-fallback.md)（D6 退避）、[2026-10-07-cos-live-fixes](2026-10-07-cos-live-fixes.md)
 
 ## 1. 文脈

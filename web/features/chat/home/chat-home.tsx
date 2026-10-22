@@ -1,21 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { inboxItemsQuery } from "../../../api/queries/inbox-notifications";
+import type { ChatMessage } from "../../../api/generated/types";
 import { ScreenFrame } from "../../../components/shell/screen-frame";
 import { ChatCardItem } from "../cards/chat-card";
-import { ChatComposer, INBOX_COMPOSER_PLACEHOLDER } from "../composer/chat-composer";
+import { ChatComposer, COS_COMPOSER_PLACEHOLDER } from "../composer/chat-composer";
 import { useChatSession } from "../data/use-chat-session";
 import { attachmentIdsOf, useAttachmentMap, useOlderMessages } from "../messages/history";
 import { MessageList } from "../messages/message-list";
 import { ThreadsModel } from "../threads/model";
 import { ChatThreads } from "../threads/threads";
 
-/** URL は選択した会話の正本。未指定のときだけ直近の人の会話を選ぶ。 */
+/** URL は選択した会話の正本。未指定のときは統括 CoS を開く（ADR 2026-10-22-cos-fixed-threads D5）。 */
 export function ChatHome() {
   const { thread } = useSearch({ from: "/" });
   const navigate = useNavigate();
-  const inbox = useQuery(inboxItemsQuery());
   const [model] = useState(() => new ThreadsModel());
   const [loaded, setLoaded] = useState(false);
   const threads = useSyncExternalStore(model.subscribe, model.snapshot, model.snapshot);
@@ -30,13 +28,13 @@ export function ChatHome() {
   useEffect(() => {
     if (!loaded || thread || threads.loading || threads.error || choosing.current) return;
     choosing.current = true;
-    const human = threads.items.find((item) => item.kind === "human");
-    if (human) {
-      void navigate({ to: "/", search: { thread: human.id }, replace: true });
+    const general = model.general();
+    if (general) {
+      void navigate({ to: "/", search: { thread: general.id }, replace: true });
       return;
     }
     void model
-      .create((id) => void navigate({ to: "/", search: { thread: id }, replace: true }))
+      .open(null, (id) => void navigate({ to: "/", search: { thread: id }, replace: true }))
       .finally(() => {
         choosing.current = false;
       });
@@ -82,16 +80,11 @@ export function ChatHome() {
         style={{ height }}
       >
         <div className="shrink-0 border-b border-border p-2 md:flex md:h-full md:min-h-0 md:flex-col md:border-r md:border-b-0 md:p-0">
-          <ChatThreads
-            model={model}
-            selectedThreadId={thread}
-            inboxWaitingCount={inbox.data?.counts.total ?? 0}
-            onSelectThread={select}
-          />
+          <ChatThreads model={model} selectedThreadId={thread} onSelectThread={select} />
         </div>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {thread ? (
-            <ChatConversation key={thread} threadId={thread} />
+            <ChatConversation key={thread} threadId={thread} model={model} />
           ) : (
             <p role="status" className="flex-1 p-4 text-muted-foreground">
               会話を準備しています
@@ -103,9 +96,14 @@ export function ChatHome() {
   );
 }
 
-function ChatConversation({ threadId }: { threadId: string }) {
+function ChatConversation({ threadId, model }: { threadId: string; model: ThreadsModel }) {
   const { session, snapshot } = useChatSession(threadId);
   const chat = snapshot.chat;
+  const lastSeq = latestSeq(chat.messages);
+  // D5: what is on screen is read; the list's unread count follows.
+  useEffect(() => {
+    if (lastSeq > 0) void model.markRead(threadId, lastSeq);
+  }, [model, threadId, lastSeq]);
   const history = useOlderMessages(chat, session.dispatch);
   const attachments = useAttachmentMap(attachmentIdsOf(chat));
   return (
@@ -142,8 +140,15 @@ function ChatConversation({ threadId }: { threadId: string }) {
         threadId={threadId}
         session={session}
         snapshot={snapshot}
-        placeholder={chat.thread?.kind === "inbox" ? INBOX_COMPOSER_PLACEHOLDER : undefined}
+        placeholder={chat.thread && chat.thread.kind !== "legacy" ? COS_COMPOSER_PLACEHOLDER : undefined}
       />
     </>
   );
+}
+
+/** The highest seq among the loaded messages (0 when empty). */
+export function latestSeq(messages: Record<string, ChatMessage>): number {
+  let max = 0;
+  for (const message of Object.values(messages)) if (message.seq > max) max = message.seq;
+  return max;
 }

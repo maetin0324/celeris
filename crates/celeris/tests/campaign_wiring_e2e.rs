@@ -10,9 +10,7 @@ use std::time::Duration;
 
 use celeris::Config;
 use serde_json::{Value, json};
-use task_core::chat::{
-    ChatCreateThreadRequest, ChatPostMessageRequest, ChatRunState, ChatSendMode,
-};
+use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatRunState, ChatSendMode};
 use task_core::decision_log::{
     CampaignVerdict, CandidateRef, DecisionLogOutcome, DecisionLogProposal, DecisionLogUsage,
     InterventionKind, UsageRole,
@@ -310,15 +308,7 @@ async fn post_tasks_to_export_connects_children_retries_review_cos_jev_and_inter
     let now = OffsetDateTime::now_utc();
     let thread = d
         .store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "t".into(),
-                project_id: None,
-                client_thread_id: "t".into(),
-            },
-            now,
-        )
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, now)
         .expect("thread")
         .thread
         .id;

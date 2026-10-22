@@ -9,7 +9,6 @@ use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use ulid::Ulid;
 
@@ -155,12 +154,6 @@ pub(crate) fn enum_from<T: DeserializeOwned>(s: &str) -> Result<T, ChatError> {
         .map_err(|e| ChatError::Store(StoreError::Invalid(format!("stored enum {s:?}: {e}"))))
 }
 
-fn hash_json(v: &Value) -> String {
-    let mut h = Sha256::new();
-    h.update(v.to_string().as_bytes());
-    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
-}
-
 fn check_key(name: &str, key: &str) -> Result<(), ChatError> {
     if key.trim().is_empty() || key.len() > CHAT_CLIENT_KEY_MAX_BYTES {
         return Err(ChatError::Invalid(format!(
@@ -206,7 +199,10 @@ pub fn chat_fts_literal(q: &str) -> Option<String> {
 pub(crate) const THREAD_SELECT: &str = "SELECT t.id,t.kind,t.title,t.project_id,t.status,t.queue_paused,\
  t.revision,t.created_at,t.updated_at,\
  (SELECT r.run_id FROM chat_runs r WHERE r.thread_id=t.id AND r.state IN ('running','stopping')),\
- (SELECT COUNT(*) FROM chat_messages m WHERE m.thread_id=t.id AND m.role='user' AND m.state='queued') \
+ (SELECT COUNT(*) FROM chat_messages m WHERE m.thread_id=t.id AND m.role='user' AND m.state='queued'),\
+ t.read_through_seq,\
+ (SELECT COUNT(*) FROM chat_messages u WHERE u.thread_id=t.id AND u.role<>'user' AND u.seq>t.read_through_seq),\
+ (SELECT COUNT(*) FROM cos_inbox_items i WHERE i.thread_id=t.id AND i.state IN ('pending','running','escalated','fallback')) \
  FROM chat_threads t";
 
 struct ThreadRaw {
@@ -221,6 +217,9 @@ struct ThreadRaw {
     updated_at: String,
     active_run_id: Option<String>,
     queued_count: i64,
+    read_through_seq: i64,
+    unread_count: i64,
+    attention_count: i64,
 }
 
 fn thread_raw(row: &Row<'_>) -> rusqlite::Result<ThreadRaw> {
@@ -236,6 +235,9 @@ fn thread_raw(row: &Row<'_>) -> rusqlite::Result<ThreadRaw> {
         updated_at: row.get(8)?,
         active_run_id: row.get(9)?,
         queued_count: row.get(10)?,
+        read_through_seq: row.get(11)?,
+        unread_count: row.get(12)?,
+        attention_count: row.get(13)?,
     })
 }
 
@@ -250,6 +252,9 @@ fn thread_from_raw(r: ThreadRaw) -> Result<ChatThread, ChatError> {
         active_run_id: r.active_run_id,
         queued_count: u32::try_from(r.queued_count).unwrap_or(u32::MAX),
         revision: u64::try_from(r.revision).unwrap_or(0),
+        read_through_seq: u64::try_from(r.read_through_seq).unwrap_or(0),
+        unread_count: u32::try_from(r.unread_count).unwrap_or(u32::MAX),
+        attention_count: u32::try_from(r.attention_count).unwrap_or(u32::MAX),
         created_at: r.created_at,
         updated_at: r.updated_at,
     })
@@ -488,8 +493,8 @@ fn parse_thread_cursor(s: &str) -> Result<(String, String), ChatError> {
 }
 
 impl SqliteStore {
-    /// MCP inputs use the normal human queue. Thread creation, input and provenance
-    /// commit together; the input id is also the compatibility task receipt.
+    /// MCP inputs use the normal human queue of the named thread, else of the project's (or the
+    /// general) CoS thread. Input and provenance commit together; the input id is also the compatibility task receipt.
     pub fn chat_mcp_instruct(
         &self,
         client_id: &str,
@@ -528,25 +533,8 @@ impl SqliteStore {
                 }
                 id.to_owned()
             }
-            None => {
-                let id = Ulid::new().to_string();
-                let source: String = client_id.chars().take(100).collect();
-                let summary: String = text
-                    .trim()
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .chars()
-                    .take(60)
-                    .collect();
-                let title = format!("{source}: {summary}");
-                tx.execute(
-                    "INSERT INTO chat_threads(id,kind,title,project_id,status,created_at,updated_at) VALUES(?1,'human',?2,?3,'open',?4,?4)",
-                    params![id, title, project_id, at],
-                )?;
-                emit_thread(&tx, &id, &at)?;
-                id
-            }
+            // ADR 2026-10-22-cos-fixed-threads D2: no new thread per input.
+            None => cos_thread_ensure_tx(&tx, project_id, &at)?,
         };
         let posted = message_post_conn(
             &tx,
@@ -602,20 +590,49 @@ impl SqliteStore {
         })
     }
 
-    /// D2 `POST /chat/threads`: idempotent on `(scope_id, client_thread_id)` via
-    /// `chat_client_requests`. The same key with the same title/project returns the same thread;
-    /// different content is a conflict. kind is always `human`.
-    pub fn chat_thread_create(
+    /// ADR 2026-10-22-cos-fixed-threads D2 `POST /chat/threads`: the general CoS thread
+    /// (`project_id: None`) or the CoS thread of one project, created on first use.
+    /// An unknown project is invalid (the API caller named it explicitly).
+    pub fn cos_thread_open(
         &self,
-        scope_id: &str,
-        req: &ChatCreateThreadRequest,
+        req: &ChatOpenThreadRequest,
         now: OffsetDateTime,
     ) -> Result<ChatThreadCreated, ChatError> {
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        let created = chat_thread_create_tx(&tx, scope_id, req, now)?;
+        let created = cos_thread_open_tx(&tx, req, now)?;
         tx.commit()?;
         Ok(created)
+    }
+
+    /// D3: the CoS thread a task's items and reports go to — the project of its root, else
+    /// the general CoS. Created on first use.
+    pub fn cos_thread_for_task(
+        &self,
+        task_id: &str,
+        now: OffsetDateTime,
+    ) -> Result<ChatThread, ChatError> {
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let project = task_root_project(&tx, Some(task_id))?;
+        let id = cos_thread_ensure_tx(&tx, project.as_deref(), &chat_ts(now))?;
+        let thread = thread_require(&tx, &id)?;
+        tx.commit()?;
+        Ok(thread)
+    }
+
+    /// D5 `POST /chat/threads/{t}/read`: raise the read watermark, capped at the last seq.
+    pub fn chat_thread_mark_read(
+        &self,
+        id: &str,
+        req: &ChatReadThreadRequest,
+        now: OffsetDateTime,
+    ) -> Result<ChatThread, ChatError> {
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let thread = chat_thread_mark_read_tx(&tx, id, req, now)?;
+        tx.commit()?;
+        Ok(thread)
     }
 
     pub fn chat_thread_get(&self, id: &str) -> Result<Option<ChatThread>, ChatError> {
@@ -1229,39 +1246,119 @@ pub(crate) fn read_tx<T>(
     })
 }
 
-/// [`SqliteStore::chat_thread_create`] inside the caller's transaction (the CoS operation
-/// transaction of ADR 2026-10-09-cos-operations-all-mutations).
-pub fn chat_thread_create_tx(
+/// The project of `task_id`'s root (`tasks.parent_id` walked to the top), if the root has one
+/// that still exists. ADR 2026-10-22-cos-fixed-threads D3.
+pub(crate) fn task_root_project(
     tx: &Connection,
-    scope_id: &str,
-    req: &ChatCreateThreadRequest,
-    now: OffsetDateTime,
-) -> Result<ChatThreadCreated, ChatError> {
-    check_key("client_thread_id", &req.client_thread_id)?;
-    check_title(&req.title)?;
-    let hash = hash_json(&json!({"title": req.title, "project_id": req.project_id}));
-    let at = chat_ts(now);
-    let existing: Option<(String, String)> = tx
+    task_id: Option<&str>,
+) -> Result<Option<String>, ChatError> {
+    let Some(task_id) = task_id else {
+        return Ok(None);
+    };
+    let project: Option<Option<String>> = tx
         .query_row(
-            "SELECT request_hash,result_id FROM chat_client_requests \
-             WHERE kind='thread' AND scope_id=?1 AND key=?2",
-            params![scope_id, req.client_thread_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            "WITH RECURSIVE up(id,parent_id,project_id,depth) AS ( \
+               SELECT id,parent_id,project_id,0 FROM tasks WHERE id=?1 \
+               UNION ALL SELECT t.id,t.parent_id,t.project_id,up.depth+1 FROM tasks t \
+               JOIN up ON t.id=up.parent_id WHERE up.depth<64) \
+             SELECT up.project_id FROM up JOIN projects p ON p.id=up.project_id \
+             ORDER BY up.depth DESC LIMIT 1",
+            params![task_id],
+            |row| row.get(0),
         )
         .optional()?;
-    if let Some((prev_hash, thread_id)) = existing {
-        if prev_hash != hash {
-            return Err(ChatError::Conflict(format!(
-                "client_thread_id {} was used with different content",
-                req.client_thread_id
-            )));
-        }
-        let thread = thread_require(tx, &thread_id)?;
-        return Ok(ChatThreadCreated {
-            thread,
-            created: false,
-        });
+    Ok(project.flatten())
+}
+
+/// D1: the one general thread (`project_id: None` or an unknown project) or the one thread of
+/// `project_id`, inserted if missing. Returns its id. The only place a CoS thread is created.
+pub fn cos_thread_ensure_tx(
+    tx: &Connection,
+    project_id: Option<&str>,
+    at: &str,
+) -> Result<String, ChatError> {
+    let project: Option<(String, String)> = match project_id {
+        Some(p) => tx
+            .query_row(
+                "SELECT id,title FROM projects WHERE id=?1",
+                params![p],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?,
+        None => None,
+    };
+    let found: Option<String> = match &project {
+        Some((p, _)) => tx
+            .query_row(
+                "SELECT id FROM chat_threads WHERE kind='project' AND project_id=?1",
+                params![p],
+                |row| row.get(0),
+            )
+            .optional()?,
+        None => tx
+            .query_row(
+                "SELECT id FROM chat_threads WHERE kind='general'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?,
+    };
+    if let Some(id) = found {
+        return Ok(id);
     }
+    let id = Ulid::new().to_string();
+    match &project {
+        Some((p, title)) => {
+            let title: String = format!("CoS: {title}")
+                .chars()
+                .take(CHAT_TITLE_MAX_CHARS)
+                .collect();
+            tx.execute(
+                "INSERT INTO chat_threads(id,kind,title,project_id,status,created_at,updated_at) \
+                 VALUES(?1,'project',?2,?3,'open',?4,?4)",
+                params![id, title, p, at],
+            )?;
+        }
+        None => {
+            tx.execute(
+                "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) \
+                 VALUES(?1,'general','統括 CoS','open',?2,?2)",
+                params![id, at],
+            )?;
+        }
+    }
+    emit_thread(tx, &id, at)?;
+    Ok(id)
+}
+
+/// [`SqliteStore::chat_thread_mark_read`] inside the caller's transaction.
+pub fn chat_thread_mark_read_tx(
+    tx: &Connection,
+    id: &str,
+    req: &ChatReadThreadRequest,
+    now: OffsetDateTime,
+) -> Result<ChatThread, ChatError> {
+    let at = chat_ts(now);
+    thread_require(tx, id)?;
+    let through = i64::try_from(req.through_seq).unwrap_or(i64::MAX);
+    let changed = tx.execute(
+        "UPDATE chat_threads SET read_through_seq=MIN(?2,next_seq-1) \
+         WHERE id=?1 AND read_through_seq<MIN(?2,next_seq-1)",
+        params![id, through],
+    )?;
+    if changed > 0 {
+        emit_thread(tx, id, &at)?;
+    }
+    thread_require(tx, id)
+}
+
+/// [`SqliteStore::cos_thread_open`] inside the caller's transaction (the CoS operation
+/// transaction of ADR 2026-10-09-cos-operations-all-mutations).
+pub fn cos_thread_open_tx(
+    tx: &Connection,
+    req: &ChatOpenThreadRequest,
+    now: OffsetDateTime,
+) -> Result<ChatThreadCreated, ChatError> {
     if let Some(project_id) = &req.project_id {
         let found: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
@@ -1274,23 +1371,30 @@ pub fn chat_thread_create_tx(
             )));
         }
     }
-    let id = Ulid::new().to_string();
-    tx.execute(
-        "INSERT INTO chat_threads(id,kind,title,project_id,status,created_at,updated_at) \
-         VALUES(?1,'human',?2,?3,'open',?4,?4)",
-        params![id, req.title, req.project_id, at],
+    let before: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM chat_threads WHERE kind IN ('general','project')",
+        [],
+        |row| row.get(0),
     )?;
-    tx.execute(
-        "INSERT INTO chat_client_requests(kind,scope_id,key,request_hash,result_id,created_at) \
-         VALUES('thread',?1,?2,?3,?4,?5)",
-        params![scope_id, req.client_thread_id, hash, id, at],
+    let id = cos_thread_ensure_tx(tx, req.project_id.as_deref(), &chat_ts(now))?;
+    let after: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM chat_threads WHERE kind IN ('general','project')",
+        [],
+        |row| row.get(0),
     )?;
-    emit_thread(tx, &id, &at)?;
-    let thread = thread_require(tx, &id)?;
     Ok(ChatThreadCreated {
-        thread,
-        created: true,
+        thread: thread_require(tx, &id)?,
+        created: after > before,
     })
+}
+
+/// D3: the sender label of an outside notification about a thread: `[統括 CoS]` or
+/// `[CoS: <project>]` (the thread title). Legacy or unknown threads have no label.
+pub fn cos_thread_label(thread: &ChatThread) -> Option<String> {
+    match thread.kind {
+        ChatThreadKind::General | ChatThreadKind::Project => Some(format!("[{}]", thread.title)),
+        ChatThreadKind::Legacy => None,
+    }
 }
 
 /// [`SqliteStore::chat_thread_patch`] inside the caller's transaction.
@@ -1322,9 +1426,9 @@ pub fn chat_thread_patch_tx(
     }
     match req.status {
         Some(ChatThreadStatus::Archived) if thread.status != ChatThreadStatus::Archived => {
-            if thread.kind == ChatThreadKind::Inbox {
+            if thread.kind != ChatThreadKind::Legacy {
                 return Err(ChatError::Conflict(
-                    "the inbox thread cannot be archived".into(),
+                    "a CoS thread (general or project) cannot be archived".into(),
                 ));
             }
             if thread.active_run_id.is_some() || thread.queued_count > 0 {

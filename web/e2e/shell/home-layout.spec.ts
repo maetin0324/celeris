@@ -61,7 +61,7 @@ for (const [width, height] of [
 }
 
 // 1440 の通知の右・会話枠の上端の右（x≈1300〜1415, y≈340〜360）に中身の無い枠が浮かない。
-// 退行の形: 枠（[data-home-console]）が末尾へ送られて宛先と「新しい会話」の行が枠の上端で切れ、button の下辺の線だけが
+// 退行の形: 枠（[data-home-console]）が末尾へ送られて宛先と会話一覧の行が枠の上端で切れ、button の下辺の線だけが
 // 空の枠に見えた（fix-r5/fix-home-states.md）。その領域の点ごとに、点を含む border 付きの要素が枠の上端で切れておらず、
 // 文字を持つことを DOM（elementFromPoint・bounding box）で確かめる。
 test("Console 1440: 会話枠の上端の右に中身の無い枠（border だけの切れた要素）が無い", async ({ page }) => {
@@ -103,13 +103,13 @@ test("Console 1440: 会話枠の上端の右に中身の無い枠（border だ�
       return { bad: [...new Set(bad)], hits };
     });
     expect(found.bad, "中身の無い枠・枠の上端で切れた border 付きの要素").toEqual([]);
-    // 領域には「新しい会話」の button がある（点が何にも当たらずに通るのを防ぐ）。
+    // 領域には会話の検索欄がある（点が何にも当たらずに通るのを防ぐ）。
     expect(found.hits).toBeGreaterThan(0);
-    const fresh = page.getByRole("button", { name: "新しい会話" });
+    const fresh = page.getByRole("searchbox", { name: "会話を検索" });
     const region = await page.locator("[data-home-console]").boundingBox();
     const button = await fresh.boundingBox();
     if (!region || !button) throw new Error("no box");
-    expect(button.y, "「新しい会話」は枠の上端より下から始まる").toBeGreaterThanOrEqual(region.y - 0.5);
+    expect(button.y, "会話の検索欄は枠の上端より下から始まる").toBeGreaterThanOrEqual(region.y - 0.5);
   } finally {
     await gateway.close();
   }

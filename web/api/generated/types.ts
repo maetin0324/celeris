@@ -641,12 +641,6 @@ export type ChatCheckpointSaved = {
   "thread_id": string;
 };
 
-export type ChatCreateThreadRequest = {
-  "client_thread_id": string;
-  "project_id"?: string | null;
-  "title": string;
-};
-
 export type ChatEvent = {
   "at": string;
   "data": ChatEventData;
@@ -702,6 +696,10 @@ export type ChatMessageRole = "user" | "assistant" | "system";
 
 export type ChatMessageState = "queued" | "running" | "completed" | "cancelled" | "interrupted" | "failed";
 
+export type ChatOpenThreadRequest = {
+  "project_id"?: string | null;
+};
+
 export type ChatPatchThreadRequest = {
   "expected_revision": number;
   "status"?: ChatThreadStatus | null;
@@ -726,6 +724,10 @@ export type ChatPostMessageResponse = {
 export type ChatQueueData = {
   "message_ids": Array<string>;
   "paused": boolean;
+};
+
+export type ChatReadThreadRequest = {
+  "through_seq": number;
 };
 
 export type ChatReferenceOwnerKind = "task" | "knowledge_inbox";
@@ -811,15 +813,18 @@ export type ChatTextDeltaData = {
 
 export type ChatThread = {
   "active_run_id"?: string | null;
+  "attention_count": number;
   "created_at": string;
   "id": string;
   "kind": ChatThreadKind;
   "project_id"?: string | null;
   "queue_paused": boolean;
   "queued_count": number;
+  "read_through_seq": number;
   "revision": number;
   "status": ChatThreadStatus;
   "title": string;
+  "unread_count": number;
   "updated_at": string;
 };
 
@@ -833,7 +838,7 @@ export type ChatThreadDetailResponse = {
   "thread": ChatThread;
 };
 
-export type ChatThreadKind = "human" | "inbox" | "legacy";
+export type ChatThreadKind = "general" | "project" | "legacy";
 
 export type ChatThreadListResponse = {
   "items": Array<ChatThread>;

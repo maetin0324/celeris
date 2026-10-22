@@ -391,16 +391,17 @@ impl CosChatLaunch {
     /// 2026-10-07-cos-inbox-thread-conversation D2: the line names the wait and what the
     /// person must decide; the card stays answerable while the wait is open.
     fn handoff_message(&mut self, c: &FallbackCandidate, reason: &str, now: OffsetDateTime) {
-        let thread = match self.inbox_thread() {
-            Ok(Some(thread)) => thread,
+        // ADR 2026-10-22-cos-fixed-threads D3: the hand-off line goes to the item's CoS thread.
+        let report = match self.store.cos_triage_item_report(&c.item_id) {
+            Ok(Some(report)) => report,
             Ok(None) => return,
             Err(error) => {
-                tracing::warn!(%error, "CoS fallback inbox thread lookup failed");
+                tracing::warn!(%error, item_id = %c.item_id, "CoS fallback item lookup failed");
                 return;
             }
         };
-        let report = self.store.cos_triage_item_report(&c.item_id).ok().flatten();
-        let (text, card) = handoff_text(c, reason, report.as_ref());
+        let thread = report.thread_id.clone();
+        let (text, card) = handoff_text(c, reason, Some(&report));
         if let Err(error) = self.store.chat_system_message_add_once(
             &thread,
             &handoff_key(&c.item_id),

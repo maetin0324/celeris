@@ -4,26 +4,42 @@ import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Drawer } from "../../../components/ui/drawer";
 import { Input } from "../../../components/ui/input";
-import { ThreadsModel } from "./model";
+import { ThreadsModel, threadTotals } from "./model";
 
 export type ChatThreadsProps = {
   selectedThreadId?: string | null;
-  inboxWaitingCount?: number;
   onSelectThread: (id: string) => void;
   model?: ThreadsModel;
 };
 
+/** 未読・要対応の数の badge。0 のときは出さない。 */
+function CountBadges({ item }: { item: ChatThread }) {
+  return (
+    <>
+      {item.attention_count > 0 && (
+        <Badge tone="warning" className="shrink-0 whitespace-nowrap">
+          要対応 {item.attention_count}
+        </Badge>
+      )}
+      {item.unread_count > 0 && (
+        <Badge tone="info" className="shrink-0 whitespace-nowrap">
+          未読 {item.unread_count}
+        </Badge>
+      )}
+    </>
+  );
+}
+
+const KIND_LABEL: Record<ChatThread["kind"], string> = { general: "統括", project: "案件", legacy: "旧会話" };
+
 function ThreadList({
   model,
   selectedThreadId,
-  inboxWaitingCount = 0,
   onSelectThread,
   onSelected,
 }: ChatThreadsProps & { model: ThreadsModel; onSelected?: () => void }) {
   const state = useSyncExternalStore(model.subscribe, model.snapshot, model.snapshot);
   const [search, setSearch] = useState(state.query);
-  const [editing, setEditing] = useState<string | null>(null);
-  const [title, setTitle] = useState("");
   const searchId = useId();
   useEffect(() => {
     setSearch(state.query);
@@ -37,14 +53,13 @@ function ThreadList({
     onSelectThread(id);
     onSelected?.();
   };
-  const save = async (item: ChatThread) => {
-    if (await model.rename(item, title)) setEditing(null);
-  };
+  const totals = threadTotals(state.items);
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <Button variant="primary" disabled={state.busy} onClick={() => void model.create(select)}>
-        新しい会話
-      </Button>
+      <p className="text-label text-muted-foreground" data-thread-totals>
+        CoS {state.items.filter((item) => item.kind !== "legacy").length} 件・要対応 {totals.attention}・未読{" "}
+        {totals.unread}
+      </p>
       <div className="flex flex-col gap-1">
         <label htmlFor={searchId} className="text-label text-muted-foreground">
           会話を検索
@@ -68,77 +83,33 @@ function ThreadList({
         )}
         <ul className="space-y-1">
           {state.items.map((item) => (
-            <li key={item.id} className="rounded-md border border-border bg-surface p-1">
-              {editing === item.id ? (
-                <form
-                  className="flex flex-wrap gap-1"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void save(item);
-                  }}
+            <li key={item.id} className="rounded-md border border-border bg-surface p-1" data-thread-kind={item.kind}>
+              <div className="flex min-w-0 items-center gap-1">
+                <Button
+                  variant="ghost"
+                  className="min-w-0 flex-1 justify-start text-left"
+                  aria-label={item.title}
+                  aria-current={selectedThreadId === item.id ? "page" : undefined}
+                  onClick={() => select(item.id)}
                 >
-                  <label className="sr-only" htmlFor={`${searchId}-thread-title-${item.id}`}>
-                    会話の題名
-                  </label>
-                  <Input
-                    id={`${searchId}-thread-title-${item.id}`}
-                    autoFocus
-                    value={title}
-                    onChange={(event) => setTitle(event.target.value)}
-                    maxLength={200}
-                    className="min-w-0 flex-1"
-                  />
-                  <Button type="submit" disabled={!title.trim() || state.busy}>
-                    保存
-                  </Button>
-                  <Button onClick={() => setEditing(null)}>取消</Button>
-                </form>
-              ) : (
-                <div className="flex min-w-0 items-center gap-1">
+                  <Badge tone={item.kind === "legacy" ? "neutral" : "info"} className="shrink-0 whitespace-nowrap">
+                    {KIND_LABEL[item.kind]}
+                  </Badge>
+                  <span className="min-w-0 truncate">{item.title}</span>
+                  <CountBadges item={item} />
+                </Button>
+                {item.kind === "legacy" && (
                   <Button
                     variant="ghost"
-                    className="min-w-0 flex-1 justify-start text-left"
-                    aria-current={selectedThreadId === item.id ? "page" : undefined}
-                    onClick={() => select(item.id)}
+                    size="icon"
+                    aria-label={`${item.title}をアーカイブ`}
+                    disabled={state.busy}
+                    onClick={() => void model.archive(item)}
                   >
-                    <span className="min-w-0 truncate">{item.title}</span>
-                    {item.kind === "legacy" && (
-                      <Badge tone="neutral" className="shrink-0 whitespace-nowrap">
-                        旧会話
-                      </Badge>
-                    )}
-                    {item.kind === "inbox" && (
-                      <Badge tone="info" className="shrink-0 whitespace-nowrap">
-                        受信箱{inboxWaitingCount > 0 ? ` ${inboxWaitingCount} 件待ち` : ""}
-                      </Badge>
-                    )}
+                    保管
                   </Button>
-                  {item.kind !== "inbox" && (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`${item.title}の題名を変更`}
-                        onClick={() => {
-                          setEditing(item.id);
-                          setTitle(item.title);
-                        }}
-                      >
-                        編集
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`${item.title}をアーカイブ`}
-                        disabled={state.busy}
-                        onClick={() => void model.archive(item)}
-                      >
-                        保管
-                      </Button>
-                    </>
-                  )}
-                </div>
-              )}
+                )}
+              </div>
             </li>
           ))}
         </ul>

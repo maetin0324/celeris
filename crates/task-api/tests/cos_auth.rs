@@ -3,25 +3,14 @@ mod common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::chat::{ChatCreateThreadRequest, ChatPostMessageRequest, ChatSendMode};
+use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use time::{Duration, OffsetDateTime};
 
 /// A live CoS run: `(thread_id, run_id, delivered input seq)`.
 fn live_run(env: &TestEnv, key: &str) -> (String, String, u64) {
     let store = &env.store;
     let now = OffsetDateTime::now_utc();
-    let thread = store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: format!("thread {key}"),
-                project_id: None,
-                client_thread_id: key.into(),
-            },
-            now,
-        )
-        .expect("thread")
-        .thread;
+    let thread = common::project_cos_thread(&store, &task_core::ProjectId::new().to_string());
     store
         .chat_message_post(
             &thread.id,
@@ -320,10 +309,7 @@ async fn cos_chat_ops_auth_admin_bearer_unchanged() {
     let app = env.router();
     let created = send(
         &app,
-        post_admin(
-            "/api/v1/chat/threads",
-            &json!({"title":"a","project_id":null,"client_thread_id":"adm"}),
-        ),
+        post_admin("/api/v1/chat/threads", &json!({"project_id":null})),
     )
     .await;
     assert_eq!(created.status.as_u16(), 201, "{}", created.text());

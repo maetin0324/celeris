@@ -23,14 +23,14 @@ afterEach(async () => {
 
 it("seeds chat threads, long history and every card kind with schema-valid responses", async () => {
   const seed = chatSeedFixture();
-  expect(seed.map((row) => row.thread.kind)).toEqual(["human", "human", "inbox", "legacy"]);
+  expect(seed.map((row) => row.thread.kind)).toEqual(["general", "project", "project", "legacy"]);
   expect(seed[1].messages).toHaveLength(240);
   expect(seed.flatMap((row) => row.messages.flatMap((message) => message.cards.map((card) => card.kind)))).toEqual(
     expect.arrayContaining(["task", "decision", "question", "approval", "plan_gate", "notice", "operation"]),
   );
-  // 受信箱 thread のカードは人待ちの決定・質問。
+  // 案件 P2 の CoS の受信箱のカードは人待ちの決定・質問。
   const inboxCards =
-    seed.find((row) => row.thread.kind === "inbox")?.messages.flatMap((message) => message.cards) ?? [];
+    seed.find((row) => row.thread.id === "chat-inbox")?.messages.flatMap((message) => message.cards) ?? [];
   expect(inboxCards.map((card) => `${card.kind}:${card.id}:${card.state}`)).toEqual([
     "decision:decision:D1:pending",
     "question:question:Q1:pending",
@@ -67,11 +67,17 @@ it("supports thread and queue mutations with revisions and idempotency", async (
   const base = `${await daemon.start()}/api/v1/chat`;
   const request = (path: string, method: string, body: unknown) =>
     fetch(`${base}${path}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  const create = { client_thread_id: "client-1", title: "新しい相談", project_id: null };
-  const first = await request("/threads", "POST", create);
+  // ADR 2026-10-22-cos-fixed-threads D2: POST opens the fixed CoS of a scope.
+  expect((await request("/threads", "POST", { project_id: null })).status).toBe(200);
+  expect((await request("/threads", "POST", { title: "新しい相談" })).status).toBe(400);
+  const open = { project_id: "P9" };
+  const first = await request("/threads", "POST", open);
   expect(first.status).toBe(201);
   const thread = (await first.json()).thread;
-  expect((await request("/threads", "POST", create)).status).toBe(200);
+  expect(thread.kind).toBe("project");
+  const again = await request("/threads", "POST", open);
+  expect(again.status).toBe(200);
+  expect((await again.json()).thread.id).toBe(thread.id);
   expect((await request(`/threads/${thread.id}`, "PATCH", { title: "変更後", expected_revision: 1 })).status).toBe(200);
   expect((await request(`/threads/${thread.id}`, "PATCH", { title: "古い", expected_revision: 1 })).status).toBe(409);
   const message = { client_message_id: "m1", text: "送信", attachment_ids: [], mode: "queue", resume_queue: false };
@@ -85,12 +91,19 @@ it("supports thread and queue mutations with revisions and idempotency", async (
   expect((await fetch(`${base}/threads/${thread.id}/messages/${queued.message.id}`, { method: "DELETE" })).status).toBe(
     200,
   );
+  // A CoS thread is never archived; only legacy history is.
   expect((await request(`/threads/${thread.id}`, "PATCH", { status: "archived", expected_revision: 2 })).status).toBe(
+    409,
+  );
+  expect((await request("/threads/chat-legacy", "PATCH", { status: "archived", expected_revision: 1 })).status).toBe(
     200,
   );
   expect(
     (await (await fetch(`${base}/threads?status=archived`)).json()).items.map((row: { id: string }) => row.id),
-  ).toContain(thread.id);
+  ).toContain("chat-legacy");
+  const read = await request("/threads/chat-main/read", "POST", { through_seq: 2 });
+  expect(read.status).toBe(200);
+  expect((await read.json()).thread).toMatchObject({ read_through_seq: 2, unread_count: 0 });
 });
 
 it("replays chat SSE, emits live events, expires old cursors and handles attachments", async () => {

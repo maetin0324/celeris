@@ -9,7 +9,7 @@ use common::*;
 use serde_json::{Value, json};
 use task_core::approval::{Approval, ApprovalId, ApprovalStore};
 use task_core::chat::triage::CosTriageSource;
-use task_core::chat::{ChatCreateThreadRequest, ChatPostMessageRequest, ChatSendMode};
+use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
 use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
@@ -34,15 +34,7 @@ fn cos_bearer(env: &TestEnv, key: &str) -> String {
     let store = &env.store;
     let now = OffsetDateTime::now_utc();
     let thread = store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: format!("受信箱 {key}"),
-                project_id: None,
-                client_thread_id: key.into(),
-            },
-            now,
-        )
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, now)
         .expect("thread")
         .thread;
     store
@@ -195,6 +187,7 @@ fn ingest_all(env: &TestEnv, cursor: i64) -> Vec<(String, String, String)> {
             operation_id: None,
             summary: item.title.clone(),
             policy_version: "1".into(),
+            task_id: None,
         })
         .collect();
     env.store

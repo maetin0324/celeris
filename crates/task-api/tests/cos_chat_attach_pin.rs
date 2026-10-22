@@ -8,7 +8,7 @@ use axum::http::Request;
 use common::*;
 use serde_json::{Value, json};
 use task_core::chat::attachments::ChatAttachmentLimits;
-use task_core::chat::{ChatCreateThreadRequest, ChatPostMessageRequest, ChatSendMode};
+use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
 use time::{Duration, OffsetDateTime};
 
 const OPS: &str = "/api/v1/cos/operations";
@@ -27,15 +27,7 @@ async fn attachment_and_bearer(env: &TestEnv, app: &axum::Router) -> (String, St
     let store = &env.store;
     let now = OffsetDateTime::now_utc();
     let thread = store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "pin".into(),
-                project_id: None,
-                client_thread_id: "pin-thread".into(),
-            },
-            now,
-        )
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, now)
         .expect("thread")
         .thread;
     let mut body = Vec::new();

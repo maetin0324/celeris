@@ -4,12 +4,13 @@ import { thread } from "../../data/fixtures.test-support";
 import { type ThreadApi, ThreadsModel } from "../model";
 import { ChatThreads } from "../threads";
 
-const inbox = thread({ id: "inbox", kind: "inbox", title: "受信箱" });
-const human = thread({ id: "human", title: "作業の相談" });
+const general = thread({ id: "general", title: "統括 CoS", attention_count: 2 });
+const project = thread({ id: "human", kind: "project", project_id: "A", title: "作業の相談" });
 const api: ThreadApi = {
-  list: async () => ({ items: [human, inbox], next_cursor: null }),
-  create: async () => ({ thread: human }),
-  patch: async () => ({ thread: human }),
+  list: async () => ({ items: [project, general], next_cursor: null }),
+  open: async () => ({ thread: general }),
+  read: async () => ({ thread: general }),
+  patch: async () => ({ thread: project }),
 };
 const model = new ThreadsModel(api);
 const root = document.getElementById("root");
@@ -19,7 +20,6 @@ createRoot(root).render(
     <h1>会話の試験</h1>
     <ChatThreads
       model={model}
-      inboxWaitingCount={2}
       onSelectThread={(id) => {
         document.body.dataset.selected = id;
       }}

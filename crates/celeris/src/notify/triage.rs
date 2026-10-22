@@ -49,6 +49,13 @@ pub fn render(row: &Notification, config: &NotifyConfig) -> Result<String, &'sta
         NotificationKind::CosFallback => "CoS 不在のため直接通知",
         _ => return Err("unsupported outbound route"),
     };
+    // ADR 2026-10-22-cos-fixed-threads D3: which CoS (general or the project's) is asking.
+    let cos = field(&packet, "cos");
+    let heading = if cos.is_empty() {
+        heading.to_owned()
+    } else {
+        format!("{} {heading}", excerpt(cos, 80))
+    };
     let options = packet.get("options").and_then(Value::as_array);
     let option_text = options
         .map(|xs| {
@@ -205,6 +212,13 @@ pub fn cutover(store: &SqliteStore, view: &ViewContext, now: OffsetDateTime) -> 
             operation_id: None,
             summary: i.title.clone(),
             policy_version: "1".into(),
+            task_id: i
+                .task
+                .iter()
+                .chain(i.blocking.root.iter())
+                .chain(i.blocking.tasks.iter())
+                .map(|t| t.id.to_string())
+                .next(),
         })
         .collect();
     let mut legacy = Vec::new();
@@ -224,6 +238,7 @@ pub fn cutover(store: &SqliteStore, view: &ViewContext, now: OffsetDateTime) -> 
             operation_id: None,
             summary: excerpt(&row.body, 120),
             policy_version: "1".into(),
+            task_id: None,
         });
         legacy.push((
             key,

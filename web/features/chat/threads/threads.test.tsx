@@ -2,33 +2,62 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../../api/client";
 import { thread } from "../data/fixtures.test-support";
-import { orderThreads, type ThreadApi, ThreadsModel, threadError } from "./model";
+import { orderThreads, type ThreadApi, ThreadsModel, threadError, threadTotals } from "./model";
 import { ChatThreads } from "./threads";
 
 function mockApi() {
   return {
     list: vi.fn<ThreadApi["list"]>(),
-    create: vi.fn<ThreadApi["create"]>(),
+    open: vi.fn<ThreadApi["open"]>(),
+    read: vi.fn<ThreadApi["read"]>(),
     patch: vi.fn<ThreadApi["patch"]>(),
   };
 }
 
 const conflict = new ApiError("conflict", { method: "PATCH", path: "/api/v1/chat/threads/t1", status: 409 });
 
+// ADR 2026-10-22-cos-fixed-threads D5: the home lists the general CoS first, then each project's CoS.
+const general = thread({ id: "general", title: "統括 CoS", updated_at: "2026-01-01", attention_count: 1 });
+const projectA = thread({
+  id: "pa",
+  kind: "project",
+  project_id: "A",
+  title: "CoS: 案件A",
+  updated_at: "2026-10-05",
+  unread_count: 2,
+  attention_count: 3,
+});
+const projectB = thread({ id: "pb", kind: "project", project_id: "B", title: "CoS: 案件B", updated_at: "2026-10-01" });
+const legacy = thread({ id: "legacy", kind: "legacy", title: "以前の会話", updated_at: "2026-10-09" });
+
 describe("chat threads", () => {
-  it("chat_threads_inbox_is_pinned_and_legacy_is_marked", async () => {
-    const inbox = thread({ id: "inbox", kind: "inbox", title: "受信箱", updated_at: "2026-01-01" });
-    const recent = thread({ id: "recent", updated_at: "2026-10-05" });
-    const legacy = thread({ id: "legacy", kind: "legacy", title: "以前の会話", updated_at: "2026-09-01" });
-    expect(orderThreads([legacy, recent, inbox], inbox).map((item) => item.id)).toEqual(["inbox", "recent", "legacy"]);
+  it("chat_threads_general_first_then_projects_then_legacy", () => {
+    expect(orderThreads([legacy, projectB, general, projectA]).map((item) => item.id)).toEqual([
+      "general",
+      "pa",
+      "pb",
+      "legacy",
+    ]);
+    expect(threadTotals([general, projectA, projectB])).toEqual({ unread: 2, attention: 4 });
+  });
+
+  it("chat_threads_list_shows_kind_unread_and_attention_counts", async () => {
     const api = mockApi();
-    api.list.mockResolvedValue({ items: [legacy, recent, inbox], next_cursor: null });
+    api.list.mockResolvedValue({ items: [legacy, projectA, general, projectB], next_cursor: null });
     const model = new ThreadsModel(api);
     await model.load();
-    const html = renderToStaticMarkup(<ChatThreads model={model} inboxWaitingCount={3} onSelectThread={() => {}} />);
+    const html = renderToStaticMarkup(<ChatThreads model={model} onSelectThread={() => {}} />);
+    expect(html.indexOf("統括 CoS")).toBeLessThan(html.indexOf("CoS: 案件A"));
+    expect(html.indexOf("CoS: 案件A")).toBeLessThan(html.indexOf("CoS: 案件B"));
+    expect(html).toContain("要対応 3");
+    expect(html).toContain("未読 2");
+    expect(html).toContain("要対応 1");
+    expect(html).toContain("CoS 3 件・要対応 4・未読 2");
     expect(html).toContain("旧会話");
-    expect(html).toContain("3 件待ち");
-    expect(html.indexOf("受信箱")).toBeLessThan(html.indexOf("以前の会話"));
+    // Nobody creates threads; only legacy threads can be archived.
+    expect(html).not.toContain("新しい会話");
+    expect(html).toContain('aria-label="以前の会話をアーカイブ"');
+    expect(html).not.toContain('aria-label="CoS: 案件Aをアーカイブ"');
     expect(html).toContain('aria-label="会話一覧を開く"');
   });
 
@@ -36,14 +65,14 @@ describe("chat threads", () => {
     const title = "長い題名の会話".repeat(20);
     const api = mockApi();
     api.list.mockResolvedValue({
-      items: [thread({ id: "legacy", kind: "legacy", title }), thread({ id: "inbox", kind: "inbox", title })],
+      items: [thread({ id: "legacy", kind: "legacy", title }), thread({ id: "g", title, attention_count: 123 })],
       next_cursor: null,
     });
     const model = new ThreadsModel(api);
     await model.load();
-    const html = renderToStaticMarkup(<ChatThreads model={model} inboxWaitingCount={123} onSelectThread={() => {}} />);
+    const html = renderToStaticMarkup(<ChatThreads model={model} onSelectThread={() => {}} />);
     expect(html).toContain(`<span class="min-w-0 truncate">${title}</span>`);
-    for (const label of ["旧会話", "受信箱 123 件待ち"]) {
+    for (const label of ["旧会話", "要対応 123"]) {
       const badge = html.match(new RegExp(`<span[^>]*class="([^"]*)"[^>]*>${label}</span>`));
       expect(badge).not.toBeNull();
       expect(badge?.[1].split(" ")).toEqual(expect.arrayContaining(["shrink-0", "whitespace-nowrap"]));
@@ -51,61 +80,65 @@ describe("chat threads", () => {
     }
   });
 
-  it("chat_threads_create_reuses_client_thread_id_after_unknown_failure_and_selects_existing_response", async () => {
+  it("chat_threads_open_returns_the_fixed_thread_and_selects_it", async () => {
     const api = mockApi();
     const model = new ThreadsModel(api);
     const selected = vi.fn();
-    api.list.mockResolvedValue({ items: [thread({ id: "existing", title: "残す会話" })], next_cursor: null });
+    api.list.mockResolvedValue({ items: [general], next_cursor: null });
     await model.load();
-    api.create
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValueOnce({ thread: thread({ id: "created", updated_at: "2026-10-06T00:00:00Z" }) });
-    await model.create(selected);
-    expect(model.state.error).toBeTruthy();
-    await model.create(selected);
-    expect(api.create).toHaveBeenCalledTimes(2);
-    expect(api.create.mock.calls[0][0].client_thread_id).toBe(api.create.mock.calls[1][0].client_thread_id);
-    expect(selected).toHaveBeenCalledWith("created");
-    expect(model.state.items.map((item) => item.id)).toEqual(["created", "existing"]);
+    api.open.mockRejectedValueOnce(new Error("offline")).mockResolvedValue({ thread: projectA });
+    await model.open("A", selected);
+    expect(model.state.error).toMatch(/CoS の会話を開けません/);
+    await model.open("A", selected);
+    await model.open("A", selected);
+    expect(api.open).toHaveBeenLastCalledWith({ project_id: "A" });
+    expect(selected).toHaveBeenCalledWith("pa");
+    expect(model.state.items.map((item) => item.id)).toEqual(["general", "pa"]);
+    expect(model.general()?.id).toBe("general");
+  });
+
+  it("chat_threads_mark_read_raises_the_watermark_once", async () => {
+    const api = mockApi();
+    const model = new ThreadsModel(api);
+    api.list.mockResolvedValue({ items: [projectA], next_cursor: null });
+    await model.load();
+    api.read.mockResolvedValue({ thread: { ...projectA, read_through_seq: 9, unread_count: 0 } });
+    await model.markRead("pa", 9);
+    await model.markRead("pa", 9);
+    await model.markRead("pa", 4);
+    expect(api.read).toHaveBeenCalledTimes(1);
+    expect(api.read).toHaveBeenCalledWith("pa", { through_seq: 9 });
+    expect(model.state.items[0].unread_count).toBe(0);
   });
 
   it("chat_threads_search_passes_q_and_uses_fts_result_in_list", async () => {
     const api = mockApi();
     const model = new ThreadsModel(api);
     api.list
-      .mockResolvedValueOnce({ items: [thread({ id: "inbox", kind: "inbox" })], next_cursor: null })
-      .mockResolvedValueOnce({ items: [thread({ id: "hit", title: "会話本文の一致" })], next_cursor: null });
+      .mockResolvedValueOnce({ items: [general], next_cursor: null })
+      .mockResolvedValueOnce({ items: [projectB], next_cursor: null });
     await model.load();
     await model.load("本文");
     expect(api.list).toHaveBeenLastCalledWith({ q: "本文", status: "open", limit: 100 });
-    expect(model.state.items.map((item) => item.id)).toEqual(["inbox", "hit"]);
+    expect(model.state.items.map((item) => item.id)).toEqual(["pb"]);
   });
 
-  it("chat_threads_rename_sends_expected_revision_and_reports_409", async () => {
+  it("chat_threads_archive_only_legacy_and_shows_queue_run_409", async () => {
     const api = mockApi();
     const model = new ThreadsModel(api);
-    api.list.mockResolvedValue({ items: [thread({ id: "t", revision: 7, title: "前" })], next_cursor: null });
+    const old = thread({ id: "t", kind: "legacy", revision: 4, queued_count: 1 });
+    api.list.mockResolvedValue({ items: [old, general], next_cursor: null });
     await model.load();
-    api.patch.mockRejectedValue(conflict);
-    expect(await model.rename(model.state.items[0], "後")).toBe(false);
-    expect(api.patch).toHaveBeenCalledWith("t", { title: "後", expected_revision: 7 });
-    expect(model.state.error).toMatch(/別の場所で更新/);
-    expect(model.state.items[0].title).toBe("前");
-  });
-
-  it("chat_threads_archive_sends_revision_and_shows_queue_run_409", async () => {
-    const api = mockApi();
-    const model = new ThreadsModel(api);
-    api.list.mockResolvedValue({ items: [thread({ id: "t", revision: 4, queued_count: 1 })], next_cursor: null });
-    await model.load();
+    expect(await model.archive(general)).toBe(false);
+    expect(api.patch).not.toHaveBeenCalled();
     api.patch
       .mockRejectedValueOnce(conflict)
-      .mockResolvedValueOnce({ thread: thread({ id: "t", status: "archived" }) });
-    expect(await model.archive(model.state.items[0])).toBe(false);
+      .mockResolvedValueOnce({ thread: thread({ id: "t", kind: "legacy", status: "archived" }) });
+    expect(await model.archive(old)).toBe(false);
     expect(model.state.error).toMatch(/実行中または待機中/);
     expect(api.patch).toHaveBeenCalledWith("t", { status: "archived", expected_revision: 4 });
-    expect(await model.archive(model.state.items[0])).toBe(true);
-    expect(model.state.items).toEqual([]);
+    expect(await model.archive(old)).toBe(true);
+    expect(model.state.items.map((item) => item.id)).toEqual(["general"]);
     expect(threadError(conflict, "archive")).toMatch(/アーカイブできません/);
   });
 
@@ -113,7 +146,6 @@ describe("chat threads", () => {
     const html = renderToStaticMarkup(<ChatThreads model={new ThreadsModel(mockApi())} onSelectThread={() => {}} />);
     expect(html).toContain('aria-label="会話一覧を開く"');
     expect(html).toContain('aria-expanded="true"');
-    expect(html).toContain("新しい会話");
     // Drawer の trigger は Radix Dialog.Trigger で、Escape 時の focus 復元は primitive の browser 試験で確認する。
   });
 });

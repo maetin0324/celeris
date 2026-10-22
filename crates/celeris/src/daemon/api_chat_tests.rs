@@ -68,7 +68,7 @@ async fn chat_wiring_passes_data_dir_and_limits_to_api() {
         .post(format!("{base}/threads"))
         .bearer_auth(TOKEN)
         .header("content-type", "application/json")
-        .body(r#"{"title":"Wiring","project_id":null,"client_thread_id":"wiring"}"#)
+        .body(r#"{"project_id":null}"#)
         .send()
         .await
         .expect("create thread");

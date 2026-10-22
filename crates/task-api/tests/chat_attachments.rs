@@ -44,7 +44,11 @@ async fn setup(max_file_bytes: u64) -> (TestEnv, String) {
         .clone()
         .with_chat_attachments(env.dir.path().to_path_buf(), limits);
     let app = env.router();
-    let response = send(&app, post_admin(&format!("{BASE}/threads"), &json!({"title":"Attachments","project_id":null,"client_thread_id":"chat-attach-thread"}))).await;
+    let response = send(
+        &app,
+        post_admin(&format!("{BASE}/threads"), &json!({"project_id":null})),
+    )
+    .await;
     assert_eq!(response.status.as_u16(), 201, "{}", response.text());
     (
         env,
@@ -74,10 +78,7 @@ async fn chat_attach_api_unconfigured_is_unavailable() {
     let app = env.router();
     let response = send(
         &app,
-        post_admin(
-            &format!("{BASE}/threads"),
-            &json!({"title":"No storage","project_id":null,"client_thread_id":"unconfigured"}),
-        ),
+        post_admin(&format!("{BASE}/threads"), &json!({"project_id":null})),
     )
     .await;
     let id = response.json()["thread"]["id"]

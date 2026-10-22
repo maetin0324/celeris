@@ -235,20 +235,14 @@ test("詳細 link は web 内の実在画面へ SPA で行き、戻るで元会�
   }
 });
 
-test("受信箱 thread の badge は受信箱の人待ち項目数を示し、回答で減る", async ({ page }) => {
+test("案件 CoS の行は要対応の数を示す（ADR 2026-10-22-cos-fixed-threads D5）", async ({ page }) => {
   const gateway = await startChatGateway();
   try {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${gateway.base}/?thread=chat-main`);
-    // 一覧の先頭は受信箱 thread。badge は全受信箱の 6 件（カード以外の待ちも含む）。
     const sidebar = page.locator("#chat-thread-sidebar");
-    await expect.poll(async () => sidebar.getByText(/受信箱 \d 件待ち/).count(), { timeout: 10_000 }).toBe(1);
-    await expect(sidebar.getByText("受信箱 6 件待ち")).toBeVisible();
-
-    // 人待ちカードを 1 件答えると badge も減る。
-    const decision = card(page, "decision");
-    await decision.getByRole("button", { name: "daemon token" }).click();
-    await expect(sidebar.getByText("受信箱 5 件待ち")).toBeVisible();
+    await expect(sidebar.getByText("要対応 2")).toBeVisible();
+    await expect(sidebar.getByText(/CoS 3 件・要対応 2/)).toBeVisible();
   } finally {
     await gateway.close();
   }

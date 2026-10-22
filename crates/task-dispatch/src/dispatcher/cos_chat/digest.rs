@@ -166,15 +166,7 @@ impl CosChatLaunch {
             self.triage.digest_due = false;
             return;
         }
-        let thread = match self.inbox_thread() {
-            Ok(Some(thread)) => thread,
-            Ok(None) => return,
-            Err(error) => {
-                tracing::warn!(%error, "CoS triage digest inbox thread lookup failed");
-                return;
-            }
-        };
-        for (run_id, run_state) in runs {
+        for (thread, run_id, run_state) in runs {
             if let Err(error) = self.digest_one(&thread, &run_id, &run_state, now) {
                 tracing::warn!(%error, %run_id, "CoS triage digest failed");
             }

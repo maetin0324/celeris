@@ -95,15 +95,17 @@ impl Fixture {
     fn inbox_runs(&self) -> i64 {
         self.count(
             "SELECT COUNT(*) FROM chat_runs r JOIN chat_threads t ON t.id=r.thread_id \
-             WHERE t.kind='inbox'",
+             WHERE t.kind='general'",
         )
     }
 
     fn inbox_thread(&self) -> Option<String> {
         let conn = rusqlite::Connection::open(&self.db_path).expect("db");
-        conn.query_row("SELECT id FROM chat_threads WHERE kind='inbox'", [], |r| {
-            r.get(0)
-        })
+        conn.query_row(
+            "SELECT id FROM chat_threads WHERE kind='general'",
+            [],
+            |r| r.get(0),
+        )
         .ok()
     }
 
@@ -159,8 +161,21 @@ impl Fixture {
 
     /// A task blocked on a question: one `question` item of the derived inbox.
     fn question(&self, title: &str, extra: Vec<Event>) -> TaskId {
+        self.question_in(title, None, None, extra)
+    }
+
+    /// A blocked question in `project`, optionally under `parent` (ADR 2026-10-22-cos-fixed-threads).
+    fn question_in(
+        &self,
+        title: &str,
+        project: Option<task_core::ProjectId>,
+        parent: Option<TaskId>,
+        extra: Vec<Event>,
+    ) -> TaskId {
         let mut task = new_task(self.dir.path(), Check::Human, 0);
         task.title = title.into();
+        task.project_id = project;
+        task.parent_id = parent;
         task.status = Status::Blocked;
         let mut events = vec![Event::QuestionRaised {
             run_id: "r0".into(),
@@ -390,75 +405,6 @@ fn cos_chat_triage_ingest_attributes_only_operation_transactions() {
 }
 
 #[tokio::test]
-async fn cos_chat_triage_ingest_places_reference_card_in_origin_thread() {
-    let mut f = fixture(true);
-    f.tick();
-    let origin = f
-        .store
-        .chat_thread_create(
-            "admin",
-            &task_core::chat::ChatCreateThreadRequest {
-                title: "依頼".into(),
-                project_id: None,
-                client_thread_id: "origin".into(),
-            },
-            f.d.now_utc(),
-        )
-        .expect("thread")
-        .thread
-        .id;
-    // CoS created the task from the human thread (operation transaction):
-    // that wait is CoS's own output and is not taken.
-    let task = f.question(
-        "from chat",
-        vec![cos_operation_in(&origin, &ulid::Ulid::new().to_string())],
-    );
-    f.tick();
-    assert_eq!(f.items(), 0);
-    // Later the task asks again from a run: a genuine new revision.
-    f.advance(60);
-    f.store
-        .append_event(
-            task,
-            &Event::QuestionRaised {
-                run_id: "r1".into(),
-                text: "which?".into(),
-            },
-        )
-        .expect("ask");
-    f.tick();
-    f.tick();
-    assert_eq!(f.items(), 1);
-    let cards: Vec<_> = f
-        .store
-        .chat_message_list(
-            &origin,
-            &ChatMessageQuery {
-                limit: Some(50),
-                ..Default::default()
-            },
-        )
-        .expect("messages")
-        .items
-        .into_iter()
-        .flat_map(|m| m.cards)
-        .collect();
-    assert_eq!(cards.len(), 1, "{cards:?}");
-    assert_eq!(cards[0].kind, task_core::chat::ChatCardKind::Question);
-    let inbox = f.inbox_thread().expect("inbox thread");
-    assert_eq!(cards[0].href, format!("/?thread={inbox}"));
-    assert_eq!(f.inbox_runs(), 1, "triage runs only in the inbox thread");
-    assert!(f.join_inbox().await);
-}
-
-#[path = "cos_chat_triage_fallback.rs"]
-mod fallback;
-#[path = "cos_chat_triage_inbox_thread.rs"]
-mod inbox_thread;
-#[path = "cos_chat_root_done.rs"]
-mod root_done;
-
-#[tokio::test]
 async fn cos_chat_triage_reconcile_resolves_closed_escalated_unintegrated_with_zero_current() {
     let mut f = fixture(true);
     f.tick();
@@ -471,6 +417,7 @@ async fn cos_chat_triage_reconcile_resolves_closed_escalated_unintegrated_with_z
         operation_id: None,
         summary: "unintegrated".into(),
         policy_version: "v1".into(),
+        task_id: None,
     };
     f.store
         .cos_triage_reconcile("unintegrated", &[src], f.d.now_utc())
@@ -501,6 +448,7 @@ fn stale_source(kind: &str, key: String) -> task_core::chat::triage::CosTriageSo
         operation_id: None,
         summary: "stale".into(),
         policy_version: "v1".into(),
+        task_id: None,
     }
 }
 
@@ -557,4 +505,87 @@ async fn cos_chat_triage_events_resolve_escalated_only_for_touched_tasks() {
         )),
         1
     );
+}
+
+#[path = "cos_chat_triage_fallback.rs"]
+mod fallback;
+#[path = "cos_chat_triage_inbox_thread.rs"]
+mod inbox_thread;
+#[path = "cos_chat_root_done.rs"]
+mod root_done;
+
+/// ADR 2026-10-22-cos-fixed-threads D3: an inbox item of a task in a project (directly or through
+/// its root) goes to that project's CoS thread, other items to the general CoS; each thread runs
+/// its own triage, and no thread is created per item.
+#[tokio::test]
+async fn cos_chat_triage_routes_items_to_the_project_or_general_cos_thread() {
+    let mut f = fixture(true);
+    f.d.config.execution.max_cos_runs = 2;
+    f.tick();
+    let project_thread = crate::test_support::project_cos_thread(&f.store, "案件A");
+    let project: task_core::ProjectId = f
+        .count_text("SELECT project_id FROM chat_threads WHERE kind='project'")
+        .parse()
+        .expect("project id");
+    let mut root = new_task(f.dir.path(), Check::Human, 0);
+    root.project_id = Some(project);
+    root.status = Status::Running;
+    f.store.create_task(&root, vec![]).expect("root");
+    let direct = f.question_in("deploy", Some(project), None, vec![]);
+    let child = f.question_in("child", None, Some(root.id), vec![]);
+    let loose = f.question("loose", vec![]);
+    f.tick();
+    let thread_of = |task: TaskId| -> String {
+        f.count_text(&format!(
+            "SELECT thread_id FROM cos_inbox_items WHERE source_key LIKE '%{task}%'"
+        ))
+    };
+    assert_eq!(thread_of(direct), project_thread);
+    assert_eq!(thread_of(child), project_thread);
+    let general = f.inbox_thread().expect("general thread");
+    assert_eq!(thread_of(loose), general);
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM chat_threads"),
+        2,
+        "one project thread and the general thread"
+    );
+    // Each thread got its own triage run over its own items.
+    for (thread, items) in [(&project_thread, 2), (&general, 1)] {
+        assert_eq!(
+            f.count(&format!(
+                "SELECT COUNT(*) FROM chat_runs WHERE thread_id='{thread}'"
+            )),
+            1,
+            "{thread}"
+        );
+        assert_eq!(
+            f.count(&format!(
+                "SELECT COUNT(*) FROM cos_inbox_items WHERE thread_id='{thread}' AND run_id IN \
+                 (SELECT run_id FROM chat_runs WHERE thread_id='{thread}')"
+            )),
+            items,
+            "{thread}"
+        );
+    }
+    let listed = f
+        .store
+        .chat_thread_get(&project_thread)
+        .expect("get")
+        .expect("thread");
+    assert!(listed.attention_count >= 2, "{listed:?}");
+    // A second wait in the same project reuses the thread.
+    f.question_in("again", Some(project), None, vec![]);
+    f.tick();
+    assert_eq!(f.count("SELECT COUNT(*) FROM chat_threads"), 2);
+    let handles: Vec<_> =
+        f.d.cos_chat_launch
+            .as_mut()
+            .expect("launch")
+            .running
+            .drain()
+            .map(|(_, h)| h)
+            .collect();
+    for handle in handles {
+        handle.await.expect("worker did not panic");
+    }
 }

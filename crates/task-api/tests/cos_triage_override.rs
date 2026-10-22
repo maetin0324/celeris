@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use serde_json::{Value, json};
 use task_core::chat::{
-    AuditContext, ChatActor, ChatCreateThreadRequest, ChatPostMessageRequest, ChatSendMode,
+    AuditContext, ChatActor, ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode,
 };
 use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
@@ -111,19 +111,7 @@ fn decision_fixture(env: &TestEnv, action: &str) -> (String, String, String) {
 
 fn live_cos_bearer(env: &TestEnv, key: &str) -> String {
     let now = OffsetDateTime::now_utc();
-    let thread = env
-        .store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: format!("thread {key}"),
-                project_id: None,
-                client_thread_id: key.into(),
-            },
-            now,
-        )
-        .expect("thread")
-        .thread;
+    let thread = common::project_cos_thread(&env.store, &task_core::ProjectId::new().to_string());
     env.store
         .chat_message_post(
             &thread.id,
@@ -312,15 +300,7 @@ async fn cos_chat_triage_override_rejects_cos_credential_and_missing_reason() {
     let now = OffsetDateTime::now_utc();
     let thread = env
         .store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "override auth".into(),
-                project_id: None,
-                client_thread_id: "override-auth".into(),
-            },
-            now,
-        )
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, now)
         .expect("thread")
         .thread;
     env.store

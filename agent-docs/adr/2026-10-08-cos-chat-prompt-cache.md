@@ -6,6 +6,7 @@ tasks: [01M4D3XKDS8DK9QEK081QKA8VE, 01M4EVARH4NPTQ73Y1NXK5WJY4]
 
 - 日付: 2026-10-08
 - 状態: **確定・実装済み（T8 full after と release/verify 検証済み）**。設計時の事実・仮説は下の1〜5に保存し、最新結果と未知値は付記D9を正とする。
+- 2026-10-22 付記（[2026-10-22-cos-fixed-threads](2026-10-22-cos-fixed-threads.md)）: 変更なし（スレッドの固定で cache の前置きは CoS ごとに 1 本で続く）。
 - 関連: [ADR 2026-10-05 cos-chat-home](2026-10-05-cos-chat-home.md)（D2 の session・要約・差分配送）、[ADR 2026-10-06 cos-chat-harness-adapters](2026-10-06-cos-chat-harness-adapters.md)、[ADR 2026-10-07 cos-live-fixes](2026-10-07-cos-live-fixes.md)（`scripts/dev/cos-chat-live.sh`）、[ADR-0054](0054-stateful-sessions-and-streaming-chat.md)、[ADR-0140](0140-claude-session-resume.md)、ADR-0056 D3・[ADR-0127](0127-skills-native-delivery.md)（skill の配送）、ADR-0072（実行 metrics・単価表）
 - 範囲: CoS chat run だけ。worker 一般（task run・planner・reviewer）の既存挙動は変えない。計測は隔離環境だけで行い、本番の config・DB・KB・release・systemd に触れない。LLM 呼び出しは subscription（`claude_oauth`）。account限定は人の決定で撤回済み（D7）。API 課金 source の利用・promote・権限変更は人の決定
 

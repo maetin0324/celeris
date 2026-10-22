@@ -439,10 +439,11 @@ async fn cos_ops_projects_cron_project_create_is_audited() {
     let created = project(&env, id);
     assert_eq!(created.title, "新しい案件");
     assert_eq!(created.status, task_core::ProjectStatus::Proposed);
-    let before = env.store.project_list().expect("list").len();
 
     // Resending the same request returns the recorded operation without a second project.
     let (_, _, bearer) = cos_bearer(&env, "project-create-again");
+    // cos_bearer opens a project's CoS thread (its own project): count after it.
+    let before = env.store.project_list().expect("list").len();
     let headers = [("authorization", bearer.as_str())];
     let envelope = op_body(
         "same",

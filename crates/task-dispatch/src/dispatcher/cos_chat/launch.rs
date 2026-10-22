@@ -78,8 +78,8 @@ pub(crate) fn path_with_first(
 const COS_INBOX_CONTEXT_ITEMS: usize = 50;
 
 /// ADR 2026-10-08-cos-chat-prompt-cache T5: the skills mounted for a CoS chat run.
-/// `cos-operator` always; `cos-inbox-triage` only in the inbox thread or when the run is handed
-/// inbox items, so an ordinary thread does not get the triage procedure. Authorization does not
+/// `cos-operator` always; `cos-inbox-triage` in a general/project CoS thread or when the run is
+/// handed inbox items, so a legacy thread does not get the triage procedure. Authorization does not
 /// depend on this: `/cos/operations` and the inbox resolve API enforce it whatever was mounted.
 pub(crate) fn cos_chat_skills(
     in_inbox_thread: bool,
@@ -206,15 +206,11 @@ impl Dispatcher {
             return;
         };
         launch.running.retain(|_, handle| !handle.is_finished());
-        if launch.triage.inbox_run_live
-            && !launch
-                .triage
-                .inbox_thread
-                .as_ref()
-                .is_some_and(|thread| launch.running.contains_key(thread))
-        {
-            // The inbox thread's run ended: its digest may be due (cheap DB check).
-            launch.triage.inbox_run_live = false;
+        let running = &launch.running;
+        let before = launch.triage.live_runs.len();
+        launch.triage.live_runs.retain(|t| running.contains_key(t));
+        if launch.triage.live_runs.len() < before {
+            // A CoS run ended: a triage digest may be due (cheap DB check).
             launch.triage.digest_due = true;
         }
         launch
@@ -332,18 +328,28 @@ impl CosChatLaunch {
         selection_metadata: serde_json::Value,
         now: OffsetDateTime,
     ) -> Result<(), String> {
-        // ADR 2026-10-07-cos-inbox-thread-conversation D3: a run in the inbox thread (triage or
-        // a human message) sees the unresolved items.
-        let in_inbox_thread = self.inbox_thread()?.as_deref() == Some(thread_id);
-        let inbox_items = if in_inbox_thread {
-            self.store
-                .cos_triage_open_items(COS_INBOX_CONTEXT_ITEMS)
+        // ADR 2026-10-22-cos-fixed-threads D3: a project CoS sees its project's unresolved items;
+        // the general CoS overlooks every thread's. Legacy threads get none.
+        let kind = self
+            .store
+            .chat_thread_get(thread_id)
+            .map_err(|e| e.to_string())?
+            .map(|t| t.kind);
+        let scope = match kind {
+            Some(task_core::chat::ChatThreadKind::General) => Some(None),
+            Some(task_core::chat::ChatThreadKind::Project) => Some(Some(thread_id)),
+            _ => None,
+        };
+        let in_inbox_thread = scope.is_some();
+        let inbox_items = match scope {
+            Some(scope) => self
+                .store
+                .cos_triage_open_items(scope, COS_INBOX_CONTEXT_ITEMS)
                 .map_err(|e| format!("CoS inbox context unavailable: {e}"))?
                 .into_iter()
                 .map(inbox_context_item)
-                .collect()
-        } else {
-            Vec::new()
+                .collect(),
+            None => Vec::new(),
         };
         let skill_names = cos_chat_skills(in_inbox_thread, &inbox_items);
         if let Some(reason) = cfg.unavailable_reason.clone() {
@@ -634,9 +640,7 @@ impl CosChatLaunch {
                 .await;
             }),
         );
-        if self.triage.inbox_thread.as_deref() == Some(thread_id) {
-            self.triage.inbox_run_live = true;
-        }
+        self.triage.live_runs.insert(thread_id.to_owned());
         self.route_reservations
             .insert(thread_id.to_owned(), (pick.candidate.source, pick.account));
         Ok(())

@@ -13,18 +13,7 @@ fn at(secs: i64) -> OffsetDateTime {
 }
 
 fn thread(s: &SqliteStore, key: &str) -> String {
-    s.chat_thread_create(
-        "admin",
-        &ChatCreateThreadRequest {
-            title: key.into(),
-            project_id: None,
-            client_thread_id: key.into(),
-        },
-        at(0),
-    )
-    .expect("thread")
-    .thread
-    .id
+    crate::chat::test_project_thread(s, key, at(0)).id
 }
 
 fn post_and_claim(s: &SqliteStore, t: &str, run: &str, now: i64) -> ChatRun {

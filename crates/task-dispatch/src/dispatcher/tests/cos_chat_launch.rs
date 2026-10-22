@@ -4,8 +4,8 @@ use super::*;
 use crate::dispatcher::cos_chat::launch::CosChatLaunchConfig;
 use task_core::chat::attachments::ChatAttachmentStore;
 use task_core::chat::{
-    ChatCreateThreadRequest, ChatEventData, ChatEventQuery, ChatMessageQuery,
-    ChatPostMessageRequest, ChatRunState, ChatSendMode,
+    ChatEventData, ChatEventQuery, ChatMessageQuery, ChatPostMessageRequest, ChatRunState,
+    ChatSendMode,
 };
 use task_worker::fake::FakeAdapter;
 
@@ -55,19 +55,7 @@ fn fixture(
 }
 
 fn thread(store: &SqliteStore, key: &str) -> String {
-    store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: key.into(),
-                project_id: None,
-                client_thread_id: key.into(),
-            },
-            OffsetDateTime::now_utc(),
-        )
-        .expect("create thread")
-        .thread
-        .id
+    crate::test_support::project_cos_thread(store, key)
 }
 
 fn post(store: &SqliteStore, thread: &str, key: &str) {
@@ -705,14 +693,15 @@ async fn cos_chat_run_launch_fake_progress_credential_and_session() {
     let run_dir = workspace.join("runs").join(&run.id);
     let request = std::fs::read_to_string(run_dir.join("request.json")).expect("request");
     let request_json: serde_json::Value = serde_json::from_str(&request).expect("request json");
-    // ADR 2026-10-08-cos-chat-prompt-cache T5: an ordinary thread mounts cos-operator only.
+    // ADR 2026-10-22-cos-fixed-threads D3: every CoS thread (here a project's) handles its inbox
+    // items, so it mounts the triage procedure too.
     assert_eq!(
         request_json["context"]["skills"].as_array().map(Vec::len),
-        Some(1)
+        Some(2)
     );
     assert_eq!(
         request_json["context"]["cos_chat"]["skills"],
-        serde_json::json!(["cos-operator"])
+        serde_json::json!(["cos-operator", "cos-inbox-triage"])
     );
     for name in ["request.json", "stdout.jsonl", "stderr.log"] {
         let content = std::fs::read_to_string(run_dir.join(name)).expect("run file exists");

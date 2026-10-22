@@ -12,15 +12,7 @@ fn at(secs: i64) -> OffsetDateTime {
 
 fn live_run(store: &SqliteStore, key: &str, now: i64) -> (String, String) {
     let thread = store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "thread".into(),
-                project_id: None,
-                client_thread_id: key.into(),
-            },
-            at(now),
-        )
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, at(now))
         .expect("thread")
         .thread;
     store
@@ -197,15 +189,7 @@ fn cos_chat_ops_checkpoint_requires_current_run() {
 fn cos_chat_ops_checkpoint_rejects_queued_gap_before_interrupt_input() {
     let store = SqliteStore::open_in_memory().expect("store");
     let thread = store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "interrupt".into(),
-                project_id: None,
-                client_thread_id: "gap".into(),
-            },
-            at(0),
-        )
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, at(0))
         .expect("thread")
         .thread;
     for (key, mode) in [

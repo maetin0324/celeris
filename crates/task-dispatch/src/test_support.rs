@@ -59,3 +59,35 @@ fn restore_write(path: &Path) {
         }
     }
 }
+
+/// The CoS thread of a new project titled `key` (ADR 2026-10-22-cos-fixed-threads D1): tests that
+/// need several CoS threads get one per project.
+pub(crate) fn project_cos_thread(store: &task_core::SqliteStore, key: &str) -> String {
+    let now = time::OffsetDateTime::now_utc();
+    let project = task_core::Project {
+        id: task_core::ProjectId::new(),
+        title: key.into(),
+        request: key.into(),
+        status: task_core::ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        auto_advance: false,
+        auto_integrate: false,
+        slug: None,
+        created_at: now,
+        updated_at: now,
+    };
+    task_core::TaskStore::project_create(store, &project).expect("project");
+    store
+        .cos_thread_open(
+            &task_core::chat::ChatOpenThreadRequest {
+                project_id: Some(project.id.to_string()),
+            },
+            now,
+        )
+        .expect("project thread")
+        .thread
+        .id
+}

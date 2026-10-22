@@ -168,6 +168,8 @@ pub(crate) const MIGRATION_0090: &str =
 
 /// ADR 2026-10-22-dynamic-config D4: `config_events`（config.toml の欄の変更履歴）。
 pub(crate) const MIGRATION_0091: &str = include_str!("../../migrations/0091_config_events.sql");
+/// ADR 2026-10-22-cos-fixed-threads: 統括 CoS 1 本と案件ごとの CoS 1 本に固定し、既読の水位を足す。
+pub(crate) const MIGRATION_0092: &str = include_str!("../../migrations/0092_cos_fixed_threads.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration）。`migrate` は飛ばし、
@@ -177,7 +179,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 91;
+pub const SCHEMA_VERSION: u32 = 92;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -302,6 +304,7 @@ impl SqliteStore {
             89 => Ok(MIGRATION_0089),
             90 => Ok(MIGRATION_0090),
             91 => Ok(MIGRATION_0091),
+            92 => Ok(MIGRATION_0092),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

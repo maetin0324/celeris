@@ -7,7 +7,7 @@ use crate::dispatcher::cos_chat::launch::CosChatLaunchConfig;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use task_core::chat::{
-    AuditContext, ChatActor, ChatCreateThreadRequest, ChatMessageQuery, ChatMessageState,
+    AuditContext, ChatActor, ChatMessageQuery, ChatMessageState, ChatOpenThreadRequest,
     ChatPostMessageRequest, ChatRunSessionMode, ChatRunState, ChatSendMode,
 };
 use task_worker::fake::FakeAdapter;
@@ -173,13 +173,8 @@ fn open_store() -> (crate::test_support::WritableTempDir, Arc<SqliteStore>) {
 
 fn thread(store: &SqliteStore) -> String {
     store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "rollover".into(),
-                project_id: None,
-                client_thread_id: "rollover".into(),
-            },
+        .cos_thread_open(
+            &ChatOpenThreadRequest { project_id: None },
             OffsetDateTime::now_utc(),
         )
         .expect("create thread")
@@ -771,4 +766,98 @@ fn cos_chat_billed_input_unknown_cache_definition_uses_input_only() {
         assert_eq!(usage.add_tokens, 30, "{harness}");
         assert_eq!(usage.context_tokens, Some(16), "{harness}");
     }
+}
+
+fn thread_count(dir: &Path) -> i64 {
+    rusqlite::Connection::open(dir.join("celeris.db"))
+        .expect("db")
+        .query_row("SELECT COUNT(*) FROM chat_threads", [], |r| r.get(0))
+        .expect("count")
+}
+
+/// ADR 2026-10-22-cos-fixed-threads D4: the CoS thread's harness session lives in SQLite, so a
+/// new daemon (new store handle and dispatcher, nothing kept in memory) resumes the same session
+/// id in the same thread.
+#[tokio::test]
+async fn cos_chat_session_survives_daemon_restart_in_the_same_thread() {
+    let (dir, store) = open_store();
+    let t = thread(&store);
+    let live = {
+        let (_probe, adapter) = refusing(&store, usize::MAX, false);
+        let mut d = fixture(adapter, store.clone(), dir.path());
+        post(&store, &t, "one");
+        tick_and_join(&mut d, &store, &t).await;
+        store
+            .chat_session_active(&t)
+            .expect("session")
+            .expect("live session")
+    };
+    drop(store);
+
+    // "Restart": a fresh store handle on the same DB file and a fresh dispatcher.
+    let store = Arc::new(SqliteStore::open(&dir.path().join("celeris.db")).expect("reopen"));
+    let (probe, adapter) = refusing(&store, usize::MAX, false);
+    let mut d = fixture(adapter, store.clone(), dir.path());
+    post(&store, &t, "two");
+    let run = tick_and_join(&mut d, &store, &t).await;
+    let attempts = probe.attempts.lock().expect("attempts").clone();
+    assert_eq!(attempts.len(), 1);
+    let session = attempts[0].context.session.as_ref().expect("session");
+    assert!(session.resume, "the restarted daemon resumes");
+    assert_eq!(session.session_id, live.session_id);
+    let record = store.chat_run_session_record(&run).expect("record");
+    assert_eq!(record.session_row_id.as_deref(), Some(live.id.as_str()));
+    let after = store
+        .chat_session_active(&t)
+        .expect("session")
+        .expect("live");
+    assert_eq!(after.id, live.id);
+    assert_eq!(thread_count(dir.path()), 1, "no new thread");
+}
+
+/// D4: an expired session (resume refused) after a restart restarts in the same thread with a
+/// fresh session that gets the thread summary and the unsummarized history.
+#[tokio::test]
+async fn cos_chat_session_expiry_after_restart_starts_fresh_from_summary_in_the_same_thread() {
+    let (dir, store) = open_store();
+    let t = thread(&store);
+    {
+        let (_probe, adapter) = refusing(&store, usize::MAX, false);
+        let mut d = fixture(adapter, store.clone(), dir.path());
+        post(&store, &t, "one");
+        tick_and_join(&mut d, &store, &t).await;
+    }
+    let old = store
+        .chat_session_active(&t)
+        .expect("session")
+        .expect("live");
+    drop(store);
+
+    let store = Arc::new(SqliteStore::open(&dir.path().join("celeris.db")).expect("reopen"));
+    // Every resumed attempt is refused: the session has expired on the harness side. The worker
+    // checkpoints a summary ("summary-A" through seq 2) before failing, like a real CoS run.
+    let (probe, adapter) = refusing(&store, 0, false);
+    let mut d = fixture(adapter, store.clone(), dir.path());
+    post(&store, &t, "two");
+    let run = tick_and_join(&mut d, &store, &t).await;
+    let attempts = probe.attempts.lock().expect("attempts").clone();
+    assert_eq!(attempts.len(), 2, "refused resume, then one fresh attempt");
+    assert!(attempts[0].context.session.as_ref().expect("s").resume);
+    let fresh = &attempts[1];
+    assert!(!fresh.context.session.as_ref().expect("s").resume);
+    let chat = fresh.context.cos_chat.as_ref().expect("cos chat");
+    assert_eq!(chat.thread_id, t);
+    assert_eq!(chat.summary.as_deref(), Some("summary-A"));
+    assert_eq!(chat.summary_through_seq, 2);
+    assert_eq!(
+        store.chat_run_get(&t, &run).expect("run").state,
+        ChatRunState::Completed
+    );
+    let live = store
+        .chat_session_active(&t)
+        .expect("session")
+        .expect("live");
+    assert_ne!(live.id, old.id);
+    assert_eq!(live.key.thread_id, t);
+    assert_eq!(thread_count(dir.path()), 1, "no new thread");
 }

@@ -2,7 +2,7 @@
 //! checks direct 422 + rejected audit, then envelope applied + row + event + chat card.
 use super::*;
 use serde_json::{Value, json};
-use task_core::chat::{ChatCreateThreadRequest, ChatPostMessageRequest, ChatSendMode};
+use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use time::{Duration, OffsetDateTime};
 
 pub const OPS: &str = "/api/v1/cos/operations";
@@ -11,18 +11,7 @@ pub const OPS: &str = "/api/v1/cos/operations";
 pub fn cos_bearer(env: &TestEnv, key: &str) -> (String, String, String) {
     let store = &env.store;
     let now = OffsetDateTime::now_utc();
-    let thread = store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: format!("thread {key}"),
-                project_id: None,
-                client_thread_id: key.into(),
-            },
-            now,
-        )
-        .expect("thread")
-        .thread;
+    let thread = super::project_cos_thread(&store, &task_core::ProjectId::new().to_string());
     store
         .chat_message_post(
             &thread.id,

@@ -10,6 +10,7 @@ import { Badge, type BadgeTone } from "../../components/ui/badge";
 import { StatusBadge, statusView } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { TaskArtifactsPanel } from "../artifacts/task-artifacts-view";
+import { ProjectCosLink } from "../chat/threads/project-cos-link";
 import { ProjectStatusBadge } from "./project-list-screen";
 import { projectDetailQuery } from "./project-queries";
 import { dagLayers, flattenTree, milestoneGroups, pendingByTask } from "./project-structure";
@@ -301,6 +302,7 @@ export function ProjectDetailScreen({
               {detail.data.project.title}
             </p>
             <nav aria-label="案件の頁" className="flex flex-wrap gap-2">
+              <ProjectCosLink projectId={projectId} />
               <Link className="inline-flex min-h-11 min-w-11 items-center text-primary underline" to="/projects">
                 案件の一覧
               </Link>

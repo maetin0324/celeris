@@ -3105,28 +3105,6 @@
       ],
       "type": "object"
     },
-    "ChatCreateThreadRequest": {
-      "additionalProperties": false,
-      "properties": {
-        "client_thread_id": {
-          "type": "string"
-        },
-        "project_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "title": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "title",
-        "client_thread_id"
-      ],
-      "type": "object"
-    },
     "ChatEvent": {
       "properties": {
         "at": {
@@ -3384,6 +3362,19 @@
       ],
       "type": "string"
     },
+    "ChatOpenThreadRequest": {
+      "additionalProperties": false,
+      "description": "ADR 2026-10-22-cos-fixed-threads D2: open the general CoS (`project_id: null`) or the CoS of\none project. Idempotent; nothing else creates a thread.",
+      "properties": {
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ChatPatchThreadRequest": {
       "additionalProperties": false,
       "properties": {
@@ -3490,6 +3481,21 @@
       "required": [
         "message_ids",
         "paused"
+      ],
+      "type": "object"
+    },
+    "ChatReadThreadRequest": {
+      "additionalProperties": false,
+      "description": "D5 `POST /chat/threads/{t}/read`: raise the read watermark (never lowers it).",
+      "properties": {
+        "through_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "through_seq"
       ],
       "type": "object"
     },
@@ -3840,6 +3846,12 @@
             "null"
           ]
         },
+        "attention_count": {
+          "description": "D5: inbox items of this thread still waiting (pending/running/escalated/fallback).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "created_at": {
           "type": "string"
         },
@@ -3863,6 +3875,12 @@
           "minimum": 0,
           "type": "integer"
         },
+        "read_through_seq": {
+          "description": "D5: highest seq the person has read (`POST /chat/threads/{t}/read`).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "revision": {
           "format": "uint64",
           "minimum": 0,
@@ -3873,6 +3891,12 @@
         },
         "title": {
           "type": "string"
+        },
+        "unread_count": {
+          "description": "D5: assistant/system messages after `read_through_seq`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         },
         "updated_at": {
           "type": "string"
@@ -3886,6 +3910,9 @@
         "queue_paused",
         "queued_count",
         "revision",
+        "read_through_seq",
+        "unread_count",
+        "attention_count",
         "created_at",
         "updated_at"
       ],
@@ -3930,8 +3957,8 @@
     },
     "ChatThreadKind": {
       "enum": [
-        "human",
-        "inbox",
+        "general",
+        "project",
         "legacy"
       ],
       "type": "string"
@@ -31837,17 +31864,20 @@
     "chat_thread": {
       "$ref": "#/$defs/ChatThread"
     },
-    "chat_thread_create": {
-      "$ref": "#/$defs/ChatCreateThreadRequest"
-    },
     "chat_thread_detail": {
       "$ref": "#/$defs/ChatThreadDetailResponse"
     },
     "chat_thread_list": {
       "$ref": "#/$defs/ChatThreadListResponse"
     },
+    "chat_thread_open": {
+      "$ref": "#/$defs/ChatOpenThreadRequest"
+    },
     "chat_thread_patch": {
       "$ref": "#/$defs/ChatPatchThreadRequest"
+    },
+    "chat_thread_read": {
+      "$ref": "#/$defs/ChatReadThreadRequest"
     },
     "chat_thread_response": {
       "$ref": "#/$defs/ChatThreadResponse"
@@ -32691,7 +32721,8 @@
     "chat_attachment",
     "chat_card",
     "chat_event",
-    "chat_thread_create",
+    "chat_thread_open",
+    "chat_thread_read",
     "chat_thread_patch",
     "chat_post_message",
     "chat_stop",

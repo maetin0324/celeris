@@ -4,7 +4,7 @@ import type { ChatAttachment } from "../../../api/generated/types";
 import { message, run, thread } from "../data/fixtures.test-support";
 import { initialChatState } from "../data/reducer";
 import type { ChatSession, ChatSessionSnapshot } from "../data/session";
-import { ChatComposer, INBOX_COMPOSER_PLACEHOLDER } from "./chat-composer";
+import { ChatComposer, COS_COMPOSER_PLACEHOLDER } from "./chat-composer";
 import { createUploadQueue, pastedFiles, shouldSendOnEnter } from "./upload-queue";
 
 const flush = async () => {
@@ -140,21 +140,21 @@ describe("chat composer", () => {
   });
 });
 
-// ADR 2026-10-07-cos-inbox-thread-conversation D5: 受信箱 thread でも送信欄は使え、何の場所かを placeholder で示す。
-describe("chat_inbox_composer", () => {
-  it("chat_inbox_composer_placeholder_names_the_inbox_as_the_place_to_talk", () => {
+// ADR 2026-10-22-cos-fixed-threads D3: CoS の会話の送信欄は受信箱の件も扱う場所であることを placeholder で示す。
+describe("chat_cos_composer", () => {
+  it("chat_cos_composer_placeholder_names_the_cos_as_the_place_to_talk", () => {
     const chat = initialChatState("t1");
-    chat.thread = thread({ kind: "inbox" });
+    chat.thread = thread({ kind: "general" });
     const snapshot: ChatSessionSnapshot = { chat, stream: "open", loading: false, loadError: undefined };
     const html = renderToStaticMarkup(
       <ChatComposer
         threadId="t1"
         snapshot={snapshot}
         session={{} as ChatSession}
-        placeholder={INBOX_COMPOSER_PLACEHOLDER}
+        placeholder={COS_COMPOSER_PLACEHOLDER}
       />,
     );
-    expect(html).toContain(`placeholder="${INBOX_COMPOSER_PLACEHOLDER}"`);
+    expect(html).toContain(`placeholder="${COS_COMPOSER_PLACEHOLDER}"`);
     expect(html).toContain('aria-label="CoS へのメッセージ"');
     expect(html).toContain("送信");
   });

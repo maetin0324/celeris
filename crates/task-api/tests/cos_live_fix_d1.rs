@@ -8,7 +8,7 @@ use axum::http::Request;
 use common::*;
 use serde_json::{Value, json};
 use task_core::chat::attachments::{ChatAttachmentLimits, ChatAttachmentStore};
-use task_core::chat::{ChatCreateThreadRequest, ChatPostMessageRequest, ChatSendMode};
+use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use time::{Duration, OffsetDateTime};
 
 const OPS: &str = "/api/v1/cos/operations";
@@ -23,19 +23,7 @@ fn env_with_attachments() -> TestEnv {
 }
 
 fn thread(env: &TestEnv, client_id: &str) -> String {
-    env.store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: client_id.into(),
-                project_id: None,
-                client_thread_id: client_id.into(),
-            },
-            OffsetDateTime::now_utc(),
-        )
-        .expect("thread")
-        .thread
-        .id
+    common::project_cos_thread(&env.store, client_id).id
 }
 
 /// Upload one attachment (admin) to `thread` and return its id.

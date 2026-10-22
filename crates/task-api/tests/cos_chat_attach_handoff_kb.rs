@@ -9,7 +9,7 @@ use common::*;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use task_core::chat::attachments::ChatAttachmentLimits;
-use task_core::chat::{ChatCreateThreadRequest, ChatPostMessageRequest, ChatSendMode};
+use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
 use time::{Duration, OffsetDateTime};
 
 const PDF: &[u8] = b"%PDF-1.4 fern03 manual";
@@ -32,13 +32,8 @@ fn admin() -> String {
 async fn upload_pdf(env: &TestEnv, app: &axum::Router) -> (String, String) {
     let thread = env
         .store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "kb".into(),
-                project_id: None,
-                client_thread_id: "kb-thread".into(),
-            },
+        .cos_thread_open(
+            &ChatOpenThreadRequest { project_id: None },
             OffsetDateTime::now_utc(),
         )
         .expect("thread")

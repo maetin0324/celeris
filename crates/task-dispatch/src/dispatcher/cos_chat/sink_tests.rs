@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use serde_json::json;
 use task_core::chat::{
-    ChatCardKind, ChatCreateThreadRequest, ChatEvent, ChatEventData, ChatEventQuery, ChatEventType,
-    ChatMessageRole, ChatPostMessageRequest, ChatRunState, ChatSendMode, ChatStatusPhase,
+    ChatCardKind, ChatEvent, ChatEventData, ChatEventQuery, ChatEventType, ChatMessageRole,
+    ChatOpenThreadRequest, ChatPostMessageRequest, ChatRunState, ChatSendMode, ChatStatusPhase,
     ChatToolState,
 };
 use task_core::{BudgetKind, ProgressFields, ProgressKind, SqliteStore};
@@ -34,15 +34,7 @@ fn fixture() -> Fixture {
     let dir = crate::test_support::WritableTempDir::new();
     let store = Arc::new(SqliteStore::open(&dir.path().join("celeris.db")).expect("store"));
     let thread = store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "t".into(),
-                project_id: None,
-                client_thread_id: "c-thread".into(),
-            },
-            at(),
-        )
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, at())
         .expect("thread")
         .thread
         .id;

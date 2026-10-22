@@ -14,10 +14,12 @@ use time::OffsetDateTime;
 const BASE: &str = "/api/v1/chat/threads";
 const WAIT: Duration = Duration::from_secs(120);
 
-async fn thread_with_message(app: &axum::Router, key: &str) -> String {
-    let body = json!({"title":"Stream","project_id":null,"client_thread_id":key});
+/// The CoS thread of a new project titled `key` with one queued message.
+async fn thread_with_message(env: &TestEnv, app: &axum::Router, key: &str) -> String {
+    let project = project_cos_thread(&env.store, key).project_id;
+    let body = json!({ "project_id": project });
     let created = send(app, post_admin(BASE, &body)).await;
-    assert_eq!(created.status.as_u16(), 201, "{}", created.text());
+    assert_eq!(created.status.as_u16(), 200, "{}", created.text());
     let id = created.json()["thread"]["id"]
         .as_str()
         .expect("thread id")
@@ -156,7 +158,7 @@ fn stream_get(
 async fn chat_stream_snapshot_then_live_has_no_gap() {
     let env = admin_env();
     let app = env.router();
-    let thread = thread_with_message(&app, "snap").await;
+    let thread = thread_with_message(&env, &app, "snap").await;
     let snapshot = snapshot_event_id(&app, &thread).await;
     // Written after the snapshot but before connecting: must come from the replay.
     claim(&env, &thread, "run-1");
@@ -216,7 +218,7 @@ async fn chat_stream_snapshot_then_live_has_no_gap() {
 async fn chat_stream_last_event_id_reconnect_has_no_duplicate() {
     let env = admin_env();
     let app = env.router();
-    let thread = thread_with_message(&app, "reconnect").await;
+    let thread = thread_with_message(&env, &app, "reconnect").await;
     let snapshot = snapshot_event_id(&app, &thread).await;
     claim(&env, &thread, "run-1");
     env.store
@@ -264,7 +266,7 @@ async fn chat_stream_last_event_id_reconnect_has_no_duplicate() {
 async fn chat_stream_heartbeat_does_not_advance_the_id() {
     let env = admin_env();
     let app = env.router();
-    let thread = thread_with_message(&app, "beat").await;
+    let thread = thread_with_message(&env, &app, "beat").await;
     let snapshot = snapshot_event_id(&app, &thread).await;
     let mut sse = open_stream(
         &app,
@@ -296,7 +298,7 @@ async fn chat_stream_heartbeat_does_not_advance_the_id() {
 async fn chat_stream_expired_cursor_is_410_and_future_is_400() {
     let env = admin_env();
     let app = env.router();
-    let thread = thread_with_message(&app, "expire").await;
+    let thread = thread_with_message(&env, &app, "expire").await;
     let snapshot = snapshot_event_id(&app, &thread).await;
     claim(&env, &thread, "run-1");
     finish_fake_run(&env, "run-1");
@@ -357,7 +359,7 @@ async fn chat_stream_expired_cursor_is_410_and_future_is_400() {
 async fn chat_stream_run_events_page() {
     let env = admin_env();
     let app = env.router();
-    let thread = thread_with_message(&app, "pages").await;
+    let thread = thread_with_message(&env, &app, "pages").await;
     claim(&env, &thread, "run-1");
     finish_fake_run(&env, "run-1");
     let all = stored_ids(&app, &thread, "run-1", 0).await;
@@ -432,7 +434,7 @@ async fn chat_stream_run_events_page() {
 async fn chat_stream_replay_crosses_store_page_boundary() {
     let env = admin_env();
     let app = env.router();
-    let thread = thread_with_message(&app, "large-replay").await;
+    let thread = thread_with_message(&env, &app, "large-replay").await;
     let snapshot = snapshot_event_id(&app, &thread).await;
     claim(&env, &thread, "run-large");
     // The stream reads at most 500 rows per store call. The terminal event must
@@ -494,8 +496,8 @@ async fn chat_stream_replay_crosses_store_page_boundary() {
 async fn chat_stream_does_not_mix_threads() {
     let env = admin_env();
     let app = env.router();
-    let thread = thread_with_message(&app, "first-thread").await;
-    let other = thread_with_message(&app, "second-thread").await;
+    let thread = thread_with_message(&env, &app, "first-thread").await;
+    let other = thread_with_message(&env, &app, "second-thread").await;
     let snapshot = snapshot_event_id(&app, &thread).await;
     claim(&env, &other, "other-run");
     finish_fake_run(&env, "other-run");

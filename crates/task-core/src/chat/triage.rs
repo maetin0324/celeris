@@ -5,7 +5,9 @@ use rusqlite::{OptionalExtension, Transaction, params};
 use time::OffsetDateTime;
 use ulid::Ulid;
 
-use super::store::{ChatError, chat_ts, immediate, writer};
+use super::store::{
+    ChatError, chat_ts, cos_thread_ensure_tx, immediate, task_root_project, writer,
+};
 use crate::store::SqliteStore;
 
 pub const COS_TRIAGE_BATCH_MAX: usize = 20;
@@ -21,6 +23,9 @@ pub struct CosTriageSource {
     pub operation_id: Option<String>,
     pub summary: String,
     pub policy_version: String,
+    /// ADR 2026-10-22-cos-fixed-threads D3: the task the item is about. Its root's project picks
+    /// the CoS thread; `None` (or no project) goes to the general CoS.
+    pub task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,21 +43,29 @@ fn cursor_name(source: &str) -> Result<String, ChatError> {
     Ok(format!("cos_triage:{source}"))
 }
 
-fn ensure_inbox(tx: &Transaction<'_>, at: &str) -> Result<String, ChatError> {
-    if let Some(id) = tx
-        .query_row("SELECT id FROM chat_threads WHERE kind='inbox'", [], |r| {
-            r.get(0)
-        })
-        .optional()?
-    {
-        return Ok(id);
+/// D3: the CoS thread of one item (its task's root project, else general).
+fn item_thread(
+    tx: &Transaction<'_>,
+    item: &CosTriageSource,
+    at: &str,
+) -> Result<String, ChatError> {
+    let project = task_root_project(tx, item.task_id.as_deref())?;
+    cos_thread_ensure_tx(tx, project.as_deref(), at)
+}
+
+/// D3: the outbox packet names the CoS the item belongs to (`"cos": "[統括 CoS]"` or
+/// `"[CoS: <project>]"`), so the person sees which CoS is asking. Non-object bodies are kept.
+fn with_cos_label(tx: &Transaction<'_>, thread_id: &str, body: &str) -> Result<String, ChatError> {
+    let Ok(serde_json::Value::Object(mut packet)) = serde_json::from_str(body) else {
+        return Ok(body.to_owned());
+    };
+    let label = super::store::thread_get_conn(tx, thread_id)?
+        .as_ref()
+        .and_then(super::store::cos_thread_label);
+    if let Some(label) = label {
+        packet.insert("cos".into(), serde_json::Value::String(label));
     }
-    let id = Ulid::new().to_string();
-    tx.execute(
-        "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) VALUES(?1,'inbox','受信箱','open',?2,?2)",
-        params![id, at],
-    )?;
-    Ok(id)
+    Ok(serde_json::Value::Object(packet).to_string())
 }
 
 fn insert_items(
@@ -60,10 +73,6 @@ fn insert_items(
     items: &[CosTriageSource],
     at: &str,
 ) -> Result<usize, ChatError> {
-    if items.iter().all(|i| i.operation_id.is_some()) {
-        return Ok(0);
-    }
-    let thread_id = ensure_inbox(tx, at)?;
     let mut inserted = 0;
     for item in items {
         if item.operation_id.is_some() {
@@ -75,6 +84,7 @@ fn insert_items(
         {
             return Err(ChatError::Invalid("empty triage source triple".into()));
         }
+        let thread_id = item_thread(tx, item, at)?;
         inserted += tx.execute(
             "INSERT INTO cos_inbox_items(id,source_kind,source_key,source_revision,source_event_id,thread_id,message_id,state,policy_version,summary,created_at,updated_at) \
              VALUES(?1,?2,?3,?4,?5,?6,'','pending',?7,?9,?8,?8) \
@@ -190,23 +200,29 @@ impl SqliteStore {
         Ok(n)
     }
 
-    /// Claim at most twenty pending items and bind one system message to one chat run.
+    /// D3: CoS threads that have pending items, oldest item first.
+    pub fn cos_triage_pending_threads(&self) -> Result<Vec<String>, ChatError> {
+        let conn = writer(self)?;
+        let mut stmt = conn.prepare(
+            "SELECT thread_id FROM cos_inbox_items WHERE state='pending' \
+             GROUP BY thread_id ORDER BY MIN(created_at),thread_id",
+        )?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Claim at most twenty pending items of one CoS thread and bind one system message to one
+    /// chat run of that thread.
     pub fn cos_triage_claim(
         &self,
+        thread_id: &str,
         run_id: &str,
         now: OffsetDateTime,
     ) -> Result<Option<CosTriageClaim>, ChatError> {
         let at = chat_ts(now);
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        let Some(thread_id): Option<String> = tx
-            .query_row("SELECT id FROM chat_threads WHERE kind='inbox'", [], |r| {
-                r.get(0)
-            })
-            .optional()?
-        else {
-            return Ok(None);
-        };
+        let thread_id = thread_id.to_owned();
         let active: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM chat_runs WHERE thread_id=?1 AND state IN ('running','stopping'))",
             [&thread_id],
@@ -216,8 +232,8 @@ impl SqliteStore {
             return Ok(None);
         }
         let ids: Vec<String> = {
-            let mut stmt = tx.prepare("SELECT id FROM cos_inbox_items WHERE state='pending' ORDER BY created_at,id LIMIT 20")?;
-            stmt.query_map([], |r| r.get(0))?
+            let mut stmt = tx.prepare("SELECT id FROM cos_inbox_items WHERE state='pending' AND thread_id=?1 ORDER BY created_at,id LIMIT 20")?;
+            stmt.query_map([&thread_id], |r| r.get(0))?
                 .collect::<Result<_, _>>()?
         };
         if ids.is_empty() {
@@ -299,11 +315,11 @@ impl SqliteStore {
         let at = chat_ts(now);
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        let source: Option<(String,String,String,String)> = tx.query_row(
-            "SELECT source_kind,source_key,source_revision,state FROM cos_inbox_items WHERE id=?1", [item_id],
-            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
+        let source: Option<(String,String,String,String,String)> = tx.query_row(
+            "SELECT source_kind,source_key,source_revision,state,thread_id FROM cos_inbox_items WHERE id=?1", [item_id],
+            |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))
         ).optional()?;
-        let Some((source_kind, source_key, revision, state)) = source else {
+        let Some((source_kind, source_key, revision, state, thread_id)) = source else {
             return Err(ChatError::not_found("triage item", item_id));
         };
         if matches!(state.as_str(), "answered" | "observed" | "resolved") {
@@ -314,6 +330,7 @@ impl SqliteStore {
         if claimed == 0 {
             return Ok(None);
         }
+        let body = with_cos_label(&tx, &thread_id, body)?;
         tx.execute(
             "INSERT INTO notifications(id,kind,key,body,created_at) VALUES(?1,?2,?3,?4,?5)",
             params![notification_id, kind, item_id, body, at],
@@ -341,7 +358,7 @@ impl SqliteStore {
         let at = chat_ts(now);
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        let thread_id = ensure_inbox(&tx, &at)?;
+        let thread_id = item_thread(&tx, source, &at)?;
         let item_id = Ulid::new().to_string();
         let inserted = tx.execute(
             "INSERT INTO cos_inbox_items(id,source_kind,source_key,source_revision,source_event_id,thread_id,message_id,state,policy_version,summary,created_at,updated_at) \
@@ -353,6 +370,7 @@ impl SqliteStore {
             return Ok(None);
         }
         let notification_id = Ulid::new().to_string();
+        let body = with_cos_label(&tx, &thread_id, body)?;
         tx.execute(
             "INSERT INTO cos_notification_routes(item_id,notification_id,route,source_kind,source_key,source_revision,created_at,updated_at) VALUES(?1,?2,'escalation',?3,?4,?5,?6,?6)",
             params![item_id, notification_id, source.source_kind, source.source_key, source.source_revision, at],
@@ -459,6 +477,8 @@ pub struct CosTriageDecision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CosTriageItemReport {
     pub item_id: String,
+    /// The CoS thread the item belongs to (ADR 2026-10-22-cos-fixed-threads D3).
+    pub thread_id: String,
     pub source_kind: String,
     pub source_key: String,
     pub source_revision: String,
@@ -519,7 +539,7 @@ pub fn decision_from_outbox(body: &str) -> Option<CosTriageDecision> {
     })
 }
 
-const REPORT_SELECT: &str = "SELECT i.id,i.source_kind,i.source_key,i.source_revision,i.state,i.summary,i.reason,i.operation_id,i.run_id,i.created_at,n.route,nt.body \
+const REPORT_SELECT: &str = "SELECT i.id,i.source_kind,i.source_key,i.source_revision,i.state,i.summary,i.reason,i.operation_id,i.run_id,i.created_at,n.route,nt.body,i.thread_id \
     FROM cos_inbox_items i \
     LEFT JOIN cos_notification_routes n ON n.item_id=i.id \
     LEFT JOIN notifications nt ON nt.id=n.notification_id";
@@ -528,6 +548,7 @@ fn report_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CosTriageItemReport> {
     let body: Option<String> = r.get(11)?;
     Ok(CosTriageItemReport {
         item_id: r.get(0)?,
+        thread_id: r.get(12)?,
         source_kind: r.get(1)?,
         source_key: r.get(2)?,
         source_revision: r.get(3)?,
@@ -572,31 +593,37 @@ impl SqliteStore {
     }
 
     /// D3: unresolved items (waiting on the person, handed over, or not yet judged), newest first.
+    /// `thread_id: Some` limits them to one CoS thread (a project CoS); `None` is every thread
+    /// (the general CoS overlooks all projects, ADR 2026-10-22-cos-fixed-threads D3).
     pub fn cos_triage_open_items(
         &self,
+        thread_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<CosTriageItemReport>, ChatError> {
         let conn = writer(self)?;
         let mut stmt = conn.prepare(&format!(
             "{REPORT_SELECT} WHERE i.state IN ('escalated','fallback','pending','running') \
+             AND (?2 IS NULL OR i.thread_id=?2) \
              ORDER BY i.created_at DESC,i.id DESC LIMIT ?1"
         ))?;
-        let rows = stmt.query_map([i64::try_from(limit).unwrap_or(i64::MAX)], report_row)?;
+        let rows = stmt.query_map(
+            params![i64::try_from(limit).unwrap_or(i64::MAX), thread_id],
+            report_row,
+        )?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    /// D1: finished triage runs (system input message, at least one item) of the inbox thread that
-    /// have no digest message yet: `(run_id, run state)` oldest first.
+    /// D1: finished triage runs (system input message, at least one item) of any CoS thread that
+    /// have no digest message yet: `(thread_id, run_id, run state)` oldest first.
     pub fn cos_triage_runs_without_digest(
         &self,
         limit: usize,
-    ) -> Result<Vec<(String, String)>, ChatError> {
+    ) -> Result<Vec<(String, String, String)>, ChatError> {
         let conn = writer(self)?;
         let mut stmt = conn.prepare(
-            "SELECT r.run_id,r.state FROM chat_runs r \
+            "SELECT r.thread_id,r.run_id,r.state FROM chat_runs r \
              JOIN chat_messages m ON m.id=r.input_message_id \
-             WHERE r.thread_id=(SELECT id FROM chat_threads WHERE kind='inbox') \
-             AND m.role='system' \
+             WHERE m.role='system' \
              AND r.state IN ('completed','failed','stopped','interrupted') \
              AND EXISTS(SELECT 1 FROM cos_inbox_items i WHERE i.run_id=r.run_id) \
              AND NOT EXISTS(SELECT 1 FROM chat_messages d WHERE d.thread_id=r.thread_id AND d.client_message_id=?1||r.run_id) \
@@ -607,7 +634,7 @@ impl SqliteStore {
                 COS_TRIAGE_DIGEST_KEY_PREFIX,
                 i64::try_from(limit).unwrap_or(i64::MAX)
             ],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
         Ok(rows.collect::<Result<_, _>>()?)
     }

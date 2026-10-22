@@ -222,9 +222,7 @@ impl CosChatLaunch {
                     .chat_run_finish(&run.id, state, None, current.reason.as_deref(), now);
             return;
         }
-        if self.triage.inbox_thread.as_deref() == Some(&run.thread_id) {
-            self.triage.digest_due = true;
-        }
+        self.triage.digest_due = true;
         let result = if let Some(sink) = previous {
             sink.finish(
                 &super::sink::ChatFinish {

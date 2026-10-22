@@ -17,7 +17,7 @@ const DOCS: &str = "docs";
 use task_api::browser::BrowserApiConfig;
 use task_core::browser_wait::BrowserWaitStore;
 use task_core::chat::attachments::ChatAttachmentLimits;
-use task_core::chat::{ChatCreateThreadRequest, ChatPostMessageRequest, ChatSendMode};
+use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use task_core::{
     ArtifactRef, Event, GenreSpec, RoleSpec, RunIndexRole, RunIndexStatus, RunRow, Status,
     TaskKind, TaskStore, Tier,
@@ -50,19 +50,7 @@ fn surface_env() -> TestEnv {
 }
 
 fn human_thread(env: &TestEnv, key: &str) -> Value {
-    let thread = env
-        .store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: format!("human {key}"),
-                project_id: None,
-                client_thread_id: key.into(),
-            },
-            OffsetDateTime::now_utc(),
-        )
-        .expect("thread")
-        .thread;
+    let thread = common::project_cos_thread(&env.store, key);
     serde_json::to_value(thread).expect("thread json")
 }
 
@@ -138,11 +126,12 @@ async fn cos_ops_ops_surface_chat_writes_are_audited_in_one_transaction() {
         "thread-create",
         "POST",
         "/api/v1/chat/threads",
-        json!({"title": "CoS が開いた相談", "client_thread_id": "cos-opened-1"}),
+        json!({"project_id": null}),
         "chat.thread_create",
     )
     .await;
-    assert_eq!(op["result"]["created"], true, "{op}");
+    // ADR 2026-10-22-cos-fixed-threads D2: opens (or returns) the general CoS thread.
+    assert_eq!(op["result"]["thread"]["kind"], "general", "{op}");
     let opened = op["result"]["thread"]["id"].as_str().expect("id");
     assert!(env.store.chat_thread_get(opened).expect("get").is_some());
 
@@ -257,7 +246,7 @@ async fn cos_ops_ops_surface_chat_writes_are_audited_in_one_transaction() {
             .expect("get")
             .expect("thread")
             .title,
-        "human inbox-like"
+        "CoS: inbox-like"
     );
 }
 

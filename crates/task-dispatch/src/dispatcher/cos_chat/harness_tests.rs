@@ -4,7 +4,7 @@ use super::*;
 use crate::dispatcher::cos_chat::launch::CosChatLaunchConfig;
 use task_core::chat::attachments::ChatAttachmentStore;
 use task_core::chat::{
-    ChatCreateThreadRequest, ChatEventQuery, ChatEventType, ChatPostMessageRequest, ChatRunState,
+    ChatEventQuery, ChatEventType, ChatOpenThreadRequest, ChatPostMessageRequest, ChatRunState,
     ChatSendMode,
 };
 use task_worker::claude_code::{ClaudeCodeAdapter, ClaudeCodeConfig};
@@ -75,15 +75,7 @@ fn fixture_on(
         },
     );
     let thread = store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: "harness".into(),
-                project_id: None,
-                client_thread_id: "harness".into(),
-            },
-            now,
-        )
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, now)
         .expect("thread")
         .thread
         .id;
@@ -739,7 +731,9 @@ async fn cos_chat_resume_delta_checkpoint_watermark_and_cursor_are_independent()
 }
 
 #[tokio::test]
-async fn cos_chat_skill_ordinary_thread_run_does_not_mount_inbox_triage() {
+/// ADR 2026-10-22-cos-fixed-threads D3: every CoS thread (general or project) handles inbox
+/// items, so a human message there also mounts the triage procedure.
+async fn cos_chat_skill_cos_thread_run_mounts_inbox_triage() {
     let script = r#"
 cat > first.input
 find .taskd/chat-runs -mindepth 1 -maxdepth 1 -type d -exec sh -c 'printf "%s" "{\"summary\":\"hello\",\"evidence\":[]}" > "$1/result.json"' sh {} \;
@@ -761,8 +755,8 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"
     run(&mut d, &store, &thread).await;
     let skills = workspace.join(".claude/skills");
     assert!(skills.join("cos-operator/SKILL.md").is_file());
-    assert!(!skills.join("cos-inbox-triage").exists());
+    assert!(skills.join("cos-inbox-triage/SKILL.md").is_file());
     let input = std::fs::read_to_string(workspace.join("first.input")).unwrap();
     assert!(input.contains("`cos-operator`"), "{input}");
-    assert!(!input.contains("cos-inbox-triage"), "{input}");
+    assert!(input.contains("cos-inbox-triage"), "{input}");
 }

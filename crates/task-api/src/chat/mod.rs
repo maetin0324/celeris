@@ -13,9 +13,9 @@ use axum::routing::{get, post};
 use serde::de::DeserializeOwned;
 use task_core::chat::attachments::ChatAttachmentLimits;
 use task_core::chat::{
-    ChatCreateThreadRequest, ChatError, ChatMessageQuery, ChatMessageResponse,
-    ChatPatchThreadRequest, ChatPostMessageRequest, ChatResumeQueueRequest, ChatRunResponse,
-    ChatStopRequest, ChatThreadQuery, ChatThreadResponse, ChatThreadStatus,
+    ChatError, ChatMessageQuery, ChatMessageResponse, ChatOpenThreadRequest,
+    ChatPatchThreadRequest, ChatPostMessageRequest, ChatReadThreadRequest, ChatResumeQueueRequest,
+    ChatRunResponse, ChatStopRequest, ChatThreadQuery, ChatThreadResponse, ChatThreadStatus,
 };
 use time::OffsetDateTime;
 use tokio::sync::Notify;
@@ -52,10 +52,7 @@ impl Default for ChatState {
 
 pub(crate) fn routes() -> axum::Router<ApiState> {
     axum::Router::new()
-        .route(
-            "/api/v1/chat/threads",
-            get(list_threads).post(create_thread),
-        )
+        .route("/api/v1/chat/threads", get(list_threads).post(open_thread))
         .route(
             "/api/v1/chat/threads/{t}",
             get(get_thread).patch(patch_thread),
@@ -68,6 +65,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
             "/api/v1/chat/threads/{t}/messages/{m}",
             axum::routing::delete(cancel_message),
         )
+        .route("/api/v1/chat/threads/{t}/read", post(mark_read))
         .route("/api/v1/chat/threads/{t}/stop", post(stop_run))
         .route("/api/v1/chat/threads/{t}/resume-queue", post(resume_queue))
         .route("/api/v1/chat/threads/{t}/runs", get(list_runs))
@@ -138,7 +136,9 @@ async fn list_threads(
     Ok(json_response(StatusCode::OK, &result))
 }
 
-async fn create_thread(
+/// ADR 2026-10-22-cos-fixed-threads D2: open the general CoS or a project's CoS thread
+/// (created on first use). There is no other way to make a thread.
+async fn open_thread(
     State(state): State<ApiState>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -146,11 +146,11 @@ async fn create_thread(
 ) -> ApiResult {
     no_query(&raw)?;
     authorize(&state, &headers)?;
-    let req: ChatCreateThreadRequest = chat_json(body).await?;
+    let req: ChatOpenThreadRequest = chat_json(body).await?;
     let result = state
         .blocking(move |store| {
             store
-                .chat_thread_create("admin", &req, OffsetDateTime::now_utc())
+                .cos_thread_open(&req, OffsetDateTime::now_utc())
                 .map_err(chat_problem)
         })
         .await?;
@@ -164,6 +164,31 @@ async fn create_thread(
         &ChatThreadResponse {
             thread: result.thread,
         },
+    ))
+}
+
+/// D5: raise the thread's read watermark.
+async fn mark_read(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Params(t): Params<String>,
+    RawQuery(raw): RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    authorize(&state, &headers)?;
+    let req: ChatReadThreadRequest = chat_json(body).await?;
+    let thread = state
+        .blocking(move |store| {
+            store
+                .chat_thread_mark_read(&t, &req, OffsetDateTime::now_utc())
+                .map_err(chat_problem)
+        })
+        .await?;
+    changed(&state);
+    Ok(json_response(
+        StatusCode::OK,
+        &ChatThreadResponse { thread },
     ))
 }
 

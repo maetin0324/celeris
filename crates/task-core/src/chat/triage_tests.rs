@@ -16,7 +16,17 @@ fn item(key: &str, revision: &str) -> CosTriageSource {
         operation_id: None,
         summary: "approve?".into(),
         policy_version: "v1".into(),
+        task_id: None,
     }
+}
+fn general(s: &SqliteStore) -> String {
+    s.cos_thread_open(
+        &crate::chat::ChatOpenThreadRequest { project_id: None },
+        at(0),
+    )
+    .expect("general")
+    .thread
+    .id
 }
 fn count(s: &SqliteStore, table: &str) -> i64 {
     s.lock()
@@ -90,12 +100,12 @@ fn cos_chat_triage_store_reconcile_claim_and_resolve() {
         22
     );
     let claim = s
-        .cos_triage_claim("run-1", at(1))
+        .cos_triage_claim(&general(&s), "run-1", at(1))
         .expect("claim")
         .expect("items");
     assert_eq!(claim.item_ids.len(), 20);
     assert!(
-        s.cos_triage_claim("run-2", at(1))
+        s.cos_triage_claim(&general(&s), "run-2", at(1))
             .expect("active run")
             .is_none()
     );
@@ -242,7 +252,7 @@ fn cos_chat_triage_store_report_open_items_and_digest_bookkeeping() {
     s.cos_triage_ingest_batch("decisions", "7", &[item("a", "1"), b], at(0))
         .expect("ingest");
     let claim = s
-        .cos_triage_claim("run-1", at(1))
+        .cos_triage_claim(&general(&s), "run-1", at(1))
         .expect("claim")
         .expect("items");
     assert_eq!(claim.item_ids.len(), 2);
@@ -294,7 +304,7 @@ fn cos_chat_triage_store_report_open_items_and_digest_bookkeeping() {
     assert_eq!(fb.options[0].key, "公開する");
     assert_eq!(fb.recommendation_reason.as_deref(), Some("CoS の推奨なし"));
 
-    let open = s.cos_triage_open_items(10).expect("open");
+    let open = s.cos_triage_open_items(None, 10).expect("open");
     assert_eq!(open.len(), 2);
     assert!(
         open.iter()
@@ -318,7 +328,7 @@ fn cos_chat_triage_store_report_open_items_and_digest_bookkeeping() {
         .expect("finish");
     assert_eq!(
         s.cos_triage_runs_without_digest(10).expect("scan"),
-        vec![("run-1".to_string(), "completed".to_string())]
+        vec![(general(&s), "run-1".to_string(), "completed".to_string())]
     );
     let card = ChatCard {
         kind: ChatCardKind::Decision,
@@ -418,4 +428,60 @@ fn cos_chat_triage_resolve_stale_does_not_insert() {
         0
     );
     assert_eq!(count(&s, "cos_inbox_items"), 1);
+}
+
+/// ADR 2026-10-22-cos-fixed-threads D3: an item of a task under a project root lands in that
+/// project's CoS thread and its outside notification names that CoS; an item without a task goes
+/// to the general CoS. No thread is created per item.
+#[test]
+fn cos_chat_triage_items_and_escalations_follow_the_root_project() {
+    use crate::Status;
+    use crate::TaskStore;
+    use crate::store::tests::sample_task;
+    let s = SqliteStore::open_in_memory().expect("store");
+    let project = crate::ProjectId::new();
+    let thread = crate::chat::test_project_thread(&s, &project.to_string(), at(0));
+    let mut root = sample_task(Status::Running);
+    root.project_id = Some(project);
+    s.create_task(&root, vec![]).expect("root");
+    let mut child = sample_task(Status::Running);
+    child.parent_id = Some(root.id);
+    s.create_task(&child, vec![]).expect("child");
+
+    let mut under_project = item("p", "1");
+    under_project.task_id = Some(child.id.to_string());
+    s.cos_triage_direct_escalate(&under_project, r#"{"title":"承認"}"#, at(1))
+        .expect("project escalate");
+    s.cos_triage_direct_escalate(&item("g", "1"), r#"{"title":"承認"}"#, at(2))
+        .expect("general escalate");
+    let general = general(&s);
+    let thread_of = |key: &str| -> String {
+        s.lock()
+            .expect("lock")
+            .query_row(
+                "SELECT thread_id FROM cos_inbox_items WHERE source_key=?1",
+                [key],
+                |r| r.get(0),
+            )
+            .expect("item")
+    };
+    assert_eq!(thread_of("p"), thread.id);
+    assert_eq!(thread_of("g"), general);
+    assert_eq!(count(&s, "chat_threads"), 2, "no thread per item");
+    let label_of = |key: &str| -> String {
+        let body: String = s
+            .lock()
+            .expect("lock")
+            .query_row(
+                "SELECT n.body FROM notifications n JOIN cos_inbox_items i ON i.id=n.key \
+                 WHERE i.source_key=?1",
+                [key],
+                |r| r.get(0),
+            )
+            .expect("notification");
+        let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+        v["cos"].as_str().expect("cos label").to_owned()
+    };
+    assert_eq!(label_of("p"), format!("[CoS: {project}]"));
+    assert_eq!(label_of("g"), "[統括 CoS]");
 }

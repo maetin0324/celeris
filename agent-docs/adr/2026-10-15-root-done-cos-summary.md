@@ -6,6 +6,7 @@ tasks: [01M4YETK5J7Q554ATEB4DSHJP6]
 
 - 日付: 2026-10-15
 - 状態: 採用・実装済み（done の root のみ。failed／cancelled は D8 の提案）
+- 2026-10-22 付記: [2026-10-22-cos-fixed-threads](2026-10-22-cos-fixed-threads.md) によりD1 の root ごとの専用スレッドは置き換え済み。要約は root の案件の CoS スレッド（無ければ統括 CoS）に入り、通知の先頭に CoS の名を付ける。
 - 関連: ADR-0133（notice store）、2026-10-05-cos-chat-home、2026-10-06-cos-chat-run-dispatch、2026-10-06-cos-inbox-triage-fallback、
   2026-10-07-cos-inbox-thread-conversation、2026-10-11-breaking-changes-by-default、ADR-0079 D6/D11（木の子は通知しない）
 - 事実の出所と証拠コマンド: `agent-docs/progress/2026-10-15-root-done-cos-summary.md`（『## 事実』）

@@ -155,6 +155,7 @@ fn cos_chat_triage_resolved_source_is_withdrawn_before_post() {
         operation_id: None,
         summary: "wait".into(),
         policy_version: "1".into(),
+        task_id: None,
     };
     store
         .cos_triage_ingest_batch("events", "0", &[source], at())
@@ -191,12 +192,24 @@ fn cos_chat_triage_three_send_failures_keep_the_unresolved_item() {
         operation_id: None,
         summary: "wait".into(),
         policy_version: "1".into(),
+        task_id: None,
     };
     store
         .cos_triage_ingest_batch("events", "0", &[source], at())
         .expect("ingest");
     let row = store
-        .cos_triage_claim("run-1", at())
+        .cos_triage_claim(
+            &store
+                .cos_thread_open(
+                    &task_core::chat::ChatOpenThreadRequest { project_id: None },
+                    at(),
+                )
+                .expect("general")
+                .thread
+                .id,
+            "run-1",
+            at(),
+        )
         .expect("claim")
         .expect("item");
     let item_id = &row.item_ids[0];
@@ -256,6 +269,7 @@ fn cos_chat_triage_notice_revision_is_checked_before_post() {
         operation_id: None,
         summary: notice.title.clone(),
         policy_version: "1".into(),
+        task_id: None,
     };
     store
         .cos_triage_ingest_batch("notices", "cursor", &[source], at())

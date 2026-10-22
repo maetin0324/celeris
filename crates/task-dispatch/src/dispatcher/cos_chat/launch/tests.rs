@@ -57,7 +57,7 @@ mod resume_delta {
     use serde_json::json;
     use task_core::SqliteStore;
     use task_core::chat::{
-        ChatCreateThreadRequest, ChatPostMessageRequest, ChatRunSessionMode, ChatRunState,
+        ChatOpenThreadRequest, ChatPostMessageRequest, ChatRunSessionMode, ChatRunState,
         ChatSendMode, ChatSession, ChatSessionKey,
     };
     use time::OffsetDateTime;
@@ -85,15 +85,7 @@ mod resume_delta {
     /// Thread with a live session; returns (thread, session row id).
     fn setup(s: &SqliteStore) -> (String, String) {
         let t = s
-            .chat_thread_create(
-                "admin",
-                &ChatCreateThreadRequest {
-                    title: "t".into(),
-                    project_id: None,
-                    client_thread_id: "t".into(),
-                },
-                now(),
-            )
+            .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, now())
             .expect("thread")
             .thread
             .id;

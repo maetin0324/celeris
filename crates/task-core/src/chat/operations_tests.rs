@@ -18,7 +18,7 @@ fn setup() -> (SqliteStore, AuditContext) {
         let conn = store.lock().expect("lock");
         conn.execute(
             "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) \
-            VALUES('thread','human','Test','open','now','now')",
+            VALUES('thread','general','Test','open','now','now')",
             [],
         )
         .expect("thread");

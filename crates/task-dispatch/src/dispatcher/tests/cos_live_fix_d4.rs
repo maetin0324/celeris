@@ -5,9 +5,7 @@
 
 use super::*;
 use crate::dispatcher::cos_chat::launch::CosChatLaunchConfig;
-use task_core::chat::{
-    ChatCreateThreadRequest, ChatMessageQuery, ChatPostMessageRequest, ChatRunState, ChatSendMode,
-};
+use task_core::chat::{ChatMessageQuery, ChatPostMessageRequest, ChatRunState, ChatSendMode};
 use task_worker::fake::FakeAdapter;
 
 /// A worker that streams assistant text before it finishes. A triage run has no
@@ -136,9 +134,11 @@ impl Fixture {
 
     fn inbox_thread(&self) -> Option<String> {
         let conn = rusqlite::Connection::open(&self.db_path).expect("db");
-        conn.query_row("SELECT id FROM chat_threads WHERE kind='inbox'", [], |r| {
-            r.get(0)
-        })
+        conn.query_row(
+            "SELECT id FROM chat_threads WHERE kind='general'",
+            [],
+            |r| r.get(0),
+        )
         .ok()
     }
 
@@ -181,19 +181,7 @@ impl Fixture {
     }
 
     fn chat_thread(&self, key: &str) -> String {
-        self.store
-            .chat_thread_create(
-                "admin",
-                &ChatCreateThreadRequest {
-                    title: key.into(),
-                    project_id: None,
-                    client_thread_id: key.into(),
-                },
-                OffsetDateTime::now_utc(),
-            )
-            .expect("create thread")
-            .thread
-            .id
+        crate::test_support::project_cos_thread(&self.store, key)
     }
 
     fn post(&self, thread: &str, key: &str) {

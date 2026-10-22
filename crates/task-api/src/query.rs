@@ -329,6 +329,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::WorkUnitCheckFinished { .. } => "work_unit_check_finished",
         Event::WorkUnitChecksHandedOff { .. } => "work_unit_checks_handed_off",
         Event::WorkUnitsSerialized { .. } => "work_units_serialized",
+        Event::AutoReplanRequested { .. } => "auto_replan_requested",
         Event::ProjectPlanProposed { .. } => "project_plan_proposed",
         Event::ProjectPlanDecided { .. } => "project_plan_decided",
         Event::PausePointsResolved { .. } => "pause_points_resolved",

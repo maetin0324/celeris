@@ -4,7 +4,7 @@
 //! 判断（D14 の検証・D15 の scheduler）はすべて `task_core::execution_plan` の純粋関数にあり、
 //! ここは I/O（store 呼び出し）と id・時刻の発行だけを行う（ADR-0001 D2）。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use task_core::execution_plan::{PlanContext, PlanValidationError, validate_with};
 use task_core::{
@@ -524,6 +524,35 @@ pub fn replan(
     Ok((new_plan, diff))
 }
 
+/// ADR 2026-10-22-stalled-auto-replan D7: 新しい版 `new` が前の版 `old` から done の unit の `checks` しか変えていないか
+/// （done の unit の checks を前の版のものに戻すと、unit の集合・各 spec・段階が前の版と同じ）。
+fn only_done_checks_changed(
+    old: &task_core::ExecutionPlanSpec,
+    new: &task_core::ExecutionPlanSpec,
+    done_work_units: &[(String, task_core::WorkUnitSpec)],
+) -> bool {
+    if old.phases != new.phases {
+        return false;
+    }
+    let old_units: BTreeMap<&str, &task_core::WorkUnitSpec> =
+        old.work_units.iter().map(|w| (w.key.as_str(), w)).collect();
+    if old_units.len() != new.work_units.len() {
+        return false;
+    }
+    new.work_units.iter().all(|w| {
+        let Some(prev) = old_units.get(w.key.as_str()) else {
+            return false;
+        };
+        if done_work_units.iter().any(|(k, _)| k == &w.key) {
+            let mut restored = w.clone();
+            restored.checks = prev.checks.clone();
+            &restored == *prev
+        } else {
+            w == *prev
+        }
+    })
+}
+
 /// [`replan`] の検証と書き込みの組み立て（読むだけ）。
 #[allow(clippy::too_many_arguments)]
 pub fn plan_replan(
@@ -592,6 +621,18 @@ pub fn plan_replan(
         .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
 
     let internal = task_core::internal_view(&validated.spec).into_owned();
+    // ADR 2026-10-22-stalled-auto-replan D7: 統合の失敗からの自動 replan に、done の unit の `checks` しか変えない
+    // planner の計画は進展なしとして拒む（同じ統合が同じ失敗を繰り返すだけ。本番 2026-10-22 moshi-brewed）。
+    if origin == PlanOrigin::Planner
+        && let Some(failed_key) =
+            crate::plan_gate::pending_integration_auto_replan(&store.events_for(task_id)?)
+        && only_done_checks_changed(&active_internal, &internal, &done_work_units)
+    {
+        return Err(OpsError::Validation(format!(
+            "no progress: the replan after the failed integration {failed_key} only changes the checks of done \
+             units; add a new unit (a fix or repair leaf) that changes the code or the environment, or raise a decision"
+        )));
+    }
     let new_keys: BTreeSet<&str> = internal.work_units.iter().map(|w| w.key.as_str()).collect();
     // `work_units.key` は `UNIQUE(task_id, key)`。過去（superseded を含む）に使われた key を
     // 「新しい」key として再利用しようとしたら拒否する（D5）。ADR-0079 付記「R7-3」D3: 段階の統合 WU の key

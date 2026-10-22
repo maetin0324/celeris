@@ -19,6 +19,12 @@ use task_core::{
 use crate::error::OpsError;
 use crate::gate::TransitionResult;
 
+mod stall;
+pub use stall::{
+    REPLAN_STALLED_QUESTION_PREFIX, STALLED_REPLAN_LIMIT, failure_signature, normalize_check_cmd,
+    pending_integration_auto_replan, replan_stalled_question, stalled_replans,
+};
+
 /// `Trigger::PlanGate` の `Transitioned.reason`。
 pub const AWAITING_PLAN_APPROVAL: &str = "awaiting_plan_approval";
 
@@ -504,19 +510,22 @@ pub fn plan_gate_state(plan: &ExecutionPlanRow, events: &[(u64, Event)]) -> Plan
 /// 人の replan の依頼として扱う（[`answered_replan_exhausted`]。上限に数えない）。
 pub const REPLAN_EXHAUSTED_QUESTION_PREFIX: &str = "replan の上限を使い切りました";
 
+/// 回答を人の replan の依頼として読む質問（上限を使い切った後と、ADR 2026-10-22-stalled-auto-replan D5 の進展の無い
+/// replan を止めた後）。
+fn is_human_replan_question(text: &str) -> bool {
+    text.starts_with(REPLAN_EXHAUSTED_QUESTION_PREFIX)
+        || text.starts_with(REPLAN_STALLED_QUESTION_PREFIX)
+}
+
 fn is_exhausted_question(e: &Event) -> Option<bool> {
     match e {
-        Event::QuestionRaised { text, .. } => {
-            Some(text.starts_with(REPLAN_EXHAUSTED_QUESTION_PREFIX))
-        }
+        Event::QuestionRaised { text, .. } => Some(is_human_replan_question(text)),
         Event::WorkerFinished { outcome, role, .. }
             if !crate::derive::is_reviewer(*role) && outcome.starts_with("question: ") =>
         {
-            Some(
-                outcome
-                    .trim_start_matches("question: ")
-                    .starts_with(REPLAN_EXHAUSTED_QUESTION_PREFIX),
-            )
+            Some(is_human_replan_question(
+                outcome.trim_start_matches("question: "),
+            ))
         }
         _ => None,
     }

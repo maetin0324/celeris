@@ -1117,10 +1117,21 @@ impl Dispatcher {
             "{timeout_tag}phase {phase} の統合後の検査が失敗しました: {}",
             summary.join("; ")
         );
+        // ADR 2026-10-22-stalled-auto-replan D2: 失敗した cmd と出力の compile error の行から失敗の識別子。
+        let failure = task_ops::plan_gate::failure_signature(
+            &failing
+                .iter()
+                .filter_map(|f| match &f.check {
+                    Check::Command { cmd, .. } => Some(cmd.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            &summary.join("\n"),
+        );
         let class = match task_core::classify_review_failure(&failing) {
             task_core::RepairDecision::Repairable(c) => c,
             task_core::RepairDecision::Substantive => {
-                return self.integration_gives_up(task, integ, &why);
+                return self.integration_gives_up_with(task, integ, &why, Some(failure));
             }
         };
         let repairs: Vec<&task_core::WorkUnitRow> = units
@@ -1134,7 +1145,7 @@ impl Dispatcher {
         if repairs.len() as u32 >= self.config.execution.max_repairs
             || same_class as u32 >= self.config.execution.max_repairs_per_class
         {
-            return self.integration_gives_up(task, integ, &why);
+            return self.integration_gives_up_with(task, integ, &why, Some(failure));
         }
         let prefix = format!("repair-{phase}-");
         let n = units.iter().filter(|u| u.key.starts_with(&prefix)).count() + 1;
@@ -1294,8 +1305,35 @@ impl Dispatcher {
         integ: &task_core::WorkUnitRow,
         why: &str,
     ) -> Result<(), DispatchError> {
+        self.integration_gives_up_with(task, integ, why, None)
+    }
+
+    /// [`Self::integration_gives_up`] に失敗の識別子（ADR 2026-10-22-stalled-auto-replan D2）を渡す形。`None` なら
+    /// `why` の文から作る（merge の衝突など、検査の cmd が無い失敗）。同じ統合 WU・同じ識別子の自動 replan が進展なしに
+    /// [`task_ops::plan_gate::STALLED_REPLAN_LIMIT`] 回続いていれば、`max_replans` に余りがあっても replan せず人に聞く（D4 / D5）。
+    pub(super) fn integration_gives_up_with(
+        &mut self,
+        task: &Task,
+        integ: &task_core::WorkUnitRow,
+        why: &str,
+        failure: Option<String>,
+    ) -> Result<(), DispatchError> {
         let replans_so_far = self.counted_replans(task.id)?;
-        let can_replan = replans_so_far < self.effective_max_replans(task.id)?;
+        let failure =
+            failure.unwrap_or_else(|| task_ops::plan_gate::failure_signature::<&str>(&[], why));
+        let stalled = task_ops::plan_gate::stalled_replans(
+            &self.store.events_for(task.id)?,
+            &integ.key,
+            &failure,
+        );
+        let stalled_stop = stalled >= task_ops::plan_gate::STALLED_REPLAN_LIMIT;
+        let can_replan = !stalled_stop && replans_so_far < self.effective_max_replans(task.id)?;
+        let question_text = if stalled_stop {
+            tracing::warn!(task_id = %task.id, key = %integ.key, stalled, "the same integration failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
+            task_ops::plan_gate::replan_stalled_question(&integ.key, stalled, why)
+        } else {
+            why.to_string()
+        };
         let mut row = integ.clone();
         row.clear_lease();
         row.updated_at = rfc3339(OffsetDateTime::now_utc());
@@ -1319,9 +1357,14 @@ impl Dispatcher {
             },
         )?;
         let run_id = last_run_id(&self.store.events_for(task.id)?).unwrap_or_default();
-        let progress = Event::worker_progress(run_id.clone(), why.to_string());
+        let progress = Event::worker_progress(run_id.clone(), question_text.clone());
         let mut events = vec![progress];
         let trigger = if can_replan {
+            events.push(Event::AutoReplanRequested {
+                key: integ.key.clone(),
+                failure,
+                source: task_core::AutoReplanSource::Integration,
+            });
             Trigger::Continue {
                 why: task_core::ContinueWhy::Replan,
             }
@@ -1329,7 +1372,7 @@ impl Dispatcher {
             if let Err(e) = crate::approvals::record_question_approval(
                 self.store.as_ref(),
                 task,
-                why,
+                &question_text,
                 OffsetDateTime::now_utc(),
             ) {
                 tracing::warn!(task_id = %task.id, error = %e, "failed to record the approval for the integration failure");
@@ -1339,7 +1382,7 @@ impl Dispatcher {
             // 同じ文）を残す。以前は残さず、受信箱の質問が空文だった（web Phase 1 の子、2026-09-30 04:57Z）。
             events.push(Event::QuestionRaised {
                 run_id,
-                text: why.to_string(),
+                text: question_text,
             });
             Trigger::WorkerQuestion
         };

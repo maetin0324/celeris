@@ -33,6 +33,21 @@
       ],
       "type": "object"
     },
+    "AutoReplanSource": {
+      "description": "ADR 2026-10-22-stalled-auto-replan D1: `Event::AutoReplanRequested.source`（どこの失敗から replan したか）。",
+      "oneOf": [
+        {
+          "const": "integration",
+          "description": "段の統合の検査の失敗（`integration_gives_up`）。",
+          "type": "string"
+        },
+        {
+          "const": "work_unit",
+          "description": "WU の run の失敗・no progress・plan_issue。",
+          "type": "string"
+        }
+      ]
+    },
     "BrowserPolicyBinding": {
       "additionalProperties": false,
       "description": "What the run is bound to: approvals, waits and leases compare this hash (ADR-0080 D1).",
@@ -3999,6 +4014,31 @@
             "merge_candidate_sha",
             "head_sha",
             "target_sha"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-22-stalled-auto-replan D1: daemon が失敗から自動 replan（`Continue{Replan}`）を起こした。`key` は\n失敗した WU（統合 WU を含む）、`failure` は失敗の識別子（`task_ops::plan_gate::failure_signature`）。同じ\n`(key, failure)` が進展（変更のある `WorkUnitCommitted`）なしに続けば自動 replan をやめる。状態は変えない。",
+          "properties": {
+            "failure": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/AutoReplanSource"
+            },
+            "type": {
+              "const": "auto_replan_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "key",
+            "failure",
+            "source"
           ],
           "type": "object"
         },

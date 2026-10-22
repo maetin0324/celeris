@@ -501,9 +501,12 @@ pub fn limit_decision(
         id: ulid::Ulid::new().to_string(),
         key: limit.decision_key(scope),
         kind: DecisionKind::Limit,
-        question: format!(
-            "木の上限 {what} を超えます（{count} > 上限 {max}）。止めた仕事をどうしますか"
-        ),
+        // ADR 2026-10-22-stalled-auto-replan D8: 上限ちょうど（使い切り）を「超過」と書かない。
+        question: if count == max {
+            format!("木の上限 {what} を使い切りました（{count}/{max}）。止めた仕事をどうしますか")
+        } else {
+            format!("木の上限 {what} を超えます（{count} > 上限 {max}）。止めた仕事をどうしますか")
+        },
         options: vec![
             DecisionOption {
                 key: "raise-once".to_string(),

@@ -351,6 +351,8 @@ export type AttestationClaims = {
   "wait_id": string;
 };
 
+export type AutoReplanSource = "integration" | "work_unit";
+
 export type BackoffCause = "retry" | "infra";
 
 export type BehindTarget = {
@@ -2553,6 +2555,11 @@ export type Event = {
   "target_sha": string;
   "type": "merge_candidate_stale";
   "work_unit_id": string;
+} | {
+  "failure": string;
+  "key": string;
+  "source": AutoReplanSource;
+  "type": "auto_replan_requested";
 } | {
   "plan_id": string;
   "reason": string;

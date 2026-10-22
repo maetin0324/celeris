@@ -1030,6 +1030,16 @@ pub struct FailedWorkUnitCheck {
     pub detail: String,
 }
 
+/// ADR 2026-10-22-stalled-auto-replan D1: `Event::AutoReplanRequested.source`（どこの失敗から replan したか）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoReplanSource {
+    /// 段の統合の検査の失敗（`integration_gives_up`）。
+    Integration,
+    /// WU の run の失敗・no progress・plan_issue。
+    WorkUnit,
+}
+
 /// `Event::TargetSweepRan` の実行方式（D1.4: `--dry-run` は何も消さない）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1724,6 +1734,14 @@ pub enum Event {
         merge_candidate_sha: String,
         head_sha: String,
         target_sha: String,
+    },
+    /// ADR 2026-10-22-stalled-auto-replan D1: daemon が失敗から自動 replan（`Continue{Replan}`）を起こした。`key` は
+    /// 失敗した WU（統合 WU を含む）、`failure` は失敗の識別子（`task_ops::plan_gate::failure_signature`）。同じ
+    /// `(key, failure)` が進展（変更のある `WorkUnitCommitted`）なしに続けば自動 replan をやめる。状態は変えない。
+    AutoReplanRequested {
+        key: String,
+        failure: String,
+        source: AutoReplanSource,
     },
     /// ADR-0074 D1.2（Phase F2b）: v2 の計画だが並列 1 に倒した（remote / 書き込み可能な `dir` の
     /// repo / `Shared`）。計画ごとに 1 回だけ残す。状態は変えない。

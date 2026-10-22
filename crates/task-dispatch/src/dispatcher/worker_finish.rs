@@ -617,6 +617,8 @@ impl Dispatcher {
             Vec<task_core::WorkUnitRow>,
         )> = None;
         let mut integration_exhausted_event: Option<Event> = None;
+        // ADR 2026-10-22-stalled-auto-replan D1: WU の失敗から起こす自動 replan の記録。
+        let mut auto_replan_event: Option<Event> = None;
         // ADR-0079 D7（Phase R3a）: worker が `result.json` の `decisions` で出した決定の要求（記録と止める unit）。
         let mut worker_decisions: Option<WorkerDecisions> = None;
         // ADR-0090 D2: この WU の run が unit を `blocked(cluster_jobs)` にした。
@@ -900,7 +902,39 @@ impl Dispatcher {
                         && matches!(decision.reason, "failed" | "limit" | "plan_issue")
                     {
                         let replans_so_far = self.counted_replans(task_id)?;
-                        if replans_so_far < self.effective_max_replans(task_id)? {
+                        // ADR 2026-10-22-stalled-auto-replan D1 / D4: 同じ WU・同じ失敗の自動 replan が進展なしに
+                        // 続いたら、`max_replans` に余りがあっても止めて人に聞く。
+                        let failure = match &check_failure {
+                            Some(f) => f.failure_signature(),
+                            None => task_ops::plan_gate::failure_signature(
+                                &[decision.reason],
+                                &outcome_str,
+                            ),
+                        };
+                        let stalled = task_ops::plan_gate::stalled_replans(
+                            &self.store.events_for(task_id)?,
+                            &wu.key,
+                            &failure,
+                        );
+                        if stalled >= task_ops::plan_gate::STALLED_REPLAN_LIMIT {
+                            let msg = outcome_str
+                                .strip_prefix("error(retryable=false): ")
+                                .unwrap_or(outcome_str.as_str())
+                                .to_string();
+                            tracing::warn!(%task_id, key = %wu.key, stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
+                            trigger = Trigger::WorkerQuestion;
+                            outcome_str = format!(
+                                "question: {}",
+                                task_ops::plan_gate::replan_stalled_question(
+                                    &wu.key, stalled, &msg
+                                )
+                            );
+                        } else if replans_so_far < self.effective_max_replans(task_id)? {
+                            auto_replan_event = Some(Event::AutoReplanRequested {
+                                key: wu.key.clone(),
+                                failure,
+                                source: task_core::AutoReplanSource::WorkUnit,
+                            });
                             let why = match decision.reason {
                                 "failed" => {
                                     format!("work unit {} failed{check_failure_suffix}", wu.key)
@@ -1420,6 +1454,9 @@ impl Dispatcher {
         };
         let mut events = vec![finished];
         if let Some(event) = integration_exhausted_event {
+            events.push(event);
+        }
+        if let Some(event) = auto_replan_event {
             events.push(event);
         }
         // ADR-0079 付記 R7-5 D1: WU の checks の不合格（どの check が・どこで・どう落ちたか）を同じトランザクションで残す。

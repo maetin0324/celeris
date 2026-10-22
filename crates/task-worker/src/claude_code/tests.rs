@@ -3776,6 +3776,7 @@ fn replan_prompt_allows_rewriting_only_the_checks_of_done_units() {
             vec![
                 "The one exception is `checks`: you may replace a done WorkUnit's `checks`",
                 "The done WorkUnit is not re-run; its checks without `\"scope\":true` are re-run at the phase integration.",
+                "a plan that only changes the `checks` of done units is rejected as no progress",
             ],
         ),
         (
@@ -3784,6 +3785,7 @@ fn replan_prompt_allows_rewriting_only_the_checks_of_done_units() {
             vec![
                 "The only thing you may change in a done unit is its `checks`",
                 "The done unit is not re-run; its checks without `\"scope\":true` are re-run at the stage integration.",
+                "a plan that only changes the `checks` of done units is rejected as no progress",
                 "At most 6 units per stage (leaves + child tasks; units already done, `adopt` units, and \
                      celeris-added integration steps and repairs do not count)",
             ],

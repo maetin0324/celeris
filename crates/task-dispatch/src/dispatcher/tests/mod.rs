@@ -3001,6 +3001,8 @@ mod planner_budget;
 /// ADR-0079 付記 R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す（replan・修正前の行の reopen）
 /// （`src/dispatcher/tests/stage_reopen.rs`）。
 mod stage_reopen;
+/// ADR 2026-10-22-stalled-auto-replan: 進展の無い自動 replan を止める（`src/dispatcher/tests/stalled_replan.rs`）。
+mod stalled_replan;
 /// ADR-0130 D2: 実装 run・WU の actual write-set の記録（`src/dispatcher/tests/write_set_record.rs`）。
 mod write_set_record;
 

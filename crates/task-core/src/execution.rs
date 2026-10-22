@@ -615,6 +615,9 @@ pub enum RepairClass {
     /// ADR-0120 D2: review 前の target 同期（rebase）が衝突した。repair WU
     /// `integration-repair-<n>` が成果を保ったまま rebase を完了させる。
     IntegrationConflict,
+    /// ADR 2026-10-22-stalled-auto-replan D6: 検査の出力が compile error（Kotlin の `e: file://…` /
+    /// `Compilation error`、rustc の `error[E…]` / `error: could not compile`）。
+    Build,
 }
 
 impl RepairClass {
@@ -630,6 +633,7 @@ impl RepairClass {
             RepairClass::ReviewTimeout => "review_timeout",
             RepairClass::MergeConflict => "merge_conflict",
             RepairClass::IntegrationConflict => INTEGRATION_REPAIR_BUCKET,
+            RepairClass::Build => "build",
         }
     }
 
@@ -641,7 +645,8 @@ impl RepairClass {
             RepairClass::TestSmall
             | RepairClass::MergeBase
             | RepairClass::MergeConflict
-            | RepairClass::IntegrationConflict => (30, 1800),
+            | RepairClass::IntegrationConflict
+            | RepairClass::Build => (30, 1800),
             RepairClass::ReviewerLocal(kind) => match kind {
                 ReviewerRepairKind::Format => (12, 600),
                 ReviewerRepairKind::Lint => (20, 1200),
@@ -763,6 +768,11 @@ fn classify_command(cmd: &str, reason: &str) -> Option<RepairClass> {
     if MERGE_BASE_ANCESTOR_WORDS.iter().all(|w| c.contains(w)) {
         return Some(RepairClass::MergeBase);
     }
+    // ADR 2026-10-22-stalled-auto-replan D6: compile error は cmd の種類（`gradle test`・`cargo test` など）より先に
+    // 見る（test の数で分類すると Substantive になり、repair を作らずに replan を繰り返した）。
+    if is_compile_error(reason) {
+        return Some(RepairClass::Build);
+    }
     if FMT_COMMAND_WORDS.iter().any(|w| c.contains(w)) {
         return Some(RepairClass::Format);
     }
@@ -776,6 +786,20 @@ fn classify_command(cmd: &str, reason: &str) -> Option<RepairClass> {
         };
     }
     None
+}
+
+/// ADR 2026-10-22-stalled-auto-replan D6: 検査の出力（`Verdict.reason` の stdout/stderr の tail）が compile error か。
+/// Kotlin（`e: file://…` の行・`Compilation error`）と rustc（`error[E…]`・`error: could not compile`）。行は実の改行・
+/// Debug 形式で逃がした `\n`・`stdout_tail="` / `stderr_tail="` の境で分ける。
+pub fn is_compile_error(output: &str) -> bool {
+    output.contains("Compilation error")
+        || output.contains("error[E")
+        || output.contains("error: could not compile")
+        || output
+            .split("_tail=\"")
+            .flat_map(|part| part.split('\n'))
+            .flat_map(|line| line.split("\\n"))
+            .any(|l| l.trim_start().starts_with("e: file://"))
 }
 
 /// D16「reason が fmt / clippy の語だけを指す（字句の予備判定）」: 明示の `repair` ヒントが無い

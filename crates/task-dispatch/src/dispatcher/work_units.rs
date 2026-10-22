@@ -1267,7 +1267,41 @@ impl Dispatcher {
             ));
         }
         let replans_so_far = self.counted_replans(task_id)?;
+        // ADR 2026-10-22-stalled-auto-replan D1 / D4: 同じ WU・同じ止まり方の自動 replan が進展なしに続いたら止める。
+        let failure = task_ops::plan_gate::failure_signature(
+            &[format!("{:?}/{:?}", wu.status, wu.blocked_reason)],
+            "",
+        );
+        let stalled = task_ops::plan_gate::stalled_replans(&events, &wu.key, &failure);
+        if stalled >= task_ops::plan_gate::STALLED_REPLAN_LIMIT {
+            let text = task_ops::plan_gate::replan_stalled_question(
+                &wu.key,
+                stalled,
+                &format!("work unit {} did not finish", wu.key),
+            );
+            tracing::warn!(%task_id, key = %wu.key, stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
+            self.store.append_event(
+                task_id,
+                &Event::QuestionRaised {
+                    run_id: last_run_id(&events).unwrap_or_default(),
+                    text: text.clone(),
+                },
+            )?;
+            return Ok((
+                Trigger::WorkerQuestion,
+                format!("question: {text}"),
+                vec![text],
+            ));
+        }
         if replans_so_far < self.effective_max_replans(task_id)? {
+            self.store.append_event(
+                task_id,
+                &Event::AutoReplanRequested {
+                    key: wu.key.clone(),
+                    failure,
+                    source: task_core::AutoReplanSource::WorkUnit,
+                },
+            )?;
             let why = match (wu.status, wu.blocked_reason) {
                 (task_core::WorkUnitStatus::Failed, _) => format!("work unit {} failed", wu.key),
                 (_, Some(task_core::WorkUnitBlockedReason::Limit)) => {
@@ -2121,6 +2155,18 @@ impl WorkUnitCheckFailure {
             &format!("checks failed in {}: {joined}", self.cwd.display()),
             CHECK_FAILURE_SUMMARY_MAX_CHARS,
         )
+    }
+
+    /// ADR 2026-10-22-stalled-auto-replan D2: 不合格の cmd と判定文から失敗の識別子。
+    pub(super) fn failure_signature(&self) -> String {
+        let cmds: Vec<&str> = self.failed.iter().map(|f| f.cmd.as_str()).collect();
+        let details = self
+            .failed
+            .iter()
+            .map(|f| f.detail.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        task_ops::plan_gate::failure_signature(&cmds, &details)
     }
 
     /// D1: `Event::WorkUnitChecksFailed`。

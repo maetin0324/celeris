@@ -344,6 +344,34 @@ fn classifies_a_clippy_command_as_lint() {
     assert_eq!(RepairClass::Lint.budget(), (20, 1200));
 }
 
+/// ADR 2026-10-22-stalled-auto-replan D6: compile error（Kotlin・rustc）は test の数より先に `build` に分類する。
+#[test]
+fn classifies_a_compile_error_as_build() {
+    for (cmd, reason) in [
+        (
+            "./gradlew --offline :core:test",
+            "cmd=\"./gradlew --offline :core:test\" exit=Some(1) expected=0 stdout_tail=\"> Task :core:compileTestKotlin FAILED\\n\" stderr_tail=\"w: x\\ne: file:///w/core/src/test/RealSshdSessionTest.kt:185:13 Unresolved reference 'destroy'.\\n\"",
+        ),
+        (
+            "./gradlew :app:assemble",
+            "stderr_tail=\"FAILURE: Build failed with an exception.\\nCompilation error. See log for more details\"",
+        ),
+        (
+            "cargo test --workspace",
+            "stderr_tail=\"error[E0425]: cannot find function `f`\\nerror: could not compile `x`\"",
+        ),
+    ] {
+        let d = classify_review_failure(&[command(cmd, reason)]);
+        assert_eq!(d, RepairDecision::Repairable(RepairClass::Build), "{cmd}");
+    }
+    assert_eq!(RepairClass::Build.bucket(), "build");
+    assert_eq!(RepairClass::Build.budget(), (30, 1800));
+    // `e: ` は行頭だけ（`reference: file://` のような文中の語では分類しない）。
+    assert!(!crate::execution::is_compile_error(
+        "stderr_tail=\"unresolved reference: file:///x\""
+    ));
+}
+
 #[test]
 fn classifies_a_small_test_failure_as_test_small() {
     let d = classify_review_failure(&[command(

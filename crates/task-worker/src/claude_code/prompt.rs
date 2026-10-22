@@ -1383,6 +1383,12 @@ fn tree_plan_shape_section(
     out
 }
 
+/// ADR 2026-10-22-stalled-auto-replan D7: 統合の失敗からの replan で done の check だけを変える計画は拒まれる。
+const INTEGRATION_REPLAN_PROGRESS_NOTE: &str = "If this replan was triggered by a failed stage / phase integration check, \
+a plan that only changes the `checks` of done units is rejected as no progress (the same integration would fail the same \
+way again). Add a new unit (a fix or repair leaf) that changes the code or the environment, or raise a decision if the \
+cause is outside what a plan can fix (e.g. a stale generated binding in the task root).\n\n";
+
 /// ADR-0079 D9（Phase R2b）: /3 の replan の節。差分（`execution-plan-delta/1`）は /2 の形しか持たないので、/3 は
 /// 計画の全体を書かせる（done の unit は daemon が採用した spec のまま持ち越す）。子 task の失敗は理由・checkpoint の
 /// 要約つきで `replan_reason` と unit の要約に入っている。
@@ -1429,6 +1435,7 @@ fn tree_replan_context_section(
             planner.preserve_done_keys.join(", ")
         ));
     }
+    out.push_str(INTEGRATION_REPLAN_PROGRESS_NOTE);
     out.push_str(
         "For a child-task unit whose child **failed** you may: keep the same unit key (celeris then creates a \
          new child task from that unit — the next attempt; fix its objective or acceptance so the retry can \
@@ -1581,6 +1588,7 @@ fn replan_context_section(planner: &crate::protocol::ExecutionPlannerContext) ->
             planner.preserve_done_keys.join(", ")
         ));
     }
+    out.push_str(INTEGRATION_REPLAN_PROGRESS_NOTE);
     out
 }
 

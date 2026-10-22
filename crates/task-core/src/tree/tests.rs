@@ -872,6 +872,26 @@ fn daemon_decisions_have_the_d7_shape() {
     assert_eq!(d.status, crate::decision::DecisionStatus::Open);
     assert_eq!(d.root_id(), root);
     assert_eq!(d.id.len(), 26, "a ULID");
+    // ADR 2026-10-22-stalled-auto-replan D8: 上限ちょうどは「使い切り」、超えたときだけ「超えます」。
+    assert!(
+        d.question.contains("使い切りました（120/120）") && !d.question.contains("> 上限"),
+        "{}",
+        d.question
+    );
+    let over = limit_decision(
+        TreeLimitKind::TreeRuns,
+        None,
+        121,
+        120,
+        vec![],
+        vec![],
+        raised_by.clone(),
+    );
+    assert!(
+        over.question.contains("（121 > 上限 120）"),
+        "{}",
+        over.question
+    );
     // 計画の決定と同じ形の検査（key の書式以外）を通る。
     let spec = crate::decision::DecisionSpec {
         key: "x".into(),

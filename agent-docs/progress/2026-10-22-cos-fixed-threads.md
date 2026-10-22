@@ -54,6 +54,16 @@ config の変更は無い。migration 0092 は release の昇格で適用され�
   `chat_api_legacy_thread_is_read_only`、`console.rs`・`cos_ops_ops_surface.rs`・celeris-mcp から new-conversation を削除、
   task-core `chat_store_legacy_thread_is_read_only`・`chat_console_projection_*` 2 件、web `conversation-input.test.tsx` 2 件。
 
+## 付記（attempt 3、決定的 check の失敗への対応）
+
+- 失敗: release 相当の負荷下で `celeris::root_done_summary root_done_runs_cos_once_and_notifies_once` が `thread write` 2≠1。
+  原因は試験側: 書き込み先が統括 CoS の固定スレッドになったので、受信箱 triage の run の返答も同じスレッドに入る。
+  試験はスレッドの assistant 発言を全部数えていた。root 完了の入力（`root-done:%`）の run が書いた発言だけを数えるよう直した。
+- 同じ調査中に、偽 webhook が要求を送らずに閉じた接続（host 上の別 process の port 探り）を空の本文として記録し、
+  4 本とも落ちる回を再現した。要求の無い接続は記録しないようにした。実装（daemon 側）は変えていない。
+- 証拠: `cargo nextest run -p celeris --test root_done_summary` を 8 回連続 4/4 pass。`bash scripts/dev/test-affected.sh` exit 0
+  （6280 passed, 16 skipped）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
+
 ## 提案
 
 - 統括 CoS の run 文脈に各案件 CoS の summary（`chat_threads.summary`）を短く渡すと、全案件の見渡しが厚くなる。

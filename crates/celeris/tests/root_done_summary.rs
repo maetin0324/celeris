@@ -17,7 +17,6 @@ use std::time::Duration;
 use celeris::notify::{self, NotifyConfig, SendResult};
 use celeris::{ClusterMasters, Config, build_dispatcher};
 use task_core::NoticeStore;
-use task_core::chat::{ChatMessageQuery, ChatMessageRole};
 use task_core::{
     Budget, Check, Criterion, NotificationStore, SqliteStore, Status, Task, TaskId, TaskKind,
     TaskStore, Tier, Trigger, WorkerHint, WorkspaceSpec,
@@ -52,7 +51,7 @@ async fn hook() -> Hook {
             let body = loop {
                 let n = stream.read(&mut buf).await.expect("read");
                 if n == 0 {
-                    break String::new();
+                    break None;
                 }
                 raw.extend_from_slice(&buf[..n]);
                 let text = String::from_utf8_lossy(&raw).to_string();
@@ -67,9 +66,13 @@ async fn hook() -> Hook {
                         })
                         .unwrap_or(0);
                     if rest.len() >= len {
-                        break rest.to_string();
+                        break Some(rest.to_string());
                     }
                 }
+            };
+            // 要求を送らずに閉じた接続（host 上の別 process の port 探り等）は webhook の POST ではない。
+            let Some(body) = body else {
+                continue;
             };
             stream
                 .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
@@ -280,21 +283,24 @@ impl Env {
         self.hook.bodies.lock().expect("bodies").clone()
     }
 
-    /// スレッドの assistant 発言（CoS の書込み）の数。
+    /// スレッドの assistant 発言のうち root 完了の run が書いたものの数。
+    ///
+    /// ADR 2026-10-22-cos-fixed-threads: 書き込み先は統括 CoS の固定スレッドで、受信箱 triage の run も
+    /// 同じスレッドに書く（負荷次第で現れる）。数えるのは root 完了の入力（`root-done:…`）への返答だけ。
     fn thread_writes(&self, thread: &str) -> usize {
-        self.store
-            .chat_message_list(
-                thread,
-                &ChatMessageQuery {
-                    limit: Some(200),
-                    ..Default::default()
-                },
+        let conn = rusqlite::Connection::open(&self.config.db.path).expect("db");
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_messages a \
+                 JOIN chat_runs r ON r.run_id=a.run_id \
+                 JOIN chat_messages m ON m.id=r.input_message_id \
+                 WHERE a.thread_id=?1 AND a.role='assistant' \
+                 AND m.client_message_id LIKE 'root-done:%'",
+                [thread],
+                |r| r.get(0),
             )
-            .expect("messages")
-            .items
-            .into_iter()
-            .filter(|m| m.role == ChatMessageRole::Assistant)
-            .count()
+            .expect("thread writes");
+        usize::try_from(n).expect("count")
     }
 
     /// daemon の notifier tick（1 通まで）。POST したかを返す。

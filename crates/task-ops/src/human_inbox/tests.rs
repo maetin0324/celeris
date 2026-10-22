@@ -201,6 +201,7 @@ fn fixture() -> Fixture {
         run_id: None,
         previous: Vec::new(),
         approval_id: None,
+        plan_issue_units: Vec::new(),
     });
     let mut authz_task = sample_task(TaskKind::Execute, Status::Blocked);
     authz_task.title = "cluster への委譲".to_string();
@@ -211,6 +212,7 @@ fn fixture() -> Fixture {
         run_id: None,
         previous: Vec::new(),
         approval_id: Some(approval_id),
+        plan_issue_units: Vec::new(),
     });
     inbox.drafts.push(DraftGroup {
         parent: Some(tref.clone()),
@@ -591,6 +593,40 @@ fn human_inbox_question_needs_note_answer() {
     assert_eq!(q.id, format!("question-{}", f.task.id));
     assert!(q.options[0].needs_note);
     assert_eq!(q.detail.as_deref(), Some("どちらの API を使うか"));
+}
+
+/// ADR 2026-10-22-plan-issue-answer-replans D5: 計画の問題の申告（`blocked(plan_issue)` の WU がある）は
+/// 「回答して再開」と「計画を直す」を分けて出し、「計画を直す」を推奨する。
+#[test]
+fn human_inbox_plan_issue_question_offers_resume_and_replan() {
+    let (f, _) = build();
+    let mut inbox = empty_inbox();
+    inbox.questions.push(QuestionItem {
+        task: view::task_ref(&f.task),
+        question: "WorkUnit transfer-ui が計画の問題を申告しました: 範囲 check の許可 path が Objective と矛盾"
+            .to_string(),
+        asked_at: Some(AT.to_string()),
+        run_id: None,
+        previous: Vec::new(),
+        approval_id: None,
+        plan_issue_units: vec!["transfer-ui".to_string()],
+    });
+    let out = from_inbox(&inbox, &f.by_id, now());
+    let q = one(&out, InboxKind::Question);
+    let keys: Vec<&str> = q.options.iter().map(|o| o.key.as_str()).collect();
+    assert_eq!(keys, ["answer", "replan"]);
+    assert!(q.options.iter().all(|o| o.needs_note));
+    assert!(
+        q.options[1].effect.contains("intent=replan"),
+        "{:?}",
+        q.options[1]
+    );
+    assert!(
+        q.options[1].effect.contains("transfer-ui"),
+        "{:?}",
+        q.options[1]
+    );
+    assert_eq!(q.recommended.as_deref(), Some("replan"));
 }
 
 #[test]

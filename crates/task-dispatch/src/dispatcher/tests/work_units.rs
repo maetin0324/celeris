@@ -3537,3 +3537,288 @@ async fn misplaced_wu_result_records_failure_without_infra_requeue() {
     assert!(stray.exists());
     assert!(!artifacts.join("result.json").exists());
 }
+
+/// ADR 2026-10-22-plan-issue-answer-replans: plan_issue の申告と人の回答の意図を回す計画（a → b → c）。`b` の check は
+/// `b_check`（計画に固定）。
+fn adopt_plan_with_b_check(store: &Arc<dyn TaskStore>, task_id: TaskId, b_check: &str) {
+    let mut b = wu_spec("b", &["a"]);
+    b.checks = vec![task_core::WorkUnitCheck {
+        cmd: b_check.to_string(),
+        expect_exit: 0,
+        scope: true,
+    }];
+    let spec = task_core::ExecutionPlanSpec {
+        stages: Vec::new(),
+        units: Vec::new(),
+        decisions: Vec::new(),
+        schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
+        rationale: "A -> B -> C".to_string(),
+        work_units: vec![wu_spec("a", &[]), b, wu_spec("c", &["b"])],
+        phases: Vec::new(),
+        children: Vec::new(),
+    };
+    task_ops::execution::adopt_plan(
+        store.as_ref(),
+        task_id,
+        spec,
+        task_core::PlanOrigin::Fixture,
+        None,
+        task_core::ExecutionLimits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("adopt plan");
+}
+
+fn plan_issue_reports(events: &[(u64, Event)]) -> usize {
+    events
+        .iter()
+        .filter(|(_, e)| {
+            matches!(
+                e,
+                Event::WorkUnitTransitioned {
+                    to: task_core::WorkUnitStatus::Blocked,
+                    reason,
+                    ..
+                } if reason == "plan_issue"
+            )
+        })
+        .count()
+}
+
+/// ADR 2026-10-22-plan-issue-answer-replans（本番 2026-10-22 moshi-brewed transfer-ui）: replan の上限を使い切った後に
+/// WU が「範囲 check が Objective と矛盾」と plan_issue を申告した。人が「計画を直す」（intent=replan）で答えると、
+/// 回答を指示に planner が replan し（上限に数えない）、b の check が直ってから b が再開して task が done になる。
+/// 同じ申告は繰り返されない（`resume` の回答では同じ check のまま再開し、2 回目の申告になる: 対の試験）。
+#[tokio::test]
+async fn a_plan_issue_answer_with_replan_intent_fixes_the_check_after_replans_are_exhausted() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        1,
+    );
+    let task_id = task.id;
+    store.insert(&task).unwrap();
+    // 計画に固定された b の check は通らない（範囲が Objective と矛盾している）。
+    adopt_plan_with_b_check(&store, task_id, "false");
+    let mut wu_script = HashMap::new();
+    wu_script.insert(
+        "b".to_string(),
+        vec![
+            Terminal::Yielded {
+                checkpoint: serde_json::json!({
+                    "plan_issue": "範囲 check の許可 path が Objective と矛盾",
+                }),
+                usage: None,
+            },
+            Terminal::Done {
+                summary: "b done with the fixed check".into(),
+                evidence: vec![],
+                usage: None,
+            },
+        ],
+    );
+    let mut fixed_b = wu_spec("b", &["a"]);
+    fixed_b.checks = vec![task_core::WorkUnitCheck {
+        cmd: "true".into(),
+        expect_exit: 0,
+        scope: true,
+    }];
+    let replanned = plan_json(vec![wu_spec("a", &[]), fixed_b, wu_spec("c", &["b"])]);
+    let adapter = Arc::new(PlannerScriptAdapter::new(vec![Some(replanned)], wu_script));
+    let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+    d.config.execution.max_replans = 0;
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+
+    let stored = store.get(task_id).unwrap().unwrap();
+    assert_eq!(stored.status, Status::Blocked, "{stored:?}");
+    let events = store.events_for(task_id).unwrap();
+    let question = task_ops::derive::latest_question(&events);
+    assert!(question.contains("計画の問題を申告しました"), "{question}");
+    assert!(
+        question.contains(task_ops::gate::PLAN_ISSUE_REPLAN_HINT),
+        "{question}"
+    );
+    assert_eq!(
+        task_ops::gate::plan_issue_unit_keys(store.as_ref(), task_id).unwrap(),
+        vec!["b".to_string()]
+    );
+    // 受信箱は「回答して再開」と「計画を直す」を分けて出す。
+    let questions = task_ops::inbox::inbox(
+        store.as_ref(),
+        None,
+        &task_ops::view::ViewContext {
+            workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+                PathBuf::from("/nonexistent"),
+                None,
+            ),
+            retry_backoff_base: Duration::ZERO,
+            retry_backoff_max: Duration::ZERO,
+            max_requeues: 5,
+            clusters: Default::default(),
+        },
+        OffsetDateTime::now_utc(),
+        &|_, _| Vec::new(),
+    )
+    .unwrap()
+    .questions;
+    let q = questions
+        .iter()
+        .find(|q| q.task.id == task_id)
+        .expect("the question is in the inbox");
+    assert_eq!(q.plan_issue_units, vec!["b".to_string()]);
+
+    task_ops::gate::answer_with_intent(
+        store.as_ref(),
+        task_id,
+        "範囲を web/features/transfer/ まで広げてよい".to_string(),
+        task_ops::gate::AnswerIntent::Replan,
+        "human",
+        Some(Status::Blocked),
+    )
+    .unwrap();
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+
+    let stored = store.get(task_id).unwrap().unwrap();
+    assert_eq!(stored.status, Status::Done, "{stored:?}");
+    let plans = store.execution_plan_list(task_id).unwrap();
+    assert_eq!(plans.len(), 2, "the answer started one replan: {plans:?}");
+    let events = store.events_for(task_id).unwrap();
+    assert_eq!(
+        task_ops::plan_gate::counted_replans(&events),
+        0,
+        "a replan from a human's answer does not count toward max_replans"
+    );
+    assert_eq!(
+        plan_issue_reports(&events),
+        1,
+        "the plan issue is not reported again"
+    );
+    let units = store.work_units_for(task_id).unwrap();
+    let b = units
+        .iter()
+        .find(|u| u.key == "b" && u.plan_id == plans[1].id)
+        .expect("b of the new version");
+    assert_eq!(b.status, task_core::WorkUnitStatus::Done, "{b:?}");
+    assert_eq!(b.spec.checks[0].cmd, "true", "the check was fixed: {b:?}");
+    let seen = adapter.seen.lock().unwrap();
+    let replan_ctx = seen
+        .iter()
+        .find_map(|c| c.execution_planner.as_ref().filter(|p| p.replan))
+        .expect("a replan planner run happened");
+    assert!(
+        replan_ctx
+            .replan_reason
+            .contains("範囲を web/features/transfer/ まで広げてよい")
+            && replan_ctx.replan_reason.contains("WorkUnit b"),
+        "the planner gets the answer as its instruction: {:?}",
+        replan_ctx.replan_reason
+    );
+}
+
+/// 対の試験: `resume`（既定の回答）は計画を変えず、同じ check のまま b を再開する。worker は同じ申告を繰り返し、
+/// 人は「計画を直す」で答え直せる（上限を使い切っていても）。`replan` は plan_issue の無い質問には使えない。
+#[tokio::test]
+async fn a_plan_issue_answer_with_resume_keeps_the_check_and_replan_needs_a_plan_issue() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        1,
+    );
+    let task_id = task.id;
+    store.insert(&task).unwrap();
+    adopt_plan_with_b_check(&store, task_id, "false");
+    let issue = || Terminal::Yielded {
+        checkpoint: serde_json::json!({"plan_issue": "範囲 check の許可 path が Objective と矛盾"}),
+        usage: None,
+    };
+    let mut wu_script = HashMap::new();
+    wu_script.insert("b".to_string(), vec![issue(), issue()]);
+    let adapter = Arc::new(PlannerScriptAdapter::new(vec![], wu_script));
+    let mut d = dispatcher(store.clone(), adapter, 1);
+    d.config.execution.max_replans = 0;
+    assert!(run_until_idle(&mut d, 400).await.idle);
+    task_ops::gate::answer(
+        store.as_ref(),
+        task_id,
+        "範囲を広げてよい".to_string(),
+        None,
+    )
+    .unwrap();
+    assert!(run_until_idle(&mut d, 400).await.idle);
+    let stored = store.get(task_id).unwrap().unwrap();
+    assert_eq!(stored.status, Status::Blocked, "{stored:?}");
+    let events = store.events_for(task_id).unwrap();
+    assert_eq!(
+        plan_issue_reports(&events),
+        2,
+        "resume re-runs the same check"
+    );
+    assert_eq!(store.execution_plan_list(task_id).unwrap().len(), 1);
+    let b = store
+        .work_units_for(task_id)
+        .unwrap()
+        .into_iter()
+        .find(|u| u.key == "b")
+        .unwrap();
+    assert_eq!(b.spec.checks[0].cmd, "false");
+    assert_eq!(
+        b.blocked_reason,
+        Some(task_core::WorkUnitBlockedReason::PlanIssue)
+    );
+
+    // plan_issue の無い質問（WU の質問）への `replan` は検証エラー。
+    let other = tempfile::tempdir().unwrap();
+    let q_task = new_task(
+        other.path(),
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        1,
+    );
+    store.insert(&q_task).unwrap();
+    adopt_three_step_plan(&store, q_task.id);
+    let mut script = HashMap::new();
+    script.insert(
+        "a".to_string(),
+        vec![Terminal::Question {
+            text: "どちらの方針にしますか".into(),
+        }],
+    );
+    let mut d2 = dispatcher(store.clone(), Arc::new(WuScriptAdapter::new(script)), 1);
+    assert!(run_until_idle(&mut d2, 400).await.idle);
+    assert_eq!(
+        store.get(q_task.id).unwrap().unwrap().status,
+        Status::Blocked
+    );
+    let err = task_ops::gate::answer_with_intent(
+        store.as_ref(),
+        q_task.id,
+        "A にする".to_string(),
+        task_ops::gate::AnswerIntent::Replan,
+        "human",
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, task_ops::error::OpsError::Validation(_)),
+        "{err:?}"
+    );
+    assert_eq!(
+        store.get(q_task.id).unwrap().unwrap().status,
+        Status::Blocked,
+        "a rejected answer does not move the task"
+    );
+}

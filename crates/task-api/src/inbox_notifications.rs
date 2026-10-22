@@ -188,7 +188,12 @@ pub(crate) fn delegated_request(
                     "this item has no direct domain action",
                 )
             })?,
-            serde_json::json!({"answer":note}),
+            // ADR 2026-10-22-plan-issue-answer-replans D5: 「計画を直す」は回答の意図 `replan`。
+            if input.option == "replan" {
+                serde_json::json!({"answer":note,"intent":"replan"})
+            } else {
+                serde_json::json!({"answer":note})
+            },
         ),
         InboxKind::AcceptanceCheck => {
             let p = base

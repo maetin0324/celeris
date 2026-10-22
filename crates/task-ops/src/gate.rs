@@ -213,13 +213,102 @@ pub fn reject_as(
     }
 }
 
+/// ADR 2026-10-22-plan-issue-answer-replans D1: 人の回答の意図。
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerIntent {
+    /// 回答して再開（計画はそのまま。止まった WU を `ready` に戻し、回答は次の run に載る）。
+    #[default]
+    Resume,
+    /// 計画を直す: `blocked(plan_issue)` の WU があるときだけ。回答を planner への指示にして replan する
+    /// （人の replan なので `max_replans` に数えない）。
+    Replan,
+}
+
+/// D6: replan の上限を使い切った後の plan_issue の質問に添える答え方。
+pub const PLAN_ISSUE_REPLAN_HINT: &str = "（replan の上限を使い切りました。回答して再開すると同じ check のまま再開します。計画を直すなら受信箱で「計画を直す」（回答の intent=replan）を選ぶと、回答を指示に planner がこの unit の check・範囲を直します。人の replan は上限に数えません）";
+
+/// D2: active な計画で `blocked(plan_issue)` の WU の key（seq 順）。
+pub fn plan_issue_unit_keys(store: &dyn TaskStore, id: TaskId) -> Result<Vec<String>, OpsError> {
+    Ok(store
+        .work_units_for(id)?
+        .into_iter()
+        .filter(|u| {
+            u.status == task_core::WorkUnitStatus::Blocked
+                && u.blocked_reason == Some(task_core::WorkUnitBlockedReason::PlanIssue)
+        })
+        .map(|u| u.key)
+        .collect())
+}
+
+/// D2: 回答と同じ transaction に足す events（`Answered` の後）。`Resume` は無し。`Replan` は
+/// `blocked(plan_issue)` の WU が無ければ検証エラー、あれば人の replan の依頼（`ExecutionHintSet{replan: true}`）。
+pub fn answer_intent_events(
+    store: &dyn TaskStore,
+    id: TaskId,
+    question: &str,
+    answer: &str,
+    intent: AnswerIntent,
+    by: &str,
+) -> Result<Vec<Event>, OpsError> {
+    match intent {
+        AnswerIntent::Resume => Ok(Vec::new()),
+        AnswerIntent::Replan => {
+            let keys = plan_issue_unit_keys(store, id)?;
+            if keys.is_empty() {
+                return Err(OpsError::Validation(
+                    "intent: replan needs a work unit blocked by a plan_issue (nothing to fix in the plan)"
+                        .to_string(),
+                ));
+            }
+            let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
+            let previous = task.routing.as_ref().and_then(|r| r.execution_hint);
+            Ok(vec![Event::ExecutionHintSet {
+                mode: task_core::execution_gate::ExecutionMode::Compound,
+                previous,
+                previous_decision: None,
+                source: format!("{by} (plan_issue)"),
+                note: Some(format!(
+                    "plan_issue への人の回答で計画を直す（WorkUnit {}。申告: {question}）。この回答に従って該当 unit の check・範囲だけを直し、他の unit は変えない: {answer}",
+                    keys.join(", ")
+                )),
+                replan: true,
+            }])
+        }
+    }
+}
+
 /// `Blocked` タスクのみ `Trigger::Answer` を適用し、回答テキストを
 /// `Event::Answered{question, answer}` として同一トランザクションで永続化する（ADR-0010 D3, P-10）。
 /// `question` は直近の `WorkerFinished{outcome:"question: ..."}` から取る（無ければ空文字列）。
+/// 意図は `resume`（[`answer_with_intent`]）。
 pub fn answer(
     store: &dyn TaskStore,
     id: TaskId,
     answer: String,
+    expected: Option<Status>,
+) -> Result<TransitionResult, OpsError> {
+    answer_with_intent(store, id, answer, AnswerIntent::Resume, "human", expected)
+}
+
+/// [`answer`] に意図を付けたもの（ADR 2026-10-22-plan-issue-answer-replans D1/D2）。`Replan` は
+/// `Answered` と同じ transaction で [`answer_intent_events`] を書く。
+pub fn answer_with_intent(
+    store: &dyn TaskStore,
+    id: TaskId,
+    answer: String,
+    intent: AnswerIntent,
+    by: &str,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
@@ -252,20 +341,19 @@ pub fn answer(
         });
     }
     let question = latest_question(&events);
+    let intent_events = answer_intent_events(store, id, &question, &answer, intent, by)?;
     let from = task.status;
     // ADR parallel integration D4 付記: 段の統合依頼で blocked(question) になった統合 WU を、受信箱の
     // 専用経路でなく汎用の回答で再開したときも、その依頼は回答済み（受信箱から消す）。遷移が WU の
     // blocked を解く前に対象を決める。再開後の統合が衝突なしで通っても dispatcher は閉じた依頼に重ねない。
     close_phase_integration_requests(store, id, &answer)?;
     let since_id = store.latest_event_id()?;
-    let outcome = store.apply_transition(
-        id,
-        Trigger::Answer,
-        Some(Event::Answered {
-            question,
-            answer: answer.clone(),
-        }),
-    )?;
+    let mut extra = vec![Event::Answered {
+        question,
+        answer: answer.clone(),
+    }];
+    extra.extend(intent_events);
+    let outcome = store.apply_transition_with_events(id, Trigger::Answer, extra)?;
     let cascaded = collect_cascaded(store, id, since_id)?;
     // GUI 監査 H2: `POST /tasks/{id}/answer` で答えたときも、そのタスクの未決の `approvals` を
     // `once` + 同じ答えで決定済みにする（決定的。無ければ何もしない）。`POST /approvals/{id}/decide`

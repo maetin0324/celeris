@@ -929,6 +929,10 @@ impl Dispatcher {
                             let (t, o) = self.replan_exhausted_ask(&task, &msg, replans_so_far)?;
                             trigger = t;
                             outcome_str = o;
+                        } else if decision.reason == "plan_issue" {
+                            // ADR 2026-10-22-plan-issue-answer-replans D6: 同じ check での再開は同じ申告を
+                            // 繰り返し得るので、計画を直す答え方を質問に添える。
+                            outcome_str.push_str(task_ops::gate::PLAN_ISSUE_REPLAN_HINT);
                         }
                     }
                     if decision.plan_complete {

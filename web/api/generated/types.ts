@@ -145,7 +145,10 @@ export type AdoptionOutcome = {
 export type AnswerBody = {
   "answer": string;
   "expected_status"?: Status | null;
+  "intent"?: AnswerIntent;
 };
+
+export type AnswerIntent = "resume" | "replan";
 
 export type AnswerNote = {
   "answer": string;
@@ -4381,6 +4384,7 @@ export type ProposedMilestone = {
 export type QuestionItem = {
   "approval_id"?: ApprovalId | null;
   "asked_at"?: string | null;
+  "plan_issue_units"?: Array<string>;
   "previous": Array<AnswerNote>;
   "question": string;
   "run_id"?: string | null;

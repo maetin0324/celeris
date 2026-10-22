@@ -110,6 +110,10 @@ pub struct QuestionItem {
     /// GUI 監査対応 Phase 29: 対応する未決の `approvals` の id（`POST /approvals/{id}/decide` へ
     /// GUI が直接リンクできるように）。無ければ `null`（`approvals` の行がまだ無い、または既に決定済み）。
     pub approval_id: Option<task_core::approval::ApprovalId>,
+    /// ADR 2026-10-22-plan-issue-answer-replans D5: `blocked(plan_issue)` の WU の key。空でなければ受信箱は
+    /// 「回答して再開」と「計画を直す」を分けて出す。
+    #[serde(default)]
+    pub plan_issue_units: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -614,6 +618,22 @@ fn build_questions(
         }
 
         let previous = derive::answers_from_events(&events);
+        // ADR 2026-10-22-plan-issue-answer-replans D5: plan_issue を申告したことのある task だけ WU を読む
+        // （受信箱の読み取りを task 数に比例させない。ADR-0133 の lock count 試験）。
+        let plan_issue_units = if events.iter().any(|(_, e)| {
+            matches!(
+                e,
+                Event::WorkUnitTransitioned {
+                    to: task_core::WorkUnitStatus::Blocked,
+                    reason,
+                    ..
+                } if reason == "plan_issue"
+            )
+        }) {
+            crate::gate::plan_issue_unit_keys(store, t.id)?
+        } else {
+            Vec::new()
+        };
         items.push(QuestionItem {
             task: view::task_ref(t),
             question,
@@ -621,6 +641,7 @@ fn build_questions(
             run_id,
             previous,
             approval_id: pending_approval_by_task.get(&t.id).copied(),
+            plan_issue_units,
         });
     }
     items.sort_by(|a, b| a.asked_at.cmp(&b.asked_at));

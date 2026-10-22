@@ -228,6 +228,7 @@ pub(super) async fn answer(
     let AnswerBody {
         answer,
         expected_status,
+        intent,
     } = read_json(body, false).await?;
     if answer.trim().is_empty() {
         return Err(ApiProblem::validation(vec![ValidationError {
@@ -237,7 +238,7 @@ pub(super) async fn answer(
     }
     let result = state
         .blocking(move |store| {
-            task_ops::gate::answer(store, id, answer, expected_status)
+            task_ops::gate::answer_with_intent(store, id, answer, intent, "human", expected_status)
                 .map_err(|e| ops_problem(store, e, Some("answer")))
         })
         .await?;
@@ -764,6 +765,7 @@ pub(crate) fn answer_op(
     AnswerBody {
         answer,
         expected_status,
+        intent,
     }: AnswerBody,
     audit: &OperationAudit,
 ) -> Result<Applied<()>, ApiProblem> {
@@ -796,16 +798,28 @@ pub(crate) fn answer_op(
             ops_problem(store, e, Some("answer")),
         )
     })?;
-    let event = task_core::Event::Answered {
+    // ADR 2026-10-22-plan-issue-answer-replans D1: CoS の代理回答も人の経路と同じ意図の検証と events。
+    let intent_events =
+        task_ops::gate::answer_intent_events(store, id, &question, &answer, intent, "cos")
+            .map_err(|e| {
+                audit.reject(
+                    store,
+                    "task",
+                    &target_id,
+                    ops_problem(store, e, Some("answer")),
+                )
+            })?;
+    let mut events = vec![task_core::Event::Answered {
         question,
         answer: answer.clone(),
-    };
+    }];
+    events.extend(intent_events);
     let operation = audit.apply(store, "task", &target_id, "question.answer", |tx| {
         let outcome = task_core::store::SqliteStore::apply_transition_tx(
             tx,
             id,
             task_core::Trigger::Answer,
-            vec![event],
+            events,
         )?;
         Ok(serde_json::json!({
             "task_id": target_id,

@@ -743,12 +743,32 @@
             }
           ],
           "default": null
+        },
+        "intent": {
+          "$ref": "#/$defs/AnswerIntent",
+          "default": "resume",
+          "description": "ADR 2026-10-22-plan-issue-answer-replans D1: `resume`（既定。回答して再開）か `replan`（計画を直す。\n`blocked(plan_issue)` の WU があるときだけ）。"
         }
       },
       "required": [
         "answer"
       ],
       "type": "object"
+    },
+    "AnswerIntent": {
+      "description": "ADR 2026-10-22-plan-issue-answer-replans D1: 人の回答の意図。",
+      "oneOf": [
+        {
+          "const": "resume",
+          "description": "回答して再開（計画はそのまま。止まった WU を `ready` に戻し、回答は次の run に載る）。",
+          "type": "string"
+        },
+        {
+          "const": "replan",
+          "description": "計画を直す: `blocked(plan_issue)` の WU があるときだけ。回答を planner への指示にして replan する\n（人の replan なので `max_replans` に数えない）。",
+          "type": "string"
+        }
+      ]
     },
     "AnswerNote": {
       "description": "`answers_from_events` の要素。`task_worker::Answer` と同じ形（フィールド名も同じ）。",
@@ -21765,6 +21785,14 @@
             "string",
             "null"
           ]
+        },
+        "plan_issue_units": {
+          "default": [],
+          "description": "ADR 2026-10-22-plan-issue-answer-replans D5: `blocked(plan_issue)` の WU の key。空でなければ受信箱は\n「回答して再開」と「計画を直す」を分けて出す。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "previous": {
           "items": {

@@ -893,12 +893,18 @@ run は止めない。同じ内容は `worker_progress`（`kind = status`・`err
 
 ### 3.12 `POST /tasks/{id}/answer` → 200 `TransitionResult`（**管理系**）
 
-本文 `AnswerBody{answer: string, expected_status?}`（`answer` は必須。空本体は 400）。`answer` が空白のみ → 422 `validation`（`answer must not be blank`、`field: "answer"`。task-api が task-ops を呼ぶ前に検査する。CLI は clap が空文字を通すので挙動は CLI と同じにしない）。
+本文 `AnswerBody{answer: string, expected_status?, intent?}`（`answer` は必須。空本体は 400）。`answer` が空白のみ → 422 `validation`（`answer must not be blank`、`field: "answer"`。task-api が task-ops を呼ぶ前に検査する。CLI は clap が空文字を通すので挙動は CLI と同じにしない）。
 `task_ops::gate::answer(store, id, answer, expected_status)`: `status != blocked` → 409 `invalid_transition`（`cannot be answered; only blocked tasks accept an answer`、`trigger: "answer"`）。
 `blocked` でも、工程の後の途中確認（`awaiting_human`）と root の計画の承認待ちは質問ではないので 409 `invalid_transition`
 （それぞれ `POST /tasks/{id}/execution/phase-gate`・`POST /tasks/{id}/execution/plan-gate` を使う。ADR-0074 D2.2 / ADR-0079 D8）。
 `Trigger::Answer` + `Event::Answered{question, answer}`（`question` は §5.5 の `latest_question`。無ければ空文字列）を同一トランザクション。
 
+- `intent`（ADR 2026-10-22-plan-issue-answer-replans）: `resume`（既定。回答して再開。止まった WU は計画のまま `ready` に戻る）か
+  `replan`（計画を直す）。`replan` は active な計画に `blocked(plan_issue)` の WU があるときだけ受け（無ければ 400 `validation`）、
+  `Answered` と同じトランザクションで `ExecutionHintSet{replan: true, note: <申告と回答>, source: "<by> (plan_issue)"}` を書く。
+  次の dispatch は人の replan として planner を起こし（`max_replans` に数えない）、planner は回答を指示に該当 unit の check・範囲を直す。
+  受信箱の質問は `QuestionItem.plan_issue_units` が空でなければ選択肢 `answer`（回答して再開）と `replan`（計画を直す。推奨）を出し、
+  `POST /inbox/{id}/answer` の `option: "replan"` は `intent: "replan"` に写る。
 - 遷移の後、このタスクの未決の `approvals`（§3.56）があれば `once` + 同じ `answer` の文言で決定済みにする
   （`approvals` が無ければ何もしない。決定的）。`POST /approvals/{id}/decide`（3.57）は既にこの経路（`gate::answer`）に
   相乗りしているので、どちらから答えても `GET /approvals?pending=true` から同じように消える。

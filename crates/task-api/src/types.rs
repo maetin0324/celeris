@@ -215,6 +215,10 @@ pub struct AnswerBody {
     pub answer: String,
     #[serde(default)]
     pub expected_status: Option<Status>,
+    /// ADR 2026-10-22-plan-issue-answer-replans D1: `resume`（既定。回答して再開）か `replan`（計画を直す。
+    /// `blocked(plan_issue)` の WU があるときだけ）。
+    #[serde(default)]
+    pub intent: task_ops::gate::AnswerIntent,
 }
 
 /// `POST /tasks/{id}/cancel` の本文。

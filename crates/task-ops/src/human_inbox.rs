@@ -546,13 +546,40 @@ impl Builder<'_> {
             kind: InboxKind::Question,
             title: format!("質問: {}", q.task.title),
             detail: clip(&q.question),
-            options: vec![opt(
-                "answer",
-                "答える（note に回答を書く）",
-                true,
-                &format!("POST /tasks/{}/answer", q.task.id),
-            )],
-            recommended: None,
+            options: if q.plan_issue_units.is_empty() {
+                vec![opt(
+                    "answer",
+                    "答える（note に回答を書く）",
+                    true,
+                    &format!("POST /tasks/{}/answer", q.task.id),
+                )]
+            } else {
+                // ADR 2026-10-22-plan-issue-answer-replans D5: 計画の問題の申告は、回答して同じ計画で再開するか、
+                // 回答を planner への指示にして check・範囲を直すかを分けて出す。
+                vec![
+                    opt(
+                        "answer",
+                        "回答して再開（計画はそのまま）",
+                        true,
+                        &format!(
+                            "POST /tasks/{}/answer（WorkUnit {} を同じ check のまま再開。申告が繰り返され得る）",
+                            q.task.id,
+                            q.plan_issue_units.join(", ")
+                        ),
+                    ),
+                    opt(
+                        "replan",
+                        "計画を直す（回答を planner への指示にする）",
+                        true,
+                        &format!(
+                            "POST /tasks/{}/answer intent=replan（planner が WorkUnit {} の check・範囲を直してから再開。replan の上限に数えない）",
+                            q.task.id,
+                            q.plan_issue_units.join(", ")
+                        ),
+                    ),
+                ]
+            },
+            recommended: (!q.plan_issue_units.is_empty()).then(|| "replan".to_string()),
             due_at: None,
             blocking: self.only_task(&q.task),
             blocked_by: Vec::new(),

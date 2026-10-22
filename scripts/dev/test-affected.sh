@@ -103,11 +103,32 @@ if [ "$web" -eq 1 ]; then
     "") echo "test-affected: web/package.json に test script がない。何も走らせない" >&2; exit 0 ;;
     *e2e*|*playwright*) echo "test-affected: web の test script が e2e のため走らせない: $script" >&2; exit 0 ;;
   esac
-  pm="$(python3 -I -c 'import json;print(json.load(open("web/package.json")).get("packageManager",""))')"
-  ver="${pm#pnpm@}"
-  ver="${ver%%+*}"
-  echo "test-affected: web unit 試験 ($script)" >&2
-  exec corepack "pnpm@$ver" -C web test
+  # test script は pnpm を通さず web/node_modules/.bin を PATH に足して直に走らせる（pnpm run と同じ解決）。
+  # daemon の決定的 check で corepack＋pnpm 経由の実行が 600 秒＋1200 秒止まり、同じ HEAD の手元では
+  # 10 秒で通った（原因未特定。task 01M5JAYKJ5W80FD5954CXHDNEX）。止まったら watchdog が止まっている
+  # process の木を stderr に出して失敗させる（check の timeout より先に、理由に証拠が残るように）。
+  web_timeout="${TEST_AFFECTED_WEB_TIMEOUT:-300}"
+  echo "test-affected: web unit 試験 ($script、上限 ${web_timeout} 秒)" >&2
+  cd web
+  export PATH="$PWD/node_modules/.bin:$PATH"
+  # 自分の session に入れる（bash の background は group leader でないので setsid は fork せず pid＝session id）。
+  setsid sh -c "$script" </dev/null &
+  pid=$!
+  (
+    sleep "$web_timeout" </dev/null >/dev/null 2>&1
+    echo "test-affected: web unit 試験が ${web_timeout} 秒で終わらない。止まっている process:" >&2
+    ps -o pid,ppid,etime,stat,wchan:24,args --forest -s "$pid" | cut -c1-200 >&2 || true
+    kill -TERM -- "-$pid" 2>/dev/null || true
+  ) &
+  dog=$!
+  set +e
+  wait "$pid"
+  rc=$?
+  set -e
+  pkill -P "$dog" 2>/dev/null || true
+  kill "$dog" 2>/dev/null || true
+  wait "$dog" 2>/dev/null || true
+  exit "$rc"
 fi
 
 echo "test-affected: 試験対象の変更なし（docs のみ等）" >&2

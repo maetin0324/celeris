@@ -21,5 +21,9 @@ tasks: [01M5JAYKJ5W80FD5954CXHDNEX]
 - attempt 2（HEAD 0d2987b7 の上で再確認）: `bash scripts/dev/test-affected.sh` exit 0・約 11 秒（web unit: vitest 96 files・676 tests、node --test server 93 tests）。`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` exit 0。
 - 前回 attempt の決定的 check で test-affected が 1200 秒で時間切れになった。同じ HEAD で再実行すると 11 秒で通り、原因は再現しなかった。cargo 試験は走らず（crates の差分なし）、web の unit 試験と `cargo metadata` だけが走る。check の環境側で詰まった可能性がある（未特定）。
 
+- attempt 3: daemon の決定的 check は 2 回とも test-affected が止まった（events: 18:17:31 開始 → 600 秒で時間切れ → 1200 秒の再実行も時間切れ → 18:47:43。reviewer run は起動前で並走なし、main は動いていない）。手元では pipe・新 session・env -i・`ulimit -n 1024`（daemon の soft 上限）・2 本並走のどれでも 10〜23 秒で exit 0、原因は未特定。
+  - 対処: `scripts/dev/test-affected.sh` の web 分岐を corepack＋pnpm 経由から、`web/node_modules/.bin` を PATH に足して test script を `setsid sh -c` で直に走らせる形に変えた（pnpm run と同じ解決。止まりうる層を 1 つ減らす）。watchdog（`TEST_AFFECTED_WEB_TIMEOUT`、既定 300 秒）が時間切れで止まっている process の木を stderr に出して session ごと止める。check の 600 秒より先に失敗し、理由の stderr_tail に証拠が残る。
+  - 証拠: `bash scripts/dev/test-affected.sh` exit 0・12.6 秒（vitest 96 files・676 tests、node --test 93 pass。全出力は artifacts/test-affected-attempt3.log）。`TEST_AFFECTED_WEB_TIMEOUT=3` で exit 143・3.4 秒、process の木を出し、vitest の残りなし。`bash scripts/dev/tests/test-affected-list.sh` ok。`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` exit 0。
+
 ## 本番への移行
 - 無し（web の release で反映）。

@@ -77,7 +77,7 @@ describe("staleTime（ADR-0081 D5）", () => {
     [queryKeys.skills.list(), 60_000],
     [queryKeys.config.list(), 60_000],
     [queryKeys.mcp.list(), 60_000],
-    [queryKeys.console.conversation("task", "c1"), 0],
+    [queryKeys.console.conversation("task"), 0],
   ] as const)("%j は %i ms", (key, ms) => {
     expect(staleTimeFor(key)).toBe(ms);
   });

@@ -136,7 +136,7 @@ function ChatConversation({ threadId, model }: { threadId: string; model: Thread
         }
         empty={<p className="mx-auto max-w-3xl text-muted-foreground">CoS にメッセージを送って会話を始めましょう。</p>}
       />
-      <ConversationInput thread={chat.thread} threadId={threadId} session={session} snapshot={snapshot} />
+      <ConversationInput thread={chat.thread ?? undefined} threadId={threadId} session={session} snapshot={snapshot} />
     </>
   );
 }

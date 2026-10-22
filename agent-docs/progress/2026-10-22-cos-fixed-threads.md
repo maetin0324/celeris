@@ -64,6 +64,14 @@ config の変更は無い。migration 0092 は release の昇格で適用され�
 - 証拠: `cargo nextest run -p celeris --test root_done_summary` を 8 回連続 4/4 pass。`bash scripts/dev/test-affected.sh` exit 0
   （6280 passed, 16 skipped）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
 
+## 付記（delivery-repair、release gate の web-pnpm-typecheck 失敗への対応）
+
+- 原因: release gate の `web_pnpm typecheck`（`tsc -b`）が 2 件で落ちた。test-affected の web 枝は vitest と node --test だけで tsc を通さないため、run の中で気づけなかった。
+  - `web/api/queries/keys.test.ts`: `consoleKeys.conversation` を 1 引数にしたのに試験が旧い 2 引数のまま。
+  - `web/features/chat/home/chat-home.tsx`: `ConversationInput` の `thread` が `ChatThread | undefined` で、snapshot の `chat.thread`（`ChatThread | null`）を受けられない。`ChatThread | null | undefined` にした。
+- 証拠: `tsc -b` exit 0、`biome check .` exit 0（警告 4 件は既存）、web の test（vitest 97 files／679 pass、node --test 98 pass）、
+  `bash scripts/dev/test-affected.sh` exit 0、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
+
 ## 提案
 
 - 統括 CoS の run 文脈に各案件 CoS の summary（`chat_threads.summary`）を短く渡すと、全案件の見渡しが厚くなる。

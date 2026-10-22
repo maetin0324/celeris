@@ -400,11 +400,20 @@ fn watch_stop_and_restart_reattaches_without_resubmit_and_stops_at_the_cap() {
         assert_eq!(rec["tokens"], 5_110, "observed usage kept: {rec}");
     }
     // 停止の確認: 3 つの process は全て消えている（process group ごと kill）。
-    let alive: Vec<String> = fs::read_to_string(&pids)
+    // kill 直後は回収前の zombie が残り得るので、消えるまで上限付きで待つ（短い sleep）。
+    let all: Vec<String> = fs::read_to_string(&pids)
         .expect("pids")
         .lines()
-        .filter(|p| !pid_gone(p))
         .map(String::from)
         .collect();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut alive: Vec<String>;
+    loop {
+        alive = all.iter().filter(|p| !pid_gone(p)).cloned().collect();
+        if alive.is_empty() || std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     assert!(alive.is_empty(), "still alive: {alive:?}");
 }

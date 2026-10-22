@@ -624,14 +624,31 @@ async fn loopback_connect(policy: EgressPolicy, authority: &str) -> (String, Opt
     (status, echoed)
 }
 
+/// Echoes one byte back on the first connection that sends one. Stray connections
+/// are tolerated: other tests on the host probe ports they bound and dropped (a
+/// "closed" resolver), and the kernel can hand that port number to this listener.
+/// Accepting only once let such a probe consume the listener, so the proxy's own
+/// connect was refused and the CONNECT came back 403.
 async fn echo_listener() -> (u16, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
-        if let Ok((mut socket, _)) = listener.accept().await {
-            let mut b = [0u8; 1];
-            if socket.read_exact(&mut b).await.is_ok() {
-                let _ = socket.write_all(&b).await;
+        let (echoed, mut done) = tokio::sync::mpsc::channel::<()>(1);
+        loop {
+            tokio::select! {
+                _ = done.recv() => break,
+                accepted = listener.accept() => {
+                    let Ok((mut socket, _)) = accepted else { continue };
+                    let echoed = echoed.clone();
+                    tokio::spawn(async move {
+                        let mut b = [0u8; 1];
+                        if socket.read_exact(&mut b).await.is_ok()
+                            && socket.write_all(&b).await.is_ok()
+                        {
+                            let _ = echoed.send(()).await;
+                        }
+                    });
+                }
             }
         }
     });
@@ -642,6 +659,10 @@ async fn echo_listener() -> (u16, tokio::task::JoinHandle<()>) {
 async fn egress_test_loopback_connect_allowed_only_when_listed() {
     let (port, listener) = echo_listener().await;
     let authority = format!("127.0.0.1:{port}");
+    // Stray connections from elsewhere on the host (one closed at once, one held
+    // open and silent) must not take the listener away from the proxy's connect.
+    drop(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+    let _silent = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
     // Default (empty set): the loopback literal stays denied with 403.
     let (status, echoed) = loopback_connect(policy(), &authority).await;
     assert!(status.contains(" 403 "), "{status}");

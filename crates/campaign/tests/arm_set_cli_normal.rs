@@ -352,6 +352,19 @@ impl Stub {
                 let Some((m, p, h, b)) = read_request(&mut c) else {
                     continue;
                 };
+                // Other processes on the host sometimes reach this ephemeral port with
+                // a bare `GET /` (seen twice per test under the parallel gate, never
+                // alone). The CLI always sends its token and only `/api/` paths, so a
+                // request with neither is not the CLI's: answer 404 and do not count it.
+                if !p.starts_with("/api/") && !h.iter().any(|(k, _)| k == "authorization") {
+                    let agent = h
+                        .iter()
+                        .find(|(k, _)| k == "user-agent")
+                        .map_or("-", |(_, v)| v.as_str());
+                    eprintln!("stub ignored a foreign request: {m} {p} (user-agent {agent})");
+                    respond(&mut c, 404, &json!({}));
+                    continue;
+                }
                 let auth_ok = h
                     .iter()
                     .any(|(k, v)| k == "authorization" && v == &format!("Bearer {TOKEN_VALUE}"));
@@ -825,8 +838,21 @@ fn files_named(root: &Path, name: &str) -> usize {
 }
 
 /// `which` = "ab"（A/B のみ）か "bc"（B/C のみ）。両セットで全 CLI 成功経路を通す。
+/// The bare `GET /` another process on the host sends now and then (no token, not
+/// under `/api/`). The stub must answer it without counting it against the CLI.
+fn foreign_get_root(f: &Fx) {
+    let addr = f.stub.as_ref().expect("stub").addr;
+    let mut c = TcpStream::connect(addr).expect("connect stub");
+    c.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nUser-Agent: probe\r\n\r\n")
+        .expect("write");
+    let mut reply = String::new();
+    let _ = c.read_to_string(&mut reply);
+    assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
+}
+
 fn flow(which: &'static str) {
     let mut f = fixture(which, 1);
+    foreign_get_root(&f);
     let (trials_total, a_calls, post_arms): (u64, usize, &[&str]) = if which == "ab" {
         (4, 2, &["B"])
     } else {

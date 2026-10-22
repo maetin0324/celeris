@@ -389,8 +389,15 @@ fn unmerged(dir: &Path) -> Result<Vec<String>, String> {
 }
 
 /// ADR 2026-10-02-parallel-integration-auto-resolve D5 で再 review 不要なのは追記だけの記録の結合だけ。
+/// ADR 2026-10-21-cargo-lock-regenerate-on-integrate D5: 再生成した `Cargo.lock` も新しい候補として
+/// 積み直し、既存の検査（再 review・候補の照合）を通ってから配送する。
 fn review_free(actions: &[ResolutionAction]) -> bool {
-    !actions.is_empty() && actions.iter().all(|a| a.kind == ConflictKind::Record)
+    !actions.is_empty()
+        && actions.iter().all(|a| {
+            a.kind == ConflictKind::Record
+                || a.kind == ConflictKind::Generated
+                    && (a.path == "Cargo.lock" || a.path.ends_with("/Cargo.lock"))
+        })
 }
 
 /// 既定ブランチの先端（target, ours）に task branch（source, theirs）を merge する。D1a の

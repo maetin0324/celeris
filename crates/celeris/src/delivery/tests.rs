@@ -1521,3 +1521,161 @@ fn auto_resolve_clean_main_follow_is_counted_and_left_to_the_legacy_path() {
     assert!(comments[0].contains("衝突なしの main 追従"));
     assert!(no_notice(&store));
 }
+
+// ---- ADR 2026-10-21-cargo-lock-regenerate-on-integrate D4: delivery 経路の Cargo.lock 再生成 ----
+
+fn cargo_metadata(dir: &std::path::Path, locked: bool) {
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.args(["metadata", "--format-version", "1"]);
+    if locked {
+        cmd.arg("--locked");
+    }
+    let out = cmd
+        .current_dir(dir)
+        .env("CARGO_NET_OFFLINE", "true")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn cargo_member(dir: &std::path::Path, name: &str, deps: &str) {
+    let crate_dir = dir.join("crates").join(name);
+    fs::create_dir_all(crate_dir.join("src")).unwrap();
+    fs::write(
+        crate_dir.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{deps}"
+        ),
+    )
+    .unwrap();
+    fs::write(crate_dir.join("src/lib.rs"), "").unwrap();
+}
+
+/// main と feature がそれぞれ新しい crate（path 依存だけ）を足し、Cargo.lock の同じ位置が衝突して
+/// `merge_base` 失敗で止まった配送。`toml_conflict` なら app の Cargo.toml も両側で変わる。
+fn cargo_lock_blocked(
+    toml_conflict: bool,
+) -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
+    use task_core::DeliveryStore;
+    let (store, mut d) = stored_delivery();
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    git_text(p, &["init", "-b", "main"]).unwrap();
+    git_text(p, &["config", "user.email", "test@example.invalid"]).unwrap();
+    git_text(p, &["config", "user.name", "test"]).unwrap();
+    fs::write(
+        p.join("Cargo.toml"),
+        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/*\"]\n",
+    )
+    .unwrap();
+    cargo_member(p, "app", "");
+    cargo_metadata(p, false);
+    git_text(p, &["add", "."]).unwrap();
+    git_text(p, &["commit", "-m", "base"]).unwrap();
+    d.base = sha(p, "HEAD").unwrap();
+    let side = |name: &str| {
+        cargo_member(p, name, "");
+        let deps = if toml_conflict {
+            format!("{name} = {{ path = \"../{name}\" }}\n")
+        } else {
+            String::new()
+        };
+        cargo_member(p, "app", &deps);
+        cargo_metadata(p, false);
+        git_text(p, &["add", "."]).unwrap();
+        git_text(p, &["commit", "-m", name]).unwrap();
+    };
+    git_text(p, &["checkout", "-b", "feature"]).unwrap();
+    side("new_b");
+    d.head = sha(p, "HEAD").unwrap();
+    git_text(p, &["checkout", "main"]).unwrap();
+    side("new_a");
+    d.state = State::Blocked;
+    d.detail = format!("{MERGE_BASE_FAILURE}対象コミットまたは既定ブランチが変わりました");
+    store.delivery_save(None, &d).unwrap();
+    (store, dir, d)
+}
+
+#[test]
+fn auto_resolve_cargo_lock_conflict_is_regenerated_and_regated() {
+    use task_core::DeliveryStore;
+    let (store, dir, d) = cargo_lock_blocked(false);
+    let p = dir.path();
+    let main_before = sha(p, "main").unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(p, &tmp.path().join("releases"));
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+
+    let requeued = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(
+        requeued.state,
+        State::MergeQueued,
+        "{} {:?}",
+        requeued.detail,
+        auto_resolve_comments(&store, &d)
+    );
+    assert_eq!(sha(p, "feature").unwrap(), requeued.head);
+    let lock = git_text(p, &["show", &format!("{}:Cargo.lock", requeued.head)]).unwrap();
+    assert!(
+        lock.contains("\"new_a\"") && lock.contains("\"new_b\""),
+        "{lock}"
+    );
+    let comments = auto_resolve_comments(&store, &d);
+    assert_eq!(comments.len(), 1, "{comments:?}");
+    assert!(
+        comments[0].contains("Cargo.lock (Generated)"),
+        "{comments:?}"
+    );
+    assert!(store.work_units_for(d.task_id).unwrap().is_empty());
+    // 再生成した lock は新しい候補の tree で cargo metadata --locked が通る。
+    let check = tmp.path().join("check");
+    git_text(
+        p,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            check.to_str().unwrap(),
+            &requeued.head,
+        ],
+    )
+    .unwrap();
+    cargo_metadata(&check, true);
+    git_text(
+        p,
+        &["worktree", "remove", "--force", check.to_str().unwrap()],
+    )
+    .unwrap();
+    // 確定は既存の検査（再 review）を通ってから。
+    advance(&store, &cfg, &requeued, OffsetDateTime::now_utc()).unwrap();
+    let reviewing = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(reviewing.state, State::Reviewing);
+    assert_eq!(sha(p, "main").unwrap(), main_before);
+}
+
+#[test]
+fn auto_resolve_cargo_lock_with_cargo_toml_conflict_requests_integration() {
+    use task_core::DeliveryStore;
+    let (store, dir, d) = cargo_lock_blocked(true);
+    let p = dir.path();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(p, &tmp.path().join("releases"));
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    assert_eq!(sha(p, "feature").unwrap(), d.head);
+    assert_eq!(git_text(p, &["status", "--porcelain"]).unwrap(), "");
+    let still = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(still.state, State::Blocked);
+    let request = open_integration_request(&store, d.task_id);
+    assert!(
+        request
+            .conflict_files
+            .iter()
+            .any(|f| f == "crates/app/Cargo.toml"),
+        "{:?}",
+        request.conflict_files
+    );
+}

@@ -5,7 +5,7 @@ tasks: [01M5GE1BGEJDRK1AQ1Y1TK85X0]
 ---
 
 - 日付: 2026-10-21
-- 状態: 採用（実装はこの task）
+- 状態: 採用・実装済み
 - 関連: ADR 2026-10-02-parallel-integration-auto-resolve（D1c 生成物の再生成）、ADR-0118、ADR-0120、ADR 2026-10-11-breaking-changes-by-default
 
 ## 状況
@@ -47,3 +47,10 @@ WU の段の統合と子 task の親への統合（`task_dispatch::integration`�
 
 - 両側が別の依存を足しただけの `Cargo.lock` 衝突は人に回らない。
 - 本番の config の書き換えは不要（D2 は内蔵、D3 は既存の設定欄のまま）。
+
+## 付記（実装突き合わせ, 2026-10-22）
+
+- D1: `task_dispatch::auto_resolve::ResolveContext.generated: Vec<GeneratedRule>`。`GeneratedRule::with_default_globs` と `generated_command` は削除。
+- D2: `generated::cargo_lock_rule()`（globs `Cargo.lock`・`**/Cargo.lock`、`cargo_workspace: true` で衝突 path のディレクトリで実行し `Cargo.toml` が無ければ人へ）。`classify::kind` は `Cargo.lock` を `Generated` にする。`CARGO_TARGET_DIR` が環境に無ければ `std::env::temp_dir()/celeris-auto-resolve-target`。
+- D3/D4: `generated::rules(schema_cmd)`。`task_dispatch::integration::integrate` は `rules(None)`、`celeris::delivery::auto_resolve::merge_in_scratch` は `rules(settings.generated.command())`。
+- D5（delivery）: `review_free` は Record に加えて再生成した `Cargo.lock` だけの解消を merge commit にして新しい候補として積み直す（state `MergeQueued` → 次の advance で `Reviewing`）。schema の再生成は従来どおり `NeedsReview` の fallback。

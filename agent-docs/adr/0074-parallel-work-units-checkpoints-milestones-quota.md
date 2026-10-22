@@ -1506,7 +1506,8 @@ repair → replan → 人の対処を招き、木の replan 上限（45）に達
 4. **落ちるときは path を出す**: 範囲 check は範囲外の path を標準出力に出してから非 0 で終える（上の形）。
    `test -z "$(…)"` の無言の形は書かない。dispatcher 側は `scope: true` の check が非 0 で stdout・stderr とも空なら、
    不合格の判定文に「範囲 check が範囲外の path を出していない」旨の一文を足す（原因の特定を速くする。判定は変えない）。
-5. **互換**: `scope` の無い既存の計画は従来どおり（全 check が統合でも流れる）。planner 指示（`PLANNER_CHECK_GUIDANCE`・
+5. **互換**: `scope` の無い既存の計画は従来どおり（全 check が統合でも流れる）。（2026-10-22 置き換え: `cmd` が
+   `CELERIS_WU_` を含む check は `scope` が無くても統合の検査に入れない。[ADR](2026-10-22-wu-env-checks-skip-integration.md)）planner 指示（`PLANNER_CHECK_GUIDANCE`・
    /1 と /3 の形の説明）と docs に `scope: true` と上の既定の形を載せる。LLM は dispatcher・store に入れない。
 
 ### 検証

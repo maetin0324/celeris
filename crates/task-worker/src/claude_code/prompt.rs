@@ -1764,6 +1764,10 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      `{\"cmd\":\"...\",\"expect_exit\":0,\"scope\":true}`. It runs only at work-unit time in the unit's own \
      worktree and is NOT rerun after stage integration or in a child task's final review, so never write it as \
      task acceptance; put it on the leaf that makes the change.\n\
+     - Any check whose `cmd` uses `$CELERIS_WU_BASE`, `$CELERIS_WU_TARGET` or another `CELERIS_WU_*` variable runs \
+     only at work-unit time, with or without `\"scope\":true`: those variables do not exist after stage integration, \
+     so such a check is left out of the integration checks and out of a child task's acceptance. Put a test that \
+     must also run after integration in a separate check that does not mention `CELERIS_WU_*`.\n\
      - Write a scope check exactly in this form: `paths=$(if [ -n \"${CELERIS_WU_SCOPE_PATHS:-}\" ]; then \
      sh \"$CELERIS_WU_SCOPE_PATHS\"; else git diff --name-only \"${CELERIS_WU_BASE:-HEAD}\" && \
      git ls-files --others --exclude-standard; fi) || exit 1; out=$(printf '%s\\n' \"$paths\" | sort -u | \

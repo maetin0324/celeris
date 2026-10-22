@@ -440,6 +440,25 @@ fn promote_to_task_drops_scope_checks_from_acceptance() {
     assert!(matches!(promoted.acceptance[0].check, Check::Reviewer));
 }
 
+/// ADR 2026-10-22-wu-env-checks-skip-integration D3: `scope` が無くても `CELERIS_WU_*` を使う check は acceptance に写さない。
+#[test]
+fn promote_to_task_drops_wu_env_checks_from_acceptance() {
+    let mut spec = leaf_spec("a", "s1", true);
+    spec.checks.push(crate::execution_plan::WorkUnitCheck {
+        cmd: "git diff --quiet \"$CELERIS_WU_BASE\" -- crates/".into(),
+        expect_exit: 0,
+        scope: false,
+    });
+    assert!(spec.checks[1].is_work_unit_only());
+    assert!(!spec.checks[0].is_work_unit_only());
+    let promoted = promote_to_task(&spec);
+    assert_eq!(promoted.acceptance.len(), 1, "{:?}", promoted.acceptance);
+    assert!(matches!(
+        &promoted.acceptance[0].check,
+        Check::Command { cmd, .. } if cmd == "test -f a.txt"
+    ));
+}
+
 fn many_leaves(stage: &str, n: usize) -> Vec<PlanUnitSpec> {
     (0..n)
         .map(|i| leaf_spec(&format!("{stage}-l{i}"), stage, false))

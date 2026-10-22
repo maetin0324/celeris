@@ -479,6 +479,8 @@ job の最終状態を渡す。`yielded` と違い、continuation の回数・�
 `CELERIS_WU_BASE`（先行 unit の未 commit の追跡済み成果を含む一時 commit）、
 `CELERIS_WU_BASE_UNTRACKED`（開始時の未追跡 path 一覧）、`CELERIS_WU_SCOPE_PATHS`（全 file の差分補助）を渡す。
 retry と daemon の検査引き継ぎでは初回の snapshot を再利用する。
+これらの変数は WU の作業時にしか無いので、`cmd` が `CELERIS_WU_` を含む check は `scope` の有無によらず
+段の統合の検査と子 task の acceptance に入れない（[ADR](../../agent-docs/adr/2026-10-22-wu-env-checks-skip-integration.md)）。
 
 WU の受け入れ検査ログは `<workspace_root>/<task_id>/work-unit-checks/<wu_key>/` に保存し、repo の作業ツリー外に置く。
 scope check の説明はこのログ置き場を差分 path として数える想定ではない。

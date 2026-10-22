@@ -302,10 +302,11 @@ pub fn promote_to_task(
     out.kind = crate::execution_plan::WorkUnitKind::Task;
     // ADR-0074 付記 2026-10-05: 範囲 check（`scope: true`）は WU の作業時だけで意味を持つので acceptance に写さない
     // （子 task の final review で他の変更を拾って必ず落ちる）。子 task 自身の leaf が範囲 check を持つ。
+    // `CELERIS_WU_*` を使う check も同じ（ADR 2026-10-22-wu-env-checks-skip-integration D3。final review に値が無い）。
     let mut acceptance: Vec<Criterion> = unit
         .checks
         .iter()
-        .filter(|c| !c.scope)
+        .filter(|c| !c.is_work_unit_only())
         .map(|c| Criterion {
             text: format!("`{}` exits {}", c.cmd, c.expect_exit),
             check: Check::Command {

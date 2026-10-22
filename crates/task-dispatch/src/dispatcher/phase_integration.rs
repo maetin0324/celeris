@@ -48,6 +48,8 @@ pub(super) fn is_repair_scope_check(check: &task_core::WorkUnitCheck) -> bool {
 /// D1.4 の 4（ADR-0074 付記 2026-10-05）: 段 `phase` の統合で流す検査の一覧（純粋関数）。その段の生きた
 /// 葉の WU の checks を計画の順に重複（`cmd` が同じ）を除いて集め、`workspace.toml` の check（`defaults`）を
 /// 足す。範囲 check（`scope: true`）は WU の作業時だけで意味を持つので入れない（統合後は他の WU の変更を拾う）。
+/// `CELERIS_WU_*` を使う check も入れない（統合後の Task の worktree には WU の作業開始時に当たる値が無い。
+/// ADR 2026-10-22-wu-env-checks-skip-integration、判定は `WorkUnitCheck::is_work_unit_only`）。
 pub(super) fn integration_checks_for_phase(
     units: &[task_core::WorkUnitRow],
     phase: &str,
@@ -59,7 +61,7 @@ pub(super) fn integration_checks_for_phase(
             && u.kind != task_core::WorkUnitKind::Integrate
             && u.phase.as_deref() == Some(phase)
     }) {
-        for c in u.spec.checks.iter().filter(|c| !c.scope) {
+        for c in u.spec.checks.iter().filter(|c| !c.is_work_unit_only()) {
             if !checks.iter().any(|x| x.cmd == c.cmd) {
                 checks.push(c.clone());
             }

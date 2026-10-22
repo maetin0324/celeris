@@ -130,6 +130,71 @@ async fn scope_checks_run_only_at_work_unit_time_and_not_after_integration() {
     );
 }
 
+/// 本番 2026-10-22（moshi-brewed 01M5HJ4XEG）の形: `scope` の印が無い `git diff --quiet "$CELERIS_WU_BASE" -- b/`
+/// を WU `a` が持つ。同じ段の WU `b` は `b/` を変える。check は WU の作業時に env 付きで流れて通り（値が空なら
+/// `bad revision ''` で exit 128 になる）、段の統合の検査には入らず（統合後の Task の worktree には WU の基点に当たる
+/// 値が無く、`b` の変更も入っている）、task は done になる（ADR 2026-10-22-wu-env-checks-skip-integration）。
+#[tokio::test]
+async fn wu_env_checks_without_scope_flag_pass_at_work_unit_time_and_skip_integration() {
+    const WU_DIFF: &str = "git diff --quiet \"$CELERIS_WU_BASE\" -- b/";
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = parallel_task(repo.path(), "true");
+    store.insert(&task).unwrap();
+    let mut a = v2_wu("a", "build", &[]);
+    a.checks = vec![check(WU_DIFF, false), check("test -f a/one.txt", false)];
+    let mut b = v2_wu("b", "build", &[]);
+    b.checks = vec![check("test -f b/one.txt", false)];
+    adopt_v2_plan(&store, task.id, &["build"], vec![a, b]);
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::from_millis(20))
+            .with_action("a", write_files(&[("a/one.txt", "a\n")]))
+            .with_action("b", write_files(&[("b/one.txt", "b\n")])),
+    );
+    let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);
+    run_until_idle(&mut d, 800).await;
+    let stored = store.get(task.id).unwrap().unwrap();
+    let events = events_of(&store, task.id);
+    assert_eq!(stored.status, Status::Done, "{stored:?}\n{events:#?}");
+    assert!(
+        work_unit_check_cmds(&events, "a").contains(&(WU_DIFF.to_string(), true)),
+        "the check ran with CELERIS_WU_BASE and passed at WU time: {events:#?}"
+    );
+    let integ = integration_check_cmds(&events, "integrate-build");
+    assert!(!integ.contains(&WU_DIFF.to_string()), "{integ:?}");
+    assert!(
+        integ.contains(&"test -f a/one.txt".to_string()),
+        "{integ:?}"
+    );
+    assert!(
+        integ.contains(&"test -f b/one.txt".to_string()),
+        "{integ:?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            Event::IntegrationCheckFinished { pass: false, .. }
+                | Event::WorkUnitChecksFailed { .. }
+        )),
+        "{events:#?}"
+    );
+    // 統合後の Task の worktree で env 無しに流すと、以前の失敗（空の revision）になる形であることも固定する。
+    let out = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(WU_DIFF)
+        .current_dir(repo.path())
+        .env_remove("CELERIS_WU_BASE")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(128), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("bad revision"),
+        "{out:?}"
+    );
+}
+
 /// (b) WU `a` が範囲外（`b/oops.txt` と追跡済みの `README.md`）を書くと、WU の作業時に `WorkUnitChecksFailed` になり、
 /// 判定文に範囲外の path が載る（未追跡も差分も見る）。範囲 check は統合の検査では流れない。
 #[tokio::test]
@@ -277,6 +342,11 @@ fn integration_checks_for_phase_skips_scope_checks() {
             true,
         ),
         check("cargo test", false),
+        // ADR 2026-10-22-wu-env-checks-skip-integration: `scope` が無くても `CELERIS_WU_*` を使えば WU の作業時だけ。
+        check("git diff --quiet \"$CELERIS_WU_BASE\" -- crates/", false),
+        check("test \"$CELERIS_WU_TARGET\" != main", false),
+        // 変数を中で読むだけの check（名前が cmd に無い）は統合でも流れる。
+        check("bash scripts/dev/test-affected.sh", false),
     ];
     let mut c = v2_wu("c", "verify", &["a", "b"]);
     c.checks = vec![check("test -f c.txt", false)];
@@ -293,6 +363,7 @@ fn integration_checks_for_phase_skips_scope_checks() {
         vec![
             ("test -f a/one.txt", false),
             ("cargo test", false),
+            ("bash scripts/dev/test-affected.sh", false),
             ("true", false)
         ]
     );

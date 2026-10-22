@@ -107,6 +107,18 @@ fn is_false(v: &bool) -> bool {
     !*v
 }
 
+/// ADR 2026-10-22-wu-env-checks-skip-integration D2: `CELERIS_WU_*`（WU の作業開始時を指す変数）の接頭辞。
+pub const WU_ENV_PREFIX: &str = "CELERIS_WU_";
+
+impl WorkUnitCheck {
+    /// ADR 2026-10-22-wu-env-checks-skip-integration D2: WU の作業時（`CELERIS_WU_*` のある環境）だけで判定する check か。
+    /// 範囲 check（`scope: true`）と、`cmd` が `CELERIS_WU_*` を使う check。段の統合の検査と子 task の acceptance には入れない
+    /// （そこには WU の作業開始時に当たる値が無い）。
+    pub fn is_work_unit_only(&self) -> bool {
+        self.scope || self.cmd.contains(WU_ENV_PREFIX)
+    }
+}
+
 /// ADR-0074 付記 2026-10-05 D3: WU の checks と WU の run の環境に入る、WU 初回 run の追跡済み作業木 snapshot（範囲 check の基点。統合用 `base_commit` とは別）。
 pub const WU_BASE_ENV: &str = "CELERIS_WU_BASE";
 /// ADR-0074 付記 2026-10-05 D3: WU の checks と WU の run の環境に入る、統合先（Task のブランチ `celeris/<task_id>`）。

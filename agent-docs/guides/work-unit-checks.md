@@ -49,6 +49,10 @@ planner は計画時に base の sha を知らないので、範囲 check は必
 `$(git merge-base HEAD main)` と比べない（main は task の途中で動き、merge-base は他の WU・main の変更を含みうる）。
 worker も同じ変数で同じ check を自分で流し、done を返す前に範囲外の path が無いことを確かめられる。
 
+これらの変数は WU の作業時にしか無い。`cmd` が `CELERIS_WU_` を含む check は `scope` の有無によらず WU の作業時だけで
+判定し、段の統合の検査と子 task の acceptance には入れない（ADR 2026-10-22-wu-env-checks-skip-integration）。統合後にも
+流したい検査は、変数を使わない別の check に分けて書く。
+
 ## 範囲 check の既定の形
 
 ```sh

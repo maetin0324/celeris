@@ -12,7 +12,6 @@ const KEY = "celeris-console-state";
 type Persisted = {
   drafts: Record<string, string>;
   expanded: string[];
-  conversations: Record<string, { id: string; since: string | null }>;
 };
 
 function storage(): Storage | null {
@@ -26,11 +25,11 @@ function storage(): Storage | null {
 function load(): Persisted {
   try {
     const raw = storage()?.getItem(KEY);
-    if (raw) return { drafts: {}, expanded: [], conversations: {}, ...(JSON.parse(raw) as Partial<Persisted>) };
+    if (raw) return { drafts: {}, expanded: [], ...(JSON.parse(raw) as Partial<Persisted>) };
   } catch {
     // 壊れた値は捨てる
   }
-  return { drafts: {}, expanded: [], conversations: {} };
+  return { drafts: {}, expanded: [] };
 }
 
 let state = load();
@@ -71,24 +70,9 @@ export const expansionStore = {
   subscribe,
 };
 
-const initial = { id: "0", since: null as string | null };
-export const conversationStore = {
-  get: (scope: string) => state.conversations[scope] ?? initial,
-  next(scope: string, since: string | null) {
-    const current = state.conversations[scope] ?? initial;
-    state = {
-      ...state,
-      conversations: { ...state.conversations, [scope]: { id: String(Number(current.id) + 1), since } },
-    };
-    save();
-    emit();
-  },
-  subscribe,
-};
-
 /** テスト用。 */
 export function resetConsoleStores(): void {
-  state = { drafts: {}, expanded: [], conversations: {} };
+  state = { drafts: {}, expanded: [] };
   save();
   emit();
 }

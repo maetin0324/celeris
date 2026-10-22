@@ -137,7 +137,7 @@ test("parity: /console/stream 中継と再接続", async () => {
   expect((await fetch(`${authedBase}/console/stream?scope=all`, { redirect: "manual" })).status).toBe(401);
 
   const client = new QueryClient();
-  const key = consoleQueryKey("node:cos", "0");
+  const key = consoleQueryKey("node:cos");
   const stream = openConsoleStream({
     scope: "node:cos",
     since: "s1",
@@ -161,18 +161,6 @@ test("parity: /console/stream 中継と再接続", async () => {
   await waitFor(() => client.getQueryData<ConsoleCache>(key)?.blocks.length === 3);
   expect(client.getQueryData<ConsoleCache>(key)?.blocks.map((b) => b.cursor)).toEqual(["c1", "c2", "c3"]);
   stream.close();
-});
-
-test("parity: /console/new-conversation 開始", async () => {
-  const res = await fetch(`${base}/api/console/new-conversation`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: "{}",
-  });
-  expect(res.status).toBe(204);
-  expect(requests("/api/v1/console/new-conversation").at(-1)?.method).toBe("POST");
-  const unauth = await fetch(`${authedBase}/api/console/new-conversation`, { method: "POST", body: "{}" });
-  expect(unauth.status).toBe(401);
 });
 
 test("parity: runs/:runId/events 全行の取得", async ({ page }) => {

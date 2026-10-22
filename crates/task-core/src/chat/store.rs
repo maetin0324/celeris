@@ -1085,6 +1085,12 @@ pub(crate) fn message_post_conn(
             "thread {thread_id} is archived"
         )));
     }
+    // ADR 2026-10-22-cos-fixed-threads D1: legacy threads are read-only; talk in the CoS thread.
+    if thread.kind == ChatThreadKind::Legacy {
+        return Err(ChatError::Conflict(format!(
+            "thread {thread_id} is a read-only legacy thread; use the general or project CoS thread"
+        )));
+    }
     if thread.queued_count as usize >= CHAT_QUEUE_MAX {
         return Err(ChatError::QueueFull {
             limit: CHAT_QUEUE_MAX,
@@ -1570,6 +1576,11 @@ pub fn chat_message_post_cos_tx(
     if thread.status == ChatThreadStatus::Archived {
         return Err(ChatError::Conflict(format!(
             "thread {thread_id} is archived"
+        )));
+    }
+    if thread.kind == ChatThreadKind::Legacy {
+        return Err(ChatError::Conflict(format!(
+            "thread {thread_id} is a read-only legacy thread"
         )));
     }
     if let Some(reply) = &req.reply_to_id

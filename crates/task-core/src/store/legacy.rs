@@ -1,5 +1,9 @@
-//! One-time, resumable projection of the old CoS Console into legacy chat threads.
-//! The old messages remain available to the Console compatibility API.
+//! Console compatibility (`GET /console`, `POST /console/instruct`, `POST /org/cos/messages`).
+//!
+//! ADR 2026-10-22-cos-fixed-threads D2': Console input to the CoS is queued on the fixed
+//! general or project CoS thread (never on a legacy thread). The one-time projection of the
+//! pre-chat Console rows (`backfill_legacy_cos`) reuses the legacy threads migration 0092 kept
+//! and otherwise lands on the fixed CoS thread of the scope: nothing creates a legacy thread.
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Value, json};
@@ -8,7 +12,8 @@ use ulid::Ulid;
 
 use super::{SqliteStore, StoreError, format_rfc3339};
 use crate::chat::store::{
-    chat_ts, emit_message, emit_queue, immediate, message_require, read_tx, writer,
+    chat_ts, cos_thread_ensure_tx, emit_message, emit_queue, immediate, message_require, read_tx,
+    writer,
 };
 use crate::chat::{CHAT_MESSAGE_TEXT_MAX_BYTES, CHAT_QUEUE_MAX, ChatError};
 use crate::{Message, MessageId, MessageRole, ProjectId, TaskId};
@@ -139,35 +144,10 @@ impl SqliteStore {
         })
     }
 
-    /// The Console's default is scoped independently of the human chat UI.
-    pub fn chat_legacy_default_thread(
-        &self,
-        project_id: Option<crate::ProjectId>,
-        now: OffsetDateTime,
-    ) -> Result<String, ChatError> {
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let id = legacy_thread(&tx, project_id, &chat_ts(now), false)?;
-        tx.commit()?;
-        Ok(id)
-    }
-
-    /// Start a fresh compatibility conversation without archiving other threads.
-    pub fn chat_legacy_new_conversation(
-        &self,
-        project_id: Option<crate::ProjectId>,
-        now: OffsetDateTime,
-    ) -> Result<String, ChatError> {
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let id = chat_legacy_new_conversation_tx(&tx, project_id, now)?;
-        tx.commit()?;
-        Ok(id)
-    }
-
-    /// Queue a legacy input once, keyed by its old message id. The old message
-    /// remains readable by /console and the queue drives the CoS run.
-    pub fn chat_legacy_enqueue(
+    /// Queue a Console input once, keyed by its old message id, on the fixed CoS thread of the
+    /// scope (ADR 2026-10-22-cos-fixed-threads D2'). The old message remains readable by
+    /// /console and the queue drives the CoS run.
+    pub fn chat_console_enqueue(
         &self,
         message: &Message,
         now: OffsetDateTime,
@@ -180,7 +160,8 @@ impl SqliteStore {
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
         let at = chat_ts(now);
-        let thread_id = legacy_thread(&tx, message.project_id, &at, false)?;
+        let project = message.project_id.map(|p| p.to_string());
+        let thread_id = cos_thread_ensure_tx(&tx, project.as_deref(), &at)?;
         let legacy_id = message.id.to_string();
         if let Some(id) = tx
             .query_row(
@@ -281,16 +262,7 @@ impl SqliteStore {
                     )));
                 }
             };
-            let thread_id = match &old.project_id {
-                Some(id) => format!("legacy:project:{id}"),
-                None => "legacy:global".to_owned(),
-            };
-            tx.execute(
-                "INSERT OR IGNORE INTO chat_threads \
-                 (id,kind,title,project_id,status,created_at,updated_at) \
-                 VALUES (?1,'legacy','旧 CoS 会話',?2,'open',?3,?3)",
-                params![thread_id, old.project_id, old.created_at],
-            )?;
+            let thread_id = backfill_thread(&tx, old.project_id.as_deref(), &old.created_at)?;
             let source_metadata = old
                 .metadata_json
                 .as_deref()
@@ -338,62 +310,25 @@ impl SqliteStore {
     }
 }
 
-fn legacy_thread(
+/// Where a projected pre-chat Console row goes: the legacy thread of its scope when migration
+/// 0092 kept one, otherwise the fixed general or project CoS thread. Legacy threads are never
+/// created here (ADR 2026-10-22-cos-fixed-threads D1).
+fn backfill_thread(
     tx: &rusqlite::Transaction<'_>,
-    project_id: Option<crate::ProjectId>,
+    project_id: Option<&str>,
     at: &str,
-    rotate: bool,
-) -> Result<String, ChatError> {
-    if let Some(project_id) = project_id {
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
-            [project_id.to_string()],
-            |r| r.get(0),
-        )?;
-        if !exists {
-            return Err(ChatError::Invalid(format!(
-                "project {project_id} does not exist"
-            )));
-        }
-    }
-    let scope = project_id.map_or_else(|| "global".to_owned(), |id| format!("project:{id}"));
-    let key = format!("cos_chat_legacy_default:{scope}");
-    let current: Option<String> = tx
-        .query_row("SELECT value FROM feed_cursor WHERE name=?1", [&key], |r| {
-            r.get(0)
-        })
-        .optional()?;
-    let mut id = if rotate {
-        format!("legacy:{}", Ulid::new())
-    } else {
-        current.unwrap_or_else(|| format!("legacy:{scope}"))
+) -> Result<String, StoreError> {
+    let legacy_id = match project_id {
+        Some(id) => format!("legacy:project:{id}"),
+        None => "legacy:global".to_owned(),
     };
-    let archived: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM chat_threads WHERE id=?1 AND status='archived')",
-        [&id],
+    let kept: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM chat_threads WHERE id=?1 AND kind='legacy')",
+        [&legacy_id],
         |r| r.get(0),
     )?;
-    if archived {
-        id = format!("legacy:{}", Ulid::new());
+    if kept {
+        return Ok(legacy_id);
     }
-    tx.execute(
-        "INSERT OR IGNORE INTO chat_threads(id,kind,title,project_id,status,created_at,updated_at) \
-         VALUES(?1,'legacy','旧 CoS 会話',?2,'open',?3,?3)",
-        params![id, project_id.map(|p| p.to_string()), at],
-    )?;
-    tx.execute(
-        "INSERT INTO feed_cursor(name,value) VALUES(?1,?2) \
-         ON CONFLICT(name) DO UPDATE SET value=excluded.value",
-        params![key, id],
-    )?;
-    Ok(id)
-}
-
-/// [`SqliteStore::chat_legacy_new_conversation`] inside the caller's transaction.
-pub fn chat_legacy_new_conversation_tx(
-    tx: &rusqlite::Transaction<'_>,
-    project_id: Option<crate::ProjectId>,
-    now: OffsetDateTime,
-) -> Result<String, ChatError> {
-    legacy_thread(tx, project_id, &chat_ts(now), true)
+    cos_thread_ensure_tx(tx, project_id, at).map_err(|e| StoreError::Invalid(e.to_string()))
 }

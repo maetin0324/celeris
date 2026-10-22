@@ -297,11 +297,41 @@ fn chat_store_search_takes_fts_syntax_literally_and_dedups_threads() {
     assert_eq!(search("   ").len(), 2);
 }
 
+/// ADR 2026-10-22-cos-fixed-threads D1: a legacy thread is read-only. Human and CoS writes are
+/// refused with 409; the thread stays readable and its messages are unchanged.
+#[test]
+fn chat_store_legacy_thread_is_read_only() {
+    let s = store();
+    let t = create(&s, "a", "A", 0);
+    post(&s, &t.id, "before", "移行前の本文", 1);
+    make_legacy(&s, &t.id);
+    let e = s
+        .chat_message_post(&t.id, &req("after", "旧スレッドへ"), at(2))
+        .expect_err("legacy is read-only");
+    assert_eq!(status(e), 409);
+    let e = s
+        .chat_message_post(&t.id, &req("after", "旧スレッドへ"), at(2))
+        .expect_err("legacy is read-only");
+    assert!(e.to_string().contains("legacy"));
+    let listed = s
+        .chat_message_list(&t.id, &ChatMessageQuery::default())
+        .expect("list");
+    assert_eq!(listed.items.len(), 1);
+    assert_eq!(listed.items[0].text, "移行前の本文");
+    // The same input is accepted by the fixed general CoS thread.
+    let general = s
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, at(3))
+        .expect("general");
+    post(&s, &general.thread.id, "after", "旧スレッドへ", 3);
+}
+
 #[test]
 fn chat_store_thread_patch_revision_and_archive_rules() {
     let s = store();
     let t = create(&s, "a", "A", 0);
     let cos = create(&s, "cos", "CoS", 0);
+    // Queued before the thread became legacy (legacy threads refuse new input).
+    let m = post(&s, &t.id, "m", "hi", 0);
     make_legacy(&s, &t.id);
     let e = s
         .chat_thread_patch(
@@ -327,7 +357,6 @@ fn chat_store_thread_patch_revision_and_archive_rules() {
         )
         .expect("rename");
     assert_eq!((renamed.title.as_str(), renamed.revision), ("B", 2));
-    let m = post(&s, &t.id, "m", "hi", 3);
     let archive = ChatPatchThreadRequest {
         title: None,
         status: Some(ChatThreadStatus::Archived),

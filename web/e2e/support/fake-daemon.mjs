@@ -2805,22 +2805,14 @@ export function createFakeDaemon({
       res.on("close", () => consoleClients.delete(res));
       return;
     }
-    if (
-      req.method === "POST" &&
-      (pathname === "/api/v1/console/instruct" || pathname === "/api/v1/console/new-conversation")
-    ) {
+    if (req.method === "POST" && pathname === "/api/v1/console/instruct") {
       const chunks = [];
       req.on("data", (chunk) => chunks.push(chunk));
       req.on("end", () => {
         record.body = Buffer.concat(chunks).toString("utf8");
         const respond = () => {
-          if (pathname.endsWith("/instruct")) {
-            res.writeHead(202, { "content-type": "application/json" });
-            res.end(JSON.stringify({ message_id: "M1", node_id: "cos", task_id: "T1" }));
-          } else {
-            res.writeHead(204);
-            res.end();
-          }
+          res.writeHead(202, { "content-type": "application/json" });
+          res.end(JSON.stringify({ message_id: "M1", node_id: "cos", task_id: "T1" }));
         };
         if (postDelay) setTimeout(respond, postDelay);
         else respond();

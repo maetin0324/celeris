@@ -60,22 +60,42 @@ async fn seed_org(app: &axum::Router) {
     }
 }
 
-fn legacy_items(
+/// ADR 2026-10-22-cos-fixed-threads D2': Console input lands on the fixed general or project
+/// CoS thread (opened here if the input has not created it yet).
+fn cos_thread(env: &TestEnv, project_id: Option<task_core::ProjectId>) -> String {
+    env.store
+        .cos_thread_open(
+            &task_core::chat::ChatOpenThreadRequest {
+                project_id: project_id.map(|p| p.to_string()),
+            },
+            time::OffsetDateTime::now_utc(),
+        )
+        .unwrap()
+        .thread
+        .id
+}
+
+fn cos_items(
     env: &TestEnv,
     project_id: Option<task_core::ProjectId>,
 ) -> Vec<task_core::chat::ChatMessage> {
-    let thread = env
-        .store
-        .chat_legacy_default_thread(project_id, time::OffsetDateTime::now_utc())
-        .unwrap();
+    let thread = cos_thread(env, project_id);
     env.store
         .chat_message_list(&thread, &ChatMessageQuery::default())
         .unwrap()
         .items
 }
 
+fn thread_count(env: &TestEnv) -> usize {
+    env.store
+        .chat_thread_list(&task_core::chat::ChatThreadQuery::default())
+        .unwrap()
+        .items
+        .len()
+}
+
 #[tokio::test]
-async fn cos_chat_legacy_console_instruct_queues_and_keeps_ids() {
+async fn cos_chat_console_instruct_queues_on_the_general_cos_thread_and_keeps_ids() {
     let env = env_with_token();
     let app = env.router();
     seed_org(&app).await;
@@ -92,24 +112,38 @@ async fn cos_chat_legacy_console_instruct_queues_and_keeps_ids() {
         env.store.get(task_id).unwrap().unwrap().status,
         Status::Draft
     );
-    let thread = env
-        .store
-        .chat_legacy_default_thread(None, time::OffsetDateTime::now_utc())
-        .unwrap();
+    let thread = cos_thread(&env, None);
     assert_eq!(
         env.store.chat_thread_get(&thread).unwrap().unwrap().kind,
-        task_core::chat::ChatThreadKind::Legacy
+        task_core::chat::ChatThreadKind::General
     );
-    let items = legacy_items(&env, None);
+    let items = cos_items(&env, None);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].text, "互換入力");
     assert_eq!(items[0].state, task_core::chat::ChatMessageState::Queued);
     let old = send(&app, g("/api/v1/org/cos/messages")).await.json();
     assert_eq!(old["items"][0]["id"], body["message_id"]);
+    // A second input stays on the same thread: no thread per input, no legacy thread.
+    let again = send(
+        &app,
+        p("/api/v1/console/instruct", &json!({"text":"二度目"})),
+    )
+    .await;
+    assert_eq!(again.status.as_u16(), 202, "{}", again.text());
+    assert_eq!(cos_items(&env, None).len(), 2);
+    assert_eq!(thread_count(&env), 1);
+    assert!(
+        env.store
+            .chat_thread_list(&task_core::chat::ChatThreadQuery::default())
+            .unwrap()
+            .items
+            .iter()
+            .all(|t| t.kind != task_core::chat::ChatThreadKind::Legacy)
+    );
 }
 
 #[tokio::test]
-async fn cos_chat_legacy_org_message_uses_same_queue() {
+async fn cos_chat_console_org_message_uses_the_same_cos_queue() {
     let env = env_with_token();
     let app = env.router();
     seed_org(&app).await;
@@ -119,12 +153,13 @@ async fn cos_chat_legacy_org_message_uses_same_queue() {
     )
     .await;
     assert_eq!(result.status.as_u16(), 202, "{}", result.text());
-    assert_eq!(legacy_items(&env, None)[0].text, "組織入口");
+    assert_eq!(cos_items(&env, None)[0].text, "組織入口");
     assert!(result.json()["task_id"].as_str().is_some());
+    assert_eq!(thread_count(&env), 1);
 }
 
 #[tokio::test]
-async fn cos_chat_legacy_project_has_own_default() {
+async fn cos_chat_console_project_scope_lands_on_the_project_cos_thread() {
     let env = env_with_token();
     let app = env.router();
     seed_org(&app).await;
@@ -147,73 +182,25 @@ async fn cos_chat_legacy_project_has_own_default() {
     )
     .await;
     assert_eq!(result.status.as_u16(), 202, "{}", result.text());
+    let thread = cos_thread(&env, Some(project));
+    let project_thread = env.store.chat_thread_get(&thread).unwrap().unwrap();
+    assert_eq!(
+        project_thread.kind,
+        task_core::chat::ChatThreadKind::Project
+    );
+    assert_eq!(project_thread.project_id, Some(project.to_string()));
     assert!(
-        legacy_items(&env, Some(project))
+        cos_items(&env, Some(project))
             .iter()
             .any(|m| m.text == "案件側")
     );
-    assert!(!legacy_items(&env, None).iter().any(|m| m.text == "案件側"));
+    assert!(!cos_items(&env, None).iter().any(|m| m.text == "案件側"));
+    // The general thread was opened by `cos_items(None)` above: project + general, nothing else.
+    assert_eq!(thread_count(&env), 2);
 }
 
 #[tokio::test]
-async fn cos_chat_legacy_new_conversation_rotates_only_default() {
-    let env = env_with_token();
-    let app = env.router();
-    seed_org(&app).await;
-    let first = env
-        .store
-        .chat_legacy_default_thread(None, time::OffsetDateTime::now_utc())
-        .unwrap();
-    let created = send(
-        &app,
-        p(
-            "/api/v1/projects",
-            &json!({"title":"Separate","request":"調査"}),
-        ),
-    )
-    .await
-    .json();
-    let project: task_core::ProjectId = created["id"].as_str().unwrap().parse().unwrap();
-    let project_first = env
-        .store
-        .chat_legacy_default_thread(Some(project), time::OffsetDateTime::now_utc())
-        .unwrap();
-    let scoped = send(
-        &app,
-        p(
-            &format!("/api/v1/console/new-conversation?scope=project:{project}"),
-            &json!({}),
-        ),
-    )
-    .await;
-    assert_eq!(scoped.status.as_u16(), 204, "{}", scoped.text());
-    assert_ne!(
-        project_first,
-        env.store
-            .chat_legacy_default_thread(Some(project), time::OffsetDateTime::now_utc())
-            .unwrap()
-    );
-    assert_eq!(
-        first,
-        env.store
-            .chat_legacy_default_thread(None, time::OffsetDateTime::now_utc())
-            .unwrap()
-    );
-    let resp = send(&app, p("/api/v1/console/new-conversation", &json!({}))).await;
-    assert_eq!(resp.status.as_u16(), 204, "{}", resp.text());
-    let second = env
-        .store
-        .chat_legacy_default_thread(None, time::OffsetDateTime::now_utc())
-        .unwrap();
-    assert_ne!(first, second);
-    assert_eq!(
-        env.store.chat_thread_get(&first).unwrap().unwrap().status,
-        task_core::chat::ChatThreadStatus::Open
-    );
-}
-
-#[tokio::test]
-async fn cos_chat_legacy_non_cos_keeps_old_path() {
+async fn cos_chat_console_non_cos_keeps_the_task_path() {
     let env = env_with_token();
     let app = env.router();
     seed_org(&app).await;
@@ -231,11 +218,11 @@ async fn cos_chat_legacy_non_cos_keeps_old_path() {
         env.store.get(task_id).unwrap().unwrap().status,
         Status::Ready
     );
-    assert!(legacy_items(&env, None).is_empty());
+    assert!(cos_items(&env, None).is_empty());
 }
 
 #[tokio::test]
-async fn cos_chat_legacy_console_reads_chat_without_duplicate_projection() {
+async fn cos_chat_console_reads_chat_without_duplicate_projection() {
     let env = env_with_token();
     let app = env.router();
     seed_org(&app).await;
@@ -245,10 +232,7 @@ async fn cos_chat_legacy_console_reads_chat_without_duplicate_projection() {
     )
     .await
     .json();
-    let thread = env
-        .store
-        .chat_legacy_default_thread(None, time::OffsetDateTime::now_utc())
-        .unwrap();
+    let thread = cos_thread(&env, None);
     env.store
         .chat_message_post(
             &thread,

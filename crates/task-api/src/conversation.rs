@@ -110,7 +110,7 @@ pub(crate) fn start_conversation(
 ) -> Result<task_ops::conversation::StartedConversation, ApiProblem> {
     let now = OffsetDateTime::now_utc();
     if id == task_core::COS_ID {
-        task_ops::conversation::start_legacy_cos(
+        task_ops::conversation::start_console_cos(
             store,
             post.project_id,
             None,

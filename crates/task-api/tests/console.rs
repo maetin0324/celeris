@@ -17,8 +17,8 @@ use task_api::StreamTuning;
 use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use task_core::{
     Approval, ApprovalStore, COS_ID, Event, Message, MessageId, MessageRole, MilestoneStatus,
-    NodeSession, NodeSessionStore, ProgressFields, ProgressKind, Project, ProjectId, Report,
-    ReportKind, ReportStore, SessionKind, Status, Task, TaskKind, TaskStore,
+    ProgressFields, ProgressKind, Project, ProjectId, Report, ReportKind, ReportStore, Status,
+    Task, TaskKind, TaskStore,
 };
 use time::OffsetDateTime;
 
@@ -77,15 +77,20 @@ fn message(node_id: &str, project_id: Option<ProjectId>, role: MessageRole, text
 }
 
 #[tokio::test]
-async fn cos_chat_legacy_stream_reads_new_cos_message() {
+async fn cos_chat_console_stream_reads_new_cos_message() {
     let env = TestEnv::new();
     let app = task_api::router(fast(&env));
     let mut sse = open_stream(&app, get("/api/v1/console/stream?scope=all")).await;
     sse.next_frame(EVENT_WAIT).await.expect("hello");
     let thread = env
         .store
-        .chat_legacy_default_thread(None, OffsetDateTime::now_utc())
-        .unwrap();
+        .cos_thread_open(
+            &task_core::chat::ChatOpenThreadRequest { project_id: None },
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap()
+        .thread
+        .id;
     env.store
         .chat_message_post(
             &thread,
@@ -936,64 +941,4 @@ async fn run_events_returns_only_that_runs_rows() {
     .json();
     assert_eq!(page["items"].as_array().map(Vec::len), Some(2));
     assert_eq!(page["has_more"], true);
-}
-
-// ---- POST /console/new-conversation（ADR-0054 D1。Phase 67）----
-
-/// 現役の CoS 継続セッションがあれば捨てる（`retired_at` が立つ）。管理系（bearer 必須）。
-#[tokio::test]
-async fn cos_chat_legacy_new_conversation_preserves_other_session() {
-    let env = admin_env();
-    let app = env.router();
-    let now = OffsetDateTime::now_utc();
-    let session = NodeSession::new(
-        COS_ID,
-        SessionKind::Conversation,
-        None,
-        "claude-code",
-        Some("acct-a".to_string()),
-        "sess-1",
-        now,
-    );
-    env.store.node_session_create(&session).expect("create");
-    assert!(
-        env.store
-            .node_session_active(COS_ID, SessionKind::Conversation, None)
-            .expect("active")
-            .is_some()
-    );
-
-    let resp = send(
-        &app,
-        post_admin("/api/v1/console/new-conversation", &serde_json::json!({})),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 204, "{}", resp.text());
-    assert!(
-        env.store
-            .node_session_active(COS_ID, SessionKind::Conversation, None)
-            .expect("active")
-            .is_some()
-    );
-
-    // もう一度切り替えても 204。既存 session は触らない。
-    let resp = send(
-        &app,
-        post_admin("/api/v1/console/new-conversation", &serde_json::json!({})),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 204, "{}", resp.text());
-}
-
-/// bearer 無しは 401（他の管理系エンドポイントと同じ規律）。
-#[tokio::test]
-async fn new_conversation_requires_admin_auth() {
-    let env = admin_env();
-    let app = env.router();
-    let resp = send(
-        &app,
-        post_json("/api/v1/console/new-conversation", &serde_json::json!({})),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 401, "{}", resp.text());
 }

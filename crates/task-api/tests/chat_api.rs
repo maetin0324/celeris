@@ -25,9 +25,7 @@ async fn create(env: &TestEnv, app: &axum::Router, title: &str) -> Value {
 
 /// A legacy thread (migration 0092 keeps old conversations as legacy; only they can be archived).
 fn legacy(env: &TestEnv) -> String {
-    env.store
-        .chat_legacy_default_thread(None, OffsetDateTime::now_utc())
-        .expect("legacy thread")
+    legacy_thread(env, "旧 CoS 会話")
 }
 
 fn message_body(key: &str, text: &str) -> Value {
@@ -426,6 +424,45 @@ async fn chat_api_message_before_and_after_pages() {
         .json();
     assert_eq!(newer["items"][0]["seq"], 2);
     assert_eq!(newer["next_after_seq"], 2);
+}
+
+/// ADR 2026-10-22-cos-fixed-threads D1: a legacy thread stays readable but refuses input
+/// (409 `chat_conflict`); the same input is accepted by the general CoS thread.
+#[tokio::test]
+async fn chat_api_legacy_thread_is_read_only() {
+    let env = admin_env();
+    let app = env.router();
+    let id = legacy(&env);
+    let shown = send(&app, get_admin(&format!("{BASE}/{id}"))).await;
+    assert_eq!(shown.status.as_u16(), 200, "{}", shown.text());
+    assert_eq!(shown.json()["thread"]["kind"], "legacy");
+    assert_problem(
+        &send(
+            &app,
+            post_admin(
+                &format!("{BASE}/{id}/messages"),
+                &message_body("post", "旧スレッドへ"),
+            ),
+        )
+        .await,
+        409,
+        "chat_conflict",
+    );
+    let general = send(&app, post_admin(BASE, &thread_body(None)))
+        .await
+        .json()["thread"]["id"]
+        .as_str()
+        .expect("general id")
+        .to_string();
+    let accepted = send(
+        &app,
+        post_admin(
+            &format!("{BASE}/{general}/messages"),
+            &message_body("post", "旧スレッドへ"),
+        ),
+    )
+    .await;
+    assert_eq!(accepted.status.as_u16(), 202, "{}", accepted.text());
 }
 
 #[tokio::test]

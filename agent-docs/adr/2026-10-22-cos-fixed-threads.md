@@ -41,16 +41,36 @@ CoS でスレッドを管理し、案件の通知はその案件の CoS に、�
 |---|---|---|---|
 | `general` | 全体で 1 本（部分 unique index） | 最初に要る時（初回の通知・人が開いた時） | 「統括 CoS」 |
 | `project` | `project_id` ごとに 1 本（部分 unique index、`project_id` 必須） | その案件の初回の通知か、人が案件の CoS を開いた時 | 「CoS: <案件の題名>」 |
-| `legacy` | 移行で残した旧スレッド | 作らない（読むだけ） | 旧題名のまま |
+| `legacy` | 移行で残した旧スレッド | migration 0092 だけが作る（読むだけ） | 旧題名のまま |
 
 スレッドを作る関数は store の `cos_thread_ensure_tx(project_id)`（無ければ作り、あれば返す）だけにする。
 `project_id` が無い・案件が存在しないときは `general` を返す。
+
+`legacy` は読むだけ: 人の `POST /chat/threads/{t}/messages` も CoS の書き込み（`chat_message_post_cos_tx`）も
+409 `chat_conflict` で断る（`client_message_id` の再送は従来どおり同じ発言を返す）。web のホームは legacy を選ぶと
+composer の代わりに「読むだけ。続きは統括 CoS か案件の CoS で」の注記を出す。legacy だけが保管（archived）できる。
+旧 Console の `messages` 行の投影（`backfill_legacy_cos`。ADR-0054 の一度きりの取り込み）は、migration 0092 が残した
+`legacy:global`／`legacy:project:<id>` があればそこへ、無ければその scope の固定 CoS スレッドへ入れる。legacy スレッドを
+作る経路はコードに無い（`legacy_thread()`・`chat_legacy_default_thread`・`chat_legacy_new_conversation(_tx)` は消した）。
 
 ### D2 人の「新しい会話」
 
 人が新しいスレッドを作る機能は**残さない**。`POST /api/v1/chat/threads` は本文 `{"project_id": <id|null>}` で
 「統括または案件の CoS スレッドを開く」（冪等。初回だけ 201）に意味を変える（`title`・`client_thread_id` は未知 field として 400）。
 話題が変わっても同じスレッドで続け、長さは D4 の compact に任せる。web の「新しい会話」は「案件の CoS を開く」に置き換える。
+
+旧 Console の「新しい会話」も残さない: `POST /api/v1/console/new-conversation`（ADR-0054 D1・api.md §3.109）と
+CoS operation `console.new_conversation`、web の Console の「新しい会話」ボタンと会話 id の切り替え（`conversationStore`）を消す。
+Console の cache key は `['console', scope]` になり、scope の最初から読む。
+
+### D2' Console・org 経由の人の入力
+
+`POST /console/instruct`（scope が CoS のもの）と `POST /org/cos/messages`（互換 facade。ADR 2026-10-05 の legacy facade）は、
+従来の scope ごとの legacy thread ではなく **その scope の固定 CoS スレッド**（`scope=project:<id>` → 案件 CoS、それ以外 → 統括 CoS）に
+入力を積む（`task_ops::conversation::start_console_cos` → `SqliteStore::chat_console_enqueue` → `cos_thread_ensure_tx`）。
+旧応答の `message_id`／`task_id`／`node_id` と `legacy_message_id` の対応（`GET /console` の重複排除、MCP `console_reply`）は変えない。
+CoS はその入力を統括・案件の CoS と同じ session で扱う。MCP `console_instruct` は既に同じ規則（`thread_id` 省略時は固定スレッド、
+legacy は 409）。
 CoS operation の action 名 `chat.thread_create`（`POST /chat/threads`）は経路表（2026-10-09-cos-operations-all-mutations）と一致させるため名前を残し、
 意味は同じく「開く」である。
 
@@ -99,6 +119,24 @@ CoS operation の action 名 `chat.thread_create`（`POST /chat/threads`）は�
 root 完了ごとのスレッド作成、`cos_triage_runs_without_digest` の inbox 固定、`instructed_by` の「受信箱スレッドだけ」の制約
 （→ `legacy` 以外の CoS スレッド）。web の新規会話作成と「受信箱」スレッドの特別扱い。
 
+D1／D2／D2' で消したもの: `POST /api/v1/console/new-conversation`（route・`new_conversation` handler・`new_conversation_project`）、
+CoS operation `console.new_conversation`（surface registry と ADR 2026-10-09 の表から削除）、store の `legacy_thread()`・
+`chat_legacy_default_thread`・`chat_legacy_new_conversation(_tx)`・`feed_cursor` の `cos_chat_legacy_default:*` 鍵、
+`start_legacy_cos`／`chat_legacy_enqueue`（→ `start_console_cos`／`chat_console_enqueue`、固定スレッドへ）、
+web の `startNewConversation`・`useNewConversation`・`conversationStore`・Console の「新しい会話」ボタン、
+`web/e2e/parity/console.spec.ts` の new-conversation parity と fake daemon の応答。
+
 ### D8 本番への移行
 
 config の変更は無い。migration 0092 は release の昇格で自動適用される。
+
+## 付記（2026-10-22、review の差し戻しへの対応）
+
+初回 review の指摘: `legacy_thread()` が `kind='legacy'` を作り続け（`POST /console/new-conversation`・`console.new_conversation` は
+rotate=true で毎回新しいスレッド）、`POST /org/cos/messages`・`POST /console/instruct` は scope ごとの legacy thread に入り CoS が別 session で
+動いていた。legacy は「読むだけ」と書きながら `message_post_conn` は断らず、web の composer も有効だった。対応は D1（legacy の作成経路なし・
+読むだけの強制）・D2（Console の「新しい会話」廃止）・D2'（Console・org の入力を固定スレッドへ）・D7 のとおり。試験:
+task-api `console_instruct.rs`（Console・org の入力が統括／案件の CoS スレッドに入りスレッド数が増えない）、`chat_api.rs`
+`chat_api_legacy_thread_is_read_only`、task-core `chat_store_legacy_thread_is_read_only`・
+`chat_console_projection_lands_on_fixed_cos_threads_without_legacy_threads`・
+`chat_console_projection_reuses_legacy_threads_kept_by_migration_0092`、web `conversation-input.test.tsx`。

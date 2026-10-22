@@ -136,7 +136,6 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 待ち行列の再開 | `POST /api/v1/chat/threads/<t>/resume-queue` | chat.queue_resume | `{"expected_revision"}` |
 | chat 添付のアップロード | `POST /api/v1/chat/threads/<t>/attachments` | chat.attachment_upload | `{"client_upload_id","name","content_base64"}`。外部効果（file）。記録に中身は残らない |
 | chat 添付の削除 | `DELETE /api/v1/chat/attachments/<a>` | chat.attachment_delete | body なし。参照のある添付は 409。外部効果（file） |
-| 互換 console の新しい会話 | `POST /api/v1/console/new-conversation` | console.new_conversation | `{"scope":"all"\|"project:<id>"\|"node:cos"}`（省略は all） |
 | 組織のノードへ話しかける | `POST /api/v1/org/<id>/messages` | org.message | `{"text","project_id"?}`。対話用 task を作り run を起こす外部効果。CoS ノード自身へは 422 `cos_self_chain` |
 | 成果物を文書へ昇格 | `POST /api/v1/tasks/<id>/artifacts/promote` | artifact.promote | `{"name","path","title"?,"overwrite"?}`。外部効果（docs git） |
 | browser site policy の作成・置換 | `PUT /api/v1/browser/site-policies/<policy_id>` | browser.site_policy_put | `{"exact_origin","login_url","password_selector","submit_selector"?}`。外部効果 |

@@ -4,16 +4,15 @@ import type { ConsoleBlock, ConsoleInstructAccepted, ConsolePage } from "../../a
 import { consoleKeys } from "../../api/queries/keys";
 import { appendBlocks } from "./blocks";
 
-// ['console', scope, conversationId] の cache（P3-01）。REST の初回取得と stream の差分を同じ cache に入れる。
+// ['console', scope] の cache（P3-01）。REST の初回取得と stream の差分を同じ cache に入れる。
 
 export const CONSOLE_PAGE_LIMIT = 100;
 
 export type ConsoleCache = { blocks: ConsoleBlock[]; cursor: string | null };
 export const emptyCache: ConsoleCache = { blocks: [], cursor: null };
 
-/** 会話の始まり以降だけを読むための since（新しい会話のとき）。 */
-export function consoleQueryKey(scope: string, conversationId: string) {
-  return consoleKeys.conversation(scope, conversationId);
+export function consoleQueryKey(scope: string) {
+  return consoleKeys.conversation(scope);
 }
 
 export function mergePage(cache: ConsoleCache | undefined, page: ConsolePage): ConsoleCache {
@@ -55,10 +54,6 @@ export type InstructInput = { text: string; scope?: string };
 
 export function sendInstruct(body: InstructInput): Promise<ConsoleInstructAccepted> {
   return apiMutate<ConsoleInstructAccepted>("POST", "/api/console/instruct", body);
-}
-
-export function startNewConversation(): Promise<void> {
-  return apiMutate<void>("POST", "/api/console/new-conversation", {});
 }
 
 /** `text` の先頭が `@<node-id> ` なら scope を付けない（daemon の規則 2 に任せる）。 */

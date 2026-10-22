@@ -211,18 +211,6 @@ async fn cos_ops_ops_surface_chat_writes_are_audited_in_one_transaction() {
             .queue_paused
     );
 
-    let op = run_domain(
-        &env,
-        "new-conversation",
-        "POST",
-        "/api/v1/console/new-conversation",
-        json!({"scope": "all"}),
-        "console.new_conversation",
-    )
-    .await;
-    let legacy = op["result"]["thread_id"].as_str().expect("thread id");
-    assert!(env.store.chat_thread_get(legacy).expect("get").is_some());
-
     // A refused chat write leaves no domain change and a rejected record (same status as the route).
     let thread = human_thread(&env, "inbox-like");
     let id = thread["id"].as_str().expect("id").to_string();

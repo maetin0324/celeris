@@ -40,6 +40,20 @@ tasks: [01M5JB3QMBZ6BB6J18YB6BBC0J]
 config の変更は無い。migration 0092 は release の昇格で適用される。旧受信箱スレッドが統括 CoS（同じ id）になり、
 人が作った会話と root 完了の旧スレッドは `legacy`（読むだけ）として一覧の末尾に残る。
 
+## 付記（attempt 2、review の差し戻しへの対応）
+
+- 指摘: `legacy_thread()` が legacy スレッドを作り続け（`POST /console/new-conversation`・`console.new_conversation` は毎回新規）、
+  `POST /org/cos/messages`・`POST /console/instruct` は scope ごとの legacy thread に入っていた。legacy の読むだけは未強制。
+- 対応（ADR D1・D2・D2'・D7・付記）: `POST /console/new-conversation`・`console.new_conversation`（surface registry と
+  ADR 2026-10-09 の表）・`legacy_thread()`・`chat_legacy_default_thread`・`chat_legacy_new_conversation(_tx)` を削除。
+  Console・org の CoS 入力は `start_console_cos` → `chat_console_enqueue` で固定 CoS スレッドへ。`message_post_conn`・
+  `chat_message_post_cos_tx` は legacy を 409 で断る。旧 Console 行の投影は残した legacy スレッドがあればそこへ、無ければ固定スレッドへ。
+  web: Console の「新しい会話」・`conversationStore`・`startNewConversation` を削除、ホームの legacy は composer の代わりに注記。
+  api.md §3.109 と行 98、feature-parity R39 を廃止に更新。
+- 試験: task-api `console_instruct.rs`（3 件を固定スレッド前提に書き換え、スレッド数の不変を追加）、`chat_api.rs`
+  `chat_api_legacy_thread_is_read_only`、`console.rs`・`cos_ops_ops_surface.rs`・celeris-mcp から new-conversation を削除、
+  task-core `chat_store_legacy_thread_is_read_only`・`chat_console_projection_*` 2 件、web `conversation-input.test.tsx` 2 件。
+
 ## 提案
 
 - 統括 CoS の run 文脈に各案件 CoS の summary（`chat_threads.summary`）を短く渡すと、全案件の見渡しが厚くなる。

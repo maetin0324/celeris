@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef } from "react";
 import {
   applyStreamBlock,
   applyStreamHello,
@@ -9,27 +9,18 @@ import {
   emptyCache,
   fetchConsole,
   sendInstruct,
-  startNewConversation,
 } from "./cache";
-import { conversationStore } from "./store";
 import { openConsoleStream } from "./stream";
 
 // Console の hook（P3-01）。REST の初回取得と stream の差分は同じ cache key に入る。
 // `/events` の再取得（api/realtime）とは別の接続。console の key は invalidation の対象にしない。
 
-export function useConversation(scope: string) {
-  return useSyncExternalStore(
-    conversationStore.subscribe,
-    () => conversationStore.get(scope),
-    () => conversationStore.get(scope),
-  );
-}
-
 export function useConsole(scope: string) {
   const client = useQueryClient();
-  const conversation = useConversation(scope);
-  const key = consoleQueryKey(scope, conversation.id);
-  const since = conversation.since;
+  const key = consoleQueryKey(scope);
+  // The Console reads the scope from its start: there is no "new conversation" cut-off
+  // (ADR 2026-10-22-cos-fixed-threads D2').
+  const since = null;
   const query = useQuery<ConsoleCache>({
     queryKey: key,
     queryFn: ({ signal }) => fetchConsole(client, key, scope, since, signal),
@@ -45,7 +36,7 @@ export function useConsole(scope: string) {
   // 初回取得に失敗したときは張らない。stream の hello が空の cache を書くと error が消えて
   // 「まだ会話がありません」と誤って出るため。再試行で取れてから張る。
   const settled = query.status === "success";
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scope と会話が変わったときだけ張り直す
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scope が変わったときだけ張り直す
   useEffect(() => {
     if (!settled) return;
     const stream = openConsoleStream({
@@ -79,17 +70,4 @@ export function useSendInstruct(scope: string) {
       }
     },
   };
-}
-
-/** 新しい会話。成功したら、いまの cursor 以降だけを見る新しい会話 id に切り替える。 */
-export function useNewConversation(scope: string, cursor: string | null) {
-  const client = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: startNewConversation,
-    onSuccess: () => {
-      conversationStore.next(scope, cursor);
-      client.removeQueries({ queryKey: ["console", scope], predicate: (q) => q.getObserversCount() === 0 });
-    },
-  });
-  return { pending: mutation.isPending, error: mutation.error, start: () => mutation.mutate() };
 }

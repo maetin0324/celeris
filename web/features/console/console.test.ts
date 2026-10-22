@@ -44,7 +44,7 @@ describe("blocks", () => {
 describe("cache", () => {
   it("merges REST page and stream deltas into one key without duplicates", () => {
     const client = new QueryClient();
-    const key = consoleQueryKey("all", "0");
+    const key = consoleQueryKey("all");
     applyStreamBlock(client, key, human("2"));
     client.setQueryData<ConsoleCache>(
       key,
@@ -53,7 +53,7 @@ describe("cache", () => {
     const data = client.getQueryData<ConsoleCache>(key);
     expect(data?.blocks.map((b) => b.cursor)).toEqual(["1", "2"]);
     expect(data?.cursor).toBe("2");
-    expect(key).toEqual(["console", "all", "0"]);
+    expect(key).toEqual(["console", "all"]);
   });
   it("omits scope for @mention and all", () => {
     expect(buildInstructBody("@cos hi", "node:x")).toEqual({ text: "@cos hi" });

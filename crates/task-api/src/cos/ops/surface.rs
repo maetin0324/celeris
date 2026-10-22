@@ -2,8 +2,7 @@
 
 use super::super::operations::{DispatchEnv, Matched, OperationAudit};
 use super::super::operations::{
-    audited, decode_optional, decode_problem, effect_value, external_store, path_param,
-    unprocessable,
+    audited, decode_problem, effect_value, external_store, path_param, unprocessable,
 };
 use crate::problem::ApiProblem;
 use serde_json::Value;
@@ -51,11 +50,6 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "DELETE",
         "/api/v1/chat/attachments/{a}",
         "chat.attachment_delete",
-    ),
-    (
-        "POST",
-        "/api/v1/console/new-conversation",
-        "console.new_conversation",
     ),
     ("POST", "/api/v1/org/{id}/messages", "org.message"),
     (
@@ -284,14 +278,6 @@ fn require_empty(
     ))
 }
 
-/// `{"scope": "all" | "project:<id>" | "node:cos"}`: the CoS form of the route's `?scope=`.
-#[derive(serde::Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct ScopeBody {
-    #[serde(default)]
-    scope: Option<String>,
-}
-
 pub(crate) fn dispatch(
     store: &SqliteStore,
     env: &DispatchEnv,
@@ -443,23 +429,6 @@ pub(crate) fn dispatch(
                         .map(|r| r.map(|()| serde_json::json!({"id": id, "deleted": true}))),
                 )
             })
-        }
-        "console.new_conversation" => {
-            let input: ScopeBody = decode_optional(body).map_err(decode)?;
-            let project = crate::console::new_conversation_project(input.scope.as_deref())
-                .map_err(|p| audit.reject(store, "chat_thread", path, p))?;
-            let target = project.map_or_else(|| "cos".to_string(), |p| p.to_string());
-            chat_apply(
-                store,
-                audit,
-                ("chat_thread", &target),
-                matched.action,
-                |tx| {
-                    let thread_id =
-                        task_core::store::chat_legacy_new_conversation_tx(tx, project, now)?;
-                    Ok(serde_json::json!({"thread_id": thread_id}))
-                },
-            )
         }
         "org.message" => {
             let id = matched.id.unwrap_or_default();

@@ -123,7 +123,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | decisions | ops-decisions | decision・approval・inbox・knowledge・notifications | 11 | 11 | 0 |
 | projects | ops-projects | project・milestone・旧 project plan・project docs・reports・standing rules | 23 | 15 | 8 |
 | admin | ops-admin | provider・account・cluster・secret・org 設定・repo・skill・LLM・cron・release・daemon | 45 | 37 | 8 |
-| surface | ops-surface | chat・添付・成果物ページ昇格・org messages・console・browser・cos の再帰除外・評価 dispatcher | 43 | 22 | 21 |
+| surface | ops-surface | chat・添付・成果物ページ昇格・org messages・console・browser・cos の再帰除外・評価 dispatcher | 42 | 21 | 21 |
 
 領域は route の先頭だけで決めない。`projects/.../repos` は admin、`org/.../messages` は surface、
 `org/.../browser-settings` は admin、task 下の browser と artifacts/promote は surface、project docs は projects。
@@ -277,7 +277,6 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/chat/threads/{t}/resume-queue` | A | `chat/mod.rs` | 共通 |
 | POST | `/chat/threads/{t}/stop` | A | `chat/mod.rs` | 共通 |
 | POST | `/console/instruct` | X: `console_instruction_chain` | `console.rs` | 共通 |
-| POST | `/console/new-conversation` | A | `console.rs` | 共通 |
 | POST | `/cos/inbox/{i}/resolve` | X: `recursive_cos` | `cos/inbox.rs` | 共通 |
 | POST | `/cos/operations` | X: `recursive_cos` | `cos/operations.rs` | 共通 |
 | POST | `/cos/operations/{o}/override` | X: `recursive_cos` | `cos/override_op.rs` | 共通 |

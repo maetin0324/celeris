@@ -22,7 +22,7 @@ import { isNearBottom } from "../runs/run-header";
 import { blockKindLabel, blocksVersion, progressPreview, splitFences, stepLine } from "./console-labels";
 import { fetchRunEvents } from "./run-events";
 import { draftStore, expansionStore } from "./store";
-import { useConsole, useNewConversation, useSendInstruct } from "./use-console";
+import { useConsole, useSendInstruct } from "./use-console";
 
 // Console の画面（P3-02）。`/` と `/org/:id` が同じ部品を使う。scope は `all` / `node:<id>` / `project:<id>`。
 // 会話は block ごとに種類の文字 label（あなた・返事・run の作業・質問 …）を出し、色だけで区別しない。
@@ -96,7 +96,6 @@ export function ConsoleView({
 }) {
   const console_ = useConsole(scope);
   const send = useSendInstruct(scope);
-  const fresh = useNewConversation(scope, console_.cursor);
   const draft = useSyncExternalStore(draftStore.subscribe, () => draftStore.get(scope));
   const composing = useRef(false);
   const follow = useFollowPage(blocksVersion(console_.blocks), !contained);
@@ -120,8 +119,9 @@ export function ConsoleView({
 
   return (
     <div className="flex min-w-0 flex-col gap-3 pb-40" data-console data-scope={scope}>
-      {/* contained（ホームの枠）では枠が末尾へ送られても宛先と「新しい会話」を枠の上端に留める。
-          留めないと枠の上端で button が切れ、下辺の線だけが空の枠に見えた（fix-r5/fix-home-states.md）。 */}
+      {/* contained（ホームの枠）では枠が末尾へ送られても宛先を枠の上端に留める
+          （fix-r5/fix-home-states.md）。「新しい会話」は無い: CoS のスレッドは統括 1 本と案件ごとに 1 本に
+          固定され、Console の入力もそこへ積まれる（ADR 2026-10-22-cos-fixed-threads D2'）。 */}
       <div
         data-console-toolbar
         className={cn(
@@ -130,9 +130,6 @@ export function ConsoleView({
         )}
       >
         <p className="min-w-0 break-words text-body text-muted-foreground">宛先: {label}</p>
-        <Button onClick={fresh.start} disabled={fresh.pending}>
-          新しい会話
-        </Button>
       </div>
       {console_.isError ? (
         <ErrorNotice subject="Console の会話" onRetry={() => void console_.refetch()} />

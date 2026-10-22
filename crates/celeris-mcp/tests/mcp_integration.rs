@@ -649,20 +649,16 @@ async fn cos_chat_mcp_new_threads_continuation_and_reply() {
             .unwrap()
             .is_empty()
     );
-    let legacy = server
-        .store
-        .chat_legacy_default_thread(None, OffsetDateTime::now_utc())
-        .unwrap();
-    assert_eq!(
+    // No legacy thread exists or is created by the input (ADR 2026-10-22-cos-fixed-threads D1).
+    assert!(
         server
             .store
-            .chat_thread_get(&legacy)
+            .chat_thread_list(&task_core::chat::ChatThreadQuery::default())
             .unwrap()
-            .unwrap()
-            .queued_count,
-        0
+            .items
+            .iter()
+            .all(|t| t.kind != ChatThreadKind::Legacy)
     );
-    assert_ne!(thread, legacy);
     let listed = server
         .store
         .chat_thread_list(&task_core::chat::ChatThreadQuery::default())
@@ -778,18 +774,17 @@ async fn cos_chat_mcp_new_threads_continuation_and_reply() {
     }
     let mismatch = console_call(&client, &server, &session, "console_instruct", json!({"text":"invalid", "thread_id":second["thread_id"], "project_id":project.id.to_string()})).await;
     assert_eq!(mismatch["error"]["code"], -32602, "{mismatch}");
-    // ADR 2026-10-22-cos-fixed-threads D1: CoS threads are never archived; legacy ones refuse input.
-    for id in ["missing", legacy.as_str()] {
-        let error = console_call(
-            &client,
-            &server,
-            &session,
-            "console_instruct",
-            json!({"text":"invalid", "thread_id":id}),
-        )
-        .await;
-        assert_eq!(error["error"]["code"], -32602, "{error}");
-    }
+    // An unknown thread is refused (legacy read-only refusal: task-core chat store tests and
+    // task-api chat_api `chat_api_legacy_thread_is_read_only`).
+    let error = console_call(
+        &client,
+        &server,
+        &session,
+        "console_instruct",
+        json!({"text":"invalid", "thread_id":"missing"}),
+    )
+    .await;
+    assert_eq!(error["error"]["code"], -32602, "{error}");
     for selector in [
         json!({}),
         json!({"thread_id":thread, "task_id":first["task_id"]}),

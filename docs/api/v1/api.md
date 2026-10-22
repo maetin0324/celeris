@@ -3,6 +3,9 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-22（ADR 2026-10-22-cos-fixed-threads D2/D2'）— **破壊的。v1 のまま**。エンドポイント 98 `POST /console/new-conversation`（§3.109）を消した。
+  `POST /console/instruct`（CoS 宛）と `POST /org/cos/messages` の入力は scope ごとの legacy thread ではなく統括・案件の固定 CoS スレッドへ入る（応答の形は不変）。
+  legacy スレッドへの `POST /chat/threads/{t}/messages` は 409 `chat_conflict`。
 - 改訂: 2026-10-17（ADR 2026-10-17-root-dependency-waits-for-integration D3）— **追加。v1 のまま**。`TaskWait` に kind `depends_on_integration`（`task_id`・`cause`〈`unmerged`/`delivery_skipped`/`held`/`discarded`〉・`detail`）を足した。
 - 改訂: 2026-10-11（ADR 2026-10-11-task-wait-reasons D4・D6）— **破壊的。v1 のまま**。`DaemonSnapshot.awaiting_human[]`・`awaiting_children[]`・`unroutable[]` を消し、`DaemonSnapshot.task_waits[]` の kind（`review_awaiting_human`・`delegated_children`・`unroutable`）へ寄せた（§3.20）。
 - 改訂: 2026-10-08（ADR 2026-10-08-account-concurrency-limits）— **追加と deprecate。v1 のまま**。エンドポイント 216:
@@ -402,7 +405,6 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | — | GET | `/llm/sources/{source_id}` | source 1 件の詳細（一覧と同じ catalog・health view） | `LlmSourceView` | celeris の `LlmSourcesReader` |
 | 103 | GET | `/harnesses` | LLM harness 宣言・適格規則・route candidates | `Vec<HarnessView>` | celeris の `HarnessesReader` |
 | — | GET | `/harnesses/{harness_id}` | harness 1 件の詳細（不明 id は 404） | `HarnessView` | celeris の `HarnessesReader` |
-| 98 | POST | `/console/new-conversation` | 互換 scope の既定 legacy thread を新規作成（CoS chat D6、**管理系**） | 204 | store `chat_threads` / `feed_cursor` |
 | 99 | GET | `/mcp/clients` | MCP クライアントの一覧（トークンの値は出ない。ADR-0056 D4） | `McpClientsView` | store `mcp_clients` |
 | 100 | GET | `/mcp/calls` | MCP の呼び出しログ（`?client=`） | `McpCallsView` | store `mcp_calls` |
 | 101 | GET | `/skills` | skill の一覧（name / description / updated / mounted_by。ADR-0056 D3 続き、Phase 82） | `SkillList` | KB `skills/` + org |
@@ -2865,13 +2867,10 @@ LLM source のローカル OpenAI 互換プロキシ（`crates/llm-proxy`。`127
   形（`tier` / `resolves_to`）は古いスナップショットとの互換のために残すだけで、新しい読み手は使わない。
   古いスナップショットには無いので省略時は空配列として扱う。
 
-### 3.109 `POST /console/new-conversation` → 204（管理系。CoS chat D6）
+### 3.109 `POST /console/new-conversation`（廃止。2026-10-22）
 
-旧 Console の「新しい会話」ボタンの入口。互換 scope の既定 legacy thread を新しく作り、次の旧入力をそこへ積む。旧 thread の履歴と新 UI の別 thread は残り、継続 session を retire しない。
-
-- 要求本文は無い（`{}` を送っても無視される）。省略時の scope は `all`。任意の `?scope=project:<id>` で案件の既定だけを切り替えられる。`node:cos` は `all` と同じ扱い。
-- 成功時は **204**。新しく作られた thread ID は旧応答に追加しない。
-- CoS 以外の node scope は 400。存在しない project scope は 422。管理認証が無ければ 401。
+ADR 2026-10-22-cos-fixed-threads D2 で消した（404）。CoS のスレッドは統括 1 本と案件ごとに 1 本に固定され、旧 Console の入力（§3.107）も
+その scope の固定スレッドへ入る。新しい会話を作る入口は無い。
 
 ### 3.110〜3.111 MCP サーバーの観測（ADR-0056 D4。読み取り）
 
@@ -3533,7 +3532,6 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | surface | `POST /chat/threads/{t}/resume-queue` | `chat.queue_resume` |
 | surface | `POST /chat/threads/{t}/attachments` | `chat.attachment_upload`（外部効果: file。本文は `{"client_upload_id","name","content_base64"}`、記録に中身は残さない） |
 | surface | `DELETE /chat/attachments/{a}` | `chat.attachment_delete`（外部効果: file） |
-| surface | `POST /console/new-conversation` | `console.new_conversation`（本文 `{"scope"}`。route の `?scope=` と同じ値） |
 | surface | `POST /org/{id}/messages` | `org.message`（外部効果: run の起動。`{id}`=cos は 422 `cos_self_chain`） |
 | surface | `POST /tasks/{id}/artifacts/promote` | `artifact.promote`（外部効果: docs git） |
 | surface | `PUT /browser/site-policies/{policy_id}` | `browser.site_policy_put`（外部効果） |

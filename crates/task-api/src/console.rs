@@ -6,7 +6,7 @@
 //!
 //! `POST /console/instruct`（D3。Phase 60b）: 素の文の入力口。`@<node-id> ` で始まる文か
 //! `scope=node:<id>` はそのノードとの対話（既存の `POST /org/{id}/messages` と同じ経路）に、
-//! それ以外は CoS（根ノード）の legacy chat thread に積む。非 CoS は従来の
+//! それ以外は CoS（根ノード）の固定スレッド（統括・案件。ADR 2026-10-22-cos-fixed-threads D2'）に積む。非 CoS は従来の
 //! `task_ops::conversation::start` に委ねる。LLM はここでは呼ばない。
 //!
 //! 読み取りは状態を変えない。`events` / `messages` / `chat_messages` / `approvals` /
@@ -51,11 +51,6 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         .route("/api/v1/console", axum::routing::get(console))
         .route("/api/v1/console/stream", axum::routing::get(stream))
         .route("/api/v1/console/instruct", axum::routing::post(instruct))
-        // D6: 互換 scope の既定 legacy thread を新規作成する。
-        .route(
-            "/api/v1/console/new-conversation",
-            axum::routing::post(new_conversation),
-        )
         // ADR-0048 D2: 折り畳んだ `progress` を開いたときに取る、その run の全行。
         .route(
             "/api/v1/tasks/{id}/runs/{run_id}/events",
@@ -163,7 +158,7 @@ async fn instruct(
             };
             let now = OffsetDateTime::now_utc();
             if node_id == COS_ID {
-                task_ops::conversation::start_legacy_cos(
+                task_ops::conversation::start_console_cos(
                     store,
                     project_id,
                     None,
@@ -206,53 +201,6 @@ async fn instruct(
             node_id: started.message.node_id,
         },
     ))
-}
-
-// ---- POST /console/new-conversation（ADR-0054 D1。Phase 67）----
-
-/// `POST /console/new-conversation`: 互換 scope の既定 legacy thread を切り替える。
-/// 旧 thread と新 UI の thread は保存し、204 を返す。
-async fn new_conversation(
-    State(state): State<ApiState>,
-    headers: HeaderMap,
-    RawQuery(raw): RawQuery,
-) -> ApiResult {
-    require_admin(&state, &headers)?;
-    let query = QueryParams::parse(raw.as_deref(), &["scope"])?;
-    let project_id = new_conversation_project(query.single("scope")?)?;
-    state
-        .blocking(move |store| {
-            let thread_id = store
-                .chat_legacy_new_conversation(project_id, OffsetDateTime::now_utc())
-                .map_err(crate::chat::chat_problem)?;
-            tracing::info!(
-                who = "admin",
-                op = "console_new_conversation",
-                thread_id,
-                "admin: created a new default legacy thread"
-            );
-            Ok(())
-        })
-        .await?;
-    state.chat.events.notify_waiters();
-    Ok(axum::response::IntoResponse::into_response(
-        StatusCode::NO_CONTENT,
-    ))
-}
-
-/// `scope` of `POST /console/new-conversation` (the CoS operation `console.new_conversation`
-/// reads it from the body): the project of the new legacy thread, or `None` for the CoS scope.
-pub(crate) fn new_conversation_project(
-    scope: Option<&str>,
-) -> Result<Option<task_core::ProjectId>, ApiProblem> {
-    match Scope::parse(scope)? {
-        Scope::All => Ok(None),
-        Scope::Node(id) if id == COS_ID => Ok(None),
-        Scope::Node(_) => Err(ApiProblem::bad_request(
-            "new conversation requires a CoS scope",
-        )),
-        Scope::Project(id) => Ok(Some(id)),
-    }
 }
 
 // ---- 範囲 ----

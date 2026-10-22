@@ -7,6 +7,9 @@
   こと。「コンテキストが逼迫しない限りセッションを継続。CoS に限らず、レビューや詳細な仕事切り分けを担当する部門長ワーカーも
   セッションをある程度継続」。サブエージェントの流れは ADR-0048 の理解どおり）
 - 関連: ADR-0048（Console。D2 の progress の正規化、D3 の actions）、ADR-0033 D4（対話の規則）、ADR-0046 D6（CoS = 根）、ADR-0051（部署のレビュー）
+- 2026-10-22 付記: D1 の「人が Console の『新しい会話』を押す」経路（`POST /console/new-conversation`、api.md §3.109）は
+  [2026-10-22-cos-fixed-threads](2026-10-22-cos-fixed-threads.md) D2 で消した。CoS の session は統括・案件ごとの固定スレッドに紐づき、
+  Console の入力もそのスレッドへ入る（同 D2'）。
 
 ## 1. 決定
 

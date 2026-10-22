@@ -3,12 +3,12 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import type { ChatMessage } from "../../../api/generated/types";
 import { ScreenFrame } from "../../../components/shell/screen-frame";
 import { ChatCardItem } from "../cards/chat-card";
-import { ChatComposer, COS_COMPOSER_PLACEHOLDER } from "../composer/chat-composer";
 import { useChatSession } from "../data/use-chat-session";
 import { attachmentIdsOf, useAttachmentMap, useOlderMessages } from "../messages/history";
 import { MessageList } from "../messages/message-list";
 import { ThreadsModel } from "../threads/model";
 import { ChatThreads } from "../threads/threads";
+import { ConversationInput } from "./conversation-input";
 
 /** URL は選択した会話の正本。未指定のときは統括 CoS を開く（ADR 2026-10-22-cos-fixed-threads D5）。 */
 export function ChatHome() {
@@ -136,12 +136,7 @@ function ChatConversation({ threadId, model }: { threadId: string; model: Thread
         }
         empty={<p className="mx-auto max-w-3xl text-muted-foreground">CoS にメッセージを送って会話を始めましょう。</p>}
       />
-      <ChatComposer
-        threadId={threadId}
-        session={session}
-        snapshot={snapshot}
-        placeholder={chat.thread && chat.thread.kind !== "legacy" ? COS_COMPOSER_PLACEHOLDER : undefined}
-      />
+      <ConversationInput thread={chat.thread} threadId={threadId} session={session} snapshot={snapshot} />
     </>
   );
 }

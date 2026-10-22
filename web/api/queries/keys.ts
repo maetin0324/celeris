@@ -96,7 +96,7 @@ export const mcpKeys = listDomain("mcp");
 
 export const consoleKeys = {
   all: ["console"] as const,
-  conversation: (scope: string, conversationId: string) => ["console", scope, conversationId] as const,
+  conversation: (scope: string) => ["console", scope] as const,
 };
 
 /** CoS チャット（ADR 2026-10-05-cos-chat-home D2）。stream の状態は query にせず features/chat/data の reducer が持つ。

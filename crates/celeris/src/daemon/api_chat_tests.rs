@@ -124,7 +124,9 @@ fn chat_wiring_daemon_store_open_runs_legacy_migration() {
         )
         .expect("old message");
     }
-    // The daemon start-up path opens the store (and so runs the legacy projection).
+    // The daemon start-up path opens the store (and so runs the Console projection). Without a
+    // legacy thread kept by migration 0092 the row lands on the general CoS thread
+    // (ADR 2026-10-22-cos-fixed-threads D1: nothing creates a legacy thread).
     let _dispatcher = crate::build_dispatcher(&cfg, Default::default()).expect("dispatcher");
     let conn = rusqlite::Connection::open(&cfg.db.path).expect("conn");
     let (kind, text): (String, String) = conn
@@ -135,6 +137,6 @@ fn chat_wiring_daemon_store_open_runs_legacy_migration() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .expect("legacy message");
-    assert_eq!(kind, "legacy");
+    assert_eq!(kind, "general");
     assert_eq!(text, "旧 Console の発言");
 }

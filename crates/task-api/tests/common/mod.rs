@@ -782,6 +782,21 @@ pub fn userns_available() -> bool {
 /// The CoS thread of a new project titled `key` (ADR 2026-10-22-cos-fixed-threads D1): tests that
 /// need separate threads (one live run each) get one per project.
 #[allow(dead_code)]
+/// A read-only legacy thread as migration 0092 leaves old conversations (ADR
+/// 2026-10-22-cos-fixed-threads D1). Nothing in the daemon creates one, so tests insert the row.
+pub fn legacy_thread(env: &TestEnv, title: &str) -> String {
+    let id = format!("legacy:{}", task_core::ProjectId::new());
+    let now = "2026-10-21T00:00:00Z";
+    let conn = rusqlite::Connection::open(&env.db_path).expect("open db");
+    conn.execute(
+        "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) \
+         VALUES(?1,'legacy',?2,'open',?3,?3)",
+        rusqlite::params![id, title, now],
+    )
+    .expect("legacy thread");
+    id
+}
+
 pub fn project_cos_thread(
     store: &task_core::SqliteStore,
     key: &str,

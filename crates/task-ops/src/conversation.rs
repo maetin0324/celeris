@@ -133,10 +133,11 @@ pub fn start_with_milestone(
     )
 }
 
-/// Compatibility input reserves the old identifiers and visible message, but the
-/// CoS reply is scheduled by the chat queue rather than by a legacy task run.
+/// Console input to the CoS (`POST /console/instruct`, `POST /org/cos/messages`) reserves the
+/// old identifiers and visible message, but the CoS reply is scheduled by the chat queue of the
+/// fixed general or project CoS thread (ADR 2026-10-22-cos-fixed-threads D2'), not by a task run.
 #[allow(clippy::too_many_arguments)]
-pub fn start_legacy_cos(
+pub fn start_console_cos(
     store: &task_core::SqliteStore,
     project_id: Option<ProjectId>,
     author: Option<&str>,
@@ -160,7 +161,7 @@ pub fn start_legacy_cos(
         false,
     )?;
     store
-        .chat_legacy_enqueue(&started.message, now)
+        .chat_console_enqueue(&started.message, now)
         .map_err(|e| OpsError::Validation(e.to_string()))?;
     Ok(started)
 }

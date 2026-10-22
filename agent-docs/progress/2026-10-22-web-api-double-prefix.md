@@ -18,7 +18,8 @@ tasks: [01M5JAYKJ5W80FD5954CXHDNEX]
 - `pnpm exec vitest run`（web）: 96 files・676 tests pass。
 - `pnpm typecheck`・`pnpm exec biome check .`: exit 0（warning 4 件は既存）。
 - `playwright test e2e/admin/settings-routing.spec.ts`: 2 passed。shell/realtime/help/gateway-relay: 15 passed。
-- `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`: 報告本文に記載。
+- attempt 2（HEAD 0d2987b7 の上で再確認）: `bash scripts/dev/test-affected.sh` exit 0・約 11 秒（web unit: vitest 96 files・676 tests、node --test server 93 tests）。`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` exit 0。
+- 前回 attempt の決定的 check で test-affected が 1200 秒で時間切れになった。同じ HEAD で再実行すると 11 秒で通り、原因は再現しなかった。cargo 試験は走らず（crates の差分なし）、web の unit 試験と `cargo metadata` だけが走る。check の環境側で詰まった可能性がある（未特定）。
 
 ## 本番への移行
 - 無し（web の release で反映）。

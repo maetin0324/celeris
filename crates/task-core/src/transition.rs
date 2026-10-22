@@ -553,8 +553,10 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
         }
 
         // ADR-0079 D8（Phase R3b）: root の計画の承認待ち。`PhaseGate` と同じ形（attempts 不変）。
+        // `Ready` からは、承認されないまま ready に戻った task を承認待ちへ戻す dispatcher の修復
+        // （ADR 2026-10-22-comment-on-human-gate D2）。
         Trigger::PlanGate { .. } => {
-            if s.status == Status::Running {
+            if matches!(s.status, Status::Running | Status::Ready) {
                 Ok(Outcome {
                     next: Status::Blocked,
                     attempts: s.attempts,

@@ -4,7 +4,8 @@
 //! |---|---|
 //! | `running` / `reviewing` | `Trigger::Interrupt` で `ready` に戻す（attempts 据え置き、理由 `comment`）。
 //!   `Event::WorkerFinished{outcome: "interrupted: comment"}` を同じトランザクションで積む。報告は作らない |
-//! | `blocked` | `answer` と同じ（ADR-0021 D2。質問への回答として渡す） |
+//! | `blocked`（質問待ち） | `answer` と同じ（ADR-0021 D2。質問への回答として渡す） |
+//! | `blocked`（`awaiting_human` / `awaiting_plan_approval`） | コメントを記録するだけ（状態は動かさない。ADR 2026-10-22-comment-on-human-gate） |
 //! | `ready` / `draft` | コメントを記録するだけ（次の run の前置きに載る） |
 //! | `done` / `failed` / `cancelled` | コメントを記録するだけ（GUI が「再開」を出す。`reopen` は別の API） |
 //!
@@ -146,6 +147,11 @@ pub fn plan_human_comment(
         // コメント・`Trigger::Answer`・`Event::Answered` を**同じトランザクション**で書く
         // （`gate::answer` を呼ぶと 2 つ目の tx になり、その間に blocked を抜けると
         // 「コメントだけ残って回答が消える」ので。Phase 53 の監査で発見）。
+        // 人の止まり方（途中確認 `awaiting_human`・計画の承認待ち `awaiting_plan_approval`）は質問ではない
+        // （`Answer` を受けない。`is_human_gate`）。コメントは記録するだけで、承認は plan-gate / phase-gate で行う。
+        Status::Blocked if crate::plan_gate::is_human_gate(&task, &store.events_for(id)?) => {
+            (CommentEffect::Stored, None)
+        }
         Status::Blocked => {
             let question = crate::derive::latest_question(&store.events_for(id)?);
             let answered = Event::Answered {

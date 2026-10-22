@@ -337,6 +337,73 @@ async fn task_wait_stage_gate_review_human_hold_matches_the_api_waits() {
     assert_eq!(d.human_gate_hold(&stored, &active, &events), None);
 }
 
+/// ADR 2026-10-22-comment-on-human-gate（本番 2026-10-22 08:08Z, 01M5HABE5N）:
+/// 1. 承認待ちの task への人のコメントは記録するだけで状態を動かさず、その後も approve が通る。
+/// 2. 旧挙動で `answer` に化けて `ready` に宙づりになった task（active plan が未承認）は、dispatcher が
+///    `awaiting_plan_approval` に戻し、approve が通る。
+#[tokio::test]
+async fn comment_on_plan_approval_keeps_the_gate_and_a_stranded_ready_task_returns_to_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", true), stage("s2", false)],
+        vec![leaf("a", "s1", &[]), task_unit("c", "s2", &["a"], "true")],
+    );
+    let adapter = Arc::new(GateAdapter::new(vec![plan]));
+    let mut d = tree_dispatcher(&store, adapter);
+    run_until_quiet(&mut d, &store, 400).await;
+    let task = store.get(root_id).unwrap().unwrap();
+    assert!(task_ops::plan_gate::is_awaiting_plan_approval(
+        &task,
+        &store.events_for(root_id).unwrap()
+    ));
+
+    // 1. comment は Stored のみ。
+    let res = task_ops::comment::post_human_comment(
+        store.as_ref(),
+        root_id,
+        "補足".into(),
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    assert_eq!(res.effect, task_ops::comment::CommentEffect::Stored);
+    assert!(res.transition.is_none());
+    let task = store.get(root_id).unwrap().unwrap();
+    assert_eq!(task.status, Status::Blocked);
+    assert!(
+        !store
+            .events_for(root_id)
+            .unwrap()
+            .iter()
+            .any(|(_, e)| matches!(e, Event::Answered { .. }))
+    );
+
+    // 2. 旧挙動の再現: Answer で ready に宙づりにする。
+    store
+        .apply_transition(
+            root_id,
+            task_core::Trigger::Answer,
+            Some(Event::Answered {
+                question: String::new(),
+                answer: "補足".into(),
+            }),
+        )
+        .unwrap();
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Ready);
+    run_until_quiet(&mut d, &store, 400).await;
+    let task = store.get(root_id).unwrap().unwrap();
+    assert_eq!(task.status, Status::Blocked, "{task:?}");
+    assert!(task_ops::plan_gate::is_awaiting_plan_approval(
+        &task,
+        &store.events_for(root_id).unwrap()
+    ));
+    approve_root_plan(&store, root_id);
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Ready);
+}
+
 /// D3（木の節点）: 節点の `max_replans` を使い切った後に leaf が失敗しても root を `failed` にせず、
 /// `limit:max_replans` の決定（`needed_before: self`）で人に聞く（質問は作らない）。`raise-once` の回答で replan
 /// が 1 回起き、直した版で done まで進む。

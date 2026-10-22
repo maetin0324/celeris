@@ -446,6 +446,23 @@ impl Dispatcher {
             && let Some(why) = self.human_gate_hold(&task, &active_plan, &events)
         {
             tracing::debug!(%task_id, hold = why, "a human gate holds the plan's units; not dispatching (ADR-0079 R6-1)");
+            // ADR 2026-10-22-comment-on-human-gate D2: 承認されないまま `ready` にいる task は誰も承認できない
+            // （plan-gate は 409）。直前の遷移が `answer` の宙づりだけを承認待ちへ戻して受信箱に出す（replan 待ちの
+            // `ready` は plan_invalid の決定が人への問いなので触らない）。
+            if why == "plan_gate_pending"
+                && task.status == task_core::Status::Ready
+                && task_ops::plan_gate::plan_gate_state(&active_plan, &events)
+                    == task_ops::plan_gate::PlanGateState::Pending
+                && task_ops::phase_gate::last_transition_reason(&events) == Some("answer")
+            {
+                self.store.apply_transition_with_events(
+                    task_id,
+                    task_core::Trigger::PlanGate {
+                        plan_id: active_plan.id.clone(),
+                    },
+                    Vec::new(),
+                )?;
+            }
             return Ok(WuDispatchGate::Skip);
         }
         // ADR-0074 D1.3（Phase F2b）: v2 の計画は工程ごとの scheduler（`settle_phase` /

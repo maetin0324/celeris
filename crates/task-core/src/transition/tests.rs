@@ -150,8 +150,17 @@ fn expected_simple(kind: TaskKind, status: Status, trigger: &Trigger) -> Expecte
             }
         }
         // ADR-0074 D2.2（Phase F3 途中確認）/ ADR-0079 D8（Phase R3b）: `Running` からだけ `Blocked` へ。
-        Trigger::PhaseGate { .. } | Trigger::PlanGate { .. } => {
+        Trigger::PhaseGate { .. } => {
             if status == Status::Running {
+                expect_ok(Status::Blocked)
+            } else {
+                expect_err()
+            }
+        }
+        // `PlanGate` は `Ready` からも（承認されないまま ready に戻った task を承認待ちへ戻す修復。
+        // ADR 2026-10-22-comment-on-human-gate D2）。
+        Trigger::PlanGate { .. } => {
+            if matches!(status, Status::Running | Status::Ready) {
                 expect_ok(Status::Blocked)
             } else {
                 expect_err()

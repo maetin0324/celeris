@@ -356,6 +356,7 @@ impl Stub {
                     .iter()
                     .any(|(k, v)| k == "authorization" && v == &format!("Bearer {TOKEN_VALUE}"));
                 if !auth_ok {
+                    eprintln!("stub received unauthenticated request: {m} {p}");
                     st.lock().expect("state").bad_auth += 1;
                 }
                 let (code, v) = handle(&st, &config, &m, &p, &b);

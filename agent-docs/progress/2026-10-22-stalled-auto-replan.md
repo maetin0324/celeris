@@ -42,3 +42,17 @@ tasks: [01M5HZ7JR0K9C9EN6BGE8T25XV]
 
 ## 本番への移行
 - 無し（config・migration の変更なし）。
+
+## 再試行（attempt 3、検査の再確認）
+- 開始時 HEAD と task branch はともに `6bbf25a8`、作業ツリーはクリーン。前回の実装を保持した。
+- reviewer の `arm_set_cli_normal::ab_only_counts_repetitions_retries_grading_and_cost_and_resumes_without_reposting`
+  における `bad_auth == 2` は再現せず、原因は未特定。認証の検査は維持し、HTTP stub に不一致時の method/path の診断を
+  追加した。認証 header・token は出力しない。認証失敗の根本修正を済ませたという主張ではない。
+- `bash scripts/dev/test-affected.sh`: exit 0、6274 passed / 16 skipped、doc test も成功。
+- `cargo nextest run -p celeris-campaign --test arm_set_cli_normal`: exit 0、6 passed。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `pnpm exec vitest run api/realtime`（web）: exit 0、3 files / 61 passed。
+- 全出力は `/local/celeris/data/workspaces/01M5HZ7JR0K9C9EN6BGE8T25XV/artifacts/` の
+  `attempt3-test-affected.log`、`attempt3-campaign.log`、`attempt3-clippy.log`、`attempt3-fmt.log`、
+  `attempt3-web-realtime.log` に保存。

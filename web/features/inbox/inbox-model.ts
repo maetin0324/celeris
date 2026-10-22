@@ -106,7 +106,7 @@ export function browserWaitBadge(item: InboxItem, waits: readonly BrowserWait[] 
 
 /**
  * credential 待ち item（ADR 2026-10-15-mlsys-min-decision-assisted D4）が待つ secret id。
- * answer.native.path（`/api/v1/secrets/{id}`）の最後の区切りで、値ではなく id だけ。
+ * answer.native.path（daemon の path、/api/v1/secrets/{id}）の最後の区切りで、値ではなく id だけ。
  */
 export function credentialSecretId(item: InboxItem): string | null {
   if (item.kind !== "credential_wait") return null;

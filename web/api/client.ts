@@ -90,11 +90,23 @@ export function abortSessionRequests(): void {
   sessionController = new AbortController();
 }
 
-/** same-origin の `/api/` 配下だけを許す。絶対 URL・`//host`・`..` を含む path は投げる。 */
+const DAEMON_PREFIX = /^\/api\/v1(\/|\?|$)/;
+
+/** same-origin の `/api/` 配下だけを許す。絶対 URL・`//host`・`..` を含む path は投げる。
+ * gateway が /api/x を daemon の /api/v1/x へ前置するので、/api/v1/... を渡すと /api/v1/v1/... になって 404 になる。
+ * その二重前置も投げる（daemon が返す path は apiPathFromDaemon で直してから渡す）。 */
 export function assertApiPath(path: string): void {
   if (!path.startsWith("/api/") || path.startsWith("//") || path.includes("\\") || /(^|\/)\.\.(\/|$|\?)/.test(path)) {
     throw new TypeError(`API path must be a same-origin /api/ path: ${path}`);
   }
+  if (DAEMON_PREFIX.test(path)) {
+    throw new TypeError(`API path must not carry the daemon prefix /api/v1 (the gateway adds it): ${path}`);
+  }
+}
+
+/** daemon が応答に載せる path（/api/v1/x、例: 受信箱の answer.native.path）を client の /api/x にする。 */
+export function apiPathFromDaemon(path: string): string {
+  return path.replace(DAEMON_PREFIX, "/api$1");
 }
 
 async function readBody(response: Response): Promise<unknown> {

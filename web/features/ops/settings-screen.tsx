@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiGet, apiMutate, isApiError } from "../../api/client";
 import type {
@@ -24,6 +24,21 @@ const settingsKeys = {
   fields: ["config", "fields"] as const,
   events: ["config", "events"] as const,
 };
+
+// path は api client の規約どおり /api/...（gateway が daemon の /api/v1/... へ前置する）。
+export const configFieldsQuery = queryOptions({
+  queryKey: settingsKeys.fields,
+  queryFn: ({ signal }) => apiGet<ConfigFieldsView>("/api/config/fields", signal),
+});
+
+export const configEventsQuery = queryOptions({
+  queryKey: settingsKeys.events,
+  queryFn: ({ signal }) => apiGet<ConfigEventList>("/api/config/events", signal),
+});
+
+export function patchConfigField(key: string, value: unknown): Promise<ConfigPatchResult> {
+  return apiMutate<ConfigPatchResult>("PATCH", "/api/config/fields", { changes: [{ key, value }] });
+}
 
 export const applyUnitLabel: Record<string, string> = {
   next_tick: "次の tick から",
@@ -304,17 +319,10 @@ export function SettingsView({
 
 export function SettingsScreen() {
   const client = useQueryClient();
-  const fields = useQuery({
-    queryKey: settingsKeys.fields,
-    queryFn: ({ signal }) => apiGet<ConfigFieldsView>("/api/v1/config/fields", signal),
-  });
-  const events = useQuery({
-    queryKey: settingsKeys.events,
-    queryFn: ({ signal }) => apiGet<ConfigEventList>("/api/v1/config/events", signal),
-  });
+  const fields = useQuery(configFieldsQuery);
+  const events = useQuery(configEventsQuery);
   const save = useMutation({
-    mutationFn: ({ key, value }: { key: string; value: unknown }) =>
-      apiMutate<ConfigPatchResult>("PATCH", "/api/v1/config/fields", { changes: [{ key, value }] }),
+    mutationFn: ({ key, value }: { key: string; value: unknown }) => patchConfigField(key, value),
     onSettled: () => {
       void client.invalidateQueries({ queryKey: ["config"] });
     },

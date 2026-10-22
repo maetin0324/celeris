@@ -42,7 +42,7 @@ export function backoffDelay(attempt: number, base = BACKOFF_BASE_MS, max = BACK
 
 export async function defaultProbe(): Promise<ProbeResult> {
   try {
-    await apiFetch("/api/v1/health");
+    await apiFetch("/api/health");
     return "ok";
   } catch (error) {
     if (error instanceof ApiError && error.kind === "unauthorized") return "unauthorized";

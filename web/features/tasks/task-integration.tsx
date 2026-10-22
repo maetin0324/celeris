@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { apiMutate } from "../../api/client";
+import { apiMutate, apiPathFromDaemon } from "../../api/client";
 import type {
   InboxItem,
   IntegrationActionResult,
@@ -30,7 +30,7 @@ export function integrationActionPath(
   repoName: string,
   method: "merge" | "discard" | "hold" | "reopen",
 ): string {
-  return `/api/v1/tasks/${encodeURIComponent(taskId)}/integrations/${encodeURIComponent(repoName)}/${method}`;
+  return `/api/tasks/${encodeURIComponent(taskId)}/integrations/${encodeURIComponent(repoName)}/${method}`;
 }
 
 export function TaskIntegrationActions({
@@ -100,7 +100,8 @@ export function TaskIntegrationActions({
 }
 
 export function InboxIntegrationActions({ item }: { item: InboxItem }) {
-  const mergePath = item.answer.native?.path;
+  const native = item.answer.native?.path;
+  const mergePath = native === undefined ? undefined : apiPathFromDaemon(native);
   return (
     <div data-testid="inbox-integration-actions">
       <IntegrationControls

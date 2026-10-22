@@ -1,7 +1,18 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { configureApiClient } from "../../api/client";
+import { fakeGateway } from "../../api/fake-gateway";
 import type { RoutingEvidenceList, RoutingStageList } from "../../api/generated/types";
-import { RoutingView } from "./routing-screen";
+import { RoutingScreen, RoutingView, routingEvidenceQuery, routingStagesQuery } from "./routing-screen";
+
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ to, children, ...props }: { to: string; children: React.ReactNode }) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
+}));
 
 const stages: RoutingStageList = {
   stages: [
@@ -78,5 +89,29 @@ describe("RoutingView", () => {
     expect(html).toContain("— / —");
     expect(html).toContain("celerisctl または API");
     expect(html).not.toContain("承認する");
+  });
+});
+
+describe("RoutingScreen against the gateway", () => {
+  afterEach(() => configureApiClient({ fetcher: (input, init) => fetch(input, init) }));
+
+  it("requests /api/routing/* once-prefixed (daemon /api/v1/routing/*) and renders the values", async () => {
+    const gateway = fakeGateway({ "/api/v1/routing/stages": stages, "/api/v1/routing/evidence": evidence });
+    configureApiClient({ fetcher: gateway.fetcher });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await Promise.all([client.fetchQuery(routingStagesQuery), client.fetchQuery(routingEvidenceQuery)]);
+    expect(gateway.calls.map((c) => [c.method, c.path, c.daemonPath])).toEqual([
+      ["GET", "/api/routing/stages", "/api/v1/routing/stages"],
+      ["GET", "/api/routing/evidence", "/api/v1/routing/evidence"],
+    ]);
+
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={client}>
+        <RoutingScreen />
+      </QueryClientProvider>,
+    );
+    expect(html).toContain("段階（1）");
+    expect(html).toContain("source-a / model-x");
+    expect(html).toContain("38/40");
   });
 });

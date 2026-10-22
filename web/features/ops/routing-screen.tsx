@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { queryOptions, useQuery } from "@tanstack/react-query";
 import { apiGet } from "../../api/client";
 import type { RoutingEvidenceList, RoutingStageList } from "../../api/generated/types";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
@@ -124,15 +124,20 @@ export function RoutingView({ stages, evidence }: { stages: RoutingStageList; ev
   );
 }
 
+// path は api client の規約どおり /api/...（gateway が daemon の /api/v1/... へ前置する）。
+export const routingStagesQuery = queryOptions({
+  queryKey: ["routing", "stages"],
+  queryFn: ({ signal }) => apiGet<RoutingStageList>("/api/routing/stages", signal),
+});
+
+export const routingEvidenceQuery = queryOptions({
+  queryKey: ["routing", "evidence"],
+  queryFn: ({ signal }) => apiGet<RoutingEvidenceList>("/api/routing/evidence", signal),
+});
+
 export function RoutingScreen() {
-  const stages = useQuery({
-    queryKey: ["routing", "stages"],
-    queryFn: ({ signal }) => apiGet<RoutingStageList>("/api/v1/routing/stages", signal),
-  });
-  const evidence = useQuery({
-    queryKey: ["routing", "evidence"],
-    queryFn: ({ signal }) => apiGet<RoutingEvidenceList>("/api/v1/routing/evidence", signal),
-  });
+  const stages = useQuery(routingStagesQuery);
+  const evidence = useQuery(routingEvidenceQuery);
   const data = stages.data && evidence.data ? { stages: stages.data, evidence: evidence.data } : undefined;
   const query = {
     data,

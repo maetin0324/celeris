@@ -1,7 +1,27 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { configureApiClient } from "../../api/client";
+import { fakeGateway } from "../../api/fake-gateway";
 import type { ConfigEventList, ConfigFieldsView } from "../../api/generated/types";
-import { parseInput, restartMessage, ruleFor, SettingsView } from "./settings-screen";
+import {
+  configEventsQuery,
+  configFieldsQuery,
+  parseInput,
+  patchConfigField,
+  restartMessage,
+  ruleFor,
+  SettingsScreen,
+  SettingsView,
+} from "./settings-screen";
+
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ to, children, ...props }: { to: string; children: React.ReactNode }) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
+}));
 
 const rules: ConfigFieldsView["rules"] = [
   { key: "execution", class: "dynamic", apply_unit: "next_dispatch", reason: "次の判定から" },
@@ -126,5 +146,47 @@ describe("settings helpers", () => {
     expect(parseInput('["a","b"]')).toEqual(["a", "b"]);
     expect(parseInput("decision_assisted")).toBe("decision_assisted");
     expect(parseInput("  ")).toBeNull();
+  });
+});
+
+describe("SettingsScreen against the gateway", () => {
+  afterEach(() => configureApiClient({ fetcher: (input, init) => fetch(input, init) }));
+
+  it("requests /api/config/* once-prefixed (daemon /api/v1/config/*) and renders the values", async () => {
+    const gateway = fakeGateway({
+      "/api/v1/config/fields": fields,
+      "/api/v1/config/events": events,
+    });
+    configureApiClient({ fetcher: gateway.fetcher });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await Promise.all([client.fetchQuery(configFieldsQuery), client.fetchQuery(configEventsQuery)]);
+    expect(gateway.calls.map((c) => [c.method, c.path, c.daemonPath])).toEqual([
+      ["GET", "/api/config/fields", "/api/v1/config/fields"],
+      ["GET", "/api/config/events", "/api/v1/config/events"],
+    ]);
+
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={client}>
+        <SettingsScreen />
+      </QueryClientProvider>,
+    );
+    expect(html).toContain("/home/u/.config/celeris/config.toml");
+    expect(html).toContain('id="config-execution.max_replans"');
+    expect(html).toContain("変更の履歴（1）");
+  });
+
+  it("sends PATCH to /api/config/fields", async () => {
+    const result = { changes: [] };
+    const gateway = fakeGateway({ "/api/v1/config/fields": result });
+    configureApiClient({ fetcher: gateway.fetcher });
+    await expect(patchConfigField("execution.max_replans", 4)).resolves.toEqual(result);
+    expect(gateway.calls).toEqual([
+      {
+        method: "PATCH",
+        path: "/api/config/fields",
+        daemonPath: "/api/v1/config/fields",
+        body: { changes: [{ key: "execution.max_replans", value: 4 }] },
+      },
+    ]);
   });
 });

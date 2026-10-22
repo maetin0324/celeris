@@ -76,7 +76,7 @@ describe("integration buttons call the task-api contract", () => {
     expect(calls.slice(index)).toEqual([
       {
         method: "POST",
-        path: `/api/v1/tasks/T%201/integrations/${repo}/${method}`,
+        path: `/api/tasks/T%201/integrations/${repo}/${method}`,
         body: reason === undefined ? null : { reason },
       },
     ]);

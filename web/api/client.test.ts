@@ -1,5 +1,15 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, abortSessionRequests, apiFetch, apiMutate, configureApiClient, kindForStatus } from "./client";
+import {
+  ApiError,
+  abortSessionRequests,
+  apiFetch,
+  apiMutate,
+  apiPathFromDaemon,
+  configureApiClient,
+  kindForStatus,
+} from "./client";
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -27,6 +37,28 @@ describe("apiFetch", () => {
       await expect(apiFetch(path)).rejects.toThrow(TypeError);
     }
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("daemon の前置 /api/v1 を付けた path は二重前置として投げる（gateway が前置する）", async () => {
+    const fetcher = vi.fn();
+    configureApiClient({ fetcher });
+    for (const path of ["/api/v1/config/fields", "/api/v1", "/api/v1?x=1", "/api/v1/routing/stages"]) {
+      await expect(apiFetch(path)).rejects.toThrow(/daemon prefix/);
+      await expect(apiMutate("PATCH", path, {})).rejects.toThrow(TypeError);
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+    // 前置の無い同名の segment は通す。
+    fetcher.mockImplementation(async () => json(200, {}));
+    await expect(apiFetch("/api/v1x")).resolves.toEqual({});
+    await expect(apiFetch("/api/tasks/v1")).resolves.toEqual({});
+  });
+
+  it("daemon が返す /api/v1/x を client の /api/x に直す", () => {
+    expect(apiPathFromDaemon("/api/v1/tasks/T%201/integrations/web/merge")).toBe(
+      "/api/tasks/T%201/integrations/web/merge",
+    );
+    expect(apiPathFromDaemon("/api/v1/inbox/items?kind=decision")).toBe("/api/inbox/items?kind=decision");
+    expect(apiPathFromDaemon("/api/tasks/T1")).toBe("/api/tasks/T1");
   });
 
   it("same-origin の資格情報で JSON を取る", async () => {
@@ -101,5 +133,28 @@ describe("apiFetch", () => {
     await expect(apiMutate("POST", "/api/tasks", {})).rejects.toMatchObject({ kind: "server" });
     await expect(apiFetch("/api/tasks")).rejects.toMatchObject({ kind: "server" });
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+});
+
+// web の client code（試験・生成物・e2e 以外）に daemon の `/api/v1` を前置した文字列 literal が無いこと。
+// gateway が `/api/x` を `/api/v1/x` へ前置するので、client が `/api/v1/...` を書くと 404 になる（2026-10-22 の設定・routing 画面）。
+describe("source scan", () => {
+  const root = join(import.meta.dirname, "..");
+  const sources = (dir: string): string[] =>
+    readdirSync(join(root, dir), { withFileTypes: true }).flatMap((entry) => {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) return entry.name === "generated" || entry.name === "fixtures" ? [] : sources(path);
+      return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [path] : [];
+    });
+
+  it("client code does not hard-code the daemon /api/v1 prefix", () => {
+    const files = ["api", "features", "components", "lib", "routes"].flatMap(sources);
+    expect(files.length).toBeGreaterThan(50);
+    const offenders = files.flatMap((file) =>
+      readFileSync(join(root, file), "utf8")
+        .split("\n")
+        .flatMap((line, i) => (/["'`]\/api\/v1(\/|["'`?])/.test(line) ? [`${file}:${i + 1}`] : [])),
+    );
+    expect(offenders).toEqual([]);
   });
 });

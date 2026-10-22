@@ -180,11 +180,11 @@ rules = [{ harness = "fake", required_capabilities = [] }]
     }
 }
 
-fn row(model: &str, pass_lower: f64) -> EvidenceRow {
+fn row(lane: &str, model: &str, pass_lower: f64) -> EvidenceRow {
     EvidenceRow {
         quota_cost_per_pass: None,
         key: EvidenceKey {
-            lane: String::new(),
+            lane: lane.into(),
             genre: GENRE.into(),
             harness_id: "fake".into(),
             harness_version: "1.0.0".into(),
@@ -208,8 +208,14 @@ fn row(model: &str, pass_lower: f64) -> EvidenceRow {
 
 /// 版 `version` の根拠表を入れる。`best` が最良（enforce で選ばれる側）。
 fn publish_evidence(store: &SqliteStore, version: &str, best: &str, other: &str) {
+    // 根拠表は lane ごと（ADR 2026-10-22 D5）。lane を持たない直接の選択（`decide`）と、tick が付ける
+    // standard lane の dispatch の両方に同じ値を入れる。
+    let rows: Vec<_> = ["", "standard"]
+        .into_iter()
+        .flat_map(|lane| [row(lane, best, 0.9), row(lane, other, 0.5)])
+        .collect();
     store
-        .replace_routing_evidence(version, &[row(best, 0.9), row(other, 0.5)])
+        .replace_routing_evidence(version, &rows)
         .expect("evidence");
     store
         .set_routing_stage(

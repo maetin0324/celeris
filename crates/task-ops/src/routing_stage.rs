@@ -74,9 +74,9 @@ pub struct RoutingEvidenceRowView {
     pub pass_lower: f64,
     pub pass_upper: f64,
     /// 結果の無い cell は `null`。
-    pub wall_median_s: Option<f64>,
+    pub wall_p90_s: Option<f64>,
     /// 定価の無い source・結果の無い cell は `null`。
-    pub usd_list_median: Option<f64>,
+    pub usd_per_pass: Option<f64>,
     /// `[quota 窓, 1 run あたりの消費率]`。
     pub quota_per_run: Vec<(String, f64)>,
     pub timeout_rate: f64,
@@ -225,8 +225,8 @@ fn evidence_group(
                 pass: r.pass,
                 pass_lower: r.pass_lower,
                 pass_upper: r.pass_upper,
-                wall_median_s: r.wall_median_s,
-                usd_list_median: r.usd_list_median,
+                wall_p90_s: r.wall_p90_s,
+                usd_per_pass: r.usd_per_pass,
                 quota_per_run: r
                     .quota_per_run
                     .iter()
@@ -337,7 +337,9 @@ mod tests {
 
     fn row(n: u64, pass_lower: f64) -> EvidenceRow {
         EvidenceRow {
+            quota_cost_per_pass: None,
             key: EvidenceKey {
+                lane: String::new(),
                 genre: "coding".into(),
                 harness_id: "codex".into(),
                 harness_version: "1.0.0".into(),
@@ -351,8 +353,8 @@ mod tests {
             pass_upper: 0.95,
             pass_boot_lower: pass_lower,
             pass_boot_upper: 0.95,
-            wall_median_s: Some(10.0),
-            usd_list_median: Some(0.2),
+            wall_p90_s: Some(10.0),
+            usd_per_pass: Some(0.2),
             quota_per_run: [("7d".to_string(), 0.001)].into(),
             timeout_rate: 0.0,
             low_confidence: false,

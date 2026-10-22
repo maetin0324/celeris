@@ -3302,8 +3302,8 @@ genre×harness の組を `(genre, harness_id)` 順に返す。段階表に行が
 #### 3.126.22 `GET /routing/evidence` → 200 `RoutingEvidenceList`
 
 組ごとの最新版の根拠表（`groups[]`: `genre`・`harness_id`・`evidence_version`・`rows[]`）。行は
-`harness_version`・`source_id`・`model_id`・`n`・`pass`・`pass_lower`・`pass_upper`（Wilson 95% 区間）・`wall_median_s`・
-`usd_list_median`・`quota_per_run`・`timeout_rate` と、D1 を満たすかの `qualifies`。行の無い組は出さない。
+`harness_version`・`source_id`・`model_id`・`n`・`pass`・`pass_lower`・`pass_upper`（Wilson 95% 区間）・`wall_p90_s`・
+`usd_per_pass`・`quota_per_run`・`timeout_rate` と、D1 を満たすかの `qualifies`。行の無い組は出さない。
 クエリは `genre` と `harness_id` だけ。
 
 #### 3.126.23 `PUT /clusters/local/settings` → 200 `LocalMachineView`（管理系）

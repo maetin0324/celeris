@@ -110,6 +110,7 @@ mod tests {
             problem_id: "p".into(),
             trial_no: 1,
             key: EvidenceKey {
+                lane: String::new(),
                 genre: "coding".into(),
                 harness_id: "claude_code".into(),
                 harness_version: "1".into(),
@@ -125,6 +126,7 @@ mod tests {
             eval_status: None,
         };
         let cell = task_core::routing_evidence::EvidenceRow {
+            quota_cost_per_pass: None,
             key: t.key.clone(),
             evidence_version: "v".into(),
             n: 1,
@@ -133,8 +135,8 @@ mod tests {
             pass_upper: 1.0,
             pass_boot_lower: 0.0,
             pass_boot_upper: 1.0,
-            wall_median_s: None,
-            usd_list_median: None,
+            wall_p90_s: None,
+            usd_per_pass: None,
             quota_per_run: BTreeMap::new(),
             timeout_rate: 0.0,
             low_confidence: false,

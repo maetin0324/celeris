@@ -71,8 +71,10 @@ pub struct EvidenceSnapshot {
     pub pass: u64,
     pub pass_lower: f64,
     pub pass_upper: f64,
-    pub wall_median_s: Option<f64>,
-    pub usd_list_median: Option<f64>,
+    pub wall_p90_s: Option<f64>,
+    pub usd_per_pass: Option<f64>,
+    #[serde(default)]
+    pub quota_cost_per_pass: Option<f64>,
     pub quota_per_run: BTreeMap<String, f64>,
     pub timeout_rate: f64,
 }
@@ -85,8 +87,9 @@ impl From<&EvidenceRow> for EvidenceSnapshot {
             pass: row.pass,
             pass_lower: row.pass_lower,
             pass_upper: row.pass_upper,
-            wall_median_s: row.wall_median_s,
-            usd_list_median: row.usd_list_median,
+            wall_p90_s: row.wall_p90_s,
+            usd_per_pass: row.usd_per_pass,
+            quota_cost_per_pass: row.quota_cost_per_pass,
             quota_per_run: row.quota_per_run.clone(),
             timeout_rate: row.timeout_rate,
         }
@@ -128,6 +131,25 @@ impl Default for RouteJudge {
             deterministic: true,
         }
     }
+}
+
+/// harness の試行順の並べ替え（ADR 2026-10-22 D1）の入力と結果。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessOrderRecord {
+    pub execution_class: String,
+    /// クラスが `harness_balance_classes` にあるか。
+    pub enabled: bool,
+    /// guardrail が止めているか（止まっていれば宣言順）。
+    pub tripped: bool,
+    pub tolerance: f64,
+    /// 宣言順。
+    pub declared: Vec<String>,
+    /// harness → 残量スコア（ADR-0024 D3 の最良 account）。不明は欠ける。
+    pub scores: BTreeMap<String, f64>,
+    /// 並べ替えの結果。
+    pub ordered: Vec<String>,
+    /// 結果の先頭が宣言順の先頭と違う。
+    pub switched: bool,
 }
 
 /// One routing decision: the record written to `route_decisions` and carried on `routing_decided`.
@@ -178,6 +200,9 @@ pub struct RouteDecision {
     /// decision-assisted の lane 層の記録（ADR 2026-10-15-mlsys-min-routing-policy。`fixed` では書かない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lane_assist: Option<super::assist::LaneAssistRecord>,
+    /// harness の試行順を残量で並べ替えた記録（ADR 2026-10-22 D1。並べ替えの対象クラスのときだけ）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_order: Option<HarnessOrderRecord>,
     /// task 欄（`routing_override`）で固定した routing の解決結果。task 欄の無い task には書かない（従来と同一）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_resolved: Option<super::task_override::ResolvedRouting>,
@@ -293,7 +318,9 @@ pub fn build_route_decision(input: &RouteDecisionInput<'_>) -> RouteDecision {
             .evidence
             .iter()
             .find(|row| {
-                row.key.source_id == key.source.as_ref() && row.key.model_id == key.model.as_ref()
+                row.key.lane == input.lane.unwrap_or_default()
+                    && row.key.source_id == key.source.as_ref()
+                    && row.key.model_id == key.model.as_ref()
             })
             .map(EvidenceSnapshot::from)
     };
@@ -347,6 +374,7 @@ pub fn build_route_decision(input: &RouteDecisionInput<'_>) -> RouteDecision {
     } else {
         match input.output.map(|o| o.source) {
             Some(super::policy::SelectionSource::Evidence) if explored => RouteRule::Explore,
+            Some(super::policy::SelectionSource::FrontierLane) if explored => RouteRule::Explore,
             Some(super::policy::SelectionSource::Evidence) => RouteRule::Evidence,
             _ => RouteRule::RouteDefaults,
         }
@@ -370,7 +398,8 @@ pub fn build_route_decision(input: &RouteDecisionInput<'_>) -> RouteDecision {
                 .enumerate()
                 .filter_map(|(rank, key)| {
                     let row = input.evidence.iter().find(|row| {
-                        row.key.source_id == key.source.as_ref()
+                        row.key.lane == input.lane.unwrap_or_default()
+                            && row.key.source_id == key.source.as_ref()
                             && row.key.model_id == key.model.as_ref()
                     })?;
                     Some(RouteScore {
@@ -380,7 +409,7 @@ pub fn build_route_decision(input: &RouteDecisionInput<'_>) -> RouteDecision {
                         } else {
                             row.pass as f64 / row.n as f64
                         },
-                        expected_cost_usd: row.usd_list_median,
+                        expected_cost_usd: row.usd_per_pass,
                         rank: (rank + 1) as u64,
                     })
                 })
@@ -422,6 +451,7 @@ pub fn build_route_decision(input: &RouteDecisionInput<'_>) -> RouteDecision {
         options_hash: None,
         judge: RouteJudge::default(),
         lane_assist: None,
+        harness_order: None,
         routing_resolved: None,
     };
     decision.options_hash = Some(options_hash(&decision.route_options()));
@@ -444,7 +474,9 @@ mod tests {
 
     fn row(source: &str, model: &str, pass: u64, n: u64, usd: f64) -> EvidenceRow {
         EvidenceRow {
+            quota_cost_per_pass: None,
             key: EvidenceKey {
+                lane: "standard".into(),
                 genre: "coding".into(),
                 harness_id: "claude_code".into(),
                 harness_version: "2.4.0".into(),
@@ -458,8 +490,8 @@ mod tests {
             pass_upper: 1.0,
             pass_boot_lower: pass as f64 / n as f64,
             pass_boot_upper: 1.0,
-            wall_median_s: Some(600.0),
-            usd_list_median: Some(usd),
+            wall_p90_s: Some(600.0),
+            usd_per_pass: Some(usd),
             quota_per_run: [("week".to_string(), 0.01)].into(),
             timeout_rate: 0.0,
             low_confidence: false,

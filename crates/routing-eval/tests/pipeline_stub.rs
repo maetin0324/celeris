@@ -94,15 +94,16 @@ fn stub_pipeline_freezes_estimates_runs_aggregates_and_exports_features() {
         manifest_path.display().to_string(),
         "--out".into(),
         aggregate_out.display().to_string(),
-        "--write-evidence".into(),
     ])
-    .expect("aggregate --write-evidence");
+    .expect("aggregate");
+    // 評価 trial の集計はレポートだけで、根拠表（本番の完了単位から作る。ADR 2026-10-22 D5）は書かない。
+    assert!(aggregate_out.join("evidence.md").is_file());
     let (store, _) = SqliteStore::open_client(&db).expect("store");
-    let evidence = task_core::TaskStore::latest_routing_evidence(&store, "coding", "claude_code")
-        .expect("read evidence");
-    assert_eq!(evidence.len(), 1);
-    assert_eq!(evidence[0].n, 1);
-    assert!(evidence[0].pass_lower <= 1.0 && evidence[0].pass_upper >= 1.0);
+    assert!(
+        task_core::TaskStore::latest_routing_evidence(&store, "coding", "claude_code")
+            .expect("read evidence")
+            .is_empty()
+    );
     let out = dir.path().join("results.jsonl");
     routing_eval::export::run_args(vec![
         "--db".into(),

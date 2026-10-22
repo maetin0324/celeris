@@ -2648,12 +2648,13 @@ export type EvidenceSnapshot = {
   "pass": number;
   "pass_lower": number;
   "pass_upper": number;
+  "quota_cost_per_pass"?: number | null;
   "quota_per_run": {
   [key: string]: number;
 };
   "timeout_rate": number;
-  "usd_list_median"?: number | null;
-  "wall_median_s"?: number | null;
+  "usd_per_pass"?: number | null;
+  "wall_p90_s"?: number | null;
 };
 
 export type EvidenceView = {
@@ -2939,6 +2940,19 @@ export type HarnessCandidateView = {
 };
 
 export type HarnessErrorClass = "supply" | "infra" | "lease_expired" | "idle_timeout";
+
+export type HarnessOrderRecord = {
+  "declared": Array<string>;
+  "enabled": boolean;
+  "execution_class": string;
+  "ordered": Array<string>;
+  "scores": {
+  [key: string]: number;
+};
+  "switched": boolean;
+  "tolerance": number;
+  "tripped": boolean;
+};
 
 export type HarnessPrefs = {
   "allowed"?: Array<string>;
@@ -4830,6 +4844,7 @@ export type RouteDecision2 = {
   "features_template"?: string | null;
   "genre": string;
   "harness_id": string;
+  "harness_order"?: HarnessOrderRecord | null;
   "harness_version": string;
   "judge": RouteJudge;
   "lane"?: string | null;
@@ -4907,8 +4922,8 @@ export type RoutingEvidenceRowView = {
   "quota_per_run": Array<Array<unknown>>;
   "source_id": string;
   "timeout_rate": number;
-  "usd_list_median"?: number | null;
-  "wall_median_s"?: number | null;
+  "usd_per_pass"?: number | null;
+  "wall_p90_s"?: number | null;
 };
 
 export type RoutingFeaturesRecord = {

@@ -107,8 +107,8 @@ export function RoutingView({ stages, evidence }: { stages: RoutingStageList; ev
                         <TableCell className="tabular-nums">{r.n}</TableCell>
                         <TableCell className="tabular-nums">{(r.timeout_rate * 100).toFixed(1)}%</TableCell>
                         <TableCell className="tabular-nums">
-                          {r.wall_median_s == null ? "—" : `${r.wall_median_s}s`} /{" "}
-                          {r.usd_list_median == null ? "—" : `$${r.usd_list_median}`}
+                          {r.wall_p90_s == null ? "—" : `${r.wall_p90_s}s`} /{" "}
+                          {r.usd_per_pass == null ? "—" : `$${r.usd_per_pass}`}
                         </TableCell>
                         <TableCell>{r.qualifies ? "適格" : "未適格"}</TableCell>
                       </TableRow>

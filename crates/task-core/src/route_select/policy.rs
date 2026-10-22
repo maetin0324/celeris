@@ -7,7 +7,14 @@ use std::collections::BTreeMap;
 pub enum SelectionSource {
     Evidence,
     RouteDefaults,
+    /// frontier lane の規則（ADR 2026-10-22 D3）: lane の `route_defaults` の先頭が根拠表の同等判定に勝つ。
+    FrontierLane,
 }
+
+/// 同等集合の中で、最小の p90 のこの倍率を超える候補は制約違反として同等から外す（ADR 2026-10-22 D5）。
+pub const WALL_P90_SLACK: f64 = 1.5;
+/// frontier 以外の lane では ε 探索をしない（探索は frontier lane の中に寄せる。ADR D4）。
+pub const FRONTIER_LANE: &str = "frontier";
 
 #[derive(Debug, Clone)]
 pub struct PolicyInput<'a> {
@@ -16,6 +23,10 @@ pub struct PolicyInput<'a> {
     pub genre: &'a str,
     pub harness_id: &'a str,
     pub harness_version: &'a str,
+    /// 決定の lane（空 = lane 不明）。根拠表は lane が一致する行だけを読む。
+    pub lane: &'a str,
+    /// frontier lane の `route_defaults`（frontier lane の決定のときだけ。他は空）。
+    pub pinned: &'a [CandidateKey],
     pub route_defaults: &'a [CandidateKey],
     /// Remaining quota by (candidate key, quota window); values are absolute remaining units.
     pub quota_remaining: &'a BTreeMap<(String, String, String), f64>,
@@ -42,6 +53,7 @@ pub fn select(input: &PolicyInput<'_>) -> Result<PolicyOutput, NoRoute> {
     for candidate in input.eligible {
         if let Some(row) = input.evidence.iter().find(|row| {
             row.key.genre == input.genre
+                && row.key.lane == input.lane
                 && row.key.harness_id == input.harness_id
                 && major_version(&row.key.harness_version) == major_version(input.harness_version)
                 && row.key.source_id == candidate.source.as_ref()
@@ -49,6 +61,9 @@ pub fn select(input: &PolicyInput<'_>) -> Result<PolicyOutput, NoRoute> {
         }) {
             rows.insert(identity(&candidate.key()), row);
         }
+    }
+    if let Some(output) = select_frontier_lane(input) {
+        return output;
     }
     if input.stage == RoutingStage::Enforce && !rows.is_empty() {
         let best = rows
@@ -60,6 +75,18 @@ pub fn select(input: &PolicyInput<'_>) -> Result<PolicyOutput, NoRoute> {
             .filter(|(_, row)| row.pass_upper >= best)
             .map(|(key, _)| key.clone())
             .collect();
+        // 制約: 経過時間 p90 が同等集合の最小の WALL_P90_SLACK 倍以内（値の無い候補は制約の対象外）。
+        let min_p90 = equivalent
+            .iter()
+            .filter_map(|key| rows[key].wall_p90_s)
+            .fold(f64::INFINITY, f64::min);
+        if min_p90.is_finite() {
+            equivalent.retain(|key| {
+                rows[key]
+                    .wall_p90_s
+                    .is_none_or(|p90| p90 <= min_p90 * WALL_P90_SLACK)
+            });
+        }
         equivalent.sort_by(|a, b| compare_candidates(a, b, &rows, input.quota_remaining));
         let mut all_evidence: Vec<_> = rows.keys().cloned().collect();
         all_evidence.sort_by(|a, b| {
@@ -79,7 +106,12 @@ pub fn select(input: &PolicyInput<'_>) -> Result<PolicyOutput, NoRoute> {
         }
         let selected_key = equivalent.first().ok_or(NoRoute)?.clone();
         let mut chosen = selected_key.clone();
-        let epsilon = input.epsilon.clamp(0.0, 1.0);
+        // ε 探索は frontier lane の中でだけ行う（ADR D4）。lane が不明な決定は従来どおり。
+        let epsilon = if input.lane.is_empty() {
+            input.epsilon.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         if equivalent.len() > 1 && deterministic_unit(input.run_id) < epsilon {
             let alternatives: Vec<_> = equivalent
                 .iter()
@@ -128,6 +160,58 @@ pub fn select(input: &PolicyInput<'_>) -> Result<PolicyOutput, NoRoute> {
         1.0,
         None,
     )
+}
+
+/// frontier lane の規則（ADR 2026-10-22 D3/D4）。lane の `route_defaults` のうち eligible な先頭を選び、
+/// ε 探索は eligible 全体（lane の列 + 候補列）から選ぶ。根拠表の同等判定は見ない。
+/// 該当する候補が無い・enforce 以外・lane の列が空のときは `None`（従来の経路）。
+fn select_frontier_lane(input: &PolicyInput<'_>) -> Option<Result<PolicyOutput, NoRoute>> {
+    if input.pinned.is_empty() {
+        return None;
+    }
+    let pool: Vec<Key> = input.eligible.iter().map(|c| identity(&c.key())).collect();
+    let first = input
+        .pinned
+        .iter()
+        .map(identity)
+        .find(|key| pool.contains(key))?;
+    let mut chosen = first.clone();
+    let mut propensity = 1.0;
+    let epsilon = input.epsilon.clamp(0.0, 1.0);
+    if input.stage == RoutingStage::Enforce && pool.len() > 1 {
+        let alternatives: Vec<_> = pool.iter().filter(|key| **key != first).collect();
+        if deterministic_unit(input.run_id) < epsilon {
+            chosen = alternatives[(deterministic_hash(input.run_id) as usize) % alternatives.len()]
+                .clone();
+            propensity = epsilon / alternatives.len() as f64;
+        } else {
+            propensity = 1.0 - epsilon;
+        }
+    }
+    // admission の順: 選んだもの → lane の列 → 残りの候補（宣言順）。
+    let mut order = vec![chosen.clone()];
+    order.extend(input.pinned.iter().map(identity));
+    order.extend(pool.iter().cloned());
+    let mut seen = Vec::new();
+    order.retain(|key| {
+        let fresh = !seen.contains(key);
+        seen.push(key.clone());
+        fresh && pool.contains(key)
+    });
+    // 先頭 = 探索しないときの選択（trace が探索かどうかを先頭との比較で判定する）。
+    let equivalent = std::iter::once(&first)
+        .chain(pool.iter().filter(|key| **key != first))
+        .map(candidate_key)
+        .collect();
+    Some(build_output(
+        input,
+        &order,
+        &chosen,
+        equivalent,
+        SelectionSource::FrontierLane,
+        propensity,
+        None,
+    ))
 }
 
 fn default_keys(input: &PolicyInput<'_>) -> Vec<CandidateKey> {
@@ -199,10 +283,11 @@ fn compare_candidates(
             })
             .unwrap_or(f64::INFINITY)
     };
-    pressure(a)
-        .total_cmp(&pressure(b))
-        .then_with(|| known_first(rows[a].usd_list_median, rows[b].usd_list_median))
-        .then_with(|| known_first(rows[a].wall_median_s, rows[b].wall_median_s))
+    // 主指標: 成功 1 件あたりの quota 加重コスト（ADR 2026-10-22 D5）。値の無い候補は後ろ。
+    known_first(rows[a].quota_cost_per_pass, rows[b].quota_cost_per_pass)
+        .then_with(|| pressure(a).total_cmp(&pressure(b)))
+        .then_with(|| known_first(rows[a].usd_per_pass, rows[b].usd_per_pass))
+        .then_with(|| known_first(rows[a].wall_p90_s, rows[b].wall_p90_s))
         .then_with(|| a.cmp(b))
 }
 
@@ -238,7 +323,9 @@ mod tests {
     }
     fn row(c: &Candidate, lower: f64, upper: f64, quota: f64, usd: f64) -> EvidenceRow {
         EvidenceRow {
+            quota_cost_per_pass: None,
             key: crate::routing_evidence::EvidenceKey {
+                lane: String::new(),
                 genre: "coding".into(),
                 harness_id: "h".into(),
                 harness_version: "2.4.0".into(),
@@ -252,8 +339,8 @@ mod tests {
             pass_upper: upper,
             pass_boot_lower: lower,
             pass_boot_upper: upper,
-            wall_median_s: Some(10.0),
-            usd_list_median: Some(usd),
+            wall_p90_s: Some(10.0),
+            usd_per_pass: Some(usd),
             quota_per_run: [("week".to_string(), quota)].into(),
             timeout_rate: 0.0,
             low_confidence: false,
@@ -269,6 +356,8 @@ mod tests {
         remaining.insert(("a".into(), "m".into(), "week".into()), 10.0);
         remaining.insert(("b".into(), "m".into(), "week".into()), 100.0);
         let input = PolicyInput {
+            lane: "",
+            pinned: &[],
             eligible: &candidates,
             evidence: &evidence,
             genre: "coding",
@@ -293,6 +382,8 @@ mod tests {
         let b = c("b", "m");
         let candidates = vec![a.clone(), b.clone()];
         let input = PolicyInput {
+            lane: "",
+            pinned: &[],
             eligible: &candidates,
             evidence: &[],
             genre: "writing",

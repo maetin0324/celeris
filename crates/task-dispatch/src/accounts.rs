@@ -272,6 +272,21 @@ fn effective_utilization(w: RateWindow, now: i64) -> f64 {
     }
 }
 
+/// アカウントの残量（0..=1）: 観測できた窓のうち最も逼迫した窓の残り割合（`1 - 実効使用率` の最小）。
+/// 観測が無ければ 1.0（まだ何も使っていないとみなす。値の捏造ではなく「観測なし」の既定）。
+/// source の `QuotaSnapshot.source_remaining` の元（ADR 2026-10-22 D1）。
+pub fn remaining_fraction(state: Option<&AccountState>, now: i64) -> f64 {
+    let Some(obs) = state.and_then(|s| s.usage.as_ref()) else {
+        return 1.0;
+    };
+    [obs.five_hour, obs.seven_day, obs.one_month]
+        .into_iter()
+        .flatten()
+        .map(|w| 1.0 - effective_utilization(w, now))
+        .fold(1.0, f64::min)
+        .clamp(0.0, 1.0)
+}
+
 /// 認証失敗（OAuth 切れ等）のアカウントを選択から外し続ける期間（ADR 2026-10-17）。再ログインか手動確認の
 /// 成功（`clear_cooldown`）が戻す唯一の経路なので、実質無期限（10 年）にする。
 pub const AUTH_FAILED_HOLD_SECS: i64 = 10 * 365 * 24 * 3600;

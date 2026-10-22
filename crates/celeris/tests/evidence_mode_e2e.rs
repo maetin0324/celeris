@@ -182,7 +182,9 @@ rules = [{ harness = "fake", required_capabilities = [] }]
 
 fn row(model: &str, pass_lower: f64) -> EvidenceRow {
     EvidenceRow {
+        quota_cost_per_pass: None,
         key: EvidenceKey {
+            lane: String::new(),
             genre: GENRE.into(),
             harness_id: "fake".into(),
             harness_version: "1.0.0".into(),
@@ -196,8 +198,8 @@ fn row(model: &str, pass_lower: f64) -> EvidenceRow {
         pass_upper: pass_lower + 0.01,
         pass_boot_lower: pass_lower,
         pass_boot_upper: 0.99,
-        wall_median_s: Some(10.0),
-        usd_list_median: Some(0.1),
+        wall_p90_s: Some(10.0),
+        usd_per_pass: Some(0.1),
         quota_per_run: BTreeMap::new(),
         timeout_rate: 0.0,
         low_confidence: false,

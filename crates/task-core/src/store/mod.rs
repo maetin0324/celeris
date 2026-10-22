@@ -113,6 +113,7 @@ mod messages;
 mod model_catalog;
 pub use model_catalog::ModelCatalogStore;
 mod account_limits;
+mod completion_outcomes;
 mod credential_wait;
 mod eval_trials;
 mod migrated_harness;

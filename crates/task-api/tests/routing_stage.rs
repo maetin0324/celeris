@@ -9,7 +9,9 @@ use task_core::{Status, TaskKind, TaskStore};
 
 fn row(n: u64, pass_lower: f64) -> EvidenceRow {
     EvidenceRow {
+        quota_cost_per_pass: None,
         key: EvidenceKey {
+            lane: String::new(),
             genre: "coding".into(),
             harness_id: "codex".into(),
             harness_version: "1.4.0".into(),
@@ -23,8 +25,8 @@ fn row(n: u64, pass_lower: f64) -> EvidenceRow {
         pass_upper: 0.97,
         pass_boot_lower: pass_lower,
         pass_boot_upper: 0.97,
-        wall_median_s: Some(41.0),
-        usd_list_median: Some(0.3),
+        wall_p90_s: Some(41.0),
+        usd_per_pass: Some(0.3),
         quota_per_run: [("7d".to_string(), 0.002)].into(),
         timeout_rate: 0.0,
         low_confidence: false,

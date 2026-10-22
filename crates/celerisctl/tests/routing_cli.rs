@@ -105,7 +105,9 @@ fn stage_fixture(path: &std::path::Path) -> String {
     .unwrap();
     let task = task_ops::add::create_task(&store, spec, time::OffsetDateTime::now_utc()).unwrap();
     let row = |n, pass_lower| EvidenceRow {
+        quota_cost_per_pass: None,
         key: EvidenceKey {
+            lane: String::new(),
             genre: "coding".into(),
             harness_id: "codex".into(),
             harness_version: "1.4.0".into(),
@@ -119,8 +121,8 @@ fn stage_fixture(path: &std::path::Path) -> String {
         pass_upper: 0.9,
         pass_boot_lower: pass_lower,
         pass_boot_upper: 0.9,
-        wall_median_s: Some(30.0),
-        usd_list_median: Some(0.2),
+        wall_p90_s: Some(30.0),
+        usd_per_pass: Some(0.2),
         quota_per_run: Default::default(),
         timeout_rate: 0.0,
         low_confidence: false,

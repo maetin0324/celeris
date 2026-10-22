@@ -26,6 +26,32 @@ use super::{
 };
 
 impl TaskStore for SqliteStore {
+    fn completion_outcomes_project(
+        &self,
+        task_id: &str,
+        celeris_version: &str,
+        now: &str,
+    ) -> Result<usize, StoreError> {
+        self.completion_outcomes_project_impl(task_id, celeris_version, now)
+    }
+    fn completion_outcomes_list(
+        &self,
+        leaf_only: bool,
+        limit: u32,
+    ) -> Result<Vec<crate::completion_outcome::CompletionOutcome>, StoreError> {
+        self.completion_outcomes_list_impl(leaf_only, limit)
+    }
+    fn harness_balance_trips(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, String>, StoreError> {
+        self.harness_balance_trips_impl()
+    }
+    fn harness_balance_trip(&self, class: &str, reason: &str, at: &str) -> Result<(), StoreError> {
+        self.harness_balance_trip_impl(class, reason, at)
+    }
+    fn harness_balance_reset(&self, class: &str) -> Result<bool, StoreError> {
+        self.harness_balance_reset_impl(class)
+    }
     fn replace_routing_evidence(
         &self,
         version: &str,

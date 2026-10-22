@@ -330,3 +330,7 @@ D5 の評価 runner（crate `routing-eval`、bin `celeris-routing-eval`）と根
 config reader は lane 列の harness/source/model と互換 route を検査し、予約枠の source も宣言必須にする。route-selection 値は epsilon / quota floor が 0..=1、window が正であることを検査する。
 
 検査: `cargo test -p celeris config::llm_route`（この WorkUnit で実行）。
+
+## 付記 2026-10-22: 根拠表は lane ごと・完了単位の本番結果から作る
+
+根拠表の作り方（run 単位の評価 trial の合格率・中央値）は、[2026-10-22-harness-balance-and-lane-first-routing](2026-10-22-harness-balance-and-lane-first-routing.md) D5〜D7 で置き換わる。鍵に `lane` が入り、行は task / WU の完了単位の本番結果（propensity 重み付け）から daemon が定期的に書く。`routing-eval aggregate --write-evidence` は撤去した（評価 trial の集計・レポートは残る）。

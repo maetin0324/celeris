@@ -1,6 +1,7 @@
 //! Pure source/model selection rules (ADR 2026-10-11 D2/D3).
 pub mod assist;
 pub mod availability;
+pub mod balance;
 pub mod escalation;
 pub mod evidence;
 pub mod lane;
@@ -17,6 +18,7 @@ pub use availability::{
     Availability, AvailabilityInput, AvailabilitySplit, Remaining, UnavailableReason, availability,
     split_by_availability,
 };
+pub use balance::{BalanceOutcome, BalanceTrip, evaluate_balance_guardrail, order_harnesses};
 pub use escalation::{
     EscalationAttempts, EscalationDecision, EscalationLimits, FailureClass, ReplanReason,
     escalation_decision,
@@ -38,8 +40,8 @@ pub use task_override::{
     resolve_routing,
 };
 pub use trace::{
-    EvidenceSnapshot, RouteAction, RouteCandidate, RouteDecision, RouteDecisionInput,
-    RouteExclusion, RouteJudge, RouteRule, RouteScore, build_route_decision,
+    EvidenceSnapshot, HarnessOrderRecord, RouteAction, RouteCandidate, RouteDecision,
+    RouteDecisionInput, RouteExclusion, RouteJudge, RouteRule, RouteScore, build_route_decision,
 };
 
 #[cfg(test)]

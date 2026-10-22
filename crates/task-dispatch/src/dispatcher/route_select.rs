@@ -19,9 +19,10 @@ use task_core::llm_route::{
     select_harness, wire_model_id,
 };
 use task_core::model_policy::RouteFeaturesRef;
+use task_core::route_select::policy::FRONTIER_LANE;
 use task_core::route_select::{
-    PolicyInput, PolicyOutput, RouteDecision, RouteDecisionInput, RoutingStage,
-    build_route_decision, select as select_by_evidence,
+    HarnessOrderRecord, PolicyInput, PolicyOutput, RouteDecision, RouteDecisionInput, RoutingStage,
+    build_route_decision, order_harnesses, select as select_by_evidence,
 };
 use task_core::routing_evidence::EvidenceRow;
 
@@ -52,6 +53,8 @@ pub struct RouteState {
     pub features: Option<RouteFeaturesRef>,
     /// The work unit this dispatch runs, when it runs one (the decision subject).
     pub work_unit_id: Option<String>,
+    /// guardrail が止めた実行クラス（`harness_balance_trips`。ADR 2026-10-22 D2）。止まったクラスは宣言順。
+    pub balance_tripped: std::collections::BTreeSet<String>,
 }
 
 /// One routing request: the harness inputs plus the source/model inputs.
@@ -210,6 +213,7 @@ pub fn route_select(
         Ok(ids) => ids,
         Err(error) => return (Err(RouteFailure::Harness(error)), RouteTrace::default()),
     };
+    let (harnesses, harness_order) = order_by_headroom(input, registry, state, harnesses);
     let mut rejected = Vec::new();
     let mut last = None;
     let mut saw_ineligible = None;
@@ -225,6 +229,7 @@ pub fn route_select(
                 aggregate.harness_rejections = rejected;
                 aggregate.harness = Some(pick.harness.clone());
                 aggregate.decision = current_trace.decision;
+                attach_harness_order(&mut aggregate, &harness_order);
                 return (Ok(pick), aggregate);
             }
             Err(error) => {
@@ -245,6 +250,7 @@ pub fn route_select(
         }
     }
     aggregate.harness_rejections = rejected;
+    attach_harness_order(&mut aggregate, &harness_order);
     let failure = saw_ineligible
         .or(last)
         .unwrap_or(RouteFailure::Harness(HarnessSelectionError::NoneEligible));
@@ -253,6 +259,64 @@ pub fn route_select(
         .last()
         .map(|r| r.harness.clone());
     (Err(failure), aggregate)
+}
+
+/// harness の試行順を残量で並べ替える（ADR 2026-10-22 D1）。対象は `harness_balance_classes` にあるクラスで、
+/// guardrail が止めていないときだけ。並べ替えの入力と結果は [`HarnessOrderRecord`] に残す（対象クラスなら
+/// 並べ替えが起きなくても残す）。
+fn order_by_headroom(
+    input: &RouteInput,
+    registry: &Registry,
+    state: &RouteState,
+    declared: Vec<HarnessId>,
+) -> (Vec<HarnessId>, Option<HarnessOrderRecord>) {
+    let Some(class) = input.harness.execution_class.as_ref() else {
+        return (declared, None);
+    };
+    let settings = &registry.route_selection;
+    if input.cos || declared.len() < 2 || !settings.harness_balance_classes.contains(class.as_ref())
+    {
+        return (declared, None);
+    }
+    let tripped = state.balance_tripped.contains(class.as_ref());
+    let mut scores = BTreeMap::new();
+    for harness in &declared {
+        let known: Vec<f64> =
+            route_priority(registry, harness, input.lane.as_deref(), false, Some(class))
+                .iter()
+                .filter_map(|key| state.quota.source_headroom.get(&key.source).copied())
+                .collect();
+        if !known.is_empty() {
+            scores.insert(harness.to_string(), known.into_iter().fold(0.0, f64::max));
+        }
+    }
+    let names: Vec<String> = declared.iter().map(ToString::to_string).collect();
+    let ordered_names = if tripped {
+        names.clone()
+    } else {
+        order_harnesses(&names, &scores, settings.harness_balance_tolerance)
+    };
+    let ordered: Vec<HarnessId> = ordered_names
+        .iter()
+        .filter_map(|n| declared.iter().find(|h| h.as_ref() == n.as_str()).cloned())
+        .collect();
+    let record = HarnessOrderRecord {
+        execution_class: class.to_string(),
+        enabled: true,
+        tripped,
+        tolerance: settings.harness_balance_tolerance,
+        switched: ordered_names.first() != names.first(),
+        declared: names,
+        scores,
+        ordered: ordered_names,
+    };
+    (ordered, Some(record))
+}
+
+fn attach_harness_order(trace: &mut RouteTrace, record: &Option<HarnessOrderRecord>) {
+    if let (Some(decision), Some(record)) = (trace.decision.as_mut(), record) {
+        decision.harness_order = Some(record.clone());
+    }
 }
 
 /// Decide one harness: the declared priority column (the execution-class list, else harness×lane
@@ -271,7 +335,7 @@ fn route_select_one(
         Err(e) => return (Err(RouteFailure::Harness(e)), trace),
     };
     trace.harness = Some(harness.clone());
-    let priority = route_priority(
+    let mut priority = route_priority(
         registry,
         &harness,
         input.lane.as_deref(),
@@ -279,6 +343,33 @@ fn route_select_one(
         input.harness.execution_class.as_ref(),
     )
     .to_vec();
+    // ADR 2026-10-22 D3: Jev / fixed 規則が frontier とした lane は、その lane の `route_defaults` を先頭に置き、
+    // 根拠表の同等判定・クラスの候補列に勝たせる。後ろに従来の候補列が続く（admission の fallback と ε の対象）。
+    let frontier_column: Vec<CandidateKey> =
+        if !input.cos && input.lane.as_deref() == Some(FRONTIER_LANE) {
+            registry
+                .lane_route_defaults
+                .get(&(harness.clone(), FRONTIER_LANE.to_owned()))
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+    if !frontier_column.is_empty() {
+        // 後ろに続くのは lane を問わない従来の列（クラスの候補列、無ければ harness 全体の列）。
+        let rest: Vec<CandidateKey> = route_priority(
+            registry,
+            &harness,
+            None,
+            false,
+            input.harness.execution_class.as_ref(),
+        )
+        .iter()
+        .filter(|key| !frontier_column.contains(key))
+        .cloned()
+        .collect();
+        priority = frontier_column.iter().cloned().chain(rest).collect();
+    }
     if priority.is_empty() {
         return (Err(RouteFailure::NoDeclaredDefault(harness)), trace);
     }
@@ -364,6 +455,8 @@ fn route_select_one(
         genre,
         harness_id: harness.as_ref(),
         harness_version: &version,
+        lane: input.lane.as_deref().unwrap_or_default(),
+        pinned: &frontier_column,
         route_defaults: &priority,
         quota_remaining: &pressure,
         stage,
@@ -720,6 +813,9 @@ impl Dispatcher {
                             .unwrap_or(std::cmp::Ordering::Equal)
                             .then_with(|| left.cmp(right))
                     });
+                    // ADR 2026-10-22 D1: source の残量。最良 account の ADR-0024 D3 スコア（席の減点なし）と、
+                    // 最も逼迫した窓の残り割合。除外された account は 0。
+                    let (mut best_score, mut best_remaining) = (0.0_f64, 0.0_f64);
                     for account in &accounts {
                         let key = (source_id.clone(), account.clone());
                         let candidate = AccountCandidate {
@@ -727,17 +823,36 @@ impl Dispatcher {
                             logged_in: true,
                             in_use: 0,
                         };
-                        match evaluate(&candidate, book.state(account.as_ref()), usize::MAX, now)
-                            .excluded
-                        {
+                        let evaluation =
+                            evaluate(&candidate, book.state(account.as_ref()), usize::MAX, now);
+                        match evaluation.excluded {
                             Some(ExcludedReason::Cooldown) => {
                                 state.quota.cooling_down.insert(key);
                             }
                             Some(_) => {
                                 state.quota.account_remaining.insert(key, 0.0);
                             }
-                            None => {}
+                            None => {
+                                best_score = best_score.max(evaluation.score.unwrap_or(0.0));
+                                best_remaining =
+                                    best_remaining.max(crate::accounts::remaining_fraction(
+                                        book.state(account.as_ref()),
+                                        now,
+                                    ));
+                            }
                         }
+                    }
+                    state
+                        .quota
+                        .source_headroom
+                        .insert(source_id.clone(), best_score);
+                    // 全 account が除外のときは account 単位の理由（cooldown・枠切れ）を残すため、
+                    // source 単位の 0 は書かない。
+                    if best_remaining > 0.0 {
+                        state
+                            .quota
+                            .source_remaining
+                            .insert(source_id.clone(), best_remaining);
                     }
                 }
             }
@@ -798,6 +913,12 @@ impl Dispatcher {
         state.run_seed = context.run_id.clone();
         state.features = context.features.clone();
         state.work_unit_id = context.work_unit_id.clone();
+        match self.store.harness_balance_trips() {
+            Ok(trips) => state.balance_tripped = trips.into_keys().collect(),
+            Err(error) => {
+                tracing::warn!(%error, "harness balance trips unavailable; keeping the declared harness order")
+            }
+        }
         self.fill_route_stage(
             input,
             context.evidence_mode,

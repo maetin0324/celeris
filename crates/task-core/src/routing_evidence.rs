@@ -9,6 +9,10 @@ pub struct EvidenceKey {
     pub genre: String,
     pub harness_id: String,
     pub harness_version: String,
+    /// lane（層）。完了単位の根拠表（ADR 2026-10-22 D5）の行は lane ごと。空は lane を持たない旧い行で、
+    /// どの lane の決定にも一致しない。
+    #[serde(default)]
+    pub lane: String,
     pub source_id: String,
     pub model_id: String,
 }
@@ -34,11 +38,14 @@ pub struct EvidenceRow {
     /// 問題単位の bootstrap 95%（seed 42・2000 resamples）。
     pub pass_boot_lower: f64,
     pub pass_boot_upper: f64,
-    /// 結果の無い cell は `None`（選択の同点比較では最後に回る）。
-    pub wall_median_s: Option<f64>,
-    /// 定価の無い source・結果の無い cell は `None`。
-    pub usd_list_median: Option<f64>,
-    /// quota 窓 → 1 run あたりの消費率（表では窓→率の JSON object）。
+    /// 完了までの経過時間の p90（秒）。結果の無い cell は `None`（選択の制約・同点比較では最後に回る）。
+    pub wall_p90_s: Option<f64>,
+    /// 成功 1 件あたりの定価 USD。定価の無い source・結果の無い cell は `None`。
+    pub usd_per_pass: Option<f64>,
+    /// 成功 1 件あたりの quota 加重コスト（主指標。ADR 2026-10-22 D5）。quota が測れない cell は `None`。
+    #[serde(default)]
+    pub quota_cost_per_pass: Option<f64>,
+    /// quota 窓 → 1 完了単位あたりの消費率（表では窓→率の JSON object）。
     pub quota_per_run: BTreeMap<String, f64>,
     pub timeout_rate: f64,
     /// k=1・部分集合の候補（優越を名乗れない）。

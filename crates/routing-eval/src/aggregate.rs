@@ -8,10 +8,7 @@ use std::{
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use task_core::{
-    routing_evidence::{EvidenceKey, EvidenceRow, harness_version_major},
-    store::SqliteStore,
-};
+use task_core::routing_evidence::{EvidenceKey, EvidenceRow, harness_version_major};
 
 use crate::{
     manifest::{Manifest, Problem},
@@ -205,6 +202,7 @@ pub fn collect(db: &str, manifest: &Manifest) -> Result<Vec<Trial>, String> {
             problem_id,
             trial_no: input.get("trial_no").and_then(Value::as_u64).unwrap_or(1) as u32,
             key: EvidenceKey {
+                lane: String::new(),
                 genre: problem.genre.clone(),
                 harness_id: harness,
                 harness_version: harness_version_major(&strval(picked, "harness_id"), &version_raw),
@@ -293,6 +291,7 @@ pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
         let low_confidence = by_problem.keys().any(|id| subset_problem_ids.contains(id))
             || by_problem.values().any(|v| v.len() < 2);
         let row = EvidenceRow {
+            quota_cost_per_pass: None,
             key: key.clone(),
             evidence_version: version.clone(),
             n: outcomes.len() as u64,
@@ -301,15 +300,15 @@ pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
             pass_upper: interval.upper,
             pass_boot_lower: bootstrap.lower,
             pass_boot_upper: bootstrap.upper,
-            wall_median_s: median(values.iter().filter_map(|t| t.wall_secs).collect()),
-            usd_list_median: median(values.iter().filter_map(|t| t.usd_list).collect()),
+            wall_p90_s: percentile90(values.iter().filter_map(|t| t.wall_secs).collect()),
+            usd_per_pass: median(values.iter().filter_map(|t| t.usd_list).collect()),
             quota_per_run,
             timeout_rate: values.iter().filter(|t| t.timed_out).count() as f64
                 / values.len().max(1) as f64,
             low_confidence,
         };
         let excluded_here = excluded.get(&key).cloned().unwrap_or_default();
-        detail.push(json!({"key":key,"excluded":excluded_here,"metrics":{"pass_rate":if row.n==0 {0.0}else{row.pass as f64/row.n as f64},"usd":row.usd_list_median,"wall_seconds":row.wall_median_s,"quota":row.quota_per_run},"evidence":row}));
+        detail.push(json!({"key":key,"excluded":excluded_here,"metrics":{"pass_rate":if row.n==0 {0.0}else{row.pass as f64/row.n as f64},"usd":row.usd_per_pass,"wall_seconds":row.wall_p90_s,"quota":row.quota_per_run},"evidence":row}));
         rows.push(row);
     }
     let metrics: Vec<stats::CandidateMetrics> = rows
@@ -324,8 +323,8 @@ pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
             } else {
                 r.pass as f64 / r.n as f64
             },
-            usd: r.usd_list_median.unwrap_or(f64::INFINITY),
-            wall_seconds: r.wall_median_s.unwrap_or(f64::INFINITY),
+            usd: r.usd_per_pass.unwrap_or(f64::INFINITY),
+            wall_seconds: r.wall_p90_s.unwrap_or(f64::INFINITY),
             quota: r.quota_per_run.values().copied().fold(0.0, f64::max),
         })
         .collect();
@@ -347,6 +346,16 @@ pub fn build(manifest: &Manifest, trials: &[Trial]) -> (Aggregate, Vec<Value>) {
         },
         detail,
     )
+}
+
+/// 経過時間の p90（nearest-rank）。評価 trial のレポート用で、根拠表（本番の完了単位）には書かない。
+fn percentile90(mut values: Vec<f64>) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    let rank = ((values.len() as f64) * 0.9).ceil() as usize;
+    values.get(rank.clamp(1, values.len()) - 1).copied()
 }
 
 fn paired_comparisons(manifest: &Manifest, trials: &[Trial]) -> Vec<Value> {
@@ -445,8 +454,8 @@ pub fn run_args(args: Vec<String>) -> Result<(), String> {
                 r.pass_boot_lower,
                 r.pass_boot_upper,
                 r.timeout_rate,
-                r.usd_list_median.map_or("—".into(), |v| format!("{v:.4}")),
-                r.wall_median_s.map_or("—".into(), |v| format!("{v:.2}")),
+                r.usd_per_pass.map_or("—".into(), |v| format!("{v:.4}")),
+                r.wall_p90_s.map_or("—".into(), |v| format!("{v:.2}")),
                 r.low_confidence,
                 result.excluded_for(&r.key).error,
                 result.excluded_for(&r.key).cancelled
@@ -464,16 +473,6 @@ pub fn run_args(args: Vec<String>) -> Result<(), String> {
         serde_json::to_vec_pretty(&detail).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    if args.iter().any(|x| x == "--write-evidence") {
-        let (store, _) =
-            SqliteStore::open_client(std::path::Path::new(&db)).map_err(|e| e.to_string())?;
-        task_core::TaskStore::replace_routing_evidence(
-            &store,
-            &result.evidence_version,
-            &result.rows,
-        )
-        .map_err(|e| e.to_string())?;
-    }
     println!(
         "trials={} excluded={} cells={} evidence_version={}",
         trials.len(),
@@ -548,6 +547,7 @@ mod tests {
             problem_id: "p".into(),
             trial_no: 1,
             key: EvidenceKey {
+                lane: String::new(),
                 genre: "coding".into(),
                 harness_id: harness.into(),
                 harness_version: "1".into(),
@@ -607,6 +607,7 @@ mod tests {
             problem_id: "p1".into(),
             trial_no: 1,
             key: EvidenceKey {
+                lane: String::new(),
                 genre: "coding".into(),
                 harness_id: "claude_code".into(),
                 harness_version: "1".into(),
@@ -629,7 +630,7 @@ mod tests {
         assert!(row.pass_lower < 1.0 && row.pass_upper == 1.0);
         assert_eq!((row.pass_boot_lower, row.pass_boot_upper), (1.0, 1.0));
         assert!(row.low_confidence);
-        assert_eq!(row.usd_list_median, Some(0.4));
+        assert_eq!(row.usd_per_pass, Some(0.4));
         assert_eq!(row.quota_per_run["7d"], 0.02);
         assert_eq!(detail.len(), 1);
         assert_eq!(agg.pareto.len(), 1);

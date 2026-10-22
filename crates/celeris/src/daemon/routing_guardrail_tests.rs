@@ -37,9 +37,11 @@ fn window(runs: u64, successes: u64, failures: u64, wall_median_s: f64) -> Route
     }
 }
 
-fn evidence(harness_version: &str, pass_lower: f64, wall_median_s: f64) -> EvidenceRow {
+fn evidence(harness_version: &str, pass_lower: f64, wall_p90_s: f64) -> EvidenceRow {
     EvidenceRow {
+        quota_cost_per_pass: None,
         key: EvidenceKey {
+            lane: String::new(),
             genre: "coding".into(),
             harness_id: "codex".into(),
             harness_version: harness_version.into(),
@@ -53,8 +55,8 @@ fn evidence(harness_version: &str, pass_lower: f64, wall_median_s: f64) -> Evide
         pass_upper: 0.97,
         pass_boot_lower: pass_lower,
         pass_boot_upper: 0.97,
-        wall_median_s: Some(wall_median_s),
-        usd_list_median: Some(0.2),
+        wall_p90_s: Some(wall_p90_s),
+        usd_per_pass: Some(0.2),
         quota_per_run: [("7d".to_string(), 0.01)].into(),
         timeout_rate: 0.0,
         low_confidence: false,
@@ -240,6 +242,7 @@ fn registry() -> Registry {
             guardrail_window: 50,
             guardrail_quota_floor: 0.1,
             evaluation_reservations: BTreeMap::new(),
+            ..RouteSelectionSettings::default()
         },
         ..Registry::default()
     };

@@ -22,6 +22,33 @@ pub enum RoutingCommand {
     Stage(StageCommand),
     /// 組ごとの最新版の根拠表（区間と D1 を満たすか）を見る。
     Evidence(StageFilterArgs),
+    /// harness 残量切替の guardrail が止めた実行クラスを見る・人が再開する（ADR 2026-10-22 D2）。
+    #[command(subcommand)]
+    Balance(BalanceCommand),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BalanceCommand {
+    /// 止まっている実行クラスと理由。
+    Trips(BalanceDbArgs),
+    /// 止まっているクラスを再開する（人の操作。自動では再開しない）。
+    Reset(BalanceResetArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct BalanceDbArgs {
+    /// Explicit database path.
+    #[arg(long)]
+    pub db: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct BalanceResetArgs {
+    /// Explicit database path.
+    #[arg(long)]
+    pub db: Option<PathBuf>,
+    /// 実行クラス（coding | planner | review）。
+    pub class: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -197,6 +224,36 @@ pub fn run(_db: Option<&Path>, command: RoutingCommand) -> Result<ExitCode, CliE
             );
             Ok(ExitCode::SUCCESS)
         }
+        RoutingCommand::Balance(BalanceCommand::Trips(args)) => {
+            let db = explicit_db("routing balance trips", args.db.as_deref())?;
+            let store = SqliteStore::open(db)
+                .map_err(|e| CliError::msg(format!("routing balance trips: {e}")))?;
+            let trips = task_core::TaskStore::harness_balance_trips(&store)
+                .map_err(|e| CliError::msg(format!("routing balance trips: {e}")))?;
+            if trips.is_empty() {
+                outln!("(no execution class is stopped)");
+            }
+            for (class, reason) in trips {
+                outln!("{class}\t{reason}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        RoutingCommand::Balance(BalanceCommand::Reset(args)) => {
+            let db = explicit_db("routing balance reset", args.db.as_deref())?;
+            let store = SqliteStore::open(db)
+                .map_err(|e| CliError::msg(format!("routing balance reset: {e}")))?;
+            let was_stopped = task_core::TaskStore::harness_balance_reset(&store, &args.class)
+                .map_err(|e| CliError::msg(format!("routing balance reset: {e}")))?;
+            outln!(
+                "{}",
+                if was_stopped {
+                    format!("{}: resumed", args.class)
+                } else {
+                    format!("{}: was not stopped", args.class)
+                }
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         RoutingCommand::Evidence(args) => {
             let db = explicit_db("routing evidence", args.db.as_deref())?;
             let store = SqliteStore::open(db)
@@ -297,9 +354,9 @@ pub fn render_evidence(list: &RoutingEvidenceList) -> String {
                 r.pass,
                 r.pass_lower,
                 r.pass_upper,
-                r.wall_median_s
+                r.wall_p90_s
                     .map_or_else(|| "-".to_string(), |v| format!("{v:.1}s")),
-                r.usd_list_median
+                r.usd_per_pass
                     .map_or_else(|| "-".to_string(), |v| format!("{v:.3}")),
                 r.timeout_rate,
                 if r.qualifies { " qualifies" } else { "" }

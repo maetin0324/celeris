@@ -458,3 +458,7 @@ LDR は proxy 経由のまま維持する。Claude/Codex source へ fallback し
 3. **戻す条件**: Codex OAuth を CoS の fallback に戻すには、`claude_code` harness を llm-proxy 経由にする接続が要る（Claude Code の endpoint・auth の注入、daemon 起動経路への適用、proxy bearer secret の引き渡し）。これは別 task の設計・実装とし、本付記の範囲外とする。それまで `claude_code` は proxy endpoint を宣言できないため、Codex の CoS 候補は宣言しない（宣言すると実行時に失敗する候補になる）。
 
 4. **変えないこと**: planner・reviewer・coding の Codex 候補、PaperQA・LDR の Codex 候補は本決定の対象外で、そのまま残る。コードの挙動は変えない（runbook・進捗 TOML・試験の宣言の一致のみ）。
+
+### 2026-10-22 付記（harness の試行順）
+
+2026-10-12 付記の「候補 harness を先頭から順に試す」は、`[route_selection] harness_balance_classes` で有効化したクラスに限り、残量スコアによる並べ替えに置き換わる（[2026-10-22-harness-balance-and-lane-first-routing](2026-10-22-harness-balance-and-lane-first-routing.md) D1。既定は無効で、無効なクラスは本付記までと同じ宣言順）。frontier lane の model 選択も同 ADR D3 が上書きする。

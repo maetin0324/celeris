@@ -26,6 +26,7 @@ pub(crate) mod browser_ledger_path;
 pub(crate) mod classify_stage;
 pub(crate) mod classify_tick;
 pub(crate) mod clusters;
+pub(crate) mod completion_evidence_tick;
 mod cos_launch;
 pub(crate) mod jev_key;
 pub(crate) mod routing_guardrail;

@@ -66,6 +66,8 @@ pub mod integration_request;
 /// ADR-0043 D5（Phase 54）: 変更の取り込みの記録（`task_integrations`）。
 pub mod integrations;
 pub use integrations::{TaskRepoIntegrationState, TaskRepoIntegrationStatus};
+/// 根拠表 `routing_evidence` の行（評価 runner が書き、選択器が読む）。
+pub mod completion_outcome;
 /// ADR-0047（Phase 61）: 知識ベース（front matter・索引・検索・マウント。純粋関数だけ）。
 pub mod knowledge;
 /// ADR-0047 D4（Phase 62）: 知識整理 run の追跡（`knowledge_runs`）。
@@ -103,7 +105,6 @@ pub mod route_record;
 pub mod route_select;
 /// 評価 run の試行（付記 2026-10-12 eval-dispatch）。
 pub mod routing_eval_trial;
-/// 根拠表 `routing_evidence` の行（評価 runner が書き、選択器が読む）。
 pub mod routing_evidence;
 pub mod routing_shadow_history;
 pub mod store;

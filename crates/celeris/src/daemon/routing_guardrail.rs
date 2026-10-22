@@ -202,7 +202,7 @@ pub(crate) fn plan_pair(
         failure_baseline,
         baseline_runs,
         wall_median_s: input.window.wall_median_s,
-        evidence_wall_median_s: selected.wall_median_s,
+        evidence_wall_median_s: selected.wall_p90_s,
         selected_pass_lower: selected.pass_lower,
         // 測れない quota を「低い」とは扱わない（通知も出さない）。
         quota_remaining_fraction: input.quota_remaining_fraction.unwrap_or(1.0),

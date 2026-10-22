@@ -4782,6 +4782,14 @@
           "format": "double",
           "type": "number"
         },
+        "quota_cost_per_pass": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "quota_per_run": {
           "additionalProperties": {
             "format": "double",
@@ -4793,14 +4801,14 @@
           "format": "double",
           "type": "number"
         },
-        "usd_list_median": {
+        "usd_per_pass": {
           "format": "double",
           "type": [
             "number",
             "null"
           ]
         },
-        "wall_median_s": {
+        "wall_p90_s": {
           "format": "double",
           "type": [
             "number",
@@ -5146,6 +5154,63 @@
         "idle_timeout"
       ],
       "type": "string"
+    },
+    "HarnessOrderRecord": {
+      "description": "harness の試行順の並べ替え（ADR 2026-10-22 D1）の入力と結果。",
+      "properties": {
+        "declared": {
+          "description": "宣言順。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "description": "クラスが `harness_balance_classes` にあるか。",
+          "type": "boolean"
+        },
+        "execution_class": {
+          "type": "string"
+        },
+        "ordered": {
+          "description": "並べ替えの結果。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scores": {
+          "additionalProperties": {
+            "format": "double",
+            "type": "number"
+          },
+          "description": "harness → 残量スコア（ADR-0024 D3 の最良 account）。不明は欠ける。",
+          "type": "object"
+        },
+        "switched": {
+          "description": "結果の先頭が宣言順の先頭と違う。",
+          "type": "boolean"
+        },
+        "tolerance": {
+          "format": "double",
+          "type": "number"
+        },
+        "tripped": {
+          "description": "guardrail が止めているか（止まっていれば宣言順）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "execution_class",
+        "enabled",
+        "tripped",
+        "tolerance",
+        "declared",
+        "scores",
+        "ordered",
+        "switched"
+      ],
+      "type": "object"
     },
     "IntegrationRepairExhaustReason": {
       "description": "ADR-0120 D4/D5: `Event::IntegrationRepairExhausted.reason`（固定値）。",
@@ -6731,6 +6796,17 @@
         },
         "harness_id": {
           "type": "string"
+        },
+        "harness_order": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HarnessOrderRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "harness の試行順を残量で並べ替えた記録（ADR 2026-10-22 D1。並べ替えの対象クラスのときだけ）。"
         },
         "harness_version": {
           "type": "string"

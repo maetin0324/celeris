@@ -758,7 +758,9 @@ mod evidence_mode {
 
     fn row(source: &str, model: &str, pass_lower: f64) -> EvidenceRow {
         EvidenceRow {
+            quota_cost_per_pass: None,
             key: EvidenceKey {
+                lane: String::new(),
                 genre: "light".into(),
                 harness_id: "opencode".into(),
                 harness_version: "1.0.0".into(),
@@ -772,8 +774,8 @@ mod evidence_mode {
             pass_upper: pass_lower + 0.01,
             pass_boot_lower: pass_lower,
             pass_boot_upper: 0.99,
-            wall_median_s: Some(10.0),
-            usd_list_median: Some(0.1),
+            wall_p90_s: Some(10.0),
+            usd_per_pass: Some(0.1),
             quota_per_run: BTreeMap::new(),
             timeout_rate: 0.0,
             low_confidence: false,
@@ -881,4 +883,283 @@ mod evidence_mode {
         let (m, v) = pick(&mut d, EvidenceMode::Pinned, Some("v1"));
         assert_eq!((m.as_str(), v.as_str()), ("qwen4", "v1"));
     }
+}
+
+// ADR 2026-10-22: harness の残量による並べ替え、frontier lane の規則、ε 探索の位置。
+mod harness_balance {
+    use super::*;
+    use task_core::llm_route::{ExecutionClass, HarnessRequest};
+    use task_core::route_select::RoutingStage;
+    use task_core::routing_evidence::{EvidenceKey, EvidenceRow};
+
+    fn two_harnesses(classes: &[&str]) -> Registry {
+        let mut r = Registry::default();
+        r.sources.insert(
+            "claude_oauth".into(),
+            source("claude_oauth", "claude_cli", &["ca"], &["sonnet", "opus"]),
+        );
+        r.sources.insert(
+            "codex_oauth".into(),
+            source("codex_oauth", "codex_cli", &["xa"], &["gpt"]),
+        );
+        r.harnesses.insert(
+            "claude_code".into(),
+            harness(&["claude_oauth"], &["claude_cli"], &["tools"]),
+        );
+        r.harnesses.insert(
+            "codex".into(),
+            harness(&["codex_oauth"], &["codex_cli"], &["tools"]),
+        );
+        r.route_defaults.insert(
+            "claude_code".into(),
+            vec![key("claude_oauth", "sonnet"), key("claude_oauth", "opus")],
+        );
+        r.route_defaults
+            .insert("codex".into(), vec![key("codex_oauth", "gpt")]);
+        r.lane_route_defaults.insert(
+            ("claude_code".into(), "frontier".into()),
+            vec![key("claude_oauth", "opus")],
+        );
+        for class in ["planner", "coding"] {
+            r.harness_selection
+                .execution_class_defaults
+                .insert(class.into(), vec!["claude_code".into(), "codex".into()]);
+        }
+        r.route_selection.harness_balance_classes =
+            classes.iter().map(|c| (*c).to_owned()).collect();
+        r
+    }
+
+    fn with_headroom(r: &Registry, claude: f64, codex: f64) -> RouteState {
+        let mut state = all_available(r);
+        state
+            .quota
+            .source_headroom
+            .insert("claude_oauth".into(), claude);
+        state
+            .quota
+            .source_headroom
+            .insert("codex_oauth".into(), codex);
+        state
+    }
+
+    fn class_input(class: &str, lane: Option<&str>) -> RouteInput {
+        RouteInput {
+            task_id: "t".into(),
+            harness: HarnessRequest {
+                genre: Some("coding".into()),
+                execution_class: Some(ExecutionClass::from(class)),
+                ..Default::default()
+            },
+            lane: lane.map(str::to_owned),
+            ..Default::default()
+        }
+    }
+
+    fn harness_of(
+        r: &Registry,
+        state: &RouteState,
+        input: &RouteInput,
+    ) -> (String, Option<task_core::route_select::HarnessOrderRecord>) {
+        let (pick, trace) = route_select(input, r, state);
+        (
+            pick.expect("route").harness.to_string(),
+            trace.decision.and_then(|d| d.harness_order),
+        )
+    }
+
+    #[test]
+    fn a_class_that_is_not_enabled_keeps_the_declared_order() {
+        let r = two_harnesses(&["review"]);
+        let state = with_headroom(&r, 0.05, 0.95);
+        let (harness, order) = harness_of(&r, &state, &class_input("planner", None));
+        assert_eq!(harness, "claude_code");
+        assert!(order.is_none(), "no record for a class that is not enabled");
+    }
+
+    #[test]
+    fn less_claude_headroom_puts_codex_first_and_records_inputs_and_result() {
+        let r = two_harnesses(&["planner"]);
+        let state = with_headroom(&r, 0.2, 0.9);
+        let (harness, order) = harness_of(&r, &state, &class_input("planner", None));
+        assert_eq!(harness, "codex");
+        let order = order.expect("harness_order on the decision");
+        assert!(order.enabled && !order.tripped && order.switched);
+        assert_eq!(order.declared, ["claude_code", "codex"]);
+        assert_eq!(order.ordered, ["codex", "claude_code"]);
+        assert_eq!(order.scores["claude_code"], 0.2);
+        assert_eq!(order.scores["codex"], 0.9);
+        assert_eq!(order.tolerance, 0.15);
+    }
+
+    #[test]
+    fn a_difference_inside_the_tolerance_keeps_the_declared_order() {
+        let r = two_harnesses(&["planner"]);
+        let state = with_headroom(&r, 0.8, 0.9);
+        let (harness, order) = harness_of(&r, &state, &class_input("planner", None));
+        assert_eq!(harness, "claude_code");
+        let order = order.expect("recorded even when nothing moves");
+        assert!(!order.switched);
+        assert_eq!(order.ordered, ["claude_code", "codex"]);
+    }
+
+    #[test]
+    fn a_tripped_class_goes_back_to_the_declared_order() {
+        let r = two_harnesses(&["planner"]);
+        let mut state = with_headroom(&r, 0.1, 0.9);
+        state.balance_tripped.insert("planner".into());
+        let (harness, order) = harness_of(&r, &state, &class_input("planner", None));
+        assert_eq!(harness, "claude_code");
+        let order = order.expect("record");
+        assert!(order.tripped && !order.switched);
+    }
+
+    #[test]
+    fn when_the_first_harness_is_full_the_ordered_next_one_is_tried() {
+        let r = two_harnesses(&["planner"]);
+        // codex is ahead on headroom but its only account is cooling down: claude still runs.
+        let mut state = with_headroom(&r, 0.3, 0.9);
+        state.quota.cooling_down.insert(pair("codex_oauth", "xa"));
+        let (pick, trace) = route_select(&class_input("planner", None), &r, &state);
+        assert_eq!(pick.unwrap().harness.to_string(), "claude_code");
+        assert_eq!(trace.harness_rejections[0].harness.to_string(), "codex");
+    }
+
+    // --- frontier lane ---
+
+    fn evidence_row(lane: &str, model: &str, pass_lower: f64) -> EvidenceRow {
+        EvidenceRow {
+            key: EvidenceKey {
+                genre: "coding".into(),
+                harness_id: "claude_code".into(),
+                harness_version: "2".into(),
+                lane: lane.into(),
+                source_id: "claude_oauth".into(),
+                model_id: model.into(),
+            },
+            evidence_version: "completion-1".into(),
+            n: 100,
+            pass: 90,
+            pass_lower,
+            pass_upper: pass_lower + 0.05,
+            pass_boot_lower: pass_lower,
+            pass_boot_upper: pass_lower + 0.05,
+            wall_p90_s: Some(100.0),
+            usd_per_pass: Some(1.0),
+            quota_cost_per_pass: Some(if model == "sonnet" { 0.01 } else { 0.03 }),
+            quota_per_run: BTreeMap::new(),
+            timeout_rate: 0.0,
+            low_confidence: false,
+        }
+    }
+
+    /// enforce の claude_code。根拠表は sonnet が opus と同等で quota コストが安い（旧来の選択は sonnet）。
+    fn enforced(r: &Registry, seed: &str) -> RouteState {
+        let mut state = all_available(r);
+        let h: task_core::llm_route::HarnessId = "claude_code".into();
+        let rows = ["standard", "frontier"]
+            .into_iter()
+            .flat_map(|lane| {
+                [
+                    evidence_row(lane, "sonnet", 0.84),
+                    evidence_row(lane, "opus", 0.85),
+                ]
+            })
+            .collect();
+        state.evidence.insert(h.clone(), rows);
+        state.stages.insert(h.clone(), RoutingStage::Enforce);
+        state.harness_versions.insert(h, "2.1.0".into());
+        state.run_seed = Some(seed.into());
+        state
+    }
+
+    fn model_of(r: &Registry, state: &RouteState, lane: &str) -> String {
+        let (pick, _) = route_select(&class_input("coding", Some(lane)), r, state);
+        pick.expect("route").candidate.model.to_string()
+    }
+
+    #[test]
+    fn a_frontier_lane_gets_the_frontier_model_whatever_the_table_says() {
+        let mut r = two_harnesses(&[]);
+        r.route_selection.exploration_epsilon = 0.0;
+        let state = enforced(&r, "run-1");
+        // 根拠表の同等判定では sonnet（quota コストが安い）が選ばれる lane は今のまま。
+        assert_eq!(model_of(&r, &state, "standard"), "sonnet");
+        // frontier lane は規則で lane の route_defaults（opus）。
+        assert_eq!(model_of(&r, &state, "frontier"), "opus");
+        let (_, trace) = route_select(&class_input("coding", Some("frontier")), &r, &state);
+        let decision = trace.decision.expect("decision");
+        assert_eq!(decision.lane.as_deref(), Some("frontier"));
+        assert_eq!(decision.propensity, 1.0);
+    }
+
+    #[test]
+    fn exploration_happens_only_inside_the_frontier_lane() {
+        let mut r = two_harnesses(&[]);
+        r.route_selection.exploration_epsilon = 0.5;
+        let mut explored_in_frontier = 0;
+        let mut kept_in_frontier = 0;
+        for i in 0..64u64 {
+            let state = enforced(
+                &r,
+                &format!("{}{}", "x".repeat((i % 7) as usize), i * 2_654_435_761u64),
+            );
+            // frontier 以外の lane では ε を使わない（常に根拠表の選択）。
+            assert_eq!(model_of(&r, &state, "standard"), "sonnet");
+            let (pick, trace) = route_select(&class_input("coding", Some("frontier")), &r, &state);
+            let pick = pick.unwrap();
+            let decision = trace.decision.unwrap();
+            let propensity = decision.propensity;
+            if pick.candidate.model.as_ref() == "opus" {
+                kept_in_frontier += 1;
+                assert!((propensity - 0.5).abs() < 1e-9);
+            } else {
+                explored_in_frontier += 1;
+                assert_eq!(pick.candidate.model.as_ref(), "sonnet");
+                assert!((propensity - 0.5).abs() < 1e-9);
+            }
+        }
+        assert!(
+            explored_in_frontier > 0 && kept_in_frontier > 0,
+            "explored={explored_in_frontier} kept={kept_in_frontier}"
+        );
+    }
+}
+
+// ADR 2026-10-22 D1: `QuotaSnapshot.source_remaining` / `source_headroom` は account book の観測値から入る。
+#[test]
+fn route_state_fills_source_remaining_and_headroom_from_the_account_book() {
+    use task_core::{AccountAdapter, RateLimitObservation, RateWindow};
+    let dir = accounts_fixture();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut d = pool_dispatcher(store, done_adapter(), None, dir.path().to_path_buf(), 2, 2);
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let observe = |five_hour: f64| RateLimitObservation {
+        five_hour: Some(RateWindow {
+            utilization: five_hour,
+            resets_at: now + 3_600,
+        }),
+        // 7d は半分経過（t7 = 0.5）で 30% 使用 → h_7d = min(1, 0.7 / 0.5) = 1。
+        seven_day: Some(RateWindow {
+            utilization: 0.30,
+            resets_at: now + 302_400,
+        }),
+        one_month: None,
+        status: None,
+        resets_at: None,
+        observed_at: now,
+    };
+    {
+        let book = d.account_book(AccountAdapter::ClaudeCode).expect("book");
+        let mut book = book.lock().unwrap();
+        book.record_observation("a", observe(0.60), crate::accounts::ObservationSource::Run);
+        book.record_observation("b", observe(0.90), crate::accounts::ObservationSource::Run);
+    }
+    let state = d.route_state(false);
+    let source: SourceId = AccountAdapter::ClaudeCode.as_str().into();
+    // 最良 account（a）: h_5h = 0.4 が最小。b は 0.1。席の減点は入れない。
+    let headroom = state.quota.source_headroom[&source];
+    let remaining = state.quota.source_remaining[&source];
+    assert!((headroom - 0.4).abs() < 1e-6, "headroom {headroom}");
+    assert!((remaining - 0.4).abs() < 1e-6, "remaining {remaining}");
 }

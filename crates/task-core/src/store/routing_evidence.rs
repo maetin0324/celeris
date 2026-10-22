@@ -7,36 +7,38 @@ use crate::routing_evidence::{EvidenceKey, EvidenceRow};
 use super::{SqliteStore, StoreError};
 
 /// 根拠表 `routing_evidence` の列（読み書きで同じ並び）。
-const EVIDENCE_COLUMNS: &str = "genre,harness_id,harness_version,source_id,model_id,evidence_version,n,pass,pass_lower,pass_upper,pass_boot_lower,pass_boot_upper,wall_median_s,usd_list_median,quota_per_run_json,timeout_rate,low_confidence";
+const EVIDENCE_COLUMNS: &str = "genre,harness_id,harness_version,lane,source_id,model_id,evidence_version,n,pass,pass_lower,pass_upper,pass_boot_lower,pass_boot_upper,wall_p90_s,usd_per_pass,quota_cost_per_pass,quota_per_run_json,timeout_rate,low_confidence";
 
 fn evidence_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<EvidenceRow> {
-    let quota: String = r.get(14)?;
+    let quota: String = r.get(16)?;
     Ok(EvidenceRow {
         key: EvidenceKey {
             genre: r.get(0)?,
             harness_id: r.get(1)?,
             harness_version: r.get(2)?,
-            source_id: r.get(3)?,
-            model_id: r.get(4)?,
+            lane: r.get(3)?,
+            source_id: r.get(4)?,
+            model_id: r.get(5)?,
         },
-        evidence_version: r.get(5)?,
-        n: r.get(6)?,
-        pass: r.get(7)?,
-        pass_lower: r.get(8)?,
-        pass_upper: r.get(9)?,
-        pass_boot_lower: r.get(10)?,
-        pass_boot_upper: r.get(11)?,
-        wall_median_s: r.get(12)?,
-        usd_list_median: r.get(13)?,
+        evidence_version: r.get(6)?,
+        n: r.get(7)?,
+        pass: r.get(8)?,
+        pass_lower: r.get(9)?,
+        pass_upper: r.get(10)?,
+        pass_boot_lower: r.get(11)?,
+        pass_boot_upper: r.get(12)?,
+        wall_p90_s: r.get(13)?,
+        usd_per_pass: r.get(14)?,
+        quota_cost_per_pass: r.get(15)?,
         quota_per_run: serde_json::from_str(&quota).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                14,
+                16,
                 rusqlite::types::Type::Text,
                 Box::new(error),
             )
         })?,
-        timeout_rate: r.get(15)?,
-        low_confidence: r.get(16)?,
+        timeout_rate: r.get(17)?,
+        low_confidence: r.get(18)?,
     })
 }
 
@@ -55,7 +57,7 @@ fn evidence_rows_at(
 }
 
 impl SqliteStore {
-    /// 同じ版は丸ごと置き換え、別の版は残す（評価 runner の `aggregate --write-evidence` が書く）。
+    /// 同じ版は丸ごと置き換え、別の版は残す（daemon が完了単位の本番結果から書く（`task_core::completion_outcome::refresh_routing_evidence`））。
     /// 行の版は引数 `version` で決まる（行の `evidence_version` は読まない）。
     pub(super) fn replace_routing_evidence_impl(
         &self,
@@ -70,13 +72,14 @@ impl SqliteStore {
         )?;
         {
             let mut stmt = tx.prepare(&format!(
-                "INSERT INTO routing_evidence ({EVIDENCE_COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)"
+                "INSERT INTO routing_evidence ({EVIDENCE_COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"
             ))?;
             for item in rows {
                 stmt.execute(params![
                     item.key.genre,
                     item.key.harness_id,
                     item.key.harness_version,
+                    item.key.lane,
                     item.key.source_id,
                     item.key.model_id,
                     version,
@@ -86,8 +89,9 @@ impl SqliteStore {
                     item.pass_upper,
                     item.pass_boot_lower,
                     item.pass_boot_upper,
-                    item.wall_median_s,
-                    item.usd_list_median,
+                    item.wall_p90_s,
+                    item.usd_per_pass,
+                    item.quota_cost_per_pass,
                     serde_json::to_string(&item.quota_per_run)?,
                     item.timeout_rate,
                     item.low_confidence
@@ -204,13 +208,15 @@ mod tests {
     fn evidence_versions_replace_and_stage_is_shadow_by_default_then_event_is_appended() {
         let store = SqliteStore::open_in_memory().unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 89);
+        assert_eq!(SCHEMA_VERSION, 90);
         assert_eq!(
             store.routing_stage("coding", "codex").unwrap(),
             RoutingStage::Shadow
         );
         let row = |version: &str, pass| EvidenceRow {
+            quota_cost_per_pass: None,
             key: EvidenceKey {
+                lane: String::new(),
                 genre: "coding".into(),
                 harness_id: "codex".into(),
                 harness_version: "1.2.0".into(),
@@ -224,8 +230,8 @@ mod tests {
             pass_upper: 0.9,
             pass_boot_lower: 0.55,
             pass_boot_upper: 0.85,
-            wall_median_s: Some(12.0),
-            usd_list_median: None,
+            wall_p90_s: Some(12.0),
+            usd_per_pass: None,
             quota_per_run: [("7d".to_string(), 0.01)].into(),
             timeout_rate: 0.0,
             low_confidence: version == "v2",
@@ -249,7 +255,7 @@ mod tests {
             (0.55, 0.85)
         );
         assert!(latest[0].low_confidence);
-        assert_eq!(latest[0].usd_list_median, None);
+        assert_eq!(latest[0].usd_per_pass, None);
         assert_eq!(latest[0].quota_per_run.get("7d"), Some(&0.01));
         // task 欄 `evidence_table_id` の固定読み: 新しい版があっても指定版だけ（無い版は空）。
         let pinned = store.routing_evidence_at("coding", "codex", "v1").unwrap();

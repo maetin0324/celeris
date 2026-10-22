@@ -55,3 +55,7 @@ Codex の cwd が worktree のとき、dispatcher の artifacts_dir は cwd の�
 許可はこのタスクの成果物ディレクトリだけに限定し、共有親や他タスクには広げない。
 sandbox を無効化せず、誤った場所の result.json を成功結果として回収しない。
 ローカル CLI 0.154.0 `exec --help` の --add-dir と実機ログで確認。
+
+## 付記 2026-10-22: 残量スコアの比較を復活する
+
+D2 の「アカウントプール同士はアダプタをまたいで残量スコアを比較する」は、2026-10-13 の source 移行（`2026-10-11-llm-source-harness-selection` 付記）で harness の試行が宣言順固定になり、実装から消えていた。廃止の決定はなく、本文は Accepted のまま。[2026-10-22-harness-balance-and-lane-first-routing](2026-10-22-harness-balance-and-lane-first-routing.md) D1 が、実行クラスごとに有効化できる形でこれを復活させる（スコアは ADR-0024 D3 の `min(h_5h, h_7d)`、許容幅つき、guardrail つき）。有効化していないクラスは宣言順のまま。

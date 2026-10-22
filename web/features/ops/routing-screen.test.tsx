@@ -42,8 +42,8 @@ const evidence: RoutingEvidenceList = {
           quota_per_run: [],
           source_id: "source-a",
           timeout_rate: 0.025,
-          usd_list_median: 0.02,
-          wall_median_s: 12,
+          usd_per_pass: 0.02,
+          wall_p90_s: 12,
         },
         {
           // 定価の無い source・結果の無い cell は null（ADR 2026-10-11 付記 2026-10-13）。
@@ -57,8 +57,8 @@ const evidence: RoutingEvidenceList = {
           quota_per_run: [],
           source_id: "source-b",
           timeout_rate: 0,
-          usd_list_median: null,
-          wall_median_s: null,
+          usd_per_pass: null,
+          wall_p90_s: null,
         },
       ],
     },

@@ -51,6 +51,26 @@ pub trait TaskStore:
     + crate::cron::CronJobStore
     + crate::store::ModelCatalogStore
 {
+    /// task とその終端の WorkUnit の完了単位を `completion_outcomes` へ冪等に書く（ADR 2026-10-22 D6）。
+    fn completion_outcomes_project(
+        &self,
+        task_id: &str,
+        celeris_version: &str,
+        now: &str,
+    ) -> Result<usize, StoreError>;
+    /// 完了単位の新しい順。`leaf_only` は評価に使う葉の単位だけ。
+    fn completion_outcomes_list(
+        &self,
+        leaf_only: bool,
+        limit: u32,
+    ) -> Result<Vec<crate::completion_outcome::CompletionOutcome>, StoreError>;
+    /// harness 切替の guardrail が止めた実行クラス（クラス → 理由）。
+    fn harness_balance_trips(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, String>, StoreError>;
+    fn harness_balance_trip(&self, class: &str, reason: &str, at: &str) -> Result<(), StoreError>;
+    /// 人の reset。止まっていたら true。
+    fn harness_balance_reset(&self, class: &str) -> Result<bool, StoreError>;
     fn replace_routing_evidence(
         &self,
         version: &str,

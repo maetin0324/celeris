@@ -81,6 +81,8 @@ pub(crate) async fn tick_loop(
         crate::daemon::stranded_sweep::spawn(dispatcher.store(), roles.role.clone());
     // ADR 2026-10-11 D3: enforce の guardrail 判定（間隔は `INTERVAL`。判定は決定的で LLM を呼ばない）。
     let mut guardrail_ticker = crate::daemon::routing_guardrail::Ticker::default();
+    let mut balance_guard_ticker = crate::daemon::routing_guardrail::Ticker::default();
+    let mut completion_evidence_ticker = crate::daemon::routing_guardrail::Ticker::default();
     // ADR 2026-10-15-jev-wire D3: `[jev] enabled` のときだけ作る分類段（reload で設定が変われば作り直す）。
     let mut classify_tick: Option<crate::daemon::classify_tick::ClassifyTick> = None;
     let mut classify_built_for: Option<crate::config::JevSectionConfig> = None;
@@ -235,6 +237,38 @@ pub(crate) async fn tick_loop(
                         Err(e) => {
                             tracing::warn!(error = %e, "routing guardrail: tick failed");
                         }
+                    }
+                }
+            }
+            {
+                // ADR 2026-10-22 D2/D7: harness 残量切替の guardrail と、完了単位の根拠表の更新。
+                let now = OffsetDateTime::now_utc();
+                if balance_guard_ticker
+                    .due(crate::daemon::completion_evidence_tick::GUARD_INTERVAL, now)
+                {
+                    match crate::daemon::completion_evidence_tick::guard(dispatcher, config, now) {
+                        Ok(report) if !report.tripped.is_empty() => {
+                            tracing::info!(classes = ?report.tripped, "harness balance guardrail: stopped");
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(error = %e, "harness balance guardrail: tick failed")
+                        }
+                    }
+                }
+                if completion_evidence_ticker.due(
+                    crate::daemon::completion_evidence_tick::EVIDENCE_INTERVAL,
+                    now,
+                ) {
+                    match crate::daemon::completion_evidence_tick::evidence_tick(
+                        dispatcher.store().as_ref(),
+                        now,
+                    ) {
+                        Ok(rows) if rows > 0 => {
+                            tracing::info!(rows, "routing evidence refreshed from completions");
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!(error = %e, "routing evidence refresh failed"),
                     }
                 }
             }

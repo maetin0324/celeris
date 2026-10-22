@@ -108,6 +108,25 @@ pub struct RouteSelectionConfig {
     pub guardrail_quota_floor: f64,
     #[serde(default)]
     pub evaluation_reservations: BTreeMap<String, u32>,
+    /// harness の試行順を残量で並べ替える実行クラス（`coding` | `planner` | `review`）。既定は空
+    /// （全クラス宣言順）。有効化は人が決める（ADR 2026-10-22 D1）。
+    #[serde(default)]
+    pub harness_balance_classes: Vec<String>,
+    #[serde(default = "default_balance_tolerance")]
+    pub harness_balance_tolerance: f64,
+    #[serde(default = "default_balance_guard_min")]
+    pub harness_balance_guard_min: u32,
+    #[serde(default = "default_balance_guard_margin")]
+    pub harness_balance_guard_margin: f64,
+}
+fn default_balance_tolerance() -> f64 {
+    0.15
+}
+fn default_balance_guard_min() -> u32 {
+    10
+}
+fn default_balance_guard_margin() -> f64 {
+    0.15
 }
 fn default_epsilon() -> f64 {
     0.1
@@ -125,6 +144,10 @@ impl Default for RouteSelectionConfig {
             guardrail_window: default_window(),
             guardrail_quota_floor: default_quota_floor(),
             evaluation_reservations: BTreeMap::new(),
+            harness_balance_classes: Vec::new(),
+            harness_balance_tolerance: default_balance_tolerance(),
+            harness_balance_guard_min: default_balance_guard_min(),
+            harness_balance_guard_margin: default_balance_guard_margin(),
         }
     }
 }
@@ -191,6 +214,15 @@ impl super::Config {
                     .iter()
                     .map(|(s, n)| (s.as_str().into(), *n))
                     .collect(),
+                harness_balance_classes: self
+                    .route_selection
+                    .harness_balance_classes
+                    .iter()
+                    .cloned()
+                    .collect(),
+                harness_balance_tolerance: self.route_selection.harness_balance_tolerance,
+                harness_balance_guard_min: self.route_selection.harness_balance_guard_min,
+                harness_balance_guard_margin: self.route_selection.harness_balance_guard_margin,
             },
             ..Default::default()
         };
@@ -314,6 +346,21 @@ fn validate_registry(r: &task_core::llm_route::Registry) -> Result<(), ConfigErr
             "route_selection guardrail window must be positive and quota floor between 0 and 1"
                 .into(),
         ));
+    }
+    if !(0.0..=1.0).contains(&r.route_selection.harness_balance_tolerance)
+        || !(0.0..=1.0).contains(&r.route_selection.harness_balance_guard_margin)
+        || r.route_selection.harness_balance_guard_min == 0
+    {
+        return Err(ConfigError::Invalid(
+            "route_selection harness_balance tolerance/guard_margin must be between 0 and 1 and guard_min positive".into(),
+        ));
+    }
+    for class in &r.route_selection.harness_balance_classes {
+        if !ROUTE_CLASSES.contains(&class.as_str()) {
+            return Err(ConfigError::Invalid(format!(
+                "route_selection.harness_balance_classes names unknown execution class {class} (expected one of {ROUTE_CLASSES:?})"
+            )));
+        }
     }
     for source in r.route_selection.evaluation_reservations.keys() {
         if !r.sources.contains_key(source) {
@@ -560,6 +607,38 @@ candidates = [{ source = "main", model = "m1" }]
             registry.route_selection.evaluation_reservations[&"main".into()],
             2
         );
+    }
+
+    /// ADR 2026-10-22 D1: 既定は全クラス無効。書いたクラスだけ有効で、未知のクラスは設定エラー。
+    #[test]
+    fn harness_balance_is_off_by_default_and_names_only_known_classes() {
+        let cfg = Config::parse_with_delivery(DECLS).unwrap();
+        let registry = cfg.llm_route_registry().unwrap();
+        assert!(registry.route_selection.harness_balance_classes.is_empty());
+        assert_eq!(registry.route_selection.harness_balance_tolerance, 0.15);
+        let on = DECLS.replace(
+            "[route_defaults.cli]",
+            "[route_selection]\nharness_balance_classes = [\"planner\", \"review\"]\nharness_balance_tolerance = 0.2\n[route_defaults.cli]",
+        );
+        let registry = Config::parse_with_delivery(&on)
+            .unwrap()
+            .llm_route_registry()
+            .unwrap();
+        assert_eq!(
+            registry.route_selection.harness_balance_classes,
+            ["planner".to_owned(), "review".to_owned()].into()
+        );
+        assert_eq!(registry.route_selection.harness_balance_tolerance, 0.2);
+        let bad = DECLS.replace(
+            "[route_defaults.cli]",
+            "[route_selection]\nharness_balance_classes = [\"nope\"]\n[route_defaults.cli]",
+        );
+        let error = Config::parse_with_delivery(&bad)
+            .unwrap()
+            .llm_route_registry()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown execution class"), "{error}");
     }
 
     #[test]

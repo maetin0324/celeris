@@ -481,7 +481,20 @@ pub fn record_task_decision_log(
     // 人の介入と CoS の実 turn（共有オーバーヘッド）。どちらも events・chat_runs からの冪等な投影。
     store.decision_log_project_interventions(&task_id.to_string())?;
     store.decision_log_project_cos_turns(now)?;
+    // ADR 2026-10-22 D6: task / WU が終端なら、完了までの総消費と判定の経過を完了単位として残す。
+    let stamp = now
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default();
+    store.completion_outcomes_project(&task_id.to_string(), &celeris_release(), &stamp)?;
     Ok(())
+}
+
+/// 完了単位に添える Celeris の版（リリース `sha12`。`--release` / `CELERIS_RELEASE`、無ければ `dev`）。
+fn celeris_release() -> String {
+    std::env::var("CELERIS_RELEASE")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "dev".into())
 }
 
 impl Dispatcher {

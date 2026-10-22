@@ -50,6 +50,7 @@ fn trial(problem_id: &str, passed: bool, eval_status: Option<&str>) -> Trial {
         problem_id: problem_id.into(),
         trial_no: 1,
         key: EvidenceKey {
+            lane: String::new(),
             genre: "coding".into(),
             harness_id: "claude_code".into(),
             harness_version: "1".into(),

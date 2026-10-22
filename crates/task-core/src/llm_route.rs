@@ -127,6 +127,14 @@ pub struct RouteSelectionSettings {
     pub guardrail_window: u64,
     pub guardrail_quota_floor: f64,
     pub evaluation_reservations: BTreeMap<SourceId, u32>,
+    /// harness の試行順を残量で並べ替える実行クラス（ADR 2026-10-22 D1）。空 = 全クラス宣言順。
+    pub harness_balance_classes: BTreeSet<String>,
+    /// 最大スコアからこの幅以内の harness は同等（宣言順を優先）。
+    pub harness_balance_tolerance: f64,
+    /// guardrail: 切替した完了単位がこの件数以上で判定する（ADR D2）。
+    pub harness_balance_guard_min: u32,
+    /// guardrail: 切替した単位の悪い率が、しなかった単位より、この幅を超えて高いと止める。
+    pub harness_balance_guard_margin: f64,
 }
 impl Default for RouteSelectionSettings {
     fn default() -> Self {
@@ -135,6 +143,10 @@ impl Default for RouteSelectionSettings {
             guardrail_window: 50,
             guardrail_quota_floor: 0.1,
             evaluation_reservations: BTreeMap::new(),
+            harness_balance_classes: BTreeSet::new(),
+            harness_balance_tolerance: 0.15,
+            harness_balance_guard_min: 10,
+            harness_balance_guard_margin: 0.15,
         }
     }
 }
@@ -381,7 +393,11 @@ pub struct AccountSnapshot {
 }
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QuotaSnapshot {
+    /// source の残量（最も余裕のある account の、最も逼迫した窓の残り割合 0..=1。ADR 2026-10-22 D1）。
     pub source_remaining: BTreeMap<SourceId, f64>,
+    /// source の残量スコア（最良 account の ADR-0024 D3 スコア `min(h_5h, h_7d, h_1m)`。除外は 0）。
+    /// account プールを持たない source は欠ける（不明）。
+    pub source_headroom: BTreeMap<SourceId, f64>,
     pub account_remaining: BTreeMap<(SourceId, AccountId), f64>,
     pub cooling_down: BTreeSet<(SourceId, AccountId)>,
 }

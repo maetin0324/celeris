@@ -76,7 +76,7 @@ DB に持つ案は、人が手で書く config.toml と DB の二重の置き場
 ③ 書き戻し → ④ `apply_config`。④ が落ちたら本文を元に戻す（何も変わらない）。ファイルを人が手で直していた分も
 同時に反映される（`PATCH` は「読み直し＋この変更」）。
 
-### D4: 変更の履歴は `config_events`（migration 0090、追記専用）
+### D4: 変更の履歴は `config_events`（migration 0091、追記専用）
 
 `ts` / `actor`（`admin`）/ `key` / `class` / `apply_unit` / `before` / `after`。UPDATE・DELETE を持たない。値の変わらない欄は記録しない。
 `GET /config/events` が新しい順に最大 200 件返し、Web UI の設定画面に出る。
@@ -93,4 +93,4 @@ DB に持つ案は、人が手で書く config.toml と DB の二重の置き場
 
 ## 本番への移行
 
-config.toml の書き換えは不要（欄は増減していない）。DB は migration 0090 が `config_events` を足すだけ（release の handoff で適用）。
+config.toml の書き換えは不要（欄は増減していない）。DB は migration 0091 が `config_events` を足すだけ（release の handoff で適用）。

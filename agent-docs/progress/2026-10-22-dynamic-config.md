@@ -7,7 +7,7 @@ ADR: `agent-docs/adr/2026-10-22-dynamic-config.md`（分類表・D1〜D6）。
 
 ## 実装
 
-- task-core: migration 0090 `config_events`（追記専用）、`config_events_append` / `config_events_recent`。
+- task-core: migration 0091 `config_events`（追記専用）、`config_events_append` / `config_events_recent`。
 - task-dispatch: `Dispatcher::apply_dispatch_config`（動的な欄を 1 本で差し替え）。`reload_config`・`set_delivery_policy` を削除。
 - celeris: `config/fields.rs`（分類表 `RULES`・secret 判定・一覧の平坦化）、`config/edit.rs`（`toml_edit` でコメントを保つ書き換え）、
   `Config::load_text` / `loaded_text`、`daemon/config_admin.rs`（一覧・検証→書き戻し→反映→履歴）、`admin.rs` の `apply_config`（reload と PATCH の共通経路）。
@@ -21,7 +21,7 @@ ADR: `agent-docs/adr/2026-10-22-dynamic-config.md`（分類表・D1〜D6）。
 
 ## 本番への移行
 
-config.toml の書き換えは不要。DB は migration 0090（`config_events`）が release で当たるだけ。
+config.toml の書き換えは不要。DB は migration 0091（`config_events`）が release で当たるだけ。
 
 ## 未解決・提案
 

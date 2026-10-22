@@ -1,7 +1,9 @@
 ---
-status: done
-completed: 2026-10-22
+title: 統合の検査で CELERIS_WU_* を使う WU の check を流さない
 tasks: [01M5HPMDFY1DDV6NCQ9KNNEPH5]
+status: done
+updated: 2026-10-22
+completed: 2026-10-22
 ---
 # 統合の検査で CELERIS_WU_BASE が空になり必ず落ちる件
 

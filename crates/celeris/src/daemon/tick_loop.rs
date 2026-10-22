@@ -544,6 +544,12 @@ pub(crate) async fn tick_loop(
                     }
                 };
             }
+            // 分類段が動いている間だけ、dispatcher は未分類の subject の起動を上限付きで見送る。
+            dispatcher.set_classification_wait(
+                classify_tick
+                    .as_ref()
+                    .map(|_| crate::daemon::classify_tick::DISPATCH_WAIT_MAX),
+            );
             if let Some(c) = &classify_tick {
                 let store = dispatcher.store();
                 c.run(store.as_ref(), dispatcher.routing_mode()).await;

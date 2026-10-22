@@ -3343,7 +3343,10 @@ export type LaneAssistRecord = {
   "classifier_status": ClassifierStatus;
   "final_lane": string;
   "fixed_lane"?: string | null;
+  "jev_confidence"?: number | null;
+  "jev_confidence_missing"?: boolean;
   "jev_lane"?: string | null;
+  "jev_specificity"?: string | null;
   "mode": string;
   "observed_snapshot"?: string | null;
   "overridden_by"?: string | null;

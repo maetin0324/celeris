@@ -801,3 +801,117 @@ async fn normal_tick_provenance_survives_reopen_export_and_reload() {
     assert_eq!(la(c).observed_snapshot.as_deref(), Some("snap-7"));
     assert_eq!(la(b).call_id, None);
 }
+
+fn dispatched_count(store: &Arc<dyn TaskStore>, task: &Task) -> usize {
+    store
+        .events_for(task.id)
+        .unwrap()
+        .iter()
+        .filter(|(_, e)| matches!(e, Event::RoutingDecided { .. }))
+        .count()
+}
+
+/// ADR 2026-10-22-jev-classification-before-launch D3: 分類段が動いている間、board に項目の無い subject は
+/// 起動を見送り、項目（成功でも fell_back でも）が載った次の tick で、その分類を `lane_assist` に載せて起動する。
+#[tokio::test]
+async fn unclassified_subject_waits_for_the_classification_then_launches_with_it() {
+    for item in [
+        jev_ok(SpecificityHint::NeedsInvestigationDesign),
+        BoardItem {
+            entry: ClassificationEntry::fell_back("timeout"),
+            credential: None,
+        },
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = hinted_task(ws.path(), task_core::TierSource::Hint);
+        store.insert(&task).unwrap();
+        let mut d = dispatcher(store.clone(), question_adapter(), 1);
+        d.set_routing_mode(RoutingMode::DecisionAssisted);
+        d.set_classification_wait(Some(Duration::from_secs(20)));
+        d.tick().unwrap();
+        assert_eq!(
+            dispatched_count(&store, &task),
+            0,
+            "分類が載るまで起動しない"
+        );
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Ready);
+        let expected = item.entry.status.clone();
+        d.classification_board().put(&task.id.to_string(), item);
+        d.tick().unwrap();
+        let assist = lane_assist_of(&routing_decided(&store, &task)).unwrap();
+        assert_eq!(assist.classifier_status, expected);
+    }
+}
+
+/// 待ちには上限がある（注入した単調時計で進める）。上限を過ぎたら従来どおり分類なし（not_attempted の fixed）で起動する。
+#[tokio::test]
+async fn classification_wait_is_bounded_by_the_injected_clock() {
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = hinted_task(ws.path(), task_core::TierSource::Hint);
+    store.insert(&task).unwrap();
+    let mut d = dispatcher(store.clone(), question_adapter(), 1);
+    let clock = Arc::new(StdMutex::new(Instant::now()));
+    d.test_policy_clock = Some(clock.clone());
+    d.set_routing_mode(RoutingMode::DecisionAssisted);
+    d.set_classification_wait(Some(Duration::from_secs(20)));
+    d.tick().unwrap();
+    *clock.lock().unwrap() += Duration::from_secs(19);
+    d.tick().unwrap();
+    assert_eq!(dispatched_count(&store, &task), 0);
+    *clock.lock().unwrap() += Duration::from_secs(2);
+    d.tick().unwrap();
+    let assist = lane_assist_of(&routing_decided(&store, &task)).unwrap();
+    assert_eq!(assist.classifier_status, ClassifierStatus::NotAttempted);
+}
+
+/// 分類段が無い（`None`）、または fixed なら待たない。
+#[tokio::test]
+async fn no_classification_wait_when_the_stage_is_off_or_mode_is_fixed() {
+    for (mode, wait) in [
+        (RoutingMode::DecisionAssisted, None),
+        (RoutingMode::Fixed, Some(Duration::from_secs(20))),
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = hinted_task(ws.path(), task_core::TierSource::Hint);
+        store.insert(&task).unwrap();
+        let mut d = dispatcher(store.clone(), question_adapter(), 1);
+        d.set_routing_mode(mode);
+        d.set_classification_wait(wait);
+        d.tick().unwrap();
+        assert_eq!(dispatched_count(&store, &task), 1);
+    }
+}
+
+/// 計画が最初から ready で作った WU も、subject は WU id。分類が載るまで起動せず、載った次の tick で
+/// その WU の分類を `lane_assist` に載せて起動する。
+#[tokio::test]
+async fn ready_work_unit_launches_only_after_its_own_unit_is_classified() {
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = hinted_task(ws.path(), task_core::TierSource::Hint);
+    store.insert(&task).unwrap();
+    let a = unit(&task, "a", 0);
+    store
+        .work_units_apply(task.id, vec![a.clone()], Vec::new(), Vec::new())
+        .unwrap();
+    let mut d = dispatcher(store.clone(), question_adapter(), 1);
+    d.set_routing_mode(RoutingMode::DecisionAssisted);
+    d.set_classification_wait(Some(Duration::from_secs(20)));
+    let now = Instant::now();
+    assert!(!d.dispatch_one(task.clone(), Some(a.clone()), now).unwrap());
+    assert_eq!(dispatched_count(&store, &task), 0);
+    d.classification_board()
+        .put(&a.id, jev_ok(SpecificityHint::NeedsInvestigationDesign));
+    d.tick().unwrap();
+    assert!(d.dispatch_one(task.clone(), Some(a.clone()), now).unwrap());
+    let assist = lane_assist_of(&routing_decided(&store, &task)).unwrap();
+    assert_eq!(assist.classifier_status, ClassifierStatus::JevOk);
+    assert_eq!(
+        assist.jev_specificity.as_deref(),
+        Some("needs_investigation_design")
+    );
+    assert_eq!(assist.jev_confidence, Some(0.95));
+}

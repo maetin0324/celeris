@@ -156,7 +156,21 @@ impl ClassificationStage {
             ClassifierStatus::FellBackToFixed { reason } => {
                 tracing::info!(subject, reason = %reason, "jev: classification fell_back_to_fixed")
             }
-            status => tracing::info!(subject, ?status, "jev: classification result"),
+            status => {
+                // 判定と確信だけ（鍵・入力本文・応答の生文は出さない）。確信が欠測なら "missing"。
+                let hint = item.entry.hint.as_ref();
+                let specificity = hint.map(|h| format!("{:?}", h.specificity));
+                let confidence = hint
+                    .and_then(|h| h.confidence)
+                    .map_or_else(|| "missing".to_owned(), |c| format!("{c:.3}"));
+                tracing::info!(
+                    subject,
+                    ?status,
+                    specificity = specificity.as_deref().unwrap_or("none"),
+                    confidence = %confidence,
+                    "jev: classification result"
+                )
+            }
         }
         self.board
             .put_with_provenance(subject, item.clone(), provenance);
@@ -528,5 +542,61 @@ mod tests {
         assert_ne!(first.call_id, second.call_id);
         assert_eq!(second.call_no, first.call_no + 1);
         assert_eq!(second.provenance, CallProvenance::default());
+    }
+
+    #[derive(Clone, Default)]
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("lock").extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Buf {
+        type Writer = Buf;
+        fn make_writer(&'a self) -> Buf {
+            self.clone()
+        }
+    }
+
+    /// 分類ログは subject・判定（specificity）・確信（欠測は "missing"）を出し、入力本文は出さない。
+    #[tokio::test]
+    async fn classification_log_shows_specificity_and_confidence_but_no_input_text() {
+        let buf = Buf::default();
+        let _guard = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_writer(buf.clone())
+                .with_ansi(false)
+                .finish(),
+        );
+        let mut missing = classified(Specificity::NeedsImplementation, 0.9);
+        if let ClassifyOutcome::Classified { classification, .. } = &mut missing {
+            classification.specificity.classification_confidence = None;
+        }
+        let (s, _board) = stage(vec![
+            Ok(classified(Specificity::Specified, 0.42)),
+            Ok(missing),
+        ]);
+        let secret_input = ClassifyInput {
+            instruction: "SECRET-INSTRUCTION-TEXT".into(),
+            ..input()
+        };
+        s.classify_subject("wu-1", &secret_input).await;
+        s.classify_subject("wu-2", &secret_input).await;
+        let log = String::from_utf8(buf.0.lock().expect("lock").clone()).expect("utf8");
+        let line = |subject: &str| {
+            log.lines()
+                .find(|l| l.contains(subject))
+                .unwrap_or_else(|| panic!("no log line for {subject}: {log}"))
+                .to_owned()
+        };
+        assert!(line("wu-1").contains("Specified"), "{log}");
+        assert!(line("wu-1").contains("0.420"), "{log}");
+        assert!(line("wu-2").contains("NeedsImplementation"), "{log}");
+        assert!(line("wu-2").contains("missing"), "{log}");
+        assert!(!log.contains("SECRET-INSTRUCTION-TEXT"), "{log}");
     }
 }

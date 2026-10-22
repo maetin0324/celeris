@@ -503,6 +503,9 @@ impl Dispatcher {
         // `routing.mode = decision_assisted`（既定 fixed では何もしない）: 分類段の結果で lane を引き上げ得る。
         let mut lane_assist_record = None;
         if !is_planner_dispatch && let Some(decision) = lane_decision.as_mut() {
+            if self.defer_for_classification(&task, current_wu.as_ref()) {
+                return Ok(false);
+            }
             let (record, held) = self.apply_lane_assist(&task, current_wu.as_ref(), decision)?;
             if held {
                 return Ok(false);

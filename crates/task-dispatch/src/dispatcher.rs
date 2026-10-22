@@ -1267,6 +1267,11 @@ pub struct Dispatcher {
     routing_mode: task_core::route_select::RoutingMode,
     /// 分類段が書く結果の置き場（dispatcher は読むだけ。Jev は呼ばない）。
     classification_board: lane_assist::ClassificationBoard,
+    /// 分類段が動いているとき、board に項目が無い subject の dispatch を待たせる上限（`None` なら待たせない）。
+    /// ADR 2026-10-22-jev-classification-before-launch。
+    classification_wait: Option<Duration>,
+    /// board に項目が無くて最初に dispatch を見送った時刻（subject ごと。項目が載るか上限を過ぎたら消す）。
+    classification_deferred_since: HashMap<String, Instant>,
     /// ADR-0062 B1（Phase 107）: 「担当が cluster:<id> を持たない」警告を出した（連続 tick で
     /// 繰り返さない）タスク。担当・道具が変わって使えるようになれば `task_may_use_cluster` が消す。
     warned_cluster_tool: std::collections::HashSet<TaskId>,
@@ -1612,6 +1617,8 @@ impl Dispatcher {
             credential_held: std::collections::HashSet::new(),
             routing_mode: task_core::route_select::RoutingMode::default(),
             classification_board: lane_assist::ClassificationBoard::default(),
+            classification_wait: None,
+            classification_deferred_since: HashMap::new(),
             warned_cluster_tool: std::collections::HashSet::new(),
             just_aborted: std::collections::HashSet::new(),
             write_reservations: HashMap::new(),

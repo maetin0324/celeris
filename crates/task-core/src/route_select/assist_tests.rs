@@ -349,3 +349,44 @@ fn legacy_record_without_new_fields_parses_and_new_fields_are_omitted_when_missi
     // 欠測は書き出さない（旧 event と同じ形のまま）。
     assert_eq!(serde_json::to_value(&r).unwrap(), old);
 }
+
+#[test]
+fn record_carries_the_jev_judgement_and_tells_a_missing_confidence_apart() {
+    // Specified は jev_lane が無いが、判定と確信は残る。
+    let e = ok_entry(SpecificityHint::Specified, 0.9);
+    let r = assisted(Some(&e), &LaneLimits::default(), Fact::No);
+    assert_eq!(r.jev_lane, None);
+    assert_eq!(r.jev_specificity.as_deref(), Some("specified"));
+    assert_eq!(r.jev_confidence, Some(0.9));
+    assert!(!r.jev_confidence_missing);
+    // 確信が閾値未満: 判定と値が残り、欠測ではない。
+    let low = ok_entry(SpecificityHint::NeedsInvestigationDesign, 0.3);
+    let r = assisted(Some(&low), &LaneLimits::default(), Fact::No);
+    assert_eq!(r.jev_lane, None);
+    assert_eq!(
+        r.jev_specificity.as_deref(),
+        Some("needs_investigation_design")
+    );
+    assert_eq!(r.jev_confidence, Some(0.3));
+    assert!(!r.jev_confidence_missing);
+    // 確信が欠測: 値は無く、欠測のフラグが立つ。
+    let mut missing = ok_entry(SpecificityHint::NeedsImplementation, 0.9);
+    missing.hint.as_mut().expect("hint").confidence = None;
+    let r = assisted(Some(&missing), &LaneLimits::default(), Fact::No);
+    assert_eq!(r.jev_lane, None);
+    assert_eq!(r.jev_confidence, None);
+    assert!(r.jev_confidence_missing);
+    let json = serde_json::to_value(&r).expect("json");
+    assert_eq!(json["jev_confidence_missing"], true);
+    assert!(json.get("jev_confidence").is_none());
+    // 分類なし（not_attempted）は判定の欄を持たない。
+    let r = assisted(None, &LaneLimits::default(), Fact::No);
+    assert_eq!(r.jev_specificity, None);
+    assert!(!r.jev_confidence_missing);
+    assert!(
+        serde_json::to_value(&r)
+            .expect("json")
+            .get("jev_confidence_missing")
+            .is_none()
+    );
+}

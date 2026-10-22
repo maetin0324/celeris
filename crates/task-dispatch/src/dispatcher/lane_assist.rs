@@ -219,6 +219,55 @@ impl Dispatcher {
         self.classification_board.clone()
     }
 
+    /// 分類段が動いている daemon が設定する。`Some(max)` の間、board に項目が無い subject の起動を最大 `max`
+    /// （単調時計）だけ見送り、次の loop で分類段が先に走れるようにする。`None` は待たせない。
+    pub fn set_classification_wait(&mut self, wait: Option<Duration>) {
+        self.classification_wait = wait;
+        if wait.is_none() {
+            self.classification_deferred_since.clear();
+        }
+    }
+
+    /// decision-assisted で、分類がまだ board に載っていない subject の起動を上限付きで見送るか。
+    /// 見送るのは上限内だけ。分類が失敗・timeout すれば `fell_back_to_fixed` の項目が載るので待ちは終わり、
+    /// 上限を過ぎても項目が無ければ従来どおり（`not_attempted` の fixed）で起動する。
+    pub(super) fn defer_for_classification(
+        &mut self,
+        task: &Task,
+        wu: Option<&WorkUnitRow>,
+    ) -> bool {
+        let Some(max) = self.classification_wait else {
+            return false;
+        };
+        if self.routing_for(task).mode == RoutingMode::Fixed {
+            return false;
+        }
+        let subject = wu.map_or_else(|| task.id.to_string(), |w| w.id.clone());
+        if self.classification_board.get(&subject).is_some() {
+            self.classification_deferred_since.remove(&subject);
+            return false;
+        }
+        let now = self.monotonic_now();
+        let since = *self
+            .classification_deferred_since
+            .entry(subject.clone())
+            .or_insert(now);
+        if now.saturating_duration_since(since) < max {
+            tracing::debug!(
+                subject,
+                "jev: dispatch deferred until the classification runs"
+            );
+            true
+        } else {
+            self.classification_deferred_since.remove(&subject);
+            tracing::warn!(
+                subject,
+                "jev: classification wait expired; dispatching unclassified"
+            );
+            false
+        }
+    }
+
     fn lane_limits_for(&self, task: &Task) -> Result<LaneLimits, DispatchError> {
         let org = self.store.org_list()?;
         let ceiling = task

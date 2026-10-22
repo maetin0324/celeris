@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use jev_classifier::{ClassifyInput, JevClassifier, JevError};
+use task_core::execution_plan::WorkUnitKind;
 use task_core::route_select::{ClassifierStatus, RoutingMode};
 use task_core::{Task, TaskStore, WorkUnitRow, runnable_work_units};
 use task_dispatch::{ClassificationBoard, CredentialGate};
@@ -19,6 +20,14 @@ use crate::config::JevSectionConfig;
 
 /// 1 tick で見る task の上限（dispatcher の窓と同程度。分類は ready の先頭から）。
 const WINDOW: usize = 32;
+
+/// 1 回の `run` で新しく分類する件数の上限（分類は tick の前に await するので、dispatch を止める長さの上限）。
+/// ready の subject を先に、残りは pending の先読み。超えた分は次の loop で分類する。
+const MAX_CLASSIFICATIONS_PER_RUN: usize = 8;
+
+/// dispatcher が、board に項目の無い subject の起動を見送る上限（ADR 2026-10-22-jev-classification-before-launch D3）。
+/// 見送った subject は次の loop の分類段で先に分類される。超えたら分類なしで従来どおり起動する。
+pub(crate) const DISPATCH_WAIT_MAX: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub(crate) struct ClassifyTick {
     stage: ClassificationStage,
@@ -73,6 +82,17 @@ impl ClassifyTick {
             Ok(t) => tasks.extend(t),
             Err(error) => tracing::warn!(%error, "jev: could not read runnable work units"),
         }
+        // 走っている WU があるだけの task も先読みの対象にする（pending の WU が次の tick で ready になって起動する）。
+        match store.list(Some(task_core::Status::Running)) {
+            Ok(running) => {
+                for t in running.into_iter().take(WINDOW) {
+                    if !tasks.iter().any(|known| known.id == t.id) {
+                        tasks.push(t);
+                    }
+                }
+            }
+            Err(error) => tracing::warn!(%error, "jev: could not read running tasks"),
+        }
         let mut done = 0;
         for task in tasks {
             let routing_override = task_dispatch::task_routing_override(store, task.id);
@@ -83,16 +103,31 @@ impl ClassifyTick {
             }
             let units = store.work_units_for(task.id).unwrap_or_default();
             let subjects = if units.is_empty() {
+                // 計画の無い task 自身は、ready の間だけ分類する（走り出した後は意味がない）。
+                if task.status != task_core::Status::Ready {
+                    continue;
+                }
                 vec![(task.id.to_string(), task_input(&task))]
             } else {
+                // ready（runnable）を先に、続けて pending など終わっていない WU を先読みする（WU の spec は
+                // 変わらないので、ready になる前に分類しておけば同じ tick で起動しても分類済み）。
                 let ids = runnable_work_units(&units, 0, WINDOW);
-                units
-                    .iter()
-                    .filter(|u| ids.contains(&u.id))
+                let ready = units.iter().filter(|u| ids.contains(&u.id));
+                let ahead = units.iter().filter(|u| {
+                    !ids.contains(&u.id)
+                        && !u.status.is_terminal()
+                        && u.kind != WorkUnitKind::Integrate
+                        && u.kind != WorkUnitKind::Task
+                });
+                ready
+                    .chain(ahead)
                     .map(|u| (u.id.clone(), unit_input(u, &units)))
                     .collect()
             };
             for (subject, input) in subjects {
+                if done >= MAX_CLASSIFICATIONS_PER_RUN {
+                    return done;
+                }
                 if self.needs_classification(&subject) {
                     self.stage.classify_for_mode(mode, &subject, &input).await;
                     done += 1;
@@ -303,19 +338,83 @@ mod tests {
         assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
     }
 
+    /// ADR 2026-10-22-jev-classification-before-launch D1: ready の WU に加え、pending の WU も ready になる前に
+    /// 分類する（同じ tick で ready になって起動しても分類済み）。統合 WU は LLM run を起こさないので分類しない。
     #[tokio::test]
-    async fn only_the_runnable_work_unit_is_classified_by_its_unit_id() {
+    async fn pending_work_units_are_classified_ahead_but_integrate_units_are_not() {
         let (tick, _fake, board, store, task) = fixture(vec![]);
         let a = unit(&task, "a", 0);
+        let mut b = unit(&task, "b", 1);
+        b.status = WorkUnitStatus::Pending;
+        let mut i = unit(&task, "i", 2);
+        i.status = WorkUnitStatus::Pending;
+        i.kind = WorkUnitKind::Integrate;
+        i.spec.kind = WorkUnitKind::Integrate;
+        store
+            .work_units_apply(
+                task.id,
+                vec![a.clone(), b.clone(), i.clone()],
+                vec![],
+                vec![],
+            )
+            .expect("units");
+        assert_eq!(tick.run(&store, RoutingMode::DecisionAssisted).await, 2);
+        assert!(board.get(&a.id).is_some());
+        assert!(
+            board.get(&b.id).is_some(),
+            "pending unit is classified ahead"
+        );
+        assert!(
+            board.get(&i.id).is_none(),
+            "integrate unit is not classified"
+        );
+        assert!(board.get(&task.id.to_string()).is_none());
+    }
+
+    /// 走っている WU があるだけの Running task でも、pending の WU を先読みする。計画の無い Running task は分類しない。
+    #[tokio::test]
+    async fn running_task_with_only_a_running_unit_still_classifies_its_pending_units() {
+        let (tick, fake, board, store, task) = fixture(vec![]);
+        let mut a = unit(&task, "a", 0);
+        a.status = WorkUnitStatus::Running;
         let mut b = unit(&task, "b", 1);
         b.status = WorkUnitStatus::Pending;
         store
             .work_units_apply(task.id, vec![a.clone(), b.clone()], vec![], vec![])
             .expect("units");
+        store
+            .apply_transition(task.id, task_core::Trigger::Dispatch, None)
+            .expect("running");
         tick.run(&store, RoutingMode::DecisionAssisted).await;
-        assert!(board.get(&a.id).is_some());
-        assert!(board.get(&b.id).is_none(), "pending unit is not classified");
-        assert!(board.get(&task.id.to_string()).is_none());
+        assert!(board.get(&b.id).is_some());
+        let calls = fake.calls.load(Ordering::SeqCst);
+        // 分類済みの subject は再分類しない。
+        assert_eq!(tick.run(&store, RoutingMode::DecisionAssisted).await, 0);
+        assert_eq!(fake.calls.load(Ordering::SeqCst), calls);
+    }
+
+    /// 1 回の run で新しく分類する件数には上限がある（残りは次の loop）。
+    #[tokio::test]
+    async fn classifications_per_run_are_capped() {
+        let (tick, _fake, board, store, task) = fixture(vec![]);
+        let mut units = vec![unit(&task, "u0", 0)];
+        for n in 1..12u32 {
+            let mut u = unit(&task, &format!("u{n}"), n);
+            u.status = WorkUnitStatus::Pending;
+            units.push(u);
+        }
+        store
+            .work_units_apply(task.id, units.clone(), vec![], vec![])
+            .expect("units");
+        assert_eq!(
+            tick.run(&store, RoutingMode::DecisionAssisted).await,
+            MAX_CLASSIFICATIONS_PER_RUN
+        );
+        assert_eq!(
+            tick.run(&store, RoutingMode::DecisionAssisted).await,
+            12 - MAX_CLASSIFICATIONS_PER_RUN
+        );
+        assert!(units.iter().all(|u| board.get(&u.id).is_some()));
     }
 
     #[tokio::test]

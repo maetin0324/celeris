@@ -16491,8 +16491,27 @@
             "null"
           ]
         },
+        "jev_confidence": {
+          "description": "Jev の分類の確信（成功確率ではない）。応答が返さなければ None で、そのとき `jev_confidence_missing` が true。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "jev_confidence_missing": {
+          "description": "分類は成功したが確信が欠測。0 や `DEFAULT_MIN_CONFIDENCE` 未満とは別（欠測は提案を採らない）。",
+          "type": "boolean"
+        },
         "jev_lane": {
           "description": "Jev 単独の提案 lane（fixed 規則と合成する前。使える提案が無ければ None）。confidence は成功確率ではない。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "jev_specificity": {
+          "description": "Jev の判定（specificity: `specified` | `needs_implementation` | `needs_investigation_design` |\n`insufficient_info`）。分類が成功した（`jev_ok`）ときだけ。`jev_lane` が無い理由（`specified`\nなのか確信不足なのか）はこの欄と `jev_confidence` で分かる。",
           "type": [
             "string",
             "null"

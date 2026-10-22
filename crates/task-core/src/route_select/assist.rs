@@ -66,6 +66,17 @@ pub struct LaneAssistRecord {
     /// Jev 単独の提案 lane（fixed 規則と合成する前。使える提案が無ければ None）。confidence は成功確率ではない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jev_lane: Option<String>,
+    /// Jev の判定（specificity: `specified` | `needs_implementation` | `needs_investigation_design` |
+    /// `insufficient_info`）。分類が成功した（`jev_ok`）ときだけ。`jev_lane` が無い理由（`specified`
+    /// なのか確信不足なのか）はこの欄と `jev_confidence` で分かる。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jev_specificity: Option<String>,
+    /// Jev の分類の確信（成功確率ではない）。応答が返さなければ None で、そのとき `jev_confidence_missing` が true。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jev_confidence: Option<f64>,
+    /// 分類は成功したが確信が欠測。0 や `DEFAULT_MIN_CONFIDENCE` 未満とは別（欠測は提案を採らない）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub jev_confidence_missing: bool,
     /// Jev 応答が名乗った model（`ClassificationEntry::model_snapshot`）。応答が無い・欠測は None。
     /// 設定の model 名では埋めない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -113,6 +124,16 @@ fn name(t: Tier) -> &'static str {
     }
 }
 
+fn specificity_name(s: super::lane::SpecificityHint) -> &'static str {
+    use super::lane::SpecificityHint as S;
+    match s {
+        S::Specified => "specified",
+        S::NeedsImplementation => "needs_implementation",
+        S::NeedsInvestigationDesign => "needs_investigation_design",
+        S::InsufficientInfo => "insufficient_info",
+    }
+}
+
 fn basis_name(b: LaneBasis) -> &'static str {
     match b {
         LaneBasis::FixedRule => "fixed_rule",
@@ -142,6 +163,7 @@ pub fn assist_lane(input: &AssistInput<'_>, available: impl Fn(Tier) -> bool) ->
         DEFAULT_MIN_CONFIDENCE,
     )
     .map(lane_name);
+    let hint = input.entry.and_then(|e| e.hint.as_ref());
     let response_model = input.entry.and_then(|e| e.model_snapshot.clone());
     let make = |lane: Tier,
                 proposed: Option<LaneChoice>,
@@ -156,6 +178,9 @@ pub fn assist_lane(input: &AssistInput<'_>, available: impl Fn(Tier) -> bool) ->
             proposed_lane: proposed.map(lane_name),
             fixed_lane: fixed.clone(),
             jev_lane: jev.clone(),
+            jev_specificity: hint.map(|h| specificity_name(h.specificity).to_owned()),
+            jev_confidence: hint.and_then(|h| h.confidence),
+            jev_confidence_missing: hint.is_some_and(|h| h.confidence.is_none()),
             response_model: response_model.clone(),
             observed_snapshot: None,
             call_id: None,
@@ -167,7 +192,6 @@ pub fn assist_lane(input: &AssistInput<'_>, available: impl Fn(Tier) -> bool) ->
     if input.explicit {
         return make(input.base, None, LaneBasis::FixedFallback, Some("explicit"));
     }
-    let hint = input.entry.and_then(|e| e.hint.as_ref());
     let decided = decide_lane(
         RoutingMode::DecisionAssisted,
         &input.facts,

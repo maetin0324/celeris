@@ -30,7 +30,7 @@ completed: 2026-10-23
   browser_sandbox_artifacts --run-ignored all`）: 修正後 3 回とも 3 passed（load 35〜103）。
 - `python3 scripts/dev/check-source-size.py`: exit 0（0 failure, 3 debt warning, 1 reasoned exception）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 結果は task の報告に記載。
+- `bash scripts/dev/test-affected.sh`（main a3933dc2 取り込み後）: exit 0、4468 passed / 17 skipped。
 
 ## 未解決事項
 - post-login の「Elsewhere Blank PDF」で agent-browser の daemon を止めた直後の snapshot が、

@@ -8,35 +8,59 @@ completed: 2026-10-23
 
 # 共通 agent 指示の正本と配布
 
-基準 SHA: 13d64acd1780（main、着手時）。検証対象は本 task の branch の最終 commit。
+- 基準 SHA（着手時の main）: 13d64acd1780。attempt 2 の途中で main e3b1ace40fc6（健全性ゲート task）を no-ff で取り込んだ（衝突なし）。
+- 検証対象 SHA: attempt 2 の最終 commit。main 取り込み commit 85abbd68 の上に、root_done_summary の試験の直しとこの進捗を足したもの。下の検査はその作業ツリーで実行した。
+- 設計: [ADR 2026-10-23-required-rules-prompt-delivery](../adr/2026-10-23-required-rules-prompt-delivery.md)。
 
-## 着手時の実測（fresh worktree）
+## 各 harness が自分で読む file（実測。配布物を読んで確認、CLI は起動していない）
 
-- Claude Code: tracked の `CLAUDE.md` が worktree に出る。直接読まれ、届く（変更不要）。
-- Codex: `AGENTS.md` は `.gitignore` の `/AGENTS.md` で追跡されず、fresh worktree には無い。旧 `deliver_agents_md` は skills 一覧の節だけを書くので、
-  `CLAUDE.md` の必須規則は届かなかった（実測: 旧コードは `CLAUDE.md` を一切読まない）。
-- Pi・ACP: skills は `.agents/skills` と前置きにだけ載り、規則を届ける経路が無かった。
-- `CLAUDE.md` の「AGENTS.md は symlink」は誤り（symlink を作る経路が無い）。「Web UI／リモート実行／予算管理の実装禁止」は実装済み機能と衝突。
-  `workspace.rs` の「LocalWorkspace のみ／RemoteWorkspace 骨組み」は `SshWorkspace`（ADR-0018）と食い違い、`RemoteWorkspace` は `unimplemented!` の死に体だった。
+| harness | 版 | 読む file | 何が届くか（この変更後） |
+|---|---|---|---|
+| Claude Code | 2.1.303 | `CLAUDE.md`（worker は project 設定を外す引数を付けない） | worktree の CLAUDE.md を直接読む |
+| Codex | 0.162.1 | `AGENTS.override.md`/`AGENTS.md` のみ（既定 `project_doc_fallback_filenames = []`） | prompt（stdin）先頭の CLAUDE.md 全文 |
+| Pi | 0.84.2 | 各 dir で `AGENTS.override.md`・`AGENTS.md`・`AGENTS.MD`・`CLAUDE.md` の最初の 1 つ | prompt（stdin）先頭の CLAUDE.md 全文（AGENTS.md が無ければ pi 自身も CLAUDE.md を読む） |
+| opencode（ACP） | 配布 binary | `AGENTS.md`・`CLAUDE.md`・`CONTEXT.md` の最初の 1 つ | `session/prompt` の文面先頭の CLAUDE.md 全文 |
 
-## 変更
+Codex は CLAUDE.md を一切読まず、Pi・opencode は AGENTS.md があると CLAUDE.md を読まない。よって main の時点で Codex には規則が届いていなかった。
 
-- `skills::deliver_required_rules`（新規）: 作業場所直下の `CLAUDE.md` を `AGENTS.md` の `celeris:rules` 節へ写す。区切り外のユーザー内容を保つ・冪等。
-  `codex.rs`・`pi.rs`・`acp.rs` の run 開始時に呼ぶ。`CLAUDE.md` が無い repo は何もしない。参照先なし（壊れた symlink）・空・書けない・読み戻して節が無い、は
-  `Err` で run が落ちる（従来の skills 一覧の失敗は警告のまま）。
-- `CLAUDE.md`: AGENTS の説明を正本＋配布経路に直し、実装済み機能と衝突する禁止項目を削り、歴史的 ADR と現行規則の区別を明記。
-- `workspace.rs`: 説明を実装に合わせ、使われていない `RemoteWorkspace`・`WorkspaceError::RemoteUnsupported` を削除（破壊的変更方針）。
-- `docs/architecture-map.md`: 「共通 agent 指示と配布」節（入口・不変条件・関連試験）。`agent-docs/README.md` に正本の一文。
+## attempt 1 の差し戻しと attempt 2 の変更
+
+attempt 1 は CLAUDE.md を AGENTS.md の `celeris:rules` 節へ写した。差し戻し理由: CLAUDE.md→AGENTS.md の symlink の repo では写すたびに節が入れ子で増える。AGENTS.md を追跡する repo では追跡ファイルを書き換え、AGENTS.md を ignore しない repo では未追跡ファイルを残す。試験も関数を直接呼ぶ単体試験だけだった。
+
+attempt 2:
+- `crates/task-worker/src/required_rules.rs`（新規）: `preamble` で CLAUDE.md の全文を見出し付きの前置きにする。CLAUDE.md が無ければ空。壊れた symlink・読めない・空は Err になる。`codex.rs`・`pi.rs`・`acp.rs`（CoS の再組み立てを含む）は prompt の先頭に置き、Err なら harness を起動せず run を落とす。
+- 作業ツリーには何も書かない。attempt 1 の `skills::deliver_required_rules`・`rewrite_rules_section`・`RULES_BEGIN/END` とその試験は撤去し、`skills.rs` は main と同じに戻した。
+- `CLAUDE.md`・`agent-docs/README.md`・`docs/architecture-map.md`: 配布経路の説明を prompt 前置きに直した（「AGENTS.md は tracked ではない」は agent-platform について、と明記）。
+- attempt 1 から引き継いだ変更: CLAUDE.md の誤った symlink 説明と、実装済み機能と衝突する禁止事項（Web UI・リモート実行・予算管理）を直し、初期 ADR は歴史的記録だと明記した。`workspace.rs` の説明を実装に合わせ、死んだ `RemoteWorkspace`・`RemoteUnsupported` を削除した。地図に「共通 agent 指示と配布」節を足した。歴史的 ADR は書き換えていない。
+
+## 試験（fresh worktree を `git worktree add` で切り、stub CLI で adapter の run を通す）
+
+fixture は `test_support::fresh_worktree_with_rules`。この repo の実際の CLAUDE.md を commit した repo から worktree を切る。AGENTS.md の形は 4 通り（なし、人が書いた tracked file、AGENTS.md→CLAUDE.md、CLAUDE.md→AGENTS.md）。
+- `codex/tests.rs::required_rules_reach_codex_from_a_fresh_worktree`、`pi/tests.rs::required_rules_reach_pi_from_a_fresh_worktree`、`acp/tests.rs::required_rules_reach_acp_from_a_fresh_worktree`: run を 2 回回す。毎回、stub が受け取った prompt に CLAUDE.md の全文がちょうど 1 度ある（ACP は `session/prompt` の JSON を解いて確認）。AGENTS.md は不変（marker 外のユーザー指示を維持）。`git status --porcelain --ignored --untracked-files=all` は空。
+- `claude_code/tests.rs::required_rules_reach_claude_code_from_a_fresh_worktree`: claude は worktree を cwd として起動され、そこに正本と同じ CLAUDE.md が見える。`--setting-sources`・`--bare` は付かない。前置きは足さない。作業ツリーは不変。
+- `{codex,pi,acp}/tests.rs::*_run_fails_when_required_rules_are_unreadable`: 壊れた symlink または空の CLAUDE.md で run が `required rules delivery failed` の Err になり、stub は起動しない。
+- `required_rules/tests.rs`: 前置きの形、欠落、壊れた symlink、空、読めない（ディレクトリ）、4 通りの worktree で 3 回呼んでも作業ツリーが不変、この repo が CLAUDE.md を追跡し AGENTS.md を追跡しないこと。
 
 ## 検証（コマンドと結果）
 
-- `cargo test -p task-worker --lib skills`: 44 passed（`required_rules_*` 4 件と、実 repo の CLAUDE.md が git 追跡され AGENTS.md は追跡されず、
-  fresh な作業場所へ各経路で同じ規則が出る `the_repo_claude_md_is_tracked_and_reaches_every_harness_path`）。
-- `python3 scripts/dev/check-architecture-map.py`: OK（429 パス）。`sh scripts/dev/check-doc-links.sh`: ok。
-- `bash scripts/dev/test-affected.sh`: exit 0。`cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- 全 workspace／e2e／browser／userns 試験は走らせていない（ADR 2026-10-20-full-tests-at-release-only）。
+- `cargo nextest run -p task-worker required_rules`: 12 passed。
+- `bash scripts/dev/check-health.sh`（main 取り込み後）: exit 0（source-size: failure 0、地図: 449 パス OK、doc-links・adr-numbers OK）。
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`: ok。
+- `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`: 結果は下の「最終検査」。
+- 全 workspace・e2e・browser・userns の試験は走らせていない（ADR 2026-10-20-full-tests-at-release-only）。
+
+## 最終検査（main 取り込み後の作業ツリー）
+
+- `bash scripts/dev/test-affected.sh`: exit 0（対象 crate: celeris celeris-campaign celerisctl llm-proxy task-api task-dispatch task-worker、4464 passed / 15 skipped）。
+  - 取り込み後の 1 回目は `celeris::root_done_summary restart_does_not_duplicate` が負荷下で落ちた（"Discord once" left 3）。単独で回すと 3 回とも通った。`post_webhook` には再試行が無いので、原因は別の試験が手放した port を偽 webhook が拾い、その試験の HTTP 要求を本文として数えたこと、と判断した。偽 webhook は `POST /hook` だけを数え、他の要求には 404 を返すように直した（`crates/celeris/tests/root_done_summary.rs`）。直した後は上のとおり exit 0。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+
+## main で既に解消済みだった項目
+
+- なし。13d64acd でも CLAUDE.md に symlink の説明と「Web UI・リモート実行・予算管理の禁止」が残り、Codex 経路は CLAUDE.md を読んでいなかった（上の実測表）。
 
 ## 残件・提案
 
-- 実 Codex／Pi／opencode の CLI が `AGENTS.md` を実際に読むことの実機確認は未実施（LLM 呼び出しを伴うため）。配布結果（ファイル内容）までを試験で確認した。
-- 他の ACP agent が `AGENTS.md` を読まない場合は、前置きへ規則を足す案がある（未実施）。
+- 実 CLI（Codex・Pi・opencode）での実機確認はしていない（LLM 呼び出しを伴う）。stub が受け取った prompt の内容までを試験で確かめた。
+- Codex の skills 一覧（`skills::deliver_agents_md`、ADR-0127）は従来どおり AGENTS.md の `celeris:skills` 節を書く。そのため skill がある Codex run だけは、AGENTS.md を追跡する repo で作業ツリーを変える（main からの既存の挙動）。提案: skills 一覧も Pi・ACP と同じく prompt に載せ、AGENTS.md を書かないようにする（別 task）。
+- 対象外: aider など上の 4 経路以外の adapter には前置きを足していない。

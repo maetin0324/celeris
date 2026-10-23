@@ -398,5 +398,5 @@ pub fn verify_archive(expected: &LockedInitial, root: &Path) -> Result<(), TreeP
 }
 
 #[cfg(test)]
-#[path = "lock_tree/tests.rs"]
+#[path = "lock_tree_tests.rs"]
 mod tests;

@@ -25,10 +25,10 @@ TaskStore の契約やDispatcherの状態/副作用分割には踏み込まな�
 
 | 元ファイル | 外部test | 元inline行数 |
 |---|---|---:|
-| `crates/campaign/src/lock.rs` | `crates/campaign/src/lock/tests.rs` | 408 |
-| `crates/campaign/src/lock_tree.rs` | `crates/campaign/src/lock_tree/tests.rs` | 321 |
-| `crates/campaign/src/manifest.rs` | `crates/campaign/src/manifest/tests.rs` | 475 |
-| `crates/campaign/src/variant_pin.rs` | `crates/campaign/src/variant_pin/tests.rs` | 343 |
+| `crates/campaign/src/lock.rs` | `crates/campaign/src/lock_tests.rs` | 408 |
+| `crates/campaign/src/lock_tree.rs` | `crates/campaign/src/lock_tree_tests.rs` | 321 |
+| `crates/campaign/src/manifest.rs` | `crates/campaign/src/manifest_tests.rs` | 475 |
+| `crates/campaign/src/variant_pin.rs` | `crates/campaign/src/variant_pin_tests.rs` | 343 |
 | `crates/celeris/src/daemon/classify_stage.rs` | `crates/celeris/src/daemon/classify_stage/tests.rs` | 415 |
 | `crates/celeris/src/daemon/classify_tick.rs` | `crates/celeris/src/daemon/classify_tick/tests.rs` | 319 |
 | `crates/routing-eval/src/aggregate.rs` | `crates/routing-eval/src/aggregate/tests.rs` | 330 |

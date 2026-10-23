@@ -686,5 +686,5 @@ pub fn check_successor(old: &CampaignLock, new: &CampaignLock) -> Result<(), Loc
 }
 
 #[cfg(test)]
-#[path = "lock/tests.rs"]
+#[path = "lock_tests.rs"]
 mod tests;

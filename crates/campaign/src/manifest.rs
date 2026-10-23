@@ -1392,5 +1392,5 @@ pub fn manifest_hash(m: &InputManifest) -> Result<String, String> {
 }
 
 #[cfg(test)]
-#[path = "manifest/tests.rs"]
+#[path = "manifest_tests.rs"]
 mod tests;

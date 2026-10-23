@@ -280,5 +280,5 @@ pub fn check_pin(
 }
 
 #[cfg(test)]
-#[path = "variant_pin/tests.rs"]
+#[path = "variant_pin_tests.rs"]
 pub(crate) mod tests;

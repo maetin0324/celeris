@@ -371,6 +371,8 @@ run_step cargo-clippy "$BUILD" -- cargo clippy --workspace -- -D warnings
 # ADR-0083: 手書き production の肥大化・巨大 inline test・gitignore された未追跡 mod を毎回可視化する。
 # 既定は warning のみ（exit 0）なので、この段が gate を落とすのは source-size-report.py 自体が
 # 壊れたときだけ（`--strict` を渡していないので閾値超過そのものでは落ちない）。
+# Mandatory differential checks run through workspace test-affected.sh -> check-health.sh.
+# This release report retains the complete debt inventory, rather than failing historical debt.
 run_step source-size-report "$BUILD" -- python3 scripts/dev/source-size-report.py
 run_step cargo-build "$BUILD" -- cargo build --release -p celeris -p celerisctl -p celeris-credentiald
 WEB_PNPM_VERSION="$(sd_json_get "$BUILD/web/package.json" packageManager 2>/dev/null | sed -n 's/^pnpm@//p' || true)"

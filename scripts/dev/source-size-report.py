@@ -221,9 +221,10 @@ def analyze_rust_file(lines: list[str]) -> RustFileInfo:
                 test_mask[k] = True
             inline_test_mods.append({"name": m.group(2), "start": i + 1, "end": end + 1, "lines": end - i + 1})
         elif m and m.group(3) == ";":
-            # `#[cfg(test)] mod x;` — an external test module declared behind cfg(test).
-            # Its own file (if any) is analyzed separately; nothing here counts as inline.
-            pass
+            # The declaration is test-only too; moving a module must not add
+            # production debt merely by leaving its cfg/path declaration behind.
+            for k in range(i, j + 1):
+                test_mask[k] = True
         else:
             # Some other cfg(test)-gated item embedded in production code: a test-only
             # helper fn/const/struct/impl, not a whole `mod`. Mask its extent too, since
@@ -335,7 +336,7 @@ def excepted(exceptions: list[Exception_], path: str, check: str) -> Exception_ 
 
 
 def run_report(root: str, prod_threshold: int, inline_threshold: int, exceptions: list[Exception_]) -> dict:
-    tracked = [f for f in git(root, "ls-files").split("\n") if f]
+    tracked = sorted(set(f for f in git(root, "ls-files", "--cached", "--others", "--exclude-standard").split("\n") if f))
     tracked_set = set(tracked)
     totals: dict[str, dict[str, int]] = {}
 
@@ -386,6 +387,9 @@ def run_report(root: str, prod_threshold: int, inline_threshold: int, exceptions
                     {
                         "check": CHECK_PRODUCTION_SIZE,
                         "path": path,
+                        "value": info.prod_lines,
+                        "threshold": prod_threshold,
+                        "kind": "rust_production",
                         "detail": f"{info.prod_lines} handwritten production lines (threshold {prod_threshold})",
                         "excepted": exc.reason if exc else None,
                     }
@@ -397,6 +401,10 @@ def run_report(root: str, prod_threshold: int, inline_threshold: int, exceptions
                         {
                             "check": CHECK_INLINE_TEST_SIZE,
                             "path": path,
+                            "value": mod["lines"],
+                            "module": mod["name"],
+                            "threshold": inline_threshold,
+                            "kind": "rust_inline_test",
                             "detail": (
                                 f"inline `mod {mod['name']}` at lines {mod['start']}-{mod['end']} "
                                 f"is {mod['lines']} lines (threshold {inline_threshold})"
@@ -420,6 +428,9 @@ def run_report(root: str, prod_threshold: int, inline_threshold: int, exceptions
                         {
                             "check": CHECK_PRODUCTION_SIZE,
                             "path": path,
+                            "value": n,
+                            "threshold": prod_threshold,
+                            "kind": "ts_production",
                             "detail": f"{n} handwritten production lines (threshold {prod_threshold})",
                             "excepted": exc.reason if exc else None,
                         }

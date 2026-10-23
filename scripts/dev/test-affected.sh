@@ -17,6 +17,10 @@ esac
 
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
+# Required for every check, including docs-only changes; --list remains read-only.
+if [ "$list_only" -eq 0 ]; then
+  bash scripts/dev/check-health.sh
+fi
 base="${CELERIS_WU_BASE:-$(git merge-base HEAD main)}"
 
 changed="$(mktemp "${TMPDIR:-/tmp}/test-affected.XXXXXX")"

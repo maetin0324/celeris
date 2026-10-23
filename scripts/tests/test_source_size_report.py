@@ -102,11 +102,12 @@ class InlineTestExtentTests(unittest.TestCase):
         self.assertEqual(info.prod_lines, 2)
         self.assertEqual(info.inline_test_lines, 4)
 
-    def test_external_mod_tests_declaration_is_not_inline(self):
+    def test_external_mod_declaration_is_test_only(self):
         lines = ["pub fn a() {}", "", "#[cfg(test)]", "mod tests;"]
         info = ssr.analyze_rust_file(lines)
-        self.assertEqual(info.prod_lines, 4)
-        self.assertEqual(info.inline_test_lines, 0)
+        self.assertEqual(info.prod_lines, 2)
+        self.assertEqual(info.inline_test_lines, 2)
+        self.assertEqual(info.inline_test_mods, [])
         self.assertEqual(info.external_mod_decls, ["tests"])
 
     def test_string_containing_brace_does_not_confuse_block_end(self):

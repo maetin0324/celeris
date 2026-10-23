@@ -1,0 +1,248 @@
+{
+  "version": 1,
+  "classification": "source-size-report/1",
+  "sha": "13d64acd17806d73a1797bffbf831efc9cb5ab6a",
+  "thresholds": {
+    "production_lines": 2000,
+    "inline_test_lines": 300
+  },
+  "debt": [
+    {
+      "check": "inline_test_size",
+      "path": "crates/campaign/src/lock.rs",
+      "value": 408,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/campaign/src/lock_tree.rs",
+      "value": 321,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/campaign/src/manifest.rs",
+      "value": 475,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/campaign/src/variant_pin.rs",
+      "value": 343,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/celeris/src/daemon/classify_stage.rs",
+      "value": 415,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/celeris/src/daemon/classify_tick.rs",
+      "value": 319,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/routing-eval/src/aggregate.rs",
+      "value": 330,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/routing-eval/src/recheck.rs",
+      "value": 417,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-core/src/accounts.rs",
+      "value": 337,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-core/src/browser_backend.rs",
+      "value": 321,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-core/src/chat/attachments.rs",
+      "value": 477,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-core/src/llm_route.rs",
+      "value": 332,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "production_size",
+      "path": "crates/task-core/src/model.rs",
+      "value": 2064,
+      "threshold": 2000,
+      "kind": "rust_production",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-core/src/model_router/cost.rs",
+      "value": 322,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-core/src/node_session.rs",
+      "value": 524,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-core/src/retry_policy.rs",
+      "value": 396,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-core/src/route_extract.rs",
+      "value": 540,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-core/src/store/completion_outcomes.rs",
+      "value": 385,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "production_size",
+      "path": "crates/task-dispatch/src/dispatcher.rs",
+      "value": 2480,
+      "threshold": 2000,
+      "kind": "rust_production",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-dispatch/src/dispatcher/decision_log_wire.rs",
+      "value": 614,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "production_size",
+      "path": "crates/task-dispatch/src/dispatcher/work_units.rs",
+      "value": 2182,
+      "threshold": 2000,
+      "kind": "rust_production",
+      "excepted": null
+    },
+    {
+      "check": "production_size",
+      "path": "crates/task-dispatch/src/dispatcher/worker_finish.rs",
+      "value": 2111,
+      "threshold": 2000,
+      "kind": "rust_production",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-ops/src/stranded.rs",
+      "value": 740,
+      "module": "tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "production_size",
+      "path": "crates/task-worker/src/browser.rs",
+      "value": 2532,
+      "threshold": 2000,
+      "kind": "rust_production",
+      "excepted": null
+    },
+    {
+      "check": "production_size",
+      "path": "crates/task-worker/src/browser_cdp_sink.rs",
+      "value": 2596,
+      "threshold": 2000,
+      "kind": "rust_production",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-worker/src/browser_cdp_sink.rs",
+      "value": 758,
+      "module": "idle_pump_tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    },
+    {
+      "check": "inline_test_size",
+      "path": "crates/task-worker/src/browser_launcher_run.rs",
+      "value": 878,
+      "module": "live_frame_tests",
+      "threshold": 300,
+      "kind": "rust_inline_test",
+      "excepted": null
+    }
+  ]
+}

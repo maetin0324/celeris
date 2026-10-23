@@ -171,3 +171,11 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
   変更頻度の低い行をまとめる。
 - 新しい crate や大きな module 分割をしたら、この表の対応行を 1 行更新する（新しい ADR/設計文書があればリンクを足す。内容はコピーしない）。
 - パスの実在は `scripts/dev/check-architecture-map.py` で機械的に検査する（このファイルを手で直したら実行すること）。
+
+## ソース健全性とモデル境界
+
+| subsystem | owner crate/module | entry point | 設計 |
+|---|---|---|---|
+| 必須の軽量差分検査 | scripts/dev | `scripts/dev/{test-affected.sh,check-health.sh,check-source-size.py,source-size-baseline.json,check-architecture-map.py,check-doc-links.sh}` | [ソース健全性](guides/source-health.md) |
+| タスク・run のモデルと追記専用event payload | task-core::model | `crates/task-core/src/model.rs`（task/run型）、`crates/task-core/src/model/events.rs`（event定義とtype名） | [ソース健全性の変更記録](progress/2026-10-23-source-health.md) |
+| 大きなinline testの外部化 | 各crateの元module | `crates/task-worker/src/browser_cdp_sink/idle_pump_tests.rs`, `crates/task-worker/src/browser_launcher_run/live_frame_tests.rs`, `crates/task-dispatch/src/dispatcher/decision_log_wire/tests.rs` | [移動一覧](progress/2026-10-23-source-health.md) |

@@ -8,8 +8,8 @@ completed: 2026-10-23
 
 # 共通 agent 指示の正本と配布
 
-- 基準 SHA（着手時の main）: 13d64acd1780。attempt 2 の途中で main e3b1ace40fc6（健全性ゲート task）を no-ff で取り込んだ（衝突なし）。
-- 検証対象 SHA: attempt 2 の最終 commit。main 取り込み commit 85abbd68 の上に、root_done_summary の試験の直しとこの進捗を足したもの。下の検査はその作業ツリーで実行した。
+- 基準 SHA（着手時の main）: 13d64acd1780。attempt 2 の途中で main e3b1ace40fc6（健全性ゲート task）を no-ff で取り込んだ（衝突なし）。この記録の統合基準は main `a3933dc2`。
+- 検証対象 SHA（今回の再検証）: `9d975d56`（この記録修正 commit の直前）。下記3検査をこの HEAD に対して再実行した。
 - 設計: [ADR 2026-10-23-required-rules-prompt-delivery](../adr/2026-10-23-required-rules-prompt-delivery.md)。
 
 ## 各 harness が自分で読む file（実測。配布物を読んで確認、CLI は起動していない）
@@ -55,16 +55,22 @@ fixture は `test_support::fresh_worktree_with_rules`。この repo の実際の
   - 取り込み後の 1 回目は `celeris::root_done_summary restart_does_not_duplicate` が負荷下で落ちた（"Discord once" left 3）。単独で回すと 3 回とも通った。`post_webhook` には再試行が無いので、原因は別の試験が手放した port を偽 webhook が拾い、その試験の HTTP 要求を本文として数えたこと、と判断した。偽 webhook は `POST /hook` だけを数え、他の要求には 404 を返すように直した（`crates/celeris/tests/root_done_summary.rs`）。直した後は上のとおり exit 0。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 
+## integration_repair の rebase
+
+integration_repair でまず main `01a1753d` に rebase し、その後 main `a3933dc2` に再度 rebase した。2回目では次の衝突を解消した。
+- `crates/celeris/tests/credential_wait_notify.rs`: branch 側の superset fake webhook（`POST /hook` のみ記録し、EOF/他 request を通知として数えない）を残し、main 側の回帰試験も保持した。
+- `docs/architecture-map.md`: 6列の表を維持し、main が変更した cell を写した。main で追加された DAG A2 行も6列にし、関連試験に `crates/campaign/tests/dagbench_harness.rs` を記載した。
+
 ## attempt 3（試験の flaky 2 件の修正）
 
-attempt 2 の審査で `bash scripts/dev/test-affected.sh` が exit 100 になった（指示配布の変更とは関係しない試験が負荷下で落ちた）。検証対象 SHA は main 22711d25 取り込み後の eda6869b に、下の 2 つの修正を足した attempt 3 の commit。
+attempt 2 の審査で `bash scripts/dev/test-affected.sh` が exit 100 になった（指示配布の変更とは関係しない試験が負荷下で落ちた）。attempt 3 の rebased commit は `a0f886ad`。
 - `task-worker browser_egress::tests::egress_test_loopback_connect_allowed_only_when_listed`（403）: echo listener は最初の 1 byte を echo したら閉じていた。別の試験 process が、自分で bind して手放した port に byte を送ると、この listener がそれを echo して閉じ、proxy の connect は拒否されて 403 になる。listener は試験が abort するまで全接続を echo するように直した。byte を送る stray 接続を試験に足し、この状況を決定的に作る。
 - `celeris-campaign::ablation_application spec_off_and_on_apply_through_real_dispatcher_and_worker`（attempt 3 の 1 回目の test-affected で発生）: 空き port を確かめてから daemon が bind するまでの間に、他の process が同じ port を取った（`Address already in use`）。fixture（`crates/campaign/tests/ablation_application_support/mod.rs`）は、listen の前に bind の衝突で終わったときだけ、新しい port で起動し直す（最大 5 回）。stdout・stderr の EOF まで読み切ってから判定する（`Signal::LogClosed`）。ほかの失敗は従来どおり daemon.log 付きで落ちる。
 - 検査（attempt 3 の最終作業ツリー）: `cargo nextest run -p task-worker -E 'test(/browser_egress::tests::egress_test_loopback/)'` 2 passed、`cargo nextest run -p celeris-campaign --test ablation_application` 4 passed、`bash scripts/dev/test-affected.sh` exit 0（4470 passed / 16 skipped、source-size failure 0、地図 449 パス OK）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
 
 ## attempt 4（条件 3: 地図の関連試験・不変条件）
 
-attempt 3 の審査で条件 3 だけが不合格だった。地図のうち、関連試験と不変条件を持っていたのは「共通 agent 指示と配布」の 4 行だけだった。検証対象 SHA は 8a04de45（base 23cca1dd に下の変更を足したもの）。実装（`crates/` の本体）には触っていない。
+attempt 3 の審査で条件 3 だけが不合格だった。地図のうち、関連試験と不変条件を持っていたのは「共通 agent 指示と配布」の 4 行だけだった。attempt 4 の rebased commit は `1eb659e4`（その進捗記録 commit は `9d975d56`）。実装（`crates/` の本体）には触っていない。
 - `docs/architecture-map.md`: 全節（task-core・task-dispatch・task-worker・task-ops・task-api・celeris・周辺 crate・Web・共通指示・ソース健全性）の表を同じ 6 列（subsystem | owner | entry point | ADR / 設計 | 関連試験 | 不変条件）に揃えた。119 行すべてに、実在する試験 file・module のパスと、不変条件 1 行（根拠 ADR 付き）を書いた。対象は TaskStore と events（`store/tests.rs` の `append_event_*`）、Dispatcher の状態遷移（`dispatcher/tests/*.rs`）、worker adapter（`{claude_code,codex,pi,acp}/tests.rs`）、task-api（`crates/task-api/tests/*.rs`）、celeris daemon（`classify_tick`・`instance_handoff` 等）、web（`*.test.ts(x)`・`web/e2e`）など。ADR やソースの全文は貼っていない。
 - `scripts/dev/check-architecture-map.py`: 既存のパス実在検査に、表の形の検査を足した。見出しは 6 列、各行の関連試験には backtick のパスが 1 つ以上、不変条件は空でないこと。形の試験 `scripts/tests/test_architecture_map.py` に負例 3 つ（関連試験なし、不変条件が空、4 列の見出し）を足した。
 - 回帰試験の flaky を 1 件直した。attempt 4 の 1 回目の test-affected で `celeris::credential_wait_notify wait_notify_register_verify_and_resume_once_through_the_fake_webhook` が落ちた（webhook の数 left 3 / right 1）。原因は attempt 2 の `root_done_summary` と同じで、偽 webhook が要求の前の EOF と他の試験の要求を通知として数えていた。直し方: `POST /hook` だけを数え、他の要求には 404 を返す。記録は応答の前に確定する。回帰として、stray 接続（EOF と `GET /other`）を送ってから数える段を試験に足した。
@@ -76,6 +82,12 @@ attempt 3 の審査で条件 3 だけが不合格だった。地図のうち、�
   - `cargo clippy --workspace -- -D warnings`: exit 0。
   - `cargo fmt --all -- --check`: exit 0。
 - 全 workspace・e2e・browser・userns の試験は走らせていない。
+
+## 再検証（統合後 HEAD `9d975d56`）
+
+- `bash scripts/dev/test-affected.sh`: exit 0。対象 crate の差分なしのため Rust crate 試験は対象外。health 内の Python 試験 38 件と architecture-map 用試験 1 件が成功し、地図の実在パス 715 件を確認。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
 
 ## main で既に解消済みだった項目
 

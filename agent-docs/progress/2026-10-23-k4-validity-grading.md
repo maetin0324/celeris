@@ -30,6 +30,7 @@ rebase で SHA が変わるため、hash ではなく件名で挙げる。main �
 | phase 1: progress-hashfree — 進捗の commit 表を件名で列挙し、提出時の HEAD の検査を記録する | この文書だけを変更。コードは変えていない |
 | phase 1: progress-hashfree — 提出時の HEAD の検査結果を記録する | この文書だけを変更。コードは変えていない |
 | phase 1: progress-hashfree — source-size-browser 進捗の front matter を main 版に揃え、提出時の HEAD の検査を記録する | 他 task の進捗 1 file を main と同じ内容にし、この文書を更新。コードは変えていない |
+| phase 1: progress-hashfree — 提出時の HEAD の再検査の結果を記録する | この文書だけを変更。コードは変えていない |
 
 ## 実装の要点
 - `crates/campaign/src/cells_validity.rs`: 固定 raw から次を決定的に計算する。期待セル集合（`planned-cells.json`）、完了記録（`cell.json`/`exit.json`）、
@@ -65,7 +66,7 @@ F かつ Exit 0 は正常として扱う。
 
 ## 必須検査（提出時の HEAD で実行）
 最後の commit の後、提出時の HEAD（working tree clean）で次を実行した。ログは run 成果物 root の final-test-affected.log・final-clippy.log・final-fmt.log。
-- `bash scripts/dev/test-affected.sh`: exit 0。基点は `git merge-base HEAD main`（`CELERIS_WU_BASE` にその値を渡して branch 全体の変更を対象にした）。2634 tests run、2634 passed、7 skipped、190.208 秒。
+- `bash scripts/dev/test-affected.sh`: exit 0。基点は `git merge-base HEAD main`（`CELERIS_WU_BASE` にその値を渡して branch 全体の変更を対象にした）。2634 tests run、2634 passed、7 skipped、195.268 秒。最後の commit（結果の記録）の後にも同じ 3 検査を再実行し、exit と件数が一致することを確かめた。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0（差分なし）。
 - 文書検査: `sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-adr-numbers.sh`、`sh scripts/dev/progress-index.sh --check`: すべて exit 0。前回は main 由来の agent-docs/progress/2026-10-23-source-size-browser.md の front matter（title・updated）欠落で progress-index --check が exit 1 だった。main の同じ file の版（front matter 2 行の追加だけ）を写して直した。本文は変えていない。

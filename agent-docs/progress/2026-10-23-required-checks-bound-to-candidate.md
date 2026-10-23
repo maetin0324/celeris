@@ -37,7 +37,7 @@ ADR: `agent-docs/adr/2026-10-23-required-checks-bound-to-candidate.md`
 - `cargo fmt --all -- --check` exit 0 / `cargo clippy --workspace -- -D warnings` exit 0
 - `cargo test -p celeris --lib delivery` 37 passed、`cargo test -p task-dispatch --lib review::` 57 passed、`... target_sync` 23 passed、`git_workspace` は新規則に合わせて更新
 - `sh scripts/dev/tests/test-affected-list.sh` → ok
-- `bash scripts/dev/test-affected.sh`: 末尾の結果は報告本文に記載
+- `bash scripts/dev/test-affected.sh`: 1 回目は `celeris::root_done_summary restart_does_not_duplicate` が負荷で 1 回落ち（単独再実行 2 回とも 4 passed、本変更と無関係の既存の時間依存）、2 回目は exit 0（全 crate の nextest ＋ doc test 通過）
 
 ## 本番への移行
 config・DB の変更なし。昇格時に MergeQueued で止まっている配送は証跡が無いので 1 回だけ再 review になる。

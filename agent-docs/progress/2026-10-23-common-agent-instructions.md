@@ -141,3 +141,19 @@ attempt 3 の審査で条件 3 だけが不合格だった。地図のうち、�
   - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
   - 文書検査: `check-architecture-map.py`・`check-doc-links.sh docs/architecture-map.md`・`progress-index.sh --check`・`check-doc-layout.sh scripts/dev/docs-layout.tsv`・`check-adr-numbers.sh` がすべて exit 0。
 - 残件: なし（上の「残件・提案」の Codex skills 一覧の件は別 task）。
+
+## main-sync-3（main への同期、run 01M5MEXJZACBKJ4AECZ7W398RM）
+
+- rebase 先: main の「docs: record verify smoke stall diagnosis and main fix merge」（作業中に main が「docs: replan 上限の ADR と進捗を agent-docs へ移す」から進んだので 2 度 rebase した。2 度目は進捗 2 file だけの差で衝突なし）。
+- 衝突と解き方:
+  - `crates/celeris/tests/root_done_summary.rs`・`crates/celeris/tests/credential_wait_notify.rs`・`crates/task-worker/src/browser_egress/tests.rs`: main 側（偽 server の迷い込み接続を数えない共通 reader、echo listener の補修）を採った。branch の同種補修は main と重複するので落とした（この 3 file は main との差分 0）。
+  - `docs/architecture-map.md`: branch の 6 列表を採り、main が変えた cell（実行計画行の entry point に `plan_limits` を追加）を写した。両側の先頭 4 列を python で切り出して比べ、main の 125 行がすべて HEAD に残ることを確かめた（欠落 0）。main が新しく足した行は無かった。
+  - agent-docs/progress の他 task の 7 file（と無衝突だった 1 file）: main 版を採り、この branch の差分から外した。main との差分に残る進捗はこの file だけ。
+  - `crates/campaign/tests/ablation_application_support/mod.rs` の port 衝突補修は main に無いので残した。実装（required_rules.rs と adapter）は変えていない。
+- 同期後 HEAD での検査（全 workspace・browser/userns・release 手順は回していない）:
+  - `git merge-base --is-ancestor main HEAD`: exit 0。衝突 marker なし。
+  - `cargo test -p task-worker --lib required_rules`: exit 0（16 passed）。
+  - `bash scripts/dev/test-affected.sh`: exit 0（6379 passed / 18 skipped、地図 716 パス OK）。
+  - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+  - 文書検査: `check-architecture-map.py`・`check-doc-links.sh`・`progress-index.sh --check`・`check-doc-layout.sh scripts/dev/docs-layout.tsv`・`check-adr-numbers.sh`・`scripts/tests/test_architecture_map.py` がすべて exit 0。
+- 残件: なし（Codex skills 一覧の AGENTS.md 書き込みは別 task）。

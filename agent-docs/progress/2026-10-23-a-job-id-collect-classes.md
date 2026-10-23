@@ -74,7 +74,7 @@ base は main `df3a0e01`（「試験用サーバーが迷い込み接続を要�
 実測定の raw・grade・集計は新規作成していない（試験は tempfile の合成データ）。既存の履歴は変更していない。K2/HPC 比較は引き続き**開始不可**: Sirius の qstat Variable_List に trial 印が残ることの実機確認、測定用 A の cap-env/prompt への wrapper 導入、タスク 1・2 の成立が必要。fixture の成功でこれらを代替しない。本番設定の変更・実 pilot・有料評価は実施していない。
 
 ## 最終検査
-WU「既存 not_submitted 修正を新しい範囲基点で検証して再提出する」で、実装を変えずに再検証した（新機能・flaky 補修の追加なし、main 由来変更と front matter 補修は維持）。範囲の基点は WU 開始 snapshot（`CELERIS_WU_BASE` の commit「WU tracked scope base」。HEAD「docs: record rebase onto main and final checks」の tree をそのまま写したもの）。branch の base は main 由来の `df3a0e01`（提出直前に `git merge-base --is-ancestor df3a0e01 HEAD` が exit 0）。なお現在の main ref `81fd646a` は `df3a0e01` を別 task branch へ merge した commit で、本 branch の祖先ではない（取り込みは配送の target 同期に任せ、本 WU では merge しない）。
+WU「既存 not_submitted 修正を新しい範囲基点で検証して再提出する」で、実装を変えずに再検証した（新機能・flaky 補修の追加なし、main 由来変更と front matter 補修は維持）。範囲の基点は WU 開始 snapshot（`CELERIS_WU_BASE` の commit「WU tracked scope base」。HEAD「docs: record rebase onto main and final checks」の tree をそのまま写したもの）。branch の base は main 由来の `df3a0e01`（提出直前に `git merge-base --is-ancestor df3a0e01 HEAD` が exit 0）。（この base 記述は当時のもの。その後の target 同期と下の delivery-repair で main を取り込み、現在の base は下節のとおり）。
 - `cargo nextest run -p celeris-campaign --test grade_failure_class`: **exit 0**、8 passed（未投入のみ → model_failure、注入 fault 下で投げずに断念 → model_failure、NotSubmitted+FetchFailed 混在 → observation_failed を含む）。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/final-grade-failure-class.log
 - `bash scripts/dev/test-affected.sh`（WU snapshot 基点）: **exit 0**。差分は docs のみと判定され Rust 試験対象なし、source-size gate 0 failure、architecture-map 441 path・doc-links・ADR 番号（285 file）ok、python 試験 38+1 OK。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/final-test-affected.log
 - 参考に branch base で `CELERIS_WU_BASE=df3a0e01… bash scripts/dev/test-affected.sh`: **exit 0**、nextest **2608 passed / 6 skipped**（249 秒）。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/final-test-affected-branchbase.log
@@ -82,3 +82,26 @@ WU「既存 not_submitted 修正を新しい範囲基点で検証して再提出
 - `cargo fmt --all -- --check`: **exit 0**（差分 0）。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/final-fmt.log
 - 文書検査 `sh scripts/dev/progress-index.sh --check`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`bash scripts/dev/check-doc-links.sh`・`bash scripts/dev/check-adr-numbers.sh`: いずれも **exit 0**。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/final-doc-checks.log
 - 実測 raw・grade は新規なし、既存の測定履歴は不変。K2/HPC 比較は開始不可（Sirius qstat Variable_List の trial 印の実機確認、A の cap-env/prompt への wrapper 導入、タスク 1・2 の成立が未了）。
+
+## delivery-repair: verify の smoke が running のまま 60 秒で失敗
+
+### 原因（ログ根拠）
+対象 release は本 branch の commit「docs: record final checks on the new WU scope base」。prepare.log では fmt・試験・clippy・build・web がすべて exit 0 で、verify の check 6（smoke）だけが false だった（「the smoke task is 'running' after 60.82s」、task 01M5MDGPVV5MVWWAGEF5C4CSH3）。staging の celeris-new.log・run dir（読み取りのみ）を見ると次の順になる:
+- 12:59:09 起動。最初の tick は dispatch phase に 35.9 秒かかり、dispatched 0（smoke の POST は 12:59:31 で、この tick の候補取得より後）。
+- 12:59:47 smoke を dispatch（adapter fake）。worker は同じ秒に stdout.jsonl・result.json（`done: fake`）を書いて終わった。
+- その tick の dispatch phase は 49.1 秒続いた。worker の終了は次の reap まで反映されず、13:00:33 に verify が 60 秒で打ち切った（終了の記録は SIGTERM 後の 13:00:36、next=Reviewing）。
+停止したのは worker ではなく dispatcher の dispatch phase だった。verify mode は smoke しか扱わないのに、snapshot（1693 task）の対象外 ready task に依存の判定・子 task の照会・保守 executor をかけていた。前回通過した release でも smoke は 25〜52 秒かかっており、同じ原因で余裕が無くなっていた。
+
+### 修正
+現在の main には、同じ原因の修正 commit「verify 対象外のタスクを依存確認・保守処理の前に除外する」がある（`eligible_ready_tasks` で候補取得直後に `is_eligible` で絞る。回帰試験 `verify_skips_ineligible_ready_tasks_before_pre_dispatch_work`）。本 branch にはこれが無かったので、この worktree で main を no-ff merge して取り込んだ（commit「Merge main: verify の対象外タスクを先に除外する修正を取り込む」。衝突なし）。独自の修正は足していない。60 秒の合格条件も、成功の判定も変えていない。merge で入る差分はすべて main 由来で、本 task の修正対象ではない。base は main `f8e6fddb`（提出直前に `git merge-base --is-ancestor f8e6fddb HEAD` で確認）。main 由来の `agent-docs/progress/2026-10-23-source-size-browser.md` に front matter の title・updated が無く progress-index --check が落ちたので、この 2 欄だけを補った（本文は不変）。
+collector・not_submitted の契約は変えていない。受理 job ID の回収、観測障害の分類、not_submitted=model_failure、needs_regrade=false はそのまま。新しい研究機構も足していない。
+
+### 検査（すべて merge 後の HEAD で実行）
+- `cargo test -p task-dispatch --lib verify_skips_ineligible_ready_tasks_before_pre_dispatch_work`: **exit 0**、1 passed。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/smoke-regression.log
+- `bash scripts/dev/test-affected.sh`: **exit 0**、**6319 passed / 18 skipped**（13 crate）。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/repair-smoke-test-affected.log
+- `cargo clippy --workspace -- -D warnings`: **exit 0**。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/repair-smoke-clippy.log
+- `cargo fmt --all -- --check`: **exit 0**。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/repair-smoke-fmt.log
+- 文書検査（progress-index --check・check-doc-layout・check-doc-links・check-adr-numbers）: いずれも **exit 0**。front matter 補完前の progress-index は上記 1 file で exit 1 だった。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/repair-smoke-doc-checks.log、/local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/repair-smoke-progress-index.log
+
+### 未確認・人の再検証
+release.sh・verify.sh・本番・staging には触れていない。実 snapshot 上で smoke が 60 秒以内に done になるかは、次の配送の release 検証で確かめる。再検証の手順は、配送が新しい HEAD で prepare を再実行し、verify.json の check 6 が ok=true になり、celeris-new.log の dispatch_ms が数秒以下に収まっていることを見る。新しい raw・grade・集計は作っていない。Sirius の Variable_List の実機確認と、A の cap-env/prompt への wrapper 導入は未解決のまま。K2/HPC 比較は**開始不可**のまま。

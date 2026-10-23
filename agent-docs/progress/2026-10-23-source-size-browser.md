@@ -1,6 +1,8 @@
 ---
+title: source-size/browser: browser.rs と browser_cdp_sink.rs の責務分離（delivery-repair）
 tasks: [01M5KYMKBGCZP4MXHEF13TYAZQ]
 status: done
+updated: 2026-10-23
 completed: 2026-10-23
 ---
 # source-size/browser: browser.rs と browser_cdp_sink.rs の責務分離（delivery-repair）

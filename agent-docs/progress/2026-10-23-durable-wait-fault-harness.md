@@ -39,7 +39,7 @@ artifacts/c0/analyze.attempts/{0,1}/grade.json、metrics、reaggregated-v2を保
 
 ## コミットと追加検査
 
-実装commitは38a755a5（報告c69d4a2d。旧runの4f13a062と同内容をこのbranchへ載せたもの）。mainへの反映は配送待ち（このrunからmainへ直接commitしない）。
+実装commitは38a755a5（報告c69d4a2d。旧runの4f13a062と同内容をこのbranchへ載せたもの）。38a755a5・c69d4a2dはmainに反映済み（`git merge-base --is-ancestor 38a755a5 main`・`c69d4a2d main`ともにexit 0、確認時main 81fd646a）。
 任意のprogress-index全件検査は既存8文書のfrontmatter不備で非0。本タスクの新規文書は該当せず、必須health gateの対象外。
 
 ## attempt 2（必須検査の不合格への対応）
@@ -55,7 +55,7 @@ artifacts/c0/analyze.attempts/{0,1}/grade.json、metrics、reaggregated-v2を保
 
 release 準備（a3933dc2）の cargo-test で task-dispatch `dispatcher::tests::work_units::parallel_units_survive_dispatcher_restart` が `max_active` 1≠2 で落ちた（本 task の差分外、負荷で 10ms の WU run が重ならない時間依存）。
 試験用 `ParallelWuAdapter` に `meeting(n)`（同時に走る run が n に届くまで終わらない）を足し、再起動後の adapter に `meeting(2)` を付けて並列の観測を負荷に依らず決めた。
-検査: `cargo nextest run -p task-dispatch work_units::` 55 passed、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`bash scripts/dev/test-affected.sh` exit 0（対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、2600 passed、6 skipped）。修正 commit 337f3c64。
+検査: `cargo nextest run -p task-dispatch work_units::` 55 passed、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`bash scripts/dev/test-affected.sh` exit 0（対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、2600 passed、6 skipped）。修正 commit は「phase 6: 再起動後の並列 WU 試験を同時実行の待ち合わせで決定化する」（05eec4c5、このbranchの祖先。mainへは配送待ち）。旧記載の337f3c64はrebase前のhashで誤り。
 
 ## 残る実HPC接続と測定開始可否
 
@@ -64,3 +64,8 @@ release 準備（a3933dc2）の cargo-test で task-dispatch `dispatcher::tests:
 実schedulerの投入・成果物回収へ結ぶ接続は無い。測定専用controller、両armの投入台帳・job ID、
 停止中qstat/sacct原票、再開後の同一job成果物hashと独立grader入力を揃える必要がある。
 K3既存原票の再採点は新たなHPC復旧測定ではない。新規有料評価・実クラスタ投入・本番障害注入は行っていない。
+
+## attempt 2 再提出（commit 参照の訂正）
+
+review で commit 参照の誤り（337f3c64 は提出履歴に無い、main 反映済みを配送待ちと記載）を指摘された。上の 2 箇所を訂正した。
+main 81fd646a（browser runner request の修正 c051132c を含む）を `git merge --no-ff main` で取り込んだ（衝突なし）。A2 実装は不変。

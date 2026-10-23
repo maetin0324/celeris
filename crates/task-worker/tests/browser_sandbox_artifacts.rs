@@ -264,11 +264,10 @@ fn action(
     let request = session
         .join("actions")
         .join(format!("{:016x}.request", *seq));
-    std::fs::write(
+    write_request(
         &request,
-        serde_json::to_vec(&json!({"verb":verb,"args":args,"artifact":artifact})).expect("json"),
-    )
-    .expect("request");
+        &json!({"verb":verb,"args":args,"artifact":artifact}),
+    );
     let result = request.with_extension("result");
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {
@@ -281,13 +280,21 @@ fn action(
     }
 }
 
+/// Write a runner request as the launcher does: complete before it is named `*.request` (the
+/// runner polls for that name; a half-written request was `request_invalid` under load).
+fn write_request(request: &Path, body: &Value) {
+    let pending = request.with_extension("pending");
+    std::fs::write(&pending, serde_json::to_vec(body).expect("json")).expect("request");
+    std::fs::rename(&pending, request).expect("request");
+}
+
 /// A runner request with any body (the launcher's two-phase download).
 fn action_raw(session: &Path, seq: &mut u64, body: Value) -> Value {
     *seq += 1;
     let request = session
         .join("actions")
         .join(format!("{:016x}.request", *seq));
-    std::fs::write(&request, serde_json::to_vec(&body).expect("json")).expect("request");
+    write_request(&request, &body);
     let result = request.with_extension("result");
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {

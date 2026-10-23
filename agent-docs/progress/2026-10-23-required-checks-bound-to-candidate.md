@@ -39,6 +39,12 @@ ADR: `agent-docs/adr/2026-10-23-required-checks-bound-to-candidate.md`
 - `sh scripts/dev/tests/test-affected-list.sh` → ok
 - `bash scripts/dev/test-affected.sh`: 1 回目は `celeris::root_done_summary restart_does_not_duplicate` が負荷で 1 回落ち（単独再実行 2 回とも 4 passed、本変更と無関係の既存の時間依存）、2 回目は exit 0（全 crate の nextest ＋ doc test 通過）
 
+### 最終 review の不合格（test-affected exit 100）への対応（WU fix-live-limit-race）
+- 原因: `browser_launcher::live_tests::browser_launcher_live_frame_other_session_rejected`（live_tests.rs:687, `ErrorCode::Limit`）の試験の競合。本変更は task-worker に触れていない。拒否された接続（LeaseMismatch・Limit）を client が閉じても、server の接続 thread が `connections`（上限 `max_connections`=4）を減らす前に次の接続を張ると上限超過で Limit になる。live a を開く前（拒否 2 本が残ると a, b と合わせて 4）と raw を張る前（拒否 1 本が残ると 5 本目）の 2 か所に窓があった。
+- 修正 dc595f7f: `ServerHandle::wait_connections_at_most`（`#[cfg(test)]`、`conn_exit` Condvar で数えている接続が n 本以下になるまで待つ。30 秒は保険）を足し、試験は live a の前に 2、raw の前に 3 まで戻るのを待つ。sleep・上限・assert は変えていない。production の経路は不変。同じ形（拒否直後に上限近くで新しい接続）の他試験は無い（`live_view_rejects_input` は最大 3 本、`session_and_connection_limits` は Limit を期待する側）。
+- `cargo test -p task-worker --lib browser_launcher::` exit 0（54 passed）、`browser_launcher::live_tests::` 5 回連続 10 passed。注: この run の TMPDIR は長く unix socket の SUN_LEN を超えるため、試験は `TMPDIR=/dev/shm/...` で回した（評価器の環境では既存どおり）。
+- `bash scripts/dev/test-affected.sh` exit 0（4462 passed / 16 skipped）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
+
 ## 本番への移行
 config・DB の変更なし。昇格時に MergeQueued で止まっている配送は証跡が無いので 1 回だけ再 review になる。
 

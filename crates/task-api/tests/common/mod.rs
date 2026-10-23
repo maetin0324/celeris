@@ -458,6 +458,7 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
             reason: "throttled".into(),
         }],
         task_waits: vec![],
+        stalled_tasks: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,

@@ -80,6 +80,7 @@ fn node(units: Vec<LivenessUnitFacts>) -> NodeLivenessFacts {
         tree_limit_decision_open: false,
         replans_left: true,
         plan_reviewed: false,
+        plan_stalled: None,
         units,
     }
 }
@@ -251,5 +252,21 @@ fn unexplained_stalls_are_flagged() {
     assert_eq!(
         class(fixed),
         (LivenessClass::Runnable, "planner".to_string())
+    );
+}
+
+/// ADR 2026-10-23-stage-order-and-plan-stall D5: ready の unit があっても計画の都合で起こせない節点は理由なし
+/// （`plan_stalled`）。以前は ready の unit を「走れる」と分類し、生存確認が黙っていた（本番 01M5HDSN3A）。
+#[test]
+fn liveness_plan_stalled_node_is_unexplained_even_with_a_ready_unit() {
+    let mut n = node(vec![
+        leaf("chat-port", WorkUnitStatus::Pending),
+        leaf("parity-final", WorkUnitStatus::Ready),
+    ]);
+    assert_eq!(class(n.clone()).0, LivenessClass::Runnable);
+    n.plan_stalled = Some("計画の都合で起こせる unit が無い".into());
+    assert_eq!(
+        class(n),
+        (LivenessClass::Unexplained, "plan_stalled".to_string())
     );
 }

@@ -22,6 +22,7 @@ export const INBOX_KINDS: readonly InboxKind[] = [
   "delivery_skipped",
   "integration_request",
   "unintegrated",
+  "stalled",
 ];
 
 export const KIND_LABELS: Record<InboxKind, string> = {
@@ -42,6 +43,7 @@ export const KIND_LABELS: Record<InboxKind, string> = {
   delivery_skipped: "配送の見送り",
   integration_request: "統合の依頼",
   unintegrated: "未取り込み",
+  stalled: "理由なく止まっている",
 };
 
 export function isInboxKind(value: unknown): value is InboxKind {
@@ -73,6 +75,7 @@ const NATIVE_KINDS = new Set<InboxKind>([
   "delivery_skipped",
   "integration_request",
   "browser_wait",
+  "stalled",
 ]);
 
 export function needsNativeScreen(item: InboxItem): boolean {

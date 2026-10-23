@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::execution_plan::{
     CHILD_DEP_PREFIX, WorkUnitBlockedReason, WorkUnitKind, WorkUnitRow, WorkUnitStatus,
-    phase_ranks, runnable_work_units,
+    newly_ready_with, phase_ranks, runnable_work_units,
 };
 use crate::message::is_conversation;
 use crate::model::{Status, Task, TaskId, TaskKind};
@@ -122,6 +122,14 @@ pub enum TaskWait {
     StageHalted {
         stage: String,
         unit_keys: Vec<String>,
+    },
+    /// ADR 2026-10-23-stage-order-and-plan-stall D4: 計画の都合で何も起こせない（走っている unit も、起こせる・上げられる
+    /// unit も、走れる統合も、名指しの待ち〈失敗・blocked・子・決定〉も無いのに非終端の unit が残る）。`stage` は scheduler の
+    /// 現在の段、`unit_keys` は現在の段の外で ready の unit と現在の段の pending の unit（seq 順）。
+    PlanStalled {
+        stage: Option<String>,
+        unit_keys: Vec<String>,
+        detail: String,
     },
     /// D11。
     HumanDecision { decision_keys: Vec<String> },
@@ -400,6 +408,107 @@ impl UnitWait {
     }
 }
 
+/// ADR 2026-10-23-stage-order-and-plan-stall D4: [`plan_stall`] の結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanStall {
+    pub stage: Option<String>,
+    pub unit_keys: Vec<String>,
+    pub detail: String,
+}
+
+/// ADR 2026-10-23-stage-order-and-plan-stall D4: scheduler が計画の都合で何も起こせないか（純粋関数）。次のすべてのとき
+/// `Some`:
+/// - 非終端の有効な unit がある。
+/// - `running` の unit（kind task の子の写しを含む）・`blocked`・`failed` の unit が無い（それぞれ別の名指しの待ちか replan）。
+/// - 未回答の決定（`open_decision_keys`）・未完の子への `child:` 依存が無い。
+/// - 起こせる unit（[`runnable_work_units`]）・現在の段の ready の kind task の unit・上げられる unit（[`newly_ready_with`]）が無い。
+/// - 現在の段の非統合の unit がすべて done で統合 WU が待っている（dispatcher が統合を走らせる）形でもない。
+pub fn plan_stall(
+    units: &[WorkUnitRow],
+    external_done: &BTreeSet<String>,
+    open_decision_keys: &[String],
+) -> Option<PlanStall> {
+    if !open_decision_keys.is_empty() {
+        return None;
+    }
+    let live: Vec<&WorkUnitRow> = units
+        .iter()
+        .filter(|u| u.status.is_active() && !u.status.is_terminal())
+        .collect();
+    let current = live.iter().min_by_key(|u| u.seq)?;
+    if live.iter().any(|u| {
+        matches!(
+            u.status,
+            WorkUnitStatus::Running | WorkUnitStatus::Blocked | WorkUnitStatus::Failed
+        )
+    }) {
+        return None;
+    }
+    if live.iter().any(|u| {
+        u.status == WorkUnitStatus::Pending
+            && u.depends_on
+                .iter()
+                .any(|d| d.starts_with(CHILD_DEP_PREFIX) && !external_done.contains(d))
+    }) {
+        return None;
+    }
+    let stage = current.phase.clone();
+    let in_stage = |u: &&&WorkUnitRow| u.phase == stage;
+    if !runnable_work_units(units, 0, usize::MAX).is_empty()
+        || !newly_ready_with(units, external_done).is_empty()
+        || live.iter().filter(in_stage).any(|u| {
+            u.kind == WorkUnitKind::Task
+                && matches!(
+                    u.status,
+                    WorkUnitStatus::Ready | WorkUnitStatus::NeedsContinuation
+                )
+        })
+    {
+        return None;
+    }
+    let stage_units_done = units
+        .iter()
+        .filter(|u| u.status.is_active() && u.phase == stage && u.kind != WorkUnitKind::Integrate)
+        .all(|u| u.status == WorkUnitStatus::Done);
+    if stage.is_some()
+        && stage_units_done
+        && live
+            .iter()
+            .filter(in_stage)
+            .any(|u| u.kind == WorkUnitKind::Integrate)
+    {
+        return None;
+    }
+    let mut stuck: Vec<&&WorkUnitRow> = live
+        .iter()
+        .filter(|u| u.kind != WorkUnitKind::Integrate)
+        .filter(|u| {
+            (u.phase != stage
+                && matches!(
+                    u.status,
+                    WorkUnitStatus::Ready | WorkUnitStatus::NeedsContinuation
+                ))
+                || (u.phase == stage && u.status == WorkUnitStatus::Pending)
+        })
+        .collect();
+    stuck.sort_by_key(|u| u.seq);
+    let unit_keys: Vec<String> = stuck.iter().map(|u| u.key.clone()).collect();
+    let label = stage.clone().unwrap_or_else(|| "-".to_string());
+    let detail = format!(
+        "計画の都合で起こせる unit が無い（現在の段 {label}、止まっている unit: {}）",
+        if unit_keys.is_empty() {
+            "-".to_string()
+        } else {
+            unit_keys.join(", ")
+        }
+    );
+    Some(PlanStall {
+        stage,
+        unit_keys,
+        detail,
+    })
+}
+
 /// D7〜D11・D13: 計画（WorkUnit）から決まる待ち。`open_decision_keys` は未回答の `needed_before: self` の決定。
 pub fn plan_waits(
     units: &[WorkUnitRow],
@@ -455,6 +564,15 @@ pub fn plan_waits(
         });
     }
 
+    // ADR 2026-10-23-stage-order-and-plan-stall D4: 計画の詰まり（D8/D9 の unit ごとの待ちも出せるときは続けて出す）。
+    let stall = plan_stall(units, &resolution.done, open_decision_keys);
+    if let Some(s) = &stall {
+        out.push(TaskWait::PlanStalled {
+            stage: s.stage.clone(),
+            unit_keys: s.unit_keys.clone(),
+            detail: s.detail.clone(),
+        });
+    }
     // D8/D9: runnable な unit が無く、走っている unit も無いときだけ。
     let moving = live.iter().any(|u| {
         matches!(

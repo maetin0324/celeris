@@ -25,6 +25,13 @@ gap-c の chat-port・diff-viewer・integrate-gap-c は pending のまま、clos
 - D1（段の順位）: `phase_ranks` は、段に done でない有効な行があればその行の `seq` の最小値、すべて done の段だけ従来どおり
   有効な行の最小値を順位にする。done の行の `seq` は前の版の並びのまま残る（R5b-fix1・replay は変えない）ので、
   順位の比較に使うのは「今の版の並びを持つ行」だけにする。工程の障壁・`unit_waits`・GUI の段の帯は同じ関数を使う。
+  - 人の指示（2026-10-23T05:05Z「段の順は今の版の spec.stages の宣言順で決める。前の版の行は rank に入れない」）との関係:
+    今の版の未完の行の `seq` は `materialized_order`（spec.stages の宣言順に段ごとに並べ、段の末尾に統合 WU を置く）の index
+    （D2 で replan の採用時に書き直す）なので、未完の行がある段の順位は spec.stages の宣言順と一致する。前の版の行（done の
+    繰り越し行）は、その段に未完の行がある限り順位に入らない。すべて done の段（今の版に行が無い gateway・screens・chat を含む）は
+    前の版の `seq` で並ぶが、工程の障壁（`earliest_unfinished_phase`）は未完の行のある段しか見ないので待ちの判定には効かない。
+    spec を引数に取らずに済むので、`newly_ready`・`unit_waits`・`runnable_work_units` の呼び出し側（dispatcher・replay・
+    decision・tree_adopt）は変えない。
   - daemon が足した phase 付きの行（統合の repair WU）は replan で `seq` を書き換えない。段を並べ替える replan でだけ古い
     `seq` が段の順位を下げうる。現在の段に属すので、並べ替えが無い限り害は無い（既知の残り）。
 - D2（replan の ready の決め直し）: `plan_replan` は、持ち越し・新規の未完の行の `seq` を新しい版の並び（`materialized_order`）に
@@ -39,12 +46,18 @@ gap-c の chat-port・diff-viewer・integrate-gap-c は pending のまま、clos
   scheduler が起こせる unit（`runnable_work_units`）も上げられる unit（`newly_ready_with`）も無く、現在の段の統合も走れず、
   failed・blocked の unit・子待ち・未回答の決定も無いのに、非終端の unit が残っているとき `Some`。`plan_waits` はこのとき
   `TaskWait::PlanStalled{stage, unit_keys, detail}` を出す（`stage` は現在の段、`unit_keys` は現在の段の外で ready の unit と
-  現在の段の pending の unit）。他の待ちの理由（D8/D9 の `WorkUnits`）より詳しい理由なので、同じ task に D8/D9 は出さない。
+  現在の段の pending の unit）。D8/D9 の `WorkUnits`（unit ごとの待ち）が出せる形（ready の unit が無い）なら続けて出す。本番の形は ready の unit があるので D8/D9 は出ず、`PlanStalled` だけが出る。
 - D5（受信箱）: 木の生存確認（ADR-0079 D10）の節点の事実に `plan_stalled` を足し、`Some` なら他の unit の分類より先に
   `Unexplained{reason: "plan_stalled"}` にする。`liveness_timeout_secs`（既定 600 秒）続けば従来どおり `StallDetected` と
   障害通知を 1 回出す。受信箱の attention には `AttentionItem::Stalled` を足す: dispatcher が「最後の event が `StallDetected`
   の ready の task」を snapshot の `stalled_tasks` に載せ、`build_attention` がそこから項目を作る（task ごとに events を読まない）。
   何か起きて最後の event が変われば snapshot から消える。
+  - 実装: `NodeLivenessFacts.plan_stalled`（`task_ops::tree::node_liveness_facts` が `plan_stall` の `detail` を入れる。
+    `child:` の依存は unit の事実で名指しの待ちになるので空の集合で渡す）、`Dispatcher.stalled_tasks` と
+    `DaemonSnapshot.stalled_tasks[]`（`SnapshotStalledTask{task_id, reason, detail, since, at}`。生存確認ごとに作り直し、
+    最後の event が `StallDetected` の Unexplained の task だけを残す）、`AttentionItem::Stalled`、受信箱の kind `stalled`
+    （`InboxKind::Stalled`。選択肢は replan・cancel で人の手を示すだけ、native なし。答えると 409 `native_action_required`。人の手は task 詳細の replan か取り消し）。
+    `plan_stalled` 以外の理由（`nothing_runnable`・`replans_exhausted` など）の `StallDetected` も同じく受信箱に出る。
 - 設定の追加・変更は無い（`[execution.tree].liveness_timeout_secs` の既定 600 秒をそのまま使う）。
 
 ## 結果

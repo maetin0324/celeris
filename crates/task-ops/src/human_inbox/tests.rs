@@ -318,6 +318,15 @@ fn fixture() -> Fixture {
             reason: None,
             at: AT.to_string(),
         },
+        AttentionItem::Stalled {
+            task: tref.clone(),
+            reason: "plan_stalled".into(),
+            detail:
+                "計画の都合で起こせる unit が無い（現在の段 gap-c、止まっている unit: chat-port）"
+                    .into(),
+            since: AT.to_string(),
+            at: AT.to_string(),
+        },
     ];
     inbox
         .browser_waits
@@ -470,6 +479,7 @@ fn variant_index(kind: InboxKind) -> usize {
         InboxKind::DeliverySkipped => 14,
         InboxKind::IntegrationRequest => 15,
         InboxKind::Unintegrated => 16,
+        InboxKind::Stalled => 17,
     }
 }
 
@@ -479,7 +489,7 @@ fn human_inbox_all_contains_every_variant_once() {
     seen.sort_unstable();
     assert_eq!(
         seen,
-        (0..=16).collect::<Vec<_>>(),
+        (0..=17).collect::<Vec<_>>(),
         "ALL must list every variant once"
     );
 }

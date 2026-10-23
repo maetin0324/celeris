@@ -346,6 +346,7 @@ pub(crate) fn delegated_request(
         | InboxKind::DeliverySkipped
         | InboxKind::ClusterLogin
         | InboxKind::DiskFull
+        | InboxKind::Stalled
         | InboxKind::CredentialWait => {
             return Err(ApiProblem::new(
                 StatusCode::CONFLICT,

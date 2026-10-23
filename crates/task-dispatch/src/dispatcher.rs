@@ -1236,6 +1236,9 @@ pub struct Dispatcher {
     /// ADR-0079 D10（Phase R3b）: 理由なく止まっている（`LivenessClass::Unexplained`）と最初に見た木の節点と、その時の
     /// 節点の最後の event の seq（seq が変われば数え直す）。プロセス内メモリのみ（再起動で数え直す = 安全側）。
     stall_watch: HashMap<TaskId, (u64, OffsetDateTime)>,
+    /// ADR 2026-10-23-stage-order-and-plan-stall D5: `StallDetected` を出した後まだ何も起きていない task
+    /// （snapshot の `stalled_tasks`。受信箱の attention の元）。生存確認ごとに作り直す。プロセス内メモリのみ。
+    stalled_tasks: std::collections::BTreeMap<TaskId, task_ops::daemon::SnapshotStalledTask>,
     /// ADR-0079 D10（Phase R3b）: 最後に生存確認をした時刻（[`LIVENESS_CHECK_INTERVAL_SECS`] ごと）。
     liveness_checked_at: Option<OffsetDateTime>,
     /// ADR-0079 付記「R6-1」D4: 最後に終端の task の未完了 run と統合依頼を照合した時刻（起動後の最初の
@@ -1602,6 +1605,7 @@ impl Dispatcher {
             wu_prepare_failures: HashMap::new(),
             run_write_bases: HashMap::new(),
             stall_watch: HashMap::new(),
+            stalled_tasks: std::collections::BTreeMap::new(),
             liveness_checked_at: None,
             terminal_records_reconciled_at: None,
             ownerless_reconciled_at: None,

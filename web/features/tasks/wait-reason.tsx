@@ -34,6 +34,8 @@ export function waitReason(wait: TaskWait): string {
     }
     case "stage_halted":
       return `段停止: ${wait.stage}`;
+    case "plan_stalled":
+      return `計画が詰まっている: ${wait.stage ?? "段"}（${wait.unit_keys.join(", ") || "unit なし"}）`;
     case "human_decision":
       return "人の決定待ち";
     case "human_gate":
@@ -99,7 +101,10 @@ export function TaskWaitReason({ task }: { task: Pick<TaskSummary, "id" | "waits
     );
   const targets = waitTargets(wait);
   const detail =
-    wait.kind === "work_units" || wait.kind === "stage_halted" || wait.kind === "units_blocked"
+    wait.kind === "work_units" ||
+    wait.kind === "stage_halted" ||
+    wait.kind === "plan_stalled" ||
+    wait.kind === "units_blocked"
       ? `/tasks/${encodeURIComponent(task.id)}#task-tree`
       : wait.kind === "human_decision" || wait.kind === "human_gate" || wait.kind === "review_awaiting_human"
         ? `/tasks/${encodeURIComponent(task.id)}#task-decisions`

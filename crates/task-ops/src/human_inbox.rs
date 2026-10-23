@@ -46,11 +46,13 @@ pub enum InboxKind {
     DeliverySkipped,
     IntegrationRequest,
     Unintegrated,
+    // ADR 2026-10-23-stage-order-and-plan-stall D5: 計画を持つ task が理由なく止まっている（生存確認の `StallDetected`）。
+    Stalled,
     // 人の決定 2026-10-08: KB の取り込み待ち（旧 `knowledge_review`）は受信箱に出さない。知識画面で扱う。
 }
 
 impl InboxKind {
-    pub const ALL: [InboxKind; 17] = [
+    pub const ALL: [InboxKind; 18] = [
         InboxKind::Decision,
         InboxKind::PlanGate,
         InboxKind::PhaseGate,
@@ -68,6 +70,7 @@ impl InboxKind {
         InboxKind::DeliverySkipped,
         InboxKind::IntegrationRequest,
         InboxKind::Unintegrated,
+        InboxKind::Stalled,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -89,6 +92,7 @@ impl InboxKind {
             InboxKind::DeliverySkipped => "delivery_skipped",
             InboxKind::IntegrationRequest => "integration_request",
             InboxKind::Unintegrated => "unintegrated",
+            InboxKind::Stalled => "stalled",
         }
     }
 }
@@ -190,6 +194,7 @@ pub fn route_attention(item: &AttentionItem) -> Option<InboxKind> {
         AttentionItem::DeliverySkipped { .. } => Some(InboxKind::DeliverySkipped),
         AttentionItem::IntegrationRequest { .. } => Some(InboxKind::IntegrationRequest),
         AttentionItem::Unintegrated { .. } => Some(InboxKind::Unintegrated),
+        AttentionItem::Stalled { .. } => Some(InboxKind::Stalled),
         // ADR 2026-10-08-browser-prod-enablement D2: browser の前提で止まった task。人の手は task 詳細の
         // browser 節（policy の編集）か release・台帳の作り直しなので、browser の人手の種類に入れる。
         AttentionItem::BrowserPrerequisite { .. } => Some(InboxKind::BrowserWait),
@@ -1062,6 +1067,45 @@ impl Builder<'_> {
                     links: Vec::new(),
                 })
             }
+            // ADR 2026-10-23-stage-order-and-plan-stall D5: 受信箱では答えない（native なし。答えると 409）。選択肢は人の手
+            // （task 詳細の replan か取り消し）を示すだけ。何か起きれば次の生存確認で消える。
+            AttentionItem::Stalled {
+                task,
+                reason,
+                detail,
+                since,
+                at,
+            } => self.finish(Draft {
+                id: format!("stalled-{}-{}", task.id, ts_part(at)),
+                kind: InboxKind::Stalled,
+                title: format!("理由なく止まっている: {}", task.title),
+                detail: clip(&format!(
+                    "{detail}（{reason}、{since} から）。task 詳細の計画で replan するか取り消す"
+                )),
+                options: vec![
+                    opt(
+                        "replan",
+                        "task 詳細の計画から replan する",
+                        false,
+                        "計画を分解し直す（POST /tasks/{id}/execution/decompose）。動けば項目は消える",
+                    ),
+                    opt(
+                        "cancel",
+                        "取り消す",
+                        false,
+                        &format!("POST /tasks/{}/cancel", task.id),
+                    ),
+                ],
+                recommended: Some("replan".to_string()),
+                due_at: None,
+                blocking: self.only_task(task),
+                blocked_by: Vec::new(),
+                native: None,
+                project_id: self.project_of(task.id),
+                task: Some(task.clone()),
+                created_at: at.clone(),
+                links: vec![link("task 詳細", format!("/tasks/{}", task.id))],
+            }),
             AttentionItem::Unintegrated {
                 task,
                 repo_id,

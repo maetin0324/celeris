@@ -322,6 +322,13 @@ export type AttentionItem = {
   "type": "delivery_skipped";
 } | {
   "at": string;
+  "detail": string;
+  "reason": string;
+  "since": string;
+  "task": TaskRef;
+  "type": "stalled";
+} | {
+  "at": string;
   "request": IntegrationRequest;
   "request_id": string;
   "task": TaskRef;
@@ -1629,6 +1636,7 @@ export type DaemonSnapshot = {
   "pid": number;
   "reports"?: ReportsLive | null;
   "scratch"?: ScratchStatus | null;
+  "stalled_tasks"?: Array<SnapshotStalledTask>;
   "started_at": string;
   "task_waits"?: Array<SnapshotTaskWait>;
   "tick_ms": number;
@@ -3175,7 +3183,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled";
 
 export type InboxLink = {
   "href": string;
@@ -5445,6 +5453,14 @@ export type SkillSummaryView = {
   "updated"?: string | null;
 };
 
+export type SnapshotStalledTask = {
+  "at": string;
+  "detail": string;
+  "reason": string;
+  "since": string;
+  "task_id": TaskId;
+};
+
 export type SnapshotTaskWait = {
   "task_id": TaskId;
   "wait": TaskWait;
@@ -5860,6 +5876,11 @@ export type TaskWait = {
 } | {
   "kind": "stage_halted";
   "stage": string;
+  "unit_keys": Array<string>;
+} | {
+  "detail": string;
+  "kind": "plan_stalled";
+  "stage"?: string | null;
   "unit_keys": Array<string>;
 } | {
   "decision_keys": Array<string>;

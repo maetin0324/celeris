@@ -768,6 +768,7 @@ fn inbox_attention_unroutable_only_populated_with_snapshot() {
                 detail: "no provider".into(),
             },
         }],
+        stalled_tasks: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,
@@ -793,6 +794,96 @@ fn inbox_attention_unroutable_only_populated_with_snapshot() {
             .attention
             .iter()
             .any(|a| matches!(a, AttentionItem::Unroutable { task, .. } if task.id == stuck.id))
+    );
+}
+
+/// ADR 2026-10-23-stage-order-and-plan-stall D5: snapshot の `stalled_tasks` の ready の task だけが attention の
+/// `Stalled` になり、受信箱の `stalled` に出る（終端・ready でない task は出さない）。
+#[test]
+fn inbox_attention_stalled_from_snapshot_for_ready_tasks_only() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let stuck = sample_task(TaskKind::Execute, Status::Ready);
+    store.insert(&stuck).expect("insert stuck");
+    let done = sample_task(TaskKind::Execute, Status::Done);
+    store.insert(&done).expect("insert done");
+    let ctx = view_ctx();
+    let now = OffsetDateTime::now_utc();
+    let stalled = |id: TaskId| {
+        crate::daemon::SnapshotStalledTask {
+        task_id: id,
+        reason: "plan_stalled".into(),
+        detail: "計画の都合で起こせる unit が無い（現在の段 gap-c、止まっている unit: chat-port, parity-final）"
+            .into(),
+        since: "2026-10-22T12:10:37Z".into(),
+        at: "2026-10-22T12:20:40Z".into(),
+    }
+    };
+    let snapshot = DaemonSnapshot {
+        instance_id: "01J000000000000000000000AA".into(),
+        pid: 1,
+        hostname: "host".into(),
+        started_at: view::to_rfc3339(now),
+        last_tick_at: view::to_rfc3339(now),
+        ticks: 1,
+        tick_ms: 2000,
+        in_flight: vec![],
+        cooldowns: vec![],
+        task_waits: vec![],
+        stalled_tasks: vec![stalled(stuck.id), stalled(done.id)],
+        reports: None,
+        approvals_pending: 0,
+        decisions_open: 0,
+        clusters: vec![],
+        accounts_root: None,
+        accounts_roots: std::collections::HashMap::new(),
+        max_runs_per_account: None,
+        accounts: vec![],
+        implicit_accounts: vec![],
+        containers: None,
+        scratch: None,
+    };
+    let out = inbox(&store, Some(&snapshot), &ctx, now, &no_evidence).expect("inbox");
+    let ids: Vec<TaskId> = out
+        .attention
+        .iter()
+        .filter_map(|a| match a {
+            AttentionItem::Stalled { task, reason, .. } if reason == "plan_stalled" => {
+                Some(task.id)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, vec![stuck.id]);
+    let human = crate::human_inbox::from_inbox(
+        &out,
+        &store
+            .list(None)
+            .expect("list")
+            .into_iter()
+            .map(|t| (t.id, t))
+            .collect(),
+        now,
+    );
+    let item = human
+        .items
+        .iter()
+        .find(|i| i.kind == crate::human_inbox::InboxKind::Stalled)
+        .expect("stalled item");
+    assert_eq!(item.task.as_ref().map(|t| t.id), Some(stuck.id));
+    assert_eq!(item.recommended.as_deref(), Some("replan"));
+    assert!(item.answer.native.is_none());
+    assert!(
+        item.detail.as_deref().unwrap_or("").contains("gap-c"),
+        "{item:?}"
+    );
+    // 生存確認が消せば（何か起きた）出ない。
+    let mut cleared = snapshot.clone();
+    cleared.stalled_tasks.clear();
+    let out = inbox(&store, Some(&cleared), &ctx, now, &no_evidence).expect("inbox");
+    assert!(
+        !out.attention
+            .iter()
+            .any(|a| matches!(a, AttentionItem::Stalled { .. }))
     );
 }
 
@@ -1039,6 +1130,7 @@ fn inbox_attention_cluster_unavailable_hidden_once_reconnected_and_host_filled_f
         in_flight: vec![],
         cooldowns: vec![],
         task_waits: vec![],
+        stalled_tasks: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,
@@ -1329,6 +1421,7 @@ fn inbox_cleanup_r3_terminal_snapshot_unroutable_is_hidden() {
                 detail: "no provider".into(),
             },
         }],
+        stalled_tasks: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,

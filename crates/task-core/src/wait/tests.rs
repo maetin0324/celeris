@@ -258,22 +258,30 @@ fn task_wait_plan_waits_reports_units_when_nothing_runnable() {
     ];
     assert_eq!(
         plan_waits(&units, &[], &[]),
-        vec![TaskWait::WorkUnits {
-            units: vec![
-                UnitWait {
-                    key: "b".into(),
-                    stage: Some("s1".into()),
-                    waiting_on: vec!["c".into()],
-                    waiting_stage: None,
-                },
-                UnitWait {
-                    key: "c".into(),
-                    stage: Some("s1".into()),
-                    waiting_on: vec!["b".into()],
-                    waiting_stage: None,
-                },
-            ]
-        }]
+        vec![
+            TaskWait::PlanStalled {
+                stage: Some("s1".into()),
+                unit_keys: vec!["b".into(), "c".into()],
+                detail: "計画の都合で起こせる unit が無い（現在の段 s1、止まっている unit: b, c）"
+                    .into(),
+            },
+            TaskWait::WorkUnits {
+                units: vec![
+                    UnitWait {
+                        key: "b".into(),
+                        stage: Some("s1".into()),
+                        waiting_on: vec!["c".into()],
+                        waiting_stage: None,
+                    },
+                    UnitWait {
+                        key: "c".into(),
+                        stage: Some("s1".into()),
+                        waiting_on: vec!["b".into()],
+                        waiting_stage: None,
+                    },
+                ]
+            }
+        ]
     );
 }
 
@@ -368,4 +376,108 @@ fn task_wait_serializes_with_kind_tag() {
         serde_json::to_value(TaskWait::ReviewAwaitingHuman).expect("json")["kind"],
         "review_awaiting_human"
     );
+}
+
+/// ADR 2026-10-23-stage-order-and-plan-stall D4: 本番 01M5HDSN3A の止まった形（修正前の段の順位で作られた状態に、
+/// 依存先の行が無い pending を足したもの）。前の段 gap-c の pending が行の無い key を待ち、後の段 close の parity-final は
+/// ready だが現在の段でないので起こせない。waits に `PlanStalled` が出る（以前は ready の unit があるので [] だった）。
+#[test]
+fn plan_stall_is_reported_when_nothing_can_be_dispatched() {
+    let units = vec![
+        unit("gap-b1", Some("gap-b"), 0, WorkUnitStatus::Done, &[]),
+        unit(
+            "integrate-gap-b",
+            Some("gap-b"),
+            1,
+            WorkUnitStatus::Done,
+            &["gap-b1"],
+        ),
+        unit(
+            "chat-port",
+            Some("gap-c"),
+            2,
+            WorkUnitStatus::Pending,
+            &["gone"],
+        ),
+        unit(
+            "integrate-gap-c",
+            Some("gap-c"),
+            3,
+            WorkUnitStatus::Pending,
+            &["chat-port"],
+        ),
+        unit("parity-final", Some("close"), 4, WorkUnitStatus::Ready, &[]),
+        unit(
+            "integrate-close",
+            Some("close"),
+            5,
+            WorkUnitStatus::Pending,
+            &["parity-final"],
+        ),
+    ];
+    let waits = plan_waits(&units, &[], &[]);
+    assert_eq!(
+        waits,
+        vec![TaskWait::PlanStalled {
+            stage: Some("gap-c".into()),
+            unit_keys: vec!["chat-port".into(), "parity-final".into()],
+            detail: "計画の都合で起こせる unit が無い（現在の段 gap-c、止まっている unit: chat-port, parity-final）".into(),
+        }]
+    );
+    let json = serde_json::to_value(&waits[0]).unwrap();
+    assert_eq!(json["kind"], "plan_stalled");
+}
+
+/// 動いている・名指しの待ちがある計画には `PlanStalled` を出さない。
+#[test]
+fn plan_stall_is_none_while_the_plan_can_move_or_waits_on_a_named_reason() {
+    let ext = BTreeSet::new();
+    // 起こせる unit がある。
+    let runnable = vec![unit("a", Some("s1"), 0, WorkUnitStatus::Ready, &[])];
+    assert_eq!(plan_stall(&runnable, &ext, &[]), None);
+    // 上げられる unit がある（dispatcher が次の tick で上げる）。
+    let promotable = vec![
+        unit("a", Some("s1"), 0, WorkUnitStatus::Done, &[]),
+        unit("b", Some("s1"), 1, WorkUnitStatus::Pending, &["a"]),
+    ];
+    assert_eq!(plan_stall(&promotable, &ext, &[]), None);
+    // 段の unit がすべて done で統合が走れる。
+    let integrate = vec![
+        unit("a", Some("s1"), 0, WorkUnitStatus::Done, &[]),
+        unit(
+            "integrate-s1",
+            Some("s1"),
+            1,
+            WorkUnitStatus::Pending,
+            &["a"],
+        ),
+        unit("b", Some("s2"), 2, WorkUnitStatus::Pending, &[]),
+    ];
+    assert_eq!(plan_stall(&integrate, &ext, &[]), None);
+    // 走っている・blocked・failed の unit、未回答の決定、子待ち。
+    for status in [
+        WorkUnitStatus::Running,
+        WorkUnitStatus::Blocked,
+        WorkUnitStatus::Failed,
+    ] {
+        let units = vec![
+            unit("a", Some("s1"), 0, status, &[]),
+            unit("b", Some("s1"), 1, WorkUnitStatus::Pending, &["a"]),
+        ];
+        assert_eq!(plan_stall(&units, &ext, &[]), None, "{status:?}");
+    }
+    let stuck = vec![unit("b", Some("s1"), 0, WorkUnitStatus::Pending, &["gone"])];
+    assert!(plan_stall(&stuck, &ext, &[]).is_some());
+    assert_eq!(plan_stall(&stuck, &ext, &["d".to_string()]), None);
+    let child = vec![unit(
+        "b",
+        Some("s1"),
+        0,
+        WorkUnitStatus::Pending,
+        &["child:k"],
+    )];
+    assert_eq!(plan_stall(&child, &ext, &[]), None);
+    // 全部 done（計画の完了は別の経路）。
+    let done = vec![unit("a", Some("s1"), 0, WorkUnitStatus::Done, &[])];
+    assert_eq!(plan_stall(&done, &ext, &[]), None);
 }

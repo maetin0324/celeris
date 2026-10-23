@@ -17,6 +17,16 @@ describe("task wait reasons", () => {
       }),
     ).toBe("WU 待ち: dispatch-prune ← cos-route");
   });
+  test("names the stalled stage and units of a plan that cannot dispatch", () => {
+    expect(
+      waitReason({
+        kind: "plan_stalled",
+        stage: "gap-c",
+        unit_keys: ["chat-port", "parity-final"],
+        detail: "計画の都合で起こせる unit が無い",
+      }),
+    ).toBe("計画が詰まっている: gap-c（chat-port, parity-final）");
+  });
   test("tells the human gates apart", () => {
     expect(waitReason({ kind: "human_gate", gate: "plan_approval", stage: null })).toBe("計画の承認待ち");
     expect(waitReason({ kind: "human_gate", gate: "stage_review", stage: "edges" })).toBe("段の確認待ち: edges");

@@ -93,6 +93,7 @@ impl Dispatcher {
         }
         if nodes.is_empty() {
             self.stall_watch.clear();
+            self.stalled_tasks.clear();
             return Ok(());
         }
         let eligible: std::collections::HashSet<TaskId> = self
@@ -117,6 +118,8 @@ impl Dispatcher {
         }
         let verdicts = task_core::tree::liveness(&task_core::TreeSnapshot { nodes: facts });
         let mut watching: std::collections::HashSet<TaskId> = std::collections::HashSet::new();
+        let mut stalled: std::collections::BTreeMap<TaskId, task_ops::daemon::SnapshotStalledTask> =
+            std::collections::BTreeMap::new();
         for v in verdicts {
             if v.class != task_core::LivenessClass::Unexplained {
                 continue;
@@ -125,8 +128,29 @@ impl Dispatcher {
             let Some((last_seq, last)) = events.last() else {
                 continue;
             };
-            if matches!(last, Event::StallDetected { .. }) {
-                // 既に知らせた止まり方（何か起きるまで繰り返さない）。
+            if let Event::StallDetected {
+                reason,
+                detail,
+                since,
+                ..
+            } = last
+            {
+                // 既に知らせた止まり方（何か起きるまで繰り返さない）。受信箱には出し続ける（D5）。
+                let at = self
+                    .stalled_tasks
+                    .get(&v.task_id)
+                    .map(|s| s.at.clone())
+                    .unwrap_or_else(|| since.clone());
+                stalled.insert(
+                    v.task_id,
+                    task_ops::daemon::SnapshotStalledTask {
+                        task_id: v.task_id,
+                        reason: reason.clone(),
+                        detail: detail.clone(),
+                        since: since.clone(),
+                        at,
+                    },
+                );
                 continue;
             }
             watching.insert(v.task_id);
@@ -186,10 +210,21 @@ impl Dispatcher {
             ) {
                 tracing::error!(task_id = %v.task_id, error = %e, "failed to record the stall notification");
             }
+            stalled.insert(
+                v.task_id,
+                task_ops::daemon::SnapshotStalledTask {
+                    task_id: v.task_id,
+                    reason: v.reason.clone(),
+                    detail: v.detail.clone(),
+                    since: rfc3339(since),
+                    at: rfc3339(now),
+                },
+            );
             self.stall_watch.remove(&v.task_id);
             watching.remove(&v.task_id);
         }
         self.stall_watch.retain(|id, _| watching.contains(id));
+        self.stalled_tasks = stalled;
         Ok(())
     }
 

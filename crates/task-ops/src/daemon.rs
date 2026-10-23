@@ -25,6 +25,11 @@ pub struct DaemonSnapshot {
     /// 1 task に 1 件。DB で決まる理由（`task_core::db_waits` / `plan_waits`）は入れない。
     #[serde(default)]
     pub task_waits: Vec<SnapshotTaskWait>,
+    /// ADR 2026-10-23-stage-order-and-plan-stall D5: 生存確認（ADR-0079 D10）が理由なく止まっていると知らせ
+    /// （`Event::StallDetected`）、その後まだ何も起きていない `ready` の task（task_id 順）。受信箱の attention
+    /// （`AttentionItem::Stalled`）の元。何か起きて最後の event が変われば次の確認で消える。
+    #[serde(default)]
+    pub stalled_tasks: Vec<SnapshotStalledTask>,
     /// ADR-0033 D3（Phase 25）: 秘書レベルの未読の報告と通知の判定。**API が応答を組むときに埋める**
     /// 唯一のフィールド（`last_notified_at` は `POST /reports/notified` が進める API プロセスの観測値で、
     /// ディスパッチャは知らない）。ディスパッチャが送るスナップショットでは常に `None`。
@@ -402,6 +407,19 @@ pub struct AccountCooldownLive {
 pub struct SnapshotTaskWait {
     pub task_id: TaskId,
     pub wait: task_core::TaskWait,
+}
+
+/// ADR 2026-10-23-stage-order-and-plan-stall D5: `DaemonSnapshot.stalled_tasks` の 1 件（`StallDetected` の写し）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SnapshotStalledTask {
+    pub task_id: TaskId,
+    /// `StallDetected.reason`（`plan_stalled`・`nothing_runnable` など）。
+    pub reason: String,
+    pub detail: String,
+    /// 止まっていると最初に見た時刻（RFC 3339）。
+    pub since: String,
+    /// `StallDetected` を記録した時刻（RFC 3339）。
+    pub at: String,
 }
 
 /// 実行中の run（ワーカー run、またはプロバイダを使う Reviewer run）。

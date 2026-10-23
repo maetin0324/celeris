@@ -588,8 +588,16 @@ pub fn node_liveness_facts(
             && task_core::TreeLimitKind::from_decision_key(&d.key)
                 .is_some_and(|k| k.is_tree_wide() && k.is_run_time())
     });
+    let rows = store.work_units_for(task.id)?;
+    // ADR 2026-10-23-stage-order-and-plan-stall D5: 子 task（`child:`）の依存は上の unit の事実で名指しの待ちに
+    // なるので空で渡す（`plan_stall` は未完の `child:` 依存があれば None）。未回答の決定は節点の決定で先に見る。
+    let plan_stalled = if has_plan {
+        task_core::plan_stall(&rows, &Default::default(), &[]).map(|s| s.detail)
+    } else {
+        None
+    };
     let mut units = Vec::new();
-    for u in store.work_units_for(task.id)? {
+    for u in rows {
         let child = if u.kind == task_core::WorkUnitKind::Task {
             match u.child_task_id.as_deref() {
                 Some(raw) => match raw.parse::<TaskId>() {
@@ -640,6 +648,7 @@ pub fn node_liveness_facts(
         tree_limit_decision_open,
         replans_left,
         plan_reviewed,
+        plan_stalled,
         units,
     })
 }

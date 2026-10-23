@@ -230,6 +230,17 @@ pub enum AttentionItem {
         head: Option<String>,
         at: String,
     },
+    /// ADR 2026-10-23-stage-order-and-plan-stall D5: 計画を持つ `ready` の task が、走っている・走れる・名指しの待ちの
+    /// どれでもないまま生存確認の時間（`[execution.tree].liveness_timeout_secs`）を過ぎた（`Event::StallDetected` の写し。
+    /// dispatcher の snapshot の `stalled_tasks` から作る）。何か起きれば次の確認で消える。
+    Stalled {
+        task: TaskRef,
+        /// `StallDetected.reason`（`plan_stalled` など）。
+        reason: String,
+        detail: String,
+        since: String,
+        at: String,
+    },
     /// ADR D4: 未回答の統合依頼。正本は IntegrationRequested / IntegrationAnswered。
     IntegrationRequest {
         task: TaskRef,
@@ -357,6 +368,7 @@ fn attention_task(item: &AttentionItem) -> Option<TaskId> {
         | AttentionItem::PhaseCheckpoint { task, .. }
         | AttentionItem::PlanApproval { task, .. }
         | AttentionItem::DeliverySkipped { task, .. }
+        | AttentionItem::Stalled { task, .. }
         | AttentionItem::BrowserPrerequisite { task, .. } => Some(task.id),
         // 統合依頼は Done task にも届くため、終端 task の attention 整理規則で隠さない。
         AttentionItem::ClusterUnavailable { .. }
@@ -374,6 +386,7 @@ fn attention_at(item: &AttentionItem) -> &str {
         AttentionItem::PhaseCheckpoint { at, .. } => at,
         AttentionItem::PlanApproval { at, .. } => at,
         AttentionItem::DeliverySkipped { at, .. } => at,
+        AttentionItem::Stalled { at, .. } => at,
         AttentionItem::IntegrationRequest { at, .. } => at,
         AttentionItem::BrowserPrerequisite { at, .. } => at,
         AttentionItem::Unintegrated { at, .. } => at,
@@ -1186,6 +1199,20 @@ fn build_attention(
                     task: view::task_ref(t),
                     hint: t.worker_hint.clone(),
                     at: snap.last_tick_at.clone(),
+                });
+            }
+        }
+        // ADR 2026-10-23-stage-order-and-plan-stall D5: 生存確認が理由なく止まっていると知らせた ready の task。
+        for s in &snap.stalled_tasks {
+            if let Some(t) = by_id.get(&s.task_id)
+                && t.status == Status::Ready
+            {
+                items.push(AttentionItem::Stalled {
+                    task: view::task_ref(t),
+                    reason: s.reason.clone(),
+                    detail: s.detail.clone(),
+                    since: s.since.clone(),
+                    at: s.at.clone(),
                 });
             }
         }

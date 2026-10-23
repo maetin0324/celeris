@@ -294,8 +294,8 @@ pub use tree::{
 pub use tree_metrics::{DepthRollup, RollupMetrics, RollupNodeFacts, SubtreeMetrics};
 pub use wait::{
     BackoffCause, CapacityScope, ChildFacts, ChildResolution, HaltState, HaltedSet, HumanGateKind,
-    IntegrationWaitCause, TaskWait, UnitWait, WaitFacts, db_waits, halt_waits, plan_waits,
-    resolve_children, unit_waits,
+    IntegrationWaitCause, PlanStall, TaskWait, UnitWait, WaitFacts, db_waits, halt_waits,
+    plan_stall, plan_waits, resolve_children, unit_waits,
 };
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
 pub use direct_route::{

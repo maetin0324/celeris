@@ -3,6 +3,9 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-23（ADR 2026-10-23-stage-order-and-plan-stall D3〜D5）— **追加。v1 のまま**。`TaskWait` に kind `plan_stalled`（`stage`・`unit_keys`・`detail`）、
+  `DaemonSnapshot.stalled_tasks[]`（`task_id`・`reason`・`detail`・`since`・`at`）、`Inbox.attention[]` に type `stalled`、受信箱の kind `stalled`
+  （選択肢 replan・cancel は人の手を示すだけ。答えると 409 `native_action_required`）を足した。計画の採用（新規・replan）は有効な行に解決できない依存を422 `validation`（文は `work unit <key> depends on <dep>, which has no live work unit row ...`）で拒む。
 - 改訂: 2026-10-22（ADR 2026-10-22-cos-fixed-threads D2/D2'）— **破壊的。v1 のまま**。エンドポイント 98 `POST /console/new-conversation`（§3.109）を消した。
   `POST /console/instruct`（CoS 宛）と `POST /org/cos/messages` の入力は scope ごとの legacy thread ではなく統括・案件の固定 CoS スレッドへ入る（応答の形は不変）。
   legacy スレッドへの `POST /chat/threads/{t}/messages` は 409 `chat_conflict`。
@@ -568,8 +571,9 @@ browser の制御（`crate::browser_control`）の 6 本は、route を定数 `B
 計算規則は §5.1。クエリ無し（あれば 400）。応答は `task_ops::inbox::Inbox`:
 `{approvals, questions, drafts, attention, browser_waits, decisions, counts}`（`counts` は各配列の件数と
 DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区別する（`failed` / `requeue_limit_near` /
-`unroutable` / `cluster_unavailable` / `phase_checkpoint` / `plan_approval` / `delivery_skipped`）。
+`unroutable` / `cluster_unavailable` / `phase_checkpoint` / `plan_approval` / `delivery_skipped` / `stalled`）。
 `type: "unroutable"` はデーモンのスナップショット（3.20）の `task_waits[]` の `unroutable` から合成する。スナップショットがまだ無ければ出ない。
+`type: "stalled"` はスナップショットの `stalled_tasks[]`（生存確認が `StallDetected` を出し、その後まだ何も起きていない task）のうち `ready` の task から合成する。
 
 - `questions[].approval_id`: その質問に対応する**未決の** `approvals` の id（§3.56）。GUI はこれで
   `POST /approvals/{id}/decide`（3.57）へ直接リンクできる。行がまだ無い、または既に決定済みなら `null`。

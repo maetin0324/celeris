@@ -351,3 +351,123 @@ fn liveness_does_not_flag_runnable_non_tree_plans() {
         "{v:?}"
     );
 }
+
+/// ADR 2026-10-23-stage-order-and-plan-stall D4・D5: 計画の都合で何も起こせない形（前の段 a の unit が待っても満たされない
+/// 依存〈行の無い key〉で pending、後の段 b の unit は ready だが現在の段でないので起こせない。本番 01M5HDSN3A の形）。
+/// 修正前は ready の unit を「走れる」と見て生存確認も waits も黙っていた。修正後は waits に `plan_stalled` が出て、
+/// `liveness_timeout_secs`（600 秒、偽の時計）を過ぎると `StallDetected{reason: plan_stalled}` と snapshot の
+/// `stalled_tasks`（受信箱の attention の元）に載る。何か起きて最後の event が変われば snapshot から消える。
+#[tokio::test]
+async fn a_plan_that_cannot_dispatch_reports_plan_stalled_and_reaches_the_inbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        2,
+    );
+    let task_id = task.id;
+    store.insert(&task).unwrap();
+    adopt_v2_plan(
+        &store,
+        task_id,
+        &["a", "b"],
+        vec![super::v2_wu("a1", "a", &[]), super::v2_wu("b1", "b", &[])],
+    );
+    for u in store.work_units_for(task_id).unwrap() {
+        let mut row = u.clone();
+        match u.key.as_str() {
+            "a1" => {
+                row.status = task_core::WorkUnitStatus::Pending;
+                row.depends_on = vec!["gone".into()];
+                row.spec.depends_on = vec!["gone".into()];
+            }
+            "b1" => row.status = task_core::WorkUnitStatus::Ready,
+            _ => continue,
+        }
+        store
+            .work_unit_transition(
+                task_id,
+                row,
+                Event::WorkUnitTransitioned {
+                    work_unit_id: u.id.clone(),
+                    key: u.key.clone(),
+                    from: u.status,
+                    to: u.status,
+                    reason: "test_shape".into(),
+                    run_id: None,
+                },
+            )
+            .unwrap();
+    }
+    let units = store.work_units_for(task_id).unwrap();
+    let waits = task_core::plan_waits(&units, &[], &[]);
+    assert!(
+        matches!(
+            waits.first(),
+            Some(task_core::TaskWait::PlanStalled { stage: Some(s), unit_keys, .. })
+                if s == "a" && unit_keys == &vec!["a1".to_string(), "b1".to_string()]
+        ),
+        "{waits:?}"
+    );
+
+    let adapter = Arc::new(EmptyReplanAdapter::new(dir.path().join("unused"), 1));
+    let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+    d.config.execution.max_replans = 0;
+    let t0 = OffsetDateTime::now_utc() + time::Duration::minutes(5);
+    let clock = Arc::new(StdMutex::new(t0));
+    d.test_now = Some(clock.clone());
+    d.tick().unwrap();
+    *clock.lock().unwrap() = t0 + time::Duration::seconds(599);
+    d.tick().unwrap();
+    assert!(stalls(&store, task_id).is_empty(), "not before 600 s");
+    assert!(d.stalled_tasks.is_empty());
+    *clock.lock().unwrap() = t0 + time::Duration::seconds(630);
+    d.tick().unwrap();
+    assert_eq!(stalls(&store, task_id), vec!["plan_stalled".to_string()]);
+    let snap = d
+        .stalled_tasks
+        .get(&task_id)
+        .expect("stalled task in snapshot");
+    assert_eq!(snap.reason, "plan_stalled");
+    assert!(snap.detail.contains("a1, b1"), "{}", snap.detail);
+    // 知らせた後も（StallDetected が最後の event の間）snapshot に残る。
+    *clock.lock().unwrap() = t0 + time::Duration::seconds(1300);
+    d.tick().unwrap();
+    assert!(d.stalled_tasks.contains_key(&task_id));
+    assert_eq!(stalls(&store, task_id).len(), 1, "only once");
+    assert_eq!(adapter.worker_runs.load(Ordering::SeqCst), 0);
+    assert_eq!(adapter.planner_runs.load(Ordering::SeqCst), 0);
+    assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Ready);
+
+    // 人が unit を直す（依存を外す）と最後の event が変わり、次の確認で snapshot から消える。
+    let a1 = store
+        .work_units_for(task_id)
+        .unwrap()
+        .into_iter()
+        .find(|u| u.key == "a1")
+        .unwrap();
+    let mut row = a1.clone();
+    row.depends_on.clear();
+    row.spec.depends_on.clear();
+    store
+        .work_unit_transition(
+            task_id,
+            row,
+            Event::WorkUnitTransitioned {
+                work_unit_id: a1.id.clone(),
+                key: a1.key.clone(),
+                from: a1.status,
+                to: a1.status,
+                reason: "test_fixed".into(),
+                run_id: None,
+            },
+        )
+        .unwrap();
+    *clock.lock().unwrap() = t0 + time::Duration::seconds(1400);
+    d.tick().unwrap();
+    assert!(!d.stalled_tasks.contains_key(&task_id));
+}

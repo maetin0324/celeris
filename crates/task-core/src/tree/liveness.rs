@@ -59,6 +59,9 @@ pub struct NodeLivenessFacts {
     /// （`!execution_plan::plan_awaits_final_review`）。unit がすべて終わった節点で、`false` なら次の tick で
     /// 最終レビューに進み、`true` なら不合格の後なので replan（余地が無ければ理由なし）。
     pub plan_reviewed: bool,
+    /// ADR 2026-10-23-stage-order-and-plan-stall D5: 計画の都合で何も起こせない（[`crate::wait::plan_stall`] の
+    /// `detail`）。`Some` なら unit の分類より先に理由なし（`plan_stalled`）にする（ready の unit があっても起こせない）。
+    pub plan_stalled: Option<String>,
     pub units: Vec<LivenessUnitFacts>,
 }
 
@@ -172,6 +175,14 @@ fn classify_node(n: &NodeLivenessFacts) -> NodeLiveness {
             LivenessClass::Runnable,
             "planner",
             "次の tick で planner（replan・再試行）を起こす".to_string(),
+        );
+    }
+    if let Some(detail) = &n.plan_stalled {
+        return verdict(
+            id,
+            LivenessClass::Unexplained,
+            "plan_stalled",
+            detail.clone(),
         );
     }
     let mut running: Option<String> = None;

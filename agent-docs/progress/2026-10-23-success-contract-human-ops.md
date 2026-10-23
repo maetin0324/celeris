@@ -40,6 +40,7 @@ main 反映 commit は人の取り込み後に決まる（この branch `celeris
 ## 実行したコマンドと結果
 - `bash scripts/dev/test-affected.sh` → exit 0、6296 tests run: 6296 passed, 16 skipped（13 crate）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- attempt 2: 決定的 check の再実行で範囲外の `celeris daemon::classify_tick::e2e::unregistered_key_waits_notifies_then_resumes_once_and_classifies` が負荷下で落ちた（Jev request 総数 3、期待 1。単独では通る）。同じ入力は classifier の cache と `max_retries = 0` で再送されないので、総数が増えるのは別 subject の分類と判断し、試験の task の `instruction` を持つ request だけを数える `JevServer::count_for` に直した。直後に `bash scripts/dev/test-affected.sh` → exit 0、6296 passed / 16 skipped。clippy・fmt も exit 0。
 - main-3 再集計（読み取りのみ。測定 root は書き換えていない）:
   `celeris-campaign check --manifest $M/out/campaign.json --out $M/out --measurement-id mlsys-main-3` → ok=true・complete=true、A (n1, passed1, final_passed0, grader_failed1)、B (n1, cancelled1)。
   `celeris-campaign export ... --dest <artifacts>/export --records $M/runs/exp-db/records.jsonl` → complete、table.csv 3 行とも 43 列。

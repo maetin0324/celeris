@@ -127,3 +127,56 @@ fn corrupt_state_is_an_error_not_a_silent_restart() {
     let sc = load_scenario(&scenarios(), "k2-mini").unwrap();
     assert!(Baseline::open(sc, bcfg(), &dir.path().join("state.json")).is_err());
 }
+
+/// Both ledger writers must close pre-work at submit/reconciliation and distinguish post-work.
+#[test]
+fn worker_and_progress_logs_agree_on_external_execution_boundaries() {
+    use celeris_campaign::dagbench::celeris_side::read_worker_ledger;
+    for faults in [
+        vec![],
+        vec![FaultSpec {
+            fault_id: "lost".into(),
+            kind: FaultKind::DropResponse,
+            event: "external_submit_accepted".into(),
+            seed: 0,
+            occurrences: 1,
+        }],
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut b, mut e) = open(dir.path(), "k2-mini", faults);
+        let worker = dir.path().join("worker.jsonl");
+        let progress = dir.path().join("progress.jsonl");
+        b.set_worker_log(&worker).unwrap();
+        b.set_progress_log(&progress).unwrap();
+        assert_eq!(b.run(&mut e).unwrap(), Outcome::Complete);
+        for path in [&worker, &progress] {
+            let entries = read_worker_ledger(path).unwrap();
+            for node in ["exp-uring", "exp-posix"] {
+                let boundaries: Vec<_> = entries
+                    .iter()
+                    .filter(|e| {
+                        e.node == node
+                            && matches!(
+                                e.event.as_str(),
+                                "node_started"
+                                    | "external_wait_started"
+                                    | "post_wait_started"
+                                    | "execution_finished"
+                            )
+                    })
+                    .map(|e| (e.event.as_str(), e.logical_secs))
+                    .collect();
+                assert_eq!(
+                    boundaries,
+                    vec![
+                        ("node_started", 570),
+                        ("external_wait_started", 630),
+                        ("post_wait_started", 960),
+                        ("execution_finished", 990)
+                    ],
+                    "{path:?}/{node}"
+                );
+            }
+        }
+    }
+}

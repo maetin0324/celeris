@@ -576,6 +576,9 @@ fn real_k3_repetitions_from_formal_entry() {
                 let m = run(&p).unwrap();
                 assert_eq!(m.completed.nodes, m.completed.nodes_expected);
                 assert!(m.lost_progress.rerun_node_starts >= 1);
+                if fault != Some("a1-restart-after-accept") {
+                    assert_execution_cost(&m);
+                }
                 assert_eq!(
                     fs::read_dir(p.out.join("artifacts/c0/analyze.attempts"))
                         .unwrap()
@@ -589,6 +592,53 @@ fn real_k3_repetitions_from_formal_entry() {
             }
         }
     }
+}
+
+/// External waiting and the first post phase are neither worker busy time nor redo.
+#[test]
+fn graded_faults_exclude_external_wait_and_post_from_redo() {
+    let root = tempfile::tempdir().unwrap();
+    let g = grading_fixture::fixture(
+        &root.path().join("inputs"),
+        vec![(
+            "report.md".into(),
+            grading_fixture::FABRICATED_REPORT.into(),
+        )],
+    );
+    for fault in [
+        None,
+        Some("b-submit-response-lost"),
+        Some("c-completion-duplicate"),
+    ] {
+        for arm in ["baseline", "celeris"] {
+            let mut p = params(arm, "camp-1", fault, root.path());
+            p.grading = Some(g.clone());
+            let m = run(&p).unwrap();
+            assert_execution_cost(&m);
+            let workers = celeris_campaign::dagbench::celeris_side::read_worker_ledger(
+                &p.out.join("worker.jsonl"),
+            )
+            .unwrap();
+            for node in ["exp-uring", "exp-posix"] {
+                for event in ["node_started", "external_wait_started", "post_wait_started"] {
+                    assert_eq!(
+                        workers
+                            .iter()
+                            .filter(|e| e.node == node && e.event == event)
+                            .count(),
+                        1,
+                        "{arm}/{fault:?}/{node}/{event}: {workers:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn assert_execution_cost(m: &Metrics) {
+    assert_eq!(m.execution_busy_secs, 1200, "{m:?}");
+    assert_eq!(m.lost_progress.rerun_node_starts, 1, "{m:?}");
+    assert_eq!(m.lost_progress.rerun_work_secs, 120, "{m:?}");
 }
 
 const GRADED_RESTART_ENV: &str = "DAGBENCH_GRADED_RESTART";

@@ -510,6 +510,10 @@ impl Baseline {
             let logical = self.logical_id(id);
             match ext.lookup(&logical)? {
                 Lookup::Known { physical_id, state } => {
+                    if st == Status::Submitted {
+                        self.log("external_wait_started", id);
+                        self.log_progress("external_wait_started", id, Phase::Pre)?;
+                    }
                     ext.wait_started(&logical)?;
                     let n = self.state.nodes.get_mut(id).expect("node");
                     n.physical_id = Some(physical_id);
@@ -602,7 +606,15 @@ impl Baseline {
             if changed {
                 let stop = self.save()?;
                 for (id, phase) in started.drain(..) {
-                    self.log_progress("node_started", &id, phase)?;
+                    self.log_progress(
+                        if phase == Phase::Post {
+                            "post_wait_started"
+                        } else {
+                            "node_started"
+                        },
+                        &id,
+                        phase,
+                    )?;
                 }
                 if stop {
                     return Ok(Outcome::Interrupted);
@@ -781,15 +793,14 @@ impl Baseline {
             return Ok(true);
         }
         let reply = ext.submit(&logical, self.cfg.ext_job_secs)?;
-        if reply.is_ok() {
-            ext.wait_started(&logical)?;
-        }
         let n = self.state.nodes.get_mut(id).expect("node");
         match reply {
             Ok(r) => {
                 n.physical_id = Some(r.physical_id);
                 n.status = Status::Waiting;
                 self.log("external_wait_started", id);
+                self.log_progress("external_wait_started", id, Phase::Pre)?;
+                ext.wait_started(&logical)?;
             }
             // 応答不明: 再開時（または次の poll）に論理 ID で照会して解く。
             Err(SubmitError::ResponseLost) => {
@@ -810,14 +821,14 @@ impl Baseline {
     fn reconcile(&mut self, ext: &mut dyn ExtBackend, id: &str) -> Result<bool, Error> {
         let logical = self.logical_id(id);
         let found = ext.lookup(&logical)?;
-        if matches!(found, Lookup::Known { .. }) {
-            ext.wait_started(&logical)?;
-        }
         let n = self.state.nodes.get_mut(id).expect("node");
         match found {
             Lookup::Known { physical_id, .. } => {
                 n.physical_id = Some(physical_id);
                 n.status = Status::Waiting;
+                self.log("external_wait_started", id);
+                self.log_progress("external_wait_started", id, Phase::Pre)?;
+                ext.wait_started(&logical)?;
             }
             Lookup::Unknown => n.status = Status::SubmitPending,
         }

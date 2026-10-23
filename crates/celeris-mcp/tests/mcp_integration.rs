@@ -1893,3 +1893,386 @@ async fn knowledge_propose_resolves_project_ids_rejects_misplaced_pages_and_merg
 
     server.stop().await;
 }
+
+// ---------------------------------------------------------------------------
+// ADR 2026-10-23-mcp-read-only-db-and-api: db_schema / db_query（db:read）と api_get（api:read）
+// ---------------------------------------------------------------------------
+
+/// 偽の Celeris API（loopback）。`/api/` の下への要求だけを記録する（host の他の process からの
+/// 迷い込みを数えない）。
+/// 受けた要求（method, path と query, Authorization）。
+type SeenRequest = (String, String, Option<String>);
+
+#[derive(Clone, Default)]
+struct StubApi {
+    seen: Arc<std::sync::Mutex<Vec<SeenRequest>>>,
+}
+
+async fn stub_handler(
+    axum::extract::State(stub): axum::extract::State<StubApi>,
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let path = req.uri().path().to_string();
+    if !path.starts_with("/api/") {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    }
+    let auth = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    stub.seen
+        .lock()
+        .unwrap()
+        .push((req.method().to_string(), req.uri().to_string(), auth));
+    match path.as_str() {
+        "/api/v1/big" => ([("content-type", "text/plain")], "x".repeat(2 << 20)).into_response(),
+        "/api/v1/bin" => (
+            [("content-type", "application/octet-stream")],
+            vec![0xff_u8, 0xfe, 0x00, 0x80],
+        )
+            .into_response(),
+        "/api/v1/missing" => (
+            axum::http::StatusCode::NOT_FOUND,
+            axum::Json(json!({"error": "not found"})),
+        )
+            .into_response(),
+        _ => axum::Json(json!({"ok": true, "path": path})).into_response(),
+    }
+}
+
+async fn spawn_stub_api() -> (String, StubApi) {
+    let stub = StubApi::default();
+    let app = axum::Router::new()
+        .fallback(stub_handler)
+        .with_state(stub.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://{addr}"), stub)
+}
+
+struct ReadServer {
+    server: Server,
+    _dir: tempfile::TempDir,
+    stub: StubApi,
+}
+
+/// ファイルの DB（WAL）と偽の API を持つ MCP サーバー。
+async fn spawn_read_server() -> ReadServer {
+    let dir = tempfile::tempdir().expect("tmp");
+    let db_path = dir.path().join("celeris.sqlite3");
+    let store = Arc::new(SqliteStore::open(&db_path).expect("open"));
+    let (roles, genres) = roles_and_genres();
+    let state = McpState::from_store(
+        Arc::clone(&store),
+        60,
+        roles,
+        genres,
+        "secretary".to_string(),
+        None,
+    );
+    state.set_db_read_path(db_path);
+    let (api_base, stub) = spawn_stub_api().await;
+    state.set_api_target(
+        celeris_mcp::tools::api::ApiTarget::new(api_base, Some("api-token".into())).expect("t"),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("addr");
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let handle = tokio::spawn(celeris_mcp::serve(
+        listener,
+        state,
+        ListenerAuth::Token,
+        async {
+            let _ = stop_rx.await;
+        },
+    ));
+    ReadServer {
+        server: Server {
+            base_url: format!("http://{addr}"),
+            store,
+            _kb_root: None,
+            stop: Some(stop_tx),
+            handle: Some(handle),
+        },
+        _dir: dir,
+        stub,
+    }
+}
+
+async fn tool_names(client: &reqwest::Client, base_url: &str, token: &str) -> Vec<String> {
+    let session = initialize(client, base_url, Some(token)).await;
+    let resp = rpc(
+        client,
+        base_url,
+        Some(token),
+        Some(&session),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
+    )
+    .await;
+    let body: Value = resp.json().await.expect("json");
+    body["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn db_and_api_tools_require_their_scopes() {
+    let rs = spawn_read_server().await;
+    let base = rs.server.base_url.clone();
+    create_client(
+        &rs.server.store,
+        "plain",
+        Some("t0"),
+        vec![McpScope::TasksRead],
+    );
+    create_client(&rs.server.store, "db", Some("t1"), vec![McpScope::DbRead]);
+    create_client(&rs.server.store, "api", Some("t2"), vec![McpScope::ApiRead]);
+    let client = reqwest::Client::new();
+
+    let names = tool_names(&client, &base, "t0").await;
+    for t in ["db_schema", "db_query", "api_get"] {
+        assert!(!names.iter().any(|n| n == t), "{t} visible without scope");
+    }
+    let session = initialize(&client, &base, Some("t0")).await;
+    for (tool, args) in [
+        ("db_query", json!({"sql": "SELECT 1"})),
+        ("db_schema", json!({})),
+        ("api_get", json!({"path": "/api/v1/tasks"})),
+    ] {
+        let body = call_tool(&client, &base, Some("t0"), &session, tool, args).await;
+        assert_eq!(body["error"]["code"], -32601, "{tool}: {body}");
+    }
+
+    let names = tool_names(&client, &base, "t1").await;
+    assert!(names.iter().any(|n| n == "db_query"));
+    assert!(names.iter().any(|n| n == "db_schema"));
+    assert!(!names.iter().any(|n| n == "api_get"));
+    let names = tool_names(&client, &base, "t2").await;
+    assert!(names.iter().any(|n| n == "api_get"));
+    assert!(!names.iter().any(|n| n == "db_query"));
+    assert!(rs.stub.seen.lock().unwrap().is_empty());
+
+    rs.server.stop().await;
+}
+
+#[tokio::test]
+async fn db_query_over_mcp_masks_secrets_rejects_writes_and_records_the_sql() {
+    let rs = spawn_read_server().await;
+    let base = rs.server.base_url.clone();
+    create_client(
+        &rs.server.store,
+        "rdc",
+        Some("tok-rdc"),
+        vec![McpScope::DbRead],
+    );
+    let client = reqwest::Client::new();
+    let session = initialize(&client, &base, Some("tok-rdc")).await;
+
+    let body = call_tool(
+        &client,
+        &base,
+        Some("tok-rdc"),
+        &session,
+        "db_query",
+        json!({"sql": "SELECT id, token_hash FROM mcp_clients WHERE id = ?1", "params": ["rdc"]}),
+    )
+    .await;
+    let out = structured(&body);
+    assert_eq!(out["rows"], json!([["rdc", null]]));
+    assert_eq!(out["masked"], json!(["mcp_clients.token_hash"]));
+    assert!(
+        !body
+            .to_string()
+            .contains(&celeris_mcp::auth::hash_token("tok-rdc"))
+    );
+
+    let body = call_tool(
+        &client,
+        &base,
+        Some("tok-rdc"),
+        &session,
+        "db_query",
+        json!({"sql": "UPDATE mcp_clients SET scopes = 'org:write'"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32002, "{body}");
+    let body = call_tool(
+        &client,
+        &base,
+        Some("tok-rdc"),
+        &session,
+        "db_query",
+        json!({"sql": "ATTACH DATABASE ':memory:' AS x"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32002, "{body}");
+    let me = rs.server.store.mcp_client_get("rdc").unwrap().unwrap();
+    assert_eq!(me.scopes, vec![McpScope::DbRead]);
+
+    let body = call_tool(
+        &client,
+        &base,
+        Some("tok-rdc"),
+        &session,
+        "db_schema",
+        json!({}),
+    )
+    .await;
+    let out = structured(&body);
+    assert!(
+        out["tables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "events")
+    );
+
+    let calls = {
+        use task_core::McpCallStore;
+        rs.server.store.mcp_calls_list(Some("rdc"), 100).unwrap()
+    };
+    // 新しい順: db_schema, ATTACH, UPDATE, SELECT。
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0].tool, "db_schema");
+    assert_eq!(calls[0].request, None);
+    assert_eq!(calls[1].error_kind.as_deref(), Some("rejected"));
+    assert_eq!(
+        calls[1].request.as_deref(),
+        Some("ATTACH DATABASE ':memory:' AS x")
+    );
+    assert_eq!(
+        calls[3].request.as_deref(),
+        Some("SELECT id, token_hash FROM mcp_clients WHERE id = ?1 -- params: [\"rdc\"]")
+    );
+    assert!(calls[3].ok);
+    // 結果（行の中身）は記録しない。
+    assert!(
+        calls
+            .iter()
+            .all(|c| !c.request.as_deref().unwrap_or("").contains("\"rows\""))
+    );
+
+    rs.server.stop().await;
+}
+
+#[tokio::test]
+async fn api_get_proxies_only_safe_gets_with_the_daemon_token() {
+    let rs = spawn_read_server().await;
+    let base = rs.server.base_url.clone();
+    create_client(
+        &rs.server.store,
+        "rdc",
+        Some("tok-rdc"),
+        vec![McpScope::ApiRead],
+    );
+    let client = reqwest::Client::new();
+    let session = initialize(&client, &base, Some("tok-rdc")).await;
+
+    let body = call_tool(
+        &client,
+        &base,
+        Some("tok-rdc"),
+        &session,
+        "api_get",
+        json!({"path": "/api/v1/tasks", "query": {"limit": 5, "status": "ready"}}),
+    )
+    .await;
+    let out = structured(&body);
+    assert_eq!(out["status"], 200);
+    assert_eq!(out["body"]["path"], "/api/v1/tasks");
+    {
+        let seen = rs.stub.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(seen[0].0, "GET");
+        assert!(seen[0].1.starts_with("/api/v1/tasks?"), "{}", seen[0].1);
+        assert!(seen[0].1.contains("limit=5") && seen[0].1.contains("status=ready"));
+        assert_eq!(seen[0].2.as_deref(), Some("Bearer api-token"));
+    }
+
+    // 4xx はそのまま返す。
+    let body = call_tool(
+        &client,
+        &base,
+        Some("tok-rdc"),
+        &session,
+        "api_get",
+        json!({"path": "/api/v1/missing"}),
+    )
+    .await;
+    let out = structured(&body);
+    assert_eq!(out["status"], 404);
+
+    // 拒否: GET 以外・/api/v1 外・traversal・拒否リスト。どれも偽 API に届かない。
+    for args in [
+        json!({"path": "/api/v1/tasks", "method": "POST"}),
+        json!({"path": "/mcp"}),
+        json!({"path": "/api/v1/../mcp"}),
+        json!({"path": "/api/v1/secrets"}),
+        json!({"path": "/api/v1/browser/credentials"}),
+        json!({"path": "/api/v1/tasks/t1/browser/live/r/s/frames"}),
+    ] {
+        let body = call_tool(
+            &client,
+            &base,
+            Some("tok-rdc"),
+            &session,
+            "api_get",
+            args.clone(),
+        )
+        .await;
+        assert_eq!(body["error"]["code"], -32002, "{args}: {body}");
+    }
+    assert_eq!(rs.stub.seen.lock().unwrap().len(), 2);
+
+    // 大きすぎる応答・text でない応答は拒否。
+    let body = call_tool(
+        &client,
+        &base,
+        Some("tok-rdc"),
+        &session,
+        "api_get",
+        json!({"path": "/api/v1/big"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32002, "{body}");
+    let body = call_tool(
+        &client,
+        &base,
+        Some("tok-rdc"),
+        &session,
+        "api_get",
+        json!({"path": "/api/v1/bin"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32002, "{body}");
+
+    let calls = {
+        use task_core::McpCallStore;
+        rs.server.store.mcp_calls_list(Some("rdc"), 100).unwrap()
+    };
+    let first = calls.last().unwrap();
+    assert_eq!(first.tool, "api_get");
+    assert_eq!(
+        first.request.as_deref(),
+        Some("GET /api/v1/tasks {\"limit\":5,\"status\":\"ready\"}")
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.request.as_deref() == Some("POST /api/v1/tasks") && !c.ok)
+    );
+
+    rs.server.stop().await;
+}

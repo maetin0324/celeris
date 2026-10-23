@@ -67,6 +67,7 @@ async fn lists_calls_optionally_filtered_by_client() {
                 error_kind: None,
                 latency_ms: 5,
                 at: OffsetDateTime::now_utc() + time::Duration::seconds(i as i64),
+                request: None,
             })
             .expect("record");
     }

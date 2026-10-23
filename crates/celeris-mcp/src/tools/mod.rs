@@ -3,7 +3,9 @@
 //! すべての道具は `(&Arc<McpState>, &AuthedClient, serde_json::Value) -> Result<ToolOutput, ToolError>`
 //! の形（非同期）。判断・検証は道具の中に閉じ、JSON-RPC の形への変換は `crate::rpc` が行う。
 
+pub mod api;
 pub mod console;
+pub mod db;
 pub mod decisions;
 pub mod knowledge;
 pub mod org;
@@ -139,11 +141,27 @@ pub fn all() -> Vec<ToolDef> {
         skills::list_def(),
         skills::get_def(),
         skills::put_def(),
+        db::schema_def(),
+        db::query_def(),
+        api::get_def(),
     ]
 }
 
 pub fn find(name: &str) -> Option<ToolDef> {
     all().into_iter().find(|t| t.name == name)
+}
+
+/// `mcp_calls.request` に残す要求（ADR 2026-10-23-mcp-read-only-db-and-api D6）。読み取りの道具
+/// （`db_query` の SQL と params、`api_get` の path と query）だけ。4000 文字で切る。
+pub const AUDIT_REQUEST_MAX_CHARS: usize = 4000;
+
+pub fn audit_request(name: &str, args: &serde_json::Value) -> Option<String> {
+    let raw = match name {
+        "db_query" => db::audit_request(args),
+        "api_get" => api::audit_request(args),
+        _ => None,
+    }?;
+    Some(raw.chars().take(AUDIT_REQUEST_MAX_CHARS).collect())
 }
 
 /// 既定の `limit`（ADR-0056 D2）。

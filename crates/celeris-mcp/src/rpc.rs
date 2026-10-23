@@ -261,8 +261,18 @@ async fn call_tool(
             .check(&client.id, state.rate_limit_per_min, Instant::now())
             .err()
     };
+    let request = tools::audit_request(&name, &arguments);
     if let Some(retry_after) = retry_after {
-        record_call(state, &client.id, &name, false, Some("rate_limited"), 0).await;
+        record_call(
+            state,
+            &client.id,
+            &name,
+            false,
+            Some("rate_limited"),
+            0,
+            request,
+        )
+        .await;
         return RpcResponse::err_with_data(
             id.clone(),
             RATE_LIMITED,
@@ -276,7 +286,7 @@ async fn call_tool(
     let latency_ms = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
     match result {
         Ok(out) => {
-            record_call(state, &client.id, &name, true, None, latency_ms).await;
+            record_call(state, &client.id, &name, true, None, latency_ms, request).await;
             let text = serde_json::to_string(&out.value).unwrap_or_default();
             RpcResponse::ok(
                 id.clone(),
@@ -294,6 +304,7 @@ async fn call_tool(
                 false,
                 Some(error_kind_label(e.code)),
                 latency_ms,
+                request,
             )
             .await;
             RpcResponse::err(id.clone(), tool_error_code(e.code), e.message)
@@ -308,6 +319,7 @@ async fn record_call(
     ok: bool,
     error_kind: Option<&str>,
     latency_ms: i64,
+    request: Option<String>,
 ) {
     let call = McpCall {
         id: ulid::Ulid::new().to_string(),
@@ -317,6 +329,7 @@ async fn record_call(
         error_kind: error_kind.map(str::to_string),
         latency_ms,
         at: OffsetDateTime::now_utc(),
+        request,
     };
     state
         .blocking(move |store| {

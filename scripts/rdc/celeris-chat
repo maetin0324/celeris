@@ -1,14 +1,18 @@
 #!/bin/sh
-# ADR-0056 Phase 101 追記: Remote Desktop Commander（RDC）経由の ChatGPT 向けの、たった 1 本の入口。
+# ADR-0056 Phase 101 追記・ADR 2026-10-23-mcp-read-only-db-and-api: Remote Desktop Commander（RDC）経由の
+# ChatGPT 向けの、たった 1 本の入口。
 #
 # 構成: ChatGPT → RDC device agent（専用 Linux ユーザー chatgpt-rdc、権限最小）→ この celeris-chat
 # → 127.0.0.1:18200/mcp（token）→ Celeris MCP。専用ユーザーのシェルからはこのスクリプトだけを
-# 呼ばせ、汎用 curl で HTTP API を直接叩かせない（MCP client の scope で許される操作だけに絞るため。
-# `docs/guides/mcp.md` §8 参照）。中身は `celerisctl mcp call` をそのまま呼ぶだけの薄いラッパ（判断も検証も
-# 持たない）。
+# 呼ばせる。できることは MCP client の scope で決まる: DB の読み取りは db_schema / db_query（db:read）、
+# API の GET は api_get（api:read）、書き込みは task_comment 等の固定の道具（`docs/guides/mcp.md` §8）。
+# 使い方と問い合わせ例は `docs/guides/chatgpt-rdc.md`（専用ユーザーの ~/CELERIS-CHAT.md）。中身は
+# `celerisctl mcp call` をそのまま呼ぶだけの薄いラッパ（判断も検証も持たない）。
 #
 # 使い方: celeris-chat <TOOL> [JSON_ARGS]
 #         celeris-chat --list
+#         celeris-chat db_query '{"sql":"SELECT id, status FROM tasks LIMIT 5"}'
+#         celeris-chat api_get '{"path":"/api/v1/routing/evidence"}'
 #
 # 運用（`scripts/rdc/setup-chatgpt-rdc.sh` が整える）: 専用ユーザー（chatgpt-rdc）は rmaeda のホーム下の
 # `~/.local/celeris/current/bin/celerisctl` を読めないので、setup スクリプトが現行リリースの `celerisctl` を

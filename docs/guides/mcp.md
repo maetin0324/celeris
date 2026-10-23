@@ -74,6 +74,8 @@ token: <64+ 文字の値。この 1 回しか出ない>
 - `--no-token` で「トークンを持たない客」を作る（`auth = "none"` の口に `client = "<id>"` で固定する
   専用。この客は `auth = "token"` の口では**絶対に**認証できない — トークンの値がそもそも無い）。
 - `celerisctl mcp client ls` — 一覧（id / name / scopes / last_used_at。トークンは出ない）。
+- `celerisctl mcp client scopes <id> --scope a,b,…` — scope を置き換える（トークンはそのまま。追加ではなく
+  全体を書く）。次の要求から効く（scope は要求ごとに DB から読む）。
 - `celerisctl mcp client revoke <id>` — 失効（以後そのトークンは使えない。`--no-token` の客も失効できる
   ので、`auth = "none"` の口を一時的に止めたいときにも使える）。
 - トークンの値は**ログ・応答・`agent-docs/PROGRESS.md` のどこにも出さない**（celeris 側の DB にはハッシュ
@@ -94,6 +96,8 @@ token: <64+ 文字の値。この 1 回しか出ない>
 | `org:write` | `org_create_node` / `org_mount_skill` / `org_unmount_skill` |
 | `skills:read` | `skills_list` / `skills_get` |
 | `skills:write` | `skills_put` |
+| `db:read` | `db_schema` / `db_query`（DB を読み取り専用で問い合わせる。ADR 2026-10-23-mcp-read-only-db-and-api） |
+| `api:read` | `api_get`（`/api/v1` への GET を daemon が代行する。同 ADR） |
 
 `tools/list` は**持っているスコープの道具だけ**を返す（無い道具は一覧にすら出ない）。スコープが無い
 道具を `tools/call` で呼んでも JSON-RPC `-32601`（`method not found` と同じ見え方。「その道具は無い」
@@ -122,8 +126,8 @@ token: <64+ 文字の値。この 1 回しか出ない>
   - `knowledge_list` / `knowledge_search` の `scope` に `project:<案件 ID>` を渡しても slug として引く。
 - **タスク・案件**（読むだけ）: `tasks_list { status?, project_id?, limit? }`、`tasks_get { id }`、
   `projects_list { status?, limit? }`、`projects_get { id }`。
-- **タスクの操作**（Phase 101。外部エージェント（ChatGPT・RDC 経由）向けに、汎用 curl で HTTP API を
-  叩かせず、scope で許した操作だけをさせる。いずれも `task-api` の HTTP ハンドラと**同じ** `task-ops` の
+- **タスクの操作**（Phase 101。外部エージェント（ChatGPT・RDC 経由）の**書き込み**は、scope で許した
+  この操作だけにする（HTTP API は `api_get` の GET しか代行しない）。いずれも `task-api` の HTTP ハンドラと**同じ** `task-ops` の
   関数を呼ぶ。書き込みの主体は `mcp:<client_id>`）:
   - `task_comment { id, text }`（scope `tasks:interact`。`POST /tasks/{id}/comments` と同じ効き方 —
     `running`/`reviewing` は割り込んで `ready` に戻す、`blocked` は回答として渡す、それ以外は記録するだけ。
@@ -188,6 +192,20 @@ token: <64+ 文字の値。この 1 回しか出ない>
   `skills_put { name, skill_md, files? }`（frontmatter に `name` / `description` 必須。名前は
   `[a-z0-9-]{1,64}`。出典 `mcp:<client_id>` を frontmatter に残す。mount されるまで何にも効かない）。
 
+- **DB の読み取り**（scope `db:read`。ADR 2026-10-23-mcp-read-only-db-and-api D2/D3）:
+  `db_schema {}`（表・view・列・index、伏せた列の一覧 `masked`、上限）、
+  `db_query { sql, params?, limit? }`（1 文の SELECT。`?1` 等に `params` を結ぶ。返り値は
+  `{columns, rows, row_count, truncated, truncated_reason?, masked?, elapsed_ms}`）。daemon の store とは別の
+  読み取り専用接続（`mode=ro`・`query_only`）を呼び出しごとに開き、authorizer で SELECT・読み取りの関数・
+  `table_info` 等の PRAGMA だけを許す（書き込み・ATTACH・他の PRAGMA・temp 表・`load_extension` は `-32002`）。
+  行数は既定 500・上限 5000、結果 1 MiB、10 秒で打ち切り、同時 2 本。秘密の列（`mcp_clients.token_hash`、
+  `node_sessions.session_id` など。一覧は ADR と `db_schema` の `masked`）は WHERE の中でも NULL として読まれる。
+- **API の GET**（scope `api:read`。同 ADR D5）: `api_get { path, query?, method? }`。daemon が `[api] listen` の
+  loopback に `[api] token_file` の token で GET する（客に token は渡らない）。`path` は `/api/v1/` の下だけ、
+  `query` は object（値は文字列・数・真偽）。`method` は省略か `GET`。secret・保存 credential・browser の
+  identity と Live View・credential の受け渡し・TOTP 接続・login・添付の生 bytes・SSE は拒否（`-32002`。一覧は ADR）。
+  返り値は `{status, content_type, body}`（4xx/5xx もそのまま返す）。応答 1 MiB・30 秒まで。
+
 **resources**（読むだけの客のため。`resources/read { uri }` は対応する `*_get` と同じものを返す）:
 `celeris://knowledge/<path>`、`celeris://tasks/<id>`、`celeris://projects/<id>`、
 `celeris://org/<node_id>`、`celeris://skills/<name>`。`resources/list` は**列挙できるもの**（知識の
@@ -197,7 +215,8 @@ token: <64+ 文字の値。この 1 回しか出ない>
 ## 6. 監査と流量制限
 
 - すべての `tools/call` を `mcp_calls`（`client_id` / `tool` / `ok` / `error_kind` / `latency_ms` /
-  `at`）に残す（引数と結果の本文は残さない）。`console_instruct` はチャットに発言を保存するので二重には
+  `at` / `request`）に残す。結果の本文は残さない。引数は `db_query`（SQL 本文と params）と `api_get`（path と
+  query）だけを `request` に 4000 文字まで残し、他の道具は残さない。`console_instruct` はチャットに発言を保存するので二重には
   書かない。
 - クライアントごとに 1 分あたり `[mcp] rate_limit_per_min`（既定 60）。超えたら JSON-RPC エラー
   `-32000` + `data.retry_after`（秒）。
@@ -276,11 +295,12 @@ $ celerisctl mcp call --base-url http://127.0.0.1:18200 --token-file /tmp/celeri
 - エラー: 引数不正（`JSON_ARGS` が JSON として読めない、`TOOL` も `--list` も無い）は **exit code 2**。
   JSON-RPC のエラー・HTTP のエラー（401 等）・接続不可は理由を stderr に出して **exit code 1**。
 
-## 8. Remote Desktop Commander 経由（ChatGPT）（Phase 101）
+## 8. Remote Desktop Commander 経由（ChatGPT）（Phase 101、ADR 2026-10-23-mcp-read-only-db-and-api）
 
 ChatGPT からは Remote Desktop Commander（RDC）というリモート MCP で home-dev のシェルを叩ける。
-汎用 `curl` で HTTP API を直接叩かせず、**MCP client の scope で許される操作だけ**をさせるための構成
-（ADR-0056 Phase 101 追記）。
+ChatGPT の操作は **MCP client（`chatgpt-rdc`）の scope で許される範囲だけ**にする。DB と HTTP API は、
+MCP の中の読み取り限定の道具（`db_query` / `db_schema`、`api_get`）で読む。専用ユーザーに DB ファイルの
+権限・API の token・curl は渡さない（境界は Linux ユーザーと MCP client の scope）。
 
 ```
 ChatGPT
@@ -288,7 +308,12 @@ ChatGPT
        └─ scripts/rdc/celeris-chat（薄い入口。celerisctl mcp call をそのまま呼ぶだけ）
             └─ 127.0.0.1:18200/mcp（token 付き。auth = "token"）
                  └─ Celeris MCP（crates/celeris-mcp）
+                      ├─ db_query / db_schema → DB を読み取り専用の別接続で（db:read）
+                      └─ api_get → daemon が /api/v1 に GET（api:read）
 ```
+
+ChatGPT 向けの使い方（よく使う問い合わせ例）は `docs/guides/chatgpt-rdc.md`。setup スクリプトが専用ユーザーの
+`~/CELERIS-CHAT.md` に写す。
 
 ### 8.1 専用 Linux ユーザーの権限最小化
 
@@ -297,28 +322,31 @@ RDC の device agent は `chatgpt-rdc` という**専用の**ユーザーで動�
 
 - `scripts/rdc/celeris-chat` を実行できること（と、そのスクリプトが読む `celerisctl` バイナリ・
   token ファイル）。
-- **それ以外は何も無い**: `sudo` 無し、SSH 鍵無し（クラスタにもどこにも入れない）、`~/.config/celeris` /
-  `~/.local/celeris` の DB（`celeris.sqlite3`）への直接アクセス無し（読み書きとも不可。celeris の状態は
-  MCP のツール経由でしか見えない・変えられない）。
+- **それ以外は何も無い**: `sudo` 無し、SSH 鍵無し、`~/.config/celeris` / `~/.local/celeris` の DB
+  （`celeris.sqlite3`）・API の token への権限無し。DB と API は MCP の `db_query` / `api_get` を通して
+  読むだけで、秘密の列・path は MCP の側で伏せる・拒否する。
 - token ファイル（`CELERIS_MCP_TOKEN_FILE`、既定 `$HOME/.config/celeris/mcp-token`）だけを、
   `chatgpt-rdc` から読める権限（他人には読ませない。`0400` 等）で置く。
 
-`celerisctl` バイナリ自体（既定 `$HOME/.local/celeris/current/bin/celerisctl`）は rmaeda のホーム下に
-あるため、`chatgpt-rdc` からは既定では読めない。専用ユーザーのホーム配下にコピーするか、
-`~/.local/celeris` に対して専用ユーザーへの読み取り権を足すか、`CELERIS_BIN` で別の場所を指すかは
-運用側（親）が決める（`scripts/rdc/celeris-chat` の先頭コメントにも同じ注意を書いてある）。
+`celerisctl` バイナリは `scripts/rdc/setup-chatgpt-rdc.sh` が専用ユーザーの `~/.local/bin/` に写す
+（`celerisctl mcp call` は DB を開かない）。
 
 ### 8.2 推奨 scope
 
 ```
 $ celerisctl --db ~/.local/celeris/celeris.sqlite3 mcp client add chatgpt-rdc \
-    --scope knowledge:read,knowledge:propose,tasks:read,tasks:interact,console:instruct
+    --scope knowledge:read,knowledge:propose,tasks:read,tasks:interact,console:instruct,db:read,api:read
+# 既にある chatgpt-rdc に足すとき（token はそのまま。scope は置き換えなので全部書く）
+$ celerisctl --db ~/.local/celeris/celeris.sqlite3 mcp client scopes chatgpt-rdc \
+    --scope knowledge:read,knowledge:propose,tasks:read,tasks:interact,console:instruct,db:read,api:read
 ```
 
-- 与える: `knowledge:read`、`knowledge:propose`、`tasks:read`、`tasks:interact`、`console:instruct`。
+- 与える: `knowledge:read`、`knowledge:propose`、`tasks:read`、`tasks:interact`、`console:instruct`、
+  `db:read`（DB の読み取り）、`api:read`（API の GET）。
 - **与えない**: `tasks:control`（やり直し・取り消し）、`tasks:decide`（承認・却下）、`org:write`、
   `skills:write`。これらは人が GUI から行う決定的な操作で、ChatGPT に渡す理由がない（欲しくなったら
   この節の scope を明示して広げる。既定では絞る）。
+- scope の付与・token の発行は人が行う（credential は人だけが扱う）。
 - この口は `auth = "token"`（§2 の 18200）を使う（`auth = "none"` の 18201 は同じホストの ChatGPT の
   Secure MCP tunnel 専用。RDC とは別経路）。
 
@@ -331,6 +359,9 @@ $ celerisctl --db ~/.local/celeris/celeris.sqlite3 mcp client add chatgpt-rdc \
 $ celeris-chat --list
 $ celeris-chat tasks_list '{"status":"blocked","limit":5}'
 $ celeris-chat knowledge_search '{"query":"pegasus"}'
+$ celeris-chat db_schema
+$ celeris-chat db_query '{"sql":"SELECT kind, count(*) FROM events GROUP BY kind ORDER BY 2 DESC","limit":50}'
+$ celeris-chat api_get '{"path":"/api/v1/routing/evidence"}'
 $ celeris-chat console_instruct '{"text":"調査結果をタスクにして"}'
 # 続きは console_instruct に返値の thread_id を指定。返信は task_id または thread_id で取得。
 $ celeris-chat console_reply '{"task_id":"<上の task_id>","wait_secs":30}'

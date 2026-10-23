@@ -3,11 +3,13 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use task_core::{RoleSpec, SqliteStore, StoreOptions};
 
 use crate::ratelimit::RateLimiter;
+use crate::tools::api::ApiTarget;
+use crate::tools::db::MAX_CONCURRENT_QUERIES;
 
 /// `McpState::new` の失敗。
 #[derive(Debug, thiserror::Error)]
@@ -23,6 +25,13 @@ pub struct McpState {
     pub(crate) knowledge_root: Option<PathBuf>,
     /// MCP セッション（`initialize` で発行）。`session_id -> client_id`。
     pub(crate) sessions: Mutex<HashMap<String, String>>,
+    /// ADR 2026-10-23-mcp-read-only-db-and-api D2: `db_query` / `db_schema` が読み取り専用で開く DB。
+    /// `open` は store と同じ path を入れる。
+    pub(crate) db_read_path: OnceLock<PathBuf>,
+    /// 同時に走らせる `db_query` の数。
+    pub(crate) db_query_slots: Arc<tokio::sync::Semaphore>,
+    /// ADR 2026-10-23-mcp-read-only-db-and-api D5: `api_get` の宛先（daemon が `[api]` から入れる）。
+    pub(crate) api_target: OnceLock<ApiTarget>,
 }
 
 impl McpState {
@@ -48,13 +57,9 @@ impl McpState {
                 ..StoreOptions::default()
             },
         )?;
-        Ok(Arc::new(Self {
-            store: Arc::new(store),
-            rate_limit_per_min,
-            limiter: Mutex::new(RateLimiter::default()),
-            knowledge_root,
-            sessions: Mutex::new(HashMap::new()),
-        }))
+        let state = Self::new(Arc::new(store), rate_limit_per_min, knowledge_root);
+        let _ = state.db_read_path.set(db_path.to_path_buf());
+        Ok(state)
     }
 
     /// テスト用: 開いてある `SqliteStore` をそのまま共有する（in-memory の店をテストごとに開き直さない
@@ -68,13 +73,35 @@ impl McpState {
         _conversation_genre: String,
         knowledge_root: Option<PathBuf>,
     ) -> Arc<Self> {
+        Self::new(store, rate_limit_per_min, knowledge_root)
+    }
+
+    fn new(
+        store: Arc<SqliteStore>,
+        rate_limit_per_min: u32,
+        knowledge_root: Option<PathBuf>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             store,
             rate_limit_per_min,
             limiter: Mutex::new(RateLimiter::default()),
             knowledge_root,
             sessions: Mutex::new(HashMap::new()),
+            db_read_path: OnceLock::new(),
+            db_query_slots: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_QUERIES)),
+            api_target: OnceLock::new(),
         })
+    }
+
+    /// `db_query` / `db_schema` が読む DB を決める（`open` は store と同じ path を既に入れている。
+    /// `from_store` で作った試験はファイルの DB をここで渡す）。2 回目以降は無視する。
+    pub fn set_db_read_path(&self, path: PathBuf) {
+        let _ = self.db_read_path.set(path);
+    }
+
+    /// `api_get` の宛先を決める（daemon が `[api] listen` と token から作る）。2 回目以降は無視する。
+    pub fn set_api_target(&self, target: ApiTarget) {
+        let _ = self.api_target.set(target);
     }
 
     /// 同期の store 呼び出しをブロッキングスレッドへ逃がす（`task_api::ApiState::blocking` と同じ形）。

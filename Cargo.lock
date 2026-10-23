@@ -337,6 +337,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "reqwest",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",

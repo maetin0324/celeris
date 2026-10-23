@@ -8,11 +8,14 @@
 #
 #   TOKEN_FILE: `celerisctl mcp client add chatgpt-rdc --scope …` が出したトークンを保存した 600 のファイル。
 #               与えると専用ユーザーの ~/.config/celeris/mcp-token に 600 で置く（値は表示しない）。
+#               既にある client に scope を足すだけなら不要（`celerisctl mcp client scopes`。token は変わらない）。
 #
-# 作るもの（docs/guides/mcp.md §8、ADR-0056 Phase 101 追記）:
-#   - ユーザー chatgpt-rdc（sudo 無し・補助グループ無し・ssh 鍵無し・celeris の DB や設定に触れない）
+# 作るもの（docs/guides/mcp.md §8、ADR-0056 Phase 101 追記、ADR 2026-10-23-mcp-read-only-db-and-api）:
+#   - ユーザー chatgpt-rdc（sudo 無し・補助グループ無し・ssh 鍵無し・celeris の DB ファイルや API token に触れない。
+#     DB と API は MCP の db_query / api_get で読むだけ）
 #   - ~chatgpt-rdc/.local/bin/celerisctl   … 現行リリースの celerisctl のコピー（`mcp call` は DB を開かない）
 #   - ~chatgpt-rdc/.local/bin/celeris-chat … scripts/rdc/celeris-chat の写し（RDC から呼ぶ唯一の入口）
+#   - ~chatgpt-rdc/CELERIS-CHAT.md         … docs/guides/chatgpt-rdc.md の写し（ChatGPT 向けの使い方と問い合わせ例）
 #   - ~chatgpt-rdc/.config/celeris/mcp-token … MCP client のトークン（600）
 # celeris をリリースし直しても `celerisctl mcp call` の互換が保たれる限り再実行は不要。変えたときはもう一度実行する。
 set -euo pipefail
@@ -27,6 +30,7 @@ die() { echo "setup-chatgpt-rdc: $*" >&2; exit 1; }
 sudo -n true 2>/dev/null || die "sudo が使えません（パスワード付きなら先に 'sudo -v' を実行）"
 [ -x "$CELERIS_HOME/current/bin/celerisctl" ] || die "celerisctl が見つかりません: $CELERIS_HOME/current/bin/celerisctl"
 [ -f "$REPO/scripts/rdc/celeris-chat" ] || die "scripts/rdc/celeris-chat がありません（Phase 101 以降のリポジトリで実行）"
+[ -f "$REPO/docs/guides/chatgpt-rdc.md" ] || die "docs/guides/chatgpt-rdc.md がありません（2026-10-23 以降のリポジトリで実行）"
 if [ -n "$TOKEN_SRC" ]; then
   [ -f "$TOKEN_SRC" ] || die "TOKEN_FILE が無い: $TOKEN_SRC"
   # NFS の home で POSIX ACL（mask）が付くと mode が 660 等に見えるので、「other が 0、owner が自分」で判定する。
@@ -54,6 +58,7 @@ trap 'rm -rf "$STAGE"' EXIT
 chmod 700 "$STAGE"
 install -m 755 "$CELERIS_HOME/current/bin/celerisctl" "$STAGE/celerisctl"
 install -m 755 "$REPO/scripts/rdc/celeris-chat" "$STAGE/celeris-chat"
+install -m 644 "$REPO/docs/guides/chatgpt-rdc.md" "$STAGE/CELERIS-CHAT.md"
 if [ -n "$TOKEN_SRC" ]; then
   install -m 600 "$TOKEN_SRC" "$STAGE/mcp-token"
 fi
@@ -67,7 +72,8 @@ sudo -n install -d -m 700 -o "$RDC_USER" -g "$RDC_USER" "$HOME_DIR/.config" "$HO
 sudo -n install -d -m 755 -o "$RDC_USER" -g "$RDC_USER" "$HOME_DIR/.local" "$HOME_DIR/.local/bin"
 sudo -n install -m 755 -o "$RDC_USER" -g "$RDC_USER" "$STAGE/celerisctl" "$HOME_DIR/.local/bin/celerisctl"
 sudo -n install -m 755 -o "$RDC_USER" -g "$RDC_USER" "$STAGE/celeris-chat" "$HOME_DIR/.local/bin/celeris-chat"
-echo "installed: $HOME_DIR/.local/bin/{celerisctl,celeris-chat} (from $(readlink -f "$CELERIS_HOME/current"))"
+sudo -n install -m 644 -o "$RDC_USER" -g "$RDC_USER" "$STAGE/CELERIS-CHAT.md" "$HOME_DIR/CELERIS-CHAT.md"
+echo "installed: $HOME_DIR/.local/bin/{celerisctl,celeris-chat}, $HOME_DIR/CELERIS-CHAT.md (from $(readlink -f "$CELERIS_HOME/current"))"
 if [ -n "$TOKEN_SRC" ]; then
   sudo -n install -m 600 -o "$RDC_USER" -g "$RDC_USER" "$STAGE/mcp-token" "$HOME_DIR/.config/celeris/mcp-token"
   echo "installed: $HOME_DIR/.config/celeris/mcp-token (600; value not shown)"
@@ -84,7 +90,12 @@ echo "check: groups = $(id -nG "$RDC_USER")"
 echo
 cat <<NEXT
 next (人が行う):
+  0. scope（DB と API の読み取りを含む。docs/guides/mcp.md §8.2）。既にある client なら token はそのまま:
+       $CELERIS_HOME/current/bin/celerisctl --db $CELERIS_HOME/celeris.sqlite3 mcp client scopes chatgpt-rdc \\
+         --scope knowledge:read,knowledge:propose,tasks:read,tasks:interact,console:instruct,db:read,api:read
   1. 動作確認:  sudo -iu $RDC_USER -- celeris-chat --list
+               sudo -iu $RDC_USER -- celeris-chat db_query '{"sql":"SELECT count(*) FROM tasks"}'
+               sudo -iu $RDC_USER -- celeris-chat api_get '{"path":"/api/v1/health"}'
   2. RDC の端末を専用ユーザーで開いて対にする（ブラウザで device verification）:
        sudo -iu $RDC_USER
        tmux new -s rdc     # 端末を閉じると切れるので tmux の中で
@@ -92,5 +103,7 @@ next (人が行う):
   3. ChatGPT: Settings → Apps & Connectors → Advanced settings → Developer mode → Create connector →
        https://mcp.desktopcommander.app/mcp
   4. RDC の allowedDirectories を \$HOME（$HOME_DIR）だけにし、blockedCommands に curl / wget / ssh / scp / sqlite3 を足す
-     （guardrail であって sandbox ではない。境界は Linux ユーザーと MCP client の scope）。
+     （guardrail であって sandbox ではない。境界は Linux ユーザーと MCP client の scope。DB と API は
+     celeris-chat の db_query / api_get で読む）。
+  5. ChatGPT に ~/CELERIS-CHAT.md を読ませる（使い方と問い合わせ例）。
 NEXT

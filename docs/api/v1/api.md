@@ -2888,7 +2888,8 @@ ADR 2026-10-22-cos-fixed-threads D2 で消した（404）。CoS のスレッド�
   `revoked_at`（無ければ省略）。**トークンの値は出ない**（DB にも平文では無い。ハッシュも出さない）。
 - `GET /mcp/calls?client=<id>` → 200 `{"items": [McpCall]}`。`client` は省略可（省略時は全クライアント）。
   新しい順、直近 100 件。`McpCall` は `id` / `client_id` / `tool` / `ok` / `error_kind`（成功なら省略） /
-  `latency_ms` / `at`。**引数と結果の本文は残さない**（ADR-0056 D4）。`console_instruct` の呼び出しは
+  `latency_ms` / `at` / `request`（読み取りの道具 `db_query` の SQL 本文と params・`api_get` の path と query だけ。
+  4000 文字まで。他の道具は省略。ADR 2026-10-23-mcp-read-only-db-and-api D6）。**結果の本文は残さない**（ADR-0056 D4）。`console_instruct` の呼び出しは
   チャットに発言を保存する（2026-10-08 の変更。§3.128）。
 - どちらも読み取り専用。`token_file` があれば Bearer 必須。
 

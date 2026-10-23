@@ -39,6 +39,8 @@ pub enum ClientCommand {
     Ls,
     /// 失効させる（以後そのトークンは使えない）。
     Revoke(ClientRevokeArgs),
+    /// scope を置き換える（トークンはそのまま。ADR 2026-10-23-mcp-read-only-db-and-api D1）。
+    Scopes(ClientScopesArgs),
 }
 
 #[derive(Args, Debug)]
@@ -57,6 +59,14 @@ pub struct ClientAddArgs {
 #[derive(Args, Debug)]
 pub struct ClientRevokeArgs {
     pub id: String,
+}
+
+#[derive(Args, Debug)]
+pub struct ClientScopesArgs {
+    pub id: String,
+    /// 新しい scope の全体（カンマ区切り、複数回も可。今の scope への追加ではなく置き換え）。
+    #[arg(long = "scope", value_delimiter = ',', required = true)]
+    pub scopes: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -110,6 +120,7 @@ pub fn run_client(store: &SqliteStore, command: ClientCommand) -> Result<ExitCod
         ClientCommand::Add(args) => run_add(store, args),
         ClientCommand::Ls => run_ls(store),
         ClientCommand::Revoke(args) => run_revoke(store, args),
+        ClientCommand::Scopes(args) => run_scopes(store, args),
     }
 }
 
@@ -124,6 +135,15 @@ fn parse_scopes(raw: &[String]) -> Result<Vec<McpScope>, CliError> {
             })
         })
         .collect()
+}
+
+fn run_scopes(store: &SqliteStore, args: ClientScopesArgs) -> Result<ExitCode, CliError> {
+    let scopes = parse_scopes(&args.scopes)?;
+    if !store.mcp_client_set_scopes(&args.id, &scopes)? {
+        return Err(CliError::msg(format!("no such client: {}", args.id)));
+    }
+    outln!("{}: {}", args.id, task_core::scopes_to_string(&scopes));
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_add(store: &SqliteStore, args: ClientAddArgs) -> Result<ExitCode, CliError> {

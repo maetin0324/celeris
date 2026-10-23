@@ -17569,7 +17569,7 @@
       "type": "object"
     },
     "McpCall": {
-      "description": "`mcp_calls` の 1 行（ADR-0056 D4: 引数と結果の本文は持たない）。",
+      "description": "`mcp_calls` の 1 行（ADR-0056 D4: 結果の本文は持たない。`request` は読み取りの道具の要求だけ）。",
       "properties": {
         "at": {
           "type": "string"
@@ -17592,6 +17592,13 @@
         },
         "ok": {
           "type": "boolean"
+        },
+        "request": {
+          "description": "ADR 2026-10-23-mcp-read-only-db-and-api D6: `db_query` の SQL 本文と params、`api_get` の path と\nquery（4000 文字まで）。他の道具は `None`。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "tool": {
           "type": "string"
@@ -17693,7 +17700,9 @@
         "org:read",
         "org:write",
         "skills:read",
-        "skills:write"
+        "skills:write",
+        "db:read",
+        "api:read"
       ],
       "type": "string"
     },

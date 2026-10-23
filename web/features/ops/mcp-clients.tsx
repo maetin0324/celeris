@@ -37,6 +37,11 @@ function Calls({ id }: { id: string }) {
                   {call.tool} {call.ok ? "ok" : `error ${call.error_kind ?? ""}`}（{call.latency_ms} ms）・
                   {formatAbsolute(call.at)}
                 </span>
+                {call.request && (
+                  <code className="block w-full min-w-0 break-words font-mono text-muted-foreground">
+                    {call.request}
+                  </code>
+                )}
               </li>
             ))}
           </ul>

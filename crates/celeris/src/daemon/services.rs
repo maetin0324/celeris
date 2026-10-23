@@ -73,6 +73,14 @@ pub(crate) fn build_mcp_state(
         true,
     )
     .map_err(|e| ApiError::Startup(format!("mcp: could not open the store: {e}")))?;
+    // ADR 2026-10-23-mcp-read-only-db-and-api D5: `api_get` は `[api] listen` の loopback へ、
+    // `[api] token_file` の token で GET を代行する（llm-proxy と同じ経路）。`listen` が無ければ置かない。
+    if let Some(listen) = config.api.listen {
+        let token = config.api.read_token()?;
+        let target = celeris_mcp::tools::api::ApiTarget::from_listen(listen, token)
+            .map_err(|e| ApiError::Startup(format!("mcp: {e}")))?;
+        state.set_api_target(target);
+    }
     Ok(Some(state))
 }
 

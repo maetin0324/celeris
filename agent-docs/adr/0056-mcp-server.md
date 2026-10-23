@@ -404,6 +404,12 @@ MCP へ task 操作のツールと scope、`celerisctl mcp call` を足す）
 の scope で許される操作だけ**にする。実装は決定どおり（**決定を変えた点は無い**）。ADR に書いていな
 かった細部と、あえて別のやり方にした点だけを残す。
 
+> **2026-10-23 置き換え**: この追記の「DB を直接読ませない・汎用 HTTP（curl）で API を叩かせない」は、
+> `agent-docs/adr/2026-10-23-mcp-read-only-db-and-api.md` で**読み取りに限って MCP の中で解いた**
+> （scope `db:read` の `db_schema` / `db_query`、scope `api:read` の `api_get`）。専用ユーザーに DB ファイル・
+> API token・curl を渡さない点と、書き込みを scope 付きの固定ツールに限る点は変わらない。伏せる列・拒否する
+> path の一覧はその ADR にある。
+
 ### 決めた細部（ADR が書いていなかったこと）
 
 - **P-101-a: `McpScope` に `tasks:interact` / `tasks:control` / `tasks:decide` の 3 つを足したが、

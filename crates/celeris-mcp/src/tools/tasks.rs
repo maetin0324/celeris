@@ -2,8 +2,9 @@
 //!
 //! Phase 101 追記: `task_comment` / `task_answer`（scope `tasks:interact`）、`task_retry` /
 //! `task_cancel`（scope `tasks:control`）、`task_approve` / `task_reject`（scope `tasks:decide`）。
-//! 外部エージェント（ChatGPT、Remote Desktop Commander 経由）が汎用 curl で HTTP API を叩かず、
-//! MCP client の scope で許される操作だけをできるようにする（ADR-0056 Phase 101 追記）。
+//! 外部エージェント（ChatGPT、Remote Desktop Commander 経由）の書き込みを、MCP client の scope で
+//! 許される操作だけにする（ADR-0056 Phase 101 追記。読み取りは `db_query` / `api_get`。
+//! ADR 2026-10-23-mcp-read-only-db-and-api）。
 //! いずれも HTTP ハンドラ（`task-api::handlers`）と**同じ** `task-ops` の関数を呼ぶ（ロジックの
 //! 二重実装をしない）。書き込みの主体は `mcp:<client_id>`（`knowledge_propose` と同じ流儀。
 //! `task_retry` / `task_cancel` は下敷きの `task-ops` 関数がそもそも actor を持たないので、監査は

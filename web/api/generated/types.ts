@@ -3586,6 +3586,7 @@ export type McpCall = {
   "id": string;
   "latency_ms": number;
   "ok": boolean;
+  "request"?: string | null;
   "tool": string;
 };
 
@@ -3607,7 +3608,7 @@ export type McpClientsView = {
   "items": Array<McpClient>;
 };
 
-export type McpScope = "knowledge:read" | "knowledge:propose" | "tasks:read" | "tasks:interact" | "tasks:control" | "tasks:decide" | "console:instruct" | "org:read" | "org:write" | "skills:read" | "skills:write";
+export type McpScope = "knowledge:read" | "knowledge:propose" | "tasks:read" | "tasks:interact" | "tasks:control" | "tasks:decide" | "console:instruct" | "org:read" | "org:write" | "skills:read" | "skills:write" | "db:read" | "api:read";
 
 export type MemoryView = {
   "notes": string;

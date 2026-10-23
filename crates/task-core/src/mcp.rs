@@ -6,7 +6,8 @@
 //!
 //! - `mcp_clients`: クライアントごとの Bearer トークン。**値そのものは持たない**（`token_hash` は
 //!   SHA-256 の 16 進文字列。発行は `celerisctl mcp client add`）。
-//! - `mcp_calls`: `tools/call` の監査ログ（ADR-0056 D4: 引数と結果の本文は残さない）。
+//! - `mcp_calls`: `tools/call` の監査ログ（ADR-0056 D4: 結果の本文は残さない。引数は読み取りの道具
+//!   `db_query` / `api_get` の要求だけ `request` に残す。ADR 2026-10-23-mcp-read-only-db-and-api D6）。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,10 @@ pub enum McpScope {
     OrgWrite,
     SkillsRead,
     SkillsWrite,
+    /// ADR 2026-10-23-mcp-read-only-db-and-api D1: `db_schema` / `db_query`（読み取り専用接続の SQL）。
+    DbRead,
+    /// ADR 2026-10-23-mcp-read-only-db-and-api D1: `api_get`（`/api/v1` への GET の代行）。
+    ApiRead,
 }
 
 impl McpScope {
@@ -49,6 +54,8 @@ impl McpScope {
             McpScope::OrgWrite => "org:write",
             McpScope::SkillsRead => "skills:read",
             McpScope::SkillsWrite => "skills:write",
+            McpScope::DbRead => "db:read",
+            McpScope::ApiRead => "api:read",
         }
     }
 
@@ -65,6 +72,8 @@ impl McpScope {
             "org:write" => Some(McpScope::OrgWrite),
             "skills:read" => Some(McpScope::SkillsRead),
             "skills:write" => Some(McpScope::SkillsWrite),
+            "db:read" => Some(McpScope::DbRead),
+            "api:read" => Some(McpScope::ApiRead),
             _ => None,
         }
     }
@@ -106,6 +115,7 @@ impl schemars::JsonSchema for McpScope {
                 "knowledge:read", "knowledge:propose", "tasks:read",
                 "tasks:interact", "tasks:control", "tasks:decide", "console:instruct",
                 "org:read", "org:write", "skills:read", "skills:write",
+                "db:read", "api:read",
             ],
         })
     }
@@ -164,7 +174,7 @@ impl McpClient {
     }
 }
 
-/// `mcp_calls` の 1 行（ADR-0056 D4: 引数と結果の本文は持たない）。
+/// `mcp_calls` の 1 行（ADR-0056 D4: 結果の本文は持たない。`request` は読み取りの道具の要求だけ）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct McpCall {
     pub id: String,
@@ -177,6 +187,10 @@ pub struct McpCall {
     #[serde(with = "time::serde::rfc3339")]
     #[schemars(with = "String")]
     pub at: OffsetDateTime,
+    /// ADR 2026-10-23-mcp-read-only-db-and-api D6: `db_query` の SQL 本文と params、`api_get` の path と
+    /// query（4000 文字まで）。他の道具は `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
 }
 
 /// MCP クライアント表の永続状態（`SqliteStore` が実装する）。
@@ -190,6 +204,9 @@ pub trait McpClientStore: Send + Sync {
     fn mcp_client_revoke(&self, id: &str, now: OffsetDateTime) -> Result<bool, StoreError>;
     fn mcp_client_touch_last_used(&self, id: &str, now: OffsetDateTime)
     -> Result<bool, StoreError>;
+    /// scope を置き換える（ADR 2026-10-23-mcp-read-only-db-and-api D1。人が `celerisctl mcp client scopes`
+    /// で行う）。無ければ `false`。
+    fn mcp_client_set_scopes(&self, id: &str, scopes: &[McpScope]) -> Result<bool, StoreError>;
 }
 
 /// MCP 呼び出しログの永続状態（`SqliteStore` が実装する）。
@@ -287,6 +304,15 @@ impl McpClientStore for SqliteStore {
         )?;
         Ok(changed > 0)
     }
+
+    fn mcp_client_set_scopes(&self, id: &str, scopes: &[McpScope]) -> Result<bool, StoreError> {
+        let conn = self.lock()?;
+        let changed = conn.execute(
+            "UPDATE mcp_clients SET scopes = ?2 WHERE id = ?1",
+            rusqlite::params![id, scopes_to_string(scopes)],
+        )?;
+        Ok(changed > 0)
+    }
 }
 
 const SELECT_MCP_CLIENT: &str =
@@ -329,8 +355,8 @@ impl McpCallStore for SqliteStore {
         let at = format_rfc3339(call.at)?;
         let conn = self.lock()?;
         conn.execute(
-            "INSERT INTO mcp_calls (id, client_id, tool, ok, error_kind, latency_ms, at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO mcp_calls (id, client_id, tool, ok, error_kind, latency_ms, at, request) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 call.id,
                 call.client_id,
@@ -339,6 +365,7 @@ impl McpCallStore for SqliteStore {
                 call.error_kind,
                 call.latency_ms,
                 at,
+                call.request,
             ],
         )?;
         Ok(())
@@ -350,7 +377,7 @@ impl McpCallStore for SqliteStore {
         limit: usize,
     ) -> Result<Vec<McpCall>, StoreError> {
         let conn = self.lock()?;
-        let sql = "SELECT id, client_id, tool, ok, error_kind, latency_ms, at FROM mcp_calls \
+        let sql = "SELECT id, client_id, tool, ok, error_kind, latency_ms, at, request FROM mcp_calls \
              WHERE client_id IS ?1 OR ?1 IS NULL \
              ORDER BY at DESC, id DESC LIMIT ?2";
         let mut stmt = conn.prepare(sql)?;
@@ -371,6 +398,7 @@ fn row_to_mcp_call(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<McpCall, 
     let error_kind: Option<String> = row.get(4)?;
     let latency_ms: i64 = row.get(5)?;
     let at: String = row.get(6)?;
+    let request: Option<String> = row.get(7)?;
     let at = match parse_rfc3339(&at) {
         Ok(t) => t,
         Err(e) => return Ok(Err(e)),
@@ -383,6 +411,7 @@ fn row_to_mcp_call(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<McpCall, 
         error_kind,
         latency_ms,
         at,
+        request,
     }))
 }
 
@@ -410,6 +439,8 @@ mod tests {
             McpScope::OrgWrite,
             McpScope::SkillsRead,
             McpScope::SkillsWrite,
+            McpScope::DbRead,
+            McpScope::ApiRead,
         ] {
             assert_eq!(McpScope::parse(scope.as_str()), Some(scope));
         }
@@ -520,16 +551,48 @@ mod tests {
                     error_kind: None,
                     latency_ms: 10,
                     at: now + time::Duration::seconds(i as i64),
+                    request: (i == 2).then(|| "SELECT 1".to_string()),
                 })
                 .expect("record");
         }
         let all = store.mcp_calls_list(None, 100).expect("list all");
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].id, "call-2"); // newest first
+        assert_eq!(all[0].request.as_deref(), Some("SELECT 1"));
+        assert_eq!(all[1].request, None);
         let a_only = store.mcp_calls_list(Some("a"), 100).expect("list a");
         assert_eq!(a_only.len(), 2);
         assert!(a_only.iter().all(|c| c.client_id == "a"));
         let limited = store.mcp_calls_list(None, 1).expect("limit 1");
         assert_eq!(limited.len(), 1);
+    }
+
+    #[test]
+    fn set_scopes_replaces_the_scope_list() {
+        let store = store();
+        let client = McpClient {
+            id: "rdc".into(),
+            name: "rdc".into(),
+            token_hash: Some("h".into()),
+            scopes: vec![McpScope::TasksRead],
+            created_at: OffsetDateTime::now_utc(),
+            last_used_at: None,
+            revoked_at: None,
+        };
+        store.mcp_client_create(&client).expect("create");
+        assert!(
+            store
+                .mcp_client_set_scopes(
+                    "rdc",
+                    &[McpScope::TasksRead, McpScope::DbRead, McpScope::ApiRead]
+                )
+                .expect("set")
+        );
+        let got = store.mcp_client_get("rdc").expect("get").expect("some");
+        assert_eq!(
+            got.scopes,
+            vec![McpScope::TasksRead, McpScope::DbRead, McpScope::ApiRead]
+        );
+        assert!(!store.mcp_client_set_scopes("nobody", &[]).expect("set"));
     }
 }

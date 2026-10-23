@@ -2559,7 +2559,13 @@ fn stale_seq_rows(parity_final: WorkUnitStatus) -> Vec<WorkUnitRow> {
         integ_v2("screens", 3, WorkUnitStatus::Done, &["sidebar"]),
         row_v2("chat-view", "chat", 4, WorkUnitStatus::Done, &[]),
         integ_v2("chat", 5, WorkUnitStatus::Done, &["chat-view"]),
-        row_v2("parity-close", "close", 6, WorkUnitStatus::Done, &["chat-view"]),
+        row_v2(
+            "parity-close",
+            "close",
+            6,
+            WorkUnitStatus::Done,
+            &["chat-view"],
+        ),
         // 今の版の並び（gap-a, gap-b は統合済み）。
         row_v2("gap-a1", "gap-a", 10, WorkUnitStatus::Done, &[]),
         integ_v2("gap-a", 11, WorkUnitStatus::Done, &["gap-a1"]),

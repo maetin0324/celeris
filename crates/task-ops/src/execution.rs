@@ -967,6 +967,24 @@ pub fn plan_replan(
                 updated_work_units.push(row);
             }
         }
+        // ADR 2026-10-23-stage-order-and-plan-stall D2: 未完の行の `seq` を先に新しい版の並びに書き換えてから
+        // ready を決める（以前は書き換える前の並びで決め、統合 WU の古い `seq` で段の順を取り違えた）。
+        let order: std::collections::BTreeMap<String, u32> =
+            task_core::materialized_order(&validated.spec, &validated.topological_order)
+                .into_iter()
+                .enumerate()
+                .map(|(i, w)| (w.key, i as u32))
+                .collect();
+        for rows in [&mut updated_work_units, &mut new_work_units] {
+            for row in rows.iter_mut() {
+                // done の行（人の replan が spec を上書きしたもの）の `seq` は元のまま（R5b-fix1）。
+                if row.status != WorkUnitStatus::Done
+                    && let Some(seq) = order.get(&row.key)
+                {
+                    row.seq = *seq;
+                }
+            }
+        }
         // 工程の障壁つきで ready を決め直す（依存が done でも前の工程の統合が済んでいなければ pending）。
         let mut projected: Vec<WorkUnitRow> = all_units
             .iter()
@@ -984,20 +1002,8 @@ pub fn plan_replan(
             }
         }
         let ready = task_core::newly_ready(&projected);
-        let order: std::collections::BTreeMap<String, u32> =
-            task_core::materialized_order(&validated.spec, &validated.topological_order)
-                .into_iter()
-                .enumerate()
-                .map(|(i, w)| (w.key, i as u32))
-                .collect();
         for rows in [&mut updated_work_units, &mut new_work_units] {
             for row in rows.iter_mut() {
-                // done の行（人の replan が spec を上書きしたもの）の `seq` は元のまま（R5b-fix1）。
-                if row.status != WorkUnitStatus::Done
-                    && let Some(seq) = order.get(&row.key)
-                {
-                    row.seq = *seq;
-                }
                 if row.status == WorkUnitStatus::Ready || row.status == WorkUnitStatus::Pending {
                     let status = if ready.contains(&row.id) {
                         WorkUnitStatus::Ready

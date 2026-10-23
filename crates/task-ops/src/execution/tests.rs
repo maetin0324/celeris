@@ -776,6 +776,128 @@ fn replan_moving_a_unit_to_a_later_stage_does_not_strand_the_earlier_stage() {
     assert_eq!(applied, 0);
 }
 
+/// ADR 2026-10-23-stage-order-and-plan-stall D1/D2（本番 01M5HDSN3AWKK4ZJ0T1K3QTC8X の版 01M5KHDY52 の再現）: 前の版で
+/// done になった後段（chat・close）の行は前の版の小さい `seq` のまま残る。replan が前に段（gap-a・gap-c）を足すと、
+/// 修正前は close が gap-c より前の段に見え、gap-a の統合の後に close の parity-final だけが ready になり、gap-c の
+/// c1 は close を待って pending のまま止まった。修正後は c1 が先に上がり、parity-final は gap-c を待つ。
+#[test]
+fn replan_adding_earlier_stages_keeps_stage_order_over_done_rows() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task();
+    store.insert(&task).unwrap();
+    let limits = ExecutionLimits {
+        tree: task_core::TreeLimits {
+            enabled: true,
+            ..task_core::TreeLimits::default()
+        },
+        ..ExecutionLimits::default()
+    };
+    let leaf = |key: &str, stage: &str, deps: &[&str]| {
+        serde_json::json!({
+            "key": key,
+            "stage": stage,
+            "kind": "implement",
+            "title": format!("leaf {key}"),
+            "objective": format!("objective of leaf {key} that is distinct"),
+            "depends_on": deps,
+            "checks": [{"cmd": "true", "expect_exit": 0}],
+        })
+    };
+    let plan = |rationale: &str, stages: &[&str], units: Vec<serde_json::Value>| {
+        let stages: Vec<serde_json::Value> = stages
+            .iter()
+            .map(|k| serde_json::json!({"key": k, "kind": "implement", "title": k}))
+            .collect();
+        serde_json::from_value::<ExecutionPlanSpec>(serde_json::json!({
+            "schema": task_core::EXECUTION_PLAN_SCHEMA_V3,
+            "rationale": rationale,
+            "stages": stages,
+            "units": units,
+        }))
+        .unwrap()
+    };
+    let done_units = || {
+        vec![
+            leaf("chat-view", "chat", &[]),
+            leaf("parity-close", "close", &["chat-view"]),
+        ]
+    };
+    adopt_plan(
+        &store,
+        task.id,
+        plan("v1", &["chat", "close"], done_units()),
+        PlanOrigin::Planner,
+        None,
+        limits,
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    for key in [
+        "chat-view",
+        "integrate-chat",
+        "parity-close",
+        "integrate-close",
+    ] {
+        mark_done(&store, task.id, key);
+    }
+    let mut v2_units = vec![
+        leaf("a1", "gap-a", &[]),
+        leaf("a2", "gap-a", &[]),
+        leaf("c1", "gap-c", &[]),
+        leaf("parity-final", "close", &[]),
+    ];
+    v2_units.extend(done_units());
+    replan(
+        &store,
+        task.id,
+        plan("v2", &["gap-a", "gap-c", "chat", "close"], v2_units),
+        "add the gap stages".to_string(),
+        PlanOrigin::Planner,
+        None,
+        limits,
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    let rows = |store: &SqliteStore| -> Vec<WorkUnitRow> {
+        store
+            .work_units_for(task.id)
+            .unwrap()
+            .into_iter()
+            .filter(|u| u.status.is_active())
+            .collect()
+    };
+    let status_of =
+        |rows: &[WorkUnitRow], k: &str| rows.iter().find(|u| u.key == k).unwrap().status;
+    let now = rows(&store);
+    assert_eq!(status_of(&now, "a1"), WorkUnitStatus::Ready);
+    assert_eq!(status_of(&now, "a2"), WorkUnitStatus::Ready);
+    assert_eq!(status_of(&now, "c1"), WorkUnitStatus::Pending);
+    assert_eq!(status_of(&now, "parity-final"), WorkUnitStatus::Pending);
+    let ranks = task_core::phase_ranks(&now);
+    assert!(
+        ranks["gap-a"] < ranks["gap-c"] && ranks["gap-c"] < ranks["close"],
+        "{ranks:?}"
+    );
+
+    // gap-a が済んで統合された（本番の integrate-gap-b done の時点）。次に上がるのは gap-c の c1 だけ。
+    for key in ["a1", "a2", "integrate-gap-a"] {
+        mark_done(&store, task.id, key);
+    }
+    let now = rows(&store);
+    let c1 = now.iter().find(|u| u.key == "c1").unwrap().id.clone();
+    assert_eq!(task_core::newly_ready(&now), vec![c1]);
+    let waits = task_core::unit_waits(&now, &std::collections::BTreeSet::new());
+    let pf = waits.iter().find(|w| w.key == "parity-final").unwrap();
+    assert_eq!(pf.waiting_stage.as_deref(), Some("gap-c"));
+
+    let (wu_mm, run_mm, plan_mm, applied) =
+        crate::replay::check_and_apply_execution(&store, false).unwrap();
+    assert!(wu_mm.is_empty(), "{wu_mm:?}");
+    assert!(run_mm.is_empty(), "{run_mm:?}");
+    assert!(plan_mm.is_empty(), "{plan_mm:?}");
+    assert_eq!(applied, 0);
+}
+
 /// ADR-0079 R5b-fix1: planner の replan は done の WU の spec を変えられない（人の replan は上書きできる。
 /// `human_replan_overrides_the_spec_of_a_done_work_unit`）。
 #[test]

@@ -2537,3 +2537,91 @@ fn carried_done_unit_is_exempt_from_text_size_limits() {
         "{errs:?}"
     );
 }
+
+// ---- ADR 2026-10-23-stage-order-and-plan-stall D1: 段の順位は未完の行で決める ----
+
+fn integ_v2(stage: &str, seq: u32, status: WorkUnitStatus, depends_on: &[&str]) -> WorkUnitRow {
+    let mut r = row_v2(&integrate_key(stage), stage, seq, status, depends_on);
+    r.kind = WorkUnitKind::Integrate;
+    r.spec.kind = WorkUnitKind::Integrate;
+    r
+}
+
+/// 本番 01M5HDSN3AWKK4ZJ0T1K3QTC8X（計画 01M5HHK8M0）の形。段の順は gap-a, gap-b, gap-c, gateway, screens, chat, close。
+/// gateway・screens・chat・close の done の行（parity-close など）は前の版で作られ、前の版の小さい `seq` のまま
+/// （replan は done の行の `seq` を書き換えない）。今の版の gap-c の行は新しい並びの大きい `seq` を持つ。
+/// `parity_final` で close の parity-final の状態（本番は ready まで上がっていた）を選ぶ。
+fn stale_seq_rows(parity_final: WorkUnitStatus) -> Vec<WorkUnitRow> {
+    vec![
+        row_v2("gw-wiring", "gateway", 0, WorkUnitStatus::Done, &[]),
+        integ_v2("gateway", 1, WorkUnitStatus::Done, &["gw-wiring"]),
+        row_v2("sidebar", "screens", 2, WorkUnitStatus::Done, &[]),
+        integ_v2("screens", 3, WorkUnitStatus::Done, &["sidebar"]),
+        row_v2("chat-view", "chat", 4, WorkUnitStatus::Done, &[]),
+        integ_v2("chat", 5, WorkUnitStatus::Done, &["chat-view"]),
+        row_v2("parity-close", "close", 6, WorkUnitStatus::Done, &["chat-view"]),
+        // 今の版の並び（gap-a, gap-b は統合済み）。
+        row_v2("gap-a1", "gap-a", 10, WorkUnitStatus::Done, &[]),
+        integ_v2("gap-a", 11, WorkUnitStatus::Done, &["gap-a1"]),
+        row_v2("gap-b1", "gap-b", 12, WorkUnitStatus::Done, &[]),
+        integ_v2("gap-b", 13, WorkUnitStatus::Done, &["gap-b1"]),
+        row_v2("chat-port", "gap-c", 14, WorkUnitStatus::Pending, &[]),
+        row_v2("diff-viewer", "gap-c", 15, WorkUnitStatus::Pending, &[]),
+        row_v2("pf-servers", "gap-c", 16, WorkUnitStatus::Pending, &[]),
+        integ_v2(
+            "gap-c",
+            17,
+            WorkUnitStatus::Pending,
+            &["chat-port", "diff-viewer", "pf-servers"],
+        ),
+        row_v2("parity-final", "close", 30, parity_final, &[]),
+        integ_v2(
+            "close",
+            31,
+            WorkUnitStatus::Pending,
+            &["parity-close", "parity-final"],
+        ),
+    ]
+}
+
+/// 修正前: close の順位が parity-close の古い seq 6 になり gap-c（14）より前に見え、gap-b の統合の直後に
+/// parity-final だけが ready になり、gap-c の 3 つは `waiting_stage = close` で pending のまま（deadlock）。
+/// 修正後: gap-c の 3 つが ready になり、parity-final は gap-c を待つ。
+#[test]
+fn stage_order_ignores_stale_seq_of_done_rows_from_earlier_versions() {
+    let units = stale_seq_rows(WorkUnitStatus::Pending);
+    let ranks = phase_ranks(&units);
+    assert!(ranks["gap-c"] < ranks["close"], "{ranks:?}");
+    assert_eq!(
+        newly_ready(&units),
+        vec![
+            "wu-chat-port".to_string(),
+            "wu-diff-viewer".to_string(),
+            "wu-pf-servers".to_string()
+        ]
+    );
+    let waits = crate::wait::unit_waits(&units, &BTreeSet::new());
+    let pf = waits.iter().find(|w| w.key == "parity-final").unwrap();
+    assert_eq!(pf.waiting_stage.as_deref(), Some("gap-c"));
+    for key in ["chat-port", "diff-viewer", "pf-servers"] {
+        let w = waits.iter().find(|w| w.key == key).unwrap();
+        assert!(w.is_clear(), "{w:?}");
+    }
+}
+
+/// 本番の止まった状態（parity-final が既に ready）からも、前の段 gap-c の unit が上がって走れる。
+#[test]
+fn stalled_production_state_resumes_from_the_earlier_stage() {
+    let mut units = stale_seq_rows(WorkUnitStatus::Ready);
+    let ready = newly_ready(&units);
+    assert_eq!(ready.len(), 3, "{ready:?}");
+    for u in units.iter_mut() {
+        if ready.contains(&u.id) {
+            u.status = WorkUnitStatus::Ready;
+        }
+    }
+    assert_eq!(
+        runnable_work_units(&units, 0, 1),
+        vec!["wu-chat-port".to_string()]
+    );
+}

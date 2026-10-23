@@ -610,17 +610,27 @@ pub fn newly_ready(units: &[WorkUnitRow]) -> Vec<String> {
 
 /// ADR-0074 D1.3（Phase F2b）: 工程の key → 順位（その工程の行の `seq` の最小値。`topo_sort` が
 /// 工程順を保証し、統合 WU は工程の末尾に置くので、`seq` の最小値で工程の順が引ける）。
+///
+/// ADR 2026-10-23-stage-order-and-plan-stall D1: done の行の `seq` は前の版の並びのまま残る（replan は書き換えない）
+/// ので、done でない有効な行がある段はその行だけで順位を決める。すべて done の段だけ有効な行の最小値を使う。
+/// 前の版で done になった後段の行の小さい `seq` が、その段を未完の前段より前に見せていた（本番 01M5HDSN3A）。
 pub fn phase_ranks(units: &[WorkUnitRow]) -> BTreeMap<String, u32> {
-    let mut ranks: BTreeMap<String, u32> = BTreeMap::new();
+    let mut open: BTreeMap<String, u32> = BTreeMap::new();
+    let mut all: BTreeMap<String, u32> = BTreeMap::new();
     for u in units.iter().filter(|u| u.status.is_active()) {
         if let Some(p) = &u.phase {
-            let e = ranks.entry(p.clone()).or_insert(u.seq);
-            if u.seq < *e {
-                *e = u.seq;
+            let e = all.entry(p.clone()).or_insert(u.seq);
+            *e = (*e).min(u.seq);
+            if u.status != WorkUnitStatus::Done {
+                let e = open.entry(p.clone()).or_insert(u.seq);
+                *e = (*e).min(u.seq);
             }
         }
     }
-    ranks
+    for (p, seq) in open {
+        all.insert(p, seq);
+    }
+    all
 }
 
 /// ADR-0074 D1.4（Phase F2b）: 統合 WU の key の接頭辞（`integrate-<phase>`）。

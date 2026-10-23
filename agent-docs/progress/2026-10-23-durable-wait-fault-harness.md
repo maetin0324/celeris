@@ -39,9 +39,17 @@ artifacts/c0/analyze.attempts/{0,1}/grade.json、metrics、reaggregated-v2を保
 
 ## コミットと追加検査
 
-実装commitは4f13a062。mainへの反映は配送待ち（このrunからmainへ直接commitしない）。
+実装commitは38a755a5（報告c69d4a2d。旧runの4f13a062と同内容をこのbranchへ載せたもの）。mainへの反映は配送待ち（このrunからmainへ直接commitしない）。
 任意のprogress-index全件検査は既存8文書のfrontmatter不備で非0。本タスクの新規文書は該当せず、必須health gateの対象外。
 
+## attempt 2（必須検査の不合格への対応）
+
+前回はtest-affectedが`credential_wait_notify`の偽webhookで落ちた（HTTP要求前のEOFを空本文として数え、left 3 / right 1）。
+本タスクの差分ではなく、修正165d76e1は既にmainにある。`git merge --no-ff main`（f5a08c93、衝突なし）で取り込んだ。A2の実装は変えていない。
+
+- `bash scripts/dev/test-affected.sh`はexit 0（2600 tests run: 2600 passed、6 skipped、176秒、doc tests合格）。
+- `cargo clippy --workspace -- -D warnings`はexit 0。
+- `cargo fmt --all -- --check`はexit 0。
 
 ## 残る実HPC接続と測定開始可否
 

@@ -705,3 +705,33 @@ fn runbook_does_not_redirect_into_out() {
     }
     assert!(seen > 0);
 }
+
+/// Declaration-only lock can be frozen before runtime approval. It creates no out,
+/// and still rejects a modified grader instead of sealing inconsistent assets.
+#[test]
+fn asset_lock_cli_needs_no_runtime_and_rejects_changed_grade_case() {
+    let f = fx();
+    let result = bin("lock", &f, &[]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let lock: CampaignLock = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(lock, f.lock());
+    assert!(
+        !f.out().exists(),
+        "stdout only; no environment or trial state"
+    );
+    let p = f
+        .inp
+        .grade_cases_root
+        .join("final")
+        .join(K4)
+        .join(format!("{K4}.json"));
+    fs::write(p, "{}").unwrap();
+    let result = bin("lock", &f, &[]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("grade-case hash"));
+    assert!(!f.out().exists());
+}

@@ -330,6 +330,9 @@ def load_pins(path, problems):
     d = load_json(path, problems, "pins.json")
     if d is None:
         return
+    for k in ("RELEASE", "A_VERSION", "CAMPAIGN_BIN_SHA", "A_PROGRAM"):
+        if not d.get(k):
+            problems.append(f"pins.json: {k}: pending: 人が記入")
     for k, v in d.items():
         if k not in PIN_KEYS:
             problems.append(f"pins.json: unknown pin {k}")
@@ -501,6 +504,8 @@ def run_checks(root, lock_dir=None, pins=None):
     try:
         if pins:
             load_pins(pins, problems)
+            if problems:
+                return problems
         return _run_checks(layout_of(root, pinned, main_dir, fixed_dir), main_dir, lock_dir, problems)
     finally:
         globals().update(saved)

@@ -41,5 +41,14 @@ mlsys-main-3 の実 pilot では A が 30/32、B が 28/32（UnifyFS W3 を無�
 - `check-main-pins.py` は `--pins <json>`（または `<root>/pinned/main/pins.json`）で測定ごとの固定値を受け、既定は mlsys-main-1 の値のまま
   （旧 bundle の検査を壊さない）。grade-case の `input_archive` の実在・sha256 を検査し、公開入力と同一 bytes の archive は leak と数えない。
 
+### D3 付記: 運用 pin 未確定時の freeze
+- `celeris-campaign lock --manifest <file> --cases-root <dir> --grader-root <dir> --grade-case-root <dir> --measurement-id <id>` は
+  通常 preflight と同じ `expected_lock` を JSON として stdout に出す。宣言資産の hash を封印する入口で、out・環境・台帳は作らない。
+  取得元の実体照合、env-lock、capability、daemon の確認は従来の preflight / offline-lock が引き続き必須。lock の存在だけでは測定開始不可。
+- pins.json を指定した場合、RELEASE/A_VERSION/CAMPAIGN_BIN_SHA/A_PROGRAM の欠落・空文字は `pending: 人が記入` として非 0 で止める。
+  この場合 main-1 の既定値による後続検査は行わない。pins.json を使わない旧 bundle だけは既定値を維持する。
+- 再 freeze は別の revision dir に置き、旧 bundle と raw/grades の hash を前後で照合する。runtime pin は承認前に推測で補わず、
+  freeze-status.json に取得元・不足物・運用者の手順を記す。無 LLM の fake Host / simulated executor 証跡は実 launcher の承認証跡に代用しない。
+
 ### D4 やらないこと
 - short-ml の `input_archive` 化（次の測定で有効にしない）。既存の測定履歴・raw・grade の書き換え。再採点は新しい grader 版として別 file に保存する。

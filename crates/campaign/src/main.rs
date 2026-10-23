@@ -17,7 +17,7 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <human-op|jev-stages|dry-run|validate|collect-observed|collect-observed-out|stage-grader-inputs|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <human-op|jev-stages|dry-run|validate|lock|collect-observed|collect-observed-out|stage-grader-inputs|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--variant-b0-sha256 <hex>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -405,6 +405,9 @@ fn run(args: Vec<String>) -> Result<String, String> {
             m.validate()?;
             Ok(m.compute_sha256()?)
         }
+        // 宣言資産だけの lock を stdout に出す。環境・source の実証は preflight が別途必須。
+        "lock" => serde_json::to_string_pretty(&cli_lock(&args, &manifest_path, &m)?)
+            .map_err(|e| e.to_string()),
         "env-lock" | "offline-lock" => {
             use celeris_campaign::env_lock;
             let offline = cmd == "offline-lock";

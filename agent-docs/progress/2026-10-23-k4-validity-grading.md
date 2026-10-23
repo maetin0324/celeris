@@ -102,3 +102,40 @@ job 43706 は `review28/qstat-43706.txt` で `F / Exit_status = -20`（BenchFS W
   偽 Discord hook が空の接続を数える、`task-dispatch` の `browser_policy_missing_worker_rejection_is_not_infra_requeue`）。単独再実行と 2 回目は全合格。
   WU の範囲外（crates/celeris・task-dispatch）なので本 WU では直さない。
 - 残り: 新 bundle（main-4）での実 preflight と無 LLM の通し（bundle-nollm WU）、進捗の SHA・試験数の書き直し（close-progress WU）。
+
+## bundle-nollm WU（2026-10-23）
+
+この節は上の旧 bundle に関する記述を更新する。測定開始は不可。進捗本文全体の整理は後続 close-progress WU の対象。
+
+- 旧 main-4 は保持し、成果物 root の mlsys-main-4/revisions/judged-scope-v2 に再 freeze。
+  campaign ID は mlsys-main-4-v2、campaign_sha256 は c678b60a999f95ed8f34d792d3ec3bb6ff2a4f2344885e0951adaf92d9a8048e。
+  K3/K4 の analysis 宣言を含む現行 case を配置した。task-template.max_turns は 100。
+- `celeris-campaign lock` を追加。通常 preflight の expected_lock を stdout に出すだけで環境や台帳を作らない。
+  新版 lock.json の内部 sha256 は abdf0b6147ad830551200218206545a113591d585f4e59bb8498359815d2ae7a。
+  宣言資産の lock であり、環境・取り込み元の実在を承認するものではない。
+- `check-main-pins.py` は pins.json の RELEASE/A_VERSION/CAMPAIGN_BIN_SHA/A_PROGRAM が未記入なら
+  「pending: 人が記入」で非 0 にする。既定の main-1 release による検査は続けない。pins を指定しない旧 bundle の挙動は維持。
+- 成果物 root は /local/celeris/data/workspaces/01M5KVHA4222TK6VEKW599SNMA/artifacts。
+  mlsys-main-4/freeze-status.json に各 pin の frozen/pending、取得元、不足物、運用者の手順を保存。
+  RELEASE、A executable、環境証跡、K2 初期木、project ID 等は未確定。旧 manifest の harness version は引き継いだ候補であり承認 pin ではない。
+- 新版 bundle への実 CLI preflight は mlsys-main-4/nollm/bundle-preflight-pending.json。
+  graders と case-inputs は通過し、K2 repo、cap-env、認証/runtime、project ID、測定設定の不足で exit 1（paid_calls_made=0）。
+  A program は /usr/bin/false を指定し、LLM CLI や daemon を起動していない。
+- 旧 bundle、再採点済み grades、main-3 の原票と grades.jsonl は mlsys-main-4/old-assets-before.json と old-assets-after.json で hash を照合して不変。
+- 無 LLM の実原票監査: `cargo test -p celeris-campaign --test preflight_input_archive real_archive_offline_audit -- --ignored`（K4_AUDIT_DIR と K4_REAL_ARCHIVE を指定）exit 0、1 passed。
+  実 tgz は sha256 128057cf4016535941963fc4142ba424c05c65889905ca2bbcc190f6161077a1、期待 30/32。
+  stage / grade / grade-out / check / export の CLI はすべて exit 0。archive 欠落・sha 不一致の stage と全セル valid の grade は exit 1。
+  preflight の正負例は偽 Host による check / run_gated（負例の transport 呼び出し 0 回）。executor は simulated。
+  実 launcher / daemon の接続成功を意味しない。新版 bundle の実 CLI preflight は上記 blocker により非 0。
+  nollm/summary.json に argv・exit・出力・新版 source hash との一致を保存。nollm/fixture/positive-out に grades・集計・export を保存。
+  原票を展開した fixture/raw も保存した。fixture は KB canary とその hash、監査専用 manifest/runtime だけを変更し、K4 の raw/grade-case は新版と同じ。
+- 初回の監査 fixture では副比較の subset と、正例 out の残存による負例の未作成チェック不一致を修正した。失敗ログは bundle-real-audit.log / bundle-real-audit-v2.log / bundle-real-audit-v3.log、
+  成功ログは bundle-real-audit-final.log。以前の出力は nollm/attempts/v3 に分けた。
+- 最終検査: `python3 scripts/campaign/test_check_main_pins.py` 36 passed、asset_lock_cli_needs_no_runtime_and_rejects_changed_grade_case 1 passed。
+  `bash scripts/dev/test-affected.sh` exit 0（2615 passed / 6 skipped、342.347 秒）、`cargo clippy --workspace -- -D warnings` exit 0、
+  `cargo fmt --all -- --check` exit 0、`git diff --check` exit 0。
+  初回の test-affected は dagbench_harness の graded_limits_and_failed_costs_use_the_formal_entry が compute 時の ENOENT で不合格（2614 passed / 1 failed）。
+  同時ビルド終了後の単独再実行で全合格。範囲外のコード変更は行っていない。
+  ログ: bundle-python-tests.log、bundle-lock-test.log、bundle-test-affected-final.log、bundle-clippy.log、bundle-fmt-final.log。
+- freeze-status は 45 frozen / 14 pending。実 launcher 接続、環境承認、K2 初期木、project ID、共有台帳の確認が残る。
+  K4 pilot はこれらの解消と task 2 の成功契約との統合確認まで開始不可。

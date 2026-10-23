@@ -221,7 +221,8 @@ class CheckMainPins(unittest.TestCase):
         # 別 bundle（mlsys-main-4）: pins.json が無ければ main-1 の値で落ち、あれば通る。
         self.edit_manifest(lambda m: m.__setitem__("campaign_id", "mlsys-main-4"))
         self.assertFlags("campaign_id must be mlsys-main-1")
-        pins = {"CAMPAIGN_ID": "mlsys-main-4"}
+        pins = {k: getattr(cmp_, k) for k in cmp_.PIN_KEYS}
+        pins["CAMPAIGN_ID"] = "mlsys-main-4"
         write_json(os.path.join(self.main, "pins.json"), pins)
         got = self.problems()
         self.assertFalse(any("final.json: campaign_id must be" in p for p in got), got)
@@ -231,6 +232,25 @@ class CheckMainPins(unittest.TestCase):
         got = self.problems()
         self.assertTrue(any("unknown pin BOGUS" in p for p in got), got)
         self.assertTrue(any("PROBLEMS must be a list" in p for p in got), got)
+
+    def test_explicit_pins_never_fall_back_to_main1_release(self):
+        for missing in ("RELEASE", "A_VERSION", "CAMPAIGN_BIN_SHA", "A_PROGRAM"):
+            for value in (None, ""):
+                with self.subTest(pin=missing, value=value):
+                    pins = {k: getattr(cmp_, k) for k in cmp_.PIN_KEYS}
+                    if value is None:
+                        del pins[missing]
+                    else:
+                        pins[missing] = value
+                    path = os.path.join(self.main, "pins.json")
+                    write_json(path, pins)
+                    got = cmp_.run_checks(self.root, pins=path)
+                    self.assertIn(f"pins.json: {missing}: pending: 人が記入", got)
+                    self.assertFalse(any("B must be celeris@" in p for p in got), got)
+                    result = subprocess.run([sys.executable, SCRIPT, "--root", self.root,
+                                             "--pins", path], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("pending: 人が記入", result.stderr)
 
     def test_cli_exit_codes(self):
         cmd = [sys.executable, "-I", SCRIPT, "--root", self.root]

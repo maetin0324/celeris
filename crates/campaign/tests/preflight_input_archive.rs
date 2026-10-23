@@ -425,3 +425,6 @@ fn stage_grader_inputs_cli_stages_or_exits_nonzero_without_placing_anything() {
     );
     st.assert_nothing_placed();
 }
+
+#[path = "preflight_input_archive/real.rs"]
+mod real;

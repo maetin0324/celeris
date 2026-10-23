@@ -63,3 +63,7 @@ job 43706 は `review28/qstat-43706.txt` で `F / Exit_status = -20`（BenchFS W
 
 ## 提案
 - 原票 tgz に監査の答え（`review28/cells-*.csv`）を同梱しない版を次の原票から作る（解答の漏れ経路を減らす）。
+
+## attempt 2（2026-10-23）
+- 前回の不合格は test-affected.sh の文書 path 検査だけ（docs/architecture-map.md の `` `results/cells.csv` `` を repo の path として扱った）。提出物の path なので backtick を外した。
+- `bash scripts/dev/test-affected.sh` exit 0（nextest 2594 passed / 4 skipped、check-doc-links ok）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。

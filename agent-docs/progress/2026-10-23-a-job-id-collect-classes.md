@@ -29,7 +29,7 @@ ADR: `agent-docs/adr/2026-10-23-a-submit-audit-and-collect-classes.md`。
 - scheduler・qsub はすべて stub/固定応答（origin=synthetic 相当）。実 cluster・実 LLM には触れていない。
 
 ## 検査結果
-- `bash scripts/dev/test-affected.sh`: exit 0（nextest 2586 passed, 4 skipped。対象 celeris, celeris-campaign, celerisctl, llm-proxy, task-dispatch）
+- `bash scripts/dev/test-affected.sh`: exit 0（旧値。最終は下記の 2588 passed。対象 celeris, celeris-campaign, celerisctl, llm-proxy, task-dispatch）
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo fmt --all -- --check`: exit 0
 - 参考: `cargo clippy --all-targets` は main 既存の `crates/task-api/tests/common/cos_ops.rs:14` の needless_borrow で落ちる（本変更と無関係、未修正）。
@@ -48,6 +48,22 @@ ADR: `agent-docs/adr/2026-10-23-a-submit-audit-and-collect-classes.md`。
 ## 本番への移行
 - config・DB の変更なし。A の cap-env に wrapper の mount と 2 つの env を足すのは人の運用（上記）。
 
-## 再試行での補完
+## 再試行での補完（attempt 2〜3 と差し戻し対応）
 
-前回レビューで GradeBinding 以降の収集分類が欠けていたため、再試行で修正した。実装・検証と測定開始条件は [再試行報告](../../docs/progress/2026-10-23-collector-binding-retry.md) に記録する。
+main 反映 commit（rebase 後）: `011e11fb`（受理記録・track・台帳・分類）、`268bbde9`（GradeBinding への分類保持）、`4883fac6`（報告）、`d30deca4`（check/export の独立集計）と、本差し戻し対応の commit（unwrap 除去と報告の統合）。以前の報告にあった `e75f3e76`・`9481ce03`・`2e21d7ac` は rebase 前の hash で、現在の履歴の祖先ではない。確認した main は `13d64acd1780` のまま。
+
+### 実装
+- `GradeOutcome::ObservationFailure(Vec<CollectIssue>)` で収集の分類と詳細を保持する。bind は非空の既知分類、dominant failure_class と grade の一致、final_pass=false を検査する（比較は文字列値で行い、unwrap を使わない）。observation 欄の無い従来の grade は従来どおり。
+- check/export の `observation_failed` は収集失敗の cell 数、`observation_failures` は分類別 cell 数（複数分類の cell は重複するので和を分母に使わない）。executor の結果（passed/failed/timeout）と独立に全 cell で数える。排他の内訳用に `grader_observation_failed`（executor passed で収集失敗）を持ち、`failure_breakdown` はこれを使う。JSON・CSV の両方に出す。not_submitted 以外は complete=false とし、再収集・再採点の案内を出す。
+- 観測障害は workflow fault の `fault_breakdown` に混ぜない。`faults::reconcile` の `observation_breakdown`（注入状態 × observation_failed / no_collector_failure）が観測障害の軸で、`fault_breakdown` は注入状態 × executor/grade 結果のまま。
+- 試験: `launcher` に取得失敗 → grade → binding → check/export の通常経路の確認を追加（再収集後に分類が消え、分母・時間・消費・trials.jsonl が不変、旧 grade は grades.history.jsonl に残る）。`grade_failure_class` は全 7 分類、重複不計上、矛盾した failure_class の拒否、failed/timeout cell の fetch_failed 計数を確認する。
+- 通知試験 `credential_wait_notify` の偽 webhook を、完全な要求だけを記録し受信記録を応答前に確定するよう局所修正した（試験のみ。本番の通知処理は不変）。
+- ADR `agent-docs/adr/2026-10-23-a-submit-audit-and-collect-classes.md` D6 に反映済み。
+
+### 最終検査（本差し戻し対応後）
+- `bash scripts/dev/test-affected.sh`: exit 0（2588 tests run: 2588 passed、4 skipped、doc tests 成功）
+- `cargo clippy --workspace -- -D warnings`: exit 0
+- `cargo fmt --all -- --check`: exit 0
+
+### 証拠の保存と測定開始条件
+実測定の raw・grade・集計は新規作成していない（試験は tempfile の合成データ）。既存の履歴は変更していない。K2/HPC 比較は引き続き**開始不可**: Sirius の qstat Variable_List に trial 印が残ることの実機確認（取得元: Sirius の scheduler 記録）、測定用 A の cap-env/prompt への wrapper 導入（設定元: 測定 campaign の A cap-env と case prompt）、タスク 1・2 の成立が必要。fixture の成功でこれらを代替しない。本番設定の変更・実 pilot・有料評価は実施していない。

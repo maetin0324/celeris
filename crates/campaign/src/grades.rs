@@ -221,11 +221,12 @@ pub fn bind(
                 Ok(issues)
                     if !issues.is_empty()
                         && !fp
-                        && v["observation"]["failure_class"]
-                            == serde_json::to_value(crate::observe::dominant_failure_class(
-                                &issues,
-                            ))
-                            .unwrap()
+                        && serde_json::to_value(crate::observe::dominant_failure_class(
+                            &issues,
+                        ))
+                        .ok()
+                        .as_ref()
+                            == Some(&v["observation"]["failure_class"])
                         && v["grade"]["failure_class"] == v["observation"]["failure_class"] =>
                 {
                     GradeOutcome::ObservationFailure(issues)

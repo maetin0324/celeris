@@ -136,9 +136,10 @@ fn sigterm_kills_the_worker_process_and_exits_130() {
     };
     store.create_task(&task, vec![]).unwrap();
     let script = root.join("worker.sh");
+    // Publish only the complete PID: file creation precedes echo writing its contents.
     std::fs::write(
         &script,
-        "cat >/dev/null\necho $$ > worker.pid\nexec sleep 60\n",
+        "cat >/dev/null\necho $$ > worker.pid.tmp\nmv worker.pid.tmp worker.pid\nexec sleep 60\n",
     )
     .unwrap();
     let config = write_config(&root, &script);

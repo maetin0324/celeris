@@ -82,3 +82,23 @@ job 43706 は `review28/qstat-43706.txt` で `F / Exit_status = -20`（BenchFS W
 - 前回 run は crates/celeris/tests/credential_wait_notify.rs の偽 webhook 補修（7cf00c45）を含み、WU の範囲 check が範囲外として不合格。8102013e で revert した（同等の修正は main 165d76e1 にあり、main 取り込みで入る）。
 - judged_scope 修正 98c29a8c は維持。`cargo test -p celeris-campaign --test k_case_judged_scope` 2 passed。
 - test-affected exit 0（2602 passed / 5 skipped）、clippy・fmt exit 0。範囲 check の out-of-scope は空。
+
+## preflight-reject WU（2026-10-23、attempt 3）
+- 新しい試験 `crates/campaign/tests/preflight_input_archive.rs`（`cargo test -p celeris-campaign --test preflight_input_archive`: 12 passed）。
+  fixture は `synth::healthy().install_k4_fixture`、tgz は `asset_assembly::create_tgz` で作る。外部には出ない。
+  - preflight の正例: `preflight_accepts_the_synthetic_k4_archive`
+  - preflight の負例（`check` が `graders` だけを不足にし、`run_gated` が transport 0 回・out 無しで止まる＝LLM run を起こさない）:
+    `preflight_rejects_a_missing_grader_archive`（grade-case の隣に無い）、`preflight_rejects_an_archive_that_differs_from_the_pinned_sha256`、
+    `preflight_rejects_a_grader_archive_whose_bytes_differ_from_the_public_input`、`preflight_rejects_an_archive_that_cannot_be_extracted`、
+    `preflight_rejects_an_archive_whose_raw_differs_from_pinned_raw`、`preflight_rejects_an_archive_from_which_cells_cannot_be_recomputed`
+  - stage-grader-inputs（`inputs::stage_grader_inputs` と CLI）: `stage_grader_inputs_places_the_pinned_archive_next_to_the_grade_case`、
+    `stage_grader_inputs_rejects_a_missing_archive_and_places_nothing`、`stage_grader_inputs_rejects_a_hash_mismatch_and_places_nothing`、
+    `stage_grader_inputs_validates_every_case_before_copying_any`、`stage_grader_inputs_cli_stages_or_exits_nonzero_without_placing_anything`
+- 見つかった穴と修正（`crates/campaign/src/inputs.rs`）: `stage_grader_inputs` は case を順に照合しながら写していたため、後ろの case の archive が
+  欠落・不一致だと前の case の tgz を置いたまま Err になっていた。全 case を照合してから写す 2 段に変え、写しの失敗時は `.partial` を消す。
+  preflight.rs の `check_input_archive` は各 miss を既に区別して返しており変更なし。
+- 必須検査: `bash scripts/dev/test-affected.sh` exit 0（2614 passed/5 skipped）、`cargo clippy --workspace -- -D warnings` exit 0、
+  `cargo fmt --all -- --check` exit 0。1 回目の test-affected は範囲外の負荷 flake 4 件で exit 100（`celeris::root_done_summary` 3 件は
+  偽 Discord hook が空の接続を数える、`task-dispatch` の `browser_policy_missing_worker_rejection_is_not_infra_requeue`）。単独再実行と 2 回目は全合格。
+  WU の範囲外（crates/celeris・task-dispatch）なので本 WU では直さない。
+- 残り: 新 bundle（main-4）での実 preflight と無 LLM の通し（bundle-nollm WU）、進捗の SHA・試験数の書き直し（close-progress WU）。

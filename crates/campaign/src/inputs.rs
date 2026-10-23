@@ -252,14 +252,15 @@ impl Seeder<'_> {
 
 /// grade-case の `recompute.input_archive`（評価側の固定入力 tgz）を `<inputs_src>/<name>` から grade-case の隣へ写す
 /// （ADR 2026-10-23-k4-cells-validity-grading D3）。`only` があればその case id だけ（manifest の problems）。sha256 が grade-case の固定と違えば写さず Err。既に同じ bytes が
-/// 在れば何もしない。戻り値は写した一覧（launcher の prepare が表示する）。
+/// 在れば何もしない。全 case を照合し終えてから写すので、1 件でも Err なら grade-case の隣には何も置かない。
+/// 戻り値は写した一覧（launcher の prepare が表示する）。
 pub fn stage_grader_inputs(
     grade_cases_root: &Path,
     inputs_src: &Path,
     only: Option<&[String]>,
 ) -> Result<Vec<String>, String> {
     use crate::grader::{GradeCase, safe_join, sha256_file};
-    let mut done = Vec::new();
+    let mut todo = Vec::new();
     for split in ["dev", "final"] {
         let Ok(rd) = std::fs::read_dir(grade_cases_root.join(split)) else {
             continue;
@@ -311,14 +312,21 @@ pub fn stage_grader_inputs(
                     a.sha256
                 ));
             }
-            if let Some(d) = dest.parent() {
-                std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
-            }
-            let tmp = dest.with_extension("tgz.partial");
-            std::fs::copy(&src, &tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
-            std::fs::rename(&tmp, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-            done.push(format!("{id}: {name} -> {}", dest.display()));
+            todo.push((id, name, src, dest));
         }
+    }
+    let mut done = Vec::new();
+    for (id, name, src, dest) in todo {
+        if let Some(d) = dest.parent() {
+            std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+        }
+        let tmp = dest.with_extension("tgz.partial");
+        if let Err(e) = std::fs::copy(&src, &tmp) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("{}: {e}", tmp.display()));
+        }
+        std::fs::rename(&tmp, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+        done.push(format!("{id}: {name} -> {}", dest.display()));
     }
     Ok(done)
 }

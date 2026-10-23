@@ -8,7 +8,8 @@ status: done
 # 必須検査と候補 SHA の対応保証（健全性 5）
 
 ADR: `agent-docs/adr/2026-10-23-required-checks-bound-to-candidate.md`
-基準: `git merge-base HEAD main`（task branch の base。rebase で動くので固定 hash は書かない）。
+基準 SHA（着手時の main）: d7cb0fd459263ad52c432959b188c7abfbd81c2d（main の祖先なので rebase で変わらない）。
+比較の基準（test-affected・変更範囲）は `git merge-base HEAD main`（最後の target 同期の基底。main の進行で動く）。
 起票直前の main は根拠の鮮度の参考値で、比較基準ではない。
 変更範囲: `git diff "$(git merge-base HEAD main)"..HEAD`（celeris/delivery.rs、task-dispatch の review/review_spawn/review_verdict、task-core の required_checks と event、task-worker の browser launcher 試験、docs/api・web/api の生成物、workspace.toml・ADR・guide、scripts/dev/tests/test-affected-list.sh）。
 
@@ -150,6 +151,13 @@ hash は rebase で変わるので書かない。
 検査は提出時の candidate（その時点の HEAD、最後の rebase の後）で再実行した。hash は rebase で変わるので書かない。直前の commit からこの節の追記までの差分は本進捗文書だけで、コードの tree は同じ。
 - `bash scripts/dev/test-affected.sh`（WU 基準 `CELERIS_WU_BASE`）: exit 0（health gate・文書検査合格、docs のみの差分で Rust 試験対象なし）
 - `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh`（task 基準 = `git merge-base HEAD main`）: exit 0、6336 tests run: 6336 passed、18 skipped
+- `cargo clippy --workspace -- -D warnings`: exit 0
+- `cargo fmt --all -- --check`: exit 0
+
+## 提出時の HEAD での検査（progress-base-sha WU）
+着手時 main の基準 SHA を戻した後、提出時の HEAD（コードの tree は同じ、差分は本進捗文書だけ）で再実行した。
+- `bash scripts/dev/test-affected.sh`（WU 基準 `CELERIS_WU_BASE`）: exit 0（health gate・文書検査合格、docs のみの差分で Rust 試験対象なし）
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh`（task 基準 = `git merge-base HEAD main`）: exit 0、6339 tests run: 6339 passed、18 skipped
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo fmt --all -- --check`: exit 0
 - 全 workspace の試験・web e2e・本物の browser/userns 試験は実行・追加していない（release gate だけ）。

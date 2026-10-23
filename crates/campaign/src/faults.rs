@@ -146,6 +146,7 @@ pub(crate) fn reconcile(
                         Some(GradeOutcome::EnvFailure) => "grader_env_failure",
                         Some(GradeOutcome::Undetermined) => "grader_undetermined",
                         Some(GradeOutcome::ControlOnly) => "grader_control_only",
+                        Some(GradeOutcome::ObservationFailure(_)) => "observation_failed",
                         None => "ungraded",
                     },
                     Some(Outcome::Failed) => "executor_failed",

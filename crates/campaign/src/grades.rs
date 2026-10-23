@@ -23,7 +23,7 @@ pub fn key_of(r: &TrialRecord) -> TrialKey {
 
 /// 結合検査を通った独立採点の結果。`final_pass` の bool に潰さず、不合格の原因を保つ（checker・export まで届く）。
 /// 成功に数えるのは `Passed` だけ。残りは分母に残り、原因別に数える。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GradeOutcome {
     Passed,
     /// 成果物の不合格（初期 tree が健全で、モデルの変更が壊した）。
@@ -34,12 +34,15 @@ pub enum GradeOutcome {
     Undetermined,
     /// control（fixture/mock）case。検査が通っても最終合格ではない。
     ControlOnly,
+    /// Collector issues, kept separate from grader defects and workflow faults.
+    ObservationFailure(Vec<crate::observe::CollectIssue>),
 }
 
 impl GradeOutcome {
     /// 再採点（環境修復・初期 tree の指定）まで結論を出せない結果か。
-    pub fn needs_regrade(self) -> bool {
+    pub fn needs_regrade(&self) -> bool {
         matches!(self, Self::EnvFailure | Self::Undetermined)
+            || matches!(self, Self::ObservationFailure(issues) if issues.iter().any(|i| i.class != crate::observe::CollectClass::NotSubmitted))
     }
 }
 
@@ -209,6 +212,33 @@ pub fn bind(
                     continue;
                 }
             }
+        };
+        let outcome = if v["observation"]["status"] == "collect_failed" {
+            let issues = serde_json::from_value::<Vec<crate::observe::CollectIssue>>(
+                v["observation"]["issues"].clone(),
+            );
+            match issues {
+                Ok(issues)
+                    if !issues.is_empty()
+                        && !fp
+                        && v["observation"]["failure_class"]
+                            == serde_json::to_value(crate::observe::dominant_failure_class(
+                                &issues,
+                            ))
+                            .unwrap()
+                        && v["grade"]["failure_class"] == v["observation"]["failure_class"] =>
+                {
+                    GradeOutcome::ObservationFailure(issues)
+                }
+                _ => {
+                    b.violations
+                        .push(format!("{tag}: invalid collector failure classification"));
+                    rejected.push(key);
+                    continue;
+                }
+            }
+        } else {
+            outcome
         };
         b.valid.insert(key, outcome);
     }

@@ -402,3 +402,75 @@ fn fault_declaration_without_confirmed_injection_is_incomplete_and_bad_binding_i
         normal.compute_sha256().unwrap()
     });
 }
+
+#[test]
+fn collector_classes_remain_distinct_from_grader_and_injected_faults() {
+    use celeris_campaign::observe::CollectClass as C;
+    for class in [
+        C::NotSubmitted,
+        C::NotFinished,
+        C::FetchFailed,
+        C::Unobserved,
+        C::IdentityMismatch,
+        C::ArtifactChanged,
+        C::EvaluatorAsset,
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let (m, out) = pilot_out_with_faults(d.path(), true);
+        write_faults(&out, &fault_records(&m, &out, "injected"));
+        let fc = serde_json::to_value(class.failure_class()).unwrap();
+        let failure_name = match class.failure_class() {
+            celeris_campaign::grader::FailureClass::ModelFailure => "model_failure",
+            celeris_campaign::grader::FailureClass::EnvFailure => "env_failure",
+            celeris_campaign::grader::FailureClass::Undetermined => "undetermined",
+        };
+        common::write_grades_classed(&m, &out, |_| Some(failure_name));
+        let path = out.join(GRADES_FILE);
+        let lines: Vec<Value> = fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| {
+                let mut v: Value = serde_json::from_str(l).unwrap();
+                v["observation"] = json!({
+                    "status": "collect_failed", "failure_class": fc,
+                    "issues": [
+                        {"class": class, "detail": "scheduler query one"},
+                        {"class": class, "detail": "scheduler query two"},
+                    ]
+                });
+                v
+            })
+            .collect();
+        fs::write(
+            &path,
+            lines.iter().map(|v| format!("{v}\n")).collect::<String>(),
+        )
+        .unwrap();
+        let rep = check(&m, &out);
+        assert!(rep.ok, "{:?}", rep.violations);
+        assert_eq!(rep.complete, class == C::NotSubmitted);
+        let table = export(&m, &out, &out.join("ex")).unwrap();
+        let name = serde_json::to_value(class).unwrap();
+        for row in table["configs"].as_array().unwrap() {
+            assert_eq!(row["observation_failed"], row["n"]);
+            assert_eq!(
+                row["observation_failures"][name.as_str().unwrap()],
+                row["n"]
+            );
+            assert_eq!(row["grader_env_failure"], 0);
+            assert_eq!(row["grader_undetermined"], 0);
+            assert_eq!(row["grader_failed"], 0);
+            assert_eq!(row["fault_breakdown"]["injected"]["observation_failed"], 1);
+            assert_eq!(row["n"], 2);
+        }
+        // An internally inconsistent collector classification must not be accepted.
+        let mut invalid = lines;
+        invalid[0]["observation"]["failure_class"] = json!("bogus");
+        fs::write(
+            &path,
+            invalid.iter().map(|v| format!("{v}\n")).collect::<String>(),
+        )
+        .unwrap();
+        assert!(!check(&m, &out).ok);
+    }
+}

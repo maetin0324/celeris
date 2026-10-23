@@ -41,6 +41,12 @@ pub struct Totals {
     /// 分母に残り、成功にも `grader_failed` にも数えない。再採点まで未確定で、`complete=false` にする。
     #[serde(default)]
     pub grader_env_failure: u64,
+    /// Collector failures by class (one count per cell/class; multiple classes may overlap).
+    #[serde(default)]
+    pub observation_failures: BTreeMap<String, u64>,
+    /// Cells with collector failures; disjoint from grader failure counts.
+    #[serde(default)]
+    pub observation_failed: u64,
     /// 実行器は passed だが独立採点の不合格の原因が決められない（初期 tree 未指定）。再採点まで未確定で `complete=false`。
     #[serde(default)]
     pub grader_undetermined: u64,
@@ -951,6 +957,13 @@ pub fn check_expected(
                 t.ungraded
             ));
         }
+        for (class, count) in &t.observation_failures {
+            if class != "not_submitted" {
+                reasons.push(format!(
+                    "{c:?}: {count} collector failures ({class}); repair observation source, re-collect and re-grade"
+                ));
+            }
+        }
         if t.grader_env_failure > 0 {
             reasons.push(format!(
                 "{c:?}: {} executor-passed trials failed grading for a grader/initial-asset defect (env_failure, not a model failure); fix the environment and re-grade",
@@ -1007,6 +1020,28 @@ pub fn recompute_graded(
             S::GraderEnvFailure => t.grader_env_failure += 1,
             S::GraderUndetermined => t.grader_undetermined += 1,
             S::ControlOnly => t.grader_control_only += 1,
+            S::ObservationFailed => {
+                t.observation_failed += 1;
+                use crate::grades::GradeOutcome as G;
+                if let Some(G::ObservationFailure(issues)) = cell
+                    .canonical_trial_no
+                    .and_then(|n| grades.get(&(cell.config, cell.problem_id.clone(), cell.rep, n)))
+                {
+                    let classes: std::collections::BTreeSet<String> = issues
+                        .iter()
+                        .map(|i| {
+                            serde_json::to_value(i.class)
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                                .to_owned()
+                        })
+                        .collect();
+                    for class in classes {
+                        *t.observation_failures.entry(class).or_default() += 1;
+                    }
+                }
+            }
             S::Ungraded => t.ungraded += 1,
             S::ExecutorFailed => t.failed += 1,
             S::ExecutorError => t.error += 1,

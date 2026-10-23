@@ -38,6 +38,8 @@ pub enum SuccessClass {
     GraderUndetermined,
     /// executor passed、control case（最終合格にならない）。
     ControlOnly,
+    /// executor passed、収集（観測）の失敗で採点できなかった。再収集・再採点まで未確定。
+    ObservationFailed,
     /// executor passed、有効な採点が無い（未採点・結合検査で拒否）。
     Ungraded,
     ExecutorFailed,
@@ -57,6 +59,7 @@ impl SuccessClass {
             Self::GraderEnvFailure => "grader_env_failure",
             Self::GraderUndetermined => "grader_undetermined",
             Self::ControlOnly => "control_only",
+            Self::ObservationFailed => "observation_failed",
             Self::Ungraded => "ungraded",
             Self::ExecutorFailed => "executor_failed",
             Self::ExecutorError => "executor_error",
@@ -73,12 +76,15 @@ impl SuccessClass {
 
     /// 再採点（環境修復・初期 tree の指定）まで結論を出せない。
     pub fn needs_regrade(self) -> bool {
-        matches!(self, Self::GraderEnvFailure | Self::GraderUndetermined)
+        matches!(
+            self,
+            Self::GraderEnvFailure | Self::GraderUndetermined | Self::ObservationFailed
+        )
     }
 }
 
 /// 1 試行の記録と（あれば）結合済みの採点から結論を出す。
-pub fn classify(r: Option<&TrialRecord>, grade: Option<GradeOutcome>) -> SuccessClass {
+pub fn classify(r: Option<&TrialRecord>, grade: Option<&GradeOutcome>) -> SuccessClass {
     use SuccessClass as S;
     let Some(r) = r else { return S::Missing };
     match r.outcome {
@@ -88,6 +94,7 @@ pub fn classify(r: Option<&TrialRecord>, grade: Option<GradeOutcome>) -> Success
             Some(GradeOutcome::EnvFailure) => S::GraderEnvFailure,
             Some(GradeOutcome::Undetermined) => S::GraderUndetermined,
             Some(GradeOutcome::ControlOnly) => S::ControlOnly,
+            Some(GradeOutcome::ObservationFailure(_)) => S::ObservationFailed,
             None => S::Ungraded,
         },
         Outcome::Failed => S::ExecutorFailed,
@@ -138,7 +145,7 @@ pub fn cells(
         for p in &probs {
             for rep in 1..=m.repeats {
                 let r = first.get(&(c, p.as_str(), rep)).copied();
-                let grade = r.and_then(|r| grades.get(&key_of(r)).copied());
+                let grade = r.and_then(|r| grades.get(&key_of(r)));
                 out.insert(
                     (c, p.clone(), rep),
                     Cell {

@@ -73,9 +73,12 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
     // 固定分母 n の総合値（pass_rate = final_passed / n）と、不成功の原因別内訳は別に持つ。
     // grader_env_failure / grader_undetermined は再採点前の未確定で、モデルの失敗に混ぜない
     // （complete=false で最終表を止める）。
+    row["observation_failed"] = json!(t.observation_failed);
+    row["observation_failures"] = json!(t.observation_failures);
     row["fault_breakdown"] = json!(t.fault_breakdown);
     row["failure_breakdown"] = json!({
         "model_failure": t.grader_failed,
+        "observation_failed": t.observation_failed,
         "grader_env_failure": t.grader_env_failure,
         "grader_undetermined": t.grader_undetermined,
         "grader_control_only": t.grader_control_only,
@@ -90,7 +93,7 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
     row
 }
 
-pub const COLUMNS: [&str; 41] = [
+pub const COLUMNS: [&str; 43] = [
     "config",
     "harness",
     "model",
@@ -107,6 +110,8 @@ pub const COLUMNS: [&str; 41] = [
     "final_passed",
     "ungraded",
     "grader_failed",
+    "observation_failed",
+    "observation_failures",
     "grader_env_failure",
     "grader_undetermined",
     "grader_control_only",

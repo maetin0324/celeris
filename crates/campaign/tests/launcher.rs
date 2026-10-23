@@ -1267,6 +1267,36 @@ fn grade_collects_job_observations_bound_to_the_trial_and_rejects_every_mismatch
         "{l}"
     );
 
+    // The actual collect -> grade -> binding -> check/export path must retain the cause.
+    let manifest =
+        celeris_campaign::manifest::CampaignManifest::load(&out.join("campaign.json")).unwrap();
+    let check = celeris_campaign::checker::check(&manifest, &out);
+    assert!(check.ok, "{:?}", check.violations);
+    assert!(!check.complete);
+    assert!(
+        check
+            .incomplete_reasons
+            .iter()
+            .any(|r| r.contains("fetch_failed") && r.contains("re-collect and re-grade"))
+    );
+    let before = serde_json::to_value(check.recomputed.unwrap().totals).unwrap();
+    assert_eq!(before["A"]["observation_failures"]["fetch_failed"], 1);
+    assert_eq!(before["A"]["grader_env_failure"], 0);
+    let table =
+        celeris_campaign::export::export(&manifest, &out, &out.join("collector-export")).unwrap();
+    let a = table["configs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["config"] == "A")
+        .unwrap();
+    assert_eq!(a["observation_failures"]["fetch_failed"], 1);
+    assert_eq!(a["fault_breakdown"]["not_planned"]["observation_failed"], 1);
+    assert_eq!(table["complete"], false);
+    let csv = fs::read_to_string(out.join("collector-export/table.incomplete.csv")).unwrap();
+    assert!(csv.contains("fetch_failed"));
+    let trials_before = fs::read(out.join("trials.jsonl")).unwrap();
+
     // 未終了（job_state=R）: 記録を作らず collect は非 0。grade は続き、その試行は観測なしとして成功にならない。
     reply("R");
     let o = launch(&f, "collect");
@@ -1319,6 +1349,37 @@ fn grade_collects_job_observations_bound_to_the_trial_and_rejects_every_mismatch
     assert!(
         !line.contains("no evaluator-collected") && !line.contains("does not match"),
         "{line}"
+    );
+    let after = serde_json::to_value(
+        celeris_campaign::checker::check(&manifest, &out)
+            .recomputed
+            .unwrap()
+            .totals,
+    )
+    .unwrap();
+    assert!(
+        after["A"]["observation_failures"]
+            .get("fetch_failed")
+            .is_none()
+    );
+    for key in [
+        "n",
+        "passed",
+        "tokens_sum",
+        "cost_micro_usd_sum",
+        "ran_trials",
+        "wall_secs_sum",
+    ] {
+        assert_eq!(before["A"][key], after["A"][key], "{key}");
+    }
+    assert_eq!(fs::read(out.join("trials.jsonl")).unwrap(), trials_before);
+    let history = fs::read_to_string(out.join("grades.history.jsonl")).unwrap();
+    assert!(
+        history.lines().any(|line| {
+            let row: Value = serde_json::from_str(line).unwrap();
+            row["observation"]["issues"][0]["class"] == "fetch_failed"
+        }),
+        "{history}"
     );
     let good = fs::read(&obs).unwrap();
 

@@ -43,6 +43,8 @@ join は task_id で試行に結び `event_waits`、`run` 行の `is_retry` を 
 `counts_as_human_op`（protocol_step・intent protocol・automatic を除く）を介入・人の時間・再作業に共通で使う。除外した op を含む論理作業の
 attempt は再作業に数えない。観測窓の終端は cutoff、無ければ試行終了（ledger start + wall）で、その後に始まった op・attempt は数えない。
 試行開始前の同じ identity の記録（準備・再起動）は数える（終端だけで切る）。
+観測の有無は項目ごとに持つ（付記 2026-10-23、差し戻し対応）: op 記録（`op_start`/`op_end`）が無い試行の介入・人の時間、
+attempt を持つ記録が無い試行の再作業は欠測（null）で、cutoff・job・wait だけの記録から観測済みの 0 を作らない。
 
 ### D6 CSV は RFC 4180
 `crate::csv`（writer と parser）で quoting する。外部 crate は足さない。`export::csv_table` が表を作り、試験は parser で列数と JSON セルを確かめる。

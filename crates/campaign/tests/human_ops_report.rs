@@ -710,3 +710,78 @@ fn b_waits_auto_retries_and_event_refs_join_from_export_rows() {
     assert_eq!(w["open"], 1, "決定の無い approval は open（0 秒にしない）");
     assert_eq!(j["arms"]["B0"]["auto_retries"], 1);
 }
+
+/// cutoff・job・wait の記録だけでは、介入・人の時間・再作業を観測したことにならない（0 と欠測を区別する）。
+/// op を 1 件でも記録した試行は観測済みで、protocol だけなら 0（観測済みの 0）になる。
+#[test]
+fn cutoff_or_job_only_records_leave_human_time_and_rework_unobserved() {
+    let d = tempfile::tempdir().expect("tmp");
+    write_trials(d.path());
+    let f = d.path().join("human-ops.jsonl");
+    let f = f.to_str().expect("p");
+    // A0: cutoff と job 観測だけ（op・attempt 記録なし）。
+    span(
+        f,
+        "A0",
+        &["--kind", "cutoff", "--occurred-at", "2026-10-22T09:00:00Z"],
+    );
+    span(
+        f,
+        "A0",
+        &[
+            "--kind",
+            "job",
+            "--job-ref",
+            "pbs:sirius:1",
+            "--job-submit",
+            "2026-10-22T00:01:00Z",
+            "--job-start",
+            "2026-10-22T00:02:00Z",
+            "--job-end",
+            "2026-10-22T00:03:00Z",
+        ],
+    );
+    // B0: protocol の op だけ（評価者は見ていた。人の介入は観測済みの 0）。
+    rec(
+        f,
+        "B0",
+        &[
+            "--op-kind",
+            "protocol_step",
+            "--intent",
+            "protocol",
+            "--logical-op",
+            "trial-start",
+            "--started-at",
+            "2026-10-22T00:00:00Z",
+            "--ended-at",
+            "2026-10-22T00:00:10Z",
+        ],
+    );
+    let j = run_report(f, d.path(), &d.path().join("o"));
+    let a = &j["trials"][0];
+    assert_eq!(a["arm_labels"][0], "A0", "{a}");
+    for k in ["human_time", "interventions", "rework"] {
+        assert_eq!(a[k]["source"], "missing", "{k}: {a}");
+        assert_eq!(a[k]["value"], Value::Null, "{k}");
+    }
+    assert_eq!(
+        a["external_queue_wait"]["value"]["union_secs"], 60,
+        "job 観測は観測済み"
+    );
+    let arm = &j["arms"]["A0"];
+    assert_eq!(arm["human_time_missing_trials"], 1, "{arm}");
+    assert_eq!(arm["rework_missing_trials"], 1);
+    assert_eq!(arm.get("human_union_secs"), None, "欠測を 0 秒に足さない");
+
+    let b = &j["trials"][1];
+    assert_eq!(b["human_time"]["source"], "evaluator", "{b}");
+    assert_eq!(b["human_time"]["value"]["union_secs"], 0);
+    assert_eq!(b["interventions"]["value"], json!({}));
+    assert_eq!(b["rework"]["source"], "evaluator");
+    assert_eq!(j["arms"]["B0"]["human_union_secs"], 0);
+    assert_eq!(j["arms"]["B0"].get("human_time_missing_trials"), None);
+
+    let md = fs::read_to_string(d.path().join("o/report.md")).expect("md");
+    assert!(md.contains("| A0 |"), "{md}");
+}

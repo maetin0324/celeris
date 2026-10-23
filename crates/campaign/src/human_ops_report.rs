@@ -182,6 +182,19 @@ struct TrialEval {
     bases: BTreeMap<String, u64>,
     cutoff: Option<i64>,
     window: Window,
+    /// op 記録（op_start/op_end。protocol・automatic を含む）の件数。0 なら介入・人の時間は未観測（0 にしない）。
+    op_records: u32,
+    /// attempt の記録（op_start または attempt 行で logical_op_id と attempt を持つもの）の件数。0 なら再作業は未観測。
+    attempt_records: u32,
+}
+
+impl TrialEval {
+    fn ops_observed(&self) -> bool {
+        self.op_records > 0
+    }
+    fn attempts_observed(&self) -> bool {
+        self.attempt_records > 0
+    }
 }
 
 fn eval_trial(recs: &[&HumanOpRecord], trial_end: Option<i64>) -> TrialEval {
@@ -228,6 +241,8 @@ fn eval_trial(recs: &[&HumanOpRecord], trial_end: Option<i64>) -> TrialEval {
         bases: BTreeMap::new(),
         cutoff,
         window,
+        op_records: 0,
+        attempt_records: 0,
     };
     for r in &owned {
         if r.clock_source == crate::human_ops::ClockSource::Unknown {
@@ -238,6 +253,15 @@ fn eval_trial(recs: &[&HumanOpRecord], trial_end: Option<i64>) -> TrialEval {
         }
         let b = r.time_basis.map_or("unknown", |b| b.as_str());
         *t.bases.entry(b.to_string()).or_default() += 1;
+        if matches!(r.record_type, RecordType::OpStart | RecordType::OpEnd) {
+            t.op_records += 1;
+        }
+        if matches!(r.record_type, RecordType::OpStart | RecordType::Attempt)
+            && r.logical_op_id.is_some()
+            && r.attempt.is_some()
+        {
+            t.attempt_records += 1;
+        }
     }
     for (rec, span) in op_spans(&owned) {
         let kind = rec.op_kind.map_or("unclassified", |k| k.as_str());
@@ -529,16 +553,23 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
         };
         match &ev {
             Some(e) => {
-                t.insert(
-                    "interventions".into(),
-                    field(counts_json(&e.interventions), "evaluator"),
-                );
+                // op 記録が 1 件も無ければ、介入・人の時間は観測していない（cutoff・job・wait だけの記録で 0 にしない）。
+                let no_ops = "この試行に評価者の op 記録が無い（未観測。0 ではない）";
+                if e.ops_observed() {
+                    t.insert(
+                        "interventions".into(),
+                        field(counts_json(&e.interventions), "evaluator"),
+                    );
+                    t.insert("human_time".into(), e.human_time.json("evaluator"));
+                } else {
+                    t.insert("interventions".into(), missing(no_ops));
+                    t.insert("human_time".into(), missing(no_ops));
+                }
                 t.insert(
                     "excluded_ops".into(),
                     json!({"automatic": e.automatic_ops, "protocol": e.protocol_ops,
                            "after_window": e.after_window_ops}),
                 );
-                t.insert("human_time".into(), e.human_time.json("evaluator"));
                 t.insert(
                     "human_wait".into(),
                     spans_or(
@@ -562,9 +593,13 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
                 );
                 t.insert(
                     "rework".into(),
-                    json!({"value": {"count": e.rework, "after_window": e.rework_after_window,
-                                     "failed_attempt_secs": e.rework_secs.json("evaluator")["value"]},
-                           "source": "evaluator"}),
+                    if e.attempts_observed() {
+                        json!({"value": {"count": e.rework, "after_window": e.rework_after_window,
+                                         "failed_attempt_secs": e.rework_secs.json("evaluator")["value"]},
+                               "source": "evaluator"})
+                    } else {
+                        missing("この試行に評価者の attempt 記録（op_start・attempt）が無い（未観測。0 ではない）")
+                    },
                 );
                 t.insert(
                     "time_quality".into(),
@@ -699,15 +734,22 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
         }
         match &ev {
             Some(e) => {
-                let hv = t["human_time"]["value"].clone();
-                bump(
-                    a,
-                    "human_union_secs",
-                    hv["union_secs"].as_u64().unwrap_or(0),
-                );
-                bump(a, "human_sum_secs", hv["sum_secs"].as_u64().unwrap_or(0));
-                if hv["lower_bound"] == true {
-                    bump(a, "human_time_lower_bound_trials", 1);
+                if e.ops_observed() {
+                    let hv = t["human_time"]["value"].clone();
+                    bump(
+                        a,
+                        "human_union_secs",
+                        hv["union_secs"].as_u64().unwrap_or(0),
+                    );
+                    bump(a, "human_sum_secs", hv["sum_secs"].as_u64().unwrap_or(0));
+                    if hv["lower_bound"] == true {
+                        bump(a, "human_time_lower_bound_trials", 1);
+                    }
+                } else {
+                    bump(a, "human_time_missing_trials", 1);
+                }
+                if !e.attempts_observed() {
+                    bump(a, "rework_missing_trials", 1);
                 }
                 for (src, name) in [
                     (&e.human_wait, "human_wait"),
@@ -733,7 +775,11 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
                     tally(a, "time_basis", k, *n);
                 }
             }
-            None => bump(a, "trials_without_evaluator_records", 1),
+            None => {
+                bump(a, "trials_without_evaluator_records", 1);
+                bump(a, "human_time_missing_trials", 1);
+                bump(a, "rework_missing_trials", 1);
+            }
         }
         trials.push(Value::Object(t));
     }
@@ -742,8 +788,13 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
         .iter()
         .map(|(campaign, rs)| {
             let e = eval_trial(rs, None);
+            let (interventions, human_time) = if e.ops_observed() {
+                (json!(e.interventions), e.human_time.json("evaluator")["value"].clone())
+            } else {
+                (Value::Null, Value::Null)
+            };
             json!({"campaign_id": campaign, "records": rs.len(),
-                   "interventions": e.interventions, "human_time": e.human_time.json("evaluator")["value"],
+                   "interventions": interventions, "human_time": human_time,
                    "attribution": "arm へ配分しない（shared scope: case/arm/rep の identity が無い記録。1 度だけ計上）"})
         })
         .collect();
@@ -806,11 +857,11 @@ fn markdown(j: &Value, timeline: &[(i64, String, Value)]) -> String {
     for n in j["notices"].as_array().into_iter().flatten() {
         m += &format!("- {}\n", n.as_str().unwrap_or(""));
     }
-    m += "\n## arm 別\n\n| arm | 試行 | validated success | executor passed | 結論(区分別) | 介入(区分別) | 人の時間 union 秒 (単純和) | 下限の試行 | 人待ち秒 (欠測試行) | Celeris 待ち秒 (欠測試行) | 外部 queue 秒 (欠測試行) | 再作業(原因別) | 自動 retry | tokens 観測合計 (欠測試行) | 費用 µUSD 観測合計 (欠測試行) | 評価者記録なし | time_basis |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+    m += "\n## arm 別\n\n| arm | 試行 | validated success | executor passed | 結論(区分別) | 介入(区分別) | 人の時間 union 秒 (単純和・欠測試行) | 下限の試行 | 人待ち秒 (欠測試行) | Celeris 待ち秒 (欠測試行) | 外部 queue 秒 (欠測試行) | 再作業(原因別・欠測試行) | 自動 retry | tokens 観測合計 (欠測試行) | 費用 µUSD 観測合計 (欠測試行) | 評価者記録なし | time_basis |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
     for (arm, a) in j["arms"].as_object().into_iter().flatten() {
         let o = |k: &str| a.get(k).map_or("-".into(), |v| v.to_string());
         m += &format!(
-            "| {arm} | {} | {} | {} | {} | {} | {} ({}) | {} | {} ({}) | {} ({}) | {} ({}) | {} | {} | {} ({}) | {} ({}) | {} | {} |\n",
+            "| {arm} | {} | {} | {} | {} | {} | {} ({}・{}) | {} | {} ({}) | {} ({}) | {} ({}) | {} ({}) | {} | {} ({}) | {} ({}) | {} | {} |\n",
             cell(a, "trials"),
             cell(a, "validated_success"),
             cell(a, "executor_passed"),
@@ -818,6 +869,7 @@ fn markdown(j: &Value, timeline: &[(i64, String, Value)]) -> String {
             o("interventions"),
             cell(a, "human_union_secs"),
             cell(a, "human_sum_secs"),
+            cell(a, "human_time_missing_trials"),
             cell(a, "human_time_lower_bound_trials"),
             cell(a, "human_wait_union_secs"),
             cell(a, "human_wait_missing_trials"),
@@ -826,6 +878,7 @@ fn markdown(j: &Value, timeline: &[(i64, String, Value)]) -> String {
             cell(a, "external_queue_wait_union_secs"),
             cell(a, "external_queue_wait_missing_trials"),
             o("rework"),
+            cell(a, "rework_missing_trials"),
             cell(a, "auto_retries"),
             cell(a, "tokens_observed"),
             cell(a, "tokens_missing_trials"),

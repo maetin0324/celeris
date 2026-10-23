@@ -10,7 +10,14 @@ completed: 2026-10-23
 ADR: `agent-docs/adr/2026-10-23-campaign-success-contract.md`。定義: `docs/ops/eval-raw-record-definitions.md` §4・§5・§7、手順: `docs/ops/eval-human-ops-runbook.md`。
 
 着手時の main は監査対象と同じ `13d64acd17806d73a1797bffbf831efc9cb5ab6a`。5 群の所見はどれも main で未解消だった（解消済みで変更を省いた項目は無い）。
-main 反映 commit は人の取り込み後に決まる（この branch `celeris/01M5KVHDWYTACKJKBNKWQXGX0M` の commit を参照）。
+main 反映 commit はまだ無い（確認時の main `d7cb0fd4` に対し `git merge-base --is-ancestor 9bbf6827 main` は exit 1）。人の取り込み後に決まる。
+この branch `celeris/01M5KVHDWYTACKJKBNKWQXGX0M` の commit（base `d7cb0fd4` からの履歴）:
+- `9bbf6827` 成功契約・human-op・共有作業の訂正・B の待機/自動 retry・CSV quoting の実装（本体）。
+- `2b15bd6d` Jev e2e 試験を試験の task の request だけで数える（範囲外の flaky 修正）。
+- `165d76e1` 偽 webhook の HTTP 要求前 EOF を通知に数えない（範囲外の flaky 修正と回帰試験）。
+- `cd689927`・`f08ce9db` 第 3 回検証・再提出の記録（誤って `docs/progress/` に置いた。今回 agent-docs のこのファイルへ統合し削除）。
+- 今回の commit（attempt 2 of 3 の差し戻し対応）: 未観測の人の時間・介入・再作業を 0 にしない修正と本ファイルの統合。
+過去の報告にあった `d1ef3181`・`e5fedc86`・`4a0f8f93`・`9dd77c10`・`801279e0`・`d7687881` は別 worktree の履歴の hash で、この branch の祖先ではない（上の 5 commit が同じ変更）。
 
 ## 変更
 - `crates/campaign/src/success.rs`（新）: 計画 cell ごとの判定（trial_no 最小・`SuccessClass`・`needs_regrade`・未実行・記録数）と out dir からの `load`。
@@ -32,6 +39,12 @@ main 反映 commit は人の取り込み後に決まる（この branch `celeris
    `correct --logical-op pilot/env-lock-regen --retract` と `record --scope shared` を追記 → A0/B0 の人の時間 71→0、shared_overhead 71 秒・補正履歴 4 件、元の行は byte 一致の prefix。
 3. B event: `tests/human_ops_report.rs::b_waits_auto_retries_and_event_refs_join_from_export_rows`、`task-core` `human_waits_pair_question_and_approval_events_of_the_campaign_tree`。
    main-3 B は自動 retry 2 run（`is_retry`）、Question/Approval 0 件（event 観測あり）。A は event_waits/auto_retries が欠測として残る。
+   未観測と観測済み 0 の区別（差し戻し対応）: `human_ops_report.rs` の `TrialEval` が op 記録数・attempt 記録数を持ち、op 記録の無い試行の
+   `interventions`・`human_time`、attempt 記録の無い試行の `rework` は `source=missing`・値 null。arm 集計は `human_time_missing_trials`・
+   `rework_missing_trials` に数えて秒数・件数に 0 を足さない。shared_overhead も op が無ければ null。
+   試験 `tests/human_ops_report.rs::cutoff_or_job_only_records_leave_human_time_and_rework_unobserved`（cutoff+job だけの A0 は 3 項目とも欠測、
+   protocol op だけの B0 は観測済みの 0）。定義書 §5、ADR D5 付記。
+   main-3 は A0/B0 とも status_check・protocol の op 記録があるので観測済みのまま（新コードの再生成 `report-corrected-v3/` は arms・shared_overhead が前版と一致）。
 4. filter/窓: `tests/human_ops_report.rs::protocol_attempts_and_out_of_window_ops_are_not_counted` と既存 fixture（cutoff 後の op を介入に数えない）。
 5. CSV: `tests/success_contract.rs::csv_round_trips_json_cells_with_multiple_fault_keys`（comma・quote・改行・fault_breakdown 2 key、parser で列数と JSON 一致）。
 6. cost scope: `export::COST_SCOPE`（CoS call・共有 overhead を含まない、list/cash は final-accounting の別欄）を table.json・report.json・定義書 §7 に記載。
@@ -46,10 +59,18 @@ main 反映 commit は人の取り込み後に決まる（この branch `celeris
   `celeris-campaign export ... --dest <artifacts>/export --records $M/runs/exp-db/records.jsonl` → complete、table.csv 3 行とも 43 列。
   `celeris-campaign human-op report --file … --events $M/out --events $M/runs/exp-db --out …`。
 
+- 第 3 回（`165d76e1`）: 偽 webhook が HTTP 要求前の EOF を空の通知として記録していたのを直した（受信記録を応答前に確定）。`cargo test -p celeris --test credential_wait_notify` → 2 passed。
+  `bash scripts/dev/test-affected.sh` → exit 0、6297 passed / 16 skipped。clippy・fmt exit 0。
+- 再提出（run 01M5M0TR319JS7HBDS6GTEN1H8）: コード変更なしで再検査、test-affected 6303 passed / 17 skipped、clippy・fmt exit 0（制御プレーンの再実行でも合格）。
+- 今回（attempt 2 of 3 の差し戻し対応）: `cargo test -p celeris-campaign --test human_ops_report --test success_contract` → 5 passed + 2 passed。
+  最終検査の結果は下の「最終検査」節。
+
 ## 保存した raw・grade・集計
 - 入力（不変）: `/local/celeris/data/measure/main-3/out/{trials,grades,human-ops,ledger}.jsonl`、`runs/exp-db/records.jsonl`。sha256 は成果物の `inputs.sha256`。
 - 再集計の出力: run の成果物 dir `/local/celeris/data/workspaces/01M5KVHDWYTACKJKBNKWQXGX0M/artifacts/main-3-reaggregate/`
-  （`check.json`・`export/table.{json,csv}`・`export/final-accounting.json`・`report-original/`・`human-ops.corrected.jsonl`・`report-corrected/`）。
+  （`check.json`・`export/table.{json,csv}`・`export/final-accounting.json`・`report-original/`・`human-ops.corrected.jsonl`・`report-corrected/`・
+  今回のコードで再生成した `report-corrected-v3/`）。前版は上書きしていない。
+- 入力 6 file の sha256 は今回も `inputs.sha256` と全件一致（`sha256sum -c`）。訂正台帳は元 human-ops を byte 一致の prefix として保持、CSV 全 3 行 43 列。
 
 ## 未解決
 - `--measurement-id` を付けない check は、現行の期待 lock の measurement id（`mlsys-main-3-043d5f52e4da`）と保存 lock（`mlsys-main-3`）の命名差で lock 不信用になり採点を外す。旧 raw の再集計では id を明示する。

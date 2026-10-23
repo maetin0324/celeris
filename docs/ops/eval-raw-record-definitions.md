@@ -176,6 +176,9 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 - Celeris の自動 retry は export の `run` 行（`is_retry`）から導出し、`auto_retries` に別掲する（人の再作業に足さない）。人の作業・A の作業は評価者が付ける。
 - 共通 filter: `protocol_step`・`intent=protocol`・`mode=automatic` の op を含む論理作業は、介入件数・人の時間・再作業のどれにも数えない
   （protocol 上の trial-start `attempt=2` は科学的な redo ではない）。
+- 観測の有無は項目ごと: その試行に op 記録（`op_start`/`op_end`。protocol・automatic を含む）が 1 件も無ければ介入件数・人の時間は欠測（`source=missing`、
+  値 null）、attempt を持つ記録（`op_start`・`attempt`）が無ければ再作業は欠測。`cutoff`・`job_observation`・`wait_*` だけの試行を 0 にしない。
+  arm 集計は欠測の試行を `human_time_missing_trials`・`rework_missing_trials` に数え、秒数・件数に 0 を足さない。
 - 失敗・cancel・timeout の attempt も分母に残す（`runs_by_end` と同じ方針）。
 
 ## 6. 記録できない指標と主張の限定

@@ -77,3 +77,8 @@ job 43706 は `review28/qstat-43706.txt` で `F / Exit_status = -20`（BenchFS W
 - 必須検査中に既知の偽 webhook 試験の EOF 誤計数（空本文 2 件を通知に加算）を再現。HTTP の POST /hook 完了時だけ記録し、応答前に記録するよう試験 fixture を補修し、EOF・別 path・正規 POST を順に送る回帰試験を追加した。
 - 最終検査: `cargo test -p celeris-campaign --test k_case_judged_scope` exit 0（2 passed）、`cargo test -p celeris --test credential_wait_notify` exit 0（2 passed）。`bash scripts/dev/test-affected.sh` exit 0（2603 passed / 5 skipped、177.293 秒）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`git diff --check` exit 0。webhook 補修 commit は `7cf00c45`。
 - この WU の検査ログは run 成果物ディレクトリの judged-scope-targeted-final.log / judged-scope-webhook.log / judged-scope-test-affected-final.log / judged-scope-clippy-final.log / judged-scope-fmt-final.log に保存した。初回失敗ログも別名で保持した。
+
+### judged-scope WU 再試行（2026-10-23）
+- 前回 run は crates/celeris/tests/credential_wait_notify.rs の偽 webhook 補修（7cf00c45）を含み、WU の範囲 check が範囲外として不合格。8102013e で revert した（同等の修正は main 165d76e1 にあり、main 取り込みで入る）。
+- judged_scope 修正 98c29a8c は維持。`cargo test -p celeris-campaign --test k_case_judged_scope` 2 passed。
+- test-affected exit 0（2602 passed / 5 skipped）、clippy・fmt exit 0。範囲 check の out-of-scope は空。

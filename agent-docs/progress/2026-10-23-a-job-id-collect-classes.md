@@ -74,8 +74,9 @@ base は main `df3a0e01`（「試験用サーバーが迷い込み接続を要�
 実測定の raw・grade・集計は新規作成していない（試験は tempfile の合成データ）。既存の履歴は変更していない。K2/HPC 比較は引き続き**開始不可**: Sirius の qstat Variable_List に trial 印が残ることの実機確認、測定用 A の cap-env/prompt への wrapper 導入、タスク 1・2 の成立が必要。fixture の成功でこれらを代替しない。本番設定の変更・実 pilot・有料評価は実施していない。
 
 ## 最終検査
-差し戻し対応（not_submitted を model failure に）の commit 後、HEAD で実行:
-- `bash scripts/dev/test-affected.sh`: **exit 0**。nextest **2605 passed / 6 skipped**（137 binaries、157.451 秒）。健全性 Python 試験 38 件・1 件成功、doc-links self-test 成功、doc test 4 target とも成功。新規試験 `injected_fault_give_up_without_submit_is_model_failure_not_observation_failure` を含む。
+main `df3a0e01` への rebase と front matter 補修の後、HEAD で実行（変更 crate が main の変更と合わさり、試験対象は前回より広い）:
+- `bash scripts/dev/test-affected.sh`: **exit 0**。nextest **6359 passed / 18 skipped**（323.5 秒）、doc test 成功。前回落ちた `classify_tick::e2e` の Jev 試験も成功。not_submitted の新規試験 `injected_fault_give_up_without_submit_is_model_failure_not_observation_failure` を含む。
 - `cargo clippy --workspace -- -D warnings`: **exit 0**（警告 0）。
 - `cargo fmt --all -- --check`: **exit 0**（差分 0）。
-- ログ: /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/ 内の retry4-test-affected.log・retry4-clippy.log・retry4-fmt.log。
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check`: **exit 0**（285 ADR file、progress-index ok）。
+- ログ: /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/ 内の retry5-test-affected.log・retry5-clippy.log・retry5-fmt.log。

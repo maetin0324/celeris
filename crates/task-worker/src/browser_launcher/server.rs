@@ -299,6 +299,22 @@ impl ServerHandle {
         lock(&self.inner.state).sessions.len()
     }
 
+    /// 試験専用: 接続 thread の回収が進み、数えている接続が `n` 本以下になるまで `conn_exit` で待つ。
+    /// 拒否された接続を client が閉じても、server がそれを数え終えるまでは次の接続が上限に当たる。
+    /// `timeout` は保険で、戻り値は待ちが成り立ったか（agent-docs/guides/testing.md）。
+    #[cfg(test)]
+    pub(super) fn wait_connections_at_most(&self, n: usize, timeout: Duration) -> bool {
+        let g = lock(&self.inner.conns);
+        let (_g, r) = self
+            .inner
+            .conn_exit
+            .wait_timeout_while(g, timeout, |_| {
+                self.inner.connections.load(Ordering::SeqCst) > n
+            })
+            .unwrap_or_else(|p| p.into_inner());
+        !r.timed_out()
+    }
+
     /// accept を止め、全接続を閉じ、全 session を回収する。
     ///
     /// 接続 thread は切断時に自分の session を引き取って teardown するので、その thread が

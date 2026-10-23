@@ -8,12 +8,12 @@ status: done
 # 必須検査と候補 SHA の対応保証（健全性 5）
 
 ADR: `agent-docs/adr/2026-10-23-required-checks-bound-to-candidate.md`
-基準 SHA（着手時の main・task branch の base）: `d7cb0fd459263ad52c432959b188c7abfbd81c2d`（2026-10-23 09:20Z）。
-起票直前の main `13d64acd` は根拠の鮮度の参考値で、比較基準ではない。
-変更範囲: `git diff d7cb0fd4..HEAD`（celeris/delivery.rs、task-dispatch の review/review_spawn/review_verdict、task-core の required_checks と event、task-worker の browser launcher 試験、docs/api・web/api の生成物、workspace.toml・ADR・guide、scripts/dev/tests/test-affected-list.sh）。
+基準: `git merge-base HEAD main`（task branch の base。rebase で動くので固定 hash は書かない）。
+起票直前の main は根拠の鮮度の参考値で、比較基準ではない。
+変更範囲: `git diff "$(git merge-base HEAD main)"..HEAD`（celeris/delivery.rs、task-dispatch の review/review_spawn/review_verdict、task-core の required_checks と event、task-worker の browser launcher 試験、docs/api・web/api の生成物、workspace.toml・ADR・guide、scripts/dev/tests/test-affected-list.sh）。
 
-## タスク 1 の health gate との接続状態: 接続済み（基準 d7cb0fd4 の時点で既に）
-- 基準 d7cb0fd4 の `scripts/dev/test-affected.sh` は `--list` 以外で最初に `bash scripts/dev/check-health.sh` を必須実行する（同 22 行）。
+## タスク 1 の health gate との接続状態: 接続済み（着手時の基準の時点で既に）
+- 着手時の基準の `scripts/dev/test-affected.sh` は `--list` 以外で最初に `bash scripts/dev/check-health.sh` を必須実行する（同 22 行）。
 - 同じく `.config/celeris/workspace.toml` の `check` 3 本の 1 本目が `bash scripts/dev/test-affected.sh` で、コメントにも health gate の必須実行が書かれている。
 - よって health gate は workspace.toml の check を通して必須検査に含まれ、本 task の `RequiredChecksEvaluated` 証跡の対象（候補・基底・定義 digest に束縛）になる。本 task で追加の接続作業は不要だった。
 
@@ -48,7 +48,7 @@ ADR: `agent-docs/adr/2026-10-23-required-checks-bound-to-candidate.md`
 
 ### 最終 review の不合格（test-affected exit 100）への対応（WU fix-live-limit-race）
 - 原因: `browser_launcher::live_tests::browser_launcher_live_frame_other_session_rejected`（live_tests.rs:687, `ErrorCode::Limit`）の試験の競合。本変更は task-worker に触れていない。拒否された接続（LeaseMismatch・Limit）を client が閉じても、server の接続 thread が `connections`（上限 `max_connections`=4）を減らす前に次の接続を張ると上限超過で Limit になる。live a を開く前（拒否 2 本が残ると a, b と合わせて 4）と raw を張る前（拒否 1 本が残ると 5 本目）の 2 か所に窓があった。
-- 修正 ece122a3: `ServerHandle::wait_connections_at_most`（`#[cfg(test)]`、`conn_exit` Condvar で数えている接続が n 本以下になるまで待つ。30 秒は保険）を足し、試験は live a の前に 2、raw の前に 3 まで戻るのを待つ。sleep・上限・assert は変えていない。production の経路は不変。同じ形（拒否直後に上限近くで新しい接続）の他試験は無い（`live_view_rejects_input` は最大 3 本、`session_and_connection_limits` は Limit を期待する側）。
+- 修正（commit「browser launcher live 試験の接続数競合を接続回収の出来事待ちで決定的にする」）: `ServerHandle::wait_connections_at_most`（`#[cfg(test)]`、`conn_exit` Condvar で数えている接続が n 本以下になるまで待つ。30 秒は保険）を足し、試験は live a の前に 2、raw の前に 3 まで戻るのを待つ。sleep・上限・assert は変えていない。production の経路は不変。同じ形（拒否直後に上限近くで新しい接続）の他試験は無い（`live_view_rejects_input` は最大 3 本、`session_and_connection_limits` は Limit を期待する側）。
 - `cargo test -p task-worker --lib browser_launcher::` exit 0（54 passed）、`browser_launcher::live_tests::` 5 回連続 10 passed。注: この run の TMPDIR は長く unix socket の SUN_LEN を超えるため、試験は `TMPDIR=/dev/shm/...` で回した（評価器の環境では既存どおり）。
 - `bash scripts/dev/test-affected.sh` exit 0（4462 passed / 16 skipped）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
 
@@ -63,9 +63,7 @@ config・DB の変更なし。昇格時に MergeQueued で止まっている配�
 
 ## evidence-gaps WU（run 01M5M4X70353ZH5HQMCVQ2QHDZ）
 
-- 作業開始 HEAD: 406c1c06fc8c6b9b9040788950d05bf1af6d95ad。
-  最新 main: 01a1753dee594c115213d8aa6cb2e44488ee7ce6、merge-base: d7cb0fd459263ad52c432959b188c7abfbd81c2d。
-  WU の比較基準（CELERIS_WU_BASE）: 69e0bcee8637c07d9ba59308cb5ed9689c86a3a9。
+- 作業開始時の HEAD は commit「進捗に live 試験の接続数競合の修正を記録」。基準は `git merge-base HEAD main`、WU の比較基準は `CELERIS_WU_BASE`。
 - delivery と review は候補の定義を共通の candidate_required_checks で取得する。
   ファイル不在のみ空定義にし、git 取得不能・parse 失敗は拒否する。
 - repo ごとに候補の定義、worktree での実行結果、既存 review snapshot、定義 digest を保持して証跡を残す。
@@ -80,7 +78,7 @@ config・DB の変更なし。昇格時に MergeQueued で止まっている配�
 
 ### 既存の Git 取得不能試験の期待値修正
 
-- 最初の固定 SHA d9bb6ae0c959b752e16243f8ff7d55e2253ee393 で test-affected は exit 100
+- commit「fix: bind required checks and reuse to each repository and definition」の時点で test-affected は exit 100
   （6315 passed / 1 failed / 17 skipped）。失敗は write_set_record_git_failure_keeps_the_run_and_records_unavailable。
 - この試験は worker が .git を削除しても task が Done になることを期待していた。
   必須定義が取得不能なら完了を拒否する今回の契約と矛盾するため、失敗した ReviewVerdict を出来事待ちし、
@@ -90,7 +88,7 @@ config・DB の変更なし。昇格時に MergeQueued で止まっている配�
 
 ### evidence-gaps の確定した検証結果
 
-- 実装・検証対象 SHA: 79e5ec762d3a6cf80a07a9a17546cd13997ff6aa（実装 commit）。必須検査を実行した時点の worktree は clean。
+- 当時の検査は commit「test: reject completion when required definitions are unavailable」の時点の HEAD（worktree clean）で実行した。提出時の candidate での再実行は末尾の節。
 - digest は v2 domain と長さ付き cmd 列を使う。旧実装が別 repo に複製した成功も失効させる。
 - 対象単体試験: review 60、target_sync 23、delivery 34、定義 loader 2、task-core required_checks 9、実 worktree 2 repo の試験と既存 repo 必須検査の試験はすべて exit 0。
 - `UPDATE_SCHEMA=1 cargo test -p task-core --lib event_row_schema_matches_committed`: exit 0。
@@ -102,14 +100,14 @@ config・DB の変更なし。昇格時に MergeQueued で止まっている配�
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - test-affected の集計: Summary [ 220.331s] 6316 tests run: 6316 passed (8 slow), 17 skipped。明示的な全 workspace/e2e/browser/userns コマンドは追加・実行していない。
 - crates・docs/api・web/api の削除対象欄は検索結果 0 件。schema と web 生成型は再生成済み。
-- 本節を記録する後続 commit は進捗文書のみを変更する。実装との差分を確認し、最終記録 commit SHA は result.json に記録する。
+- 本節を記録する後続 commit は進捗文書のみを変更する。
 - 任意の progress-index --check は既存の別進捗文書の front matter 不備を報告（本ファイルへの指摘なし）。必須3検査には影響しない。
 - この WU の残件なし。shell fixture とタスク全体の最終記録は後続 WU shell-test-records に残る。
 
 ## evidence-gaps 再試行（範囲 check の不合格への対応）
 - 不合格: WU の範囲 check が `crates/task-ops/src/changes.rs`・`crates/task-ops/src/changes/required_checks.rs` を範囲外と判定（exit 1）。
 - 対応: 候補の定義読み取り（file 不在の確認だけ空定義、git 失敗・parse 失敗は Err）を `task_core::required_checks::candidate_required_checks(candidate, git)` へ移した。git の実行は delivery（`git_text`）と review_spawn（`task_ops::changes::git`）が closure で渡す。task-ops の差分は base と同一に戻した。試験 `only_confirmed_absence_means_no_required_checks`・`malformed_definition_is_rejected` は `crates/task-core/src/required_checks/tests.rs` へ移した。
-- 範囲 check（同じ cmd、`CELERIS_WU_BASE`=69e0bcee）: 範囲外 0 件、exit 0
+- 範囲 check（同じ cmd、当時の `CELERIS_WU_BASE`）: 範囲外 0 件、exit 0
 - `cargo test -p task-core --lib required_checks::`: 11 passed
 - `bash scripts/dev/test-affected.sh`: exit 0（6316 passed / 17 skipped）
 - `cargo clippy --workspace -- -D warnings`: exit 0、`cargo fmt --all -- --check`: exit 0
@@ -118,30 +116,29 @@ config・DB の変更なし。昇格時に MergeQueued で止まっている配�
 
 ### 修正
 - `scripts/dev/tests/test-affected-list.sh`: fixture に最小の `scripts/dev/check-health.sh`（呼ばれたことを記録 file に残す）を置いた。期待は弱めず、次を足した: `--list` では health gate を呼ばない、実行時は必ず呼ぶ、health gate が失敗すると test-affected.sh も失敗する。これで (c) docs only と (d) 統合基底（CELERIS_WU_BASE なしで commit 済み変更が空 diff にならない）まで到達する。test-affected.sh 本体は変更していない。
-- 既存の進捗 8 件の front matter 欠落を補った（`progress-index --check` を通すため。別 branch の 7457746c と同内容）。
+- 既存の進捗 8 件の front matter 欠落を補った（`progress-index --check` を通すため。別 branch の commit「docs: fill missing progress front matter fields」と同内容）。
 
-### 本 task の commit（`git log d7cb0fd4..` の実 SHA、古い順）
-- 35c7d011 必須検査を置き換えず、結果を基底・候補 SHA に束縛して main 取り込み前に照合する
-- 5d121042 進捗に test-affected の結果を記録
-- ece122a3 browser launcher live 試験の接続数競合を接続回収の出来事待ちで決定的にする
-- 406c1c06 進捗に live 試験の接続数競合の修正を記録
-- d9bb6ae0 fix: bind required checks and reuse to each repository and definition
-- 79e5ec76 test: reject completion when required definitions are unavailable
-- 302c82ce docs: record required-check evidence verification at 79e5ec76
-- dc7c4edb 必須検査の定義読み取りを task-core へ移し、WU の範囲内に収める
-- 0e4144a0 test: test-affected-list の fixture に最小 health gate を置き、(c)(d) まで通す
-- 1004f3e8 docs: 既存進捗 8 件の front matter 欠落を補う
+### 本 task の commit（`git log --format=%s "$(git merge-base HEAD main)"..HEAD` の subject、古い順）
+hash は rebase で変わるので書かない。
+- phase: 必須検査を置き換えず、結果を基底・候補 SHA に束縛して main 取り込み前に照合する
+- phase: 進捗に test-affected の結果を記録
+- phase: browser launcher live 試験の接続数競合を接続回収の出来事待ちで決定的にする
+- phase: 進捗に live 試験の接続数競合の修正を記録
+- fix: bind required checks and reuse to each repository and definition
+- test: reject completion when required definitions are unavailable
+- docs: record required-check evidence verification（当時の実装 commit での検証記録）
+- phase: 必須検査の定義読み取りを task-core へ移し、WU の範囲内に収める
+- test: test-affected-list の fixture に最小 health gate を置き、(c)(d) まで通す
+- docs: 進捗に基準 SHA・health gate 接続・実 commit・最終 SHA と今回の exit を記録
+- 以降は本進捗文書だけを変える commit（hash を除き、提出時の HEAD での検査を記録）
 
-### 検証対象の最終コード SHA
-`1004f3e85cc6197cb3bbe8ed2953df27ac50702e`（記録時の `git rev-parse HEAD`、worktree clean）。これ以降の commit はこの進捗文書だけを変える。
-
-### 今回実行したコマンドと exit（すべて上記 SHA）
+### shell-test-records WU 当時に実行したコマンドと exit
 - `sh scripts/dev/tests/test-affected-list.sh`: exit 0（`test-affected-list: ok`、(c)(d) まで到達）
 - `sh scripts/dev/check-doc-links.sh`: exit 0
 - `sh scripts/dev/check-adr-numbers.sh`: exit 0（283 files）
 - `sh scripts/dev/progress-index.sh --check`: exit 0
-- `bash scripts/dev/test-affected.sh`（WU 基準 `CELERIS_WU_BASE`=35b4518f）: exit 0（health gate 合格、crate 差分なしで試験対象なし）
-- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh`（task 基準 = merge-base d7cb0fd4）: exit 0、6316 tests run: 6316 passed、17 skipped
+- `bash scripts/dev/test-affected.sh`（当時の WU 基準 `CELERIS_WU_BASE`）: exit 0（health gate 合格、crate 差分なしで試験対象なし）
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh`（task 基準 = `git merge-base HEAD main`）: exit 0、6316 tests run: 6316 passed、17 skipped
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo fmt --all -- --check`: exit 0
 - 全 workspace の試験・web e2e・本物の browser/userns 試験は実行・追加していない（release gate だけ）。

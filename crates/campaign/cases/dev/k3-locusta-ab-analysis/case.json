@@ -34,6 +34,9 @@
       "sha256": "bdb155d4c1690ae5743621d129c270fcc53c919751d62c56d0c4395b74d2e90f"
     }
   ],
+  "judged_scope": [
+    "analysis"
+  ],
   "kind": "real",
   "private_ref": {
     "path": "dev/k3-locusta-ab-analysis/private.json",

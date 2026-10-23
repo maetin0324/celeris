@@ -34,6 +34,9 @@
       "sha256": "128057cf4016535941963fc4142ba424c05c65889905ca2bbcc190f6161077a1"
     }
   ],
+  "judged_scope": [
+    "analysis"
+  ],
   "kind": "real",
   "private_ref": {
     "path": "final/k4-cmp4-validity-analysis/private.json",

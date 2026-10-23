@@ -52,7 +52,7 @@
   },
   "grade_case_ref": {
     "path": "dev/k1-bf-fsync-campaign/k1-bf-fsync-campaign.json",
-    "sha256": "0d873f7d428f51aa3018a9c9eb43f3f3cce431c0307f83d10f6149367bfb650d"
+    "sha256": "10c180ede5c738c6d1f6a8c8a32acedb06aa3c6ca2192a497f8e6501491ac9af"
   },
   "id": "k1-bf-fsync-campaign",
   "initial": {
@@ -72,6 +72,10 @@
     ],
     "tree": "5bda9947c168e81275758f3c40aacc094f14c2fd"
   },
+  "judged_scope": [
+    "implementation",
+    "experiment"
+  ],
   "kind": "real",
   "private_ref": {
     "path": "dev/k1-bf-fsync-campaign/private.json",

@@ -67,3 +67,13 @@ job 43706 は `review28/qstat-43706.txt` で `F / Exit_status = -20`（BenchFS W
 ## attempt 2（2026-10-23）
 - 前回の不合格は test-affected.sh の文書 path 検査だけ（docs/architecture-map.md の `` `results/cells.csv` `` を repo の path として扱った）。提出物の path なので backtick を外した。
 - `bash scripts/dev/test-affected.sh` exit 0（nextest 2594 passed / 4 skipped、check-doc-links ok）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
+
+## judged-scope WU（2026-10-23、attempt 3）
+- K4 と K3 の公開 case に `judged_scope: ["analysis"]` を明記した。review check を持たない grade-case と一致し、K4 の campaign report は `judged_scope stages=analysis not_judged=review` を出す。
+- 全 case の照合で K1 にも同種の不一致を検出したため、K1 は実際の implementation / experiment 検査に限定した。K2・short-ml は変更していない。
+- `crates/campaign/tests/k_case_judged_scope.rs` は CaseSet で全 case を読み、全実 case の判定範囲を grade-case の検査実体と比較する。grade-case の無い K0 は mock control であることを検査する。別の試験で K4 の campaign_scope と scope 行を検査する。
+- hash 追跡: K3/K4 は公開 case.json の範囲宣言のみで、materials・KB・private・grade-case の bytes と各 pin は不変。K1 は generator が範囲宣言を grade-case に転記するため同ファイルも更新し、grade_case_ref を `10c180ed…` に再 pin した。旧 grade-case hash の参照は case.json のみだった。旧 K3/K4 case.json SHA の固定参照は repo 内に無い。測定 bundle の再 freeze は後続 bundle-nollm WU の対象で、旧測定の grades/raw は変更していない。
+- この節は判定範囲の修正だけの記録。上記の新 bundle 検証済みとの記述や古い試験数の整合は、後続 preflight-reject / bundle-nollm / close-progress WU で解消する。本 WU では測定開始可とはしない。
+- 必須検査中に既知の偽 webhook 試験の EOF 誤計数（空本文 2 件を通知に加算）を再現。HTTP の POST /hook 完了時だけ記録し、応答前に記録するよう試験 fixture を補修し、EOF・別 path・正規 POST を順に送る回帰試験を追加した。
+- 最終検査: `cargo test -p celeris-campaign --test k_case_judged_scope` exit 0（2 passed）、`cargo test -p celeris --test credential_wait_notify` exit 0（2 passed）。`bash scripts/dev/test-affected.sh` exit 0（2603 passed / 5 skipped、177.293 秒）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`git diff --check` exit 0。webhook 補修 commit は `7cf00c45`。
+- この WU の検査ログは run 成果物ディレクトリの judged-scope-targeted-final.log / judged-scope-webhook.log / judged-scope-test-affected-final.log / judged-scope-clippy-final.log / judged-scope-fmt-final.log に保存した。初回失敗ログも別名で保持した。

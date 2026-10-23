@@ -47,5 +47,9 @@
     }
   },
   "recompute": null,
-  "review": null
+  "review": null,
+  "judged_scope": [
+    "implementation",
+    "experiment"
+  ]
 }

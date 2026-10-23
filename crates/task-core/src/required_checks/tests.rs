@@ -143,3 +143,43 @@ fn ambiguous_multiline_commands_and_pre_v2_evidence_cannot_be_reused() {
     assert!(verify_required_checks(&[event.clone()], repo, "t", "c", &required()).is_err());
     assert!(reusable_passes(&[event], repo, "t", "c", &required()).is_empty());
 }
+
+#[test]
+fn only_confirmed_absence_means_no_required_checks() {
+    assert_eq!(
+        candidate_required_checks("c", |args| match args[0] {
+            "ls-tree" => Ok(String::new()),
+            _ => Err("missing".into()),
+        }),
+        Ok(vec![])
+    );
+    assert!(candidate_required_checks("c", |_| Err("git unavailable".into())).is_err());
+    assert!(
+        candidate_required_checks("c", |args| match args[0] {
+            "show" => Err("read failed".into()),
+            _ => Ok("exists".into()),
+        })
+        .unwrap_err()
+        .contains("read failed")
+    );
+    assert!(
+        candidate_required_checks("c", |args| match args[0] {
+            "ls-tree" => Ok(crate::workspace_config::WORKSPACE_CONFIG_PATH.into()),
+            _ => Err("object unavailable".into()),
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn malformed_definition_is_rejected() {
+    assert!(
+        candidate_required_checks("c", |_| Ok("[commands\n".into()))
+            .unwrap_err()
+            .contains("invalid required checks")
+    );
+    assert_eq!(
+        candidate_required_checks("c", |_| Ok("[commands]\ncheck = ['a', 'b']".into())),
+        Ok(vec!["a".into(), "b".into()])
+    );
+}

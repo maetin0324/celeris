@@ -265,7 +265,9 @@ fn check_required_evidence(
     let required = if prototype {
         Vec::new()
     } else {
-        match task_ops::changes::candidate_required_checks(repo, &d.head) {
+        match task_core::required_checks::candidate_required_checks(&d.head, |args| {
+            git_text(repo, args)
+        }) {
             Ok(required) => required,
             Err(reason) => return Ok(Err(reason)),
         }

@@ -93,5 +93,33 @@ pub fn verify_required_checks(
     Ok(())
 }
 
+/// 候補 `candidate` の tree にある必須検査の定義。`git` は repo で git を実行して stdout を返す。
+/// file が無いと確かめられたときだけ必須検査なし。読めない・parse できない定義は拒否（fail closed）。
+pub fn candidate_required_checks(
+    candidate: &str,
+    mut git: impl FnMut(&[&str]) -> Result<String, String>,
+) -> Result<Vec<String>, String> {
+    let path = crate::workspace_config::WORKSPACE_CONFIG_PATH;
+    let object = format!("{candidate}:{path}");
+    let text = match git(&["show", &object]) {
+        Ok(text) => text,
+        Err(error) => {
+            // A failed cat-file alone cannot distinguish absence from repository corruption.
+            // Confirm that the candidate tree can be listed and has no entry for this path.
+            if git(&["cat-file", "-e", &object]).is_err()
+                && git(&["ls-tree", "--name-only", candidate, "--", path])?
+                    .trim()
+                    .is_empty()
+            {
+                return Ok(Vec::new());
+            }
+            return Err(format!("cannot read required checks: {error}"));
+        }
+    };
+    crate::workspace_config::parse(&text)
+        .map(|cfg| cfg.commands.check)
+        .map_err(|e| format!("invalid required checks definition at {object}: {e}"))
+}
+
 #[cfg(test)]
 mod tests;

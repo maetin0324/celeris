@@ -97,3 +97,11 @@ config・DB の変更なし。昇格時に MergeQueued で止まっている配�
 - 本節を記録する後続 commit は進捗文書のみを変更する。実装との差分を確認し、最終記録 commit SHA は result.json に記録する。
 - 任意の progress-index --check は既存の別進捗文書の front matter 不備を報告（本ファイルへの指摘なし）。必須3検査には影響しない。
 - この WU の残件なし。shell fixture とタスク全体の最終記録は後続 WU shell-test-records に残る。
+
+## evidence-gaps 再試行（範囲 check の不合格への対応）
+- 不合格: WU の範囲 check が `crates/task-ops/src/changes.rs`・`crates/task-ops/src/changes/required_checks.rs` を範囲外と判定（exit 1）。
+- 対応: 候補の定義読み取り（file 不在の確認だけ空定義、git 失敗・parse 失敗は Err）を `task_core::required_checks::candidate_required_checks(candidate, git)` へ移した。git の実行は delivery（`git_text`）と review_spawn（`task_ops::changes::git`）が closure で渡す。task-ops の差分は base と同一に戻した。試験 `only_confirmed_absence_means_no_required_checks`・`malformed_definition_is_rejected` は `crates/task-core/src/required_checks/tests.rs` へ移した。
+- 範囲 check（同じ cmd、`CELERIS_WU_BASE`=69e0bcee）: 範囲外 0 件、exit 0
+- `cargo test -p task-core --lib required_checks::`: 11 passed
+- `bash scripts/dev/test-affected.sh`: exit 0（6316 passed / 17 skipped）
+- `cargo clippy --workspace -- -D warnings`: exit 0、`cargo fmt --all -- --check`: exit 0

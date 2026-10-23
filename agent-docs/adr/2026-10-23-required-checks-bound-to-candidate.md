@@ -41,7 +41,7 @@ release gate（全体試験）は main 更新・push の後なので、統合前
 
 ## 付記: evidence-gaps（2026-10-23）
 
-- 候補の定義は共通の `task_ops::changes::candidate_required_checks` で読む。git show が失敗した場合、cat-file と
+- 候補の定義は共通の `task_core::required_checks::candidate_required_checks`（git の実行は呼び出し側が渡す）で読む。git show が失敗した場合、cat-file と
   ls-tree で候補のファイル不在を確認したときだけ空の定義とする。git 実行・取得・parse の失敗は review と delivery を拒否する。
 - 各 repo の候補の定義を各 worktree で実行し、その repo 自身の ReviewTargetSynced と結果・定義指紋を束縛する。
   他 repo への結果の複製・網羅検査の免除は廃止した。

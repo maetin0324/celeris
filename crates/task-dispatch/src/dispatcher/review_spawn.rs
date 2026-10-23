@@ -859,9 +859,21 @@ impl Dispatcher {
                     || repo.worktree.is_some()
                     || repo.dir.join(".git").exists()
                 {
-                    task_ops::changes::candidate_required_checks(
-                        &repo.dir,
+                    task_core::required_checks::candidate_required_checks(
                         snapshot.map(|s| s.reviewed_sha.as_str()).unwrap_or("HEAD"),
+                        |args| {
+                            let out = task_ops::changes::git(
+                                &repo.dir,
+                                args,
+                                task_ops::changes::GIT_TIMEOUT,
+                            )
+                            .ok_or("cannot start git")?;
+                            if out.ok {
+                                Ok(out.stdout)
+                            } else {
+                                Err(format!("git {}: {}", args.join(" "), out.why()))
+                            }
+                        },
                     )
                 } else {
                     task_core::workspace_config::load(&repo.dir)

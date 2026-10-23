@@ -17,10 +17,25 @@ class ArchitectureMapTests(unittest.TestCase):
             script = root / 'scripts/dev/check-architecture-map.py'
             shutil.copy(ROOT / 'scripts/dev/check-architecture-map.py', script)
             doc = root / 'docs/architecture-map.md'
-            doc.write_text('| source | `scripts/dev/check-architecture-map.py` |\n')
+            header = ('| subsystem | owner crate/module | entry point | ADR / 設計 | 関連試験 | 不変条件 |\n'
+                      '|---|---|---|---|---|---|\n')
+
+            def row(path: str, tests: str = '`scripts/dev/check-architecture-map.py`',
+                    invariant: str = '地図のパスは実在する') -> str:
+                return f'| map | scripts | `{path}` | - | {tests} | {invariant} |\n'
+
+            doc.write_text(header + row('scripts/dev/check-architecture-map.py'))
             ok = subprocess.run(['python3', str(script)], capture_output=True, text=True)
             self.assertEqual(ok.returncode, 0, ok.stderr)
-            doc.write_text('| source | `crates/missing.rs` |\n')
+            # 関連試験・不変条件の欠けた行と、列の足りない見出しは列の形の不備で落ちる。
+            for broken in [header + row('scripts/dev/check-architecture-map.py', tests='なし'),
+                           header + row('scripts/dev/check-architecture-map.py', invariant=''),
+                           '| subsystem | owner crate/module | entry point | ADR / 設計 |\n']:
+                doc.write_text(broken)
+                shape = subprocess.run(['python3', str(script)], capture_output=True, text=True)
+                self.assertEqual(shape.returncode, 1, broken)
+                self.assertIn('列の形の不備', shape.stderr)
+            doc.write_text(header + row('crates/missing.rs'))
             bad = subprocess.run(['python3', str(script)], capture_output=True, text=True)
             self.assertEqual(bad.returncode, 1)
             self.assertIn('crates/missing.rs', bad.stderr)

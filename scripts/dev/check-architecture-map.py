@@ -12,6 +12,9 @@
   直前パスと同じディレクトリからの相対パスとして展開する（Rust の親ファイル + 子 module の慣習）。
 
 ADR / SPEC の見出しアンカー（`#...`）はレンダラ依存のため検査しない。
+
+表の列の形も検査する: 全節の表は `COLUMNS` の 6 列で、各行の「関連試験」は backtick の
+パスを 1 つ以上、「不変条件」は空でない文を持つ。
 """
 
 from __future__ import annotations
@@ -27,6 +30,44 @@ TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
 BACKTICK_RE = re.compile(r"`([^`]+)`")
 MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 BRACE_RE = re.compile(r"\{([^{}]*)\}")
+COLUMNS = ["subsystem", "owner crate/module", "entry point", "ADR / 設計", "関連試験", "不変条件"]
+
+
+def split_cells(line: str) -> list[str]:
+    """表の行を列に分ける（backtick の中の `|` は区切りにしない）。"""
+    cells, cur, in_code = [], "", False
+    for ch in line.strip().strip("|"):
+        if ch == "`":
+            in_code = not in_code
+        if ch == "|" and not in_code:
+            cells.append(cur.strip())
+            cur = ""
+            continue
+        cur += ch
+    cells.append(cur.strip())
+    return cells
+
+
+def check_columns(lines: list[str]) -> list[str]:
+    """表の列の形の不備を返す（行番号つき）。"""
+    errors: list[str] = []
+    for no, line in enumerate(lines, 1):
+        if not TABLE_ROW_RE.match(line) or line.lstrip().startswith("|---"):
+            continue
+        cells = split_cells(line)
+        if cells[0] == "subsystem":
+            if cells != COLUMNS:
+                errors.append(f"{no}: 見出しの列が {COLUMNS} と違う")
+            continue
+        if len(cells) != len(COLUMNS):
+            errors.append(f"{no}: 列の数が {len(cells)}（{len(COLUMNS)} のはず）")
+            continue
+        tests, invariant = cells[4], cells[5]
+        if not any(looks_like_path(m.group(1)) for m in BACKTICK_RE.finditer(tests)):
+            errors.append(f"{no}: 関連試験に backtick のパスが無い")
+        if not invariant:
+            errors.append(f"{no}: 不変条件が空")
+    return errors
 
 
 def expand_braces(pattern: str) -> list[str]:
@@ -112,8 +153,16 @@ def main() -> int:
         return 1
 
     doc_dir = DOC_PATH.parent
+    lines = DOC_PATH.read_text(encoding="utf-8").splitlines()
+    column_errors = check_columns(lines)
+    if column_errors:
+        print(f"NG: 表の列の形の不備 {len(column_errors)} 件（{DOC_PATH.relative_to(REPO_ROOT)}）:", file=sys.stderr)
+        for err in column_errors:
+            print(f"  - {err}", file=sys.stderr)
+        return 1
+
     candidates: set[str] = set()
-    for line in DOC_PATH.read_text(encoding="utf-8").splitlines():
+    for line in lines:
         if not TABLE_ROW_RE.match(line):
             continue
         candidates |= collect_backtick_paths(line)

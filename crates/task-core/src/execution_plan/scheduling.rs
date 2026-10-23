@@ -776,6 +776,37 @@ pub fn retired_key_errors(
     errors
 }
 
+/// ADR 2026-10-23-stage-order-and-plan-stall D3: 採用で書く行 `written`（新規・持ち越し）のうち未完の行の依存が、
+/// 採用後の行 `projected`（版を問わない）の有効な行に解決できるか。前の版で done の繰り越し行（今の版の `plan_id` を
+/// 持たない行）は有効な行なので満たされた依存になる。`child:<key>` は子 Task で解くので見ない。解決できない依存ごとに
+/// [`PlanValidationError::DependencyWithoutRow`]。純粋関数。
+pub fn dependency_without_row_errors(
+    written: &[WorkUnitRow],
+    projected: &[WorkUnitRow],
+) -> Vec<PlanValidationError> {
+    let live: BTreeSet<&str> = projected
+        .iter()
+        .filter(|u| u.status.is_active())
+        .map(|u| u.key.as_str())
+        .collect();
+    let mut errors = Vec::new();
+    for u in written
+        .iter()
+        .filter(|u| u.status.is_active() && u.status != WorkUnitStatus::Done)
+    {
+        for d in &u.depends_on {
+            if d.starts_with(CHILD_DEP_PREFIX) || live.contains(d.as_str()) {
+                continue;
+            }
+            errors.push(PlanValidationError::DependencyWithoutRow {
+                key: u.key.clone(),
+                depends_on: d.clone(),
+            });
+        }
+    }
+    errors
+}
+
 /// ADR-0079 D9（Phase R2b）: /3 の replan（差分 `execution-plan-delta/1` は /2 の形しか持たないので /3 は計画の全体を
 /// 書く）で、`done` の unit を今の版（`active`）から持ち越す（純粋関数）。planner が done の unit を書かなかった・
 /// 書き写し損ねた（unit の gate で上げ下げされた spec を知らない）ときも、採用した spec のまま新しい版に入る:

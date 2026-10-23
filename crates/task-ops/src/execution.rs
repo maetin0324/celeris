@@ -108,6 +108,13 @@ pub fn adopt_plan_with_children(
         &mut |_| new_id(),
     );
 
+    // ADR 2026-10-23-stage-order-and-plan-stall D3: 新規の採用でも同じ規則（検証を通った計画では起きないが、規則を 1 つにする）。
+    let dangling =
+        task_core::execution_plan::dependency_without_row_errors(&work_units, &work_units);
+    if !dangling.is_empty() {
+        return Err(OpsError::Validation(describe_validation_errors(&dangling)));
+    }
+
     // ADR-0074 D2.1（Phase F3 途中確認）: 採用と同じトランザクションで `Task.routing.pause_after`
     // を工程の key の集合へ解決する。v1（`phases` が空）は常に空集合（無害）。
     let pause_after = task
@@ -1032,6 +1039,27 @@ pub fn plan_replan(
                     }
                 }
             }
+        }
+    }
+
+    // ADR 2026-10-23-stage-order-and-plan-stall D3: 書く未完の行の依存は、採用後の有効な行（前の版で done の繰り越し行を
+    // 含む）に解決できなければならない。解決できない依存は待っても満たされないので採用しない。
+    {
+        let written: Vec<WorkUnitRow> = updated_work_units
+            .iter()
+            .chain(new_work_units.iter())
+            .cloned()
+            .collect();
+        let mut projected: Vec<WorkUnitRow> = all_units
+            .iter()
+            .filter(|u| !written.iter().any(|w| w.id == u.id))
+            .cloned()
+            .collect();
+        projected.extend(written.iter().cloned());
+        let dangling =
+            task_core::execution_plan::dependency_without_row_errors(&written, &projected);
+        if !dangling.is_empty() {
+            return Err(OpsError::Validation(describe_validation_errors(&dangling)));
         }
     }
 

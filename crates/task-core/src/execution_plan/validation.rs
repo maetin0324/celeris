@@ -314,6 +314,12 @@ pub enum PlanValidationError {
     DaemonAddedKeyReused {
         key: String,
     },
+    /// ADR 2026-10-23-stage-order-and-plan-stall D3: 採用で書く未完の行の依存が、有効な行（版を問わない。前の版で done の
+    /// 繰り越し行は満たされた依存）に解決できない。待っても満たされないので採用しない。
+    DependencyWithoutRow {
+        key: String,
+        depends_on: String,
+    },
     /// この深さの task の計画は kind task の unit を持てない（U-R1: `depth < max_depth` のときだけ）。
     ChildTaskTooDeep {
         key: String,
@@ -637,6 +643,10 @@ impl std::fmt::Display for PlanValidationError {
             } => write!(
                 f,
                 "stage key {stage:?} was used by a stage removed in an earlier plan version (its integration work unit {key} is superseded) and cannot be reused; choose a new stage key（前の版で消した段階の key は再利用できない。新しい段階の key を選ぶこと。ADR-0079 R7-3）"
+            ),
+            PlanValidationError::DependencyWithoutRow { key, depends_on } => write!(
+                f,
+                "work unit {key} depends on {depends_on}, which has no live work unit row (superseded, cancelled or never created); it would wait forever（{key} の依存 {depends_on} に有効な行が無く、満たされない。ADR 2026-10-23-stage-order-and-plan-stall D3）"
             ),
             PlanValidationError::DaemonAddedKeyReused { key } => write!(
                 f,

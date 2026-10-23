@@ -2631,3 +2631,61 @@ fn stalled_production_state_resumes_from_the_earlier_stage() {
         vec!["wu-chat-port".to_string()]
     );
 }
+
+// ---- ADR 2026-10-23-stage-order-and-plan-stall D3: 行の無い依存 ----
+
+/// 前の版で done の繰り越し行（今の版の `plan_id` を持たない parity-close）は満たされた依存。integrate-close は
+/// parity-final だけを待つ。
+#[test]
+fn carried_over_done_row_from_an_earlier_version_satisfies_a_dependency() {
+    let mut parity_close = row_v2("parity-close", "close", 6, WorkUnitStatus::Done, &[]);
+    parity_close.plan_id = "plan-v1".to_string();
+    let parity_final = row_v2("parity-final", "close", 30, WorkUnitStatus::Pending, &[]);
+    let integ = integ_v2(
+        "close",
+        31,
+        WorkUnitStatus::Pending,
+        &["parity-close", "parity-final"],
+    );
+    let written = vec![parity_final.clone(), integ.clone()];
+    let projected = vec![parity_close, parity_final, integ];
+    assert!(dependency_without_row_errors(&written, &projected).is_empty());
+    let waits = crate::wait::unit_waits(&projected, &BTreeSet::new());
+    let w = waits.iter().find(|w| w.key == "integrate-close").unwrap();
+    assert_eq!(w.waiting_on, vec!["parity-final".to_string()]);
+}
+
+/// 有効な行に解決できない依存（行の無い key・superseded の行）は採用を拒む。`child:` は対象外。
+#[test]
+fn dependency_on_a_key_without_a_live_row_is_rejected() {
+    let gone = row_v2("gone", "close", 5, WorkUnitStatus::Superseded, &[]);
+    let a = row_v2(
+        "a",
+        "close",
+        10,
+        WorkUnitStatus::Pending,
+        &["gone", "missing"],
+    );
+    let b = row_v2("b", "close", 11, WorkUnitStatus::Pending, &["child:k"]);
+    let done_dangling = row_v2("old", "close", 1, WorkUnitStatus::Done, &["missing"]);
+    let written = vec![a.clone(), b.clone(), done_dangling.clone()];
+    let projected = vec![gone, a, b, done_dangling];
+    let errs = dependency_without_row_errors(&written, &projected);
+    let pairs: Vec<(String, String)> = errs
+        .iter()
+        .map(|e| match e {
+            PlanValidationError::DependencyWithoutRow { key, depends_on } => {
+                (key.clone(), depends_on.clone())
+            }
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            ("a".to_string(), "gone".to_string()),
+            ("a".to_string(), "missing".to_string())
+        ]
+    );
+    assert!(errs[0].to_string().contains("no live work unit row"));
+}

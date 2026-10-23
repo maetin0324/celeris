@@ -2752,7 +2752,8 @@ async fn parallel_units_survive_dispatcher_restart() {
     let second = Arc::new(
         ParallelWuAdapter::new(Duration::from_millis(10))
             .with_file("a", "a.txt", "a")
-            .with_file("b", "b.txt", "b"),
+            .with_file("b", "b.txt", "b")
+            .meeting(2),
     );
     let mut d2 = parallel_dispatcher(store.clone(), second.clone(), root.path(), 3, 3, 3);
     let report = d2.tick().unwrap();

@@ -2202,6 +2202,9 @@ struct ParallelWuAdapter {
     /// この key の run は `gate` が開くまで終わらない（再起動・Cancel の試験用）。
     hold: StdMutex<std::collections::HashSet<String>>,
     gate: tokio::sync::Notify,
+    /// WU の run は同時に走る run がこの数に届くまで終わらない（並列の観測を負荷に依らず決める）。
+    meet: Option<usize>,
+    met: tokio::sync::Notify,
     /// planner run（`context.execution_planner`）が順に書く `execution-plan.json`（F5-fix）。
     planner_outputs: StdMutex<std::collections::VecDeque<String>>,
 }
@@ -2219,6 +2222,8 @@ impl ParallelWuAdapter {
             seen: StdMutex::new(Vec::new()),
             hold: StdMutex::new(std::collections::HashSet::new()),
             gate: tokio::sync::Notify::new(),
+            meet: None,
+            met: tokio::sync::Notify::new(),
             planner_outputs: StdMutex::new(std::collections::VecDeque::new()),
         }
     }
@@ -2252,6 +2257,11 @@ impl ParallelWuAdapter {
 
     fn holding(self, key: &str) -> Self {
         self.hold.lock().unwrap().insert(key.to_string());
+        self
+    }
+
+    fn meeting(mut self, n: usize) -> Self {
+        self.meet = Some(n);
         self
     }
 
@@ -2321,6 +2331,18 @@ impl WorkerAdapter for ParallelWuAdapter {
             .push((key.clone(), cwd.clone(), req.artifacts_dir.clone()));
         let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_active.fetch_max(now, Ordering::SeqCst);
+        self.met.notify_waiters();
+        if let Some(n) = self.meet {
+            loop {
+                let met = self.met.notified();
+                tokio::pin!(met);
+                met.as_mut().enable();
+                if self.max_active() >= n {
+                    break;
+                }
+                met.await;
+            }
+        }
         if let Some(files) = self.files.get(&key) {
             for (path, content) in files {
                 std::fs::write(cwd.join(path), content).unwrap();

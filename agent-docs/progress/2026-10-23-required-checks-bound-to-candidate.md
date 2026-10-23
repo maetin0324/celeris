@@ -79,3 +79,21 @@ config・DB の変更なし。昇格時に MergeQueued で止まっている配�
   Done でないこと・合格証跡がないことを検査するよう更新した。run と write-set の unavailable/理由保持の検査は維持。
 - `cargo test -p task-dispatch --lib write_set_record_git_failure_keeps_the_run_and_records_unavailable`:
   exit 0（1 passed）。production の迂回・例外は追加していない。必須3検査は修正後の SHA で再実行する。
+
+### evidence-gaps の確定した検証結果
+
+- 実装・検証対象 SHA: 79e5ec762d3a6cf80a07a9a17546cd13997ff6aa（実装 commit）。必須検査を実行した時点の worktree は clean。
+- digest は v2 domain と長さ付き cmd 列を使う。旧実装が別 repo に複製した成功も失効させる。
+- 対象単体試験: review 60、target_sync 23、delivery 34、定義 loader 2、task-core required_checks 9、実 worktree 2 repo の試験と既存 repo 必須検査の試験はすべて exit 0。
+- `UPDATE_SCHEMA=1 cargo test -p task-core --lib event_row_schema_matches_committed`: exit 0。
+- `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema::tests::committed_schema_matches_generated`: exit 0。
+- `node web/scripts/gen-types.mjs`: exit 0。
+- `cargo test -p task-core --lib required_checks::`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/test-affected.sh`: exit 0。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- test-affected の集計: Summary [ 220.331s] 6316 tests run: 6316 passed (8 slow), 17 skipped。明示的な全 workspace/e2e/browser/userns コマンドは追加・実行していない。
+- crates・docs/api・web/api の削除対象欄は検索結果 0 件。schema と web 生成型は再生成済み。
+- 本節を記録する後続 commit は進捗文書のみを変更する。実装との差分を確認し、最終記録 commit SHA は result.json に記録する。
+- 任意の progress-index --check は既存の別進捗文書の front matter 不備を報告（本ファイルへの指摘なし）。必須3検査には影響しない。
+- この WU の残件なし。shell fixture とタスク全体の最終記録は後続 WU shell-test-records に残る。

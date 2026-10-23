@@ -155,13 +155,21 @@ pub(crate) fn reconcile(
                     Some(Outcome::Cancelled) => "executor_cancelled",
                     Some(Outcome::Blocked) => "executor_blocked",
                 };
-                *rc.totals
-                    .entry(c)
-                    .or_default()
-                    .fault_breakdown
+                // 測定基盤の観測障害は workflow fault の結果とは別の軸（実行器の結果を問わない）。
+                let collector = match first.and_then(|r| grades.get(&key_of(r))) {
+                    Some(GradeOutcome::ObservationFailure(_)) => "observation_failed",
+                    _ => "no_collector_failure",
+                };
+                let t = rc.totals.entry(c).or_default();
+                *t.fault_breakdown
                     .entry(exposure.into())
                     .or_default()
                     .entry(outcome.into())
+                    .or_default() += 1;
+                *t.observation_breakdown
+                    .entry(exposure.into())
+                    .or_default()
+                    .entry(collector.into())
                     .or_default() += 1;
             }
         }

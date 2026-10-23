@@ -27,6 +27,10 @@ fn pilot_out(dir: &Path) -> (CampaignManifest, PathBuf) {
 }
 
 fn pilot_out_with_faults(dir: &Path, faults: bool) -> (CampaignManifest, PathBuf) {
+    pilot_out_with(dir, faults, &MockExecutor::seeded())
+}
+
+fn pilot_out_with(dir: &Path, faults: bool, exec: &MockExecutor) -> (CampaignManifest, PathBuf) {
     let mp = fx().join("pilot.json");
     let mut m = CampaignManifest::load(&mp).expect("pilot");
     if faults {
@@ -48,7 +52,7 @@ fn pilot_out_with_faults(dir: &Path, faults: bool) -> (CampaignManifest, PathBuf
         case_inputs: Default::default(),
         lock: None,
     };
-    run(&m, &i, &MockExecutor::seeded(), &o).expect("run");
+    run(&m, &i, exec, &o).expect("run");
     (m, out)
 }
 
@@ -472,5 +476,124 @@ fn collector_classes_remain_distinct_from_grader_and_injected_faults() {
         )
         .unwrap();
         assert!(!check(&m, &out).ok);
+    }
+}
+
+/// executor が failed / timeout で終わった cell の収集が fetch_failed のとき、bind → check → export で観測障害が
+/// executor の結果と独立に数えられ（workflow fault の軸とも別）、再収集後の実 grade_out の再採点で解消されること。
+/// pilot の grade case は実験 case でないので、1 回目の grade 行は grade_out と同じ形で書く。
+#[test]
+fn fetch_failure_is_counted_for_executor_failed_and_timeout_cells_and_clears_on_regrade() {
+    use celeris_campaign::{executor::MockStep, manifest::ConfigId};
+    let mp = fx().join("pilot.json");
+    let mut probe = CampaignManifest::load(&mp).unwrap();
+    probe.problems = probe.secondary.subset.clone();
+    let (faulted, other) = (probe.problems[0].clone(), probe.problems[1].clone());
+    let mut script = std::collections::BTreeMap::new();
+    for c in [ConfigId::A, ConfigId::B, ConfigId::C] {
+        script.insert((c, faulted.clone()), MockStep::Fail);
+        script.insert((c, other.clone()), MockStep::Timeout);
+    }
+    let d = tempfile::tempdir().unwrap();
+    let (m, out) = pilot_out_with(d.path(), true, &MockExecutor::scripted(script));
+    write_faults(&out, &fault_records(&m, &out, "injected"));
+    let outcomes: Vec<String> = fs::read_to_string(out.join("trials.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|l| {
+            serde_json::from_str::<Value>(l).unwrap()["outcome"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert!(
+        outcomes.iter().all(|o| o == "failed" || o == "timeout"),
+        "{outcomes:?}"
+    );
+    common::write_grades_classed(&m, &out, |_| Some("env_failure"));
+    let path = out.join(GRADES_FILE);
+    let lines: String = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            let mut v: Value = serde_json::from_str(l).unwrap();
+            v["observation"] = json!({
+                "status": "collect_failed", "failure_class": "env_failure",
+                "issues": [{"class": "fetch_failed", "detail": "ssh qstat: connection refused"}],
+            });
+            format!("{v}\n")
+        })
+        .collect();
+    fs::write(&path, lines).unwrap();
+    let rep = check(&m, &out);
+    assert!(rep.ok, "{:?}", rep.violations);
+    assert!(!rep.complete);
+    assert!(
+        rep.incomplete_reasons
+            .iter()
+            .any(|r| r.contains("fetch_failed") && r.contains("re-collect")),
+        "{:?}",
+        rep.incomplete_reasons
+    );
+    let table = export(&m, &out, &out.join("ex")).unwrap();
+    for row in table["configs"].as_array().unwrap() {
+        let n = row["n"].as_u64().unwrap();
+        // 観測障害は executor の failed/timeout と重なって数える（落とさない）。model_failure にしない。
+        assert_eq!(row["observation_failed"], n, "{row}");
+        assert_eq!(row["observation_failures"]["fetch_failed"], n);
+        assert_eq!(row["grader_failed"], 0);
+        assert_eq!(
+            row["failed"].as_u64().unwrap() + row["timeout"].as_u64().unwrap(),
+            n
+        );
+        // 原因別内訳は排他のまま（executor-passed の観測障害だけが observation_failed）。
+        assert_eq!(row["failure_breakdown"]["observation_failed"], 0);
+        // workflow fault の軸は executor の結果、観測障害は別の軸。
+        assert_eq!(row["fault_breakdown"]["injected"]["executor_failed"], 1);
+        assert_eq!(
+            row["observation_breakdown"]["injected"]["observation_failed"],
+            1
+        );
+        assert_eq!(
+            row["observation_breakdown"]["not_planned"]["observation_failed"],
+            n - 1
+        );
+    }
+    let csv = fs::read_to_string(out.join("ex/table.incomplete.csv")).unwrap();
+    assert!(csv.contains("observation_breakdown") && csv.contains("fetch_failed"));
+    // 再収集で取得に成功した（失敗記録が無い）後の実 grade_out の再採点では観測障害が消え、前の grade は履歴に残る。
+    grade_out(
+        &m,
+        &out,
+        &fx().join("grade-cases/pilot"),
+        &canned(101, "test chunk_zero ... FAILED\n", ""),
+    )
+    .unwrap();
+    assert!(
+        fs::read_to_string(out.join(GRADES_HISTORY_FILE))
+            .unwrap()
+            .contains("fetch_failed")
+    );
+    let rep = check(&m, &out);
+    assert!(rep.ok, "{:?}", rep.violations);
+    assert!(
+        rep.incomplete_reasons
+            .iter()
+            .all(|r| !r.contains("fetch_failed"))
+    );
+    let table = export(&m, &out, &out.join("ex")).unwrap();
+    for row in table["configs"].as_array().unwrap() {
+        let n = row["n"].as_u64().unwrap();
+        assert_eq!(row["observation_failed"], 0);
+        assert_eq!(
+            row["observation_breakdown"]["injected"]["no_collector_failure"],
+            1
+        );
+        assert_eq!(
+            row["observation_breakdown"]["not_planned"]["no_collector_failure"],
+            n - 1
+        );
+        assert_eq!(row["fault_breakdown"]["injected"]["executor_failed"], 1);
     }
 }

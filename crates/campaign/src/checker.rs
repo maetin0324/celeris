@@ -44,9 +44,19 @@ pub struct Totals {
     /// Collector failures by class (one count per cell/class; multiple classes may overlap).
     #[serde(default)]
     pub observation_failures: BTreeMap<String, u64>,
-    /// Cells with collector failures; disjoint from grader failure counts.
+    /// Cells with collector failures, counted for every planned cell independently of the executor
+    /// result (an executor `failed`/`timeout` cell whose job could not be fetched is counted here too).
+    /// Overlaps `failed`/`timeout`/…; `failure_breakdown` uses the disjoint `grader_observation_failed`.
     #[serde(default)]
     pub observation_failed: u64,
+    /// Executor passed but the grade is blocked by a collector failure (disjoint from grader failure counts).
+    #[serde(default)]
+    pub grader_observation_failed: u64,
+    /// Independent exposure × collector status cross-tabulation (`observation_failed` / `no_collector_failure`);
+    /// sums to n per config, kept apart from `fault_breakdown` so injected workflow faults and
+    /// measurement-infrastructure observation failures are never merged.
+    #[serde(default)]
+    pub observation_breakdown: BTreeMap<String, BTreeMap<String, u64>>,
     /// 実行器は passed だが独立採点の不合格の原因が決められない（初期 tree 未指定）。再採点まで未確定で `complete=false`。
     #[serde(default)]
     pub grader_undetermined: u64,
@@ -1013,6 +1023,24 @@ pub fn recompute_graded(
             continue;
         };
         t.unexecuted += u64::from(cell.unexecuted);
+        // 収集の失敗は実行器の結果と独立に数える（failed/timeout の cell の取得失敗も落とさない）。
+        if let Some(crate::grades::GradeOutcome::ObservationFailure(issues)) = cell
+            .canonical_trial_no
+            .and_then(|n| grades.get(&(cell.config, cell.problem_id.clone(), cell.rep, n)))
+        {
+            t.observation_failed += 1;
+            let classes: BTreeSet<String> = issues
+                .iter()
+                .filter_map(|i| {
+                    serde_json::to_value(i.class)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                })
+                .collect();
+            for class in classes {
+                *t.observation_failures.entry(class).or_default() += 1;
+            }
+        }
         use crate::success::SuccessClass as S;
         match cell.class {
             S::ValidatedSuccess => t.final_passed += 1,
@@ -1020,28 +1048,7 @@ pub fn recompute_graded(
             S::GraderEnvFailure => t.grader_env_failure += 1,
             S::GraderUndetermined => t.grader_undetermined += 1,
             S::ControlOnly => t.grader_control_only += 1,
-            S::ObservationFailed => {
-                t.observation_failed += 1;
-                use crate::grades::GradeOutcome as G;
-                if let Some(G::ObservationFailure(issues)) = cell
-                    .canonical_trial_no
-                    .and_then(|n| grades.get(&(cell.config, cell.problem_id.clone(), cell.rep, n)))
-                {
-                    let classes: std::collections::BTreeSet<String> = issues
-                        .iter()
-                        .map(|i| {
-                            serde_json::to_value(i.class)
-                                .unwrap()
-                                .as_str()
-                                .unwrap()
-                                .to_owned()
-                        })
-                        .collect();
-                    for class in classes {
-                        *t.observation_failures.entry(class).or_default() += 1;
-                    }
-                }
-            }
+            S::ObservationFailed => t.grader_observation_failed += 1,
             S::Ungraded => t.ungraded += 1,
             S::ExecutorFailed => t.failed += 1,
             S::ExecutorError => t.error += 1,

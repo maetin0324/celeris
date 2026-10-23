@@ -76,9 +76,10 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
     row["observation_failed"] = json!(t.observation_failed);
     row["observation_failures"] = json!(t.observation_failures);
     row["fault_breakdown"] = json!(t.fault_breakdown);
+    row["observation_breakdown"] = json!(t.observation_breakdown);
     row["failure_breakdown"] = json!({
         "model_failure": t.grader_failed,
-        "observation_failed": t.observation_failed,
+        "observation_failed": t.grader_observation_failed,
         "grader_env_failure": t.grader_env_failure,
         "grader_undetermined": t.grader_undetermined,
         "grader_control_only": t.grader_control_only,
@@ -93,7 +94,7 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
     row
 }
 
-pub const COLUMNS: [&str; 43] = [
+pub const COLUMNS: [&str; 44] = [
     "config",
     "harness",
     "model",
@@ -137,6 +138,7 @@ pub const COLUMNS: [&str; 43] = [
     "cost_micro_usd_sum",
     "cost_status",
     "fault_breakdown",
+    "observation_breakdown",
 ];
 
 fn cell(v: &Value, col: &str) -> String {

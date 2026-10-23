@@ -30,3 +30,14 @@ workflow fault は引き続き別軸とし、fault_breakdown に注入状態 × 
 検査ログは `/local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/` の targeted.log、test-affected.log、clippy.log、fmt.log に保存する。試験の raw・grade・集計は tempfile 内の合成データで、試験終了時に削除する。実測定の raw・grade・集計は新規作成しておらず、既存の履歴も変更していない。
 
 K2/HPC 比較はまだ開始不可。前回報告の未解決条件を継続する: Sirius の qstat Variable_List に trial 印が残ることの実機確認、測定用 A の cap-env/prompt への wrapper 導入、およびタスク1・2の成立が必要。取得元は Sirius の scheduler 記録、設定元は測定 campaign の A cap-env と case prompt。これらの実資産・実機の確認を fixture 成功で代替しない。本番設定の変更、実 pilot、有料評価は実施していない。
+
+## 再試行 3（attempt 3）: executor 失敗 cell の観測障害の集計
+
+前回レビューの指摘（checker の ObservationFailure 集計が executor passed の分岐の中だけにあり、failed/timeout 等の cell の fetch_failed が `observation_failed` に出ない。faults の reconcile も executor_* しか出さない）を再現・修正した。
+
+- `checker::recompute_graded`: `observation_failed`/`observation_failures` を executor の結果と独立に全 cell で数える。排他の内訳用に `grader_observation_failed`（executor passed で収集失敗）を足し、export の `failure_breakdown.observation_failed` はこれを使う（内訳の和は n のまま）。再収集・再採点の案内（incomplete_reasons）も全 cell の分類から出る。
+- `faults::reconcile`: `fault_breakdown`（注入状態 × executor/grade 結果）とは別に `observation_breakdown`（注入状態 × `observation_failed`/`no_collector_failure`）を数え、export の JSON/CSV に出す。workflow fault と観測障害を同じ軸に混ぜない。
+- 試験 `grade_failure_class::fetch_failure_is_counted_for_executor_failed_and_timeout_cells_and_clears_on_regrade`: scripted executor で全 cell を failed/timeout にし、fetch_failed の grade 行で bind → check/export を通す（observation_failed = n、grader_failed = 0、fault_breakdown は executor_failed、observation_breakdown に observation_failed、complete=false と再収集案内）。その後に失敗記録の無い状態で実 grade_out を再実行し、観測障害が消え前の grade が grades.history.jsonl に残ることを確かめる。pilot の grade case は実験 case でないので、1 回目の grade 行は grade_out と同じ形で書いた（実験 case の実 grade_out 経路は launcher 試験が覆う）。
+- ADR `agent-docs/adr/2026-10-23-a-submit-audit-and-collect-classes.md` D6 を更新。
+
+検証結果は task の完了報告に記す。K2/HPC 比較の開始可否の結論（開始不可）と未解決条件は上記から変わらない。

@@ -535,6 +535,9 @@ impl HumanOpRecord {
             if set.is_empty() {
                 return Err("set が空".into());
             }
+            if set.get(RETRACTED).is_some_and(|v| !v.is_boolean()) {
+                return Err("set.retracted は true / false".into());
+            }
             for k in set.keys() {
                 if !CORRECTABLE.contains(&k.as_str()) {
                     return Err(format!(
@@ -620,7 +623,8 @@ impl HumanOpRecord {
 }
 
 /// correction で置き換えられる欄。
-const CORRECTABLE: [&str; 18] = [
+const CORRECTABLE: [&str; 19] = [
+    "retracted",
     "start",
     "end",
     "occurred_at",
@@ -721,8 +725,29 @@ pub fn read_records(path: &Path) -> Result<Vec<HumanOpRecord>, HumanOpError> {
     Ok(out)
 }
 
-/// correction を適用した、record_id で一意の読み出し。correction 行自体は含めない。
+/// correction の `set` で記録を取り消す擬似欄。`true` の記録は resolve の結果から外れる（元の行は file に残る）。
+pub const RETRACTED: &str = "retracted";
+
+/// 適用した correction（補正履歴）。報告に元記録・補正の対・理由を残す。
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AppliedCorrection {
+    pub correction_id: String,
+    pub corrects: String,
+    pub campaign_id: String,
+    pub recorded_at: String,
+    pub set: Map<String, Value>,
+    pub note: Option<String>,
+}
+
+/// correction を適用した、record_id で一意の読み出し。correction 行自体と取り消した記録は含めない。
 pub fn resolve(records: &[HumanOpRecord]) -> Result<Vec<HumanOpRecord>, HumanOpError> {
+    resolve_with_history(records).map(|(r, _)| r)
+}
+
+/// `resolve` と、適用した correction の履歴（行順）。
+pub fn resolve_with_history(
+    records: &[HumanOpRecord],
+) -> Result<(Vec<HumanOpRecord>, Vec<AppliedCorrection>), HumanOpError> {
     let mut by_id: BTreeMap<&str, usize> = BTreeMap::new();
     for (i, r) in records.iter().enumerate() {
         by_id.entry(r.record_id.as_str()).or_insert(i);
@@ -761,6 +786,21 @@ pub fn resolve(records: &[HumanOpRecord]) -> Result<Vec<HumanOpRecord>, HumanOpE
             }
         }
     }
+    let mut history = Vec::new();
+    for (ci, c) in records.iter().enumerate() {
+        if c.record_type == RecordType::Correction
+            && let (Some(t), Some(set)) = (c.corrects.as_ref(), &eff[ci])
+        {
+            history.push(AppliedCorrection {
+                correction_id: c.record_id.clone(),
+                corrects: t.clone(),
+                campaign_id: c.campaign_id.clone(),
+                recorded_at: c.recorded_at.clone(),
+                set: set.clone(),
+                note: c.note.clone(),
+            });
+        }
+    }
     let mut out = Vec::new();
     for r in records {
         if r.record_type == RecordType::Correction {
@@ -768,16 +808,25 @@ pub fn resolve(records: &[HumanOpRecord]) -> Result<Vec<HumanOpRecord>, HumanOpE
         }
         let mut v = serde_json::to_value(r).map_err(|e| HumanOpError::Invalid(e.to_string()))?;
         let mut touched = false;
+        let mut retracted = false;
         for (ci, c) in records.iter().enumerate() {
             if c.record_type == RecordType::Correction
                 && c.corrects.as_deref() == Some(r.record_id.as_str())
                 && let (Some(set), Some(m)) = (&eff[ci], v.as_object_mut())
             {
                 for (k, x) in set {
+                    if k == RETRACTED {
+                        // 後の correction が勝つ（false で取り消しを戻せる）。
+                        retracted = x == &Value::Bool(true);
+                        continue;
+                    }
                     m.insert(k.clone(), x.clone());
                 }
                 touched = true;
             }
+        }
+        if retracted {
+            continue;
         }
         let rr: HumanOpRecord = if touched {
             serde_json::from_value(v)
@@ -789,7 +838,7 @@ pub fn resolve(records: &[HumanOpRecord]) -> Result<Vec<HumanOpRecord>, HumanOpE
             .map_err(|e| HumanOpError::Invalid(format!("{}: 訂正後 {e}", r.record_id)))?;
         out.push(rr);
     }
-    Ok(out)
+    Ok((out, history))
 }
 
 /// 追記専用の JSONL。
@@ -927,6 +976,8 @@ record --file F --campaign ID (--manifest-sha256 H | --manifest M) --case ID --a
 [--actor-kind human|script] [--trigger T] [--logical-op ID] [--attempt N] [--started-at T|now] [--ended-at T|now] [--outcome ok|failed|abandoned] [--reason S] [--target kind:ref]... \
 [--task-id ID] [--run-id ID] [--celeris-event-ref R] [--trial-no N] [--missing-reason R] [--time-basis B] [--time-precision P] [--note S]\n\
 span --kind wait|attempt|job|cutoff (same identity flags) [--wait-kind K] [--logical-op ID] [--attempt N] [--result R] [--job-ref S:C:ID] [--job-submit|--job-start|--job-end T] [--started-at T] [--ended-at T] [--occurred-at T]\n\
+scope: --scope trial (default; --arm/--case/--rep 必須) | --scope shared [--experiment-set main-ab|jev-bc] (campaign 全体の共有作業。arm へ配分しない)\n\
+correct --file F (--corrects ID... | --logical-op L [--campaign ID] [--arm A0|B0|B1|C1]) (--retract | --set-field k=<JSON>...) --reason S (追記専用の訂正。元の行は残る)\n\
 validate --file F\nlist --file F [--campaign ID] [--arm A0|B0|B1|C1] [--case ID]\n\
 clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--host H] (env CELERIS_HUMAN_OPS_NOW / CELERIS_HUMAN_OPS_HOST)";
 
@@ -1032,7 +1083,6 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
 
     fn ctx(args: &[String]) -> Result<Ctx, String> {
         let clock = clock(args)?;
-        let (set, arm) = arm_of(&req(args, "--arm")?)?;
         let campaign_id = req(args, "--campaign")?;
         let manifest_sha256 = match (opt(args, "--manifest-sha256"), opt(args, "--manifest")) {
             (Some(h), _) => h,
@@ -1040,23 +1090,46 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
             (None, Some(p)) => CampaignManifest::load(Path::new(&p))?.compute_sha256()?,
             _ => return Err(format!("--manifest-sha256 か --manifest が必要\n{USAGE}")),
         };
-        let case = req(args, "--case")?;
-        let rep = parse_num("--rep", &req(args, "--rep")?)?;
-        let trial_no = match opt(args, "--trial-no") {
-            Some(n) => parse_num("--trial-no", &n)?,
-            None => 1,
+        // scope: trial（arm/case/rep の 1 試行）か shared（campaign 全体の共有作業。arm へ配分しない）。
+        let shared = match opt(args, "--scope").as_deref() {
+            None | Some("trial") => false,
+            Some("shared") => true,
+            Some(o) => return Err(format!("--scope: trial|shared（{o:?}）")),
         };
-        let key = TrialKey {
-            manifest_sha256: manifest_sha256.clone(),
-            problem_id: case.clone(),
-            arm,
-            trial_no,
-            rep,
-        }
-        .idempotency_key();
+        let (set, ident) = if shared {
+            for f in ["--arm", "--case", "--rep", "--trial-no"] {
+                if opt(args, f).is_some() {
+                    return Err(format!(
+                        "--scope shared では {f} を書かない（arm へ配分しない）"
+                    ));
+                }
+            }
+            let set: ExperimentSet = parse_enum(
+                "--experiment-set",
+                &opt(args, "--experiment-set").unwrap_or_else(|| "main-ab".into()),
+            )?;
+            (set, None)
+        } else {
+            let (set, arm) = arm_of(&req(args, "--arm")?)?;
+            let case = req(args, "--case")?;
+            let rep = parse_num("--rep", &req(args, "--rep")?)?;
+            let trial_no = match opt(args, "--trial-no") {
+                Some(n) => parse_num("--trial-no", &n)?,
+                None => 1,
+            };
+            let key = TrialKey {
+                manifest_sha256: manifest_sha256.clone(),
+                problem_id: case.clone(),
+                arm,
+                trial_no,
+                rep,
+            }
+            .idempotency_key();
+            (set, Some((arm, case, rep, trial_no, key)))
+        };
         let mut missing = BTreeMap::new();
         // A に Celeris の task / run は無い（定義書 §2.1）。
-        let a_arm = arm == ConfigId::A;
+        let a_arm = ident.as_ref().is_some_and(|i| i.0 == ConfigId::A);
         let task_id = opt(args, "--task-id");
         let run_id = opt(args, "--run-id");
         if a_arm {
@@ -1088,11 +1161,11 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
             experiment_set: set,
             campaign_id,
             manifest_sha256,
-            case_id: Some(case),
-            arm: Some(arm),
-            repetition: Some(rep),
-            trial_no: Some(trial_no),
-            trial_key: Some(key),
+            case_id: ident.as_ref().map(|i| i.1.clone()),
+            arm: ident.as_ref().map(|i| i.0),
+            repetition: ident.as_ref().map(|i| i.2),
+            trial_no: ident.as_ref().map(|i| i.3),
+            trial_key: ident.map(|i| i.4),
             task_id,
             run_id,
             job_ref: None,
@@ -1310,6 +1383,106 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
         append_all(Path::new(&file), recs)
     }
 
+    /// `correct`: 追記専用の訂正。`--corrects ID`（繰り返し可）か `--logical-op L`（同じ campaign の該当記録すべて。
+    /// `--arm` で絞れる）を対象に、`--retract`（取り消し）か `--set-field k=<JSON>`（繰り返し可）の correction 行を書く。
+    /// 元の行は書き換えない。`--reason` は correction の note に残る（補正履歴）。
+    fn correct(args: &[String]) -> Result<String, String> {
+        let file = req(args, "--file")?;
+        let reason = req(args, "--reason")?;
+        let clock = clock(args)?;
+        let existing = read(args)?;
+        let mut targets: Vec<&HumanOpRecord> = Vec::new();
+        for id in opts(args, "--corrects") {
+            let t = existing
+                .iter()
+                .find(|r| r.record_id == id)
+                .ok_or_else(|| format!("--corrects {id}: file に無い"))?;
+            targets.push(t);
+        }
+        if let Some(l) = opt(args, "--logical-op") {
+            let campaign = opt(args, "--campaign");
+            let arm = opt(args, "--arm");
+            let hit: Vec<&HumanOpRecord> = existing
+                .iter()
+                .filter(|r| r.record_type != RecordType::Correction)
+                .filter(|r| r.logical_op_id.as_deref() == Some(l.as_str()))
+                .filter(|r| campaign.as_deref().is_none_or(|c| r.campaign_id == c))
+                .filter(|r| arm.as_deref().is_none_or(|a| r.arm_label() == Some(a)))
+                .collect();
+            if hit.is_empty() {
+                return Err(format!("--logical-op {l}: 該当する記録が無い"));
+            }
+            targets.extend(hit);
+        }
+        if targets.is_empty() {
+            return Err(format!("--corrects か --logical-op が必要\n{USAGE}"));
+        }
+        let mut set = serde_json::Map::new();
+        if args.iter().any(|a| a == "--retract") {
+            set.insert(RETRACTED.into(), Value::Bool(true));
+        }
+        for kv in opts(args, "--set-field") {
+            let (k, v) = kv.split_once('=').ok_or("--set-field は k=<JSON>")?;
+            let v: Value = serde_json::from_str(v).unwrap_or(Value::String(v.to_string()));
+            set.insert(k.to_string(), v);
+        }
+        if set.is_empty() {
+            return Err("--retract か --set-field が必要".into());
+        }
+        let mut recs = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for t in targets {
+            if !seen.insert(t.record_id.clone()) {
+                continue;
+            }
+            recs.push(HumanOpRecord {
+                schema: HUMAN_OP_SCHEMA.into(),
+                record_id: String::new(),
+                record_type: RecordType::Correction,
+                experiment_set: t.experiment_set,
+                campaign_id: t.campaign_id.clone(),
+                manifest_sha256: t.manifest_sha256.clone(),
+                case_id: None,
+                arm: None,
+                repetition: None,
+                trial_no: None,
+                trial_key: None,
+                task_id: None,
+                run_id: None,
+                job_ref: None,
+                logical_op_id: None,
+                attempt: None,
+                recorded_at: clock.now.clone(),
+                clock_source: clock.source,
+                host: clock.host.clone(),
+                start: None,
+                end: None,
+                occurred_at: None,
+                job_submit: None,
+                job_start: None,
+                job_end: None,
+                time_basis: None,
+                time_precision: None,
+                missing: BTreeMap::new(),
+                op_kind: None,
+                mode: None,
+                intent: None,
+                actor: None,
+                reason: None,
+                trigger: None,
+                targets: vec![],
+                celeris_event_ref: None,
+                outcome: None,
+                wait_kind: None,
+                result: None,
+                corrects: Some(t.record_id.clone()),
+                set: Some(set.clone()),
+                note: Some(reason.clone()),
+            });
+        }
+        append_all(Path::new(&file), recs)
+    }
+
     fn read(args: &[String]) -> Result<Vec<HumanOpRecord>, String> {
         let file = req(args, "--file")?;
         if !Path::new(&file).exists() {
@@ -1374,6 +1547,7 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
         match args.get(1).map(String::as_str) {
             Some("record") => record(rest),
             Some("span") => span(rest),
+            Some("correct") => correct(rest),
             Some("validate") => validate(rest),
             Some("list") => list(rest),
             Some("join") => crate::human_ops_join::join_cli(rest),

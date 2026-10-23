@@ -143,9 +143,9 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 | run の区間 | （run は無い。試行＝harness 1 回） | `runs.started_at`/`finished_at`、`WorkerStarted`/`WorkerFinished` | 書かない |
 | ready_not_running | not_applicable | `Transitioned` で `ready` にいた区間のうち running run が無い時間 | 書かない |
 | external_queue_wait | `job_observation`（scheduler 計上） | 主: `job_observation`、照合: `ClusterJobWaitStarted/Polled/Finished` | **書く**（A/B とも同じ計上値） |
-| human_wait（システムが人を待つ） | `wait_start`/`wait_end`（transcript の ts があれば `time_basis=harness_transcript`） | `QuestionRaised`/`ApprovalRequested`/`BrowserWaitOpened` → `Answered`/`ApprovalDecided`/`BrowserWaitResolved`、`Transitioned` blocked 区間 | A だけ書く |
+| human_wait（システムが人を待つ） | `wait_start`/`wait_end`（transcript の ts があれば `time_basis=harness_transcript`） | `QuestionRaised` → `Answered`、`ApprovalRequested` → `ApprovalDecided`（`celerisctl campaign export` の `wait` 行。campaign の task 木の events から導出。決定の無い区間は `ended_at: null`）。`BrowserWaitOpened` と blocked 区間は未導出 | A だけ書く |
 | 人の操作の種別・区間・理由 | `op_start`/`op_end` | `op_start`/`op_end`（event は `celeris_event_ref` で照合、加算しない） | **書く**（A/B 同一） |
-| Celeris 内の自動 retry・repair・continuation | not_applicable（harness 内部の再試行は §6） | `runs.seq`、`RepairScheduled`、`IntegrationRepair*`、`Retried` | 書かない |
+| Celeris 内の自動 retry・repair・continuation | not_applicable（harness 内部の再試行は §6） | export の `run` 行の `is_retry`・`parent_run_id`・`attempt_no`（同じ task の自動再試行 run）。人が失敗 task を複製した `Retried` は介入（recovery）で、自動 retry に数えない | 書かない |
 | 人の作業の attempt | `attempt` | `attempt` | **書く** |
 | observation_cutoff | `cutoff` | `cutoff` | **書く** |
 | 介入の件数（区分別） | 生記録から | 生記録から（projection は照合） | 生記録を正とする |
@@ -157,7 +157,8 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 - `submitted`: `LedgerRow.submitted_at`（B は Celeris が task を受けた時刻）。A は `started_at` と同じ（投入と開始が同時）。
 - `started`: `LedgerRow.started_at`。
 - `ended`: 試行の終端（`TrialRecord` を書いた時点。ledger の `done`/`cancelled` 行）。値が無ければ null。
-- `observation_cutoff`: 評価者の `cutoff` 行の `occurred_at`。無ければ `ended`。cutoff 後の出来事は数えない。
+- `observation_cutoff`: 評価者の `cutoff` 行の `occurred_at`。無ければ `ended`（`started` + `TrialRecord.wall_secs`）。この終端より後に始まった op・attempt・区間は
+  介入件数・人の時間・再作業のどれにも数えない（跨ぐ区間は終端で切る）。同じ試行 identity の試行開始前の記録（準備・再起動）は数える。
 
 区間（いずれも `[start, end)`、端が null なら長さも null）:
 
@@ -172,7 +173,12 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 
 やり直し:
 - 同じ `logical_op_id` の `attempt` は 1 から連番。attempt 数 − 1 が「やり直し回数」。
-- Celeris の run は `logical_op_id = <task_id>`、`attempt = runs.seq`（導出、書かない）。人の作業・A の作業は評価者が付ける。
+- Celeris の自動 retry は export の `run` 行（`is_retry`）から導出し、`auto_retries` に別掲する（人の再作業に足さない）。人の作業・A の作業は評価者が付ける。
+- 共通 filter: `protocol_step`・`intent=protocol`・`mode=automatic` の op を含む論理作業は、介入件数・人の時間・再作業のどれにも数えない
+  （protocol 上の trial-start `attempt=2` は科学的な redo ではない）。
+- 観測の有無は項目ごと: その試行に op 記録（`op_start`/`op_end`。protocol・automatic を含む）が 1 件も無ければ介入件数・人の時間は欠測（`source=missing`、
+  値 null）、attempt を持つ記録（`op_start`・`attempt`）が無ければ再作業は欠測。`cutoff`・`job_observation`・`wait_*` だけの試行を 0 にしない。
+  arm 集計は欠測の試行を `human_time_missing_trials`・`rework_missing_trials` に数え、秒数・件数に 0 を足さない。
 - 失敗・cancel・timeout の attempt も分母に残す（`runs_by_end` と同じ方針）。
 
 ## 6. 記録できない指標と主張の限定
@@ -191,3 +197,24 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 - external_queue_wait はクラスタの混雑に依存し、システムの性能として帰属させない（別欄で報告）。
 - 試行数は承認枠（12 試行以内）で小さく、統計的有意性は主張しない。差は記述として報告する。
 - 研究の質・人の判断の質・認知負荷は測らない。
+
+## 7. 成功契約と集計の範囲（checker・export・human-op で共通）
+
+実装は `crates/campaign/src/success.rs`（ADR `agent-docs/adr/2026-10-23-campaign-success-contract.md`）。checker・export・`human-op join/report` は同じ関数で cell を判定し、report は再判定しない。
+
+- cell = manifest の計画 (arm, case, rep)。**分母**は計画 cell 数で、未実行・未採点・欠測の cell も残す。join は runner の out dir（`campaign.json` がある dir）を `--events` に渡すと計画 cell をすべて行にする。
+- **再試行の選択**: cell は `trial_no` 最小の記録で判定する。後の `trial_no` は `executor_trials` に数えるだけで成功に昇格させない。
+- **executor status** と **validated success** は別欄。validated success = executor `passed` かつ結合検査（campaign hash・case・split・grader hash・成果物 hash・lock）を通った独立採点の `final_pass`。
+  分類（`success_class`）: `validated_success` / `model_failure` / `grader_env_failure` / `grader_undetermined`（この 2 つは `needs_regrade`）/ `control_only` / `ungraded` / `executor_{failed,error,timeout,cancelled,blocked}` / `missing`。
+- manifest・grades を渡さない入力では validated success は欠測（executor passed を成功に読み替えない）。
+- 再採点は grades.jsonl を版として残し（`grade_out` の history）、再集計は同じ関数で行う。旧採点の結果を上書きしない。
+- 消費の範囲（`export::COST_SCOPE`）: 主比較の tokens・費用は試行の run だけで、CoS の call と共有 overhead は含めず arm へ配分しない。
+  定価換算と実支出は `final-accounting.json` で別欄のまま（加算しない）。欠測の試行は数え、0 で埋めない。
+
+### 7.1 shared scope と訂正
+
+- campaign 全体の共有作業（共有 env の修正など）は `human-op record --scope shared [--experiment-set main-ab|jev-bc]` で case/arm/rep を持たない行として 1 度だけ書く。
+  report の `shared_overhead` に別掲し、arm へ配分しない。
+- 訂正は追記専用: `human-op correct --file F (--corrects ID... | --logical-op L [--campaign C] [--arm A0]) (--retract | --set-field k=<JSON>...) --reason S`。
+  元の行は書き換えず、`retracted: true` の対象は resolve で外れる。report の `corrections` と `report.md` の「補正履歴」に correction id・対象・理由が残る。
+- 例: A/B 両方に記録した共有 env-lock 修正（71 秒）は、両方を `--retract` し、shared scope に 1 件書き直す。

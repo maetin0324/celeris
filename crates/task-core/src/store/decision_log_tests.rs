@@ -462,3 +462,52 @@ fn missing_stage_values_stay_null_and_not_attempted_makes_no_classifier() {
     assert_eq!(by("r-fb")["classifier_fallback"], "timeout");
     assert!(by("r1")["classifier_kind"].is_null());
 }
+
+#[test]
+fn human_waits_pair_question_and_approval_events_of_the_campaign_tree() {
+    use crate::model::{Event, Status};
+    let s = SqliteStore::open_in_memory().unwrap();
+    let root = super::tests::sample_task(Status::Draft);
+    s.create_task(&root, vec![]).unwrap();
+    let mut child = super::tests::sample_task(Status::Draft);
+    child.parent_id = Some(root.id);
+    s.create_task(&child, vec![]).unwrap();
+    let other = super::tests::sample_task(Status::Draft);
+    s.create_task(&other, vec![]).unwrap();
+    let id = CampaignIdentity {
+        campaign_id: "camp-w".into(),
+        case_id: Some("case-1".into()),
+        arm: Some("B".into()),
+        repetition: Some(1),
+        manifest_hash: None,
+        routing_setting: None,
+        variant: None,
+        variant_org: None,
+    };
+    s.task_campaign_set(&root.id.to_string(), &id, now())
+        .unwrap();
+    let q = Event::QuestionRaised {
+        run_id: "run-1".into(),
+        text: "which?".into(),
+    };
+    s.append_event(root.id, &q).unwrap();
+    s.append_event(
+        root.id,
+        &Event::Answered {
+            question: "which?".into(),
+            answer: "a".into(),
+        },
+    )
+    .unwrap();
+    s.append_event(child.id, &Event::ApprovalRequested).unwrap(); // 決定なし → open
+    s.append_event(other.id, &q).unwrap(); // 別 campaign の task は出さない
+    let w = s.decision_log_human_waits("camp-w").unwrap();
+    assert_eq!(w.len(), 2, "{w:?}");
+    let q = w.iter().find(|x| x["wait_kind"] == "question").unwrap();
+    assert_eq!(q["run_id"], "run-1");
+    assert_eq!(q["task_id"], root.id.to_string());
+    assert!(q["ended_at"].is_string() && q["end_event"].is_string());
+    let a = w.iter().find(|x| x["wait_kind"] == "approval").unwrap();
+    assert_eq!(a["task_id"], child.id.to_string());
+    assert!(a["ended_at"].is_null(), "open は null（0 秒にしない）");
+}

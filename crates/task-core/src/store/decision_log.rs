@@ -1011,6 +1011,73 @@ impl SqliteStore {
         Ok(n)
     }
 
+    /// campaign の task 木（識別を持つ task とその子孫）の events から、人の応答待ちの区間を投影する
+    /// （`record_type: "wait"`、`dedup_key = wait:<task_id>:<開始 seq>`）。export の追加行で、DB には書かない。
+    ///
+    /// - `question`: `QuestionRaised`（開始。`run_id` はきっかけの run）→ 次の `Answered`（終了）。
+    /// - `approval`: `ApprovalRequested` → 次の `ApprovalDecided`。
+    /// - 終了が無い区間は `ended_at: null`（open。0 秒にしない）。開始・終了の event は `event:<task_id>:<seq>` で残す。
+    pub fn decision_log_human_waits(
+        &self,
+        campaign_id: &str,
+    ) -> Result<Vec<serde_json::Value>, StoreError> {
+        let rows: Vec<(String, i64, String, String)> = {
+            let conn = self.lock()?;
+            let mut stmt = conn.prepare(
+                "WITH RECURSIVE tree(id) AS ( \
+                   SELECT task_id FROM task_campaigns WHERE campaign_id = ?1 \
+                   UNION SELECT t.id FROM tasks t JOIN tree ON t.parent_id = tree.id) \
+                 SELECT e.task_id, e.seq, e.ts, e.json FROM events e JOIN tree ON e.task_id = tree.id \
+                 ORDER BY e.task_id, e.seq",
+            )?;
+            stmt.query_map([campaign_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .collect::<Result<_, _>>()?
+        };
+        let mut out = Vec::new();
+        // (task_id, kind) → 開いている区間の index（先に開いたものから閉じる）。
+        let mut open: std::collections::BTreeMap<(String, &'static str), Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (task_id, seq, ts, json) in rows {
+            let Ok(event) = serde_json::from_str::<crate::Event>(&json) else {
+                continue;
+            };
+            let (kind, start, run_id) = match &event {
+                crate::Event::QuestionRaised { run_id, .. } => {
+                    ("question", true, Some(run_id.clone()))
+                }
+                crate::Event::Answered { .. } => ("question", false, None),
+                crate::Event::ApprovalRequested => ("approval", true, None),
+                crate::Event::ApprovalDecided { .. } => ("approval", false, None),
+                _ => continue,
+            };
+            let ev_ref = format!("event:{task_id}:{seq}");
+            let slot = open.entry((task_id.clone(), kind)).or_default();
+            if start {
+                slot.push(out.len());
+                out.push(serde_json::json!({
+                    "record_type": "wait",
+                    "schema": crate::decision_log_export::RECORD_SCHEMA,
+                    "dedup_key": format!("wait:{task_id}:{seq}"),
+                    "campaign_id": campaign_id,
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "wait_kind": kind,
+                    "started_at": ts,
+                    "ended_at": null,
+                    "start_event": ev_ref,
+                    "end_event": null,
+                }));
+            } else if !slot.is_empty() {
+                let i = slot.remove(0);
+                out[i]["ended_at"] = serde_json::json!(ts);
+                out[i]["end_event"] = serde_json::json!(ev_ref);
+            }
+        }
+        Ok(out)
+    }
+
     /// 時刻 `at` に活動中（最初の識別付与〜最後の活動）の campaign がちょうど 1 つならその id。
     /// 0 個・2 個以上は `None`（帰属を推測しない）。
     fn campaign_active_at(&self, at: OffsetDateTime) -> Result<Option<String>, StoreError> {

@@ -115,6 +115,10 @@ fn export(store: &SqliteStore, args: CampaignExportArgs) -> Result<ExitCode, Cli
         export_cursor: None,
     };
     let mut result = store.decision_log_export_campaign(&params)?;
+    // 人の応答待ち（Question / Approval）の区間。human-op join が B の待機として試行に結ぶ。
+    result
+        .records
+        .extend(store.decision_log_human_waits(&args.campaign_id)?);
     if let Some(path) = &args.grades {
         let text = fs::read_to_string(path)
             .map_err(|e| CliError::msg(format!("read {}: {e}", path.display())))?;

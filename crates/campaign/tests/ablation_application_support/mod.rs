@@ -458,6 +458,8 @@ enum Signal {
     StreamClosed,
     /// daemon process が終わった（`wait` の結果）。
     Exited(Option<ExitStatus>),
+    /// daemon の stdout か stderr が EOF になった（1 本につき 1 回）。
+    LogClosed,
 }
 
 pub struct Fixture {
@@ -471,6 +473,14 @@ pub struct Fixture {
     pub label: String,
     events: Vec<Value>,
     last_event_id: u64,
+}
+
+/// port の衝突で起動し直す回数の上限。
+const BIND_ATTEMPTS: usize = 5;
+
+/// daemon が API の port を他に取られて終わったときの行。
+fn is_bind_conflict(line: &str) -> bool {
+    line.contains("cannot bind the API listener") && line.contains("Address already in use")
 }
 
 fn free_loopback_addr() -> SocketAddr {
@@ -556,7 +566,20 @@ pub fn assert_config_is_stub_only(text: &str) {
 impl Fixture {
     /// 一時 dir・token・org の種・workspace・HOME・スタブを用意し、実 `celeris` を `env_clear` で起動して
     /// `GET /health` が答えるまで待つ（期限付き。上がらなければ daemon.log 付きで失敗）。
+    ///
+    /// port は空きを確かめてから daemon に渡すので、その間に host 上の他の試験が同じ port を取ることがある。
+    /// daemon が listen の前に「Address already in use」で終わったときだけ、新しい port で起動し直す。
     pub fn start(spec: FixtureSpec) -> Self {
+        for _ in 0..BIND_ATTEMPTS {
+            if let Some(fx) = Self::launch(spec.clone()) {
+                return fx;
+            }
+        }
+        panic!("daemon could not bind a free loopback port in {BIND_ATTEMPTS} attempts");
+    }
+
+    /// 1 回の起動。listen の前に port の衝突で終わったら `None`（他の失敗は daemon.log 付きで panic）。
+    fn launch(spec: FixtureSpec) -> Option<Self> {
         let dir = tempfile::Builder::new()
             .prefix(&format!("ablation-app-{}-", spec.label))
             .tempdir()
@@ -628,10 +651,36 @@ impl Fixture {
             last_event_id: 0,
         };
         let up_by = Instant::now() + Duration::from_secs(60);
+        let mut bind_conflict = false;
+        let mut logs_open = 2;
         loop {
-            match fx.next_signal(up_by, "the API listening line") {
-                Signal::Log(line) if line.contains("celeris API listening") => break,
-                _ => {}
+            let left = up_by.saturating_duration_since(Instant::now());
+            match fx.signals.recv_timeout(left) {
+                Ok(Signal::Log(line)) if line.contains("celeris API listening") => break,
+                Ok(Signal::Log(line)) => bind_conflict |= is_bind_conflict(&line),
+                Ok(Signal::LogClosed) => logs_open -= 1,
+                Ok(Signal::Exited(st)) => {
+                    fx.exited = Some(st);
+                    // 終了の知らせは stderr の最後の行より先に届くことがある。listen 前は worker が
+                    // pipe を持たないので、stdout・stderr の EOF まで読み切ってから判定する。
+                    while logs_open > 0 {
+                        let left = up_by.saturating_duration_since(Instant::now());
+                        match fx.signals.recv_timeout(left) {
+                            Ok(Signal::Log(line)) => bind_conflict |= is_bind_conflict(&line),
+                            Ok(Signal::LogClosed) => logs_open -= 1,
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                    }
+                    if bind_conflict {
+                        return None;
+                    }
+                    fx.next_signal(up_by, "the API listening line");
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    fx.next_signal(up_by, "the API listening line");
+                }
             }
         }
         let health = fx.http.get("/api/v1/health");
@@ -643,7 +692,7 @@ impl Fixture {
             fx.daemon_log()
         );
         fx.open_stream();
-        fx
+        Some(fx)
     }
 
     /// SSE `GET /stream` を開き、frame の到着を [`Signal::Stream`] で知らせる thread を起こす
@@ -931,7 +980,10 @@ fn tee_lines(src: impl Read + Send + 'static, mut log: fs::File, tx: Sender<Sign
         loop {
             line.clear();
             match r.read_line(&mut line) {
-                Ok(0) | Err(_) => return,
+                Ok(0) | Err(_) => {
+                    let _ = tx.send(Signal::LogClosed);
+                    return;
+                }
                 Ok(_) => {
                     let _ = log.write_all(line.as_bytes());
                     let _ = tx.send(Signal::Log(line.clone()));

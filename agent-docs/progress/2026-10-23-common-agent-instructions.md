@@ -55,6 +55,13 @@ fixture は `test_support::fresh_worktree_with_rules`。この repo の実際の
   - 取り込み後の 1 回目は `celeris::root_done_summary restart_does_not_duplicate` が負荷下で落ちた（"Discord once" left 3）。単独で回すと 3 回とも通った。`post_webhook` には再試行が無いので、原因は別の試験が手放した port を偽 webhook が拾い、その試験の HTTP 要求を本文として数えたこと、と判断した。偽 webhook は `POST /hook` だけを数え、他の要求には 404 を返すように直した（`crates/celeris/tests/root_done_summary.rs`）。直した後は上のとおり exit 0。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 
+## attempt 3（試験の flaky 2 件の修正）
+
+attempt 2 の審査で `bash scripts/dev/test-affected.sh` が exit 100 になった（指示配布の変更とは関係しない試験が負荷下で落ちた）。検証対象 SHA は main 22711d25 取り込み後の eda6869b に、下の 2 つの修正を足した attempt 3 の commit。
+- `task-worker browser_egress::tests::egress_test_loopback_connect_allowed_only_when_listed`（403）: echo listener は最初の 1 byte を echo したら閉じていた。別の試験 process が、自分で bind して手放した port に byte を送ると、この listener がそれを echo して閉じ、proxy の connect は拒否されて 403 になる。listener は試験が abort するまで全接続を echo するように直した。byte を送る stray 接続を試験に足し、この状況を決定的に作る。
+- `celeris-campaign::ablation_application spec_off_and_on_apply_through_real_dispatcher_and_worker`（attempt 3 の 1 回目の test-affected で発生）: 空き port を確かめてから daemon が bind するまでの間に、他の process が同じ port を取った（`Address already in use`）。fixture（`crates/campaign/tests/ablation_application_support/mod.rs`）は、listen の前に bind の衝突で終わったときだけ、新しい port で起動し直す（最大 5 回）。stdout・stderr の EOF まで読み切ってから判定する（`Signal::LogClosed`）。ほかの失敗は従来どおり daemon.log 付きで落ちる。
+- 検査（attempt 3 の最終作業ツリー）: `cargo nextest run -p task-worker -E 'test(/browser_egress::tests::egress_test_loopback/)'` 2 passed、`cargo nextest run -p celeris-campaign --test ablation_application` 4 passed、`bash scripts/dev/test-affected.sh` exit 0（4470 passed / 16 skipped、source-size failure 0、地図 449 パス OK）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
+
 ## main で既に解消済みだった項目
 
 - なし。13d64acd でも CLAUDE.md に symlink の説明と「Web UI・リモート実行・予算管理の禁止」が残り、Codex 経路は CLAUDE.md を読んでいなかった（上の実測表）。

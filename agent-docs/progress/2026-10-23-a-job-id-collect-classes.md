@@ -69,7 +69,7 @@ ADR: `agent-docs/adr/2026-10-23-a-submit-audit-and-collect-classes.md`。
 実測定の raw・grade・集計は新規作成していない（試験は tempfile の合成データ）。既存の履歴は変更していない。K2/HPC 比較は引き続き**開始不可**: Sirius の qstat Variable_List に trial 印が残ることの実機確認（取得元: Sirius の scheduler 記録）、測定用 A の cap-env/prompt への wrapper 導入（設定元: 測定 campaign の A cap-env と case prompt）、タスク 1・2 の成立が必要。fixture の成功でこれらを代替しない。本番設定の変更・実 pilot・有料評価は実施していない。
 
 
-### 今回の最終再検証（run 01M5M30HXG5JM90KDZY5R7Y6MJ、attempt 2）
+### 前回の再検証（run 01M5M30HXG5JM90KDZY5R7Y6MJ、attempt 2）
 
 - 追加 commit `708d124f`: 前回の決定的検査で失敗した worker_run_signal 試験を局所修正。PID ファイルの存在確認と echo の書き込みの間に空内容を読む競合があったため、一時ファイルから rename して完全な PID を公開する。本番実装の追加はない。
 - `bash scripts/dev/test-affected.sh`: **exit 0**。nextest **2594 passed / 5 skipped**（136 binaries、107.871 秒）。健全性の Python 試験 **38 passed**、doc test は 4 target とも 0 件・成功。前回失敗した signal 試験も対象に含む。
@@ -78,3 +78,15 @@ ADR: `agent-docs/adr/2026-10-23-a-submit-audit-and-collect-classes.md`。
 - ログの保存先: /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/ 内の retry2-test-affected.log、retry2-clippy.log、retry2-fmt.log。今回の報告更新 commit の hash は同ディレクトリの result.json に記録する。
 - unwrap 除去・旧 retry 文書削除・front matter 先頭への統合は `d3e865fa` で完了済み。今回、現履歴の commit 対応と集計説明を訂正した。実 raw/grade/集計の新規作成・上書きなし。main への反映は未実施。上記の実機・測定資産の未解決条件により K2/HPC 比較は引き続き開始不可。
 - 補助検査 `sh scripts/dev/progress-index.sh --check`: exit 1。既存の他タスク進捗（例: 2026-10-22-plan-issue-answer-replans.md）の title/updated 欠落で失敗。本タスクの進捗は指摘なし。範囲外文書は変更していない（詳細 retry2-progress-check.log）。必須3検査は上記のとおり全て成功。
+
+
+### 最終再検証（run 01M5M4A2628Y1CNPY6F9R3ZJ4C、attempt 3）
+
+- operator 指定の4点は現ブランチで維持: `grades.rs` の unwrap は `d3e865fa` で除去済み、旧 retry 文書は削除済みで本書へ統合済み（front matter は先頭）。指定時の commit と現 commit の対応は上記のとおり。`observation_failed` は executor 結果から独立した観測障害として集計し、workflow fault の研究失敗には混ぜない。
+- 前回 reviewer の test-affected 失敗は偽 webhook の本文に空文字列が2件混入したもの。EOF の除外だけでは GET 等の完全な別要求を数えてしまうため、試験 server の記録対象を `POST /hook HTTP/1.1` に限定した。回帰試験で EOF・GET・別 path の POST・途中で切れた本文を順番に送信し、その後の正しい POST だけを記録することを確認する。待機時間や負荷で再現せず、応答/切断を同期点とする。本番実装・研究評価機能の追加はない。
+- 今回の試験修正 commit: `b4975759`。前回の報告 commit は `332a6b92`、signal 試験の修正は `708d124f`。main/base は `d7cb0fd45926`、本タスクの main 反映は未実施（提出ブランチ上）。
+- `bash scripts/dev/test-affected.sh`: **exit 0**。nextest **2595 passed / 5 skipped**（136 binaries、190.213 秒）。健全性 Python 試験 **38件成功**、文書リンク self-test **1件成功**、doc test **4 target、各0件、成功**。前回失敗した通知試験と新規回帰試験を含む。
+- `cargo clippy --workspace -- -D warnings`: **exit 0**（警告0、1分42秒、試験件数は該当なし）。
+- `cargo fmt --all -- --check`: **exit 0**（書式差分0、試験件数は該当なし）。
+- 今回のログ: /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/retry3-test-affected.log、retry3-clippy.log、retry3-fmt.log。同ディレクトリの result.json に提出 commit と完了報告を保存。
+- 実 raw・grade・集計は作成も上書きもしていない。K2/HPC 比較は引き続き**開始不可**。Sirius の trial 印の実機確認、A cap-env/prompt の wrapper 導入、タスク1・2の成立が必要。本番操作・追加 pilot・有料評価は未実施。

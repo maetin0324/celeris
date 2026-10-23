@@ -93,7 +93,7 @@ attempt 3 の審査で条件 3 だけが不合格だった。地図のうち、�
 
 - 差し戻し: `required_rules::preamble` は CLAUDE.md が無いと `Ok("")` を返し、正本を持つ repo で消えても Codex・Pi・ACP は規則なしで起動していた（旧試験 `preamble_is_empty_without_a_rules_source` が固定）。
 - 変更（commit「phase 1: 必須規則の正本欠落を run 前に検出する」）: CLAUDE.md が無いとき cwd で `git ls-files --error-unmatch -- CLAUDE.md`（index）と `git cat-file -e HEAD:./CLAUDE.md`（HEAD）を tokio::process で確かめ、どちらかが追跡していれば `required rules source is missing: <path>` の Err。adapter は `required rules delivery failed` で harness の起動前に落ちる。空の前置きは git でない dir と CLAUDE.md を追跡しない repo だけ。壊れた symlink・読めない・空は従来どおり Err。ADR D2 に付記。
-- 試験: 旧試験を削除し、`preamble_fails_when_the_tracked_rules_source_is_missing`（worktree で削除／index にだけある正本）と `preamble_is_empty_where_no_rules_source_is_tracked`（git でない dir／CLAUDE.md なしの repo）を追加。`codex`・`pi`・`acp` の各 `*_run_fails_when_the_tracked_rules_source_is_missing` は `fresh_worktree_with_rules` から CLAUDE.md を消して adapter.run し、Err と stub の marker file 不在を確かめる。
+- 試験: 旧試験を削除し、`preamble_fails_when_the_tracked_rules_source_is_missing`（worktree で削除／index にだけある正本）と `preamble_is_empty_where_no_rules_source_is_tracked`（git でない dir／CLAUDE.md なしの repo）を追加。`codex`・`pi`・`acp` の各 `*_run_fails_when_tracked_required_rules_are_missing` は `fresh_worktree_with_rules` から CLAUDE.md を消して adapter.run し、Err と stub の marker file 不在を確かめる。
 - 検証（基準 HEAD a80f7a1b の上の作業ツリー）:
   - `cargo nextest run -p task-worker -E 'test(/required_rules|rules_source|rules_are_unreadable|preamble/)'`: 51 passed。
   - `bash scripts/dev/test-affected.sh`: exit 0（4484 passed / 17 skipped、source-size failure 0、地図 715 パス OK）。
@@ -130,3 +130,14 @@ attempt 3 の審査で条件 3 だけが不合格だった。地図のうち、�
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
 - 今回の変更範囲はこの進捗への検証結果追記のみ。ログは run の成果物ディレクトリの rules-missing-final-{test,clippy,fmt}.log。受け入れ条件の残件なし。
+
+## rules-missing-verify（run 01M5MDEMJKBZJEGPP6E5TDZJTF）
+
+- 条件 1（欠落の検出）の根拠: commit「phase 1: 必須規則の正本欠落を run 前に検出する」の `required_rules::preamble` が、作業ツリーに CLAUDE.md が無く git（index または HEAD）が追跡しているとき `required rules source is missing` の Err を返す。Codex・Pi・ACP の adapter は `required rules delivery failed` で harness 起動前に落ちる。実装は今回変えていない。
+- 試験は既にあった（`fresh_worktree_with_rules` で git に commit した CLAUDE.md を作業ツリーから消し、adapter.run の Err と stub の started 印 file 不在を確かめる）。ただし受け入れのコマンド `cargo test -p task-worker --lib required_rules` の filter に当たらなかったので、名前を `codex_run_fails_when_tracked_required_rules_are_missing`・`pi_run_fails_when_tracked_required_rules_are_missing`・`acp_run_fails_when_tracked_required_rules_are_missing` に改め、地図・ADR・この進捗の参照も直した（地図は 6 列のまま）。
+- 検証対象: 基準 HEAD `6b7fd4172b86`（「phase 1: 正本欠落検出の最終検証を記録する」）の上の試験名変更 commit（「phase 1: 正本欠落の adapter 試験を required_rules の filter に載せる」）。main との merge-base `a3933dc2222d`。
+  - `cargo test -p task-worker --lib required_rules`: exit 0（16 passed。既存 13 本と新しい名前の 3 本）。
+  - `bash scripts/dev/test-affected.sh`: exit 0（4484 passed / 17 skipped、地図 715 パス OK）。
+  - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+  - 文書検査: `check-architecture-map.py`・`check-doc-links.sh docs/architecture-map.md`・`progress-index.sh --check`・`check-doc-layout.sh scripts/dev/docs-layout.tsv`・`check-adr-numbers.sh` がすべて exit 0。
+- 残件: なし（上の「残件・提案」の Codex skills 一覧の件は別 task）。

@@ -2722,7 +2722,7 @@ async fn codex_run_fails_when_required_rules_are_unreadable() {
 
 /// 正本 CLAUDE.md を追跡する fresh worktree から CLAUDE.md が消えたら、codex を起動せずに run が落ちる。
 #[tokio::test]
-async fn codex_run_fails_when_the_tracked_rules_source_is_missing() {
+async fn codex_run_fails_when_tracked_required_rules_are_missing() {
     use crate::test_support::*;
     let root = tempfile::tempdir().unwrap();
     let wt = fresh_worktree_with_rules(root.path(), AgentsMdFixture::Absent);

@@ -11,7 +11,8 @@ use celeris_campaign::{
     grader::{GradeCase, Status, evidence},
     manifest::ConfigId,
     observe::{
-        Expect, JobRef, Origin, SchedulerReply, SchedulerTransport, TrialKey, collect_for_trial,
+        CollectClass, CollectIssue, Expect, JobRef, Origin, SchedulerReply, SchedulerTransport,
+        TrialKey, collect_for_trial,
     },
 };
 use serde_json::{Value, json};
@@ -63,6 +64,8 @@ fn expect(gc: &GradeCase) -> Expect {
         scheduler: "pbs".into(),
         cluster: "sirius".into(),
         conditions: gc.experiment.as_ref().unwrap().conditions.clone(),
+        trial_key: None,
+        require_marker: false,
     }
 }
 
@@ -105,7 +108,21 @@ fn refs(id: &str) -> Vec<JobRef> {
     vec![JobRef::parse(&format!("pbs:sirius:{id}")).unwrap()]
 }
 
-fn run(fx: &Fx, t: &Fixed, r: &[JobRef], e: &Expect) -> Result<PathBuf, Vec<String>> {
+fn run(
+    fx: &Fx,
+    t: &dyn SchedulerTransport,
+    r: &[JobRef],
+    e: &Expect,
+) -> Result<PathBuf, Vec<String>> {
+    run_classified(fx, t, r, e).map_err(|v| v.iter().map(ToString::to_string).collect())
+}
+
+fn run_classified(
+    fx: &Fx,
+    t: &dyn SchedulerTransport,
+    r: &[JobRef],
+    e: &Expect,
+) -> Result<PathBuf, Vec<CollectIssue>> {
     collect_for_trial(
         t,
         &fx.out,
@@ -297,4 +314,94 @@ fn ssh_qstat_refuses_non_pbs_pid_like_ids_and_option_like_clusters_without_runni
             .unwrap_err()
             .contains("refusing")
     );
+}
+
+/// 照会が届かない（ssh・qstat の不通）か、scheduler が job を知らないと答える transport。
+struct Down(&'static str);
+
+impl SchedulerTransport for Down {
+    fn origin(&self) -> Origin {
+        Origin::Synthetic
+    }
+    fn qstat(&self, _s: &str, _c: &str, _id: &str) -> Result<SchedulerReply, String> {
+        Err(self.0.into())
+    }
+}
+
+fn with_marker(raw: String, key: &str) -> String {
+    format!(
+        "{raw}    Variable_List = PBS_O_HOME=/home/u,CELERIS_TRIAL_KEY={key},\n\tPBS_O_SHELL=/bin/sh\n"
+    )
+}
+
+/// 収集の結果は分類付き: 未投入・未完了・取得失敗・未観測（未知 ID）・identity 不一致を分け、失敗は分類と原因
+/// （failure_class）を持つ記録に残す。取得失敗は env_failure（model_failure にしない）で、直れば収集し直せる。
+/// job の非 0 終了（研究の失敗）は収集の失敗ではなく、記録を作って job_failed と印す。
+#[test]
+fn collection_outcomes_are_classified_and_fetch_failures_are_not_model_failures() {
+    let (gc, fx) = (grade_case(), artifact(JOB));
+    let key = "campaign-0123456789abcdef";
+    let e = Expect {
+        trial_key: Some(key.into()),
+        require_marker: true,
+        ..expect(&gc)
+    };
+    let failure = fx
+        .out
+        .join("observed/short-ml-campaign/B-rep1.collect-failure.json");
+    let class = |t: &dyn SchedulerTransport, r: &[JobRef]| -> CollectClass {
+        let issues = run_classified(&fx, t, r, &e).unwrap_err();
+        let doc: Value = serde_json::from_slice(&fs::read(&failure).unwrap()).unwrap();
+        assert_eq!(doc["schema"], "celeris.observe-failure/1");
+        assert_eq!(
+            doc["issues"][0]["class"],
+            serde_json::to_value(issues[0].class).unwrap()
+        );
+        issues[0].class
+    };
+    let marked = |state: &str, exit: Option<i32>, k: &str| Fixed {
+        cluster: "sirius".into(),
+        raw: with_marker(qstat(JOB, state, exit, "debug", 24), k),
+    };
+    assert_eq!(class(&ok_reply(), &[]), CollectClass::NotSubmitted);
+    assert_eq!(
+        class(&marked("R", None, key), &refs(JOB)),
+        CollectClass::NotFinished
+    );
+    // 取得失敗（ssh 不通）は測定基盤の失敗: env_failure。
+    assert_eq!(
+        class(&Down("ssh sirius: Connection timed out"), &refs(JOB)),
+        CollectClass::FetchFailed
+    );
+    let doc: Value = serde_json::from_slice(&fs::read(&failure).unwrap()).unwrap();
+    assert_eq!(doc["failure_class"], "env_failure");
+    // scheduler が知らない ID（未知 ID）は未観測で、取得失敗とは分ける。
+    assert_eq!(
+        class(&Down("qstat: Unknown Job Id 4242.sirius"), &refs(JOB)),
+        CollectClass::Unobserved
+    );
+    // 別 trial の印を持つ job・印の無い job（wrapper を通らない投入）は identity 不一致。
+    assert_eq!(
+        class(
+            &marked("F", Some(0), "campaign-ffffffffffffffff"),
+            &refs(JOB)
+        ),
+        CollectClass::IdentityMismatch
+    );
+    assert_eq!(
+        class(&ok_reply(), &refs(JOB)),
+        CollectClass::IdentityMismatch
+    );
+    let doc: Value = serde_json::from_slice(&fs::read(&failure).unwrap()).unwrap();
+    assert_eq!(doc["failure_class"], "undetermined");
+    // 直った後の再収集: 記録ができ、失敗記録は消え、試みの履歴は collect-log に残る。
+    let p = run_classified(&fx, &marked("F", Some(3), key), &refs(JOB), &e).unwrap();
+    assert!(!failure.exists());
+    let doc: Value = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
+    assert_eq!(doc["jobs"][0]["job_status"], "job_failed");
+    assert_eq!(doc["jobs"][0]["exit_status"], 3);
+    let log =
+        fs::read_to_string(fx.out.join("observed/short-ml-campaign/collect-log.jsonl")).unwrap();
+    assert_eq!(log.lines().count(), 7, "{log}");
+    assert!(log.lines().last().unwrap().contains("\"ok\":true"), "{log}");
 }

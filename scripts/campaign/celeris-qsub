@@ -1,0 +1,52 @@
+#!/bin/sh
+# 試行内の制御された submit wrapper（ADR 2026-10-23-a-submit-audit-and-collect-classes）。
+#
+# A arm の試行は qsub の代わりにこれを呼ぶ（cap-env の toolchain で PATH 上に置き、CELERIS_SUBMIT_CMD に実際の投入
+# command を渡す。例: CELERIS_SUBMIT_CMD="ssh sirius qsub"、CELERIS_SUBMIT_TARGET=pbs:sirius）。
+# - 実 scheduler へ投入し、job に trial の印 `-v CELERIS_TRIAL_KEY=<冪等キー>` を付ける（collect が scheduler 記録で照合する）。
+# - scheduler が受理して返した job id だけを CELERIS_SUBMIT_AUDIT（executor が渡す）に 1 行追記する。
+# - 投入の終了コードと出力はそのまま返す。受理されなかった投入は記録しない。
+# 記録は自己申告の成功根拠ではない: executor の track が台帳へ運び、collect が scheduler から記録を取り直して
+# trial の印と照合する。受理応答を失った投入の照合（reconciliation）はしない。
+set -u
+: "${CELERIS_SUBMIT_AUDIT:?CELERIS_SUBMIT_AUDIT is not set (not inside a Celeris trial)}"
+: "${CELERIS_TRIAL_KEY:?CELERIS_TRIAL_KEY is not set (not inside a Celeris trial)}"
+: "${CELERIS_SUBMIT_TARGET:?CELERIS_SUBMIT_TARGET (scheduler:cluster) is not set}"
+: "${CELERIS_SUBMIT_CMD:?CELERIS_SUBMIT_CMD (the real submit command) is not set}"
+
+scheduler=${CELERIS_SUBMIT_TARGET%%:*}
+cluster=${CELERIS_SUBMIT_TARGET#*:}
+safe() {
+    case $1 in
+        '' | -* | *[!A-Za-z0-9._-]*) return 1 ;;
+    esac
+}
+if ! safe "$scheduler" || ! safe "$cluster" || ! safe "$CELERIS_TRIAL_KEY"; then
+    echo "celeris-qsub: invalid CELERIS_SUBMIT_TARGET or CELERIS_TRIAL_KEY" >&2
+    exit 2
+fi
+
+# CELERIS_SUBMIT_CMD は空白で分けて使う（例: ssh sirius qsub）。
+# shellcheck disable=SC2086
+out=$($CELERIS_SUBMIT_CMD -v "CELERIS_TRIAL_KEY=$CELERIS_TRIAL_KEY" "$@")
+rc=$?
+printf '%s\n' "$out"
+[ "$rc" -eq 0 ] || exit "$rc"
+
+# PBS の qsub は受理した job id（<数字>.<server>）を最後の行に出す。
+id=$(printf '%s\n' "$out" | sed -n '$p' | tr -d '[:space:]')
+case $id in
+    [0-9]*.[A-Za-z0-9]*) ;;
+    *)
+        echo "celeris-qsub: submit succeeded but the reply has no job id; not recorded" >&2
+        exit "$rc"
+        ;;
+esac
+safe "$id" || { echo "celeris-qsub: unexpected job id $id; not recorded" >&2; exit "$rc"; }
+now=$(date +%s)
+printf '{"schema":"celeris.submit-audit/1","trial_key":"%s","scheduler":"%s","cluster":"%s","job_id":"%s","accepted_at":%s}\n' \
+    "$CELERIS_TRIAL_KEY" "$scheduler" "$cluster" "$id" "$now" >>"$CELERIS_SUBMIT_AUDIT" || {
+    echo "celeris-qsub: could not append to $CELERIS_SUBMIT_AUDIT" >&2
+    exit 3
+}
+exit 0

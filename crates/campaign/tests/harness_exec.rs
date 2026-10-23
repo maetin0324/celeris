@@ -439,3 +439,62 @@ echo hello
     assert_ne!(seen[0].model.as_deref(), Some(t.cfg.model.as_str()));
     assert_eq!(seen[0].harness.as_deref(), Some("stub.sh"));
 }
+
+/// A の試行内の submit wrapper（`scripts/campaign/celeris-qsub`）が scheduler の受理した job id を受理記録に残し、
+/// `HarnessExecutor::track` がそれを参照（→ 台帳）へ運ぶ。投入には trial の印が付く。受理されなかった投入・別 trial の行・
+/// 壊れた行は採らず、同じ記録の再読（再開）でも重複しない。
+#[test]
+fn submit_wrapper_records_accepted_job_ids_and_track_carries_them_without_duplicates() {
+    let wrapper = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/campaign/celeris-qsub");
+    let t = h(&format!(
+        r#"#!/bin/sh
+export CELERIS_SUBMIT_TARGET=pbs:sirius CELERIS_SUBMIT_CMD="$PWD/fake-qsub"
+{w} job.sh >> submit.out
+FAIL=1 {w} job.sh >> submit.out
+{w} job2.sh >> submit.out
+echo '{{"usage":{{"input_tokens":1,"output_tokens":1}}}}'
+"#,
+        w = wrapper.display()
+    ));
+    // 偽の scheduler: 引数を残し、受理した job id（連番）を返す。FAIL があれば受理しない。
+    write_executable(
+        &t.ws.join("fake-qsub"),
+        r#"#!/bin/sh
+echo "$*" >> qsub.args
+[ -z "${FAIL:-}" ] || { echo "qsub: queue disabled" >&2; exit 1; }
+n=$(cat n 2>/dev/null || echo 4242); echo $((n + 1)) > n
+echo "$n.sirius"
+"#,
+    );
+    let x = t.exec();
+    let r = x.submit(&t.req(600), "campaign-k1").expect("submit");
+    wait_done(&x, &r);
+    let args = fs::read_to_string(t.ws.join("qsub.args")).expect("qsub args");
+    assert!(
+        args.lines()
+            .all(|l| l.starts_with("-v CELERIS_TRIAL_KEY=campaign-k1 ")),
+        "{args}"
+    );
+    let tracked = x.track(&r).expect("track");
+    assert_eq!(
+        tracked.cluster_job_ids,
+        vec!["pbs:sirius:4242.sirius", "pbs:sirius:4243.sirius"]
+    );
+    // 別 trial の行・PID・壊れた行・同じ受理の重複（再開時の再追記）を足しても、この trial の 2 件だけ。
+    let audit = t.state.join("campaign-k1").join("submit-audit.jsonl");
+    let mut f = fs::OpenOptions::new()
+        .append(true)
+        .open(&audit)
+        .expect("audit");
+    for l in [
+        r#"{"schema":"celeris.submit-audit/1","trial_key":"campaign-other","scheduler":"pbs","cluster":"sirius","job_id":"9.sirius"}"#,
+        r#"{"schema":"celeris.submit-audit/1","trial_key":"campaign-k1","scheduler":"pbs","cluster":"sirius","job_id":"4242"}"#,
+        "not json",
+        r#"{"schema":"celeris.submit-audit/1","trial_key":"campaign-k1","scheduler":"pbs","cluster":"sirius","job_id":"4242.sirius"}"#,
+    ] {
+        writeln!(f, "{l}").expect("append");
+    }
+    // 再開: 別の executor 実体が meta から受理記録を見つけ、既に参照にある ID を重ねない。
+    let again = t.exec().track(&tracked).expect("track after resume");
+    assert_eq!(again, tracked);
+}

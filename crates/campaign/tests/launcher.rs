@@ -258,6 +258,11 @@ echo "$*" >> @BIN@/claude.log
 if [ "$1" = --version ]; then echo claude-code@2.1.0; exit 0; fi
 # 実験 case の試行 workspace に、エージェントが申告する job 証拠と raw を残す（評価側の観測が照合する対象）。
 if [ ! -f evidence/jobs.json ]; then
+    # 試験が有効にしたときだけ、制御された submit wrapper で（偽の）scheduler へ投入する（A の通常の投入経路）。
+    # 投入先と実 submit command は運用者が cap-env で与える値（ここでは偽の qsub）。
+    if [ -f @BIN@/qsub.enabled ]; then
+        CELERIS_SUBMIT_TARGET=pbs:sirius CELERIS_SUBMIT_CMD=fake-qsub celeris-qsub job.sh >/dev/null || exit 1
+    fi
     mkdir -p evidence results
     echo raw >results/out.csv
     h=$(sha256sum results/out.csv | cut -d' ' -f1)
@@ -515,6 +520,19 @@ fn fixture() -> Fx {
             if t == "sh" { CAP_SH_STUB } else { CAP_STUB },
         );
     }
+    // 制御された submit wrapper（repo の実物）と、受理した job id を返す偽の qsub。
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/campaign/celeris-qsub"),
+        tools.join("celeris-qsub"),
+    )
+    .unwrap();
+    write_exec(
+        &tools.join("fake-qsub"),
+        &format!(
+            "#!/bin/sh\necho \"$*\" >> {}/qsub.log\necho 4242.sirius\n",
+            bin.display()
+        ),
+    );
     let tc = json!({
         "ro_mounts": [tools],
         "env": [["PATH", format!("{}:{}:/usr/local/bin:/usr/bin:/bin", tools.display(), bin.display())]],
@@ -1151,18 +1169,21 @@ fn variant_b0_sha256_is_passed_to_preflight_and_a_wrong_hash_is_rejected() {
     stop(&f);
 }
 
-/// 実験 case の試行について、標準の grade が評価側の観測を収集し、trial identity・台帳の job ID・scheduler 応答の控え・
-/// 成果物 hash に結ぶ。未終了・欠測・成果物改変・別 trial の記録・台帳に無い job・控えの改変は成功証拠にならない。
+/// 実験 case の試行について、A の submit wrapper が受理を記録した job ID が通常経路（executor の track → 台帳）で
+/// 台帳に入り、標準の grade が評価側の観測を収集し、trial identity・台帳の job ID・scheduler 応答の控え（trial の印）・
+/// 成果物 hash に結ぶ。台帳は手で編集しない。取得失敗は env_failure、未終了は undetermined として grade に残り、
+/// 未終了・欠測・成果物改変・別 trial の記録・台帳に無い job・控えの改変は成功証拠にならない。
 #[test]
 fn grade_collects_job_observations_bound_to_the_trial_and_rejects_every_mismatch() {
     let f = fixture();
+    fs::write(f.d().join("bin/qsub.enabled"), "").unwrap();
     ok(&f, "prepare");
     ok(&f, "start");
     f.create_project();
     ok(&f, "preflight");
     ok(&f, "watch");
     let out = f.out();
-    // 実験 case（k2）の A 試行。Celeris が台帳に残した投入先（job ID）を、通常の台帳行の追記と同じ形で足す。
+    // 実験 case（k2）の A 試行。投入先（job ID）は wrapper の受理記録から executor が台帳へ運んだもの。
     let trial: Value = fs::read_to_string(out.join("trials.jsonl"))
         .unwrap()
         .lines()
@@ -1171,18 +1192,37 @@ fn grade_collects_job_observations_bound_to_the_trial_and_rejects_every_mismatch
         .expect("A k2 trial");
     let ws = out.join(trial["workspace"].as_str().unwrap());
     assert!(ws.join("evidence/jobs.json").is_file());
-    let mut row: Value = fs::read_to_string(out.join("ledger.jsonl"))
+    let row: Value = fs::read_to_string(out.join("ledger.jsonl"))
         .unwrap()
         .lines()
         .map(|l| serde_json::from_str::<Value>(l).unwrap())
         .rfind(|r| r["arm"] == "A" && r["problem_id"] == trial["problem_id"])
         .expect("ledger row");
-    row["cluster_job_ids"] = json!(["pbs:sirius:4242.sirius"]);
-    let mut l = fs::OpenOptions::new()
-        .append(true)
-        .open(out.join("ledger.jsonl"))
-        .unwrap();
-    std::io::Write::write_all(&mut l, format!("{row}\n").as_bytes()).unwrap();
+    assert_eq!(row["state"], json!("done"), "{row}");
+    assert_eq!(
+        row["cluster_job_ids"],
+        json!(["pbs:sirius:4242.sirius"]),
+        "{row}"
+    );
+    let key = row["idempotency_key"].as_str().unwrap().to_string();
+    let qsub_log = fs::read_to_string(f.d().join("bin/qsub.log")).unwrap();
+    assert!(
+        qsub_log.contains(&format!("-v CELERIS_TRIAL_KEY={key} job.sh")),
+        "{qsub_log}"
+    );
+    // B/C は A の wrapper を使わない（Celeris の cluster wait が投入先の正）。この fixture では投入しない。
+    for r in fs::read_to_string(out.join("ledger.jsonl"))
+        .unwrap()
+        .lines()
+    {
+        let r: Value = serde_json::from_str(r).unwrap();
+        if r["arm"] != "A" {
+            assert!(
+                r["cluster_job_ids"].as_array().is_none_or(Vec::is_empty),
+                "{r}"
+            );
+        }
+    }
     // read-only の scheduler 照会（ssh qstat）の固定応答。
     let qstat = f.d().join("bin/qstat.out");
     // cap-tools の ssh stub（能力検査用）を、qstat の固定応答を返す stub に置き換える（PATH 上で先に当たる）。
@@ -1193,7 +1233,7 @@ fn grade_collects_job_observations_bound_to_the_trial_and_rejects_every_mismatch
     let reply = |state: &str| {
         fs::write(
             &qstat,
-            format!("Job Id: 4242.sirius\n    job_state = {state}\n    Exit_status = 0\n    Resource_List.nodes = 3\n"),
+            format!("Job Id: 4242.sirius\n    job_state = {state}\n    Exit_status = 0\n    Resource_List.nodes = 3\n    Variable_List = PBS_O_HOME=/home/u,CELERIS_TRIAL_KEY={key}\n"),
         )
         .unwrap();
     };
@@ -1206,6 +1246,26 @@ fn grade_collects_job_observations_bound_to_the_trial_and_rejects_every_mismatch
             .unwrap()
             .to_string()
     };
+
+    let a_line = |f: &Fx| -> Value { serde_json::from_str(&a_grade(f)).unwrap() };
+
+    // 取得失敗（scheduler 照会の不通）: 記録を作らず、grade はその試行を env_failure にする（model_failure にしない）。
+    let o = launch(&f, "collect");
+    assert!(
+        !o.status.success() && text(&o).contains("[fetch_failed]"),
+        "{}",
+        text(&o)
+    );
+    assert!(!obs.exists(), "no partial record");
+    launch(&f, "grade");
+    let l = a_line(&f);
+    assert_eq!(l["failure_class"], json!("env_failure"), "{l}");
+    assert_eq!(l["observation"]["status"], json!("collect_failed"), "{l}");
+    assert_eq!(
+        l["observation"]["issues"][0]["class"],
+        json!("fetch_failed"),
+        "{l}"
+    );
 
     // 未終了（job_state=R）: 記録を作らず collect は非 0。grade は続き、その試行は観測なしとして成功にならない。
     reply("R");
@@ -1223,6 +1283,16 @@ fn grade_collects_job_observations_bound_to_the_trial_and_rejects_every_mismatch
         "{}",
         a_grade(&f)
     );
+    assert_eq!(a_line(&f)["failure_class"], json!("undetermined"));
+    // 別 trial の印を持つ scheduler 記録は identity 不一致（成功証拠にしない）。
+    fs::write(
+        &qstat,
+        "Job Id: 4242.sirius\n    job_state = F\n    Exit_status = 0\n    Variable_List = CELERIS_TRIAL_KEY=campaign-ffffffffffffffff\n",
+    )
+    .unwrap();
+    let o = launch(&f, "collect");
+    assert!(text(&o).contains("[identity_mismatch]"), "{}", text(&o));
+    assert!(!obs.exists());
 
     // 終了: 収集でき、記録は trial identity・台帳の job ID に結ばれ、grade の実験証拠検査を通る。
     reply("F");

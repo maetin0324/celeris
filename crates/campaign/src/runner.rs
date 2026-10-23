@@ -576,6 +576,15 @@ fn drive_async(
     match exec.poll(&fresh) {
         Err(e) => interrupted(ledger, key, "poll", e),
         Ok(ExecStatus::Done(r)) => {
+            // 終了を確かめた後にもう一度追う: track と poll の間に受理された job（終了直前の投入）を落とさない。
+            let last = match exec.track(&fresh) {
+                Ok(l) => l,
+                Err(e) => return interrupted(ledger, key, "track", e),
+            };
+            if last != fresh {
+                ledger.record_ref(key, &last)?;
+            }
+            let fresh = last;
             let seen = match exec.observed(&fresh) {
                 Ok(seen) => seen,
                 Err(e) => return interrupted(ledger, key, "observed", ExecError::interrupted(e)),

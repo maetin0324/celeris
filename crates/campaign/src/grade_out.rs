@@ -170,7 +170,34 @@ pub fn grade_out_with(
             // grader 側で組んだ初期 tree は <initial_trees>/<problem_id>（compile error の出どころの判定に使う）。
             initial_tree: initial_trees.map(|d| d.join(&r.problem_id)),
         };
-        let rep = grade(&case, &artifact, &opts);
+        let mut rep = grade(&case, &artifact, &opts);
+        // 観測記録が無いときは収集の失敗記録（分類付き）を読み、取得失敗を model_failure にしない。観測の状態は
+        // 注入した workflow fault（faults.jsonl）とは別の欄 `observation` に残す。
+        let observation = if opts.observed_jobs.is_some() {
+            json!({"status": "observed"})
+        } else {
+            let fpath = crate::observe::failure_path(
+                out,
+                crate::observe::TrialKey {
+                    problem: &r.problem_id,
+                    config: r.config,
+                    rep: r.rep,
+                },
+            );
+            let want =
+                crate::observe::trial_identity(&hash, r.config, &r.problem_id, r.rep, r.trial_no);
+            match crate::observe::read_failure(&fpath, &want) {
+                Some((class, issues)) => {
+                    crate::grader::apply_observation_failure(
+                        &mut rep,
+                        class,
+                        issues.iter().map(ToString::to_string).collect(),
+                    );
+                    json!({"status": "collect_failed", "failure_class": class, "issues": issues})
+                }
+                None => json!({"status": "none"}),
+            }
+        };
         graded += 1;
         final_pass += u64::from(rep.final_pass);
         if let Some(fc) = rep.failure_class {
@@ -199,6 +226,7 @@ pub fn grade_out_with(
             "artifact_sha256": artifact_sha,
             "graded": true,
             "failure_class": rep.failure_class,
+            "observation": observation,
             "grade": rep,
         }));
     }

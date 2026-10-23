@@ -267,7 +267,11 @@ impl Toolchain {
             }
         }
         if let Some((k, _)) = self.env.iter().find(|(k, _)| {
-            matches!(k.as_str(), "HOME" | "CLAUDE_CONFIG_DIR") || k.is_empty() || k.contains('=')
+            matches!(
+                k.as_str(),
+                "HOME" | "CLAUDE_CONFIG_DIR" | SUBMIT_AUDIT_ENV | TRIAL_KEY_ENV
+            ) || k.is_empty()
+                || k.contains('=')
         }) {
             return Err(format!("toolchain env must not set {k:?}"));
         }
@@ -476,6 +480,55 @@ struct Meta {
     /// この試行の実効 token 上限（`TrialRequest.budget.max_tokens`）。再開後の `poll` も同じ上限で止める。
     #[serde(default)]
     max_tokens: Option<u64>,
+    /// submit wrapper が受理した job を追記する file（[`SUBMIT_AUDIT_ENV`]）。`track` が読む。旧 meta は None。
+    #[serde(default)]
+    submit_audit: Option<PathBuf>,
+}
+
+/// 試行内の submit wrapper（`scripts/campaign/celeris-qsub`）に渡す環境変数: 受理記録の追記先と trial の冪等キー。
+pub const SUBMIT_AUDIT_ENV: &str = "CELERIS_SUBMIT_AUDIT";
+pub const TRIAL_KEY_ENV: &str = crate::observe::TRIAL_MARKER_VAR;
+/// 受理記録の file 名（試行 state dir、sandbox 無しは executor の key dir）。
+pub const SUBMIT_AUDIT_FILE: &str = "submit-audit.jsonl";
+/// 受理記録 1 行の schema。
+pub const SUBMIT_AUDIT_SCHEMA: &str = "celeris.submit-audit/1";
+
+/// 受理記録から、この trial の job 参照（`scheduler:cluster:job_id`）を順序どおり重複なく取り出す。
+/// 別 trial の行・scheduler の job id の形でない行・壊れた行は採らない（scheduler 側の照合は collect が行う）。
+pub fn audited_jobs(text: &str, key: &str) -> Vec<String> {
+    let safe = |s: &str| {
+        !s.is_empty()
+            && !s.starts_with('-')
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    };
+    let mut v: Vec<String> = Vec::new();
+    for l in text.lines() {
+        let Ok(r) = serde_json::from_str::<Value>(l.trim()) else {
+            continue;
+        };
+        let (Some(k), Some(s), Some(c), Some(id)) = (
+            r["trial_key"].as_str(),
+            r["scheduler"].as_str(),
+            r["cluster"].as_str(),
+            r["job_id"].as_str(),
+        ) else {
+            continue;
+        };
+        if r["schema"] != SUBMIT_AUDIT_SCHEMA
+            || k != key
+            || !safe(s)
+            || !safe(c)
+            || !crate::observe::is_scheduler_job_id(id)
+        {
+            continue;
+        }
+        let j = format!("{s}:{c}:{id}");
+        if !v.contains(&j) {
+            v.push(j);
+        }
+    }
+    v
 }
 
 /// timeout / cancel で executor が確定させた結果（process が exit file を書けないとき）。
@@ -710,7 +763,7 @@ impl Executor for HarnessExecutor {
             .and_then(|d| d.sync_all())
             .map_err(|e| e.to_string())?;
 
-        let c = self.builder.build(req);
+        let mut c = self.builder.build(req);
         // 実際に渡す引数から実測を残す（manifest の宣言名は使わない）。
         let model = c
             .args
@@ -749,12 +802,20 @@ impl Executor for HarnessExecutor {
             &dir.join("launch.json"),
             &serde_json::to_vec(&launch).map_err(|e| e.to_string())?,
         )?;
-        let c = match &self.sandbox {
-            Some(sb) => {
-                let state = sb.prepare(req)?;
-                sb.wrap(&c, req.workspace, &state)?
-            }
-            None => c,
+        // 受理記録の追記先: sandbox では試行 state dir（書き込み可で bind 済み）、無ければ key dir。
+        let state = match &self.sandbox {
+            Some(sb) => Some(sb.prepare(req)?),
+            None => None,
+        };
+        let audit = state.as_deref().unwrap_or(&dir).join(SUBMIT_AUDIT_FILE);
+        c.env.push((
+            SUBMIT_AUDIT_ENV.into(),
+            audit.to_string_lossy().into_owned(),
+        ));
+        c.env.push((TRIAL_KEY_ENV.into(), key.into()));
+        let c = match (&self.sandbox, &state) {
+            (Some(sb), Some(state)) => sb.wrap(&c, req.workspace, state)?,
+            _ => c,
         };
         let open = |n: &str| File::create(dir.join(n)).map_err(|e| e.to_string());
         // wrapper: command の終了コードを exit.code に原子的に書く（親 process が死んでも残る）。
@@ -783,6 +844,7 @@ impl Executor for HarnessExecutor {
             started_unix: now_secs(),
             timeout_secs: req.timeout_secs,
             max_tokens: Some(req.budget.max_tokens),
+            submit_audit: Some(audit),
         };
         let b = serde_json::to_vec(&m).map_err(|e| e.to_string())?;
         write_synced(&dir.join("meta.json"), &b)?;
@@ -796,6 +858,7 @@ impl Executor for HarnessExecutor {
                 started_unix: m.started_unix,
                 timeout_secs: m.timeout_secs,
                 max_tokens: m.max_tokens,
+                submit_audit: m.submit_audit.clone(),
             };
             std::thread::spawn(move || {
                 while alive(&m2) && !dir.join("final.json").exists() {
@@ -869,6 +932,31 @@ impl Executor for HarnessExecutor {
             return done(Outcome::Timeout, m.timeout_secs);
         }
         Ok(ExecStatus::Wait)
+    }
+
+    /// submit wrapper の受理記録から、この trial の cluster job を参照に足す（台帳へ追記される）。既に記録した ID は保つ。
+    fn track(&self, t: &TaskRef) -> Result<TaskRef, ExecError> {
+        let key = &t.task_id;
+        let Some(m) = self.meta(key)? else {
+            return Ok(t.clone());
+        };
+        let path = m
+            .submit_audit
+            .unwrap_or_else(|| self.state_dir.join(key).join(SUBMIT_AUDIT_FILE));
+        let text = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(t.clone()),
+            Err(e) => {
+                return Err(ExecError::interrupted(format!("{}: {e}", path.display())));
+            }
+        };
+        let mut out = t.clone();
+        for j in audited_jobs(&text, key) {
+            if !out.cluster_job_ids.contains(&j) {
+                out.cluster_job_ids.push(j);
+            }
+        }
+        Ok(out)
     }
 
     fn usage(&self, t: &TaskRef) -> Result<Option<Usage>, ExecError> {

@@ -315,6 +315,11 @@ impl Ledger {
         })
     }
 
+    /// 状態は変えずに参照（子 task・job）だけを更新する。終了確認の直後に受理記録を取り込む時に使う。
+    pub fn record_ref(&mut self, key: &TrialKey, t: &TaskRef) -> Result<(), String> {
+        self.update(key, |r| Self::apply_ref(r, t))
+    }
+
     pub fn mark_done(&mut self, key: &TrialKey) -> Result<(), String> {
         self.update(key, |r| r.state = LedgerState::Done)
     }

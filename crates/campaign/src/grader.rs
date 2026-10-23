@@ -1507,6 +1507,42 @@ pub fn grade(case: &GradeCase, artifact: &Path, opts: &GradeOptions) -> GradeRep
     }
 }
 
+/// 評価側の観測記録が無く、収集が分類付きで失敗していたとき（`observe::record_failure`）、実験証拠の不合格の原因を
+/// その分類に合わせる。取得失敗（測定基盤）は env_failure、未確定は undetermined にし、model_failure に数えない。
+/// 未投入（model_failure）は理由を足すだけ。
+pub fn apply_observation_failure(rep: &mut GradeReport, class: FailureClass, reasons: Vec<String>) {
+    let ev = &mut rep.checks.evidence;
+    if ev.status != Status::Fail {
+        return;
+    }
+    ev.reasons.extend(
+        reasons
+            .into_iter()
+            .map(|r| format!("evaluator collection failed: {r}")),
+    );
+    match class {
+        FailureClass::EnvFailure => {
+            ev.env_failure = true;
+            ev.undetermined = false;
+        }
+        FailureClass::Undetermined if !ev.env_failure => ev.undetermined = true,
+        _ => {}
+    }
+    let all = [
+        &rep.checks.implementation,
+        &rep.checks.evidence,
+        &rep.checks.recompute,
+        &rep.checks.review,
+    ];
+    rep.failure_class = Some(if all.iter().any(|c| c.env_failure) {
+        FailureClass::EnvFailure
+    } else if all.iter().any(|c| c.undetermined) {
+        FailureClass::Undetermined
+    } else {
+        FailureClass::ModelFailure
+    });
+}
+
 /// `celeris-campaign grade --case <file> --artifact <dir> [--work <dir>] [--observed <file>] [--initial-tree <dir>]`。合格で Ok、不合格で Err（どちらも判定 JSON）。
 /// 評価 command は `runner`（CLI では `grade_runner::ProcessRunner`）が grade の作業 dir の中で実際に走らせる。
 pub fn cli(args: &[String], runner: &dyn CommandRunner) -> Result<String, String> {

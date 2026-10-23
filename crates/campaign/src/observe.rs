@@ -63,7 +63,94 @@ pub struct Expect {
     pub scheduler: String,
     pub cluster: String,
     pub conditions: BTreeMap<String, Value>,
+    /// この trial の冪等キー。scheduler 記録の `Variable_List` に [`TRIAL_MARKER_VAR`] があれば一致を要る。
+    pub trial_key: Option<String>,
+    /// 記録に marker が無ければ拒否する（A: 試行内の submit wrapper が受理を記録するので、scheduler 側の印で裏付ける）。
+    pub require_marker: bool,
 }
+
+/// submit wrapper が job に付ける trial の印（`qsub -v CELERIS_TRIAL_KEY=<冪等キー>`）。
+pub const TRIAL_MARKER_VAR: &str = "CELERIS_TRIAL_KEY";
+
+/// 収集できなかった理由の分類（ADR 2026-10-23-a-submit-audit-and-collect-classes）。研究の失敗（job の非 0 終了）は
+/// 収集の失敗ではない（記録を作り、grader が case と照合して落とす）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectClass {
+    /// 台帳に投入先が無い（試行が受理済みの job を残さなかった）。
+    NotSubmitted,
+    /// job が終わっていない（後で収集し直す）。
+    NotFinished,
+    /// scheduler への照会自体が失敗した（ssh・qstat の不通。測定基盤の失敗）。
+    FetchFailed,
+    /// 照会はできたが、記録が欠けている・scheduler が job を知らない・raw が無い。
+    Unobserved,
+    /// 記録が別の job・別の cluster・別の trial のもの。
+    IdentityMismatch,
+    /// 成果物が実行終了時の hash と違う（収集の前提が崩れた）。
+    ArtifactChanged,
+    /// 評価側の資産（grade case 等）が読めない。
+    EvaluatorAsset,
+}
+
+impl CollectClass {
+    /// grade 行の `failure_class` に写す値。測定基盤の失敗は model_failure にしない。
+    pub fn failure_class(self) -> crate::grader::FailureClass {
+        use crate::grader::FailureClass as F;
+        match self {
+            Self::NotSubmitted => F::ModelFailure,
+            Self::FetchFailed | Self::EvaluatorAsset => F::EnvFailure,
+            Self::NotFinished
+            | Self::Unobserved
+            | Self::IdentityMismatch
+            | Self::ArtifactChanged => F::Undetermined,
+        }
+    }
+}
+
+/// 収集できなかった 1 件（分類と本文）。
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CollectIssue {
+    pub class: CollectClass,
+    pub detail: String,
+}
+
+impl CollectIssue {
+    fn new(class: CollectClass, detail: impl Into<String>) -> Self {
+        Self {
+            class,
+            detail: detail.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for CollectIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let c = serde_json::to_value(self.class)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default();
+        write!(f, "[{c}] {}", self.detail)
+    }
+}
+
+/// 複数の理由から trial の失敗分類を 1 つ決める（環境 > 未確定 > model）。
+pub fn dominant_failure_class(issues: &[CollectIssue]) -> crate::grader::FailureClass {
+    use crate::grader::FailureClass as F;
+    let cs: Vec<F> = issues.iter().map(|i| i.class.failure_class()).collect();
+    if cs.contains(&F::EnvFailure) {
+        F::EnvFailure
+    } else if cs.contains(&F::Undetermined) || cs.is_empty() {
+        F::Undetermined
+    } else {
+        F::ModelFailure
+    }
+}
+
+/// 収集失敗の記録（`<out>/observed/<problem>/<Config>-rep<N>.collect-failure.json`）の schema。
+pub const OBSERVE_FAILURE_SCHEMA: &str = "celeris.observe-failure/1";
+/// 収集の試みの追記専用の履歴（成功・失敗とも）。
+pub const COLLECT_LOG: &str = "collect-log.jsonl";
 
 /// PBS の `key = value`（継続行は前行へ連結）。
 fn parse_qstat(text: &str) -> (Option<String>, BTreeMap<String, String>) {
@@ -118,44 +205,85 @@ fn observe_job(
     artifact: &Path,
     raw_paths: &[String],
     raw_dir: &Path,
-) -> Result<Value, String> {
+) -> Result<Value, CollectIssue> {
     let tag = format!("{}:{}:{}", r.scheduler, r.cluster, r.job_id);
     if !is_scheduler_job_id(&r.job_id) {
-        return Err(format!(
-            "{tag}: not a scheduler job id (PIDs are not accepted)"
+        return Err(CollectIssue::new(
+            CollectClass::IdentityMismatch,
+            format!("{tag}: not a scheduler job id (PIDs are not accepted)"),
         ));
     }
     if r.scheduler != expect.scheduler || r.cluster != expect.cluster {
-        return Err(format!(
-            "{tag}: submitted to {}:{} but the case fixes {}:{}",
-            r.scheduler, r.cluster, expect.scheduler, expect.cluster
+        return Err(CollectIssue::new(
+            CollectClass::IdentityMismatch,
+            format!(
+                "{tag}: submitted to {}:{} but the case fixes {}:{}",
+                r.scheduler, r.cluster, expect.scheduler, expect.cluster
+            ),
         ));
     }
-    let reply = t
-        .qstat(&r.scheduler, &r.cluster, &r.job_id)
-        .map_err(|e| format!("{tag}: scheduler query failed: {e}"))?;
+    let reply = t.qstat(&r.scheduler, &r.cluster, &r.job_id).map_err(|e| {
+        // scheduler が「知らない」と答えた（照会は届いた）のと、照会自体の失敗（ssh・qstat の不通）を分ける。
+        let class = if e.contains("Unknown Job Id") {
+            CollectClass::Unobserved
+        } else {
+            CollectClass::FetchFailed
+        };
+        CollectIssue::new(class, format!("{tag}: scheduler query failed: {e}"))
+    })?;
+    let mismatch = |d: String| CollectIssue::new(CollectClass::IdentityMismatch, d);
+    let unobserved = |d: String| CollectIssue::new(CollectClass::Unobserved, d);
     if reply.cluster != r.cluster {
-        return Err(format!(
+        return Err(mismatch(format!(
             "{tag}: answered by {} not the submission cluster {}",
             reply.cluster, r.cluster
-        ));
+        )));
     }
     let (rid, kv) = parse_qstat(&reply.raw);
-    if rid.as_deref() != Some(r.job_id.as_str()) {
-        return Err(format!(
-            "{tag}: scheduler record is for {rid:?}, not this job id"
-        ));
+    match rid.as_deref() {
+        None => {
+            return Err(unobserved(format!(
+                "{tag}: scheduler reply has no job record"
+            )));
+        }
+        Some(id) if id != r.job_id => {
+            return Err(mismatch(format!(
+                "{tag}: scheduler record is for {rid:?}, not this job id"
+            )));
+        }
+        Some(_) => {}
+    }
+    let marker = kv.get("Variable_List").and_then(|vl| {
+        vl.split(',')
+            .find_map(|kv| kv.trim().strip_prefix(&format!("{TRIAL_MARKER_VAR}=")))
+            .map(String::from)
+    });
+    match (&marker, &expect.trial_key) {
+        (Some(m), Some(k)) if m != k => {
+            return Err(mismatch(format!(
+                "{tag}: job belongs to trial {m}, not this trial {k}"
+            )));
+        }
+        (None, _) if expect.require_marker => {
+            return Err(mismatch(format!(
+                "{tag}: scheduler record has no {TRIAL_MARKER_VAR} (not submitted through the controlled submit wrapper)"
+            )));
+        }
+        _ => {}
     }
     if kv.get("job_state").map(String::as_str) != Some("F") {
-        return Err(format!(
-            "{tag}: job is not finished (job_state={:?})",
-            kv.get("job_state")
+        return Err(CollectIssue::new(
+            CollectClass::NotFinished,
+            format!(
+                "{tag}: job is not finished (job_state={:?})",
+                kv.get("job_state")
+            ),
         ));
     }
     let exit: i64 = kv
         .get("Exit_status")
         .and_then(|v| v.parse().ok())
-        .ok_or_else(|| format!("{tag}: scheduler record has no Exit_status"))?;
+        .ok_or_else(|| unobserved(format!("{tag}: scheduler record has no Exit_status")))?;
     let mut conditions = Map::new();
     for k in expect.conditions.keys() {
         let v = kv
@@ -167,18 +295,19 @@ fn observe_job(
     }
     let mut raw = Vec::new();
     for p in raw_paths {
-        let f = safe_join(artifact, p).map_err(|e| format!("{tag}: {e}"))?;
+        let f = safe_join(artifact, p).map_err(|e| unobserved(format!("{tag}: {e}")))?;
         if !f.is_file() {
-            return Err(format!("{tag}: raw data {p} is missing"));
+            return Err(unobserved(format!("{tag}: raw data {p} is missing")));
         }
-        raw.push(json!({"path": p, "sha256": sha256_file(&f)?}));
+        raw.push(json!({"path": p, "sha256": sha256_file(&f).map_err(&unobserved)?}));
     }
     if raw.is_empty() {
-        return Err(format!("{tag}: no raw data to hash"));
+        return Err(unobserved(format!("{tag}: no raw data to hash")));
     }
-    fs::create_dir_all(raw_dir).map_err(|e| e.to_string())?;
+    let io = |e: std::io::Error| CollectIssue::new(CollectClass::FetchFailed, e.to_string());
+    fs::create_dir_all(raw_dir).map_err(io)?;
     let file = raw_dir.join(format!("{}.qstat", r.job_id));
-    fs::write(&file, &reply.raw).map_err(|e| e.to_string())?;
+    fs::write(&file, &reply.raw).map_err(io)?;
     Ok(json!({
         "job_id": r.job_id,
         "scheduler": r.scheduler,
@@ -187,7 +316,8 @@ fn observe_job(
         "exit_status": exit,
         "conditions": Value::Object(conditions),
         "raw": raw,
-        "scheduler_record_sha256": sha256_file(&file)?,
+        "job_status": if exit == 0 { "finished" } else { "job_failed" },
+        "scheduler_record_sha256": sha256_file(&file).map_err(&unobserved)?,
     }))
 }
 
@@ -200,11 +330,12 @@ pub fn collect(
     artifact: &Path,
     raw_paths: &[String],
     raw_dir: &Path,
-) -> Result<Value, Vec<String>> {
+) -> Result<Value, Vec<CollectIssue>> {
     if refs.is_empty() {
-        return Err(vec![
-            "no job was submitted by Celeris for this trial (not executed)".into(),
-        ]);
+        return Err(vec![CollectIssue::new(
+            CollectClass::NotSubmitted,
+            "no job was submitted by Celeris for this trial (not executed)",
+        )]);
     }
     let (mut jobs, mut errs) = (Vec::new(), Vec::new());
     for r in refs {
@@ -231,7 +362,8 @@ pub struct TrialKey<'a> {
     pub rep: u32,
 }
 
-/// `grade-out` が読む場所（`<out>/observed/<problem>/<Config>-rep<N>.json`）へ収集して書く。拒否時は記録を書かない。
+/// `grade-out` が読む場所（`<out>/observed/<problem>/<Config>-rep<N>.json`）へ収集して書く。拒否時は観測記録を書かず、
+/// 分類付きの失敗記録（[`failure_path`]）を書く。成功・失敗とも試みは `<out>/observed/<problem>/collect-log.jsonl` に追記する。
 ///
 /// `identity`（[`trial_identity`]）は記録の `trial` に入り、`grade-out` が当該 trial の記録と照合する。
 #[allow(clippy::too_many_arguments)]
@@ -244,15 +376,94 @@ pub fn collect_for_trial(
     expect: &Expect,
     artifact: &Path,
     raw_paths: &[String],
-) -> Result<std::path::PathBuf, Vec<String>> {
+) -> Result<std::path::PathBuf, Vec<CollectIssue>> {
     let dir = out.join("observed").join(key.problem);
     let stem = format!("{:?}-rep{}", key.config, key.rep);
     let raw_dir = dir.join("scheduler").join(&stem);
-    let mut doc = collect(t, refs, expect, artifact, raw_paths, &raw_dir)?;
+    let mut doc = match collect(t, refs, expect, artifact, raw_paths, &raw_dir) {
+        Ok(d) => d,
+        Err(issues) => {
+            record_failure(out, key, identity, &issues);
+            return Err(issues);
+        }
+    };
     doc["trial"] = identity.clone();
     let path = dir.join(format!("{stem}.json"));
-    fs::write(&path, doc.to_string()).map_err(|e| vec![e.to_string()])?;
+    fs::write(&path, doc.to_string()).map_err(|e| {
+        vec![CollectIssue::new(
+            CollectClass::FetchFailed,
+            format!("{}: {e}", path.display()),
+        )]
+    })?;
+    // 前回の失敗記録は、この成功で置き換わる（履歴は collect-log に残る）。
+    let _ = fs::remove_file(failure_path(out, key));
+    append_log(
+        out,
+        key,
+        &json!({"trial": identity, "ok": true, "jobs": doc["jobs"].as_array().map_or(0, Vec::len)}),
+    );
     Ok(path)
+}
+
+/// 収集失敗の記録の path（観測記録の隣）。grade-out は観測記録が無いときだけこれを読む。
+pub fn failure_path(out: &Path, key: TrialKey<'_>) -> std::path::PathBuf {
+    out.join("observed").join(key.problem).join(format!(
+        "{:?}-rep{}.collect-failure.json",
+        key.config, key.rep
+    ))
+}
+
+fn append_log(out: &Path, key: TrialKey<'_>, line: &Value) {
+    use std::io::Write as _;
+    let dir = out.join("observed").join(key.problem);
+    let mut l = line.clone();
+    l["config"] = json!(format!("{:?}", key.config));
+    l["rep"] = json!(key.rep);
+    l["at"] = json!(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+    );
+    let _ = fs::create_dir_all(&dir).and_then(|_| {
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(COLLECT_LOG))
+            .and_then(|mut f| writeln!(f, "{l}"))
+    });
+}
+
+/// 分類付きの失敗記録を書く（最新の 1 件）と履歴への追記。既存の観測記録は消さない（取得の一時失敗で証拠を失わない）。
+pub fn record_failure(out: &Path, key: TrialKey<'_>, identity: &Value, issues: &[CollectIssue]) {
+    let doc = json!({
+        "schema": OBSERVE_FAILURE_SCHEMA,
+        "trial": identity,
+        "failure_class": dominant_failure_class(issues),
+        "issues": issues,
+    });
+    let p = failure_path(out, key);
+    if let Some(d) = p.parent() {
+        let _ = fs::create_dir_all(d);
+    }
+    let _ = fs::write(&p, doc.to_string());
+    append_log(
+        out,
+        key,
+        &json!({"trial": identity, "ok": false, "issues": issues}),
+    );
+}
+
+/// grade-out が読む失敗記録。identity が当該 trial と違う・読めない記録は使わない（None）。
+pub(crate) fn read_failure(
+    path: &Path,
+    want: &Value,
+) -> Option<(crate::grader::FailureClass, Vec<CollectIssue>)> {
+    let doc: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    if doc["schema"] != OBSERVE_FAILURE_SCHEMA || &doc["trial"] != want {
+        return None;
+    }
+    let issues: Vec<CollectIssue> = serde_json::from_value(doc["issues"].clone()).ok()?;
+    Some((dominant_failure_class(&issues), issues))
 }
 
 /// 観測記録に結ぶ trial の identity（campaign sha256・arm・problem・rep・trial_no）。
@@ -396,12 +607,31 @@ pub fn collect_out(
             "{:?}/{}/rep{}#{}",
             r.config, r.problem_id, r.rep, r.trial_no
         );
-        let fail = |why: Vec<String>| json!({"trial": tag, "reasons": why});
+        let tkey = TrialKey {
+            problem: &r.problem_id,
+            config: r.config,
+            rep: r.rep,
+        };
+        let identity = trial_identity(&hash, r.config, &r.problem_id, r.rep, r.trial_no);
+        let fail = |why: &[CollectIssue]| {
+            json!({
+                "trial": tag,
+                "failure_class": dominant_failure_class(why),
+                "classes": why.iter().map(|i| i.class).collect::<Vec<_>>(),
+                "reasons": why.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            })
+        };
+        // 収集の前段で止まった理由も分類して失敗記録に残す（grade が原因を model_failure にしない）。
+        let early = |class: CollectClass, detail: String| {
+            let issues = vec![CollectIssue::new(class, detail)];
+            record_failure(out, tkey, &identity, &issues);
+            issues
+        };
         let gpath = crate::grade_out::resolve_case_path(m, grade_cases, &r.problem_id, true);
         let gc = match GradeCase::load(&gpath) {
             Ok(g) => g,
             Err(e) => {
-                failed.push(fail(vec![e]));
+                failed.push(fail(&early(CollectClass::EvaluatorAsset, e)));
                 continue;
             }
         };
@@ -413,24 +643,35 @@ pub fn collect_out(
         match hash_tree(&artifact) {
             Ok(h) if h == r.workspace_sha256_final => {}
             _ => {
-                failed.push(fail(vec![
+                failed.push(fail(&early(
+                    CollectClass::ArtifactChanged,
                     "artifact hash differs from the trial's recorded final workspace".into(),
-                ]));
+                )));
                 continue;
             }
         }
-        let refs: Result<Vec<JobRef>, String> = ledger_row(&ledger, &hash, &r)
+        let row = ledger_row(&ledger, &hash, &r);
+        let refs: Result<Vec<JobRef>, CollectIssue> = row
             .map(|row| {
                 row.cluster_job_ids
                     .iter()
-                    .map(|i| ledger_ref(i, &exp.cluster))
+                    .map(|i| {
+                        ledger_ref(i, &exp.cluster)
+                            .map_err(|e| CollectIssue::new(CollectClass::IdentityMismatch, e))
+                    })
                     .collect()
             })
-            .unwrap_or_else(|| Err("no ledger row for this trial".into()));
+            .unwrap_or_else(|| {
+                Err(CollectIssue::new(
+                    CollectClass::Unobserved,
+                    "no ledger row for this trial",
+                ))
+            });
         let refs = match refs {
             Ok(v) => v,
             Err(e) => {
-                failed.push(fail(vec![e]));
+                record_failure(out, tkey, &identity, std::slice::from_ref(&e));
+                failed.push(fail(&[e]));
                 continue;
             }
         };
@@ -455,23 +696,29 @@ pub fn collect_out(
             scheduler: "pbs".into(),
             cluster: exp.cluster.clone(),
             conditions: spec.conditions.clone(),
+            trial_key: row.map(|w| w.idempotency_key.clone()),
+            // A の投入先は試行内の submit wrapper の受理記録から来るので、scheduler 側の trial 印で裏付ける。
+            require_marker: r.config == ConfigId::A,
         };
         match collect_for_trial(
-            t,
-            out,
-            TrialKey {
-                problem: &r.problem_id,
-                config: r.config,
-                rep: r.rep,
-            },
-            &trial_identity(&hash, r.config, &r.problem_id, r.rep, r.trial_no),
-            &refs,
-            &expect,
-            &artifact,
-            &raw_paths,
+            t, out, tkey, &identity, &refs, &expect, &artifact, &raw_paths,
         ) {
-            Ok(p) => collected.push(json!({"trial": tag, "path": p.display().to_string()})),
-            Err(e) => failed.push(fail(e)),
+            Ok(p) => {
+                // 研究の失敗（job の非 0 終了）は収集の失敗と分けて数える（記録は作り、grader が落とす）。
+                let failed_jobs = fs::read(&p)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                    .map_or(0, |d| {
+                        d["jobs"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter(|j| j["job_status"] == "job_failed")
+                            .count()
+                    });
+                collected.push(json!({"trial": tag, "path": p.display().to_string(), "job_failed": failed_jobs}))
+            }
+            Err(e) => failed.push(fail(&e)),
         }
     }
     let rep = json!({
@@ -541,6 +788,12 @@ pub fn cli(args: &[String], t: &dyn SchedulerTransport) -> Result<String, String
         scheduler: "pbs".into(),
         cluster,
         conditions,
+        trial_key: args
+            .iter()
+            .position(|a| a == "--trial-key")
+            .and_then(|i| args.get(i + 1))
+            .cloned(),
+        require_marker: false,
     };
     // 単発の手動収集は trial_no を引数で受け、`collect-observed-out`（台帳から全 trial）と同じ identity を書く。
     let identity = trial_identity(
@@ -566,6 +819,11 @@ pub fn cli(args: &[String], t: &dyn SchedulerTransport) -> Result<String, String
         Path::new(&one("--artifact")?),
         &many("--raw"),
     )
-    .map_err(|e| e.join("\n"))?;
+    .map_err(|e| {
+        e.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
     Ok(path.display().to_string())
 }

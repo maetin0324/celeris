@@ -29,6 +29,7 @@ rebase で SHA が変わるため、hash ではなく件名で挙げる。main �
 | phase 1: close-progress — 進捗を実 commit・試験数・blocker・開始可否で書き直す | 進捗 |
 | phase 1: progress-hashfree — 進捗の commit 表を件名で列挙し、提出時の HEAD の検査を記録する | この文書だけを変更。コードは変えていない |
 | phase 1: progress-hashfree — 提出時の HEAD の検査結果を記録する | この文書だけを変更。コードは変えていない |
+| phase 1: progress-hashfree — source-size-browser 進捗の front matter を main 版に揃え、提出時の HEAD の検査を記録する | 他 task の進捗 1 file を main と同じ内容にし、この文書を更新。コードは変えていない |
 
 ## 実装の要点
 - `crates/campaign/src/cells_validity.rs`: 固定 raw から次を決定的に計算する。期待セル集合（`planned-cells.json`）、完了記録（`cell.json`/`exit.json`）、
@@ -67,7 +68,7 @@ F かつ Exit 0 は正常として扱う。
 - `bash scripts/dev/test-affected.sh`: exit 0。基点は `git merge-base HEAD main`（`CELERIS_WU_BASE` にその値を渡して branch 全体の変更を対象にした）。2634 tests run、2634 passed、7 skipped、190.208 秒。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0（差分なし）。
-- 文書検査: `sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-adr-numbers.sh`、`sh scripts/dev/progress-index.sh --check`: check-doc-links exit 0、check-adr-numbers exit 0。progress-index --check は exit 1。原因は main 由来の他 task の進捗 agent-docs/progress/2026-10-23-source-size-browser.md の front matter（title・updated）欠落で、本 WU の範囲（この文書だけ）の外なので直していない。
+- 文書検査: `sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-adr-numbers.sh`、`sh scripts/dev/progress-index.sh --check`: すべて exit 0。前回は main 由来の agent-docs/progress/2026-10-23-source-size-browser.md の front matter（title・updated）欠落で progress-index --check が exit 1 だった。main の同じ file の版（front matter 2 行の追加だけ）を写して直した。本文は変えていない。
   progress-index は close-progress の時点で、main 由来の他 task の進捗 8 件の front matter（title/tasks/updated）欠落で exit 1 だった。
   別 branch の「docs: fill missing progress front matter fields」の該当 8 file 分を写して直した。各 file の本文は変えていない。
 

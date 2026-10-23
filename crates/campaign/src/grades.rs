@@ -41,8 +41,14 @@ pub enum GradeOutcome {
 impl GradeOutcome {
     /// 再採点（環境修復・初期 tree の指定）まで結論を出せない結果か。
     pub fn needs_regrade(&self) -> bool {
-        matches!(self, Self::EnvFailure | Self::Undetermined)
-            || matches!(self, Self::ObservationFailure(issues) if issues.iter().any(|i| i.class != crate::observe::CollectClass::NotSubmitted))
+        matches!(self, Self::EnvFailure | Self::Undetermined) || self.is_observation_failure()
+    }
+
+    /// Collector/infrastructure failure: an `ObservationFailure` with at least one issue other than
+    /// `not_submitted`. A cell whose only issues are `not_submitted` (the model never submitted a job)
+    /// is a model failure, not an observation failure. Infrastructure classes win over `not_submitted`.
+    pub fn is_observation_failure(&self) -> bool {
+        matches!(self, Self::ObservationFailure(issues) if issues.iter().any(|i| i.class != crate::observe::CollectClass::NotSubmitted))
     }
 }
 

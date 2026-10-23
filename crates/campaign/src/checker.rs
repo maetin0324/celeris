@@ -1024,9 +1024,11 @@ pub fn recompute_graded(
         };
         t.unexecuted += u64::from(cell.unexecuted);
         // 収集の失敗は実行器の結果と独立に数える（failed/timeout の cell の取得失敗も落とさない）。
+        // not_submitted だけの cell はモデルの失敗（grader_failed）で、観測障害には数えない。
         if let Some(crate::grades::GradeOutcome::ObservationFailure(issues)) = cell
             .canonical_trial_no
             .and_then(|n| grades.get(&(cell.config, cell.problem_id.clone(), cell.rep, n)))
+            .filter(|g| g.is_observation_failure())
         {
             t.observation_failed += 1;
             let classes: BTreeSet<String> = issues

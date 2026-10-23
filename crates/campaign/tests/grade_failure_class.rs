@@ -456,16 +456,26 @@ fn collector_classes_remain_distinct_from_grader_and_injected_faults() {
         let table = export(&m, &out, &out.join("ex")).unwrap();
         let name = serde_json::to_value(class).unwrap();
         for row in table["configs"].as_array().unwrap() {
-            assert_eq!(row["observation_failed"], row["n"]);
-            assert_eq!(
-                row["observation_failures"][name.as_str().unwrap()],
-                row["n"]
-            );
             assert_eq!(row["grader_env_failure"], 0);
             assert_eq!(row["grader_undetermined"], 0);
-            assert_eq!(row["grader_failed"], 0);
-            assert_eq!(row["fault_breakdown"]["injected"]["observation_failed"], 1);
             assert_eq!(row["n"], 2);
+            if class == C::NotSubmitted {
+                // The model never submitted its job: a model failure, not an observation failure.
+                assert_eq!(row["grader_failed"], row["n"]);
+                assert_eq!(row["observation_failed"], 0);
+                assert_eq!(row["failure_breakdown"]["observation_failed"], 0);
+                assert!(row["observation_failures"][name.as_str().unwrap()].is_null());
+                assert_eq!(row["fault_breakdown"]["injected"]["model_failure"], 1);
+                assert!(row["fault_breakdown"]["injected"]["observation_failed"].is_null());
+            } else {
+                assert_eq!(row["observation_failed"], row["n"]);
+                assert_eq!(
+                    row["observation_failures"][name.as_str().unwrap()],
+                    row["n"]
+                );
+                assert_eq!(row["grader_failed"], 0);
+                assert_eq!(row["fault_breakdown"]["injected"]["observation_failed"], 1);
+            }
         }
         // An internally inconsistent collector classification must not be accepted.
         let mut invalid = lines;
@@ -476,6 +486,93 @@ fn collector_classes_remain_distinct_from_grader_and_injected_faults() {
         )
         .unwrap();
         assert!(!check(&m, &out).ok);
+    }
+}
+
+/// An injected workflow fault makes the agent give up before submitting its job (not_submitted only).
+/// That cell is a model failure under the injected fault, never a measurement-infrastructure observation
+/// failure. If an infrastructure class is present too, the cell is an observation failure.
+#[test]
+fn injected_fault_give_up_without_submit_is_model_failure_not_observation_failure() {
+    use celeris_campaign::aggregate::Outcome;
+    use celeris_campaign::grades::GradeOutcome;
+    use celeris_campaign::observe::{CollectClass as C, CollectIssue};
+    use celeris_campaign::record::TrialRecord;
+    use celeris_campaign::success::{SuccessClass, classify};
+    for (classes, infra) in [
+        (vec![C::NotSubmitted], false),
+        (vec![C::NotSubmitted, C::FetchFailed], true),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let (m, out) = pilot_out_with_faults(d.path(), true);
+        write_faults(&out, &fault_records(&m, &out, "injected"));
+        let fc = if infra {
+            "env_failure"
+        } else {
+            "model_failure"
+        };
+        common::write_grades_classed(&m, &out, |_| Some(fc));
+        let path = out.join(GRADES_FILE);
+        let issues: Vec<Value> = classes
+            .iter()
+            .map(|c| json!({"class": c, "detail": "agent gave up after the injected fault"}))
+            .collect();
+        let lines: String = fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| {
+                let mut v: Value = serde_json::from_str(l).unwrap();
+                v["observation"] =
+                    json!({"status": "collect_failed", "failure_class": fc, "issues": issues});
+                format!("{v}\n")
+            })
+            .collect();
+        fs::write(&path, lines).unwrap();
+        let rep = check(&m, &out);
+        assert!(rep.ok, "{:?}", rep.violations);
+        assert_eq!(rep.complete, !infra);
+        let g = GradeOutcome::ObservationFailure(
+            classes
+                .iter()
+                .map(|&class| CollectIssue {
+                    class,
+                    detail: "gave up".into(),
+                })
+                .collect(),
+        );
+        assert_eq!(g.is_observation_failure(), infra);
+        assert_eq!(g.needs_regrade(), infra);
+        let first = fs::read_to_string(out.join("trials.jsonl")).unwrap();
+        let r: TrialRecord = serde_json::from_str(first.lines().next().unwrap()).unwrap();
+        assert_eq!(r.outcome, Outcome::Passed);
+        let sc = classify(Some(&r), Some(&g));
+        assert_eq!(sc.needs_regrade(), infra);
+        let expected = if infra {
+            SuccessClass::ObservationFailed
+        } else {
+            SuccessClass::ModelFailure
+        };
+        assert_eq!(sc, expected);
+        let table = export(&m, &out, &out.join("ex")).unwrap();
+        for row in table["configs"].as_array().unwrap() {
+            let injected = &row["fault_breakdown"]["injected"];
+            if infra {
+                assert_eq!(row["observation_failed"], row["n"]);
+                assert_eq!(row["grader_failed"], 0);
+                assert_eq!(injected["observation_failed"], 1);
+                assert!(injected["model_failure"].is_null());
+            } else {
+                assert_eq!(row["grader_failed"], row["n"]);
+                assert_eq!(row["observation_failed"], 0);
+                assert_eq!(row["failure_breakdown"]["observation_failed"], 0);
+                assert_eq!(injected["model_failure"], 1);
+                assert!(injected["observation_failed"].is_null());
+                assert_eq!(
+                    row["observation_breakdown"]["injected"]["no_collector_failure"],
+                    1
+                );
+            }
+        }
     }
 }
 

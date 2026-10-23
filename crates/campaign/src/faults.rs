@@ -146,7 +146,13 @@ pub(crate) fn reconcile(
                         Some(GradeOutcome::EnvFailure) => "grader_env_failure",
                         Some(GradeOutcome::Undetermined) => "grader_undetermined",
                         Some(GradeOutcome::ControlOnly) => "grader_control_only",
-                        Some(GradeOutcome::ObservationFailure(_)) => "observation_failed",
+                        Some(g @ GradeOutcome::ObservationFailure(_))
+                            if g.is_observation_failure() =>
+                        {
+                            "observation_failed"
+                        }
+                        // not_submitted only: a model failure under the injected fault.
+                        Some(GradeOutcome::ObservationFailure(_)) => "model_failure",
                         None => "ungraded",
                     },
                     Some(Outcome::Failed) => "executor_failed",
@@ -157,7 +163,7 @@ pub(crate) fn reconcile(
                 };
                 // 測定基盤の観測障害は workflow fault の結果とは別の軸（実行器の結果を問わない）。
                 let collector = match first.and_then(|r| grades.get(&key_of(r))) {
-                    Some(GradeOutcome::ObservationFailure(_)) => "observation_failed",
+                    Some(g) if g.is_observation_failure() => "observation_failed",
                     _ => "no_collector_failure",
                 };
                 let t = rc.totals.entry(c).or_default();

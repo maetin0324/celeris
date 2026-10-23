@@ -94,7 +94,11 @@ pub fn classify(r: Option<&TrialRecord>, grade: Option<&GradeOutcome>) -> Succes
             Some(GradeOutcome::EnvFailure) => S::GraderEnvFailure,
             Some(GradeOutcome::Undetermined) => S::GraderUndetermined,
             Some(GradeOutcome::ControlOnly) => S::ControlOnly,
-            Some(GradeOutcome::ObservationFailure(_)) => S::ObservationFailed,
+            Some(g @ GradeOutcome::ObservationFailure(_)) if g.is_observation_failure() => {
+                S::ObservationFailed
+            }
+            // not_submitted only: the model never submitted its job.
+            Some(GradeOutcome::ObservationFailure(_)) => S::ModelFailure,
             None => S::Ungraded,
         },
         Outcome::Failed => S::ExecutorFailed,

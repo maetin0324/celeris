@@ -74,9 +74,11 @@ base は main `df3a0e01`（「試験用サーバーが迷い込み接続を要�
 実測定の raw・grade・集計は新規作成していない（試験は tempfile の合成データ）。既存の履歴は変更していない。K2/HPC 比較は引き続き**開始不可**: Sirius の qstat Variable_List に trial 印が残ることの実機確認、測定用 A の cap-env/prompt への wrapper 導入、タスク 1・2 の成立が必要。fixture の成功でこれらを代替しない。本番設定の変更・実 pilot・有料評価は実施していない。
 
 ## 最終検査
-main `df3a0e01` への rebase と front matter 補修の後、HEAD で実行（変更 crate が main の変更と合わさり、試験対象は前回より広い）:
-- `bash scripts/dev/test-affected.sh`: **exit 0**。nextest **6359 passed / 18 skipped**（323.5 秒）、doc test 成功。前回落ちた `classify_tick::e2e` の Jev 試験も成功。not_submitted の新規試験 `injected_fault_give_up_without_submit_is_model_failure_not_observation_failure` を含む。
-- `cargo clippy --workspace -- -D warnings`: **exit 0**（警告 0）。
-- `cargo fmt --all -- --check`: **exit 0**（差分 0）。
-- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check`: **exit 0**（285 ADR file、progress-index ok）。
-- ログ: /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/ 内の retry5-test-affected.log・retry5-clippy.log・retry5-fmt.log。
+WU「既存 not_submitted 修正を新しい範囲基点で検証して再提出する」で、実装を変えずに再検証した（新機能・flaky 補修の追加なし、main 由来変更と front matter 補修は維持）。範囲の基点は WU 開始 snapshot（`CELERIS_WU_BASE` の commit「WU tracked scope base」。HEAD「docs: record rebase onto main and final checks」の tree をそのまま写したもの）。branch の base は main 由来の `df3a0e01`（提出直前に `git merge-base --is-ancestor df3a0e01 HEAD` が exit 0）。なお現在の main ref `81fd646a` は `df3a0e01` を別 task branch へ merge した commit で、本 branch の祖先ではない（取り込みは配送の target 同期に任せ、本 WU では merge しない）。
+- `cargo nextest run -p celeris-campaign --test grade_failure_class`: **exit 0**、8 passed（未投入のみ → model_failure、注入 fault 下で投げずに断念 → model_failure、NotSubmitted+FetchFailed 混在 → observation_failed を含む）。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/final-grade-failure-class.log
+- `bash scripts/dev/test-affected.sh`（WU snapshot 基点）: **exit 0**。差分は docs のみと判定され Rust 試験対象なし、source-size gate 0 failure、architecture-map 441 path・doc-links・ADR 番号（285 file）ok、python 試験 38+1 OK。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/final-test-affected.log
+- 参考に branch base で `CELERIS_WU_BASE=df3a0e01… bash scripts/dev/test-affected.sh`: **exit 0**、nextest **2608 passed / 6 skipped**（249 秒）。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/final-test-affected-branchbase.log
+- `cargo clippy --workspace -- -D warnings`: **exit 0**（警告 0）。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/final-clippy.log
+- `cargo fmt --all -- --check`: **exit 0**（差分 0）。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/final-fmt.log
+- 文書検査 `sh scripts/dev/progress-index.sh --check`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`bash scripts/dev/check-doc-links.sh`・`bash scripts/dev/check-adr-numbers.sh`: いずれも **exit 0**。ログ /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/final-doc-checks.log
+- 実測 raw・grade は新規なし、既存の測定履歴は不変。K2/HPC 比較は開始不可（Sirius qstat Variable_List の trial 印の実機確認、A の cap-env/prompt への wrapper 導入、タスク 1・2 の成立が未了）。

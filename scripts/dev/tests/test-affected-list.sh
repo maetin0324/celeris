@@ -1,12 +1,18 @@
 #!/bin/sh
 # scripts/dev/test-affected.sh --list を小さな git fixture（最小 cargo workspace）で確かめる。
 # 確かめること: (a) 変更 crate+逆依存 crate、(b) workspace 共通 file で全 crate + 警告、
-# (c) web のみ・docs のみは crate を出さない。cargo の試験は走らせない（--list のみ）。
+# (c) web のみ・docs のみは crate を出さない、(d) 統合時の基準が空 diff にならない。
+# cargo の試験は走らせない（--list と docs のみの実行）。
+# 必須の health gate（scripts/dev/check-health.sh）は fixture に最小版を置き、test-affected.sh が
+# 実行時に必ず呼ぶこと（--list では呼ばないこと）を記録 file で確かめる。本物の gate は repo 自身の
+# test-affected.sh 実行で走る。
 set -eu
 
 here="$(cd "$(dirname "$0")/../../.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/test-affected-list.XXXXXX")"
-trap 'rm -rf "$work"' EXIT
+mark="$(mktemp -d "${TMPDIR:-/tmp}/test-affected-mark.XXXXXX")/health"
+trap 'rm -rf "$work" "$(dirname "$mark")"' EXIT
+export HEALTH_MARK="$mark"
 cd "$work"
 git init -q -b main .
 git config user.email t@example.com
@@ -24,6 +30,9 @@ mk b a
 mk c
 echo '{"scripts":{"test":"vitest run"},"packageManager":"pnpm@1.0.0"}' >web/package.json
 echo x >"$d"/x.md
+mkdir -p scripts/dev
+# fixture 用の最小 health gate: 呼ばれた記録を残す。
+printf '#!/usr/bin/env bash\nset -eu\necho called >>"$HEALTH_MARK"\n' >scripts/dev/check-health.sh
 git add -A
 git commit -q -m base
 base="$(git rev-parse HEAD)"
@@ -54,6 +63,23 @@ echo "// w" >web/a.ts
 rm web/a.ts
 echo y >>"$d"/x.md
 [ -z "$(run)" ] || fail "(c) docs only not empty"
-CELERIS_WU_BASE="$base" bash "$here/scripts/dev/test-affected.sh" 2>/dev/null || fail "(c) docs only exit"
+[ ! -e "$mark" ] || fail "(c) --list must not run the health gate"
+CELERIS_WU_BASE="$base" bash "$here/scripts/dev/test-affected.sh" >/dev/null 2>"$work/err" || fail "(c) docs only exit: $(cat "$work/err")"
+[ "$(cat "$mark" 2>/dev/null)" = "called" ] || fail "(c) health gate was not run"
+# health gate が落ちたら test-affected.sh も落ちる（必須検査を飛ばさない）。
+printf '#!/usr/bin/env bash\nexit 3\n' >scripts/dev/check-health.sh
+if CELERIS_WU_BASE="$base" bash "$here/scripts/dev/test-affected.sh" >/dev/null 2>&1; then fail "(c) failing health gate must fail test-affected"; fi
+
+# (d) 統合の検査（CELERIS_WU_BASE なし。Task の worktree で env 無しに流れる）: 基準は merge-base(HEAD, main)。
+# commit 済みの Task ブランチの変更が空 diff にならず、main へ取り込んだ後の HEAD==main だけが空になる。
+git checkout -q -- .
+git checkout -q -b task
+echo "// t" >>crates/a/src/lib.rs
+git commit -q -am "task change"
+integ() { env -u CELERIS_WU_BASE bash "$here/scripts/dev/test-affected.sh" --list 2>"$work/err"; }
+[ "$(integ)" = "a
+b" ] || fail "(d) integration base must not be an empty diff: got [$(integ)]"
+# 基準を HEAD にした呼び出し（過去の退行: base が HEAD 自身）は空になる。基準の既定がそうならないことを上で確かめた。
+[ -z "$(CELERIS_WU_BASE="$(git rev-parse HEAD)" bash "$here/scripts/dev/test-affected.sh" --list 2>/dev/null)" ] || fail "(d) explicit HEAD base should be empty"
 
 echo "test-affected-list: ok"

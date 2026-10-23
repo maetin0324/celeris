@@ -6,7 +6,7 @@
 //! 使い道:
 //! - `[workspace] description` — 計画 run と前置きに出す
 //! - `[commands] check` — 前置きの「このリポジトリの検査コマンド」と、レビュー担当の
-//!   `Check::Command` の既定（タスクに `acceptance` が明示されていればそれが勝つ）
+//!   必須の検査（タスクの `acceptance` で置き換えず、足される。ADR 2026-10-23-required-checks-bound-to-candidate）
 //! - `[commands] setup` — worktree を作った直後に一度だけ走らせる
 //! - `[outputs] docs` / `deliverables` — 成果物の置き場（ADR-0043 D8）
 //! - `[run] mode` / `[container]` — **読むだけ**（コンテナ実行は ADR-0043 A3）

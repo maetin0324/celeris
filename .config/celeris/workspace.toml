@@ -11,7 +11,8 @@ mode = "host"
 
 [commands]
 # 実装者とレビュー担当が使う検査コマンド（CLAUDE.md の「各Phase完了時に必ず」と同じ 3 本）。
-# タスクに `acceptance` の検査コマンドが明示されていればそちらが勝つ。
+# 必須: タスクの `acceptance` に検査コマンドがあっても置き換えない（足される。同じ cmd は重複して走らせない）。
+# 結果は基底 SHA・候補 SHA に束縛して記録され、配送（main への ff）の前に照合される（ADR 2026-10-23-required-checks-bound-to-candidate）。
 # test-affected.sh は最初に check-health.sh（source-size 差分・architecture-map・文書参照）を必須実行する。
 # 試験は変更 crate と逆依存 crate だけ（scripts/dev/test-affected.sh。web だけの変更は web の unit 試験）。
 # 全体の試験（workspace 全体の試験・web e2e・本物の browser/userns）は release gate だけ

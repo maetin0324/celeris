@@ -248,6 +248,40 @@ fn check_candidate(repo: &Path, d: &Delivery) -> Result<Candidate, String> {
     Ok(Candidate::Stale { target, reason })
 }
 
+/// ADR 2026-10-23-required-checks-bound-to-candidate: 候補の HEAD にある必須検査（`workspace.toml` の
+/// `[commands] check`。`mode = prototype` は review と同じく空）が、この配送の基底・候補に束縛された
+/// 合格の証跡（`RequiredChecksEvaluated`）で満たされているかを照合する。内側の `Err` は再 review の理由。
+fn check_required_evidence(
+    store: &dyn TaskStore,
+    repo: &Path,
+    d: &Delivery,
+) -> Result<Result<(), String>, StoreError> {
+    let (Some(target), Some(reviewed)) = (&d.target_sha, &d.reviewed_sha) else {
+        return Ok(Err("検査済みの基底・候補が記録されていません".into()));
+    };
+    let prototype = store
+        .get(d.task_id)?
+        .is_some_and(|t| t.mode == task_core::TaskMode::Prototype);
+    let required = if prototype {
+        Vec::new()
+    } else {
+        match task_core::required_checks::candidate_required_checks(&d.head, |args| {
+            git_text(repo, args)
+        }) {
+            Ok(required) => required,
+            Err(reason) => return Ok(Err(reason)),
+        }
+    };
+    let events: Vec<Event> = store
+        .events_for(d.task_id)?
+        .into_iter()
+        .map(|(_, e)| e)
+        .collect();
+    Ok(task_core::required_checks::verify_required_checks(
+        &events, d.repo_id, target, reviewed, &required,
+    ))
+}
+
 /// ADR-0118 D4: stale な合格を取り込まず、task を再レビュー（同期→checks→reviewer）へ戻す。
 /// 自動の再試行は [`task_ops::delivery::MAX_TARGET_RESYNCS`] 回まで。超えたら人に見える状態で止める。
 /// stale はコードの不合格ではないので review の試行回数・ReviewRepair・配送の局所修復に数えない。
@@ -588,8 +622,20 @@ fn advance(
         State::MergeQueued => {
             // ADR-0118 D4: target 再進行・候補の不一致は ff-only を試みずに再レビューへ戻す。
             // ref を読めない失敗は従来どおり merge_reviewed の失敗（局所修復の対象）に任せる。
-            if let Ok(Candidate::Stale { target, reason }) = check_candidate(repo, old) {
-                return request_rereview(store, old, &target, &reason);
+            match check_candidate(repo, old) {
+                Ok(Candidate::Stale { target, reason }) => {
+                    return request_rereview(store, old, &target, &reason);
+                }
+                // ADR 2026-10-23-required-checks-bound-to-candidate: 検査済みの候補でも、必須検査の証跡が
+                // 現在の基底・候補に束縛されていなければ ff を試みず再 review（再実行は同じ束縛の合格を再利用）。
+                Ok(Candidate::Fresh) if old.merge_candidate_sha.is_some() => {
+                    if let Err(reason) = check_required_evidence(store, repo, old)? {
+                        let target = sha(repo, &format!("refs/heads/{}", old.default_branch))
+                            .unwrap_or_default();
+                        return request_rereview(store, old, &target, &reason);
+                    }
+                }
+                _ => {}
             }
             d.state = State::Merging;
             if !store.delivery_save(Some(old), &d)? {

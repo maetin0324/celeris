@@ -1032,7 +1032,7 @@ async fn the_repository_check_commands_are_the_reviewers_default() {
     task.project_id = Some(project_id);
     task.repos = repos.iter().map(task_core::RepoRef::of).collect();
     store.insert(&task).unwrap();
-    // 自分で検査コマンドを書いたタスクには足さない（明示が勝つ）。
+    // ADR 2026-10-23-required-checks-bound-to-candidate: 自分で検査コマンドを書いたタスクにも必須検査は足される（置き換えない）。
     let mut explicit = new_task(
         &code,
         Check::Command {
@@ -1083,10 +1083,15 @@ async fn the_repository_check_commands_are_the_reviewers_default() {
     assert!(mine[1].1, "{mine:?}");
     assert!(mine[1].2.contains("workspace.toml check"), "{mine:?}");
 
-    // 自分で検査コマンドを書いたタスクには暗黙の条件は足されない。
+    // 自分で検査コマンドを書いたタスクにも、リポジトリの `check` は暗黙の条件として足される。
     let theirs = verdicts(explicit.id);
-    assert_eq!(theirs.len(), 1, "{theirs:?}");
+    assert_eq!(theirs.len(), 2, "{theirs:?}");
     assert!(theirs[0].1, "{theirs:?}");
+    assert_eq!(theirs[1].0, 1);
+    assert!(
+        theirs[1].1 && theirs[1].2.contains("workspace.toml check"),
+        "{theirs:?}"
+    );
     assert_eq!(
         store.get(explicit.id).unwrap().unwrap().status,
         Status::Done
@@ -1406,4 +1411,108 @@ async fn repository_required_attached_blocked_child_runs_in_registered_worktree(
     );
     let marker = task_ops::workspace::read_marker(&task_dir).unwrap();
     assert_eq!(marker.repos[0].name, "code");
+}
+
+#[tokio::test]
+async fn review_records_each_repositories_own_definition_and_worktree_results() {
+    for second_passes in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        for (repo, marker, command) in [
+            (&first, "first-only", "test -f first-only"),
+            (
+                &second,
+                "second-only",
+                if second_passes {
+                    "test -f second-only"
+                } else {
+                    "false"
+                },
+            ),
+        ] {
+            init_test_repo(repo);
+            std::fs::create_dir_all(repo.join(".config/celeris")).unwrap();
+            std::fs::write(
+                repo.join(".config/celeris/workspace.toml"),
+                format!("[commands]\ncheck = ['{command}']\n"),
+            )
+            .unwrap();
+            std::fs::write(repo.join(marker), b"x").unwrap();
+            for args in [vec!["add", "-A"], vec!["commit", "-q", "-m", "checks"]] {
+                assert!(
+                    std::process::Command::new("git")
+                        .arg("-C")
+                        .arg(repo)
+                        .args(args)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+        }
+        let ws_root = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let (project_id, repos) = project_with_repos(
+            &store,
+            &[
+                ("first", first.as_path(), task_core::RepoKind::Git),
+                ("second", second.as_path(), task_core::RepoKind::Git),
+            ],
+        );
+        let mut task = new_task(
+            &first,
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            0,
+        );
+        task.project_id = Some(project_id);
+        task.repos = repos.iter().map(task_core::RepoRef::of).collect();
+        store.insert(&task).unwrap();
+        let adapter = Arc::new(RecordingAdapter {
+            seen: Arc::new(StdMutex::new(Vec::new())),
+            files: vec![],
+        });
+        let mut d = worktree_dispatcher(store.clone(), adapter, ws_root.path(), None);
+        run_until_idle(&mut d, 60).await;
+        let events = store.events_for(task.id).unwrap();
+        for (index, command, pass) in [
+            (0, "test -f first-only", true),
+            (
+                1,
+                if second_passes {
+                    "test -f second-only"
+                } else {
+                    "false"
+                },
+                second_passes,
+            ),
+        ] {
+            let evidence = events
+                .iter()
+                .find_map(|(_, event)| match event {
+                    Event::RequiredChecksEvaluated {
+                        repo_id,
+                        results,
+                        definition_sha256,
+                        ..
+                    } if *repo_id == repos[index].id => Some((results, definition_sha256)),
+                    _ => None,
+                })
+                .expect("each repository must have its own evidence");
+            assert_eq!(evidence.0.len(), 1);
+            assert_eq!(evidence.0[0].cmd, command);
+            assert_eq!(evidence.0[0].pass, pass);
+            assert_eq!(
+                *evidence.1,
+                task_core::required_checks::definition_digest(&[command.into()])
+            );
+        }
+        assert_eq!(
+            store.get(task.id).unwrap().unwrap().status == Status::Done,
+            second_passes
+        );
+    }
 }

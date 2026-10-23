@@ -492,7 +492,7 @@ struct Fixture {
     _dir: tempfile::TempDir,
     sock: PathBuf,
     backend: Arc<LiveBackend>,
-    _handle: ServerHandle,
+    handle: ServerHandle,
 }
 
 fn fixture() -> Fixture {
@@ -515,8 +515,17 @@ fn fixture() -> Fixture {
         _dir: dir,
         sock,
         backend,
-        _handle: handle,
+        handle,
     }
+}
+
+/// Waits (on the server's connection-exit signal) until at most `n` connections are counted.
+fn wait_connections(f: &Fixture, n: usize) {
+    assert!(
+        f.handle
+            .wait_connections_at_most(n, Duration::from_secs(30)),
+        "launcher still counts more than {n} connections"
+    );
 }
 
 fn connect(sock: &Path) -> LauncherClient {
@@ -663,12 +672,15 @@ fn browser_launcher_live_frame_other_session_rejected() {
         }),
         Err(ClientError::Remote(ErrorCode::Unauthorized))
     ));
+    // The refused connections count until their server thread reaps them; wait for a and b only.
+    wait_connections(&f, 2);
     let mut live_a = open(&sa.session_id, "leaseA").expect("live a");
     assert!(matches!(
         open(&sa.session_id, "leaseA"),
         Err(ClientError::Remote(ErrorCode::Limit))
     ));
     // B's stream on a raw connection (the launcher allows 4 connections: a, b, live a, this).
+    wait_connections(&f, 3);
     let mut raw = UnixStream::connect(&f.sock).expect("raw");
     raw.set_read_timeout(Some(Duration::from_secs(10)))
         .expect("timeout");

@@ -137,8 +137,8 @@ async fn write_set_record_atomic_run_counts_only_commits_from_its_start_head() {
     );
 }
 
-/// git が読めない（worker が作業ツリーの `.git` を消した）run でも、run は落ちずに task は done になり、
-/// 記録は空配列ではなく `unavailable` と理由で残る。
+/// Git が読めない run の write-set は unavailable と理由を残す。
+/// 必須定義も取得不能なので task を Done にせず、合格証跡を作らない。
 #[tokio::test]
 async fn write_set_record_git_failure_keeps_the_run_and_records_unavailable() {
     let repo = tempfile::tempdir().unwrap();
@@ -153,11 +153,25 @@ async fn write_set_record_git_failure_keeps_the_run_and_records_unavailable() {
         }),
     );
     let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 1, 1, 1);
-    let report = run_until_idle(&mut d, 200).await;
-    assert!(report.idle, "{report:?}");
+    assert!(
+        run_until_state(&mut d, || store.events_for(task.id).unwrap().iter().any(
+            |(_, e)| {
+                matches!(e, Event::ReviewVerdict { pass: false, reason, .. }
+            if reason.contains("git") || reason.contains("required checks"))
+            }
+        ))
+        .await,
+        "unavailable required definitions must fail review"
+    );
     let stored = store.get(task.id).unwrap().unwrap();
-    assert_eq!(stored.status, Status::Done, "{stored:?}");
-    assert_eq!(stored.attempts, 0, "git の失敗で試行を消費しない");
+    assert_ne!(stored.status, Status::Done, "{stored:?}");
+    assert!(
+        !store
+            .events_for(task.id)
+            .unwrap()
+            .iter()
+            .any(|(_, e)| matches!(e, Event::RequiredChecksEvaluated { .. }))
+    );
 
     let run_id = store.runs_for_task(task.id).unwrap()[0].run_id.clone();
     let records = store.run_write_sets(&run_id).unwrap();

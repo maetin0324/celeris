@@ -839,13 +839,77 @@ impl Dispatcher {
         // ADR-0074 F5-fix: reviewer の checks は Task の worktree で走るので `<repo-key>`
         // （Task 単位の run と同じ target）。
         let review_check_env = self.check_cargo_target_env(&task, None);
-        // ADR-0043 D4: リポジトリが宣言した検査コマンド（`workspace.toml` の `[commands] check`）。
-        // ADR-0046 D4（Phase 59）: `mode = prototype` は「明示の受け入れ条件だけ」なので使わない。
-        let repo_checks = if task.mode == task_core::TaskMode::Prototype {
-            Vec::new()
-        } else {
-            self.default_checks(&task)
-        };
+        let events: Vec<Event> = self
+            .store
+            .events_for(task_id)?
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        let mut repo_checks = Vec::new();
+        if let Some(workspaces) = self.task_workspaces_for(&task) {
+            for (index, repo) in workspaces.repos.iter().enumerate() {
+                let snapshot = task
+                    .repos
+                    .iter()
+                    .find(|r| r.name == repo.name)
+                    .and_then(|r| synced.iter().find(|s| s.repo_id == r.repo_id));
+                let commands = if task.mode == task_core::TaskMode::Prototype {
+                    Ok(Vec::new())
+                } else if snapshot.is_some()
+                    || repo.worktree.is_some()
+                    || repo.dir.join(".git").exists()
+                {
+                    task_core::required_checks::candidate_required_checks(
+                        snapshot.map(|s| s.reviewed_sha.as_str()).unwrap_or("HEAD"),
+                        |args| {
+                            let out = task_ops::changes::git(
+                                &repo.dir,
+                                args,
+                                task_ops::changes::GIT_TIMEOUT,
+                            )
+                            .ok_or("cannot start git")?;
+                            if out.ok {
+                                Ok(out.stdout)
+                            } else {
+                                Err(format!("git {}: {}", args.join(" "), out.why()))
+                            }
+                        },
+                    )
+                } else {
+                    task_core::workspace_config::load(&repo.dir)
+                        .unwrap_or_else(|| Ok(Default::default()))
+                        .map(|cfg| cfg.commands.check)
+                };
+                let reusable = match (snapshot, &commands) {
+                    (Some(s), Ok(cmds)) => task_core::required_checks::reusable_passes(
+                        &events,
+                        s.repo_id,
+                        &s.target_sha,
+                        &s.reviewed_sha,
+                        cmds,
+                    ),
+                    _ => Default::default(),
+                };
+                repo_checks.push(crate::review::RequiredRepoChecks {
+                    binding: snapshot.map(|s| crate::review::RequiredCheckBinding {
+                        repo_id: s.repo_id,
+                        target_sha: s.target_sha.clone(),
+                        reviewed_sha: s.reviewed_sha.clone(),
+                    }),
+                    commands,
+                    reusable,
+                    workspace: if index == 0 {
+                        None
+                    } else {
+                        Some(Box::new(
+                            LocalWorkspace::new(&dir)
+                                .with_work_dir(repo.dir.clone())
+                                .with_cargo_env(review_check_env.clone()),
+                        ) as Box<dyn Workspace>)
+                    },
+                });
+            }
+        }
         // ADR-0046 D4（Phase 59）: `mode = research` は「結果に出典か計測の記録」を暗黙の条件に足す。
         let research = task.mode == task_core::TaskMode::Research;
         let running_review_lock = review_lock.clone();
@@ -886,7 +950,7 @@ impl Dispatcher {
                 reviewer: reviewer_run,
                 human,
                 aggregate,
-                // ADR-0043 D4: リポジトリの `[commands] check`（タスクに検査コマンドが無いときだけ効く）。
+                // ADR-0043 D4: リポジトリの `[commands] check`（必須。acceptance で置き換えない）。
                 repo_checks,
                 // ADR-0046 D4: `mode = research` の暗黙の条件。
                 research,

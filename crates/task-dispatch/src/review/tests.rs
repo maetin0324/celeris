@@ -1419,3 +1419,226 @@ fn reviewer_run_gets_a_run_tmpdir_that_is_removed_on_drop() {
     drop(tmp);
     assert!(!dir.exists());
 }
+
+async fn review_with_repo_checks(
+    task: &Task,
+    ws: &ScriptedWorkspace,
+    dir: &Path,
+    repo_checks: &[&str],
+    reusable: &[&str],
+) -> ReviewOutcome {
+    review_task(
+        task,
+        ws,
+        dir,
+        &dir.join("artifacts"),
+        &[],
+        Duration::from_secs(60),
+        ReviewExtras {
+            repo_checks: vec![RequiredRepoChecks {
+                binding: None,
+                commands: Ok(repo_checks.iter().map(|c| (*c).to_string()).collect()),
+                reusable: reusable.iter().map(|c| (*c).to_string()).collect(),
+                workspace: None,
+            }],
+            ..ReviewExtras::default()
+        },
+    )
+    .await
+}
+
+/// ADR 2026-10-23-required-checks-bound-to-candidate: acceptance の command は workspace.toml の必須検査を置き換えない。
+/// 同じ cmd（exit 0）は重複して走らせず、acceptance の判定を必須検査の結果にする。
+#[tokio::test]
+async fn acceptance_command_does_not_replace_the_repo_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = task_with(
+        vec![Check::Command {
+            cmd: "acc".into(),
+            expect_exit: 0,
+        }],
+        dir.path(),
+    );
+    let ws = ScriptedWorkspace::default();
+    ws.push("acc", exec_ok(0));
+    ws.push("repo-a", exec_ok(0));
+    let outcome = review_with_repo_checks(&task, &ws, dir.path(), &["repo-a", "acc"], &[]).await;
+    assert!(outcome.all_pass());
+    let calls: Vec<String> = ws
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.0.clone())
+        .collect();
+    assert_eq!(calls, vec!["repo-a".to_string(), "acc".to_string()]);
+    let results: Vec<(&str, bool)> = outcome.required_checks[0]
+        .results
+        .iter()
+        .map(|r| (r.cmd.as_str(), r.pass))
+        .collect();
+    assert_eq!(results, vec![("repo-a", true), ("acc", true)]);
+
+    // 必須検査が落ちれば、acceptance が全部通っても不合格。
+    let ws = ScriptedWorkspace::default();
+    ws.push("acc", exec_ok(0));
+    ws.push("repo-a", exec_ok(1));
+    let outcome = review_with_repo_checks(&task, &ws, dir.path(), &["repo-a"], &[]).await;
+    assert!(!outcome.all_pass());
+    assert!(
+        outcome.required_checks[0]
+            .results
+            .iter()
+            .any(|r| r.cmd == "repo-a" && !r.pass)
+    );
+}
+
+/// 同じ束縛で合格済みの必須検査は再実行せず再利用する（再利用の印が証跡に残る）。落ちた検査は再利用されない。
+#[tokio::test]
+async fn bound_passes_are_reused_without_running_the_check_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = task_with(vec![], dir.path());
+    let ws = ScriptedWorkspace::default();
+    ws.push("repo-b", exec_ok(0));
+    let outcome =
+        review_with_repo_checks(&task, &ws, dir.path(), &["repo-a", "repo-b"], &["repo-a"]).await;
+    assert!(outcome.all_pass());
+    let calls: Vec<String> = ws
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.0.clone())
+        .collect();
+    assert_eq!(calls, vec!["repo-b".to_string()]);
+    let reused: Vec<(&str, &str)> = outcome.required_checks[0]
+        .results
+        .iter()
+        .map(|r| (r.cmd.as_str(), r.summary.as_str()))
+        .collect();
+    assert_eq!(reused[0], ("repo-a", "reused"));
+    assert!(outcome.required_checks[0].results.iter().all(|r| r.pass));
+}
+
+#[tokio::test]
+async fn acceptance_and_required_command_execute_once_and_share_bound_reuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = task_with(
+        vec![
+            Check::Command {
+                cmd: "same".into(),
+                expect_exit: 0,
+            },
+            Check::Command {
+                cmd: "same".into(),
+                expect_exit: 0,
+            },
+        ],
+        dir.path(),
+    );
+    let ws = ScriptedWorkspace::default();
+    ws.push("same", exec_ok(0));
+    let outcome = review_with_repo_checks(&task, &ws, dir.path(), &["same"], &[]).await;
+    assert!(outcome.all_pass());
+    assert_eq!(ws.calls.lock().unwrap().len(), 1);
+    let ws = ScriptedWorkspace::default();
+    let outcome = review_with_repo_checks(&task, &ws, dir.path(), &["same"], &["same"]).await;
+    assert!(outcome.all_pass());
+    assert!(ws.calls.lock().unwrap().is_empty());
+    assert_eq!(outcome.required_checks[0].results[0].summary, "reused");
+}
+
+#[tokio::test]
+async fn each_repository_runs_its_own_checks_and_cannot_share_another_repos_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = task_with(
+        vec![Check::Command {
+            cmd: "same".into(),
+            expect_exit: 0,
+        }],
+        dir.path(),
+    );
+    let first = ScriptedWorkspace::default();
+    // The second workspace has an independently failing command with the same name.
+    let second = ScriptedWorkspace::default();
+    second.push("same", exec_ok(1));
+    let first_id = RepoId::new();
+    let second_id = RepoId::new();
+    let binding = |repo_id| {
+        Some(RequiredCheckBinding {
+            repo_id,
+            target_sha: "t".into(),
+            reviewed_sha: "c".into(),
+        })
+    };
+    let outcome = review_task(
+        &task,
+        &first,
+        dir.path(),
+        &dir.path().join("artifacts"),
+        &[],
+        Duration::from_secs(60),
+        ReviewExtras {
+            repo_checks: vec![
+                RequiredRepoChecks {
+                    binding: binding(first_id),
+                    commands: Ok(vec!["same".into()]),
+                    reusable: ["same".into()].into_iter().collect(),
+                    workspace: None,
+                },
+                RequiredRepoChecks {
+                    binding: binding(second_id),
+                    commands: Ok(vec!["same".into()]),
+                    reusable: Default::default(),
+                    workspace: Some(Box::new(second)),
+                },
+            ],
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(first.calls.lock().unwrap().is_empty());
+    assert!(!outcome.all_pass());
+    assert_eq!(outcome.required_checks.len(), 2);
+    assert_eq!(
+        outcome.required_checks[0].binding.as_ref().unwrap().repo_id,
+        first_id
+    );
+    assert_eq!(
+        outcome.required_checks[1].binding.as_ref().unwrap().repo_id,
+        second_id
+    );
+    assert!(outcome.required_checks[0].results[0].pass);
+    assert!(!outcome.required_checks[1].results[0].pass);
+}
+
+#[tokio::test]
+async fn unreadable_second_repository_definition_fails_review_without_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = task_with(vec![], dir.path());
+    let ws = ScriptedWorkspace::default();
+    let outcome = review_task(
+        &task,
+        &ws,
+        dir.path(),
+        &dir.path().join("artifacts"),
+        &[],
+        Duration::from_secs(60),
+        ReviewExtras {
+            repo_checks: vec![RequiredRepoChecks {
+                binding: Some(RequiredCheckBinding {
+                    repo_id: RepoId::new(),
+                    target_sha: "t".into(),
+                    reviewed_sha: "c".into(),
+                }),
+                commands: Err("definition unavailable".into()),
+                reusable: Default::default(),
+                workspace: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(!outcome.all_pass());
+    assert!(outcome.required_checks[0].binding.is_none());
+}

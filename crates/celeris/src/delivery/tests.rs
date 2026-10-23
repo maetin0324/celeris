@@ -434,6 +434,7 @@ fn merge_base_repair_revalidates_and_delivers_only_the_repaired_branch() {
     requeued.reviewed_sha = Some(repaired_head.clone());
     requeued.merge_candidate_sha = Some(repaired_head.clone());
     assert!(store.delivery_save(Some(&rereview), &requeued).unwrap());
+    record_evidence(&store, &requeued, &[]);
     store
         .apply_transition(d.task_id, Trigger::ReviewPass, None)
         .unwrap();
@@ -501,6 +502,12 @@ fn push_merged_skips_when_remote_is_already_up_to_date() {
 /// `stored_delivery()`（task がDone・cos/engineeringの組織）と `repository()`（git リポジトリ）を
 /// 組み合わせ、`State::MergeQueued` から `advance` を通す。
 fn merge_queued_delivery() -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
+    let (store, dir, d) = merge_queued_without_evidence();
+    record_evidence(&store, &d, &[]);
+    (store, dir, d)
+}
+
+fn merge_queued_without_evidence() -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
     use task_core::DeliveryStore;
     let (store, mut d) = stored_delivery();
     let (dir, repo_d) = repository();
@@ -514,6 +521,124 @@ fn merge_queued_delivery() -> (task_core::SqliteStore, tempfile::TempDir, Delive
     d.state = State::MergeQueued;
     store.delivery_save(None, &d).unwrap();
     (store, dir, d)
+}
+
+/// review が記録する必須検査の証跡（`d` の基底・候補に束縛）。
+fn record_evidence(store: &task_core::SqliteStore, d: &Delivery, results: &[(&str, bool)]) {
+    record_evidence_with_definition(store, d, results, &[]);
+}
+
+fn record_evidence_with_definition(
+    store: &task_core::SqliteStore,
+    d: &Delivery,
+    results: &[(&str, bool)],
+    definition: &[String],
+) {
+    use task_core::TaskStore;
+    store
+        .append_event(
+            d.task_id,
+            &Event::RequiredChecksEvaluated {
+                review_run: d.review_run.clone(),
+                repo_id: d.repo_id,
+                target_sha: d.target_sha.clone().unwrap(),
+                reviewed_sha: d.reviewed_sha.clone().unwrap(),
+                definition_sha256: task_core::required_checks::definition_digest(definition),
+                results: results
+                    .iter()
+                    .map(|(cmd, pass)| task_core::PhaseCheckResult {
+                        cmd: (*cmd).into(),
+                        pass: *pass,
+                        summary: String::new(),
+                    })
+                    .collect(),
+            },
+        )
+        .unwrap();
+}
+
+/// ADR 2026-10-23-required-checks-bound-to-candidate: 証跡が無い・不合格・別の基底への束縛は ff せず再 review。
+/// 束縛どおりの合格なら ff する。
+#[test]
+fn merge_requires_passing_evidence_bound_to_the_candidate_and_base() {
+    use task_core::DeliveryStore;
+    let tmp = tempfile::tempdir().unwrap();
+    let rejected = |setup: &dyn Fn(&task_core::SqliteStore, &Delivery), name: &str| {
+        let (store, dir, d) = merge_queued_without_evidence();
+        setup(&store, &d);
+        let cfg = cfg_for(dir.path(), &tmp.path().join(name));
+        advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+        assert_eq!(sha(dir.path(), "main").unwrap(), d.base, "{name}");
+        let after = store.delivery_get(d.task_id).unwrap().unwrap();
+        assert_eq!(after.state, State::Reviewing, "{name}");
+        assert_eq!(after.merge_candidate_sha, None, "{name}");
+        after.detail
+    };
+    // 証跡が無い（旧 review）。
+    rejected(&|_, _| {}, "none");
+    // 不合格の証跡。
+    let detail = rejected(
+        &|s, d| record_evidence(s, d, &[("cargo fmt", false)]),
+        "failed",
+    );
+    assert!(detail.contains("cargo fmt"), "{detail}");
+    // 別の基底・候補に束縛された合格だけがある。
+    rejected(
+        &|s, d| {
+            let mut other = d.clone();
+            other.target_sha = Some("0".repeat(40));
+            record_evidence(s, &other, &[]);
+            other.target_sha = d.target_sha.clone();
+            other.reviewed_sha = Some("1".repeat(40));
+            record_evidence(s, &other, &[]);
+        },
+        "other-binding",
+    );
+    // 束縛どおりの合格は ff する。
+    let (store, dir, d) = merge_queued_without_evidence();
+    record_evidence(&store, &d, &[]);
+    let cfg = cfg_for(dir.path(), &tmp.path().join("ok"));
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    assert_eq!(sha(dir.path(), "main").unwrap(), d.head);
+}
+
+/// 候補の HEAD の workspace.toml が必須とする検査が証跡に無ければ（acceptance での置換など）ff しない。
+#[test]
+fn merge_rejects_evidence_missing_a_required_check_of_the_candidate() {
+    use task_core::DeliveryStore;
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, dir, mut d) = merge_queued_delivery();
+    // 候補ブランチに必須検査 2 件を宣言する commit を足し、候補をそれに進める。
+    let p = dir.path();
+    git_text(p, &["checkout", "feature"]).unwrap();
+    fs::create_dir_all(p.join(".config/celeris")).unwrap();
+    fs::write(
+        p.join(".config/celeris/workspace.toml"),
+        "[commands]\ncheck = [\"cmd-a\", \"cmd-b\"]\n",
+    )
+    .unwrap();
+    git_text(p, &["add", "."]).unwrap();
+    git_text(p, &["commit", "-m", "declare checks"]).unwrap();
+    let head = sha(p, "HEAD").unwrap();
+    git_text(p, &["checkout", "main"]).unwrap();
+    let old = d.clone();
+    d.head = head.clone();
+    d.reviewed_sha = Some(head.clone());
+    d.merge_candidate_sha = Some(head);
+    assert!(store.delivery_save(Some(&old), &d).unwrap());
+    let cfg = cfg_for(p, &tmp.path().join("releases"));
+    // 証跡は cmd-a だけ（cmd-b が acceptance 等で置き換わった）。
+    record_evidence_with_definition(
+        &store,
+        &d,
+        &[("cmd-a", true)],
+        &["cmd-a".into(), "cmd-b".into()],
+    );
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    assert_eq!(sha(p, "main").unwrap(), d.base);
+    let after = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(after.state, State::Reviewing);
+    assert!(after.detail.contains("cmd-b"));
 }
 
 fn cfg_for(repo: &Path, releases_dir: &Path) -> Config {
@@ -1131,6 +1256,7 @@ fn integration_repair_fallback_delivers() {
     let blocked = store.delivery_get(d.task_id).unwrap().unwrap();
     let (synced, released) = review_pass(&blocked);
     assert!(released);
+    record_evidence(&store, &synced, &[]);
     assert_eq!(
         synced.merge_candidate_sha.as_deref(),
         Some(repaired.as_str())
@@ -1678,4 +1804,43 @@ fn auto_resolve_cargo_lock_with_cargo_toml_conflict_requests_integration() {
         "{:?}",
         request.conflict_files
     );
+}
+
+#[test]
+fn required_definition_absence_is_allowed_but_git_and_parse_failures_are_rejected() {
+    let (store, dir, mut d) = merge_queued_without_evidence();
+    record_evidence(&store, &d, &[]);
+    // The candidate tree has no config; its own empty definition is valid.
+    assert_eq!(
+        check_required_evidence(&store, dir.path(), &d).unwrap(),
+        Ok(())
+    );
+    let missing = dir.path().join("missing-repository");
+    assert!(
+        check_required_evidence(&store, &missing, &d)
+            .unwrap()
+            .is_err()
+    );
+    let saved = d.head.clone();
+    d.head = "not-a-candidate".into();
+    assert!(
+        check_required_evidence(&store, dir.path(), &d)
+            .unwrap()
+            .is_err()
+    );
+    d.head = saved;
+    git_text(dir.path(), &["checkout", "feature"]).unwrap();
+    fs::create_dir_all(dir.path().join(".config/celeris")).unwrap();
+    fs::write(
+        dir.path().join(".config/celeris/workspace.toml"),
+        "[commands\n",
+    )
+    .unwrap();
+    git_text(dir.path(), &["add", "."]).unwrap();
+    git_text(dir.path(), &["commit", "-m", "malformed check definition"]).unwrap();
+    d.head = sha(dir.path(), "HEAD").unwrap();
+    let error = check_required_evidence(&store, dir.path(), &d)
+        .unwrap()
+        .unwrap_err();
+    assert!(error.contains("invalid required checks"), "{error}");
 }

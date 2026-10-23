@@ -822,6 +822,9 @@ fn run_of(event: &Event) -> Option<&str> {
         | Event::ReviewTargetSynced {
             review_run: run_id, ..
         }
+        | Event::RequiredChecksEvaluated {
+            review_run: run_id, ..
+        }
         | Event::ReviewTargetAdvanced {
             review_run: run_id, ..
         }

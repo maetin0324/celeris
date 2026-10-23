@@ -14,15 +14,15 @@ release gate（全体試験）は main 更新・push の後なので、統合前
   （`review::review_task`）。acceptance に `expect_exit = 0` で同じ cmd があれば、その判定を必須検査の結果とし、二重には走らせない。
   `mode = prototype` は従来どおり必須検査を持たない（ADR-0046 D4）。ADR-0043 D4 のこの部分を置き換える（旧い分岐は消した）。
 - D2: review は必須検査の結果を `Event::RequiredChecksEvaluated {repo_id, target_sha, reviewed_sha, definition_sha256,
-  definition_repo_id, results[]}` に残す。`target_sha` / `reviewed_sha` は同じ review の `ReviewTargetSynced`（ADR-0118 D3）の値で、
+  results[]}` に残す。`target_sha` / `reviewed_sha` は同じ review の `ReviewTargetSynced`（ADR-0118 D3）の値で、
   新しい SHA の仕組みは作らない。検査中に snapshot が動けば従来どおり stale で、証跡は書かない。
-- D3: 同じ `(repo, target_sha, reviewed_sha)` に束縛された最新の証跡で合格した cmd は、次の review で再実行せず再利用する
-  （`required_checks::reusable_passes`。不合格は再利用しない）。候補・基底・cmd のどれかが違えば再利用されない（失効）。
+- D3: 同じ `(repo, target_sha, reviewed_sha, definition_sha256)` に束縛された最新の証跡で合格した cmd は、次の review で再実行せず再利用する
+  （`required_checks::reusable_passes`。不合格は再利用しない）。候補・基底・定義 digest のどれかが違えば再利用されない（失効）。
 - D4: delivery は `MergeQueued` から ff-only を試す前に、`check_candidate`（ADR-0118 D4）に続けて
   `required_checks::verify_required_checks` を呼ぶ。証跡が無い・束縛が現在の `target_sha`/`reviewed_sha` と違う・1 件でも不合格・
   候補の HEAD の `workspace.toml` が必須とする cmd が結果に無い（acceptance 等で置換された）は、ff せず再 review に戻す
   （`request_rereview`。stale と同じ上限 `MAX_TARGET_RESYNCS`、超えたら人に見える Blocked）。ff-only と `validate_candidate` は変えない。
-  定義を別 repo（複数 repo の task の先頭 repo）から読んだ証跡は定義の網羅を求めず、合否だけ見る。
+  各 repo で必須 cmd の網羅・定義指紋を照合する。
 - D5: 統合経路ごとの検査と証跡の照合箇所は進捗ファイルの棚卸しに書く。全体試験・e2e・browser/userns は足さない
   （ADR 2026-10-20-full-tests-at-release-only）。
 
@@ -38,3 +38,18 @@ release gate（全体試験）は main 更新・push の後なので、統合前
 同一 cmd の重複なし・再利用）、`delivery::tests::merge_requires_passing_evidence_*`・
 `merge_rejects_evidence_missing_a_required_check_of_the_candidate`、`target_sync` の証跡の記録、
 `scripts/dev/tests/test-affected-list.sh` (d)（統合時に基準が空 diff にならない）。
+
+## 付記: evidence-gaps（2026-10-23）
+
+- 候補の定義は共通の `task_ops::changes::candidate_required_checks` で読む。git show が失敗した場合、cat-file と
+  ls-tree で候補のファイル不在を確認したときだけ空の定義とする。git 実行・取得・parse の失敗は review と delivery を拒否する。
+- 各 repo の候補の定義を各 worktree で実行し、その repo 自身の ReviewTargetSynced と結果・定義指紋を束縛する。
+  他 repo への結果の複製・網羅検査の免除は廃止した。
+- verify と reusable_passes は定義 digest の一致も必須とする。同じ候補・基底でも定義指紋が異なれば失効する。
+- 必須検査を先に実行し、acceptance の同じ cmd（expect_exit=0）は同じ workspace の結果を使う。
+  同じ束縛・定義での再 review は acceptance も合格を再利用する。別 repo の同一 cmd は共有しない。
+- event の不要な定義元 repo 欄を削除し、API schema と web 生成型を更新する。
+
+定義 digest は v2 domain と長さ付き cmd 列に変更する。これにより旧実装が別 repo へ複製した成功も失効し、
+同一コマンド列を持つ複数 repo でも旧証跡を再利用しない。改行入りの単一 cmd と複数 cmd の衝突も避ける。
+旧イベントは削除せず、次の review が各 repo の証跡を追記する。

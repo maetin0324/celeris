@@ -1802,12 +1802,8 @@
         {
           "description": "ADR 2026-10-23-required-checks-bound-to-candidate: review が評価した必須検査（リポジトリの\n`[commands] check`）の結果を、基底 `target_sha`・候補 `reviewed_sha` に束縛して残す。\n同じ束縛の合格は再 review で再利用し、delivery は束縛が現在の候補・基底と一致する証跡だけを受け取る。",
           "properties": {
-            "definition_repo_id": {
-              "$ref": "#/$defs/RepoId",
-              "description": "この定義を読んだリポジトリ（review が検査の定義を引く先頭のリポジトリ）。"
-            },
             "definition_sha256": {
-              "description": "評価した必須検査の定義（cmd を順に連ねた sha256）。",
+              "description": "評価した必須検査の定義（required_checks::definition_digest の sha256）。",
               "type": "string"
             },
             "repo_id": {
@@ -1840,7 +1836,6 @@
             "target_sha",
             "reviewed_sha",
             "definition_sha256",
-            "definition_repo_id",
             "results"
           ],
           "type": "object"

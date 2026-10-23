@@ -166,10 +166,8 @@ pub enum Event {
         repo_id: crate::RepoId,
         target_sha: String,
         reviewed_sha: String,
-        /// 評価した必須検査の定義（cmd を順に連ねた sha256）。
+        /// 評価した必須検査の定義（required_checks::definition_digest の sha256）。
         definition_sha256: String,
-        /// この定義を読んだリポジトリ（review が検査の定義を引く先頭のリポジトリ）。
-        definition_repo_id: crate::RepoId,
         results: Vec<PhaseCheckResult>,
     },
     /// ADR-0118 D4: a previously reviewed target advanced before integration.

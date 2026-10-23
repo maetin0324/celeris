@@ -2167,7 +2167,6 @@ export type Event = {
   "target_sha": string;
   "type": "review_target_synced";
 } | {
-  "definition_repo_id": RepoId;
   "definition_sha256": string;
   "repo_id": RepoId;
   "results": Array<PhaseCheckResult>;

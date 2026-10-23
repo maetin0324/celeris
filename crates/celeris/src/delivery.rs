@@ -265,21 +265,10 @@ fn check_required_evidence(
     let required = if prototype {
         Vec::new()
     } else {
-        git_text(
-            repo,
-            &[
-                "show",
-                &format!(
-                    "{}:{}",
-                    d.head,
-                    task_core::workspace_config::WORKSPACE_CONFIG_PATH
-                ),
-            ],
-        )
-        .ok()
-        .and_then(|text| task_core::workspace_config::parse(&text).ok())
-        .map(|cfg| cfg.commands.check)
-        .unwrap_or_default()
+        match task_ops::changes::candidate_required_checks(repo, &d.head) {
+            Ok(required) => required,
+            Err(reason) => return Ok(Err(reason)),
+        }
     };
     let events: Vec<Event> = store
         .events_for(d.task_id)?

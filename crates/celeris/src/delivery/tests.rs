@@ -525,6 +525,15 @@ fn merge_queued_without_evidence() -> (task_core::SqliteStore, tempfile::TempDir
 
 /// review が記録する必須検査の証跡（`d` の基底・候補に束縛）。
 fn record_evidence(store: &task_core::SqliteStore, d: &Delivery, results: &[(&str, bool)]) {
+    record_evidence_with_definition(store, d, results, &[]);
+}
+
+fn record_evidence_with_definition(
+    store: &task_core::SqliteStore,
+    d: &Delivery,
+    results: &[(&str, bool)],
+    definition: &[String],
+) {
     use task_core::TaskStore;
     store
         .append_event(
@@ -534,8 +543,7 @@ fn record_evidence(store: &task_core::SqliteStore, d: &Delivery, results: &[(&st
                 repo_id: d.repo_id,
                 target_sha: d.target_sha.clone().unwrap(),
                 reviewed_sha: d.reviewed_sha.clone().unwrap(),
-                definition_sha256: String::new(),
-                definition_repo_id: d.repo_id,
+                definition_sha256: task_core::required_checks::definition_digest(definition),
                 results: results
                     .iter()
                     .map(|(cmd, pass)| task_core::PhaseCheckResult {
@@ -620,7 +628,12 @@ fn merge_rejects_evidence_missing_a_required_check_of_the_candidate() {
     assert!(store.delivery_save(Some(&old), &d).unwrap());
     let cfg = cfg_for(p, &tmp.path().join("releases"));
     // 証跡は cmd-a だけ（cmd-b が acceptance 等で置き換わった）。
-    record_evidence(&store, &d, &[("cmd-a", true)]);
+    record_evidence_with_definition(
+        &store,
+        &d,
+        &[("cmd-a", true)],
+        &["cmd-a".into(), "cmd-b".into()],
+    );
     advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(sha(p, "main").unwrap(), d.base);
     let after = store.delivery_get(d.task_id).unwrap().unwrap();
@@ -1791,4 +1804,43 @@ fn auto_resolve_cargo_lock_with_cargo_toml_conflict_requests_integration() {
         "{:?}",
         request.conflict_files
     );
+}
+
+#[test]
+fn required_definition_absence_is_allowed_but_git_and_parse_failures_are_rejected() {
+    let (store, dir, mut d) = merge_queued_without_evidence();
+    record_evidence(&store, &d, &[]);
+    // The candidate tree has no config; its own empty definition is valid.
+    assert_eq!(
+        check_required_evidence(&store, dir.path(), &d).unwrap(),
+        Ok(())
+    );
+    let missing = dir.path().join("missing-repository");
+    assert!(
+        check_required_evidence(&store, &missing, &d)
+            .unwrap()
+            .is_err()
+    );
+    let saved = d.head.clone();
+    d.head = "not-a-candidate".into();
+    assert!(
+        check_required_evidence(&store, dir.path(), &d)
+            .unwrap()
+            .is_err()
+    );
+    d.head = saved;
+    git_text(dir.path(), &["checkout", "feature"]).unwrap();
+    fs::create_dir_all(dir.path().join(".config/celeris")).unwrap();
+    fs::write(
+        dir.path().join(".config/celeris/workspace.toml"),
+        "[commands\n",
+    )
+    .unwrap();
+    git_text(dir.path(), &["add", "."]).unwrap();
+    git_text(dir.path(), &["commit", "-m", "malformed check definition"]).unwrap();
+    d.head = sha(dir.path(), "HEAD").unwrap();
+    let error = check_required_evidence(&store, dir.path(), &d)
+        .unwrap()
+        .unwrap_err();
+    assert!(error.contains("invalid required checks"), "{error}");
 }

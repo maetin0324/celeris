@@ -1435,8 +1435,12 @@ async fn review_with_repo_checks(
         &[],
         Duration::from_secs(60),
         ReviewExtras {
-            repo_checks: repo_checks.iter().map(|c| (*c).to_string()).collect(),
-            reusable_checks: reusable.iter().map(|c| (*c).to_string()).collect(),
+            repo_checks: vec![RequiredRepoChecks {
+                binding: None,
+                commands: Ok(repo_checks.iter().map(|c| (*c).to_string()).collect()),
+                reusable: reusable.iter().map(|c| (*c).to_string()).collect(),
+                workspace: None,
+            }],
             ..ReviewExtras::default()
         },
     )
@@ -1467,9 +1471,9 @@ async fn acceptance_command_does_not_replace_the_repo_checks() {
         .iter()
         .map(|c| c.0.clone())
         .collect();
-    assert_eq!(calls, vec!["acc".to_string(), "repo-a".to_string()]);
-    let results: Vec<(&str, bool)> = outcome
-        .required_checks
+    assert_eq!(calls, vec!["repo-a".to_string(), "acc".to_string()]);
+    let results: Vec<(&str, bool)> = outcome.required_checks[0]
+        .results
         .iter()
         .map(|r| (r.cmd.as_str(), r.pass))
         .collect();
@@ -1482,8 +1486,8 @@ async fn acceptance_command_does_not_replace_the_repo_checks() {
     let outcome = review_with_repo_checks(&task, &ws, dir.path(), &["repo-a"], &[]).await;
     assert!(!outcome.all_pass());
     assert!(
-        outcome
-            .required_checks
+        outcome.required_checks[0]
+            .results
             .iter()
             .any(|r| r.cmd == "repo-a" && !r.pass)
     );
@@ -1507,11 +1511,134 @@ async fn bound_passes_are_reused_without_running_the_check_again() {
         .map(|c| c.0.clone())
         .collect();
     assert_eq!(calls, vec!["repo-b".to_string()]);
-    let reused: Vec<(&str, &str)> = outcome
-        .required_checks
+    let reused: Vec<(&str, &str)> = outcome.required_checks[0]
+        .results
         .iter()
         .map(|r| (r.cmd.as_str(), r.summary.as_str()))
         .collect();
     assert_eq!(reused[0], ("repo-a", "reused"));
-    assert!(outcome.required_checks.iter().all(|r| r.pass));
+    assert!(outcome.required_checks[0].results.iter().all(|r| r.pass));
+}
+
+#[tokio::test]
+async fn acceptance_and_required_command_execute_once_and_share_bound_reuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = task_with(
+        vec![
+            Check::Command {
+                cmd: "same".into(),
+                expect_exit: 0,
+            },
+            Check::Command {
+                cmd: "same".into(),
+                expect_exit: 0,
+            },
+        ],
+        dir.path(),
+    );
+    let ws = ScriptedWorkspace::default();
+    ws.push("same", exec_ok(0));
+    let outcome = review_with_repo_checks(&task, &ws, dir.path(), &["same"], &[]).await;
+    assert!(outcome.all_pass());
+    assert_eq!(ws.calls.lock().unwrap().len(), 1);
+    let ws = ScriptedWorkspace::default();
+    let outcome = review_with_repo_checks(&task, &ws, dir.path(), &["same"], &["same"]).await;
+    assert!(outcome.all_pass());
+    assert!(ws.calls.lock().unwrap().is_empty());
+    assert_eq!(outcome.required_checks[0].results[0].summary, "reused");
+}
+
+#[tokio::test]
+async fn each_repository_runs_its_own_checks_and_cannot_share_another_repos_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = task_with(
+        vec![Check::Command {
+            cmd: "same".into(),
+            expect_exit: 0,
+        }],
+        dir.path(),
+    );
+    let first = ScriptedWorkspace::default();
+    // The second workspace has an independently failing command with the same name.
+    let second = ScriptedWorkspace::default();
+    second.push("same", exec_ok(1));
+    let first_id = RepoId::new();
+    let second_id = RepoId::new();
+    let binding = |repo_id| {
+        Some(RequiredCheckBinding {
+            repo_id,
+            target_sha: "t".into(),
+            reviewed_sha: "c".into(),
+        })
+    };
+    let outcome = review_task(
+        &task,
+        &first,
+        dir.path(),
+        &dir.path().join("artifacts"),
+        &[],
+        Duration::from_secs(60),
+        ReviewExtras {
+            repo_checks: vec![
+                RequiredRepoChecks {
+                    binding: binding(first_id),
+                    commands: Ok(vec!["same".into()]),
+                    reusable: ["same".into()].into_iter().collect(),
+                    workspace: None,
+                },
+                RequiredRepoChecks {
+                    binding: binding(second_id),
+                    commands: Ok(vec!["same".into()]),
+                    reusable: Default::default(),
+                    workspace: Some(Box::new(second)),
+                },
+            ],
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(first.calls.lock().unwrap().is_empty());
+    assert!(!outcome.all_pass());
+    assert_eq!(outcome.required_checks.len(), 2);
+    assert_eq!(
+        outcome.required_checks[0].binding.as_ref().unwrap().repo_id,
+        first_id
+    );
+    assert_eq!(
+        outcome.required_checks[1].binding.as_ref().unwrap().repo_id,
+        second_id
+    );
+    assert!(outcome.required_checks[0].results[0].pass);
+    assert!(!outcome.required_checks[1].results[0].pass);
+}
+
+#[tokio::test]
+async fn unreadable_second_repository_definition_fails_review_without_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = task_with(vec![], dir.path());
+    let ws = ScriptedWorkspace::default();
+    let outcome = review_task(
+        &task,
+        &ws,
+        dir.path(),
+        &dir.path().join("artifacts"),
+        &[],
+        Duration::from_secs(60),
+        ReviewExtras {
+            repo_checks: vec![RequiredRepoChecks {
+                binding: Some(RequiredCheckBinding {
+                    repo_id: RepoId::new(),
+                    target_sha: "t".into(),
+                    reviewed_sha: "c".into(),
+                }),
+                commands: Err("definition unavailable".into()),
+                reusable: Default::default(),
+                workspace: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(!outcome.all_pass());
+    assert!(outcome.required_checks[0].binding.is_none());
 }

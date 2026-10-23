@@ -1566,3 +1566,6 @@ mod run_wait_tests {
         assert_eq!(out.stderr.len(), 1 << 20);
     }
 }
+
+mod required_checks;
+pub use required_checks::candidate_required_checks;

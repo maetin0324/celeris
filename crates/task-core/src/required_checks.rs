@@ -6,12 +6,14 @@ use crate::{Event, PhaseCheckResult, RepoId};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-/// 必須検査の定義の指紋（cmd を順に改行で連ねた sha256 の hex）。
+/// 必須検査の定義の指紋（v2 domain と長さ付き cmd 列の sha256 hex）。
 pub fn definition_digest(cmds: &[String]) -> String {
     let mut hasher = Sha256::new();
+    // Invalidate pre-v2 evidence, which could copy one repository's results to another.
+    hasher.update(b"celeris.required-checks/2\0");
     for cmd in cmds {
+        hasher.update((cmd.len() as u64).to_be_bytes());
         hasher.update(cmd.as_bytes());
-        hasher.update(b"\n");
     }
     hasher
         .finalize()
@@ -26,17 +28,17 @@ fn latest_bound<'a>(
     repo: RepoId,
     target_sha: &str,
     reviewed_sha: &str,
-) -> Option<(&'a [PhaseCheckResult], RepoId)> {
+) -> Option<(&'a [PhaseCheckResult], &'a str)> {
     events.iter().rev().find_map(|e| match e {
         Event::RequiredChecksEvaluated {
             repo_id,
             target_sha: t,
             reviewed_sha: r,
             results,
-            definition_repo_id,
+            definition_sha256,
             ..
         } if *repo_id == repo && t == target_sha && r == reviewed_sha => {
-            Some((results.as_slice(), *definition_repo_id))
+            Some((results.as_slice(), definition_sha256.as_str()))
         }
         _ => None,
     })
@@ -48,8 +50,10 @@ pub fn reusable_passes(
     repo: RepoId,
     target_sha: &str,
     reviewed_sha: &str,
+    required: &[String],
 ) -> BTreeSet<String> {
     latest_bound(events, repo, target_sha, reviewed_sha)
+        .filter(|(_, digest)| *digest == definition_digest(required))
         .map(|(results, _)| {
             results
                 .iter()
@@ -61,8 +65,7 @@ pub fn reusable_passes(
 }
 
 /// main へ取り込む前の照合。`required` は候補の HEAD にある必須検査の定義。
-/// 証跡が無い・束縛が違う・1 件でも不合格・定義を読んだ repo で必須検査の結果が欠けている、は `Err`（理由つき）。
-/// 定義を別の repo から読んだ証跡（複数 repo の task の 2 番目以降）は、定義の網羅を求めず合否だけを見る。
+/// 証跡・束縛・定義指紋・必須検査の網羅・合否を repo ごとに照合する。
 pub fn verify_required_checks(
     events: &[Event],
     repo: RepoId,
@@ -70,19 +73,20 @@ pub fn verify_required_checks(
     reviewed_sha: &str,
     required: &[String],
 ) -> Result<(), String> {
-    let Some((results, definition_repo)) = latest_bound(events, repo, target_sha, reviewed_sha)
-    else {
+    let Some((results, digest)) = latest_bound(events, repo, target_sha, reviewed_sha) else {
         return Err(format!(
             "基底 {target_sha}・候補 {reviewed_sha} に束縛された必須検査の証跡がありません"
         ));
     };
+    if digest != definition_digest(required) {
+        return Err("必須検査の定義指紋が候補と一致しません".into());
+    }
     if let Some(failed) = results.iter().find(|r| !r.pass) {
         return Err(format!("必須検査が不合格です: {}", failed.cmd));
     }
-    if definition_repo == repo
-        && let Some(missing) = required
-            .iter()
-            .find(|cmd| !results.iter().any(|r| &r.cmd == *cmd))
+    if let Some(missing) = required
+        .iter()
+        .find(|cmd| !results.iter().any(|r| &r.cmd == *cmd))
     {
         return Err(format!("必須検査の結果が証跡にありません: {missing}"));
     }

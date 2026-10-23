@@ -124,7 +124,7 @@ pub struct ReviewOutcome {
     pub target_stale: Option<TargetStale>,
     /// 必須検査（`repo_checks`）の結果（cmd ごと。acceptance の同一 cmd・再利用した合格を含む）。
     /// ディスパッチャが `Event::RequiredChecksEvaluated` に候補 SHA・基底 SHA を束ねて残す。
-    pub required_checks: Vec<task_core::PhaseCheckResult>,
+    pub required_checks: Vec<RequiredRepoResult>,
 }
 
 /// ADR-0118 D4 付記: 検査後に review snapshot が変わったリポジトリ（`ReviewTargetAdvanced` に残す）。
@@ -174,20 +174,6 @@ fn tail(s: &str, n: usize) -> &str {
     &s[start..]
 }
 
-/// acceptance の `Check::Command`（`expect_exit = 0`）の cmd。必須検査と同じ cmd の重複実行を避けるのに使う。
-fn acceptance_zero_exit_cmds(task: &Task) -> std::collections::BTreeSet<&str> {
-    task.acceptance
-        .iter()
-        .filter_map(|c| match &c.check {
-            Check::Command {
-                cmd,
-                expect_exit: 0,
-            } => Some(cmd.as_str()),
-            _ => None,
-        })
-        .collect()
-}
-
 /// `task` に `Check::Reviewer` の条件があるか（ディスパッチャがレビュー run の要否を決めるのに使う）。
 pub fn needs_reviewer_run(task: &Task) -> bool {
     task.acceptance
@@ -201,6 +187,9 @@ pub fn reviewer_hint() -> WorkerHint {
         tier: Tier::Standard,
     }
 }
+
+mod required;
+pub use required::{RequiredCheckBinding, RequiredRepoChecks, RequiredRepoResult};
 
 /// `review_task` の Phase 5 追加入力（ADR-0007）。
 #[derive(Default)]
@@ -218,16 +207,14 @@ pub struct ReviewExtras {
     /// ADR-0016 D3 / M4: 集約 run のレビューなら true。暗黙の条件「`<artifacts_dir>/summary.md` が存在する」を
     /// `criterion_idx = acceptance.len()`（Plan の暗黙条件があればその次）に加える。
     pub aggregate: bool,
-    /// ADR-0043 D4: 先頭のリポジトリの `.config/celeris/workspace.toml` の `[commands] check`。
+    /// ADR-0043 D4: 各リポジトリの候補の `[commands] check` と、その repo の実行場所・再利用集合。
     /// 暗黙の必須条件として `exit 0` を期待して実行する。ADR 2026-10-23-required-checks-bound-to-candidate:
     /// タスクの `acceptance` に `Check::Command` があっても**置き換えない**（足すだけ）。acceptance に
-    /// `expect_exit = 0` で同じ cmd があるときだけ、その判定を必須検査の結果として使い二重に走らせない。空なら何もしない。
+    /// `expect_exit = 0` で同じ cmd があるときだけ、同じ workspace の必須検査の結果を使い二重に走らせない。空なら何もしない。
     ///
     /// ADR-0046 D4（Phase 59）: `mode = prototype` のタスクではディスパッチャがこれを**空にする**
     /// （「明示の受け入れ条件だけ。リポジトリの check は使わない」）。
-    pub repo_checks: Vec<String>,
-    /// 同じ（基底 SHA・候補 SHA）で既に合格した必須検査の cmd。再実行せず合格として再利用する。
-    pub reusable_checks: std::collections::BTreeSet<String>,
+    pub repo_checks: Vec<RequiredRepoChecks>,
     /// ADR-0046 D4（Phase 59）: `mode = research` のタスクだけ true。暗黙の条件として
     /// 「結果に出典（`sources`）か計測の記録がある」を足す（[`research_evidence`] が決定的に判定する）。
     pub research: bool,
@@ -630,7 +617,6 @@ pub async fn review_task(
         human,
         aggregate,
         repo_checks,
-        reusable_checks,
         research,
         decisions,
         answers,
@@ -640,11 +626,25 @@ pub async fn review_task(
     let subject = &subject;
     let mut verdicts = Vec::with_capacity(task.acceptance.len() + 1);
     let mut reviewer_criteria: Vec<usize> = Vec::new();
+    let (required_checks, acceptance_passes) =
+        required::evaluate(repo_checks, workspace, command_timeout).await;
     for (idx, criterion) in task.acceptance.iter().enumerate() {
         let (pass, reason) = match &criterion.check {
             Check::Command { cmd, expect_exit } => {
-                exec_check_with_repair_retries(workspace, cmd, *expect_exit, command_timeout, "")
+                if *expect_exit == 0
+                    && let Some(result) = acceptance_passes.get(cmd)
+                {
+                    result.clone()
+                } else {
+                    exec_check_with_repair_retries(
+                        workspace,
+                        cmd,
+                        *expect_exit,
+                        command_timeout,
+                        "",
+                    )
                     .await
+                }
             }
             Check::ArtifactExists { name } => {
                 let rel = produced
@@ -744,65 +744,20 @@ pub async fn review_task(
         });
     }
 
-    // ADR 2026-10-23-required-checks-bound-to-candidate: リポジトリの `[commands] check` は必須条件で、
-    // タスクの `acceptance` の明示で置き換えない。acceptance が同じ cmd（exit 0）を持つなら重複を走らせない。
-    let acceptance_cmds = acceptance_zero_exit_cmds(task);
-    let extra_checks: Vec<&String> = repo_checks
-        .iter()
-        .filter(|cmd| !acceptance_cmds.contains(cmd.as_str()))
-        .collect();
-    let mut required_checks = Vec::with_capacity(repo_checks.len());
     let base = task.acceptance.len() + usize::from(plan.is_some()) + usize::from(aggregate);
-    for (n, cmd) in extra_checks.iter().enumerate() {
-        let (pass, reason, reused) = if reusable_checks.contains(cmd.as_str()) {
-            (
-                true,
-                "workspace.toml check: reused a pass bound to the same base and candidate SHA"
-                    .to_string(),
-                true,
-            )
-        } else {
-            let (pass, reason) = exec_check_with_repair_retries(
-                workspace,
-                cmd,
-                0,
-                command_timeout,
-                "workspace.toml check: ",
-            )
-            .await;
-            (pass, reason, false)
-        };
-        implicit.insert(base + n, ("repo_check", Some((*cmd).clone())));
-        required_checks.push(task_core::PhaseCheckResult {
-            cmd: (*cmd).clone(),
-            pass,
-            summary: if reused {
-                "reused".into()
-            } else {
-                tail(&reason, REASON_TAIL).to_string()
-            },
-        });
-        verdicts.push(Verdict {
-            criterion_idx: base + n,
-            pass,
-            reason,
-            repair_hint: None,
-        });
-    }
-    // acceptance 側の同一 cmd の判定も必須検査の結果として証跡に入れる。
-    for cmd in repo_checks
-        .iter()
-        .filter(|cmd| acceptance_cmds.contains(cmd.as_str()))
-    {
-        let pass = task.acceptance.iter().enumerate().all(|(idx, c)| {
-            !matches!(&c.check, Check::Command { cmd: other, expect_exit: 0 } if other == cmd)
-                || verdicts.iter().any(|v| v.criterion_idx == idx && v.pass)
-        });
-        required_checks.push(task_core::PhaseCheckResult {
-            cmd: cmd.clone(),
-            pass,
-            summary: "acceptance".into(),
-        });
+    let mut extra_check_count = 0;
+    for repo in &required_checks {
+        for result in &repo.results {
+            let idx = base + extra_check_count;
+            extra_check_count += 1;
+            implicit.insert(idx, ("repo_check", Some(result.cmd.clone())));
+            verdicts.push(Verdict {
+                criterion_idx: idx,
+                pass: result.pass,
+                reason: result.summary.clone(),
+                repair_hint: None,
+            });
+        }
     }
 
     // ADR-0046 D4（Phase 59）: `mode = research` は「結果に出典か計測の記録があること」を暗黙の条件に足す。
@@ -810,7 +765,7 @@ pub async fn review_task(
         let idx = task.acceptance.len()
             + usize::from(plan.is_some())
             + usize::from(aggregate)
-            + extra_checks.len();
+            + extra_check_count;
         let (pass, reason) = research_evidence(artifacts_dir, &artifacts_rel);
         implicit.insert(idx, ("research_evidence", None));
         verdicts.push(Verdict {

@@ -64,10 +64,10 @@ F かつ Exit 0 は正常として扱う。
 
 ## 必須検査（提出時の HEAD で実行）
 最後の commit の後、提出時の HEAD（working tree clean）で次を実行した。ログは run 成果物 root の final-test-affected.log・final-clippy.log・final-fmt.log。
-- `bash scripts/dev/test-affected.sh`: （次の commit で記録する）
-- `cargo clippy --workspace -- -D warnings`: （次の commit で記録する）
-- `cargo fmt --all -- --check`: （次の commit で記録する）
-- 文書検査: `sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-adr-numbers.sh`、`sh scripts/dev/progress-index.sh --check`: （次の commit で記録する）
+- `bash scripts/dev/test-affected.sh`: exit 0。基点は `git merge-base HEAD main`（`CELERIS_WU_BASE` にその値を渡して branch 全体の変更を対象にした）。2634 tests run、2634 passed、7 skipped、190.208 秒。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0（差分なし）。
+- 文書検査: `sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-adr-numbers.sh`、`sh scripts/dev/progress-index.sh --check`: check-doc-links exit 0、check-adr-numbers exit 0。progress-index --check は exit 1。原因は main 由来の他 task の進捗 agent-docs/progress/2026-10-23-source-size-browser.md の front matter（title・updated）欠落で、本 WU の範囲（この文書だけ）の外なので直していない。
   progress-index は close-progress の時点で、main 由来の他 task の進捗 8 件の front matter（title/tasks/updated）欠落で exit 1 だった。
   別 branch の「docs: fill missing progress front matter fields」の該当 8 file 分を写して直した。各 file の本文は変えていない。
 

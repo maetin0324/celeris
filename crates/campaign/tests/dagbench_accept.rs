@@ -626,8 +626,8 @@ fn a1_control_stop_after_accept_resumes_from_persisted_state() {
 }
 
 #[test]
-fn a2_control_stop_after_wait_resumes_from_persisted_state() {
-    let (_c, b, ce, mb, mc) = faulted("a2-restart-after-wait");
+fn pre_save_control_stop_resumes_from_persisted_state() {
+    let (_c, b, ce, mb, mc) = faulted("a0-restart-before-wait-save");
     for (r, m) in [(&b, &mb), (&ce, &mc)] {
         assert_control_restarted(r);
         assert!(m.recovery.logical_secs.is_some(), "{}", r.system);

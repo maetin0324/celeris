@@ -974,7 +974,7 @@ pub fn check_expected(
     }
 }
 
-/// 生記録から再計算する。各 (config, 問題) は trial_no 最小の記録で判定し、無ければ missing。
+/// 生記録から再計算する。cell の判定は成功契約（`crate::success::cells`: trial_no 最小の記録・無ければ missing）。
 /// 分母は期待された問題数で、failed/error/timeout/cancelled/missing のどれも除かない。
 pub fn recompute(m: &CampaignManifest, recs: &[TrialRecord]) -> Recomputed {
     recompute_graded(m, recs, &BTreeMap::new())
@@ -988,52 +988,35 @@ pub fn recompute_graded(
 ) -> Recomputed {
     let exp = expected(m);
     let mut totals: BTreeMap<ConfigId, Totals> = BTreeMap::new();
-    let mut first: BTreeMap<(ConfigId, &str, u32), &TrialRecord> = BTreeMap::new();
-    for r in recs {
-        let e = first
-            .entry((r.config, r.problem_id.as_str(), r.rep))
-            .or_insert(r);
-        if r.trial_no < e.trial_no {
-            *e = r;
-        }
-    }
+    // cell の判定は成功契約（crate::success）だけで行う。join/report も同じ関数を使う。
+    let cells = crate::success::cells(m, recs, grades);
     for (c, probs) in &exp {
         let t = totals.entry(*c).or_default();
         // 分母 = 計画された試行総数（問題数 × repeats）。
         t.n = (probs.len() as u64) * u64::from(m.repeats);
-        for (p, rep) in probs
-            .iter()
-            .flat_map(|p| (1..=m.repeats).map(move |k| (p, k)))
-        {
-            let cell = first.get(&(*c, p.as_str(), rep));
-            if cell.is_some_and(|r| {
-                r.reason.as_deref() == Some(REASON_EXECUTOR_ERROR)
-                    || (!r.ran() && r.reason.as_deref() != Some(REASON_BLOCKED))
-            }) {
-                t.unexecuted += 1;
-            }
-            match cell.map(|r| r.outcome) {
-                None => t.missing += 1,
-                Some(o) => match o {
-                    crate::aggregate::Outcome::Passed => {
-                        t.passed += 1;
-                        use crate::grades::GradeOutcome as G;
-                        match cell.and_then(|r| grades.get(&crate::grades::key_of(r))) {
-                            Some(G::Passed) => t.final_passed += 1,
-                            Some(G::ModelFailure) => t.grader_failed += 1,
-                            Some(G::EnvFailure) => t.grader_env_failure += 1,
-                            Some(G::Undetermined) => t.grader_undetermined += 1,
-                            Some(G::ControlOnly) => t.grader_control_only += 1,
-                            None => t.ungraded += 1,
-                        }
-                    }
-                    crate::aggregate::Outcome::Failed => t.failed += 1,
-                    crate::aggregate::Outcome::Error => t.error += 1,
-                    crate::aggregate::Outcome::Timeout => t.timeout += 1,
-                    crate::aggregate::Outcome::Cancelled => t.cancelled += 1,
-                    crate::aggregate::Outcome::Blocked => t.blocked += 1,
-                },
-            }
+    }
+    for cell in cells.values() {
+        let Some(t) = totals.get_mut(&cell.config) else {
+            continue;
+        };
+        t.unexecuted += u64::from(cell.unexecuted);
+        use crate::success::SuccessClass as S;
+        match cell.class {
+            S::ValidatedSuccess => t.final_passed += 1,
+            S::ModelFailure => t.grader_failed += 1,
+            S::GraderEnvFailure => t.grader_env_failure += 1,
+            S::GraderUndetermined => t.grader_undetermined += 1,
+            S::ControlOnly => t.grader_control_only += 1,
+            S::Ungraded => t.ungraded += 1,
+            S::ExecutorFailed => t.failed += 1,
+            S::ExecutorError => t.error += 1,
+            S::ExecutorTimeout => t.timeout += 1,
+            S::ExecutorCancelled => t.cancelled += 1,
+            S::ExecutorBlocked => t.blocked += 1,
+            S::Missing => t.missing += 1,
+        }
+        if cell.executor_status == Some(crate::aggregate::Outcome::Passed) {
+            t.passed += 1;
         }
     }
     for r in recs.iter().filter(|r| r.ran()) {
@@ -1077,11 +1060,9 @@ pub fn recompute_graded(
         }
     }
     let pass = |c: ConfigId, p: &str, rep: u32| {
-        first.get(&(c, p, rep)).is_some_and(|r| {
-            r.outcome == crate::aggregate::Outcome::Passed
-                && grades.get(&crate::grades::key_of(r))
-                    == Some(&crate::grades::GradeOutcome::Passed)
-        })
+        cells
+            .get(&(c, p.to_string(), rep))
+            .is_some_and(|x| x.class.is_success())
     };
     let mut pairs = Vec::new();
     // 選択した比較組だけ（選んでいない比較表は出さない）。名前は従来の primary(A,B) / secondary(B,C)。

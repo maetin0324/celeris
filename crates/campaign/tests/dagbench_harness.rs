@@ -38,6 +38,11 @@ use celeris_campaign::{
 use serde_json::{Value, json};
 use task_core::TaskStore;
 
+#[path = "common/dagbench_durable.rs"]
+mod durable;
+#[path = "common/dagbench_durable_checks.rs"]
+mod durable_checks;
+
 const CHILD_ENV: &str = "DAGBENCH_HARNESS_CHILD";
 
 fn scenarios() -> PathBuf {
@@ -243,6 +248,9 @@ fn run_faulted(p: &Params, s: &RunSpec, fault: &str) -> Result<(), String> {
     if s.point.concurrent_campaigns != 1 {
         return Err("fault comparison is defined for the camp-1 point only".into());
     }
+    if fault == "a2-restart-after-wait" {
+        return durable::run(p, s);
+    }
     let occurrences = (s
         .scenario
         .nodes
@@ -313,17 +321,20 @@ pub fn run(p: &Params) -> Result<Metrics, String> {
     }
     fs::create_dir_all(&p.out).map_err(|e| e.to_string())?;
     let s = p.spec()?;
-    RunHeader::from_spec(
-        &s,
-        &p.arm,
-        if p.arm == "baseline" {
-            BASELINE_SCOPE
-        } else {
-            CELERIS_SCOPE
-        },
-    )
-    .write(&p.out)
-    .map_err(|e| e.to_string())?;
+    let header = if p.fault.as_deref() == Some("a2-restart-after-wait") {
+        durable::header(p, &s)
+    } else {
+        RunHeader::from_spec(
+            &s,
+            &p.arm,
+            if p.arm == "baseline" {
+                BASELINE_SCOPE
+            } else {
+                CELERIS_SCOPE
+            },
+        )
+    };
+    header.write(&p.out).map_err(|e| e.to_string())?;
     let outcome = match &p.fault {
         None => run_normal(p, &s),
         Some(f) => run_faulted(p, &s, f),
@@ -421,7 +432,11 @@ fn fault_condition_is_a_parameter_of_the_same_entry() {
         assert_eq!(m.completed.nodes, m.completed.nodes_expected, "{arm}");
         assert_eq!(m.duplicates.extra_physical_launches, 0, "{arm}");
         let ext = read_ledger(&p.out.join("ext.jsonl")).unwrap();
-        assert!(ext.iter().any(|e| e.event == "fault_fired"), "{arm}");
+        if fault == "a2-restart-after-wait" {
+            celeris_campaign::dagbench::durable::verify(&p.out).unwrap();
+        } else {
+            assert!(ext.iter().any(|e| e.event == "fault_fired"), "{arm}");
+        }
     }
     // camp-1 以外の点では故障を拒否する。
     let p = params(

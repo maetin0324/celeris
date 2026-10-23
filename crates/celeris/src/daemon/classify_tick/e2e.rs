@@ -28,6 +28,7 @@ use crate::{ClusterMasters, Config, build_dispatcher};
 const WEB: &str = "http://celeris.test";
 const SECRET: &str = "jev_api_key";
 const DUMMY: &str = "sk-dummy-jev-e2e-never-leak-4242";
+const OBJECTIVE: &str = "Jev で分類する";
 const PURPOSE: &str = "Jev で依頼を分類する";
 const OK: &str = r#"{"model":"typesafe/jev-1.14","answers":{"specificity":{"choice":"specified"},"work_nature":{"choice":"implementation"}}}"#;
 
@@ -100,7 +101,7 @@ fn new_task(dir: &std::path::Path, title: &str) -> Task {
         parent_id: None,
         kind: TaskKind::Execute,
         title: title.into(),
-        objective: "Jev で分類する".into(),
+        objective: OBJECTIVE.into(),
         acceptance: vec![Criterion {
             text: "人が確かめる".into(),
             check: Check::Human,
@@ -147,6 +148,19 @@ struct JevServer {
 impl JevServer {
     fn count(&self) -> usize {
         self.requests.lock().expect("requests").len()
+    }
+
+    /// `instruction` が `objective` そのものの request の数。同じ入力は classifier の cache と
+    /// `max_retries = 0` で再送されないので、総数が増えるのは別の subject の分類（負荷で時機のずれた
+    /// daemon 側の task 等。release gate の並列実行で総数 3 を観測）。試験の task だけを数える。
+    fn count_for(&self, objective: &str) -> usize {
+        let needle = format!("\"instruction: {objective}\"");
+        self.requests
+            .lock()
+            .expect("requests")
+            .iter()
+            .filter(|r| r.contains(&needle))
+            .count()
     }
 }
 
@@ -488,7 +502,11 @@ async fn unregistered_key_waits_notifies_then_resumes_once_and_classifies() {
         env.step().await;
     }
     assert_eq!(env.wait_state(&wu), CredentialWaitState::Waiting);
-    assert_eq!(env.jev.count(), 0, "鍵が無い間は Jev を呼ばない");
+    assert_eq!(
+        env.jev.count_for(OBJECTIVE),
+        0,
+        "鍵が無い間は Jev を呼ばない"
+    );
     let item = env.dispatcher.classification_board().get(&subject);
     assert!(item.is_some_and(|i| i.credential.is_some()));
     assert_eq!(
@@ -521,7 +539,7 @@ async fn unregistered_key_waits_notifies_then_resumes_once_and_classifies() {
     let classified = classified.expect("classified after resume");
     assert_eq!(classified.entry.status, ClassifierStatus::JevOk);
     assert!(classified.credential.is_none());
-    assert_eq!(env.jev.count(), 1, "分類は 1 回だけ");
+    assert_eq!(env.jev.count_for(OBJECTIVE), 1, "分類は 1 回だけ");
     let request = env.jev.requests.lock().expect("requests")[0].clone();
     assert!(request.contains(&format!("Bearer {DUMMY}")), "{request}");
 
@@ -532,7 +550,7 @@ async fn unregistered_key_waits_notifies_then_resumes_once_and_classifies() {
     }
     assert_eq!(verifier.calls.load(Ordering::SeqCst), 1);
     assert_eq!(env.count("SELECT COUNT(*) FROM credential_waits"), 1);
-    assert_eq!(env.jev.count(), 1);
+    assert_eq!(env.jev.count_for(OBJECTIVE), 1);
     assert_eq!(env.credential_inbox_items(), 0);
     assert_eq!(env.webhook_bodies().len(), 1, "再開後に通知は増えない");
     assert_eq!(RoutingMode::DecisionAssisted, env.dispatcher.routing_mode());

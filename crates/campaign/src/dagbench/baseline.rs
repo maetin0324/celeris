@@ -712,6 +712,8 @@ impl Baseline {
                 }
                 let phase = n.phase;
                 if phase == Phase::Pre {
+                    self.log("execution_finished", id);
+                    self.log_progress("execution_finished", id, phase)?;
                     let n = self.state.nodes.get_mut(id).expect("node");
                     n.status = Status::SubmitPending;
                     n.phase_end = None;

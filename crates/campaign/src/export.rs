@@ -11,6 +11,8 @@ use crate::{
 
 pub const FINAL_ACCOUNTING_FILE: &str = "final-accounting.json";
 pub const MISSING_LABEL: &str = "欠測";
+/// 主比較の消費の範囲。CoS の call と共有オーバーヘッドは含まない（arm へ配分しない）。
+pub const COST_SCOPE: &str = "trial runs only (tokens/cost recorded on each trial; for B the task tree runs of the trial). CoS calls and shared overhead are NOT included and are not attributed to arms. cost_micro_usd_sum is the per-trial recorded cost; list-price and cash cost are kept apart only in final-accounting.json (never added together); missing trials are counted, never zero-filled";
 
 fn status(sum_missing: u64, ran: u64) -> &'static str {
     if ran == 0 || sum_missing == ran {
@@ -88,7 +90,7 @@ fn row(m: &CampaignManifest, c: crate::manifest::ConfigId, t: &Totals) -> Value 
     row
 }
 
-const COLUMNS: [&str; 41] = [
+pub const COLUMNS: [&str; 41] = [
     "config",
     "harness",
     "model",
@@ -141,6 +143,24 @@ fn cell(v: &Value, col: &str) -> String {
         (Value::String(s), _) => s.clone(),
         (o, _) => o.to_string(),
     }
+}
+
+/// 表の CSV（RFC 4180。JSON の object を持つ `fault_breakdown` も 1 セルに quoting する）。
+/// 列は `COLUMNS` + `evidence_kind` + `complete`。
+pub fn csv_table(rows: &[Value], evidence_kind: &str, complete: bool) -> String {
+    let header: Vec<&str> = COLUMNS
+        .iter()
+        .copied()
+        .chain(["evidence_kind", "complete"])
+        .collect();
+    let mut csv = crate::csv::line(&header);
+    for r in rows {
+        let mut line: Vec<String> = COLUMNS.iter().map(|c| cell(r, c)).collect();
+        line.push(evidence_kind.to_string());
+        line.push(complete.to_string());
+        csv += &crate::csv::line(&line);
+    }
+    csv
 }
 
 /// 表を `dest` に書く。戻り値は table の内容。
@@ -215,6 +235,10 @@ pub fn export_full(
         "lock_verified": locked,
         "complete": complete,
         "incomplete_reasons": reasons,
+        "success_contract": crate::success::SUCCESS_CONTRACT,
+        "retry_selection": crate::success::RETRY_SELECTION,
+        "denominator": crate::success::DENOMINATOR,
+        "cost_scope": COST_SCOPE,
         "success_definition": "executor outcome passed AND independent grade final_pass (a failed grade keeps its failure_class: model_failure | env_failure | undetermined; the last two are unresolved until re-graded) (bound by campaign hash, case id, split, grader hash, artifact hash)",
         "real_performance": real && complete,
         "notice": if real { Value::Null } else {
@@ -264,11 +288,7 @@ pub fn export_full(
     let mut s = serde_json::to_string_pretty(&table).map_err(|e| e.to_string())?;
     s.push('\n');
     fs::write(dest.join(format!("{stem}.json")), s).map_err(|e| e.to_string())?;
-    let mut csv = COLUMNS.join(",") + ",evidence_kind,complete\n";
-    for r in &rows {
-        let line: Vec<String> = COLUMNS.iter().map(|c| cell(r, c)).collect();
-        csv += &(line.join(",") + &format!(",{kind},{complete}\n"));
-    }
+    let csv = csv_table(&rows, &kind, complete);
     fs::write(dest.join(format!("{stem}.csv")), csv).map_err(|e| e.to_string())?;
     Ok(table)
 }

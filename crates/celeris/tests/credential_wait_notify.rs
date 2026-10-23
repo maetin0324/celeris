@@ -42,13 +42,14 @@ async fn hook() -> Hook {
     let bodies = Arc::new(Mutex::new(Vec::new()));
     let kept = bodies.clone();
     tokio::spawn(async move {
-        while let Ok((mut stream, _)) = listener.accept().await {
+        'connections: while let Ok((mut stream, _)) = listener.accept().await {
             let mut raw = Vec::new();
             let mut buf = vec![0; 8192];
             let body = loop {
                 let n = stream.read(&mut buf).await.expect("read");
                 if n == 0 {
-                    break String::new();
+                    // A connection closed before a complete HTTP request is not a POST.
+                    continue 'connections;
                 }
                 raw.extend_from_slice(&buf[..n]);
                 let text = String::from_utf8_lossy(&raw).to_string();
@@ -67,14 +68,45 @@ async fn hook() -> Hook {
                     }
                 }
             };
+            kept.lock().expect("bodies").push(body);
             stream
                 .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
                 .await
                 .expect("reply");
-            kept.lock().expect("bodies").push(body);
         }
     });
     Hook { url, bodies }
+}
+
+#[tokio::test]
+async fn webhook_ignores_eof_before_complete_request() {
+    let hook = hook().await;
+    let address = hook
+        .url
+        .strip_prefix("http://")
+        .unwrap()
+        .strip_suffix("/hook")
+        .unwrap();
+    for partial in ["", "POST /hook HTTP/1.1\r\nContent-Length: 4\r\n\r\nx"] {
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        stream.write_all(partial.as_bytes()).await.unwrap();
+        stream.shutdown().await.unwrap();
+        let mut reply = Vec::new();
+        stream.read_to_end(&mut reply).await.unwrap();
+        assert!(
+            reply.is_empty(),
+            "incomplete request must not be acknowledged"
+        );
+    }
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    stream
+        .write_all(b"POST /hook HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}")
+        .await
+        .unwrap();
+    let mut reply = Vec::new();
+    stream.read_to_end(&mut reply).await.unwrap();
+    assert!(reply.starts_with(b"HTTP/1.1 204"));
+    assert_eq!(*hook.bodies.lock().unwrap(), vec!["{}"]);
 }
 
 /// mock 検証（provider adapter 境界）。呼ばれた回数と受け取った値を内側にだけ残す。

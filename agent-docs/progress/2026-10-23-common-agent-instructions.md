@@ -62,6 +62,21 @@ attempt 2 の審査で `bash scripts/dev/test-affected.sh` が exit 100 にな�
 - `celeris-campaign::ablation_application spec_off_and_on_apply_through_real_dispatcher_and_worker`（attempt 3 の 1 回目の test-affected で発生）: 空き port を確かめてから daemon が bind するまでの間に、他の process が同じ port を取った（`Address already in use`）。fixture（`crates/campaign/tests/ablation_application_support/mod.rs`）は、listen の前に bind の衝突で終わったときだけ、新しい port で起動し直す（最大 5 回）。stdout・stderr の EOF まで読み切ってから判定する（`Signal::LogClosed`）。ほかの失敗は従来どおり daemon.log 付きで落ちる。
 - 検査（attempt 3 の最終作業ツリー）: `cargo nextest run -p task-worker -E 'test(/browser_egress::tests::egress_test_loopback/)'` 2 passed、`cargo nextest run -p celeris-campaign --test ablation_application` 4 passed、`bash scripts/dev/test-affected.sh` exit 0（4470 passed / 16 skipped、source-size failure 0、地図 449 パス OK）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
 
+## attempt 4（条件 3: 地図の関連試験・不変条件）
+
+attempt 3 の審査で条件 3 だけが不合格だった。地図のうち、関連試験と不変条件を持っていたのは「共通 agent 指示と配布」の 4 行だけだった。検証対象 SHA は 8a04de45（base 23cca1dd に下の変更を足したもの）。実装（`crates/` の本体）には触っていない。
+- `docs/architecture-map.md`: 全節（task-core・task-dispatch・task-worker・task-ops・task-api・celeris・周辺 crate・Web・共通指示・ソース健全性）の表を同じ 6 列（subsystem | owner | entry point | ADR / 設計 | 関連試験 | 不変条件）に揃えた。119 行すべてに、実在する試験 file・module のパスと、不変条件 1 行（根拠 ADR 付き）を書いた。対象は TaskStore と events（`store/tests.rs` の `append_event_*`）、Dispatcher の状態遷移（`dispatcher/tests/*.rs`）、worker adapter（`{claude_code,codex,pi,acp}/tests.rs`）、task-api（`crates/task-api/tests/*.rs`）、celeris daemon（`classify_tick`・`instance_handoff` 等）、web（`*.test.ts(x)`・`web/e2e`）など。ADR やソースの全文は貼っていない。
+- `scripts/dev/check-architecture-map.py`: 既存のパス実在検査に、表の形の検査を足した。見出しは 6 列、各行の関連試験には backtick のパスが 1 つ以上、不変条件は空でないこと。形の試験 `scripts/tests/test_architecture_map.py` に負例 3 つ（関連試験なし、不変条件が空、4 列の見出し）を足した。
+- 回帰試験の flaky を 1 件直した。attempt 4 の 1 回目の test-affected で `celeris::credential_wait_notify wait_notify_register_verify_and_resume_once_through_the_fake_webhook` が落ちた（webhook の数 left 3 / right 1）。原因は attempt 2 の `root_done_summary` と同じで、偽 webhook が要求の前の EOF と他の試験の要求を通知として数えていた。直し方: `POST /hook` だけを数え、他の要求には 404 を返す。記録は応答の前に確定する。回帰として、stray 接続（EOF と `GET /other`）を送ってから数える段を試験に足した。
+- 検査:
+  - `python3 scripts/dev/check-architecture-map.py`: exit 0（708 パス）。関連試験を消した負例は exit 1。
+  - `python3 scripts/tests/test_architecture_map.py`: OK。
+  - `cargo nextest run -p celeris --test credential_wait_notify`: 3 回とも 1 passed。
+  - `bash scripts/dev/test-affected.sh`: exit 0（4470 passed / 16 skipped、source-size failure 0、地図 708 パス OK）。
+  - `cargo clippy --workspace -- -D warnings`: exit 0。
+  - `cargo fmt --all -- --check`: exit 0。
+- 全 workspace・e2e・browser・userns の試験は走らせていない。
+
 ## main で既に解消済みだった項目
 
 - なし。13d64acd でも CLAUDE.md に symlink の説明と「Web UI・リモート実行・予算管理の禁止」が残り、Codex 経路は CLAUDE.md を読んでいなかった（上の実測表）。

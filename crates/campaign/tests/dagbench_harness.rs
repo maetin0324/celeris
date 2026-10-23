@@ -30,6 +30,7 @@ use celeris_campaign::{
             ControlCommand, FaultCase, FaultRunner, RunnerOutcome, RunnerStop, block_until_killed,
             read_obs,
         },
+        graded::Grading,
         metrics::{Metrics, RunHeader, append_control, append_sample, compute, write_tables},
         run::{BASELINE_SCOPE, CELERIS_SCOPE, run_baseline},
     },
@@ -52,17 +53,38 @@ pub struct Params {
     pub seed: Option<u64>,
     pub fault: Option<String>,
     pub out: PathBuf,
+    #[serde(default)]
+    pub grading: Option<Grading>,
 }
 
 impl Params {
     fn spec(&self) -> Result<RunSpec, String> {
         let file = load_scenarios(&scenarios())?;
-        RunSpec::resolve(
+        let mut spec = RunSpec::resolve(
             &file,
             &self.scenario,
             &self.point,
             self.seed.unwrap_or(file.seed),
-        )
+        )?;
+        if let Some(mut g) = self.grading.clone() {
+            if spec.point.concurrent_campaigns != 1
+                || g.max_attempts == 0
+                || !spec
+                    .scenario
+                    .nodes
+                    .iter()
+                    .any(|n| n.id == g.node && n.external.is_none())
+            {
+                return Err(
+                    "grading requires camp-1, a local graded node, and max_attempts > 0".into(),
+                );
+            }
+            g.pin()?;
+            g.stage_root = self.out.join("artifacts");
+            g.work = self.out.join("grade-work");
+            spec.grading = Some(Arc::new(g));
+        }
+        Ok(spec)
     }
 }
 
@@ -151,6 +173,17 @@ fn child_control() {
     let p: Params = serde_json::from_value(cfg["params"].clone()).unwrap();
     let case: FaultCase = serde_json::from_value(cfg["case"].clone()).unwrap();
     let s = p.spec().unwrap();
+    RunHeader::from_spec(
+        &s,
+        &p.arm,
+        if p.arm == "baseline" {
+            BASELINE_SCOPE
+        } else {
+            CELERIS_SCOPE
+        },
+    )
+    .write(&p.out)
+    .unwrap();
     match p.arm.as_str() {
         "baseline" => {
             let mut ext = ExtSim::open(
@@ -173,6 +206,10 @@ fn child_control() {
             )
             .unwrap();
             b.set_progress_log(&p.out.join("worker.jsonl")).unwrap();
+            b.set_logical_cap(s.caps.max_logical_secs);
+            if let Some(g) = &s.grading {
+                g.attach_baseline(&mut b);
+            }
             assert_eq!(b.run(&mut ext).unwrap(), Outcome::Complete);
         }
         _ => drive_celeris(
@@ -271,15 +308,32 @@ fn run_faulted(p: &Params, s: &RunSpec, fault: &str) -> Result<(), String> {
 
 /// 入口本体: 実行 → 指標再生成（raw だけから）。
 pub fn run(p: &Params) -> Result<Metrics, String> {
+    if p.out.join("run.json").exists() {
+        return Err("output already contains a run; choose a fresh directory".into());
+    }
     fs::create_dir_all(&p.out).map_err(|e| e.to_string())?;
     let s = p.spec()?;
-    match &p.fault {
-        None => run_normal(p, &s)?,
-        Some(f) => run_faulted(p, &s, f)?,
+    RunHeader::from_spec(
+        &s,
+        &p.arm,
+        if p.arm == "baseline" {
+            BASELINE_SCOPE
+        } else {
+            CELERIS_SCOPE
+        },
+    )
+    .write(&p.out)
+    .map_err(|e| e.to_string())?;
+    let outcome = match &p.fault {
+        None => run_normal(p, &s),
+        Some(f) => run_faulted(p, &s, f),
+    };
+    let metrics = compute(&p.out);
+    if let Ok(m) = &metrics {
+        write_tables(&p.out.join("metrics"), m).map_err(|e| e.to_string())?;
     }
-    let m = compute(&p.out)?;
-    write_tables(&p.out.join("metrics"), &m).map_err(|e| e.to_string())?;
-    Ok(m)
+    outcome?;
+    metrics
 }
 
 fn env(n: &str) -> Option<String> {
@@ -298,6 +352,9 @@ fn run_from_env() {
         seed: env("DAGBENCH_SEED").map(|v| v.parse().expect("DAGBENCH_SEED")),
         fault: env("DAGBENCH_FAULT"),
         out: PathBuf::from(need("DAGBENCH_OUT")),
+        grading: env("DAGBENCH_GRADING").map(|path| {
+            serde_json::from_slice(&fs::read(path).expect("grading config")).expect("Grading JSON")
+        }),
     };
     let m = run(&p).unwrap_or_else(|e| panic!("{e}"));
     println!("{}", serde_json::to_string_pretty(&m).unwrap());
@@ -308,9 +365,10 @@ fn params(arm: &str, point: &str, fault: Option<&str>, out: &Path) -> Params {
         arm: arm.into(),
         scenario: "k2-mini".into(),
         point: point.into(),
+        grading: None,
         seed: None,
         fault: fault.map(String::from),
-        out: out.join(format!("{arm}-{}", fault.unwrap_or("normal"))),
+        out: out.join(format!("{arm}-{point}-{}", fault.unwrap_or("normal"))),
     }
 }
 
@@ -399,4 +457,308 @@ fn stage_conversion_does_not_add_dependencies() {
         extra.contains(&("review".into(), "analyze".into())),
         "{extra:?}"
     );
+}
+
+#[path = "common/dagbench_grading.rs"]
+mod grading_fixture;
+
+#[test]
+fn graded_limits_and_failed_costs_use_the_formal_entry() {
+    use grading_fixture::{FABRICATED_REPORT, fixture};
+    let root = tempfile::tempdir().unwrap();
+    for (limit, all_fail) in [(1, false), (2, false), (3, true)] {
+        let inputs = root.path().join(format!("input-{limit}"));
+        let mut g = fixture(
+            &inputs,
+            vec![("report.md".into(), FABRICATED_REPORT.into())],
+        );
+        g.max_attempts = limit;
+        if all_fail {
+            fs::write(g.good_artifact.join("report.md"), FABRICATED_REPORT).unwrap();
+        }
+        for arm in ["baseline", "celeris"] {
+            let mut p = params(
+                arm,
+                "camp-1",
+                None,
+                &root.path().join(format!("limit-{limit}")),
+            );
+            p.grading = Some(g.clone());
+            let result = run(&p);
+            assert_eq!(result.is_ok(), limit == 2, "{arm} {limit}: {result:?}");
+            let m = compute(&p.out).unwrap();
+            assert_eq!(m.completed.campaigns, usize::from(limit == 2), "{m:?}");
+            let attempts = p.out.join("artifacts/c0/analyze.attempts");
+            assert_eq!(fs::read_dir(&attempts).unwrap().count(), limit as usize);
+            for i in 0..limit {
+                let v: Value = serde_json::from_slice(
+                    &fs::read(attempts.join(i.to_string()).join("grade.json")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(v["passed"], limit == 2 && i == 1);
+            }
+            let w = celeris_campaign::dagbench::celeris_side::read_worker_ledger(
+                &p.out.join("worker.jsonl"),
+            )
+            .unwrap();
+            assert_eq!(
+                w.iter()
+                    .filter(|e| e.node == "analyze" && e.event == "execution_finished")
+                    .count(),
+                limit as usize
+            );
+            assert_eq!(
+                w.iter()
+                    .filter(|e| e.node == "analyze" && e.event == "validated_completed")
+                    .count(),
+                usize::from(limit == 2)
+            );
+            assert_eq!(m.lost_progress.rerun_node_starts, (limit - 1) as usize);
+            let node_work = p
+                .spec()
+                .unwrap()
+                .scenario
+                .nodes
+                .iter()
+                .find(|n| n.id == "analyze")
+                .unwrap()
+                .work_secs;
+            assert!(m.execution_busy_secs >= u64::from(limit) * node_work);
+            if limit != 2 {
+                // A legacy worker finish must never manufacture validated completion.
+                let mut premature = w.last().unwrap().clone();
+                premature.seq += 1;
+                premature.node = "analyze".into();
+                premature.event = "node_finished".into();
+                celeris_campaign::dagbench::metrics::append_jsonl(
+                    &p.out.join("worker.jsonl"),
+                    &premature,
+                )
+                .unwrap();
+                let again = compute(&p.out).unwrap();
+                assert_eq!(again.completed, m.completed);
+                assert_eq!(again.makespan, m.makespan);
+                assert_eq!(again.ready_wait, m.ready_wait);
+            }
+        }
+    }
+}
+
+/// Persistent real-input repetitions; never silently skip a missing K3 archive.
+#[test]
+#[ignore = "set DAGBENCH_SUITE_OUT to a fresh persistent output directory"]
+fn real_k3_repetitions_from_formal_entry() {
+    let root = PathBuf::from(std::env::var("DAGBENCH_SUITE_OUT").expect("DAGBENCH_SUITE_OUT"));
+    assert!(!root.exists(), "fresh output directory required");
+    fs::create_dir_all(&root).unwrap();
+    let mut g = grading_fixture::k3_grading(&root.join("inputs")).expect("missing CAMPAIGN_K3_TGZ");
+    // Cargo may rebuild the shared target binary while a repetition is in flight.
+    // Freeze the exact evaluator used by every child and every arm.
+    let frozen_grader = root.join("grader");
+    fs::copy(&g.grader_bin, &frozen_grader).unwrap();
+    g.grader_bin = frozen_grader;
+    fs::write(
+        root.join("grading.json"),
+        serde_json::to_vec_pretty(&g).unwrap(),
+    )
+    .unwrap();
+    for seed in [17, 23] {
+        for fault in [
+            None,
+            Some("a1-restart-after-accept"),
+            Some("b-submit-response-lost"),
+            Some("c-completion-duplicate"),
+        ] {
+            for arm in ["baseline", "celeris"] {
+                let mut p = params(arm, "camp-1", fault, &root.join(seed.to_string()));
+                p.seed = Some(seed);
+                p.grading = Some(g.clone());
+                let m = run(&p).unwrap();
+                assert_eq!(m.completed.nodes, m.completed.nodes_expected);
+                assert!(m.lost_progress.rerun_node_starts >= 1);
+                assert_eq!(
+                    fs::read_dir(p.out.join("artifacts/c0/analyze.attempts"))
+                        .unwrap()
+                        .count(),
+                    2
+                );
+                assert_eq!(
+                    serde_json::to_value(&m).unwrap(),
+                    serde_json::to_value(compute(&p.out).unwrap()).unwrap()
+                );
+            }
+        }
+    }
+}
+
+const GRADED_RESTART_ENV: &str = "DAGBENCH_GRADED_RESTART";
+
+#[test]
+fn graded_restart_child() {
+    let Ok(config) = std::env::var(GRADED_RESTART_ENV) else {
+        return;
+    };
+    let (p, stop): (Params, bool) = serde_json::from_str(&config).unwrap();
+    fs::create_dir_all(&p.out).unwrap();
+    let mut s = p.spec().unwrap();
+    let budget = std::env::var("DAGBENCH_LOGICAL_CAP")
+        .ok()
+        .map(|v| v.parse::<u64>().unwrap());
+    if let Some(cap) = budget {
+        s.caps.max_logical_secs = cap;
+    }
+    if stop {
+        RunHeader::from_spec(&s, &p.arm, "restart-test")
+            .write(&p.out)
+            .unwrap();
+    }
+    let outcome = if p.arm == "baseline" {
+        let mut ext = ExtSim::open(
+            &p.out.join("ext.jsonl"),
+            ExtConfig {
+                poll_secs: s.poll_secs,
+                job_slots: s.scenario.resources.external_job_slots,
+                faults: vec![],
+            },
+        )
+        .unwrap();
+        let mut b = Baseline::open(
+            load_scenario(&scenarios(), &p.scenario).unwrap(),
+            BaselineConfig {
+                poll_secs: s.poll_secs,
+                ext_job_secs: s.ext_job_secs,
+            },
+            &p.out.join("state.json"),
+        )
+        .unwrap();
+        b.set_progress_log(&p.out.join("worker.jsonl")).unwrap();
+        b.set_logical_cap(s.caps.max_logical_secs);
+        s.grading.as_ref().unwrap().attach_baseline(&mut b);
+        if stop {
+            b.stop_after_verify_failure();
+        }
+        b.run(&mut ext)
+            .map(|o| o == Outcome::Complete)
+            .map_err(|e| format!("{e:?}"))
+    } else {
+        let paths = Paths::under(&p.out.join("celeris.db"), &p.out);
+        let store: Arc<dyn TaskStore> = Arc::new(task_core::SqliteStore::open(&paths.db).unwrap());
+        let transport = RouterTransport(router_at(&p.out));
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let mut side = CelerisSide::new(s.clone(), paths, store).unwrap();
+            if stop {
+                side.stop_after_verify_failure();
+            }
+            side.drive(&transport)
+                .await
+                .map(|r| r.campaigns.iter().all(|c| c.status == "done"))
+        })
+    };
+    if !stop && budget.is_none() && s.grading.as_ref().unwrap().max_attempts > 1 {
+        assert_eq!(outcome, Ok(true));
+    } else {
+        assert_ne!(outcome, Ok(true));
+    }
+}
+
+#[test]
+fn failed_attempt_survives_controller_process_restart_on_both_arms() {
+    use grading_fixture::{FABRICATED_REPORT, fixture};
+    let root = tempfile::tempdir().unwrap();
+    for limit in [1, 2] {
+        let mut g = fixture(
+            &root.path().join(format!("input-{limit}")),
+            vec![("report.md".into(), FABRICATED_REPORT.into())],
+        );
+        g.max_attempts = limit;
+        for arm in ["baseline", "celeris"] {
+            let mut p = params(arm, "camp-1", None, &root.path().join(limit.to_string()));
+            p.grading = Some(g.clone());
+            let mut original = vec![];
+            for stop in [true, false] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "graded_restart_child", "--nocapture"])
+                    .env(
+                        GRADED_RESTART_ENV,
+                        serde_json::to_string(&(&p, stop)).unwrap(),
+                    )
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{arm}/{limit}: {} {}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let grade =
+                    fs::read(p.out.join("artifacts/c0/analyze.attempts/0/grade.json")).unwrap();
+                if stop {
+                    original = grade;
+                } else {
+                    assert_eq!(grade, original);
+                }
+            }
+            let w = celeris_campaign::dagbench::celeris_side::read_worker_ledger(
+                &p.out.join("worker.jsonl"),
+            )
+            .unwrap();
+            assert_eq!(
+                w.iter()
+                    .filter(|e| e.node == "analyze" && e.event == "node_started")
+                    .count(),
+                limit as usize,
+                "{arm}/{limit}: {w:?}"
+            );
+            let m = compute(&p.out).unwrap();
+            assert_eq!(
+                m.completed.campaigns,
+                usize::from(limit == 2),
+                "{arm}/{limit}: {m:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn logical_budget_stop_survives_controller_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let g = grading_fixture::fixture(&root.path().join("inputs"), vec![]);
+    for arm in ["baseline", "celeris"] {
+        let mut p = params(arm, "camp-1", None, root.path());
+        p.grading = Some(g.clone());
+        let mut starts = 0;
+        for stop in [true, false] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "graded_restart_child", "--nocapture"])
+                .env(
+                    GRADED_RESTART_ENV,
+                    serde_json::to_string(&(&p, stop)).unwrap(),
+                )
+                .env("DAGBENCH_LOGICAL_CAP", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{arm}: {} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let w = celeris_campaign::dagbench::celeris_side::read_worker_ledger(
+                &p.out.join("worker.jsonl"),
+            )
+            .unwrap();
+            let count = w.iter().filter(|e| e.event == "node_started").count();
+            if stop {
+                starts = count;
+            } else {
+                assert_eq!(count, starts, "budget must remain exhausted");
+            }
+            assert_eq!(compute(&p.out).unwrap().completed.campaigns, 0);
+        }
+    }
 }

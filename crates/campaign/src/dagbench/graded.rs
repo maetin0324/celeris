@@ -16,7 +16,7 @@ use std::{
     process::Command,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Grading {
     /// 判定付きにする scenario の node id。
     pub node: String,
@@ -38,17 +38,28 @@ pub struct Grading {
 }
 
 impl Grading {
-    /// campaign の成果物 dir（再実行は同じ dir を上書きする）。
+    /// Latest artifact link; immutable attempt directories are retained next to it.
     pub fn artifact_dir(&self, campaign: &str) -> PathBuf {
         self.stage_root.join(campaign).join(&self.node)
     }
 
     /// `attempt`（0 始まり）の成果物を `dir` に作る。
     pub fn materialize(&self, attempt: u32, dir: &Path) -> std::io::Result<()> {
-        if dir.exists() {
-            fs::remove_dir_all(dir)?;
+        let attempts = dir.with_extension("attempts");
+        fs::create_dir_all(&attempts)?;
+        let saved = attempts.join(attempt.to_string());
+        // Never overwrite an earlier attempt, including one interrupted by a crash.
+        fs::create_dir(&saved)?;
+        let payload = saved.join("artifact");
+        copy_dir(&self.good_artifact, &payload)?;
+        if fs::symlink_metadata(dir).is_ok() {
+            if dir.is_symlink() {
+                fs::remove_file(dir)?;
+            } else {
+                fs::remove_dir_all(dir)?;
+            }
         }
-        copy_dir(&self.good_artifact, dir)?;
+        std::os::unix::fs::symlink(fs::canonicalize(&payload)?, dir)?;
         if attempt == 0 {
             for (rel, body) in &self.first_attempt_overrides {
                 let p = dir.join(rel);
@@ -79,9 +90,72 @@ impl Grading {
         a
     }
 
-    /// WorkUnit の `checks` に置く shell 文字列（空白を含まない path 前提。測定側が作る dir だけを渡す）。
+    /// Content pins, independent of arm-specific output paths.
+    pub fn pin(&self) -> Result<serde_json::Value, String> {
+        use sha2::{Digest, Sha256};
+        fn hash(p: &Path) -> Result<String, String> {
+            Ok(format!(
+                "{:x}",
+                Sha256::digest(fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?)
+            ))
+        }
+        fn tree(
+            root: &Path,
+            at: &Path,
+            out: &mut std::collections::BTreeMap<String, String>,
+        ) -> Result<(), String> {
+            for entry in fs::read_dir(at).map_err(|e| e.to_string())? {
+                let p = entry.map_err(|e| e.to_string())?.path();
+                if p.is_symlink() {
+                    continue;
+                }
+                if p.is_dir() {
+                    tree(root, &p, out)?;
+                } else {
+                    out.insert(
+                        p.strip_prefix(root).unwrap().to_string_lossy().into_owned(),
+                        hash(&p)?,
+                    );
+                }
+            }
+            Ok(())
+        }
+        let mut inputs = std::collections::BTreeMap::new();
+        tree(&self.good_artifact, &self.good_artifact, &mut inputs)?;
+        Ok(
+            serde_json::json!({"contract": "validated-attempts/1", "node": self.node,
+            "case_sha256": hash(&self.case)?, "case": self.case,
+            "grader_version": env!("CARGO_PKG_VERSION"),
+            "grader_sha256": hash(&self.grader_bin)?, "inputs": inputs,
+            "observed_sha256": self.observed.as_ref().map(|p| hash(p)).transpose()?,
+            "first_attempt_overrides": self.first_attempt_overrides, "max_attempts": self.max_attempts}),
+        )
+    }
+
+    pub fn attach_baseline(&self, baseline: &mut super::baseline::Baseline) {
+        baseline.set_graded_node(self.node.clone());
+        let g = self.clone();
+        baseline.set_verifier(
+            Box::new(move |id, attempt| {
+                let (campaign, node) = id.split_once('/').unwrap_or(("c0", id));
+                if node != g.node {
+                    return Ok(());
+                }
+                let dir = g.artifact_dir(campaign);
+                g.materialize(attempt, &dir).map_err(|e| e.to_string())?;
+                g.grade(&dir)
+            }),
+            self.max_attempts,
+        );
+    }
+
+    /// WorkUnit の `checks` に置く shell 文字列（各引数を shell quote する）。
     pub fn check_cmd(&self, campaign: &str) -> String {
-        self.argv(&self.artifact_dir(campaign)).join(" ")
+        self.argv(&self.artifact_dir(campaign))
+            .iter()
+            .map(|a| format!("'{}'", a.replace('\'', "'\"'\"'")))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// grader を実際に走らせる。合格で Ok、不合格で Err（判定 JSON の stderr）。
@@ -92,6 +166,29 @@ impl Grading {
             .args(&a[1..])
             .output()
             .map_err(|e| format!("{}: {e}", a[0]))?;
+        let record = serde_json::json!({
+            "schema": "celeris.dagbench-grade/1",
+            "passed": out.status.success(), "exit": out.status.code(),
+            "stdout": String::from_utf8_lossy(&out.stdout),
+            "stderr": String::from_utf8_lossy(&out.stderr),
+        });
+        // The first independent verdict remains attached to this attempt.
+        let canonical = fs::canonicalize(artifact).map_err(|e| e.to_string())?;
+        let path = if canonical.file_name().is_some_and(|n| n == "artifact") {
+            canonical
+                .parent()
+                .expect("attempt parent")
+                .join("grade.json")
+        } else {
+            canonical.with_extension("grade.json")
+        };
+        if !path.exists() {
+            fs::write(
+                &path,
+                serde_json::to_vec_pretty(&record).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+        }
         if out.status.success() {
             Ok(())
         } else {

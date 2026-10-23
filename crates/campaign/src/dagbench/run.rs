@@ -82,6 +82,10 @@ pub fn run_baseline(spec: &RunSpec, raw: &Path) -> Result<(), String> {
     .map_err(|e| format!("{e:?}"))?;
     b.set_worker_log(&raw.join("worker.jsonl"))
         .map_err(|e| e.to_string())?;
+    b.set_logical_cap(spec.caps.max_logical_secs);
+    if let Some(g) = &spec.grading {
+        g.attach_baseline(&mut b);
+    }
     let pid = std::process::id();
     append_sample(raw, pid, wall())?;
     let r = b.run(&mut ext).map_err(|e| format!("{e:?}"))?;

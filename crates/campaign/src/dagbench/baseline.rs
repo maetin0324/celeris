@@ -120,6 +120,8 @@ pub struct NodeState {
     /// 独立検証（[`Baseline::set_verifier`]）が不合格にして、同じ node をやり直した回数。
     #[serde(default)]
     pub verify_failures: u32,
+    #[serde(default)]
+    pub execution_attempts: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +129,8 @@ pub struct State {
     pub schema: String,
     pub scenario: String,
     pub now: u64,
+    #[serde(default)]
+    pub budget_exhausted: bool,
     #[serde(default)]
     pub next_poll: Option<u64>,
     pub nodes: BTreeMap<String, NodeState>,
@@ -176,6 +180,9 @@ pub struct Baseline {
     /// 成果物の独立検証（Celeris 側の WorkUnit check に当たる）。不合格なら同じ node を最初から再実行する。
     verifier: Option<Verifier>,
     verify_max_attempts: u32,
+    graded_node: Option<String>,
+    logical_cap: u64,
+    stop_after_verify_failure: bool,
 }
 
 /// node の完了を確定する前に呼ぶ独立検証: `(node id, 0 始まりの試行番号)` → Err(理由) で不合格。
@@ -242,6 +249,7 @@ impl Baseline {
                             physical_id: None,
                             reruns: 0,
                             verify_failures: 0,
+                            execution_attempts: 0,
                         },
                     )
                 })
@@ -250,6 +258,7 @@ impl Baseline {
                 schema: STATE_SCHEMA.into(),
                 scenario: scenario.id.clone(),
                 now: 0,
+                budget_exhausted: false,
                 next_poll: None,
                 nodes,
                 duplicate_notices_ignored: 0,
@@ -266,6 +275,9 @@ impl Baseline {
             worker_log: None,
             verifier: None,
             verify_max_attempts: 1,
+            graded_node: None,
+            logical_cap: u64::MAX,
+            stop_after_verify_failure: false,
             notices: None,
         };
         // 実行中だった作業は止まった時点で失われているので、最初からやり直す。
@@ -283,6 +295,21 @@ impl Baseline {
     pub fn set_verifier(&mut self, v: Verifier, max_attempts: u32) {
         self.verifier = Some(v);
         self.verify_max_attempts = max_attempts;
+    }
+
+    /// Deterministic controller restart boundary, after a failed verdict is durable.
+    pub fn stop_after_verify_failure(&mut self) {
+        self.stop_after_verify_failure = true;
+    }
+
+    pub fn set_graded_node(&mut self, node: String) {
+        self.graded_node = Some(node);
+    }
+    pub fn set_logical_cap(&mut self, cap: u64) {
+        self.logical_cap = cap;
+    }
+    fn is_graded(&self, id: &str) -> bool {
+        self.graded_node.as_deref() == id.rsplit('/').next()
     }
 
     pub fn set_worker_log(&mut self, path: &Path) -> std::io::Result<()> {
@@ -460,6 +487,18 @@ impl Baseline {
 
     /// 完了まで（または停止点まで）進める。外部側の事実は `ext`（独立 ledger）が持つ。
     pub fn run(&mut self, ext: &mut dyn ExtBackend) -> Result<Outcome, Error> {
+        if self.state.budget_exhausted {
+            return Err(Error::State("logical budget exhausted".into()));
+        }
+        if self.verifier.is_some()
+            && self
+                .state
+                .nodes
+                .values()
+                .any(|n| n.verify_failures >= self.verify_max_attempts)
+        {
+            return Err(Error::State("verification attempt limit exhausted".into()));
+        }
         self.state.now = self.state.now.max(ext.now()?);
         // 再開時の再照合: 応答不明の投入と待機中の job を論理 ID で確かめる。
         let ids: Vec<String> = self.scenario.nodes.iter().map(|n| n.id.clone()).collect();
@@ -531,6 +570,13 @@ impl Baseline {
                 if self.state.nodes[id].status != Status::Ready {
                     continue;
                 }
+                if self.is_graded(id) {
+                    let n = self.state.nodes.get_mut(id).expect("node");
+                    if n.execution_attempts >= self.verify_max_attempts {
+                        return Err(Error::State("graded attempt limit exhausted".into()));
+                    }
+                    n.execution_attempts += 1;
+                }
                 let secs = {
                     let sp = self.spec(id);
                     match (self.state.nodes[id].phase, &sp.external) {
@@ -599,6 +645,11 @@ impl Baseline {
                     "no runnable node and nothing to wait for".into(),
                 ));
             };
+            if t > self.logical_cap {
+                self.state.budget_exhausted = true;
+                self.save()?;
+                return Err(Error::State("logical cap exceeded".into()));
+            }
             self.state.now = t.max(self.state.now);
             let notices = ext.advance(self.state.now)?;
             // 通知主導: advance が返す通知は使わない（時計を進めるだけ）。完了は push の実受信で知る。
@@ -656,23 +707,34 @@ impl Baseline {
                         return Ok(Outcome::Interrupted);
                     }
                 } else {
-                    let attempt = self.state.nodes[id].verify_failures;
+                    self.log("execution_finished", id);
+                    self.log_progress("execution_finished", id, phase)?;
+                    let attempt = if self.is_graded(id) {
+                        self.state.nodes[id].execution_attempts - 1
+                    } else {
+                        self.state.nodes[id].verify_failures
+                    };
                     if let Some(v) = self.verifier.as_mut()
                         && let Err(why) = v(id, attempt)
                     {
-                        if attempt + 1 >= self.verify_max_attempts {
-                            return Err(Error::State(format!(
-                                "{id}: verification failed after {} attempts: {why}",
-                                attempt + 1
-                            )));
-                        }
-                        // 不合格: 完了にせず、同じ node を ready に戻して最初から再実行する。
+                        // Persist every failure, including the final one, before returning.
                         let n = self.state.nodes.get_mut(id).expect("node");
                         n.verify_failures += 1;
                         n.status = Status::Ready;
                         n.ready_at = Some(now);
                         n.phase_end = None;
                         self.log("verify_failed", id);
+                        self.log_progress("verify_failed", id, phase)?;
+                        let stop = self.save()?;
+                        if attempt + 1 >= self.verify_max_attempts {
+                            return Err(Error::State(format!(
+                                "{id}: verification failed after {} attempts: {why}",
+                                attempt + 1
+                            )));
+                        }
+                        if stop || self.stop_after_verify_failure {
+                            return Ok(Outcome::Interrupted);
+                        }
                         continue;
                     }
                     let n = self.state.nodes.get_mut(id).expect("node");
@@ -680,6 +742,7 @@ impl Baseline {
                     n.done_at = Some(now);
                     n.phase_end = None;
                     finished.push((id.clone(), phase));
+                    self.log("validated_completed", id);
                     self.log("node_finished", id);
                 }
             }
@@ -701,6 +764,7 @@ impl Baseline {
             }
             let stop = self.save()?;
             for (id, phase) in finished {
+                self.log_progress("validated_completed", &id, phase)?;
                 self.log_progress("node_finished", &id, phase)?;
             }
             if stop {

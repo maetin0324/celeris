@@ -1,7 +1,7 @@
 # DAG・外部待機・障害復旧の比較ドライバ（dagbench）
 
 ---
-tasks: [01M59KY5FNM0K4XGPPS61D0CA2, 01M5BT8CRNPJX1THX36XF4C7PZ]
+tasks: [01M59KY5FNM0K4XGPPS61D0CA2, 01M5BT8CRNPJX1THX36XF4C7PZ, 01M5KVHDZ6PGW45VNA5E6MGRPC]
 ---
 
 無 LLM で Celeris の通常経路と合理的な非同期 DAG baseline を比べる driver の公開仕様と、通常の実行・再生成手順。
@@ -185,14 +185,41 @@ DAG の祖先でない node を待たせると scenario に無い依存を足す
   （`--observed`）と実装検査の経路用に残す。K1/K2 は実装検査に実 build（BenchFS submodule・UCX）が要るので対象外。
 - 成功宣言だけの成果物は同じ grader が不合格にする。常に true の check は科学的成功の根拠にしない（判定付きでない node の
   `true` は台本の node で、成功率の欄に入れない）。
-- 再作業は `lost_progress.rerun_node_starts`・`rerun_work_secs` に出る（両方式とも 1 回）。
+- 正式入口 `tests/dagbench_harness.rs` の `Params.grading` / `DAGBENCH_GRADING=<Grading JSON>` が両 arm に同じ設定を渡す。
+  対応範囲は固定 scenario の camp-1、外部待機でない1 node。`max_attempts > 0` を必須とする。
+  `run.json.grading` に case hash、grader 実行ファイル hash/版、入力ファイル hash、改変列、node、attempt 上限を固定する。
+  出力先は新規ディレクトリ必須。子 controller は同じ設定と永続 state で再開する。
+- `artifacts/c0/<node>.attempts/<0始まり番号>/artifact/` と隣の `grade.json` に各試行の成果物・独立採点 stdout/stderr/exit を保存する。
+  `<node>` は最新成果物へのリンク。過去の attempt は成功時にも上書きしない。
+- `execution_finished` は実作業の終了、`validated_completed` は検証済み完了。
+  Celeris は独立 grader の結果を保存し、さらに WU check が合格した後に完了を記録する。
+  baseline は verifier 合格後に記録する。graded 集計は `celeris.dagbench-metrics/2` とし、完遂・makespan・依存 ready は
+  `validated_completed` だけを使う。旧 raw の `node_finished` による集計は旧定義として残す。
+- `execution_busy_secs` は各実行区間の和（失敗も含む）。`lost_progress.rerun_node_starts` / `rerun_work_secs` は再実行から計算する。
+  障害時は採点失敗以外の再作業も加わるため、再作業回数を必ず1とはしない。
+- attempt は開始前に消費し、Celeris は worker ledger、baseline は state.json から再開時に復元する。
+  上限まで失敗した場合は未完遂として停止し、再開しても予算を補充しない。baseline の最終失敗も保存する。
+  Celeris の replan/no-progress 枠には指定 attempt 分の repair 機会を確保するが、実作業の上限は独立した attempt counter が守る。
+  共通の測定予算は `max_logical_secs`。予算停止も永続化する。`max_wall_secs` は各 controller の安全用 watchdog であり測定予算ではない。
+
+実 K3 の原票を使う保存付き反復（seed 17/23 × nofault/A1/B/C × 両 arm）は次で実行する。
+`CAMPAIGN_K3_TGZ` が未取得なら明示的に失敗し、fixture 合格で代用しない。
+
+```sh
+DAGBENCH_SUITE_OUT=/absolute/fresh/output \
+  cargo test -p celeris-campaign --test dagbench_harness \
+  real_k3_repetitions_from_formal_entry -- --exact --ignored
+```
+
+各 run の `metrics/` は raw だけから `celeris-campaign dagbench metrics --raw <run> --out <new-dir>` で再集計する。
+これは実 LLM の能力評価や実 HPC 障害測定ではなく、固定原票を使った control-plane の接続検証である。
 
 ## 測定専用 controller の停止（既知 job ID・wait 永続化後）
 
-`a2-restart-after-wait`: 外部 job の物理 ID と wait を永続化（baseline は state.json、Celeris は SQLite の durable wait と
-worker ledger）した後、runner が握る制御 child だけへ SIGKILL → 同じ永続 state で再起動。外部 job は別 process の ext-sim
-（実 HPC job の代役）が持ち続け、再起動後は論理 ID で追跡して完遂する（物理起動数 = 論理 job 数）。本番サービスは止めない
-（測定側が起こした子 process だけ）。a1（受理直後）・b・c も同じ入口で流せる。
+`a2-restart-after-wait` は既存の停止条件名として残る。ただし正式な in-process harness の停止位置が
+Celeris の DB durable wait 確定後であることと、controller を停止しても独立外部 process が進むことを合わせた
+最終検証はタスク5の範囲。本タスクの graded K3 保存付き反復は nofault/A1/B/C に限る。
+本番サービスへの障害注入、有料 LLM、追加実クラスタ job は実施しない。
 
 ## 指標の定義と、何が実測で何が未実施か
 

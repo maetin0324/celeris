@@ -323,6 +323,7 @@ pub fn load_scenarios(path: &Path) -> Result<ScenarioFile, String> {
 #[derive(Default)]
 struct ClockState {
     now: u64,
+    stopped: bool,
     /// sleeper id → 期限。
     sleepers: BTreeMap<u64, u64>,
     next_id: u64,
@@ -361,7 +362,7 @@ impl LogicalClock {
     /// `deadline` まで（論理時計で）待つ。呼び出し元の thread を塞ぐ。
     fn sleep_until(&self, deadline: u64, kind: SleeperKind) {
         let mut st = self.lock();
-        if st.now >= deadline {
+        if st.stopped || st.now >= deadline {
             return;
         }
         st.next_id += 1;
@@ -372,7 +373,7 @@ impl LogicalClock {
             SleeperKind::Worker => st.worker_sleepers += 1,
             SleeperKind::Poll => st.poll_sleepers += 1,
         }
-        while st.now < deadline {
+        while !st.stopped && st.now < deadline {
             st = self.cv.wait(st).unwrap_or_else(|e| e.into_inner());
         }
         st.sleepers.remove(&id);
@@ -454,6 +455,10 @@ struct Shared {
     poll_attempts: std::sync::atomic::AtomicU64,
     /// 判定付き node の試行回数（campaign/node → 書いた回数）。
     attempts: Mutex<HashMap<String, u32>>,
+    exhausted: std::sync::atomic::AtomicBool,
+    budget_exhausted: bool,
+    verify_failed: std::sync::atomic::AtomicBool,
+    validated: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Shared {
@@ -563,12 +568,24 @@ impl WorkerAdapter for StubWorker {
                     .map_err(AdapterError::Io)?;
                 sh.record("consumed", &campaign, &key, Some(json!({"first": first})));
                 sh.work(ext.post_wait_work_secs).await;
+                if sh.clock.lock().stopped {
+                    return Err(AdapterError::Io(std::io::Error::other(
+                        "controller stopped",
+                    )));
+                }
+                sh.record("execution_finished", &campaign, &key, None);
+
                 sh.record("node_finished", &campaign, &key, None);
                 done(format!("{key} collected"))
             }
             (Some(ext), None) => {
                 sh.record("node_started", &campaign, &key, None);
                 sh.work(node.work_secs).await;
+                if sh.clock.lock().stopped {
+                    return Err(AdapterError::Io(std::io::Error::other(
+                        "controller stopped",
+                    )));
+                }
                 let logical = RunSpec::logical_job(&campaign, ext);
                 let job_secs = sh.spec.ext_job_secs;
                 // 枠が空くまで poll_secs ごとに投入し直す（何も起こしていない拒否だけ）。
@@ -646,16 +663,37 @@ impl WorkerAdapter for StubWorker {
                 }
             }
             (None, _) => {
+                let grading = sh.spec.grading.as_ref().filter(|g| g.node == key);
+                let attempt = if let Some(g) = grading {
+                    let mut m = sh.attempts.lock().unwrap_or_else(|e| e.into_inner());
+                    let a = m.entry(format!("{campaign}/{key}")).or_insert(0);
+                    if *a >= g.max_attempts {
+                        sh.exhausted
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                        return Err(AdapterError::Io(std::io::Error::other(
+                            "graded attempt limit exhausted",
+                        )));
+                    }
+                    let attempt = *a;
+                    *a += 1;
+                    sh.record(
+                        "attempt_started",
+                        &campaign,
+                        &key,
+                        Some(json!({"attempt": attempt})),
+                    );
+                    attempt
+                } else {
+                    0
+                };
                 sh.record("node_started", &campaign, &key, None);
                 sh.work(node.work_secs).await;
-                // 判定付き node: 実成果物を書く。合否は WorkUnit の check（独立 grader）が決める。ここでは判定しない。
-                if let Some(g) = sh.spec.grading.as_ref().filter(|g| g.node == key) {
-                    let attempt = {
-                        let mut m = sh.attempts.lock().unwrap_or_else(|e| e.into_inner());
-                        let a = m.entry(format!("{campaign}/{key}")).or_insert(0);
-                        *a += 1;
-                        *a - 1
-                    };
+                if sh.clock.lock().stopped {
+                    return Err(AdapterError::Io(std::io::Error::other(
+                        "controller stopped",
+                    )));
+                }
+                if let Some(g) = grading {
                     let dir = g.artifact_dir(&campaign);
                     g.materialize(attempt, &dir).map_err(AdapterError::Io)?;
                     sh.record(
@@ -665,7 +703,28 @@ impl WorkerAdapter for StubWorker {
                         Some(json!({"attempt": attempt, "dir": dir})),
                     );
                 }
-                sh.record("node_finished", &campaign, &key, None);
+                sh.record("execution_finished", &campaign, &key, None);
+                let verdict = grading.map_or(Ok(()), |g| g.grade(&g.artifact_dir(&campaign)));
+                match verdict {
+                    Ok(()) => {
+                        sh.record("node_finished", &campaign, &key, None);
+                    }
+                    Err(why) => {
+                        sh.record(
+                            "verify_failed",
+                            &campaign,
+                            &key,
+                            Some(json!({"attempt": attempt, "why": why})),
+                        );
+                        sh.verify_failed
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                        if grading.is_some_and(|g| attempt + 1 >= g.max_attempts) {
+                            sh.record("attempt_limit_exhausted", &campaign, &key, None);
+                            sh.exhausted
+                                .store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                }
                 done(format!("{key} done"))
             }
         };
@@ -785,9 +844,22 @@ pub struct CelerisSide {
     submitted: Vec<CampaignResult>,
     /// 外部 push の通知窓口（測定用の最小フック。無ければ従来どおり poll）。
     notices: Option<NoticeChannel>,
+    stop_after_verify_failure: bool,
+}
+
+impl Drop for CelerisSide {
+    fn drop(&mut self) {
+        self.shared.clock.lock().stopped = true;
+        self.shared.clock.cv.notify_all();
+    }
 }
 
 impl CelerisSide {
+    /// Deterministic controller-stop boundary after a failed independent grade is durable.
+    pub fn stop_after_verify_failure(&mut self) {
+        self.stop_after_verify_failure = true;
+    }
+
     /// `store` は `paths.db` を開いた SQLite（task-api の router と同じ file）。
     pub fn new(spec: RunSpec, paths: Paths, store: Arc<dyn TaskStore>) -> Result<Self, String> {
         Self::with_faults(spec, paths, store, vec![], None)
@@ -859,7 +931,11 @@ impl CelerisSide {
             jobs: Mutex::new(resume.jobs),
             poll_disabled: Default::default(),
             poll_attempts: Default::default(),
-            attempts: Default::default(),
+            attempts: Mutex::new(resume.attempts),
+            exhausted: std::sync::atomic::AtomicBool::new(resume.exhausted),
+            budget_exhausted: resume.budget_exhausted,
+            verify_failed: Default::default(),
+            validated: Mutex::new(resume.validated),
         });
         let mut dispatcher = build_dispatcher(&shared, &paths, store.clone());
         register_instance(&mut dispatcher, &store)?;
@@ -870,6 +946,7 @@ impl CelerisSide {
             dispatcher,
             submitted: resume.submitted,
             notices: None,
+            stop_after_verify_failure: false,
         })
     }
 
@@ -1074,6 +1151,24 @@ impl CelerisSide {
         let cap_logical = self.shared.spec.caps.max_logical_secs;
         let (mut last_gen, mut stable, mut ticks) = (u64::MAX, 0u32, 0u64);
         loop {
+            if self.shared.budget_exhausted {
+                return Err("logical budget exhausted".into());
+            }
+            if self
+                .shared
+                .exhausted
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err("graded attempt limit exhausted".into());
+            }
+            if self.stop_after_verify_failure
+                && self
+                    .shared
+                    .verify_failed
+                    .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err("stopped after durable verification failure".into());
+            }
             // 到着時刻に達した campaign を投入する。
             while self.submitted.len() < n
                 && self.shared.spec.arrival(self.submitted.len()) <= self.shared.clock.now()
@@ -1088,6 +1183,23 @@ impl CelerisSide {
             let pushed = self.pump_notices()?;
             if pushed > 0 {
                 self.dispatcher.tick().map_err(|e| e.to_string())?;
+            }
+            // Completion is published only after the WorkUnit's independent check passes.
+            for c in &self.submitted {
+                let id = c.task_id.parse().map_err(|e| format!("{e:?}"))?;
+                for unit in self.store.work_units_for(id).map_err(|e| e.to_string())? {
+                    if unit.status == task_core::execution_plan::WorkUnitStatus::Done
+                        && self
+                            .shared
+                            .validated
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(format!("{}/{}", c.campaign, unit.key))
+                    {
+                        self.shared
+                            .record("validated_completed", &c.campaign, &unit.key, None);
+                    }
+                }
             }
             let statuses = self.statuses()?;
             if self.submitted.len() == n && statuses.iter().all(|s| s.is_terminal()) {
@@ -1125,6 +1237,7 @@ impl CelerisSide {
                 {
                     Some(next) => {
                         if next > cap_logical {
+                            self.shared.record("logical_budget_exhausted", "", "", None);
                             return Err(format!("logical cap {cap_logical} exceeded"));
                         }
                         // ext-sim の時計も同じ時刻へ（期限の来た job を完了させる。通知は Celeris 側では使わず poll で知る）。
@@ -1197,6 +1310,10 @@ struct Resume {
     campaigns: HashMap<TaskId, String>,
     submitted: Vec<CampaignResult>,
     jobs: HashMap<String, (String, u64)>,
+    attempts: HashMap<String, u32>,
+    exhausted: bool,
+    budget_exhausted: bool,
+    validated: std::collections::HashSet<String>,
 }
 
 impl Resume {
@@ -1221,12 +1338,28 @@ impl Resume {
             campaigns: HashMap::new(),
             submitted: Vec::new(),
             jobs: HashMap::new(),
+            attempts: HashMap::new(),
+            exhausted: false,
+            budget_exhausted: false,
+            validated: Default::default(),
         };
         for e in prior {
             r.seq = r.seq.max(e.seq);
             r.now = r.now.max(e.logical_secs);
             let d = e.detail.as_ref();
             match e.event.as_str() {
+                "attempt_started" => {
+                    let attempt = d
+                        .and_then(|d| d["attempt"].as_u64())
+                        .ok_or("attempt_started without attempt")?;
+                    r.attempts
+                        .insert(format!("{}/{}", e.campaign, e.node), attempt as u32 + 1);
+                }
+                "attempt_limit_exhausted" => r.exhausted = true,
+                "logical_budget_exhausted" => r.budget_exhausted = true,
+                "validated_completed" => {
+                    r.validated.insert(format!("{}/{}", e.campaign, e.node));
+                }
                 "campaign_submitted" => {
                     let id = d
                         .and_then(|d| d["task_id"].as_str())
@@ -1333,6 +1466,10 @@ fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<dyn TaskStor
         max_parallel_work_units: slots,
         ..Default::default()
     };
+    if let Some(g) = &shared.spec.grading {
+        execution.max_replans = g.max_attempts;
+        execution.no_progress_limit = g.max_attempts.saturating_add(1);
+    }
     execution.limits.tree.enabled = true;
     // 既存の `[tree] max_stages`（既定 5）: 位相レベルごとの stage（k2-* は 7 段）が上限・上限近くの人の承認に
     // 掛からない値にする（測定 config の設定。人の承認を台本で挟まない）。

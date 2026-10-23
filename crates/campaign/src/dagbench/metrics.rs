@@ -68,11 +68,17 @@ pub struct RunHeader {
     pub control_scope: String,
     pub campaigns: Vec<(String, u64)>,
     pub nodes: Vec<NodeHdr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grading: Option<Value>,
 }
 
 impl RunHeader {
     pub fn from_spec(spec: &RunSpec, arm: &str, control_scope: &str) -> Self {
         RunHeader {
+            grading: spec
+                .grading
+                .as_ref()
+                .map(|g| g.pin().expect("read grading pins")),
             schema: RAW_SCHEMA.into(),
             dataset: DATASET.into(),
             measurement_id: spec
@@ -115,6 +121,16 @@ impl RunHeader {
 
     pub fn write(&self, raw: &Path) -> std::io::Result<()> {
         fs::create_dir_all(raw)?;
+        if self.grading.is_some() && raw.join("run.json").exists() {
+            let old: Value = serde_json::from_slice(&fs::read(raw.join("run.json"))?)
+                .map_err(std::io::Error::other)?;
+            if old != serde_json::to_value(self).map_err(std::io::Error::other)? {
+                return Err(std::io::Error::other(
+                    "graded run pins changed; use a fresh output directory",
+                ));
+            }
+            return Ok(());
+        }
         fs::write(
             raw.join("run.json"),
             serde_json::to_string_pretty(self).map_err(std::io::Error::other)?,
@@ -326,6 +342,9 @@ pub struct Metrics {
     pub recovery: Recovery,
     pub lost_progress: LostProgress,
     pub interventions: u64,
+    /// Sum of execution intervals across worker slots, including failed attempts.
+    #[serde(default)]
+    pub execution_busy_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -484,7 +503,15 @@ pub fn compute(raw: &Path) -> Result<Metrics, String> {
                     intervals.push((k, s, e.logical_secs));
                 }
             }
-            "node_finished" => {
+            "execution_finished" => {
+                if let Some(s) = open.remove(&k) {
+                    intervals.push((k, s, e.logical_secs));
+                }
+            }
+            event
+                if (h.grading.is_some() && event == "validated_completed")
+                    || (h.grading.is_none() && event == "node_finished") =>
+            {
                 if let Some(s) = open.remove(&k) {
                     intervals.push((k.clone(), s, e.logical_secs));
                 }
@@ -737,7 +764,10 @@ pub fn compute(raw: &Path) -> Result<Metrics, String> {
                     "node_started" | "post_wait_started" => {
                         inflight_nodes.insert(k);
                     }
-                    "node_finished" => {
+                    event
+                        if (h.grading.is_some() && event == "validated_completed")
+                            || (h.grading.is_none() && event == "node_finished") =>
+                    {
                         inflight_nodes.remove(&k);
                     }
                     _ => {}
@@ -858,8 +888,25 @@ pub fn compute(raw: &Path) -> Result<Metrics, String> {
     .iter()
     .map(|f| (f.to_string(), sha256_file(&raw.join(f))))
     .collect();
+    let observed_end = workers
+        .iter()
+        .map(|e| e.logical_secs)
+        .chain(ext.iter().map(|e| e.logical_secs))
+        .max()
+        .unwrap_or(0)
+        .min(cap);
+    let execution_busy_secs = intervals
+        .iter()
+        .map(|(_, start, end)| end.min(&observed_end).saturating_sub(*start))
+        .sum();
     Ok(Metrics {
-        schema: METRICS_SCHEMA.into(),
+        execution_busy_secs,
+        schema: if h.grading.is_some() {
+            "celeris.dagbench-metrics/2"
+        } else {
+            METRICS_SCHEMA
+        }
+        .into(),
         dataset: DATASET.into(),
         measurement_id: h.measurement_id.clone(),
         arm: h.arm.clone(),
@@ -901,6 +948,7 @@ pub fn write_tables(out: &Path, m: &Metrics) -> std::io::Result<()> {
         ("condition", json!(m.condition)),
         ("makespan_max_secs", json!(m.makespan.max)),
         ("makespan_median_secs", json!(m.makespan.median)),
+        ("execution_busy_secs", json!(m.execution_busy_secs)),
         ("completed_nodes", json!(m.completed.nodes)),
         ("completed_campaigns", json!(m.completed.campaigns)),
         ("ready_wait_sum_secs", json!(m.ready_wait.all.sum)),

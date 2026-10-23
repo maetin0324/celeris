@@ -47,3 +47,7 @@ ADR: `agent-docs/adr/2026-10-23-a-submit-audit-and-collect-classes.md`。
 
 ## 本番への移行
 - config・DB の変更なし。A の cap-env に wrapper の mount と 2 つの env を足すのは人の運用（上記）。
+
+## 再試行での補完
+
+前回レビューで GradeBinding 以降の収集分類が欠けていたため、再試行で修正した。実装・検証と測定開始条件は [再試行報告](../../docs/progress/2026-10-23-collector-binding-retry.md) に記録する。

@@ -553,6 +553,14 @@ fn review_prompt_includes_human_decisions_and_check_results() {
         "artifacts",
     );
     assert!(!empty.contains("## Human decisions and answers (authoritative)"));
+    // ADR 2026-10-23-commit-refs-by-subject D6: review context の有無にかかわらず hash で照合しないと伝える。
+    for expected in [
+        "## Commit references in progress files and reports",
+        "Do not fail a criterion because a commit hash, a tested SHA or a fixed merge-base hash",
+        "`git log $(git merge-base HEAD main)..HEAD`",
+    ] {
+        assert!(empty.contains(expected), "missing {expected:?}");
+    }
     assert!(!empty.contains("## Deterministic checks already executed by celeris"));
 
     let context = RunContext {
@@ -3626,6 +3634,9 @@ fn planner_prompt_has_the_check_writing_section() {
         "a new ADR is `agent-docs/adr/YYYY-MM-DD-<slug>.md` (no new ADR numbers)",
         "`agent-docs/progress/YYYY-MM-DD-<slug>/<unit key>.md`. Never append to `agent-docs/PROGRESS.md` (frozen).",
         "`sh scripts/dev/check-doc-links.sh`, `sh scripts/dev/check-adr-numbers.sh` and `sh scripts/dev/progress-index.sh --check`",
+        // ADR 2026-10-23-commit-refs-by-subject: 進捗は commit を件名で書き、検証 SHA の記録を条件にしない。
+        "Progress files name commits by subject, not hash",
+        "never write a criterion that asks to record a tested or final SHA",
         "Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test`",
         "corepack pnpm@<version from package.json packageManager> -C <dir>",
         "A non-scope diff check may compare against `$(git merge-base HEAD main)`",

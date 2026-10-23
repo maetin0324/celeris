@@ -28,7 +28,8 @@ ADR-0128 により、設計判断の経緯・進捗・作業記録は `docs/` �
 - `PROGRESS.md` — 旧 `docs/PROGRESS.md`（凍結。追記しない）
 
 検査（land 系の check に必ず入れる。ADR-0128 D7）: `sh scripts/dev/check-doc-links.sh`（参照の実在）、
-`sh scripts/dev/check-adr-numbers.sh`（ADR の名前と番号）、`sh scripts/dev/progress-index.sh --check`（進捗ファイルの front matter）。
+`sh scripts/dev/check-adr-numbers.sh`（ADR の名前と番号）、`sh scripts/dev/progress-index.sh --check`（進捗ファイルの front matter と、変えた進捗ファイルの main の祖先でない commit hash）。
 
 ADR の採番規則（番号は 0128 で止まり、以後は日付+slug）は `adr/0128-docs-layout.md` D5 を見る。
-進捗ファイルの書き方（task ごと・並列 WorkUnit ごと）は同 ADR D3 を見る。
+進捗ファイルの書き方（task ごと・並列 WorkUnit ごと）は同 ADR D3 と、テンプレート・commit の参照方法（件名で書き hash を書かない）の
+[`guides/progress-files.md`](guides/progress-files.md) を見る。

@@ -1,7 +1,7 @@
 ---
 title: web の event 種別一覧に required_checks_evaluated を登録する
 updated: 2026-10-23
-tasks: []
+tasks: [01M5KWPP519YW28Q6FQRNP5184]
 status: done
 ---
 # web の event 種別一覧に required_checks_evaluated を登録する

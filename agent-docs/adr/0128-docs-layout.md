@@ -68,6 +68,9 @@ tasks: [01M3YBGM64RYPEY9NZANF79A0M]
   ```
   本文は従来の PROGRESS 節と同じく「完了日・証拠（コマンドと結果）・未解決・提案」を書く。
   仕様変更の提案もこのファイルの `## 提案` 節に書く。
+  付記（2026-10-23）: commit は件名で列挙し hash を書かない。基準は `git merge-base HEAD main`（WU は `$CELERIS_WU_BASE`）と式で書き、
+  検査結果は提出時の HEAD（最後の同期の後）で実行したものを書く。`--check` は変えた進捗ファイルの main の祖先でない hash で失敗する
+  （[ADR 2026-10-23-commit-refs-by-subject](2026-10-23-commit-refs-by-subject.md)、書式とテンプレートは [`guides/progress-files.md`](../guides/progress-files.md)）。
 - **そのファイルは持ち主の task だけが書く。** 同じ段で並列に走る WorkUnit は
   `agent-docs/progress/YYYY-MM-DD-<slug>/<wu-key>.md` に分けて書き、親ファイルは段が直列のときだけ書く。
 - 既存の `phase-*.md` などの旧ファイルは名前を変えずに `agent-docs/progress/` へ移し、履歴として残す。新しい追記先にはしない。
@@ -82,6 +85,7 @@ tasks: [01M3YBGM64RYPEY9NZANF79A0M]
   - 引数なし: 全進捗ファイルを `updated 降順 | status | title | tasks | path` で表示（`running`・`blocked` を先に）。これが「現在地」。
   - `--check`: `YYYY-MM-DD-*.md` 形式のファイルに front matter（title, tasks, status, updated）が揃い、
     status が上の 4 値のどれかであることを確かめ、違反を `path: 理由` で出して exit 1。旧ファイル（それ以外の名前）は対象外。
+    付記（2026-10-23）: あわせてこの branch が変えた進捗ファイルの commit hash らしい hex が main の祖先でなければ失敗する（ADR 2026-10-23-commit-refs-by-subject D4）。
 - ADR の一覧も生成とし、commit した一覧表は持たない（`ls agent-docs/adr` と各 ADR の 1 行目で足りる）。
 
 ### D5. ADR の採番

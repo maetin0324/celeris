@@ -4,7 +4,11 @@
 #   sh scripts/dev/progress-index.sh          現在地: agent-docs/progress/ の front matter 付きファイルを
 #                                             「updated | status | title | tasks | path」で出す（running・blocked が先、updated 降順）
 #   sh scripts/dev/progress-index.sh --check  YYYY-MM-DD-*.md の front matter（title, tasks, status, updated）を検査し、
-#                                             違反を「path:1: 理由」で出して exit 1
+#                                             違反を「path:1: 理由」で出して exit 1。あわせて、この branch が
+#                                             変えた進捗ファイル（git merge-base HEAD main との差分と未追跡）の
+#                                             commit hash らしい hex（7〜40 桁、数字と a-f を両方含む）が
+#                                             main 側の commit（merge-base の祖先）でなければ「path:行: 理由」で失敗
+#                                             （agent-docs/adr/2026-10-23-commit-refs-by-subject.md）
 #
 # agent-docs/progress/ が無ければ何も出さずに exit 0。旧ファイル（phase-*.md など）は --check の対象外。
 set -u
@@ -46,6 +50,41 @@ front_matter() {
         }' "$1"
 }
 
+# 本文・front matter の hex 語（7〜40 桁、数字と a-f を両方含む。大文字を含む ULID などは対象外）を「行番号 US 語」で出す。
+hex_words() {
+    awk '
+        {
+            n = split($0, w, /[^0-9A-Za-z]+/)
+            for (i = 1; i <= n; i++) {
+                t = w[i]
+                if (length(t) >= 7 && length(t) <= 40 && t ~ /^[0-9a-f]+$/ && t ~ /[0-9]/ && t ~ /[a-f]/)
+                    printf "%d\037%s\n", NR, t
+            }
+        }' "$1"
+}
+
+# ADR 2026-10-23-commit-refs-by-subject D4: task branch の commit は main 同期の rebase で hash が変わるので、
+# この branch が変えた進捗ファイルに書けるのは main 側の commit（merge-base の祖先）の hash だけ。
+# main が無い（release bundle など）ときは検査しない。
+check_commit_hashes() {
+    git rev-parse -q --verify 'main^{commit}' >/dev/null || return 0
+    mb=$(git merge-base HEAD main) || return 0
+    {
+        git diff --name-only "$mb" -- "$DIR"
+        git ls-files --others --exclude-standard -- "$DIR"
+    } | LC_ALL=C sort -u | while IFS= read -r f; do
+        case "$f" in *.md) ;; *) continue ;; esac
+        [ -f "$f" ] || continue
+        hex_words "$f" | while IFS="$US" read -r line word; do
+            if ! c=$(git rev-parse -q --verify "$word^{commit}" 2>/dev/null); then
+                echo "$f:$line: $word は commit として解決できない（commit は hash でなく件名で書く。ADR 2026-10-23-commit-refs-by-subject）"
+            elif ! git merge-base --is-ancestor "$c" "$mb"; then
+                echo "$f:$line: $word は main の祖先でない（task branch の commit は rebase で hash が変わる。件名で書く。ADR 2026-10-23-commit-refs-by-subject）"
+            fi
+        done
+    done
+}
+
 TAB=$(printf '\t')
 US=$(printf '\037')
 
@@ -77,6 +116,7 @@ EOF
             *) echo "$f:1: updated が YYYY-MM-DD でない（${updated:-空}）" >>"$out" ;;
         esac
     done
+    check_commit_hashes >>"$out"
     cat "$out"
     n=$(wc -l <"$out" | tr -d ' ')
     rm -f "$out"

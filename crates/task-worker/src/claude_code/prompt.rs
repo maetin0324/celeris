@@ -1632,6 +1632,17 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
          false pass is worse than a false fail (completion is decided by review, not by the worker's \
          own claim).\n\n",
     );
+    // ADR 2026-10-23-commit-refs-by-subject D1・D6: celeris は review 前に task branch を rebase するので hash で照合しない。
+    out.push_str(
+        "## Commit references in progress files and reports\n\
+         celeris rebases the task branch onto main before review, so every task-branch commit hash the worker \
+         could have written is stale by now. Progress files and reports name commits by subject and the base as \
+         `git merge-base HEAD main` (`$CELERIS_WU_BASE` for a work unit), and record checks as run on the HEAD \
+         at submission. Do not fail a criterion because a commit hash, a tested SHA or a fixed merge-base hash \
+         is missing or differs from the current HEAD. Judge a commit listed by subject by whether a commit with \
+         that subject is in `git log $(git merge-base HEAD main)..HEAD`, and judge check results by rerunning \
+         them or by the deterministic checks below.\n\n",
+    );
     out.push_str("## Acceptance criteria of the task under review\n");
     for (i, c) in task.acceptance.iter().enumerate() {
         out.push_str(&format!("{}. {}\n", i, c.text));
@@ -1801,7 +1812,9 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      under `web/`).\n\
      - Records follow ADR-0128: a new ADR is `agent-docs/adr/YYYY-MM-DD-<slug>.md` (no new ADR numbers); progress \
      goes to the task's own file `agent-docs/progress/YYYY-MM-DD-<slug>.md`, and parallel units of one stage write \
-     `agent-docs/progress/YYYY-MM-DD-<slug>/<unit key>.md`. Never append to `agent-docs/PROGRESS.md` (frozen).\n\
+     `agent-docs/progress/YYYY-MM-DD-<slug>/<unit key>.md`. Never append to `agent-docs/PROGRESS.md` (frozen). \
+     Progress files name commits by subject, not hash (task branches are rebased before review; ADR \
+     2026-10-23-commit-refs-by-subject): never write a criterion that asks to record a tested or final SHA.\n\
      - A land, close-out or final verify leaf's checks must include `sh scripts/dev/check-doc-links.sh`, \
      `sh scripts/dev/check-adr-numbers.sh` and `sh scripts/dev/progress-index.sh --check`.\n\
      - Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test` unless the package \

@@ -15,6 +15,7 @@
   - `bash scripts/dev/test-affected.sh`（変更 crate と逆依存 crate の試験だけ。web/・docs/api/、task-api とその通常依存の crate（task-core の event kind 等）の変更では web の型検査（tsc -b）と unit 試験も走らせる。node_modules が無ければ先に offline で pnpm install。基準は `git merge-base HEAD main`、WU では `$CELERIS_WU_BASE`。`--list` で対象を確認）と `cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check`（release gate の cargo-fmt-check と同じ。落ちたら `cargo fmt --all` で直す）を実行し、出力の要点を報告に含める
   - 全体の試験（`cargo nextest run --workspace` と doc test の一括・web の e2e・本物の browser/userns の試験）は release gate（`scripts/selfdeploy/release.sh`）だけで走らせる。WU・段の統合・task の受け入れ・review・Phase 完了では走らせない（`agent-docs/adr/2026-10-20-full-tests-at-release-only.md`）
   - task の進捗ファイル `agent-docs/progress/YYYY-MM-DD-<slug>.md` を更新（front matter と完了日、証拠コマンドと結果、未解決事項、提案。並列 WorkUnit は `agent-docs/progress/YYYY-MM-DD-<slug>/<wu-key>.md`。ADR-0128 D3）。共有の索引・`agent-docs/PROGRESS.md` には追記しない
+  - 進捗ファイルと報告では commit を件名で列挙し hash を書かない（celeris は review 前の main 同期で task branch を rebase し、hash が変わる）。基準は「`git merge-base HEAD main`」（WU は `$CELERIS_WU_BASE`）と書き、固定 hash を書かない。検査結果は「提出時の HEAD で実行」とし、最後の同期（main 取り込み・rebase・merge）の後に再実行する。報告本文で hash を挙げるなら提出直前に `git merge-base --is-ancestor <hash> HEAD` が 0 のものだけ。`sh scripts/dev/progress-index.sh --check` は変えた進捗ファイルの main の祖先でない hash で落ちる（`agent-docs/adr/2026-10-23-commit-refs-by-subject.md`、書式は `agent-docs/guides/progress-files.md`）
   - `git add -A && git commit -m "phase N: <summary>"`
 - 仕様・設計の変更の提案は task の進捗ファイルの「提案」節に書く（ADR-0128 D3）
 - 同じアプローチを3回失敗したら、task の進捗ファイルに状況を書き、報告本文で人間に質問する
@@ -40,4 +41,5 @@ Web UI（`web/`）・ssh によるリモート実行（ADR-0018）・予算/quot
 
 ## 完了報告の書き方
 受け入れ条件ごとに「条件」「実行したコマンド」「出力の要点（exit code、テスト数、差分ゼロなど）」を箇条書きで本文に書く。
+commit は件名で挙げ、検査は提出時の HEAD（最後の同期の後）で実行したものを書く。
 評価器はトランスクリプトしか見ないので、ファイルに書いただけでは完了と判定されない。

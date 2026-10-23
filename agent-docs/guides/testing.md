@@ -86,6 +86,12 @@ done
 
 ## WU の check・受け入れ条件
 
+- 差分の試験は `bash scripts/dev/test-affected.sh`。変更 crate と逆依存 crate の nextest・doc test に加え、
+  web の型に届きうる変更（`web/`・`docs/api/`・workspace 共通 file・`task-api` とその通常依存の crate。
+  Rust の event kind や API の型を変えたとき）では web の型検査（typecheck = `tsc -b`）と unit 試験（vitest＋node --test）を先に走らせる。
+  `--list` は対象 crate と `web: typecheck+unit (理由: …)` の行を出す。worktree に `web/node_modules` が無ければ
+  `pnpm install --offline --frozen-lockfile` を先に行う（ADR 2026-10-23-test-affected-web-typecheck）。
+  e2e・本物の browser・workspace 全体の試験は release gate だけ（ADR 2026-10-20-full-tests-at-release-only）。
 - check に重い負荷の台本（CPU 焼き、`stress-ng`、並走 cargo）を置かない。
 - 高負荷の host で落ちた試験は、単独で再実行して結果を記録し、必要なら上の方法で決定的な回帰試験を足す。
 - web の e2e は機能（`pnpm -C web e2e`）と非機能（`pnpm -C web e2e:nfr`: 全画面の axe・latency・

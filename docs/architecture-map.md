@@ -164,6 +164,15 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
 | SPA route・shell | web | `web/routeTree.gen.ts`, `web/components/shell/shell.tsx` | [ADR-0081](../agent-docs/adr/0081-web-spa-frontend.md) |
 | web gateway の owner session・Live View・信頼端末（POST /browser/owner-session/resume・…/device、GET/DELETE /browser/trusted-devices、probe mode） | web::server | `web/server/browser-live.js`（`createBrowserLive` の `register`・`resumeDevice`・`registerDevice`）, `web/server/{auth.js,app.js}`, `web/features/browser/{browser-query.ts,trusted-devices.tsx}`, `web/routes/browser.devices.tsx` | [ADR 2026-10-05 web Live View](../agent-docs/adr/2026-10-05-browser-department-web-live-view.md) D2.1, [ADR 2026-10-07 browser-trusted-devices](../agent-docs/adr/2026-10-07-browser-trusted-devices.md), [運用手順](ops/browser-trusted-devices.md) |
 
+## 共通 agent 指示と配布（全 harness が同じ必須規則に届く）
+
+| subsystem | owner crate/module | entry point | 不変条件 / 関連試験 |
+|---|---|---|---|
+| 必須規則の正本は tracked の `CLAUDE.md` だけ（読む順 → `agent-docs/README.md` → この地図）。AGENTS.md は gitignore 対象の生成物 | task-worker::skills | `CLAUDE.md`, `crates/task-worker/src/skills.rs`（`deliver_required_rules`・`deliver_agents_md`・`rewrite_section`） | Claude Code は `CLAUDE.md` を直接読む。Codex（`crates/task-worker/src/codex.rs`）・Pi（`crates/task-worker/src/pi.rs`）・ACP（`crates/task-worker/src/acp.rs`）は run 開始時に生成物 AGENTS.md の celeris:rules 節へ写す。区切り外のユーザー内容は保つ・冪等・配布失敗（参照先なし・空・書けない）は run を落とす。試験: `crates/task-worker/src/skills/tests.rs`（`required_rules_*`・`the_repo_claude_md_is_tracked_and_reaches_every_harness_path`） |
+| skill の配布（Claude は .claude/skills、他は .agents/skills と AGENTS.md の celeris:skills 節） | task-worker::skills | `crates/task-worker/src/skills.rs`（`deliver_claude_code`・`deliver_agent_skills`・`skills_block`） | [ADR-0127](../agent-docs/adr/0127-skills-native-delivery.md)。試験: `crates/task-worker/src/skills/tests.rs`, `crates/celeris/tests/ui_ux_skills_delivery.rs` |
+| 作業場所（`LocalWorkspace`／ssh の `SshWorkspace`） | task-worker::workspace / ssh | `crates/task-worker/src/{workspace,ssh}.rs` | 1 インスタンス = 1 タスクの作業ディレクトリ。ssh は人が張った ControlMaster を借り、対話認証をしない（[ADR-0018](../agent-docs/adr/0018-remote-clusters-over-ssh.md)）。試験: `crates/task-worker/src/workspace/tests.rs` |
+| 現行の禁止事項（LLM をディスパッチャ/ストアに入れない・events 追記専用・状態の真実は SQLite・`unwrap()` はテスト以外禁止） | 全体 | `CLAUDE.md`「禁止」節 | 初期 ADR の「非目標」は歴史的記録。現行の仕様は `docs/SPEC.md`。events は追記専用: [ADR-0001](../agent-docs/adr/0001-scope-and-principles.md)、実装 `crates/task-core/src/store/events.rs` |
+
 ## この文書の作り方・保ち方
 
 - 出典: `wu/*/artifacts/map.md`（p0-config・p1-handlers・p1-lib・p1-gui）、`wu/*/artifacts/p2.md`（p2-core・p2-worker）、

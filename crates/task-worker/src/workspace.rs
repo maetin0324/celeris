@@ -1,5 +1,5 @@
-//! `Workspace`（作業場所。docs/SPEC.md §3.7）。本プロジェクトは `LocalWorkspace` のみ実装し、
-//! `RemoteWorkspace` は接続層プロジェクトが実装するまで骨組みのみ（ADR-0005 D3）。
+//! `Workspace`（作業場所。docs/SPEC.md §3.7）。手元の作業ディレクトリは `LocalWorkspace`、
+//! クラスタ上の作業場所は `ssh.rs` の `SshWorkspace`（ADR-0018・ADR-0059。人が張った ControlMaster を借りる）が実装する。
 //!
 //! 1 インスタンス = 1 タスクの作業ディレクトリ。ディスパッチャが run ごとに
 //! `LocalWorkspace::new(dir)` を作る。
@@ -16,8 +16,6 @@ pub enum WorkspaceError {
     Io(#[from] std::io::Error),
     #[error("input artifact not found: {0}")]
     InputNotFound(String),
-    #[error("remote workspace is not implemented (cluster={0})")]
-    RemoteUnsupported(String),
     /// ADR-0018 D5: ssh / rsync 自体の失敗（接続が無い・認証を求められた・宛先に届かない）。供給側失敗として扱う。
     #[error("cluster is unreachable: {0}")]
     Unreachable(String),
@@ -190,13 +188,6 @@ impl LocalWorkspace {
     pub fn work_dir(&self) -> &Path {
         self.work_dir.as_deref().unwrap_or(&self.dir)
     }
-}
-
-/// 接続層プロジェクトが実装する。型のみ。
-#[derive(Debug, Clone)]
-pub struct RemoteWorkspace {
-    pub cluster: String,
-    pub path: PathBuf,
 }
 
 // ---- 以下は implementer（unit B）が実装する ----
@@ -423,21 +414,6 @@ fn append_timeout_note(path: &Path, timeout: Duration, killed: &[String]) {
     );
     for line in killed {
         let _ = writeln!(f, "[celeris]   {line}");
-    }
-}
-
-#[async_trait]
-impl Workspace for RemoteWorkspace {
-    async fn prepare(&self, _task: &Task) -> Result<PathBuf, WorkspaceError> {
-        unimplemented!("RemoteWorkspace is implemented by the connection layer project")
-    }
-
-    async fn exec(&self, _cmd: &str, _timeout: Duration) -> Result<ExecResult, WorkspaceError> {
-        unimplemented!("RemoteWorkspace is implemented by the connection layer project")
-    }
-
-    async fn collect(&self, _task: &Task) -> Result<Vec<ArtifactRef>, WorkspaceError> {
-        unimplemented!("RemoteWorkspace is implemented by the connection layer project")
     }
 }
 

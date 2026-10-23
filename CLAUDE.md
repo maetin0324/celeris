@@ -22,7 +22,7 @@
 - テストで外部ネットワークに出ない。LLM呼び出しを伴う実機確認は、認証が使える環境ならエージェントが実行し証跡を task の進捗ファイルに残してよい。使えなければ手順を書いて人間に依頼する（ADR-0009 P-34）
 
 ## 変更の方針（破壊的変更を是とする）
-- 詳細は `agent-docs/adr/2026-10-11-breaking-changes-by-default.md`。Claude 以外の agent も同じ（`AGENTS.md` はこのファイルへの symlink）
+- 詳細は `agent-docs/adr/2026-10-11-breaking-changes-by-default.md`。Claude 以外の agent も同じ。この `CLAUDE.md` が必須規則の唯一の正本で、`AGENTS.md` は tracked ではなく、Codex・Pi・ACP の run 開始時に worker が `CLAUDE.md` の写しを `AGENTS.md` の `celeris:rules` 節へ書く（`crates/task-worker/src/skills.rs` の `deliver_required_rules`。Claude Code は `CLAUDE.md` を直接読む。配布に失敗した run は落ちる）。`AGENTS.md` を手で作らない・symlink にしない
 - 仕組みを置き換えるときは、同じ変更で旧い仕組み（コード経路・config 欄・API field・画面・文書・旧挙動の試験）を消す。deprecated・互換分岐・警告だけ出して無視・新旧切替 flag を残さない
 - 失敗した変更は git（revert・cherry-pick）と release の rollback で救出する。「念のため」旧い仕組みを残さない
 - 消した config 欄は読み込みエラーにし、本番 config の書き換えは進捗ファイルの「本番への移行」節に書く
@@ -32,10 +32,11 @@
 ## 禁止
 - ディスパッチャやストアにLLM呼び出しを入れる
 - `unwrap()`（テスト以外）
-- Web UI、リモート実行、予算管理の実装（別プロジェクト）
 - タスクの状態を会話やワーカーのメモリに持たせる（真実は SQLite。ワーカーはステートレス）
 - ワーカーの自己申告だけで完了にする（完了はレビュアーか決定的な検査が決める）
 - events の書き換え・削除（追記専用）
+
+Web UI（`web/`）・ssh によるリモート実行（ADR-0018）・予算/quota の扱いは実装済みの現行機能で、禁止ではない。初期 ADR（0001 等）や旧 DESIGN の「Web UI 禁止」「非目標」は当時の範囲を記した歴史的記録で、現行規則はこのファイルと `docs/SPEC.md`。
 
 ## 完了報告の書き方
 受け入れ条件ごとに「条件」「実行したコマンド」「出力の要点（exit code、テスト数、差分ゼロなど）」を箇条書きで本文に書く。

@@ -820,6 +820,10 @@ async fn run_codex(
     if let Err(e) = crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await {
         warn!("run {run_id}: failed to deliver skills to .agents/skills: {e}");
     }
+    // 必須規則（CLAUDE.md が正本）は届かなければ run を落とす。skills 一覧の失敗は従来どおり警告。
+    crate::skills::deliver_required_rules(req.cwd())
+        .await
+        .map_err(|e| AdapterError::Other(format!("required rules delivery failed: {e}")))?;
     if let Err(e) = crate::skills::deliver_agents_md(req.cwd(), &req.context.skills).await {
         warn!("run {run_id}: failed to update AGENTS.md with skills: {e}");
     }

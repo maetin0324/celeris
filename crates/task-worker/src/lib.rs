@@ -139,4 +139,4 @@ pub use subprocess::{SubprocessSpec, run_subprocess};
 pub use task_repos::{
     REPOS_DIR_NAME, SetupOutcome, TaskRepo, TaskWorkspaces, run_setup, run_setup_in,
 };
-pub use workspace::{ExecResult, LocalWorkspace, RemoteWorkspace, Workspace, WorkspaceError};
+pub use workspace::{ExecResult, LocalWorkspace, Workspace, WorkspaceError};

@@ -12,6 +12,8 @@ ADR-0128 により、設計判断の経緯・進捗・作業記録は `docs/` �
 4. `progress/` の索引 — `sh scripts/dev/progress-index.sh` で現在地（running・blocked を先に）を生成する。
    旧 `PROGRESS.md`（凍結、以後の追記は無い）はこの索引ができる前の記録。
 
+必須規則の正本は repo 直下の `CLAUDE.md` だけ。Claude Code は直接読み、Codex・Pi・ACP は worker が `AGENTS.md` へ写す（配布経路は地図の「共通 agent 指示と配布」）。
+
 変更の方針: 破壊的変更を是とし、置き換えた旧い仕組みは同じ変更で消す。救出は git と release rollback で行う
 （[`adr/2026-10-11-breaking-changes-by-default.md`](adr/2026-10-11-breaking-changes-by-default.md)）。
 

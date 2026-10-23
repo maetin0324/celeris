@@ -120,3 +120,13 @@ attempt 3 の審査で条件 3 だけが不合格だった。地図のうち、�
 - `python3 scripts/dev/check-architecture-map.py`: exit 0（715 path）。`bash scripts/dev/check-doc-links.sh docs/architecture-map.md`: exit 0。
 - `bash scripts/dev/test-affected.sh`: exit 0（health の 38 件と architecture-map の 1 件が成功。Rust 対象試験は docs のみのため対象なし）。
 - 残件: なし。
+
+## rules-missing-detect（run 01M5MB8PHA0H745H3JEJB6F73A 最終確認）
+
+- 検証対象 SHA: `7d1f9bbd09bf`。WU 基準: `a98c8d06657d`、main との merge-base: `a3933dc2222d`（いずれも検証対象の祖先）。
+- commit「phase 1: 必須規則の正本欠落を run 前に検出する」の実装・試験・ADR D2 付記が既に存在することを確認した。追跡済み正本の欠落は Err、規則のない repo / 非 git dir は空の前置き。Codex・Pi・ACP の adapter.run 試験はエラーと stub 起動 marker の不在を確認する。今回、実装の追加変更はない。
+- 地図は TaskStore/events、Dispatcher、worker adapter、task-api、daemon、web を含む全節が同じ6列で、関連試験と ADR を根拠とする不変条件を持つ。`python3 scripts/dev/check-architecture-map.py`: exit 0（715 パス）。追加修正なし。
+- `bash scripts/dev/test-affected.sh`: exit 0（4484 passed / 17 skipped。health の38試験と地図の1試験も成功）。渡された WU 基準を変更せず実行した。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- 今回の変更範囲はこの進捗への検証結果追記のみ。ログは run の成果物ディレクトリの rules-missing-final-{test,clippy,fmt}.log。受け入れ条件の残件なし。

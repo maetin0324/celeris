@@ -89,6 +89,17 @@ attempt 3 の審査で条件 3 だけが不合格だった。地図のうち、�
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
 
+## 条件 1 の差し戻し対応（正本 CLAUDE.md の欠落を run 前に検出）
+
+- 差し戻し: `required_rules::preamble` は CLAUDE.md が無いと `Ok("")` を返し、正本を持つ repo で消えても Codex・Pi・ACP は規則なしで起動していた（旧試験 `preamble_is_empty_without_a_rules_source` が固定）。
+- 変更（commit「phase 1: 必須規則の正本欠落を run 前に検出する」）: CLAUDE.md が無いとき cwd で `git ls-files --error-unmatch -- CLAUDE.md`（index）と `git cat-file -e HEAD:./CLAUDE.md`（HEAD）を tokio::process で確かめ、どちらかが追跡していれば `required rules source is missing: <path>` の Err。adapter は `required rules delivery failed` で harness の起動前に落ちる。空の前置きは git でない dir と CLAUDE.md を追跡しない repo だけ。壊れた symlink・読めない・空は従来どおり Err。ADR D2 に付記。
+- 試験: 旧試験を削除し、`preamble_fails_when_the_tracked_rules_source_is_missing`（worktree で削除／index にだけある正本）と `preamble_is_empty_where_no_rules_source_is_tracked`（git でない dir／CLAUDE.md なしの repo）を追加。`codex`・`pi`・`acp` の各 `*_run_fails_when_the_tracked_rules_source_is_missing` は `fresh_worktree_with_rules` から CLAUDE.md を消して adapter.run し、Err と stub の marker file 不在を確かめる。
+- 検証（基準 HEAD a80f7a1b の上の作業ツリー）:
+  - `cargo nextest run -p task-worker -E 'test(/required_rules|rules_source|rules_are_unreadable|preamble/)'`: 51 passed。
+  - `bash scripts/dev/test-affected.sh`: exit 0（4484 passed / 17 skipped、source-size failure 0、地図 715 パス OK）。
+  - `cargo clippy --workspace -- -D warnings`: exit 0。
+  - `cargo fmt --all -- --check`: exit 0。
+
 ## main で既に解消済みだった項目
 
 - なし。13d64acd でも CLAUDE.md に symlink の説明と「Web UI・リモート実行・予算管理の禁止」が残り、Codex 経路は CLAUDE.md を読んでいなかった（上の実測表）。

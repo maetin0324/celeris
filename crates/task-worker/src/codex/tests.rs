@@ -2719,3 +2719,30 @@ async fn codex_run_fails_when_required_rules_are_unreadable() {
     );
     assert!(!started.exists());
 }
+
+/// 正本 CLAUDE.md を追跡する fresh worktree から CLAUDE.md が消えたら、codex を起動せずに run が落ちる。
+#[tokio::test]
+async fn codex_run_fails_when_the_tracked_rules_source_is_missing() {
+    use crate::test_support::*;
+    let root = tempfile::tempdir().unwrap();
+    let wt = fresh_worktree_with_rules(root.path(), AgentsMdFixture::Absent);
+    std::fs::remove_file(wt.join("CLAUDE.md")).unwrap();
+    let started = root.path().join("started");
+    let adapter = CodexAdapter::new(stub_codex(
+        root.path(),
+        &format!("touch '{}'\n{SKILLS_OK_SCRIPT}", started.display()),
+    ));
+    let mut req = sample_req(root.path().join("ws"));
+    req.work_dir = Some(wt.clone());
+    let sink = RecordingSink::default();
+    let err = adapter
+        .run(req, "run-rules-missing", default_limits(), &sink)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("required rules delivery failed"),
+        "{err}"
+    );
+    assert!(err.to_string().contains("missing"), "{err}");
+    assert!(!started.exists());
+}

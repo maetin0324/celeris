@@ -17,8 +17,10 @@ pub const RULES_HEADING: &str =
 
 /// `cwd` の `CLAUDE.md` を prompt の前置きにする。
 ///
-/// - `CLAUDE.md` が無い作業場所（規則を持たない repo）は空文字列。
-/// - 参照先の無い symlink・読めない・空は `Err`（呼び出し側は run を落とす）。
+/// - `CLAUDE.md` が無く、git が作業場所直下の `CLAUDE.md` を追跡していない作業場所（git でない dir・
+///   規則を持たない repo）は空文字列。
+/// - git の HEAD か index が `CLAUDE.md` を追跡しているのに作業ツリーに無い・参照先の無い symlink・
+///   読めない・空は `Err`（呼び出し側は run を落とす）。
 pub async fn preamble(cwd: &Path) -> std::io::Result<String> {
     let source = cwd.join(RULES_SOURCE);
     let rules = match tokio::fs::read_to_string(&source).await {
@@ -32,6 +34,13 @@ pub async fn preamble(cwd: &Path) -> std::io::Result<String> {
                         "required rules source is a dangling link: {}",
                         source.display()
                     ),
+                ));
+            }
+            // 正本を持つ repo で消えた規則と、規則を持たない作業場所を git の追跡で区別する。
+            if tracked_by_git(cwd).await {
+                return Err(std::io::Error::new(
+                    error.kind(),
+                    format!("required rules source is missing: {}", source.display()),
                 ));
             }
             return Ok(String::new());
@@ -53,6 +62,27 @@ pub async fn preamble(cwd: &Path) -> std::io::Result<String> {
         "{RULES_HEADING}\n\n{}\n\n---\n\n",
         rules.trim_end()
     ))
+}
+
+/// `cwd` が git の作業ツリーで、HEAD か index が `cwd` 直下の `CLAUDE.md` を追跡しているか。
+/// git でない dir・git を起動できないときは追跡なし（規則を要求しない）とする。
+async fn tracked_by_git(cwd: &Path) -> bool {
+    let succeeds = |args: &'static [&'static str]| async move {
+        tokio::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .is_ok_and(|status| status.success())
+    };
+    succeeds(&["ls-files", "--error-unmatch", "--", RULES_SOURCE]).await
+        || succeeds(&["cat-file", "-e", "HEAD:./CLAUDE.md"]).await
 }
 
 /// adapter 用: 前置きを読み、失敗は run を落とす `AdapterError` にする。

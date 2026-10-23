@@ -28,7 +28,6 @@ mod preflight_setup;
 
 const K2: &str = "k2-bf-xattr-restart-campaign";
 const K4: &str = "k4-cmp4-validity-analysis";
-const K4_INPUT: &str = "main-v3-n2-43706.tgz";
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
@@ -149,6 +148,18 @@ fn resolved_manifest() -> Value {
         .join("..")
         .join("agent-docs/progress/2026-10-16-mlsys-final/final.json");
     let mut v: Value = serde_json::from_slice(&fs::read(p).unwrap()).unwrap();
+    // 公開 materials（K2・K4 の materials/）の内容 hash は repo の現物から計算する（task.md を変えると固定値がずれる）。
+    {
+        let t = tempfile::tempdir().unwrap();
+        for c in ["k2-bf-xattr-restart-campaign", "k4-cmp4-validity-analysis"] {
+            copy(
+                &root().join("cases/final").join(c).join("materials"),
+                &t.path().join(c),
+            );
+        }
+        v["snapshot"]["materials_sha256"] =
+            json!(celeris_campaign::snapshot::hash_tree(t.path()).unwrap());
+    }
     for c in v["configs"].as_array_mut().unwrap() {
         match c["id"].as_str().unwrap() {
             "A" => c["harness_version"] = json!("claude-code@2.1.0"),
@@ -179,7 +190,6 @@ fn fx() -> Fx {
     copy(&root().join("cases"), &cases);
     copy(&root().join("fixtures/grade-cases"), &grade);
     fs::create_dir_all(&ins).unwrap();
-    fs::write(ins.join(K4_INPUT), b"fake archive for the test").unwrap();
     let repo = d.join("repo");
     fs::create_dir_all(repo.join("src")).unwrap();
     fs::write(repo.join("README"), "k2 initial tree").unwrap();
@@ -205,12 +215,10 @@ fn fx() -> Fx {
         c["initial"]["submodules"] = json!([]);
         c["snapshot"]["repo_commit"] = json!(li.commit);
     });
-    edit(cases.join("final").join(K4).join("case.json"), &|c| {
-        c["inputs"][0]["sha256"] = json!(format!(
-            "{:x}",
-            Sha256::digest(b"fake archive for the test")
-        ));
-    });
+    // K4 の固定入力 tgz は合成 raw で代用（公開 inputs と grade-case の隣に同じ tgz。case.json を再固定）。
+    celeris_campaign::cells_validity::synth::healthy()
+        .install_k4_fixture(&grade, &cases, &ins)
+        .unwrap();
     let (m, k) = (d.join("materials"), d.join("kb"));
     for c in [K2, K4] {
         copy(
@@ -696,4 +704,34 @@ fn runbook_does_not_redirect_into_out() {
         }
     }
     assert!(seen > 0);
+}
+
+/// Declaration-only lock can be frozen before runtime approval. It creates no out,
+/// and still rejects a modified grader instead of sealing inconsistent assets.
+#[test]
+fn asset_lock_cli_needs_no_runtime_and_rejects_changed_grade_case() {
+    let f = fx();
+    let result = bin("lock", &f, &[]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let lock: CampaignLock = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(lock, f.lock());
+    assert!(
+        !f.out().exists(),
+        "stdout only; no environment or trial state"
+    );
+    let p = f
+        .inp
+        .grade_cases_root
+        .join("final")
+        .join(K4)
+        .join(format!("{K4}.json"));
+    fs::write(p, "{}").unwrap();
+    let result = bin("lock", &f, &[]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("grade-case hash"));
+    assert!(!f.out().exists());
 }

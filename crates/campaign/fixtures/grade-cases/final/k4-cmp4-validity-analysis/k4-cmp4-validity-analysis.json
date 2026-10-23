@@ -4,6 +4,11 @@
   "split": "final",
   "recompute": {
     "report": "report.md",
+    "input_archive": {
+      "path": "main-v3-n2-43706.tgz",
+      "sha256": "128057cf4016535941963fc4142ba424c05c65889905ca2bbcc190f6161077a1",
+      "extract_to": "inputs"
+    },
     "pinned_raw": {
       "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep1/w1a/cell.json": "6fa1a9d94d6e794632aad66f608e0f30670cdc38dea7f1fb168e069619e21c19",
       "inputs/runs/43706-20261008T045834Z/cells/benchfs/rep1/w1b/cell.json": "e52762d2730727d6045f65320a4a94d5e2a19a41f650e498a780af53de8bb4e8",
@@ -34,7 +39,9 @@
       "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w1a/cell.json": "bc57e6943165e627e16003179758959cbf753727f317f422de0a21b6edaa721c",
       "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w1b/cell.json": "d3855aa94d95f57bfe49717bea4ca4c2c872fb723622bddd1ec6da8348e63069",
       "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w2/cell.json": "52012e627c5c9d21cf0e0708a13d55fe5a6b348165a2a35dbb8b81a6f0642f81",
-      "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w3/cell.json": "1d5cbbe0b8dfdc010792b08520642de473c2d6f17e96d8c1c90990412d84732e"
+      "inputs/runs/43706-20261008T045834Z/cells/unifyfs/rep2/w3/cell.json": "1d5cbbe0b8dfdc010792b08520642de473c2d6f17e96d8c1c90990412d84732e",
+      "inputs/runs/43706-20261008T045834Z/planned-cells.json": "0b08cc498de34c30af1b8311529173f3cd2b56b1b8ea9b310797f1df24f8f3bb",
+      "inputs/review28/qstat-43706.txt": "e72ca558c377cf1d152531ce25a2e8d3d7b52f97e040c34a0d24592fcedf68ac"
     },
     "metrics": [
       {
@@ -157,6 +164,21 @@
         "agg": "count",
         "tolerance_rel": 0.0
       }
-    ]
+    ],
+    "cells": {
+      "run": "inputs/runs/43706-20261008T045834Z",
+      "planned": "planned-cells.json",
+      "jobs": {
+        "43706": "inputs/review28/qstat-43706.txt"
+      },
+      "table": "results/cells.csv",
+      "api": {
+        "benchfs": "BENCHFS",
+        "chfs": "CHFS",
+        "gekkofs": "POSIX",
+        "unifyfs": "POSIX"
+      },
+      "tolerance_rel": 0.001
+    }
   }
 }

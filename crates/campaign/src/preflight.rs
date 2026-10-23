@@ -1442,6 +1442,11 @@ fn check_grader(a: &mut Acc, case: &crate::cases::Case, root: &Path) {
         a.miss("graders", format!("{id}: grade-case has no check"));
     }
     let dir = p.parent().map(Path::to_path_buf).unwrap_or_default();
+    if let Some(r) = &g.recompute
+        && let Some(arc) = &r.input_archive
+    {
+        check_input_archive(a, case, &dir, r, arc);
+    }
     if let Some(i) = &g.implementation {
         let groups = [
             (&i.pristine_dir, &i.tests),
@@ -1466,6 +1471,113 @@ fn check_grader(a: &mut Acc, case: &crate::cases::Case, root: &Path) {
                 }
             }
         }
+    }
+}
+
+/// grader の固定入力 tgz（ADR 2026-10-23-k4-cells-validity-grading D3）: grade-case の隣に実在し sha256 が固定と一致し、
+/// 公開 `case.inputs[]` の同名入力と同じ bytes で、展開でき、展開した raw が `pinned_raw`・`cells` の参照と合うこと。
+/// 欠けていれば投入前に拒否する（grader はこれを env_failure にするので、ここで止める）。
+fn check_input_archive(
+    a: &mut Acc,
+    case: &crate::cases::Case,
+    case_dir: &Path,
+    spec: &crate::grader::case::RecomputeSpec,
+    arc: &crate::grader::case::InputArchive,
+) {
+    let id = &case.id;
+    if !rel_ok(&arc.path) || !rel_ok(&arc.extract_to) {
+        a.miss("graders", format!("{id}: input_archive path is unsafe"));
+        return;
+    }
+    let p = case_dir.join(&arc.path);
+    match sha256_file(&p) {
+        Err(_) => {
+            a.miss(
+                "graders",
+                format!(
+                    "{id}: grader input archive {} is missing next to the grade-case (stage it: celeris-campaign stage-grader-inputs --grade-case-root <dir> --inputs-src <dir>)",
+                    arc.path
+                ),
+            );
+            return;
+        }
+        Ok(h) if h != arc.sha256 => {
+            a.miss(
+                "graders",
+                format!(
+                    "{id}: grader input archive {} sha256 {h} differs from the pinned {}",
+                    arc.path, arc.sha256
+                ),
+            );
+            return;
+        }
+        Ok(_) => {}
+    }
+    let name = Path::new(&arc.path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match case.inputs.iter().find(|i| i.name == name) {
+        None => a.miss(
+            "graders",
+            format!("{id}: the public case declares no input named {name} (the worker and the grader must read the same archive)"),
+        ),
+        Some(i) if i.sha256 != arc.sha256 => a.miss(
+            "graders",
+            format!("{id}: grader input archive {name} sha256 differs from the public input's sha256 {}", i.sha256),
+        ),
+        Some(_) => {}
+    }
+    let tmp = match tempfile::tempdir() {
+        Ok(t) => t,
+        Err(e) => {
+            a.miss(
+                "graders",
+                format!("{id}: cannot create a scratch dir to extract the grader archive: {e}"),
+            );
+            return;
+        }
+    };
+    let dest = tmp.path().join(&arc.extract_to);
+    if let Err(e) = fs::create_dir_all(&dest)
+        .map_err(|e| e.to_string())
+        .and_then(|()| crate::asset_assembly::extract_tgz(&p, &dest))
+    {
+        a.miss(
+            "graders",
+            format!(
+                "{id}: grader input archive {} could not be extracted: {e}",
+                arc.path
+            ),
+        );
+        return;
+    }
+    let mut bad = 0usize;
+    for (rel, want) in &spec.pinned_raw {
+        let ok = rel_ok(rel) && sha256_file(&tmp.path().join(rel)).is_ok_and(|h| &h == want);
+        if !ok {
+            bad += 1;
+            if bad <= 5 {
+                a.miss(
+                    "graders",
+                    format!("{id}: extracted raw {rel} is missing or differs from pinned_raw"),
+                );
+            }
+        }
+    }
+    if bad > 5 {
+        a.miss(
+            "graders",
+            format!("{id}: {bad} pinned raw files are missing or differ in total"),
+        );
+    }
+    if let Some(cs) = &spec.cells
+        && let Err(e) = crate::cells_validity::compute(tmp.path(), cs)
+    {
+        a.miss(
+            "graders",
+            format!("{id}: cells validity cannot be recomputed from the extracted archive: {e}"),
+        );
     }
 }
 

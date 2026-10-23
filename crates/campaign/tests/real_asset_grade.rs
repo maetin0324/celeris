@@ -494,6 +494,9 @@ fn k4_fixture_raw_recompute_matches_and_rejects_a_wrong_or_tampered_report() {
     let t = tempfile::tempdir().expect("tmp");
     let art = t.path().join("artifact");
     let spec = g.recompute.as_mut().expect("recompute");
+    // この試験は metric 定義だけを使い raw を合成する（固定 tgz とセル有効性は実物検証・k4_cells_validity が見る）。
+    spec.input_archive = None;
+    spec.cells = None;
     let mut seen = std::collections::BTreeMap::new();
     for (n, m) in spec.metrics.iter().enumerate() {
         let Source::Json { files, pointer } = &m.source else {
@@ -809,10 +812,16 @@ fn real_k4_raw_recompute_matches_the_grader() {
         "128057cf4016535941963fc4142ba424c05c65889905ca2bbcc190f6161077a1",
         "raw hash が case.json の固定と違う"
     );
-    let g = load(K4);
     let t = tempfile::tempdir().expect("tmp");
-    let art = t.path().join("artifact");
-    fs::create_dir_all(art.join("inputs")).expect("mkdir");
+    // grader 側の写し: grade-case の隣に固定 tgz を置く（grader が自分で展開する）。
+    let cdir = t.path().join("case");
+    copy_dir(&case_dir(K4), &cdir);
+    let g = GradeCase::load(&cdir.join(format!("{K4}.json"))).expect("grade-case");
+    let rec = g.recompute.as_ref().expect("recompute");
+    let arc = rec.input_archive.as_ref().expect("input_archive");
+    fs::copy(&tgz, cdir.join(&arc.path)).expect("copy tgz");
+    let raw = t.path().join("raw");
+    fs::create_dir_all(raw.join("inputs")).expect("mkdir");
     sh(
         t.path(),
         "tar",
@@ -820,12 +829,34 @@ fn real_k4_raw_recompute_matches_the_grader() {
             "-xzf",
             tgz.to_str().expect("u8"),
             "-C",
-            art.join("inputs").to_str().expect("u8"),
+            raw.join("inputs").to_str().expect("u8"),
         ],
     );
-    for c in [1.0, 1.06] {
-        w(&art.join("report.md"), &oracle(&g, &art, c));
-        let want = if c == 1.0 { Status::Pass } else { Status::Fail };
-        assert_eq!(grade_recompute(&g, &art), want, "corrupt x{c}");
-    }
+    let cs = rec.cells.as_ref().expect("cells");
+    let exp = celeris_campaign::cells_validity::compute(&raw, cs).expect("expected");
+    let counts = exp.counts();
+    assert_eq!((counts["cells_total"], counts["cells_valid"]), (32.0, 30.0));
+    let art = t.path().join("artifact");
+    w(&art.join("results/cells.csv"), &exp.csv());
+    let run = |report: &str| {
+        w(&art.join("report.md"), report);
+        let scratch = t.path().join("scratch");
+        fs::create_dir_all(&scratch).expect("scratch");
+        let r = grade(
+            &g,
+            &art,
+            &GradeOptions {
+                case_dir: cdir.clone(),
+                work_root: scratch,
+                runner: &celeris_campaign::grader::NoRunner,
+                observed_jobs: None,
+                initial_tree: None,
+            },
+        );
+        (r.checks.recompute.status, r.failure_class)
+    };
+    let (st, fc) = run(&(oracle(&g, &raw, 1.0) + &exp.metric_lines()));
+    assert_eq!((st, fc), (Status::Pass, None));
+    let (st, fc) = run(&(oracle(&g, &raw, 1.06) + &exp.metric_lines()));
+    assert_eq!((st, fc), (Status::Fail, Some(FailureClass::ModelFailure)));
 }

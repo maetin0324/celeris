@@ -249,3 +249,84 @@ impl Seeder<'_> {
         }
     }
 }
+
+/// grade-case の `recompute.input_archive`（評価側の固定入力 tgz）を `<inputs_src>/<name>` から grade-case の隣へ写す
+/// （ADR 2026-10-23-k4-cells-validity-grading D3）。`only` があればその case id だけ（manifest の problems）。sha256 が grade-case の固定と違えば写さず Err。既に同じ bytes が
+/// 在れば何もしない。全 case を照合し終えてから写すので、1 件でも Err なら grade-case の隣には何も置かない。
+/// 戻り値は写した一覧（launcher の prepare が表示する）。
+pub fn stage_grader_inputs(
+    grade_cases_root: &Path,
+    inputs_src: &Path,
+    only: Option<&[String]>,
+) -> Result<Vec<String>, String> {
+    use crate::grader::{GradeCase, safe_join, sha256_file};
+    let mut todo = Vec::new();
+    for split in ["dev", "final"] {
+        let Ok(rd) = std::fs::read_dir(grade_cases_root.join(split)) else {
+            continue;
+        };
+        let mut dirs: Vec<_> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        dirs.sort();
+        for case_dir in dirs {
+            let id = case_dir
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let cp = case_dir.join(format!("{id}.json"));
+            if !cp.is_file() || only.is_some_and(|o| !o.contains(&id)) {
+                continue;
+            }
+            let g = GradeCase::load(&cp)?;
+            let Some(a) = g.recompute.as_ref().and_then(|r| r.input_archive.as_ref()) else {
+                continue;
+            };
+            let dest = safe_join(&case_dir, &a.path)?;
+            if let Ok(h) = sha256_file(&dest) {
+                if h == a.sha256 {
+                    continue;
+                }
+                return Err(format!(
+                    "{id}: {} already exists with sha256 {h} != the pinned {} (not overwritten)",
+                    a.path, a.sha256
+                ));
+            }
+            let name = Path::new(&a.path)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let src = inputs_src.join(&name);
+            let h = sha256_file(&src).map_err(|_| {
+                format!(
+                    "{id}: grader input archive {name} is not in {} (blocker: place the pinned tgz there)",
+                    inputs_src.display()
+                )
+            })?;
+            if h != a.sha256 {
+                return Err(format!(
+                    "{id}: {}/{name} sha256 {h} differs from the grade-case pin {}",
+                    inputs_src.display(),
+                    a.sha256
+                ));
+            }
+            todo.push((id, name, src, dest));
+        }
+    }
+    let mut done = Vec::new();
+    for (id, name, src, dest) in todo {
+        if let Some(d) = dest.parent() {
+            std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+        }
+        let tmp = dest.with_extension("tgz.partial");
+        if let Err(e) = std::fs::copy(&src, &tmp) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("{}: {e}", tmp.display()));
+        }
+        std::fs::rename(&tmp, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+        done.push(format!("{id}: {name} -> {}", dest.display()));
+    }
+    Ok(done)
+}

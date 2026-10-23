@@ -62,7 +62,7 @@ CAP_ENV=…/cap-env.json             # celeris.campaign-cap-env/1（cap-runbook 
 確定済み（2026-10-19、`agent-docs/progress/2026-10-19-main-config/`）:
 - B・C は同じ `routing.models=["claude-sonnet-5-5"]`・`routing.run_harnesses=["claude-code"]`・`lower_policy=mlsys-min-1`。方策だけが違う（B=fixed、C=jev-1）。A は claude-code / claude-sonnet-5-5 で集合の内側。`cap-probe-*` は run_harnesses に入れない。
 - C は `no_evidence_table=true`（根拠表なし。`effective_evidence_mode=none`）、B は根拠表欄なしで none。**`evidence_table_id` と `celerisctl routing evidence` の手順は無い（消した）。latest へ fallback しない。**
-- 比較: primary A vs B、secondary B vs C。subset は K2・K4。K2 `judged_scope=[implementation, experiment]`（analysis / review は `not_judged`。維持する。ADR 2026-10-18-k2-judged-scope）、K4 は analysis。
+- 比較: primary A vs B、secondary B vs C。subset は K2・K4。K2 `judged_scope=[implementation, experiment]`（analysis / review は `not_judged`。維持する。ADR 2026-10-18-k2-judged-scope）、K4 は analysis（採点はセル有効性の再計算: `planned-cells.json` の期待集合・`review28/qstat-43706.txt` の job 終了状態・実効 fsync/checkRead/api・`results/cells.csv` と件数 metric の照合。ADR 2026-10-23-k4-cells-validity-grading。grade-case の `input_archive` は launcher の `prepare` が `INPUTS_SRC` から grade-case の隣へ写し、preflight が実在・sha256・展開を確かめる）。
 - `$P/task-template.json`: `project_id=01M2WTS3DKNZBSZ2JMVB4CZMBW`、acceptance は reviewer、`"max_turns": 100` を必ず書く（無い雛形は preflight・`--task-template` 読み込みで拒否される。書かないと task 既定の 10 に落ち、worker・reviewer が 10 turn で止まる。worker と reviewer は同じ task の max_turns を `--max-turns` に渡す。ADR 2026-10-21-grader-own-input-extraction-and-max-turns D2）。`repos`・`workspace_mode`・`max_tokens` は書かない（拒否される。実行器が trial workspace を作業場所にし、`repos: []`・`max_tokens=per_case` を埋める。ADR 2026-10-20-mlsys-main2-fixes D1・D2）。
 - `budget.token_basis=all`。`lower_policy`/`online_update` は変えない。
 
@@ -80,7 +80,7 @@ CAP_ENV=…/cap-env.json             # celeris.campaign-cap-env/1（cap-runbook 
 | 試行数・予算 | 主比較は A・B × K2・K4 × 1 rep = 4 試行。承認枠（§冒頭）は **主副で共有する 1 本**で、副比較（B vs C）の枠を別に足さない。`per_arm` 1,300,000 は A・B 各腕の上限で、全体 3,000,000 を超える分の二重計上はしない |
 | K2 / K4 | K2 `judged_scope=[implementation, experiment]`（analysis / review は `not_judged`）、K4 は analysis。維持する |
 
-固定資産の整合は `python3 scripts/campaign/check-main-pins.py --root $R`（読むだけ。設定・実在 path・lock/hash・公開側への private 混入・実 K2 preflight 証跡を内容検証し、不足があれば非 0。**手順を始める前と、変えた後に必ず通す**）。
+固定資産の整合は `python3 scripts/campaign/check-main-pins.py --root $R`（読むだけ。別の測定 bundle は `--pins <json>`（または `$R/pinned/main/pins.json`）で承認値を渡す。既定は mlsys-main-1 の値。grade-case の `input_archive` が grade-case の隣に固定 sha256 で在ることも検査する。設定・実在 path・lock/hash・公開側への private 混入・実 K2 preflight 証跡を内容検証し、不足があれば非 0。**手順を始める前と、変えた後に必ず通す**）。
 
 ### env-lock/3 と campaign lock（通常の生成関数。watch 不要・無試行）
 実 root の `pinned/main/{env-lock.json,lock.json}` は `celeris-campaign offline-lock`（通常の `preflight::expected_lock` → `env_lock::establish` → `lock_exec::save` を呼ぶ最小入口。LLM に接続せず `paid_calls_made=0`）で作る。**モデル一覧（`--models-evidence`）は launcher.env の測定 daemon の `GET /api/v1/llm/models` から取る。本番 daemon の一覧は使わない**（source が違えば watch と preflight の env-lock 照合で拒否される。2026-10-21 の mlsys-main-3 は本番一覧 72 件で作った lock が測定 daemon 14 件と食い違い watch で停止した。ADR `agent-docs/adr/2026-10-21-preflight-env-lock-check.md`）。生成は launcher の `lock` 段で行う（測定 daemon を start した後。保存→sha256→offline-lock を 1 段で行い、`<LOCK_OUT>.measure-llm-models.json` に証跡を残す）:
@@ -130,7 +130,7 @@ mkdir -p $M $K $R $I
 for c in k2-bf-xattr-restart-campaign k4-cmp4-validity-analysis; do cp -r crates/campaign/cases/final/$c/materials $M/$c; done
 cp -r crates/campaign/cases/final/k2-bf-xattr-restart-campaign/kb/. $K/
 # R: k2 の初期 tree（BenchFS 086c4618。case.json の initial.fetch の手順）。k4 は repo 不要
-cp <main-v3-n2-43706.tgz の実物> $I/main-v3-n2-43706.tgz
+cp <main-v3-n2-43706.tgz の実物> $I/main-v3-n2-43706.tgz   # prepare が同じ tgz を sha256 照合のうえ GRADE_CASES_ROOT/final/k4-…/ へ写す（grader が自分で展開する。ADR 2026-10-23-k4-cells-validity-grading D3）
 # R（K2 初期 tree）の組立: bundle を clone → commit 086c4618 を checkout → submodule 5 件を lock の path へ snapshot tar 展開 → .git を消す
 # （手順の実例: pinned/build-srcs.sh。asset_assembly::assemble_initial と同じ）
 # K2 の組立後 tree には tree 内 symlink が 3 件ある（lib/locusta/CLAUDE.md・…/centos6/run-test.sh・…/ucx1-sys/ucx/README）。修正後 binary（§3a）は tree 内に閉じた symlink を許し、lock の content_sha256 と両立する（解決済み。実 K2 preflight exit 0 の証跡あり）。修正前の binary では preflight が exit 1 になる

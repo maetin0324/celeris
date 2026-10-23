@@ -38,3 +38,7 @@ config/secrets/
 # Celeris の run 作業場所が書く中間物（ログ・result.json 等）。repository の成果物ではない
 # （commit e49b57cb で artifacts/review.json を誤って追跡した事故の再発防止）。
 /artifacts/
+
+# 評価側の固定入力 tgz（grade-case の input_archive）。repo には置かず launcher の prepare が INPUTS_SRC から写す。
+crates/campaign/fixtures/grade-cases/**/*.tgz
+crates/campaign/fixtures/grade-cases/**/*.tgz.partial

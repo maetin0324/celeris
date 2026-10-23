@@ -115,19 +115,34 @@ pub fn fixture(root: &Path, overrides: Vec<(String, String)>) -> Grading {
 
 pub fn k3_grading(root: &Path) -> Option<Grading> {
     use celeris_campaign::grader::case::{Agg, Source};
-    let tgz = std::path::PathBuf::from(std::env::var("CAMPAIGN_K3_TGZ").unwrap_or_else(|_| {
-        "/local/celeris/data/workspaces/01M45ACZQWTW9BP8WVY8KAW9TC/artifacts/locusta-latency/raw/main-43223.tgz".into()
-    }));
-    if !tgz.is_file() {
+    let tgz = std::env::var("CAMPAIGN_K3_TGZ")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .into_iter()
+        .chain([
+            std::path::PathBuf::from("/local/celeris/data/scratch/mlsys-pilot-2/inputs/main-43223.tgz"),
+            std::path::PathBuf::from("/local/celeris/data/workspaces/01M45ACZQWTW9BP8WVY8KAW9TC/artifacts/locusta-latency/raw/main-43223.tgz"),
+        ])
+        .find(|p| p.is_file());
+    let Some(tgz) = tgz else {
         return None;
-    }
+    };
     assert_eq!(
         sha(&fs::read(&tgz).unwrap()),
         "bdb155d4c1690ae5743621d129c270fcc53c919751d62c56d0c4395b74d2e90f",
         "原票の hash が case.json の固定とずれた"
     );
-    let case = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/grade-cases/dev/k3-locusta-ab-analysis/k3-locusta-ab-analysis.json");
+    // grader 側の写し: 固定 tgz は grade-case の隣（grader が自分で展開する。repo には置かない）。
+    let case_dir = root.join("grade-case");
+    fs::create_dir_all(&case_dir).unwrap();
+    let case = case_dir.join("k3-locusta-ab-analysis.json");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/grade-cases/dev/k3-locusta-ab-analysis/k3-locusta-ab-analysis.json"),
+        &case,
+    )
+    .unwrap();
+    fs::copy(&tgz, case_dir.join("main-43223.tgz")).unwrap();
     let g = GradeCase::load(&case).unwrap();
     let good = root.join("good");
     fs::create_dir_all(good.join("inputs")).unwrap();

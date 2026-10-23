@@ -20,7 +20,7 @@
   ],
   "grade_case_ref": {
     "path": "dev/k3-locusta-ab-analysis/k3-locusta-ab-analysis.json",
-    "sha256": "3216c548ce8b14aef16293f4d96899c7eb67e3e9c68ad77706dad0b9794004a9"
+    "sha256": "22960f91bfbfeb82b334a842bcb5065cd1d77f165cf357bb502f9e1c130a8a57"
   },
   "id": "k3-locusta-ab-analysis",
   "inputs": [
@@ -33,6 +33,9 @@
       "name": "main-43223.tgz",
       "sha256": "bdb155d4c1690ae5743621d129c270fcc53c919751d62c56d0c4395b74d2e90f"
     }
+  ],
+  "judged_scope": [
+    "analysis"
   ],
   "kind": "real",
   "private_ref": {

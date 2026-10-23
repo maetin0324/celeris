@@ -256,6 +256,10 @@ cmd_prepare() {
     done
     [ -z "$miss" ] || die "required input missing:$miss"
     "$CAMPAIGN_BIN" validate --manifest "$MANIFEST" >/dev/null || die "manifest validate failed"
+    # 評価側の固定入力 tgz（grade-case の input_archive）を INPUTS_SRC から grade-case の隣へ写す
+    # （ADR 2026-10-23-k4-cells-validity-grading D3。sha256 が合わなければ写さず止まる。preflight が実在・一致・展開を確かめる）。
+    [ -z "$GRADE_CASES_ROOT" ] || "$CAMPAIGN_BIN" stage-grader-inputs --manifest "$MANIFEST" --grade-case-root "$GRADE_CASES_ROOT" --inputs-src "$INPUTS_SRC" \
+        || die "stage-grader-inputs failed: the grader's pinned input archive is missing or differs from INPUTS_SRC"
     config_check >/dev/null || {
         config_check >&2 || true
         die "config-check failed: the measurement config is not isolated from normal operation"

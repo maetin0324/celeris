@@ -6,6 +6,7 @@ pub mod budget;
 pub mod cap_probe;
 pub mod cases;
 pub mod celeris_exec;
+pub mod cells_validity;
 pub mod checker;
 pub mod csv;
 pub mod curl_transport;

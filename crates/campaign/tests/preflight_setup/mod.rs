@@ -12,7 +12,6 @@ use celeris_campaign::{
     snapshot::hash_tree,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 pub const K4_INPUT: &str = "main-v3-n2-43706.tgz";
 
@@ -61,6 +60,18 @@ pub fn resolved_manifest() -> Value {
         .join("../../agent-docs")
         .join("progress/2026-10-16-mlsys-final/final.json");
     let mut v: Value = serde_json::from_slice(&fs::read(p).unwrap()).unwrap();
+    // 公開 materials（K2・K4 の materials/）の内容 hash は repo の現物から計算する（task.md を変えると固定値がずれる）。
+    {
+        let t = tempfile::tempdir().unwrap();
+        for c in ["k2-bf-xattr-restart-campaign", "k4-cmp4-validity-analysis"] {
+            copy(
+                &root().join("cases/final").join(c).join("materials"),
+                &t.path().join(c),
+            );
+        }
+        v["snapshot"]["materials_sha256"] =
+            json!(celeris_campaign::snapshot::hash_tree(t.path()).unwrap());
+    }
     for c in v["configs"].as_array_mut().unwrap() {
         match c["id"].as_str().unwrap() {
             "A" => c["harness_version"] = json!("claude-code@2.1.0"),
@@ -168,14 +179,12 @@ pub fn setup() -> Setup {
     fs::create_dir_all(&repo).unwrap();
     fs::write(repo.join("README"), "k2 initial tree").unwrap();
     pin_synthetic_initial(&cases, &repo);
-    fs::write(ins.join(K4_INPUT), b"fake archive for the test").unwrap();
-    let cj = cases.join("final/k4-cmp4-validity-analysis/case.json");
-    let mut c: Value = serde_json::from_slice(&fs::read(&cj).unwrap()).unwrap();
-    c["inputs"][0]["sha256"] = json!(format!(
-        "{:x}",
-        Sha256::digest(b"fake archive for the test")
-    ));
-    fs::write(&cj, c.to_string()).unwrap();
+    // K4 の固定入力 tgz（公開 inputs と grader の隣）は合成 raw で代用し、grade-case と case.json を再固定する。
+    let grade = d.join("grade-cases");
+    copy(&root().join("fixtures/grade-cases"), &grade);
+    celeris_campaign::cells_validity::synth::healthy()
+        .install_k4_fixture(&grade, &cases, &ins)
+        .unwrap();
     for c in ["k2-bf-xattr-restart-campaign", "k4-cmp4-validity-analysis"] {
         copy(
             &root().join("cases/final").join(c).join("materials"),
@@ -198,7 +207,7 @@ pub fn setup() -> Setup {
         input_override: None,
         cases_root: cases,
         grader_root: root().join("fixtures/grader-private"),
-        grade_cases_root: root().join("fixtures/grade-cases"),
+        grade_cases_root: grade,
         a_program: "claude".into(),
         api_url: Some(MEASURE_API_URL.into()),
         token_env: Some("CELERIS_CAMPAIGN_TOKEN".into()),

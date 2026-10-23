@@ -15,6 +15,11 @@ import re
 import sys
 import tomllib
 
+# 既定は mlsys-main-1 の承認値。別の bundle は `--pins <json>`（または `<root>/pinned/main/pins.json`）で上書きする
+# （ADR 2026-10-23-k4-cells-validity-grading D3。旧 main-1 bundle の検査は既定値のまま通る）。
+PIN_KEYS = ("MODEL", "HARNESS", "CAMPAIGN_ID", "RELEASE", "A_VERSION", "INPUT_MANIFEST_SHA", "MATERIALS_SHA", "KB_SHA",
+            "CAMPAIGN_SHA", "CAMPAIGN_BIN_SHA", "CAMPAIGN_BIN_REL", "K2_COMMIT", "PROBLEMS", "A_PROGRAM", "A_PROGRAM_SHA",
+            "MEASURE_ROOT_PREFIX")
 MODEL = "claude-sonnet-5-5"
 HARNESS = "claude-code"
 CAMPAIGN_ID = "mlsys-main-1"
@@ -127,7 +132,9 @@ def check_manifest(layout, problems):
         problems.append("final.json: primary must be exactly [A, B] (C must not be in the main comparison)")
     if m.get("problems") != PROBLEMS:
         problems.append(f"final.json: problems must be {PROBLEMS}")
-    if m.get("repeats") != 1:
+    # repeats は旧 manifest では最上位、現行 manifest では experiment_sets の各 set が持つ。
+    reps = [m["repeats"]] if "repeats" in m else [x.get("repeats") for x in (m.get("experiment_sets") or []) if "repeats" in x]
+    if any(r != 1 for r in reps):
         problems.append("final.json: repeats must be 1")
     cfgs = {c.get("id"): c for c in m.get("configs", [])}
     for cid in ("A", "B"):
@@ -218,8 +225,8 @@ def check_daemon(layout, env, problems):
     if re.search(r"(api[_-]?key|secret|password)\s*=\s*\"[^\"]+\"", raw, re.I):
         problems.append("daemon.toml: contains an inline secret value")
     for k in ("db", "workspace_root"):
-        if not str(d.get(k, "")).startswith("/local/celeris/data/measure/main/"):
-            problems.append(f"daemon.toml: {k} must live under /local/celeris/data/measure/main/")
+        if not str(d.get(k, "")).startswith(MEASURE_ROOT_PREFIX):
+            problems.append(f"daemon.toml: {k} must live under {MEASURE_ROOT_PREFIX}")
     listen = (d.get("api") or {}).get("listen", "")
     if not listen.startswith("127.0.0.1:") or listen.endswith((":7710", ":7720", ":7721")):
         problems.append(f"daemon.toml: api.listen must be loopback and not a production port (got {listen!r})")
@@ -264,8 +271,9 @@ def check_fixed(layout, canaries, problems):
                 problems.append(f"fixed: missing {sub}/final/{p}")
             elif name and not os.path.isfile(os.path.join(d, name)):
                 problems.append(f"fixed: missing {sub}/final/{p}/{name}")
-    lock = load_json(os.path.join(layout["fixed_dir"], "cases", "final", PROBLEMS[0], "initial.lock.json"),
-                     problems, "K2 initial.lock.json")
+    k2 = next((p for p in PROBLEMS if p.startswith("k2-")), None)
+    lock = load_json(os.path.join(layout["fixed_dir"], "cases", "final", k2, "initial.lock.json"),
+                     problems, "K2 initial.lock.json") if k2 else None
     if lock is not None and lock.get("commit") != K2_COMMIT:
         problems.append("K2 initial.lock.json: commit differs from the approved K2 tree")
     private = [fx["GRADER_ROOT"], fx["GRADE_CASES_ROOT"]]
@@ -275,6 +283,8 @@ def check_fixed(layout, canaries, problems):
             a, b = os.path.realpath(pr), os.path.realpath(pu)
             if a == b or a.startswith(b + os.sep) or b.startswith(a + os.sep):
                 problems.append(f"isolation: private root overlaps public root: {pr} vs {pu}")
+    # grader の固定入力 tgz は公開入力と同じ bytes であるべきもの（同じ原票を作業者と grader が読む）。leak には数えない。
+    archive_shas = grade_case_archives(layout["fixed_dir"], problems)
     private_hashes = set()
     for pr in private:
         for f in files_under(pr):
@@ -300,7 +310,10 @@ def check_fixed(layout, canaries, problems):
                     data = fh.read()
             except OSError:
                 continue
-            if len(data) >= MIN_HASH_SIZE and hashlib.sha256(data).hexdigest() in private_hashes:
+            digest = hashlib.sha256(data).hexdigest() if len(data) >= MIN_HASH_SIZE else None
+            if digest in archive_shas:
+                continue
+            if digest is not None and digest in private_hashes:
                 problems.append(f"leak: public file is a copy of a private grader file: {pu}/{rel}")
             elif any(s in data for s in forbidden):
                 problems.append(f"leak: canary (forbidden) string in public input: {pu}/{rel}")
@@ -308,7 +321,60 @@ def check_fixed(layout, canaries, problems):
 
 A_PROGRAM = "/home/rmaeda/.local/share/claude/versions/2.1.303"
 A_PROGRAM_SHA = "375988f457756524234695cf2d8f64ace99c5f68682e47ea24862a843c191450"
+MEASURE_ROOT_PREFIX = "/local/celeris/data/measure/main/"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def load_pins(path, problems):
+    """pins.json の値で承認値を上書きする。未知の key・型違いは問題として数える。"""
+    d = load_json(path, problems, "pins.json")
+    if d is None:
+        return
+    for k in ("RELEASE", "A_VERSION", "CAMPAIGN_BIN_SHA", "A_PROGRAM"):
+        if not d.get(k):
+            problems.append(f"pins.json: {k}: pending: 人が記入")
+    for k, v in d.items():
+        if k not in PIN_KEYS:
+            problems.append(f"pins.json: unknown pin {k}")
+            continue
+        if not isinstance(v, type(globals()[k])):
+            problems.append(f"pins.json: {k} must be a {type(globals()[k]).__name__}")
+            continue
+        globals()[k] = v
+
+
+def grade_case_archives(fixed_dir, problems):
+    """grade-case の `recompute.input_archive`: grade-case の隣に実在し sha256 が固定と一致すること。戻り値は archive の sha256 の集合。"""
+    shas = set()
+    gc_root = os.path.join(fixed_dir, "grade-cases")
+    for split in ("dev", "final"):
+        d = os.path.join(gc_root, split)
+        if not os.path.isdir(d):
+            continue
+        for cid in sorted(os.listdir(d)):
+            path = os.path.join(d, cid, f"{cid}.json")
+            # 選ばれていない case（dev の K3 等）の原票は要らない。
+            if not os.path.isfile(path) or cid not in PROBLEMS:
+                continue
+            g = load_json(path, problems, f"grade-case {cid}")
+            arc = ((g or {}).get("recompute") or {}).get("input_archive")
+            if not arc:
+                continue
+            rel, want = arc.get("path", ""), arc.get("sha256", "")
+            if not rel or rel.startswith("/") or ".." in rel.split("/") or not HEX64.match(str(want)):
+                problems.append(f"grade-case {cid}: input_archive path/sha256 malformed")
+                continue
+            p = os.path.join(d, cid, rel)
+            if not os.path.isfile(p):
+                problems.append(f"grade-case {cid}: input archive {rel} is not staged next to the grade-case "
+                                f"(celeris-campaign stage-grader-inputs / launcher prepare)")
+                continue
+            got = sha256_file(p)
+            if got != want:
+                problems.append(f"grade-case {cid}: input archive {rel} sha256 differs from the pinned value")
+                continue
+            shas.add(got)
+    return shas
 
 
 def check_lock(layout, lock_dir, env, problems):
@@ -367,9 +433,10 @@ def check_lock(layout, lock_dir, env, problems):
             problems.append("lock.json: seal sha256 missing or malformed")
         cases = {c.get("id"): c for c in lk.get("cases", [])}
         if set(cases) < set(PROBLEMS):
-            problems.append("lock.json: cases must include K2 and K4")
-        init = (cases.get(PROBLEMS[0]) or {}).get("initial") or {}
-        if cases.get(PROBLEMS[0]) is not None and init.get("commit") != K2_COMMIT:
+            problems.append(f"lock.json: cases must include {', '.join(PROBLEMS)}")
+        k2 = next((p for p in PROBLEMS if p.startswith("k2-")), None)
+        init = (cases.get(k2) or {}).get("initial") or {}
+        if k2 and cases.get(k2) is not None and init.get("commit") != K2_COMMIT:
             problems.append("lock.json: K2 initial commit differs from the approved K2 tree")
         for c in lk.get("configs", (lk.get("execution") or {}).get("configs", [])):
             if c.get("model") != MODEL or c.get("model_version") != MODEL:
@@ -380,9 +447,20 @@ def check_lock(layout, lock_dir, env, problems):
             problems.append("env-lock.json / lock.json: campaign_sha256 disagree")
 
 
+def cap_probe_evidence():
+    """PROBLEMS に応じた cap-probe 証跡（K2: A と B、K4: A）。選ばれていない case の証跡は要らない。"""
+    k2 = next((p for p in PROBLEMS if p.startswith("k2-")), None)
+    k4 = next((p for p in PROBLEMS if p.startswith("k4-")), None)
+    out = []
+    if k2:
+        out += [("cap-a-k2.json", k2, "A"), ("cap-b.json", k2, "B")]
+    if k4:
+        out.append(("cap-a-k4.json", k4, "A"))
+    return out
+
+
 def check_evidence(layout, problems):
-    for name, case, arm in (("cap-a-k2.json", PROBLEMS[0], "A"), ("cap-a-k4.json", PROBLEMS[1], "A"),
-                            ("cap-b.json", PROBLEMS[0], "B")):
+    for name, case, arm in cap_probe_evidence():
         d = load_json(os.path.join(layout["evidence"], name), problems, name)
         if d is None:
             continue
@@ -415,12 +493,26 @@ def check_preflight_argv(layout, env, problems):
         problems.append("real K2 preflight argv: binary differs from launcher.env CAMPAIGN_BIN")
 
 
-def run_checks(root, lock_dir=None):
+def run_checks(root, lock_dir=None, pins=None):
     root = os.path.abspath(root)
     pinned = os.path.join(root, "pinned")
     main_dir = os.path.join(pinned, "main")
     fixed_dir = os.path.join(main_dir, "fixed")
-    layout = {
+    problems = []
+    pins = pins or (os.path.join(main_dir, "pins.json") if os.path.isfile(os.path.join(main_dir, "pins.json")) else None)
+    saved = {k: globals()[k] for k in PIN_KEYS}
+    try:
+        if pins:
+            load_pins(pins, problems)
+            if problems:
+                return problems
+        return _run_checks(layout_of(root, pinned, main_dir, fixed_dir), main_dir, lock_dir, problems)
+    finally:
+        globals().update(saved)
+
+
+def layout_of(root, pinned, main_dir, fixed_dir):
+    return {
         "root": root, "pinned": pinned, "main": main_dir, "fixed_dir": fixed_dir,
         "evidence": os.path.join(pinned, "evidence"),
         "fixed": {"CASES_ROOT": os.path.join(fixed_dir, "cases"),
@@ -428,9 +520,12 @@ def run_checks(root, lock_dir=None):
                   "GRADE_CASES_ROOT": os.path.join(fixed_dir, "grade-cases")},
         "src": {k: os.path.join(root, "measure-src", "main", k) for k in ("materials", "kb", "repo", "inputs")},
     }
+
+
+def _run_checks(layout, main_dir, lock_dir, problems):
+    root, fixed_dir = layout["root"], layout["fixed_dir"]
     if not os.path.isdir(main_dir):
         return [f"missing pinned main dir: {main_dir}"]
-    problems = []
     env = parse_env(os.path.join(main_dir, "launcher.env"), problems)
     if env is not None:
         check_env(layout, env, problems)
@@ -460,8 +555,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", required=True, help="成果物 root（pinned/ と measure-src/ を持つ dir）")
     ap.add_argument("--lock-dir", help="env-lock.json / lock.json の dir（既定 <root>/pinned/main）")
+    ap.add_argument("--pins", help="承認値の JSON（既定 <root>/pinned/main/pins.json があればそれ。無ければ mlsys-main-1 の値）")
     args = ap.parse_args(argv)
-    problems = run_checks(args.root, args.lock_dir)
+    problems = run_checks(args.root, args.lock_dir, args.pins)
     if problems:
         for p in problems:
             print(f"NG {p}", file=sys.stderr)

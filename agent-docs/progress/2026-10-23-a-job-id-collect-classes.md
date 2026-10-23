@@ -29,7 +29,7 @@ ADR: `agent-docs/adr/2026-10-23-a-submit-audit-and-collect-classes.md`。
 - scheduler・qsub はすべて stub/固定応答（origin=synthetic 相当）。実 cluster・実 LLM には触れていない。
 
 ## 検査結果
-- `bash scripts/dev/test-affected.sh`: exit 0（旧値。最終は下記の 2588 passed。対象 celeris, celeris-campaign, celerisctl, llm-proxy, task-dispatch）
+- `bash scripts/dev/test-affected.sh`: exit 0（過去の結果。今回の最終結果は末尾。対象 celeris, celeris-campaign, celerisctl, llm-proxy, task-dispatch）
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo fmt --all -- --check`: exit 0
 - 参考: `cargo clippy --all-targets` は main 既存の `crates/task-api/tests/common/cos_ops.rs:14` の needless_borrow で落ちる（本変更と無関係、未修正）。
@@ -50,20 +50,31 @@ ADR: `agent-docs/adr/2026-10-23-a-submit-audit-and-collect-classes.md`。
 
 ## 再試行での補完（attempt 2〜3 と差し戻し対応）
 
-main 反映 commit（rebase 後）: `011e11fb`（受理記録・track・台帳・分類）、`268bbde9`（GradeBinding への分類保持）、`4883fac6`（報告）、`d30deca4`（check/export の独立集計）と、本差し戻し対応の commit（unwrap 除去と報告の統合）。以前の報告にあった `e75f3e76`・`9481ce03`・`2e21d7ac` は rebase 前の hash で、現在の履歴の祖先ではない。確認した main は `13d64acd1780` のまま。
+実装 commit（現 worktree の rebase 後）: `472a3bc5`（受理記録・track・台帳・分類）、`a04963ae`（GradeBinding への分類保持）、`c60e320f`（報告）、`01891b39`（check/export の独立集計）、`d3e865fa`（unwrap 除去と報告統合）。operator 指定時の `011e11fb` / `268bbde9` / `4883fac6` / `d30deca4` はそれぞれ先頭 4 commit に対応する再 rebase 前の参照。現在の main/base は `d7cb0fd45926`。本 task の main 反映は未実施で、このブランチを提出する。今回の追加 commit は本節末尾の再検証記録を参照。
 
 ### 実装
-- `GradeOutcome::ObservationFailure(Vec<CollectIssue>)` で収集の分類と詳細を保持する。bind は非空の既知分類、dominant failure_class と grade の一致、final_pass=false を検査する（比較は文字列値で行い、unwrap を使わない）。observation 欄の無い従来の grade は従来どおり。
+- `GradeOutcome::ObservationFailure(Vec<CollectIssue>)` で収集の分類と詳細を保持する。bind は非空の既知分類、dominant failure_class と grade の一致、final_pass=false を検査する（シリアライズ失敗も拒否し、unwrap を使わない）。observation 欄の無い従来の grade は従来どおり。
 - check/export の `observation_failed` は収集失敗の cell 数、`observation_failures` は分類別 cell 数（複数分類の cell は重複するので和を分母に使わない）。executor の結果（passed/failed/timeout）と独立に全 cell で数える。排他の内訳用に `grader_observation_failed`（executor passed で収集失敗）を持ち、`failure_breakdown` はこれを使う。JSON・CSV の両方に出す。not_submitted 以外は complete=false とし、再収集・再採点の案内を出す。
-- 観測障害は workflow fault の `fault_breakdown` に混ぜない。`faults::reconcile` の `observation_breakdown`（注入状態 × observation_failed / no_collector_failure）が観測障害の軸で、`fault_breakdown` は注入状態 × executor/grade 結果のまま。
+- 観測障害の全 cell 集計は `fault_breakdown` から求めず、`faults::reconcile` の `observation_breakdown`（注入状態 × observation_failed / no_collector_failure）で独立に数える。`fault_breakdown` は注入状態 × executor/grade 結果のまま（executor passed の収集失敗は結果ラベル observation_failed が残る）。このラベルを workflow fault に起因する研究失敗と解釈しない。
 - 試験: `launcher` に取得失敗 → grade → binding → check/export の通常経路の確認を追加（再収集後に分類が消え、分母・時間・消費・trials.jsonl が不変、旧 grade は grades.history.jsonl に残る）。`grade_failure_class` は全 7 分類、重複不計上、矛盾した failure_class の拒否、failed/timeout cell の fetch_failed 計数を確認する。
 - 通知試験 `credential_wait_notify` の偽 webhook を、完全な要求だけを記録し受信記録を応答前に確定するよう局所修正した（試験のみ。本番の通知処理は不変）。
 - ADR `agent-docs/adr/2026-10-23-a-submit-audit-and-collect-classes.md` D6 に反映済み。
 
-### 最終検査（本差し戻し対応後）
+### 前回の検査（今回の再検証前）
 - `bash scripts/dev/test-affected.sh`: exit 0（2588 tests run: 2588 passed、4 skipped、doc tests 成功）
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo fmt --all -- --check`: exit 0
 
 ### 証拠の保存と測定開始条件
 実測定の raw・grade・集計は新規作成していない（試験は tempfile の合成データ）。既存の履歴は変更していない。K2/HPC 比較は引き続き**開始不可**: Sirius の qstat Variable_List に trial 印が残ることの実機確認（取得元: Sirius の scheduler 記録）、測定用 A の cap-env/prompt への wrapper 導入（設定元: 測定 campaign の A cap-env と case prompt）、タスク 1・2 の成立が必要。fixture の成功でこれらを代替しない。本番設定の変更・実 pilot・有料評価は実施していない。
+
+
+### 今回の最終再検証（run 01M5M30HXG5JM90KDZY5R7Y6MJ、attempt 2）
+
+- 追加 commit `708d124f`: 前回の決定的検査で失敗した worker_run_signal 試験を局所修正。PID ファイルの存在確認と echo の書き込みの間に空内容を読む競合があったため、一時ファイルから rename して完全な PID を公開する。本番実装の追加はない。
+- `bash scripts/dev/test-affected.sh`: **exit 0**。nextest **2594 passed / 5 skipped**（136 binaries、107.871 秒）。健全性の Python 試験 **38 passed**、doc test は 4 target とも 0 件・成功。前回失敗した signal 試験も対象に含む。
+- `cargo clippy --workspace -- -D warnings`: **exit 0**（警告 0、試験件数は該当なし）。
+- `cargo fmt --all -- --check`: **exit 0**（書式差分 0、試験件数は該当なし）。
+- ログの保存先: /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/ 内の retry2-test-affected.log、retry2-clippy.log、retry2-fmt.log。今回の報告更新 commit の hash は同ディレクトリの result.json に記録する。
+- unwrap 除去・旧 retry 文書削除・front matter 先頭への統合は `d3e865fa` で完了済み。今回、現履歴の commit 対応と集計説明を訂正した。実 raw/grade/集計の新規作成・上書きなし。main への反映は未実施。上記の実機・測定資産の未解決条件により K2/HPC 比較は引き続き開始不可。
+- 補助検査 `sh scripts/dev/progress-index.sh --check`: exit 1。既存の他タスク進捗（例: 2026-10-22-plan-issue-answer-replans.md）の title/updated 欠落で失敗。本タスクの進捗は指摘なし。範囲外文書は変更していない（詳細 retry2-progress-check.log）。必須3検査は上記のとおり全て成功。

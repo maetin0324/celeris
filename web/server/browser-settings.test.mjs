@@ -5,12 +5,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { createApp } from "./app.js";
+import { acceptFixtureRequest } from "./test-support/http-fixture.mjs";
 
 test("site policy and credential grant mutations require owner session and CSRF; generic relay cannot bypass", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "browser-settings-"));
   const requests = [];
   let conflict = false;
   const daemon = http.createServer((req, res) => {
+    if (!acceptFixtureRequest(req, res)) return;
     let body = "";
     req.on("data", (data) => {
       body += data;

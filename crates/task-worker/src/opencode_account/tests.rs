@@ -1,5 +1,9 @@
+#[cfg(test)]
+#[path = "../../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use super::*;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 
 /// `status_line` と本文を 1 回だけ返す偽 HTTP server。受け取った要求の先頭部分を返す。
@@ -13,10 +17,7 @@ async fn serve_once(
         listener.local_addr().expect("addr")
     );
     let handle = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("accept");
-        let mut buf = vec![0u8; 4096];
-        let n = socket.read(&mut buf).await.expect("read");
-        let request = String::from_utf8_lossy(&buf[..n]).to_string();
+        let (mut socket, request) = fake_http::accept(&listener, "GET", "/zen/go/v1/usage").await;
         let response = format!(
             "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
             body.len()

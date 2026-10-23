@@ -1,8 +1,12 @@
 //! Doctor reads a fake daemon in a temporary configuration, never a production DB/socket.
 mod common;
 
+#[cfg(test)]
+#[path = "../../../tests/support/http_sync.rs"]
+mod fake_http;
+
 use serde_json::{Value, json};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpListener;
 use std::process::{Command, Output};
 
@@ -19,17 +23,7 @@ fn serve(dir: &std::path::Path, items: Value) -> (std::path::PathBuf, std::threa
     )
     .unwrap();
     let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
-        let mut req = Vec::new();
-        let mut byte = [0];
-        while !req.ends_with(b"\r\n\r\n") {
-            stream.read_exact(&mut byte).unwrap();
-            req.push(byte[0]);
-        }
-        let req = String::from_utf8(req).unwrap();
+        let (mut stream, req) = fake_http::accept(&listener, "GET", "/api/v1/browser/readiness");
         assert!(req.starts_with("GET /api/v1/browser/readiness HTTP/1.1\r\n"));
         assert!(req.contains("Authorization: Bearer test-doctor-token\r\n"));
         let body = json!({"items":items}).to_string();

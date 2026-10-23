@@ -64,6 +64,21 @@ export async function startFakeDashboard(): Promise<FakeDashboard> {
   const sockets = new Set<Socket>();
   const server = http.createServer((req, res) => {
     const pathname = (req.url ?? "/").split("?")[0];
+    // The gateway always sends Origin, including for GET /. A bare host probe is not a dashboard request.
+    if (
+      req.method !== "GET" ||
+      !req.headers.origin ||
+      req.headers["transfer-encoding"] ||
+      Number(req.headers["content-length"] ?? 0) !== 0 ||
+      !(
+        ["/", "/_next/static/x.js", "/api/sessions", "/api/chat/status"].includes(pathname) ||
+        /^\/api\/session\/\d{1,5}\/(status|tabs)$/.test(pathname)
+      )
+    ) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
     requests.push({ path: req.url ?? "/", host: req.headers.host, origin: req.headers.origin });
     const send = (type: string, body: string) => {
       res.writeHead(200, { "content-type": type });
@@ -91,12 +106,17 @@ export async function startFakeDashboard(): Promise<FakeDashboard> {
     res.end(JSON.stringify({ error: "not found" }));
   });
   server.on("upgrade", (req, socket: Socket) => {
-    requests.push({ path: req.url ?? "/", host: req.headers.host, origin: req.headers.origin });
     const key = req.headers["sec-websocket-key"];
-    if (!/^\/api\/session\/\d{1,5}\/stream(\?|$)/.test(req.url ?? "") || typeof key !== "string") {
+    if (
+      req.method !== "GET" ||
+      !req.headers.origin ||
+      !/^\/api\/session\/\d{1,5}\/stream(\?|$)/.test(req.url ?? "") ||
+      typeof key !== "string"
+    ) {
       socket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
       return;
     }
+    requests.push({ path: req.url ?? "/", host: req.headers.host, origin: req.headers.origin });
     const accept = createHash("sha1")
       .update(key + WS_MAGIC)
       .digest("base64");

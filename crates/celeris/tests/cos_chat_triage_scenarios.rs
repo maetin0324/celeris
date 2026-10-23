@@ -2,6 +2,10 @@
 //! tick（`tick_loop`）と同じ順（`select_routes_batch` → `withdraw_if_resolved` → `triage::render` →
 //! `post_webhook` → `record`）を偽 webhook（127.0.0.1 の TCP）に向けて回す。外部ネットワークに出ず、
 //! 時刻は固定値を渡す。待ちは webhook の受信を出来事として待ち、sleep しない。
+#[cfg(test)]
+#[path = "../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use std::sync::{Arc, Mutex};
 
 use celeris::notify::{self, NotifyConfig, SendResult};
@@ -13,7 +17,7 @@ use task_core::{
     TaskStore, Tier,
 };
 use time::OffsetDateTime;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 fn at() -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock")
@@ -59,37 +63,21 @@ async fn hook() -> Hook {
     let kept = bodies.clone();
     tokio::spawn(async move {
         while let Ok((mut stream, _)) = listener.accept().await {
-            let mut raw = Vec::new();
-            let mut buf = vec![0; 8192];
-            // Read the head, then exactly Content-Length bytes of body.
-            let body = loop {
-                let n = stream.read(&mut buf).await.expect("read");
-                if n == 0 {
-                    break String::new();
-                }
-                raw.extend_from_slice(&buf[..n]);
-                let text = String::from_utf8_lossy(&raw).to_string();
-                if let Some((head, rest)) = text.split_once("\r\n\r\n") {
-                    let len = head
-                        .lines()
-                        .find_map(|l| {
-                            let (k, v) = l.split_once(':')?;
-                            k.eq_ignore_ascii_case("content-length")
-                                .then(|| v.trim().parse::<usize>().ok())
-                                .flatten()
-                        })
-                        .unwrap_or(0);
-                    if rest.len() >= len {
-                        break rest.to_string();
-                    }
-                }
-            };
-            stream
-                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
-                .await
-                .expect("reply");
-            kept.lock().expect("bodies").push(body);
-            let _ = tx.send(());
+            let kept = kept.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let Some(raw) =
+                    fake_http::read(&mut stream, |r| fake_http::matches(r, "POST", "/hook")).await
+                else {
+                    return;
+                };
+                let body = raw.split_once("\r\n\r\n").unwrap().1.to_owned();
+                kept.lock().expect("bodies").push(body);
+                let _ = stream
+                    .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+                let _ = tx.send(());
+            });
         }
     });
     Hook { url, bodies, seen }

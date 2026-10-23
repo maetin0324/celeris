@@ -1,4 +1,8 @@
 //! Submit frozen manifest problems as Celeris evaluation trials.
+#[cfg(test)]
+#[path = "../../../tests/support/http_sync.rs"]
+mod fake_http;
+
 use std::{fs, path::PathBuf, thread, time::Duration};
 
 use reqwest::blocking::Client;
@@ -226,10 +230,7 @@ fn is_terminal(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        io::{Read, Write},
-        net::TcpListener,
-    };
+    use std::{io::Write, net::TcpListener};
     #[test]
     fn trial_objective_carries_problem_text_without_check() {
         let mut manifest: Manifest = serde_json::from_value(json!({"schema":"x","version":"1","cutoff":"x","seed":0,"sha256":"abc","problems":[
@@ -259,35 +260,10 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").expect("local listener");
         let address = listener.local_addr().expect("address");
         let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("request");
-            let mut data = Vec::new();
-            let mut buf = [0u8; 4096];
-            loop {
-                let n = stream.read(&mut buf).expect("read request");
-                if n == 0 {
-                    break;
-                }
-                data.extend_from_slice(&buf[..n]);
-                let text = String::from_utf8_lossy(&data);
-                if let Some(end) = text.find("\r\n\r\n") {
-                    let length = text[..end]
-                        .lines()
-                        .find_map(|l| {
-                            l.to_ascii_lowercase()
-                                .strip_prefix("content-length: ")
-                                .and_then(|s| s.parse::<usize>().ok())
-                        })
-                        .unwrap_or(0);
-                    if data.len() >= end + 4 + length {
-                        break;
-                    }
-                }
-            }
-            let body_start = data
-                .windows(4)
-                .position(|w| w == b"\r\n\r\n")
-                .expect("headers")
-                + 4;
+            let (mut stream, raw) =
+                fake_http::accept(&listener, "POST", "/api/v1/routing-eval/trials");
+            let data = raw.as_bytes();
+            let body_start = raw.find("\r\n\r\n").unwrap() + 4;
             let body: Value = serde_json::from_slice(&data[body_start..]).expect("json body");
             let wire = body.to_string();
             assert!(wire.contains("PRIVATE_CHECK_TOKEN"));
@@ -297,19 +273,8 @@ mod tests {
             write!(stream, "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).expect("write response");
             drop(stream);
 
-            let (mut stream, _) = listener.accept().expect("poll request");
-            let mut request = Vec::new();
-            loop {
-                let n = stream.read(&mut buf).expect("read poll");
-                if n == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buf[..n]);
-                if request.windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            let request = String::from_utf8_lossy(&request);
+            let (mut stream, request) =
+                fake_http::accept(&listener, "GET", "/api/v1/routing-eval/trials?batch_id=b1");
             assert!(request.starts_with("GET /api/v1/routing-eval/trials?batch_id=b1 "));
             let response = json!({"trials":[{"trial_id":"t1","problem_id":"p1","trial_no":1,"status":"passed"}]}).to_string();
             write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).expect("write poll response");
@@ -345,28 +310,10 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").expect("local listener");
         let address = listener.local_addr().expect("address");
         let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("request");
-            let mut data = Vec::new();
-            let mut buf = [0u8; 4096];
-            let body_start = loop {
-                let n = stream.read(&mut buf).expect("read request");
-                assert!(n > 0, "request ended before body");
-                data.extend_from_slice(&buf[..n]);
-                let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") else {
-                    continue;
-                };
-                let length = String::from_utf8_lossy(&data[..end])
-                    .lines()
-                    .find_map(|l| {
-                        l.to_ascii_lowercase()
-                            .strip_prefix("content-length: ")
-                            .and_then(|s| s.parse::<usize>().ok())
-                    })
-                    .unwrap_or(0);
-                if data.len() >= end + 4 + length {
-                    break end + 4;
-                }
-            };
+            let (mut stream, raw) =
+                fake_http::accept(&listener, "POST", "/api/v1/routing-eval/trials");
+            let data = raw.as_bytes();
+            let body_start = raw.find("\r\n\r\n").unwrap() + 4;
             let body: Value = serde_json::from_slice(&data[body_start..]).expect("json body");
             let trials = body["trials"].as_array().expect("trials").clone();
             let refs: Vec<Value> = trials.iter().enumerate().map(|(i, t)| json!({"trial_id":format!("t{i}"),"problem_id":t["problem_id"],"trial_no":t["trial_no"],"status":"queued"})).collect();

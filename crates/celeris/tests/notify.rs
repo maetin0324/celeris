@@ -9,6 +9,10 @@
 //! - Phase 40（実機 2026-09-18）: backfill 禁止、1 tick 最大 1 通、429 は attempts に数えない、
 //!   `bad_news` の束ね、`milestone_ready` の新しい意味。
 
+#[cfg(test)]
+#[path = "../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -789,15 +793,11 @@ async fn fake_webhook_raw(
         .unwrap_or_else(|e| panic!("addr: {e}"));
     let response = response.to_string();
     let handle = tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::io::AsyncWriteExt;
         let mut bodies = Vec::new();
         for _ in 0..max {
-            let Ok((mut socket, _)) = listener.accept().await else {
-                break;
-            };
-            let mut buf = vec![0u8; 8192];
-            let n = socket.read(&mut buf).await.unwrap_or(0);
-            bodies.push(String::from_utf8_lossy(&buf[..n]).to_string());
+            let (mut socket, request) = fake_http::accept(&listener, "POST", "/hook").await;
+            bodies.push(request);
             let _ = socket.write_all(response.as_bytes()).await;
             let _ = socket.flush().await;
             let _ = socket.shutdown().await;

@@ -3,6 +3,10 @@
 //! 呼び出しのたびにファイルを読み直す（人の登録・再登録が再起動なしで次の分類に反映される）。
 //! 未登録・空・読めない場合は `None`（`JevError::KeyMissing` → 既存の credential 待ちへ）。値は log・Debug・エラーに出さない。
 
+#[cfg(test)]
+#[path = "../../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use std::fmt;
 use std::path::PathBuf;
 
@@ -51,7 +55,7 @@ mod tests {
     use std::sync::Arc;
     use task_core::route_select::ClassifierStatus;
     use task_dispatch::{ClassificationBoard, CredentialGate};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
 
     const SECRET: &str = "sk-test-SECRET-value-123456";
@@ -88,34 +92,11 @@ mod tests {
         let l = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = l.local_addr().expect("addr");
         let h = tokio::spawn(async move {
-            let (mut sock, _) = l.accept().await.expect("accept");
-            let mut buf = vec![0u8; 65536];
-            let mut n = 0;
-            loop {
-                let k = sock.read(&mut buf[n..]).await.unwrap_or(0);
-                if k == 0 {
-                    break;
-                }
-                n += k;
-                let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                if let Some((head, body)) = text.split_once("\r\n\r\n") {
-                    let len = head
-                        .lines()
-                        .find_map(|l| {
-                            l.to_ascii_lowercase()
-                                .strip_prefix("content-length:")
-                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
-                        })
-                        .unwrap_or(0);
-                    if body.len() >= len {
-                        break;
-                    }
-                }
-            }
+            let (mut sock, request) = fake_http::accept(&l, "POST", "/decisions").await;
             let resp =
                 format!("HTTP/1.1 {status} X\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
             let _ = sock.write_all(resp.as_bytes()).await;
-            String::from_utf8_lossy(&buf[..n]).to_string()
+            request
         });
         (format!("http://{addr}/decisions"), h)
     }

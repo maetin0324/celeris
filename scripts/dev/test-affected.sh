@@ -34,7 +34,7 @@ all=0
 web=0
 while IFS= read -r f; do
   case "$f" in
-    Cargo.lock|Cargo.toml|.config/nextest.toml|rust-toolchain|rust-toolchain.toml) all=1 ;;
+    Cargo.lock|Cargo.toml|.config/nextest.toml|rust-toolchain|rust-toolchain.toml|tests/support/*) all=1 ;;
     web/*) web=1 ;;
   esac
 done <"$changed"

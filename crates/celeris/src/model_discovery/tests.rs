@@ -1,6 +1,10 @@
+#[cfg(test)]
+#[path = "../../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use super::*;
 use task_core::SqliteStore;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 
 /// path ごとの固定応答を返す偽 HTTP server。受けた要求の頭（ヘッダ込み）を `seen` に溜める。
@@ -19,15 +23,19 @@ async fn serve(
             let routes = routes.clone();
             let seen = Arc::clone(&seen2);
             tokio::spawn(async move {
-                let mut buf = Vec::new();
-                let mut chunk = [0u8; 1024];
-                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
-                    match sock.read(&mut chunk).await {
-                        Ok(0) | Err(_) => return,
-                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                    }
-                }
-                let head = String::from_utf8_lossy(&buf).to_string();
+                let Some(head) = fake_http::read(&mut sock, |r| {
+                    let mut parts = r.split_whitespace();
+                    parts.next() == Some("GET")
+                        && parts.next().is_some_and(|p| {
+                            routes
+                                .iter()
+                                .any(|(route, _, _)| *route == p.split('?').next().unwrap_or(""))
+                        })
+                })
+                .await
+                else {
+                    return;
+                };
                 let path = head
                     .split_whitespace()
                     .nth(1)

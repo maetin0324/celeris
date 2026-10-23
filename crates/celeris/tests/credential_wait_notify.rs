@@ -6,6 +6,10 @@
 //! （外部ネットワークに出ない）。その後 PUT /api/v1/secrets/{id} 相当（秘密の保存 + `secret_stored` event）→ mock 検証成功
 //! → 同じ work unit が一度だけ再キューされる。待ちは DB の状態の出来事で判定し、時間では待たない。
 
+#[cfg(test)]
+#[path = "../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -42,37 +46,20 @@ async fn hook() -> Hook {
     let bodies = Arc::new(Mutex::new(Vec::new()));
     let kept = bodies.clone();
     tokio::spawn(async move {
-        'connections: while let Ok((mut stream, _)) = listener.accept().await {
-            let mut raw = Vec::new();
-            let mut buf = vec![0; 8192];
-            let body = loop {
-                let n = stream.read(&mut buf).await.expect("read");
-                if n == 0 {
-                    // A connection closed before a complete HTTP request is not a POST.
-                    continue 'connections;
-                }
-                raw.extend_from_slice(&buf[..n]);
-                let text = String::from_utf8_lossy(&raw).to_string();
-                if let Some((head, rest)) = text.split_once("\r\n\r\n") {
-                    let len = head
-                        .lines()
-                        .find_map(|l| {
-                            let (k, v) = l.split_once(':')?;
-                            k.eq_ignore_ascii_case("content-length")
-                                .then(|| v.trim().parse::<usize>().ok())
-                                .flatten()
-                        })
-                        .unwrap_or(0);
-                    if rest.len() >= len {
-                        break rest.to_string();
-                    }
-                }
-            };
-            kept.lock().expect("bodies").push(body);
-            stream
-                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
-                .await
-                .expect("reply");
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let kept = kept.clone();
+            tokio::spawn(async move {
+                let Some(raw) =
+                    fake_http::read(&mut stream, |r| fake_http::matches(r, "POST", "/hook")).await
+                else {
+                    return;
+                };
+                let body = raw.split_once("\r\n\r\n").unwrap().1.to_owned();
+                kept.lock().expect("bodies").push(body);
+                let _ = stream
+                    .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            });
         }
     });
     Hook { url, bodies }
@@ -87,15 +74,19 @@ async fn webhook_ignores_eof_before_complete_request() {
         .unwrap()
         .strip_suffix("/hook")
         .unwrap();
-    for partial in ["", "POST /hook HTTP/1.1\r\nContent-Length: 4\r\n\r\nx"] {
+    for partial in [
+        "",
+        "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        "POST /hook HTTP/1.1\r\nContent-Length: 4\r\n\r\nx",
+    ] {
         let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
         stream.write_all(partial.as_bytes()).await.unwrap();
         stream.shutdown().await.unwrap();
         let mut reply = Vec::new();
         stream.read_to_end(&mut reply).await.unwrap();
         assert!(
-            reply.is_empty(),
-            "incomplete request must not be acknowledged"
+            reply.starts_with(b"HTTP/1.1 404"),
+            "foreign or incomplete request must be rejected"
         );
     }
     let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();

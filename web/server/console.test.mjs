@@ -6,6 +6,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { createApp } from "./app.js";
 import { consoleParams } from "./console.js";
+import { acceptFixtureRequest } from "./test-support/http-fixture.mjs";
 
 const TOKEN = "fixture-daemon-token-3f9c2a71";
 const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-console-"));
@@ -16,6 +17,7 @@ writeFileSync(passwordFile, "pw\n");
 const seen = [];
 const open = new Set();
 const daemon = http.createServer((req, res) => {
+  if (!acceptFixtureRequest(req, res)) return;
   seen.push({ url: req.url, headers: req.headers });
   res.writeHead(200, { "content-type": "text/event-stream" });
   res.write('event: hello\ndata: {"cursor":"c1"}\n\n');

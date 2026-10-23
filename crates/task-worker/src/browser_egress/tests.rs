@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 use tokio::net::TcpListener;
@@ -182,6 +186,39 @@ fn response(query: &[u8], ips: &[IpAddr]) -> Vec<u8> {
     bytes
 }
 
+// Only complete DNS questions consume scripted A/AAAA replies; HTTP probes are unrelated.
+async fn accept_dns(listener: &TcpListener) -> (TcpStream, Vec<u8>) {
+    let mut pending = tokio::task::JoinSet::new();
+    timeout(Duration::from_secs(60), async {
+        loop {
+            tokio::select! {
+                connection = listener.accept() => {
+                    let (mut socket, _) = connection.unwrap();
+                    pending.spawn(async move {
+                        let packet = timeout(Duration::from_secs(5), async {
+                            let size = usize::from(socket.read_u16().await.ok()?);
+                            if !(17..=512).contains(&size) { return None; }
+                            let mut packet = vec![0; size];
+                            socket.read_exact(&mut packet).await.ok()?;
+                            // Standard query, one question, IN class, A or AAAA.
+                            if packet[2..12] != [1, 0, 0, 1, 0, 0, 0, 0, 0, 0]
+                                || !matches!(word(&packet, size - 4), Ok(1 | 28))
+                                || word(&packet, size - 2) != Ok(1) { return None; }
+                            Some(packet)
+                        }).await.ok().flatten()?;
+                        Some((socket, packet))
+                    });
+                }
+                Some(result) = pending.join_next(), if !pending.is_empty() => {
+                    if let Some(request) = result.unwrap() { return request; }
+                }
+            }
+        }
+    })
+    .await
+    .expect("expected DNS question")
+}
+
 async fn dns_fixture(ips: &[&str]) -> (SocketAddr, tokio::task::JoinHandle<Vec<u16>>) {
     let ips: Vec<IpAddr> = ips.iter().map(|ip| ip.parse().unwrap()).collect();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -189,10 +226,7 @@ async fn dns_fixture(ips: &[&str]) -> (SocketAddr, tokio::task::JoinHandle<Vec<u
     let task = tokio::spawn(async move {
         let mut kinds = vec![];
         for _ in 0..2 {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let size = socket.read_u16().await.unwrap();
-            let mut packet = vec![0; usize::from(size)];
-            socket.read_exact(&mut packet).await.unwrap();
+            let (mut socket, packet) = accept_dns(&listener).await;
             kinds.push(word(&packet, packet.len() - 4).unwrap());
             let bytes = response(&packet, &ips);
             socket.write_u16(bytes.len() as u16).await.unwrap();
@@ -318,7 +352,12 @@ async fn tunnel_preserves_prefetched_bytes_and_half_close() {
     let upstream = TcpStream::connect(listener.local_addr().unwrap())
         .await
         .unwrap();
-    let (mut echo, _) = listener.accept().await.unwrap();
+    let mut echo = loop {
+        let (socket, peer) = listener.accept().await.unwrap();
+        if peer == upstream.local_addr().unwrap() {
+            break socket;
+        }
+    };
     let echo_job = tokio::spawn(async move {
         let mut bytes = vec![];
         echo.read_to_end(&mut bytes).await.unwrap();
@@ -494,6 +533,18 @@ fn dns_cname_nodata_is_empty_only_with_the_terminal_zone_soa() {
 #[tokio::test]
 async fn actual_dns_transport_pins_ipv4_for_a_dual_stack_name() {
     let (address, job) = dns_fixture(&["2606:2800:220:1::1", "93.184.216.34"]).await;
+    for raw in [
+        b"".as_slice(),
+        b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        b"\x00\x20partial",
+    ] {
+        let mut noise = TcpStream::connect(address).await.unwrap();
+        noise.write_all(raw).await.unwrap();
+        noise.shutdown().await.unwrap();
+        let _ = timeout(Duration::from_secs(5), noise.read_to_end(&mut Vec::new()))
+            .await
+            .unwrap();
+    }
     let (mut client, mut server) = UnixStream::pair().unwrap();
     client.write_all(&connect("example.com:443")).await.unwrap();
     let result = destination(&mut server, &policy(), address).await.unwrap();
@@ -507,10 +558,7 @@ async fn malformed_dns_length_or_transaction_is_rejected_over_tcp() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let job = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let size = usize::from(stream.read_u16().await.unwrap());
-            let mut q = vec![0; size];
-            stream.read_exact(&mut q).await.unwrap();
+            let (mut stream, q) = accept_dns(&listener).await;
             if invalid_length {
                 stream.write_u16(u16::MAX).await.unwrap();
             } else {
@@ -643,6 +691,7 @@ async fn echo_listener() -> (u16, tokio::task::JoinHandle<()>) {
                     tokio::spawn(async move {
                         let mut b = [0u8; 1];
                         if socket.read_exact(&mut b).await.is_ok()
+                            && b == [b'x']
                             && socket.write_all(&b).await.is_ok()
                         {
                             let _ = echoed.send(()).await;
@@ -663,6 +712,12 @@ async fn egress_test_loopback_connect_allowed_only_when_listed() {
     // open and silent) must not take the listener away from the proxy's connect.
     drop(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
     let _silent = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let mut noise = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    noise.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
+    noise.shutdown().await.unwrap();
+    let _ = timeout(Duration::from_secs(5), noise.read_to_end(&mut Vec::new()))
+        .await
+        .unwrap();
     // Default (empty set): the loopback literal stays denied with 403.
     let (status, echoed) = loopback_connect(policy(), &authority).await;
     assert!(status.contains(" 403 "), "{status}");
@@ -728,15 +783,16 @@ async fn egress_test_loopback_destination_skips_dns_only_for_listed_literal() {
 
 /// A one-shot loopback origin: records the request header it receives, answers
 /// `reply`, then closes (as a `Connection: close` server does).
-async fn http_origin(reply: &'static [u8]) -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
+async fn http_origin(
+    reply: &'static [u8],
+    method: &'static str,
+    path: &'static str,
+) -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut header = vec![];
-        while !header.ends_with(b"\r\n\r\n") {
-            header.push(socket.read_u8().await.unwrap());
-        }
+        let (mut socket, raw) = fake_http::accept(&listener, method, path).await;
+        let mut header = raw.into_bytes();
         socket.write_all(reply).await.unwrap();
         socket.shutdown().await.unwrap();
         // Anything further on this connection would be a second request.
@@ -779,7 +835,8 @@ const REPLY: &[u8] = b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5
 
 #[tokio::test]
 async fn egress_get_allowed_origin_is_forwarded_in_origin_form() {
-    let (port, origin) = http_origin(REPLY).await;
+    let (port, origin) = http_origin(REPLY, "GET", "/page?q=1").await;
+    fake_http::inject_noise(&format!("http://127.0.0.1:{port}")).await;
     let request = format!(
         "GET http://127.0.0.1:{port}/page?q=1 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
          Proxy-Connection: keep-alive\r\nAccept: text/html\r\nUser-Agent: Chrome\r\n\r\n"
@@ -802,7 +859,7 @@ async fn egress_get_allowed_origin_is_forwarded_in_origin_form() {
 #[tokio::test]
 async fn egress_head_and_default_path_are_forwarded() {
     let reply: &[u8] = b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\n";
-    let (port, origin) = http_origin(reply).await;
+    let (port, origin) = http_origin(reply, "HEAD", "/").await;
     let request =
         format!("HEAD http://127.0.0.1:{port} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
     let (output, result, _) = forward_exchange(request.into_bytes(), loopback_policy(port)).await;
@@ -814,7 +871,7 @@ async fn egress_head_and_default_path_are_forwarded() {
 
 #[tokio::test]
 async fn egress_get_query_only_uri_uses_origin_form() {
-    let (port, origin) = http_origin(REPLY).await;
+    let (port, origin) = http_origin(REPLY, "GET", "/?q=1").await;
     let request =
         format!("GET http://127.0.0.1:{port}?q=1 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
     let (output, result, _) = forward_exchange(request.into_bytes(), loopback_policy(port)).await;
@@ -826,9 +883,9 @@ async fn egress_get_query_only_uri_uses_origin_form() {
 
 #[tokio::test]
 async fn egress_get_drops_hop_by_hop_headers() {
-    let (port, origin) = http_origin(REPLY).await;
+    let (port, origin) = http_origin(REPLY, "GET", "/fixture").await;
     let request = format!(
-        "GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+        "GET http://127.0.0.1:{port}/fixture HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
          Connection: keep-alive, X-Secret-Hop\r\nX-Secret-Hop: drop-me\r\n\
          Proxy-Connection: keep-alive\r\nProxy-Authorization: Basic c2VjcmV0\r\n\
          Keep-Alive: timeout=5\r\nTE: trailers\r\nTrailer: Expires\r\nUpgrade: websocket\r\n\
@@ -841,7 +898,7 @@ async fn egress_get_drops_hop_by_hop_headers() {
     assert_eq!(
         seen,
         format!(
-            "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: a=b\r\nX-End: kept\r\n\
+            "GET /fixture HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: a=b\r\nX-End: kept\r\n\
              Connection: close\r\n\r\n"
         )
     );
@@ -862,7 +919,7 @@ async fn egress_get_drops_hop_by_hop_headers() {
 
 #[tokio::test]
 async fn egress_get_serves_one_request_per_connection() {
-    let (port, origin) = http_origin(REPLY).await;
+    let (port, origin) = http_origin(REPLY, "GET", "/a").await;
     let one = format!("GET http://127.0.0.1:{port}/a HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
     // A pipelined second request, even to the same allowed origin, is never read.
     let two = format!("GET http://127.0.0.1:{port}/b HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
@@ -878,7 +935,7 @@ async fn egress_get_serves_one_request_per_connection() {
 
 #[tokio::test]
 async fn egress_get_switching_origin_on_the_same_connection_never_connects() {
-    let (port, origin) = http_origin(REPLY).await;
+    let (port, origin) = http_origin(REPLY, "GET", "/fixture").await;
     let other = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let other_port = other.local_addr().unwrap().port();
     let mut policy = loopback_policy(port);
@@ -886,7 +943,7 @@ async fn egress_get_switching_origin_on_the_same_connection_never_connects() {
         .test_loopback_allow
         .insert(format!("127.0.0.1:{other_port}"));
     let request = format!(
-        "GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n\
+        "GET http://127.0.0.1:{port}/fixture HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n\
          GET http://127.0.0.1:{other_port}/ HTTP/1.1\r\nHost: 127.0.0.1:{other_port}\r\n\r\n"
     );
     let (output, result, _) = forward_exchange(request.into_bytes(), policy).await;
@@ -905,7 +962,7 @@ async fn egress_get_denials_are_recorded_like_connect() {
     let dir = tempfile::tempdir().unwrap();
     let mut recorder =
         crate::browser_runtime::DenialRecorder::new(dir.path(), "session-get").unwrap();
-    let (port, _origin) = http_origin(REPLY).await;
+    let (port, _origin) = http_origin(REPLY, "GET", "/fixture").await;
     let cases: Vec<(String, &str, Option<&str>, Option<u16>)> = vec![
         (
             "GET http://evil.com/PATH_SECRET HTTP/1.1\r\nHost: evil.com\r\nCookie: HEADER_SECRET\r\n\r\n".into(),

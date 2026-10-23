@@ -6,6 +6,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { createApp } from "./app.js";
 import { streamParams } from "./events.js";
+import { acceptFixtureRequest } from "./test-support/http-fixture.mjs";
 
 // 偽 daemon と gateway は loopback の空き port。
 const TOKEN = "fixture-daemon-token-3f9c2a71";
@@ -20,6 +21,7 @@ const open = new Set();
 let aborted = 0;
 let status = 200;
 const daemon = http.createServer((req, res) => {
+  if (!acceptFixtureRequest(req, res)) return;
   seen.push({ url: req.url, headers: req.headers });
   if (req.headers.authorization !== `Bearer ${TOKEN}`) {
     res.writeHead(401, { "content-type": "application/json" });

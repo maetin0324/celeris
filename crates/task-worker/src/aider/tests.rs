@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../../../tests/support/http_sync.rs"]
+mod fake_http;
+
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -302,7 +306,7 @@ fn with_model_returns_a_new_adapter_carrying_the_model() {
 #[tokio::test]
 #[ignore]
 async fn real_aider_binary_end_to_end() {
-    use std::io::{Read, Write};
+    use std::io::Write;
 
     let bin = std::env::var("AIDER_TEST_BIN").unwrap_or_else(|_| "aider".into());
     if std::process::Command::new(&bin)
@@ -321,38 +325,7 @@ async fn real_aider_binary_end_to_end() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
-        let Ok((mut stream, _)) = listener.accept() else {
-            return;
-        };
-        let mut buf = [0u8; 8192];
-        let mut received = Vec::new();
-        loop {
-            let n = stream.read(&mut buf).unwrap_or(0);
-            if n == 0 {
-                break;
-            }
-            received.extend_from_slice(&buf[..n]);
-            let Some(header_end) = received
-                .windows(4)
-                .position(|w| w == b"\r\n\r\n")
-                .map(|p| p + 4)
-            else {
-                continue;
-            };
-            let header = String::from_utf8_lossy(&received[..header_end]);
-            let content_length: usize = header
-                .lines()
-                .find_map(|l| {
-                    l.to_ascii_lowercase()
-                        .strip_prefix("content-length:")
-                        .map(|v| v.trim().to_string())
-                })
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0);
-            if received.len() >= header_end + content_length {
-                break;
-            }
-        }
+        let (mut stream, _) = fake_http::accept(&listener, "POST", "/v1/chat/completions");
         let body = br#"{"id":"mock","object":"chat.completion","created":0,"model":"mock","choices":[{"index":0,"message":{"role":"assistant","content":"artifacts/result.json\n```json\n<<<<<<< SEARCH\n=======\n{\"summary\": \"real aider binary smoke test\", \"evidence\": []}\n>>>>>>> REPLACE\n```\n"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":20,"total_tokens":70}}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

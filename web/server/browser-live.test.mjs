@@ -9,6 +9,7 @@ import { after, before, test } from "node:test";
 import { createApp } from "./app.js";
 import { liveAvailability, parseLiveUpstream } from "./browser-live.js";
 import { makeSocketDir } from "./socket-path.js";
+import { acceptFixtureRequest } from "./test-support/http-fixture.mjs";
 
 const dir = mkdtempSync(path.join(tmpdir(), "celeris-browser-live-"));
 // startWeb は device-owner-<連番>.sock を作る。連番は 4 桁まで見込む。
@@ -32,6 +33,7 @@ let leaseHolder = null;
 let upstreamInput = null;
 let liveFramesAvailable = false;
 const daemon = http.createServer((req, res) => {
+  if (!acceptFixtureRequest(req, res)) return;
   let body = "";
   req.on("data", (chunk) => {
     body += chunk;
@@ -186,6 +188,10 @@ function get(route, options = {}) {
 }
 before(async () => {
   const daemonUrl = await listen(daemon);
+  const probe = await fetch(`${daemonUrl}/`);
+  assert.equal(probe.status, 404);
+  await probe.text();
+  assert.equal(requests.length, 0);
   const liveUrl = await listen(dashboard);
   app = createApp({
     distDir: dir,
@@ -624,6 +630,7 @@ const deviceRows = new Map();
 const deviceRequests = [];
 let deviceSeq = 0;
 const deviceDaemon = http.createServer((req, res) => {
+  if (!acceptFixtureRequest(req, res)) return;
   let body = "";
   req.on("data", (chunk) => {
     body += chunk;

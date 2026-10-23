@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../../../tests/support/http_sync.rs"]
+mod fake_http;
+
 use super::*;
 use std::net::TcpListener;
 use std::sync::mpsc;
@@ -13,10 +17,8 @@ fn provider_kind_proxy_is_reachable_without_a_qwen_model() {
     let addr = server.local_addr().expect("addr");
     let (tx, rx) = mpsc::channel::<String>();
     let handle = std::thread::spawn(move || {
-        let (mut stream, _) = server.accept().expect("accept");
-        let mut buf = [0u8; 1024];
-        let n = stream.read(&mut buf).unwrap_or(0);
-        let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
+        let (mut stream, request) = fake_http::accept(&server, "GET", "/v1/models");
+        let _ = tx.send(request);
         let _ = stream.write_all(
             b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{\"data\": []}\r\n\r\n",
         );
@@ -34,9 +36,7 @@ fn a_non_2xx_answer_is_unreachable() {
     let server = listener();
     let addr = server.local_addr().expect("addr");
     let handle = std::thread::spawn(move || {
-        let (mut stream, _) = server.accept().expect("accept");
-        let mut buf = [0u8; 1024];
-        let _ = stream.read(&mut buf);
+        let (mut stream, _) = fake_http::accept(&server, "GET", "/v1/models");
         let _ = stream.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
     });
     let base = format!("http://127.0.0.1:{}/v1", addr.port());
@@ -70,7 +70,7 @@ fn a_server_that_never_answers_times_out() {
     let addr = server.local_addr().expect("addr");
     let (done_tx, done_rx) = mpsc::channel::<()>();
     let handle = std::thread::spawn(move || {
-        let (stream, _) = server.accept().expect("accept");
+        let (stream, _) = fake_http::accept(&server, "GET", "/v1/models");
         // 何も書かずに、検査が終わるまで開けたままにする。
         let _ = done_rx.recv();
         drop(stream);
@@ -117,10 +117,7 @@ fn a_bearer_token_is_sent_as_an_authorization_header() {
     let addr = server.local_addr().expect("addr");
     let (tx, rx) = mpsc::channel::<String>();
     let handle = std::thread::spawn(move || {
-        let (mut stream, _) = server.accept().expect("accept");
-        let mut buf = [0u8; 1024];
-        let n = stream.read(&mut buf).unwrap_or(0);
-        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+        let (mut stream, req) = fake_http::accept(&server, "GET", "/v1/models");
         let _ = tx.send(req.clone());
         if req.contains("Authorization: Bearer secret-proxy-token") {
             let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
@@ -146,10 +143,7 @@ fn without_a_bearer_token_the_same_upstream_answers_401() {
     let server = listener();
     let addr = server.local_addr().expect("addr");
     let handle = std::thread::spawn(move || {
-        let (mut stream, _) = server.accept().expect("accept");
-        let mut buf = [0u8; 1024];
-        let n = stream.read(&mut buf).unwrap_or(0);
-        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+        let (mut stream, req) = fake_http::accept(&server, "GET", "/v1/models");
         assert!(!req.contains("Authorization"), "{req}");
         let _ = stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
     });
@@ -171,9 +165,7 @@ fn a_401_or_403_from_the_probe_is_unknown_not_unreachable() {
         let addr = server.local_addr().expect("addr");
         let response = format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\n");
         let handle = std::thread::spawn(move || {
-            let (mut stream, _) = server.accept().expect("accept");
-            let mut buf = [0u8; 1024];
-            let _ = stream.read(&mut buf);
+            let (mut stream, _) = fake_http::accept(&server, "GET", "/v1/models");
             let _ = stream.write_all(response.as_bytes());
         });
         let base = format!("http://127.0.0.1:{}/v1", addr.port());

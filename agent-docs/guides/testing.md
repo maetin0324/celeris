@@ -93,3 +93,24 @@ done
   functional spec を指定して流し（例: `pnpm -C web build && pnpm -C web e2e parity/inbox.spec.ts`）、
   nfr と `e2e:all` は visual-qa・最終の受け入れ・release gate の段で流す。webServer は dist/ が無いか
   古いときだけ build するので、check で先に build しても二重には build しない。
+
+## loopback の fake server は期待する要求だけを数える
+
+`127.0.0.1:0` は試験専用の接続元を保証しない。host の別 process が空接続や `GET /`
+（例: Go-http-client）を送る場合がある。accept 回数を request 数にせず、期待する method・path と
+完全な HTTP header・Content-Length 分の本文を確認した後で記録・通知・応答台本の消費を行う。
+空接続、header/body の途中 EOF、別 path は記録せず、書ける接続には 404 を返す。
+一回応答する stub も期待する要求が来るまで accept を続ける。認証や本文の assertion は残す。
+
+手書き HTTP fixture は `tests/support/http_async.rs` または `http_sync.rs` を `#[path]` で参照する。
+両者の framing は `http_request.rs` に集約した（HTTP/1.x・Content-Length、上限 1 MiB、chunked は非対応）。
+Node の fake daemon は `web/server/test-support/http-fixture.mjs` で API 外要求を除き、本文の記録は
+`end` / `req.complete` を確認する。upload 中断を検査するための bytes・abort 観測は、完了要求数とは区別する。
+読み取りは有界とし、無言の接続が正規 client を妨げないよう接続ごとに処理する。
+負の応答や timeout を試す fixture は、その意図を保ったまま期待する要求を識別する。
+TCP の DNS・echo 等も protocol の完全な要求や既知の peer を確認する。接続自体の拒否・無応答を
+測る fixture、ネットワーク namespace 内だけの fixture は、その性質を一覧に明記して区別する。
+
+回帰試験では正規 client より先に空接続・別 path の GET・途中切断を注入し、404 の受信完了を
+同期点にする。その後の正規応答と記録数、台本が消費されていないことを確かめる。無言の接続も
+開いたまま正規要求を通す。確率的な反復や CPU 負荷で再現させない。

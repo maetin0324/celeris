@@ -1,6 +1,10 @@
+#[cfg(test)]
+#[path = "../../../../tests/support/http_sync.rs"]
+mod fake_http;
+
 use super::*;
 use clap::Parser;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpListener;
 use std::thread;
 
@@ -152,31 +156,9 @@ fn exercise(command: IntegrationCommand, expected_method: &str, expected_path: &
     let addr = listener.local_addr().unwrap();
     let expected_first = format!("{method} /api/v1{path} HTTP/1.1");
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut bytes = Vec::new();
-        let mut buf = [0; 4096];
-        loop {
-            let n = stream.read(&mut buf).unwrap();
-            if n == 0 {
-                break;
-            }
-            bytes.extend_from_slice(&buf[..n]);
-            let text = String::from_utf8_lossy(&bytes);
-            if let Some((head, content)) = text.split_once("\r\n\r\n") {
-                let length = head
-                    .lines()
-                    .find_map(|l| {
-                        l.to_ascii_lowercase()
-                            .strip_prefix("content-length: ")
-                            .and_then(|x| x.trim().parse::<usize>().ok())
-                    })
-                    .unwrap_or(0);
-                if content.len() >= length {
-                    break;
-                }
-            }
-        }
-        let request = String::from_utf8_lossy(&bytes).into_owned();
+        let mut parts = expected_first.split_whitespace();
+        let (mut stream, request) =
+            fake_http::accept(&listener, parts.next().unwrap(), parts.next().unwrap());
         assert!(request.starts_with(&expected_first), "{request}");
         assert!(request.contains("Authorization: Bearer admin-token\r\n"));
         let reply = r#"{"integrated":false}"#;

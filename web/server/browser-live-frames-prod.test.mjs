@@ -14,6 +14,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { createApp } from "./app.js";
 import { makeSocketDir } from "./socket-path.js";
+import { acceptFixtureRequest } from "./test-support/http-fixture.mjs";
 
 const dir = mkdtempSync(path.join(tmpdir(), "celeris-browser-live-prod-"));
 const socketDir = makeSocketDir("cbp-", "owner.sock");
@@ -59,6 +60,7 @@ const daemonRequests = [];
 let grantProblem = null;
 const logs = [];
 const daemon = http.createServer((req, res) => {
+  if (!acceptFixtureRequest(req, res)) return;
   let body = "";
   req.on("data", (chunk) => {
     body += chunk;

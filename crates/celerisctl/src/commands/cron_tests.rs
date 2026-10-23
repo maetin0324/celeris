@@ -1,5 +1,9 @@
+#[cfg(test)]
+#[path = "../../../../tests/support/http_sync.rs"]
+mod fake_http;
+
 use super::*;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpListener;
 use std::thread;
 
@@ -15,31 +19,7 @@ fn exercise(
     let method = expected_method.to_string();
     let body = expected_body.map(str::to_string);
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut bytes = Vec::new();
-        let mut buf = [0; 4096];
-        loop {
-            let n = stream.read(&mut buf).unwrap();
-            if n == 0 {
-                break;
-            }
-            bytes.extend_from_slice(&buf[..n]);
-            let request = String::from_utf8_lossy(&bytes);
-            if let Some((head, content)) = request.split_once("\r\n\r\n") {
-                let length = head
-                    .lines()
-                    .find_map(|l| {
-                        l.to_ascii_lowercase()
-                            .strip_prefix("content-length: ")
-                            .and_then(|x| x.trim().parse::<usize>().ok())
-                    })
-                    .unwrap_or(0);
-                if content.len() >= length {
-                    break;
-                }
-            }
-        }
-        let request = String::from_utf8_lossy(&bytes);
+        let (mut stream, request) = fake_http::accept(&listener, &method, &path);
         let first = request.lines().next().unwrap();
         assert!(
             first.starts_with(&format!("{method} {path} HTTP/1.1")),
@@ -196,22 +176,9 @@ fn cron_request_keeps_the_api_v1_prefix_separator() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut bytes = Vec::new();
-        let mut buf = [0; 4096];
-        while !String::from_utf8_lossy(&bytes).contains("\r\n\r\n") {
-            let n = stream.read(&mut buf).unwrap();
-            if n == 0 {
-                break;
-            }
-            bytes.extend_from_slice(&buf[..n]);
-        }
+        let (mut stream, request) = fake_http::accept(&listener, "GET", "/api/v1/cron-jobs");
         stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\nconnection: close\r\n\r\n{\"ok\":true}").unwrap();
-        String::from_utf8_lossy(&bytes)
-            .lines()
-            .next()
-            .unwrap()
-            .to_string()
+        request.lines().next().unwrap().to_string()
     });
     let api = ApiConfig {
         base_url: format!("http://{addr}/api/v1"),

@@ -936,16 +936,19 @@ async fn run_acp(
     let _ = tokio::fs::remove_file(&result_path).await;
     clear_delegate_file(&req.artifacts_dir).await;
 
-    let mut prompt = build_prompt_with_skill_list(&req.task, &req.context, run_id, &artifacts_rel);
+    // 必須規則（作業場所の CLAUDE.md）は prompt の先頭に写す。opencode は AGENTS.md があると CLAUDE.md を
+    // 読まないので、作業ツリーの file に頼らない。読めなければ run を落とす。
+    let rules = crate::required_rules::preamble_for_run(req.cwd()).await?;
+    let mut prompt = format!(
+        "{rules}{}",
+        build_prompt_with_skill_list(&req.task, &req.context, run_id, &artifacts_rel)
+    );
     // ADR-0127 D1/D3: mount された skill のディレクトリを `.agents/skills/<name>/` に丸写しし（opencode が
     // ネイティブに読む。他の ACP エージェントは前置きの一覧から読む）、前置きには名前・説明・パスの
     // 一覧だけを足す（本文は埋め込まない。`skills` が空なら前置きは 1 バイトも変わらない）。
     if let Err(e) = crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await {
         warn!("run {run_id}: failed to deliver skills to .agents/skills: {e}");
     }
-    crate::skills::deliver_required_rules(req.cwd())
-        .await
-        .map_err(|e| AdapterError::Other(format!("required rules delivery failed: {e}")))?;
     crate::campaign_pin::enforce(&run_dir, req).await?;
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
@@ -1144,7 +1147,10 @@ async fn run_acp(
                 .and_then(|v| v.as_bool())
                 == Some(true),
         });
-        prompt = build_prompt_with_skill_list(&req.task, &context, run_id, &artifacts_rel);
+        prompt = format!(
+            "{rules}{}",
+            build_prompt_with_skill_list(&req.task, &context, run_id, &artifacts_rel)
+        );
         crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
     }
     if cos_chat.is_some()

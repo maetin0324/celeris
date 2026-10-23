@@ -220,14 +220,15 @@ async fn run_pi(
     // context files and the cwd line) and only the skill list and the run specific part on stdin.
     let cos_parts =
         crate::claude_code::build_cos_chat_parts(&req.task, &req.context, run_id, &artifacts_rel);
+    // 必須規則（作業場所の CLAUDE.md）は prompt の先頭に写す。pi は AGENTS.md があると CLAUDE.md を
+    // 読まないので、作業ツリーの file に頼らない。読めなければ run を落とす。
+    let rules = crate::required_rules::preamble_for_run(req.cwd()).await?;
     let prompt = match &cos_parts {
         Some(parts) => cos_chat_pi_input(&req.context.skills, &parts.variable),
         None => build_prompt_with_skill_list(&req.task, &req.context, run_id, &artifacts_rel),
     };
+    let prompt = format!("{rules}{prompt}");
     crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await?;
-    crate::skills::deliver_required_rules(req.cwd())
-        .await
-        .map_err(|e| AdapterError::Other(format!("required rules delivery failed: {e}")))?;
     crate::campaign_pin::enforce(&run_dir, req).await?;
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     let recorded = match &cos_parts {

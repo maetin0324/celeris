@@ -1513,3 +1513,87 @@ fn acp_tool_calls_that_spawn_subagents_or_launch_llm_clis_are_reported() {
         "{violations:#?}"
     );
 }
+
+/// ADR 2026-10-23-required-rules-prompt-delivery: fresh worktree から ACP の run を回すと、agent が受け取る
+/// `session/prompt` の文面に正本 CLAUDE.md の全文が 1 度だけ入る（opencode は AGENTS.md があると CLAUDE.md を
+/// 読まない）。追跡された AGENTS.md・symlink の repo でも作業ツリーは変わらず、run を重ねても増えない。
+#[tokio::test]
+async fn required_rules_reach_acp_from_a_fresh_worktree() {
+    use crate::test_support::*;
+    for fixture in AGENTS_MD_FIXTURES {
+        let root = tempfile::tempdir().unwrap();
+        let wt = fresh_worktree_with_rules(root.path(), fixture);
+        let ws = root.path().join("ws");
+        let seen = root.path().join("seen.jsonl");
+        let artifacts = ws.join("artifacts");
+        let config = stub_acp(
+            root.path(),
+            &format!(
+                r#"read -r _init
+printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1,"agentCapabilities":{{}}}}}}'
+read -r _new
+printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"sess-1","configOptions":[]}}}}'
+read -r prompt
+printf '%s\n' "$prompt" > '{seen}'
+mkdir -p '{a}'
+printf '%s' '{{"summary":"ok","evidence":[]}}' > '{a}/result.json'
+printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
+"#,
+                seen = seen.display(),
+                a = artifacts.display()
+            ),
+        );
+        let adapter = AcpAdapter::new(config);
+        let before = agents_md_state(&wt);
+        for run in ["run-rules-1", "run-rules-2"] {
+            let mut req = sample_req(ws.clone());
+            req.work_dir = Some(wt.clone());
+            let sink = RecordingSink::default();
+            adapter
+                .run(req, run, default_limits(), &sink)
+                .await
+                .unwrap();
+            let line: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&seen).unwrap()).unwrap();
+            assert_eq!(line["method"], "session/prompt", "{line}");
+            let text: String = line["params"]["prompt"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect();
+            assert_required_rules_in(&text);
+        }
+        assert_eq!(agents_md_state(&wt), before, "{fixture:?}");
+        assert_eq!(worktree_changes(&wt), "", "{fixture:?}");
+    }
+}
+
+/// 必須規則が読めない作業場所（参照先なしの CLAUDE.md）では ACP agent を起動せずに run が落ちる。
+#[tokio::test]
+async fn acp_run_fails_when_required_rules_are_unreadable() {
+    let dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink("/nonexistent/rules.md", dir.path().join("CLAUDE.md")).unwrap();
+    let started = dir.path().join("started");
+    let mut config = skills_ok_acp(dir.path());
+    crate::test_support::write_executable(
+        Path::new(&config.command),
+        &format!("#!/bin/sh\ntouch '{}'\nexit 1\n", started.display()),
+    );
+    config.startup_timeout = Duration::from_secs(5);
+    let sink = RecordingSink::default();
+    let err = AcpAdapter::new(config)
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "run-rules-bad",
+            default_limits(),
+            &sink,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("required rules delivery failed"),
+        "{err}"
+    );
+    assert!(!started.exists());
+}

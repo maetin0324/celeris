@@ -158,17 +158,13 @@ pub fn skills_block(skills: &[SkillMount]) -> Option<String> {
     Some(out)
 }
 
-/// `AGENTS.md` に足す「必須規則」節の区切り。正本は作業場所の `CLAUDE.md`（Claude Code が直接読む）。
-pub const RULES_BEGIN: &str = "<!-- celeris:rules:start -->";
-pub const RULES_END: &str = "<!-- celeris:rules:end -->";
-
-/// 区切り外の内容を保ちながら、`begin`〜`end` の節だけを更新する。
-fn rewrite_section(existing: &str, begin: &str, end: &str, block: Option<&str>) -> String {
+/// 区切り外の内容を保ちながら celeris の節だけを更新する。
+pub fn rewrite_agents_md(existing: &str, block: Option<&str>) -> String {
     let mut base = existing.to_string();
-    if let (Some(start), Some(end_tag_at)) = (base.find(begin), base.find(end)) {
-        let end_at = end_tag_at + end.len();
-        if start <= end_at {
-            base.replace_range(start..end_at, "");
+    if let (Some(start), Some(end_tag_at)) = (base.find(SECTION_BEGIN), base.find(SECTION_END)) {
+        let end = end_tag_at + SECTION_END.len();
+        if start <= end {
+            base.replace_range(start..end, "");
         }
     }
     let base = base.trim_end();
@@ -183,26 +179,16 @@ fn rewrite_section(existing: &str, begin: &str, end: &str, block: Option<&str>) 
     if !out.is_empty() {
         out.push_str("\n\n");
     }
-    out.push_str(begin);
+    out.push_str(SECTION_BEGIN);
     out.push('\n');
     out.push_str(block.trim_end());
     out.push('\n');
-    out.push_str(end);
+    out.push_str(SECTION_END);
     out.push('\n');
     out
 }
 
-/// 区切り外の内容を保ちながら celeris の skills 節だけを更新する。
-pub fn rewrite_agents_md(existing: &str, block: Option<&str>) -> String {
-    rewrite_section(existing, SECTION_BEGIN, SECTION_END, block)
-}
-
-/// 区切り外の内容を保ちながら celeris の必須規則節だけを更新する。
-pub fn rewrite_rules_section(existing: &str, rules: Option<&str>) -> String {
-    rewrite_section(existing, RULES_BEGIN, RULES_END, rules)
-}
-
-/// `codex` / `pi` / ACP 用の AGENTS.md 節。空なら既存の celeris 節だけを除去する。
+/// `codex` 用の AGENTS.md 節。空なら既存の celeris 節だけを除去する。
 pub async fn deliver_agents_md(cwd: &Path, skills: &[SkillMount]) -> std::io::Result<()> {
     let path = cwd.join("AGENTS.md");
     let existing = match tokio::fs::read_to_string(&path).await {
@@ -215,65 +201,6 @@ pub async fn deliver_agents_md(cwd: &Path, skills: &[SkillMount]) -> std::io::Re
     }
     let updated = rewrite_agents_md(&existing, skills_block(skills).as_deref());
     tokio::fs::write(&path, updated).await
-}
-
-/// 必須規則の正本（作業場所直下の `CLAUDE.md`）を `AGENTS.md` の `celeris:rules` 節へ写す。
-/// Claude Code は `CLAUDE.md` を直接読むので不要。Codex・Pi・opencode 等の ACP は `AGENTS.md` を読むが、
-/// `AGENTS.md` は gitignore 対象で fresh worktree には無いため、ここで届ける。
-///
-/// - `CLAUDE.md` が無い作業場所（規則を持たない repo）は何もしない。
-/// - `CLAUDE.md` が読めない・空でないのに書けない・書いた後に読み戻して節が無い、は `Err`（run を落とす）。
-/// - 区切り外のユーザーの内容は保つ。
-pub async fn deliver_required_rules(cwd: &Path) -> std::io::Result<()> {
-    let source = cwd.join("CLAUDE.md");
-    let rules = match tokio::fs::read_to_string(&source).await {
-        Ok(rules) => rules,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            // 壊れた symlink（参照先なし）は規則があるはずの宣言なので、欠落として検出する。
-            if tokio::fs::symlink_metadata(&source).await.is_ok() {
-                return Err(std::io::Error::new(
-                    error.kind(),
-                    format!(
-                        "required rules source is a dangling link: {}",
-                        source.display()
-                    ),
-                ));
-            }
-            return Ok(());
-        }
-        Err(error) => {
-            return Err(std::io::Error::new(
-                error.kind(),
-                format!("cannot read required rules {}: {error}", source.display()),
-            ));
-        }
-    };
-    if rules.trim().is_empty() {
-        return Err(std::io::Error::other(format!(
-            "required rules source is empty: {}",
-            source.display()
-        )));
-    }
-    let path = cwd.join("AGENTS.md");
-    let existing = match tokio::fs::read_to_string(&path).await {
-        Ok(existing) => existing,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error),
-    };
-    let block = format!(
-        "## 必須規則（celeris。正本は CLAUDE.md。作業前に必ず読み、従うこと）\n\n{}",
-        rules.trim_end()
-    );
-    let updated = rewrite_rules_section(&existing, Some(&block));
-    tokio::fs::write(&path, &updated).await?;
-    let written = tokio::fs::read_to_string(&path).await?;
-    if !written.contains(RULES_BEGIN) || !written.contains(rules.trim_end()) {
-        return Err(std::io::Error::other(format!(
-            "required rules were not delivered to {}",
-            path.display()
-        )));
-    }
-    Ok(())
 }
 
 /// `acp` の前置きに足す一覧。

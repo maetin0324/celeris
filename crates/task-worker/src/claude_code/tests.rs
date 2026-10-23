@@ -4497,3 +4497,51 @@ async fn claude_code_error_carries_observed_usage() {
     assert_eq!(usage.cache_read_tokens, Some(230));
     assert_eq!(usage.cache_creation_tokens, Some(20));
 }
+
+/// ADR 2026-10-23-required-rules-prompt-delivery D3: Claude Code は fresh worktree の `CLAUDE.md` を直接読む。
+/// claude は worktree を cwd として起動され、そこに正本の全文が見え、project 設定（CLAUDE.md）を外す
+/// 引数（`--setting-sources`・`--bare`）は付かない。前置きは足さない（二重にしない）。作業ツリーは変わらない。
+#[tokio::test]
+async fn required_rules_reach_claude_code_from_a_fresh_worktree() {
+    use crate::test_support::*;
+    for fixture in AGENTS_MD_FIXTURES {
+        let root = tempfile::tempdir().unwrap();
+        let wt = fresh_worktree_with_rules(root.path(), fixture);
+        let ws = root.path().join("ws");
+        let out = root.path().join("seen");
+        std::fs::create_dir(&out).unwrap();
+        let artifacts = ws.join("artifacts");
+        let script = format!(
+            "cat > '{o}/prompt'\npwd > '{o}/cwd'\ncat CLAUDE.md > '{o}/claude_md'\nfor a in \"$@\"; do printf '%s\\0' \"$a\" >> '{o}/args.log'; done\nmkdir -p '{a}'\nprintf '%s' '{{\"summary\":\"ok\",\"evidence\":[]}}' > '{a}/result.json'\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}}'\n",
+            o = out.display(),
+            a = artifacts.display()
+        );
+        let adapter = ClaudeCodeAdapter::new(stub_claude(root.path(), &script));
+        let mut req = sample_req(ws.clone());
+        req.work_dir = Some(wt.clone());
+        adapter
+            .run(
+                req,
+                "run-rules",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .unwrap();
+        let seen = |name: &str| std::fs::read_to_string(out.join(name)).unwrap();
+        assert_eq!(seen("cwd").trim(), wt.to_string_lossy(), "{fixture:?}");
+        assert_eq!(seen("claude_md"), repo_claude_md(), "{fixture:?}");
+        let args = captured_args(&out);
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.starts_with("--setting-sources") || a == "--bare"),
+            "{args:?}"
+        );
+        assert!(
+            !seen("prompt").contains(crate::required_rules::RULES_HEADING),
+            "{fixture:?}"
+        );
+        assert_eq!(worktree_changes(&wt), "", "{fixture:?}");
+    }
+}

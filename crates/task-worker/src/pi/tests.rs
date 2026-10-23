@@ -543,3 +543,63 @@ printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"
     let raw = std::fs::read_to_string(dir.path().join("args.nul")).unwrap();
     assert!(!raw.split('\0').any(|a| a == "--append-system-prompt"));
 }
+
+/// ADR 2026-10-23-required-rules-prompt-delivery: fresh worktree から pi の run を回すと、pi が受け取る
+/// prompt（stdin）に正本 CLAUDE.md の全文が 1 度だけ入る（pi は AGENTS.md があると CLAUDE.md を読まない）。
+/// 追跡された AGENTS.md・symlink の repo でも作業ツリーは変わらず、run を重ねても増えない。
+#[tokio::test]
+async fn required_rules_reach_pi_from_a_fresh_worktree() {
+    use crate::test_support::*;
+    for fixture in AGENTS_MD_FIXTURES {
+        let root = tempfile::tempdir().unwrap();
+        let wt = fresh_worktree_with_rules(root.path(), fixture);
+        let ws = root.path().join("ws");
+        std::fs::create_dir(&ws).unwrap();
+        let seen = root.path().join("seen.txt");
+        let artifacts = ws.join("artifacts");
+        // `config` の stub は stdin を cwd の prompt.copy に書くので、ここでは cwd を汚さない stub を作る。
+        let cfg = config(root.path(), "");
+        crate::test_support::write_executable(
+            std::path::Path::new(&cfg.command),
+            &format!(
+                "#!/bin/sh\ncat > '{}'\nmkdir -p '{a}'\nprintf '%s' '{{\"summary\":\"ok\",\"evidence\":[]}}' > '{a}/result.json'\nprintf '%s\\n' '{{\"type\":\"agent_end\",\"messages\":[]}}'\n",
+                seen.display(),
+                a = artifacts.display()
+            ),
+        );
+        let before = agents_md_state(&wt);
+        for run in ["rules-1", "rules-2"] {
+            let mut req = request(&ws);
+            req.work_dir = Some(wt.clone());
+            let result = PiAdapter::new(cfg.clone())
+                .run(req, run, limits(), &NullSink)
+                .await
+                .unwrap();
+            assert!(matches!(result.terminal, Terminal::Done { .. }));
+            assert_required_rules_in(&std::fs::read_to_string(&seen).unwrap());
+        }
+        assert_eq!(agents_md_state(&wt), before, "{fixture:?}");
+        assert_eq!(worktree_changes(&wt), "", "{fixture:?}");
+    }
+}
+
+/// 必須規則が読めない作業場所（空の CLAUDE.md）では pi を起動せずに run が落ちる。
+#[tokio::test]
+async fn pi_run_fails_when_required_rules_are_unreadable() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("CLAUDE.md"), "\n").unwrap();
+    let started = dir.path().join("started");
+    let cfg = config(
+        dir.path(),
+        &format!("touch '{}'\n{SUCCESS}", started.display()),
+    );
+    let err = PiAdapter::new(cfg)
+        .run(request(dir.path()), "rules-bad", limits(), &NullSink)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("required rules delivery failed"),
+        "{err}"
+    );
+    assert!(!started.exists());
+}

@@ -797,10 +797,12 @@ async fn run_codex(
     let cos_parts =
         crate::claude_code::build_cos_chat_parts(&req.task, &req.context, run_id, &artifacts_rel);
     let work_note = work_dir_note(req.work_dir.as_deref(), &req.workspace, &req.artifacts_dir);
+    // 必須規則（作業場所の CLAUDE.md）は prompt の先頭に写す。読めなければ run を落とす。
+    let rules = crate::required_rules::preamble_for_run(req.cwd()).await?;
     let prompt = match &cos_parts {
-        Some(parts) => format!("{work_note}{}", parts.variable),
+        Some(parts) => format!("{rules}{work_note}{}", parts.variable),
         None => format!(
-            "{work_note}{}",
+            "{rules}{work_note}{}",
             build_prompt(&req.task, &req.context, run_id, &artifacts_rel)
         ),
     };
@@ -820,10 +822,6 @@ async fn run_codex(
     if let Err(e) = crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await {
         warn!("run {run_id}: failed to deliver skills to .agents/skills: {e}");
     }
-    // 必須規則（CLAUDE.md が正本）は届かなければ run を落とす。skills 一覧の失敗は従来どおり警告。
-    crate::skills::deliver_required_rules(req.cwd())
-        .await
-        .map_err(|e| AdapterError::Other(format!("required rules delivery failed: {e}")))?;
     if let Err(e) = crate::skills::deliver_agents_md(req.cwd(), &req.context.skills).await {
         warn!("run {run_id}: failed to update AGENTS.md with skills: {e}");
     }

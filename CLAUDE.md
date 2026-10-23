@@ -22,7 +22,7 @@
 - テストで外部ネットワークに出ない。LLM呼び出しを伴う実機確認は、認証が使える環境ならエージェントが実行し証跡を task の進捗ファイルに残してよい。使えなければ手順を書いて人間に依頼する（ADR-0009 P-34）
 
 ## 変更の方針（破壊的変更を是とする）
-- 詳細は `agent-docs/adr/2026-10-11-breaking-changes-by-default.md`。Claude 以外の agent も同じ。この `CLAUDE.md` が必須規則の唯一の正本で、`AGENTS.md` は tracked ではなく、Codex・Pi・ACP の run 開始時に worker が `CLAUDE.md` の写しを `AGENTS.md` の `celeris:rules` 節へ書く（`crates/task-worker/src/skills.rs` の `deliver_required_rules`。Claude Code は `CLAUDE.md` を直接読む。配布に失敗した run は落ちる）。`AGENTS.md` を手で作らない・symlink にしない
+- 詳細は `agent-docs/adr/2026-10-11-breaking-changes-by-default.md`。Claude 以外の agent も同じ。この `CLAUDE.md` が必須規則の唯一の正本。Claude Code は直接読み、Codex・Pi・ACP の run には worker がこのファイルの全文を prompt の先頭に写す（`crates/task-worker/src/required_rules.rs`、`agent-docs/adr/2026-10-23-required-rules-prompt-delivery.md`。作業ツリーには書かない。読めない・空なら run は落ちる）。この repo は `AGENTS.md` を追跡しない（Codex の skills 一覧だけが生成する）。規則の写しとして `AGENTS.md` を手で作らない
 - 仕組みを置き換えるときは、同じ変更で旧い仕組み（コード経路・config 欄・API field・画面・文書・旧挙動の試験）を消す。deprecated・互換分岐・警告だけ出して無視・新旧切替 flag を残さない
 - 失敗した変更は git（revert・cherry-pick）と release の rollback で救出する。「念のため」旧い仕組みを残さない
 - 消した config 欄は読み込みエラーにし、本番 config の書き換えは進捗ファイルの「本番への移行」節に書く

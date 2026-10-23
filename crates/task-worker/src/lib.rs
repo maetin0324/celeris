@@ -54,6 +54,8 @@ pub mod process_group;
 mod progress;
 pub mod protocol;
 pub mod provider;
+/// ADR 2026-10-23-required-rules-prompt-delivery: 作業場所の CLAUDE.md を Codex・Pi・ACP の prompt に写す。
+pub mod required_rules;
 pub mod research_targets;
 pub mod result_location;
 pub mod result_report;

@@ -281,4 +281,4 @@ pub fn check_pin(
 
 #[cfg(test)]
 #[path = "variant_pin/tests.rs"]
-mod tests;
+pub(crate) mod tests;

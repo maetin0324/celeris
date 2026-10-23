@@ -2,7 +2,7 @@
 """Warn about oversized handwritten source and about untracked modules the
 build only sees by accident (ADR-0083).
 
-Classifies every tracked `.rs`/`.ts`/`.tsx` file as handwritten production,
+Classifies tracked and non-ignored untracked `.rs`/`.ts`/`.tsx` files as handwritten production,
 inline test (`#[cfg(test)] mod ... { }` embedded in a production file),
 external test (a dedicated `tests.rs` / `*_test*.rs` / `*.test.ts` file, or
 anything under a `tests/`, `e2e/` or `benches/` directory), or generated
@@ -19,7 +19,7 @@ Usage:
 
 Exit code is always 0 unless --strict is given and a non-excepted warning
 was found (or the tool itself failed to run). This is a warning-only
-guardrail (ADR-0083); it is not meant to fail a build by itself.
+inventory (ADR-0083). check-source-size.py supplies the mandatory differential gate.
 
 Heuristics rely on rustfmt formatting: a brace-delimited item ends at the
 first later line that is exactly `' ' * indent + '}'`. This is the same

@@ -412,3 +412,65 @@ async fn target_sweep_executor_cleans_finished_workspaces_and_scratch_at_critica
     }
     drop(lock);
 }
+
+/// Verify must not inspect dependencies or execute maintenance from the snapshot.
+#[tokio::test]
+async fn verify_skips_ineligible_ready_tasks_before_pre_dispatch_work() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        delay: Duration::ZERO,
+    });
+    let mut d = dispatcher(store.clone(), adapter, 1);
+    d.set_target_sweep(task_worker::target_sweep::SweepParams {
+        roots: vec![],
+        ..Default::default()
+    });
+    let mut dependency = new_task(tmp.path(), Check::Reviewer, 0);
+    dependency.status = Status::Done;
+    store.insert(&dependency).unwrap();
+    let mut excluded = new_task(tmp.path(), Check::Reviewer, 0);
+    excluded.depends_on.push(dependency.id);
+    excluded.labels = vec!["maintenance-action-target-sweep".into()];
+    store.insert(&excluded).unwrap();
+    d.set_eligible_tasks(Arc::new(|task: &Task| {
+        task.genre.as_deref() == Some("smoke")
+    }));
+    assert_eq!(d.dispatch_ready().unwrap(), 0);
+    assert!(
+        d.integrated_deps.is_empty(),
+        "excluded dependencies must not be inspected"
+    );
+    assert_eq!(
+        store.get(excluded.id).unwrap().unwrap().status,
+        Status::Ready
+    );
+    assert!(store.events_for(excluded.id).unwrap().is_empty());
+    assert!(d.dispatch_waits.is_empty());
+
+    // Capacity exhaustion must not publish waits for tasks outside this instance either.
+    d.max_concurrency = 0;
+    assert_eq!(d.dispatch_ready().unwrap(), 0);
+    assert!(d.dispatch_waits.is_empty());
+    d.max_concurrency = 1;
+    let mut smoke = new_task(
+        tmp.path(),
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    smoke.genre = Some("smoke".into());
+    store.insert(&smoke).unwrap();
+    run_until_task_terminal(&mut d, &store, smoke.id).await;
+    assert_eq!(
+        store.get(excluded.id).unwrap().unwrap().status,
+        Status::Ready
+    );
+}

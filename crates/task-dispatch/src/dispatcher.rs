@@ -2629,7 +2629,7 @@ impl Dispatcher {
             // 容量切れで照合しなかった tick: write-set の待機の数えを戻さない（2026-10-03-write-set-no-starvation）。
             self.carry_write_set_waits();
             // ADR 2026-10-11-task-wait-reasons M9: 照合しなかった ready は全体の枠待ち（窓の分だけ）。
-            for task in self.store.ready_tasks(self.ready_window())? {
+            for task in self.eligible_ready_tasks(self.ready_window())? {
                 self.note_dispatch_wait(task.id, global_capacity());
             }
             return Ok(0);
@@ -2637,7 +2637,7 @@ impl Dispatcher {
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。
         let window = self.ready_window();
         let ready_started = Instant::now();
-        let candidates = self.store.ready_tasks(window)?;
+        let candidates = self.eligible_ready_tasks(window)?;
         log_slow_step("ready_tasks", ready_started);
         // ADR-0130 D3: 終わった run の予約を捨て、長く待たされた候補を先に照合する。
         self.prune_write_set_state();

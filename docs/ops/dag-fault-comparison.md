@@ -1,7 +1,7 @@
 # DAG・外部待機・障害復旧の比較ドライバ（dagbench）
 
 ---
-tasks: [01M59KY5FNM0K4XGPPS61D0CA2, 01M5BT8CRNPJX1THX36XF4C7PZ, 01M5KVHDZ6PGW45VNA5E6MGRPC]
+tasks: [01M59KY5FNM0K4XGPPS61D0CA2, 01M5BT8CRNPJX1THX36XF4C7PZ, 01M5KVHDZ6PGW45VNA5E6MGRPC, 01M5KVHHCMVFY0ZDPKYVS09GXC]
 ---
 
 無 LLM で Celeris の通常経路と合理的な非同期 DAG baseline を比べる driver の公開仕様と、通常の実行・再生成手順。
@@ -51,6 +51,7 @@ ledger に残っているため再起動されない。
 |---|---|---|
 | in-process raw | `celeris.dagbench-raw/1` | `dagbench run` と `metrics::compute`（/2 は拒否） |
 | 別 process raw（外部時計・通知） | `celeris.dagbench-raw/2` | `process::compute_process`（/1 は拒否） |
+| A2 保存後停止 raw | `celeris.dagbench-durable-raw/1` | 正式 harness と `metrics::compute`（生存・保存証拠を必須検証） |
 | 指標表 | `celeris.dagbench-metrics/1` | `control_measured_metrics.json` / `.tsv` |
 | 制御 overhead | `celeris.dagbench-overhead/1` | `overhead::regenerate`（`control_isolated_overhead.json` / `.tsv`） |
 
@@ -76,7 +77,7 @@ cargo test -p celeris-campaign --test dagbench_process --test dagbench_overhead
 ```
 
 - `dagbench_accept`: `k2-mini`（campaign 1 本）を baseline と Celeris 通常経路（task-api の実 router への POST）の両方で、正常と 3 障害
-  （a1/a2 制御 process の SIGKILL・再起動、b 投入応答の喪失、c 完了通知の重複）で流す。各 run の生ログ（`ext.jsonl`・`worker.jsonl`・
+  （a1/a0 制御 process の SIGKILL・再起動、b 投入応答の喪失、c 完了通知の重複）で流す。各 run の生ログ（`ext.jsonl`・`worker.jsonl`・
   観測 ledger `fault.jsonl`）から `control.jsonl` と `run.json` を整え、`dagbench metrics` と同じ `compute` で指標を再生成して断言する:
   同一 DAG/資源の完了量、重複通知で二重計上なし、応答喪失で実起動数 = 外部記録の物理起動数、停止後に永続 state から再開。
   停止した制御 process への SIGKILL は runner が握る子 `Child` にだけ送る。
@@ -216,10 +217,32 @@ DAGBENCH_SUITE_OUT=/absolute/fresh/output \
 
 ## 測定専用 controller の停止（既知 job ID・wait 永続化後）
 
-`a2-restart-after-wait` は既存の停止条件名として残る。ただし正式な in-process harness の停止位置が
-Celeris の DB durable wait 確定後であることと、controller を停止しても独立外部 process が進むことを合わせた
-最終検証はタスク5の範囲。本タスクの graded K3 保存付き反復は nofault/A1/B/C に限る。
-本番サービスへの障害注入、有料 LLM、追加実クラスタ job は実施しない。
+`a2-restart-after-wait` は正式 harness から Supervisor / IpcExt に接続する。
+外部 job は controller と別 process にあり、停止中に observer が論理時計を進める。
+`durable_wait_saved` は seed で選んだ job の Waiting と job ID を読み直した境界。
+Celeris は TaskStore の cluster_job_waits_waiting、baseline は sync/rename 後の state.json を使う。
+親が再確認してから所有 controller だけを SIGKILL・回収し、外部完了の sync ack 後に再開する。
+保存前の旧 external_wait_started 停止は `a0-restart-before-wait-save` として分離する。
+旧 A2 raw は保存後停止の証拠として使用できない。
+
+A2 raw は celeris.dagbench-durable-raw/1。process-events.jsonl に job/wait ID、保存確認、終了、外部完了、再開の順序を保存し、
+durable-wait.json に親の読み取り結果を保存する。共通 metrics はこの証跡と同一物理 job の一度だけの起動・完了・回収を検証する。
+A2のCPU/RSSは停止前と再開直後の疎な標本であり、全runのCPU消費比較には使わない（別のisolated overhead手順を使う）。
+worker/grade の定義・attempt 上限は上記タスク4と共通。外部完了までの停止時間は論理時間として計上し、実 HPC 所要時間とは解釈しない。
+
+```sh
+DAGBENCH_A2_OUT=/absolute/fresh/output \
+  cargo test -p celeris-campaign --test dagbench_harness \
+  durable_checks::real_k3_a2_repetitions -- --exact --ignored
+```
+
+seed 17/24（2番目/1番目のwait）× attempt上限1/2 × 両armで、失敗維持と復旧後の独立採点を確認する。
+固定K3入力を使用し、graderを出力先へpinする。summary.jsonと各runのmetricsを保存する。
+これは実HPC復旧の証明ではない。既存PBS/Slurm pollerとSSH adapterは利用可能だが、
+正式harnessのExtBackendはまだIpcExt/ExtSimであり、実scheduler投入・成果物回収への接続は未実装。
+実HPCを主張するには、測定専用controller、投入台帳/job ID、停止中のqstat/sacct原票、同一job成果物とhash、
+独立grader用のobserved入力を結び、両armで等しい資源・予算・障害境界を固定する必要がある。
+タスク3のcollector schemaはこの無LLM検証では使用しない。追加有料測定・本番障害注入は実施しない。
 
 ## 指標の定義と、何が実測で何が未実施か
 

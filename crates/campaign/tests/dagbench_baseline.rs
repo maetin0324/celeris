@@ -170,6 +170,7 @@ fn worker_and_progress_logs_agree_on_external_execution_boundaries() {
                     boundaries,
                     vec![
                         ("node_started", 570),
+                        ("execution_finished", 630),
                         ("external_wait_started", 630),
                         ("post_wait_started", 960),
                         ("execution_finished", 990)

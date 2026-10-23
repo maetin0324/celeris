@@ -206,6 +206,11 @@ const WATCH_GAP: Duration = Duration::from_millis(10);
 impl FaultRunner {
     /// 制御 process を起こし、fault を観測し、(a) なら SIGKILL → 再起動して完走まで見届ける。
     pub fn run(&self) -> Result<RunnerOutcome, String> {
+        if self.case.trigger_event == "durable_wait_saved" {
+            return Err(
+                "durable_wait_saved requires the formal independent-process A2 harness".into(),
+            );
+        }
         let prior = read_obs(&self.obs_path).map_err(|e| e.to_string())?;
         let file = OpenOptions::new()
             .create(true)

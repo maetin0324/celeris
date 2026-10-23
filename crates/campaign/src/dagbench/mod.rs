@@ -10,3 +10,5 @@ pub mod metrics;
 pub mod overhead;
 pub mod process;
 pub mod run;
+
+pub mod durable;

@@ -478,8 +478,8 @@ fn a1_control_killed_after_accept_resumes_without_double_launch() {
 }
 
 #[test]
-fn a2_control_killed_after_wait_started_resumes() {
-    let c = case("a2-restart-after-wait");
+fn pre_save_control_killed_after_wait_started_resumes() {
+    let c = case("a0-restart-before-wait-save");
     let (b, ce) = both(&c);
     for r in [&b, &ce] {
         assert_external_consistent(r, &c);

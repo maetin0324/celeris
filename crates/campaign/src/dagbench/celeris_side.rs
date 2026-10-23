@@ -586,6 +586,7 @@ impl WorkerAdapter for StubWorker {
                         "controller stopped",
                     )));
                 }
+                sh.record("execution_finished", &campaign, &key, None);
                 let logical = RunSpec::logical_job(&campaign, ext);
                 let job_secs = sh.spec.ext_job_secs;
                 // 枠が空くまで poll_secs ごとに投入し直す（何も起こしていない拒否だけ）。

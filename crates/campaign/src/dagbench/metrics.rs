@@ -26,6 +26,9 @@ use super::{
     ext::{DATASET, Entry, read_ledger},
 };
 
+/// Formal A2: RunHeader plus mandatory persisted-wait and process survival proof.
+pub const DURABLE_RAW_SCHEMA: &str = "celeris.dagbench-durable-raw/1";
+
 pub const RAW_SCHEMA: &str = "celeris.dagbench-raw/1";
 /// 独立 process 版（制御 child を kill しても外部 process が完了する run）の raw 版。旧 in-process の
 /// [`RAW_SCHEMA`]（`/1`）とは別物で、`compute`（/1 専用）は /2 を、`dagbench::process::compute_process`（/2 専用）は /1 を
@@ -433,7 +436,7 @@ pub fn raw_schema_of(run_json: &str) -> Result<String, String> {
         .ok_or_else(|| "run.json: no schema".to_string())
 }
 
-/// raw dir の生ログだけから指標を計算する（旧 in-process 版 /1 専用）。
+/// raw dir の生ログから共通指標を計算する。A2 は保存・独立processの証明を必須検証する。
 pub fn compute(raw: &Path) -> Result<Metrics, String> {
     let run_json =
         fs::read_to_string(raw.join("run.json")).map_err(|e| format!("run.json: {e}"))?;
@@ -446,11 +449,14 @@ pub fn compute(raw: &Path) -> Result<Metrics, String> {
         ));
     }
     let h: RunHeader = serde_json::from_str(&run_json).map_err(|e| format!("run.json: {e}"))?;
-    if h.schema != RAW_SCHEMA || h.dataset != DATASET {
+    if (h.schema != RAW_SCHEMA && h.schema != DURABLE_RAW_SCHEMA) || h.dataset != DATASET {
         return Err(format!(
             "raw dir is not a {DATASET} dagbench record ({} / {})",
             h.schema, h.dataset
         ));
+    }
+    if h.schema == DURABLE_RAW_SCHEMA {
+        super::durable::verify(raw)?;
     }
     let workers = read_worker_ledger(&raw.join("worker.jsonl")).map_err(|e| e.to_string())?;
     let ext: Vec<Entry> = read_ledger(&raw.join("ext.jsonl")).map_err(|e| e.to_string())?;
@@ -716,6 +722,9 @@ pub fn compute(raw: &Path) -> Result<Metrics, String> {
                 .map(str::to_string)
         })
         .collect();
+    if h.schema == DURABLE_RAW_SCHEMA {
+        faults.insert("a2-restart-after-wait".into());
+    }
     if !restarts.is_empty() {
         faults.insert("control_restart".into());
     }
@@ -878,16 +887,24 @@ pub fn compute(raw: &Path) -> Result<Metrics, String> {
         .collect::<BTreeSet<_>>()
         .len() as u64;
 
-    let raw_sha256 = [
+    let mut raw_files = vec![
         "run.json",
         "ext.jsonl",
         "worker.jsonl",
         "control.jsonl",
         "samples.jsonl",
-    ]
-    .iter()
-    .map(|f| (f.to_string(), sha256_file(&raw.join(f))))
-    .collect();
+    ];
+    if h.schema == DURABLE_RAW_SCHEMA {
+        raw_files.extend([
+            "durable-wait.json",
+            "process-events.jsonl",
+            "controller-outcome.json",
+        ]);
+    }
+    let raw_sha256 = raw_files
+        .iter()
+        .map(|f| (f.to_string(), sha256_file(&raw.join(f))))
+        .collect();
     let observed_end = workers
         .iter()
         .map(|e| e.logical_secs)

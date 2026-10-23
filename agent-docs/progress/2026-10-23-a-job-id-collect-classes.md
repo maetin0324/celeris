@@ -48,12 +48,14 @@ ADR: `agent-docs/adr/2026-10-23-a-submit-audit-and-collect-classes.md`。
 
 ## 再試行での補完（attempt 2〜3 と差し戻し対応）
 
-base は main `a3933dc2`（提出直前に `git merge-base --is-ancestor a3933dc2 HEAD` で確認）。本 task の main 反映は未実施で、このブランチを提出する。commit は rebase で hash が変わるので subject で書く（`git log --format=%s a3933dc2..HEAD` の順）:
+base は main `df3a0e01`（「試験用サーバーが迷い込み接続を要求として数えないようにする」。差し戻し時の base `a3933dc2` はその祖先）。提出直前に `git merge-base --is-ancestor df3a0e01 HEAD` と `git merge-base --is-ancestor a3933dc2 HEAD` で確認した。本 task の main 反映は未実施で、このブランチを提出する。commit は rebase で hash が変わるので subject で書く（`git log --format=%s df3a0e01..HEAD` の順）:
 - 「A の受理済み job ID を submit wrapper の受理記録から台帳へ運び、収集の失敗を分類して研究の失敗と分ける」: 受理記録・track・台帳・CollectClass。
 - 「Preserve collector failure causes through grade binding and exports」: `GradeOutcome::ObservationFailure(Vec<CollectIssue>)`。
 - 「Count collector failures independently of executor outcome in check/export」: 観測障害の全 cell 集計と `observation_breakdown`。
 - 「Remove unwrap in collector binding and merge retry report into agent-docs progress」: grades.rs の unwrap 除去、旧 docs/progress の retry 文書を本書へ統合。
-- 「test(celerisctl): publish worker PID atomically before signal check」「test(celeris): ignore unrelated requests in fake credential webhook」: 試験だけの flaky 補修。
+- 「test(celerisctl): publish worker PID atomically before signal check」: 試験だけの flaky 補修。
+- 旧「test(celeris): ignore unrelated requests in fake credential webhook」は、main の「試験用サーバーが迷い込み接続を要求として数えないようにする」が同じ偽 webhook を共通 reader（期待する method/path の完全な要求だけを数える）で直した上位互換なので、rebase で main 側を採って消えた。
+- 「docs: fill missing progress front matter fields」: 前回 run の後 check（`progress-index.sh --check`）が main 由来の 8 file の front matter 欠け（title・tasks・status・updated）で落ちたため欄を補った（本文は不変）。
 - 「Count not_submitted as model failure, not observation failure」: 今回の差し戻し対応（下記）。
 - ほかは報告（docs:）の commit。
 
@@ -64,7 +66,8 @@ base は main `a3933dc2`（提出直前に `git merge-base --is-ancestor a3933dc
 - check/export の `observation_failed` は観測障害の cell 数、`observation_failures` は分類別 cell 数（重複可、和を分母に使わない）。executor の結果と独立に全 cell で数える。排他の内訳用に `grader_observation_failed` を持つ。観測障害は complete=false とし再収集・再採点を案内する。
 - `faults::reconcile`: `fault_breakdown`（注入状態 × executor/grade 結果）は not_submitted だけの cell を `model_failure`（注入した fault の下でのモデルの失敗）と数え、`observation_failed` は観測障害の cell だけ。`observation_breakdown`（注入状態 × observation_failed/no_collector_failure）も同じ判定で、not_submitted だけの cell は no_collector_failure。
 - 試験: `tests/grade_failure_class.rs` `collector_classes_remain_distinct_from_grader_and_injected_faults` は NotSubmitted で grader_failed==n・observation_failed==0・`fault_breakdown.injected.model_failure`==1（observation_failed 無し）、他 6 分類は observation_failed==n を確かめる。新規 `injected_fault_give_up_without_submit_is_model_failure_not_observation_failure` は注入 fault 下で投げずに諦めた cell が model failure（complete=true、needs_regrade=false、classify=ModelFailure）で、NotSubmitted+FetchFailed の混在は観測障害になることを確かめる。`launcher` は取得失敗 → grade → binding → check/export の通常経路と grades.history.jsonl の再採点履歴を確かめる。
-- 通知試験 `credential_wait_notify` の偽 webhook と `worker_run_signal` の PID 公開は試験だけの局所修正（本番の処理は不変）。
+- `worker_run_signal` の PID 公開は試験だけの局所修正（本番の処理は不変）。`credential_wait_notify` の偽 webhook は main 版を使う。
+- 前回 run の後 check で `classify_tick::e2e` の Jev 試験が空接続の誤計数（left 3 / right 1）で落ちた。main の上記 commit がこの試験の偽 server も直しているので、main への rebase で取り込んだ。
 - ADR `agent-docs/adr/2026-10-23-a-submit-audit-and-collect-classes.md` の D4・D6 に not_submitted の扱いを反映した。
 
 ### 証拠の保存と測定開始条件

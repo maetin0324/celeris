@@ -1,5 +1,7 @@
 ---
-task: 01M5EKSPKAKTBEYD5RHGZ0S3AQ
+title: preflight に env-lock の照合を入れる・offline-lock のモデル一覧は測定 daemon から取る
+tasks: [01M5EKSPKAKTBEYD5RHGZ0S3AQ]
+updated: 2026-10-21
 status: done
 completed: 2026-10-21
 adr: agent-docs/adr/2026-10-21-preflight-env-lock-check.md

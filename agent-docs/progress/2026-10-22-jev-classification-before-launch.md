@@ -1,4 +1,6 @@
 ---
+title: Jev 分類を WU の起動に間に合わせる
+updated: 2026-10-22
 tasks: [01M5H617AKZ119RE9EGH1JMPX5]
 status: done
 completed: 2026-10-22

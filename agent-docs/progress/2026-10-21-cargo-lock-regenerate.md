@@ -1,4 +1,5 @@
 ---
+title: 統合の自動解決で Cargo.lock の衝突を再生成で解く
 tasks: [01M5GE1BGEJDRK1AQ1Y1TK85X0]
 status: done
 completed: 2026-10-22

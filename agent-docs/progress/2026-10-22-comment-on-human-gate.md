@@ -1,4 +1,7 @@
 ---
+title: comment が承認待ちを answer に化かす件
+tasks: [01M5HD1FGG2KJFDH8BPJ50AEW1]
+updated: 2026-10-22
 status: done
 completed: 2026-10-22
 ---

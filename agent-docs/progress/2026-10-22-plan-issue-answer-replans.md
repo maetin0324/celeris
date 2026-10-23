@@ -1,4 +1,6 @@
 ---
+title: plan_issue への人の回答で計画（check・範囲）を直す
+updated: 2026-10-22
 status: done
 completed: 2026-10-22
 tasks: [01M5HMXMZ8CJ0JQRJNPD707N2P]

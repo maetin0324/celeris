@@ -1,4 +1,7 @@
 ---
+title: config の動的変更（再起動なしに Web UI から）
+status: done
+updated: 2026-10-22
 tasks: [01M5H8CYR3587G4RW3VXYEVZCP]
 ---
 # config の動的変更（再起動なしに Web UI から）

@@ -1,4 +1,6 @@
 ---
+title: harness の残量選択の復活、frontier lane の規則、完了単位の根拠表
+updated: 2026-10-22
 tasks: [01M5H8CYQHDBSCB3VQRB60K8PJ]
 status: done
 completed: 2026-10-22

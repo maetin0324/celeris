@@ -1,4 +1,7 @@
 ---
+title: grader の入力展開を自前化・雛形 max_turns=100 必須化
+tasks: [01M5EN2R1E5A6PNN4KPJZ3GHB3]
+updated: 2026-10-21
 status: done
 completed: 2026-10-21
 adr: agent-docs/adr/2026-10-21-grader-own-input-extraction-and-max-turns.md

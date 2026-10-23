@@ -158,6 +158,20 @@ pub enum Event {
         merge_candidate_sha: String,
         attempt: u32,
     },
+    /// ADR 2026-10-23-required-checks-bound-to-candidate: review が評価した必須検査（リポジトリの
+    /// `[commands] check`）の結果を、基底 `target_sha`・候補 `reviewed_sha` に束縛して残す。
+    /// 同じ束縛の合格は再 review で再利用し、delivery は束縛が現在の候補・基底と一致する証跡だけを受け取る。
+    RequiredChecksEvaluated {
+        review_run: String,
+        repo_id: crate::RepoId,
+        target_sha: String,
+        reviewed_sha: String,
+        /// 評価した必須検査の定義（cmd を順に連ねた sha256）。
+        definition_sha256: String,
+        /// この定義を読んだリポジトリ（review が検査の定義を引く先頭のリポジトリ）。
+        definition_repo_id: crate::RepoId,
+        results: Vec<PhaseCheckResult>,
+    },
     /// ADR-0118 D4: a previously reviewed target advanced before integration.
     ReviewTargetAdvanced {
         review_run: String,

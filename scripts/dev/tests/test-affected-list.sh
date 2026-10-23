@@ -56,4 +56,16 @@ echo y >>"$d"/x.md
 [ -z "$(run)" ] || fail "(c) docs only not empty"
 CELERIS_WU_BASE="$base" bash "$here/scripts/dev/test-affected.sh" 2>/dev/null || fail "(c) docs only exit"
 
+# (d) 統合の検査（CELERIS_WU_BASE なし。Task の worktree で env 無しに流れる）: 基準は merge-base(HEAD, main)。
+# commit 済みの Task ブランチの変更が空 diff にならず、main へ取り込んだ後の HEAD==main だけが空になる。
+git checkout -q -- .
+git checkout -q -b task
+echo "// t" >>crates/a/src/lib.rs
+git commit -q -am "task change"
+integ() { env -u CELERIS_WU_BASE bash "$here/scripts/dev/test-affected.sh" --list 2>"$work/err"; }
+[ "$(integ)" = "a
+b" ] || fail "(d) integration base must not be an empty diff: got [$(integ)]"
+# 基準を HEAD にした呼び出し（過去の退行: base が HEAD 自身）は空になる。基準の既定がそうならないことを上で確かめた。
+[ -z "$(CELERIS_WU_BASE="$(git rev-parse HEAD)" bash "$here/scripts/dev/test-affected.sh" --list 2>/dev/null)" ] || fail "(d) explicit HEAD base should be empty"
+
 echo "test-affected-list: ok"

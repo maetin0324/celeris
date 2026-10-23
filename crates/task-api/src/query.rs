@@ -279,6 +279,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::WorkerFinished { .. } => "worker_finished",
         Event::ReviewVerdict { .. } => "review_verdict",
         Event::ReviewTargetSynced { .. } => "review_target_synced",
+        Event::RequiredChecksEvaluated { .. } => "required_checks_evaluated",
         Event::ReviewTargetAdvanced { .. } => "review_target_advanced",
         Event::IntegrationRepairScheduled { .. } => "integration_repair_scheduled",
         Event::IntegrationRepairResolved { .. } => "integration_repair_resolved",

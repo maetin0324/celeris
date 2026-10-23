@@ -79,6 +79,20 @@ async fn target_sync_pre_review_sync_root_reviews_the_rebased_sha() {
     check_snapshot(&store, &task, &target, &reviewed);
     assert!(run_until_idle(&mut d, 100).await.idle);
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    // ADR 2026-10-23-required-checks-bound-to-candidate: 必須検査の証跡が review の基底・候補に束縛されて残る。
+    let evidence: Vec<(String, String)> = events_of(&store, &task)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::RequiredChecksEvaluated {
+                target_sha,
+                reviewed_sha,
+                results,
+                ..
+            } if results.iter().all(|r| r.pass) => Some((target_sha, reviewed_sha)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(evidence, vec![(target.clone(), reviewed.clone())]);
     assert!(
         store
             .events_for(task.id)

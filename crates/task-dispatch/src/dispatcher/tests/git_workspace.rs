@@ -1032,7 +1032,7 @@ async fn the_repository_check_commands_are_the_reviewers_default() {
     task.project_id = Some(project_id);
     task.repos = repos.iter().map(task_core::RepoRef::of).collect();
     store.insert(&task).unwrap();
-    // 自分で検査コマンドを書いたタスクには足さない（明示が勝つ）。
+    // ADR 2026-10-23-required-checks-bound-to-candidate: 自分で検査コマンドを書いたタスクにも必須検査は足される（置き換えない）。
     let mut explicit = new_task(
         &code,
         Check::Command {
@@ -1083,10 +1083,15 @@ async fn the_repository_check_commands_are_the_reviewers_default() {
     assert!(mine[1].1, "{mine:?}");
     assert!(mine[1].2.contains("workspace.toml check"), "{mine:?}");
 
-    // 自分で検査コマンドを書いたタスクには暗黙の条件は足されない。
+    // 自分で検査コマンドを書いたタスクにも、リポジトリの `check` は暗黙の条件として足される。
     let theirs = verdicts(explicit.id);
-    assert_eq!(theirs.len(), 1, "{theirs:?}");
+    assert_eq!(theirs.len(), 2, "{theirs:?}");
     assert!(theirs[0].1, "{theirs:?}");
+    assert_eq!(theirs[1].0, 1);
+    assert!(
+        theirs[1].1 && theirs[1].2.contains("workspace.toml check"),
+        "{theirs:?}"
+    );
     assert_eq!(
         store.get(explicit.id).unwrap().unwrap().status,
         Status::Done

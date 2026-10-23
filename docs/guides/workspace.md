@@ -29,7 +29,7 @@ deliverables = "."
 | `workspace.description` | 計画 run と worker の作業場所に出す説明 |
 | `run.mode` | リポジトリの `run = auto` での host/container 選択。明示した `run` が優先 |
 | `commands.setup` | worktree 作成後に一度実行。失敗時は run を始めない |
-| `commands.check` | worker に示す検査コマンド。task にコマンドの受け入れ条件が無い場合は review でも実行 |
+| `commands.check` | worker に示す検査コマンド。review でも必須で実行（task の受け入れ条件のコマンドで置き換えず、足す。同じ cmd は重複させない）。結果は基底・候補 SHA に束縛して記録し、main への取り込み前に照合する |
 | `outputs.docs` | 人向け文書の根。既定 `docs` |
 | `outputs.deliverables` | コード以外の成果物の根。既定 `.` |
 

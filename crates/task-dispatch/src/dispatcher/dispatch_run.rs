@@ -1344,9 +1344,8 @@ impl Dispatcher {
         self.max_concurrency * 4 + 16 + self.warned_unroutable.len()
     }
 
-    /// ADR-0043 D4: レビュー担当の `Check::Command` の既定になる検査コマンド
-    /// （タスクに `acceptance` が明示されていればそれが勝つ。決めるのはここではなく `review.rs` の
-    /// 呼び出し側）。**先頭のリポジトリの** `[commands] check` だけを使う。
+    /// ADR-0043 D4: レビュー担当の必須の検査コマンド（ADR 2026-10-23-required-checks-bound-to-candidate:
+    /// タスクの `acceptance` で置き換えない。実行は `review.rs`）。**先頭のリポジトリの** `[commands] check` だけを使う。
     /// ADR-0069 D3 / D6（Phase 114）: このタスクの lane を決める（`routing` を持つ execute タスクだけ。
     /// それ以外は `None` で従来どおり `worker_hint.tier`）。担当の実効 profile の天井（`allowed_tiers` /
     /// `budget.max_lane`）で丸め、やり直し（`attempts > 0`）ならイベントの軌跡から

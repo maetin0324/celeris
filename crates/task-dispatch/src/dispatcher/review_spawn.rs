@@ -846,6 +846,29 @@ impl Dispatcher {
         } else {
             self.default_checks(&task)
         };
+        // ADR 2026-10-23-required-checks-bound-to-candidate: 同じ基底 SHA・候補 SHA で既に合格した必須検査は
+        // 再実行しない（検査の定義を読むのは先頭のリポジトリ）。束縛が変われば何も再利用しない。
+        let reusable_checks = match task
+            .repos
+            .first()
+            .and_then(|first| synced.iter().find(|s| s.repo_id == first.repo_id))
+        {
+            Some(snapshot) => {
+                let events: Vec<Event> = self
+                    .store
+                    .events_for(task_id)?
+                    .into_iter()
+                    .map(|(_, e)| e)
+                    .collect();
+                task_core::required_checks::reusable_passes(
+                    &events,
+                    snapshot.repo_id,
+                    &snapshot.target_sha,
+                    &snapshot.reviewed_sha,
+                )
+            }
+            None => Default::default(),
+        };
         // ADR-0046 D4（Phase 59）: `mode = research` は「結果に出典か計測の記録」を暗黙の条件に足す。
         let research = task.mode == task_core::TaskMode::Research;
         let running_review_lock = review_lock.clone();
@@ -886,8 +909,9 @@ impl Dispatcher {
                 reviewer: reviewer_run,
                 human,
                 aggregate,
-                // ADR-0043 D4: リポジトリの `[commands] check`（タスクに検査コマンドが無いときだけ効く）。
+                // ADR-0043 D4: リポジトリの `[commands] check`（必須。acceptance で置き換えない）。
                 repo_checks,
+                reusable_checks,
                 // ADR-0046 D4: `mode = research` の暗黙の条件。
                 research,
                 // ADR-0117 D1: 人の決定・回答。

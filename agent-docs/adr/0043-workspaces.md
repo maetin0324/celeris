@@ -123,7 +123,7 @@ deliverables = "."                     # コード以外の成果物（図・表
 
 - **書いてあることだけ使う**。言語から推定しない。無ければ全部既定。
 - `check` は前置きに「このリポジトリの検査コマンド」として出し、レビュー担当の `Check::Command` の既定にもなる（タスクに
-  `acceptance` が明示されていればそれが勝つ）。
+  `acceptance` が明示されていればそれが勝つ）。※ 2026-10-23 の ADR required-checks-bound-to-candidate で置き換え: acceptance があっても必須検査は足される。
 - 読み取りは taskd 側（`task-core::workspace_config`。TOML、`deny_unknown_fields`、不正なら warn して既定）。
 
 ### D5. 変更の取り込み（intake）: 差分を見て、merge / PR / 捨てる

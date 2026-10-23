@@ -164,6 +164,49 @@ impl Dispatcher {
             }
             return Ok(());
         }
+        // ADR 2026-10-23-required-checks-bound-to-candidate: 必須検査の結果を、この review が固定した
+        // 基底 SHA・候補 SHA に束ねて残す（reviewer が延期でも、合格は同じ束縛の再 review で再利用される）。
+        {
+            let review_run = completed_review_run
+                .clone()
+                .unwrap_or_else(|| run_id.clone());
+            let definition_repo = task.repos.first().map(|r| r.repo_id);
+            let digest = task_core::required_checks::definition_digest(
+                &outcome
+                    .required_checks
+                    .iter()
+                    .map(|r| r.cmd.clone())
+                    .collect::<Vec<_>>(),
+            );
+            let snapshots: Vec<Event> = self
+                .store
+                .events_for(task_id)?
+                .into_iter()
+                .filter_map(|(_, e)| match e {
+                    Event::ReviewTargetSynced {
+                        review_run: run,
+                        repo_id,
+                        target_sha,
+                        reviewed_sha,
+                        ..
+                    } if run == review_run => {
+                        definition_repo.map(|definition_repo_id| Event::RequiredChecksEvaluated {
+                            review_run: review_run.clone(),
+                            repo_id,
+                            target_sha,
+                            reviewed_sha,
+                            definition_sha256: digest.clone(),
+                            definition_repo_id,
+                            results: outcome.required_checks.clone(),
+                        })
+                    }
+                    _ => None,
+                })
+                .collect();
+            for event in &snapshots {
+                self.store.append_event(task_id, event)?;
+            }
+        }
         let mut throttled_events = Vec::new();
         if let Some(pf) = outcome.provider_failure.take() {
             // ADR-0054 D2（Phase 113）: `pf.outcome = Some(..)` はプロバイダが分類できた供給側失敗

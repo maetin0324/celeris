@@ -98,6 +98,7 @@ pub mod quota;
 pub mod report;
 /// ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ（`project_repos`）とタスクの `repos`。
 pub mod repos;
+pub mod required_checks;
 pub mod route_extract;
 /// ADR 2026-10-11 task-routing-features D1-D4: deterministic feature and option records.
 pub mod route_record;

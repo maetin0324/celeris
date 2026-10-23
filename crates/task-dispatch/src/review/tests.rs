@@ -1419,3 +1419,99 @@ fn reviewer_run_gets_a_run_tmpdir_that_is_removed_on_drop() {
     drop(tmp);
     assert!(!dir.exists());
 }
+
+async fn review_with_repo_checks(
+    task: &Task,
+    ws: &ScriptedWorkspace,
+    dir: &Path,
+    repo_checks: &[&str],
+    reusable: &[&str],
+) -> ReviewOutcome {
+    review_task(
+        task,
+        ws,
+        dir,
+        &dir.join("artifacts"),
+        &[],
+        Duration::from_secs(60),
+        ReviewExtras {
+            repo_checks: repo_checks.iter().map(|c| (*c).to_string()).collect(),
+            reusable_checks: reusable.iter().map(|c| (*c).to_string()).collect(),
+            ..ReviewExtras::default()
+        },
+    )
+    .await
+}
+
+/// ADR 2026-10-23-required-checks-bound-to-candidate: acceptance の command は workspace.toml の必須検査を置き換えない。
+/// 同じ cmd（exit 0）は重複して走らせず、acceptance の判定を必須検査の結果にする。
+#[tokio::test]
+async fn acceptance_command_does_not_replace_the_repo_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = task_with(
+        vec![Check::Command {
+            cmd: "acc".into(),
+            expect_exit: 0,
+        }],
+        dir.path(),
+    );
+    let ws = ScriptedWorkspace::default();
+    ws.push("acc", exec_ok(0));
+    ws.push("repo-a", exec_ok(0));
+    let outcome = review_with_repo_checks(&task, &ws, dir.path(), &["repo-a", "acc"], &[]).await;
+    assert!(outcome.all_pass());
+    let calls: Vec<String> = ws
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.0.clone())
+        .collect();
+    assert_eq!(calls, vec!["acc".to_string(), "repo-a".to_string()]);
+    let results: Vec<(&str, bool)> = outcome
+        .required_checks
+        .iter()
+        .map(|r| (r.cmd.as_str(), r.pass))
+        .collect();
+    assert_eq!(results, vec![("repo-a", true), ("acc", true)]);
+
+    // 必須検査が落ちれば、acceptance が全部通っても不合格。
+    let ws = ScriptedWorkspace::default();
+    ws.push("acc", exec_ok(0));
+    ws.push("repo-a", exec_ok(1));
+    let outcome = review_with_repo_checks(&task, &ws, dir.path(), &["repo-a"], &[]).await;
+    assert!(!outcome.all_pass());
+    assert!(
+        outcome
+            .required_checks
+            .iter()
+            .any(|r| r.cmd == "repo-a" && !r.pass)
+    );
+}
+
+/// 同じ束縛で合格済みの必須検査は再実行せず再利用する（再利用の印が証跡に残る）。落ちた検査は再利用されない。
+#[tokio::test]
+async fn bound_passes_are_reused_without_running_the_check_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = task_with(vec![], dir.path());
+    let ws = ScriptedWorkspace::default();
+    ws.push("repo-b", exec_ok(0));
+    let outcome =
+        review_with_repo_checks(&task, &ws, dir.path(), &["repo-a", "repo-b"], &["repo-a"]).await;
+    assert!(outcome.all_pass());
+    let calls: Vec<String> = ws
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.0.clone())
+        .collect();
+    assert_eq!(calls, vec!["repo-b".to_string()]);
+    let reused: Vec<(&str, &str)> = outcome
+        .required_checks
+        .iter()
+        .map(|r| (r.cmd.as_str(), r.summary.as_str()))
+        .collect();
+    assert_eq!(reused[0], ("repo-a", "reused"));
+    assert!(outcome.required_checks.iter().all(|r| r.pass));
+}

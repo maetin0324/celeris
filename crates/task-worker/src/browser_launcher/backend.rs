@@ -814,11 +814,18 @@ impl RuntimeSession {
             .join("actions")
             .join(format!("{:016x}.request", self.sequence));
         let result = request.with_extension("result");
+        // The runner polls for `*.request` and reads what it finds: the request appears under that
+        // name only once complete (a half-written file was `request_invalid` under load).
+        let pending = request.with_extension("pending");
         write_shared(
-            &request,
+            &pending,
             &serde_json::to_vec(&body).map_err(|_| at(ErrorCode::BadRequest, "request_encode"))?,
         )
         .map_err(|code| at(code, "request_write"))?;
+        std::fs::rename(&pending, &request).map_err(|_| {
+            let _ = std::fs::remove_file(&pending);
+            at(ErrorCode::LaunchFailed, "request_write")
+        })?;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(50);
         let body = loop {
             match std::fs::read(&result) {

@@ -339,13 +339,19 @@ fn run_action(
     let stem = format!("{sequence:016x}");
     let request = actions.join(format!("{stem}.request"));
     let result = actions.join(format!("{stem}.result"));
+    // The runner reads any `*.request` it finds: the request gets that name only once complete.
+    let pending = actions.join(format!("{stem}.pending"));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .open(&request)?;
+        .open(&pending)?;
     file.write_all(&serde_json::to_vec(req)?)?;
     drop(file);
+    if let Err(e) = std::fs::rename(&pending, &request) {
+        let _ = std::fs::remove_file(&pending);
+        return Err(e);
+    }
     let deadline = Instant::now() + Duration::from_secs(50);
     loop {
         match std::fs::read(&result) {

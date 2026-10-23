@@ -1,10 +1,13 @@
-# replan の done 持ち越しと計画上限の修正
-
 ---
 title: replan の done 持ち越しと計画上限の修正
 updated: 2026-10-23
+completed: 2026-10-23
 tasks: [01M5MAPDJVDBJ1FXMDBJABD8E2]
+status: done
 ---
+# replan の done 持ち越しと計画上限の修正
+
+ADR: `agent-docs/adr/2026-10-23-replan-planner-portion-limits.md`
 
 ## 実装
 
@@ -27,6 +30,10 @@ tasks: [01M5MAPDJVDBJ1FXMDBJABD8E2]
 `/local/celeris/data/workspaces/01M5MAPDJVDBJ1FXMDBJABD8E2/artifacts/` の
 `regression.log`、`adoption-regression.log`、`test-affected.log`（初回）、
 `test-affected-final.log`（最終）、`clippy.log`、`fmt.log` に保存。
+
+## attempt 2（review 差し戻し対応）
+
+- ADR と進捗を `docs/` から `agent-docs/adr/`・`agent-docs/progress/` へ移し、進捗の front matter を先頭に置いた（title/updated/status/tasks）。コードは変更なし。
 
 ## 本番への移行
 

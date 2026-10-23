@@ -1,9 +1,5 @@
 # ADR 2026-10-23: replan の計画上限は done の持ち越しを除いて測る
 
----
-tasks: [01M5MAPDJVDBJ1FXMDBJABD8E2]
----
-
 ## 背景
 
 `execution-plan/3` の replan は planner の提出後に `carry_done_units_v3` で完了済みの unit・段を補う。

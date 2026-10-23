@@ -69,3 +69,4 @@ K3既存原票の再採点は新たなHPC復旧測定ではない。新規有料
 
 review で commit 参照の誤り（337f3c64 は提出履歴に無い、main 反映済みを配送待ちと記載）を指摘された。上の 2 箇所を訂正した。
 main 81fd646a（browser runner request の修正 c051132c を含む）を `git merge --no-ff main` で取り込んだ（衝突なし）。A2 実装は不変。
+検査（再提出時）: `bash scripts/dev/test-affected.sh` exit 0（2603 passed、6 skipped）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。

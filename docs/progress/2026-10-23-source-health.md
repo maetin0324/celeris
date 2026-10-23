@@ -3,7 +3,7 @@
 ---
 title: source-size 差分ゲートと既存負債の是正
 tasks: [01M5KWPP2W6FZAGWXFDFBQJ5S0]
-status: running
+status: done
 updated: 2026-10-23
 ---
 
@@ -47,7 +47,8 @@ TaskStore の契約やDispatcherの状態/副作用分割には踏み込まな�
 | `crates/task-worker/src/browser_cdp_sink.rs` | `crates/task-worker/src/browser_cdp_sink/idle_pump_tests.rs` | 758 |
 | `crates/task-worker/src/browser_launcher_run.rs` | `crates/task-worker/src/browser_launcher_run/live_frame_tests.rs` | 878 |
 
-productionの解消: `crates/task-core/src/model.rs`（2,064行）からevent責務を分離。
+productionの解消: `crates/task-core/src/model.rs` は2,064行から1,018行へ。
+分離先 `crates/task-core/src/model/events.rs` は1,062行。event責務を独立させた。
 行数削減ではなく、同一test・同一型定義の責務別配置。新規のsize例外は追加しない。
 
 ## 残件（未解消として追跡）
@@ -69,5 +70,30 @@ browser分割に該当する未完了taskは無く、`celerisctl add` により
 
 ## 検証
 
-実行結果・検証対象SHAは検証完了後に記録する。
+検証対象SHA: `ac90601a3cbe89c2d90e73b0c35002f880022e70`（作業tree clean）。
+この検証後の変更はこの進捗文書だけ。最終文書を含むcommitでは軽量ゲートを再実行する。
+
+| コマンド | exit | 結果 |
+|---|---:|---|
+| `bash scripts/dev/test-affected.sh` | 0 | 6290 passed、16 skipped。doc test 3 passed、1 ignored。軽量ゲートも通過 |
+| `cargo clippy --workspace -- -D warnings` | 0 | warningなし、1m32s |
+| `cargo fmt --all -- --check` | 0 | 差分なし |
+
+source-sizeの正負例と既存分類試験38件、architecture-mapの正負例・必須入口への伝播試験1件、
+文書参照self-testが成功。地図431参照、文書参照・ADR番号検査成功。
+新規違反、既存悪化、改善後の再膨張、inline module追加・増加、基準値改変、不明SHA、
+閾値改変、理由なし例外は失敗。未悪化・改善・削除・理由付き例外・生成物・external testは成功。
+
+対象crate: celeris、celeris-campaign、celeris-credentiald、celeris-mcp、celerisctl、e2e、
+llm-proxy、routing-eval、task-api、task-core、task-dispatch、task-ops、task-worker。
+これは変更crateと逆依存の閉包であり、全workspace指定はしていない。
+
+途中の失敗と修正: Event抽出時のimport不足、variant_pin共有testのpub(crate)漏れ、
+campaignが未知のsrcサブディレクトリを拒否する配置検査。いずれも原因を直し、
+最後の再実行で成功した。campaignは同階層の *_tests.rs とし、検査は変更していない。
+元の文字列リテラルも照合した。compiler wrapper・target設定・試験の条件は変更しない。
+
+ログ: run `01M5KWPRXVTJV27JDSGJ5NTG74` の成果物ディレクトリ内
+`test-affected.log`、`clippy.log`、`fmt.log`、`source-size-before.json`、`source-size-after.json`、
+`audit-old.json`。最終軽量検査は `health-final.log` に記録する。
 全workspace/e2e/実browser/userns試験は追加しない。

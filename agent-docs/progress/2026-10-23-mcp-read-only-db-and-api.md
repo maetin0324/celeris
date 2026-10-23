@@ -41,7 +41,7 @@ ADR: `agent-docs/adr/2026-10-23-mcp-read-only-db-and-api.md`（ADR-0056 Phase 10
 ## 検査（提出時の HEAD で実行）
 - `cargo fmt --all -- --check`: exit 0
 - `cargo clippy --workspace -- -D warnings`: exit 0
-- `bash scripts/dev/test-affected.sh`: 結果は完了報告に記載
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 6450 passed・19 skipped、web Vitest 682 passed・tsc -b 通過、progress-index --check ok）
 
 ## 本番への移行（人が行う）
 scope と token は人だけが扱う。daemon の再起動（この変更を含む release の昇格）の後に:

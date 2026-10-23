@@ -31,15 +31,17 @@ export GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid
 unset CELERIS_WU_BASE 2>/dev/null || true
 
 repo="$root/repo"
-mkdir -p "$repo/scripts/dev" "$repo/agent-docs/progress"
+d=agent-docs/progress
+mkdir -p "$repo/scripts/dev" "$repo/$d"
 cp "$repo_root/scripts/dev/progress-index.sh" "$repo/scripts/dev/"
 cd "$repo"
 git init -q -b main
 fm() {
   printf -- '---\ntitle: t\ntasks: [01M5MQ6SXVA1WQYJNDG7VJRW8T]\nstatus: running\nupdated: 2026-10-23\n---\n# t\n'
 }
-fm >agent-docs/progress/2026-10-01-old.md
-echo 'deadbeef1234 は消えた commit（main の既存ファイル。この branch は変えない）' >>agent-docs/progress/2026-10-01-old.md
+old="$d/2026-10-01-old.md"
+fm >"$old"
+echo 'deadbeef1234 は消えた commit（main の既存ファイル。この branch は変えない）' >>"$old"
 git add -A
 git commit -q -m "base"
 main_sha=$(git rev-parse HEAD)
@@ -50,7 +52,7 @@ git add work.txt
 git commit -q -m "phase 1: work"
 pre_rebase=$(git rev-parse HEAD)
 
-progress=agent-docs/progress/2026-10-23-new.md
+progress="$d/2026-10-23-new.md"
 check() {
   sh scripts/dev/progress-index.sh --check >"$root/out" 2>"$root/err"
 }

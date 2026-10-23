@@ -19,11 +19,14 @@ updated: 2026-10-23
     試験 `scripts/dev/tests/progress_index_commit_hashes.sh`（一時 repo、5 場合）。`scripts/dev/check-health.sh` から `--check` と試験を走らせる。
   - `--check` が main 上で落ちていた `2026-10-23-web-event-kind-required-checks.md` の `tasks: []` を、原因の task の id にした。
 
+- `fix: 進捗 hash 検査の試験で fixture の path を変数で組む` — attempt 1 は試験台本の `agent-docs/progress/...` の literal path を `check-doc-links.sh` が実在検査して test-affected が落ちた（3 件）。path を `d=agent-docs/progress` から組むようにした。
+
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - `sh scripts/dev/tests/progress_index_commit_hashes.sh` → exit 0（5 場合 OK）
 - `sh scripts/dev/progress-index.sh --check` → exit 0
 - `cargo test -p task-worker --lib claude_code::tests` → 125 passed
-- `bash scripts/dev/test-affected.sh` → exit 0（check-health 込み。nextest 4527 passed・18 skipped）
+- `bash scripts/dev/check-doc-links.sh` → exit 0（check-doc-links: ok）
+- `bash scripts/dev/test-affected.sh` → exit 0（check-health・check-doc-links 込み。nextest 4527 passed・18 skipped）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 

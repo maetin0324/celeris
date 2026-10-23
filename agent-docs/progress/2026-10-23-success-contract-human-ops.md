@@ -16,7 +16,7 @@ main 反映 commit はまだ無い（確認時の main `d7cb0fd4` に対し `git
 - `2b15bd6d` Jev e2e 試験を試験の task の request だけで数える（範囲外の flaky 修正）。
 - `165d76e1` 偽 webhook の HTTP 要求前 EOF を通知に数えない（範囲外の flaky 修正と回帰試験）。
 - `cd689927`・`f08ce9db` 第 3 回検証・再提出の記録（誤って `docs/progress/` に置いた。今回 agent-docs のこのファイルへ統合し削除）。
-- 今回の commit（attempt 2 of 3 の差し戻し対応）: 未観測の人の時間・介入・再作業を 0 にしない修正と本ファイルの統合。
+- `34ea4979`（attempt 2 of 3 の差し戻し対応）: 未観測の人の時間・介入・再作業を 0 にしない修正と本ファイルの統合。
 過去の報告にあった `d1ef3181`・`e5fedc86`・`4a0f8f93`・`9dd77c10`・`801279e0`・`d7687881` は別 worktree の履歴の hash で、この branch の祖先ではない（上の 5 commit が同じ変更）。
 
 ## 変更
@@ -64,6 +64,10 @@ main 反映 commit はまだ無い（確認時の main `d7cb0fd4` に対し `git
 - 再提出（run 01M5M0TR319JS7HBDS6GTEN1H8）: コード変更なしで再検査、test-affected 6303 passed / 17 skipped、clippy・fmt exit 0（制御プレーンの再実行でも合格）。
 - 今回（attempt 2 of 3 の差し戻し対応）: `cargo test -p celeris-campaign --test human_ops_report --test success_contract` → 5 passed + 2 passed。
   最終検査の結果は下の「最終検査」節。
+
+## 最終検査（`34ea4979` で実行）
+- `bash scripts/dev/test-affected.sh` → exit 0、6304 tests run: 6304 passed、17 skipped（doc-link 検査・doc test 含む）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 ## 保存した raw・grade・集計
 - 入力（不変）: `/local/celeris/data/measure/main-3/out/{trials,grades,human-ops,ledger}.jsonl`、`runs/exp-db/records.jsonl`。sha256 は成果物の `inputs.sha256`。

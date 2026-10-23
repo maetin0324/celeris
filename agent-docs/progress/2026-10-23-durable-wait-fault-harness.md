@@ -55,7 +55,7 @@ artifacts/c0/analyze.attempts/{0,1}/grade.json、metrics、reaggregated-v2を保
 
 release 準備（a3933dc2）の cargo-test で task-dispatch `dispatcher::tests::work_units::parallel_units_survive_dispatcher_restart` が `max_active` 1≠2 で落ちた（本 task の差分外、負荷で 10ms の WU run が重ならない時間依存）。
 試験用 `ParallelWuAdapter` に `meeting(n)`（同時に走る run が n に届くまで終わらない）を足し、再起動後の adapter に `meeting(2)` を付けて並列の観測を負荷に依らず決めた。
-検査: `cargo nextest run -p task-dispatch work_units::` 55 passed、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`bash scripts/dev/test-affected.sh` は下記。
+検査: `cargo nextest run -p task-dispatch work_units::` 55 passed、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`bash scripts/dev/test-affected.sh` exit 0（対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、2600 passed、6 skipped）。修正 commit 337f3c64。
 
 ## 残る実HPC接続と測定開始可否
 

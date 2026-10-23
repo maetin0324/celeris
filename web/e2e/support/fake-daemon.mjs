@@ -2620,6 +2620,19 @@ export function createFakeDaemon({
     (rule.paths ?? ["/api/v1"]).some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url ?? "/", `http://${host === "::1" ? "[::1]" : host}`).pathname;
+    // Loopback is shared with other host processes. Probes must not enter request accounting.
+    if (
+      !pathname.startsWith("/api/v1/") &&
+      !pathname.startsWith("/__fixture/") &&
+      !streamPaths.has(pathname) &&
+      !(pathname in fixtures) &&
+      !(pathname in files) &&
+      !(browserBackend && /^\/(tasks|inbox)(\/|$)/.test(pathname))
+    ) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
     if (matches(holdRule, pathname)) {
       held.push(() => handle(req, res));
       return;
@@ -2636,7 +2649,13 @@ export function createFakeDaemon({
       authorization: req.headers.authorization ?? null,
       cookie: req.headers.cookie ?? null,
     };
-    requests.push(record);
+    if (!req.headers["transfer-encoding"] && Number(req.headers["content-length"] ?? 0) === 0) {
+      requests.push(record);
+    } else {
+      req.once("end", () => {
+        if (req.complete) requests.push(record);
+      });
+    }
     let finished = false;
     res.on("finish", () => {
       finished = true;

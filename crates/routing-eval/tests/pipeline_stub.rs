@@ -1,8 +1,8 @@
-use std::{
-    io::{Read, Write},
-    net::TcpListener,
-    thread,
-};
+#[cfg(test)]
+#[path = "../../../tests/support/http_sync.rs"]
+mod fake_http;
+
+use std::{io::Write, net::TcpListener, thread};
 
 use routing_eval::{aggregate, dryrun, manifest, run};
 use rusqlite::{Connection, params};
@@ -45,11 +45,9 @@ fn stub_pipeline_freezes_estimates_runs_aggregates_and_exports_features() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("stub listener");
     let address = listener.local_addr().expect("address");
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("request");
-        let mut request = [0u8; 65_536];
-        let size = stream.read(&mut request).expect("body");
-        let text = String::from_utf8_lossy(&request[..size]);
-        let body = text.split_once("\r\n\r\n").map(|x| x.1).unwrap_or("");
+        let (mut stream, text) =
+            fake_http::accept(&listener, "POST", "/api/v1/routing-eval/trials");
+        let body = text.split_once("\r\n\r\n").unwrap().1;
         let request: Value = serde_json::from_str(body).expect("trial request json");
         let trials: Vec<Value> = request["trials"].as_array().expect("trials").iter().enumerate().map(|(i,t)| json!({"trial_id":format!("trial-{i}"),"problem_id":t["problem_id"],"trial_no":t["trial_no"],"status":"queued"})).collect();
         let response = json!({"batch_id":"batch-1","trials":trials}).to_string();

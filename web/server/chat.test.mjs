@@ -7,6 +7,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { createApp } from "./app.js";
 import { chatRoute, chatStreamParams, DEFAULT_CHAT_UPLOAD_LIMIT_BYTES, parseUploadLimit } from "./chat.js";
+import { acceptFixtureRequest } from "./test-support/http-fixture.mjs";
 
 // 偽 daemon と gateway は loopback の空き port。待ちは sleep でなく出来事（daemon が受けた・閉じた）で行う。
 const TOKEN = "fixture-daemon-token-c0a7e1d2";
@@ -38,6 +39,7 @@ function deferred() {
 
 const seen = [];
 const daemon = http.createServer((req, res) => {
+  if (!acceptFixtureRequest(req, res)) return;
   const record = { method: req.method, url: req.url, headers: req.headers, bytes: 0, complete: false };
   seen.push(record);
   if (req.headers.authorization !== `Bearer ${TOKEN}`) {

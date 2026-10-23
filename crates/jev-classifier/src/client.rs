@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use std::fmt;
 use std::sync::Arc;
 
@@ -285,7 +289,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
 
     use super::*;
@@ -329,31 +333,13 @@ mod tests {
         let mut q: VecDeque<_> = responses.into();
         tokio::spawn(async move {
             while let Ok((mut sock, _)) = listener.accept().await {
-                let mut buf = vec![0u8; 65536];
-                let mut n = 0;
-                while let Ok(k) = sock.read(&mut buf[n..]).await {
-                    if k == 0 {
-                        break;
-                    }
-                    n += k;
-                    let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
-                        let len = head
-                            .lines()
-                            .find_map(|l| {
-                                l.to_ascii_lowercase()
-                                    .strip_prefix("content-length:")
-                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
-                            })
-                            .unwrap_or(0);
-                        if body.len() >= len {
-                            break;
-                        }
-                    }
-                }
-                s2.lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(String::from_utf8_lossy(&buf[..n]).to_string());
+                let Some(raw) =
+                    fake_http::read(&mut sock, |r| fake_http::matches(r, "POST", "/decisions"))
+                        .await
+                else {
+                    continue;
+                };
+                s2.lock().unwrap_or_else(|e| e.into_inner()).push(raw);
                 c2.fetch_add(1, Ordering::SeqCst);
                 let (status, body) = q.pop_front().unwrap_or((500, String::new()));
                 let resp = format!(
@@ -392,6 +378,7 @@ mod tests {
     #[tokio::test]
     async fn success_sends_bearer_and_redacted_payload_then_caches() {
         let (url, seen, count) = serve(vec![(200, OK.into())]).await;
+        fake_http::inject_noise(&url).await;
         let c = classifier(url, Arc::default(), Arc::new(FakeClock(AtomicU64::new(0))));
         let i = ClassifyInput {
             instruction: format!("deploy with token={SECRET} now"),

@@ -6,6 +6,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { createApp } from "./app.js";
 import { parseUpstream, upstreamPath } from "./relay.js";
+import { acceptFixtureRequest } from "./test-support/http-fixture.mjs";
 
 // 偽 daemon と gateway は loopback の空き port。token は fixture で、どの出力にも出てはいけない。
 const TOKEN = "fixture-daemon-token-3f9c2a71";
@@ -19,6 +20,7 @@ writeFileSync(path.join(dir, "index.html"), "<!doctype html><title>celeris</titl
 const seen = [];
 let aborted = 0;
 const daemon = http.createServer((req, res) => {
+  if (!acceptFixtureRequest(req, res)) return;
   const chunks = [];
   req.on("data", (chunk) => chunks.push(chunk));
   req.on("end", () => {

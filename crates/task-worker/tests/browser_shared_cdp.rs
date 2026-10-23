@@ -281,7 +281,12 @@ fn inner_preflight() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("loopback TCP bind");
     let addr = listener.local_addr().expect("local addr");
     let mut client = TcpStream::connect(addr).expect("loopback TCP connect");
-    let (mut server, _) = listener.accept().expect("loopback TCP accept");
+    let mut server = loop {
+        let (stream, peer) = listener.accept().expect("loopback TCP accept");
+        if peer == client.local_addr().unwrap() {
+            break stream;
+        }
+    };
     client.write_all(b"x").expect("loopback TCP write");
     let mut byte = [0];
     server

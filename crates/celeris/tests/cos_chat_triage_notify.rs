@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use celeris::notify::{self, NotifyConfig, SendOutcome};
 use task_core::chat::triage::CosTriageSource;
 use task_core::{NotificationKind, NotificationStore, SqliteStore};
@@ -87,16 +91,13 @@ fn cos_chat_triage_long_packet_keeps_link_within_1900_characters() {
 
 #[tokio::test]
 async fn cos_chat_triage_webhook_disables_mentions_and_obeys_retry_after() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let addr = listener.local_addr().expect("addr");
     let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.expect("accept");
-        let mut bytes = vec![0; 8192];
-        let n = stream.read(&mut bytes).await.expect("read");
-        let request = String::from_utf8_lossy(&bytes[..n]).to_string();
+        let (mut stream, request) = fake_http::accept(&listener, "POST", "/hook").await;
         stream
             .write_all(
                 b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 2\r\nContent-Length: 0\r\n\r\n",

@@ -5,6 +5,10 @@
 //! Jev は 127.0.0.1 の fake HTTP server、通知は fake webhook、鍵の検証だけ mock（provider adapter 境界）にする。
 //! 外部ネットワークには出ない。待ちは DB の状態で判定し、時間では待たない。
 
+#[cfg(test)]
+#[path = "../../../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,7 +23,7 @@ use task_dispatch::credential_resume::{
     CredentialResumer, CredentialVerifier, FileSecretSource, VerifyOutcome, secret_fingerprint,
 };
 use time::OffsetDateTime;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 use super::ClassifyTick;
 use crate::notify::{self, SendResult};
@@ -47,35 +51,19 @@ async fn hook() -> Hook {
     let kept = bodies.clone();
     tokio::spawn(async move {
         while let Ok((mut stream, _)) = listener.accept().await {
-            let mut raw = Vec::new();
-            let mut buf = vec![0; 8192];
-            let body = loop {
-                let n = stream.read(&mut buf).await.expect("read");
-                if n == 0 {
-                    break String::new();
-                }
-                raw.extend_from_slice(&buf[..n]);
-                let text = String::from_utf8_lossy(&raw).to_string();
-                if let Some((head, rest)) = text.split_once("\r\n\r\n") {
-                    let len = head
-                        .lines()
-                        .find_map(|l| {
-                            let (k, v) = l.split_once(':')?;
-                            k.eq_ignore_ascii_case("content-length")
-                                .then(|| v.trim().parse::<usize>().ok())
-                                .flatten()
-                        })
-                        .unwrap_or(0);
-                    if rest.len() >= len {
-                        break rest.to_string();
-                    }
-                }
-            };
-            stream
-                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
-                .await
-                .expect("reply");
-            kept.lock().expect("bodies").push(body);
+            let kept = kept.clone();
+            tokio::spawn(async move {
+                let Some(raw) =
+                    fake_http::read(&mut stream, |r| fake_http::matches(r, "POST", "/hook")).await
+                else {
+                    return;
+                };
+                let body = raw.split_once("\r\n\r\n").unwrap().1.to_owned();
+                kept.lock().expect("bodies").push(body);
+                let _ = stream
+                    .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            });
         }
     });
     Hook { url, bodies }
@@ -175,31 +163,13 @@ async fn jev_server(status: u16, body: &'static str) -> JevServer {
         while let Ok((mut sock, _)) = listener.accept().await {
             let kept = kept.clone();
             tokio::spawn(async move {
-                let mut buf = vec![0u8; 65536];
-                let mut n = 0;
-                while let Ok(k) = sock.read(&mut buf[n..]).await {
-                    if k == 0 {
-                        break;
-                    }
-                    n += k;
-                    let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                    if let Some((head, rest)) = text.split_once("\r\n\r\n") {
-                        let len = head
-                            .lines()
-                            .find_map(|l| {
-                                l.to_ascii_lowercase()
-                                    .strip_prefix("content-length:")
-                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
-                            })
-                            .unwrap_or(0);
-                        if rest.len() >= len {
-                            break;
-                        }
-                    }
-                }
-                kept.lock()
-                    .expect("requests")
-                    .push(String::from_utf8_lossy(&buf[..n]).to_string());
+                let Some(raw) =
+                    fake_http::read(&mut sock, |r| fake_http::matches(r, "POST", "/decisions"))
+                        .await
+                else {
+                    return;
+                };
+                kept.lock().expect("requests").push(raw);
                 let resp = format!(
                     "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
@@ -568,6 +538,8 @@ async fn unregistered_key_waits_notifies_then_resumes_once_and_classifies() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rate_limit_never_becomes_a_credential_wait() {
     let mut env = env(429, "{}", true).await;
+    fake_http::inject_noise(&env.jev.url).await;
+    assert_eq!(env.jev.count(), 0);
     env.step().await;
     let task = new_task(env.dir.path(), "分類 429");
     env.store.insert(&task).expect("insert");

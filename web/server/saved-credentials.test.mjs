@@ -6,12 +6,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { createApp } from "./app.js";
+import { acceptFixtureRequest } from "./test-support/http-fixture.mjs";
 
 test("saved credentials require owner and CSRF and bind signed deletion to the selected ID", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "saved-credentials-"));
   const keys = generateKeyPairSync("ed25519");
   const requests = [];
   const daemon = http.createServer((req, res) => {
+    if (!acceptFixtureRequest(req, res)) return;
     const payload = req.headers["x-celeris-assertion-payload"];
     assert.equal(
       verify(

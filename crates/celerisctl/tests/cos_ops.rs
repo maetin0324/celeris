@@ -1,6 +1,10 @@
 mod common;
 
-use std::io::{Read, Write};
+#[cfg(test)]
+#[path = "../../../tests/support/http_sync.rs"]
+mod fake_http;
+
+use std::io::Write;
 use std::net::TcpListener;
 use std::process::Command;
 use std::thread;
@@ -11,31 +15,15 @@ fn capture_one() -> (String, thread::JoinHandle<(String, Value)>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut bytes = Vec::new();
-        let mut buf = [0u8; 4096];
-        loop {
-            let n = stream.read(&mut buf).unwrap();
-            assert!(n > 0);
-            bytes.extend_from_slice(&buf[..n]);
-            let Some(split) = bytes.windows(4).position(|w| w == b"\r\n\r\n") else {
-                continue;
-            };
-            let head = String::from_utf8_lossy(&bytes[..split]);
-            let length = head
-                .lines()
-                .find_map(|line| {
-                    line.to_ascii_lowercase()
-                        .strip_prefix("content-length: ")
-                        .and_then(|v| v.parse::<usize>().ok())
-                })
-                .unwrap_or(0);
-            if bytes.len() >= split + 4 + length {
-                let body = serde_json::from_slice(&bytes[split + 4..split + 4 + length]).unwrap();
-                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}").unwrap();
-                return (head.into_owned(), body);
-            }
-        }
+        let (mut stream, raw) = fake_http::accept(&listener, "POST", "/api/v1/cos/operations");
+        let (head, body) = raw.split_once("\r\n\r\n").unwrap();
+        let body = serde_json::from_str(body).unwrap();
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+            )
+            .unwrap();
+        (head.to_owned(), body)
     });
     (format!("http://{addr}/api/v1"), handle)
 }

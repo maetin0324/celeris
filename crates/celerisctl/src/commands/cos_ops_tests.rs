@@ -1,37 +1,29 @@
+#[cfg(test)]
+#[path = "../../../../tests/support/http_sync.rs"]
+mod fake_http;
+
 use super::*;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::TcpListener;
 use std::thread;
 
 pub(crate) fn fake_server() -> (ApiConfig, thread::JoinHandle<(String, Value)>) {
+    fake_server_at("/api/v1/cos/operations")
+}
+
+fn fake_server_at(path: &'static str) -> (ApiConfig, thread::JoinHandle<(String, Value)>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut bytes = Vec::new();
-        let mut buffer = [0u8; 2048];
-        loop {
-            let n = stream.read(&mut buffer).unwrap();
-            assert!(n > 0, "request ended before the body");
-            bytes.extend_from_slice(&buffer[..n]);
-            if let Some(split) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
-                let headers = String::from_utf8_lossy(&bytes[..split]);
-                let length = headers
-                    .lines()
-                    .find_map(|line| {
-                        line.to_ascii_lowercase()
-                            .strip_prefix("content-length: ")
-                            .and_then(|v| v.parse::<usize>().ok())
-                    })
-                    .unwrap_or(0);
-                if bytes.len() >= split + 4 + length {
-                    let body =
-                        serde_json::from_slice(&bytes[split + 4..split + 4 + length]).unwrap();
-                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}").unwrap();
-                    return (headers.into_owned(), body);
-                }
-            }
-        }
+        let (mut stream, raw) = fake_http::accept(&listener, "POST", path);
+        let (headers, body) = raw.split_once("\r\n\r\n").unwrap();
+        let body = serde_json::from_str(body).unwrap();
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+            )
+            .unwrap();
+        (headers.to_owned(), body)
     });
     (
         ApiConfig {
@@ -76,7 +68,7 @@ fn cos_chat_ops_ctl_credential_wraps_domain_mutation_and_uses_run_bearer() {
 
 #[test]
 fn cos_chat_ops_ctl_without_credential_preserves_domain_request() {
-    let (api, server) = fake_server();
+    let (api, server) = fake_server_at("/api/v1/tasks");
     send(
         &api,
         "POST",

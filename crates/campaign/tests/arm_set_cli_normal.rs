@@ -6,6 +6,10 @@
 //! stub の終了は event（停止フラグ + 自己接続）と有界 timeout で待つ。cap probe は fixture case が必要能力を宣言しないため
 //! 走らない（userns の実走は不要）。
 #![allow(dead_code)]
+#[cfg(test)]
+#[path = "../../../tests/support/http_sync.rs"]
+mod fake_http;
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -98,18 +102,9 @@ struct Stub {
 type Request = (String, String, Vec<(String, String)>, Vec<u8>);
 
 fn read_request(s: &mut TcpStream) -> Option<Request> {
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 4096];
-    let head_end = loop {
-        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            break i;
-        }
-        let n = s.read(&mut chunk).ok()?;
-        if n == 0 {
-            return None;
-        }
-        buf.extend_from_slice(&chunk[..n]);
-    };
+    let raw = fake_http::read(s, |_| true)?;
+    let buf = raw.as_bytes();
+    let head_end = raw.find("\r\n\r\n")?;
     let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
     let mut lines = head.lines();
     let mut first = lines.next()?.split(' ');
@@ -118,19 +113,7 @@ fn read_request(s: &mut TcpStream) -> Option<Request> {
         .filter_map(|l| l.split_once(':'))
         .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
         .collect();
-    let len: usize = headers
-        .iter()
-        .find(|(k, _)| k == "content-length")
-        .and_then(|(_, v)| v.parse().ok())
-        .unwrap_or(0);
-    let mut body = buf[head_end + 4..].to_vec();
-    while body.len() < len {
-        let n = s.read(&mut chunk).ok()?;
-        if n == 0 {
-            break;
-        }
-        body.extend_from_slice(&chunk[..n]);
-    }
+    let body = buf[head_end + 4..].to_vec();
     Some((method, path, headers, body))
 }
 

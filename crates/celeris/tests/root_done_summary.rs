@@ -10,6 +10,10 @@
 //! 時計: dispatcher の注入時計は task-dispatch の内部（`test_now`）で外から差せない。この試験の結果は
 //! 時間に依存しない（fallback は run の失敗で即決まり、待ち時間の経過に頼らない）。
 
+#[cfg(test)]
+#[path = "../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -23,7 +27,7 @@ use task_core::{
 };
 use task_dispatch::Dispatcher;
 use time::OffsetDateTime;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 const WEB: &str = "http://celeris.test";
 const COS_OK: &str = "cat >/dev/null; echo '{\"type\":\"done\",\"summary\":\"まとめ: 調査の仕事を行い、成果が出た\",\"evidence\":[]}'";
@@ -46,40 +50,21 @@ async fn hook() -> Hook {
     let kept = bodies.clone();
     tokio::spawn(async move {
         while let Ok((mut stream, _)) = listener.accept().await {
-            let mut raw = Vec::new();
-            let mut buf = vec![0; 8192];
-            let body = loop {
-                let n = stream.read(&mut buf).await.expect("read");
-                if n == 0 {
-                    break None;
-                }
-                raw.extend_from_slice(&buf[..n]);
-                let text = String::from_utf8_lossy(&raw).to_string();
-                if let Some((head, rest)) = text.split_once("\r\n\r\n") {
-                    let len = head
-                        .lines()
-                        .find_map(|l| {
-                            let (k, v) = l.split_once(':')?;
-                            k.eq_ignore_ascii_case("content-length")
-                                .then(|| v.trim().parse::<usize>().ok())
-                                .flatten()
-                        })
-                        .unwrap_or(0);
-                    if rest.len() >= len {
-                        break Some(rest.to_string());
-                    }
-                }
-            };
-            // 要求を送らずに閉じた接続（host 上の別 process の port 探り等）は webhook の POST ではない。
-            let Some(body) = body else {
-                continue;
-            };
-            stream
-                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
-                .await
-                .expect("reply");
-            kept.lock().expect("bodies").push(body);
-            let _ = tx.send(());
+            let kept = kept.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let Some(raw) =
+                    fake_http::read(&mut stream, |r| fake_http::matches(r, "POST", "/hook")).await
+                else {
+                    return;
+                };
+                let body = raw.split_once("\r\n\r\n").unwrap().1.to_owned();
+                kept.lock().expect("bodies").push(body);
+                let _ = stream
+                    .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+                let _ = tx.send(());
+            });
         }
     });
     Hook { url, bodies, seen }

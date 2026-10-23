@@ -1,6 +1,9 @@
 //! ローカルの fake HTTP server（127.0.0.1 の TcpListener）に対する結合試験。実 API・外部ネットワークには出ない。
 //! 遅延は server 側の注入フック（`Reply::Delay`）で作り、timeout の試験は tokio の時計を pause する。CPU 負荷は掛けない。
 
+#[path = "../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -12,7 +15,7 @@ use jev_classifier::{
     ApiKey, ApiKeyProvider, ClassifyInput, ClassifyOutcome, ClientErrorDetail, Clock,
     FallbackReason, JevClassifier, JevConfig, JevError, Sleeper,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 
 const SECRET: &str = "sk-or-v1-FAKE-SECRET-0123456789abcdef";
@@ -59,45 +62,29 @@ async fn serve(script: Vec<Reply>) -> Fake {
     let (r2, c2) = (requests.clone(), count.clone());
     let queue = Arc::new(Mutex::new(VecDeque::from(script)));
     tokio::spawn(async move {
-        let mut last = json(500, "{}");
+        let last = Arc::new(Mutex::new(json(500, "{}")));
         while let Ok((mut sock, _)) = listener.accept().await {
-            let reply = {
-                let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(r) = q.pop_front() {
-                    last = r;
-                }
-                last.clone()
-            };
+            let queue = queue.clone();
+            let last = last.clone();
             let (r3, c3) = (r2.clone(), c2.clone());
             tokio::spawn(async move {
-                let mut buf = vec![0u8; 65536];
-                let mut n = 0;
-                while let Ok(k) = sock.read(&mut buf[n..]).await {
-                    if k == 0 {
-                        break;
+                let Some(raw) =
+                    fake_http::read(&mut sock, |r| fake_http::matches(r, "POST", "/decisions"))
+                        .await
+                else {
+                    return;
+                };
+                let reply = {
+                    let mut last = last.lock().unwrap();
+                    if let Some(reply) = queue.lock().unwrap().pop_front() {
+                        *last = reply;
                     }
-                    n += k;
-                    let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
-                        let len = head
-                            .lines()
-                            .find_map(|l| {
-                                l.to_ascii_lowercase()
-                                    .strip_prefix("content-length:")
-                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
-                            })
-                            .unwrap_or(0);
-                        if body.len() >= len {
-                            break;
-                        }
-                    }
-                }
+                    last.clone()
+                };
                 r3.lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .push(String::from_utf8_lossy(&buf[..n]).to_string());
+                    .push(raw.clone());
                 c3.fetch_add(1, Ordering::SeqCst);
-                // 公式 schema の形でない要求は台本に関わらず 400 で拒否する（実 API と同じく）。
-                let raw = String::from_utf8_lossy(&buf[..n]).to_string();
                 let rejected = serde_json::from_str::<serde_json::Value>(body_of(&raw))
                     .ok()
                     .and_then(|v| schema_error(&v));
@@ -197,6 +184,7 @@ fn fixed(reason: FallbackReason) -> Result<ClassifyOutcome, JevError> {
 #[tokio::test]
 async fn success_returns_typed_classification_with_one_request() {
     let f = serve(vec![json(200, OK)]).await;
+    fake_http::inject_noise(&f.url).await;
     let r = rig(&f.url, |_| {});
     let out =
         r.c.classify(&input("add a cli flag"), &Key(Some(SECRET)))
@@ -251,6 +239,8 @@ async fn invalid_then_valid_recovers_within_retry_bound() {
         json(200, OK),
     ])
     .await;
+    fake_http::inject_noise(&f.url).await;
+    assert_eq!(f.count(), 0);
     let r = rig(&f.url, |_| {});
     let out = r.c.classify(&input("a"), &Key(Some(SECRET))).await;
     assert!(matches!(

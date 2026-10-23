@@ -71,3 +71,8 @@ base は main `a3933dc2`（提出直前に `git merge-base --is-ancestor a3933dc
 実測定の raw・grade・集計は新規作成していない（試験は tempfile の合成データ）。既存の履歴は変更していない。K2/HPC 比較は引き続き**開始不可**: Sirius の qstat Variable_List に trial 印が残ることの実機確認、測定用 A の cap-env/prompt への wrapper 導入、タスク 1・2 の成立が必要。fixture の成功でこれらを代替しない。本番設定の変更・実 pilot・有料評価は実施していない。
 
 ## 最終検査
+差し戻し対応（not_submitted を model failure に）の commit 後、HEAD で実行:
+- `bash scripts/dev/test-affected.sh`: **exit 0**。nextest **2605 passed / 6 skipped**（137 binaries、157.451 秒）。健全性 Python 試験 38 件・1 件成功、doc-links self-test 成功、doc test 4 target とも成功。新規試験 `injected_fault_give_up_without_submit_is_model_failure_not_observation_failure` を含む。
+- `cargo clippy --workspace -- -D warnings`: **exit 0**（警告 0）。
+- `cargo fmt --all -- --check`: **exit 0**（差分 0）。
+- ログ: /local/celeris/data/workspaces/01M5KVHDY26YCNYGZKDTANGJX6/artifacts/ 内の retry4-test-affected.log・retry4-clippy.log・retry4-fmt.log。

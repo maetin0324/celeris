@@ -69,3 +69,13 @@ config・DB の変更なし。昇格時に MergeQueued で止まっている配�
   delivery の取得不能拒否、task-core の 2 repo 欠落/不合格・digest 失効、review の 1 回実行/再利用、
   dispatcher の実 worktree 2 repo で各定義と各合否を記録する試験。
 - 全 workspace/e2e/browser/userns の試験経路は追加していない。API schema は UPDATE_SCHEMA=1 で再生成する。
+
+### 既存の Git 取得不能試験の期待値修正
+
+- 最初の固定 SHA d9bb6ae0c959b752e16243f8ff7d55e2253ee393 で test-affected は exit 100
+  （6315 passed / 1 failed / 17 skipped）。失敗は write_set_record_git_failure_keeps_the_run_and_records_unavailable。
+- この試験は worker が .git を削除しても task が Done になることを期待していた。
+  必須定義が取得不能なら完了を拒否する今回の契約と矛盾するため、失敗した ReviewVerdict を出来事待ちし、
+  Done でないこと・合格証跡がないことを検査するよう更新した。run と write-set の unavailable/理由保持の検査は維持。
+- `cargo test -p task-dispatch --lib write_set_record_git_failure_keeps_the_run_and_records_unavailable`:
+  exit 0（1 passed）。production の迂回・例外は追加していない。必須3検査は修正後の SHA で再実行する。

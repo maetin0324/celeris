@@ -170,6 +170,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   // ADR-0118 / ADR-0120: review 前同期と integration repair（TaskDetail・受信箱の Failed 項目に出る）。
   review_target_synced: { sets: ["T", "E"] },
   review_target_advanced: { sets: ["T", "E"] },
+  // ADR 2026-10-23: review が評価した必須検査の結果を基底・候補 SHA に束縛して残す（状態は変えない。詳細と timeline のみ）。
+  required_checks_evaluated: { sets: ["T", "E"] },
   merge_candidate_stale: { sets: ["T", "E", "L"] },
   integration_repair_scheduled: { sets: TLE },
   integration_repair_resolved: { sets: TLE },

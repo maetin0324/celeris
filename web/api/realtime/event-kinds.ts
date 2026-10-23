@@ -80,6 +80,7 @@ export const EVENT_KINDS = [
   "stall_detected",
   "review_target_synced",
   "review_target_advanced",
+  "required_checks_evaluated",
   "merge_candidate_stale",
   "integration_repair_scheduled",
   "integration_repair_resolved",

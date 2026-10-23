@@ -336,9 +336,12 @@ fn fixture_matches_expected_and_regenerates_identically() {
     assert_eq!(h["after_cutoff"], 1);
     assert_eq!(h["lower_bound"], true);
     assert_eq!(
-        a["interventions"]["value"]["status_check"], 2,
-        "再送は 1 件、cutoff 後も介入件数に残る/protocol は無い: {a}"
+        a["interventions"]["value"]["status_check"], 1,
+        "再送は 1 件、cutoff 後の op は介入件数に入れない（時間と同じ窓）/protocol は無い: {a}"
     );
+    assert_eq!(a["excluded_ops"]["after_window"], 1);
+    assert_eq!(a["excluded_ops"]["protocol"], 1);
+    assert_eq!(a["observation_window"]["basis"], "cutoff");
     assert!(a["interventions"]["value"].get("protocol_step").is_none());
     assert_eq!(a["human_wait"]["value"]["union_secs"], 300);
     assert_eq!(a["external_queue_wait"]["value"]["union_secs"], 3600);
@@ -353,8 +356,10 @@ fn fixture_matches_expected_and_regenerates_identically() {
         a["rework"]["value"]["failed_attempt_secs"]["union_secs"],
         2400 + 600
     );
-    assert_eq!(a["failure_cause"]["value"], "verification_failed");
-    assert_eq!(a["failure_cause"]["schema"], "provisional-failure-cause/1");
+    // manifest（runner の out dir）を渡していないので成否は欠測。executor の状態は別欄に残る。
+    assert_eq!(a["completion"]["source"], "missing");
+    assert_eq!(a["success_class"]["source"], "missing");
+    assert_eq!(a["executor_status"]["value"], "failed");
     assert_eq!(
         a["tokens"]["value"]["observed_sum"], 1000,
         "trials.jsonl の重複行は 1 件"
@@ -369,7 +374,12 @@ fn fixture_matches_expected_and_regenerates_identically() {
         .expect("B");
     assert_eq!(b["human_time"]["source"], "missing");
     assert_eq!(b["tokens"]["source"], "missing");
-    assert_eq!(b["failure_cause"]["value"], "infrastructure_error");
+    assert_eq!(b["executor_status"]["value"], "error");
+    assert_eq!(b["completion"]["source"], "missing");
+    assert_eq!(
+        a["external_queue_wait"]["source"], "evaluator",
+        "job 観測があれば evaluator"
+    );
     assert_eq!(j["arms"]["A0"]["human_union_secs"], 1080);
     assert_eq!(j["arms"]["B"]["trials_without_evaluator_records"], 1);
     // 注意書き（下限・A/B 観測差・共有 overhead）
@@ -391,4 +401,312 @@ fn fixture_matches_expected_and_regenerates_identically() {
             "{n}"
         );
     }
+}
+
+/// 共有作業（env-lock 修正 71 秒）が A/B に二重記録された生記録を、元の行を書き換えずに
+/// correction（取り消し）と shared scope の 1 件で補正し、補正履歴が報告に残ること。
+#[test]
+fn shared_env_lock_fix_is_counted_once_with_correction_history() {
+    let d = tempfile::tempdir().expect("tmp");
+    write_trials(d.path());
+    let f = d.path().join("human-ops.jsonl");
+    let f = f.to_str().expect("p");
+    let env_lock = [
+        "--op-kind",
+        "system_adjustment",
+        "--intent",
+        "system",
+        "--reason",
+        "env-lock 再生成",
+        "--logical-op",
+        "pilot/env-lock-regen",
+        "--started-at",
+        "2026-10-21T06:54:09Z",
+        "--ended-at",
+        "2026-10-21T06:55:20Z",
+    ];
+    rec(f, "A0", &env_lock);
+    rec(f, "B0", &env_lock);
+    let before = fs::read_to_string(f).expect("raw");
+    let o1 = d.path().join("before");
+    let j = run_report(f, d.path(), &o1);
+    assert_eq!(j["arms"]["A0"]["human_union_secs"], 71);
+    assert_eq!(j["arms"]["B0"]["human_union_secs"], 71, "二重計上の再現");
+
+    // 通常 CLI: 取り消しの correction（append-only）と shared scope の 1 件。
+    let (c, out, e) = cli(&[
+        "correct",
+        "--file",
+        f,
+        "--logical-op",
+        "pilot/env-lock-regen",
+        "--campaign",
+        "c1",
+        "--retract",
+        "--reason",
+        "共有 env-lock 修正を A/B に二重記録した。shared scope へ移す",
+    ]);
+    assert_eq!(c, 0, "{e}");
+    assert_eq!(out.matches("appended").count(), 4, "{out}");
+    let mut shared = vec![
+        "record",
+        "--file",
+        f,
+        "--campaign",
+        "c1",
+        "--manifest-sha256",
+        H,
+        "--scope",
+        "shared",
+        "--experiment-set",
+        "main-ab",
+        "--actor",
+        "eval1",
+        "--mode",
+        "manual",
+    ];
+    shared.extend(env_lock);
+    let (c, _, e) = cli(&shared);
+    assert_eq!(c, 0, "{e}");
+    // shared scope に arm を書くのは拒否（配分しない）。
+    let mut bad = shared.clone();
+    bad.extend(["--arm", "A0"]);
+    assert_ne!(cli(&bad).0, 0);
+
+    let after = fs::read_to_string(f).expect("raw");
+    assert!(after.starts_with(&before), "元の行は上書きしない");
+    let (c, v, e) = cli(&["validate", "--file", f]);
+    assert_eq!(c, 0, "{e}{v}");
+    let j = run_report(f, d.path(), &d.path().join("after"));
+    for (arm, a) in j["arms"].as_object().expect("arms") {
+        assert_eq!(
+            a["human_union_secs"].as_u64().unwrap_or(0),
+            0,
+            "{arm}: 取り消した記録は arm に残らない: {a}"
+        );
+    }
+    let sh = &j["shared_overhead"][0];
+    assert_eq!(sh["human_time"]["union_secs"], 71, "{sh}");
+    assert_eq!(sh["interventions"]["system_adjustment"], 1);
+    let cs = j["corrections"].as_array().expect("history");
+    assert_eq!(cs.len(), 4);
+    assert!(cs.iter().all(|c| c["set"]["retracted"] == true
+        && c["note"].as_str().is_some_and(|n| n.contains("二重記録"))));
+    let md = fs::read_to_string(d.path().join("after/report.md")).expect("md");
+    assert!(md.contains("補正履歴") && md.contains("二重記録"), "{md}");
+}
+
+/// protocol_step・attempt・再作業・介入に共通 filter と共通の観測窓（cutoff が無ければ試行終了）を使う。
+#[test]
+fn protocol_attempts_and_out_of_window_ops_are_not_counted() {
+    let d = tempfile::tempdir().expect("tmp");
+    // 試行 A0/p0: 00:00 開始・wall 3600 → 窓の終端 01:00（cutoff なし）
+    let trial = json!({"campaign_sha256":H,"problem_id":"p0","config":"A","rep":1,"trial_no":1,
+        "outcome":"passed","workspace":"w","wall_secs":3600,"tokens":1,"cost_micro_usd":1,"reason":null});
+    fs::write(d.path().join("trials.jsonl"), format!("{trial}\n")).expect("t");
+    let start = 1_792_627_200u64; // 2026-10-22T00:00:00Z
+    let ledger =
+        json!({"manifest_sha256":H,"problem_id":"p0","arm":"A","rep":1,"started_at":start});
+    fs::write(d.path().join("ledger.jsonl"), format!("{ledger}\n")).expect("l");
+    let f = d.path().join("human-ops.jsonl");
+    let f = f.to_str().expect("p");
+    for (attempt, at) in [("1", "2026-10-22T00:00:00Z"), ("2", "2026-10-22T00:30:00Z")] {
+        rec(
+            f,
+            "A0",
+            &[
+                "--op-kind",
+                "protocol_step",
+                "--intent",
+                "protocol",
+                "--logical-op",
+                "pilot/trial-start",
+                "--attempt",
+                attempt,
+                "--started-at",
+                at,
+                "--ended-at",
+                at,
+            ],
+        );
+    }
+    let sc = |at: &'static str, l: &'static str| {
+        [
+            "--op-kind",
+            "status_check",
+            "--intent",
+            "monitoring",
+            "--logical-op",
+            l,
+            "--started-at",
+            at,
+            "--ended-at",
+            at,
+        ]
+    };
+    rec(f, "A0", &sc("2026-10-22T00:10:00Z", "in"));
+    rec(f, "A0", &sc("2026-10-22T02:00:00Z", "late"));
+    // 窓の外で始まった attempt 2 の再投入は再作業に数えない
+    span(
+        f,
+        "A0",
+        &[
+            "--kind",
+            "attempt",
+            "--logical-op",
+            "x",
+            "--attempt",
+            "1",
+            "--result",
+            "failed",
+            "--started-at",
+            "2026-10-22T00:20:00Z",
+            "--ended-at",
+            "2026-10-22T00:25:00Z",
+        ],
+    );
+    rec(
+        f,
+        "A0",
+        &[
+            "--op-kind",
+            "resubmit",
+            "--intent",
+            "system",
+            "--reason",
+            "再投入",
+            "--logical-op",
+            "x",
+            "--attempt",
+            "2",
+            "--started-at",
+            "2026-10-22T03:00:00Z",
+            "--ended-at",
+            "2026-10-22T03:01:00Z",
+        ],
+    );
+    let j = run_report(f, d.path(), &d.path().join("o"));
+    let a = &j["trials"][0];
+    assert_eq!(a["observation_window"]["basis"], "trial_end", "{a}");
+    assert_eq!(
+        a["interventions"]["value"],
+        json!({"status_check": 1}),
+        "{a}"
+    );
+    assert_eq!(a["excluded_ops"]["protocol"], 2);
+    assert_eq!(a["excluded_ops"]["after_window"], 2, "late と x#2");
+    assert_eq!(
+        a["rework"]["value"]["count"],
+        json!({}),
+        "protocol の attempt=2 は redo ではない"
+    );
+    assert_eq!(a["rework"]["value"]["after_window"], 1);
+    assert_eq!(
+        a["human_wait"]["source"], "missing",
+        "wait 記録なしは 0 秒ではない"
+    );
+    assert_eq!(a["external_queue_wait"]["source"], "missing");
+}
+
+/// B の通常 event（export の wait・run 行）から、応答待ち・自動 retry・event 参照を試行に結ぶ。
+#[test]
+fn b_waits_auto_retries_and_event_refs_join_from_export_rows() {
+    let d = tempfile::tempdir().expect("tmp");
+    let ex = d.path().join("export");
+    fs::create_dir_all(&ex).expect("d");
+    let id = |r: &str| json!({"campaign_id":"c1","case_id":"p0","arm":"B","repetition":1,"manifest_hash":H,"task_id":"t1","run_id":r});
+    let mut rows = Vec::new();
+    for (r, retry, parent) in [("r1", false, Value::Null), ("r2", true, json!("r1"))] {
+        let mut v = id(r);
+        v["record_type"] = json!("run");
+        v["dedup_key"] = json!(format!("run:{r}"));
+        v["is_retry"] = json!(retry);
+        v["parent_run_id"] = parent;
+        v["attempt_no"] = json!(0);
+        rows.push(v);
+        rows.push(json!({"record_type":"outcome","dedup_key":format!("outcome:{r}"),"run_id":r,"wall_ms":1000}));
+    }
+    rows.push(
+        json!({"record_type":"wait","dedup_key":"wait:t1:5","campaign_id":"c1","task_id":"t1",
+        "run_id":"r1","wait_kind":"question","started_at":"2026-10-22T00:10:00Z",
+        "ended_at":"2026-10-22T00:12:00Z","start_event":"event:t1:5","end_event":"event:t1:7"}),
+    );
+    rows.push(
+        json!({"record_type":"wait","dedup_key":"wait:t1:9","campaign_id":"c1","task_id":"t1",
+        "run_id":null,"wait_kind":"approval","started_at":"2026-10-22T00:20:00Z",
+        "ended_at":null,"start_event":"event:t1:9","end_event":null}),
+    );
+    rows.push(json!({"record_type":"intervention","dedup_key":"intervention:t1:7","campaign_id":"c1",
+        "intervention_id":"t1:7","kind":"research_judgment","task_id":"t1","source_event":"event:t1:7"}));
+    fs::write(
+        ex.join("records.jsonl"),
+        rows.iter().map(|r| format!("{r}\n")).collect::<String>(),
+    )
+    .expect("w");
+    let f = d.path().join("human-ops.jsonl");
+    let f = f.to_str().expect("p");
+    rec(
+        f,
+        "B0",
+        &[
+            "--op-kind",
+            "research_direction",
+            "--intent",
+            "research",
+            "--logical-op",
+            "answer",
+            "--celeris-event-ref",
+            "event:t1:7",
+            "--started-at",
+            "2026-10-22T00:11:00Z",
+            "--ended-at",
+            "2026-10-22T00:12:00Z",
+        ],
+    );
+    rec(
+        f,
+        "B0",
+        &[
+            "--op-kind",
+            "status_check",
+            "--intent",
+            "monitoring",
+            "--logical-op",
+            "peek",
+            "--celeris-event-ref",
+            "event:t1:999",
+            "--started-at",
+            "2026-10-22T00:13:00Z",
+            "--ended-at",
+            "2026-10-22T00:13:00Z",
+        ],
+    );
+    let j = run_report(f, &ex, &d.path().join("o"));
+    let b = &j["trials"][0];
+    let jn = &b["join"];
+    assert_eq!(
+        jn["event_waits"]["value"]["count"],
+        json!({"approval":1,"question":1}),
+        "{jn}"
+    );
+    assert_eq!(jn["event_waits"]["value"]["open"], 1);
+    assert_eq!(
+        b["auto_retries"]["value"]["count"], 1,
+        "is_retry の run は自動 retry"
+    );
+    assert_eq!(b["auto_retries"]["value"]["runs"][0]["parent_run_id"], "r1");
+    assert_eq!(
+        b["rework"]["value"]["count"],
+        json!({}),
+        "自動 retry は人の再作業ではない"
+    );
+    assert_eq!(jn["event_refs"]["value"]["joined"], json!(["event:t1:7"]));
+    assert_eq!(
+        jn["event_refs"]["value"]["unjoined"],
+        json!(["event:t1:999"])
+    );
+    let w = &b["celeris_wait"]["value"];
+    assert_eq!(w["union_secs"], 120, "{w}");
+    assert_eq!(w["open"], 1, "決定の無い approval は open（0 秒にしない）");
+    assert_eq!(j["arms"]["B0"]["auto_retries"], 1);
 }

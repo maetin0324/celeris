@@ -4,6 +4,10 @@
 //! - 各欄は `{"value": ..., "source": "event" | "evaluator" | "missing"}`。Celeris 側から取れる区間は再記録せず導出する。
 //! - どちらにも無い項目は `missing`（value は null）。0 に変換しない。`missing_fields` に欄名を並べる。
 //! - 再開・重複: events は `dedup_key` / `run_id` / 台帳の鍵で、評価者記録は `record_id` で 1 件に潰す。行は identity ごとに 1 つ。
+//! - 成否は成功契約（`crate::success`）: runner の out dir（`campaign.json` がある dir）を渡すと、manifest の計画 cell を
+//!   すべて行にし、checker と同じ規則（trial_no 最小・結合検査を通った採点）で `executor_status` と `validated_success` を別に出す。
+//!   manifest が無い入力では `validated_success` は欠測（executor passed を成功に読み替えない）。
+//! - B の通常 event: 人の応答待ち（export の `wait` 行）・自動 retry（`run` 行の `is_retry`）・`celeris_event_ref` の照合を試行に結ぶ。
 //! - `--events` は繰り返せる。runner の out dir（`trials.jsonl`・`ledger.jsonl`）と、`celerisctl campaign export` の出力 dir（decision-log の `records.jsonl`）を両方渡す。file 単独も可。
 //!   `celeris-campaign export` は table/final-accounting だけを書き、この 3 file は出さない。
 use std::{
@@ -26,6 +30,8 @@ type Key = (String, String, ConfigId, u32);
 const EVENT: &str = "event";
 const EVALUATOR: &str = "evaluator";
 const MISSING: &str = "missing";
+/// 成功契約（`crate::success`。結合検査を通った独立採点）由来。
+const GRADE: &str = "grade";
 
 fn field(value: Value, source: &str) -> Value {
     json!({"value": value, "source": source})
@@ -81,6 +87,21 @@ struct EventSide {
     run_wall_ms: BTreeMap<String, Option<u64>>,
     /// intervention_id → kind。
     interventions: BTreeMap<String, String>,
+    /// 人の応答待ち（export の `wait` 行）。
+    waits: Vec<WaitFact>,
+    /// Celeris が自動で作った再試行 run（`is_retry`）: run_id → (parent_run_id, attempt_no)。人の再作業ではない。
+    auto_retries: BTreeMap<String, (Option<String>, Option<u64>)>,
+    /// この試行の event 参照（介入の source_event・待機の開始/終了 event・`run:<run_id>`）。
+    refs: BTreeSet<String>,
+}
+
+#[derive(Clone)]
+struct WaitFact {
+    kind: String,
+    started_at: Option<String>,
+    ended_at: Option<String>,
+    start_event: Option<String>,
+    end_event: Option<String>,
 }
 
 struct TrialResultFacts {
@@ -90,12 +111,24 @@ struct TrialResultFacts {
     cost_micro_usd: Option<u64>,
 }
 
+/// export の介入行: (intervention_id, task_id, campaign_id, kind, source_event)。
+type EventIntervention = (
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+);
+
 #[derive(Default)]
 struct Events {
     by_key: BTreeMap<Key, EventSide>,
     /// 試行に結べなかった介入（task_id が試行の run に無い・campaign 識別なし）。
     unjoined_interventions: BTreeMap<String, (Option<String>, String)>,
-    interventions: Vec<(String, Option<String>, Option<String>, String)>,
+    interventions: Vec<EventIntervention>,
+    waits: Vec<(Option<String>, WaitFact)>,
+    /// runner の out dir から読んだ成功契約の判定。
+    canonical: Vec<crate::success::Canonical>,
     /// campaign_id → manifest sha（評価者記録から）。
     campaign_sha: BTreeMap<String, String>,
 }
@@ -107,6 +140,12 @@ impl Events {
         let mut out = Vec::new();
         for path in paths {
             let files: Vec<(String, std::path::PathBuf)> = if path.is_dir() {
+                if path.join(crate::record::CAMPAIGN_FILE).is_file() {
+                    out.push((
+                        CANONICAL_DIR.into(),
+                        vec![json!(path.display().to_string())],
+                    ));
+                }
                 ["records.jsonl", "trials.jsonl", "ledger.jsonl"]
                     .iter()
                     .map(|n| (n.to_string(), path.join(n)))
@@ -139,6 +178,9 @@ impl Events {
     }
 }
 
+/// `Events::load` の出力で、成功契約を読む runner out dir を表す名前。
+const CANONICAL_DIR: &str = "<campaign out dir>";
+
 fn s(v: &Value, k: &str) -> Option<String> {
     v.get(k).and_then(Value::as_str).map(String::from)
 }
@@ -150,7 +192,7 @@ fn u(v: &Value, k: &str) -> Option<u64> {
 fn build_events(
     inputs: Vec<(String, Vec<Value>)>,
     campaign_sha: &BTreeMap<String, String>,
-) -> Events {
+) -> Result<Events, String> {
     let mut ev = Events {
         campaign_sha: campaign_sha.clone(),
         ..Events::default()
@@ -159,6 +201,20 @@ fn build_events(
     let mut outcome_wall: BTreeMap<String, Option<u64>> = BTreeMap::new();
     let mut run_keys: Vec<(String, Key)> = Vec::new();
     for (name, rows) in inputs {
+        if name == CANONICAL_DIR {
+            for r in &rows {
+                let dir = r.as_str().unwrap_or_default();
+                if let Some(c) = crate::success::load(Path::new(dir))?
+                    && !ev
+                        .canonical
+                        .iter()
+                        .any(|x| x.manifest_sha256 == c.manifest_sha256)
+                {
+                    ev.canonical.push(c);
+                }
+            }
+            continue;
+        }
         for r in rows {
             if let Some(rt) = r.get("record_type").and_then(Value::as_str) {
                 // export の records.jsonl: dedup_key で潰す（再 export・重複行で増やさない）。
@@ -192,7 +248,26 @@ fn build_events(
                         if let Some(t) = s(&r, "task_id") {
                             side.task_ids.insert(t);
                         }
+                        side.refs.insert(format!("run:{run_id}"));
+                        if r.get("is_retry").and_then(Value::as_bool) == Some(true) {
+                            side.auto_retries.insert(
+                                run_id.clone(),
+                                (s(&r, "parent_run_id"), u(&r, "attempt_no")),
+                            );
+                        }
                         run_keys.push((run_id, key));
+                    }
+                    "wait" => {
+                        ev.waits.push((
+                            s(&r, "task_id"),
+                            WaitFact {
+                                kind: s(&r, "wait_kind").unwrap_or_else(|| "unknown".into()),
+                                started_at: s(&r, "started_at"),
+                                ended_at: s(&r, "ended_at"),
+                                start_event: s(&r, "start_event"),
+                                end_event: s(&r, "end_event"),
+                            },
+                        ));
                     }
                     "outcome" => {
                         if let Some(run_id) = s(&r, "run_id") {
@@ -206,6 +281,7 @@ fn build_events(
                                 s(&r, "task_id"),
                                 s(&r, "campaign_id"),
                                 s(&r, "kind").unwrap_or_else(|| "unclassified".into()),
+                                s(&r, "source_event"),
                             ));
                         }
                     }
@@ -273,8 +349,21 @@ fn build_events(
         }
     }
     // 介入を試行へ: task_id が試行の task にある場合だけ結ぶ。
+    let waits = std::mem::take(&mut ev.waits);
+    for (task, w) in waits {
+        let target = task.as_ref().and_then(|t| {
+            ev.by_key
+                .iter_mut()
+                .find(|(_, side)| side.task_ids.contains(t))
+        });
+        if let Some((_, side)) = target {
+            side.refs
+                .extend(w.start_event.iter().chain(&w.end_event).cloned());
+            side.waits.push(w);
+        }
+    }
     let ivs = std::mem::take(&mut ev.interventions);
-    for (id, task, campaign, kind) in ivs {
+    for (id, task, campaign, kind, source) in ivs {
         let target = task.as_ref().and_then(|t| {
             ev.by_key
                 .iter()
@@ -284,6 +373,7 @@ fn build_events(
         match target {
             Some(k) => {
                 if let Some(side) = ev.by_key.get_mut(&k) {
+                    side.refs.extend(source);
                     side.interventions.insert(id, kind);
                 }
             }
@@ -292,7 +382,7 @@ fn build_events(
             }
         }
     }
-    ev
+    Ok(ev)
 }
 
 fn counts(items: impl Iterator<Item = String>) -> Value {
@@ -373,8 +463,8 @@ fn event_fields(side: Option<&EventSide>, row: &mut Map<String, Value>) {
     let Some(side) = side else {
         for f in [
             "wall_secs",
-            "outcome",
-            "failure_reason",
+            "executor_status",
+            "executor_reason",
             "tokens",
             "cost_micro_usd",
             "started_at",
@@ -382,6 +472,8 @@ fn event_fields(side: Option<&EventSide>, row: &mut Map<String, Value>) {
             "run_ids",
             "run_wall_ms",
             "event_interventions",
+            "event_waits",
+            "auto_retries",
         ] {
             row.insert(f.into(), missing());
         }
@@ -400,15 +492,16 @@ fn event_fields(side: Option<&EventSide>, row: &mut Map<String, Value>) {
             )
         },
     );
-    // 結果は最後の trial_no（内部再試行の最終）。tokens・費用は観測できた試行の合計と欠測数。
-    let last = side.results.values().next_back();
+    // 実行器の状態は成功契約と同じ最初の trial_no（後の trial_no は判定に使わない）。tokens・費用は観測できた試行の合計と欠測数。
+    let first = side.results.values().next();
     row.insert(
-        "outcome".into(),
-        last.map_or_else(missing, |r| field(json!(r.outcome), EVENT)),
+        "executor_status".into(),
+        first.map_or_else(missing, |r| field(json!(r.outcome), EVENT)),
     );
     row.insert(
-        "failure_reason".into(),
-        last.and_then(|r| r.reason.as_ref())
+        "executor_reason".into(),
+        first
+            .and_then(|r| r.reason.as_ref())
             .map_or_else(missing, |x| field(json!(x), EVENT)),
     );
     for (name, pick) in [
@@ -471,6 +564,91 @@ fn event_fields(side: Option<&EventSide>, row: &mut Map<String, Value>) {
             missing()
         },
     );
+    // 人の応答待ち（Question / Approval）。export の run 行が無い試行（A・未 export）は欠測で、0 件と区別する。
+    row.insert(
+        "event_waits".into(),
+        if side.has_records {
+            let items: Vec<Value> = side
+                .waits
+                .iter()
+                .map(|w| {
+                    json!({"wait_kind": w.kind, "started_at": w.started_at, "ended_at": w.ended_at,
+                           "start_event": w.start_event, "end_event": w.end_event})
+                })
+                .collect();
+            field(
+                json!({"count": counts(side.waits.iter().map(|w| w.kind.clone())),
+                       "open": side.waits.iter().filter(|w| w.ended_at.is_none()).count(),
+                       "items": items}),
+                EVENT,
+            )
+        } else {
+            missing()
+        },
+    );
+    // Celeris が自動で作った再試行 run（人の再作業ではない）。
+    row.insert(
+        "auto_retries".into(),
+        if side.has_records {
+            let items: Vec<Value> = side
+                .auto_retries
+                .iter()
+                .map(|(run, (parent, attempt))| {
+                    json!({"run_id": run, "parent_run_id": parent, "attempt_no": attempt,
+                           "wall_ms": side.run_wall_ms.get(run).copied().flatten()})
+                })
+                .collect();
+            field(
+                json!({"count": side.auto_retries.len(), "runs": items}),
+                EVENT,
+            )
+        } else {
+            missing()
+        },
+    );
+}
+
+/// 成功契約の判定（runner の out dir がある入力だけ）。無ければ欠測（executor passed を成功に読み替えない）。
+fn canonical_fields(cell: Option<&crate::success::Cell>, row: &mut Map<String, Value>) {
+    let Some(c) = cell else {
+        for f in [
+            "validated_success",
+            "success_class",
+            "canonical_trial_no",
+            "executor_trials",
+        ] {
+            row.insert(f.into(), missing());
+        }
+        return;
+    };
+    let class = c.class;
+    row.insert(
+        "validated_success".into(),
+        if class == crate::success::SuccessClass::Missing {
+            missing()
+        } else {
+            field(json!(class.is_success()), GRADE)
+        },
+    );
+    row.insert(
+        "success_class".into(),
+        json!({"value": class.as_str(), "source": GRADE,
+               "needs_regrade": class.needs_regrade(), "unexecuted": c.unexecuted,
+               "contract": crate::success::SUCCESS_CONTRACT}),
+    );
+    row.insert(
+        "canonical_trial_no".into(),
+        c.canonical_trial_no
+            .map_or_else(missing, |n| field(json!(n), GRADE)),
+    );
+    row.insert(
+        "executor_trials".into(),
+        field(json!(c.recorded_trials), EVENT),
+    );
+    // 実行器の状態は canonical の試行の値で上書きする（trials.jsonl の同じ行）。
+    if let Some(st) = c.executor_status {
+        row.insert("executor_status".into(), field(json!(st), EVENT));
+    }
 }
 
 /// 結合して JSONL（末尾改行つき）を返す。
@@ -481,7 +659,13 @@ pub fn join(human_ops_file: &Path, events: &[&Path]) -> Result<String, String> {
     for r in &recs {
         campaign_sha.insert(r.campaign_id.clone(), r.manifest_sha256.clone());
     }
-    let ev = build_events(Events::load(events)?, &campaign_sha);
+    let ev = build_events(Events::load(events)?, &campaign_sha)?;
+    let mut cells: BTreeMap<Key, &crate::success::Cell> = BTreeMap::new();
+    for c in &ev.canonical {
+        for ((cfg, case, rep), cell) in &c.cells {
+            cells.insert((c.manifest_sha256.clone(), case.clone(), *cfg, *rep), cell);
+        }
+    }
 
     let mut ops: BTreeMap<Key, Vec<HumanOpRecord>> = BTreeMap::new();
     let mut unkeyed: BTreeMap<(String, String), usize> = BTreeMap::new();
@@ -498,7 +682,13 @@ pub fn join(human_ops_file: &Path, events: &[&Path]) -> Result<String, String> {
             }
         }
     }
-    let keys: BTreeSet<Key> = ops.keys().chain(ev.by_key.keys()).cloned().collect();
+    // 分母は manifest の計画 cell（渡されていれば）。観測行だけの key も残す（計画外は checker が違反にする）。
+    let keys: BTreeSet<Key> = ops
+        .keys()
+        .chain(ev.by_key.keys())
+        .chain(cells.keys())
+        .cloned()
+        .collect();
     let mut lines = String::new();
     for key in keys {
         let (sha, case, cfg, rep) = &key;
@@ -527,7 +717,25 @@ pub fn join(human_ops_file: &Path, events: &[&Path]) -> Result<String, String> {
         );
         row.insert("rep".into(), json!(rep));
         event_fields(side, &mut row);
+        canonical_fields(cells.get(&key).copied(), &mut row);
         evaluator_fields(recs, &mut row);
+        // 評価者記録の celeris_event_ref を Celeris 側の参照（介入・待機の event、run）と照合する。
+        let refs: BTreeSet<&String> = recs
+            .iter()
+            .filter_map(|r| r.celeris_event_ref.as_ref())
+            .collect();
+        row.insert(
+            "event_refs".into(),
+            if refs.is_empty() {
+                missing()
+            } else {
+                let known = side.map(|s| &s.refs);
+                let (joined, unjoined): (Vec<&String>, Vec<&String>) = refs
+                    .into_iter()
+                    .partition(|r| known.is_some_and(|k| k.contains(*r)));
+                field(json!({"joined": joined, "unjoined": unjoined}), EVALUATOR)
+            },
+        );
         // 評価者記録が task/run を持つが event が無い（A 腕）ときは評価者由来で補う。
         if row["run_ids"]["source"] == MISSING {
             let ids: BTreeSet<&String> = recs.iter().filter_map(|r| r.run_id.as_ref()).collect();
@@ -545,9 +753,16 @@ pub fn join(human_ops_file: &Path, events: &[&Path]) -> Result<String, String> {
         lines += &Value::Object(row).to_string();
         lines.push('\n');
     }
+    for c in &ev.canonical {
+        lines += &json!({"row_type": "canonical", "manifest_sha256": c.manifest_sha256,
+            "contract": crate::success::SUCCESS_CONTRACT, "grades_file": c.grades_file,
+            "grade_violations": c.grade_violations, "cells": c.cells.len()})
+        .to_string();
+        lines.push('\n');
+    }
     for ((campaign_id, sha), n) in unkeyed {
         lines += &json!({"row_type": "unjoined_evaluator", "campaign_id": campaign_id,
-            "manifest_sha256": sha, "records": n, "reason": "case/arm/rep の identity が無い記録"})
+            "manifest_sha256": sha, "records": n, "reason": "case/arm/rep の identity が無い記録（shared scope。arm へ配分しない）"})
         .to_string();
         lines.push('\n');
     }

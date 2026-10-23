@@ -2,31 +2,36 @@
   "schema": "celeris.campaign-case-private/1",
   "case_id": "k4-cmp4-validity-analysis",
   "split": "final",
-  "hidden_command": "grader が inputs の IOR/mdtest JSON・stdout・実効設定・qstat から fs×workload×nhosts の有効性を再計算し、報告の表と照合する",
+  "hidden_command": "grader が固定 raw（planned-cells.json・cell.json/exit.json・ior.json・stdout/stderr・mdtest-ranks.csv・review28/qstat-43706.txt）から fs×rep×workload の有効性・理由・値と有効数／全数を再計算し、results/cells.csv と report.md の metric 行に照合する（cells_validity）",
   "known_defects": [
     {
       "id": "k4-chfs-fsync-zero",
-      "description": "CHFS の fsync 許可リストにより実効 fsync=0 のセルを有効に数えている"
+      "description": "実効 fsync=0（Parameters.fsync≠1 または fsync() not supported の fallback）のセルを有効に数えている"
     },
     {
       "id": "k4-job-failed",
-      "description": "qstat -x の Unknown Job Id／F／Exit≠0 の job のセルを有効に数えている"
+      "description": "qstat -xf の記録が無い（Unknown Job Id）・F 以外・F かつ Exit_status≠0 で完了記録の無いセル（job 43706 は F/-20: BenchFS W2 の 2 セル）を有効に数えている。逆に F だけで失敗と読んで完了済みセルを無効にしている"
     },
     {
       "id": "k4-w2-denominator",
-      "description": "BenchFS W2 の欠測を分母から落としている"
+      "description": "BenchFS W2 の欠測（rep1 は途中で切れ、rep2 は未実行）を表と分母から落としている"
     }
   ],
   "false_claim_traps": [
     {
       "id": "k4-claim-all-valid",
-      "claim": "全セル有効と書く",
-      "why_wrong": "無効セルが存在する"
+      "claim": "全セル有効（32/32）と書く",
+      "why_wrong": "BenchFS W2 の 2 セルが無効（欠測・job 失敗）"
     },
     {
       "id": "k4-claim-no-denominator",
       "claim": "分母なしの帯域表",
       "why_wrong": "有効数／全数が無ければ不合格"
+    },
+    {
+      "id": "k4-claim-unifyfs-w3-invalid",
+      "claim": "UnifyFS W3 を unlink 警告で無効にする（28/32）",
+      "why_wrong": "exit 0・全 phase 完走・mdtest all 行が正で規則上は有効（人が承認した final-v3 と同じ）"
     }
   ],
   "expected": {
@@ -34,7 +39,18 @@
     "jobs": [
       43706
     ],
-    "rule": "実効設定が要求を満たし job 正常終了のセルだけ有効。欠測は分母に残す",
+    "job_terminal_state": {
+      "43706": "F / Exit_status -20（review28/qstat-43706.txt）"
+    },
+    "rule": "完了記録（exit 0・完全な出力）と実効設定（fsync=1・checkRead=1・api）を満たし job が F のセルだけ有効。F/Exit≠0 は完了記録の無いセルの理由。欠測は分母に残す",
+    "cells_total": 32,
+    "cells_valid": 30,
+    "cells_valid_by_fs": {
+      "benchfs": 6,
+      "chfs": 8,
+      "gekkofs": 8,
+      "unifyfs": 8
+    },
     "tolerance_relative": 0.001
   }
 }

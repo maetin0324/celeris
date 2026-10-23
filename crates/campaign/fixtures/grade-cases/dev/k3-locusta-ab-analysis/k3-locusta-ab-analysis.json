@@ -4,6 +4,11 @@
   "split": "dev",
   "recompute": {
     "report": "report.md",
+    "input_archive": {
+      "path": "main-43223.tgz",
+      "sha256": "bdb155d4c1690ae5743621d129c270fcc53c919751d62c56d0c4395b74d2e90f",
+      "extract_to": "inputs"
+    },
     "pinned_raw": {
       "inputs/main-43223.pbs/main/rep1/L_base_t4k_p1_sep/2026.10.06-02.41.10-43223-4n/ior_results/ior_result_0.json": "b5e88826223a5f22515f194c03fdb2aa7f6dcfee8a01fa47eac8b3e35fb8c08d",
       "inputs/main-43223.pbs/main/rep2/L_base_t4k_p1_sep/2026.10.06-02.49.32-43223-4n/ior_results/ior_result_0.json": "de7d407454892863560d264635d5ba9a1f5a8bf315bc0592e148cfbac8eb1b8e",

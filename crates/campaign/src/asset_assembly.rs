@@ -149,6 +149,26 @@ pub fn assemble_initial(
 }
 
 /// 固定入力の tgz を `dest` へ展開する（grader の再計算検査用。grader 自身は子 process を起動しない）。
+/// `src_dir` の中身（`.`）を gzip tar にする（評価側の固定入力の写し・試験 fixture 用）。
+pub fn create_tgz(src_dir: &Path, archive: &Path) -> Result<(), String> {
+    let out = std::process::Command::new("tar")
+        .arg("-czf")
+        .arg(archive)
+        .arg("-C")
+        .arg(src_dir)
+        .arg(".")
+        .output()
+        .map_err(|e| format!("tar: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "tar -czf {}: {}",
+            archive.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
 pub fn extract_tgz(archive: &Path, dest: &Path) -> Result<(), String> {
     let out = std::process::Command::new("tar")
         .arg("-xzf")

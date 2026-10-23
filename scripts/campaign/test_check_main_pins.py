@@ -1,5 +1,6 @@
 """check-main-pins.py の offline 試験。合成 fixture だけを使い、実 artifacts・ネットワーク・LLM には触れない。"""
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -189,6 +190,47 @@ class CheckMainPins(unittest.TestCase):
 
     def test_success(self):
         self.assertEqual(self.problems(), [])
+
+    def grade_case_with_archive(self, stage=True, tamper=False):
+        """K4 の grade-case に input_archive を書き、公開 inputs と（必要なら）grade-case の隣へ同じ tgz を置く。"""
+        gc_dir = os.path.join(self.main, "fixed", "grade-cases", "final", K4)
+        body = b"\x1f\x8b fake tgz bytes for the pinned k4 raw archive 0123456789"
+        pub = os.path.join(self.root, "measure-src", "main", "inputs", "main-v3-n2-43706.tgz")
+        with open(pub, "wb") as f:
+            f.write(body)
+        sha = hashlib.sha256(body).hexdigest()
+        write_json(os.path.join(gc_dir, f"{K4}.json"),
+                   {"schema": "celeris.grade-case/1", "id": K4, "split": "final",
+                    "recompute": {"report": "report.md", "metrics": [],
+                                  "input_archive": {"path": "main-v3-n2-43706.tgz", "sha256": sha}}})
+        if stage:
+            with open(os.path.join(gc_dir, "main-v3-n2-43706.tgz"), "wb") as f:
+                f.write(body + (b"x" if tamper else b""))
+
+    def test_staged_grader_archive_passes_and_is_not_a_leak(self):
+        self.grade_case_with_archive()
+        self.assertEqual(self.problems(), [])
+
+    def test_unstaged_or_tampered_grader_archive_is_flagged(self):
+        self.grade_case_with_archive(stage=False)
+        self.assertFlags("is not staged next to the grade-case")
+        self.grade_case_with_archive(stage=True, tamper=True)
+        self.assertFlags("sha256 differs from the pinned value")
+
+    def test_pins_file_overrides_the_approved_values_for_a_new_bundle(self):
+        # 別 bundle（mlsys-main-4）: pins.json が無ければ main-1 の値で落ち、あれば通る。
+        self.edit_manifest(lambda m: m.__setitem__("campaign_id", "mlsys-main-4"))
+        self.assertFlags("campaign_id must be mlsys-main-1")
+        pins = {"CAMPAIGN_ID": "mlsys-main-4"}
+        write_json(os.path.join(self.main, "pins.json"), pins)
+        got = self.problems()
+        self.assertFalse(any("final.json: campaign_id must be" in p for p in got), got)
+        # 他の main-1 固定値（MEASUREMENT_ID 等）も同じ値で見る
+        self.assertTrue(any("MEASUREMENT_ID must be mlsys-main-4" in p for p in got), got)
+        write_json(os.path.join(self.main, "pins.json"), {"BOGUS": 1, "PROBLEMS": "not-a-list"})
+        got = self.problems()
+        self.assertTrue(any("unknown pin BOGUS" in p for p in got), got)
+        self.assertTrue(any("PROBLEMS must be a list" in p for p in got), got)
 
     def test_cli_exit_codes(self):
         cmd = [sys.executable, "-I", SCRIPT, "--root", self.root]

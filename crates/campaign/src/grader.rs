@@ -147,6 +147,9 @@ pub mod case {
         #[serde(default)]
         pub input_archive: Option<InputArchive>,
         pub metrics: Vec<MetricSpec>,
+        /// セル有効性の再計算と表・件数 metric の照合（cmp4 系。ADR 2026-10-23-k4-cells-validity-grading）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub cells: Option<crate::cells_validity::CellsSpec>,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1186,10 +1189,25 @@ pub mod recompute {
             }
             rows.push(row);
         }
-        if env_pins && pin_failed {
-            CheckResult::env_failure(reasons, json!({"metrics": rows}))
+        let mut details = json!({"metrics": rows});
+        let mut raw_broken = pin_failed;
+        if let Some(cs) = &spec.cells {
+            match crate::cells_validity::check(cs, artifact, raw, &reported) {
+                Ok(o) => {
+                    reasons.extend(o.reasons);
+                    details["cells"] = o.details;
+                }
+                Err(e) => {
+                    // 固定 raw 側（planned-cells・job 記録）の不整合。archive を使う case では grader 資産の失敗。
+                    reasons.push(format!("cells: cannot recompute from raw data: {e}"));
+                    raw_broken = true;
+                }
+            }
+        }
+        if env_pins && raw_broken {
+            CheckResult::env_failure(reasons, details)
         } else {
-            CheckResult::from_reasons(reasons, json!({"metrics": rows}))
+            CheckResult::from_reasons(reasons, details)
         }
     }
 }
@@ -1576,7 +1594,7 @@ pub(crate) fn sha256_file(p: &Path) -> Result<String, String> {
 }
 
 /// 成果物 dir 内の相対 path を解決する。絶対 path・`..`・成果物外を指す symlink を拒否する。
-pub(crate) fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
+pub fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
     let p = Path::new(rel);
     if rel.is_empty()
         || p.components()
@@ -1595,7 +1613,7 @@ pub(crate) fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
     Ok(joined)
 }
 
-pub(crate) fn read_json(p: &Path) -> Result<Value, String> {
+pub fn read_json(p: &Path) -> Result<Value, String> {
     let b = fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
     serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", p.display()))
 }

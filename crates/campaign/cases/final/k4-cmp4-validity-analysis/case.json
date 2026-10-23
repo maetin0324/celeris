@@ -20,7 +20,7 @@
   ],
   "grade_case_ref": {
     "path": "final/k4-cmp4-validity-analysis/k4-cmp4-validity-analysis.json",
-    "sha256": "723c68ff87737e71d8f28c377c11d7a76fad16f3ec795fbfbfad05b8e8509074"
+    "sha256": "34de0c8823c7f03cf227620e73fcbe3c630b18070307d79ca8f9a74db338b64d"
   },
   "id": "k4-cmp4-validity-analysis",
   "inputs": [
@@ -28,7 +28,7 @@
       "fetch": [
         "main-v3-n2-43706.tgz は run が --inputs-src から sha256 を照合して inputs/main-v3-n2-43706.tgz に置く（取得は不要）",
         "sha256sum inputs/main-v3-n2-43706.tgz で sha256 と一致を確かめる",
-        "cd inputs && tar -xzf main-v3-n2-43706.tgz（final-v*/ の集計・報告は含まれない）"
+        "cd inputs && tar -xzf main-v3-n2-43706.tgz（inputs/ 直下に runs/ と review28/ ができる。final-v*/ の集計・報告は含まれない。採点器は同じ tgz を自分で展開して照合する）"
       ],
       "name": "main-v3-n2-43706.tgz",
       "sha256": "128057cf4016535941963fc4142ba424c05c65889905ca2bbcc190f6161077a1"
@@ -37,32 +37,32 @@
   "kind": "real",
   "private_ref": {
     "path": "final/k4-cmp4-validity-analysis/private.json",
-    "sha256": "f090be147379ef5fa5337b31a699fc700170718a5075cbdbeb20cb1ec76a91d8"
+    "sha256": "2aeea5675525b8dd7959c87e5739be9608cccb6a3695c27a503549f821a08638"
   },
   "required_capabilities": [
     {
-      "id": "python3",
-      "kind": "interpreter",
       "argv": [
         "python3",
         "--version"
       ],
-      "expect_stdout": "Python 3"
+      "expect_stdout": "Python 3",
+      "id": "python3",
+      "kind": "interpreter"
     },
     {
-      "id": "python3-stdlib",
-      "kind": "interpreter",
       "argv": [
         "python3",
         "-c",
         "import json, csv, statistics, hashlib"
-      ]
+      ],
+      "id": "python3-stdlib",
+      "kind": "interpreter"
     }
   ],
   "schema": "celeris.campaign-case/1",
   "snapshot": {
     "kb_snapshot": "741f24146f5c02f44acf5291e23806416b9956809e55a1474488ecbcc9fe0702",
-    "materials_sha256": "74eed730b32a26f40df208621e7248d033ec4ffeaf0739344bab5256ecd6c05a",
+    "materials_sha256": "77aa6847bd45ea487d575a95dd6ad2a1efa36401d94b816bcc09921e3bb29dd7",
     "repo_commit": "none (control or input-only case)"
   },
   "split": "final",

@@ -531,26 +531,41 @@ fn oracle_report(g: &GradeCase, artifact: &Path, corrupt_first: Option<f64>) -> 
 fn recompute_status(id: &str, tgz: &Path, corrupt: Option<f64>) -> Status {
     let set = set();
     let l = set.get(id).unwrap();
-    let dir = grade_root().join(split_dir(&l.case)).join(id);
-    let g = GradeCase::load(&dir.join(format!("{id}.json"))).unwrap();
     let t = tempfile::tempdir().unwrap();
-    let artifact = t.path().join("artifact");
-    fs::create_dir_all(artifact.join("inputs")).unwrap();
+    // grader 側: 固定 tgz は grade-case の隣（repo には無いので写しの case dir に置く）。grader が自分で展開する。
+    let dir = t.path().join("case");
+    copy(&grade_root().join(split_dir(&l.case)).join(id), &dir);
+    let g = GradeCase::load(&dir.join(format!("{id}.json"))).unwrap();
+    let rec = g.recompute.as_ref().unwrap();
+    let arc = rec.input_archive.as_ref().expect("input_archive");
+    assert_eq!(
+        sha(tgz),
+        arc.sha256,
+        "{id}: 原票の hash が grade-case の固定とずれた"
+    );
+    fs::copy(tgz, dir.join(&arc.path)).unwrap();
+    // oracle 用に同じ原票を展開して期待値を作る（作業者は inputs/ に展開しなくても採点される）。
+    let raw = t.path().join("raw");
+    fs::create_dir_all(raw.join("inputs")).unwrap();
     assert!(
         Command::new("tar")
             .arg("-xzf")
             .arg(tgz)
             .arg("-C")
-            .arg(artifact.join("inputs"))
+            .arg(raw.join("inputs"))
             .status()
             .unwrap()
             .success()
     );
-    fs::write(
-        artifact.join("report.md"),
-        oracle_report(&g, &artifact, corrupt),
-    )
-    .unwrap();
+    let artifact = t.path().join("artifact");
+    fs::create_dir_all(artifact.join("results")).unwrap();
+    let mut report = oracle_report(&g, &raw, corrupt);
+    if let Some(cs) = &rec.cells {
+        let exp = celeris_campaign::cells_validity::compute(&raw, cs).unwrap();
+        report.push_str(&exp.metric_lines());
+        fs::write(artifact.join("results/cells.csv"), exp.csv()).unwrap();
+    }
+    fs::write(artifact.join("report.md"), report).unwrap();
     let opts = GradeOptions {
         case_dir: dir,
         work_root: t.path().join("scratch"),
@@ -558,7 +573,14 @@ fn recompute_status(id: &str, tgz: &Path, corrupt: Option<f64>) -> Status {
         observed_jobs: None,
         initial_tree: None,
     };
+    fs::create_dir_all(t.path().join("scratch")).unwrap();
     let r = grade(&g, &artifact, &opts);
+    assert_ne!(
+        r.failure_class,
+        Some(celeris_campaign::grader::FailureClass::EnvFailure),
+        "{id}: grader 側の資産不整合: {:?}",
+        r.checks.recompute.reasons
+    );
     r.checks.recompute.status
 }
 
@@ -566,12 +588,24 @@ fn recompute_status(id: &str, tgz: &Path, corrupt: Option<f64>) -> Status {
 fn k3_k4_recompute_rejects_a_wrong_report_and_accepts_the_raw_derived_one() {
     let k3 = raw_tgz(
         "CAMPAIGN_K3_TGZ",
-        "/local/celeris/data/workspaces/01M45ACZQWTW9BP8WVY8KAW9TC/artifacts/locusta-latency/raw/main-43223.tgz",
-    );
+        "/local/celeris/data/scratch/mlsys-pilot-2/inputs/main-43223.tgz",
+    )
+    .or_else(|| {
+        raw_tgz(
+            "CAMPAIGN_K3_TGZ",
+            "/local/celeris/data/workspaces/01M45ACZQWTW9BP8WVY8KAW9TC/artifacts/locusta-latency/raw/main-43223.tgz",
+        )
+    });
     let k4 = raw_tgz(
         "CAMPAIGN_K4_TGZ",
-        "/local/celeris/data/workspaces/01M49KWT59XM37ANGCTJ8A4DX5/artifacts/cmp4/raw/main-v3-n2-43706.tgz",
-    );
+        "/local/celeris/data/measure/main-3/out/snapshot/inputs/main-v3-n2-43706.tgz",
+    )
+    .or_else(|| {
+        raw_tgz(
+            "CAMPAIGN_K4_TGZ",
+            "/local/celeris/data/workspaces/01M49KWT59XM37ANGCTJ8A4DX5/artifacts/cmp4/raw/main-v3-n2-43706.tgz",
+        )
+    });
     let (Some(k3), Some(k4)) = (k3, k4) else {
         eprintln!("SKIPPED(実行不能): 原票 tgz が無い");
         return;

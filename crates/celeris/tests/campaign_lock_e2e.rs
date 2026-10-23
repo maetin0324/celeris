@@ -46,7 +46,6 @@ use celeris_campaign::{
     watch::{Clock, WatchEnd, WatchOptions, WatchReport, watch},
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use task_core::{
     DaemonMode, Event, InstanceRole, RunEnd, RunMetrics, RunRole, SharedRole, SqliteStore, Status,
     TaskId, TaskStore, Trigger, Usage as RunUsage,
@@ -617,6 +616,21 @@ fn resolved_manifest() -> Value {
         .join("..")
         .join("agent-docs/progress/2026-10-16-mlsys-final/final.json");
     let mut v: Value = serde_json::from_slice(&fs::read(p).expect("final.json")).expect("json");
+    // 公開 materials（K2・K4 の materials/）の内容 hash は repo の現物から計算する（task.md を変えると固定値がずれる）。
+    {
+        let t = tempfile::tempdir().expect("tmp");
+        for c in ["k2-bf-xattr-restart-campaign", "k4-cmp4-validity-analysis"] {
+            copy(
+                &campaign_root()
+                    .join("cases/final")
+                    .join(c)
+                    .join("materials"),
+                &t.path().join(c),
+            );
+        }
+        v["snapshot"]["materials_sha256"] =
+            json!(celeris_campaign::snapshot::hash_tree(t.path()).expect("hash"));
+    }
     for c in v["configs"].as_array_mut().expect("configs") {
         match c["id"].as_str().expect("id") {
             "A" => c["harness_version"] = json!("claude-code@2.1.0"),
@@ -666,7 +680,6 @@ impl World {
         copy(&c.join("cases"), &cases);
         copy(&c.join("fixtures/grade-cases"), &grade);
         fs::create_dir_all(&ins).expect("ins");
-        fs::write(ins.join(K4_INPUT), b"fake archive for the test").expect("input");
         let repo = d.join("repo");
         fs::create_dir_all(repo.join("src")).expect("src");
         fs::write(repo.join("README"), "k2 initial tree").expect("readme");
@@ -692,12 +705,10 @@ impl World {
             v["initial"]["submodules"] = json!([]);
             v["snapshot"]["repo_commit"] = json!(li.commit);
         });
-        edit(cases.join("final").join(K4).join("case.json"), &|v| {
-            v["inputs"][0]["sha256"] = json!(format!(
-                "{:x}",
-                Sha256::digest(b"fake archive for the test")
-            ));
-        });
+        // K4 の固定入力 tgz は合成 raw で代用（公開 inputs と grade-case の隣に同じ tgz。case.json を再固定）。
+        celeris_campaign::cells_validity::synth::healthy()
+            .install_k4_fixture(&grade, &cases, &ins)
+            .expect("k4 fixture");
         let (m, k) = (d.join("materials"), d.join("kb"));
         for case in [K2, K4] {
             copy(
@@ -1001,9 +1012,10 @@ async fn wrong_initial_repo_submodule_materials_kb_or_inputs_cause_no_post_or_ex
     refused("kb");
     fs::remove_file(k.join("added.txt")).expect("rm");
     let ins = w.inp.inputs_src.clone().expect("ins");
+    let pinned_tgz = w.inp.grade_cases_root.join("final").join(K4).join(K4_INPUT);
     fs::write(ins.join(K4_INPUT), b"another archive").expect("w");
     refused("external input");
-    fs::write(ins.join(K4_INPUT), b"fake archive for the test").expect("w");
+    fs::copy(&pinned_tgz, ins.join(K4_INPUT)).expect("restore input");
     // 対照: 元の入力なら通る（上の拒否が実体差だけによる）。
     let r = w.drive(&w.inp, 200).expect("correct inputs");
     assert_eq!(r.end, WatchEnd::Settled);

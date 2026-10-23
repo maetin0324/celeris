@@ -42,7 +42,7 @@ fn seed(store: &SqliteStore, task_id: &str, seq: i64, u: &Unit<'_>) {
     let wu = format!("wu-{}", u.key);
     conn.execute(
         "INSERT INTO work_units (id, task_id, plan_id, key, seq, kind, status, json, created_at, updated_at) \
-         VALUES (?1, ?2, 'p1', ?3, ?4, 'implement', ?5, '{}', '2026-10-22T00:00:00Z', '2026-10-22T00:00:00Z')",
+             VALUES (?1, ?2, 'p1', ?3, ?4, 'implement', ?5, '{}', '2026-10-22T00:00:00Z', '2026-10-22T00:00:00Z')",
         params![wu, task_id, u.key, seq, u.status],
     )
     .unwrap();
@@ -54,8 +54,8 @@ fn seed(store: &SqliteStore, task_id: &str, seq: i64, u: &Unit<'_>) {
         let end = format!("2026-10-22T00:{:02}:00Z", n * 5 + 4);
         conn.execute(
             "INSERT INTO runs (run_id, task_id, work_unit_id, role, seq, status, started_at, finished_at, \
-             selected_harness_id, selected_source_id, selected_model_id) \
-             VALUES (?1, ?2, ?3, 'worker', ?4, 'done', ?5, ?6, 'claude_code', 'claude_oauth', ?7)",
+                 selected_harness_id, selected_source_id, selected_model_id) \
+                 VALUES (?1, ?2, ?3, 'worker', ?4, 'done', ?5, ?6, 'claude_code', 'claude_oauth', ?7)",
             params![run, task_id, wu, n, start, end, u.model],
         )
         .unwrap();
@@ -67,7 +67,7 @@ fn seed(store: &SqliteStore, task_id: &str, seq: i64, u: &Unit<'_>) {
         .unwrap();
         conn.execute(
             "INSERT INTO decision_log_usage (dedup_key, run_id, role, input_tokens, output_tokens, cache_read_tokens, \
-             cache_creation_tokens, list_cost_usd, updated_at) VALUES (?1, ?2, 'worker', 100, 10, 1000, 50, ?3, 'now')",
+                 cache_creation_tokens, list_cost_usd, updated_at) VALUES (?1, ?2, 'worker', 100, 10, 1000, 50, ?3, 'now')",
             params![format!("run:{run}:x"), run, u.usd / attempts as f64],
         )
         .unwrap();
@@ -98,7 +98,7 @@ fn seed(store: &SqliteStore, task_id: &str, seq: i64, u: &Unit<'_>) {
         let run = format!("{}-rv", u.key);
         conn.execute(
             "INSERT INTO runs (run_id, task_id, work_unit_id, role, seq, status, started_at, finished_at) \
-             VALUES (?1, ?2, ?3, 'reviewer', 9, 'done', '2026-10-22T00:20:00Z', '2026-10-22T00:21:00Z')",
+                 VALUES (?1, ?2, ?3, 'reviewer', 9, 'done', '2026-10-22T00:20:00Z', '2026-10-22T00:21:00Z')",
             params![run, task_id, wu],
         )
         .unwrap();

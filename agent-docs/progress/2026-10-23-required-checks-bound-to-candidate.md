@@ -145,3 +145,11 @@ hash は rebase で変わるので書かない。
 
 ### 残件
 - なし。本番への昇格は人が release gate・verify・promote の手順で行う。昇格時に MergeQueued で止まっている配送は証跡が無いので 1 回だけ再 review になる。
+
+## 提出時の HEAD での検査（progress-hashfree WU）
+検査は提出時の candidate（その時点の HEAD、最後の rebase の後）で再実行した。hash は rebase で変わるので書かない。直前の commit からこの節の追記までの差分は本進捗文書だけで、コードの tree は同じ。
+- `bash scripts/dev/test-affected.sh`（WU 基準 `CELERIS_WU_BASE`）: exit 0（health gate・文書検査合格、docs のみの差分で Rust 試験対象なし）
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh`（task 基準 = `git merge-base HEAD main`）: exit 0、6336 tests run: 6336 passed、18 skipped
+- `cargo clippy --workspace -- -D warnings`: exit 0
+- `cargo fmt --all -- --check`: exit 0
+- 全 workspace の試験・web e2e・本物の browser/userns 試験は実行・追加していない（release gate だけ）。

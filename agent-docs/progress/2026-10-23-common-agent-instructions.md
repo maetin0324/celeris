@@ -109,3 +109,14 @@ attempt 3 の審査で条件 3 だけが不合格だった。地図のうち、�
 - 実 CLI（Codex・Pi・opencode）での実機確認はしていない（LLM 呼び出しを伴う）。stub が受け取った prompt の内容までを試験で確かめた。
 - Codex の skills 一覧（`skills::deliver_agents_md`、ADR-0127）は従来どおり AGENTS.md の `celeris:skills` 節を書く。そのため skill がある Codex run だけは、AGENTS.md を追跡する repo で作業ツリーを変える（main からの既存の挙動）。提案: skills 一覧も Pi・ACP と同じく prompt に載せ、AGENTS.md を書かないようにする（別 task）。
 - 対象外: aider など上の 4 経路以外の adapter には前置きを足していない。
+
+
+## progress-metadata-repair（attempt 3）
+
+- 根拠: `bash scripts/dev/progress-index.sh --check` が示した既存8文書。title は各本文の `# ` 見出し、tasks は既存 front matter または参照 ADR / 同案件の task 記録、status と updated は各文書の `completed` 記録を根拠に補完した。既存の正しい欄・本文・実装・検査スクリプトは変更していない。
+- 変更範囲: `agent-docs/progress/2026-10-21-{cargo-lock-regenerate,grader-input-and-max-turns,preflight-env-lock-check}.md` と `agent-docs/progress/2026-10-22-{comment-on-human-gate,dynamic-config,harness-balance-lane-routing,jev-classification-before-launch,plan-issue-answer-replans}.md` の front matter のみ。
+- 基準 main: `f01e41e9bf43`。検証対象 SHA: `a3ca64fd`。
+- `bash scripts/dev/progress-index.sh --check`: exit 0。
+- `python3 scripts/dev/check-architecture-map.py`: exit 0（715 path）。`bash scripts/dev/check-doc-links.sh docs/architecture-map.md`: exit 0。
+- `bash scripts/dev/test-affected.sh`: exit 0（health の 38 件と architecture-map の 1 件が成功。Rust 対象試験は docs のみのため対象なし）。
+- 残件: なし。

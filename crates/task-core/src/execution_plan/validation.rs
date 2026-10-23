@@ -1,5 +1,6 @@
 //! Plan validation, limits, and deterministic topological ordering.
 
+use super::plan_limits::planner_portion_v3;
 use super::*;
 
 // ---------------------------------------------------------------------------
@@ -27,8 +28,7 @@ pub struct ExecutionLimits {
     pub max_checks: usize,
     /// 計画の JSON 全体の大きさの上限（バイト、既定 24 KiB）。/1・/2 の検証が見る。
     pub max_plan_json_bytes: usize,
-    /// ADR-0079 R7-2: `celeris.execution-plan/3` の JSON 全体の大きさの上限（バイト、既定 64 KiB）。/3 は段階・
-    /// 決定・done の unit の持ち越しを 1 つの JSON に書くので /1・/2 の 24 KiB では足りない（本番 24815 > 24576）。
+    /// `/3` の planner 分の JSON サイズ上限（既定 64 KiB）。done の持ち越しを除く。
     pub max_plan_json_bytes_v3: usize,
     /// ADR-0074 §4（Phase F2）: `celeris.execution-plan/2` の `work_units` の件数上限（既定 10。
     /// 統合 WU・repair は数えない）。`max_work_units` は v1 専用のまま（既定 8。§4 の表）。
@@ -90,6 +90,10 @@ impl Default for ExecutionLimits {
 /// D14: 検証エラー（すべて拒否理由。1 回だけ再試行し、それでも駄目なら atomic に倒す。呼び出し側の責務）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanValidationError {
+    /// /3 の拒否に添える計測対象の内訳（単独では拒否しない）。
+    PlanLimitAccounting {
+        detail: String,
+    },
     /// `schema` 欄が `celeris.execution-plan/1` でも `/2`（ADR-0074 D1.1、Phase F2）でもない。
     WrongSchema {
         found: String,
@@ -399,6 +403,7 @@ pub enum PlanValidationError {
 impl std::fmt::Display for PlanValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            PlanValidationError::PlanLimitAccounting { detail } => f.write_str(detail),
             PlanValidationError::WrongSchema { found } => {
                 write!(
                     f,
@@ -806,7 +811,10 @@ pub struct ValidatedPlan {
 /// 〈[`PlanUnitSpec::to_work_unit_spec`]〉が done の spec と一致する）。
 /// ADR-0079 付記「R7-3」D1: `checks` だけが違う写しも done の写しとして扱う（planner の replan は done の unit の
 /// `checks` を書き換えられる）。
-fn is_done_carry_over(unit: &PlanUnitSpec, done_work_units: &[(String, WorkUnitSpec)]) -> bool {
+pub(super) fn is_done_carry_over(
+    unit: &PlanUnitSpec,
+    done_work_units: &[(String, WorkUnitSpec)],
+) -> bool {
     done_work_units
         .iter()
         .any(|(k, s)| *k == unit.key && same_except_checks(s, &unit.to_work_unit_spec()))
@@ -1408,6 +1416,29 @@ fn validate_v3(
         return Err(vec![PlanValidationError::TreeDisabled]);
     }
     let mut errors = Vec::new();
+    let planner = planner_portion_v3(spec, done_work_units);
+    // A done unit can have new checks. Charge those bytes without charging its historical objective.
+    let changed_done_checks: Vec<_> = spec
+        .units
+        .iter()
+        .filter_map(|u| {
+            done_work_units
+                .iter()
+                .find(|(key, _)| key == &u.key)
+                .filter(|(_, old)| old.checks != u.checks && is_done_carry_over(u, done_work_units))
+                .map(|_| (&u.key, &u.checks))
+        })
+        .collect();
+    let changed_check_bytes = if changed_done_checks.is_empty() {
+        0
+    } else {
+        serde_json::to_vec(&changed_done_checks)
+            .expect("checks serialize")
+            .len()
+    };
+    let planner_bytes =
+        serde_json::to_vec(&planner).expect("plan serializes").len() + changed_check_bytes;
+    let total_bytes = serde_json::to_vec(spec).expect("plan serializes").len();
 
     for (field, present) in [
         ("phases", !spec.phases.is_empty()),
@@ -1423,9 +1454,9 @@ fn validate_v3(
     if spec.stages.is_empty() {
         errors.push(PlanValidationError::NoStages);
     }
-    if spec.stages.len() > tree.max_stages {
+    if planner.stages.len() > tree.max_stages {
         errors.push(PlanValidationError::TooManyStages {
-            count: spec.stages.len(),
+            count: planner.stages.len(),
             max: tree.max_stages,
         });
     }
@@ -1591,7 +1622,9 @@ fn validate_v3(
                     count: repo_count,
                 });
             }
-            if let Some(budget) = u.budget {
+            if let Some(budget) = u.budget
+                && !done_keys.contains(u.key.as_str())
+            {
                 if let Some(turns) = budget.max_turns
                     && turns > limits.work_unit_max_turns
                 {
@@ -1696,9 +1729,10 @@ fn validate_v3(
             }
         }
     }
-    if decisions.len() > tree.max_open_decisions_per_plan {
+    let planner_decisions = normalized_decisions(&planner).len();
+    if planner_decisions > tree.max_open_decisions_per_plan {
         errors.push(PlanValidationError::TooManyDecisions {
-            count: decisions.len(),
+            count: planner_decisions,
             max: tree.max_open_decisions_per_plan,
         });
     }
@@ -1745,14 +1779,18 @@ fn validate_v3(
         });
     }
     for wu in &internal.work_units {
-        if wu.checks.len() > limits.max_checks {
+        if wu.checks.len() > limits.max_checks
+            && !done_work_units
+                .iter()
+                .any(|(key, old)| key == &wu.key && old.checks == wu.checks)
+        {
             errors.push(PlanValidationError::TooManyChecks {
                 key: wu.key.clone(),
                 count: wu.checks.len(),
                 max: limits.max_checks,
             });
         }
-        // 持ち越しの done の WU は文字数の上限を掛けない（`checks` の数は planner が書き換えられるので掛ける）。
+        // 持ち越しの done は文字数の上限を掛けない。変更した checks の件数は上で検査済み。
         if is_unchanged_done_work_unit(wu, done_work_units) {
             continue;
         }
@@ -1791,11 +1829,10 @@ fn validate_v3(
             }
         }
     }
-    // ADR-0079 R7-2: /3 は `max_plan_json_bytes_v3`（既定 64 KiB）で測る。
-    let plan_bytes = serde_json::to_vec(spec).map(|v| v.len()).unwrap_or(0);
-    if plan_bytes > limits.max_plan_json_bytes_v3 {
+    // Only the planner portion consumes the per-plan JSON budget.
+    if planner_bytes > limits.max_plan_json_bytes_v3 {
         errors.push(PlanValidationError::PlanTooLarge {
-            bytes: plan_bytes,
+            bytes: planner_bytes,
             max: limits.max_plan_json_bytes_v3,
         });
     }
@@ -1838,6 +1875,14 @@ fn validate_v3(
     ));
 
     if !errors.is_empty() {
+        errors.push(PlanValidationError::PlanLimitAccounting {
+            detail: format!(
+                "plan limits apply to planner portion: planner JSON={planner_bytes} bytes (changed done checks={changed_check_bytes}), stages={}, units={}; carried done JSON={} bytes, stages={}, units={}; total JSON={total_bytes} bytes, stages={}, units={} (tree-wide limits still count the whole tree)",
+                planner.stages.len(), planner.units.len(), total_bytes.saturating_sub(planner_bytes),
+                spec.stages.len() - planner.stages.len(), spec.units.len() - planner.units.len(),
+                spec.stages.len(), spec.units.len(),
+            ),
+        });
         return Err(errors);
     }
     let mut normalized = spec.clone();

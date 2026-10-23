@@ -473,8 +473,8 @@ impl Dispatcher {
     /// （`blocked`。D12「失敗にしないもの」、D17/D18）。Task を `failed` にはしない。
     // `finished` は `WorkerFinished` とそれに添える Event（ADR-0076 の `QuotaEstimated`）。
     /// Phase F5-fix3: 拒否した planner の計画（`artifacts/execution-plan.json`）を
-    /// `artifacts/execution-plan.rejected.json` に移す（上書き）。無ければ何もしない。失敗しても警告だけ。
-    pub(super) fn set_aside_rejected_plan(&self, task: &Task) {
+    /// `artifacts/execution-plan.rejected.<run>.attempt-<n>.json` に移す。無ければ何もしない。失敗しても警告だけ。
+    pub(super) fn set_aside_rejected_plan(&self, task: &Task, run_id: &str, attempt: usize) {
         let Some(dir) = self
             .task_dir(task)
             .map(|d| self.artifacts_dir(task, d.as_path()))
@@ -485,7 +485,7 @@ impl Dispatcher {
         if !from.exists() {
             return;
         }
-        let to = dir.join(REJECTED_PLAN_FILE);
+        let to = dir.join(rejected_plan_file(run_id, attempt));
         if let Err(e) = std::fs::rename(&from, &to) {
             tracing::warn!(task_id = %task.id, error = %e, "failed to set the rejected execution plan aside");
         }
@@ -501,9 +501,9 @@ impl Dispatcher {
         now: OffsetDateTime,
     ) -> Result<(), DispatchError> {
         // Phase F5-fix3: 拒否した計画のファイルを残すと、次の planner run はそれを見つけて「検証済み」と
-        // 思い込みそのまま再提出する（dogfood 4 回目の 2 回目の試行）。`execution-plan.rejected.json` に移す。
-        self.set_aside_rejected_plan(task);
+        // 思い込みそのまま再提出する。run ID と試行番号で再計画の窓をまたいでも保存する。
         let attempts_so_far = self.planner_attempts_in_window(task_id)?;
+        self.set_aside_rejected_plan(task, run_id, attempts_so_far);
         let tree_planner = self.is_tree_planner(task)?;
         if attempts_so_far < MAX_PLANNER_ATTEMPTS {
             let progress = Event::worker_progress(run_id, planner_retry_message(&reason));
@@ -1062,7 +1062,9 @@ impl Dispatcher {
 }
 
 /// Phase F5-fix3: 拒否した planner の計画の移し先（`artifacts/` の中）。
-pub(super) const REJECTED_PLAN_FILE: &str = "execution-plan.rejected.json";
+pub(super) fn rejected_plan_file(run_id: &str, attempt: usize) -> String {
+    format!("execution-plan.rejected.{run_id}.attempt-{attempt}.json")
+}
 /// Phase F5-fix3: `give_up_or_retry_planner` の進捗・質問の文面（`planner_rejections_since_last_plan` が
 /// 同じ定数で理由を取り出す。文面は F5-fix2 までと 1 バイトも変えない）。
 // ADR-0079 D10（Phase R3b）: 生存確認（`task_ops::tree::planner_retry_pending`）が同じ文言を読むので task_ops に置く。

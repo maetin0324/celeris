@@ -3,6 +3,17 @@
 use super::*;
 
 impl Dispatcher {
+    // Verify must skip snapshot tasks before dependency/child lookups and maintenance.
+    // Filtering only in dispatch_one still scans the snapshot on every smoke tick.
+    pub(super) fn eligible_ready_tasks(&self, window: usize) -> Result<Vec<Task>, DispatchError> {
+        Ok(self
+            .store
+            .ready_tasks(window)?
+            .into_iter()
+            .filter(|task| self.is_eligible(task))
+            .collect())
+    }
+
     /// `dispatch_ready` の 1 件分（ADR-0074 D1.3（Phase F2b）で切り出した。並列 WU の 2 本目以降も
     /// ここを通る）。run を起こしたら `Ok(true)`。
     pub(super) fn dispatch_one(

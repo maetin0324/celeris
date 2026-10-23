@@ -407,10 +407,23 @@ async fn child_failure_triggers_parent_replan() {
         vec![stage("s1", false)],
         vec![task_unit("c", "s1", &[], "test -f c.txt")],
     );
+    // The second planner submission fits, but its expanded JSON with carried a does not.
+    let first: task_core::ExecutionPlanSpec = serde_json::from_str(&v1).unwrap();
+    let mut second: task_core::ExecutionPlanSpec = serde_json::from_str(&v2).unwrap();
+    let byte_limit = serde_json::to_vec(&first).unwrap().len();
+    let second_bytes = serde_json::to_vec(&second).unwrap().len();
+    second
+        .rationale
+        .push_str(&"r".repeat(byte_limit - second_bytes - 1));
+    let v2 = serde_json::to_string(&second).unwrap();
+    assert!(v2.len() < byte_limit);
+    task_core::execution_plan::carry_done_units_v3(&first, &mut second, &["a".into()].into());
+    assert!(serde_json::to_vec(&second).unwrap().len() > byte_limit);
     let adapter = Arc::new(ReplanAdapter::new(vec![v1, v2]));
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), ws.path(), 3, 3, 3);
     d.config.execution.gate = task_core::GateMode::On;
     d.config.execution.limits = super::tree::tree_limits();
+    d.config.execution.limits.max_plan_json_bytes_v3 = byte_limit;
     let report = run_until_idle(&mut d, 2500).await;
     assert!(report.idle, "{report:?}");
     let events = store.events_for(root_id).unwrap();

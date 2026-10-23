@@ -143,3 +143,37 @@ API 外要求を除外し `GET /` を注入する回帰試験を追加して解�
 
 補助確認の `progress-index.sh --check` は既存の 2026-10-21/22 文書の front matter 不足で
 exit 1（`progress-index.log`）。報告された文書は今回の変更対象ではなく、この新規進捗に違反はない。
+
+## delivery-repair: verify の対象外タスクを先に除外
+
+2026-10-23 の `df3a0e017569` prepare.log は Rust/Web の全検査・build に成功した後、
+verify の smoke が 60.38 秒で `reviewing` のまま時間切れになった。
+同時刻の staging `celeris-new.log` は dispatch に 21.937 秒、39.912 秒を記録し、
+N-1 も 27.395 秒、34.815 秒を記録していた。fake server 試験の再発ではない。
+
+`dispatch_ready` の対象判定は `dispatch_one` まで遅延しており、verify が扱わない
+snapshot の ready task にも依存の git 判定、子 task の照会、保守 executor を適用していた。
+`dispatch_run` の `eligible_ready_tasks` で候補取得直後に `is_eligible` を検査し、
+容量不足時も対象外 task の待ちを記録しない。
+通常モード（filter なし）の振る舞いは同じ。60 秒の合格条件は変更していない。
+
+回帰試験 `verify_skips_ineligible_ready_tasks_before_pre_dispatch_work` は対象外の
+依存をキャッシュへ入れず、保守 task に event/状態変更を起こさず、容量不足でも待ちを
+記録せず、対象の smoke が Done に進むことを一時 DB 上で確認する。
+元 checkout・本番サービス・staging は変更せず、release/verify/deploy は実行しない。
+実際の snapshot 上での 60 秒以内の完了は次回リリース検証で確認する必要がある。
+
+修復後の検証:
+
+- `bash scripts/dev/test-affected.sh`: exit 0、2604 passed / 6 skipped、doc tests 成功。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `cargo test -p task-dispatch --lib verify_skips_ineligible_ready_tasks_before_pre_dispatch_work`:
+  exit 0、1 passed（0.31 秒）。
+- `git diff --check`: exit 0。
+
+ログは同じ絶対 artifacts ディレクトリの `repair-test-affected.log`、`repair-clippy.log`、
+`repair-fmt.log`、`repair-regression-final.log`、`repair-diagnosis.log`。
+初回の source-size 増加は既存 dispatch モジュールへの helper 配置で解消した。
+回帰試験初版の smoke は汎用 Done adapter に Reviewer 判定を要求して失敗したため、
+verify と同じ `true` のコマンド判定に揃えた。最終検査では両方とも解消済み。

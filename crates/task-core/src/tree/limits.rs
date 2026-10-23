@@ -198,10 +198,11 @@ pub fn plan_limit_holds(
             max,
         });
     };
-    // 段階の数。
-    if spec.stages.len() > limits.max_stages {
-        let late: std::collections::BTreeSet<&str> = spec
-            .stages
+    // Validation and adoption both exclude done-only stages.
+    let done_refs = done_keys.iter().map(String::as_str).collect();
+    let stages = crate::execution_plan::counted_plan_stages(spec, &done_refs);
+    if stages.len() > limits.max_stages {
+        let late: std::collections::BTreeSet<&str> = stages
             .iter()
             .skip(limits.max_stages)
             .map(|s| s.key.as_str())
@@ -209,7 +210,7 @@ pub fn plan_limit_holds(
         let units = spec
             .units
             .iter()
-            .filter(|u| late.contains(u.stage.as_str()))
+            .filter(|u| late.contains(u.stage.as_str()) && !done_keys.contains(&u.key))
             .map(|u| u.key.clone())
             .collect();
         push(
@@ -218,7 +219,7 @@ pub fn plan_limit_holds(
             TreeLimitKind::Stages,
             None,
             units,
-            spec.stages.len() as u64,
+            stages.len() as u64,
             limits.max_stages as u64,
         );
     }

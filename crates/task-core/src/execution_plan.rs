@@ -653,9 +653,11 @@ pub fn apply_delta(
     })
 }
 
+mod plan_limits;
 mod scheduling;
 mod validation;
 
+pub use plan_limits::counted_plan_stages;
 pub use scheduling::*;
 pub use validation::*;
 

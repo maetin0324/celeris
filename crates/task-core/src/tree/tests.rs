@@ -967,3 +967,33 @@ fn limit_keys_allowances_and_plan_invalid_options() {
         "no atomic once a plan exists"
     );
 }
+
+#[test]
+fn replan_stage_holds_exclude_done_history_but_tree_leaves_remain_cumulative() {
+    let limits = TreeLimits {
+        max_stages: 1,
+        max_tree_leaves: 1,
+        ..enabled()
+    };
+    let none = std::collections::BTreeSet::new();
+    let done: std::collections::BTreeSet<String> = ["old".into()].into();
+    let mut p = plan(
+        &[("old-stage", "implement"), ("new-stage", "implement")],
+        vec![
+            leaf_spec("old", "old-stage", false),
+            leaf_spec("new", "new-stage", false),
+        ],
+    );
+    assert!(plan_limit_holds(&p, &limits, 1, 0, &done, &none, &done).is_empty());
+    let holds = plan_limit_holds(&p, &limits, 1, 1, &done, &none, &done);
+    assert_eq!(holds.len(), 1);
+    assert_eq!(holds[0].limit, TreeLimitKind::TreeLeaves);
+    assert_eq!((holds[0].count, holds[0].max), (2, 1));
+    assert_eq!(holds[0].units, vec!["new"]);
+    // Mixed stages still count, but a done unit in a late stage must never be held.
+    p.units.push(leaf_spec("another", "old-stage", false));
+    p.stages.swap(0, 1);
+    let holds = plan_limit_holds(&p, &limits, 1, 0, &done, &none, &done);
+    assert_eq!(holds[0].limit, TreeLimitKind::Stages);
+    assert_eq!(holds[0].units, vec!["another"]);
+}

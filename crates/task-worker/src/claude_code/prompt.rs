@@ -1112,15 +1112,16 @@ fn plan_limits_section(planner: &crate::protocol::ExecutionPlannerContext) -> St
     if planner.tree.is_some() {
         // ADR-0079 D3（Phase R2b）: /3 の計画の上限（検証で拒否）。
         out.push_str(&format!(
-            "- `stages`: 1 to {} stages. At most {} units per stage (leaves + child tasks; units already done, \
+            "- `stages`: 1 to {} stages (stages containing only carried done units do not count). At most {} units per stage (leaves + child tasks; units already done, \
              `adopt` units, and celeris-added integration steps and repairs do not count). At most {} units with `\"kind\":\"task\"` that will \
              create a child (units already done and `adopt` units do not count). At most {} `decisions` \
-             (plan-level and unit-level together).\n",
+             (plan-level and unit-level together, excluding decisions needed solely by carried done units).\n",
             l.tree.max_stages,
             l.tree.max_units_per_stage,
             l.tree.max_child_tasks_per_plan,
             l.tree.max_open_decisions_per_plan
         ));
+        out.push_str("- JSON bytes exclude carried done units and done-only stages; rewritten checks on done units still count. Tree-wide lifetime limits include completed work.\n");
     } else {
         out.push_str(&format!(
             "- `work_units`: 1 to {} WorkUnits (celeris-added integration steps and repairs do not count).\n",
@@ -1145,8 +1146,13 @@ fn plan_limits_section(planner: &crate::protocol::ExecutionPlannerContext) -> St
         l.max_checks
     ));
     out.push_str(&format!(
-        "- `rationale` at most {} characters; the whole plan JSON at most {} bytes.\n",
+        "- `rationale` at most {} characters; the {} JSON at most {} bytes.\n",
         l.max_rationale_chars,
+        if planner.tree.is_some() {
+            "planner portion"
+        } else {
+            "whole plan"
+        },
         if planner.tree.is_some() {
             l.max_plan_json_bytes_v3
         } else {
@@ -1178,7 +1184,7 @@ fn plan_limits_section(planner: &crate::protocol::ExecutionPlannerContext) -> St
 }
 
 /// Phase F5-fix3: 前の planner run の計画が拒否された理由（同じ計画の回の中）。拒否された計画のファイルは
-/// dispatcher が `execution-plan.rejected.json` に移してある（そのまま再提出させない）。
+/// dispatcher が `execution-plan.rejected.<run>.attempt-<n>.json` に移してある（そのまま再提出させない）。
 fn previous_attempt_errors_section(
     planner: &crate::protocol::ExecutionPlannerContext,
     artifacts: &str,
@@ -1195,7 +1201,7 @@ fn previous_attempt_errors_section(
         out.push_str(&format!("- {e}\n"));
     }
     out.push_str(&format!(
-        "\nThe rejected file was moved to `{artifacts}/execution-plan.rejected.json`. Do NOT resubmit it \
+        "\nThe rejected file was moved to `{artifacts}/execution-plan.rejected.<run>.attempt-<n>.json`. Do NOT resubmit it \
          unchanged and do not assume any plan file you find is valid: start from it if useful, fix \
          exactly the problems listed above (keep everything else as it was), check the result against \
          the plan limits above, and write the corrected plan to `{artifacts}/execution-plan.json`.\n\n"

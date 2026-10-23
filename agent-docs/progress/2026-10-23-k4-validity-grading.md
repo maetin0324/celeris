@@ -139,3 +139,9 @@ job 43706 は `review28/qstat-43706.txt` で `F / Exit_status = -20`（BenchFS W
   ログ: bundle-python-tests.log、bundle-lock-test.log、bundle-test-affected-final.log、bundle-clippy.log、bundle-fmt-final.log。
 - freeze-status は 45 frozen / 14 pending。実 launcher 接続、環境承認、K2 初期木、project ID、共有台帳の確認が残る。
   K4 pilot はこれらの解消と task 2 の成功契約との統合確認まで開始不可。
+- attempt 3（範囲 check の不合格対応）: 前回 run は flaky 回避のため main 81fd646a を merge した commit を branch に残し、WU の範囲 check が
+  50 件の範囲外 file（crates/celeris・task-worker・web 等）で不合格だった。merge commit を branch から外し、実装 commit
+  「fix(campaign): freeze declared asset locks and audit real K4 inputs offline」を HEAD に戻した（成果物・bundle・summary は不変）。
+  偽 webhook の補修は main 側に既にあり target 同期で入る。再検査: 範囲 check の out-of-scope 空、
+  `bash scripts/dev/test-affected.sh` exit 0（2615 passed / 6 skipped、133.958 秒）、`cargo clippy --workspace -- -D warnings` exit 0、
+  `cargo fmt --all -- --check` exit 0。ログ: bundle-test-affected-attempt3.log、bundle-clippy-attempt3.log。

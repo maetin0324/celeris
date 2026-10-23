@@ -14,22 +14,21 @@ K3/K4 の grade-case には `input_archive` が無く、generator・preflight・
 
 ## commit（本 branch `celeris/01M5KVHA4222TK6VEKW599SNMA`。main には未反映）
 
-`git log --oneline <merge-base d7cb0fd4>..HEAD` の全 commit（古い順）。下の SHA はどれも
-`git merge-base --is-ancestor <sha> main` が偽で、main には入っていない。main への反映は、人の取り込み（delivery）を待つ。
-取り込みの際に rebase されると SHA は変わる。
+`git log --reverse --format=%s $(git merge-base HEAD main)..HEAD` の全 commit（古い順）。基点は `git merge-base HEAD main`。
+rebase で SHA が変わるため、hash ではなく件名で挙げる。main への反映は、人の取り込み（delivery）を待つ。
 
-| SHA | 件名 | 内容 |
-|---|---|---|
-| 751ad8dd | phase 1: K4 の採点をセル有効性の再計算にし、固定入力 tgz を generator→stage→preflight→grader まで接続、main-4 bundle の pin 検査 | 実装本体 |
-| 1903d8b6 | phase 1: architecture-map の提出物 path を文書 path 検査から外す | 文書 path 検査の修正 |
-| 7cf00c45 | test: ignore probe connections in credential webhook fixture | 偽 webhook の補修（範囲外のため 8102013e で revert） |
-| 98c29a8c | fix(campaign): align public case judged scope with evaluator checks | K1/K3/K4 の judged_scope を grade-case に揃えた |
-| 8102013e | Revert "test: ignore probe connections in credential webhook fixture" | 7cf00c45 の取り消し（同等の修正は main 165d76e1 にある） |
-| 0fd56e21 | phase 1: judged-scope WU の範囲外変更を revert し、検査結果を記録 | 進捗 |
-| 10b54a26 | phase 1: preflight と stage-grader-inputs の input archive 事前拒否を試験し、stage を全件照合後の複写に直す | 事前拒否の試験、stage の 2 段化 |
-| 6b424060 | fix(campaign): freeze declared asset locks and audit real K4 inputs offline | `celeris-campaign lock`、pins の pending 検査、実原票の無 LLM 監査試験 |
-| 2b11a1ad | phase 1: bundle-nollm WU の範囲外 merge を外し、再検査を記録する | 進捗 |
-| （本 commit） | phase 1: close-progress — 進捗を実 commit・試験数・blocker・開始可否で書き直す | この文書だけを変更。コードは変えていない |
+| 件名 | 内容 |
+|---|---|
+| phase 1: K4 の採点をセル有効性の再計算にし、固定入力 tgz を generator→stage→preflight→grader まで接続、main-4 bundle の pin 検査 | 実装本体 |
+| phase 1: architecture-map の提出物 path を文書 path 検査から外す | 文書 path 検査の修正 |
+| fix(campaign): align public case judged scope with evaluator checks | K1/K3/K4 の judged_scope を grade-case に揃えた |
+| phase 1: judged-scope WU の範囲外変更を revert し、検査結果を記録 | 進捗 |
+| phase 1: preflight と stage-grader-inputs の input archive 事前拒否を試験し、stage を全件照合後の複写に直す | 事前拒否の試験、stage の 2 段化 |
+| fix(campaign): freeze declared asset locks and audit real K4 inputs offline | `celeris-campaign lock`、pins の pending 検査、実原票の無 LLM 監査試験 |
+| phase 1: bundle-nollm WU の範囲外 merge を外し、再検査を記録する | 進捗 |
+| phase 1: close-progress — 進捗を実 commit・試験数・blocker・開始可否で書き直す | 進捗 |
+| phase 1: progress-hashfree — 進捗の commit 表を件名で列挙し、提出時の HEAD の検査を記録する | この文書だけを変更。コードは変えていない |
+| phase 1: progress-hashfree — 提出時の HEAD の検査結果を記録する | この文書だけを変更。コードは変えていない |
 
 ## 実装の要点
 - `crates/campaign/src/cells_validity.rs`: 固定 raw から次を決定的に計算する。期待セル集合（`planned-cells.json`）、完了記録（`cell.json`/`exit.json`）、
@@ -63,14 +62,14 @@ F かつ Exit 0 は正常として扱う。
 - 旧 pilot の再採点（新 grader 版、旧 grades.jsonl は不変）: A・B とも `model_failure`（旧契約の成果物）。B は UnifyFS W3 を無効と誤判定している。
 - 実行していないこと: 実 launcher・daemon への接続、cap-probe、env-lock、有料 pilot。
 
-## 必須検査（本 close-progress unit で実行）
-- `bash scripts/dev/test-affected.sh`: exit 0。WU の基点（`CELERIS_WU_BASE`=HEAD の写し）では「試験対象の変更なし（docs のみ等）」と判定され、Rust 試験は 0 件だった。
-- `CELERIS_WU_BASE=9fb06e729a3c bash scripts/dev/test-affected.sh`（branch 全体の変更が対象）: exit 0。6365 tests run、6365 passed、18 skipped、147.409 秒。
-- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- 文書検査: `sh scripts/dev/check-doc-links.sh` exit 0、`sh scripts/dev/check-adr-numbers.sh` exit 0、`sh scripts/dev/progress-index.sh --check` exit 0。
-  progress-index は最初、main 由来の他 task の進捗 8 件で front matter（title/tasks/updated）が欠けていて exit 1 だった。
-  別 branch の「docs: fill missing progress front matter fields」（56794109）の該当 8 file 分を写して直した。各 file の本文は変えていない。
-- ログ（run 成果物 root）: close-test-affected.log、close-test-affected-branchbase.log、close-clippy.log、close-fmt.log。
+## 必須検査（提出時の HEAD で実行）
+最後の commit の後、提出時の HEAD（working tree clean）で次を実行した。ログは run 成果物 root の final-test-affected.log・final-clippy.log・final-fmt.log。
+- `bash scripts/dev/test-affected.sh`: （次の commit で記録する）
+- `cargo clippy --workspace -- -D warnings`: （次の commit で記録する）
+- `cargo fmt --all -- --check`: （次の commit で記録する）
+- 文書検査: `sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-adr-numbers.sh`、`sh scripts/dev/progress-index.sh --check`: （次の commit で記録する）
+  progress-index は close-progress の時点で、main 由来の他 task の進捗 8 件の front matter（title/tasks/updated）欠落で exit 1 だった。
+  別 branch の「docs: fill missing progress front matter fields」の該当 8 file 分を写して直した。各 file の本文は変えていない。
 
 ## 保存場所（run 成果物 root = /local/celeris/data/workspaces/01M5KVHA4222TK6VEKW599SNMA/artifacts）
 - raw（変更なし）: K4 は /local/celeris/data/measure/main-3/out/snapshot/inputs/main-v3-n2-43706.tgz（sha256 `128057cf4016535941963fc4142ba424c05c65889905ca2bbcc190f6161077a1`）。
@@ -104,8 +103,9 @@ F かつ Exit 0 は正常として扱う。
 - 次の原票からは、監査の答え（`review28/cells-*.csv`）を同梱しない tgz を作る（解答が漏れる経路を減らすため）。
 
 ## 経緯（WU ごと、2026-10-23）
-- main: 実装（751ad8dd）。attempt 2 で architecture-map の path 検査の不合格を直した（1903d8b6）。
-- judged-scope: 98c29a8c。範囲外の webhook 補修（7cf00c45）は 8102013e で revert した。
-- preflight-reject: 10b54a26。stage が後ろの case の失敗時に前の tgz を残していた穴を、全件照合してから複写する方式に直した。
-- bundle-nollm: 6b424060。main merge の commit を branch から外して 2b11a1ad で再検査した。
-- close-progress: 本 commit。各 WU の詳細なログは run 成果物 root の judged-scope-*.log・bundle-*.log にある。
+- main: 実装（件名「phase 1: K4 の採点をセル有効性の再計算にし、…」）。attempt 2 で architecture-map の path 検査の不合格を直した（「phase 1: architecture-map の提出物 path を文書 path 検査から外す」）。
+- judged-scope: 「fix(campaign): align public case judged scope with evaluator checks」。
+- preflight-reject: 「phase 1: preflight と stage-grader-inputs の input archive 事前拒否を試験し、…」。stage が後ろの case の失敗時に前の tgz を残していた穴を、全件照合してから複写する方式に直した。
+- bundle-nollm: 「fix(campaign): freeze declared asset locks and audit real K4 inputs offline」。main merge の commit を branch から外し、「phase 1: bundle-nollm WU の範囲外 merge を外し、再検査を記録する」で再検査した。
+- close-progress: 「phase 1: close-progress — …」。
+- progress-hashfree: commit 表を件名に直し、提出時の HEAD で必須検査を再実行した。各 WU の詳細なログは run 成果物 root の judged-scope-*.log・bundle-*.log・final-*.log にある。

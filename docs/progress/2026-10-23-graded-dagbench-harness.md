@@ -83,3 +83,51 @@ v2 は並行した再ビルドによる grader hash 変更を pin 検査が検�
 
 A2 の DB durable wait 後停止と、controller から独立した外部 process が継続する最終接続試験はタスク5に残る。
 従って障害復旧比較の本測定開始はタスク5と合わせて判断する。本タスクだけを根拠に開始可とはしない。
+
+## 再試行2：fault baseline の busy/redo 修正
+
+前回レビューで基準2を差し戻し。実装 `cbbaccdb` で修正した（main 反映は配送待ち）。
+前回 v3 は validated completion・grade 保持の証拠として残すが、fault baseline の
+busy/redo 比較には使用しない。特に seed17/B は旧 busy=3180秒、redo=3回であり、
+外部待機と初回 post 作業を余分に計上していた。
+
+原因は fault driver が使う `set_progress_log` と通常 driver の `set_worker_log` のイベント差。
+progress 側も post を `post_wait_started` として記録し、submit・応答喪失の reconcile・
+再開時の未確定投入の照合から、両 logger に `external_wait_started` を記録する。
+待機開始は ext の停止 hook より先に記録する。既存 metrics の区間定義・grading pin の意味は変えない。
+無故障/B/C の両 arm は busy=1200秒、redo=1回/120秒（analyze の失敗分）で一致する。
+これは worker の論理実行時間であり、grader の壁時計時間ではない。
+
+追加した通常回帰試験は以下。
+
+- `cargo test -p celeris-campaign --test dagbench_baseline worker_and_progress_logs_agree_on_external_execution_boundaries -- --exact`：exit 0。
+  両 logger、通常投入/応答喪失を検査し、外部 node の開始570・待機630・post960・終了990秒を固定。
+- `cargo test -p celeris-campaign --test dagbench_harness graded_faults_exclude_external_wait_and_post_from_redo -- --exact`：exit 0。
+  正式入口 nofault/B/C × 両 arm の6条件で費用とイベント件数を検査。
+
+修正後の固定K3反復は新しい絶対パス
+`/local/celeris/data/workspaces/01M5KVHDZ6PGW45VNA5E6MGRPC/artifacts/k3-repetitions-v4` に保存する。
+v1〜v3 の原票・grade・集計は変更しない。A1 の実際の再作業は arm ごとに異なり得るため、
+B/C と同じ redo 回数を強制しない。A2 の最終停止境界・独立外部 process は引き続きタスク5の範囲。
+本測定の開始可否は上記「次の測定の開始可否」から変更しない。
+
+再試行2の必須検査はすべて exit 0。
+`bash scripts/dev/test-affected.sh` は2,590件合格・5件skip、doc tests合格（199.858秒）。
+`cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check` も合格。
+ログは成果物ディレクトリの `retry-test-affected.log`、`retry-clippy.log`、`retry-fmt.log`。
+追加試験のログは `retry-boundaries.log`、`retry-fault-cost.log`。
+
+K3 v4 は `DAGBENCH_SUITE_OUT` を上記 v4 パスに設定し、前掲の
+`real_k3_repetitions_from_formal_entry -- --exact --ignored` で16条件完走（663.34秒、exit 0）。
+全条件で初回fail→2回目pass、計32 grade を保存した。nofault/B/C は両 seed・両 arm で
+busy=1200秒、redo=1回/120秒。A1 は baseline=1200秒/1回、Celeris=1320秒/3回で、
+後者の外部 node pre 作業の再実行を保持している。
+
+`python3 /local/celeris/data/workspaces/01M5KVHDZ6PGW45VNA5E6MGRPC/artifacts/summarize-repetitions-v4.py`
+も exit 0。16条件の同一 grading pin、32件の grade、固定 grader による raw 再集計と
+元の JSON/TSV の byte 一致を検証した。
+機械向け集計は `k3-repetitions-v4/repetition-summary.json`、各 run の再集計は `reaggregated/`、
+実行ログは `k3-repetitions-v4.log` と `reaggregation-v4.log`。
+再採点は新規 v4 の各 attempt で実施し、v3 の grade は上書きしていない。
+実資産の欠落 blocker はなく、この再試行の差し戻し事項は解消した。
+実LLM/HPC障害比較の開始判断は、引き続きタスク5の完了と合わせて行う。

@@ -2689,3 +2689,141 @@ fn dependency_on_a_key_without_a_live_row_is_rejected() {
     );
     assert!(errs[0].to_string().contains("no live work unit row"));
 }
+
+#[test]
+fn v3_replan_limits_exclude_done_history_but_charge_new_work() {
+    let stage = |key: &str| StageSpec {
+        key: key.into(),
+        title: key.into(),
+        kind: WorkUnitKind::Implement,
+        review: StageReview::None,
+    };
+    let mut active = ExecutionPlanSpec {
+        schema: EXECUTION_PLAN_SCHEMA_V3.into(),
+        stages: (0..10).map(|i| stage(&format!("old-{i}"))).collect(),
+        units: (0..30)
+            .map(|i| {
+                let mut u = leaf(&format!("done-{i}"), &format!("old-{}", i / 3));
+                u.objective = format!("history{i} ").repeat(500);
+                // History can predate the current check-count limit too.
+                u.checks = (0..7)
+                    .map(|n| WorkUnitCheck {
+                        cmd: format!("true {n}"),
+                        expect_exit: 0,
+                        scope: false,
+                    })
+                    .collect();
+                u
+            })
+            .collect(),
+        ..plan(vec![])
+    };
+    let done: Vec<_> = active
+        .units
+        .iter()
+        .map(|u| (u.key.clone(), u.to_work_unit_spec()))
+        .collect();
+    let keys = done.iter().map(|(k, _)| k.clone()).collect();
+    let mut proposal = ExecutionPlanSpec {
+        schema: EXECUTION_PLAN_SCHEMA_V3.into(),
+        stages: vec![stage("new")],
+        units: vec![leaf("new-work", "new")],
+        ..plan(vec![])
+    };
+    let authored_bytes = serde_json::to_vec(&proposal).unwrap().len();
+    carry_done_units_v3(&active, &mut proposal, &keys);
+    assert!(serde_json::to_vec(&proposal).unwrap().len() > 64 * 1024);
+    let mut limits = tree_on();
+    limits.tree.max_stages = 1;
+    limits.max_plan_json_bytes_v3 = authored_bytes;
+    let validated = validate(&proposal, limits, &done).expect("history consumes no planner budget");
+    assert_eq!(validated.spec.units.len(), 31);
+    assert_eq!(validated.spec.stages.len(), 11);
+
+    limits.max_plan_json_bytes_v3 -= 1;
+    let errors = validate(&proposal, limits, &done).unwrap_err();
+    assert!(errors.contains(&PlanValidationError::PlanTooLarge {
+        bytes: authored_bytes,
+        max: authored_bytes - 1
+    }));
+    let text = errors
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        text.contains(&format!("planner JSON={authored_bytes} bytes")),
+        "{text}"
+    );
+    assert!(text.contains("carried done JSON="), "{text}");
+    assert!(text.contains("stages=10, units=30"), "{text}");
+    assert!(text.contains("tree-wide limits still count the whole tree"));
+
+    limits.max_plan_json_bytes_v3 = 64 * 1024;
+    proposal.stages.push(stage("extra")); // Empty authored stages count too.
+    assert!(
+        validate(&proposal, limits, &done)
+            .unwrap_err()
+            .contains(&PlanValidationError::TooManyStages { count: 2, max: 1 })
+    );
+    proposal.stages.pop();
+    // Rewriting done checks must not provide an unbounded JSON channel.
+    proposal
+        .units
+        .iter_mut()
+        .find(|u| u.key == "done-0")
+        .unwrap()
+        .checks = vec![WorkUnitCheck {
+        cmd: "x".repeat(64 * 1024),
+        expect_exit: 0,
+        scope: false,
+    }];
+    assert!(
+        validate(&proposal, limits, &done)
+            .unwrap_err()
+            .iter()
+            .any(|e| matches!(e, PlanValidationError::PlanTooLarge { .. }))
+    );
+    // A fresh plan does not get the history exemption.
+    active
+        .units
+        .iter_mut()
+        .for_each(|u| u.objective = u.key.clone());
+    assert!(
+        validate(&active, tree_on(), &[])
+            .unwrap_err()
+            .iter()
+            .any(|e| matches!(e, PlanValidationError::TooManyStages { count: 10, .. }))
+    );
+}
+
+#[test]
+fn v3_replan_counts_shared_stages_and_decisions_but_not_done_only_history() {
+    let mut p = v3_fixture();
+    // h2 is explicitly required by p2-a. Only that unit and its stage remain as history.
+    p.units.retain(|u| u.key == "p2-a");
+    p.units[0].depends_on.clear();
+    p.stages.retain(|s| s.key == "phase-2");
+    p.decisions.retain(|d| d.key == "h2");
+    p.decisions[0].needed_before = vec!["p2-a".into()];
+    let done = vec![(p.units[0].key.clone(), p.units[0].to_work_unit_spec())];
+    let mut limits = tree_on();
+    limits.tree.max_stages = 0;
+    limits.tree.max_open_decisions_per_plan = 0;
+    validate(&p, limits, &done).expect("done-only stages and decisions do not consume plan limits");
+
+    let mut live = leaf("live", "phase-2");
+    live.needs_decisions = vec!["h2".into()];
+    p.units.push(live);
+    let errors = validate(&p, limits, &done).unwrap_err();
+    assert!(errors.contains(&PlanValidationError::TooManyStages { count: 1, max: 0 }));
+    assert!(errors.contains(&PlanValidationError::TooManyDecisions { count: 1, max: 0 }));
+    // needed_before also keeps a shared decision in the budget, even without needs_decisions.
+    p.units[1].needs_decisions.clear();
+    p.decisions[0].needed_before = vec!["stage:phase-2".into()];
+    assert!(
+        validate(&p, limits, &done)
+            .unwrap_err()
+            .contains(&PlanValidationError::TooManyDecisions { count: 1, max: 0 })
+    );
+}

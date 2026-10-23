@@ -2153,7 +2153,7 @@ fn the_retry_planner_prompt_contains_the_previous_validation_error() {
     let prompt = build_prompt(&task, &context, "run-retry", "artifacts");
     assert!(prompt.contains("### Your previous plan was REJECTED"));
     assert!(prompt.contains("- work unit sync-main: too many checks: 8 > 6\n"));
-    assert!(prompt.contains("artifacts/execution-plan.rejected.json"));
+    assert!(prompt.contains("artifacts/execution-plan.rejected.<run>.attempt-<n>.json"));
     assert!(prompt.contains("Do NOT resubmit it"));
     // 欄の無い古い context（0）は既定の上限に倒す。
     assert!(prompt.contains("**at most 6 `checks`**"));
@@ -3460,7 +3460,7 @@ fn planner_prompt_carries_depth_and_leaf_criteria() {
         "Stages the human named (stages_hint, ADR-0079 D12)",
         "- \"Phase 1\": MVP of the browser capability",
         "- \"Phase 2\"\n",
-        "- `stages`: 1 to 4 stages. At most 5 units per stage",
+        "- `stages`: 1 to 4 stages (stages containing only carried done units do not count). At most 5 units per stage",
         "is **rejected** (not capped)",
     ] {
         assert!(prompt.contains(needle), "missing {needle:?} in:\n{prompt}");
@@ -3680,7 +3680,14 @@ fn planner_prompt_has_the_check_writing_section() {
         assert_eq!(prompt.matches("### check の書き方").count(), 1, "{name}");
         let bytes = if planner.tree.is_some() { 65536 } else { 24576 };
         assert!(
-            prompt.contains(&format!("the whole plan JSON at most {bytes} bytes")),
+            prompt.contains(&format!(
+                "the {} JSON at most {bytes} bytes",
+                if planner.tree.is_some() {
+                    "planner portion"
+                } else {
+                    "whole plan"
+                }
+            )),
             "{name}"
         );
         if planner.tree.is_some() {

@@ -184,8 +184,7 @@ use cluster::{
 use leases::wall_ms_since;
 #[cfg(test)]
 use planner_flow::{
-    REJECTED_PLAN_FILE, planner_blocked_question, planner_rejections_since_last_plan,
-    planner_retry_message,
+    planner_blocked_question, planner_rejections_since_last_plan, planner_retry_message,
 };
 use route_failure::{
     account_cooldown_reason_name, cooldown_reason_name, excluded_reason_name,

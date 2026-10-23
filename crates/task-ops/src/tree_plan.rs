@@ -23,7 +23,9 @@ pub fn is_tree_plan_limit_error(e: &PlanValidationError) -> bool {
     use PlanValidationError as E;
     matches!(
         e,
-        E::TooManyStages { .. }
+        // Accounting accompanies errors but must not turn a soft tree limit into a hard rejection.
+        E::PlanLimitAccounting { .. }
+            | E::TooManyStages { .. }
             | E::TooManyUnitsInStage { .. }
             | E::TooManyChildTasks { .. }
             | E::ChildTaskTooDeep { .. }

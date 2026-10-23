@@ -289,12 +289,6 @@ pub fn approval_facts(
         })
         .map(|s| s.key.clone())
         .collect();
-    let max_units_in_stage = spec
-        .stages
-        .iter()
-        .map(|s| spec.units.iter().filter(|u| u.stage == s.key).count())
-        .max()
-        .unwrap_or(0);
     // ADR-0079 付記「R6-1」D5: 子を作る unit だけを数える（`adopt` の unit と done の unit は除く。検証の
     // `max_child_tasks_per_plan` と同じ `creates_child`。R5b-prep 付記 8.）。以前は `kind == Task` をすべて数え、
     // BenchFS の v2 で `near_limit:max_child_tasks_per_plan:10/6`（採用 6 を含む）と出た。
@@ -303,6 +297,19 @@ pub fn approval_facts(
         .filter(|u| u.status == WorkUnitStatus::Done)
         .map(|u| u.key.as_str())
         .collect();
+    let stages = task_core::execution_plan::counted_plan_stages(spec, &done_keys);
+    let max_units_in_stage = stages
+        .iter()
+        .map(|s| {
+            spec.units
+                .iter()
+                .filter(|u| {
+                    u.stage == s.key && u.adopt.is_none() && !done_keys.contains(u.key.as_str())
+                })
+                .count()
+        })
+        .max()
+        .unwrap_or(0);
     let child_task_units = spec
         .units
         .iter()
@@ -336,7 +343,7 @@ pub fn approval_facts(
     Ok(PlanApprovalFacts {
         open_decisions,
         review_human_stages,
-        stages: spec.stages.len(),
+        stages: stages.len(),
         max_units_in_stage,
         child_task_units,
         estimated_leaves: u64::from(counters.leaves)

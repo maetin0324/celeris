@@ -1046,7 +1046,7 @@ async fn invalid_planner_output_retries_once_then_falls_back_to_atomic() {
 
 /// Phase F5-fix3（dogfood 4 回目の不具合 1）: planner は検証と同じ `ExecutionLimits`（config の値）を
 /// プロンプトで受け取り、計画が拒否されたら次の試行はその検証エラーを受け取る。拒否された計画の
-/// ファイルは `execution-plan.rejected.json` に移る（次の試行が「検証済み」と思い込んで再提出しない）。
+/// ファイルは `execution-plan.rejected.<run>.attempt-<n>.json` に移る（次の試行が「検証済み」と思い込んで再提出しない）。
 #[tokio::test]
 async fn the_retry_planner_run_receives_the_previous_validation_error_and_config_limits() {
     let dir = tempfile::tempdir().unwrap();
@@ -1102,7 +1102,39 @@ async fn the_retry_planner_run_receives_the_previous_validation_error_and_config
         .task_dir(&stored)
         .map(|w| d.artifacts_dir(&stored, &w))
         .expect("artifacts dir");
-    assert!(artifacts.join(REJECTED_PLAN_FILE).exists());
+    assert!(std::fs::read_dir(&artifacts).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".attempt-1.json")
+    }));
+    // Another rejection in a later planning window must preserve the first file too.
+    for (run, attempt, body) in [("second-run", 2, "second"), ("later-window", 1, "third")] {
+        std::fs::write(artifacts.join("execution-plan.json"), body).unwrap();
+        d.set_aside_rejected_plan(&stored, run, attempt);
+        assert_eq!(
+            std::fs::read_to_string(
+                artifacts.join(super::super::planner_flow::rejected_plan_file(run, attempt))
+            )
+            .unwrap(),
+            body
+        );
+    }
+    assert_eq!(
+        std::fs::read_dir(&artifacts)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("execution-plan.rejected.")
+            })
+            .count(),
+        3
+    );
     assert!(!artifacts.join("execution-plan.json").exists());
     assert!(events.iter().any(|(_, e)| matches!(
         e,

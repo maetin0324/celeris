@@ -14,6 +14,7 @@
 //! `DAGBENCH_BACKEND=ext-sim|pbs`（既定 ext-sim）、`pbs` では `DAGBENCH_RECOVERY=normal|a2`・`DAGBENCH_PBS_SPEC`・
 //! `DAGBENCH_PBS_STUDY`・`DAGBENCH_PBS_STATE`（偽 cluster の state dir）が必須、`DAGBENCH_PBS_TRANSPORT=file` だけを受ける。
 //! 1 起動 = 1 trial（arm × condition）で、測定専用 controller は子 process（この binary の `pbs_control_child`）。
+//! 拒否の試験だけが `DAGBENCH_PBS_CHILD_FAULT=announce-before-save|duplicate-submit|duplicate-consume`（子の env）を使う。
 //! 出力: `<out>/run.json` ほかの raw 一式と `<out>/metrics/control_measured_metrics.{json,tsv}`。
 #[path = "../../task-api/tests/common/mod.rs"]
 mod api_common;
@@ -96,6 +97,9 @@ pub struct PbsParams {
     /// `file` だけ（`ssh` は人の承認前なので拒否）。
     pub transport: String,
     pub state: PathBuf,
+    /// 試験専用の子の故障（`DAGBENCH_PBS_CHILD_FAULT`、付記 I14 (5)）。子の env にだけ渡す。
+    #[serde(default)]
+    pub child_fault: Option<String>,
 }
 
 impl Params {
@@ -460,7 +464,11 @@ pub fn run_pbs(p: &Params) -> Result<ProcReport, String> {
     } else {
         create_measurement(&dir, &spec, file, clock, &epoch).map_err(|e| e.to_string())?
     };
+    if let Some(f) = &pbs.child_fault {
+        pbs_proc::ChildFault::parse(f)?;
+    }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let child_fault = pbs.child_fault.clone();
     let child = move || {
         let mut c = std::process::Command::new(&exe);
         c.args([
@@ -469,7 +477,11 @@ pub fn run_pbs(p: &Params) -> Result<ProcReport, String> {
             "--nocapture",
             "--test-threads=1",
         ])
-        .env_remove(CHILD_ENV);
+        .env_remove(CHILD_ENV)
+        .env_remove(pbs_proc::CHILD_FAULT_ENV);
+        if let Some(f) = &child_fault {
+            c.env(pbs_proc::CHILD_FAULT_ENV, f);
+        }
         c
     };
     ProcTrial {
@@ -526,6 +538,7 @@ fn run_from_env() {
         study: PathBuf::from(need("DAGBENCH_PBS_STUDY")),
         transport: env("DAGBENCH_PBS_TRANSPORT").unwrap_or_else(|| "file".into()),
         state: PathBuf::from(need("DAGBENCH_PBS_STATE")),
+        child_fault: env(pbs_proc::CHILD_FAULT_ENV),
     });
     let p = Params {
         backend,
@@ -1095,6 +1108,7 @@ impl PbsSetup {
                 study: self.root.path().join("study.json"),
                 transport: "file".into(),
                 state: self.state(),
+                child_fault: None,
             }),
         }
     }
@@ -1862,4 +1876,252 @@ fn harness_pbs_raw_wall_and_logical_clocks_are_separate() {
             .keys()
             .all(|k| !k.ends_with("_ms") && !k.ends_with("_secs"))
     );
+}
+
+// ---- recovery 比較: 拒否条件（付記 I14 (5)）。無 LLM・無実 job の file 永続の偽 PBS と別 process の controller ----
+// 故障は子の env（`DAGBENCH_PBS_CHILD_FAULT`）か偽 cluster の `faults.json` で、出来事（合図・exit）の順だけで決まる。
+// これらは偽 transport での決定的試験で、LLM の未知修復能力や HPC 実測の結果ではない。
+
+fn reject_trial_dir(s: &PbsSetup, arm: &str, cond: Condition) -> PathBuf {
+    s.out()
+        .canonicalize()
+        .unwrap()
+        .join("trials")
+        .join(format!("{arm}-{}", cond.as_str()))
+}
+
+/// 拒否された trial を流し、Err の理由・`reject.json`・測定成功の記録が無いことを確かめる。
+fn rejected_trial(
+    s: &PbsSetup,
+    arm: &str,
+    cond: Condition,
+    child_fault: Option<&str>,
+    reason: &str,
+) -> String {
+    let mut p = s.params(arm, cond);
+    if let Some(x) = p.pbs.as_mut() {
+        x.child_fault = child_fault.map(str::to_string);
+    }
+    let e = match run_pbs(&p) {
+        Ok(r) => panic!("{arm}/{cond:?}: accepted {:?}", r.recovery),
+        Err(e) => e,
+    };
+    assert!(e.starts_with(&format!("{reason}:")), "{arm}/{cond:?}: {e}");
+    let dir = reject_trial_dir(s, arm, cond);
+    let rec: Value =
+        serde_json::from_slice(&fs::read(dir.join(pbs_proc::REJECT_FILE)).unwrap()).unwrap();
+    assert_eq!(rec["schema"], json!(pbs_proc::REJECT_SCHEMA));
+    assert_eq!(rec["reject_reason"], json!(reason), "{rec}");
+    assert_eq!(rec["condition"], json!(cond.as_str()));
+    // 測定成功の記録（recovery-trials.jsonl の行・grade・a2.json）を残さない。
+    let recovery = s
+        .out()
+        .join(celeris_campaign::dagbench::pbs::raw::RECOVERY_FILE);
+    assert!(
+        fs::read_to_string(&recovery).map_or(true, |t| !t.contains(&format!("\"{arm}\""))),
+        "{arm}/{cond:?}: no recovery row"
+    );
+    assert!(!dir.join("a2.json").exists());
+    e
+}
+
+fn consumed_rows(s: &PbsSetup) -> usize {
+    use celeris_campaign::dagbench::pbs::backend::CONSUMED_LEDGER;
+    fs::read_to_string(s.out().join(CONSUMED_LEDGER)).map_or(0, |t| t.lines().count())
+}
+
+/// (1) Waiting の保存前に合図した controller は止めない（A2 の SIGKILL を送らない）。親の独立読み直しに job ID 付きの
+/// Waiting が無いので trial を拒否し、解放・再起動・消費をしない。両 arm（state.json / read-only SQLite）。
+#[test]
+fn harness_pbs_reject_stop_before_save_is_refused_without_kill() {
+    for arm in ["baseline", "celeris"] {
+        let s = PbsSetup::new();
+        let e = rejected_trial(
+            &s,
+            arm,
+            Condition::A2,
+            Some("announce-before-save"),
+            "wait_not_saved",
+        );
+        let dir = reject_trial_dir(&s, arm, Condition::A2);
+        assert!(barrier_names(&dir).is_empty(), "{arm}: {e}");
+        let events =
+            celeris_campaign::dagbench::process::read_events(&dir.join("process-events.jsonl"))
+                .unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e["kind"] == "process_started" && e["role"] == "control")
+                .count(),
+            1,
+            "{arm}: no resumed controller"
+        );
+        assert!(!dir.join(pbs_proc::DURABLE_WAIT_FILE).exists());
+        let jobs = s.pbs().jobs().unwrap();
+        assert_eq!(jobs.len(), 1, "{arm}: submitted once");
+        assert!(!jobs[0].released, "{arm}: not released");
+        assert_eq!(consumed_rows(&s), 0, "{arm}: nothing consumed");
+        assert_eq!(s.pbs().counts().unwrap().qsub, 1);
+    }
+}
+
+/// (2) 保存証拠が欠けたら成功にしない: normal でも保存前の合図には `CONTINUE` を送らず（解放しない）拒否する。
+/// 閉じた raw から `durable-wait.json` を消す・書き換える・recovery 行の saved_wait を落とすと validator が拒否する。
+#[test]
+fn harness_pbs_reject_missing_saved_evidence_is_not_success() {
+    for arm in ["baseline", "celeris"] {
+        let s = PbsSetup::new();
+        rejected_trial(
+            &s,
+            arm,
+            Condition::Normal,
+            Some("announce-before-save"),
+            "wait_not_saved",
+        );
+        let dir = reject_trial_dir(&s, arm, Condition::Normal);
+        assert!(!barrier_names(&dir).contains(&"released".to_string()));
+        assert!(!s.pbs().jobs().unwrap()[0].released, "{arm}: not released");
+        assert_eq!(consumed_rows(&s), 0);
+    }
+    use celeris_campaign::dagbench::pbs::raw::{RECOVERY_FILE, validate};
+    let s = PbsSetup::new();
+    let (raw_dir, _) = closed_measurement(&s, &[("celeris", Condition::A2)]);
+    validate(&raw_dir).expect("intact raw");
+    let saved = Path::new("trials/celeris-a2").join(pbs_proc::DURABLE_WAIT_FILE);
+    let copy = |name: &str| {
+        let d = s.root.path().join(name);
+        copy_tree(&raw_dir, &d);
+        d
+    };
+    let gone = copy("gone");
+    fs::remove_file(gone.join(&saved)).unwrap();
+    let e = validate(&gone).expect_err("durable-wait.json missing");
+    assert!(e.contains("is missing"), "{e}");
+    let altered = copy("altered");
+    let mut v: Value = serde_json::from_slice(&fs::read(altered.join(&saved)).unwrap()).unwrap();
+    v["job_id"] = json!("9999.sirius");
+    fs::write(altered.join(&saved), v.to_string()).unwrap();
+    let e = validate(&altered).expect_err("durable-wait.json altered");
+    assert!(e.contains("altered"), "{e}");
+    let dropped = copy("dropped");
+    let mut row: Value = serde_json::from_str(
+        fs::read_to_string(dropped.join(RECOVERY_FILE))
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    row["saved_wait"] = Value::Null;
+    fs::write(dropped.join(RECOVERY_FILE), format!("{row}\n")).unwrap();
+    assert!(validate(&dropped).is_err(), "a2 without saved wait");
+    let out = s.root.path().join("regen-gone");
+    assert!(
+        celeris_campaign::dagbench::pbs::metrics::regenerate(&gone, &out).is_err(),
+        "no metrics from a raw without saved evidence"
+    );
+}
+
+/// (3) 停止中・再起動後に回収した原票が保存済み Waiting の job（同じ trial・同じ intent）でなければ拒否する。
+/// A2 は停止中の原票の Variable_List で job_mismatch、normal は collector が identity 不一致にして成功にしない。
+#[test]
+fn harness_pbs_reject_job_mismatch_after_restart() {
+    use celeris_campaign::dagbench::pbs::{file_pbs::FilePbsFaults, raw::RecoveryStatus};
+    for arm in ["baseline", "celeris"] {
+        let s = PbsSetup::new();
+        s.pbs()
+            .write_faults(&FilePbsFaults {
+                variable_list_trial_key: Some("someone-else".into()),
+                ..FilePbsFaults::default()
+            })
+            .unwrap();
+        let e = rejected_trial(&s, arm, Condition::A2, None, "job_mismatch");
+        assert!(e.contains("CELERIS_TRIAL_KEY"), "{e}");
+        let dir = reject_trial_dir(&s, arm, Condition::A2);
+        let names = barrier_names(&dir);
+        assert!(names.contains(&"controller_killed".to_string()));
+        assert!(
+            !names.contains(&"controller_resumed".to_string()),
+            "{arm}: not resumed onto another job"
+        );
+        assert_eq!(consumed_rows(&s), 0);
+        match run_pbs(&s.params(arm, Condition::Normal)) {
+            Ok(r) => assert_ne!(r.recovery.recovery_status, RecoveryStatus::Recovered),
+            Err(e) => assert!(!e.is_empty()),
+        }
+    }
+}
+
+/// (4) 重複投入・重複消費は検出して不合格にする（再投入した controller・台帳を迂回して 2 回消費した controller）。
+#[test]
+fn harness_pbs_reject_duplicate_submit_and_consume() {
+    for arm in ["baseline", "celeris"] {
+        let s = PbsSetup::new();
+        let e = rejected_trial(
+            &s,
+            arm,
+            Condition::Normal,
+            Some("duplicate-submit"),
+            "duplicate_submit",
+        );
+        assert!(e.contains("intent ledger grew"), "{e}");
+        assert_eq!(
+            s.pbs().counts().unwrap().qsub,
+            2,
+            "{arm}: physical resubmit"
+        );
+        let s = PbsSetup::new();
+        let e = rejected_trial(
+            &s,
+            arm,
+            Condition::A2,
+            Some("duplicate-consume"),
+            "duplicate_consume",
+        );
+        assert!(e.contains("2 consumed rows"), "{e}");
+        assert_eq!(s.pbs().counts().unwrap().qsub, 1);
+    }
+    // 未知の故障名は入口で拒否する（何も投入しない）。
+    let s = PbsSetup::new();
+    let mut p = s.params("baseline", Condition::Normal);
+    if let Some(x) = p.pbs.as_mut() {
+        x.child_fault = Some("crash".into());
+    }
+    assert!(run_pbs(&p).unwrap_err().contains(pbs_proc::CHILD_FAULT_ENV));
+    assert_eq!(s.pbs().counts().unwrap().qsub, 0);
+}
+
+/// (5) scheduler が job を知らない（解放後に履歴が消える）・collector が照会に失敗する trial を成功にしない。
+#[test]
+fn harness_pbs_reject_scheduler_unknown_is_not_success() {
+    use celeris_campaign::dagbench::pbs::{
+        file_pbs::FilePbsFaults, raw::RecoveryStatus, transport::CallOutcome,
+    };
+    for faults in [
+        FilePbsFaults {
+            forget_after_release: true,
+            ..FilePbsFaults::default()
+        },
+        FilePbsFaults {
+            qstat_outcome: Some(CallOutcome::Timeout),
+            ..FilePbsFaults::default()
+        },
+    ] {
+        for arm in ["baseline", "celeris"] {
+            for cond in [Condition::Normal, Condition::A2] {
+                let s = PbsSetup::new();
+                s.pbs().write_faults(&faults).unwrap();
+                match run_pbs(&s.params(arm, cond)) {
+                    Ok(r) => assert_ne!(
+                        r.recovery.recovery_status,
+                        RecoveryStatus::Recovered,
+                        "{arm}/{cond:?}/{faults:?}"
+                    ),
+                    Err(e) => {
+                        let dir = reject_trial_dir(&s, arm, cond);
+                        assert!(dir.join(pbs_proc::REJECT_FILE).exists(), "{e}");
+                        assert!(!dir.join("a2.json").exists(), "{e}");
+                    }
+                }
+            }
+        }
+    }
 }

@@ -424,6 +424,16 @@ pub fn probe(
             argv: Vec::new(),
         });
     }
+    // 落ちた capability の detail に、sandbox が bind できない cap env の元（無い ro_mount・socket でない socket）を
+    // B/C の worker 検査と同じ id で添える（bwrap は元が無いと全 capability を同じ exit 1 で落とす）。判定は変えない。
+    let missing = missing_sources(&sb.toolchain);
+    let why = |d: String| {
+        if missing.is_empty() {
+            d
+        } else {
+            format!("{d} (sandbox source missing: {})", missing.join(", "))
+        }
+    };
     for cap in &case.required_capabilities {
         let r = match sandboxed(sb, workspace, cap) {
             Err(e) => CapResult {
@@ -434,8 +444,8 @@ pub fn probe(
             },
             Ok((prog, args)) => {
                 let (ok, detail) = match runner.run(&prog, &args) {
-                    Ran::Unrunnable(e) => (false, format!("sandbox did not run: {e}")),
-                    Ran::Exit { code, .. } if code != 0 => (false, format!("exit {code}")),
+                    Ran::Unrunnable(e) => (false, why(format!("sandbox did not run: {e}"))),
+                    Ran::Exit { code, .. } if code != 0 => (false, why(format!("exit {code}"))),
                     Ran::Exit { stdout, .. } => match &cap.expect_stdout {
                         Some(x) if !stdout.contains(x.as_str()) => {
                             (false, format!("stdout lacks {x:?}"))
@@ -464,6 +474,25 @@ pub fn probe(
         daemon: None,
         results,
     }
+}
+
+/// host 側で sandbox が bind できない cap env の元。id は B/C の worker 検査（`toolchain:<p>`・`socket:<p>`）と同じ。
+/// socket は symlink を辿って unix socket であること（ControlMaster が切れて残った dangling symlink は無い扱い）。
+pub fn missing_sources(t: &Toolchain) -> Vec<String> {
+    use std::os::unix::fs::FileTypeExt;
+    let mut v: Vec<String> = t
+        .ro_mounts
+        .iter()
+        .filter(|m| !m.exists())
+        .map(|m| format!("toolchain:{}", m.display()))
+        .collect();
+    v.extend(
+        t.sockets
+            .iter()
+            .filter(|s| !std::fs::metadata(s).is_ok_and(|md| md.file_type().is_socket()))
+            .map(|s| format!("socket:{}", s.display())),
+    );
+    v
 }
 
 /// 検査先 daemon の識別。秘密を含まない（pid・identity が答えた instance/release・検査 task の id）。

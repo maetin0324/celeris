@@ -442,6 +442,12 @@ pub fn compute(raw: &Path) -> Result<Metrics, String> {
         fs::read_to_string(raw.join("run.json")).map_err(|e| format!("run.json: {e}"))?;
     // header の形を読む前に版を見る（別の版の欄で壊れた parse error に埋もれさせない）。
     let schema = raw_schema_of(&run_json)?;
+    if schema == super::pbs::raw::SCHEDULER_RAW_SCHEMA {
+        return Err(format!(
+            "{schema} is a real-scheduler raw (wall clock); `compute` does not read it — \
+             use dagbench::pbs::raw::validate"
+        ));
+    }
     if schema == PROCESS_RAW_SCHEMA {
         return Err(format!(
             "{PROCESS_RAW_SCHEMA} is a process raw (separate external process); \

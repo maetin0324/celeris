@@ -11,10 +11,11 @@ use std::{
 use super::{
     baseline::{Baseline, BaselineConfig, ExternalSpec, NodeSpec, Outcome, Resources, Scenario},
     celeris_side::{RunSpec, load_scenarios},
-    ext::{ExtConfig, ExtSim},
+    ext::ExtConfig,
     metrics::{
         RunHeader, append_campaign_submitted, append_control, append_sample, compute, write_tables,
     },
+    pbs::entry::{BackendChoice, BackendFlag},
 };
 
 pub const BASELINE_SCOPE: &str = "driver_process_inclusive(baseline+ext-sim in one process)";
@@ -62,14 +63,13 @@ pub fn run_baseline(spec: &RunSpec, raw: &Path) -> Result<(), String> {
     for (i, c) in spec.campaign_ids().iter().enumerate() {
         append_campaign_submitted(raw, c, spec.arrival(i)).map_err(|e| e.to_string())?;
     }
-    let mut ext = ExtSim::open(
-        &raw.join("ext.jsonl"),
-        ExtConfig {
-            poll_secs: spec.poll_secs,
-            job_slots: spec.scenario.resources.external_job_slots,
-            faults: vec![],
-        },
-    )
+    // 既定の offline backend（ExtSim）。PBS は pbs::entry::BackendChoice::Pbs を明示した harness だけ。
+    let mut ext = BackendChoice::ExtSim(ExtConfig {
+        poll_secs: spec.poll_secs,
+        job_slots: spec.scenario.resources.external_job_slots,
+        faults: vec![],
+    })
+    .open(raw)
     .map_err(|e| e.to_string())?;
     let mut b = Baseline::open(
         merged_scenario(spec),
@@ -88,7 +88,7 @@ pub fn run_baseline(spec: &RunSpec, raw: &Path) -> Result<(), String> {
     }
     let pid = std::process::id();
     append_sample(raw, pid, wall())?;
-    let r = b.run(&mut ext).map_err(|e| format!("{e:?}"))?;
+    let r = b.run(ext.as_mut()).map_err(|e| format!("{e:?}"))?;
     append_sample(raw, pid, wall())?;
     if r != Outcome::Complete {
         return Err("baseline did not complete".into());
@@ -115,6 +115,12 @@ pub fn cli(args: &[String]) -> Result<String, String> {
     let out = flag(args, "--out").ok_or("--out <dir> is required")?;
     match sub {
         "run" => {
+            if BackendFlag::from_args(args)? == BackendFlag::Pbs {
+                return Err("--backend pbs is not driven from this CLI: the recovery harness opts in with \
+                     dagbench::pbs::entry::BackendChoice::Pbs and an injected transport (both arms need the \
+                     in-process task-api router; a real scheduler connection needs human approval)"
+                    .into());
+            }
             let file = load_scenarios(&flag(args, "--scenarios").unwrap_or_else(default_scenarios))?;
             let seed = match text("--seed") {
                 Some(s) => s.parse::<u64>().map_err(|e| format!("--seed: {e}"))?,
@@ -147,6 +153,6 @@ pub fn cli(args: &[String]) -> Result<String, String> {
             let s = super::process::compute_process(&raw)?;
             serde_json::to_string_pretty(&s).map_err(|e| e.to_string())
         }
-        _ => Err("usage: celeris-campaign dagbench run --scenario <id> --point <p> --arm baseline|celeris --out <dir> | dagbench metrics --raw <dir> --out <dir> | dagbench process-metrics --raw <dir> --out <dir>".into()),
+        _ => Err("usage: celeris-campaign dagbench run --scenario <id> --point <p> --arm baseline|celeris [--backend ext-sim] --out <dir> | dagbench metrics --raw <dir> --out <dir> | dagbench process-metrics --raw <dir> --out <dir>".into()),
     }
 }

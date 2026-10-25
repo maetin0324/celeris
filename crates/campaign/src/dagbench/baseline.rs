@@ -160,6 +160,13 @@ pub enum Error {
     Stuck(String),
 }
 
+/// 照合できない外部投入での停止。state は投入済み（Submitted）のまま残し、再投入しない。
+fn unresolved(node: &str, submit_intent_id: &str, reason: &str) -> Error {
+    Error::State(format!(
+        "{node}: external submit {submit_intent_id} is unresolved ({reason}); not resubmitting"
+    ))
+}
+
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Error::Io(e)
@@ -529,6 +536,11 @@ impl Baseline {
                 Lookup::Unknown => {
                     self.state.nodes.get_mut(id).expect("node").status = Status::SubmitPending;
                 }
+                // 照合できない投入は再投入へ戻さず停止する（ADR 2026-10-25-recovery-scheduler-backend I4）。
+                Lookup::Unresolved {
+                    submit_intent_id,
+                    reason,
+                } => return Err(unresolved(id, &submit_intent_id, &reason)),
             }
         }
         let mut retry_submit = true;
@@ -815,6 +827,13 @@ impl Baseline {
                 return self.reconcile(ext, id);
             }
             Err(SubmitError::NoSlot) => n.status = Status::SubmitPending,
+            Err(SubmitError::Unresolved {
+                submit_intent_id,
+                reason,
+            }) => {
+                self.save()?;
+                return Err(unresolved(id, &submit_intent_id, &reason));
+            }
         }
         self.save()
     }
@@ -833,6 +852,13 @@ impl Baseline {
                 ext.wait_started(&logical)?;
             }
             Lookup::Unknown => n.status = Status::SubmitPending,
+            Lookup::Unresolved {
+                submit_intent_id,
+                reason,
+            } => {
+                self.save()?;
+                return Err(unresolved(id, &submit_intent_id, &reason));
+            }
         }
         self.save()
     }

@@ -602,3 +602,91 @@ unit harness-proc / harness-raw / harness-reject の実装と (1)–(6) を突�
   確かめた raw の記録（`recovery-trials.jsonl` の `controller`・`saved_wait` 等）から出す。
 - 試験名: 正式入口の試験は `crates/campaign/tests/dagbench_harness.rs` の `harness_pbs_*`（normal/A2 × 両 arm・共通測定・
   入口の拒否 6 本、`harness_pbs_raw_*` 4 本、`harness_pbs_reject_*` 5 本）。
+
+### I15. 実 cluster smoke の経路（2026-10-25、実装前）
+
+P0-3 の smoke 段（unit payload / ssh-entry / runbook / live-smoke）が実装・実行する形を、実装前に固める。
+D1–D5・I1–I14 は変えない（I14 (1) の「`ssh` は入口で拒否」を、下の (1) の承認 gate を通るときだけ受ける形に狭く開く）。
+対象は Sirius の PBS 1 cluster のみ。この付記の段で実接続するのは unit live-smoke だけで、それも (1) の承認記録がある場合に限る。
+
+#### (1) `run_pbs` が `DAGBENCH_PBS_TRANSPORT=ssh` を受ける条件
+
+- `ssh` は `DAGBENCH_PBS_APPROVAL=<承認記録 JSON の絶対 path>` があり、下の検査を全て通るときだけ受ける。
+  1 つでも外れれば ssh・qsub・qstat を 1 回も起こさず（子 process も起こさず、測定 dir も作らず）`run_pbs` が Err を返す。
+- 承認記録（`deny_unknown_fields`、欄の欠落・未知の欄は Err）:
+
+  | 欄 | 型 | 照合 |
+  |---|---|---|
+  | `schema` | `celeris.recovery-smoke-approval/1` | 一致 |
+  | `source` | 文字列 | 空でない。人の決定の参照（例 `task:<id>/decision:<key>`、人の inbox 回答）。中身は解釈しない |
+  | `cluster`・`queue`・`account` | 文字列 | `spec.cluster`・`spec.queue`・`spec.account` と完全一致 |
+  | `select`・`place`・`walltime_secs` | 文字列・文字列・整数 | `spec.resources` の同名欄と完全一致 |
+  | `max_jobs` | 整数 | `1 ≤ max_jobs ≤ spec.limits.max_jobs` |
+  | `valid_until` | UTC RFC 3339（`Z`） | 起動時の UTC が `valid_until` より前 |
+  | `measurement_id` | 文字列 | `spec.measurement_id` と完全一致 |
+
+- 承認記録は測定 dir の `recovery-approval.json` に pin する（spec の `recovery-spec.json` と同じく hard link で 1 回だけ作る）。
+  2 回目以降の trial は与えた承認記録の sha256 が pin と一致しなければ Err（途中で枠を差し替えない）。
+- 期限と件数は起動時だけでなく qsub の直前にも確かめる。`SshPbs` を包む gate（`PbsTransport` の実装。qsub 以外は素通し）が
+  qsub ごとに「UTC < `valid_until`」と「測定 dir の intent 台帳で `sent` 以降に進んだ intent の数 < 承認の `max_jobs`」を
+  確かめ、外れれば qsub を起こさず `CallOutcome::Unsupported` 相当の拒否を原票に残す（spec の `max_jobs` と承認の `max_jobs` の
+  小さい方が効く）。期限切れの後も qstat（観測・回収）は続けてよい。
+- ssh では `DAGBENCH_PBS_STATE` を与えれば Err（`FilePbs` の state は file 専用）。時計は実時計で、`FileClock` は使わない。
+  測定専用 controller の子 process も同じ env を受け、同じ検査を自分でやり直す（親の検査結果を信じない）。
+- `file` transport は従来どおり（I14）。`file` に `DAGBENCH_PBS_APPROVAL` を与えれば Err（取り違え防止）。
+
+#### (2) 実 cluster の `Site`（`SshSite`）
+
+- 置き場所: `crates/campaign/src/dagbench/pbs/transport.rs` の `SshPbs` の隣に `SshSite`（`impl entry::Site`）。ssh を起こす file は
+  I1 のとおり `ssh_qstat.rs` と `pbs/transport.rs` だけに保つ。argv は `SshPbs::ssh_argv` と同じ
+  （`BatchMode=yes`・`ConnectTimeout`・`ControlMaster=no`）。全 call は `spec.limits.ssh_timeout_secs` の全体 timeout を
+  `run_bounded` で持ち、timeout は子を SIGKILL して Err。master の起動・停止はしない（D5）。
+- cluster 上の測定 dir は `dirname(spec.payload.script)` だけ。検査: 絶対 path、`..`・空要素なし、文字種 `[A-Za-z0-9._/-]`
+  （`,` を含まない）、basename が `spec.measurement_id` と一致。job ID は `is_scheduler_job_id` を通るものだけ。
+  自由文字列から path を組まない。
+- `release(job_id)`: `touch -- <dir>/release/<job_id>` を 1 回（冪等。`release/` は runbook の準備で作ってある前提で、無ければ Err）。
+- `fetch_outputs(job_id, dest)`: `cat -- <dir>/out/<job_id>/out.bin` の stdout を `dest/out.bin` に新規作成して `["out.bin"]` を返す。
+  stdout の上限は 1 MiB（超えれば Err）。非 0・timeout・空出力は Err。
+- 原票: `SshSite` の呼び出し 1 回 = trial dir の `site-calls.jsonl`（`celeris.recovery-site-call/1`、追記専用）の 1 行
+  `{seq, call: release|fetch_outputs, job_id, argv, started_utc, finished_utc, exit, outcome, stdout_sha256, stdout_bytes}`。
+  `raw::validate` は `site-calls.jsonl` がある trial では、取得した `out.bin` の sha256 が `fetch_outputs` 行の `stdout_sha256` と
+  一致することを確かめる（file transport の trial では file が無くてよい）。
+- 持たない操作: `qdel`・`qalter`・`qhold`・`qrls`・`qmove` と、`<dir>` の外への書き込み・`rm`。`SshPbs` も qsub / qstat 以外を持たない。
+
+#### (3) 測定を閉じる env 入口 `close_from_env`
+
+- `crates/campaign/tests/dagbench_harness.rs` の `#[ignore]` 試験 `close_from_env`。env は `DAGBENCH_CLOSE_RAW=<測定 dir>` と
+  `DAGBENCH_CLOSE_PINS=<StudyPins の JSON path>`（`deny_unknown_fields`）の 2 つで、どちらも必須。
+- 動作: `RawWriter::append(<測定 dir>)` で開き、`write_run(StudyPins)` を 1 回だけ呼ぶ（`run.json` は新規作成のみ。既にあれば Err で、
+  2 回目の close は何も書かない）。その後 `raw::validate` を流し、`RunMeta` を stdout に JSON で出す。validate が落ちれば Err で、
+  `run.json` は消さない（追記専用。その測定は成功に数えない）。I14 (7) の未解決「`write_run` を呼ぶ env 入口が無い」をこれで閉じる。
+- qsub・ssh・子 process は起こさない（transport を開かない）。閉じた後は `regen_from_env` で再集計する。
+
+#### (4) payload 契約（`scripts/campaign/recovery-smoke/job.sh`）
+
+- cluster の測定 dir `<dir>`（(2)）に `job.sh` と入力 `input.bin` を置く。`spec.payload.script = <dir>/job.sh`、
+  `script_sha256`・`input_sha256` はその 2 file の sha256、`expected_output_sha256` は下の 3. の `out.bin` の sha256。
+- `<dir>` は qsub の `-v` に `RECOVERY_SMOKE_DIR=<dir>` として渡す。`QsubRequest::argv` は `CELERIS_TRIAL_KEY`・
+  `CELERIS_SUBMIT_INTENT` に続けて `RECOVERY_SMOKE_DIR=dirname(script)` を足す（spec 由来で、自由文字列ではない。両 arm・file/ssh で同じ）。
+- job の手順（`PBS_JOBID` を key にする。`set -eu`）:
+  1. `out/<PBS_JOBID>/` を作り、`input.bin` の写し `input.copy` とその sha256 `input.sha256` を書く。
+  2. `release/<PBS_JOBID>` ができるまで `sleep 5` 間隔で待つ。上限は `RECOVERY_SMOKE_RELEASE_TIMEOUT` 秒（既定 240）。
+     上限に達したら `out.bin` を書かずに非 0（3）で終わる（grade 不合格・未完了として扱われ、成功に数えない）。
+  3. `out.bin` を書く。中身は入力だけから決まる（job ID・時刻・host を含めない）ので `expected_output_sha256` で固定できる。
+- 禁止: CPU 負荷（busy loop・計算 kernel）、`qsub`・`qdel` などの PBS 呼び出し、`<dir>` の外への書き込み、network。
+- 資源: `spec.resources.walltime_secs` は `RECOVERY_SMOKE_RELEASE_TIMEOUT` + 余裕（60 秒以上）より長くする。
+  A2 では controller の停止中も job は `release` を待って `R` のまま残り、再開した controller が同じ job を release・回収する（再投入しない）。
+
+#### (5) raw の新規保存先と取消禁止の境界
+
+- 手元の raw（`DAGBENCH_OUT`）は実 smoke 専用の新規 dir: 絶対 path、最初の trial の時点で存在しない、repo の作業ツリーの外、
+  既存の測定（main-3・K4・nollm・ext-sim の raw、`FilePbs` の state）の内側でも外側を包む配置でもない。
+  `measurement_id` は既存 raw に無い新しい値。2 trial 目以降は (1) の pin（spec・承認）一致で `RawWriter::append` に足す。
+  ログ・機械結果（stdout の `ProcReport`、grade、再集計の出力）は各 run の artifacts に置き、raw dir には書かない。
+- cluster 側は `<dir>` だけに書く（`job.sh` の出力と `SshSite::release` の marker）。
+- 取消禁止: Celeris・harness・payload は PBS job を取り消さない（qdel 系を持たない）。A2 で止めるのは I14 (3) の測定専用 controller の
+  子 process だけで、本番 controller（celeris daemon）は止めない。残った job は `RECOVERY_SMOKE_RELEASE_TIMEOUT` と walltime で
+  自然に終わる。人が手で `qdel` してよいのは、その測定の intent 台帳（`submit-intents.jsonl`）の `accepted` 行にある job ID だけで、
+  runbook に手順として書く（他の job には触れない）。
+- I9 の未決（marker 検索の具体 command、D4.4）は決めない。`SshPbs::find_by_marker` は `Unsupported` のままで、qsub の応答が
+  取れない unknown submit は照合不能として停止する（その trial は成功に数えず、再投入しない）。

@@ -42,6 +42,10 @@ use crate::{
     observe::{self, CollectClass, CollectIssue, Expect, JobRef},
 };
 
+pub use super::recovery::{
+    RECOVERY_FILE, RECOVERY_SCHEMA, RecoveryInput, RecoveryRecord, RecoveryStatus, derive_recovery,
+};
+
 pub const SCHEDULER_RAW_SCHEMA: &str = "celeris.dagbench-scheduler-raw/1";
 pub const DATASET: &str = "scheduler_measured";
 pub const RUN_FILE: &str = "run.json";
@@ -456,6 +460,25 @@ impl RawWriter {
         Ok(Self::new(dir, epoch, pin))
     }
 
+    /// 同じ測定 dir に trial を足すために開く（1 起動 = 1 trial、付記 I14 (1)）。spec pin が要り、`run.json` は
+    /// まだ無いこと（`run.json` は全 trial の後に [`RawWriter::write_run`] が 1 回だけ書く）。
+    pub fn append(dir: &Path, epoch: &str) -> io::Result<Self> {
+        let pin = read_pin(dir)?;
+        if dir.join(RUN_FILE).exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "{}: the measurement is closed",
+                    dir.join(RUN_FILE).display()
+                ),
+            ));
+        }
+        drop_torn_tail(&dir.join(EVENTS_FILE))?;
+        drop_torn_tail(&dir.join(TRIALS_FILE))?;
+        drop_torn_tail(&dir.join(RECOVERY_FILE))?;
+        Ok(Self::new(dir, epoch, pin))
+    }
+
     /// 再収集のために開く。`run.json` が本 raw の版であること（旧 raw を読み替えない）。
     pub fn reopen(dir: &Path, epoch: &str) -> io::Result<Self> {
         let pin = read_pin(dir)?;
@@ -465,6 +488,7 @@ impl RawWriter {
         }
         drop_torn_tail(&dir.join(EVENTS_FILE))?;
         drop_torn_tail(&dir.join(TRIALS_FILE))?;
+        drop_torn_tail(&dir.join(RECOVERY_FILE))?;
         Ok(Self::new(dir, epoch, pin))
     }
 
@@ -791,6 +815,20 @@ impl RawWriter {
         Ok(b)
     }
 
+    /// trial の recovery 記録（`recovery-trials.jsonl`、付記 I14 (4)）を `b` に結合して追記する。導出欄
+    /// （`scheduler_class`・`rework`・台帳由来の論理時刻・`recovery_status`）は validator と同じ関数で埋める。
+    pub fn record_recovery(
+        &mut self,
+        b: &TrialBinding,
+        input: RecoveryInput,
+    ) -> io::Result<RecoveryRecord> {
+        let path = self.dir.join(RECOVERY_FILE);
+        let seq = Self::next_seq(&path)?;
+        let r = super::recovery::build_record(&self.dir, b, input, seq).map_err(invalid)?;
+        append_line(&path, &r)?;
+        Ok(r)
+    }
+
     /// `run.json` を新規に書く（1 回だけ）。実 job 数は台帳から数え、LLM calls は 0。
     pub fn write_run(&self, pins: StudyPins) -> io::Result<RunMeta> {
         let s = &self.pin.spec;
@@ -852,6 +890,8 @@ pub struct RawReport {
     pub run: RunMeta,
     pub events: usize,
     pub trials: BTreeMap<String, TrialBinding>,
+    /// trial_key ごとの最新の recovery 記録（`recovery-trials.jsonl` が無い raw では空）。
+    pub recovery: BTreeMap<String, RecoveryRecord>,
 }
 
 fn check_file(dir: &Path, rel: &str, want: &str, what: &str) -> Result<(), String> {
@@ -948,10 +988,14 @@ pub fn validate(dir: &Path) -> Result<RawReport, String> {
         check_binding(dir, &pin, &statuses, &events, &audit, b, i as u64 + 1)?;
         trials.insert(b.trial_key.clone(), b.clone());
     }
+    let records: Vec<RecoveryRecord> =
+        read_jsonl(&dir.join(RECOVERY_FILE)).map_err(|e| e.to_string())?;
+    let recovery = super::recovery::check_records(dir, &records, &rows, &events)?;
     Ok(RawReport {
         run,
         events: events.len(),
         trials,
+        recovery,
     })
 }
 

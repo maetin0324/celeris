@@ -25,10 +25,12 @@ completed: 2026-10-25
 
 ## 証拠
 
-提出時の HEAD で実行（結果は本 WU の報告に記す）。
+commit「phase 1: add PBS transport with bounded ssh calls and reply classification」の HEAD で実行。
 
-- `cargo test -p celeris-campaign --test dagbench_pbs_transport` → 8 passed。
-- `bash scripts/dev/test-affected.sh`、`cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check`。
+- `cargo test -p celeris-campaign --test dagbench_pbs_transport --test runner_checker --test short_ml_observation` → 8 / 16 / 8 passed。
+- `bash scripts/dev/test-affected.sh` → exit 0、2652 passed / 7 skipped。1 回目は shell 試験 `scripts/dev/tests/progress_index_commit_hashes.sh` の (2) が exit 1（単独実行・再実行では通る。本変更は scripts に触れない）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` は crates/campaign と本進捗ファイルの 8 path のみ。
 
 ## 未解決事項
 

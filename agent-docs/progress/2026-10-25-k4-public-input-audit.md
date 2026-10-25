@@ -89,7 +89,7 @@ v2 の値は提出時の HEAD の file の sha256 で、case.json の `inputs[0]
 - 「progress: K4 公開入力 v2 の採用版・新旧 hash・残件を固定する」（本ファイル。close WU はコードを変えていない）
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-- `adoption.json` の sha256 照合（`python3 -I` で archive・path を持つ全 ref・旧 lock・旧 tgz の実 file を sha256 計算）→ 14 件、不一致 0。
+- `adoption.json` の sha256 照合（`python3 -I` で archive・path を持つ全 ref・旧 lock・旧 tgz の実 file を sha256 計算）→ 13 件、不一致 0（`materials_tree` は case.json の欄値なので上の表で照合）。
 - WU の範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）→ 本ファイルだけ。
 - `bash scripts/dev/test-affected.sh` → exit 0（docs のみの変更で Rust・web の試験対象なし。check-doc-links self-test ok）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。

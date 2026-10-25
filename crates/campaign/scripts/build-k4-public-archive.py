@@ -17,9 +17,12 @@
 - 旧 tgz と同じ file には書かない。新 tgz は一時名に書いてから rename する。
 - symlink・hardlink・device 等の regular file/dir 以外の entry は失敗にする。
 
-manifest.json: 旧/新 tgz の sha256・size、残した entry（path・type・sha256）、除いた entry
-（path・type・sha256・reason）、除外リストの sha256。時刻は書かない（再生成で同じ内容になる）。
+manifest.json: old_sha256・new_sha256（source/output に path・size も）、残した entry kept
+（path・type・sha256）、除いた entry removed（path・type・sha256・reason）、除外リストの sha256。
+時刻は書かない（再生成で同じ内容になる）。
 exit: 0 = 成功 / 1 = 入力の不整合 / 2 = 使い方の誤り。
+
+自己試験（合成 tgz）: python3 -I crates/campaign/scripts/build-k4-public-archive.py --self-test
 """
 import argparse
 import gzip
@@ -179,6 +182,8 @@ def build(src, exclude, out, manifest):
     if sha256_file(src) != src_sha_before:
         raise Fail(f"{src}: source archive changed during the build")
 
+    new_sha = sha256_file(out)
+
     def row(name, extra=None):
         _, kind, data, sha = entries[name]
         r = {"path": name, "type": kind}
@@ -192,15 +197,17 @@ def build(src, exclude, out, manifest):
     doc = {
         "schema": SCHEMA,
         "changed": True,
+        "old_sha256": src_sha_before,
+        "new_sha256": new_sha,
         "source": {"path": os.path.abspath(src), "sha256": src_sha_before, "size": os.path.getsize(src),
                    "entries": len(entries)},
-        "output": {"path": os.path.abspath(out), "sha256": sha256_file(out), "size": os.path.getsize(out),
+        "output": {"path": os.path.abspath(out), "sha256": new_sha, "size": os.path.getsize(out),
                    "entries": len(keep)},
         "exclude_list": {"path": os.path.abspath(exclude), "sha256": sha256_file(exclude), "entries": len(excl)},
         "normalization": {"order": "name", "mtime": 0, "uid": 0, "gid": 0, "uname": "", "gname": "",
                           "mode": "source", "tar_format": "pax", "gzip_mtime": 0, "gzip_level": 9},
         "kept": [row(n) for n in keep],
-        "excluded": [row(n, {"reason": reasons[n]}) for n in sorted(excl)],
+        "removed": [row(n, {"reason": reasons[n]}) for n in sorted(excl)],
     }
     tmp = manifest + ".partial"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -210,7 +217,123 @@ def build(src, exclude, out, manifest):
     return doc
 
 
+# ---- 自己試験（--self-test。標準ライブラリのみ・合成 tgz） ----
+
+def self_test():
+    import subprocess
+    import tempfile
+    import unittest
+    from pathlib import Path
+    FILES = {
+        "review28/qstat-43706.txt": b"Job Id: 43706\n",
+        "review28/cells-43706.csv": b"fs,valid\n",
+        "review28/__pycache__/x.cpython-39.pyc": b"\x00pyc",
+        "runs/43706-x/planned-cells.json": b"[]\n",
+        "runs/43706-x/cells/benchfs/rep1/w1a/cell.json": b"{}\n",
+        "runs/43706-x/cells/benchfs/rep1/w1a/nic-audit.json": b"{\"pass\":true}\n",
+        "runs/43706-x/fs/benchfs/rep1/w1a/logs-audit.json": b"{\"pass\":true}\n",
+    }
+    DIRS = ["review28", "review28/__pycache__"]
+    EXCLUDE = [
+        "review28/__pycache__",
+        "review28/__pycache__/x.cpython-39.pyc",
+        "review28/cells-43706.csv",
+        "runs/43706-x/cells/benchfs/rep1/w1a/nic-audit.json",
+        "runs/43706-x/fs/benchfs/rep1/w1a/logs-audit.json",
+    ]
+
+
+    def sha(b):
+        return hashlib.sha256(b).hexdigest()
+
+
+    class Build(unittest.TestCase):
+        def setUp(self):
+            self.tmp = tempfile.TemporaryDirectory()
+            self.addCleanup(self.tmp.cleanup)
+            self.dir = Path(self.tmp.name)
+            self.src = self.dir / "src.tgz"
+            with tarfile.open(self.src, "w:gz") as t:
+                for i, d in enumerate(DIRS):
+                    ti = tarfile.TarInfo(d)
+                    ti.type, ti.mode, ti.mtime, ti.uid = tarfile.DIRTYPE, 0o755, 1000 + i, 31305
+                    t.addfile(ti)
+                # 名前順でない順に入れ、mtime・uid も entry ごとに変える。
+                for i, (name, data) in enumerate(reversed(list(FILES.items()))):
+                    ti = tarfile.TarInfo(name)
+                    ti.size, ti.mode, ti.mtime, ti.uid, ti.uname = len(data), 0o644, 2000 + i, 31305, "rmaeda"
+                    t.addfile(ti, io.BytesIO(data))
+            self.excl = self.dir / "exclude.txt"
+            self.excl.write_text("".join(p + "\n" for p in EXCLUDE))
+
+        def run_build(self, out, manifest, excl=None):
+            return subprocess.run([sys.executable, "-I", os.path.abspath(__file__), "--src", str(self.src),
+                                   "--exclude", str(excl or self.excl), "--out", str(out),
+                                   "--manifest", str(manifest)], capture_output=True, text=True)
+
+        def test_deterministic_and_keeps_raw_bytes(self):
+            src_sha = sha(self.src.read_bytes())
+            r1 = self.run_build(self.dir / "a.tgz", self.dir / "a.json")
+            r2 = self.run_build(self.dir / "b.tgz", self.dir / "b.json")
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            self.assertEqual((self.dir / "a.tgz").read_bytes(), (self.dir / "b.tgz").read_bytes())
+            self.assertEqual(src_sha, sha(self.src.read_bytes()))
+            with tarfile.open(self.dir / "a.tgz") as t:
+                ms = t.getmembers()
+                names = [m.name for m in ms]
+                self.assertEqual(names, sorted(names))
+                self.assertTrue(all(m.mtime == 0 and m.uid == 0 and m.gid == 0 and m.uname == "" for m in ms))
+                for m in ms:
+                    if m.isfile():
+                        self.assertEqual(t.extractfile(m).read(), FILES[m.name])
+            self.assertEqual(set(names), (set(FILES) | set(DIRS)) - set(EXCLUDE))
+            self.assertEqual((self.dir / "a.tgz").read_bytes()[4:8], b"\x00\x00\x00\x00")  # gzip mtime
+            m = json.loads((self.dir / "a.json").read_text())
+            self.assertTrue(m["changed"])
+            self.assertEqual(m["source"]["sha256"], src_sha)
+            self.assertEqual(m["old_sha256"], src_sha)
+            self.assertEqual(m["new_sha256"], m["output"]["sha256"])
+            self.assertEqual(m["output"]["sha256"], sha((self.dir / "a.tgz").read_bytes()))
+            self.assertEqual(sorted(e["path"] for e in m["removed"]), sorted(EXCLUDE))
+            self.assertTrue(all(e["reason"] for e in m["removed"]))
+            kept = {e["path"]: e for e in m["kept"]}
+            self.assertEqual(kept["review28/qstat-43706.txt"]["sha256"], sha(FILES["review28/qstat-43706.txt"]))
+            # out の path 以外は同じ内容（時刻を書かない）。
+            m2 = json.loads((self.dir / "b.json").read_text())
+            for d in (m, m2):
+                d["output"].pop("path")
+            self.assertEqual(m, m2)
+
+        def expect_fail(self, lines, needle):
+            excl = self.dir / "bad.txt"
+            excl.write_text("".join(p + "\n" for p in lines))
+            r = self.run_build(self.dir / "o.tgz", self.dir / "o.json", excl)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn(needle, r.stderr)
+            self.assertFalse((self.dir / "o.tgz").exists())
+
+        def test_rejects_path_missing_from_source(self):
+            self.expect_fail(EXCLUDE + ["review28/nope.txt"], "not in the source archive")
+
+        def test_rejects_raw_file_without_reason_rule(self):
+            self.expect_fail(["review28/qstat-43706.txt"], "no exclusion reason rule")
+
+        def test_rejects_dir_with_unlisted_children(self):
+            self.expect_fail(["review28/__pycache__"], "has entries not in the exclude list")
+
+        def test_rejects_writing_over_source(self):
+            r = self.run_build(self.src, self.dir / "o.json")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("must not be the source", r.stderr)
+
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(Build)
+    return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
+
+
 def main(argv):
+    if argv == ["--self-test"]:
+        return self_test()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--src", required=True)
     ap.add_argument("--exclude", required=True)
@@ -226,7 +349,7 @@ def main(argv):
         print(f"build-k4-public-archive: {e}", file=sys.stderr)
         return 1
     print(json.dumps({"source_sha256": doc["source"]["sha256"], "output_sha256": doc["output"]["sha256"],
-                      "kept": len(doc["kept"]), "excluded": len(doc["excluded"])}))
+                      "kept": len(doc["kept"]), "removed": len(doc["removed"])}))
     return 0
 
 

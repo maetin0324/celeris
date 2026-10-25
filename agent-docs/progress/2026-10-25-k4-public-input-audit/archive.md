@@ -15,7 +15,7 @@ updated: 2026-10-25
   - 新: `/local/celeris/data/workspaces/01M5SRJMA9CFNG2C9KCCS5VS4B/artifacts/k4-inputs-v2/main-v3-n2-43706-public2.tgz`
     sha256 `0671a85528b4a29a8f6fb5176986c178afb2174cb22e56b003c33ed5f2da3a1e`（5676 entry）
 - 除外リスト: `.../artifacts/k4-inputs-v2/exclude.txt`（1 行 1 path、85 行。audit.json の `exclude_proposal` を名前順に写したもの）
-- manifest: `.../artifacts/k4-inputs-v2/manifest.json`（`changed: true`、新旧 sha256、残した 5676 entry と除いた 85 entry の sha256、除外理由）
+- manifest: `.../artifacts/k4-inputs-v2/manifest.json`（`changed: true`、`old_sha256`・`new_sha256`、残した 5676 entry `kept` と除いた 85 entry `removed` の sha256、除外理由）
 - 判断要 26 件（runner の実行コード、`review28/qstat-43722.txt`、`review28/v3-submissions.json` など）は人の決定が出ていないので残した。
 
 ## 作り方
@@ -32,12 +32,13 @@ updated: 2026-10-25
   `runs/*/runner/` の `summarize.py`・`audit-nic.py`・`__pycache__` 6 件。
 
 ## 証拠（提出時の HEAD で実行）
+- WU の check 2 本（manifest の `old_sha256`/`new_sha256`/`removed[].reason` と旧 tgz の `sha256sum -c`、範囲 check）→ どちらも exit 0
 - 2 回の生成: artifacts の新 tgz と `$TMPDIR` への 2 回目がどちらも上記の新 sha256 と全桁一致
 - 旧 tgz の `sha256sum`: 生成の前後とも上記の旧 sha256 と全桁一致
 - audit.json との照合（`python3 -I`）: grader が読む 147 件はすべて残っていて sha256 も同じ。残した file の sha256 の不一致は 0 件。
   除いた集合は `exclude_proposal` と一致し、全件に理由がある。判断要 26 件はすべて残した
 - `tar -xzf`（grader の `extract_tgz` と同じ GNU tar）で展開できる。file 5675 件（新 tgz の entry 5676 件から dir 1 件を除いた数）
-- `python3 -m unittest crates/campaign/scripts/test_build_k4_public_archive.py` → 5 tests OK
+- `python3 -I crates/campaign/scripts/build-k4-public-archive.py --self-test` → 5 tests OK
   （同じ入力から同じ byte列ができること・原票の bytes が保たれること・旧 tgz に無い path、原票の除外、子を書いていない dir、旧 tgz への上書きを拒否すること）
 - `bash scripts/dev/test-affected.sh`（基準 `$CELERIS_WU_BASE`）→ exit 0、2644 passed / 7 skipped
 - `cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` → どちらも exit 0
@@ -45,6 +46,7 @@ updated: 2026-10-25
 
 ## 変更
 - `campaign: K4 公開入力の派生物を除く決定的な archive 生成 script を足す` — script・unit test・本ファイル
+- `campaign: K4 archive manifest を old_sha256/new_sha256/removed にし、試験を script の --self-test に入れる` — WU の check（manifest の `old_sha256`・`removed` を読む、範囲は script と進捗だけ）に合わせた。別 file だった unit test は範囲外なので消し、同じ 5 試験を script 内に移した
 
 ## 未解決
 - case.json の `inputs[].sha256`、grade-case の `recompute.input_archive`・`pinned_raw`、private の更新は case 段で行う。

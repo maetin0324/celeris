@@ -4,6 +4,8 @@
 //! - [`SshPbs`] は `ssh -o BatchMode=yes -o ConnectTimeout=<n> -o ControlMaster=no -- <cluster> <cmd>`。
 //!   ControlMaster は利用者の ssh 設定の既存 master を使うだけで、起動・停止しない（D5）。1 回の呼出し全体に timeout を持ち、
 //!   過ぎたら子 process を SIGKILL して回収し、読めた途中の出力をそのまま原票に残す。
+//! - [`SshSite`] は実 cluster の解放（`touch -- <dir>/release/<id>`）と成果物の取得（`cat -- <dir>/out/<id>/out.bin`）。
+//!   `<dir>` は検査済みの `dirname(spec.payload.script)` だけで、呼び出しごとに `site-calls.jsonl` へ 1 行残す（付記 I15 (2)）。
 //! - [`FakePbs`] は試験用の台本応答。ssh・qsub・外部 network を使わない。
 //!
 //! 応答の解釈は [`classify_qsub`]・[`classify_qstat`]・[`classify_marker`] が型で返す。timeout・切断・ID 不正は
@@ -182,6 +184,22 @@ pub trait PbsTransport {
     fn qstat_full(&self, job_id: &str) -> PbsReply;
     /// 自分の job（実行中＋履歴）から marker 完全一致を探す。
     fn find_by_marker(&self, m: &MarkerQuery) -> PbsReply;
+}
+
+/// 共有した transport（親子で同じ経路を包む）。
+impl<T: PbsTransport + ?Sized> PbsTransport for Arc<T> {
+    fn origin(&self) -> Origin {
+        (**self).origin()
+    }
+    fn qsub(&self, req: &QsubRequest) -> PbsReply {
+        (**self).qsub(req)
+    }
+    fn qstat_full(&self, job_id: &str) -> PbsReply {
+        (**self).qstat_full(job_id)
+    }
+    fn find_by_marker(&self, m: &MarkerQuery) -> PbsReply {
+        (**self).find_by_marker(m)
+    }
 }
 
 /// unknown の理由。どれも「未投入」「成功」の根拠にならない。
@@ -386,6 +404,16 @@ impl CallTimer for RealTimer {
     }
 }
 
+/// 1 回の起動の結果（byte のまま）。`status` が None なら timeout（子は SIGKILL 済み）。
+struct BoundedRun {
+    started_utc: String,
+    finished_utc: String,
+    spawn_error: Option<String>,
+    status: Option<std::process::ExitStatus>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
 /// 起動から回収までの全体を `limit` で区切って 1 回実行する。
 fn run_bounded(
     call: PbsCall,
@@ -393,24 +421,38 @@ fn run_bounded(
     limit: Duration,
     timer: &dyn CallTimer,
 ) -> PbsReply {
-    let started_utc = now_utc();
-    let reply = |exit, stdout: String, stderr: String, outcome| PbsReply {
+    let r = run_bounded_bytes(&argv, limit, timer);
+    let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+    let (exit, outcome, stderr) = match (&r.spawn_error, r.status) {
+        (Some(e), _) => (None, CallOutcome::SpawnFailed, e.clone()),
+        (None, None) => (None, CallOutcome::Timeout, text(&r.stderr)),
+        (None, Some(s)) if s.success() => (s.code(), CallOutcome::Ok, text(&r.stderr)),
+        (None, Some(s)) => (s.code(), CallOutcome::NonZero, text(&r.stderr)),
+    };
+    PbsReply {
         call,
-        argv: argv.clone(),
-        started_utc: started_utc.clone(),
-        finished_utc: now_utc(),
+        argv,
+        started_utc: r.started_utc,
+        finished_utc: r.finished_utc,
         exit,
-        stdout,
+        stdout: text(&r.stdout),
         stderr,
         outcome,
+    }
+}
+
+fn run_bounded_bytes(argv: &[String], limit: Duration, timer: &dyn CallTimer) -> BoundedRun {
+    let started_utc = now_utc();
+    let failed = |e: String| BoundedRun {
+        started_utc: started_utc.clone(),
+        finished_utc: now_utc(),
+        spawn_error: Some(e),
+        status: None,
+        stdout: Vec::new(),
+        stderr: Vec::new(),
     };
     let Some((prog, args)) = argv.split_first() else {
-        return reply(
-            None,
-            String::new(),
-            "empty command".into(),
-            CallOutcome::SpawnFailed,
-        );
+        return failed("empty command".into());
     };
     let start = Instant::now();
     let mut child = match Command::new(prog)
@@ -421,14 +463,7 @@ fn run_bounded(
         .spawn()
     {
         Ok(c) => c,
-        Err(e) => {
-            return reply(
-                None,
-                String::new(),
-                format!("spawn {prog}: {e}"),
-                CallOutcome::SpawnFailed,
-            );
-        }
+        Err(e) => return failed(format!("spawn {prog}: {e}")),
     };
     let (tx, rx) = mpsc::channel();
     let mut bufs = Vec::new();
@@ -496,14 +531,14 @@ fn run_bounded(
             eofs += 1;
         }
     }
-    let text = |i: usize| {
-        String::from_utf8_lossy(&bufs[i].lock().unwrap_or_else(|e| e.into_inner())).into_owned()
-    };
-    let (stdout, stderr) = (text(0), text(1));
-    match status {
-        None => reply(None, stdout, stderr, CallOutcome::Timeout),
-        Some(s) if s.success() => reply(s.code(), stdout, stderr, CallOutcome::Ok),
-        Some(s) => reply(s.code(), stdout, stderr, CallOutcome::NonZero),
+    let take = |i: usize| std::mem::take(&mut *bufs[i].lock().unwrap_or_else(|e| e.into_inner()));
+    BoundedRun {
+        started_utc,
+        finished_utc: now_utc(),
+        spawn_error: None,
+        status,
+        stdout: take(0),
+        stderr: take(1),
     }
 }
 
@@ -622,6 +657,222 @@ impl PbsTransport for SshPbs {
             stderr: "marker search command is not confirmed for this cluster (D4.4)".into(),
             outcome: CallOutcome::Unsupported,
         }
+    }
+}
+
+/// [`SshSite`] の原票（trial dir、追記専用）。
+pub const SITE_CALLS_FILE: &str = "site-calls.jsonl";
+pub const SITE_CALL_SCHEMA: &str = "celeris.recovery-site-call/1";
+/// `fetch_outputs` の stdout の上限。
+pub const FETCH_LIMIT_BYTES: usize = 1 << 20;
+
+/// [`SshSite`] の呼び出しの種別。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SiteCall {
+    Release,
+    FetchOutputs,
+}
+
+/// [`SITE_CALLS_FILE`] の 1 行（付記 I15 (2)）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SiteCallRow {
+    pub schema: String,
+    pub seq: u64,
+    pub call: SiteCall,
+    pub job_id: String,
+    pub argv: Vec<String>,
+    pub started_utc: String,
+    pub finished_utc: String,
+    pub exit: Option<i32>,
+    pub outcome: CallOutcome,
+    pub stdout_sha256: String,
+    pub stdout_bytes: u64,
+}
+
+/// cluster 上の測定 dir（`dirname(spec.payload.script)`）を検査して返す。絶対 path・`..` と空要素なし・
+/// 文字種 `[A-Za-z0-9._/-]`・basename が `measurement_id`。
+pub fn cluster_measurement_dir(script: &str, measurement_id: &str) -> Result<String, String> {
+    let bad = |why: &str| Err(format!("payload.script {script:?}: {why}"));
+    let Some(rest) = script.strip_prefix('/') else {
+        return bad("not an absolute path");
+    };
+    if !script
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b))
+    {
+        return bad("only [A-Za-z0-9._/-] is allowed");
+    }
+    let parts: Vec<&str> = rest.split('/').collect();
+    if parts
+        .iter()
+        .any(|c| c.is_empty() || *c == "." || *c == "..")
+    {
+        return bad("has an empty, '.' or '..' component");
+    }
+    let [dirs @ .., _file] = parts.as_slice() else {
+        return bad("has no directory");
+    };
+    match dirs.last() {
+        Some(base) if *base == measurement_id => Ok(format!("/{}", dirs.join("/"))),
+        _ => bad(&format!(
+            "the directory basename must be the measurement_id {measurement_id:?}"
+        )),
+    }
+}
+
+/// 実 cluster の [`super::entry::Site`]（付記 I15 (2)）。`release` は `touch -- <dir>/release/<job_id>`、
+/// `fetch_outputs` は `cat -- <dir>/out/<job_id>/out.bin`。argv は [`SshPbs`] と同じ ssh で、全体 timeout を持つ。
+/// 呼び出しごとに [`SITE_CALLS_FILE`] へ 1 行を追記する。qdel 等・`<dir>` の外への書き込みは持たない。
+pub struct SshSite {
+    ssh: SshPbs,
+    dir: String,
+    calls: PathBuf,
+}
+
+impl SshSite {
+    /// `script`・`measurement_id` は spec の値。`calls` は trial dir の [`SITE_CALLS_FILE`]。
+    pub fn new(
+        cluster: &str,
+        timeout: Duration,
+        script: &str,
+        measurement_id: &str,
+        calls: PathBuf,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            ssh: SshPbs::new(cluster, timeout)?,
+            dir: cluster_measurement_dir(script, measurement_id)?,
+            calls,
+        })
+    }
+
+    /// 起動する ssh を差し替える（試験の stub）。
+    pub fn with_program(mut self, program: impl Into<PathBuf>) -> Self {
+        self.ssh = self.ssh.with_program(program);
+        self
+    }
+
+    /// 待ちの時計を差し替える（試験で timeout を出来事で発火させる）。
+    pub fn with_timer(mut self, timer: Arc<dyn CallTimer>) -> Self {
+        self.ssh = self.ssh.with_timer(timer);
+        self
+    }
+
+    /// cluster 上の測定 dir（検査済み）。
+    pub fn dir(&self) -> &str {
+        &self.dir
+    }
+
+    fn call(
+        &self,
+        call: SiteCall,
+        job_id: &str,
+        remote: Vec<String>,
+    ) -> std::io::Result<(CallOutcome, Vec<u8>, String)> {
+        use std::io::Write as _;
+        let argv = self.ssh.ssh_argv(&remote);
+        let r = run_bounded_bytes(&argv, self.ssh.timeout, self.ssh.timer.as_ref());
+        let outcome = match (&r.spawn_error, r.status) {
+            (Some(_), _) => CallOutcome::SpawnFailed,
+            (None, None) => CallOutcome::Timeout,
+            (None, Some(s)) if s.success() => CallOutcome::Ok,
+            (None, Some(_)) => CallOutcome::NonZero,
+        };
+        let seq = std::fs::read_to_string(&self.calls)
+            .map_or(0, |t| t.lines().filter(|l| !l.trim().is_empty()).count())
+            as u64
+            + 1;
+        let row = SiteCallRow {
+            schema: SITE_CALL_SCHEMA.into(),
+            seq,
+            call,
+            job_id: job_id.into(),
+            argv,
+            started_utc: r.started_utc,
+            finished_utc: r.finished_utc,
+            exit: r.status.and_then(|s| s.code()),
+            outcome,
+            stdout_sha256: sha256_hex(&r.stdout),
+            stdout_bytes: r.stdout.len() as u64,
+        };
+        let mut line = serde_json::to_vec(&row).map_err(std::io::Error::other)?;
+        line.push(b'\n');
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.calls)?;
+        f.write_all(&line)?;
+        f.sync_data()?;
+        let why = r
+            .spawn_error
+            .unwrap_or_else(|| String::from_utf8_lossy(&r.stderr).trim().to_string());
+        Ok((outcome, r.stdout, why))
+    }
+}
+
+fn sha256_hex(b: &[u8]) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(b)
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect()
+}
+
+fn site_job(job_id: &str) -> std::io::Result<()> {
+    if is_scheduler_job_id(job_id) {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "not a PBS job id {job_id:?} (not started)"
+        )))
+    }
+}
+
+impl super::entry::Site for SshSite {
+    fn release(&self, job_id: &str, _reason: &str) -> std::io::Result<()> {
+        site_job(job_id)?;
+        let marker = format!("{}/release/{job_id}", self.dir);
+        let (outcome, _, why) = self.call(
+            SiteCall::Release,
+            job_id,
+            vec!["touch".into(), "--".into(), marker],
+        )?;
+        match outcome {
+            CallOutcome::Ok => Ok(()),
+            o => Err(std::io::Error::other(format!(
+                "release {job_id}: {o:?}: {why}"
+            ))),
+        }
+    }
+
+    fn fetch_outputs(&self, job_id: &str, dest: &std::path::Path) -> std::io::Result<Vec<String>> {
+        use std::io::Write as _;
+        site_job(job_id)?;
+        let src = format!("{}/out/{job_id}/out.bin", self.dir);
+        let (outcome, out, why) = self.call(
+            SiteCall::FetchOutputs,
+            job_id,
+            vec!["cat".into(), "--".into(), src],
+        )?;
+        if outcome != CallOutcome::Ok {
+            return Err(std::io::Error::other(format!(
+                "fetch_outputs {job_id}: {outcome:?}: {why}"
+            )));
+        }
+        if out.is_empty() || out.len() > FETCH_LIMIT_BYTES {
+            return Err(std::io::Error::other(format!(
+                "fetch_outputs {job_id}: {} bytes (expected 1..={FETCH_LIMIT_BYTES})",
+                out.len()
+            )));
+        }
+        let mut f = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(dest.join("out.bin"))?;
+        f.write_all(&out)?;
+        f.sync_all()?;
+        Ok(vec!["out.bin".into()])
     }
 }
 

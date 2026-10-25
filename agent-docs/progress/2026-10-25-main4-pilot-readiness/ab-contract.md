@@ -25,7 +25,11 @@ WorkUnit `ab-contract`。基準は `$CELERIS_WU_BASE`。成果は `docs/ops/mlsy
 - 実装: `crates/campaign/src/{harness_exec,celeris_exec,final_accounting,export}.rs`、`crates/task-worker/src/claude_code.rs`（`usage_with_cost`・`--disallowedTools`）、`crates/task-dispatch/src/dispatcher/decision_log_wire.rs`（`list_cost_usd = u.cost_usd`、cash は欠測）、`crates/task-core/src/pricing.rs`、ADR 2026-10-20-mlsys-main2-fixes D1。
 
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
-検査結果は下の「検査」節に記録する。
+- `bash scripts/dev/test-affected.sh` → exit 0（docs のみの変更で Rust 試験の対象なし。doc-link 検査の self-test ok）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/check-doc-links.sh` → exit 0、`bash scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0、`sh scripts/dev/progress-index.sh --check` → exit 0
+- 範囲: `git diff --name-only $CELERIS_WU_BASE` は文書と本ファイルの 2 file だけ
 
 ## 未解決
 - 文書の未整合 U1〜U11 は実装していない（WU の範囲外）。特に U6（`initial_info` が mlsys-main-1 の材料 hash のままで、lock の材料 hash と違う）は final-freeze で campaign hash を作り直さないと checker が違反にする。

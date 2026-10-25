@@ -456,6 +456,24 @@ impl RawWriter {
         Ok(Self::new(dir, epoch, pin))
     }
 
+    /// 同じ測定 dir に trial を足すために開く（1 起動 = 1 trial、付記 I14 (1)）。spec pin が要り、`run.json` は
+    /// まだ無いこと（`run.json` は全 trial の後に [`RawWriter::write_run`] が 1 回だけ書く）。
+    pub fn append(dir: &Path, epoch: &str) -> io::Result<Self> {
+        let pin = read_pin(dir)?;
+        if dir.join(RUN_FILE).exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "{}: the measurement is closed",
+                    dir.join(RUN_FILE).display()
+                ),
+            ));
+        }
+        drop_torn_tail(&dir.join(EVENTS_FILE))?;
+        drop_torn_tail(&dir.join(TRIALS_FILE))?;
+        Ok(Self::new(dir, epoch, pin))
+    }
+
     /// 再収集のために開く。`run.json` が本 raw の版であること（旧 raw を読み替えない）。
     pub fn reopen(dir: &Path, epoch: &str) -> io::Result<Self> {
         let pin = read_pin(dir)?;

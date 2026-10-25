@@ -9,6 +9,11 @@
 //!   cargo test -p celeris-campaign --test dagbench_harness -- --exact run_from_env --ignored --nocapture
 //! ```
 //! 故障条件は camp-1 の点だけ（制御 process は runner が起こす子で、この binary の `child_control`）。
+//!
+//! recovery 比較（ADR 2026-10-25-recovery-scheduler-backend 付記 I14 (1)）は同じ入口に backend と条件を足す。
+//! `DAGBENCH_BACKEND=ext-sim|pbs`（既定 ext-sim）、`pbs` では `DAGBENCH_RECOVERY=normal|a2`・`DAGBENCH_PBS_SPEC`・
+//! `DAGBENCH_PBS_STUDY`・`DAGBENCH_PBS_STATE`（偽 cluster の state dir）が必須、`DAGBENCH_PBS_TRANSPORT=file` だけを受ける。
+//! 1 起動 = 1 trial（arm × condition）で、測定専用 controller は子 process（この binary の `pbs_control_child`）。
 //! 出力: `<out>/run.json` ほかの raw 一式と `<out>/metrics/control_measured_metrics.{json,tsv}`。
 #[path = "../../task-api/tests/common/mod.rs"]
 mod api_common;
@@ -20,6 +25,16 @@ use std::{
     time::Duration,
 };
 
+use celeris_campaign::dagbench::pbs::{
+    backend::{Arm, RecoverySpec, SPEC_PIN},
+    entry::{
+        BackendFlag, BaselineController, Condition, RECOVERY_POINT, RECOVERY_SCENARIO, Study,
+        create_measurement, run_spec,
+    },
+    file_pbs::{FileClock, FilePbs},
+    proc::{self as pbs_proc, ChildConfig, ProcReport, ProcTrial},
+    raw::RawWriter,
+};
 use celeris_campaign::{
     celeris_exec::{HttpResponse, Transport},
     dagbench::{
@@ -37,6 +52,9 @@ use celeris_campaign::{
 };
 use serde_json::{Value, json};
 use task_core::TaskStore;
+
+#[path = "common/dagbench_pbs_controller.rs"]
+mod pbs_controller;
 
 #[path = "common/dagbench_durable.rs"]
 mod durable;
@@ -60,6 +78,24 @@ pub struct Params {
     pub out: PathBuf,
     #[serde(default)]
     pub grading: Option<Grading>,
+    /// 外部 backend（既定 ext-sim。付記 I14 (1)）。
+    #[serde(default)]
+    pub backend: BackendFlag,
+    /// `pbs` の recovery 条件（`ext-sim` では設定しない）。
+    #[serde(default)]
+    pub recovery: Option<Condition>,
+    #[serde(default)]
+    pub pbs: Option<PbsParams>,
+}
+
+/// `pbs` backend の入力（`DAGBENCH_PBS_*`）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PbsParams {
+    pub spec: PathBuf,
+    pub study: PathBuf,
+    /// `file` だけ（`ssh` は人の承認前なので拒否）。
+    pub transport: String,
+    pub state: PathBuf,
 }
 
 impl Params {
@@ -314,8 +350,17 @@ fn run_faulted(p: &Params, s: &RunSpec, fault: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 入口本体: 実行 → 指標再生成（raw だけから）。
+/// 入口本体: 実行 → 指標再生成（raw だけから）。`pbs` は [`run_pbs`]（1 trial、再集計しない）。
 pub fn run(p: &Params) -> Result<Metrics, String> {
+    if p.backend != BackendFlag::ExtSim {
+        return Err("the pbs backend runs one trial through run_pbs".into());
+    }
+    if p.recovery.is_some() || p.pbs.is_some() {
+        return Err(
+            "DAGBENCH_RECOVERY / DAGBENCH_PBS_* need DAGBENCH_BACKEND=pbs (ext-sim faults use DAGBENCH_FAULT)"
+                .into(),
+        );
+    }
     if p.out.join("run.json").exists() {
         return Err("output already contains a run; choose a fresh directory".into());
     }
@@ -351,12 +396,141 @@ fn env(n: &str) -> Option<String> {
     std::env::var(n).ok().filter(|v| !v.is_empty())
 }
 
+/// `pbs` の 1 trial（arm × condition）。測定 dir は両 arm・両条件で共通で、trial dir は新規だけ。
+/// 測定専用 controller は子 process で、親が独立に保存を確かめてから A2 ではその子だけを止める（付記 I14 (3)）。
+pub fn run_pbs(p: &Params) -> Result<ProcReport, String> {
+    if p.backend != BackendFlag::Pbs {
+        return Err("run_pbs needs DAGBENCH_BACKEND=pbs".into());
+    }
+    let condition = p
+        .recovery
+        .ok_or("DAGBENCH_RECOVERY=normal|a2 is required with pbs")?;
+    let pbs = p.pbs.as_ref().ok_or(
+        "DAGBENCH_PBS_SPEC / DAGBENCH_PBS_STUDY / DAGBENCH_PBS_STATE are required with pbs",
+    )?;
+    if pbs.transport != "file" {
+        return Err(format!(
+            "DAGBENCH_PBS_TRANSPORT={} is not accepted (file only; ssh needs human approval)",
+            pbs.transport
+        ));
+    }
+    if p.scenario != RECOVERY_SCENARIO || p.point != RECOVERY_POINT {
+        return Err(format!(
+            "pbs runs scenario {RECOVERY_SCENARIO} at point {RECOVERY_POINT}"
+        ));
+    }
+    if p.fault.is_some() || p.grading.is_some() {
+        return Err(
+            "pbs does not take DAGBENCH_FAULT / DAGBENCH_GRADING (the grader is entry::grade)"
+                .into(),
+        );
+    }
+    let arm = match p.arm.as_str() {
+        "baseline" => Arm::Baseline,
+        "celeris" => Arm::Celeris,
+        other => return Err(format!("unknown arm {other} (baseline|celeris)")),
+    };
+    fs::create_dir_all(&p.out).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&pbs.state).map_err(|e| e.to_string())?;
+    let dir = fs::canonicalize(&p.out).map_err(|e| e.to_string())?;
+    let state = fs::canonicalize(&pbs.state).map_err(|e| e.to_string())?;
+    if state.starts_with(&dir) || dir.starts_with(&state) {
+        return Err("DAGBENCH_PBS_STATE must be outside the measurement dir".into());
+    }
+    let spec = RecoverySpec::parse(&fs::read_to_string(&pbs.spec).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let study: Study = serde_json::from_slice(&fs::read(&pbs.study).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let file = Arc::new(FilePbs::open(&state).map_err(|e| e.to_string())?);
+    let clock = Arc::new(FileClock::open(&state).map_err(|e| e.to_string())?);
+    let epoch = format!("runner-{}-{}", arm.as_str(), condition.as_str());
+    let mut raw = if dir.join(SPEC_PIN).exists() {
+        // 同じ spec の pin であること（別 spec なら PbsExt::open が拒否する）。
+        celeris_campaign::dagbench::pbs::backend::PbsExt::open(
+            &dir,
+            spec.clone(),
+            Arm::Baseline,
+            "pin",
+            &epoch,
+            file.clone(),
+            clock.clone(),
+        )
+        .map_err(|e| e.to_string())?;
+        RawWriter::append(&dir, &epoch).map_err(|e| e.to_string())?
+    } else {
+        create_measurement(&dir, &spec, file, clock, &epoch).map_err(|e| e.to_string())?
+    };
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let child = move || {
+        let mut c = std::process::Command::new(&exe);
+        c.args([
+            "--exact",
+            "pbs_control_child",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env_remove(CHILD_ENV);
+        c
+    };
+    ProcTrial {
+        dir: &dir,
+        spec: &spec,
+        spec_path: &fs::canonicalize(&pbs.spec).map_err(|e| e.to_string())?,
+        study: &study,
+        study_path: &fs::canonicalize(&pbs.study).map_err(|e| e.to_string())?,
+        arm,
+        condition,
+        state: &state,
+        params: serde_json::to_value(p).map_err(|e| e.to_string())?,
+        child: &child,
+        read_saved: &pbs_controller::read_saved,
+    }
+    .run(&mut raw)
+}
+
+/// `pbs` の測定専用 controller（子）の入口。runner が `DAGBENCH_PBS_CHILD` に `ChildConfig` を入れて起こしたときだけ動く。
+#[test]
+fn pbs_control_child() {
+    let Ok(cfg) = std::env::var(pbs_proc::CHILD_ENV) else {
+        return;
+    };
+    let cfg: ChildConfig = serde_json::from_str(&cfg).unwrap();
+    let spec = RecoverySpec::parse(&fs::read_to_string(&cfg.spec_path).unwrap()).unwrap();
+    let rs = run_spec(&spec).unwrap();
+    let r = match cfg.arm {
+        Arm::Baseline => {
+            pbs_proc::child_trial(&cfg, &mut BaselineController::new(rs, &cfg.trial_dir))
+        }
+        Arm::Celeris => pbs_proc::child_trial(
+            &cfg,
+            &mut pbs_controller::CelerisChildController {
+                spec: rs,
+                dir: cfg.trial_dir.clone(),
+            },
+        ),
+    };
+    r.unwrap_or_else(|e| panic!("pbs controller failed: {e}"));
+}
+
 /// 環境変数で指定する反復実行入口（`--ignored`）。
 #[test]
 #[ignore = "iterative entry: set DAGBENCH_* (see the module doc)"]
 fn run_from_env() {
     let need = |n: &str| env(n).unwrap_or_else(|| panic!("{n} is required"));
+    let backend = BackendFlag::from_env_value(env("DAGBENCH_BACKEND").as_deref())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let recovery =
+        env("DAGBENCH_RECOVERY").map(|v| Condition::parse(&v).unwrap_or_else(|e| panic!("{e}")));
+    let pbs = (backend == BackendFlag::Pbs).then(|| PbsParams {
+        spec: PathBuf::from(need("DAGBENCH_PBS_SPEC")),
+        study: PathBuf::from(need("DAGBENCH_PBS_STUDY")),
+        transport: env("DAGBENCH_PBS_TRANSPORT").unwrap_or_else(|| "file".into()),
+        state: PathBuf::from(need("DAGBENCH_PBS_STATE")),
+    });
     let p = Params {
+        backend,
+        recovery,
+        pbs,
         arm: need("DAGBENCH_ARM"),
         scenario: need("DAGBENCH_SCENARIO"),
         point: need("DAGBENCH_POINT"),
@@ -367,6 +541,15 @@ fn run_from_env() {
             serde_json::from_slice(&fs::read(path).expect("grading config")).expect("Grading JSON")
         }),
     };
+    if p.backend == BackendFlag::Pbs {
+        let r = run_pbs(&p).unwrap_or_else(|e| panic!("{e}"));
+        println!(
+            "{}",
+            json!({"logical_job_id": r.logical_job_id, "job_id": r.job_id, "job_ref": r.job_ref,
+                "binding": r.binding, "saved_wait": r.saved_wait, "controllers": r.controllers, "a2": r.a2})
+        );
+        return;
+    }
     let m = run(&p).unwrap_or_else(|e| panic!("{e}"));
     println!("{}", serde_json::to_string_pretty(&m).unwrap());
 }
@@ -380,6 +563,9 @@ fn params(arm: &str, point: &str, fault: Option<&str>, out: &Path) -> Params {
         seed: None,
         fault: fault.map(String::from),
         out: out.join(format!("{arm}-{point}-{}", fault.unwrap_or("normal"))),
+        backend: BackendFlag::ExtSim,
+        recovery: None,
+        pbs: None,
     }
 }
 
@@ -826,4 +1012,385 @@ fn logical_budget_stop_survives_controller_restart() {
             assert_eq!(compute(&p.out).unwrap().completed.campaigns, 0);
         }
     }
+}
+
+// ---- recovery 比較: PBS backend（付記 I14）。無 LLM・無実 job の file 永続の偽 PBS での決定的試験 ----
+
+/// 偽 PBS の測定一式（spec・study・測定 dir・偽 cluster の state dir は測定 dir の外）。
+struct PbsSetup {
+    root: tempfile::TempDir,
+}
+
+impl PbsSetup {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let output_sha: String = <sha2::Sha256 as sha2::Digest>::digest(
+            celeris_campaign::dagbench::pbs::file_pbs::DEFAULT_OUTPUT.as_bytes(),
+        )
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+        let spec = json!({
+            "measurement_id": "rcv-harness-1",
+            "scheduler": "pbs",
+            "cluster": "sirius",
+            "owner": "rmaeda",
+            "queue": "gen",
+            "account": "NBBG",
+            "resources": {"select": "1:ncpus=24:mem=124gb:ngpus=1", "place": "exclhost", "walltime_secs": 300},
+            "rerunnable": false,
+            "payload": {
+                "script": "/work/NBB/rmaeda/recovery/job.sh",
+                "script_sha256": "a".repeat(64),
+                "input_sha256": "b".repeat(64),
+                "expected_output_sha256": output_sha
+            },
+            "grader": {"binary_sha256": "d".repeat(64), "version": "g1"},
+            "env": {"modules": ["gcc/13"], "env_sha256": "e".repeat(64)},
+            "limits": {
+                "external_slots": 1, "worker_slots": 1, "poll_secs": 30, "trial_deadline_secs": 1800,
+                "ssh_timeout_secs": 60, "max_jobs": 4, "workload_attempts": 1
+            },
+            "conditions": ["normal", "a2"],
+            "seed": 17,
+            "rep": 1
+        });
+        let study = json!({
+            "pins": {
+                "campaign_id": "recovery-pbs-harness",
+                "manifest_sha256": "f".repeat(64),
+                "case_sha256": "1".repeat(64),
+                "source": "agent-platform@test",
+                "binary_sha256": "2".repeat(64)
+            },
+            "problem_id": "rcv",
+            "trial_no": 1
+        });
+        fs::write(root.path().join("spec.json"), spec.to_string()).unwrap();
+        fs::write(root.path().join("study.json"), study.to_string()).unwrap();
+        Self { root }
+    }
+
+    fn out(&self) -> PathBuf {
+        self.root.path().join("measure")
+    }
+
+    fn state(&self) -> PathBuf {
+        self.root.path().join("fake-pbs")
+    }
+
+    fn params(&self, arm: &str, cond: Condition) -> Params {
+        Params {
+            arm: arm.into(),
+            scenario: RECOVERY_SCENARIO.into(),
+            point: RECOVERY_POINT.into(),
+            seed: None,
+            fault: None,
+            out: self.out(),
+            grading: None,
+            backend: BackendFlag::Pbs,
+            recovery: Some(cond),
+            pbs: Some(PbsParams {
+                spec: self.root.path().join("spec.json"),
+                study: self.root.path().join("study.json"),
+                transport: "file".into(),
+                state: self.state(),
+            }),
+        }
+    }
+
+    fn pbs(&self) -> FilePbs {
+        FilePbs::open(&self.state()).unwrap()
+    }
+}
+
+fn barrier_names(trial_dir: &Path) -> Vec<String> {
+    celeris_campaign::dagbench::process::read_events(&trial_dir.join("process-events.jsonl"))
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "barrier")
+        .map(|e| e["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// 1 trial を流し、両条件に共通の性質を確かめる: 物理 qsub 1・消費 1・保存済み Waiting の job と消費 job_ref の一致・
+/// 親の独立した読み直し（durable-wait.json の hash）・独立 grade の合格。
+fn pbs_trial(s: &PbsSetup, arm: &str, cond: Condition) -> ProcReport {
+    use celeris_campaign::dagbench::pbs::{backend::CONSUMED_LEDGER, raw::TrialStatus};
+    let before = s.pbs().counts().unwrap().qsub;
+    let r = run_pbs(&s.params(arm, cond)).unwrap_or_else(|e| panic!("{arm}/{cond:?}: {e}"));
+    let c = s.pbs().counts().unwrap();
+    assert_eq!(c.qsub, before + 1, "{arm}/{cond:?}: one physical qsub");
+    assert_eq!(
+        c.find_by_marker, 0,
+        "{arm}/{cond:?}: no reconciliation needed"
+    );
+    assert_eq!(
+        r.binding.status,
+        TrialStatus::ValidatedCompleted,
+        "{arm}/{cond:?}"
+    );
+    assert_eq!(r.job_ref, format!("pbs:sirius:{}", r.job_id));
+    assert_eq!(r.binding.job_ref.as_deref(), Some(r.job_ref.as_str()));
+    assert_eq!(
+        r.saved_wait.job_id, r.job_id,
+        "saved Waiting holds the submitted job"
+    );
+    assert_eq!(
+        r.saved_wait.source,
+        if arm == "baseline" {
+            "state.json"
+        } else {
+            "sqlite_ro"
+        }
+    );
+    if arm == "celeris" {
+        assert!(r.saved_wait.wait_id.is_some(), "cluster_job_waits row");
+    }
+    let consumed: Vec<Value> = fs::read_to_string(s.out().join(CONSUMED_LEDGER))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .filter(|row| {
+            row["logical_job_id"] == json!(r.logical_job_id) && row["job_ref"] == json!(r.job_ref)
+        })
+        .collect();
+    assert_eq!(
+        consumed.len(),
+        1,
+        "{arm}/{cond:?}: the job is consumed once"
+    );
+    let trial_dir = s
+        .out()
+        .canonicalize()
+        .unwrap()
+        .join("trials")
+        .join(format!("{arm}-{}", cond.as_str()));
+    let saved = fs::read(trial_dir.join(pbs_proc::DURABLE_WAIT_FILE)).unwrap();
+    let saved_sha: String = <sha2::Sha256 as sha2::Digest>::digest(&saved)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let events =
+        celeris_campaign::dagbench::process::read_events(&trial_dir.join("process-events.jsonl"))
+            .unwrap();
+    let wait_saved = events
+        .iter()
+        .find(|e| e["kind"] == "barrier" && e["name"] == "wait_saved")
+        .expect("wait_saved barrier");
+    assert_eq!(wait_saved["sha256"], json!(saved_sha));
+    assert_eq!(wait_saved["job_id"], json!(r.job_id));
+    let grade: Value =
+        serde_json::from_slice(&fs::read(trial_dir.join("grade.json")).unwrap()).unwrap();
+    assert_eq!(grade["passed"], json!(true), "independent grade");
+    // 物理 qsub は最初の controller の process から（runner は投入しない）。
+    let calls = s.pbs().calls().unwrap();
+    let qsub_pids: Vec<u64> = calls
+        .iter()
+        .filter(|c| c["call"] == "qsub")
+        .map(|c| c["pid"].as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        qsub_pids.last().copied(),
+        Some(u64::from(r.controllers[0].pid))
+    );
+    assert_ne!(
+        r.controllers[0].pid,
+        std::process::id(),
+        "controller is a separate process"
+    );
+    r
+}
+
+fn assert_normal(s: &PbsSetup, arm: &str, r: &ProcReport) {
+    let trial_dir = s
+        .out()
+        .canonicalize()
+        .unwrap()
+        .join("trials")
+        .join(format!("{arm}-normal"));
+    assert_eq!(
+        barrier_names(&trial_dir),
+        ["wait_saved", "released", "controller_exited"],
+        "{arm}"
+    );
+    assert!(r.a2.is_none());
+    assert_eq!(
+        r.controllers.len(),
+        1,
+        "normal does not stop the controller"
+    );
+    assert_eq!(r.controllers[0].exit_code, Some(0));
+    assert!(!r.controllers[0].killed_by_runner);
+}
+
+fn assert_a2(s: &PbsSetup, arm: &str, r: &ProcReport) {
+    let trial_dir = s
+        .out()
+        .canonicalize()
+        .unwrap()
+        .join("trials")
+        .join(format!("{arm}-a2"));
+    assert_eq!(
+        barrier_names(&trial_dir),
+        [
+            "wait_saved",
+            "controller_killed",
+            "released",
+            "observed_finished_while_stopped",
+            "controller_resumed",
+            "controller_exited"
+        ],
+        "{arm}"
+    );
+    let a2 = r.a2.clone().expect("a2 evidence");
+    assert_eq!(a2.job_id, r.job_id);
+    assert_eq!(
+        a2.consumed_job_ref,
+        format!("pbs:sirius:{}", a2.saved_wait.job_id),
+        "same job as the saved Waiting"
+    );
+    assert_eq!(a2.exit_signal, Some(9));
+    assert_eq!(a2.killed_pid, r.controllers[0].pid);
+    assert!(r.controllers[0].killed_by_runner);
+    assert_eq!(r.controllers.len(), 2);
+    assert_ne!(
+        r.controllers[1].pid, r.controllers[0].pid,
+        "resumed in a new process"
+    );
+    assert_eq!(r.controllers[1].exit_code, Some(0));
+    assert!(
+        !a2.stopped_qstat_seqs.is_empty(),
+        "scheduler observed while stopped"
+    );
+    assert_eq!(
+        a2.intent_rows_before_stop, a2.intent_rows_after_resume,
+        "no new submit"
+    );
+    // 停止中の照会は runner（この process）が行い、最後の原票は F。
+    let calls = s.pbs().calls().unwrap();
+    assert!(
+        calls
+            .iter()
+            .any(|c| c["call"] == "qstat_full" && c["pid"] == json!(std::process::id())),
+        "runner queried while the controller was stopped"
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| c["call"] == "qstat_full" && c["pid"] == json!(r.controllers[1].pid)),
+        "the resumed controller polled the same job"
+    );
+    let events: Vec<Value> = fs::read_to_string(s.out().join("scheduler-events.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let last = a2.stopped_qstat_seqs.last().unwrap();
+    let ev = events.iter().find(|e| e["seq"] == json!(last)).unwrap();
+    let text = fs::read_to_string(s.out().join(ev["file"].as_str().unwrap())).unwrap();
+    assert!(text.contains(&format!("Job Id: {}", r.job_id)), "{text}");
+    assert!(text.contains("job_state = F"), "{text}");
+    let file: Value =
+        serde_json::from_slice(&fs::read(trial_dir.join("a2.json")).unwrap()).unwrap();
+    assert_eq!(file["schema"], json!("celeris.recovery-a2/1"));
+    assert_eq!(file["job_id"], json!(r.job_id));
+}
+
+#[test]
+fn harness_pbs_baseline_normal_runs_in_a_separate_controller_process() {
+    let s = PbsSetup::new();
+    let r = pbs_trial(&s, "baseline", Condition::Normal);
+    assert_normal(&s, "baseline", &r);
+}
+
+#[test]
+fn harness_pbs_celeris_normal_runs_in_a_separate_controller_process() {
+    let s = PbsSetup::new();
+    let r = pbs_trial(&s, "celeris", Condition::Normal);
+    assert_normal(&s, "celeris", &r);
+}
+
+#[test]
+fn harness_pbs_baseline_a2_kills_controller_and_resumes_the_same_job() {
+    let s = PbsSetup::new();
+    let r = pbs_trial(&s, "baseline", Condition::A2);
+    assert_a2(&s, "baseline", &r);
+}
+
+#[test]
+fn harness_pbs_celeris_a2_kills_controller_and_resumes_the_same_job() {
+    let s = PbsSetup::new();
+    let r = pbs_trial(&s, "celeris", Condition::A2);
+    assert_a2(&s, "celeris", &r);
+}
+
+/// 両 arm × normal/A2 を同じ測定 dir に足していく（1 起動 = 1 trial）。物理 qsub 4・別々の job、raw の validator が受ける。
+/// 同じ trial の再実行は上書きせず拒否する。
+#[test]
+fn harness_pbs_both_arms_and_conditions_share_one_measurement() {
+    let s = PbsSetup::new();
+    let mut jobs = std::collections::BTreeSet::new();
+    for arm in ["baseline", "celeris"] {
+        for cond in [Condition::Normal, Condition::A2] {
+            let r = pbs_trial(&s, arm, cond);
+            match cond {
+                Condition::Normal => assert_normal(&s, arm, &r),
+                Condition::A2 => assert_a2(&s, arm, &r),
+            }
+            assert!(
+                jobs.insert(r.job_id.clone()),
+                "arms/conditions do not share a job"
+            );
+        }
+    }
+    assert_eq!(s.pbs().counts().unwrap().qsub, 4);
+    let again = run_pbs(&s.params("baseline", Condition::A2)).expect_err("trial dir exists");
+    assert!(again.contains("already exists"), "{again}");
+    assert_eq!(
+        s.pbs().counts().unwrap().qsub,
+        4,
+        "a refused trial does not submit"
+    );
+    let pins: celeris_campaign::dagbench::pbs::raw::StudyPins = serde_json::from_value(
+        serde_json::from_slice::<Value>(&fs::read(s.root.path().join("study.json")).unwrap())
+            .unwrap()["pins"]
+            .clone(),
+    )
+    .unwrap();
+    let out = s.out().canonicalize().unwrap();
+    RawWriter::append(&out, "close")
+        .unwrap()
+        .write_run(pins)
+        .unwrap();
+    let report = celeris_campaign::dagbench::pbs::raw::validate(&out).expect("valid raw");
+    assert_eq!(report.run.real_jobs, 4);
+    assert_eq!(report.trials.len(), 4);
+}
+
+/// 入口の拒否: ext-sim に recovery を付けない・pbs は file transport だけ・組合せ違いは Err（何も投入しない）。
+#[test]
+fn harness_pbs_entry_refuses_bad_combinations() {
+    let s = PbsSetup::new();
+    let mut p = s.params("baseline", Condition::Normal);
+    p.backend = BackendFlag::ExtSim;
+    assert!(run(&p).unwrap_err().contains("DAGBENCH_BACKEND=pbs"));
+    let mut p = s.params("baseline", Condition::Normal);
+    p.recovery = None;
+    assert!(run_pbs(&p).unwrap_err().contains("DAGBENCH_RECOVERY"));
+    let mut p = s.params("baseline", Condition::Normal);
+    if let Some(x) = p.pbs.as_mut() {
+        x.transport = "ssh".into();
+    }
+    assert!(run_pbs(&p).unwrap_err().contains("file only"));
+    let mut p = s.params("baseline", Condition::Normal);
+    p.scenario = "k2-mini".into();
+    assert!(run_pbs(&p).unwrap_err().contains("rcv-1"));
+    let mut p = s.params("baseline", Condition::Normal);
+    p.fault = Some("a2-restart-after-wait".into());
+    assert!(run_pbs(&p).unwrap_err().contains("DAGBENCH_FAULT"));
+    assert!(BackendFlag::from_env_value(Some("slurm")).is_err());
+    assert_eq!(BackendFlag::from_env_value(None), Ok(BackendFlag::ExtSim));
+    assert!(Condition::parse("a1").is_err());
+    assert_eq!(s.pbs().counts().unwrap().qsub, 0);
 }

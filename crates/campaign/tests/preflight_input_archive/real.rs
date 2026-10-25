@@ -49,8 +49,19 @@ fn real_archive_offline_audit() {
         grade_json(&s.inp.grade_cases_root),
     )
     .unwrap();
+    // 合成 raw の tgz（合成用の名前）を外し、実 case の名前（公開入力 v2）で実 archive を置く。
+    let real_input = c["inputs"][0]["name"]
+        .as_str()
+        .expect("input name")
+        .to_string();
+    let real_grader_archive = k4_grade_dir(&s.inp.grade_cases_root).join(&real_input);
     fs::remove_file(grader_archive(&s)).unwrap();
-    fs::copy(&archive, s.inp.inputs_src.as_ref().unwrap().join(K4_INPUT)).unwrap();
+    fs::remove_file(s.inp.inputs_src.as_ref().unwrap().join(K4_INPUT)).unwrap();
+    fs::copy(
+        &archive,
+        s.inp.inputs_src.as_ref().unwrap().join(&real_input),
+    )
+    .unwrap();
     // Isolate K4; K2 initial tree and host observations remain fixture-only.
     let ip = s
         .inp
@@ -188,19 +199,19 @@ fn real_archive_offline_audit() {
     cli("grade-all-valid-negative", grade_args(&bad), false);
     // Preserve the positive run while the rejection helper checks a fresh out.
     fs::rename(&out, s.dir.path().join("positive-out")).unwrap();
-    fs::remove_file(grader_archive(&s)).unwrap();
+    fs::remove_file(&real_grader_archive).unwrap();
     assert_rejected_before_run(&s, "missing next to the grade-case");
     fs::write(
         dest.join("preflight-missing.json"),
         serde_json::to_vec_pretty(&check(&s.inp, &host())).unwrap(),
     )
     .unwrap();
-    let public = s.inp.inputs_src.as_ref().unwrap().join(K4_INPUT);
+    let public = s.inp.inputs_src.as_ref().unwrap().join(&real_input);
     fs::remove_file(&public).unwrap();
     cli("stage-missing-negative", stage(), false);
     fs::write(&public, b"wrong sha").unwrap();
     cli("stage-sha-negative", stage(), false);
-    fs::write(grader_archive(&s), b"wrong sha").unwrap();
+    fs::write(&real_grader_archive, b"wrong sha").unwrap();
     fs::copy(&archive, &public).unwrap();
     assert_rejected_before_run(&s, "differs from the pinned");
     fs::write(
@@ -208,7 +219,7 @@ fn real_archive_offline_audit() {
         serde_json::to_vec_pretty(&check(&s.inp, &host())).unwrap(),
     )
     .unwrap();
-    fs::copy(&archive, grader_archive(&s)).unwrap();
+    fs::copy(&archive, &real_grader_archive).unwrap();
     let retained = dest.join("fixture");
     copy(s.dir.path(), &retained);
     let kept = s.dir.keep();

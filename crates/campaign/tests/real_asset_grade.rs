@@ -809,8 +809,8 @@ fn real_k4_raw_recompute_matches_the_grader() {
     assert!(tgz.is_file(), "raw missing: {}", tgz.display());
     assert_eq!(
         sha(&tgz),
-        "128057cf4016535941963fc4142ba424c05c65889905ca2bbcc190f6161077a1",
-        "raw hash が case.json の固定と違う"
+        "0671a85528b4a29a8f6fb5176986c178afb2174cb22e56b003c33ed5f2da3a1e",
+        "raw hash が case.json の固定と違う（公開入力 v2 main-v3-n2-43706-public2.tgz を渡す）"
     );
     let t = tempfile::tempdir().expect("tmp");
     // grader 側の写し: grade-case の隣に固定 tgz を置く（grader が自分で展開する）。

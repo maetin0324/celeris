@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """K3/K4 の grade-case/1（recompute）を原票 tgz から作る。固定入力の sha256 は原票の実 file から計算する。
-使い方: gen_recompute.py <main-43223.tgz> <main-v3-n2-43706.tgz> <grade-cases dir>
+使い方: gen_recompute.py <main-43223.tgz> <main-v3-n2-43706-public2.tgz> <grade-cases dir>
+
+- K4 は公開入力 v2（旧判定・集計の派生物を除いた archive。ADR 2026-10-25-k4-public-input-v2）を渡す。
+  `input_archive.path` は渡した tgz の basename になる。
 
 - `input_archive`: grader が自分で展開する固定入力 tgz（grade-case の隣に同名で置く。repo には置かず launcher の prepare が
   `--inputs-src` から写す。ADR 2026-10-23-k4-cells-validity-grading D3）。`pinned_raw`・metrics の path は展開先 `inputs/` 起点。

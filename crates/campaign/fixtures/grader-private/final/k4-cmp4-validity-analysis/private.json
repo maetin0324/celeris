@@ -35,7 +35,7 @@
     }
   ],
   "expected": {
-    "input": "main-v3-n2-43706.tgz",
+    "input": "main-v3-n2-43706-public2.tgz",
     "jobs": [
       43706
     ],

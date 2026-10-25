@@ -41,7 +41,8 @@ commit: 「campaign: K4 v2 の無 LLM 通しを script にし、独立負例と 
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - `sh crates/campaign/scripts/nollm-k4-v2.sh <public2.tgz> …/artifacts/k4-nollm-v2` → exit 0、15 case 全 ok、old assets unchanged True（64 files）、pin match True。
-- `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` の結果は下の「検査」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0、2645 tests run: 2645 passed、7 skipped。1 回目は範囲外の `celeris::routing_eval_run daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records` が偽 daemon の 401 で 1 件落ち、単独再実行（1 passed）と全体の再実行で通った（本件は crates/celeris に触れていない）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → ok。
 
 ## 未解決事項
 - 偽 Host・模擬 executor の通しで、実 launcher・daemon・cap-env・release 接続は pending のまま（測定開始の証拠ではない）。

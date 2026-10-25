@@ -43,6 +43,8 @@ Slurm 対応や複数クラスタ比較は今回含めない。認証・残枠�
 最初の接続確認は無 LLM の小さな決定的 job とし、baseline / celeris に同一 payload bytes、入力 hash、
 出力 hash 検査、grader binary/版、module/env、queue/account、select/place、walltime、poll/deadline を渡す。
 job は測定専用ディレクトリに固定入力のコピーと digest を出す。CPU stress・BenchFS の危険な既知 hang 再現はしない。
+短いjobが保存確認前に終了しないよう、両armで同じ完了解放barrierを使う。A2では親のcontroller終了確認後、
+normalでは親のwait保存確認後にobserverが解放する。期限付きの出来事待ちとし、解放時刻と理由を原票に残す。
 過去 K3 の解析結果を新 job の成果物として採点しない。独立 grader は新 job の出力と scheduler 原票を照合する。
 
 接続確認の上限契約（承認額ではない）:
@@ -87,6 +89,8 @@ JSONL は seq・UTC・observer の単調時計/epoch・identity・根拠参照�
 出力先は新規のみ。集計は raw から再生成し、旧 `celeris.dagbench-durable-raw/1` の論理秒を実秒と読み替えない。
 既存 `celeris.observed-jobs/1` と `celeris.submit-audit/1` は副記録としてそのまま結合し、collector 不一致を拒否する。
 新 raw の reader/validator が完成するまでは現行 metrics CLI に渡さない。
+実測指標も `celeris.dagbench-scheduler-metrics/1` に分離する。queue待ち・外部実行・停止・回収・採点の
+実時間を個別に出し、強制barrier待ちを自然なscheduler待ちとして解釈しない。CPU/RSSはcontrollerの観測範囲を明記する。
 
 独立採点成功と実行終了を分け、完遂は `validated_completed` のみ。
 qstat の `F/Exit_status=0` だけでは完遂にならず、原票・identity・成果物 hash・独立 grade の全てが必要。

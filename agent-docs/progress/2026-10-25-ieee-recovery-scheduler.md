@@ -87,7 +87,24 @@ result.json はP0-3と「測定identity・記録形式だけを合わせる」�
 ## 受入・必須検査
 
 提出時の HEAD で実行（最後の同期後。基準は `git merge-base HEAD main`）。
-結果は検査後に追記する。全workspace試験、release/verify/promote、実browser、外部ネットワーク試験、LLM、本番操作は行わない。
+以下は結果記録commit後にも同じコマンドで再確認する。ログは
+`/local/celeris/data/workspaces/01M5SRQ6DAEA8RMHFENY699T5B/artifacts/` の final-*.log。
+
+- 条件0（契約固定）: ADR D1–D5で再利用・PBS・両arm・identity/raw・unknown停止・所有権を固定。
+  `git diff --quiet $(git merge-base HEAD main) -- crates/ scripts/ docs/` → exit 0、既存実装/成果への差分なし。
+- 条件1（認可と照合）: `celerisctl knowledge get environment/clusters/sirius-job-submission.md`、
+  `celerisctl show 01M5SRJMB1CSGBYT028X0B67N2` → exit 0。出典/上限/期限不明/枠不足を上表に記載。
+  `ssh -O check -o BatchMode=yes sirius` → exit 255、借用接続なし（想定した不足の確認、検査不具合ではない）。
+- 条件2: `test -s agent-docs/adr/2026-10-25-recovery-scheduler-backend.md && test -s agent-docs/progress/2026-10-25-ieee-recovery-scheduler.md` → exit 0。
+- 条件3: `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0、全てok（ADR 293 files）。
+- `bash scripts/dev/test-affected.sh` → exit 0、docsのみでRust試験対象なし。
+  health: source-size失敗0（既存debt警告3、理由付き例外1）、architecture-map 726パス、
+  progress hash自己試験5項目、Python 38+1試験、doc-links自己試験が合格。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0、差分なし。
+- `git diff --check` → exit 0。
+
+全workspace試験、release/verify/promote、実browser、外部ネットワーク試験、LLM、本番操作は行わなかった。
 
 ## commit（件名）
 

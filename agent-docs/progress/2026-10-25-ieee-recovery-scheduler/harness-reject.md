@@ -43,7 +43,8 @@ commit: 「harness-process: close the child stdin only after SIGKILL so an immed
 |---|---|
 | `cargo test -p celeris-campaign --test dagbench_harness harness_pbs_reject_` | exit 0、5 passed |
 | `cargo test -p celeris-campaign --test dagbench_harness --test dagbench_pbs_e2e` | exit 0、harness 28 passed / 4 ignored、e2e 5 passed |
-| `bash scripts/dev/test-affected.sh` | TEST_AFFECTED |
+| `bash scripts/dev/test-affected.sh` | exit 0、2700 passed / 8 skipped（修正前は負荷下で A2 の 2 件が exit 101 で失敗 → 上の process.rs 修正） |
+| `cargo nextest run -p celeris-campaign --test dagbench_harness --test dagbench_pbs_e2e -E 'test(harness_pbs_) \| binary(dagbench_pbs_e2e)'` | exit 0、20 passed |
 | `cargo clippy --workspace -- -D warnings` | exit 0 |
 | `cargo fmt --all -- --check` | exit 0 |
 

@@ -376,3 +376,176 @@ I6 の実装（`pbs/raw.rs`）で、付記に書いていなかった形を次�
   `SubmitError::Unresolved` で停止する（照会のたびに同じ判定で、再投入はしない）。`human_resolution` 行は未実装で、
   人の解決の記録形式は実接続前に決める。lock は入口の process が持つ（IPC の独立 owner ではない）。
 - I5: spec の関数は `qsub_request`/`intent_spec`（arm・trial_key・logical job を取る）で、`observe::Expect` は作らない。
+
+### I14. 正式入口への接続・別 process 停止・raw 指標・拒否条件（2026-10-25、実装前）
+
+P0-3 の harness 段（unit harness-proc / harness-raw / harness-reject / harness-close）が実装する形を、実装前に固める。
+D1–D5 と I1–I13 は変えない（I12 の「in-process の incarnation 終了で A2 を表す」は、下の (3) で別 process の停止へ置き換える。
+I12 が実接続の段に残した `dagbench::process` への載せ替えをこの段で前倒しする）。実 ssh・qsub・network・LLM は使わない。
+
+#### (1) 同じ入口に backend と recovery 条件を足す
+
+入口は既存の `crates/campaign/tests/dagbench_harness.rs` の `run_from_env` → `run(&Params)` のまま。別入口は作らない。
+
+| env | 値 | 既定 | 意味 |
+|---|---|---|---|
+| `DAGBENCH_BACKEND` | `ext-sim` \| `pbs` | `ext-sim` | 外部 backend。未知の値は panic（入口の拒否） |
+| `DAGBENCH_RECOVERY` | `normal` \| `a2` | なし | `pbs` のときだけ必須。`ext-sim` で設定すれば拒否（故障は従来どおり `DAGBENCH_FAULT`） |
+| `DAGBENCH_PBS_SPEC` | `RecoverySpec` の JSON path | なし | `pbs` で必須（I5・I10 の spec。pin は測定 dir の `recovery-spec.json`） |
+| `DAGBENCH_PBS_STUDY` | `entry::Study` の JSON path | なし | `pbs` で必須（collector identity・StudyPins） |
+| `DAGBENCH_PBS_TRANSPORT` | `file` | `file` | `file` = 下の `FilePbs`。`ssh`（`SshPbs`）は人の承認前なので入口で拒否 |
+| `DAGBENCH_PBS_STATE` | dir | なし | `file` で必須。`FilePbs` の state dir（測定 dir の外。偽 cluster 側の真実） |
+
+- `Params` に `backend: BackendFlag`（`entry::BackendFlag` を `Deserialize` 可にして再利用、`#[serde(default)]` = `ExtSim`）と
+  `recovery: Option<Condition>`（`entry::Condition`）を足す。既存の `child_control` の cfg（`DAGBENCH_HARNESS_CHILD`）は
+  欄が増えるだけで読める。`ext-sim` の `run_normal`/`run_faulted`・既存 fault id（`a1-restart-after-accept`・
+  `a2-restart-after-wait`・`b-submit-response-lost`・`c-completion-duplicate`）・raw・metrics の挙動は変えない。
+- `pbs` の組合せ制約（違えば `run` が Err）: `DAGBENCH_SCENARIO=rcv-1`（`entry::RECOVERY_SCENARIO`、
+  `fixtures/dagbench/recovery-scenarios.json`）、`DAGBENCH_POINT=camp-1`、`DAGBENCH_FAULT` 無し、`DAGBENCH_GRADING` 無し
+  （採点は `entry::grade`）、`DAGBENCH_ARM=baseline|celeris`。
+- 1 回の起動 = 1 trial（arm × condition）。`DAGBENCH_OUT` は測定 dir（I10: 両 arm・両条件が同じ dir）。
+  `run.json` が無ければ `entry::create_measurement` で新規に作り、あれば `RawWriter::reopen` で開いて spec pin の一致を確かめる。
+  trial dir `trials/<arm>-<condition>` が既にあれば拒否（上書きしない。ext-sim の「`run.json` があれば拒否」は ext-sim のままで変えない）。
+  `run.json` は `RawWriter::create` が作成時に 1 回だけ書く形に変え、作成時に決まらない `real_jobs` は `RunMeta` から外して
+  (6) の再集計の出力へ移す（同じ測定 dir に trial を足すため。I11 の「収集後に 1 回」をこれで置き換える）。
+- `pbs` の `run` は (6) の `regenerate` を呼ばない（測定 dir に trial が足されていく途中なので）。trial の結果は
+  `TrialReport` を stdout に JSON で出す。再集計は別の ignored 入口 `regenerate_from_env`（(6)）。
+
+#### (2) process 間で共有する決定的な偽 PBS（`FilePbs`）
+
+- 置き場所: `crates/campaign/src/dagbench/pbs/file_pbs.rs`（`pbs/mod.rs` に `pub mod file_pbs;`）。
+  library に置く（controller child も runner も test binary の別 process から使うため。`FakePbs` と同じく `Origin::Synthetic`）。
+- API:
+  - `FilePbs::open(state: &Path) -> io::Result<FilePbs>`（無ければ作る。process ごとに開き直してよい）。
+  - `impl PbsTransport for FilePbs`（`qsub`・`qstat_full`・`find_by_marker`）と `impl entry::Site for FilePbs`
+    （`release`・`fetch_outputs`）。in-memory の状態は持たず、毎回 file を lock 内で読み直す。
+  - `FilePbs::counts() -> io::Result<FakeCounts>`（`transport::FakeCounts` を再利用）と `FilePbs::jobs()`（試験の assert 用。raw には使わない）。
+  - `FileClock::open(state)`（`impl IntentClock`。`clock.json` の値を lock 内で単調に進める。`sleep_until` は待たずに跳ぶ）。
+    sleep も busy loop もしない（ADR-0125・testing guide）。
+  - `FilePbsFaults`（`faults.json`、試験が起動前に書く）: `qsub_timeout: bool`、`qstat_outcome: Option<CallOutcome>`
+    （collector 障害）、`variable_list_trial_key: Option<String>`（原票の job/trial 不一致）、`forget_after_release: bool`
+    （履歴消失 = `Unknown Job Id`）、`output: Option<String>`（成果物の差し替え → grade 不合格）。
+- state dir の file（全て追記専用 JSONL、行ごとに sync、排他は `File::lock` の `pbs.lock`。末尾の壊れ行は `ext::drop_torn_tail` で捨てる）:
+  - `jobs.jsonl`（`celeris.file-pbs-job/1`）: `submitted {job_id, request: QsubRequest}` / `released {job_id}`。
+    job ID は `<4300+n>.sirius`（n = submitted 行の数 +1）で決定的。`R` は released 行まで、以後 `F`・`Exit_status = 0`。
+    原票の欄は `tests/dagbench_pbs_e2e.rs` の `Cluster::qstat_full` と同じ（そこから移す）。
+  - `calls.jsonl`（`celeris.file-pbs-call/1`）: 呼び出し 1 回 = 1 行 `{seq, call, argv, pid, outcome}`。
+    `pid` は呼んだ process（runner と controller の incarnation を区別する）。物理 qsub 数・照会数はこの file から数える。
+  - `outputs/<job_id>/out.bin`（`release` 時に作る。`fetch_outputs` が写す）。
+- `tests/dagbench_pbs_e2e.rs` の in-memory `Cluster` は `FilePbs` に置き換えて消す（同じ偽を 2 つ持たない）。
+  `transport.rs` の `FakePbs`（台本型、intent/backend の単体試験用）は別用途なので残す。
+
+#### (3) 親が独立に保存を確かめてから、自分の controller だけを止める
+
+新規 `crates/campaign/src/dagbench/pbs/proc.rs`。`entry::run_trial`（in-process の A2）は `proc::ProcTrial::run`（親）と
+`proc::child_trial`（子）に分けて置き換え、in-process の A2 停止（`Gate` の `on_stop`・drive future の破棄）は消す。
+`Controller`・`BaselineController`・`grade`・`open_ext`・`Study`・`RawWriter` は再利用する。
+`tests/dagbench_pbs_e2e.rs` の `CelerisController` は `tests/common/dagbench_pbs_controller.rs` へ移し、
+`dagbench_harness.rs` と `dagbench_pbs_e2e.rs` が `#[path]` で共有する（Celeris arm は dev-dependency の task-api router が要る）。
+
+子（測定専用 controller）:
+- 入口は `dagbench_harness.rs` の新しい `#[test] fn pbs_control_child`（env `DAGBENCH_PBS_CHILD` に `ChildConfig` の JSON。
+  無ければ即 return。`child_control` と同じ形）。`ChildConfig { params, spec_path, study_path, state, trial_dir, incarnation, condition: Option<Condition> }`。
+- transport は `RecordingTransport<FilePbs>`: 返った `PbsReply` を `trial_dir/replies-<incarnation>.jsonl` に 1 行ずつ sync で追記
+  （SIGKILL の後も親が読める。controller の memory に原票を置かない）。
+- `ChildGate`（`entry::Gate` の境界判定を流用）: job ID を受けた後の次の backend 呼び出しで、自分の保存先
+  （`Controller::saved_reader`）に job ID 付き Waiting があれば stdout に 1 行
+  `PBS_WAIT_SAVED {"logical_job_id","job_id","incarnation"}` を出し、stdin の 1 行を待つ（出来事待ち）。
+  `CONTINUE` で先へ進む（normal）。A2 では親は行を送らず SIGKILL する。子の申告は合図だけで、証拠にしない。
+- 再起動した incarnation 2 は `condition: None`（境界なし）で同じ `trial_dir`（`state.json` / `celeris.db`）・同じ測定 dir の
+  intent 台帳・消費台帳を開き直して完走し exit 0。
+
+親（runner = `run_from_env` の process、`proc::ProcTrial`）:
+1. `process::Supervisor::spawn(Role::Control, …)` で子を起こす（`OwnedProc`。`trial_dir/process-events.jsonl` の
+   `process::EventLog` に `process_started`）。起動直後に `/proc/<pid>/stat` の starttime（第 22 欄）を記録する。
+2. `OwnedProc::next_line` で `PBS_WAIT_SAVED` を待つ（上限 = spec の `trial_deadline_secs` の実時間。超えたら子を止めて Err）。
+3. 子と独立の接続で保存を読み直す: baseline は `trial_dir/state.json` を新しく open して読む。Celeris は
+   `rusqlite::Connection::open_with_flags(trial_dir/celeris.db, SQLITE_OPEN_READ_ONLY)` で
+   `SELECT wait_id, jobs_json, state FROM cluster_job_waits WHERE state = 'waiting'` を読み、`jobs_json` に job ID を含む行。
+   親は `SqliteStore::open`（書込み接続・migration）を使わない。関数は `proc::read_saved_wait(arm, trial_dir, job_id) -> io::Result<Option<SavedWait>>`
+   （`SavedWait { source: "state.json"|"sqlite_ro", wait_id: Option<String>, job_id, snapshot: Value }`）。
+   さらに intent 台帳の再生で同じ job ID が `accepted`/`reconciled` であること、`FilePbs` でなく raw 側の
+   `replies-1.jsonl` に同じ job の qsub 応答があることを確かめる。満たさなければ (5) で拒否。
+   確認した snapshot は `trial_dir/durable-wait.json`（新規作成）に書き、sha256 を barrier に残す。barrier `wait_saved`。
+4. normal: `Site::release(job_id)` → barrier `released` → 子の stdin に `CONTINUE` → 子の exit 0 を待つ。
+   A2: starttime を読み直して 1 と一致を確かめ（違えば signal を送らず Err）、`OwnedProc::kill("a2-wait-saved")`
+   （所有 `Child` への SIGKILL。PID 番号で signal を送る API は使わない）。`StopReport.exit_signal == Some(9)` を確かめ barrier
+   `controller_killed`。子は測定専用の process だけで、本番 daemon・SSH master・PBS server は対象外（D5）。
+5. A2 の停止中: 親が `Site::release` → barrier `released` → 親自身が開いた `FilePbs`（observer。子と別の file handle・別 pid）で
+   `qstat_full(job_id)` を `F` まで照会する（`FileClock` で poll 間隔を進める。上限は trial deadline）。返った原票は
+   `RawWriter::record_replies` で raw の `scheduler-events.jsonl` に入れ、その seq を barrier `observed_finished_while_stopped` に残す。
+   停止中に `F` の原票が取れなければ A2 不成立（(5)）。
+6. 同じ `trial_dir`・同じ測定 dir・`incarnation: 2` で子を spawn → barrier `controller_resumed` → exit 0 を待つ。
+7. 回収: `replies-1.jsonl`・`replies-2.jsonl` を raw に取り込み（順序は 1 → 停止中の親の照会 → 2。末尾の壊れ行は捨てる）、
+   `Site::fetch_outputs` → `entry::grade`（独立 grader）→ `RawWriter::collect_trial`。
+8. 重複の検出（両条件）: intent 台帳で同じ `submit_intent_id` の `sent` 行が 2 以上、または再開前後で intent 行数が増えた
+   → `DuplicateSubmit`。`consumed.jsonl` に同じ `(job_ref, workload_attempt)` が 2 行以上、または消費 0 → `DuplicateConsume` / 未回収。
+   消費した `job_ref`・保存済み Waiting の job ID・停止中の原票の `Job Id`・intent 台帳の job ID が全て同じでなければ `JobMismatch`。
+   試験は raw と別に `FilePbs::counts()`（`calls.jsonl`）の物理 qsub = 1/trial を assert し、raw から導いた数と一致させる。
+- 証跡: `trial_dir/process-events.jsonl`（`process::EventLog`。`process_started`/`process_stopped`/`barrier`）が
+  `entry` の `barriers.jsonl`（`celeris.recovery-barrier/1`）を置き換える（消す）。barrier の順は
+  normal `wait_saved→released→controller_exited`、A2 `wait_saved→controller_killed→released→observed_finished_while_stopped→controller_resumed→controller_exited`。
+  `a2.json`（`celeris.recovery-a2/1`）は `A2Evidence` に `killed_pid`・`killed_starttime`・`exit_signal`・
+  `saved_wait_file`・`saved_wait_sha256`・`stopped_qstat_seqs: Vec<u64>` を足す（`observed_finished_while_stopped` の数は seq の数に置き換える）。
+
+#### (4) raw に足す欄
+
+新しい per-trial 記録 `recovery-trials.jsonl`（測定 dir、`celeris.recovery-trial/1`、型 `raw::RecoveryRecord`、追記専用）。
+`TrialBinding`（`trials.jsonl`）の欄と `derive_status` は変えず、`trial_key` で結合する。
+
+| 欄 | 型 | 意味（未観測は null + `missing` に理由） |
+|---|---|---|
+| `measurement_id`・`arm`・`condition`・`trial_key`・`logical_job_id`・`job_ref` | string | identity（D3） |
+| `controller` | `[{incarnation, pid, starttime, exit_code, exit_signal, killed_by_runner}]` | `process-events.jsonl` から |
+| `saved_wait` | `{source, wait_id, job_id, file, sha256}` \| null | (3)-3 の親の読み直し |
+| `stopped_qstat_seqs` | `[u64]` | 停止中の原票（A2 のみ。normal は `[]`） |
+| `wall_submit_to_wait_saved_ms`・`wall_stop_ms`（kill→resume spawn）・`wall_recovery_ms`（kill→消費）・`wall_collect_ms`・`wall_grade_ms`・`wall_trial_ms` | u64 \| null | 親の `Instant`（実時間）。normal の `wall_stop_ms`/`wall_recovery_ms` は null |
+| `logical_submit_secs`・`logical_wait_saved_secs`・`logical_stop_secs`・`logical_resume_secs`・`logical_consume_secs` | u64 \| null | 注入した `IntentClock`（`FileClock` = replay/偽の時計）の値 |
+| `clock_kind` | `file_fake` \| `system` | 論理欄の時計の出自。`file_fake` の論理秒を実秒と読まない |
+| `rework` | `{resubmits, reconsumes, redone_local_nodes}` | 再投入・再消費（どちらも 0 が合格）。`redone_local_nodes` は worker の進捗記録で再実行が数えられなければ null |
+| `human_intervention` | `{count, minutes}` \| null | op 記録（`op_start`/`op_end`）が無い自動 run は null（0 にしない。human-op 定義と同じ） |
+| `scheduler_class` | `finished_exit_zero` \| `finished_nonzero` \| `unknown` \| `fetch_failed` \| `mismatch` | 最後の原票の分類 |
+| `recovery_status` | `recovered` \| `not_recovered` \| `rejected` \| `unobserved` | 下の規則で導く |
+| `reject_reason` | `RejectReason` \| null | (5) |
+| `missing` | `[Missing]` | 既存の `raw::Missing` |
+
+- `recovered` は `TrialBinding.status == ValidatedCompleted`・`scheduler_class == finished_exit_zero`・`reject_reason == null`・
+  `rework.resubmits == 0 && rework.reconsumes == 0`、A2 ではさらに `saved_wait`・`stopped_qstat_seqs` 非空・kill の exit_signal 9 の全てのとき。
+  `scheduler_class` が `unknown`・`fetch_failed` なら `unobserved`、`mismatch` なら `rejected`（成功にしない）。
+  導出は `raw::derive_recovery(&TrialBinding, &RecoveryRecord) -> RecoveryStatus` 1 本で、writer と validator が同じ関数を使う。
+- `wall_*` と `logical_*` は欄の名前で分け、同じ欄に混ぜない。validator は `clock_kind == file_fake` の raw を
+  `dataset=scheduler_measured` の実測と表示しない（metrics の出力に `clock_kind` を写す）。`run.json` の `clock` は `wall` のまま
+  （wall_* が正）、`scheduler` 由来でない（偽 transport の）raw は `Origin::Synthetic` が原票に残る。
+
+#### (5) 拒否する条件（測定成功にしない）
+
+型は `proc::RejectReason`（`Serialize`、snake_case）。runner は trial を Err で終え、raw に `recovery_status=rejected` と理由を残す。
+validator（`raw::validate`）は raw だけから同じ判定を再計算し、食い違えば Err。
+
+| reason | 検出 |
+|---|---|
+| `wait_not_saved`（保存前停止） | `PBS_WAIT_SAVED` を受けたのに (3)-3 の独立読み直しで job ID 付き Waiting が無い。親は kill せず子を止め、A2 不成立。validator は `controller_killed` の barrier seq が `wait_saved` より前、または `wait_saved` が無い A2 を拒否 |
+| `saved_evidence_missing`（保存証拠欠落） | `durable-wait.json` が無い・sha256 不一致、`stopped_qstat_seqs` が空・指す原票 file が無い/hash 不一致、`replies-*.jsonl` の取り込みが欠ける |
+| `job_mismatch` | 保存済み Waiting・intent 台帳・停止中原票の `Job Id`・原票の `Variable_List` の `CELERIS_TRIAL_KEY`/`CELERIS_SUBMIT_INTENT`・消費 `job_ref` のどれかが食い違う |
+| `duplicate_submit` / `duplicate_consume` | (3)-8 |
+| `stop_boundary_invalid` | kill の対象が自分の `OwnedProc` でない・starttime 不一致・exit_signal ≠ 9・停止中に子の incarnation が生きていた |
+| `collector_failed` | `FilePbsFaults.qstat_outcome`（`SpawnFailed`/`NonZero`/`Timeout`）→ `scheduler_class=fetch_failed`。拒否ではなく `unobserved`（成功にしない）として記録し、測定成功の数に入れない |
+
+- 試験専用の故障: `FilePbsFaults`（(2)）と、子の env `DAGBENCH_PBS_CHILD_FAULT=announce-before-save`
+  （保存前に `PBS_WAIT_SAVED` を出す）。どちらも出来事待ちで再現し、sleep・負荷をかけない。
+- これらの試験は「無 LLM・無実 job の偽 transport での決定的試験」であり、LLM の未知修復能力や HPC 実測の結果とは称さない。
+
+#### (6) 新 raw だけからの再集計
+
+- 新規 `crates/campaign/src/dagbench/pbs/metrics.rs`: `regenerate(raw: &Path, out: &Path) -> Result<SchedulerMetrics, String>`。
+  `raw::validate(raw)` を通った raw の `run.json`・`scheduler-events.jsonl`・`trials.jsonl`・`recovery-trials.jsonl`・
+  `submit-intents.jsonl`・`consumed.jsonl` と trial dir の `process-events.jsonl`・`a2.json`・`grade.json` だけを読み、
+  `out/scheduler_metrics.json`（`celeris.dagbench-scheduler-metrics/1`）と `out/scheduler_metrics.tsv` を新規作成する。
+  `real_jobs`（intent 台帳の受理・照合済み job 数）・arm × condition ごとの `recovery_status` 件数・wall_*/logical_* の値と
+  `clock_kind`・`rework`・`human_intervention`（null のまま）を出す。`FilePbs` の state dir・controller の memory は読まない。
+- 入口: `dagbench_harness.rs` の ignored `regenerate_from_env`（`DAGBENCH_RAW=<測定 dir>`、`DAGBENCH_METRICS_OUT=<新規 dir>`）。
+- 書かない保証: `out` が既に存在すれば Err、`out` が `raw` の内側でも Err。raw は読み取りだけで開く。
+  `run.json` の schema が `celeris.dagbench-scheduler-raw/1` でなければ Err（旧 `celeris.dagbench-durable-raw/1`・ext-sim の raw・
+  main-3・K4 の資産は版で拒否され、読まれも書かれもしない）。`metrics::compute` は従来どおり本 raw を拒否する。
+- 検証経路（試験）: 測定後に raw dir の全 file の sha256 一覧を取り、`regenerate` を 2 回（別の新規 dir）と、raw dir を
+  別の場所へ写した写しから 1 回流す。3 つの出力が byte 一致し、raw の sha256 一覧が前後で不変であることを assert する。

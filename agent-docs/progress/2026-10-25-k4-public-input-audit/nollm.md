@@ -41,8 +41,10 @@ updated: 2026-10-25
 commits: 「campaign: K4 v2 の無 LLM 通しを script にし、独立負例と lock を記録する」、「campaign: K4 v2 無 LLM 通しの負例を script へ移し、試験を基点の版へ戻す」。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-- `sh crates/campaign/scripts/nollm-k4-v2.sh <public2.tgz> …/artifacts/k4-nollm-v2` → exit 0、15 case 全 ok、old assets unchanged True（64 files）、pin match True。
-- `bash scripts/dev/test-affected.sh` → exit 0、2645 tests run: 2645 passed、7 skipped。1 回目は範囲外の `celeris::routing_eval_run daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records` が偽 daemon の 401 で 1 件落ち、単独再実行（1 passed）と全体の再実行で通った（本件は crates/celeris に触れていない）。
+- `sh crates/campaign/scripts/nollm-k4-v2.sh <public2.tgz> …/artifacts/k4-nollm-v2` → exit 0、15 case 全 ok（`all_match: true`）、old assets unchanged True（64 files）、pin match True。
+  負例の拒否理由は各 `grade-*-negative.stderr` の verdict fail の reasons で確かめた（表のとおり）。
+- WU の範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` から script と進捗を除いた残り）→ 空。
+- `bash scripts/dev/test-affected.sh` → exit 0、2645 tests run: 2645 passed、7 skipped（crates: celeris celeris-campaign celerisctl llm-proxy task-dispatch）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → ok。
 
 ## 未解決事項

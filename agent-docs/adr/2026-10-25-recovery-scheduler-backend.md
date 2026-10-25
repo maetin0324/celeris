@@ -314,3 +314,22 @@ I4・I5 の実装（`pbs/backend.rs`）で、付記に書いていなかった�
   `Lookup::Unresolved`。`Lookup::Unknown` は台帳に intent が無いときだけ。
 - 消費台帳は `consumed.jsonl`（lock 内で読み直し、`(job_ref, workload_attempt)` の 2 回目は `false`）。
 - ipc server を `Box<dyn ExtBackend + Send>` に広げる変更（I1）は入口を作る wire-entry に残す。`PROTOCOL_VERSION` は variant 追加に合わせて 2 にした。
+
+### I11. raw-collect 実装での補足（2026-10-25）
+
+I6 の実装（`pbs/raw.rs`）で、付記に書いていなかった形を次のとおり決めた。D1–D5 は変えない。
+
+- raw は `PbsExt` と同じ測定 dir に置く。`RawWriter::create` は `run.json`・`scheduler-events.jsonl`・`trials.jsonl` が
+  まだ無い dir だけを受け（出力先は新規のみ）、`RawWriter::reopen` は本 raw の `run.json` がある dir だけを受ける（再収集）。
+  `run.json` は収集後に `write_run` が1回だけ新規作成し、`real_jobs` は intent 台帳の受理・照合済み job の数、`llm_calls` は 0。
+  spec に無い研究資産の pin（campaign_id・manifest・case・source・binary）は `StudyPins` で渡す。
+- PBS 呼び出し 1 回 = `scheduler-events.jsonl` の 1 行。stdout は `scheduler/<seq>-<call>.txt` に新規作成し sha256 を残す。
+  stdout が空なら file/sha256 は null、outcome が Ok 以外なら `missing_reason` 必須。
+- trial_key は collector identity から既存 `TrialKey::idempotency_key()` で作り、arm→Config は baseline→A・celeris→B。
+  結合行の collector 収集は既存 `observe::collect` を `QstatView` 越しに呼び、成功時の `celeris.observed-jobs/1` は
+  `observed/<seq>.json`（collector の控えは `observed/c<seq>/`）に新規作成する。`submit-audit.jsonl` は台帳から導く。
+- 結果（`status`）は `derive_status` が欄から導き、validator は同じ規則で再計算して行の値と食い違えば拒否する。
+  `validated_completed` は受理/照合済み・収集成功・Exit_status 0・attempt 成果物 hash 全部・期待出力 hash 一致・
+  grade 合格の全てが揃うときだけ。intent 無し・送信前拒否は `not_submitted`、それ以外の未照合は `unresolved`
+  （収集分類は `Unobserved`。`NotSubmitted` にしない）。
+- `metrics::compute` と `durable::verify` は本 raw の `run.json` を版で拒否する。

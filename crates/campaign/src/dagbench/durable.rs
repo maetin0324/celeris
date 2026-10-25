@@ -7,6 +7,16 @@ use serde_json::Value;
 use std::path::Path;
 
 pub fn verify(raw: &Path) -> Result<(), String> {
+    // 実 scheduler raw（壁時計）を論理時計の durable raw として読まない。
+    if let Ok(run) = std::fs::read_to_string(raw.join("run.json"))
+        && super::metrics::raw_schema_of(&run).as_deref()
+            == Ok(super::pbs::raw::SCHEDULER_RAW_SCHEMA)
+    {
+        return Err(format!(
+            "{} is not a durable raw; durable::verify does not read it",
+            super::pbs::raw::SCHEDULER_RAW_SCHEMA
+        ));
+    }
     let events = read_events(&raw.join("process-events.jsonl")).map_err(|e| e.to_string())?;
     let proof = verify_survival_barriers(&events)?;
     if proof.control_pid == proof.external_pid {

@@ -27,8 +27,8 @@ updated: 2026-10-25
 | 事前拒否 | `preflight-missing-negative`・`preflight-sha-negative` | 1（1） | `graders` の不足だけ。run_gated は拒否、transport 呼び出し 0、out 未作成 |
 
 - lock（新 expected_lock）: main-4 の `judged-scope-v2/pinned/main/final.json` を repo の v2 case・grader・grade-case で lock した。
-  sha256 `fa0934224cb3bed29b1e0d2ed1c8f6cb087822b6666bbfc751e959401d887250`（旧 bundle の lock は `abdf0b61…`）。
-  K4 の inputs は `main-v3-n2-43706-public2.tgz`/`0671a855…`、private `46ea074b…`、grade-case `7751a857…`。bundle には書いていない（stdout を記録へ出しただけ）。
+  sha256 `fa0934224cb3bed29b1e0d2ed1c8f6cb087822b6666bbfc751e959401d887250`（旧 bundle の lock は `abdf0b6147ad830551200218206545a113591d585f4e59bb8498359815d2ae7a`）。
+  K4 の inputs は `main-v3-n2-43706-public2.tgz`/`0671a85528b4a29a8f6fb5176986c178afb2174cb22e56b003c33ed5f2da3a1e`、private `46ea074be15202c4b3d2fca143563ce9c06822607f51e656469da6ad5f6871da`、grade-case `7751a8577dd09d3f8cd5729179bfbc819aaf87249bb46f16e3ecb751ce48ca54`。bundle には書いていない（stdout を記録へ出しただけ）。
 - 旧資産: 旧 tgz（`128057cf4016535941963fc4142ba424c05c65889905ca2bbcc190f6161077a1`）と旧資産一覧 `old-assets-after.json` の 63 file、計 64 file の sha256 が実行前後で同じで固定値と一致（`old_assets.unchanged: true`）。
 
 ## 変えたもの

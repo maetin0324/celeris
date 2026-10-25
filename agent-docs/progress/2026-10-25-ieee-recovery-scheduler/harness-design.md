@@ -36,7 +36,9 @@ commit「docs: add ADR addendum I14 for formal entry, process stop, raw metrics 
 
 - `grep -c '^### I14' agent-docs/adr/2026-10-25-recovery-scheduler-backend.md` → 1。
 - 範囲 check `sh "$CELERIS_WU_SCOPE_PATHS"` → ADR と本 file の 2 path のみ（`crates/` なし）。
-- 下の「検査」節を参照。
+- `bash scripts/dev/test-affected.sh` → exit 0（docs のみの変更で Rust 試験対象なし、文書検査の self-test ok）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `check-doc-links.sh`・`check-doc-layout.sh scripts/dev/docs-layout.tsv`・`check-adr-numbers.sh`・`progress-index.sh --check` → いずれも exit 0。
 
 ## 未解決事項
 

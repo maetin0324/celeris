@@ -135,3 +135,166 @@ PBS rerun の有無も観測し、job ID が同じだけで物理実行1回と�
 offline では応答喪失・0/1/複数候補・履歴消失・不一致・timeout・再起動・二重submit競合・grade失敗の fixture を検証する。
 実接続は認証/残枠確認後にのみ実行し、normal/A2 両 arm の同じ資源/pins、永続 wait、停止中原票、同一job回収、
 grade、raw 再集計一致が揃って初めて実HPC復旧の証拠とする。この contract 完了は実測完了を意味しない。
+
+## 実装付記 2026-10-25
+
+実装前に形だけを固める付記。上の D1–D5 は変えない。食い違えば D1–D5 が正で、この付記を直す。
+対象は PBS / Sirius の1 scheduler・1 cluster のみ。Slurm の型・分岐は作らない。
+
+### I1. module 配置
+
+新規は `crates/campaign/src/dagbench/pbs/` の4 file と `mod.rs`（`dagbench/mod.rs` に `pub mod pbs;`）。
+
+| file | 持つもの | 再利用 |
+|---|---|---|
+| `pbs/transport.rs` | `PbsTransport` trait、`SshPbs`（実装）、`PbsCall`/`PbsReply` 原票型 | `observe::SchedulerTransport`・`Origin`・`SchedulerReply`、`observe::is_scheduler_job_id`、`observe` の PBS `key = value` パーサ（`pub(crate)` に上げて共用。複製しない） |
+| `pbs/intent.rs` | submit intent 台帳（`submit-intents.jsonl`）、排他、`submit_intent_id` の生成、状態の再生 | `ext.rs` の `drop_torn_tail` 方式（壊れた末尾行の切り捨て）と seq 復元 |
+| `pbs/backend.rs` | `PbsExt`（`ExtBackend` の PBS 実装）、`RecoverySpec`、marker 照合 | `observe::Expect`/`observe_job` の照合規則（cluster・job id・`CELERIS_TRIAL_KEY`・conditions） |
+| `pbs/raw.rs` | `celeris.dagbench-scheduler-raw/1` の writer と validator、trial 結合 | `observe::trial_identity`・`TrialKey`・`CollectClass`・`record_failure`、`harness_exec::SUBMIT_AUDIT_SCHEMA` |
+
+子 process（ssh）を起こすのは従来どおり `ssh_qstat.rs` と新しい `pbs/transport.rs` の `SshPbs` だけ。
+`dagbench/{baseline,celeris_side,durable,graded,metrics}.rs` は I4 の境界追加以外は変えない。
+`ipc.rs` の server は `ExtSim` 固定から `Box<dyn ExtBackend + Send>` の所有へ広げ、PbsExt も同じ独立 process
+（submit owner、D5）に置く。`Lookup`/`SubmitError` の variant 追加に伴い `PROTOCOL_VERSION` を上げる。
+
+### I2. `PbsTransport`
+
+```text
+trait PbsTransport {
+    fn origin(&self) -> Origin;                       // Live / Synthetic を raw に残す
+    fn qsub(&self, req: &QsubRequest) -> PbsReply;    // 1 回だけ実行。再試行しない
+    fn qstat_full(&self, job_id: &str) -> PbsReply;   // qstat -x -f <完全なID>
+    fn find_by_marker(&self, m: &MarkerQuery) -> PbsReply; // 自分の job のみ、実行中＋履歴
+}
+PbsReply = { call, started_utc, finished_utc, exit: Option<i32>, stdout, stderr, outcome }
+outcome  = Ok | Timeout | SpawnFailed | NonZero
+```
+
+- 全 call は transport 側で全体 timeout（D2 の 60 秒、`RecoverySpec` から渡す）を持つ。子 process は timeout で
+  SIGKILL して回収し、`Timeout` を返す。読み取り途中の stdout も原票に残す（推定で補わない）。
+- `SshPbs` は `ssh -o BatchMode=yes -o ConnectTimeout=<n> -- sirius <cmd>`。ControlMaster は利用者の ssh 設定に任せ、
+  transport 側で master の起動・停止をしない（D5）。引数は既存 `SshQstat` と同じ文字種検査を通す。
+- `qsub` の引数は `QsubRequest`（spec 由来の `-q -A -l select/place/walltime -r n -N -v CELERIS_TRIAL_KEY=..,CELERIS_SUBMIT_INTENT=..` と
+  script path）から組み立て、自由文字列を受けない。
+- `find_by_marker` の具体 command（`qselect -x -u <user> -v ...` か `qstat -x -f -u` の走査か）は D4.4 のとおり接続後の
+  read-only 確認で決める。それまでは trait と偽実装だけで、`SshPbs::find_by_marker` は「未確認」を返す
+  （`NonZero` 扱いではなく専用の `outcome = Unsupported` とし、照合不能として停止する）。
+- 既存 `SshQstat` は評価側 collector（`observe::collect`）の既知 ID 照会として残す。recovery の収集は
+  `PbsTransport::qstat_full` を `SchedulerTransport` に写す薄い adapter で `observe_job` に渡し、パーサと照合規則を共有する。
+
+### I3. submit intent 台帳と状態遷移
+
+`submit_intent_id = "si-" + hex(sha256(canonical JSON {schema:"celeris.submit-intent-id/1", measurement_id, arm,
+trial_key, logical_job_id, node, workload_attempt}))`（64 桁全体）。再起動・controller epoch で変わらない。
+PBS に渡す marker も完全な値で、job 名（`-N`）は表示用であり照合に使わない。
+
+台帳は raw の `submit-intents.jsonl`（追記専用、1 行 = 1 遷移、`seq`・UTC・observer epoch・`submit_intent_id`・
+`state`・根拠の原票参照）。書くたびに `sync_data`。排他は同じ dir の `submit-intents.lock` に
+`std::fs::File::lock`（排他 lock）を取り、qsub の前後の記録を同じ lock 区間で行う。lock は submit owner の
+独立 process が持ち、controller は IPC 越しにしか投入しない。
+
+```text
+intent_recorded ──(lock 内で qsub を 1 回)──> sent
+sent ──(完全な PBS ID を受け、accepted を sync)──> accepted ──(qstat_full の marker/資源一致)──> 以降は wait へ
+sent ──(timeout・切断・ID 不正・accepted の書込み失敗)──> unknown_submit
+unknown_submit ──(marker 検索で候補1件・全項目一致)──> reconciled（job_ref を追記）
+unknown_submit ──(0件・2件以上・不一致・履歴欠落・権限不足・Unsupported・検索 timeout・deadline 到達)──> unresolved_stop
+accepted ──(qstat_full が marker/資源で不一致)──> unresolved_stop
+```
+
+- 再起動時は台帳を再生する。最後が `intent_recorded` なら「送ったか不明」なので `sent` と同じく unknown_submit へ
+  進める（送信前停止と送信後停止を区別できないため。qsub を送り直さない）。
+- `sent` の行は qsub を起動する直前に sync する。qsub の起動自体が失敗した（`SpawnFailed`、PBS に届いていない）
+  ことが transport で確実なときだけ `rejected_before_send` を記録できるが、D4.6 によりこの接続確認では停止する。
+- `unknown_submit` からの再照合は poll 間隔（30 秒）ごと、試行 deadline 内だけ。`unresolved_stop` は終端で、
+  以後この intent に qsub も qdel も出さない。人の解決は `human_resolution` 行の追記で表し、既存行は書き換えない。
+- 同じ `submit_intent_id` で 2 本目の `intent_recorded` は書かない（lock 内で既存状態を見て、既にあれば再生へ回す）。
+  これで二重 submit 競合（2 controller・再起動直後の重複呼び出し）は物理 qsub 1 回に収まる。
+
+### I4. `ExtBackend` の境界
+
+- `Lookup` に `Unresolved { submit_intent_id, reason }`、`SubmitError` に `Unresolved { .. }` を足す。
+  PbsExt は unknown_submit/unresolved_stop の intent について **`Lookup::Unknown` を返さない**（`Unknown` は
+  台帳に intent が無い＝まだ一度も投入していない、の意味に限る）。
+- baseline の `reconcile`/再開照会と celeris_side の応答喪失分岐は、`Unresolved` を受けたら `SubmitPending`
+  （再投入）へ戻さず `Error` で停止し、raw に停止理由を残す。ExtSim はこの variant を返さないので既存の
+  offline 試験・成功契約は変わらない。
+- `advance(now)` は PbsExt では実時計で qstat_full を poll し、終了を `Notice` にする。`due_secs` は `None`
+  （論理時計で完了を推定しない、D1）。`now` は observer の単調時計秒。
+- `record_consumed` は台帳と別の `consumed.jsonl` に `(job_ref, workload_attempt)` を1回だけ書き、2 回目は
+  `false`（既存の重複消費 0 判定と同じ意味）。
+- unknown な投入を `CollectClass::NotSubmitted`（model_failure）に写さない。trial の収集分類は
+  `Unobserved`（照合不能）か `IdentityMismatch`（不一致）で、`failure_class` は `Undetermined`。
+
+### I5. 両 arm 共通の spec
+
+`RecoverySpec`（serde、`deny_unknown_fields`）を1つの JSON から読み、その sha256 を `run.json` の pin にする。
+
+```text
+RecoverySpec {
+  measurement_id, scheduler:"pbs", cluster:"sirius", queue:"gen", account:"NBBG",
+  resources { select:"1:ncpus=24:mem=124gb:ngpus=1", place:"exclhost", walltime_secs:300 },
+  rerunnable:false, payload { script_sha256, input_sha256, expected_output_sha256 },
+  grader { binary_sha256, version }, env { modules, env_sha256 },
+  limits { external_slots:1, worker_slots:1, poll_secs:30, trial_deadline_secs:1800,
+           ssh_timeout_secs:60, max_jobs:4, workload_attempts:1 },
+  conditions:[normal, a2], seed:17, rep:1 }
+```
+
+- `RecoverySpec::qsub_request(arm, identity) -> QsubRequest` と `RecoverySpec::expect(arm, identity) -> observe::Expect`
+  が baseline/celeris の両方に同じ値を返す。arm で変わるのは identity（arm・trial_key・intent）だけで、資源・
+  終了（walltime・deadline）・attempt 上限は arm を引数に取らない関数で作る。
+- 既定値は持たない（欄の欠落は読み込みエラー）。値の変更は新しい measurement_id（D2）。
+
+### I6. trial への結合と再収集
+
+- 1 trial の結合行（raw の `trials.jsonl`）は `trial_key`、collector identity（`observe::trial_identity`）、
+  `submit_intent_id`、`job_ref`、qstat 原票の file 名・sha256・取得 UTC、投入先（cluster/queue/account）、
+  attempt 別成果物の sha256、grade 参照、`CollectClass`（成功時は null）を持つ。
+- validator（`raw.rs`）は、`run.json` の pin と spec hash、intent 台帳の再生結果、`scheduler-events.jsonl`、
+  原票 hash 一覧、成果物 hash、grade を突き合わせ、job ref と trial の不一致・原票欠落・hash 改変・
+  `unresolved_stop` を含む trial の成功扱い・`validated_completed` 以外の完遂を拒否する。旧 `celeris.dagbench-durable-raw/1`
+  は受けない（schema で分岐し、読み替えない）。
+- 再収集は read-only: qstat_full と成果物の読み直しだけで、`PbsTransport::qsub` も `record_consumed` も呼ばない
+  （collector は transport を `qstat_full` だけの view で受け取り、型で qsub を呼べないようにする）。
+  取得は毎回新しい原票として追記し、前回の原票・結合行を上書きしない。結合行は最新の取得を参照する新行を足す。
+
+### I7. `celeris-qsub` との関係
+
+- recovery harness の投入経路は PbsExt → `PbsTransport::qsub` の1本だけ。payload の job script は qsub を呼ばず、
+  recovery 入口は `CELERIS_SUBMIT_CMD`/`CELERIS_SUBMIT_AUDIT` を payload 環境へ渡さない（設定されていれば起動を拒否）。
+- `scripts/campaign/celeris-qsub` は主比較 A arm（LLM 試行内の投入）の wrapper として変えずに残す。recovery の
+  exactly-once 投入には使わず、共有もしない（応答喪失の照合を持たないため、D1）。wire-entry unit で wrapper 冒頭の
+  注記に「recovery 比較の投入には使わない」を加える。
+- recovery の受理記録は intent 台帳が正本で、`celeris.submit-audit/1` 形式の副記録は台帳の `accepted`/`reconciled`
+  から導出して書く（D3 の副記録の結合を保つ）。wrapper と台帳の両方が同じ job を記録する経路は作らない。
+
+### I8. offline fixture（偽 transport）
+
+偽 `FakePbs` は台本（呼び出し順の応答列）と物理投入数・消費数のカウンタを持ち、試験は数を assert する。
+ssh・qsub・外部ネットワークは使わない。時間は注入時計で進め sleep しない。
+
+| fixture | 台本 | 期待 |
+|---|---|---|
+| 正常 | qsub → `123.sirius`、qstat 実行中→`F`/Exit 0、成果物 hash 一致、grade 合格 | `accepted`、`validated_completed`、qsub 1・消費 1 |
+| 応答喪失→1候補 | qsub `Timeout`、marker 検索 1 件一致 | `unknown_submit`→`reconciled`、qsub 1・同じ job を回収 |
+| 応答喪失→0候補 | qsub `Timeout`、検索 0 件 | `unresolved_stop`、qsub 1、not_submitted にしない |
+| 複数候補 | 検索 2 件 | `unresolved_stop`、qsub 1 |
+| 不一致 | 候補1件だが queue/資源/account/owner が違う | `unresolved_stop` |
+| 履歴消失 | accepted 後 qstat が unknown job | `Unobserved`、成功・重複0 に補完しない |
+| ID 不正 | qsub stdout が PID 形・空 | `unknown_submit` |
+| timeout（照会） | qstat/検索が `Timeout` 連続し deadline 到達 | raw 保存・`unresolved_stop` |
+| Unsupported | 検索 capability 未確認 | 照合不能で停止 |
+| 再起動（送信前後） | `intent_recorded`/`sent` 行で process 停止→再生 | qsub を送り直さず unknown_submit へ |
+| A2 再開 | Waiting 保存後に controller 停止→再開 | 同じ job_ref を回収、新 qsub 0 |
+| 二重 submit 競合 | 同じ intent を 2 経路から同時に submit（lock 待ちを出来事で同期） | qsub 1、2 本目は再生 |
+| 原票欠落・hash 改変 | raw の qstat 原票を消す/1 byte 変える | validator が拒否 |
+| job ID/trial 不一致 | 原票の Variable_List が別 trial_key | `IdentityMismatch` |
+| collector 障害 | qstat_full `SpawnFailed`/`NonZero` | `FetchFailed`（env_failure） |
+| grade 失敗 | 成果物 hash が expected と違う/grader 非0 | 実行終了でも `validated_completed` でない |
+| 再収集 | 収集を2回 | qsub・消費の数が増えず、原票行が追記で増える |
+| arm 共通 spec | 同じ spec から baseline/celeris の QsubRequest | identity 以外の欄が一致 |
+
+### I9. この付記で決めないこと
+
+実 command の検索手段（D4.4）、PBS 課金単位の換算、実接続の承認は接続後・人の決定に残す。

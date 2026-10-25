@@ -8,7 +8,14 @@
 # - 投入の終了コードと出力はそのまま返す。受理されなかった投入は記録しない。
 # 記録は自己申告の成功根拠ではない: executor の track が台帳へ運び、collect が scheduler から記録を取り直して
 # trial の印と照合する。受理応答を失った投入の照合（reconciliation）はしない。
+# recovery 比較（ADR 2026-10-25-recovery-scheduler-backend I7）の投入には使わない: recovery の投入は
+# crates/campaign の intent 台帳（dagbench::pbs）1 本で、その job には CELERIS_SUBMIT_INTENT が付く。
+# この変数がある環境（recovery の job の中）から呼ばれたら、二重投入経路にしないため何も投入せずに止める。
 set -u
+if [ -n "${CELERIS_SUBMIT_INTENT:-}" ]; then
+    echo "celeris-qsub: CELERIS_SUBMIT_INTENT is set (recovery job); recovery submits only through the intent ledger" >&2
+    exit 4
+fi
 : "${CELERIS_SUBMIT_AUDIT:?CELERIS_SUBMIT_AUDIT is not set (not inside a Celeris trial)}"
 : "${CELERIS_TRIAL_KEY:?CELERIS_TRIAL_KEY is not set (not inside a Celeris trial)}"
 : "${CELERIS_SUBMIT_TARGET:?CELERIS_SUBMIT_TARGET (scheduler:cluster) is not set}"

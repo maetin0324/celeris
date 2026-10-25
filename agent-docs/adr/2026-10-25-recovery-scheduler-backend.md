@@ -333,3 +333,28 @@ I6 の実装（`pbs/raw.rs`）で、付記に書いていなかった形を次�
   grade 合格の全てが揃うときだけ。intent 無し・送信前拒否は `not_submitted`、それ以外の未照合は `unresolved`
   （収集分類は `Unobserved`。`NotSubmitted` にしない）。
 - `metrics::compute` と `durable::verify` は本 raw の `run.json` を版で拒否する。
+
+### I12. wire-entry 実装での補足（2026-10-25）
+
+入口（`pbs/entry.rs`）で、付記に書いていなかった形を次のとおり決めた。D1–D5 は変えない。
+
+- backend の選択は `entry::BackendChoice`（`ExtSim` が既定、`Pbs` は transport・時計を注入したときだけ）。
+  `dagbench run` は `BackendChoice::ExtSim` で開き、`--backend` の既定は `ext-sim`。`--backend pbs` は CLI では
+  実 transport を組まずに拒否する（Celeris arm は dev-dependency の task-api router が要り、実接続は人の承認後）。
+  recovery の harness は `entry::run_trial` に `BackendChoice::Pbs` 相当の注入物（`TrialRun`）を渡して使う。
+- I1 の ipc server の `Box<dyn ExtBackend + Send>` 化はしない。PbsExt の真実（intent 台帳・消費台帳）は file にあり、
+  controller の寿命から独立している（D5）。A2 の「所有 controller の停止」は controller の incarnation を終える
+  （baseline は `Baseline::run` を backend の誤りで抜け、Celeris は drive の future を捨てる）ことで表し、
+  保存済み Waiting は controller の保存先（`state.json` / 測定専用 SQLite の cluster job wait）を読み直して確かめる。
+  別 process での停止（PID・starttime の確認と SIGKILL）は実接続の段で `dagbench::process` の Supervisor に載せる。
+- 境界は `entry::Gate`: controller が job ID を受けた後の次の backend 呼び出しで保存済み Waiting を確かめ、normal は
+  完了解放 barrier を外し、A2 は止める。barrier と順序は trial dir の `barriers.jsonl`（`celeris.recovery-barrier/1`）、
+  A2 の証跡は `a2.json`（`celeris.recovery-a2/1`: 保存済み Waiting・停止中の同 job 終了原票・再開前後の intent 行数・
+  消費した job_ref）。停止中の観測原票は raw の `scheduler-events.jsonl` に入る。
+- DAG は `fixtures/dagbench/recovery-scenarios.json` の `rcv-1`（外部 job 1 本、worker/外部枠 1）で、両 arm 共通。
+  測定 dir 1 つに 2 arm × 2 condition = 4 job（D2 の上限）。
+- 独立 grader（`entry::grade`）は attempt の成果物がちょうど 1 つで sha256 が spec の期待出力と一致すれば合格とし、
+  `grade.json`（`celeris.recovery-grade/1`）を書く。
+- 投入経路は intent 台帳 1 本: 入口は `CELERIS_SUBMIT_CMD`・`CELERIS_SUBMIT_AUDIT` があれば拒否し、
+  `scripts/campaign/celeris-qsub` は `CELERIS_SUBMIT_INTENT` のある環境（recovery の job）では何も投入せず exit 4。
+  A arm（印なし）の挙動は変えない。

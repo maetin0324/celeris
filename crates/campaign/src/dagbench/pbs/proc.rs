@@ -22,17 +22,18 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{
+    approval::{self, ApprovalGate},
     backend::{Arm, ConsumedRow, PbsExt, RecoverySpec},
     entry::{
         A2_FILE, A2_SCHEMA, Condition, Controller, GRADE_FILE, Site, Study, child_gated, grade,
     },
     file_pbs::{FileClock, FilePbs},
-    intent::{INTENT_LEDGER, IntentClock, IntentLedger, IntentState},
+    intent::{INTENT_LEDGER, IntentClock, IntentLedger, IntentState, SystemClock},
     raw::{AttemptArtifacts, RawWriter, TrialBinding, TrialInput},
     recovery::{ClockKind, RecoveryInput, RecoveryRecord, SavedWaitRef, read_consumed},
     transport::{
         CallOutcome, MarkerQuery, PbsCall, PbsReply, PbsTransport, QstatClass, QstatView,
-        QsubRequest, classify_qstat,
+        QsubRequest, SITE_CALLS_FILE, SshPbs, SshSite, classify_qstat,
     },
 };
 use crate::{
@@ -89,8 +90,8 @@ pub struct ChildConfig {
     pub params: Value,
     pub spec_path: PathBuf,
     pub study_path: PathBuf,
-    /// [`FilePbs`] の state dir。
-    pub state: PathBuf,
+    /// PBS への経路（file の偽 cluster / 承認つき ssh）。
+    pub access: PbsAccess,
     /// 両 arm 共通の測定 dir（intent 台帳・消費台帳・spec pin）。
     pub dir: PathBuf,
     pub trial_dir: PathBuf,
@@ -98,6 +99,106 @@ pub struct ChildConfig {
     pub condition: Condition,
     /// 1 = 最初の incarnation（境界で合図する）、2 = 再起動（境界なし）。
     pub incarnation: u64,
+}
+
+/// PBS への経路。`File` は I14 の偽 cluster（state dir と偽の時計）、`Ssh` は付記 I15 (1) の承認つき実 cluster
+/// （実時計）。どちらも parent と子が同じ値から自分で開き直す（相手の検査結果を信じない）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PbsAccess {
+    File {
+        state: PathBuf,
+    },
+    Ssh {
+        approval: PathBuf,
+        /// 試験専用: 起動する ssh（stub）。env 入口からは設定できず、None なら PATH の `ssh`。
+        #[serde(default)]
+        program: Option<PathBuf>,
+        /// 試験専用: 論理時計を state dir の [`FileClock`] にする（stub ssh の試験で実時間を待たない）。
+        /// env 入口からは設定できず、None（本番）は実時計。設定すると原票の時計種別は `file_fake`。
+        #[serde(default)]
+        test_clock: Option<PathBuf>,
+    },
+}
+
+type SharedTransport = Arc<dyn PbsTransport + Send + Sync>;
+
+impl PbsAccess {
+    /// qsub/qstat の transport。`Ssh` は承認を読み直して spec・期限・測定 dir の pin と照合し、[`ApprovalGate`] で包む。
+    pub fn transport(&self, spec: &RecoverySpec, dir: &Path) -> Result<SharedTransport, String> {
+        match self {
+            PbsAccess::File { state } => Ok(Arc::new(FilePbs::open(state).map_err(e2s)?)),
+            PbsAccess::Ssh {
+                approval, program, ..
+            } => {
+                let a = approval::load(approval, spec, time::OffsetDateTime::now_utc())?;
+                approval::check_pinned(dir, &a)?;
+                let mut ssh = SshPbs::new(
+                    &spec.cluster,
+                    Duration::from_secs(spec.limits.ssh_timeout_secs),
+                )?;
+                if let Some(p) = program {
+                    ssh = ssh.with_program(p);
+                }
+                Ok(Arc::new(ApprovalGate::new(ssh, dir, &a)))
+            }
+        }
+    }
+
+    /// intent 台帳・controller の時計（`File` は偽の時計、`Ssh` は実時計）。
+    pub fn clock(&self) -> Result<Arc<dyn IntentClock + Send + Sync>, String> {
+        match self {
+            PbsAccess::File { state }
+            | PbsAccess::Ssh {
+                test_clock: Some(state),
+                ..
+            } => Ok(Arc::new(FileClock::open(state).map_err(e2s)?)),
+            PbsAccess::Ssh { .. } => Ok(Arc::new(SystemClock)),
+        }
+    }
+
+    pub fn clock_kind(&self) -> ClockKind {
+        match self {
+            PbsAccess::File { .. }
+            | PbsAccess::Ssh {
+                test_clock: Some(_),
+                ..
+            } => ClockKind::FileFake,
+            PbsAccess::Ssh { .. } => ClockKind::System,
+        }
+    }
+
+    /// 解放・成果物の取得。`Ssh` は [`SshSite`]（原票は `trial_dir` の [`SITE_CALLS_FILE`]）。
+    pub fn site(&self, spec: &RecoverySpec, trial_dir: &Path) -> Result<Arc<dyn Site>, String> {
+        match self {
+            PbsAccess::File { state } => Ok(Arc::new(FilePbs::open(state).map_err(e2s)?)),
+            PbsAccess::Ssh { program, .. } => {
+                let mut site = SshSite::new(
+                    &spec.cluster,
+                    Duration::from_secs(spec.limits.ssh_timeout_secs),
+                    &spec.payload.script,
+                    &spec.measurement_id,
+                    trial_dir.join(SITE_CALLS_FILE),
+                )?;
+                if let Some(p) = program {
+                    site = site.with_program(p);
+                }
+                Ok(Arc::new(site))
+            }
+        }
+    }
+
+    /// 論理欄の現在値（`File` は偽の時計の値、`Ssh` は実時計の unix 秒）。
+    fn logical_now(&self) -> Option<u64> {
+        match self {
+            PbsAccess::File { state }
+            | PbsAccess::Ssh {
+                test_clock: Some(state),
+                ..
+            } => FileClock::open(state).ok().and_then(|c| c.now().ok()),
+            PbsAccess::Ssh { .. } => Some(SystemClock.now_unix()),
+        }
+    }
 }
 
 impl ChildConfig {
@@ -193,9 +294,12 @@ fn epoch(arm: Arm, cond: Condition, incarnation: u64) -> String {
 pub fn child_trial(cfg: &ChildConfig, ctl: &mut dyn Controller) -> Result<(), String> {
     let (spec, study) = load_spec_study(&cfg.spec_path, &cfg.study_path)?;
     let trial_key = study.collector(&spec, cfg.arm, cfg.condition).trial_key();
-    let pbs = FilePbs::open(&cfg.state).map_err(|e| e.to_string())?;
-    let transport = Arc::new(RecordingTransport::new(pbs.clone(), cfg.replies_file()));
-    let clock = Arc::new(FileClock::open(&cfg.state).map_err(|e| e.to_string())?);
+    let transport = Arc::new(RecordingTransport::new(
+        cfg.access.transport(&spec, &cfg.dir)?,
+        cfg.replies_file(),
+    ));
+    let clock = cfg.access.clock()?;
+    let site = cfg.access.site(&spec, &cfg.trial_dir)?;
     let ext = PbsExt::open(
         &cfg.dir,
         spec.clone(),
@@ -211,10 +315,17 @@ pub fn child_trial(cfg: &ChildConfig, ctl: &mut dyn Controller) -> Result<(), St
         Err(_) => None,
     };
     let incarnation = cfg.incarnation;
+    let file_state = match &cfg.access {
+        PbsAccess::File { state } => Some(state.clone()),
+        PbsAccess::Ssh { .. } => None,
+    };
+    if fault.is_some() && file_state.is_none() {
+        return Err(format!("{CHILD_FAULT_ENV} is for the file transport only"));
+    }
     let dup = (fault == Some(ChildFault::DuplicateSubmit)).then(|| {
         (
             cfg.dir.clone(),
-            cfg.state.clone(),
+            file_state.clone().unwrap_or_default(),
             cfg.replies_file(),
             spec.clone(),
             cfg.arm,
@@ -251,7 +362,7 @@ pub fn child_trial(cfg: &ChildConfig, ctl: &mut dyn Controller) -> Result<(), St
     let gated = child_gated(
         ext,
         &cfg.trial_dir,
-        Arc::new(pbs),
+        site,
         ctl.saved_reader(),
         announce,
         fault == Some(ChildFault::AnnounceBeforeSave),
@@ -326,8 +437,8 @@ pub struct ProcTrial<'a> {
     pub study_path: &'a Path,
     pub arm: Arm,
     pub condition: Condition,
-    /// [`FilePbs`] の state dir。
-    pub state: &'a Path,
+    /// PBS への経路（子にも同じ値を渡す）。
+    pub access: &'a PbsAccess,
     /// harness の `Params`（子へそのまま渡す）。
     pub params: Value,
     /// 子 process の command（test binary の `pbs_control_child`）。env は proc が足す。
@@ -419,7 +530,7 @@ impl ProcTrial<'_> {
             params: self.params.clone(),
             spec_path: self.spec_path.to_path_buf(),
             study_path: self.study_path.to_path_buf(),
-            state: self.state.to_path_buf(),
+            access: self.access.clone(),
             dir: self.dir.to_path_buf(),
             trial_dir: self.trial_dir(),
             arm: self.arm,
@@ -561,9 +672,8 @@ impl ProcTrial<'_> {
             })
             .map_err(e2s)?;
         let saved_sha = sha256_bytes(&saved_bytes);
-        let clock = FileClock::open(self.state).map_err(e2s)?;
         let wall_wait_saved = ms(t0.elapsed());
-        let logical_wait_saved = clock.now().ok();
+        let logical_wait_saved = self.access.logical_now();
         log.barrier(
             "wait_saved",
             json!({"job_id": job_id, "logical_job_id": logical, "source": saved.source,
@@ -575,7 +685,7 @@ impl ProcTrial<'_> {
         let identity = raw
             .identity(self.arm, &self.trial_key(), &logical)
             .map_err(e2s)?;
-        let site = FilePbs::open(self.state).map_err(e2s)?;
+        let site = self.access.site(self.spec, &trial_dir)?;
         let mut controllers = Vec::new();
         let mut stopped_seqs = Vec::new();
         let mut killed = None;
@@ -621,7 +731,7 @@ impl ProcTrial<'_> {
                 }
                 let rep = c1.kill("a2-wait-saved").map_err(e2s)?;
                 let t_kill = Instant::now();
-                logical_stop = clock.now().ok();
+                logical_stop = self.access.logical_now();
                 controllers.push(ControllerRun {
                     incarnation: 1,
                     pid: pid1,
@@ -667,7 +777,7 @@ impl ProcTrial<'_> {
                 )
                 .map_err(e2s)?;
                 wall_stop = Some(ms(t_kill.elapsed()));
-                logical_resume = clock.now().ok();
+                logical_resume = self.access.logical_now();
                 let mut c2 = sup.spawn(Role::Control, self.child_cmd(2)?).map_err(e2s)?;
                 let pid2 = c2.pid();
                 let start2 = proc_starttime(pid2).unwrap_or(0);
@@ -742,10 +852,10 @@ impl ProcTrial<'_> {
         let g = grade(self.spec, &att, &trial_dir.join(GRADE_FILE)).map_err(e2s)?;
         let wall_grade = ms(t_grade.elapsed());
         let t_collect = Instant::now();
-        let observer = FilePbs::open(self.state).map_err(e2s)?;
+        let observer = self.access.transport(self.spec, self.dir)?;
         let binding = raw
             .collect_trial(
-                QstatView::new(&observer, &self.spec.cluster),
+                QstatView::new(observer.as_ref(), &self.spec.cluster),
                 &TrialInput {
                     arm: self.arm,
                     logical_job_id: logical.clone(),
@@ -809,8 +919,8 @@ impl ProcTrial<'_> {
                     logical_wait_saved_secs: logical_wait_saved,
                     logical_stop_secs: logical_stop,
                     logical_resume_secs: logical_resume,
-                    // 論理欄は state dir の偽の時計（FileClock）。実秒ではない。
-                    clock_kind: ClockKind::FileFake,
+                    // file の論理欄は state dir の偽の時計（FileClock）で実秒ではない。ssh は実時計。
+                    clock_kind: self.access.clock_kind(),
                     reject_reason: None,
                 },
             )
@@ -827,15 +937,15 @@ impl ProcTrial<'_> {
         })
     }
 
-    /// 停止中の照会: 親自身が開いた [`FilePbs`]（子と別の handle・別 pid）で、同じ job を `F` まで照会する。
-    /// poll 間隔は [`FileClock`] を進めるだけで待たない。停止中に `F` が取れなければ Err（A2 不成立）。
+    /// 停止中の照会: 親自身が開いた transport（子と別の handle・別 pid）で、同じ job を `F` まで照会する。
+    /// poll 間隔は file では [`FileClock`] を進めるだけで待たず、ssh では実時計で待つ。停止中に `F` が取れなければ Err（A2 不成立）。
     fn observe_stopped(
         &self,
         job_id: &str,
         intent: &super::intent::IntentSpec,
     ) -> Result<Vec<PbsReply>, String> {
-        let observer = FilePbs::open(self.state).map_err(e2s)?;
-        let clock = FileClock::open(self.state).map_err(e2s)?;
+        let observer = self.access.transport(self.spec, self.dir)?;
+        let clock = self.access.clock()?;
         let deadline = clock
             .now_unix()
             .saturating_add(self.spec.limits.trial_deadline_secs);

@@ -12,7 +12,10 @@
 //!
 //! recovery 比較（ADR 2026-10-25-recovery-scheduler-backend 付記 I14 (1)）は同じ入口に backend と条件を足す。
 //! `DAGBENCH_BACKEND=ext-sim|pbs`（既定 ext-sim）、`pbs` では `DAGBENCH_RECOVERY=normal|a2`・`DAGBENCH_PBS_SPEC`・
-//! `DAGBENCH_PBS_STUDY`・`DAGBENCH_PBS_STATE`（偽 cluster の state dir）が必須、`DAGBENCH_PBS_TRANSPORT=file` だけを受ける。
+//! `DAGBENCH_PBS_STUDY` が必須。`DAGBENCH_PBS_TRANSPORT=file`（既定）は `DAGBENCH_PBS_STATE`（偽 cluster の state dir）が必須。
+//! `DAGBENCH_PBS_TRANSPORT=ssh`（付記 I15 (1)）は `DAGBENCH_PBS_APPROVAL=<人の承認記録 JSON の絶対 path>` が spec と一致し
+//! 期限内のときだけ受け（`DAGBENCH_PBS_STATE` は与えない）、外れれば ssh・qsub を起こさず Err。
+//! 測定を閉じるのは `close_from_env`（`DAGBENCH_CLOSE_RAW`・`DAGBENCH_CLOSE_PINS`、付記 I15 (3)）。
 //! 1 起動 = 1 trial（arm × condition）で、測定専用 controller は子 process（この binary の `pbs_control_child`）。
 //! 拒否の試験だけが `DAGBENCH_PBS_CHILD_FAULT=announce-before-save|duplicate-submit|duplicate-consume`（子の env）を使う。
 //! 出力: `<out>/run.json` ほかの raw 一式と `<out>/metrics/control_measured_metrics.{json,tsv}`。
@@ -27,13 +30,14 @@ use std::{
 };
 
 use celeris_campaign::dagbench::pbs::{
+    approval,
     backend::{Arm, RecoverySpec, SPEC_PIN},
     entry::{
         BackendFlag, BaselineController, Condition, RECOVERY_POINT, RECOVERY_SCENARIO, Study,
         create_measurement, run_spec,
     },
-    file_pbs::{FileClock, FilePbs},
-    proc::{self as pbs_proc, ChildConfig, ProcReport, ProcTrial},
+    file_pbs::FilePbs,
+    proc::{self as pbs_proc, ChildConfig, PbsAccess, ProcReport, ProcTrial},
     raw::RawWriter,
 };
 use celeris_campaign::{
@@ -89,14 +93,29 @@ pub struct Params {
     pub pbs: Option<PbsParams>,
 }
 
+/// 試験専用の ssh の差し替え（stub の ssh・偽の論理時計）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SshTest {
+    pub program: PathBuf,
+    pub clock_state: PathBuf,
+}
+
 /// `pbs` backend の入力（`DAGBENCH_PBS_*`）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PbsParams {
     pub spec: PathBuf,
     pub study: PathBuf,
-    /// `file` だけ（`ssh` は人の承認前なので拒否）。
+    /// `file` / `ssh`（`ssh` は `approval` が spec と一致し期限内のときだけ）。
     pub transport: String,
-    pub state: PathBuf,
+    /// `file` の偽 cluster の state dir（`ssh` では与えない）。
+    #[serde(default)]
+    pub state: Option<PathBuf>,
+    /// `ssh` の人の承認記録（`DAGBENCH_PBS_APPROVAL`、`file` では与えない）。
+    #[serde(default)]
+    pub approval: Option<PathBuf>,
+    /// 試験専用（env 入口からは設定しない）: stub の ssh と偽の論理時計の state dir（[`PbsAccess::Ssh`]）。
+    #[serde(default)]
+    pub ssh_test: Option<SshTest>,
     /// 試験専用の子の故障（`DAGBENCH_PBS_CHILD_FAULT`、付記 I14 (5)）。子の env にだけ渡す。
     #[serde(default)]
     pub child_fault: Option<String>,
@@ -409,14 +428,30 @@ pub fn run_pbs(p: &Params) -> Result<ProcReport, String> {
     let condition = p
         .recovery
         .ok_or("DAGBENCH_RECOVERY=normal|a2 is required with pbs")?;
-    let pbs = p.pbs.as_ref().ok_or(
-        "DAGBENCH_PBS_SPEC / DAGBENCH_PBS_STUDY / DAGBENCH_PBS_STATE are required with pbs",
-    )?;
-    if pbs.transport != "file" {
-        return Err(format!(
-            "DAGBENCH_PBS_TRANSPORT={} is not accepted (file only; ssh needs human approval)",
-            pbs.transport
-        ));
+    let pbs = p
+        .pbs
+        .as_ref()
+        .ok_or("DAGBENCH_PBS_SPEC / DAGBENCH_PBS_STUDY are required with pbs")?;
+    match (pbs.transport.as_str(), &pbs.state, &pbs.approval) {
+        ("file", Some(_), None) | ("ssh", None, Some(_)) => {}
+        ("file", None, _) => return Err("DAGBENCH_PBS_STATE is required with file".into()),
+        ("file", Some(_), Some(_)) => {
+            return Err("DAGBENCH_PBS_APPROVAL is for ssh; the file transport refuses it".into());
+        }
+        ("ssh", _, None) => {
+            return Err(
+                "DAGBENCH_PBS_TRANSPORT=ssh needs DAGBENCH_PBS_APPROVAL (file only without a human approval record)"
+                    .into(),
+            );
+        }
+        ("ssh", Some(_), Some(_)) => {
+            return Err("DAGBENCH_PBS_STATE is for the file transport; ssh refuses it".into());
+        }
+        (other, _, _) => {
+            return Err(format!(
+                "DAGBENCH_PBS_TRANSPORT={other} is not accepted (file, or ssh with an approval)"
+            ));
+        }
     }
     if p.scenario != RECOVERY_SCENARIO || p.point != RECOVERY_POINT {
         return Err(format!(
@@ -434,19 +469,47 @@ pub fn run_pbs(p: &Params) -> Result<ProcReport, String> {
         "celeris" => Arm::Celeris,
         other => return Err(format!("unknown arm {other} (baseline|celeris)")),
     };
-    fs::create_dir_all(&p.out).map_err(|e| e.to_string())?;
-    fs::create_dir_all(&pbs.state).map_err(|e| e.to_string())?;
-    let dir = fs::canonicalize(&p.out).map_err(|e| e.to_string())?;
-    let state = fs::canonicalize(&pbs.state).map_err(|e| e.to_string())?;
-    if state.starts_with(&dir) || dir.starts_with(&state) {
-        return Err("DAGBENCH_PBS_STATE must be outside the measurement dir".into());
+    if let Some(f) = &pbs.child_fault {
+        if pbs.transport != "file" {
+            return Err(format!(
+                "{} is for the file transport only",
+                pbs_proc::CHILD_FAULT_ENV
+            ));
+        }
+        pbs_proc::ChildFault::parse(f)?;
     }
     let spec = RecoverySpec::parse(&fs::read_to_string(&pbs.spec).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     let study: Study = serde_json::from_slice(&fs::read(&pbs.study).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    let file = Arc::new(FilePbs::open(&state).map_err(|e| e.to_string())?);
-    let clock = Arc::new(FileClock::open(&state).map_err(|e| e.to_string())?);
+    // ssh は測定 dir を作る前に承認を検査する（外れれば何も作らず、ssh・qsub を起こさない）。
+    let approved = match &pbs.approval {
+        Some(a) => Some(approval::load(a, &spec, time::OffsetDateTime::now_utc())?),
+        None => None,
+    };
+    fs::create_dir_all(&p.out).map_err(|e| e.to_string())?;
+    let dir = fs::canonicalize(&p.out).map_err(|e| e.to_string())?;
+    let access = match (&pbs.state, &pbs.approval, &approved) {
+        (Some(state), _, _) => {
+            fs::create_dir_all(state).map_err(|e| e.to_string())?;
+            let state = fs::canonicalize(state).map_err(|e| e.to_string())?;
+            if state.starts_with(&dir) || dir.starts_with(&state) {
+                return Err("DAGBENCH_PBS_STATE must be outside the measurement dir".into());
+            }
+            PbsAccess::File { state }
+        }
+        (None, Some(path), Some(a)) => {
+            approval::pin(&dir, a)?;
+            PbsAccess::Ssh {
+                approval: path.clone(),
+                program: pbs.ssh_test.as_ref().map(|t| t.program.clone()),
+                test_clock: pbs.ssh_test.as_ref().map(|t| t.clock_state.clone()),
+            }
+        }
+        _ => return Err("pbs transport is not set".into()),
+    };
+    let file = access.transport(&spec, &dir)?;
+    let clock = access.clock()?;
     let epoch = format!("runner-{}-{}", arm.as_str(), condition.as_str());
     let mut raw = if dir.join(SPEC_PIN).exists() {
         // 同じ spec の pin であること（別 spec なら PbsExt::open が拒否する）。
@@ -464,9 +527,6 @@ pub fn run_pbs(p: &Params) -> Result<ProcReport, String> {
     } else {
         create_measurement(&dir, &spec, file, clock, &epoch).map_err(|e| e.to_string())?
     };
-    if let Some(f) = &pbs.child_fault {
-        pbs_proc::ChildFault::parse(f)?;
-    }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let child_fault = pbs.child_fault.clone();
     let child = move || {
@@ -492,7 +552,7 @@ pub fn run_pbs(p: &Params) -> Result<ProcReport, String> {
         study_path: &fs::canonicalize(&pbs.study).map_err(|e| e.to_string())?,
         arm,
         condition,
-        state: &state,
+        access: &access,
         params: serde_json::to_value(p).map_err(|e| e.to_string())?,
         child: &child,
         read_saved: &pbs_controller::read_saved,
@@ -537,7 +597,9 @@ fn run_from_env() {
         spec: PathBuf::from(need("DAGBENCH_PBS_SPEC")),
         study: PathBuf::from(need("DAGBENCH_PBS_STUDY")),
         transport: env("DAGBENCH_PBS_TRANSPORT").unwrap_or_else(|| "file".into()),
-        state: PathBuf::from(need("DAGBENCH_PBS_STATE")),
+        state: env("DAGBENCH_PBS_STATE").map(PathBuf::from),
+        approval: env("DAGBENCH_PBS_APPROVAL").map(PathBuf::from),
+        ssh_test: None,
         child_fault: env(pbs_proc::CHILD_FAULT_ENV),
     });
     let p = Params {
@@ -1107,7 +1169,9 @@ impl PbsSetup {
                 spec: self.root.path().join("spec.json"),
                 study: self.root.path().join("study.json"),
                 transport: "file".into(),
-                state: self.state(),
+                state: Some(self.state()),
+                approval: None,
+                ssh_test: None,
                 child_fault: None,
             }),
         }
@@ -1422,6 +1486,35 @@ fn regen_from_env() {
         celeris_campaign::dagbench::pbs::metrics::regenerate(Path::new(&raw_dir), Path::new(&out))
             .unwrap_or_else(|e| panic!("{e}"));
     println!("{}", serde_json::to_string_pretty(&m).unwrap());
+}
+
+/// 測定を閉じる入口（`--ignored`、付記 I15 (3)）。`DAGBENCH_CLOSE_RAW=<測定 dir>` と `DAGBENCH_CLOSE_PINS=<StudyPins の
+/// JSON>` が必須。`run.json` を 1 回だけ新規に書き（既にあれば Err で何も書かない）、`raw::validate` を流して `RunMeta`
+/// を stdout に出す。validate が落ちれば Err（`run.json` は消さない）。transport を開かず、qsub・ssh・子 process を起こさない。
+#[test]
+#[ignore = "set DAGBENCH_CLOSE_RAW=<measurement dir> and DAGBENCH_CLOSE_PINS=<StudyPins JSON>"]
+fn close_from_env() {
+    let raw_dir = env("DAGBENCH_CLOSE_RAW").expect("DAGBENCH_CLOSE_RAW is required");
+    let pins = env("DAGBENCH_CLOSE_PINS").expect("DAGBENCH_CLOSE_PINS is required");
+    let run =
+        close_measurement(Path::new(&raw_dir), Path::new(&pins)).unwrap_or_else(|e| panic!("{e}"));
+    println!("{}", serde_json::to_string_pretty(&run).unwrap());
+}
+
+fn close_measurement(
+    raw_dir: &Path,
+    pins: &Path,
+) -> Result<celeris_campaign::dagbench::pbs::raw::RunMeta, String> {
+    use celeris_campaign::dagbench::pbs::raw::{StudyPins, validate};
+    let pins: StudyPins =
+        serde_json::from_slice(&fs::read(pins).map_err(|e| format!("{}: {e}", pins.display()))?)
+            .map_err(|e| format!("{}: {e}", pins.display()))?;
+    let run = RawWriter::append(raw_dir, "close")
+        .map_err(|e| e.to_string())?
+        .write_run(pins)
+        .map_err(|e| format!("run.json: {e}"))?;
+    validate(raw_dir).map_err(|e| format!("closed but invalid (not counted as a success): {e}"))?;
+    Ok(run)
 }
 
 fn study_pins(s: &PbsSetup) -> celeris_campaign::dagbench::pbs::raw::StudyPins {
@@ -2124,4 +2217,548 @@ fn harness_pbs_reject_scheduler_unknown_is_not_success() {
             }
         }
     }
+}
+
+// ---- recovery 比較: 承認つき ssh 経路（付記 I15 (1)(2)(3)）。stub の ssh だけで、実 ssh・network・qsub なし ----
+// stub は試験専用の `SshTest`（env 入口からは設定できない）で親と子の controller に渡し、論理時計は偽の時計にする
+// （rcv-1 の DAG は 180 論理秒あり、実時計では試験が実時間を待つため）。本番の ssh は PATH の `ssh` と実時計。
+
+const SSH_MEASUREMENT: &str = "rcv-ssh-1";
+
+/// 実行可能 file を別 process で書く（ETXTBSY 回避。dagbench_pbs_transport の stub と同じ書き方）。
+fn write_executable(path: &Path, contents: &str) {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(r#"cat > "$1" && chmod 755 "$1""#)
+        .arg("sh")
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn writer");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(contents.as_bytes())
+        .expect("write");
+    assert!(child.wait().expect("wait").success());
+}
+
+/// 承認つき ssh の測定一式。`bin/ssh` は stub で、qsub は job を作るだけ、qstat は解放 marker
+/// （`<cluster dir>/release/<id>`）の有無で `R`/`F` を返し `F` で `out/<id>/out.bin` を書く（job の代わり）。
+/// `touch`/`cat` は cluster dir が手元の一時 dir なのでその場で実行する。受けた remote command は `ssh.log` に 1 行ずつ残す。
+struct SshSetup {
+    root: tempfile::TempDir,
+}
+
+impl SshSetup {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let s = Self { root };
+        let output_sha: String = <sha2::Sha256 as sha2::Digest>::digest(
+            celeris_campaign::dagbench::pbs::file_pbs::DEFAULT_OUTPUT.as_bytes(),
+        )
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+        for d in ["release", "out"] {
+            fs::create_dir_all(s.cluster_dir().join(d)).unwrap();
+        }
+        fs::create_dir_all(s.root.path().join("bin")).unwrap();
+        fs::create_dir_all(s.root.path().join("stub")).unwrap();
+        let spec = json!({
+            "measurement_id": SSH_MEASUREMENT,
+            "scheduler": "pbs",
+            "cluster": "sirius",
+            "owner": "rmaeda",
+            "queue": "gen",
+            "account": "NBBG",
+            "resources": {"select": "1:ncpus=1", "place": "free", "walltime_secs": 300},
+            "rerunnable": false,
+            "payload": {
+                "script": s.cluster_dir().join("job.sh").display().to_string(),
+                "script_sha256": "a".repeat(64),
+                "input_sha256": "b".repeat(64),
+                "expected_output_sha256": output_sha
+            },
+            "grader": {"binary_sha256": "d".repeat(64), "version": "g1"},
+            "env": {"modules": [], "env_sha256": "e".repeat(64)},
+            "limits": {
+                "external_slots": 1, "worker_slots": 1, "poll_secs": 30, "trial_deadline_secs": 1800,
+                "ssh_timeout_secs": 30, "max_jobs": 4, "workload_attempts": 1
+            },
+            "conditions": ["normal", "a2"],
+            "seed": 17,
+            "rep": 1
+        });
+        let study = json!({
+            "pins": {
+                "campaign_id": "recovery-pbs-ssh",
+                "manifest_sha256": "f".repeat(64),
+                "case_sha256": "1".repeat(64),
+                "source": "agent-platform@test",
+                "binary_sha256": "2".repeat(64)
+            },
+            "problem_id": "rcv",
+            "trial_no": 1
+        });
+        fs::write(s.root.path().join("spec.json"), spec.to_string()).unwrap();
+        fs::write(s.root.path().join("study.json"), study.to_string()).unwrap();
+        fs::write(s.root.path().join("pins.json"), study["pins"].to_string()).unwrap();
+        s.write_approval("approval.json", |_| {});
+        write_executable(
+            &s.root.path().join("bin/ssh"),
+            &format!(
+                r#"#!/bin/sh
+S={stub}
+D={dir}
+while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
+[ $# -ge 3 ] || {{ echo "stub: no remote command" >&2; exit 255; }}
+shift
+[ "$1" = sirius ] || {{ echo "stub: unknown host $1" >&2; exit 255; }}
+shift
+printf '%s\n' "$*" >> "$S/ssh.log"
+case "$1" in
+qsub)
+  n=$(cat "$S/next" 2>/dev/null || echo 4100)
+  echo $((n + 1)) > "$S/next"
+  id="$n.sirius"
+  mkdir -p "$S/jobs/$id"
+  while [ $# -gt 1 ]; do
+    [ "$1" = -v ] && printf '%s' "$2" > "$S/jobs/$id/vars"
+    [ "$1" = -N ] && printf '%s' "$2" > "$S/jobs/$id/name"
+    shift
+  done
+  printf '%s' "$1" > "$S/jobs/$id/script"
+  echo "$id"
+  ;;
+qstat)
+  id=$4
+  [ -d "$S/jobs/$id" ] || {{ echo "qstat: Unknown Job Id $id" >&2; exit 153; }}
+  state=R
+  if [ -e "$D/release/$id" ]; then
+    state=F
+    mkdir -p "$D/out/$id"
+    [ -e "$D/out/$id/out.bin" ] || printf 'recovery payload output seed=17\n' > "$D/out/$id/out.bin"
+  fi
+  echo "Job Id: $id"
+  echo "    Job_Name = $(cat "$S/jobs/$id/name")"
+  echo "    Job_Owner = rmaeda@sirius-login1"
+  echo "    job_state = $state"
+  echo "    queue = gen"
+  echo "    server = sirius"
+  echo "    Account_Name = NBBG"
+  echo "    Rerunable = False"
+  echo "    Resource_List.place = free"
+  echo "    Resource_List.select = 1:ncpus=1"
+  echo "    Resource_List.walltime = 00:05:00"
+  echo "    Variable_List = PBS_O_HOME=/home/rmaeda,$(cat "$S/jobs/$id/vars")"
+  echo "    Submit_arguments = -q gen -A NBBG -r n $(cat "$S/jobs/$id/script")"
+  [ "$state" = F ] && echo "    Exit_status = 0"
+  echo
+  ;;
+touch|cat) exec "$@" ;;
+*) echo "stub: refusing $1" >&2; exit 2 ;;
+esac
+"#,
+                stub = s.root.path().join("stub").display(),
+                dir = s.cluster_dir().display(),
+            ),
+        );
+        s
+    }
+
+    fn cluster_dir(&self) -> PathBuf {
+        self.root.path().join("cluster").join(SSH_MEASUREMENT)
+    }
+
+    fn out(&self) -> PathBuf {
+        self.root.path().join("measure")
+    }
+
+    fn approval(&self, name: &str) -> PathBuf {
+        self.root.path().join(name)
+    }
+
+    /// 期限 1 時間先の一致する承認を `edit` で変えて書く。
+    fn write_approval(&self, name: &str, edit: impl FnOnce(&mut Value)) -> PathBuf {
+        let until = (time::OffsetDateTime::now_utc() + time::Duration::hours(1))
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let mut a = json!({
+            "schema": approval::APPROVAL_SCHEMA,
+            "source": "task:test/decision:d-smoke",
+            "cluster": "sirius", "queue": "gen", "account": "NBBG",
+            "select": "1:ncpus=1", "place": "free", "walltime_secs": 300,
+            "max_jobs": 4,
+            "valid_until": until,
+            "measurement_id": SSH_MEASUREMENT
+        });
+        edit(&mut a);
+        let p = self.approval(name);
+        fs::write(&p, a.to_string()).unwrap();
+        p
+    }
+
+    fn params(&self, arm: &str, cond: Condition, approval: &str) -> Params {
+        Params {
+            arm: arm.into(),
+            scenario: RECOVERY_SCENARIO.into(),
+            point: RECOVERY_POINT.into(),
+            seed: None,
+            fault: None,
+            out: self.out(),
+            grading: None,
+            backend: BackendFlag::Pbs,
+            recovery: Some(cond),
+            pbs: Some(PbsParams {
+                spec: self.root.path().join("spec.json"),
+                study: self.root.path().join("study.json"),
+                transport: "ssh".into(),
+                state: None,
+                approval: Some(self.approval(approval)),
+                ssh_test: Some(SshTest {
+                    program: self.root.path().join("bin/ssh"),
+                    clock_state: self.root.path().join("clock"),
+                }),
+                child_fault: None,
+            }),
+        }
+    }
+
+    /// stub が受けた remote command（順）。
+    fn ssh_log(&self) -> Vec<String> {
+        fs::read_to_string(self.root.path().join("stub/ssh.log"))
+            .unwrap_or_default()
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+
+    fn qsubs(&self) -> usize {
+        self.ssh_log()
+            .iter()
+            .filter(|l| l.starts_with("qsub "))
+            .count()
+    }
+
+    fn trial_ok(&self, arm: &str, cond: Condition, approval: &str) {
+        let before = self.qsubs();
+        let trial = self
+            .out()
+            .join("trials")
+            .join(format!("{arm}-{}", cond.as_str()));
+        if let Err(e) = run_pbs(&self.params(arm, cond, approval)) {
+            panic!(
+                "{arm}/{cond:?}: {e}\ncontrol-1: {}",
+                fs::read_to_string(trial.join("control-1.stderr")).unwrap_or_default()
+            );
+        }
+        assert_eq!(
+            self.qsubs(),
+            before + 1,
+            "{arm}/{cond:?}: one physical qsub"
+        );
+    }
+}
+
+/// 承認が spec と一致し期限内なら、両 arm の normal/A2 が stub ssh 越しに通る。同じ job を回収して独立 grade に合格し、
+/// 閉じた raw（`close_from_env` と同じ本体）が validate を通り、実 job 数 4・site 原票の hash が成果物と一致する。
+#[test]
+fn harness_pbs_ssh_approved_normal_and_a2_pass_for_both_arms() {
+    use celeris_campaign::dagbench::pbs::{
+        raw::{TrialStatus, derive_status, validate},
+        transport::{SITE_CALLS_FILE, SiteCall, SiteCallRow},
+    };
+    let s = SshSetup::new();
+    for (arm, cond) in [
+        ("baseline", Condition::Normal),
+        ("celeris", Condition::Normal),
+        ("baseline", Condition::A2),
+        ("celeris", Condition::A2),
+    ] {
+        s.trial_ok(arm, cond, "approval.json");
+        let trial = s
+            .out()
+            .join("trials")
+            .join(format!("{arm}-{}", cond.as_str()));
+        let rows: Vec<SiteCallRow> = fs::read_to_string(trial.join(SITE_CALLS_FILE))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let fetched = rows
+            .iter()
+            .find(|r| r.call == SiteCall::FetchOutputs)
+            .expect("fetch_outputs row");
+        let got: String = <sha2::Sha256 as sha2::Digest>::digest(
+            fs::read(trial.join("attempt-1/out.bin")).unwrap(),
+        )
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+        assert_eq!(fetched.stdout_sha256, got, "{arm}/{cond:?}");
+        if cond == Condition::A2 {
+            assert!(trial.join("a2.json").exists(), "{arm}: A2 evidence");
+        }
+    }
+    let run = close_measurement(&s.out(), &s.root.path().join("pins.json")).unwrap();
+    assert_eq!(run.real_jobs, 4);
+    assert!(
+        close_measurement(&s.out(), &s.root.path().join("pins.json")).is_err(),
+        "the second close writes nothing"
+    );
+    let report = validate(&s.out()).unwrap();
+    assert_eq!(report.trials.len(), 4);
+    for b in report.trials.values() {
+        assert_eq!(
+            derive_status(b),
+            TrialStatus::ValidatedCompleted,
+            "{}",
+            b.trial_key
+        );
+    }
+    // remote command は qsub / qstat / touch / cat だけ（qdel 等なし）。
+    for l in s.ssh_log() {
+        let cmd = l.split_whitespace().next().unwrap_or_default();
+        assert!(
+            ["qsub", "qstat", "touch", "cat"].contains(&cmd),
+            "unexpected remote command {l}"
+        );
+    }
+    assert_eq!(s.qsubs(), 4);
+    // 取得した成果物が site 原票の hash と食い違えば validate が落ちる。
+    let out = s.out().join("trials/baseline-normal/attempt-1/out.bin");
+    fs::write(&out, b"altered\n").unwrap();
+    let e = validate(&s.out()).unwrap_err();
+    assert!(e.contains("altered") || e.contains("differs"), "{e}");
+}
+
+/// 承認の欠落・queue 不一致・期限切れ・max_jobs 超過・未知の欄は、ssh を 1 回も起こさず測定 dir も作らずに Err。
+#[test]
+fn harness_pbs_ssh_refuses_missing_mismatched_expired_or_oversized_approval() {
+    let s = SshSetup::new();
+    s.write_approval("queue.json", |a| a["queue"] = json!("debug"));
+    s.write_approval("expired.json", |a| {
+        a["valid_until"] = json!("2026-01-01T00:00:00Z")
+    });
+    s.write_approval("oversized.json", |a| a["max_jobs"] = json!(5));
+    s.write_approval("zero.json", |a| a["max_jobs"] = json!(0));
+    s.write_approval("unknown.json", |a| a["extra"] = json!(1));
+    s.write_approval("offset.json", |a| {
+        a["valid_until"] = json!("2999-01-01T00:00:00+09:00")
+    });
+    for (name, want) in [
+        ("missing.json", "No such file"),
+        ("queue.json", "queue"),
+        ("expired.json", "expired"),
+        ("oversized.json", "max_jobs"),
+        ("zero.json", "max_jobs"),
+        ("unknown.json", "unknown field"),
+        ("offset.json", "UTC"),
+    ] {
+        let e = run_pbs(&s.params("baseline", Condition::Normal, name)).unwrap_err();
+        assert!(e.contains(want), "{name}: {e}");
+        assert!(!s.out().exists(), "{name}: no measurement dir");
+    }
+    // 承認なしの ssh・ssh に state・file に承認も Err。
+    let mut p = s.params("baseline", Condition::Normal, "approval.json");
+    if let Some(x) = p.pbs.as_mut() {
+        x.approval = None;
+    }
+    assert!(run_pbs(&p).unwrap_err().contains("DAGBENCH_PBS_APPROVAL"));
+    let mut p = s.params("baseline", Condition::Normal, "approval.json");
+    if let Some(x) = p.pbs.as_mut() {
+        x.state = Some(s.root.path().join("state"));
+    }
+    assert!(run_pbs(&p).unwrap_err().contains("DAGBENCH_PBS_STATE"));
+    let mut p = s.params("baseline", Condition::Normal, "approval.json");
+    if let Some(x) = p.pbs.as_mut() {
+        x.transport = "file".into();
+        x.state = Some(s.root.path().join("state"));
+    }
+    assert!(run_pbs(&p).unwrap_err().contains("DAGBENCH_PBS_APPROVAL"));
+    let mut p = s.params("baseline", Condition::Normal, "approval.json");
+    if let Some(x) = p.pbs.as_mut() {
+        x.child_fault = Some("duplicate-submit".into());
+    }
+    assert!(run_pbs(&p).unwrap_err().contains("file transport only"));
+    assert!(!s.out().exists());
+    assert!(s.ssh_log().is_empty(), "no ssh at all: {:?}", s.ssh_log());
+}
+
+/// 承認の max_jobs に達したら gate が qsub を起こさない（2 trial 目は投入 0 で失敗）。測定中に承認を差し替えれば Err。
+#[test]
+fn harness_pbs_ssh_gate_refuses_qsub_beyond_max_jobs_and_swapped_approval() {
+    let s = SshSetup::new();
+    s.write_approval("one.json", |a| a["max_jobs"] = json!(1));
+    s.trial_ok("baseline", Condition::Normal, "one.json");
+    assert!(run_pbs(&s.params("celeris", Condition::Normal, "one.json")).is_err());
+    assert_eq!(s.qsubs(), 1, "no qsub beyond the approved max_jobs");
+    let replies =
+        fs::read_to_string(s.out().join("trials/celeris-normal/replies-1.jsonl")).unwrap();
+    assert!(replies.contains("approval max_jobs 1 reached"), "{replies}");
+    // 同じ枠でも別の承認記録（source 違い）は pin と合わない。
+    s.write_approval("other.json", |a| {
+        a["max_jobs"] = json!(1);
+        a["source"] = json!("task:test/decision:other");
+    });
+    let e = run_pbs(&s.params("baseline", Condition::A2, "other.json")).unwrap_err();
+    assert!(e.contains("pinned"), "{e}");
+    assert_eq!(s.qsubs(), 1);
+}
+
+/// `SshSite` の argv は検査済みの cluster dir と job ID だけ（ssh の option は SshPbs と同じ）。不正な path・job ID は
+/// 起動しない。
+#[test]
+fn harness_pbs_ssh_site_argv_uses_only_checked_paths() {
+    use celeris_campaign::dagbench::pbs::{
+        entry::Site,
+        transport::{SITE_CALLS_FILE, SiteCall, SiteCallRow, SshSite},
+    };
+    let s = SshSetup::new();
+    s.trial_ok("baseline", Condition::Normal, "approval.json");
+    let trial = s.out().join("trials/baseline-normal");
+    let rows: Vec<SiteCallRow> = fs::read_to_string(trial.join(SITE_CALLS_FILE))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let dir = s.cluster_dir().display().to_string();
+    let job = rows[0].job_id.clone();
+    let head = [
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=30",
+        "-o",
+        "ControlMaster=no",
+        "--",
+        "sirius",
+    ];
+    for r in &rows {
+        assert_eq!(r.job_id, job);
+        assert_eq!(
+            r.argv[0],
+            s.root.path().join("bin/ssh").display().to_string()
+        );
+        assert_eq!(&r.argv[1..9], &head);
+        let tail: Vec<&str> = r.argv[9..].iter().map(String::as_str).collect();
+        let want = match r.call {
+            SiteCall::Release => vec![
+                "touch".to_string(),
+                "--".into(),
+                format!("{dir}/release/{job}"),
+            ],
+            SiteCall::FetchOutputs => {
+                vec![
+                    "cat".to_string(),
+                    "--".into(),
+                    format!("{dir}/out/{job}/out.bin"),
+                ]
+            }
+        };
+        assert_eq!(tail, want.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(
+            r.seq as usize,
+            rows.iter().position(|x| x == r).unwrap() + 1
+        );
+    }
+    assert_eq!(
+        rows.iter().map(|r| r.call).collect::<Vec<_>>(),
+        [SiteCall::Release, SiteCall::FetchOutputs]
+    );
+    // 検査: 相対・`..`・`,`・空要素・basename 違い。
+    for bad in [
+        "rcv-ssh-1/job.sh".to_string(),
+        format!("{}/../rcv-ssh-1/job.sh", s.root.path().display()),
+        "/work/a,b/rcv-ssh-1/job.sh".into(),
+        "/work//rcv-ssh-1/job.sh".into(),
+        "/work/other/job.sh".into(),
+    ] {
+        assert!(
+            SshSite::new(
+                "sirius",
+                Duration::from_secs(5),
+                &bad,
+                SSH_MEASUREMENT,
+                s.root.path().join("x.jsonl")
+            )
+            .is_err(),
+            "{bad}"
+        );
+    }
+    assert!(
+        SshSite::new(
+            "-oProxy=x",
+            Duration::from_secs(5),
+            &format!("{dir}/job.sh"),
+            SSH_MEASUREMENT,
+            s.root.path().join("x.jsonl")
+        )
+        .is_err()
+    );
+    let site = SshSite::new(
+        "sirius",
+        Duration::from_secs(5),
+        &format!("{dir}/job.sh"),
+        SSH_MEASUREMENT,
+        s.root.path().join("x.jsonl"),
+    )
+    .unwrap()
+    .with_program(s.root.path().join("bin/ssh"));
+    let before = s.ssh_log().len();
+    assert!(site.release("1;rm -rf /", "bad").is_err());
+    assert!(site.fetch_outputs("../x", s.root.path()).is_err());
+    assert_eq!(s.ssh_log().len(), before, "bad job ids are not started");
+    assert!(!s.root.path().join("x.jsonl").exists());
+}
+
+/// 全体 timeout を過ぎた `SshSite` の呼び出しは子を殺して Err、原票の outcome は `timeout`。
+#[test]
+fn harness_pbs_ssh_site_timeout_is_classified_as_timeout() {
+    use celeris_campaign::dagbench::pbs::{
+        entry::Site,
+        transport::{CallOutcome, CallTimer, SiteCallRow, SshSite},
+    };
+    /// 待たずに期限切れにする時計（実時間を待たない）。
+    struct Expired;
+    impl CallTimer for Expired {
+        fn wait(&self, _e: &std::sync::mpsc::Receiver<()>, _l: Duration) -> bool {
+            false
+        }
+    }
+    let s = SshSetup::new();
+    let hang = s.root.path().join("bin/hang-ssh");
+    write_executable(&hang, "#!/bin/sh\nexec sleep 3600\n");
+    let calls = s.root.path().join("site-calls.jsonl");
+    let site = SshSite::new(
+        "sirius",
+        Duration::from_secs(5),
+        &format!("{}/job.sh", s.cluster_dir().display()),
+        SSH_MEASUREMENT,
+        calls.clone(),
+    )
+    .unwrap()
+    .with_program(&hang)
+    .with_timer(Arc::new(Expired));
+    let e = site.release("4100.sirius", "t").unwrap_err();
+    assert!(e.to_string().contains("Timeout"), "{e}");
+    let dest = s.root.path().join("dest");
+    fs::create_dir_all(&dest).unwrap();
+    assert!(site.fetch_outputs("4100.sirius", &dest).is_err());
+    assert!(!dest.join("out.bin").exists());
+    let rows: Vec<SiteCallRow> = fs::read_to_string(&calls)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter()
+            .all(|r| r.outcome == CallOutcome::Timeout && r.exit.is_none())
+    );
 }

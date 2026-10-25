@@ -1,6 +1,7 @@
 //! K4 のセル有効性採点（ADR 2026-10-23-k4-cells-validity-grading）。合成 raw を sha256 固定の tgz にして
 //! grader 自身に展開させ、正しい解は通り、既知の誤答（全セル有効・実効 fsync=0 を有効・失敗 job を有効・
-//! 欠測を分母から除外・表と報告の不一致）は落ちることを無 LLM で確かめる。
+//! 欠測を分母から除外・表と報告の不一致・有効セルの数値誤り）は落ちることを無 LLM で確かめる。
+//! 実 K4 は公開入力 v2（`main-v3-n2-43706-public2.tgz`、ADR 2026-10-25-k4-public-input-v2）を `CAMPAIGN_K4_TGZ` で渡す。
 use std::{collections::BTreeMap, fs, path::Path, process::Command};
 
 use celeris_campaign::{
@@ -425,8 +426,51 @@ fn qstat_records_are_read_by_state_and_exit_status() {
     assert_eq!(m.len(), 1);
 }
 
-/// 実 K4 原票（job 43706）: 人が承認した final-v3 と同じ 30/32（BenchFS W2 の 2 セルは欠測・job F/-20）。
-/// A 腕相当の 30/32 は通り、B 腕相当（UnifyFS W3 を無効にした 28/32）と全セル有効は落ちる。
+/// 件数・valid 列・報告がすべて正しく、有効セル 1 つの数値 1 つだけが許容差（相対 0.1%）を超えてずれた表は落ちる。
+/// 表と報告の不一致とは独立に、数値誤りだけで拒否されることを確かめる。
+#[test]
+fn numeric_error_in_one_valid_cell_is_rejected_on_its_own() {
+    let fx = fixture(&like_real());
+    for (key, factor) in [("read_ops", 1.02), ("md_stat", 0.97)] {
+        let mut exp = fx.expected.clone();
+        let row = exp
+            .rows
+            .iter_mut()
+            .find(|r| r.valid && r.values.contains_key(key))
+            .expect("valid row with the value");
+        let cell = format!("{}/rep{}/{}", row.fs, row.rep, row.workload);
+        *row.values.get_mut(key).expect("value") *= factor;
+        assert_eq!(exp.counts(), fx.expected.counts(), "件数は正しいまま");
+        fs::write(fx.art.join("results/cells.csv"), exp.csv()).expect("csv");
+        fs::write(fx.art.join("report.md"), exp.metric_lines()).expect("report");
+        let (st, reasons) = recompute(&fx);
+        assert_eq!(st, Status::Fail, "{key}");
+        assert!(
+            reasons
+                .iter()
+                .any(|r| r.contains(&cell) && r.contains(key) && r.contains("tolerance")),
+            "{key}: {reasons:?}"
+        );
+        assert!(
+            !reasons.iter().any(|r| r.contains("metric cells_")),
+            "数値誤りだけで落ちる: {reasons:?}"
+        );
+    }
+    // 許容差の内側（相対 0.05%）は通る。
+    let mut exp = fx.expected.clone();
+    for r in &mut exp.rows {
+        if let Some(v) = r.values.get_mut("write_MiB_s") {
+            *v *= 1.0005;
+        }
+    }
+    fs::write(fx.art.join("results/cells.csv"), exp.csv()).expect("csv");
+    fs::write(fx.art.join("report.md"), exp.metric_lines()).expect("report");
+    assert_eq!(recompute(&fx).0, Status::Pass);
+}
+
+/// 実 K4 原票（job 43706、公開入力 v2）: 人が承認した final-v3 と同じ 30/32（BenchFS W2 の 2 セルは欠測・job F/-20）。
+/// A 腕相当の 30/32 は通り、B 腕相当（UnifyFS W3 を無効にした 28/32）・全セル有効・失敗 job のセルだけを有効・
+/// 欠測を分母から除外・有効セルの数値誤りは落ちる。
 #[test]
 fn real_k4_archive_grades_thirty_of_thirty_two() {
     let tgz = std::env::var("CAMPAIGN_K4_TGZ")
@@ -435,7 +479,7 @@ fn real_k4_archive_grades_thirty_of_thirty_two() {
         .filter(|p| p.is_file())
         .or_else(|| {
             let p = std::path::PathBuf::from(
-                "/local/celeris/data/measure/main-3/out/snapshot/inputs/main-v3-n2-43706.tgz",
+                "/local/celeris/data/workspaces/01M5SRJMA9CFNG2C9KCCS5VS4B/artifacts/k4-inputs-v2/main-v3-n2-43706-public2.tgz",
             );
             p.is_file().then_some(p)
         });
@@ -550,4 +594,47 @@ fn real_k4_archive_grades_thirty_of_thirty_two() {
         r.valid = true;
     }
     assert_eq!(run(&all_valid).0, Status::Fail);
+    // 失敗 job（F/-20）の BenchFS W2 だけを有効にした報告（32/32）。
+    let mut w2_valid = exp.clone();
+    for r in &mut w2_valid.rows {
+        if r.fs == "benchfs" && r.workload == "w2" {
+            r.valid = true;
+            r.reasons.clear();
+        }
+    }
+    let (st, fc, reasons) = run(&w2_valid);
+    assert_eq!((st, fc), (Status::Fail, Some(FailureClass::ModelFailure)));
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains("benchfs/rep1/w2") && r.contains("marked valid")),
+        "{reasons:?}"
+    );
+    // 欠測の 2 セルを表と分母から落とした報告（30/30）。
+    let mut dropped = exp.clone();
+    dropped.rows.retain(|r| r.valid);
+    assert_eq!(dropped.counts()["cells_total"], 30.0);
+    let (st, _, reasons) = run(&dropped);
+    assert_eq!(st, Status::Fail);
+    assert!(
+        reasons.iter().any(|r| r.contains("denominator")),
+        "{reasons:?}"
+    );
+    // 件数は正しく、有効セル 1 つの帯域だけを 2% 誤った報告。
+    let mut wrong_value = exp.clone();
+    let row = wrong_value
+        .rows
+        .iter_mut()
+        .find(|r| r.valid && r.values.contains_key("write_MiB_s"))
+        .expect("valid ior row");
+    let cell = format!("{}/rep{}/{}", row.fs, row.rep, row.workload);
+    *row.values.get_mut("write_MiB_s").expect("value") *= 1.02;
+    let (st, fc, reasons) = run(&wrong_value);
+    assert_eq!((st, fc), (Status::Fail, Some(FailureClass::ModelFailure)));
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains(&cell) && r.contains("write_MiB_s") && r.contains("tolerance")),
+        "{reasons:?}"
+    );
 }

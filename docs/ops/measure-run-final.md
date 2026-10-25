@@ -130,7 +130,7 @@ mkdir -p $M $K $R $I
 for c in k2-bf-xattr-restart-campaign k4-cmp4-validity-analysis; do cp -r crates/campaign/cases/final/$c/materials $M/$c; done
 cp -r crates/campaign/cases/final/k2-bf-xattr-restart-campaign/kb/. $K/
 # R: k2 の初期 tree（BenchFS 086c4618。case.json の initial.fetch の手順）。k4 は repo 不要
-cp <main-v3-n2-43706.tgz の実物> $I/main-v3-n2-43706.tgz   # prepare が同じ tgz を sha256 照合のうえ GRADE_CASES_ROOT/final/k4-…/ へ写す（grader が自分で展開する。ADR 2026-10-23-k4-cells-validity-grading D3）
+cp <main-v3-n2-43706-public2.tgz の実物（公開入力 v2。ADR 2026-10-25-k4-public-input-v2）> $I/main-v3-n2-43706-public2.tgz   # prepare が同じ tgz を sha256 照合のうえ GRADE_CASES_ROOT/final/k4-…/ へ写す（grader が自分で展開する。ADR 2026-10-23-k4-cells-validity-grading D3）
 # R（K2 初期 tree）の組立: bundle を clone → commit 086c4618 を checkout → submodule 5 件を lock の path へ snapshot tar 展開 → .git を消す
 # （手順の実例: pinned/build-srcs.sh。asset_assembly::assemble_initial と同じ）
 # K2 の組立後 tree には tree 内 symlink が 3 件ある（lib/locusta/CLAUDE.md・…/centos6/run-test.sh・…/ucx1-sys/ucx/README）。修正後 binary（§3a）は tree 内に閉じた symlink を許し、lock の content_sha256 と両立する（解決済み。実 K2 preflight exit 0 の証跡あり）。修正前の binary では preflight が exit 1 になる
@@ -148,7 +148,7 @@ echo $?                       # 0 = 全件 OK。非 0 は stderr JSON の `missi
 sh $L watch     --env $ENVF   # daemon 実体照合 → preflight → env-lock（初回は作成、再開は照合）→ 実行直前に実体照合を再度 → watch。どれか不一致なら外部実行 0 件で非 0
 ```
 - `measure-config`（`DAEMON_CONFIG`）・`normal-config`・`canaries`: **起動前**の `config-check`（`prepare` と `start` が daemon を起こす前に実行。daemon には接続しない）と preflight が、測定 config が本番と別の port・db・workspace・KB・記憶・llm_proxy・releases_dir・通知先であること、自動整理が無効であること、canary 値を照合する。不適切なら daemon を起動せず非 0。起動後は `env-check` が `GET /api/v1/config` の `identity`（instance・pid・release・config sha256・実効構成。秘密なし）を照合する: `identity.pid` が launcher 所有 daemon の PID（`--daemon-pid`）と一致、`config_sha256` が `DAEMON_CONFIG` の現物と一致、`overrides` が空、release が manifest の B/C と一致（`dev` は不可）、実効構成が `DAEMON_CONFIG` と一致。別 daemon の URL・起動後の config 書換え・版不一致・必須入力欠落・daemon 実行ファイルの差替えは、いずれも測定用外部実行 0 件で非 0。
-- inputs: `--inputs-src` に case の宣言した file が全て在り sha256 が一致すること（k4 の `main-v3-n2-43706.tgz`。k2 は `REPO_SRC`）を preflight が確かめ、watch が各試行 workspace の `inputs/<name>` に A/B/C 共通で置く。
+- inputs: `--inputs-src` に case の宣言した file が全て在り sha256 が一致すること（k4 の `main-v3-n2-43706-public2.tgz`。k2 は `REPO_SRC`）を preflight が確かめ、watch が各試行 workspace の `inputs/<name>` に A/B/C 共通で置く。
 - daemon 実体の照合（`start` の新規起動・既存 process への再接続、`preflight`、`watch` の全経路。`watch` は実行の直前にもう一度）: ① `CELERIS_BIN` の現物が `prepare` の固定 sha256 と一致、② launcher 所有 process（`$STATE_DIR/launcher.pid`・`launcher.meta` の starttime と cmdline の `--config`）が生きている、③ その実行像 `/proc/<pid>/exe` が起動時に記録した path・sha256 と一致し、その path の現物も同じ。同じ path の binary を差し替えると、再開時（watch・再接続）も `--version` が同じでも拒否される。
 - 主比較（mlsys-main-1）は env-lock/3 と campaign lock が §3a で生成・照合済み（`pinned/main/`）。`watch` 初回が作る旧記述は一般手順で、主比較では `$OUT` へ複写した固定 lock と照合する。
 - env-lock（`$OUT/env-lock.json`）: A の絶対 path・sha256・`--version`、B/C の release sha12、arm ごとの lower_policy・evidence_mode（none）・models・run_harnesses と**接続先 daemon の `GET /api/v1/llm/models` から取った候補集合と階層（catalog）**、worker 実行ファイル（`WORKER_PROGRAMS`）、`campaign_sha256` の固定記録。再開時は現物から作り直して突き合わせ、追加・削除・階層移動を key 名で挙げて拒否する。秘密値は持たない。

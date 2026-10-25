@@ -25,8 +25,12 @@ completed: 2026-10-25
 
 ## 検査（提出時の HEAD で実行）
 
-- `sh scripts/dev/check-doc-links.sh` / `sh scripts/dev/check-adr-numbers.sh` / `sh scripts/dev/progress-index.sh --check`
-  の結果は報告本文に書く。
+- `sh scripts/dev/check-doc-links.sh` → exit 0（ok）
+- `sh scripts/dev/check-adr-numbers.sh` → exit 0（ok、293 files）
+- `sh scripts/dev/progress-index.sh --check` → exit 0（ok）
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0（ok）
+- `bash scripts/dev/test-affected.sh` → exit 0（試験対象の変更なし。docs のみ）
+- `cargo clippy --workspace -- -D warnings` → exit 0 / `cargo fmt --all -- --check` → exit 0
 - commit: 「runbook: recovery smoke runbook and P0-2 identity reconciliation」
 
 ## 未解決事項

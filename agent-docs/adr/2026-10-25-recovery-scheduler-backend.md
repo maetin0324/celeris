@@ -298,3 +298,19 @@ ssh・qsub・外部ネットワークは使わない。時間は注入時計で�
 ### I9. この付記で決めないこと
 
 実 command の検索手段（D4.4）、PBS 課金単位の換算、実接続の承認は接続後・人の決定に残す。
+
+### I10. ext-pbs 実装での補足（2026-10-25）
+
+I4・I5 の実装（`pbs/backend.rs`）で、付記に書いていなかった形を次のとおり決めた。D1–D5 は変えない。
+
+- `RecoverySpec` に `owner`（`Job_Owner` の user・marker 検索の範囲）と `payload.script`（cluster 上の job script の絶対 path）を足す。
+  intent の照合（`IntentSpec::check_record`）に要るため。`limits.workload_attempts` は 1 以外を読み込みエラーにし、`rerunnable=true` も拒否する。
+- spec の hash は測定 dir の `recovery-spec.json`（pin、hard link で 1 回だけ作る）と照合する。両 arm は同じ測定 dir を使い、
+  別 hash の spec では `PbsExt::open` が失敗する。pin の `start_unix` を `now`/`advance` の秒の起点にし、`advance(t)` は wall clock が
+  開始 + t に届くまで注入時計で待ってから poll 間隔ごとに qstat する。
+- identity の `node` は論理 job ID（scenario の外部 node ごとに一意）。`max_jobs` と `external_slots` は測定 dir 全体（両 arm）で数え、
+  未解決の intent は枠を戻さない（D4.6）。
+- 受理後の履歴消失（`Unknown Job Id`）・照会失敗は `Lookup` ではなく `io::Error`（未観測で停止）。原票が intent と食い違えば
+  `Lookup::Unresolved`。`Lookup::Unknown` は台帳に intent が無いときだけ。
+- 消費台帳は `consumed.jsonl`（lock 内で読み直し、`(job_ref, workload_attempt)` の 2 回目は `false`）。
+- ipc server を `Box<dyn ExtBackend + Send>` に広げる変更（I1）は入口を作る wire-entry に残す。`PROTOCOL_VERSION` は variant 追加に合わせて 2 にした。

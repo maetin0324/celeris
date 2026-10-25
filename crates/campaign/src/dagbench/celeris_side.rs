@@ -620,6 +620,14 @@ impl WorkerAdapter for StubWorker {
                                     "submit {logical}: response lost and unknown to the lookup"
                                 ))));
                             }
+                            Lookup::Unresolved {
+                                submit_intent_id,
+                                reason,
+                            } => {
+                                return Err(AdapterError::Io(std::io::Error::other(format!(
+                                    "submit {logical}: {submit_intent_id} unresolved ({reason})"
+                                ))));
+                            }
                         }
                     }
                     Err(e) => {
@@ -775,7 +783,8 @@ fn ext_poller(shared: Arc<Shared>) -> task_dispatch::dispatcher::ClusterJobPolle
                     ..
                 } => "F",
                 Lookup::Known { .. } => "R",
-                Lookup::Unknown => continue,
+                // 照合できない投入は submit 側で停止済み。poll では記録を作らない。
+                Lookup::Unknown | Lookup::Unresolved { .. } => continue,
             };
             out.push_str(&format!(
                 "Job Id: {id}.{CLUSTER}\n    Job_Name = {logical}\n    job_state = {state}\n    queue = dagbench\n"

@@ -80,6 +80,12 @@ pub enum SubmitError {
     ResponseLost,
     /// job 枠が空いていない（何も起こしていない）。
     NoSlot,
+    /// 送ったか分からない投入を照合できず停止した（unknown_submit → unresolved_stop）。再投入の許可ではない。
+    /// ExtSim は返さない（実 scheduler の backend だけ）。
+    Unresolved {
+        submit_intent_id: String,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,10 +97,17 @@ pub struct SubmitReply {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Lookup {
+    /// 一度も投入していない（投入前の記録も無い）。再投入してよいのはこの場合だけ。
     Unknown,
     Known {
         physical_id: String,
         state: JobState,
+    },
+    /// 投入したか・どの job か照合できない。再投入の許可ではなく、呼び出し側は停止する。
+    /// ExtSim は返さない（実 scheduler の backend だけ）。
+    Unresolved {
+        submit_intent_id: String,
+        reason: String,
     },
 }
 
@@ -407,7 +420,7 @@ impl ExtSim {
         };
         let phys = match &r {
             Lookup::Known { physical_id, .. } => Some(physical_id.clone()),
-            Lookup::Unknown => None,
+            Lookup::Unknown | Lookup::Unresolved { .. } => None,
         };
         let _ = self.append(
             "lookup",
@@ -415,6 +428,7 @@ impl ExtSim {
             phys.as_deref(),
             Some(serde_json::json!({"result": match &r {
                 Lookup::Unknown => "unknown",
+                Lookup::Unresolved{..} => "unresolved",
                 Lookup::Known{state: JobState::Running, ..} => "running",
                 Lookup::Known{..} => "completed",
             }})),

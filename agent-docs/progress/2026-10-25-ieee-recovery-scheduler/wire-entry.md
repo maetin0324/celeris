@@ -40,7 +40,7 @@ commit「phase 1: wire opt-in PBS recovery entry with offline e2e」の HEAD で
   - 既定 ext-sim・`--backend pbs` の CLI 拒否・wrapper 環境の拒否・`celeris-qsub` の recovery job 内拒否（印なしは従来どおり記録）。
 - `python3 scripts/dev/check-architecture-map.py` → OK（exit 0）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- `bash scripts/dev/test-affected.sh` → 結果は下の「提出時の検査」。
+- `bash scripts/dev/test-affected.sh` → exit 0、2684 passed / 7 skipped（commit「phase 1: wire opt-in PBS recovery entry with offline e2e」の HEAD）。
 
 ## 未解決事項
 

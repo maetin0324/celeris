@@ -22,11 +22,11 @@ completed: 2026-10-25
 
 ## 証拠
 
-提出時の HEAD（commit「phase 1: add submit intent ledger with marker reconciliation」）で実行。
+commit「phase 1: add submit intent ledger with marker reconciliation」の HEAD で実行。
 
 - `cargo test -p celeris-campaign --test dagbench_pbs_intent` → 14 passed。
 - `cargo test -p celeris-campaign --test runner_checker --test dagbench_pbs_transport` → 16 / 8 passed（src 走査の禁止語に抵触しない）。
-- `bash scripts/dev/test-affected.sh` → TEST_AFFECTED_RESULT
+- `bash scripts/dev/test-affected.sh` → exit 0、2666 passed / 7 skipped。1 回目は shell 試験 `scripts/dev/tests/progress_index_commit_hashes.sh` の (2) が落ちて health 段で止まった（単独実行・再実行では通る。pbs-transport unit と同じ。本変更は scripts に触れない）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` は crates/campaign の 3 path と本進捗ファイルのみ。
 

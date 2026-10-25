@@ -40,7 +40,7 @@ completed: 2026-10-25
 - **使い方のずれ（コードは変えない）**: checker を `--measurement-id`・資産の引数なしで呼ぶと（nollm の check 段の形）期待 lock が合わず grade を外し（A ungraded 2）、
   保存 lock だけで結合する report（A model_failure 2）とずれる。launcher の grade は正しい引数で呼ぶ。照合 script はこれをずれとして出す
   （`grade-integrate/consistency.nollm-stage-check.json`）。
-- export・final-accounting はこの out を拒否する（件数ではなく pin の違反: manifest の set fixed `initial_info` dab3ca05… ≠ 観測 materials ae9007f5…）。
+- export・final-accounting はこの out を拒否する（件数ではなく pin の違反: manifest の set fixed `initial_info` が観測 materials の sha256 と食い違う。値は consistency.json の `blocked_by_pins`）。
   export の行は checker totals の写し（`export::row`）で、既存の `success_contract` 試験が checker と同じ数を確かめている。表そのものの照合は再固定の後。
 
 ## 必須入力の供給・欠測・共有 setup・wait

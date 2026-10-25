@@ -59,7 +59,8 @@ completed: 2026-10-25
 - `python3 scripts/campaign/check-out-consistency.py --out M/nollm/out …`（launcher と同じ資産の引数）→ exit 0、`consistent: true`。
 - `python3 scripts/campaign/test_check_out_consistency.py` → 8 passed。
 - `cargo test -p celeris-campaign --test success_contract --test final_accounting` → 4 passed + 11 passed。
-- `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` → 結果は報告本文。
+- `bash scripts/dev/test-affected.sh` → exit 0、2648 tests run: 2648 passed、7 skipped。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → ok。
 
 ## 残件
 - **P0-1 の最終資産での再確認**: K4 公開入力 v2 は main に入ったが、main-4 bundle（judged-scope-v2）と この out は v1（main-v3-n2-43706.tgz）のまま。

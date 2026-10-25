@@ -32,12 +32,13 @@ updated: 2026-10-25
 - 旧資産: 旧 tgz（`128057cf4016535941963fc4142ba424c05c65889905ca2bbcc190f6161077a1`）と旧資産一覧 `old-assets-after.json` の 63 file、計 64 file の sha256 が実行前後で同じで固定値と一致（`old_assets.unchanged: true`）。
 
 ## 変えたもの
-- `crates/campaign/tests/preflight_input_archive/real.rs`: `real_archive_offline_audit` が各 case の argv・exit・期待 exit を全部記録してから一致を確かめる形にした。
-  数値誤り・失敗 job の W2 を有効・欠測を分母から落とす負例の grade を足し、preflight の拒否で transport 呼び出し数と out の有無を残す。
-  出力は `audit.json`。fixture 全体の写し（1 GB 超）はやめ、manifest・case・grade-case だけ残す。
-- `crates/campaign/scripts/nollm-k4-v2.sh`（新規）: build、lock、上の試験、旧資産の前後照合をして `summary.json` を書く。
+- `crates/campaign/scripts/nollm-k4-v2.sh`（新規）: build、lock、既存の opt-in 試験 `real_archive_offline_audit`（変更なし。出力は `<出力dir>/audit/`）、
+  独立負例 3 本の作成と CLI の grade、旧資産の前後照合をして `summary.json` を書く。
+  負例は試験の正例報告（`audit/positive-artifact`）から 1 つずつ別の誤りだけを入れて作り、正例と同じ grade argv の `--artifact` だけ差し替える。
+  試験が残す fixture の写し（1 GB 超）は 1 MB を超える file を消し、manifest・case・grade-case だけ残す。
+- 前回の attempt は試験 `crates/campaign/tests/preflight_input_archive/real.rs` も変えたが、WU の範囲（script と進捗だけ）の外だったので基点の版へ戻した。
 
-commit: 「campaign: K4 v2 の無 LLM 通しを script にし、独立負例と lock を記録する」。
+commits: 「campaign: K4 v2 の無 LLM 通しを script にし、独立負例と lock を記録する」、「campaign: K4 v2 無 LLM 通しの負例を script へ移し、試験を基点の版へ戻す」。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - `sh crates/campaign/scripts/nollm-k4-v2.sh <public2.tgz> …/artifacts/k4-nollm-v2` → exit 0、15 case 全 ok、old assets unchanged True（64 files）、pin match True。

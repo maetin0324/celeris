@@ -49,7 +49,7 @@ grader が読む 147 件（`pinned_raw` 32 件を含む）はすべて v2 に残
 | `kb/snapshot.md` | `4a758f43cb093c45da9297784cf220e8bb26160782b3af30e560e292a59d8122` | 同じ（変更なし） |
 | grade-case（`fixtures/grade-cases/final/k4-…/k4-cmp4-validity-analysis.json`） | `34de0c8823c7f03cf227620e73fcbe3c630b18070307d79ca8f9a74db338b64d` | `7751a8577dd09d3f8cd5729179bfbc819aaf87249bb46f16e3ecb751ce48ca54` |
 | private（`fixtures/grader-private/final/k4-…/private.json`） | `2aeea5675525b8dd7959c87e5739be9608cccb6a3695c27a503549f821a08638` | `46ea074be15202c4b3d2fca143563ce9c06822607f51e656469da6ad5f6871da` |
-| lock の expected_lock | `abdf0b6147ad830551200218206545a113591d585f4e59bb8498359815d2ae7a`（main-4 `judged-scope-v2/pinned/main/lock.json`） | `fa0934224cb3bed29b1e0d2ed1c8f6cb087822b6666bbfc751e959401d887250`（`k4-nollm-v2/lock.json`、measurement_id `mlsys-main-4-v2-c678b60a999f`） |
+| lock の expected_lock | `abdf0b6147ad830551200218206545a113591d585f4e59bb8498359815d2ae7a`（main-4 `judged-scope-v2/pinned/main/lock.json`） | `fa0934224cb3bed29b1e0d2ed1c8f6cb087822b6666bbfc751e959401d887250`（`k4-nollm-v2/lock.json`、measurement_id は `mlsys-main-4-v2-` の後に campaign sha256 の先頭 12 桁） |
 | lock の file | `e6c7471090e6a11f2771c91a9f0cd1e679ce3f9698b01747a27ba13f5a4dbf99` | `299985bbb3c47a6b3c7fb1e6ee06d87470d438acd22d48a267b402b2d82c8546` |
 
 v1 の case・grade-case・private の値は archive 段の commit「campaign: K4 archive manifest を old_sha256/new_sha256/removed にし、試験を script の --self-test に入れる」時点の file の sha256（case 段より前）。

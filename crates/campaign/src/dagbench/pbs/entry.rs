@@ -93,14 +93,25 @@ impl BackendChoice {
     }
 }
 
-/// `--backend ext-sim|pbs`（無ければ ext-sim）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `--backend ext-sim|pbs`（無ければ ext-sim）。harness の `DAGBENCH_BACKEND` も同じ値（付記 I14 (1)）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum BackendFlag {
+    #[default]
     ExtSim,
     Pbs,
 }
 
 impl BackendFlag {
+    /// `DAGBENCH_BACKEND` の値（無ければ ext-sim、未知の値は Err）。
+    pub fn from_env_value(v: Option<&str>) -> Result<Self, String> {
+        match v {
+            None | Some("ext-sim") => Ok(BackendFlag::ExtSim),
+            Some("pbs") => Ok(BackendFlag::Pbs),
+            Some(v) => Err(format!("DAGBENCH_BACKEND ext-sim|pbs (got {v:?})")),
+        }
+    }
+
     pub fn from_args(args: &[String]) -> Result<Self, String> {
         match args
             .iter()
@@ -140,6 +151,15 @@ pub enum Condition {
 }
 
 impl Condition {
+    /// `DAGBENCH_RECOVERY` の値。
+    pub fn parse(v: &str) -> Result<Self, String> {
+        match v {
+            "normal" => Ok(Condition::Normal),
+            "a2" => Ok(Condition::A2),
+            _ => Err(format!("DAGBENCH_RECOVERY normal|a2 (got {v:?})")),
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Condition::Normal => "normal",
@@ -205,6 +225,10 @@ pub trait Controller {
 }
 
 pub type SavedReader = Box<dyn Fn(&str) -> io::Result<Option<Value>> + Send + Sync>;
+
+/// 子 process の controller が保存済み Waiting を見つけたときの合図（`(logical, job_id, snapshot)`）。
+/// 親の応答を待つ出来事待ちで、Err なら controller を止める（付記 I14 (3)）。
+pub type Announce = Box<dyn Fn(&str, &str, &Value) -> io::Result<()> + Send + Sync>;
 
 /// baseline arm の controller。state は `state.json`（sync/rename）で、再開は同じ file から。
 pub struct BaselineController {
@@ -284,6 +308,8 @@ pub struct Gate {
     site: Arc<dyn Site>,
     saved_wait: SavedReader,
     on_stop: Box<dyn Fn() + Send + Sync>,
+    /// 子 process の境界（`Some` なら cond に代わり、合図して親の応答を待つ。barrier は親が残す）。
+    announce: Option<Announce>,
     stopped: AtomicBool,
     state: Mutex<GateState>,
 }
@@ -316,9 +342,9 @@ impl Gate {
         if self.is_stopped() {
             return Err(io::Error::other(STOPPED));
         }
-        let Some(cond) = self.cond else {
+        if self.cond.is_none() && self.announce.is_none() {
             return Ok(());
-        };
+        }
         let (selected, done) = {
             let st = self.lock()?;
             (st.selected.clone(), st.saved.is_some())
@@ -333,6 +359,12 @@ impl Gate {
             return Ok(());
         };
         self.lock()?.saved = Some(snapshot.clone());
+        if let Some(announce) = &self.announce {
+            return announce(&logical, &physical, &snapshot);
+        }
+        let Some(cond) = self.cond else {
+            return Ok(());
+        };
         barrier(
             &self.trial_dir,
             "wait_saved",
@@ -756,10 +788,38 @@ fn ctl_gate(
         site: t.site.clone(),
         saved_wait: reader,
         on_stop,
+        announce: None,
         stopped: AtomicBool::new(false),
         state: Mutex::new(GateState {
             selected: None,
             saved: None,
         }),
     }))
+}
+
+/// 子 process の controller に渡す backend。`announce` が `Some` なら、job ID を受けた後の次の呼び出しで保存済み
+/// Waiting を見つけたときに 1 回だけ合図する（`None` は再開した incarnation：境界なし）。
+pub fn child_gated(
+    ext: PbsExt,
+    trial_dir: &Path,
+    site: Arc<dyn Site>,
+    reader: SavedReader,
+    announce: Option<Announce>,
+) -> GatedExt {
+    GatedExt {
+        ext: SharedExt(Arc::new(Mutex::new(ext))),
+        gate: Arc::new(Gate {
+            cond: None,
+            trial_dir: trial_dir.to_path_buf(),
+            site,
+            saved_wait: reader,
+            on_stop: Box::new(|| {}),
+            announce,
+            stopped: AtomicBool::new(false),
+            state: Mutex::new(GateState {
+                selected: None,
+                saved: None,
+            }),
+        }),
+    }
 }

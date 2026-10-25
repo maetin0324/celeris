@@ -1,0 +1,127 @@
+{
+  "schema": "celeris.dagbench-scenarios/1",
+  "schema_version": 1,
+  "doc": "recovery 比較（ADR 2026-10-25-recovery-scheduler-backend）の DAG。外部 job は PBS backend が実時計で追う（ext_job_secs は ExtSim 用の値で PBS では使わない）",
+  "dataset_label": "control_measured",
+  "paid": {
+    "llm_calls": 0,
+    "cluster_jobs": 0,
+    "note": "worker は台本 stub、外部 job は ext-sim stub。有料 LLM・実クラスタ job は 0"
+  },
+  "time": {
+    "unit": "logical_secs",
+    "clock": "driver が進める仮想時計。両系とも同じ poll_secs で外部 job を照会する",
+    "poll_secs": 30,
+    "note": "poll_secs は task-core cluster_job::MIN_POLL_SECS (30) に揃える。duration はすべて 30 の倍数"
+  },
+  "seed": 17,
+  "seed_note": "seed は既定の基点 seed（単発実行・障害の既定点）。seeds は反復に使う全 seed で、先頭は seed と同じ",
+  "observation_caps": {
+    "max_logical_secs": 40000,
+    "max_events": 100000,
+    "max_wall_secs": 600,
+    "max_control_restarts": 3
+  },
+  "scenarios": [
+    {
+      "id": "rcv-1",
+      "description": "recovery 比較の接続確認（外部 job 1 本: prep→exp→report）",
+      "resources": {
+        "worker_slots": 1,
+        "external_job_slots": 1,
+        "cluster_nodes": 1
+      },
+      "nodes": [
+        {
+          "id": "prep",
+          "kind": "worker",
+          "deps": [],
+          "work_secs": 60,
+          "resources": {
+            "worker": 1
+          }
+        },
+        {
+          "id": "exp",
+          "kind": "external",
+          "deps": [
+            "prep"
+          ],
+          "work_secs": 30,
+          "resources": {
+            "worker": 1
+          },
+          "external": {
+            "logical_job_id": "exp",
+            "nodes": 1,
+            "job_secs": "ext_job_secs",
+            "post_wait_work_secs": 30
+          }
+        },
+        {
+          "id": "report",
+          "kind": "worker",
+          "deps": [
+            "exp"
+          ],
+          "work_secs": 60,
+          "resources": {
+            "worker": 1
+          }
+        }
+      ]
+    }
+  ],
+  "fixed_points": {
+    "design": "one_factor_at_a_time",
+    "note": "全軸の総当たりはしない。center と、各軸を 1 つずつ動かした点だけを流す（scenario ごとに 7 点）",
+    "axes": {
+      "concurrent_campaigns": {
+        "values": [
+          1,
+          2,
+          4
+        ],
+        "center": 2,
+        "meaning": "外側: 同じ制御系へ投入する DAG（campaign）の数。内部の worker_slots とは別変数"
+      },
+      "load": {
+        "values": [
+          0.5,
+          0.9,
+          1.5
+        ],
+        "center": 0.9,
+        "meaning": "worker 枠の提供負荷 rho。campaign の投入間隔 arrival_interval_secs = total_worker_secs / (worker_slots * rho)。concurrent_campaigns=1 では効かない",
+        "formula": "arrival_interval_secs = round_to_poll(total_worker_secs / (worker_slots * load))",
+        "derived_arrival_interval_secs": {
+          "rcv-1": {
+            "0.9": 180
+          }
+        }
+      },
+      "external_wait_ratio": {
+        "values": [
+          0.25,
+          0.5,
+          0.75
+        ],
+        "center": 0.5,
+        "meaning": "臨界経路上の外部 job 時間の割合 r。ext_job_secs = round_to_poll(critical_path_worker_secs * r / (1 - r))",
+        "derived_ext_job_secs": {
+          "rcv-1": {
+            "0.5": 300
+          }
+        }
+      }
+    },
+    "points": [
+      {
+        "id": "camp-1",
+        "concurrent_campaigns": 1,
+        "load": 0.9,
+        "external_wait_ratio": 0.5
+      }
+    ]
+  }
+}

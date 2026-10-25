@@ -124,6 +124,9 @@ pub struct Cell {
     pub class: SuccessClass,
     /// 記録はあるが実行されなかった（task 作成失敗・予算で未投入）。依存で blocked は含めない。
     pub unexecuted: bool,
+    /// 判定に使った試行が実行された（`TrialRecord::ran`。checker の `ran_trials`・消費の欠測数と同じ規則）。
+    /// 記録が無ければ false（その cell は `Missing`）。
+    pub ran: bool,
     /// この cell の記録の数（再試行を含む。判定には最初の 1 件だけを使う）。
     pub recorded_trials: u32,
 }
@@ -164,6 +167,7 @@ pub fn cells(
                             r.reason.as_deref() == Some(REASON_EXECUTOR_ERROR)
                                 || (!r.ran() && r.reason.as_deref() != Some(REASON_BLOCKED))
                         }),
+                        ran: r.is_some_and(|r| r.ran()),
                         recorded_trials: count.get(&(c, p.as_str(), rep)).copied().unwrap_or(0),
                     },
                 );

@@ -462,7 +462,14 @@ cmd_grade() {
 cmd_export() {
     load_token
     set --
-    [ -z "$RECORDS" ] || set -- --records "$RECORDS"
+    # RECORDS（decision-log の records.jsonl）は collect/grade では作られない。測定 DB の写しから
+    # `celerisctl --db <写し> campaign export <campaign_id> --out <dir>` で作る（docs/ops/measure-run-final.md §8）。
+    # 無ければ表の consumption は欠測（0 ではない）として書かれる。
+    if [ -n "$RECORDS" ]; then
+        set -- --records "$RECORDS"
+    else
+        echo "measure-launcher: warning: RECORDS is unset: final accounting is not computed and the table records total consumption as missing" >&2
+    fi
     campaign export --dest "$OUT/export" "$@"
 }
 

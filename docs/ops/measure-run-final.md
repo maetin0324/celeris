@@ -173,12 +173,13 @@ exit 0 = A のアカウントを含む claude が 45%・codex が 21% 以内（`
 ```sh
 sh $L collect --env $ENVF  # = `celeris-campaign collect-observed-out`（実験 case の trial ごとに評価側の job 終了記録を <OUT>/observed/ へ。単独でも実行できる）
 sh $L grade  --env $ENVF   # = collect-observed-out（失敗は警告のみ）+ `celeris-campaign grade-out --cases $GRADE_CASES_ROOT [--initial-trees $INITIAL_TREES]`（独立採点 → $OUT/grades.jsonl）+ `check`。主比較は GRADE_CASES_ROOT=$R/pinned/main/fixed/grade-cases
-sh $L export --env $ENVF   # export を $OUT/export へ。RECORDS があれば final_accounting（総消費量）も含める
+sh $L export --env $ENVF   # export を $OUT/export へ。RECORDS があれば final_accounting（総消費量）も含める。無ければ警告し、表の consumption は欠測（0 ではない）
 ```
 - `grade` は主比較の 4 試行（A・B × K2・K4）すべてに判定を付ける。失敗・timeout・cancelled・未完了も分母に残す。grade-case が無い problem（root 直下 `<problem_id>.json` か `final/<problem>/<problem>.json`）は `missing_cases` で非 0。`check` は `ok true`・violations 空。`complete=false` なら `incomplete_reasons` を読む。
 - 評価側の観測（`collect`）: 台帳に Celeris が残した job ID（`scheduler:cluster:job_id`、素の `<n>.<server>` は case の cluster の PBS とみなす）を `ssh <cluster> qstat -x -f`（read-only）で照会し、記録に campaign sha256・arm・problem・rep・trial_no（`trial`）と scheduler 応答の控え（`observed/<problem>/scheduler/`）の sha256 を結ぶ。job 未終了（`job_state` が `F` 以外）・台帳に job が無い・成果物が実行終了時の hash と違う、のどれでも記録は作られず `collect` は非 0（grade は警告のみで続き、その trial は観測なしの実験証拠として成功にならない）。`grade-out` は記録の `trial` が当該 trial と違う・job 集合が台帳と違う・控えが改変されている記録を拒否する（`graded:false`、非 0）。
 - `grade-out` 単体の再判定が要るときは `$B grade --case $R/pinned/main/fixed/grade-cases/final/<case-id>/<case-id>.json --artifact $OUT/trials/<A|B|C>/<case-id>/rep1/workspace`（`celeris-campaign grade`）。
 - final_accounting を単独で見る: `$B final-accounting --manifest $MANIFEST --out $OUT --records $RECORDS`。
+- 件数と分母の照合: `python3 scripts/campaign/check-out-consistency.py --out $OUT --manifest $MANIFEST --campaign-bin $B --check-arg=…（launcher と同じ資産の引数）--human-ops-report <report dir>`。checker・export・human-op report の成功/失敗/欠測の件数を生記録からの再計算と突き合わせ、一致で exit 0。checker は launcher と同じ `--measurement-id`・資産で呼ぶ（省くと期待 lock が合わず採点が外れ、report とずれる）。
 - 結果回収の固定 hash 一覧（§3a と同じ。回収前後で変わったら採点・export を無効として止める）: campaign_sha256 `8ca0e198…a999`、`pinned/main/lock.json` file sha256 `8ddc8384…2343`、`env-lock.json` `6c2275f3…986c`、daemon release `c9654bff5633` / binary `be62f43d…a3d2`、campaign binary `de339f1c…1394`、final.json sha256 `0aaa6a23…fa36`。確認は `python3 scripts/campaign/check-main-pins.py --root $R`。
 - Celeris 側の消費・判断ログ（人。本番 DB は読むだけ、写しに対して）:
 ```sh

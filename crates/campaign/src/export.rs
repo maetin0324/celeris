@@ -11,6 +11,8 @@ use crate::{
 
 pub const FINAL_ACCOUNTING_FILE: &str = "final-accounting.json";
 pub const MISSING_LABEL: &str = "欠測";
+/// `--records`（launcher の RECORDS）を渡さない export の `consumption.reason`。
+pub const NO_RECORDS_REASON: &str = "decision-log records.jsonl (--records / launcher RECORDS) was not given: total consumption (final-accounting) is missing, not zero";
 /// 主比較の消費の範囲。CoS の call と共有オーバーヘッドは含まない（arm へ配分しない）。
 pub const COST_SCOPE: &str = "trial runs only (tokens/cost recorded on each trial; for B the task tree runs of the trial). CoS calls and shared overhead are NOT included and are not attributed to arms. cost_micro_usd_sum is the per-trial recorded cost; list-price and cash cost are kept apart only in final-accounting.json (never added together); missing trials are counted, never zero-filled";
 
@@ -269,12 +271,24 @@ pub fn export_full(
             "reduction_confirmable": a["reduction_confirmable"],
             "gaps": a["gaps"].as_array().map_or(0, Vec::len),
         });
+    } else {
+        // decision-log の records が無ければ総消費は欠測（0 でも「記載なし」でもない）。表に明記する。
+        table["consumption"] = json!({
+            "file": Value::Null,
+            "scope": {"tokens": "missing", "list_cost_usd": "missing", "cash_cost_usd": "missing"},
+            "reduction_confirmable": false,
+            "reason": NO_RECORDS_REASON,
+        });
     }
     fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let fa = dest.join(FINAL_ACCOUNTING_FILE);
     if let Some(a) = accounting {
         let mut s = serde_json::to_string_pretty(a).map_err(|e| e.to_string())?;
         s.push('\n');
-        fs::write(dest.join(FINAL_ACCOUNTING_FILE), s).map_err(|e| e.to_string())?;
+        fs::write(&fa, s).map_err(|e| e.to_string())?;
+    } else if fa.exists() {
+        // 前回の export の最終集計を今回の表と並べて残さない（別の入力の値になる）。
+        fs::remove_file(&fa).map_err(|e| format!("{}: {e}", fa.display()))?;
     }
     let stem = if complete {
         "table"

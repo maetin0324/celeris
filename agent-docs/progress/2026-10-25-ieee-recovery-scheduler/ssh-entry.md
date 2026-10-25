@@ -48,7 +48,11 @@ D1–D5・I1–I14 の挙動（file transport）は変えていない。実 ssh�
   approved_normal_and_a2_pass_for_both_arms / refuses_missing_mismatched_expired_or_oversized_approval /
   gate_refuses_qsub_beyond_max_jobs_and_swapped_approval / site_argv_uses_only_checked_paths /
   site_timeout_is_classified_as_timeout。既存 15 本は無変更で通過）
-- `bash scripts/dev/test-affected.sh`、`cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check` → 結果は報告本文に記載
+- `bash scripts/dev/test-affected.sh` → exit 0（対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch ほか、
+  nextest 2705 tests run: 2705 passed, 9 skipped）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- commit: 「ssh-entry: approval gate, SshSite and close_from_env for the ssh PBS path (ADR I15 (1)-(3))」
 
 ## 未解決事項
 

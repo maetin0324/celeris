@@ -310,6 +310,8 @@ pub struct Gate {
     on_stop: Box<dyn Fn() + Send + Sync>,
     /// 子 process の境界（`Some` なら cond に代わり、合図して親の応答を待つ。barrier は親が残す）。
     announce: Option<Announce>,
+    /// 試験専用の故障（付記 I14 (5) `announce-before-save`）: job ID を受けた直後、controller が保存する前に合図する。
+    announce_early: bool,
     stopped: AtomicBool,
     state: Mutex<GateState>,
 }
@@ -335,6 +337,21 @@ impl Gate {
             st.selected = Some((logical.into(), physical.into()));
         }
         Ok(())
+    }
+
+    /// `announce_early` のときだけ、job ID を受けた直後（保存の前）に合図する。snapshot は無い（null）。
+    fn announce_before_save(&self, logical: &str, physical: &str) -> io::Result<()> {
+        let Some(announce) = self.announce.as_ref().filter(|_| self.announce_early) else {
+            return Ok(());
+        };
+        {
+            let mut st = self.lock()?;
+            if st.saved.is_some() {
+                return Ok(());
+            }
+            st.saved = Some(Value::Null);
+        }
+        announce(logical, physical, &Value::Null)
     }
 
     /// 次の backend 呼び出しの前（= controller が直前の状態を保存した後）に走る。
@@ -411,6 +428,8 @@ impl ExtBackend for GatedExt {
         let r = self.ext.with(|e| e.submit(logical, job_secs))?;
         if let Ok(reply) = &r {
             self.gate.select(logical, &reply.physical_id)?;
+            self.gate
+                .announce_before_save(logical, &reply.physical_id)?;
         }
         Ok(r)
     }
@@ -789,6 +808,7 @@ fn ctl_gate(
         saved_wait: reader,
         on_stop,
         announce: None,
+        announce_early: false,
         stopped: AtomicBool::new(false),
         state: Mutex::new(GateState {
             selected: None,
@@ -805,6 +825,7 @@ pub fn child_gated(
     site: Arc<dyn Site>,
     reader: SavedReader,
     announce: Option<Announce>,
+    announce_early: bool,
 ) -> GatedExt {
     GatedExt {
         ext: SharedExt(Arc::new(Mutex::new(ext))),
@@ -815,6 +836,7 @@ pub fn child_gated(
             saved_wait: reader,
             on_stop: Box::new(|| {}),
             announce,
+            announce_early,
             stopped: AtomicBool::new(false),
             state: Mutex::new(GateState {
                 selected: None,

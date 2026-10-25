@@ -51,6 +51,35 @@ pub const WAIT_SAVED_LINE: &str = "PBS_WAIT_SAVED";
 pub const CONTINUE_LINE: &str = "CONTINUE";
 /// 親が読み直した保存済み Waiting（trial dir、新規作成）。
 pub const DURABLE_WAIT_FILE: &str = "durable-wait.json";
+/// 拒否した trial の理由（trial dir、新規作成。`celeris.recovery-reject/1`）。
+pub const REJECT_FILE: &str = "reject.json";
+pub const REJECT_SCHEMA: &str = "celeris.recovery-reject/1";
+/// 子の試験専用の故障（付記 I14 (5)）。runner が子の env にだけ入れる。
+pub const CHILD_FAULT_ENV: &str = "DAGBENCH_PBS_CHILD_FAULT";
+
+/// 測定専用 controller の試験専用の故障。どれも出来事（合図・exit）の順で決まり、sleep・負荷を使わない。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChildFault {
+    /// job ID を受けた直後、Waiting を保存する前に `PBS_WAIT_SAVED` を出す。
+    AnnounceBeforeSave,
+    /// `CONTINUE` の後、intent を忘れたかのように別の intent（`workload_attempt` + 1）で同じ job を投入し直す。
+    DuplicateSubmit,
+    /// 完走の後、同じ `(job_ref, workload_attempt)` の消費行を台帳の重複防止を迂回して 2 行目として足す。
+    DuplicateConsume,
+}
+
+impl ChildFault {
+    pub fn parse(v: &str) -> Result<Self, String> {
+        match v {
+            "announce-before-save" => Ok(Self::AnnounceBeforeSave),
+            "duplicate-submit" => Ok(Self::DuplicateSubmit),
+            "duplicate-consume" => Ok(Self::DuplicateConsume),
+            other => Err(format!(
+                "{CHILD_FAULT_ENV}={other} (announce-before-save|duplicate-submit|duplicate-consume)"
+            )),
+        }
+    }
+}
 
 /// 子 process の設定（`DAGBENCH_PBS_CHILD`）。
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -169,7 +198,7 @@ pub fn child_trial(cfg: &ChildConfig, ctl: &mut dyn Controller) -> Result<(), St
     let clock = Arc::new(FileClock::open(&cfg.state).map_err(|e| e.to_string())?);
     let ext = PbsExt::open(
         &cfg.dir,
-        spec,
+        spec.clone(),
         cfg.arm,
         &trial_key,
         &epoch(cfg.arm, cfg.condition, cfg.incarnation),
@@ -177,7 +206,21 @@ pub fn child_trial(cfg: &ChildConfig, ctl: &mut dyn Controller) -> Result<(), St
         clock,
     )
     .map_err(|e| e.to_string())?;
+    let fault = match std::env::var(CHILD_FAULT_ENV) {
+        Ok(v) => Some(ChildFault::parse(&v)?),
+        Err(_) => None,
+    };
     let incarnation = cfg.incarnation;
+    let dup = (fault == Some(ChildFault::DuplicateSubmit)).then(|| {
+        (
+            cfg.dir.clone(),
+            cfg.state.clone(),
+            cfg.replies_file(),
+            spec.clone(),
+            cfg.arm,
+            trial_key.clone(),
+        )
+    });
     let announce: Option<super::entry::Announce> = (incarnation == 1).then(|| {
         Box::new(move |logical: &str, job_id: &str, _snapshot: &Value| {
             let line =
@@ -189,6 +232,14 @@ pub fn child_trial(cfg: &ChildConfig, ctl: &mut dyn Controller) -> Result<(), St
             let mut reply = String::new();
             io::stdin().lock().read_line(&mut reply)?;
             if reply.trim() == CONTINUE_LINE {
+                if let Some((dir, state, replies, spec, arm, trial_key)) = &dup {
+                    let mut again = spec.intent_spec(*arm, trial_key, logical);
+                    again.identity.workload_attempt += 1;
+                    let pbs = RecordingTransport::new(FilePbs::open(state)?, replies.clone());
+                    IntentLedger::open(dir, "fault-duplicate-submit")?
+                        .submit(&again, &pbs, &FileClock::open(state)?)
+                        .map_err(|e| io::Error::other(e.to_string()))?;
+                }
                 Ok(())
             } else {
                 Err(io::Error::other(format!(
@@ -203,12 +254,33 @@ pub fn child_trial(cfg: &ChildConfig, ctl: &mut dyn Controller) -> Result<(), St
         Arc::new(pbs),
         ctl.saved_reader(),
         announce,
+        fault == Some(ChildFault::AnnounceBeforeSave),
     );
     if ctl.run(gated)? {
+        if fault == Some(ChildFault::DuplicateConsume) {
+            duplicate_last_consumed(&cfg.dir)?;
+        }
         Ok(())
     } else {
         Err("controller did not complete".into())
     }
+}
+
+/// [`ChildFault::DuplicateConsume`]: 最後の消費行を seq だけ変えて追記する（台帳の重複防止を迂回する故障）。
+fn duplicate_last_consumed(dir: &Path) -> Result<(), String> {
+    let rows = read_consumed(dir)?;
+    let mut row = rows
+        .last()
+        .cloned()
+        .ok_or("duplicate-consume: nothing consumed")?;
+    row.seq += 1;
+    let mut line = serde_json::to_vec(&row).map_err(e2s)?;
+    line.push(b'\n');
+    let mut f = OpenOptions::new()
+        .append(true)
+        .open(dir.join(super::backend::CONSUMED_LEDGER))
+        .map_err(e2s)?;
+    f.write_all(&line).and_then(|()| f.sync_data()).map_err(e2s)
 }
 
 /// 親が子と独立の接続で読み直した保存済み Waiting。
@@ -360,6 +432,7 @@ impl ProcTrial<'_> {
     }
 
     /// 1 trial を流して raw に結合する。境界・停止・回収の順は module 文書のとおり。
+    /// 拒否（付記 I14 (5)）は Err で終え、理由を trial dir の [`REJECT_FILE`] に残す（測定成功にしない）。
     pub fn run(&self, raw: &mut RawWriter) -> Result<ProcReport, String> {
         let trial_dir = self.trial_dir();
         if trial_dir.exists() {
@@ -369,6 +442,29 @@ impl ProcTrial<'_> {
             ));
         }
         fs::create_dir_all(&trial_dir).map_err(e2s)?;
+        self.run_trial(raw, &trial_dir).map_err(|e| {
+            let reason = e
+                .split_once(':')
+                .and_then(|(k, _)| serde_json::from_value::<RejectReason>(json!(k)).ok());
+            let rec = json!({"schema": REJECT_SCHEMA, "trial_key": self.trial_key(),
+                "arm": self.arm.as_str(), "condition": self.condition.as_str(),
+                "reject_reason": reason, "detail": e});
+            match OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(trial_dir.join(REJECT_FILE))
+                .and_then(|mut f| {
+                    f.write_all(rec.to_string().as_bytes())?;
+                    f.sync_data()
+                }) {
+                Ok(()) => e,
+                Err(w) => format!("{e} (and {REJECT_FILE} was not written: {w})"),
+            }
+        })
+    }
+
+    fn run_trial(&self, raw: &mut RawWriter, trial_dir: &Path) -> Result<ProcReport, String> {
+        let trial_dir = trial_dir.to_path_buf();
         let deadline = Duration::from_secs(self.spec.limits.trial_deadline_secs);
         let log = EventLog::create(&trial_dir).map_err(e2s)?;
         let mut sup = Supervisor::new(
@@ -558,7 +654,7 @@ impl ProcTrial<'_> {
                     read_replies(&replies_file(&trial_dir, 1)).map_err(e2s)?,
                 )
                 .map_err(e2s)?;
-                let stopped = self.observe_stopped(&job_id)?;
+                let stopped = self.observe_stopped(&job_id, &intent)?;
                 stopped_seqs = raw
                     .record_replies(&identity, stopped)
                     .map_err(e2s)?
@@ -733,7 +829,11 @@ impl ProcTrial<'_> {
 
     /// 停止中の照会: 親自身が開いた [`FilePbs`]（子と別の handle・別 pid）で、同じ job を `F` まで照会する。
     /// poll 間隔は [`FileClock`] を進めるだけで待たない。停止中に `F` が取れなければ Err（A2 不成立）。
-    fn observe_stopped(&self, job_id: &str) -> Result<Vec<PbsReply>, String> {
+    fn observe_stopped(
+        &self,
+        job_id: &str,
+        intent: &super::intent::IntentSpec,
+    ) -> Result<Vec<PbsReply>, String> {
         let observer = FilePbs::open(self.state).map_err(e2s)?;
         let clock = FileClock::open(self.state).map_err(e2s)?;
         let deadline = clock
@@ -744,6 +844,12 @@ impl ProcTrial<'_> {
             let r = observer.qstat_full(job_id);
             let class = classify_qstat(&r, job_id);
             out.push(r);
+            if let QstatClass::Record { attrs } = &class {
+                // 停止中の原票が保存済み Waiting の job（同じ trial・同じ intent）のものか。
+                intent
+                    .check_record(job_id, attrs)
+                    .map_err(|e| format!("job_mismatch: stopped qstat of {job_id}: {e}"))?;
+            }
             match class {
                 QstatClass::Record { attrs }
                     if attrs.get("job_state").map(String::as_str) == Some("F") =>

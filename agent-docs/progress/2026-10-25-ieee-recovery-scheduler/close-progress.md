@@ -70,7 +70,16 @@ completed: 2026-10-25
 
 ### 検査結果
 
-（記録 commit で追記）
+commit「phase 1: summarize recovery scheduler progress and reconcile ADR appendix」の HEAD（提出時の HEAD、最後の同期の後）で実行し、
+本節を書いた記録 commit「docs: record close-progress checks」の後に同じ検査を再実行して一致を確かめた。
+
+- `bash scripts/dev/test-affected.sh` → exit 0。`$CELERIS_WU_BASE` からの差分は文書だけなので「試験対象の変更なし（docs のみ等）」、shell の self-test は合格。Rust の件数は上の pbs 試験 40 passed を見る。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（ok）。
+- `python3 scripts/dev/check-architecture-map.py` → exit 0（738 件のパスを確認）。
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0（ok）。
+- 追加で `sh scripts/dev/check-doc-links.sh` → exit 0、`sh scripts/dev/check-adr-numbers.sh` → exit 0（293 files）。
 
 ## 未解決
 

@@ -1,0 +1,40 @@
+{
+  "measurement_id": "<measurement_id>",
+  "scheduler": "pbs",
+  "cluster": "sirius",
+  "owner": "<owner>",
+  "queue": "gen",
+  "account": "NBBG",
+  "resources": {
+    "select": "1:ncpus=24:mem=124gb:ngpus=1",
+    "place": "exclhost",
+    "walltime_secs": 300
+  },
+  "rerunnable": false,
+  "payload": {
+    "script": "<cluster measurement dir>/job.sh",
+    "script_sha256": "<sha256 of job.sh>",
+    "input_sha256": "<sha256 of input.bin>",
+    "expected_output_sha256": "<contents of expected.sha256>"
+  },
+  "grader": {
+    "binary_sha256": "<grader binary sha256>",
+    "version": "<grader version>"
+  },
+  "env": {
+    "modules": [],
+    "env_sha256": "<env sha256>"
+  },
+  "limits": {
+    "external_slots": 1,
+    "worker_slots": 1,
+    "poll_secs": 30,
+    "trial_deadline_secs": 1800,
+    "ssh_timeout_secs": 60,
+    "max_jobs": 4,
+    "workload_attempts": 1
+  },
+  "conditions": ["normal", "a2"],
+  "seed": 17,
+  "rep": 1
+}

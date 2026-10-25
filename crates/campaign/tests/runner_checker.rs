@@ -468,8 +468,22 @@ fn run_refuses_split_mix_and_unknown_executor_path_has_no_network_code() {
                 "unknown directory under src: {}",
                 p.display()
             );
+            // dagbench の下のディレクトリは recovery の PBS 接続（`pbs/`）だけ。ssh を起こすのは `pbs/transport.rs`。
             for g in fs::read_dir(&p).expect("dagbench") {
-                dagbench_files.push(g.expect("e").path());
+                let g = g.expect("e").path();
+                if g.is_dir() {
+                    assert_eq!(
+                        g.file_name().and_then(|n| n.to_str()),
+                        Some("pbs"),
+                        "unknown directory under dagbench: {}",
+                        g.display()
+                    );
+                    for h in fs::read_dir(&g).expect("pbs") {
+                        dagbench_files.push(h.expect("e").path());
+                    }
+                } else {
+                    dagbench_files.push(g);
+                }
             }
         } else {
             files.push(p);

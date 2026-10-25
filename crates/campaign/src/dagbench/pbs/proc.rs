@@ -22,13 +22,14 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{
-    backend::{Arm, CONSUMED_LEDGER, ConsumedRow, PbsExt, RecoverySpec},
+    backend::{Arm, ConsumedRow, PbsExt, RecoverySpec},
     entry::{
         A2_FILE, A2_SCHEMA, Condition, Controller, GRADE_FILE, Site, Study, child_gated, grade,
     },
     file_pbs::{FileClock, FilePbs},
     intent::{INTENT_LEDGER, IntentClock, IntentLedger, IntentState},
     raw::{AttemptArtifacts, RawWriter, TrialBinding, TrialInput},
+    recovery::{ClockKind, RecoveryInput, RecoveryRecord, SavedWaitRef, read_consumed},
     transport::{
         CallOutcome, MarkerQuery, PbsCall, PbsReply, PbsTransport, QstatClass, QstatView,
         QsubRequest, classify_qstat,
@@ -262,16 +263,7 @@ pub struct ProcTrial<'a> {
     pub read_saved: &'a SavedWaitReader,
 }
 
-/// controller の 1 incarnation の証跡。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ControllerRun {
-    pub incarnation: u64,
-    pub pid: u32,
-    pub starttime: u64,
-    pub exit_code: Option<i32>,
-    pub exit_signal: Option<i32>,
-    pub killed_by_runner: bool,
-}
+pub use super::recovery::{ControllerRun, RejectReason};
 
 /// A2 の証跡（`a2.json`、`celeris.recovery-a2/1`）。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -301,6 +293,8 @@ pub struct ProcReport {
     pub saved_wait: SavedWait,
     pub controllers: Vec<ControllerRun>,
     pub a2: Option<ProcA2Evidence>,
+    /// `recovery-trials.jsonl` に追記した行。
+    pub recovery: RecoveryRecord,
 }
 
 fn sha256_bytes(b: &[u8]) -> String {
@@ -314,19 +308,6 @@ fn rows(path: &Path) -> usize {
     fs::read_to_string(path).map_or(0, |t| t.lines().filter(|l| !l.trim().is_empty()).count())
 }
 
-fn consumed_rows(dir: &Path) -> Result<Vec<ConsumedRow>, String> {
-    let path = dir.join(CONSUMED_LEDGER);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    fs::read_to_string(&path)
-        .map_err(|e| e.to_string())?
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).map_err(|e| format!("{CONSUMED_LEDGER}: {e}")))
-        .collect()
-}
-
 /// `/proc/<pid>/stat` の starttime（第 22 欄）。pid の再利用を見分ける。
 pub fn proc_starttime(pid: u32) -> io::Result<u64> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
@@ -338,6 +319,10 @@ pub fn proc_starttime(pid: u32) -> io::Result<u64> {
         .nth(19)
         .and_then(|v| v.parse().ok())
         .ok_or_else(|| io::Error::other("stat: no starttime"))
+}
+
+fn ms(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn e2s(e: impl std::fmt::Display) -> String {
@@ -480,6 +465,9 @@ impl ProcTrial<'_> {
             })
             .map_err(e2s)?;
         let saved_sha = sha256_bytes(&saved_bytes);
+        let clock = FileClock::open(self.state).map_err(e2s)?;
+        let wall_wait_saved = ms(t0.elapsed());
+        let logical_wait_saved = clock.now().ok();
         log.barrier(
             "wait_saved",
             json!({"job_id": job_id, "logical_job_id": logical, "source": saved.source,
@@ -495,6 +483,8 @@ impl ProcTrial<'_> {
         let mut controllers = Vec::new();
         let mut stopped_seqs = Vec::new();
         let mut killed = None;
+        let (mut wall_stop, mut wall_recovery) = (None, None);
+        let (mut logical_stop, mut logical_resume) = (None, None);
 
         match self.condition {
             Condition::Normal => {
@@ -534,6 +524,8 @@ impl ProcTrial<'_> {
                     ));
                 }
                 let rep = c1.kill("a2-wait-saved").map_err(e2s)?;
+                let t_kill = Instant::now();
+                logical_stop = clock.now().ok();
                 controllers.push(ControllerRun {
                     incarnation: 1,
                     pid: pid1,
@@ -578,6 +570,8 @@ impl ProcTrial<'_> {
                     json!({"job_id": job_id, "seqs": stopped_seqs}),
                 )
                 .map_err(e2s)?;
+                wall_stop = Some(ms(t_kill.elapsed()));
+                logical_resume = clock.now().ok();
                 let mut c2 = sup.spawn(Role::Control, self.child_cmd(2)?).map_err(e2s)?;
                 let pid2 = c2.pid();
                 let start2 = proc_starttime(pid2).unwrap_or(0);
@@ -585,6 +579,7 @@ impl ProcTrial<'_> {
                     .map_err(e2s)?;
                 c2.wait_exit(remaining()).map_err(e2s)?;
                 let rep2 = c2.stop(None, "controller_exited").map_err(e2s)?;
+                wall_recovery = Some(ms(t_kill.elapsed()));
                 controllers.push(ControllerRun {
                     incarnation: 2,
                     pid: pid2,
@@ -617,7 +612,7 @@ impl ProcTrial<'_> {
             ));
         }
         let job_ref = intent.job_ref(&job_id);
-        let consumed: Vec<ConsumedRow> = consumed_rows(self.dir)?
+        let consumed: Vec<ConsumedRow> = read_consumed(self.dir)?
             .into_iter()
             .filter(|r| r.submit_intent_id == intent.submit_intent_id())
             .collect();
@@ -639,6 +634,7 @@ impl ProcTrial<'_> {
             }
         }
 
+        let t_grade = Instant::now();
         let att_dir = trial_dir.join("attempt-1");
         fs::create_dir_all(&att_dir).map_err(e2s)?;
         let paths = site.fetch_outputs(&job_id, &att_dir).map_err(e2s)?;
@@ -648,6 +644,8 @@ impl ProcTrial<'_> {
             paths,
         };
         let g = grade(self.spec, &att, &trial_dir.join(GRADE_FILE)).map_err(e2s)?;
+        let wall_grade = ms(t_grade.elapsed());
+        let t_collect = Instant::now();
         let observer = FilePbs::open(self.state).map_err(e2s)?;
         let binding = raw
             .collect_trial(
@@ -661,6 +659,7 @@ impl ProcTrial<'_> {
                 },
             )
             .map_err(e2s)?;
+        let wall_collect = ms(t_collect.elapsed());
         let a2 = match killed {
             None => None,
             Some((killed_pid, killed_starttime, exit_signal)) => {
@@ -687,7 +686,41 @@ impl ProcTrial<'_> {
                 Some(ev)
             }
         };
+        let rel_trial = trial_dir.strip_prefix(self.dir).map_err(e2s)?;
+        let recovery = raw
+            .record_recovery(
+                &binding,
+                RecoveryInput {
+                    condition: self.condition.as_str().into(),
+                    controller: controllers.clone(),
+                    saved_wait: Some(SavedWaitRef {
+                        source: saved.source.clone(),
+                        wait_id: saved.wait_id.clone(),
+                        job_id: saved.job_id.clone(),
+                        file: rel_trial.join(DURABLE_WAIT_FILE).display().to_string(),
+                        sha256: saved_sha.clone(),
+                    }),
+                    stopped_qstat_seqs: a2
+                        .as_ref()
+                        .map(|a| a.stopped_qstat_seqs.clone())
+                        .unwrap_or_default(),
+                    wall_spawn_to_wait_saved_ms: Some(wall_wait_saved),
+                    wall_stop_ms: wall_stop,
+                    wall_recovery_ms: wall_recovery,
+                    wall_collect_ms: Some(wall_collect),
+                    wall_grade_ms: Some(wall_grade),
+                    wall_trial_ms: Some(ms(t0.elapsed())),
+                    logical_wait_saved_secs: logical_wait_saved,
+                    logical_stop_secs: logical_stop,
+                    logical_resume_secs: logical_resume,
+                    // 論理欄は state dir の偽の時計（FileClock）。実秒ではない。
+                    clock_kind: ClockKind::FileFake,
+                    reject_reason: None,
+                },
+            )
+            .map_err(e2s)?;
         Ok(ProcReport {
+            recovery,
             logical_job_id: logical,
             job_id,
             job_ref,

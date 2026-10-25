@@ -89,7 +89,12 @@ v2 の値は提出時の HEAD の file の sha256 で、case.json の `inputs[0]
 - 「progress: K4 公開入力 v2 の採用版・新旧 hash・残件を固定する」（本ファイル。close WU はコードを変えていない）
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-（検査後に記入）
+- `adoption.json` の sha256 照合（`python3 -I` で archive・path を持つ全 ref・旧 lock・旧 tgz の実 file を sha256 計算）→ 14 件、不一致 0。
+- WU の範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）→ 本ファイルだけ。
+- `bash scripts/dev/test-affected.sh` → exit 0（docs のみの変更で Rust・web の試験対象なし。check-doc-links self-test ok）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- 文書検査 `bash scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`bash scripts/dev/check-doc-links.sh`・`sh scripts/dev/progress-index.sh --check` → 3 本とも exit 0。
+- `crates/` の変更なし（コードは変えていない）。
 
 ## 残件
 - **P0-2:** main-4（`mlsys-main-4/revisions/judged-scope-v2`）の K4 pin を v2 に替え、lock を作り直して `adoption.json` の `refs.lock.expected_lock` と照合し、最終 freeze に取り込む。bundle は本 task では変えていない。

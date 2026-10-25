@@ -39,6 +39,9 @@ updated: 2026-10-25
 - `tar -xzf`（grader の `extract_tgz` と同じ GNU tar）で展開できる。file 5675 件（新 tgz の entry 5676 件から dir 1 件を除いた数）
 - `python3 -m unittest crates/campaign/scripts/test_build_k4_public_archive.py` → 5 tests OK
   （同じ入力から同じ byte列ができること・原票の bytes が保たれること・旧 tgz に無い path、原票の除外、子を書いていない dir、旧 tgz への上書きを拒否すること）
+- `bash scripts/dev/test-affected.sh`（基準 `$CELERIS_WU_BASE`）→ exit 0、2644 passed / 7 skipped
+- `cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` → どちらも exit 0
+- 文書検査（`check-doc-layout.sh`・`check-doc-links.sh`・`progress-index.sh --check`）→ 3 本とも exit 0
 
 ## 変更
 - `campaign: K4 公開入力の派生物を除く決定的な archive 生成 script を足す` — script・unit test・本ファイル

@@ -1394,3 +1394,472 @@ fn harness_pbs_entry_refuses_bad_combinations() {
     assert!(Condition::parse("a1").is_err());
     assert_eq!(s.pbs().counts().unwrap().qsub, 0);
 }
+
+// ---- recovery 比較: raw 指標と新 raw だけからの再集計（付記 I14 (4)(6)）----
+
+/// 新 raw の測定 dir（`DAGBENCH_REGEN_RAW`）だけから集計を再生成する入口（`--ignored`）。出力は新しい dir
+/// （`DAGBENCH_REGEN_OUT`。既にあれば・raw の内側なら拒否）。既存 raw・main-3・K4 の資産は版で拒否し、読み書きしない。
+#[test]
+#[ignore = "set DAGBENCH_REGEN_RAW=<measurement dir> and DAGBENCH_REGEN_OUT=<new dir>"]
+fn regen_from_env() {
+    let raw_dir = env("DAGBENCH_REGEN_RAW").expect("DAGBENCH_REGEN_RAW is required");
+    let out = env("DAGBENCH_REGEN_OUT").expect("DAGBENCH_REGEN_OUT is required");
+    let m =
+        celeris_campaign::dagbench::pbs::metrics::regenerate(Path::new(&raw_dir), Path::new(&out))
+            .unwrap_or_else(|e| panic!("{e}"));
+    println!("{}", serde_json::to_string_pretty(&m).unwrap());
+}
+
+fn study_pins(s: &PbsSetup) -> celeris_campaign::dagbench::pbs::raw::StudyPins {
+    serde_json::from_value(
+        serde_json::from_slice::<Value>(&fs::read(s.root.path().join("study.json")).unwrap())
+            .unwrap()["pins"]
+            .clone(),
+    )
+    .unwrap()
+}
+
+/// trial を流してから測定を閉じる（`run.json`）。
+fn closed_measurement(s: &PbsSetup, trials: &[(&str, Condition)]) -> (PathBuf, Vec<ProcReport>) {
+    let reports = trials
+        .iter()
+        .map(|(arm, cond)| pbs_trial(s, arm, *cond))
+        .collect();
+    let out = s.out().canonicalize().unwrap();
+    RawWriter::append(&out, "close")
+        .unwrap()
+        .write_run(study_pins(s))
+        .unwrap();
+    (out, reports)
+}
+
+/// dir 以下の全 file の sha256（相対 path → hash）。
+fn tree_hashes(dir: &Path) -> std::collections::BTreeMap<String, String> {
+    fn walk(root: &Path, d: &Path, out: &mut std::collections::BTreeMap<String, String>) {
+        for e in fs::read_dir(d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(root, &p, out);
+            } else {
+                let h: String = <sha2::Sha256 as sha2::Digest>::digest(fs::read(&p).unwrap())
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                out.insert(p.strip_prefix(root).unwrap().display().to_string(), h);
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for e in fs::read_dir(from).unwrap() {
+        let p = e.unwrap().path();
+        let dst = to.join(p.file_name().unwrap());
+        if p.is_dir() {
+            copy_tree(&p, &dst);
+        } else {
+            fs::copy(&p, &dst).unwrap();
+        }
+    }
+}
+
+fn read_outputs(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    use celeris_campaign::dagbench::pbs::metrics::*;
+    [METRICS_JSON, CELLS_TSV, TRIALS_TSV, WALL_TSV, LOGICAL_TSV]
+        .into_iter()
+        .map(|f| (f.to_string(), fs::read(dir.join(f)).unwrap()))
+        .collect()
+}
+
+/// 両 arm × normal/A2 の raw から 2 回と、raw の写しから 1 回再集計して byte 一致し、元の集計（各 trial で runner が
+/// 追記した記録）と一致し、raw の全 file が不変。既存の出力 dir・raw の内側・旧 raw の版は拒否して何も書かない。
+#[test]
+fn harness_pbs_raw_regeneration_matches_and_leaves_raw_untouched() {
+    use celeris_campaign::dagbench::pbs::{
+        metrics::{METRICS_JSON, regenerate},
+        raw::RecoveryStatus,
+    };
+    let s = PbsSetup::new();
+    let (raw_dir, reports) = closed_measurement(
+        &s,
+        &[
+            ("baseline", Condition::Normal),
+            ("baseline", Condition::A2),
+            ("celeris", Condition::Normal),
+            ("celeris", Condition::A2),
+        ],
+    );
+    let before = tree_hashes(&raw_dir);
+    let work = tempfile::tempdir().unwrap();
+    let m1 = regenerate(&raw_dir, &work.path().join("m1")).expect("regenerate 1");
+    let m2 = regenerate(&raw_dir, &work.path().join("m2")).expect("regenerate 2");
+    let copy = work.path().join("raw-copy");
+    copy_tree(&raw_dir, &copy);
+    let m3 = regenerate(&copy, &work.path().join("m3")).expect("regenerate from a copy");
+    assert_eq!(m1, m2);
+    assert_eq!(m1, m3);
+    let o1 = read_outputs(&work.path().join("m1"));
+    assert_eq!(o1, read_outputs(&work.path().join("m2")), "byte-identical");
+    assert_eq!(
+        o1,
+        read_outputs(&work.path().join("m3")),
+        "byte-identical from a copy"
+    );
+    assert_eq!(tree_hashes(&raw_dir), before, "raw is not written");
+
+    // 元の集計（runner が trial ごとに追記した記録）と一致。
+    assert_eq!(m1.real_jobs, 4);
+    assert_eq!(m1.qsub_records, 4);
+    assert_eq!(m1.trials, 4);
+    assert_eq!(m1.validated_completed, 4);
+    assert_eq!(m1.trials_without_recovery_record, 0);
+    assert_eq!(m1.cells.len(), 4);
+    for c in &m1.cells {
+        assert_eq!(
+            (c.trials, c.recovered, c.validated_completed),
+            (1, 1, 1),
+            "{c:?}"
+        );
+        assert_eq!(
+            (c.not_recovered, c.rejected, c.unobserved),
+            (0, 0, 0),
+            "{c:?}"
+        );
+    }
+    for r in &reports {
+        let rec = &r.recovery;
+        assert_eq!(rec.recovery_status, RecoveryStatus::Recovered);
+        let w = m1
+            .wall
+            .iter()
+            .find(|w| w.trial_key == rec.trial_key)
+            .unwrap();
+        assert_eq!(
+            (
+                w.spawn_to_wait_saved_ms,
+                w.stop_ms,
+                w.recovery_ms,
+                w.trial_ms
+            ),
+            (
+                rec.wall_spawn_to_wait_saved_ms,
+                rec.wall_stop_ms,
+                rec.wall_recovery_ms,
+                rec.wall_trial_ms
+            )
+        );
+        let l = m1
+            .logical
+            .iter()
+            .find(|l| l.trial_key == rec.trial_key)
+            .unwrap();
+        assert_eq!(
+            (l.submit_secs, l.stop_secs, l.consume_secs),
+            (
+                rec.logical_submit_secs,
+                rec.logical_stop_secs,
+                rec.logical_consume_secs
+            )
+        );
+        let t = m1
+            .trial_rows
+            .iter()
+            .find(|t| t.trial_key == rec.trial_key)
+            .unwrap();
+        assert_eq!(t.job_ref.as_deref(), Some(r.job_ref.as_str()));
+        assert_eq!(
+            t.stopped_qstat_records as usize,
+            rec.stopped_qstat_seqs.len()
+        );
+    }
+
+    // 拒否: 既存の出力 dir（上書きしない）・raw の内側・旧 raw の版。
+    let e = regenerate(&raw_dir, &work.path().join("m1")).expect_err("existing out");
+    assert!(e.contains("new directory"), "{e}");
+    assert_eq!(
+        read_outputs(&work.path().join("m1")),
+        o1,
+        "existing out untouched"
+    );
+    let e = regenerate(&raw_dir, &raw_dir.join("metrics-x")).expect_err("inside raw");
+    assert!(e.contains("outside the raw dir"), "{e}");
+    assert!(!raw_dir.join("metrics-x").exists());
+    let old = work.path().join("old-durable");
+    fs::create_dir_all(&old).unwrap();
+    fs::write(
+        old.join("run.json"),
+        json!({"schema": "celeris.dagbench-durable-raw/1"}).to_string(),
+    )
+    .unwrap();
+    let old_before = tree_hashes(&old);
+    let e = regenerate(&old, &work.path().join("m-old")).expect_err("old raw");
+    assert!(e.contains("durable-raw"), "{e}");
+    assert!(!work.path().join("m-old").exists());
+    assert_eq!(tree_hashes(&old), old_before);
+    assert_eq!(
+        tree_hashes(&raw_dir),
+        before,
+        "raw is not written by refusals"
+    );
+    assert!(work.path().join("m1").join(METRICS_JSON).exists());
+}
+
+/// 未観測は null と理由で残し 0 にしない: 人介入・局所再実行・normal の停止欄。raw・JSON・TSV のどれでも null。
+/// 理由を消した raw は validator が拒否する。
+#[test]
+fn harness_pbs_raw_unobserved_fields_stay_null() {
+    use celeris_campaign::dagbench::pbs::{
+        metrics::{TRIALS_TSV, WALL_TSV, regenerate},
+        raw::{RECOVERY_FILE, validate},
+    };
+    let s = PbsSetup::new();
+    let (raw_dir, reports) = closed_measurement(
+        &s,
+        &[("baseline", Condition::Normal), ("celeris", Condition::A2)],
+    );
+    let normal = &reports[0].recovery;
+    let a2 = &reports[1].recovery;
+    for r in [normal, a2] {
+        assert_eq!(r.human_intervention, None, "no op record → null, not 0");
+        assert_eq!(r.rework.redone_local_nodes, None);
+        assert_eq!((r.rework.resubmits, r.rework.reconsumes), (0, 0));
+        let names: Vec<&str> = r.missing.iter().map(|m| m.field.as_str()).collect();
+        assert!(names.contains(&"human_intervention"), "{names:?}");
+        assert!(names.contains(&"rework.redone_local_nodes"), "{names:?}");
+    }
+    assert_eq!((normal.wall_stop_ms, normal.wall_recovery_ms), (None, None));
+    assert_eq!(
+        (normal.logical_stop_secs, normal.logical_resume_secs),
+        (None, None)
+    );
+    assert!(normal.stopped_qstat_seqs.is_empty());
+    assert!(a2.wall_stop_ms.is_some() && a2.wall_recovery_ms.is_some());
+    assert!(!a2.stopped_qstat_seqs.is_empty());
+
+    let rows: Vec<Value> = fs::read_to_string(raw_dir.join(RECOVERY_FILE))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["human_intervention"], Value::Null);
+    assert_eq!(rows[0]["rework"]["redone_local_nodes"], Value::Null);
+    assert_eq!(rows[0]["wall_stop_ms"], Value::Null);
+
+    let work = tempfile::tempdir().unwrap();
+    let m = regenerate(&raw_dir, &work.path().join("m")).unwrap();
+    let mj: Value = serde_json::to_value(&m).unwrap();
+    for t in mj["trial_rows"].as_array().unwrap() {
+        assert_eq!(t["human_intervention"], Value::Null);
+        assert_eq!(t["rework"]["redone_local_nodes"], Value::Null);
+    }
+    let trials = fs::read_to_string(work.path().join("m").join(TRIALS_TSV)).unwrap();
+    for line in trials.lines().skip(1) {
+        let cols: Vec<&str> = line.split('\t').collect();
+        assert_eq!(&cols[cols.len() - 3..], ["null", "null", "null"], "{line}");
+    }
+    let wall = fs::read_to_string(work.path().join("m").join(WALL_TSV)).unwrap();
+    let normal_line = wall.lines().find(|l| l.contains("\tnormal\t")).unwrap();
+    let cols: Vec<&str> = normal_line.split('\t').collect();
+    assert_eq!((cols[4], cols[5]), ("null", "null"), "{normal_line}");
+
+    // 理由を消した null は拒否（0 で埋めた扱いにも黙った欠落にもしない）。
+    let mut tampered = rows.clone();
+    tampered[0]["missing"] = json!(
+        tampered[0]["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["field"] != "human_intervention")
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+    let text: String = tampered.iter().map(|r| format!("{r}\n")).collect();
+    fs::write(raw_dir.join(RECOVERY_FILE), text).unwrap();
+    let e = validate(&raw_dir).expect_err("null without a reason");
+    assert!(
+        e.contains("human_intervention is null without a reason"),
+        "{e}"
+    );
+}
+
+/// scheduler unknown・取得失敗・unresolved は成功（recovered / validated_completed）に数えない。導出は writer と
+/// validator で同じで、unknown を recovered と書き換えた raw は拒否する。
+#[test]
+fn harness_pbs_raw_scheduler_unknown_is_not_success() {
+    use celeris_campaign::dagbench::pbs::{
+        metrics::compute,
+        raw::{RECOVERY_FILE, RecoveryStatus, TrialStatus, derive_recovery, validate},
+        recovery::{SchedulerClass, scheduler_class_of},
+    };
+    use celeris_campaign::observe::CollectClass;
+    let s = PbsSetup::new();
+    let (raw_dir, reports) = closed_measurement(&s, &[("baseline", Condition::A2)]);
+    let r = &reports[0];
+    assert_eq!(r.recovery.scheduler_class, SchedulerClass::FinishedExitZero);
+    assert_eq!(r.recovery.recovery_status, RecoveryStatus::Recovered);
+
+    // 照会で終了を観測できない（scheduler が job を知らない）。
+    let mut b = r.binding.clone();
+    b.collect_class = Some(CollectClass::Unobserved);
+    b.observed = None;
+    b.exit_status = None;
+    b.status = TrialStatus::Unobserved;
+    assert_eq!(scheduler_class_of(&b), SchedulerClass::Unknown);
+    let mut rec = r.recovery.clone();
+    rec.scheduler_class = scheduler_class_of(&b);
+    assert_eq!(derive_recovery(&b, &rec), RecoveryStatus::Unobserved);
+    // 取得失敗。
+    b.collect_class = Some(CollectClass::FetchFailed);
+    rec.scheduler_class = scheduler_class_of(&b);
+    assert_eq!(rec.scheduler_class, SchedulerClass::FetchFailed);
+    assert_eq!(derive_recovery(&b, &rec), RecoveryStatus::Unobserved);
+    // 投入が照合できない（unresolved）。原票が F/0 でも成功にしない。
+    let mut u = r.binding.clone();
+    u.status = TrialStatus::Unresolved;
+    assert_eq!(derive_recovery(&u, &r.recovery), RecoveryStatus::Unobserved);
+    // 別 job の原票。
+    b.collect_class = Some(CollectClass::IdentityMismatch);
+    rec.scheduler_class = scheduler_class_of(&b);
+    assert_eq!(derive_recovery(&b, &rec), RecoveryStatus::Rejected);
+
+    // 集計: unknown の trial は validated_completed に入らない。
+    let mut report = validate(&raw_dir).unwrap();
+    let key = r.recovery.trial_key.clone();
+    let x = report.recovery.get_mut(&key).unwrap();
+    x.scheduler_class = SchedulerClass::Unknown;
+    x.recovery_status = RecoveryStatus::Unobserved;
+    let m = compute(&report, 1);
+    assert_eq!(m.validated_completed, 0);
+    assert_eq!((m.cells[0].unobserved, m.cells[0].recovered), (1, 0));
+
+    // raw で unknown を recovered と書いても、validator が結合行から導き直して拒否する。
+    let mut row: Value = serde_json::from_str(
+        fs::read_to_string(raw_dir.join(RECOVERY_FILE))
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    row["scheduler_class"] = json!("unknown");
+    fs::write(raw_dir.join(RECOVERY_FILE), format!("{row}\n")).unwrap();
+    let e = validate(&raw_dir).expect_err("unknown is not derived");
+    assert!(e.contains("scheduler_class"), "{e}");
+    row["scheduler_class"] = json!("finished_exit_zero");
+    row["recovery_status"] = json!("not_recovered");
+    fs::write(raw_dir.join(RECOVERY_FILE), format!("{row}\n")).unwrap();
+    let e = validate(&raw_dir).expect_err("status is derived");
+    assert!(e.contains("recovery_status"), "{e}");
+}
+
+/// 壁時計（`wall_*_ms`、親の実時間）と論理時計（`logical_*_secs`、FileClock = 偽の時計、`clock_kind=file_fake`）は
+/// 別の欄・別の表に置き、混ぜない。
+#[test]
+fn harness_pbs_raw_wall_and_logical_clocks_are_separate() {
+    use celeris_campaign::dagbench::pbs::{
+        file_pbs::CLOCK_T0,
+        metrics::{LOGICAL_TSV, METRICS_JSON, WALL_TSV, regenerate},
+        raw::RECOVERY_FILE,
+        recovery::ClockKind,
+    };
+    let s = PbsSetup::new();
+    let (raw_dir, reports) = closed_measurement(&s, &[("celeris", Condition::A2)]);
+    let rec = &reports[0].recovery;
+    assert_eq!(rec.clock_kind, ClockKind::FileFake);
+    let row: Value = serde_json::from_str(
+        fs::read_to_string(raw_dir.join(RECOVERY_FILE))
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    let keys: Vec<&String> = row.as_object().unwrap().keys().collect();
+    let wall: Vec<&&String> = keys.iter().filter(|k| k.starts_with("wall_")).collect();
+    // `logical_job_id` は identity（時計の欄ではない）。
+    let logical: Vec<&&String> = keys
+        .iter()
+        .filter(|k| k.starts_with("logical_") && k.as_str() != "logical_job_id")
+        .collect();
+    assert_eq!(wall.len(), 6, "{wall:?}");
+    assert_eq!(logical.len(), 5, "{logical:?}");
+    assert!(wall.iter().all(|k| k.ends_with("_ms")), "{wall:?}");
+    assert!(logical.iter().all(|k| k.ends_with("_secs")), "{logical:?}");
+    assert_eq!(row["clock_kind"], json!("file_fake"));
+    // 論理値は FileClock の値（実時刻ではない）で、順序を保つ。
+    let l = |k: &str| row[k].as_u64().unwrap_or_else(|| panic!("{k}"));
+    assert!(l("logical_submit_secs") >= CLOCK_T0);
+    assert!(l("logical_submit_secs") <= l("logical_wait_saved_secs"));
+    assert!(l("logical_wait_saved_secs") <= l("logical_stop_secs"));
+    assert!(l("logical_stop_secs") <= l("logical_resume_secs"));
+    assert!(l("logical_resume_secs") <= l("logical_consume_secs"));
+    // 壁時計は親の Instant の差分（ms）で、trial 全体以下。
+    let w = |k: &str| row[k].as_u64().unwrap_or_else(|| panic!("{k}"));
+    assert!(w("wall_stop_ms") <= w("wall_recovery_ms"));
+    assert!(w("wall_recovery_ms") <= w("wall_trial_ms"));
+    assert!(
+        w("wall_trial_ms") < CLOCK_T0,
+        "wall values are durations, not logical times"
+    );
+
+    let work = tempfile::tempdir().unwrap();
+    regenerate(&raw_dir, &work.path().join("m")).unwrap();
+    let out = work.path().join("m");
+    let wall_tsv = fs::read_to_string(out.join(WALL_TSV)).unwrap();
+    let logical_tsv = fs::read_to_string(out.join(LOGICAL_TSV)).unwrap();
+    let wall_head: Vec<&str> = wall_tsv
+        .lines()
+        .next()
+        .unwrap()
+        .split('\t')
+        .skip(3)
+        .collect();
+    let logical_head: Vec<&str> = logical_tsv
+        .lines()
+        .next()
+        .unwrap()
+        .split('\t')
+        .skip(3)
+        .collect();
+    assert!(
+        wall_head.iter().all(|c| c.ends_with("_ms")),
+        "{wall_head:?}"
+    );
+    assert_eq!(logical_head[0], "clock_kind");
+    assert!(
+        logical_head[1..].iter().all(|c| c.ends_with("_secs")),
+        "{logical_head:?}"
+    );
+    assert!(
+        logical_tsv
+            .lines()
+            .nth(1)
+            .unwrap()
+            .contains("\tfile_fake\t")
+    );
+    let mj: Value = serde_json::from_slice(&fs::read(out.join(METRICS_JSON)).unwrap()).unwrap();
+    assert!(mj["wall"][0].get("clock_kind").is_none());
+    assert_eq!(mj["logical"][0]["clock_kind"], json!("file_fake"));
+    assert!(
+        mj["wall"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|k| !k.ends_with("_secs"))
+    );
+    assert!(
+        mj["logical"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|k| !k.ends_with("_ms"))
+    );
+    assert!(
+        mj["trial_rows"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|k| !k.ends_with("_ms") && !k.ends_with("_secs"))
+    );
+}

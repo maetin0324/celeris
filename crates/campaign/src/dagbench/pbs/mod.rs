@@ -3,6 +3,8 @@ pub mod backend;
 pub mod entry;
 pub mod file_pbs;
 pub mod intent;
+pub mod metrics;
 pub mod proc;
 pub mod raw;
+pub mod recovery;
 pub mod transport;

@@ -300,11 +300,12 @@ impl OwnedProc {
             {
                 graceful_error = Some(format!("{:?}: {e}", e.kind()));
             }
-            // stdin を閉じるのも graceful 要求（読んで止まる child 向け）。
-            self.stdin = None;
+            // stdin を閉じるのも graceful 要求（読んで止まる child 向け）。即時 kill では閉じない: 閉じると stdin を
+            // 待つ child が EOF で自分から exit し、SIGKILL より先に終わる（exit_signal 9 にならない）ことがある。
             status = if immediate_kill {
                 None
             } else {
+                self.stdin = None;
                 self.wait_exit(self.limits.stop_grace)?
             };
             if status.is_some() {
@@ -312,6 +313,7 @@ impl OwnedProc {
             } else {
                 // 握っている Child にだけ SIGKILL（std の kill は unix で SIGKILL）。
                 let _ = self.child.kill();
+                self.stdin = None;
                 killed = true;
                 status = self.wait_exit(self.limits.kill_wait)?;
                 reason = if status.is_some() {

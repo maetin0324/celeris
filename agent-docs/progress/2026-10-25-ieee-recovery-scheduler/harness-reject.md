@@ -8,7 +8,7 @@ completed: 2026-10-25
 # 正式入口の拒否条件を独立 process の決定的試験で固定（harness-reject）
 
 完了日: 2026-10-25。基準は `git merge-base HEAD main`（WU は `$CELERIS_WU_BASE`）。ADR 付記 I14 (5) を実装した。
-commit: 「harness-reject: refuse stop-before-save, missing saved evidence, job mismatch, duplicate submit/consume and unknown scheduler on the formal pbs entry」。
+commit: 「harness-process: close the child stdin only after SIGKILL so an immediate kill is never pre-empted by an EOF exit」、「harness-reject: refuse stop-before-save, missing saved evidence, job mismatch, duplicate submit/consume and unknown scheduler on the formal pbs entry」。
 
 ## やったこと
 
@@ -18,6 +18,10 @@ commit: 「harness-reject: refuse stop-before-save, missing saved evidence, job 
   `ProcTrial::run` は Err（拒否）で trial dir に `reject.json`（`celeris.recovery-reject/1`、`reject_reason` は Err の理由名を
   `RejectReason` に読んだもの、`detail`）を新規作成する。停止中の原票は `IntentSpec::check_record` で照合し、Variable_List 等の
   食い違いは `job_mismatch`（再起動しない）。
+- `dagbench/process.rs`: `OwnedProc::kill`（即時 kill）は SIGKILL の後に stdin を閉じる。従来は先に閉じたため、`CONTINUE` を
+  待つ子が EOF で自分から exit 101 し、負荷下で `exit_signal` 9 にならず A2 が `stop_boundary_invalid` で落ちた
+  （test-affected で `harness_pbs_both_arms_and_conditions_share_one_measurement` と本 unit の試験が再現、単独実行では通る）。
+  graceful 停止（`stop`）は従来どおり stdin を閉じて待つ。
 - `pbs/entry.rs`: `child_gated` に `announce_early`。`GatedExt::submit` が job ID を受けた直後（保存前）に合図する（故障時のみ）。
 - `tests/dagbench_harness.rs`: `PbsParams.child_fault`（入口で `ChildFault::parse`、子の env にだけ渡す）と試験 `harness_pbs_reject_` 5 本
   （全て `run_pbs` = 正式入口、偽 PBS は `FilePbs`、controller は別 process）:

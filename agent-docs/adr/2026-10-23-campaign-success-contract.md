@@ -56,3 +56,16 @@ attempt を持つ記録が無い試行の再作業は欠測（null）で、cutof
 ## 影響
 - report.json の欄名が変わる（`completion` の source は `grade`、`failure_cause` は無い）。旧 report は再生成する（生記録は不変）。
 - 旧 main-3（mlsys-main-3）の生記録は旧採点定義のまま再集計できる（A/B とも validated success 0）。
+
+## 付記 2026-10-25: 未実行 cell の消費・records 欠如・照合 script（main-4 grade-integrate）
+- **未実行 cell の消費**: report の `tokens_missing_trials`・`cost_micro_usd_missing_trials` は、cell の判定に使った試行が実行されなかった cell
+  （`TrialRecord::ran` が false: 予算停止・依存 blocked・arm 予算切れで未投入）を数えない。代わりに `*_not_run_trials` と arm の `not_run_trials` に数え、
+  値は null のまま（欠測にも観測済み 0 にもしない）。これで欠測数の分母が checker の `ran_trials` と同じ「実行した試行」になる。
+  `success::Cell.ran`（join の `success_class.ran`）が判断の元。記録の無い cell（`missing`）は従来どおり欠測に数える。
+  理由: main-4 の無 LLM 通しで B の arm 予算切れ 1 件を report だけが欠測 2（checker 1）と数え、分母が食い違った。
+- **records 無しの export**: `--records`（launcher の RECORDS）が無い export は `consumption` に `scope: missing`・`reason` を書き、
+  前回の export の `final-accounting.json` を消す（別入力の値を表と並べて残さない）。launcher は警告を出す（RECORDS は collect/grade では作られず、
+  測定 DB の写しからの `celerisctl campaign export` が元）。
+- **照合**: `scripts/campaign/check-out-consistency.py --out <out>` が生記録から成功契約を再計算し、checker totals・export 行・report の arm を突き合わせる。
+  採点の結合（hash・lock）は checker の判断に従う。report（`success::load`）は保存 lock だけで結合し期待 lock を作らないので、checker は launcher と同じ
+  `--measurement-id`・資産の引数で呼ぶ（省くと期待 lock が合わず checker だけが grade を外し、report とずれる。照合はこれをずれとして出す）。

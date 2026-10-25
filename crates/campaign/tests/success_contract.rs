@@ -207,3 +207,85 @@ fn csv_round_trips_json_cells_with_multiple_fault_keys() {
     assert_eq!(csv::field("say \"hi\""), "\"say \"\"hi\"\"\"");
     assert!(csv::parse("\"open").is_err());
 }
+
+/// 実行されなかった cell（arm 予算切れで未投入）の消費は、checker の欠測数（分母 = 実行した試行）と
+/// report の欠測数が一致し、report は未実行として別に数える（値は null のまま。観測済み 0 にしない）。
+#[test]
+fn unexecuted_cell_consumption_is_not_run_in_report_and_checker_alike() {
+    let d = tempfile::tempdir().expect("dir");
+    let (m, out) = pilot_out(d.path());
+    common::write_grades_classed(&m, &out, |_| None);
+    // B の最初の記録を「arm の残りが無く投入しなかった」試行に書き換える（runner が書く形と同じ）。
+    let tp = out.join("trials.jsonl");
+    let mut rewritten = false;
+    let lines: Vec<String> = fs::read_to_string(&tp)
+        .expect("trials")
+        .lines()
+        .map(|l| {
+            let mut v: Value = serde_json::from_str(l).expect("json");
+            if !rewritten && v["config"] == "B" {
+                rewritten = true;
+                for (k, x) in [
+                    ("outcome", json!("cancelled")),
+                    ("passed", json!(false)),
+                    ("reason", json!("arm_budget")),
+                    ("tokens", Value::Null),
+                    ("token_usage", Value::Null),
+                    ("cost_micro_usd", Value::Null),
+                    ("wall_secs", json!(0)),
+                    ("workspace", json!("")),
+                    ("kb", json!("")),
+                ] {
+                    v[k] = x;
+                }
+            }
+            v.to_string()
+        })
+        .collect();
+    assert!(rewritten, "pilot に B の記録がある");
+    fs::write(&tp, lines.join("\n") + "\n").expect("write");
+
+    let totals = check(&m, &out).recomputed.expect("rc").totals;
+    let b = &totals[&celeris_campaign::manifest::ConfigId::B];
+    assert!(b.ran_trials < b.n, "B に未実行の cell がある");
+    let hop = d.path().join("human-ops.jsonl");
+    fs::write(&hop, "").expect("hop");
+    let r = report(&hop, &out, &d.path().join("rep"));
+    let arm = &r["arms"]["B"];
+    let n = |k: &str| arm[k].as_u64().unwrap_or(0);
+    assert_eq!(n("tokens_missing_trials"), b.tokens_missing_trials, "{arm}");
+    assert_eq!(
+        n("cost_micro_usd_missing_trials"),
+        b.cost_missing_trials,
+        "{arm}"
+    );
+    assert_eq!(n("not_run_trials"), b.n - b.ran_trials, "{arm}");
+    assert_eq!(n("tokens_not_run_trials"), b.n - b.ran_trials, "{arm}");
+    // 未実行の試行の値は null（0 にしない）、join の success_class は ran=false。
+    let t = r["trials"]
+        .as_array()
+        .expect("trials")
+        .iter()
+        .find(|t| t["arm"] == "B" && t["success_class"]["ran"] == false)
+        .expect("not-run trial");
+    assert_eq!(t["success_class"]["value"], "executor_cancelled", "{t}");
+    assert!(t["join"]["tokens"]["value"].is_null(), "{t}");
+}
+
+/// decision-log の records を渡さない export は総消費を欠測と明記し、前回の final-accounting.json を残さない。
+#[test]
+fn export_without_records_marks_consumption_missing() {
+    let d = tempfile::tempdir().expect("dir");
+    let (m, out) = pilot_out(d.path());
+    common::write_grades_classed(&m, &out, |_| None);
+    let dest = out.join("ex");
+    fs::create_dir_all(&dest).expect("dest");
+    let stale = dest.join(celeris_campaign::export::FINAL_ACCOUNTING_FILE);
+    fs::write(&stale, "{}\n").expect("stale");
+    let table = export(&m, &out, &dest).expect("export");
+    let c = &table["consumption"];
+    assert_eq!(c["scope"]["tokens"], "missing", "{c}");
+    assert_eq!(c["reduction_confirmable"], false, "{c}");
+    assert_eq!(c["reason"], celeris_campaign::export::NO_RECORDS_REASON);
+    assert!(!stale.exists(), "前回の最終集計が残っている");
+}

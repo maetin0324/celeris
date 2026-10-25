@@ -549,3 +549,56 @@ validator（`raw::validate`）は raw だけから同じ判定を再計算し、
   main-3・K4 の資産は版で拒否され、読まれも書かれもしない）。`metrics::compute` は従来どおり本 raw を拒否する。
 - 検証経路（試験）: 測定後に raw dir の全 file の sha256 一覧を取り、`regenerate` を 2 回（別の新規 dir）と、raw dir を
   別の場所へ写した写しから 1 回流す。3 つの出力が byte 一致し、raw の sha256 一覧が前後で不変であることを assert する。
+
+#### (7) 実装突き合わせ（harness-close、2026-10-25）
+
+unit harness-proc / harness-raw / harness-reject の実装と (1)–(6) を突き合わせた。D1–D5・I1–I13 は変えない。
+下の各項は実装を正とし、(1)–(6) の該当記述をここで置き換える（書いていない点は (1)–(6) のとおり実装済み）。
+
+- (1) 入口: `pbs` の 1 trial は `run` でなく新しい `run_pbs(&Params) -> Result<ProcReport, String>`
+  （`crates/campaign/tests/dagbench_harness.rs`）。`run_from_env` が `DAGBENCH_BACKEND` で `run` / `run_pbs` を振り分け、
+  `run` は `pbs` を Err で返す。`DAGBENCH_*` の pbs 欄は `Params.pbs: Option<PbsParams>`（`spec`・`study`・`state`・
+  `transport`・`child_fault`）にまとめた。`DAGBENCH_PBS_STATE` が測定 dir の内側・外側を包む配置は Err。
+- (1) `run.json`: 「作成時に 1 回」にはしていない。`create_measurement` は `run.json` を書かず、trial ごとに
+  `RawWriter::append` で開き、全 trial の後に呼び出し側が `RawWriter::append(..).write_run(StudyPins)` で 1 回だけ書いて閉じる。
+  `real_jobs` は `RunMeta` に残し、`raw::validate` が intent 台帳の job 数と一致を確かめる（I11 の「収集後に 1 回」のまま）。
+  `write_run` を呼ぶ env 入口は無い（試験 `harness_pbs_both_arms_and_conditions_share_one_measurement`・
+  `harness_pbs_raw_regeneration_matches_and_leaves_raw_untouched` だけが呼ぶ）。`run_from_env` だけで足した測定は閉じられず、
+  `regen_from_env` は `run.json` 無しで Err になる（未解決として progress に残す）。
+- (2) `tests/dagbench_pbs_e2e.rs` の in-memory `Cluster`（`ClusterState`）と `CelerisController` は消していない。
+  e2e は I12 の in-process 経路（`entry::run_trial` と `Gate` の `on_stop`、`barriers.jsonl`）を試験し続ける。
+  正式入口（`run_pbs`）は `FilePbs`・`proc`・`process-events.jsonl` だけを使い、`entry::run_trial`・`barriers.jsonl` を使わない。
+- (3) 子の Celeris controller は `tests/common/dagbench_pbs_controller.rs` の `CelerisChildController`（e2e の
+  `CelerisController` とは別物）。親の読み直しは `proc::read_saved_wait` の 1 関数でなく、注入する
+  `proc::SavedWaitReader`（`dyn Fn(Arm, &Path, &str) -> io::Result<Option<SavedWait>>`）で、baseline は
+  `proc::read_saved_state_json`、Celeris は `dagbench_pbs_controller::read_saved_sqlite_ro`（`SQLITE_OPEN_READ_ONLY`、
+  `cluster_job_waits WHERE state = 'waiting'`）、振り分けは `dagbench_pbs_controller::read_saved`。
+  A2 の証跡型は `proc::ProcA2Evidence`（`a2.json`、`celeris.recovery-a2/1`。`saved_wait`・`saved_wait_file`・`saved_wait_sha256`・
+  `killed_pid`・`killed_starttime`・`exit_signal`・`stopped_qstat_seqs`・`intent_rows_before_stop`・`intent_rows_after_resume`・
+  `consumed_job_ref`）で、`entry::A2Evidence` は e2e の in-process 経路の型として残る。
+- (3)/(5) 試験専用の子の故障 `DAGBENCH_PBS_CHILD_FAULT` は `announce-before-save` に加え `duplicate-submit`
+  （`CONTINUE` の後に `workload_attempt + 1` の別 intent で同じ job を再投入）と `duplicate-consume`（完走後に同じ
+  `(job_ref, workload_attempt)` の消費行を 2 行目として足す）の 3 値（`proc::ChildFault`）。
+- (4) 型と置き場所: `RecoveryRecord`・`RejectReason`・`ClockKind`・`SchedulerClass`・`RecoveryStatus`・`derive_recovery`・
+  `check_records` は `raw.rs` でなく新規 `crates/campaign/src/dagbench/pbs/recovery.rs`（`proc` は `RejectReason` を再公開）。
+  `RecoveryRecord` は `schema`・`seq`・`binding_seq`（結合した `trials.jsonl` 行の seq）を持ち、`job_ref` は `Option`。
+  欄 `wall_submit_to_wait_saved_ms` は `wall_spawn_to_wait_saved_ms`（最初の controller の spawn 起点。投入は子の中で親から
+  実時間で見えないため）。`wall_recovery_ms` は kill → 再開 controller の exit（消費の後）。
+- (5) 拒否の記録: Err で終わる trial は `recovery-trials.jsonl` に `rejected` 行を足さない（collect 前で `TrialBinding` が無い）。
+  代わりに trial dir に `reject.json`（`proc::REJECT_FILE`、`celeris.recovery-reject/1`、`trial_key`・`arm`・`condition`・
+  `reject_reason`・`detail`）を新規作成し、`trials.jsonl`・`recovery-trials.jsonl` には何も残らない（測定成功に数えられない）。
+  `raw::validate` は `reject.json` を読まない。validator の再判定（`recovery::check_records`）は収集済みの行についてだけ
+  identity（job ID・trial）・`scheduler_class`・rework と台帳（再投入・再消費）・保存証拠の sha256・停止中原票の seq・
+  `derive_recovery` の結果を raw から計算し直す。
+- (5) `wait_not_saved` では子を `OwnedProc::kill`（合図の stdin 待ちで止まっている測定専用 process の停止）で止め、
+  `controller_killed` barrier は残さない。`collector_failed`（`FilePbsFaults.qstat_outcome`）と停止中・期限内に `F` が取れない
+  `unknown` は `RejectReason` の値でなく、Err の理由名 `collector_failed:` / `unobserved:` で trial を終える（`reject.json` の
+  `reject_reason` は null、理由は `detail`）。どちらも測定成功に数えない点は (5) のとおり。
+- (6) 入口名・env: `regenerate_from_env` / `DAGBENCH_RAW`・`DAGBENCH_METRICS_OUT` は `regen_from_env` /
+  `DAGBENCH_REGEN_RAW`・`DAGBENCH_REGEN_OUT`。出力は `scheduler_metrics.json`（`celeris.dagbench-scheduler-metrics/1`）と
+  TSV 4 本 `scheduler_cells.tsv`・`scheduler_trials.tsv`・`scheduler_wall.tsv`・`scheduler_logical.tsv`（`scheduler_metrics.tsv` 1 本ではない。
+  壁時計と論理時計を別表にするため）。`real_jobs` は validator が台帳と一致を確かめた `run.json` の値を写す。
+  `regenerate` は trial dir の `process-events.jsonl`・`a2.json`・`grade.json` を直接は読まず、`raw::validate` が hash で
+  確かめた raw の記録（`recovery-trials.jsonl` の `controller`・`saved_wait` 等）から出す。
+- 試験名: 正式入口の試験は `crates/campaign/tests/dagbench_harness.rs` の `harness_pbs_*`（normal/A2 × 両 arm・共通測定・
+  入口の拒否 6 本、`harness_pbs_raw_*` 4 本、`harness_pbs_reject_*` 5 本）。

@@ -52,6 +52,22 @@ git add work.txt
 git commit -q -m "phase 1: work"
 pre_rebase=$(git rev-parse HEAD)
 
+# progress-index.sh の hex_words は数字と a-f を両方含む語だけを hash とみなす。短縮形が数字だけ
+# （8 桁で約 2.3%）だと検出されず試験が commit 日時次第で落ちるので、条件を満たすまで長さを伸ばす。
+detectable_short() {
+  n=$2
+  while [ "$n" -le 40 ]; do
+    s=$(printf "%.${n}s" "$1")
+    case "$s" in
+      *[0-9]*) case "$s" in *[a-f]*) echo "$s"; return 0 ;; esac ;;
+    esac
+    n=$((n + 1))
+  done
+  fail "setup: $1 has no detectable prefix"
+}
+[ "$(detectable_short 1234567890abcdef 8)" = 1234567890a ] || fail "setup: detectable_short must extend digit-only prefixes"
+[ "$(detectable_short abcdef0123456789 8)" = abcdef01 ] || fail "setup: detectable_short must keep detectable prefixes"
+
 progress="$d/2026-10-23-new.md"
 check() {
   sh scripts/dev/progress-index.sh --check >"$root/out" 2>"$root/err"
@@ -76,15 +92,16 @@ git commit -q -m "main moves"
 git switch -q task
 git rebase -q main
 git merge-base --is-ancestor "$pre_rebase" HEAD && fail "setup: pre-rebase commit is still an ancestor"
-echo "- 検証した commit $(printf %.8s "$pre_rebase")" >>"$progress"
+pre_short=$(detectable_short "$pre_rebase" 8)
+echo "- 検証した commit $pre_short" >>"$progress"
 if check; then fail "(2) pre-rebase hash must fail"; fi
-grep -q "$progress:.*$(printf %.8s "$pre_rebase") は main の祖先でない" "$root/out" \
+grep -q "$progress:.*$pre_short は main の祖先でない" "$root/out" \
   || fail "(2) unexpected output: $(cat "$root/out")"
 echo "OK (2) pre-rebase hash fails"
 
 # (3) rebase 後の task branch の hash（HEAD の祖先）も失敗する
 fm >"$progress"
-echo "- 検証した commit $(git rev-parse --short=10 HEAD)" >>"$progress"
+echo "- 検証した commit $(detectable_short "$(git rev-parse HEAD)" 10)" >>"$progress"
 if check; then fail "(3) task-branch hash must fail"; fi
 grep -q 'main の祖先でない' "$root/out" || fail "(3) unexpected output: $(cat "$root/out")"
 echo "OK (3) task-branch hash (ancestor of HEAD only) fails"

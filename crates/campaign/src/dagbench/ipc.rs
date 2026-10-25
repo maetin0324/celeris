@@ -58,7 +58,8 @@ use serde::{Deserialize, Serialize};
 use super::ext::{ExtBackend, ExtConfig, ExtSim, Lookup, Notice, SubmitError, SubmitReply};
 
 /// 線形式の版。互換のない変更で上げる（server は違う版を拒否する）。
-pub const PROTOCOL_VERSION: u32 = 1;
+/// 2: `Lookup::Unresolved`・`SubmitError::Unresolved` を追加（ADR 2026-10-25-recovery-scheduler-backend I4）。
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]

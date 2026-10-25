@@ -53,6 +53,9 @@ lock_exit=$?
 # 実 archive の通し（既存の opt-in 試験。偽 Host・模擬 executor）。試験が <出力dir>/audit/summary.json に
 # stage・grade・grade-out・check・export・全セル有効の負例・stage の欠落/不一致の各 CLI と preflight の結果を書き、
 # preflight の拒否では transport 0 回と out 不在を assert する。
+# 前回の audit は消す（残した fixture の .git/objects は読み取り専用で、上書きの copy が EACCES になる）。
+[ -d "$out/audit" ] && chmod -R u+w "$out/audit"
+rm -rf "$out/audit"
 K4_AUDIT_DIR="$out/audit" K4_REAL_ARCHIVE="$tgz" cargo test -p celeris-campaign --test preflight_input_archive \
   -- --ignored --exact real::real_archive_offline_audit >"$out/audit-test.log" 2>&1
 audit_exit=$?

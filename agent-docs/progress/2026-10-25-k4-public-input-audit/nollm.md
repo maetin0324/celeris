@@ -47,6 +47,10 @@ commits: 「campaign: K4 v2 の無 LLM 通しを script にし、独立負例と
 - `bash scripts/dev/test-affected.sh` → exit 0、2645 tests run: 2645 passed、7 skipped（crates: celeris celeris-campaign celerisctl llm-proxy task-dispatch）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → ok。
 
+- 再実行（retry）: 初回 run の後の check で `real_archive_offline_audit` が `preflight_setup::copy` の EACCES で落ちた（前回残した `audit/fixture/repo/.git/objects` が読み取り専用で上書き copy できない）。
+  script が試験の前に `<出力dir>/audit` を消すよう直し（commit「campaign: K4 v2 無 LLM 通しは前回の audit を消してから試験する」）、
+  同じ出力 dir へ check と同じコマンドを 2 回続けて流して両方 exit 0（15 case 全 ok、旧 tgz sha256 OK）。
+
 ## 未解決事項
 - 偽 Host・模擬 executor の通しで、実 launcher・daemon・cap-env・release 接続は pending のまま（測定開始の証拠ではない）。
 - main-4 bundle の lock.json・pins は旧 v1 のまま。新 expected_lock を bundle に固定するかは close WU・P0-2 の判断。

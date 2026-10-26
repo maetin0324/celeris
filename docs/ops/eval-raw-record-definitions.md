@@ -213,7 +213,7 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 - 消費の欠測数の分母は「実行した試行」（`TrialRecord::ran`。checker の `ran_trials`）。実行されなかった cell（予算停止・依存 blocked・arm 予算切れで未投入）は
   report では `tokens_not_run_trials`・`cost_micro_usd_not_run_trials`（arm の `not_run_trials`）に数え、値は null のまま（欠測にも観測済み 0 にもしない）。
   記録の無い cell（`missing`）は欠測に数える。join の `success_class.ran` が cell の判定に使った試行の実行の有無。
-- 照合: `python3 scripts/campaign/check-out-consistency.py --out <out>` が checker・export・human-op report の件数と分母を生記録からの再計算と突き合わせる（一致で exit 0）。
+- 照合: `python3 scripts/campaign/check-out-consistency.py --out <out>` が checker・export・human-op report（`--final-accounting` を渡せば final-accounting も）の件数と分母を生記録からの再計算と突き合わせる（一致で exit 0）。
 
 ### 7.1 shared scope と訂正
 

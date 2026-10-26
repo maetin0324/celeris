@@ -168,7 +168,9 @@ sh $L grade --env $ENVF                           # collect → grade-out → ch
 sh $L export --env $ENVF
 $B human-op report --file $OUT/human-ops.jsonl --events $OUT --out $(dirname "$OUT")/human-ops-report
 $B final-accounting --manifest $MANIFEST --out $OUT --records <RECORDS>
-python3 scripts/campaign/check-out-consistency.py --out $OUT --campaign-bin $B --check-arg=…
+python3 scripts/campaign/check-out-consistency.py --out $OUT --manifest $MANIFEST --campaign-bin $B \
+  --human-ops-report $(dirname "$OUT")/human-ops-report --final-accounting $OUT/export/final-accounting.json \
+  --records <RECORDS> --check-arg=…（launcher の引数から --manifest・--out を除いたもの）
 ```
 
 各段の exit code・`watch.end`・`tokens_missing`・`max_overshoot_*` を進捗ファイルに写す。K4 の全段が exit 0 で §3 に当たらなかったら、

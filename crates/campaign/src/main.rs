@@ -17,10 +17,10 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <human-op|jev-stages|dry-run|validate|lock|collect-observed|collect-observed-out|stage-grader-inputs|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <human-op|jev-stages|dry-run|validate|lock|collect-observed|collect-observed-out|stage-grader-inputs|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|ledger-init|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
-[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--variant-b0-sha256 <hex>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
+[--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--approval <json>] [--variant-b0-sha256 <hex>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
 
 fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.iter()
@@ -724,6 +724,20 @@ fn run(args: Vec<String>) -> Result<String, String> {
             )?;
             let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
             if v["ok"] == true { Ok(s) } else { Err(s) }
+        }
+        "ledger-init" => {
+            // 人の承認（出典・範囲・期限・試行数）を共有台帳に記録する（冪等）。宣言した台帳の path だけを受ける。
+            m.check_shared_ledger(arg(&args, "--global-ledger").as_deref())?;
+            let dir = arg(&args, "--global-ledger").ok_or("--global-ledger <dir> is required")?;
+            let path = arg(&args, "--approval").ok_or("--approval <json> is required")?;
+            let a: celeris_campaign::global_ledger::Approval = serde_json::from_slice(
+                &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+            )
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+            let dir = std::path::absolute(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let rep =
+                celeris_campaign::global_ledger::GlobalLedger::open(&dir)?.init_approval(&m, &a)?;
+            serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())
         }
         "usage" => {
             // A が有効計画に無ければ要らない（report が summary の cells で判断する）。

@@ -927,3 +927,156 @@ impl GlobalLedger {
         Ok(o)
     }
 }
+
+/// 承認の記録の file 名（台帳 dir の中。台帳の行には入れない: 行の schema は承認の出典を持たない）。
+pub const APPROVAL_FILE: &str = "approval.json";
+pub const APPROVAL_SCHEMA: &str = "celeris.campaign-ledger-approval/1";
+
+/// 人の承認（`ledger-init` の入力）。秘密値は持たない。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Approval {
+    /// 誰がいつ承認したか。
+    pub source: String,
+    /// 承認の範囲（case・arm・model 等）。
+    pub scope: String,
+    /// 期限（`YYYY-MM-DD`）。
+    pub expiry: String,
+    /// 承認した試行数（台帳の上限 `caps.trials` になる。増やせない）。
+    pub approved_trials: u64,
+    /// 承認した tokens の上限。無ければ台帳は tokens を制限しない（manifest の budget が効く）。
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
+    /// 停止条件などの補足。
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl Approval {
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, v) in [
+            ("source", &self.source),
+            ("scope", &self.scope),
+            ("expiry", &self.expiry),
+        ] {
+            if v.trim().is_empty() {
+                return Err(format!("approval: {name} is empty"));
+            }
+        }
+        let bad = || format!("approval: expiry {:?} is not YYYY-MM-DD", self.expiry);
+        let parts: Vec<&str> = self.expiry.split('-').collect();
+        let [y, mo, d] = parts.as_slice() else {
+            return Err(bad());
+        };
+        if (y.len(), mo.len(), d.len()) != (4, 2, 2) {
+            return Err(bad());
+        }
+        let n = |x: &str| x.parse::<u8>().map_err(|_| bad());
+        let month = time::Month::try_from(n(mo)?).map_err(|_| bad())?;
+        let year = y.parse::<i32>().map_err(|_| bad())?;
+        time::Date::from_calendar_date(year, month, n(d)?).map_err(|_| bad())?;
+        if self.approved_trials == 0 {
+            return Err("approval: approved_trials must be > 0".into());
+        }
+        Ok(())
+    }
+
+    fn caps(&self) -> Caps {
+        Caps {
+            tokens: self.max_tokens.unwrap_or(u64::MAX),
+            trials: self.approved_trials,
+            provider_slots: u32::MAX,
+        }
+    }
+}
+
+/// `ledger-init` の結果。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LedgerInit {
+    pub ledger_path: PathBuf,
+    pub approval_path: PathBuf,
+    pub measurement_id: String,
+    /// 台帳全体の上限（全行の最小）。
+    pub ledger_caps: Caps,
+    /// manifest が宣言する上限。
+    pub manifest_caps: Caps,
+    /// 投入で効く上限（台帳と manifest の最小）。
+    pub effective_caps: Caps,
+    /// 台帳の全測定 ID の確定消費の合計。
+    pub consumed: Consumed,
+    /// 承認の残り試行数（`approved_trials` − 確定消費）。
+    pub remaining_trials_approval: u64,
+    /// 投入で効く残り試行数（`effective_caps.trials` − 確定消費）。
+    pub remaining_trials_effective: u64,
+    /// この manifest の期待試行数。
+    pub expected_trials: u64,
+}
+
+impl GlobalLedger {
+    /// 承認を台帳に記録する（冪等）。承認の出典・範囲・期限は台帳 dir の `approval.json`、上限は測定 ID の行の
+    /// `caps` に入れる。既に違う承認が記録されていれば拒否する（上限は増えないので、引き上げは新しい台帳で行う）。
+    /// 消費は書かない（試行の消費は runner の予約・精算だけが書く）。
+    pub fn init_approval(&self, m: &CampaignManifest, a: &Approval) -> Result<LedgerInit, String> {
+        a.validate()?;
+        let _g = self.lock()?;
+        let dir = self
+            .path
+            .parent()
+            .ok_or("global ledger path has no parent")?;
+        let approval_path = dir.join(APPROVAL_FILE);
+        let mut doc = serde_json::to_value(a).map_err(|e| e.to_string())?;
+        if let Some(o) = doc.as_object_mut() {
+            o.insert("schema".into(), APPROVAL_SCHEMA.into());
+        }
+        match fs::read(&approval_path) {
+            Ok(b) => {
+                let prev: Value = serde_json::from_slice(&b)
+                    .map_err(|e| format!("{}: {e}", approval_path.display()))?;
+                if prev != doc {
+                    return Err(format!(
+                        "{}: a different approval is already recorded; caps never increase, use a new ledger",
+                        approval_path.display()
+                    ));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let tmp = approval_path.with_extension("json.tmp");
+                let body = serde_json::to_vec_pretty(&doc).map_err(|e| e.to_string())?;
+                let mut f =
+                    fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+                f.write_all(&body).map_err(|e| e.to_string())?;
+                f.sync_all().map_err(|e| e.to_string())?;
+                fs::rename(&tmp, &approval_path)
+                    .map_err(|e| format!("{}: {e}", approval_path.display()))?;
+            }
+            Err(e) => return Err(format!("{}: {e}", approval_path.display())),
+        }
+        let s = self.state()?;
+        let hash = m.compute_sha256()?;
+        let mut row = Self::measurement_or_new(&s, &m.campaign_id, &hash);
+        row.caps = row.caps.min(a.caps());
+        self.write_measurement(&s, &row)?;
+        let s = self.state()?;
+        let mut consumed = Consumed::default();
+        for id in s.ids() {
+            let c = s.view(&id).consumed;
+            consumed.tokens = consumed.tokens.saturating_add(c.tokens);
+            consumed.wall_secs = consumed.wall_secs.saturating_add(c.wall_secs);
+            consumed.trials = consumed.trials.saturating_add(c.trials);
+        }
+        let manifest_caps = Caps::of(m);
+        let effective_caps = s.caps.min(manifest_caps);
+        Ok(LedgerInit {
+            ledger_path: self.path.clone(),
+            approval_path,
+            measurement_id: m.campaign_id.clone(),
+            ledger_caps: s.caps,
+            manifest_caps,
+            effective_caps,
+            consumed,
+            remaining_trials_approval: a.approved_trials.saturating_sub(consumed.trials),
+            remaining_trials_effective: effective_caps.trials.saturating_sub(consumed.trials),
+            expected_trials: m.expected_trials(),
+        })
+    }
+}

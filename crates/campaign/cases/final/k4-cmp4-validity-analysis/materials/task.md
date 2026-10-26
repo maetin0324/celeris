@@ -1,9 +1,12 @@
 # K4: 4 FS 比較の有効性分析
 
-入力は cmp4 v3 の N=2 原票 tgz（job 43706）。`inputs/main-v3-n2-43706.tgz` を `inputs/` 直下に展開する
-（`cd inputs && tar -xzf main-v3-n2-43706.tgz` → `inputs/runs/<run>/…`、`inputs/review28/…`）。
+入力は cmp4 v3 の N=2 原票 tgz（job 43706、公開入力 v2）。`inputs/main-v3-n2-43706-public2.tgz` を `inputs/` 直下に展開する
+（`cd inputs && tar -xzf main-v3-n2-43706-public2.tgz` → `inputs/runs/<run>/…`、`inputs/review28/…`）。
+- `runs/<run>/`: `planned-cells.json`、`cells/<fs>/rep<n>/<workload>/`（`cell.json`・`exit.json`・`ior.json`・stdout/stderr・`mdtest-ranks.csv` 等）、
+  `fs/<fs>/rep<n>/<workload>/`（FS 側の log）、`runner/`（投入・実行 script）、job・host・topology の記録。
+- `review28/`: scheduler の原票（`qstat-<job>.txt`、`v3-submissions.json`）。
 FS（BenchFS/CHFS/GekkoFS/UnifyFS）×workload ごとの帯域・IOPS と、セルが有効か無効か（理由つき）を原票から決め、
-有効セル数／全セル数の分母つきの表と報告を作る。同梱の集計・報告文言は証拠にしない。原票から自分で計算すること。
+有効セル数／全セル数の分母つきの表と報告を作る。原票から自分で計算すること。
 
 ## 判定規則（採点器も同じ規則で原票から再計算する）
 - 期待セル集合は `runs/<run>/planned-cells.json`（fs・rep・workload）。全セル数はその大きさ。欠測（dir や `cell.json`・`exit.json` が無い）も表の行に残し、分母に残す。

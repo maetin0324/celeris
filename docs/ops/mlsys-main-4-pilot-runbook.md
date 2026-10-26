@@ -5,6 +5,7 @@ tasks: [01M5SRJMB1CSGBYT028X0B67N2]
 
 この票は main-4 の再 freeze（revision `final-freeze-2`、`campaign_id = measurement_id = mlsys-main-4-v4`）で pilot を始めるための手順と条件をまとめる。
 pilot は問題ごとの manifest 2 件（`mlsys-main-4-v4-pilot-k4`・`mlsys-main-4-v4-pilot-k2`）で流す。
+campaign binary は collect 修正入りに再固定し（repin）、その binary そのもので lock・preflight・無評価 LLM の通しを取り直した（nollm-pinned）。
 **この票を更新した時点（2026-10-26）で pilot の LLM 試行は 1 件も実行していない**（人の指示。paid_calls_made = 0）。
 主測定（12/20 試行）と追加予算はこの票の範囲外で、書かないし実行もしない。
 
@@ -19,11 +20,12 @@ pilot は問題ごとの manifest 2 件（`mlsys-main-4-v4-pilot-k4`・`mlsys-ma
 W=/local/celeris/data/workspaces/01M5SRJMB1CSGBYT028X0B67N2/artifacts/main4-ready
 R=$W/bundle/final-freeze-2                 # 再 freeze の bundle（revision R2）
 P=$R/pinned/main                           # final.json・lock.json・pins.json・launcher.env
-RR=$W/rerun                                # refreeze・nollm-rerun の機械向け記録（*.json）
-K4=$RR/pilot/k4                            # K4 だけの pilot manifest・launcher.env・lock・out
-K2=$RR/pilot/k2                            # K2 だけの pilot manifest・launcher.env・lock・out
+RR=$W/rerun                                # refreeze・nollm-rerun の機械向け記録（*.json。旧 binary 時点）
+RP=$W/repin                                # repin・nollm-pinned の機械向け記録（repin.json・nollm-pass.json・consistency.json）
+K4=$RP/pilot/k4                            # K4 だけの pilot manifest・launcher.env・lock・out
+K2=$RP/pilot/k2                            # K2 だけの pilot manifest・launcher.env・lock・out
 L=scripts/campaign/measure-launcher.sh     # subcommand: prepare/start/preflight/lock/watch/collect/grade/export/stop
-B=$R/pinned/evidence/main-k2/bin/celeris-campaign-fixed   # check・usage・human-op・final-accounting は CLI を直接（§6 C9 で差し替える）
+B=$R/pinned/evidence/main-k2/bin/celeris-campaign-fixed   # check・usage・human-op・final-accounting は CLI を直接（repin で pin した collect 修正入り）
 ```
 
 ## 1. 試行の順序と構成
@@ -43,19 +45,19 @@ B=$R/pinned/evidence/main-k2/bin/celeris-campaign-fixed   # check・usage・huma
 - 順序: K4 と K2 を別 manifest にしたので、`$K4/launcher.env` の `watch` を先に流せば K4 だけが走る（旧票の「K2 が先に走る」制約は解消。C7）。
   R2 の主 manifest（4 試行・`approved_trials = 2`）は pilot に使わない。
 
-### 1.1 固定値（`$RR/revision.json`・`$RR/pilot-manifests.json`・R2 の現物から写した値）
+### 1.1 固定値（`$RP/repin.json`・`$RP/pilot.json`・`$RR/revision.json`・R2 の現物から写した値）
 
 | 項目 | 値 |
 |---|---|
-| R2 の measurement_id | `mlsys-main-4-v4`（旧 `mlsys-main-4-v2` 系・`-v3` とは state dir も分けた） |
+| root / R2 の measurement_id | root `$R`、`mlsys-main-4-v4`（`$RP/repin.json`。repin で新 ID は不要だった＝needs_new_mid false。旧 `mlsys-main-4-v2` 系・`-v3` とは state dir も分けた） |
 | R2 manifest `$P/final.json` | sha256 `e5ef430a767499e3affea705bd607cb5d8f32949b2c0f2aba6d9674862cb0a09`、campaign_sha256 `3756ff02244a5d6c8ee4e1c04d5041487d7ebbba9ba762543bc429dfa2e51c65` |
 | R2 lock `$P/lock.json` | sha256 `e3bd04c582d288760b1e506a52ae77a2ee0884bc190d10e5f0de573b76231258`、seal `a76cb0766735cd172d1b669871421552d53b10ea8f26c8557bce36da89da3134` |
-| K4 pilot manifest | `$K4/final.json`、measurement_id `mlsys-main-4-v4-pilot-k4`、sha256 `472594e3ceca7fc79a44d455347a41a755398f4f7a0f0ee67c668d99c2c505de`、campaign_sha256 `e9fb2320303a16d17e38ea6831d1d53b337bb5a869514a2a4bbfa39c0b6ceee0`、lock_sha256 `7b840f04399b0abdcc1ac0b209e775c492c60f73085af0b2987c17cd6b7f071b` |
-| K2 pilot manifest | `$K2/final.json`、measurement_id `mlsys-main-4-v4-pilot-k2`、sha256 `0bd0db33718536c32f0e2665e6bbf4bb20953793b88002e550718952221654c7`、campaign_sha256 `3447ea282a8c19696aeae9a1793f863782a11a3083c3727cfd652c91cd683a0e`、lock_sha256 `0c236423339bc18dd875e96ea07c0fa791ccf11aa623477e33ad96321bc39938` |
+| K4 pilot manifest | `$K4/final.json`（repin で lock を取り直した。lock_exit 0）、measurement_id `mlsys-main-4-v4-pilot-k4`、sha256 `472594e3ceca7fc79a44d455347a41a755398f4f7a0f0ee67c668d99c2c505de`、campaign_sha256 `e9fb2320303a16d17e38ea6831d1d53b337bb5a869514a2a4bbfa39c0b6ceee0`、lock_sha256 `7b840f04399b0abdcc1ac0b209e775c492c60f73085af0b2987c17cd6b7f071b` |
+| K2 pilot manifest | `$K2/final.json`（repin で lock を取り直した。lock_exit 0）、measurement_id `mlsys-main-4-v4-pilot-k2`、sha256 `0bd0db33718536c32f0e2665e6bbf4bb20953793b88002e550718952221654c7`、campaign_sha256 `3447ea282a8c19696aeae9a1793f863782a11a3083c3727cfd652c91cd683a0e`、lock_sha256 `0c236423339bc18dd875e96ea07c0fa791ccf11aa623477e33ad96321bc39938` |
 | input manifest | file sha256 `e71e3e43860e8ae5411f451dda61d784d53cc172f6cb9dc1a6d463895ae090f4`（R1 から不変） |
 | materials / KB | `810b9562a7b28e736dbe0ce7a7ee9079a6f79df245f2c9f9092a747bc7b14593` / `741f24146f5c02f44acf5291e23806416b9956809e55a1474488ecbcc9fe0702` |
 | daemon（RELEASE） | `a28184889f56`、`/local/celeris/state/releases/a28184889f56/bin/celeris` sha256 `8f3ee98dc57ba9219a8b1db8987afb7f584ea14c13308cdd04821b281f67a3aa` |
-| campaign binary | `$B`、sha256 `5132230995128dc745593546132dfb947e537d1913718bea482cbc83f5ff93dd`（collect の修正なし。§6 C9 で差し替え） |
+| campaign binary | `$B`、sha256 `2344d2c47b001e66560a778e964d9e5c2f2b9f5108c552016b727f5105b2b402`（collect 修正入り。`$P/pins.json` の CAMPAIGN_BIN_SHA と一致、check-main-pins exit 0）。旧 binary（修正なし、sha256 `5132230995128dc745593546132dfb947e537d1913718bea482cbc83f5ff93dd`）は `$B.pre-repin` に残し、使わない |
 | A（A0） | `claude-code` `2.1.303`、実体 `/home/rmaeda/.local/share/claude/versions/2.1.303`、sha256 `375988f457756524234695cf2d8f64ace99c5f68682e47ea24862a843c191450`、account `claude_max_lab` |
 | B（B0） | `celeris`、`harness_version` `a28184889f56`、run harness `claude-code`、Jev 無効 |
 | model | `claude-sonnet-5-5`（A・B・cos・planner・worker・reviewer の全部。d-model = sonnet） |
@@ -64,7 +66,7 @@ B=$R/pinned/evidence/main-k2/bin/celeris-campaign-fixed   # check・usage・huma
 | K2 case / grader | case.json `e1d1e5936ffb60a7ce7709653004e02fdaf4e0d01bbf01bea9ee8a4b6b2d64ca`、grader private `d02126077a47495b121e1e678f055ba4e2493f92d05cd010f2bda32d30694760`、grade-case `f84089bcf161edab75bfc619574c112de446b75622f893323f43405190aca593` |
 | K2 初期 tree（BenchFS） | commit `086c4618e2a4d94ea56da78ceeed0f8d6d568d67`、tree `56d2f021530c8f55c78e740a4823e53e01975965`。submodule 5 件は bundle（`/local/celeris/data/measure/main-4/k2-submodule-bundles/`）から入れた（`$RR/repo-src.json`） |
 
-C9 で binary を差し替えると lock を取り直すので、pilot manifest の lock_sha256 などは替わり得る。替わった値はその時の記録に書き、この表の値を流用しない。
+repin で新 binary の lock を取り直した結果、R2 の lock.json・env-lock.json と pilot manifest 2 件の lock は旧 binary の物と byte 一致した（`$RP/lock-probe.json`・`$RP/live.json`・`$RP/pilot.json`）。そのため manifest・lock の sha256 は前の値のままである。
 
 ## 2. 出力先
 
@@ -130,27 +132,23 @@ $B human-op record $ID --op-kind status_check --actor eval1 --mode manual --inte
 
 ## 6. 開始可否
 
-**判定: 開始不可**（2026-10-26 時点。残りは C9 の 1 件）。C1〜C8 は満たした（証跡は `$RR` の各 JSON）。
-C9 は本 task の統合後に worker が行い、証跡を残したら開始できる。
+**判定: 開始可**（2026-10-26 時点。C1〜C9 すべて済）。運用条件: 承認枠（ループせず前進する限り試行数の固定上限なし、台帳の承認 40）、
+同じ原因で 2 回続けて失敗したら停止して人に上げる、期限 2026-11-13。
 
 | # | 条件 | 状態 | 証跡（2026-10-26） |
 |---|---|---|---|
-| C1 | RELEASE の昇格（d-release = post-merge）と pins・launcher.env・B の harness_version・lock の作り直し | 済 | release `a28184889f56`（health・current・promoted.json、`$RR/revision.json`）。`check-main-pins.py --root $R --pins $P/pins.json` → exit 0（`$RR/check-main-pins.exit`） |
+| C1 | RELEASE の昇格（d-release = post-merge）と pins・launcher.env・B の harness_version・lock の作り直し | 済 | release `a28184889f56`（health・current・promoted.json、`$RR/revision.json`）。新 binary の pin 後に `check-main-pins.py --root $R --pins $P/pins.json` → exit 0（`$RP/repin.json` の check_main_pins_exit、`$RP/notes/record-check-main-pins.out`） |
 | C2 | A の account login | 済 | `claude_max_lab` logged_in（task comment 2026-10-26 06:26Z）。実 preflight の auth-env・capability が通過 |
-| C3 | claude OAuth の更新と env-lock | 済 | model catalog 14 件、`lock` exit 0、`env-lock --verify` exit 0（`$RR/env-lock.json`） |
-| C4 | sirius の ControlMaster と cap-probe | 済 | `ssh -O check -S /run/celeris-cap/sirius-ssh.sock sirius` exit 0、cap-probe A/B × K2/K4 exit 0・paid_calls 0（`$RR/cap-probe.json`、`$R/pinned/evidence/cap-{a-k2,a-k4,b}.json`） |
+| C3 | claude OAuth の更新と env-lock | 済 | model catalog 14 件（`$RR/env-lock.json`）。新 binary で `lock` exit 0、`env-lock --verify` exit 0（`$RP/live.json`、`$RP/repin.json` の env_lock_verify_exit） |
+| C4 | sirius の ControlMaster と cap-probe | 済 | `ssh -O check -S /run/celeris-cap/sirius-ssh.sock sirius` exit 0（`$RR/cap-probe.json`）。新 binary で cap-probe A/B × K2/K4 exit 0・paid_calls 0（`$RP/live.json`） |
 | C5 | 承認の記録と共有台帳の初期化 | 済 | `ledger-init` exit 0、承認 40・消費 0・残 40（`$RR/ledger.json`）。pilot manifest は各 2 試行で `approved_trials = 2` と一致 |
-| C6 | 実測定構成の preflight | 済 | R2 で prepare・start・preflight・stop exit 0、run `01M5WANNTJSBHTQA364VMBC5YB`、ok=true・missing []・paid_calls 0（`$RR/preflight.json`、config=real）。project `01M5W9014BJF29SS6VQDFX0Z18` |
-| C7 | K4 先行の順序を表せる manifest | 済 | `$K4/final.json`・`$K2/final.json` を同じ shared_ledger で作り、start・lock・stop exit 0（`$RR/pilot-manifests.json`） |
-| C8 | 新 revision の out で件数照合 | 済 | R2 の写しで無評価 LLM の 12 段 exit 0、`check-out-consistency.py` exit 0・consistent=true、final-accounting も一致（`$RR/nollm-pass.json`・`$RR/consistency.json`）。binary は collect 修正入り（sha256 `2dd77ed2a28772999878a65bd122450dc9eb1fb3eea6dc0d4c49cb7d39b18e6d`） |
-| C9 | campaign binary を collect 修正入りに再固定 | **未** | `$B` には修正が無く、job を出さない cell（not_submitted）で collect が exit 1 になる（§3 の 7 に当たる）。修正の commit `collect-stub: collect-observed-out は not_submitted だけなら記録を書いて exit 0` は task branch にあり、main にまだ無い |
+| C6 | 実測定構成の preflight | 済 | 新 binary・R2 で prepare・start・preflight・stop exit 0、run `01M5WHQT0TVY435VY470C2KNYB`、ok=true・missing なし・checked 17・paid_calls 0、config=real、release `a28184889f56`（`$RP/live.json`・`$RP/repin.json`）。project `01M5W9014BJF29SS6VQDFX0Z18`。旧 binary での preflight run `01M5WANNTJSBHTQA364VMBC5YB`（`$RR/preflight.json`）は参考 |
+| C7 | K4 先行の順序を表せる manifest | 済 | `$K4/final.json`・`$K2/final.json` を同じ shared_ledger で作り、新 binary で validate・start・lock・stop exit 0（`$RP/pilot.json`） |
+| C8 | 新 revision の out で件数照合 | 済 | pin した binary そのもの（sha256 `2344d2c47b001e66560a778e964d9e5c2f2b9f5108c552016b727f5105b2b402`）で無評価 LLM の 12 段 exit 0、paid_calls 0（`$RP/nollm-pass.json`）。`check-out-consistency.py` exit 0・consistent=true・mismatches []、final-accounting も一致（`$RP/consistency.json`、campaign_bin_matches_pin true）。旧 binary 時代の通し（`$RR/nollm-pass.json`、未 pin の sha256 `2dd77ed2a28772999878a65bd122450dc9eb1fb3eea6dc0d4c49cb7d39b18e6d`）は参考 |
+| C9 | campaign binary を collect 修正入りに再固定 | 済 | 件名 `collect-stub: collect-observed-out は not_submitted だけなら記録を書いて exit 0` の commit を含む task HEAD から `cargo build --release -p celeris-campaign` → `$B` に置き、`$P/pins.json` の CAMPAIGN_BIN_SHA を `2344d2c47b001e66560a778e964d9e5c2f2b9f5108c552016b727f5105b2b402` に更新、check-main-pins exit 0。lock・env-lock --verify・preflight・pilot lock 2 件を取り直し全部 exit 0、新 measurement_id 不要（`$RP/repin.json`）。同じ binary の無評価 LLM 通しで collect exit 0（not_submitted 2・blocking 0、`$RP/nollm-pass.json`） |
 
-C9 の手順（worker、本 task が main に入った後）:
-1. `git merge-base --is-ancestor <collect 修正の commit> main` が 0 であることを確かめる。
-2. その main で `cargo build --release -p celeris-campaign` → 出来た binary を `$B` に置く（旧 binary は別名で残す）。
-3. `sha256sum` を `$P/pins.json` の `CAMPAIGN_BIN_SHA` に書き、`python3 scripts/campaign/check-main-pins.py --root $R --pins $P/pins.json` → exit 0。
-4. 新 binary で R2 の `sh $L lock`・`env-lock --verify`・`sh $L preflight` を取り直す（lock が新しい measurement_id を求めたら新 ID を採る）。
-5. `$K4`・`$K2` の lock を新 binary で取り直し、manifest・campaign_sha256・lock の値を記録する。
+注意: pin した binary は task branch の HEAD から build した物で、collect 修正はまだ main と release gate を通っていない。
+main 取り込み後に別の build の binary に差し替えるときは、repin と同じ手順（build-pin → lock-probe → live → pilot）と無評価 LLM の通しをやり直す。差し替えない限り、この票の値で開始してよい。
 
 開始後の運用条件: §3 の停止条件、§4 の台帳の約束（同じ原因で 2 回続けて失敗したら停止、期限 2026-11-13）、§5 の人操作の記録。
 pilot manifest には pilot 用の pins が無いので `check-main-pins.py` は通していない。lock の照合は `watch` の preflight が毎回行う。

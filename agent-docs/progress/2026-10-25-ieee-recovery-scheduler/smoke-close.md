@@ -22,7 +22,15 @@ Sirius・claude_max_lab への接続はしていない（利用者のコメン�
   `hpc_ready = false`。`grep -n 'hpc_ready = false' docs/experiments/recovery-scheduler-smoke.md agent-docs/progress/2026-10-25-ieee-recovery-scheduler/live-smoke.md` で両方 1 件以上。
 - 条件 1「文書検査 3 本・test-affected・clippy・fmt が exit 0」: 下の表。
 
-CHECKS_TABLE
+| 検査 | 結果 |
+|---|---|
+| `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | exit 0（ok） |
+| `sh scripts/dev/check-doc-links.sh` | exit 0（ok） |
+| `sh scripts/dev/check-adr-numbers.sh` | exit 0（294 files） |
+| `sh scripts/dev/progress-index.sh --check` | exit 0（ok） |
+| `bash scripts/dev/test-affected.sh`（WU 基点） | exit 0、docs のみの変更で Rust 試験対象なし（doc-links 自己試験 ok） |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `cargo fmt --all -- --check` | exit 0 |
 
 ## smoke 段の総括
 
@@ -44,6 +52,7 @@ CHECKS_TABLE
 - 「live-smoke: record Sirius smoke stop (qsub rejected place=exclhost), hpc_ready=false」
 - 「live-smoke: record checks at the submitted HEAD」
 - 「smoke-close: align the runbook verdict with live-smoke and summarize the smoke stage」
+- 「smoke-close: record checks at the submitted HEAD」
 
 ## 未解決事項
 

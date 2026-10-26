@@ -230,9 +230,18 @@ P0-2 の `consistency.json` は旧 manifest の out で取ったもので、fina
 
 ## 判定
 
-**`hpc_ready = false`**（2026-10-26、live-smoke の結果）。d-smoke は承認、BatchMode 接続あり、`RECOVERY_SMOKE_DIR` の
-qsub `-v` は実装済み（以前の不足 1〜3 は解消）。1 本目の qsub を gen が
-`'place=exclhost' is allowed only for node-exclusive placement` で拒否し（受理 job 0 本）、停止条件どおり残りを流していない。
-資源の配置（`place`）を人が決め直し、ADR D2・`spec.template.json`・上の資源表を更新してから新しい measurement_id で再実行する。
-記録は [live-smoke 進捗](../../agent-docs/progress/2026-10-25-ieee-recovery-scheduler/live-smoke.md)。
-残る不足: 承認枠と PBS 課金単位の換算が未照合、unknown submit の marker 検索が未実装（`find_by_marker` は `Unsupported`）。
+**`hpc_ready = false`**（2026-10-26、[live-smoke 進捗](../../agent-docs/progress/2026-10-25-ieee-recovery-scheduler/live-smoke.md)の値と同じ）。
+
+- 接続（実装）: 完了。ssh 承認 gate・`SshSite`・`close_from_env`・cluster payload、`RECOVERY_SMOKE_DIR` の qsub `-v` は
+  実装と stub 試験まで済んだ。d-smoke は承認、BatchMode 接続もあった（以前の不足 1〜3 は解消）。
+- 実機受入: **未完了**。measurement_id `rcv-smoke-20261026-1` の 1 本目（baseline/normal）の qsub を gen が
+  `'place=exclhost' is allowed only for node-exclusive placement`（exit 32）で拒否した。受理 job 0 本、validated_completed 0。
+  停止条件どおり残り 3 trial は流していない。同一 job 継続・回収・二重投入/消費 0・独立 grade・raw 再集計一致は、
+  どれも実機では確かめていない（偽 transport の決定的試験でだけ確認済み）。この測定 ID は再利用しない（ledger に sent 1 件）。
+- 残る人の判断:
+  1. 資源の配置（`place`）を決め直す（推奨 `place=excl`、代案 `select=4:…`+`place=exclhost`）。d-smoke の後継の決定として回答し、
+     ADR D2・`spec.template.json`・上の資源表を更新してから新しい measurement_id で再実行する。
+  2. 承認枠と PBS 課金単位（1/3 host-hour）の換算を照合する。
+  3. 再実行の時期。Sirius の保守と claude_max_lab の login 復旧を待つ（それまで Sirius へ接続しない）。
+- 残る実装の不足: unknown submit の marker 検索が未実装（`find_by_marker` は `Unsupported`）。qsub の明示的拒否を
+  `rejected` と分ける分類は提案のまま。

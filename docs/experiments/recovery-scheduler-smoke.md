@@ -230,16 +230,9 @@ P0-2 の `consistency.json` は旧 manifest の out で取ったもので、fina
 
 ## 判定
 
-**`hpc_ready = false`**（2026-10-25 提出時点）。実機受入は未実施で、接続の実装（stub ssh 試験の合格）とは分けて扱う。
-実 job 0 本・新規試行 0。不足:
-
-1. 承認なし: 人の決定 d-smoke が未回答。
-2. 接続なし: `ssh -O check -o BatchMode=yes sirius` は exit 255（Control socket が無い）。BatchMode で使える接続は人が
-   TOTP で張り直す必要がある（P0-2 の `sirius-controlmaster` と同じ）。
-3. payload の env が届かない: I15 (4) の qsub `-v` への `RECOVERY_SMOKE_DIR=dirname(script)` の追加が未実装
-   （`QsubRequest::argv` は `CELERIS_TRIAL_KEY`・`CELERIS_SUBMIT_INTENT` だけを渡す）。このままでは `job.sh` が
-   `RECOVERY_SMOKE_DIR is not set` で即終了し、`out.bin` ができない。live-smoke の前に実装と試験が要る。
-4. 承認枠と PBS 課金単位（1/3 host-hour）の換算が未照合。
-5. unknown submit の marker 検索は未実装（`find_by_marker` は `Unsupported`）。起きれば停止して人が解決する。
-
-1〜3 が揃い、実行手順 1.〜8. と「観測・回収・再集計」の受入が全て合格したときに限り `hpc_ready=true` にする。
+**`hpc_ready = false`**（2026-10-26、live-smoke の結果）。d-smoke は承認、BatchMode 接続あり、`RECOVERY_SMOKE_DIR` の
+qsub `-v` は実装済み（以前の不足 1〜3 は解消）。1 本目の qsub を gen が
+`'place=exclhost' is allowed only for node-exclusive placement` で拒否し（受理 job 0 本）、停止条件どおり残りを流していない。
+資源の配置（`place`）を人が決め直し、ADR D2・`spec.template.json`・上の資源表を更新してから新しい measurement_id で再実行する。
+記録は [live-smoke 進捗](../../agent-docs/progress/2026-10-25-ieee-recovery-scheduler/live-smoke.md)。
+残る不足: 承認枠と PBS 課金単位の換算が未照合、unknown submit の marker 検索が未実装（`find_by_marker` は `Unsupported`）。

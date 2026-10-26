@@ -489,6 +489,7 @@ fn fallback_reason(class: FailureClass) -> &'static str {
     match class {
         FailureClass::Unauthorized => "auth_failed",
         FailureClass::RateLimited => "rate_limit",
+        FailureClass::Refused => "refused",
         FailureClass::Server | FailureClass::Network => "health_down",
         FailureClass::Local => "local",
         FailureClass::Client => "client",
@@ -499,6 +500,7 @@ fn error_kind(e: &SourceError) -> &'static str {
     match e {
         SourceError::Unauthorized => "unauthorized",
         SourceError::RateLimited { .. } => "rate_limited",
+        SourceError::Refused { .. } => "refused",
         SourceError::Upstream { .. } => "upstream",
         SourceError::Network(_) => "network",
         SourceError::Credentials(_) => "credentials",
@@ -797,6 +799,11 @@ fn error_response(e: &SourceError) -> Response {
             }
             resp
         }
+        SourceError::Refused { .. } => problem(
+            StatusCode::BAD_GATEWAY,
+            "upstream_refused",
+            "upstream refused the request",
+        ),
         SourceError::Upstream { status, summary } => {
             let code = StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY);
             let code = if code.is_client_error() || code.is_server_error() {
@@ -1140,12 +1147,47 @@ async fn guard(State(state): State<Arc<ProxyState>>, req: Request, next: Next) -
     next.run(req).await
 }
 
+/// どの route にも一致しない要求（例: LangChain が codex の model 名で送る `POST /v1/responses`）を
+/// `warn` と request log に残して 404 を返す。黙った 404 で原因が追えなくなるのを防ぐ
+/// （ADR 2026-10-26-ldr-proxy-and-route-fixes B3）。guard の後に動くので認証済みの要求だけが記録される。
+async fn unknown_route(State(state): State<Arc<ProxyState>>, req: Request) -> Response {
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+    tracing::warn!(%method, %path, "llm-proxy: no route for the request");
+    if let Some(db_path) = &state.db_path {
+        let row = RequestLogRow {
+            id: Ulid::new().to_string(),
+            ts: time::OffsetDateTime::now_utc().unix_timestamp(),
+            source: None,
+            account: None,
+            requested_model: format!("{method} {path}"),
+            upstream_model: None,
+            prompt_tokens: None,
+            completion_tokens: None,
+            latency_ms: 0,
+            status: "not_found",
+            error_kind: Some("unknown_route".to_string()),
+        };
+        let result =
+            log::open(db_path, state.busy_timeout).and_then(|conn| log::insert(&conn, &row));
+        if let Err(e) = result {
+            tracing::warn!(error = %e, "llm-proxy: could not record the request log row");
+        }
+    }
+    problem(
+        StatusCode::NOT_FOUND,
+        "not_found",
+        &format!("no route for {method} {path}"),
+    )
+}
+
 pub fn router(state: Arc<ProxyState>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/embeddings", post(embeddings_not_implemented))
+        .fallback(unknown_route)
         .layer(axum::middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
 }

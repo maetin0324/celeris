@@ -176,6 +176,45 @@ def call_with_fallback(func, required_kwargs, optional_kwargs):
             kwargs.pop(name, None)
 
 
+# Settings copied onto the `ChatOpenAI` the factory below builds (LDR's own key -> `ChatOpenAI` kwarg).
+_CHAT_MODEL_OPTIONAL_SETTINGS = (
+    ("llm.max_tokens", "max_tokens"),
+    ("llm.max_retries", "max_retries"),
+    ("llm.request_timeout", "request_timeout"),
+)
+
+
+def chat_completions_llms(settings):
+    """`llms=` for LDR's API functions: a factory registered as `openai_endpoint`.
+
+    LDR's `get_llm` looks a registered name up before its built-in providers, so
+    this replaces the built-in `openai_endpoint` provider without changing the
+    `llm.provider` setting. The factory passes `use_responses_api=False` to
+    `ChatOpenAI` (a public argument): `langchain_openai` otherwise switches to
+    the Responses API (`POST /v1/responses`) for any model name containing
+    `codex`, which the celeris llm-proxy does not serve
+    (ADR 2026-10-26-ldr-proxy-and-route-fixes B1)."""
+
+    def factory(model_name=None, temperature=None, settings_snapshot=None):
+        from langchain_openai import ChatOpenAI
+
+        kwargs = {
+            "model": model_name or settings.get("llm.model"),
+            "base_url": settings.get("llm.openai_endpoint.url"),
+            "api_key": settings.get("llm.openai_endpoint.api_key") or "not-needed",
+            "use_responses_api": False,
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        for key, name in _CHAT_MODEL_OPTIONAL_SETTINGS:
+            value = settings.get(key)
+            if value not in (None, ""):
+                kwargs[name] = value
+        return ChatOpenAI(**kwargs)
+
+    return {"openai_endpoint": factory}
+
+
 _CITATION_RE = re.compile(r"\[(\d+)\]")
 _URL_IN_TEXT_RE = re.compile(r"\((https?://[^\s)]+)\)|(https?://[^\s)]+)")
 
@@ -1108,6 +1147,7 @@ def main():
         return 1
 
     progress = make_progress_printer()
+    llms = chat_completions_llms(settings)
 
     try:
         os.makedirs(os.path.dirname(report_path) or ".", exist_ok=True)
@@ -1144,7 +1184,7 @@ def main():
                 lambda: call_ldr_stage(
                     lambda: call_with_fallback(
                         quick_summary,
-                        {"query": augmented_query, "settings_override": settings_q},
+                        {"query": augmented_query, "settings_override": settings_q, "llms": llms},
                         [("progress_callback", progress)] + direct,
                     ),
                     lambda r: str((r or {}).get("summary") or "") if isinstance(r, dict) else "",
@@ -1180,6 +1220,7 @@ def main():
                         {
                             "query": augmented_query,
                             "settings_snapshot": create_settings_snapshot(overrides=settings_d),
+                            "llms": llms,
                         },
                         [("progress_callback", progress)] + direct,
                     ),
@@ -1201,7 +1242,12 @@ def main():
             def do_report():
                 raw = call_with_fallback(
                     generate_report,
-                    {"query": augmented_query, "settings_override": settings_r, "output_file": report_path},
+                    {
+                        "query": augmented_query,
+                        "settings_override": settings_r,
+                        "output_file": report_path,
+                        "llms": llms,
+                    },
                     [("progress_callback", progress)] + direct,
                 )
                 text, _ = summarize_report_file(report_path)

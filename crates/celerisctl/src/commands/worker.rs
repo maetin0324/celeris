@@ -162,8 +162,10 @@ fn resolve_cluster_target(
     })
 }
 
-/// Admission state read from the declarations only: OAuth sources offer their logged-in account
-/// directories (narrowed to the declared accounts, if any), other sources their declared accounts.
+/// Admission state read from the declarations only, with the dispatcher's pool rule
+/// ([`task_dispatch::source_account_pool`]): OAuth sources offer their logged-in account
+/// directories (narrowed to the declared accounts, if any), other sources their declared accounts
+/// or, with none declared, the source id as their one implicit account.
 /// `--source` / `--account` narrow it. In-flight runs and cooldowns are not consulted.
 fn route_state(config: &Config, registry: &Registry, args: &WorkerRunArgs) -> RouteState {
     let mut state = RouteState::default();
@@ -175,27 +177,21 @@ fn route_state(config: &Config, registry: &Registry, args: &WorkerRunArgs) -> Ro
         {
             continue;
         }
-        let mut accounts: Vec<AccountId> = spec.accounts.clone();
-        if let Some(adapter) = task_dispatch::account_adapter_for_source_kind(spec.kind.as_ref()) {
-            let logged_in: Vec<AccountId> = config
-                .accounts
-                .as_ref()
-                .and_then(|a| a.root_for(adapter))
-                .map(|root| task_dispatch::scan_accounts(root, adapter))
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|d| d.logged_in)
-                .map(|d| AccountId::from(d.id.as_str()))
-                .collect();
-            accounts = if accounts.is_empty() {
-                logged_in
-            } else {
-                accounts
+        let logged_in: Option<Vec<AccountId>> =
+            task_dispatch::account_adapter_for_source_kind(spec.kind.as_ref()).map(|adapter| {
+                config
+                    .accounts
+                    .as_ref()
+                    .and_then(|a| a.root_for(adapter))
+                    .map(|root| task_dispatch::scan_accounts(root, adapter))
+                    .unwrap_or_default()
                     .into_iter()
-                    .filter(|a| logged_in.contains(a))
+                    .filter(|d| d.logged_in)
+                    .map(|d| AccountId::from(d.id.as_str()))
                     .collect()
-            };
-        }
+            });
+        let mut accounts =
+            task_dispatch::source_account_pool(source_id, &spec.accounts, logged_in.as_deref());
         if let Some(account) = &args.account {
             accounts.retain(|a| a.as_ref() == account);
         }

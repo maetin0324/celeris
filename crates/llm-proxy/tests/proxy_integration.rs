@@ -156,6 +156,18 @@ async fn anthropic_messages(
 ) -> axum::response::Response {
     fake.captured.lock().expect("lock").push(body.clone());
 
+    // Anthropic と同じく、Claude Code の名乗りが先頭 system block に無い OAuth 要求は unified header の無い
+    // 429 で拒む（ADR 2026-10-26-ldr-proxy-and-route-fixes A1）。
+    if body["system"][0]["text"] != "You are Claude Code, Anthropic's official CLI for Claude." {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(
+                json!({"type": "error", "error": {"type": "rate_limit_error", "message": "Error"}}),
+            ),
+        )
+            .into_response();
+    }
+
     // Claude 5 系と同じく sampling 引数を拒否する（ADR 2026-10-26-claude-source-drops-sampling-params）。
     for param in ["temperature", "top_p"] {
         if body.get(param).is_some() {
@@ -349,9 +361,16 @@ async fn claude_non_stream_round_trip() {
     assert_eq!(body["choices"][0]["finish_reason"], "stop");
     assert_eq!(body["model"], "claude_oauth/claude-opus-5-5");
 
-    // system メッセージが `system` フィールドに分離されていること。
+    // system メッセージが `system` の block 配列に分離され、先頭 block が Claude Code の名乗りであること
+    // （ADR 2026-10-26-ldr-proxy-and-route-fixes A1）。
     let captured = fake.captured.lock().expect("lock");
-    assert_eq!(captured[0]["system"], "You are terse.");
+    assert_eq!(
+        captured[0]["system"],
+        json!([
+            {"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+            {"type": "text", "text": "You are terse."},
+        ])
+    );
     // 要求した model（claude_oauth/claude-opus-5-5 の model 部分）がそのまま上流へ渡る。
     assert_eq!(captured[0]["model"], "claude-opus-5-5");
 }
@@ -684,7 +703,18 @@ async fn claude_429_falls_back_to_the_next_account_and_records_a_cooldown() {
     ) -> axum::response::Response {
         let n = counter.fetch_add(1, Ordering::SeqCst);
         if n == 0 {
-            (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "30")]).into_response()
+            // 真の throttling は unified-status header を伴う（ADR 2026-10-26-ldr-proxy-and-route-fixes A2）。
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                [
+                    (header::RETRY_AFTER, "30"),
+                    (
+                        header::HeaderName::from_static("anthropic-ratelimit-unified-status"),
+                        "rejected",
+                    ),
+                ],
+            )
+                .into_response()
         } else {
             Json(json!({
                 "id": "msg_ok",
@@ -761,6 +791,77 @@ async fn claude_429_falls_back_to_the_next_account_and_records_a_cooldown() {
     // `acct-a`（辞書順で先。最初に 429 を受けた）が cooldown になっていること。
     let guard = book.lock().expect("lock");
     assert!(guard.state("acct-a").expect("state").cooldown.is_some());
+}
+
+/// ADR 2026-10-26-ldr-proxy-and-route-fixes A2/A3: unified-status header の無い 429 は throttling ではない。
+/// どの account にも cooldown を書かず（Claude Code ワーカーと共有の帳簿を汚さない）、client には 502
+/// `upstream_refused` を返す。
+#[tokio::test]
+async fn claude_429_without_unified_status_is_refused_without_a_cooldown() {
+    async fn refuse(AxumState(counter): AxumState<Arc<AtomicU32>>) -> axum::response::Response {
+        counter.fetch_add(1, Ordering::SeqCst);
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, "30")],
+            Json(
+                json!({"type": "error", "error": {"type": "rate_limit_error", "message": "Error"}}),
+            ),
+        )
+            .into_response()
+    }
+    let counter = Arc::new(AtomicU32::new(0));
+    let app = Router::new()
+        .route("/v1/messages", post(refuse))
+        .with_state(counter.clone());
+    let (upstream_addr, _h1) = spawn(app).await;
+
+    let accounts_tmp = tempfile::tempdir().expect("tmp");
+    for id in ["acct-a", "acct-b"] {
+        write_claude_credentials(
+            accounts_tmp.path(),
+            id,
+            "fake-access",
+            "fake-refresh",
+            far_future_ms(),
+        );
+    }
+    let mut config = base_config();
+    config.sources.claude_oauth = Some(claude_source(
+        upstream_addr,
+        accounts_tmp.path().to_path_buf(),
+    ));
+    let book = Arc::new(StdMutex::new(AccountBook::new_in_memory()));
+    let state = ProxyState::new(
+        config,
+        reqwest::Client::new(),
+        Some(book.clone()),
+        None,
+        None,
+        SharedRole::default(),
+        None,
+        std::time::Duration::from_secs(5),
+    );
+    let (addr, _h2) = spawn(router(state)).await;
+
+    let resp = post_chat(
+        &reqwest::Client::new(),
+        addr,
+        &chat_request("claude_oauth/claude-opus-5-5", false),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    let body: Value = resp.json().await.expect("json");
+    assert_eq!(body["error"]["type"], "upstream_refused");
+    // 次の候補（もう 1 つの account）へは倒す。
+    assert_eq!(counter.load(Ordering::SeqCst), 2);
+    let guard = book.lock().expect("lock");
+    for id in ["acct-a", "acct-b"] {
+        assert!(
+            guard.state(id).and_then(|s| s.cooldown.clone()).is_none(),
+            "{id} must not get a Throttled cooldown"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2001,4 +2102,69 @@ async fn no_source_available_gives_up_with_retry_after_when_nothing_ever_recover
     );
     let body: Value = resp.json().await.expect("json");
     assert_eq!(body["error"]["type"], "no_source_available");
+}
+
+// ---------------------------------------------------------------------------
+// 一致しない method/path: warn と request log に残して 404（ADR 2026-10-26-ldr-proxy-and-route-fixes B3）
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn unknown_route_is_recorded_in_the_request_log_and_returns_404() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let db = dir.path().join("celeris.sqlite3");
+    rusqlite::Connection::open(&db)
+        .expect("open db")
+        .execute_batch(include_str!(
+            "../../task-core/migrations/0022_llm_proxy_requests.sql"
+        ))
+        .expect("0022");
+    let state = ProxyState::new(
+        base_config(),
+        reqwest::Client::new(),
+        None,
+        None,
+        Some("fake-token".to_string()),
+        SharedRole::default(),
+        Some(db.clone()),
+        std::time::Duration::from_secs(5),
+    );
+    let (addr, _h) = spawn(router(state)).await;
+    let client = reqwest::Client::new();
+
+    // LangChain が codex の model 名で送る Responses API の要求。
+    let resp = client
+        .post(format!("http://{addr}/v1/responses"))
+        .bearer_auth("fake-token")
+        .json(&json!({"model": "codex_oauth/gpt-5.5-codex", "input": "hi"}))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body: Value = resp.json().await.expect("json body (not empty)");
+    assert_eq!(body["error"]["type"], "not_found");
+
+    // 認証の無い要求は guard が 401 で返し、記録しない。
+    let unauth = client
+        .get(format!("http://{addr}/v1/nope"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+    let conn = rusqlite::Connection::open(&db).expect("open");
+    let rows: Vec<(String, String, Option<String>)> = conn
+        .prepare("SELECT requested_model, status, error_kind FROM llm_proxy_requests")
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(
+        rows,
+        vec![(
+            "POST /v1/responses".to_string(),
+            "not_found".to_string(),
+            Some("unknown_route".to_string())
+        )]
+    );
 }

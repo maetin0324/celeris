@@ -529,3 +529,59 @@ fn langmem_runner_falls_back_to_env_api_key() {
     ));
     assert!(RUNNER_SCRIPT.contains("api_key = llm.get(\"api_key\") or env_key or \"not-needed\""));
 }
+
+/// ADR 2026-10-26-ldr-proxy-and-route-fixes B2: `build_chat_model` は codex の model 名でも
+/// `ChatOpenAI(use_responses_api=False)` を作る（Responses API へ切り替わらない）。
+#[test]
+fn build_chat_model_pins_chat_completions_for_a_codex_model_name() {
+    let Ok(python) = std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+    else {
+        eprintln!("skipping: python3 not available");
+        return;
+    };
+    if !python.status.success() {
+        eprintln!("skipping: python3 not available");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("langmem_run.py");
+    std::fs::write(&script_path, RUNNER_SCRIPT).unwrap();
+    let checker = r#"
+import importlib.util, json, sys, types
+built = []
+class FakeChatOpenAI:
+    def __init__(self, **kwargs):
+        built.append(kwargs)
+fake = types.ModuleType("langchain_openai")
+fake.ChatOpenAI = FakeChatOpenAI
+sys.modules["langchain_openai"] = fake
+spec = importlib.util.spec_from_file_location("langmem_run", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.build_chat_model({"model": "codex_oauth/gpt-5.5-codex", "base_url": "http://127.0.0.1:18100/v1", "api_key": "fake-key"})
+print(json.dumps(built))
+"#;
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(checker)
+        .arg(&script_path)
+        .output()
+        .expect("failed to run python3");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let built: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(
+        built,
+        serde_json::json!([{
+            "model": "codex_oauth/gpt-5.5-codex",
+            "base_url": "http://127.0.0.1:18100/v1",
+            "api_key": "fake-key",
+            "use_responses_api": false,
+        }])
+    );
+}

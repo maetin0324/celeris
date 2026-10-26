@@ -671,6 +671,33 @@ pub fn account_adapter_for_source_kind(kind: &str) -> Option<AccountAdapter> {
     }
 }
 
+/// The account pool `source_id` offers to route selection. `logged_in` is the logged-in account
+/// directories when the source kind has an account adapter (OAuth pools), `None` otherwise.
+///
+/// - OAuth pool: the declared accounts narrowed to the logged-in ones, or every logged-in one when
+///   none are declared.
+/// - No account adapter: the declared accounts, or the source id itself as its one implicit account
+///   when none are declared (ADR 2026-10-08 account-concurrency-limits §(e),
+///   ADR 2026-10-26-ldr-proxy-and-route-fixes C1).
+///
+/// The dispatcher and `celerisctl worker` both build their pools here.
+pub fn source_account_pool(
+    source_id: &SourceId,
+    declared: &[AccountId],
+    logged_in: Option<&[AccountId]>,
+) -> Vec<AccountId> {
+    match logged_in {
+        Some(logged_in) if declared.is_empty() => logged_in.to_vec(),
+        Some(logged_in) => declared
+            .iter()
+            .filter(|a| logged_in.contains(a))
+            .cloned()
+            .collect(),
+        None if declared.is_empty() => vec![AccountId::from(source_id.as_ref())],
+        None => declared.to_vec(),
+    }
+}
+
 /// Harness inputs taken from the task's structured fields only (never its prose).
 pub fn harness_request_for(task: &Task) -> HarnessRequest {
     let mut required_capabilities = std::collections::BTreeSet::new();
@@ -752,8 +779,13 @@ impl Dispatcher {
                     }
                 }
             }
-            let mut accounts: Vec<AccountId> = spec.accounts.clone();
-            if let Some(adapter) = account_adapter_for_source_kind(spec.kind.as_ref()) {
+            let adapter = account_adapter_for_source_kind(spec.kind.as_ref());
+            // OAuth pools are filled from the logged-in directories below.
+            let mut accounts = match adapter {
+                Some(_) => Vec::new(),
+                None => source_account_pool(source_id, &spec.accounts, None),
+            };
+            if let Some(adapter) = adapter {
                 let scanned = match (
                     self.config.accounts.clone(),
                     self.accounts_scan_cache.get(&adapter),
@@ -774,14 +806,7 @@ impl Dispatcher {
                     .filter(|d| d.logged_in)
                     .map(|d| AccountId::from(d.id.as_str()))
                     .collect();
-                accounts = if accounts.is_empty() {
-                    logged_in
-                } else {
-                    accounts
-                        .into_iter()
-                        .filter(|a| logged_in.contains(a))
-                        .collect()
-                };
+                accounts = source_account_pool(source_id, &spec.accounts, Some(&logged_in));
                 if let Some(book) = self.account_book(adapter) {
                     let book = book.lock().unwrap_or_else(|e| e.into_inner());
                     // Preserve the account pool's headroom policy when adapting it to

@@ -2803,3 +2803,100 @@ print(json.dumps(out, ensure_ascii=False))
     assert_eq!(v["file_after_giving_up"], "untouched", "{v}");
     assert_eq!(v["skips_without_targets"], true, "{v}");
 }
+
+/// ADR 2026-10-26-ldr-proxy-and-route-fixes B1: `main()` は LDR に `llms={"openai_endpoint": factory}` を渡し、
+/// factory は codex の model 名でも `ChatOpenAI(use_responses_api=False)` を作る（Chat Completions に固定）。
+/// LDR 本体と `langchain_openai` は偽物にして、渡った引数だけを見る。
+#[test]
+fn runner_registers_a_chat_completions_factory_for_openai_endpoint() {
+    if !python3_available() {
+        eprintln!("skipping: python3 not available");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("local_deep_research_run.py");
+    std::fs::write(&script_path, RUNNER_SCRIPT).unwrap();
+    let checker = r###"
+import contextlib, importlib.util, io, json, os, sys, tempfile, types
+
+spec = importlib.util.spec_from_file_location("ldr_run", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+built = []
+class FakeChatOpenAI:
+    def __init__(self, **kwargs):
+        built.append(kwargs)
+fake_lc = types.ModuleType("langchain_openai")
+fake_lc.ChatOpenAI = FakeChatOpenAI
+sys.modules["langchain_openai"] = fake_lc
+
+seen = {}
+def fake_quick_summary(query, **kwargs):
+    seen["llms"] = kwargs.get("llms")
+    # LDR の get_llm が登録済みの factory を呼ぶのと同じ引数で呼ぶ。
+    kwargs["llms"]["openai_endpoint"](
+        model_name="codex_oauth/gpt-5.5-codex", temperature=0.7, settings_snapshot={}
+    )
+    return {"summary": "s", "sources": [], "findings": [], "iterations": 1, "questions": {}}
+
+fake_api = types.ModuleType("local_deep_research.api")
+fake_api.quick_summary = fake_quick_summary
+fake_api.detailed_research = lambda *a, **k: (_ for _ in ()).throw(AssertionError("not used"))
+fake_api.generate_report = lambda *a, **k: (_ for _ in ()).throw(AssertionError("not used"))
+fake_api.create_settings_snapshot = lambda **k: {}
+fake_pkg = types.ModuleType("local_deep_research")
+fake_pkg.api = fake_api
+sys.modules["local_deep_research"] = fake_pkg
+sys.modules["local_deep_research.api"] = fake_api
+
+with tempfile.TemporaryDirectory() as d:
+    input_path = os.path.join(d, "input.json")
+    payload = {
+        "query": "q",
+        "mode": "quick",
+        "settings": {
+            "llm.provider": "openai_endpoint",
+            "llm.model": "codex_oauth/gpt-5.5-codex",
+            "llm.openai_endpoint.url": "http://127.0.0.1:18100/v1",
+            "llm.openai_endpoint.api_key": "fake-key",
+            "llm.max_tokens": "2000",
+        },
+        "report_path": os.path.join(d, "artifacts", "report.md"),
+        "structured_synthesis": False,
+    }
+    with open(input_path, "w") as f:
+        json.dump(payload, f)
+    sys.argv = ["local_deep_research_run.py", input_path]
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = mod.main()
+
+print(json.dumps({"rc": rc, "llm_names": sorted((seen.get("llms") or {}).keys()), "built": built}))
+"###;
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(checker)
+        .arg(&script_path)
+        .output()
+        .expect("failed to run python3");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let values: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid JSON on stdout");
+    assert_eq!(values["rc"], 0);
+    assert_eq!(values["llm_names"], serde_json::json!(["openai_endpoint"]));
+    assert_eq!(
+        values["built"],
+        serde_json::json!([{
+            "model": "codex_oauth/gpt-5.5-codex",
+            "base_url": "http://127.0.0.1:18100/v1",
+            "api_key": "fake-key",
+            "use_responses_api": false,
+            "temperature": 0.7,
+            "max_tokens": 2000,
+        }])
+    );
+}

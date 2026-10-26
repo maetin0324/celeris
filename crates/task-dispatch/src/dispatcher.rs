@@ -162,10 +162,10 @@ pub use route_failure::{FailureAction, FailureOrigin, classify_failure, provider
 pub use route_launch::{
     LaunchAdmission, RouteLaunchError, admit_by_availability, selected_llm_route,
 };
-pub use route_select::account_adapter_for_source_kind;
 pub use route_select::{
     RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for, route_select,
 };
+pub use route_select::{account_adapter_for_source_kind, source_account_pool};
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DispatchRoutingSettings {
     pub escalation: task_core::EscalationThresholds,

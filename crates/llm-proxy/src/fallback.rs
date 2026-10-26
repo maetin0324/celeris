@@ -23,6 +23,9 @@ pub enum FailureClass {
     Unauthorized,
     /// 429: rate limit（account 単位。既存の account cooldown・Retry-After）。
     RateLimited,
+    /// throttling の印の無い 429 など、上流が要求を拒んだ（account の cooldown にも breaker にも数えない。
+    /// 別の source なら通る見込みがあるので次の候補へは倒す。ADR 2026-10-26-ldr-proxy-and-route-fixes A3）。
+    Refused,
     /// 5xx: 上流の障害（deployment 単位。breaker に数える）。
     Server,
     /// 接続・timeout・本文の破損（deployment 単位。breaker に数える）。
@@ -38,6 +41,7 @@ impl FailureClass {
         match e {
             SourceError::Unauthorized => Self::Unauthorized,
             SourceError::RateLimited { .. } => Self::RateLimited,
+            SourceError::Refused { .. } => Self::Refused,
             SourceError::Upstream { status, .. } if *status >= 500 => Self::Server,
             SourceError::Upstream { .. } => Self::Client,
             SourceError::Network(_) => Self::Network,
@@ -54,6 +58,7 @@ impl FailureClass {
         match self {
             Self::Unauthorized => "unauthorized",
             Self::RateLimited => "rate_limited",
+            Self::Refused => "refused",
             Self::Server => "server",
             Self::Network => "network",
             Self::Local => "local",
@@ -67,6 +72,7 @@ impl FailureClass {
 pub struct RetryLimits {
     pub unauthorized: u32,
     pub rate_limited: u32,
+    pub refused: u32,
     pub server: u32,
     pub network: u32,
     pub local: u32,
@@ -80,6 +86,7 @@ impl Default for RetryLimits {
         Self {
             unauthorized: 3,
             rate_limited: 3,
+            refused: 3,
             server: 2,
             network: 2,
             local: 3,
@@ -94,6 +101,7 @@ impl RetryLimits {
         match class {
             FailureClass::Unauthorized => self.unauthorized,
             FailureClass::RateLimited => self.rate_limited,
+            FailureClass::Refused => self.refused,
             FailureClass::Server => self.server,
             FailureClass::Network => self.network,
             FailureClass::Local => self.local,

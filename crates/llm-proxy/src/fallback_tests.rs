@@ -35,6 +35,14 @@ fn classifies_401_429_5xx_network_and_client_errors() {
     assert!(FailureClass::Network.trips_breaker());
     assert!(!FailureClass::Unauthorized.trips_breaker());
     assert!(!FailureClass::RateLimited.trips_breaker());
+    // throttling の印の無い 429 は拒否として別に分ける（ADR 2026-10-26-ldr-proxy-and-route-fixes A3）。
+    let refused = SourceError::Refused {
+        status: 429,
+        summary: "Error".into(),
+    };
+    assert_eq!(FailureClass::of(&refused), FailureClass::Refused);
+    assert!(!FailureClass::Refused.trips_breaker());
+    assert!(RetryLimits::default().for_class(FailureClass::Refused) > 0);
 }
 
 #[test]

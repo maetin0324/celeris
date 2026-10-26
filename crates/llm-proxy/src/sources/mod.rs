@@ -21,6 +21,10 @@ pub enum SourceError {
     /// 429。`retry_after` があれば秒数。
     #[error("upstream rate-limited the request (429)")]
     RateLimited { retry_after: Option<u64> },
+    /// 上流が要求そのものを拒んだ（throttling の印の無い 429。例: Claude の OAuth 要求に Claude Code の
+    /// 名乗りが無い）。account の cooldown にしない（ADR 2026-10-26-ldr-proxy-and-route-fixes A2）。
+    #[error("upstream refused the request (HTTP {status}): {summary}")]
+    Refused { status: u16, summary: String },
     /// その他の HTTP エラー応答（本文は要約のみ。値は含めない）。
     #[error("upstream returned HTTP {status}: {summary}")]
     Upstream { status: u16, summary: String },

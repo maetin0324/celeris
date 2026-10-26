@@ -1,7 +1,7 @@
 //! `claude-oauth`（ADR-0053 D1-1）: Claude Code の `.credentials.json` を使って Anthropic Messages API
 //! を叩き、OpenAI 互換の要求/応答へ双方向に写す。
 //!
-//! - 要求: `messages`（`system` は分離、`tool`/`tool_calls` を `tool_result`/`tool_use` ブロックへ）、
+//! - 要求: `messages`（`system` は分離して block 配列にし、先頭 block を Claude Code の名乗りに固定、`tool`/`tool_calls` を `tool_result`/`tool_use` ブロックへ）、
 //!   `tools`、`tool_choice`、`stream`。`temperature`/`top_p` は送らない（Claude 5 系が拒否する）。
 //! - 応答: `content` ブロックの連結と `tool_use`、`stop_reason`、`usage`。
 //! - stream: `content_block_delta` の `text_delta`/`input_json_delta` を OpenAI の delta chunk に写す。
@@ -28,6 +28,10 @@ use super::{SendOutcome, SourceError};
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const ANTHROPIC_BETA: &str = "oauth-2025-04-20";
+/// claude source の上流要求の先頭 system block（ADR 2026-10-26-ldr-proxy-and-route-fixes A1）。
+pub const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+/// 真の throttling の 429 にだけ付く header。無い 429 は throttling でなく拒否（同 A2）。
+const UNIFIED_STATUS_HEADER: &str = "anthropic-ratelimit-unified-status";
 /// 送信前に更新する猶予（期限まで 60 秒を切っていたら先に更新する）。
 const REFRESH_BUFFER_MS: i64 = 60_000;
 
@@ -105,17 +109,22 @@ fn message_to_anthropic(msg: &ChatMessage) -> Option<Value> {
 
 /// OpenAI の `ChatCompletionRequest` を Anthropic Messages API の本文へ写す。
 pub fn to_anthropic_body(req: &crate::openai::ChatCompletionRequest, model: &str) -> Value {
-    let system: Vec<String> = req
-        .messages
-        .iter()
-        .filter(|m| m.role == "system")
-        .map(|m| {
-            m.content
-                .as_ref()
-                .map(MessageContent::as_text)
-                .unwrap_or_default()
-        })
-        .collect();
+    // 先頭 block は Claude Code の名乗りに固定し、client の system は後ろの block に元の順で続ける。
+    // Anthropic は名乗りの無い OAuth 要求を 429 で拒む（ADR 2026-10-26-ldr-proxy-and-route-fixes A1）。
+    let mut system = vec![json!({"type": "text", "text": CLAUDE_CODE_IDENTITY})];
+    system.extend(
+        req.messages
+            .iter()
+            .filter(|m| m.role == "system")
+            .map(|m| {
+                m.content
+                    .as_ref()
+                    .map(MessageContent::as_text)
+                    .unwrap_or_default()
+            })
+            .filter(|text| !text.is_empty())
+            .map(|text| json!({"type": "text", "text": text})),
+    );
     let messages: Vec<Value> = req
         .messages
         .iter()
@@ -127,13 +136,11 @@ pub fn to_anthropic_body(req: &crate::openai::ChatCompletionRequest, model: &str
         "messages": messages,
         "max_tokens": req.max_tokens.unwrap_or(4096),
         "stream": req.stream,
+        "system": system,
     });
     let obj = body
         .as_object_mut()
         .unwrap_or_else(|| unreachable!("body is always an object"));
-    if !system.is_empty() {
-        obj.insert("system".to_string(), json!(system.join("\n\n")));
-    }
     // `temperature` / `top_p` は写さない。Claude 5 系は sampling 引数を 400（"`temperature` is
     // deprecated for this model."）で拒否し、LDR などの client は自前の既定値を付けて来るので、
     // ここで捨てる（ADR 2026-10-26-claude-source-drops-sampling-params）。
@@ -593,6 +600,13 @@ pub async fn send(
     if status.as_u16() == 401 {
         return Err(SourceError::Unauthorized);
     }
+    if status.as_u16() == 429 && resp.headers().get(UNIFIED_STATUS_HEADER).is_none() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(SourceError::Refused {
+            status: 429,
+            summary: extract_error_summary(&text),
+        });
+    }
     if status.as_u16() == 429 {
         let retry_after = resp
             .headers()
@@ -674,4 +688,52 @@ fn extract_error_summary(body: &str) -> String {
         .chars()
         .take(200)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(messages: Value) -> crate::openai::ChatCompletionRequest {
+        serde_json::from_value(
+            json!({"model": "claude_oauth/claude-sonnet-5-5", "messages": messages}),
+        )
+        .expect("request")
+    }
+
+    /// ADR 2026-10-26-ldr-proxy-and-route-fixes A1: 先頭 block は名乗り、client の system は後ろに元の順で続く。
+    #[test]
+    fn system_blocks_start_with_the_claude_code_identity_and_keep_client_order() {
+        let req = request(json!([
+            {"role": "system", "content": "first"},
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "second"},
+            {"role": "system", "content": ""},
+        ]));
+        let body = to_anthropic_body(&req, "claude-sonnet-5-5");
+        assert_eq!(
+            body["system"],
+            json!([
+                {"type": "text", "text": CLAUDE_CODE_IDENTITY},
+                {"type": "text", "text": "first"},
+                {"type": "text", "text": "second"},
+            ])
+        );
+        assert_eq!(
+            CLAUDE_CODE_IDENTITY,
+            "You are Claude Code, Anthropic's official CLI for Claude."
+        );
+        // system message は messages に残らない。
+        assert_eq!(body["messages"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn system_identity_is_sent_even_without_a_client_system_message() {
+        let req = request(json!([{"role": "user", "content": "hi"}]));
+        let body = to_anthropic_body(&req, "claude-sonnet-5-5");
+        assert_eq!(
+            body["system"],
+            json!([{"type": "text", "text": CLAUDE_CODE_IDENTITY}])
+        );
+    }
 }

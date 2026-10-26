@@ -138,6 +138,9 @@ def build_chat_model(llm):
         if base_url:
             kwargs["base_url"] = base_url
         kwargs["api_key"] = api_key
+        # Chat Completions only: `langchain_openai` would use the Responses API for a model name
+        # containing `codex`, which the llm-proxy does not serve (ADR 2026-10-26-ldr-proxy-and-route-fixes B2).
+        kwargs["use_responses_api"] = False
         return ChatOpenAI(**kwargs)
     raise ValueError(f"unknown [knowledge.langmem] provider: {provider!r}")
 

@@ -375,7 +375,6 @@ claude_dir = "{claude}"
 [llm_sources.qwen]
 kind = "openai_compatible"
 models = ["qwen3-coder"]
-accounts = ["qwen"]
 endpoint = "http://127.0.0.1:18000/v1"
 
 [llm_sources.claude_main]
@@ -482,6 +481,8 @@ fn worker_route_cli_openai_compatible_source_carries_its_endpoint() {
     let mut args = args_fixture();
     args.harness = Some("pi".into());
     let route = select_worker_route(&config, &registry, &local_task(), &args).unwrap();
+    // `[llm_sources.qwen]` declares no accounts (like production): the source id is its one
+    // implicit account (ADR 2026-10-26-ldr-proxy-and-route-fixes C1).
     assert_eq!(
         (route.source_id.as_str(), route.account_id.as_str()),
         ("qwen", "qwen")

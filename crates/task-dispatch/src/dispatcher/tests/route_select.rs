@@ -486,6 +486,66 @@ fn route_select_records_events_and_run_row() {
     );
 }
 
+/// ADR 2026-10-26-ldr-proxy-and-route-fixes C1: an `openai_compatible` source that declares no
+/// accounts (production `[llm_sources.qwen]`) offers its source id as its one implicit account, so the
+/// dispatcher's route selection picks it instead of excluding it as `AccountUnavailable`.
+#[test]
+fn route_select_offers_an_undeclared_pool_source_its_implicit_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db.sqlite");
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let mut d = dispatcher(store.clone(), done_adapter(), 1);
+    let mut r = registry();
+    r.sources.insert(
+        "qwen".into(),
+        source("openai_compatible", "openai_compatible", &[], &["qwen3"]),
+    );
+    d.set_llm_route_registry(r);
+    let mut task = new_task(dir.path(), Check::Reviewer, 0);
+    task.genre = Some("light".into());
+    let req = RouteInput {
+        task_id: task.id.to_string(),
+        harness: crate::dispatcher::harness_request_for(&task),
+        ..Default::default()
+    };
+    let (outcome, trace) = d.select_route(&req);
+    let pick = outcome.unwrap();
+    assert_eq!(pick.candidate.key(), key("qwen", "qwen3"));
+    assert_eq!(pick.account, AccountId::from("qwen"));
+    assert!(
+        !trace
+            .rejections
+            .iter()
+            .any(|x| x.reason == ExclusionReason::AccountUnavailable),
+        "{:?}",
+        trace.rejections
+    );
+}
+
+#[test]
+fn source_account_pool_rules() {
+    let ids = |v: &[&str]| v.iter().map(|a| AccountId::from(*a)).collect::<Vec<_>>();
+    let qwen = SourceId::from("qwen");
+    // No account adapter: declared accounts, else the source id as the implicit account.
+    assert_eq!(crate::source_account_pool(&qwen, &[], None), ids(&["qwen"]));
+    assert_eq!(
+        crate::source_account_pool(&qwen, &ids(&["shared"]), None),
+        ids(&["shared"])
+    );
+    // OAuth pool: logged-in directories, narrowed to the declared ones; never an implicit account.
+    let claude = SourceId::from("claude_oauth");
+    let logged_in = ids(&["ca", "cb"]);
+    assert_eq!(
+        crate::source_account_pool(&claude, &[], Some(&logged_in)),
+        logged_in
+    );
+    assert_eq!(
+        crate::source_account_pool(&claude, &ids(&["cb", "cz"]), Some(&logged_in)),
+        ids(&["cb"])
+    );
+    assert!(crate::source_account_pool(&claude, &[], Some(&[])).is_empty());
+}
+
 /// Records the route each run was launched with.
 #[derive(Clone, Default)]
 struct RouteCapture {

@@ -86,6 +86,23 @@ Claude 5 系はこれらを `400 "`temperature` is deprecated for this model."` 
 送る経路を残す設定は無い（`agent-docs/adr/2026-10-26-claude-source-drops-sampling-params.md`）。
 `max_tokens` と `stop`（→ `stop_sequences`）はこれまでどおり写す。
 
+### claude-oauth の名乗りと、ヘッダの無い 429（2026-10-26）
+
+claude-oauth は上流要求の `system` を常に text block の配列にし、先頭 block を
+`You are Claude Code, Anthropic's official CLI for Claude.` に固定する。client の system メッセージは
+2 番目以降の block に元の順で続く。Anthropic は名乗りの無い OAuth 要求を `429 rate_limit_error "Error"`
+（`anthropic-ratelimit-unified-*` ヘッダ無し）で拒むため。`anthropic-ratelimit-unified-status` の無い 429 は
+throttling ではなく拒否（`refused`）として扱い、account に cooldown を付けず、次の候補へ倒し、client には
+502 `upstream_refused` を返す（`agent-docs/adr/2026-10-26-ldr-proxy-and-route-fixes.md` A）。
+
+### 一致しない path（2026-10-26）
+
+`/v1/chat/completions`・`/v1/models`・`/v1/embeddings`・`/healthz` 以外の method/path は `warn` を出し、
+`llm_proxy_requests` に `status = not_found`・`error_kind = unknown_route`・`requested_model = "<METHOD> <path>"`
+の行を書いて 404（problem JSON）を返す。Responses API（`/v1/responses`）は実装しない。LangChain の
+`ChatOpenAI` は model 名に `codex` を含むと Responses API を使うので、LDR・langmem の adapter は
+`use_responses_api=False` で Chat Completions に固定する（同 ADR B）。
+
 ### 上流エラーの読み方（Phase 65b 追記）
 
 上流が非 2xx を返したとき、この層は本文から `error.message`（OpenAI 互換の形）と、ChatGPT backend
@@ -128,7 +145,7 @@ route 設定）が決め、proxy は source を跨いで選び直さない。
 - 使えるアカウント・中継先が無ければ 503 `no_source_available`。
 
 **429/401 を受けたら**、そのアカウントに cooldown を付け（既存の帳簘。401 は `AuthFailed`、429 は
-`Throttled`）、**まだバイトを送っていなければ**同じ要求を次の候補でやり直す。stream 開始後
+`Throttled`。claude-oauth の unified-status ヘッダの無い 429 は cooldown を付けない）、**まだバイトを送っていなければ**同じ要求を次の候補でやり直す。stream 開始後
 （upstream から 200 を受けて bytes を転送し始めた後）に何か起きたら、やり直さずに切断するだけ
 （OpenAI 形式のエラーフレームを送らない。ADR-0053: 「開始後は切断を返す」）。
 

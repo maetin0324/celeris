@@ -62,7 +62,9 @@ pub use dispatcher::{
     FailureAction, FailureOrigin, LaunchAdmission, admit_by_availability, classify_failure,
 };
 /// ADR 2026-10-11 llm-source-harness-selection: launch inputs of an admitted route.
-pub use dispatcher::{RouteLaunchError, account_adapter_for_source_kind, selected_llm_route};
+pub use dispatcher::{
+    RouteLaunchError, account_adapter_for_source_kind, selected_llm_route, source_account_pool,
+};
 pub use policy::{AdapterId, ProviderId, ProviderOutcome};
 pub use review::{
     PLAN_FILE_NAME, PlanCheck, REVIEW_FILE_NAME, ReviewExtras, ReviewOutcome, ReviewSubject,

@@ -36,6 +36,17 @@
 //! cap 欄が無い行は上限を与えない（manifest と他の行の最小が効くので承認は増えない）、`provider_slots` は
 //! 解放の記録が無いので枠を占有し続ける。同じ測定 ID の持ち主が自分の未完了試行が無いことを確かめて
 //! `confirm_legacy_idle` を呼んだときだけ解放する。読めない行・不明 schema は破損として拒否する（0 にしない）。
+//!
+//! ## 人の承認の記録（`ledger-init`、2026-10-26 決定）
+//! runner の `admit_start`・予約・精算以外に、人の承認（誰が・いつ・範囲・期限・試行数）を台帳へ記録する入口。
+//! - `celeris-campaign ledger-init --manifest <m> --global-ledger <dir> --approval <json>`。`--global-ledger` は
+//!   manifest の宣言 path だけを受ける（`check_shared_ledger`）。
+//! - 出典・範囲・期限・補足は台帳 dir の `approval.json`（schema `celeris.campaign-ledger-approval/1`）に置き、
+//!   台帳の行（`deny_unknown_fields`）には入れない。固定済みの campaign binary も同じ台帳を読める。
+//! - 承認の試行数（任意で tokens）は測定 ID の `measurement` 行の `caps` に入れる。上限は全行の最小なので増えない。
+//!   違う承認の再記録は拒否する（引き上げは新しい台帳 path と manifest で行う）。同じ承認の再実行は冪等。
+//! - 消費は書かない（runner の予約・精算だけが書く）。出力は台帳・manifest・実効の上限、確定消費・残り試行数。
+//! - 入力の欠け（空の source/scope/expiry、`YYYY-MM-DD` でない期限、試行数 0）は何も書かずに失敗する。
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},

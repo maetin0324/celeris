@@ -402,8 +402,11 @@ def check_lock(layout, lock_dir, env, problems):
                 if not path or not sha or (os.path.isfile(path) and sha256_file(path) != sha):
                     problems.append("env-lock.json: worker program path/sha256 does not match the binary on disk")
         arms = {a.get("id"): a for a in bc.get("arms", [])}
-        if set(arms) != {"B", "C"}:
-            problems.append("env-lock.json: bc.arms must be exactly B and C")
+        # env-lock の B/C arm は manifest の configs にある Celeris arm と同じ集合（C の無い A/B だけの構成もある）
+        m = load_json(os.path.join(layout["main"], "final.json"), [], "final.json") or {}
+        want_arms = {c.get("id") for c in m.get("configs", [])} & {"B", "C"}
+        if set(arms) != want_arms:
+            problems.append(f"env-lock.json: bc.arms must be exactly {' and '.join(sorted(want_arms))} (the manifest's B/C configs)")
         for aid, a in arms.items():
             if a.get("models") != [MODEL] or a.get("run_harnesses") != [HARNESS] or a.get("online_update"):
                 problems.append(f"env-lock.json: arm {aid} must be Sonnet-only, claude-code, online_update false")

@@ -382,6 +382,17 @@ class CheckMainPins(unittest.TestCase):
         self.edit_lock("env-lock.json", lambda d: d["bc"]["arms"][0].update(evidence_table_id="t1"))
         self.assertFlags("no evidence table")
 
+    def test_env_lock_arms_follow_the_manifest_configs(self):
+        # A/B だけの manifest（C なし）は env-lock の arm も B だけで通る
+        self.edit_manifest(lambda m: m.update(configs=[c for c in m["configs"] if c["id"] != "C"],
+                                              secondary={}))
+        self.edit_lock("env-lock.json", lambda d: d["bc"].update(arms=d["bc"]["arms"][:1]))
+        self.assertFalse(any("bc.arms" in p for p in self.problems()), self.problems())
+        # manifest に C があるのに env-lock に B しか無いのは不合格
+        self.setUp()
+        self.edit_lock("env-lock.json", lambda d: d["bc"].update(arms=d["bc"]["arms"][:1]))
+        self.assertFlags("bc.arms must be exactly B and C")
+
     def test_env_lock_cap_env_and_release_mismatch(self):
         self.edit_lock("env-lock.json", lambda d: d["cap_env"]["toolchain"].update(ro_mounts=["/other"]))
         self.assertFlags("cap_env toolchain differs")

@@ -1,3 +1,6 @@
+#[path = "../../../../tests/support/http_async.rs"]
+mod fake_http;
+
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -2405,6 +2408,7 @@ def run_once(targets, aspects):
             "settings": {
                 "llm.model": "qwen/qwen3.8-27b",
                 "llm.openai_endpoint.url": "http://127.0.0.1:18100/v1",
+                "llm.openai_endpoint.api_key": "fake-key",
             },
             "report_path": report_path,
             "targets": targets,
@@ -2899,4 +2903,313 @@ print(json.dumps({"rc": rc, "llm_names": sorted((seen.get("llms") or {}).keys())
             "max_tokens": 2000,
         }])
     );
+}
+
+/// ADR 2026-10-26-ldr-proxy-bearer-from-env: 本番は proxy の bearer を settings ではなく env
+/// `LDR_LLM_OPENAI_ENDPOINT_API_KEY` で渡す。settings に key が無くても chat model の factory と構造化合成の
+/// 両方が env の key を使う。settings の key は env より優先する。URL があるのに key がどこにも無ければ
+/// `"not-needed"` にせず、factory は例外、`main()` は LDR を呼ぶ前に exit 2 で止まる（key の値は出さない）。
+#[test]
+fn runner_reads_the_proxy_bearer_from_env_for_the_factory_and_the_synthesis() {
+    if !python3_available() {
+        eprintln!("skipping: python3 not available");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("local_deep_research_run.py");
+    std::fs::write(&script_path, RUNNER_SCRIPT).unwrap();
+    let checker = r###"
+import contextlib, importlib.util, io, json, os, sys, tempfile, types
+
+spec = importlib.util.spec_from_file_location("ldr_run", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.time.sleep = lambda s: None
+
+built = []
+class FakeChatOpenAI:
+    def __init__(self, **kwargs):
+        built.append(kwargs)
+fake_lc = types.ModuleType("langchain_openai")
+fake_lc.ChatOpenAI = FakeChatOpenAI
+sys.modules["langchain_openai"] = fake_lc
+
+synth_keys = []
+def fake_synthesize(messages, base_url, api_key, model, timeout=120):
+    synth_keys.append(api_key)
+    return "| 対象 | 配置 |\n|---|---|\n| CHFS | 事実 |"
+mod.default_synthesize = fake_synthesize
+
+ldr_calls = []
+def fake_quick_summary(query, **kwargs):
+    ldr_calls.append(1)
+    kwargs["llms"]["openai_endpoint"](model_name="qwen/qwen3.8-27b", temperature=None, settings_snapshot={})
+    return {"summary": "CHFS is a file system. [1]",
+            "sources": [{"link": "https://example.org/a", "title": "A", "engine": "tavily"}],
+            "findings": [], "iterations": 1, "questions": {}}
+
+fake_api = types.ModuleType("local_deep_research.api")
+fake_api.quick_summary = fake_quick_summary
+fake_api.detailed_research = lambda *a, **k: (_ for _ in ()).throw(AssertionError("not used"))
+fake_api.generate_report = lambda *a, **k: (_ for _ in ()).throw(AssertionError("not used"))
+fake_api.create_settings_snapshot = lambda **k: {}
+fake_pkg = types.ModuleType("local_deep_research")
+fake_pkg.api = fake_api
+sys.modules["local_deep_research"] = fake_pkg
+sys.modules["local_deep_research.api"] = fake_api
+
+ENV = "LDR_LLM_OPENAI_ENDPOINT_API_KEY"
+
+def run_main(settings):
+    with tempfile.TemporaryDirectory() as d:
+        input_path = os.path.join(d, "input.json")
+        with open(input_path, "w") as f:
+            json.dump({"query": "q", "mode": "quick", "settings": settings,
+                       "report_path": os.path.join(d, "artifacts", "report.md"),
+                       "targets": ["CHFS"], "aspects": ["配置"]}, f)
+        sys.argv = ["local_deep_research_run.py", input_path]
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = mod.main()
+        return rc, err.getvalue()
+
+base = {"llm.model": "qwen/qwen3.8-27b", "llm.openai_endpoint.url": "http://127.0.0.1:18100/v1"}
+out = {}
+
+os.environ[ENV] = "env-only-key"
+out["env_rc"], _ = run_main(dict(base))
+out["env_factory_keys"] = [b["api_key"] for b in built]
+out["env_synth_keys"] = list(synth_keys)
+
+built.clear(); synth_keys.clear()
+out["settings_rc"], _ = run_main(dict(base, **{"llm.openai_endpoint.api_key": "settings-key"}))
+out["settings_factory_keys"] = [b["api_key"] for b in built]
+out["settings_synth_keys"] = list(synth_keys)
+
+del os.environ[ENV]
+built.clear(); synth_keys.clear(); ldr_calls.clear()
+out["missing_rc"], missing_err = run_main(dict(base))
+out["missing_err"] = missing_err
+out["missing_ldr_calls"] = len(ldr_calls)
+try:
+    mod.chat_completions_llms(dict(base))["openai_endpoint"](model_name="m")
+    out["factory_missing"] = "built"
+except mod.MissingApiKeyError:
+    out["factory_missing"] = "raised"
+out["missing_built"] = len(built)
+out["no_url_key"] = mod.openai_endpoint_api_key({"llm.model": "m"})
+print(json.dumps(out, ensure_ascii=False))
+"###;
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(checker)
+        .arg(&script_path)
+        .env_remove("LDR_LLM_OPENAI_ENDPOINT_API_KEY")
+        .output()
+        .expect("failed to run python3");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid JSON on stdout");
+    assert_eq!(v["env_rc"], 0, "{v}");
+    assert_eq!(v["env_factory_keys"], serde_json::json!(["env-only-key"]));
+    assert_eq!(v["env_synth_keys"], serde_json::json!(["env-only-key"]));
+    assert_eq!(v["settings_rc"], 0, "{v}");
+    assert_eq!(
+        v["settings_factory_keys"],
+        serde_json::json!(["settings-key"])
+    );
+    assert_eq!(
+        v["settings_synth_keys"],
+        serde_json::json!(["settings-key"])
+    );
+    assert_eq!(v["missing_rc"], 2, "{v}");
+    let missing_err = v["missing_err"].as_str().unwrap();
+    assert!(
+        missing_err.contains("LDR_LLM_OPENAI_ENDPOINT_API_KEY"),
+        "{missing_err}"
+    );
+    assert_eq!(v["missing_ldr_calls"], 0, "LDR を呼ぶ前に止まる: {v}");
+    assert_eq!(v["factory_missing"], "raised", "{v}");
+    assert_eq!(v["missing_built"], 0, "{v}");
+    assert_eq!(v["no_url_key"], serde_json::Value::Null, "{v}");
+}
+
+/// 偽の `local_deep_research` と `langchain_openai`（実際に HTTP を送る最小の `ChatOpenAI`）を
+/// `PYTHONPATH` に置く。LDR の `get_llm` と同じく登録された factory から chat model を作って 1 回呼ぶ。
+fn write_fake_ldr_packages(root: &Path) {
+    std::fs::create_dir_all(root.join("local_deep_research")).unwrap();
+    std::fs::create_dir_all(root.join("langchain_openai")).unwrap();
+    std::fs::write(root.join("local_deep_research/__init__.py"), "").unwrap();
+    std::fs::write(
+        root.join("local_deep_research/api.py"),
+        r#"
+def quick_summary(query, **kwargs):
+    llm = kwargs["llms"]["openai_endpoint"](model_name="qwen/qwen3.8-27b", temperature=None, settings_snapshot={})
+    answer = llm.invoke(query)
+    return {"summary": answer + " [1]",
+            "sources": [{"link": "https://a.example.com/1", "title": "A", "engine": "tavily"}],
+            "findings": [], "iterations": 1, "questions": {}}
+
+def detailed_research(*args, **kwargs):
+    raise AssertionError("not used")
+
+def generate_report(*args, **kwargs):
+    raise AssertionError("not used")
+
+def create_settings_snapshot(**kwargs):
+    return {}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("langchain_openai/__init__.py"),
+        r#"
+import json, urllib.request
+
+class ChatOpenAI:
+    def __init__(self, model=None, base_url=None, api_key=None, **kwargs):
+        self.model, self.base_url, self.api_key = model, base_url, api_key
+
+    def invoke(self, prompt):
+        body = json.dumps({"model": self.model, "messages": [{"role": "user", "content": prompt}]}).encode()
+        request = urllib.request.Request(
+            self.base_url.rstrip("/") + "/chat/completions",
+            data=body,
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + self.api_key},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read())["choices"][0]["message"]["content"]
+"#,
+    )
+    .unwrap();
+}
+
+/// ADR 2026-10-26-ldr-proxy-bearer-from-env: 本番と同じく bearer を settings に置かず adapter の env
+/// `LDR_LLM_OPENAI_ENDPOINT_API_KEY` だけで渡し、bearer を要求する偽の OpenAI 互換サーバ（llm-proxy の
+/// 代わり）に対して run を通す。LDR の chat model と構造化合成の 2 本とも 401 にならない。
+#[tokio::test]
+async fn env_only_proxy_bearer_reaches_a_bearer_checking_endpoint() {
+    if !python3_available() {
+        eprintln!("skipping: python3 not available");
+        return;
+    }
+    // 試験用の値。本物の token ではない。
+    const KEY: &str = "test-proxy-bearer";
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let seen: std::sync::Arc<Mutex<Vec<bool>>> = std::sync::Arc::default();
+    let seen_by_server = seen.clone();
+    let server = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let seen = seen_by_server.clone();
+            tokio::spawn(async move {
+                // 期待する要求（POST /v1/chat/completions）を読み切るまで記録しない（host の迷い込み対策）。
+                let Some(raw) = fake_http::read(&mut stream, |r| {
+                    fake_http::matches(r, "POST", "/v1/chat/completions")
+                })
+                .await
+                else {
+                    return;
+                };
+                let authorized = raw.lines().any(|line| {
+                    line.split_once(':').is_some_and(|(name, value)| {
+                        name.eq_ignore_ascii_case("authorization")
+                            && value.trim() == format!("Bearer {KEY}")
+                    })
+                });
+                seen.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(authorized);
+                let (status, body) = if authorized {
+                    (
+                        "200 OK",
+                        r#"{"choices":[{"message":{"role":"assistant","content":"CHFS and BenchFS answer"}}]}"#,
+                    )
+                } else {
+                    (
+                        "401 Unauthorized",
+                        r#"{"error":{"message":"missing or invalid bearer token"}}"#,
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let pylib = dir.path().join("pylib");
+    write_fake_ldr_packages(&pylib);
+    let config = LdrConfig {
+        command: "python3".to_string(),
+        settings: vec![
+            ("llm.provider".to_string(), "openai_endpoint".to_string()),
+            ("llm.openai_endpoint.url".to_string(), base_url.clone()),
+            ("llm.model".to_string(), "qwen/qwen3.8-27b".to_string()),
+        ],
+        // 本番の `[adapters.local_deep_research] env_from_secrets` と同じく env だけで渡す。
+        env: vec![
+            (
+                "PYTHONPATH".to_string(),
+                pylib.to_string_lossy().into_owned(),
+            ),
+            (
+                "LDR_LLM_OPENAI_ENDPOINT_API_KEY".to_string(),
+                KEY.to_string(),
+            ),
+            ("NO_PROXY".to_string(), "127.0.0.1,localhost".to_string()),
+            ("no_proxy".to_string(), "127.0.0.1,localhost".to_string()),
+        ],
+        evidence: EvidenceThresholds {
+            min_search_results: 0,
+            min_sources: 0,
+            min_cited: 0,
+            min_domains: 0,
+            insufficient_is_error: false,
+        },
+        ..LdrConfig::default()
+    };
+    let adapter = LdrAdapter::new(config);
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.task.objective = "CHFS/BenchFS の配置を調べる。".to_string();
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(req, "run-bearer", default_limits(), &sink)
+        .await
+        .unwrap();
+    server.abort();
+
+    let stderr =
+        std::fs::read_to_string(dir.path().join("runs/run-bearer/stderr.log")).unwrap_or_default();
+    assert!(
+        matches!(outcome.terminal, Terminal::Done { .. }),
+        "{:?}\n{stderr}",
+        outcome.terminal
+    );
+    let seen = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    // LDR の chat model 1 本 + 構造化合成 1 本。どちらも bearer 付き（401 は 1 本も無い）。
+    assert_eq!(seen, vec![true, true], "{stderr}");
+    let report = std::fs::read_to_string(dir.path().join("artifacts/report.md")).unwrap();
+    assert!(report.starts_with("# 対象別の整理"), "{report}");
+    let input = std::fs::read_to_string(dir.path().join("runs/run-bearer/ldr_input.json")).unwrap();
+    let stdout = std::fs::read_to_string(dir.path().join("runs/run-bearer/stdout.log")).unwrap();
+    for (name, text) in [
+        ("ldr_input.json", &input),
+        ("stdout.log", &stdout),
+        ("stderr.log", &stderr),
+    ] {
+        assert!(!text.contains(KEY), "{name} に bearer が出てはいけない");
+    }
 }

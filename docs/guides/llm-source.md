@@ -102,6 +102,9 @@ throttling ではなく拒否（`refused`）として扱い、account に cooldo
 の行を書いて 404（problem JSON）を返す。Responses API（`/v1/responses`）は実装しない。LangChain の
 `ChatOpenAI` は model 名に `codex` を含むと Responses API を使うので、LDR・langmem の adapter は
 `use_responses_api=False` で Chat Completions に固定する（同 ADR B）。
+LDR の factory と構造化合成は proxy の bearer を `llm.openai_endpoint.api_key`（settings）→ 環境変数
+`LDR_LLM_OPENAI_ENDPOINT_API_KEY`（`env_from_secrets`）の順に読み、`llm.openai_endpoint.url` があるのに key が
+どちらにも無ければ LDR を呼ぶ前に exit 2 で止まる（[ADR 2026-10-26-ldr-proxy-bearer-from-env](../../agent-docs/adr/2026-10-26-ldr-proxy-bearer-from-env.md)）。
 
 ### 上流エラーの読み方（Phase 65b 追記）
 

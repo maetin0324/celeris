@@ -184,6 +184,39 @@ _CHAT_MODEL_OPTIONAL_SETTINGS = (
 )
 
 
+# The environment variable the celeris adapter sets for `llm.openai_endpoint.api_key` (the
+# `LDR_`-prefixed name LDR's own settings use for env overrides). In production the llm-proxy bearer
+# arrives only here (`[adapters.local_deep_research] env_from_secrets`), never in `settings`.
+OPENAI_ENDPOINT_API_KEY_ENV = "LDR_LLM_OPENAI_ENDPOINT_API_KEY"
+
+
+class MissingApiKeyError(Exception):
+    """`llm.openai_endpoint.url` is set but no key was given in settings or the environment."""
+
+
+def openai_endpoint_api_key(settings):
+    """The bearer for `llm.openai_endpoint.url`: `settings["llm.openai_endpoint.api_key"]` (a resolved
+    `"<env:...>"` placeholder included), else the environment variable `LDR_LLM_OPENAI_ENDPOINT_API_KEY`.
+
+    No silent `"not-needed"`: when a URL is set (in celeris it is the llm-proxy, which answers 401 to a
+    request without a valid bearer) and neither source has a key, this raises `MissingApiKeyError`.
+    With no URL set it returns `None` (nothing to authenticate against).
+    (ADR 2026-10-26-ldr-proxy-bearer-from-env)"""
+    value = settings.get("llm.openai_endpoint.api_key")
+    if isinstance(value, str):
+        value = value.strip()
+    if value in (None, ""):
+        value = os.environ.get(OPENAI_ENDPOINT_API_KEY_ENV, "").strip()
+    if value:
+        return str(value)
+    if settings.get("llm.openai_endpoint.url"):
+        raise MissingApiKeyError(
+            "llm.openai_endpoint.url is set but no API key was given: set "
+            f"llm.openai_endpoint.api_key or the environment variable {OPENAI_ENDPOINT_API_KEY_ENV}"
+        )
+    return None
+
+
 def chat_completions_llms(settings):
     """`llms=` for LDR's API functions: a factory registered as `openai_endpoint`.
 
@@ -201,7 +234,7 @@ def chat_completions_llms(settings):
         kwargs = {
             "model": model_name or settings.get("llm.model"),
             "base_url": settings.get("llm.openai_endpoint.url"),
-            "api_key": settings.get("llm.openai_endpoint.api_key") or "not-needed",
+            "api_key": openai_endpoint_api_key(settings),
             "use_responses_api": False,
         }
         if temperature is not None:
@@ -1135,6 +1168,13 @@ def main():
     aspects = [str(a).strip() for a in (payload.get("aspects") or []) if str(a or "").strip()]
     structured_synthesis_enabled = bool(payload.get("structured_synthesis", True))
 
+    # Fail at startup, not as an llm-proxy 401 deep inside LDR (ADR 2026-10-26-ldr-proxy-bearer-from-env).
+    try:
+        openai_endpoint_api_key(settings)
+    except MissingApiKeyError as exc:
+        print(f"llm: {exc}", file=sys.stderr)
+        return 2
+
     try:
         from local_deep_research.api import (
             create_settings_snapshot,
@@ -1285,7 +1325,7 @@ def main():
         if targets and structured_synthesis_enabled:
             synth_model = settings.get("llm.model")
             synth_base_url = settings.get("llm.openai_endpoint.url")
-            synth_api_key = settings.get("llm.openai_endpoint.api_key")
+            synth_api_key = openai_endpoint_api_key(settings)
             if synth_model and synth_base_url:
                 if apply_structured_synthesis(
                     report_path,

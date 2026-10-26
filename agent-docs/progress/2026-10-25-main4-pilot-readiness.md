@@ -44,7 +44,7 @@ WorkUnit ごとの記録は [2026-10-25-main4-pilot-readiness/](2026-10-25-main4
 |---|---|
 | RELEASE | pins・launcher.env・B の harness_version = `a28184889f56`。preflight の daemon.release が同値 |
 | A_VERSION / A_PROGRAM / A_PROGRAM_SHA | `2.1.303 (Claude Code)`、preflight の a_program.path、`sha256sum` が pin と一致 |
-| CAMPAIGN_BIN_SHA | `sha256sum` = pin `5132230995128dc7…`。実 preflight の argv.txt が同じ binary（再固定は §受入条件 7） |
+| CAMPAIGN_BIN_SHA | `sha256sum` = pin（`RR/check-main-pins` で照合した全 64 桁、実行票 §1.1）。実 preflight の argv.txt が同じ binary（再固定は §受入条件 7） |
 | env-lock.json / cap-env.json | launcher lock exit 0、`env-lock --verify` exit 0、cap-probe 4 本 exit 0 |
 | daemon.toml / launcher.env / canaries.json | 測定専用 state/v4・port 7741 で start exit 0、実構成 preflight exit 0 |
 | K2 repo-src | submodule 5 件の commit を bundle から入れ verify.sh exit 0、lock の再実行が byte 一致（`RR/repo-src.json`） |
@@ -91,7 +91,7 @@ WorkUnit ごとの記録は [2026-10-25-main4-pilot-readiness/](2026-10-25-main4
 | final-accounting | 0 | false | export の写しと同内容 |
 
 - fixture/stub と実 daemon を分けて記録した。実構成の preflight は exit 0 で、無評価 LLM の通しの値を実構成の ready の根拠にしていない。
-- stub の通しは collect 修正入りの binary（sha256 `2dd77ed2…`）で行った。pin した binary（`51322309…`）とは違う（受入条件 7）。
+- stub の通しは collect 修正入りの binary（sha256 `2dd77ed2a28772999878a65bd122450dc9eb1fb3eea6dc0d4c49cb7d39b18e6d`）で行った。pin した binary（`5132230995128dc745593546132dfb947e537d1913718bea482cbc83f5ff93dd`）とは違う（受入条件 7）。
 - paid_calls_made = 0。判定: 達成。
 
 ## 受入条件 4: checker・export・report の一致と比較契約
@@ -151,6 +151,7 @@ final-close WU の検査結果は WU の result に記録する。この WU の�
 - `collect-stub: collect-observed-out は not_submitted だけなら記録を書いて exit 0`
 - `nollm-rerun: 無評価 LLM 全段通し・照合・pilot manifest lock の進捗を記録する`
 - `final-close: main-4 集約進捗と pilot 実行票の開始可否を refreeze・nollm-rerun の証跡で更新する`（本 WU）
+- `final-close: 集約進捗の binary hash を全桁で書く`（本 WU）
 
 ## 提案
 - check-main-pins に「manifest の approved_trials ≥ expected_trials」と「CAMPAIGN_BIN が main の campaign crate から作られたか」の検査を足す。

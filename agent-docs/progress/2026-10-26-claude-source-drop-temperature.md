@@ -23,8 +23,9 @@ updated: 2026-10-26
 - `cargo nextest run -p llm-proxy --test proxy_integration` → 25 passed。
 - 回帰の確認: `to_anthropic_body` に temperature の写しを一時的に戻すと新しい試験が 1 failed（400）になり、
   戻すと pass。
-- `bash scripts/dev/test-affected.sh` / `cargo clippy --workspace -- -D warnings` / `cargo fmt --all -- --check`
-  → 結果は task の完了報告に記す。
+- `bash scripts/dev/test-affected.sh` → exit 0（4594 passed、20 skipped。doc 検査・progress-index --check も ok）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
 
 ## 本番での確認手順（operator。release 後）
 1. この変更を含む release を promote する（通常の `scripts/selfdeploy/release.sh` → promote）。llm-proxy は

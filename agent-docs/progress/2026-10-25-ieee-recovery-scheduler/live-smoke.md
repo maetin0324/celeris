@@ -44,8 +44,8 @@ updated: 2026-10-26
 
 ## 証拠（提出時の HEAD で実行）
 
-- `cargo test -p celeris-campaign --test dagbench_harness harness_pbs_` → exit 0
-- `bash scripts/dev/test-affected.sh` → exit 0
+- `cargo test -p celeris-campaign --test dagbench_harness harness_pbs_` → exit 0（20 passed）
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 2709 passed、9 skipped。main 取り込み後）
 - `cargo clippy --workspace -- -D warnings` → exit 0 / `cargo fmt --all -- --check` → exit 0
 - `sh scripts/dev/progress-index.sh --check` → exit 0
 

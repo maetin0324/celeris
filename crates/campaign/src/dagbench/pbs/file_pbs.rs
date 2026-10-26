@@ -334,9 +334,10 @@ fn qstat_text(j: &FileJob, trial_key: Option<&str>) -> String {
         (
             "Variable_List".into(),
             format!(
-                "PBS_O_HOME=/home/rmaeda,CELERIS_TRIAL_KEY={},CELERIS_SUBMIT_INTENT={}",
+                "PBS_O_HOME=/home/rmaeda,CELERIS_TRIAL_KEY={},CELERIS_SUBMIT_INTENT={},RECOVERY_SMOKE_DIR={}",
                 trial_key.unwrap_or(&req.trial_key),
-                req.submit_intent
+                req.submit_intent,
+                req.dir().unwrap_or_default()
             ),
         ),
         (

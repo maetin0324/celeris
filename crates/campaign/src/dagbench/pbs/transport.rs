@@ -33,6 +33,9 @@ use crate::{
 /// qsub に渡す submit intent の印（`-v CELERIS_SUBMIT_INTENT=<submit_intent_id>`）。
 pub const SUBMIT_INTENT_VAR: &str = "CELERIS_SUBMIT_INTENT";
 
+/// payload に渡す cluster 上の測定 dir（`-v RECOVERY_SMOKE_DIR=dirname(script)`。付記 I15 (4)）。
+pub const SMOKE_DIR_VAR: &str = "RECOVERY_SMOKE_DIR";
+
 /// timeout で殺した後、pipe の残りを読み切るまで待つ上限（孫 process が pipe を握っても止まらない）。
 const KILL_GRACE: Duration = Duration::from_secs(2);
 
@@ -140,6 +143,7 @@ impl QsubRequest {
             ));
         }
         chars("script", &self.script[1..], b"/")?;
+        let dir = self.dir()?;
         Ok(vec![
             "qsub".into(),
             "-q".into(),
@@ -158,11 +162,22 @@ impl QsubRequest {
             self.job_name.clone(),
             "-v".into(),
             format!(
-                "{TRIAL_MARKER_VAR}={},{SUBMIT_INTENT_VAR}={}",
+                "{TRIAL_MARKER_VAR}={},{SUBMIT_INTENT_VAR}={},{SMOKE_DIR_VAR}={dir}",
                 self.trial_key, self.submit_intent
             ),
             self.script.clone(),
         ])
+    }
+
+    /// cluster 上の測定 dir（`dirname(script)`）。root 直下の script は Err。
+    pub fn dir(&self) -> Result<&str, String> {
+        match self.script.rsplit_once('/') {
+            Some((d, f)) if !d.is_empty() && !f.is_empty() => Ok(d),
+            _ => Err(format!(
+                "script {:?}: expected <dir>/<file> below the root",
+                self.script
+            )),
+        }
     }
 }
 

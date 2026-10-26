@@ -57,7 +57,7 @@ fn qsub_request_is_non_rerunnable_and_carries_both_markers() {
     assert_eq!(
         argv[v + 1],
         format!(
-            "CELERIS_TRIAL_KEY=m1.baseline.n1.a1,CELERIS_SUBMIT_INTENT=si-{}",
+            "CELERIS_TRIAL_KEY=m1.baseline.n1.a1,CELERIS_SUBMIT_INTENT=si-{},RECOVERY_SMOKE_DIR=/work/NBB/rmaeda/recovery",
             "a".repeat(64)
         )
     );
@@ -80,6 +80,14 @@ fn qsub_request_is_non_rerunnable_and_carries_both_markers() {
         },
         QsubRequest {
             script: "/work/../etc/x".into(),
+            ..req()
+        },
+        QsubRequest {
+            script: "/job.sh".into(),
+            ..req()
+        },
+        QsubRequest {
+            script: "/work/a,X=1/job.sh".into(),
             ..req()
         },
         QsubRequest {

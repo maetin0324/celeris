@@ -461,6 +461,8 @@ async fn run_ldr(
         );
     }
 
+    // `llm.temperature` は設定しない。LDR が自前の既定値を OpenAI 互換要求に付けて来ても、
+    // llm-proxy の claude source が上流へ写さない（ADR 2026-10-26-claude-source-drops-sampling-params）。
     // `model` は `settings` の `llm.model` より優先する（ADR-0029 D1）。`BTreeMap` で決定的な順序にする。
     let mut settings: std::collections::BTreeMap<String, String> =
         config.settings.iter().cloned().collect();

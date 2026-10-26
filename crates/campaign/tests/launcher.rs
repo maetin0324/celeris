@@ -1169,6 +1169,88 @@ fn variant_b0_sha256_is_passed_to_preflight_and_a_wrong_hash_is_rejected() {
     stop(&f);
 }
 
+/// stub が cluster job を投げない trial（not_submitted だけ）では、collect は失敗記録と履歴を書いて 0 で終わる。
+/// grade/checker と同じく、モデルの失敗で測定基盤の失敗ではない（ADR 2026-10-26-collect-not-submitted-exit）。
+#[test]
+fn collect_not_submitted_only_writes_failure_records_and_exits_zero() {
+    let f = fixture();
+    ok(&f, "prepare");
+    ok(&f, "start");
+    f.create_project();
+    ok(&f, "preflight");
+    ok(&f, "watch");
+    let out = f.out();
+    let o = launch(&f, "collect");
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    let rep: Value = serde_json::from_str(&String::from_utf8_lossy(&o.stdout)).expect("report");
+    assert_eq!(rep["ok"], json!(true), "{rep}");
+    assert_eq!(rep["blocking"], json!(0), "{rep}");
+    let failed = rep["failed"].as_array().expect("failed");
+    assert!(!failed.is_empty(), "{rep}");
+    assert_eq!(rep["not_submitted"], json!(failed.len()), "{rep}");
+    for c in ["A", "B", "C"] {
+        assert!(
+            failed.iter().any(|r| r["trial"]
+                == json!(format!("{c}/k2-bf-xattr-restart-campaign/rep1#1"))
+                && r["classes"] == json!(["not_submitted"])
+                && r["failure_class"] == json!("model_failure")),
+            "{rep}"
+        );
+        let rec: Value = serde_json::from_slice(
+            &fs::read(out.join(format!(
+                "observed/k2-bf-xattr-restart-campaign/{c}-rep1.collect-failure.json"
+            )))
+            .expect("failure record"),
+        )
+        .unwrap();
+        assert_eq!(rec["failure_class"], json!("model_failure"), "{rec}");
+        assert_eq!(rec["issues"][0]["class"], json!("not_submitted"), "{rec}");
+    }
+    assert!(
+        out.join("observed/k2-bf-xattr-restart-campaign/collect-log.jsonl")
+            .is_file()
+    );
+    // grade は not_submitted を観測障害の警告なしに採点する。
+    let g = launch(&f, "grade");
+    assert!(
+        !text(&g).contains("measure-launcher: warning: collect-observed-out"),
+        "{}",
+        text(&g)
+    );
+    stop(&f);
+}
+
+/// not_submitted（B/C）と測定基盤の class（A: scheduler の応答に job 記録が無い = unobserved）が混ざると、collect は非 0 のまま。
+#[test]
+fn collect_not_submitted_mixed_with_infra_class_stays_nonzero() {
+    let f = fixture();
+    fs::write(f.d().join("bin/qsub.enabled"), "").unwrap();
+    ok(&f, "prepare");
+    ok(&f, "start");
+    f.create_project();
+    ok(&f, "preflight");
+    ok(&f, "watch");
+    let o = launch(&f, "collect");
+    let t = text(&o);
+    assert!(!o.status.success(), "{t}");
+    assert!(
+        t.contains("[unobserved]") && t.contains("[not_submitted]"),
+        "{t}"
+    );
+    assert!(
+        t.contains("\"ok\": false") && t.contains("\"blocking\": 1"),
+        "{t}"
+    );
+    let g = launch(&f, "grade");
+    assert!(
+        text(&g).contains("collect-observed-out failed on measurement infrastructure"),
+        "{}",
+        text(&g)
+    );
+    stop(&f);
+}
+
 /// 実験 case の試行について、A の submit wrapper が受理を記録した job ID が通常経路（executor の track → 台帳）で
 /// 台帳に入り、標準の grade が評価側の観測を収集し、trial identity・台帳の job ID・scheduler 応答の控え（trial の印）・
 /// 成果物 hash に結ぶ。台帳は手で編集しない。取得失敗は env_failure、未終了は undetermined として grade に残り、
@@ -1326,10 +1408,11 @@ fn grade_collects_job_observations_bound_to_the_trial_and_rejects_every_mismatch
 
     // 終了: 収集でき、記録は trial identity・台帳の job ID に結ばれ、grade の実験証拠検査を通る。
     reply("F");
-    // B/C は cluster job を投入していない（台帳に job が無い）ので収集の対象外として報告され、A の試行だけが収集される。
+    // B/C は cluster job を投入していない（台帳に job が無い）ので not_submitted（モデルの失敗）として報告され、
+    // A の試行だけが収集される。基盤の失敗は無いので collect は 0 で終わる。
     let o = launch(&f, "collect");
     let t = text(&o);
-    assert!(!o.status.success(), "{t}");
+    assert!(o.status.success(), "{t}");
     assert!(
         t.contains("\"A/k2-bf-xattr-restart-campaign/rep1#1\"")
             && t.contains("no job was submitted by Celeris"),

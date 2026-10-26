@@ -13,6 +13,8 @@ use celeris_campaign::{
 };
 use serde_json::{Value, json};
 
+/// K4 の合成 raw tgz の名前（`install_k4_fixture` が case の `inputs[0].name` もこれに替える）。
+/// 実 case の公開入力 v2 は `main-v3-n2-43706-public2.tgz`（ADR 2026-10-25-k4-public-input-v2）。
 pub const K4_INPUT: &str = "main-v3-n2-43706.tgz";
 
 pub fn root() -> PathBuf {

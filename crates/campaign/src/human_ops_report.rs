@@ -710,13 +710,21 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
         if jr["success_class"]["needs_regrade"] == true {
             bump(a, "needs_regrade", 1);
         }
+        // 実行されなかった cell（予算停止・依存 blocked・arm 予算切れで未投入）の消費は欠測でも観測済み 0 でもなく
+        // `*_not_run_trials` に数える（値は null のまま）。欠測数の分母は checker の ran_trials と同じ「実行した試行」。
+        let not_run = jr["success_class"]["ran"] == false && class != "missing";
+        if not_run {
+            bump(a, "not_run_trials", 1);
+        }
         for (k, jk) in [
             ("tokens_observed", "tokens"),
             ("cost_micro_usd_observed", "cost_micro_usd"),
         ] {
             let (sum, _, miss) = sum_obs(&jr[jk]);
             bump(a, k, sum);
-            if jr[jk]["source"] == "missing" || miss > 0 {
+            if not_run {
+                bump(a, &format!("{jk}_not_run_trials"), 1);
+            } else if jr[jk]["source"] == "missing" || miss > 0 {
                 bump(a, &format!("{jk}_missing_trials"), 1);
             }
         }
@@ -857,11 +865,11 @@ fn markdown(j: &Value, timeline: &[(i64, String, Value)]) -> String {
     for n in j["notices"].as_array().into_iter().flatten() {
         m += &format!("- {}\n", n.as_str().unwrap_or(""));
     }
-    m += "\n## arm 別\n\n| arm | 試行 | validated success | executor passed | 結論(区分別) | 介入(区分別) | 人の時間 union 秒 (単純和・欠測試行) | 下限の試行 | 人待ち秒 (欠測試行) | Celeris 待ち秒 (欠測試行) | 外部 queue 秒 (欠測試行) | 再作業(原因別・欠測試行) | 自動 retry | tokens 観測合計 (欠測試行) | 費用 µUSD 観測合計 (欠測試行) | 評価者記録なし | time_basis |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+    m += "\n## arm 別\n\n| arm | 試行 | validated success | executor passed | 結論(区分別) | 介入(区分別) | 人の時間 union 秒 (単純和・欠測試行) | 下限の試行 | 人待ち秒 (欠測試行) | Celeris 待ち秒 (欠測試行) | 外部 queue 秒 (欠測試行) | 再作業(原因別・欠測試行) | 自動 retry | tokens 観測合計 (欠測試行・未実行試行) | 費用 µUSD 観測合計 (欠測試行・未実行試行) | 評価者記録なし | time_basis |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
     for (arm, a) in j["arms"].as_object().into_iter().flatten() {
         let o = |k: &str| a.get(k).map_or("-".into(), |v| v.to_string());
         m += &format!(
-            "| {arm} | {} | {} | {} | {} | {} | {} ({}・{}) | {} | {} ({}) | {} ({}) | {} ({}) | {} ({}) | {} | {} ({}) | {} ({}) | {} | {} |\n",
+            "| {arm} | {} | {} | {} | {} | {} | {} ({}・{}) | {} | {} ({}) | {} ({}) | {} ({}) | {} ({}) | {} | {} ({}・{}) | {} ({}・{}) | {} | {} |\n",
             cell(a, "trials"),
             cell(a, "validated_success"),
             cell(a, "executor_passed"),
@@ -882,8 +890,10 @@ fn markdown(j: &Value, timeline: &[(i64, String, Value)]) -> String {
             cell(a, "auto_retries"),
             cell(a, "tokens_observed"),
             cell(a, "tokens_missing_trials"),
+            cell(a, "tokens_not_run_trials"),
             cell(a, "cost_micro_usd_observed"),
             cell(a, "cost_micro_usd_missing_trials"),
+            cell(a, "cost_micro_usd_not_run_trials"),
             cell(a, "trials_without_evaluator_records"),
             o("time_basis"),
         );

@@ -199,6 +199,60 @@ impl ProbeRunner for FailRunner {
     }
 }
 
+/// cap env の socket が dangling symlink（ControlMaster 切れ）だと bwrap は全 capability を同じ exit で落とす。
+/// 落ちた detail は B/C の worker 検査と同じ id（`socket:<p>`・`toolchain:<p>`）で元を名指す。在る元は挙げない。
+#[test]
+fn failed_a_probe_names_the_missing_socket_and_mount_behind_the_exit() {
+    let d = tempfile::tempdir().expect("tmp");
+    let present = d.path().join("toolchain");
+    fs::create_dir(&present).expect("mkdir");
+    let gone = d.path().join("no-such-prefix");
+    let sock = d.path().join("sirius-ssh.sock");
+    std::os::unix::fs::symlink(d.path().join("ssh-mux-gone"), &sock).expect("symlink");
+    let tc = json!({"ro_mounts":[present, gone],"sockets":[sock]});
+    let env = env_json(tc);
+    let set = cases();
+    let case = &set.get("k4-cmp4-validity-analysis").expect("k4").case;
+    let rep = cap_probe::probe(
+        &sb(&env, ConfigId::A),
+        ConfigId::A,
+        Path::new("/w"),
+        case,
+        &FailRunner,
+    );
+    assert!(!rep.ok);
+    assert_eq!(rep.failure_class, Some("env_failure"));
+    assert_eq!(rep.paid_calls_made, 0);
+    let want_sock = format!("socket:{}", sock.display());
+    let want_mount = format!("toolchain:{}", gone.display());
+    for r in &rep.results {
+        assert!(r.detail.starts_with("exit 127"), "{r:?}");
+        assert!(
+            r.detail.contains(&want_sock) && r.detail.contains(&want_mount),
+            "{r:?}"
+        );
+        assert!(
+            !r.detail
+                .contains(&format!("toolchain:{}", present.display())),
+            "{r:?}"
+        );
+    }
+    // 元が揃っていれば detail は従来どおり（exit だけ）。
+    let ok_env = env_json(json!({"ro_mounts":[present]}));
+    let rep = cap_probe::probe(
+        &sb(&ok_env, ConfigId::A),
+        ConfigId::A,
+        Path::new("/w"),
+        case,
+        &FailRunner,
+    );
+    assert!(
+        rep.results.iter().all(|r| r.detail == "exit 127"),
+        "{:?}",
+        rep.results
+    );
+}
+
 #[test]
 fn missing_capability_is_env_failure_and_counts_no_paid_call() {
     let set = cases();

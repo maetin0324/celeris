@@ -195,16 +195,16 @@ class CheckMainPins(unittest.TestCase):
         """K4 の grade-case に input_archive を書き、公開 inputs と（必要なら）grade-case の隣へ同じ tgz を置く。"""
         gc_dir = os.path.join(self.main, "fixed", "grade-cases", "final", K4)
         body = b"\x1f\x8b fake tgz bytes for the pinned k4 raw archive 0123456789"
-        pub = os.path.join(self.root, "measure-src", "main", "inputs", "main-v3-n2-43706.tgz")
+        pub = os.path.join(self.root, "measure-src", "main", "inputs", "main-v3-n2-43706-public2.tgz")
         with open(pub, "wb") as f:
             f.write(body)
         sha = hashlib.sha256(body).hexdigest()
         write_json(os.path.join(gc_dir, f"{K4}.json"),
                    {"schema": "celeris.grade-case/1", "id": K4, "split": "final",
                     "recompute": {"report": "report.md", "metrics": [],
-                                  "input_archive": {"path": "main-v3-n2-43706.tgz", "sha256": sha}}})
+                                  "input_archive": {"path": "main-v3-n2-43706-public2.tgz", "sha256": sha}}})
         if stage:
-            with open(os.path.join(gc_dir, "main-v3-n2-43706.tgz"), "wb") as f:
+            with open(os.path.join(gc_dir, "main-v3-n2-43706-public2.tgz"), "wb") as f:
                 f.write(body + (b"x" if tamper else b""))
 
     def test_staged_grader_archive_passes_and_is_not_a_leak(self):

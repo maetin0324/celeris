@@ -815,7 +815,8 @@ pub mod synth {
 impl synth::Plan {
     /// 試験用: 実 tgz の無い環境で K4 の case を preflight・lock・grade に通せるよう、合成 raw の tgz を
     /// `inputs_src/<name>`（公開入力）と grade-case の隣（評価側の写し）に置き、grade-case を合成 raw に合わせて書き直し、
-    /// `cases_root` の case.json の `inputs[0].sha256` と `grade_case_ref.sha256` を再固定する。
+    /// `cases_root` の case.json の `inputs[0]`（name・sha256）と `grade_case_ref.sha256` を再固定する。
+    /// 合成 raw は実 archive（公開入力 v2 `main-v3-n2-43706-public2.tgz`）とは別物なので、name も合成用の名前に替える。
     pub fn install_k4_fixture(
         &self,
         grade_cases_root: &Path,
@@ -857,6 +858,7 @@ impl synth::Plan {
         .map_err(|e| format!("{}: {e}", gp.display()))?;
         let cp = cases_root.join("final").join(ID).join("case.json");
         let mut c = read_json(&cp)?;
+        c["inputs"][0]["name"] = json!(NAME);
         c["inputs"][0]["sha256"] = json!(sha);
         c["grade_case_ref"]["sha256"] = json!(sha256_file(&gp)?);
         fs::write(

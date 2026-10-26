@@ -130,7 +130,7 @@ mkdir -p $M $K $R $I
 for c in k2-bf-xattr-restart-campaign k4-cmp4-validity-analysis; do cp -r crates/campaign/cases/final/$c/materials $M/$c; done
 cp -r crates/campaign/cases/final/k2-bf-xattr-restart-campaign/kb/. $K/
 # R: k2 の初期 tree（BenchFS 086c4618。case.json の initial.fetch の手順）。k4 は repo 不要
-cp <main-v3-n2-43706.tgz の実物> $I/main-v3-n2-43706.tgz   # prepare が同じ tgz を sha256 照合のうえ GRADE_CASES_ROOT/final/k4-…/ へ写す（grader が自分で展開する。ADR 2026-10-23-k4-cells-validity-grading D3）
+cp <main-v3-n2-43706-public2.tgz の実物（公開入力 v2。ADR 2026-10-25-k4-public-input-v2）> $I/main-v3-n2-43706-public2.tgz   # prepare が同じ tgz を sha256 照合のうえ GRADE_CASES_ROOT/final/k4-…/ へ写す（grader が自分で展開する。ADR 2026-10-23-k4-cells-validity-grading D3）
 # R（K2 初期 tree）の組立: bundle を clone → commit 086c4618 を checkout → submodule 5 件を lock の path へ snapshot tar 展開 → .git を消す
 # （手順の実例: pinned/build-srcs.sh。asset_assembly::assemble_initial と同じ）
 # K2 の組立後 tree には tree 内 symlink が 3 件ある（lib/locusta/CLAUDE.md・…/centos6/run-test.sh・…/ucx1-sys/ucx/README）。修正後 binary（§3a）は tree 内に閉じた symlink を許し、lock の content_sha256 と両立する（解決済み。実 K2 preflight exit 0 の証跡あり）。修正前の binary では preflight が exit 1 になる
@@ -148,7 +148,7 @@ echo $?                       # 0 = 全件 OK。非 0 は stderr JSON の `missi
 sh $L watch     --env $ENVF   # daemon 実体照合 → preflight → env-lock（初回は作成、再開は照合）→ 実行直前に実体照合を再度 → watch。どれか不一致なら外部実行 0 件で非 0
 ```
 - `measure-config`（`DAEMON_CONFIG`）・`normal-config`・`canaries`: **起動前**の `config-check`（`prepare` と `start` が daemon を起こす前に実行。daemon には接続しない）と preflight が、測定 config が本番と別の port・db・workspace・KB・記憶・llm_proxy・releases_dir・通知先であること、自動整理が無効であること、canary 値を照合する。不適切なら daemon を起動せず非 0。起動後は `env-check` が `GET /api/v1/config` の `identity`（instance・pid・release・config sha256・実効構成。秘密なし）を照合する: `identity.pid` が launcher 所有 daemon の PID（`--daemon-pid`）と一致、`config_sha256` が `DAEMON_CONFIG` の現物と一致、`overrides` が空、release が manifest の B/C と一致（`dev` は不可）、実効構成が `DAEMON_CONFIG` と一致。別 daemon の URL・起動後の config 書換え・版不一致・必須入力欠落・daemon 実行ファイルの差替えは、いずれも測定用外部実行 0 件で非 0。
-- inputs: `--inputs-src` に case の宣言した file が全て在り sha256 が一致すること（k4 の `main-v3-n2-43706.tgz`。k2 は `REPO_SRC`）を preflight が確かめ、watch が各試行 workspace の `inputs/<name>` に A/B/C 共通で置く。
+- inputs: `--inputs-src` に case の宣言した file が全て在り sha256 が一致すること（k4 の `main-v3-n2-43706-public2.tgz`。k2 は `REPO_SRC`）を preflight が確かめ、watch が各試行 workspace の `inputs/<name>` に A/B/C 共通で置く。
 - daemon 実体の照合（`start` の新規起動・既存 process への再接続、`preflight`、`watch` の全経路。`watch` は実行の直前にもう一度）: ① `CELERIS_BIN` の現物が `prepare` の固定 sha256 と一致、② launcher 所有 process（`$STATE_DIR/launcher.pid`・`launcher.meta` の starttime と cmdline の `--config`）が生きている、③ その実行像 `/proc/<pid>/exe` が起動時に記録した path・sha256 と一致し、その path の現物も同じ。同じ path の binary を差し替えると、再開時（watch・再接続）も `--version` が同じでも拒否される。
 - 主比較（mlsys-main-1）は env-lock/3 と campaign lock が §3a で生成・照合済み（`pinned/main/`）。`watch` 初回が作る旧記述は一般手順で、主比較では `$OUT` へ複写した固定 lock と照合する。
 - env-lock（`$OUT/env-lock.json`）: A の絶対 path・sha256・`--version`、B/C の release sha12、arm ごとの lower_policy・evidence_mode（none）・models・run_harnesses と**接続先 daemon の `GET /api/v1/llm/models` から取った候補集合と階層（catalog）**、worker 実行ファイル（`WORKER_PROGRAMS`）、`campaign_sha256` の固定記録。再開時は現物から作り直して突き合わせ、追加・削除・階層移動を key 名で挙げて拒否する。秘密値は持たない。
@@ -173,12 +173,13 @@ exit 0 = A のアカウントを含む claude が 45%・codex が 21% 以内（`
 ```sh
 sh $L collect --env $ENVF  # = `celeris-campaign collect-observed-out`（実験 case の trial ごとに評価側の job 終了記録を <OUT>/observed/ へ。単独でも実行できる）
 sh $L grade  --env $ENVF   # = collect-observed-out（失敗は警告のみ）+ `celeris-campaign grade-out --cases $GRADE_CASES_ROOT [--initial-trees $INITIAL_TREES]`（独立採点 → $OUT/grades.jsonl）+ `check`。主比較は GRADE_CASES_ROOT=$R/pinned/main/fixed/grade-cases
-sh $L export --env $ENVF   # export を $OUT/export へ。RECORDS があれば final_accounting（総消費量）も含める
+sh $L export --env $ENVF   # export を $OUT/export へ。RECORDS があれば final_accounting（総消費量）も含める。無ければ警告し、表の consumption は欠測（0 ではない）
 ```
 - `grade` は主比較の 4 試行（A・B × K2・K4）すべてに判定を付ける。失敗・timeout・cancelled・未完了も分母に残す。grade-case が無い problem（root 直下 `<problem_id>.json` か `final/<problem>/<problem>.json`）は `missing_cases` で非 0。`check` は `ok true`・violations 空。`complete=false` なら `incomplete_reasons` を読む。
 - 評価側の観測（`collect`）: 台帳に Celeris が残した job ID（`scheduler:cluster:job_id`、素の `<n>.<server>` は case の cluster の PBS とみなす）を `ssh <cluster> qstat -x -f`（read-only）で照会し、記録に campaign sha256・arm・problem・rep・trial_no（`trial`）と scheduler 応答の控え（`observed/<problem>/scheduler/`）の sha256 を結ぶ。job 未終了（`job_state` が `F` 以外）・台帳に job が無い・成果物が実行終了時の hash と違う、のどれでも記録は作られず `collect` は非 0（grade は警告のみで続き、その trial は観測なしの実験証拠として成功にならない）。`grade-out` は記録の `trial` が当該 trial と違う・job 集合が台帳と違う・控えが改変されている記録を拒否する（`graded:false`、非 0）。
 - `grade-out` 単体の再判定が要るときは `$B grade --case $R/pinned/main/fixed/grade-cases/final/<case-id>/<case-id>.json --artifact $OUT/trials/<A|B|C>/<case-id>/rep1/workspace`（`celeris-campaign grade`）。
 - final_accounting を単独で見る: `$B final-accounting --manifest $MANIFEST --out $OUT --records $RECORDS`。
+- 件数と分母の照合: `python3 scripts/campaign/check-out-consistency.py --out $OUT --manifest $MANIFEST --campaign-bin $B --check-arg=…（launcher と同じ資産の引数）--human-ops-report <report dir>`。checker・export・human-op report の成功/失敗/欠測の件数を生記録からの再計算と突き合わせ、一致で exit 0。checker は launcher と同じ `--measurement-id`・資産で呼ぶ（省くと期待 lock が合わず採点が外れ、report とずれる）。
 - 結果回収の固定 hash 一覧（§3a と同じ。回収前後で変わったら採点・export を無効として止める）: campaign_sha256 `8ca0e198…a999`、`pinned/main/lock.json` file sha256 `8ddc8384…2343`、`env-lock.json` `6c2275f3…986c`、daemon release `c9654bff5633` / binary `be62f43d…a3d2`、campaign binary `de339f1c…1394`、final.json sha256 `0aaa6a23…fa36`。確認は `python3 scripts/campaign/check-main-pins.py --root $R`。
 - Celeris 側の消費・判断ログ（人。本番 DB は読むだけ、写しに対して）:
 ```sh

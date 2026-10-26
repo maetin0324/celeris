@@ -570,8 +570,8 @@ pub(crate) fn verify_binding(
 
 /// `collect-observed-out --manifest <m> --out <out> --cases-root <dir> --grader-root <dir> --grade-case-root <dir>`:
 /// out の実行済み trial のうち実験工程のある case について、台帳の job ID・case の cluster・grade-case の条件・成果物内の raw から
-/// `<out>/observed/…` を作る（trial identity 付き）。成果物が実行終了時の hash と違う・job 未終了・欠測は記録を作らず、
-/// 失敗した trial を報告して Err を返す。
+/// `<out>/observed/…` を作る（trial identity 付き）。成果物が実行終了時の hash と違う・job 未終了・欠測は観測記録を作らず、
+/// 失敗記録を書いて報告する。測定基盤の class を含む失敗があれば Err、not_submitted だけなら Ok（モデルの失敗）。
 pub fn collect_out(
     m: &CampaignManifest,
     out: &Path,
@@ -721,15 +721,29 @@ pub fn collect_out(
             Err(e) => failed.push(fail(&e)),
         }
     }
+    // not_submitted だけの trial はモデルの失敗（grade/checker と同じ契約）で、記録を書いた上で終了 0。
+    // 測定基盤の class を 1 件でも含む trial があるときだけ非 0（ADR 2026-10-26-collect-not-submitted-exit）。
+    let blocking = failed
+        .iter()
+        .filter(|f| {
+            f["classes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|c| c != "not_submitted")
+        })
+        .count();
     let rep = json!({
         "schema": "celeris.campaign-collect-out/1",
-        "ok": failed.is_empty(),
+        "ok": blocking == 0,
         "collected": collected,
         "failed": failed,
+        "not_submitted": failed.len() - blocking,
+        "blocking": blocking,
         "skipped_no_experiment": skipped,
     });
     let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
-    if failed.is_empty() { Ok(s) } else { Err(s) }
+    if blocking == 0 { Ok(s) } else { Err(s) }
 }
 
 /// `celeris-campaign collect-observed --case <case.json> --grade-case <grade-case.json> --artifact <dir> --out <dir>

@@ -2,7 +2,7 @@
 //! を叩き、OpenAI 互換の要求/応答へ双方向に写す。
 //!
 //! - 要求: `messages`（`system` は分離、`tool`/`tool_calls` を `tool_result`/`tool_use` ブロックへ）、
-//!   `tools`、`tool_choice`、`stream`。
+//!   `tools`、`tool_choice`、`stream`。`temperature`/`top_p` は送らない（Claude 5 系が拒否する）。
 //! - 応答: `content` ブロックの連結と `tool_use`、`stop_reason`、`usage`。
 //! - stream: `content_block_delta` の `text_delta`/`input_json_delta` を OpenAI の delta chunk に写す。
 //! - トークン更新: `expiresAt` を過ぎていれば送信前に、401 を受ければ 1 回だけ事後に。どちらも同じファイルへ書き戻す。
@@ -134,12 +134,9 @@ pub fn to_anthropic_body(req: &crate::openai::ChatCompletionRequest, model: &str
     if !system.is_empty() {
         obj.insert("system".to_string(), json!(system.join("\n\n")));
     }
-    if let Some(t) = req.temperature {
-        obj.insert("temperature".to_string(), json!(t));
-    }
-    if let Some(t) = req.top_p {
-        obj.insert("top_p".to_string(), json!(t));
-    }
+    // `temperature` / `top_p` は写さない。Claude 5 系は sampling 引数を 400（"`temperature` is
+    // deprecated for this model."）で拒否し、LDR などの client は自前の既定値を付けて来るので、
+    // ここで捨てる（ADR 2026-10-26-claude-source-drops-sampling-params）。
     if let Some(stop) = &req.stop {
         obj.insert("stop_sequences".to_string(), json!(stop));
     }

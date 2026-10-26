@@ -78,6 +78,14 @@ ChatGPT の Codex backend（`https://chatgpt.com/backend-api/codex/responses`）
   他のヘッダ（`Authorization`、`chatgpt-account-id`、`OpenAI-Beta: responses=experimental`、
   `originator: codex_cli_rs`、`session_id`、`accept: text/event-stream`）は Phase 65 のまま。
 
+### claude-oauth の sampling 引数（2026-10-26）
+
+claude-oauth は OpenAI 互換要求の `temperature` / `top_p` を Messages API へ写さず、黙って捨てる。
+Claude 5 系はこれらを `400 "`temperature` is deprecated for this model."` で拒否し、LDR（LangChain の
+`ChatOpenAI`）などの client は自前の既定値を付けて来るため（task 01M5WC8PPWXB22788R17Y10DEB の 3 連続失敗）。
+送る経路を残す設定は無い（`agent-docs/adr/2026-10-26-claude-source-drops-sampling-params.md`）。
+`max_tokens` と `stop`（→ `stop_sequences`）はこれまでどおり写す。
+
 ### 上流エラーの読み方（Phase 65b 追記）
 
 上流が非 2xx を返したとき、この層は本文から `error.message`（OpenAI 互換の形）と、ChatGPT backend

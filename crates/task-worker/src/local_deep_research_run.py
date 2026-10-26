@@ -988,7 +988,13 @@ def parse_chat_completion_text(body):
 
 def default_synthesize(messages, base_url, api_key, model, timeout=120):
     """The real `chat/completions` call to the LDR proxy (production only;
-    tests inject a fake `synthesize` instead)."""
+    tests inject a fake `synthesize` instead).
+
+    No `temperature`/`top_p` here, and the adapter sets no `llm.temperature`
+    either. LDR itself still sends its own `llm.temperature` default through
+    LangChain; the proxy's claude source drops sampling params before calling
+    Claude 5, which rejects them (ADR 2026-10-26-claude-source-drops-sampling-params),
+    so neither side needs a per-model switch."""
     url = str(base_url or "").rstrip("/")
     if not url.endswith("/chat/completions"):
         url = url + "/chat/completions"

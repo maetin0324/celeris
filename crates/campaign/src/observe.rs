@@ -152,8 +152,8 @@ pub const OBSERVE_FAILURE_SCHEMA: &str = "celeris.observe-failure/1";
 /// 収集の試みの追記専用の履歴（成功・失敗とも）。
 pub const COLLECT_LOG: &str = "collect-log.jsonl";
 
-/// PBS の `key = value`（継続行は前行へ連結）。
-fn parse_qstat(text: &str) -> (Option<String>, BTreeMap<String, String>) {
+/// PBS の `key = value`（継続行は前行へ連結）。recovery の `dagbench::pbs::transport` も共用する。
+pub(crate) fn parse_qstat(text: &str) -> (Option<String>, BTreeMap<String, String>) {
     let mut id = None;
     let mut kv: BTreeMap<String, String> = BTreeMap::new();
     let mut last: Option<String> = None;
@@ -183,6 +183,15 @@ fn typed(v: &str) -> Value {
     v.parse::<i64>()
         .map(Value::from)
         .unwrap_or_else(|_| v.into())
+}
+
+/// 原票の `Variable_List` から `name=<値>` の値を取る（無ければ None）。
+pub(crate) fn job_variable(kv: &BTreeMap<String, String>, name: &str) -> Option<String> {
+    kv.get("Variable_List").and_then(|vl| {
+        vl.split(',')
+            .find_map(|kv| kv.trim().strip_prefix(&format!("{name}=")))
+            .map(String::from)
+    })
 }
 
 /// PBS の job id は `<数字>.<server>`。host を欠く数字だけ（PID に見えるもの）は scheduler id とみなさない。
@@ -253,11 +262,7 @@ fn observe_job(
         }
         Some(_) => {}
     }
-    let marker = kv.get("Variable_List").and_then(|vl| {
-        vl.split(',')
-            .find_map(|kv| kv.trim().strip_prefix(&format!("{TRIAL_MARKER_VAR}=")))
-            .map(String::from)
-    });
+    let marker = job_variable(&kv, TRIAL_MARKER_VAR);
     match (&marker, &expect.trial_key) {
         (Some(m), Some(k)) if m != k => {
             return Err(mismatch(format!(

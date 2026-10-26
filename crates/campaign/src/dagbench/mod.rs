@@ -8,6 +8,7 @@ pub mod graded;
 pub mod ipc;
 pub mod metrics;
 pub mod overhead;
+pub mod pbs;
 pub mod process;
 pub mod run;
 

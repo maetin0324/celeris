@@ -156,6 +156,23 @@ async fn anthropic_messages(
 ) -> axum::response::Response {
     fake.captured.lock().expect("lock").push(body.clone());
 
+    // Claude 5 系と同じく sampling 引数を拒否する（ADR 2026-10-26-claude-source-drops-sampling-params）。
+    for param in ["temperature", "top_p"] {
+        if body.get(param).is_some() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": format!("`{param}` is deprecated for this model."),
+                    }
+                })),
+            )
+                .into_response();
+        }
+    }
+
     let stream = body
         .get("stream")
         .and_then(|v| v.as_bool())
@@ -337,6 +354,66 @@ async fn claude_non_stream_round_trip() {
     assert_eq!(captured[0]["system"], "You are terse.");
     // 要求した model（claude_oauth/claude-opus-5-5 の model 部分）がそのまま上流へ渡る。
     assert_eq!(captured[0]["model"], "claude-opus-5-5");
+}
+
+/// LDR（LangChain の `ChatOpenAI`）のように `temperature`/`top_p` を付けた要求でも、claude source は
+/// それを上流へ写さず 200 で返す（ADR 2026-10-26-claude-source-drops-sampling-params）。偽の上流は
+/// Claude 5 系と同じく sampling 引数があれば 400 を返す。
+#[tokio::test]
+async fn claude_drops_sampling_params_from_the_upstream_request() {
+    let fake = Arc::new(AnthropicFake::default());
+    let (upstream_addr, _h1) = spawn(anthropic_router(fake.clone())).await;
+
+    let accounts_tmp = tempfile::tempdir().expect("tmp");
+    write_claude_credentials(
+        accounts_tmp.path(),
+        "acct-a",
+        "fake-access-a",
+        "fake-refresh-a",
+        far_future_ms(),
+    );
+
+    let mut config = base_config();
+    config.sources.claude_oauth = Some(claude_source(
+        upstream_addr,
+        accounts_tmp.path().to_path_buf(),
+    ));
+
+    let state = ProxyState::new(
+        config,
+        reqwest::Client::new(),
+        Some(Arc::new(StdMutex::new(AccountBook::new_in_memory()))),
+        None,
+        None,
+        SharedRole::default(),
+        None,
+        std::time::Duration::from_secs(5),
+    );
+    let (addr, _h2) = spawn(router(state)).await;
+
+    let client = reqwest::Client::new();
+    for stream in [false, true] {
+        let mut req = chat_request("claude_oauth/claude-sonnet-5-5", stream);
+        req["temperature"] = json!(0.7);
+        req["top_p"] = json!(0.9);
+        req["max_tokens"] = json!(1234);
+        req["stop"] = json!(["END"]);
+        let resp = post_chat(&client, addr, &req, None).await;
+        assert_eq!(resp.status(), StatusCode::OK, "stream={stream}");
+        let text = resp.text().await.expect("body");
+        assert!(text.contains("Hello"), "stream={stream}: {text}");
+    }
+
+    let captured = fake.captured.lock().expect("lock");
+    assert_eq!(captured.len(), 2, "1 回ずつで通り、再試行していない");
+    for sent in captured.iter() {
+        assert!(sent.get("temperature").is_none(), "{sent}");
+        assert!(sent.get("top_p").is_none(), "{sent}");
+        assert_eq!(sent["model"], "claude-sonnet-5-5");
+        // sampling 以外の引数はこれまでどおり写る。
+        assert_eq!(sent["max_tokens"], 1234);
+        assert_eq!(sent["stop_sequences"], json!(["END"]));
+    }
 }
 
 // ---------------------------------------------------------------------------

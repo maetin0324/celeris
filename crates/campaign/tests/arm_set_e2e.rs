@@ -762,3 +762,78 @@ fn cli_refuses_shared_approval_bypass_before_any_submit() {
     );
     assert!(!d.path().join("out2").join(TRIALS_FILE).exists());
 }
+
+// ---- 共有台帳の承認の記録（ledger-init） ----
+
+fn approval(trials: u64) -> celeris_campaign::global_ledger::Approval {
+    celeris_campaign::global_ledger::Approval {
+        source: "operator, 2026-10-26".into(),
+        scope: "K2/K4 x A0/B0".into(),
+        expiry: "2026-11-13".into(),
+        approved_trials: trials,
+        max_tokens: None,
+        note: None,
+    }
+}
+
+#[test]
+fn ledger_init_records_the_approval_caps_and_never_raises_them() {
+    let d = tempfile::tempdir().expect("dir");
+    let g = d.path().join("g");
+    let i = input(2);
+    let m = shared_manifest(&i, "m1", &g, 2);
+    let gl = GlobalLedger::open(&g).expect("open");
+    let r = gl.init_approval(&m, &approval(40)).expect("init");
+    assert_eq!(r.ledger_caps.trials, 40);
+    assert_eq!(r.ledger_caps.tokens, u64::MAX);
+    // 投入で効く上限は manifest の approved_trials（2）との最小。
+    assert_eq!(r.effective_caps.trials, 2);
+    assert_eq!(
+        (r.remaining_trials_approval, r.remaining_trials_effective),
+        (40, 2)
+    );
+    assert_eq!(r.consumed.trials, 0);
+    let saved: Value =
+        serde_json::from_slice(&fs::read(g.join("approval.json")).expect("approval"))
+            .expect("json");
+    assert_eq!(saved["expiry"], "2026-11-13");
+    let rows = fs::read_to_string(gl.path()).expect("ledger");
+    assert_eq!(rows.lines().count(), 1);
+    // 同じ承認の再実行は冪等。違う承認（引き上げ）は拒否し、台帳も承認の記録も変えない。
+    gl.init_approval(&m, &approval(40)).expect("idempotent");
+    let e = gl.init_approval(&m, &approval(80)).expect_err("raise");
+    assert!(e.contains("different approval"), "{e}");
+    assert_eq!(fs::read_to_string(gl.path()).expect("ledger"), rows);
+    // 承認の上限は manifest を大きくしても増えない。
+    let m40 = shared_manifest(&i, "m1", &g, 100);
+    assert_eq!(
+        gl.init_approval(&m40, &approval(40))
+            .expect("init")
+            .effective_caps
+            .trials,
+        40
+    );
+}
+
+#[test]
+fn ledger_init_rejects_an_incomplete_approval_without_writing() {
+    let d = tempfile::tempdir().expect("dir");
+    let g = d.path().join("g");
+    let m = shared_manifest(&input(2), "m1", &g, 2);
+    let gl = GlobalLedger::open(&g).expect("open");
+    for bad in [
+        celeris_campaign::global_ledger::Approval {
+            source: " ".into(),
+            ..approval(4)
+        },
+        celeris_campaign::global_ledger::Approval {
+            expiry: "11/13".into(),
+            ..approval(4)
+        },
+        approval(0),
+    ] {
+        assert!(gl.init_approval(&m, &bad).is_err());
+    }
+    assert!(!g.join("approval.json").exists());
+    assert!(!gl.path().exists());
+}

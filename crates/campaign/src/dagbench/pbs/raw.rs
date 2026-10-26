@@ -991,12 +991,61 @@ pub fn validate(dir: &Path) -> Result<RawReport, String> {
     let records: Vec<RecoveryRecord> =
         read_jsonl(&dir.join(RECOVERY_FILE)).map_err(|e| e.to_string())?;
     let recovery = super::recovery::check_records(dir, &records, &rows, &events)?;
+    check_site_calls(dir)?;
     Ok(RawReport {
         run,
         events: events.len(),
         trials,
         recovery,
     })
+}
+
+/// 実 cluster の trial（`site-calls.jsonl` がある trial）で、取得した `attempt-1/out.bin` の sha256 が最後の成功した
+/// `fetch_outputs` 行の `stdout_sha256` と一致すること（付記 I15 (2)）。file transport の trial は file が無くてよい。
+fn check_site_calls(dir: &Path) -> Result<(), String> {
+    use super::transport::{SITE_CALL_SCHEMA, SITE_CALLS_FILE, SiteCall, SiteCallRow};
+    let Ok(entries) = fs::read_dir(dir.join("trials")) else {
+        return Ok(());
+    };
+    for e in entries {
+        let trial = e.map_err(|e| e.to_string())?.path();
+        let calls = trial.join(SITE_CALLS_FILE);
+        if !calls.exists() {
+            continue;
+        }
+        let at = calls
+            .strip_prefix(dir)
+            .unwrap_or(&calls)
+            .display()
+            .to_string();
+        let rows: Vec<SiteCallRow> = read_jsonl(&calls).map_err(|e| format!("{at}: {e}"))?;
+        for (i, r) in rows.iter().enumerate() {
+            if r.schema != SITE_CALL_SCHEMA || r.seq != i as u64 + 1 {
+                return Err(format!(
+                    "{at} seq {}: schema or seq is broken (append-only)",
+                    r.seq
+                ));
+            }
+        }
+        let out = trial.join("attempt-1").join("out.bin");
+        let fetched = rows
+            .iter()
+            .rev()
+            .find(|r| r.call == SiteCall::FetchOutputs && r.outcome == CallOutcome::Ok);
+        match (fetched, out.exists()) {
+            (Some(r), true) => {
+                let rel = out.strip_prefix(dir).unwrap_or(&out).display().to_string();
+                check_file(dir, &rel, &r.stdout_sha256, "fetched output")?;
+            }
+            (None, true) => {
+                return Err(format!(
+                    "{at}: attempt-1/out.bin exists without a successful fetch_outputs row"
+                ));
+            }
+            (_, false) => {}
+        }
+    }
+    Ok(())
 }
 
 fn check_binding(

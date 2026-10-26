@@ -596,16 +596,11 @@ fn k3_k4_recompute_rejects_a_wrong_report_and_accepts_the_raw_derived_one() {
             "/local/celeris/data/workspaces/01M45ACZQWTW9BP8WVY8KAW9TC/artifacts/locusta-latency/raw/main-43223.tgz",
         )
     });
+    // K4 は公開入力 v2（旧判定・集計を除いた archive。ADR 2026-10-25-k4-public-input-v2）。
     let k4 = raw_tgz(
         "CAMPAIGN_K4_TGZ",
-        "/local/celeris/data/measure/main-3/out/snapshot/inputs/main-v3-n2-43706.tgz",
-    )
-    .or_else(|| {
-        raw_tgz(
-            "CAMPAIGN_K4_TGZ",
-            "/local/celeris/data/workspaces/01M49KWT59XM37ANGCTJ8A4DX5/artifacts/cmp4/raw/main-v3-n2-43706.tgz",
-        )
-    });
+        "/local/celeris/data/workspaces/01M5SRJMA9CFNG2C9KCCS5VS4B/artifacts/k4-inputs-v2/main-v3-n2-43706-public2.tgz",
+    );
     let (Some(k3), Some(k4)) = (k3, k4) else {
         eprintln!("SKIPPED(実行不能): 原票 tgz が無い");
         return;
@@ -619,7 +614,7 @@ fn k3_k4_recompute_rejects_a_wrong_report_and_accepts_the_raw_derived_one() {
         (
             "k4-cmp4-validity-analysis",
             k4,
-            "128057cf4016535941963fc4142ba424c05c65889905ca2bbcc190f6161077a1",
+            "0671a85528b4a29a8f6fb5176986c178afb2174cb22e56b003c33ed5f2da3a1e",
         ),
     ] {
         assert_eq!(

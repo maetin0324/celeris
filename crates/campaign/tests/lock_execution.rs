@@ -30,6 +30,7 @@ mod preflight_setup;
 
 const K2: &str = "k2-bf-xattr-restart-campaign";
 const K4: &str = "k4-cmp4-validity-analysis";
+/// K4 の合成 raw tgz の名前（`install_k4_fixture` が case の入力名もこれに替える。実 case は公開入力 v2）。
 const K4_INPUT: &str = "main-v3-n2-43706.tgz";
 
 fn root() -> PathBuf {

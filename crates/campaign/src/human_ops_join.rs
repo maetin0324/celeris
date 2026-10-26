@@ -633,7 +633,7 @@ fn canonical_fields(cell: Option<&crate::success::Cell>, row: &mut Map<String, V
     row.insert(
         "success_class".into(),
         json!({"value": class.as_str(), "source": GRADE,
-               "needs_regrade": class.needs_regrade(), "unexecuted": c.unexecuted,
+               "needs_regrade": class.needs_regrade(), "unexecuted": c.unexecuted, "ran": c.ran,
                "contract": crate::success::SUCCESS_CONTRACT}),
     );
     row.insert(

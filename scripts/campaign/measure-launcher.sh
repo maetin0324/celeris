@@ -439,7 +439,8 @@ cmd_watch() {
 }
 
 # 評価側が scheduler から取る job の終了記録（<out>/observed）。台帳の job ID・trial identity・成果物の hash に結ぶ。
-# 未終了・欠測・成果物の改変は記録を作らず非 0（採点は grade が続けて行い、その trial を成功にしない）。
+# 未終了・欠測・成果物の改変（測定基盤の失敗）は観測記録を作らず非 0（採点は grade が続けて行い、その trial を成功にしない）。
+# job を投げなかった trial（not_submitted だけ）はモデルの失敗として失敗記録を書き、終了は 0。
 cmd_collect() {
     load_token
     campaign collect-observed-out
@@ -455,8 +456,9 @@ cmd_grade() {
     [ -z "$INITIAL_TREES" ] || set -- "$@" --initial-trees "$INITIAL_TREES"
     campaign grade-out "$@"
     campaign check
-    # 収集できなかった trial（未終了・欠測・改変）は観測記録が無いまま grade-out が採点し、実験証拠の検査で成功にならない。
-    [ "$collect_rc" -eq 0 ] || echo "measure-launcher: warning: collect-observed-out reported trials without evaluator observations (see above); they are not success evidence" >&2
+    # 測定基盤の失敗で収集できなかった trial（未終了・取得失敗・欠測・改変）は観測記録が無いまま grade-out が採点し、
+    # 実験証拠の検査で成功にならない。not_submitted だけの trial は collect が 0 で終わるので警告しない。
+    [ "$collect_rc" -eq 0 ] || echo "measure-launcher: warning: collect-observed-out failed on measurement infrastructure (not_finished/fetch_failed/unobserved/identity_mismatch/artifact_changed/evaluator_asset, see above); fix it, then re-collect and re-grade — those trials are not success evidence" >&2
 }
 
 cmd_export() {

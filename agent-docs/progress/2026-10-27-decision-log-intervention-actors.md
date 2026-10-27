@@ -28,6 +28,11 @@ tasks: [01M5XXF7Q6YWNB9ZZY0NYK3154]
 - `celeris-campaign` の `human-op join`: `event_interventions` は human だけを数え、`event_interventions_by_actor_kind`
   を追加（主体の欄が無い旧 export は unknown）。
 - `docs/ops/eval-raw-record-definitions.md` の対応表と制約の記述を更新。
+- Jev 副比較の Python 写し（attempt 2、review の差し戻し）: `scripts/dev/jev_source_reconcile.py` の投影を
+  `human_interventions_by_kind`（human だけ）・`interventions_by_actor_kind`（7 種）と行の `actor_kind`・`actor_id`
+  に合わせた。`scripts/dev/jev_source_reader.py` の必要欄に `actor_kind`・`actor_id` を足し、既知の schema 版を 98 にした
+  （86 のままでは現行 DB を読めなかった）。試験 `test_interventions_split_by_actor_like_the_rust_export` を追加（5 主体＋unknown
+  の行の投影、旧形式の export は altered で不合格）。
 
 ## 証拠（提出時の HEAD で実行）
 
@@ -35,6 +40,7 @@ tasks: [01M5XXF7Q6YWNB9ZZY0NYK3154]
   統括 CoS・operator・MCP が 1 件ずつ答える fixture。主体別件数、export の人の介入 2 件、decision の待ち 3 区間と
   終了主体、再投影で行が増えない）、`actor_classification_keeps_unknown_for_rounded_or_missing_by`、
   `decision_log_export_tests`（CoS の行が人の集計に入らない）、`campaign tests/human_ops_join.rs`。
+- `python3 -m unittest discover -s scripts/dev/tests/jev_live_evidence -t scripts/dev/tests`: 93 tests OK。
 - `bash scripts/dev/test-affected.sh` exit 0（nextest 6595 passed / 21 skipped、web 685 passed）。
 - `cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
 

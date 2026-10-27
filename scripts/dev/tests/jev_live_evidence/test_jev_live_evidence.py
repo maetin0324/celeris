@@ -96,6 +96,38 @@ class ConversionPositive(Base):
         self.assertEqual(s["exec_vs_proposed"], {"exec_differs": 5})
         self.assertEqual(s["incomplete"][-1], "quota")
 
+    def test_interventions_split_by_actor_like_the_rust_export(self):
+        """人・案件 CoS・統括 CoS・operator・MCP が 1 件ずつ答え、主体不明（A2 以前）が 1 件。人の介入は human だけ。"""
+        s = self.source()
+        s.intervention("iv-1", "research_judgment", "human", "human:web", wall_ms=1000)
+        s.intervention("iv-2", "research_judgment", "cos_project", "cos:tp")
+        s.intervention("iv-3", "research_judgment", "cos_general", "cos:tg")
+        s.intervention("iv-4", "recovery", "external_operator", "operator:claude-code")
+        s.intervention("iv-5", "manual_handoff", "mcp_client", "mcp:c1")
+        s.intervention("iv-6", "recovery", "unknown")
+        s.close()
+        p = b.project(self.db)
+        sm = p["summary"]
+        self.assertNotIn("interventions_by_kind", sm)
+        self.assertEqual(sm["interventions_by_actor_kind"], {
+            "human": 1, "cos_project": 1, "cos_general": 1, "external_operator": 1, "mcp_client": 1, "system": 0,
+            "unknown": 1})
+        self.assertEqual({k: v["count"] for k, v in sm["human_interventions_by_kind"].items()},
+                         {"research_judgment": 1, "manual_handoff": 0, "recovery": 0, "unclassified": 0})
+        ivs = {r["intervention_id"]: r for r in p["records"] if r["record_type"] == "intervention"}
+        self.assertEqual((ivs["iv-2"]["actor_kind"], ivs["iv-2"]["actor_id"]), ("cos_project", "cos:tp"))
+        self.assertEqual((ivs["iv-6"]["actor_kind"], ivs["iv-6"]["actor_id"]), ("unknown", None))
+        ex = b.export_of(self.db)
+        self.check(0, ex=ex)
+        # 旧形式の export（interventions_by_kind・主体の欄なし）は改変として落ちる。
+        old = json.loads(json.dumps(ex))
+        old["summary"]["interventions_by_kind"] = old["summary"].pop("human_interventions_by_kind")
+        del old["summary"]["interventions_by_actor_kind"]
+        for r in old["records"]:
+            if r["record_type"] == "intervention":
+                del r["actor_kind"], r["actor_id"]
+        self.check(1, "altered", ex=old)
+
     def test_fallback_is_suppression_not_success(self):
         s = self.source()
         s.c.execute("UPDATE events SET json = ? WHERE json LIKE ?", (json.dumps(b.event_body(R["r2"], "C", jev_ok=False)), f'%"{R["r2"]}"%'))

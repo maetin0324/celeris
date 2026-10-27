@@ -23,6 +23,8 @@ import re
 SCHEMA = "celeris.decision-log/1"
 ROLES = ["cos", "planner", "worker", "reviewer", "jev"]
 INTERVENTION_KINDS = ["research_judgment", "manual_handoff", "recovery", "unclassified"]
+# task_core::decision_log::InterventionActorKind::ALL（ADR 2026-10-27-decision-log-intervention-actors D1）。
+ACTOR_KINDS = ["human", "cos_project", "cos_general", "external_operator", "mcp_client", "system", "unknown"]
 RUN_ENDS = {"completed", "yielded", "budget_exhausted", "question", "failed", "harness_error", "cancelled",
             "waiting", "timeout"}
 WU_VERDICTS = {"passed", "failed", "unverified"}
@@ -386,15 +388,22 @@ def build_export(campaign, manifest_hash, runs, usage, interventions, started_at
         trials.append(_trial(campaign, r, usage_map, run_map, run_ids))
 
     ivs = {k: {"count": 0, "wall_ms": _stat()} for k in INTERVENTION_KINDS}
+    by_actor = {k: 0 for k in ACTOR_KINDS}
     for iid in sorted(iv_map):
         i = iv_map[iid]
         if i["kind"] not in INTERVENTION_KINDS:
             raise ProjectionError(f"介入 {iid}: 未知の kind {i['kind']!r}（store の export が失敗する）")
-        s = ivs[i["kind"]]
-        s["count"] += 1
-        _stat_add(s["wall_ms"], _u64(i.get("wall_ms")), False)
+        actor = i.get("actor_kind")
+        if actor not in ACTOR_KINDS:
+            raise ProjectionError(f"介入 {iid}: 未知の actor_kind {actor!r}（store の export が失敗する）")
+        by_actor[actor] += 1
+        if actor == "human":
+            s = ivs[i["kind"]]
+            s["count"] += 1
+            _stat_add(s["wall_ms"], _u64(i.get("wall_ms")), False)
         records.append({"record_type": "intervention", "schema": SCHEMA, "dedup_key": f"intervention:{iid}",
-                        "campaign_id": campaign, "intervention_id": iid, "kind": i["kind"], "task_id": i.get("task_id"),
+                        "campaign_id": campaign, "intervention_id": iid, "kind": i["kind"], "actor_kind": actor,
+                        "actor_id": i.get("actor_id"), "task_id": i.get("task_id"),
                         "at": i["at"], "wall_ms": _u64(i.get("wall_ms")), "source_event": i.get("source_event")})
     incomplete = [f for f in STAT_FIELDS if total[f]["n_missing"] > 0]
     if total["n_rows"] == 0:
@@ -412,7 +421,8 @@ def build_export(campaign, manifest_hash, runs, usage, interventions, started_at
         "cluster": {"wait_ms": total["cluster_wait_ms"], "run_ms": total["cluster_run_ms"],
                     "node_hours": total["cluster_node_hours"], "queue_ms": total["cluster_queue_ms"]},
         "runs_by_end": runs_by_end, "wu_verdicts": wu_v, "campaign_verdicts": camp_v,
-        "interventions_by_kind": ivs, "exec_vs_proposed": evp, "incomplete": incomplete, "quota": None,
+        "human_interventions_by_kind": ivs,
+        "interventions_by_actor_kind": by_actor, "exec_vs_proposed": evp, "incomplete": incomplete, "quota": None,
         "excluded_rows": excluded, "integrity": integ,
     }
     return {"records": scrub_value(records + trials), "summary": scrub_value(summary),

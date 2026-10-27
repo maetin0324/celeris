@@ -59,7 +59,7 @@ def _template():
             with open(f, encoding="utf-8") as fh:
                 m.executescript(fh.read())
         m.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
-        m.execute("INSERT INTO schema_migrations VALUES (86, ?)", (TS,))
+        m.execute("INSERT INTO schema_migrations VALUES (98, ?)", (TS,))
         m.commit()
         _TEMPLATE = m
     return _TEMPLATE
@@ -138,6 +138,11 @@ class Source:
                    cost, run=rid if bound else None, task=tid, retry=call_no > 1,
                    decision=f"jev:{tid}:{'ok' if ok else 'fallback:client_error'}:call-{rid}-{call_no}",
                    rule="jev_classification_subject")
+
+    def intervention(self, iid, kind, actor_kind, actor_id=None, task=ROOT, wall_ms=None, campaign=CAMPAIGN):
+        self.c.execute("INSERT INTO decision_log_interventions (intervention_id, kind, actor_kind, actor_id, task_id, "
+                       "campaign_id, at, wall_ms, source_event) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                       (iid, kind, actor_kind, actor_id, task, campaign, TS, wall_ms, f"{task}:{iid}"))
 
     def commit(self):
         self.c.commit()

@@ -48,7 +48,7 @@ def _template():
     return _TEMPLATE
 
 
-def make_db(path, version=86, wal=False):
+def make_db(path, version=98, wal=False):
     c = sqlite3.connect(path)
     _template().backup(c)
     if wal:
@@ -192,7 +192,7 @@ class Schema(Base):
     def test_missing_table_and_column_are_diagnosed(self):
         c = sqlite3.connect(self.db)
         c.executescript("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);"
-                        "INSERT INTO schema_migrations VALUES (86, 'x');"
+                        "INSERT INTO schema_migrations VALUES (98, 'x');"
                         "CREATE TABLE tasks (id TEXT PRIMARY KEY, parent_id TEXT, status TEXT, kind TEXT, created_at TEXT);")
         c.close()
         code, _, err = self.cli(self.env(), "--campaign", "cmp-c1")

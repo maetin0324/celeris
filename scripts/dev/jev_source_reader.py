@@ -24,7 +24,7 @@ ENV_SOURCE = "CELERIS_JEV_SOURCE_DB"
 # 接続先に使わない（運用者の設定と取り違えない）daemon / worker の DB 変数。
 FORBIDDEN_ENV = ("CELERIS_DB", "CELERIS_RUN_DB")
 # crates/task-core/src/store/migrations.rs の SCHEMA_VERSION。上げたら必要欄も見直す。
-KNOWN_SCHEMA_VERSIONS = (86,)
+KNOWN_SCHEMA_VERSIONS = (98,)
 REQUIRED = {
     "schema_migrations": ["version"],
     "tasks": ["id", "parent_id", "status", "kind", "created_at", "json"],
@@ -41,8 +41,8 @@ REQUIRED = {
     "decision_log_usage": ["dedup_key", "run_id", "decision_id", "campaign_id", "task_id",
                            "role", "is_retry", "list_cost_usd", "cash_cost_usd",
                            "attribution_rule", "shared_overhead"],
-    "decision_log_interventions": ["intervention_id", "kind", "task_id", "campaign_id", "at", "wall_ms",
-                                   "source_event"],
+    "decision_log_interventions": ["intervention_id", "kind", "actor_kind", "actor_id", "task_id", "campaign_id",
+                                   "at", "wall_ms", "source_event"],
     "decision_log_campaign_activity": ["campaign_id", "last_activity_at"],
     "route_decisions": ["decision_id", "run_id", "input_json", "output_json", "judge_json",
                         "stage", "created_at"],

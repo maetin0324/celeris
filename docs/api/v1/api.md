@@ -549,7 +549,8 @@ browser の制御（`crate::browser_control`）の 6 本は、route を定数 `B
 ```json
 {"api_version":"1","schema_version":37,"celeris_version":"0.9.0","instance_id":"01J…",
  "started_at":"…","now":"…","db":{"journal_mode":"wal","busy_timeout_ms":5000,"filesystem":"ext4","device":"/dev/sda1"},
- "release":"a1b2c3d4e5f6","mode":"normal","role":"active"}
+ "release":"a1b2c3d4e5f6","mode":"normal","role":"active","pricing_version":"2026-09-approx-1",
+ "cos_policy_version":"1"}
 ```
 
 - `api_version` は `"1"` 固定。互換性を壊す変更は `/api/v2` で行う（ADR-0013 D8）。
@@ -561,6 +562,9 @@ browser の制御（`crate::browser_control`）の 6 本は、route を定数 `B
   `mode` は `"normal"` か `"verify"`（`--mode`）、`role` は `"active"` / `"standby"` / `"draining"` / `"verify"`。
   昇格（`promote.sh`）と検証（`verify.sh`）は「どの版がどの役割で動いているか」をここだけで判定する。
   `role` が `standby` / `draining` の間はディスパッチャの状態を要する管理系が 503 `standby`（§1.5。ADR-0040 D3/D4）。
+- `pricing_version` は費用推定に使う単価表の版（`task_core::pricing::PRICE_TABLE_VERSION`）、`cos_policy_version` は
+  `[cos.triage] policy_version`（CoS が無効なら `null`）。campaign は試行の開始時にこの 2 つと `release` を観測し、
+  契約 revision の宣言と照合する（ADR 2026-10-27-trial-observed-versions）。
 - `mode == "verify"` のプロセスは、**`genre = "smoke"` かつアダプタが `fake` のタスクだけ**を dispatch する
   （他の ready は動かさない）。その役割・分野・プロバイダは verify モードが組み込みで足すもので、すべて偽のアダプタ
   （`adapter = "fake"`）。`GET /config` にだけ姿が出る（§3.21）。本番（`normal`）には何の影響も無い（ADR-0041 D5）。

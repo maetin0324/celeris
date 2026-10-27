@@ -95,6 +95,10 @@ pub struct TrialRecord {
     pub model: String,
     pub model_version: String,
     pub policy_version: String,
+    /// 試行の開始時に観測した実際に動く版（daemon の release・Claude Code の版と sha256・単価表と CoS 方針の版）。
+    /// manifest が契約 revision（`contract`）を宣言した試行だけが持つ。上の 4 欄は宣言の写し。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_versions: Option<crate::versions::ObservedVersions>,
     /// out からの相対 path。実行しなかった試行は空。
     pub workspace: String,
     pub kb: String,

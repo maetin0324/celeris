@@ -30,8 +30,8 @@ use serde_json::Value;
 use crate::{
     aggregate::Outcome,
     executor::{
-        ExecError, ExecResult, ExecStatus, Executor, ObservedRun, TaskRef, TokenUsage,
-        TrialRequest, Usage,
+        ExecError, ExecResult, ExecStatus, Executor, ObservedRun, ObservedVersions, TaskRef,
+        TokenUsage, TrialRequest, Usage,
     },
     manifest::TokenBasis,
     record::REASON_CASE_BUDGET,
@@ -51,6 +51,11 @@ pub trait CommandBuilder: Send + Sync {
 
     /// preflight が解決した実行ファイルの版。実起動の記録（`launch.json`）に残す。
     fn program_version(&self) -> Option<String> {
+        None
+    }
+
+    /// 起動する実行ファイル（Claude Code のとき）。試行の開始時に sha256 と `--version` を観測する。
+    fn claude_code_program(&self) -> Option<PathBuf> {
         None
     }
 
@@ -87,6 +92,10 @@ impl ClaudeCodeBuilder {
 impl CommandBuilder for ClaudeCodeBuilder {
     fn program_version(&self) -> Option<String> {
         self.version.clone()
+    }
+
+    fn claude_code_program(&self) -> Option<PathBuf> {
+        Some(self.program.clone())
     }
 
     fn build(&self, req: &TrialRequest) -> HarnessCommand {
@@ -729,6 +738,21 @@ impl Executor for HarnessExecutor {
             "harness": req.config.harness,
             "model": req.config.model,
         }))
+    }
+
+    /// A は daemon を通らない: 観測するのは起動する Claude Code の実体だけ（release・単価表・CoS は `None`）。
+    fn observe_versions(&self, _req: &TrialRequest) -> Result<ObservedVersions, String> {
+        let claude_code = match self.builder.claude_code_program() {
+            Some(p) => Some(crate::env_lock::pin_program(
+                &p,
+                std::env::var_os("PATH").as_deref(),
+            )?),
+            None => None,
+        };
+        Ok(ObservedVersions {
+            claude_code,
+            ..ObservedVersions::default()
+        })
     }
 
     fn lookup(&self, key: &str) -> Result<Option<TaskRef>, ExecError> {

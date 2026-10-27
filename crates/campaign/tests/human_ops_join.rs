@@ -34,6 +34,7 @@ fn campaign(i: &Input, n: usize) -> CampaignManifest {
         routing: None,
     };
     CampaignManifest {
+        contract: None,
         variant: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: "e2e".into(),

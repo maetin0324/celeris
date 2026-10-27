@@ -113,6 +113,7 @@ pub(crate) struct Inner {
     pub(crate) integration_releases_dir: Option<std::path::PathBuf>,
     /// ADR-0040 D4（Phase 47）: `GET /health` の `release` / `mode` と、管理 API の 503 に使う役割。
     pub(crate) release: String,
+    pub(crate) cos_policy_version: Option<String>,
     pub(crate) mode: task_core::DaemonMode,
     pub(crate) role: task_core::SharedRole,
     /// ADR-0043 D5（Phase 54）: `[github]`（`gh` の場所と merge の方法）。
@@ -195,6 +196,7 @@ impl ApiState {
             releases: settings.releases,
             integration_releases_dir: settings.integration_releases_dir,
             release: settings.release,
+            cos_policy_version: settings.cos_policy_version,
             mode: settings.mode,
             role: settings.role,
             github: settings.github,

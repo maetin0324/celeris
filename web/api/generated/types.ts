@@ -3072,10 +3072,12 @@ export type HarnessView = {
 export type Health = {
   "api_version": string;
   "celeris_version": string;
+  "cos_policy_version"?: string | null;
   "db": DbInfo;
   "instance_id": string;
   "mode": string;
   "now": string;
+  "pricing_version": string;
   "release": string;
   "role": string;
   "schema_version": number;

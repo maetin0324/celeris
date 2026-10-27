@@ -108,6 +108,7 @@ fn state_rx(
         releases: None,
         integration_releases_dir: None,
         release: "dev".to_string(),
+        cos_policy_version: None,
         mode: task_core::DaemonMode::Normal,
         role: task_core::SharedRole::new(task_core::InstanceRole::Active),
         github: crate::GithubSettings::default(),

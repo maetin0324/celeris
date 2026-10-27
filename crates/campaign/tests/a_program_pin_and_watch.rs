@@ -223,6 +223,7 @@ fn input(n: usize) -> Input {
 
 fn campaign(i: &Input, per_case: u64) -> CampaignManifest {
     CampaignManifest {
+        contract: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: "pin-watch".into(),
         version: "v1".into(),

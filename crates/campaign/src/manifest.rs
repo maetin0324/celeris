@@ -489,8 +489,100 @@ pub struct CampaignManifest {
     /// ADR 2026-10-19-specialization-variant。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variant: Option<crate::variant::VariantRef>,
+    /// 契約の revision と、試行の開始時に観測値と照合する版の宣言（ADR 2026-10-27-trial-observed-versions）。
+    /// 省略時は直列化しない（固定済み bundle・pilot の manifest の hash と条件を変えない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<ContractRevision>,
     #[serde(default)]
     pub sha256: String,
+}
+
+/// 試行ごとの観測版を必須にする契約 revision（ADR 2026-10-27-trial-observed-versions D1）。
+pub const CONTRACT_REVISION_OPS_R1: &str = "main-4-ops-r1";
+
+/// 契約 revision の宣言。`revision` は既知の名前だけ。有効 arm は全部 `pinned_versions` を持つ。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ContractRevision {
+    pub revision: String,
+    pub pinned_versions: BTreeMap<ConfigId, PinnedVersions>,
+}
+
+/// arm ごとに試行の開始時の観測と照合する宣言。B/C の release は `Config::harness_version`（12 桁 hex）を使う。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PinnedVersions {
+    /// 実際に起動する Claude Code の版（`claude --version` の先頭語。例 `2.1.3`）。
+    pub claude_code_version: String,
+    /// 同じ実行ファイルの sha256（64 桁 hex）。
+    pub claude_code_sha256: String,
+    /// daemon の単価表の版（`GET /health` の `pricing_version`）。B/C は必須、A は書かない（A の金額は harness 報告額）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_version: Option<String>,
+    /// CoS の方針の版（`GET /health` の `cos_policy_version`）。CoS を使う構成だけ書く。B/C のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cos_policy_version: Option<String>,
+}
+
+fn is_hex(s: &str, n: usize) -> bool {
+    s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+impl ContractRevision {
+    /// 宣言の形の検査（revision 名・有効 arm の網羅・各欄）。
+    pub fn validate(&self, active: &[ConfigId]) -> Result<(), String> {
+        if self.revision != CONTRACT_REVISION_OPS_R1 {
+            return Err(format!(
+                "contract.revision {:?} is unknown (known: {CONTRACT_REVISION_OPS_R1})",
+                self.revision
+            ));
+        }
+        for id in active {
+            if !self.pinned_versions.contains_key(id) {
+                return Err(format!(
+                    "contract.pinned_versions: active arm {id:?} is not pinned"
+                ));
+            }
+        }
+        for (id, p) in &self.pinned_versions {
+            if !active.contains(id) {
+                return Err(format!(
+                    "contract.pinned_versions: arm {id:?} is not active"
+                ));
+            }
+            if p.claude_code_version.trim().is_empty()
+                || p.claude_code_version.split_whitespace().count() != 1
+            {
+                return Err(format!(
+                    "contract.pinned_versions.{id:?}.claude_code_version must be one version word"
+                ));
+            }
+            if !is_hex(&p.claude_code_sha256, 64) {
+                return Err(format!(
+                    "contract.pinned_versions.{id:?}.claude_code_sha256 must be 64 hex"
+                ));
+            }
+            let empty = |v: &Option<String>| v.as_deref().is_some_and(|s| s.trim().is_empty());
+            if empty(&p.pricing_version) || empty(&p.cos_policy_version) {
+                return Err(format!("contract.pinned_versions.{id:?}: empty version"));
+            }
+            match id {
+                ConfigId::A if p.pricing_version.is_some() || p.cos_policy_version.is_some() => {
+                    return Err(
+                        "contract.pinned_versions.A: pricing_version/cos_policy_version are B/C only (A has no daemon)"
+                            .into(),
+                    );
+                }
+                ConfigId::B | ConfigId::C if p.pricing_version.is_none() => {
+                    return Err(format!(
+                        "contract.pinned_versions.{id:?}.pricing_version is required"
+                    ));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 fn is_default_order(o: &ArmOrder) -> bool {
@@ -870,6 +962,9 @@ impl CampaignManifest {
             v.check_fixed().map_err(|e| e.to_string())?;
         }
         let ids: Vec<ConfigId> = self.normalized().configs.iter().map(|c| c.id).collect();
+        if let Some(c) = &self.contract {
+            c.validate(&ids)?;
+        }
         if self.experiment_sets.is_empty() && side {
             if ids != [ConfigId::B, ConfigId::C] {
                 return Err("side manifest configs must contain exactly B and C once each".into());
@@ -1304,6 +1399,7 @@ pub(crate) mod fixtures {
             routing: None,
         };
         CampaignManifest {
+            contract: None,
             schema: CAMPAIGN_SCHEMA.into(),
             campaign_id: "c1".into(),
             version: "v1".into(),

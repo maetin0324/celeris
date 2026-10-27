@@ -247,6 +247,8 @@ pub struct ApiSettings {
     pub release: String,
     /// ADR-0040 D3: `--mode`（`normal` / `verify`）。`GET /health` の `mode`。
     pub mode: task_core::DaemonMode,
+    /// ADR 2026-10-27-trial-observed-versions D4: `GET /health` の `cos_policy_version`（CoS が無効なら `None`）。
+    pub cos_policy_version: Option<String>,
     /// ADR-0040 D4: いまの役割。**tick ループだけが書き、API は読むだけ**。`standby` / `draining` の間は
     /// ディスパッチャの状態を要する管理 API（`reload` / `check` / クラスタ接続 / アカウントのログイン中継 /
     /// `notify/test`）が 503 `standby` になる。

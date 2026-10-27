@@ -54,6 +54,7 @@ pub mod usage;
 pub mod variant;
 pub mod variant_pin;
 pub mod variant_proof;
+pub mod versions;
 pub mod watch;
 
 pub const CAMPAIGN_SCHEMA: &str = "celeris.campaign-manifest/1";

@@ -612,6 +612,7 @@ fn campaign(i: &Input, problems: &[&str], lim: &Limits) -> CampaignManifest {
         ..ArmRouting::default()
     };
     CampaignManifest {
+        contract: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: "acceptance".into(),
         version: "v1".into(),

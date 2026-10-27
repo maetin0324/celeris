@@ -70,6 +70,7 @@ fn campaign(i: &Input, which: &str, n: usize, max_tokens: u64) -> CampaignManife
         })
         .collect();
     CampaignManifest {
+        contract: None,
         variant: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: which.into(),

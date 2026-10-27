@@ -360,6 +360,10 @@ pub fn api_settings(
         release,
         mode,
         role,
+        cos_policy_version: config
+            .cos
+            .enabled
+            .then(|| config.cos.triage.policy_version.clone()),
         // ADR-0043 D5（Phase 54）: 取り込みで使う `gh` の場所と merge の方法。
         github: task_api::GithubSettings {
             gh: config.github.gh.clone(),

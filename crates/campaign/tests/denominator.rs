@@ -37,6 +37,7 @@ fn campaign(i: &Input, n: usize, repeats: u32) -> CampaignManifest {
         routing: None,
     };
     CampaignManifest {
+        contract: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: "c1".into(),
         version: "v1".into(),

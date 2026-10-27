@@ -46,6 +46,7 @@ fn campaign(i: &Input, split: Split, n: usize, max_tokens: u64, repeats: u32) ->
         }),
     };
     CampaignManifest {
+        contract: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: "c1".into(),
         version: "v1".into(),

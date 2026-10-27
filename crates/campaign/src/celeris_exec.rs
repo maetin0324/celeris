@@ -21,8 +21,8 @@ use task_core::variant_wire::{CampaignOrgPin, CampaignVariantRef};
 use crate::{
     aggregate::Outcome,
     executor::{
-        ExecError, ExecResult, ExecStatus, Executor, ObservedRun, TaskRef, TokenUsage,
-        TrialRequest, Usage,
+        ExecError, ExecResult, ExecStatus, Executor, ObservedRun, ObservedVersions, TaskRef,
+        TokenUsage, TrialRequest, Usage,
     },
     manifest::{Config, ConfigId},
     variant::{OrgPin, VariantRef},
@@ -165,6 +165,9 @@ pub struct CelerisExecutor<T: Transport> {
     variant: Option<VariantRef>,
     /// variant が前提とする構成 pin（`VariantSpec.org`）。variant があるとき必須（POST の `campaign.variant_org`）。
     variant_org: Option<OrgPin>,
+    /// 測定 daemon の worker が起動する Claude Code（`--worker-program claude_code=<path>`）。試行の開始時に
+    /// sha256 と `--version` を観測する。無ければ Claude Code の版は観測できない（契約 revision の試行は拒否される）。
+    claude_code: Option<PathBuf>,
 }
 
 /// 1 回の走査で見た task 木。
@@ -282,7 +285,14 @@ impl<T: Transport> CelerisExecutor<T> {
             cluster_cancel_log,
             variant: None,
             variant_org: None,
+            claude_code: None,
         }
+    }
+
+    /// 試行の開始時に観測する Claude Code の実行ファイル（daemon の `[adapters.claude_code] command` と同じ実体）。
+    pub fn with_claude_code(mut self, program: Option<PathBuf>) -> Self {
+        self.claude_code = program;
+        self
     }
 
     /// manifest の variant 参照を固定する（省略 = 従来どおり）。
@@ -686,6 +696,25 @@ impl<T: Transport> Executor for CelerisExecutor<T> {
 
     fn routing(&self, req: &TrialRequest) -> Result<Value, String> {
         routing_override(req.config)
+    }
+
+    /// daemon の `GET /health`（release・単価表・CoS 方針の版）と、worker が起動する Claude Code の実体。
+    fn observe_versions(&self, _req: &TrialRequest) -> Result<ObservedVersions, String> {
+        let h = self.get("/api/v1/health")?;
+        let text = |k: &str| h.get(k).and_then(Value::as_str).map(String::from);
+        let claude_code = match &self.claude_code {
+            Some(p) => Some(crate::env_lock::pin_program(
+                p,
+                std::env::var_os("PATH").as_deref(),
+            )?),
+            None => None,
+        };
+        Ok(ObservedVersions {
+            release: text("release"),
+            claude_code,
+            pricing_version: text("pricing_version"),
+            cos_policy_version: text("cos_policy_version"),
+        })
     }
 
     fn lookup(&self, key: &str) -> Result<Option<TaskRef>, ExecError> {

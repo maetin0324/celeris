@@ -349,6 +349,7 @@ pub fn settings(
         releases: options.releases,
         integration_releases_dir: options.integration_releases_dir,
         release: options.release,
+        cos_policy_version: None,
         mode: options.mode,
         role: options.role,
         github: options.github,

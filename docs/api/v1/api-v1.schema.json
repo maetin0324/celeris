@@ -15128,6 +15128,13 @@
         "celeris_version": {
           "type": "string"
         },
+        "cos_policy_version": {
+          "description": "同 D4: CoS の受信箱振り分け方針の版（`[cos.triage] policy_version`）。CoS が無効なら `null`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "db": {
           "$ref": "#/$defs/DbInfo"
         },
@@ -15139,6 +15146,10 @@
           "type": "string"
         },
         "now": {
+          "type": "string"
+        },
+        "pricing_version": {
+          "description": "ADR 2026-10-27-trial-observed-versions D3: 費用推定に使う単価表の版（`task_core::pricing::PRICE_TABLE_VERSION`）。",
           "type": "string"
         },
         "release": {
@@ -15169,7 +15180,8 @@
         "db",
         "release",
         "mode",
-        "role"
+        "role",
+        "pricing_version"
       ],
       "type": "object"
     },

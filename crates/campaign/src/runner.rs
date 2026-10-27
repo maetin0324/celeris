@@ -13,7 +13,9 @@ use serde_json::{Value, json};
 use crate::{
     aggregate::Outcome,
     budget::{self, Gate, effective_cap},
-    executor::{ErrKind, ExecError, ExecResult, ExecStatus, Executor, TrialRequest, Usage},
+    executor::{
+        ErrKind, ExecError, ExecResult, ExecStatus, Executor, ObservedVersions, TrialRequest, Usage,
+    },
     global_ledger::{
         Admission, AttemptId, AttemptRow, AttemptState, Caps, GlobalLedger, Terminal,
         TrialAdmission,
@@ -26,6 +28,7 @@ use crate::{
     record::*,
     series,
     snapshot::{copy_tree, hash_tree},
+    versions,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -405,6 +408,7 @@ fn new_record(
         model: cfg.model.clone(),
         model_version: cfg.model_version.clone(),
         policy_version: cfg.policy_version.clone(),
+        observed_versions: None,
         workspace: String::new(),
         kb: String::new(),
         inputs: Vec::new(),
@@ -498,6 +502,7 @@ fn drive_async(
     budget: &Budget,
     arm: (u64, u64),
     shared: Option<(&GlobalLedger, &AttemptId)>,
+    versions: Option<ObservedVersions>,
 ) -> Result<Driven, String> {
     let ws_rel = format!("{rel}/workspace");
     let idem = key.idempotency_key();
@@ -512,7 +517,7 @@ fn drive_async(
     let mut task = known.as_ref().and_then(LedgerRow::task_ref);
     if known.is_none() {
         // 投入『前』に planned を fsync する。ここで落ちても冪等キーで再開できる。
-        ledger.plan(key, &ws_rel, exec.routing(req)?)?;
+        ledger.plan_with(key, &ws_rel, exec.routing(req)?, versions)?;
     }
     // 予約額（この試行の実効上限）も投入前に台帳へ残す。外部の終端を確認するまで解除しない。
     ledger.reserve(key, req.budget)?;
@@ -1047,8 +1052,35 @@ fn run_inner(
                 cost_micro_usd: None,
                 wall_secs: 0,
             };
+            // 契約 revision の試行は開始時に実際に動く版を観測し、宣言と照合する。不一致・観測不能はその試行だけ
+            // error（task は作らない）。台帳に既にある試行（投入済み・再開）は開始時の観測を使い、観測し直さない
+            // （ADR 2026-10-27-trial-observed-versions D2）。
+            let started = match m
+                .contract
+                .as_ref()
+                .and_then(|c| c.pinned_versions.get(&cid))
+            {
+                None => Ok(()),
+                Some(pins) => match ledger.get(&key).filter(|_| is_async) {
+                    Some(row) => {
+                        rec.observed_versions = row.versions.clone();
+                        Ok(())
+                    }
+                    None => match exec.observe_versions(&req) {
+                        Ok(v) => {
+                            let r = versions::verify(cfg, pins, &v);
+                            rec.observed_versions = Some(v);
+                            r
+                        }
+                        Err(e) => Err(format!(
+                            "{}: versions not observable: {e}",
+                            versions::VERSION_MISMATCH
+                        )),
+                    },
+                },
+            };
             // routing は投入前に決める。Err ならその試行だけ error（task は作らない）。
-            let pinned = exec.routing(&req);
+            let pinned = started.and_then(|()| exec.routing(&req));
             if let Ok(v) = &pinned
                 && cid != ConfigId::A
                 && !v.is_null()
@@ -1080,6 +1112,7 @@ fn run_inner(
                     &m.budget,
                     arm,
                     global.as_ref().zip(shared_id.as_ref()),
+                    rec.observed_versions.clone(),
                 )? {
                     Driven::Refused(e) => {
                         errored = Some(e);

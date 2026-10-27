@@ -50,6 +50,14 @@ fn variant_org_for(
     Ok(Some(spec.org))
 }
 
+/// B/C の worker が起動する Claude Code（`--worker-program claude=<program>`）。契約 revision の試行は開始時に
+/// この実体の sha256・版を観測する（ADR 2026-10-27-trial-observed-versions）。
+fn worker_claude(args: &[String]) -> Option<PathBuf> {
+    worker_program_args(args)
+        .into_iter()
+        .find_map(|w| w.strip_prefix("claude=").map(PathBuf::from))
+}
+
 /// `--worker-program <name>=<program>` の全指定（env-lock と preflight で同じ値を使う）。
 fn worker_program_args(args: &[String]) -> Vec<String> {
     args.iter()
@@ -624,7 +632,8 @@ fn run(args: Vec<String>) -> Result<String, String> {
                         out_dir.join("cluster-cancel.jsonl"),
                     )
                     .with_variant(m.variant.clone())
-                    .with_variant_org(variant_org);
+                    .with_variant_org(variant_org)
+                    .with_claude_code(worker_claude(&args));
                     // A が有効なときだけ A の実行器を作る（B/C のみの測定は A の program・account を要求しない）。
                     let a = if m.is_active(celeris_campaign::manifest::ConfigId::A) {
                         Some(a_executor(&args, &m, &out_dir, a_program()?)?)

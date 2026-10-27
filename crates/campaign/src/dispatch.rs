@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use crate::{
-    executor::{ExecError, ExecStatus, Executor, TaskRef, TrialRequest, Usage},
+    executor::{ExecError, ExecStatus, Executor, ObservedVersions, TaskRef, TrialRequest, Usage},
     manifest::ConfigId,
 };
 
@@ -56,6 +56,9 @@ impl<A: Executor, BC: Executor> Executor for ArmDispatch<A, BC> {
     }
     fn routing(&self, r: &TrialRequest) -> Result<Value, String> {
         self.by_req(r).ok_or_else(a_disabled)?.routing(r)
+    }
+    fn observe_versions(&self, r: &TrialRequest) -> Result<ObservedVersions, String> {
+        self.by_req(r).ok_or_else(a_disabled)?.observe_versions(r)
     }
     fn lookup(&self, key: &str) -> Result<Option<TaskRef>, ExecError> {
         // 腕は key だけでは分からないので、有効な側だけを引く（A 無効なら B/C だけ）。

@@ -12,11 +12,15 @@ use celeris_campaign::{
         CLUSTER_CANCEL_FILE, CelerisExecutor, HttpResponse, Transport, idempotency_label,
         routing_override,
     },
-    executor::{ExecError, ExecStatus, Executor, MockAsyncExecutor, TaskRef, TrialRequest},
+    env_lock::ProgramPin,
+    executor::{
+        ExecError, ExecStatus, Executor, MockAsyncExecutor, ObservedVersions, TaskRef, TrialRequest,
+    },
     ledger::{Ledger, LedgerState, TrialKey},
     manifest::{
-        ArmRouting, Budget, CampaignManifest, Config, ConfigId, InputRef, Secondary, SnapshotRef,
-        Split, Termination, manifest_hash,
+        ArmRouting, Budget, CONTRACT_REVISION_OPS_R1, CampaignManifest, Config, ConfigId,
+        ContractRevision, InputRef, PinnedVersions, Secondary, SnapshotRef, Split, Termination,
+        manifest_hash,
     },
     runner::{RunOptions, run},
 };
@@ -47,6 +51,9 @@ struct State {
     lose_next_post: bool,
     /// 次の label 照会を n 回だけ空にする（照会と投入の間の競合の再現）。
     hide_list: u32,
+    /// `GET /health` の本文（null なら 404。daemon の release・単価表・CoS 方針の版）。
+    health: Value,
+    health_gets: u32,
 }
 
 #[derive(Clone, Default)]
@@ -134,6 +141,14 @@ impl Transport for Fake {
         let (p, q) = path.split_once('?').unwrap_or((path, ""));
         let seg: Vec<&str> = p.trim_start_matches("/api/v1/").split('/').collect();
         match (method, seg.as_slice()) {
+            ("GET", ["health"]) => {
+                let mut s = self.st();
+                s.health_gets += 1;
+                if s.health.is_null() {
+                    return resp(404, json!({}));
+                }
+                resp(200, s.health.clone())
+            }
             ("GET", ["tasks"]) => {
                 let label = q
                     .split('&')
@@ -555,6 +570,9 @@ impl Executor for ByArm<'_> {
     fn routing(&self, r: &TrialRequest) -> Result<Value, String> {
         self.by_req(r).routing(r)
     }
+    fn observe_versions(&self, r: &TrialRequest) -> Result<ObservedVersions, String> {
+        self.by_req(r).observe_versions(r)
+    }
     fn lookup(&self, key: &str) -> Result<Option<TaskRef>, ExecError> {
         Ok(match self.bc.lookup(key)? {
             Some(t) => Some(t),
@@ -584,6 +602,7 @@ fn input() -> Input {
 
 fn campaign(i: &Input) -> CampaignManifest {
     CampaignManifest {
+        contract: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: "bc".into(),
         version: "v1".into(),
@@ -1084,4 +1103,324 @@ fn per_case_overshoot_bounded_and_ledger_matches() {
         rep.tokens_charged_total, observed,
         "ledger charge matches observed"
     );
+}
+
+// ---- 契約 revision: 試行の開始時に観測した版と宣言の照合（ADR 2026-10-27-trial-observed-versions） ----
+
+const CC_VERSION: &str = "2.1.3";
+
+/// fork 中の別 thread に書き込み fd を継がせない（ETXTBSY 回避）ため、shell に書かせる。
+fn write_executable(path: &Path, contents: &str) {
+    use std::io::Write;
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(r#"cat > "$1" && chmod 755 "$1""#)
+        .arg("sh")
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn writer");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(contents.as_bytes())
+        .expect("write");
+    assert!(child.wait().expect("wait").success());
+}
+
+/// 測定 daemon の worker が起動する Claude Code の代役（`--version` だけ答える）。中身を変えると sha256 が変わる。
+fn fake_claude(dir: &Path, extra: &str) -> (std::path::PathBuf, String) {
+    use sha2::Digest;
+    let p = dir.join("claude");
+    write_executable(
+        &p,
+        &format!("#!/bin/sh\n# {extra}\necho '{CC_VERSION} (Claude Code)'\n"),
+    );
+    let sha = format!("{:x}", sha2::Sha256::digest(fs::read(&p).expect("read")));
+    (p, sha)
+}
+
+fn ops_r1(sha: &str) -> ContractRevision {
+    let pin = |pricing: Option<&str>| PinnedVersions {
+        claude_code_version: CC_VERSION.into(),
+        claude_code_sha256: sha.into(),
+        pricing_version: pricing.map(String::from),
+        cos_policy_version: None,
+    };
+    let p = task_core::pricing::PRICE_TABLE_VERSION;
+    ContractRevision {
+        revision: CONTRACT_REVISION_OPS_R1.into(),
+        pinned_versions: [
+            (ConfigId::A, pin(None)),
+            (ConfigId::B, pin(Some(p))),
+            (ConfigId::C, pin(Some(p))),
+        ]
+        .into(),
+    }
+}
+
+/// 宣言どおりの daemon（release は cfg の harness_version "1"）。
+fn good_health() -> Value {
+    json!({"release": "1", "pricing_version": task_core::pricing::PRICE_TABLE_VERSION,
+        "cos_policy_version": null})
+}
+
+struct OpsRun {
+    d: tempfile::TempDir,
+    m: CampaignManifest,
+    i: Input,
+    f: Fake,
+    a: MockAsyncExecutor,
+    bc: CelerisExecutor<Fake>,
+    opts: RunOptions,
+}
+
+/// 宣言は常に `pinned_sha`（宣言時の Claude Code）。`claude_now` は試行の開始時にある実体の中身。
+fn ops_run(health: Value, claude_now: &str) -> OpsRun {
+    let d = tempfile::tempdir().expect("dir");
+    let pinned_sha = fake_claude(d.path(), "pinned").1;
+    let (claude, sha_now) = fake_claude(d.path(), claude_now);
+    let i = input();
+    let mut m = campaign(&i);
+    m.contract = Some(ops_r1(&pinned_sha));
+    m.validate().expect("valid ops-r1 manifest");
+    let f = Fake::new();
+    f.st().health = health;
+    let a = MockAsyncExecutor::new(0).with_versions(ObservedVersions {
+        claude_code: Some(ProgramPin {
+            path: claude.to_string_lossy().into_owned(),
+            sha256: sha_now,
+            version: format!("{CC_VERSION} (Claude Code)"),
+        }),
+        ..ObservedVersions::default()
+    });
+    let bc = exec(&f, d.path(), 1800).with_claude_code(Some(claude));
+    let opts = RunOptions {
+        global_ledger: None,
+        out: d.path().join("out"),
+        ..RunOptions::default()
+    };
+    OpsRun {
+        d,
+        m,
+        i,
+        f,
+        a,
+        bc,
+        opts,
+    }
+}
+
+impl OpsRun {
+    fn run(&self) -> celeris_campaign::runner::RunReport {
+        let by = ByArm {
+            a: &self.a,
+            bc: &self.bc,
+        };
+        run(&self.m, &self.i, &by, &self.opts).expect("run")
+    }
+    fn records(&self) -> Vec<celeris_campaign::record::TrialRecord> {
+        fs::read_to_string(self.opts.out.join("trials.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("record"))
+            .collect()
+    }
+    fn record(&self, id: ConfigId) -> celeris_campaign::record::TrialRecord {
+        self.records()
+            .into_iter()
+            .find(|r| r.config == id)
+            .expect("record")
+    }
+    fn ledger_task(&self, id: ConfigId) -> String {
+        let key = TrialKey {
+            manifest_sha256: self.m.compute_sha256().expect("hash"),
+            problem_id: "p0".into(),
+            arm: id,
+            trial_no: 1,
+            rep: 1,
+        };
+        Ledger::open(&self.opts.out)
+            .expect("ledger")
+            .get(&key)
+            .and_then(|r| r.task_id.clone())
+            .expect("task id")
+    }
+}
+
+#[test]
+fn ops_r1_records_observed_versions_from_the_fake_daemon_and_binary() {
+    let o = ops_run(good_health(), "pinned");
+    let rep = o.run();
+    assert_eq!(rep.executor_errors, 0);
+    assert_eq!(o.f.posts(), 2, "B and C are submitted");
+    for id in [ConfigId::B, ConfigId::C] {
+        o.f.finish(&o.ledger_task(id), "done", 100);
+    }
+    o.run();
+    let b = o.record(ConfigId::B);
+    let v = b.observed_versions.expect("B observed_versions");
+    assert_eq!(v.release.as_deref(), Some("1"));
+    assert_eq!(
+        v.pricing_version.as_deref(),
+        Some(task_core::pricing::PRICE_TABLE_VERSION)
+    );
+    let cc = v.claude_code.expect("claude code observed");
+    assert_eq!(cc.version, format!("{CC_VERSION} (Claude Code)"));
+    assert_eq!(cc.path, o.d.path().join("claude").to_string_lossy());
+    // A は daemon を通らない: release・単価表は観測しない。
+    let a = o.record(ConfigId::A).observed_versions.expect("A observed");
+    assert!(a.release.is_none() && a.pricing_version.is_none());
+    assert!(a.claude_code.is_some());
+    let viol = celeris_campaign::checker::check(&o.m, &o.opts.out).violations;
+    assert!(
+        !viol.iter().any(|x| x.contains("observed_versions")),
+        "{viol:?}"
+    );
+    // 記録を書き換えて宣言と違う版にすると checker が落とす。
+    let p = o.opts.out.join("trials.jsonl");
+    let text = fs::read_to_string(&p).expect("trials");
+    assert!(text.contains(r#""release":"1""#));
+    fs::write(
+        &p,
+        text.replace(r#""release":"1""#, r#""release":"999999999999""#),
+    )
+    .expect("write");
+    let viol = celeris_campaign::checker::check(&o.m, &o.opts.out).violations;
+    assert!(
+        viol.iter()
+            .any(|x| x.contains("observed_versions release: observed 999999999999")),
+        "{viol:?}"
+    );
+}
+
+#[test]
+fn ops_r1_rejects_release_mismatch_before_submitting() {
+    let o = ops_run(
+        json!({"release": "0123456789ab",
+            "pricing_version": task_core::pricing::PRICE_TABLE_VERSION}),
+        "pinned",
+    );
+    let rep = o.run();
+    assert_eq!(rep.executor_errors, 2, "B and C refused");
+    assert_eq!(o.f.posts(), 0, "no task is created on a version mismatch");
+    for id in [ConfigId::B, ConfigId::C] {
+        let r = o.record(id);
+        assert_eq!(r.outcome, Outcome::Error);
+        let e = r.error.clone().unwrap_or_default();
+        assert!(
+            e.starts_with("version_mismatch:") && e.contains("release: observed 0123456789ab"),
+            "{e}"
+        );
+        // 拒否した試行にも観測値を残す（宣言の写しではない）。
+        assert_eq!(
+            r.observed_versions.and_then(|v| v.release).as_deref(),
+            Some("0123456789ab")
+        );
+        assert_eq!(r.harness_version, "1", "declared copy stays as declared");
+    }
+    // A（版は一致）は拒否されずに走る。
+    assert!(o.record(ConfigId::A).error.is_none());
+}
+
+#[test]
+fn ops_r1_rejects_a_replaced_claude_code_binary_and_pricing_mismatch() {
+    let mut h = good_health();
+    h["pricing_version"] = json!("2026-11-new");
+    let o = ops_run(h, "replaced");
+    let rep = o.run();
+    assert_eq!(rep.executor_errors, 3, "every arm runs the replaced binary");
+    assert_eq!(o.f.posts(), 0);
+    let e = o.record(ConfigId::B).error.unwrap_or_default();
+    assert!(e.contains("claude_code.sha256: observed"), "{e}");
+    assert!(e.contains("pricing_version: observed 2026-11-new"), "{e}");
+    let a = o.record(ConfigId::A).error.unwrap_or_default();
+    assert!(a.contains("claude_code.sha256"), "{a}");
+}
+
+#[test]
+fn ops_r1_rejects_when_the_daemon_does_not_report_versions() {
+    let o = ops_run(Value::Null, "pinned");
+    o.run();
+    assert_eq!(o.f.posts(), 0);
+    let e = o.record(ConfigId::B).error.unwrap_or_default();
+    assert!(
+        e.starts_with("version_mismatch: versions not observable"),
+        "{e}"
+    );
+}
+
+#[test]
+fn ops_r1_resume_keeps_the_start_observation() {
+    let o = ops_run(good_health(), "pinned");
+    o.run();
+    assert_eq!(o.f.posts(), 2);
+    // 投入後に daemon が差し替わっても、走っている試行は開始時の観測で記録する（観測し直さない）。
+    o.f.st().health = json!({"release": "fedcba987654", "pricing_version": "x"});
+    for id in [ConfigId::B, ConfigId::C] {
+        o.f.finish(&o.ledger_task(id), "done", 100);
+    }
+    let rep = o.run();
+    assert_eq!(rep.executor_errors, 0);
+    let v = o.record(ConfigId::C).observed_versions.expect("observed");
+    assert_eq!(v.release.as_deref(), Some("1"));
+}
+
+#[test]
+fn manifest_without_contract_keeps_pinned_bundle_behaviour() {
+    let d = tempfile::tempdir().expect("dir");
+    let i = input();
+    let m = campaign(&i);
+    let before = m.compute_sha256().expect("hash");
+    let f = Fake::new();
+    let a = MockAsyncExecutor::new(0);
+    let bc = exec(&f, d.path(), 1800);
+    let opts = RunOptions {
+        global_ledger: None,
+        out: d.path().join("out"),
+        ..RunOptions::default()
+    };
+    run(&m, &i, &ByArm { a: &a, bc: &bc }, &opts).expect("run");
+    assert_eq!(f.st().health_gets, 0, "no observation without a contract");
+    assert_eq!(f.posts(), 2);
+    let text = fs::read_to_string(opts.out.join("trials.jsonl")).expect("trials");
+    assert!(!text.contains("observed_versions"));
+    // 欄を足しても既存 manifest の正規形（hash）は変わらない。
+    let v = serde_json::to_value(&m).expect("json");
+    assert!(v.get("contract").is_none());
+    assert_eq!(m.compute_sha256().expect("hash"), before);
+}
+
+#[test]
+fn contract_declaration_is_validated() {
+    let i = input();
+    let sha = "a".repeat(64);
+    let mut m = campaign(&i);
+    let mut c = ops_r1(&sha);
+    c.revision = "judged-scope-v2".into();
+    m.contract = Some(c);
+    assert!(m.validate().unwrap_err().contains("unknown"));
+    let mut c = ops_r1(&sha);
+    c.pinned_versions.remove(&ConfigId::C);
+    m.contract = Some(c);
+    assert!(m.validate().unwrap_err().contains("C is not pinned"));
+    let mut c = ops_r1(&sha);
+    if let Some(p) = c.pinned_versions.get_mut(&ConfigId::B) {
+        p.pricing_version = None;
+    }
+    m.contract = Some(c);
+    assert!(
+        m.validate()
+            .unwrap_err()
+            .contains("pricing_version is required")
+    );
+    let mut c = ops_r1(&sha);
+    if let Some(p) = c.pinned_versions.get_mut(&ConfigId::A) {
+        p.pricing_version = Some("x".into());
+    }
+    m.contract = Some(c);
+    assert!(m.validate().unwrap_err().contains("B/C only"));
+    m.contract = Some(ops_r1("short"));
+    assert!(m.validate().unwrap_err().contains("64 hex"));
 }

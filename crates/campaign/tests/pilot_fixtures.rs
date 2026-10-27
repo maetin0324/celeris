@@ -63,6 +63,7 @@ fn build_pilot(input: &Input) -> CampaignManifest {
         routing: None,
     };
     let mut m = CampaignManifest {
+        contract: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: "pilot-dev-1".into(),
         version: "1".into(),

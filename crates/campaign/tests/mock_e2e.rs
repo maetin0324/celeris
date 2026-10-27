@@ -39,6 +39,7 @@ fn campaign(i: &Input, n: usize, split: Split, max_tokens: u64) -> CampaignManif
         routing: None,
     };
     CampaignManifest {
+        contract: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: "e2e".into(),
         version: "v1".into(),

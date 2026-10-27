@@ -132,6 +132,9 @@ pub struct LedgerRow {
     pub comm_failures: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// 試行の開始時（planned にした時）に観測した版。契約 revision の manifest の試行だけ。再開しても観測し直さない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versions: Option<crate::versions::ObservedVersions>,
 }
 
 impl LedgerRow {
@@ -255,6 +258,17 @@ impl Ledger {
         workspace: &str,
         routing: Value,
     ) -> Result<&LedgerRow, String> {
+        self.plan_with(key, workspace, routing, None)
+    }
+
+    /// `plan` に開始時の観測版を載せる（投入前の同じ 1 行に fsync する）。
+    pub fn plan_with(
+        &mut self,
+        key: &TrialKey,
+        workspace: &str,
+        routing: Value,
+        versions: Option<crate::versions::ObservedVersions>,
+    ) -> Result<&LedgerRow, String> {
         if !self.rows.contains_key(key) {
             self.append(LedgerRow {
                 schema: LEDGER_SCHEMA.into(),
@@ -274,6 +288,7 @@ impl Ledger {
                 reserved: None,
                 comm_failures: 0,
                 last_error: None,
+                versions,
             })?;
         }
         self.rows

@@ -29,6 +29,10 @@ pub struct Health {
     pub mode: String,
     /// ADR-0040 D4: `active` / `standby` / `draining` / `verify`。
     pub role: String,
+    /// ADR 2026-10-27-trial-observed-versions D3: 費用推定に使う単価表の版（`task_core::pricing::PRICE_TABLE_VERSION`）。
+    pub pricing_version: String,
+    /// 同 D4: CoS の受信箱振り分け方針の版（`[cos.triage] policy_version`）。CoS が無効なら `null`。
+    pub cos_policy_version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

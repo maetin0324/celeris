@@ -207,6 +207,7 @@ fn input(n: usize) -> Input {
 
 fn campaign(i: &Input, n: usize, b: Option<ArmRouting>, c: Option<ArmRouting>) -> CampaignManifest {
     CampaignManifest {
+        contract: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: "pin".into(),
         version: "v1".into(),

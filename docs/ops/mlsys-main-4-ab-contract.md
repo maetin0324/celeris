@@ -155,6 +155,7 @@ CoS を含む通常運用と、境界外の「外部 AI による支援」を報
 - **U2 実支出が両腕で取れない**: B の `cash_cost_usd` は常に欠測、A は欄が無い。subscription の account では試行単位の請求は存在しない。cash は「取得不能」として固定し、quota と併記する方針を final-freeze で確定する必要がある。
 - **U3 subagent の消費の数え方**: B の run は subagent を禁止し、Celeris は main thread の usage だけを数える。A は Agent/Task を使え、A の token は `result.usage` から取る。`result.usage` が subagent の消費を含むかを確かめておらず、A が subagent を使った試行で token・費用を過少に数えるおそれがある。stream-json の subagent 行の有無を試行ごとに記録する必要がある。
 - **U4 Claude Code の版が別々に固定される**: A は `A_PROGRAM`・`A_VERSION`、B の run は測定 daemon の `[adapters.claude_code] command` で、同じ実体・同じ版であることを照合する検査が無い（`final.json` の B `harness_version` は Celeris の release で、run の Claude Code 版ではない）。
+  新しい契約 revision `main-4-ops-r1` の manifest（`contract`）では、試行の開始時に daemon の release と両腕が起動する Claude Code の sha256・版を `observed_versions` に記録し、宣言と違えば試行を拒否する（ADR 2026-10-27-trial-observed-versions）。この文書の revision `judged-scope-v2` と固定済み bundle の条件は変えない。
 - **U5 B の前置きの固定**: B の run の prompt に載る Celeris の前置き（profile・知識・記憶・必須規則）は、試行の入力 hash（`initial_info`・materials・kb snapshot）に含まれない。測定 daemon の DB（org・memory）が試行ごとに同じであることを示す記録が無い。
 - **U6 `initial_info` と材料 hash の食い違い**: `final.json` の `experiment_sets.main.fixed.initial_info` は `dab3ca05d01adf1da268c8ec35e24f33249ca3cc02083e0a2e6b487d0c5a800d`（mlsys-main-1 の材料 hash）で、`snapshot.materials_sha256` と `lock.json` の `materials_sha256` は `ae9007f5f32c1ea4230001ca30c7e47fc6ea1cf51e142ba2e921dbb613af32d4`。checker の `reconcile_set_evidence` はこの差を違反にする。final-freeze で `initial_info` を材料 hash に合わせ、campaign hash を作り直す必要がある。
 - **U7 per_arm と per_case が同じ値**: per_arm 1,500,000 = per_case 1,500,000 で、1 腕に K2・K4 の 2 試行がある。先の試行が上限近くまで使うと、後の試行の上限（`min(per_case, per_arm の残り)`）が小さくなり、腕ごと・順番ごとに条件が変わる。pilot（各腕 1 試行）では起きないが、K2 を足す段で確かめる。
@@ -162,3 +163,4 @@ CoS を含む通常運用と、境界外の「外部 AI による支援」を報
 - **U9 A の自動 retry が観測できない**: A の `auto_retries`・待ち（`event_waits`）は欠測のまま（成功契約の未解決にも記載）。B の内部 retry だけが数に出るので、retry の多さを A/B の差として書かない。
 - **U10 quota の割り振り**: `celeris-campaign usage` の値は account 全体の使用率で、主測定の期間に本番 Celeris や人の会話が同じ account を使うと混ざる。測定専用 account にするか、混ざることを報告に書くかを final-freeze で決める必要がある。
 - **U11 単価表の版**: `task_core::pricing` の単価表は 2026-09 の概算で、版の識別子を記録に残していない。cache write の単価は 1 種類で、5 分・1 時間の cache を区別しない。
+  版の識別子は `task_core::pricing::PRICE_TABLE_VERSION`（`GET /health` の `pricing_version`）として足した。`main-4-ops-r1` の B/C は `pricing_version` を宣言し、試行の開始時に照合する（同 ADR D3）。cache write の区別は未整合のまま。

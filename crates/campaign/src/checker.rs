@@ -678,6 +678,26 @@ pub fn check_expected(
                     "{tag}: harness/model/policy version differs from the manifest"
                 ));
             }
+            // 契約 revision: 実行した試行は開始時の観測版を持ち、宣言と一致する（ADR 2026-10-27-trial-observed-versions）。
+            if let (Some(pins), Some(c)) = (
+                m.contract
+                    .as_ref()
+                    .and_then(|k| k.pinned_versions.get(&r.config)),
+                cfg_by_id.get(&r.config),
+            ) && r.ran()
+                && r.reason.as_deref() != Some(REASON_EXECUTOR_ERROR)
+            {
+                match &r.observed_versions {
+                    None => v.push(format!(
+                        "{tag}: observed_versions missing (contract revision)"
+                    )),
+                    Some(o) => {
+                        for e in crate::versions::mismatches(c, pins, o) {
+                            v.push(format!("{tag}: observed_versions {e}"));
+                        }
+                    }
+                }
+            }
             // 実効 routing: 記録した値は manifest の arm 設定から導いた値と一致する（A は持たない）。
             if r.config == ConfigId::A {
                 if r.routing.is_some() {

@@ -57,6 +57,7 @@ fn campaign(i: &Input, n: usize, max_parallel: u32, basis: TokenBasis) -> Campai
         routing: None,
     };
     CampaignManifest {
+        contract: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: "pilot-wiring".into(),
         version: "v1".into(),

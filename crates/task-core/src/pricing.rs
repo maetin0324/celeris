@@ -18,6 +18,10 @@ struct Price {
     cache_write_per_million: Option<f64>,
 }
 
+/// `PRICE_TABLE` の版 ID（ADR 2026-10-27-trial-observed-versions D3）。単価・行を変えたら必ず変える。
+/// daemon は `GET /health` の `pricing_version` で公開し、campaign は試行の開始時に観測して宣言と照合する。
+pub const PRICE_TABLE_VERSION: &str = "2026-09-approx-1";
+
 /// 前方一致で引く単価表（先に書いた行が優先。長い/具体的なプレフィックスを先に置く）。
 /// 2026-09 時点の公開価格からの概算スナップショット。
 const PRICE_TABLE: &[(&str, Price)] = &[

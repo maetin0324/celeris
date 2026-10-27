@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 
 pub use crate::ledger::TaskRef;
 pub use crate::record::ObservedRun;
+pub use crate::versions::ObservedVersions;
 use crate::{
     aggregate::Outcome,
     manifest::{Cap, Config, ConfigId},
@@ -138,6 +139,12 @@ pub trait Executor {
         Ok(Value::Null)
     }
 
+    /// 試行の開始時（投入前）に、実際に動く版を観測する（ADR 2026-10-27-trial-observed-versions）。
+    /// manifest が契約 revision を宣言したときだけ呼ばれる。観測できない欄は `None` にし、宣言の値を返してはならない。
+    fn observe_versions(&self, _req: &TrialRequest) -> Result<ObservedVersions, String> {
+        Ok(ObservedVersions::default())
+    }
+
     /// 冪等キーで既に投入済みの task を照会する。応答喪失・再起動後の再開手順の第 1 段。
     fn lookup(&self, _key: &str) -> Result<Option<TaskRef>, ExecError> {
         Ok(None)
@@ -216,6 +223,8 @@ pub struct MockExecutor {
     script: BTreeMap<(ConfigId, String), MockStep>,
     /// script に無い試行は (config, problem) の hash から決める。false なら常に Pass。
     seeded: bool,
+    /// `observe_versions` が返す観測（試験用。無ければ何も観測できない）。
+    versions: Option<ObservedVersions>,
 }
 
 impl MockExecutor {
@@ -223,6 +232,7 @@ impl MockExecutor {
         Self {
             script,
             seeded: false,
+            versions: None,
         }
     }
 
@@ -231,7 +241,14 @@ impl MockExecutor {
         Self {
             script: BTreeMap::new(),
             seeded: true,
+            versions: None,
         }
+    }
+
+    /// 試行の開始時の観測を固定する（契約 revision の照合の試験用）。
+    pub fn with_versions(mut self, v: ObservedVersions) -> Self {
+        self.versions = Some(v);
+        self
     }
 
     fn step(&self, req: &TrialRequest) -> MockStep {
@@ -262,6 +279,10 @@ impl Executor for MockExecutor {
 
     fn simulated(&self) -> bool {
         true
+    }
+
+    fn observe_versions(&self, _req: &TrialRequest) -> Result<ObservedVersions, String> {
+        Ok(self.versions.clone().unwrap_or_default())
     }
 
     fn execute(&self, req: &TrialRequest) -> Result<ExecStatus, String> {
@@ -307,6 +328,8 @@ pub struct MockAsyncExecutor {
     remote: Mutex<MockRemote>,
     /// task を Done にするまでに Wait を返す poll 回数。
     pub wait_polls: u32,
+    /// `observe_versions` が返す観測（試験用。無ければ何も観測できない）。
+    versions: Option<ObservedVersions>,
 }
 
 #[derive(Default)]
@@ -332,7 +355,14 @@ impl MockAsyncExecutor {
         Self {
             remote: Mutex::default(),
             wait_polls,
+            versions: None,
         }
+    }
+
+    /// 試行の開始時の観測を固定する（契約 revision の照合の試験用）。
+    pub fn with_versions(mut self, v: ObservedVersions) -> Self {
+        self.versions = Some(v);
+        self
     }
 
     fn remote(&self) -> std::sync::MutexGuard<'_, MockRemote> {
@@ -397,6 +427,10 @@ impl Executor for MockAsyncExecutor {
 
     fn execute(&self, _req: &TrialRequest) -> Result<ExecStatus, String> {
         Err("mock-async is driven via submit/poll".into())
+    }
+
+    fn observe_versions(&self, _req: &TrialRequest) -> Result<ObservedVersions, String> {
+        Ok(self.versions.clone().unwrap_or_default())
     }
 
     fn is_async(&self) -> bool {

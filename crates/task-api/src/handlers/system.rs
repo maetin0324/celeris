@@ -47,6 +47,8 @@ pub(super) async fn health(State(state): State<ApiState>, RawQuery(raw): RawQuer
             release: inner.release.clone(),
             mode: inner.mode.as_str().to_string(),
             role: inner.role.get().as_str().to_string(),
+            pricing_version: task_core::pricing::PRICE_TABLE_VERSION.to_string(),
+            cos_policy_version: inner.cos_policy_version.clone(),
         },
     ))
 }

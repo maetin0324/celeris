@@ -36,6 +36,7 @@ fn campaign(i: &Input) -> CampaignManifest {
         routing: None,
     };
     CampaignManifest {
+        contract: None,
         schema: celeris_campaign::CAMPAIGN_SCHEMA.into(),
         campaign_id: "dep".into(),
         version: "v1".into(),

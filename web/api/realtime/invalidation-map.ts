@@ -171,6 +171,12 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   // ADR-0118 / ADR-0120: review 前同期と integration repair（TaskDetail・受信箱の Failed 項目に出る）。
   review_target_synced: { sets: ["T", "E"] },
   review_target_advanced: { sets: ["T", "E"] },
+  // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse: reviewer 合格の束縛と再利用（詳細と timeline のみ）、
+  // 再同期の上限での停止・再開（受信箱 review_resync_halted と通知が変わる）。
+  reviewer_passed: { sets: ["T", "E"] },
+  reviewer_pass_reused: { sets: ["T", "E"] },
+  review_resync_halted: { sets: ["T", "E", "R", "N"] },
+  review_resync_resumed: { sets: ["T", "E", "R"] },
   // ADR 2026-10-23: review が評価した必須検査の結果を基底・候補 SHA に束縛して残す（状態は変えない。詳細と timeline のみ）。
   required_checks_evaluated: { sets: ["T", "E"] },
   merge_candidate_stale: { sets: ["T", "E", "L"] },

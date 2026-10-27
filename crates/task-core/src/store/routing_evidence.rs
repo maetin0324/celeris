@@ -163,7 +163,7 @@ impl SqliteStore {
             window,
             actor,
         } = change;
-        if !(matches!(actor.as_str(), "human" | "daemon") || crate::is_principal_actor(&actor)) {
+        if !(matches!(actor.as_str(), "human" | "daemon") || crate::is_principal_actor(actor)) {
             return Err(StoreError::Invalid(
                 "routing stage actor must be human, daemon or an API principal".into(),
             ));

@@ -264,7 +264,10 @@ candidates = [{{ source = "fake", model = "fake" }}]
         let token = format!("tok-e2e-phase55-{}-{}", std::process::id(), self.port);
         std::fs::write(self.root.join("api.token"), format!("{token}\n")).unwrap();
         self.token = Some(token);
-        format!("{}\ntoken_file = \"api.token\"", self.api_listen())
+        format!(
+            "{}\n\n[[api.tokens]]\nprincipal = \"operator:test\"\ntoken_file = \"api.token\"",
+            self.api_listen()
+        )
     }
 
     fn workspace(&self, name: &str) -> String {
@@ -1012,14 +1015,17 @@ fn api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values()
     );
     assert_eq!(bad.child.wait().unwrap().code(), Some(2));
     assert!(
-        bad.log_text().contains("token_file is required"),
+        bad.log_text().contains("[[api.tokens]] is required"),
         "{}",
         bad.log_text()
     );
     drop(bad);
 
     std::fs::write(env.root.join("api.token"), "  tok-9f8e7d\n").unwrap();
-    let api = format!("{}\ntoken_file = \"api.token\"", env.api_listen());
+    let api = format!(
+        "{}\n\n[[api.tokens]]\nprincipal = \"operator:test\"\ntoken_file = \"api.token\"",
+        env.api_listen()
+    );
     let config = env.write_config(&script, &api);
     let mut daemon = env.start_celeris(&config);
     env.wait_api(&mut daemon);
@@ -1337,9 +1343,13 @@ impl BrowserFixture {
         let signer = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
         std::fs::write(env.root.join("gui.pub"), signer.public_key().as_ref()).unwrap();
         let script = env.write_script("sleep 30");
+        // `[[api.tokens]]` の後ろに書いた欄は token の表に入るので、`[api]` の欄を前に置く。
+        let with_token = env.api_listen_with_token();
+        let (listen, tokens) = with_token
+            .split_once("\n\n[[api.tokens]]")
+            .expect("api.tokens block");
         let api = format!(
-            "{}\nbrowser_attestation_public_key_file = \"gui.pub\"\nbrowser_credentiald_control_socket = \"broker/control.sock\"",
-            env.api_listen_with_token()
+            "{listen}\nbrowser_attestation_public_key_file = \"gui.pub\"\nbrowser_credentiald_control_socket = \"broker/control.sock\"\n\n[[api.tokens]]{tokens}"
         );
         let config = env.write_config(&script, &api);
         let seed = env.add(&["--title", "fixture", "--check-cmd", "true"]);

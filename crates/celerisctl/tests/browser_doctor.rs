@@ -17,7 +17,7 @@ fn serve(dir: &std::path::Path, items: Value) -> (std::path::PathBuf, std::threa
     std::fs::write(
         &config,
         format!(
-            "[api]\nlisten = '{}'\ntoken_file = 'token'\n[db]\npath = 'must-not-create.db'\n",
+            "[api]\nlisten = '{}'\n[[api.tokens]]\nprincipal = 'operator:test'\ntoken_file = 'token'\n[db]\npath = 'must-not-create.db'\n",
             listener.local_addr().unwrap()
         ),
     )

@@ -501,6 +501,9 @@ org_include = "org.toml"
 
 [api]
 listen = "{addr}"
+
+[[api.tokens]]
+principal = "operator:test"
 token_file = "api.token"
 
 [adapters.fake]

@@ -186,7 +186,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
         //   5 GiB を切ると dispatch が保留され、t1 が始まらない（台本の対象外の環境要因）。
         let token_line = if let Some(token) = token {
             std::fs::write(self.root.join("api.token"), token).unwrap();
-            "token_file = \"api.token\"\n"
+            "\n[[api.tokens]]\nprincipal = \"operator:test\"\ntoken_file = \"api.token\"\n"
         } else {
             ""
         };

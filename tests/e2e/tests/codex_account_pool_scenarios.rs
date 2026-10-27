@@ -186,7 +186,7 @@ echo '{"type":"turn.completed"}'
         let path = self.root.join("config.toml");
         let token_line = if let Some(token) = token {
             std::fs::write(self.root.join("api.token"), token).unwrap();
-            "token_file = \"api.token\"\n"
+            "\n[[api.tokens]]\nprincipal = \"operator:test\"\ntoken_file = \"api.token\"\n"
         } else {
             ""
         };

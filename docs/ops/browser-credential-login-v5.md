@@ -70,7 +70,8 @@ sqlite3 "file:/local/celeris/data/db/celeris.sqlite3?mode=ro" "select release,ro
 
 昇格後の credentiald の切り替えは promote.sh が行う（旧 `celeris-credentiald@<旧>` を止め、新を起こし、3 秒後も active なのを確かめる。
 rollback.sh も同じ。ADR 2026-10-27-promote-switches-credentiald）。vault は `CELERIS_CREDENTIALD_DATA_DIR` にあり残る。登録中の稼働
-session は memory だけなので、browser run が動いていないときに昇格する。promote.sh が「credentiald switch failed」で終わったときだけ、手で行う。
+session は memory だけなので、browser run が動いていないときに昇格する。promote.sh・rollback.sh が exit 3（「credentiald switch failed」、
+release に `credentiald_switch_failed.json`）で終わったときだけ、手で行う。daemon の昇格・rollback はその時点で済んでいる。
 
 ```sh
 systemctl --user list-units 'celeris*' --no-pager

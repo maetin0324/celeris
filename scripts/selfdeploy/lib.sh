@@ -141,6 +141,25 @@ sd_switch_credentiald() {
   sd_log "credentiald: $new_unit is active"
 }
 
+# 昇格・rollback が済んだ後（link の付け替え・promoted.json の後）に呼ぶ。切り替えの失敗は昇格の取り消しでも
+# promote_failed.json でもなく、release の credentiald_switch_failed.json に残して 1 を返す（成功したら消す）。
+sd_credentiald_after_switch() {
+  local rel="$1" new="$2" old="${3:-}"
+  if sd_switch_credentiald "$new" "$old"; then
+    rm -f "$rel/credentiald_switch_failed.json"
+    return 0
+  fi
+  {
+    printf '{\n'
+    printf '  "failed_at": %s,\n' "$(sd_json_str "$(sd_ts)")"
+    printf '  "from": %s,\n' "$(sd_json_str "$old")"
+    printf '  "error": %s\n' "$(sd_json_str "$(tail -n 20 "${SD_LOG_FILE:-/dev/null}" 2>/dev/null | tr -d '\r')")"
+    printf '}\n'
+  } >"$rel/credentiald_switch_failed.json" 2>/dev/null || true
+  sd_log "credentiald switch failed (recorded in $rel/credentiald_switch_failed.json). By hand: systemctl --user stop celeris-credentiald@${old:-<old>}.service; systemctl --user reset-failed celeris-credentiald@$new.service; systemctl --user start celeris-credentiald@$new.service; then celerisctl browser doctor"
+  return 1
+}
+
 # ---- JSON（python3 を優先。無ければ jq） -----------------------------------
 
 if command -v python3 >/dev/null 2>&1; then

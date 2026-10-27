@@ -153,8 +153,6 @@ if [ -n "$CUR" ]; then
   systemctl --user disable "celeris@$CUR" || sd_log "warning: disable celeris@$CUR failed"
 fi
 bash "$(dirname "${BASH_SOURCE[0]}")/web-follow.sh" "$PREV" "$CUR" || sd_die "web rollback failed; daemon restored but links unchanged"
-sd_switch_credentiald "$PREV" "$CUR" \
-  || sd_die "daemon rolled back, but the credentiald switch failed: stop celeris-credentiald@${CUR:-<current>}.service and start celeris-credentiald@$PREV.service by hand (links unchanged)"
 if [ -n "$CUR" ] && [ -d "$(sd_release_dir "$CUR")" ]; then
   sd_set_link "$SD_PREVIOUS" "$CUR"
 fi
@@ -162,3 +160,8 @@ sd_set_link "$SD_CURRENT" "$PREV"
 sd_clear_promoting "$PREV"
 PROMOTING_WRITTEN=false
 sd_log "rolled back to $PREV with a restored DB. Lost: everything after $SRC was taken."
+# credentiald は link の付け替え・印の片付けの後に切り替える（失敗しても rollback は取り消さない）。
+if ! sd_credentiald_after_switch "$PREV_DIR" "$PREV" "$CUR"; then
+  echo "rollback.sh: rolled back to $PREV, but the credentiald switch failed (see $PREV_DIR/credentiald_switch_failed.json)" >&2
+  exit 3
+fi

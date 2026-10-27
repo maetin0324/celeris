@@ -71,10 +71,13 @@ REL="$(sd_release_dir "$SHA12")"
 # ADR-0040 付記 2026-10-02: start の直前に置く昇格中の印（`$REL/promoting.json`）も、成功・失敗の
 # どちらでもここで消す（`update_links` の直後に消し損ねた場合、`sd_die` / `set -e` / シグナルでの途中終了）。
 PROMOTING_WRITTEN=false
+PROMOTED_RECORDED=false
 record_promote_failure() {
   local ec=$?
   if [ "$PROMOTING_WRITTEN" = true ]; then sd_clear_promoting "$SHA12" || true; fi
   [ "$ec" -eq 0 ] && return
+  # promoted.json を書いた後の失敗（credentiald の切り替え）は昇格の失敗ではない。
+  [ "$PROMOTED_RECORDED" = true ] && return
   [ -d "$REL" ] || return
   {
     printf '{\n'
@@ -387,7 +390,6 @@ promote_live() {
 
   follow_web
   update_links
-  switch_credentiald
   sd_log "live handoff complete. The old celeris keeps draining its runs; watch it with status.sh."
 }
 
@@ -474,15 +476,7 @@ promote_stop_start() {
 
   follow_web
   update_links
-  switch_credentiald
   sd_log "stop-start promotion complete"
-}
-
-# 引き継ぎ・link 付け替えの後に旧 credentiald を止めて新を起こす（lib.sh sd_switch_credentiald）。daemon の昇格は
-# 済んでいるので、失敗は昇格の取り消しではなく、人への知らせ（exit 1）にする。
-switch_credentiald() {
-  sd_switch_credentiald "$SHA12" "$OLD" \
-    || sd_die "the promotion itself is done, but the credentiald switch failed: stop celeris-credentiald@${OLD:-<old>}.service and start celeris-credentiald@$SHA12.service by hand, then check \`celerisctl browser doctor\`"
 }
 
 # 失敗したときに旧 unit を起こし直す（unit が無い＝初回の移行なら、人に任せる）。
@@ -563,6 +557,7 @@ sd_log "browser_ledger: $BROWSER_LEDGER_JSON (not required to promote)"
   printf '  "included": %s\n' "$(promoted_included_json)"
   printf '}\n'
 } >"$REL/promoted.json"
+PROMOTED_RECORDED=true
 rm -f "$PREVIEW_JSON" 2>/dev/null || true
 sd_log "promoted.json: $REL/promoted.json (mode=$MODE from=${OLD:-<none>})"
 
@@ -575,3 +570,10 @@ else
   sd_log "warning: prune-backups.sh $SD_BACKUPS failed (exit $?); no backup was pruned or only some were — see $SD_LOG_FILE"
 fi
 sd_log "the working checkout was NOT touched. If main is behind this release, a human runs: git -C $SD_REPO merge --ff-only $SHA12"
+
+# credentiald の切り替え（ADR 2026-10-27-promote-switches-credentiald）。live・stop-start・引き継ぎの再開の
+# どれでも、昇格を記録した後に行う。失敗は昇格を取り消さず credentiald_switch_failed.json と exit 3 で知らせる。
+if ! sd_credentiald_after_switch "$REL" "$SHA12" "$OLD"; then
+  echo "promote.sh: $SHA12 is promoted, but the credentiald switch failed (see $REL/credentiald_switch_failed.json)" >&2
+  exit 3
+fi

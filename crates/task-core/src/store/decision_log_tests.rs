@@ -511,3 +511,92 @@ fn human_waits_pair_question_and_approval_events_of_the_campaign_tree() {
     assert_eq!(a["task_id"], child.id.to_string());
     assert!(a["ended_at"].is_null(), "open は null（0 秒にしない）");
 }
+
+#[test]
+fn cos_export_keeps_thread_context_missing_usage_and_separate_shared_subtotals() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    {
+        let conn = s.lock().unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO chat_threads(id,kind,title,project_id,status,created_at,updated_at) VALUES
+             ('general','general','CoS',NULL,'open','1970-01-01T00:00:00Z','1970-01-01T00:00:00Z'),
+             ('project','project','Project CoS','p1','open','1970-01-01T00:00:00Z','1970-01-01T00:00:00Z');
+             INSERT INTO node_sessions(id,node_id,kind,adapter,session_id,thread_id,model,created_at,last_used_at,retired_at) VALUES
+             ('old-session','cos','cos_chat','claude-code','old-harness-session','project','session-model','1970-01-01T00:00:00Z','1970-01-01T00:00:00Z','1970-01-01T00:00:01Z'),
+             ('new-session','cos','cos_chat','claude-code','new-harness-session','project','new-model','1970-01-01T00:00:01Z','1970-01-01T00:00:01Z',NULL);
+             INSERT INTO chat_runs(run_id,thread_id,input_message_id,state,session_row_id,resolved_config_json,started_at,finished_at,usage_json) VALUES
+             ('general-run','general','m1','completed',NULL,'{"model":"general-model"}','1970-01-01T00:00:00Z','1970-01-01T00:00:01Z','{"input_tokens":11,"output_tokens":0}'),
+             ('project-run','project','m2','completed','old-session','{"model":"run-model"}','1970-01-01T00:00:00Z','1970-01-01T00:00:01Z','{"input_tokens":23}'),
+             ('missing-run','project','m3','failed','old-session','{}','1970-01-01T00:00:00Z','1970-01-01T00:00:01Z',NULL),
+             ('invalid-run','general','m4','interrupted',NULL,'{}',NULL,'1970-01-01T00:00:01Z','{"input_tokens":"invalid"}'),
+             ('active-run','project','m5','running',NULL,'{}','1970-01-01T00:00:00Z',NULL,NULL);"#
+        ).unwrap();
+    }
+    // An existing, old projected row also acquires context without a rewrite/migration.
+    let mut old = DecisionLogUsage::cos_turn("project-run", 1, None);
+    old.input_tokens = Some(23);
+    s.decision_log_record_usage(&old, now()).unwrap();
+    let later = now() + time::Duration::days(2);
+    assert_eq!(s.decision_log_project_cos_turns(later).unwrap(), 3);
+    assert_eq!(s.decision_log_project_cos_turns(later).unwrap(), 0);
+    let usage = s.decision_log_usage_list(None).unwrap();
+    assert_eq!(usage.len(), 4);
+    let project = usage
+        .iter()
+        .find(|u| u.thread_id.as_deref() == Some("project") && u.input_tokens.is_some())
+        .unwrap();
+    assert_eq!(project.thread_kind.as_deref(), Some("project"));
+    assert_eq!(project.project_id.as_deref(), Some("p1"));
+    assert_eq!(project.model.as_deref(), Some("run-model"));
+    assert_eq!(project.session.as_deref(), Some("old-harness-session"));
+
+    let params = ExportParams {
+        campaign_id: "camp1".into(),
+        manifest_hash: None,
+        export_cursor: None,
+    };
+    let export = s.decision_log_export_campaign(&params).unwrap();
+    let missing = export
+        .records
+        .iter()
+        .find(|r| r["dedup_key"] == "decision:cos:missing-run:1")
+        .unwrap();
+    for field in [
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_creation_tokens",
+        "list_cost_usd",
+        "cash_cost_usd",
+    ] {
+        assert!(missing.get(field).unwrap().is_null(), "{field}");
+    }
+    assert_eq!(missing["model"], "session-model");
+    assert_eq!(missing["thread_id"], "project");
+    assert_eq!(missing["thread_kind"], "project");
+    assert_eq!(missing["project_id"], "p1");
+    assert_eq!(missing["session"], "old-harness-session");
+    assert!(missing["campaign_id"].is_null());
+    let general = export
+        .records
+        .iter()
+        .find(|r| r["thread_id"] == "general" && r["input_tokens"] == 11)
+        .unwrap();
+    assert_eq!(general["model"], "general-model");
+    assert!(general["session"].is_null());
+    assert!(general["project_id"].is_null());
+    assert_eq!(general["output_tokens"], 0);
+    let by_kind = &export.summary.shared_overhead_by_kind;
+    assert_eq!(by_kind["cos:general"].input_tokens.sum, Some(11.0));
+    assert_eq!(by_kind["cos:project"].input_tokens.sum, Some(23.0));
+    assert_eq!(by_kind["cos:general"].input_tokens.n_missing, 1);
+    assert_eq!(by_kind["cos:project"].input_tokens.n_missing, 1);
+    assert_eq!(by_kind["cos:project"].output_tokens.sum, None);
+    assert_eq!(export.summary.shared_overhead.n_rows, 4);
+    assert_eq!(export.summary.total.n_rows, 0);
+    assert!(export.trials.is_empty());
+    assert!(export.summary.by_arm.is_empty());
+    let again = s.decision_log_export_campaign(&params).unwrap();
+    assert_eq!(export.records_jsonl(), again.records_jsonl());
+    assert_eq!(export.summary_json(), again.summary_json());
+}

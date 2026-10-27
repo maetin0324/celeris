@@ -254,3 +254,19 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 - 訂正は追記専用: `human-op correct --file F (--corrects ID... | --logical-op L [--campaign C] [--arm A0]) (--retract | --set-field k=<JSON>...) --reason S`。
   元の行は書き換えず、`retracted: true` の対象は resolve で外れる。report の `corrections` と `report.md` の「補正履歴」に correction id・対象・理由が残る。
 - 例: A/B 両方に記録した共有 env-lock 修正（71 秒）は、両方を `--retract` し、shared scope に 1 件書き直す。
+
+### 7.2 CoS 消費の export
+
+`celerisctl campaign export <campaign_id> --out <dir>` の `records.jsonl` の CoS usage 行は、
+`thread_id`・`thread_kind`（general / project / legacy）・`project_id`・`model`・`session` を持つ。
+`session` はその chat run の `session_row_id` に対応する `node_sessions.session_id`。
+model は run の記録を優先し、無ければ同じ session の model。識別不明は null。
+usage が無い終端 run も出力し、token・費用の欠測を null とする（観測値 0 と区別する）。
+
+`summary.json.shared_overhead_by_kind` は `cos:general` と `cos:project` を分けて小計する。
+過去の会話は `cos:legacy`、種類不明は `cos:unknown`。各値は観測数・欠測数を含む。
+これは `shared_overhead` の内訳で、総小計に再加算しない。試行・arm への均等配分もしない。
+
+campaign に未帰属の共有行も含むが、元の `campaign_id: null` を保つ。これらは全体の未帰属消費で、
+選択した campaign の費用とはみなさない。campaign に明示帰属する共有行とは `campaign_id` で区別できる。
+複数 campaign の export を結合するときは `dedup_key` で重複を除く。

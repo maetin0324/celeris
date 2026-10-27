@@ -362,3 +362,44 @@ fn duplicates_match_or_conflict_and_foreign_hash_and_late_usage_are_counted() {
             .any(|p| p.contains("conflicting"))
     );
 }
+
+#[test]
+fn unassigned_shared_cos_is_exported_once_without_allocation_to_trials() {
+    let mut shared = DecisionLogUsage::cos_turn("chat-run", 1, None);
+    shared.thread_kind = Some("project".into());
+    shared.project_id = Some("p1".into());
+    shared.input_tokens = Some(100);
+    let mut foreign = DecisionLogUsage::cos_turn("foreign", 1, Some("c2"));
+    foreign.input_tokens = Some(1000);
+    let direct = usage("r1", "c1", UsageRole::Worker);
+    let export = build_campaign_export(
+        &params("c1"),
+        &[
+            run("r1", "c1", RunEnd::Completed),
+            run("r2", "c1", RunEnd::Completed),
+        ],
+        &[direct, shared.clone(), shared, foreign],
+        &[],
+    );
+    assert_eq!(export.summary.shared_overhead.n_rows, 1);
+    assert_eq!(
+        export.summary.shared_overhead_by_kind["cos:project"]
+            .input_tokens
+            .sum,
+        Some(100.0)
+    );
+    assert_eq!(export.summary.total.input_tokens.sum, None);
+    assert_eq!(export.summary.integrity.duplicates_identical, 1);
+    assert_eq!(export.trials.len(), 2);
+    for trial in &export.trials {
+        assert!(trial.get("run_consumption").unwrap()["input_tokens"]["sum"].is_null());
+        assert!(trial["task_level_consumption"]["input_tokens"]["sum"].is_null());
+    }
+    let rows: Vec<_> = export
+        .records
+        .iter()
+        .filter(|r| r["role"] == "cos")
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0]["campaign_id"].is_null());
+}

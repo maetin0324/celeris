@@ -4,7 +4,7 @@
 //! 同じ入力からは byte 一致の出力になる（実行日・乱数を使わない）。
 //!
 //! - 別 campaign の行は混ぜない（`campaign_id` が一致する行と、campaign 未記載でも run/decision が
-//!   この campaign に属する消費行だけを採る）。
+//!   この campaign に属する消費行、および campaign 未帰属の共有消費を採る）。
 //! - 冪等: run は `run_id`、消費は `dedup_key`、介入は `intervention_id` で 1 件に潰す（合算しない）。
 //! - 集計は区分ごとの 4 つ組 [`Stat`]（和・観測数・欠測数・推定数）。欠測は 0 に潰さず、観測 0 件の和は `null`。
 //! - 失敗・timeout・cancel・retry は分母（`runs_by_end`）に残す。
@@ -156,6 +156,8 @@ pub struct CampaignSummary {
     pub total: ConsumptionStats,
     /// 共有オーバーヘッド（CoS など campaign に割れない消費）。`total` に足さない別欄。
     pub shared_overhead: ConsumptionStats,
+    /// Shared consumption by role and CoS thread kind; never allocated to trials.
+    pub shared_overhead_by_kind: BTreeMap<String, ConsumptionStats>,
     /// 帰属規則の名前ごとの消費行数（規則なしは `none`）。
     pub by_attribution_rule: BTreeMap<String, u64>,
     /// campaign 開始から最後の活動までの壁時計。store が埋める（純関数では `None`）。
@@ -324,7 +326,8 @@ pub fn build_campaign_export(
         let belongs = match u.campaign_id.as_deref() {
             Some(c) => c == campaign,
             None => {
-                u.run_id.as_deref().is_some_and(|r| run_map.contains_key(r))
+                u.shared_overhead
+                    || u.run_id.as_deref().is_some_and(|r| run_map.contains_key(r))
                     || u.decision_id
                         .as_deref()
                         .is_some_and(|d| decision_ids.contains(d))
@@ -387,6 +390,7 @@ pub fn build_campaign_export(
     let mut by_arm: BTreeMap<String, ConsumptionStats> = BTreeMap::new();
     let mut total = ConsumptionStats::default();
     let mut shared = ConsumptionStats::default();
+    let mut shared_by_kind: BTreeMap<String, ConsumptionStats> = BTreeMap::new();
     let mut by_rule: BTreeMap<String, u64> = BTreeMap::new();
     let mut run_wall_sum = Stat::default();
     let mut records: Vec<Value> = Vec::new();
@@ -402,6 +406,12 @@ pub fn build_campaign_export(
         }
         if u.shared_overhead {
             shared.add(u);
+            let kind = if u.role == UsageRole::Cos {
+                format!("cos:{}", u.thread_kind.as_deref().unwrap_or("unknown"))
+            } else {
+                u.role.as_str().to_string()
+            };
+            shared_by_kind.entry(kind).or_default().add(u);
         } else {
             by_role
                 .entry(u.role.as_str().to_string())
@@ -429,7 +439,12 @@ pub fn build_campaign_export(
             "usage_key": serde_json::to_value(&u.key).unwrap_or(Value::Null),
             "usage_state": usage_state(u),
             "run_known": run_known,
-            "campaign_id": campaign,
+            "campaign_id": if u.shared_overhead { ov(&u.campaign_id) } else { json!(campaign) },
+            "thread_id": ov(&u.thread_id),
+            "thread_kind": ov(&u.thread_kind),
+            "project_id": ov(&u.project_id),
+            "model": ov(&u.model),
+            "session": ov(&u.session),
             "attribution_rule": ov(&u.attribution_rule),
             "shared_overhead": u.shared_overhead,
             "run_id": ov(&u.run_id),
@@ -642,6 +657,7 @@ pub fn build_campaign_export(
         by_arm,
         total,
         shared_overhead: shared,
+        shared_overhead_by_kind: shared_by_kind,
         by_attribution_rule: by_rule,
         elapsed_ms: None,
         run_wall_sum_ms: run_wall_sum,

@@ -560,6 +560,18 @@ impl UsageKey {
 pub struct DecisionLogUsage {
     pub key: UsageKey,
     pub role: UsageRole,
+    /// CoS context, joined from the recorded chat run and its session at read time.
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub thread_kind: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Harness session id from the run's node_sessions row (not the active session).
+    #[serde(default)]
+    pub session: Option<String>,
     #[serde(default)]
     pub is_retry: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -609,11 +621,11 @@ pub const ATTRIBUTION_COS_SHARED: &str = "cos_turn_shared_overhead";
 pub const ATTRIBUTION_JEV_SUBJECT: &str = "jev_classification_subject";
 
 impl DecisionLogUsage {
-    /// CoS の `turn` 番目の消費（`session_id` は CoS session）。campaign に割れないので共有オーバーヘッド。
-    pub fn cos_turn(session_id: &str, turn: u32, campaign_id: Option<&str>) -> Self {
+    /// CoS chat run の消費。task の試行に割れないので共有オーバーヘッド。
+    pub fn cos_turn(run_id: &str, turn: u32, campaign_id: Option<&str>) -> Self {
         let mut u = Self::new(
             UsageKey::Call {
-                decision_id: format!("cos:{session_id}"),
+                decision_id: format!("cos:{run_id}"),
                 call_attempt: turn,
             },
             UsageRole::Cos,
@@ -661,6 +673,11 @@ impl DecisionLogUsage {
         Self {
             key,
             role,
+            thread_id: None,
+            thread_kind: None,
+            project_id: None,
+            model: None,
+            session: None,
             is_retry: false,
             decision_id: None,
             run_id: None,

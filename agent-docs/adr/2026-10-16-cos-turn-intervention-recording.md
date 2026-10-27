@@ -3,6 +3,9 @@
 - 日付: 2026-10-16
 - 関連: 2026-10-15-decision-log-export（D5〜D7）、2026-10-16-campaign-identity-propagation
 
+2026-10-27 追記: D1 の usage 必須条件と D2 の未帰属 export 除外は
+[CoS 消費の context と共有小計](2026-10-27-cos-usage-context.md) で置換した。
+
 ## 決定
 - D1. CoS の実 turn は `chat_runs`（終端・`usage_json` あり）から `decision:cos:<run_id>:1` の消費行へ冪等に投影する。常に共有オーバーヘッド（`cos_turn_shared_overhead`）。観測できなかった欄は欠測のまま。費用は定価換算の欄だけ（実支出・quota に書かない）。
 - D2. campaign への帰属は、turn の開始時刻に活動中（識別付与〜最後の活動）の campaign がちょうど 1 つのときだけ。0 個・複数は帰属なし（推測しない）。帰属なしの行も共有オーバーヘッドとして残るが campaign の export には入らない。

@@ -416,14 +416,33 @@ impl SqliteStore {
         &self,
         campaign_id: Option<&str>,
     ) -> Result<Vec<DecisionLogUsage>, StoreError> {
+        self.read_decision_log_usage(campaign_id, false)
+    }
+
+    fn read_decision_log_usage(
+        &self,
+        campaign_id: Option<&str>,
+        include_unassigned_shared: bool,
+    ) -> Result<Vec<DecisionLogUsage>, StoreError> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT dedup_key, run_id, decision_id, campaign_id, task_id, role, is_retry, input_tokens, \
-             output_tokens, cache_read_tokens, cache_creation_tokens, list_cost_usd, cash_cost_usd, wall_ms, \
-             cluster_wait_ms, cluster_run_ms, cluster_node_hours, cluster_queue_ms, attribution_rule, shared_overhead \
-             FROM decision_log_usage WHERE (?1 IS NULL OR campaign_id = ?1) ORDER BY dedup_key",
+            "SELECT d.dedup_key, COALESCE(d.run_id, c.run_id), d.decision_id, d.campaign_id, d.task_id, \
+             d.role, d.is_retry, d.input_tokens, d.output_tokens, d.cache_read_tokens, \
+             d.cache_creation_tokens, d.list_cost_usd, d.cash_cost_usd, d.wall_ms, d.cluster_wait_ms, \
+             d.cluster_run_ms, d.cluster_node_hours, d.cluster_queue_ms, d.attribution_rule, d.shared_overhead, \
+             c.thread_id, t.kind, t.project_id, \
+             COALESCE(json_extract(CASE WHEN json_valid(c.resolved_config_json) \
+                 THEN c.resolved_config_json ELSE '{}' END, '$.model'), n.model), \
+             NULLIF(n.session_id, '') \
+             FROM decision_log_usage d \
+             LEFT JOIN chat_runs c ON d.role='cos' AND c.run_id=substr(d.decision_id,5) \
+             AND d.dedup_key='decision:cos:' || c.run_id || ':1' \
+             LEFT JOIN chat_threads t ON t.id=c.thread_id \
+             LEFT JOIN node_sessions n ON n.id=c.session_row_id \
+             WHERE (?1 IS NULL OR d.campaign_id = ?1 \
+                 OR (?2 AND d.campaign_id IS NULL AND d.shared_overhead=1)) ORDER BY d.dedup_key",
         )?;
-        let rows = stmt.query_map([campaign_id], |r| {
+        let rows = stmt.query_map(params![campaign_id, include_unassigned_shared], |r| {
             let dedup: String = r.get(0)?;
             let run_id: Option<String> = r.get(1)?;
             let decision_id: Option<String> = r.get(2)?;
@@ -451,6 +470,13 @@ impl SqliteStore {
                 ],
                 r.get::<_, Option<f64>>(16)?,
                 (r.get::<_, Option<String>>(18)?, r.get::<_, i64>(19)?),
+                [
+                    r.get::<_, Option<String>>(20)?,
+                    r.get(21)?,
+                    r.get(22)?,
+                    r.get(23)?,
+                    r.get(24)?,
+                ],
             ))
         })?;
         let mut out = Vec::new();
@@ -468,6 +494,7 @@ impl SqliteStore {
                 ms,
                 nh,
                 (attribution_rule, shared_overhead),
+                [thread_id, thread_kind, project_id, model, session],
             ) = row?;
             let role = UsageRole::parse(&role)
                 .ok_or_else(|| StoreError::Invalid(format!("unknown usage role: {role}")))?;
@@ -499,6 +526,11 @@ impl SqliteStore {
             out.push(DecisionLogUsage {
                 key,
                 role,
+                thread_id,
+                thread_kind,
+                project_id,
+                model,
+                session,
                 is_retry: is_retry != 0,
                 decision_id,
                 run_id,
@@ -630,7 +662,7 @@ impl SqliteStore {
     ) -> Result<crate::decision_log_export::CampaignExport, StoreError> {
         let c = Some(params.campaign_id.as_str());
         let runs = self.decision_log_runs_list(c)?;
-        let usage = self.decision_log_usage_list(c)?;
+        let usage = self.read_decision_log_usage(c, true)?;
         let ivs = self.decision_log_interventions_list(c)?;
         let mut export =
             crate::decision_log_export::build_campaign_export(params, &runs, &usage, &ivs);
@@ -957,6 +989,13 @@ impl SqliteStore {
 /// 帰属しない CoS turn の再評価を続ける期間（campaign の窓が後から延びて当たる場合の保険）。
 const COS_REATTRIBUTE_WINDOW_SECS: i64 = 24 * 3600;
 
+struct CosTurnUsageRow {
+    run_id: String,
+    started: Option<String>,
+    finished: Option<String>,
+    usage_json: Option<String>,
+}
+
 fn parse_ts(s: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
 }
@@ -1101,16 +1140,16 @@ impl SqliteStore {
         Ok(if hit.next().is_some() { None } else { first })
     }
 
-    /// CoS chat の終端 run（`usage_json` あり）を、CoS の実 turn として消費行へ投影する。
+    /// CoS chat の終端 run（`usage_json` 欠測も含む）を、CoS の実 turn として消費行へ投影する。
     /// 常に共有オーバーヘッド。campaign は活動窓から一意に決まるときだけ付ける。観測できなかった欄は欠測のまま
     /// （0 にしない）。費用は定価換算の欄だけで、実支出には書かない。冪等（`decision:cos:<run_id>:1`）。
     pub fn decision_log_project_cos_turns(&self, now: OffsetDateTime) -> Result<usize, StoreError> {
         let cutoff = format_rfc3339(now - time::Duration::seconds(COS_REATTRIBUTE_WINDOW_SECS))?;
-        let rows: Vec<(String, Option<String>, Option<String>, String)> = {
+        let rows: Vec<CosTurnUsageRow> = {
             let conn = self.lock()?;
             let mut stmt = conn.prepare(
                 "SELECT c.run_id, c.started_at, c.finished_at, c.usage_json FROM chat_runs c \
-                 WHERE c.usage_json IS NOT NULL AND c.finished_at IS NOT NULL \
+                 WHERE c.finished_at IS NOT NULL \
                  AND c.state IN ('completed','stopped','failed','interrupted') \
                  AND NOT EXISTS (SELECT 1 FROM decision_log_usage d \
                      WHERE d.dedup_key = 'decision:cos:' || c.run_id || ':1' \
@@ -1118,15 +1157,27 @@ impl SqliteStore {
                  ORDER BY c.run_id",
             )?;
             stmt.query_map([cutoff], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                Ok(CosTurnUsageRow {
+                    run_id: r.get(0)?,
+                    started: r.get(1)?,
+                    finished: r.get(2)?,
+                    usage_json: r.get(3)?,
+                })
             })?
             .collect::<Result<_, _>>()?
         };
         let mut n = 0;
-        for (run_id, started, finished, usage_json) in rows {
-            let Ok(usage) = serde_json::from_str::<crate::Usage>(&usage_json) else {
-                continue;
-            };
+        for CosTurnUsageRow {
+            run_id,
+            started,
+            finished,
+            usage_json,
+        } in rows
+        {
+            let usage = usage_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<crate::Usage>(json).ok())
+                .unwrap_or_default();
             let at = started
                 .as_deref()
                 .and_then(parse_ts)

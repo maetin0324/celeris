@@ -31,16 +31,17 @@ updated: 2026-10-27
 
 検査は提出時の HEAD で実行（基準は `git merge-base HEAD main`）。
 
-- `bash scripts/dev/test-affected.sh` 内の task-ops::unblocks: 4 passed（failed の待ちが 1 度だけ reopen され、二度目の昇格・再走査で重ならない／
+- `bash scripts/dev/test-affected.sh` 内の task-ops::unblocks: 5 passed（結びの作成より前に親が昇格した release では発火せず、
+  作成後の昇格で 1 度だけ reopen（ADR 付記 A1）／failed の待ちが 1 度だけ reopen され、二度目の昇格・再走査で重ならない／
   blocked はコメントだけ・子の修正は親の配送で判定／`included: null`・壊れた `promoted.json` を飛ばす／検証）。
 - 同コマンド内の task-api::unblocks: 3 passed（API で結んで昇格 → 1 度だけ reopen、二度目の昇格で重ならない／
   不明・重複 id は 422 で何も作らない／CoS の `task.create` でも結びが書かれる）。
-- `bash scripts/dev/test-affected.sh`: exit 0（nextest 6538 passed・21 skipped、web Vitest 685 passed・Node 98 passed）。
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 6550 passed・21 skipped、web Vitest 685 passed・Node 98 passed）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 
 ## 再検査時の修正
 
-- main の task 冪等キー（migration 0094）を保持し、unblocks を migration 0095 に配置。
+- main の task 冪等キー（migration 0094）を保持し、unblocks を migration 0096 に配置（main の 0095 は project_briefs）。
   API の `idempotency_key` と `unblocks` を両立させ、旧 DB への downgrade 試験は両表を削除する。
 
 - ArtifactPreview の4幅の axe 検査を幅別の試験に分け、各20秒を上限として完了を待つ。
@@ -48,11 +49,17 @@ updated: 2026-10-27
   44px target・折り返し・アクセシビリティの assertion は維持。
 - ADR D3・D4 の説明を、発火の印・コメント・reopen を同じ transaction に入れる既存実装に合わせた。
 
+- review の差し戻し（3 回目）: `sweep` は祖先の一致を過去の全 release で探していたため、修正の子を作る前に親が昇格した
+  古い release で誤発火し得た。結びの `created_at` より後に昇格した release だけを見るよう直した（ADR 付記 A1）。
+  回帰試験 `unblocks_release_promoted_before_the_link_does_not_fire` を足し、API 試験の昇格時刻を作成後にした。
+  migration 0096 の先頭コメントの版数を直した。
+
 ## コミット
 
 - `unblocks: 修正 task と待っている task を結び、修正を含む release の昇格で 1 度だけ再開する`
 - `phase 1: 成果物プレビューの幅別検査を分けてタイムアウトを防ぐ`
 - `phase 1: main 同期後の unblocks 検証結果を更新する`
+- `phase 1: unblocks は結びの作成より後に昇格した release だけで発火する`
 
 ## 未解決事項
 

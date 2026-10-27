@@ -48,3 +48,12 @@ operator が reopen した）。`promote.sh` が書く `promoted.json` の `incl
 - API: `NewTaskBody.unblocks`（任意）を足した（`docs/api/v1/api-v1.schema.json`・web の生成型を再生成）。
 - DB: migration 0096（`task_unblocks`、SCHEMA_VERSION 96）。追加だけでデータは移さない。
 - 本番 config の変更は不要（`[selfdeploy] releases_dir` を読むだけ）。
+
+## 付記
+
+- A1（2026-10-27、review の差し戻し）. D2 の「昇格した release はすべて見る」は、**結びの作成（`task_unblocks.created_at`）
+  より後に昇格した release** に限る。修正 task の親は continuation のたびに再配送されるので、修正の子を作る前に親が
+  既に昇格していることがある。その古い release の `included.tasks` に親があるだけで発火すると、修正を含まない
+  release で待っている task を reopen し、結びが fired 済みになって本当の修正の昇格で再開しない。比べるのは
+  `promoted.json` の `promoted_at`（RFC 3339）で、読めない release は前後が決まらないので見ない。
+  実装は `task_ops::unblocks::sweep`、回帰試験は `unblocks_release_promoted_before_the_link_does_not_fire`。

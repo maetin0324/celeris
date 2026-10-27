@@ -3,6 +3,7 @@ use task_core::{
     ArtifactRef, Budget, Check, Criterion, Event, SqliteStore, Task, TaskKind, Tier, WorkerHint,
     WorkspaceSpec,
 };
+use time::format_description::well_known::Rfc3339;
 
 fn sample_task(title: &str, status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
@@ -54,9 +55,14 @@ fn sample_task(title: &str, status: Status) -> Task {
     }
 }
 
+/// 結びの作成時刻。試験の release はこれより後（`2026-10-26T*`・`2026-10-27T*`）に昇格させる。
+fn linked_at() -> OffsetDateTime {
+    OffsetDateTime::parse("2026-10-26T00:00:00Z", &Rfc3339).expect("linked_at")
+}
+
 /// 修正 task を `waiting` に結んで作る（`POST /tasks` と同じく作成と同じ transaction）。
 fn create_fix(store: &SqliteStore, fix: &Task, waiting: &[TaskId]) {
-    let now = OffsetDateTime::now_utc();
+    let now = linked_at();
     store
         .create_task_with(fix, vec![], |tx| {
             SqliteStore::unblocks_insert_tx(tx, fix.id, waiting, now)
@@ -284,4 +290,48 @@ fn unblocks_validation_rejects_unknown_duplicate_and_too_many() {
         validate_unblocks(&store, &many),
         Err(OpsError::Validation(m)) if m.contains("at most")
     ));
+}
+
+/// 付記 A1: 修正 task の親が、修正（と結び）の作成より前に昇格した release に入っていても発火しない。
+/// 修正を作った後に親か修正 task を含む release が昇格したときに初めて 1 度だけ reopen する。
+#[test]
+fn unblocks_release_promoted_before_the_link_does_not_fire() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let waiting = sample_task("waits for the fix", Status::Failed);
+    store.insert(&waiting).expect("insert waiting");
+    let parent = sample_task("long-running parent", Status::Running);
+    store.insert(&parent).expect("insert parent");
+    // 親は修正の子を作る前に配送・昇格済み（結びの作成時刻より前）。
+    write_release(
+        tmp.path(),
+        "000000000001",
+        "2026-10-25T12:00:00Z",
+        &[parent.id],
+    );
+    let mut fix = sample_task("fix child", Status::Done);
+    fix.parent_id = Some(parent.id);
+    create_fix(&store, &fix, &[waiting.id]);
+
+    let now = OffsetDateTime::now_utc();
+    let fired = sweep(&store, &read_promoted_releases(tmp.path()), now).expect("sweep");
+    assert!(fired.is_empty(), "{fired:?}");
+    assert_eq!(
+        store.get(waiting.id).unwrap().unwrap().status,
+        Status::Failed
+    );
+    assert_eq!(store.unblock_pending().expect("pending").len(), 1);
+
+    // 修正を作った後の親の再配送で、修正を含む release が昇格したら発火する。
+    write_release(
+        tmp.path(),
+        "000000000002",
+        "2026-10-26T12:00:00Z",
+        &[parent.id],
+    );
+    let fired = sweep(&store, &read_promoted_releases(tmp.path()), now).expect("sweep");
+    assert_eq!(fired.len(), 1, "{fired:?}");
+    assert_eq!(fired[0].release, "000000000002");
+    assert_eq!(fired[0].action, UnblockAction::Reopened);
+    assert_eq!(reopen_count(&store, waiting.id), 1);
 }

@@ -59,6 +59,11 @@ fn write_release(dir: &std::path::Path, sha12: &str, promoted_at: &str, fix: Tas
     .expect("promoted.json");
 }
 
+fn rfc3339(at: OffsetDateTime) -> String {
+    at.format(&time::format_description::well_known::Rfc3339)
+        .expect("rfc3339")
+}
+
 fn reopens(env: &TestEnv, id: TaskId) -> usize {
     env.store
         .events_for(id)
@@ -87,8 +92,14 @@ async fn unblocks_api_links_and_promotion_reopens_the_failed_task_once() {
     assert_eq!(links[0].fired_at, None);
 
     let releases = tempfile::tempdir().expect("releases dir");
-    write_release(releases.path(), "0123456789ab", "2026-10-27T05:00:00Z", fix);
+    // 昇格は結びの作成より後（ADR 付記 A1: 作成前の昇格は見ない）。
     let now = OffsetDateTime::now_utc();
+    write_release(
+        releases.path(),
+        "0123456789ab",
+        &rfc3339(now + Duration::hours(1)),
+        fix,
+    );
     let fired = task_ops::unblocks::sweep(
         &env.store,
         &task_ops::unblocks::read_promoted_releases(releases.path()),
@@ -108,7 +119,12 @@ async fn unblocks_api_links_and_promotion_reopens_the_failed_task_once() {
     env.store
         .apply_transition(waiting, Trigger::TokenBudgetExhausted, None)
         .expect("the reopened task fails again");
-    write_release(releases.path(), "ba9876543210", "2026-10-27T07:00:00Z", fix);
+    write_release(
+        releases.path(),
+        "ba9876543210",
+        &rfc3339(now + Duration::hours(3)),
+        fix,
+    );
     let fired = task_ops::unblocks::sweep(
         &env.store,
         &task_ops::unblocks::read_promoted_releases(releases.path()),

@@ -3,7 +3,8 @@
 //!
 //! - [`validate_unblocks`]: 修正 task の作成時（`POST /tasks` / CoS の `task.create`）の `unblocks` の検証。
 //! - [`read_promoted_releases`]: `releases_dir` の各 `<sha12>/promoted.json` の `included.tasks` を読む。
-//! - [`sweep`]: 未発火の結びのうち、修正 task（またはその祖先）が昇格した release に入ったものを発火させる。
+//! - [`sweep`]: 未発火の結びのうち、修正 task（またはその祖先）が結びの作成より後に昇格した release に
+//!   入ったものを発火させる。
 //!
 //! どれも決定的（JSON と DB だけ。git も LLM も使わない）。`releases_dir` は呼び出し側（daemon）が渡す。
 
@@ -15,6 +16,7 @@ use task_core::comment::{CommentAuthorKind, TaskComment};
 use task_core::unblocks::{MAX_UNBLOCKS, UnblockAction, UnblockFire};
 use task_core::{Status, TaskId, TaskStore};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::error::OpsError;
 
@@ -101,8 +103,11 @@ pub struct UnblockOutcome {
     pub action: UnblockAction,
 }
 
-/// D2〜D4: 未発火の結びを見て、修正 task（かその祖先）を含む最も古い昇格済み release があれば発火させる。
-/// 発火した結びを返す（同じ結びは二度返らない）。
+/// D2〜D4: 未発火の結びを見て、修正 task（かその祖先）を含み、結びの作成より後に昇格した最も古い release が
+/// あれば発火させる。発火した結びを返す（同じ結びは二度返らない）。
+///
+/// 作成より前の昇格を見ないのは、祖先（修正 task の親）が修正の作成前に既に配送・昇格していることがあるため
+/// （付記 A1）。`promoted_at` が RFC 3339 で読めない release は前後が決まらないので見ない。
 pub fn sweep(
     store: &dyn TaskStore,
     releases: &[PromotedRelease],
@@ -112,6 +117,10 @@ pub fn sweep(
     if pending.is_empty() || releases.is_empty() {
         return Ok(Vec::new());
     }
+    let promoted: Vec<(OffsetDateTime, &PromotedRelease)> = releases
+        .iter()
+        .filter_map(|r| Some((OffsetDateTime::parse(&r.promoted_at, &Rfc3339).ok()?, r)))
+        .collect();
     let mut chains: HashMap<TaskId, Vec<TaskId>> = HashMap::new();
     let mut out = Vec::new();
     for link in pending {
@@ -119,11 +128,16 @@ pub fn sweep(
             Entry::Occupied(e) => e.into_mut(),
             Entry::Vacant(e) => e.insert(ancestor_chain(store, link.fix_task_id)?),
         };
-        let Some(release) = releases.iter().find(|r| {
-            chain
-                .iter()
-                .any(|id| r.task_ids.iter().any(|t| *t == id.to_string()))
-        }) else {
+        let Some(release) = promoted
+            .iter()
+            .filter(|(at, _)| *at > link.created_at)
+            .map(|(_, r)| *r)
+            .find(|r| {
+                chain
+                    .iter()
+                    .any(|id| r.task_ids.iter().any(|t| *t == id.to_string()))
+            })
+        else {
             continue;
         };
         let Some(waiting) = store.get(link.waiting_task_id)? else {

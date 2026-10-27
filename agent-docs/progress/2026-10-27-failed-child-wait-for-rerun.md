@@ -11,7 +11,7 @@ tasks: [01M5XXF7QF5831M38E81S63RP1]
 ## 変更
 - ADR `agent-docs/adr/2026-10-18-parent-waits-for-children.md` に付記（2026-10-27）A1〜A4 を足した。
 - `task_ops::delegate::child_wait`（新規）: `awaited_children` と `is_wait_instruction`。
-- `SqliteStore::cos_triage_failure_escalated`: その子の `failed` 項目が `escalated` か `fallback` で未解決か。
+- `SqliteStore::cos_triage_failure_escalated`: その子の `failed` 項目が `escalated` の状態で未解決か（`fallback` は数えない）。
 - dispatcher: `parent_waits_for_children` を `child_tasks.rs` に移し、`awaited_children` を使う。待ちは `DelegatedChildren` として見せる。
   run の終わりの子待ち判定（`worker_finish.rs`）も `awaited_children` を使う。
 - 試験: dispatcher `parent_stays_asleep_for_a_failed_child_while_told_to_wait_for_its_rerun`、task-ops 3 件、task-core 1 件。

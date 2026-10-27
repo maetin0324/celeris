@@ -32,15 +32,15 @@ operator が reopen した）。`promote.sh` が書く `promoted.json` の `incl
 - D3. **reopen を選ぶ**（CoS への通知ではない）。結びは人か CoS が「この修正が入ったら再開する」と明示した意思で、
   operator が手で行っていたのも reopen だった。通知にすると「通知を読んで reopen する」という同じ手作業が残る。
   - 待っている task が `failed` なら、system コメント（「修正 task <id> を含む release <sha12> が昇格したので
-    再開した」）と `Trigger::Reopen` を**同じ transaction**で書く（`TaskStore::comment_add` の遷移付き）。コメントは
+    再開した」）と `Trigger::Reopen` を**同じ transaction**で書く（`TaskStore::unblock_fire` 内の遷移付きコメント）。コメントは
     次の run の前置きに載るので、再開した run は理由を知る。
   - `blocked` なら状態は変えず、同じ文の system コメントだけを残す（`blocked` は phase gate・計画の承認・browser・
     cluster job など人や外部の待ちで、昇格を理由に勝手に外すと人の gate を飛ばすため）。
   - それ以外（`ready`・`running`・`reviewing`・`done`・`cancelled`・`draft`。人が既に reopen した等）は何もしない。
 - D4. 一度だけ。結びの行に `fired_release`・`fired_action`（`reopened` / `commented` / `skipped`）・`fired_at` を書き、
   書いた行は二度と見ない（`fired_at IS NULL` の行だけが対象。書き込みは `WHERE fired_at IS NULL` の条件付き更新）。
-  二度目の昇格（修正を含む後の release）や再起動後の周期でも同じ結びで二度 reopen しない。reopen の後に印の書き込みが
-  失敗しても、次の周期では待っている task が `ready` 以降なので `skipped` になり、二度目の reopen は起きない。
+  二度目の昇格（修正を含む後の release）や再起動後の周期でも同じ結びで二度 reopen しない。
+  発火の印・コメント・reopen は同じ transaction で書き、途中で失敗したらすべて rollback する。
 - D5. 旧い仕組みは無い（operator の手作業の置き換え）。消すコード経路・config 欄は無い。
 
 ## 影響

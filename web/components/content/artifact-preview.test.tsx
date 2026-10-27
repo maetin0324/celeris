@@ -96,21 +96,20 @@ describe("ArtifactPreview", () => {
     await row.getByRole("button", { name: "本文を閉じる", exact: true }).click();
   }, 20_000);
 
-  it("4幅で download の44px targetと本文の折り返しを保つ", async () => {
+  // axe の完了を幅ごとに待つ。4 回の監査を既定の 5 秒にまとめない。
+  it.each([360, 390, 412, 1440])("幅 %i で download の44px targetと本文の折り返しを保つ", async (width) => {
     const { page } = fixture;
     const directory = process.env.PREVIEW_SHOTS_DIR;
     if (directory) await mkdir(directory, { recursive: true });
-    for (const width of [360, 390, 412, 1440]) {
-      await page.setViewportSize({ width, height: 800 });
-      const link = page
-        .locator("[data-artifact-kind='other']")
-        .getByRole("link", { name: "ダウンロード", exact: true });
-      const bounds = await link.boundingBox();
-      expect(bounds?.width).toBeGreaterThanOrEqual(44);
-      expect(bounds?.height).toBeGreaterThanOrEqual(44);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      expect(await seriousViolations(page)).toEqual([]);
-      if (directory) await page.screenshot({ path: join(directory, `preview-${width}.png`) });
-    }
-  });
+    await page.setViewportSize({ width, height: 800 });
+    const link = page
+      .locator("[data-artifact-kind='other']")
+      .getByRole("link", { name: "ダウンロード", exact: true });
+    const bounds = await link.boundingBox();
+    expect(bounds?.width).toBeGreaterThanOrEqual(44);
+    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await seriousViolations(page)).toEqual([]);
+    if (directory) await page.screenshot({ path: join(directory, `preview-${width}.png`) });
+  }, 20_000);
 });

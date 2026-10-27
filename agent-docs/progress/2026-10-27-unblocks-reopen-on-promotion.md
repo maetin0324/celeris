@@ -35,8 +35,20 @@ updated: 2026-10-27
   blocked はコメントだけ・子の修正は親の配送で判定／`included: null`・壊れた `promoted.json` を飛ばす／検証）。
 - `cargo test -p task-api --test unblocks`: 3 passed（API で結んで昇格 → 1 度だけ reopen、二度目の昇格で重ならない／
   不明・重複 id は 422 で何も作らない／CoS の `task.create` でも結びが書かれる）。
-- `bash scripts/dev/test-affected.sh`: exit 0（nextest 6499 passed・21 skipped、web Vitest 682 passed）。
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 6501 passed・21 skipped、web Vitest 685 passed・Node 98 passed）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+
+## 再検査時の修正
+
+- ArtifactPreview の4幅の axe 検査を幅別の試験に分け、各20秒を上限として完了を待つ。
+  4回の検査全体に既定の5秒を適用していたため、Web unit 試験で timeout が起きていた。
+  44px target・折り返し・アクセシビリティの assertion は維持。
+- ADR D3・D4 の説明を、発火の印・コメント・reopen を同じ transaction に入れる既存実装に合わせた。
+
+## コミット
+
+- `unblocks: 修正 task と待っている task を結び、修正を含む release の昇格で 1 度だけ再開する`
+- `phase 1: 成果物プレビューの幅別検査を分けてタイムアウトを防ぐ`
 
 ## 未解決事項
 

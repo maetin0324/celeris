@@ -64,7 +64,7 @@ fn linked_at() -> OffsetDateTime {
 fn create_fix(store: &SqliteStore, fix: &Task, waiting: &[TaskId]) {
     let now = linked_at();
     store
-        .create_task_with(fix, vec![], |tx| {
+        .create_task_with(fix, "human:test", vec![], |tx| {
             SqliteStore::unblocks_insert_tx(tx, fix.id, waiting, now)
         })
         .expect("create fix task with unblocks");

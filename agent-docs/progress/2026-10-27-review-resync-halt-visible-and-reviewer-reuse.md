@@ -37,6 +37,33 @@ updated: 2026-10-27
   `inbox_attention_review_resync_halted_from_snapshot_for_reviewing_tasks_only`、`cos_ops_mutations_task_rereview_resumes_halted_review`、
   `target_advanced_rereview_beyond_limit_still_requests_rereview`。
 
+## operator 追記への対応（done 後の unintegrated の自動取り込み直し）
+
+2026-10-27 16:26Z の外部 operator の追記（01M5XXF7QH が done の 17 秒後に main が進み unintegrated のまま残った）への対応。
+設計は ADR `2026-10-27-done-task-auto-reintegrate`（状態: 実装済み、付記: 実装との突き合わせ）。
+
+- commit「ADR: done 後に unintegrated になった task を衝突しなければ自動で取り込み直す設計」
+- commit「phase 1: done 後に unintegrated になった task を衝突しなければ再 review 経路で取り込み直す」
+  - `crates/task-ops/src/stranded/reintegrate.rs`（新規）: `classify`（merge-tree と変更 file の重なりで disjoint / overlap / conflict / unknown）、
+    `run`（auto_integrate・held/discarded 除外・走行中の配送除外・repo ごと 1 件／周期・task あたり 2 回）、`attempts`。
+  - clean なら `Trigger::Rereview` と `Event::DoneReintegrationStarted` を同じ transaction で記録し、既存の review 前同期・必須 check・reviewer 再利用・配送の ff に乗せる。
+  - 衝突・上限は `Event::DoneReintegrationDeferred` と受信箱 `unintegrated` の理由（`auto reintegrate: ...`、actor `auto-reintegrate`）、衝突は統合依頼にも出す。
+    `stranded::sweep` はこの理由を同じ head の間は上書きしない。
+  - `crates/celeris/src/daemon/stranded_sweep.rs` の `run` が sweep の後に呼ぶ（同じ single-flight）。
+  - event の schema（docs/api/v1）、web の `event-kinds.ts`・`invalidation-map.ts`・生成型、`docs/api/v1/api.md`、`docs/architecture-map.md`、
+    ADR `2026-10-11-stranded-done-branches` と ADR-0118 に付記。
+
+証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）:
+- `cargo test -p task-ops --lib stranded::reintegrate` → 5 passed（(a) `disjoint_advance_reenters_review_and_lands_as_ancestor`、
+  (b) `conflicting_advance_stays_done_and_surfaces_in_inbox`、(c) `held_discarded_and_disabled_projects_are_left_alone`、
+  `overlapping_clean_advance_reenters_review_as_overlap`、`one_start_per_repo_per_sweep_and_two_attempts_per_task`）
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 6565 passed / 21 skipped、web tsc 成功・vitest 682 passed・node --test 98 passed）
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0
+- `python3 scripts/dev/check-human-text.py` → 0 findings
+
+本番への移行（この追記の分）: 設定の追加・書き換えは無い。昇格後、既存の unintegrated 行のうち auto_integrate 案件で衝突しないものは
+次の sweep（300 秒以内）から 1 repo 1 件ずつ reviewing に戻る。
+
 ## 未解決
 - 本番で止まっている task（2026-10-27 の 6 件は operator がコメントで再開済み）は、この release の昇格後は受信箱に出る。
 

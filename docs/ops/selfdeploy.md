@@ -659,7 +659,13 @@ git -C "$repo" merge-base --is-ancestor "$reviewed" FETCH_HEAD
 ## 配備操作の監査情報
 
 `promote.sh` / `rollback.sh` は `SD_ACTOR`・`SD_REASON`・`SD_POLICY_REF` を必須とする。
-実行者は `human`、`operator:<name>`、`cos`、`system:<name>`。OS の USER は実行者の代用にしない。
+`SD_ACTOR` は `<kind>` または `<kind>:<id>`。kind は
+[human-ops ADR](../../agent-docs/adr/2026-10-27-human-ops-actor-roles-request-ref.md) D2 の 7 種
+（`human` / `script` / `cos_project` / `cos_general` / `external_operator` / `mcp_client` / `unknown`）に限る。
+id は空にせず、メールアドレスは書かない。人は `SD_ACTOR=human`、外部 operator は `SD_ACTOR=external_operator:<name>`、
+script・cron は `SD_ACTOR=script` を使う。CoS 経路は thread の種類から `cos_general:<thread id>` か
+`cos_project:<thread id>` を渡す。旧い `cos`・`operator:<name>`・`system:<name>` は拒否される。
+記録には `actor_kind` と `actor_id`（id が無ければ null）が入る。OS の USER は実行者の代用にしない。
 `SD_TASK_REFS` と `SD_DECISION_REFS` は JSON 文字列配列（関係するものが無ければ省略して `[]`）。
 人が実行する例:
 

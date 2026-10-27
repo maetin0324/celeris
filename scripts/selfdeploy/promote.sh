@@ -16,7 +16,7 @@ usage() {
   cat >&2 <<'EOF'
 usage: promote.sh <sha12> [--pre-start <script>] [--stop-stale]
 
-  必須環境変数: SD_ACTOR（human / operator:<name> / cos / system:<name>）、SD_REASON、SD_POLICY_REF。
+  必須環境変数: SD_ACTOR（<kind> または <kind>:<id>。kind は human / script / cos_project / cos_general / external_operator / mcp_client / unknown）、SD_REASON、SD_POLICY_REF。
   関係する参照: SD_TASK_REFS / SD_DECISION_REFS（JSON 文字列配列、既定 []）。
 
   verify.sh が `ok` を出したリリースだけを昇格できる。`--force` は無い（ADR-0040 D2）。

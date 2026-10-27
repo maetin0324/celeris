@@ -46,7 +46,7 @@ esac
 FAKE
 chmod +x "$WORK/bin/systemctl"
 export PATH="$WORK/bin:$PATH" FAKE_LOG="$WORK/log" SD_CREDENTIALD_SETTLE=0
-export SD_ACTOR='operator:test' SD_REASON='test reason' SD_POLICY_REF='test approval'
+export SD_ACTOR='external_operator:test' SD_REASON='test reason' SD_POLICY_REF='test approval'
 
 run() { : >"$FAKE_LOG"; if (sd_switch_credentiald new "$@") 2>/dev/null; then echo 0; else echo 1; fi; }
 line() { grep -n -- "$1" "$FAKE_LOG" | head -1 | cut -d: -f1; }

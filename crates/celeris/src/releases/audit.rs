@@ -52,7 +52,7 @@ mod tests {
         let dir = root.path().join("aaaaaaaaaaaa");
         std::fs::create_dir_all(dir.join("audit")).expect("mkdir");
         let record = serde_json::json!({
-            "actor": "operator:test", "reason": "recover", "policy_ref": "approval:1",
+            "actor": "external_operator:test", "actor_kind": "external_operator", "actor_id": "test", "reason": "recover", "policy_ref": "approval:1",
             "task_refs": ["task:1"], "decision_refs": ["decision:1"],
             "operation": "rollback", "verify": {"ok": false, "checks": []},
             "status": "succeeded", "started_at": "2026-10-27T00:00:00Z"
@@ -67,7 +67,7 @@ mod tests {
     #[test]
     fn script_environment_carries_explicit_context() {
         let audit = DeploymentContext {
-            actor: "cos".into(),
+            actor: "cos_general:general".into(),
             reason: "requested recovery".into(),
             policy_ref: "policy:1".into(),
             task_refs: vec!["task:1".into()],
@@ -78,7 +78,7 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(
             String::from_utf8(output.stdout).expect("utf8"),
-            "cos\nrequested recovery\npolicy:1\n[\"task:1\"]\n[\"cos_operation:1\"]\n"
+            "cos_general:general\nrequested recovery\npolicy:1\n[\"task:1\"]\n[\"cos_operation:1\"]\n"
         );
     }
 }

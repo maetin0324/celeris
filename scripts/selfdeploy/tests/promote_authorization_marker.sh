@@ -15,7 +15,7 @@
 # dash/sh で走る POSIX sh（bash 配列展開は使わない: ${BASH_SOURCE[0]} も ${@:2} も不可）。
 set -eu
 
-export SD_ACTOR='operator:test'
+export SD_ACTOR='external_operator:test'
 export SD_REASON='test "reason"'
 export SD_POLICY_REF='test approval'
 export SD_TASK_REFS='["task:test"]'
@@ -211,7 +211,9 @@ check_audit() {
 import json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
 d = json.loads(p.read_text())
-assert d['actor'] == 'operator:test'
+assert d['actor'] == 'external_operator:test'
+assert d['actor_kind'] == 'external_operator'
+assert d['actor_id'] == 'test'
 assert d['reason'] == 'test "reason"'
 assert d['policy_ref'] == 'test approval'
 assert d['task_refs'] == ['task:test']
@@ -237,6 +239,36 @@ for script in promote.sh rollback.sh; do
     [ ! -f "$FAKE_STATE/systemctl.log" ] || ng "side effect without $field"
   done
 done
+
+# ADR 2026-10-27-human-ops-actor-roles-request-ref D2: only its 7 actor kinds are accepted.
+# The old vocabulary (cos / operator:<name> / system:<name>), unknown kinds, an empty id and an
+# email id are refused before any side effect.
+for script in promote.sh rollback.sh; do
+  for actor in cos operator:x system:x robot robot:x human: 'external_operator:a@example.com'; do
+    setup "bad-actor-$script" false
+    set +e
+    env SD_ACTOR="$actor" PATH="$FAKE_BIN:$PATH" bash "$SD/$script" "$([ "$script" = promote.sh ] && echo "$NEW" || echo --restore-db)" >"$CASE/out.log" 2>&1
+    RC=$?
+    set -e
+    [ "$RC" -ne 0 ] && ok "$script refuses SD_ACTOR=$actor" || ng "$script accepted SD_ACTOR=$actor"
+    grep -q "SD_ACTOR" "$CASE/out.log" || ng "$script: no SD_ACTOR diagnostic for $actor"
+    [ ! -f "$FAKE_STATE/systemctl.log" ] || ng "$script: side effect with SD_ACTOR=$actor"
+    [ -z "$(find "$CELERIS_STATE_DIR/releases" -path '*/audit/*.json' 2>/dev/null)" ] || ng "$script: audit written for SD_ACTOR=$actor"
+  done
+done
+
+# A bare kind records actor_id null; <kind>:<id> splits into actor_kind / actor_id (checked by
+# check_audit in the cases below).
+setup bare-kind true
+touch "$FAKE_STATE/started-celeris@$OLD" "$FAKE_STATE/started-celeris-web@$OLD"
+set +e
+env SD_ACTOR=human SD_STOP_WAIT=1 PATH="$FAKE_BIN:$PATH" bash "$SD/promote.sh" "$NEW" >"$CASE/out.log" 2>&1
+RC=$?
+set -e
+assert_eq "bare-kind: promote.sh exit" 0 "$RC"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if (d["actor"], d["actor_kind"], d["actor_id"]) == ("human", "human", None) else 1)' \
+  "$CELERIS_STATE_DIR/releases/$NEW/promoted.json" && ok "bare-kind: actor_kind=human actor_id=null" || ng "bare-kind: actor fields wrong"
+dump_on_fail
 
 # ---- ケース 1: promote.sh live ------------------------------------------------
 setup live true
@@ -319,8 +351,7 @@ python3 - "$CELERIS_STATE_DIR/releases/$OLD/audit" <<'PYTEST' || ng "failed rest
 import pathlib, json, sys
 records = [json.loads(p.read_text()) for p in pathlib.Path(sys.argv[1]).glob('*.json')]
 assert len(records) == 1
-assert records[0]['status'] == 'failed' and records[0]['exit_code'] != 0
-assert records[0]['actor'] == 'operator:test'
+assert (records[0]['actor'], records[0]['actor_kind'], records[0]['actor_id']) == ('external_operator:test', 'external_operator', 'test')
 PYTEST
 
 # A required web failure must not publish successful promotion or advance links.

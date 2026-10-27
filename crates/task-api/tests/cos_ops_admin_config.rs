@@ -432,7 +432,12 @@ impl task_api::ReleaseSource for FakeReleases {
         sha12: &str,
         audit: &task_api::releases::DeploymentContext,
     ) -> Result<task_api::types::ReleasePromoteAccepted, task_api::ReleasePromoteError> {
-        assert_eq!(audit.actor, "cos");
+        // ADR 2026-10-27-human-ops-actor-roles-request-ref D2: the test threads are project CoS threads.
+        let thread = audit
+            .actor
+            .strip_prefix("cos_project:")
+            .expect("cos_project actor");
+        assert!(!thread.is_empty(), "{}", audit.actor);
         assert!(!audit.reason.trim().is_empty());
         assert!(!audit.policy_ref.trim().is_empty());
         assert_eq!(audit.decision_refs.len(), 1);

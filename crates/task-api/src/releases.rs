@@ -63,14 +63,33 @@ pub struct DeploymentContext {
 }
 
 impl DeploymentContext {
-    pub fn human() -> Self {
+    /// The authenticated admin API path; `policy_ref` names the concrete request.
+    pub fn human(sha12: &str) -> Self {
         Self {
             actor: "human".into(),
             reason: "authenticated release promotion request".into(),
-            policy_ref: "POST /api/v1/releases/{sha12}/promote".into(),
+            policy_ref: format!("POST /api/v1/releases/{sha12}/promote"),
             task_refs: vec![],
             decision_refs: vec![],
         }
+    }
+}
+
+/// `SD_ACTOR` for a CoS operation (ADR 2026-10-27-human-ops-actor-roles-request-ref D2): the
+/// thread kind decides `cos_general` or `cos_project` and the thread id is the actor id. A legacy
+/// or unreadable thread is refused rather than guessed.
+pub fn cos_deployment_actor(
+    thread_id: &str,
+    kind: Option<task_core::chat::ChatThreadKind>,
+) -> Result<String, String> {
+    use task_core::chat::ChatThreadKind;
+    match kind {
+        Some(ChatThreadKind::General) => Ok(format!("cos_general:{thread_id}")),
+        Some(ChatThreadKind::Project) => Ok(format!("cos_project:{thread_id}")),
+        Some(ChatThreadKind::Legacy) => Err(format!(
+            "thread {thread_id} is a legacy thread, not a general or project CoS thread"
+        )),
+        None => Err(format!("thread {thread_id} is not readable")),
     }
 }
 
@@ -168,7 +187,7 @@ pub(crate) async fn promote(
         crate::cos::operations::effect_result(promote_effect(
             source.as_ref(),
             &requested,
-            &DeploymentContext::human(),
+            &DeploymentContext::human(&sha12),
         ))
     })
     .await
@@ -274,3 +293,34 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
 
 /// `ApiSettings` が持つ型（`Option` なので `[selfdeploy]` が無い構成でも API は動く）。
 pub type SharedReleaseSource = Arc<dyn ReleaseSource>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use task_core::chat::ChatThreadKind;
+
+    #[test]
+    fn cos_actor_follows_the_thread_kind_and_refuses_legacy_or_unreadable() {
+        assert_eq!(
+            cos_deployment_actor("general", Some(ChatThreadKind::General)).as_deref(),
+            Ok("cos_general:general")
+        );
+        assert_eq!(
+            cos_deployment_actor("project:p1", Some(ChatThreadKind::Project)).as_deref(),
+            Ok("cos_project:project:p1")
+        );
+        assert!(cos_deployment_actor("legacy:x", Some(ChatThreadKind::Legacy)).is_err());
+        assert!(cos_deployment_actor("gone", None).is_err());
+    }
+
+    #[test]
+    fn human_policy_ref_names_the_requested_release() {
+        let context = DeploymentContext::human("abcdef123456");
+        assert_eq!(context.actor, "human");
+        assert_eq!(
+            context.policy_ref,
+            "POST /api/v1/releases/abcdef123456/promote"
+        );
+        assert!(!context.policy_ref.contains("{sha12}"));
+    }
+}

@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import uuid
 
+ACTOR_KINDS = ('human', 'script', 'cos_project', 'cos_general', 'external_operator', 'mcp_client', 'unknown')
 
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -21,9 +22,14 @@ def context():
         if not value.strip():
             raise ValueError('SD_' + key.upper() + ' is required')
         result[key] = value
-    actor = result['actor']
-    if actor not in ('human', 'cos') and not any(actor.startswith(p) and actor[len(p):].strip() for p in ('operator:', 'system:')):
-        raise ValueError('SD_ACTOR must identify human, cos, operator:<name> or system:<name>')
+    # ADR 2026-10-27-human-ops-actor-roles-request-ref D2 is the only actor vocabulary.
+    kind, sep, actor_id = result['actor'].partition(':')
+    if kind not in ACTOR_KINDS:
+        raise ValueError('SD_ACTOR kind must be one of ' + ', '.join(ACTOR_KINDS) + ' (form <kind> or <kind>:<id>)')
+    if sep and (not actor_id.strip() or '@' in actor_id):
+        raise ValueError('SD_ACTOR id must be nonempty and not an email address')
+    result['actor_kind'] = kind
+    result['actor_id'] = actor_id if sep else None
     for key in ('task_refs', 'decision_refs'):
         value = json.loads(os.environ.get('SD_' + key.upper(), '[]'))
         if not isinstance(value, list) or any(not isinstance(x, str) or not x.strip() for x in value):

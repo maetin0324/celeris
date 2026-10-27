@@ -11,6 +11,23 @@ tasks: [01M5SRJMB1CSGBYT028X0B67N2]
 - 実行器: `crates/campaign/src/harness_exec.rs`（A）、`crates/campaign/src/celeris_exec.rs`（B）、`crates/task-worker/src/claude_code.rs`（B の run）
 - 成功契約と集計: `agent-docs/progress/2026-10-23-success-contract-human-ops.md`、[eval-raw-record-definitions.md](eval-raw-record-definitions.md) §7、`crates/campaign/src/{success,export,final_accounting}.rs`
 
+## 評価範囲（2026-10-27 明記）
+
+A0/B0 が測るのは **task 実行系**であり、通常運用の Celeris 全体ではない。A0 は単体 harness、B0 は
+`crates/campaign/src/celeris_exec.rs` の `submit` が task API を直接呼ぶ構成で、通常の案件 CoS・統括 CoS による
+依頼の理解・起票・受信箱対応・報告や、外部 operator による運用補助を試行の経路に組み込まない。
+§7 の `cos_not_called_basis` はこの経路と消費行の確認に基づく。通常運用でも CoS の費用が 0 という意味ではない。
+したがって、この比較だけから通常運用全体の成功率、人の負担、自律性、総費用の優劣は主張しない。
+
+この追記は評価範囲の説明であり、既存の pinned bundle・pilot の条件、ID、予算、成功契約、§7 の集計範囲を変えない。
+後続の freeze/pilot の現物は [pilot 実行票](mlsys-main-4-pilot-runbook.md)と
+[readiness 記録](../../agent-docs/progress/2026-10-25-main4-pilot-readiness.md)を参照する。
+実際に外部 operator が回答・修復・再投入等で結果へ影響した場合は、その支援を別記し、
+「共有の開発作業」と一律に除外して支援なしの結果に見せない。既存の試行記録・成功判定は書き換えない。
+
+CoS を含む通常運用と、境界外の「外部 AI による支援」を報告する新 revision は
+[main-4-ops-r1](mlsys-main-4-ops-r1.md)で別に定義する。既存 A0/B0 の結果とは混合しない。
+
 ## 1. 後で入る欄（人の決定）
 
 | 欄 | 決定 | 値 | 記入する段 |

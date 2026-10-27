@@ -577,6 +577,25 @@ impl SqliteStore {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    /// ADR 2026-10-18-parent-waits-for-children 付記: the failure of `task_id` (inbox kind `failed`,
+    /// key `failed-<task_id>-<ts>`) was escalated to the person by CoS and is unresolved. A `fallback`
+    /// (CoS unavailable) is a mechanical notice, not a hold, and does not count.
+    pub fn cos_triage_failure_escalated(&self, task_id: &str) -> Result<bool, ChatError> {
+        let conn = writer(self)?;
+        Ok(conn
+            .query_row(
+                "SELECT 1 FROM cos_inbox_items WHERE source_kind='failed' \
+                 AND substr(source_key,1,?2)=?1 AND state='escalated' LIMIT 1",
+                params![
+                    format!("failed-{task_id}-"),
+                    i64::try_from(task_id.len() + 8).unwrap_or(i64::MAX)
+                ],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
     /// One item with its route and decision packet.
     pub fn cos_triage_item_report(
         &self,

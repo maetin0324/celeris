@@ -705,3 +705,131 @@ fn rejects_reproposing_the_scope_of_an_existing_child() {
     let titles: Vec<&str> = out.accepted.iter().map(|t| t.title.as_str()).collect();
     assert_eq!(titles, vec!["31d retry", "31e new scope"]);
 }
+
+/// ADR 2026-10-18-parent-waits-for-children 付記: 「待て」の読み取りは決定的な語の照合で、否定を含めば読まない。
+#[test]
+fn wait_instruction_matches_wait_phrases_and_rejects_negations() {
+    use child_wait::is_wait_instruction;
+    assert!(is_wait_instruction("01M5WC8PPW の再実行を待ってください"));
+    assert!(is_wait_instruction(
+        "Please WAIT FOR THE RERUN of the child"
+    ));
+    assert!(is_wait_instruction("子の完了を待つ"));
+    assert!(!is_wait_instruction("子の完了を待たずに進めて"));
+    assert!(!is_wait_instruction("don't wait for the rerun, proceed"));
+    assert!(!is_wait_instruction("進めてください"));
+}
+
+/// `failed` の子を `Transitioned{to: failed}` 付きで作る。
+fn failed_child(store: &SqliteStore, parent: TaskId) -> Task {
+    let child = make_task(Some(parent), Status::Ready);
+    insert(store, &child);
+    store
+        .apply_transition(child.id, task_core::Trigger::TokenBudgetExhausted, None)
+        .expect("fail child");
+    child
+}
+
+fn comment(
+    store: &SqliteStore,
+    task: TaskId,
+    kind: task_core::comment::CommentAuthorKind,
+    run_id: Option<&str>,
+    body: &str,
+    at: OffsetDateTime,
+) {
+    let c = task_core::comment::TaskComment::new(
+        task,
+        kind,
+        None,
+        body.into(),
+        run_id.map(str::to_owned),
+        at,
+    );
+    store.comment_add(&c, None).expect("comment");
+}
+
+fn awaited(store: &SqliteStore, parent: TaskId, escalated: &[TaskId]) -> Vec<TaskId> {
+    let mut lookup = |id: TaskId| Ok(escalated.contains(&id));
+    child_wait::awaited_children(store, parent, false, &mut lookup).expect("awaited")
+}
+
+/// 印の無い `failed` の子は待たない。未解決の escalated 項目、人・CoS の「待て」の comment があれば待つ。
+/// worker の run の comment は指示に数えない。
+#[test]
+fn awaited_children_holds_a_failed_child_only_while_told_to_wait() {
+    use task_core::comment::CommentAuthorKind;
+    let store = SqliteStore::open_in_memory().expect("open");
+    let parent = make_task(None, Status::Ready);
+    insert(&store, &parent);
+    let child = failed_child(&store, parent.id);
+
+    assert!(
+        awaited(&store, parent.id, &[]).is_empty(),
+        "印が無ければ終端"
+    );
+    assert_eq!(awaited(&store, parent.id, &[child.id]), vec![child.id]);
+
+    comment(
+        &store,
+        child.id,
+        CommentAuthorKind::Node,
+        Some("run-1"),
+        "再実行を待ちます",
+        now(),
+    );
+    assert!(
+        awaited(&store, parent.id, &[]).is_empty(),
+        "worker の comment は数えない"
+    );
+
+    comment(
+        &store,
+        child.id,
+        CommentAuthorKind::Node,
+        None,
+        "CoS: 修正の昇格後に再実行するので、それまで再実行を待つこと",
+        now(),
+    );
+    assert_eq!(awaited(&store, parent.id, &[]), vec![child.id]);
+}
+
+/// 子が reopen されて再び失敗したら、前の失敗への「待て」は効かない（親を起こす）。
+#[test]
+fn a_wait_instruction_before_the_latest_failure_does_not_hold() {
+    use task_core::comment::CommentAuthorKind;
+    let store = SqliteStore::open_in_memory().expect("open");
+    let parent = make_task(None, Status::Ready);
+    insert(&store, &parent);
+    let child = failed_child(&store, parent.id);
+    comment(
+        &store,
+        parent.id,
+        CommentAuthorKind::Human,
+        None,
+        "子の再実行を待って",
+        now() - time::Duration::hours(1),
+    );
+    assert!(awaited(&store, parent.id, &[]).is_empty());
+
+    // 失敗の後の人の回答（親への answer）は効く。
+    store
+        .apply_transition(parent.id, task_core::Trigger::Dispatch, None)
+        .expect("dispatch");
+    store
+        .apply_transition(parent.id, task_core::Trigger::WorkerQuestion, None)
+        .expect("question");
+    crate::gate::answer(&store, parent.id, "子の再実行を待ってください".into(), None)
+        .expect("answer");
+    assert_eq!(awaited(&store, parent.id, &[]), vec![child.id]);
+    // 再実行中（ready）は、親の最後の run より後の指示があるので待つ。
+    store
+        .apply_transition(child.id, task_core::Trigger::Reopen, None)
+        .expect("reopen");
+    assert_eq!(awaited(&store, parent.id, &[]), vec![child.id]);
+    // 再び失敗したら外れる。
+    store
+        .apply_transition(child.id, task_core::Trigger::TokenBudgetExhausted, None)
+        .expect("fail again");
+    assert!(awaited(&store, parent.id, &[]).is_empty());
+}

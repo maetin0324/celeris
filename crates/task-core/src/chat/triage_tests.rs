@@ -485,3 +485,33 @@ fn cos_chat_triage_items_and_escalations_follow_the_root_project() {
     assert_eq!(label_of("p"), format!("[CoS: {project}]"));
     assert_eq!(label_of("g"), "[統括 CoS]");
 }
+
+/// ADR 2026-10-18-parent-waits-for-children 付記: 子の失敗の item が人に渡って未解決（escalated）の間だけ真。
+/// 別の task の key（id の前方一致）・`fallback`・解決済みは数えない。
+#[test]
+fn cos_triage_failure_escalated_matches_only_the_open_item_of_that_task() {
+    let s = SqliteStore::open_in_memory().expect("store");
+    let failed = |key: &str| CosTriageSource {
+        source_kind: "failed".into(),
+        ..item(key, "1")
+    };
+    s.cos_triage_direct_escalate(&failed("failed-01ABC-20261027T000000Z"), "body", at(0))
+        .expect("direct");
+    assert!(s.cos_triage_failure_escalated("01ABC").expect("query"));
+    assert!(!s.cos_triage_failure_escalated("01AB").expect("query"));
+    assert!(!s.cos_triage_failure_escalated("01XYZ").expect("query"));
+    // CoS が使えず機械的に人へ回した `fallback` は数えない。
+    s.cos_triage_direct_escalate(&failed("failed-01DEF-20261027T000000Z"), "body", at(0))
+        .expect("direct");
+    s.lock()
+        .expect("lock")
+        .execute(
+            "UPDATE cos_inbox_items SET state='fallback' WHERE source_key LIKE 'failed-01DEF-%'",
+            [],
+        )
+        .expect("fallback");
+    assert!(!s.cos_triage_failure_escalated("01DEF").expect("query"));
+    s.cos_triage_resolve_stale("failed", &[], at(1))
+        .expect("stale");
+    assert!(!s.cos_triage_failure_escalated("01ABC").expect("query"));
+}

@@ -910,6 +910,112 @@ async fn parent_waits_for_unfinished_children_without_counting_continuations() {
     assert!(finished(&store) >= 2, "子の完了で親が dispatch される");
 }
 
+/// ADR 2026-10-18-parent-waits-for-children 付記（2026-10-27、BenchFS 01M5WARE6D56 の再現）: 子が `failed` で
+/// 「再実行を待て」の回答がある間は親を起こさず continuation も増えない。子が reopen されて完了すると親が起きる。
+#[tokio::test]
+async fn parent_stays_asleep_for_a_failed_child_while_told_to_wait_for_its_rerun() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let check = || Check::Command {
+        cmd: "true".into(),
+        expect_exit: 0,
+    };
+    let parent = new_task(dir.path(), check(), 2);
+    let parent_id = parent.id;
+    store.insert(&parent).unwrap();
+    let mut child = new_task(dir.path(), check(), 2);
+    child.parent_id = Some(parent_id);
+    let child_id = child.id;
+    store.insert(&child).unwrap();
+    store
+        .apply_transition(child_id, Trigger::TokenBudgetExhausted, None)
+        .unwrap();
+    assert_eq!(store.get(child_id).unwrap().unwrap().status, Status::Failed);
+    let mut d = dispatcher(store.clone(), Arc::new(AlwaysBudgetExhaustedAdapter), 1);
+
+    let runs = |store: &Arc<dyn TaskStore>| {
+        store
+            .events_for(parent_id)
+            .unwrap()
+            .iter()
+            .filter(|(_, e)| matches!(e, Event::WorkerStarted { role: None, .. }))
+            .count()
+    };
+    let status = |store: &Arc<dyn TaskStore>| store.get(parent_id).unwrap().unwrap().status;
+    // 印の無い失敗した子は終端: 親は起き、進捗なしで人に質問する（ADR-0072）。
+    for _ in 0..200 {
+        d.tick().unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        if status(&store) == Status::Blocked {
+            break;
+        }
+    }
+    assert_eq!(status(&store), Status::Blocked);
+    let before = runs(&store);
+    assert!(before >= 1);
+    let continues = |store: &Arc<dyn TaskStore>| {
+        store
+            .events_for(parent_id)
+            .unwrap()
+            .iter()
+            .filter(|(_, e)| {
+                matches!(e, Event::Transitioned { reason, .. } if reason.starts_with("continue"))
+            })
+            .count()
+    };
+    let continues_before = continues(&store);
+
+    // 人が「子の再実行を待て」と答える。親は ready に戻るが起きず、continuation も増えない。
+    task_ops::gate::answer(
+        store.as_ref(),
+        parent_id,
+        "子 task の再実行を待ってください".into(),
+        None,
+    )
+    .unwrap();
+    for _ in 0..60 {
+        d.tick().unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        runs(&store),
+        before,
+        "再実行待ちの間は親の run を起こさない"
+    );
+    assert_eq!(status(&store), Status::Ready);
+    assert_eq!(continues(&store), continues_before);
+    let waits = d.snapshot_task_waits();
+    assert!(
+        waits.iter().any(|w| w.task_id == parent_id
+            && w.wait
+                == task_core::TaskWait::DelegatedChildren {
+                    task_ids: vec![child_id]
+                }),
+        "{waits:?}"
+    );
+
+    // 子が reopen されて動いている間も待つ（tick で子を走らせない。判定だけを見る）。
+    task_ops::comment::reopen(store.as_ref(), child_id, None).unwrap();
+    assert_eq!(
+        d.awaited_children(parent_id, false).unwrap(),
+        vec![child_id],
+        "再実行中の子も待つ"
+    );
+    // 子が完了すると親が起きる。
+    for trigger in [Trigger::Dispatch, Trigger::WorkerDone, Trigger::ReviewPass] {
+        store.apply_transition(child_id, trigger, None).unwrap();
+    }
+    assert_eq!(store.get(child_id).unwrap().unwrap().status, Status::Done);
+    for _ in 0..60 {
+        d.tick().unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        if runs(&store) > before {
+            break;
+        }
+    }
+    assert!(runs(&store) > before, "子の完了で親が dispatch される");
+}
+
 /// ADR-0072 (a)(b)(e)(g): 予算切れは `Trigger::Continue` で `Ready` に戻り attempts を消費しない。
 /// 進捗のない checkpoint が連続 2 回続くと `blocked`（`QuestionRaised` + `Approval`）。人の回答
 /// （`Trigger::Answer`）で窓が戻り、また continuation が進む。

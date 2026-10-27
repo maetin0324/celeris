@@ -2664,7 +2664,7 @@ impl Dispatcher {
                 self.note_dispatch_wait(task.id, wait);
                 continue;
             }
-            // ADR 2026-10-18-parent-waits-for-children: 委譲した子が未完了の間、子待ちの親は起こさない。
+            // ADR 2026-10-18-parent-waits-for-children: 委譲した子が未完了・再実行待ちの間、親は起こさない。
             if self.parent_waits_for_children(&task)? {
                 continue;
             }
@@ -2684,26 +2684,6 @@ impl Dispatcher {
             self.carry_write_set_waits();
         }
         Ok(dispatched)
-    }
-
-    /// 直近の遷移が子待ち（`children_wait`）で、委譲した子がまだ終端でない。
-    fn parent_waits_for_children(&self, task: &Task) -> Result<bool, DispatchError> {
-        if task_ops::delegate::pending_children(self.store.as_ref(), task.id)
-            .map_err(ops_to_store)?
-            == 0
-        {
-            return Ok(false);
-        }
-        Ok(self
-            .store
-            .events_for(task.id)?
-            .iter()
-            .rev()
-            .find_map(|(_, ev)| match ev {
-                Event::Transitioned { reason, .. } => Some(reason.as_str() == "children_wait"),
-                _ => None,
-            })
-            .unwrap_or(false))
     }
 
     /// ADR 2026-10-11-task-wait-reasons D4: この tick の見送りの理由を 1 件記録する（同じ task の 2 件目は上書きしない）。

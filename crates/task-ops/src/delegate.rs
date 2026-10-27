@@ -11,6 +11,8 @@ use time::OffsetDateTime;
 
 use crate::OpsError;
 
+pub mod child_wait;
+
 /// `plan_delegation` の結果。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DelegationOutcome {

@@ -3,6 +3,53 @@
 use super::*;
 
 impl Dispatcher {
+    /// ADR 2026-10-18-parent-waits-for-children（2026-10-27 付記）: 親が待つ子
+    /// （`task_ops::delegate::child_wait::awaited_children`）。未解決の escalated 項目は CoS の受信箱から読む
+    /// （CoS chat が無ければ無い）。
+    pub(super) fn awaited_children(
+        &self,
+        parent: TaskId,
+        children_wait_started: bool,
+    ) -> Result<Vec<TaskId>, DispatchError> {
+        let chat = self.cos_chat_launch.as_ref().map(|c| c.store.clone());
+        let mut escalated = |child: TaskId| -> Result<bool, task_ops::OpsError> {
+            Ok(match &chat {
+                Some(store) => store
+                    .cos_triage_failure_escalated(&child.to_string())
+                    .map_err(|e| task_ops::OpsError::Validation(e.to_string()))?,
+                None => false,
+            })
+        };
+        task_ops::delegate::child_wait::awaited_children(
+            self.store.as_ref(),
+            parent,
+            children_wait_started,
+            &mut escalated,
+        )
+        .map_err(ops_to_store)
+    }
+
+    /// 委譲した子を待つ親は dispatch しない（直近の遷移が `children_wait` なら未完の子を、そうでなくても
+    /// 「再実行を待て」の印がある子を待つ）。待つ子は `DelegatedChildren` の待ちとして見せる。
+    pub(super) fn parent_waits_for_children(&mut self, task: &Task) -> Result<bool, DispatchError> {
+        let children_wait_started = self
+            .store
+            .events_for(task.id)?
+            .iter()
+            .rev()
+            .find_map(|(_, ev)| match ev {
+                Event::Transitioned { reason, .. } => Some(reason.as_str() == "children_wait"),
+                _ => None,
+            })
+            .unwrap_or(false);
+        let task_ids = self.awaited_children(task.id, children_wait_started)?;
+        if task_ids.is_empty() {
+            return Ok(false);
+        }
+        self.note_dispatch_wait(task.id, task_core::TaskWait::DelegatedChildren { task_ids });
+        Ok(true)
+    }
+
     /// ADR-0016 M4: `aggregate = true` で、Approval 以外の子が 1 件以上あり、まだ集約遷移をしていないか。
     pub(super) fn needs_aggregate_run(&self, task: &Task) -> Result<bool, DispatchError> {
         if !task.aggregate {

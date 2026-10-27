@@ -1087,12 +1087,11 @@ impl Dispatcher {
                         .as_deref()
                         .and_then(crate::checkpoint::read_worker_checkpoint)
                 });
-            // ADR 2026-10-18-parent-waits-for-children: 委譲した子が未完了なら、親の続きの run は進むものが無い。
-            // 子待ちとして止め（continuation・進捗なしに数えない）、子が終わってから dispatch する。
+            // ADR 2026-10-18-parent-waits-for-children: 委譲した子が未完了か、失敗した子に「再実行を待て」の印が
+            // あるなら、親の続きの run は進むものが無い。子待ちとして止め（continuation・進捗なしに数えない）、
+            // 子が終わってから dispatch する。
             let children_pending = end != task_core::RunEnd::Waiting
-                && task_ops::delegate::pending_children(self.store.as_ref(), task_id)
-                    .map_err(ops_to_store)?
-                    > 0;
+                && !self.awaited_children(task_id, true)?.is_empty();
             let checkpoint_end = if children_pending {
                 task_core::CheckpointEnd::Waiting
             } else {

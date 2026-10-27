@@ -179,7 +179,7 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
             &root,
             "aaaaaaaaaaaa",
             "inline",
-            &DeploymentContext::human("aaaaaaaaaaaa")
+            &DeploymentContext::authenticated("aaaaaaaaaaaa", "human:web")
         ),
         Err(ReleasePromoteError::NotFound)
     );
@@ -188,7 +188,7 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
             &root,
             "../etc",
             "inline",
-            &DeploymentContext::human("../etc")
+            &DeploymentContext::authenticated("../etc", "human:web")
         ),
         Err(ReleasePromoteError::NotFound)
     );
@@ -206,7 +206,7 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
             &root,
             "aaaaaaaaaaaa",
             "inline",
-            &DeploymentContext::human("aaaaaaaaaaaa")
+            &DeploymentContext::authenticated("aaaaaaaaaaaa", "human:web")
         ),
         Err(ReleasePromoteError::NotVerified(_))
     ));
@@ -221,7 +221,7 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
             &root,
             "aaaaaaaaaaaa",
             "inline",
-            &DeploymentContext::human("aaaaaaaaaaaa")
+            &DeploymentContext::authenticated("aaaaaaaaaaaa", "human:web")
         ),
         Err(ReleasePromoteError::NotVerified(_))
     ));
@@ -239,7 +239,7 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
             &root,
             "aaaaaaaaaaaa",
             "inline",
-            &DeploymentContext::human("aaaaaaaaaaaa")
+            &DeploymentContext::authenticated("aaaaaaaaaaaa", "human:web")
         ),
         Err(ReleasePromoteError::AlreadyCurrent)
     );
@@ -257,7 +257,7 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
             &root,
             "bbbbbbbbbbbb",
             "inline",
-            &DeploymentContext::human("bbbbbbbbbbbb")
+            &DeploymentContext::authenticated("bbbbbbbbbbbb", "human:web")
         ),
         Err(ReleasePromoteError::Unavailable(_))
     ));
@@ -276,7 +276,7 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
             &root,
             "bbbbbbbbbbbb",
             "inline",
-            &DeploymentContext::human("bbbbbbbbbbbb")
+            &DeploymentContext::authenticated("bbbbbbbbbbbb", "human:web")
         ),
         Err(ReleasePromoteError::AlreadyPromoting)
     );
@@ -312,7 +312,7 @@ fn promoting_spawns_the_bundled_script_detached_and_writes_the_lock() {
         &root,
         "abcdef123456",
         &DetachLauncher::Inline,
-        &DeploymentContext::human("abcdef123456"),
+        &DeploymentContext::authenticated("abcdef123456", "human:web"),
     )
     .expect("202");
     assert_eq!(accepted.sha12, "abcdef123456");
@@ -348,7 +348,7 @@ fn promoting_spawns_the_bundled_script_detached_and_writes_the_lock() {
             &root,
             "abcdef123456",
             "inline",
-            &DeploymentContext::human("abcdef123456")
+            &DeploymentContext::authenticated("abcdef123456", "human:web")
         ),
         Err(ReleasePromoteError::AlreadyPromoting)
     );
@@ -390,7 +390,7 @@ fn promotion_runs_the_promote_script_of_the_current_release() {
             &root,
             "bbbbbbbbbbbb",
             "inline",
-            &DeploymentContext::human("bbbbbbbbbbbb")
+            &DeploymentContext::authenticated("bbbbbbbbbbbb", "human:web")
         ),
         Err(ReleasePromoteError::Unavailable(_))
     ));
@@ -402,7 +402,7 @@ fn promotion_runs_the_promote_script_of_the_current_release() {
         &root,
         "bbbbbbbbbbbb",
         &DetachLauncher::Inline,
-        &DeploymentContext::human("bbbbbbbbbbbb"),
+        &DeploymentContext::authenticated("bbbbbbbbbbbb", "human:web"),
     )
     .expect("202");
     assert_eq!(accepted.script_from, "target");
@@ -426,7 +426,7 @@ fn promotion_runs_the_promote_script_of_the_current_release() {
         &root,
         "bbbbbbbbbbbb",
         &DetachLauncher::Inline,
-        &DeploymentContext::human("bbbbbbbbbbbb"),
+        &DeploymentContext::authenticated("bbbbbbbbbbbb", "human:web"),
     )
     .expect("202");
     assert_eq!(accepted.script_from, "current");
@@ -569,7 +569,7 @@ fn starting_a_new_promotion_clears_the_previous_failure_marker() {
         &root,
         "abcdef123456",
         &DetachLauncher::Inline,
-        &DeploymentContext::human("abcdef123456"),
+        &DeploymentContext::authenticated("abcdef123456", "human:web"),
     )
     .expect("202");
 
@@ -978,7 +978,7 @@ fn promoting_via_fake_systemd_run_writes_the_lock_and_streams_the_log() {
         &root,
         "abcdef123456",
         &launcher,
-        &DeploymentContext::human("abcdef123456"),
+        &DeploymentContext::authenticated("abcdef123456", "human:web"),
     )
     .expect("202");
     assert_eq!(accepted.sha12, "abcdef123456");
@@ -1007,7 +1007,7 @@ fn promoting_via_fake_systemd_run_writes_the_lock_and_streams_the_log() {
             &root,
             "abcdef123456",
             &launcher,
-            &DeploymentContext::human("abcdef123456")
+            &DeploymentContext::authenticated("abcdef123456", "human:web")
         ),
         Err(ReleasePromoteError::AlreadyPromoting)
     );

@@ -15,6 +15,7 @@ use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
+use task_core::TaskStore;
 use task_ops::lifecycle;
 use time::OffsetDateTime;
 
@@ -139,6 +140,7 @@ async fn milestone_action(state: ApiState, headers: HeaderMap) -> ApiResult {
 /// 判断は `task_ops::lifecycle::{pause_task, resume_task}`（`ready_tasks` が祖先を辿って止める）。
 async fn task_action(
     state: ApiState,
+    caller: crate::Caller,
     headers: HeaderMap,
     raw: Option<String>,
     body: Body,
@@ -151,30 +153,33 @@ async fn task_action(
     let EmptyBody {} = read_json(body, true).await?;
     let trigger = if pause { "task_pause" } else { "task_resume" };
     let result = state
-        .blocking(move |store| task_pause_op(store, task_id, pause, None)?.direct())
+        .blocking(move |store| {
+            task_pause_op(store, task_id, pause, &caller.actor(), None)?.direct()
+        })
         .await?;
     tracing::info!(who = "admin", op = trigger, task_id = %task_id, subtree = result.subtree.len(), "admin: task subtree lifecycle");
     Ok(json_response(StatusCode::OK, &result))
 }
 
-/// `POST /tasks/{id}/pause|resume` の本体。handler（`audit = None`、`by = human`）と CoS の
-/// `/cos/operations`（ADR 2026-10-09 D3/D5。`by = cos`、task の更新・`Edited` event・監査を同じ transaction）
+/// `POST /tasks/{id}/pause|resume` の本体。handler（`audit = None`、認証済み principal）と CoS の
+/// `/cos/operations`（ADR 2026-10-09 D3/D5。`by = cos:<thread_id>`、task の更新・`Edited` event・監査を同じ transaction）
 /// が共有する。
 pub(crate) fn task_pause_op(
     store: &task_core::store::SqliteStore,
     task_id: task_core::TaskId,
     pause: bool,
+    by: &str,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<lifecycle::TaskPauseResult>, ApiProblem> {
     let now = OffsetDateTime::now_utc();
     let trigger = if pause { "task_pause" } else { "task_resume" };
     let Some(audit) = audit else {
-        let outcome = if pause {
-            lifecycle::pause_task(store, task_id, now)
-        } else {
-            lifecycle::resume_task(store, task_id, now)
-        };
-        return outcome
+        let (next, event) = lifecycle::plan_set_paused(store, task_id, pause, by, now)
+            .map_err(|e| ops_problem(store, e, Some(trigger)))?;
+        let updated = store
+            .update_task(&next, event)
+            .map_err(crate::problem::store_problem)?;
+        return lifecycle::pause_result(store, &updated)
             .map(Applied::Direct)
             .map_err(|e| ops_problem(store, e, Some(trigger)));
     };
@@ -225,12 +230,13 @@ macro_rules! task_handler {
     ($name:ident, $pause:expr) => {
         async fn $name(
             State(state): State<ApiState>,
+            caller: crate::Caller,
             headers: HeaderMap,
             Params(id): Params<String>,
             RawQuery(raw): RawQuery,
             body: Body,
         ) -> ApiResult {
-            task_action(state, headers, raw, body, id, $pause).await
+            task_action(state, caller, headers, raw, body, id, $pause).await
         }
     };
 }

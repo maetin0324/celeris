@@ -61,5 +61,14 @@ CoS の操作は cos_operations に thread が残るが、ドメイン event の
 - by を principal にした handler: task の approve/reject/answer/comment/retry/patch、decisions の answer/withdraw/revise、
   execution の plan adopt / PUT / tree adopt / plan-gate / decompose、integrations、routing stage、browser site policy、
   CoS の各 op（`OperationAudit::by` = `cos:<thread_id>`）。
-- 付記（実装との差）: phase-gate・cancel・task pause/resume の人の経路、POST /tasks 等は task-ops 内部の `"human"` の
-  ままで、進捗ファイルの未解決に残す。
+- 主体欄を持たない既存 event（phase-gate・cancel・POST /tasks 等）への新規監査欄追加は含めない。
+  既存の by / actor / source は principal を渡す。
+
+## main 同期時の追記: 昇格 API の監査
+
+main に加わった配備監査にも認証済み principal を渡す。通常の昇格 API は human を
+`human:<name>`、operator を配備監査 D2 の語彙 `external_operator:<name>` に変換する。
+MCP・CoS・未認証はこの通常 API の昇格主体として拒否する。CoS は既存の operation 経路で
+thread 種別から `cos_general` / `cos_project` を決める。固定 human の constructor は除去する。
+
+一時停止・再開の通常 API も Caller を `plan_set_paused` へ渡し、既存 Edited.by の固定 human を除く。

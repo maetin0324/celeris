@@ -16,7 +16,12 @@ const OPERATOR_TOKEN: &str = "operator-token-value-2";
 const MCP_TOKEN: &str = "celeris-mcp.0123456789abcdef";
 
 fn env() -> TestEnv {
+    env_with_releases(None)
+}
+
+fn env_with_releases(releases: Option<task_api::SharedReleaseSource>) -> TestEnv {
     TestEnv::with(EnvOptions {
+        releases,
         extra_tokens: vec![
             ApiToken::new(Principal::Human { name: "web".into() }, WEB_TOKEN),
             ApiToken::new(
@@ -202,4 +207,119 @@ async fn api_principals_cos_runs_are_recorded_with_their_thread() {
     }
     assert_ne!(threads[0], threads[1]);
     assert_eq!(authors(&env, &task), threads);
+}
+
+#[tokio::test]
+async fn retry_idempotency_preserves_the_token_principal() {
+    let env = env();
+    let app = env.router();
+    for (token, actor, key) in [
+        (WEB_TOKEN, "human:web", "web-retry"),
+        (OPERATOR_TOKEN, "operator:claude-code", "operator-retry"),
+    ] {
+        let mut failed = new_task(TaskKind::Execute, Status::Failed);
+        failed.routing = Some(task_core::TaskRouting::default());
+        env.seed(&failed);
+        let path = format!("/api/v1/tasks/{}/retry", failed.id);
+        let body = json!({"execution": "compound", "idempotency_key": key});
+        let mut copy_id = None;
+        for status in [201, 200] {
+            let response = send(
+                &app,
+                post_json_with(&path, &body, &[("authorization", &bearer(token))]),
+            )
+            .await;
+            assert_eq!(response.status.as_u16(), status, "{}", response.text());
+            let id: task_core::TaskId = response.json()["task_id"]
+                .as_str()
+                .expect("task id")
+                .parse()
+                .expect("id");
+            if let Some(previous) = copy_id {
+                assert_eq!(id, previous);
+            }
+            copy_id = Some(id);
+        }
+        let sources: Vec<_> = env
+            .store
+            .events_for(copy_id.expect("copy"))
+            .expect("events")
+            .into_iter()
+            .filter_map(|(_, event)| match event {
+                Event::ExecutionHintSet { source, .. } => Some(source),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sources, [actor]);
+    }
+}
+
+#[tokio::test]
+async fn promotion_audit_distinguishes_web_and_external_operator() {
+    #[derive(Default)]
+    struct Releases(std::sync::Mutex<Vec<String>>);
+    impl task_api::ReleaseSource for Releases {
+        fn list(&self) -> task_api::ReleasesFs {
+            Default::default()
+        }
+        fn promote(
+            &self,
+            _sha12: &str,
+            audit: &task_api::releases::DeploymentContext,
+        ) -> Result<task_api::types::ReleasePromoteAccepted, task_api::ReleasePromoteError>
+        {
+            self.0.lock().expect("actors").push(audit.actor.clone());
+            Err(task_api::ReleasePromoteError::AlreadyCurrent)
+        }
+    }
+    let releases = std::sync::Arc::new(Releases::default());
+    let env = env_with_releases(Some(releases.clone()));
+    let app = env.router();
+    for token in [WEB_TOKEN, OPERATOR_TOKEN] {
+        let response = send(
+            &app,
+            post_json_with(
+                "/api/v1/releases/abcdef123456/promote",
+                &json!({}),
+                &[("authorization", &bearer(token))],
+            ),
+        )
+        .await;
+        assert_eq!(response.status.as_u16(), 409, "{}", response.text());
+    }
+    assert_eq!(
+        *releases.0.lock().expect("actors"),
+        ["human:web", "external_operator:claude-code"]
+    );
+}
+
+#[tokio::test]
+async fn pause_and_resume_record_the_authenticated_actor() {
+    let env = env();
+    let app = env.router();
+    let task = new_task(TaskKind::Execute, Status::Ready);
+    env.seed(&task);
+    for (action, token) in [("pause", OPERATOR_TOKEN), ("resume", WEB_TOKEN)] {
+        let response = send(
+            &app,
+            post_json_with(
+                &format!("/api/v1/tasks/{}/{action}", task.id),
+                &json!({}),
+                &[("authorization", &bearer(token))],
+            ),
+        )
+        .await;
+        assert_eq!(response.status.as_u16(), 200, "{}", response.text());
+    }
+    let actors: Vec<_> = env
+        .store
+        .events_for(task.id)
+        .expect("events")
+        .into_iter()
+        .filter_map(|(_, event)| match event {
+            Event::Edited { by, fields } if fields == ["paused_at"] => Some(by),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(actors, ["operator:claude-code", "human:web"]);
 }

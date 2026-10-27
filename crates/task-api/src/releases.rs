@@ -64,9 +64,9 @@ pub struct DeploymentContext {
 
 impl DeploymentContext {
     /// The authenticated admin API path; `policy_ref` names the concrete request.
-    pub fn human(sha12: &str) -> Self {
+    pub fn authenticated(sha12: &str, actor: &str) -> Self {
         Self {
-            actor: "human".into(),
+            actor: actor.into(),
             reason: "authenticated release promotion request".into(),
             policy_ref: format!("POST /api/v1/releases/{sha12}/promote"),
             task_refs: vec![],
@@ -171,6 +171,7 @@ pub(crate) async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery)
 /// `POST /releases/{sha12}/promote`（管理系）。
 pub(crate) async fn promote(
     State(state): State<ApiState>,
+    caller: crate::Caller,
     crate::handlers::Params(sha12): crate::handlers::Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -182,12 +183,23 @@ pub(crate) async fn promote(
             "the [selfdeploy] section is not configured in config.toml",
         ));
     };
+    let actor = match caller.0 {
+        crate::Principal::Human { name } => format!("human:{name}"),
+        crate::Principal::Operator { name } => format!("external_operator:{name}"),
+        _ => {
+            return Err(ApiProblem::new(
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "a configured API token is required",
+            ));
+        }
+    };
     let requested = sha12.clone();
     let accepted = tokio::task::spawn_blocking(move || {
         crate::cos::operations::effect_result(promote_effect(
             source.as_ref(),
             &requested,
-            &DeploymentContext::human(&sha12),
+            &DeploymentContext::authenticated(&sha12, &actor),
         ))
     })
     .await
@@ -315,8 +327,8 @@ mod tests {
 
     #[test]
     fn human_policy_ref_names_the_requested_release() {
-        let context = DeploymentContext::human("abcdef123456");
-        assert_eq!(context.actor, "human");
+        let context = DeploymentContext::authenticated("abcdef123456", "human:web");
+        assert_eq!(context.actor, "human:web");
         assert_eq!(
             context.policy_ref,
             "POST /api/v1/releases/abcdef123456/promote"

@@ -14,7 +14,7 @@
 - 語彙は [ADR 2026-10-27-human-ops-actor-roles-request-ref](2026-10-27-human-ops-actor-roles-request-ref.md) D2 の actor_kind をそのまま使う。D2 が Celeris の actor_kind の唯一の語彙で、配備監査のための別の語彙は作らない。kind は `human` / `script` / `cos_project` / `cos_general` / `external_operator` / `mcp_client` / `unknown` の 7 種に限る。
 - `SD_ACTOR` の形は `<kind>` または `<kind>:<id>`。id は任意だが、書くなら空でなく、メールアドレス（`@` を含む値）は書かない。`scripts/selfdeploy/audit.sh` は 7 種以外の kind、空の id、メールの id を副作用の前に拒否する。旧い語彙 `cos` / `operator:<name>` / `system:<name>` は互換の分岐を置かずに拒否する（外部 operator は `external_operator:<name>`、script・cron は `script` を使う）。
 - 記録（`audit/*.json`、`promoted.json`、`rolled_back.json`）には、渡された `actor` に加えて `actor_kind` と `actor_id`（id が無ければ null）を分けて書く。
-- 人の API（`POST /api/v1/releases/{sha12}/promote`）は `DeploymentContext::human(sha12)` で actor=`human`、理由=authenticated release promotion request、policy_ref=`POST /api/v1/releases/<実際の sha12>/promote` を渡す。`{sha12}` の型板は残さない。
+- 人の API（`POST /api/v1/releases/{sha12}/promote`）は 認証済み principal から `DeploymentContext::authenticated` で actor=`human:<name>` または `external_operator:<name>`、理由=authenticated release promotion request、policy_ref=`POST /api/v1/releases/<実際の sha12>/promote` を渡す。`{sha12}` の型板は残さない。
 - CoS 経路（CoS operation `release.promote`）は `AuditContext.thread_id` の chat thread を読み、`ChatThreadKind::General` なら `cos_general:<thread id>`、`ChatThreadKind::Project` なら `cos_project:<thread id>` を渡す（`task_api::releases::cos_deployment_actor`）。legacy の thread と読めない thread は拒否し、推測で埋めない。
 
 ## 運用

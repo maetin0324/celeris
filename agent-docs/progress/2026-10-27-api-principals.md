@@ -22,18 +22,28 @@ tasks: [01M5XXF7Q3N2619D5RQA5J7C7N]
 - 試験: `crates/task-api/tests/api_principals.rs`（2 本の token・MCP・2 つの CoS thread・偽の名乗り・未知 bearer）、
   `handlers/tests.rs` の `resolve_principal_distinguishes_config_tokens_and_mcp_clients`、config の新形式の試験。
 
+## main 同期後の修正
+
+- `git rebase main` で同期。retry の衝突は冪等キー処理と principal の引数を両方残して解消。
+- main の配備監査へ principal を接続。昇格 API の web は `human:web`、operator は
+  配備監査の語彙 `external_operator:<name>`。固定 human の constructor は削除。
+- retry 再送・task pause/resume の主体保持、昇格の主体区別、BFF の旧共有 token 設定拒否を回帰試験に追加。
+
 ## 証拠（提出時の HEAD で実行）
 
-- `cargo nextest run -p task-api --test api_principals` → 4 passed。
-- `bash scripts/dev/test-affected.sh` → exit 0（Rust 6499 passed / 21 skipped、web Vitest 682 passed、Node 98 passed）。
+- `cargo nextest run -p task-api --test api_principals` → exit 0（7 passed）。
+- `bash scripts/dev/test-affected.sh` → exit 0（Rust 6541 passed / 21 skipped、web 型検査成功、Vitest 682 passed、Node 99 passed）。
 - `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。
-- e2e（`api_scenarios`・`account_pool_scenarios`・`codex_account_pool_scenarios`）は新形式の config で 17 passed（参考。release gate の全体試験ではない）。
+- `node --test web/server/principal-config.test.mjs` → exit 0（1 passed）。
+- 全体 nextest・全体 doc test・web e2e・実 browser/userns は実行していない。
 
 ## commit（件名）
 
 - API の主体: 名前付き token・MCP 専用 token・CoS thread を principal として by に残す（途中）
 - API の主体: config・campaign・BFF・文書を名前付き token へ移し、本番への移行手順を書く
 - API の主体: 残りの試験 config を [[api.tokens]] へ移し、clippy の指摘を直す
+
+- phase 1: main 同期後の API 主体を昇格監査と一時停止へ通す
 
 ## 本番への移行
 
@@ -79,11 +89,11 @@ token の値は shell 引数・log・画面に出さない。
 
 ## 未解決
 
-- phase-gate・cancel・task pause/resume（人の経路）・POST /tasks・project 系など、task-ops の中で `"human"` を
-  固定している経路は今回変えていない（主体を引数に通す変更が task-ops に広がるため）。次の task で principal を通す。
+- phase-gate・cancel・POST /tasks・project 系など、既存 event に主体欄が無い操作への新規監査欄追加は含めない。
+  task pause/resume の既存 Edited.by は今回 principal に接続済み。
 - celerisctl `routing stage set` は DB を直接書くので actor は `human` のまま。
-- web BFF の全経路（relay・SSE・Console・Browser Live）は同じ `daemonTokenFile` 1 本を使う構造で、経路ごとの
-  新しい試験は足していない。
+- web BFF の全経路（relay・SSE・Console・Browser Live）は同じ `daemonTokenFile` 1 本を使う。既存の転送試験に加え、
+  起動時に旧共有 token の設定を拒否する試験を追加した。
 
 ## 提案
 

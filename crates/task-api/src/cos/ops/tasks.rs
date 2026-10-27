@@ -284,6 +284,7 @@ pub(crate) fn dispatch(
                         store,
                         id,
                         pause == "task.pause",
+                        &audit.by(),
                         Some(audit),
                     )?)
                 }

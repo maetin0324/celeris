@@ -1471,10 +1471,10 @@ async fn task_plan_gate_requires_tasks_interact_and_records_the_mcp_source() {
     assert_eq!(out["reason"], "plan_approved", "{out}");
     let events = server.store.events_for(task_id).unwrap();
     assert!(
-        events
-            .iter()
-            .any(|(_, e)| matches!(e, Event::WorkerProgress { msg, .. }
-            if msg.contains("承認") && msg.contains("mcp:chatgpt"))),
+        events.iter().any(
+            |(_, e)| matches!(e, Event::PlanGateDecided { action, by, .. }
+            if action == "approve" && by == "mcp:chatgpt")
+        ),
         "{events:?}"
     );
     // もう承認待ちではない → invalid_params。

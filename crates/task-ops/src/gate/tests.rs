@@ -294,7 +294,7 @@ fn answer_persists_answered_event_with_question_from_worker_finished() {
     assert_eq!(
         tail[1].1,
         Event::Answered {
-            by: None,
+            by: Some("human:test".to_string()),
             question: "which version?".to_string(),
             answer: "use v2".to_string(),
         }
@@ -322,7 +322,7 @@ fn answer_without_worker_finished_uses_empty_question() {
     assert_eq!(
         *last,
         Event::Answered {
-            by: None,
+            by: Some("human:test".to_string()),
             question: String::new(),
             answer: "the answer".to_string(),
         }

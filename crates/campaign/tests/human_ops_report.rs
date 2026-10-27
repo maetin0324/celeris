@@ -38,6 +38,8 @@ fn rec(f: &str, arm: &str, extra: &[&str]) {
         "1",
         "--actor",
         "eval1",
+        "--actor-kind",
+        "human",
         "--mode",
         "manual",
     ];
@@ -63,6 +65,8 @@ fn span(f: &str, arm: &str, extra: &[&str]) {
         "1",
         "--actor",
         "eval1",
+        "--actor-kind",
+        "human",
     ];
     a.extend(extra);
     let (c, _, e) = cli(&a);
@@ -462,6 +466,8 @@ fn shared_env_lock_fix_is_counted_once_with_correction_history() {
         "main-ab",
         "--actor",
         "eval1",
+        "--actor-kind",
+        "human",
         "--mode",
         "manual",
     ];
@@ -784,4 +790,219 @@ fn cutoff_or_job_only_records_leave_human_time_and_rework_unobserved() {
 
     let md = fs::read_to_string(d.path().join("o/report.md")).expect("md");
     assert!(md.contains("| A0 |"), "{md}");
+}
+
+/// 主体の種類を指定する record（`rec` は human 固定）。
+fn rec_as(f: &str, kind: &str, actor: &str, extra: &[&str]) {
+    let mut a = vec![
+        "record",
+        "--file",
+        f,
+        "--campaign",
+        "c1",
+        "--manifest-sha256",
+        H,
+        "--case",
+        "p0",
+        "--arm",
+        "A0",
+        "--rep",
+        "1",
+        "--actor-kind",
+        kind,
+        "--actor",
+        actor,
+    ];
+    a.extend(extra);
+    let (c, _, e) = cli(&a);
+    assert_eq!(c, 0, "{extra:?}: {e}");
+}
+
+/// 介入は論理要求（request_ref）単位: 3 revision は 1 件・history 3。CoS・unknown の操作は人の時間に入らず、
+/// 主体別と unknown 欄に別掲。人の時間は質問が開いていた時間（wait）で代用しない。
+#[test]
+fn request_revisions_count_once_and_only_human_manual_time_counts() {
+    let d = tempfile::tempdir().expect("tmp");
+    let trial = json!({"campaign_sha256":H,"problem_id":"p0","config":"A","rep":1,"trial_no":1,
+        "outcome":"passed","workspace":"w","wall_secs":7200,"tokens":1,"cost_micro_usd":1,"reason":null});
+    fs::write(d.path().join("trials.jsonl"), format!("{trial}\n")).expect("t");
+    let start = 1_792_627_200u64; // 2026-10-22T00:00:00Z
+    let ledger =
+        json!({"manifest_sha256":H,"problem_id":"p0","arm":"A","rep":1,"started_at":start});
+    fs::write(d.path().join("ledger.jsonl"), format!("{ledger}\n")).expect("l");
+    let f = d.path().join("human-ops.jsonl");
+    let f = f.to_str().expect("p");
+    // 同じ問い question:q1 の 3 revision に人が答える（同じ logical op・attempt。revision で別の行）。
+    for (rev, s, e) in [
+        ("1", "2026-10-22T00:10:00Z", "2026-10-22T00:15:00Z"),
+        ("2", "2026-10-22T00:20:00Z", "2026-10-22T00:22:00Z"),
+        ("3", "2026-10-22T00:30:00Z", "2026-10-22T00:33:00Z"),
+    ] {
+        rec_as(
+            f,
+            "human",
+            "eval1",
+            &[
+                "--mode",
+                "manual",
+                "--op-kind",
+                "research_direction",
+                "--intent",
+                "research",
+                "--credential",
+                "web",
+                "--logical-op",
+                "q1",
+                "--request-ref",
+                "question:q1",
+                "--request-revision",
+                rev,
+                "--started-at",
+                s,
+                "--ended-at",
+                e,
+            ],
+        );
+    }
+    // 問いが開いていた区間（00:05〜00:40）。人の時間には入れない。
+    span(
+        f,
+        "A0",
+        &[
+            "--kind",
+            "wait",
+            "--wait-kind",
+            "question",
+            "--logical-op",
+            "w-q1",
+            "--request-ref",
+            "question:q1",
+            "--request-revision",
+            "1",
+            "--started-at",
+            "2026-10-22T00:05:00Z",
+            "--ended-at",
+            "2026-10-22T00:40:00Z",
+        ],
+    );
+    // 案件の CoS が q2 に答え、統括の CoS が同じ revision で再対応（差戻し）。
+    for (kind, actor, l, s, e) in [
+        (
+            "cos_project",
+            "cos-p",
+            "q2",
+            "2026-10-22T01:00:00Z",
+            "2026-10-22T01:30:00Z",
+        ),
+        (
+            "cos_general",
+            "cos-g",
+            "q2b",
+            "2026-10-22T01:35:00Z",
+            "2026-10-22T01:36:00Z",
+        ),
+    ] {
+        rec_as(
+            f,
+            kind,
+            actor,
+            &[
+                "--mode",
+                "automatic",
+                "--op-kind",
+                "research_direction",
+                "--intent",
+                "research",
+                "--credential",
+                "cos_run",
+                "--logical-op",
+                l,
+                "--request-ref",
+                "notice:q2",
+                "--request-revision",
+                "1",
+                "--started-at",
+                s,
+                "--ended-at",
+                e,
+            ],
+        );
+    }
+    // 主体不明の手作業（10 分）。人にも 0 にも寄せない。
+    rec_as(
+        f,
+        "unknown",
+        "who",
+        &[
+            "--mode",
+            "manual",
+            "--op-kind",
+            "status_check",
+            "--intent",
+            "monitoring",
+            "--logical-op",
+            "u1",
+            "--started-at",
+            "2026-10-22T01:40:00Z",
+            "--ended-at",
+            "2026-10-22T01:50:00Z",
+        ],
+    );
+
+    let j = run_report(f, d.path(), &d.path().join("out"));
+    let t = &j["trials"][0];
+    assert_eq!(
+        t["interventions"]["value"],
+        json!({"research_direction": 1}),
+        "{t}"
+    );
+    let items = t["intervention_items"]["value"].as_array().expect("items");
+    assert_eq!(items.len(), 3, "q1・q2・u1: {items:?}");
+    let q1 = items
+        .iter()
+        .find(|i| i["request_ref"] == "question:q1")
+        .expect("q1");
+    let h = q1["history"].as_array().expect("history");
+    assert_eq!(h.len(), 3);
+    let revs: Vec<&str> = h.iter().filter_map(|x| x["revision"].as_str()).collect();
+    assert_eq!(revs, ["1", "2", "3"]);
+    let evs: Vec<&str> = h.iter().filter_map(|x| x["event"].as_str()).collect();
+    assert_eq!(evs, ["initial", "revision", "revision"]);
+    let q2 = items
+        .iter()
+        .find(|i| i["request_ref"] == "notice:q2")
+        .expect("q2");
+    assert_eq!(q2["human"], false);
+    assert_eq!(q2["actor_kinds"], json!(["cos_general", "cos_project"]));
+    let evs: Vec<&str> = q2["history"]
+        .as_array()
+        .expect("h")
+        .iter()
+        .filter_map(|x| x["event"].as_str())
+        .collect();
+    assert_eq!(evs, ["initial", "repeat"]);
+    assert_eq!(
+        t["interventions_by_actor_kind"]["value"],
+        json!({"human": 1, "cos_project": 1, "cos_general": 1, "unknown": 1})
+    );
+    // 人の時間 = 人の manual の区間だけ（300+120+180）。CoS の 30 分・unknown の 10 分・問いの 35 分は入らない。
+    assert_eq!(t["human_time"]["value"]["union_secs"], 600, "{t}");
+    assert_eq!(t["human_wait"]["value"]["union_secs"], 2100);
+    assert_eq!(t["unknown_actor"]["value"]["interventions"], 1);
+    assert_eq!(t["unknown_actor"]["value"]["time"]["union_secs"], 600);
+    assert_eq!(
+        t["excluded_ops"]["non_human"],
+        json!({"cos_general": 1, "cos_project": 1, "unknown": 1})
+    );
+    let a = &j["arms"]["A0"];
+    assert_eq!(a["interventions"], json!({"research_direction": 1}), "{a}");
+    assert_eq!(a["human_union_secs"], 600);
+    assert_eq!(a["unknown_actor_interventions"], 1);
+    assert_eq!(a["unknown_actor_union_secs"], 600);
+    assert_eq!(a["interventions_by_actor_kind"]["cos_project"], 1);
+    let md = fs::read_to_string(d.path().join("out/report.md")).expect("md");
+    assert!(
+        md.contains("主体別介入") && md.contains("unknown 主体"),
+        "{md}"
+    );
 }

@@ -100,6 +100,8 @@ fn checker_export_and_human_ops_reach_the_same_conclusion_per_cell() {
         .args([
             "--actor",
             "eval",
+            "--actor-kind",
+            "human",
             "--mode",
             "manual",
             "--started-at",

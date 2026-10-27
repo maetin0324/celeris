@@ -2,8 +2,11 @@
 //! 手編集の集計値は読まない。同じ入力からは同じ出力になる（時計を読まない）。
 //!
 //! 取り決め（`docs/ops/eval-raw-record-definitions.md` §5・§6、`docs/ops/eval-human-ops-runbook.md` §7）:
-//! - 人の時間 = `mode=manual` の op の `[start, end)` を試行ごとに**和集合**で数える（重なりの二重計上をしない。単純和は別に残す）。
-//!   `protocol_step`（評価者の測定作業）と `mode=automatic`（script）は人の時間・介入・再作業に数えない。
+//! - 人の時間 = `actor.kind=human` かつ `mode=manual` の op の `[start, end)` を試行ごとに**和集合**で数える（重なりの二重計上を
+//!   しない。単純和は別に残す）。質問が開いていた時間（human_wait）では代用しない。`protocol_step`（評価者の測定作業）・
+//!   `mode=automatic`・人以外の主体（CoS・外部 operator・MCP client・script・unknown）は人の時間・介入・再作業に数えない。
+//! - 介入は論理要求（`request_ref`）で 1 件にまとめ、改訂・再通知・差戻しは `history` に並べる（ADR 2026-10-27-human-ops-actor-roles-request-ref）。
+//!   主体の種類別の件数は `interventions_by_actor_kind`、`actor.kind=unknown` は `unknown_actor` に別掲する（0 にしない）。
 //! - 端が無い・読めない・`end<start` の区間は長さを持たない。0 にせず `open` / `missing_start` / `inverted` に件数で残す。
 //! - 観測窓（cutoff、無ければ試行終了）の後は数えない（跨ぐ区間は窓の終端で切り `clipped` に数える）。
 //! - 再送・再 export・訂正の重複は `record_id` / `dedup_key` / job_ref で潰した後の値。
@@ -22,8 +25,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     human_ops::{
-        HumanOpRecord, Intent, Mode, OpKind, RecordType, op_spans, parse_utc, read_records,
-        resolve_with_history,
+        ActorKind, HumanOpRecord, Intent, Mode, OpKind, RecordType, TimingSpan, op_spans,
+        parse_utc, read_records, resolve_with_history,
     },
     human_ops_join,
 };
@@ -145,12 +148,65 @@ fn rework_cause(op: Option<&HumanOpRecord>) -> &'static str {
     }
 }
 
-/// 人の介入・時間・再作業に数える op か（共通 filter）。評価者の測定作業（`protocol_step` / intent protocol）と
-/// script（`mode=automatic`）は数えない。介入件数・人の時間・attempt/再作業のすべてがこの 1 つを使う。
+/// 評価者の測定作業（`protocol_step` / intent protocol）か。主体を問わず介入に数えない。
+fn is_protocol(r: &HumanOpRecord) -> bool {
+    r.op_kind == Some(OpKind::ProtocolStep) || r.intent == Some(Intent::Protocol)
+}
+
+/// 人の介入・時間・再作業に数える op か（共通 filter）。`actor.kind=human` かつ `mode=manual` で、評価者の測定作業
+/// （`protocol_step` / intent protocol）でないものだけ。介入件数・人の時間・attempt/再作業のすべてがこの 1 つを使う。
 pub fn counts_as_human_op(r: &HumanOpRecord) -> bool {
-    r.op_kind != Some(OpKind::ProtocolStep)
-        && r.intent != Some(Intent::Protocol)
-        && r.mode != Some(Mode::Automatic)
+    !is_protocol(r)
+        && r.mode == Some(Mode::Manual)
+        && r.actor.as_ref().is_some_and(|a| a.kind == ActorKind::Human)
+}
+
+fn actor_kind(r: &HumanOpRecord) -> &'static str {
+    r.actor.as_ref().map_or("unknown", |a| a.kind.as_str())
+}
+
+type OpSpan = (HumanOpRecord, TimingSpan);
+
+/// 論理要求単位の介入（`request_ref` の無い op は 1 op = 1 件）。
+fn intervention_item(request_ref: Option<&str>, ops: &mut [OpSpan]) -> Value {
+    ops.sort_by_key(|(r, s)| {
+        (
+            s.start.as_deref().and_then(ts).unwrap_or(i64::MAX),
+            r.request_revision.clone(),
+        )
+    });
+    let mut prev: Option<Option<String>> = None;
+    let history: Vec<Value> = ops
+        .iter()
+        .map(|(r, s)| {
+            let event = match &prev {
+                None => "initial",
+                Some(p) if *p == r.request_revision => "repeat",
+                Some(_) => "revision",
+            };
+            prev = Some(r.request_revision.clone());
+            json!({
+                "event": event, "revision": r.request_revision, "op_kind": r.op_kind,
+                "actor_kind": actor_kind(r), "mode": r.mode, "credential": r.credential,
+                "decided_by": r.decided_by, "executed_by": r.executed_by, "approved_by": r.approved_by,
+                "policy_ref": r.policy_ref, "logical_op_id": r.logical_op_id, "attempt": r.attempt,
+                "start": s.start, "end": s.end, "duration_secs": s.duration_secs(),
+                "counts_as_human": counts_as_human_op(r),
+            })
+        })
+        .collect();
+    let kinds: BTreeSet<&str> = ops.iter().map(|(r, _)| actor_kind(r)).collect();
+    // 介入の区分は最初の人の op（人が関わらなければ最初の op）の種別。
+    let op_kind = ops
+        .iter()
+        .find(|(r, _)| counts_as_human_op(r))
+        .or(ops.first())
+        .and_then(|(r, _)| r.op_kind)
+        .map_or("unclassified", |k| k.as_str());
+    json!({
+        "request_ref": request_ref, "op_kind": op_kind, "actor_kinds": kinds,
+        "human": ops.iter().any(|(r, _)| counts_as_human_op(r)), "history": history,
+    })
 }
 
 type TrialKey = (String, String, String, u32);
@@ -164,6 +220,15 @@ struct Window {
 
 struct TrialEval {
     interventions: BTreeMap<String, u64>,
+    /// 論理要求単位の介入（protocol を除く全主体）と history。
+    intervention_items: Vec<Value>,
+    /// 主体の種類 → その種類が関わった論理要求の件数。
+    by_actor_kind: BTreeMap<String, u64>,
+    /// 人以外の主体の op 件数（主体の種類別）。
+    non_human_ops: BTreeMap<String, u64>,
+    /// `actor.kind=unknown` の論理要求の件数と op 区間（人にも 0 にも寄せない）。
+    unknown_interventions: u64,
+    unknown_time: Spans,
     after_window_ops: u64,
     automatic_ops: u64,
     protocol_ops: u64,
@@ -189,6 +254,13 @@ struct TrialEval {
 }
 
 impl TrialEval {
+    fn unknown_actor_json(&self) -> Value {
+        field(
+            json!({"interventions": self.unknown_interventions,
+                   "time": self.unknown_time.json("evaluator")["value"]}),
+            "evaluator",
+        )
+    }
     fn ops_observed(&self) -> bool {
         self.op_records > 0
     }
@@ -225,6 +297,11 @@ fn eval_trial(recs: &[&HumanOpRecord], trial_end: Option<i64>) -> TrialEval {
     };
     let mut t = TrialEval {
         interventions: BTreeMap::new(),
+        intervention_items: Vec::new(),
+        by_actor_kind: BTreeMap::new(),
+        non_human_ops: BTreeMap::new(),
+        unknown_interventions: 0,
+        unknown_time: Spans::default(),
         after_window_ops: 0,
         automatic_ops: 0,
         protocol_ops: 0,
@@ -263,26 +340,58 @@ fn eval_trial(recs: &[&HumanOpRecord], trial_end: Option<i64>) -> TrialEval {
             t.attempt_records += 1;
         }
     }
-    for (rec, span) in op_spans(&owned) {
+    // 論理要求ごとに op を集める（request_ref の無い op は 1 件ずつ）。
+    let mut groups: BTreeMap<(Option<String>, usize), Vec<OpSpan>> = BTreeMap::new();
+    for (i, (rec, span)) in op_spans(&owned).into_iter().enumerate() {
         let kind = rec.op_kind.map_or("unclassified", |k| k.as_str());
-        if !counts_as_human_op(&rec) {
-            if rec.mode == Some(Mode::Automatic) {
-                t.automatic_ops += 1;
-            } else {
-                t.protocol_ops += 1;
+        if is_protocol(&rec) {
+            t.protocol_ops += 1;
+            continue;
+        }
+        if rec.mode == Some(Mode::Automatic) {
+            t.automatic_ops += 1;
+        }
+        let who = actor_kind(&rec);
+        let human = counts_as_human_op(&rec);
+        if who != ActorKind::Human.as_str() {
+            *t.non_human_ops.entry(who.to_string()).or_default() += 1;
+        }
+        let (s, e) = (span.start.as_deref(), span.end.as_deref());
+        // 窓の外で始まった op は介入件数にも時間にも入れない（Spans も同じ窓で after_cutoff に数える）。
+        if !in_window(s.and_then(ts)) {
+            t.after_window_ops += 1;
+            if human {
+                t.human_time.add(kind, s, e, limit);
+            } else if who == ActorKind::Unknown.as_str() {
+                t.unknown_time.add(kind, s, e, limit);
             }
             continue;
         }
-        // 窓の外で始まった op は介入件数にも時間にも入れない（Spans も同じ窓で after_cutoff に数える）。
-        if !in_window(span.start.as_deref().and_then(ts)) {
-            t.after_window_ops += 1;
-            t.human_time
-                .add(kind, span.start.as_deref(), span.end.as_deref(), limit);
-            continue;
+        if human {
+            t.human_time.add(kind, s, e, limit);
+        } else if who == ActorKind::Unknown.as_str() {
+            t.unknown_time.add(kind, s, e, limit);
         }
-        *t.interventions.entry(kind.to_string()).or_default() += 1;
-        t.human_time
-            .add(kind, span.start.as_deref(), span.end.as_deref(), limit);
+        let key = match &rec.request_ref {
+            Some(r) => (Some(r.clone()), 0),
+            None => (None, i),
+        };
+        groups.entry(key).or_default().push((rec, span));
+    }
+    for ((request_ref, _), mut ops) in groups {
+        let item = intervention_item(request_ref.as_deref(), &mut ops);
+        for k in item["actor_kinds"].as_array().into_iter().flatten() {
+            let k = k.as_str().unwrap_or("unknown");
+            *t.by_actor_kind.entry(k.to_string()).or_default() += 1;
+            if k == ActorKind::Unknown.as_str() {
+                t.unknown_interventions += 1;
+            }
+        }
+        if item["human"] == true {
+            let kind = item["op_kind"].as_str().unwrap_or("unclassified");
+            *t.interventions.entry(kind.to_string()).or_default() += 1;
+        }
+        t.intervention_items.push(item);
     }
     // 人待ち: (logical_op, attempt, wait_kind) で start と end を対にする。
     let mut waits: BTreeMap<String, (Option<String>, Option<String>)> = BTreeMap::new();
@@ -560,15 +669,31 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
                         "interventions".into(),
                         field(counts_json(&e.interventions), "evaluator"),
                     );
+                    t.insert(
+                        "interventions_by_actor_kind".into(),
+                        field(json!(e.by_actor_kind), "evaluator"),
+                    );
+                    t.insert(
+                        "intervention_items".into(),
+                        field(json!(e.intervention_items), "evaluator"),
+                    );
+                    t.insert("unknown_actor".into(), e.unknown_actor_json());
                     t.insert("human_time".into(), e.human_time.json("evaluator"));
                 } else {
-                    t.insert("interventions".into(), missing(no_ops));
-                    t.insert("human_time".into(), missing(no_ops));
+                    for k in [
+                        "interventions",
+                        "interventions_by_actor_kind",
+                        "intervention_items",
+                        "unknown_actor",
+                        "human_time",
+                    ] {
+                        t.insert(k.into(), missing(no_ops));
+                    }
                 }
                 t.insert(
                     "excluded_ops".into(),
                     json!({"automatic": e.automatic_ops, "protocol": e.protocol_ops,
-                           "after_window": e.after_window_ops}),
+                           "after_window": e.after_window_ops, "non_human": e.non_human_ops}),
                 );
                 t.insert(
                     "human_wait".into(),
@@ -653,6 +778,9 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
             None => {
                 for k in [
                     "interventions",
+                    "interventions_by_actor_kind",
+                    "intervention_items",
+                    "unknown_actor",
                     "human_time",
                     "human_wait",
                     "external_queue_wait",
@@ -776,6 +904,20 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
                 for (k, n) in &e.interventions {
                     tally(a, "interventions", k, *n);
                 }
+                if e.ops_observed() {
+                    // 欄を必ず作る（主体の種類の件数が無い試行も「観測した 0 件」として表に出す）。
+                    a.entry("interventions_by_actor_kind")
+                        .or_insert_with(|| json!({}));
+                    for (k, n) in &e.by_actor_kind {
+                        tally(a, "interventions_by_actor_kind", k, *n);
+                    }
+                    bump(a, "unknown_actor_interventions", e.unknown_interventions);
+                    bump(
+                        a,
+                        "unknown_actor_union_secs",
+                        union_and_sum(&e.unknown_time.closed).0 as u64,
+                    );
+                }
                 for (k, n) in &e.rework {
                     tally(a, "rework", k, *n);
                 }
@@ -796,13 +938,14 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
         .iter()
         .map(|(campaign, rs)| {
             let e = eval_trial(rs, None);
-            let (interventions, human_time) = if e.ops_observed() {
-                (json!(e.interventions), e.human_time.json("evaluator")["value"].clone())
-            } else {
-                (Value::Null, Value::Null)
-            };
+            let observed = e.ops_observed();
+            let pick = |v: Value| if observed { v } else { Value::Null };
             json!({"campaign_id": campaign, "records": rs.len(),
-                   "interventions": interventions, "human_time": human_time,
+                   "interventions": pick(json!(e.interventions)),
+                   "interventions_by_actor_kind": pick(json!(e.by_actor_kind)),
+                   "intervention_items": pick(json!(e.intervention_items)),
+                   "unknown_actor": pick(e.unknown_actor_json()["value"].clone()),
+                   "human_time": pick(e.human_time.json("evaluator")["value"].clone()),
                    "attribution": "arm へ配分しない（shared scope: case/arm/rep の identity が無い記録。1 度だけ計上）"})
         })
         .collect();
@@ -823,7 +966,8 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
             "retry_selection": crate::success::RETRY_SELECTION,
             "denominator": crate::success::DENOMINATOR,
             "observation_window": crate::success::OBSERVATION_WINDOW,
-            "human_op_filter": "protocol_step / intent=protocol / mode=automatic are excluded from interventions, human time and rework alike",
+            "human_op_filter": "only actor.kind=human with mode=manual counts; protocol_step / intent=protocol / mode=automatic / non-human actors are excluded from interventions, human time and rework alike",
+            "intervention_unit": "one logical request (request_ref); revisions, re-notifications and send-backs go to history and do not add to the count",
         },
         "cost_scope": crate::export::COST_SCOPE,
         "trials": trials,
@@ -844,6 +988,8 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
 fn notices() -> Vec<&'static str> {
     vec![
         "人の時間は『記録された操作の範囲』の下限で、総労働時間・認知負荷・判断の質ではない（定義書 §6）。端の欠けた区間は長さに入れず件数で併記する。",
+        "人の時間・介入は actor.kind=human の manual の op だけ。CoS・外部 operator・MCP client・script は interventions_by_actor_kind に、主体不明（unknown）は unknown_actor に別掲し、人にも 0 にも寄せない。質問が開いていた時間で人の時間を代用しない。",
+        "介入は論理要求（request_ref）単位。同じ要求の改訂・再通知・差戻しは件数を増やさず history に並ぶ。",
         "A と B で観測方法が異なる（human_wait は B が event・A が評価者記録/transcript、time_basis を併記）。単純な差を性能差として読まない。",
         "shared scope の作業（共有 env 修正・CoS 等）は arm へ配分せず、shared_overhead に 1 度だけ別掲する。記録が無いものは欠測で 0 ではない。",
         "internal_wait（ready_not_running）は現在の入力に無く欠測。external_queue_wait はクラスタ混雑に依存しシステム性能として帰属しない。",
@@ -865,16 +1011,19 @@ fn markdown(j: &Value, timeline: &[(i64, String, Value)]) -> String {
     for n in j["notices"].as_array().into_iter().flatten() {
         m += &format!("- {}\n", n.as_str().unwrap_or(""));
     }
-    m += "\n## arm 別\n\n| arm | 試行 | validated success | executor passed | 結論(区分別) | 介入(区分別) | 人の時間 union 秒 (単純和・欠測試行) | 下限の試行 | 人待ち秒 (欠測試行) | Celeris 待ち秒 (欠測試行) | 外部 queue 秒 (欠測試行) | 再作業(原因別・欠測試行) | 自動 retry | tokens 観測合計 (欠測試行・未実行試行) | 費用 µUSD 観測合計 (欠測試行・未実行試行) | 評価者記録なし | time_basis |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+    m += "\n## arm 別\n\n| arm | 試行 | validated success | executor passed | 結論(区分別) | 介入(区分別) | 主体別介入 | unknown 主体 (件・秒) | 人の時間 union 秒 (単純和・欠測試行) | 下限の試行 | 人待ち秒 (欠測試行) | Celeris 待ち秒 (欠測試行) | 外部 queue 秒 (欠測試行) | 再作業(原因別・欠測試行) | 自動 retry | tokens 観測合計 (欠測試行・未実行試行) | 費用 µUSD 観測合計 (欠測試行・未実行試行) | 評価者記録なし | time_basis |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
     for (arm, a) in j["arms"].as_object().into_iter().flatten() {
         let o = |k: &str| a.get(k).map_or("-".into(), |v| v.to_string());
         m += &format!(
-            "| {arm} | {} | {} | {} | {} | {} | {} ({}・{}) | {} | {} ({}) | {} ({}) | {} ({}) | {} ({}) | {} | {} ({}・{}) | {} ({}・{}) | {} | {} |\n",
+            "| {arm} | {} | {} | {} | {} | {} | {} | {}・{} | {} ({}・{}) | {} | {} ({}) | {} ({}) | {} ({}) | {} ({}) | {} | {} ({}・{}) | {} ({}・{}) | {} | {} |\n",
             cell(a, "trials"),
             cell(a, "validated_success"),
             cell(a, "executor_passed"),
             o("success_classes"),
             o("interventions"),
+            o("interventions_by_actor_kind"),
+            o("unknown_actor_interventions"),
+            o("unknown_actor_union_secs"),
             cell(a, "human_union_secs"),
             cell(a, "human_sum_secs"),
             cell(a, "human_time_missing_trials"),
@@ -905,8 +1054,13 @@ fn markdown(j: &Value, timeline: &[(i64, String, Value)]) -> String {
     }
     for s in &sh {
         m += &format!(
-            "- campaign {}: 記録 {} 件、介入 {}、人の時間 {}\n",
-            s["campaign_id"], s["records"], s["interventions"], s["human_time"]
+            "- campaign {}: 記録 {} 件、介入 {}、主体別 {}、unknown 主体 {}、人の時間 {}\n",
+            s["campaign_id"],
+            s["records"],
+            s["interventions"],
+            s["interventions_by_actor_kind"],
+            s["unknown_actor"],
+            s["human_time"]
         );
     }
     m += "\n## 補正履歴（append-only correction）\n\n";

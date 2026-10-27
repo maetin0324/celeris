@@ -116,12 +116,12 @@ repin で新 binary の lock を取り直した結果、R2 の lock.json・env-l
 F=$K4/out/human-ops.jsonl            # K2 は $K2/out/human-ops.jsonl
 ID="--file $F --campaign mlsys-main-4-v4-pilot-k4 --manifest $K4/final.json --case k4-cmp4-validity-analysis --arm A0 --rep 1"
 # 開始時（live）。op_start が残る
-$B human-op record $ID --op-kind status_check --actor eval1 --mode manual --intent monitoring \
+$B human-op record $ID --op-kind status_check --actor-kind human --actor eval1 --mode manual --intent monitoring \
   --trigger scheduled --logical-op pilot/k4/look --started-at now
 # 開始時刻を読む
 $B human-op list --file $F --arm A0 --case k4-cmp4-validity-analysis
 # 終わったら同じ identity・同じ開始時刻で終了を足す（op_end が 1 行足される）
-$B human-op record $ID --op-kind status_check --actor eval1 --mode manual --intent monitoring \
+$B human-op record $ID --op-kind status_check --actor-kind human --actor eval1 --mode manual --intent monitoring \
   --trigger scheduled --logical-op pilot/k4/look --started-at <list の start> --ended-at now --outcome ok
 ```
 

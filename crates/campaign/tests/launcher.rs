@@ -1828,6 +1828,8 @@ rules = [
                 "status_check",
                 "--actor",
                 "eval1",
+                "--actor-kind",
+                "human",
                 "--mode",
                 "manual",
                 "--intent",

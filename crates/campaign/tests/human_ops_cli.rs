@@ -48,6 +48,8 @@ fn script(file: &Path, arm: &str) -> Vec<i32> {
                 "research_direction",
                 "--actor",
                 "eval1",
+                "--actor-kind",
+                "human",
                 "--mode",
                 "manual",
                 "--intent",
@@ -68,6 +70,8 @@ fn script(file: &Path, arm: &str) -> Vec<i32> {
                 "status_check",
                 "--actor",
                 "eval1",
+                "--actor-kind",
+                "human",
                 "--mode",
                 "manual",
                 "--intent",
@@ -264,6 +268,8 @@ fn record_rejects_invalid_input_and_conflicting_rewrite() {
         "resubmit",
         "--actor",
         "e",
+        "--actor-kind",
+        "human",
         "--mode",
         "manual",
         "--intent",
@@ -290,6 +296,51 @@ fn record_rejects_invalid_input_and_conflicting_rewrite() {
     assert_ne!(code, 0);
     assert!(err.contains("食い違う"), "{err}");
     assert_eq!(lines(&f).len(), 1);
+    // --actor-kind は必須（既定の human は無い）。
+    let no_kind: Vec<&str> = ok
+        .iter()
+        .enumerate()
+        .filter(|(i, a)| **a != "--actor-kind" && (*i == 0 || ok[i - 1] != "--actor-kind"))
+        .map(|(_, a)| *a)
+        .collect();
+    let (code, _, err) = run(&no_kind);
+    assert_ne!(code, 0);
+    assert!(err.contains("--actor-kind"), "{err}");
+    // request_ref だけ・語彙外の credential は拒否。
+    let mut half = ok.clone();
+    half.extend(["--logical-op", "x2", "--request-ref", "notice:k"]);
+    assert_ne!(run(&half).0, 0);
+    let mut cred = ok.clone();
+    cred.extend(["--logical-op", "x3", "--credential", "password"]);
+    assert_ne!(run(&cred).0, 0);
+    assert_eq!(lines(&f).len(), 1);
+    // /2 の欄が行に入る（credential の既定は unknown、役割は kind:id）。
+    let mut full = ok.clone();
+    full.extend([
+        "--logical-op",
+        "x4",
+        "--request-ref",
+        "question:q1",
+        "--request-revision",
+        "2",
+        "--decided-by",
+        "human:e",
+        "--executed-by",
+        "cos_project:cos-p",
+        "--policy-ref",
+        "approval:a1",
+    ]);
+    let (code, _, err) = run(&full);
+    assert_eq!(code, 0, "{err}");
+    let row = lines(&f).pop().unwrap();
+    assert_eq!(row["schema"], "celeris.eval-human-op/2");
+    assert_eq!(row["credential"], "unknown");
+    assert_eq!(row["request_ref"], "question:q1");
+    assert_eq!(row["request_revision"], "2");
+    assert_eq!(row["decided_by"]["kind"], "human");
+    assert_eq!(row["executed_by"]["kind"], "cos_project");
+    assert_eq!(row["approved_by"], Value::Null);
+    assert_eq!(row["policy_ref"], "approval:a1");
 }
 
 /// `--now` を差し替えて走らせる（env の NOW より優先）。
@@ -324,6 +375,8 @@ fn live_start_then_explicit_end_resumes_for_a0_and_b0() {
             "research_direction",
             "--actor",
             "eval1",
+            "--actor-kind",
+            "human",
             "--mode",
             "manual",
             "--intent",
@@ -404,6 +457,8 @@ fn manifest_path_identity_uses_the_campaign_hash() {
         "status_check",
         "--actor",
         "eval1",
+        "--actor-kind",
+        "human",
         "--mode",
         "manual",
         "--intent",

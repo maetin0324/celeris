@@ -46,6 +46,13 @@ fn base(set: ExperimentSet, arm: ConfigId, rt: RecordType) -> HumanOpRecord {
         mode: None,
         intent: None,
         actor: None,
+        decided_by: None,
+        executed_by: None,
+        approved_by: None,
+        credential: None,
+        request_ref: None,
+        request_revision: None,
+        policy_ref: None,
         reason: None,
         trigger: None,
         targets: vec![],
@@ -70,6 +77,7 @@ fn op_start(arm: ConfigId, start: Option<&str>) -> HumanOpRecord {
         kind: ActorKind::Human,
         id: "eval-1".into(),
     });
+    r.credential = Some("web".into());
     r.reason = Some("sbatch が失敗したため出し直す".into());
     r.trigger = Some(Trigger::Failure);
     match start {
@@ -275,6 +283,21 @@ fn invalid_inputs_are_rejected() {
         })
     });
     check(&|r| r.time_basis = None);
+    // /2 の欄: credential 必須・語彙外は拒否、request_ref は両方か無しか・形式、役割の id にメール不可。
+    check(&|r| r.credential = None);
+    check(&|r| r.credential = Some("password".into()));
+    check(&|r| r.credential = Some("operator:".into()));
+    check(&|r| r.request_ref = Some("notice:k1".into()));
+    check(&|r| {
+        r.request_ref = Some("no-colon".into());
+        r.request_revision = Some("1".into());
+    });
+    check(&|r| {
+        r.decided_by = Some(Actor {
+            kind: ActorKind::Human,
+            id: "x@y.example".into(),
+        })
+    });
     check(&|r| r.end = Some("2026-10-19T00:00:00Z".into())); // op_start では使えない
     check(&|r| r.schema = "x".into());
     check(&|r| r.manifest_sha256 = "short".into());
@@ -345,4 +368,85 @@ fn file_without_trailing_newline_does_not_glue_lines() {
     l.append(&op_end(ConfigId::A, Some("2026-10-19T01:05:00Z")))
         .unwrap();
     assert_eq!(l.read().unwrap().len(), 2);
+}
+
+#[test]
+fn v2_fields_validate_and_old_rows_are_rejected() {
+    let mut r = op_start(ConfigId::A, Some("2026-10-19T01:00:00Z"));
+    r.actor = Some(Actor {
+        kind: ActorKind::CosProject,
+        id: "cos-p1".into(),
+    });
+    r.decided_by = Some(Actor {
+        kind: ActorKind::Human,
+        id: "eval-1".into(),
+    });
+    r.executed_by = Some(Actor {
+        kind: ActorKind::ExternalOperator,
+        id: "op1".into(),
+    });
+    r.credential = Some("operator:op1".into());
+    r.request_ref = Some("notice:release-ready".into());
+    r.request_revision = Some("3".into());
+    r.policy_ref = Some("adr:2026-10-27-external-operator".into());
+    let r = r.with_record_id();
+    r.validate().expect("v2 op");
+    for c in [
+        "admin_token",
+        "web",
+        "cos_run",
+        "none",
+        "unknown",
+        "mcp:chatgpt",
+    ] {
+        let mut x = r.clone();
+        x.credential = Some(c.into());
+        x.validate().unwrap_or_else(|e| panic!("{c}: {e}"));
+    }
+    // revision は record_id の材料（同じ論理作業・attempt の別 revision は別の行）。
+    let mut r4 = r.clone();
+    r4.request_revision = Some("4".into());
+    assert_ne!(r4.compute_record_id(), r.record_id);
+
+    let (_d, l) = log();
+    let mut v = serde_json::to_value(&r).expect("json");
+    // 新しい欄の無い行（/1 の形）は形式エラー。
+    for k in ["credential", "request_ref", "decided_by", "policy_ref"] {
+        let mut x = v.clone();
+        x.as_object_mut().expect("obj").remove(k);
+        fs::write(l.path(), format!("{x}\n")).expect("write");
+        assert!(l.read().is_err(), "{k} が無い行を受けた");
+    }
+    // 未知の主体の種類は拒否。
+    v["actor"]["kind"] = serde_json::json!("robot");
+    fs::write(l.path(), format!("{v}\n")).expect("write");
+    assert!(l.read().is_err());
+    // /1 の schema は拒否（互換分岐を置かない）。
+    let mut old = r.clone();
+    old.schema = "celeris.eval-human-op/1".into();
+    let old = old.with_record_id();
+    assert!(old.validate().unwrap_err().contains("schema"));
+    // 7 種の語彙。
+    let kinds = [
+        ActorKind::Human,
+        ActorKind::Script,
+        ActorKind::CosProject,
+        ActorKind::CosGeneral,
+        ActorKind::ExternalOperator,
+        ActorKind::McpClient,
+        ActorKind::Unknown,
+    ];
+    let names: Vec<&str> = kinds.iter().map(ActorKind::as_str).collect();
+    assert_eq!(
+        names,
+        [
+            "human",
+            "script",
+            "cos_project",
+            "cos_general",
+            "external_operator",
+            "mcp_client",
+            "unknown"
+        ]
+    );
 }

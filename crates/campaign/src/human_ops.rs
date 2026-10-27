@@ -21,7 +21,7 @@ use crate::{
     manifest::{ConfigId, canonical},
 };
 
-pub const HUMAN_OP_SCHEMA: &str = "celeris.eval-human-op/1";
+pub const HUMAN_OP_SCHEMA: &str = "celeris.eval-human-op/2";
 pub const HUMAN_OPS_FILE: &str = "human-ops.jsonl";
 
 /// 欄が JSON に無いことを形式エラーにする（`Option` でも省略を許さない）。
@@ -77,7 +77,11 @@ str_enum!(Outcome { Ok = "ok", Failed = "failed", Abandoned = "abandoned" });
 str_enum!(AttemptResult {
     Ok = "ok", Failed = "failed", Cancelled = "cancelled", Timeout = "timeout", Abandoned = "abandoned",
 });
-str_enum!(ActorKind { Human = "human", Script = "script" });
+// 主体の種類（ADR 2026-10-27-human-ops-actor-roles-request-ref D2。Celeris の actor_kind の唯一の語彙）。
+str_enum!(ActorKind {
+    Human = "human", Script = "script", CosProject = "cos_project", CosGeneral = "cos_general",
+    ExternalOperator = "external_operator", McpClient = "mcp_client", Unknown = "unknown",
+});
 str_enum!(TargetKind {
     Artifact = "artifact", Job = "job", Task = "task", Run = "run", Session = "session", Config = "config",
 });
@@ -160,6 +164,24 @@ pub struct HumanOpRecord {
     pub intent: Option<Intent>,
     #[serde(deserialize_with = "req")]
     pub actor: Option<Actor>,
+    /// 判断した者・実行した者・承認した者（`actor` と同じ・分からなければ null）。
+    #[serde(deserialize_with = "req")]
+    pub decided_by: Option<Actor>,
+    #[serde(deserialize_with = "req")]
+    pub executed_by: Option<Actor>,
+    #[serde(deserialize_with = "req")]
+    pub approved_by: Option<Actor>,
+    /// 使った credential の種類（`CREDENTIAL_KINDS` か `operator:<name>` / `mcp:<id>`）。op で必須。値は書かない。
+    #[serde(deserialize_with = "req")]
+    pub credential: Option<String>,
+    /// 論理要求 `<source_kind>:<source_key>` と、その revision（op / wait。両方か無しか）。
+    #[serde(deserialize_with = "req")]
+    pub request_ref: Option<String>,
+    #[serde(deserialize_with = "req")]
+    pub request_revision: Option<String>,
+    /// 適用した方針・既存承認への参照。
+    #[serde(deserialize_with = "req")]
+    pub policy_ref: Option<String>,
     #[serde(deserialize_with = "req")]
     pub reason: Option<String>,
     #[serde(deserialize_with = "req")]
@@ -272,7 +294,8 @@ impl HumanOpRecord {
             "case_id": self.case_id, "arm": self.arm, "repetition": self.repetition,
             "trial_no": self.trial_no, "logical_op_id": self.logical_op_id, "attempt": self.attempt,
             "op_kind": self.op_kind, "wait_kind": self.wait_kind, "job_ref": self.job_ref,
-            "corrects": self.corrects,
+            "corrects": self.corrects, "request_ref": self.request_ref,
+            "request_revision": self.request_revision,
         });
         let text = canonical(&v).to_string();
         let hex: String = Sha256::digest(text)
@@ -457,7 +480,12 @@ impl HumanOpRecord {
             || self.reason.is_some()
             || !self.targets.is_empty()
             || self.celeris_event_ref.is_some()
-            || self.outcome.is_some();
+            || self.outcome.is_some()
+            || self.decided_by.is_some()
+            || self.executed_by.is_some()
+            || self.approved_by.is_some()
+            || self.credential.is_some()
+            || self.policy_ref.is_some();
         if is_op {
             let (Some(kind), Some(_), Some(_), Some(actor), Some(_)) = (
                 self.op_kind,
@@ -468,9 +496,23 @@ impl HumanOpRecord {
             ) else {
                 return Err("op には op_kind・mode・intent・actor・trigger が必須".into());
             };
-            nonempty("actor.id", &actor.id)?;
-            if actor.id.contains('@') {
-                return Err("actor.id にメールアドレスを書かない（仮名か script 名）".into());
+            check_actor("actor", actor)?;
+            for (name, role) in [
+                ("decided_by", &self.decided_by),
+                ("executed_by", &self.executed_by),
+                ("approved_by", &self.approved_by),
+            ] {
+                if let Some(a) = role {
+                    check_actor(name, a)?;
+                }
+            }
+            let cred = self
+                .credential
+                .as_deref()
+                .ok_or("op には credential が必須（分からなければ unknown）")?;
+            check_credential(cred)?;
+            if let Some(p) = &self.policy_ref {
+                nonempty("policy_ref", p)?;
             }
             let reason_needed = matches!(
                 kind,
@@ -499,6 +541,25 @@ impl HumanOpRecord {
                 "op 欄は {} では使えない",
                 self.record_type.as_str()
             ));
+        }
+        match (&self.request_ref, &self.request_revision) {
+            (None, None) => {}
+            (Some(r), Some(v)) if is_op || is_wait => {
+                if !r
+                    .split_once(':')
+                    .is_some_and(|(k, key)| !k.trim().is_empty() && !key.trim().is_empty())
+                {
+                    return Err("request_ref は <source_kind>:<source_key>".into());
+                }
+                nonempty("request_revision", v)?;
+            }
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "request_ref/request_revision は {} では使えない",
+                    self.record_type.as_str()
+                ));
+            }
+            _ => return Err("request_ref と request_revision は両方か無しか".into()),
         }
         match (&self.wait_kind, is_wait) {
             (Some(w), true) => nonempty("wait_kind", w)?,
@@ -622,8 +683,8 @@ impl HumanOpRecord {
     }
 }
 
-/// correction で置き換えられる欄。
-const CORRECTABLE: [&str; 19] = [
+/// correction で置き換えられる欄（request_ref/request_revision は材料なので変えない）。
+const CORRECTABLE: [&str; 25] = [
     "retracted",
     "start",
     "end",
@@ -643,7 +704,39 @@ const CORRECTABLE: [&str; 19] = [
     "targets",
     "celeris_event_ref",
     "note",
+    "actor",
+    "decided_by",
+    "executed_by",
+    "approved_by",
+    "credential",
+    "policy_ref",
 ];
+
+/// `credential` の固定値。ほかに `operator:<name>` と `mcp:<id>` を許す。
+pub const CREDENTIAL_KINDS: [&str; 5] = ["admin_token", "web", "cos_run", "none", "unknown"];
+
+fn check_credential(c: &str) -> Result<(), String> {
+    let named = ["operator:", "mcp:"]
+        .iter()
+        .any(|p| c.strip_prefix(p).is_some_and(|n| !n.trim().is_empty()));
+    if CREDENTIAL_KINDS.contains(&c) || named {
+        Ok(())
+    } else {
+        Err(format!(
+            "credential {c:?}: admin_token / web / operator:<name> / mcp:<id> / cos_run / none / unknown のどれか"
+        ))
+    }
+}
+
+fn check_actor(name: &str, a: &Actor) -> Result<(), String> {
+    nonempty(&format!("{name}.id"), &a.id)?;
+    if a.id.contains('@') {
+        return Err(format!(
+            "{name}.id にメールアドレスを書かない（仮名か script 名）"
+        ));
+    }
+    Ok(())
+}
 
 fn nonempty(name: &str, v: &str) -> Result<(), String> {
     if v.trim().is_empty() {
@@ -919,8 +1012,14 @@ pub fn op_spans(records: &[HumanOpRecord]) -> Vec<(HumanOpRecord, TimingSpan)> {
     for r in records {
         let key = match r.record_type {
             RecordType::OpStart | RecordType::OpEnd => format!(
-                "{}|{:?}|{:?}|{:?}|{:?}",
-                r.campaign_id, r.trial_key, r.logical_op_id, r.attempt, r.op_kind
+                "{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+                r.campaign_id,
+                r.trial_key,
+                r.logical_op_id,
+                r.attempt,
+                r.op_kind,
+                r.request_ref,
+                r.request_revision
             ),
             _ => continue,
         };
@@ -972,10 +1071,11 @@ pub mod cli {
     const USAGE: &str = "usage: celeris-campaign human-op <record|span|validate|list|join> --file <jsonl> ...\n\
 report --file F --events <dir|file>... --out <dir> (join から表 report.md・機械可読 report.json・timeline.jsonl を再生成)\n\
 join --file F --events <export dir|out dir|file> (event 由来/評価者記録/欠測の出所つき JSONL)\n\
-record --file F --campaign ID (--manifest-sha256 H | --manifest M) --case ID --arm A0|B0|B1|C1 --rep N --op-kind K --actor NAME --mode manual|automatic --intent I \
-[--actor-kind human|script] [--trigger T] [--logical-op ID] [--attempt N] [--started-at T|now] [--ended-at T|now] [--outcome ok|failed|abandoned] [--reason S] [--target kind:ref]... \
+record --file F --campaign ID (--manifest-sha256 H | --manifest M) --case ID --arm A0|B0|B1|C1 --rep N --op-kind K --actor-kind human|script|cos_project|cos_general|external_operator|mcp_client|unknown --actor NAME --mode manual|automatic --intent I \
+[--decided-by KIND:ID] [--executed-by KIND:ID] [--approved-by KIND:ID] [--credential admin_token|web|operator:<name>|mcp:<id>|cos_run|none|unknown (既定 unknown)] \
+[--request-ref SOURCE_KIND:SOURCE_KEY --request-revision R] [--policy-ref S] [--trigger T] [--logical-op ID] [--attempt N] [--started-at T|now] [--ended-at T|now] [--outcome ok|failed|abandoned] [--reason S] [--target kind:ref]... \
 [--task-id ID] [--run-id ID] [--celeris-event-ref R] [--trial-no N] [--missing-reason R] [--time-basis B] [--time-precision P] [--note S]\n\
-span --kind wait|attempt|job|cutoff (same identity flags) [--wait-kind K] [--logical-op ID] [--attempt N] [--result R] [--job-ref S:C:ID] [--job-submit|--job-start|--job-end T] [--started-at T] [--ended-at T] [--occurred-at T]\n\
+span --kind wait|attempt|job|cutoff (same identity flags) [--wait-kind K] [--request-ref S:K --request-revision R] [--logical-op ID] [--attempt N] [--result R] [--job-ref S:C:ID] [--job-submit|--job-start|--job-end T] [--started-at T] [--ended-at T] [--occurred-at T]\n\
 scope: --scope trial (default; --arm/--case/--rep 必須) | --scope shared [--experiment-set main-ab|jev-bc] (campaign 全体の共有作業。arm へ配分しない)\n\
 correct --file F (--corrects ID... | --logical-op L [--campaign ID] [--arm A0|B0|B1|C1]) (--retract | --set-field k=<JSON>...) --reason S (追記専用の訂正。元の行は残る)\n\
 validate --file F\nlist --file F [--campaign ID] [--arm A0|B0|B1|C1] [--case ID]\n\
@@ -1187,6 +1287,13 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
             mode: None,
             intent: None,
             actor: None,
+            decided_by: None,
+            executed_by: None,
+            approved_by: None,
+            credential: None,
+            request_ref: None,
+            request_revision: None,
+            policy_ref: None,
             reason: None,
             trigger: None,
             targets: vec![],
@@ -1267,6 +1374,29 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
         Ok((l, a))
     }
 
+    /// `--decided-by` 等の `<kind>:<id>`。
+    fn role(args: &[String], name: &str) -> Result<Option<Actor>, String> {
+        opt(args, name)
+            .map(|v| {
+                let (k, id) = v
+                    .split_once(':')
+                    .ok_or_else(|| format!("{name} は <actor_kind>:<id>"))?;
+                Ok(Actor {
+                    kind: parse_enum(name, k)?,
+                    id: id.to_string(),
+                })
+            })
+            .transpose()
+    }
+
+    /// `--request-ref S:K` と `--request-revision R`（両方か無しか）。
+    fn request(args: &[String]) -> Result<(Option<String>, Option<String>), String> {
+        match (opt(args, "--request-ref"), opt(args, "--request-revision")) {
+            (r, v) if r.is_some() == v.is_some() => Ok((r, v)),
+            _ => Err("--request-ref と --request-revision は両方か無しか".into()),
+        }
+    }
+
     fn record(args: &[String]) -> Result<String, String> {
         let file = req(args, "--file")?;
         let c = ctx(args)?;
@@ -1287,13 +1417,17 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
         r.op_kind = Some(kind);
         r.mode = Some(parse_enum("--mode", &req(args, "--mode")?)?);
         r.intent = Some(parse_enum("--intent", &req(args, "--intent")?)?);
+        // 主体の種類に既定は無い（推測で human に寄せない。ADR 2026-10-27-human-ops-actor-roles-request-ref D3）。
         r.actor = Some(Actor {
-            kind: match opt(args, "--actor-kind") {
-                Some(k) => parse_enum("--actor-kind", &k)?,
-                None => ActorKind::Human,
-            },
+            kind: parse_enum("--actor-kind", &req(args, "--actor-kind")?)?,
             id: req(args, "--actor")?,
         });
+        r.decided_by = role(args, "--decided-by")?;
+        r.executed_by = role(args, "--executed-by")?;
+        r.approved_by = role(args, "--approved-by")?;
+        r.credential = Some(opt(args, "--credential").unwrap_or_else(|| "unknown".into()));
+        r.policy_ref = opt(args, "--policy-ref");
+        (r.request_ref, r.request_revision) = request(args)?;
         r.trigger = Some(match opt(args, "--trigger") {
             Some(t) => parse_enum("--trigger", &t)?,
             None => Trigger::SelfInitiated,
@@ -1334,6 +1468,7 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
                 r.logical_op_id = Some(l);
                 r.attempt = Some(a);
                 r.wait_kind = Some(req(args, "--wait-kind")?);
+                (r.request_ref, r.request_revision) = request(args)?;
                 let close = end.value.is_some();
                 let mut s = r.clone();
                 s.record_type = RecordType::WaitStart;
@@ -1468,6 +1603,13 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
                 mode: None,
                 intent: None,
                 actor: None,
+                decided_by: None,
+                executed_by: None,
+                approved_by: None,
+                credential: None,
+                request_ref: None,
+                request_revision: None,
+                policy_ref: None,
                 reason: None,
                 trigger: None,
                 targets: vec![],

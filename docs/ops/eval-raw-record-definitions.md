@@ -4,14 +4,15 @@
 tasks: [01M59KXY854W5C65GTG9GVQVAC]
 ---
 
-根拠: ADR `agent-docs/adr/2026-10-19-eval-raw-human-ops-record.md`。この文書は **測定開始前に固定する定義** で、
+根拠: ADR `agent-docs/adr/2026-10-19-eval-raw-human-ops-record.md`、/2 の主体・役割・論理要求は ADR `agent-docs/adr/2026-10-27-human-ops-actor-roles-request-ref.md`。この文書は **測定開始前に固定する定義** で、
 評価者は A（A0）と B（B0）、および Jev 副比較（B1/C1）で同じ定義を使う。実装（型・CLI・結合）はこの定義に従う。
 形式を変えるときは `schema` の版を上げ、ADR に付記する。
 
 ## 1. ファイルと行
 
 - 場所: campaign の out ディレクトリ（`trials.jsonl`・`ledger.jsonl` と同じ）に `human-ops.jsonl`。
-- 1 行 = 1 record（UTF-8 JSON、改行区切り）。`schema = "celeris.eval-human-op/1"`。
+- 1 行 = 1 record（UTF-8 JSON、改行区切り）。`schema = "celeris.eval-human-op/2"`。/1 の行は読み込みで拒否する（変換しない）。
+- すべての欄は JSON に存在しなければならない（その型で使わない欄は null）。欄の無い行は形式エラー。
 - 追記専用。訂正は `record_type = "correction"` の新しい行で、元の行は書き換えない。
 - `record_type` の値:
 
@@ -30,7 +31,7 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 
 | 欄 | 型 | 必須 | 既存の対応先 | 規則 |
 |---|---|---|---|---|
-| `schema` | string | 必須 | — | `celeris.eval-human-op/1` |
+| `schema` | string | 必須 | — | `celeris.eval-human-op/2` |
 | `record_id` | string | 必須 | — | §2.3。`hop-<sha256 hex>` |
 | `record_type` | enum | 必須 | — | §1 の表 |
 | `experiment_set` | enum | 必須 | （新規） | `main-ab`（A0/B0）または `jev-bc`（B1/C1）。両セットは別 campaign_id・別 out |
@@ -65,7 +66,8 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 - `record_id = "hop-" + hex(sha256(canonical_json(材料)))`。`canonical_json` は key を辞書順に並べた空白なしの JSON
   （`manifest.rs` の `canonical` と同じ並べ方）。
 - 材料 = `schema`, `record_type`, `experiment_set`, `campaign_id`, `manifest_sha256`, `case_id`, `arm`, `repetition`,
-  `trial_no`, `logical_op_id`, `attempt`, `op_kind`, `wait_kind`, `job_ref`, `corrects`（無い欄は null として入れる）。
+  `trial_no`, `logical_op_id`, `attempt`, `op_kind`, `wait_kind`, `job_ref`, `corrects`, `request_ref`, `request_revision`
+  （無い欄は null として入れる）。同じ論理作業・attempt でも revision が違えば別の行。
   `op_start`/`op_end` と `wait_start`/`wait_end` は `record_type` が違うので別 id。同じ論理作業・同じ attempt の同じ種別の
   開始は 1 件しか存在しない。
 - 材料に入れない: `recorded_at`, `clock_source`, `host`, `time_basis`, `time_precision`, `note`, 時刻の値そのもの。→ 同じ事実を再送・再開・二重実行で
@@ -102,7 +104,12 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 | `op_kind` | enum | 必須 | §3.2 の表 |
 | `mode` | `manual` \| `automatic` | 必須 | 人が手で行った → manual。評価者が起動した script・cron が行った → automatic（Celeris 自身の自動処理は event 側なので書かない） |
 | `intent` | enum | 必須 | `research`（研究内容のため）/ `safety`（安全・費用・外部送信の承認）/ `system`（道具・環境の都合）/ `protocol`（測定手順そのもの。介入に数えない）/ `monitoring`（状態の確認だけ） |
-| `actor` | `{kind, id}` | 必須 | `kind`: `human` / `script`。`id`: 評価者の仮名（メール・本名を書かない）か script 名 |
+| `actor` | `{kind, id}` | 必須 | その op を行った主体。`kind`: §3.3 の 7 種（CLI の `--actor-kind` は必須で既定値は無い）。`id`: 仮名（メール・本名を書かない）、script 名、CoS・operator・MCP client の名前 |
+| `decided_by` / `executed_by` / `approved_by` | `{kind, id}` \| null | 欄は必須（値は任意） | 判断した者・実行した者・承認した者。`actor` と同じ・分からないときは null。`kind`・`id` の規則は `actor` と同じ |
+| `credential` | string | 必須 | 使った credential の種類: `admin_token` / `web` / `operator:<name>` / `mcp:<id>` / `cos_run` / `none` / `unknown`。token の値は書かない。CLI の既定は `unknown` |
+| `request_ref` | string \| null | 欄は必須（op・wait で任意） | 論理要求 `<source_kind>:<source_key>`（受信箱の source の組。例 `question:<id>`・`notice:<key>`）。同じ問いの再通知・改訂は同じ値 |
+| `request_revision` | string \| null | `request_ref` があれば必須 | 論理要求の revision（`cos_inbox_items.source_revision` と同じ文字列）。`request_ref` と両方か無しか |
+| `policy_ref` | string \| null | 欄は必須（値は任意） | 適用した方針・既存承認への参照（例 `adr:2026-10-27-external-operator`、`approval:<id>`） |
 | `start` / `end` | 時刻 \| null | `op_start` は `start`、`op_end` は `end` | §2.4 |
 | `reason` | string | `resubmit`・`resume`・`system_*`・`manual_handoff`・`unclassified` では必須 | 1〜3 文。何が起きてなぜ必要だったか |
 | `trigger` | enum | 必須 | `system_request`（システムが人を求めた: question・approval・prompt）/ `failure`（失敗・停止を見つけた）/ `scheduled`（手順で決めた確認）/ `self_initiated`（人の判断で） |
@@ -127,11 +134,25 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 | `protocol_step` | 測定手順 | 評価手順そのもの（試行開始・cutoff 宣言・grade 起動）。**介入に数えない** | protocol | （なし） | A/B: 試行を起動 |
 | `unclassified` | 未分類 | 上のどれか決められない。推測で寄せない（理由必須） | 評価者が選ぶ | unclassified | — |
 
+### 3.3 主体の種類（`actor.kind`。Celeris の actor_kind の唯一の語彙）
+
+| kind | 意味 | 人の時間・人の介入に数えるか |
+|---|---|---|
+| `human` | 人（評価者・利用者）が自分で行った | `mode=manual` なら数える |
+| `script` | 評価者が起動した script・cron | 数えない |
+| `cos_project` | 案件の CoS（案件の固定スレッドの CoS run） | 数えない（主体別に別掲） |
+| `cos_general` | 統括の CoS | 数えない（主体別に別掲） |
+| `external_operator` | Celeris の外の operator（Claude Code 等の外部 session） | 数えない（主体別に別掲） |
+| `mcp_client` | MCP client（ChatGPT RDC 等） | 数えない（主体別に別掲） |
+| `unknown` | 主体を確かめられない。推測で `human` に寄せない | 数えない。`unknown_actor` に件数と区間を別掲（0 にしない） |
+
 判定規則（A/B 共通）:
 - 1 つの行為が 2 種に当たるときは、**その行為を必要にした原因** で選ぶ（障害が原因の再投入 → `resubmit` で `intent=system`、
   研究上の条件変更のための再投入 → `resubmit` で `intent=research`）。
 - `status_check` は何かを変えたら別の op（変えた種別）を併記する。確認だけで終わったものも記録する（人の時間を使ったため）。
 - 評価者自身の測定作業は `protocol_step`。人の介入の集計からは除き、別に件数だけ出す。
+- CoS が人の代わりに答えた操作は `actor.kind=cos_project|cos_general`。人が CoS に判断を委ねた・CoS の案を人が承認したときは
+  `decided_by`・`approved_by` に人を書く（`actor` は実際に操作した CoS）。
 
 ## 4. event 由来（記録しない）と評価者記録の区分表
 
@@ -168,13 +189,22 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 | ready_not_running | B: task または WU が `ready` で、running の run も外部待ちも無い区間。A: not_applicable | events |
 | external_queue_wait | job の scheduler の submit〜start（実行待ち）。job の start〜end は「外部実行」で別に数える | `job_observation` |
 | human_wait | システムが人の入力を求めてから人が応じるまで | B: events / A: `wait_*` |
-| 人の操作時間 | `op_start.start`〜`op_end.end`（同じ `logical_op_id`・`attempt`・`op_kind`） | 生記録 |
+| 人の操作時間 | `actor.kind=human` かつ `mode=manual` の `op_start.start`〜`op_end.end`（同じ `logical_op_id`・`attempt`・`op_kind`・`request_ref`・`request_revision`）。質問・承認が開いていた時間（human_wait）では代用しない | 生記録 |
 | retry/recovery 区間 | 同じ論理作業の attempt n の失敗終了〜attempt n+1 の開始 | B 自動: runs.seq / 人: `attempt` |
+
+介入の単位（論理要求）:
+- 介入は `request_ref` で 1 件にまとめる（`request_ref` の無い op は 1 op = 1 件）。同じ要求の 2 件目以降の op（改訂・再通知・差戻し）は
+  件数を増やさず、report の `intervention_items[].history` に時刻順に並べる。各要素の `event` は `initial`（最初）/ `revision`
+  （revision が前と違う）/ `repeat`（同じ revision の再対応・差戻し）。介入の区分（op_kind）は最初の人の op の種別。
+- `interventions`（人の介入）は `actor.kind=human` の manual の op を含む論理要求だけを数える。
+- `interventions_by_actor_kind` は protocol を除く論理要求を、関わった主体の種類ごとに数える（1 件に複数の種類が関われば各種類に 1。
+  合計は介入数を超え得る）。`actor.kind=unknown` の論理要求の件数と op 区間は `unknown_actor` に別掲する。
+- 人以外の主体の op 件数は `excluded_ops.non_human`（主体の種類別）に残す。
 
 やり直し:
 - 同じ `logical_op_id` の `attempt` は 1 から連番。attempt 数 − 1 が「やり直し回数」。
 - Celeris の自動 retry は export の `run` 行（`is_retry`）から導出し、`auto_retries` に別掲する（人の再作業に足さない）。人の作業・A の作業は評価者が付ける。
-- 共通 filter: `protocol_step`・`intent=protocol`・`mode=automatic` の op を含む論理作業は、介入件数・人の時間・再作業のどれにも数えない
+- 共通 filter: `protocol_step`・`intent=protocol`・`mode=automatic`・`actor.kind≠human` の op を含む論理作業は、介入件数・人の時間・再作業のどれにも数えない
   （protocol 上の trial-start `attempt=2` は科学的な redo ではない）。
 - 観測の有無は項目ごと: その試行に op 記録（`op_start`/`op_end`。protocol・automatic を含む）が 1 件も無ければ介入件数・人の時間は欠測（`source=missing`、
   値 null）、attempt を持つ記録（`op_start`・`attempt`）が無ければ再作業は欠測。`cutoff`・`job_observation`・`wait_*` だけの試行を 0 にしない。
@@ -184,7 +214,9 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 ## 6. 記録できない指標と主張の限定
 
 - 評価者が気付かなかった・画面外で考えた時間は記録されない。人の時間は **下限** として報告し、「人の時間が X 減った」は
-  記録された操作の範囲の主張に限る。
+  記録された操作の範囲の主張に限る。人の時間は `actor.kind=human` の manual の区間だけで、質問が開いていた時間では代用しない。
+- 主体の種類は記録者の申告で、認証 principal との照合はしない（`credential` は種類の記録）。主体が分からない操作は `unknown` として
+  別掲し、人の操作にも 0 にも寄せない。
 - 評価者が操作者を兼ねるため盲検ではなく、分類（op_kind・intent）は単一評価者の判断で、評価者間一致は測れない。
 - A の harness 内部（Claude Code の tool 再試行・自動 compact・内部の待ち）は transcript を見ない限り見えない。
   A の ready_not_running は定義上存在しない（not_applicable）ため、B の待ち時間と同じ土俵で比べない。

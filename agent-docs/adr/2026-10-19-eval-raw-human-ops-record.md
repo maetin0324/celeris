@@ -51,3 +51,9 @@
 - D11（join の入力）: join は新しい出力形式を足さず既存の出力を再利用する。runner の out dir の `trials.jsonl`・`ledger.jsonl` と、
   decision-log export の records を入力にする。`celeris-campaign export` の table/final-accounting は join の入力ではない。
 
+
+## 付記（2026-10-27）
+
+schema を `celeris.eval-human-op/2` に上げた（D2・D9）。主体の種類 7 種・`decided_by`/`executed_by`/`approved_by`・`credential`・
+`request_ref`/`request_revision`（record_id の材料）・`policy_ref` を足し、report は介入を論理要求単位・主体別に集計する。
+決定は [2026-10-27-human-ops-actor-roles-request-ref](2026-10-27-human-ops-actor-roles-request-ref.md)。/1 の行は読まない。

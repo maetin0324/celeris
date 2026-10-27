@@ -15,6 +15,12 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 - 生記録は `<campaign out>/human-ops.jsonl`（`trials.jsonl`・`ledger.jsonl` と同じ out dir）。追記専用。直すときは訂正行を足す（元の行は書き換えない）。
 - 分からない時刻は **書かない**（flag を省略する）。0 や推測値を入れない。欠測は `missing` に理由つきで残り、集計で 0 にならない。
 - 評価者名は仮名（`--actor eval1`）。メール・本名は検証で拒否される。
+- 主体の種類 `--actor-kind` は必須で既定値は無い（`human` / `script` / `cos_project` / `cos_general` / `external_operator` / `mcp_client` / `unknown`。定義書 §3.3）。
+  主体が分からない操作は `unknown` で書き、`human` と推測しない。人の時間・人の介入に数えるのは `human` の `manual` だけ。
+- 判断・実行・承認の担い手が `actor` と違うときは `--decided-by` / `--executed-by` / `--approved-by <kind>:<id>`、使った credential は
+  `--credential admin_token|web|operator:<name>|mcp:<id>|cos_run|none|unknown`（既定 `unknown`。値は書かない）、適用した方針・既存承認は `--policy-ref`。
+- 受信箱の問い・承認・通知に応じた操作は `--request-ref <source_kind>:<source_key> --request-revision <revision>` を付ける。
+  同じ問いの再通知・改訂は同じ `--request-ref` で revision だけ変える。report は介入を論理要求 1 件にまとめ、改訂・差戻しを history に並べる。
 
 以下の例は共通の識別を変数にして書く（`F` 以外は試行ごとに変わる）:
 
@@ -35,16 +41,16 @@ B0 と B1 は同じ ConfigId::B なので、必ず **別 campaign（別 manifest
 
 ```sh
 # 終わった操作（開始・終了とも分かる）。時刻は UTC の RFC 3339。
-$CC human-op record $ID --op-kind research_direction --actor eval1 --mode manual --intent research \
+$CC human-op record $ID --op-kind research_direction --actor-kind human --actor eval1 --mode manual --intent research \
   --trigger system_request --logical-op p1/answer \
   --started-at 2026-10-22T00:10:00Z --ended-at 2026-10-22T00:12:00Z
 
 # その場で記録（時計の値を使う。time_basis=evaluator_live になる）
-$CC human-op record $ID --op-kind status_check --actor eval1 --mode manual --intent monitoring \
+$CC human-op record $ID --op-kind status_check --actor-kind human --actor eval1 --mode manual --intent monitoring \
   --trigger scheduled --logical-op p1/look --started-at now --ended-at now
 
 # 終了が分からない操作: --ended-at も --outcome も付けない → op_start だけが残り end は missing
-$CC human-op record $ID --op-kind resubmit --actor eval1 --mode manual --intent system --trigger failure \
+$CC human-op record $ID --op-kind resubmit --actor-kind human --actor eval1 --mode manual --intent system --trigger failure \
   --logical-op p3/submit-train --attempt 2 --reason "sbatch が queue 満杯で失敗したため出し直し" \
   --started-at 2026-10-22T03:00:00Z
 ```
@@ -180,7 +186,8 @@ $CC human-op report --file $F --events <out dir> --events <dl dir> --out <report
 `<report dir>` に `report.json`（機械可読。正本）・`report.md`（表。注意書き付き）・`timeline.jsonl`（区間 1 行ずつ）を書く。同じ入力は byte 一致で再生成される。
 表・集計値は手編集しない（直すときは生記録に訂正を足して再生成）。
 
-- 人の時間は `mode=manual` の op の区間の**和集合**（重なりの二重計上なし。`sum_secs` と `overlap_secs` を併記）。`protocol_step`・script の op は数えない。
+- 人の時間は `actor.kind=human` かつ `mode=manual` の op の区間の**和集合**（重なりの二重計上なし。`sum_secs` と `overlap_secs` を併記）。`protocol_step`・script・CoS・外部 operator・MCP client・unknown の op は数えない。質問が開いていた時間（human_wait）では代用しない。
+- 介入は論理要求（`request_ref`）単位で `interventions` に数え、改訂・再通知・差戻しは `intervention_items[].history` に並ぶ。主体の種類別は `interventions_by_actor_kind`、主体不明は `unknown_actor`（件数と区間）に別掲する。
   終了不明は `open`、始点不明は `missing_start`、`end<start` は `inverted` に件数で残し、長さに入れない（`lower_bound: true`）。観測窓（cutoff、無ければ試行終了）の後に始まった op は介入件数にも時間にも入れず（`excluded_ops.after_window`）、跨ぐ区間は終端で切る。
 - 待ち: `human_wait`（評価者の `wait_*`。記録が無ければ欠測で 0 秒にしない）、`celeris_wait`（B: export の `wait` 行 = Question/Approval）、`external_queue_wait`（job の submit〜start）、`external_run`（start〜end。job 観測が無ければ欠測）。同じ `job_ref` は 1 件。`internal_wait` は現在の入力に無く欠測。
 - 再作業: 同じ `logical_op` の attempt n+1 を再作業とし、原因は n+1 の op の intent（system→`infrastructure`、research/safety→`research`、他→`unclassified`）。失敗 attempt の所要時間も併記。protocol_step・script を含む論理作業と窓の外の attempt は数えない。Celeris の自動 retry（`is_retry` の run）は `auto_retries` に別掲する。

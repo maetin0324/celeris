@@ -7,6 +7,7 @@ import { after, before, test } from "node:test";
 import { WebSocket } from "ws";
 import { createApp } from "./app.js";
 import { terminalConfig } from "./terminal.js";
+import { acceptFixtureRequest } from "./test-support/http-fixture.mjs";
 
 // ADR 2026-10-27-web-terminal の gateway 側（D1〜D4）の決定的な試験。偽の helper（frame を解く node script）と
 // 偽の daemon で、開く・入出力・リサイズ・終了の理由・helper の消滅・上限・認可・入口を確かめる。
@@ -51,12 +52,16 @@ const closes = [];
 const closeWaiters = [];
 let pidSeq = 0;
 const daemon = http.createServer((req, res) => {
+  // 並走する他の試験の loopback probe を記録しない。gateway が web の token を付けない要求も 404 になり、
+  // 開く試験が失敗する（token の検査を兼ねる）。
+  const expected = (r) =>
+    r.url?.startsWith("/api/v1/terminals") && r.headers.authorization === "Bearer test-daemon-token";
+  if (!acceptFixtureRequest(req, res, expected)) return;
   let body = "";
   req.on("data", (chunk) => {
     body += chunk;
   });
   req.on("end", () => {
-    assert.equal(req.headers.authorization, "Bearer test-daemon-token");
     const json = JSON.parse(body || "{}");
     res.setHeader("content-type", "application/json");
     if (req.method === "POST" && req.url === "/api/v1/terminals") {

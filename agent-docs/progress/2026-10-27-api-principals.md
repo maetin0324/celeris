@@ -25,7 +25,15 @@ tasks: [01M5XXF7Q3N2619D5RQA5J7C7N]
 ## 証拠（提出時の HEAD で実行）
 
 - `cargo nextest run -p task-api --test api_principals` → 4 passed。
-- 必須検査の結果は報告本文と result.json に記す（test-affected / clippy / fmt）。
+- `bash scripts/dev/test-affected.sh` → exit 0（Rust 6499 passed / 21 skipped、web Vitest 682 passed、Node 98 passed）。
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。
+- e2e（`api_scenarios`・`account_pool_scenarios`・`codex_account_pool_scenarios`）は新形式の config で 17 passed（参考。release gate の全体試験ではない）。
+
+## commit（件名）
+
+- API の主体: 名前付き token・MCP 専用 token・CoS thread を principal として by に残す（途中）
+- API の主体: config・campaign・BFF・文書を名前付き token へ移し、本番への移行手順を書く
+- API の主体: 残りの試験 config を [[api.tokens]] へ移し、clippy の指摘を直す
 
 ## 本番への移行
 

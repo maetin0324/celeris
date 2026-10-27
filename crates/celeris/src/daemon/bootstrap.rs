@@ -451,11 +451,8 @@ pub(crate) fn worker_db_guard_protected_set(home: Option<&Path>) -> ProtectedSet
             path.display()
         )),
     }
-    match value.get("llm_proxy") {
-        Some(toml::Value::Table(proxy)) => {
-            add_token(&mut set, proxy.get("token_file"), "[llm_proxy] token_file")
-        }
-        None | Some(_) => {}
+    if let Some(toml::Value::Table(proxy)) = value.get("llm_proxy") {
+        add_token(&mut set, proxy.get("token_file"), "[llm_proxy] token_file");
     }
     set
 }

@@ -114,7 +114,12 @@ updated: 2026-10-27
 - 後: human-ops schema を /2 に上げた（ADR 2026-10-27-human-ops-actor-roles-request-ref）。actor.kind を 7 種にし、--actor-kind を必須にした（既定の human を削除）。decided_by/executed_by/approved_by・credential・request_ref/request_revision（record_id の材料）・policy_ref を足した。新しい欄の無い行・未知の kind・/1 の行は拒否する。report は介入を request_ref で 1 件にまとめて history（initial/revision/repeat）に並べ、主体別の件数（interventions_by_actor_kind）・unknown_actor の別欄・excluded_ops.non_human を出す。人の時間は human かつ manual の区間だけを数える。定義書と runbook を更新した。commit『phase 1: human-ops /2 に主体の種類・役割・論理要求の参照を足し、report を主体別・論理要求単位で集計する』。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
-EVIDENCE
+- `bash scripts/dev/test-affected.sh` → exit 0（health に check-human-text を含む。nextest 6510 passed・21 skipped、
+  web Vitest 682 passed・Node 98 passed、tsc -b 通過）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `sh scripts/dev/progress-index.sh --check`・`check-doc-links.sh`・`check-adr-numbers.sh`・
+  `check-doc-layout.sh scripts/dev/docs-layout.tsv` → いずれも ok
 
 ## 本番への移行
 - 本番 config（`~/.config/celeris/config.toml`）の `[cos.triage]` は `policy_version = "1"` を明示している。この release を

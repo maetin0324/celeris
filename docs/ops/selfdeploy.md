@@ -4,11 +4,13 @@
 設計は [ADR-0040](../../agent-docs/adr/0040-self-improvement-deploy.md)（D1〜D5）と
 [ADR-0041](../../agent-docs/adr/0041-self-improvement-loop-hardening.md)（D2〜D4）。ここはその**使い方**だけを書く。
 
+外部 operator と CoS の役割・実行担当・重複防止は [外部 operator 手順書](external-operator.md) に従う。
+
 ## 0. 全体像
 
 ```
 release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻すとき: rollback.sh）
-  本番に触れない      本番に触れない        人だけが実行する           人だけが実行する
+  本番に触れない      本番に触れない        人が決定する（§4c）       人だけが実行する
   誰が実行してもよい   誰が実行してもよい
 ```
 
@@ -382,7 +384,13 @@ scripts/selfdeploy/promote.sh <sha12>
 web「リリース」画面（`/releases`）の「昇格」ボタンは `POST /releases/{sha12}/promote`（管理系）を叩き、
 celeris が **`~/.local/celeris/current/scripts/promote.sh <sha12>`** を detached（`setsid`、stdin は
 `/dev/null`、stdout/err は `<release>/promote.log`）で起こす。やることは shell から `promote.sh` を
-叩くのと**同じ**で、押すのは人（ADR-0040 D5。celeris の中に自動で呼ぶ経路は無い）。
+叩くのと**同じ**。人の Web 操作に加え、人が対象版の昇格を依頼した場合は CoS の
+`POST /api/v1/cos/operations` → `release.promote` も利用できる
+（[CoS 全変更操作 ADR](../../agent-docs/adr/2026-10-09-cos-operations-all-mutations.md)、
+[production skill](../../config/skills/cos-operator/production.md)）。CoS は `status.sh` の
+`verify.json.ok` と `live_ok` を確認し、監査付きの経路を使う。通知だけの一次対応では昇格しない。
+人の Web と CoS のどちらが実行するか一つに決め、operator は同じ版を重ねて起動しない。
+CoS に直接の `promote.sh` 実行を許可したものではない。202 は受付であり、稼働版は別途確認する。
 
 **どちらの `promote.sh` か**（ADR-0041 D4。Phase 50 で変わった）: **いま動いている版（`current`）**の
 もの。昇格は「動いている本番を止めて／引き継いで替える」作業なので、その手順を知っているべきなのは
@@ -539,7 +547,7 @@ celeris の上の「人」（ワーカー）が自己改善の案件でやって
 やってはいけないこと:
 
 - `promote.sh` / `rollback.sh` / `install-units.sh` を実行する（リリースの中の `<release>/scripts/*.sh` も同じ）
-- `POST /releases/{sha12}/promote` を叩く（GUI の「昇格」ボタンと同じもの。押すのは人だけ）
+- 通常 worker が `POST /releases/{sha12}/promote` を叩く（人の Web 操作、および §4c の人の指示に基づく CoS の監査経路だけを認める）
 - `systemctl` を叩く（本番の unit を start / stop / restart / enable / disable する）
 - `~/.config/celeris/config.toml` を編集する
 - `~/.local/celeris/*.sqlite3` に書き込む（読むのは `sqlite3 "file:…?mode=ro"` と `.backup` だけ）
@@ -549,7 +557,7 @@ celeris の上の「人」（ワーカー）が自己改善の案件でやって
 - `git checkout` で作業ツリーのブランチを変える・自分でブランチを切る（作業ツリーは celeris がタスクごとに用意する）
 
 実装者は `gate.json` / `verify.json` を `artifacts/` に写し、報告に「検証済み sha」を書く。
-昇格は人が `status.sh` で `verify.json.ok` を見てから行う。
+昇格は人が版を決定し、`status.sh` で `verify.json.ok` と `live_ok` を確認してから §4c の一つの経路で行う。
 
 ## 8. config.toml について
 
@@ -599,7 +607,7 @@ draining のまま run の面倒を見る上限（§4b）。
 部署長の別runが既存レビューを担当するため、CoSに技術的な再承認は求めない。
 合格した固定SHAを task の repo（案件のローカルリポジトリ）の既定ブランチへfast-forwardする。
 取り込み先が `[selfdeploy] repo`（自己リポジトリ）なら、そのあとrelease/verifyを準備し、成功後にCoSからデプロイ候補を通知する
-（本番昇格は引き続きリリース画面から行う）。**それ以外のリポジトリは取り込みで止まり**、release・promoteには進まない
+（本番昇格は人が決定し、リリース画面または §4c の CoS 経路で行う）。**それ以外のリポジトリは取り込みで止まり**、release・promoteには進まない
 （CoSには「取り込み完了」を通知する）。push は `[selfdeploy] push` が有効で、取り込み先に `push_remote` が実在するときだけ行う。
 旧 `[selfdeploy] delivery_projects` は廃止（書くと config の読み込みエラー）。
 
@@ -610,3 +618,40 @@ draining のまま run の面倒を見る上限（§4b）。
 `prepare.sh` は release 全体に 7200 秒、verify に 900 秒の上限を掛ける。
 Cargo の clean と全 workspace テストに時間がかかる場合も、gate 成功後の梱包と
 作業ツリーの掃除まで release の期限に含める。
+
+
+### 9a. push_error の確認と復旧（non-fast-forward）
+
+`GET /api/v1/tasks/<id>/changes` の `delivery` で `push_error`・`pushed_at`・対象 commit・state を確認する。
+`GET /deliveries` は task/commit 対応の一覧であり、診断には task の changes を使う。
+[ADR-0051](../../agent-docs/adr/0051-supervised-delivery.md) と `crates/celeris/src/delivery.rs` のとおり、
+push 失敗は release 準備を止めない。自動再試行は一度だけで、なお失敗すると内部の `[retried]` 印が付き、
+以後は繰り返さない。`ready` や本番稼働を remote 同期済みの証拠にしない。
+
+non-fast-forward は、まず人が指定した repo/remote/default branch と対象 delivery を照合し、
+CoS・operator のどちらか一人が診断を担当する。以下は**人が実行する手順**。値は delivery と登録 repo から指定する。
+fetch は remote に書かないがローカル追跡 ref を更新するため、進行中の取り込みと重ねない。
+
+```bash
+repo=/path/to/registered/repo
+remote=origin
+branch=main
+# reviewed は delivery の対象 commit（実際の値を指定）
+reviewed='<delivery-commit>'
+git -C "$repo" status --short
+# 認証失敗なら停止。対話認証を自動反復しない
+GIT_TERMINAL_PROMPT=0 git -C "$repo" fetch "$remote" "$branch"
+git -C "$repo" rev-list --left-right --count "refs/heads/$branch...FETCH_HEAD"
+git -C "$repo" merge-base --is-ancestor "$reviewed" FETCH_HEAD
+```
+
+- 最後が exit 0: remote は対象 commit を含む。push は不要。fetch 時刻と包含確認を復旧証拠にする。
+- 対象を含まず、`git -C "$repo" merge-base --is-ancestor FETCH_HEAD "refs/heads/$branch"` が exit 0:
+  remote がローカルの祖先。未承認 commit が混じっていないことと既存 push 認可を確認した人が
+  `git -C "$repo" push "$remote" "refs/heads/$branch:refs/heads/$branch"` を一度実行し、再 fetch と対象包含で成功を確かめる。
+- 分岐・ローカルが後退・対象 commit 不明・認証失敗: 自動再試行を止め、履歴とエラーを元 task に添えて人へ戻す。
+  force push、共有 main の reset/rebase、無関係な再起票はしない。統合修復が必要なら既存のレビュー経路で扱う。
+
+手動 push 後の古い `push_error` を解除する専用の管理 API は現状ない。復旧済みでも履歴に残り得る。
+本番 DB の delivery JSON を直接書き換えず、元 task に観測時刻・対象・remote の包含・コマンド結果を追記する。
+「remote は復旧済み／過去の push_error は残存」を分けて報告する。表示を消すための rereview・release・promote はしない。

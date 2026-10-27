@@ -11,6 +11,7 @@ agent（Celeris のタスク）がまず読むべき文書は `docs/` ではな�
 - `protocol/` — worker protocol の説明と schema
 - `guides/` — 機能・画面ごとの使い方（knowledge、mcp、providers、llm-source、workspace、browser-capability、browser-credentiald、
   repository-documentation-maintenance）
+- [外部 operator と CoS の取り決め](ops/external-operator.md) — 起動・権限・配備・二重対応防止
 - `ops/` — 運用手順（selfdeploy、nextest、sccache-l1、web-parallel-operation、browser-launcher-host-setup）
 
 一度きりの作業手順・経緯・日付付きの調査報告・ADR・進捗記録は `agent-docs/` にある。

@@ -726,7 +726,7 @@ impl World {
         }
         copy(&c.join("cases/final").join(K2).join("kb"), &k);
         preflight_setup::pin_trial_kb(&d.join("final.json"), &cases, &k);
-        // 測定 daemon の `[api] token_file`（`Config::load` が読めること。値は試験用）。
+        // 測定 daemon の `[[api.tokens]]` の token_file（`Config::load` が読めること。値は試験用）。
         fs::create_dir_all(d.join("measure")).expect("measure dir");
         fs::write(d.join("measure/token"), "t\n").expect("token");
         let measure = preflight_setup::write_configs(

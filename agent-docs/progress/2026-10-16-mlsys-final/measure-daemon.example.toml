@@ -10,6 +10,9 @@ max_concurrency = 1
 
 [api]
 listen = "127.0.0.1:<measure port>"                        # 本番と別 port
+
+[[api.tokens]]                                             # launcher は最初の 1 本を使う
+principal = "operator:measure"
 token_file = "<abs local path>/measure-state/token"        # prepare が 0600 で作る測定専用 token
 
 [knowledge]

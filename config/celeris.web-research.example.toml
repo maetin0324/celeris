@@ -10,7 +10,7 @@
 #     を celeris が `<python> <スクリプト> <入力 JSON>` の形で起動する。ADR-0029 D1）。
 #   - LLM は celeris の OpenAI 互換 proxy に向ける。`settings` の
 #     `llm.provider`/`llm.openai_endpoint.url`/`llm.openai_endpoint.api_key`/`llm.model` で指定する
-#     （`api_key` は `[api] token_file` と同じ値が必要）。
+#     （`api_key` は `[llm_proxy] token_file` と同じ値が必要）。
 #   - 検索エンジン（`search.tool`）はホストの事情に強く左右される（実機確認: このホストでは一般的な
 #     Web エンジンが軒並み塞がれていた — mojeek は 403、SearXNG 経由の duckduckgo は CAPTCHA、brave は
 #     レート制限、qwant はアクセス拒否、google/wikipedia の web エンジンは 0 件。SearXNG 単体で
@@ -109,13 +109,13 @@ env = { RES_OPTIONS = "single-request" }
 [adapters.local_deep_research.settings]
 "llm.provider" = "openai_endpoint"
 # ADR-0132 D4: celeris の LLM source プロキシに向ける。モデル名は `<source_id>/<model_id>`（具体的な供給元。
-# tier alias は廃止）。下の [[llm_routes]] の供給元・model と一致させる。`api_key` は**プロキシの Bearer**（`[api] token_file`
+# tier alias は廃止）。下の [[llm_routes]] の供給元・model と一致させる。`api_key` は**プロキシの Bearer**（`[llm_proxy] token_file`
 # と同じ値。ダミーの "unused" では通らない）。
 # ADR-0063 D4（Phase 109）: ここに書いた値は `ldr_input.json` には平文で書かれない
 # （`redact_secret_settings` が `api_key` で終わるキーを自動で検出し、`LDR_LLM_OPENAI_ENDPOINT_API_KEY`
 # という環境変数名に変換して子プロセスへ渡す。JSON にはその環境変数名へのプレースホルダだけが残る）。
 "llm.openai_endpoint.url" = "http://127.0.0.1:18100/v1"
-"llm.openai_endpoint.api_key" = "<[api] token_file と同じ値>"
+"llm.openai_endpoint.api_key" = "<[llm_proxy] token_file と同じ値>"
 "llm.model" = "claude_oauth/claude-haiku-4-5"
 "search.tool" = "tavily"
 # SearXNG に切り替える場合の代替（このホストでは `engines` を絞らないとノイズが出る。上のコメント参照）:

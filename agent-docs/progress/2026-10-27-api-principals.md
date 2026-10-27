@@ -29,6 +29,17 @@ tasks: [01M5XXF7Q3N2619D5RQA5J7C7N]
   配備監査の語彙 `external_operator:<name>`。固定 human の constructor は削除。
 - retry 再送・task pause/resume の主体保持、昇格の主体区別、BFF の旧共有 token 設定拒否を回帰試験に追加。
 
+## 差し戻し後の修正（旧い token 設定の案内を消す）
+
+- review の指摘どおり、現行文書と設定例に残っていた旧形式を新形式へ直した。README（GUI は
+  `CELERIS_WEB_API_TOKEN_FILE`）、`docs/ops/browser-web-live-check.md`（`[[api.tokens]]` の `human:web`）、
+  `docs/ops/measure-run-final.md`・`docs/ops/mlsys-main-4-pilot-runbook.md`・測定 daemon の雛形
+  （最初の `[[api.tokens]]`、`operator:measure`）、`config/celeris*.example.toml`（`[[api.tokens]]` の例と
+  proxy の bearer は `[llm_proxy] token_file`）、`docs/ops/selfdeploy.md` と `celeris --token-file` の説明
+  （`operator:verify` 1 本への置き換え）。
+- 残す: 過去の進捗・ADR の記述（歴史記録）、`celerisctl browser doctor` の `CELERIS_API_TOKEN_FILE`
+  （CLI の token file を指す現行の env で、BFF の旧 env とは別）。
+
 ## 証拠（提出時の HEAD で実行）
 
 - `cargo nextest run -p task-api --test api_principals` → exit 0（7 passed）。
@@ -44,6 +55,7 @@ tasks: [01M5XXF7Q3N2619D5RQA5J7C7N]
 - API の主体: 残りの試験 config を [[api.tokens]] へ移し、clippy の指摘を直す
 
 - phase 1: main 同期後の API 主体を昇格監査と一時停止へ通す
+- API の主体: 現行文書と設定例から旧い [api] token_file・CELERIS_API_TOKEN_FILE の案内を消す
 
 ## 本番への移行
 

@@ -207,7 +207,8 @@ SD_VERIFY_LOCK_WAIT=60 scripts/selfdeploy/verify.sh <sha12>   # 他の検証を 
    **その場（マイグレーション前）で件数を数える**（検査 2 の基準）。
 2. 新リリースの celeris を **verify モード**で `127.0.0.1:7711` に起こす
    （`--mode verify --db <snapshot> --listen … --workspace-root … --token-file … --release <sha12>`。
-   設定は**本番の `config.toml` をそのまま読む**。上書きは CLI だけ）。
+   設定は**本番の `config.toml` をそのまま読む**。上書きは CLI だけ。`--token-file` は本番の `[[api.tokens]]` を
+   全て捨て、`operator:verify` の 1 本（staging の token）に置き換える。ADR 2026-10-27-api-principals D6）。
 3. 検査:
    1. 起動し、`health.schema_version` が新バイナリの `SCHEMA_VERSION` と等しい（＝本番のデータで
       マイグレーションが通った）
@@ -584,11 +585,12 @@ ADR-0064 D1: `db` は文字列でも、`[db]` テーブルでもよい
 | `backup_interval_secs` | 3600 |
 | `backup_keep` | 48 |
 
-**書いてあれば従来どおり**（相対パスは設定ファイルのディレクトリ基準）。`[api] token_file` と
+**書いてあれば従来どおり**（相対パスは設定ファイルのディレクトリ基準）。`[[api.tokens]]` と
 `[accounts] claude_dir` / `codex_dir` には**暗黙の既定を入れない**: 「書いていない」こと自体が
 「認証を使わない（ADR-0013 D3）」「そのプールを設定していない（ADR-0024 D2 / ADR-0025 D1）」という
-意味を持っているため。推奨の置き場（`~/.config/celeris/api.token`、
-`~/.local/celeris/{claude,codex}-accounts`）は `config/celeris.example.toml` に書いてある。
+意味を持っているため。推奨の置き場（operator 用 `~/.config/celeris/api.token`・web 用 `web.api-token`・
+proxy 用 `llm-proxy.token`、`~/.local/celeris/{claude,codex}-accounts`）は `config/celeris.example.toml` に書いてある。
+削除した `[api] token_file` は読み込みエラーになる（ADR 2026-10-27-api-principals）。
 
 `[selfdeploy] repo` も既定が
 `~/workspace/agent-platform`（`~` は celeris の `$HOME` で展開）なので、書かなければそのまま当たる

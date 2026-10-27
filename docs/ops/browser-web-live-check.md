@@ -15,7 +15,7 @@ tasks: [01M46W97H391DSFW1XJ745W0G9, 01M47QXZR0QMCYZM9KAZC81BCD]
 - **`/tmp` の下は使わない。** launcher は session ごとに `/tmp` を tmpfs で覆うため、`/tmp` の下の launcher state・socket・bwrap 等は session の中から見えない（attempt 4 の bwrap ENOENT）。台本は証跡ディレクトリ、launcher config とその親、daemon config、上の各パス、launcher の `bwrap`/`sandboxd`/`egress`/`chrome`/`agent_browser` のどれかが `/tmp` の下（symlink 解決後）なら開始前に拒否する。既定はすべて `/var/tmp` の下。
 - 証跡ディレクトリ名は短くする（例 `/var/tmp/cb-1001`）。run の workspace はこの下にでき、action socket の path が Unix socket の 107 byte 上限を超えると run が `isolated_runtime_unavailable` で止まる（attempt 5。launcher 経路の socket path の修正（D4）が入っていない build では特に）。ルートは launcher が通れるよう 0711、ログは umask 077 で 0600。web owner socket と秘密鍵は各 0700 の私有サブディレクトリに置く。
 - `CELERIS_BROWSER_TEST_LAUNCHER_CONFIG` は root 所有で group/other 書込不可の TOML。親ディレクトリも root 所有で group/other 書込不可にする（既定 `/var/tmp/celeris-browser-config-<UID>/launcher.toml`、ディレクトリは 0755）。書式は [launcher 配置手順](browser-launcher-host-setup.md) §4。`allowed_uids` に試験 daemon UID を入れ、`socket` と `state_dir` は証跡ディレクトリ内へ向ける。bwrap、sandboxd、egress、Chrome、agent-browser の実体と subuid/subgid を用意する。launcher UID が `state_dir` を所有する。台本は `sudo -n` で一時 socket を daemon UID 所有の 0600 で作り、fd 3 を launcher に渡す（systemd socket activation と同じ契約）。socket がすでに fd 3 のとき `os.dup2(fd, 3, inheritable=True)` は何もせず `O_CLOEXEC` が残るので、続けて `os.set_inheritable(3, True)` で継承可にする（attempt 1 の launcher abort）。
-- `CELERIS_BROWSER_TEST_DAEMON_CONFIG` は使い捨て DB・workspace、`[browser] runtime="launcher"` と同じ socket、loopback の `[api] listen`・`token_file`、`org_include`（`engineering` node を含む）、`browser-specialist` または ACP の**ローカル試験 harness**と provider を設定する。`CELERIS_BROWSER_CONFORMANCE_FILE` には対象 backend の実測済み台帳を指定する。試験 harness は run を少なくとも 3 分維持し、外部 URL を開かず、許可ページを表示して範囲外 origin `http://127.0.0.1:17731` への遷移拒否を行う。拒否証跡は harness が作らず、launcher の session 記録から台本が採取する。外部ネットワークに出る provider は使わない。
+- `CELERIS_BROWSER_TEST_DAEMON_CONFIG` は使い捨て DB・workspace、`[browser] runtime="launcher"` と同じ socket、loopback の `[api] listen` と `[[api.tokens]]`（`principal`・`token_file`）、`org_include`（`engineering` node を含む）、`browser-specialist` または ACP の**ローカル試験 harness**と provider を設定する。`CELERIS_BROWSER_CONFORMANCE_FILE` には対象 backend の実測済み台帳を指定する。試験 harness は run を少なくとも 3 分維持し、外部 URL を開かず、許可ページを表示して範囲外 origin `http://127.0.0.1:17731` への遷移拒否を行う。拒否証跡は harness が作らず、launcher の session 記録から台本が採取する。外部ネットワークに出る provider は使わない。
 - gateway の Ed25519 秘密鍵 `CELERIS_WEB_ATTESTATION_KEY_FILE` と daemon の `[api] browser_attestation_public_key_file` は同じ鍵ペアを使う。daemon には `[api] browser_credentiald_control_socket` も試験ディレクトリ内で指定する。web password file と owner socket の親は試験 daemon UID 所有で 0700。`web/` の依存と `dist/` を先に用意する。
 - `CELERIS_BROWSER_TEST_DAEMON_BIN` と `CELERIS_BROWSER_TEST_LAUNCHER_BIN` は検査したビルドの実行ファイル。試験用 socket を root で作って launcher UID に切り替えるため、当該 Python ラッパーを `sudo -n` で起動できる権限が必要。試験用の未使用 API/web/page port を確保する。既定の web/許可ページ/不許可ページ/Live View fixture port は 17729/17730/17731/17732 で、`CELERIS_BROWSER_TEST_{WEB,PAGE,DENIED,LIVE}_PORT` で変更できる。5 つの port（API を含む）は互いに異なり、7710/7720/7721 は拒否する。
 
@@ -46,9 +46,12 @@ tick_ms = 200
 
 [api]
 listen = "127.0.0.1:17728"
-token_file = "/var/tmp/cb-1001/api.token"
 browser_attestation_public_key_file = "/var/tmp/cb-1001/attestation.pub"
 browser_credentiald_control_socket = "/var/tmp/cb-1001/credentiald/control.sock"
+
+[[api.tokens]]
+principal = "human:web"                  # 台本は最初の 1 本を BFF（CELERIS_WEB_API_TOKEN_FILE）に渡す
+token_file = "/var/tmp/cb-1001/api.token"
 
 [browser]
 runtime = "launcher"

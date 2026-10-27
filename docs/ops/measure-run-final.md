@@ -5,12 +5,12 @@ tasks: [01M52D2AM5K6GCFGEJZW4REWM2, 01M56HCNS9SYAS7TAEA7Z3E4CZ, 01M58VFRBA6HG0SS
 ---
 
 根拠: ADR `agent-docs/adr/2026-10-18-measure-env-launcher.md`、条件 `agent-docs/progress/2026-10-16-mlsys-final/freeze-final.md`。実装は `scripts/campaign/measure-launcher.sh` と `crates/campaign/src/{env_check,env_lock,measure_env,preflight}.rs`。
-**値（token・鍵）はこのファイルに書かない。** token は測定専用 file（`[api] token_file`）に launcher が 0600 で作り、CLI には環境変数の**名前**（`CELERIS_MEASURE_TOKEN`）だけが渡る。
+**値（token・鍵）はこのファイルに書かない。** token は測定専用 file（最初の `[[api.tokens]]` の `token_file`。主体は `operator:measure`）に launcher が 0600 で作り、CLI には環境変数の**名前**（`CELERIS_MEASURE_TOKEN`）だけが渡る。
 承認枠: 試行 12 以内・tokens 全体 3,000,000・per_case 300,000・per_arm 1,300,000・`token_basis = all`・claude 7 日使用率 45% 以内（codex 21%）・fable 不使用（人の決定 2026-10-16）。枠を超える変更は新 campaign_id と新しい決定が要る。
 **2026-10-21 の決定（最小実 pilot `mlsys-main-3`）**: A0/B0 × K4 の 2 試行、`per_case.max_tokens`・`per_arm.max_tokens` 各 1,500,000、tokens 全体 3,000,000（`token_basis=all`、fable 不使用、trial 数 2）。preflight の承認上限定数（`preflight::APPROVED_*`）はこの値に更新済み。上の 300,000 / 1,300,000 は 2026-10-16 の旧枠。
 
 入口は 1 つ: `scripts/campaign/measure-launcher.sh <prepare|start|preflight|watch|collect|grade|export|stop> --env <file>`。標準の流れは prepare → start → preflight → watch → grade（評価側の観測収集 → 独立採点 → check）→ export。各 subcommand は再実行できる。
-接続先（`--api-url`）・token・`--measure-config` 等の CLI 引数は、すべて env ファイル（と、その `DAEMON_CONFIG` の `[api] listen` / `token_file`）から launcher が 1 回だけ生成する。**手で `--api-url` や `--token-env` を書かない。**
+接続先（`--api-url`）・token・`--measure-config` 等の CLI 引数は、すべて env ファイル（と、その `DAEMON_CONFIG` の `[api] listen` と最初の `[[api.tokens]]` の `token_file`）から launcher が 1 回だけ生成する。**手で `--api-url` や `--token-env` を書かない。**
 launcher がやらないこと: systemd / `systemctl` / `pkill` / 本番 config・本番 DB・本番 release の変更、昇格、cluster job の cancel、account の作成・削除・書換え。停止は launcher 自身が起動した daemon の pid 1 つだけ（§7）。
 
 ## 0. 前提（人。本番 host 操作。launcher は行わない）
@@ -158,7 +158,7 @@ sh $L watch     --env $ENVF   # daemon 実体照合 → preflight → env-lock�
 
 ## 6. 7 日使用率（run のたびに。launcher の subcommand に無いので CLI を直接。引数は launcher と同じ接続先）
 ```sh
-export CELERIS_MEASURE_TOKEN="$(cat <DAEMON_CONFIG の [api] token_file>)"   # 値は表示・記録しない
+export CELERIS_MEASURE_TOKEN="$(cat <DAEMON_CONFIG の最初の [[api.tokens]] の token_file>)"   # 値は表示・記録しない
 $B usage --manifest $MANIFEST --out $OUT --api-url http://<DAEMON_CONFIG の [api] listen> --token-env CELERIS_MEASURE_TOKEN --a-account $A_ACCOUNT > $RUNS/usage-N.json
 ```
 exit 0 = A のアカウントを含む claude が 45%・codex が 21% 以内（`--max-7d` / `--max-7d-codex`。承認枠を超える変更は新しい決定）。使用率が観測できない（null）ときは非 0。腕ごとの tokens は `campaign_tokens_by_arm`。

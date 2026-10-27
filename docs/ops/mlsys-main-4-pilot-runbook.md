@@ -158,7 +158,7 @@ pilot manifest には pilot 用の pins が無いので `check-main-pins.py` は
 ```sh
 ENVF=$K4/launcher.env               # K2 は $K2/launcher.env
 RUNS=$(dirname "$OUT")/runs; mkdir -p "$RUNS"
-export CELERIS_MEASURE_TOKEN="$(cat <DAEMON_CONFIG の [api] token_file>)"   # 値は表示・記録しない
+export CELERIS_MEASURE_TOKEN="$(cat <DAEMON_CONFIG の最初の [[api.tokens]] の token_file>)"   # 値は表示・記録しない
 $B usage --manifest $MANIFEST --out $OUT --api-url http://<DAEMON_CONFIG の [api] listen> \
   --token-env CELERIS_MEASURE_TOKEN --a-account claude_max_lab > $RUNS/usage-1.json      # exit 0 を確かめてから
 sh $L watch --env $ENVF > $RUNS/watch-1.json      # max_parallel=1 なので A → B の順に 1 件ずつ

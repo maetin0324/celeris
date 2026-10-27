@@ -8,9 +8,10 @@
 #   db = "~/.local/celeris/celeris.sqlite3"          workspace_root = "~/.local/celeris/workspaces"
 #   [selfdeploy] releases_dir = "~/.local/celeris/releases"   [memory] dir = "~/.local/celeris/memory"
 #   [containers] build_dir = "~/.local/celeris/containers"    [secrets] dir = "~/.config/celeris/secrets"
-# `[api] token_file` と `[accounts] claude_dir` / `codex_dir` には既定を入れない（書いていないこと自体が
-# 「認証を使わない」「そのプールを設定していない」という意味を持つ）。本番は
-# `~/.config/celeris/api.token` と `~/.local/celeris/{claude,codex}-accounts` に置く。
+# `[[api.tokens]]` と `[accounts] claude_dir` / `codex_dir` には既定を入れない（書いていないこと自体が
+# 「認証を使わない」「そのプールを設定していない」という意味を持つ）。本番の token は
+# `~/.config/celeris/` の下（operator 用 `api.token`・web 用 `web.api-token`・proxy 用 `llm-proxy.token`）、
+# アカウントは `~/.local/celeris/{claude,codex}-accounts` に置く。
 db = "../celeris.sqlite3"            # celerisctl --db / CELERIS_DB と同じファイルを指すこと
 # ADR-0095: worker の run（adapter・check）からは DB のディレクトリが読み取り専用に見える（既定。user namespace を
 # 使う）。直下の既存の項目（workspaces/ など）は書けるが、DB の隣に新しいファイルは作れない。無効にするのは
@@ -163,7 +164,7 @@ dir = "../memory"
 #   base_url            — "openai-compatible" のときの接続先（例: celeris proxy
 #                          "http://127.0.0.1:18100/v1"）。
 #   model               — 例 "celeris/cheap"。
-#   api_key_secret      — `[secrets] dir` の下の id。proxy では `[api] token_file` と同じ秘密を指定する。
+#   api_key_secret      — `[secrets] dir` の下の id。proxy では `[llm_proxy] token_file` と同じ秘密を指定する。
 #   max_related_pages   — 依頼文に入れる関連ページの上限（既定 10）。
 #
 # ADR-0052 D1（Phase 64）: 知識整理タスクを起こす直前に `GET <base_url>/models` を 3 秒で当て、届かなければ
@@ -505,11 +506,21 @@ interval_secs = 30                                # 判定と送信の間隔（�
 # opencode_cli = "opencode"           # gateway が引けないときの代替（`<cmd> models opencode-go`）
 
 # HTTP API（ADR-0013、docs/api/v1/api.md）。listen を書いたときだけ celeris のプロセス内で動く（既定は無効）。web gateway はこれを使う。
-# loopback 以外で listen するなら token_file が必須（中身 1 行が Bearer トークン。読めない・空なら起動時に exit 2）。
+# 呼び出しの主体は名前付きの token で決まる（ADR 2026-10-27-api-principals）。loopback 以外で listen するなら
+# `[[api.tokens]]` が 1 本以上必須（各 file の中身 1 行が Bearer トークン。読めない・空・主体の重複なら起動時に exit 2）。
+# principal は `human:<name>`（web の BFF は `human:web`）か `operator:<name>`。MCP と CoS run の token は daemon が作る。
+# 旧い `[api] token_file` は削除済みで、書くと読み込みエラーになる。
 # [api]
 # listen = "127.0.0.1:7710"
-# token_file = "~/.config/celeris/api.token"   # 本番の置き場（既定は無い。書かなければ認証なし）
 # allowed_hosts = ["celeris.lab.example"]   # Host 許可リストへの追加（localhost / 127.0.0.1 / [::1] は常に許可）
+#
+# [[api.tokens]]                               # 既定は無い。書かなければ認証なし
+# principal = "operator:claude-code"
+# token_file = "~/.config/celeris/api.token"
+#
+# [[api.tokens]]
+# principal = "human:web"                      # BFF の CELERIS_WEB_API_TOKEN_FILE と同じ file
+# token_file = "~/.config/celeris/web.api-token"
 
 # fake アダプタ: サブプロセスとして起動するコマンド。省略時は progress + done を返す sh スクリプト。
 #

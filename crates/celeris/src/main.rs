@@ -53,7 +53,8 @@ struct Cli {
     /// ADR-0040 D3: `workspace_root` の上書き（相対パスは設定ファイルのディレクトリ基準）。
     #[arg(long)]
     workspace_root: Option<PathBuf>,
-    /// ADR-0040 D3: `[api] token_file` の上書き（相対パスは設定ファイルのディレクトリ基準）。
+    /// ADR-0040 D3 / ADR 2026-10-27-api-principals D6: `[[api.tokens]]` を `operator:verify` の 1 本（この file）に
+    /// 置き換える（相対パスは設定ファイルのディレクトリ基準）。
     #[arg(long)]
     token_file: Option<PathBuf>,
     /// ADR-0040 D4: このプロセスのリリース（`sha12`）。省略時は環境変数 `CELERIS_RELEASE`、

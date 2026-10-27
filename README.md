@@ -127,7 +127,7 @@ CELERIS_API_URL=http://127.0.0.1:7710 corepack pnpm@12.6.0 start
 ```
 
 ブラウザで `http://127.0.0.1:7720/` を開くとホームが表示されます。
-API の `token_file` を設定した場合は、GUI にも `CELERIS_API_TOKEN_FILE` を指定してください。
+API に `[[api.tokens]]` を設定した場合は、GUI に `principal = "human:web"` の token file を `CELERIS_WEB_API_TOKEN_FILE` で指定してください（BFF はこの 1 本だけを持つ）。
 GUI の認証・公開設定は [web 運用手順](docs/ops/web-operation.md)、継続運用は [デプロイ手順](docs/ops/selfdeploy.md)を参照してください。
 画面の説明と操作方法は GUI の `/help` にあります。
 

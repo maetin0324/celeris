@@ -224,6 +224,65 @@ async fn cos_ops_mutations_task_rereview() {
     );
 }
 
+/// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4: reviewing で再同期が上限で止まっている task の
+/// `rereview` は遷移せず `ReviewResyncResumed{human}` を残す（受信箱の `review_resync_halted` が委ねる操作）。
+#[tokio::test]
+async fn cos_ops_mutations_task_rereview_resumes_halted_review() {
+    let env = admin_env();
+    let mut task = new_task(TaskKind::Execute, Status::Reviewing);
+    task.acceptance = vec![Criterion {
+        text: "review result".into(),
+        check: Check::Reviewer,
+    }];
+    env.seed(&task);
+    let repo_id = task_core::RepoId::new();
+    env.store
+        .append_event(
+            task.id,
+            &Event::ReviewResyncHalted {
+                review_run: "review-1".into(),
+                repo_id,
+                reviewed_sha: "a".repeat(40),
+                target_sha: "b".repeat(40),
+                resyncs: 3,
+            },
+        )
+        .expect("halt");
+    let path = format!("/api/v1/tasks/{}/rereview", task.id);
+    let operation = run_domain(
+        &env,
+        "task-rereview-resume",
+        "POST",
+        &path,
+        json!({"expected_status":"reviewing"}),
+        "task.rereview",
+    )
+    .await;
+    assert_eq!(operation["state"], "applied");
+    assert_eq!(
+        env.store.get(task.id).expect("task").expect("row").status,
+        Status::Reviewing
+    );
+    let events: Vec<Event> = env
+        .store
+        .events_for(task.id)
+        .expect("events")
+        .into_iter()
+        .map(|(_, e)| e)
+        .collect();
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::ReviewResyncResumed { review_run, repo_id: r, reason }
+            if review_run == "review-1" && *r == repo_id && reason == "human"
+    )));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::Transitioned { .. }))
+    );
+    assert!(task_ops::delivery::review_resync_halted(&events).is_none());
+}
+
 #[tokio::test]
 async fn cos_ops_mutations_execution_decompose() {
     let env = admin_env();

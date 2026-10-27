@@ -73,7 +73,7 @@ fn winsize(cols: u16, rows: u16) -> libc::winsize {
 fn open_pty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
     let mut master: libc::c_int = -1;
     let mut slave: libc::c_int = -1;
-    let mut ws = winsize(cols, rows);
+    let ws = winsize(cols, rows);
     // SAFETY: 出力引数は有効な int へのポインタ。name と termios は null（使わない）。
     let rc = unsafe {
         libc::openpty(
@@ -81,7 +81,7 @@ fn open_pty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null(),
-            &mut ws,
+            &ws,
         )
     };
     if rc != 0 {

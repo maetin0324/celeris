@@ -22,6 +22,9 @@ updated: 2026-10-27
   - `scripts/dev/check-human-text.py`（`check-health.sh` から毎回）で固定の文面を yomiyasu_lint.py にかける。
     指摘 2 件を直した（通知の要約の「—」→ 括弧、束ねた決定の文末の「:」→「。」）。
   - CoS の Core の大きさの試験の上限を 7500 → 8300 B にした（規則の 798 B の分）。
+- `phase 1: yomiyasu の SOURCE.md の注記を ADR の D2・D4 に合わせる` — attempt 1 の review の差し戻し（criterion 6）への対応。
+  SOURCE.md の Notes は、存在しない試験（`crates/task-worker/tests/human_text_lint.rs`）と「本体を CoS の run に mount する」を
+  書いていた。検査は `scripts/dev/check-human-text.py`（check-health.sh から）であること、本体は mount しないこと（D2）に直した。
 
 ## token の実測（ADR の表と同じ）
 - CoS の Core: 試験の fixture で 7439 → 8237 B、`cargo test -p task-worker cos_chat_bench_ -- --nocapture` の core で

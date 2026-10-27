@@ -114,7 +114,9 @@ sd_die() {
 # 本番の drop-in（celeris@.service.d/50-credentiald.conf の Wants=）は、新しい daemon と一緒に同じ release の
 # celeris-credentiald@<新> を起こす。旧 broker は旧 daemon が draining の間も socket を持ち続けるので、新は
 # permission_denied で失敗を繰り返す（2026-10-26 21:18、operator が毎回手で止めて起こしていた）。
-# 引き継ぎの後に、旧を止め、失敗状態を消して新を起こし、SD_CREDENTIALD_SETTLE 秒後も active なのを確かめる。
+# 引き継ぎの後に、旧を止めて disable し、失敗状態を消して新を起こして enable し、SD_CREDENTIALD_SETTLE 秒後も
+# active なのを確かめる。enable/disable は celeris@・celeris-web@ と揃え、host の再起動で起きる版を新にする
+# （stop/start だけだと旧が enabled のまま残り、再起動で旧の broker が起きていた。2026-10-27 の昇格）。
 # unit が入っていない host（新の unit が無い）では何もしない。失敗は 1 を返す（呼び出し側が人に知らせる）。
 sd_switch_credentiald() {
   local new="$1" old="${2:-}" settle="${SD_CREDENTIALD_SETTLE:-3}"
@@ -129,16 +131,20 @@ sd_switch_credentiald() {
       sd_log "systemctl --user stop $old_unit"
       systemctl --user stop "$old_unit" || { sd_log "credentiald: failed to stop $old_unit"; return 1; }
     fi
+    sd_log "systemctl --user disable $old_unit"
+    systemctl --user disable "$old_unit" || { sd_log "credentiald: failed to disable $old_unit"; return 1; }
   fi
   systemctl --user reset-failed "$new_unit" >/dev/null 2>&1 || true
   sd_log "systemctl --user start $new_unit"
   systemctl --user start "$new_unit" || { sd_log "credentiald: failed to start $new_unit"; return 1; }
+  sd_log "systemctl --user enable $new_unit"
+  systemctl --user enable "$new_unit" || { sd_log "credentiald: failed to enable $new_unit"; return 1; }
   if [ "$settle" -gt 0 ]; then sleep "$settle"; fi
   if ! systemctl --user is-active --quiet "$new_unit"; then
     sd_log "credentiald: $new_unit is not active ${settle}s after start (journalctl --user -u $new_unit)"
     return 1
   fi
-  sd_log "credentiald: $new_unit is active"
+  sd_log "credentiald: $new_unit is active and enabled"
 }
 
 # 昇格・rollback が済んだ後（link の付け替え・promoted.json の後）に呼ぶ。切り替えの失敗は昇格の取り消しでも
@@ -156,7 +162,7 @@ sd_credentiald_after_switch() {
     printf '  "error": %s\n' "$(sd_json_str "$(tail -n 20 "${SD_LOG_FILE:-/dev/null}" 2>/dev/null | tr -d '\r')")"
     printf '}\n'
   } >"$rel/credentiald_switch_failed.json" 2>/dev/null || true
-  sd_log "credentiald switch failed (recorded in $rel/credentiald_switch_failed.json). By hand: systemctl --user stop celeris-credentiald@${old:-<old>}.service; systemctl --user reset-failed celeris-credentiald@$new.service; systemctl --user start celeris-credentiald@$new.service; then celerisctl browser doctor"
+  sd_log "credentiald switch failed (recorded in $rel/credentiald_switch_failed.json). By hand: systemctl --user stop celeris-credentiald@${old:-<old>}.service; systemctl --user disable celeris-credentiald@${old:-<old>}.service; systemctl --user reset-failed celeris-credentiald@$new.service; systemctl --user start celeris-credentiald@$new.service; systemctl --user enable celeris-credentiald@$new.service; then celerisctl browser doctor"
   return 1
 }
 

@@ -845,6 +845,21 @@
           "const": "system",
           "description": "celeris 自身（決定的な記録）。",
           "type": "string"
+        },
+        {
+          "const": "cos",
+          "description": "CoS（`author` は `cos:<thread_id>`。ADR 2026-10-27-event-principals D3）。",
+          "type": "string"
+        },
+        {
+          "const": "mcp",
+          "description": "MCP の客（`author` は `mcp:<client_id>`）。",
+          "type": "string"
+        },
+        {
+          "const": "operator",
+          "description": "外部 operator（`author` は `operator:<name>`）。",
+          "type": "string"
         }
       ]
     },

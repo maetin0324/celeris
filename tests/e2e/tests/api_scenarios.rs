@@ -689,7 +689,7 @@ esac"#,
     assert_eq!(answered.json()["to"], "ready");
     assert!(env.events(id).iter().any(|e| matches!(
         e,
-        Event::Answered { question, answer } if question == "which version should I target?" && answer == "target v2"
+        Event::Answered { question, answer, .. } if question == "which version should I target?" && answer == "target v2"
     )));
     assert!(
         wait_until(Duration::from_secs(120), || env.task(id).status

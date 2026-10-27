@@ -300,6 +300,14 @@ fn comments_section(context: &RunContext) -> String {
                 None => "担当".to_string(),
             },
             task_core::CommentAuthorKind::System => "celeris".to_string(),
+            task_core::CommentAuthorKind::Cos => "CoS".to_string(),
+            task_core::CommentAuthorKind::Mcp => {
+                comment.author.clone().unwrap_or_else(|| "MCP".to_string())
+            }
+            task_core::CommentAuthorKind::Operator => comment
+                .author
+                .clone()
+                .unwrap_or_else(|| "operator".to_string()),
         };
         out.push_str(&format!(
             "- [{}] {}: {}\n",

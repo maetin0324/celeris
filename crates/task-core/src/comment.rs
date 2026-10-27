@@ -52,6 +52,12 @@ pub enum CommentAuthorKind {
     Node,
     /// celeris 自身（決定的な記録）。
     System,
+    /// CoS（`author` は `cos:<thread_id>`。ADR 2026-10-27-event-principals D3）。
+    Cos,
+    /// MCP の客（`author` は `mcp:<client_id>`）。
+    Mcp,
+    /// 外部 operator（`author` は `operator:<name>`）。
+    Operator,
 }
 
 impl CommentAuthorKind {
@@ -60,7 +66,26 @@ impl CommentAuthorKind {
             CommentAuthorKind::Human => "human",
             CommentAuthorKind::Node => "node",
             CommentAuthorKind::System => "system",
+            CommentAuthorKind::Cos => "cos",
+            CommentAuthorKind::Mcp => "mcp",
+            CommentAuthorKind::Operator => "operator",
         }
+    }
+
+    /// 要求の主体（`human:<name>` / `cos:<thread>` / `mcp:<client>` / `operator:<name>`）から種別を決める。
+    /// 主体が無い（旧い呼び出し）・人の主体は `Human`。
+    pub fn from_actor(actor: Option<&str>) -> CommentAuthorKind {
+        match actor {
+            Some(a) if crate::is_cos_actor(a) => CommentAuthorKind::Cos,
+            Some(a) if a.starts_with("mcp:") => CommentAuthorKind::Mcp,
+            Some(a) if a.starts_with("operator:") => CommentAuthorKind::Operator,
+            _ => CommentAuthorKind::Human,
+        }
+    }
+
+    /// 人の指示として効く書き手か（人・CoS・MCP・operator。割り込み・回答・「待て」の指示を起こせる）。
+    pub fn is_instruction(&self) -> bool {
+        !matches!(self, CommentAuthorKind::Node | CommentAuthorKind::System)
     }
 
     pub fn parse(s: &str) -> Option<CommentAuthorKind> {
@@ -68,6 +93,9 @@ impl CommentAuthorKind {
             "human" => Some(CommentAuthorKind::Human),
             "node" => Some(CommentAuthorKind::Node),
             "system" => Some(CommentAuthorKind::System),
+            "cos" => Some(CommentAuthorKind::Cos),
+            "mcp" => Some(CommentAuthorKind::Mcp),
+            "operator" => Some(CommentAuthorKind::Operator),
             _ => None,
         }
     }

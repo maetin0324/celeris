@@ -29,7 +29,14 @@ pub struct RetryArgs {
 
 pub fn run(store: &dyn TaskStore, args: RetryArgs) -> Result<ExitCode, CliError> {
     let id = crate::error::parse_task_id(&args.id)?;
-    let result = ops_retry(store, id, !args.draft, None, OffsetDateTime::now_utc())?;
+    let result = ops_retry(
+        store,
+        id,
+        !args.draft,
+        None,
+        super::CLI_ACTOR,
+        OffsetDateTime::now_utc(),
+    )?;
     outln!("{}", result.task_id);
     if !result.rewired.is_empty() {
         outln!("rewired: {:?}", result.rewired);

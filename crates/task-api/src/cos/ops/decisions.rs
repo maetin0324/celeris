@@ -161,7 +161,13 @@ pub(crate) fn dispatch(
                 )
             })?;
             let input = serde_json::from_value(body).map_err(decode)?;
-            audited(crate::approvals::decide_op(store, id, input, Some(audit))?)
+            audited(crate::approvals::decide_op(
+                store,
+                id,
+                input,
+                &audit.by(),
+                Some(audit),
+            )?)
         }
         "knowledge.reject" => {
             let raw_id = matched.id.unwrap_or_default();

@@ -124,8 +124,9 @@ pub fn phase_gate(
     id: TaskId,
     action: PhaseGateAction,
     note: Option<String>,
+    by: &str,
 ) -> Result<TransitionResult, OpsError> {
-    match plan_phase_gate(store, id, action, note)? {
+    match plan_phase_gate(store, id, action, note, by)? {
         PhaseGatePlan::Withdraw => crate::gate::cancel(store, id, Some(Status::Blocked)),
         PhaseGatePlan::Resume {
             trigger,
@@ -163,6 +164,7 @@ pub fn plan_phase_gate(
     id: TaskId,
     action: PhaseGateAction,
     note: Option<String>,
+    by: &str,
 ) -> Result<PhaseGatePlan, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     let events = store.events_for(id)?;
@@ -215,6 +217,7 @@ pub fn plan_phase_gate(
     let extra_event = extra.map(|answer| Event::Answered {
         question: format!("{PHASE_GATE_QUESTION_PREFIX}『{phase}』の後"),
         answer,
+        by: Some(by.to_string()),
     });
     Ok(PhaseGatePlan::Resume {
         trigger,
@@ -233,9 +236,9 @@ pub fn phase_replan_instruction(events: &[(u64, Event)]) -> Option<String> {
     let lo = idx.saturating_sub(1);
     let hi = (idx + 2).min(events.len());
     events[lo..hi].iter().find_map(|(_, e)| match e {
-        Event::Answered { question, answer }
-            if question.starts_with(PHASE_GATE_QUESTION_PREFIX) =>
-        {
+        Event::Answered {
+            question, answer, ..
+        } if question.starts_with(PHASE_GATE_QUESTION_PREFIX) => {
             Some(format!("{HUMAN_INSTRUCTION_PREFIX}{answer}"))
         }
         _ => None,
@@ -279,7 +282,9 @@ pub fn continue_note_lines(
         let lo = idx.saturating_sub(1);
         let hi = (idx + 2).min(events.len());
         let Some((phase, note)) = events[lo..hi].iter().find_map(|(_, e)| match e {
-            Event::Answered { question, answer } => question
+            Event::Answered {
+                question, answer, ..
+            } => question
                 .strip_prefix(PHASE_GATE_QUESTION_PREFIX)
                 .and_then(|rest| rest.strip_prefix('『'))
                 .and_then(|rest| rest.strip_suffix("』の後"))

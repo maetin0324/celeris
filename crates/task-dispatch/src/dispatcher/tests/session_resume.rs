@@ -249,9 +249,10 @@ impl WorkerAdapter for ClaudeScriptAdapter {
                     std::fs::remove_file(session_jsonl(dir, req.cwd(), &session.session_id))
                         .expect("remove session jsonl");
                 }
-                task_ops::comment::post_human_comment(
+                task_ops::comment::post_human_comment_as(
                     self.store.as_ref(),
                     req.task.id,
+                    Some("human:web".to_string()),
                     INTERRUPT_BODY.into(),
                     OffsetDateTime::now_utc(),
                 )

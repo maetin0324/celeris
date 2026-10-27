@@ -339,8 +339,13 @@ impl TaskStore for SqliteStore {
         self.complete_plan_impl(plan_id, verdict_events, children, accept_children)
     }
 
-    fn create_task(&self, task: &Task, extra_events: Vec<Event>) -> Result<(), StoreError> {
-        self.create_task_impl(task, None, extra_events)
+    fn create_task_by(
+        &self,
+        task: &Task,
+        created_by: &str,
+        extra_events: Vec<Event>,
+    ) -> Result<(), StoreError> {
+        self.create_task_impl(task, None, created_by, extra_events)
     }
 
     fn create_task_with_origin(
@@ -349,7 +354,7 @@ impl TaskStore for SqliteStore {
         origin: Option<crate::model::CreatedOrigin>,
         extra_events: Vec<Event>,
     ) -> Result<(), StoreError> {
-        self.create_task_impl(task, origin, extra_events)
+        self.create_task_impl(task, origin, crate::DAEMON_ACTOR, extra_events)
     }
 
     fn project_plan_decide_apply(
@@ -384,8 +389,13 @@ impl TaskStore for SqliteStore {
         self.delegate_children_impl(parent_id, run_id, children)
     }
 
-    fn retry_task(&self, original: TaskId, new_task: &Task) -> Result<Vec<TaskId>, StoreError> {
-        self.retry_task_impl(original, new_task)
+    fn retry_task(
+        &self,
+        original: TaskId,
+        new_task: &Task,
+        by: &str,
+    ) -> Result<Vec<TaskId>, StoreError> {
+        self.retry_task_impl(original, new_task, by)
     }
 
     fn children(&self, parent_id: TaskId) -> Result<Vec<Task>, StoreError> {
@@ -448,8 +458,9 @@ impl TaskStore for SqliteStore {
         request_id: &str,
         answer: &str,
         note: Option<&str>,
+        by: &str,
     ) -> Result<bool, StoreError> {
-        self.integration_request_answer_impl(task_id, request_id, answer, note)
+        self.integration_request_answer_impl(task_id, request_id, answer, note, by)
     }
 
     fn integration_requests_close(
@@ -458,8 +469,9 @@ impl TaskStore for SqliteStore {
         origin: &str,
         answer: &str,
         note: Option<&str>,
+        by: &str,
     ) -> Result<Vec<String>, StoreError> {
-        self.integration_requests_close_impl(task_id, origin, answer, note)
+        self.integration_requests_close_impl(task_id, origin, answer, note, by)
     }
 
     fn close_integration_requests_of_terminal_tasks(

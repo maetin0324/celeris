@@ -74,6 +74,7 @@ fn replay_reports_zero_mismatches_when_events_match_current_state() {
         .append_event(
             task.id,
             &Event::Created {
+                created_by: None,
                 task: Box::new(task.clone()),
                 origin: None,
             },
@@ -97,6 +98,7 @@ fn replay_detects_status_drift_from_events() {
         .append_event(
             task.id,
             &Event::Created {
+                created_by: None,
                 task: Box::new(task.clone()),
                 origin: None,
             },
@@ -132,6 +134,7 @@ fn replay_counts_retry_reasons_into_attempts() {
         .append_event(
             task.id,
             &Event::Created {
+                created_by: None,
                 task: Box::new(task.clone()),
                 origin: None,
             },
@@ -174,6 +177,7 @@ fn replay_aggregate_transition_does_not_bump_attempts() {
         .append_event(
             task.id,
             &Event::Created {
+                created_by: None,
                 task: Box::new(task.clone()),
                 origin: None,
             },
@@ -207,6 +211,7 @@ fn replay_child_failed_bumps_attempts_only_when_it_retries() {
             .append_event(
                 task.id,
                 &Event::Created {
+                    created_by: None,
                     task: Box::new(task.clone()),
                     origin: None,
                 },
@@ -249,6 +254,7 @@ fn replay_follows_reopen_back_to_zero_attempts() {
         .create_task(
             &task,
             vec![Event::Created {
+                created_by: None,
                 task: Box::new(task.clone()),
                 origin: None,
             }],
@@ -674,6 +680,7 @@ fn rebuild_work_units_and_runs_matches_the_scheduler_written_index_for_the_e2_fi
         .append_event(
             task.id,
             &Event::Answered {
+                by: None,
                 question: "続けますか".into(),
                 answer: "続けてください".into(),
             },
@@ -1367,6 +1374,7 @@ fn rebuild_work_units_and_runs_is_empty_for_a_task_without_a_plan_and_covers_eve
         .append_event(
             task.id,
             &Event::Created {
+                created_by: None,
                 task: Box::new(task.clone()),
                 origin: None,
             },

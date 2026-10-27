@@ -423,6 +423,7 @@ async fn foreign_assignee_is_not_accepted() {
         .update_task(
             &t,
             Event::Answered {
+                by: None,
                 question: "q".into(),
                 answer: "a".into(),
             },

@@ -394,6 +394,10 @@ pub fn is_cos_actor(by: &str) -> bool {
     by == "cos" || by.starts_with("cos:")
 }
 
+/// daemon 自身が起こした記録の主体（人・operator・MCP・CoS の入口は `Principal::actor`。
+/// ADR 2026-10-27-event-principals D2）。
+pub const DAEMON_ACTOR: &str = "daemon";
+
 /// `by`・`actor` が API の要求の主体（`human:` / `operator:` / `mcp:` / `cos:` + 名前）か。
 pub fn is_principal_actor(by: &str) -> bool {
     ["human:", "operator:", "mcp:", "cos:"]

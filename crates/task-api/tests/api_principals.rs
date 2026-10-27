@@ -323,3 +323,153 @@ async fn pause_and_resume_record_the_authenticated_actor() {
         .collect();
     assert_eq!(actors, ["operator:claude-code", "human:web"]);
 }
+
+fn blocked_task(env: &TestEnv) -> task_core::Task {
+    let task = new_task(TaskKind::Execute, Status::Ready);
+    env.seed(&task);
+    env.store
+        .apply_transition(task.id, task_core::Trigger::Dispatch, None)
+        .expect("dispatch");
+    env.store
+        .apply_transition(task.id, task_core::Trigger::WorkerQuestion, None)
+        .expect("question");
+    task
+}
+
+fn answered_by(env: &TestEnv, task: &task_core::Task) -> Vec<Option<String>> {
+    env.store
+        .events_for(task.id)
+        .expect("events")
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            Event::Answered { by, .. } => Some(by),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_comment_answer_carries_the_principal_and_its_author_kind() {
+    use task_core::CommentAuthorKind::{Cos, Human, Operator};
+    let env = env();
+    let app = env.router();
+    let cases = [
+        (bearer(WEB_TOKEN), "human:web".to_string(), Human),
+        (
+            bearer(OPERATOR_TOKEN),
+            "operator:claude-code".to_string(),
+            Operator,
+        ),
+    ];
+    for (auth, actor, kind) in cases {
+        let task = blocked_task(&env);
+        let resp = comment(&app, &task, &auth, "これで進めて").await;
+        assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
+        let stored = env.store.comments_for(task.id).expect("comments");
+        assert_eq!(stored[0].author_kind, kind, "{actor}");
+        assert_eq!(answered_by(&env, &task), [Some(actor)]);
+    }
+    // CoS は thread ごとに `cos:<thread>`。人の回答（human）にならない。
+    let task = blocked_task(&env);
+    let (thread_id, _, auth) = cos_bearer(&env, "thread-answer");
+    let resp = send(
+        &app,
+        post_json_with(
+            OPS,
+            &op_body(
+                "answer-by-comment",
+                "POST",
+                &format!("/api/v1/tasks/{}/comments", task.id),
+                json!({"body": "既存の指示どおり"}),
+            ),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let stored = env.store.comments_for(task.id).expect("comments");
+    assert_eq!(stored[0].author_kind, Cos);
+    assert_eq!(answered_by(&env, &task), [Some(format!("cos:{thread_id}"))]);
+}
+
+#[tokio::test]
+async fn task_creation_and_retry_record_who_created_the_task() {
+    let env = env();
+    let app = env.router();
+    for (token, actor) in [
+        (WEB_TOKEN, "human:web"),
+        (OPERATOR_TOKEN, "operator:claude-code"),
+    ] {
+        let resp = send(
+            &app,
+            post_json_with(
+                "/api/v1/tasks",
+                &json!({"title": "t", "objective": "o",
+                        "acceptance": [{"type": "artifact_exists", "name": "r.md"}]}),
+                &[("authorization", &bearer(token))],
+            ),
+        )
+        .await;
+        assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
+        let id: task_core::TaskId = resp.json()["id"].as_str().expect("id").parse().expect("id");
+        let created: Vec<_> = env
+            .store
+            .events_for(id)
+            .expect("events")
+            .into_iter()
+            .filter_map(|(_, e)| match e {
+                Event::Created { created_by, .. } => Some(created_by),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(created, [Some(actor.to_string())]);
+
+        let failed = new_task(TaskKind::Execute, Status::Failed);
+        env.seed(&failed);
+        let resp = send(
+            &app,
+            post_json_with(
+                &format!("/api/v1/tasks/{}/retry", failed.id),
+                &json!({}),
+                &[("authorization", &bearer(token))],
+            ),
+        )
+        .await;
+        assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
+        let copy: task_core::TaskId = resp.json()["task_id"]
+            .as_str()
+            .expect("id")
+            .parse()
+            .expect("id");
+        let events = env.store.events_for(copy).expect("events");
+        assert!(events.iter().any(|(_, e)| matches!(
+            e,
+            Event::Created { created_by, .. } if created_by.as_deref() == Some(actor)
+        )));
+        assert!(events.iter().any(|(_, e)| matches!(
+            e,
+            Event::Retried { by, .. } if by.as_deref() == Some(actor)
+        )));
+    }
+}
+
+#[tokio::test]
+async fn an_integration_answer_and_a_task_answer_carry_the_principal() {
+    let env = env();
+    let app = env.router();
+    let task = blocked_task(&env);
+    let resp = send(
+        &app,
+        post_json_with(
+            &format!("/api/v1/tasks/{}/answer", task.id),
+            &json!({"answer": "はい"}),
+            &[("authorization", &bearer(OPERATOR_TOKEN))],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(
+        answered_by(&env, &task),
+        [Some("operator:claude-code".to_string())]
+    );
+}

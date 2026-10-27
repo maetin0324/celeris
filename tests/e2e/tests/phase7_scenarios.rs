@@ -280,7 +280,7 @@ esac"#,
     env.celerisctl(&["answer", &id.to_string(), "target v2"]);
     assert!(env.events(id).iter().any(|e| matches!(
         e,
-        Event::Answered { question, answer } if question == "which version should I target?" && answer == "target v2"
+        Event::Answered { question, answer, .. } if question == "which version should I target?" && answer == "target v2"
     )));
 
     env.run_celeris(&config, Duration::from_secs(60));

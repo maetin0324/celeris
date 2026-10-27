@@ -264,7 +264,8 @@ async fn each_approval_trigger_holds_the_root_plan() {
         assert!(store.children(root_id).unwrap().is_empty(), "{name}");
         assert!(reports_of(&store, root_id).is_empty(), "{name}");
         // 質問ではない。
-        let err = task_ops::gate::answer(store.as_ref(), root_id, "go".into(), None).unwrap_err();
+        let err = task_ops::gate::answer(store.as_ref(), root_id, "go".into(), "human:test", None)
+            .unwrap_err();
         assert!(
             matches!(err, task_ops::OpsError::InvalidState { .. }),
             "{name}: {err}"

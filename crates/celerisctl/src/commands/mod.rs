@@ -1,4 +1,7 @@
 /// ADR-0070 D2 追記（Phase 116）: `celerisctl accept <task_id>`。`draft` を `ready` にする専用の道具。
+/// celerisctl が DB へ直接書く操作の主体（ADR 2026-10-27-event-principals D2）。
+pub const CLI_ACTOR: &str = "human:cli";
+
 pub mod accept;
 pub mod add;
 /// ADR-0080 D6: `celerisctl browser owner-session approve <challenge>`（GUI の Unix control socket。DB を開かない）。

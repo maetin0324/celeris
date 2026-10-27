@@ -58,21 +58,10 @@ pub struct CommentResult {
     pub can_reopen: bool,
 }
 
-/// 人のコメント（ADR-0044 D2）。状態に応じて割り込み・回答・記録を決定的に行う。
-pub fn post_human_comment(
-    store: &dyn TaskStore,
-    id: TaskId,
-    body: String,
-    now: OffsetDateTime,
-) -> Result<CommentResult, OpsError> {
-    post_human_comment_as(store, id, None, body, now)
-}
-
-/// ADR-0056 Phase 101: `post_human_comment` と同じ効き方（`ADR-0044 D2` の表）だが、
-/// `author`（`CommentAuthorKind::Human` の `TaskComment.author`）を明示できる。MCP の
-/// `task_comment` は `Some("mcp:<client_id>")` を渡す（`knowledge_propose` の `mcp:chatgpt` と
-/// 同じ流儀）。GUI/HTTP の `POST /tasks/{id}/comments`（`post_human_comment`）は `None` のまま
-/// （挙動もフィールドの見え方も、この Phase では 1 バイトも変えない）。
+/// 人・CoS・MCP・operator のコメント（ADR-0044 D2）。状態に応じて割り込み・回答・記録を決定的に行う。
+/// `author` は要求の主体（`human:web` / `cos:<thread>` / `mcp:<client>` / `operator:<name>`）で、
+/// `author_kind` はそこから決まる（ADR 2026-10-27-event-principals D3）。回答になったときの
+/// `Answered.by` も同じ主体。
 pub fn post_human_comment_as(
     store: &dyn TaskStore,
     id: TaskId,
@@ -111,9 +100,10 @@ pub fn plan_human_comment(
 ) -> Result<HumanCommentPlan, OpsError> {
     TaskComment::validate_body(&body).map_err(OpsError::Validation)?;
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
+    let by = author.clone();
     let comment = TaskComment::new(
         id,
-        CommentAuthorKind::Human,
+        CommentAuthorKind::from_actor(author.as_deref()),
         author,
         body.clone(),
         None,
@@ -157,6 +147,7 @@ pub fn plan_human_comment(
             let answered = Event::Answered {
                 question,
                 answer: body,
+                by,
             };
             (
                 CommentEffect::Answered,
@@ -322,7 +313,7 @@ pub fn interrupting_comment<'a>(
     comments
         .iter()
         .rev()
-        .find(|c| c.author_kind == CommentAuthorKind::Human)
+        .find(|c| c.author_kind.is_instruction())
 }
 
 /// `WorkerFinished.outcome` が「割り込みを受け取った run が実際に走って終わった」印か（純粋関数）。

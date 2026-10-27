@@ -148,7 +148,7 @@ fn retry_duplicates_fields_and_records_retried_event() {
     let store = store();
     let original = make_failed(&store, "investigate incident");
 
-    let result = retry_task(&store, original.id, false, None, now()).expect("retry");
+    let result = retry_task(&store, original.id, false, None, "human:test", now()).expect("retry");
     assert!(result.rewired.is_empty());
     let new_task = store.get(result.task_id).expect("get").expect("some");
     assert_eq!(new_task.status, Status::Draft);
@@ -179,14 +179,16 @@ fn retry_duplicates_fields_and_records_retried_event() {
         .map(|(_, e)| e)
         .collect();
     assert!(matches!(&events[0], Event::Created { task, .. } if task.id == new_task.id));
-    assert!(matches!(&events[1], Event::Retried { from } if *from == original.id));
+    assert!(
+        matches!(&events[1], Event::Retried { from, by: Some(by) } if *from == original.id && by == "human:test")
+    );
 }
 
 #[test]
 fn retry_with_accept_starts_ready() {
     let store = store();
     let original = make_failed(&store, "retry me");
-    let result = retry_task(&store, original.id, true, None, now()).expect("retry");
+    let result = retry_task(&store, original.id, true, None, "human:test", now()).expect("retry");
     let new_task = store.get(result.task_id).expect("get").expect("some");
     assert_eq!(new_task.status, Status::Ready);
 }
@@ -248,6 +250,7 @@ fn retry_can_override_the_workspace_of_the_new_task() {
         original.id,
         false,
         Some(WorkspaceSpec::local("/tmp/retry-local")),
+        "human:test",
         now(),
     )
     .expect("retry");
@@ -267,6 +270,7 @@ fn retry_workspace_override_rejects_an_empty_local_path() {
         original.id,
         false,
         Some(WorkspaceSpec::local("")),
+        "human:test",
         now(),
     )
     .unwrap_err();
@@ -293,6 +297,7 @@ fn retry_workspace_override_rejects_remote_when_the_assignee_lacks_the_cluster_t
             path: "~".into(),
             mode: None,
         }),
+        "human:test",
         now(),
     )
     .unwrap_err();
@@ -350,7 +355,7 @@ fn retry_rewires_non_terminal_and_cascaded_cancelled_dependents_but_not_manual_c
         Status::Cancelled
     );
 
-    let result = retry_task(&store, original.id, false, None, now()).expect("retry");
+    let result = retry_task(&store, original.id, false, None, "human:test", now()).expect("retry");
     let mut rewired = result.rewired.clone();
     rewired.sort();
     let mut expected = vec![conv_dependent.id, normal_dependent.id];
@@ -399,7 +404,7 @@ fn retry_rewires_non_terminal_and_cascaded_cancelled_dependents_but_not_manual_c
 fn retry_rejects_non_terminal_or_done_tasks_with_409() {
     let store = store();
     let draft = crate::add::create_task(&store, base_spec("still draft"), now()).expect("create");
-    let err = retry_task(&store, draft.id, false, None, now()).unwrap_err();
+    let err = retry_task(&store, draft.id, false, None, "human:test", now()).unwrap_err();
     assert!(matches!(err, OpsError::InvalidState { .. }));
 
     let done = crate::add::create_task(&store, base_spec("will be done"), now()).expect("create");
@@ -417,14 +422,14 @@ fn retry_rejects_non_terminal_or_done_tasks_with_409() {
         .expect("review_pass");
     let done = store.get(done.id).expect("get").expect("some");
     assert_eq!(done.status, Status::Done);
-    let err = retry_task(&store, done.id, false, None, now()).unwrap_err();
+    let err = retry_task(&store, done.id, false, None, "human:test", now()).unwrap_err();
     assert!(matches!(err, OpsError::InvalidState { .. }));
 }
 
 #[test]
 fn retry_missing_task_is_not_found() {
     let store = store();
-    let err = retry_task(&store, TaskId::new(), false, None, now()).unwrap_err();
+    let err = retry_task(&store, TaskId::new(), false, None, "human:test", now()).unwrap_err();
     assert!(matches!(err, OpsError::NotFound(_)));
 }
 
@@ -467,7 +472,7 @@ fn retry_drops_the_copied_gate_decision_and_keeps_an_explicit_hint() {
         explicit: true,
     };
     let original = fail_with_routing(&store, hint);
-    let result = retry_task(&store, original.id, true, None, now()).expect("retry");
+    let result = retry_task(&store, original.id, true, None, "human:test", now()).expect("retry");
     let copy = store.get(result.task_id).expect("get").expect("some");
     let routing = copy.routing.expect("routing");
     assert_eq!(routing.execution_hint, Some(hint));

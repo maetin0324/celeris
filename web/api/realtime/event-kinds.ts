@@ -77,6 +77,7 @@ export const EVENT_KINDS = [
   "decision_answered",
   "decision_withdrawn",
   "plan_approval_requested",
+  "plan_gate_decided",
   "stall_detected",
   "review_target_synced",
   "review_target_advanced",

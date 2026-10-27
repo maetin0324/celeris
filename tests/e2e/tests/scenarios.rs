@@ -173,6 +173,7 @@ candidates = [{{ source = "fake", model = "fake" }}]
             .append_event(
                 task.id,
                 &Event::Created {
+                    created_by: None,
                     task: Box::new(task.clone()),
                     origin: None,
                 },
@@ -512,6 +513,7 @@ fn expired_lease_is_reclaimed_and_task_completes() {
         .append_event(
             task.id,
             &Event::Created {
+                created_by: None,
                 task: Box::new(task.clone()),
                 origin: None,
             },

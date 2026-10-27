@@ -777,7 +777,7 @@ async fn worker_declared_decisions() {
     let child_events = store.events_for(child.id).unwrap();
     assert!(child_events.iter().any(|(_, e)| matches!(
         e,
-        Event::Answered { question, answer }
+        Event::Answered { question, answer, .. }
             if question.starts_with(task_ops::decision::ANSWERED_QUESTION_PREFIX)
                 && answer == "- wk question wk: manual entry（推奨と異なる）"
     )));
@@ -861,6 +861,7 @@ async fn continue_note_scenario(
         root_id,
         task_ops::phase_gate::PhaseGateAction::Continue,
         note.map(str::to_string),
+        "human:test",
     )
     .unwrap();
     let report = run_until_idle(&mut d, 1500).await;

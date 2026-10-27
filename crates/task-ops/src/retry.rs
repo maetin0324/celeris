@@ -36,9 +36,10 @@ pub fn retry_task(
     id: TaskId,
     accept: bool,
     workspace: Option<WorkspaceSpec>,
+    by: &str,
     now: OffsetDateTime,
 ) -> Result<RetryResult, OpsError> {
-    retry_task_with_execution(store, id, accept, workspace, None, "human", now)
+    retry_task_with_execution(store, id, accept, workspace, None, by, now)
 }
 
 /// ADR-0072「Phase F6 実装時の決定」: [`retry_task`] に、複製先の実行の形（`execution`）の人の明示を
@@ -62,7 +63,7 @@ pub fn retry_task_with_execution(
     now: OffsetDateTime,
 ) -> Result<RetryResult, OpsError> {
     let new_task = plan_retry(store, id, accept, workspace, execution.is_some(), now)?;
-    let rewired = store.retry_task(id, &new_task)?;
+    let rewired = store.retry_task(id, &new_task, source)?;
     finish_retry(store, new_task.id, rewired, execution, source, now)
 }
 

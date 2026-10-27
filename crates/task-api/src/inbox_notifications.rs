@@ -384,6 +384,7 @@ pub(crate) fn delegated_request(
 
 async fn answer(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params(id): Params<String>,
     RawQuery(raw): RawQuery,
@@ -404,6 +405,7 @@ async fn answer(
         let item_id = id.clone();
         let answer = input.option.clone();
         let note = input.note.clone();
+        let by = caller.actor();
         let request_id = state
             .blocking(move |store| {
                 let row = store
@@ -466,7 +468,7 @@ async fn answer(
                     None
                 };
                 if !store
-                    .integration_request_answer(task_id, &request_id, &answer, note.as_deref())
+                    .integration_request_answer(task_id, &request_id, &answer, note.as_deref(), &by)
                     .map_err(store_problem)?
                 {
                     return Err(gone(&item_id));
@@ -500,6 +502,7 @@ async fn answer(
                             store,
                             task_id,
                             note.unwrap_or_else(|| answer.clone()),
+                            &by,
                             Some(Status::Blocked),
                         )
                         .map_err(|e| ops_problem(store, e, Some("answer")))?;

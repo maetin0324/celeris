@@ -120,6 +120,7 @@ impl SqliteStore {
             &Event::Created {
                 task: Box::new(child.clone()),
                 origin: Some(crate::model::CreatedOrigin::PlanUnit),
+                created_by: Some(crate::DAEMON_ACTOR.to_string()),
             },
         )?;
         Self::update_work_unit_tx(&tx, &unit)?;

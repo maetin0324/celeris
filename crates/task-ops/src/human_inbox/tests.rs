@@ -996,7 +996,14 @@ fn human_inbox_answered_items_disappear() {
     );
 
     crate::gate::accept(&store, draft.id, None).expect("accept");
-    crate::gate::answer(&store, blocked.id, "A を使う".to_string(), None).expect("answer");
+    crate::gate::answer(
+        &store,
+        blocked.id,
+        "A を使う".to_string(),
+        "human:test",
+        None,
+    )
+    .expect("answer");
 
     let after = human_inbox(&store, None, &ctx, now(), &no_evidence).expect("inbox after");
     assert!(

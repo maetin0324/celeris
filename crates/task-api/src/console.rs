@@ -497,7 +497,10 @@ fn progress_run(event: &Event) -> Option<&str> {
 fn answered_texts(rows: &[&EventRow]) -> HashMap<(TaskId, String), String> {
     let mut out = HashMap::new();
     for row in rows {
-        if let Event::Answered { question, answer } = &row.event {
+        if let Event::Answered {
+            question, answer, ..
+        } = &row.event
+        {
             out.insert((row.task_id, question.clone()), answer.clone());
         }
     }

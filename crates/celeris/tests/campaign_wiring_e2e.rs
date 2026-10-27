@@ -297,6 +297,7 @@ async fn post_tasks_to_export_connects_children_retries_review_cos_jev_and_inter
     ev(
         child,
         Event::Answered {
+            by: None,
             question: "q".into(),
             answer: "a".into(),
         },

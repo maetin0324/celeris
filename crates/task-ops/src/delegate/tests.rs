@@ -818,8 +818,14 @@ fn a_wait_instruction_before_the_latest_failure_does_not_hold() {
     store
         .apply_transition(parent.id, task_core::Trigger::WorkerQuestion, None)
         .expect("question");
-    crate::gate::answer(&store, parent.id, "子の再実行を待ってください".into(), None)
-        .expect("answer");
+    crate::gate::answer(
+        &store,
+        parent.id,
+        "子の再実行を待ってください".into(),
+        "human:test",
+        None,
+    )
+    .expect("answer");
     assert_eq!(awaited(&store, parent.id, &[]), vec![child.id]);
     // 再実行中（ready）は、親の最後の run より後の指示があるので待つ。
     store

@@ -272,6 +272,7 @@ async fn review_human_stage_holds_the_next_stage_child() {
         root_id,
         task_ops::phase_gate::PhaseGateAction::Continue,
         None,
+        "human:test",
     )
     .unwrap();
     let report = run_until_idle(&mut d, 1200).await;
@@ -329,6 +330,7 @@ async fn task_wait_stage_gate_review_human_hold_matches_the_api_waits() {
         root_id,
         task_ops::phase_gate::PhaseGateAction::Continue,
         None,
+        "human:test",
     )
     .unwrap();
     let stored = store.get(root_id).unwrap().unwrap();
@@ -362,9 +364,10 @@ async fn comment_on_plan_approval_keeps_the_gate_and_a_stranded_ready_task_retur
     ));
 
     // 1. comment は Stored のみ。
-    let res = task_ops::comment::post_human_comment(
+    let res = task_ops::comment::post_human_comment_as(
         store.as_ref(),
         root_id,
+        Some("human:web".to_string()),
         "補足".into(),
         OffsetDateTime::now_utc(),
     )
@@ -387,6 +390,7 @@ async fn comment_on_plan_approval_keeps_the_gate_and_a_stranded_ready_task_retur
             root_id,
             task_core::Trigger::Answer,
             Some(Event::Answered {
+                by: None,
                 question: String::new(),
                 answer: "補足".into(),
             }),
@@ -428,9 +432,10 @@ async fn comment_on_awaiting_human_keeps_the_gate_and_continue_still_works() {
         &store.events_for(root_id).unwrap()
     ));
 
-    let res = task_ops::comment::post_human_comment(
+    let res = task_ops::comment::post_human_comment_as(
         store.as_ref(),
         root_id,
+        Some("human:web".to_string()),
         "補足".into(),
         OffsetDateTime::now_utc(),
     )
@@ -452,6 +457,7 @@ async fn comment_on_awaiting_human_keeps_the_gate_and_continue_still_works() {
         root_id,
         task_ops::phase_gate::PhaseGateAction::Continue,
         None,
+        "human:test",
     )
     .unwrap();
     assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Ready);

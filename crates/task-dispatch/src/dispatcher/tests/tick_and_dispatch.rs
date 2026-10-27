@@ -686,9 +686,10 @@ async fn a_human_comment_interrupts_the_running_run_and_the_next_run_carries_it(
     assert_eq!(seen.lock().unwrap().len(), 1, "1 回目の run が始まっている");
 
     // 人がコメントする（API と同じ経路）。
-    let result = task_ops::comment::post_human_comment(
+    let result = task_ops::comment::post_human_comment_as(
         store.as_ref(),
         task.id,
+        Some("human:web".to_string()),
         "方針を変えたい。まず設計を書いて".into(),
         OffsetDateTime::now_utc(),
     )
@@ -970,6 +971,7 @@ async fn parent_stays_asleep_for_a_failed_child_while_told_to_wait_for_its_rerun
         store.as_ref(),
         parent_id,
         "子 task の再実行を待ってください".into(),
+        "human:test",
         None,
     )
     .unwrap();
@@ -1100,6 +1102,7 @@ async fn budget_exhausted_run_continues_without_consuming_attempts_then_blocks_o
             task_id,
             Trigger::Answer,
             Some(Event::Answered {
+                by: None,
                 question: "実行が進みません".into(),
                 answer: "続けてください".into(),
             }),

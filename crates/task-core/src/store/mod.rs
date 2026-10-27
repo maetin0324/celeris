@@ -1045,6 +1045,8 @@ mod client_open_tests;
 #[cfg(test)]
 mod decision_log_tests;
 #[cfg(test)]
+mod principal_tests;
+#[cfg(test)]
 mod routing_log_tests;
 #[cfg(test)]
 pub(crate) mod tests;

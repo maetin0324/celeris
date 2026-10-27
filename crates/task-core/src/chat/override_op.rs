@@ -430,7 +430,7 @@ impl SqliteStore {
             task.paused_at = None;
             task.created_at = now;
             task.updated_at = now;
-            Self::create_task_tx(&tx, &task, None, vec![])?;
+            Self::create_task_tx(&tx, &task, None, crate::DAEMON_ACTOR, vec![])?;
             Self::apply_transition_tx(&tx, task.id, Trigger::Accept, vec![])?;
             result.remediation_task_id = Some(task.id.to_string());
         }

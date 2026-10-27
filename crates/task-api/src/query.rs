@@ -333,6 +333,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::AutoReplanRequested { .. } => "auto_replan_requested",
         Event::ProjectPlanProposed { .. } => "project_plan_proposed",
         Event::ProjectPlanDecided { .. } => "project_plan_decided",
+        Event::PlanGateDecided { .. } => "plan_gate_decided",
         Event::PausePointsResolved { .. } => "pause_points_resolved",
         Event::PhaseReported { .. } => "phase_reported",
         Event::ChildTaskCreated { .. } => "child_task_created",

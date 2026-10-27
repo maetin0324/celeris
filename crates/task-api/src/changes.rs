@@ -502,6 +502,7 @@ fn run_integrate(
                             vec![task_core::Event::Created {
                                 task: Box::new(child.clone()),
                                 origin: None,
+                                created_by: Some(task_core::DAEMON_ACTOR.to_string()),
                             }],
                         )
                         .map_err(store_problem)?;

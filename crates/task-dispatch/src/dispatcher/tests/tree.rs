@@ -288,7 +288,7 @@ async fn v3_task_unit_creates_child_when_ready() {
     // 子の Created は origin plan_unit、状態は ready（draft を挟まない）。
     let child_events = store.events_for(child.id).unwrap();
     match &child_events[0].1 {
-        Event::Created { task, origin } => {
+        Event::Created { task, origin, .. } => {
             assert_eq!(*origin, Some(task_core::CreatedOrigin::PlanUnit));
             assert_eq!(task.status, Status::Ready);
         }
@@ -879,6 +879,7 @@ async fn review_human_stage_pauses_after_integration() {
         root_id,
         task_ops::phase_gate::PhaseGateAction::Continue,
         None,
+        "human:test",
     )
     .unwrap();
     let report = run_until_idle(&mut d, 600).await;
@@ -961,6 +962,7 @@ async fn stage_report_lists_child_summaries() {
         root_id,
         task_ops::phase_gate::PhaseGateAction::Continue,
         None,
+        "human:test",
     )
     .unwrap();
     let report = run_until_idle(&mut d, 600).await;

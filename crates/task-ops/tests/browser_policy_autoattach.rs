@@ -143,8 +143,15 @@ fn browser_policy_autoattach_retry_inherits_original_policy() {
         .expect("get")
         .expect("policy");
     cancel(&store, &original);
-    let retried =
-        retry_task(&store, original.id, true, None, OffsetDateTime::now_utc()).expect("retry");
+    let retried = retry_task(
+        &store,
+        original.id,
+        true,
+        None,
+        "human:test",
+        OffsetDateTime::now_utc(),
+    )
+    .expect("retry");
     assert_ne!(
         retried.task_id, original.id,
         "retry は新しい task id を作る"
@@ -170,8 +177,15 @@ fn browser_policy_autoattach_does_not_overwrite_human_put() {
     );
     // retry は自動付与し直さず、人の policy を写す（revision だけ 1 に戻す）。
     cancel(&store, &task);
-    let retried =
-        retry_task(&store, task.id, true, None, OffsetDateTime::now_utc()).expect("retry");
+    let retried = retry_task(
+        &store,
+        task.id,
+        true,
+        None,
+        "human:test",
+        OffsetDateTime::now_utc(),
+    )
+    .expect("retry");
     let inherited = store
         .browser_task_policy_get(retried.task_id)
         .expect("get")

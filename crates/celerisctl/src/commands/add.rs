@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use clap::{Args, ValueEnum};
 use task_core::{GenreSpec, RoleSpec, TaskId, TaskKind, TaskStore, Tier};
-use task_ops::add::{CriterionSpec, NewTaskSpec, create_task_with_roles};
+use task_ops::add::{CriterionSpec, NewTaskSpec, build_task_with_roles};
 use time::OffsetDateTime;
 
 use crate::error::{CliError, parse_task_id};
@@ -199,7 +199,8 @@ pub fn run(store: &dyn TaskStore, args: AddArgs) -> Result<ExitCode, CliError> {
         args.genre.as_deref(),
     )?;
     let spec = build_spec(args)?;
-    let task = create_task_with_roles(store, spec, &roles, &genres, OffsetDateTime::now_utc())?;
+    let task = build_task_with_roles(store, spec, &roles, &genres, OffsetDateTime::now_utc())?;
+    store.create_task_by(&task, super::CLI_ACTOR, vec![])?;
 
     outln!("{}", task.id);
     Ok(ExitCode::SUCCESS)

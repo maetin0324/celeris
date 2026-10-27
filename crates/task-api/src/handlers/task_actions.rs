@@ -379,11 +379,11 @@ pub(crate) fn retry_op(
     let Some(audit) = audit else {
         let new_id = new_task.id;
         let rewired = match claim {
-            None => task_core::store::TaskStore::retry_task(store, id, &new_task)
+            None => task_core::store::TaskStore::retry_task(store, id, &new_task, by)
                 .map_err(|e| ops_problem(store, e.into(), Some("retry")))?,
             Some(claim) => {
                 match store
-                    .retry_task_claimed(id, &new_task, claim, &super::rfc3339(now))
+                    .retry_task_claimed(id, &new_task, by, claim, &super::rfc3339(now))
                     .map_err(|e| ops_problem(store, e.into(), Some("retry")))?
                 {
                     task_core::store::RetryClaimed::Created(rewired) => rewired,
@@ -405,7 +405,7 @@ pub(crate) fn retry_op(
     let new_id = new_task.id;
     let mut rewired = Vec::new();
     let operation = audit.apply(store, "task", &target_id, "task.retry", |tx| {
-        rewired = task_core::store::SqliteStore::retry_task_tx(tx, id, &new_task)?;
+        rewired = task_core::store::SqliteStore::retry_task_tx(tx, id, &new_task, by)?;
         if let Some(ov) = &inherited {
             task_core::store::SqliteStore::set_task_routing_override_tx(
                 tx,
@@ -870,14 +870,16 @@ pub(crate) fn answer_op(
                 ops_problem(store, e, Some("answer")),
             )
         })?;
-    task_ops::gate::close_phase_integration_requests(store, id, &answer).map_err(|e| {
-        audit.reject(
-            store,
-            "task",
-            &target_id,
-            ops_problem(store, e, Some("answer")),
-        )
-    })?;
+    task_ops::gate::close_phase_integration_requests(store, id, &answer, &audit.by()).map_err(
+        |e| {
+            audit.reject(
+                store,
+                "task",
+                &target_id,
+                ops_problem(store, e, Some("answer")),
+            )
+        },
+    )?;
     // ADR 2026-10-22-plan-issue-answer-replans D1: CoS の代理回答も人の経路と同じ意図の検証と events。
     let intent_events =
         task_ops::gate::answer_intent_events(store, id, &question, &answer, intent, &audit.by())
@@ -892,6 +894,7 @@ pub(crate) fn answer_op(
     let mut events = vec![task_core::Event::Answered {
         question,
         answer: answer.clone(),
+        by: Some(audit.by()),
     }];
     events.extend(intent_events);
     let operation = audit.apply(store, "task", &target_id, "question.answer", |tx| {

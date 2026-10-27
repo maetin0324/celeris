@@ -95,13 +95,14 @@ fn continue_resumes_and_keeps_the_note_as_an_answer() {
         id,
         PhaseGateAction::Continue,
         Some("  keep it small ".to_string()),
+        "human:test",
     )
     .unwrap();
     assert_eq!(r.to, Status::Ready);
     assert_eq!(r.reason, "phase_continue");
     let events = store.events_for(id).unwrap();
     assert!(events.iter().any(|(_, e)| matches!(e,
-        Event::Answered { question, answer }
+        Event::Answered { question, answer, .. }
             if question == "途中確認: 工程『design』の後" && answer == "keep it small")));
 }
 
@@ -110,7 +111,7 @@ fn replan_requires_a_note_and_does_not_change_the_state() {
     let store = SqliteStore::open_in_memory().unwrap();
     let id = blocked_task(&store, true);
     for note in [None, Some("   ".to_string())] {
-        let err = phase_gate(&store, id, PhaseGateAction::Replan, note).unwrap_err();
+        let err = phase_gate(&store, id, PhaseGateAction::Replan, note, "human:test").unwrap_err();
         assert!(matches!(err, OpsError::Validation(_)), "{err:?}");
     }
     assert_eq!(store.get(id).unwrap().unwrap().status, Status::Blocked);
@@ -119,6 +120,7 @@ fn replan_requires_a_note_and_does_not_change_the_state() {
         id,
         PhaseGateAction::Replan,
         Some("split build".to_string()),
+        "human:test",
     )
     .unwrap();
     assert_eq!(r.reason, "phase_replan");
@@ -134,7 +136,7 @@ fn replan_requires_a_note_and_does_not_change_the_state() {
 fn answer_is_rejected_while_awaiting_human() {
     let store = SqliteStore::open_in_memory().unwrap();
     let id = blocked_task(&store, true);
-    let err = crate::gate::answer(&store, id, "go".to_string(), None).unwrap_err();
+    let err = crate::gate::answer(&store, id, "go".to_string(), "human:test", None).unwrap_err();
     assert!(matches!(err, OpsError::InvalidState { .. }), "{err:?}");
     assert_eq!(store.get(id).unwrap().unwrap().status, Status::Blocked);
 }
@@ -143,7 +145,7 @@ fn answer_is_rejected_while_awaiting_human() {
 fn withdraw_cancels() {
     let store = SqliteStore::open_in_memory().unwrap();
     let id = blocked_task(&store, true);
-    let r = phase_gate(&store, id, PhaseGateAction::Withdraw, None).unwrap();
+    let r = phase_gate(&store, id, PhaseGateAction::Withdraw, None, "human:test").unwrap();
     assert_eq!(r.to, Status::Cancelled);
 }
 
@@ -156,7 +158,7 @@ fn a_question_block_is_not_a_phase_gate() {
         PhaseGateAction::Replan,
         PhaseGateAction::Withdraw,
     ] {
-        let err = phase_gate(&store, id, action, Some("x".to_string())).unwrap_err();
+        let err = phase_gate(&store, id, action, Some("x".to_string()), "human:test").unwrap_err();
         assert!(matches!(err, OpsError::InvalidState { .. }), "{err:?}");
     }
     assert_eq!(store.get(id).unwrap().unwrap().status, Status::Blocked);
@@ -171,7 +173,7 @@ fn latest_checkpoint_reads_the_report_only_while_awaiting_human() {
     let info = latest_phase_checkpoint(&task, &events).expect("checkpoint");
     assert_eq!(info.report.phase, "design");
     assert_eq!(info.report_idx, None);
-    phase_gate(&store, id, PhaseGateAction::Continue, None).unwrap();
+    phase_gate(&store, id, PhaseGateAction::Continue, None, "human:test").unwrap();
     let task = store.get(id).unwrap().unwrap();
     let events = store.events_for(id).unwrap();
     assert!(latest_phase_checkpoint(&task, &events).is_none());

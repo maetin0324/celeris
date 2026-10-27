@@ -2209,6 +2209,13 @@
         },
         {
           "properties": {
+            "created_by": {
+              "description": "作った主体（ADR 2026-10-27-event-principals。`human:<name>` / `operator:<name>` / `mcp:<client>` /\n`cos:<thread>` / daemon の入口は `daemon`）。導入前の event には無い。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "origin": {
               "anyOf": [
                 {
@@ -2590,6 +2597,13 @@
             "answer": {
               "type": "string"
             },
+            "by": {
+              "description": "主体（ADR 2026-10-27-event-principals。`human:<name>` / `operator:<name>` / `mcp:<client>` / `cos:<thread>`）。\n導入前の event には無い。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "question": {
               "type": "string"
             },
@@ -2735,6 +2749,13 @@
         {
           "description": "Phase 31（実機の事故、2026-09-18）: `failed`/`cancelled` を複製してやり直したときの新しいタスクに\n記録する。`from` = 元のタスク。状態は変えない（`Created` が初期状態を与える）。",
           "properties": {
+            "by": {
+              "description": "主体（ADR 2026-10-27-event-principals。`human:<name>` / `operator:<name>` / `mcp:<client>` / `cos:<thread>`）。\n導入前の event には無い。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "from": {
               "$ref": "#/$defs/TaskId"
             },
@@ -2746,6 +2767,37 @@
           "required": [
             "type",
             "from"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-27-event-principals D2: root の計画の承認待ち（`awaiting_plan_approval`）への判断\n（`POST /tasks/{id}/execution/plan-gate`）。`action` は `approve` / `replan` / `withdraw`、`by` は主体。\n状態は変えない（遷移は同じ操作の `Transitioned`）。",
+          "properties": {
+            "action": {
+              "type": "string"
+            },
+            "by": {
+              "type": "string"
+            },
+            "note": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "plan_gate_decided",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "plan_id",
+            "action",
+            "by"
           ],
           "type": "object"
         },
@@ -4214,6 +4266,13 @@
             "approved": {
               "type": "boolean"
             },
+            "by": {
+              "description": "主体（ADR 2026-10-27-event-principals。`human:<name>` / `operator:<name>` / `mcp:<client>` / `cos:<thread>`）。\n導入前の event には無い。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "note": {
               "type": [
                 "string",
@@ -4572,6 +4631,13 @@
           "properties": {
             "answer": {
               "type": "string"
+            },
+            "by": {
+              "description": "主体（ADR 2026-10-27-event-principals。`human:<name>` / `operator:<name>` / `mcp:<client>` / `cos:<thread>`）。\n導入前の event には無い。",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "note": {
               "default": null,

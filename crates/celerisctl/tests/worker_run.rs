@@ -206,6 +206,7 @@ echo '{"type":"done","summary":"ok","evidence":[]}'
         .append_event(
             task.id,
             &Event::Answered {
+                by: None,
                 question: "q?".to_string(),
                 answer: "a!".to_string(),
             },

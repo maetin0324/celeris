@@ -166,6 +166,7 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   decision_answered: { sets: ["T", "L", "N"], extra: () => [decisionKeys.all] },
   decision_withdrawn: { sets: ["T", "L", "N"], extra: () => [decisionKeys.all] },
   plan_approval_requested: { sets: ["T", "L", "N", "E"] },
+  plan_gate_decided: { sets: ["T", "L", "N", "E"] },
   stall_detected: { sets: ["T", "R", "L"] },
   // ADR-0118 / ADR-0120: review 前同期と integration repair（TaskDetail・受信箱の Failed 項目に出る）。
   review_target_synced: { sets: ["T", "E"] },

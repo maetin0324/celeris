@@ -1999,6 +1999,7 @@ fn review_human_inputs_collect_answered_decisions_and_answers_of_the_task_and_it
         .append_event(
             root.id,
             &Event::Answered {
+                by: None,
                 question: "root q".into(),
                 answer: "root a".into(),
             },
@@ -2008,6 +2009,7 @@ fn review_human_inputs_collect_answered_decisions_and_answers_of_the_task_and_it
         .append_event(
             child.id,
             &Event::Answered {
+                by: None,
                 question: "child q".into(),
                 answer: "child a".into(),
             },
@@ -2017,6 +2019,7 @@ fn review_human_inputs_collect_answered_decisions_and_answers_of_the_task_and_it
         .append_event(
             sibling.id,
             &Event::Answered {
+                by: None,
                 question: "sibling q".into(),
                 answer: "sibling a".into(),
             },

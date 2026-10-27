@@ -494,6 +494,7 @@ fn human_waits_pair_question_and_approval_events_of_the_campaign_tree() {
     s.append_event(
         root.id,
         &Event::Answered {
+            by: None,
             question: "which?".into(),
             answer: "a".into(),
         },

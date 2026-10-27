@@ -151,6 +151,7 @@ async fn the_same_integration_failure_without_commits_asks_a_human_after_two_rep
         store.as_ref(),
         task.id,
         "binding を作り直した".to_string(),
+        "human:test",
         None,
     )
     .unwrap();

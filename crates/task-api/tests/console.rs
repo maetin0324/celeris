@@ -704,6 +704,7 @@ async fn approvals_milestones_and_questions_carry_their_state() {
         .append_event(
             task.id,
             &Event::Answered {
+                by: None,
                 question: "どのブランチに入れますか".into(),
                 answer: "main で".into(),
             },

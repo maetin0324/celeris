@@ -211,7 +211,9 @@ async fn answer_covers_blocked_not_blocked_and_blank() {
         .expect("events")
         .into_iter()
         .find_map(|(_, e)| match e {
-            Event::Answered { question, answer } => Some((question, answer)),
+            Event::Answered {
+                question, answer, ..
+            } => Some((question, answer)),
             _ => None,
         });
     assert_eq!(
@@ -450,7 +452,7 @@ async fn retry_duplicates_a_failed_task_and_rewires_dependents() {
         .map(|(_, e)| e)
         .collect();
     assert!(matches!(&events[0], Event::Created { task, .. } if task.id == new_id));
-    assert!(matches!(&events[1], Event::Retried { from } if *from == original.id));
+    assert!(matches!(&events[1], Event::Retried { from, .. } if *from == original.id));
 
     let draft_after = env
         .store

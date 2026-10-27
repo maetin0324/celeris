@@ -129,9 +129,9 @@ fn instruction_times(
         .comments_for(task)?
         .into_iter()
         .filter(|c| match c.author_kind {
-            CommentAuthorKind::Human => true,
             CommentAuthorKind::Node => c.run_id.is_none(),
             CommentAuthorKind::System => false,
+            kind => kind.is_instruction(),
         })
         .filter(|c| is_wait_instruction(&c.body))
         .map(|c| c.created_at)

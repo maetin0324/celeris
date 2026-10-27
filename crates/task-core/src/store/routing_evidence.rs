@@ -208,7 +208,7 @@ mod tests {
     fn evidence_versions_replace_and_stage_is_shadow_by_default_then_event_is_appended() {
         let store = SqliteStore::open_in_memory().unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 96);
+        assert_eq!(SCHEMA_VERSION, 97);
         assert_eq!(
             store.routing_stage("coding", "codex").unwrap(),
             RoutingStage::Shadow

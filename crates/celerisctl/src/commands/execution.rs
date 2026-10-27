@@ -195,7 +195,8 @@ fn run_phase_gate(
         PhaseGateActionArg::Replan => PhaseGateAction::Replan,
         PhaseGateActionArg::Withdraw => PhaseGateAction::Withdraw,
     };
-    let result = task_ops::phase_gate::phase_gate(store, task_id, action, args.note)?;
+    let result =
+        task_ops::phase_gate::phase_gate(store, task_id, action, args.note, super::CLI_ACTOR)?;
     outln!(
         "phase gate {}; task {} moved to {:?} ({})",
         action.as_str(),

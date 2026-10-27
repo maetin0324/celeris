@@ -327,7 +327,8 @@ async fn cos_chat_triage_b_webhook_packet_and_stop_after_human_answer() {
     // A second escalation is pending; the human answers on the web before the next tick.
     let second = question_task(&store, "設計の変更");
     escalate(&store, &db, &second, "設計の根本変更");
-    task_ops::gate::answer(&store, second.id, "web で答えた".into(), None).expect("human answer");
+    task_ops::gate::answer(&store, second.id, "web で答えた".into(), "human:test", None)
+        .expect("human answer");
     assert!(!tick(&store, &db, &view, &mut hook).await);
     assert!(store.notification_pending().expect("pending").is_empty());
     assert_eq!(hook.bodies.lock().expect("bodies").len(), 1);

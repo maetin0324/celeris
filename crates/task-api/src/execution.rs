@@ -597,6 +597,7 @@ async fn get_task_execution(
 /// `replan` で `note` が空なら 422。応答は `TransitionResult`。
 async fn post_phase_gate(
     axum::extract::State(state): axum::extract::State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params(id): Params<String>,
     axum::extract::RawQuery(raw): axum::extract::RawQuery,
@@ -607,8 +608,9 @@ async fn post_phase_gate(
     let task_id = parse_task_id(&id)?;
     let req: task_ops::phase_gate::PhaseGateRequest = read_json(body, false).await?;
     let action = req.action;
+    let by = caller.actor();
     let result = state
-        .blocking(move |store| phase_gate_op(store, task_id, req, None)?.direct())
+        .blocking(move |store| phase_gate_op(store, task_id, req, &by, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "phase_gate", task_id = %task_id, action = action.as_str(), to = ?result.to, "admin: phase gate");
     Ok(json_response(StatusCode::OK, &result))
@@ -634,17 +636,18 @@ pub(crate) fn phase_gate_op(
     store: &task_core::SqliteStore,
     task_id: task_core::TaskId,
     req: task_ops::phase_gate::PhaseGateRequest,
+    by: &str,
     audit: Option<&crate::cos::operations::OperationAudit>,
 ) -> Result<crate::cos::operations::Applied<task_ops::gate::TransitionResult>, ApiProblem> {
     use crate::cos::operations::Applied;
     use task_ops::phase_gate::PhaseGatePlan;
     let Some(audit) = audit else {
-        return task_ops::phase_gate::phase_gate(store, task_id, req.action, req.note)
+        return task_ops::phase_gate::phase_gate(store, task_id, req.action, req.note, by)
             .map(Applied::Direct)
             .map_err(|e| phase_gate_problem(store, e));
     };
     let target_id = task_id.to_string();
-    let plan = task_ops::phase_gate::plan_phase_gate(store, task_id, req.action, req.note)
+    let plan = task_ops::phase_gate::plan_phase_gate(store, task_id, req.action, req.note, by)
         .map_err(|e| audit.reject(store, "task", &target_id, phase_gate_problem(store, e)))?;
     let PhaseGatePlan::Resume {
         trigger,

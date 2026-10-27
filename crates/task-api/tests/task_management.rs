@@ -333,7 +333,7 @@ async fn posting_a_human_comment_follows_the_effect_table() {
             .events_for(blocked.id)
             .expect("events")
             .iter()
-            .any(|(_, e)| matches!(e, Event::Answered { answer, question } if answer == "postgres で" && question == "which db?"))
+            .any(|(_, e)| matches!(e, Event::Answered { answer, question, .. } if answer == "postgres で" && question == "which db?"))
     );
 }
 

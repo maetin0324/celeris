@@ -75,6 +75,7 @@ fn answers_from_events_collects_in_order() {
         (
             0,
             Event::Answered {
+                by: None,
                 question: "q1".into(),
                 answer: "a1".into(),
             },
@@ -83,6 +84,7 @@ fn answers_from_events_collects_in_order() {
         (
             2,
             Event::Answered {
+                by: None,
                 question: "q2".into(),
                 answer: "a2".into(),
             },

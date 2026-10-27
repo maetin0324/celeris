@@ -150,6 +150,7 @@ fn current_stall_is_the_last_event_of_a_live_node() {
     );
     // 何か起きたら（最後の event が別物なら）止まりではない。
     let later = Event::Answered {
+        by: None,
         question: "q".into(),
         answer: "a".into(),
     };

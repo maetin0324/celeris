@@ -47,6 +47,7 @@ impl SqliteStore {
                 &Event::Created {
                     task: Box::new(child.clone()),
                     origin: None,
+                    created_by: Some(crate::DAEMON_ACTOR.to_string()),
                 },
             )?;
             if accept_children {

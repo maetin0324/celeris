@@ -811,8 +811,21 @@ async fn plan_gate_status_codes_and_inbox() {
     let events = env.store.events_for(task.id).expect("events");
     assert!(events.iter().any(|(_, e)| matches!(
         e,
-        Event::Answered { question, answer }
-            if question == task_ops::plan_gate::PLAN_APPROVAL_QUESTION && answer == "進めて"
+        Event::Answered { question, answer, by }
+            if question == task_ops::plan_gate::PLAN_APPROVAL_QUESTION
+                && answer == "進めて"
+                && by.as_deref() == Some("human:test")
+    )));
+    // 判断は構造化した event（自由文の worker_progress に主体を埋めない）。
+    assert!(events.iter().any(|(_, e)| matches!(
+        e,
+        Event::PlanGateDecided { plan_id, action, by, note }
+            if plan_id == "plan-1" && action == "approve" && by == "human:test"
+                && note.as_deref() == Some("進めて")
+    )));
+    assert!(!events.iter().any(|(_, e)| matches!(
+        e,
+        Event::WorkerProgress { msg, .. } if msg.contains(task_ops::plan_gate::PLAN_APPROVAL_QUESTION)
     )));
     // もう承認待ちではない → 409。
     let resp = send(&app, post_admin(&path, &json!({"action": "withdraw"}))).await;
@@ -843,6 +856,10 @@ async fn plan_gate_replan_requests_a_planner_and_withdraw_cancels() {
         e,
         Event::ExecutionHintSet { source, replan: true, .. } if source == "human:test (plan-gate)"
     )));
+    assert!(events.iter().any(|(_, e)| matches!(
+        e,
+        Event::PlanGateDecided { action, by, .. } if action == "replan" && by == "human:test"
+    )));
 
     let other = awaiting_plan_task(&env);
     let resp = send(
@@ -856,6 +873,10 @@ async fn plan_gate_replan_requests_a_planner_and_withdraw_cancels() {
     assert_eq!(resp.status, 200, "{}", resp.text());
     assert_eq!(resp.json()["to"], "cancelled");
     assert_eq!(env.status_of(other.id), Status::Cancelled);
+    assert!(env.store.events_for(other.id).expect("events").iter().any(|(_, e)| matches!(
+        e,
+        Event::PlanGateDecided { action, by, .. } if action == "withdraw" && by == "human:test"
+    )));
 }
 
 // ---- ADR-0072「Phase F6 実装時の決定」: POST /tasks/{id}/execution/decompose と retry の execution ----

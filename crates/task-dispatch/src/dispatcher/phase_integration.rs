@@ -810,6 +810,7 @@ impl Dispatcher {
                 "統合済み: {} の統合が衝突なしで通った（HEAD {}）",
                 integ.key, run.head
             )),
+            task_core::DAEMON_ACTOR,
         )?;
         if !closed.is_empty() {
             tracing::info!(%task_id, work_unit = %integ.key, requests = ?closed, "integration requests closed as integrated");

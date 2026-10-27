@@ -450,11 +450,12 @@ impl SqliteStore {
         &self,
         task: &Task,
         origin: Option<crate::model::CreatedOrigin>,
+        created_by: &str,
         extra_events: Vec<Event>,
     ) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::create_task_tx(&tx, task, origin, extra_events)?;
+        Self::create_task_tx(&tx, task, origin, created_by, extra_events)?;
         tx.commit()?;
         Ok(())
     }
@@ -465,6 +466,7 @@ impl SqliteStore {
     pub fn create_task_with<F>(
         &self,
         task: &Task,
+        created_by: &str,
         extra_events: Vec<Event>,
         also: F,
     ) -> Result<(), StoreError>
@@ -473,7 +475,7 @@ impl SqliteStore {
     {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::create_task_tx(&tx, task, None, extra_events)?;
+        Self::create_task_tx(&tx, task, None, created_by, extra_events)?;
         also(&tx)?;
         tx.commit()?;
         Ok(())
@@ -485,6 +487,7 @@ impl SqliteStore {
         tx: &Connection,
         task: &Task,
         origin: Option<crate::model::CreatedOrigin>,
+        created_by: &str,
         extra_events: Vec<Event>,
     ) -> Result<(), StoreError> {
         Self::insert_tx(tx, task)?;
@@ -494,6 +497,7 @@ impl SqliteStore {
             &Event::Created {
                 task: Box::new(task.clone()),
                 origin,
+                created_by: Some(created_by.to_string()),
             },
         )?;
         for event in &extra_events {
@@ -508,6 +512,7 @@ impl SqliteStore {
         run_id: &str,
         children: Vec<Task>,
     ) -> Result<Vec<TaskId>, StoreError> {
+        let created_by = format!("worker:{run_id}");
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if Self::get_locked(&tx, parent_id)?.is_none() {
@@ -528,6 +533,7 @@ impl SqliteStore {
                 &Event::Created {
                     task: Box::new(child.clone()),
                     origin: None,
+                    created_by: Some(created_by.clone()),
                 },
             )?;
             if child.status == Status::Draft {
@@ -551,10 +557,11 @@ impl SqliteStore {
         &self,
         original: TaskId,
         new_task: &Task,
+        by: &str,
     ) -> Result<Vec<TaskId>, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let rewired = Self::retry_task_tx(&tx, original, new_task)?;
+        let rewired = Self::retry_task_tx(&tx, original, new_task, by)?;
         tx.commit()?;
         Ok(rewired)
     }
@@ -564,6 +571,7 @@ impl SqliteStore {
         tx: &Connection,
         original: TaskId,
         new_task: &Task,
+        by: &str,
     ) -> Result<Vec<TaskId>, StoreError> {
         let Some(orig) = Self::get_locked(tx, original)? else {
             return Err(StoreError::Invalid(format!("task not found: {original}")));
@@ -583,9 +591,17 @@ impl SqliteStore {
             &Event::Created {
                 task: Box::new(new_task.clone()),
                 origin: None,
+                created_by: Some(by.to_string()),
             },
         )?;
-        Self::append_event_tx(tx, new_task.id, &Event::Retried { from: original })?;
+        Self::append_event_tx(
+            tx,
+            new_task.id,
+            &Event::Retried {
+                from: original,
+                by: Some(by.to_string()),
+            },
+        )?;
         // ADR 2026-10-08-browser-prod-enablement D4: 元の task の保存 policy を引き継ぐ（無ければ自動付与のまま）。
         Self::inherit_browser_policy_tx(tx, original, new_task.id)?;
 

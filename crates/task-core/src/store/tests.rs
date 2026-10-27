@@ -1226,6 +1226,7 @@ fn open_migrates_legacy_v1_db_and_is_idempotent() {
 
         // events は task をまたいで rowid 順をばらして挿入する（各 task 内の seq 順は保つ）。
         let ev = Event::Created {
+            created_by: None,
             task: Box::new(a.clone()),
             origin: None,
         };
@@ -1234,6 +1235,7 @@ fn open_migrates_legacy_v1_db_and_is_idempotent() {
         expected_global.push((a.id, 0));
 
         let ev = Event::Created {
+            created_by: None,
             task: Box::new(b.clone()),
             origin: None,
         };
@@ -1963,6 +1965,7 @@ fn integration_requests_are_idempotent_and_answer_removes_only_matching_pair() {
         .append_event(
             task.id,
             &Event::IntegrationAnswered {
+                by: None,
                 request_id: a.id_for(task.id),
                 answer: "integrated".into(),
                 note: Some("resolved".into()),
@@ -2640,7 +2643,7 @@ fn migration_0008_adds_the_notifications_table_to_a_schema_7_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 96);
+    assert_eq!(SCHEMA_VERSION, 97);
     let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
     assert!(
         store
@@ -3183,7 +3186,7 @@ fn migration_0010_adds_the_projects_workspace_column_to_a_schema_9_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 96);
+    assert_eq!(SCHEMA_VERSION, 97);
     // 導入前の案件は「作業場所なし」= 従来どおり。
     assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
     let spec = WorkspaceSpec::Local {
@@ -3674,7 +3677,7 @@ fn migration_0015_adds_the_lifecycle_columns_to_a_schema_14_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 96);
+    assert_eq!(SCHEMA_VERSION, 97);
 
     let project = store.project_get(project_id).unwrap().expect("project");
     assert_eq!(project.status, ProjectStatus::Active);
@@ -3740,7 +3743,7 @@ fn migration_0017_adds_message_metadata_and_console_action_runs_to_a_schema_16_d
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 96);
+    assert_eq!(SCHEMA_VERSION, 97);
 
     // 導入前の行は `metadata = None` として読める。
     let messages = store.message_list("secretary", None, 10).unwrap();
@@ -3833,7 +3836,7 @@ fn migration_0013_adds_task_comments_and_the_label_columns_to_a_schema_11_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 96);
+    assert_eq!(SCHEMA_VERSION, 97);
     {
         let conn = store.lock().unwrap();
         let (labels, category): (String, String) = conn
@@ -4292,7 +4295,7 @@ fn migration_0026_adds_the_execution_tables_to_a_schema_25_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 96);
+    assert_eq!(SCHEMA_VERSION, 97);
 
     // 新しい表が使える（round trip）。
     let task = sample_task(Status::Draft);
@@ -4301,6 +4304,7 @@ fn migration_0026_adds_the_execution_tables_to_a_schema_25_db() {
         .append_event(
             task.id,
             &Event::Created {
+                created_by: None,
                 task: Box::new(task.clone()),
                 origin: None,
             },
@@ -4538,7 +4542,7 @@ fn migration_31_adds_tree_columns_without_rewriting_rows() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 96);
+    assert_eq!(SCHEMA_VERSION, 97);
 
     let conn = Connection::open(&path).unwrap();
     // 既存の task の行は 1 バイトも変わらず、`root_id` は NULL のまま（埋め戻さない）。
@@ -4789,7 +4793,7 @@ fn migration_27_adds_work_unit_lease_columns() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 96);
+    assert_eq!(SCHEMA_VERSION, 97);
 
     let conn = Connection::open(&path).unwrap();
     let mut columns: Vec<String> = Vec::new();
@@ -6136,18 +6140,24 @@ fn integration_requests_close_once_and_newer_request_of_same_origin_supersedes()
     );
     assert!(
         store
-            .integration_request_answer(task.id, &a_id, INTEGRATED_ANSWER, Some("統合済み"))
+            .integration_request_answer(
+                task.id,
+                &a_id,
+                INTEGRATED_ANSWER,
+                Some("統合済み"),
+                "human:test"
+            )
             .unwrap()
     );
     assert!(
         !store
-            .integration_request_answer(task.id, &a_id, INTEGRATED_ANSWER, None)
+            .integration_request_answer(task.id, &a_id, INTEGRATED_ANSWER, None, "human:test")
             .unwrap(),
         "回答済みの依頼には重ねて追記しない"
     );
     assert!(
         !store
-            .integration_request_answer(task.id, "unknown", INTEGRATED_ANSWER, None)
+            .integration_request_answer(task.id, "unknown", INTEGRATED_ANSWER, None, "human:test")
             .unwrap()
     );
     assert!(store.open_integration_requests().unwrap().is_empty());
@@ -6187,19 +6197,25 @@ fn integration_requests_close_once_and_newer_request_of_same_origin_supersedes()
     let events = store.events_for(task.id).unwrap();
     assert!(
         events.iter().any(|(_, event)| matches!(event,
-            Event::IntegrationAnswered { request_id, answer, note }
+            Event::IntegrationAnswered { request_id, answer, note, .. }
                 if *request_id == b.id_for(task.id) && answer == SUPERSEDED_ANSWER
                     && note.as_deref().is_some_and(|n| n.contains(&c.id_for(task.id))))),
         "{events:?}"
     );
 
     let closed = store
-        .integration_requests_close(task.id, "delivery", INTEGRATED_ANSWER, Some("main took it"))
+        .integration_requests_close(
+            task.id,
+            "delivery",
+            INTEGRATED_ANSWER,
+            Some("main took it"),
+            "human:test",
+        )
         .unwrap();
     assert_eq!(closed, vec![other.id_for(task.id)]);
     assert!(
         store
-            .integration_requests_close(task.id, "delivery", INTEGRATED_ANSWER, None)
+            .integration_requests_close(task.id, "delivery", INTEGRATED_ANSWER, None, "human:test")
             .unwrap()
             .is_empty()
     );
@@ -6241,7 +6257,13 @@ fn terminal_transitions_close_non_delivery_integration_requests_by_appending_ans
             .integration_request_record(task.id, &answered, "phase:old")
             .unwrap();
         store
-            .integration_request_answer(task.id, &answered.id_for(task.id), "integrated", None)
+            .integration_request_answer(
+                task.id,
+                &answered.id_for(task.id),
+                "integrated",
+                None,
+                "human:test",
+            )
             .unwrap();
         store
             .integration_request_record(live.id, &a, "phase:impl")

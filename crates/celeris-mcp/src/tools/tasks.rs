@@ -348,7 +348,7 @@ pub struct AnswerArgs {
 
 async fn answer_impl(
     state: &Arc<McpState>,
-    _client: &AuthedClient,
+    client: &AuthedClient,
     args: serde_json::Value,
 ) -> Result<ToolOutput, ToolError> {
     let args: AnswerArgs =
@@ -357,9 +357,10 @@ async fn answer_impl(
         return Err(ToolError::invalid_params("answer must not be blank"));
     }
     let id = parse_task_id(&args.id)?;
+    let by = format!("mcp:{}", client.id);
     let result = state
         .blocking(move |store| {
-            task_ops::gate::answer(store, id, args.answer, args.expected_status)
+            task_ops::gate::answer(store, id, args.answer, &by, args.expected_status)
                 .map_err(map_ops_err)
         })
         .await?;

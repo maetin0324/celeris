@@ -109,6 +109,7 @@ fn insert_with_created(store: &Arc<dyn TaskStore>, task: &Task) {
         .append_event(
             task.id,
             &Event::Created {
+                created_by: None,
                 task: Box::new(task.clone()),
                 origin: None,
             },

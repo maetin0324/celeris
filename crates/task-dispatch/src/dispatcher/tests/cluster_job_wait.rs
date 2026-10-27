@@ -270,7 +270,7 @@ async fn a_wait_parks_the_task_polls_and_resumes_as_a_continuation() {
     assert_eq!(waits[0].poll_secs, 30);
     assert_eq!(waits[0].timeout_secs, 3600);
     // waiting の間は一般の回答で戻せない。
-    assert!(task_ops::gate::answer(store.as_ref(), id, "go".into(), None).is_err());
+    assert!(task_ops::gate::answer(store.as_ref(), id, "go".into(), "human:test", None).is_err());
     // 受信箱の質問にも出ない。
     let questions = inbox_questions(&store);
     assert!(!questions.contains(&id), "{questions:?}");
@@ -442,7 +442,14 @@ async fn a_timed_out_wait_asks_a_human_and_the_answer_resumes() {
     assert!(inbox_questions(&store).contains(&id));
 
     // 回答で ready に戻り、次の run は continuation（timed_out の job の状態）と回答を受け取る。
-    task_ops::gate::answer(store.as_ref(), id, "延長して待ち直す".into(), None).unwrap();
+    task_ops::gate::answer(
+        store.as_ref(),
+        id,
+        "延長して待ち直す".into(),
+        "human:test",
+        None,
+    )
+    .unwrap();
     tick_until(&mut d, |_| {
         store.get(id).unwrap().unwrap().status == Status::Done
     })

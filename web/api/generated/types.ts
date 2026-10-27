@@ -1140,7 +1140,7 @@ export type Clusters = {
   "local": LocalMachineView;
 };
 
-export type CommentAuthorKind = "human" | "node" | "system";
+export type CommentAuthorKind = "human" | "node" | "system" | "cos" | "mcp" | "operator";
 
 export type CommentBody = {
   "body": string;
@@ -2269,6 +2269,7 @@ export type Event = {
   "type": "cluster_job_wait_finished";
   "wait_id": string;
 } | {
+  "created_by"?: string | null;
   "origin"?: CreatedOrigin | null;
   "task": Task;
   "type": "created";
@@ -2335,6 +2336,7 @@ export type Event = {
   "type": "approvals_withdrawn";
 } | {
   "answer": string;
+  "by"?: string | null;
   "question": string;
   "type": "answered";
 } | {
@@ -2361,8 +2363,15 @@ export type Event = {
   "type": "provider_throttled";
   "until": string;
 } | {
+  "by"?: string | null;
   "from": TaskId;
   "type": "retried";
+} | {
+  "action": string;
+  "by": string;
+  "note"?: string | null;
+  "plan_id": string;
+  "type": "plan_gate_decided";
 } | {
   "by": string;
   "fields": Array<string>;
@@ -2628,6 +2637,7 @@ export type Event = {
   "version": number;
 } | {
   "approved": boolean;
+  "by"?: string | null;
   "note"?: string | null;
   "project_id": ProjectId;
   "type": "project_plan_decided";
@@ -2694,6 +2704,7 @@ export type Event = {
   "type": "integration_requested";
 } | {
   "answer": string;
+  "by"?: string | null;
   "note"?: string | null;
   "request_id": string;
   "type": "integration_answered";

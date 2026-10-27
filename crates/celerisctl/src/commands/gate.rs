@@ -54,7 +54,7 @@ pub fn run_reject(store: &dyn TaskStore, args: RejectArgs) -> Result<ExitCode, C
 
 pub fn run_answer(store: &dyn TaskStore, args: AnswerArgs) -> Result<ExitCode, CliError> {
     let id = crate::error::parse_task_id(&args.id)?;
-    let result = ops_answer(store, id, args.answer, None)?;
+    let result = ops_answer(store, id, args.answer, super::CLI_ACTOR, None)?;
     outln!(
         "answer recorded; task {} moved to {:?}",
         result.id,

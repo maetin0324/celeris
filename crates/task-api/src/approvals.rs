@@ -27,6 +27,7 @@ use time::OffsetDateTime;
 use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
 use crate::middleware::require_admin;
+use crate::principal::Caller;
 use crate::problem::{ApiProblem, ops_problem, store_problem};
 use crate::query::QueryParams;
 use crate::state::ApiState;
@@ -142,6 +143,7 @@ pub(crate) async fn list_approvals(
 
 pub(crate) async fn decide(
     State(state): State<ApiState>,
+    caller: Caller,
     headers: HeaderMap,
     Params(id): Params<String>,
     RawQuery(raw): RawQuery,
@@ -152,8 +154,9 @@ pub(crate) async fn decide(
     let approval_id = parse_approval_id(&id)?;
     let payload: ApprovalDecideBody = read_json(body, false).await?;
     let decision = payload.decision;
+    let by = caller.actor();
     let outcome = state
-        .blocking(move |store| decide_op(store, approval_id, payload, None)?.direct())
+        .blocking(move |store| decide_op(store, approval_id, payload, &by, None)?.direct())
         .await?;
     tracing::info!(
         who = "admin",
@@ -172,6 +175,7 @@ pub(crate) fn decide_op(
     store: &SqliteStore,
     approval_id: ApprovalId,
     payload: ApprovalDecideBody,
+    by: &str,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<ApprovalDecideResult>, ApiProblem> {
     let target_id = approval_id.to_string();
@@ -201,6 +205,7 @@ pub(crate) fn decide_op(
             payload.decision,
             payload.answer,
             scope,
+            by,
             now,
         )
         .map_err(|e| ops_problem(store, e, Some("decide")))?;
@@ -217,6 +222,7 @@ pub(crate) fn decide_op(
         payload.decision,
         payload.answer,
         scope,
+        by,
         now,
     )
     .map_err(|e| reject(ops_problem(store, e, Some("decide"))))?;

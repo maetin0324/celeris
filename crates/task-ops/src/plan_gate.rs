@@ -193,29 +193,25 @@ pub fn plan_plan_gate(
     let plan_id = latest_plan_approval(&task, &events)
         .map(|i| i.plan_id)
         .unwrap_or_default();
-    let audit = |what: &str| {
-        Event::worker_progress(
-            String::new(),
-            format!(
-                "{PLAN_APPROVAL_QUESTION}: {what}（{by}、計画 {plan_id}）{}",
-                note.as_deref()
-                    .map(|n| format!(": {n}"))
-                    .unwrap_or_default()
-            ),
-        )
+    let audit = |action: PlanGateAction| Event::PlanGateDecided {
+        plan_id: plan_id.clone(),
+        action: action.as_str().to_string(),
+        by: by.to_string(),
+        note: note.clone(),
     };
     let (trigger, extra) = match action {
         PlanGateAction::Withdraw => {
             return Ok(PlanGatePlan::Withdraw {
-                audit: audit("取り下げ"),
+                audit: audit(PlanGateAction::Withdraw),
             });
         }
         PlanGateAction::Approve => {
-            let mut extra = vec![audit("承認")];
+            let mut extra = vec![audit(PlanGateAction::Approve)];
             if let Some(n) = &note {
                 extra.push(Event::Answered {
                     question: PLAN_APPROVAL_QUESTION.to_string(),
                     answer: n.clone(),
+                    by: Some(by.to_string()),
                 });
             }
             (
@@ -238,7 +234,7 @@ pub fn plan_plan_gate(
                     mode: PhaseResumeMode::PlanReplan,
                 },
                 vec![
-                    audit("replan"),
+                    audit(PlanGateAction::Replan),
                     Event::ExecutionHintSet {
                         mode: ExecutionMode::Compound,
                         previous,

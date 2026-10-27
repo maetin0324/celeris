@@ -17,6 +17,7 @@ use time::OffsetDateTime;
 use crate::cos::operations::{Applied, OperationAudit};
 use crate::files;
 use crate::middleware::require_admin;
+use crate::principal::Caller;
 use crate::problem::{ApiProblem, ops_problem};
 use crate::query::{QueryParams, parse_snake, parse_task_id};
 use crate::state::ApiState;
@@ -354,6 +355,7 @@ pub(super) async fn list_tasks(
 
 pub(super) async fn create_task(
     State(state): State<ApiState>,
+    caller: Caller,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
     body: Body,
@@ -365,6 +367,7 @@ pub(super) async fn create_task(
     let body: NewTaskBody = idempotency::decode(raw)?;
     let roles = state.inner.roles.clone();
     let genres = state.inner.genres.clone();
+    let by = caller.actor();
     let (task, resent) = state
         .blocking(move |store| {
             let keyed = match &claim {
@@ -389,7 +392,7 @@ pub(super) async fn create_task(
             if let Some(existing) = keyed {
                 return Ok((idempotency::existing_task(store, &existing)?, true));
             }
-            match create_task_op(store, &roles, &genres, body, claim.as_ref(), None) {
+            match create_task_op(store, &roles, &genres, body, claim.as_ref(), &by, None) {
                 Ok(applied) => Ok((applied.direct()?, false)),
                 Err(problem) => {
                     // 別の要求が先に commit した場合、rollback 後に結果を照合する。
@@ -479,6 +482,7 @@ pub(crate) fn create_task_op(
     genres: &[task_core::GenreSpec],
     body: NewTaskBody,
     claim: Option<&task_core::store::IdempotencyClaim>,
+    by: &str,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<Task>, ApiProblem> {
     let NewTaskBody {
@@ -614,7 +618,7 @@ pub(crate) fn create_task_op(
         Ok(())
     };
     let Some(audit) = audit else {
-        let outcome = store.create_task_with(&built, pinned_events.clone(), write);
+        let outcome = store.create_task_with(&built, by, pinned_events.clone(), write);
         if let Some(problem) = failure {
             return Err(problem);
         }
@@ -623,7 +627,7 @@ pub(crate) fn create_task_op(
     };
     let target_id = built.id.to_string();
     let outcome = audit.apply(store, "task", &target_id, "task.create", |tx| {
-        task_core::store::SqliteStore::create_task_tx(tx, &built, None, pinned_events.clone())?;
+        task_core::store::SqliteStore::create_task_tx(tx, &built, None, by, pinned_events.clone())?;
         write(tx).map_err(|e| task_core::chat::ChatError::Invalid(e.to_string()))?;
         Ok(serde_json::json!({
             "task_id": built.id.to_string(),

@@ -124,6 +124,7 @@ impl SqliteStore {
         &self,
         original: TaskId,
         new_task: &Task,
+        by: &str,
         claim: &IdempotencyClaim,
         now: &str,
     ) -> Result<RetryClaimed, StoreError> {
@@ -133,7 +134,7 @@ impl SqliteStore {
         if found != IdempotencyLookup::New {
             return Ok(RetryClaimed::Taken(found));
         }
-        let rewired = Self::retry_task_tx(&tx, original, new_task)?;
+        let rewired = Self::retry_task_tx(&tx, original, new_task, by)?;
         let result = serde_json::json!({
             "task_id": new_task.id.to_string(),
             "rewired": rewired.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
@@ -173,7 +174,7 @@ mod tests {
         {
             let store = SqliteStore::open(&path).unwrap();
             store
-                .create_task_with(&task, vec![], |tx| {
+                .create_task_with(&task, "human:test", vec![], |tx| {
                     SqliteStore::idempotency_record_tx(
                         tx,
                         &claim("durable", "hash"),
@@ -201,7 +202,7 @@ mod tests {
     fn same_hash_is_same_and_other_hash_conflicts() {
         let s = SqliteStore::open_in_memory().unwrap();
         let t = sample_task(Status::Ready);
-        s.create_task_with(&t, vec![], |tx| {
+        s.create_task_with(&t, "human:test", vec![], |tx| {
             SqliteStore::idempotency_record_tx(
                 tx,
                 &claim("k1", "h1"),
@@ -234,7 +235,8 @@ mod tests {
     fn claimed_retry_creates_once_and_records_the_result() {
         let s = SqliteStore::open_in_memory().unwrap();
         let orig = sample_task(Status::Failed);
-        s.create_task_with(&orig, vec![], |_| Ok(())).unwrap();
+        s.create_task_with(&orig, "human:test", vec![], |_| Ok(()))
+            .unwrap();
         let c = IdempotencyClaim {
             key: "r1".into(),
             operation: "task.retry".into(),
@@ -242,14 +244,17 @@ mod tests {
         };
         let first = sample_task(Status::Ready);
         assert_eq!(
-            s.retry_task_claimed(orig.id, &first, &c, "now").unwrap(),
+            s.retry_task_claimed(orig.id, &first, "human:test", &c, "now")
+                .unwrap(),
             RetryClaimed::Created(vec![])
         );
         let second = sample_task(Status::Ready);
         let RetryClaimed::Taken(IdempotencyLookup::Same {
             task_id,
             result_json,
-        }) = s.retry_task_claimed(orig.id, &second, &c, "now").unwrap()
+        }) = s
+            .retry_task_claimed(orig.id, &second, "human:test", &c, "now")
+            .unwrap()
         else {
             panic!("second claim must not create");
         };

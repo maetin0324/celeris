@@ -474,6 +474,7 @@ fn plan_effect(
                 row.key, row.request.question
             ),
             answer: line,
+            by: Some(source.to_string()),
         });
     }
     Ok(plan)

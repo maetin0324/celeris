@@ -1325,6 +1325,7 @@ fn integration_request_is_one_attention_until_answered_even_for_done_task() {
         .append_event(
             task.id,
             &Event::IntegrationAnswered {
+                by: None,
                 request_id: request.id_for(task.id),
                 answer: "integrated".into(),
                 note: None,
@@ -1610,7 +1611,8 @@ fn answered_integrated_and_superseded_integration_requests_leave_the_inbox() {
                 task.id,
                 &answered.id_for(task.id),
                 "answered",
-                Some("Fable が統合した")
+                Some("Fable が統合した"),
+                "human:test"
             )
             .unwrap()
     );
@@ -1632,6 +1634,7 @@ fn answered_integrated_and_superseded_integration_requests_leave_the_inbox() {
                 "phase:integrate-close",
                 task_core::integration_request::INTEGRATED_ANSWER,
                 Some("統合済み: HEAD が source を含む"),
+                "human:test"
             )
             .unwrap(),
         vec![integrated.id_for(task.id)]

@@ -141,7 +141,7 @@ async fn integration_request_answer_appends_event_and_removes_only_its_inbox_ite
     assert_eq!(answer.json()["removed"], true);
     assert_eq!(answer.json()["result"]["request_id"], request_id);
     assert!(env.store.events_for(task.id).unwrap().iter().any(|row| matches!(&row.1,
-        Event::IntegrationAnswered { request_id: id, answer, note }
+        Event::IntegrationAnswered { request_id: id, answer, note, .. }
             if id.as_str() == request_id.as_str() && answer == "integrated" && note.as_deref() == Some("merged locally"))));
     let after = send(
         &app,
@@ -204,7 +204,7 @@ async fn integration_request_answer_appends_event_and_removes_only_its_inbox_ite
                 .unwrap()
                 .iter()
                 .any(|row| matches!(&row.1,
-            Event::IntegrationAnswered { request_id, answer, note }
+            Event::IntegrationAnswered { request_id, answer, note, .. }
                 if request_id == &next_id && answer == option && note.is_none()))
         );
     }

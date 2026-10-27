@@ -1391,6 +1391,7 @@ async fn repository_required_attached_blocked_child_runs_in_registered_worktree(
             task.id,
             Trigger::Answer,
             Some(Event::Answered {
+                by: None,
                 question: "リポジトリが無い".into(),
                 answer: "リポジトリを付けた".into(),
             }),

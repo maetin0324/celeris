@@ -724,6 +724,7 @@ async fn a_work_unit_question_blocks_the_task_and_an_answer_resumes_it() {
             task_id,
             Trigger::Answer,
             Some(Event::Answered {
+                by: None,
                 question: "どちらの方針にしますか".into(),
                 answer: "A でお願いします".into(),
             }),
@@ -845,6 +846,7 @@ async fn a_work_unit_stuck_running_after_a_restart_is_reconciled_on_lease_expiry
         .append_event(
             task_id,
             &Event::Created {
+                created_by: None,
                 task: Box::new(task.clone()),
                 origin: None,
             },
@@ -914,6 +916,7 @@ async fn a_lease_expiry_requeue_closes_the_runs_row() {
         .append_event(
             task_id,
             &Event::Created {
+                created_by: None,
                 task: Box::new(task.clone()),
                 origin: None,
             },
@@ -1333,6 +1336,7 @@ async fn phase_gate_continue_resumes_the_next_phase() {
         task.id,
         task_ops::phase_gate::PhaseGateAction::Continue,
         Some("build は小さく".to_string()),
+        "human:test",
     )
     .unwrap();
     assert_eq!(r.from, Status::Blocked);
@@ -1354,7 +1358,7 @@ async fn phase_gate_continue_resumes_the_next_phase() {
         "最後の工程（build）の後では止まらない"
     );
     assert!(events.iter().any(|e| matches!(e,
-        Event::Answered { question, answer }
+        Event::Answered { question, answer, .. }
             if question == "途中確認: 工程『design』の後" && answer == "build は小さく")));
     let reasons: Vec<&str> = events
         .iter()
@@ -1374,6 +1378,7 @@ async fn phase_gate_continue_resumes_the_next_phase() {
         task.id,
         task_ops::phase_gate::PhaseGateAction::Continue,
         None,
+        "human:test",
     )
     .unwrap_err();
     assert!(
@@ -1394,11 +1399,19 @@ async fn phase_gate_replan_requires_a_note() {
             task.id,
             task_ops::phase_gate::PhaseGateAction::Replan,
             note,
+            "human:test",
         )
         .unwrap_err();
         assert!(matches!(err, task_ops::OpsError::Validation(_)), "{err:?}");
     }
-    let err = task_ops::gate::answer(store.as_ref(), task.id, "go".to_string(), None).unwrap_err();
+    let err = task_ops::gate::answer(
+        store.as_ref(),
+        task.id,
+        "go".to_string(),
+        "human:test",
+        None,
+    )
+    .unwrap_err();
     assert!(
         matches!(err, task_ops::OpsError::InvalidState { .. }),
         "{err:?}"
@@ -1414,6 +1427,7 @@ async fn phase_gate_replan_requires_a_note() {
         task.id,
         task_ops::phase_gate::PhaseGateAction::Replan,
         Some("build を 2 つに分ける".to_string()),
+        "human:test",
     )
     .unwrap();
     assert_eq!(r.to, Status::Ready);
@@ -1842,6 +1856,7 @@ async fn a_pending_human_replan_runs_the_planner_before_retrying_the_integration
         store.as_ref(),
         task.id,
         "replan してください".to_string(),
+        "human:test",
         None,
     )
     .unwrap();
@@ -3125,6 +3140,7 @@ async fn replan_exhaustion_on_a_non_tree_task_asks_a_human_and_the_answer_replan
         store.as_ref(),
         task_id,
         "b の失敗は環境の問題。同じ計画でやり直して".to_string(),
+        "human:test",
         None,
     )
     .unwrap();
@@ -3345,6 +3361,7 @@ async fn an_integration_request_leaves_the_inbox_once_the_human_merged_and_answe
         store.as_ref(),
         task.id,
         "Fable が統合した: 衝突は README.md だけ".into(),
+        "human:test",
         Some(Status::Blocked),
     )
     .unwrap();
@@ -3355,7 +3372,7 @@ async fn an_integration_request_leaves_the_inbox_once_the_human_merged_and_answe
     assert_eq!(inbox_integration_requests(&store, task.id), 0);
     let request_id = request.id_for(task.id);
     assert!(events_of(&store, task.id).iter().any(|e| matches!(e,
-        Event::IntegrationAnswered { request_id: id, answer, note }
+        Event::IntegrationAnswered { request_id: id, answer, note, .. }
             if *id == request_id && answer == "answered"
                 && note.as_deref().is_some_and(|n| n.starts_with("Fable が統合した")))));
 
@@ -3441,7 +3458,7 @@ async fn a_clean_integration_closes_the_open_request_of_its_origin_as_integrated
     assert_eq!(inbox_integration_requests(&store, task.id), 0);
     let request_id = stale.id_for(task.id);
     assert!(events_of(&store, task.id).iter().any(|e| matches!(e,
-        Event::IntegrationAnswered { request_id: id, answer, note }
+        Event::IntegrationAnswered { request_id: id, answer, note, .. }
             if *id == request_id
                 && answer == task_core::integration_request::INTEGRATED_ANSWER
                 && note.as_deref().is_some_and(|n| n.contains("integrate-build")))));
@@ -3754,6 +3771,7 @@ async fn a_plan_issue_answer_with_resume_keeps_the_check_and_replan_needs_a_plan
         store.as_ref(),
         task_id,
         "範囲を広げてよい".to_string(),
+        "human:test",
         None,
     )
     .unwrap();

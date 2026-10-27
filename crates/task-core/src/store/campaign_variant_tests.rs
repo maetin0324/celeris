@@ -321,7 +321,7 @@ fn failed_set_in_create_transaction_leaves_nothing() {
     let mut child = sample_task(Status::Draft);
     child.parent_id = Some(root.id);
     let other = with_variant("spec-on", "M1-spec-off", H2);
-    let r = s.create_task_with(&child, vec![], |tx| {
+    let r = s.create_task_with(&child, "human:test", vec![], |tx| {
         SqliteStore::task_campaign_set_tx(tx, &child.id.to_string(), &other, now())
     });
     invalid(r);

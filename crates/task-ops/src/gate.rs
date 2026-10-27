@@ -296,9 +296,10 @@ pub fn answer(
     store: &dyn TaskStore,
     id: TaskId,
     answer: String,
+    by: &str,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
-    answer_with_intent(store, id, answer, AnswerIntent::Resume, "human", expected)
+    answer_with_intent(store, id, answer, AnswerIntent::Resume, by, expected)
 }
 
 /// [`answer`] に意図を付けたもの（ADR 2026-10-22-plan-issue-answer-replans D1/D2）。`Replan` は
@@ -346,11 +347,12 @@ pub fn answer_with_intent(
     // ADR parallel integration D4 付記: 段の統合依頼で blocked(question) になった統合 WU を、受信箱の
     // 専用経路でなく汎用の回答で再開したときも、その依頼は回答済み（受信箱から消す）。遷移が WU の
     // blocked を解く前に対象を決める。再開後の統合が衝突なしで通っても dispatcher は閉じた依頼に重ねない。
-    close_phase_integration_requests(store, id, &answer)?;
+    close_phase_integration_requests(store, id, &answer, by)?;
     let since_id = store.latest_event_id()?;
     let mut extra = vec![Event::Answered {
         question,
         answer: answer.clone(),
+        by: Some(by.to_string()),
     }];
     extra.extend(intent_events);
     let outcome = store.apply_transition_with_events(id, Trigger::Answer, extra)?;
@@ -403,6 +405,7 @@ pub fn close_phase_integration_requests(
     store: &dyn TaskStore,
     task_id: TaskId,
     answer: &str,
+    by: &str,
 ) -> Result<(), OpsError> {
     let blocked_integrations: Vec<String> = store
         .work_units_for(task_id)?
@@ -418,7 +421,7 @@ pub fn close_phase_integration_requests(
         .map(|unit| format!("phase:{}", unit.key))
         .collect();
     for origin in blocked_integrations {
-        store.integration_requests_close(task_id, &origin, "answered", Some(answer))?;
+        store.integration_requests_close(task_id, &origin, "answered", Some(answer), by)?;
     }
     Ok(())
 }

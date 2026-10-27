@@ -178,6 +178,9 @@ pub(crate) const MIGRATION_0094: &str =
 pub(crate) const MIGRATION_0095: &str = include_str!("../../migrations/0095_project_briefs.sql");
 /// ADR 2026-10-27-unblocks-reopen-on-promotion D1: `task_unblocks`（修正 task と待っている task の結び）。
 pub(crate) const MIGRATION_0096: &str = include_str!("../../migrations/0096_task_unblocks.sql");
+/// ADR 2026-10-27-event-principals D3: `task_comments.author_kind` に cos・mcp・operator を足し、誤記録の行を author から直す。
+pub(crate) const MIGRATION_0097: &str =
+    include_str!("../../migrations/0097_comment_author_kinds.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration）。`migrate` は飛ばし、
@@ -187,7 +190,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 96;
+pub const SCHEMA_VERSION: u32 = 97;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -317,6 +320,7 @@ impl SqliteStore {
             94 => Ok(MIGRATION_0094),
             95 => Ok(MIGRATION_0095),
             96 => Ok(MIGRATION_0096),
+            97 => Ok(MIGRATION_0097),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

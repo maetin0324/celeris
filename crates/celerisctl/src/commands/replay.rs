@@ -179,6 +179,7 @@ mod tests {
             .append_event(
                 task.id,
                 &Event::Created {
+                    created_by: None,
                     task: Box::new(task.clone()),
                     origin: None,
                 },

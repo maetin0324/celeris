@@ -105,6 +105,7 @@ fn once_answers_the_task_and_leaves_no_standing_rule() {
         Decision::Once,
         "pegasus".into(),
         Scope::Node,
+        "human:test",
         OffsetDateTime::now_utc(),
     )
     .expect("decide");
@@ -137,6 +138,7 @@ fn standing_records_a_rule_scoped_to_the_node_by_default() {
         Decision::Standing,
         "pegasus のジョブは 1 ノードで始めてよい".into(),
         Scope::Node,
+        "human:test",
         OffsetDateTime::now_utc(),
     )
     .expect("decide");
@@ -163,6 +165,7 @@ fn standing_with_scope_all_applies_to_everyone() {
         Decision::Standing,
         "深夜は連絡しない".into(),
         Scope::All,
+        "human:test",
         OffsetDateTime::now_utc(),
     )
     .expect("decide");
@@ -191,6 +194,7 @@ fn denied_prefixes_the_answer_so_the_worker_can_tell() {
         Decision::Denied,
         "予算超過".into(),
         Scope::Node,
+        "human:test",
         OffsetDateTime::now_utc(),
     )
     .expect("decide");
@@ -218,6 +222,7 @@ fn a_blank_answer_is_rejected_without_writing_anything() {
             Decision::Once,
             "   ".into(),
             Scope::Node,
+            "human:test",
             OffsetDateTime::now_utc()
         ),
         Err(OpsError::Validation(_))
@@ -255,6 +260,7 @@ fn an_approval_without_a_task_id_only_records_the_decision() {
         Decision::Once,
         "待つ".into(),
         Scope::Node,
+        "human:test",
         OffsetDateTime::now_utc(),
     )
     .expect("decide");

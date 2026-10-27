@@ -654,6 +654,7 @@ fn advance(
                             "統合済み: {} が {} を取り込んだ",
                             d.default_branch, d.head
                         )),
+                        task_core::DAEMON_ACTOR,
                     )?;
                     if self_repo {
                         d.state = State::Preparing;

@@ -56,7 +56,9 @@ pub fn answers_from_events(events: &[(u64, Event)]) -> Vec<AnswerNote> {
     events
         .iter()
         .filter_map(|(_, ev)| match ev {
-            Event::Answered { question, answer } => Some(AnswerNote {
+            Event::Answered {
+                question, answer, ..
+            } => Some(AnswerNote {
                 question: question.clone(),
                 answer: answer.clone(),
             }),

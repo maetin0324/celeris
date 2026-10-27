@@ -520,6 +520,7 @@ pub fn finish_edit(
     let EditPlan {
         fields,
         original_status,
+        by,
         ..
     } = plan;
     let id = task.id;
@@ -543,6 +544,7 @@ pub fn finish_edit(
                 Some(Event::Answered {
                     question,
                     answer: answer.clone(),
+                    by: Some(by.to_string()),
                 }),
             ) {
                 Ok(outcome) => {

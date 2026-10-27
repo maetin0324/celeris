@@ -108,6 +108,7 @@ pub(crate) fn dispatch(
                 &env.genres,
                 input,
                 None,
+                &audit.by(),
                 Some(audit),
             )?)
         }
@@ -218,6 +219,7 @@ pub(crate) fn dispatch(
                 store,
                 id,
                 input,
+                &audit.by(),
                 Some(audit),
             )?)
         }

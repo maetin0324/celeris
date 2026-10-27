@@ -72,6 +72,7 @@ pub(super) fn running_orphan(
         .append_event(
             task_id,
             &Event::Created {
+                created_by: None,
                 task: Box::new(task.clone()),
                 origin: None,
             },

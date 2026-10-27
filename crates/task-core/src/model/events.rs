@@ -273,6 +273,10 @@ pub enum Event {
         /// daemon が作った子 task だけが `plan_unit` を持つ。それ以外は省略〈従来の JSON のまま〉）。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin: Option<CreatedOrigin>,
+        /// 作った主体（ADR 2026-10-27-event-principals。`human:<name>` / `operator:<name>` / `mcp:<client>` /
+        /// `cos:<thread>` / daemon の入口は `daemon`）。導入前の event には無い。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        created_by: Option<String>,
     },
     Transitioned {
         from: Status,
@@ -378,6 +382,10 @@ pub enum Event {
     Answered {
         question: String,
         answer: String,
+        /// 主体（ADR 2026-10-27-event-principals。`human:<name>` / `operator:<name>` / `mcp:<client>` / `cos:<thread>`）。
+        /// 導入前の event には無い。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
     },
     /// ADR-0021 D2: ディスパッチャが人間に出した質問（run の終了ではないので `WorkerFinished` は使わない）。
     /// 状態は変えない（`replay` は無視する）。同じトランザクションの `Transitioned{to: blocked}` と対で記録する。
@@ -425,6 +433,20 @@ pub enum Event {
     /// 記録する。`from` = 元のタスク。状態は変えない（`Created` が初期状態を与える）。
     Retried {
         from: TaskId,
+        /// 主体（ADR 2026-10-27-event-principals。`human:<name>` / `operator:<name>` / `mcp:<client>` / `cos:<thread>`）。
+        /// 導入前の event には無い。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
+    },
+    /// ADR 2026-10-27-event-principals D2: root の計画の承認待ち（`awaiting_plan_approval`）への判断
+    /// （`POST /tasks/{id}/execution/plan-gate`）。`action` は `approve` / `replan` / `withdraw`、`by` は主体。
+    /// 状態は変えない（遷移は同じ操作の `Transitioned`）。
+    PlanGateDecided {
+        plan_id: String,
+        action: String,
+        by: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// ADR-0044 D1（Phase 53）: 人がタスクを編集した（`PATCH /tasks/{id}`）。`fields` は変えた項目の名前
     /// （`title` / `priority` / `labels` …。並びは決定的）、`by` は `"human"`。状態は変えない
@@ -806,6 +828,10 @@ pub enum Event {
         approved: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
+        /// 主体（ADR 2026-10-27-event-principals。`human:<name>` / `operator:<name>` / `mcp:<client>` / `cos:<thread>`）。
+        /// 導入前の event には無い。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
     },
     // ---- ADR-0079（Phase R1a）: 再帰的な task の木。型と replay の読みだけ（発行は R1b 以降）----
     /// ADR-0079 D4 (4): 親の計画の kind task の unit から子 task を作った（親の events に積む）。
@@ -911,6 +937,10 @@ pub enum Event {
         answer: String,
         #[serde(default)]
         note: Option<String>,
+        /// 主体（ADR 2026-10-27-event-principals。`human:<name>` / `operator:<name>` / `mcp:<client>` / `cos:<thread>`）。
+        /// 導入前の event には無い。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
     },
     /// ADR 2026-10-06 D4: モデル catalog の変化（追加・消失・復活）。task に属さない監査イベントで、
     /// `model_catalog::catalog_event_task_id()` の疑似 task の列に追記する。状態は変えない。

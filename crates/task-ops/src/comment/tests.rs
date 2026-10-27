@@ -166,8 +166,14 @@ fn the_human_comment_effect_table_holds_for_every_status() {
         ),
     ] {
         let (store, id) = store_with(status);
-        let result = post_human_comment(&store, id, "見てほしい".into(), now)
-            .unwrap_or_else(|e| panic!("{status:?}: {e}"));
+        let result = post_human_comment_as(
+            &store,
+            id,
+            Some("human:web".to_string()),
+            "見てほしい".into(),
+            now,
+        )
+        .unwrap_or_else(|e| panic!("{status:?}: {e}"));
         assert_eq!(result.effect, expected, "{status:?}");
         assert_eq!(result.can_reopen, can_reopen, "{status:?}");
         let after = store.get(id).expect("get").expect("task");
@@ -259,7 +265,7 @@ fn a_node_comment_only_records_and_blank_bodies_are_rejected() {
         Err(OpsError::Validation(_))
     ));
     assert!(matches!(
-        post_human_comment(&store, id, "".into(), now),
+        post_human_comment_as(&store, id, Some("human:web".to_string()), "".into(), now),
         Err(OpsError::Validation(_))
     ));
 }
@@ -271,7 +277,14 @@ fn a_requeue_or_a_lease_expiry_does_not_consume_the_interruption() {
     let now = OffsetDateTime::now_utc();
     for outcome in ["requeue: adapter: throttled", "lease_expired"] {
         let (store, id) = store_with(Status::Running);
-        post_human_comment(&store, id, "止めて".into(), now).expect("comment");
+        post_human_comment_as(
+            &store,
+            id,
+            Some("human:web".to_string()),
+            "止めて".into(),
+            now,
+        )
+        .expect("comment");
         let comments = store.comments_for(id).expect("comments");
         store
             .apply_transition(id, Trigger::Dispatch, None)
@@ -304,7 +317,14 @@ fn a_requeue_or_a_lease_expiry_does_not_consume_the_interruption() {
 fn the_interruption_is_only_carried_into_the_next_run() {
     let now = OffsetDateTime::now_utc();
     let (store, id) = store_with(Status::Running);
-    post_human_comment(&store, id, "止めて".into(), now).expect("comment");
+    post_human_comment_as(
+        &store,
+        id,
+        Some("human:web".to_string()),
+        "止めて".into(),
+        now,
+    )
+    .expect("comment");
     let comments = store.comments_for(id).expect("comments");
     let events = store.events_for(id).expect("events");
     assert!(interrupting_comment(&events, &comments).is_some());
@@ -339,4 +359,41 @@ fn the_interruption_is_only_carried_into_the_next_run() {
         interrupting_comment(&events, &comments).is_none(),
         "消化済み"
     );
+}
+
+/// ADR 2026-10-27-event-principals D3: comment の `author_kind` は主体から決まり、回答になった
+/// comment の `Answered.by` は同じ主体になる。CoS・MCP・operator の comment も割り込みとして効く。
+#[test]
+fn a_comment_records_its_principal_kind_and_the_answer_carries_the_principal() {
+    let now = OffsetDateTime::now_utc();
+    for (actor, kind) in [
+        ("human:web", CommentAuthorKind::Human),
+        ("cos:thread-1", CommentAuthorKind::Cos),
+        ("mcp:chatgpt-rdc", CommentAuthorKind::Mcp),
+        ("operator:claude-code", CommentAuthorKind::Operator),
+    ] {
+        let (store, id) = store_with(Status::Blocked);
+        let result = post_human_comment_as(&store, id, Some(actor.to_string()), "答え".into(), now)
+            .expect("comment");
+        assert_eq!(result.effect, CommentEffect::Answered, "{actor}");
+        let comments = store.comments_for(id).expect("comments");
+        assert_eq!(comments[0].author_kind, kind, "{actor}");
+        assert_eq!(comments[0].author.as_deref(), Some(actor));
+        let by: Vec<Option<String>> = store
+            .events_for(id)
+            .expect("events")
+            .into_iter()
+            .filter_map(|(_, e)| match e {
+                Event::Answered { by, .. } => Some(by),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(by, [Some(actor.to_string())], "{actor}");
+
+        let (store, id) = store_with(Status::Running);
+        let result =
+            post_human_comment_as(&store, id, Some(actor.to_string()), "止めて".into(), now)
+                .expect("comment");
+        assert_eq!(result.effect, CommentEffect::Interrupted, "{actor}");
+    }
 }

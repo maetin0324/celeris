@@ -531,6 +531,7 @@ pub fn create_support_task(
     let extra_events = vec![task_core::Event::Created {
         task: Box::new(task.clone()),
         origin: None,
+        created_by: Some(task_core::DAEMON_ACTOR.to_string()),
     }];
     insert_task(store, task, extra_events)
 }

@@ -284,7 +284,19 @@ pub trait TaskStore:
     ) -> Result<Outcome, StoreError>;
 
     /// ADR-0010 D2: `insert` + `Event::Created` + `extra_events` を 1 トランザクションで行う。
-    fn create_task(&self, task: &Task, extra_events: Vec<Event>) -> Result<(), StoreError>;
+    /// 作った主体（`Created.created_by`）は `daemon`（daemon 自身の入口。人・operator・MCP・CoS の入口は
+    /// [`TaskStore::create_task_by`]。ADR 2026-10-27-event-principals D2）。
+    fn create_task(&self, task: &Task, extra_events: Vec<Event>) -> Result<(), StoreError> {
+        self.create_task_by(task, crate::DAEMON_ACTOR, extra_events)
+    }
+
+    /// `create_task` と同じだが、`Created.created_by` に主体 `created_by` を書く。
+    fn create_task_by(
+        &self,
+        task: &Task,
+        created_by: &str,
+        extra_events: Vec<Event>,
+    ) -> Result<(), StoreError>;
 
     /// ADR-0098 D5（Phase R7-10）: `create_task` と同じだが、`Event::Created.origin` に `origin` を書く
     /// （worker の run が宣言した後続の出自）。
@@ -377,6 +389,7 @@ pub trait TaskStore:
         request_id: &str,
         answer: &str,
         note: Option<&str>,
+        by: &str,
     ) -> Result<bool, StoreError>;
     /// `origin`（`delivery` / `phase:<key>`）の未回答依頼を全て `answer` で閉じる。閉じた依頼 id を返す。
     fn integration_requests_close(
@@ -385,6 +398,7 @@ pub trait TaskStore:
         origin: &str,
         answer: &str,
         note: Option<&str>,
+        by: &str,
     ) -> Result<Vec<String>, StoreError>;
 
     /// 終端 task の未回答統合依頼を `task_terminal` で閉じる（旧版の取り残しの回収）。
@@ -612,7 +626,12 @@ pub trait TaskStore:
     /// 「未終端」または「`dependency_failed` で `cancelled` になった」タスクの `depends_on` を `new_task.id` に
     /// 張り替える（後者は `draft` に戻し、`Event::Transitioned{from: cancelled, to: draft, reason: "retried"}`
     /// を追記する）。全体を単一トランザクションで行い、張り替えたタスクの id を返す。
-    fn retry_task(&self, original: TaskId, new_task: &Task) -> Result<Vec<TaskId>, StoreError>;
+    fn retry_task(
+        &self,
+        original: TaskId,
+        new_task: &Task,
+        by: &str,
+    ) -> Result<Vec<TaskId>, StoreError>;
 
     // ---- ADR-0044 D1/D2（Phase 53）: 人の編集とタスク単位のコメント ----
 

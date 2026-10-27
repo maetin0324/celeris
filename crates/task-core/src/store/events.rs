@@ -146,6 +146,7 @@ impl SqliteStore {
                     request_id: existing.id_for(task_id),
                     answer: SUPERSEDED_ANSWER.to_owned(),
                     note: Some(format!("新しい依頼 {new_id} に置き換わった")),
+                    by: Some(crate::DAEMON_ACTOR.to_owned()),
                 },
             )?;
         }
@@ -167,6 +168,7 @@ impl SqliteStore {
         request_id: &str,
         answer: &str,
         note: Option<&str>,
+        by: &str,
     ) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -186,6 +188,7 @@ impl SqliteStore {
                 request_id: request_id.to_owned(),
                 answer: answer.to_owned(),
                 note: note.map(str::to_owned),
+                by: Some(by.to_owned()),
             },
         )?;
         tx.commit()?;
@@ -198,6 +201,7 @@ impl SqliteStore {
         origin: &str,
         answer: &str,
         note: Option<&str>,
+        by: &str,
     ) -> Result<Vec<String>, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -223,6 +227,7 @@ impl SqliteStore {
                     request_id: request_id.clone(),
                     answer: answer.to_owned(),
                     note: note.map(str::to_owned),
+                    by: Some(by.to_owned()),
                 },
             )?;
             closed.push(request_id);
@@ -245,6 +250,7 @@ impl SqliteStore {
                 request_id,
                 answer: TASK_TERMINAL_ANSWER.to_owned(),
                 note: None,
+                by: Some(crate::DAEMON_ACTOR.to_owned()),
             },
         )?;
         Ok(())

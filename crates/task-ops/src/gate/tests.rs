@@ -188,7 +188,14 @@ fn answer_on_blocked_moves_to_ready() {
     let task = sample_task(TaskKind::Execute, Status::Blocked);
     store.insert(&task).expect("insert");
 
-    let result = answer(&store, task.id, "the answer".to_string(), None).expect("answer");
+    let result = answer(
+        &store,
+        task.id,
+        "the answer".to_string(),
+        "human:test",
+        None,
+    )
+    .expect("answer");
     assert_eq!(result.to, Status::Ready);
 
     let fetched = store.get(task.id).expect("get").expect("some");
@@ -234,7 +241,7 @@ fn answer_settles_the_tasks_pending_approvals_as_once_with_the_same_answer() {
     store.approval_append(&mine).expect("append mine");
     store.approval_append(&unrelated).expect("append unrelated");
 
-    answer(&store, task.id, "pegasus".to_string(), None).expect("answer");
+    answer(&store, task.id, "pegasus".to_string(), "human:test", None).expect("answer");
 
     let decided = store.approval_get(mine.id).expect("get").expect("some");
     assert_eq!(decided.decision, Some(Decision::Once));
@@ -251,7 +258,7 @@ fn answer_settles_the_tasks_pending_approvals_as_once_with_the_same_answer() {
     // approvals が無いタスクへの answer はエラーにならない。
     let plain = sample_task(TaskKind::Execute, Status::Blocked);
     store.insert(&plain).expect("insert plain");
-    assert!(answer(&store, plain.id, "x".to_string(), None).is_ok());
+    assert!(answer(&store, plain.id, "x".to_string(), "human:test", None).is_ok());
 }
 
 /// ADR-0010 D3（P-10）: `answer` は `Event::Answered{question, answer}` を
@@ -276,7 +283,7 @@ fn answer_persists_answered_event_with_question_from_worker_finished() {
         )
         .expect("append worker finished");
 
-    answer(&store, task.id, "use v2".to_string(), None).expect("answer");
+    answer(&store, task.id, "use v2".to_string(), "human:test", None).expect("answer");
 
     let events = store.events_for(task.id).expect("events_for");
     let tail = &events[events.len() - 2..];
@@ -287,6 +294,7 @@ fn answer_persists_answered_event_with_question_from_worker_finished() {
     assert_eq!(
         tail[1].1,
         Event::Answered {
+            by: None,
             question: "which version?".to_string(),
             answer: "use v2".to_string(),
         }
@@ -300,13 +308,21 @@ fn answer_without_worker_finished_uses_empty_question() {
     let task = sample_task(TaskKind::Execute, Status::Blocked);
     store.insert(&task).expect("insert");
 
-    answer(&store, task.id, "the answer".to_string(), None).expect("answer");
+    answer(
+        &store,
+        task.id,
+        "the answer".to_string(),
+        "human:test",
+        None,
+    )
+    .expect("answer");
 
     let events = store.events_for(task.id).expect("events_for");
     let last = &events.last().expect("some event").1;
     assert_eq!(
         *last,
         Event::Answered {
+            by: None,
             question: String::new(),
             answer: "the answer".to_string(),
         }
@@ -319,7 +335,13 @@ fn answer_on_ready_task_is_an_error() {
     let task = sample_task(TaskKind::Execute, Status::Ready);
     store.insert(&task).expect("insert");
 
-    let result = answer(&store, task.id, "irrelevant".to_string(), None);
+    let result = answer(
+        &store,
+        task.id,
+        "irrelevant".to_string(),
+        "human:test",
+        None,
+    );
     assert!(result.is_err());
 }
 

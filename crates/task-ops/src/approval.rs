@@ -57,9 +57,10 @@ pub fn decide(
     decision: Decision,
     answer: String,
     scope: Scope,
+    by: &str,
     now: OffsetDateTime,
 ) -> Result<DecideOutcome, OpsError> {
-    let plan = plan_decide(store, approval, decision, answer, scope, now)?;
+    let plan = plan_decide(store, approval, decision, answer, scope, by, now)?;
     let decided = store
         .approval_decide(
             plan.approval.id,
@@ -90,6 +91,8 @@ pub struct DecidePlan {
     pub answer: String,
     pub standing_rule: Option<StandingRule>,
     target: Target,
+    /// 決めた主体（再開する回答の `Answered.by`）。
+    by: String,
 }
 
 pub fn plan_decide(
@@ -98,6 +101,7 @@ pub fn plan_decide(
     decision: Decision,
     answer: String,
     scope: Scope,
+    by: &str,
     now: OffsetDateTime,
 ) -> Result<DecidePlan, OpsError> {
     if answer.trim().is_empty() {
@@ -177,6 +181,7 @@ pub fn plan_decide(
         answer,
         standing_rule,
         target,
+        by: by.to_string(),
     })
 }
 
@@ -193,7 +198,13 @@ fn resume_target(
     };
     Ok(match &plan.target {
         Target::Answer(task_id) => (
-            Some(gate::answer(store, *task_id, effective_answer, None)?),
+            Some(gate::answer(
+                store,
+                *task_id,
+                effective_answer,
+                &plan.by,
+                None,
+            )?),
             None,
         ),
         Target::Closed { note } => (None, Some(note.clone())),

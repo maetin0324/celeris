@@ -826,11 +826,16 @@ fn the_cli_overrides_replace_the_config_values() {
         config.api.listen.map(|a| a.to_string()).as_deref(),
         Some("127.0.0.1:7711")
     );
-    assert_eq!(config.api.token_file, Some(env.root.join("api.token")));
+    assert_eq!(config.api.tokens.len(), 1);
+    assert_eq!(
+        config.api.tokens[0].principal,
+        celeris::config::VERIFY_PRINCIPAL
+    );
+    assert_eq!(config.api.tokens[0].token_file, env.root.join("api.token"));
     assert_eq!(
         config
             .api
-            .read_token()
+            .client_token()
             .unwrap_or_else(|e| panic!("{e}"))
             .as_deref(),
         Some("s3cret")

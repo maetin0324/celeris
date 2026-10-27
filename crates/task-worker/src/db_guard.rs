@@ -739,7 +739,7 @@ impl ProtectedSet {
         }
     }
 
-    /// 本番 config の `[api] token_file`。path と内容を P に入れる（無ければ path だけ）。
+    /// 本番 config の token file（`[[api.tokens]]` と `[llm_proxy] token_file`）。path と内容を P に入れる（無ければ path だけ）。
     pub fn add_token_file(&mut self, token_file: &Path) {
         match ResolvedPath::resolve_lenient(token_file) {
             Ok(r) => self.token_files.push(r),
@@ -795,7 +795,8 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 pub struct DaemonPaths {
     pub db: PathBuf,
     pub state_dir: Option<PathBuf>,
-    pub token_file: Option<PathBuf>,
+    /// daemon の token の file（`[[api.tokens]]` の全て と `[llm_proxy] token_file`）。
+    pub token_files: Vec<PathBuf>,
 }
 
 /// ADR-0126 A3-2: worker run の印（`CELERIS_WORKER_DB_GUARD`）の状態。
@@ -954,7 +955,7 @@ pub fn judge_worker_db_guard(
             ));
         }
     }
-    if let Some(token_file) = &daemon.token_file {
+    for token_file in &daemon.token_files {
         let t = match ResolvedPath::resolve_lenient(token_file) {
             Ok(r) => r,
             Err(e) => {

@@ -95,7 +95,12 @@ rules = [{ harness = "fake", required_capabilities = [] }]
         let settings = celeris::api_settings(
             &config,
             addr,
-            Some(TOKEN.to_string()),
+            vec![task_api::ApiToken::new(
+                task_api::Principal::Human {
+                    name: "test".into(),
+                },
+                TOKEN,
+            )],
             "01J00000000000000000000000".to_string(),
             "2026-10-14T00:00:00Z".to_string(),
             None,

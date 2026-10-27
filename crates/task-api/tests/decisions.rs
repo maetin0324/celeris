@@ -248,12 +248,12 @@ async fn answering_an_open_decision_resumes_and_records_the_event() {
     assert_eq!(body["effect"], "resume", "{body}");
     assert_eq!(body["decision"]["decision"]["status"], "answered", "{body}");
     assert_eq!(body["decision"]["decision"]["answer"]["option"], "vault");
-    assert_eq!(body["decision"]["decision"]["answer"]["by"], "human");
+    assert_eq!(body["decision"]["decision"]["answer"]["by"], "human:test");
 
     let events = env.store.events_for(root.id).expect("events");
     let answered = events.iter().any(|(_, e)| {
         matches!(e, Event::DecisionAnswered { id, option, by, .. }
-            if id == "dec-1" && option == "vault" && by == "human")
+            if id == "dec-1" && option == "vault" && by == "human:test")
     });
     assert!(answered, "{events:?}");
 

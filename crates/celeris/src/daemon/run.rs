@@ -251,6 +251,13 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     // ADR-0053 D1/D4（Phase 65）: 主 API（`GET /llm/sources`）とプロキシ自身が同じ `Arc` を使う。
     let llm_proxy_state =
         build_llm_proxy_state(&mut config, &mut dispatcher, role.clone(), routing_registry)?;
+    // ADR 2026-10-27-api-principals D4: MCP の `api_get` は管理 token を持たず、起動ごとの MCP 専用 token で読む。
+    let mcp_token = match (config.mcp.effective_enabled(), config.api.listen) {
+        (true, Some(_)) => Some(task_api::principal::random_mcp_token().map_err(|e| {
+            task_api::ApiError::Startup(format!("mcp: could not make the API token: {e}"))
+        })?),
+        _ => None,
+    };
     let (api, admin_rx) = match config.api.listen {
         Some(listen) => {
             // `standby` も起きてすぐ API を受ける（同じポートに `SO_REUSEPORT` で bind する）。
@@ -264,6 +271,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                 !verify,
                 llm_proxy_state.clone(),
                 Arc::clone(&live_sessions),
+                mcp_token.clone(),
             )
             .await?;
             (Some(api), admin_rx)
@@ -278,7 +286,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         _ => None,
     };
     // ADR-0056 D1（Phase 78）: `[mcp]` も同じ理由で `standby`/`verify` から受ける。
-    let mcp_state = build_mcp_state(&config)?;
+    let mcp_state = build_mcp_state(&config, mcp_token)?;
     let mcp = match mcp_state {
         Some(state) => Some(start_mcp(&config, state).await?),
         None => None,

@@ -140,6 +140,17 @@ pub(crate) struct OperationAudit {
     pub(crate) item: Option<ItemMark>,
 }
 
+impl OperationAudit {
+    /// この操作を書く `by`・`actor`（`cos:<thread_id>`。ADR 2026-10-27-api-principals D3）。
+    pub(crate) fn by(&self) -> String {
+        crate::principal::Principal::Cos {
+            thread_id: self.ctx.thread_id.clone(),
+            run_id: self.ctx.run_id.clone(),
+        }
+        .actor()
+    }
+}
+
 /// The triage item a resolve request settles (ADR 2026-10-05 D3).
 #[derive(Debug, Clone)]
 pub(crate) struct ItemMark {

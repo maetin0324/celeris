@@ -841,7 +841,7 @@ async fn plan_gate_replan_requests_a_planner_and_withdraw_cancels() {
     );
     assert!(events.iter().any(|(_, e)| matches!(
         e,
-        Event::ExecutionHintSet { source, replan: true, .. } if source == "human (plan-gate)"
+        Event::ExecutionHintSet { source, replan: true, .. } if source == "human:test (plan-gate)"
     )));
 
     let other = awaiting_plan_task(&env);
@@ -913,7 +913,7 @@ async fn decompose_sets_an_explicit_compound_hint_and_clears_the_gate_decision()
     assert!(events.iter().any(|(_, e)| matches!(
         e,
         Event::ExecutionHintSet { source, note, .. }
-            if source == "human" && note.as_deref() == Some("計画を作って")
+            if source == "human:test" && note.as_deref() == Some("計画を作って")
     )));
 
     // atomic に戻すこともできる（計画はまだ無い）。

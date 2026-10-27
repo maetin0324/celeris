@@ -984,7 +984,9 @@ fn intervention_kind_of(event: &crate::Event) -> Option<InterventionKind> {
         // 失敗した task を人が再実行した。
         Event::Retried { .. } => Some(InterventionKind::Recovery),
         Event::ApprovalDecided { .. } => Some(InterventionKind::Unclassified),
-        Event::Edited { by, .. } if by == "human" => Some(InterventionKind::Unclassified),
+        Event::Edited { by, .. } if by == "human" || by.starts_with("human:") => {
+            Some(InterventionKind::Unclassified)
+        }
         _ => None,
     }
 }

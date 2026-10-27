@@ -93,7 +93,7 @@ fn fetch(args: &DoctorArgs, api_url: Option<&str>) -> Result<Report, CliError> {
             ),
             token: config
                 .api
-                .read_token()
+                .client_token()
                 .map_err(|_| CliError::msg("cannot read API token"))?,
         }
     };

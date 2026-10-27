@@ -80,7 +80,7 @@ async fn approve_covers_accept_approve_and_both_invalid_cases() {
         });
     assert_eq!(
         decided,
-        Some(("human".to_string(), true, Some("lgtm".to_string())))
+        Some(("human:test".to_string(), true, Some("lgtm".to_string())))
     );
 
     // (3) approval + done → 409 invalid_transition。
@@ -164,7 +164,7 @@ async fn reject_covers_approval_and_draft() {
     assert_eq!(resp.json()["to"], "failed");
     assert_eq!(resp.json()["reason"], "reject");
     let decided = env.store.events_for(approval.id).expect("events").into_iter().any(|(_, e)| {
-        matches!(e, Event::ApprovalDecided { approved: false, ref by, ref note } if by == "human" && note.as_deref() == Some("no"))
+        matches!(e, Event::ApprovalDecided { approved: false, ref by, ref note } if by == "human:test" && note.as_deref() == Some("no"))
     });
     assert!(decided);
 

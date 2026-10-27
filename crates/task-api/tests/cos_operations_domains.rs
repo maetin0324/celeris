@@ -91,7 +91,12 @@ async fn cos_chat_ops_domain_comment_create() {
     .await;
     let comments = env.store.comments_for(task.id).expect("comments");
     assert_eq!(comments.len(), 1, "the direct call wrote no comment");
-    assert_eq!(comments[0].author.as_deref(), Some("cos"));
+    assert!(
+        comments[0]
+            .author
+            .as_deref()
+            .is_some_and(task_core::is_cos_actor)
+    );
 }
 
 #[tokio::test]
@@ -112,7 +117,9 @@ async fn cos_chat_ops_domain_decision_answer() {
     let events = env.store.events_for(task.id).expect("events");
     let answered: Vec<_> = events
         .iter()
-        .filter(|(_, e)| matches!(e, Event::DecisionAnswered { by, .. } if by == "cos"))
+        .filter(
+            |(_, e)| matches!(e, Event::DecisionAnswered { by, .. } if task_core::is_cos_actor(by)),
+        )
         .collect();
     assert_eq!(answered.len(), 1);
 }

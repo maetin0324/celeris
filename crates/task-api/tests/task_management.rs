@@ -83,7 +83,7 @@ async fn patch_task_changes_only_the_written_fields_and_records_an_edited_event(
             _ => None,
         })
         .expect("Edited event");
-    assert_eq!(edited.1, "human");
+    assert_eq!(edited.1, "human:test");
     assert_eq!(edited.0.len(), 6);
 
     // `GET /tasks/{id}` にも `priority_label` が出る。

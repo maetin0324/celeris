@@ -49,7 +49,7 @@ pub fn run(config_path: Option<PathBuf>, command: ModelsCommand) -> Result<ExitC
         base_url: format!("http://{listen}/api/v1"),
         token: config
             .api
-            .read_token()
+            .client_token()
             .map_err(|e| CliError::msg(e.to_string()))?,
     };
     match command {

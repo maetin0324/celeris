@@ -62,6 +62,7 @@ mod middleware;
 pub mod milestones;
 pub mod model_catalog;
 pub mod notify;
+pub mod principal;
 mod problem;
 pub mod project_plan;
 mod query;
@@ -107,6 +108,7 @@ pub use memory::MemoryView;
 pub use milestones::{MilestoneDecideBody, MilestoneDecided};
 pub use model_catalog::{DiscoverySummaryView, ModelDiscoveryHook, SharedModelDiscoveryHook};
 pub use notify::{NotifyRecent, NotifyTestResult, NotifyView};
+pub use principal::{ApiToken, Caller, Principal};
 pub use project_plan::{ProjectPlanAccepted, ProjectPlanBody};
 pub use releases::{
     BRANCH_COMMITS_LIMIT, ReleasePromoteError, ReleaseSource, ReleasesFs, SharedReleaseSource,
@@ -186,8 +188,11 @@ pub const SHA256_MAX_BYTES: u64 = 64 * 1024 * 1024;
 #[derive(Clone)]
 pub struct ApiSettings {
     pub listen: SocketAddr,
-    /// `token_file` の内容（前後の空白除去済み）。`None` なら認証しない（loopback のみの構成）。
-    pub token: Option<String>,
+    /// `[[api.tokens]]`（ADR 2026-10-27-api-principals）: 名前付きの token と主体。空なら認証しない
+    /// （loopback のみの構成）。
+    pub tokens: Vec<ApiToken>,
+    /// daemon が起動ごとに作る MCP 専用 token（`api_get` の代行だけが使う。GET だけを通す）。
+    pub mcp_token: Option<String>,
     /// `[api] allowed_hosts`（`localhost` / `127.0.0.1` / `[::1]` / `listen` のホストは常に許可）。
     pub allowed_hosts: Vec<String>,
     /// API 専用の `SqliteStore` を `open_with` で開く DB のパス。
@@ -319,7 +324,8 @@ impl std::fmt::Debug for ApiSettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ApiSettings")
             .field("listen", &self.listen)
-            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("tokens", &self.tokens)
+            .field("mcp_token", &self.mcp_token.as_ref().map(|_| "<redacted>"))
             .field("allowed_hosts", &self.allowed_hosts)
             .field("db_path", &self.db_path)
             .field("busy_timeout", &self.busy_timeout)

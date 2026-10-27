@@ -179,8 +179,8 @@ pub(crate) fn task_pause_op(
             .map_err(|e| ops_problem(store, e, Some(trigger)));
     };
     let target_id = task_id.to_string();
-    let (next, event) =
-        lifecycle::plan_set_paused(store, task_id, pause, "cos", now).map_err(|e| {
+    let (next, event) = lifecycle::plan_set_paused(store, task_id, pause, &audit.by(), now)
+        .map_err(|e| {
             audit.reject(
                 store,
                 "task",

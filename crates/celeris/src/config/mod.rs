@@ -376,6 +376,9 @@ pub struct BrowserEgressConfig {
     pub resolver: Option<std::net::IpAddr>,
 }
 
+/// `--token-file`（verify の staging）で置き換えた token の主体。
+pub const VERIFY_PRINCIPAL: &str = "operator:verify";
+
 /// ADR-0040 D3（Phase 47）: CLI からの上書き。`verify.sh` が本番の設定をそのまま読ませたまま、
 /// DB・待ち受け・作業場所・トークンだけを staging のものに差し替えるために使う。
 #[derive(Debug, Clone, Default)]
@@ -525,6 +528,11 @@ impl Config {
         cfg.maintenance.resolve_disk_watch_paths();
         cfg.scratch.resolve_paths(&base);
         cfg.api.resolve_paths(&base);
+        if let Some(token_file) = &cfg.llm_proxy.token_file
+            && token_file.is_relative()
+        {
+            cfg.llm_proxy.token_file = Some(base.join(token_file));
+        }
         if let Some(org_include) = &cfg.org_include {
             cfg.org = org::load_org_seed(org_include, &base)?;
         }
@@ -563,9 +571,34 @@ impl Config {
         }
         // API を有効にするなら、トークンが読めることを起動時に確かめる（exit 2）。
         if cfg.api.listen.is_some() {
-            cfg.api.read_token()?;
+            cfg.api.read_tokens()?;
+        }
+        if cfg.llm_proxy.effective_enabled() {
+            cfg.llm_proxy_token()?;
         }
         Ok(cfg)
+    }
+
+    /// `[llm_proxy] token_file` の値（ADR 2026-10-27-api-principals D6。API の token とは別）。無ければ `None`
+    /// （proxy は認証しない）。読めない・空なら設定エラー。値は出さない。
+    pub fn llm_proxy_token(&self) -> Result<Option<String>, ConfigError> {
+        self.llm_proxy
+            .token_file
+            .as_deref()
+            .map(|p| api::read_token_file(p, "[llm_proxy] token_file"))
+            .transpose()
+    }
+
+    /// daemon が持つ token の file（`[[api.tokens]]` の全てと `[llm_proxy] token_file`）。db guard が使う。
+    pub fn token_files(&self) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = self
+            .api
+            .tokens
+            .iter()
+            .map(|t| t.token_file.clone())
+            .collect();
+        out.extend(self.llm_proxy.token_file.clone());
+        out
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
@@ -722,9 +755,13 @@ impl Config {
             self.applied_overrides.push("workspace_root".into());
             self.workspace_root_cli = Some(resolve(root));
         }
+        // ADR 2026-10-27-api-principals D6: staging（verify）の token は 1 本だけにし、`[[api.tokens]]` を全て置き換える。
         if let Some(token_file) = &overrides.token_file {
             self.applied_overrides.push("token_file".into());
-            self.api.token_file = Some(resolve(token_file));
+            self.api.tokens = vec![api::ApiTokenConfig {
+                principal: VERIFY_PRINCIPAL.into(),
+                token_file: resolve(token_file),
+            }];
         }
     }
 }

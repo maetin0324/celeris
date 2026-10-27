@@ -231,7 +231,12 @@ async fn cos_chat_triage_resolve_answer_runs_the_shared_operation() {
     assert_eq!(out["item"]["state"], "answered");
     assert_eq!(out["item"]["operation_id"], op["id"]);
     assert_eq!(item_state(&env, &item), "answered");
-    assert_eq!(decision_answered_by(&env, &task), vec!["cos".to_string()]);
+    assert!(
+        decision_answered_by(&env, &task)
+            .iter()
+            .all(|by| task_core::is_cos_actor(by))
+    );
+    assert_eq!(decision_answered_by(&env, &task).len(), 1);
 
     // Criterion 1: actor=cos and the reason are in the audit envelope event.
     let op_id = op["id"].as_str().expect("op id");
@@ -357,7 +362,10 @@ async fn cos_chat_triage_resolve_conflicts_on_stale_revision() {
     )
     .await;
     assert_problem(&resp, 409, "cos_inbox_revision_conflict");
-    assert_eq!(decision_answered_by(&env, &task), vec!["human".to_string()]);
+    assert_eq!(
+        decision_answered_by(&env, &task),
+        vec!["human:test".to_string()]
+    );
     assert_eq!(item_state(&env, &newer), "pending");
 }
 

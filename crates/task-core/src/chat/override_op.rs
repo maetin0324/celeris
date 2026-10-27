@@ -215,7 +215,7 @@ impl SqliteStore {
             if request
                 .answer
                 .as_ref()
-                .is_none_or(|answer| answer.by != "cos")
+                .is_none_or(|answer| !crate::is_cos_actor(&answer.by))
             {
                 return Err(ChatError::Conflict(
                     "a human already changed this decision".into(),

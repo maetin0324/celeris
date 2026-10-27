@@ -89,7 +89,7 @@ pub(crate) fn api_config(api_url: Option<&str>) -> Result<ApiConfig, CliError> {
         } else {
             config
                 .api
-                .read_token()
+                .client_token()
                 .map_err(|e| CliError::msg(e.to_string()))?
         },
     })

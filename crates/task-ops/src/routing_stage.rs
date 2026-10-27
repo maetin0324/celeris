@@ -268,6 +268,8 @@ pub struct HumanStageChange {
     pub harness_id: String,
     pub stage: RoutingStage,
     pub reason: String,
+    /// 記録する主体（API は要求の principal。ADR 2026-10-27-api-principals）。
+    pub actor: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -318,7 +320,7 @@ pub fn set_stage_by_human(
             evidence_version: rows.first().map(|r| r.evidence_version.clone()),
             reason: change.reason.clone(),
             window: serde_json::json!({}),
-            actor: "human".into(),
+            actor: change.actor.clone(),
         },
     )?;
     let list = list_stages(db_path, Some(&change.genre), Some(&change.harness_id))?;
@@ -378,6 +380,7 @@ mod tests {
             harness_id: "codex".into(),
             stage: RoutingStage::Enforce,
             reason: "approve".into(),
+            actor: "human".into(),
         };
         assert!(matches!(
             set_stage_by_human(&store, &db, &change, "2026-10-13T00:00:00Z"),

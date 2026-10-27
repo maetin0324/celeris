@@ -29,13 +29,25 @@ use tower::ServiceExt;
 
 pub const HOST: &str = "127.0.0.1:7710";
 pub const TOKEN: &str = "s3cret-token-value";
+/// `TOKEN` の主体（`by` に `human:test` と残る）。
+pub static TEST_PRINCIPAL: std::sync::LazyLock<task_api::Principal> =
+    std::sync::LazyLock::new(|| task_api::Principal::Human {
+        name: "test".into(),
+    });
+/// `TEST_PRINCIPAL.actor()`。
+pub const TEST_ACTOR: &str = "human:test";
 
 /// 来るはずのフレーム・状態を待つ保険の上限（ADR-0125）。主判定は出来事の到着で、
 /// 負荷で遅れても落ちないよう長く取る。来ないことを確かめる短い待ちには使わない。
 pub const EVENT_WAIT: Duration = Duration::from_secs(60);
 
 pub struct EnvOptions {
+    /// `human:test` の token（ADR 2026-10-27-api-principals）。
     pub token: Option<String>,
+    /// 追加の名前付き token（主体の区別を見る試験）。
+    pub extra_tokens: Vec<task_api::ApiToken>,
+    /// daemon が MCP の代行に渡す token。
+    pub mcp_token: Option<String>,
     pub allowed_hosts: Vec<String>,
     /// ADR-0016 D1: `POST /tasks` の省略値を埋める `[[roles]]`。
     pub roles: Vec<task_core::RoleSpec>,
@@ -90,6 +102,8 @@ impl Default for EnvOptions {
     fn default() -> Self {
         Self {
             token: None,
+            extra_tokens: Vec::new(),
+            mcp_token: None,
             allowed_hosts: Vec::new(),
             roles: Vec::new(),
             genres: Vec::new(),
@@ -309,7 +323,13 @@ pub fn settings(
 ) -> ApiSettings {
     ApiSettings {
         listen: HOST.parse().expect("listen"),
-        token: options.token,
+        tokens: options
+            .token
+            .map(|t| task_api::ApiToken::new(TEST_PRINCIPAL.clone(), t))
+            .into_iter()
+            .chain(options.extra_tokens)
+            .collect(),
+        mcp_token: options.mcp_token,
         allowed_hosts: options.allowed_hosts,
         db_path: db_path.to_path_buf(),
         busy_timeout: Duration::from_millis(5000),

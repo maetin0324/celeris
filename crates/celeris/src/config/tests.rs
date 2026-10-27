@@ -2002,18 +2002,25 @@ fn api_section_defaults_to_disabled_and_requires_token_off_loopback() {
         cfg.validate()
             .unwrap_err()
             .to_string()
-            .contains("token_file is required")
+            .contains("[[api.tokens]] is required")
     );
-    let cfg: Config =
-        toml::from_str("[api]\nlisten = \"0.0.0.0:7720\"\ntoken_file = \"api.token\"\n").unwrap();
+    let cfg: Config = toml::from_str(
+        "[api]\nlisten = \"0.0.0.0:7720\"\n[[api.tokens]]\nprincipal = \"human:web\"\ntoken_file = \"api.token\"\n",
+    )
+    .unwrap();
     assert!(cfg.validate().is_ok());
     assert!(toml::from_str::<Config>("[api]\nbogus = 1\n").is_err());
+    // ADR 2026-10-27-api-principals D1: 削除した単一 token の欄は読み込みエラー。
+    let err = toml::from_str::<Config>("[api]\ntoken_file = \"api.token\"\n")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("token_file"), "{err}");
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(
         &path,
-        "[api]\nlisten = \"127.0.0.1:7720\"\ntoken_file = \"secrets/api.token\"\n",
+        "[api]\nlisten = \"127.0.0.1:7720\"\n[[api.tokens]]\nprincipal = \"human:web\"\ntoken_file = \"secrets/web.token\"\n\n[[api.tokens]]\nprincipal = \"operator:claude-code\"\ntoken_file = \"secrets/op.token\"\n",
     )
     .unwrap();
     // token_file が無い・空なら起動時の設定エラー（値は出さない）。
@@ -2023,20 +2030,61 @@ fn api_section_defaults_to_disabled_and_requires_token_off_loopback() {
         "{err}"
     );
     std::fs::create_dir_all(dir.path().join("secrets")).unwrap();
-    std::fs::write(dir.path().join("secrets/api.token"), " \n").unwrap();
+    std::fs::write(dir.path().join("secrets/web.token"), " \n").unwrap();
+    std::fs::write(dir.path().join("secrets/op.token"), "op-456\n").unwrap();
     assert!(
         Config::load(&path)
             .unwrap_err()
             .to_string()
             .contains("is empty")
     );
-    std::fs::write(dir.path().join("secrets/api.token"), "  tok-123\n").unwrap();
+    // 同じ token を 2 つの主体に持たせない（値は出さない）。
+    std::fs::write(dir.path().join("secrets/web.token"), "op-456\n").unwrap();
+    let err = Config::load(&path).unwrap_err().to_string();
+    assert!(err.contains("share the same token"), "{err}");
+    assert!(!err.contains("op-456"), "{err}");
+    // CoS run credential の接頭辞は名乗れない。
+    std::fs::write(dir.path().join("secrets/web.token"), "celeris-cos-run.x\n").unwrap();
+    let err = Config::load(&path).unwrap_err().to_string();
+    assert!(err.contains("reserved CoS"), "{err}");
+    std::fs::write(dir.path().join("secrets/web.token"), "  tok-123\n").unwrap();
     let cfg = Config::load(&path).unwrap();
-    assert_eq!(cfg.api.read_token().unwrap().as_deref(), Some("tok-123"));
+    let tokens = cfg.api.read_tokens().unwrap();
     assert_eq!(
-        cfg.api.token_file.unwrap(),
-        dir.path().canonicalize().unwrap().join("secrets/api.token")
+        tokens
+            .iter()
+            .map(|t| t.principal.actor())
+            .collect::<Vec<_>>(),
+        ["human:web", "operator:claude-code"]
     );
+    assert_eq!(tokens[0].token, "tok-123");
+    // CLI は既定で operator の token を使う。
+    assert_eq!(cfg.api.client_token().unwrap().as_deref(), Some("op-456"));
+    assert_eq!(
+        cfg.api.tokens[0].token_file,
+        dir.path().canonicalize().unwrap().join("secrets/web.token")
+    );
+    assert_eq!(cfg.token_files().len(), 2);
+
+    // 同じ主体を 2 度書かない・主体の形を守る。
+    for (principal, needle) in [
+        ("operator:claude-code", "appears twice"),
+        ("cos:t1", "come from the daemon"),
+        ("robot:x", "must be human"),
+    ] {
+        std::fs::write(
+            &path,
+            format!(
+                "[[api.tokens]]\nprincipal = \"operator:claude-code\"\ntoken_file = \"secrets/op.token\"\n\n[[api.tokens]]\nprincipal = \"{principal}\"\ntoken_file = \"secrets/web.token\"\n"
+            ),
+        )
+        .unwrap();
+        let cfg: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let mut cfg = cfg;
+        cfg.api.resolve_paths(&dir.path().canonicalize().unwrap());
+        let err = cfg.api.read_tokens().unwrap_err().to_string();
+        assert!(err.contains(needle), "{principal}: {err}");
+    }
 }
 
 /// ADR-0016 D1 / D2: `[[roles]]` と `[delegation]` を読み、task-core の型と DispatchConfig に写す。
@@ -3377,7 +3425,7 @@ fn hot_mount_check_refuses_a_plain_directory_on_the_root_filesystem() {
     assert!(!is_mount_point("garbage\n", Path::new("/local")));
 }
 
-/// ADR-0139 の試験用: proxy を有効にし、`[api]` のトークンと `[secrets]` の鍵を置いた設定。
+/// ADR-0139 の試験用: proxy を有効にし、`[llm_proxy] token_file` と `[secrets]` の鍵を置いた設定。
 fn langmem_proxy_config(dir: &Path, base_url: &str, secret: Option<&str>) -> Config {
     let secrets_dir = dir.join("secrets");
     std::fs::create_dir_all(&secrets_dir).unwrap();
@@ -3392,15 +3440,13 @@ fn langmem_proxy_config(dir: &Path, base_url: &str, secret: Option<&str>) -> Con
     };
     let text = format!(
         r#"
-[api]
-token_file = "{token}"
-
 [secrets]
 dir = "{secrets}"
 
 [llm_proxy]
 enabled = true
 listen = "127.0.0.1:18100"
+token_file = "{token}"
 
 [knowledge.langmem]
 enabled = true

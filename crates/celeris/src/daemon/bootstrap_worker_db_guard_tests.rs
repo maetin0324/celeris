@@ -47,8 +47,7 @@ fn env(config: &str) -> Env {
     }
 }
 
-const PROD_CONFIG: &str =
-    "[db]\npath = \"@LIB@/celeris.sqlite3\"\n\n[api]\ntoken_file = \"api.token\"\n";
+const PROD_CONFIG: &str = "[db]\npath = \"@LIB@/celeris.sqlite3\"\n\n[[api.tokens]]\nprincipal = \"operator:prod\"\ntoken_file = \"api.token\"\n";
 
 /// guard の効いた worker run の中（印 = 本番 DB のディレクトリ）。
 fn inside(e: &Env) -> WorkerRunMarker {
@@ -61,7 +60,7 @@ fn test_daemon(e: &Env) -> DaemonPaths {
     DaemonPaths {
         db,
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     }
 }
 
@@ -92,7 +91,7 @@ fn worker_db_guard_test_db_is_exempt_with_production_config() {
     let mut daemon = test_daemon(&e);
     let token = e.test.join("api.token");
     std::fs::write(&token, "test-only-token\n").unwrap();
-    daemon.token_file = Some(token);
+    daemon.token_files = vec![token];
     assert_eq!(
         worker_db_guard_decision(&set, &daemon, &inside(&e)),
         GuardDecision::Exempt
@@ -141,7 +140,7 @@ fn worker_db_guard_refuses_production_db_from_production_config() {
     let daemon = DaemonPaths {
         db: e.db.clone(),
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     };
     assert_refused_inside(&decide(Some(&e.home), &daemon, &marker));
     // 本番 config が無ければ同じ DB でも P に入らない（印の dir の外）。
@@ -158,12 +157,12 @@ fn worker_db_guard_refuses_production_token_relative_to_production_config() {
     let marker = WorkerRunMarker::ReadOnly(e.home.clone());
     // 本番 token file そのもの（config 基準の相対 path が解けている）。
     let mut daemon = test_daemon(&e);
-    daemon.token_file = Some(e.token.clone());
+    daemon.token_files = vec![e.token.clone()];
     assert_refused_inside(&decide(Some(&e.home), &daemon, &marker));
     // 内容の写し。
     let copy = e.test.join("copied.token");
     std::fs::write(&copy, "production-token").unwrap();
-    daemon.token_file = Some(copy);
+    daemon.token_files = vec![copy];
     assert_refused_inside(&decide(Some(&e.home), &daemon, &marker));
 }
 
@@ -178,7 +177,7 @@ fn worker_db_guard_production_db_tilde_uses_passwd_home_not_env_home() {
     let daemon = DaemonPaths {
         db,
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     };
     assert_refused_inside(&decide(Some(&e.home), &daemon, &inside(&e)));
 }
@@ -332,7 +331,7 @@ fn worker_db_guard_refuse_production_db() {
     let daemon = DaemonPaths {
         db: e.db.clone(),
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     };
     assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
 }
@@ -349,7 +348,7 @@ fn worker_db_guard_refuse_state_dir_overlap() {
     let daemon = DaemonPaths {
         db,
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     };
     assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
     // daemon の state_dir が本番 state_dir を含む（祖先）。
@@ -363,12 +362,12 @@ fn worker_db_guard_refuse_production_token() {
     let e = env(PROD_CONFIG);
     let marker = WorkerRunMarker::ReadOnly(e.home.join(".config"));
     let mut daemon = test_daemon(&e);
-    daemon.token_file = Some(e.token.clone());
+    daemon.token_files = vec![e.token.clone()];
     assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
     // 同じ内容の写し（path は別）。
     let copy = e.test.join("copy.token");
     std::fs::write(&copy, "production-token\n").unwrap();
-    daemon.token_file = Some(copy);
+    daemon.token_files = vec![copy];
     assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
 }
 
@@ -382,7 +381,7 @@ fn worker_db_guard_refuse_via_symlink() {
     let daemon = DaemonPaths {
         db: link,
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     };
     assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
     // 本番 DB のディレクトリへの symlink を通した path。
@@ -391,14 +390,14 @@ fn worker_db_guard_refuse_via_symlink() {
     let daemon = DaemonPaths {
         db: dir_link.join("celeris.sqlite3"),
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     };
     assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
     // 本番 token への symlink。
     let token_link = e.test.join("token.link");
     std::os::unix::fs::symlink(&e.token, &token_link).unwrap();
     let mut daemon = test_daemon(&e);
-    daemon.token_file = Some(token_link);
+    daemon.token_files = vec![token_link];
     assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
 }
 
@@ -410,14 +409,14 @@ fn worker_db_guard_refuse_relative_path_with_dotdot() {
     let daemon = DaemonPaths {
         db: e.db.clone(),
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     };
     assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
     // daemon 側の `..` を含む path。
     let daemon = DaemonPaths {
         db: e.test.join("../lib/./celeris.sqlite3"),
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     };
     assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
     // 試験 daemon の config に書いた相対 path（config 基準で解ける）。
@@ -444,7 +443,7 @@ fn worker_db_guard_refuse_under_marker_path() {
     let daemon = DaemonPaths {
         db,
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     };
     assert_refuse_action(&decide(Some(&e.home), &daemon, &inside(&e)));
 }
@@ -488,7 +487,12 @@ fn worker_db_guard_refuse_precheck_before_opening_db() {
 fn opt_out_config(e: &Env, db: &Path, token: Option<&Path>) -> crate::Config {
     let path = e.test.join("opt-out.toml");
     let api = token
-        .map(|t| format!("\n[api]\ntoken_file = \"{}\"\n", t.display()))
+        .map(|t| {
+            format!(
+                "\n[[api.tokens]]\nprincipal = \"operator:test\"\ntoken_file = \"{}\"\n",
+                t.display()
+            )
+        })
         .unwrap_or_default();
     std::fs::write(
         &path,
@@ -509,7 +513,7 @@ fn worker_guard_exempt_test_db_without_marker() {
     let mut daemon = test_daemon(&e);
     let token = e.test.join("api.token");
     std::fs::write(&token, "test-only-token\n").unwrap();
-    daemon.token_file = Some(token);
+    daemon.token_files = vec![token];
     let decision = decide(Some(&e.home), &daemon, &WorkerRunMarker::Absent);
     assert_eq!(decision, GuardDecision::Exempt);
     let config = daemon_config(&e, &daemon.db);
@@ -561,13 +565,13 @@ fn worker_guard_probe_production_without_marker() {
     check(&DaemonPaths {
         db: e.db.clone(),
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     });
     // 本番 token（写し）を使う daemon。
     let copy = e.test.join("copy.token");
     std::fs::write(&copy, "production-token\n").unwrap();
     let mut daemon = test_daemon(&e);
-    daemon.token_file = Some(copy);
+    daemon.token_files = vec![copy];
     check(&daemon);
 }
 
@@ -579,7 +583,7 @@ fn worker_guard_opt_out_refuses_production_inside_worker_run() {
     let prod = DaemonPaths {
         db: e.db.clone(),
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     };
     // 印の中・本番 DB: opt-out でも拒否（token の値は出さない）。
     match worker_db_guard_opt_out_action(&set, &prod, &marker) {
@@ -601,7 +605,7 @@ fn worker_guard_opt_out_refuses_production_inside_worker_run() {
     let copy = e.test.join("copy.token");
     std::fs::write(&copy, "production-token\n").unwrap();
     let mut daemon = test_daemon(&e);
-    daemon.token_file = Some(copy.clone());
+    daemon.token_files = vec![copy.clone()];
     match worker_db_guard_opt_out_action(&set, &daemon, &marker) {
         WorkerDbGuardAction::Refuse(m) => assert!(!m.contains("production-token"), "{m}"),
         other => panic!("not refused: {other:?}"),
@@ -695,7 +699,7 @@ fn egress_test_loopback_production_db_or_config_daemon_refuses_test_launcher() {
     let prod_db = DaemonPaths {
         db: e.db.clone(),
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     };
     let reason = launcher_test_loopback_refusal(Some(&e.home), Some(&own_config), &prod_db)
         .expect("production db");
@@ -704,12 +708,12 @@ fn egress_test_loopback_production_db_or_config_daemon_refuses_test_launcher() {
     let copy = e.test.join("api.token");
     std::fs::write(&copy, "production-token\n").unwrap();
     let mut prod_token = test_daemon(&e);
-    prod_token.token_file = Some(copy);
+    prod_token.token_files = vec![copy];
     assert!(
         launcher_test_loopback_refusal(Some(&e.home), Some(&own_config), &prod_token).is_some()
     );
     let mut prod_token_file = test_daemon(&e);
-    prod_token_file.token_file = Some(e.token.clone());
+    prod_token_file.token_files = vec![e.token.clone()];
     assert!(
         launcher_test_loopback_refusal(Some(&e.home), Some(&own_config), &prod_token_file)
             .is_some()

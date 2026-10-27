@@ -98,6 +98,7 @@ async fn list(
 
 async fn put(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     Path(policy_id): Path<String>,
     headers: HeaderMap,
     body: Result<Json<SitePolicyPutBody>, JsonRejection>,
@@ -116,7 +117,7 @@ async fn put(
     })?;
     let policy = validated_policy(policy_id, body)?;
     let result = state
-        .blocking(move |store| upsert_policy(store, &policy, "admin"))
+        .blocking(move |store| upsert_policy(store, &policy, &caller.actor()))
         .await?;
     let status = if result.created {
         StatusCode::CREATED
@@ -140,6 +141,7 @@ pub(crate) fn upsert_policy(
 
 async fn delete(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     Path(policy_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiProblem> {
@@ -148,7 +150,7 @@ async fn delete(
         return Err(not_found());
     }
     state
-        .blocking(move |store| delete_policy(store, &policy_id, "admin"))
+        .blocking(move |store| delete_policy(store, &policy_id, &caller.actor()))
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

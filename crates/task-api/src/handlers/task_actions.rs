@@ -10,6 +10,7 @@ use time::OffsetDateTime;
 
 use crate::cos::operations::{Applied, OperationAudit};
 use crate::middleware::require_admin;
+use crate::principal::Caller;
 use crate::problem::{ApiProblem, ops_problem};
 use crate::query::parse_task_id;
 use crate::state::ApiState;
@@ -45,6 +46,7 @@ where
 
 pub(super) async fn approve(
     State(state): State<ApiState>,
+    caller: Caller,
     Params(id): Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -59,7 +61,7 @@ pub(super) async fn approve(
     } = read_json(body, true).await?;
     let result = state
         .blocking(move |store| {
-            task_ops::gate::approve(store, id, note, expected_status)
+            task_ops::gate::approve_as(store, id, &caller.actor(), note, expected_status)
                 .map_err(|e| ops_problem(store, e, Some("approve")))
         })
         .await?;
@@ -91,6 +93,7 @@ pub(super) async fn accept(
 
 pub(super) async fn reject(
     State(state): State<ApiState>,
+    caller: Caller,
     Params(id): Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -105,7 +108,7 @@ pub(super) async fn reject(
     } = read_json(body, true).await?;
     let result = state
         .blocking(move |store| {
-            task_ops::gate::reject(store, id, note, expected_status)
+            task_ops::gate::reject_as(store, id, &caller.actor(), note, expected_status)
                 .map_err(|e| ops_problem(store, e, Some("reject")))
         })
         .await?;
@@ -161,7 +164,7 @@ pub(crate) fn gate_action_op(
             (
                 task_core::Trigger::Approve,
                 vec![task_core::Event::ApprovalDecided {
-                    by: "cos".to_string(),
+                    by: audit.by(),
                     approved: true,
                     note,
                 }],
@@ -174,7 +177,7 @@ pub(crate) fn gate_action_op(
             (
                 task_core::Trigger::Reject,
                 vec![task_core::Event::ApprovalDecided {
-                    by: "cos".to_string(),
+                    by: audit.by(),
                     approved: false,
                     note,
                 }],
@@ -217,6 +220,7 @@ pub(crate) fn gate_action_op(
 
 pub(super) async fn answer(
     State(state): State<ApiState>,
+    caller: Caller,
     Params(id): Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -238,8 +242,15 @@ pub(super) async fn answer(
     }
     let result = state
         .blocking(move |store| {
-            task_ops::gate::answer_with_intent(store, id, answer, intent, "human", expected_status)
-                .map_err(|e| ops_problem(store, e, Some("answer")))
+            task_ops::gate::answer_with_intent(
+                store,
+                id,
+                answer,
+                intent,
+                &caller.actor(),
+                expected_status,
+            )
+            .map_err(|e| ops_problem(store, e, Some("answer")))
         })
         .await?;
     Ok(json_response(StatusCode::OK, &result))
@@ -270,6 +281,7 @@ pub(super) async fn cancel(
 /// Phase 31（実機の事故、2026-09-18）: `failed`/`cancelled` を複製してやり直す。
 pub(super) async fn retry(
     State(state): State<ApiState>,
+    caller: Caller,
     Params(id): Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -287,6 +299,7 @@ pub(super) async fn retry(
     )?;
     let body: RetryBody = super::idempotency::decode(raw)?;
     let clusters = super::cluster_ids(&state);
+    let by = caller.actor();
     let (result, resent) = state
         .blocking(move |store| {
             if let Some(claim) = &claim
@@ -297,7 +310,7 @@ pub(super) async fn retry(
                     .map_err(|e| ApiProblem::internal(format!("stored retry result: {e}")))?;
                 return Ok((result, true));
             }
-            match retry_op(store, &clusters, id, body, claim.as_ref(), None) {
+            match retry_op(store, &clusters, id, body, claim.as_ref(), &by, None) {
                 Ok(applied) => Ok((applied.direct()?, false)),
                 Err(problem) => {
                     if problem.code() == "idempotency_key_conflict"
@@ -339,6 +352,7 @@ pub(crate) fn retry_op(
         idempotency_key,
     }: RetryBody,
     claim: Option<&task_core::store::IdempotencyClaim>,
+    by: &str,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::retry::RetryResult>, ApiProblem> {
     let target_id = id.to_string();
@@ -384,7 +398,7 @@ pub(crate) fn retry_op(
                 .set_task_routing_override(new_id, ov, &super::rfc3339(now))
                 .map_err(|e| ops_problem(store, e.into(), Some("retry")))?;
         }
-        return task_ops::retry::finish_retry(store, new_id, rewired, execution, "human", now)
+        return task_ops::retry::finish_retry(store, new_id, rewired, execution, by, now)
             .map(Applied::Direct)
             .map_err(|e| ops_problem(store, e, Some("retry")));
     };
@@ -408,7 +422,7 @@ pub(crate) fn retry_op(
     })?;
     if operation.id == audit.ctx.operation_id
         && let Err(error) =
-            task_ops::retry::finish_retry(store, new_id, rewired, execution, "cos", now)
+            task_ops::retry::finish_retry(store, new_id, rewired, execution, by, now)
     {
         tracing::warn!(operation_id = %operation.id, %error, "cos retry follow-up failed");
     }
@@ -421,6 +435,7 @@ pub(crate) fn retry_op(
 /// `running` / `reviewing` は受け付けるが**次の run から効く**（走っている run は止めない）。
 pub(super) async fn patch_task(
     State(state): State<ApiState>,
+    caller: Caller,
     Params(id): Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -432,8 +447,11 @@ pub(super) async fn patch_task(
     let body: TaskPatchBody = read_json(body, true).await?;
     let genres = state.inner.genres.clone();
     let clusters = super::cluster_ids(&state);
+    let by = caller.actor();
     let result = state
-        .blocking(move |store| patch_task_op(store, &genres, &clusters, id, body, None)?.direct())
+        .blocking(move |store| {
+            patch_task_op(store, &genres, &clusters, id, body, &by, None)?.direct()
+        })
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
@@ -449,6 +467,7 @@ pub(crate) fn patch_task_op(
         mut task,
         expected_write_paths,
     }: TaskPatchBody,
+    by: &str,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::edit::EditResult>, ApiProblem> {
     let target_id = id.to_string();
@@ -476,7 +495,6 @@ pub(crate) fn patch_task_op(
         task.workspace = Some(super::validated_workspace_in(clusters, spec).map_err(reject)?);
     }
     let now = OffsetDateTime::now_utc();
-    let by = if audit.is_some() { "cos" } else { "human" };
     let plan = if task.is_empty() {
         let existing = store
             .get(id)
@@ -593,6 +611,7 @@ pub(super) async fn list_comments(
 /// 割り込み（`running`/`reviewing`）・回答（`blocked`）・記録（その他）になる。
 pub(super) async fn create_comment(
     State(state): State<ApiState>,
+    caller: Caller,
     Params(id): Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -602,8 +621,9 @@ pub(super) async fn create_comment(
     require_admin(&state, &headers)?;
     let id = parse_task_id(&id)?;
     let body: CommentBody = read_json(body, false).await?;
+    let by = caller.actor();
     let result = state
-        .blocking(move |store| create_comment_op(store, id, body, None)?.direct())
+        .blocking(move |store| create_comment_op(store, id, body, &by, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::CREATED, &result))
 }
@@ -614,16 +634,23 @@ pub(crate) fn create_comment_op(
     store: &task_core::store::SqliteStore,
     id: task_core::TaskId,
     CommentBody { body }: CommentBody,
+    by: &str,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::comment::CommentResult>, ApiProblem> {
     let now = OffsetDateTime::now_utc();
     let Some(audit) = audit else {
-        return task_ops::comment::post_human_comment(store, id, body, now)
-            .map(Applied::Direct)
-            .map_err(|e| ops_problem(store, e, Some("comment")));
+        return task_ops::comment::post_human_comment_as(
+            store,
+            id,
+            Some(by.to_string()),
+            body,
+            now,
+        )
+        .map(Applied::Direct)
+        .map_err(|e| ops_problem(store, e, Some("comment")));
     };
     let target_id = id.to_string();
-    let plan = task_ops::comment::plan_human_comment(store, id, Some("cos".into()), body, now)
+    let plan = task_ops::comment::plan_human_comment(store, id, Some(by.to_string()), body, now)
         .map_err(|e| {
             audit.reject(
                 store,
@@ -853,7 +880,7 @@ pub(crate) fn answer_op(
     })?;
     // ADR 2026-10-22-plan-issue-answer-replans D1: CoS の代理回答も人の経路と同じ意図の検証と events。
     let intent_events =
-        task_ops::gate::answer_intent_events(store, id, &question, &answer, intent, "cos")
+        task_ops::gate::answer_intent_events(store, id, &question, &answer, intent, &audit.by())
             .map_err(|e| {
                 audit.reject(
                     store,

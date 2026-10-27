@@ -89,46 +89,69 @@ async fn task_integrations(
 
 async fn discard(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params((raw_id, repo)): Params<(String, String)>,
     body: Body,
 ) -> ApiResult {
     let input: ReasonBody = read_json(body, false).await?;
-    disposition(state, headers, raw_id, repo, input.reason, true).await
+    disposition(
+        state,
+        headers,
+        caller.actor(),
+        raw_id,
+        repo,
+        input.reason,
+        true,
+    )
+    .await
 }
 async fn hold(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params((raw_id, repo)): Params<(String, String)>,
     body: Body,
 ) -> ApiResult {
     let input: ReasonBody = read_json(body, false).await?;
-    disposition(state, headers, raw_id, repo, input.reason, false).await
+    disposition(
+        state,
+        headers,
+        caller.actor(),
+        raw_id,
+        repo,
+        input.reason,
+        false,
+    )
+    .await
 }
 async fn reopen(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params((raw_id, repo)): Params<(String, String)>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
     no_query(&raw)?;
     require_human(&state, &headers)?;
-    mutate_simple(state, raw_id, repo, Action::Reopen).await
+    mutate_simple(state, caller.actor(), raw_id, repo, Action::Reopen).await
 }
 async fn merge(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params((raw_id, repo)): Params<(String, String)>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
     no_query(&raw)?;
     require_human(&state, &headers)?;
-    mutate_simple(state, raw_id, repo, Action::Merge).await
+    mutate_simple(state, caller.actor(), raw_id, repo, Action::Merge).await
 }
 
 async fn disposition(
     state: ApiState,
     headers: HeaderMap,
+    by: String,
     raw_id: String,
     repo: String,
     reason: String,
@@ -145,9 +168,9 @@ async fn disposition(
         .blocking(move |store| {
             let repo_id = resolve_repo(store, id, &repo_name)?;
             let result = if discard {
-                task_ops::stranded::discard(store, id, repo_id, &reason, "human", now)
+                task_ops::stranded::discard(store, id, repo_id, &reason, &by, now)
             } else {
-                task_ops::stranded::hold(store, id, repo_id, &reason, "human", now)
+                task_ops::stranded::hold(store, id, repo_id, &reason, &by, now)
             };
             result.map_err(invalid_problem)?;
             state_row(store, id, repo_id)
@@ -177,7 +200,13 @@ enum Action {
     Reopen,
     Merge,
 }
-async fn mutate_simple(state: ApiState, raw_id: String, repo: String, action: Action) -> ApiResult {
+async fn mutate_simple(
+    state: ApiState,
+    by: String,
+    raw_id: String,
+    repo: String,
+    action: Action,
+) -> ApiResult {
     let id = parse_task_id(&raw_id)?;
     let now = time::OffsetDateTime::now_utc();
     let roots = state.inner.view.workspace_roots.clone();
@@ -186,7 +215,7 @@ async fn mutate_simple(state: ApiState, raw_id: String, repo: String, action: Ac
             let repo_id = resolve_repo(store, id, &repo)?;
             let (integrated, reason) = match action {
                 Action::Reopen => {
-                    task_ops::stranded::reopen(store, id, repo_id, "human", now)
+                    task_ops::stranded::reopen(store, id, repo_id, &by, now)
                         .map_err(invalid_problem)?;
                     (false, None)
                 }
@@ -231,7 +260,7 @@ async fn mutate_simple(state: ApiState, raw_id: String, repo: String, action: Ac
                             branch: &state_row(store, id, repo_id)?.branch,
                             head: &state_row(store, id, repo_id)?.head_sha,
                             default_branch: &default_branch,
-                            actor: "human",
+                            actor: &by,
                             now,
                         },
                     )

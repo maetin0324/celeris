@@ -385,3 +385,16 @@ fn task_workspace_root_pin_once() {
 fn workspace_root_priority_cli_store_config() {
     local_machine::tests::workspace_root_priority_cli_store_config();
 }
+
+/// `by`・`actor` が CoS の書いたものか（ADR 2026-10-27-api-principals: 新しい記録は `cos:<thread_id>`、
+/// それ以前の追記済み event は `cos`）。
+pub fn is_cos_actor(by: &str) -> bool {
+    by == "cos" || by.starts_with("cos:")
+}
+
+/// `by`・`actor` が API の要求の主体（`human:` / `operator:` / `mcp:` / `cos:` + 名前）か。
+pub fn is_principal_actor(by: &str) -> bool {
+    ["human:", "operator:", "mcp:", "cos:"]
+        .iter()
+        .any(|p| by.strip_prefix(p).is_some_and(|rest| !rest.is_empty()))
+}

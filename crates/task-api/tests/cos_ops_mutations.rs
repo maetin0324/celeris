@@ -96,7 +96,7 @@ async fn cos_ops_mutations_decision_revise_and_withdraw() {
     assert!(events.iter().any(|(_, e)| matches!(
         e,
         Event::DecisionAnswered { id, by, option, .. }
-            if id == "dec-revise" && by == "cos" && option == "manual"
+            if id == "dec-revise" && task_core::is_cos_actor(by) && option == "manual"
     )));
 
     // withdraw: an open decision is withdrawn by cos (the body may be omitted).
@@ -256,7 +256,7 @@ async fn cos_ops_mutations_execution_decompose() {
         .events_for(task.id)
         .expect("events")
         .iter()
-        .any(|(_, event)| matches!(event, Event::ExecutionHintSet { source, mode: task_core::ExecutionMode::Compound, .. } if source == "cos")));
+        .any(|(_, event)| matches!(event, Event::ExecutionHintSet { source, mode: task_core::ExecutionMode::Compound, .. } if task_core::is_cos_actor(source))));
 }
 
 #[tokio::test]
@@ -436,7 +436,7 @@ async fn cos_ops_mutations_task_edit_pause_resume_reopen_retry() {
     let events = env.store.events_for(ready.id).expect("events");
     assert!(events.iter().any(|(_, e)| matches!(
         e,
-        Event::Edited { fields, by } if by == "cos" && fields == &vec!["title".to_string()]
+        Event::Edited { fields, by } if task_core::is_cos_actor(by) && fields == &vec!["title".to_string()]
     )));
 
     run_domain(

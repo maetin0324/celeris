@@ -288,7 +288,12 @@ async fn cos_chat_ops_api_comment_and_decision_answer_use_the_shared_operations(
     assert_eq!(resp.json()["operation"]["action"], "comment.create");
     let comments = env.store.comments_for(task.id).expect("comments");
     assert_eq!(comments.len(), 1);
-    assert_eq!(comments[0].author.as_deref(), Some("cos"));
+    assert!(
+        comments[0]
+            .author
+            .as_deref()
+            .is_some_and(task_core::is_cos_actor)
+    );
 
     let opt = |key: &str| DecisionOption {
         key: key.into(),
@@ -342,7 +347,7 @@ async fn cos_chat_ops_api_comment_and_decision_answer_use_the_shared_operations(
     let events = env.store.events_for(task.id).expect("events");
     assert!(events.iter().any(|(_, e)| matches!(
         e,
-        Event::DecisionAnswered { by, option, .. } if by == "cos" && option == "vault"
+        Event::DecisionAnswered { by, option, .. } if task_core::is_cos_actor(by) && option == "vault"
     )));
     // Answering again is a domain conflict: rejected, recorded, the decision unchanged.
     let again = post_op(

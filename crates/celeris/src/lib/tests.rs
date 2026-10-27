@@ -376,7 +376,7 @@ fn api_settings_carries_secrets_dir_and_usage() {
     let settings = api_settings(
         &cfg,
         "127.0.0.1:7710".parse().unwrap_or_else(|e| panic!("{e}")),
-        None,
+        Vec::new(),
         "i".into(),
         "t".into(),
         None,

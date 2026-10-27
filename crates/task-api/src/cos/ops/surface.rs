@@ -489,7 +489,7 @@ pub(crate) fn dispatch(
                 audit,
                 ("browser_site_policy", &policy_id),
                 matched.action,
-                || crate::browser_site_policies::upsert_policy(store, &policy, "cos"),
+                || crate::browser_site_policies::upsert_policy(store, &policy, &audit.by()),
             )
         }
         "browser.site_policy_delete" => {
@@ -501,7 +501,7 @@ pub(crate) fn dispatch(
                 ("browser_site_policy", &policy_id),
                 matched.action,
                 || {
-                    crate::browser_site_policies::delete_policy(store, &policy_id, "cos")
+                    crate::browser_site_policies::delete_policy(store, &policy_id, &audit.by())
                         .map(|()| serde_json::json!({"policy_id": policy_id, "deleted": true}))
                 },
             )

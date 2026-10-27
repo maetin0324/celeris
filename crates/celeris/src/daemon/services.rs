@@ -57,6 +57,7 @@ impl RunningMcp {
 /// しない）。`[mcp]` は独立の DB 接続を持つ（`task-api` の `ApiState` と同じ多重接続の流儀）。
 pub(crate) fn build_mcp_state(
     config: &Config,
+    mcp_token: Option<String>,
 ) -> Result<Option<Arc<celeris_mcp::McpState>>, DaemonError> {
     if !config.mcp.effective_enabled() {
         return Ok(None);
@@ -73,10 +74,10 @@ pub(crate) fn build_mcp_state(
         true,
     )
     .map_err(|e| ApiError::Startup(format!("mcp: could not open the store: {e}")))?;
-    // ADR 2026-10-23-mcp-read-only-db-and-api D5: `api_get` は `[api] listen` の loopback へ、
-    // `[api] token_file` の token で GET を代行する（llm-proxy と同じ経路）。`listen` が無ければ置かない。
+    // ADR 2026-10-23-mcp-read-only-db-and-api D5 / ADR 2026-10-27-api-principals D4: `api_get` は `[api] listen`
+    // の loopback へ、起動ごとの MCP 専用 token と客の id で GET を代行する。`listen` が無ければ置かない。
     if let Some(listen) = config.api.listen {
-        let token = config.api.read_token()?;
+        let token = mcp_token;
         let target = celeris_mcp::tools::api::ApiTarget::from_listen(listen, token)
             .map_err(|e| ApiError::Startup(format!("mcp: {e}")))?;
         state.set_api_target(target);
@@ -120,7 +121,7 @@ pub(crate) async fn start_mcp(
 /// しない。`GET /llm/sources`（主 API）とプロキシ自身の両方がこの同じ `Arc` を使うため、`run()` が
 /// 主 API の起動より前に 1 度だけ呼ぶ）。アカウントプール（cooldown・観測値）はディスパッチャの帳簿を
 /// **そのまま共有する**（`crates/task-dispatch/src/dispatcher.rs` の `account_book`。別の写しを作らない）。
-/// Bearer は `[api] token_file` と同じ（`docs/guides/llm-source.md`）。
+/// Bearer は `[llm_proxy] token_file`（ADR 2026-10-27-api-principals D6。`docs/guides/llm-source.md`）。
 pub(crate) fn build_llm_proxy_state(
     config: &mut Config,
     dispatcher: &mut Dispatcher,
@@ -130,7 +131,7 @@ pub(crate) fn build_llm_proxy_state(
     if !config.llm_proxy.effective_enabled() {
         return Ok(None);
     }
-    let token = config.api.read_token()?;
+    let token = config.llm_proxy_token()?;
     let client = reqwest::Client::builder().build().map_err(|e| {
         ApiError::Startup(format!("llm-proxy: could not build the HTTP client: {e}"))
     })?;

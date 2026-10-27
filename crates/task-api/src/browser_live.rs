@@ -152,7 +152,7 @@ pub(crate) fn verify(
         return Err(invalid());
     }
     Ok(LiveViewer {
-        auth_enabled: state.inner.token_digest.is_some(),
+        auth_enabled: state.inner.auth_enabled(),
         single_owner_instance: true,
         session_id: Some(claims.owner_session_id),
         owner_session: claims.owner_session,
@@ -389,7 +389,7 @@ async fn event(
 ) -> Result<Json<EventResponse>, ApiProblem> {
     let body = parse_body(body)?;
     // Worker calls this with the daemon bearer. The current run and task are checked before writing.
-    if state.inner.token_digest.is_none() {
+    if !state.inner.auth_enabled() {
         return Err(denied(LiveDenied::LiveViewDisabled));
     }
     let target = target(&state, &path).await?;
@@ -407,7 +407,7 @@ fn event_checked(
     target: &LiveTarget,
     body: EventBody,
 ) -> Result<ScrubbedLiveEvent, ApiProblem> {
-    if state.inner.token_digest.is_none() {
+    if !state.inner.auth_enabled() {
         return Err(denied(LiveDenied::LiveViewDisabled));
     }
     if !target.run_active {
@@ -459,7 +459,7 @@ pub(crate) fn event_op(
             "invalid live request",
         ))
     })?;
-    if state.inner.token_digest.is_none() {
+    if !state.inner.auth_enabled() {
         return Err(reject(denied(LiveDenied::LiveViewDisabled)));
     }
     let scrubbed = target_in(store, &path)

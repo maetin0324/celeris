@@ -264,7 +264,7 @@ async fn human_put_v3_goes_through_the_tree_path_without_plan_gate() {
     assert_eq!(tree.depth, 2);
     assert!(events(&env, done.id).iter().any(|e| matches!(
         e,
-        Event::Edited { fields, by } if fields == &vec!["tree".to_string(), "parent_id".to_string()] && by == "human"
+        Event::Edited { fields, by } if fields == &vec!["tree".to_string(), "parent_id".to_string()] && by == "human:test"
     )));
     // root は案件の root task のまま、採用した task は root task ではなくなる。
     assert!(task_core::is_root_task(

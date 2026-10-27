@@ -127,7 +127,7 @@ pub(crate) fn stop_task(store: &SqliteStore, task_id: &str) -> Result<usize, Api
 
 fn require_daemon(state: &ApiState) -> Result<(), ApiProblem> {
     // worker は daemon bearer で呼ぶ（middleware が検査済み）。認証が無い構成では開かない。
-    if state.inner.token_digest.is_none() {
+    if !state.inner.auth_enabled() {
         return Err(ApiProblem::new(
             StatusCode::FORBIDDEN,
             "browser_control_disabled",

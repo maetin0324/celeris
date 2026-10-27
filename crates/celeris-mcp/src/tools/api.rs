@@ -1,6 +1,6 @@
 //! ADR 2026-10-23-mcp-read-only-db-and-api D5: `api_get`（scope `api:read`）。
 //!
-//! daemon の中から `[api] listen` の loopback へ、`[api] token_file` の token で **GET だけ**を代行する
+//! daemon の中から `[api] listen` の loopback へ、起動ごとの MCP 専用 token（ADR 2026-10-27-api-principals D4）で **GET だけ**を代行する
 //! （llm-proxy と同じ経路。MCP の客に token は渡らない）。path は `/api/v1/` の下に限り、秘密を返し得る
 //! endpoint は拒否リスト（`DENIED_PATHS` / `DENIED_SEGMENTS`）で止める。
 
@@ -65,6 +65,9 @@ pub const DENIED_SEGMENTS: &[&str] = &[
     "passwords",
     "login",
 ];
+
+/// 客の id を API へ運ぶ header（`task_api::principal::MCP_CLIENT_HEADER` と同じ値）。
+pub const MCP_CLIENT_HEADER: &str = "x-celeris-mcp-client";
 
 /// API への GET の宛先（daemon が `[api]` から組み立てて `McpState::set_api_target` で渡す）。
 #[derive(Clone)]
@@ -246,7 +249,7 @@ pub fn check_request(args: &ApiGetArgs) -> Result<Vec<(String, String)>, ToolErr
 
 fn call_get<'a>(
     state: &'a Arc<McpState>,
-    _client: &'a AuthedClient,
+    client: &'a AuthedClient,
     args: serde_json::Value,
 ) -> ToolCallFuture<'a> {
     Box::pin(async move {
@@ -263,7 +266,11 @@ fn call_get<'a>(
         if !pairs.is_empty() {
             url.query_pairs_mut().extend_pairs(&pairs);
         }
-        let mut req = target.client.get(url);
+        // ADR 2026-10-27-api-principals D4: API は MCP 専用 token と一緒に来た客の id を主体（mcp:<id>）にする。
+        let mut req = target
+            .client
+            .get(url)
+            .header(MCP_CLIENT_HEADER, client.id.as_str());
         if let Some(token) = &target.token {
             req = req.bearer_auth(token);
         }

@@ -98,7 +98,12 @@ async fn spawn_api(
     let settings = api_settings(
         config,
         addr,
-        Some(TOKEN.into()),
+        vec![task_api::ApiToken::new(
+            task_api::Principal::Human {
+                name: "test".into(),
+            },
+            TOKEN,
+        )],
         "i".into(),
         "t".into(),
         Some(admin_tx),

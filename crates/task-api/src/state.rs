@@ -68,9 +68,19 @@ fn system_clock() -> ApiClock {
     Arc::new(|| time::OffsetDateTime::now_utc().unix_timestamp())
 }
 
+impl Inner {
+    /// 管理 API の token が 1 本でもあるか（無ければ loopback だけの無認証の構成）。
+    pub(crate) fn auth_enabled(&self) -> bool {
+        !self.token_digests.is_empty()
+    }
+}
+
 pub(crate) struct Inner {
     pub(crate) store: Arc<SqliteStore>,
-    pub(crate) token_digest: Option<[u8; 32]>,
+    /// `[[api.tokens]]` の SHA-256 と主体（ADR 2026-10-27-api-principals）。空なら認証しない。
+    pub(crate) token_digests: Vec<([u8; 32], crate::principal::Principal)>,
+    /// MCP 専用 token の SHA-256。
+    pub(crate) mcp_token_digest: Option<[u8; 32]>,
     pub(crate) allowed_hosts: Vec<String>,
     pub(crate) journal_mode: String,
     pub(crate) busy_timeout_ms: u64,
@@ -169,7 +179,12 @@ impl ApiState {
         };
         let inner = Inner {
             store: Arc::new(store),
-            token_digest: settings.token.as_deref().map(token_digest),
+            token_digests: settings
+                .tokens
+                .iter()
+                .map(|t| (token_digest(&t.token), t.principal.clone()))
+                .collect(),
+            mcp_token_digest: settings.mcp_token.as_deref().map(token_digest),
             allowed_hosts: allowed_host_list(settings.listen, &settings.allowed_hosts),
             journal_mode,
             busy_timeout_ms: u64::try_from(settings.busy_timeout.as_millis()).unwrap_or(u64::MAX),

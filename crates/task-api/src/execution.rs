@@ -128,6 +128,7 @@ async fn get_execution_plan(
 
 async fn post_execution_plan(
     axum::extract::State(state): axum::extract::State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params(id): Params<String>,
     axum::extract::RawQuery(raw): axum::extract::RawQuery,
@@ -135,6 +136,7 @@ async fn post_execution_plan(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
+    let by = caller.actor();
     let task_id = parse_task_id(&id)?;
     let spec: task_core::ExecutionPlanSpec = read_json(body, false).await?;
     // ADR-0079 R5b-prep: daemon と同じ実効の上限（`[execution.tree]` 以外は既定。celeris の `dispatch_config` と同じ）。
@@ -144,7 +146,7 @@ async fn post_execution_plan(
     };
     let view = state
         .blocking(move |store| {
-            let adopted = execution_plan_adopt_op(store, task_id, spec, limits, None)?.direct()?;
+            let adopted = execution_plan_adopt_op(store, task_id, spec, limits, &by, None)?.direct()?;
             if let Err(e) = task_ops::regate::record_human_plan_gate(
                 store,
                 task_id,
@@ -173,6 +175,7 @@ pub(crate) fn execution_plan_adopt_op(
     task_id: task_core::TaskId,
     spec: task_core::ExecutionPlanSpec,
     limits: task_core::ExecutionLimits,
+    by: &str,
     audit: Option<&crate::cos::operations::OperationAudit>,
 ) -> Result<crate::cos::operations::Applied<task_ops::execution::HumanPlanAdopted>, ApiProblem> {
     let target = task_id.to_string();
@@ -181,7 +184,7 @@ pub(crate) fn execution_plan_adopt_op(
         task_id,
         spec,
         limits,
-        "human",
+        by,
         OffsetDateTime::now_utc(),
     )
     .map_err(|e| {
@@ -219,7 +222,7 @@ pub(crate) fn execution_plan_adopt_op(
         task_ops::execution::record_human_plan_notice(
             store,
             &prepared.result,
-            "human",
+            by,
             OffsetDateTime::now_utc(),
         );
         Ok(crate::cos::operations::Applied::Audited(Box::new(op)))
@@ -245,7 +248,7 @@ pub(crate) fn execution_plan_adopt_op(
         task_ops::execution::record_human_plan_notice(
             store,
             &prepared.result,
-            "human",
+            by,
             OffsetDateTime::now_utc(),
         );
         Ok(crate::cos::operations::Applied::Direct(prepared.result))
@@ -258,6 +261,7 @@ pub(crate) fn execution_plan_adopt_op(
 /// ほかの欄（`checks` など）は上書きできる（`replan.overridden_done`、`Event::WorkUnitSpecOverridden`）。
 async fn put_execution_plan(
     axum::extract::State(state): axum::extract::State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params(id): Params<String>,
     axum::extract::RawQuery(raw): axum::extract::RawQuery,
@@ -265,6 +269,7 @@ async fn put_execution_plan(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
+    let by = caller.actor();
     let task_id = parse_task_id(&id)?;
     let spec: task_core::ExecutionPlanSpec = read_json(body, false).await?;
     let limits = ExecutionLimits {
@@ -293,7 +298,7 @@ async fn put_execution_plan(
                 (StatusCode::OK, plan, Vec::new(), 0, Some(diff))
             } else {
                 let adopted = task_ops::execution::adopt_human_plan(
-                    store, task_id, spec, limits, "human", now,
+                    store, task_id, spec, limits, &by, now,
                 )
                 .map_err(|e| ops_problem(store, e, Some("execution_plan_adopt")))?;
                 // ADR-0079「R5b-fix3」: POST と同じく、人の計画の採用は gate の記録を人の compound にする。
@@ -412,6 +417,7 @@ pub(crate) fn put_plan_audited(
 /// unit が既に子を持つか pending / ready でない・計画を持つ task が終端・競合。
 async fn post_tree_adopt(
     axum::extract::State(state): axum::extract::State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params(id): Params<String>,
     axum::extract::RawQuery(raw): axum::extract::RawQuery,
@@ -419,11 +425,12 @@ async fn post_tree_adopt(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
+    let by = caller.actor();
     let task_id = parse_task_id(&id)?;
     let req: task_ops::tree_adopt::AdoptRequest = read_json(body, false).await?;
     let limits = state.inner.tree_limits;
     let outcome = state
-        .blocking(move |store| tree_adopt_op(store, task_id, req, limits, None)?.direct())
+        .blocking(move |store| tree_adopt_op(store, task_id, req, limits, &by, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "tree_adopt", task_id = %task_id, unit = %outcome.unit_key, adopted = %outcome.task_id, "admin: task adopted into the tree");
     Ok(json_response(StatusCode::OK, &outcome))
@@ -434,6 +441,7 @@ pub(crate) fn tree_adopt_op(
     task_id: task_core::TaskId,
     req: task_ops::tree_adopt::AdoptRequest,
     limits: task_core::TreeLimits,
+    by: &str,
     audit: Option<&crate::cos::operations::OperationAudit>,
 ) -> Result<crate::cos::operations::Applied<task_ops::tree_adopt::AdoptionOutcome>, ApiProblem> {
     let target_id = task_id.to_string();
@@ -442,7 +450,7 @@ pub(crate) fn tree_adopt_op(
         task_id,
         &req,
         &limits,
-        "human",
+        by,
         OffsetDateTime::now_utc(),
     )
     .map_err(|e| {
@@ -680,6 +688,7 @@ pub(crate) fn phase_gate_op(
 /// 無い task は 404。応答は `TransitionResult`。
 async fn post_plan_gate(
     axum::extract::State(state): axum::extract::State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params(id): Params<String>,
     axum::extract::RawQuery(raw): axum::extract::RawQuery,
@@ -687,13 +696,14 @@ async fn post_plan_gate(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
+    let by = caller.actor();
     let task_id = parse_task_id(&id)?;
     let req: task_ops::plan_gate::PlanGateRequest = read_json(body, false).await?;
     let action = req.action;
     let result = state
         .blocking(move |store| {
-            task_ops::plan_gate::plan_gate(store, task_id, req.action, req.note, "human").map_err(
-                |e| match e {
+            task_ops::plan_gate::plan_gate(store, task_id, req.action, req.note, &by).map_err(|e| {
+                match e {
                     task_ops::OpsError::Validation(message) => {
                         ApiProblem::validation(vec![crate::types::ValidationError {
                             field: Some("note".to_string()),
@@ -701,8 +711,8 @@ async fn post_plan_gate(
                         }])
                     }
                     other => ops_problem(store, other, Some("plan_gate")),
-                },
-            )
+                }
+            })
         })
         .await?;
     tracing::info!(who = "admin", op = "plan_gate", task_id = %task_id, action = action.as_str(), to = ?result.to, "admin: plan gate");
@@ -717,6 +727,7 @@ async fn post_plan_gate(
 /// `atomic`。422: gate の対象外・`note` が長すぎる。
 async fn post_decompose(
     axum::extract::State(state): axum::extract::State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params(id): Params<String>,
     axum::extract::RawQuery(raw): axum::extract::RawQuery,
@@ -724,10 +735,11 @@ async fn post_decompose(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
+    let by = caller.actor();
     let task_id = parse_task_id(&id)?;
     let req: task_ops::regate::DecomposeRequest = read_json(body, false).await?;
     let result = state
-        .blocking(move |store| decompose_op(store, task_id, req, None)?.direct())
+        .blocking(move |store| decompose_op(store, task_id, req, &by, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "execution_decompose", task_id = %task_id, mode = result.mode.as_str(), replan = result.replan, "admin: execution mode set by a human");
     Ok(json_response(StatusCode::OK, &result))
@@ -737,6 +749,7 @@ pub(crate) fn decompose_op(
     store: &task_core::store::SqliteStore,
     task_id: task_core::TaskId,
     req: task_ops::regate::DecomposeRequest,
+    by: &str,
     audit: Option<&crate::cos::operations::OperationAudit>,
 ) -> Result<crate::cos::operations::Applied<task_ops::regate::DecomposeResult>, ApiProblem> {
     use crate::cos::operations::Applied;
@@ -745,7 +758,7 @@ pub(crate) fn decompose_op(
             store,
             task_id,
             req.mode,
-            "human",
+            by,
             req.note,
             OffsetDateTime::now_utc(),
         )
@@ -757,7 +770,7 @@ pub(crate) fn decompose_op(
         store,
         task_id,
         req.mode,
-        "cos",
+        by,
         req.note,
         OffsetDateTime::now_utc(),
     )
@@ -851,19 +864,20 @@ pub(crate) fn plan_gate_op(
     use task_ops::plan_gate::PlanGatePlan;
     let target_id = task_id.to_string();
     let action = req.action.as_str();
-    let plan = task_ops::plan_gate::plan_plan_gate(store, task_id, req.action, req.note, "cos")
-        .map_err(|e| {
-            let problem = match e {
-                task_ops::OpsError::Validation(message) => {
-                    ApiProblem::validation(vec![crate::types::ValidationError {
-                        field: Some("note".to_string()),
-                        message,
-                    }])
-                }
-                other => ops_problem(store, other, Some("plan_gate")),
-            };
-            audit.reject(store, "task", &target_id, problem)
-        })?;
+    let plan =
+        task_ops::plan_gate::plan_plan_gate(store, task_id, req.action, req.note, &audit.by())
+            .map_err(|e| {
+                let problem = match e {
+                    task_ops::OpsError::Validation(message) => {
+                        ApiProblem::validation(vec![crate::types::ValidationError {
+                            field: Some("note".to_string()),
+                            message,
+                        }])
+                    }
+                    other => ops_problem(store, other, Some("plan_gate")),
+                };
+                audit.reject(store, "task", &target_id, problem)
+            })?;
     let PlanGatePlan::Resume {
         trigger,
         extra,

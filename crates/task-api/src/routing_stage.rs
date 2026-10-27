@@ -106,9 +106,10 @@ async fn evidence(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Api
     Ok(json_response(StatusCode::OK, &list))
 }
 
-/// `POST /routing/stages` → 200 `RoutingStageView`（actor は `human`）。
+/// `POST /routing/stages` → 200 `RoutingStageView`（actor は要求の主体）。
 async fn set_stage(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     RawQuery(raw): RawQuery,
     body: Body,
 ) -> ApiResult {
@@ -129,6 +130,7 @@ async fn set_stage(
                     harness_id: body.harness_id,
                     stage: body.stage,
                     reason: body.reason,
+                    actor: caller.actor(),
                 },
                 &since,
             )

@@ -33,6 +33,10 @@ pub struct LlmProxyConfig {
     pub cooldown_fallback_secs: u64,
     #[serde(default)]
     pub sources: SourcesConfig,
+    /// proxy が照合する Bearer を書いた file（ADR 2026-10-27-api-principals D6。管理 API の token とは別）。
+    /// 無ければ proxy は認証しない。相対パスは設定ファイル基準。
+    #[serde(default)]
+    pub token_file: Option<std::path::PathBuf>,
     /// 削除済みの `[llm_proxy.models]`（tier alias）。書かれていれば読み込みエラーにする。
     #[serde(default, rename = "models")]
     pub removed_models: Option<RemovedModels>,
@@ -48,6 +52,7 @@ impl Default for LlmProxyConfig {
             max_concurrent_per_account: default_max_concurrent_per_account(),
             cooldown_fallback_secs: default_cooldown_fallback_secs(),
             sources: SourcesConfig::default(),
+            token_file: None,
             removed_models: None,
         }
     }

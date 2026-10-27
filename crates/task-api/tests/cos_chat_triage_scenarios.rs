@@ -312,7 +312,7 @@ async fn cos_chat_triage_a_answers_each_wait_kind_without_webhook() {
             .events_for(decision.id)
             .expect("events")
             .iter()
-            .any(|(_, e)| matches!(e, Event::DecisionAnswered { by, .. } if by == "cos"))
+            .any(|(_, e)| matches!(e, Event::DecisionAnswered { by, .. } if task_core::is_cos_actor(by)))
     );
     assert_eq!(env.status_of(question.id), Status::Ready);
     assert_ne!(env.status_of(plan.id), Status::Blocked);

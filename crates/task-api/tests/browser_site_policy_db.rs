@@ -145,9 +145,9 @@ async fn browser_site_policy_db_api_changes_reach_broker_without_restart() {
     assert_eq!(
         ops,
         vec![
-            ("manaba", "upsert", "api", "admin"),
-            ("manaba", "upsert", "api", "admin"),
-            ("manaba", "delete", "api", "admin"),
+            ("manaba", "upsert", "api", "human:test"),
+            ("manaba", "upsert", "api", "human:test"),
+            ("manaba", "delete", "api", "human:test"),
         ]
     );
 }

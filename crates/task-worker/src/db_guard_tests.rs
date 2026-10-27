@@ -569,7 +569,7 @@ fn daemon(db: PathBuf) -> DaemonPaths {
     DaemonPaths {
         db,
         state_dir: None,
-        token_file: None,
+        token_files: Vec::new(),
     }
 }
 
@@ -686,14 +686,14 @@ fn worker_db_guard_refuses_production_state_dir_subpath() {
 fn worker_db_guard_refuses_production_token_file_and_copied_token() {
     let p = prod();
     let mut same = daemon(test_db(&p));
-    same.token_file = Some(p.token.clone());
+    same.token_files = vec![p.token.clone()];
     assert_refused(judge_worker_db_guard(&protected(&p), &same, &inside(&p)));
 
     // 内容の写し（末尾の改行の違いも同じ token とみなす）。
     let copy = p.test.join("token");
     std::fs::write(&copy, PROD_TOKEN).unwrap();
     let mut copied = daemon(test_db(&p));
-    copied.token_file = Some(copy);
+    copied.token_files = vec![copy];
     let d = judge_worker_db_guard(&protected(&p), &copied, &inside(&p));
     match &d {
         GuardDecision::RefuseProduction { reason, .. } => {
@@ -712,7 +712,7 @@ fn worker_db_guard_refuses_production_token_file_and_copied_token() {
     let other = p.test.join("other-token");
     std::fs::write(&other, "test-token").unwrap();
     let mut with_token = daemon(test_db(&p));
-    with_token.token_file = Some(other);
+    with_token.token_files = vec![other];
     assert_refused(judge_worker_db_guard(&unreadable, &with_token, &inside(&p)));
 }
 
@@ -777,7 +777,7 @@ fn worker_db_guard_allows_test_db_with_test_token() {
     let token = p.test.join("token");
     std::fs::write(&token, "test-only-token\n").unwrap();
     let mut paths = daemon(test_db(&p));
-    paths.token_file = Some(token);
+    paths.token_files = vec![token];
     assert_eq!(
         judge_worker_db_guard(&protected(&p), &paths, &inside(&p)),
         GuardDecision::Exempt

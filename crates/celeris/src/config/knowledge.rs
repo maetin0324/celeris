@@ -217,11 +217,11 @@ impl Config {
     }
 
     /// ADR-0139 D2: langmem（とその dispatch 前 probe）に渡す鍵。proxy を指すなら proxy が照合する
-    /// `[api] token_file` の値（読めなければ `api_key_secret` に倒す）。それ以外は `api_key_secret` を
+    /// `[llm_proxy] token_file` の値（読めなければ `api_key_secret` に倒す）。それ以外は `api_key_secret` を
     /// `[secrets] dir` から解決した値。**値はログに出さない**。
     pub fn langmem_api_key(&self) -> Option<String> {
         if self.langmem_targets_llm_proxy()
-            && let Ok(Some(token)) = self.api.read_token()
+            && let Ok(Some(token)) = self.llm_proxy_token()
         {
             return Some(token);
         }
@@ -242,14 +242,14 @@ impl Config {
         }
         let mut out = Vec::new();
         if self.langmem_targets_llm_proxy() {
-            match self.api.read_token() {
+            match self.llm_proxy_token() {
                 Ok(Some(token)) => {
                     if lm.api_key_secret.is_some()
                         && self.langmem_secret_key().is_some_and(|key| key != token)
                     {
                         out.push(
-                            "[knowledge.langmem].api_key_secret differs from the [api] token that \
-                             llm-proxy checks; langmem uses the [api] token (ADR-0139 D2)"
+                            "[knowledge.langmem].api_key_secret differs from the [llm_proxy] token that \
+                             llm-proxy checks; langmem uses the [llm_proxy] token (ADR-0139 D2)"
                                 .to_string(),
                         );
                     }
@@ -257,14 +257,14 @@ impl Config {
                 Ok(None) | Err(_) => {
                     if self.langmem_secret_key().is_none() {
                         out.push(
-                            "[knowledge.langmem].base_url points at llm-proxy but neither [api] \
+                            "[knowledge.langmem].base_url points at llm-proxy but neither [llm_proxy] \
                              token_file nor api_key_secret is readable; langmem runs will get 401 \
                              (ADR-0139 D3)"
                                 .to_string(),
                         );
                     } else {
                         out.push(
-                            "[knowledge.langmem].base_url points at llm-proxy but [api] token_file \
+                            "[knowledge.langmem].base_url points at llm-proxy but [llm_proxy] token_file \
                              is not readable; falling back to api_key_secret (ADR-0139 D3)"
                                 .to_string(),
                         );

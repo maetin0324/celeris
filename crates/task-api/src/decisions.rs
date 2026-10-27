@@ -26,11 +26,6 @@ use crate::problem::{ApiProblem, ops_problem};
 use crate::query::{QueryParams, parse_task_id};
 use crate::state::ApiState;
 
-/// API から答えたときの `DecisionAnswered.by`（管理系のトークン = 人）。
-const HUMAN: &str = "human";
-/// CoS の `/cos/operations` から答えたときの `DecisionAnswered.by`。
-const COS: &str = "cos";
-
 pub(crate) fn routes() -> axum::Router<ApiState> {
     use axum::routing::{get, post};
     axum::Router::new()
@@ -78,6 +73,7 @@ async fn task_decisions(
 
 async fn answer(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params(id): Params<String>,
     RawQuery(raw): RawQuery,
@@ -87,8 +83,9 @@ async fn answer(
     require_admin(&state, &headers)?;
     let payload: DecisionAnswerBody = read_json(body, false).await?;
     let decision_id = id.clone();
+    let by = caller.actor();
     let outcome = state
-        .blocking(move |store| answer_op(store, &decision_id, payload, None)?.direct())
+        .blocking(move |store| answer_op(store, &decision_id, payload, &by, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "decision_answer", decision_id = %id, effect = outcome.effect.as_str(), resumed = outcome.resumed.len(), cancelled = outcome.cancelled.len(), "admin: decision answered");
     Ok(json_response(StatusCode::OK, &outcome))
@@ -101,12 +98,14 @@ pub(crate) fn answer_op(
     store: &task_core::store::SqliteStore,
     decision_id: &str,
     payload: DecisionAnswerBody,
+    by: &str,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::decision::DecisionOutcome>, ApiProblem> {
     let now = OffsetDateTime::now_utc();
     resolve_op(
         store,
         decision_id,
+        by,
         audit,
         "decision.answer",
         "decision_answer",
@@ -129,12 +128,14 @@ pub(crate) fn withdraw_op(
     store: &task_core::store::SqliteStore,
     decision_id: &str,
     payload: DecisionWithdrawBody,
+    by: &str,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::decision::DecisionOutcome>, ApiProblem> {
     let now = OffsetDateTime::now_utc();
     resolve_op(
         store,
         decision_id,
+        by,
         audit,
         "decision.withdraw",
         "decision_withdraw",
@@ -156,12 +157,14 @@ pub(crate) fn revise_op(
     store: &task_core::store::SqliteStore,
     decision_id: &str,
     payload: DecisionAnswerBody,
+    by: &str,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::decision::DecisionOutcome>, ApiProblem> {
     let now = OffsetDateTime::now_utc();
     resolve_op(
         store,
         decision_id,
+        by,
         audit,
         "decision.revise",
         "decision_revise",
@@ -185,6 +188,7 @@ pub(crate) fn revise_op(
 fn resolve_op(
     store: &task_core::store::SqliteStore,
     decision_id: &str,
+    by: &str,
     audit: Option<&OperationAudit>,
     action: &str,
     op: &str,
@@ -192,14 +196,14 @@ fn resolve_op(
     now: OffsetDateTime,
 ) -> Result<Applied<task_ops::decision::DecisionOutcome>, ApiProblem> {
     let Some(audit) = audit else {
-        let plan = plan(HUMAN).map_err(|e| ops_problem(store, e, Some(op)))?;
+        let plan = plan(by).map_err(|e| ops_problem(store, e, Some(op)))?;
         task_ops::decision::apply_plan(store, &plan)
             .map_err(|e| ops_problem(store, e, Some(op)))?;
         return task_ops::decision::finish_answer(store, plan, now)
             .map(Applied::Direct)
             .map_err(|e| ops_problem(store, e, Some(op)));
     };
-    let plan = plan(COS).map_err(|e| {
+    let plan = plan(by).map_err(|e| {
         audit.reject(
             store,
             "decision",
@@ -234,6 +238,7 @@ fn resolve_op(
 
 async fn withdraw(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params(id): Params<String>,
     RawQuery(raw): RawQuery,
@@ -243,8 +248,9 @@ async fn withdraw(
     require_admin(&state, &headers)?;
     let payload: DecisionWithdrawBody = read_json(body, true).await?;
     let decision_id = id.clone();
+    let by = caller.actor();
     let outcome = state
-        .blocking(move |store| withdraw_op(store, &decision_id, payload, None)?.direct())
+        .blocking(move |store| withdraw_op(store, &decision_id, payload, &by, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "decision_withdraw", decision_id = %id, cancelled = outcome.cancelled.len(), "admin: decision withdrawn");
     Ok(json_response(StatusCode::OK, &outcome))
@@ -252,6 +258,7 @@ async fn withdraw(
 
 async fn revise(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params(id): Params<String>,
     RawQuery(raw): RawQuery,
@@ -261,8 +268,9 @@ async fn revise(
     require_admin(&state, &headers)?;
     let payload: DecisionAnswerBody = read_json(body, false).await?;
     let decision_id = id.clone();
+    let by = caller.actor();
     let outcome = state
-        .blocking(move |store| revise_op(store, &decision_id, payload, None)?.direct())
+        .blocking(move |store| revise_op(store, &decision_id, payload, &by, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "decision_revise", decision_id = %id, notified = outcome.notified_children.len(), "admin: decision revised");
     Ok(json_response(StatusCode::OK, &outcome))

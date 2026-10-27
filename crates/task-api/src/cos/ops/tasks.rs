@@ -163,6 +163,7 @@ pub(crate) fn dispatch(
                 store,
                 id,
                 input,
+                &audit.by(),
                 Some(audit),
             )?)
         }
@@ -175,6 +176,7 @@ pub(crate) fn dispatch(
                 id,
                 req,
                 env.tree_limits,
+                &audit.by(),
                 Some(audit),
             )?)
         }
@@ -190,6 +192,7 @@ pub(crate) fn dispatch(
                     tree: env.tree_limits,
                     ..task_core::ExecutionLimits::default()
                 },
+                &audit.by(),
                 Some(audit),
             )?)
         }
@@ -202,6 +205,7 @@ pub(crate) fn dispatch(
                 store,
                 id,
                 input,
+                &audit.by(),
                 Some(audit),
             )?)
         }
@@ -245,6 +249,7 @@ pub(crate) fn dispatch(
                         &env.clusters,
                         id,
                         input,
+                        &audit.by(),
                         Some(audit),
                     )?)
                 }
@@ -265,6 +270,7 @@ pub(crate) fn dispatch(
                         id,
                         input,
                         None,
+                        &audit.by(),
                         Some(audit),
                     )?)
                 }

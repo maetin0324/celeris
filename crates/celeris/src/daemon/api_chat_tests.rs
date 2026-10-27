@@ -43,7 +43,12 @@ async fn chat_wiring_passes_data_dir_and_limits_to_api() {
     let settings = api_settings(
         &cfg,
         addr,
-        Some(TOKEN.into()),
+        vec![task_api::ApiToken::new(
+            task_api::Principal::Human {
+                name: "test".into(),
+            },
+            TOKEN,
+        )],
         "i".into(),
         "t".into(),
         None,

@@ -316,7 +316,7 @@ pub(crate) fn worker_db_guard_precheck(
         daemon = DaemonPaths {
             db: PathBuf::from("/dev/null"),
             state_dir: Some(dir),
-            token_file: daemon.token_file,
+            token_files: daemon.token_files,
         };
     }
     let protected = worker_db_guard_protected_set(home);
@@ -414,21 +414,48 @@ pub(crate) fn worker_db_guard_protected_set(home: Option<&Path>) -> ProtectedSet
             path.display()
         )),
     }
-    // `[api] token_file` は相対なら config のディレクトリ基準（`~` は展開しない。`ApiConfig::resolve_paths`）。
+    // token の file は相対なら config のディレクトリ基準（`~` は展開しない。`ApiConfig::resolve_paths`）。
+    // `[[api.tokens]]` の全てと `[llm_proxy] token_file` を守る（ADR 2026-10-27-api-principals D6）。本番 config が
+    // 移行前（削除済みの `[api] token_file`）でも、その file は本番の token なので守る側に数える。
+    let add_token = |set: &mut ProtectedSet, v: Option<&toml::Value>, what: &str| match v {
+        None => {}
+        Some(toml::Value::String(s)) => set.add_token_file(&resolve(s, false)),
+        Some(_) => set.mark_unknown(format!(
+            "production config {}: invalid {what}",
+            path.display()
+        )),
+    };
     match value.get("api") {
         None => {}
-        Some(toml::Value::Table(api)) => match api.get("token_file") {
-            None => {}
-            Some(toml::Value::String(s)) => set.add_token_file(&resolve(s, false)),
-            Some(_) => set.mark_unknown(format!(
-                "production config {}: invalid [api] token_file",
-                path.display()
-            )),
-        },
+        Some(toml::Value::Table(api)) => {
+            add_token(&mut set, api.get("token_file"), "[api] token_file");
+            match api.get("tokens") {
+                None => {}
+                Some(toml::Value::Array(tokens)) => {
+                    for token in tokens {
+                        match token {
+                            toml::Value::Table(t) => add_token(
+                                &mut set,
+                                t.get("token_file"),
+                                "[[api.tokens]] token_file",
+                            ),
+                            _ => add_token(&mut set, Some(token), "[[api.tokens]]"),
+                        }
+                    }
+                }
+                Some(other) => add_token(&mut set, Some(other), "[[api.tokens]]"),
+            }
+        }
         Some(_) => set.mark_unknown(format!(
             "production config {}: invalid [api]",
             path.display()
         )),
+    }
+    match value.get("llm_proxy") {
+        Some(toml::Value::Table(proxy)) => {
+            add_token(&mut set, proxy.get("token_file"), "[llm_proxy] token_file")
+        }
+        None | Some(_) => {}
     }
     set
 }
@@ -438,7 +465,7 @@ pub(crate) fn worker_db_guard_daemon_paths(config: &Config) -> DaemonPaths {
     DaemonPaths {
         db: config.db.path.clone(),
         state_dir: None,
-        token_file: config.api.token_file.clone(),
+        token_files: config.token_files(),
     }
 }
 

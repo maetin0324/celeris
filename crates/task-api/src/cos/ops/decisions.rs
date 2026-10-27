@@ -64,6 +64,7 @@ pub(crate) fn dispatch(
                 store,
                 &decision_id,
                 input,
+                &audit.by(),
                 Some(audit),
             )?)
         }
@@ -74,6 +75,7 @@ pub(crate) fn dispatch(
                 store,
                 &decision_id,
                 input,
+                &audit.by(),
                 Some(audit),
             )?)
         }
@@ -84,6 +86,7 @@ pub(crate) fn dispatch(
                 store,
                 &decision_id,
                 input,
+                &audit.by(),
                 Some(audit),
             )?)
         }

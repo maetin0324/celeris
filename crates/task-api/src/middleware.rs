@@ -8,13 +8,14 @@
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use sha2::{Digest, Sha256};
 use ulid::Ulid;
 
 use crate::MAX_BODY_BYTES;
+use crate::principal::{MCP_CLIENT_HEADER, Principal, valid_client_id};
 use crate::problem::{ApiProblem, PendingProblem};
 use crate::state::ApiState;
 
@@ -31,7 +32,12 @@ pub(crate) async fn guard(State(state): State<ApiState>, mut req: Request, next:
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let checked = match check_request(&state, &req) {
-        Ok(()) => crate::cos::authenticate(&state, &mut req).await,
+        Ok(principal) => {
+            if let Some(principal) = principal {
+                req.extensions_mut().insert(principal);
+            }
+            crate::cos::authenticate(&state, &mut req).await
+        }
         Err(problem) => Err(problem),
     };
     let mut response = match checked {
@@ -102,7 +108,8 @@ fn host_allowed(state: &ApiState, req: &Request) -> bool {
         })
 }
 
-fn check_request(state: &ApiState, req: &Request) -> Result<(), ApiProblem> {
+/// 主体を決める（CoS run credential は `crate::cos::authenticate` が決めるので `None`）。
+fn check_request(state: &ApiState, req: &Request) -> Result<Option<Principal>, ApiProblem> {
     if !host_allowed(state, req) {
         return Err(ApiProblem::host_not_allowed());
     }
@@ -112,12 +119,13 @@ fn check_request(state: &ApiState, req: &Request) -> Result<(), ApiProblem> {
     }
 
     // CoS run credential は接頭辞で決まり、admin token とは比べない（検証は `crate::cos::authenticate`）。
-    if let Some(expected) = &state.inner.token_digest
-        && req.uri().path() != HEALTH_PATH
-        && crate::cos::cos_bearer_secret(req.headers()).is_none()
-    {
-        check_bearer(req.headers(), expected)?;
-    }
+    let principal = if crate::cos::cos_bearer_secret(req.headers()).is_some() {
+        None
+    } else if req.uri().path() == HEALTH_PATH {
+        Some(Principal::Unauthenticated)
+    } else {
+        Some(resolve_principal(state, req.headers())?)
+    };
 
     // ADR-0017 で PATCH/DELETE（プロバイダ管理）が加わるまでは変更系 = POST だけだった。ADR-0030 で
     // `PUT /secrets/{id}` が加わり PUT も同じ扱いにする。`Origin` の拒否は本文の有無に関わらず全ての変更系
@@ -128,6 +136,14 @@ fn check_request(state: &ApiState, req: &Request) -> Result<(), ApiProblem> {
     );
     if is_mutating && req.headers().contains_key(header::ORIGIN) {
         return Err(ApiProblem::origin_forbidden());
+    }
+    // MCP の代行（`api_get`）は読むだけ。MCP 専用 token で変更系は通さない。
+    if is_mutating && matches!(principal, Some(Principal::Mcp { .. })) {
+        return Err(ApiProblem::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "the MCP token is read-only",
+        ));
     }
     // Content-Type / 本文サイズは本文を伴うメソッド（POST・PUT・PATCH）だけ検査する（DELETE は本文を取らない）。
     if matches!(*req.method(), Method::POST | Method::PUT | Method::PATCH) {
@@ -160,7 +176,7 @@ fn check_request(state: &ApiState, req: &Request) -> Result<(), ApiProblem> {
             return Err(ApiProblem::payload_too_large());
         }
     }
-    Ok(())
+    Ok(principal)
 }
 
 fn is_json_content_type(headers: &HeaderMap) -> bool {
@@ -171,22 +187,59 @@ fn is_json_content_type(headers: &HeaderMap) -> bool {
         .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
 }
 
-pub(crate) fn check_bearer(headers: &HeaderMap, expected: &[u8; 32]) -> Result<(), ApiProblem> {
-    let presented = headers
+fn presented_bearer(headers: &HeaderMap) -> Option<&str> {
+    headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.trim().split_once(' '))
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
         .map(|(_, token)| token.trim())
-        .filter(|token| !token.is_empty());
-    match presented {
-        Some(token) if constant_time_eq(&token_digest(token), expected) => Ok(()),
-        _ => Err(ApiProblem::unauthorized()),
+        .filter(|token| !token.is_empty())
+}
+
+/// bearer から主体を決める（ADR 2026-10-27-api-principals D2）。`[[api.tokens]]` の全てと比べ（定数時間の
+/// 比較を全件に掛ける）、一致した token の主体を返す。MCP 専用 token なら `X-Celeris-Mcp-Client` の id を
+/// 主体にする（id が無い・形が違えば 401）。token が 1 本も無い構成では、一致しなければ認証の無い主体。
+pub(crate) fn resolve_principal(
+    state: &ApiState,
+    headers: &HeaderMap,
+) -> Result<Principal, ApiProblem> {
+    let inner = &state.inner;
+    if let Some(token) = presented_bearer(headers) {
+        let digest = token_digest(token);
+        let mut found = None;
+        for (expected, principal) in &inner.token_digests {
+            if constant_time_eq(&digest, expected) && found.is_none() {
+                found = Some(principal.clone());
+            }
+        }
+        if let Some(principal) = found {
+            return Ok(principal);
+        }
+        if let Some(expected) = &inner.mcp_token_digest
+            && constant_time_eq(&digest, expected)
+        {
+            let client_id = headers
+                .get(MCP_CLIENT_HEADER)
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|id| valid_client_id(id))
+                .ok_or_else(ApiProblem::unauthorized)?;
+            return Ok(Principal::Mcp {
+                client_id: client_id.to_string(),
+            });
+        }
+    }
+    if inner.auth_enabled() {
+        Err(ApiProblem::unauthorized())
+    } else {
+        Ok(Principal::Unauthenticated)
     }
 }
 
-/// ADR-0017 D1: 管理系エンドポイントは `token_file` 未設定（loopback 限定構成）でも認証をスキップしない
-/// （通常のガードは `token_digest` が無ければ全て通す。管理系はここで別に検査する）。
+/// ADR-0017 D1: 管理系エンドポイントは token 未設定（loopback 限定構成）でも認証をスキップしない
+/// （通常のガードは token が無ければ全て通す。管理系はここで別に検査する）。通すのは config の token
+/// （`human:` / `operator:`）と MCP の読み取り（変更系は guard が 403 にする）。
 ///
 /// CoS run credential（接頭辞の bearer）は guard が検証済みで、変更系は `/api/v1/cos/` だけが handler に届く
 /// （それ以外は guard が 422）。よってここでは閲覧と CoS 経路の管理操作として通す（ADR 2026-10-05 D2）。
@@ -194,9 +247,9 @@ pub(crate) fn require_admin(state: &ApiState, headers: &HeaderMap) -> Result<(),
     if crate::cos::cos_bearer_secret(headers).is_some() {
         return Ok(());
     }
-    match &state.inner.token_digest {
-        Some(expected) => check_bearer(headers, expected),
-        None => Err(ApiProblem::unauthorized()),
+    match resolve_principal(state, headers)? {
+        Principal::Unauthenticated => Err(ApiProblem::unauthorized()),
+        _ => Ok(()),
     }
 }
 

@@ -23,7 +23,13 @@ fn state_rx(
         listen: "127.0.0.1:7710".parse().unwrap_or_else(|e| panic!("{e}")),
         // ADR-0044 §5 Phase 53 追記（Phase 55）: `POST /replay` は管理系になったので、
         // この単体テストのルータにもトークンを持たせる（下の要求は Bearer を付ける）。
-        token: Some(REPLAY_TEST_TOKEN.to_string()),
+        tokens: vec![crate::ApiToken::new(
+            crate::Principal::Human {
+                name: "test".into(),
+            },
+            REPLAY_TEST_TOKEN,
+        )],
+        mcp_token: Some(UNIT_MCP_TOKEN.into()),
         allowed_hosts: vec![],
         db_path: dir.join("celeris.db"),
         busy_timeout: Duration::from_millis(5000),
@@ -395,4 +401,50 @@ async fn second_concurrent_replay_is_rejected_with_503() {
         .unwrap_or_else(|e| match e {});
     assert_eq!(ok.status(), StatusCode::OK);
     let _ = PathBuf::new();
+}
+
+const UNIT_MCP_TOKEN: &str = "celeris-mcp.unit-test";
+
+/// ADR 2026-10-27-api-principals D2/D4: bearer から主体を決める。MCP 専用 token は client id を主体にし、
+/// config の token は header の名乗りを無視する。
+#[test]
+fn resolve_principal_distinguishes_config_tokens_and_mcp_clients() {
+    use axum::http::{HeaderMap, HeaderValue};
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let state = state(dir.path());
+    let headers = |token: &str, client: Option<&str>| {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "authorization",
+            HeaderValue::from_str(&format!("Bearer {token}")).unwrap_or_else(|e| panic!("{e}")),
+        );
+        if let Some(client) = client {
+            h.insert(
+                crate::principal::MCP_CLIENT_HEADER,
+                HeaderValue::from_str(client).unwrap_or_else(|e| panic!("{e}")),
+            );
+        }
+        h
+    };
+    let resolve = |h: &HeaderMap| crate::middleware::resolve_principal(&state, h);
+    assert_eq!(
+        resolve(&headers(UNIT_MCP_TOKEN, Some("01CLIENTA")))
+            .unwrap_or_else(|e| panic!("{e:?}"))
+            .actor(),
+        "mcp:01CLIENTA"
+    );
+    assert_eq!(
+        resolve(&headers(UNIT_MCP_TOKEN, Some("01CLIENTB")))
+            .unwrap_or_else(|e| panic!("{e:?}"))
+            .actor(),
+        "mcp:01CLIENTB"
+    );
+    assert!(resolve(&headers(UNIT_MCP_TOKEN, None)).is_err());
+    assert_eq!(
+        resolve(&headers(REPLAY_TEST_TOKEN, Some("01CLIENTA")))
+            .unwrap_or_else(|e| panic!("{e:?}"))
+            .actor(),
+        "human:test"
+    );
+    assert!(resolve(&headers("nope", None)).is_err());
 }

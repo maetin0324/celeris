@@ -214,6 +214,7 @@ pub fn run(_db: Option<&Path>, command: RoutingCommand) -> Result<ExitCode, CliE
                         StageName::Enforce => task_core::route_select::RoutingStage::Enforce,
                     },
                     reason: args.reason,
+                    actor: "human".into(),
                 },
                 &since,
             )

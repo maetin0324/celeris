@@ -137,6 +137,11 @@ pub(crate) async fn authenticate(state: &ApiState, req: &mut Request) -> Result<
         )
         .with_extra("instead", "/api/v1/cos/operations"));
     }
+    req.extensions_mut()
+        .insert(crate::principal::Principal::Cos {
+            thread_id: caller.thread_id.clone(),
+            run_id: caller.run_id.clone(),
+        });
     req.extensions_mut().insert(caller);
     Ok(())
 }

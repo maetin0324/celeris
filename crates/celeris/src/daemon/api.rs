@@ -124,7 +124,7 @@ pub fn config_view(
         delegation: config.delegation_limits(),
         api: ApiConfigView {
             bind: listen.to_string(),
-            auth_required: config.api.token_file.is_some(),
+            auth_required: !config.api.tokens.is_empty(),
             allowed_hosts: config.api.allowed_hosts.clone(),
         },
         identity: identity_view(config, listen, instance_id, release, started_at),
@@ -294,7 +294,7 @@ impl task_api::LlmSourcesReader for LlmSourcesAdapter {
 pub fn api_settings(
     config: &Config,
     listen: SocketAddr,
-    token: Option<String>,
+    tokens: Vec<task_api::ApiToken>,
     instance_id: String,
     started_at: String,
     admin_tx: Option<tokio::sync::mpsc::Sender<task_api::AdminRequest>>,
@@ -307,7 +307,8 @@ pub fn api_settings(
         // ADR-0080 D5: human attestation の鍵と broker の結線は e2e の WU（既定は 503）。
         browser: Default::default(),
         listen,
-        token,
+        tokens,
+        mcp_token: None,
         allowed_hosts: config.api.allowed_hosts.clone(),
         db_path: config.db.path.clone(),
         busy_timeout: config.db.busy_timeout(),
@@ -496,6 +497,7 @@ pub(crate) async fn start_api(
     admin: bool,
     llm_proxy_state: Option<Arc<llm_proxy::ProxyState>>,
     live_sessions: Arc<task_core::browser_isolation::LiveSessions>,
+    mcp_token: Option<String>,
 ) -> Result<
     (
         RunningApi,
@@ -503,7 +505,7 @@ pub(crate) async fn start_api(
     ),
     DaemonError,
 > {
-    let token = config.api.read_token()?;
+    let tokens = config.api.read_tokens()?;
     let instance_id = identity.instance_id.clone();
     let started_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -528,7 +530,7 @@ pub(crate) async fn start_api(
     let mut settings = api_settings(
         config,
         listen,
-        token,
+        tokens,
         instance_id,
         started_at,
         admin_tx,
@@ -537,6 +539,7 @@ pub(crate) async fn start_api(
         role,
         llm_proxy_state,
     );
+    settings.mcp_token = mcp_token;
     // ADR 2026-10-06 D5: 手動の発見。起動時の設定の写しで対象を組む（reload で足した source は次の起動から）。
     settings.model_discovery = Some(Arc::new(crate::model_discovery::DaemonDiscoveryHook {
         store: dispatcher.store(),
@@ -623,7 +626,7 @@ pub(crate) async fn start_api(
         source,
     })?;
     let addr = listener.local_addr().unwrap_or(listen);
-    tracing::info!(%addr, auth_required = config.api.token_file.is_some(), "api listening");
+    tracing::info!(%addr, auth_required = !config.api.tokens.is_empty(), "api listening");
     let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let handle = tokio::spawn(task_api::serve_with_listener(listener, state, async move {
         let _ = stop_rx.await;

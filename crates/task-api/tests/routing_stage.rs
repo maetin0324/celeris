@@ -117,7 +117,7 @@ async fn stages_and_evidence_are_listed_and_enforce_requires_d1_evidence() {
     let approved = approved.json();
     assert_eq!(approved["stage"], "enforce");
     assert_eq!(approved["evidence_version"], "2026-10-13.2");
-    assert_eq!(approved["last_change"]["actor"], "human");
+    assert_eq!(approved["last_change"]["actor"], "human:local");
     assert_eq!(approved["last_change"]["from"], json!(null));
     assert_eq!(approved["last_change"]["task_id"], task.id.to_string());
 

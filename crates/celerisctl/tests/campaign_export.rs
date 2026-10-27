@@ -7,7 +7,8 @@ use std::process::{Command, Output};
 use task_core::SqliteStore;
 use task_core::decision_log::{
     CandidateRef, DecisionLogExecution, DecisionLogIntervention, DecisionLogOutcome,
-    DecisionLogProposal, DecisionLogUsage, InterventionKind, UsageKey, UsageRole,
+    DecisionLogProposal, DecisionLogUsage, InterventionActorKind, InterventionKind, UsageKey,
+    UsageRole,
 };
 use time::OffsetDateTime;
 
@@ -101,6 +102,8 @@ fn campaign_export_is_deterministic_deduped_scoped_and_secret_free() {
             .decision_log_record_intervention(&DecisionLogIntervention {
                 intervention_id: "i1".into(),
                 kind: InterventionKind::ResearchJudgment,
+                actor_kind: InterventionActorKind::Human,
+                actor_id: Some("alice".into()),
                 task_id: Some("t-r1".into()),
                 campaign_id: Some("c1".into()),
                 at: "2026-10-15T00:00:00Z".into(),

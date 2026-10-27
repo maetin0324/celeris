@@ -85,8 +85,8 @@ struct EventSide {
     run_ids: BTreeSet<String>,
     /// run_id → wall_ms（outcome 行）。
     run_wall_ms: BTreeMap<String, Option<u64>>,
-    /// intervention_id → kind。
-    interventions: BTreeMap<String, String>,
+    /// intervention_id → (kind, actor_kind)。
+    interventions: BTreeMap<String, (String, String)>,
     /// 人の応答待ち（export の `wait` 行）。
     waits: Vec<WaitFact>,
     /// Celeris が自動で作った再試行 run（`is_retry`）: run_id → (parent_run_id, attempt_no)。人の再作業ではない。
@@ -111,11 +111,12 @@ struct TrialResultFacts {
     cost_micro_usd: Option<u64>,
 }
 
-/// export の介入行: (intervention_id, task_id, campaign_id, kind, source_event)。
+/// export の介入行: (intervention_id, task_id, campaign_id, kind, actor_kind, source_event)。
 type EventIntervention = (
     String,
     Option<String>,
     Option<String>,
+    String,
     String,
     Option<String>,
 );
@@ -124,7 +125,7 @@ type EventIntervention = (
 struct Events {
     by_key: BTreeMap<Key, EventSide>,
     /// 試行に結べなかった介入（task_id が試行の run に無い・campaign 識別なし）。
-    unjoined_interventions: BTreeMap<String, (Option<String>, String)>,
+    unjoined_interventions: BTreeMap<String, (Option<String>, String, String)>,
     interventions: Vec<EventIntervention>,
     waits: Vec<(Option<String>, WaitFact)>,
     /// runner の out dir から読んだ成功契約の判定。
@@ -281,6 +282,8 @@ fn build_events(
                                 s(&r, "task_id"),
                                 s(&r, "campaign_id"),
                                 s(&r, "kind").unwrap_or_else(|| "unclassified".into()),
+                                // 主体の欄が無い（ADR 2026-10-27-decision-log-intervention-actors より前の）export は unknown。
+                                s(&r, "actor_kind").unwrap_or_else(|| "unknown".into()),
                                 s(&r, "source_event"),
                             ));
                         }
@@ -363,7 +366,7 @@ fn build_events(
         }
     }
     let ivs = std::mem::take(&mut ev.interventions);
-    for (id, task, campaign, kind, source) in ivs {
+    for (id, task, campaign, kind, actor, source) in ivs {
         let target = task.as_ref().and_then(|t| {
             ev.by_key
                 .iter()
@@ -374,11 +377,12 @@ fn build_events(
             Some(k) => {
                 if let Some(side) = ev.by_key.get_mut(&k) {
                     side.refs.extend(source);
-                    side.interventions.insert(id, kind);
+                    side.interventions.insert(id, (kind, actor));
                 }
             }
             None => {
-                ev.unjoined_interventions.insert(id, (campaign, kind));
+                ev.unjoined_interventions
+                    .insert(id, (campaign, kind, actor));
             }
         }
     }
@@ -472,6 +476,7 @@ fn event_fields(side: Option<&EventSide>, row: &mut Map<String, Value>) {
             "run_ids",
             "run_wall_ms",
             "event_interventions",
+            "event_interventions_by_actor_kind",
             "event_waits",
             "auto_retries",
         ] {
@@ -555,11 +560,31 @@ fn event_fields(side: Option<&EventSide>, row: &mut Map<String, Value>) {
             )
         },
     );
-    // projection の介入は件数と区分だけ（wall_ms は持たない: 所要時間は評価者記録）。
+    // projection の介入は件数と区分だけ（wall_ms は持たない: 所要時間は評価者記録）。人の介入は actor_kind=human だけで、
+    // CoS・operator・MCP・system・unknown の処理は主体別の件数にだけ出す。
     row.insert(
         "event_interventions".into(),
         if side.has_records {
-            field(counts(side.interventions.values().cloned()), EVENT)
+            field(
+                counts(
+                    side.interventions
+                        .values()
+                        .filter(|(_, actor)| actor == "human")
+                        .map(|(kind, _)| kind.clone()),
+                ),
+                EVENT,
+            )
+        } else {
+            missing()
+        },
+    );
+    row.insert(
+        "event_interventions_by_actor_kind".into(),
+        if side.has_records {
+            field(
+                counts(side.interventions.values().map(|(_, actor)| actor.clone())),
+                EVENT,
+            )
         } else {
             missing()
         },
@@ -766,9 +791,9 @@ pub fn join(human_ops_file: &Path, events: &[&Path]) -> Result<String, String> {
         .to_string();
         lines.push('\n');
     }
-    for (id, (campaign, kind)) in &ev.unjoined_interventions {
+    for (id, (campaign, kind, actor)) in &ev.unjoined_interventions {
         lines += &json!({"row_type": "unjoined_event", "intervention_id": id,
-            "campaign_id": campaign, "kind": kind, "source": EVENT,
+            "campaign_id": campaign, "kind": kind, "actor_kind": actor, "source": EVENT,
             "reason": "task_id が試行の run に無い"})
         .to_string();
         lines.push('\n');

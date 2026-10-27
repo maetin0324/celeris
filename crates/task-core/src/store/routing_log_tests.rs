@@ -43,7 +43,7 @@ fn routing_log_correlation_migration_is_additive() {
     // 旧版 DB を開く（ここで 0048 が当たる）。
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 97);
+    assert_eq!(SCHEMA_VERSION, 98);
 
     // 既存の行と既存の欄は残る。
     {
@@ -205,7 +205,7 @@ fn migration_0075_drops_shadow_reservations_and_keeps_shadow_events() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 97);
+    assert_eq!(SCHEMA_VERSION, 98);
     {
         let conn = Connection::open(&path).unwrap();
         let left: i64 = conn

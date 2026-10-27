@@ -10,7 +10,8 @@ use super::{SqliteStore, StoreError, format_rfc3339};
 use crate::decision_log::{
     CampaignIdentity, CampaignVerdict, CandidateRef, ClassifierRecord, DecisionLogExecution,
     DecisionLogIntervention, DecisionLogOutcome, DecisionLogProposal, DecisionLogRun,
-    DecisionLogUsage, ExclusionRef, InterventionKind, RunEndLabel, UsageKey, UsageRole, WuVerdict,
+    DecisionLogUsage, ExclusionRef, InterventionActorKind, InterventionKind, RunEndLabel, UsageKey,
+    UsageRole, WuVerdict,
 };
 
 fn json_opt<T: serde::Serialize>(v: &T, empty: bool) -> Result<Option<String>, StoreError> {
@@ -560,11 +561,12 @@ impl SqliteStore {
         i: &DecisionLogIntervention,
     ) -> Result<(), StoreError> {
         self.lock()?.execute(
-            "INSERT INTO decision_log_interventions (intervention_id, kind, task_id, campaign_id, at, wall_ms, source_event) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(intervention_id) DO UPDATE SET kind=excluded.kind, \
+            "INSERT INTO decision_log_interventions (intervention_id, kind, actor_kind, actor_id, task_id, campaign_id, at, wall_ms, source_event) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(intervention_id) DO UPDATE SET kind=excluded.kind, \
+             actor_kind=excluded.actor_kind, actor_id=excluded.actor_id, \
              task_id=excluded.task_id, campaign_id=excluded.campaign_id, at=excluded.at, wall_ms=excluded.wall_ms, \
              source_event=excluded.source_event",
-            params![i.intervention_id, i.kind.as_str(), i.task_id, i.campaign_id, i.at, u(i.wall_ms), i.source_event],
+            params![i.intervention_id, i.kind.as_str(), i.actor_kind.as_str(), i.actor_id, i.task_id, i.campaign_id, i.at, u(i.wall_ms), i.source_event],
         )?;
         Ok(())
     }
@@ -575,28 +577,38 @@ impl SqliteStore {
     ) -> Result<Vec<DecisionLogIntervention>, StoreError> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT intervention_id, kind, task_id, campaign_id, at, wall_ms, source_event \
+            "SELECT intervention_id, kind, task_id, campaign_id, at, wall_ms, source_event, actor_kind, actor_id \
              FROM decision_log_interventions WHERE (?1 IS NULL OR campaign_id = ?1) ORDER BY intervention_id",
         )?;
         let rows = stmt.query_map([campaign_id], |r| {
             Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, Option<String>>(2)?,
-                r.get::<_, Option<String>>(3)?,
-                r.get::<_, String>(4)?,
-                r.get::<_, Option<i64>>(5)?,
-                r.get::<_, Option<String>>(6)?,
+                (
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, Option<i64>>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                ),
+                (r.get::<_, String>(7)?, r.get::<_, Option<String>>(8)?),
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (intervention_id, kind, task_id, campaign_id, at, wall_ms, source_event) = row?;
+            let (
+                (intervention_id, kind, task_id, campaign_id, at, wall_ms, source_event),
+                (actor_kind, actor_id),
+            ) = row?;
             out.push(DecisionLogIntervention {
                 intervention_id,
                 kind: InterventionKind::parse(&kind).ok_or_else(|| {
                     StoreError::Invalid(format!("unknown intervention kind: {kind}"))
                 })?,
+                actor_kind: InterventionActorKind::parse(&actor_kind).ok_or_else(|| {
+                    StoreError::Invalid(format!("unknown intervention actor kind: {actor_kind}"))
+                })?,
+                actor_id,
                 task_id,
                 campaign_id,
                 at,
@@ -974,27 +986,56 @@ fn parse_ts(s: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
 }
 
-/// 人の event を介入の区分へ写す。区分が分からないものは `Unclassified`（推測で 3 区分へ入れない）。
-/// 人でない event（system の遷移など）は `None`。
-fn intervention_kind_of(event: &crate::Event) -> Option<InterventionKind> {
+/// 判断・操作の event を介入の区分と主体の `by` へ写す（ADR 2026-10-27-decision-log-intervention-actors D2）。
+/// 主体は問わない（人以外の処理も行に残し、主体の欄で区別する）。介入でない event は `None`。
+fn intervention_of(event: &crate::Event) -> Option<(InterventionKind, Option<&str>)> {
     use crate::Event;
-    match event {
-        // decisions・blocked への回答は研究の方針の選択。
-        Event::Answered { .. } => Some(InterventionKind::ResearchJudgment),
-        // 失敗した task を人が再実行した。
-        Event::Retried { .. } => Some(InterventionKind::Recovery),
-        Event::ApprovalDecided { .. } => Some(InterventionKind::Unclassified),
-        Event::Edited { by, .. } if by == "human" || by.starts_with("human:") => {
-            Some(InterventionKind::Unclassified)
+    Some(match event {
+        // blocked・decision への回答と計画の承認待ちの判断は研究の方針の選択。
+        Event::Answered { by, .. } => (InterventionKind::ResearchJudgment, by.as_deref()),
+        Event::DecisionAnswered { by, .. } | Event::PlanGateDecided { by, .. } => {
+            (InterventionKind::ResearchJudgment, Some(by.as_str()))
         }
-        _ => None,
-    }
+        // 失敗した task の再実行と、自動統合の失敗からの回復。
+        Event::Retried { by, .. } | Event::IntegrationAnswered { by, .. } => {
+            (InterventionKind::Recovery, by.as_deref())
+        }
+        Event::ApprovalDecided { by, .. } | Event::Edited { by, .. } => {
+            (InterventionKind::Unclassified, Some(by.as_str()))
+        }
+        _ => return None,
+    })
+}
+
+/// event の終了の主体（wait の `end_actor_kind`）。`by` を持たない event は `None`。
+fn event_by(event: &crate::Event) -> Option<Option<&str>> {
+    intervention_of(event).map(|(_, by)| by)
 }
 
 impl SqliteStore {
-    /// task の events から人の介入を投影する（`intervention_id = <task_id>:<seq>` で冪等）。
-    /// campaign 識別（自身か祖先）のある task だけ書く。人の所要時間は取れないので `wall_ms` は欠測。
-    /// 書いた件数（upsert した数）を返す。
+    /// `cos:<thread>` の thread の種類（読めなければ `None`）。
+    fn chat_thread_kind_of(&self, thread_id: &str) -> Option<crate::chat::ChatThreadKind> {
+        let kind: Option<String> = self
+            .lock()
+            .ok()?
+            .query_row(
+                "SELECT kind FROM chat_threads WHERE id = ?1",
+                [thread_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .ok()??;
+        serde_json::from_value(serde_json::Value::String(kind?)).ok()
+    }
+
+    /// event の `by` を主体の種類と id へ（D1）。
+    fn intervention_actor(&self, by: Option<&str>) -> (InterventionActorKind, Option<String>) {
+        InterventionActorKind::classify(by, |t| self.chat_thread_kind_of(t))
+    }
+
+    /// task の events から介入を投影する（`intervention_id = <task_id>:<seq>` で冪等）。主体は event の `by` から決め、
+    /// 人以外の処理も `actor_kind` 付きで残す。campaign 識別（自身か祖先）のある task だけ書く。
+    /// 人の所要時間は取れないので `wall_ms` は欠測。書いた件数（upsert した数）を返す。
     pub fn decision_log_project_interventions(&self, task_id: &str) -> Result<usize, StoreError> {
         let Some(identity) = self.task_campaign_resolve(task_id)? else {
             return Ok(0);
@@ -1009,12 +1050,15 @@ impl SqliteStore {
         let mut n = 0;
         for (seq, ts, json) in rows {
             let event: crate::Event = serde_json::from_str(&json)?;
-            let Some(kind) = intervention_kind_of(&event) else {
+            let Some((kind, by)) = intervention_of(&event) else {
                 continue;
             };
+            let (actor_kind, actor_id) = self.intervention_actor(by);
             self.decision_log_record_intervention(&DecisionLogIntervention {
                 intervention_id: format!("{task_id}:{seq}"),
                 kind,
+                actor_kind,
+                actor_id,
                 task_id: Some(task_id.to_string()),
                 campaign_id: Some(identity.campaign_id.clone()),
                 at: ts,
@@ -1031,7 +1075,10 @@ impl SqliteStore {
     ///
     /// - `question`: `QuestionRaised`（開始。`run_id` はきっかけの run）→ 次の `Answered`（終了）。
     /// - `approval`: `ApprovalRequested` → 次の `ApprovalDecided`。
+    /// - `decision`: `DecisionRequested` → 同じ decision id の最初の `DecisionAnswered` か `DecisionWithdrawn`
+    ///   （decision id で対にする。revise は終了にしない。ADR 2026-10-27-decision-log-intervention-actors D4）。
     /// - 終了が無い区間は `ended_at: null`（open。0 秒にしない）。開始・終了の event は `event:<task_id>:<seq>` で残す。
+    /// - 終了の主体は `end_actor_kind`・`end_actor_id`（終了が無い・`by` を持たない終了は `null`）。
     pub fn decision_log_human_waits(
         &self,
         campaign_id: &str,
@@ -1043,34 +1090,45 @@ impl SqliteStore {
                    SELECT task_id FROM task_campaigns WHERE campaign_id = ?1 \
                    UNION SELECT t.id FROM tasks t JOIN tree ON t.parent_id = tree.id) \
                  SELECT e.task_id, e.seq, e.ts, e.json FROM events e JOIN tree ON e.task_id = tree.id \
-                 ORDER BY e.task_id, e.seq",
+                 ORDER BY e.id",
             )?;
             stmt.query_map([campaign_id], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
             })?
             .collect::<Result<_, _>>()?
         };
+        // 全 event の追記順に読み（decision の回答は別の task の列に積まれ得る）、出力は (task_id, 開始 seq) の順に並べる。
         let mut out = Vec::new();
-        // (task_id, kind) → 開いている区間の index（先に開いたものから閉じる）。
+        let mut order: Vec<(String, i64)> = Vec::new();
+        // 対の鍵（question・approval は (task_id, kind)、decision は decision id）→ 開いている区間の index
+        // （先に開いたものから閉じる）。
         let mut open: std::collections::BTreeMap<(String, &'static str), Vec<usize>> =
             std::collections::BTreeMap::new();
         for (task_id, seq, ts, json) in rows {
             let Ok(event) = serde_json::from_str::<crate::Event>(&json) else {
                 continue;
             };
-            let (kind, start, run_id) = match &event {
+            let (kind, key, start, run_id) = match &event {
                 crate::Event::QuestionRaised { run_id, .. } => {
-                    ("question", true, Some(run_id.clone()))
+                    ("question", task_id.clone(), true, Some(run_id.clone()))
                 }
-                crate::Event::Answered { .. } => ("question", false, None),
-                crate::Event::ApprovalRequested => ("approval", true, None),
-                crate::Event::ApprovalDecided { .. } => ("approval", false, None),
+                crate::Event::Answered { .. } => ("question", task_id.clone(), false, None),
+                crate::Event::ApprovalRequested => ("approval", task_id.clone(), true, None),
+                crate::Event::ApprovalDecided { .. } => ("approval", task_id.clone(), false, None),
+                crate::Event::DecisionRequested { decision } => {
+                    ("decision", decision.id.clone(), true, None)
+                }
+                crate::Event::DecisionAnswered { id, .. }
+                | crate::Event::DecisionWithdrawn { id, .. } => {
+                    ("decision", id.clone(), false, None)
+                }
                 _ => continue,
             };
             let ev_ref = format!("event:{task_id}:{seq}");
-            let slot = open.entry((task_id.clone(), kind)).or_default();
+            let slot = open.entry((key, kind)).or_default();
             if start {
                 slot.push(out.len());
+                order.push((task_id.clone(), seq));
                 out.push(serde_json::json!({
                     "record_type": "wait",
                     "schema": crate::decision_log_export::RECORD_SCHEMA,
@@ -1083,14 +1141,23 @@ impl SqliteStore {
                     "ended_at": null,
                     "start_event": ev_ref,
                     "end_event": null,
+                    "end_actor_kind": null,
+                    "end_actor_id": null,
                 }));
             } else if !slot.is_empty() {
                 let i = slot.remove(0);
                 out[i]["ended_at"] = serde_json::json!(ts);
                 out[i]["end_event"] = serde_json::json!(ev_ref);
+                if let Some(by) = event_by(&event) {
+                    let (actor_kind, actor_id) = self.intervention_actor(by);
+                    out[i]["end_actor_kind"] = serde_json::json!(actor_kind.as_str());
+                    out[i]["end_actor_id"] = serde_json::json!(actor_id);
+                }
             }
         }
-        Ok(out)
+        let mut sorted: Vec<_> = order.into_iter().zip(out).collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(sorted.into_iter().map(|(_, w)| w).collect())
     }
 
     /// 時刻 `at` に活動中（最初の識別付与〜最後の活動）の campaign がちょうど 1 つならその id。

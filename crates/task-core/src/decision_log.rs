@@ -817,17 +817,104 @@ impl InterventionKind {
     }
 }
 
-/// 介入 1 件。`intervention_id` は元 event の `seq` 由来で冪等。
+/// 介入の主体の種類（ADR 2026-10-27-decision-log-intervention-actors D1）。event の `by` から決める。
+/// `by` の無い（ADR 2026-10-27-event-principals より前の）event・丸めた値・読めない値は `Unknown`（`Human` で埋めない）。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum InterventionActorKind {
+    Human,
+    CosProject,
+    CosGeneral,
+    ExternalOperator,
+    McpClient,
+    /// daemon・worker の run など Celeris 自身が書いた記録。
+    System,
+    Unknown,
+}
+
+impl InterventionActorKind {
+    pub const ALL: [Self; 7] = [
+        Self::Human,
+        Self::CosProject,
+        Self::CosGeneral,
+        Self::ExternalOperator,
+        Self::McpClient,
+        Self::System,
+        Self::Unknown,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::CosProject => "cos_project",
+            Self::CosGeneral => "cos_general",
+            Self::ExternalOperator => "external_operator",
+            Self::McpClient => "mcp_client",
+            Self::System => "system",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == s)
+    }
+
+    /// event の `by` を主体の種類と id に分ける。`cos:<thread>` は `thread_kind` で thread の種類を引く
+    /// （読めない・legacy は `Unknown`）。id は読めた値を残す（`by` が無ければ `None`）。
+    pub fn classify(
+        by: Option<&str>,
+        thread_kind: impl Fn(&str) -> Option<crate::chat::ChatThreadKind>,
+    ) -> (Self, Option<String>) {
+        use crate::chat::ChatThreadKind;
+        let Some(by) = by else {
+            return (Self::Unknown, None);
+        };
+        let tail = |kind: Self, rest: &str| {
+            if rest.is_empty() {
+                (Self::Unknown, Some(by.to_string()))
+            } else {
+                (kind, Some(rest.to_string()))
+            }
+        };
+        if by == crate::DAEMON_ACTOR || by == "system" || by == "project-plan" {
+            return (Self::System, Some(by.to_string()));
+        }
+        match by.split_once(':') {
+            Some(("human", rest)) => tail(Self::Human, rest),
+            Some(("operator", rest)) => tail(Self::ExternalOperator, rest),
+            Some(("mcp", rest)) => tail(Self::McpClient, rest),
+            Some(("cos_project", rest)) => tail(Self::CosProject, rest),
+            Some(("cos_general", rest)) => tail(Self::CosGeneral, rest),
+            // worker の run が書いた記録は run id 付きの値をそのまま id にする。
+            Some(("worker", rest)) if !rest.is_empty() => (Self::System, Some(by.to_string())),
+            Some(("cos", rest)) if !rest.is_empty() => match thread_kind(rest) {
+                Some(ChatThreadKind::Project) => (Self::CosProject, Some(rest.to_string())),
+                Some(ChatThreadKind::General) => (Self::CosGeneral, Some(rest.to_string())),
+                Some(ChatThreadKind::Legacy) | None => (Self::Unknown, Some(by.to_string())),
+            },
+            _ => (Self::Unknown, Some(by.to_string())),
+        }
+    }
+}
+
+/// 介入 1 件。`intervention_id` は元 event の `seq` 由来で冪等。人以外の主体の処理も行に残し、
+/// `actor_kind` で区別する（人の介入として数えるのは `Human` だけ）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DecisionLogIntervention {
     pub intervention_id: String,
     pub kind: InterventionKind,
+    pub actor_kind: InterventionActorKind,
+    /// 主体の id（`human:<name>` の name、CoS は thread id、system・unknown は `by` の値）。`by` が無ければ `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub campaign_id: Option<String>,
     pub at: String,
-    /// 人の所要時間（取れなければ `None`）。
+    /// 人の所要時間。events から観測できないので欠測（`None`）。応答の遅れは wait 区間で見る。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wall_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

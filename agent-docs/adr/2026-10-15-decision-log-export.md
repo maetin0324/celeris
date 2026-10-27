@@ -183,3 +183,10 @@ run 終了・WU 検証・campaign 合否は**別の欄**で、互いの代用に
 - 本文からの差: `export_cursor` は None のまま。cost は定価換算（estimated）で、実支出 `cash_cost_usd` は欠測のまま（定価で代用しない）。
 - 未実装（後続）: `campaign_id`・`arm`・`routing_mode`・Jev classifier 欄の書き手（欄と保持は実装済み、書く側は campaign／Jev adapter unit）。CoS・cluster 待機・介入の消費行の自動書き込み。reviewer run の判断 record。この間 `campaign_id` が None の run は export 対象外。
 - 未検証: 実 LLM を使った測定は行っていない（試験は決定的な fixture のみ）。
+
+## 付記（2026-10-27、介入の主体）
+
+D7 の介入に主体（`actor_kind`・`actor_id`）を足し、`DecisionAnswered`・`IntegrationAnswered`・`PlanGateDecided` を写像に
+加えた。summary の `interventions_by_kind` は `human_interventions_by_kind`（人だけ）と `interventions_by_actor_kind`
+（全主体）に置き換えた。wait に `decision` の区間を足した。詳細は
+[2026-10-27-decision-log-intervention-actors](2026-10-27-decision-log-intervention-actors.md)。

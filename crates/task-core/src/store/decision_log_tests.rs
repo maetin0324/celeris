@@ -189,6 +189,8 @@ fn reprocessing_does_not_add_rows_or_double_count() {
         s.decision_log_record_intervention(&DecisionLogIntervention {
             intervention_id: "ev-42".into(),
             kind: InterventionKind::ResearchJudgment,
+            actor_kind: InterventionActorKind::Human,
+            actor_id: Some("alice".into()),
             task_id: Some("t1".into()),
             campaign_id: Some("camp1".into()),
             at: "2026-10-15T00:00:00Z".into(),
@@ -600,4 +602,332 @@ fn cos_export_keeps_thread_context_missing_usage_and_separate_shared_subtotals()
     let again = s.decision_log_export_campaign(&params).unwrap();
     assert_eq!(export.records_jsonl(), again.records_jsonl());
     assert_eq!(export.summary_json(), again.summary_json());
+}
+
+fn decision_request(id: &str, raised_on: crate::model::TaskId) -> crate::decision::DecisionRequest {
+    use crate::decision::*;
+    let opt = |k: &str| DecisionOption {
+        key: k.into(),
+        label: k.to_uppercase(),
+        consequence: None,
+    };
+    DecisionRequest {
+        id: id.into(),
+        key: format!("k-{id}"),
+        kind: DecisionKind::Choice,
+        question: "which?".into(),
+        options: vec![opt("a"), opt("b")],
+        recommended: "a".into(),
+        cost_of_reversal: CostOfReversal::Low,
+        cost_note: None,
+        needed_before: vec!["self".into()],
+        path: Vec::new(),
+        raised_by: DecisionRaisedBy {
+            task_id: raised_on,
+            run_id: None,
+            origin: DecisionOrigin::Planner,
+        },
+        status: DecisionStatus::Open,
+        answer: None,
+        withdrawn_reason: None,
+    }
+}
+
+/// ADR 2026-10-27-decision-log-intervention-actors: 人・案件 CoS・統括 CoS・operator・MCP が 1 件ずつ答える event 列から、
+/// 主体別の件数と decision の待ち区間が決定的に出る。CoS・operator・MCP は人の介入に入らず、A2 より前の event は unknown。
+#[test]
+fn interventions_split_by_actor_and_decision_waits_close_on_answer() {
+    use crate::model::{Event, Status};
+    let s = SqliteStore::open_in_memory().unwrap();
+    {
+        let conn = s.lock().unwrap();
+        conn.execute_batch(
+            "INSERT INTO chat_threads(id,kind,title,project_id,status,created_at,updated_at) VALUES
+             ('tg','general','CoS',NULL,'open','1970-01-01T00:00:00Z','1970-01-01T00:00:00Z'),
+             ('tp','project','Project CoS','p1','open','1970-01-01T00:00:00Z','1970-01-01T00:00:00Z'),
+             ('tl','legacy','old',NULL,'open','1970-01-01T00:00:00Z','1970-01-01T00:00:00Z');",
+        )
+        .unwrap();
+    }
+    let root = super::tests::sample_task(Status::Draft);
+    s.create_task(&root, vec![]).unwrap();
+    let mut child = super::tests::sample_task(Status::Draft);
+    child.parent_id = Some(root.id);
+    s.create_task(&child, vec![]).unwrap();
+    let id = CampaignIdentity {
+        campaign_id: "camp-a".into(),
+        case_id: None,
+        arm: None,
+        repetition: None,
+        manifest_hash: None,
+        routing_setting: None,
+        variant: None,
+        variant_org: None,
+    };
+    s.task_campaign_set(&root.id.to_string(), &id, now())
+        .unwrap();
+    let answer = |id: &str, by: &str| Event::DecisionAnswered {
+        id: id.into(),
+        option: "a".into(),
+        note: None,
+        by: by.into(),
+    };
+    let requested = |id: &str, on| Event::DecisionRequested {
+        decision: Box::new(decision_request(id, on)),
+    };
+    let root_events = [
+        // 人: 質問への回答。
+        Event::QuestionRaised {
+            run_id: "run-1".into(),
+            text: "which?".into(),
+        },
+        Event::Answered {
+            question: "which?".into(),
+            answer: "a".into(),
+            by: Some("human:alice".into()),
+        },
+        // 案件 CoS: decision への回答。
+        requested("D1", root.id),
+        answer("D1", "cos:tp"),
+        // operator: 統合依頼への回答。
+        Event::IntegrationAnswered {
+            request_id: "ir-1".into(),
+            answer: "integrated".into(),
+            note: None,
+            by: Some("operator:claude-code".into()),
+        },
+        // MCP: 計画の承認。
+        Event::PlanGateDecided {
+            plan_id: "plan-1".into(),
+            action: "approve".into(),
+            by: "mcp:chatgpt".into(),
+            note: None,
+        },
+        // A2 より前（主体なし）と、丸めた `human`・legacy thread の CoS は unknown。
+        Event::Answered {
+            question: "old".into(),
+            answer: "b".into(),
+            by: None,
+        },
+        Event::ApprovalDecided {
+            by: "human".into(),
+            approved: true,
+            note: None,
+        },
+        Event::Edited {
+            fields: vec!["title".into()],
+            by: "cos:tl".into(),
+        },
+        // system: daemon が置き換えで閉じた統合依頼。
+        Event::IntegrationAnswered {
+            request_id: "ir-0".into(),
+            answer: "superseded".into(),
+            note: None,
+            by: Some(crate::DAEMON_ACTOR.into()),
+        },
+        // 開いたままの decision。
+        requested("D3", root.id),
+    ];
+    // 統括 CoS: child が出した decision に root の列で答える（decision id で対にする）。
+    s.append_event(child.id, &requested("D2", child.id))
+        .unwrap();
+    for e in &root_events {
+        s.append_event(root.id, e).unwrap();
+    }
+    s.append_event(root.id, &answer("D2", "cos:tg")).unwrap();
+    // revise は介入だが、待ちを閉じ直さない。
+    s.append_event(root.id, &answer("D1", "human:alice"))
+        .unwrap();
+
+    for _ in 0..2 {
+        // 再投影しても行は増えない。
+        s.decision_log_project_interventions(&root.id.to_string())
+            .unwrap();
+        s.decision_log_project_interventions(&child.id.to_string())
+            .unwrap();
+    }
+    let ivs = s.decision_log_interventions_list(Some("camp-a")).unwrap();
+    let mut by_actor = std::collections::BTreeMap::<&str, Vec<&str>>::new();
+    for i in &ivs {
+        by_actor
+            .entry(i.actor_kind.as_str())
+            .or_default()
+            .push(i.actor_id.as_deref().unwrap_or("-"));
+    }
+    for v in by_actor.values_mut() {
+        v.sort();
+    }
+    let expect: std::collections::BTreeMap<&str, Vec<&str>> = [
+        ("human", vec!["alice", "alice"]),
+        ("cos_project", vec!["tp"]),
+        ("cos_general", vec!["tg"]),
+        ("external_operator", vec!["claude-code"]),
+        ("mcp_client", vec!["chatgpt"]),
+        ("system", vec!["daemon"]),
+        ("unknown", vec!["-", "cos:tl", "human"]),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(by_actor, expect);
+    let kind_of = |actor: InterventionActorKind| {
+        ivs.iter()
+            .filter(|i| i.actor_kind == actor)
+            .map(|i| i.kind)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        kind_of(InterventionActorKind::McpClient),
+        vec![InterventionKind::ResearchJudgment]
+    );
+    assert_eq!(
+        kind_of(InterventionActorKind::ExternalOperator),
+        vec![InterventionKind::Recovery]
+    );
+
+    // export: 人の介入は human の 2 件だけ、主体別は 7 種。
+    let params = ExportParams {
+        campaign_id: "camp-a".into(),
+        manifest_hash: None,
+        export_cursor: None,
+    };
+    let e = s.decision_log_export_campaign(&params).unwrap();
+    let human: u64 = e
+        .summary
+        .human_interventions_by_kind
+        .values()
+        .map(|x| x.count)
+        .sum();
+    assert_eq!(human, 2);
+    assert_eq!(
+        e.summary.human_interventions_by_kind["research_judgment"].count,
+        2
+    );
+    let counts: Vec<(&str, u64)> = e
+        .summary
+        .interventions_by_actor_kind
+        .iter()
+        .map(|(k, n)| (k.as_str(), *n))
+        .collect();
+    assert_eq!(
+        counts,
+        vec![
+            ("cos_general", 1),
+            ("cos_project", 1),
+            ("external_operator", 1),
+            ("human", 2),
+            ("mcp_client", 1),
+            ("system", 1),
+            ("unknown", 3),
+        ]
+    );
+
+    // 待ち区間: question 1・decision 3（D1 は CoS が閉じ、D2 は別 task の回答で閉じ、D3 は open）。
+    let w = s.decision_log_human_waits("camp-a").unwrap();
+    let summary: Vec<(String, bool, serde_json::Value, serde_json::Value)> = w
+        .iter()
+        .map(|x| {
+            (
+                x["wait_kind"].as_str().unwrap().to_string(),
+                x["ended_at"].is_string(),
+                x["end_actor_kind"].clone(),
+                x["end_actor_id"].clone(),
+            )
+        })
+        .collect();
+    let mut expect = vec![
+        ("question".to_string(), true, "human".into(), "alice".into()),
+        (
+            "decision".to_string(),
+            true,
+            "cos_project".into(),
+            "tp".into(),
+        ),
+        (
+            "decision".to_string(),
+            false,
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+        ),
+        (
+            "decision".to_string(),
+            true,
+            "cos_general".into(),
+            "tg".into(),
+        ),
+    ];
+    // 出力は (task_id, 開始 seq) の順。child と root の並びは task id の大小で決まる。
+    if child.id.to_string() < root.id.to_string() {
+        let d2 = expect.remove(3);
+        expect.insert(0, d2);
+    }
+    assert_eq!(summary, expect);
+    let d2 = w
+        .iter()
+        .find(|x| x["task_id"] == child.id.to_string())
+        .unwrap();
+    assert!(
+        d2["end_event"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("event:{}:", root.id))
+    );
+    assert_eq!(s.decision_log_human_waits("camp-a").unwrap(), w);
+}
+
+#[test]
+fn actor_classification_keeps_unknown_for_rounded_or_missing_by() {
+    use crate::chat::ChatThreadKind;
+    let k = |by: Option<&str>| {
+        InterventionActorKind::classify(by, |t| match t {
+            "g" => Some(ChatThreadKind::General),
+            "p" => Some(ChatThreadKind::Project),
+            _ => None,
+        })
+    };
+    let cases = [
+        (None, InterventionActorKind::Unknown, None),
+        (Some("human"), InterventionActorKind::Unknown, Some("human")),
+        (
+            Some("human:"),
+            InterventionActorKind::Unknown,
+            Some("human:"),
+        ),
+        (Some("cos"), InterventionActorKind::Unknown, Some("cos")),
+        (
+            Some("cos:zz"),
+            InterventionActorKind::Unknown,
+            Some("cos:zz"),
+        ),
+        (Some("human:bob"), InterventionActorKind::Human, Some("bob")),
+        (Some("cos:g"), InterventionActorKind::CosGeneral, Some("g")),
+        (
+            Some("cos_project:x"),
+            InterventionActorKind::CosProject,
+            Some("x"),
+        ),
+        (
+            Some("operator:op"),
+            InterventionActorKind::ExternalOperator,
+            Some("op"),
+        ),
+        (Some("mcp:c1"), InterventionActorKind::McpClient, Some("c1")),
+        (
+            Some("daemon"),
+            InterventionActorKind::System,
+            Some("daemon"),
+        ),
+        (
+            Some("worker:r1"),
+            InterventionActorKind::System,
+            Some("worker:r1"),
+        ),
+        (
+            Some("project-plan"),
+            InterventionActorKind::System,
+            Some("project-plan"),
+        ),
+    ];
+    for (by, kind, id) in cases {
+        assert_eq!(k(by), (kind, id.map(str::to_string)), "{by:?}");
+    }
 }

@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use crate::decision_log::{
     DecisionLogIntervention, DecisionLogProposal, DecisionLogRun, DecisionLogUsage,
-    InterventionKind, UsageKey, UsageRole,
+    InterventionActorKind, InterventionKind, UsageKey, UsageRole,
 };
 
 pub const RECORD_SCHEMA: &str = "celeris.decision-log/1";
@@ -170,7 +170,10 @@ pub struct CampaignSummary {
     /// 3 階層は別表（混ぜない）。未記録は `unrecorded`。
     pub wu_verdicts: BTreeMap<String, u64>,
     pub campaign_verdicts: BTreeMap<String, u64>,
-    pub interventions_by_kind: BTreeMap<String, InterventionStats>,
+    /// 人（`actor_kind = human`）の介入だけを区分ごとに数える。CoS・operator・MCP・system・unknown の処理は入れない。
+    pub human_interventions_by_kind: BTreeMap<String, InterventionStats>,
+    /// 全主体の介入の件数（7 種を全て出す。ADR 2026-10-27-decision-log-intervention-actors D3）。
+    pub interventions_by_actor_kind: BTreeMap<String, u64>,
     /// 実行した候補が提案先頭と違う run 数（判定不能は `exec_unknown`）。
     pub exec_vs_proposed: BTreeMap<String, u64>,
     /// 欠測を含む区分（`n_missing > 0` または取得元なし）。
@@ -598,7 +601,11 @@ pub fn build_campaign_export(
         trials.push(trial_record(campaign, r, &usage_map, &run_map));
     }
 
-    let mut interventions_by_kind: BTreeMap<String, InterventionStats> = [
+    let mut interventions_by_actor_kind: BTreeMap<String, u64> = InterventionActorKind::ALL
+        .iter()
+        .map(|k| (k.as_str().to_string(), 0))
+        .collect();
+    let mut human_interventions_by_kind: BTreeMap<String, InterventionStats> = [
         InterventionKind::ResearchJudgment,
         InterventionKind::ManualHandoff,
         InterventionKind::Recovery,
@@ -608,11 +615,16 @@ pub fn build_campaign_export(
     .map(|k| (k.as_str().to_string(), InterventionStats::default()))
     .collect();
     for (id, i) in &iv_map {
-        let s = interventions_by_kind
-            .entry(i.kind.as_str().to_string())
-            .or_default();
-        s.count += 1;
-        s.wall_ms.add(i.wall_ms.map(|x| x as f64), false);
+        *interventions_by_actor_kind
+            .entry(i.actor_kind.as_str().to_string())
+            .or_default() += 1;
+        if i.actor_kind == InterventionActorKind::Human {
+            let s = human_interventions_by_kind
+                .entry(i.kind.as_str().to_string())
+                .or_default();
+            s.count += 1;
+            s.wall_ms.add(i.wall_ms.map(|x| x as f64), false);
+        }
         records.push(json!({
             "record_type": "intervention",
             "schema": RECORD_SCHEMA,
@@ -620,6 +632,8 @@ pub fn build_campaign_export(
             "campaign_id": campaign,
             "intervention_id": id,
             "kind": i.kind.as_str(),
+            "actor_kind": i.actor_kind.as_str(),
+            "actor_id": ov(&i.actor_id),
             "task_id": ov(&i.task_id),
             "at": i.at,
             "wall_ms": ov(&i.wall_ms),
@@ -665,7 +679,8 @@ pub fn build_campaign_export(
         runs_by_end,
         wu_verdicts,
         campaign_verdicts,
-        interventions_by_kind,
+        human_interventions_by_kind,
+        interventions_by_actor_kind,
         exec_vs_proposed,
         incomplete,
         quota: None,

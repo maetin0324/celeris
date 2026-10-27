@@ -66,6 +66,8 @@ fn other_campaign_rows_do_not_mix() {
     let iv = |id: &str, c: &str| DecisionLogIntervention {
         intervention_id: id.into(),
         kind: InterventionKind::Recovery,
+        actor_kind: InterventionActorKind::Human,
+        actor_id: Some("alice".into()),
         task_id: None,
         campaign_id: Some(c.into()),
         at: "t".into(),
@@ -83,7 +85,7 @@ fn other_campaign_rows_do_not_mix() {
     );
     assert_eq!(e.summary.n_runs, 1);
     assert_eq!(e.summary.total.input_tokens.sum, Some(10.0));
-    assert_eq!(e.summary.interventions_by_kind["recovery"].count, 1);
+    assert_eq!(e.summary.human_interventions_by_kind["recovery"].count, 1);
     assert_eq!(e.summary.excluded_rows, 3);
     assert!(!e.records_jsonl().contains("r2"));
 }
@@ -234,6 +236,8 @@ fn confidence_is_never_propensity_and_interventions_are_classified() {
     let iv = |id: &str, k| DecisionLogIntervention {
         intervention_id: id.into(),
         kind: k,
+        actor_kind: InterventionActorKind::Human,
+        actor_id: Some("alice".into()),
         task_id: Some("t-c1".into()), // campaign 未記載でも task で結ぶ
         campaign_id: None,
         at: "t".into(),
@@ -248,9 +252,27 @@ fn confidence_is_never_propensity_and_interventions_are_classified() {
             iv("a", InterventionKind::ResearchJudgment),
             iv("b", InterventionKind::ManualHandoff),
             iv("c", InterventionKind::Unclassified),
+            DecisionLogIntervention {
+                actor_kind: InterventionActorKind::CosProject,
+                actor_id: Some("thread-p".into()),
+                ..iv("d", InterventionKind::ResearchJudgment)
+            },
         ],
     );
-    let k = &e.summary.interventions_by_kind;
+    // CoS の処理は人の介入に入らず、主体別の件数にだけ出る。
+    let by_actor = &e.summary.interventions_by_actor_kind;
+    assert_eq!(by_actor.len(), 7);
+    assert_eq!(by_actor["human"], 3);
+    assert_eq!(by_actor["cos_project"], 1);
+    assert_eq!(by_actor["unknown"], 0);
+    let d = e
+        .records
+        .iter()
+        .find(|r| r["intervention_id"] == "d")
+        .unwrap();
+    assert_eq!(d["actor_kind"], "cos_project");
+    assert_eq!(d["actor_id"], "thread-p");
+    let k = &e.summary.human_interventions_by_kind;
     assert_eq!(k["research_judgment"].count, 1);
     assert_eq!(k["manual_handoff"].count, 1);
     assert_eq!(k["recovery"].count, 0);

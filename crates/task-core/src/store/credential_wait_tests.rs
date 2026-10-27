@@ -53,7 +53,7 @@ fn verified_wait(store: &SqliteStore, wu: &str, task: TaskId) {
 fn migration_creates_tables_and_version_is_81() {
     let store = SqliteStore::open_in_memory().expect("open");
     assert_eq!(store.schema_version().expect("v"), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 97);
+    assert_eq!(crate::SCHEMA_VERSION, 98);
     let conn = store.lock().expect("lock");
     for table in ["credential_waits", "credential_wait_events"] {
         let n: i64 = conn

@@ -204,11 +204,15 @@ fn write_records(dir: &Path, hash: &str, dup: bool) {
     let outcome = json!({"record_type":"outcome","dedup_key":"outcome:r1","campaign_id":"e2e",
         "run_id":"r1","wall_ms":90_000});
     let iv = json!({"record_type":"intervention","dedup_key":"intervention:i1","campaign_id":"e2e",
-        "intervention_id":"i1","kind":"research_judgment","task_id":"t-b-p0","at":"2026-10-19T00:11:00Z",
-        "wall_ms":null});
+        "intervention_id":"i1","kind":"research_judgment","actor_kind":"human","actor_id":"alice",
+        "task_id":"t-b-p0","at":"2026-10-19T00:11:00Z","wall_ms":null});
+    // CoS が答えた介入は人の介入に数えず、主体別の件数にだけ出る。
+    let cos = json!({"record_type":"intervention","dedup_key":"intervention:i2","campaign_id":"e2e",
+        "intervention_id":"i2","kind":"research_judgment","actor_kind":"cos_project","actor_id":"tp",
+        "task_id":"t-b-p0","at":"2026-10-19T00:12:00Z","wall_ms":null});
     let stray = json!({"record_type":"intervention","dedup_key":"intervention:i9","campaign_id":"e2e",
         "intervention_id":"i9","kind":"recovery","task_id":"t-unknown","at":"2026-10-19T00:11:00Z","wall_ms":null});
-    let mut rows = vec![run_row, outcome, iv, stray];
+    let mut rows = vec![run_row, outcome, iv, cos, stray];
     if dup {
         rows.extend(rows.clone());
     }
@@ -255,6 +259,10 @@ fn joins_on_same_identity_without_duplicates_and_a_arm_keeps_missing() {
     assert_eq!(
         b["event_interventions"]["value"],
         json!({"research_judgment": 1})
+    );
+    assert_eq!(
+        b["event_interventions_by_actor_kind"]["value"],
+        json!({"cos_project": 1, "human": 1})
     );
     assert_eq!(src(b, "human_ops"), "evaluator");
     assert_eq!(
@@ -354,7 +362,8 @@ fn joins_runner_out_and_decision_log_export_from_normal_paths() {
     use task_core::{
         SqliteStore,
         decision_log::{
-            DecisionLogIntervention, DecisionLogOutcome, DecisionLogProposal, InterventionKind,
+            DecisionLogIntervention, DecisionLogOutcome, DecisionLogProposal,
+            InterventionActorKind, InterventionKind,
         },
         decision_log_export::ExportParams,
     };
@@ -419,6 +428,8 @@ fn joins_runner_out_and_decision_log_export_from_normal_paths() {
         .decision_log_record_intervention(&DecisionLogIntervention {
             intervention_id: "i1".into(),
             kind: InterventionKind::ResearchJudgment,
+            actor_kind: InterventionActorKind::Human,
+            actor_id: Some("alice".into()),
             task_id: Some("t-b-p0".into()),
             campaign_id: Some("e2e".into()),
             at: "2026-10-19T00:11:00Z".into(),

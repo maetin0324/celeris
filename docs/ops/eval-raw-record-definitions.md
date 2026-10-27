@@ -126,10 +126,10 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 | `status_check` | 状態確認 | 人が進捗・状態を見に行く（GUI・`squeue`/`qstat`・ログ・transcript）。何も変えない | monitoring | （なし） | A: 端末で Claude Code の出力を見る / B: GUI の task 画面を見る |
 | `resubmit` | 再投入 | 失敗・停止した job・task・session を人が投入し直す | system（研究上の再試行なら research） | `Retried` → recovery | A: 失敗した `sbatch` を人が出し直す / B: failed task を Retry |
 | `resume` | 再開 | 中断した作業を同じ状態から続けさせる（API キー更新後の再開、session の resume、continue） | system | （なし。API キー通知/再開は event 照合） | A: 上限で止まった Claude Code を `--resume` / B: blocked を解いて続行 |
-| `research_direction` | 研究方針判断 | 研究の内容・方法・範囲を人が選ぶ（質問・decision への回答、方針の指示） | research | `Answered` → research_judgment | A: 次の実験条件を指示 / B: decisions に回答 |
+| `research_direction` | 研究方針判断 | 研究の内容・方法・範囲を人が選ぶ（質問・decision への回答、方針の指示） | research | `Answered`・`DecisionAnswered`・`PlanGateDecided` → research_judgment | A: 次の実験条件を指示 / B: decisions に回答 |
 | `safety_approval` | 安全承認 | 危険・費用・外部送信・credential 使用の可否を人が決める | safety | `ApprovalDecided` → unclassified（ここで safety に確定） | A: permission prompt で `rm`/外部送信を許可 / B: approval を承認 |
-| `system_adjustment` | システム都合の調整 | 研究内容と無関係な道具・設定・権限・環境の手直し（失敗はまだ起きていない） | system | `Edited(by=human)` → unclassified（調整なら確定） | A: CLAUDE.md・設定の修正 / B: task の編集・config の修正 |
-| `system_recovery` | システム都合の復旧 | 障害・停止・壊れた状態から戻す（daemon/tunnel 再起動、詰まった process の kill、壊れた workspace の修復） | system | → recovery | A: ssh master の張り直し / B: daemon の再起動 |
+| `system_adjustment` | システム都合の調整 | 研究内容と無関係な道具・設定・権限・環境の手直し（失敗はまだ起きていない） | system | `Edited` → unclassified（調整なら確定） | A: CLAUDE.md・設定の修正 / B: task の編集・config の修正 |
+| `system_recovery` | システム都合の復旧 | 障害・停止・壊れた状態から戻す（daemon/tunnel 再起動、詰まった process の kill、壊れた workspace の修復） | system | `IntegrationAnswered` → recovery | A: ssh master の張り直し / B: daemon の再起動 |
 | `manual_handoff` | 人の代行実行 | 本来システムがやる作業工程を人が自分で実行する | research または system | → manual_handoff | A/B: 解析 script を人が回す |
 | `protocol_step` | 測定手順 | 評価手順そのもの（試行開始・cutoff 宣言・grade 起動）。**介入に数えない** | protocol | （なし） | A/B: 試行を起動 |
 | `unclassified` | 未分類 | 上のどれか決められない。推測で寄せない（理由必須） | 評価者が選ぶ | unclassified | — |
@@ -221,8 +221,11 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 - A の harness 内部（Claude Code の tool 再試行・自動 compact・内部の待ち）は transcript を見ない限り見えない。
   A の ready_not_running は定義上存在しない（not_applicable）ため、B の待ち時間と同じ土俵で比べない。
 - human_wait は B が event（秒精度）、A が評価者記録または transcript で、**測り方が arm で異なる**。比較表には `time_basis` を並べる。
-- Celeris の intervention projection は `wall_ms` を持たず、ApprovalDecided・Edited を区別しない。B の介入件数・区分は生記録を正とし、
-  projection は件数の照合にだけ使う。campaign 識別の無い task の介入は projection に出ない。
+- Celeris の intervention projection は `wall_ms` を持たず（欠測）、ApprovalDecided・Edited を区別しない。主体は event の `by` から
+  `actor_kind`（human / cos_project / cos_general / external_operator / mcp_client / system / unknown）に分け、export の
+  `human_interventions_by_kind` は `human` だけ、`interventions_by_actor_kind` は全主体を数える。`by` の無い（ADR
+  2026-10-27-event-principals より前の）event は `unknown`（ADR 2026-10-27-decision-log-intervention-actors）。B の介入件数・区分は
+  生記録を正とし、projection は件数の照合にだけ使う。campaign 識別の無い task の介入は projection に出ない。
 - `TrialRecord.wall_secs` は整数秒で timeout で丸められる（超過分は分からない）。未実行・executor_error の 0 は欠測。
 - host 間の時計のずれは補正しない。`clock_source=system_utc` 同士でも host が違う区間の長さは秒未満〜数秒の誤差を含み得る。
   scheduler 計上値と手元の時刻を混ぜた区間は `time_precision=approximate`。

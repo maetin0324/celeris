@@ -18,8 +18,12 @@ tasks: [01M5XXF7QF5831M38E81S63RP1]
   旧い挙動（印があっても failed の子で親を起こす）を固定した試験は無かった。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
-- `bash scripts/dev/test-affected.sh`: 結果は下の「検査」に書く。
-- `cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check`: 同上。
+- commit: 「phase 1: 失敗した子に再実行待ちの印がある間は親を起こさない」と、この進捗の記録の commit。
+- `bash scripts/dev/test-affected.sh`: exit 0。6506 件 run、6506 passed、21 skipped。web の tsc -b と unit 試験も走って通った。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- 途中で e2e `delegation_scenarios` の 2 件が落ちた。原因は `fallback` 状態の項目まで escalated として数えたことで、
+  CoS の無い daemon で ADR-0021 の親のやり直しが止まった。`escalated` だけを数えるように直した（ADR 付記 A1）。
 
 ## 未解決事項
 - 「待て」の判定は語の照合で行う。語の一覧に無い言い回しの指示は拾わない。その場合、親は従来どおり起きる。

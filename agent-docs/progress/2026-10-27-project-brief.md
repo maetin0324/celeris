@@ -26,12 +26,20 @@ updated: 2026-10-27
 
 ## 試験（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
-- `bash scripts/dev/test-affected.sh` → exit 0（Rust 6505 run / 6505 passed、web Vitest 682 passed・98 files、tsc -b 通過）
+- `bash scripts/dev/test-affected.sh` → exit 0（Rust 6544 run / 6544 passed、web Vitest 682 passed・98 files、tsc -b 通過）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 - 追加した試験: task-core `project_brief::tests`（検査 4 件）・`store::project_briefs::tests`（置換・案件なし・活動・migration 0095 の写し）、
   task-dispatch `cos_chat::projects::tests`、task-worker `cos_chat_prompt_projects_section_lists_summaries_and_points_to_the_api`、
   task-api `tests/project_brief.rs`（admin PUT と一覧・詳細、件数・最終活動・人待ち、CoS op の案件 CoS 限定）。
+
+## main の取り込み（review の再開）
+
+- review が「target kept moving after 2 automatic re-syncs」で止まったので、外部 operator のコメントに従い task branch を main（件名「配備監査の進捗に main 取り込みと統合後の試験結果を書く」）に rebase した。
+- 衝突は migration の番号だけ。main が 0094 を `task_idempotency_keys` に使ったので、こちらを 0095 に振り直し SCHEMA_VERSION を 95 にした
+  （`migrations.rs`・版数の assert 16 か所・`delivery.rs` の版数列・downgrade の試験 2 本・`migration:0095` の記述）。
+  別 branch（task_unblocks）も 0095 を使っているが、main に無い番号は後から入る側が振り直す。
+- 上の試験は rebase 後の HEAD で再実行した。
 
 ## 本番への移行
 

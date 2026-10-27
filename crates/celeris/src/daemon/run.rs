@@ -192,6 +192,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     // 上書きするので、harness まで見ることで本物の LLM を呼ぶ経路を**設定ではなく構造で**閉じる
     // （ADR-0041 §3）。それ以外は ready のまま置かれ、リースの回収もレビューの拾い上げも起きない。
     if verify {
+        dispatcher.disable_cos_chat_for_verify();
         dispatcher.set_eligible_tasks(Arc::new(|task: &task_core::Task| {
             task.genre.as_deref() == Some(config::SMOKE_ID)
                 && task

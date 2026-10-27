@@ -52,3 +52,30 @@ updated: 2026-10-27
 ## 提案
 
 - CoS・MCP の操作を human-ops に自動で書く経路（cos_operations・mcp_calls から actor.kind と credential を導出）があると申告の誤りが減る。
+
+## delivery-repair: verify の CoS 背景処理を停止
+
+- commit: `phase 1: verify の CoS 背景処理を外して煙試験への干渉を防ぐ`
+- main をこの worktree に fast-forward で取り込んだ。元の checkout・本番サービス・staging は変更していない。
+- prepare.log は build・全体試験の成功後、verify の smoke が reviewing のまま60秒で失敗したことを示す。
+  staging のログでは dispatch 区間が約21秒・38秒。ready task の eligible filter は既に存在したが、
+  同区間で呼ばれる CoS intake・fallback・root 完了通知は filter を通らず snapshot 全体を対象にしていた。
+- [決定](../adr/2026-10-27-verify-without-cos-background.md): verify の最初の tick 前に CoS launch 登録を外す。
+  `cos.enabled=false` だけでは intake が残るため登録自体を解除する。通知ループ起動時の CoS route cutover も verify では抑止する。通常運用の fallback と煙試験の60秒条件は維持。
+- 回帰試験を既存 `instance_handoff` の verify 試験へ追加。`cos.enabled=true` でも CoS inbox・chat run・
+  triage/root-done cursor を書かず、fake smoke の worker→review→done を通す。
+- 修正前: 同試験は exit 101、CoS cursor が期待0に対して2行あり失敗。時間・負荷に依存せず不要な経路を検出した。
+- 修正後と必須検査の結果は以下へ記録する（提出時の HEAD、最後の main 同期後。基準は `git merge-base HEAD main`）。
+
+### 残る確認
+
+- 実 snapshot 上で60秒以内に完了するかは次回配送の verify check 6 で確認する。今回 release・deploy は実行しない。
+- phase の個別計測が無いため、過去ログの dispatch 時間すべてが CoS に由来するとは断定しない。
+
+### 再検査結果（提出時の HEAD、最後の main 同期後）
+
+- `cargo test -p celeris --test instance_handoff verify_mode_never_dispatches_and_never_touches_daemon_instances -- --nocapture`: exit 0、1 passed（1.49秒）。CoS cursor/inbox/chat run は0件、smoke は done。
+- `bash scripts/dev/test-affected.sh`: exit 0、2729 passed・9 skipped（183.412秒）。human_ops・human_ops_cli・human_ops_join・human_ops_report を含む。文書・進捗・source-size 検査も成功。既存 `dagbench_pbs_e2e` の `ExtBackend` 未使用import警告1件。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `git diff --check`: exit 0。

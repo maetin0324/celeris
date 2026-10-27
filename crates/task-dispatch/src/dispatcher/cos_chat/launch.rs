@@ -193,6 +193,13 @@ impl Dispatcher {
         });
     }
 
+    /// Startup-only: verify owns smoke tasks, never snapshot chats or inbox intake.
+    /// Unlike `enabled=false`, removing the pipeline also omits reconciliation,
+    /// fallback and root-done processing. Call before the first tick.
+    pub fn disable_cos_chat_for_verify(&mut self) {
+        self.cos_chat_launch = None;
+    }
+
     /// Change only future runs; keep handles, capacity reservations and triage state intact.
     pub fn reload_cos_chat_launch(&mut self, config: CosChatLaunchConfig) {
         if let Some(launch) = &mut self.cos_chat_launch {

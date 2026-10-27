@@ -370,7 +370,7 @@ command = ["sh", "-c", '{gated_fake}']
 /// - (c) それでも `daemon_instances` は空のまま。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn verify_mode_never_dispatches_and_never_touches_daemon_instances() {
-    let env = Env::new();
+    let env = Env::with_extra("[cos]\nenabled = true\n");
     let task_id = env.ready_task("verify");
     let smoke_id = env.smoke_task("smoke");
     let store = env.store();
@@ -440,6 +440,26 @@ async fn verify_mode_never_dispatches_and_never_touches_daemon_instances() {
             .unwrap_or_else(|e| panic!("instances: {e}"))
             .is_empty(),
         "verify は daemon_instances に行を書かない"
+    );
+    // CoS intake runs even when cos.enabled=false in normal operation. Verify
+    // must omit that pipeline entirely, including its reconciliation cursors.
+    let conn = rusqlite::Connection::open(&env.db).unwrap();
+    for table in ["cos_inbox_items", "chat_runs"] {
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "verify must not write {table}");
+    }
+    let cursors: Vec<String> = conn
+        .prepare("SELECT name FROM feed_cursor WHERE name LIKE 'cos_triage:%' OR name='root_done_summary'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        cursors.is_empty(),
+        "verify must not reconcile CoS: {cursors:?}"
     );
     // マイグレーションは適用されている（`SCHEMA_VERSION` まで上がっている）。
     assert_eq!(

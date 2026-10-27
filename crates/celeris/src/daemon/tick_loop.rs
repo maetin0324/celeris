@@ -55,7 +55,9 @@ pub(crate) async fn tick_loop(
     // ADR 2026-10-14-local-machine-settings D5: 足回りの resolver は dispatcher と同じものを使う。
     let workspace_roots = dispatcher.config().workspace_roots.clone();
     let triage_store = task_core::SqliteStore::open_client(&config.db.path).map(|(store, _)| store);
-    let triage_ready = if let Ok(store) = &triage_store {
+    let triage_ready = if roles.role.get() == InstanceRole::Verify {
+        false
+    } else if let Ok(store) = &triage_store {
         let view = task_ops::view::ViewContext {
             workspace_roots: workspace_roots.clone(),
             retry_backoff_base: Duration::from_secs(config.retry_backoff_base_secs),

@@ -1,6 +1,7 @@
 //! `celerisctl terminal-pty`（ADR 2026-10-27-web-terminal D1）の試験。偽の shell（`/bin/sh` の固定スクリプト）
 //! で、入出力・リサイズ・stdin の EOF と子の終了で session の process（別 process group の job、SIGHUP を
-//! 無視する job を含む）が残らないことを確かめる。待ちは出来事（出力の行・process の消滅）で、上限は保険。
+//! 無視する job を含む）と、`setsid` で session を抜けて tty を持ったままの job が残らないことを確かめる。
+//! 待ちは出来事（出力の行・process の消滅）で、上限は保険。
 
 use std::io::{Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -174,4 +175,57 @@ fn sigterm_ends_the_whole_session() {
     assert!(status.success());
     pty.wait_exit();
     assert_gone(&pids);
+}
+
+/// `setsid` で session を抜け、stdout・stderr に slave（tty）を持ったままの job。session の SIGHUP・SIGKILL は
+/// 届かず、master の読み取りも EIO にならない。
+const DETACHED: &str = r#"
+setsid sleep 300 &
+echo "bg:$!"
+echo ready
+while read -r line; do echo "got:$line"; done
+"#;
+
+/// helper の終了の上限。session の猶予 2 秒 + SIGKILL 後の待ち + pts の回収 + 読み切りの上限 2 秒に余裕を見る。
+const DETACHED_LIMIT: Duration = Duration::from_secs(15);
+
+fn wait_exit_within(pty: &mut Pty, limit: Duration) {
+    let deadline = Instant::now() + limit;
+    while pty.child.try_wait().expect("try_wait").is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "helper did not exit within {limit:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn detached_pid(pty: &mut Pty) -> i32 {
+    let pids = pty.background_pids();
+    assert_eq!(pids.len(), 1);
+    // 確かに別 session（helper の子の shell の session ではない）で生きている。
+    assert!(alive(pids[0]));
+    pids[0]
+}
+
+#[test]
+fn stdin_eof_ends_a_job_that_left_the_session_holding_the_tty() {
+    let mut pty = Pty::start(DETACHED);
+    let pid = detached_pid(&mut pty);
+    drop(pty.stdin.take());
+    wait_exit_within(&mut pty, DETACHED_LIMIT);
+    assert_gone(&[pid]);
+}
+
+#[test]
+fn sigterm_ends_a_job_that_left_the_session_holding_the_tty() {
+    let mut pty = Pty::start(DETACHED);
+    let pid = detached_pid(&mut pty);
+    let status = Command::new("kill")
+        .args(["-TERM", &pty.child.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(status.success());
+    wait_exit_within(&mut pty, DETACHED_LIMIT);
+    assert_gone(&[pid]);
 }

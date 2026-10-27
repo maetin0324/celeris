@@ -9,8 +9,9 @@
 //! - `1`: リサイズ（本文 4 byte = cols u16 BE + rows u16 BE）
 //!
 //! 終わり方（D1 の終了の保証）: stdin の EOF・SIGTERM/SIGHUP/SIGINT・子の終了のどれでも、子の session
-//! （sid = 子の pid）に属する全 process に SIGHUP、猶予の後 SIGKILL を送る。`celeris-terminal-*.scope` の
-//! 中にいれば最後にその cgroup の `cgroup.kill` に書き、session を抜けた process も消す。
+//! （sid = 子の pid）に属する全 process に SIGHUP、猶予の後 SIGKILL を送る。続けて session を抜けても slave（pts）を
+//! 開いている自 uid の process に SIGKILL を送り、`celeris-terminal-*.scope` の中で自分以外の process が残って
+//! いればその cgroup の `cgroup.kill` に書く。出力の読み切りは上限（`DRAIN_LIMIT`）つきで待つ。
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -30,6 +31,8 @@ const FRAME_RESIZE: u8 = 1;
 const MAX_FRAME: usize = 1 << 20;
 /// SIGHUP から SIGKILL までの猶予。
 const HANGUP_GRACE: Duration = Duration::from_secs(2);
+/// 終了後に PTY の出力を読み切る待ちの上限。超えたら読み切らずに終わる。
+const DRAIN_LIMIT: Duration = Duration::from_secs(2);
 /// 子の終了・停止の知らせを見る間隔（待ちの上限。CPU は使わない）。
 const POLL: Duration = Duration::from_millis(50);
 
@@ -157,7 +160,8 @@ fn signal_session(sid: i32, sig: libc::c_int) -> usize {
     members.len()
 }
 
-/// 自分が `celeris-terminal-*.scope` の中にいれば、その cgroup の全 process（自分を含む）を消す。
+/// 自分が `celeris-terminal-*.scope` の中にいて、自分以外の process（zombie を除く）が残っていれば、その cgroup の
+/// `cgroup.kill` に書いて全 process（自分を含む）を消す。何も残っていなければ書かない（子の終了 code を返せる）。
 fn kill_own_scope() {
     let Ok(text) = std::fs::read_to_string("/proc/self/cgroup") else {
         return;
@@ -169,7 +173,68 @@ fn kill_own_scope() {
     if !(leaf.starts_with("celeris-terminal-") && leaf.ends_with(".scope")) {
         return;
     }
-    let _ = std::fs::write(format!("/sys/fs/cgroup{path}/cgroup.kill"), "1");
+    let me = std::process::id() as i32;
+    let procs =
+        std::fs::read_to_string(format!("/sys/fs/cgroup{path}/cgroup.procs")).unwrap_or_default();
+    let others = procs
+        .lines()
+        .filter_map(|l| l.trim().parse::<i32>().ok())
+        .any(|pid| pid != me && alive(pid));
+    if others {
+        let _ = std::fs::write(format!("/sys/fs/cgroup{path}/cgroup.kill"), "1");
+    }
+}
+
+/// zombie でない process か。
+fn alive(pid: i32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| {
+            stat.rfind(')')
+                .map(|i| stat[i + 1..].trim_start().to_string())
+        })
+        .is_some_and(|rest| !rest.starts_with('Z'))
+}
+
+/// `tty`（`/dev/pts/N`）を fd に開いている自 uid の process（自分を除く、zombie を除く）の pid。他の uid の
+/// `/proc/<pid>/fd` は読めないので数えない。
+fn pts_holders(tty: &std::path::Path) -> Vec<i32> {
+    use std::os::unix::fs::MetadataExt;
+    let me = std::process::id() as i32;
+    // SAFETY: getuid は引数を取らず失敗しない。
+    let uid = unsafe { libc::getuid() };
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<i32>().ok())
+        .filter(|pid| *pid != me)
+        .filter(|pid| {
+            std::fs::metadata(format!("/proc/{pid}")).is_ok_and(|m| m.uid() == uid) && alive(*pid)
+        })
+        .filter(|pid| {
+            let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
+                return false;
+            };
+            fds.filter_map(|fd| fd.ok())
+                .any(|fd| std::fs::read_link(fd.path()).is_ok_and(|target| target == tty))
+        })
+        .collect()
+}
+
+/// session を抜けても slave を開いたままの process に SIGKILL を送り、消えるまで待つ（上限つき）。
+fn kill_pts_holders(tty: &std::path::Path) {
+    let deadline = Instant::now() + HANGUP_GRACE;
+    loop {
+        let holders = pts_holders(tty);
+        if holders.is_empty() || Instant::now() >= deadline {
+            return;
+        }
+        for pid in holders {
+            // SAFETY: kill は pid と signal 番号だけを受ける。
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        std::thread::sleep(POLL);
+    }
 }
 
 /// session の全 process を止める。SIGHUP → 猶予 → SIGKILL。子の回収は呼び出し側。
@@ -209,6 +274,8 @@ pub fn run(args: TerminalPtyArgs) -> ExitCode {
         Some(split) => split,
         None => return ExitCode::from(64),
     };
+    // slave の名前（`/dev/pts/N`）。終了時に、session を抜けてもこれを開いている process を探す。
+    let tty = std::fs::read_link(format!("/proc/self/fd/{}", slave.as_raw_fd())).ok();
     let stdio = |fd: &OwnedFd| fd.try_clone().map(Stdio::from);
     let (Ok(sin), Ok(sout), Ok(serr)) = (stdio(&slave), stdio(&slave), stdio(&slave)) else {
         eprintln!("terminal-pty: dup failed");
@@ -254,7 +321,8 @@ pub fn run(args: TerminalPtyArgs) -> ExitCode {
     let Ok(reader) = master.try_clone() else {
         return ExitCode::from(70);
     };
-    let output = std::thread::spawn(move || {
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
         let mut reader = File::from(reader);
         let mut stdout = std::io::stdout().lock();
         let mut buf = [0_u8; 16 * 1024];
@@ -271,6 +339,7 @@ pub fn run(args: TerminalPtyArgs) -> ExitCode {
                 Err(_) => break,
             }
         }
+        let _ = done_tx.send(());
     });
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || read_frames(std::io::stdin().lock(), tx));
@@ -302,10 +371,14 @@ pub fn run(args: TerminalPtyArgs) -> ExitCode {
     }
     end_session(sid, &mut child);
     let status = status.or_else(|| child.wait().ok());
-    drop(writer);
-    // 出力の残りを読み切る（slave を持つ process はもう居ないので EIO で終わる）。
-    let _ = output.join();
+    if let Some(tty) = &tty {
+        kill_pts_holders(tty);
+    }
     kill_own_scope();
+    drop(writer);
+    // 出力の残りを読み切る（slave を持つ process はもう居ないので EIO で終わる）。他の uid が slave を持つなど
+    // で終わらなくても、上限で切り上げて終了する（読み取りの thread は process の終了で消える）。
+    let _ = done_rx.recv_timeout(DRAIN_LIMIT);
     match status {
         Some(s) => match s.code() {
             Some(code) => ExitCode::from(code.clamp(0, 255) as u8),

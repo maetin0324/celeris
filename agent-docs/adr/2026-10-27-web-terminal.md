@@ -35,6 +35,22 @@ tasks: [01M5ZA2NP31AVVKQ9F4T3A52VB]
   background job（別 process group）も同じ session なので消える。さらに helper が `celeris-terminal-*.scope` の中に
   いれば、最後にその cgroup の `cgroup.kill` に 1 を書き、`setsid` で session を抜けた process も消す。
 
+- **付記 A1（2026-10-27、終了の保証の修正）**: 最初の実装は session の SIGHUP・SIGKILL の後に PTY 出力の読み切り
+  （読み取り thread の join）を待ち、その後で `cgroup.kill` を書いていた。`setsid` で session を抜けた process が
+  slave（tty）を開いたままだと master の read が EIO にならず、join が返らない。SIGTERM も止める旗を立てるだけなので
+  helper は終わらず、`cgroup.kill` にも届かなかった。直した後の終わり方は次の順:
+  1. 子の session の全 process に SIGHUP、猶予 2 秒で SIGKILL（従来どおり）。
+  2. **pts を持つ process の回収**: slave の名前（`/dev/pts/N`）を `/proc/<pid>/fd` の readlink で開いている
+     自 uid の process（自分と zombie を除く）を探して SIGKILL を送り、消えるまで待つ（上限 2 秒）。scope の外
+     （`inline`）でも、session を抜けて tty を持つ process はこれで消える。他の uid の process と、tty を閉じて
+     session を抜けた process は scope の外では消せない（scope 運用では 3 で消える）。
+  3. **join の前の `cgroup.kill`**: `celeris-terminal-*.scope` の `cgroup.procs` に自分以外の process（zombie を除く）
+     が残っていれば `cgroup.kill` に 1 を書く（helper 自身も消える）。何も残っていなければ書かず、子の終了 code を返す。
+  4. **読み切りの上限**: 出力の読み切りは出来事（読み取り thread の終了の知らせ）を最大 2 秒待ち、超えたら読み切らずに
+     終わる。
+  試験は `crates/celerisctl/tests/terminal_pty.rs` の `*_ends_a_job_that_left_the_session_holding_the_tty`
+  （stdin の EOF と SIGTERM。`setsid sleep 300 &` の job が消え、helper が 15 秒以内に終わる）。
+
 ### D2 寿命: 切断で必ず終了する（再接続しない）
 
 - WebSocket が切れたら端末は終わる（同じ PTY への再接続はしない）。再接続の窓を設けると、別の端末・別の経路から
@@ -101,7 +117,8 @@ tasks: [01M5ZA2NP31AVVKQ9F4T3A52VB]
 ## 試験（R6）
 
 - `celerisctl terminal-pty` の試験（偽 shell = `/bin/sh` の固定スクリプト）: 入出力、リサイズで `stty size` が変わる、
-  stdin の EOF で background job を含む session の process が消える、子の終了後に残った job が消える。
+  stdin の EOF で background job を含む session の process が消える、子の終了後に残った job が消える、
+  `setsid` で session を抜けて tty を持つ job が stdin の EOF と SIGTERM で消え helper が上限内に終わる（D1 付記 A1）。
 - gateway の試験（`node --test`、偽 helper、偽 daemon）: 開く・入出力・リサイズ frame・切断で helper が終わる・
   idle timeout・最大継続・同時数の上限・logout・step-up 無し / 失効・Origin 違反・LAN の Host・daemon の 403/409。
 - daemon の試験: `human:web` 以外の主体は 403、未接続のクラスタは 409、記録の追記と UPDATE/DELETE の拒否。

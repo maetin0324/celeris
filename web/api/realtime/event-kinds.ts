@@ -85,6 +85,8 @@ export const EVENT_KINDS = [
   "reviewer_pass_reused",
   "review_resync_halted",
   "review_resync_resumed",
+  "done_reintegration_started",
+  "done_reintegration_deferred",
   "required_checks_evaluated",
   "merge_candidate_stale",
   "integration_repair_scheduled",

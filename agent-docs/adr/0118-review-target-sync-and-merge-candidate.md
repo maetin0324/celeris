@@ -40,6 +40,8 @@ stale（同期中の target 再進行、delivery の base/head と同期 snapsho
 
 **付記 2026-10-27（置き換え）**: 上限での停止は `WorkerProgress` の印ではなく `Event::ReviewResyncHalted` で残し、受信箱（kind `review_resync_halted`）と通知に出す。再開は `POST /tasks/{id}/rereview`（`ReviewResyncResumed{human}`）と target が静かになったときの自動再開（`ReviewResyncResumed{target_quiet}`）。stale の後の再 review は、reviewer の合格が同期前の HEAD に束縛されていて target の進みが候補の差分と重ならなければ reviewer を省き、決定的 check だけをやり直す。root delivery の `request_rereview` は上限で Blocked にしない。詳細は [ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse](2026-10-27-review-resync-halt-visible-and-reviewer-reuse.md)。
 
+**付記 2026-10-27（done の後）**: review 合格で done になった後に main が進み、配送の ff が届かず unintegrated になった task は、stranded sweep が衝突しなければ `Trigger::Rereview` で reviewing に戻し、この ADR の review 前同期から通常どおりやり直す（`Event::DoneReintegrationStarted`）。衝突・回数の上限は受信箱 `unintegrated` に残す。詳細は [ADR 2026-10-27-done-task-auto-reintegrate](2026-10-27-done-task-auto-reintegrate.md)。
+
 ### D3. 検査した SHA の記録
 
 同期後、checks を起動する直前の HEAD を `reviewed_sha` として固定し、`merge_candidate_sha = reviewed_sha` とする。`target_sha` は同じ同期で読んだ target ref である。三つ組はリポジトリ単位かつ review attempt 単位で保持する。checks と reviewer は同じ task worktree を見て、レビューの task 単位ロックを verdict の保存まで持つ。checks の前後、reviewer の前後、verdict 保存前に HEAD と task ブランチ ref が `reviewed_sha` から動いていないことを確かめる。変化した attempt の合格判定を破棄し、D4 に戻す。reviewer がいない task でも deterministic checks の SHA を同じように固定する。

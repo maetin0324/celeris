@@ -201,3 +201,11 @@ Status は Proposed のまま。以下は実装（views・routes・routes-wire�
 - 受信箱 item の `at` は従来どおり `checked_at` から作る（`AttentionItem::Unintegrated`）。通知 feed も同じ inbox view を元にする。
 - 試験: `stranded_identity_preserves_attention_item_id_and_at_until_head_changes`（`crates/task-ops/src/inbox/tests.rs`。5 分あけた 2 回の sweep で item の id と `at` が同じ、head を変えると `at` が進む）。
 - ずれ: 無し。
+
+## 付記: 衝突しない進みは自動で取り込み直す（2026-10-27）
+
+D2 の「衝突・権限不足など自動処理不能なら integration request」は、人が気づいて押すまで残る前提だった。
+[ADR 2026-10-27-done-task-auto-reintegrate](2026-10-27-done-task-auto-reintegrate.md) により、auto_integrate の案件で main が進んだだけの
+`unintegrated` 行は sweep の後に `task_ops::stranded::reintegrate::run` が git だけで判定し、clean なら再 review 経路に戻す。
+衝突・回数の上限だけが従来どおり受信箱 `unintegrated` と integration request に残る。手動の `merge`・`hold`・`discard`・`reopen` は変えない。
+

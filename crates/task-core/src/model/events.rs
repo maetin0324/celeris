@@ -215,6 +215,24 @@ pub enum Event {
         repo_id: crate::RepoId,
         reason: String,
     },
+    /// ADR 2026-10-27-done-task-auto-reintegrate D3・D6: done の後に main が進んで unintegrated になった task を、
+    /// stranded sweep が `Trigger::Rereview` で reviewing に戻した（遷移と同じ transaction）。`class` は
+    /// `disjoint`（main 側の変更 file が task の差分と重ならない）か `overlap`。`attempt` は 1 始まり。
+    DoneReintegrationStarted {
+        repo_id: crate::RepoId,
+        head_sha: String,
+        target_sha: String,
+        class: String,
+        attempt: u32,
+    },
+    /// 同 ADR D4・D5: 自動の再取り込みをしなかった（衝突・回数の上限）。同じ理由では 1 回だけ追記する。
+    /// 状態は変えない。受信箱 `unintegrated` が理由を出す。
+    DoneReintegrationDeferred {
+        repo_id: crate::RepoId,
+        head_sha: String,
+        target_sha: String,
+        reason: String,
+    },
     /// ADR-0120 D5: review 前同期の衝突に対し IntegrationRepair WU を起票した（WU の追加・
     /// `ReviewRepair` 遷移と同じ transaction で 1 回）。`attempt` は integration_repair WU の通し番号
     /// （1 始まり）。`conflict_files` は重複を除きパス順。状態・attempts は変えない。

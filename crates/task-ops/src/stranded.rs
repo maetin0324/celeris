@@ -7,6 +7,8 @@ use task_core::{
 };
 use time::OffsetDateTime;
 
+pub mod reintegrate;
+
 /// Caller supplied repository/release context; this module never reads daemon configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IntegrationContext {
@@ -580,9 +582,18 @@ pub fn sweep(
                         default_branch,
                     ) =>
                 {
+                    // ADR 2026-10-27-done-task-auto-reintegrate D4・D5: 自動の再取り込みが同じ head に残した理由
+                    // （衝突・上限）は、main が進んだだけの理由で上書きしない。
                     Some(
-                        "recorded head is not an ancestor of the repository default branch"
-                            .to_owned(),
+                        previous
+                            .as_ref()
+                            .filter(|p| {
+                                p.head_sha == head
+                                    && p.state == TaskRepoIntegrationStatus::Unintegrated
+                            })
+                            .and_then(|p| p.reason.clone())
+                            .filter(|r| r.starts_with(reintegrate::REASON_PREFIX))
+                            .unwrap_or_else(|| reintegrate::NOT_ANCESTOR.to_owned()),
                     )
                 }
                 Ok(_) => None,

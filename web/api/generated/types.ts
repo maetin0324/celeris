@@ -2244,6 +2244,19 @@ export type Event = {
   "type": "review_resync_resumed";
 } | {
   "attempt": number;
+  "class": string;
+  "head_sha": string;
+  "repo_id": RepoId;
+  "target_sha": string;
+  "type": "done_reintegration_started";
+} | {
+  "head_sha": string;
+  "reason": string;
+  "repo_id": RepoId;
+  "target_sha": string;
+  "type": "done_reintegration_deferred";
+} | {
+  "attempt": number;
   "before_sha": string;
   "conflict_files": Array<string>;
   "key": string;

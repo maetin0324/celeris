@@ -3,6 +3,10 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-27（ADR 2026-10-27-done-task-auto-reintegrate D4・D6）— **追加。v1 のまま**。task の event に `done_reintegration_started`
+  （`repo_id`・`head_sha`・`target_sha`・`class`（`disjoint`|`overlap`）・`attempt`）と `done_reintegration_deferred`（`repo_id`・`head_sha`・
+  `target_sha`・`reason`）を足した。受信箱 `unintegrated` の理由に `auto reintegrate: merge conflict in <files>`・
+  `auto reintegrate: limit reached after <n> attempts`（actor `auto-reintegrate`）が出る。
 - 改訂: 2026-10-27（ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D1〜D5）— **追加。v1 のまま**。
   `DaemonSnapshot.review_resync_halted[]`（`task_id`・`repo_id`・`reviewed_sha`・`target_sha`・`resyncs`・`at`）、`Inbox.attention[]` に
   type `review_resync_halted`、受信箱の kind `review_resync_halted`（選択肢 `rereview` → `POST /tasks/{id}/rereview`）を足した。

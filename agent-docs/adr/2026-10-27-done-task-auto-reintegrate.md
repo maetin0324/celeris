@@ -1,6 +1,6 @@
 # ADR 2026-10-27: done の後に main が進んで unintegrated になった task を、衝突しなければ自動で取り込み直す
 
-- 状態: 提案（2026-10-27。実装は次の WorkUnit）
+- 状態: 実装済み（2026-10-27。付記: 実装との突き合わせ）
 - tasks: [01M5YYZ7FJ4REHEKFMDPV4KCGG]
 - 関係: ADR 2026-10-11-stranded-done-branches、ADR 2026-10-12-stranded-sweep-single-flight、
   ADR 2026-10-16-project-auto-integrate、ADR 2026-10-02-parallel-integration-auto-resolve、
@@ -115,3 +115,20 @@ main との結合で壊れても検出できない。check を走らせる別の
 - reviewer は main 側と重ならない進みでは走らない。重なる場合だけ reviewer の費用がかかる。
 - 衝突・上限到達は受信箱に理由つきで残り、無言で止まらない。
 - 自動の再取り込みは task あたり 2 回・repo あたり 1 件／周期に抑えるので、取り込みが続く日でも再 review の連鎖は起きない。
+
+## 付記: 実装との突き合わせ（2026-10-27）
+
+- D1・D2・D5: `crates/task-ops/src/stranded/reintegrate.rs` の `run` が条件と回数・repo ごと 1 件（`updated_at`（done にした遷移の時刻）、
+  同時刻は task id の順）を決め、`classify` が判定する。`merge-tree` は `--name-only --no-messages` で、衝突 file は出力の 2 行目以降。
+  候補にするのは理由が `recorded head is not an ancestor ...` の行に加え、前の周期に衝突で見送った行（`auto reintegrate: merge conflict`。
+  main がさらに進めば衝突が消えることがある）。上限到達の行は候補にしない。
+- D4: 衝突・上限で書いた理由（接頭辞 `auto reintegrate:`）は、同じ head で unintegrated のままなら `stranded::sweep` が上書きしない
+  （上書きすると周期ごとに理由が往復するため）。見送りの event は直近の見送りと head・理由が同じなら追記しない。
+  統合依頼は `IntegrationRequest::id_for` が同じ両側の head を 1 件にまとめる。
+- D3: 遷移の失敗・git の失敗は `Outcome::Retry` として daemon が log に出すだけで、行も event も変えない（task-ops は tracing を持たない）。
+- 試験: `crates/task-ops/src/stranded/reintegrate/tests.rs`（実 git の一時 repo。main 側の commit は `GIT_INDEX_FILE` と `commit-tree`）。
+  disjoint・overlap・衝突・hold/discard/auto_integrate 無効・repo ごと 1 件と上限。reviewing に戻った後の review 前同期・reviewer 再利用・
+  必須 check の再実行は既存の試験（`crates/task-dispatch/src/dispatcher/tests/target_sync.rs` の
+  `reviewer_pass_is_reused_when_target_advances_without_overlap`・`reviewer_runs_again_when_target_advances_touching_the_task_files`）が持ち、
+  人の rereview と同じ遷移なので dispatcher 側の新しい試験は足していない。task-api の受信箱の試験も、行の理由をそのまま出す既存の経路なので足していない。
+

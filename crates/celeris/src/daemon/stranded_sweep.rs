@@ -78,7 +78,14 @@ pub(crate) fn run(store: &dyn TaskStore, now: OffsetDateTime) -> Result<usize, S
             });
         }
     }
-    task_ops::stranded::sweep(store, &records, now).map_err(|e| e.to_string())
+    let changed = task_ops::stranded::sweep(store, &records, now).map_err(|e| e.to_string())?;
+    // ADR 2026-10-27-done-task-auto-reintegrate: 同じ single-flight の中で、main が進んだだけの行を取り込み直す。
+    let outcomes =
+        task_ops::stranded::reintegrate::run(store, &records, now).map_err(|e| e.to_string())?;
+    for outcome in outcomes {
+        tracing::info!(?outcome, "auto reintegrate");
+    }
+    Ok(changed)
 }
 
 /// ADR 2026-10-12-stranded-sweep-single-flight D3: per sweep, each Local repository's

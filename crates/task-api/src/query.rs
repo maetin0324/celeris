@@ -285,6 +285,8 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::ReviewerPassReused { .. } => "reviewer_pass_reused",
         Event::ReviewResyncHalted { .. } => "review_resync_halted",
         Event::ReviewResyncResumed { .. } => "review_resync_resumed",
+        Event::DoneReintegrationStarted { .. } => "done_reintegration_started",
+        Event::DoneReintegrationDeferred { .. } => "done_reintegration_deferred",
         Event::IntegrationRepairScheduled { .. } => "integration_repair_scheduled",
         Event::IntegrationRepairResolved { .. } => "integration_repair_resolved",
         Event::IntegrationRepairExhausted { .. } => "integration_repair_exhausted",

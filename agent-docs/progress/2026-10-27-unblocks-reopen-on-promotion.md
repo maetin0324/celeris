@@ -36,8 +36,22 @@ updated: 2026-10-27
   blocked はコメントだけ・子の修正は親の配送で判定／`included: null`・壊れた `promoted.json` を飛ばす／検証）。
 - 同コマンド内の task-api::unblocks: 3 passed（API で結んで昇格 → 1 度だけ reopen、二度目の昇格で重ならない／
   不明・重複 id は 422 で何も作らない／CoS の `task.create` でも結びが書かれる）。
-- `bash scripts/dev/test-affected.sh`: exit 0（nextest 6550 passed・21 skipped、web Vitest 685 passed・Node 98 passed）。
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 6573 passed・21 skipped、web Vitest 685 passed・Node 99 passed）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+
+- 文書検査: `sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-adr-numbers.sh`、
+  `sh scripts/dev/progress-index.sh --check` はすべて exit 0。
+- `python3 scripts/dev/check-human-text.py`: exit 0（0 findings）。`git diff --check`: exit 0。
+
+## main-resync-recheck（2026-10-27 完了）
+
+- 最新ローカル main へ `git rebase main` を実行し、衝突なしで完了。既存 main と integration-repair-1 の実装、
+  ADR D1〜D4・付記 A1 を維持した。新機能・設計変更はない。
+- main の stagnation 試験のビルド修正を取り込み、`secretary_summary` の削除を重複実装していない。
+- main の migration は 0095 までで、unblocks の 0096 は衝突なし。番号・版数の変更は不要。
+- 最終同期後、提出時の HEAD で上記検査を実行。test-affected は `env -u CELERIS_WU_BASE` を付け、
+  基準を `git merge-base HEAD main` に揃えた。API・CoS 作成、failed の再開、blocked のコメント、
+  重複防止、結び作成前の昇格除外の既存 8 試験を含めて成功した。
 
 ## 再検査時の修正
 
@@ -60,6 +74,8 @@ updated: 2026-10-27
 - `phase 1: 成果物プレビューの幅別検査を分けてタイムアウトを防ぐ`
 - `phase 1: main 同期後の unblocks 検証結果を更新する`
 - `phase 1: unblocks は結びの作成より後に昇格した release だけで発火する`
+
+- `phase 1: 最新 main のビルド修正を取り込み unblocks の再検査を記録する`
 
 ## 未解決事項
 

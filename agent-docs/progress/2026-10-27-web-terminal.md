@@ -13,7 +13,7 @@ tasks: [01M5ZA2NP31AVVKQ9F4T3A52VB]
 ## 変更
 - `phase 1: クラスタ画面から host とクラスタの web 端末を開けるようにする` — ADR、PTY helper
   （`celerisctl terminal-pty`）、daemon の `POST /api/v1/terminals`・`/close`（主体 human:web だけ）と追記専用の表
-  `terminal_session_events`（migration 0098。0097 は別 branch の `comment_author_kinds` が使うので予約）、web gateway の
+  `terminal_session_events`（migration 0099。0097・0098 は main の `comment_author_kinds`・`decision_log_intervention_actors`）、web gateway の
   `/terminal/ws`・`/terminal/step-up`・`/terminal/status`、`/api/terminals` の中継の拒否、xterm.js の画面、CoS ops の除外表。
 - `phase 1: web 端末の検査結果を記録する` — clippy の指摘（openpty の引数）の修正とこの進捗ファイル。
 - `phase 1: web 端末の gateway 試験で並走する probe を記録しない` — 並走する他の試験の loopback probe で偽 daemon が落ちたので、`acceptFixtureRequest` で絞った。
@@ -49,7 +49,7 @@ tasks: [01M5ZA2NP31AVVKQ9F4T3A52VB]
 - 端末は既定で loopback の Host からだけ開ける。tailscale から使うには `~/.config/celeris/web.env` に
   `CELERIS_WEB_TERMINAL_HOSTS=<tailscale の名前>` を足してから昇格する（operator が利用者に告知してから適用する。
   手順は docs/ops/web-terminal.md「本番で有効にする手順」）。
-- migration 0098 は昇格時に daemon が当てる（表の追加だけ）。
+- migration 0099 は昇格時に daemon が当てる（表の追加だけ）。
 
 ## 未解決
 - 本物の browser・ssh・systemd-run の e2e（xterm の描画、CSP 下の `<style>`、scope の資源上限、ControlMaster 越しの
@@ -67,3 +67,9 @@ tasks: [01M5ZA2NP31AVVKQ9F4T3A52VB]
 
 ## 提案
 - 端末の入出力の opt-in 記録は作っていない。必要になったら秘密の扱いを別 ADR で決める。
+
+## main 同期（integration-repair-2）
+- main が 0098 を `decision_log_intervention_actors` に使ったので、`terminal_session_events` を 0099 へ移し、
+  `SCHEMA_VERSION` を 99 にした（版数を固定する試験の assert も 99）。
+- 未解決: `scripts/dev/jev_source_reader.py` の `KNOWN_SCHEMA_VERSIONS` は 98 のままで、版 99 の DB に
+  `unknown_schema` の診断を出す。この WU の範囲外なので followup に回した。

@@ -1,0 +1,6 @@
+# check-human-text.py の許可（rule<TAB>snippet<TAB>理由）。format 文字列の断片で切れたために出る候補だけを書く。
+trailing_colon	悪い知らせ:	BAD_NEWS_PREFIX は「悪い知らせ: <本文>」の前置き。断片で切れて文末に見える
+trailing_colon	{prefix}人の決定が {} 件必要:	次の行から決定の一覧が続くラベル
+trailing_colon	人の決定 {} 件:	次の行から決定の一覧が続くラベル
+excess_list	リスト行: 5 / 全非空行: 8	prompt の規則の一覧（人への通知文ではない）。項目は 1 行ずつ独立した規則
+slop_vocabulary	- 比喩や「手触り」「解像度」「地図を描く」のような意味のぼやけた語を使わない。	使わない語の例として挙げている

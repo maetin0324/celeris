@@ -622,8 +622,9 @@ fn cos_chat_core_is_byte_identical_across_runs_and_free_of_run_values() {
         "{}",
         a.core
     );
+    // ADR 2026-10-27-yomiyasu-human-text D3: 7500 + the human-text rules (798 B) → 8300.
     assert!(
-        a.core.len() <= 7500,
+        a.core.len() <= 8300,
         "Core is {} bytes\n{}",
         a.core.len(),
         a.core

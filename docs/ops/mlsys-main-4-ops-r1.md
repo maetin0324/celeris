@@ -139,3 +139,11 @@ A3/A5/A7 は起票元の改善計画の識別子。A7 等が別 task で完了�
 報告には revision/condition、計画・実行・未実行・中断・条件混在の数、成功判定、支援 3 区分、主体別の論理要求数と
 生の操作回数、人の能動時間、Celeris/外部 AI/共有/評価器の消費、欠測件数と理由、条件変更履歴を載せる。
 raw と集計の参照を添え、結果に影響する外部 AI 支援を共有開発費として除外していないことを確認する。
+
+## 8. 方針の版の変更記録
+
+§3 の「変更時」の記録のうち、CoS の方針の版の変更を並べる。測定 daemon で版を変えたら、新しい `condition_id` で試行を始める。
+
+| 日付 | 変更 | 版 | 根拠 | 既存の試行への影響 |
+|---|---|---|---|---|
+| 2026-10-27 | 人に返す文面の規則（yomiyasu の要点）を CoS の Core と skill、worker の結果・質問の指示に入れた | `cos_policy_version` "1" → "3"（`cos-inbox-triage` 3、`cos-operator` 5） | [ADR](../../agent-docs/adr/2026-10-27-yomiyasu-human-text.md) | main-4 の pinned 測定（RELEASE a28184889f56、別 daemon）は固定した release と config で動くので変わらない。版 "3" の release を配備した daemon の試行は、版 "1" の試行と別の condition |

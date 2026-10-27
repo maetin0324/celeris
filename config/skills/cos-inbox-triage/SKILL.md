@@ -1,12 +1,12 @@
 ---
 name: cos-inbox-triage
-description: Celeris の受信箱の一次対応 policy（policy_version 2）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
+description: Celeris の受信箱の一次対応 policy（policy_version 3）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
 metadata:
   author: celeris
-  version: "2"
+  version: "3"
 ---
 
-# CoS inbox triage（policy_version "2"）
+# CoS inbox triage（policy_version "3"）
 
 受信箱に届く待ちは全て最初に CoS（あなた）に渡る。あなたは各 item について
 **answer / observe / escalate** のどれかを選び、`POST /api/v1/cos/inbox/{i}/resolve` で 1 件ずつ記録する。
@@ -73,10 +73,10 @@ metadata:
 ```json
 {"idempotency_key":"k","expected_revision":"1","outcome":"answer",
  "answer":{"option":"continue","note":"既定手順内","payload":null},
- "reason":"承認済み計画と一致","confidence":0.97,"policy_version":"2","escalation":null}
+ "reason":"承認済み計画と一致","confidence":0.97,"policy_version":"3","escalation":null}
 ```
 
-- `expected_revision` は item の `source_revision`。`policy_version` はこの skill の `"2"`（config の値があればそれ）。
+- `expected_revision` は item の `source_revision`。`policy_version` はこの skill の `"3"`（config の値があればそれ）。
 - `outcome` が answer 以外なら `answer=null`。answer・observe なら `escalation=null`。escalate では escalation packet が必須。
 - `idempotency_key` は item ごとに一意にし、再試行では同じ key を使う。
 
@@ -97,6 +97,11 @@ metadata:
 - `web_path`: 対象の web 画面の、同じアプリ内の path（`/tasks/<id>` など）。サーバが対象から導く path と照合するので、
   外部 URL や推測の path を書かない。
 - 秘密・添付の本文・認証情報を packet に入れない。
+- `summary`・`label`・`recommendation_reason`・`reason` は人が読む文なので、日本語の推敲 skill yomiyasu の要点
+  （Core の「人が読む文面」、cos-operator の explaining.md の「文面の推敲」）に沿って書く。主語と述語（誰が何をしたか・
+  誰が何をするか）をはっきり書き、比喩や「手触り」「解像度」のような意味のぼやけた語を使わない。task ID・数値・期限・
+  止まっている範囲を具体的に書き、元の問いの意味・条件・未確認の事項を変えない。`label` は選んだら何が起きるかが分かる
+  短い句にする（例: 「公開する」「保留して公開先を確かめる」）。
 
 ## 7. Discord の扱い
 

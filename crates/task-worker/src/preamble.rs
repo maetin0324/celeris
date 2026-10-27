@@ -48,7 +48,9 @@ pub fn decision_requests_section(artifacts: &str) -> String {
          `{{\"key\": \"<a-z0-9->\", \"question\": \"…\", \"options\": [{{\"key\": \"…\", \"label\": \"…\"}}, …], \
          \"recommended\": \"<option key>\", \"cost_of_reversal\": \"low|medium|high\", \"needed_before\": [\"self\" | \"<unit key>\" | \"stage:<key>\"]}}`、\
          選択肢は 2〜5 件）。`needed_before: [\"self\"]` はこの仕事を人の答えが出るまで止めます（答えは次の run の前置きに入ります）。\
-         他の unit を指せばその unit だけが待ち、この run の完了は妨げません。数が多すぎると 1 件に束ねられます。\n\n"
+         他の unit を指せばその unit だけが待ち、この run の完了は妨げません。数が多すぎると 1 件に束ねられます。\n\
+         {rules}",
+        rules = crate::human_text::DECISION_TEXT_RULES
     )
 }
 

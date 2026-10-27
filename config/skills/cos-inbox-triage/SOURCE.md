@@ -12,3 +12,4 @@ license: このリポジトリと同じ（外部の license は無い）
 - 2026-10-08（ADR 2026-10-08-cos-chat-prompt-cache 付記 D7）: 受信箱スレッドの run と、受信箱の件を渡された run にだけ
   mount するようにした（`task-dispatch` の `cos_chat_skills`）。通常のスレッドには載らない。policy（version 2）は変えていない。
   cos-operator の §5・§10 への参照を production.md・explaining.md に直した。
+- 2026-10-27（ADR 2026-10-27-yomiyasu-human-text）: §6 に人が読む文面の規則（yomiyasu の要点）を足し、policy_version を 3 に上げた。config の `[cos.triage] policy_version` の既定も "3"。

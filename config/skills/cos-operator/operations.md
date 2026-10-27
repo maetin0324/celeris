@@ -14,7 +14,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 
 ```json
 {"idempotency_key":"<thread 内で一意>","expected_revision":null,
- "reason":"<空でない理由>","policy_version":"4",
+ "reason":"<空でない理由>","policy_version":"5",
  "request":{"method":"POST","path":"<下の表の path>","body":{}}}
 ```
 
@@ -185,7 +185,7 @@ CoS も上の表の `PATCH /api/v1/tasks/<id>`（task.update）で同じ修復�
 
 ```json
 {"idempotency_key":"create-screen-fix-1","expected_revision":null,
- "reason":"人がチャットで画面の修正を依頼した（seq 12）","policy_version":"4",
+ "reason":"人がチャットで画面の修正を依頼した（seq 12）","policy_version":"5",
  "request":{"method":"POST","path":"/api/v1/tasks","body":{
    "title":"画面修正","objective":"依頼の全文",
    "genre":"coding","project_id":"<確認した案件 ID>","repos":["agent-platform"],
@@ -199,7 +199,7 @@ CoS も上の表の `PATCH /api/v1/tasks/<id>`（task.update）で同じ修復�
 
 ```json
 {"idempotency_key":"kb-fern03-manual-1","expected_revision":null,
- "reason":"人がチャットで手順を KB に残すよう依頼した（seq 14）","policy_version":"4",
+ "reason":"人がチャットで手順を KB に残すよう依頼した（seq 14）","policy_version":"5",
  "request":{"method":"POST","path":"/api/v1/knowledge/inbox","body":{
    "title":"fern03 の使い方","scope":"project:agent-platform",
    "body":"要点（Markdown）","sources":["message:<message id>"],

@@ -501,7 +501,8 @@ fn result_json_instructions(artifacts: &str) -> String {
          If you cannot proceed and need a decision from a human, instead write \
          `{{\"question\": \"<your question>\"}}` to `{artifacts}/result.json` and stop there. This is a \
          non-interactive run: you cannot ask a question any other way, and no one will read your final \
-         chat message directly.\n"
+         chat message directly.\n\n{rules}",
+        rules = crate::human_text::HUMAN_TEXT_RULES
     )
 }
 

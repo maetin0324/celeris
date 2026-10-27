@@ -27,3 +27,4 @@ license: このリポジトリと同じ（外部の license は無い）
   「登録されていない操作」「登録待ち」の案内を消し、operations.md に「除外する操作」の表（`EXCLUDED` の系列と理由）を置いた。
   `PATCH /api/v1/tasks/<id>` が登録済みになったので起票節の「PATCH は操作表に無い」を直した。cos-inbox-triage には
   standing_rule.create・release.promote を一次対応では使わない旨を足した。
+- 2026-10-27（ADR 2026-10-27-yomiyasu-human-text）: explaining.md に「文面の推敲（yomiyasu の要点）」を足し、metadata.version を 5 に上げた。Core と operations.md・attachments.md の OP の `policy_version` 例も "5" にそろえた（Core は "3"、operations.md は "4" とずれていた）。

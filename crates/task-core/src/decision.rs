@@ -668,7 +668,7 @@ pub fn prepare_worker_decisions(
 /// `needed_before` は元の和（順を保つ）、後戻りの大きさは最大のもの。
 fn bundle_decisions(key: &str, rest: &[DecisionSpec], cap: usize) -> DecisionSpec {
     let mut question = format!(
-        "worker が出した決定が多すぎるため（未回答の上限の残り {cap} 件）、次の {} 件を 1 件にまとめました。note に各問いへの答えを書くか、推奨どおりに進めてください:",
+        "worker が出した決定が多すぎるため（未回答の上限の残り {cap} 件）、次の {} 件を 1 件にまとめました。note に各問いへの答えを書くか、推奨どおりに進めてください。",
         rest.len()
     );
     let mut needed_before: Vec<String> = Vec::new();

@@ -37,6 +37,7 @@ pub mod delegate_file;
 /// （`cluster_login.rs` の ssh master と `celeris::releases::start_promote` の両方が使う）。
 pub mod detach;
 pub mod fake;
+pub mod human_text;
 /// ADR-0047 D4（Phase 62）: 知識整理 run（`langmem` の memory manager を包む）。
 pub mod langmem;
 pub mod local_deep_research;

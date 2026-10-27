@@ -16,7 +16,7 @@ ADR 2026-10-07 cos-live-fixes D1・D2）。要点は Core の「添付」節に�
 
 ```json
 {"idempotency_key":"create-screen-fix-1","expected_revision":null,
- "reason":"人がチャットで screenshot つきで画面修正を依頼した（seq 12）","policy_version":"3",
+ "reason":"人がチャットで screenshot つきで画面修正を依頼した（seq 12）","policy_version":"5",
  "request":{"method":"POST","path":"/api/v1/tasks","body":{
    "title":"画面修正","objective":"依頼の全文（添付の screenshot の画面）",
    "acceptance":[{"type":"reviewer","text":"添付の screenshot の崩れが直っている"}],
@@ -45,7 +45,7 @@ pin（provenance）が一緒に入り、どちらかが失敗すれば候補も�
 
 ```json
 {"idempotency_key":"pin-<添付 id>-<owner id>","expected_revision":null,
- "reason":"…","policy_version":"3",
+ "reason":"…","policy_version":"5",
  "request":{"method":"POST","path":"/api/v1/chat/attachments/<添付 id>/references",
             "body":{"owner_kind":"task","owner_id":"<owner id>","idempotency_key":"pin-<添付 id>-<owner id>"}}}
 ```

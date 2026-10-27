@@ -149,7 +149,7 @@ pub fn core(chat: &CosChatContext) -> String {
          - 【割り込み】の付いた発言は前の run を止めて渡したもの。止まった仕事の続きより先に応える。\n\
          - 変更（起票・回答・決定など）は `celerisctl` か OP を通す（監査が付く）。認証は環境変数 `${env}`（run credential）。値を表示・記録・返事・ファイルに書かない。\n\
          - OP: `curl -sf -X POST -H \"Authorization: Bearer ${env}\" -H 'Content-Type: application/json' \
-         {api}/cos/operations -d '{{\"idempotency_key\":\"<key>\",\"expected_revision\":null,\"reason\":\"…\",\"policy_version\":\"3\",<追加の欄>\"request\":{{\"method\":\"POST\",\"path\":\"<path>\",\"body\":{{…}}}}}}'`。\
+         {api}/cos/operations -d '{{\"idempotency_key\":\"<key>\",\"expected_revision\":null,\"reason\":\"…\",\"policy_version\":\"5\",<追加の欄>\"request\":{{\"method\":\"POST\",\"path\":\"<path>\",\"body\":{{…}}}}}}'`。\
          key は thread 内で一意。再試行・再送は同じ key で（同じ key で本文が違えば 409）。\
          409 は状態が変わった印なので、最新を読み直して判断し直す。path は登録済みの操作だけ（表と本文の形は skill `cos-operator` の operations.md）。\
          拒否を別の経路で回避せず、理由を人に書く。\n\n\
@@ -168,6 +168,7 @@ pub fn core(chat: &CosChatContext) -> String {
          で古い方へ、`after_seq=<seq>` で新しい方へ（items は seq 昇順、`next_before_seq` が null で終わり）。\
          要約が覆わない範囲は推測で補わず、渡された発言と履歴 API で確かめる。\n\n",
     ));
+    out.push_str(crate::human_text::HUMAN_TEXT_RULES);
     out.push_str(ATTACHMENT_RULES);
     out.push_str(INBOX_RELAY_RULES);
     out

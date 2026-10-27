@@ -1056,7 +1056,7 @@ pub fn schedule_routes(
                 .iter()
                 .take(config.digest_max_lines)
                 .map(|(kind, (count, title))| {
-                    format!("• {kind}: {count} 件 — {}", excerpt(title, EXCERPT_CHARS))
+                    format!("• {kind}: {count} 件（{}）", excerpt(title, EXCERPT_CHARS))
                 })
                 .collect();
             if changed.len() > lines.len() {

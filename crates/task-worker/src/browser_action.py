@@ -297,13 +297,15 @@ def download(request, argv):
     # Only when agent-browser waited in vain for a download (not when it failed for its own reason,
     # e.g. an unknown ref) is a file Chrome completed meanwhile this action's download.
     waited = reason == 'exec_timeout' or error_class(stdout) == 'timeout'
+    # Adoption only recovers the file, not the daemon still waiting on the download.
+    recovery = {'recovery': 'daemon_restarted'} if waited and recover_browser_daemon() else {}
     if waited and len(fresh) == 1 and not artifact.exists():
         try:
             os.replace(OUTPUT / fresh[0], artifact)
         except OSError:
-            return with_link({'status': 1, 'stdout': '', 'runner_reason': 'adopt_failed'}, tokens)
+            return with_link({'status': 1, 'stdout': '', 'runner_reason': 'adopt_failed', **recovery}, tokens)
         return with_link({'status': 0, 'stdout': json.dumps({'success': True, 'data': {'adopted': True}}),
-                          'adopted_guid': fresh[0], 'runner_reason': 'adopted_download'}, tokens)
+                          'adopted_guid': fresh[0], 'runner_reason': 'adopted_download', **recovery}, tokens)
     response = {'status': 1, 'stdout': stdout if reason is None else '',
                 'runner_reason': reason or 'agent_browser_exit',
                 'error_class': error_class(stdout) if reason is None else 'none'}
@@ -311,8 +313,7 @@ def download(request, argv):
         response['link'] = tokens
     if len(fresh) > 1:
         response['runner_reason'] = 'downloads_ambiguous'
-    if waited and recover_browser_daemon():
-        response['recovery'] = 'daemon_restarted'
+    response.update(recovery)
     return response
 
 

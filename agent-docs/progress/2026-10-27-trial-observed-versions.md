@@ -50,10 +50,35 @@ updated: 2026-10-27
 ## 未解決事項
 
 - 外部 operator の方針の版は daemon から観測できず、照合していない（human-ops の `policy_ref` に残る）。
-- `main-4-ops-r1` の評価条件の文書（A9、task 01M5XXF7QDVASQFQBT1GZBXS6V）はまだ main に無い。revision 名は A9 の objective の例
-  `main-4-ops-r1` に合わせた。A9 が別名にするなら `CONTRACT_REVISION_OPS_R1` を同じ変更で直す。
 - 単価表の cache write（5 分・1 時間）の区別は未対応（U11 の残り）。
 
 ## 提案
 
 - B の `--worker-program claude=` と測定 config の `[adapters.claude_code] command` の一致を preflight で検査する（現在は運用者が揃える）。
+
+## 配送修復（2026-10-27）
+
+- prepare.log と保存された cargo-test log を読み、6551 passed / 1 failed の失敗箇所が
+  `real_sandbox_launcher_chrome_downloads_inline_pdf_after_login` の download 後 snapshot timeout と確認した。
+- main の「phase 1: verify の CoS 背景処理を外して煙試験への干渉を防ぐ」を fast-forward で取り込んだ。
+- [download adoption recovery ADR](../adr/2026-10-27-download-adoption-recovery.md) に従い、保存済み GUID の採用で
+  早期 return する前にも timeout 後の daemon 回復を行う。launcher の許可検査は維持した。
+- Python runner の偽 subprocess 回帰試験を追加。旧コードは採用後に daemon が blocked のままで exit 1、
+  修正後は process timeout・報告された timeout・unknown ref・通常成功・rename 失敗・候補なし・候補複数の7ケースで exit 0。
+- 実 browser/userns・全体 release gate・デプロイは実行していない。実ブラウザでの修復確認は次回配送 gate に残る。
+- commit 件名: `phase 1: download 採用時も待ち続ける browser daemon を回復する`。
+
+A9 の評価契約は `docs/ops/mlsys-main-4-ops-r1.md` として main に取り込み済みで、revision 名の一致を確認した。
+
+### 配送修復の検査結果
+
+最後の main 同期後、提出時の HEAD の実装に対して実行。差分基準は `git merge-base HEAD main`。
+
+- `cargo test -p task-worker --test browser_action_recovery`: exit 0、1 passed（内部で7ケース）。
+- `bash scripts/dev/test-affected.sh`: exit 0、4625 passed / 20 skipped、対象7 crate の doc test 成功。
+  campaign の `ops_r1_*` と `manifest_without_contract_keeps_pinned_bundle_behaviour` を含む。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0、差分なし。
+- `bash scripts/dev/check-health.sh`: exit 0。
+
+実 browser 試験の再実行は release gate のみであり、今回の検査結果には含めない。

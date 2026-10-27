@@ -668,10 +668,10 @@ fn inner() {
             }
             None => {
                 assert_ne!(got["status"], 0, "{got}");
-                // 付記 2026-10-10m: the runner stopped agent-browser's daemon after the timeout.
-                assert_eq!(got["recovery"], "daemon_restarted", "{got}");
             }
         }
+        // Adoption recovers the file, but must also stop the timed-out daemon.
+        assert_eq!(got["recovery"], "daemon_restarted", "{got}");
         // The same tab answers again without reopening it.
         let snap = action(s, &mut seq, "snapshot", &[], None);
         assert_eq!(

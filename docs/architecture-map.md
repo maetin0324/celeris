@@ -16,6 +16,7 @@ file・module）→ 不変条件（1 行と根拠 ADR）。設計判断そのも
 
 | subsystem | owner crate/module | entry point | ADR / 設計 | 関連試験 | 不変条件 |
 |---|---|---|---|---|---|
+| task 作成・retry の冪等キー | task-api / task-core::store | `crates/task-api/src/handlers/idempotency.rs`, `crates/task-core/src/store/idempotency.rs` | [task idempotency ADR](../agent-docs/adr/2026-10-27-task-idempotency-keys.md) | `crates/task-api/tests/task_idempotency.rs` | キーと task を同じ transaction で保存し、同一要求の再送は複製を増やさない |
 | Task 型・状態機械 | task-core | `crates/task-core/src/{model,transition}.rs` | [ADR-0002](../agent-docs/adr/0002-state-machine.md) | `crates/task-core/src/transition/tests.rs` | 状態は `transition` が許す遷移でだけ変わり、不正な遷移は Err で DB を変えない（ADR-0002） |
 | Event（追記専用） | task-core::store | `crates/task-core/src/store/events.rs` | [ADR-0001](../agent-docs/adr/0001-scope-and-principles.md) | `crates/task-core/src/store/tests.rs`（`append_event_*`・`apply_transition_*_appends_*`） | events は追記専用で書き換え・削除しない。遷移と event は同じ transaction で書く（ADR-0001） |
 | SQLite 永続化（facade + 領域別 impl） | task-core::store | `crates/task-core/src/store/mod.rs`（module map はここの doc comment） | [ADR-0001](../agent-docs/adr/0001-scope-and-principles.md) | `crates/task-core/src/store/{tests,migration_harness_tests,client_open_tests,legacy_tests}.rs` | タスクの状態の真実は SQLite。worker・会話のメモリに持たない。schema は migration でだけ移す（ADR-0001） |

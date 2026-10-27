@@ -1007,7 +1007,7 @@ fn flow(which: &'static str) {
         assert!(post_arms.contains(&arm), "POST for an unused arm {arm}");
         assert_eq!(p["campaign"]["campaign_id"], format!("armset-{which}"));
         assert_eq!(p["project_id"], "01ABC");
-        assert!(p["campaign_idempotency_key"].is_string());
+        assert!(p["idempotency_key"].is_string());
         // probe 用の task（能力 probe の分野）は無い。
         assert!(!p.to_string().contains("cap-probe"), "{p}");
     }
@@ -1419,12 +1419,7 @@ fn accounting(which: &'static str) {
     let mut keys: Vec<String> = s
         .posts
         .iter()
-        .map(|p| {
-            p["campaign_idempotency_key"]
-                .as_str()
-                .expect("key")
-                .to_string()
-        })
+        .map(|p| p["idempotency_key"].as_str().expect("key").to_string())
         .collect();
     keys.sort();
     keys.dedup();

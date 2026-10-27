@@ -226,7 +226,7 @@ fn identity(content: &str, pin: Value) -> Value {
 fn root_body(campaign: Value) -> Value {
     json!({"title": "trial", "objective": "o", "genre": "coding",
            "acceptance": [{"type": "artifact_exists", "name": "result.md"}],
-           "campaign": campaign, "campaign_idempotency_key": "campaign-vp-1"})
+           "campaign": campaign, "idempotency_key": "campaign-vp-1"})
 }
 
 fn tid(v: &Value) -> TaskId {
@@ -238,7 +238,7 @@ async fn child(d: &Daemon, parent: TaskId, campaign: Option<Value>) -> (u16, Val
         "acceptance": [{"type": "artifact_exists", "name": "r"}]});
     if let Some(c) = campaign {
         b["campaign"] = c;
-        b["campaign_idempotency_key"] = json!(format!("child-key-{}", b["title"]));
+        b["idempotency_key"] = json!(format!("child-key-{}", b["title"]));
     }
     d.post("/api/v1/tasks", b).await
 }

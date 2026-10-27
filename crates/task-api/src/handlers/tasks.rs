@@ -21,7 +21,7 @@ use crate::problem::{ApiProblem, ops_problem};
 use crate::query::{QueryParams, parse_snake, parse_task_id};
 use crate::state::ApiState;
 
-use super::{ApiResult, Params, json_response, no_query, read_json};
+use super::{ApiResult, Params, idempotency, json_response, no_query, read_json};
 
 const TITLE_QUERY_MAX_CHARS: usize = 200;
 
@@ -134,11 +134,12 @@ pub struct NewTaskBody {
     /// 同じ transaction で保存する。子孫・再試行・review は祖先の鎖から継ぐ。省略時は campaign 無し。
     #[serde(default)]
     pub campaign: Option<task_core::decision_log::CampaignIdentity>,
-    /// `campaign` の再送判定に使う冪等キー（task の label として照合する）。同じ識別の再送は
-    /// 既存 task を 200 で返し、同じキーで識別が違う、または同じ試行で識別の欄が違えば 409
-    /// `campaign_identity_conflict`。`campaign` が無ければ 400。
+    /// ADR 2026-10-27-task-idempotency-keys: 再送をまとめる冪等キー（1〜200 文字）。同じキーで
+    /// 中身（キーを除いた本文）も同じ再送は既存 task を 200 で返し、中身が違えば 409
+    /// `idempotency_key_conflict`。キーは `POST /tasks/{id}/retry` と同じ名前空間。CoS の
+    /// `/cos/operations` からは 400（操作自身の `idempotency_key` を使う）。
     #[serde(default)]
-    pub campaign_idempotency_key: Option<String>,
+    pub idempotency_key: Option<String>,
 }
 
 fn created_task(task: &Task) -> Response {
@@ -353,22 +354,51 @@ pub(super) async fn create_task(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let body: NewTaskBody = read_json(body, false).await?;
+    let raw: serde_json::Value = read_json(body, false).await?;
+    let claim = idempotency::claim("task.create", "POST", "/api/v1/tasks", &raw)?;
+    let body: NewTaskBody = idempotency::decode(raw)?;
     let roles = state.inner.roles.clone();
     let genres = state.inner.genres.clone();
     let (task, resent) = state
         .blocking(move |store| {
+            let keyed = match &claim {
+                Some(claim) => idempotency::lookup(store, claim)?,
+                None => None,
+            };
             if let Some(task) = campaign_resend(store, &body)? {
+                if let Some(claim) = &claim {
+                    let found = store
+                        .idempotency_bind_existing(
+                            claim,
+                            &task.id.to_string(),
+                            &OffsetDateTime::now_utc().to_string(),
+                        )
+                        .map_err(crate::problem::store_problem)?;
+                    if let Some(existing) = idempotency::settle(found)? {
+                        return Ok((idempotency::existing_task(store, &existing)?, true));
+                    }
+                }
                 return Ok((task, true));
             }
-            Ok((
-                create_task_op(store, &roles, &genres, body, None)?.direct()?,
-                false,
-            ))
+            if let Some(existing) = keyed {
+                return Ok((idempotency::existing_task(store, &existing)?, true));
+            }
+            match create_task_op(store, &roles, &genres, body, claim.as_ref(), None) {
+                Ok(applied) => Ok((applied.direct()?, false)),
+                Err(problem) => {
+                    // 別の要求が先に commit した場合、rollback 後に結果を照合する。
+                    if let Some(claim) = &claim
+                        && let Some(existing) = idempotency::lookup(store, claim)?
+                    {
+                        return Ok((idempotency::existing_task(store, &existing)?, true));
+                    }
+                    Err(problem)
+                }
+            }
         })
         .await?;
     if resent {
-        // 同じ識別の再送: 既存 task をそのまま返す（作り直さない）。
+        // 同じキー・同じ識別の再送: 既存 task をそのまま返す（作り直さない）。
         return Ok(json_response(StatusCode::OK, &task));
     }
     let mut response = created_task(&task);
@@ -389,17 +419,12 @@ fn campaign_resend(
     body: &NewTaskBody,
 ) -> Result<Option<Task>, ApiProblem> {
     let Some(identity) = &body.campaign else {
-        if body.campaign_idempotency_key.is_some() {
-            return Err(ApiProblem::bad_request(
-                "campaign_idempotency_key requires campaign",
-            ));
-        }
         return Ok(None);
     };
     identity.validate().map_err(ApiProblem::bad_request)?;
     let internal = |e: StoreError| ApiProblem::internal(e.to_string());
     match store
-        .task_campaign_resend_org_checked(identity, body.campaign_idempotency_key.as_deref())
+        .task_campaign_resend_org_checked(identity)
         .map_err(|e| match e {
             StoreError::Invalid(why) => org_drift(&why),
             e => internal(e),
@@ -431,9 +456,7 @@ fn campaign_conflict(existing: &str) -> ApiProblem {
     ApiProblem::new(
         StatusCode::CONFLICT,
         "campaign_identity_conflict",
-        format!(
-            "task {existing} already holds this idempotency key or trial with a different campaign identity"
-        ),
+        format!("task {existing} already holds this trial with a different campaign identity"),
     )
 }
 
@@ -449,6 +472,7 @@ pub(crate) fn create_task_op(
     roles: &[task_core::RoleSpec],
     genres: &[task_core::GenreSpec],
     body: NewTaskBody,
+    claim: Option<&task_core::store::IdempotencyClaim>,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<Task>, ApiProblem> {
     let NewTaskBody {
@@ -457,12 +481,15 @@ pub(crate) fn create_task_op(
         attachment_ids,
         routing_override,
         campaign,
-        campaign_idempotency_key,
+        idempotency_key,
     } = body;
     let reject = |problem: ApiProblem| match audit {
         Some(audit) => audit.reject(store, "task", "new", problem),
         None => problem,
     };
+    if audit.is_some() && idempotency_key.is_some() {
+        return Err(reject(idempotency::cos_key_rejected()));
+    }
     // repo 名だけがあり案件が無い要求にも、CoS へは同じ修正可能な理由を返す。
     if audit.is_some() && task.project_id.is_none() && !task.repos.is_empty() {
         return Err(reject(ApiProblem::new(
@@ -480,12 +507,6 @@ pub(crate) fn create_task_op(
     // ここを通らないので変わらない。
     if task.status.is_none() {
         task.status = Some(task_core::Status::Ready);
-    }
-    // 冪等キーは label として照合するので、呼び出し側が付け忘れても必ず残す。
-    if let Some(key) = &campaign_idempotency_key
-        && !task.labels.contains(key)
-    {
-        task.labels.push(key.clone());
     }
     // ADR-0016 M3 / ADR-0027 D1: 省略された tier / adapter / 予算は `[[roles]]` の既定 → `[[genres]]` の
     // `default_role` の既定 → 全体の既定で埋める。API は常に完全な設定を持つので、`genres` が設定されて
@@ -533,11 +554,7 @@ pub(crate) fn create_task_op(
         if let Some(identity) = &campaign {
             // 同じ transaction で再確認する（先の確認と保存の間に同じ試行が入った競合も 409 にする）。
             if !matches!(
-                task_core::store::SqliteStore::task_campaign_resend_tx(
-                    tx,
-                    identity,
-                    campaign_idempotency_key.as_deref()
-                )?,
+                task_core::store::SqliteStore::task_campaign_resend_tx(tx, identity)?,
                 task_core::store::CampaignResend::New
             ) {
                 failure = Some(campaign_conflict("(concurrent)"));
@@ -556,6 +573,14 @@ pub(crate) fn create_task_op(
                 identity,
                 OffsetDateTime::now_utc(),
             )?;
+        }
+        if let Some(claim) = claim {
+            // 同じ transaction で照合し直す（先の照合と保存の間に同じキーが入った競合も 409 にする）。
+            if let Err(problem) = idempotency::record_tx(tx, claim, &built.id.to_string(), None) {
+                let detail = problem.detail().to_string();
+                failure = Some(problem);
+                return Err(StoreError::Invalid(detail));
+            }
         }
         if paths.is_some() {
             task_core::store::SqliteStore::set_task_expected_write_paths_tx(

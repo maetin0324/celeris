@@ -142,7 +142,7 @@ fn body(arm: &str, rep: u32) -> Value {
         "acceptance": [{"type": "artifact_exists", "name": "result.md"}],
         "campaign": {"campaign_id": CAMPAIGN, "case_id": "case-a", "arm": arm, "repetition": rep,
                      "manifest_hash": "mh-1", "routing_setting": "fixed"},
-        "campaign_idempotency_key": format!("campaign-{}-{rep}", arm.to_lowercase()),
+        "idempotency_key": format!("campaign-{}-{rep}", arm.to_lowercase()),
     })
 }
 

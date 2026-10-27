@@ -251,6 +251,11 @@ pub struct RetryBody {
     /// 判定は引き継がず、複製先の最初の dispatch で今の設定で判定し直す。gate の対象外のタスクは 422。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<task_core::ExecutionMode>,
+    /// ADR 2026-10-27-task-idempotency-keys: 再送をまとめる冪等キー（1〜200 文字、`POST /tasks` と同じ
+    /// 名前空間）。同じキーで同じ task・同じ中身の再送は先の結果を 200 で返して複製を作らない。中身か
+    /// 対象の task が違えば 409 `idempotency_key_conflict`。CoS の `/cos/operations` からは 400。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
 }
 
 fn default_retry_accept() -> bool {

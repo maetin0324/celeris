@@ -278,11 +278,46 @@ pub(super) async fn retry(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let id = parse_task_id(&id)?;
-    let body: RetryBody = read_json(body, true).await?;
+    let raw: serde_json::Value = read_json(body, true).await?;
+    let claim = super::idempotency::claim(
+        "task.retry",
+        "POST",
+        &format!("/api/v1/tasks/{id}/retry"),
+        &raw,
+    )?;
+    let body: RetryBody = super::idempotency::decode(raw)?;
     let clusters = super::cluster_ids(&state);
-    let result = state
-        .blocking(move |store| retry_op(store, &clusters, id, body, None)?.direct())
+    let (result, resent) = state
+        .blocking(move |store| {
+            if let Some(claim) = &claim
+                && let Some((_, result_json)) = super::idempotency::lookup(store, claim)?
+            {
+                // 同じキー・同じ中身の再送: 先の応答を返す（複製を作り直さない）。
+                let result = serde_json::from_str(result_json.as_deref().unwrap_or("null"))
+                    .map_err(|e| ApiProblem::internal(format!("stored retry result: {e}")))?;
+                return Ok((result, true));
+            }
+            match retry_op(store, &clusters, id, body, claim.as_ref(), None) {
+                Ok(applied) => Ok((applied.direct()?, false)),
+                Err(problem) => {
+                    if problem.code() == "idempotency_key_conflict"
+                        && let Some(claim) = &claim
+                        && let Some((_, result_json)) = super::idempotency::lookup(store, claim)?
+                    {
+                        let result = serde_json::from_str(result_json.as_deref().unwrap_or("null"))
+                            .map_err(|e| {
+                                ApiProblem::internal(format!("stored retry result: {e}"))
+                            })?;
+                        return Ok((result, true));
+                    }
+                    Err(problem)
+                }
+            }
+        })
         .await?;
+    if resent {
+        return Ok(json_response(StatusCode::OK, &result));
+    }
     let mut response = json_response(StatusCode::CREATED, &result);
     if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/tasks/{}", result.task_id)) {
         response.headers_mut().insert(header::LOCATION, location);
@@ -301,7 +336,9 @@ pub(crate) fn retry_op(
         accept,
         workspace,
         execution,
+        idempotency_key,
     }: RetryBody,
+    claim: Option<&task_core::store::IdempotencyClaim>,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::retry::RetryResult>, ApiProblem> {
     let target_id = id.to_string();
@@ -309,6 +346,9 @@ pub(crate) fn retry_op(
         Some(audit) => audit.reject(store, "task", &target_id, problem),
         None => problem,
     };
+    if audit.is_some() && idempotency_key.is_some() {
+        return Err(reject(super::idempotency::cos_key_rejected()));
+    }
     // ADR-0062 Phase 108: `workspace` の検証は `PATCH /tasks/{id}` と同じ（先に 422 を返す）。
     let workspace = workspace
         .map(|spec| super::validated_workspace_in(clusters, spec))
@@ -324,8 +364,21 @@ pub(crate) fn retry_op(
             .map_err(|e| reject(ops_problem(store, e, Some("retry"))))?;
     let Some(audit) = audit else {
         let new_id = new_task.id;
-        let rewired = task_core::store::TaskStore::retry_task(store, id, &new_task)
-            .map_err(|e| ops_problem(store, e.into(), Some("retry")))?;
+        let rewired = match claim {
+            None => task_core::store::TaskStore::retry_task(store, id, &new_task)
+                .map_err(|e| ops_problem(store, e.into(), Some("retry")))?,
+            Some(claim) => {
+                match store
+                    .retry_task_claimed(id, &new_task, claim, &super::rfc3339(now))
+                    .map_err(|e| ops_problem(store, e.into(), Some("retry")))?
+                {
+                    task_core::store::RetryClaimed::Created(rewired) => rewired,
+                    task_core::store::RetryClaimed::Taken(found) => {
+                        return Err(super::idempotency::taken(found));
+                    }
+                }
+            }
+        };
         if let Some(ov) = &inherited {
             store
                 .set_task_routing_override(new_id, ov, &super::rfc3339(now))

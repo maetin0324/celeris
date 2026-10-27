@@ -821,22 +821,14 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// 再送の判定。同じ冪等キー、または同じ試行（campaign / case / arm / repetition）の task が
-    /// 既にあれば、識別が全欄一致（variant と構成 pin を含む）なら `Same`、違えば `Conflict`
-    /// （variant の変更・脱落・追加も別の試行として黙って上書きしない）。
+    /// 再送の判定。同じ試行（campaign / case / arm / repetition）の task が既にあれば、識別が全欄一致
+    /// （variant と構成 pin を含む）なら `Same`、違えば `Conflict`（variant の変更・脱落・追加も別の試行として
+    /// 黙って上書きしない）。冪等キーの照合は `task_idempotency_keys`（ADR 2026-10-27-task-idempotency-keys）。
     pub fn task_campaign_resend_tx(
         conn: &rusqlite::Connection,
         id: &CampaignIdentity,
-        key: Option<&str>,
     ) -> Result<CampaignResend, StoreError> {
-        let mut found = None;
-        if let Some(key) = key {
-            found = Self::task_campaign_by_key_tx(conn, key)?;
-        }
-        if found.is_none() {
-            found = Self::task_campaign_by_trial_tx(conn, id)?;
-        }
-        let Some(task_id) = found else {
+        let Some(task_id) = Self::task_campaign_by_trial_tx(conn, id)? else {
             return Ok(CampaignResend::New);
         };
         Ok(match Self::task_campaign_own_tx(conn, &task_id)? {
@@ -850,10 +842,9 @@ impl SqliteStore {
     pub fn task_campaign_resend_org_checked(
         &self,
         id: &CampaignIdentity,
-        key: Option<&str>,
     ) -> Result<CampaignResend, StoreError> {
         let conn = self.lock()?;
-        let out = Self::task_campaign_resend_tx(&conn, id, key)?;
+        let out = Self::task_campaign_resend_tx(&conn, id)?;
         if matches!(out, CampaignResend::Same(_))
             && let Some(pin) = &id.variant_org
         {
@@ -865,10 +856,9 @@ impl SqliteStore {
     pub fn task_campaign_resend(
         &self,
         id: &CampaignIdentity,
-        key: Option<&str>,
     ) -> Result<CampaignResend, StoreError> {
         let conn = self.lock()?;
-        Self::task_campaign_resend_tx(&conn, id, key)
+        Self::task_campaign_resend_tx(&conn, id)
     }
 
     /// 同じ試行（campaign / case / arm / repetition が全て一致）の識別を持つ task。最古を返す。
@@ -886,22 +876,6 @@ impl SqliteStore {
                     id.arm,
                     id.repetition.map(i64::from)
                 ],
-                |r| r.get(0),
-            )
-            .optional()?)
-    }
-
-    /// 冪等キー（label）を持ち、識別も持つ task。最古を返す。
-    pub fn task_campaign_by_key_tx(
-        conn: &rusqlite::Connection,
-        key: &str,
-    ) -> Result<Option<String>, StoreError> {
-        Ok(conn
-            .query_row(
-                "SELECT c.task_id FROM task_campaigns c JOIN tasks t ON t.id = c.task_id \
-                 WHERE EXISTS (SELECT 1 FROM json_each(COALESCE(t.labels_json, '[]')) \
-                 WHERE json_each.value = ?1) ORDER BY c.task_id LIMIT 1",
-                [key],
                 |r| r.get(0),
             )
             .optional()?)

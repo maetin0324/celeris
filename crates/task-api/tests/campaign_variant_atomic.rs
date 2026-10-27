@@ -68,7 +68,7 @@ fn identity(content: &str, pin: Value) -> Value {
 fn body(campaign: Value) -> Value {
     json!({"title": "trial", "objective": "o",
            "acceptance": [{"type": "artifact_exists", "name": "result.md"}],
-           "campaign": campaign, "campaign_idempotency_key": "campaign-k1"})
+           "campaign": campaign, "idempotency_key": "campaign-k1"})
 }
 
 fn counts(env: &TestEnv) -> (usize, i64, i64) {

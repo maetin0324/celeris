@@ -104,6 +104,7 @@ mod config_events;
 mod decision_log;
 mod events;
 mod execution;
+mod idempotency;
 mod instances;
 mod integrations;
 mod legacy;
@@ -136,6 +137,7 @@ pub use credential_wait::{
     CredentialWaitStore, EnterWaitOutcome,
 };
 pub use decision_log::CampaignResend;
+pub use idempotency::{IdempotencyClaim, IdempotencyLookup, RetryClaimed};
 pub use root_done::{RootDoneState, RootDoneSummary};
 pub(crate) use site_policies::site_policy_tx;
 pub use site_policies::{

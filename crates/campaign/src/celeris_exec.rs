@@ -115,7 +115,7 @@ pub fn check_template(t: &Map<String, Value>) -> Result<(), String> {
         "max_tokens",
         "routing_override",
         "campaign",
-        "campaign_idempotency_key",
+        "idempotency_key",
     ] {
         if t.contains_key(k) {
             return Err(format!(
@@ -517,10 +517,7 @@ impl<T: Transport> CelerisExecutor<T> {
             );
         }
         b.insert("campaign".into(), Value::Object(campaign));
-        b.insert(
-            "campaign_idempotency_key".into(),
-            json!(idempotency_label(key)),
-        );
+        b.insert("idempotency_key".into(), json!(idempotency_label(key)));
         b.insert("routing_override".into(), ro);
         Ok(Value::Object(b))
     }

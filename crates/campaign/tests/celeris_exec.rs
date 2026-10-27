@@ -741,7 +741,7 @@ fn body_carries_campaign_identity_and_idempotency_key() {
         json!({"campaign_id": "c1", "case_id": "p0", "arm": "C", "repetition": 2,
                "manifest_hash": "m1", "routing_setting": "decision_assisted"})
     );
-    assert_eq!(b["campaign_idempotency_key"], json!(idempotency_label(KEY)));
+    assert_eq!(b["idempotency_key"], json!(idempotency_label(KEY)));
     assert!(
         b["labels"]
             .as_array()

@@ -299,7 +299,7 @@ fn an_api_without_variant_support_fails_closed() {
 
 #[test]
 fn task_template_cannot_override_campaign_identity() {
-    for k in ["campaign", "campaign_idempotency_key"] {
+    for k in ["campaign", "idempotency_key"] {
         let mut t = Map::new();
         t.insert(k.into(), json!({"variant": {}}));
         assert!(check_template(&t).is_err(), "{k}");

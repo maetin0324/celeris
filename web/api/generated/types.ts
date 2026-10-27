@@ -3833,7 +3833,6 @@ export type NewTaskBody = {
   "assignee"?: string | null;
   "attachment_ids"?: Array<string>;
   "campaign"?: CampaignIdentity | null;
-  "campaign_idempotency_key"?: string | null;
   "category"?: TaskCategory | null;
   "cluster"?: string | null;
   "depends_on"?: Array<TaskId>;
@@ -3842,6 +3841,7 @@ export type NewTaskBody = {
   "features"?: TaskFeatureHints | null;
   "genre"?: string | null;
   "harness"?: string | null;
+  "idempotency_key"?: string | null;
   "kind"?: TaskKind;
   "labels"?: Array<string>;
   "max_retries"?: number;
@@ -4839,6 +4839,7 @@ export type ResolvedRouting = {
 export type RetryBody = {
   "accept"?: boolean;
   "execution"?: ExecutionMode | null;
+  "idempotency_key"?: string | null;
   "workspace"?: WorkspaceSpec | null;
 };
 

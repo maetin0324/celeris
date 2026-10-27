@@ -377,7 +377,7 @@ impl Env {
                 "title": format!("trial {arm} {rep}"), "objective": "o",
                 "acceptance": [{"type": "reviewer", "text": "reviewed"}],
                 "assignee": NODE, "workspace": ws, "max_retries": 0,
-                "campaign": identity("w"), "campaign_idempotency_key": key("w"),
+                "campaign": identity("w"), "idempotency_key": key("w"),
             }))
             .await;
         assert_eq!(s, 201, "{root}");
@@ -396,7 +396,7 @@ impl Env {
                 "title": format!("plan {arm} {rep}"), "objective": "plan", "kind": "plan",
                 "acceptance": [{"type": "artifact_exists", "name": "plan.json"}],
                 "assignee": NODE, "workspace": plan_ws, "max_retries": 0,
-                "campaign": identity("p"), "campaign_idempotency_key": key("p"),
+                "campaign": identity("p"), "idempotency_key": key("p"),
             }))
             .await;
         assert_eq!(s, 201, "{plan}");

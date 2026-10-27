@@ -330,7 +330,7 @@ fn run_scenario(spec_on: bool) -> Observed {
         "execution": "compound",
         "acceptance": [{"type": "artifact_exists", "name": "result.md"}],
         "campaign": campaign,
-        "campaign_idempotency_key": "campaign-0123456789abcdef",
+        "idempotency_key": "campaign-0123456789abcdef",
     }));
     assert_eq!(r.status, 201, "{}", r.body);
     let root = r.body["id"].as_str().expect("root id").to_string();
@@ -877,7 +877,7 @@ fn run_negative(id: VariantId, b0_org: Option<&Value>, foreign_canaries: &[Strin
     no_key
         .as_object_mut()
         .expect("body")
-        .remove("campaign_idempotency_key");
+        .remove("idempotency_key");
     let r = fx.post_task(&no_key);
     assert_eq!(r.status, 200, "{label}: resend without key: {}", r.body);
     assert_eq!(r.body["id"], t1.as_str());

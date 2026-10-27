@@ -39,8 +39,7 @@ async fn create_stores_campaign_identity_and_resend_is_idempotent() {
     });
     let app = env.router();
 
-    let body =
-        task(json!({"campaign": campaign(1, "m1"), "campaign_idempotency_key": "campaign-k1"}));
+    let body = task(json!({"campaign": campaign(1, "m1"), "idempotency_key": "campaign-k1"}));
     let first = send(&app, p(&body)).await;
     assert_eq!(first.status.as_u16(), 201, "{}", first.text());
     let id = first.json()["id"].as_str().expect("id").to_string();
@@ -54,13 +53,11 @@ async fn create_stores_campaign_identity_and_resend_is_idempotent() {
     assert_eq!(own.arm.as_deref(), Some("B"));
     assert_eq!(own.repetition, Some(1));
     assert_eq!(own.manifest_hash.as_deref(), Some("m1"));
-    // 冪等キーは label に残る（呼び出し側が付けなくても）。
+    // 冪等キーは label にしない（`task_idempotency_keys` で照合する。ADR 2026-10-27-task-idempotency-keys）。
     assert!(
-        first.json()["labels"]
+        !first.json()["labels"]
             .as_array()
-            .expect("labels")
-            .iter()
-            .any(|l| l == "campaign-k1")
+            .is_some_and(|labels| labels.iter().any(|l| l == "campaign-k1"))
     );
 
     // 同一識別の再送は既存 task（200）。新しい task は増えない。
@@ -76,7 +73,7 @@ async fn create_stores_campaign_identity_and_resend_is_idempotent() {
     let other = send(
         &app,
         p(&task(
-            json!({"campaign": campaign(2, "m1"), "campaign_idempotency_key": "campaign-k2"}),
+            json!({"campaign": campaign(2, "m1"), "idempotency_key": "campaign-k2"}),
         )),
     )
     .await;
@@ -87,11 +84,12 @@ async fn create_stores_campaign_identity_and_resend_is_idempotent() {
     let bad_key = send(
         &app,
         p(&task(
-            json!({"campaign": campaign(3, "m1"), "campaign_idempotency_key": "campaign-k1"}),
+            json!({"campaign": campaign(3, "m1"), "idempotency_key": "campaign-k1"}),
         )),
     )
     .await;
     assert_eq!(bad_key.status.as_u16(), 409, "{}", bad_key.text());
+    assert_eq!(bad_key.json()["code"], "idempotency_key_conflict");
     let bad_manifest = send(&app, p(&task(json!({"campaign": campaign(1, "m2")})))).await;
     assert_eq!(bad_manifest.status.as_u16(), 409, "{}", bad_manifest.text());
 
@@ -106,7 +104,7 @@ async fn create_stores_campaign_identity_and_resend_is_idempotent() {
         Some(own)
     );
 
-    // campaign 無しの task は従来どおり識別 NULL。キーだけは 400、不正な routing_setting も 400。
+    // campaign 無しの task は従来どおり識別 NULL。キーだけでも作れる（汎用の冪等キー）。不正な routing_setting は 400。
     let plain = send(&app, p(&task(json!({})))).await;
     assert_eq!(plain.status.as_u16(), 201);
     let pid = plain.json()["id"].as_str().expect("id").to_string();
@@ -116,8 +114,8 @@ async fn create_stores_campaign_identity_and_resend_is_idempotent() {
             .expect("resolve")
             .is_none()
     );
-    let key_only = send(&app, p(&task(json!({"campaign_idempotency_key": "k"})))).await;
-    assert_eq!(key_only.status.as_u16(), 400, "{}", key_only.text());
+    let key_only = send(&app, p(&task(json!({"idempotency_key": "k"})))).await;
+    assert_eq!(key_only.status.as_u16(), 201, "{}", key_only.text());
     let mut bad = campaign(9, "m");
     bad["routing_setting"] = json!("auto");
     let resp = send(&app, p(&task(json!({"campaign": bad})))).await;

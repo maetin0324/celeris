@@ -361,7 +361,8 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
              ALTER TABLE runs DROP COLUMN selected_account_id; \
              ALTER TABLE runs DROP COLUMN selection_metadata_json; \
              DROP TABLE route_outcomes; DROP TABLE route_judgments; DROP TABLE route_decisions; DROP TABLE route_options; DROP TABLE route_features; \
-             ALTER TABLE mcp_calls DROP COLUMN request;",
+             ALTER TABLE mcp_calls DROP COLUMN request; \
+             DROP TABLE task_idempotency_keys;",
         )
         .unwrap();
         conn.execute(
@@ -372,7 +373,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 93);
+    assert_eq!(SCHEMA_VERSION, 94);
     assert_eq!(
         store
             .cluster_settings_get("pegasus")

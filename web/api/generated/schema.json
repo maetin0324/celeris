@@ -18886,14 +18886,6 @@
           "default": null,
           "description": "ADR 2026-10-16-campaign-identity-propagation: campaign の root task に付ける識別\n（campaign_id / case_id / arm / repetition / manifest_hash / routing_setting）。task 作成と\n同じ transaction で保存する。子孫・再試行・review は祖先の鎖から継ぐ。省略時は campaign 無し。"
         },
-        "campaign_idempotency_key": {
-          "default": null,
-          "description": "`campaign` の再送判定に使う冪等キー（task の label として照合する）。同じ識別の再送は\n既存 task を 200 で返し、同じキーで識別が違う、または同じ試行で識別の欄が違えば 409\n`campaign_identity_conflict`。`campaign` が無ければ 400。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "category": {
           "anyOf": [
             {
@@ -18966,6 +18958,14 @@
         "harness": {
           "default": null,
           "description": "省略時は役割の既定 → 指定なし。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idempotency_key": {
+          "default": null,
+          "description": "ADR 2026-10-27-task-idempotency-keys: 再送をまとめる冪等キー（1〜200 文字）。同じキーで\n中身（キーを除いた本文）も同じ再送は既存 task を 200 で返し、中身が違えば 409\n`idempotency_key_conflict`。キーは `POST /tasks/{id}/retry` と同じ名前空間。CoS の\n`/cos/operations` からは 400（操作自身の `idempotency_key` を使う）。",
           "type": [
             "string",
             "null"
@@ -24043,6 +24043,13 @@
             }
           ],
           "description": "ADR-0072「Phase F6 実装時の決定」: 複製先の実行の形の人の明示（`\"compound\"` で計画を作らせる、\n`\"atomic\"` で直接実行）。省略なら元の `execution_hint` をそのまま引き継ぐ。どちらでも元の gate の\n判定は引き継がず、複製先の最初の dispatch で今の設定で判定し直す。gate の対象外のタスクは 422。"
+        },
+        "idempotency_key": {
+          "description": "ADR 2026-10-27-task-idempotency-keys: 再送をまとめる冪等キー（1〜200 文字、`POST /tasks` と同じ\n名前空間）。同じキーで同じ task・同じ中身の再送は先の結果を 200 で返して複製を作らない。中身か\n対象の task が違えば 409 `idempotency_key_conflict`。CoS の `/cos/operations` からは 400。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "workspace": {
           "anyOf": [

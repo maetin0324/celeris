@@ -23,6 +23,7 @@ use crate::types::ValidationError;
 pub(crate) mod accounts;
 pub(crate) mod clusters;
 mod config_fields;
+mod idempotency;
 pub(crate) mod org;
 pub(crate) mod projects;
 pub(crate) mod reload;

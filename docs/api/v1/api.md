@@ -204,7 +204,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | ページング | keyset。`limit` の既定と最大はエンドポイントごと（`GET /tasks` は既定 100・最大 500、`GET /events` 系は既定 500・最大 5,000）で、最大を超えれば最大に丸め、`0` は 400。不透明な `cursor`（応答の `next_cursor`）。並び順はエンドポイントごとに固定 |
 | 要求本文 | `POST` / `PUT` / `PATCH` は本文が空でも `Content-Type: application/json` 必須（無ければ 415。`DELETE` は検査しない）。上限 1 MiB（`MAX_BODY_BYTES`。`Content-Length` が超えれば middleware が、読みながら超えればハンドラが 413）。本文を取らない操作の多くは空の本文を `{}` とみなす。未知のフィールドは 400（`deny_unknown_fields`） |
 | 楽観的検査 | 変更系は `expected_status` を受け取れる。現在の `status` と違えば 409 `conflict`（状態は変えない） |
-| 冪等性 | 変更系は冪等ではない（同じ承認を 2 回送れば 2 回目は 409 `invalid_transition`）。`expected_status` を付けるのが正 |
+| 冪等性 | task 作成・retry は `idempotency_key` による再送を受ける（§3.4）。その他の状態変更は `expected_status` で競合を検出する |
 
 ### 1.3 認証（Bearer）
 
@@ -640,6 +640,15 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
 クエリは受けない。読み取り専用で、`celerisctl show --json` の応答は変えない。
 
 ### 3.4 `POST /tasks` → 201 `Task`（`Location: /api/v1/tasks/{id}`。**管理系**）
+
+`POST /tasks` と `POST /tasks/{id}/retry` の本文には任意の `idempotency_key` を指定できる。
+キーは 1〜200 文字（空白だけは不可）で、主体と両 endpoint をまたぐ共通の名前空間を持つ。
+同じキー・method・対象 path・本文なら既存結果を 200 で返す。本文のキー順序は無視し、
+`idempotency_key` 自身は比較から除く。それ以外の本文が違えば 409 `idempotency_key_conflict`。
+キー無しは毎回作成する。retry の再送は同じ複製先 ID と依存の張替え結果を返す。
+キーは SQLite に永続化する。campaign の作成にも同じ欄を使う。
+CoS `/cos/operations` は操作自身のキーを使い、本文への二重指定は 400。
+
 
 CoS の `/cos/operations` 経由では、coding または objective・acceptance に repo の path/コマンドを含む task に
 案件と非空 repos が無ければ 422 `repository_required`（task は作成されない）。人の直接 POST は同じ検査で

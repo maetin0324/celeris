@@ -102,7 +102,7 @@ fn variant_survives_reopen() {
     assert_eq!(s.task_campaign_resolve(&id).unwrap(), Some(v.clone()));
     let conn = s.lock().unwrap();
     assert_eq!(
-        SqliteStore::task_campaign_resend_tx(&conn, &v, None).unwrap(),
+        SqliteStore::task_campaign_resend_tx(&conn, &v).unwrap(),
         CampaignResend::Same(id)
     );
 }
@@ -115,7 +115,7 @@ fn resend_same_is_same_and_changed_or_dropped_variant_conflicts() {
     let v = with_variant("spec-on", "M1-spec-on", H1);
     s.task_campaign_set(&tid, &v, now()).unwrap();
     assert_eq!(
-        s.task_campaign_resend(&v, None).unwrap(),
+        s.task_campaign_resend(&v).unwrap(),
         CampaignResend::Same(tid.clone())
     );
     // variant の変更（内容 hash）、構成 pin の変更、variant の脱落はどれも同じ試行の別内容 → Conflict。
@@ -130,7 +130,7 @@ fn resend_same_is_same_and_changed_or_dropped_variant_conflicts() {
     let dropped = plain("spec-on");
     for other in [changed, org_changed, dropped] {
         assert_eq!(
-            s.task_campaign_resend(&other, None).unwrap(),
+            s.task_campaign_resend(&other).unwrap(),
             CampaignResend::Conflict(tid.clone()),
             "{other:?}"
         );
@@ -317,10 +317,9 @@ fn failed_set_in_create_transaction_leaves_nothing() {
             ))
         },
     );
-    // 子を root と違う識別（冪等キー label 付き）で作ろうとして、識別の保存で失敗する。
+    // 子を root と違う識別で作ろうとして、識別の保存で失敗する。
     let mut child = sample_task(Status::Draft);
     child.parent_id = Some(root.id);
-    child.labels = vec!["idem-key-1".into()];
     let other = with_variant("spec-on", "M1-spec-off", H2);
     let r = s.create_task_with(&child, vec![], |tx| {
         SqliteStore::task_campaign_set_tx(tx, &child.id.to_string(), &other, now())
@@ -329,12 +328,8 @@ fn failed_set_in_create_transaction_leaves_nothing() {
     assert!(s.get(child.id).unwrap().is_none());
     assert!(s.events_for(child.id).unwrap().is_empty());
     assert_eq!(s.task_campaign_own(&child.id.to_string()).unwrap(), None);
-    // 冪等照会にも残らない（キーで当たらず、試行の一致は root の行だけ）。
+    // 冪等照会にも残らない（試行の一致は root の行だけ）。
     let conn = s.lock().unwrap();
-    assert_eq!(
-        SqliteStore::task_campaign_by_key_tx(&conn, "idem-key-1").unwrap(),
-        None
-    );
     let after = conn.query_row(
         "SELECT (SELECT COUNT(*) FROM tasks), (SELECT COUNT(*) FROM task_campaigns), \
          (SELECT COUNT(*) FROM events), (SELECT COUNT(*) FROM decision_log_runs)",

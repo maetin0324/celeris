@@ -655,3 +655,22 @@ git -C "$repo" merge-base --is-ancestor "$reviewed" FETCH_HEAD
 手動 push 後の古い `push_error` を解除する専用の管理 API は現状ない。復旧済みでも履歴に残り得る。
 本番 DB の delivery JSON を直接書き換えず、元 task に観測時刻・対象・remote の包含・コマンド結果を追記する。
 「remote は復旧済み／過去の push_error は残存」を分けて報告する。表示を消すための rereview・release・promote はしない。
+
+## 配備操作の監査情報
+
+`promote.sh` / `rollback.sh` は `SD_ACTOR`・`SD_REASON`・`SD_POLICY_REF` を必須とする。
+実行者は `human`、`operator:<name>`、`cos`、`system:<name>`。OS の USER は実行者の代用にしない。
+`SD_TASK_REFS` と `SD_DECISION_REFS` は JSON 文字列配列（関係するものが無ければ省略して `[]`）。
+人が実行する例:
+
+```sh
+SD_ACTOR=human SD_REASON='検証済み修正の配備' SD_POLICY_REF='利用者の配備承認への参照' \
+  SD_TASK_REFS='["task-id"]' SD_DECISION_REFS='["decision-id"]' \
+  bash scripts/selfdeploy/promote.sh <sha12>
+```
+
+rollback も同じ環境変数を指定する。`--restore-db` のデータ復元に関する注意は従来どおり。
+対象 release の `audit/*.json` に各操作の開始時の verify 全体・実行者・理由・根拠・参照・結果を保存する。
+成功時は `promoted.json` / `rolled_back.json` にも写す。`status=started` のままなら正常終了の証拠は無い。
+`GET /api/v1/releases` と `status.sh --json` の `items[].deployment_audit` / `releases[].deployment_audit`
+で履歴を読める。過去の release の欠けている実行者は推測で補わない。

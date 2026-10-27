@@ -3979,3 +3979,11 @@ Reviewer条件がある `done` の仕事、または直前の遷移が `review_f
 policy_version, reasons, escalation, outcome, cost_usd, input_tokens, output_tokens, wall_ms, retries, review`）。
 各 run の `escalation` がエスカレーションの履歴。run が無いタスクは `runs: []`、知らないタスクは 404、
 クエリパラメータは 400。
+
+### 配備監査の履歴
+
+`GET /api/v1/releases` の `items[].deployment_audit` は対象 release に対する操作の配列。
+各記録は `actor`, `reason`, `policy_ref`, `task_refs`, `decision_refs`, `verify`（開始時の verify.json）、
+`operation`（promote / rollback）、`mode`, `from`, `to`, `started_at`, `status`（started / succeeded / failed）、
+`exit_code` と終了時の `finished_at` を持つ。既存 release に記録が無ければ空配列。
+人の昇格 API は actor=human、CoS は actor=cos と認証済み操作の理由・方針・操作 ID を渡す。

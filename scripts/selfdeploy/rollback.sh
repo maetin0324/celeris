@@ -15,6 +15,9 @@ usage() {
   cat >&2 <<'EOF'
 usage: rollback.sh [--restore-db]
 
+  必須環境変数: SD_ACTOR（human / operator:<name> / cos / system:<name>）、SD_REASON、SD_POLICY_REF。
+  関係する参照: SD_TASK_REFS / SD_DECISION_REFS（JSON 文字列配列、既定 []）。
+
   引数なし  : previous を昇格し直す（promote.sh previous と同じ。スキーマが進んでいたら拒否）
   --restore-db: DB を backups/ の直近の `*-pre-*.sqlite3` に書き戻してから停止 → 起動で戻す。
                 昇格の後に進んだ仕事は失われる。
@@ -31,6 +34,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+. "$SD_DIR/audit.sh"
+sd_audit validate
 sd_require_json_tool
 TS="$(sd_stamp)"
 mkdir -p "$SD_BACKUPS" "$SD_LOGS"
@@ -60,6 +65,7 @@ sd_log "rollback: current=${CUR:-<none>} -> previous=$PREV (previous SCHEMA_VERS
 
 if [ "$PREV_SCHEMA" -ge "$DB_SCHEMA" ] && [ "$RESTORE_DB" != true ]; then
   sd_log "the previous binary can read the current DB; promoting $PREV"
+  export SD_OPERATION=rollback
   exec "$SD_DIR/promote.sh" "$PREV"
 fi
 
@@ -77,6 +83,17 @@ for f in $(ls -1t "$SD_BACKUPS"/*-pre-*.sqlite3 2>/dev/null || true); do
 done
 [ -n "$SRC" ] || sd_die "no $SD_BACKUPS/*-pre-*.sqlite3 to restore from"
 sd_log "will restore the DB from $SRC ($(du -h "$SRC" | cut -f1))"
+
+AUDIT_FILE="$(sd_audit begin "$PREV_DIR" rollback "$CUR" "$PREV" restore-db)"
+PROMOTING_WRITTEN=false
+clear_promoting_on_exit() {
+  local ec=$?
+  if [ "$PROMOTING_WRITTEN" = true ]; then sd_clear_promoting "$PREV" || true; fi
+  sd_audit finish "$AUDIT_FILE" "$ec"
+}
+trap clear_promoting_on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 PRE_ROLLBACK="$SD_BACKUPS/$TS-pre-rollback.sqlite3"
 sd_log "backing up the current DB to $PRE_ROLLBACK"
@@ -127,13 +144,6 @@ rm -f "$SD_DB-wal" "$SD_DB-shm"
 
 # ADR-0040 付記 2026-10-02: `current` はまだ旧（$CUR）を指すので、start の直前に昇格中の印を置く
 # （無ければ celeris@$PREV は未昇格として exit 4 で止まる）。`current` を付け替えた直後と EXIT で消す。
-PROMOTING_WRITTEN=false
-clear_promoting_on_exit() {
-  if [ "$PROMOTING_WRITTEN" = true ]; then sd_clear_promoting "$PREV" || true; fi
-}
-trap clear_promoting_on_exit EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
 sd_write_promoting "$PREV" rollback.sh restore-db
 PROMOTING_WRITTEN=true
 

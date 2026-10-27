@@ -430,7 +430,13 @@ impl task_api::ReleaseSource for FakeReleases {
     fn promote(
         &self,
         sha12: &str,
+        audit: &task_api::releases::DeploymentContext,
     ) -> Result<task_api::types::ReleasePromoteAccepted, task_api::ReleasePromoteError> {
+        assert_eq!(audit.actor, "cos");
+        assert!(!audit.reason.trim().is_empty());
+        assert!(!audit.policy_ref.trim().is_empty());
+        assert_eq!(audit.decision_refs.len(), 1);
+        assert!(audit.decision_refs[0].starts_with("cos_operation:"));
         if sha12 == "aaaaaaaaaaaa" {
             return Err(task_api::ReleasePromoteError::AlreadyCurrent);
         }

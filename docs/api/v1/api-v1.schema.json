@@ -22374,6 +22374,12 @@
           ],
           "description": "ADR-0041 D4: いま動いている版からこのリリースへ**何が変わるか**（`changes.json`）。\nPhase 48 以前に作られたリリースには無いので `null`。"
         },
+        "deployment_audit": {
+          "default": [],
+          "description": "Operation records: actor, reason, policy_ref, task/decision refs, verify snapshot and outcome.",
+          "items": true,
+          "type": "array"
+        },
         "gate": {
           "anyOf": [
             {

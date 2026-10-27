@@ -15,6 +15,13 @@
 # dash/sh で走る POSIX sh（bash 配列展開は使わない: ${BASH_SOURCE[0]} も ${@:2} も不可）。
 set -eu
 
+export SD_ACTOR='operator:test'
+export SD_REASON='test "reason"'
+export SD_POLICY_REF='test approval'
+export SD_TASK_REFS='["task:test"]'
+export SD_DECISION_REFS='["decision:test"]'
+unset SD_OPERATION
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SD="$(cd "$HERE/.." && pwd)"
 
@@ -199,6 +206,38 @@ check_no_marker_left() {
 }
 dump_on_fail() { if [ "$FAIL" -ne 0 ]; then echo "---- $CASE/out.log" >&2; cat "$CASE/out.log" >&2; fi; }
 
+check_audit() {
+  python3 - "$1" "$2" "$3" <<'PYTEST' || ng "audit fields: $1"
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+d = json.loads(p.read_text())
+assert d['actor'] == 'operator:test'
+assert d['reason'] == 'test "reason"'
+assert d['policy_ref'] == 'test approval'
+assert d['task_refs'] == ['task:test']
+assert d['decision_refs'] == ['decision:test']
+assert d['verify']['ok'] is True
+assert d['operation'] == sys.argv[2]
+assert d['status'] == sys.argv[3]
+assert d['from'] and d['to'] and d['finished_at']
+assert any(json.loads(f.read_text())['status'] == d['status'] for f in (p.parent / 'audit').glob('*.json'))
+PYTEST
+}
+
+# Missing provenance must fail before systemctl or DB backup, in every entry path.
+for script in promote.sh rollback.sh; do
+  for field in SD_ACTOR SD_REASON SD_POLICY_REF; do
+    setup "missing-$script-$field" false
+    set +e
+    env -u "$field" PATH="$FAKE_BIN:$PATH" bash "$SD/$script" "$([ "$script" = promote.sh ] && echo "$NEW" || echo --restore-db)" >"$CASE/out.log" 2>&1
+    RC=$?
+    set -e
+    [ "$RC" -ne 0 ] || ng "$field missing accepted by $script"
+    grep -q "$field is required" "$CASE/out.log" || ng "missing diagnostic $field"
+    [ ! -f "$FAKE_STATE/systemctl.log" ] || ng "side effect without $field"
+  done
+done
+
 # ---- ケース 1: promote.sh live ------------------------------------------------
 setup live true
 touch "$FAKE_STATE/started-celeris@$OLD" "$FAKE_STATE/started-celeris-web@$OLD"
@@ -206,6 +245,7 @@ touch "$FAKE_STATE/started-celeris@$OLD" "$FAKE_STATE/started-celeris-web@$OLD"
 run_script promote.sh "$NEW"
 assert_eq "live: promote.sh exit" 0 "$RC"
 grep -q "promotion mode: live" "$CASE/out.log" && ok "live: took the live path" || ng "live: did not take the live path"
+check_audit "$CELERIS_STATE_DIR/releases/$NEW/promoted.json" promote succeeded
 check_marker_at_start live "$NEW" promote.sh live
 check_no_marker_left live
 assert_eq "live: current -> new" "releases/$NEW" "$(readlink "$CELERIS_STATE_DIR/current")"
@@ -216,6 +256,7 @@ setup stop-start false
 run_script promote.sh "$NEW"
 assert_eq "stop-start: promote.sh exit" 0 "$RC"
 grep -q "promotion mode: stop-start" "$CASE/out.log" && ok "stop-start: took the stop-start path" || ng "stop-start: did not take the stop-start path"
+check_audit "$CELERIS_STATE_DIR/releases/$NEW/promoted.json" promote succeeded
 check_marker_at_start stop-start "$NEW" promote.sh stop-start
 check_no_marker_left stop-start
 assert_eq "stop-start: current -> new" "releases/$NEW" "$(readlink "$CELERIS_STATE_DIR/current")"
@@ -253,10 +294,34 @@ ln -sfn "releases/$OLD" "$CELERIS_STATE_DIR/previous"
 echo backup >"$CELERIS_STATE_DIR/backups/20261001-000000-pre-$NEW.sqlite3"
 run_script rollback.sh --restore-db
 assert_eq "rollback: rollback.sh exit" 0 "$RC"
+check_audit "$CELERIS_STATE_DIR/releases/$OLD/rolled_back.json" rollback succeeded
 check_marker_at_start rollback "$OLD" rollback.sh restore-db
 check_no_marker_left rollback
 assert_eq "rollback: current -> old" "releases/$OLD" "$(readlink "$CELERIS_STATE_DIR/current")"
 dump_on_fail
+
+# Ordinary rollback delegates to promote, while retaining rollback identity.
+setup rollback-normal false
+ln -sfn "releases/$NEW" "$CELERIS_STATE_DIR/previous"
+run_script rollback.sh
+assert_eq "ordinary rollback exit" 0 "$RC"
+check_audit "$CELERIS_STATE_DIR/releases/$NEW/rolled_back.json" rollback succeeded
+
+# A failed restore is retained without publishing a success summary.
+setup rollback-failed false
+ln -sfn "releases/$OLD" "$CELERIS_STATE_DIR/previous"
+echo backup >"$CELERIS_STATE_DIR/backups/20261001-000000-pre-$NEW.sqlite3"
+touch "$FAKE_STATE/fail-start-celeris@$OLD"
+run_script rollback.sh --restore-db
+[ "$RC" -ne 0 ] || ng "failed restore accepted"
+[ ! -e "$CELERIS_STATE_DIR/releases/$OLD/rolled_back.json" ] || ng "failed restore marked succeeded"
+python3 - "$CELERIS_STATE_DIR/releases/$OLD/audit" <<'PYTEST' || ng "failed restore audit"
+import pathlib, json, sys
+records = [json.loads(p.read_text()) for p in pathlib.Path(sys.argv[1]).glob('*.json')]
+assert len(records) == 1
+assert records[0]['status'] == 'failed' and records[0]['exit_code'] != 0
+assert records[0]['actor'] == 'operator:test'
+PYTEST
 
 # A required web failure must not publish successful promotion or advance links.
 for live in true false; do
@@ -273,6 +338,16 @@ for live in true false; do
   assert_eq "web-retry-$live: exit" 0 "$RC"
   assert_eq "web-retry-$live: current new" "releases/$NEW" "$(readlink "$CELERIS_STATE_DIR/current")"
   dump_on_fail
+  python3 - "$CELERIS_STATE_DIR/releases/$NEW" <<'PYTEST' || ng "retry history lost"
+import pathlib, json, sys
+root = pathlib.Path(sys.argv[1])
+records = [json.loads(p.read_text()) for p in (root / 'audit').glob('*.json')]
+assert sorted(r['status'] for r in records) == ['failed', 'succeeded']
+assert all(r['verify']['ok'] is True for r in records)
+(root / 'verify.json').write_text('{"ok": false}')
+assert all(json.loads(p.read_text())['verify']['ok'] is True for p in (root / 'audit').glob('*.json'))
+PYTEST
+
 done
 
 # 偽の systemctl だけが呼ばれたこと（本番 host の systemctl は使わない）の念押し: 記録があること。

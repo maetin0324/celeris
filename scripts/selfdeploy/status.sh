@@ -138,6 +138,7 @@ if os.path.isdir(releases_dir):
         items.append({
             "promoted_at": (promoted or {}).get("promoted_at"),
             "promoted": promoted,
+            "deployment_audit": [load(os.path.join(d, "audit", f)) for f in sorted(os.listdir(os.path.join(d, "audit"))) if f.endswith(".json")] if os.path.isdir(os.path.join(d, "audit")) else [],
             "promote_failed": promote_failed,
             # ADR-0041 D3: 本番に出た版が `main` に戻っているか（null = 分からない）。
             "on_main": on_main(manifest.get("sha") or name),

@@ -52,6 +52,28 @@ pub enum ReleasePromoteError {
     Unavailable(String),
 }
 
+/// Explicit provenance passed to the deployment script (never inferred from the daemon user).
+#[derive(Debug, Clone)]
+pub struct DeploymentContext {
+    pub actor: String,
+    pub reason: String,
+    pub policy_ref: String,
+    pub task_refs: Vec<String>,
+    pub decision_refs: Vec<String>,
+}
+
+impl DeploymentContext {
+    pub fn human() -> Self {
+        Self {
+            actor: "human".into(),
+            reason: "authenticated release promotion request".into(),
+            policy_ref: "POST /api/v1/releases/{sha12}/promote".into(),
+            task_refs: vec![],
+            decision_refs: vec![],
+        }
+    }
+}
+
 /// celeris が渡す「リリースのディレクトリ」。**決定的で、LLM もワーカーも関与しない**。
 pub trait ReleaseSource: Send + Sync + 'static {
     /// `releases_dir` を読む（失敗しても落ちない。読めなかったリリースは `problem` 付きで出る）。
@@ -68,7 +90,11 @@ pub trait ReleaseSource: Send + Sync + 'static {
         None
     }
     /// `<releases_dir>/<sha12>/scripts/promote.sh <sha12>` を detached で起こす。
-    fn promote(&self, sha12: &str) -> Result<ReleasePromoteAccepted, ReleasePromoteError>;
+    fn promote(
+        &self,
+        sha12: &str,
+        audit: &DeploymentContext,
+    ) -> Result<ReleasePromoteAccepted, ReleasePromoteError>;
 
     /// ADR-0044 D5（Phase 53）: `repo` の `branch` にだけ載っているコミットの sha（新しい順、最大
     /// `BRANCH_COMMITS_LIMIT` 件）。タスクのブランチ（`celeris/<task_id>` / `celeris/<task_id>`）の
@@ -139,7 +165,11 @@ pub(crate) async fn promote(
     };
     let requested = sha12.clone();
     let accepted = tokio::task::spawn_blocking(move || {
-        crate::cos::operations::effect_result(promote_effect(source.as_ref(), &requested))
+        crate::cos::operations::effect_result(promote_effect(
+            source.as_ref(),
+            &requested,
+            &DeploymentContext::human(),
+        ))
     })
     .await
     .map_err(|e| ApiProblem::internal(format!("starting promote.sh failed: {e}")))??;
@@ -151,11 +181,12 @@ pub(crate) async fn promote(
 pub(crate) fn promote_effect(
     source: &dyn ReleaseSource,
     sha12: &str,
+    audit: &DeploymentContext,
 ) -> crate::cos::operations::Effect<ReleasePromoteAccepted> {
-    match source.promote(sha12) {
+    match source.promote(sha12, audit) {
         Ok(accepted) => {
-            // ADR-0040 D5: 昇格は人が押す。誰が押したかは記録に残す（値は sha12 だけ）。
-            tracing::warn!(who = "admin", op = "release_promote", sha12 = %accepted.sha12, log = %accepted.log,
+            // Record the caller provenance used by the detached script.
+            tracing::warn!(who = %audit.actor, reason = %audit.reason, op = "release_promote", sha12 = %accepted.sha12, log = %accepted.log,
                 "admin: promote.sh started");
             Ok(Ok(accepted))
         }

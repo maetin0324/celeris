@@ -16,6 +16,9 @@ usage() {
   cat >&2 <<'EOF'
 usage: promote.sh <sha12> [--pre-start <script>] [--stop-stale]
 
+  必須環境変数: SD_ACTOR（human / operator:<name> / cos / system:<name>）、SD_REASON、SD_POLICY_REF。
+  関係する参照: SD_TASK_REFS / SD_DECISION_REFS（JSON 文字列配列、既定 []）。
+
   verify.sh が `ok` を出したリリースだけを昇格できる。`--force` は無い（ADR-0040 D2）。
   systemd の unit が要る: scripts/selfdeploy/install-units.sh を一度だけ実行しておくこと。
 
@@ -54,6 +57,9 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$SHA12" ] || usage
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/audit.sh"
+sd_audit validate
+AUDIT_FILE=""
 sd_require_json_tool
 TS="$(sd_stamp)"
 mkdir -p "$SD_BACKUPS" "$SD_LOGS"
@@ -74,6 +80,7 @@ PROMOTING_WRITTEN=false
 PROMOTED_RECORDED=false
 record_promote_failure() {
   local ec=$?
+  if [ -n "$AUDIT_FILE" ] && [ "$ec" -ne 0 ]; then sd_audit finish "$AUDIT_FILE" "$ec" || true; fi
   if [ "$PROMOTING_WRITTEN" = true ]; then sd_clear_promoting "$SHA12" || true; fi
   [ "$ec" -eq 0 ] && return
   # promoted.json を書いた後の失敗（credentiald の切り替え）は昇格の失敗ではない。
@@ -150,6 +157,7 @@ fi
 
 MODE=stop-start
 if [ "$LIVE_OK" = true ] && [ -n "$LIVE_ROLE" ] && [ -z "$PRE_START" ]; then MODE=live; fi
+AUDIT_FILE="$(sd_audit begin "$REL" "${SD_OPERATION:-promote}" "$OLD" "$SHA12" "$MODE")"
 if [ -n "$PRE_START" ]; then sd_log "--pre-start given ($PRE_START): forcing stop-start"; fi
 sd_log "promotion mode: $MODE"
 
@@ -556,7 +564,8 @@ sd_log "browser_ledger: $BROWSER_LEDGER_JSON (not required to promote)"
   printf '  "browser_ledger": %s,\n' "$BROWSER_LEDGER_JSON"
   printf '  "included": %s\n' "$(promoted_included_json)"
   printf '}\n'
-} >"$REL/promoted.json"
+} >"$AUDIT_FILE.summary"
+sd_audit finish "$AUDIT_FILE" 0
 PROMOTED_RECORDED=true
 rm -f "$PREVIEW_JSON" 2>/dev/null || true
 sd_log "promoted.json: $REL/promoted.json (mode=$MODE from=${OLD:-<none>})"

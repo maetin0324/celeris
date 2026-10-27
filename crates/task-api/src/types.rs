@@ -1287,6 +1287,9 @@ pub struct ReleaseItem {
     /// ADR-0041 D3: `promoted.json` の `promoted_at`（`promote.sh` が昇格に成功したときだけ書く）。
     /// 一度も昇格していないリリースは `null`。
     pub promoted_at: Option<String>,
+    /// Operation records: actor, reason, policy_ref, task/decision refs, verify snapshot and outcome.
+    #[serde(default)]
+    pub deployment_audit: Vec<serde_json::Value>,
     /// ADR-0041 D3: この sha が `[selfdeploy] repo` の `main` の**祖先**か
     /// （`git merge-base --is-ancestor <sha> main`）。`false` なら本番のコードが `main` に
     /// 戻っていない。リポジトリが無い・git が動かない・その sha を知らないときは `null`。

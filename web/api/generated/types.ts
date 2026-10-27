@@ -4503,6 +4503,7 @@ export type ReleaseGateStep = {
 export type ReleaseItem = {
   "built_at"?: string | null;
   "changes"?: ReleaseChanges | null;
+  "deployment_audit"?: Array<unknown>;
   "gate"?: ReleaseGate | null;
   "gate_ok": boolean;
   "is_current": boolean;

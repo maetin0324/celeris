@@ -838,6 +838,7 @@ async fn the_timeline_lists_the_releases_that_contain_this_tasks_commits() {
         fn promote(
             &self,
             _sha12: &str,
+            _audit: &task_api::releases::DeploymentContext,
         ) -> Result<task_api::types::ReleasePromoteAccepted, task_api::ReleasePromoteError>
         {
             Err(task_api::ReleasePromoteError::NotFound)
@@ -865,6 +866,7 @@ async fn the_timeline_lists_the_releases_that_contain_this_tasks_commits() {
             gate: None,
             verify: None,
             promoted_at: None,
+            deployment_audit: vec![],
             on_main: None,
             notes: None,
             promotion: None,

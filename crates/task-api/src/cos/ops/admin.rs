@@ -517,7 +517,17 @@ pub(crate) fn dispatch(
                 ));
             };
             external(store, audit, ("release", &sha12), matched.action, || {
-                crate::releases::promote_effect(source.as_ref(), &sha12)
+                crate::releases::promote_effect(
+                    source.as_ref(),
+                    &sha12,
+                    &crate::releases::DeploymentContext {
+                        actor: "cos".into(),
+                        reason: audit.ctx.reason.clone(),
+                        policy_ref: audit.ctx.policy_version.clone(),
+                        task_refs: vec![],
+                        decision_refs: vec![format!("cos_operation:{}", audit.ctx.operation_id)],
+                    },
+                )
             })
         }
         "cron_job.create" => {

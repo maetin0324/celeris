@@ -26,9 +26,11 @@
 //! リポジトリが無い・その sha を知らない、のどれでも `null` を出すだけで、一覧は落とさない
 //! （このモジュールは読むだけ。ADR-0051のdeliveryは別途レビュー済みSHAを取り込む）。
 
+mod audit;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use task_api::releases::DeploymentContext;
 
 use task_api::types::{
     ReleaseChanges, ReleaseCommit, ReleaseGate, ReleaseGateStep, ReleaseItem,
@@ -86,8 +88,12 @@ impl ReleaseSource for FsReleases {
         crate::release_notes::preview_from_dir(&self.root, sha12)
     }
 
-    fn promote(&self, sha12: &str) -> Result<ReleasePromoteAccepted, ReleasePromoteError> {
-        start_promote(&self.root, sha12, &self.detach)
+    fn promote(
+        &self,
+        sha12: &str,
+        audit: &DeploymentContext,
+    ) -> Result<ReleasePromoteAccepted, ReleasePromoteError> {
+        start_promote(&self.root, sha12, &self.detach, audit)
     }
 
     /// ADR-0044 D5（Phase 53）: タスクのブランチにだけ載っているコミットの sha。
@@ -460,6 +466,7 @@ fn read_release(
             checks: read_verify_checks(v),
         }),
         promoted_at: as_string(field(&promoted, "promoted_at")),
+        deployment_audit: audit::read(dir),
         on_main: repo.and_then(|r| on_main(r, &full_sha)),
         changes: read_changes(dir, current),
         notes: None,
@@ -582,13 +589,14 @@ pub fn start_promote(
     root: &Path,
     sha12: &str,
     detach: &str,
+    audit: &DeploymentContext,
 ) -> Result<ReleasePromoteAccepted, ReleasePromoteError> {
     let launcher = task_worker::detach::resolve_detach_launcher(
         detach,
         task_worker::detach::systemd_run_on_path(),
         task_worker::detach::xdg_runtime_dir_is_set(),
     );
-    start_promote_with_launcher(root, sha12, &launcher)
+    start_promote_with_launcher(root, sha12, &launcher, audit)
 }
 
 /// [`start_promote`] の本体。`launcher` を注入できるのはテストのため
@@ -597,6 +605,7 @@ fn start_promote_with_launcher(
     root: &Path,
     sha12: &str,
     launcher: &DetachLauncher,
+    audit: &DeploymentContext,
 ) -> Result<ReleasePromoteAccepted, ReleasePromoteError> {
     if !valid_sha12(sha12) {
         return Err(ReleasePromoteError::NotFound);
@@ -683,7 +692,7 @@ fn start_promote_with_launcher(
         log = sh_quote(&log.to_string_lossy()),
         lock = sh_quote(&lock.to_string_lossy()),
     );
-    let status = Command::new("sh")
+    let status = audit::command(audit)?
         .arg("-c")
         .arg(&command)
         .current_dir(&dir)

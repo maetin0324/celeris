@@ -175,11 +175,11 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
     let (dir, root) = env();
     // 知らない sha / 形が違う sha。
     assert_eq!(
-        start_promote(&root, "aaaaaaaaaaaa", "inline"),
+        start_promote(&root, "aaaaaaaaaaaa", "inline", &DeploymentContext::human()),
         Err(ReleasePromoteError::NotFound)
     );
     assert_eq!(
-        start_promote(&root, "../etc", "inline"),
+        start_promote(&root, "../etc", "inline", &DeploymentContext::human()),
         Err(ReleasePromoteError::NotFound)
     );
 
@@ -192,7 +192,7 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
         None,
     );
     assert!(matches!(
-        start_promote(&root, "aaaaaaaaaaaa", "inline"),
+        start_promote(&root, "aaaaaaaaaaaa", "inline", &DeploymentContext::human()),
         Err(ReleasePromoteError::NotVerified(_))
     ));
     // verify.json は在るが ok ではない。
@@ -202,7 +202,7 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
     )
     .expect("write");
     assert!(matches!(
-        start_promote(&root, "aaaaaaaaaaaa", "inline"),
+        start_promote(&root, "aaaaaaaaaaaa", "inline", &DeploymentContext::human()),
         Err(ReleasePromoteError::NotVerified(_))
     ));
 
@@ -215,7 +215,7 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
     std::os::unix::fs::symlink("releases/aaaaaaaaaaaa", dir.path().join("current"))
         .expect("symlink");
     assert_eq!(
-        start_promote(&root, "aaaaaaaaaaaa", "inline"),
+        start_promote(&root, "aaaaaaaaaaaa", "inline", &DeploymentContext::human()),
         Err(ReleasePromoteError::AlreadyCurrent)
     );
 
@@ -228,7 +228,7 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
         Some(r#"{"ok":true,"live_ok":true}"#),
     );
     assert!(matches!(
-        start_promote(&root, "bbbbbbbbbbbb", "inline"),
+        start_promote(&root, "bbbbbbbbbbbb", "inline", &DeploymentContext::human()),
         Err(ReleasePromoteError::Unavailable(_))
     ));
 
@@ -242,7 +242,7 @@ fn promotion_is_refused_for_unknown_unverified_current_and_running_releases() {
     )
     .expect("write");
     assert_eq!(
-        start_promote(&root, "bbbbbbbbbbbb", "inline"),
+        start_promote(&root, "bbbbbbbbbbbb", "inline", &DeploymentContext::human()),
         Err(ReleasePromoteError::AlreadyPromoting)
     );
 }
@@ -273,8 +273,13 @@ fn promoting_spawns_the_bundled_script_detached_and_writes_the_lock() {
 
     // `Inline` を明示して、この開発環境に `systemd-run`/`XDG_RUNTIME_DIR` があっても
     // 本物の systemd-run を呼ばないようにする（実行は禁止。テストは常に偽物か `Inline`）。
-    let accepted =
-        start_promote_with_launcher(&root, "abcdef123456", &DetachLauncher::Inline).expect("202");
+    let accepted = start_promote_with_launcher(
+        &root,
+        "abcdef123456",
+        &DetachLauncher::Inline,
+        &DeploymentContext::human(),
+    )
+    .expect("202");
     assert_eq!(accepted.sha12, "abcdef123456");
     assert!(
         accepted.log.ends_with("abcdef123456/promote.log"),
@@ -304,7 +309,7 @@ fn promoting_spawns_the_bundled_script_detached_and_writes_the_lock() {
 
     // 走っている間は 409（二重に起こさない）。
     assert_eq!(
-        start_promote(&root, "abcdef123456", "inline"),
+        start_promote(&root, "abcdef123456", "inline", &DeploymentContext::human()),
         Err(ReleasePromoteError::AlreadyPromoting)
     );
     // 一覧にも `promoting = true` で出る。
@@ -341,15 +346,20 @@ fn promotion_runs_the_promote_script_of_the_current_release() {
 
     // (1) current にも昇格先にも `scripts/` が無い → 409。
     assert!(matches!(
-        start_promote(&root, "bbbbbbbbbbbb", "inline"),
+        start_promote(&root, "bbbbbbbbbbbb", "inline", &DeploymentContext::human()),
         Err(ReleasePromoteError::Unavailable(_))
     ));
 
     // (2) 昇格先にだけある（current は Phase 48 以前）→ 昇格先のものを使う。
     // `Inline` を明示（本物の systemd-run を呼ばない）。
     fake_script(&root, "bbbbbbbbbbbb", "target-script");
-    let accepted =
-        start_promote_with_launcher(&root, "bbbbbbbbbbbb", &DetachLauncher::Inline).expect("202");
+    let accepted = start_promote_with_launcher(
+        &root,
+        "bbbbbbbbbbbb",
+        &DetachLauncher::Inline,
+        &DeploymentContext::human(),
+    )
+    .expect("202");
     assert_eq!(accepted.script_from, "target");
     let log = root.join("bbbbbbbbbbbb").join("promote.log");
     let mut logged = String::new();
@@ -367,8 +377,13 @@ fn promotion_runs_the_promote_script_of_the_current_release() {
     std::fs::remove_file(root.join("bbbbbbbbbbbb").join("promote.lock")).expect("rm lock");
     std::fs::remove_file(&log).expect("rm log");
     fake_script(&root, "aaaaaaaaaaaa", "current-script");
-    let accepted =
-        start_promote_with_launcher(&root, "bbbbbbbbbbbb", &DetachLauncher::Inline).expect("202");
+    let accepted = start_promote_with_launcher(
+        &root,
+        "bbbbbbbbbbbb",
+        &DetachLauncher::Inline,
+        &DeploymentContext::human(),
+    )
+    .expect("202");
     assert_eq!(accepted.script_from, "current");
     // ログは**昇格先**の promote.log（人が見る場所は変わらない）。
     assert!(
@@ -505,7 +520,13 @@ fn starting_a_new_promotion_clears_the_previous_failure_marker() {
     .expect("write");
     fake_script(&root, "abcdef123456", "retry");
 
-    start_promote_with_launcher(&root, "abcdef123456", &DetachLauncher::Inline).expect("202");
+    start_promote_with_launcher(
+        &root,
+        "abcdef123456",
+        &DetachLauncher::Inline,
+        &DeploymentContext::human(),
+    )
+    .expect("202");
 
     assert!(
         !root
@@ -908,7 +929,13 @@ fn promoting_via_fake_systemd_run_writes_the_lock_and_streams_the_log() {
     let launcher = DetachLauncher::SystemdRun {
         program: fake_systemd_run.to_string_lossy().into_owned(),
     };
-    let accepted = start_promote_with_launcher(&root, "abcdef123456", &launcher).expect("202");
+    let accepted = start_promote_with_launcher(
+        &root,
+        "abcdef123456",
+        &launcher,
+        &DeploymentContext::human(),
+    )
+    .expect("202");
     assert_eq!(accepted.sha12, "abcdef123456");
 
     let lock = root.join("abcdef123456").join("promote.lock");
@@ -931,7 +958,12 @@ fn promoting_via_fake_systemd_run_writes_the_lock_and_streams_the_log() {
 
     // 走っている間は 409（二重に起こさない。launcher に依らず同じ判定）。
     assert_eq!(
-        start_promote_with_launcher(&root, "abcdef123456", &launcher),
+        start_promote_with_launcher(
+            &root,
+            "abcdef123456",
+            &launcher,
+            &DeploymentContext::human()
+        ),
         Err(ReleasePromoteError::AlreadyPromoting)
     );
 }

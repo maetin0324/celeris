@@ -22,6 +22,13 @@
 #   SD_TEST_CASES="A E" で走らせるケースを絞れる（既定は全部）。
 set -euo pipefail
 
+export SD_ACTOR='operator:test'
+export SD_REASON='test "reason"'
+export SD_POLICY_REF='test approval'
+export SD_TASK_REFS='["task:test"]'
+export SD_DECISION_REFS='["decision:test"]'
+unset SD_OPERATION
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SD="${SD_UNDER_TEST:-$(cd "$HERE/.." && pwd)}"
 

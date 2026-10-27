@@ -228,6 +228,57 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// ADR 2026-10-27-project-stagnation-inbox D3・D4: 停滞の閾値と判定の間隔（`[maintenance.stagnation]`）。
+    /// 次の判定から効く（間隔の待ちも捨てる）。
+    pub fn set_stagnation(
+        &mut self,
+        policy: task_ops::stagnation::StagnationPolicy,
+        scan_interval_secs: u64,
+    ) {
+        self.stagnation_policy = policy;
+        self.stagnation_scan_interval_secs = scan_interval_secs;
+        self.stagnation_checked_at = None;
+    }
+
+    /// ADR 2026-10-27-project-stagnation-inbox D1・D3: `scan_interval_secs` ごとに、store と releases_dir の事実から
+    /// `project_stalled`・`release_unpromoted`・`task_unscheduled` を判定して snapshot の `stagnation` を作り直す。
+    /// 読み取りだけで、状態は変えず event も書かない（LLM なし）。
+    pub(super) fn check_stagnation(&mut self) -> Result<(), DispatchError> {
+        let now = self.now_utc();
+        if let Some(last) = self.stagnation_checked_at
+            && (now - last).whole_seconds()
+                < i64::try_from(self.stagnation_scan_interval_secs).unwrap_or(i64::MAX)
+        {
+            return Ok(());
+        }
+        self.stagnation_checked_at = Some(now);
+        let in_flight: std::collections::HashSet<TaskId> = self
+            .running
+            .keys()
+            .map(|k| k.task)
+            .chain(self.reviewing.keys().copied())
+            .collect();
+        let excluded: std::collections::HashSet<TaskId> =
+            self.stalled_tasks.keys().copied().collect();
+        let memory = task_ops::wait::MemoryWaits::from_waits(
+            self.snapshot_task_waits()
+                .into_iter()
+                .map(|w| (w.task_id, w.wait)),
+        );
+        let facts = task_ops::stagnation::gather(
+            self.store.as_ref(),
+            self.config.releases_dir.as_deref(),
+            &self.stagnation_policy,
+            now,
+            &in_flight,
+            &excluded,
+            &memory,
+        )
+        .map_err(ops_to_store)?;
+        self.stagnation = task_ops::stagnation::detect(&facts, &self.stagnation_policy, now);
+        Ok(())
+    }
+
     /// ADR-0079 D8（Phase R3b）: 採用した計画が root の /3 の計画なら、承認の要否（`task_core::tree::plan_approval`）。
     /// 木が無効・/3 でない・木の子（子の計画は承認を求めない）なら `None`（従来どおり進める。報告も残さない）。
     pub(super) fn root_plan_approval(

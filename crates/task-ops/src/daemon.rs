@@ -30,6 +30,13 @@ pub struct DaemonSnapshot {
     /// （`AttentionItem::Stalled`）の元。何か起きて最後の event が変われば次の確認で消える。
     #[serde(default)]
     pub stalled_tasks: Vec<SnapshotStalledTask>,
+    /// ADR 2026-10-27-project-stagnation-inbox D3: 案件単位の停滞（`project_stalled`・`release_unpromoted`・
+    /// `task_unscheduled`）。dispatcher が `scan_interval_secs` ごとに作り直す（`key` 順）。受信箱の項目の元。
+    #[serde(default)]
+    pub stagnation: Vec<crate::stagnation::StagnationFinding>,
+    /// 同 D3: `human_wait_aging` の閾値（受信箱を組むときに使う）。`None` なら出さない。
+    #[serde(default)]
+    pub stagnation_policy: Option<crate::stagnation::StagnationPolicy>,
     /// ADR-0033 D3（Phase 25）: 秘書レベルの未読の報告と通知の判定。**API が応答を組むときに埋める**
     /// 唯一のフィールド（`last_notified_at` は `POST /reports/notified` が進める API プロセスの観測値で、
     /// ディスパッチャは知らない）。ディスパッチャが送るスナップショットでは常に `None`。

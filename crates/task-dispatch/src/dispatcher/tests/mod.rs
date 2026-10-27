@@ -3061,4 +3061,7 @@ mod stale_priority;
 mod write_set_gate;
 
 mod orphan_work_units;
+/// ADR 2026-10-27-project-stagnation-inbox D3: dispatcher の停滞の判定（偽の時計・一時 releases_dir）
+/// （`src/dispatcher/tests/stagnation.rs`）。
+mod stagnation;
 mod variant_pin;

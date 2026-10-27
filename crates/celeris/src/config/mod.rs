@@ -638,6 +638,7 @@ impl Config {
         self.workspace.validate()?;
         self.maintenance.target_sweep.validate()?;
         self.maintenance.validate_disk_watch()?;
+        self.maintenance.stagnation.validate()?;
         harness::validate_harnesses(&self.harnesses)?;
         let role_ids = harness::validate_roles(&self.roles)?;
         let genre_ids = harness::validate_genres(&self.genres, &role_ids)?;

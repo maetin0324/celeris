@@ -684,6 +684,27 @@ impl SqliteStore {
         })
     }
 
+    pub(super) fn latest_event_ts_impl(
+        &self,
+        task_ids: &[TaskId],
+    ) -> Result<std::collections::HashMap<TaskId, String>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT ts FROM events WHERE task_id = ?1 ORDER BY seq DESC LIMIT 1",
+            )?;
+            let mut out = std::collections::HashMap::with_capacity(task_ids.len());
+            for id in task_ids {
+                let ts: Option<String> = stmt
+                    .query_row(params![id.to_string()], |row| row.get(0))
+                    .optional()?;
+                if let Some(ts) = ts {
+                    out.insert(*id, ts);
+                }
+            }
+            Ok(out)
+        })
+    }
+
     pub(super) fn latest_event_id_impl(&self) -> Result<u64, StoreError> {
         self.with_read_conn(|conn| {
             let id: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) FROM events", [], |row| {

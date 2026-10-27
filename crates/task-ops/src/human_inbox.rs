@@ -48,11 +48,16 @@ pub enum InboxKind {
     Unintegrated,
     // ADR 2026-10-23-stage-order-and-plan-stall D5: 計画を持つ task が理由なく止まっている（生存確認の `StallDetected`）。
     Stalled,
+    // ADR 2026-10-27-project-stagnation-inbox D1: 案件単位の停滞（決定的な判定。受信箱では答えない）。
+    ProjectStalled,
+    HumanWaitAging,
+    ReleaseUnpromoted,
+    TaskUnscheduled,
     // 人の決定 2026-10-08: KB の取り込み待ち（旧 `knowledge_review`）は受信箱に出さない。知識画面で扱う。
 }
 
 impl InboxKind {
-    pub const ALL: [InboxKind; 18] = [
+    pub const ALL: [InboxKind; 22] = [
         InboxKind::Decision,
         InboxKind::PlanGate,
         InboxKind::PhaseGate,
@@ -71,6 +76,26 @@ impl InboxKind {
         InboxKind::IntegrationRequest,
         InboxKind::Unintegrated,
         InboxKind::Stalled,
+        InboxKind::ProjectStalled,
+        InboxKind::HumanWaitAging,
+        InboxKind::ReleaseUnpromoted,
+        InboxKind::TaskUnscheduled,
+    ];
+
+    /// ADR 2026-10-27-project-stagnation-inbox D1: 人の操作を待って止まっている種類（`human_wait_aging` の対象）。
+    pub const HUMAN_WAITS: [InboxKind; 12] = [
+        InboxKind::Decision,
+        InboxKind::PlanGate,
+        InboxKind::PhaseGate,
+        InboxKind::Authorization,
+        InboxKind::BrowserWait,
+        InboxKind::Question,
+        InboxKind::AcceptanceCheck,
+        InboxKind::DraftAccept,
+        InboxKind::ProjectPlan,
+        InboxKind::CredentialWait,
+        InboxKind::ClusterLogin,
+        InboxKind::IntegrationRequest,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -93,6 +118,10 @@ impl InboxKind {
             InboxKind::IntegrationRequest => "integration_request",
             InboxKind::Unintegrated => "unintegrated",
             InboxKind::Stalled => "stalled",
+            InboxKind::ProjectStalled => "project_stalled",
+            InboxKind::HumanWaitAging => "human_wait_aging",
+            InboxKind::ReleaseUnpromoted => "release_unpromoted",
+            InboxKind::TaskUnscheduled => "task_unscheduled",
         }
     }
 }
@@ -260,6 +289,26 @@ pub fn from_inbox(inbox: &Inbox, by_id: &HashMap<TaskId, Task>, now: OffsetDateT
     }
     for waits in groups.values() {
         items.push(b.credential_wait(waits));
+    }
+    // ADR 2026-10-27-project-stagnation-inbox D1・D2: 人の操作待ちの長期化は、ここまでの項目の経過から案件ごとに 1 件。
+    if let Some(policy) = inbox.stagnation_policy {
+        let waits: Vec<crate::stagnation::HumanWait> = items
+            .iter()
+            .filter(|it| InboxKind::HUMAN_WAITS.contains(&it.kind))
+            .map(|it| crate::stagnation::HumanWait {
+                item_id: it.id.clone(),
+                title: it.title.clone(),
+                project_id: it.project_id.clone(),
+                created_at: it.created_at.clone(),
+                age_secs: it.age_secs,
+            })
+            .collect();
+        for aging in crate::stagnation::human_wait_aging(&waits, policy.human_wait_secs) {
+            items.push(b.human_wait_aging(&aging, policy.human_wait_secs));
+        }
+    }
+    for f in &inbox.stagnation {
+        items.push(b.stagnation(f));
     }
 
     sort_items(&mut items);
@@ -1346,6 +1395,167 @@ impl Builder<'_> {
             project_id: None,
             created_at: view::to_rfc3339(d.since),
             links: Vec::new(),
+        })
+    }
+
+    /// ADR 2026-10-27-project-stagnation-inbox D2: id は論理キー、`created_at` は最も古い待ち（revision）。
+    fn human_wait_aging(
+        &self,
+        a: &crate::stagnation::HumanWaitAging,
+        threshold_secs: u64,
+    ) -> InboxItem {
+        let project = a
+            .project_id
+            .as_deref()
+            .map(|p| format!("案件 {p}"))
+            .unwrap_or_else(|| "案件なし".to_string());
+        let lines: Vec<String> = a
+            .waits
+            .iter()
+            .map(|w| format!("- {}（{} 分）", w.title, w.age_secs / 60))
+            .collect();
+        self.finish(Draft {
+            id: id_part(&a.key),
+            kind: InboxKind::HumanWaitAging,
+            title: format!("人の操作待ちが長い: {project}（{} 件）", a.waits.len()),
+            detail: clip(&format!(
+                "{} 秒以上答えられていない待ち:\n{}",
+                threshold_secs,
+                lines.join("\n")
+            )),
+            options: vec![opt(
+                "answer_items",
+                "各項目に答える",
+                false,
+                "待ちの項目に答えると、閾値を過ぎた待ちが無くなった時点で消える",
+            )],
+            recommended: Some("answer_items".to_string()),
+            due_at: None,
+            blocking: InboxBlocking {
+                tasks: Vec::new(),
+                units: Vec::new(),
+                root: None,
+                summary: format!("{project} の人の操作待ち {} 件", a.waits.len()),
+            },
+            blocked_by: a.waits.iter().map(|w| w.item_id.clone()).collect(),
+            native: None,
+            task: None,
+            project_id: a.project_id.clone(),
+            created_at: a.since.clone(),
+            links: a
+                .waits
+                .iter()
+                .map(|w| link(&w.title, format!("/api/v1/inbox/items/{}", w.item_id)))
+                .collect(),
+        })
+    }
+
+    /// ADR 2026-10-27-project-stagnation-inbox D1〜D3・D5: snapshot の停滞の判定 1 件。受信箱では答えない。
+    fn stagnation(&self, f: &crate::stagnation::StagnationFinding) -> InboxItem {
+        use crate::stagnation::StagnationKind;
+        let task = f.task_id.and_then(|id| self.ref_of(id));
+        let project_id = f
+            .project_id
+            .map(|p| p.to_string())
+            .or_else(|| f.task_id.and_then(|id| self.project_of(id)));
+        let (kind, title, options, recommended, blocking, links) = match f.kind {
+            StagnationKind::ProjectStalled => {
+                let pid = project_id.clone().unwrap_or_default();
+                (
+                    InboxKind::ProjectStalled,
+                    format!("案件が進んでいない: {}", f.subject),
+                    vec![
+                        opt(
+                            "inspect",
+                            "案件を開いて次の手を決める",
+                            false,
+                            "task が動くか出来事が起きれば消える",
+                        ),
+                        opt(
+                            "pause",
+                            "案件を一時停止する",
+                            false,
+                            &format!("POST /projects/{pid}/pause（active でなくなれば消える）"),
+                        ),
+                    ],
+                    Some("inspect".to_string()),
+                    InboxBlocking {
+                        tasks: Vec::new(),
+                        units: Vec::new(),
+                        root: None,
+                        summary: format!("案件 {} 全体", f.subject),
+                    },
+                    vec![link("案件", format!("/projects/{pid}"))],
+                )
+            }
+            StagnationKind::ReleaseUnpromoted => (
+                InboxKind::ReleaseUnpromoted,
+                format!("verify 済みの release が昇格されていない: {}", f.subject),
+                vec![opt(
+                    "promote",
+                    "release 画面で昇格する",
+                    false,
+                    &format!("POST /releases/{}/promote（昇格すれば消える）", f.subject),
+                )],
+                Some("promote".to_string()),
+                InboxBlocking {
+                    tasks: Vec::new(),
+                    units: Vec::new(),
+                    root: None,
+                    summary: "本番に入っていない変更".to_string(),
+                },
+                vec![link("release", "/releases".to_string())],
+            ),
+            StagnationKind::TaskUnscheduled => (
+                InboxKind::TaskUnscheduled,
+                format!("ready のまま起きない: {}", f.subject),
+                vec![
+                    opt(
+                        "inspect",
+                        "task 詳細で原因を見る",
+                        false,
+                        "run が起きるか待ちの理由が付けば消える",
+                    ),
+                    opt(
+                        "cancel",
+                        "取り消す",
+                        false,
+                        &format!(
+                            "POST /tasks/{}/cancel",
+                            f.task_id.map(|t| t.to_string()).unwrap_or_default()
+                        ),
+                    ),
+                ],
+                Some("inspect".to_string()),
+                match &task {
+                    Some(t) => self.only_task(t),
+                    None => InboxBlocking {
+                        tasks: Vec::new(),
+                        units: Vec::new(),
+                        root: None,
+                        summary: "この task だけ".to_string(),
+                    },
+                },
+                f.task_id
+                    .map(|t| vec![link("task 詳細", format!("/tasks/{t}"))])
+                    .unwrap_or_default(),
+            ),
+        };
+        self.finish(Draft {
+            id: id_part(&f.key),
+            kind,
+            title,
+            detail: clip(&f.detail),
+            options,
+            recommended,
+            due_at: None,
+            blocking,
+            blocked_by: Vec::new(),
+            native: None,
+            task,
+            project_id,
+            created_at: f.since.clone(),
+            links,
         })
     }
 

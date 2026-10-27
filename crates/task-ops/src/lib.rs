@@ -69,6 +69,7 @@ pub mod routing_outcome;
 /// ADR 2026-10-11-llm-source-model-routing-evaluation D3: 段階・根拠表の読み取りと人の段階変更。
 pub mod routing_stage;
 /// Deterministic scan of completed task branches against their repository default branch.
+pub mod stagnation;
 pub mod stranded;
 pub mod tree;
 pub mod tree_adopt;

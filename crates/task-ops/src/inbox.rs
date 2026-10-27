@@ -41,6 +41,15 @@ pub struct Inbox {
     #[serde(skip)]
     #[schemars(skip)]
     pub credential_waits: Vec<task_core::CredentialWait>,
+    /// ADR 2026-10-27-project-stagnation-inbox D3: snapshot の停滞の判定（`DaemonSnapshot.stagnation` の写し）。
+    /// 受信箱の共通形（`human_inbox`）だけが使う。
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub stagnation: Vec<crate::stagnation::StagnationFinding>,
+    /// 同 D3: `human_wait_aging` の閾値（`DaemonSnapshot.stagnation_policy` の写し）。
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub stagnation_policy: Option<crate::stagnation::StagnationPolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -1372,6 +1381,8 @@ pub fn inbox(
         counts,
         disk_full,
         credential_waits,
+        stagnation: snapshot.map(|s| s.stagnation.clone()).unwrap_or_default(),
+        stagnation_policy: snapshot.and_then(|s| s.stagnation_policy),
     })
 }
 

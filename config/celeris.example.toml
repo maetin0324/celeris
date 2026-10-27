@@ -718,6 +718,16 @@ path = "/tmp"
 warn_pct = 80
 critical_pct = 95
 
+# 案件単位の停滞（agent-docs/adr/2026-10-27-project-stagnation-inbox.md）。dispatcher が scan_interval_secs ごとに
+# 決定的に判定し（LLM なし）、受信箱に project_stalled・human_wait_aging・release_unpromoted・task_unscheduled を
+# 論理キーで 1 件ずつ出す。解消すれば消える。閾値は秒、0 でその種類を止める。値は既定値。
+[maintenance.stagnation]
+project_idle_secs = 21600
+human_wait_secs = 7200
+release_unpromoted_secs = 3600
+task_unscheduled_secs = 1800
+scan_interval_secs = 60
+
 # CoS チャット（agent-docs/adr/2026-10-05-cos-chat-home.md D4）。値は既定値。
 # 添付は `<db のディレクトリ>/chat/attachments/<id>/blob` に置く（DB と一緒に backup する）。
 # daemon は 1 時間ごとに、未送信の upload（orphan_ttl_hours 経過）、最後の参照が外れて

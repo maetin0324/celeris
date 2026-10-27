@@ -343,6 +343,12 @@ pub trait TaskStore:
     fn events_since(&self, after_id: u64, limit: usize) -> Result<Vec<EventRow>, StoreError>;
     /// ADR-0013 D6: `events` の現在の最大 `id`。行が無ければ 0。
     fn latest_event_id(&self) -> Result<u64, StoreError>;
+    /// ADR 2026-10-27-project-stagnation-inbox D1: 各 task の最後の event の `ts`（RFC 3339）。event の無い task は
+    /// 入らない。`(task_id, seq)` の index を task ごとに 1 回引くだけで、events 全体は走査しない。
+    fn latest_event_ts(
+        &self,
+        task_ids: &[TaskId],
+    ) -> Result<std::collections::HashMap<TaskId, String>, StoreError>;
     /// ADR-0013（Phase 9b）: 1 タスクのイベントを `seq` 昇順で、`after_seq` より後（`None` なら最初から）最大 `limit` 件、
     /// グローバル `id` と `ts` 付きで返す（API の `GET /tasks/{id}/events` と run の要約が使う）。
     fn event_rows_for(

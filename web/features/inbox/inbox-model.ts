@@ -23,6 +23,10 @@ export const INBOX_KINDS: readonly InboxKind[] = [
   "integration_request",
   "unintegrated",
   "stalled",
+  "project_stalled",
+  "human_wait_aging",
+  "release_unpromoted",
+  "task_unscheduled",
 ];
 
 export const KIND_LABELS: Record<InboxKind, string> = {
@@ -44,6 +48,10 @@ export const KIND_LABELS: Record<InboxKind, string> = {
   integration_request: "統合の依頼",
   unintegrated: "未取り込み",
   stalled: "理由なく止まっている",
+  project_stalled: "案件が進んでいない",
+  human_wait_aging: "人の操作待ちが長い",
+  release_unpromoted: "release が昇格されていない",
+  task_unscheduled: "ready のまま起きない",
 };
 
 export function isInboxKind(value: unknown): value is InboxKind {
@@ -76,6 +84,10 @@ const NATIVE_KINDS = new Set<InboxKind>([
   "integration_request",
   "browser_wait",
   "stalled",
+  "project_stalled",
+  "human_wait_aging",
+  "release_unpromoted",
+  "task_unscheduled",
 ]);
 
 export function needsNativeScreen(item: InboxItem): boolean {

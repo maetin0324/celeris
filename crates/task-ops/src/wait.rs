@@ -42,6 +42,11 @@ impl MemoryWaits {
         )
     }
 
+    /// dispatcher が自分のメモリの理由をそのまま渡す（ADR 2026-10-27-project-stagnation-inbox D1 の `task_unscheduled`）。
+    pub fn from_waits(waits: impl IntoIterator<Item = (TaskId, TaskWait)>) -> Self {
+        Self(waits.into_iter().collect())
+    }
+
     pub fn get(&self, id: TaskId) -> Option<&TaskWait> {
         self.0.get(&id)
     }

@@ -21,6 +21,82 @@ pub struct MaintenanceConfig {
     /// D4.1: 省略すると既定の 3 つ（`/`・`/local`・`/tmp`、80% / 95%）。`disk_watch = []` で監視しない。
     #[serde(default = "default_disk_watch")]
     pub disk_watch: Vec<DiskWatchConfig>,
+    /// ADR 2026-10-27-project-stagnation-inbox D4: `[maintenance.stagnation]`（案件単位の停滞の閾値）。
+    #[serde(default)]
+    pub stagnation: StagnationConfig,
+}
+
+/// `[maintenance.stagnation]`。閾値は秒、`0` でその種類を止める。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StagnationConfig {
+    #[serde(default = "default_project_idle_secs")]
+    pub project_idle_secs: u64,
+    #[serde(default = "default_human_wait_secs")]
+    pub human_wait_secs: u64,
+    #[serde(default = "default_release_unpromoted_secs")]
+    pub release_unpromoted_secs: u64,
+    #[serde(default = "default_task_unscheduled_secs")]
+    pub task_unscheduled_secs: u64,
+    /// 判定の間隔（秒、10 以上）。
+    #[serde(default = "default_stagnation_scan_interval_secs")]
+    pub scan_interval_secs: u64,
+}
+
+impl Default for StagnationConfig {
+    fn default() -> Self {
+        Self {
+            project_idle_secs: default_project_idle_secs(),
+            human_wait_secs: default_human_wait_secs(),
+            release_unpromoted_secs: default_release_unpromoted_secs(),
+            task_unscheduled_secs: default_task_unscheduled_secs(),
+            scan_interval_secs: default_stagnation_scan_interval_secs(),
+        }
+    }
+}
+
+fn default_project_idle_secs() -> u64 {
+    task_ops::stagnation::DEFAULT_PROJECT_IDLE_SECS
+}
+
+fn default_human_wait_secs() -> u64 {
+    task_ops::stagnation::DEFAULT_HUMAN_WAIT_SECS
+}
+
+fn default_release_unpromoted_secs() -> u64 {
+    task_ops::stagnation::DEFAULT_RELEASE_UNPROMOTED_SECS
+}
+
+fn default_task_unscheduled_secs() -> u64 {
+    task_ops::stagnation::DEFAULT_TASK_UNSCHEDULED_SECS
+}
+
+fn default_stagnation_scan_interval_secs() -> u64 {
+    task_ops::stagnation::DEFAULT_SCAN_INTERVAL_SECS
+}
+
+/// `scan_interval_secs` の下限（tick ごとに store を読み直さない）。
+const MIN_STAGNATION_SCAN_INTERVAL_SECS: u64 = 10;
+
+impl StagnationConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.scan_interval_secs < MIN_STAGNATION_SCAN_INTERVAL_SECS {
+            return Err(ConfigError::Invalid(format!(
+                "[maintenance.stagnation] scan_interval_secs must be >= {MIN_STAGNATION_SCAN_INTERVAL_SECS} (got {})",
+                self.scan_interval_secs
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn policy(&self) -> task_ops::stagnation::StagnationPolicy {
+        task_ops::stagnation::StagnationPolicy {
+            project_idle_secs: self.project_idle_secs,
+            human_wait_secs: self.human_wait_secs,
+            release_unpromoted_secs: self.release_unpromoted_secs,
+            task_unscheduled_secs: self.task_unscheduled_secs,
+        }
+    }
 }
 
 impl Default for MaintenanceConfig {
@@ -28,6 +104,7 @@ impl Default for MaintenanceConfig {
         Self {
             target_sweep: TargetSweepConfig::default(),
             disk_watch: default_disk_watch(),
+            stagnation: StagnationConfig::default(),
         }
     }
 }

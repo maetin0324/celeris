@@ -460,6 +460,8 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
         }],
         task_waits: vec![],
         stalled_tasks: vec![],
+        stagnation: vec![],
+        stagnation_policy: None,
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,

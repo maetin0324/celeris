@@ -409,6 +409,13 @@ impl TaskStore for SqliteStore {
         self.latest_event_id_impl()
     }
 
+    fn latest_event_ts(
+        &self,
+        task_ids: &[TaskId],
+    ) -> Result<std::collections::HashMap<TaskId, String>, StoreError> {
+        self.latest_event_ts_impl(task_ids)
+    }
+
     fn event_rows_for(
         &self,
         task_id: TaskId,

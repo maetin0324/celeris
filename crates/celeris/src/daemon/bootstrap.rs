@@ -615,6 +615,11 @@ pub fn build_dispatcher(
     dispatcher.set_target_sweep_scope(config.target_sweep_scope());
     // ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（tick の段 `disk_watch`）。
     dispatcher.set_disk_watch(config.disk_watch_entries());
+    // ADR 2026-10-27-project-stagnation-inbox D4: 案件単位の停滞の閾値と判定の間隔。
+    dispatcher.set_stagnation(
+        config.maintenance.stagnation.policy(),
+        config.maintenance.stagnation.scan_interval_secs,
+    );
     dispatcher.set_cos_chat_launch(
         sqlite.clone(),
         super::cos_launch::build_cos_chat_launch(config, &config.db.path, config.api.listen),

@@ -120,6 +120,8 @@ impl Dispatcher {
             cooldowns,
             task_waits,
             stalled_tasks: self.stalled_tasks.values().cloned().collect(),
+            stagnation: self.stagnation.clone(),
+            stagnation_policy: Some(self.stagnation_policy),
             reports: None,
             // ADR-0033 D5（Phase 26）: 未読の件数は API が応答を組むときに埋める（`reports` と同じ理由）。
             approvals_pending: 0,

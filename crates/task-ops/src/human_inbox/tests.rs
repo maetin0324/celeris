@@ -103,6 +103,8 @@ fn empty_inbox() -> Inbox {
         },
         disk_full: Vec::new(),
         credential_waits: Vec::new(),
+        stagnation: Vec::new(),
+        stagnation_policy: None,
     }
 }
 
@@ -346,6 +348,13 @@ fn fixture() -> Fixture {
             .credential_waits
             .push(credential_wait(&task, work_unit, i as i64));
     }
+    // ADR 2026-10-27-project-stagnation-inbox: 停滞の 3 種（snapshot の判定）と、閾値 6000 秒で人の操作待ちの長期化 1 件
+    // （AT の項目は 6600 秒経過。案件の無い項目は 1 件に束ねる）。
+    inbox.stagnation_policy = Some(crate::stagnation::StagnationPolicy {
+        human_wait_secs: 6000,
+        ..Default::default()
+    });
+    inbox.stagnation = stagnation_findings(&task, project_id);
 
     let by_id: HashMap<TaskId, Task> = [task.clone(), draft, approval_task, authz_task]
         .into_iter()
@@ -357,6 +366,132 @@ fn fixture() -> Fixture {
         task,
         approval_id,
     }
+}
+
+fn stagnation_findings(
+    task: &Task,
+    project_id: task_core::ProjectId,
+) -> Vec<crate::stagnation::StagnationFinding> {
+    use crate::stagnation::{StagnationFinding, StagnationKind};
+    vec![
+        StagnationFinding {
+            kind: StagnationKind::ProjectStalled,
+            key: format!("project_stalled-{project_id}"),
+            project_id: Some(project_id),
+            task_id: None,
+            subject: "案件 A".to_string(),
+            since: AT.to_string(),
+            detail: "開いている task が 1 件".to_string(),
+        },
+        StagnationFinding {
+            kind: StagnationKind::ReleaseUnpromoted,
+            key: "release_unpromoted-selfdeploy".to_string(),
+            project_id: None,
+            task_id: None,
+            subject: "ca6f52cb0000".to_string(),
+            since: AT.to_string(),
+            detail: "verify 済み 1 件".to_string(),
+        },
+        StagnationFinding {
+            kind: StagnationKind::TaskUnscheduled,
+            key: format!("task_unscheduled-{}", task.id),
+            project_id: None,
+            task_id: Some(task.id),
+            subject: task.title.clone(),
+            since: AT.to_string(),
+            detail: "ready のまま".to_string(),
+        },
+    ]
+}
+
+/// ADR 2026-10-27-project-stagnation-inbox D1・D2: 人の操作待ちの長期化は閾値で 1 件出て、id（論理キー）と
+/// created_at（revision）は再検出で変わらず、最も古い待ちが答えられると created_at だけが進み、全部答えられると消える。
+#[test]
+fn human_wait_aging_is_one_item_per_project_and_closes_when_answered() {
+    let (f, out) = build();
+    let item = one(&out, InboxKind::HumanWaitAging);
+    assert_eq!(item.id, "human_wait_aging-none");
+    assert!(item.options.iter().all(|o| !o.key.is_empty()));
+    assert!(item.answer.native.is_none());
+    let oldest = item.created_at.clone();
+    assert!(!item.blocked_by.is_empty());
+
+    // 同じ状態の再検出（時計が進んでも）: 同じ id・同じ created_at の 1 件。
+    let again = from_inbox(&f.inbox, &f.by_id, now() + time::Duration::minutes(5));
+    let item2 = one(&again, InboxKind::HumanWaitAging);
+    assert_eq!(
+        (item2.id.as_str(), &item2.created_at),
+        (item.id.as_str(), &oldest)
+    );
+
+    // 閾値の手前（時計を戻す）なら出ない。
+    let early = from_inbox(&f.inbox, &f.by_id, now() - time::Duration::minutes(15));
+    assert!(
+        early
+            .items
+            .iter()
+            .all(|i| i.kind != InboxKind::HumanWaitAging)
+    );
+
+    // 人の操作待ちが全部答えられると閉じる（policy が無い snapshot でも出ない）。
+    let mut answered = f.inbox.clone();
+    answered.decisions.clear();
+    answered.approvals.clear();
+    answered.questions.clear();
+    answered.drafts.clear();
+    answered.browser_waits.clear();
+    answered.credential_waits.clear();
+    answered.attention.retain(|a| {
+        !matches!(
+            a,
+            AttentionItem::PlanApproval { .. }
+                | AttentionItem::PhaseCheckpoint { .. }
+                | AttentionItem::ClusterUnavailable { .. }
+                | AttentionItem::IntegrationRequest { .. }
+        )
+    });
+    let closed = from_inbox(&answered, &f.by_id, now());
+    assert!(
+        closed
+            .items
+            .iter()
+            .all(|i| i.kind != InboxKind::HumanWaitAging)
+    );
+    let mut off = f.inbox.clone();
+    off.stagnation_policy = None;
+    let none = from_inbox(&off, &f.by_id, now());
+    assert!(
+        none.items
+            .iter()
+            .all(|i| i.kind != InboxKind::HumanWaitAging)
+    );
+}
+
+/// ADR 2026-10-27-project-stagnation-inbox D2・D5: snapshot の停滞は論理キーを id に、since を created_at にした
+/// 1 件ずつで、受信箱では答えない（native なし）。
+#[test]
+fn stagnation_findings_map_to_items_keyed_by_logical_key() {
+    let (f, out) = build();
+    let p = one(&out, InboxKind::ProjectStalled);
+    assert!(p.id.starts_with("project_stalled-"));
+    assert_eq!(p.created_at, AT);
+    assert!(p.project_id.is_some());
+    let r = one(&out, InboxKind::ReleaseUnpromoted);
+    assert_eq!(r.id, "release_unpromoted-selfdeploy");
+    assert!(r.title.contains("ca6f52cb0000"));
+    let t = one(&out, InboxKind::TaskUnscheduled);
+    assert_eq!(t.id, format!("task_unscheduled-{}", f.task.id));
+    assert_eq!(t.task.as_ref().map(|x| x.id), Some(f.task.id));
+    for i in [p, r, t] {
+        assert!(i.answer.native.is_none(), "{}", i.id);
+    }
+    let mut cleared = f.inbox.clone();
+    cleared.stagnation.clear();
+    let gone = from_inbox(&cleared, &f.by_id, now());
+    assert!(gone.items.iter().all(|i| !matches!(
+        i.kind,
+        InboxKind::ProjectStalled | InboxKind::ReleaseUnpromoted | InboxKind::TaskUnscheduled
+    )));
 }
 
 fn credential_wait(task: &Task, work_unit: &str, minutes: i64) -> task_core::CredentialWait {
@@ -480,6 +615,10 @@ fn variant_index(kind: InboxKind) -> usize {
         InboxKind::IntegrationRequest => 15,
         InboxKind::Unintegrated => 16,
         InboxKind::Stalled => 17,
+        InboxKind::ProjectStalled => 18,
+        InboxKind::HumanWaitAging => 19,
+        InboxKind::ReleaseUnpromoted => 20,
+        InboxKind::TaskUnscheduled => 21,
     }
 }
 
@@ -489,7 +628,7 @@ fn human_inbox_all_contains_every_variant_once() {
     seen.sort_unstable();
     assert_eq!(
         seen,
-        (0..=17).collect::<Vec<_>>(),
+        (0..=21).collect::<Vec<_>>(),
         "ALL must list every variant once"
     );
 }

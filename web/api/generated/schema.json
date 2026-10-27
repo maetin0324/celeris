@@ -7726,6 +7726,26 @@
           ],
           "description": "ADR-0075 D6（Phase G1）: scratch pool の観測値（`GET /api/v1/metrics/scratch` と `celerisctl scratch status --json`\nと同じ `celeris.scratch-status/1`）。古いスナップショットと scratch を持たない構成では `None`。"
         },
+        "stagnation": {
+          "default": [],
+          "description": "ADR 2026-10-27-project-stagnation-inbox D3: 案件単位の停滞（`project_stalled`・`release_unpromoted`・\n`task_unscheduled`）。dispatcher が `scan_interval_secs` ごとに作り直す（`key` 順）。受信箱の項目の元。",
+          "items": {
+            "$ref": "#/$defs/StagnationFinding"
+          },
+          "type": "array"
+        },
+        "stagnation_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StagnationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "同 D3: `human_wait_aging` の閾値（受信箱を組むときに使う）。`None` なら出さない。"
+        },
         "stalled_tasks": {
           "default": [],
           "description": "ADR 2026-10-23-stage-order-and-plan-stall D5: 生存確認（ADR-0079 D10）が理由なく止まっていると知らせ\n（`Event::StallDetected`）、その後まだ何も起きていない `ready` の task（task_id 順）。受信箱の attention\n（`AttentionItem::Stalled`）の元。何か起きて最後の event が変われば次の確認で消える。",
@@ -15668,7 +15688,11 @@
         "delivery_skipped",
         "integration_request",
         "unintegrated",
-        "stalled"
+        "stalled",
+        "project_stalled",
+        "human_wait_aging",
+        "release_unpromoted",
+        "task_unscheduled"
       ],
       "type": "string"
     },
@@ -27386,6 +27410,98 @@
           "type": "string"
         }
       ]
+    },
+    "StagnationFinding": {
+      "description": "D3: snapshot に載る判定の 1 件。`key` が受信箱の項目の id、`since` が `created_at`（revision）。",
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "key": {
+          "description": "論理キー（`<kind>-<対象>`）。同じ対象の同じ種類は常に 1 件。",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/StagnationKind"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "since": {
+          "description": "状態が始まった時刻（RFC 3339）。同じ状態の間は変わらない。",
+          "type": "string"
+        },
+        "subject": {
+          "description": "対象の表示名（案件名・task の題・release の sha12）。",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "key",
+        "subject",
+        "since",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "StagnationKind": {
+      "description": "D1: 停滞の種類（受信箱の kind と同じ名前）。",
+      "enum": [
+        "project_stalled",
+        "release_unpromoted",
+        "task_unscheduled"
+      ],
+      "type": "string"
+    },
+    "StagnationPolicy": {
+      "description": "D4: `[maintenance.stagnation]` の閾値（秒）。`0` でその種類を止める。",
+      "properties": {
+        "human_wait_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "project_idle_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "release_unpromoted_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "task_unscheduled_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "project_idle_secs",
+        "human_wait_secs",
+        "release_unpromoted_secs",
+        "task_unscheduled_secs"
+      ],
+      "type": "object"
     },
     "StandingRule": {
       "description": "永続の認可 1 行（`standing_rules` テーブル。ADR-0033 D5）。",

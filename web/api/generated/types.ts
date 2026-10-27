@@ -1636,6 +1636,8 @@ export type DaemonSnapshot = {
   "pid": number;
   "reports"?: ReportsLive | null;
   "scratch"?: ScratchStatus | null;
+  "stagnation"?: Array<StagnationFinding>;
+  "stagnation_policy"?: StagnationPolicy | null;
   "stalled_tasks"?: Array<SnapshotStalledTask>;
   "started_at": string;
   "task_waits"?: Array<SnapshotTaskWait>;
@@ -3193,7 +3195,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled";
 
 export type InboxLink = {
   "href": string;
@@ -5496,6 +5498,25 @@ export type StageSpec = {
 };
 
 export type StageState = "done" | "current" | "pending";
+
+export type StagnationFinding = {
+  "detail": string;
+  "key": string;
+  "kind": StagnationKind;
+  "project_id"?: ProjectId | null;
+  "since": string;
+  "subject": string;
+  "task_id"?: TaskId | null;
+};
+
+export type StagnationKind = "project_stalled" | "release_unpromoted" | "task_unscheduled";
+
+export type StagnationPolicy = {
+  "human_wait_secs": number;
+  "project_idle_secs": number;
+  "release_unpromoted_secs": number;
+  "task_unscheduled_secs": number;
+};
 
 export type StandingRule = {
   "created_at": string;

@@ -19192,6 +19192,14 @@
         "title": {
           "type": "string"
         },
+        "unblocks": {
+          "default": [],
+          "description": "ADR 2026-10-27-unblocks-reopen-on-promotion D1: この task（修正）を待っている task の id（最大 8 件・\n重複不可・存在する task だけ。違反は 422 `validation`）。task と同じ transaction で `task_unblocks` に\n書く。この task を含む release が昇格したら、daemon が待っている `failed` の task を 1 度だけ reopen し、\n`blocked` の task にはコメントを残す。",
+          "items": {
+            "$ref": "#/$defs/TaskId"
+          },
+          "type": "array"
+        },
         "workspace": {
           "default": null,
           "type": [

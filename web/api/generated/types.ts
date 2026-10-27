@@ -3866,6 +3866,7 @@ export type NewTaskBody = {
   "status"?: Status | null;
   "tier"?: Tier | null;
   "title": string;
+  "unblocks"?: Array<TaskId>;
   "workspace"?: string | null;
   "workspace_mode"?: WorkspaceMode | null;
 };

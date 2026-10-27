@@ -36,3 +36,4 @@ pub(crate) mod secrets;
 pub(crate) mod services;
 pub(crate) mod stranded_sweep;
 pub(crate) mod tick_loop;
+pub(crate) mod unblocks_sweep;

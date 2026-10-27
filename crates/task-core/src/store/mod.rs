@@ -150,6 +150,7 @@ mod task_store_impl;
 mod tasks;
 mod transition;
 mod trusted_devices;
+mod unblocks;
 mod write_sets;
 
 pub use migrations::SCHEMA_VERSION;

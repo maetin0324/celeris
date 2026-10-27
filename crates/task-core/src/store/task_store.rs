@@ -635,6 +635,19 @@ pub trait TaskStore:
     /// ADR-0044 D2: そのタスクのコメントを古い順（`created_at`、同時刻は `id` 昇順）で返す。
     fn comments_for(&self, task_id: TaskId) -> Result<Vec<TaskComment>, StoreError>;
 
+    // ---- ADR 2026-10-27-unblocks-reopen-on-promotion: 修正 task と待っている task の結び ----
+
+    /// まだ発火していない結び（`fired_at IS NULL`）を、修正 task・待っている task の id 順で返す。
+    fn unblock_pending(&self) -> Result<Vec<crate::unblocks::UnblockLink>, StoreError>;
+
+    /// 修正 task `fix` の結び（発火済みを含む）を、待っている task の id 順で返す。
+    fn unblocks_of(&self, fix: TaskId) -> Result<Vec<crate::unblocks::UnblockLink>, StoreError>;
+
+    /// 結びを 1 度だけ発火させる（1 つの IMMEDIATE transaction）。行が無いか既に発火していれば何も書かず
+    /// `false`。発火できたら `fire.comment` を書き、`fire.action == Reopened` なら同じ transaction で
+    /// `Trigger::Reopen` を適用する（遷移に失敗すれば全体を戻す）。
+    fn unblock_fire(&self, fire: &crate::unblocks::UnblockFire) -> Result<bool, StoreError>;
+
     // ---- ADR-0040 D4（Phase 47）: celeris のインスタンスの役割（`daemon_instances`）----
     //
     // ここにあるのは「行を読み書きする」だけの操作で、役割を決める規則（誰が active になるか、いつ

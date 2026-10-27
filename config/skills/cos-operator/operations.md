@@ -193,6 +193,9 @@ CoS も上の表の `PATCH /api/v1/tasks/<id>`（task.update）で同じ修復�
    "acceptance":[{"type":"reviewer","text":"添付の screenshot の崩れが直っている"}]}}}
 ```
 
+失敗・blocked の task を直す修正を起票するときは `"unblocks":["<待っている task の ID>"]` を付ける。
+修正を含む release が昇格すると、待っている failed の task は Celeris が 1 度だけ reopen する（手で reopen しない）。
+
 `acceptance` の要素: `{"type":"reviewer","text":"…"}`・`{"type":"command","cmd":"…","expect_exit":0}`・
 `{"type":"artifact_exists","name":"…"}`・`{"type":"knowledge_page","path":"…"}`・`{"type":"human","text":"…"}`。
 

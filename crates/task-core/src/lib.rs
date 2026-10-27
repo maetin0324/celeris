@@ -116,6 +116,8 @@ pub mod transition;
 pub mod tree;
 /// ADR-0079 D11（Phase R4a）: 木の roll-up（純粋関数）。
 pub mod tree_metrics;
+/// ADR 2026-10-27-unblocks-reopen-on-promotion: 修正 task と待っている task の結び。
+pub mod unblocks;
 // ADR 2026-10-11-task-wait-reasons: task の待ちの理由（dispatcher と画面が同じ関数を使う）。
 pub mod wait;
 /// ADR-0043 D4（Phase 52）: リポジトリの中の設定 `.config/celeris/workspace.toml`。

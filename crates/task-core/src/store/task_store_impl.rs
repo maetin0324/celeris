@@ -721,6 +721,18 @@ impl TaskStore for SqliteStore {
         self.comments_for_impl(task_id)
     }
 
+    fn unblock_pending(&self) -> Result<Vec<crate::unblocks::UnblockLink>, StoreError> {
+        self.unblock_pending_impl()
+    }
+
+    fn unblocks_of(&self, fix: TaskId) -> Result<Vec<crate::unblocks::UnblockLink>, StoreError> {
+        self.unblocks_of_impl(fix)
+    }
+
+    fn unblock_fire(&self, fire: &crate::unblocks::UnblockFire) -> Result<bool, StoreError> {
+        self.unblock_fire_impl(fire)
+    }
+
     fn instance_register(&self, instance: &DaemonInstance) -> Result<(), StoreError> {
         self.instance_register_impl(instance)
     }

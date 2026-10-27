@@ -728,6 +728,11 @@ CoS の `/cos/operations` 経由では、coding または objective・acceptance
   `cluster` / `workspace_mode`（`WorkspaceSpec::Remote` と作業場所の扱い。ADR-0018 / ADR-0059 D1）、
   `features`（ADR-0069 D3）、`execution`（`atomic` / `compound`。人が書けば Complexity Gate の明示。ADR-0072 D13）、
   `pause_after`（ADR-0074 D2.1）、`stages_hint`（`[{title, scope}]`、最大 16 件。ADR-0079 D12）も任意。
+- `unblocks`（任意。`[task_id]`、最大 8 件・重複不可・存在する task だけ。違反は 422 `validation`、`field: "unblocks"`。
+  ADR 2026-10-27-unblocks-reopen-on-promotion）: この task（修正）を待っている task。task と同じ transaction で
+  `task_unblocks` に結ぶ。この task（かその祖先）が昇格した release の `promoted.json` の `included.tasks` に載ったら、
+  daemon が待っている task を 1 度だけ処理する（`failed` は system コメント付きで reopen、`blocked` はコメントだけ、
+  それ以外は何もしない）。CoS の `task.create` も同じ本文。
 - 初期 `status`（ADR-0044 D1）: `kind=approval` なら常に `ready`。それ以外は
   **`POST /tasks` では `ready`**（人は Go を出す側なので draft を挟まない）。`status: "draft"` を
   明示したときだけ Go 待ちの `draft` で始まる。`celerisctl add`・委譲・分解の子は `draft`

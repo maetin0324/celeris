@@ -81,6 +81,12 @@ pub(crate) async fn tick_loop(
     let tick = config.tick();
     let _stranded_sweep =
         crate::daemon::stranded_sweep::spawn(dispatcher.store(), roles.role.clone());
+    // ADR 2026-10-27-unblocks-reopen-on-promotion D2: 修正を含む release の昇格で待っている task を再開する。
+    let _unblocks_sweep = crate::daemon::unblocks_sweep::spawn(
+        dispatcher.store(),
+        roles.role.clone(),
+        config.selfdeploy.releases_dir.clone(),
+    );
     // ADR 2026-10-11 D3: enforce の guardrail 判定（間隔は `INTERVAL`。判定は決定的で LLM を呼ばない）。
     let mut guardrail_ticker = crate::daemon::routing_guardrail::Ticker::default();
     let mut balance_guard_ticker = crate::daemon::routing_guardrail::Ticker::default();

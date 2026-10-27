@@ -140,6 +140,12 @@ pub struct NewTaskBody {
     /// `/cos/operations` からは 400（操作自身の `idempotency_key` を使う）。
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// ADR 2026-10-27-unblocks-reopen-on-promotion D1: この task（修正）を待っている task の id（最大 8 件・
+    /// 重複不可・存在する task だけ。違反は 422 `validation`）。task と同じ transaction で `task_unblocks` に
+    /// 書く。この task を含む release が昇格したら、daemon が待っている `failed` の task を 1 度だけ reopen し、
+    /// `blocked` の task にはコメントを残す。
+    #[serde(default)]
+    pub unblocks: Vec<task_core::TaskId>,
 }
 
 fn created_task(task: &Task) -> Response {
@@ -482,6 +488,7 @@ pub(crate) fn create_task_op(
         routing_override,
         campaign,
         idempotency_key,
+        unblocks,
     } = body;
     let reject = |problem: ApiProblem| match audit {
         Some(audit) => audit.reject(store, "task", "new", problem),
@@ -516,6 +523,8 @@ pub(crate) fn create_task_op(
         o.validate()
             .map_err(|e| reject(ApiProblem::bad_request(e.to_string())))?;
     }
+    task_ops::unblocks::validate_unblocks(store, &unblocks)
+        .map_err(|e| reject(ops_problem(store, e, None)))?;
     let built =
         task_ops::add::build_task_with_roles(store, task, roles, genres, OffsetDateTime::now_utc())
             .map_err(|e| reject(ops_problem(store, e, None)))?;
@@ -590,6 +599,13 @@ pub(crate) fn create_task_op(
                 &OffsetDateTime::now_utc().to_string(),
             )?;
         }
+        // ADR 2026-10-27-unblocks-reopen-on-promotion D1: 結びは task と同じ transaction で書く。
+        task_core::store::SqliteStore::unblocks_insert_tx(
+            tx,
+            built.id,
+            &unblocks,
+            OffsetDateTime::now_utc(),
+        )?;
         if let Err(problem) = pin_attachments_tx(tx, &attachment_ids, built.id, thread.as_deref()) {
             let detail = problem.detail().to_string();
             failure = Some(problem);

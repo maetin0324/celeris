@@ -254,6 +254,41 @@ async fn manual_run_creates_a_task_and_skips_while_previous_is_running() {
     assert_problem(&missing, 404, "cron_job_not_found");
 }
 
+/// ADR 2026-10-27-cron-cos-review: a `cos_review` job needs no task fields, and its manual run is
+/// refused (only the daemon tick posts the input) without writing a run.
+#[tokio::test]
+async fn cos_review_job_is_created_without_task_fields_and_refuses_a_manual_run() {
+    let env = TestEnv::new();
+    let app = env.router();
+    let body = json!({
+        "name": "cos-review",
+        "schedule": "0 * * * *",
+        "timezone": "UTC",
+        "template": {"title": "定期見直し", "kind": "cos_review"}
+    });
+    let resp = send(&app, post_json(BASE, &body)).await;
+    assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
+    assert_eq!(resp.json()["template"]["kind"], "cos_review");
+
+    let run = send(&app, post_empty(&format!("{BASE}/cos-review/run"))).await;
+    assert_eq!(run.status.as_u16(), 422, "{}", run.text());
+    assert!(
+        run.text().contains("fires only on its schedule"),
+        "{}",
+        run.text()
+    );
+    let hist = send(&app, get(&format!("{BASE}/cos-review/runs")))
+        .await
+        .json();
+    assert_eq!(hist["items"].as_array().map(Vec::len), Some(0), "{hist}");
+
+    let mut with_task_field = body.clone();
+    with_task_field["name"] = json!("cos-review-2");
+    with_task_field["template"]["acceptance"] = json!([{"type": "reviewer", "text": "x"}]);
+    let rejected = send(&app, post_json(BASE, &with_task_field)).await;
+    assert!(rejected.status.is_client_error(), "{}", rejected.text());
+}
+
 #[tokio::test]
 async fn delete_removes_job_and_history_but_keeps_tasks() {
     let env = TestEnv::new();

@@ -111,6 +111,7 @@ mod child_tasks;
 mod cluster;
 mod continuation_session;
 pub mod cos_chat;
+mod cron_tick;
 mod decision_log_wire;
 mod dispatch_run;
 mod eval_trials;
@@ -2404,36 +2405,8 @@ impl Dispatcher {
         let cluster_ms = lap(&mut at);
         run_cluster_hooks_off_async(|| self.refresh_cluster_tunnels());
         let tunnel_ms = lap(&mut at);
-        // ADR-0131 D4: dispatch の前に予定時刻を評価する。draining 中やディスク不足の
-        // インスタンスは新しい task を作らない。時刻はテストで差し替えられる時計を使う。
-        if self.accepting_new_work && self.disk_ready {
-            let ctx = task_ops::cron_jobs::CronFireContext {
-                roles: &self.config.roles,
-                genres: &self.config.genres,
-                ..Default::default()
-            };
-            let mut fired = Vec::new();
-            for result in
-                task_ops::cron_jobs::fire_due_with(self.store.as_ref(), &ctx, self.now_utc())
-            {
-                match result {
-                    Ok(outcome) => {
-                        fired.extend(outcome.task_id);
-                        tracing::info!(
-                        job_id = %outcome.job_id,
-                        job_name = %outcome.job_name,
-                        task_id = ?outcome.task_id,
-                        runs = ?outcome.runs,
-                        "cron job evaluated"
-                        )
-                    }
-                    Err(error) => tracing::warn!(error = %error, "cron job evaluation failed"),
-                }
-            }
-            // ADR 2026-10-07-build-tmp-hygiene D1.4: `action` 付きの雛形の task は worker に渡さず、
-            // ここで決定的な保守 executor が走らせる（LLM なし）。
-            self.run_maintenance_tasks(&fired);
-        }
+        // ADR-0131 D4: dispatch の前に予定時刻を評価する（`cron_tick.rs`）。
+        self.tick_cron_jobs();
         // ADR 2026-10-08-browser-prod-enablement D2: 前提が揃った browser task を dispatch の前に戻す。
         if let Err(e) = self.resume_browser_prereq_blocked() {
             tracing::warn!(error = %e, "browser prerequisite re-evaluation failed");

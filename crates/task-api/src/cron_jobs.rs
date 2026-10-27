@@ -433,6 +433,9 @@ pub(crate) fn run_job_op(
     now: OffsetDateTime,
 ) -> Result<Applied<CronRunResult>, ApiProblem> {
     let job = resolve_for(store, audit, key)?;
+    // ADR 2026-10-27-cron-cos-review: refused before the external-effect record is begun.
+    task_ops::cron_jobs::check_manual_run(&job)
+        .map_err(|e| cron_problem(store, e, "cron_job_run"))?;
     let ctx = CronFireContext {
         roles,
         genres,

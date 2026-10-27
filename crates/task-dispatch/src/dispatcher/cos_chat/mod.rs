@@ -4,6 +4,7 @@ pub(crate) mod digest;
 pub(crate) mod fallback;
 pub mod launch;
 pub(crate) mod projects;
+pub(crate) mod review;
 pub(crate) mod rollover;
 pub(crate) mod root_done;
 pub(crate) mod sink;

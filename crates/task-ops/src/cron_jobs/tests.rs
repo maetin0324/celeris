@@ -564,3 +564,154 @@ fn knowledge_curation_job_mode_is_snapshotted_at_fire_time() {
     let task = store.get(next[0]).expect("get").expect("task");
     assert_eq!(task_mode(&task), "dry_run");
 }
+
+// ---- ADR 2026-10-27-cron-cos-review ----
+
+fn review_job(overlap: CronOverlap) -> NewCronJob {
+    let mut template = CronTaskTemplate {
+        title: "定期見直し".to_string(),
+        ..CronTaskTemplate::default()
+    };
+    template
+        .extra
+        .insert("kind".into(), serde_json::json!(CRON_KIND_COS_REVIEW));
+    NewCronJob {
+        name: "cos-review".to_string(),
+        schedule: "0 * * * *".to_string(),
+        timezone: "UTC".to_string(),
+        overlap,
+        catch_up: CronCatchUp::Latest,
+        enabled: true,
+        template,
+    }
+}
+
+/// Records what it was asked to post; `busy` answers like a thread with a queued input.
+#[derive(Default)]
+struct RecordingSink {
+    calls: Vec<(OffsetDateTime, Option<OffsetDateTime>)>,
+    busy: bool,
+}
+
+impl CronInputSink for RecordingSink {
+    fn post_cos_review(
+        &mut self,
+        _job: &CronJob,
+        scheduled_for: OffsetDateTime,
+        previous: Option<OffsetDateTime>,
+    ) -> Result<CronInputPost, String> {
+        self.calls.push((scheduled_for, previous));
+        Ok(if self.busy {
+            CronInputPost::Busy("queued".into())
+        } else {
+            CronInputPost::Posted("posted".into())
+        })
+    }
+}
+
+#[test]
+fn cos_review_job_rejects_task_fields_queue_overlap_and_unknown_kinds() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let ctx = CronFireContext::default();
+    let now = t("2026-10-27T00:00:00Z");
+    let mut with_acceptance = review_job(CronOverlap::Skip);
+    with_acceptance.template.acceptance = template().acceptance;
+    let err = create_job(&store, &ctx, with_acceptance, now).expect_err("acceptance");
+    assert!(err.to_string().contains("template.acceptance"), "{err}");
+    let err = create_job(&store, &ctx, review_job(CronOverlap::Queue), now).expect_err("queue");
+    assert!(err.to_string().contains("overlap"), "{err}");
+    let mut unknown = review_job(CronOverlap::Skip);
+    unknown
+        .template
+        .extra
+        .insert("kind".into(), serde_json::json!("cos_chat"));
+    let err = create_job(&store, &ctx, unknown, now).expect_err("kind");
+    assert!(err.to_string().contains("extra.kind"), "{err}");
+    // A cos_review job needs no acceptance, project or harness.
+    create_job(&store, &ctx, review_job(CronOverlap::Skip), now).expect("valid");
+}
+
+#[test]
+fn cos_review_fires_through_the_sink_once_per_time_and_never_creates_a_task() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let ctx = CronFireContext::default();
+    let job = create_job(
+        &store,
+        &ctx,
+        review_job(CronOverlap::Skip),
+        t("2026-10-27T00:00:00Z"),
+    )
+    .expect("create");
+    let mut sink = RecordingSink::default();
+    let fire = |sink: &mut RecordingSink, now: &str| {
+        fire_due_with(&store, &ctx, sink, t(now))
+            .into_iter()
+            .map(|r| r.expect("fire"))
+            .collect::<Vec<_>>()
+    };
+    assert!(fire(&mut sink, "2026-10-27T00:59:59Z").is_empty());
+    let out = fire(&mut sink, "2026-10-27T01:00:00Z");
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].task_id, None);
+    assert!(fire(&mut sink, "2026-10-27T01:00:30Z").is_empty());
+    sink.busy = true;
+    fire(&mut sink, "2026-10-27T02:00:00Z");
+    sink.busy = false;
+    fire(&mut sink, "2026-10-27T03:00:00Z");
+    // `previous` is the last created time: the busy 02:00 does not move it.
+    assert_eq!(
+        sink.calls,
+        vec![
+            (t("2026-10-27T01:00:00Z"), None),
+            (t("2026-10-27T02:00:00Z"), Some(t("2026-10-27T01:00:00Z"))),
+            (t("2026-10-27T03:00:00Z"), Some(t("2026-10-27T01:00:00Z"))),
+        ]
+    );
+    assert_eq!(
+        history(&store, &job),
+        vec![
+            (
+                CronTrigger::Schedule,
+                CronRunOutcome::Created,
+                "2026-10-27T01:00:00Z".into()
+            ),
+            (
+                CronTrigger::Schedule,
+                CronRunOutcome::SkippedOverlap,
+                "2026-10-27T02:00:00Z".into()
+            ),
+            (
+                CronTrigger::Schedule,
+                CronRunOutcome::Created,
+                "2026-10-27T03:00:00Z".into()
+            ),
+        ]
+    );
+    assert!(store.list(None).expect("tasks").is_empty());
+}
+
+#[test]
+fn cos_review_without_a_sink_records_an_error_and_run_now_is_refused() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let job = create_job(
+        &store,
+        &CronFireContext::default(),
+        review_job(CronOverlap::Skip),
+        t("2026-10-27T00:00:00Z"),
+    )
+    .expect("create");
+    assert!(tick(&store, "2026-10-27T01:00:00Z").is_empty());
+    assert_eq!(
+        history(&store, &job),
+        vec![(
+            CronTrigger::Schedule,
+            CronRunOutcome::Error,
+            "2026-10-27T01:00:00Z".into()
+        )]
+    );
+    let err = run_now(&store, job.id, t("2026-10-27T01:10:00Z")).expect_err("manual");
+    assert!(
+        err.to_string().contains("fires only on its schedule"),
+        "{err}"
+    );
+}

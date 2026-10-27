@@ -98,6 +98,100 @@ pub fn task_action(task: &Task) -> Option<&'static str> {
     })
 }
 
+/// ADR 2026-10-27-cron-cos-review D1: 雛形の `extra["kind"]` に書ける値。無ければ従来どおり task を作る。
+/// `cos_review` は task を作らず、発火ごとに統括 CoS の thread へ入力を 1 件積む（積むのは dispatcher の
+/// [`CronInputSink`]。この module は LLM も chat も呼ばない）。
+pub const CRON_KIND_COS_REVIEW: &str = "cos_review";
+
+/// job が発火で作るもの。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CronJobKind {
+    /// 雛形から通常の task を作る（ADR-0131）。
+    Task,
+    /// 統括 CoS の thread へ定期見直しの入力を積む（ADR 2026-10-27-cron-cos-review）。
+    CosReview,
+}
+
+/// 雛形の `extra["kind"]` を読む（無ければ [`CronJobKind::Task`]）。
+pub fn template_kind(template: &CronTaskTemplate) -> Result<CronJobKind, String> {
+    match template.extra.get("kind") {
+        None => Ok(CronJobKind::Task),
+        Some(v) if v.as_str() == Some(CRON_KIND_COS_REVIEW) => Ok(CronJobKind::CosReview),
+        Some(v) => Err(format!(
+            "template extra.kind must be {CRON_KIND_COS_REVIEW:?} or absent, got {v}"
+        )),
+    }
+}
+
+/// `cos_review` の雛形の検証: task の欄（acceptance・担当・分野・lane・案件・repo・優先度・mode・action）は
+/// 使わないので書けない。重ね掛けは `skip` だけ（溜めた入力は CoS の待ち行列にあるので `queue` は持たない）。
+fn validate_cos_review(job: &CronJob) -> Result<(), OpsError> {
+    let t = &job.template;
+    let task_fields = [
+        ("acceptance", !t.acceptance.is_empty()),
+        ("assignee", t.assignee.is_some()),
+        ("harness", t.harness.is_some()),
+        ("lane", t.lane.is_some()),
+        ("project", t.project.is_some()),
+        ("repos", !t.repos.is_empty()),
+        ("priority", t.priority.is_some()),
+        ("extra.mode", t.extra.contains_key("mode")),
+        ("extra.action", t.extra.contains_key("action")),
+    ];
+    if let Some((field, _)) = task_fields.iter().find(|(_, set)| *set) {
+        return Err(OpsError::Validation(format!(
+            "template.{field} is a task field; a {CRON_KIND_COS_REVIEW} job does not create a task"
+        )));
+    }
+    if job.overlap != CronOverlap::Skip {
+        return Err(OpsError::Validation(format!(
+            "a {CRON_KIND_COS_REVIEW} job must use overlap \"skip\""
+        )));
+    }
+    if t.title.trim().is_empty() {
+        return Err(OpsError::Validation(
+            "template.title must not be blank".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// `cos_review` の 1 回の発火の結果（[`CronInputSink::post_cos_review`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CronInputPost {
+    /// 入力を積んだ（または同じ予定時刻の入力が既にあった）。履歴は `created`、`detail` は積んだ message。
+    Posted(String),
+    /// 前の入力がまだ待ち行列にある。履歴は `skipped_overlap`。
+    Busy(String),
+}
+
+/// `cos_review` の入力を積む先（dispatcher が実装する）。`scheduled_for` が同じなら何度呼ばれても入力は 1 件
+/// （冪等キーで束ねる）。`previous` は前回 `created` になった予定時刻（要約の変化の起点）。`Err` は履歴の `error`。
+pub trait CronInputSink {
+    fn post_cos_review(
+        &mut self,
+        job: &CronJob,
+        scheduled_for: OffsetDateTime,
+        previous: Option<OffsetDateTime>,
+    ) -> Result<CronInputPost, String>;
+}
+
+/// 入力を積めない呼び出し元（API の手動実行・試験の [`fire_due`]）。`cos_review` の発火は `error` になる。
+pub struct NoCronInputSink;
+
+impl CronInputSink for NoCronInputSink {
+    fn post_cos_review(
+        &mut self,
+        _job: &CronJob,
+        _scheduled_for: OffsetDateTime,
+        _previous: Option<OffsetDateTime>,
+    ) -> Result<CronInputPost, String> {
+        Err(format!(
+            "{CRON_KIND_COS_REVIEW} inputs are posted only by the daemon tick"
+        ))
+    }
+}
+
 /// 予定時刻からの遅れがこれ以内なら通常運転（`trigger = schedule`）とみなす（ADR-0131 D3「1 tick 以内」）。
 /// tick の既定間隔（数秒）に余裕を持たせた値。
 pub const DEFAULT_ON_TIME_GRACE: Duration = Duration::minutes(2);
@@ -285,6 +379,7 @@ pub fn validate_job(
         ));
     }
     template_action(&job.template).map_err(OpsError::Validation)?;
+    let kind = template_kind(&job.template).map_err(OpsError::Validation)?;
     if job.name.trim().is_empty() {
         return Err(OpsError::Validation("name must not be blank".to_string()));
     }
@@ -304,7 +399,10 @@ pub fn validate_job(
             task_core::cron::SEARCH_YEARS
         )));
     }
-    build_task(store, ctx, job, now, now).map(|_| ())
+    match kind {
+        CronJobKind::Task => build_task(store, ctx, job, now, now).map(|_| ()),
+        CronJobKind::CosReview => validate_cos_review(job),
+    }
 }
 
 /// `{id}` は ULID か `name` のどちらでも引ける（ADR-0131 D5）。
@@ -501,12 +599,18 @@ pub fn fire_due(
     store: &dyn TaskStore,
     now: OffsetDateTime,
 ) -> Vec<Result<CronFireOutcome, OpsError>> {
-    fire_due_with(store, &CronFireContext::default(), now)
+    fire_due_with(
+        store,
+        &CronFireContext::default(),
+        &mut NoCronInputSink,
+        now,
+    )
 }
 
 pub fn fire_due_with(
     store: &dyn TaskStore,
     ctx: &CronFireContext<'_>,
+    sink: &mut dyn CronInputSink,
     now: OffsetDateTime,
 ) -> Vec<Result<CronFireOutcome, OpsError>> {
     let jobs = match store.cron_job_list() {
@@ -515,7 +619,7 @@ pub fn fire_due_with(
     };
     jobs.into_iter()
         .filter(|j| j.enabled)
-        .map(|job| fire_job(store, ctx, &job, now))
+        .map(|job| fire_job(store, ctx, sink, &job, now))
         .filter(|r| !matches!(r, Ok(o) if o.runs.is_empty()))
         .collect()
 }
@@ -525,9 +629,11 @@ pub fn fire_due_with(
 pub fn fire_job(
     store: &dyn TaskStore,
     ctx: &CronFireContext<'_>,
+    sink: &mut dyn CronInputSink,
     job: &CronJob,
     now: OffsetDateTime,
 ) -> Result<CronFireOutcome, OpsError> {
+    let kind = template_kind(&job.template).map_err(OpsError::Validation)?;
     let mut out = CronFireOutcome {
         job_id: job.id,
         job_name: job.name.clone(),
@@ -598,7 +704,15 @@ pub fn fire_job(
     }
     let mut task = None;
     if let Some(trigger) = fire {
-        let (run, built) = decide_fire(store, ctx, job, due.latest, trigger, now)?;
+        let (run, built) = match kind {
+            CronJobKind::Task => decide_fire(store, ctx, job, due.latest, trigger, now)?,
+            // 積んでから履歴と `next_fire_at` を書く。間で落ちても、再起動後の同じ予定時刻の発火は
+            // sink の冪等キーで同じ入力に束なる（ADR 2026-10-27-cron-cos-review D3）。
+            CronJobKind::CosReview => (
+                decide_post(store, sink, job, due.latest, trigger, now)?,
+                None,
+            ),
+        };
         runs.push(run);
         task = built;
     }
@@ -624,6 +738,7 @@ pub fn run_now_with(
     now: OffsetDateTime,
 ) -> Result<CronFireOutcome, OpsError> {
     let job = require_job(store, job_id)?;
+    check_manual_run(&job)?;
     let mut out = CronFireOutcome {
         job_id: job.id,
         job_name: job.name.clone(),
@@ -641,6 +756,17 @@ pub fn run_now_with(
         &mut out,
     )?;
     Ok(out)
+}
+
+/// 手動実行できる job か。`cos_review` は入力を積む sink が daemon の tick にしか無いので、予定時刻でだけ
+/// 発火する（API は監査の記録を始める前にこれで拒否する）。
+pub fn check_manual_run(job: &CronJob) -> Result<(), OpsError> {
+    if template_kind(&job.template).map_err(OpsError::Validation)? == CronJobKind::CosReview {
+        return Err(OpsError::Validation(format!(
+            "a {CRON_KIND_COS_REVIEW} job fires only on its schedule (the daemon tick posts the input)"
+        )));
+    }
+    Ok(())
 }
 
 /// 前回の task がまだ動いているか（ADR-0131 D2）。動いていればその task を返す。作った task が消えて
@@ -724,6 +850,34 @@ fn decide_fire(
             Ok((run, None))
         }
     }
+}
+
+/// `cos_review` の 1 回の発火: sink に入力を積ませ、その結果を履歴 1 行にする（task は作らない）。
+fn decide_post(
+    store: &dyn TaskStore,
+    sink: &mut dyn CronInputSink,
+    job: &CronJob,
+    scheduled_for: OffsetDateTime,
+    trigger: CronTrigger,
+    now: OffsetDateTime,
+) -> Result<CronJobRun, OpsError> {
+    let previous = store
+        .cron_job_run_last_created(job.id)?
+        .map(|r| r.scheduled_for);
+    let (outcome, detail) = match sink.post_cos_review(job, scheduled_for, previous) {
+        Ok(CronInputPost::Posted(detail)) => (CronRunOutcome::Created, detail),
+        Ok(CronInputPost::Busy(detail)) => (CronRunOutcome::SkippedOverlap, detail),
+        Err(detail) => (CronRunOutcome::Error, detail),
+    };
+    Ok(new_run(
+        job.id,
+        scheduled_for,
+        trigger,
+        outcome,
+        None,
+        Some(detail),
+        now,
+    ))
 }
 
 /// 履歴と `next_fire_at` を 1 transaction で書き、通ってから task を挿入する。

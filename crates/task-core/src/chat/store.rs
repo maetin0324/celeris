@@ -891,6 +891,26 @@ impl SqliteStore {
         message_require(&conn, thread_id, message_id)
     }
 
+    /// The message a `client_message_id` names in a thread, if any. Daemon producers whose text
+    /// is rebuilt on retry (ADR 2026-10-27-cron-cos-review) check this before posting, so a
+    /// replay with different text is "already posted", not a conflict.
+    pub fn chat_message_by_client_id(
+        &self,
+        thread_id: &str,
+        client_message_id: &str,
+    ) -> Result<Option<ChatMessage>, ChatError> {
+        let conn = writer(self)?;
+        thread_require(&conn, thread_id)?;
+        conn.query_row(
+            &format!("{MESSAGE_SELECT} WHERE thread_id=?1 AND client_message_id=?2"),
+            params![thread_id, client_message_id],
+            message_raw,
+        )
+        .optional()?
+        .map(|raw| message_from_raw(&conn, raw))
+        .transpose()
+    }
+
     /// Adds a completed system message (cards such as task/operation notices) to a thread.
     pub fn chat_system_message_add(
         &self,

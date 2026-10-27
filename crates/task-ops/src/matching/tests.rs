@@ -1,5 +1,5 @@
 use super::*;
-use task_core::{HarnessPrefs, Profile};
+use task_core::{HarnessPrefs, OrgKind, Profile};
 use time::OffsetDateTime;
 
 fn node(
@@ -341,6 +341,84 @@ fn remote_workspace_with_no_cluster_tool_holder_is_unroutable() {
         panic!("expected Unroutable");
     };
     assert!(question.contains("cluster:sirius"), "{question}");
+}
+
+/// ADR 2026-10-27-inherited-remote-unassigned-child (a): 案件の Remote(sirius) を継いだ担当未定の
+/// web-research の子（2026-10-27 の 01M5XEA3EE と同じ形）。そのままでは matching が誰も選べないが、
+/// 作成時の降格（`task_core::downgrade_inherited_remote`。この `decide` と同じ候補の条件を使う）で
+/// Local に落ち、web-research の課に割り当たる。
+#[test]
+fn inherited_remote_child_without_a_cluster_taker_is_downgraded_and_assigned() {
+    let mut org = org();
+    org.push(node(
+        "web-research",
+        Some("cos"),
+        &["web-research"],
+        Some("web-research"),
+        &[],
+    ));
+    org.iter_mut()
+        .find(|n| n.id == "systems-performance")
+        .unwrap()
+        .profile
+        .tools = vec!["cluster:sirius".to_string()];
+    let mut t = task(Some("web-research"), &[]);
+    t.workspace = task_core::WorkspaceSpec::Remote {
+        cluster: "sirius".into(),
+        path: std::path::PathBuf::from("/work/NBB/rmaeda/workspace/rust/benchfs"),
+        mode: None,
+    };
+    let Assignment::Unroutable { question } = decide(&org, &t) else {
+        panic!("a remote web-research task has no taker with cluster:sirius");
+    };
+    assert!(question.contains("cluster:sirius"), "{question}");
+
+    let reason = task_core::downgrade_inherited_remote(&mut t, false, &org);
+    assert!(reason.is_some());
+    assert_eq!(
+        t.workspace,
+        task_core::WorkspaceSpec::Local {
+            path: std::path::PathBuf::from(t.id.to_string()),
+            mode: None,
+        }
+    );
+    match decide(&org, &t) {
+        Assignment::Assigned { node, .. } => assert_eq!(node, "web-research"),
+        other => panic!("expected Assigned(web-research), got {other:?}"),
+    }
+}
+
+/// (b) の matching 側: cluster:sirius を持つ課が web-research も受けるなら、作成時は Remote のまま
+/// 残し、matching はその課を選ぶ（作成時の判定と matching の候補が食い違わない）。
+#[test]
+fn inherited_remote_child_with_a_cluster_taker_stays_remote_and_is_assigned_there() {
+    let mut org = org();
+    org.push(node(
+        "web-research",
+        Some("cos"),
+        &["web-research"],
+        Some("web-research"),
+        &[],
+    ));
+    let sp = org
+        .iter_mut()
+        .find(|n| n.id == "systems-performance")
+        .unwrap();
+    sp.profile.tools = vec!["cluster:sirius".to_string()];
+    sp.profile.harnesses.allowed.push("web-research".into());
+    let mut t = task(Some("web-research"), &[]);
+    let remote = task_core::WorkspaceSpec::Remote {
+        cluster: "sirius".into(),
+        path: std::path::PathBuf::from("/work/x"),
+        mode: None,
+    };
+    t.workspace = remote.clone();
+    assert!(task_core::downgrade_inherited_remote(&mut t, false, &org).is_none());
+    assert_eq!(t.workspace, remote);
+    match decide(&org, &t) {
+        Assignment::Assigned { node, .. } => assert_eq!(node, "systems-performance"),
+        other => panic!("expected Assigned(systems-performance), got {other:?}"),
+    }
 }
 
 /// 既に担当が居る・ハーネスが無いタスクは対象外（何もしない）。

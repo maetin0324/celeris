@@ -602,6 +602,10 @@ pub struct TaskRouting {
     /// LLM が書いたが、人の明示ではないので捨てた担当（監査用。ADR-0069 D1）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dropped_assignee: Option<String>,
+    /// 継いだ Remote の作業場所を作成時に Local へ落とした理由（ADR-0062 B2・ADR
+    /// 2026-10-27-inherited-remote-unassigned-child。`task_core::downgrade_inherited_remote`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_downgrade: Option<String>,
     /// TaskFeatures の明示の上書き（ADR-0069 D3）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub features: Option<crate::model_policy::TaskFeatureHints>,

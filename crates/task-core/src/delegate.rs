@@ -424,41 +424,58 @@ pub fn resolve_child_defaults(
     }
 }
 
-/// ADR-0062 B2（Phase 107）: 継承した（そのタスク自身は明示していない）Remote の workspace を、
-/// 担当が `cluster:<id>` を持たない場合は専用の Local（`workspace_root/<task_id>`）に落とす。
-/// 明示された workspace（`was_explicit == true`）はここでは触らない（検証で別途拒否する経路。
-/// `task_ops::actions::create_task_action` / matching の候補フィルタ）。
-/// `assignee` が未定（matching に任せる）なら、その場では判定せず Remote のまま返す
-/// （ADR-0046 D5 の matching が `cluster:<id>` を持つノードだけを候補にするので、後で矛盾しない）。
-pub(crate) fn downgrade_inherited_remote_if_needed(
-    workspace: WorkspaceSpec,
+/// ADR-0062 B2（Phase 107）・ADR 2026-10-27-inherited-remote-unassigned-child: 継承した（そのタスク
+/// 自身は明示していない）Remote の workspace を、その仕事を受けて `cluster:<id>` も持つノードが無ければ
+/// 専用の Local（`workspace_root/<task_id>`）に落とす。組み立て終わった子（`genre`・`skills`・`assignee`
+/// が決まった `Task`）に対して 1 回呼ぶ。
+/// - 明示された workspace（`was_explicit == true`）は触らない（検証で別途拒否する経路。
+///   `task_ops::actions::create_task_action` / matching の候補フィルタ）。
+/// - 担当が決まっていれば、その担当が `cluster:<id>` を持つか。
+/// - 担当が未定（matching に任せる）なら、matching の候補の条件（harness・skills。
+///   [`crate::matching_candidates::accepts`]）を満たし `cluster:<id>` を持つノードが 1 つでもあるか。
+///   matching が走らない子（harness 無し・組み込みハーネス）と組織が空の構成は Remote のまま。
+///
+/// 落としたら `task.routing.workspace_downgrade` に理由を書き（`Event::Created` の task に載る）、
+/// 同じ理由を返す（呼び出し側は tracing に 1 回残す）。
+pub fn downgrade_inherited_remote(
+    task: &mut Task,
     was_explicit: bool,
-    assignee: Option<&str>,
     org: &[OrgNode],
-    task_id: TaskId,
-) -> (WorkspaceSpec, Option<String>) {
-    if was_explicit {
-        return (workspace, None);
+) -> Option<String> {
+    if was_explicit || org.is_empty() {
+        return None;
     }
-    let WorkspaceSpec::Remote { cluster, .. } = &workspace else {
-        return (workspace, None);
+    let wanted = crate::matching_candidates::required_cluster_tool(&task.workspace)?;
+    let reason = match task.assignee.as_deref() {
+        Some(assignee) => {
+            if crate::profile::resolve(org, assignee).has_tool(&wanted) {
+                return None;
+            }
+            format!("workspace inherited as local: assignee {assignee} has no {wanted}")
+        }
+        None => {
+            let harness = crate::matching_candidates::matching_harness(org, task)?;
+            if crate::matching_candidates::any_candidate_with_tool(
+                org,
+                harness,
+                &task.skills,
+                &wanted,
+            ) {
+                return None;
+            }
+            format!(
+                "workspace inherited as local: no node that takes harness {harness} has {wanted}"
+            )
+        }
     };
-    let Some(assignee) = assignee else {
-        return (workspace, None);
+    task.workspace = WorkspaceSpec::Local {
+        path: std::path::PathBuf::from(task.id.to_string()),
+        mode: None,
     };
-    let effective = crate::profile::resolve(org, assignee);
-    let wanted = format!("{}{cluster}", crate::profile::CLUSTER_TOOL_PREFIX);
-    if effective.has_tool(&wanted) {
-        return (workspace, None);
-    }
-    let reason = format!("workspace inherited as local: assignee {assignee} has no {wanted}");
-    (
-        WorkspaceSpec::Local {
-            path: std::path::PathBuf::from(task_id.to_string()),
-            mode: None,
-        },
-        Some(reason),
-    )
+    task.routing
+        .get_or_insert_with(Default::default)
+        .workspace_downgrade = Some(reason.clone());
+    Some(reason)
 }
 
 /// 検証を通った提案（`accepted` はインデックス）から子タスクを組み立てる（ADR-0016 M2 / M3, ADR-0027 D1）。
@@ -535,7 +552,7 @@ pub fn materialize_delegated_logging(
             let mut budget = parent.budget;
             budget.max_turns = defaults.max_turns;
             budget.max_wall_secs = defaults.max_wall_secs;
-            Task {
+            let mut child = Task {
                 harness_id: defaults.harness_id.clone(),
                 requirements: t.requirements.clone(),
                 tree: None,
@@ -560,21 +577,8 @@ pub fn materialize_delegated_logging(
                     tier: defaults.tier,
                 },
                 // ADR-0039 D2: 明示 > 案件の workspace > 親の workspace（従来）。
-                // ADR-0062 B2: 継承した Remote は、担当が cluster:<id> を持たなければ Local に落とす。
-                workspace: {
-                    let raw = workspace.child_workspace(parent, t.workspace.as_ref());
-                    let (ws, reason) = downgrade_inherited_remote_if_needed(
-                        raw,
-                        t.workspace.is_some(),
-                        defaults.assignee.as_deref(),
-                        org,
-                        ids[&i],
-                    );
-                    if let Some(reason) = reason {
-                        on_downgrade(ids[&i], &reason);
-                    }
-                    ws
-                },
+                // 継承した Remote の降格（ADR-0062 B2）は組み立て後に `downgrade_inherited_remote`。
+                workspace: workspace.child_workspace(parent, t.workspace.as_ref()),
                 // ADR-0043 D2: 委譲の子は親のリポジトリを継ぐ（親が持たなければ案件の primary）。
                 repos: workspace.child_repos(parent, &[]),
                 budget,
@@ -597,7 +601,12 @@ pub fn materialize_delegated_logging(
                 // 委譲の提案には無い（親が明示の担当を決めるか、親の担当がそのまま受ける）。
                 skills: Vec::new(),
                 mode: parent.mode,
+            };
+            if let Some(reason) = downgrade_inherited_remote(&mut child, t.workspace.is_some(), org)
+            {
+                on_downgrade(child.id, &reason);
             }
+            child
         })
         .collect()
 }

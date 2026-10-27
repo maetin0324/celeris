@@ -318,8 +318,7 @@ pub fn build_child_task(
         project: None,
         home: home.as_deref(),
     };
-    let mut downgrades: Vec<String> = Vec::new();
-    let mut built = task_core::materialize_delegated_logging(
+    let mut built = task_core::materialize_delegated(
         parent,
         &proposals,
         &[0],
@@ -328,7 +327,6 @@ pub fn build_child_task(
         genres,
         workspace,
         now,
-        &mut |_, reason| downgrades.push(reason.to_string()),
     );
     let Some(mut child) = built.pop() else {
         return Err(format!(
@@ -337,8 +335,6 @@ pub fn build_child_task(
         ));
     };
     child.status = Status::Ready;
-    // R5b-fix3: 子は自分の作業ディレクトリを持つ（親の `<root>/<parent_id>` を共有しない。R1c 付記 1.）。
-    child.workspace = child_own_workspace(parent, child.id, &child.workspace);
     // R5b-fix3: 子の予算は `max(親, leaf 1 run の既定 30 turns / 1,800 秒)`（`tree_child_budget`）。
     child.budget = task_core::tree::tree_child_budget(&parent.budget);
     // R6-2: kind task の unit は計画の書き手の明示（unit の `gate`、無ければ compound。書き手を問わない）。
@@ -358,6 +354,17 @@ pub fn build_child_task(
         Some(parent),
     )
     .map_err(|e| format!("unit {}: {e}", unit.key))?;
+    // R5b-fix3: 子は自分の作業ディレクトリを持つ（親の `<root>/<parent_id>` を共有しない。R1c 付記 1.）。
+    // ADR 2026-10-27-inherited-remote-unassigned-child: 継いだ Remote の降格は、子の skills が決まった
+    // ここで 1 回だけ判定する（`materialize_delegated` は skills を空で組むので、そこでの判定を捨てて
+    // 親から継いだ値でやり直す。matching の browser の条件が skills を見るため）。
+    child.workspace = child_own_workspace(parent, child.id, &parent.workspace);
+    if let Some(routing) = child.routing.as_mut() {
+        routing.workspace_downgrade = None;
+    }
+    let downgrades: Vec<String> = task_core::downgrade_inherited_remote(&mut child, false, &org)
+        .into_iter()
+        .collect();
     if !unit.repos.is_empty() {
         let inherited = workspace.child_repos(parent, &[]);
         child.repos = unit

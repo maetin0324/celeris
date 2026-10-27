@@ -131,6 +131,10 @@ ADR-0039 D2 の「子は案件・親の作業場所を継ぐ」は担当を見�
 - `create_task`（Console action）と `plan.json` の子タスクで**明示**された remote workspace は、
   D5 の検証でそのまま拒否する（継承だけがこの D6 の対象）。
 
+付記（2026-10-27）: ADR-0069 D1 以降、委譲・計画の子は担当が常に未定で、上の降格は起きなくなっていた。担当未定でも
+matching の候補の条件で受け手が居なければ落とすよう改め、関数は `task_core::downgrade_inherited_remote` に置き換えた
+（[ADR 2026-10-27-inherited-remote-unassigned-child](2026-10-27-inherited-remote-unassigned-child.md)）。
+
 ### D7. テストの偽 ssh が残らないようにする
 
 `cluster_login.rs` のテストが起こす偽 ssh（`-M -N cluster-host` を模す）は、`-M -N` の待ちを

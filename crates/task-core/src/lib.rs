@@ -75,6 +75,8 @@ pub mod knowledge_run;
 /// ADR 2026-10-11: harness 選択と source/model routing の純粋な境界。
 pub mod llm_route;
 pub mod local_machine;
+/// ADR-0046 D5: matching の候補の条件（作成時の作業場所の判定と共用）。
+pub mod matching_candidates;
 /// ADR-0056 D1 / D4（Phase 78）: MCP サーバーの認証（`mcp_clients`）とログ（`mcp_calls`）。
 pub mod mcp;
 pub mod message;
@@ -137,7 +139,8 @@ pub use cron::{
 };
 pub use delegate::{
     DelegateDep, DelegateError, DelegateTask, DelegationLimits, OnChildFailure, WorkspaceContext,
-    materialize_delegated, materialize_delegated_logging, validate_each,
+    downgrade_inherited_remote, materialize_delegated, materialize_delegated_logging,
+    validate_each,
 };
 pub use instance::{DaemonInstance, DaemonMode, InstanceRole, SharedRole};
 // ---- ADR-0046 D3（Phase 59）: ハーネスのレジストリ ----

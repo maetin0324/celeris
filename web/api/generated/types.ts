@@ -5773,6 +5773,7 @@ export type TaskRouting = {
   "route"?: RouteDecision | null;
   "stages_hint"?: Array<StageHint>;
   "tier_source"?: TierSource;
+  "workspace_downgrade"?: string | null;
 };
 
 export type TaskRoutingView = {

@@ -723,6 +723,9 @@ fn build_task(
     )?;
 
     let id = TaskId::new();
+    // ADR 2026-10-27-inherited-remote-unassigned-child: `cluster` も `workspace` も書いていないタスクの
+    // Remote は選んだリポジトリの置き場から継いだもの（明示ではない）。組み立て後に降格を判定する。
+    let workspace_inherited = spec.cluster.is_none() && spec.workspace.is_none();
     let workspace = match (spec.cluster, spec.workspace) {
         // ADR-0018: クラスタ指定。path はクラスタ側の作業ディレクトリ（絶対パスで指定する）。
         // ADR-0059 D1: `workspace_mode` が `WorkspaceSpec::Remote.mode` になる（省略時 = 従来どおり）。
@@ -819,8 +822,9 @@ fn build_task(
         // root の planner だけが読む（R2b）。空なら出力しない。
         stages_hint: spec.stages_hint.clone(),
         route: None,
+        workspace_downgrade: None,
     };
-    let task = Task {
+    let mut task = Task {
         harness_id: browser_adapter
             .or(spec.harness)
             .or_else(|| role.and_then(|r| r.harness.clone()))
@@ -868,6 +872,12 @@ fn build_task(
         mode: spec.mode.unwrap_or_default(),
         category,
     };
+    // ADR-0062 B2 / ADR 2026-10-27-inherited-remote-unassigned-child: 継いだ Remote は、受けられて
+    // `cluster:<id>` も持つノードが無ければ Local に落とす（委譲・計画の子と同じ関数）。理由は
+    // `routing.workspace_downgrade` に残り、`Event::Created` の task に載る。
+    if workspace_inherited {
+        task_core::downgrade_inherited_remote(&mut task, false, &store.org_list()?);
+    }
     Ok(task)
 }
 

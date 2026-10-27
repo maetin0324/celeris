@@ -613,17 +613,25 @@ fn delegated_child_workspace_is_explicit_then_project_then_parent() {
     assert_eq!(out[0].workspace, explicit);
 }
 
-fn org_node_with_tools(id: &str, tools: &[&str]) -> OrgNode {
+fn org_node(id: &str, parent: Option<&str>, allowed: &[&str], tools: &[&str]) -> OrgNode {
     let now = OffsetDateTime::now_utc();
     OrgNode {
         id: id.into(),
-        parent_id: Some("cos".into()),
+        parent_id: parent.map(str::to_string),
         name: id.into(),
-        kind: crate::org::OrgKind::Department,
+        kind: if parent.is_none() {
+            crate::org::OrgKind::Secretary
+        } else {
+            crate::org::OrgKind::Department
+        },
         genre: None,
         brief: String::new(),
         profile: crate::profile::Profile {
             tools: tools.iter().map(|s| s.to_string()).collect(),
+            harnesses: crate::profile::HarnessPrefs {
+                allowed: allowed.iter().map(|s| s.to_string()).collect(),
+                default: None,
+            },
             ..Default::default()
         },
         position: 0,
@@ -632,101 +640,154 @@ fn org_node_with_tools(id: &str, tools: &[&str]) -> OrgNode {
     }
 }
 
-/// ADR-0062 B2（Phase 107）→ ADR-0069 D1（Phase 114）: 委譲が書いた担当は捨てるので、案件から継いだ
-/// Remote workspace は担当未定のまま Remote に残る（matching が `cluster:<id>` を持つノードだけを
-/// 候補にする）。明示した子（`t.workspace = Some(..)`）も従来どおり落とさない。
-#[test]
-fn inherited_remote_workspace_stays_remote_because_the_delegated_assignee_is_dropped() {
-    let p = parent();
-    let now = OffsetDateTime::now_utc();
-    let project = WorkspaceSpec::Remote {
+fn sirius_project() -> WorkspaceSpec {
+    WorkspaceSpec::Remote {
         cluster: "sirius".into(),
         path: PathBuf::from("/work/NBB/rmaeda/workspace/rust/benchfs"),
         mode: None,
-    };
+    }
+}
+
+/// 実機の組織の形: web-research は cluster 道具を持たず、cluster:sirius を持つのは coding の課だけ。
+fn org_without_a_sirius_web_researcher() -> Vec<OrgNode> {
+    vec![
+        org_node("cos", None, &["conversation", "plan"], &[]),
+        org_node("web-research", Some("cos"), &["web-research"], &["tavily"]),
+        org_node("cluster-hpc", Some("cos"), &["coding"], &["cluster:sirius"]),
+    ]
+}
+
+fn delegate_one(child: DelegateTask, org: &[OrgNode]) -> (Task, Vec<(TaskId, String)>) {
+    let p = parent();
+    let project = sirius_project();
     let ws = WorkspaceContext {
         repos: &[],
         project: Some(&project),
         home: None,
     };
-    let org = vec![
-        org_node_with_tools("web-research", &["tavily", "exa"]),
-        org_node_with_tools("cluster-hpc", &["cluster:sirius"]),
-    ];
-
-    // 以前は Local(<task_id>) に落ちた。今は担当を捨てるので Remote のまま、reason も出ない。
-    let mut without_tool = dt("survey", vec![]);
-    without_tool.assignee = Some("web-research".into());
     let mut reasons: Vec<(TaskId, String)> = Vec::new();
-    let out = materialize_delegated_logging(
+    let mut out = materialize_delegated_logging(
         &p,
-        &[without_tool],
+        &[child],
         &[0],
-        &org,
+        org,
         &[],
         &[],
         ws,
-        now,
+        OffsetDateTime::now_utc(),
         &mut |id, reason| reasons.push((id, reason.to_string())),
     );
-    assert_eq!(out[0].workspace, project);
-    assert!(reasons.is_empty(), "{reasons:?}");
-
-    // 担当が cluster:sirius を持つ → Remote のまま、reason は出ない。
-    let mut with_tool = dt("compute", vec![]);
-    with_tool.assignee = Some("cluster-hpc".into());
-    let mut reasons2: Vec<(TaskId, String)> = Vec::new();
-    let out2 = materialize_delegated_logging(
-        &p,
-        &[with_tool],
-        &[0],
-        &org,
-        &[],
-        &[],
-        ws,
-        now,
-        &mut |id, reason| reasons2.push((id, reason.to_string())),
-    );
-    assert_eq!(out2[0].workspace, project);
-    assert!(reasons2.is_empty());
-
-    // 明示した子は落とさない（担当が道具を持たなくても、明示は明示のまま。検証は別経路で拒否する）。
-    let mut explicit_child = dt("explicit", vec![]);
-    explicit_child.assignee = Some("web-research".into());
-    explicit_child.workspace = Some(project.clone());
-    let out3 = materialize_delegated(&p, &[explicit_child], &[0], &org, &[], &[], ws, now);
-    assert_eq!(out3[0].workspace, project);
+    (out.remove(0), reasons)
 }
 
-/// ADR-0062 B2 の降格そのもの（担当が決まっている経路のための関数。ADR-0069 以降、計画・委譲は
-/// 担当を渡さないのでここには `None` が来るが、規則自体は保つ）。
+/// ADR 2026-10-27-inherited-remote-unassigned-child (a): 案件の Remote(sirius) を継いだ担当未定の
+/// web-research の子は、web-research を受けて cluster:sirius も持つノードが無いので Local(<id>) に落ちる。
+/// 理由は on_downgrade と `routing.workspace_downgrade`（`Event::Created` に載る）に残る。
+#[test]
+fn inherited_remote_goes_local_when_no_cluster_node_takes_the_harness() {
+    let org = org_without_a_sirius_web_researcher();
+    let mut survey = dt("survey", vec![]);
+    survey.genre = Some("web-research".into());
+    // 委譲が書いた担当は捨てる（ADR-0069 D1）ので、ここは担当未定の経路。
+    survey.assignee = Some("cluster-hpc".into());
+    let (child, reasons) = delegate_one(survey, &org);
+    assert!(child.assignee.is_none());
+    assert_eq!(
+        child.workspace,
+        WorkspaceSpec::Local {
+            path: PathBuf::from(child.id.to_string()),
+            mode: None,
+        }
+    );
+    assert_eq!(reasons.len(), 1, "{reasons:?}");
+    assert_eq!(reasons[0].0, child.id);
+    assert!(
+        reasons[0].1.contains("web-research") && reasons[0].1.contains("cluster:sirius"),
+        "{reasons:?}"
+    );
+    assert_eq!(
+        child
+            .routing
+            .as_ref()
+            .and_then(|r| r.workspace_downgrade.as_deref()),
+        Some(reasons[0].1.as_str())
+    );
+}
+
+/// (b): web-research を受けて cluster:sirius も持つノードがあれば Remote のまま（matching がそこへ流す）。
+#[test]
+fn inherited_remote_stays_when_a_cluster_node_takes_the_harness() {
+    let mut org = org_without_a_sirius_web_researcher();
+    org.push(org_node(
+        "sirius-research",
+        Some("cos"),
+        &["web-research"],
+        &["cluster:sirius"],
+    ));
+    let mut survey = dt("survey", vec![]);
+    survey.genre = Some("web-research".into());
+    let (child, reasons) = delegate_one(survey, &org);
+    assert_eq!(child.workspace, sirius_project());
+    assert!(reasons.is_empty(), "{reasons:?}");
+    assert!(
+        child
+            .routing
+            .as_ref()
+            .is_none_or(|r| r.workspace_downgrade.is_none())
+    );
+    // 親の分野（coding）を継ぐ子も、coding を受けて cluster:sirius を持つ課があるので Remote のまま。
+    let (coding, reasons) = delegate_one(dt("build", vec![]), &org);
+    assert_eq!(coding.genre.as_deref(), Some("coding"));
+    assert_eq!(coding.workspace, sirius_project());
+    assert!(reasons.is_empty(), "{reasons:?}");
+}
+
+/// (c): 明示した Remote は、受けられるノードが無くても落とさない（明示は明示のまま。matching が人に聞く）。
+#[test]
+fn explicit_remote_is_never_downgraded() {
+    let org = org_without_a_sirius_web_researcher();
+    let mut survey = dt("survey", vec![]);
+    survey.genre = Some("web-research".into());
+    survey.workspace = Some(sirius_project());
+    let (child, reasons) = delegate_one(survey, &org);
+    assert_eq!(child.workspace, sirius_project());
+    assert!(reasons.is_empty(), "{reasons:?}");
+}
+
+/// matching が走らない子（組み込みハーネス）と組織が空の構成は、判定せず Remote のまま。
+#[test]
+fn inherited_remote_stays_when_matching_does_not_run() {
+    let org = org_without_a_sirius_web_researcher();
+    let mut review = dt("review", vec![]);
+    review.genre = Some(crate::harness::BUILTIN_REVIEWER.into());
+    let (child, reasons) = delegate_one(review, &org);
+    assert_eq!(child.workspace, sirius_project());
+    assert!(reasons.is_empty(), "{reasons:?}");
+    let mut survey = dt("survey", vec![]);
+    survey.genre = Some("web-research".into());
+    let (child, reasons) = delegate_one(survey, &[]);
+    assert_eq!(child.workspace, sirius_project());
+    assert!(reasons.is_empty(), "{reasons:?}");
+}
+
+/// ADR-0062 B2 の担当が決まっている経路（POST /tasks の明示の担当など）: 担当が cluster:<id> を
+/// 持たなければ落とし、持てば Remote のまま。
 #[test]
 fn downgrade_rule_still_applies_when_an_assignee_is_known() {
-    let project = WorkspaceSpec::Remote {
-        cluster: "sirius".into(),
-        path: PathBuf::from("/work/x"),
-        mode: None,
-    };
-    let org = vec![
-        org_node_with_tools("web-research", &["tavily"]),
-        org_node_with_tools("cluster-hpc", &["cluster:sirius"]),
-    ];
-    let id = TaskId::new();
-    let (ws, reason) = downgrade_inherited_remote_if_needed(
-        project.clone(),
-        false,
-        Some("web-research"),
-        &org,
-        id,
-    );
-    assert!(matches!(ws, WorkspaceSpec::Local { .. }));
-    assert!(reason.is_some_and(|r| r.contains("cluster:sirius")));
-    let (ws, reason) =
-        downgrade_inherited_remote_if_needed(project.clone(), false, Some("cluster-hpc"), &org, id);
-    assert_eq!(ws, project);
-    assert!(reason.is_none());
-    let (ws, _) = downgrade_inherited_remote_if_needed(project.clone(), false, None, &org, id);
-    assert_eq!(ws, project);
+    let org = org_without_a_sirius_web_researcher();
+    let mut t = parent();
+    t.workspace = sirius_project();
+    t.genre = Some("web-research".into());
+    t.assignee = Some("web-research".into());
+    let reason = downgrade_inherited_remote(&mut t, false, &org);
+    assert!(matches!(t.workspace, WorkspaceSpec::Local { .. }));
+    assert!(reason.is_some_and(|r| r.contains("assignee web-research has no cluster:sirius")));
+    let mut t = parent();
+    t.workspace = sirius_project();
+    t.genre = Some("web-research".into());
+    t.assignee = Some("cluster-hpc".into());
+    assert!(downgrade_inherited_remote(&mut t, false, &org).is_none());
+    assert_eq!(t.workspace, sirius_project());
 }
 
 /// ADR-0039 D5: `~` は `$HOME` で展開する。`Remote` の `~` はクラスタ側の home なので触らない。

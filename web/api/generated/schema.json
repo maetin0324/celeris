@@ -28979,6 +28979,13 @@
         "tier_source": {
           "$ref": "#/$defs/TierSource",
           "default": "default"
+        },
+        "workspace_downgrade": {
+          "description": "継いだ Remote の作業場所を作成時に Local へ落とした理由（ADR-0062 B2・ADR\n2026-10-27-inherited-remote-unassigned-child。`task_core::downgrade_inherited_remote`）。",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"

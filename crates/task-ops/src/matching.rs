@@ -12,7 +12,7 @@
 //!   持つ最も浅いノード。
 //! - 候補が無ければ `blocked` にして人に聞く（ADR-0021 の質問経路）。
 
-use task_core::{OrgKind, OrgNode, Task, TaskStore};
+use task_core::{OrgNode, Task, TaskStore};
 
 use crate::error::OpsError;
 
@@ -78,62 +78,30 @@ pub fn decide(org: &[OrgNode], task: &Task) -> Assignment {
     if task.assignee.is_some() {
         return Assignment::NotApplicable;
     }
-    // ハーネスが決まっていないタスクは matching の対象外（従来どおり担当なしで走る）。
-    let Some(harness) = task.genre.as_deref().filter(|g| !g.is_empty()) else {
+    // ハーネスが決まっていないタスク・組織が空の構成・組み込みの裏方ハーネスは matching の対象外
+    // （従来どおり担当なしで走る。条件は `task_core::matching_candidates::matching_harness`）。
+    // - ADR-0046 D5 / Phase 59 の規律「Phase 59 より前の組織を壊さない」: 組織を 1 つも作っていない
+    //   構成では matching そのものを走らせない（ADR-0041 D5 の `smoke` 煙試験などを `blocked` にしない）。
+    // - 組み込みの裏方ハーネス（conversation / plan / reviewer / smoke / knowledge）は組織の仕事ではない
+    //   （実機 2026-09-20: verify の煙試験が「担当が見つからない」で `blocked` になった）。
+    let Some(harness) = task_core::matching_candidates::matching_harness(org, task) else {
         return Assignment::NotApplicable;
     };
-    // ADR-0046 D5 / Phase 59 の規律「Phase 59 より前の組織を壊さない」: 組織を 1 つも作っていない
-    // 構成（`org_include` を書いていない・`org_nodes` が空）では matching そのものを走らせない
-    // （さもないと ADR-0041 D5 の `smoke` 煙試験のような、組織を使わない既存の genre 付きタスクが
-    // 軒並み `blocked` になってしまう）。
-    if org.is_empty() {
-        return Assignment::NotApplicable;
-    }
-    // 組み込みの裏方ハーネス（conversation / plan / reviewer / smoke / knowledge）は組織の仕事ではない。
-    // 実機 2026-09-20: 本番の組織が profile を持つようになった後、verify の煙試験（harness `smoke`）が
-    // 「担当が見つからない」で `blocked` になり検査 6 が落ちた。どのノードの `allowed` にも無いのが正しい姿なので、
-    // matching の対象から外す（担当なしで走る。Phase 59 以前と同じ）。
-    if task_core::harness::BUILTIN_HARNESSES.contains(&harness) {
-        return Assignment::NotApplicable;
-    }
 
     // ADR-0062 B1（Phase 107）: remote な作業場所（`WorkspaceSpec::Remote{cluster}`）の仕事は、
     // `cluster:<id>` を実効 profile に持つノードだけを候補にする（tools が空でも例外なし。
     // 人間の指示により ADR-0046 D8 の「tools を 1 つも宣言していないノードは従来どおり通す」の
-    // 例外を、クラスタの利用可否についてだけ廃止した）。
-    let required_cluster_tool = match &task.workspace {
-        task_core::WorkspaceSpec::Remote { cluster, .. } => {
-            Some(format!("{}{cluster}", task_core::CLUSTER_TOOL_PREFIX))
-        }
-        task_core::WorkspaceSpec::Local { .. } => None,
-    };
+    // 例外を、クラスタの利用可否についてだけ廃止した）。継いだ Remote で受けられるノードが無い子は、
+    // 作成時に Local へ落ちている（ADR 2026-10-27-inherited-remote-unassigned-child）。
+    let required_cluster_tool =
+        task_core::matching_candidates::required_cluster_tool(&task.workspace);
 
-    // 候補: 根を除く全ノードのうち、実効 profile がその harness を許すもの。
+    // 候補: 根を除く全ノードのうち、実効 profile がその harness（と browser の条件）を許すもの
+    // （`task_core::matching_candidates::accepts`。作成時の作業場所の判定と同じ条件）。
     let mut candidates: Vec<Candidate> = Vec::new();
     for node in org {
-        if is_root(org, node) {
-            continue;
-        }
         let effective = task_core::resolve_profile(org, &node.id);
-        // browser-enabled を掲げる専用 node は通常 task の候補にしない。
-        // 空 skill の同点判定でも browser-execution に流さないため、採点前に除外する。
-        if !task_core::browser::requests_browser(&task.skills)
-            && effective
-                .skills
-                .iter()
-                .any(|skill| skill == "browser-enabled")
-        {
-            continue;
-        }
-        if task_core::browser::requests_browser(&task.skills)
-            && effective
-                .browser
-                .as_ref()
-                .is_none_or(|browser| browser.validate().is_err())
-        {
-            continue;
-        }
-        if !effective.allows_harness(harness) {
+        if !task_core::matching_candidates::accepts(node, &effective, harness, &task.skills) {
             continue;
         }
         if let Some(wanted) = &required_cluster_tool
@@ -209,12 +177,6 @@ struct Candidate {
     score: usize,
     is_default: bool,
     matched: Vec<String>,
-}
-
-/// 根のノードか（CoS。`kind = secretary` か、親を持たないノード）。
-fn is_root(org: &[OrgNode], node: &OrgNode) -> bool {
-    let _ = org;
-    node.kind == OrgKind::Secretary || node.parent_id.is_none()
 }
 
 /// ADR-0046 D5 / D3: 明示の `assignee` がそのハーネスを受けられるか。ノードが `harnesses.allowed` を

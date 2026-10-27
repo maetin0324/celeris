@@ -3960,7 +3960,8 @@ Reviewer条件がある `done` の仕事、または直前の遷移が `review_f
 
 `GET /tasks/{id}/routing` → 200 `TaskRoutingView {task_id, assignee?, routing?, runs[]}`（読み取り。認証は他の
 読み取りと同じ）。`routing` は `Task.routing`（`tier_source`・`assignee_explicit`・CoS/計画/委譲が書いたが
-捨てた担当 `dropped_assignee`・`features` の上書き）。`runs[]` はワーカー run ごとの `RoutingAudit`（古い順:
+捨てた担当 `dropped_assignee`・`features` の上書き・継いだ Remote の作業場所を作成時に Local へ落とした理由
+`workspace_downgrade`）。`runs[]` はワーカー run ごとの `RoutingAudit`（古い順:
 `task_id, run_id, org_node, harness, adapter, provider, account, lane, model, reasoning_effort, features, rule_id,
 policy_version, reasons, escalation, outcome, cost_usd, input_tokens, output_tokens, wall_ms, retries, review`）。
 各 run の `escalation` がエスカレーションの履歴。run が無いタスクは `runs: []`、知らないタスクは 404、

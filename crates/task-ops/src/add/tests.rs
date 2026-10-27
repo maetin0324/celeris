@@ -596,6 +596,78 @@ fn project_task_inherits_a_remote_project_workspace() {
     );
 }
 
+/// ADR 2026-10-27-inherited-remote-unassigned-child: `POST /tasks` で親付き・`workspace` 省略の
+/// web-research の子は、案件の Remote(sirius) を継ぐが、web-research を受けて cluster:sirius を持つ
+/// ノードが無いので Local(<id>) に落ちる（理由は `routing.workspace_downgrade`）。coding の子は
+/// cluster:sirius を持つ課が受けるので Remote のまま。明示の `cluster` は落とさない。
+#[test]
+fn inherited_remote_without_a_cluster_taker_is_created_local() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let remote = WorkspaceSpec::Remote {
+        cluster: "sirius".into(),
+        path: "/work/NBB/rmaeda/workspace/rust/benchfs".into(),
+        mode: None,
+    };
+    let project = a_project_with_workspace(&store, remote.clone());
+    let mut cos = org_node("cos", None, task_core::OrgKind::Secretary, None);
+    cos.profile.harnesses.allowed = vec!["conversation".into()];
+    let mut web = org_node(
+        "web-research",
+        Some("cos"),
+        task_core::OrgKind::Section,
+        None,
+    );
+    web.profile.harnesses.allowed = vec!["web-research".into()];
+    let mut hpc = org_node(
+        "cluster-hpc",
+        Some("cos"),
+        task_core::OrgKind::Section,
+        None,
+    );
+    hpc.profile.harnesses.allowed = vec!["coding".into()];
+    hpc.profile.tools = vec!["cluster:sirius".into()];
+    for node in [cos, web, hpc] {
+        store.org_upsert(&node).expect("org");
+    }
+    let mut spec = base_spec();
+    spec.project_id = Some(project.id);
+    spec.workspace = None;
+    spec.genre = Some("coding".into());
+    let parent = create_task(&store, spec, now()).expect("parent");
+    assert_eq!(parent.workspace, remote);
+
+    let mut spec = base_spec();
+    spec.project_id = Some(project.id);
+    spec.parent = Some(parent.id);
+    spec.workspace = None;
+    spec.genre = Some("web-research".into());
+    let child = create_task(&store, spec, now()).expect("child");
+    assert_eq!(child.workspace, WorkspaceSpec::local(child.id.to_string()));
+    assert_eq!(child.repos.len(), 1, "the repo is still inherited");
+    let reason = child
+        .routing
+        .as_ref()
+        .and_then(|r| r.workspace_downgrade.clone())
+        .expect("reason recorded");
+    assert!(
+        reason.contains("web-research") && reason.contains("cluster:sirius"),
+        "{reason}"
+    );
+    assert!(matches!(
+        crate::matching::decide(&store.org_list().unwrap(), &child),
+        crate::matching::Assignment::Assigned { ref node, .. } if node == "web-research"
+    ));
+
+    let mut spec = base_spec();
+    spec.project_id = Some(project.id);
+    spec.parent = Some(parent.id);
+    spec.cluster = Some("sirius".into());
+    spec.workspace = Some("/work/NBB/rmaeda/workspace/rust/benchfs".into());
+    spec.genre = Some("web-research".into());
+    let explicit = create_task(&store, spec, now()).expect("explicit");
+    assert_eq!(explicit.workspace, remote);
+}
+
 /// R5b-fix3 (D1): 明示の `Local` の作業場所とリモートの primary の組み合わせは 422（Validation）。
 #[test]
 fn explicit_local_workspace_with_a_remote_repo_is_rejected() {

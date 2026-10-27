@@ -544,7 +544,7 @@ pub fn materialize_logging(
                 roles,
                 genres,
             );
-            Task {
+            let mut child = Task {
                 requirements: t.requirements.clone(),
                 tree: None,
                 paused_at: None,
@@ -576,21 +576,8 @@ pub fn materialize_logging(
                 },
                 harness_id: defaults.harness_id.clone(),
                 // ADR-0039 D2: 明示 > 案件の workspace > 親の workspace（従来）。
-                // ADR-0062 B2: 継承した Remote は、担当が cluster:<id> を持たなければ Local に落とす。
-                workspace: {
-                    let raw = workspace.child_workspace(parent, t.workspace.as_ref());
-                    let (ws, reason) = crate::delegate::downgrade_inherited_remote_if_needed(
-                        raw,
-                        t.workspace.is_some(),
-                        defaults.assignee.as_deref(),
-                        org,
-                        ids[i],
-                    );
-                    if let Some(reason) = reason {
-                        on_downgrade(ids[i], &reason);
-                    }
-                    ws
-                },
+                // 継承した Remote の降格（ADR-0062 B2）は組み立て後に `downgrade_inherited_remote`。
+                workspace: workspace.child_workspace(parent, t.workspace.as_ref()),
                 // ADR-0043 D2: 明示（名前）> 親 > 案件の primary。
                 repos: workspace.child_repos(parent, &t.repos),
                 budget: Budget {
@@ -638,7 +625,13 @@ pub fn materialize_logging(
                 // 進め方（省略時は親の mode を継ぐ）。
                 skills: keep_valid_skills(&t.skills),
                 mode: t.mode.unwrap_or(parent.mode),
+            };
+            if let Some(reason) =
+                crate::delegate::downgrade_inherited_remote(&mut child, t.workspace.is_some(), org)
+            {
+                on_downgrade(child.id, &reason);
             }
+            child
         })
         .collect()
 }

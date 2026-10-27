@@ -326,23 +326,7 @@ fn create_task_action(
             // 持たないなら action 全体を検証で落とす（`assignee` 省略時は matching が
             // `cluster:<id>` を持つノードだけを候補にするので、ここでは触らない）。
             if let Some(assignee_id) = assignee.as_deref().filter(|a| !a.trim().is_empty()) {
-                let wanted = format!("{}{cluster}", task_core::CLUSTER_TOOL_PREFIX);
-                let effective = task_core::resolve_profile(org, assignee_id);
-                if !effective.has_tool(&wanted) {
-                    let holders: Vec<&str> = org
-                        .iter()
-                        .filter(|n| task_core::resolve_profile(org, &n.id).has_tool(&wanted))
-                        .map(|n| n.id.as_str())
-                        .collect();
-                    return Err(format!(
-                        "assignee {assignee_id:?} には {wanted} が無い。{wanted} を持つノード: {}",
-                        if holders.is_empty() {
-                            "なし".to_string()
-                        } else {
-                            holders.join(", ")
-                        }
-                    ));
-                }
+                crate::matching::assignee_has_cluster_tool(org, assignee_id, cluster)?;
             }
             (Some(path.clone()), Some(cluster.clone()), *mode)
         }

@@ -1240,13 +1240,7 @@ pub struct Dispatcher {
     stalled_tasks: std::collections::BTreeMap<TaskId, task_ops::daemon::SnapshotStalledTask>,
     /// ADR-0079 D10（Phase R3b）: 最後に生存確認をした時刻（[`LIVENESS_CHECK_INTERVAL_SECS`] ごと）。
     liveness_checked_at: Option<OffsetDateTime>,
-    /// ADR 2026-10-27-project-stagnation-inbox D3・D4: 停滞の閾値と判定の間隔（`set_stagnation` で渡す）。
-    stagnation_policy: task_ops::stagnation::StagnationPolicy,
-    stagnation_scan_interval_secs: u64,
-    /// 同 D3: 最後の判定（snapshot の `stagnation`）と判定した時刻。判定は store と releases_dir から毎回作り直す
-    /// （ここは結果の写しだけで、止まり始めた時刻を持たない）。
-    stagnation: Vec<task_ops::stagnation::StagnationFinding>,
-    stagnation_checked_at: Option<OffsetDateTime>,
+    stagnation: tree_units::StagnationWatch,
     /// ADR-0079 付記「R6-1」D4: 最後に終端の task の未完了 run と統合依頼を照合した時刻（起動後の最初の
     /// tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと）。
     terminal_records_reconciled_at: Option<OffsetDateTime>,
@@ -1613,10 +1607,7 @@ impl Dispatcher {
             stall_watch: HashMap::new(),
             stalled_tasks: std::collections::BTreeMap::new(),
             liveness_checked_at: None,
-            stagnation_policy: task_ops::stagnation::StagnationPolicy::default(),
-            stagnation_scan_interval_secs: task_ops::stagnation::DEFAULT_SCAN_INTERVAL_SECS,
-            stagnation: Vec::new(),
-            stagnation_checked_at: None,
+            stagnation: Default::default(),
             terminal_records_reconciled_at: None,
             ownerless_reconciled_at: None,
             lost_review_watch: std::collections::HashSet::new(),
@@ -2328,13 +2319,8 @@ impl Dispatcher {
         // ADR-0079 §7 R1b: 木の照合（子の状態の写しと、ready の kind task の unit からの子 task の生成）。
         self.reconcile_tree_units()?;
         // ADR-0079 D10（Phase R3b）: 木の生存確認（理由なく止まっている節点に `StallDetected` と障害通知を 1 回）。
-        if let Err(e) = self.check_tree_liveness() {
-            tracing::warn!(error = %e, "tree liveness check failed (ADR-0079 D10)");
-        }
-        // ADR 2026-10-27-project-stagnation-inbox D3: 案件単位の停滞（生存確認の後。その `stalled` を除くため）。
-        if let Err(e) = self.check_stagnation() {
-            tracing::warn!(error = %e, "stagnation check failed (ADR 2026-10-27-project-stagnation-inbox)");
-        }
+        // ADR 2026-10-27-project-stagnation-inbox D3: 続けて案件単位の停滞（生存確認の `stalled` を除く）。
+        self.check_liveness_and_stagnation();
         // Phase F7: 認可元のタスクが終端のまま未決で残った認可の要求を閉じる（照合。通常は遷移が閉じる）。
         if let Err(e) = crate::approvals::withdraw_stale_approvals(
             self.store.as_ref(),

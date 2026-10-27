@@ -235,9 +235,22 @@ impl Dispatcher {
         policy: task_ops::stagnation::StagnationPolicy,
         scan_interval_secs: u64,
     ) {
-        self.stagnation_policy = policy;
-        self.stagnation_scan_interval_secs = scan_interval_secs;
-        self.stagnation_checked_at = None;
+        self.stagnation = StagnationWatch {
+            policy,
+            scan_interval_secs,
+            ..Default::default()
+        };
+    }
+
+    /// tick の段: 木の生存確認（ADR-0079 D10）と、続けて案件単位の停滞（ADR 2026-10-27-project-stagnation-inbox D3）。
+    /// 停滞は生存確認の `stalled` に載った task を除くので、この順に呼ぶ。失敗は log だけで tick を止めない。
+    pub(super) fn check_liveness_and_stagnation(&mut self) {
+        if let Err(e) = self.check_tree_liveness() {
+            tracing::warn!(error = %e, "tree liveness check failed (ADR-0079 D10)");
+        }
+        if let Err(e) = self.check_stagnation() {
+            tracing::warn!(error = %e, "stagnation check failed (ADR 2026-10-27-project-stagnation-inbox)");
+        }
     }
 
     /// ADR 2026-10-27-project-stagnation-inbox D1・D3: `scan_interval_secs` ごとに、store と releases_dir の事実から
@@ -245,13 +258,13 @@ impl Dispatcher {
     /// 読み取りだけで、状態は変えず event も書かない（LLM なし）。
     pub(super) fn check_stagnation(&mut self) -> Result<(), DispatchError> {
         let now = self.now_utc();
-        if let Some(last) = self.stagnation_checked_at
+        if let Some(last) = self.stagnation.checked_at
             && (now - last).whole_seconds()
-                < i64::try_from(self.stagnation_scan_interval_secs).unwrap_or(i64::MAX)
+                < i64::try_from(self.stagnation.scan_interval_secs).unwrap_or(i64::MAX)
         {
             return Ok(());
         }
-        self.stagnation_checked_at = Some(now);
+        self.stagnation.checked_at = Some(now);
         let in_flight: std::collections::HashSet<TaskId> = self
             .running
             .keys()
@@ -268,14 +281,15 @@ impl Dispatcher {
         let facts = task_ops::stagnation::gather(
             self.store.as_ref(),
             self.config.releases_dir.as_deref(),
-            &self.stagnation_policy,
+            &self.stagnation.policy,
             now,
             &in_flight,
             &excluded,
             &memory,
         )
         .map_err(ops_to_store)?;
-        self.stagnation = task_ops::stagnation::detect(&facts, &self.stagnation_policy, now);
+        self.stagnation.findings =
+            task_ops::stagnation::detect(&facts, &self.stagnation.policy, now);
         Ok(())
     }
 
@@ -1293,5 +1307,27 @@ impl Dispatcher {
                 .work_units_apply(task.id, Vec::new(), rows, events)?;
         }
         Ok(())
+    }
+}
+
+/// ADR 2026-10-27-project-stagnation-inbox D3・D4: dispatcher の停滞の判定の状態。閾値と間隔（`set_stagnation` で渡す）、
+/// 最後の判定（snapshot の `stagnation`）と判定した時刻。判定は store と releases_dir から毎回作り直す
+/// （ここは結果の写しだけで、止まり始めた時刻を持たない）。
+#[derive(Debug, Clone)]
+pub(crate) struct StagnationWatch {
+    pub(crate) policy: task_ops::stagnation::StagnationPolicy,
+    pub(crate) scan_interval_secs: u64,
+    pub(crate) findings: Vec<task_ops::stagnation::StagnationFinding>,
+    pub(crate) checked_at: Option<OffsetDateTime>,
+}
+
+impl Default for StagnationWatch {
+    fn default() -> Self {
+        Self {
+            policy: task_ops::stagnation::StagnationPolicy::default(),
+            scan_interval_secs: task_ops::stagnation::DEFAULT_SCAN_INTERVAL_SECS,
+            findings: Vec::new(),
+            checked_at: None,
+        }
     }
 }

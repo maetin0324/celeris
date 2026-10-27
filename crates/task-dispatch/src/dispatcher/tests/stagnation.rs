@@ -51,6 +51,7 @@ async fn release_unpromoted_appears_at_threshold_once_and_closes_on_promotion() 
     d.test_now = Some(clock.clone());
     let release_items = |d: &Dispatcher| {
         d.stagnation
+            .findings
             .iter()
             .filter(|f| f.kind == task_ops::stagnation::StagnationKind::ReleaseUnpromoted)
             .map(|f| (f.key.clone(), f.since.clone()))

@@ -74,6 +74,9 @@ tier = "standard"
 
 [api]
 listen = "127.0.0.1:$PORT"
+
+[[api.tokens]]
+principal = "operator:dev"
 token_file = "$RUN/token"
 
 [adapters.fake]

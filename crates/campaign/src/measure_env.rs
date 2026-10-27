@@ -236,16 +236,23 @@ pub fn check_config(measure: &Path, normal: &Path, fixed_kb: Option<&Path>) -> V
             ));
         }
     }
-    // 接続設定は壊さない: クラスタは通常運用と同じ、task-api は listen と token_file を持つ。
+    // 接続設定は壊さない: クラスタは通常運用と同じ、task-api は listen と [[api.tokens]] を持つ。
     if n.get("clusters") != m.get("clusters") {
         v.push("measurement [[clusters]] differs from the normal operation's (real cluster connections must be kept)".into());
     }
-    for k in ["listen", "token_file"] {
-        if tget(&m, &["api", k]).is_none() {
-            v.push(format!(
-                "measurement config lacks [api] {k} (task-api authentication)"
-            ));
-        }
+    if tget(&m, &["api", "listen"]).is_none() {
+        v.push("measurement config lacks [api] listen (task-api authentication)".into());
+    }
+    // ADR 2026-10-27-api-principals: token は `[[api.tokens]]`（launcher は最初の 1 本の token_file を使う）。
+    if tget(&m, &["api", "tokens"])
+        .and_then(|t| t.as_array())
+        .and_then(|t| t.first())
+        .and_then(|t| t.get("token_file"))
+        .is_none()
+    {
+        v.push(
+            "measurement config lacks [[api.tokens]] token_file (task-api authentication)".into(),
+        );
     }
     v
 }

@@ -245,7 +245,7 @@ pub fn normal_config(d: &Path) -> String {
 pub fn measure_config(d: &Path, tag: &str) -> String {
     format!(
         "db = \"{n}/celeris.db\"\nworkspace_root = \"{n}/ws\"\n[knowledge]\nroot = \"{n}/kb\"\ndefault_mounts = [\"kb:trial\"]\n\
-         [api]\nlisten = \"127.0.0.1:7701\"\ntoken_file = \"{n}/token\"\n\
+         [api]\nlisten = \"127.0.0.1:7701\"\n[[api.tokens]]\nprincipal = \"operator:measure\"\ntoken_file = \"{n}/token\"\n\
          [[clusters]]\nid = \"pegasus\"\nhost = \"pegasus\"\n{probe}",
         n = d.join(tag).display(),
         probe = probe_declarations("claude-code"),

@@ -46,7 +46,7 @@ base="http://127.0.0.1:$port"
   cd "$release_dir/web/app"
   CELERIS_WEB_BIND="127.0.0.1:$port" \
   CELERIS_API_URL="$api_url" \
-  CELERIS_API_TOKEN_FILE="$token_file" \
+  CELERIS_WEB_API_TOKEN_FILE="$token_file" \
   CELERIS_WEB_PASSWORD_FILE="$private_dir/password" \
   CELERIS_WEB_SESSION_SECRET_FILE="$private_dir/session-secret" \
   CELERIS_WEB_RELEASE="$sha12" \

@@ -144,6 +144,9 @@ tick_ms = 100
 
 [api]
 listen = "127.0.0.1:{port}"
+
+[[api.tokens]]
+principal = "operator:test"
 token_file = "api.token"
 
 [adapters.fake]

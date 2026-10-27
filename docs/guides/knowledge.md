@@ -257,7 +257,7 @@ provider = "openai-compatible"
 # 127.0.0.1:18100）。proxy は具体的な `<source_id>/<model_id>` だけを受ける（tier alias は無い）。
 base_url = "http://127.0.0.1:18100/v1"
 model = "qwen/qwen3.8-27b"
-api_key_secret = "celeris-api-token"    # [api] token_file と同じ値を secrets に登録
+api_key_secret = "celeris-api-token"    # [llm_proxy] token_file と同じ値を secrets に登録
 
 [harnesses.langmem]
 kind = "langmem"

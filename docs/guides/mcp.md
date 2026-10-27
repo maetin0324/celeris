@@ -201,7 +201,7 @@ token: <64+ 文字の値。この 1 回しか出ない>
   行数は既定 500・上限 5000、結果 1 MiB、10 秒で打ち切り、同時 2 本。秘密の列（`mcp_clients.token_hash`、
   `node_sessions.session_id` など。一覧は ADR と `db_schema` の `masked`）は WHERE の中でも NULL として読まれる。
 - **API の GET**（scope `api:read`。同 ADR D5）: `api_get { path, query?, method? }`。daemon が `[api] listen` の
-  loopback に `[api] token_file` の token で GET する（客に token は渡らない）。`path` は `/api/v1/` の下だけ、
+  loopback に daemon が起動ごとに作る MCP 専用 token と客の id（`X-Celeris-Mcp-Client`）で GET する（客に token は渡らない。API 側の主体は `mcp:<client_id>`、変更系は 403。ADR 2026-10-27-api-principals D4）。`path` は `/api/v1/` の下だけ、
   `query` は object（値は文字列・数・真偽）。`method` は省略か `GET`。secret・保存 credential・browser の
   identity と Live View・credential の受け渡し・TOTP 接続・login・添付の生 bytes・SSE は拒否（`-32002`。一覧は ADR）。
   返り値は `{status, content_type, body}`（4xx/5xx もそのまま返す）。応答 1 MiB・30 秒まで。

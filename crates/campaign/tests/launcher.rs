@@ -72,10 +72,11 @@ async fn serve_role(config: PathBuf, release: String) {
     let ws = PathBuf::from(toml_str(&t, &["workspace_root"]));
     let base = db.parent().unwrap().to_path_buf();
     fs::create_dir_all(&ws).unwrap();
-    let token = fs::read_to_string(toml_str(&t, &["api", "token_file"]))
+    let token_file = t["api"]["tokens"][0]["token_file"]
+        .as_str()
         .unwrap()
-        .trim()
         .to_string();
+    let token = fs::read_to_string(token_file).unwrap().trim().to_string();
     {
         // B/C の候補集合・階層（daemon の model catalog。`GET /llm/models` が返す）。
         use task_core::{
@@ -1661,6 +1662,9 @@ default_mounts = ["kb:trial"]
 
 [api]
 listen = "127.0.0.1:{port}"
+
+[[api.tokens]]
+principal = "operator:measure"
 token_file = "{n}/token"
 
 [accounts]

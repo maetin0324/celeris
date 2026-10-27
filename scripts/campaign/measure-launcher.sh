@@ -105,8 +105,9 @@ HOSTPART=${LISTEN%:*}
 PORT=${LISTEN##*:}
 case $HOSTPART in 0.0.0.0) HOSTPART=127.0.0.1 ;; "[::]") HOSTPART="[::1]" ;; esac
 API_URL="http://$HOSTPART:$PORT"
-TOKEN_FILE=$(toml_get api token_file)
-[ -n "$TOKEN_FILE" ] || die "[api] token_file is missing in $DAEMON_CONFIG"
+# ADR 2026-10-27-api-principals: 最初の [[api.tokens]] の token_file（awk は [[api.tokens]] を api.tokens と読む）。
+TOKEN_FILE=$(toml_get api.tokens token_file)
+[ -n "$TOKEN_FILE" ] || die "[[api.tokens]] token_file is missing in $DAEMON_CONFIG"
 case $TOKEN_FILE in /*) ;; *) TOKEN_FILE=$(dirname "$DAEMON_CONFIG")/$TOKEN_FILE ;; esac
 
 # token の値は argv・ログ・出力に出さない（CLI には環境変数の「名前」だけを渡す）。

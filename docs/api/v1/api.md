@@ -175,13 +175,24 @@
 ```toml
 [api]
 listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（Option<SocketAddr>。無ければ無効）。推奨ポートは 7710（web は 7720）
-# token_file = "secrets/api.token"       # 非 loopback で listen するとき必須。指定があれば loopback でも要求する。相対パスは設定ファイル基準
 # allowed_hosts = ["celeris.lab.example"]  # Host 許可リストへの追加（localhost / 127.0.0.1 / [::1] とポート付きの形は常に許可）
+
+# 名前付きの token（ADR 2026-10-27-api-principals）。非 loopback で listen するとき 1 本以上必須。相対パスは設定ファイル基準
+[[api.tokens]]
+principal = "human:web"                 # web の BFF（CELERIS_WEB_API_TOKEN_FILE）
+token_file = "web.api-token"
+[[api.tokens]]
+principal = "operator:claude-code"      # 外部 operator（celerisctl・selfdeploy の api.token）
+token_file = "api.token"
 ```
 
-- `listen` が無ければ API は動かない（既定は無効。デーモンに暗黙のネットワーク口を開けない）。設定の型は `crates/celeris/src/config/api.rs` の `ApiConfig{listen, token_file, allowed_hosts}`、task-api が受け取るのは `task_api::ApiSettings`（`crates/task-api/src/lib.rs`）。
-- `listen` が loopback（`127.0.0.0/8`、`::1`）以外で `token_file` が無い → `ConfigError::Invalid`（`[api] listen = … is not a loopback address; token_file is required`。起動時 exit 2）。
-- `token_file` の内容（前後の空白を除いた 1 行）がトークン。ファイルが読めない・空 → 設定エラー。トークンはログにも API にも出さない（task-api は SHA-256 の値だけを持つ）。
+- `listen` が無ければ API は動かない（既定は無効。デーモンに暗黙のネットワーク口を開けない）。設定の型は `crates/celeris/src/config/api.rs` の `ApiConfig{listen, tokens, allowed_hosts}`、task-api が受け取るのは `task_api::ApiSettings`（`crates/task-api/src/lib.rs`）。
+- `listen` が loopback（`127.0.0.0/8`、`::1`）以外で `[[api.tokens]]` が無い → `ConfigError::Invalid`（`[api] listen = … is not a loopback address; [[api.tokens]] is required`。起動時 exit 2）。
+- 各 `token_file` の内容（前後の空白を除いた 1 行）がトークン。ファイルが読めない・空・同じ主体か同じ token の重複・CoS run credential の接頭辞 → 設定エラー。トークンはログにも API にも出さない（task-api は SHA-256 の値だけを持つ）。
+- `principal` は `human:<name>` か `operator:<name>`（name は `[a-z0-9][a-z0-9._-]{0,63}`）。`mcp:`・`cos:` は daemon が決める主体で config には書けない。
+- 削除した `[api] token_file` は読み込みエラー（未知の欄）。llm-proxy の bearer は `[llm_proxy] token_file`（API の token とは別）。
+- 要求の主体（principal）は認証が決め、handler は `by`・`actor` にその文字列を書く: `human:<name>` / `operator:<name>` / `mcp:<client_id>`（daemon が起動ごとに作る MCP 専用 token + `X-Celeris-Mcp-Client`。読み取り専用で変更系は 403）/ `cos:<thread_id>`（CoS run credential）/ token の無い構成は `human:local`。
+- celerisctl など CLI が API を呼ぶ token は `$CELERIS_API_PRINCIPAL` の主体、無ければ最初の `operator:`、それも無ければ最初の token。
 - SSE の同時接続数の上限は task-api の定数 `MAX_STREAMS = 16`（設定キーにしない）。
 - API は**自分専用の `SqliteStore` 接続**を持ち、DB 呼び出しは `spawn_blocking` で行う（ディスパッチャの接続と Mutex を共有しない。ADR-0013 D3）。
 - LLM の接続先は `[llm_sources.<id>]`、実行器は `[harnesses.<id>]`、組み合わせの既定候補は `[route_defaults.<harness>]` で宣言する（ADR 2026-10-11 llm-source-harness-selection）。
@@ -208,12 +219,12 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 
 ### 1.3 認証（Bearer）
 
-- `token_file` が設定されていれば全エンドポイント（`GET /health` を除く）で `Authorization: Bearer <token>` を要求する（scheme は大文字小文字を区別しない）。無い・違えば 401 `unauthorized`（`WWW-Authenticate: Bearer realm="celeris"`）。比較は SHA-256 の値どうしを定数時間で行う。
-- `token_file` が無い（= loopback のみ）場合は認証しない。**ただし管理系エンドポイントは例外**で、`token_file` が無くても常に 401 にする（ADR-0017 D1: loopback でも管理操作にはトークンを要求する）。管理 API を使うには `token_file` の設定が要る。
+- `[[api.tokens]]` が 1 本でもあれば全エンドポイント（`GET /health` を除く）で `Authorization: Bearer <token>` を要求する（scheme は大文字小文字を区別しない）。無い・どの token とも違えば 401 `unauthorized`（`WWW-Authenticate: Bearer realm="celeris"`）。比較は SHA-256 の値どうしを全 token に定数時間で行う。
+- `[[api.tokens]]` が無い（= loopback のみ）場合は認証しない。**ただし管理系エンドポイントは例外**で、token が無くても常に 401 にする（ADR-0017 D1: loopback でも管理操作にはトークンを要求する）。管理 API を使うには `[[api.tokens]]` の設定が要る。
 - **Phase 55（ADR-0044 §5 Phase 53 追記）から、人の変更操作のエンドポイントは管理系**（ハンドラが `middleware::require_admin` を呼ぶ）。読み取り（`GET`）は従来どおりで、`token_file` が無ければ loopback から素通しのまま。
   - 例外: browser の Live View（`/tasks/{id}/browser/live/…`）と制御（`/tasks/{id}/browser/control/…`）は `require_admin` を使わず、middleware の Bearer に加えて GUI 署名の assertion（人の操作）か daemon の bearer（worker）で認可する。`token_file` が無い構成では制御は 403 `browser_control_disabled`、Live View の追記も拒否する（ADR-0099 D3）。
   - この Phase で管理系に揃えたもの（それまでトークン不要だった）: `POST /tasks`、`POST /tasks/{id}/{approve|reject|answer|cancel|retry}`、`POST /plans`、`POST /replay`、`PATCH /projects/{id}`、`POST /projects/{id}/milestones`、`PATCH /milestones/{id}`。**v1 の破壊的変更**（冒頭の変更点一覧）。
-  - GUI は BFF がトークンを持つ（`CELERIS_API_TOKEN_FILE`）ので画面は変わらない。`celerisctl` は HTTP API を使わず SQLite を直接開くので影響しない。組織の「人」（ワーカー）はそもそも API を叩かない（SPEC §3.6）。
+  - GUI は BFF が `human:web` のトークンだけを持つ（`CELERIS_WEB_API_TOKEN_FILE`）ので画面は変わらない。`celerisctl` は HTTP API を使わず SQLite を直接開くので影響しない。組織の「人」（ワーカー）はそもそも API を叩かない（SPEC §3.6）。
 - `GET /health` は常に無認証（版とスキーマ版数だけを返す。G0 の疎通確認用）。ただし Host 検査は受ける。
 
 ### 1.4 Host 検査・Origin・CSRF

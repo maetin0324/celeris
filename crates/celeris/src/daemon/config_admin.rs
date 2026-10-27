@@ -214,6 +214,9 @@ max_concurrency = 2
 
 [api]
 listen = "127.0.0.1:0"
+
+[[api.tokens]]
+principal = "operator:test"
 token_file = "api.token"
 
 [selfdeploy]
@@ -446,8 +449,8 @@ max_replans = 5
         assert_eq!(field("execution.max_replans").value, Some(json!(5)));
         assert_eq!(field("api.listen").class, "startup");
         assert_eq!(field("api.listen").apply_unit, "restart");
-        assert!(field("api.token_file").secret);
-        assert_eq!(field("api.token_file").value, Some(json!("<redacted>")));
+        assert!(field("api.tokens").secret);
+        assert_eq!(field("api.tokens").value, Some(json!("<redacted>")));
         assert!(!view.fields.iter().any(|f| f.pending_restart));
         assert!(!view.rules.is_empty());
         // ファイルだけ書き換えた起動時のみの欄は「再起動待ち」。running は起動時の値のまま。

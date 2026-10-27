@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn secrets_are_redacted() {
         assert!(is_secret_key("notify.discord_webhook_secret"));
-        assert!(is_secret_key("api.token_file"));
+        assert!(is_secret_key("api.tokens"));
         assert!(!is_secret_key("execution.max_replans"));
         assert_eq!(
             display_value("x.api_key", &Value::String("sk-1".into())),

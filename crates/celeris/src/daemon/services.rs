@@ -286,8 +286,8 @@ mod routing_tests {
         std::fs::write(
             &path,
             format!(
-                "db = {:?}\nworkspace_root = {:?}\n[api]\ntoken_file = {token:?}\n\
-                 [llm_proxy]\nenabled = true\n",
+                "db = {:?}\nworkspace_root = {:?}\n\
+                 [llm_proxy]\nenabled = true\ntoken_file = {token:?}\n",
                 dir.path().join("db.sqlite3"),
                 dir.path().join("ws"),
             ),

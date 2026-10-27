@@ -8,7 +8,7 @@ WorkingDirectory=/opt/celeris-web
 Environment=NODE_ENV=production
 Environment=CELERIS_WEB_BIND=127.0.0.1:7720
 Environment=CELERIS_API_URL=http://127.0.0.1:7710
-Environment=CELERIS_API_TOKEN_FILE=/etc/celeris/api.token
+Environment=CELERIS_WEB_API_TOKEN_FILE=/etc/celeris/web.api-token
 # Set CELERIS_WEB_PASSWORD_FILE and CELERIS_WEB_SESSION_SECRET_FILE for a non-loopback bind.
 ExecStart=/usr/bin/node server/index.js
 Restart=on-failure

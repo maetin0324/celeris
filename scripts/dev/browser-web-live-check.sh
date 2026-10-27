@@ -62,7 +62,7 @@ if pathlib.Path(d["browser"]["launcher_socket"]).resolve() != pathlib.Path(l["so
     raise SystemExit("daemon and launcher sockets differ")
 launcher_paths = [l["socket"], l["state_dir"]] + [l[k] for k in ("session_root",) if k in l]
 for path in [daemon, d["db"], d["workspace_root"], *launcher_paths,
-             d["api"]["token_file"], d["api"]["browser_attestation_public_key_file"],
+             d["api"]["tokens"][0]["token_file"], d["api"]["browser_attestation_public_key_file"],
              d["api"]["browser_credentiald_control_socket"], owner, denial, password, key]:
     p = pathlib.Path(path)
     if not p.is_absolute() or not p.resolve().is_relative_to(pathlib.Path(evidence).resolve()):
@@ -129,7 +129,7 @@ PY
 )
 TOKEN_FILE=$(python3 - "$DAEMON_CONFIG" <<'PY'
 import sys,tomllib
-print(tomllib.load(open(sys.argv[1],"rb"))["api"]["token_file"])
+print(tomllib.load(open(sys.argv[1],"rb"))["api"]["tokens"][0]["token_file"])
 PY
 )
 [[ -f $TOKEN_FILE ]] || { echo "missing isolated API token" >&2; exit 1; }
@@ -263,7 +263,7 @@ grep -q 'Serving live fixture' "$EVIDENCE/live-upstream.log" || { echo "live vie
 
 CELERIS_WEB_BIND="127.0.0.1:$WEB_PORT" \
 CELERIS_API_URL="http://127.0.0.1:$API_PORT" \
-CELERIS_API_TOKEN_FILE="$TOKEN_FILE" \
+CELERIS_WEB_API_TOKEN_FILE="$TOKEN_FILE" \
 CELERIS_WEB_LIVE_VIEW_UPSTREAM="$LIVE_UPSTREAM" \
 setsid node "$ROOT/web/server/index.js" >"$EVIDENCE/web.log" 2>&1 &
 WEB_PID=$!

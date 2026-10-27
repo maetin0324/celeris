@@ -1,7 +1,7 @@
 # ADR: API の主体を認証済み token ごとに区別する
 
 - Date: 2026-10-27
-- Status: Accepted（実装中）
+- Status: Accepted
 - Task: 01M5XXF7Q3N2619D5RQA5J7C7N
 
 ## 背景
@@ -53,5 +53,13 @@ CoS の操作は cos_operations に thread が残るが、ドメイン event の
 
 ## 実装状況
 
-中断前の作業ツリーに principal 型・middleware・CoS extension・一部 task handler の変更がある。
-config・daemon 配線・MCP・BFF・残り handler・試験は未完了。受け入れ済みとは扱わない。
+- config `[[api.tokens]]`・`[llm_proxy] token_file`（`crates/celeris/src/config/api.rs`・`mod.rs`）、CLI の token 選択
+  `ApiConfig::client_token`（`$CELERIS_API_PRINCIPAL` → 最初の operator → 最初の token）、verify の `--token-file` は
+  `[[api.tokens]]` を `operator:verify` 1 本に置き換える。
+- principal と guard（`crates/task-api/src/principal.rs`・`middleware.rs`）、MCP 専用 token（`daemon/run.rs` →
+  `ApiSettings.mcp_token` と `celeris_mcp::tools::api::ApiTarget`）、BFF の `CELERIS_WEB_API_TOKEN_FILE`。
+- by を principal にした handler: task の approve/reject/answer/comment/retry/patch、decisions の answer/withdraw/revise、
+  execution の plan adopt / PUT / tree adopt / plan-gate / decompose、integrations、routing stage、browser site policy、
+  CoS の各 op（`OperationAudit::by` = `cos:<thread_id>`）。
+- 付記（実装との差）: phase-gate・cancel・task pause/resume の人の経路、POST /tasks 等は task-ops 内部の `"human"` の
+  ままで、進捗ファイルの未解決に残す。

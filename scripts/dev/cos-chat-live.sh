@@ -55,6 +55,9 @@ max_concurrency = 4
 
 [api]
 listen = "127.0.0.1:$PORT"
+
+[[api.tokens]]
+principal = "operator:dev"
 token_file = "api.token"
 
 [llm_sources.claude_oauth]

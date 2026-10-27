@@ -17,7 +17,7 @@ Environment=NODE_ENV=production
 # ~/.config/celeris/web.env で上書きする（例は docs/ops/web-operation.md）。
 Environment=CELERIS_WEB_BIND=127.0.0.1:7720
 Environment=CELERIS_API_URL=http://127.0.0.1:7710
-Environment=CELERIS_API_TOKEN_FILE=%h/.config/celeris/api.token
+Environment=CELERIS_WEB_API_TOKEN_FILE=%h/.config/celeris/web.api-token
 # web/ の session 署名鍵と password。
 Environment=CELERIS_WEB_SESSION_SECRET_FILE=%h/.config/celeris/web.session-secret
 Environment=CELERIS_WEB_PASSWORD_FILE=%h/.config/celeris/web.password

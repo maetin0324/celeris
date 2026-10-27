@@ -45,6 +45,9 @@ max_concurrency = 2
 
 [api]
 listen = "127.0.0.1:0"
+
+[[api.tokens]]
+principal = "operator:test"
 token_file = "api.token"
 
 [selfdeploy]

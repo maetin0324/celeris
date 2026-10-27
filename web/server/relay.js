@@ -34,7 +34,7 @@ export function parseUpstream(value) {
 export function readTokenFile(file) {
   if (!file) return null;
   const token = readFileSync(file, "utf8").trim();
-  if (!token) throw new Error("CELERIS_API_TOKEN_FILE is empty");
+  if (!token) throw new Error("CELERIS_WEB_API_TOKEN_FILE is empty");
   return token;
 }
 

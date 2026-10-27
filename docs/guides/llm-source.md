@@ -197,7 +197,7 @@ base_url = "http://127.0.0.1:18000/v1"
 1. `[llm_proxy]` を有効化（`[llm_proxy.sources.claude_oauth]` / `codex_oauth` を追加するか、
    既存の Qwen 中継を `[[llm_proxy.sources.openai_compatible]]` として登録）。`POST /reload` では
    反映されない設定なので celeris を再起動する。
-2. `curl -s -H "Authorization: Bearer $(cat ~/.config/celeris/api.token)" http://127.0.0.1:18100/healthz`
+2. `curl -s -H "Authorization: Bearer $(cat ~/.config/celeris/llm-proxy.token)" http://127.0.0.1:18100/healthz`
    → `{"status":"ok"}`。
 3. `curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
      -d '{"model":"qwen/qwen3.8-27b","messages":[{"role":"user","content":"hi"}]}' \

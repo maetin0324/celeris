@@ -1,94 +1,82 @@
 ---
 title: API の主体を token ごとに区別する
 updated: 2026-10-27
-status: running
+status: done
 tasks: [01M5XXF7Q3N2619D5RQA5J7C7N]
 ---
 # API の主体を token ごとに区別する
 
-完了日: 未完了。
+完了日: 2026-10-27。
 基準: `git merge-base HEAD main`。
 
 ## 変更
 
-- [ADR](../adr/2026-10-27-api-principals.md) に認証由来の principal と内部 MCP token、移行の境界を記録。
-- 中断前の未コミット変更を確認。task-api の principal / middleware / CoS / 一部 task handler は変更途中。
-- 2026-10-27 の人のコメントを受領。本番 config の変更直前に operator が利用者へ知らせる手順を下記に固定。
-- コミットはまだ作成していない。Phase 完了の報告ではない。
+- [ADR](../adr/2026-10-27-api-principals.md)。
+- `[api] token_file` を削除（読み込みエラー）し `[[api.tokens]]`（`principal = "human:<name>" | "operator:<name>"`、
+  `token_file`）を追加。重複・空・CoS 接頭辞の token を拒否。llm-proxy は `[llm_proxy] token_file`。
+- guard が bearer から principal を決め request extension に載せる。`human:<name>` / `operator:<name>` /
+  `mcp:<client_id>`（起動ごとの MCP 専用 token + `X-Celeris-Mcp-Client`、変更系は 403）/ `cos:<thread_id>`。
+- handler の `by`・`actor` を principal に変更（ADR の実装状況の一覧）。
+- BFF は `CELERIS_WEB_API_TOKEN_FILE` だけを読む（旧 `CELERIS_API_TOKEN_FILE` が設定されていれば起動エラー）。
+- db guard は全 token file と proxy token を保護（`DaemonPaths.token_files`）。
+- 試験: `crates/task-api/tests/api_principals.rs`（2 本の token・MCP・2 つの CoS thread・偽の名乗り・未知 bearer）、
+  `handlers/tests.rs` の `resolve_principal_distinguishes_config_tokens_and_mcp_clients`、config の新形式の試験。
 
-## 証拠
+## 証拠（提出時の HEAD で実行）
 
-- `git status --short` / `git diff --stat` → exit 0。再開時点で task-api の追跡済み 9 ファイルと未追跡 principal.rs に変更あり。
-- `sh scripts/dev/progress-index.sh` → exit 0（作業開始時の索引確認）。
-- `sh scripts/dev/check-doc-links.sh` / `sh scripts/dev/progress-index.sh --check` / `git diff --check` → exit 0（文書追加後）。
-- 必須の `bash scripts/dev/test-affected.sh`、`cargo clippy --workspace -- -D warnings`、
-  `cargo fmt --all -- --check` は未実行。提出時の HEAD での合格はまだ主張しない。
+- `cargo nextest run -p task-api --test api_principals` → 4 passed。
+- 必須検査の結果は報告本文と result.json に記す（test-affected / clippy / fmt）。
 
 ## 本番への移行
 
-この節は operator が昇格前に読む手順。**実装と受け入れ検査が完了するまでは実行しない。**
-この run は本番 config・DB・service・credential を変更していない。
+operator が昇格前に読む手順。**この run は本番 config・DB・service・credential を変更していない。**
+token の値は shell 引数・log・画面に出さない。
 
-1. operator は変更の直前に利用者へ「共有 API token を web / operator に分割し、MCP は内部 token にする。
-   LLM proxy の token 設定も独立させる。daemon と BFF の切替中は一時的に API が使えない」と知らせる。
-   告知した日時と対象 instance を運用記録に残す。秘密の値は通知・記録に含めない。
-2. 実際の config、BFF の service/env、operator/CLI、selfdeploy、langmem、LLM proxy 利用者の
-   token_file 参照先を確認する。config と各 env のバックアップを権限 0600 で保管し、戻す旧 release を確認する。
-   旧 token は credential の保全のため削除しない。既存 events の human を推測で書き換えない。
-3. 各用途に独立した token を発行する。例えば config ディレクトリを確認した上で、次の方法で
-   新しいファイルへ直接書く（既存ファイルがあれば中止し、標準出力へ秘密を出さない）。
-
-   ```sh
-   python3 - <<'PY'
-   import os, pathlib, secrets
-   config_dir = pathlib.Path(os.environ['CELERIS_CONFIG_DIR'])
-   for name in ('api-web.token', 'api-operator-claude-code.token', 'api-operator-deploy.token'):
-       fd = os.open(config_dir / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-       with os.fdopen(fd, 'w') as f:
-           f.write(secrets.token_hex(32) + '\n')
-   PY
-   ```
-
-4. `[api] token_file` を削除し、その他の api 設定を維持して次の配列を追加する。
-   operator が複数なら、その数だけ別の principal と別のファイルを登録する。
+1. **告知（必須）**: operator は変更の直前に利用者へ「共有 API token を web（human:web）と operator に分ける。
+   llm-proxy の token は独立させる（値は今の api.token を引き継ぐ）。切替中は API と web が一時的に使えない」と知らせる。
+2. バックアップ（0600）: `~/.config/celeris/config.toml`、`api.token`、`web.env`、live の
+   `~/.config/systemd/user/celeris-web@.service`。旧 token は消さない（下の 3 で proxy 用に残る）。
+3. token の用意（`cd ~/.config/celeris`、`umask 077`）:
+   - `cp -p api.token llm-proxy.token`（proxy の bearer を変えない。LDR の secret・langmem の api_key_secret はそのまま通る）
+   - `head -c 32 /dev/urandom | base64 | tr -d '\n' > web.api-token.new && mv -n web.api-token.new web.api-token`
+   - `head -c 32 /dev/urandom | base64 | tr -d '\n' > api.token.new && mv api.token.new api.token`（operator の新 token。
+     selfdeploy の `SD_API_TOKEN_FILE` と celerisctl はこの path を読み続ける）
+4. 新 config を `config.toml.new` に作る: `[api]` の `token_file` 行を消し、次を足す。
 
    ```toml
    [[api.tokens]]
-   principal = "human:web"
-   token_file = "api-web.token"
-
-   [[api.tokens]]
    principal = "operator:claude-code"
-   token_file = "api-operator-claude-code.token"
+   token_file = "api.token"
 
    [[api.tokens]]
-   principal = "operator:deploy"
-   token_file = "api-operator-deploy.token"
+   principal = "human:web"
+   token_file = "web.api-token"
+
+   [llm_proxy]            # 既存の節に 1 行足す
+   token_file = "llm-proxy.token"
    ```
 
-5. LLM proxy の現行 Bearer を保全したまま `[llm_proxy] token_file` に参照先を設定する。
-   proxy だけを利用する client の秘密を今回不要に更新しない。この旧 Bearer は api.tokens に登録しない。
-   langmem は新しい proxy 設定を参照する実装が入ったことを確認する。
-6. BFF 起動 env の `CELERIS_API_TOKEN_FILE` を `CELERIS_WEB_API_TOKEN_FILE` に置き換え、
-   api-web.token の絶対パスだけを渡す。operator/CLI は各自の token ファイル、selfdeploy は deploy 用を参照する。
-   BFF へ operator token の値・パス一覧や daemon config を渡さない。
-   MCP は daemon 起動時の内部 token を使うため、MCP client の credential を再発行しない。
-7. 新 release の設定検証と staging 検証の成功を確認して、通常の昇格手順で daemon / BFF を切り替える。
-   実行する config 検証・昇格コマンドは実装完了時にこの節へ追記する。
-   `/api/v1/health`、web の読み取り、operator の読み取り、MCP の api_get が成功することを確認する。
-   合意した確認用 task へ web と operator からコメントを 1 件ずつ投稿し、event の actor が
-   human:web / operator:claude-code に分かれることを API で読む。CoS は thread 付きの actor を確認する。
-   新 token の値を shell 引数・trace・ログ・画面に出さない。
-8. 失敗時は利用者へ状況を知らせ、旧 release と保存した config / BFF env / client 参照先を一緒に戻す。
-   新形式 config のまま旧 binary を起動しない。DB の既存 events・credential は削除しない。
+5. 検証: `CELERIS_CONFIG=~/.config/celeris/config.toml.new scripts/selfdeploy/verify.sh <sha12>`。
+   N-1（現行 release）は新形式の config を読めず起動に失敗する見込み（旧形式は新 binary が拒否するため、両方が読める
+   config は無い）。verify がこれで落ちる場合の扱いは、operator が利用者に知らせて決める。
+6. web の env: live unit と `web.env` から `CELERIS_API_TOKEN_FILE` を消し、
+   `CELERIS_WEB_API_TOKEN_FILE=%h/.config/celeris/web.api-token` にする（repo の `deploy/systemd/celeris-web@.service` と同じ）。
+   旧 env が残っていると BFF は起動しない。
+7. 切替: `mv config.toml.new config.toml` の直後に通常の昇格（`promote.sh <sha12>`）、web を再起動。
+8. 確認: `GET /api/v1/health`、web の画面、`celerisctl` の読み取り、MCP の `api_get`。確認用 task に web と
+   operator からコメントを 1 件ずつ書き、`GET /api/v1/tasks/<id>/comments` の author が `human:web` /
+   `operator:claude-code` に分かれること。CoS の操作は `cos:<thread_id>`。
+9. 戻し: 利用者に知らせ、旧 release と 2 のバックアップ（config・api.token・web.env・unit）を一緒に戻す。
+   新形式 config のまま旧 binary を起動しない。DB の events は書き換えない（既存の `human` 名義はそのまま）。
 
 ## 未解決
 
-- ApiSettings の token → tokens の変更が呼び出し元に未反映。現在の変更はビルド可能な完成品ではない。
-- config と CLI 上書き、LLM proxy、保護対象 token の複数化、MCP 内部 token 配線、BFF、全 handler、
-  fixture・現行文書の更新、統合試験と必須検査を完了する必要がある。
-- 移行手順の具体的な検証・昇格コマンドは完成した CLI と照合して追記する。
+- phase-gate・cancel・task pause/resume（人の経路）・POST /tasks・project 系など、task-ops の中で `"human"` を
+  固定している経路は今回変えていない（主体を引数に通す変更が task-ops に広がるため）。次の task で principal を通す。
+- celerisctl `routing stage set` は DB を直接書くので actor は `human` のまま。
+- web BFF の全経路（relay・SSE・Console・Browser Live）は同じ `daemonTokenFile` 1 本を使う構造で、経路ごとの
+  新しい試験は足していない。
 
 ## 提案
 
-なし。今回の認証主体の区別を完了させ、別の権限体系の導入には広げない。
+- 既存 events の `human` 名義（棚卸しで operator と判明した分）は書き換えず、研究評価では日付で区切って扱う。

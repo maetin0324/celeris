@@ -200,6 +200,9 @@ max_concurrency = 4
 
 [api]
 listen = "127.0.0.1:17998"
+
+[[api.tokens]]
+principal = "operator:test"
 token_file = "api.token"
 
 [knowledge]

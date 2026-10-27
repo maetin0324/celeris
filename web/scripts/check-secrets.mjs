@@ -9,7 +9,7 @@ import { createApp } from "../server/app.js";
 // daemon の token が build の出力・HTML・`/api/*` の応答・エラー本文・要求ログに出ないことを確かめる（P1-07、X5）。
 // 偽 daemon と gateway は loopback の空き port。先に `pnpm -C web build` で dist/ を作っておく。
 export const FIXTURE_TOKEN = "celeris-web-fixture-token-6d1f0b9e4a";
-const serverOnly = ["CELERIS_API_TOKEN_FILE", "CELERIS_WEB_PASSWORD_FILE", "CELERIS_WEB_SESSION_SECRET_FILE"];
+const serverOnly = ["CELERIS_WEB_API_TOKEN_FILE", "CELERIS_WEB_PASSWORD_FILE", "CELERIS_WEB_SESSION_SECRET_FILE"];
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function files(dir) {

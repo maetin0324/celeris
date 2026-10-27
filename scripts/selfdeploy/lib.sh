@@ -509,7 +509,7 @@ sd_web_load_env() {
   export NODE_ENV=production
   export CELERIS_WEB_BIND=127.0.0.1:7720
   export CELERIS_API_URL=http://127.0.0.1:7710
-  export CELERIS_API_TOKEN_FILE="${CELERIS_CONFIG_DIR}/api.token"
+  export CELERIS_WEB_API_TOKEN_FILE="${CELERIS_CONFIG_DIR}/web.api-token"
   export CELERIS_WEB_SESSION_SECRET_FILE="${CELERIS_CONFIG_DIR}/web.session-secret"
   export CELERIS_WEB_PASSWORD_FILE="${CELERIS_CONFIG_DIR}/web.password"
   [ -f "$file" ] || return 0

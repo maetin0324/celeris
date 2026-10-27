@@ -84,6 +84,9 @@ kill_grace_secs = 1
 
 [api]
 listen = "{addr}"
+
+[[api.tokens]]
+principal = "operator:test"
 token_file = "api.token"
 
 [routing_eval]

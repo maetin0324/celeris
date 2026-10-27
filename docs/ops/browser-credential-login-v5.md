@@ -68,7 +68,7 @@ readlink /local/celeris/state/current
 sqlite3 "file:/local/celeris/data/db/celeris.sqlite3?mode=ro" "select release,role,drained_at from daemon_instances order by started_at desc limit 3"
 ```
 
-昇格後の credentiald の切り替えは promote.sh が行う（旧 `celeris-credentiald@<旧>` を止め、新を起こし、3 秒後も active なのを確かめる。
+昇格後の credentiald の切り替えは promote.sh が行う（旧 `celeris-credentiald@<旧>` を止めて disable し、新を起こして enable し、3 秒後も active なのを確かめる。
 rollback.sh も同じ。ADR 2026-10-27-promote-switches-credentiald）。vault は `CELERIS_CREDENTIALD_DATA_DIR` にあり残る。登録中の稼働
 session は memory だけなので、browser run が動いていないときに昇格する。promote.sh・rollback.sh が exit 3（「credentiald switch failed」、
 release に `credentiald_switch_failed.json`）で終わったときだけ、手で行う。daemon の昇格・rollback はその時点で済んでいる。
@@ -76,8 +76,11 @@ release に `credentiald_switch_failed.json`）で終わったときだけ、手
 ```sh
 systemctl --user list-units 'celeris*' --no-pager
 systemctl --user stop celeris-credentiald@<旧 sha12>.service
+systemctl --user disable celeris-credentiald@<旧 sha12>.service
 systemctl --user reset-failed celeris-credentiald@<新 sha12>.service
 systemctl --user start celeris-credentiald@<新 sha12>.service
+systemctl --user enable celeris-credentiald@<新 sha12>.service
+systemctl --user is-enabled celeris-credentiald@<新 sha12>.service celeris-credentiald@<旧 sha12>.service
 systemctl --user status celeris-credentiald@<新 sha12>.service --no-pager
 ```
 

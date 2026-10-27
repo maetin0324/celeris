@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # promote.sh・rollback.sh の credentiald 切り替え（sd_switch_credentiald）を偽の systemctl で確かめる。
-#   A 旧を止めてから新を起こす（順序）。reset-failed を挟む。
-#   B 旧が active でなければ止めない。
+#   A 旧を止めて disable してから新を起こして enable する（順序）。reset-failed を挟む。
+#   B 旧が active でなければ止めないが、disable はする（enabled のまま残さない）。
 #   C 新の unit が無ければ何もしない。
 #   D 新が起動後に active でなければ失敗（1）。
 #   E 旧の停止に失敗したら新を起こさず失敗。
+#   F 旧の disable・新の enable に失敗したら失敗（1）。
 #   G〜K promote.sh・rollback.sh を偽の systemctl / curl / sqlite3 / ss で最後まで走らせる:
 #     G live: link の付け替え・promoted.json の後に旧を止めて新を起こす（exit 0）
+#     G・I・K の成功では、新が active かつ enabled、旧が inactive かつ disabled で終わる
 #     H stop-start で新が active にならない: exit 3、current は新、promoted.json あり、promote_failed.json なし、
 #       credentiald_switch_failed.json あり
 #     I 引き継ぎの再開（新の celeris が既に active）でも切り替える
@@ -41,6 +43,8 @@ case "$cmd" in
       *@new*) [ "${FAKE_NEW_ACTIVE:-1}" = 1 ] ;;
     esac ;;
   stop) [ "${FAKE_STOP_FAILS:-0}" != 1 ] ;;
+  disable) [ "${FAKE_DISABLE_FAILS:-0}" != 1 ] ;;
+  enable) [ "${FAKE_ENABLE_FAILS:-0}" != 1 ] ;;
   *) exit 0 ;;
 esac
 FAKE
@@ -48,24 +52,35 @@ chmod +x "$WORK/bin/systemctl"
 export PATH="$WORK/bin:$PATH" FAKE_LOG="$WORK/log" SD_CREDENTIALD_SETTLE=0
 
 run() { : >"$FAKE_LOG"; if (sd_switch_credentiald new "$@") 2>/dev/null; then echo 0; else echo 1; fi; }
-line() { grep -n -- "$1" "$FAKE_LOG" | head -1 | cut -d: -f1; }
+line() { grep -n -- "$1" "$FAKE_LOG" | head -1 | cut -d: -f1 || true; }
 
 rc="$(run old)"
 [ "$rc" = 0 ] && ok "A: success" || ng "A: rc=$rc"
-s="$(line 'stop celeris-credentiald@old')"; r="$(line 'reset-failed celeris-credentiald@new')"; st="$(line 'start celeris-credentiald@new')"
-if [ -n "$s" ] && [ -n "$r" ] && [ -n "$st" ] && [ "$s" -lt "$r" ] && [ "$r" -lt "$st" ]; then ok "A: stop old < reset-failed < start new"; else ng "A: order s=$s r=$r st=$st"; fi
+s="$(line 'stop celeris-credentiald@old')"; d="$(line 'disable celeris-credentiald@old')"; r="$(line 'reset-failed celeris-credentiald@new')"
+st="$(line 'start celeris-credentiald@new')"; e="$(line 'enable celeris-credentiald@new')"
+if [ -n "$s" ] && [ -n "$d" ] && [ -n "$r" ] && [ -n "$st" ] && [ -n "$e" ] && [ "$s" -lt "$d" ] && [ "$d" -lt "$r" ] && [ "$r" -lt "$st" ] && [ "$st" -lt "$e" ]; then
+  ok "A: stop old < disable old < reset-failed < start new < enable new"
+else ng "A: order s=$s d=$d r=$r st=$st e=$e"; fi
 
-FAKE_OLD_ACTIVE=0 rc="$(FAKE_OLD_ACTIVE=0 run old)"
-if [ "$rc" = 0 ] && ! grep -q 'stop celeris-credentiald@old' "$FAKE_LOG" && grep -q 'start celeris-credentiald@new' "$FAKE_LOG"; then ok "B: inactive old is not stopped"; else ng "B"; fi
+rc="$(FAKE_OLD_ACTIVE=0 run old)"
+if [ "$rc" = 0 ] && ! grep -q 'stop celeris-credentiald@old' "$FAKE_LOG" && grep -q 'disable celeris-credentiald@old' "$FAKE_LOG" \
+  && grep -q 'start celeris-credentiald@new' "$FAKE_LOG" && grep -q 'enable celeris-credentiald@new' "$FAKE_LOG"; then
+  ok "B: inactive old is not stopped but is disabled"
+else ng "B"; fi
 
 rc="$(FAKE_NO_NEW_UNIT=1 run old)"
-if [ "$rc" = 0 ] && ! grep -q 'start\|stop' "$FAKE_LOG"; then ok "C: no unit -> nothing"; else ng "C"; fi
+if [ "$rc" = 0 ] && ! grep -q 'start\|stop\|enable\|disable' "$FAKE_LOG"; then ok "C: no unit -> nothing"; else ng "C"; fi
 
 rc="$(FAKE_NEW_ACTIVE=0 run old)"
 [ "$rc" = 1 ] && ok "D: new not active -> fail" || ng "D: rc=$rc"
 
 rc="$(FAKE_STOP_FAILS=1 run old)"
-if [ "$rc" = 1 ] && ! grep -q 'start celeris-credentiald@new' "$FAKE_LOG"; then ok "E: stop failure -> no start, fail"; else ng "E: rc=$rc"; fi
+if [ "$rc" = 1 ] && ! grep -q 'start celeris-credentiald@new\|able celeris-credentiald' "$FAKE_LOG"; then ok "E: stop failure -> no disable/start/enable, fail"; else ng "E: rc=$rc"; fi
+
+rc="$(FAKE_DISABLE_FAILS=1 run old)"
+if [ "$rc" = 1 ] && ! grep -q 'start celeris-credentiald@new' "$FAKE_LOG"; then ok "F: disable failure -> no start, fail"; else ng "F: disable rc=$rc"; fi
+rc="$(FAKE_ENABLE_FAILS=1 run old)"
+[ "$rc" = 1 ] && ok "F: enable failure -> fail" || ng "F: enable rc=$rc"
 
 # ---- G〜K: promote.sh・rollback.sh を最後まで走らせる ----------------------------------
 # 本番には触れない: HOME / CELERIS_* は一時 dir、systemctl・curl・sqlite3・ss は偽物。
@@ -77,6 +92,7 @@ OLD=aaaaaaaaaaaa NEW=bbbbbbbbbbbb
 FB="$WORK/fakebin"
 # systemctl: 呼び出しと、その時の current のリンク先を記録する。celeris@ の is-active は偽（promote.sh の
 # 他の判定を変えない）。credentiald は started-<unit> の有無で答え、fail-active-<unit> があれば起動後も非 active。
+# enable/disable は enabled-<unit> を置く・消し、is-enabled はその有無で答える。
 cat >"$FB/systemctl" <<'EOF'
 #!/usr/bin/env bash
 echo "$* current=$(readlink "$CELERIS_STATE_DIR/current" 2>/dev/null)" >>"$FAKE_STATE/systemctl.log"
@@ -87,6 +103,9 @@ unit="${1:-}"
 case "$cmd" in
   start) [ -e "$FAKE_STATE/fail-active-$unit" ] || touch "$FAKE_STATE/started-$unit"; exit 0 ;;
   stop) rm -f "$FAKE_STATE/started-$unit"; exit 0 ;;
+  enable) touch "$FAKE_STATE/enabled-$unit"; exit 0 ;;
+  disable) rm -f "$FAKE_STATE/enabled-$unit"; exit 0 ;;
+  is-enabled) [ -e "$FAKE_STATE/enabled-$unit" ] ;;
   is-active)
     case "$unit" in celeris-credentiald@*) [ -e "$FAKE_STATE/started-$unit" ] ;; *) exit 1 ;; esac ;;
   show) echo 0 ;;
@@ -170,15 +189,24 @@ switched_after_link() {
     && grep -q -- "stop $(cred "$from") current=releases/$want\$" "$log" \
     && grep -q -- "start $(cred "$to") current=releases/$want\$" "$log"
 }
+# 偽 systemctl に問い合わせて、want が active かつ enabled、gone が inactive かつ disabled か。
+cred_final() {
+  local want="$1" gone="$2"
+  PATH="$FB:$PATH" systemctl --user is-active --quiet "$(cred "$want")" \
+    && PATH="$FB:$PATH" systemctl --user is-enabled --quiet "$(cred "$want")" \
+    && ! PATH="$FB:$PATH" systemctl --user is-active --quiet "$(cred "$gone")" \
+    && ! PATH="$FB:$PATH" systemctl --user is-enabled --quiet "$(cred "$gone")"
+}
 rel() { echo "$CELERIS_STATE_DIR/releases/$1"; }
 check() { if eval "$2"; then ok "$1"; else ng "$1"; echo "---- $CASE/out.log" >&2; cat "$CASE/out.log" >&2; fi; }
 
 # G live
 setup live true
-touch "$FAKE_STATE/started-celeris@$OLD" "$FAKE_STATE/started-$(cred "$OLD")"
+touch "$FAKE_STATE/started-celeris@$OLD" "$FAKE_STATE/started-$(cred "$OLD")" "$FAKE_STATE/enabled-$(cred "$OLD")"
 run_script promote.sh "$NEW"
 check "G: live exit 0 (rc=$RC)" '[ "$RC" = 0 ] && grep -q "promotion mode: live" "$CASE/out.log"'
 check "G: old stopped before new started, after current -> new" 'switched_after_link "$NEW" "$OLD" "$NEW"'
+check "G: new active+enabled, old inactive+disabled" 'cred_final "$NEW" "$OLD"'
 check "G: promoted.json, no failure files" '[ -f "$(rel "$NEW")/promoted.json" ] && [ ! -e "$(rel "$NEW")/promote_failed.json" ] && [ ! -e "$(rel "$NEW")/credentiald_switch_failed.json" ]'
 
 # H stop-start、新が active にならない
@@ -192,11 +220,12 @@ check "H: no promoting.json left" '[ -z "$(find "$CELERIS_STATE_DIR/releases" -n
 
 # I 引き継ぎの再開（stop-start。新の celeris は既に active、link はまだ旧）
 setup resume false
-touch "$FAKE_STATE/started-celeris@$NEW" "$FAKE_STATE/started-$(cred "$OLD")"
+touch "$FAKE_STATE/started-celeris@$NEW" "$FAKE_STATE/started-$(cred "$OLD")" "$FAKE_STATE/enabled-$(cred "$OLD")"
 echo old-failure >"$(rel "$NEW")/credentiald_switch_failed.json"
 run_script promote.sh "$NEW"
 check "I: resume exit 0 (rc=$RC)" '[ "$RC" = 0 ] && grep -q "resuming the incomplete" "$CASE/out.log" && ! grep -q "start celeris@" "$FAKE_STATE/systemctl.log"'
 check "I: switched after current -> new" 'switched_after_link "$NEW" "$OLD" "$NEW"'
+check "I: new active+enabled, old inactive+disabled" 'cred_final "$NEW" "$OLD"'
 check "I: an old credentiald_switch_failed.json is removed on success" '[ ! -e "$(rel "$NEW")/credentiald_switch_failed.json" ]'
 
 # J rollback --restore-db、previous の credentiald が active にならない
@@ -216,9 +245,10 @@ setup rollback false
 ln -sfn "releases/$NEW" "$CELERIS_STATE_DIR/current"
 ln -sfn "releases/$OLD" "$CELERIS_STATE_DIR/previous"
 echo backup >"$CELERIS_STATE_DIR/backups/20261001-000000-pre-$NEW.sqlite3"
-touch "$FAKE_STATE/started-$(cred "$NEW")"
+touch "$FAKE_STATE/started-$(cred "$NEW")" "$FAKE_STATE/enabled-$(cred "$NEW")"
 run_script rollback.sh --restore-db
 check "K: rollback exit 0 (rc=$RC)" '[ "$RC" = 0 ]'
 check "K: new stopped before previous started, after current -> previous" 'switched_after_link "$OLD" "$NEW" "$OLD"'
+check "K: previous active+enabled, rolled-back release inactive+disabled" 'cred_final "$OLD" "$NEW"'
 
 exit "$FAIL"

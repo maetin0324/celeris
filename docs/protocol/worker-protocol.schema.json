@@ -1067,6 +1067,13 @@
           },
           "type": "array"
         },
+        "relayed_instructions": {
+          "description": "ADR 2026-10-27-relayed-instructions D4: the person's instructions relayed into this thread\nby an external operator or an MCP client that have not expired (newest first, at most 20).\nAny run of the thread may cite one as `instructed_by` while it is in scope.",
+          "items": {
+            "$ref": "#/$defs/CosChatRelayedInstruction"
+          },
+          "type": "array"
+        },
         "run_id": {
           "description": "`chat_runs.id` (distinct from the worker run id in the prompt header).",
           "type": "string"
@@ -1387,6 +1394,52 @@
         "title",
         "status",
         "last_activity_at"
+      ],
+      "type": "object"
+    },
+    "CosChatRelayedInstruction": {
+      "description": "One relayed instruction of the thread (ADR 2026-10-27-relayed-instructions D1/D4). `text` is the\nperson's own words; `relayed_by` is the principal that carried them.",
+      "properties": {
+        "expires_at": {
+          "description": "RFC 3339 expiry; absent = no expiry.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message_id": {
+          "description": "`chat_messages.id` (the value for `instructed_by`).",
+          "type": "string"
+        },
+        "relayed_by": {
+          "description": "`operator:<name>` / `mcp:<client_id>`.",
+          "type": "string"
+        },
+        "said_at": {
+          "description": "RFC 3339: when the person said it.",
+          "type": "string"
+        },
+        "seq": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "task_ids": {
+          "description": "Tasks the instruction applies to; empty = the whole project / thread.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message_id",
+        "seq",
+        "text",
+        "relayed_by",
+        "said_at"
       ],
       "type": "object"
     },

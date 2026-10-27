@@ -4,7 +4,7 @@
 tasks: [01M5XXF7QQ6KB8MVV0RE96ZKJ8]
 ---
 
-方針版: `external-operator/1`（2026-10-27）。設計は[ADR](../../agent-docs/adr/2026-10-27-external-operator.md)。
+方針版: `external-operator/2`（2026-10-27）。設計は[ADR](../../agent-docs/adr/2026-10-27-external-operator.md)。
 外部 operator は、人が外側で起動する Claude Code 等の運用補助 session を指す。
 Celeris の CoS worker や `cos-operator` skill とは別であり、この手順書だけで本番操作の権限は増えない。
 
@@ -41,7 +41,7 @@ API が使えなければ秘密を含まない永続の運用記録に保存し�
 契機: 人の依頼 message ID または通知 ID（通知だけなら調査のみ）
 認可: 根拠、対象 host・操作・期限、実行担当一人、引き継ぎ先
 実行環境: operator 名、session ID、harness と CLI 版、実際の provider/model ID
-方針: external-operator/1、読んだ ADR/skill の版または文書 revision
+方針: external-operator/2、読んだ ADR/skill の版または文書 revision
 認証: principal ID、token の用途・scope・期限（値は記録しない）、sudo の許可対象または無し
 事前状態: 読み取り時刻、revision、既存 operation ID/state、current/候補/lock
 計画: すること、成功条件、停止条件、観測期限、戻す条件と戻す版
@@ -82,9 +82,14 @@ DB 復旧も events を書き換え・削除せず、credential を消さず、�
    担当が曖昧なら人に一本化してもらう。宣言だけでは CoS の自動処理をロックできない。
 2. 操作直前に元の待ちと revision を読み直す。既読・escalated の残行だけでは未解決と判断しない。
    解消済みなら何も答えず記録して終了する。CoS が既に同じ起票/再試行をしたらその ID を使う。
-3. 人の指示は **B3 の取り次ぎ経路**で出典と対象を保持して伝え、operator の回答は **A1 の principal**で行う。
-   自分の推測を人の発言として注入しない。未実装時は人が認証済み Web で入力する。
-   既存 CoS の `instructed_by` は当該 run の人の入力 message だけに有効であり、operator が ID を作って流用しない。
+3. 人の指示は案件の固定スレッド（案件なしなら統括）の `POST /api/v1/chat/threads/{t}/relays` に、
+   **operator 自身の principal** で投稿する。body は `{client_message_id, text, said_at, task_ids?, expires_at?}`。
+   `text` は利用者の原文、`said_at` は発言時刻（RFC 3339）、`task_ids` は対象 task、`expires_at` は期限。
+   task を省略すると案件全体、期限を省略すると期限なしになるため、人の指示の範囲に合わせる。
+   返値の `message.id` を根拠として保持する。CoS は同じスレッドの期限内・対象範囲内の取り次ぎを
+   `instructed_by` で参照でき、監査には判断者 human・取り次ぎ operator・実行者 CoS が別々に残る。
+   MCP では `console_instruct` の `relay: {said_at, task_ids?, expires_at?}` を使う。
+   自分の判断を人の発言として投稿しない。operator 自身が回答を実行する場合も A1 の principal を使う。
 4. 既存 CoS は監査経路の `idempotency_key`・`expected_revision`・`reason`・`policy_version` を保持する。
    同じ送信の再送は同じ key。operator と CoS で key を揃えるだけでは主体間の排他にはならない。
 5. **409 は正常な競合**として detail と最新状態を読む。解消済み/実行中なら終了または観測へ移る。
@@ -93,6 +98,12 @@ DB 復旧も events を書き換え・削除せず、credential を消さず、�
    別経路で回答・再試行・起票・配備し直さない。
 7. 終了票に実行者・実行時刻・対象 revision・認可参照・operation・exit/HTTP code・観測した結果・未解決・次の担当を記す。
    session memory や scratchpad のみには残さず、CoS が読める元の task/固定スレッドに関連付ける。
+
+評価の human-ops /2 にこの操作を記録する際は、`actor.kind` を実行した `cos_project` / `cos_general`、
+`decided_by` を `{kind: "human", id: null}` とし、`executed_by` は actor と同じなので定義書に従い null とする。
+`policy_ref` に `chat-message:<message id>`、証拠に operation ID を残す。
+取り次いだ operator / MCP は `payload.instructed_by.decided_by.relayed_by` で追える。
+人の能動時間を CoS の実行時間や回答待ち時間から推定しない（[評価記録の定義](eval-raw-record-definitions.md)）。
 
 ## 5. 同じ release を重ねない
 
@@ -124,8 +135,8 @@ A1/B3/C3/D1/D2 は起票元の改善計画の識別子。本 checkout で成立�
 
 | 依存 | この手順で使う契約 | 現状・使えるまでの扱い |
 |---|---|---|
-| A1 | 認証された回答主体（operator principal） | 新 principal 経路は未確認・未実装扱い。既存 admin/CoS で代用せず、人が Web で回答 |
-| B3 | 人の指示の出典を保持する operator → CoS の取り次ぎ | 新経路は未確認・未実装扱い。人が固定 CoS スレッドへ入力。既存 instructed_by を拡張したとは扱わない |
+| A1 | 認証された回答主体（operator principal） | 実装済み。`operator:<name>` の専用 token を使う。本番での設定・配備済み版は開始時に確認 |
+| B3 | 人の指示の出典を保持する operator → CoS の取り次ぎ | 実装済み。[取り次ぎ ADR](../../agent-docs/adr/2026-10-27-relayed-instructions.md) の専用 route / MCP relay を使う。配備前は人が Web で入力 |
 | C3 | 通知・escalate を契機に起動 | 新しい外部 operator 連携は未確認・未実装扱い。既存 CoS escalation/Discord は稼働機能だが自動 operator 起動ではない。人の手動依頼を使う |
 | D1・D2 | 自己改善の成果確認・版決定・実行・事後確認の関連整理 | 詳細仕様/対応実装をこの checkout では確認できない。統合未実装扱い。§3 の既存 reviewer・delivery・人の版決定を使い、新たな自動権限を推定しない |
 

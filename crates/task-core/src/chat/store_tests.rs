@@ -1239,7 +1239,7 @@ fn cos_workspace_files_attach_to_assistant_reply() {
 fn cos_chat_mcp_metadata_and_atomic_validation() {
     let s = store();
     let input = s
-        .chat_mcp_instruct("chatgpt-rdc", None, None, "依頼", at(0))
+        .chat_mcp_instruct("chatgpt-rdc", None, None, "依頼", None, at(0))
         .unwrap()
         .response
         .message;
@@ -1253,11 +1253,11 @@ fn cos_chat_mcp_metadata_and_atomic_validation() {
         Ok(())
     }).unwrap();
     assert!(
-        s.chat_mcp_instruct("chatgpt", None, None, "", at(1))
+        s.chat_mcp_instruct("chatgpt", None, None, "", None, at(1))
             .is_err()
     );
     assert!(
-        s.chat_mcp_instruct("chatgpt", None, Some("missing"), "依頼", at(1))
+        s.chat_mcp_instruct("chatgpt", None, Some("missing"), "依頼", None, at(1))
             .is_err()
     );
     let threads = s.chat_thread_list(&ChatThreadQuery::default()).unwrap();
@@ -1269,7 +1269,7 @@ fn cos_chat_mcp_input_goes_to_the_general_cos_without_a_new_thread() {
     let s = store();
     let text = format!("{}\nsecond line", "調".repeat(80));
     let input = s
-        .chat_mcp_instruct("chatgpt", None, None, &text, at(0))
+        .chat_mcp_instruct("chatgpt", None, None, &text, None, at(0))
         .unwrap()
         .response
         .message;
@@ -1277,9 +1277,209 @@ fn cos_chat_mcp_input_goes_to_the_general_cos_without_a_new_thread() {
     let thread = s.chat_thread_get(&input.thread_id).unwrap().unwrap();
     assert_eq!(thread.kind, ChatThreadKind::General);
     let again = s
-        .chat_mcp_instruct("chatgpt", None, None, "next", at(1))
+        .chat_mcp_instruct("chatgpt", None, None, "next", None, at(1))
         .unwrap()
         .response
         .message;
     assert_eq!(again.thread_id, input.thread_id);
+}
+
+/// ADR 2026-10-27-relayed-instructions D1/D2: a relayed instruction is a queued `role=user`
+/// message carrying the author, the person's time, the thread's project and the task scope.
+/// The same `client_message_id` with a different relay is a conflict; a person's own post
+/// records only the author.
+#[test]
+fn cos_chat_relay_post_records_author_time_and_scope() {
+    use crate::TaskStore;
+    use crate::store::tests::sample_task;
+    let s = store();
+    let project = crate::ProjectId::new();
+    let thread = crate::chat::test_project_thread(&s, &project.to_string(), at(0));
+    let mut task = sample_task(crate::Status::Ready);
+    task.project_id = Some(project);
+    s.create_task(&task, vec![]).expect("task");
+    let req = ChatRelayRequest {
+        client_message_id: "relay-1".into(),
+        text: "何台落としてもいいので続けて".into(),
+        said_at: "2026-10-04T03:50:00Z".into(),
+        task_ids: vec![task.id.to_string()],
+        expires_at: Some("2026-10-06T00:00:00Z".into()),
+    };
+    let now = OffsetDateTime::parse(
+        "2026-10-04T04:01:00Z",
+        &time::format_description::well_known::Rfc3339,
+    )
+    .expect("now");
+    let posted = s
+        .chat_relay_post(&thread.id, &req, "operator:claude-code", now)
+        .expect("relay");
+    assert!(posted.created);
+    let message = posted.response.message;
+    assert_eq!(message.role, ChatMessageRole::User);
+    assert_eq!(message.state, ChatMessageState::Queued);
+    assert_eq!(message.text, req.text);
+    assert_eq!(message.author.as_deref(), Some("operator:claude-code"));
+    let relay = message.relay.clone().expect("relay record");
+    assert_eq!(relay.relayed_by, "operator:claude-code");
+    assert_eq!(relay.said_at, "2026-10-04T03:50:00.000Z");
+    assert_eq!(
+        relay.scope.project_id.as_deref(),
+        Some(project.to_string().as_str())
+    );
+    assert_eq!(relay.scope.task_ids, vec![task.id.to_string()]);
+    assert_eq!(
+        relay.scope.expires_at.as_deref(),
+        Some("2026-10-06T00:00:00.000Z")
+    );
+    // Read back through the list and the single-message getter.
+    let got = s.chat_message_get(&thread.id, &message.id).expect("get");
+    assert_eq!(got.relay, Some(relay.clone()));
+    assert_eq!(got.author, message.author);
+    // Same key, same content: the same message. Same key, different scope: conflict.
+    let again = s
+        .chat_relay_post(&thread.id, &req, "operator:claude-code", now)
+        .expect("replay");
+    assert!(!again.created);
+    assert_eq!(again.response.message.id, message.id);
+    let mut other = req.clone();
+    other.expires_at = None;
+    assert!(matches!(
+        s.chat_relay_post(&thread.id, &other, "operator:claude-code", now),
+        Err(ChatError::Conflict(_))
+    ));
+    // A person's own post records the author and no relay.
+    let own = s
+        .chat_message_post_as(
+            &thread.id,
+            &req_plain("own-1", "自分の発言"),
+            "human:web",
+            now,
+        )
+        .expect("own")
+        .response
+        .message;
+    assert_eq!(own.author.as_deref(), Some("human:web"));
+    assert_eq!(own.relay, None);
+    // The listing of live relays has the relay only (newest first) and drops it once expired.
+    let live = s.chat_relayed_instructions(&thread.id, now).expect("live");
+    assert_eq!(
+        live.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        [message.id.as_str()]
+    );
+    let later = now + Duration::days(2);
+    assert!(
+        s.chat_relayed_instructions(&thread.id, later)
+            .expect("expired")
+            .is_empty()
+    );
+    assert!(relay_expired(&relay, later));
+    assert!(!relay_expired(&relay, now));
+}
+
+fn req_plain(key: &str, text: &str) -> ChatPostMessageRequest {
+    req(key, text)
+}
+
+/// D2: relay validation happens in the write transaction: a future `said_at`, an expiry not
+/// after `said_at`, an unknown task, a duplicate task and more than the task limit are refused.
+#[test]
+fn cos_chat_relay_post_validates_times_and_tasks() {
+    let s = store();
+    let thread = create(&s, "p-validate", "t", 0);
+    let now = at(100);
+    let base = ChatRelayRequest {
+        client_message_id: "relay-v".into(),
+        text: "続けて".into(),
+        said_at: "2026-10-04T00:00:00Z".into(),
+        task_ids: vec![],
+        expires_at: None,
+    };
+    let invalid = |req: ChatRelayRequest| {
+        let err = s
+            .chat_relay_post(&thread.id, &req, "operator:x", now)
+            .expect_err("refused");
+        match err {
+            ChatError::Invalid(detail) | ChatError::TooLarge(detail) => detail,
+            other => panic!("unexpected {other:?}"),
+        }
+    };
+    let future = ChatRelayRequest {
+        said_at: crate::chat::store::chat_ts(now + Duration::minutes(1)),
+        ..base.clone()
+    };
+    assert!(invalid(future).contains("said_at"));
+    let garbage = ChatRelayRequest {
+        said_at: "yesterday".into(),
+        ..base.clone()
+    };
+    assert!(invalid(garbage).contains("RFC 3339"));
+    let reversed = ChatRelayRequest {
+        expires_at: Some("2026-10-03T00:00:00Z".into()),
+        ..base.clone()
+    };
+    assert!(invalid(reversed).contains("expires_at"));
+    let unknown = ChatRelayRequest {
+        task_ids: vec![crate::TaskId::new().to_string()],
+        ..base.clone()
+    };
+    assert!(invalid(unknown).contains("not found"));
+    let too_many = ChatRelayRequest {
+        task_ids: (0..=CHAT_RELAY_TASKS_MAX)
+            .map(|_| crate::TaskId::new().to_string())
+            .collect(),
+        ..base.clone()
+    };
+    assert!(invalid(too_many).contains("task_ids"));
+    // Nothing was written.
+    assert!(
+        s.chat_relayed_instructions(&thread.id, now)
+            .expect("list")
+            .is_empty()
+    );
+    // A valid relay without tasks or expiry is accepted in the general thread with no project.
+    let general = s
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, now)
+        .expect("general")
+        .thread;
+    let posted = s
+        .chat_relay_post(&general.id, &base, "operator:x", now)
+        .expect("relay")
+        .response
+        .message;
+    let relay = posted.relay.expect("relay");
+    assert_eq!(relay.scope.project_id, None);
+    assert!(relay.scope.task_ids.is_empty());
+    assert_eq!(relay.scope.expires_at, None);
+}
+
+/// D2: `console_instruct` with a relay records `mcp:<client_id>` as the relayer and keeps the
+/// receipt that `chat_mcp_reply` resolves.
+#[test]
+fn cos_chat_mcp_instruct_relay_is_recorded_with_the_client_as_relayer() {
+    let s = store();
+    let relay = ChatRelayRequest {
+        client_message_id: String::new(),
+        text: "sonnet で".into(),
+        said_at: "2026-10-04T10:00:00Z".into(),
+        task_ids: vec![],
+        expires_at: None,
+    };
+    let message = s
+        .chat_mcp_instruct("chatgpt", None, None, "sonnet で", Some(&relay), at(0))
+        .expect("instruct")
+        .response
+        .message;
+    assert_eq!(message.author.as_deref(), Some("mcp:chatgpt"));
+    let record = message.relay.expect("relay");
+    assert_eq!(record.relayed_by, "mcp:chatgpt");
+    assert_eq!(record.said_at, "2026-10-04T10:00:00.000Z");
+    let receipt = s.chat_mcp_reply(Some(&message.id), None).expect("reply");
+    assert!(receipt.is_some(), "the receipt still resolves");
+    let plain = s
+        .chat_mcp_instruct("chatgpt", None, None, "plain", None, at(1))
+        .expect("plain")
+        .response
+        .message;
+    assert_eq!(plain.author.as_deref(), Some("mcp:chatgpt"));
+    assert_eq!(plain.relay, None);
 }

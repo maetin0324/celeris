@@ -3468,6 +3468,7 @@ REST の旧 Console エンドポイントは既定 legacy スレッドを使う�
 | PATCH `/chat/threads/{t}` | `{"title"?,"status"?,"expected_revision"}`（title と status の少なくとも一方） | 200 `ChatThreadResponse`。queue や run が残る archive は 409 |
 | GET `/chat/threads/{t}/messages` | `before_seq`、`after_seq`（両方は不可）、`limit` | 200 `ChatMessageListResponse`（seq 昇順） |
 | POST `/chat/threads/{t}/messages` | `{"client_message_id","text","attachment_ids","reply_to_id","mode":"queue\|interrupt","resume_queue"}` | 202 `ChatPostMessageResponse`（`run_id`・`queue_position`） |
+| POST `/chat/threads/{t}/relays` | `{client_message_id, text, said_at, task_ids?, expires_at?}` | operator principal のみ。202 `ChatPostMessageResponse`。原文・発言時刻・範囲を保存 |
 | DELETE `/chat/threads/{t}/messages/{m}` | なし | 200 `ChatMessageResponse`（`state=cancelled`）。queued の人の発言だけ可、開始済みは 409 |
 | POST `/chat/threads/{t}/stop` | `{"run_id"}` | 202 `ChatStopResponse`。終端への再送は 200、現在の run と違えば 409 |
 | POST `/chat/threads/{t}/resume-queue` | `{"expected_revision"}` | 200 `ChatThreadResponse` |
@@ -4028,3 +4029,16 @@ policy_version, reasons, escalation, outcome, cost_usd, input_tokens, output_tok
 `operation`（promote / rollback）、`mode`, `from`, `to`, `started_at`, `status`（started / succeeded / failed）、
 `exit_code` と終了時の `finished_at` を持つ。既存 release に記録が無ければ空配列。
 人の昇格 API は actor=human、CoS は actor=cos と認証済み操作の理由・方針・操作 ID を渡す。
+
+### 取り次がれた人の指示
+
+[取り次ぎ ADR](../../../agent-docs/adr/2026-10-27-relayed-instructions.md) に従い、`ChatMessage.author` は認証した投稿主体、
+`relay` は `{relayed_by, said_at, scope: {project_id?, task_ids?, expires_at?}}`。
+人の原文は `text`、発言時刻と期限は RFC 3339。案件はスレッドから決める。task は同案件に限り、最大20件。
+未来の発言・既に過ぎた期限・存在しない task は422。人の token による取り次ぎは403 `chat_relay_forbidden`。
+同じ `client_message_id` と同じ内容の再送は同じ message を返し、内容が違えば409。
+
+`POST /cos/operations` の `instructed_by` は当該 run の人の入力に加え、同じスレッドの有効な取り次ぎを受け付ける。
+案件・task の適用範囲から外れる対象、期限切れ、取消済み、他スレッドの指示は422 `cos_instruction_invalid`。
+監査の `payload.instructed_by` に `message_id`・`seq`・`relay`・`decided_by`・`executed_by` を残す。
+判断者は human（取り次ぎ主体を併記）、実行者は cos_project / cos_general。token 値は保存しない。

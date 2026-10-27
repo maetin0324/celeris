@@ -21,6 +21,9 @@ use task_core::chat::{AuditContext, ChatActor, ChatError, CosOperation};
 use task_core::store::SqliteStore;
 use ulid::Ulid;
 
+mod instructions;
+use instructions::{instructed_message, operation_target};
+
 use super::{CosCaller, cos_only, cos_problem, reject_identity_claims};
 use crate::handlers::{ApiResult, Params, json_response, no_query};
 use crate::problem::ApiProblem;
@@ -361,10 +364,12 @@ pub struct OperationBody {
     policy_version: String,
     request: OperationRequest,
     /// ADR 2026-10-07-cos-inbox-thread-conversation D3: the id of the human message this
-    /// operation relays. Accepted only when it is the `role=user` input message of the caller's
-    /// own run in the inbox thread (`kind=inbox`); any other message is 422
-    /// `cos_instruction_invalid`. Recorded in the payload and the audit reason; waives the
-    /// explicit human_required refusal (the person decided, CoS only relays).
+    /// operation relays. Accepted when it is the `role=user` input message of the caller's own
+    /// run in a CoS thread, or (ADR 2026-10-27-relayed-instructions D3) a relayed instruction of
+    /// the same thread that has not expired and whose scope covers the target; any other message
+    /// is 422 `cos_instruction_invalid`. Recorded in the payload (with `decided_by` /
+    /// `executed_by`) and the audit reason; waives the explicit human_required refusal (the
+    /// person decided, CoS only relays).
     #[serde(default)]
     instructed_by: Option<String>,
 }
@@ -655,12 +660,22 @@ async fn create_operation(
                 return dispatch(store, &env, &audit, &method, &path, req.request.body);
             }
             if let Some(message_id) = instructed_by.as_deref() {
-                // D3: the instruction must be the human message that started this very run, in
-                // the inbox thread. Checked from the caller's run (`CosCaller.run_id`), never from
-                // the request alone: a triage run (system input), an earlier message of the thread,
-                // a message of another thread or a human thread cannot waive human_required.
-                let message = match instructed_message(store, &audit.ctx, message_id) {
-                    Ok(message) => message,
+                // D3: the instruction must be the human message that started this very run, or a
+                // relayed instruction of this thread in scope (ADR 2026-10-27-relayed-instructions
+                // D3). Checked from the caller's run (`CosCaller.run_id`), never from the request
+                // alone: a triage run (system input) citing an ordinary earlier message, a message
+                // of another thread or a human thread cannot waive human_required.
+                let target = matched
+                    .as_ref()
+                    .and_then(|m| operation_target(m, &path, &env));
+                let instruction = match instructed_message(
+                    store,
+                    &audit.ctx,
+                    message_id,
+                    target.as_ref(),
+                    time::OffsetDateTime::now_utc(),
+                ) {
+                    Ok(instruction) => instruction,
                     Err(why) => {
                         return Err(audit.reject(
                             store,
@@ -670,12 +685,9 @@ async fn create_operation(
                         ));
                     }
                 };
-                audit.ctx.reason = format!("人の指示（seq {}）: {}", message.seq, audit.ctx.reason);
+                audit.ctx.reason = format!("{}: {}", instruction.reason_prefix(), audit.ctx.reason);
                 if let Value::Object(payload) = &mut audit.payload {
-                    payload.insert(
-                        "instructed_by".into(),
-                        serde_json::json!({"message_id": message.id, "seq": message.seq}),
-                    );
+                    payload.insert("instructed_by".into(), instruction.payload());
                 }
                 // The person decided; CoS only relays. The domain validation still applies.
                 human_required = None;
@@ -693,48 +705,6 @@ async fn create_operation(
         .await?;
     state.chat.events.notify_waiters();
     Ok(operation_response(operation))
-}
-
-/// D3: the message `instructed_by` names, when it is the `role=user` input of the caller's run
-/// in the inbox thread. Otherwise the reason it is refused (`cos_instruction_invalid`).
-fn instructed_message(
-    store: &SqliteStore,
-    ctx: &AuditContext,
-    message_id: &str,
-) -> Result<task_core::chat::ChatMessage, String> {
-    let thread_id = &ctx.thread_id;
-    let Ok(message) = store.chat_message_get(thread_id, message_id) else {
-        return Err(format!(
-            "instructed_by {message_id} is not a message of thread {thread_id}"
-        ));
-    };
-    if message.role != task_core::chat::ChatMessageRole::User {
-        return Err(format!("instructed_by {message_id} is not a human message"));
-    }
-    let thread = match store.chat_thread_get(thread_id) {
-        Ok(Some(thread)) => thread,
-        _ => return Err(format!("thread {thread_id} is not readable")),
-    };
-    // ADR 2026-10-22-cos-fixed-threads D7: any CoS thread (general or project), not legacy.
-    if thread.kind == task_core::chat::ChatThreadKind::Legacy {
-        return Err(format!(
-            "instructed_by is accepted only in a CoS thread (thread {thread_id} is {:?})",
-            thread.kind
-        ));
-    }
-    let Ok(run) = store.chat_run_get(thread_id, &ctx.run_id) else {
-        return Err(format!(
-            "run {} is not a run of thread {thread_id}",
-            ctx.run_id
-        ));
-    };
-    if run.input_message_id != message.id {
-        return Err(format!(
-            "instructed_by {message_id} is not the human message run {} answers (its input is {})",
-            ctx.run_id, run.input_message_id
-        ));
-    }
-    Ok(message)
 }
 
 /// What the operation functions need from [`ApiState`], captured before the blocking section.

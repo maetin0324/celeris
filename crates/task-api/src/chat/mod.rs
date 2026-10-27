@@ -14,14 +14,16 @@ use serde::de::DeserializeOwned;
 use task_core::chat::attachments::ChatAttachmentLimits;
 use task_core::chat::{
     ChatError, ChatMessageQuery, ChatMessageResponse, ChatOpenThreadRequest,
-    ChatPatchThreadRequest, ChatPostMessageRequest, ChatReadThreadRequest, ChatResumeQueueRequest,
-    ChatRunResponse, ChatStopRequest, ChatThreadQuery, ChatThreadResponse, ChatThreadStatus,
+    ChatPatchThreadRequest, ChatPostMessageRequest, ChatReadThreadRequest, ChatRelayRequest,
+    ChatResumeQueueRequest, ChatRunResponse, ChatStopRequest, ChatThreadQuery, ChatThreadResponse,
+    ChatThreadStatus,
 };
 use time::OffsetDateTime;
 use tokio::sync::Notify;
 
 use crate::handlers::{ApiResult, Params, json_response, no_query};
 use crate::middleware::require_admin;
+use crate::principal::{Caller, Principal};
 use crate::problem::ApiProblem;
 use crate::query::QueryParams;
 use crate::state::ApiState;
@@ -65,6 +67,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
             "/api/v1/chat/threads/{t}/messages/{m}",
             axum::routing::delete(cancel_message),
         )
+        .route("/api/v1/chat/threads/{t}/relays", post(post_relay))
         .route("/api/v1/chat/threads/{t}/read", post(mark_read))
         .route("/api/v1/chat/threads/{t}/stop", post(stop_run))
         .route("/api/v1/chat/threads/{t}/resume-queue", post(resume_queue))
@@ -249,15 +252,7 @@ async fn list_messages(
     Ok(json_response(StatusCode::OK, &result))
 }
 
-async fn post_message(
-    State(state): State<ApiState>,
-    headers: HeaderMap,
-    Params(t): Params<String>,
-    RawQuery(raw): RawQuery,
-    body: Body,
-) -> ApiResult {
-    no_query(&raw)?;
-    authorize(&state, &headers)?;
+fn require_cos_enabled(state: &ApiState) -> Result<(), ApiProblem> {
     if !state.chat.enabled {
         return Err(ApiProblem::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -265,11 +260,67 @@ async fn post_message(
             "CoS is disabled",
         ));
     }
+    Ok(())
+}
+
+async fn post_message(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    caller: Caller,
+    Params(t): Params<String>,
+    RawQuery(raw): RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    authorize(&state, &headers)?;
+    require_cos_enabled(&state)?;
     let req: ChatPostMessageRequest = chat_json(body).await?;
+    // ADR 2026-10-27-relayed-instructions D1: the authenticated principal is the author.
+    let author = caller.actor();
     let result = state
         .blocking(move |store| {
             store
-                .chat_message_post(&t, &req, OffsetDateTime::now_utc())
+                .chat_message_post_as(&t, &req, &author, OffsetDateTime::now_utc())
+                .map_err(chat_problem)
+        })
+        .await?;
+    changed(&state);
+    Ok(json_response(StatusCode::ACCEPTED, &result.response))
+}
+
+/// ADR 2026-10-27-relayed-instructions D2: `POST /chat/threads/{t}/relays`. An external
+/// operator posts a person's instruction verbatim with the time the person said it and the
+/// scope; the relaying principal is the authenticated `operator:<name>`. A person's own token
+/// is refused (a person speaks in `…/messages`); CoS runs and MCP's internal token are refused
+/// by the admin guard as for every mutation.
+async fn post_relay(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    caller: Caller,
+    Params(t): Params<String>,
+    RawQuery(raw): RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    authorize(&state, &headers)?;
+    require_cos_enabled(&state)?;
+    if !matches!(caller.0, Principal::Operator { .. }) {
+        return Err(ApiProblem::new(
+            StatusCode::FORBIDDEN,
+            "chat_relay_forbidden",
+            format!(
+                "relays are accepted only from an operator principal ({} is not one); a person \
+                 speaks in POST /chat/threads/{{t}}/messages",
+                caller.actor()
+            ),
+        ));
+    }
+    let req: ChatRelayRequest = chat_json(body).await?;
+    let relayed_by = caller.actor();
+    let result = state
+        .blocking(move |store| {
+            store
+                .chat_relay_post(&t, &req, &relayed_by, OffsetDateTime::now_utc())
                 .map_err(chat_problem)
         })
         .await?;

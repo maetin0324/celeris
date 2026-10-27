@@ -861,3 +861,44 @@ async fn cos_chat_session_expiry_after_restart_starts_fresh_from_summary_in_the_
     assert_eq!(live.key.thread_id, t);
     assert_eq!(thread_count(dir.path()), 1, "no new thread");
 }
+
+#[tokio::test]
+async fn cos_chat_launch_delivers_stored_relay_evidence_to_later_runs() {
+    let (dir, store) = open_store();
+    let (probe, adapter) = refusing(&store, usize::MAX, false);
+    let mut d = fixture(adapter, store.clone(), dir.path());
+    let t = thread(&store);
+    let now = OffsetDateTime::now_utc();
+    let posted = store
+        .chat_relay_post(
+            &t,
+            &task_core::chat::ChatRelayRequest {
+                client_message_id: "relayed".into(),
+                text: "この案件は進めて".into(),
+                said_at: (now - time::Duration::minutes(1))
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .expect("time"),
+                task_ids: vec![],
+                expires_at: None,
+            },
+            "operator:test",
+            now,
+        )
+        .expect("relay");
+    tick_and_join(&mut d, &store, &t).await;
+    post(&store, &t, "later");
+    tick_and_join(&mut d, &store, &t).await;
+    let attempts = probe.attempts.lock().expect("attempts");
+    let chat = attempts
+        .last()
+        .expect("later run")
+        .context
+        .cos_chat
+        .as_ref()
+        .expect("chat");
+    assert_ne!(chat.inputs[0].id, posted.response.message.id);
+    let relay = &chat.relayed_instructions[0];
+    assert_eq!(relay.message_id, posted.response.message.id);
+    assert_eq!(relay.text, "この案件は進めて");
+    assert_eq!(relay.relayed_by, "operator:test");
+}

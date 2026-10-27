@@ -36,11 +36,12 @@ pub use session::{
 };
 pub use store::{
     CHAT_CLIENT_KEY_MAX_BYTES, CHAT_MESSAGE_ATTACHMENTS_MAX, CHAT_MESSAGE_PAGE_DEFAULT,
-    CHAT_MESSAGE_PAGE_MAX, CHAT_MESSAGE_TEXT_MAX_BYTES, CHAT_QUEUE_MAX, CHAT_THREAD_PAGE_DEFAULT,
-    CHAT_THREAD_PAGE_MAX, CHAT_TITLE_MAX_CHARS, ChatError, ChatMessagePosted, ChatMessageQuery,
-    ChatThreadCreated, ChatThreadQuery, chat_fts_literal, chat_message_cancel_tx,
-    chat_message_post_cos_tx, chat_thread_mark_read_tx, chat_thread_patch_tx,
-    chat_thread_resume_queue_tx, cos_thread_ensure_tx, cos_thread_label, cos_thread_open_tx,
+    CHAT_MESSAGE_PAGE_MAX, CHAT_MESSAGE_TEXT_MAX_BYTES, CHAT_QUEUE_MAX, CHAT_RELAY_TASKS_MAX,
+    CHAT_RELAYS_PROMPT_MAX, CHAT_THREAD_PAGE_DEFAULT, CHAT_THREAD_PAGE_MAX, CHAT_TITLE_MAX_CHARS,
+    ChatError, ChatMessagePosted, ChatMessageQuery, ChatThreadCreated, ChatThreadQuery,
+    chat_fts_literal, chat_message_cancel_tx, chat_message_post_cos_tx, chat_thread_mark_read_tx,
+    chat_thread_patch_tx, chat_thread_resume_queue_tx, cos_thread_ensure_tx, cos_thread_label,
+    cos_thread_open_tx, relay_expired,
 };
 
 macro_rules! wire_enum {
@@ -168,8 +169,41 @@ pub struct ChatMessage {
     /// to this reply, with the workspace-relative path the reply may mention. Empty for others.
     #[serde(default)]
     pub workspace_files: Vec<ChatWorkspaceFile>,
+    /// ADR 2026-10-27-relayed-instructions D1: the authenticated principal that posted a
+    /// `role=user` message (`human:<name>` / `operator:<name>` / `mcp:<client_id>`). Absent for
+    /// CoS / system messages and for messages posted before the record existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// ADR 2026-10-27-relayed-instructions D1: present when this `role=user` message is a
+    /// person's instruction relayed by an external operator or an MCP client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<ChatRelay>,
     pub created_at: String,
     pub updated_at: String,
+}
+/// ADR 2026-10-27-relayed-instructions D1: the relay record of a `role=user` message. The text
+/// of the message is the person's own words; this says who carried them, when the person said
+/// them and where they apply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChatRelay {
+    /// The principal that relayed the instruction (same as the message `author`).
+    pub relayed_by: String,
+    /// RFC 3339: when the person said it (not after the post).
+    pub said_at: String,
+    pub scope: ChatRelayScope,
+}
+/// Where a relayed instruction applies.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChatRelayScope {
+    /// The thread's project; absent in the general CoS thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Tasks the instruction applies to; empty = the whole project / thread.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_ids: Vec<String>,
+    /// RFC 3339: after this the instruction is no longer a ground for `instructed_by`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
 }
 /// One workspace file attached to a CoS reply (`path` is relative to the thread workspace).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -327,6 +361,22 @@ pub struct ChatPostMessageRequest {
     pub reply_to_id: Option<String>,
     pub mode: ChatSendMode,
     pub resume_queue: bool,
+}
+/// ADR 2026-10-27-relayed-instructions D2: `POST /chat/threads/{t}/relays`. `text` is the
+/// person's words verbatim; the relaying principal comes from the authentication, never from here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChatRelayRequest {
+    pub client_message_id: String,
+    pub text: String,
+    /// RFC 3339: when the person said it.
+    pub said_at: String,
+    /// Tasks the instruction applies to (must exist; at most `CHAT_RELAY_TASKS_MAX`).
+    #[serde(default)]
+    pub task_ids: Vec<String>,
+    /// RFC 3339: optional expiry (must be after `said_at`).
+    #[serde(default)]
+    pub expires_at: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

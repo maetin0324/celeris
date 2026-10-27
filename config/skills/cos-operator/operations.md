@@ -159,6 +159,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 |---|---|---|
 | `secret_operations` | `/secrets/<id>`（PUT・DELETE）、`/llm/sources/<source_id>/accounts/<account_id>/login*`、`/clusters/<id>/connect*` | 秘密の値を扱う（取消・削除も含め全て除外） |
 | `browser_credential_attestation` | `/browser/identities*`、`/browser/trusted-devices*`、`/tasks/<id>/browser/waits/<w>/{credential,decision,registered,revoke}`、`/tasks/<id>/browser/live/<run>/<session>/{check,grant,read}` | credential・封緘 state・receipt・owner attestation／信頼端末を扱う |
+| `human_instruction_relay` | `POST /chat/threads/{t}/relays` | 人の指示の取り次ぎは外部主体専用。CoS は指示を作れない |
 | `console_instruction_chain` | `POST /console/instruct` | 別の指示経路へ入り監査の鎖が二重になる |
 | `recursive_cos` | `/cos/operations`・`/cos/operations/<o>/override`・`/cos/inbox/<i>/resolve`・`/cos/threads/<t>/checkpoint` | CoS 制御 API の再帰。受信箱の解決は envelope の外で直接呼ぶ |
 | `removed_by_adr_0079` | `POST /plans`、`/milestones/*`、`/projects/<id>/{milestones,plan,project-plan/<v>/decide}` | 撤去済みの 410 の互換入口 |

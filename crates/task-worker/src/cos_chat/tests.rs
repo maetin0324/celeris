@@ -89,6 +89,7 @@ fn chat() -> CosChatContext {
         api_base_url: "http://127.0.0.1:7070/api/v1".into(),
         inbox_items: vec![],
         projects: vec![],
+        relayed_instructions: vec![],
     }
 }
 
@@ -813,4 +814,56 @@ fn cos_operator_skill_documents_the_registered_project_deploy_scope() {
     }
     assert!(read("SKILL.md").contains("deploy.md"));
     assert!(read("production.md").contains("Celeris 自身の本番"));
+}
+
+/// ADR 2026-10-27-relayed-instructions D4: the live relays of the thread are listed with the
+/// message id CoS cites, who relayed them, when the person spoke and the scope; the relay rules
+/// say a listed relay may ground `instructed_by` from any run.
+#[test]
+fn cos_chat_prompt_relayed_section_lists_live_relays_with_ids_and_scope() {
+    use crate::protocol::CosChatRelayedInstruction;
+    let mut c = chat();
+    assert!(
+        !prompt(&request(Path::new("/tmp/w"), Some(c.clone()))).contains("取り次がれた人の指示")
+    );
+    c.relayed_instructions = vec![
+        CosChatRelayedInstruction {
+            message_id: "m-relay-2".into(),
+            seq: 9,
+            text: "何台落としてもいいので続けて".into(),
+            relayed_by: "operator:claude-code".into(),
+            said_at: "2026-10-27T03:50:00.000Z".into(),
+            task_ids: vec!["01TASKA".into(), "01TASKB".into()],
+            expires_at: Some("2026-10-28T00:00:00.000Z".into()),
+        },
+        CosChatRelayedInstruction {
+            message_id: "m-relay-1".into(),
+            seq: 4,
+            text: "sonnet で".into(),
+            relayed_by: "mcp:chatgpt".into(),
+            said_at: "2026-10-25T10:00:00.000Z".into(),
+            task_ids: vec![],
+            expires_at: None,
+        },
+    ];
+    let p = prompt(&request(Path::new("/tmp/w"), Some(c)));
+    assert!(p.contains("## 取り次がれた人の指示"), "{p}");
+    assert!(
+        p.contains(
+            "- seq 9 (message m-relay-2) operator:claude-code が 2026-10-27T03:50:00.000Z の人の発言を取り次ぎ\
+             （範囲: task 01TASKA, 01TASKB、期限 2026-10-28T00:00:00.000Z）: 「何台落としてもいいので続けて」"
+        ),
+        "{p}"
+    );
+    assert!(
+        p.contains(
+            "- seq 4 (message m-relay-1) mcp:chatgpt が 2026-10-25T10:00:00.000Z の人の発言を取り次ぎ\
+             （範囲: この案件全体）: 「sonnet で」"
+        ),
+        "{p}"
+    );
+    assert!(
+        p.contains("同スレッドの有効な取り次ぎ**の message id だけ"),
+        "{p}"
+    );
 }

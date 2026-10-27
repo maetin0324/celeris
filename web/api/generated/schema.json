@@ -3247,6 +3247,13 @@
           },
           "type": "array"
         },
+        "author": {
+          "description": "ADR 2026-10-27-relayed-instructions D1: the authenticated principal that posted a\n`role=user` message (`human:<name>` / `operator:<name>` / `mcp:<client_id>`). Absent for\nCoS / system messages and for messages posted before the record existed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "cards": {
           "items": {
             "$ref": "#/$defs/ChatCard"
@@ -3264,6 +3271,17 @@
         },
         "id": {
           "type": "string"
+        },
+        "relay": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatRelay"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-27-relayed-instructions D1: present when this `role=user` message is a\nperson's instruction relayed by an external operator or an MCP client."
         },
         "reply_to_id": {
           "type": [
@@ -3577,6 +3595,93 @@
         "owner_kind",
         "owner_id"
       ],
+      "type": "object"
+    },
+    "ChatRelay": {
+      "description": "ADR 2026-10-27-relayed-instructions D1: the relay record of a `role=user` message. The text\nof the message is the person's own words; this says who carried them, when the person said\nthem and where they apply.",
+      "properties": {
+        "relayed_by": {
+          "description": "The principal that relayed the instruction (same as the message `author`).",
+          "type": "string"
+        },
+        "said_at": {
+          "description": "RFC 3339: when the person said it (not after the post).",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ChatRelayScope"
+        }
+      },
+      "required": [
+        "relayed_by",
+        "said_at",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "ChatRelayRequest": {
+      "additionalProperties": false,
+      "description": "ADR 2026-10-27-relayed-instructions D2: `POST /chat/threads/{t}/relays`. `text` is the\nperson's words verbatim; the relaying principal comes from the authentication, never from here.",
+      "properties": {
+        "client_message_id": {
+          "type": "string"
+        },
+        "expires_at": {
+          "default": null,
+          "description": "RFC 3339: optional expiry (must be after `said_at`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "said_at": {
+          "description": "RFC 3339: when the person said it.",
+          "type": "string"
+        },
+        "task_ids": {
+          "default": [],
+          "description": "Tasks the instruction applies to (must exist; at most `CHAT_RELAY_TASKS_MAX`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "client_message_id",
+        "text",
+        "said_at"
+      ],
+      "type": "object"
+    },
+    "ChatRelayScope": {
+      "description": "Where a relayed instruction applies.",
+      "properties": {
+        "expires_at": {
+          "description": "RFC 3339: after this the instruction is no longer a ground for `instructed_by`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_id": {
+          "description": "The thread's project; absent in the general CoS thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_ids": {
+          "description": "Tasks the instruction applies to; empty = the whole project / thread.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
       "type": "object"
     },
     "ChatResumeQueueRequest": {
@@ -19704,7 +19809,7 @@
         },
         "instructed_by": {
           "default": null,
-          "description": "ADR 2026-10-07-cos-inbox-thread-conversation D3: the id of the human message this\noperation relays. Accepted only when it is the `role=user` input message of the caller's\nown run in the inbox thread (`kind=inbox`); any other message is 422\n`cos_instruction_invalid`. Recorded in the payload and the audit reason; waives the\nexplicit human_required refusal (the person decided, CoS only relays).",
+          "description": "ADR 2026-10-07-cos-inbox-thread-conversation D3: the id of the human message this\noperation relays. Accepted when it is the `role=user` input message of the caller's own\nrun in a CoS thread, or (ADR 2026-10-27-relayed-instructions D3) a relayed instruction of\nthe same thread that has not expired and whose scope covers the target; any other message\nis 422 `cos_instruction_invalid`. Recorded in the payload (with `decided_by` /\n`executed_by`) and the audit reason; waives the explicit human_required refusal (the\nperson decided, CoS only relays).",
           "type": [
             "string",
             "null"
@@ -32425,6 +32530,9 @@
     "chat_reference_response": {
       "$ref": "#/$defs/ChatReferenceResponse"
     },
+    "chat_relay": {
+      "$ref": "#/$defs/ChatRelayRequest"
+    },
     "chat_resume_queue": {
       "$ref": "#/$defs/ChatResumeQueueRequest"
     },
@@ -33316,6 +33424,7 @@
     "chat_thread_read",
     "chat_thread_patch",
     "chat_post_message",
+    "chat_relay",
     "chat_stop",
     "chat_resume_queue",
     "chat_reference",

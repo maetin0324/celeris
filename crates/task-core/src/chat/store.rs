@@ -31,6 +31,34 @@ pub const CHAT_MESSAGE_PAGE_MAX: u32 = 200;
 pub const CHAT_TITLE_MAX_CHARS: usize = 200;
 /// Idempotency key length limit (client_thread_id / client_message_id).
 pub const CHAT_CLIENT_KEY_MAX_BYTES: usize = 128;
+/// ADR 2026-10-27-relayed-instructions D1: tasks one relayed instruction may name.
+pub const CHAT_RELAY_TASKS_MAX: usize = 20;
+/// ADR 2026-10-27-relayed-instructions D4: unexpired relays handed to a CoS run's prompt.
+pub const CHAT_RELAYS_PROMPT_MAX: usize = 20;
+
+/// ADR 2026-10-27-relayed-instructions D3: `true` when `relay.scope.expires_at` is set and not
+/// after `now` (an unparsable expiry counts as expired: it can never ground an operation).
+pub fn relay_expired(relay: &ChatRelay, now: OffsetDateTime) -> bool {
+    match relay.scope.expires_at.as_deref() {
+        None => false,
+        Some(raw) => parse_rfc3339(raw).is_none_or(|expires| expires <= now),
+    }
+}
+
+fn parse_rfc3339(raw: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(raw, &time::format_description::well_known::Rfc3339).ok()
+}
+
+/// Who posted a `role=user` message and, for a relayed instruction, the relay record
+/// (ADR 2026-10-27-relayed-instructions D1). Decided by the caller's authentication, never by
+/// the request body.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct MessageProvenance {
+    pub author: Option<String>,
+    pub relay: Option<ChatRelay>,
+    /// `console_instruct` receipts (`chat_mcp_reply` resolves them).
+    pub mcp_receipt: bool,
+}
 
 /// Store-level chat error. Each variant maps to one D2 HTTP status (`http_status`).
 #[derive(Debug, thiserror::Error)]
@@ -314,7 +342,7 @@ pub(crate) fn message_raw(row: &Row<'_>) -> rusqlite::Result<MessageRaw> {
 }
 
 /// metadata_json keys used here: `mode`, `interrupt`, `attachment_ids` (ordered), `cards`,
-/// `workspace_files`.
+/// `workspace_files`, `author`, `relay`, `mcp_receipt`.
 /// Other keys (legacy provenance etc.) are preserved and ignored.
 pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatMessage, ChatError> {
     let meta: Value = serde_json::from_str(&r.metadata_json).unwrap_or(Value::Null);
@@ -337,6 +365,14 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         Some(v) => serde_json::from_value(v.clone())?,
         None => Vec::new(),
     };
+    let author = meta
+        .get("author")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let relay: Option<ChatRelay> = match meta.get("relay") {
+        Some(v) if !v.is_null() => Some(serde_json::from_value(v.clone())?),
+        _ => None,
+    };
     Ok(ChatMessage {
         role: enum_from(&r.role)?,
         state: enum_from(&r.state)?,
@@ -350,6 +386,8 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         attachment_ids,
         cards,
         workspace_files,
+        author,
+        relay,
         created_at: r.created_at,
         updated_at: r.updated_at,
     })
@@ -501,11 +539,13 @@ impl SqliteStore {
         thread_id: Option<&str>,
         project_id: Option<&str>,
         text: &str,
+        relay: Option<&ChatRelayRequest>,
         now: OffsetDateTime,
     ) -> Result<ChatMessagePosted, ChatError> {
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
         let at = chat_ts(now);
+        let author = format!("mcp:{client_id}");
         if let Some(project) = project_id {
             let found: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
@@ -536,7 +576,11 @@ impl SqliteStore {
             // ADR 2026-10-22-cos-fixed-threads D2: no new thread per input.
             None => cos_thread_ensure_tx(&tx, project_id, &at)?,
         };
-        let posted = message_post_conn(
+        let relay = match relay {
+            Some(req) => Some(relay_record(&tx, &id, req, &author, now)?),
+            None => None,
+        };
+        let posted = message_post_with(
             &tx,
             &id,
             &ChatPostMessageRequest {
@@ -547,11 +591,12 @@ impl SqliteStore {
                 mode: ChatSendMode::Queue,
                 resume_queue: false,
             },
+            &MessageProvenance {
+                author: Some(author),
+                relay,
+                mcp_receipt: true,
+            },
             now,
-        )?;
-        tx.execute(
-            "UPDATE chat_messages SET metadata_json=json_set(metadata_json,'$.author',?2,'$.mcp_receipt',1) WHERE id=?1",
-            params![posted.response.message.id, format!("mcp:{client_id}")],
         )?;
         tx.commit()?;
         Ok(posted)
@@ -788,6 +833,97 @@ impl SqliteStore {
         let posted = message_post_conn(&tx, thread_id, req, now)?;
         tx.commit()?;
         Ok(posted)
+    }
+
+    /// `chat_message_post` recording the authenticated principal as the message `author`
+    /// (ADR 2026-10-27-relayed-instructions D1; API handlers use this).
+    pub fn chat_message_post_as(
+        &self,
+        thread_id: &str,
+        req: &ChatPostMessageRequest,
+        author: &str,
+        now: OffsetDateTime,
+    ) -> Result<ChatMessagePosted, ChatError> {
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let provenance = MessageProvenance {
+            author: Some(author.to_owned()),
+            ..MessageProvenance::default()
+        };
+        let posted = message_post_with(&tx, thread_id, req, &provenance, now)?;
+        tx.commit()?;
+        Ok(posted)
+    }
+
+    /// ADR 2026-10-27-relayed-instructions D2: post a person's instruction relayed by
+    /// `relayed_by` (an authenticated `operator:<name>` / `mcp:<client_id>`) as a queued
+    /// `role=user` message carrying the relay record. Validation: `said_at` is RFC 3339 and not
+    /// after `now`; `expires_at` is RFC 3339 and after `said_at`; `task_ids` exist and are at
+    /// most `CHAT_RELAY_TASKS_MAX`. The project scope is the thread's project.
+    pub fn chat_relay_post(
+        &self,
+        thread_id: &str,
+        req: &ChatRelayRequest,
+        relayed_by: &str,
+        now: OffsetDateTime,
+    ) -> Result<ChatMessagePosted, ChatError> {
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let relay = relay_record(&tx, thread_id, req, relayed_by, now)?;
+        let posted = message_post_with(
+            &tx,
+            thread_id,
+            &ChatPostMessageRequest {
+                client_message_id: req.client_message_id.clone(),
+                text: req.text.clone(),
+                attachment_ids: Vec::new(),
+                reply_to_id: None,
+                mode: ChatSendMode::Queue,
+                resume_queue: false,
+            },
+            &MessageProvenance {
+                author: Some(relayed_by.to_owned()),
+                relay: Some(relay),
+                mcp_receipt: false,
+            },
+            now,
+        )?;
+        tx.commit()?;
+        Ok(posted)
+    }
+
+    /// ADR 2026-10-27-relayed-instructions D4: the relayed instructions of a thread that have not
+    /// expired at `now`, newest first, at most `CHAT_RELAYS_PROMPT_MAX`.
+    pub fn chat_relayed_instructions(
+        &self,
+        thread_id: &str,
+        now: OffsetDateTime,
+    ) -> Result<Vec<ChatMessage>, ChatError> {
+        read_tx(self, |conn| {
+            thread_require(conn, thread_id)?;
+            let mut stmt = conn.prepare(&format!(
+                "{MESSAGE_SELECT} WHERE thread_id=?1 AND role='user' AND state!='cancelled' \
+                 AND json_type(metadata_json,'$.relay')='object' ORDER BY seq DESC"
+            ))?;
+            let raws = stmt
+                .query_map(params![thread_id], message_raw)?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut out = Vec::new();
+            for raw in raws {
+                let message = message_from_raw(conn, raw)?;
+                let live = message
+                    .relay
+                    .as_ref()
+                    .is_some_and(|relay| !relay_expired(relay, now));
+                if live {
+                    out.push(message);
+                    if out.len() >= CHAT_RELAYS_PROMPT_MAX {
+                        break;
+                    }
+                }
+            }
+            Ok(out)
+        })
     }
 
     /// D2 `GET /chat/threads/{t}/messages`: items in ascending seq, with `snapshot_event_id` read
@@ -1049,6 +1185,97 @@ pub(crate) fn message_post_conn(
     req: &ChatPostMessageRequest,
     now: OffsetDateTime,
 ) -> Result<ChatMessagePosted, ChatError> {
+    message_post_with(tx, thread_id, req, &MessageProvenance::default(), now)
+}
+
+/// ADR 2026-10-27-relayed-instructions D1/D2: builds the relay record of `req` for `thread_id`
+/// inside the write transaction (reference checks included).
+fn relay_record(
+    tx: &Connection,
+    thread_id: &str,
+    req: &ChatRelayRequest,
+    relayed_by: &str,
+    now: OffsetDateTime,
+) -> Result<ChatRelay, ChatError> {
+    let said_at = parse_rfc3339(&req.said_at)
+        .ok_or_else(|| ChatError::Invalid("said_at must be an RFC 3339 time".into()))?;
+    if said_at > now {
+        return Err(ChatError::Invalid(
+            "said_at must not be after the time of the post".into(),
+        ));
+    }
+    if let Some(raw) = req.expires_at.as_deref() {
+        let expires = parse_rfc3339(raw)
+            .ok_or_else(|| ChatError::Invalid("expires_at must be an RFC 3339 time".into()))?;
+        if expires <= said_at {
+            return Err(ChatError::Invalid(
+                "expires_at must be after said_at".into(),
+            ));
+        }
+        if expires <= now {
+            return Err(ChatError::Invalid(
+                "expires_at must be after the time of the post (the relay is already expired)"
+                    .into(),
+            ));
+        }
+    }
+    if req.task_ids.len() > CHAT_RELAY_TASKS_MAX {
+        return Err(ChatError::TooLarge(format!(
+            "{} task_ids (max {CHAT_RELAY_TASKS_MAX})",
+            req.task_ids.len()
+        )));
+    }
+    let thread = thread_require(tx, thread_id)?;
+    let mut seen = std::collections::BTreeSet::new();
+    for task in &req.task_ids {
+        if !seen.insert(task.as_str()) {
+            return Err(ChatError::Invalid(format!("duplicate task id {task}")));
+        }
+        let found: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id=?1)",
+            [task],
+            |r| r.get(0),
+        )?;
+        if !found {
+            return Err(ChatError::Invalid(format!("task {task} not found")));
+        }
+    }
+    if let Some(project) = &thread.project_id {
+        for task in &req.task_ids {
+            let matches: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM tasks WHERE id=?1 AND project_id=?2)",
+                params![task, project],
+                |r| r.get(0),
+            )?;
+            if !matches {
+                return Err(ChatError::Invalid(format!(
+                    "task {task} is outside project {project}"
+                )));
+            }
+        }
+    }
+    Ok(ChatRelay {
+        relayed_by: relayed_by.to_owned(),
+        said_at: chat_ts(said_at),
+        scope: ChatRelayScope {
+            project_id: thread.project_id,
+            task_ids: req.task_ids.clone(),
+            expires_at: req
+                .expires_at
+                .as_deref()
+                .and_then(parse_rfc3339)
+                .map(chat_ts),
+        },
+    })
+}
+
+fn message_post_with(
+    tx: &Connection,
+    thread_id: &str,
+    req: &ChatPostMessageRequest,
+    provenance: &MessageProvenance,
+    now: OffsetDateTime,
+) -> Result<ChatMessagePosted, ChatError> {
     check_key("client_message_id", &req.client_message_id)?;
     if req.text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
         return Err(ChatError::TooLarge(format!(
@@ -1088,6 +1315,7 @@ pub(crate) fn message_post_conn(
             || message.attachment_ids != req.attachment_ids
             || message.reply_to_id != req.reply_to_id
             || !same_mode
+            || message.relay != provenance.relay
         {
             return Err(ChatError::Conflict(format!(
                 "client_message_id {} was used with different content",
@@ -1136,7 +1364,17 @@ pub(crate) fn message_post_conn(
             )));
         }
     }
-    let meta = json!({"mode": mode, "interrupt": interrupt, "attachment_ids": req.attachment_ids});
+    let mut meta =
+        json!({"mode": mode, "interrupt": interrupt, "attachment_ids": req.attachment_ids});
+    if let Some(author) = &provenance.author {
+        meta["author"] = json!(author);
+    }
+    if let Some(relay) = &provenance.relay {
+        meta["relay"] = serde_json::to_value(relay)?;
+    }
+    if provenance.mcp_receipt {
+        meta["mcp_receipt"] = json!(1);
+    }
     let id = insert_message(
         tx,
         NewMessage {

@@ -631,7 +631,8 @@ async fn cos_chat_mcp_new_threads_continuation_and_reply() {
         &server,
         &session,
         "console_instruct",
-        json!({"text":"調査結果をタスクにして\n本文", "project_id":project.id.to_string()}),
+        json!({"text":"調査結果をタスクにして\n本文", "project_id":project.id.to_string(),
+            "relay": {"said_at": "2026-01-01T00:00:00Z"}}),
     )
     .await;
     let thread = first["thread_id"].as_str().unwrap();
@@ -641,6 +642,16 @@ async fn cos_chat_mcp_new_threads_continuation_and_reply() {
     assert_eq!(t.project_id, Some(project.id.to_string()));
     assert_eq!(t.title, format!("CoS: {}", project.title));
     assert_eq!(first["message_id"], first["task_id"]);
+    let relayed = server
+        .store
+        .chat_message_get(thread, first["message_id"].as_str().unwrap())
+        .unwrap();
+    let relay = relayed.relay.expect("MCP relay record");
+    assert_eq!(relayed.author.as_deref(), Some(relay.relayed_by.as_str()));
+    assert!(relay.relayed_by.starts_with("mcp:"));
+    assert_eq!(relay.scope.project_id, Some(project.id.to_string()));
+    assert_eq!(relay.said_at, "2026-01-01T00:00:00.000Z");
+
     assert!(
         server
             .store

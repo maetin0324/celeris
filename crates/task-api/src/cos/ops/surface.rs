@@ -113,6 +113,11 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     (
         "POST",
+        "/api/v1/chat/threads/{t}/relays",
+        "human_instruction_relay: 人の指示の取り次ぎは認証済み外部主体だけが行う。CoS は指示を作れない。",
+    ),
+    (
+        "POST",
         "/api/v1/routing-eval/trials",
         "evaluation_dispatch: 評価試行の投入は評価 dispatcher 専用の運用操作。",
     ),

@@ -71,10 +71,35 @@ pub struct CosChatContext {
     /// when this run is in the inbox thread. Empty in every other thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inbox_items: Vec<CosChatInboxItem>,
+    /// ADR 2026-10-27-relayed-instructions D4: the person's instructions relayed into this thread
+    /// by an external operator or an MCP client that have not expired (newest first, at most 20).
+    /// Any run of the thread may cite one as `instructed_by` while it is in scope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relayed_instructions: Vec<CosChatRelayedInstruction>,
     /// ADR 2026-10-27-project-brief D5: the project summaries. Every non-archived project in the
     /// general CoS thread, the thread's own project in a project CoS thread, empty otherwise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<CosChatProjectSummary>,
+}
+
+/// One relayed instruction of the thread (ADR 2026-10-27-relayed-instructions D1/D4). `text` is the
+/// person's own words; `relayed_by` is the principal that carried them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CosChatRelayedInstruction {
+    /// `chat_messages.id` (the value for `instructed_by`).
+    pub message_id: String,
+    pub seq: i64,
+    pub text: String,
+    /// `operator:<name>` / `mcp:<client_id>`.
+    pub relayed_by: String,
+    /// RFC 3339: when the person said it.
+    pub said_at: String,
+    /// Tasks the instruction applies to; empty = the whole project / thread.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_ids: Vec<String>,
+    /// RFC 3339 expiry; absent = no expiry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
 }
 
 /// One project as summarized for a CoS chat run (ADR 2026-10-27-project-brief D5). Details are read

@@ -31,6 +31,24 @@ pub struct InstructArgs {
     pub project_id: Option<String>,
     #[serde(default)]
     pub thread_id: Option<String>,
+    /// ADR 2026-10-27-relayed-instructions D2: present when `text` is a person's instruction
+    /// (verbatim) that this client relays. The relaying principal is `mcp:<client_id>`.
+    #[serde(default)]
+    pub relay: Option<RelayArgs>,
+}
+
+/// The relay record of a `console_instruct` input (ADR 2026-10-27-relayed-instructions D1).
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RelayArgs {
+    /// RFC 3339: when the person said it (not after now).
+    pub said_at: String,
+    /// Tasks the instruction applies to (must exist; empty = the whole project / thread).
+    #[serde(default)]
+    pub task_ids: Vec<String>,
+    /// RFC 3339: optional expiry (after `said_at`).
+    #[serde(default)]
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -58,6 +76,16 @@ async fn instruct_impl(
         None => None,
     };
     let client_id = client.id.clone();
+    let relay = args
+        .relay
+        .as_ref()
+        .map(|relay| task_core::chat::ChatRelayRequest {
+            client_message_id: String::new(),
+            text: args.text.clone(),
+            said_at: relay.said_at.clone(),
+            task_ids: relay.task_ids.clone(),
+            expires_at: relay.expires_at.clone(),
+        });
     let posted = state
         .blocking(move |store| {
             store.chat_mcp_instruct(
@@ -65,6 +93,7 @@ async fn instruct_impl(
                 args.thread_id.as_deref(),
                 project_id.map(|p| p.to_string()).as_deref(),
                 &args.text,
+                relay.as_ref(),
                 time::OffsetDateTime::now_utc(),
             )
         })
@@ -89,7 +118,7 @@ fn instruct_call<'a>(
 pub fn instruct_def() -> ToolDef {
     ToolDef {
         name: "console_instruct",
-        description: "新しい CoS 会話を作って発言を積む。thread_id 指定で続ける（author は mcp:<client_id>）。",
+        description: "新しい CoS 会話を作って発言を積む。thread_id 指定で続ける（author は mcp:<client_id>）。relay を付けると、人の発言の原文を取り次いだ記録（said_at・task_ids・expires_at）になり、CoS が instructed_by の根拠に使える。",
         scope: task_core::McpScope::ConsoleInstruct,
         input_schema: schema::<InstructArgs>,
         call: instruct_call,

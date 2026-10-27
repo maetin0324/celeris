@@ -669,10 +669,12 @@ export type ChatEventType = "message" | "text_delta" | "status" | "tool" | "run"
 
 export type ChatMessage = {
   "attachment_ids": Array<string>;
+  "author"?: string | null;
   "cards": Array<ChatCard>;
   "client_message_id"?: string | null;
   "created_at": string;
   "id": string;
+  "relay"?: ChatRelay | null;
   "reply_to_id"?: string | null;
   "role": ChatMessageRole;
   "run_id"?: string | null;
@@ -749,6 +751,26 @@ export type ChatReferenceResponse = {
   "attachment_id": string;
   "owner_id": string;
   "owner_kind": ChatReferenceOwnerKind;
+};
+
+export type ChatRelay = {
+  "relayed_by": string;
+  "said_at": string;
+  "scope": ChatRelayScope;
+};
+
+export type ChatRelayRequest = {
+  "client_message_id": string;
+  "expires_at"?: string | null;
+  "said_at": string;
+  "task_ids"?: Array<string>;
+  "text": string;
+};
+
+export type ChatRelayScope = {
+  "expires_at"?: string | null;
+  "project_id"?: string | null;
+  "task_ids"?: Array<string>;
 };
 
 export type ChatResumeQueueRequest = {

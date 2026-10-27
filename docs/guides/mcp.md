@@ -170,7 +170,7 @@ token: <64+ 文字の値。この 1 回しか出ない>
     `Event::ApprovalDecided.by` に `mcp:<client_id>` が入る）。
   - `task_reject { id, reason }`（scope `tasks:decide`。`POST /tasks/{id}/reject` と同じ。`reason` は
     必須・空白不可。`by` は `mcp:<client_id>`）。
-- **CoS チャット**: `console_instruct { text, project_id?, thread_id? }`。`thread_id` を省略すると
+- **CoS チャット**: `console_instruct { text, project_id?, thread_id?, relay? }`。`thread_id` を省略すると
   呼び出しごとに通常の会話（`kind=human`）を作る。題名は `<client_id>: <本文の先頭行、最大60文字>`、
   発言の metadata の `author` は `mcp:<client_id>`。`project_id` はスレッドに保持する。
   続きは返値の `thread_id` を指定する。存在しない・archived・legacy のスレッド、またはスレッドと異なる
@@ -380,3 +380,12 @@ $ celeris-chat task_comment '{"id":"<task ulid>","text":"見ました。続け�
 この口は使わない（`chatgpt-rdc` から `18201` を直接叩けてしまうと、§8.2 で絞った scope を素通りして
 `chatgpt`（Secure MCP tunnel 用）のクライアントとして振る舞えてしまう）。RDC 経由は必ず `auth =
 "token"` の口（§2 の 18200）と、§8.2 で絞った専用クライアント（`chatgpt-rdc`）のトークンを使うこと。
+
+### 人の指示の取り次ぎ
+
+利用者が MCP client に伝えた指示は `console_instruct` の `text` に原文を書き、
+`relay: {"said_at":"2026-10-27T04:00:00Z","task_ids":["<task id>"],"expires_at":"2026-10-28T00:00:00Z"}` を付ける。
+時刻は実際の発言時刻、task と期限は利用者が指定した範囲に合わせる（省略すると案件全体・期限なし）。
+`project_id` または `thread_id` で対象の固定スレッドを指定する。
+投稿主体は認証済み client の `mcp:<client_id>`。CoS は返値の `message_id` を `instructed_by` として参照できる。
+自分の判断は人の指示として取り次がない。範囲と監査の詳細は[取り次ぎ ADR](../../agent-docs/adr/2026-10-27-relayed-instructions.md)。

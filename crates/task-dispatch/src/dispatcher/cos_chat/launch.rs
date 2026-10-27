@@ -484,9 +484,29 @@ impl CosChatLaunch {
             }
         }
 
+        // ADR 2026-10-27-relayed-instructions D4: the unexpired relays of the thread.
+        let relayed_instructions = self
+            .store
+            .chat_relayed_instructions(thread_id, now)
+            .map_err(|e| format!("relayed instructions unavailable: {e}"))?
+            .into_iter()
+            .filter_map(|message| {
+                let relay = message.relay?;
+                Some(task_worker::protocol::CosChatRelayedInstruction {
+                    message_id: message.id,
+                    seq: i64::try_from(message.seq).unwrap_or(i64::MAX),
+                    text: message.text,
+                    relayed_by: relay.relayed_by,
+                    said_at: relay.said_at,
+                    task_ids: relay.scope.task_ids,
+                    expires_at: relay.scope.expires_at,
+                })
+            })
+            .collect();
         let chat = CosChatContext {
             thread_id: thread_id.to_string(),
             run_id: run_id.to_owned(),
+            relayed_instructions,
             inputs: vec![CosChatInput {
                 id: input.id.clone(),
                 seq: input.seq as i64,

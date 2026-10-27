@@ -75,6 +75,7 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | POST | `/browser/trusted-devices` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/browser/trusted-devices/verify` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | DELETE | `/browser/trusted-devices/{id}` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
+| POST | `/chat/threads/{t}/relays` | `human_instruction_relay` | 人の指示の取り次ぎは認証済み外部主体だけが行う。CoS は指示を作れない。 |
 | POST | `/console/instruct` | `console_instruction_chain` | 人の決定 daemon-wide=no-console。別の指示経路へ入り監査の鎖が二重になる。 |
 | POST | `/cos/inbox/{i}/resolve` | `recursive_cos` | 既存の再帰禁止。操作 envelope 内から CoS 制御 API を呼ばない。override は人の取消・差し戻し専用。 |
 | POST | `/cos/operations` | `recursive_cos` | 既存の再帰禁止。操作 envelope 内から CoS 制御 API を呼ばない。override は人の取消・差し戻し専用。 |
@@ -277,6 +278,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/chat/threads/{t}/read` | A | `chat/mod.rs` | 共通 |
 | POST | `/chat/threads/{t}/resume-queue` | A | `chat/mod.rs` | 共通 |
 | POST | `/chat/threads/{t}/stop` | A | `chat/mod.rs` | 共通 |
+| POST | `/chat/threads/{t}/relays` | X: `human_instruction_relay` | `chat/mod.rs` | router のみ |
 | POST | `/console/instruct` | X: `console_instruction_chain` | `console.rs` | 共通 |
 | POST | `/cos/inbox/{i}/resolve` | X: `recursive_cos` | `cos/inbox.rs` | 共通 |
 | POST | `/cos/operations` | X: `recursive_cos` | `cos/operations.rs` | 共通 |

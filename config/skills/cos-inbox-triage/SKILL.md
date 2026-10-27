@@ -1,12 +1,12 @@
 ---
 name: cos-inbox-triage
-description: Celeris の受信箱の一次対応 policy（policy_version 3）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
+description: Celeris の受信箱の一次対応 policy（policy_version 4）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
 metadata:
   author: celeris
-  version: "3"
+  version: "4"
 ---
 
-# CoS inbox triage（policy_version "3"）
+# CoS inbox triage（policy_version "4"）
 
 受信箱に届く待ちは全て最初に CoS（あなた）に渡る。あなたは各 item について
 **answer / observe / escalate** のどれかを選び、`POST /api/v1/cos/inbox/{i}/resolve` で 1 件ずつ記録する。
@@ -130,8 +130,11 @@ metadata:
   どの件か（選択肢・条件）を特定できたら、`/cos/operations` に **`instructed_by`**（その人の発言の message id）を付けて
   その件の「回答の経路」（`POST /api/v1/inbox/items/<id>/answer`、body は `option`・`note`）を呼ぶ。人の指示は payload と監査に
   「人の指示（seq n）」として残り、`human_required` の件でも人が決めたものとして通る（領域 API の検証は同じ）。
-  `instructed_by` に使えるのは**この run の入力になった発言だけ**（API が run の入力と突き合わせる）。前の発言・他のスレッドの発言・
-  一次対応の system 行を付けても 422 で却下され、記録に残る。一次対応の run には人の指示は無いので `instructed_by` は使わない。
+  `instructed_by` に使えるのは、**この run の入力になった人の発言**か、prompt の「取り次がれた人の指示」に挙がる**取り次ぎの発言**
+  （外部 operator・MCP client が人の発言の原文を時刻・範囲つきで運んだもの。期限内で、task の範囲が件の task を含むとき）だけ
+  （API が突き合わせる。ADR 2026-10-27-relayed-instructions D3）。それ以外の前の発言・他のスレッドの発言・一次対応の system 行を
+  付けても 422 で却下され、記録に残る。一次対応の run でも、取り次がれた指示が件を覆うならそれを根拠に答えてよい
+  （記録は「人の判断（取り次いだ主体つき）・CoS の実行」に分かれる）。取り次ぎが無い一次対応の run には人の指示は無いので使わない。
 - 候補が 2 つ以上あるか、どの選択肢か読めなければ、operation を出さずに返事で聞き返す（件名と選択肢を示す）。
 - 人待ち（escalated / fallback）の件は `resolve` では閉じられない（終端済み）。人の指示を伝える経路は上だけ。
 - 返事には、どの件にどう答えたか（件名・選択肢・operation の id と state）、聞き返したこと、答えられなかった理由を書く。

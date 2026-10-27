@@ -29,6 +29,17 @@ tasks: [01M5XXF7QP63BMV6AS0WNDW01N]
 - API 履歴と環境変数伝搬、CoS の actor・理由・方針・操作参照は Rust 回帰試験で検証。
 - 本番配備、release gate、全 workspace の一括試験は実行していない。
 
+## main の取り込み
+
+- `Merge branch 'main' into celeris/01M5XXF7QP63BMV6AS0WNDW01N` — main の `selfdeploy: credentiald の切り替えで旧を disable、新を enable する` を取り込んだ。衝突は scripts/selfdeploy/tests/credentiald_switch.sh の K の検査 1 か所だけで、main の `cred_final`（is-active / is-enabled）と本 branch の `audit_matches` の両方を残した。ヘッダの注記（F、G・I・K の enable 状態、H/J/K の audit）と `SD_ACTOR`/`SD_REASON`/`SD_POLICY_REF` の export は自動で両方入った。lib.sh の `sd_switch_credentiald`（stop 旧→disable 旧→reset-failed 新→start 新→enable 新）は promote.sh・rollback.sh の記録後に呼ばれる位置のままで、disable/enable の失敗も exit 3 で audit は succeeded のまま。コード修正は不要だった。
+- 証拠（統合後の HEAD で実行）:
+  - `git merge-tree --write-tree main HEAD` → exit 0、`git merge-base --is-ancestor main HEAD` → 0。
+  - `bash scripts/selfdeploy/tests/credentiald_switch.sh` → exit 0、30 件 ok（G・I・K の cred_final、H・J・K の audit_matches を含む）。
+  - `bash scripts/selfdeploy/tests/promote_authorization_marker.sh` → exit 0、71 件 ok。
+  - `bash scripts/selfdeploy/tests/promote_live_abort.sh` → exit 0、39 件 ok。
+  - `bash scripts/dev/test-affected.sh`（基準 git merge-base HEAD main）→ exit 0。nextest 4638 passed / 20 skipped、Vitest 682、Node 98、health 検査すべて ok。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+
 ## 本番への移行
 
 本番変更は未実行。人が初回の昇格で本変更の promote.sh を使用し、`SD_ACTOR`（D2 の kind。人は `human`、外部 operator は `external_operator:<name>`）/ `SD_REASON` / `SD_POLICY_REF` を実際の実行者・理由・承認参照で設定する。以降の CLI rollback も同じ必須値を渡す。既存の配備記録は保持する。

@@ -126,7 +126,8 @@ enum Command {
     Reject(RejectArgs),
     Cancel(CancelArgs),
     /// ADR-0051 / ADR-0054 Phase 113 D3: 既存成果を再判定する（新しい実装runは起こさない）。
-    /// `done`、または直前の遷移が `review_fail` だった `failed` からだけ。
+    /// `done`、または直前の遷移が `review_fail` だった `failed` からだけ。reviewing で再同期が上限で
+    /// 止まっている task は reviewer 条件・support task を問わず遷移なしで再開する。
     Rereview(RereviewArgs),
     /// ADR-0070 D2（Phase 116）: `failed`/`cancelled` を複製してやり直す（attempts は常に 0 から）。
     Retry(RetryArgs),

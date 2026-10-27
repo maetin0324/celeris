@@ -10,7 +10,7 @@
 - 改訂: 2026-10-27（ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D1〜D5）— **追加。v1 のまま**。
   `DaemonSnapshot.review_resync_halted[]`（`task_id`・`repo_id`・`reviewed_sha`・`target_sha`・`resyncs`・`at`）、`Inbox.attention[]` に
   type `review_resync_halted`、受信箱の kind `review_resync_halted`（選択肢 `rereview` → `POST /tasks/{id}/rereview`）を足した。
-  `POST /tasks/{id}/rereview` は reviewing で再同期が上限で止まっている task も受け付け、遷移せず event `review_resync_resumed`
+  `POST /tasks/{id}/rereview` は reviewing で再同期が上限で止まっている task も受け付け（reviewer 条件の有無・support task を問わない）、遷移せず event `review_resync_resumed`
   （`reason: human`）を残す（応答の `reason` は `review_resync_resumed`、`from`/`to` は `reviewing`）。task の event に
   `reviewer_passed`・`reviewer_pass_reused`・`review_resync_halted`・`review_resync_resumed` を足した。
 - 改訂: 2026-10-23（ADR 2026-10-23-stage-order-and-plan-stall D3〜D5）— **追加。v1 のまま**。`TaskWait` に kind `plan_stalled`（`stage`・`unit_keys`・`detail`）、
@@ -3234,7 +3234,9 @@ continuation が各設定閾値（既定はともに 2、超過は 3 回目）�
 
 省略可能な `ReopenBody.expected_status` を受け付ける。reviewer 条件を持つ通常の task の
 最終レビューをやり直す。`failed` の場合は直前の実装 run が成功し、最終レビューの不合格だけが
-失敗の理由である必要がある。不明な task は 404、状態競合は 409、対象外は 422。
+失敗の理由である必要がある。例外として、reviewing で再同期が上限で止まっている task は reviewer 条件の有無・
+support task を問わず受け付け、遷移せずに event `review_resync_resumed` を残す
+（ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4）。不明な task は 404、状態競合は 409、対象外は 422。
 
 #### 3.126.3 `PUT /clusters/{id}/settings` → 200 `ClusterSettingsView`（管理系）
 
@@ -3885,7 +3887,7 @@ KB の取り込み待ち（`GET /knowledge/inbox` の候補）は `GET /api/v1/i
 
 `actions(task)`: `approve`: `status == draft` または `kind == approval && status == ready`。`reject`: `kind == approval && status == ready`。`answer`: `status == blocked`。`cancel`: 非終端。`retry`（§3.63）: `status == failed` または `cancelled`。`edit`（ADR-0044 D1。§3.74）: 非終端。`reopen`（ADR-0044 D2。§3.77）: `status == done` または `failed`（`cancelled` には付かない）。
 
-`actions_with_events(task, events)` は上に events が要る 3 つを足す: `rereview`（`done`、または直前の遷移が `review_fail` の `failed`。ADR-0070 D2）、`phase_gate`（`blocked(awaiting_human)`。ADR-0074 D2.4）、`plan_gate`（`blocked(awaiting_plan_approval)`。ADR-0079 D8）。後の 2 つのときは `answer` を出さない。
+`actions_with_events(task, events)` は上に events が要る 3 つを足す: `rereview`（`done`、または直前の遷移が `review_fail` の `failed`。ADR-0070 D2。加えて再同期の上限で止まった `reviewing`。reviewer 条件・support task を問わない）、`phase_gate`（`blocked(awaiting_human)`。ADR-0074 D2.4）、`plan_gate`（`blocked(awaiting_plan_approval)`。ADR-0079 D8）。後の 2 つのときは `answer` を出さない。
 
 `TaskDetail.actions` と受信箱の `attention[]` の `task.actions` は `actions_with_events`、`TaskRef` / `TaskSummary` の `actions` は `actions(task)`（ADR-0015 D4）。GUI は `actions` を見るだけでよい。一括承認の API は無い（GUI が 1 件ずつ `POST /tasks/{id}/approve` を呼ぶ。原子性は無い）。
 
@@ -4019,7 +4021,8 @@ review_run, worker_run, criterion_idx, decision, detail, release, prepare_pid, n
 既存 `/releases/{sha12}/promote` だけが人のデプロイ操作を受け付ける。
 
 管理系 `POST /tasks/{id}/rereview` は `ReopenBody {expected_status?}` を受け取り（不一致は 409）、
-Reviewer条件がある `done` の仕事、または直前の遷移が `review_fail` の `failed` を reviewing へ戻す（それ以外は 422）。返却は `TransitionResult`。
+Reviewer条件がある `done` の仕事、または直前の遷移が `review_fail` の `failed` を reviewing へ戻す。reviewing で再同期が上限で止まっている task は
+reviewer 条件・support task を問わず遷移なしで再開する（それ以外は 422）。返却は `TransitionResult`。
 実装runは再実行せず、既存成果のレビューを再実行する。認証、404 は他の管理操作と同じ。
 
 ### タスクの routing の監査（ADR-0069 D5）

@@ -353,22 +353,27 @@ pub fn review_fail_is_the_only_reason_for_failure(events: &[(u64, Event)]) -> bo
 /// （純粋関数）。一覧・受信箱・タスク詳細が「再レビュー」ボタンを出してよいかを判定するのに使う
 /// （`rereview` 自身の詳細なエラー文言はここでは作らない。二重実装を避けるため、条件は
 /// `rereview` と同じものをここに集約した）。
+///
+/// 同 ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4 付記: reviewing で再同期の上限に
+/// 止めている task の再開は、reviewer 条件・support task を問わず許す（停止はすべての reviewing task に
+/// 掛かるため）。Done/Failed からの再判定は [`rereviewable_kind`] の task だけ。
 pub fn can_rereview(task: &task_core::Task, events: &[(u64, Event)]) -> bool {
-    if !task
-        .acceptance
-        .iter()
-        .any(|c| matches!(c.check, task_core::Check::Reviewer))
-        || task_core::support_kind(task).is_some()
-    {
-        return false;
-    }
     match task.status {
-        Status::Done => true,
-        Status::Failed => review_fail_is_the_only_reason_for_failure(events),
-        // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4: 再同期の上限で止めている review の再開。
         Status::Reviewing => resync_halted_event(events).is_some(),
+        Status::Done => rereviewable_kind(task),
+        Status::Failed => {
+            rereviewable_kind(task) && review_fail_is_the_only_reason_for_failure(events)
+        }
         _ => false,
     }
+}
+
+/// Done/Failed からの再判定の対象: reviewer 条件を持つ通常 task（support task は除く）。
+fn rereviewable_kind(task: &task_core::Task) -> bool {
+    task.acceptance
+        .iter()
+        .any(|c| matches!(c.check, task_core::Check::Reviewer))
+        && task_core::support_kind(task).is_none()
 }
 
 /// 同 ADR D4: 止めている `ReviewResyncHalted`（直近の遷移・再開より後のもの）。
@@ -407,16 +412,7 @@ pub fn rereview(
             actual: task.status,
         });
     }
-    if !task
-        .acceptance
-        .iter()
-        .any(|c| matches!(c.check, task_core::Check::Reviewer))
-        || task_core::support_kind(&task).is_some()
-    {
-        return Err(OpsError::Validation(
-            "reviewer条件を持つ通常タスクだけを再レビューできます".into(),
-        ));
-    }
+    // 同 ADR D4 付記: reviewing の停止の再開は reviewer 条件・support task を問わない。
     if task.status == Status::Reviewing {
         let events = store.events_for(id)?;
         let Some(resume) = review_resync_resume_event(&events) else {
@@ -433,6 +429,12 @@ pub fn rereview(
             reason: "review_resync_resumed".into(),
             cascaded: Vec::new(),
         });
+    }
+    if !rereviewable_kind(&task) {
+        return Err(OpsError::Validation(
+            "reviewer条件を持つ通常タスクだけを再レビューできます（reviewing で再同期が止まっている場合を除く）"
+                .into(),
+        ));
     }
     if task.status == Status::Failed {
         let events = store.events_for(id)?;

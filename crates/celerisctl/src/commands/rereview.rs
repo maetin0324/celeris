@@ -1,8 +1,9 @@
 //! `celerisctl rereview` — ADR-0051 / ADR-0054 Phase 113 D3。
 //!
 //! 引数解析・`task_ops::comment::rereview` の呼び出し・出力整形だけをここで行う（`cancel.rs` と同じ
-//! 形）。判断と検証は `task_ops::comment::rereview`（`Reviewer` 条件を持つ通常タスクだけ。`failed` は
-//! 直前の遷移が `review_fail` のときだけ）に移した。新しい実装 run は起こさない（既存成果を
+//! 形）。判断と検証は `task_ops::comment::rereview`（`done`/`failed` は `Reviewer` 条件を持つ通常タスクだけ。
+//! `failed` は直前の遷移が `review_fail` のときだけ。reviewing で再同期が上限で止まっている task は
+//! reviewer 条件・support task を問わず遷移なしで再開する）に移した。新しい実装 run は起こさない（既存成果を
 //! 部署のレビュアーで再判定するだけ）。
 
 use std::process::ExitCode;

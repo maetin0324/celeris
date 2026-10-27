@@ -224,6 +224,71 @@ async fn cos_ops_mutations_task_rereview() {
     );
 }
 
+/// 同 ADR D4 付記: reviewer 条件の無い（決定的 check だけの）task も、reviewing で再同期が止まっていれば
+/// 人の `POST /tasks/{id}/rereview` で再開できる（2xx、遷移なし）。task 詳細の操作にも `rereview` が出る。
+#[tokio::test]
+async fn task_rereview_resumes_a_halted_review_without_a_reviewer_criterion() {
+    let env = admin_env();
+    let app = env.router();
+    let mut task = new_task(TaskKind::Execute, Status::Reviewing);
+    task.acceptance = vec![Criterion {
+        text: "tests pass".into(),
+        check: Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+    }];
+    env.seed(&task);
+    env.store
+        .append_event(
+            task.id,
+            &Event::ReviewResyncHalted {
+                review_run: "review-1".into(),
+                repo_id: task_core::RepoId::new(),
+                reviewed_sha: "a".repeat(40),
+                target_sha: "b".repeat(40),
+                resyncs: 3,
+            },
+        )
+        .expect("halt");
+    let detail = send(&app, get_admin(&format!("/api/v1/tasks/{}", task.id))).await;
+    assert_eq!(detail.status.as_u16(), 200, "{}", detail.text());
+    assert!(
+        detail.json()["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .any(|a| a == "rereview"),
+        "{}",
+        detail.text()
+    );
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/rereview", task.id),
+            &json!({"expected_status":"reviewing"}),
+        ),
+    )
+    .await;
+    assert!(resp.status.is_success(), "{} {}", resp.status, resp.text());
+    assert_eq!(resp.json()["reason"], "review_resync_resumed");
+    assert_eq!(
+        env.store.get(task.id).expect("task").expect("row").status,
+        Status::Reviewing
+    );
+    let events: Vec<Event> = env
+        .store
+        .events_for(task.id)
+        .expect("events")
+        .into_iter()
+        .map(|(_, e)| e)
+        .collect();
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::ReviewResyncResumed { reason, .. } if reason == "human"
+    )));
+}
+
 /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4: reviewing で再同期が上限で止まっている task の
 /// `rereview` は遷移せず `ReviewResyncResumed{human}` を残す（受信箱の `review_resync_halted` が委ねる操作）。
 #[tokio::test]

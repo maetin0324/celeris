@@ -827,8 +827,9 @@ pub enum Action {
     /// `done` / `failed` だけ。`cancelled` は worktree を消してあるので `Retry` を使う）。
     Reopen,
     /// ADR-0070 D2（Phase 116）: 既存成果の再判定（`POST /tasks/{id}/rereview`。ADR-0051 /
-    /// ADR-0054 Phase 113 D3）。`done`、または直前の遷移が `review_fail` だった `failed` だけ
-    /// （`task_ops::comment::can_rereview` と同じ規則。events を要るので `actions(task)` 単体では
+    /// ADR-0054 Phase 113 D3）。`done`、または直前の遷移が `review_fail` だった `failed` だけ。加えて
+    /// 再同期の上限で止めている `reviewing` の再開（ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse
+    /// D4。reviewer 条件・support task を問わない）（`task_ops::comment::can_rereview` と同じ規則。events を要るので `actions(task)` 単体では
     /// 判定できず、`task_detail` / 受信箱の `build_attention` が events を渡して個別に足す）。
     Rereview,
     /// ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認に応える（`POST /tasks/{id}/execution/

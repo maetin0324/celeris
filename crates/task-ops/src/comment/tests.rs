@@ -397,3 +397,77 @@ fn a_comment_records_its_principal_kind_and_the_answer_carries_the_principal() {
         assert_eq!(result.effect, CommentEffect::Interrupted, "{actor}");
     }
 }
+
+fn halt_event() -> Event {
+    Event::ReviewResyncHalted {
+        review_run: "review-1".into(),
+        repo_id: task_core::RepoId::new(),
+        reviewed_sha: "a".repeat(40),
+        target_sha: "b".repeat(40),
+        resyncs: 3,
+    }
+}
+
+/// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4 付記: 再同期の上限で止めた reviewing は、
+/// reviewer 条件の無い task（決定的 check だけ）も support task も rereview で再開できる（遷移しない）。
+#[test]
+fn a_halted_review_resumes_without_a_reviewer_criterion_or_for_a_support_task() {
+    let mut plain = sample_task(Status::Reviewing);
+    plain.acceptance[0].check = Check::Command {
+        cmd: "true".into(),
+        expect_exit: 0,
+    };
+    let mut support = sample_task(Status::Reviewing);
+    support.acceptance[0].check = Check::Reviewer;
+    support.role = Some("doc-gardener".into());
+    assert!(task_core::support_kind(&support).is_some());
+    for task in [plain, support] {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.insert(&task).unwrap();
+        assert!(!can_rereview(&task, &store.events_for(task.id).unwrap()));
+        store.append_event(task.id, &halt_event()).unwrap();
+        let halted = store.events_for(task.id).unwrap();
+        assert!(can_rereview(&task, &halted));
+        assert!(
+            crate::view::actions_with_events(&task, &halted)
+                .contains(&crate::view::Action::Rereview)
+        );
+        let result = rereview(&store, task.id, Some(Status::Reviewing)).unwrap();
+        assert_eq!(result.to, Status::Reviewing);
+        assert_eq!(result.reason, "review_resync_resumed");
+        let events = store.events_for(task.id).unwrap();
+        assert!(matches!(
+            events.last().map(|(_, e)| e),
+            Some(Event::ReviewResyncResumed { reason, .. }) if reason == "human"
+        ));
+        assert!(!can_rereview(&task, &events));
+        let err = rereview(&store, task.id, None).unwrap_err();
+        assert!(matches!(err, OpsError::Validation(_)), "{err:?}");
+        assert_eq!(
+            store.get(task.id).unwrap().unwrap().status,
+            Status::Reviewing
+        );
+    }
+}
+
+/// 同 D4 付記: Done/Failed からの再判定の制限は変わらない（reviewer 条件の無い task・support task は拒否）。
+#[test]
+fn done_rereview_still_requires_a_reviewer_criterion_on_a_normal_task() {
+    let mut plain = sample_task(Status::Done);
+    plain.acceptance[0].check = Check::Command {
+        cmd: "true".into(),
+        expect_exit: 0,
+    };
+    let mut support = sample_task(Status::Done);
+    support.acceptance[0].check = Check::Reviewer;
+    support.role = Some("doc-gardener".into());
+    for task in [plain, support] {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.insert(&task).unwrap();
+        store.append_event(task.id, &halt_event()).unwrap();
+        assert!(!can_rereview(&task, &store.events_for(task.id).unwrap()));
+        let err = rereview(&store, task.id, None).unwrap_err();
+        assert!(matches!(err, OpsError::Validation(_)), "{err:?}");
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    }
+}

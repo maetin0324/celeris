@@ -859,6 +859,94 @@ async fn pre_review_sync_halted_review_resumes_when_target_is_quiet() {
     assert_eq!(store.get(task.id).unwrap().unwrap().attempts, task.attempts);
 }
 
+/// 同 ADR D4 付記: reviewer 条件の無い（決定的 check だけの）task も上限で止まり、人の `rereview` で再開できる。
+/// 再開後は決定的 check を新しい target で再実行し、target が静かなら Done へ進む。
+#[tokio::test]
+async fn pre_review_sync_halted_without_reviewer_resumes_by_rereview_and_lands() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let flag = tempfile::tempdir().unwrap();
+    let quiet = flag.path().join("quiet");
+    let runs = flag.path().join("runs");
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = reviewing_task(repo.path(), &store);
+    // `quiet` が無い間は検査のたびに main を進める（並列の取り込みが続いている）。
+    set_check(
+        &mut task,
+        format!(
+            "echo x >> {r}; test -e {q} || git update-ref refs/heads/main \"$(git commit-tree 'HEAD^{{tree}}' -p HEAD -m bump)\"",
+            r = runs.display(),
+            q = quiet.display()
+        ),
+    );
+    assert!(
+        !task
+            .acceptance
+            .iter()
+            .any(|c| matches!(c.check, Check::Reviewer))
+    );
+    store.insert(&task).unwrap();
+    let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
+    let wt = d.local_worktree_for(&task).unwrap();
+    wt.ensure_blocking().unwrap();
+    commit_file(&wt.dir, "task.txt", "task\n");
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    run_until_idle(&mut d, 100).await;
+    assert_eq!(
+        store.get(task.id).unwrap().unwrap().status,
+        Status::Reviewing
+    );
+    assert_eq!(
+        events_of(&store, &task)
+            .iter()
+            .filter(|e| matches!(e, Event::ReviewResyncHalted { .. }))
+            .count(),
+        1
+    );
+    assert!(d.review_resync_halted.contains_key(&task.id));
+    let halted_runs = std::fs::read_to_string(&runs).unwrap().lines().count();
+    // 他の取り込みが止んだ。人が受信箱から rereview（reviewer 条件が無くても 422 にしない）。
+    std::fs::write(&quiet, "").unwrap();
+    let all = store.events_for(task.id).unwrap();
+    assert!(task_ops::comment::can_rereview(&task, &all));
+    let result =
+        task_ops::comment::rereview(store.as_ref(), task.id, Some(Status::Reviewing)).unwrap();
+    assert_eq!(result.reason, "review_resync_resumed");
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    assert!(run_until_idle(&mut d, 200).await.idle);
+    let done = store.get(task.id).unwrap().unwrap();
+    assert_eq!(done.status, Status::Done);
+    assert_eq!(done.attempts, task.attempts);
+    let events = events_of(&store, &task);
+    assert!(no_review_fail(&events));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::ReviewResyncResumed { reason, .. } if reason == "human"
+    )));
+    // 決定的 check を再開後にもう一度実行した。
+    assert!(std::fs::read_to_string(&runs).unwrap().lines().count() > halted_runs);
+    // 最後の同期は再開時点の main（止んだ後の target）へ。
+    let synced_target = events
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            Event::ReviewTargetSynced { target_sha, .. } => Some(target_sha.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        synced_target,
+        git_out(repo.path(), &["rev-parse", "refs/heads/main"])
+    );
+}
+
 /// `TaskKind::Review` の run を数え、合格の `review.json` を書く reviewer アダプタ。
 struct CountingReviewer {
     reviews: Arc<StdMutex<u32>>,

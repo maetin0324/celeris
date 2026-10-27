@@ -53,6 +53,12 @@ stale の数が `MAX_TARGET_RESYNCS` を超えたら、`WorkerProgress` の印�
   `[review] resync_quiet_secs`（既定 900）以上古ければ「他の取り込みが止んだ」とみなし
   `ReviewResyncResumed { reason: "target_quiet" }` を残して再開する。
 - stale の数は `ReviewResyncResumed` でも 0 に戻す（`pre_review_stale_state`・`target_restale_count`）。
+- 付記（2026-10-27、final review の差し戻し）: 停止（D3）は reviewer 条件の有無に関係なくすべての reviewing task に
+  掛かる。そのため再開の対象もすべての reviewing task とする。`task_ops::comment::can_rereview` と `rereview` は、
+  status が reviewing で停止中なら reviewer 条件（`Check::Reviewer`）と support task（`task_core::support_kind`）の
+  制限を見ずに再開を許す。決定的 check だけの task・support task も、受信箱 `review_resync_halted` の `rereview`・
+  `POST /tasks/{id}/rereview`・task 詳細の操作で再開できる。`done`/`failed` からの再判定は従来どおり reviewer 条件を
+  持つ通常 task だけ。
 
 ### D5. root delivery の上限の Blocked を消す
 

@@ -16,9 +16,10 @@ tasks: [01M5ZA2NP31AVVKQ9F4T3A52VB]
   `terminal_session_events`（migration 0098。0097 は別 branch の `comment_author_kinds` が使うので予約）、web gateway の
   `/terminal/ws`・`/terminal/step-up`・`/terminal/status`、`/api/terminals` の中継の拒否、xterm.js の画面、CoS ops の除外表。
 - `phase 1: web 端末の検査結果を記録する` — clippy の指摘（openpty の引数）の修正とこの進捗ファイル。
+- `phase 1: web 端末の gateway 試験で並走する probe を記録しない` — 並走する他の試験の loopback probe で偽 daemon が落ちたので、`acceptFixtureRequest` で絞った。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
-- `bash scripts/dev/test-affected.sh` → exit 0（nextest 6639 passed / 21 skipped、web vitest 689 passed）
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 6639 passed / 21 skipped、web vitest 689 passed、web server 105 passed）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 - 個別: `cargo nextest run -p celerisctl --test terminal_pty`（3 passed: 入出力・日本語・リサイズ・exit code、stdin の

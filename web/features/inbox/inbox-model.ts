@@ -27,6 +27,7 @@ export const INBOX_KINDS: readonly InboxKind[] = [
   "human_wait_aging",
   "release_unpromoted",
   "task_unscheduled",
+  "review_resync_halted",
 ];
 
 export const KIND_LABELS: Record<InboxKind, string> = {
@@ -52,6 +53,7 @@ export const KIND_LABELS: Record<InboxKind, string> = {
   human_wait_aging: "人の操作待ちが長い",
   release_unpromoted: "release が昇格されていない",
   task_unscheduled: "ready のまま起きない",
+  review_resync_halted: "レビューの再同期が止まっている",
 };
 
 export function isInboxKind(value: unknown): value is InboxKind {

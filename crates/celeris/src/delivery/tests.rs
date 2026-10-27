@@ -962,7 +962,7 @@ fn target_advanced_before_merge_requests_rereview_instead_of_stale_reviewed_sha(
 }
 
 #[test]
-fn target_advanced_rereview_stops_for_human_after_limit_reviewed_sha() {
+fn target_advanced_rereview_beyond_limit_still_requests_rereview() {
     use task_core::{DeliveryStore, Trigger};
     let (store, dir, d) = merge_queued_delivery();
     let tmp = tempfile::tempdir().unwrap();
@@ -992,6 +992,8 @@ fn target_advanced_rereview_stops_for_human_after_limit_reviewed_sha() {
         assert_eq!(after.state, State::Reviewing, "attempt {attempt}");
         current = reviewed_again(&after);
     }
+    // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D5: 上限を超えても delivery は Blocked にせず
+    // 再レビューへ戻す。上限は dispatcher の review 入口が `ReviewResyncHalted`（受信箱・通知・自動再開）で扱う。
     git_text(
         dir.path(),
         &["commit", "--allow-empty", "-m", "main moved again"],
@@ -999,42 +1001,29 @@ fn target_advanced_rereview_stops_for_human_after_limit_reviewed_sha() {
     .unwrap();
     let moved = sha(dir.path(), "main").unwrap();
     advance(&store, &cfg, &current, now).unwrap();
-    let stopped = store.delivery_get(d.task_id).unwrap().unwrap();
-    assert_eq!(stopped.state, State::Blocked);
-    assert!(stopped.detail.starts_with("[needs-human]"));
-    assert!(stopped.detail.contains(&moved) && stopped.detail.contains(&d.head));
-    assert!(!stopped.detail.starts_with(MERGE_BASE_FAILURE));
-    assert_eq!(stopped.merge_candidate_sha, None);
+    let again = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(again.state, State::Reviewing);
+    assert!(!again.detail.starts_with("[needs-human]"));
+    assert_eq!(again.merge_candidate_sha, None);
     assert_eq!(sha(dir.path(), "main").unwrap(), moved);
-    assert_eq!(store.get(d.task_id).unwrap().unwrap().status, Status::Done);
-    assert_eq!(target_advanced_events(&store, &d).len(), 3);
-    // The stop is visible to the human through the secretary, not repaired automatically.
-    advance(&store, &cfg, &stopped, now).unwrap();
-    let notified = store.delivery_get(d.task_id).unwrap().unwrap();
-    assert!(notified.notification.is_some());
-    assert!(store.work_units_for(d.task_id).unwrap().is_empty());
-
-    // An explicit human re-review restarts the automatic budget.
-    store
-        .apply_transition(d.task_id, Trigger::Rereview, None)
-        .unwrap();
-    store
-        .append_event(d.task_id, &Event::worker_progress("review", "synced"))
-        .unwrap();
-    let mut fresh = notified.clone();
-    fresh.notification = None;
-    assert!(store.delivery_save(Some(&notified), &fresh).unwrap());
-    let current = reviewed_again(&fresh);
-    git_text(
-        dir.path(),
-        &["commit", "--allow-empty", "-m", "main moved after restart"],
-    )
-    .unwrap();
-    advance(&store, &cfg, &current, now).unwrap();
     assert_eq!(
-        store.delivery_get(d.task_id).unwrap().unwrap().state,
-        State::Reviewing
+        store.get(d.task_id).unwrap().unwrap().status,
+        Status::Reviewing
     );
+    let advanced = target_advanced_events(&store, &d);
+    assert_eq!(
+        advanced.len() as u32,
+        task_ops::delivery::MAX_TARGET_RESYNCS + 1
+    );
+    assert!(matches!(
+        advanced.last(),
+        Some(Event::ReviewTargetAdvanced { attempt, target_sha, .. })
+            if *attempt == task_ops::delivery::MAX_TARGET_RESYNCS + 1 && *target_sha == moved
+    ));
+    // While the task is re-reviewed the delivery waits; nothing is merged or blocked.
+    advance(&store, &cfg, &again, now).unwrap();
+    assert_eq!(store.delivery_get(d.task_id).unwrap().unwrap(), again);
+    assert!(store.work_units_for(d.task_id).unwrap().is_empty());
 }
 
 #[test]

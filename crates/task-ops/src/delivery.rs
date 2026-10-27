@@ -24,6 +24,8 @@ pub fn target_restale_count(events: &[Event], repo: RepoId) -> u32 {
     for (i, event) in events.iter().enumerate() {
         match event {
             Event::ReviewTargetAdvanced { repo_id, .. } if *repo_id == repo => count += 1,
+            // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4: 再開で数え直す。
+            Event::ReviewResyncResumed { .. } => count = 0,
             Event::Transitioned { reason, .. }
                 if (reason == "rereview" || reason == "reopen")
                     && !matches!(events.get(i + 1), Some(Event::ReviewTargetAdvanced { .. })) =>
@@ -34,6 +36,20 @@ pub fn target_restale_count(events: &[Event], repo: RepoId) -> u32 {
         }
     }
     count
+}
+
+/// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移・再開より後に
+/// `ReviewResyncHalted` があれば（review を止めている）その event。
+pub fn review_resync_halted(events: &[Event]) -> Option<&Event> {
+    let mut halted = None;
+    for event in events {
+        match event {
+            Event::ReviewResyncHalted { .. } => halted = Some(event),
+            Event::Transitioned { .. } | Event::ReviewResyncResumed { .. } => halted = None,
+            _ => {}
+        }
+    }
+    halted
 }
 
 #[derive(Debug, Clone, Default)]

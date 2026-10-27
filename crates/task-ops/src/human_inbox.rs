@@ -53,11 +53,13 @@ pub enum InboxKind {
     HumanWaitAging,
     ReleaseUnpromoted,
     TaskUnscheduled,
+    // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: review の再同期が上限で止まっている task。
+    ReviewResyncHalted,
     // 人の決定 2026-10-08: KB の取り込み待ち（旧 `knowledge_review`）は受信箱に出さない。知識画面で扱う。
 }
 
 impl InboxKind {
-    pub const ALL: [InboxKind; 22] = [
+    pub const ALL: [InboxKind; 23] = [
         InboxKind::Decision,
         InboxKind::PlanGate,
         InboxKind::PhaseGate,
@@ -80,6 +82,7 @@ impl InboxKind {
         InboxKind::HumanWaitAging,
         InboxKind::ReleaseUnpromoted,
         InboxKind::TaskUnscheduled,
+        InboxKind::ReviewResyncHalted,
     ];
 
     /// ADR 2026-10-27-project-stagnation-inbox D1: 人の操作を待って止まっている種類（`human_wait_aging` の対象）。
@@ -122,6 +125,7 @@ impl InboxKind {
             InboxKind::HumanWaitAging => "human_wait_aging",
             InboxKind::ReleaseUnpromoted => "release_unpromoted",
             InboxKind::TaskUnscheduled => "task_unscheduled",
+            InboxKind::ReviewResyncHalted => "review_resync_halted",
         }
     }
 }
@@ -224,6 +228,7 @@ pub fn route_attention(item: &AttentionItem) -> Option<InboxKind> {
         AttentionItem::IntegrationRequest { .. } => Some(InboxKind::IntegrationRequest),
         AttentionItem::Unintegrated { .. } => Some(InboxKind::Unintegrated),
         AttentionItem::Stalled { .. } => Some(InboxKind::Stalled),
+        AttentionItem::ReviewResyncHalted { .. } => Some(InboxKind::ReviewResyncHalted),
         // ADR 2026-10-08-browser-prod-enablement D2: browser の前提で止まった task。人の手は task 詳細の
         // browser 節（policy の編集）か release・台帳の作り直しなので、browser の人手の種類に入れる。
         AttentionItem::BrowserPrerequisite { .. } => Some(InboxKind::BrowserWait),
@@ -1150,6 +1155,38 @@ impl Builder<'_> {
                 blocking: self.only_task(task),
                 blocked_by: Vec::new(),
                 native: None,
+                project_id: self.project_of(task.id),
+                task: Some(task.clone()),
+                created_at: at.clone(),
+                links: vec![link("task 詳細", format!("/tasks/{}", task.id))],
+            }),
+            // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: 受信箱の `rereview` が
+            // `POST /tasks/{id}/rereview`（遷移せず再開の印を残す）へ委ねる。target が静かになれば自動で再開して消える。
+            AttentionItem::ReviewResyncHalted {
+                task,
+                reviewed_sha,
+                target_sha,
+                resyncs,
+                at,
+                ..
+            } => self.finish(Draft {
+                id: format!("review_resync_halted-{}-{}", task.id, ts_part(at)),
+                kind: InboxKind::ReviewResyncHalted,
+                title: format!("レビューの再同期が上限で止まった: {}", task.title),
+                detail: clip(&format!(
+                    "取り込み先が {resyncs} 回動いたので review を止めている（検査済み {reviewed_sha}、取り込み先 {target_sha}）。再開すると最新の取り込み先へ同期して検査をやり直す。取り込み先が静かになれば自動で再開する"
+                )),
+                options: vec![opt(
+                    "rereview",
+                    "いま再開する",
+                    false,
+                    &format!("POST /tasks/{}/rereview", task.id),
+                )],
+                recommended: Some("rereview".to_string()),
+                due_at: None,
+                blocking: self.only_task(task),
+                blocked_by: Vec::new(),
+                native: native("POST", format!("/api/v1/tasks/{}/rereview", task.id)),
                 project_id: self.project_of(task.id),
                 task: Some(task.clone()),
                 created_at: at.clone(),

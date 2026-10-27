@@ -133,6 +133,44 @@ impl Dispatcher {
             );
             return Ok(());
         }
+        // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D1: reviewer 条件を全部合格にしたら、その
+        // snapshot（必須検査と同じ束縛）に束ねて残す。検査後の stale でも reviewer が見た commit と基底は確定して
+        // いるので先に残す（次の同期で target の進みが候補の差分と重ならなければ reviewer を省く材料）。
+        {
+            let reviewer_criteria: Vec<usize> = task
+                .acceptance
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| matches!(c.check, task_core::Check::Reviewer))
+                .map(|(idx, _)| idx)
+                .collect();
+            if !reviewer_criteria.is_empty()
+                && reviewer_criteria.iter().all(|idx| {
+                    outcome
+                        .verdicts
+                        .iter()
+                        .any(|v| v.criterion_idx == *idx && v.pass)
+                })
+            {
+                let review_run = completed_review_run
+                    .clone()
+                    .unwrap_or_else(|| run_id.clone());
+                for result in &outcome.required_checks {
+                    if let Some(binding) = &result.binding {
+                        self.store.append_event(
+                            task_id,
+                            &Event::ReviewerPassed {
+                                review_run: review_run.clone(),
+                                repo_id: binding.repo_id,
+                                target_sha: binding.target_sha.clone(),
+                                reviewed_sha: binding.reviewed_sha.clone(),
+                                criteria: reviewer_criteria.clone(),
+                            },
+                        )?;
+                    }
+                }
+            }
+        }
         // ADR-0118 D4 付記: 検査中に review snapshot が変わった判定は適用しない（stale は不合格ではない）。
         // attempts を消費せず reviewing のまま、次の tick の review 入口で再 sync → 再 check → 再 review。
         if let Some(stale) = outcome.target_stale.take() {
@@ -310,9 +348,11 @@ impl Dispatcher {
             outcome.verdicts.sort_by_key(|v| v.criterion_idx);
         }
         let all_pass = outcome.all_pass();
+        // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D2: reviewer を省いた review は worker の
+        // run id を review run として delivery に登録している（`delivery::begin` と同じ既定）。
         if let Some(old) = self.store.delivery_get(task_id)?
             && old.worker_run == run_id
-            && completed_review_run.as_deref() == Some(old.review_run.as_str())
+            && completed_review_run.as_deref().unwrap_or(run_id.as_str()) == old.review_run
             && old.state == task_core::DeliveryState::Reviewing
             && let Some(verdict) = outcome
                 .verdicts

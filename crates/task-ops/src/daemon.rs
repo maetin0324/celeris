@@ -37,6 +37,11 @@ pub struct DaemonSnapshot {
     /// 同 D3: `human_wait_aging` の閾値（受信箱を組むときに使う）。`None` なら出さない。
     #[serde(default)]
     pub stagnation_policy: Option<crate::stagnation::StagnationPolicy>,
+    /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: stale の自動再同期が上限を超えて
+    /// review を止めている reviewing の task（task_id 順）。受信箱の attention（`AttentionItem::ReviewResyncHalted`）
+    /// の元。再開（rereview・target が静かになった自動再開）で消える。
+    #[serde(default)]
+    pub review_resync_halted: Vec<SnapshotReviewResyncHalted>,
     /// ADR-0033 D3（Phase 25）: 秘書レベルの未読の報告と通知の判定。**API が応答を組むときに埋める**
     /// 唯一のフィールド（`last_notified_at` は `POST /reports/notified` が進める API プロセスの観測値で、
     /// ディスパッチャは知らない）。ディスパッチャが送るスナップショットでは常に `None`。
@@ -426,6 +431,22 @@ pub struct SnapshotStalledTask {
     /// 止まっていると最初に見た時刻（RFC 3339）。
     pub since: String,
     /// `StallDetected` を記録した時刻（RFC 3339）。
+    pub at: String,
+}
+
+/// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: `DaemonSnapshot.review_resync_halted` の 1 件
+/// （`Event::ReviewResyncHalted` の写し）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SnapshotReviewResyncHalted {
+    pub task_id: TaskId,
+    pub repo_id: task_core::RepoId,
+    /// 最後に検査した候補の SHA。
+    pub reviewed_sha: String,
+    /// 止めたときの target の SHA。
+    pub target_sha: String,
+    /// 止めるまでに数えた stale（自動再同期）の数。
+    pub resyncs: u32,
+    /// 止めたと記録した時刻（RFC 3339）。
     pub at: String,
 }
 

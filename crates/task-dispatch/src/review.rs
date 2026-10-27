@@ -226,6 +226,10 @@ pub struct ReviewExtras {
     /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: 対象 run で検出された subagent 道具・別 LLM CLI / API の
     /// 起動（dispatcher が `Event::WorkerPolicyViolation` から集める）。`ReviewRequest.policy_violations` に渡す。
     pub policy_violations: Vec<ReviewPolicyViolation>,
+    /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D2: `Some(理由)` なら reviewer run を起こさず、
+    /// 決定的な条件が全 pass のとき `Check::Reviewer` の条件をその理由で合格にする（同期前の HEAD に束縛された
+    /// reviewer の合格を、target の進みが候補の差分と重ならないまま持ち越す）。
+    pub reviewer_reuse: Option<String>,
 }
 
 /// ADR-0117 D2: `ReviewCheckResult.reason` に残す末尾の文字数。
@@ -621,6 +625,7 @@ pub async fn review_task(
         decisions,
         answers,
         policy_violations,
+        reviewer_reuse,
     } = extras;
     let mut implicit: HashMap<usize, (&'static str, Option<String>)> = HashMap::new();
     let subject = &subject;
@@ -797,8 +802,11 @@ pub async fn review_task(
                     .iter()
                     .map(|&idx| Verdict {
                         criterion_idx: idx,
-                        pass: false,
-                        reason: "not evaluated: no reviewer run was available".to_string(),
+                        pass: reviewer_reuse.is_some(),
+                        reason: match &reviewer_reuse {
+                            Some(reason) => format!("reviewer pass reused: {reason}"),
+                            None => "not evaluated: no reviewer run was available".to_string(),
+                        },
                         repair_hint: None,
                     })
                     .collect(),

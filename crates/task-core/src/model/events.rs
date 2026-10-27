@@ -178,6 +178,43 @@ pub enum Event {
         target_sha: String,
         attempt: u32,
     },
+    /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D1: reviewer 条件（`Check::Reviewer`）を
+    /// 全部合格にした review の snapshot（基底 `target_sha`・候補 `reviewed_sha`）。検査後の stale でも残す。
+    /// 次の同期で target の進みが候補の差分と重ならなければ reviewer を省く材料。
+    ReviewerPassed {
+        review_run: String,
+        repo_id: crate::RepoId,
+        target_sha: String,
+        reviewed_sha: String,
+        criteria: Vec<usize>,
+    },
+    /// 同 ADR D2: reviewer run を起こさず、`from_*` に束縛された合格を新しい snapshot へ持ち越した。
+    /// `target_files` は `from_target_sha` から `target_sha` までに target 側で変わった file。
+    ReviewerPassReused {
+        review_run: String,
+        repo_id: crate::RepoId,
+        target_sha: String,
+        reviewed_sha: String,
+        from_target_sha: String,
+        from_reviewed_sha: String,
+        target_files: Vec<String>,
+    },
+    /// 同 ADR D3: stale の自動再同期が上限（`MAX_TARGET_RESYNCS`）を超え、reviewing のまま review を止めた
+    /// （attempts 不変）。受信箱 `review_resync_halted` と通知の元。
+    ReviewResyncHalted {
+        review_run: String,
+        repo_id: crate::RepoId,
+        reviewed_sha: String,
+        target_sha: String,
+        resyncs: u32,
+    },
+    /// 同 ADR D4: 止めた review を再開した（`reason` は `human`（rereview）か `target_quiet`）。stale の数を
+    /// 0 に戻す。状態は変えない。
+    ReviewResyncResumed {
+        review_run: String,
+        repo_id: crate::RepoId,
+        reason: String,
+    },
     /// ADR-0120 D5: review 前同期の衝突に対し IntegrationRepair WU を起票した（WU の追加・
     /// `ReviewRepair` 遷移と同じ transaction で 1 回）。`attempt` は integration_repair WU の通し番号
     /// （1 始まり）。`conflict_files` は重複を除きパス順。状態・attempts は変えない。

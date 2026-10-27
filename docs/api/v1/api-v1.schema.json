@@ -1639,6 +1639,45 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: stale の自動再同期が上限を超え、review を\nreviewing のまま止めている task（`Event::ReviewResyncHalted` の写し。dispatcher の snapshot の\n`review_resync_halted` から作る）。rereview か target が静かになった自動再開で消える。",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "resyncs": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reviewed_sha": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "review_resync_halted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "repo_id",
+            "reviewed_sha",
+            "target_sha",
+            "resyncs",
+            "at"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR D4: 未回答の統合依頼。正本は IntegrationRequested / IntegrationAnswered。",
           "properties": {
             "at": {
@@ -7835,6 +7874,14 @@
           "default": null,
           "description": "ADR-0033 D3（Phase 25）: 秘書レベルの未読の報告と通知の判定。**API が応答を組むときに埋める**\n唯一のフィールド（`last_notified_at` は `POST /reports/notified` が進める API プロセスの観測値で、\nディスパッチャは知らない）。ディスパッチャが送るスナップショットでは常に `None`。"
         },
+        "review_resync_halted": {
+          "default": [],
+          "description": "ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: stale の自動再同期が上限を超えて\nreview を止めている reviewing の task（task_id 順）。受信箱の attention（`AttentionItem::ReviewResyncHalted`）\nの元。再開（rereview・target が静かになった自動再開）で消える。",
+          "items": {
+            "$ref": "#/$defs/SnapshotReviewResyncHalted"
+          },
+          "type": "array"
+        },
         "scratch": {
           "anyOf": [
             {
@@ -10490,6 +10537,148 @@
             "reviewed_sha",
             "target_sha",
             "attempt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D1: reviewer 条件（`Check::Reviewer`）を\n全部合格にした review の snapshot（基底 `target_sha`・候補 `reviewed_sha`）。検査後の stale でも残す。\n次の同期で target の進みが候補の差分と重ならなければ reviewer を省く材料。",
+          "properties": {
+            "criteria": {
+              "items": {
+                "format": "uint",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "review_run": {
+              "type": "string"
+            },
+            "reviewed_sha": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "reviewer_passed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "review_run",
+            "repo_id",
+            "target_sha",
+            "reviewed_sha",
+            "criteria"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "同 ADR D2: reviewer run を起こさず、`from_*` に束縛された合格を新しい snapshot へ持ち越した。\n`target_files` は `from_target_sha` から `target_sha` までに target 側で変わった file。",
+          "properties": {
+            "from_reviewed_sha": {
+              "type": "string"
+            },
+            "from_target_sha": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "review_run": {
+              "type": "string"
+            },
+            "reviewed_sha": {
+              "type": "string"
+            },
+            "target_files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "reviewer_pass_reused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "review_run",
+            "repo_id",
+            "target_sha",
+            "reviewed_sha",
+            "from_target_sha",
+            "from_reviewed_sha",
+            "target_files"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "同 ADR D3: stale の自動再同期が上限（`MAX_TARGET_RESYNCS`）を超え、reviewing のまま review を止めた\n（attempts 不変）。受信箱 `review_resync_halted` と通知の元。",
+          "properties": {
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "resyncs": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "review_run": {
+              "type": "string"
+            },
+            "reviewed_sha": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "review_resync_halted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "review_run",
+            "repo_id",
+            "reviewed_sha",
+            "target_sha",
+            "resyncs"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "同 ADR D4: 止めた review を再開した（`reason` は `human`（rereview）か `target_quiet`）。stale の数を\n0 に戻す。状態は変えない。",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "review_run": {
+              "type": "string"
+            },
+            "type": {
+              "const": "review_resync_resumed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "review_run",
+            "repo_id",
+            "reason"
           ],
           "type": "object"
         },
@@ -15878,7 +16067,8 @@
         "project_stalled",
         "human_wait_aging",
         "release_unpromoted",
-        "task_unscheduled"
+        "task_unscheduled",
+        "review_resync_halted"
       ],
       "type": "string"
     },
@@ -27706,6 +27896,44 @@
       "required": [
         "name",
         "description"
+      ],
+      "type": "object"
+    },
+    "SnapshotReviewResyncHalted": {
+      "description": "ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: `DaemonSnapshot.review_resync_halted` の 1 件\n（`Event::ReviewResyncHalted` の写し）。",
+      "properties": {
+        "at": {
+          "description": "止めたと記録した時刻（RFC 3339）。",
+          "type": "string"
+        },
+        "repo_id": {
+          "$ref": "#/$defs/RepoId"
+        },
+        "resyncs": {
+          "description": "止めるまでに数えた stale（自動再同期）の数。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reviewed_sha": {
+          "description": "最後に検査した候補の SHA。",
+          "type": "string"
+        },
+        "target_sha": {
+          "description": "止めたときの target の SHA。",
+          "type": "string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        }
+      },
+      "required": [
+        "task_id",
+        "repo_id",
+        "reviewed_sha",
+        "target_sha",
+        "resyncs",
+        "at"
       ],
       "type": "object"
     },

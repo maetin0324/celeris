@@ -688,10 +688,11 @@ async fn pre_review_sync_target_advanced_keeps_attempts() {
     assert_eq!(git_out(&wt.dir, &["rev-parse", "HEAD"]), synced[1].1);
 }
 
-/// ADR-0118 D4 付記: target が動き続けると自動の再同期は上限で止まる。attempts は変えず、`failed` にも
-/// せず、理由と両 SHA を一度だけ残して reviewing のまま人の再開を待つ。
+/// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: target が動き続けると自動の再同期は上限で
+/// 止まる。attempts は変えず `failed` にもせず、`ReviewResyncHalted` を一度だけ残して snapshot（受信箱）と通知に
+/// 出す。`rereview`（人）は遷移せず `ReviewResyncResumed{human}` を残して再開する。
 #[tokio::test]
-async fn pre_review_sync_target_advanced_limit_halts_without_attempts() {
+async fn pre_review_sync_target_advanced_limit_halts_visibly_and_rereview_resumes() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
@@ -702,6 +703,10 @@ async fn pre_review_sync_target_advanced_limit_halts_without_attempts() {
         "git update-ref refs/heads/main \"$(git commit-tree 'HEAD^{tree}' -p HEAD -m bump)\""
             .into(),
     );
+    task.acceptance.push(task_core::Criterion {
+        text: "reviewer".into(),
+        check: Check::Reviewer,
+    });
     store.insert(&task).unwrap();
     let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
     let wt = d.local_worktree_for(&task).unwrap();
@@ -722,18 +727,345 @@ async fn pre_review_sync_target_advanced_limit_halts_without_attempts() {
         .filter(|e| matches!(e, Event::ReviewTargetAdvanced { .. }))
         .count() as u32;
     assert_eq!(advanced, task_ops::delivery::MAX_TARGET_RESYNCS + 1);
+    let halted: Vec<(String, u32)> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ReviewResyncHalted {
+                target_sha,
+                resyncs,
+                ..
+            } => Some((target_sha.clone(), *resyncs)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(halted.len(), 1);
+    assert_eq!(halted[0].1, task_ops::delivery::MAX_TARGET_RESYNCS + 1);
     assert_eq!(
-        progress_with(
-            &events,
-            crate::dispatcher::review_spawn::TARGET_RESYNC_HALTED_PREFIX
-        ),
-        1
+        halted[0].0,
+        git_out(repo.path(), &["rev-parse", "refs/heads/main"])
     );
+    // 旧経路の無言の印は残らない。
+    assert_eq!(progress_with(&events, "review target resync halted"), 0);
+    // 止めている間は review を起動せず、snapshot（受信箱の元）に出る。
     assert!(
         !d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
     assert!(d.reviewing.is_empty());
+    let snapshot = d
+        .review_resync_halted
+        .get(&task.id)
+        .expect("snapshot entry");
+    assert_eq!(snapshot.target_sha, halted[0].0);
+    assert_eq!(snapshot.resyncs, halted[0].1);
+    assert_eq!(
+        progress_with(&events_of(&store, &task), "review target resync halted"),
+        0
+    );
+    // 通知（BadNews）が 1 件。
+    let notices = store
+        .notice_list(&task_core::feed::NoticeQuery {
+            kinds: vec![task_core::feed::NoticeKind::BadNews],
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(notices.items.len(), 1, "{notices:?}");
+    assert_eq!(
+        notices.items[0].task_id.as_deref(),
+        Some(task.id.to_string().as_str())
+    );
+    assert!(notices.items[0].title.contains("レビューの再同期"));
+    // 人の rereview: 遷移せず再開の印を残し、次の入口で review が動く。
+    let result =
+        task_ops::comment::rereview(store.as_ref(), task.id, Some(Status::Reviewing)).unwrap();
+    assert_eq!(result.to, Status::Reviewing);
+    assert_eq!(result.reason, "review_resync_resumed");
+    let events = events_of(&store, &task);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::ReviewResyncResumed { reason, .. } if reason == "human"
+    )));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, Event::Transitioned { .. }))
+            .count(),
+        0
+    );
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    assert!(d.review_resync_halted.is_empty());
+    assert_eq!(
+        store.get(task.id).unwrap().unwrap().status,
+        Status::Reviewing
+    );
+}
+
+/// 同 ADR D4: 止めている間に target が静かになれば（先頭 commit が `review_resync_quiet` 以上古い）、
+/// `ReviewResyncResumed{target_quiet}` を残して自動で再開する。時計は dispatcher の `test_now` で進める。
+#[tokio::test]
+async fn pre_review_sync_halted_review_resumes_when_target_is_quiet() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = reviewing_task(repo.path(), &store);
+    set_check(
+        &mut task,
+        "git update-ref refs/heads/main \"$(git commit-tree 'HEAD^{tree}' -p HEAD -m bump)\""
+            .into(),
+    );
+    store.insert(&task).unwrap();
+    let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
+    let clock = Arc::new(StdMutex::new(OffsetDateTime::now_utc()));
+    d.test_now = Some(clock.clone());
+    let wt = d.local_worktree_for(&task).unwrap();
+    wt.ensure_blocking().unwrap();
+    commit_file(&wt.dir, "task.txt", "task\n");
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    run_until_idle(&mut d, 100).await;
+    assert_eq!(
+        events_of(&store, &task)
+            .iter()
+            .filter(|e| matches!(e, Event::ReviewResyncHalted { .. }))
+            .count(),
+        1
+    );
+    // まだ静かでない（先頭 commit は今）: 止めたまま。
+    assert!(
+        !d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    assert!(d.review_resync_halted.contains_key(&task.id));
+    // 時計だけ quiet より先へ進める（git は触らない）。
+    *clock.lock().unwrap() =
+        OffsetDateTime::now_utc() + d.config.review_resync_quiet + Duration::from_secs(1);
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    assert!(d.review_resync_halted.is_empty());
+    let events = events_of(&store, &task);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::ReviewResyncResumed { reason, .. } if reason == "target_quiet"
+    )));
+    assert!(no_review_fail(&events));
+    assert_eq!(store.get(task.id).unwrap().unwrap().attempts, task.attempts);
+}
+
+/// `TaskKind::Review` の run を数え、合格の `review.json` を書く reviewer アダプタ。
+struct CountingReviewer {
+    reviews: Arc<StdMutex<u32>>,
+}
+
+#[async_trait]
+impl WorkerAdapter for CountingReviewer {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+        if req.task.kind == TaskKind::Review {
+            *self.reviews.lock().unwrap() += 1;
+            std::fs::write(
+                req.artifacts_dir.join("review.json"),
+                r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"fine"}]}"#,
+            )
+            .unwrap();
+        }
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: "ok".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            exit_code: Some(0),
+        })
+    }
+}
+
+/// 1 回目の検査の最中にだけ、main に `file` を `blob_cmd` の内容で置く commit を作る check（worktree は触らない）。
+fn bump_main_writing(flag: &std::path::Path, file: &str, blob_cmd: &str) -> String {
+    format!(
+        "test -e {f} || {{ touch {f} && b=$({blob_cmd} | git hash-object -w --stdin) && export GIT_INDEX_FILE={f}.idx && git read-tree refs/heads/main && git update-index --add --cacheinfo 100644,$b,{file} && t=$(git write-tree) && git update-ref refs/heads/main \"$(git commit-tree $t -p refs/heads/main -m other)\"; }}",
+        f = flag.display()
+    )
+}
+
+fn numbered_lines(first: &str) -> String {
+    let mut lines: Vec<String> = (1..=30).map(|n| format!("line{n}")).collect();
+    lines[0] = first.to_string();
+    lines.join("\n") + "\n"
+}
+
+/// 検査中に main が進んだ後の 2 回目の review で、reviewer run を起こしたかを返す（git だけで決まる決定的な試験）。
+/// main には 30 行の `shared.txt` があり、task は `task_file` を `task_content` で変える。検査中に main は
+/// `target_file` を `blob_cmd` の内容で書き換える。
+async fn reviewer_runs_after_target_advanced(
+    task_file: &str,
+    task_content: &str,
+    target_file: &str,
+    blob_cmd: &str,
+) -> (u32, Vec<Event>, Status) {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    commit_file(repo.path(), "shared.txt", &numbered_lines("line1"));
+    let ws = tempfile::tempdir().unwrap();
+    let flag = tempfile::tempdir().unwrap();
+    let flag = flag.path().join("advanced");
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = reviewing_task(repo.path(), &store);
+    set_check(&mut task, bump_main_writing(&flag, target_file, blob_cmd));
+    task.acceptance.push(task_core::Criterion {
+        text: "reviewer".into(),
+        check: Check::Reviewer,
+    });
+    store.insert(&task).unwrap();
+    let reviews = Arc::new(StdMutex::new(0));
+    let adapter = Arc::new(CountingReviewer {
+        reviews: reviews.clone(),
+    });
+    let mut d = worktree_dispatcher(store.clone(), adapter, ws.path(), None);
+    let wt = d.local_worktree_for(&task).unwrap();
+    wt.ensure_blocking().unwrap();
+    commit_file(&wt.dir, task_file, task_content);
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    assert!(run_until_idle(&mut d, 200).await.idle);
+    let status = store.get(task.id).unwrap().unwrap().status;
+    let count = *reviews.lock().unwrap();
+    (count, events_of(&store, &task), status)
+}
+
+/// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D1・D2: reviewer が合格した後に main が task の差分と
+/// 重ならない file だけ進んだら、reviewer をやり直さず決定的 check の再実行だけで合格を保つ（`ReviewerPassed` →
+/// `ReviewerPassReused`、reviewer run は 1 回）。
+#[tokio::test]
+async fn reviewer_pass_is_reused_when_target_advances_without_overlap() {
+    let (reviews, events, status) =
+        reviewer_runs_after_target_advanced("task.txt", "task\n", "other.txt", "printf other")
+            .await;
+    assert_eq!(status, Status::Done);
+    assert_eq!(
+        reviews, 1,
+        "reviewer ran again although the target did not touch the task's files"
+    );
+    assert!(no_review_fail(&events));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, Event::ReviewTargetAdvanced { .. }))
+            .count(),
+        1
+    );
+    let passed: Vec<(String, String)> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ReviewerPassed {
+                target_sha,
+                reviewed_sha,
+                criteria,
+                ..
+            } => {
+                assert_eq!(criteria, &vec![1]);
+                Some((target_sha.clone(), reviewed_sha.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let reused: Vec<(String, String, String, String, Vec<String>)> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ReviewerPassReused {
+                target_sha,
+                reviewed_sha,
+                from_target_sha,
+                from_reviewed_sha,
+                target_files,
+                ..
+            } => Some((
+                target_sha.clone(),
+                reviewed_sha.clone(),
+                from_target_sha.clone(),
+                from_reviewed_sha.clone(),
+                target_files.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reused.len(), 1, "{events:?}");
+    // 持ち越し元は stale になった 1 回目の review の束縛、持ち越し先は 2 回目の同期の snapshot。
+    assert_eq!((reused[0].2.clone(), reused[0].3.clone()), passed[0]);
+    assert_eq!(reused[0].4, vec!["other.txt".to_string()]);
+    let synced: Vec<(String, String)> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ReviewTargetSynced {
+                target_sha,
+                reviewed_sha,
+                ..
+            } => Some((target_sha.clone(), reviewed_sha.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(synced.len(), 2);
+    assert_eq!((reused[0].0.clone(), reused[0].1.clone()), synced[1]);
+    // 2 回目も合格を同じ束縛で残す（さらに stale になっても連鎖できる）。
+    assert_eq!(passed.len(), 2);
+    assert_eq!(passed[1], synced[1]);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::ReviewVerdict { criterion_idx: 1, pass: true, reason, .. } if reason.contains("reviewer pass reused")
+    )));
+    // 決定的 check は新しい候補で実行し直している（必須検査の証跡が 2 回目の束縛で残る）。
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::RequiredChecksEvaluated { target_sha, reviewed_sha, .. } if (target_sha.clone(), reviewed_sha.clone()) == synced[1]
+    )));
+}
+
+/// 同 ADR D2: main の進みが task の差分と重なる file を触っていれば（rebase は衝突しなくても）reviewer をやり直す
+/// （reviewer run は 2 回）。task は `shared.txt` の 1 行目、main は 30 行目を変える。
+#[tokio::test]
+async fn reviewer_runs_again_when_target_advances_touching_the_task_files() {
+    let (reviews, events, status) = reviewer_runs_after_target_advanced(
+        "shared.txt",
+        &numbered_lines("task"),
+        "shared.txt",
+        "git show refs/heads/main:shared.txt | sed 's/^line30$/changed/'",
+    )
+    .await;
+    assert_eq!(status, Status::Done);
+    assert_eq!(reviews, 2);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, Event::ReviewTargetAdvanced { .. }))
+            .count(),
+        1
+    );
+    assert!(no_review_fail(&events));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::ReviewerPassReused { .. }))
+    );
+    assert_eq!(progress_with(&events, "reviewer not reused"), 1);
+    assert_eq!(progress_with(&events, "[shared.txt]"), 1);
 }
 
 #[tokio::test]

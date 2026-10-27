@@ -95,6 +95,7 @@ use crate::policy::{ProviderId, ProviderOutcome};
 
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
 mod browser_prereq;
+mod clock;
 mod cluster_job_wait;
 mod credential_gate;
 mod lane_assist;
@@ -477,6 +478,9 @@ pub struct DispatchConfig {
     pub kill_grace: Duration,
     /// `Command` チェック 1 件あたりの上限。
     pub review_timeout: Duration,
+    /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4: 再同期の上限で止めた review を、target の
+    /// 先頭 commit がこれだけ古ければ（他の取り込みが止んだ）自動で再開する。
+    pub review_resync_quiet: Duration,
     /// task ごとの足回りの root と `WorkspaceSpec::Local` の相対パスの基準の resolver
     /// （ADR 2026-10-14-local-machine-settings D5。設定ファイル・CLI の root は resolver の中だけで使う）。
     pub workspace_roots: task_core::local_machine::WorkspaceRoots,
@@ -1239,6 +1243,10 @@ pub struct Dispatcher {
     /// ADR 2026-10-23-stage-order-and-plan-stall D5: `StallDetected` を出した後まだ何も起きていない task
     /// （snapshot の `stalled_tasks`。受信箱の attention の元）。生存確認ごとに作り直す。プロセス内メモリのみ。
     stalled_tasks: std::collections::BTreeMap<TaskId, task_ops::daemon::SnapshotStalledTask>,
+    /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: 再同期の上限で止めている reviewing の task
+    /// （snapshot の `review_resync_halted`。受信箱の attention の元）。review 入口で毎回作り直す。
+    review_resync_halted:
+        std::collections::BTreeMap<TaskId, task_ops::daemon::SnapshotReviewResyncHalted>,
     /// ADR-0079 D10（Phase R3b）: 最後に生存確認をした時刻（[`LIVENESS_CHECK_INTERVAL_SECS`] ごと）。
     liveness_checked_at: Option<OffsetDateTime>,
     stagnation: tree_units::StagnationWatch,
@@ -1496,21 +1504,6 @@ fn real_now_unix() -> i64 {
 }
 
 impl Dispatcher {
-    fn now_utc(&self) -> OffsetDateTime {
-        #[cfg(test)]
-        if let Some(clock) = &self.test_now {
-            return *clock.lock().expect("test clock mutex");
-        }
-        OffsetDateTime::now_utc()
-    }
-
-    fn monotonic_now(&self) -> Instant {
-        #[cfg(test)]
-        if let Some(clock) = &self.test_policy_clock {
-            return *clock.lock().expect("test monotonic clock mutex");
-        }
-        Instant::now()
-    }
     pub fn new(store: Arc<dyn TaskStore>, config: DispatchConfig) -> Self {
         let account_limits = match store.account_limits() {
             Ok(rows) => Some(
@@ -1607,6 +1600,7 @@ impl Dispatcher {
             run_write_bases: HashMap::new(),
             stall_watch: HashMap::new(),
             stalled_tasks: std::collections::BTreeMap::new(),
+            review_resync_halted: std::collections::BTreeMap::new(),
             liveness_checked_at: None,
             stagnation: Default::default(),
             terminal_records_reconciled_at: None,
@@ -1842,6 +1836,7 @@ impl Dispatcher {
         c.idle_timeout = new.idle_timeout;
         c.kill_grace = new.kill_grace;
         c.review_timeout = new.review_timeout;
+        c.review_resync_quiet = new.review_resync_quiet;
         c.plan_auto_accept = new.plan_auto_accept;
         c.retry_backoff_base = new.retry_backoff_base;
         c.retry_backoff_max = new.retry_backoff_max;

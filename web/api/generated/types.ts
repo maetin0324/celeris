@@ -329,6 +329,14 @@ export type AttentionItem = {
   "type": "stalled";
 } | {
   "at": string;
+  "repo_id": RepoId;
+  "resyncs": number;
+  "reviewed_sha": string;
+  "target_sha": string;
+  "task": TaskRef;
+  "type": "review_resync_halted";
+} | {
+  "at": string;
   "request": IntegrationRequest;
   "request_id": string;
   "task": TaskRef;
@@ -1657,6 +1665,7 @@ export type DaemonSnapshot = {
   "max_runs_per_account"?: number | null;
   "pid": number;
   "reports"?: ReportsLive | null;
+  "review_resync_halted"?: Array<SnapshotReviewResyncHalted>;
   "scratch"?: ScratchStatus | null;
   "stagnation"?: Array<StagnationFinding>;
   "stagnation_policy"?: StagnationPolicy | null;
@@ -2205,6 +2214,34 @@ export type Event = {
   "reviewed_sha": string;
   "target_sha": string;
   "type": "review_target_advanced";
+} | {
+  "criteria": Array<number>;
+  "repo_id": RepoId;
+  "review_run": string;
+  "reviewed_sha": string;
+  "target_sha": string;
+  "type": "reviewer_passed";
+} | {
+  "from_reviewed_sha": string;
+  "from_target_sha": string;
+  "repo_id": RepoId;
+  "review_run": string;
+  "reviewed_sha": string;
+  "target_files": Array<string>;
+  "target_sha": string;
+  "type": "reviewer_pass_reused";
+} | {
+  "repo_id": RepoId;
+  "resyncs": number;
+  "review_run": string;
+  "reviewed_sha": string;
+  "target_sha": string;
+  "type": "review_resync_halted";
+} | {
+  "reason": string;
+  "repo_id": RepoId;
+  "review_run": string;
+  "type": "review_resync_resumed";
 } | {
   "attempt": number;
   "before_sha": string;
@@ -3228,7 +3265,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled" | "review_resync_halted";
 
 export type InboxLink = {
   "href": string;
@@ -5543,6 +5580,15 @@ export type SkillSummaryView = {
   "mounted_by"?: Array<string>;
   "name": string;
   "updated"?: string | null;
+};
+
+export type SnapshotReviewResyncHalted = {
+  "at": string;
+  "repo_id": RepoId;
+  "resyncs": number;
+  "reviewed_sha": string;
+  "target_sha": string;
+  "task_id": TaskId;
 };
 
 export type SnapshotStalledTask = {

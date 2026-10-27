@@ -283,7 +283,8 @@ fn check_required_evidence(
 }
 
 /// ADR-0118 D4: stale な合格を取り込まず、task を再レビュー（同期→checks→reviewer）へ戻す。
-/// 自動の再試行は [`task_ops::delivery::MAX_TARGET_RESYNCS`] 回まで。超えたら人に見える状態で止める。
+/// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D5: 回数の上限（[`task_ops::delivery::MAX_TARGET_RESYNCS`]）
+/// はここでは見ない。dispatcher の review 入口が `ReviewResyncHalted`（受信箱・通知・自動再開）で扱う。
 /// stale はコードの不合格ではないので review の試行回数・ReviewRepair・配送の局所修復に数えない。
 fn request_rereview(
     store: &dyn TaskStore,
@@ -310,18 +311,6 @@ fn request_rereview(
     d.target_sha = None;
     d.reviewed_sha = None;
     d.merge_candidate_sha = None;
-    if restale >= task_ops::delivery::MAX_TARGET_RESYNCS {
-        d.state = State::Blocked;
-        d.detail = format!(
-            "[needs-human] target 再進行による自動の再レビューが上限（{} 回）に達したため取り込みを止めました: {reason}（検査済み {reviewed}、現在の {} {target}）。再レビューで再開してください",
-            task_ops::delivery::MAX_TARGET_RESYNCS,
-            old.default_branch
-        );
-        if store.delivery_save(Some(old), &d)? {
-            store.append_event(old.task_id, &advanced)?;
-        }
-        return Ok(());
-    }
     d.state = State::Reviewing;
     d.detail = format!(
         "target 再進行: {reason}。最新の {} へ再同期し、検査とレビューをやり直します",

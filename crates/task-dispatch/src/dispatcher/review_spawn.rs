@@ -3,16 +3,15 @@
 use super::route_select::{RouteInput, RoutePick, RouteTrace, account_adapter_for_source_kind};
 use super::*;
 
-/// ADR-0118 D4 付記: stale の自動再同期が上限に達し、reviewing のまま止めたことを示す `WorkerProgress` の接頭辞。
-pub(crate) const TARGET_RESYNC_HALTED_PREFIX: &str = "review target resync halted: ";
-
-/// ADR-0118 D4 付記: 直近の遷移（自動の再レビューの遷移を除く）以後の stale（`ReviewTargetAdvanced`）の数、
-/// その最後の記録、上限で止めた印の有無。自動の再レビュー（root delivery の `request_rereview`）は
-/// `Transitioned{rereview}` の直後に同じ transaction で `ReviewTargetAdvanced` を残すので数え直さない。
-fn pre_review_stale_state(events: &[Event]) -> (u32, Option<&Event>, bool) {
+/// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移（自動の
+/// 再レビューの遷移を除く）または再開（`ReviewResyncResumed`）以後の stale（`ReviewTargetAdvanced`）の数、
+/// その最後の記録、上限で止めた記録（`ReviewResyncHalted`）。自動の再レビュー（root delivery の
+/// `request_rereview`）は `Transitioned{rereview}` の直後に同じ transaction で `ReviewTargetAdvanced` を残すので
+/// 数え直さない。
+fn pre_review_stale_state(events: &[Event]) -> (u32, Option<&Event>, Option<&Event>) {
     let mut count = 0;
     let mut last = None;
-    let mut halted = false;
+    let mut halted = None;
     for (i, event) in events.iter().enumerate() {
         match event {
             Event::ReviewTargetAdvanced { .. } => {
@@ -24,15 +23,75 @@ fn pre_review_stale_state(events: &[Event]) -> (u32, Option<&Event>, bool) {
             {
                 count = 0;
                 last = None;
-                halted = false;
+                halted = None;
             }
-            Event::WorkerProgress { msg, .. } if msg.starts_with(TARGET_RESYNC_HALTED_PREFIX) => {
-                halted = true;
+            Event::ReviewResyncResumed { .. } => {
+                count = 0;
+                last = None;
+                halted = None;
+            }
+            Event::ReviewResyncHalted { .. } => {
+                halted = Some(event);
             }
             _ => {}
         }
     }
     (count, last, halted)
+}
+
+/// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D2: `git diff --name-only -z --no-renames a b`。
+/// git が起きない・失敗・path が UTF-8 でないときは `Err`（再利用しない側に倒す）。
+fn changed_files_between(dir: &Path, a: &str, b: &str) -> Result<Vec<String>, String> {
+    if a == b {
+        return Ok(Vec::new());
+    }
+    let out = task_ops::changes::git(
+        dir,
+        &["diff", "--name-only", "-z", "--no-renames", a, b],
+        task_ops::changes::GIT_TIMEOUT,
+    )
+    .ok_or_else(|| "git did not start".to_string())?;
+    if !out.ok {
+        return Err(format!("git diff {a} {b}: {}", out.why()));
+    }
+    task_ops::changes::parse_name_only_z(&out.stdout)
+}
+
+/// 同 D2: 同期前の HEAD（`before_sha`）に束縛された reviewer の合格（`ReviewerPassed` / `ReviewerPassReused`）。
+/// 直近の worker の run より前の合格は使わない（遷移 `review_pass`・`rereview` は跨ぐ: 合格→Done→delivery の
+/// 再レビューの経路）。
+fn bound_reviewer_pass(
+    events: &[(u64, Event)],
+    repo_id: task_core::RepoId,
+    before_sha: &str,
+) -> Option<(String, String)> {
+    for (_, event) in events.iter().rev() {
+        match event {
+            Event::Transitioned { reason, .. }
+                if reason != "review_pass" && reason != "rereview" =>
+            {
+                return None;
+            }
+            Event::ReviewerPassed {
+                review_run,
+                repo_id: repo,
+                target_sha,
+                reviewed_sha,
+                ..
+            }
+            | Event::ReviewerPassReused {
+                review_run,
+                repo_id: repo,
+                target_sha,
+                reviewed_sha,
+                ..
+            } if *repo == repo_id && reviewed_sha == before_sha => {
+                return Some((review_run.clone(), target_sha.clone()));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// ADR-0120 付記（fallback の解除）: fallback を解いて同期へ戻ったことを示す `WorkerProgress` の接頭辞。
@@ -63,6 +122,8 @@ fn fallback_head(events: &[(u64, Event)], repo_id: task_core::RepoId) -> Option<
 
 struct ReviewSync {
     repo_id: task_core::RepoId,
+    name: String,
+    dir: PathBuf,
     target_ref: String,
     target_sha: String,
     before_sha: String,
@@ -341,7 +402,7 @@ impl Dispatcher {
             )?;
             return Ok(true);
         }
-        if self.target_resync_exhausted(task_id, &run_id)? {
+        if self.target_resync_exhausted(&task, &run_id)? {
             return Ok(false);
         }
 
@@ -379,13 +440,13 @@ impl Dispatcher {
         };
         // ADR 2026-10-11 llm-source-harness-selection: reviewer run が保持する `(source, account)`
         // （admission の同時実行数に数える）。Reviewer run を起動しない場合は `None`。
-        let route = reviewer
+        let mut route = reviewer
             .as_ref()
             .map(|r| (r.pick.candidate.source.clone(), r.pick.account.clone()));
-        let account = reviewer.as_ref().map(|r| r.pick.account.to_string());
-        let account_adapter = reviewer.as_ref().and_then(|r| r.account_adapter);
+        let mut account = reviewer.as_ref().map(|r| r.pick.account.to_string());
+        let mut account_adapter = reviewer.as_ref().and_then(|r| r.account_adapter);
         // 選択の記録（`run_index_start` の後に `record_route_selection` へ渡す）と in_flight に使う。
-        let review_selection = reviewer.as_ref().map(|r| {
+        let mut review_selection = reviewer.as_ref().map(|r| {
             (
                 r.route_input.clone(),
                 r.pick.clone(),
@@ -394,7 +455,7 @@ impl Dispatcher {
                 r.run.adapter.id().to_string(),
             )
         });
-        let reviewer_run = reviewer.map(|r| r.run);
+        let mut reviewer_run = reviewer.map(|r| r.run);
         // The review lock covers the rebase and the checks that consume its result.
         // A deferred review reaches this point again and reads the then-current target.
         // Tree children historically commit their remaining run output on completion.
@@ -634,12 +695,29 @@ impl Dispatcher {
                 ));
                 synced.push(ReviewSync {
                     repo_id: reference.repo_id,
+                    name: repo.name.clone(),
+                    dir: worktree.dir.clone(),
                     target_ref,
                     target_sha,
                     before_sha,
                     reviewed_sha,
                 });
             }
+        }
+        // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D2: 同期前の HEAD に束縛された reviewer の
+        // 合格があり、target の進みが候補の差分と重ならなければ reviewer run を起こさず、決定的な check だけをやり直す。
+        let mut reviewer_reuse = None;
+        if reviewer_run.is_some()
+            && !synced.is_empty()
+            && let Some(reason) = self.reviewer_reuse(&task, &run_id, &synced)?
+        {
+            tracing::info!(%task_id, %reason, "reviewer pass reused; only deterministic checks rerun (ADR 2026-10-27 D2)");
+            reviewer_run = None;
+            review_selection = None;
+            route = None;
+            account = None;
+            account_adapter = None;
+            reviewer_reuse = Some(reason);
         }
         // ADR-0117 D1: reviewer run には対象 task と祖先の人の決定・回答を渡す（store から集める。LLM は呼ばない）。
         let (decisions, answers) = if reviewer_run.is_some() {
@@ -959,6 +1037,8 @@ impl Dispatcher {
                 answers,
                 // ADR 2026-10-07-worker-no-subagents-no-llm-cli D6。
                 policy_violations,
+                // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D2。
+                reviewer_reuse,
             };
             let mut outcome = review_task(
                 &task,
@@ -1063,14 +1143,123 @@ impl Dispatcher {
         Ok(())
     }
 
-    /// ADR-0118 D4 付記: 自動の再同期が上限（[`task_ops::delivery::MAX_TARGET_RESYNCS`]）に達したか。
-    /// 達していれば理由と両 SHA を一度だけ残し、reviewing のまま止める（attempts 不変・`failed` にしない）。
-    /// 人のコメント（`interrupt`）などの遷移で数え直して再開する。
-    fn target_resync_exhausted(
+    /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D2: 同期した全 repo で、同期前の HEAD に束縛された
+    /// reviewer の合格があり、その基底から今の target までに変わった file が候補の差分と重ならなければ、再利用の
+    /// 理由を返す（`ReviewerPassReused` を repo ごとに残す）。1 つでも満たさなければ `None`（reviewer をやり直す）。
+    fn reviewer_reuse(
         &self,
-        task_id: TaskId,
+        task: &Task,
+        run_id: &str,
+        synced: &[ReviewSync],
+    ) -> Result<Option<String>, DispatchError> {
+        let events = self.store.events_for(task.id)?;
+        let mut reused = Vec::new();
+        for s in synced {
+            let Some((review_run, from_target)) =
+                bound_reviewer_pass(&events, s.repo_id, &s.before_sha)
+            else {
+                return Ok(None);
+            };
+            let (target_files, task_files) = match (
+                changed_files_between(&s.dir, &from_target, &s.target_sha),
+                changed_files_between(&s.dir, &s.target_sha, &s.reviewed_sha),
+            ) {
+                (Ok(t), Ok(c)) => (t, c),
+                (Err(e), _) | (_, Err(e)) => {
+                    self.store.append_event(
+                        task.id,
+                        &Event::worker_progress(
+                            run_id.to_owned(),
+                            format!("reviewer not reused for {}: {e}", s.name),
+                        ),
+                    )?;
+                    return Ok(None);
+                }
+            };
+            let overlap: Vec<&String> = target_files
+                .iter()
+                .filter(|f| task_files.contains(f))
+                .collect();
+            if !overlap.is_empty() {
+                self.store.append_event(
+                    task.id,
+                    &Event::worker_progress(
+                        run_id.to_owned(),
+                        format!(
+                            "reviewer not reused for {}: {} advanced from {from_target} to {} touching the task's files [{}]; reviewing again",
+                            s.name,
+                            s.target_ref,
+                            s.target_sha,
+                            overlap
+                                .iter()
+                                .map(|f| f.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    ),
+                )?;
+                return Ok(None);
+            }
+            reused.push((review_run, from_target, target_files));
+        }
+        let mut reasons = Vec::new();
+        for (s, (review_run, from_target, target_files)) in synced.iter().zip(reused) {
+            reasons.push(format!(
+                "reviewer {review_run} passed {} on {from_target}; {} advanced to {} changing {} file(s) none of which the task touches",
+                s.before_sha,
+                s.target_ref,
+                s.target_sha,
+                target_files.len()
+            ));
+            self.store.append_event(
+                task.id,
+                &Event::ReviewerPassReused {
+                    review_run,
+                    repo_id: s.repo_id,
+                    target_sha: s.target_sha.clone(),
+                    reviewed_sha: s.reviewed_sha.clone(),
+                    from_target_sha: from_target,
+                    from_reviewed_sha: s.before_sha.clone(),
+                    target_files,
+                },
+            )?;
+        }
+        Ok(Some(reasons.join("; ")))
+    }
+
+    /// 同 ADR D4: 止めた repo の target ref の先頭 commit の committer 時刻（UNIX 秒）。読めなければ `None`。
+    fn target_commit_time(&self, task: &Task, repo_id: task_core::RepoId) -> Option<i64> {
+        let workspaces = self.task_workspaces_for(task)?;
+        let reference = task.repos.iter().find(|r| r.repo_id == repo_id)?;
+        let repo = workspaces.repos.iter().find(|r| r.name == reference.name)?;
+        let target_ref = self
+            .review_target_ref(task, repo_id, &repo.source)
+            .ok()
+            .flatten()?;
+        let dir = repo
+            .worktree
+            .as_ref()
+            .map(|w| w.dir.clone())
+            .unwrap_or_else(|| repo.source.clone());
+        let out = task_ops::changes::git(
+            &dir,
+            &["log", "-1", "--format=%ct", &target_ref],
+            task_ops::changes::GIT_TIMEOUT,
+        )?;
+        out.ok.then(|| out.stdout.trim().parse().ok()).flatten()
+    }
+
+    /// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 自動の再同期が上限
+    /// （[`task_ops::delivery::MAX_TARGET_RESYNCS`]）を超えたか。超えた最初の回は `ReviewResyncHalted` と通知を残し、
+    /// snapshot（受信箱）に出して reviewing のまま止める（attempts 不変・`failed` にしない）。止めている間は
+    /// target の先頭 commit が `review_resync_quiet` 以上古ければ（他の取り込みが止んだ）自動で再開する。
+    /// 人の `rereview`・コメント（`interrupt`）でも数え直して再開する。
+    fn target_resync_exhausted(
+        &mut self,
+        task: &Task,
         run_id: &str,
     ) -> Result<bool, DispatchError> {
+        let task_id = task.id;
         let events: Vec<Event> = self
             .store
             .events_for(task_id)?
@@ -1079,25 +1268,102 @@ impl Dispatcher {
             .collect();
         let (count, last, halted) = pre_review_stale_state(&events);
         if count <= task_ops::delivery::MAX_TARGET_RESYNCS {
+            self.review_resync_halted.remove(&task_id);
             return Ok(false);
         }
-        if !halted {
-            let (reviewed, target) = match last {
-                Some(Event::ReviewTargetAdvanced {
-                    reviewed_sha,
-                    target_sha,
-                    ..
-                }) => (reviewed_sha.as_str(), target_sha.as_str()),
-                _ => ("", ""),
-            };
-            let message = format!(
-                "{TARGET_RESYNC_HALTED_PREFIX}the target kept moving after {} automatic re-syncs (reviewed {reviewed}, target {target}); the task stays reviewing with attempts unchanged until a human resumes it",
-                task_ops::delivery::MAX_TARGET_RESYNCS
-            );
-            tracing::warn!(%task_id, %message);
-            self.store
-                .append_event(task_id, &Event::worker_progress(run_id.to_owned(), message))?;
+        let (review_run, repo_id, reviewed, target) = match halted.or(last) {
+            Some(Event::ReviewTargetAdvanced {
+                review_run,
+                repo_id,
+                reviewed_sha,
+                target_sha,
+                ..
+            })
+            | Some(Event::ReviewResyncHalted {
+                review_run,
+                repo_id,
+                reviewed_sha,
+                target_sha,
+                ..
+            }) => (
+                review_run.clone(),
+                *repo_id,
+                reviewed_sha.clone(),
+                target_sha.clone(),
+            ),
+            _ => return Ok(false),
+        };
+        let now = self.now_utc();
+        if halted.is_none() {
+            tracing::warn!(%task_id, count, %reviewed, %target, "review target kept moving; review halted until the target is quiet or a human resumes it (ADR 2026-10-27 D3)");
+            self.store.append_event(
+                task_id,
+                &Event::ReviewResyncHalted {
+                    review_run: review_run.clone(),
+                    repo_id,
+                    reviewed_sha: reviewed.clone(),
+                    target_sha: target.clone(),
+                    resyncs: count,
+                },
+            )?;
+            let title = format!("レビューの再同期が上限で止まった: {}", task.title);
+            if let Err(error) = self.store.notice_record(&task_core::feed::NoticeEvent {
+                source_key: format!("task:{task_id}:review-resync-halted:{target}"),
+                kind: task_core::feed::NoticeKind::BadNews,
+                group_key: format!("bad_news:task:{task_id}"),
+                title: title.clone(),
+                summary: format!(
+                    "{title}。取り込み先が {count} 回動いたので review を止めている（検査済み {reviewed}、取り込み先 {target}）。受信箱から再開できる。取り込み先が静かになれば自動で再開する"
+                ),
+                project_id: task.project_id.map(|p| p.to_string()),
+                task_id: Some(task_id.to_string()),
+                target: Some(task_core::feed::NoticeTarget {
+                    kind: "task".into(),
+                    id: task_id.to_string(),
+                }),
+                links: vec![task_core::feed::NoticeLink {
+                    label: "task 詳細".into(),
+                    href: format!("/tasks/{task_id}"),
+                }],
+                at: now,
+            }) {
+                tracing::error!(%task_id, %error, "failed to record the review resync halt notice");
+            }
+        } else if let Some(committed) = self.target_commit_time(task, repo_id)
+            && now.unix_timestamp() - committed >= self.config.review_resync_quiet.as_secs() as i64
+        {
+            tracing::info!(%task_id, "review target quiet; resuming the halted review (ADR 2026-10-27 D4)");
+            self.store.append_event(
+                task_id,
+                &Event::ReviewResyncResumed {
+                    review_run,
+                    repo_id,
+                    reason: "target_quiet".into(),
+                },
+            )?;
+            self.store.append_event(
+                task_id,
+                &Event::worker_progress(
+                    run_id.to_owned(),
+                    format!(
+                        "review resumed: the target has been quiet for {}s; re-syncing and re-checking",
+                        self.config.review_resync_quiet.as_secs()
+                    ),
+                ),
+            )?;
+            self.review_resync_halted.remove(&task_id);
+            return Ok(false);
         }
+        self.review_resync_halted.entry(task_id).or_insert_with(|| {
+            task_ops::daemon::SnapshotReviewResyncHalted {
+                task_id,
+                repo_id,
+                reviewed_sha: reviewed,
+                target_sha: target,
+                resyncs: count,
+                at: rfc3339(now),
+            }
+        });
         Ok(true)
     }
 

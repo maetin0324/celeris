@@ -114,6 +114,7 @@ fn dispatcher_with_test_clock(
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
                 None,
@@ -1235,6 +1236,7 @@ fn pool_dispatcher_with_requeues(
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
                 None,

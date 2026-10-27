@@ -818,6 +818,33 @@ pub(crate) fn rereview_op(
         ));
     }
     let from = task.status;
+    // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4: reviewing で止めている review の再開は遷移せず
+    // `ReviewResyncResumed` を残す（dispatcher が次の review 入口で数え直して再開する）。
+    if from == task_core::Status::Reviewing {
+        let Some(resume) = task_ops::comment::review_resync_resume_event(&events) else {
+            return Err(audit.reject(
+                store,
+                "task",
+                &target_id,
+                ops_problem(
+                    store,
+                    task_ops::OpsError::Validation("task is not eligible for rereview".into()),
+                    Some("rereview"),
+                ),
+            ));
+        };
+        let operation = audit.apply(store, "task", &target_id, "task.rereview", |tx| {
+            task_core::store::SqliteStore::append_event_tx(tx, id, &resume)?;
+            Ok(serde_json::json!({
+                "task_id": target_id,
+                "from": from,
+                "to": from,
+                "reason": "review_resync_resumed",
+                "cascaded": [],
+            }))
+        })?;
+        return Ok(Applied::Audited(Box::new(operation)));
+    }
     let operation = audit.apply(store, "task", &target_id, "task.rereview", |tx| {
         let outcome = task_core::store::SqliteStore::apply_transition_tx(
             tx,

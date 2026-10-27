@@ -250,6 +250,17 @@ pub enum AttentionItem {
         since: String,
         at: String,
     },
+    /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: stale の自動再同期が上限を超え、review を
+    /// reviewing のまま止めている task（`Event::ReviewResyncHalted` の写し。dispatcher の snapshot の
+    /// `review_resync_halted` から作る）。rereview か target が静かになった自動再開で消える。
+    ReviewResyncHalted {
+        task: TaskRef,
+        repo_id: task_core::RepoId,
+        reviewed_sha: String,
+        target_sha: String,
+        resyncs: u32,
+        at: String,
+    },
     /// ADR D4: 未回答の統合依頼。正本は IntegrationRequested / IntegrationAnswered。
     IntegrationRequest {
         task: TaskRef,
@@ -378,6 +389,7 @@ fn attention_task(item: &AttentionItem) -> Option<TaskId> {
         | AttentionItem::PlanApproval { task, .. }
         | AttentionItem::DeliverySkipped { task, .. }
         | AttentionItem::Stalled { task, .. }
+        | AttentionItem::ReviewResyncHalted { task, .. }
         | AttentionItem::BrowserPrerequisite { task, .. } => Some(task.id),
         // 統合依頼は Done task にも届くため、終端 task の attention 整理規則で隠さない。
         AttentionItem::ClusterUnavailable { .. }
@@ -396,6 +408,7 @@ fn attention_at(item: &AttentionItem) -> &str {
         AttentionItem::PlanApproval { at, .. } => at,
         AttentionItem::DeliverySkipped { at, .. } => at,
         AttentionItem::Stalled { at, .. } => at,
+        AttentionItem::ReviewResyncHalted { at, .. } => at,
         AttentionItem::IntegrationRequest { at, .. } => at,
         AttentionItem::BrowserPrerequisite { at, .. } => at,
         AttentionItem::Unintegrated { at, .. } => at,
@@ -1222,6 +1235,21 @@ fn build_attention(
                     detail: s.detail.clone(),
                     since: s.since.clone(),
                     at: s.at.clone(),
+                });
+            }
+        }
+        // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: 再同期の上限で止めている reviewing の task。
+        for h in &snap.review_resync_halted {
+            if let Some(t) = by_id.get(&h.task_id)
+                && t.status == Status::Reviewing
+            {
+                items.push(AttentionItem::ReviewResyncHalted {
+                    task: view::task_ref(t),
+                    repo_id: h.repo_id,
+                    reviewed_sha: h.reviewed_sha.clone(),
+                    target_sha: h.target_sha.clone(),
+                    resyncs: h.resyncs,
+                    at: h.at.clone(),
                 });
             }
         }

@@ -365,7 +365,31 @@ pub fn can_rereview(task: &task_core::Task, events: &[(u64, Event)]) -> bool {
     match task.status {
         Status::Done => true,
         Status::Failed => review_fail_is_the_only_reason_for_failure(events),
+        // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4: 再同期の上限で止めている review の再開。
+        Status::Reviewing => resync_halted_event(events).is_some(),
         _ => false,
+    }
+}
+
+/// 同 ADR D4: 止めている `ReviewResyncHalted`（直近の遷移・再開より後のもの）。
+fn resync_halted_event(events: &[(u64, Event)]) -> Option<Event> {
+    let plain: Vec<Event> = events.iter().map(|(_, e)| e.clone()).collect();
+    crate::delivery::review_resync_halted(&plain).cloned()
+}
+
+/// 同 ADR D4: reviewing で止めている task の再開の印（遷移しない）。`rereview` が reviewing の task で残す。
+pub fn review_resync_resume_event(events: &[(u64, Event)]) -> Option<Event> {
+    match resync_halted_event(events)? {
+        Event::ReviewResyncHalted {
+            review_run,
+            repo_id,
+            ..
+        } => Some(Event::ReviewResyncResumed {
+            review_run,
+            repo_id,
+            reason: "human".into(),
+        }),
+        _ => None,
     }
 }
 
@@ -392,6 +416,23 @@ pub fn rereview(
         return Err(OpsError::Validation(
             "reviewer条件を持つ通常タスクだけを再レビューできます".into(),
         ));
+    }
+    if task.status == Status::Reviewing {
+        let events = store.events_for(id)?;
+        let Some(resume) = review_resync_resume_event(&events) else {
+            return Err(OpsError::Validation(
+                "reviewing のタスクを再レビューできるのは、取り込み先の再同期が上限で止まっているときだけです"
+                    .into(),
+            ));
+        };
+        store.append_event(id, &resume)?;
+        return Ok(TransitionResult {
+            id,
+            from: Status::Reviewing,
+            to: Status::Reviewing,
+            reason: "review_resync_resumed".into(),
+            cascaded: Vec::new(),
+        });
     }
     if task.status == Status::Failed {
         let events = store.events_for(id)?;

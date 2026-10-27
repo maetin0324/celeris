@@ -831,6 +831,18 @@ fn run_of(event: &Event) -> Option<&str> {
         | Event::ReviewTargetAdvanced {
             review_run: run_id, ..
         }
+        | Event::ReviewerPassed {
+            review_run: run_id, ..
+        }
+        | Event::ReviewerPassReused {
+            review_run: run_id, ..
+        }
+        | Event::ReviewResyncHalted {
+            review_run: run_id, ..
+        }
+        | Event::ReviewResyncResumed {
+            review_run: run_id, ..
+        }
         | Event::QuestionRaised { run_id, .. }
         | Event::Delegated { run_id, .. } => Some(run_id.as_str()),
         _ => None,

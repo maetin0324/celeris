@@ -305,7 +305,7 @@ impl SqliteStore {
         Ok(closed)
     }
 
-    pub(crate) fn append_event_tx(
+    pub fn append_event_tx(
         conn: &Connection,
         task_id: TaskId,
         event: &Event,

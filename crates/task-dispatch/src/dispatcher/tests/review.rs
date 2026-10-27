@@ -536,6 +536,7 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
                 None,
@@ -653,6 +654,7 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
                 None,
@@ -773,6 +775,7 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
                 None,

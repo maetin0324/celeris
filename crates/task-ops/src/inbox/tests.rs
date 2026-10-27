@@ -771,6 +771,7 @@ fn inbox_attention_unroutable_only_populated_with_snapshot() {
         stalled_tasks: vec![],
         stagnation: vec![],
         stagnation_policy: None,
+        review_resync_halted: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,
@@ -834,6 +835,7 @@ fn inbox_attention_stalled_from_snapshot_for_ready_tasks_only() {
         stalled_tasks: vec![stalled(stuck.id), stalled(done.id)],
         stagnation: vec![],
         stagnation_policy: None,
+        review_resync_halted: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,
@@ -888,6 +890,100 @@ fn inbox_attention_stalled_from_snapshot_for_ready_tasks_only() {
         !out.attention
             .iter()
             .any(|a| matches!(a, AttentionItem::Stalled { .. }))
+    );
+}
+
+/// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: snapshot の `review_resync_halted` が
+/// `ReviewResyncHalted` になり、受信箱の `review_resync_halted`（rereview を native で委ねる）に出る。
+/// reviewing でない task は出さない。
+#[test]
+fn inbox_attention_review_resync_halted_from_snapshot_for_reviewing_tasks_only() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let halted = sample_task(TaskKind::Execute, Status::Reviewing);
+    store.insert(&halted).expect("insert halted");
+    let done = sample_task(TaskKind::Execute, Status::Done);
+    store.insert(&done).expect("insert done");
+    let ctx = view_ctx();
+    let now = OffsetDateTime::now_utc();
+    let entry = |id: TaskId| crate::daemon::SnapshotReviewResyncHalted {
+        task_id: id,
+        repo_id: task_core::RepoId::new(),
+        reviewed_sha: "ddd444".into(),
+        target_sha: "eee555".into(),
+        resyncs: 3,
+        at: "2026-10-27T07:23:00Z".into(),
+    };
+    let snapshot = DaemonSnapshot {
+        instance_id: "01J000000000000000000000AA".into(),
+        pid: 1,
+        hostname: "host".into(),
+        started_at: view::to_rfc3339(now),
+        last_tick_at: view::to_rfc3339(now),
+        ticks: 1,
+        tick_ms: 2000,
+        in_flight: vec![],
+        cooldowns: vec![],
+        task_waits: vec![],
+        stalled_tasks: vec![],
+        stagnation: vec![],
+        stagnation_policy: None,
+        review_resync_halted: vec![entry(halted.id), entry(done.id)],
+        reports: None,
+        approvals_pending: 0,
+        decisions_open: 0,
+        clusters: vec![],
+        accounts_root: None,
+        accounts_roots: std::collections::HashMap::new(),
+        max_runs_per_account: None,
+        accounts: vec![],
+        implicit_accounts: vec![],
+        containers: None,
+        scratch: None,
+    };
+    let out = inbox(&store, Some(&snapshot), &ctx, now, &no_evidence).expect("inbox");
+    let ids: Vec<TaskId> = out
+        .attention
+        .iter()
+        .filter_map(|a| match a {
+            AttentionItem::ReviewResyncHalted { task, resyncs, .. } if *resyncs == 3 => {
+                Some(task.id)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, vec![halted.id]);
+    let human = crate::human_inbox::from_inbox(
+        &out,
+        &store
+            .list(None)
+            .expect("list")
+            .into_iter()
+            .map(|t| (t.id, t))
+            .collect(),
+        now,
+    );
+    let item = human
+        .items
+        .iter()
+        .find(|i| i.kind == crate::human_inbox::InboxKind::ReviewResyncHalted)
+        .expect("halted item");
+    assert_eq!(item.task.as_ref().map(|t| t.id), Some(halted.id));
+    assert_eq!(item.recommended.as_deref(), Some("rereview"));
+    assert_eq!(
+        item.answer.native.as_ref().map(|n| n.path.as_str()),
+        Some(format!("/api/v1/tasks/{}/rereview", halted.id).as_str())
+    );
+    assert!(
+        item.detail.as_deref().unwrap_or("").contains("eee555"),
+        "{item:?}"
+    );
+    let mut cleared = snapshot.clone();
+    cleared.review_resync_halted.clear();
+    let out = inbox(&store, Some(&cleared), &ctx, now, &no_evidence).expect("inbox");
+    assert!(
+        !out.attention
+            .iter()
+            .any(|a| matches!(a, AttentionItem::ReviewResyncHalted { .. }))
     );
 }
 
@@ -1137,6 +1233,7 @@ fn inbox_attention_cluster_unavailable_hidden_once_reconnected_and_host_filled_f
         stalled_tasks: vec![],
         stagnation: vec![],
         stagnation_policy: None,
+        review_resync_halted: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,
@@ -1431,6 +1528,7 @@ fn inbox_cleanup_r3_terminal_snapshot_unroutable_is_hidden() {
         stalled_tasks: vec![],
         stagnation: vec![],
         stagnation_policy: None,
+        review_resync_halted: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,

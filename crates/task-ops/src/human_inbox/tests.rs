@@ -329,6 +329,14 @@ fn fixture() -> Fixture {
             since: AT.to_string(),
             at: AT.to_string(),
         },
+        AttentionItem::ReviewResyncHalted {
+            task: tref.clone(),
+            repo_id: task_core::RepoId::new(),
+            reviewed_sha: "ddd444".into(),
+            target_sha: "eee555".into(),
+            resyncs: 3,
+            at: AT.to_string(),
+        },
     ];
     inbox
         .browser_waits
@@ -619,6 +627,7 @@ fn variant_index(kind: InboxKind) -> usize {
         InboxKind::HumanWaitAging => 19,
         InboxKind::ReleaseUnpromoted => 20,
         InboxKind::TaskUnscheduled => 21,
+        InboxKind::ReviewResyncHalted => 22,
     }
 }
 
@@ -628,7 +637,7 @@ fn human_inbox_all_contains_every_variant_once() {
     seen.sort_unstable();
     assert_eq!(
         seen,
-        (0..=21).collect::<Vec<_>>(),
+        (0..=22).collect::<Vec<_>>(),
         "ALL must list every variant once"
     );
 }

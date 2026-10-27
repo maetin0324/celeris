@@ -1515,6 +1515,7 @@ fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<dyn TaskStor
             idle_timeout: Duration::from_secs(600),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(60),
+            review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 paths.workspaces.clone(),
                 None,

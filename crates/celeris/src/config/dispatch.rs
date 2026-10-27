@@ -71,18 +71,27 @@ fn default_reviewer_tier() -> Tier {
 pub struct ReviewConfig {
     #[serde(default = "default_max_reviewer_retries")]
     pub max_reviewer_retries: u32,
+    /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4: 再同期の上限で止めた review を、取り込み先の
+    /// 先頭 commit がこの秒数以上古ければ自動で再開する。
+    #[serde(default = "default_resync_quiet_secs")]
+    pub resync_quiet_secs: u64,
 }
 
 impl Default for ReviewConfig {
     fn default() -> Self {
         Self {
             max_reviewer_retries: default_max_reviewer_retries(),
+            resync_quiet_secs: default_resync_quiet_secs(),
         }
     }
 }
 
 fn default_max_reviewer_retries() -> u32 {
     3
+}
+
+fn default_resync_quiet_secs() -> u64 {
+    900
 }
 
 /// `[dispatch]`（ADR-0070 D3, Phase 116）: ワーカー run 自身のインフラ都合の失敗を、attempts を
@@ -135,6 +144,7 @@ impl Config {
             idle_timeout: Duration::from_secs(self.idle_timeout_secs),
             kill_grace: Duration::from_secs(self.kill_grace_secs),
             review_timeout: Duration::from_secs(self.review_timeout_secs),
+            review_resync_quiet: Duration::from_secs(self.review.resync_quiet_secs),
             workspace_roots: self.workspace_roots(),
             plan_auto_accept: self.plan.auto_accept,
             retry_backoff_base: Duration::from_secs(self.retry_backoff_base_secs),

@@ -251,7 +251,7 @@ pub(crate) fn delegated_request(
                 serde_json::json!({}),
             )
         }
-        InboxKind::Failed => {
+        InboxKind::Failed | InboxKind::ReviewResyncHalted => {
             let p = format!(
                 "/api/v1/tasks/{}/{}",
                 task.ok_or_else(|| gone(&item.id))?,

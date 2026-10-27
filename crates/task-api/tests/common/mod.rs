@@ -482,6 +482,7 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
         stalled_tasks: vec![],
         stagnation: vec![],
         stagnation_policy: None,
+        review_resync_halted: vec![],
         reports: None,
         approvals_pending: 0,
         decisions_open: 0,

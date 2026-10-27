@@ -90,7 +90,8 @@ token の値は shell 引数・log・画面に出さない。
    token_file = "llm-proxy.token"
    ```
 
-5. 検証: `CELERIS_CONFIG=~/.config/celeris/config.toml.new scripts/selfdeploy/verify.sh <sha12>`。
+5. 検証: `CELERIS_CONFIG=~/.config/celeris/config.toml.new SD_WEB_ENV=~/.config/celeris/web.env.new scripts/selfdeploy/verify.sh <sha12>`
+   （`web.env.new` は 6 の内容で先に作る。`SD_WEB_ENV` が無いと web probe が旧 `web.env` を読み、BFF の起動拒否で落ちる）。
    N-1（現行 release）は新形式の config を読めず起動に失敗する見込み（旧形式は新 binary が拒否するため、両方が読める
    config は無い）。verify がこれで落ちる場合の扱いは、operator が利用者に知らせて決める。
 6. web の env: live unit と `web.env` から `CELERIS_API_TOKEN_FILE` を消し、

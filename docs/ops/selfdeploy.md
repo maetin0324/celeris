@@ -57,7 +57,7 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
 ```
 
 `SD_DB`（selfdeploy が読む DB）は **`config.toml` の `db =`（または `[db].path`）から決まる**。
-`CELERIS_DB` で DB を、`CELERIS_CONFIG` で設定ファイルそのものを上書きできる（試験・別の置き場での検証用）。
+`CELERIS_DB` で DB を、`CELERIS_CONFIG` で設定ファイルそのものを、`SD_WEB_ENV` で web probe が読む `web.env` を上書きできる（試験・別の置き場での検証用。config の書式が変わる昇格では、切り替える前の新しい config と web env で `verify.sh` を通す）。
 
 **同時に走らせない**（ADR-0041 D2）。`verify.sh` は staging のディレクトリとポートを固定で使うので、
 2 本目は `staging/.lock` で待つ（上限 `SD_VERIFY_LOCK_WAIT`、既定 1800 秒。超えたら **exit 75**

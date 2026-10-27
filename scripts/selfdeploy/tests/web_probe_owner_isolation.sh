@@ -30,4 +30,17 @@ grep -qx 'CELERIS_WEB_OWNER_ID=alice' "$root/env.out" || fail "other web.env val
 grep -qx 'CELERIS_API_URL=http://127.0.0.1:9999' "$root/env.out" || fail "web.env override lost"
 grep -qx "CELERIS_WEB_BIND=127.0.0.1:$port" "$root/env.out" || fail "bind missing"
 grep -qx 'CELERIS_WEB_RELEASE=aaaaaaaaaaaa' "$root/env.out" || fail "release missing"
+
+# SD_WEB_ENV は既定の web.env より勝つ（config の書式が変わる昇格の前の verify 用）。
+printf 'CELERIS_API_URL=http://127.0.0.1:9998\n' >"$root/config/web.env.new"
+rm -f "$root/env.out"
+(
+  export CELERIS_CONFIG_DIR="$root/config" SD_WEB_NODE="$root/node" SD_WEB_PROBE_TIMEOUT=1
+  export SD_WEB_ENV="$root/config/web.env.new"
+  # shellcheck disable=SC1091
+  source "$here/lib.sh"
+  sd_web_app_probe "$root/app" "$port" aaaaaaaaaaaa || true
+) >/dev/null 2>&1
+grep -qx 'CELERIS_API_URL=http://127.0.0.1:9998' "$root/env.out" || fail "SD_WEB_ENV not read"
+! grep -q '^CELERIS_WEB_OWNER_ID=' "$root/env.out" || fail "default web.env read despite SD_WEB_ENV"
 echo 'web_probe_owner_isolation: all ok'

@@ -503,9 +503,10 @@ sd_wait_http_200() {
 }
 
 # celeris-web@.service の Environment= と EnvironmentFile= に対応する値を読む。
-# web.env は KEY=VALUE のみを受け付け、シェルとして実行しない。
+# web.env は KEY=VALUE のみを受け付け、シェルとして実行しない。`SD_WEB_ENV` が立っていればその file を
+# 読む（config の書式が変わる昇格の前に、新しい web env で `verify.sh` の web probe を通すため。`CELERIS_CONFIG` と対）。
 sd_web_load_env() {
-  local file="${CELERIS_CONFIG_DIR}/web.env" line key value
+  local file="${SD_WEB_ENV:-${CELERIS_CONFIG_DIR}/web.env}" line key value
   export NODE_ENV=production
   export CELERIS_WEB_BIND=127.0.0.1:7720
   export CELERIS_API_URL=http://127.0.0.1:7710

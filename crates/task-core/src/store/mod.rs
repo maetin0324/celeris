@@ -111,6 +111,7 @@ mod legacy;
 pub(crate) mod local_machine;
 mod messages;
 mod model_catalog;
+mod request_ledger;
 mod task_integration_state;
 pub use model_catalog::ModelCatalogStore;
 mod account_limits;

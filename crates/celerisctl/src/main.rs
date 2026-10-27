@@ -22,6 +22,7 @@ use commands::cos_ops::{self, ApiRequestArgs};
 use commands::cron::{self as cron_cmd, CronCommand};
 use commands::curation::{self as curation_cmd, CurationCommand};
 use commands::db::{self as db_cmd, DbCommand};
+use commands::eval::{self as eval_cmd, EvalCommand};
 use commands::execution::{
     self as execution_cmd, ExecutionCommand, ExecutionPlanCommand, PhaseGateActionArg, TreeCommand,
 };
@@ -212,6 +213,11 @@ enum Command {
         #[command(subcommand)]
         command: CampaignCommand,
     },
+    /// ADR 2026-10-27-eval-request-ledger: `eval requests --since --until`（論理要求の台帳。DB は読むだけ）。
+    Eval {
+        #[command(subcommand)]
+        command: EvalCommand,
+    },
     /// ADR-0066 D2（Phase 110b）: `workspace prune`。
     Workspace {
         #[command(subcommand)]
@@ -299,6 +305,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
         Command::Target { .. } => unreachable!("handled before store open"),
         Command::Release { .. } => unreachable!("handled before store open"),
         Command::Campaign { command } => campaign_cmd::run(store, command),
+        Command::Eval { command } => eval_cmd::run(store, command),
         Command::Org { command } => org_cmd::run(store, db_path, command),
         // `Config` は DB を開く前に処理される（`main` を見よ）。
         Command::Config { command } => config_cmd::run(command),

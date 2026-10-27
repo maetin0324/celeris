@@ -348,6 +348,8 @@ pub mod decision_log_export;
 #[path = "decision_log_export_tests.rs"]
 mod decision_log_export_tests;
 pub mod model_policy;
+/// ADR 2026-10-27-eval-request-ledger: 論理要求の台帳の出力の形。
+pub mod request_ledger;
 pub mod retry_policy;
 pub mod routing_audit;
 pub mod variant_wire;

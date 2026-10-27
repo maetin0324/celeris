@@ -15,7 +15,7 @@ task-dispatch = { path = "../task-dispatch" }
 celeris-mcp = { path = "../celeris-mcp" }
 celeris = { path = "../celeris" }
 clap = { version = "4", features = ["derive", "env"] }
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

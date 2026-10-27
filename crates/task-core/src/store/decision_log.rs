@@ -988,7 +988,7 @@ fn parse_ts(s: &str) -> Option<OffsetDateTime> {
 
 /// 判断・操作の event を介入の区分と主体の `by` へ写す（ADR 2026-10-27-decision-log-intervention-actors D2）。
 /// 主体は問わない（人以外の処理も行に残し、主体の欄で区別する）。介入でない event は `None`。
-fn intervention_of(event: &crate::Event) -> Option<(InterventionKind, Option<&str>)> {
+pub(crate) fn intervention_of(event: &crate::Event) -> Option<(InterventionKind, Option<&str>)> {
     use crate::Event;
     Some(match event {
         // blocked・decision への回答と計画の承認待ちの判断は研究の方針の選択。

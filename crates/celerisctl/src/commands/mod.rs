@@ -19,6 +19,8 @@ pub mod cron;
 pub mod curation;
 /// ADR-0064 D2/D3（Phase 110a）: `celerisctl db backup|integrity-check`。DB を通常の経路では開かない。
 pub mod db;
+/// ADR 2026-10-27-eval-request-ledger: `celerisctl eval requests`（論理要求の台帳。DB は読むだけ）。
+pub mod eval;
 /// ADR-0072 D14（Phase E2）: `celerisctl execution plan set|show`。
 pub mod execution;
 pub mod gate;

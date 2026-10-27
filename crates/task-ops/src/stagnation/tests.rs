@@ -294,7 +294,6 @@ fn gather_reads_project_and_ready_task_facts_from_the_store() {
         title: "P0-2".into(),
         request: "r".into(),
         status: ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         created_at: now,
         updated_at: now,

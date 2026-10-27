@@ -37,13 +37,16 @@ tasks: [01M5XXF7Q3N2619D5RQA5J7C7N]
   （最初の `[[api.tokens]]`、`operator:measure`）、`config/celeris*.example.toml`（`[[api.tokens]]` の例と
   proxy の bearer は `[llm_proxy] token_file`）、`docs/ops/selfdeploy.md` と `celeris --token-file` の説明
   （`operator:verify` 1 本への置き換え）。
+- main（案件の状態の要約）へ rebase。`PUT /projects/{id}/status` の `updated_by` が固定の `human` だったので
+  principal を渡す（`put_project_brief_op` の `by`）。`project_brief` 試験は `human:test` を確かめる。
+  main の `task-ops` stagnation 試験が削除済みの `Project.secretary_summary` を書いていて compile できなかったので消した。
 - 残す: 過去の進捗・ADR の記述（歴史記録）、`celerisctl browser doctor` の `CELERIS_API_TOKEN_FILE`
   （CLI の token file を指す現行の env で、BFF の旧 env とは別）。
 
 ## 証拠（提出時の HEAD で実行）
 
-- `cargo nextest run -p task-api --test api_principals` → exit 0（7 passed）。
-- `bash scripts/dev/test-affected.sh` → exit 0（Rust 6541 passed / 21 skipped、web 型検査成功、Vitest 682 passed、Node 99 passed）。
+- `cargo nextest run -p task-api --test api_principals` → exit 0（7 passed）。`--test project_brief` と合わせて 10 passed。
+- `bash scripts/dev/test-affected.sh` → exit 0（Rust 6565 passed / 21 skipped、web 型検査成功、Vitest 682 passed）。
 - `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。
 - `node --test web/server/principal-config.test.mjs` → exit 0（1 passed）。
 - 全体 nextest・全体 doc test・web e2e・実 browser/userns は実行していない。
@@ -56,6 +59,7 @@ tasks: [01M5XXF7Q3N2619D5RQA5J7C7N]
 
 - phase 1: main 同期後の API 主体を昇格監査と一時停止へ通す
 - API の主体: 現行文書と設定例から旧い [api] token_file・CELERIS_API_TOKEN_FILE の案内を消す
+- API の主体: 案件の状態の要約の updated_by を principal にする
 
 ## 本番への移行
 

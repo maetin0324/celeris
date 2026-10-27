@@ -1589,7 +1589,7 @@ ULID でない id・無い案件は 404 `project_not_found`。知らないクエ
 - `objective`（≤ 2,000 字）・`state`（≤ 4,000 字）は必須で空は 422。一覧は各 20 件・各 500 字まで。
 - `waiting_on[].kind` は `human` / `task` / `external`。`task` の `target` はこの案件の task id（違えば 422）。
 - 応答と `GET /projects`・`GET /projects/{id}` の `brief` は本文に `project_id`・`updated_at`・`updated_by` を足したもの。
-  `updated_by` は人の直接の `PUT` では `human`、CoS では `cos:<thread id>`。
+  `updated_by` は直接の `PUT` では呼び出しの principal（`human:web`・`operator:<name>`）、CoS では `cos:<thread id>`。
 - CoS（`/cos/operations` の `project.status_put`）からは**その案件の案件 CoS スレッドの run だけ**が書ける
   （統括 CoS・他案件の CoS は 403 `project_brief_forbidden`、`rejected` で記録）。案件が無ければ 404。
 

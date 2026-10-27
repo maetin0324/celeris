@@ -15,6 +15,7 @@ use crate::cos::operations::{Applied, OperationAudit};
 use time::OffsetDateTime;
 
 use crate::middleware::require_admin;
+use crate::principal::Caller;
 use crate::problem::{ApiProblem, ops_problem, store_problem};
 use crate::query::QueryParams;
 use crate::state::ApiState;
@@ -556,9 +557,11 @@ pub(crate) fn cos_patch_project(
 }
 
 /// `PUT /projects/{id}/status`（**管理系**）。ADR 2026-10-27-project-brief D3: 人が案件の状態の要約を
-/// 全置換で書く（`updated_by = "human"`）。CoS は `/cos/operations` の `project.status_put` を使う。
+/// 全置換で書く（`updated_by` は呼び出しの principal。ADR 2026-10-27-api-principals）。CoS は `/cos/operations` の
+/// `project.status_put` を使う。
 pub(super) async fn put_project_status(
     State(state): State<ApiState>,
+    caller: Caller,
     Params(id): Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -569,17 +572,20 @@ pub(super) async fn put_project_status(
     let project_id = parse_project_id(&id)?;
     let input: ProjectBriefInput = read_json(body, false).await?;
     let brief = state
-        .blocking(move |store| put_project_brief_op(store, project_id, input, None)?.direct())
+        .blocking(move |store| {
+            put_project_brief_op(store, project_id, input, &caller.actor(), None)?.direct()
+        })
         .await?;
     Ok(json_response(StatusCode::OK, &brief))
 }
 
-/// 案件の状態の要約の全置換。handler（`audit = None`、人）と CoS の `project.status_put` が共有する。
+/// 案件の状態の要約の全置換。handler（`audit = None`、`by` は principal）と CoS の `project.status_put` が共有する。
 /// CoS からは**その案件の案件 CoS スレッドの run だけ**が書ける（D3。他は 403 `project_brief_forbidden`）。
 pub(crate) fn put_project_brief_op(
     store: &SqliteStore,
     project_id: ProjectId,
     input: ProjectBriefInput,
+    by: &str,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<ProjectBrief>, ApiProblem> {
     let target_id = project_id.to_string();
@@ -595,7 +601,7 @@ pub(crate) fn put_project_brief_op(
         return Err(reject(ApiProblem::project_not_found(&target_id)));
     }
     let updated_by = match audit {
-        None => "human".to_string(),
+        None => by.to_string(),
         Some(audit) => {
             let thread = store
                 .chat_thread_get(&audit.ctx.thread_id)

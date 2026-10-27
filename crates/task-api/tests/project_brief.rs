@@ -74,7 +74,7 @@ async fn project_brief_admin_put_replaces_and_shows_in_list_and_detail() {
     )
     .await;
     assert_eq!(first.status.as_u16(), 200, "{}", first.text());
-    assert_eq!(first.json()["updated_by"], "human");
+    assert_eq!(first.json()["updated_by"], TEST_ACTOR);
     assert_eq!(first.json()["project_id"], project.to_string());
 
     let mut second = brief_body("二");

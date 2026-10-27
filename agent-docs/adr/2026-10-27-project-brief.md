@@ -30,7 +30,7 @@
   - CoS（`/cos/operations`）からは **その案件の案件 CoS スレッドの run だけ**が書ける（統括 CoS・他案件の CoS・
     旧スレッドは 403 `project_brief_forbidden`、`rejected` で記録）。`updated_by` は `cos:<thread id>`。
     統括 CoS は要約を読むだけにし、書く責任を案件 CoS に寄せる（同じ案件を 2 者が書き直して食い違わないように）。
-  - 人は管理系（admin token）の直接の `PUT` で書ける。`updated_by` は `human`。
+  - 人は管理系（admin token）の直接の `PUT` で書ける。`updated_by` は呼び出しの principal（`human:<name>`・`operator:<name>`。ADR 2026-10-27-api-principals）。
   - 案件が無ければ 404。
 - D4. `GET /projects` の各項目に、案件（従来の欄はそのまま平らに）に加えて次を足す:
   `brief`（D2。無ければ省略）、`task_counts`（task の状態ごとの件数）、`last_activity_at`（案件の task の

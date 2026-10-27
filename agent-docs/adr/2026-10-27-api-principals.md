@@ -72,3 +72,9 @@ MCP・CoS・未認証はこの通常 API の昇格主体として拒否する。
 thread 種別から `cos_general` / `cos_project` を決める。固定 human の constructor は除去する。
 
 一時停止・再開の通常 API も Caller を `plan_set_paused` へ渡し、既存 Edited.by の固定 human を除く。
+
+## main 同期時の追記: 案件の状態の要約
+
+main に加わった `PUT /projects/{id}/status`（ADR 2026-10-27-project-brief D3）の `updated_by` も、人の直接の
+`PUT` では固定の `human` でなく認証済み principal（`human:web`・`operator:<name>`）にする。CoS の
+`project.status_put` は従来どおり `cos:<thread_id>`。

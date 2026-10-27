@@ -124,6 +124,7 @@ pub(crate) fn dispatch(
                 store,
                 id,
                 input,
+                &audit.by(),
                 Some(audit),
             )?)
         }

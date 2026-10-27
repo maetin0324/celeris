@@ -7,7 +7,7 @@
 D10 が予定した報告からの抽出は実装されていなかった。整理 worker は候補の振り分けを続け、その前に daemon が langmem 支援 task を起こす。LLM は langmem の Python process だけで呼ぶ。既存の harness=langmem の llm_routes と独立した llm_proxy.token_file を使い、汎用 harness への切替はこの抽出には使わない。
 
 1. cron 由来の日次整理 task は、daemon の入力準備完了を SQLite の knowledge_runs に記録するまで dispatch しない。抽出 task は元の日次 task を示す label と入力 JSON を持つ。再起動時は同じ label の task を回収し、新しい抽出を重ねない。
-2. reports の期間は直前の created cron run から今回の発火時刻まで。報告・結果・コメントの抜粋、既存 KB の題名と関連ページを渡す。抽出済み・抽出中の元 task は knowledge_runs の主キーで除外する。失敗も記録し、自動で何度も抽出しない。
+2. reports の期間は直前の created cron run から今回の発火時刻まで。報告・結果・コメントの抜粋、既存 KB の題名と関連ページを渡す。抽出済み・抽出中の元 task は knowledge_runs の主キーで除外する。失敗も記録し、自動で何度も抽出しない。整理の reports.json と抽出の入力は従来どおり期間内の先頭 200 件まで（REPORTS_MAX）。通常の日次の 1 回の抽出は未処理の元 task を先頭 20 件までにし、出力が 40 件の上限を超えにくくする。外した元 task は knowledge_runs に記録せず、件数と終端の UTC 日を抽出の理由（日次要約と判断待ち）に出す。人はその日を extraction_date で遡る。
 3. 出力は knowledge-candidates.json。apply_candidates の検証と配置規則を通すが、専用 Inbox policy で全候補を _inbox に置く。元 task の出典を必須とし、最大 40 件を超える出力は全体を拒否する。候補のファイル名は run と候補の内容から決定し、適用中断後の再実行で複製を作らない。
 4. 抽出終端後に KB をコピーし、D12 の 40 件上限を維持して整理する。失敗時も入力を用意し、日次要約と判断待ちに理由を記録する。抽出失敗の判断待ちは整理 run を妨げないタイミング（整理終端）で出す。
 `dry_run` は整理による正本ページの変更を止めるが、前段の抽出候補は _inbox に保存する。

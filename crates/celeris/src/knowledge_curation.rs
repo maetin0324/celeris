@@ -60,7 +60,8 @@ pub const WORKER_DIFF: &str = "curation.worker.diff";
 const RUN_SCAN_LIMIT: usize = 30;
 /// 状態ファイルに残す task の件数の上限（古い順に捨てる）。
 const STATE_KEEP: usize = 200;
-/// 報告本文の抜粋の上限（字数）。
+/// `reports.json` と抽出の入力に入れる task の上限と、報告本文の抜粋の上限（字数）。
+const REPORTS_MAX: usize = 200;
 const REPORT_EXCERPT_CHARS: usize = 600;
 /// この日数より古い未読の報告を「古い報告」の判断候補にする。
 const OLD_REPORT_DAYS: i64 = 7;
@@ -556,6 +557,7 @@ fn reports_since(
     // 終端時刻・task id の順に重複なく並べる。
     tasks.sort_by(|a, b| a.updated_at.cmp(&b.updated_at).then(a.id.cmp(&b.id)));
     tasks.dedup_by_key(|t| t.id);
+    tasks.truncate(REPORTS_MAX);
     let mut out = Vec::with_capacity(tasks.len());
     for t in tasks {
         let report = store

@@ -14,13 +14,14 @@ updated: 2026-10-27
 - 日次整理は入力準備の永続化まで dispatch しない。再起動後は同じ抽出 task を回収する。抽出の待機は注入した時計で30分までとし、超過した task は取り消して整理を続ける。
 - 候補は最大40件。整理のD12上限も40件のまま。遡りは同じUTC日を最大10 taskずつ処理し、_inboxが40件以上なら抽出を持ち越して整理を先にする。
 - `dry_run` は整理による正本ページの変更を止める。前段の抽出は候補を _inbox に置くので、KBディレクトリ全体が不変という意味ではない。
+- `phase 1: 日次の抽出と整理の報告件数に上限を戻し遡り手順を直す`（review 差し戻しの対応）— 整理の reports.json と抽出入力は先頭 200 件（REPORTS_MAX）に戻した。通常の日次の抽出は 1 回 20 件までにし、外した件数と UTC 日を日次要約と判断待ちに出す。遡り手順の script は `cron show` の最上位の `template` を読むよう直した（CronJobView は job を flatten する。task-api の cron_jobs 試験の `body["template"]` で確認）。
 - 設計は [日次抽出ADR](../adr/2026-10-27-daily-knowledge-extraction.md)。dispatcher/storeはLLMを呼ばず、langmemのPythonだけがLLMを呼ぶ。既存のllm_routesを使い、汎用harnessへの切替はこの抽出では行わない。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 
-- 条件0（抽出→検査→候補→整理、失敗継続）: `bash scripts/dev/test-affected.sh` → exit 0。抽出の前後関係、再起動時の再利用、候補の冪等性、失敗・不正出力・出典不足・上限超過、注入時計による待機期限、同日遡りの分割と重複防止、満杯時の持ち越し、明示再試行を決定的に検証。本物のLLMは使っていない。
+- 条件0（抽出→検査→候補→整理、失敗継続）: `bash scripts/dev/test-affected.sh` → exit 0。抽出の前後関係、再起動時の再利用、候補の冪等性、失敗・不正出力・出典不足・上限超過、注入時計による待機期限、同日遡りの分割と重複防止、通常の日次の20件上限と外した日の表示、満杯時の持ち越し、明示再試行を決定的に検証。本物のLLMは使っていない。
 - 条件1（設計・遡り手順）: ADR-0131 D10を更新し、日付を固定した10 task/回の遡り手順を下に記載。langmemのproxy鍵は、独立したoperator tokenを用意した設定試験に合格。dispatcher/storeにLLM呼び出しは追加していない。
-- 条件2: `bash scripts/dev/test-affected.sh` → exit 0。Rust 5,326 passed / 21 skipped、対象crateのdoc test合格、Web tsc合格・unit 682 passed、gateway 99 passed。初回の旧前提の2件を修正して再実行した結果。
+- 条件2: `bash scripts/dev/test-affected.sh` → exit 0。Rust 5,340 passed / 21 skipped、対象crateのdoc test合格、Web tsc合格・unit 682 passed、gateway 99 passed。初回の旧前提の2件を修正して再実行した結果。
 - 条件3: `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0（差分なし）。
 - `sh scripts/dev/progress-index.sh --check` と文書・source-size・人向け文面の検査は test-affected の health 段で合格。
 
@@ -36,8 +37,8 @@ celerisctl cron pause daily-curation
 celerisctl cron show daily-curation > daily-curation.saved.json
 python3 - <<'PY'
 import json
-job = json.load(open('daily-curation.saved.json'))['job']
-template = job['template']
+# cron show の応答 CronJobView は job を flatten するので、template は最上位にある。
+template = json.load(open('daily-curation.saved.json'))['template']
 template['extraction_date'] = '2026-10-03'
 template['mode'] = 'apply'
 json.dump(template, open('knowledge-backfill-template.json', 'w'), ensure_ascii=False)
@@ -70,8 +71,9 @@ celerisctl cron run knowledge-backfill-20261003
 celerisctl cron resume daily-curation
 ```
 
-6. 失敗分は自動再抽出しない。原因を直した後、人が `celerisctl knowledge rerun <元task-id>` で失敗した元taskだけを再指定し、該当UTC日の遡りjobを発火する。成功した元taskや日次整理task自体をresetしない。resetのない同じ日の再実行は失敗分も含めて重複を作らない。取り込み済み候補の重複生成を避けるため、除外が一部だけの回は成功分をresetせず、除外理由を個別に確認する。
-7. 最後に通常の日次jobの再開を確認し、GUIの定期実行画面で遡り用のdisabled jobを削除する。必要な報告と抽出記録は保持する。
+6. 通常の日次の抽出は 1 回 20 件まで。日次要約に「報告 N 件を今回の抽出から外した」と出たら、示された UTC 日を手順 5 で遡る（外した元 task は未記録なので遡りが拾う）。
+7. 失敗分は自動再抽出しない。原因を直した後、人が `celerisctl knowledge rerun <元task-id>` で失敗した元taskだけを再指定し、該当UTC日の遡りjobを発火する。成功した元taskや日次整理task自体をresetしない。resetのない同じ日の再実行は失敗分も含めて重複を作らない。取り込み済み候補の重複生成を避けるため、除外が一部だけの回は成功分をresetせず、除外理由を個別に確認する。
+8. 最後に通常の日次jobの再開を確認し、GUIの定期実行画面で遡り用のdisabled jobを削除する。必要な報告と抽出記録は保持する。
 
 ## 未解決
 

@@ -393,3 +393,34 @@ fn failed_sources_require_an_explicit_rerun_before_another_extraction() {
         batch.id
     );
 }
+
+#[test]
+fn daily_extraction_caps_sources_and_reports_the_overflow_days() {
+    let env = setup("dry_run");
+    let sources: Vec<_> = (0..23).map(|_| source(&env)).collect();
+    let date = env
+        .store
+        .get(sources[0].id)
+        .unwrap()
+        .unwrap()
+        .updated_at
+        .date();
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    let batch = pending(&env);
+    let input: serde_json::Value = serde_json::from_str(&batch.objective).unwrap();
+    assert_eq!(input["reports"].as_array().unwrap().len(), 20);
+    complete(&env, &batch, serde_json::json!({"candidates":[]}));
+    assert_eq!(env.tick(now).prepared, vec![task.id]);
+    let summary = extraction::summary(&env.store, &task).unwrap().unwrap();
+    assert_eq!(summary.discarded_reasons.len(), 1, "{summary:?}");
+    assert!(summary.discarded_reasons[0].contains("報告 3 件"));
+    assert!(summary.discarded_reasons[0].contains(&date.to_string()));
+    // The 3 overflow sources stay unclaimed so a backfill for that day can pick them up.
+    let unclaimed = sources
+        .iter()
+        .filter(|s| !env.store.knowledge_run_exists(s.id).unwrap())
+        .count();
+    assert_eq!(unclaimed, 3);
+}

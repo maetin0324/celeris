@@ -12,3 +12,12 @@
 ## 運用
 
 本番の操作はこの task では行わない。初回導入では新しい scripts を使い、必須環境変数を明示する。既存記録は保持する。
+
+## 付記 2026-10-27: 記録した後の credentiald 切替の失敗
+
+credentiald の切り替え（ADR 2026-10-27-promote-switches-credentiald）は、昇格・rollback を記録した後に行う。この切り替えが失敗しても、監査記録は成功のまま残す。
+
+- promote.sh（通常 rollback を含む）: `sd_audit finish 0` で audit と promoted.json（rollback では rolled_back.json も）を書き、`PROMOTED_RECORDED=true` にする。その後の失敗で EXIT trap の `record_promote_failure` は audit を書き換えない（`PROMOTED_RECORDED=true` なら `sd_audit finish` を呼ばない）。promote_failed.json も書かない。
+- rollback.sh --restore-db: `current` を previous へ付け替え、promoting 印を片付けた直後に `sd_audit finish 0` を呼び、audit と rolled_back.json を書く。`AUDIT_FINISHED=true` で EXIT trap の二度目の finish を止める。それより前の失敗は従来どおり trap が status=failed で閉じる。
+- 切り替えの失敗は `credentiald_switch_failed.json` だけに残し、exit 3 で知らせる。audit file・promoted.json・rolled_back.json に別欄は足さない。このため GET /releases の deployment_audit の型は変えない。
+- 試験は `scripts/selfdeploy/tests/credentiald_switch.sh` の H・J・K。audit/*.json がちょうど 1 件で status=succeeded・exit_code=0 であること、promoted.json / rolled_back.json の operation・status・exit_code・時刻と一致することを確かめる。

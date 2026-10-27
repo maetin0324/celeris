@@ -86,10 +86,11 @@ sd_log "will restore the DB from $SRC ($(du -h "$SRC" | cut -f1))"
 
 AUDIT_FILE="$(sd_audit begin "$PREV_DIR" rollback "$CUR" "$PREV" restore-db)"
 PROMOTING_WRITTEN=false
+AUDIT_FINISHED=false
 clear_promoting_on_exit() {
   local ec=$?
   if [ "$PROMOTING_WRITTEN" = true ]; then sd_clear_promoting "$PREV" || true; fi
-  sd_audit finish "$AUDIT_FILE" "$ec"
+  if [ "$AUDIT_FINISHED" != true ]; then sd_audit finish "$AUDIT_FILE" "$ec"; fi
 }
 trap clear_promoting_on_exit EXIT
 trap 'exit 130' INT
@@ -170,6 +171,10 @@ sd_set_link "$SD_CURRENT" "$PREV"
 sd_clear_promoting "$PREV"
 PROMOTING_WRITTEN=false
 sd_log "rolled back to $PREV with a restored DB. Lost: everything after $SRC was taken."
+# link を付け替えた時点で rollback は成功。audit と rolled_back.json を先に書き、後の credentiald の
+# 失敗（exit 3）で EXIT trap が failed に書き換えないようにする。
+sd_audit finish "$AUDIT_FILE" 0
+AUDIT_FINISHED=true
 # credentiald は link の付け替え・印の片付けの後に切り替える（失敗しても rollback は取り消さない）。
 if ! sd_credentiald_after_switch "$PREV_DIR" "$PREV" "$CUR"; then
   echo "rollback.sh: rolled back to $PREV, but the credentiald switch failed (see $PREV_DIR/credentiald_switch_failed.json)" >&2

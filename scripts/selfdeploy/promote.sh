@@ -80,7 +80,10 @@ PROMOTING_WRITTEN=false
 PROMOTED_RECORDED=false
 record_promote_failure() {
   local ec=$?
-  if [ -n "$AUDIT_FILE" ] && [ "$ec" -ne 0 ]; then sd_audit finish "$AUDIT_FILE" "$ec" || true; fi
+  # promoted.json を記録した後は audit も succeeded で閉じてある。後の失敗（credentiald）で書き換えない。
+  if [ -n "$AUDIT_FILE" ] && [ "$ec" -ne 0 ] && [ "$PROMOTED_RECORDED" != true ]; then
+    sd_audit finish "$AUDIT_FILE" "$ec" || true
+  fi
   if [ "$PROMOTING_WRITTEN" = true ]; then sd_clear_promoting "$SHA12" || true; fi
   [ "$ec" -eq 0 ] && return
   # promoted.json を書いた後の失敗（credentiald の切り替え）は昇格の失敗ではない。

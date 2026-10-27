@@ -8,11 +8,11 @@
 #   G〜K promote.sh・rollback.sh を偽の systemctl / curl / sqlite3 / ss で最後まで走らせる:
 #     G live: link の付け替え・promoted.json の後に旧を止めて新を起こす（exit 0）
 #     H stop-start で新が active にならない: exit 3、current は新、promoted.json あり、promote_failed.json なし、
-#       credentiald_switch_failed.json あり
+#       credentiald_switch_failed.json あり、audit は succeeded のまま promoted.json と一致
 #     I 引き継ぎの再開（新の celeris が既に active）でも切り替える
 #     J rollback.sh --restore-db で新が active にならない: exit 3、current は previous、promoting.json なし、
-#       credentiald_switch_failed.json あり
-#     K rollback.sh --restore-db の成功: link の付け替えの後に切り替える（exit 0）
+#       credentiald_switch_failed.json あり、audit は succeeded で rolled_back.json と一致
+#     K rollback.sh --restore-db の成功: link の付け替えの後に切り替える（exit 0）。audit と rolled_back.json が一致
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SD="$(cd "$HERE/.." && pwd)"
@@ -172,6 +172,25 @@ switched_after_link() {
     && grep -q -- "start $(cred "$to") current=releases/$want\$" "$log"
 }
 rel() { echo "$CELERIS_STATE_DIR/releases/$1"; }
+# release の audit/*.json がちょうど 1 件で succeeded・exit_code=0、記録 file（promoted.json / rolled_back.json）と
+# operation・status・exit_code・started_at が一致するか。
+audit_matches() {
+  python3 - "$1" "$2" <<'PY2'
+import json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+audits = sorted((root / 'audit').glob('*.json'))
+if len(audits) != 1:
+    sys.exit('audit files: %d' % len(audits))
+audit = json.loads(audits[0].read_text())
+record = json.loads((root / sys.argv[2]).read_text())
+if audit['status'] != 'succeeded' or audit['exit_code'] != 0:
+    sys.exit('audit: status=%s exit_code=%s' % (audit['status'], audit['exit_code']))
+for key in ('operation', 'status', 'exit_code', 'started_at', 'finished_at'):
+    if record.get(key) != audit.get(key):
+        sys.exit('%s differs: %r vs %r' % (key, record.get(key), audit.get(key)))
+PY2
+}
 check() { if eval "$2"; then ok "$1"; else ng "$1"; echo "---- $CASE/out.log" >&2; cat "$CASE/out.log" >&2; fi; }
 
 # G live
@@ -189,6 +208,7 @@ run_script promote.sh "$NEW"
 check "H: stop-start exit 3 (rc=$RC)" '[ "$RC" = 3 ] && grep -q "promotion mode: stop-start" "$CASE/out.log"'
 check "H: current -> new, promoted.json kept" '[ "$(readlink "$CELERIS_STATE_DIR/current")" = "releases/$NEW" ] && [ -f "$(rel "$NEW")/promoted.json" ]'
 check "H: no promote_failed.json, credentiald_switch_failed.json written" '[ ! -e "$(rel "$NEW")/promote_failed.json" ] && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"from\"]==sys.argv[2] and d[\"failed_at\"] else 1)" "$(rel "$NEW")/credentiald_switch_failed.json" "$OLD"'
+check "H: audit stays succeeded and matches promoted.json" 'audit_matches "$(rel "$NEW")" promoted.json'
 check "H: no promoting.json left" '[ -z "$(find "$CELERIS_STATE_DIR/releases" -name "promoting.json*")" ]'
 
 # I 引き継ぎの再開（stop-start。新の celeris は既に active、link はまだ旧）
@@ -210,6 +230,7 @@ run_script rollback.sh --restore-db
 check "J: rollback exit 3 (rc=$RC)" '[ "$RC" = 3 ]'
 check "J: current -> previous, previous -> rolled-back release" '[ "$(readlink "$CELERIS_STATE_DIR/current")" = "releases/$OLD" ] && [ "$(readlink "$CELERIS_STATE_DIR/previous")" = "releases/$NEW" ]'
 check "J: no promoting.json left, credentiald_switch_failed.json written" '[ -z "$(find "$CELERIS_STATE_DIR/releases" -name "promoting.json*")" ] && [ -f "$(rel "$OLD")/credentiald_switch_failed.json" ]'
+check "J: audit succeeded and matches rolled_back.json" 'audit_matches "$(rel "$OLD")" rolled_back.json'
 check "J: switch ran after the links were updated" 'grep -q -- "start $(cred "$OLD") current=releases/$OLD\$" "$FAKE_STATE/systemctl.log"'
 
 # K rollback --restore-db の成功
@@ -221,5 +242,6 @@ touch "$FAKE_STATE/started-$(cred "$NEW")"
 run_script rollback.sh --restore-db
 check "K: rollback exit 0 (rc=$RC)" '[ "$RC" = 0 ]'
 check "K: new stopped before previous started, after current -> previous" 'switched_after_link "$OLD" "$NEW" "$OLD"'
+check "K: audit succeeded and matches rolled_back.json" 'audit_matches "$(rel "$OLD")" rolled_back.json'
 
 exit "$FAIL"

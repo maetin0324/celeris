@@ -12,6 +12,7 @@ tasks: [01M5XXF7QP63BMV6AS0WNDW01N]
 
 - `phase 1: 配備とrollbackの実行根拠・検証結果を監査履歴に残す` — 必須実行者・理由・方針、task/decision 参照、verify snapshot、操作ごとの終了結果を保存。履歴 API と status に公開。
 - 人 / CoS の API 経路を区別し、CoS の認証済み操作への参照を引き継ぐ。
+- `記録した昇格・rollback の後の credentiald 切替失敗で監査記録を書き換えない` — promote.sh は promoted.json 記録後（`PROMOTED_RECORDED=true`）の失敗で audit を上書きしない。rollback.sh --restore-db は link 付け替え後に audit を exit_code=0 で閉じて rolled_back.json を書き、その後に credentiald を切り替える（失敗は exit 3 のまま）。失敗は credentiald_switch_failed.json だけに残す（ADR 付記）。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 
@@ -20,6 +21,8 @@ tasks: [01M5XXF7QP63BMV6AS0WNDW01N]
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo test -p celeris --test deployment_audit` → exit 0、1 passed。実スクリプトを偽 host コマンドで実行し、必須情報欠落時の副作用前拒否、live / stop-start、通常 / DB 復元 rollback、失敗記録、再試行履歴、verify snapshot を検証。
 - `bash scripts/selfdeploy/tests/promote_live_abort.sh` → exit 0、all ok。
+- `bash scripts/selfdeploy/tests/credentiald_switch.sh` → exit 0、全件 ok。H・J・K で audit/*.json が 1 件・succeeded・exit_code=0 で promoted.json / rolled_back.json と一致することを検査。修正前の promote.sh・rollback.sh に戻すと H（audit status=failed exit_code=3）と J（rolled_back.json なし）が FAIL、exit 1。
+- `bash scripts/selfdeploy/tests/promote_authorization_marker.sh` → exit 0。
 - `UPDATE_SCHEMA=1 cargo test -p task-api schema --lib` → exit 0、3 passed。`node web/scripts/gen-types.mjs` で生成型を更新。
 - API 履歴と環境変数伝搬、CoS の actor・理由・方針・操作参照は Rust 回帰試験で検証。
 - 本番配備、release gate、全 workspace の一括試験は実行していない。

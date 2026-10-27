@@ -280,6 +280,11 @@ pub fn template_to_spec(
     spec.project_id = project_id;
     spec.repos = template.repos.clone();
     spec.labels = vec![CRON_TASK_LABEL.to_string()];
+    if let Some(date) =
+        crate::knowledge_curation::extraction_date(template).map_err(OpsError::Validation)?
+    {
+        spec.labels.push(format!("extraction-date-{date}"));
+    }
     if let Some(label) = template_mode_label(template) {
         spec.labels.push(label.to_string());
     }
@@ -378,6 +383,7 @@ pub fn validate_job(
             "template extra.mode must be \"dry_run\" or \"apply\"".to_string(),
         ));
     }
+    crate::knowledge_curation::extraction_date(&job.template).map_err(OpsError::Validation)?;
     template_action(&job.template).map_err(OpsError::Validation)?;
     let kind = template_kind(&job.template).map_err(OpsError::Validation)?;
     if job.name.trim().is_empty() {

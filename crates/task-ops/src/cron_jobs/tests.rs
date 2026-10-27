@@ -715,3 +715,22 @@ fn cos_review_without_a_sink_records_an_error_and_run_now_is_refused() {
         "{err}"
     );
 }
+
+#[test]
+fn extraction_date_is_validated_and_pinned_on_the_created_task() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let ctx = CronFireContext::default();
+    for value in [serde_json::json!("2026-02-30"), serde_json::json!(42)] {
+        let mut new = new_job(CronOverlap::Skip, CronCatchUp::Latest);
+        new.template.extra.insert("extraction_date".into(), value);
+        assert!(create_job(&store, &ctx, new, t("2026-10-27T00:00:00Z")).is_err());
+    }
+    let mut new = new_job(CronOverlap::Skip, CronCatchUp::Latest);
+    new.template
+        .extra
+        .insert("extraction_date".into(), serde_json::json!("2026-10-03"));
+    let job = create_job(&store, &ctx, new, t("2026-10-27T00:00:00Z")).unwrap();
+    let fired = run_now(&store, job.id, t("2026-10-27T01:00:00Z")).unwrap();
+    let task = store.get(fired.task_id.unwrap()).unwrap().unwrap();
+    assert!(task.labels.contains(&"extraction-date-2026-10-03".into()));
+}

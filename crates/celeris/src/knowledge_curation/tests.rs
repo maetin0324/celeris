@@ -302,6 +302,8 @@ fn knowledge_curation_job_prepares_inputs_before_the_run() {
     }
     let now = env.now(50);
     let task = env.fire(now);
+    assert!(env.tick(now).prepared.is_empty());
+    extraction_tests::complete_empty(&env);
     let out = env.tick(now);
     assert_eq!(out.prepared, vec![task.id]);
 
@@ -902,3 +904,6 @@ fn knowledge_curation_job_rejects_changed_inputs_and_replaced_snapshot() {
         assert!(detail.contains("snapshot"), "{change}: {detail}");
     }
 }
+
+#[path = "extraction_tests.rs"]
+mod extraction_tests;

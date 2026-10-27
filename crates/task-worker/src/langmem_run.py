@@ -47,22 +47,22 @@ MAX_SUMMARY_CHARS = 1500
 # ADR-0047 D4: what to keep vs. never store, spelled out for the extractor.
 EXTRACTION_INSTRUCTIONS = """\
 You are the knowledge-base maintainer for an autonomous agent platform (Celeris).
-You will be given the full write-up of one finished task (its objective, its
-report, its result, comments, related existing knowledge-base pages, the
-assignee's private notebook, and a list of existing page titles).
+You will be given write-ups of one or more finished tasks (their objectives,
+reports, results, comments, related existing knowledge-base pages, optional
+assignee notebook excerpts, and a list of existing page titles).
 
 Extract knowledge-base candidates as structured records. Each candidate has:
   op: one of "create" | "update" | "merge" | "retire"
   path: the knowledge-base-relative path of a *.md page (existing page for
         update/merge/retire, a new sensible path under user/, environment/,
-        projects/<slug>/, or experience/ for create)
+        projects/<slug>/, or experience/YYYY/MM/ for create)
   title: a short page title
   tags: a short list of lowercase tags
   scope: one of "user" | "environment" | "project:<slug>" | "experience"
   body: the full markdown body (for update/merge: the *complete* rewritten
         page body, not a diff or an addendum; for retire: optional, a short
         reason)
-  sources: at least one of "task:<id>" (use the given task id),
+  sources: at least one of "task:<id>" (use a source task id from the supplied reports),
            "url:<...>" -- never leave this empty. Add "human:instruction"
            next to "task:<id>" for a fact that comes from a human's
            instruction or statement. Never write a bare "human" or

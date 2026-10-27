@@ -73,7 +73,14 @@ pub fn retry_failed(
         return Ok(Vec::new());
     }
     for run in store.knowledge_run_recent(RUN_SCAN_LIMIT)? {
-        if run.state != KnowledgeRunState::Failed || run.retried_at.is_some() {
+        if store
+            .get(run.run_task_id)?
+            .as_ref()
+            .is_some_and(task_ops::knowledge_curation::is_daily_extraction)
+            || run.via.as_deref() == Some("daily-ready")
+            || run.state != KnowledgeRunState::Failed
+            || run.retried_at.is_some()
+        {
             continue;
         }
         let Some(task) = store.get(run.task_id)? else {
@@ -273,6 +280,11 @@ pub fn apply_finished(
             store.knowledge_run_finish(run.task_id, KnowledgeRunState::Failed, now, None, None)?;
             continue;
         };
+        if task_ops::knowledge_curation::is_daily_extraction(&run_task)
+            || task_ops::knowledge_curation::is_curation_task(&run_task)
+        {
+            continue;
+        }
         if !run_task.status.is_terminal() {
             continue;
         }

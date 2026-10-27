@@ -282,7 +282,8 @@ UNIQUE が防ぐ範囲に留める。
    `schedule` は呼ばず、終端 task ごとの「知識整理: …」支援 task を新たに作らない。既に作成された
    `knowledge_runs` の `apply_finished` と `retry_failed` は残し、進行中の run と一度だけの再試行を
    完了させる。`reports.rs` の「報告のまとめ」は従来どおり残す。これは D6 の「削減は範囲外」を
-   改める決定であり、日次整理は task ごとの候補抽出も引き受ける。
+   改める決定である。報告からの候補抽出は当初未実装だった。現在は
+   [日次抽出 ADR](2026-10-27-daily-knowledge-extraction.md) に従い、整理前の langmem run が引き受ける。
 2. **入力は daemon が決定的に準備する。** 日次整理 task の run ごとに、worker の作業場所の
    `inputs/kb/` に本番 KB の読み取り用の写し、`inputs/inbox.json` に `build_attention` の表示項目と
    `suppressed` の規則別件数、`inputs/reports.json` に前回の日次整理以降に終端になった task の

@@ -11,7 +11,8 @@
 //! **LLM はこの python プロセスの中だけ**で起きる（CLAUDE.md「ディスパッチャやストアに LLM 呼び出しを
 //! 入れない」。dispatch の判断もトリガの決定も celeris 側は決定的なまま）。
 //!
-//! 入力は `req.task.objective` そのもの — `crates/celeris/src/knowledge_maint.rs` が
+//! 日次入力は `celeris::knowledge_curation::extraction` が複数 task の報告を JSON にまとめる。
+//! 単体の再試行の入力は `req.task.objective` そのもの — `crates/celeris/src/knowledge_maint.rs` が
 //! `task_core::knowledge::maintenance_objective` で、タスクの報告・結果・コメント・関連する既存の
 //! KB ページ・担当ノードの手帳・既存の索引の題名を**あらかじめ** 1 本のテキストへ組んである
 //! （`local-deep-research` の `build_query` と同じ考え方: アダプタ・ランナーは余計なファイルを

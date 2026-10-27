@@ -3429,7 +3429,7 @@ fn hot_mount_check_refuses_a_plain_directory_on_the_root_filesystem() {
 fn langmem_proxy_config(dir: &Path, base_url: &str, secret: Option<&str>) -> Config {
     let secrets_dir = dir.join("secrets");
     std::fs::create_dir_all(&secrets_dir).unwrap();
-    let token_file = dir.join("api.token");
+    let token_file = dir.join("llm-proxy.token");
     std::fs::write(&token_file, "proxy-token\n").unwrap();
     let secret_line = match secret {
         Some(value) => {
@@ -3463,16 +3463,23 @@ model = "qwen3.8-27b"
 }
 
 /// ADR-0139 D2: `base_url` が同じ celeris の llm-proxy を指すなら、langmem（アダプタと probe）の鍵は
-/// proxy が照合する `[api]` のトークン。`api_key_secret` が無い・違う値でも bearer は必ず渡る。
+/// proxy が照合する `[llm_proxy] token_file` のトークン。`api_key_secret` が無い・違う値でも bearer は必ず渡る。
 #[test]
-fn langmem_api_key_config_uses_the_api_token_when_targeting_llm_proxy() {
+fn langmem_api_key_config_uses_the_proxy_token_when_targeting_llm_proxy() {
     for (secret, warns) in [
         (Some("proxy-token"), false),
         (Some("other-value"), true),
         (None, false),
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let cfg = langmem_proxy_config(dir.path(), "http://127.0.0.1:18100/v1", secret);
+        let mut cfg = langmem_proxy_config(dir.path(), "http://127.0.0.1:18100/v1", secret);
+        let operator_token = dir.path().join("operator.token");
+        std::fs::write(&operator_token, "independent-operator-token").unwrap();
+        cfg.api = toml::from_str(&format!(
+            "[[tokens]]\nprincipal = \"operator:test\"\ntoken_file = \"{}\"\n",
+            operator_token.display()
+        ))
+        .unwrap();
         assert!(cfg.langmem_targets_llm_proxy());
         assert_eq!(
             cfg.langmem_api_key().as_deref(),
@@ -3514,13 +3521,13 @@ fn langmem_api_key_config_uses_the_secret_for_other_endpoints_and_warns_if_missi
     assert!(warnings[0].contains("cannot be resolved"), "{warnings:?}");
 }
 
-/// ADR-0139 D3: proxy を指しているのに `[api]` のトークンも `api_key_secret` も読めなければ、
+/// ADR-0139 D3: proxy を指しているのに `[llm_proxy] token_file` のトークンも `api_key_secret` も読めなければ、
 /// run を起こす前（設定の読み込み時）に警告する。無効な `[knowledge.langmem]` は何も言わない。
 #[test]
 fn langmem_auth_warnings_config_reports_a_missing_proxy_bearer() {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = langmem_proxy_config(dir.path(), "http://127.0.0.1:18100/v1", None);
-    std::fs::remove_file(dir.path().join("api.token")).unwrap();
+    std::fs::remove_file(dir.path().join("llm-proxy.token")).unwrap();
     assert!(cfg.langmem_api_key().is_none());
     let warnings = cfg.langmem_auth_warnings();
     assert_eq!(warnings.len(), 1, "{warnings:?}");

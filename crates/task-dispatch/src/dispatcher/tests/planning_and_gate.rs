@@ -1502,7 +1502,7 @@ async fn knowledge_curation_cron_task_skips_the_gate_and_runs_atomic() {
     });
     let task_id = task.id;
     store.insert(&task).unwrap();
-
+    assert!(!task_ops::knowledge_curation::inputs_ready(store.as_ref(), &task).unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -1512,6 +1512,21 @@ async fn knowledge_curation_cron_task_skips_the_gate_and_runs_atomic() {
         delay: Duration::ZERO,
     });
     let mut d = dispatcher(store.clone(), adapter, 1);
+    assert!(!d.dispatch_one(task.clone(), None, Instant::now()).unwrap());
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Ready);
+    store
+        .knowledge_run_create(task.id, task.id, time::OffsetDateTime::now_utc())
+        .unwrap();
+    store
+        .knowledge_run_finish(
+            task.id,
+            task_core::KnowledgeRunState::Done,
+            time::OffsetDateTime::now_utc(),
+            None,
+            Some("daily-ready"),
+        )
+        .unwrap();
+
     d.config.execution.gate = task_core::GateMode::On;
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");

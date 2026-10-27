@@ -1433,6 +1433,8 @@ pub fn apply_candidates(root: &Path, task_id: &str, candidates: &[kb::Candidate]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyPolicy {
     Task,
+    /// Daily extraction always stages candidates for curation.
+    Inbox,
     Gc,
 }
 
@@ -1525,7 +1527,13 @@ pub fn apply_candidates_in(
             out.committed.push(path);
             continue;
         }
-        match write_inbox_candidate(root, task_id, candidate, &path) {
+        match write_inbox_candidate(
+            root,
+            task_id,
+            candidate,
+            &path,
+            policy == ApplyPolicy::Inbox,
+        ) {
             Ok(inbox_path) => out.inboxed.push(inbox_path),
             Err(detail) => out.dropped.push((candidate.path.clone(), detail)),
         }
@@ -1612,6 +1620,7 @@ fn write_inbox_candidate(
     task_id: &str,
     candidate: &kb::Candidate,
     target_path: &str,
+    deterministic: bool,
 ) -> Result<String, String> {
     let now = OffsetDateTime::now_utc();
     let stamp = format!(
@@ -1630,7 +1639,21 @@ fn write_inbox_candidate(
         id = format!("{stamp}-{slug}-{n}");
         n += 1;
     }
+    if deterministic {
+        use sha2::{Digest, Sha256};
+        let bytes = serde_json::to_vec(candidate).map_err(|e| e.to_string())?;
+        id = format!("daily-{task_id}-{:x}", Sha256::digest(bytes));
+    }
     let path = format!("{INBOX_DIR}/{id}.md");
+    if deterministic && root.join(&path).exists() {
+        commit_paths(
+            root,
+            &format!("knowledge: 候補 {path}（task {task_id}）"),
+            (kb::AGENT_AUTHOR_NAME, kb::AGENT_AUTHOR_EMAIL),
+            &[path.as_str()],
+        )?;
+        return Ok(path);
+    }
     let mut sources = candidate.sources.clone();
     let task_source = format!("task:{task_id}");
     if !sources.iter().any(|s| s == &task_source) {

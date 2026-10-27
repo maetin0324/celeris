@@ -22,6 +22,9 @@ impl Dispatcher {
         forced_wu: Option<task_core::WorkUnitRow>,
         now: Instant,
     ) -> Result<bool, DispatchError> {
+        if !task_ops::knowledge_curation::inputs_ready(self.store.as_ref(), &task)? {
+            return Ok(false);
+        }
         // ADR-0074 D1.3（Phase F2b）: 並列 WU の 2 本目以降（Task は既に Running。担当・gate・
         // バックオフは 1 本目で済んでいる）。
         let second_pass = forced_wu.is_some();
@@ -452,7 +455,11 @@ impl Dispatcher {
         // ADR-0052 D1 / D2（Phase 64）: 知識整理 run は dispatch の直前に `langmem` の接続先へ
         // `GET /models` を当て、届かなければ tier `cheap` の**汎用**ハーネスへ倒す
         // （task harness の固定を外すだけで、通常の route 選択へ戻す）。LLM は呼ばない。
-        let fallback_reason = self.knowledge_fallback_reason(&task, now);
+        let fallback_reason = if task_ops::knowledge_curation::is_daily_extraction(&task) {
+            None
+        } else {
+            self.knowledge_fallback_reason(&task, now)
+        };
         if let Some(reason) = &fallback_reason
             && let Some(tier) = self.config.knowledge.fallback_tier
         {

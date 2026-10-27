@@ -371,7 +371,13 @@ fn knowledge_curation_job_apply_without_approval_commits_pushes_and_terminal_tas
             .status
             .is_terminal()
     );
-    assert!(f.store.knowledge_run_recent(10).unwrap().is_empty());
+    // The daily task has its durable input-ready marker; an ordinary terminal task
+    // still does not start extraction outside a daily job.
+    let records = f.store.knowledge_run_recent(10).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].task_id, task.id);
+    assert_eq!(records[0].via.as_deref(), Some("daily-ready"));
+    assert!(!f.store.knowledge_run_exists(ordinary.id).unwrap());
     f.store
         .report_append(&Report {
             id: ReportId::new(),

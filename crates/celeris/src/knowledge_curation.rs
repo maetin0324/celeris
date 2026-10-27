@@ -27,6 +27,8 @@
 //! 進み具合は daemon の状態ファイル（`<db>.knowledge-curation.json`）に task ごとに残す（worker が書ける
 //! 作業場所には置かない）。
 
+mod extraction;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -58,8 +60,7 @@ pub const WORKER_DIFF: &str = "curation.worker.diff";
 const RUN_SCAN_LIMIT: usize = 30;
 /// 状態ファイルに残す task の件数の上限（古い順に捨てる）。
 const STATE_KEEP: usize = 200;
-/// `reports.json` に入れる task の上限と、報告本文の抜粋の上限（字数）。
-const REPORTS_MAX: usize = 200;
+/// 報告本文の抜粋の上限（字数）。
 const REPORT_EXCERPT_CHARS: usize = 600;
 /// この日数より古い未読の報告を「古い報告」の判断候補にする。
 const OLD_REPORT_DAYS: i64 = 7;
@@ -259,14 +260,40 @@ pub fn tick(
                     let previous = runs[i + 1..]
                         .iter()
                         .find(|r| r.outcome == CronRunOutcome::Created && r.task_id.is_some());
+                    let since = previous.map_or(job.created_at, |p| p.recorded_at);
+                    let summary = match extraction::advance(
+                        store,
+                        knowledge_root,
+                        roots,
+                        &task,
+                        since,
+                        run.recorded_at,
+                        now,
+                    ) {
+                        Ok(None) => continue,
+                        Ok(Some(summary)) => summary,
+                        Err(reason) => task_core::KnowledgeRunSummary {
+                            discarded_reasons: vec![reason],
+                            ..Default::default()
+                        },
+                    };
+                    extraction::staged(store, &task, &summary, now)?;
                     match prepare(store, knowledge_root, view, job, run, previous, &task, now) {
                         Ok(entry) => {
                             state.tasks.insert(key, entry);
+                            save_state(state_file, &state).map_err(StoreError::Invalid)?;
+                            extraction::ready(store, &task, &summary, now)?;
                             out.prepared.push(task_id);
                         }
                         Err(e) => {
                             tracing::warn!(%task_id, error = %e, "knowledge curation: could not prepare the inputs")
                         }
+                    }
+                }
+                (Some(Phase::Prepared), s) if !s.is_terminal() => {
+                    if !curation::inputs_ready(store, &task)? {
+                        let summary = extraction::summary(store, &task)?.unwrap_or_default();
+                        extraction::ready(store, &task, &summary, now)?;
                     }
                 }
                 (Some(Phase::Prepared) | None, s) if s.is_terminal() => {
@@ -433,12 +460,13 @@ fn prepare(
         Some(p) => p.recorded_at,
         None => job.created_at,
     };
-    let reports = reports_since(store, since, now).map_err(|e| e.to_string())?;
+    let (since, until) = extraction::interval(task, since, run.recorded_at)?;
+    let reports = reports_since(store, roots, since, until).map_err(|e| e.to_string())?;
     write_json(
         &inputs.join("reports.json"),
         &serde_json::json!({
             "since": rfc3339(since),
-            "until": rfc3339(now),
+            "until": rfc3339(until),
             "reports": reports,
         }),
     )?;
@@ -512,6 +540,7 @@ fn is_support(task: &Task) -> bool {
 
 fn reports_since(
     store: &dyn TaskStore,
+    roots: &WorkspaceRoots,
     since: OffsetDateTime,
     until: OffsetDateTime,
 ) -> Result<Vec<serde_json::Value>, StoreError> {
@@ -527,7 +556,6 @@ fn reports_since(
     // 終端時刻・task id の順に重複なく並べる。
     tasks.sort_by(|a, b| a.updated_at.cmp(&b.updated_at).then(a.id.cmp(&b.id)));
     tasks.dedup_by_key(|t| t.id);
-    tasks.truncate(REPORTS_MAX);
     let mut out = Vec::with_capacity(tasks.len());
     for t in tasks {
         let report = store
@@ -538,8 +566,33 @@ fn reports_since(
             })?
             .into_iter()
             .next();
+        let comments: Vec<_> = store
+            .comments_for(t.id)?
+            .into_iter()
+            .rev()
+            .take(10)
+            .map(|c| {
+                format!(
+                    "{}: {}",
+                    c.author.as_deref().unwrap_or(c.author_kind.as_str()),
+                    truncate_chars(&c.body, REPORT_EXCERPT_CHARS)
+                )
+            })
+            .collect();
+        let result_summary = artifacts_dir(store, roots, &t)
+            .ok()
+            .flatten()
+            .and_then(|p| std::fs::read_to_string(p.join("result.json")).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| {
+                v["summary"]
+                    .as_str()
+                    .map(|s| truncate_chars(s, REPORT_EXCERPT_CHARS))
+            });
         out.push(serde_json::json!({
             "task_id": t.id.to_string(),
+            "result_summary": result_summary,
+            "comments": comments,
             "title": t.title,
             "status": t.status,
             "finished_at": rfc3339(t.updated_at),
@@ -650,9 +703,25 @@ fn finish(
 ) -> Result<bool, String> {
     entry.updated_at = rfc3339(now);
     if task.status != Status::Done {
-        // 失敗・取り下げの報告は dispatcher の bad_news が既に 1 件ある。ここでは何も足さない。
         entry.phase = Phase::Reported;
         entry.detail = Some(format!("task が {:?} で終わった", task.status));
+        // Extraction failure must remain visible even when curation itself fails.
+        let decisions = extraction::failures(store, task).map_err(|e| e.to_string())?;
+        if !decisions.is_empty() {
+            let summary = format!(
+                "# 日次整理（{}）\n\n整理は {:?} で終了した。\n{}",
+                entry.mode,
+                task.status,
+                extraction::render(store, task).map_err(|e| e.to_string())?
+            );
+            if let Some(dir) = artifacts_dir(store, roots, task)? {
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                std::fs::write(dir.join("daily-summary.md"), &summary)
+                    .map_err(|e| e.to_string())?;
+            }
+            append_report(store, task, entry, &summary, None, now).map_err(|e| e.to_string())?;
+            request_human_decisions(store, task, &decisions).map_err(|e| e.to_string())?;
+        }
         return Ok(false);
     }
     let artifacts = artifacts_dir(store, roots, task)?
@@ -703,19 +772,18 @@ fn finish(
             entry.detail = Some(e.clone());
         }
     }
-    let summary = render_summary(&date, entry, checked.as_ref().ok(), checked.as_ref().err());
-    if worker_summary.is_none() {
-        std::fs::write(artifacts.join("daily-summary.md"), &summary)
-            .map_err(|e| format!("daily-summary.md: {e}"))?;
-    }
+    let mut summary = render_summary(&date, entry, checked.as_ref().ok(), checked.as_ref().err());
+    summary.push_str(&extraction::render(store, task).map_err(|e| e.to_string())?);
+    std::fs::write(artifacts.join("daily-summary.md"), &summary)
+        .map_err(|e| format!("daily-summary.md: {e}"))?;
     append_report(store, task, entry, &summary, worker_summary.as_deref(), now)
         .map_err(|e| e.to_string())?;
-    if let Ok(c) = &checked
-        && !c.validated.human_decisions.is_empty()
-    {
-        request_human_decisions(store, task, &c.validated.human_decisions)
-            .map_err(|e| e.to_string())?;
-    }
+    let mut decisions = checked
+        .as_ref()
+        .map(|c| c.validated.human_decisions.clone())
+        .unwrap_or_default();
+    decisions.extend(extraction::failures(store, task).map_err(|e| e.to_string())?);
+    request_human_decisions(store, task, &decisions).map_err(|e| e.to_string())?;
     Ok(applied)
 }
 
@@ -742,7 +810,7 @@ fn render_summary(
     let verb = match (entry.mode.as_str(), entry.phase) {
         ("apply", Phase::Applied) => "反映した",
         ("apply", _) => "反映していない（適用直前の再検証に通らなかった）",
-        _ => "提案（dry-run・本番 KB は不変）",
+        _ => "提案（dry-run・正本ページは不変）",
     };
     out.push_str(&format!("## KB（{verb}）\n\n"));
     if entry.mode == "apply" && entry.phase != Phase::Applied {

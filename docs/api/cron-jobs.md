@@ -14,3 +14,10 @@ job は DB（`cron_jobs`・`cron_job_runs`）に置く。発火は daemon の ti
 - `GET /cron-jobs/{id}/runs?limit=` → 200 `CronJobRunList`（`job_id`・`items[]` = `CronJobRun`〈`scheduled_for`・`trigger`・`outcome`〈`created` / `queued` / `skipped_overlap` / `skipped_missed` / `error`〉・`task_id?`・`detail?`・`recorded_at`〉。新しい順、`limit` 既定 50・上限 500、0 は 400）。
 
 CoS の run は書き込み系 6 つを直接呼べず（422 `cos_audit_context_required`）、`POST /api/v1/cos/operations` に包んで送る（ADR 2026-10-09-cos-operations-all-mutations D3、action は `cron_job.create`・`update`・`delete`・`pause`・`resume`・`run`）。`run` 以外は job の変更と監査の記録を同じ transaction で書く。`run` は task を作る複数の書き込みを伴うので外部効果の手順（`pending` を先に記録 → 1 回だけ実行 → `applied`）を通り、同じ idempotency key の再送は記録を返して再実行しない。CoS credential の `celerisctl cron create|update|pause|resume|run` は同じ operation を送る。
+
+日次整理（`template.harness = "knowledge-curation"`）は、整理前に langmem で終端 task の報告・結果・コメントから候補を抽出する。
+抽出の出力は検証して `_inbox` に保存し、整理は従来どおり1回40件まで扱う。抽出が失敗しても整理を続け、日次報告と判断待ちに理由を出す。
+一度だけの遡りには `template.extraction_date = "2026-10-03"` のようにUTC日を指定する。発火時のtaskに日付を固定し、
+1回につき未処理の元taskを10件まで抽出する。同じ日の再実行ではSQLiteの抽出記録にあるtaskを除外する。
+`_inbox` が40件以上なら遡りの抽出を持ち越して整理を先にする。通常のjobには `extraction_date` を設定しない。
+`mode = "dry_run"` でも抽出候補は `_inbox` に保存するが、整理による正本ページの変更は行わない。

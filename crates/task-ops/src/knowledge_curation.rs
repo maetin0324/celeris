@@ -30,6 +30,38 @@ pub fn is_curation_task(task: &task_core::Task) -> bool {
             .any(|l| l == crate::cron_jobs::CRON_TASK_LABEL)
 }
 
+/// Durable dispatch gate; set only after extraction and input preparation.
+pub fn inputs_ready(
+    store: &dyn task_core::TaskStore,
+    task: &task_core::Task,
+) -> Result<bool, task_core::StoreError> {
+    Ok(!is_curation_task(task)
+        || store
+            .knowledge_run_get(task.id)?
+            .is_some_and(|r| r.via.as_deref() == Some("daily-ready")))
+}
+
+/// Batch extraction must stay on the langmem harness, including failures.
+pub fn is_daily_extraction(task: &task_core::Task) -> bool {
+    task.labels.iter().any(|l| l == "knowledge-daily")
+}
+
+/// Optional UTC day for the one-off backfill, validated before cron creation.
+pub fn extraction_date(
+    template: &task_core::CronTaskTemplate,
+) -> Result<Option<time::Date>, String> {
+    template
+        .extra
+        .get("extraction_date")
+        .map(|v| {
+            let raw = v.as_str().ok_or("extraction_date must be YYYY-MM-DD")?;
+            let fmt = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
+                .map_err(|e| e.to_string())?;
+            time::Date::parse(raw, &fmt).map_err(|e| e.to_string())
+        })
+        .transpose()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CurationPlan {

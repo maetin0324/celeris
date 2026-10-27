@@ -1083,3 +1083,114 @@ async fn cos_chat_inbox_thread_instructed_by_refuses_messages_the_run_does_not_a
     assert_eq!(resp.json()["operation"]["state"], "applied");
     assert_eq!(decision_answered_by(&env, &task).len(), 1);
 }
+
+#[tokio::test]
+async fn cos_free_text_question_resumes_through_resolve_and_relay() {
+    for relay in [false, true] {
+        let env = admin_env();
+        let app = env.router();
+        let task = new_task(TaskKind::Execute, Status::Blocked);
+        env.seed_with(
+            &task,
+            vec![Event::QuestionRaised {
+                run_id: "worker".into(),
+                text: "どの branch に入れますか?".into(),
+            }],
+        );
+        let inbox_id = format!("question-{}", task.id);
+        let item = ingest(&env, "inbox", &inbox_id, "r1", 0);
+        let (_, _, bearer) = cos_bearer(&env, "free-text");
+        let headers = [("authorization", bearer.as_str())];
+        let path = if relay {
+            OPS.to_string()
+        } else {
+            resolve_path(&item)
+        };
+        let request = |key: &str, answer: Value| {
+            if relay {
+                common::cos_ops::op_body(
+                    key,
+                    "POST",
+                    &format!("/api/v1/inbox/items/{inbox_id}/answer"),
+                    answer,
+                )
+            } else {
+                resolve_body(key, "r1", "answer", json!({"answer": answer}))
+            }
+        };
+        for (key, answer) in [
+            ("blank", json!({"note":"  "})),
+            ("unknown", json!({"option":"reply","note":"main"})),
+        ] {
+            let resp = send(&app, post_json_with(&path, &request(key, answer), &headers)).await;
+            assert!(resp.status.is_client_error(), "{}", resp.text());
+            assert_eq!(
+                env.store.get(task.id).unwrap().unwrap().status,
+                Status::Blocked
+            );
+        }
+        let body = request("valid", json!({"note":"既存の指示どおり main に入れる"}));
+        let resp = send(&app, post_json_with(&path, &body, &headers)).await;
+        assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+        assert_eq!(resp.json()["operation"]["state"], "applied");
+        assert_eq!(resp.json()["operation"]["action"], "question.answer");
+        assert_eq!(
+            env.store.get(task.id).unwrap().unwrap().status,
+            Status::Ready
+        );
+        if !relay {
+            assert_eq!(item_state(&env, &item), "answered");
+        }
+        let repeat = send(&app, post_json_with(&path, &body, &headers)).await;
+        assert_eq!(repeat.status.as_u16(), 200, "{}", repeat.text());
+        let events = env.store.events_for(task.id).unwrap();
+        assert_eq!(events.iter().filter(|(_, e)| matches!(e, Event::Answered { answer, .. } if answer == "既存の指示どおり main に入れる")).count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn cos_choice_still_requires_an_offered_option() {
+    let env = admin_env();
+    let app = env.router();
+    let (task, inbox_id) = decision_wait(&env, "strict-choice", &[]);
+    let item = ingest(&env, "inbox", &inbox_id, "r1", 0);
+    let (_, _, bearer) = cos_bearer(&env, "strict-choice");
+    for (i, answer) in [
+        json!({"note":"main"}),
+        json!({"option":"reply","note":"main"}),
+        json!({"option":"unknown"}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let resp = send(
+            &app,
+            post_json_with(
+                &resolve_path(&item),
+                &resolve_body(
+                    &format!("invalid-{i}"),
+                    "r1",
+                    "answer",
+                    json!({"answer":answer.clone()}),
+                ),
+                &[("authorization", bearer.as_str())],
+            ),
+        )
+        .await;
+        assert_problem(&resp, 422, "validation");
+        let relay = common::cos_ops::op_body(
+            &format!("relay-invalid-{i}"),
+            "POST",
+            &format!("/api/v1/inbox/items/{inbox_id}/answer"),
+            answer,
+        );
+        let resp = send(
+            &app,
+            post_json_with(OPS, &relay, &[("authorization", bearer.as_str())]),
+        )
+        .await;
+        assert_problem(&resp, 400, "bad_request");
+    }
+    assert!(decision_answered_by(&env, &task).is_empty());
+    assert_eq!(item_state(&env, &item), "pending");
+}

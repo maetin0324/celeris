@@ -76,6 +76,7 @@ metadata:
  "reason":"承認済み計画と一致","confidence":0.97,"policy_version":"3","escalation":null}
 ```
 
+- worker の自由質問（kind=question）は `"answer":{"note":"回答本文"}` とし、option を省略できる。空本文は不可。計画を直す場合だけ `option:"replan"` を明示する。decision・approval・gate は提示された key を使う。`reply` は escalation の案内用で、answer の key には使わない。
 - `expected_revision` は item の `source_revision`。`policy_version` はこの skill の `"3"`（config の値があればそれ）。
 - `outcome` が answer 以外なら `answer=null`。answer・observe なら `escalation=null`。escalate では escalation packet が必須。
 - `idempotency_key` は item ごとに一意にし、再試行では同じ key を使う。

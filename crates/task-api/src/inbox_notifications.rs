@@ -132,6 +132,8 @@ async fn item(
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InboxAnswerBody {
+    /// Omit for a worker question and put the free-text answer in note.
+    #[serde(default)]
     pub option: String,
     #[serde(default)]
     pub note: Option<String>,
@@ -146,12 +148,30 @@ pub struct InboxAnswerResult {
     pub result: serde_json::Value,
 }
 
+/// Validate both human and CoS relay answers before translating to a domain request.
+pub(crate) fn validate_answer(item: &InboxItem, input: &InboxAnswerBody) -> Result<(), ApiProblem> {
+    let needs_note = if item.kind == InboxKind::Question && input.option.is_empty() {
+        true
+    } else {
+        item.options
+            .iter()
+            .find(|o| o.key == input.option)
+            .ok_or_else(|| ApiProblem::bad_request("option is not offered by this inbox item"))?
+            .needs_note
+    };
+    if needs_note && input.note.as_deref().is_none_or(|s| s.trim().is_empty()) {
+        return Err(ApiProblem::bad_request("note is required for this option"));
+    }
+    Ok(())
+}
+
 // Build a request to the existing domain endpoint so validation, audit, and state
 // transitions remain in one place. The path comes only from the derived InboxItem.
 pub(crate) fn delegated_request(
     item: &InboxItem,
     input: &InboxAnswerBody,
 ) -> Result<(Method, String, serde_json::Value), ApiProblem> {
+    validate_answer(item, input)?;
     let task = item.task.as_ref().map(|t| t.id.to_string());
     let native = item.answer.native.as_ref();
     let base = native.map(|n| n.path.clone());
@@ -374,14 +394,7 @@ async fn answer(
         .into_iter()
         .find(|x| x.id == id)
         .ok_or_else(|| gone(&id))?;
-    let selected = found
-        .options
-        .iter()
-        .find(|o| o.key == input.option)
-        .ok_or_else(|| ApiProblem::bad_request("option is not offered by this inbox item"))?;
-    if selected.needs_note && input.note.as_deref().is_none_or(|s| s.trim().is_empty()) {
-        return Err(ApiProblem::bad_request("note is required for this option"));
-    }
+    validate_answer(&found, &input)?;
     if found.kind == InboxKind::IntegrationRequest {
         let task_id = found.task.as_ref().ok_or_else(|| gone(&id))?.id;
         let item_id = id.clone();

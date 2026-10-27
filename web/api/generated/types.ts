@@ -3146,7 +3146,7 @@ export type InboxAnswer = {
 
 export type InboxAnswerBody = {
   "note"?: string | null;
-  "option": string;
+  "option"?: string;
   "payload"?: unknown;
 };
 

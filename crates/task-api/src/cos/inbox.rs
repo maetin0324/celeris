@@ -478,21 +478,8 @@ async fn resolve(
                     )? {
                         return Err(reject(human_required_problem(&why)));
                     }
-                    let Some(selected) = found.options.iter().find(|o| o.key == input.option)
-                    else {
-                        return Err(reject(unprocessable(
-                            "validation",
-                            "answer.option is not offered by this inbox item",
-                        )));
-                    };
-                    if selected.needs_note
-                        && input.note.as_deref().is_none_or(|s| s.trim().is_empty())
-                    {
-                        return Err(reject(unprocessable(
-                            "validation",
-                            "answer.note is required for this option",
-                        )));
-                    }
+                    crate::inbox_notifications::validate_answer(found, input)
+                        .map_err(|e| reject(unprocessable("validation", e.detail())))?;
                     let (method, domain_path, domain_body) =
                         delegated_request(found, input).map_err(&reject)?;
                     audit.item = Some(ItemMark {

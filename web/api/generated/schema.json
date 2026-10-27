@@ -15435,15 +15435,14 @@
           ]
         },
         "option": {
+          "default": "",
+          "description": "Omit for a worker question and put the free-text answer in note.",
           "type": "string"
         },
         "payload": {
           "default": null
         }
       },
-      "required": [
-        "option"
-      ],
       "type": "object"
     },
     "InboxAnswerResult": {

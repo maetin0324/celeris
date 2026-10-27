@@ -51,7 +51,6 @@ fn project(env: &TestEnv, title: &str) -> Project {
         title: title.to_string(),
         request: "do it".into(),
         status: task_core::ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

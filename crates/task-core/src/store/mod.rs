@@ -122,6 +122,7 @@ mod migrated_harness;
 mod migration_harness_tests;
 pub(crate) mod migrations;
 mod org;
+mod project_briefs;
 mod projects;
 mod query;
 mod repos;

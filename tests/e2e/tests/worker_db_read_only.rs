@@ -47,7 +47,6 @@ fn project_with_primary(store: &SqliteStore, dir: &Path) -> (ProjectId, RepoId) 
         title: "agent-platform".into(),
         request: "r".into(),
         status: ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         created_at: now,
         updated_at: now,

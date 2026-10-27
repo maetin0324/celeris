@@ -3,7 +3,13 @@
 use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
-use task_core::{ListFilter, ListOrder, Project, ProjectId, ProjectStatus, SqliteStore, TaskStore};
+use std::collections::HashMap;
+
+use task_core::{
+    ListFilter, ListOrder, Project, ProjectBrief, ProjectBriefInput, ProjectId, ProjectStatus,
+    SqliteStore, TaskStore,
+};
+use time::format_description::well_known::Rfc3339;
 
 use crate::cos::operations::{Applied, OperationAudit};
 use time::OffsetDateTime;
@@ -14,7 +20,7 @@ use crate::query::QueryParams;
 use crate::state::ApiState;
 use crate::types::{
     MilestoneReviewView, MilestoneView, ProjectCreateBody, ProjectDetail, ProjectList,
-    ProjectPatchBody, ProjectTaskView, ValidationError,
+    ProjectListItem, ProjectPatchBody, ProjectTaskView, ValidationError,
 };
 
 use super::{
@@ -26,23 +32,53 @@ use super::{
 const PROJECT_TASKS_LIMIT: usize = 2_000;
 
 /// `GET /projects`。ADR-0044 D6（Phase 55）: **アーカイブされた案件は既定で隠す**
-/// （`?archived=1` で全部、`?archived=0` は既定と同じ）。
+/// （`?archived=1` で全部、`?archived=0` は既定と同じ）。ADR 2026-10-27-project-brief D4: 各項目に
+/// 状態の要約・task の状態別件数・最終活動時刻・人待ち（受信箱と同じ数え方）の件数と最古の時刻を添える。
 pub(super) async fn project_list(
     State(state): State<ApiState>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
     let query = QueryParams::parse(raw.as_deref(), &["archived"])?;
     let show_archived = query.bool("archived")?.unwrap_or(false);
+    let feed = crate::inbox_notifications::human_feed(&state).await?;
+    let mut waits: HashMap<String, (u32, Option<OffsetDateTime>)> = HashMap::new();
+    for item in &feed.items {
+        let Some(project) = &item.project_id else {
+            continue;
+        };
+        let entry = waits.entry(project.clone()).or_default();
+        entry.0 += 1;
+        if let Ok(at) = OffsetDateTime::parse(&item.created_at, &Rfc3339) {
+            entry.1 = Some(entry.1.map_or(at, |old| old.min(at)));
+        }
+    }
     let items = state
         .blocking(move |store| {
             let all = store.project_list().map_err(store_problem)?;
-            Ok(if show_archived {
-                all
-            } else {
-                all.into_iter()
-                    .filter(|p| p.archived_at.is_none())
-                    .collect()
-            })
+            let mut briefs = store.project_brief_list().map_err(store_problem)?;
+            let mut activity = store.project_activity().map_err(store_problem)?;
+            Ok(all
+                .into_iter()
+                .filter(|p| show_archived || p.archived_at.is_none())
+                .map(|project| {
+                    let activity = activity.remove(&project.id).unwrap_or_default();
+                    let (human_waits, oldest) = waits
+                        .get(&project.id.to_string())
+                        .copied()
+                        .unwrap_or_default();
+                    let last_activity = activity
+                        .last_task_update
+                        .map_or(project.updated_at, |at| at.max(project.updated_at));
+                    ProjectListItem {
+                        brief: briefs.remove(&project.id),
+                        task_counts: activity.task_counts,
+                        last_activity_at: rfc3339(last_activity),
+                        human_waits,
+                        oldest_human_wait_at: oldest.map(rfc3339),
+                        project,
+                    }
+                })
+                .collect::<Vec<_>>())
         })
         .await?;
     Ok(json_response(StatusCode::OK, &ProjectList { items }))
@@ -93,7 +129,6 @@ pub(crate) fn create_project_op(
         request: create.request,
         // ADR-0033 D2: 作った直後は `proposed`（秘書が理解確認と方針を返すまで人の返事待ち）。
         status: ProjectStatus::Proposed,
-        secretary_summary: None,
         workspace,
         created_at: now,
         updated_at: now,
@@ -241,8 +276,10 @@ pub(super) async fn project_detail(
             } else {
                 None
             };
+            let brief = store.project_brief_get(project_id).map_err(store_problem)?;
             Ok(ProjectDetail {
                 project,
+                brief,
                 repos,
                 milestones,
                 milestones_frozen,
@@ -516,6 +553,109 @@ pub(crate) fn cos_patch_project(
         request.as_deref(),
         Some(audit),
     )
+}
+
+/// `PUT /projects/{id}/status`（**管理系**）。ADR 2026-10-27-project-brief D3: 人が案件の状態の要約を
+/// 全置換で書く（`updated_by = "human"`）。CoS は `/cos/operations` の `project.status_put` を使う。
+pub(super) async fn put_project_status(
+    State(state): State<ApiState>,
+    Params(id): Params<String>,
+    headers: HeaderMap,
+    RawQuery(raw): RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let project_id = parse_project_id(&id)?;
+    let input: ProjectBriefInput = read_json(body, false).await?;
+    let brief = state
+        .blocking(move |store| put_project_brief_op(store, project_id, input, None)?.direct())
+        .await?;
+    Ok(json_response(StatusCode::OK, &brief))
+}
+
+/// 案件の状態の要約の全置換。handler（`audit = None`、人）と CoS の `project.status_put` が共有する。
+/// CoS からは**その案件の案件 CoS スレッドの run だけ**が書ける（D3。他は 403 `project_brief_forbidden`）。
+pub(crate) fn put_project_brief_op(
+    store: &SqliteStore,
+    project_id: ProjectId,
+    input: ProjectBriefInput,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<ProjectBrief>, ApiProblem> {
+    let target_id = project_id.to_string();
+    let reject = |problem: ApiProblem| match audit {
+        Some(audit) => audit.reject(store, "project", &target_id, problem),
+        None => problem,
+    };
+    if store
+        .project_get(project_id)
+        .map_err(|e| reject(store_problem(e)))?
+        .is_none()
+    {
+        return Err(reject(ApiProblem::project_not_found(&target_id)));
+    }
+    let updated_by = match audit {
+        None => "human".to_string(),
+        Some(audit) => {
+            let thread = store
+                .chat_thread_get(&audit.ctx.thread_id)
+                .map_err(|e| reject(ApiProblem::internal(e.to_string())))?;
+            let own = thread.as_ref().is_some_and(|t| {
+                t.kind == task_core::chat::ChatThreadKind::Project
+                    && t.project_id.as_deref() == Some(target_id.as_str())
+            });
+            if !own {
+                return Err(reject(ApiProblem::new(
+                    StatusCode::FORBIDDEN,
+                    "project_brief_forbidden",
+                    format!(
+                        "only the CoS thread of project {target_id} may write its status (thread {})",
+                        audit.ctx.thread_id
+                    ),
+                )));
+            }
+            format!("cos:{}", audit.ctx.thread_id)
+        }
+    };
+    let is_project_task = |task: task_core::TaskId| {
+        store
+            .get(task)
+            .ok()
+            .flatten()
+            .is_some_and(|t| t.project_id == Some(project_id))
+    };
+    let input = input.validate(&is_project_task).map_err(|errors| {
+        reject(ApiProblem::validation(
+            errors
+                .into_iter()
+                .map(|e| ValidationError {
+                    field: Some(e.field),
+                    message: e.message,
+                })
+                .collect(),
+        ))
+    })?;
+    let brief = ProjectBrief::from_input(project_id, input, updated_by, OffsetDateTime::now_utc());
+    let Some(audit) = audit else {
+        if !store.project_brief_put(&brief).map_err(store_problem)? {
+            return Err(ApiProblem::project_not_found(&target_id));
+        }
+        return Ok(Applied::Direct(brief));
+    };
+    let operation = audit.apply(store, "project", &target_id, "project.status_put", |tx| {
+        if !SqliteStore::project_brief_put_tx(tx, &brief)? {
+            return Err(task_core::chat::ChatError::NotFound {
+                kind: "project",
+                id: target_id.clone(),
+            });
+        }
+        Ok(serde_json::json!({
+            "project_id": target_id,
+            "updated_by": brief.updated_by,
+            "waiting_on": brief.waiting_on.len(),
+        }))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 /// ADR-0079 D13（Phase R5a）: 途中目標の作成は 410（途中目標は root task の段階で表す）。

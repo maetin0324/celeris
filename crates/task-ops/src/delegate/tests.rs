@@ -575,7 +575,6 @@ fn delegated_children_inherit_the_projects_workspace() {
         title: "Pluvio".into(),
         request: "PoC".into(),
         status: task_core::ProjectStatus::Active,
-        secretary_summary: None,
         workspace: Some(WorkspaceSpec::Remote {
             cluster: "pegasus".into(),
             path: PathBuf::from("/work/NBB/rmaeda/workspace/rust/benchfs"),

@@ -211,6 +211,7 @@ pub use notify::{
     DEFAULT_WEBHOOK_SECRET_ID, MAX_NOTIFY_ATTEMPTS, Notification, NotificationId, NotificationKind,
     NotificationStore,
 };
+pub mod project_brief;
 pub use org::{
     Milestone, MilestoneDecision, MilestoneId, MilestoneStatus, OrgError, OrgKind, OrgNode,
     Project, ProjectId, ProjectStatus, assignee_defaults, department_of, is_root_task,
@@ -219,6 +220,9 @@ pub use org::{
 pub use plan::{
     MAX_PLAN_DEPTH, NewTask, NewTaskKind, PlanError, PlanLimits, PlanOutput, fix_harness_artifacts,
     warn_missing_partial_ok,
+};
+pub use project_brief::{
+    ProjectActivity, ProjectBrief, ProjectBriefInput, WaitingOn, WaitingOnKind,
 };
 // ---- ADR-0074 D3.3（Phase F4a）: 案件レベルの計画（マイルストーン Task の DAG）----
 pub use project_plan::{

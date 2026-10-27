@@ -481,7 +481,6 @@ fn propose_project_action(
         title: title.trim().to_string(),
         request: request.trim().to_string(),
         status: ProjectStatus::Proposed,
-        secretary_summary: None,
         workspace: None,
         created_at: now,
         updated_at: now,

@@ -1060,6 +1060,13 @@
           },
           "type": "array"
         },
+        "projects": {
+          "description": "ADR 2026-10-27-project-brief D5: the project summaries. Every non-archived project in the\ngeneral CoS thread, the thread's own project in a project CoS thread, empty otherwise.",
+          "items": {
+            "$ref": "#/$defs/CosChatProjectSummary"
+          },
+          "type": "array"
+        },
         "run_id": {
           "description": "`chat_runs.id` (distinct from the worker run id in the prompt header).",
           "type": "string"
@@ -1319,6 +1326,67 @@
         "id",
         "seq",
         "text"
+      ],
+      "type": "object"
+    },
+    "CosChatProjectSummary": {
+      "description": "One project as summarized for a CoS chat run (ADR 2026-10-27-project-brief D5). Details are read\nwith `GET /api/v1/projects/{id}`.",
+      "properties": {
+        "brief_updated_at": {
+          "description": "RFC 3339 of the brief; absent when there is no brief.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_activity_at": {
+          "description": "RFC 3339: the latest task `updated_at` or the project `updated_at`.",
+          "type": "string"
+        },
+        "objective": {
+          "description": "`project_briefs.objective`; absent until the project CoS writes a brief.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "open_tasks": {
+          "default": 0,
+          "description": "Number of non-terminal tasks of the project.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "state": {
+          "description": "`project_briefs.state`, cut to 400 characters.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Lifecycle status (`proposed` / `active` / `paused` / `done` / `cancelled`).",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "waiting_on": {
+          "description": "`<kind>: <note>` of each `waiting_on` entry.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "project_id",
+        "title",
+        "status",
+        "last_activity_at"
       ],
       "type": "object"
     },

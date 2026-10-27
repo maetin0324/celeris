@@ -37,7 +37,6 @@ fn seed(env: &TestEnv, n: usize) -> Vec<PathBuf> {
         title: "p".into(),
         request: "r".into(),
         status: ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

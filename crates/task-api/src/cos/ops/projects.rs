@@ -20,6 +20,7 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/projects/{id}/unarchive",
         "project.unarchive",
     ),
+    ("PUT", "/api/v1/projects/{id}/status", "project.status_put"),
     ("POST", "/api/v1/standing-rules", "standing_rule.create"),
     (
         "DELETE",
@@ -112,6 +113,18 @@ pub(crate) fn dispatch(
             let input = serde_json::from_value(body).map_err(decode)?;
             audited(crate::handlers::projects::cos_patch_project(
                 store, id, input, audit,
+            )?)
+        }
+        "project.status_put" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = crate::handlers::parse_project_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "project", &raw_id, problem))?;
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::handlers::projects::put_project_brief_op(
+                store,
+                id,
+                input,
+                Some(audit),
             )?)
         }
         "project.cancel" | "project.pause" | "project.resume" | "project.archive"

@@ -111,7 +111,6 @@ async fn frozen_milestones_do_not_gate_or_advance_root_tasks() {
         title: "案件".into(),
         request: "やって".into(),
         status: task_core::ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

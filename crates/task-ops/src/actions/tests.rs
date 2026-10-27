@@ -883,7 +883,6 @@ fn parse_with_repo(store: &SqliteStore, text: &str) -> (Vec<ConsoleAction>, Vec<
         slug: None,
         archived_at: None,
         paused_from: None,
-        secretary_summary: None,
         workspace: None,
         created_at: now(),
         updated_at: now(),

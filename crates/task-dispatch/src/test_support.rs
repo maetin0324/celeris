@@ -69,7 +69,6 @@ pub(crate) fn project_cos_thread(store: &task_core::SqliteStore, key: &str) -> S
         title: key.into(),
         request: key.into(),
         status: task_core::ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

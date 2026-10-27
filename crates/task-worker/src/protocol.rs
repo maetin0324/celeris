@@ -1333,7 +1333,7 @@ mod cos_chat;
 pub use cos_chat::{
     COS_CHAT_IMAGE_MEDIA_TYPES, COS_RUN_CREDENTIAL_ENV, CosChatAttachment, CosChatContext,
     CosChatDelivery, CosChatHistory, CosChatHistoryMessage, CosChatInboxDecision, CosChatInboxItem,
-    CosChatInboxOption, CosChatInput, is_cos_chat_run,
+    CosChatInboxOption, CosChatInput, CosChatProjectSummary, is_cos_chat_run,
 };
 
 /// 試験用の最小の `Task`。他 crate の試験が `RunRequest` を組むために公開している（製品の経路では使わない）。

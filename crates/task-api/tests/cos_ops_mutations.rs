@@ -303,7 +303,6 @@ async fn cos_ops_mutations_tree_adopt_is_audited_atomically() {
         title: "tree adoption".into(),
         request: "request".into(),
         status: task_core::ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

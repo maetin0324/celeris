@@ -67,7 +67,6 @@ fn project_with_primary(store: &Arc<dyn TaskStore>, dir: &std::path::Path) -> (P
         title: "agent-platform".into(),
         request: "r".into(),
         status: ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         created_at: now,
         updated_at: now,

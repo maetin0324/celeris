@@ -63,7 +63,6 @@ fn register_repo(store: &SqliteStore, path: &Path) -> ProjectRepo {
         title: "stranded default branch".into(),
         request: "default branch".into(),
         status: ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

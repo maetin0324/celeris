@@ -71,6 +71,37 @@ pub struct CosChatContext {
     /// when this run is in the inbox thread. Empty in every other thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inbox_items: Vec<CosChatInboxItem>,
+    /// ADR 2026-10-27-project-brief D5: the project summaries. Every non-archived project in the
+    /// general CoS thread, the thread's own project in a project CoS thread, empty otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<CosChatProjectSummary>,
+}
+
+/// One project as summarized for a CoS chat run (ADR 2026-10-27-project-brief D5). Details are read
+/// with `GET /api/v1/projects/{id}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CosChatProjectSummary {
+    pub project_id: String,
+    pub title: String,
+    /// Lifecycle status (`proposed` / `active` / `paused` / `done` / `cancelled`).
+    pub status: String,
+    /// `project_briefs.objective`; absent until the project CoS writes a brief.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective: Option<String>,
+    /// `project_briefs.state`, cut to 400 characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// `<kind>: <note>` of each `waiting_on` entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting_on: Vec<String>,
+    /// Number of non-terminal tasks of the project.
+    #[serde(default)]
+    pub open_tasks: u32,
+    /// RFC 3339: the latest task `updated_at` or the project `updated_at`.
+    pub last_activity_at: String,
+    /// RFC 3339 of the brief; absent when there is no brief.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_updated_at: Option<String>,
 }
 
 /// One unresolved item of the CoS inbox (`cos_inbox_items`), as context for a run in the inbox

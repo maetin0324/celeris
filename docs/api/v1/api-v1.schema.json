@@ -21181,13 +21181,6 @@
           "description": "人が投げた依頼文そのまま。",
           "type": "string"
         },
-        "secretary_summary": {
-          "description": "秘書の理解確認・方針（Phase 24 で秘書が書く）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "slug": {
           "description": "ADR-0044 D7 追記（Phase K-1）: 知識ベースでのこの案件の置き場 `projects/<slug>/` の slug\n（front matter の `scope: project:<slug>`）。案件を作るときに題名 → primary リポジトリの名前 →\nid の末尾から決め（[`crate::knowledge::derive_project_slug`]）、`PATCH /projects/{id}\n{slug}` で変えられる。案件の間で一意。`None` は migration 0029 より前の行（読むときは\n[`Project::kb_slug`] が同じ規則で補う）。",
           "type": [
@@ -21226,6 +21219,111 @@
       ],
       "type": "object"
     },
+    "ProjectBrief": {
+      "description": "案件の状態の要約（`project_briefs` の 1 行）。",
+      "properties": {
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "next_actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "open_issues": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "$ref": "#/$defs/ProjectId"
+        },
+        "state": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "updated_by": {
+          "description": "書いた者（`cos:<thread id>`・`human`・`migration:0095`）。",
+          "type": "string"
+        },
+        "waiting_on": {
+          "items": {
+            "$ref": "#/$defs/WaitingOn"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "project_id",
+        "objective",
+        "state",
+        "open_issues",
+        "next_actions",
+        "waiting_on",
+        "evidence_refs",
+        "updated_at",
+        "updated_by"
+      ],
+      "type": "object"
+    },
+    "ProjectBriefInput": {
+      "additionalProperties": false,
+      "description": "`PUT /projects/{id}/status`（CoS op `project.status_put`）の本文。全置換。",
+      "properties": {
+        "evidence_refs": {
+          "default": [],
+          "description": "根拠への参照（`task:<id>`・`run:<id>`・文書の path・URL など）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "next_actions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "objective": {
+          "description": "案件の目的。",
+          "type": "string"
+        },
+        "open_issues": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "state": {
+          "description": "今の状態（Markdown 可）。",
+          "type": "string"
+        },
+        "waiting_on": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WaitingOn"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "objective",
+        "state"
+      ],
+      "type": "object"
+    },
     "ProjectCreateBody": {
       "additionalProperties": false,
       "description": "`POST /projects` の要求本文。作られた案件は `status = \"proposed\"`（秘書の返事待ち）。",
@@ -21257,6 +21355,17 @@
     "ProjectDetail": {
       "description": "`GET /projects/{id}` の応答。案件 + 途中目標 + その案件のタスクの要約（GUI の「仕事の木」用）。",
       "properties": {
+        "brief": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectBrief"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-27-project-brief: 案件の状態の要約。まだ無ければ省略。"
+        },
         "milestones": {
           "description": "ADR-0038 D1 / D4（Phase 41）: 途中目標そのもの（`Milestone` の各フィールドはそのまま）に、\n秘書のレビューの返事と提案された次の途中目標を添えたもの。\nADR-0079 D13 / U-R8（Phase R5a）: 途中目標は凍結した履歴で、**既定では空**（`?include_frozen=true` の\nときだけ全行を読み取り専用で返す）。",
           "items": {
@@ -21399,13 +21508,132 @@
       "properties": {
         "items": {
           "items": {
-            "$ref": "#/$defs/Project"
+            "$ref": "#/$defs/ProjectListItem"
           },
           "type": "array"
         }
       },
       "required": [
         "items"
+      ],
+      "type": "object"
+    },
+    "ProjectListItem": {
+      "description": "`GET /projects` の 1 件。案件の欄は平らに出し、ADR 2026-10-27-project-brief D4 の要約と活動を添える。",
+      "properties": {
+        "archived_at": {
+          "description": "ADR-0044 D6: アーカイブした時刻。`None` ならアーカイブされていない。一覧は既定でこれが\n`Some` の案件（とそのタスク）を隠す。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "auto_advance": {
+          "default": false,
+          "description": "ADR-0074 D3.2（Phase F4b）: `true` なら、案件計画のマイルストーン Task は依存先が `done` になった\n時点で進む（途中目標の `reached` = 人の `ok` を待たない。判定のレビューは後から行う）。既定 `false`。",
+          "type": "boolean"
+        },
+        "auto_integrate": {
+          "default": false,
+          "description": "ADR 2026-10-16-project-auto-integrate D1: `true` なら、この案件のレビュー合格した root task を\n既定ブランチへ自動で取り込む（delivery）。既定 `false`。",
+          "type": "boolean"
+        },
+        "brief": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectBrief"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "案件の状態の要約（案件 CoS が `project.status_put` で書く）。まだ無ければ省略。"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "human_waits": {
+          "default": 0,
+          "description": "この案件の人の受信箱の項目数（`GET /inbox/items?project=` と同じ数え方）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "$ref": "#/$defs/ProjectId"
+        },
+        "last_activity_at": {
+          "description": "RFC 3339。案件の task の `updated_at` の最大と案件の `updated_at` の遅い方。",
+          "type": "string"
+        },
+        "oldest_human_wait_at": {
+          "description": "RFC 3339。上の項目のうち最古の `created_at`。無ければ省略。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "paused_from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0044 D6: `pause` する直前の状態（`resume` の戻り先）。`paused` でなければ `None`。"
+        },
+        "request": {
+          "description": "人が投げた依頼文そのまま。",
+          "type": "string"
+        },
+        "slug": {
+          "description": "ADR-0044 D7 追記（Phase K-1）: 知識ベースでのこの案件の置き場 `projects/<slug>/` の slug\n（front matter の `scope: project:<slug>`）。案件を作るときに題名 → primary リポジトリの名前 →\nid の末尾から決め（[`crate::knowledge::derive_project_slug`]）、`PATCH /projects/{id}\n{slug}` で変えられる。案件の間で一意。`None` は migration 0029 より前の行（読むときは\n[`Project::kb_slug`] が同じ規則で補う）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/ProjectStatus"
+        },
+        "task_counts": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default": {},
+          "description": "案件の task の状態（`ready` 等）ごとの件数。",
+          "type": "object"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspaceSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0039 D1: この案件の作業場所（コードのある場所）。`Local` は手元の普段のパス（SPEC §2.1）、\n`Remote` はクラスタ側の作業ディレクトリ（ADR-0018 D1）。決めていない案件は `None`（従来どおり、\n分解した仕事は親の workspace を継ぐ）。"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "request",
+        "status",
+        "created_at",
+        "updated_at",
+        "last_activity_at"
       ],
       "type": "object"
     },
@@ -31439,6 +31667,51 @@
       ],
       "type": "object"
     },
+    "WaitingOn": {
+      "additionalProperties": false,
+      "description": "待っている相手 1 件。",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/WaitingOnKind"
+        },
+        "note": {
+          "description": "何を待っているか（1 行）。",
+          "type": "string"
+        },
+        "target": {
+          "description": "相手の参照（`kind = task` では必須でこの案件の task id。他は任意）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "note"
+      ],
+      "type": "object"
+    },
+    "WaitingOnKind": {
+      "description": "待っている相手の種類（D2）。",
+      "oneOf": [
+        {
+          "const": "human",
+          "description": "人の判断・回答・操作。",
+          "type": "string"
+        },
+        {
+          "const": "task",
+          "description": "この案件の task（`target` は task id）。",
+          "type": "string"
+        },
+        {
+          "const": "external",
+          "description": "外部（クラスタの保守・他者の返事など）。",
+          "type": "string"
+        }
+      ]
+    },
     "WorkUnitBlockedReason": {
       "description": "D6: `work_units.blocked_reason`。",
       "oneOf": [
@@ -32581,6 +32854,13 @@
     "problem": {
       "$ref": "#/$defs/Problem"
     },
+    "project_brief": {
+      "$ref": "#/$defs/ProjectBrief"
+    },
+    "project_brief_put": {
+      "$ref": "#/$defs/ProjectBriefInput",
+      "description": "ADR 2026-10-27-project-brief: `PUT /projects/{id}/status` の本文と応答。"
+    },
     "project_create": {
       "$ref": "#/$defs/ProjectCreateBody"
     },
@@ -32880,6 +33160,8 @@
     "project_create",
     "project_patch",
     "project_detail",
+    "project_brief_put",
+    "project_brief",
     "milestone_create",
     "milestone_patch",
     "milestone_decide",

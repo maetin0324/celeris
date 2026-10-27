@@ -1079,7 +1079,28 @@ where
 /// `GET /projects` の応答（`created_at` の降順）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectList {
-    pub items: Vec<Project>,
+    pub items: Vec<ProjectListItem>,
+}
+
+/// `GET /projects` の 1 件。案件の欄は平らに出し、ADR 2026-10-27-project-brief D4 の要約と活動を添える。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectListItem {
+    #[serde(flatten)]
+    pub project: Project,
+    /// 案件の状態の要約（案件 CoS が `project.status_put` で書く）。まだ無ければ省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<task_core::ProjectBrief>,
+    /// 案件の task の状態（`ready` 等）ごとの件数。
+    #[serde(default)]
+    pub task_counts: BTreeMap<String, u32>,
+    /// RFC 3339。案件の task の `updated_at` の最大と案件の `updated_at` の遅い方。
+    pub last_activity_at: String,
+    /// この案件の人の受信箱の項目数（`GET /inbox/items?project=` と同じ数え方）。
+    #[serde(default)]
+    pub human_waits: u32,
+    /// RFC 3339。上の項目のうち最古の `created_at`。無ければ省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_human_wait_at: Option<String>,
 }
 
 /// `POST /projects` の要求本文。作られた案件は `status = "proposed"`（秘書の返事待ち）。
@@ -1141,6 +1162,9 @@ pub const PROJECT_REQUEST_MAX_CHARS: usize = 20_000;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectDetail {
     pub project: Project,
+    /// ADR 2026-10-27-project-brief: 案件の状態の要約。まだ無ければ省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<task_core::ProjectBrief>,
     /// ADR-0043 D1（Phase 52）: この案件のリポジトリ（primary が先頭）。
     /// `project.workspace` は primary の `location` の写し（GUI の後方互換）。
     #[serde(default)]

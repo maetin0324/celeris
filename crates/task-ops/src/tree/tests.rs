@@ -407,7 +407,6 @@ fn repository_required_child_task_inherits_the_parent_project_and_repos() {
         title: "p".into(),
         request: "r".into(),
         status: ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         created_at: now,
         updated_at: now,

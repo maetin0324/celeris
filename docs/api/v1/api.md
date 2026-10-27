@@ -343,7 +343,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 41 | POST | `/org` | 役職を足す（**管理系**） | 201 `OrgNode`（`Location`） | store `org_upsert` |
 | 42 | PATCH | `/org/{id}` | 役職を変える・付け替える（**管理系**） | 200 `OrgNode` | store `org_upsert` |
 | 43 | DELETE | `/org/{id}` | 役職を消す。仕事を抱えていたら 409（**管理系**） | 204 | store `org_delete` |
-| 44 | GET | `/projects` | 案件の一覧（新しい順。ADR-0033 D2） | `ProjectList` | store `project_list` |
+| 44 | GET | `/projects` | 案件の一覧（新しい順。ADR-0033 D2）。各項目に状態の要約・task の状態別件数・最終活動時刻・人待ちの件数と最古の時刻（ADR 2026-10-27-project-brief D4） | `ProjectList` | store `project_list` + `project_briefs` + 受信箱 |
 | 45 | POST | `/projects` | 案件を投げる（`status = proposed`。直後に秘書の run が起きるので**管理系**。Phase 27） | 201 `Project`（`Location`） | store `project_create` |
 | 46 | GET | `/projects/{id}` | 案件 + 途中目標 + 仕事の木 | `ProjectDetail` | store（`project_id` で絞った `tasks`） |
 | 47 | PATCH | `/projects/{id}` | 案件の状態を変える | 200 `Project` | store `project_set_status` |
@@ -383,6 +383,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 75 | POST | `/projects/{id}/resume` | 一時停止を解く（`paused_from` へ戻す。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 76 | POST | `/projects/{id}/archive` | 終端の案件をアーカイブする（一覧から既定で隠れる。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 77 | POST | `/projects/{id}/unarchive` | アーカイブを解除する（**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
+| 77a | PUT | `/projects/{id}/status` | 案件の状態の要約を全置換で書く（ADR 2026-10-27-project-brief。§3.48a。**管理系**。CoS は `project.status_put`） | 200 `ProjectBrief` | store `project_briefs` |
 | 78 | POST | `/milestones/{id}/cancel` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: 途中目標を中止し、属する非終端タスクを連鎖で `cancelled` にする（**管理系**） | 410 `Problem`（旧 200 `MilestoneLifecycle`） | `task_ops::lifecycle` |
 | 79 | POST | `/milestones/{id}/pause` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: 途中目標を一時停止する（**管理系**） | 410 `Problem`（旧 200 `MilestoneLifecycle`） | `task_ops::lifecycle` |
 | 80 | POST | `/milestones/{id}/resume` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: 一時停止を解く（**管理系**） | 410 `Problem`（旧 200 `MilestoneLifecycle`） | `task_ops::lifecycle` |
@@ -1471,6 +1472,11 @@ celeris では、他の全要求と同じくトークンが要る）。
 SPEC §7 / ADR-0033 D2）。空白だけの `title` / `request` は 422 `validation`。知らない欄は 400 `bad_request`。
 一覧は `created_at` の降順。
 
+`GET /projects` の各項目（`ProjectListItem`）は `Project` の欄を平らに持ち、ADR 2026-10-27-project-brief D4 の
+`brief`（§3.48a の要約。無ければ省略）・`task_counts`（task の状態 → 件数）・`last_activity_at`（task の
+`updated_at` の最大と案件の `updated_at` の遅い方）・`human_waits`（`GET /inbox/items?project=` と同じ数え方の
+件数）・`oldest_human_wait_at`（その最古の `created_at`。無ければ省略）を添える。`GET /projects/{id}` にも `brief` が付く。
+
 `GET /projects` は**アーカイブされた案件を既定で隠す**。`?archived=1`
 （`1`/`0`/`true`/`false`）で全部返す（他のクエリキーは 400）。`GET /projects/{id}`（個別）は既定でもそのまま見える。
 `Project` の状態は `proposed` / `active` / `paused` / `done` / `cancelled`。`paused` / `cancelled` は
@@ -1557,6 +1563,24 @@ ULID でない id・無い案件は 404 `project_not_found`。知らないクエ
 
 - `review`: その途中目標についての**秘書のレビューの返事**（`{message_id, text, at}`）。
 - `proposal`: その返事が提案した**次の途中目標**（`proposed` の最新。`review` がある行にだけ付く）。
+
+#### 3.48a `PUT /projects/{id}/status` → 200 `ProjectBrief`（**管理系**）
+
+案件の状態の要約（ADR 2026-10-27-project-brief）を**全置換**で書く。本文:
+
+```json
+{"objective":"…","state":"…","open_issues":["…"],"next_actions":["…"],
+ "waiting_on":[{"kind":"human","note":"P0-2 の判断"},{"kind":"task","target":"01J…","note":"計測"},
+               {"kind":"external","target":"sirius","note":"保守明け"}],
+ "evidence_refs":["task:01J…","run:01J…","docs/x.md"]}
+```
+
+- `objective`（≤ 2,000 字）・`state`（≤ 4,000 字）は必須で空は 422。一覧は各 20 件・各 500 字まで。
+- `waiting_on[].kind` は `human` / `task` / `external`。`task` の `target` はこの案件の task id（違えば 422）。
+- 応答と `GET /projects`・`GET /projects/{id}` の `brief` は本文に `project_id`・`updated_at`・`updated_by` を足したもの。
+  `updated_by` は人の直接の `PUT` では `human`、CoS では `cos:<thread id>`。
+- CoS（`/cos/operations` の `project.status_put`）からは**その案件の案件 CoS スレッドの run だけ**が書ける
+  （統括 CoS・他案件の CoS は 403 `project_brief_forbidden`、`rejected` で記録）。案件が無ければ 404。
 
 #### 3.48 `PATCH /projects/{id}` → 200 `Project`（**管理系**）
 
@@ -3503,6 +3527,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | projects | `POST /projects/{id}/resume` | `project.resume` |
 | projects | `POST /projects/{id}/archive` | `project.archive` |
 | projects | `POST /projects/{id}/unarchive` | `project.unarchive` |
+| projects | `PUT /projects/{id}/status` | `project.status_put`（その案件の案件 CoS スレッドだけ。他は 403 `project_brief_forbidden` で `rejected`） |
 | projects | `POST /standing-rules` | `standing_rule.create`（人の決定で CoS にも許可） |
 | projects | `DELETE /standing-rules/{id}` | `standing_rule.delete` |
 | projects | `POST /reports/read` | `report.read`（対応する通知も同じ transaction で既読） |

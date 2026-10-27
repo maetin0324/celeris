@@ -122,6 +122,9 @@ pub struct ApiV1Schema {
     pub project_create: ProjectCreateBody,
     pub project_patch: ProjectPatchBody,
     pub project_detail: ProjectDetail,
+    /// ADR 2026-10-27-project-brief: `PUT /projects/{id}/status` の本文と応答。
+    pub project_brief_put: task_core::ProjectBriefInput,
+    pub project_brief: task_core::ProjectBrief,
     pub milestone_create: MilestoneCreateBody,
     pub milestone_patch: MilestonePatchBody,
     /// Phase 41（ADR-0038 D2）: 途中目標の判定（`POST /milestones/{id}/decide`）。

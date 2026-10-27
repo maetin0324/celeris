@@ -27,7 +27,6 @@ fn project(store: &SqliteStore, title: &str) -> ProjectId {
         title: title.into(),
         request: "r".into(),
         status: ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         created_at: now,
         updated_at: now,

@@ -64,6 +64,30 @@ updated: 2026-10-27
 本番への移行（この追記の分）: 設定の追加・書き換えは無い。昇格後、既存の unintegrated 行のうち auto_integrate 案件で衝突しないものは
 次の sweep（300 秒以内）から 1 repo 1 件ずつ reviewing に戻る。
 
+## final review の差し戻し（criterion 0）への対応: reviewer 条件の無い停止 task の再開
+
+差し戻しの内容: 停止はすべての reviewing task に掛かるのに、`can_rereview`/`rereview` が reviewer 条件の無い task と support task を
+拒否していたため、決定的 check だけの task が止まると受信箱の `rereview` と `POST /tasks/{id}/rereview` が 422 になった。
+
+- `phase 1: 再同期の上限で止まった reviewing task は reviewer 条件・support を問わず rereview で再開できるようにする` —
+  - `crates/task-ops/src/comment.rs`: `can_rereview` は reviewing なら停止中かだけを見る。done/failed の制限は `rereviewable_kind` に集約し、
+    `rereview` も reviewing の停止の分岐を制限より先に置いた（条件の重複なし）。task-api `rereview_op` と view の `actions_with_events` は
+    同じ `can_rereview` を通る。
+  - ADR D4 に付記（再開の対象はすべての reviewing task）。`docs/api/v1/api.md`、`celerisctl rereview` の doc comment、view の `Action::Rereview`
+    の説明（schema 再生成）を直した。
+  - 試験: task-ops `a_halted_review_resumes_without_a_reviewer_criterion_or_for_a_support_task`（command 条件だけの task と doc-gardener の support
+    task。停止前は false、停止中は true・操作に `rereview`、`rereview` は Ok で `ReviewResyncResumed{human}`、再開後は 422 相当）、
+    `done_rereview_still_requires_a_reviewer_criterion_on_a_normal_task`（done の制限は不変）。task-api
+    `task_rereview_resumes_a_halted_review_without_a_reviewer_criterion`（GET の actions に `rereview`、POST が 2xx・`review_resync_resumed`）。
+    dispatcher `pre_review_sync_halted_without_reviewer_resumes_by_rereview_and_lands`（実 git の tempdir。check が main を進め続けて停止 →
+    取り込みが止む → `rereview` → 決定的 check を再実行して Done）。
+
+証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）:
+- `cargo test -p task-ops --lib comment::` → 9 passed、`cargo test -p task-api --test cos_ops_mutations rereview` → 3 passed、
+  `cargo test -p task-dispatch --lib pre_review_sync_halted` → 2 passed
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 5330 passed / 21 skipped、web vitest 98 files / 682 passed、node --test 99 passed）
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0
+
 ## 未解決
 - 本番で止まっている task（2026-10-27 の 6 件は operator がコメントで再開済み）は、この release の昇格後は受信箱に出る。
 

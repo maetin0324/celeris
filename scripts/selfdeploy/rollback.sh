@@ -153,6 +153,8 @@ if [ -n "$CUR" ]; then
   systemctl --user disable "celeris@$CUR" || sd_log "warning: disable celeris@$CUR failed"
 fi
 bash "$(dirname "${BASH_SOURCE[0]}")/web-follow.sh" "$PREV" "$CUR" || sd_die "web rollback failed; daemon restored but links unchanged"
+sd_switch_credentiald "$PREV" "$CUR" \
+  || sd_die "daemon rolled back, but the credentiald switch failed: stop celeris-credentiald@${CUR:-<current>}.service and start celeris-credentiald@$PREV.service by hand (links unchanged)"
 if [ -n "$CUR" ] && [ -d "$(sd_release_dir "$CUR")" ]; then
   sd_set_link "$SD_PREVIOUS" "$CUR"
 fi

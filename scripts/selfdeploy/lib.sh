@@ -110,6 +110,37 @@ sd_die() {
   exit 1
 }
 
+# ---- credentiald の切り替え --------------------------------------------------
+# 本番の drop-in（celeris@.service.d/50-credentiald.conf の Wants=）は、新しい daemon と一緒に同じ release の
+# celeris-credentiald@<新> を起こす。旧 broker は旧 daemon が draining の間も socket を持ち続けるので、新は
+# permission_denied で失敗を繰り返す（2026-10-26 21:18、operator が毎回手で止めて起こしていた）。
+# 引き継ぎの後に、旧を止め、失敗状態を消して新を起こし、SD_CREDENTIALD_SETTLE 秒後も active なのを確かめる。
+# unit が入っていない host（新の unit が無い）では何もしない。失敗は 1 を返す（呼び出し側が人に知らせる）。
+sd_switch_credentiald() {
+  local new="$1" old="${2:-}" settle="${SD_CREDENTIALD_SETTLE:-3}"
+  local new_unit="celeris-credentiald@$new.service" old_unit
+  if ! systemctl --user cat "$new_unit" >/dev/null 2>&1; then
+    sd_log "credentiald: $new_unit is not installed; skipping the credentiald switch"
+    return 0
+  fi
+  if [ -n "$old" ] && [ "$old" != "$new" ]; then
+    old_unit="celeris-credentiald@$old.service"
+    if systemctl --user is-active --quiet "$old_unit"; then
+      sd_log "systemctl --user stop $old_unit"
+      systemctl --user stop "$old_unit" || { sd_log "credentiald: failed to stop $old_unit"; return 1; }
+    fi
+  fi
+  systemctl --user reset-failed "$new_unit" >/dev/null 2>&1 || true
+  sd_log "systemctl --user start $new_unit"
+  systemctl --user start "$new_unit" || { sd_log "credentiald: failed to start $new_unit"; return 1; }
+  if [ "$settle" -gt 0 ]; then sleep "$settle"; fi
+  if ! systemctl --user is-active --quiet "$new_unit"; then
+    sd_log "credentiald: $new_unit is not active ${settle}s after start (journalctl --user -u $new_unit)"
+    return 1
+  fi
+  sd_log "credentiald: $new_unit is active"
+}
+
 # ---- JSON（python3 を優先。無ければ jq） -----------------------------------
 
 if command -v python3 >/dev/null 2>&1; then

@@ -80,7 +80,7 @@ case "$cmd" in
   cat) exit 0 ;;
   start) touch "$FAKE_STATE/started-$1" "$FAKE_STATE/ever-started-$1"; exit 0 ;;
   stop) rm -f "$FAKE_STATE/started-$1"; exit 0 ;;
-  is-active) exit 1 ;;
+  is-active) case "$*" in *credentiald*) exit 0 ;; esac; exit 1 ;;
   enable | disable | daemon-reload) exit 0 ;;
   show) echo 0; exit 0 ;;
   list-units) exit 0 ;;

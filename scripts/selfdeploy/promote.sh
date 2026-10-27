@@ -387,6 +387,7 @@ promote_live() {
 
   follow_web
   update_links
+  switch_credentiald
   sd_log "live handoff complete. The old celeris keeps draining its runs; watch it with status.sh."
 }
 
@@ -473,7 +474,15 @@ promote_stop_start() {
 
   follow_web
   update_links
+  switch_credentiald
   sd_log "stop-start promotion complete"
+}
+
+# 引き継ぎ・link 付け替えの後に旧 credentiald を止めて新を起こす（lib.sh sd_switch_credentiald）。daemon の昇格は
+# 済んでいるので、失敗は昇格の取り消しではなく、人への知らせ（exit 1）にする。
+switch_credentiald() {
+  sd_switch_credentiald "$SHA12" "$OLD" \
+    || sd_die "the promotion itself is done, but the credentiald switch failed: stop celeris-credentiald@${OLD:-<old>}.service and start celeris-credentiald@$SHA12.service by hand, then check \`celerisctl browser doctor\`"
 }
 
 # 失敗したときに旧 unit を起こし直す（unit が無い＝初回の移行なら、人に任せる）。

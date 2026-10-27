@@ -41,6 +41,7 @@ pub mod manifest;
 pub mod measure_env;
 pub mod observe;
 pub mod offline_lock;
+pub mod operator_usage;
 pub mod preflight;
 pub mod record;
 pub mod report;

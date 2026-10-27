@@ -17,7 +17,7 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <human-op|jev-stages|dry-run|validate|lock|collect-observed|collect-observed-out|stage-grader-inputs|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|ledger-init|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <operator-usage|human-op|jev-stages|dry-run|validate|lock|collect-observed|collect-observed-out|stage-grader-inputs|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|ledger-init|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--approval <json>] [--variant-b0-sha256 <hex>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -322,11 +322,11 @@ fn cap_probe_cli(args: &[String]) -> Result<String, String> {
 
 fn run(args: Vec<String>) -> Result<String, String> {
     let cmd = args.first().map(String::as_str).unwrap_or("");
-    if cmd == "grade" {
-        return celeris_campaign::grader::cli(&args, &ProcessRunner::default());
-    }
-    if cmd == "human-op" {
-        return celeris_campaign::human_ops::cli::cli(&args);
+    match cmd {
+        "grade" => return celeris_campaign::grader::cli(&args, &ProcessRunner::default()),
+        "human-op" => return celeris_campaign::human_ops::cli::cli(&args),
+        "operator-usage" => return celeris_campaign::operator_usage::cli(&args),
+        _ => {}
     }
     if cmd == "jev-stages" {
         let path = arg(&args, "--records").ok_or("--records <json> is required")?;

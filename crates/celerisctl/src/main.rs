@@ -44,6 +44,7 @@ use commands::routing::{self as routing_cmd, RoutingCommand};
 use commands::scratch::{self as scratch_cmd, ScratchCommand};
 use commands::skills::{self as skills_cmd, SkillsCommand};
 use commands::target_sweep::{self as target_cmd, TargetCommand};
+use commands::terminal_pty::{self, TerminalPtyArgs};
 use commands::worker::{self, WorkerCommand};
 use commands::workspace::{self, WorkspaceCommand};
 use error::CliError;
@@ -97,6 +98,9 @@ enum Command {
         #[command(subcommand)]
         command: TargetCommand,
     },
+    /// ADR 2026-10-27-web-terminal D1: web 端末の PTY helper（web gateway だけが起こす。DB は開かない）。
+    #[command(hide = true)]
+    TerminalPty(TerminalPtyArgs),
     /// 共有 Cargo ビルドキャッシュの古い repo-key を列挙・削除する（DB は開かない）。
     /// ADR-0075: scratch へ移行済み。通常は `celerisctl scratch gc` を使う。
     BuildCache {
@@ -303,6 +307,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
         Command::Browser { .. } => unreachable!("handled before store open"),
         Command::Scratch { .. } => unreachable!("handled before store open"),
         Command::Target { .. } => unreachable!("handled before store open"),
+        Command::TerminalPty(_) => unreachable!("handled before store open"),
         Command::Release { .. } => unreachable!("handled before store open"),
         Command::Campaign { command } => campaign_cmd::run(store, command),
         Command::Eval { command } => eval_cmd::run(store, command),
@@ -450,6 +455,9 @@ fn cos_mapped(
 
 fn main() -> ExitCode {
     let mut cli = Cli::parse();
+    if let Command::TerminalPty(args) = cli.command {
+        return terminal_pty::run(args);
+    }
     let cos_options = cos_ops::Options {
         reason: cli.reason.take(),
         idempotency_key: cli.idempotency_key.take(),

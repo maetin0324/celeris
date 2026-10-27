@@ -60,6 +60,8 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | PATCH | `/milestones/{id}` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/milestones/{id}/cancel` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/milestones/{id}/decide` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
+| POST | `/terminals` | `human_only` | ADR 2026-10-27-web-terminal D3。端末は web に login し step-up した人だけが開く（主体 human:web 以外は 403）。 |
+| POST | `/terminals/{id}/close` | `human_only` | ADR 2026-10-27-web-terminal D3。端末は web に login し step-up した人だけが開く（主体 human:web 以外は 403）。 |
 | PATCH | `/config/fields` | `human_only` | ADR 2026-10-22-dynamic-config D5。config.toml の欄の変更（書き戻しと稼働中の差し替え）は人が設定画面で行う。 |
 | POST | `/routing/stages` | `human_only` | ADR 2026-10-11-llm-source-model-routing-evaluation D3。enforce へ進めるのは人の承認だけ（戻すのは daemon）。 |
 | POST | `/milestones/{id}/pause` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
@@ -246,6 +248,8 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | DELETE | `/repos/{id}` | A | `repos.rs` | 共通 |
 | PATCH | `/repos/{id}` | A | `repos.rs` | 共通 |
 | PATCH | `/config/fields` | X: `human_only` | `handlers.rs` | 共通 |
+| POST | `/terminals` | X: `human_only` | `handlers.rs` | 共通 |
+| POST | `/terminals/{id}/close` | X: `human_only` | `handlers.rs` | 共通 |
 | POST | `/routing/stages` | X: `human_only` | `routing_stage.rs` | 共通 |
 | DELETE | `/secrets/{id}` | X: `secret_operations` | `handlers.rs` | 共通 |
 | PUT | `/secrets/{id}` | X: `secret_operations` | `handlers.rs` | 共通 |

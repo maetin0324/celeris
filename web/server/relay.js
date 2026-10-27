@@ -108,6 +108,9 @@ export function createRelay({ upstream, tokenFile, timeoutMs = DEFAULT_RELAY_TIM
     const target = upstreamPath(rawPath);
     if (!target) return fail(res, 400, "invalid_path");
     if (browserRouteRequired(target, req.method)) return fail(res, 403, "browser_route_required");
+    // ADR 2026-10-27-web-terminal D3: 端末の許可は gateway の端末経路（step-up・入口・Origin の検査つき）だけが取る。
+    if (/^\/api\/v1\/terminals(?:\/|$)/.test(decodeURIComponent(target)))
+      return fail(res, 403, "terminal_route_required");
     const url = new URL(`${target}${queryIndex < 0 ? "" : req.originalUrl.slice(queryIndex)}`, origin);
     if (url.origin !== origin || !url.pathname.startsWith("/api/v1/")) return fail(res, 400, "invalid_path");
 

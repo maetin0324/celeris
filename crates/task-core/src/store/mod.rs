@@ -147,6 +147,8 @@ pub use site_policies::{
     BrowserSitePolicyReferences, BrowserSitePolicySource,
 };
 mod task_store;
+mod terminal_sessions;
+pub use terminal_sessions::TerminalSessionEvent;
 mod task_store_impl;
 mod tasks;
 mod transition;

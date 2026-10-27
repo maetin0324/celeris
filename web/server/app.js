@@ -12,6 +12,7 @@ import { createEvents } from "./events.js";
 import { createFiles } from "./files.js";
 import { createRelay } from "./relay.js";
 import { isSpaRoute } from "./spa-routes.js";
+import { createTerminal, terminalConfig } from "./terminal.js";
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -19,7 +20,9 @@ const defaultCsp = "default-src 'none'; base-uri 'none'; object-src 'none'; fram
 // SPA の document だけ、成果物の表示（`/files/...?view=1`）を自 origin の iframe（HTML）と object（PDF）で埋め込める。
 // 埋め込まれる側は files.js が sandbox（HTML・SVG）と frame-ancestors 'self' で縛る（ADR 2026-10-05-web-artifact-inline-view）。
 // composer のローカル添付 preview（URL.createObjectURL）は画像だけ blob: を許可する。
-const htmlCsp = `${defaultCsp.replace("object-src 'none'", "object-src 'self'")}; frame-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self'`;
+// web 端末の xterm.js は描画用の `<style>` 要素を作る（ADR 2026-10-27-web-terminal D5）。`style-src-elem` だけ広げ、
+// script と style 属性は従来どおり。
+const htmlCsp = `${defaultCsp.replace("object-src 'none'", "object-src 'self'")}; frame-src 'self'; script-src 'self'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self'`;
 const fingerprint = /-[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9]+$/;
 
 export function parseBind(value = "127.0.0.1:7720") {
@@ -81,6 +84,7 @@ export function createApp({
   attestationKeyFile = process.env.CELERIS_WEB_ATTESTATION_KEY_FILE,
   ownerSocket = process.env.CELERIS_WEB_OWNER_SOCKET,
   liveFrameConnectTimeoutMs,
+  terminal: terminalOptions = {},
   // promote の probe（scripts/selfdeploy の sd_web_app_probe）が付ける。owner socket と信頼端末の書き込みを止める。
   probe = process.env.CELERIS_WEB_PROBE === "1",
   now = Date.now,
@@ -99,6 +103,17 @@ export function createApp({
     now,
     log,
     frameConnectTimeoutMs: liveFrameConnectTimeoutMs,
+  });
+  // web 端末（ADR 2026-10-27-web-terminal）。daemon が無ければ開けない（状態は `terminal_unavailable`）。
+  const terminal = createTerminal({
+    auth,
+    daemonUrl,
+    daemonTokenFile,
+    log,
+    now,
+    failedDelayMs: failedLoginDelayMs,
+    config: terminalOptions.config ?? terminalConfig(),
+    ...terminalOptions,
   });
   // daemonUrl が無ければ中継しない（/api/* は 404）。起動時の既定は index.js が与える。
   // `/files/*` と `/events` も同じ daemon へ中継する（P1-08・P1-09）。チャットの添付・stream・ダウンロードは
@@ -173,12 +188,15 @@ export function createApp({
   );
   auth.register(app);
   browser.register(app);
+  terminal.register(app);
   app.locals.browserLive = browser;
+  app.locals.terminal = terminal;
   app.locals.browserLiveUpgrade = (req, socket, head) => {
     guardUpgradeSocket(socket);
     const host = hostName(req.headers.host);
     if (!host || !allowed.has(host))
       return rejectUpgrade(socket, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+    if (req.url === "/terminal/ws" || req.url?.startsWith("/terminal/ws?")) return terminal.upgrade(req, socket, head);
     browser.upgrade(req, socket, head).catch(() => socket.destroy());
   };
   registerRoutes(app);

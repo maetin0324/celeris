@@ -32,6 +32,7 @@ pub(crate) mod system;
 pub(crate) mod task_actions;
 mod task_io;
 pub(crate) mod tasks;
+pub(crate) mod terminals;
 
 use accounts::{
     accounts, cancel_account_login, check_account, create_account, delete_account,
@@ -141,6 +142,12 @@ pub(crate) fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/clusters/{id}/connect/code",
             post(submit_cluster_connect_code),
+        )
+        // ADR 2026-10-27-web-terminal D3・D4: 主体 human:web だけ（web gateway の端末）。
+        .route("/api/v1/terminals", post(terminals::open_terminal))
+        .route(
+            "/api/v1/terminals/{id}/close",
+            post(terminals::close_terminal),
         )
         .route("/api/v1/secrets", get(secrets_list))
         .route(

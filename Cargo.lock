@@ -359,6 +359,7 @@ dependencies = [
  "celeris",
  "celeris-mcp",
  "clap",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

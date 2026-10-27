@@ -24,6 +24,8 @@ import { DataList } from "../../components/ui/data-list";
 import { Section } from "../../components/ui/panel";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { formatAbsolute, formatRelative } from "../../lib/time";
+import { nextTab, type TerminalTab, type TerminalTarget, targetLabel } from "./terminal-model";
+import { TerminalPanel } from "./terminal-panel";
 
 type Sender = ReturnType<typeof useActionResult>;
 // 入力欄の枠は --color-input（styles.css の @layer base）に任せ、ここでは色を指定しない。
@@ -226,11 +228,13 @@ export function LocalMachineCard({
   sender,
   denied,
   saved: savedInitial = null,
+  onOpenTerminal,
 }: {
   local: LocalMachineView;
   sender: Sender;
   denied: boolean;
   saved?: LocalMachineView | null;
+  onOpenTerminal?: () => void;
 }) {
   const wr = local.workspace_root;
   const mc = local.max_concurrency;
@@ -259,6 +263,11 @@ export function LocalMachineCard({
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="min-w-0 break-all text-body font-semibold text-foreground">{localTitle(local)}</h3>
         <Badge tone={localState.tone}>{localState.label}</Badge>
+        {onOpenTerminal && (
+          <Button onClick={onOpenTerminal} aria-label="このマシンの端末を開く">
+            端末を開く
+          </Button>
+        )}
       </div>
       <DataList
         items={[
@@ -445,12 +454,14 @@ function ClusterCard({
   start,
   setStart,
   denied,
+  onOpenTerminal,
 }: {
   item: ClusterView;
   sender: Sender;
   start: ClusterConnectStart | undefined;
   setStart: (id: string, value: ClusterConnectStart | null) => void;
   denied: boolean;
+  onOpenTerminal?: () => void;
 }) {
   const [code, setCode] = useState("");
   const [workDir, setWorkDir] = useState(item.work_dir ?? "");
@@ -496,7 +507,24 @@ function ClusterCard({
         >
           接続
         </Button>
+        {onOpenTerminal && (
+          <Button
+            disabled={item.connected !== true || !item.work_dir}
+            onClick={onOpenTerminal}
+            aria-label={`${item.id} の端末を開く`}
+          >
+            端末を開く
+          </Button>
+        )}
       </div>
+      {onOpenTerminal && item.connected !== true && (
+        <p className="text-label text-muted-foreground">
+          端末は ssh 接続（ControlMaster）があるときだけ開けます。先に「接続」を押してください。
+        </p>
+      )}
+      {onOpenTerminal && item.connected === true && !item.work_dir && (
+        <p className="text-label text-muted-foreground">端末を開くには作業ディレクトリを設定してください。</p>
+      )}
       <ActionResultView result={sender.results[`connect:${item.id}`]} />
       {awaiting && (
         <section className="space-y-2 rounded border border-border p-3" aria-label={`接続コード ${item.id}`}>
@@ -592,6 +620,12 @@ export function ClustersScreen() {
   });
   const sender = useActionResult(clusterKeys.all);
   const [starts, setStarts] = useState<Starts>({});
+  const [tabs, setTabs] = useState<TerminalTab[]>([]);
+  const [tabSeq, setTabSeq] = useState(0);
+  const openTerminal = (target: TerminalTarget, label: string) => {
+    setTabs((prev) => nextTab(prev, target, label, tabSeq + 1));
+    setTabSeq((n) => n + 1);
+  };
   const setStart = (id: string, value: ClusterConnectStart | null) =>
     setStarts((prev) => {
       const next = { ...prev };
@@ -645,7 +679,12 @@ export function ClustersScreen() {
               description="このマシンの作業ディレクトリと同時実行数、各クラスタの接続と作業ディレクトリの上書きを行います。"
             >
               <ul className="space-y-3">
-                <LocalMachineCard local={query.data.local} sender={sender} denied={denied !== null} />
+                <LocalMachineCard
+                  local={query.data.local}
+                  sender={sender}
+                  denied={denied !== null}
+                  onOpenTerminal={() => openTerminal("local", targetLabel("local", query.data?.local.hostname))}
+                />
                 {items.map((item) => (
                   <ClusterCard
                     key={item.id}
@@ -654,10 +693,12 @@ export function ClustersScreen() {
                     start={starts[item.id]}
                     setStart={setStart}
                     denied={denied !== null}
+                    onOpenTerminal={() => openTerminal(`cluster:${item.id}`, targetLabel(`cluster:${item.id}`))}
                   />
                 ))}
               </ul>
             </Section>
+            <TerminalPanel tabs={tabs} onCloseTab={(key) => setTabs((prev) => prev.filter((t) => t.key !== key))} />
           </div>
         )}
       </FetchFrame>

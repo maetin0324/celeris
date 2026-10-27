@@ -359,6 +359,8 @@ token_file = "api.token"
 | 36 | DELETE | `/secrets/{id}` | 秘密の削除（**管理系**） | 200 `{}` | celeris（ファイル削除のみ） |
 | 37 | POST | `/clusters/{id}/connect` | 接続を開始する（コード不要で張れれば即完了。ADR-0032、Phase 22。**管理系**） | 200 `ClusterConnectStart` | celeris（`ssh -M -N` の起動・借用） |
 | 38 | POST | `/clusters/{id}/connect/code` | 進行中の接続に検証コード（TOTP 等）を渡す（**管理系**） | 200 `ClusterConnectResult` | celeris（`SSH_ASKPASS` 経由の中継） |
+| 38a | POST | `/terminals` | web 端末を開く許可と対象（`local` / `cluster:<id>`）の解決、開始の記録（主体 `human:web` だけ。ADR 2026-10-27-web-terminal） | 201 `TerminalOpened` | `terminal_session_events` |
+| 38b | POST | `/terminals/{id}/close` | web 端末の終了の記録（主体 `human:web` だけ） | 204 | `terminal_session_events` |
 | 39 | DELETE | `/clusters/{id}/connect` | 進行中の接続を取り消す、または張った接続を切る（**管理系**） | 200 `{}` | celeris（子プロセスの終了） |
 | 40 | GET | `/org` | 組織（一つ、役割の木）の全ノード（ADR-0033 D1、Phase 23） | `OrgList` | store `org_list` |
 | 41 | POST | `/org` | 役職を足す（**管理系**） | 201 `OrgNode`（`Location`） | store `org_upsert` |
@@ -1380,6 +1382,16 @@ celeris への管理要求の経路が無い・応答が時間内に返らない
   （ADR-0032 D5。GUI は `ok: false` を握りつぶさずに画面へ出す）。`detail` に**コードは含まれない**。
 - **コードは受け取ってもログにも応答にも出さない**（`who = "admin"`, `op = "cluster_connect_code"`, `cluster`
   だけ記録する。ADR-0032 D4）。
+
+#### 3.40a `POST /terminals` → 201 `TerminalOpened`、`POST /terminals/{id}/close` → 204
+
+ADR 2026-10-27-web-terminal D3・D4。主体が `human:web`（web gateway の token）でなければ 403
+`terminal_forbidden`（operator・MCP・CoS・別の人の token・token の無い構成）。本文 `{"target": "local" |
+"cluster:<id>", "client": "<Host と接続元>"}`。`local` は daemon のユーザーの login shell（`-l`、cwd は HOME）。
+クラスタは snapshot で ControlMaster が繋がっていなければ 409 `cluster_not_connected`、絶対の作業 dir が無ければ
+409 `work_dir_unset`。応答は `{session_id, target, argv, cwd, remote_dir?}`。close の本文は `{reason, duration_secs?,
+exit_code?}`、`reason` は `user`・`disconnect`・`idle_timeout`・`max_duration`・`logout`・`exited`・`spawn_failed`・
+`gateway_shutdown`。開始・終了は追記専用の表 `terminal_session_events` に残る。端末の入出力は daemon に来ない。
 
 #### 3.41 `DELETE /clusters/{id}/connect` → 200 `{}`
 

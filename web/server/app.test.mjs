@@ -80,7 +80,10 @@ test("HTML and health are local even when no daemon exists", async () => {
   assert.match(await html.text(), /main-abcdef012345/);
   assert.equal(html.headers.get("cache-control"), "no-store");
   assert.match(html.headers.get("content-security-policy"), /script-src 'self'/);
-  assert.doesNotMatch(html.headers.get("content-security-policy"), /unsafe-inline/);
+  // unsafe-inline は xterm.js の `<style>` 要素（style-src-elem）だけ（ADR 2026-10-27-web-terminal D5）。
+  const csp = html.headers.get("content-security-policy");
+  assert.doesNotMatch(csp.replace("style-src-elem 'self' 'unsafe-inline'", ""), /unsafe-inline/);
+  assert.match(csp, /style-src 'self';/);
   assert.match(html.headers.get("content-security-policy"), /img-src 'self' data: blob:;/);
   const health = await get("/healthz");
   assert.deepEqual(await health.json(), { ok: true, name: "celeris-web", version: "0.1.0", release: "test" });

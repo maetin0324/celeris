@@ -95,6 +95,16 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     (
+        "POST",
+        "/api/v1/terminals",
+        "human_only: ADR 2026-10-27-web-terminal D3。端末は web に login し step-up した人だけが開く（主体 human:web 以外は 403）。",
+    ),
+    (
+        "POST",
+        "/api/v1/terminals/{id}/close",
+        "human_only: ADR 2026-10-27-web-terminal D3。端末は web に login し step-up した人だけが開く（主体 human:web 以外は 403）。",
+    ),
+    (
         "PATCH",
         "/api/v1/config/fields",
         "human_only: ADR 2026-10-22-dynamic-config D5。config.toml の欄の変更（書き戻しと稼働中の差し替え）は人が設定画面で行う。",

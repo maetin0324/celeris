@@ -31,14 +31,17 @@ updated: 2026-10-27
 
 検査は提出時の HEAD で実行（基準は `git merge-base HEAD main`）。
 
-- `cargo test -p task-ops --lib unblocks`: 4 passed（failed の待ちが 1 度だけ reopen され、二度目の昇格・再走査で重ならない／
+- `bash scripts/dev/test-affected.sh` 内の task-ops::unblocks: 4 passed（failed の待ちが 1 度だけ reopen され、二度目の昇格・再走査で重ならない／
   blocked はコメントだけ・子の修正は親の配送で判定／`included: null`・壊れた `promoted.json` を飛ばす／検証）。
-- `cargo test -p task-api --test unblocks`: 3 passed（API で結んで昇格 → 1 度だけ reopen、二度目の昇格で重ならない／
+- 同コマンド内の task-api::unblocks: 3 passed（API で結んで昇格 → 1 度だけ reopen、二度目の昇格で重ならない／
   不明・重複 id は 422 で何も作らない／CoS の `task.create` でも結びが書かれる）。
-- `bash scripts/dev/test-affected.sh`: exit 0（nextest 6501 passed・21 skipped、web Vitest 685 passed・Node 98 passed）。
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 6538 passed・21 skipped、web Vitest 685 passed・Node 98 passed）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 
 ## 再検査時の修正
+
+- main の task 冪等キー（migration 0094）を保持し、unblocks を migration 0095 に配置。
+  API の `idempotency_key` と `unblocks` を両立させ、旧 DB への downgrade 試験は両表を削除する。
 
 - ArtifactPreview の4幅の axe 検査を幅別の試験に分け、各20秒を上限として完了を待つ。
   4回の検査全体に既定の5秒を適用していたため、Web unit 試験で timeout が起きていた。
@@ -49,6 +52,7 @@ updated: 2026-10-27
 
 - `unblocks: 修正 task と待っている task を結び、修正を含む release の昇格で 1 度だけ再開する`
 - `phase 1: 成果物プレビューの幅別検査を分けてタイムアウトを防ぐ`
+- `phase 1: main 同期後の unblocks 検証結果を更新する`
 
 ## 未解決事項
 

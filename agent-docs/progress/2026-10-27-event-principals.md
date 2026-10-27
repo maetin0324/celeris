@@ -19,12 +19,12 @@ tasks: [01M5XXF7Q58YE3PEHHND8DBWT5]
   `WorkerProgress` の自由文に by を埋める旧い記録は削除。
 - `CommentAuthorKind` に `cos` / `mcp` / `operator` を追加。comment の種別は主体から決まり、comment 由来の
   `Answered.by` は comment の主体。`post_human_comment`（主体なし）は削除。
-- migration 0096（SCHEMA_VERSION 96）: `task_comments` の CHECK を広げ、`author_kind = human` の行を author から直す。
+- migration 0097（SCHEMA_VERSION 97。main の 0096 は task_unblocks）: `task_comments` の CHECK を広げ、`author_kind = human` の行を author から直す。
   events は書き換えない。
 
 ## 証拠（提出時の HEAD で実行）
 
-- 試験: `store::principal_tests`（作成・retry の主体、migration 0096 で誤記録 0 件・events 件数不変）、
+- 試験: `store::principal_tests`（作成・retry の主体、migration 0097 で誤記録 0 件・events 件数不変）、
   `task-ops comment::tests::a_comment_records_its_principal_kind_and_the_answer_carries_the_principal`、
   `retry::tests`・`gate::tests` の by、`task-api tests/api_principals.rs`・`tests/execution.rs` の PlanGateDecided、
   `celeris-mcp mcp_integration task_plan_gate_*`。
@@ -32,7 +32,7 @@ tasks: [01M5XXF7Q58YE3PEHHND8DBWT5]
 
 ## 本番への移行
 
-- migration 0096 は daemon の起動時に自動で走る。人の config 変更は不要。
+- migration 0097 は daemon の起動時に自動で走る。人の config 変更は不要。
 
 ## 未解決事項
 

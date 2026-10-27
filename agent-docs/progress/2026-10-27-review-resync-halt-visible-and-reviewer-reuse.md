@@ -46,3 +46,7 @@ updated: 2026-10-27
 ## 提案
 - stale の上限 `MAX_TARGET_RESYNCS` は定数のまま。reviewer 再利用で 1 回の stale の代価が check の再実行だけになったので、上限を config に出す必要が
   出たら別 task にする。
+- done 後の unintegrated の自動取り込み直しは ADR `2026-10-27-done-task-auto-reintegrate`。sweep（300 秒・単一飛行）が auto_integrate 案件の done・「not an ancestor」行を
+  `git merge-tree` と変更 file の重なりで分類する（実装は `task_ops::stranded::reintegrate`）。
+- clean なら `Trigger::Rereview` で reviewing に戻し、既存の review 前同期・必須 check の再実行・reviewer 再利用（重ならなければ reviewer 省略）・ff 取り込みに乗せる。rebase と check 無しの直接 merge は採らない。
+- 衝突・上限（task あたり 2 回、repo あたり周期 1 件）は既存の受信箱 `unintegrated` に理由つきで残す。event `DoneReintegrationStarted/Deferred` を追記する。

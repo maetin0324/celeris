@@ -23,7 +23,8 @@ updated: 2026-10-27
 - API schema・web の生成型、`web/features/inbox/inbox-model.ts`（種類・表示名・native の種類）。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
-- `bash scripts/dev/test-affected.sh` → exit 0（nextest 6501 passed / 21 skipped、web Vitest 682 passed、tsc -b 通過）。
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 6540 passed / 21 skipped。review の再同期で止まったため main に rebase した後に再実行）。
+- rebase 後、main に入った人向け文面の lint（check-human-text）が human_wait_aging の本文の末尾コロンを拾った。本文を「次の待ちが N 秒以上答えられていない。」に直した。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - 停滞の試験: `task-ops` の `stagnation::tests`（6 件: 閾値ちょうどで 1 件、再検出で同じ key・since、解消で消える、
   release の読み、gather）、`human_inbox::tests` の `human_wait_aging_is_one_item_per_project_and_closes_when_answered`・

@@ -1419,7 +1419,7 @@ impl Builder<'_> {
             kind: InboxKind::HumanWaitAging,
             title: format!("人の操作待ちが長い: {project}（{} 件）", a.waits.len()),
             detail: clip(&format!(
-                "{} 秒以上答えられていない待ち:\n{}",
+                "次の待ちが {} 秒以上答えられていない。\n{}",
                 threshold_secs,
                 lines.join("\n")
             )),

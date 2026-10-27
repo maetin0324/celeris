@@ -24,9 +24,6 @@ tasks: [01M5ZA2NP31AVVKQ9F4T3A52VB]
   `setsid sleep 48` で helper が 48 秒残った）。直した順: session の SIGHUP/SIGKILL → slave の pts を
   `/proc/<pid>/fd` で開いている自 uid の process に SIGKILL（上限 2 秒で消えるまで待つ）→ scope に自分以外が残って
   いれば `cgroup.kill` → 読み切りは最大 2 秒の出来事待ち。ADR D1 付記 A1、試験 2 件を追加。
-- `phase 1: test-affected の doc test を lib のある crate に絞る` — 変更 crate が bin だけ（celerisctl）のとき、
-  `cargo test --doc -p celerisctl` が「no library targets found」で落ちて test-affected が exit 101 になった。
-  `cargo metadata` で lib（proc-macro を含む）target のある crate だけを doc test に渡す。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - `bash scripts/dev/test-affected.sh` → exit 0（nextest 6639 passed / 21 skipped、web vitest 689 passed、web server 105 passed）
@@ -43,9 +40,6 @@ tasks: [01M5ZA2NP31AVVKQ9F4T3A52VB]
   新しい 2 件が「helper did not exit within 15s」で落ちる（修正前のソースに戻して確認）。reviewer の再現
   `( sleep 1 ) | timeout 20 celerisctl terminal-pty --cwd . --cols 80 --rows 24 -- /bin/sh -c 'setsid sleep 48 & echo started; sleep 100'`
   は修正後 1 秒で終わり（exit=129、SIGHUP で終わった shell の code）、`sleep 48` は残らない。
-- WU の検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）: `bash scripts/dev/test-affected.sh` → exit 0
-  （crates: celerisctl、nextest 193 passed、doc test は対象 crate に lib が無いので省略）、
-  `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。
 
 ## 本番への移行
 - 端末は既定で loopback の Host からだけ開ける。tailscale から使うには `~/.config/celeris/web.env` に

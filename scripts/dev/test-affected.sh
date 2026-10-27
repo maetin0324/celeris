@@ -204,15 +204,7 @@ if [ -n "$crates" ]; then
   mkdir -p "$tmproot/tmp"
   export TMPDIR="$tmproot/tmp"
   cargo nextest run "${args[@]}"
-  # doc test は lib target のある crate だけ（bin だけの crate を -p に渡すと「no library targets」で落ちる）。
-  libs="$(cargo metadata --no-deps --format-version 1 | python3 -I -c 'import json,sys
-for p in json.load(sys.stdin)["packages"]:
-    if any("lib" in t["kind"] or "proc-macro" in t["kind"] for t in p["targets"]): print(p["name"])')"
-  doc_args=()
-  while IFS= read -r c; do
-    grep -qx "$c" <<<"$libs" && doc_args+=(-p "$c")
-  done <<<"$crates"
-  [ "${#doc_args[@]}" -eq 0 ] || cargo test --doc "${doc_args[@]}"
+  cargo test --doc "${args[@]}"
   ran=1
 fi
 

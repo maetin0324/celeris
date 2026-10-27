@@ -978,7 +978,6 @@ async fn patch_task_attaches_a_project_to_a_project_less_task_once() {
             title: title.into(),
             request: "r".into(),
             status: ProjectStatus::Active,
-            secretary_summary: None,
             workspace: None,
             created_at: now,
             updated_at: now,

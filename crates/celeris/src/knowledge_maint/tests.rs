@@ -38,7 +38,6 @@ fn seed_project(store: &SqliteStore, archived: bool) -> ProjectId {
         title: "案件".into(),
         request: "依頼".into(),
         status: ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         created_at: now,
         updated_at: now,

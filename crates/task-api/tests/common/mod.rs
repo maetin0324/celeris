@@ -809,7 +809,6 @@ pub fn project_cos_thread(
         title: key.into(),
         request: key.into(),
         status: task_core::ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

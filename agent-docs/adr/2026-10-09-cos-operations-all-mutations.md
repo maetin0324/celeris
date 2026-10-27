@@ -198,6 +198,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/projects/{id}/plan` | X: `removed_by_adr_0079` | `project_plan.rs` | 共通 |
 | POST | `/projects/{id}/project-plan/{version}/decide` | X: `removed_by_adr_0079` | `project_plan.rs` | 共通 |
 | POST | `/projects/{id}/resume` | A | `lifecycle.rs` | 共通 |
+| PUT | `/projects/{id}/status` | A | `handlers.rs` | 共通 |
 | POST | `/projects/{id}/unarchive` | A | `lifecycle.rs` | 共通 |
 | POST | `/reports/notified` | A | `reports.rs` | 共通 |
 | POST | `/reports/read` | A | `reports.rs` | 共通 |

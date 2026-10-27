@@ -120,7 +120,6 @@ fn stored_delivery() -> (task_core::SqliteStore, Delivery) {
         title: "test".into(),
         request: "fix".into(),
         status: ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

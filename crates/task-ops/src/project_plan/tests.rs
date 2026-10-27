@@ -17,7 +17,6 @@ fn a_project_without_plan_versions_has_no_dag() {
         title: "案件".into(),
         request: "r".into(),
         status: ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         created_at: now,
         updated_at: now,

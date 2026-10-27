@@ -13,14 +13,14 @@ impl SqliteStore {
     ) -> rusqlite::Result<Result<Project, StoreError>> {
         let id: String = row.get(0)?;
         let status_col: String = row.get(3)?;
-        let created_at: String = row.get(5)?;
-        let updated_at: String = row.get(6)?;
-        // ADR-0039 D1 / ADR-0043 D1: 7 列目は **primary のリポジトリの `location_json`**、無ければ
+        let created_at: String = row.get(4)?;
+        let updated_at: String = row.get(5)?;
+        // ADR-0039 D1 / ADR-0043 D1: 6 列目は **primary のリポジトリの `location_json`**、無ければ
         // 従来の `projects.workspace` 列（`COALESCE`。導入前の行と作業場所を決めていない案件は NULL）。
-        let workspace_col: Option<String> = row.get(7)?;
-        // ADR-0044 D6（Phase 55）: 8 列目 `archived_at`、9 列目 `paused_from`。
-        let archived_at_col: Option<String> = row.get(8)?;
-        let paused_from_col: Option<String> = row.get(9)?;
+        let workspace_col: Option<String> = row.get(6)?;
+        // ADR-0044 D6（Phase 55）: 7 列目 `archived_at`、8 列目 `paused_from`。
+        let archived_at_col: Option<String> = row.get(7)?;
+        let paused_from_col: Option<String> = row.get(8)?;
         let (Ok(id), Some(status)) = (id.parse::<ProjectId>(), ProjectStatus::parse(&status_col))
         else {
             return Ok(Err(StoreError::Invalid(format!(
@@ -55,19 +55,18 @@ impl SqliteStore {
                 title: row.get(1)?,
                 request: row.get(2)?,
                 status,
-                secretary_summary: row.get(4)?,
                 workspace,
                 archived_at: match archived_at_col.as_deref() {
                     Some(raw) => Some(parse_rfc3339(raw)?),
                     None => None,
                 },
                 paused_from,
-                // ADR-0074 D3.2（Phase F4b）: 11 列目 `auto_advance`。
-                auto_advance: row.get::<_, i64>(10)? != 0,
-                // Phase K-1: 12 列目 `slug`。
-                slug: row.get(11)?,
-                // ADR 2026-10-16-project-auto-integrate D1: 13 列目 `auto_integrate`。
-                auto_integrate: row.get::<_, i64>(12)? != 0,
+                // ADR-0074 D3.2（Phase F4b）: 10 列目 `auto_advance`。
+                auto_advance: row.get::<_, i64>(9)? != 0,
+                // Phase K-1: 11 列目 `slug`。
+                slug: row.get(10)?,
+                // ADR 2026-10-16-project-auto-integrate D1: 12 列目 `auto_integrate`。
+                auto_integrate: row.get::<_, i64>(11)? != 0,
                 created_at: parse_rfc3339(&created_at)?,
                 updated_at: parse_rfc3339(&updated_at)?,
             })
@@ -297,15 +296,14 @@ impl SqliteStore {
             )?,
         };
         tx.execute(
-            "INSERT INTO projects (id, title, request, status, secretary_summary, created_at, updated_at, workspace, \
+            "INSERT INTO projects (id, title, request, status, created_at, updated_at, workspace, \
              archived_at, paused_from, auto_advance, slug, auto_integrate) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 project.id.to_string(),
                 project.title,
                 project.request,
                 project.status.as_str(),
-                project.secretary_summary,
                 format_rfc3339(project.created_at)?,
                 format_rfc3339(project.updated_at)?,
                 Self::project_workspace_column(project.workspace.as_ref())?,
@@ -342,7 +340,7 @@ impl SqliteStore {
         self.with_read_conn(|conn| {
             let row = conn
                 .query_row(
-                    "SELECT p.id, p.title, p.request, p.status, p.secretary_summary, p.created_at, p.updated_at, \
+                    "SELECT p.id, p.title, p.request, p.status, p.created_at, p.updated_at, \
                      COALESCE((SELECT r.location_json FROM project_repos r \
                                WHERE r.project_id = p.id AND r.is_primary = 1 \
                                ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
@@ -359,7 +357,7 @@ impl SqliteStore {
     pub(super) fn project_list_impl(&self) -> Result<Vec<Project>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT p.id, p.title, p.request, p.status, p.secretary_summary, p.created_at, p.updated_at, \
+                "SELECT p.id, p.title, p.request, p.status, p.created_at, p.updated_at, \
                      COALESCE((SELECT r.location_json FROM project_repos r \
                                WHERE r.project_id = p.id AND r.is_primary = 1 \
                                ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \

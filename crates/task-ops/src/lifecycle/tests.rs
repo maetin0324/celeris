@@ -18,7 +18,6 @@ fn a_project(store: &dyn TaskStore, status: ProjectStatus) -> Project {
         title: "案件".to_string(),
         request: "やって".to_string(),
         status,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

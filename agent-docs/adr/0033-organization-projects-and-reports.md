@@ -254,3 +254,8 @@ CoS に関する D4 の「返答専用・道具を使わない」という制約
 CoS は全道具を使う特別 worker となり、スレッドごとの継続 session と API 経由の制御操作を持つ。
 受信箱の一次対応も担い、代答は actor=cos と理由を events に残し、人が必要なものだけ Discord へ依頼する。
 非 CoS ノードの対話と既存の認可・秘密保護は維持する。適用は新 ADR D6 の切替時であり、この付記は実装済みを意味しない。
+
+## 付記（2026-10-27）
+
+`projects.secretary_summary` は書く経路が無いまま残っていたので、[ADR 2026-10-27-project-brief](2026-10-27-project-brief.md)
+で消した（migration 0095）。案件の状態の要約は `project_briefs` に構造化して持つ。

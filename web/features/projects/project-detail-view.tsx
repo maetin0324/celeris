@@ -77,7 +77,7 @@ export function MilestoneBadge({ status }: { status: MilestoneStatus }) {
 const indent = ["ps-2", "ps-6", "ps-10", "ps-14", "ps-18", "ps-22", "ps-26", "ps-30", "ps-34"] as const;
 
 function Overview({ detail }: { detail: ProjectDetail }) {
-  const { project, root_totals: totals } = detail;
+  const { project, root_totals: totals, brief } = detail;
   return (
     <ProjectSection title="概要" testId="project-overview">
       <p className="flex flex-wrap items-center gap-2">
@@ -102,7 +102,15 @@ function Overview({ detail }: { detail: ProjectDetail }) {
             .join("")}
         </p>
       )}
-      <Markdown source={project.secretary_summary || project.request} />
+      <Markdown source={project.request} />
+      {brief ? (
+        <div data-testid="project-brief" className="space-y-1">
+          <p className="text-muted-foreground">
+            現状（{brief.updated_by}、{brief.updated_at}）
+          </p>
+          <Markdown source={brief.state} />
+        </div>
+      ) : null}
     </ProjectSection>
   );
 }

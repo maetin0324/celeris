@@ -68,10 +68,6 @@ fn run_show(store: &dyn TaskStore, args: ProjectsShowArgs) -> Result<ExitCode, C
     outln!("title: {}", project.title);
     outln!("status: {:?}", project.status);
     outln!("request: {}", project.request);
-    outln!(
-        "secretary_summary: {}",
-        project.secretary_summary.as_deref().unwrap_or("(none)")
-    );
     match project.archived_at {
         Some(at) => outln!("archived_at: {at}"),
         None => outln!("archived_at: (none)"),
@@ -110,7 +106,6 @@ mod tests {
             title: "Pluvio".into(),
             request: "降水予測の研究".into(),
             status,
-            secretary_summary: None,
             workspace: None,
             archived_at: if archived { Some(now) } else { None },
             paused_from: None,

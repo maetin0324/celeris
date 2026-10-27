@@ -48,6 +48,7 @@ use config_fields::{
 use org::{create_org_node, delete_org_node, org_list, patch_browser_settings, patch_org_node};
 use projects::{
     create_milestone, create_project, patch_milestone, patch_project, project_detail, project_list,
+    put_project_status,
 };
 use reload::reload;
 use secrets::{delete_secret, put_secret, secrets_list};
@@ -165,6 +166,8 @@ pub(crate) fn router(state: ApiState) -> Router {
             "/api/v1/projects/{id}",
             get(project_detail).patch(patch_project),
         )
+        // ADR 2026-10-27-project-brief D3: 案件の状態の要約（全置換）。
+        .route("/api/v1/projects/{id}/status", put(put_project_status))
         .route("/api/v1/projects/{id}/milestones", post(create_milestone))
         // ADR-0043 D1（Phase 52）: 案件のリポジトリ。実装は `crate::repos`。
         .merge(crate::repos::routes())

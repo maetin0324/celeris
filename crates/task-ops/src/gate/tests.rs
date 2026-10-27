@@ -509,7 +509,6 @@ fn a_draft_of_a_frozen_project_plan_proposal_can_be_accepted_individually() {
         title: "t".into(),
         request: "r".into(),
         status: task_core::ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

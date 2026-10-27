@@ -100,6 +100,7 @@ pub fn cos_chat_section(chat: &CosChatContext) -> String {
     out.push_str(&summary_section(chat));
     out.push_str(&history_section(chat));
     out.push_str(&inbox_section(chat));
+    out.push_str(&projects_section(chat));
     out.push_str(&attachments_section(chat));
     out
 }
@@ -330,6 +331,38 @@ fn missing_line(h: &CosChatHistory) -> String {
 
 /// ADR 2026-10-07-cos-inbox-thread-conversation D3: the unresolved inbox items of the inbox
 /// thread, so a human's free-text instruction can be matched to its item and relayed.
+/// ADR 2026-10-27-project-brief D5: the project summaries (no detail; read it through the API).
+fn projects_section(chat: &CosChatContext) -> String {
+    if chat.projects.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "## 案件の要約 (project briefs)\n\
+         詳細（task 木・要約の全文）は必要な案件だけ `GET /api/v1/projects/<id>` で読む。\
+         案件 CoS は自分の案件の状態が変わったら `project.status_put`（`PUT /api/v1/projects/<id>/status`、全置換）で書き直す。\n",
+    );
+    for p in &chat.projects {
+        out.push_str(&format!(
+            "- {} [{}] {}: 未終端 task {}、最終活動 {}\n",
+            p.project_id, p.status, p.title, p.open_tasks, p.last_activity_at
+        ));
+        match (&p.objective, &p.state) {
+            (Some(objective), Some(state)) => {
+                out.push_str(&format!("  目的: {objective}\n  現状: {state}\n"));
+            }
+            _ => out.push_str("  要約: まだ無い\n"),
+        }
+        if !p.waiting_on.is_empty() {
+            out.push_str(&format!("  待ち: {}\n", p.waiting_on.join("; ")));
+        }
+        if let Some(at) = &p.brief_updated_at {
+            out.push_str(&format!("  要約の更新: {at}\n"));
+        }
+    }
+    out.push('\n');
+    out
+}
+
 fn inbox_section(chat: &CosChatContext) -> String {
     if chat.inbox_items.is_empty() {
         return String::new();

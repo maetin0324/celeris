@@ -4252,12 +4252,32 @@ export type Project = {
   "id": ProjectId;
   "paused_from"?: ProjectStatus | null;
   "request": string;
-  "secretary_summary"?: string | null;
   "slug"?: string | null;
   "status": ProjectStatus;
   "title": string;
   "updated_at": string;
   "workspace"?: WorkspaceSpec | null;
+};
+
+export type ProjectBrief = {
+  "evidence_refs": Array<string>;
+  "next_actions": Array<string>;
+  "objective": string;
+  "open_issues": Array<string>;
+  "project_id": ProjectId;
+  "state": string;
+  "updated_at": string;
+  "updated_by": string;
+  "waiting_on": Array<WaitingOn>;
+};
+
+export type ProjectBriefInput = {
+  "evidence_refs"?: Array<string>;
+  "next_actions"?: Array<string>;
+  "objective": string;
+  "open_issues"?: Array<string>;
+  "state": string;
+  "waiting_on"?: Array<WaitingOn>;
 };
 
 export type ProjectCreateBody = {
@@ -4267,6 +4287,7 @@ export type ProjectCreateBody = {
 };
 
 export type ProjectDetail = {
+  "brief"?: ProjectBrief | null;
   "milestones": Array<MilestoneView>;
   "milestones_frozen"?: number;
   "milestones_frozen_open"?: number;
@@ -4296,7 +4317,29 @@ export type ProjectLifecycle = {
 };
 
 export type ProjectList = {
-  "items": Array<Project>;
+  "items": Array<ProjectListItem>;
+};
+
+export type ProjectListItem = {
+  "archived_at"?: string | null;
+  "auto_advance"?: boolean;
+  "auto_integrate"?: boolean;
+  "brief"?: ProjectBrief | null;
+  "created_at": string;
+  "human_waits"?: number;
+  "id": ProjectId;
+  "last_activity_at": string;
+  "oldest_human_wait_at"?: string | null;
+  "paused_from"?: ProjectStatus | null;
+  "request": string;
+  "slug"?: string | null;
+  "status": ProjectStatus;
+  "task_counts"?: {
+  [key: string]: number;
+};
+  "title": string;
+  "updated_at": string;
+  "workspace"?: WorkspaceSpec | null;
 };
 
 export type ProjectPatchBody = {
@@ -6209,6 +6252,14 @@ export type VerdictView = {
   "run_id": string;
   "ts": string;
 };
+
+export type WaitingOn = {
+  "kind": WaitingOnKind;
+  "note": string;
+  "target"?: string | null;
+};
+
+export type WaitingOnKind = "human" | "task" | "external";
 
 export type WorkUnitBlockedReason = "question" | "dependency_failed" | "limit" | "plan_issue" | "decision" | "infra" | "cluster_jobs" | "waiting_for_auth" | "continuation_cap";
 

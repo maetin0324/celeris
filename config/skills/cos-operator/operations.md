@@ -78,6 +78,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 案件の再開 | `POST /api/v1/projects/<id>/resume` | project.resume | body は `{}`。停止中でなければ 409 |
 | 案件のアーカイブ | `POST /api/v1/projects/<id>/archive` | project.archive | body は `{}`。終端の案件だけ |
 | アーカイブの解除 | `POST /api/v1/projects/<id>/unarchive` | project.unarchive | body は `{}` |
+| 案件の状態の要約を書く | `PUT /api/v1/projects/<id>/status` | project.status_put | 案件 CoS が自分の案件だけ。全置換 `{"objective":"…","state":"…","open_issues":[…],"next_actions":[…],"waiting_on":[{"kind":"human","target":"…","note":"…"}],"evidence_refs":[…]}`。kind は human・task・external で `task` の target はこの案件の task id。他の thread からは 403 |
 | 永続の認可の追加 | `POST /api/v1/standing-rules` | standing_rule.create | `{"rule":"…","node_id":"…"}`（node_id 省略で全員向け）。人の決定で CoS にも許可 |
 | 永続の認可の削除 | `DELETE /api/v1/standing-rules/<id>` | standing_rule.delete | body なし。無ければ 404 |
 | 報告を既読化（旧入口） | `POST /api/v1/reports/read` | report.read | `{"ids":["…"]}`。対応する通知も既読。新しくは notification.read を使う |

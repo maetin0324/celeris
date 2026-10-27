@@ -88,6 +88,7 @@ fn chat() -> CosChatContext {
         credential_env: COS_RUN_CREDENTIAL_ENV.into(),
         api_base_url: "http://127.0.0.1:7070/api/v1".into(),
         inbox_items: vec![],
+        projects: vec![],
     }
 }
 
@@ -533,6 +534,49 @@ fn cos_chat_prompt_inbox_items_section_lists_open_items_and_relay_rules() {
     );
     assert!(p.contains("\"instructed_by\":\"<message id>\""), "{p}");
     assert!(p.contains("operation を出さずに返事で聞き返す"), "{p}");
+}
+
+/// ADR 2026-10-27-project-brief D5: the project summaries render without the brief's detail.
+#[test]
+fn cos_chat_prompt_projects_section_lists_summaries_and_points_to_the_api() {
+    use crate::protocol::CosChatProjectSummary;
+    let mut c = chat();
+    assert!(
+        !prompt(&request(Path::new("/tmp/w"), Some(c.clone()))).contains("## 案件の要約"),
+        "no section without projects"
+    );
+    c.projects = vec![
+        CosChatProjectSummary {
+            project_id: "p1".into(),
+            title: "BenchFS".into(),
+            status: "active".into(),
+            objective: Some("論文初版".into()),
+            state: Some("E3 計測中".into()),
+            waiting_on: vec!["external: Sirius 保守".into()],
+            open_tasks: 3,
+            last_activity_at: "2026-10-27T00:00:00Z".into(),
+            brief_updated_at: Some("2026-10-26T00:00:00Z".into()),
+        },
+        CosChatProjectSummary {
+            project_id: "p2".into(),
+            title: "Pluvio".into(),
+            status: "proposed".into(),
+            last_activity_at: "2026-10-20T00:00:00Z".into(),
+            ..Default::default()
+        },
+    ];
+    let p = prompt(&request(Path::new("/tmp/w"), Some(c)));
+    assert!(p.contains("## 案件の要約 (project briefs)"), "{p}");
+    assert!(p.contains("GET /api/v1/projects/<id>"), "{p}");
+    assert!(p.contains("project.status_put"), "{p}");
+    assert!(
+        p.contains("- p1 [active] BenchFS: 未終端 task 3、最終活動 2026-10-27T00:00:00Z"),
+        "{p}"
+    );
+    assert!(p.contains("  目的: 論文初版\n  現状: E3 計測中"), "{p}");
+    assert!(p.contains("  待ち: external: Sirius 保守"), "{p}");
+    assert!(p.contains("- p2 [proposed] Pluvio: 未終端 task 0"), "{p}");
+    assert!(p.contains("  要約: まだ無い"), "{p}");
 }
 
 fn inbox_item(created_at: &str) -> crate::protocol::CosChatInboxItem {

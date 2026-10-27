@@ -148,7 +148,6 @@ impl Env {
             title: "Pluvio の検証".into(),
             request: "調べて".into(),
             status,
-            secretary_summary: None,
             workspace: None,
             created_at: at(0),
             updated_at: at(0),

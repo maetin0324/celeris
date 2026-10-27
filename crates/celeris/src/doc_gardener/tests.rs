@@ -53,7 +53,6 @@ fn managed_scan_schedules_bounded_review_and_survives_state_loss() {
         title: "fixture".into(),
         request: "".into(),
         status: ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

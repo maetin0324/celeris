@@ -204,7 +204,6 @@ fn set_adopts_a_v3_plan_with_the_configured_tree_limits() {
         title: "p".into(),
         request: "r".into(),
         status: task_core::ProjectStatus::Active,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

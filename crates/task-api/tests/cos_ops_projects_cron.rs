@@ -210,7 +210,6 @@ fn seed_project(env: &TestEnv, status: task_core::ProjectStatus) -> task_core::P
         title: "lifecycle".into(),
         request: "request".into(),
         status,
-        secretary_summary: None,
         workspace: None,
         archived_at: None,
         paused_from: None,

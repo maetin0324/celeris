@@ -337,11 +337,29 @@ impl CosChatLaunch {
     ) -> Result<(), String> {
         // ADR 2026-10-22-cos-fixed-threads D3: a project CoS sees its project's unresolved items;
         // the general CoS overlooks every thread's. Legacy threads get none.
-        let kind = self
+        let thread = self
             .store
             .chat_thread_get(thread_id)
-            .map_err(|e| e.to_string())?
-            .map(|t| t.kind);
+            .map_err(|e| e.to_string())?;
+        let kind = thread.as_ref().map(|t| t.kind);
+        // ADR 2026-10-27-project-brief D5: the general CoS sees every project's summary; a project
+        // CoS its own project's. Legacy threads get none.
+        let projects = match kind {
+            Some(task_core::chat::ChatThreadKind::General) => {
+                super::projects::project_summaries(&self.store, None)?
+            }
+            Some(task_core::chat::ChatThreadKind::Project) => {
+                match thread
+                    .as_ref()
+                    .and_then(|t| t.project_id.as_deref())
+                    .and_then(|id| id.parse::<task_core::ProjectId>().ok())
+                {
+                    Some(id) => super::projects::project_summaries(&self.store, Some(id))?,
+                    None => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        };
         let scope = match kind {
             Some(task_core::chat::ChatThreadKind::General) => Some(None),
             Some(task_core::chat::ChatThreadKind::Project) => Some(Some(thread_id)),
@@ -498,6 +516,7 @@ impl CosChatLaunch {
             credential_env: COS_RUN_CREDENTIAL_ENV.into(),
             api_base_url: cfg.api_base_url.clone(),
             inbox_items,
+            projects,
         };
         let budget = task_core::Budget {
             max_turns: cfg.max_turns,

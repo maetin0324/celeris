@@ -26,7 +26,8 @@ tasks: [01M5ZA2NP31AVVKQ9F4T3A52VB]
   いれば `cgroup.kill` → 読み切りは最大 2 秒の出来事待ち。ADR D1 付記 A1、試験 2 件を追加。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
-- `bash scripts/dev/test-affected.sh` → exit 0（nextest 6639 passed / 21 skipped、web vitest 689 passed、web server 105 passed）
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 6672 passed / 21 skipped、web vitest 689 passed、web server 試験成功。
+  WU の run では `env -u CELERIS_WU_BASE` で基準を main にして実行）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 - 個別: `cargo nextest run -p celerisctl --test terminal_pty`（3 passed: 入出力・日本語・リサイズ・exit code、stdin の
@@ -40,6 +41,9 @@ tasks: [01M5ZA2NP31AVVKQ9F4T3A52VB]
   新しい 2 件が「helper did not exit within 15s」で落ちる（修正前のソースに戻して確認）。reviewer の再現
   `( sleep 1 ) | timeout 20 celerisctl terminal-pty --cwd . --cols 80 --rows 24 -- /bin/sh -c 'setsid sleep 48 & echo started; sleep 100'`
   は修正後 1 秒で終わり（exit=129、SIGHUP で終わった shell の code）、`sleep 48` は残らない。
+- WU pty-orphan-fix の 2 回目: 前の run で入れた `scripts/dev/test-affected.sh` の修正は WU の範囲外（範囲の check が
+  落ちた）なので `phase 1: test-affected の変更をこの WU から外す` で取り消した。提出時の HEAD で
+  `cargo test -p celerisctl --test terminal_pty` → 5 passed、clippy・fmt → exit 0、範囲の check → 範囲外 0 件。
 
 ## 本番への移行
 - 端末は既定で loopback の Host からだけ開ける。tailscale から使うには `~/.config/celeris/web.env` に
@@ -56,6 +60,10 @@ tasks: [01M5ZA2NP31AVVKQ9F4T3A52VB]
   （この run の sandbox では systemd-run の scope を作らない）。
 - この WU の前の run で残った古い helper 3 個（2 thread、子なし、`drop(command)` 修正前の build と推定）を見つけ、
   SIGKILL で消した。
+
+- `CELERIS_WU_BASE` を基準にした test-affected は、変更 crate が bin だけの celerisctl になるので
+  `cargo test --doc -p celerisctl` が「no library targets found」で落ちる（script の欠陥。この WU の範囲外）。
+  修正は followups の task に回した（`cargo metadata` で lib target のある crate だけを doc test に渡す）。
 
 ## 提案
 - 端末の入出力の opt-in 記録は作っていない。必要になったら秘密の扱いを別 ADR で決める。

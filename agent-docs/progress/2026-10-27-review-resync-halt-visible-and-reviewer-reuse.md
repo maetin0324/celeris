@@ -11,7 +11,7 @@ updated: 2026-10-27
 設計: `agent-docs/adr/2026-10-27-review-resync-halt-visible-and-reviewer-reuse.md`（D1〜D5）。
 
 ## 変更
-- `phase 1: review の再同期の停止を受信箱に出し、reviewer 合格を再利用する` —
+- `phase 1: review の再同期の停止を受信箱・通知に出し、reviewer 合格を再利用して並列取り込みで止まりにくくする` —
   - event `ReviewerPassed` / `ReviewerPassReused` / `ReviewResyncHalted` / `ReviewResyncResumed`（task-core、query の kind 名、console の run 紐付け）。
   - dispatcher `review_spawn.rs`: 上限で `ReviewResyncHalted`＋BadNews 通知、`review_resync_halted` snapshot、target の先頭 commit が
     `[review] resync_quiet_secs`（既定 900）以上古ければ `ReviewResyncResumed{target_quiet}` で自動再開。`reviewer_reuse`（同期前 HEAD に
@@ -23,12 +23,19 @@ updated: 2026-10-27
   - root delivery `request_rereview` の上限 `[needs-human]` Blocked を削除（D5）。
   - dispatcher.rs の source-size gate のため時計 2 関数を `dispatcher/clock.rs` へ移した。
   - schema 再生成（api-v1 / event / web types）、`docs/api/v1/api.md`、ADR-0118 D4 付記、architecture-map。
+- `phase 1: 止めている review の rereview 再開の API 試験を足す`
+- `phase 1: web の realtime に review 再同期・reviewer 合格の event kind を足す`
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
-- `cargo nextest run -p task-dispatch -p task-ops -p celeris -E '...'`（target_sync・reviewer_pass・human_inbox・inbox_attention・target_advanced・rereview）→ 69 passed
-- `bash scripts/dev/test-affected.sh` → （下に追記）
-- `cargo clippy --workspace -- -D warnings` → （下に追記）
-- `cargo fmt --all -- --check` → （下に追記）
+- `bash scripts/dev/test-affected.sh` → exit 0（crates 13 個: 6536 passed、21 skipped。web: tsc -b 通過、unit 682 passed）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- 試験の要点: `target_sync::pre_review_sync_target_advanced_limit_halts_visibly_and_rereview_resumes`（停止 event 1 件・snapshot・BadNews 通知 1 件・rereview で再開）、
+  `target_sync::pre_review_sync_halted_review_resumes_when_target_is_quiet`（`test_now` を進めて自動再開）、
+  `target_sync::reviewer_pass_is_reused_when_target_advances_without_overlap`（reviewer run 1 回、`ReviewerPassReused`、必須検査は新候補で再実行）、
+  `target_sync::reviewer_runs_again_when_target_advances_touching_the_task_files`（reviewer run 2 回）、
+  `inbox_attention_review_resync_halted_from_snapshot_for_reviewing_tasks_only`、`cos_ops_mutations_task_rereview_resumes_halted_review`、
+  `target_advanced_rereview_beyond_limit_still_requests_rereview`。
 
 ## 未解決
 - 本番で止まっている task（2026-10-27 の 6 件は operator がコメントで再開済み）は、この release の昇格後は受信箱に出る。

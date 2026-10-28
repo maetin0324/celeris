@@ -57,3 +57,17 @@
 - 同じ要求の再通知・改訂・差戻し・担当の再起動で行が増えない。
 - 本番 DB の読み取り専用の写しで、件数を `SELECT COUNT(DISTINCT source_kind||':'||source_key) FROM cos_inbox_items` と照合できる
   （差戻しで key が変わった decision・approval の分だけ export の方が少ない）。
+
+## 付記（2026-10-28）: 人へ回した後の CoS の operation を要求に寄せる
+
+通しの受け入れ試験（[actor-trace](2026-10-28-actor-trace-acceptance.md) 流れ 2）で見つけた欠落を直した。
+人へ回した item は `escalated` のまま `operation_id` を持たない。その後に CoS が取り次ぎ（`instructed_by`）を根拠に
+答えた operation は item から辿れず、`operations` と D8 の `instructed_by:`・`relay:` が台帳から落ちていた。
+
+- 要求の item から辿れない operation のうち、対象が要求の decision（`target_kind=decision`、`target_id` が key の decision id）か
+  受信箱の件（`target_kind=inbox`、`target_id` が key）で、作成が最初の revision の開始以後、state が
+  `applied`・`superseded`・`needs_remediation` のものを同じ要求に寄せる（`rejected`・`pending` は寄せない）。
+- 寄せた operation は `operations` と `policy_refs`（方針版・`instructed_by:`・`relay:`）に出す。解決の主体は従来どおり
+  解決 event の `by` で決める。migration は無い。
+- 試験: `request_ledger_tests::later_operation_on_an_escalated_request_is_linked_by_its_target`、
+  `crates/celeris/tests/actor_trace_flow2.rs`。

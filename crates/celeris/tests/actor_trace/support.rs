@@ -418,7 +418,7 @@ pub fn new_task() -> Task {
 
 use celeris_campaign::{human_ops::*, ledger::TrialKey, manifest::ConfigId};
 use std::collections::BTreeMap;
-fn human_record_base(set: ExperimentSet, arm: ConfigId, rt: RecordType) -> HumanOpRecord {
+pub fn human_record_base(set: ExperimentSet, arm: ConfigId, rt: RecordType) -> HumanOpRecord {
     let key = TrialKey {
         manifest_sha256: HASH.into(),
         problem_id: "flow1".into(),

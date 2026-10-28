@@ -144,7 +144,7 @@ fn cos_chat_ops_ctl_without_policy_version_env_fails() {
     let out = Command::new(common::celerisctl_path())
         .args([
             "--api-url",
-            "http://127.0.0.1:1",
+            "http://127.0.0.1:1/api/v1",
             "api-request",
             "POST",
             "/api/v1/decisions/decision-1/answer",

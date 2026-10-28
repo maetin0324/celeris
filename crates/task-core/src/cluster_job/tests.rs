@@ -455,7 +455,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              ALTER TABLE mcp_calls DROP COLUMN request; \
              DROP TABLE task_idempotency_keys; DROP TABLE task_unblocks; \
              DROP TABLE project_briefs; ALTER TABLE projects ADD COLUMN secretary_summary TEXT; \
-             DROP TABLE terminal_session_events; \
+             DROP TABLE terminal_session_events; ALTER TABLE node_sessions DROP COLUMN policy_key; \
              DELETE FROM schema_migrations WHERE version >= 34;",
         )
         .unwrap();

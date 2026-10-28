@@ -169,7 +169,10 @@ fn cos_live_fix_d2_cli_record_with_cos_credential_calls_the_api() {
         json: false,
         root: args(&root),
     };
-    let options = super::super::cos_ops::Options::default();
+    let options = super::super::cos_ops::Options {
+        policy_version: Some("6".into()),
+        ..Default::default()
+    };
     let result = record_via_cos(
         &api,
         &args,

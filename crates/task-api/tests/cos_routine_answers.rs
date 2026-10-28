@@ -112,7 +112,7 @@ fn answer(key: &str, answer: Value, basis: Value) -> Value {
         "expected_revision": "r1",
         "outcome": "answer",
         "reason": "根拠を確かめた",
-        "policy_version": "6",
+        "policy_version": "1",
         "confidence": 0.95,
         "answer": answer,
         "basis": basis,
@@ -195,7 +195,7 @@ fn escalate(key: &str, web_path: &str) -> Value {
         "expected_revision": "r1",
         "outcome": "escalate",
         "reason": "枠を超えるので人が決める",
-        "policy_version": "6",
+        "policy_version": "1",
         "confidence": 0.9,
         "escalation": {
             "summary": "予算の枠を超えるので、続けるかを決めてください",
@@ -284,7 +284,7 @@ async fn cos_routine_a_within_approved_frame_answers_and_over_frame_escalates() 
             &item,
             json!({
                 "idempotency_key": "bare", "expected_revision": "r1", "outcome": "answer",
-                "reason": "定型", "policy_version": "6", "confidence": 0.95, "answer": choice,
+                "reason": "定型", "policy_version": "1", "confidence": 0.95, "answer": choice,
             }),
         )
         .await;
@@ -593,7 +593,7 @@ async fn cos_routine_operations_need_a_basis_without_instruction() {
     let body = |key: &str, basis: Option<Value>| {
         let mut body = json!({
             "idempotency_key": key, "expected_revision": null, "reason": "根拠を確かめた",
-            "policy_version": "6",
+            "policy_version": "1",
             "request": {"method": "POST", "path": "/api/v1/decisions/dec-op/answer", "body": {"option": "vault"}},
         });
         if let Some(basis) = basis {

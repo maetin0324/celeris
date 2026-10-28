@@ -430,6 +430,7 @@ pub(crate) fn record_via_cos(
         idempotency_key: Some(key),
         expected_revision: options.expected_revision.clone(),
         api_url: options.api_url.clone(),
+        policy_version: options.policy_version.clone(),
     };
     super::cos_ops::send(
         api,

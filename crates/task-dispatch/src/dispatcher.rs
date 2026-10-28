@@ -1798,13 +1798,6 @@ impl Dispatcher {
         self.eligible.as_ref().is_none_or(|f| f(task))
     }
 
-    /// ADR-0040 D3 / ADR-0041 D5: `--mode verify` の煙試験インスタンスか（`set_eligible_tasks` が目印。celeris は
-    /// verify のときだけ呼ぶ）。verify は本番のコピー（staging DB）を検査するだけなので、smoke 以外の task・wait・
-    /// 承認・通知を書き換える裏の処理と、外部（クラスタ・共有の scratch）への副作用を起こさない。
-    pub(super) fn verify_smoke_only(&self) -> bool {
-        self.eligible.is_some()
-    }
-
     /// 手元で動いている run とレビューの数（ADR-0040 D4 の drain の判定に使う）。
     ///
     /// Phase F5-fix2: run が終わった後の WU の `checks`（`checking`）と工程の統合（`integrating`）も
@@ -2328,37 +2321,8 @@ impl Dispatcher {
         // ADR-0079 D10（Phase R3b）: 木の生存確認（理由なく止まっている節点に `StallDetected` と障害通知を 1 回）。
         // ADR 2026-10-27-project-stagnation-inbox D3: 続けて案件単位の停滞（生存確認の `stalled` を除く）。
         self.check_liveness_and_stagnation();
-        // Phase F7: 認可元のタスクが終端のまま未決で残った認可の要求を閉じる（照合。通常は遷移が閉じる）。
-        // ADR-0041 D5: verify（`verify_smoke_only`）は staging DB の承認と browser の wait を書き換えない。
-        let verify = self.verify_smoke_only();
-        if !verify
-            && let Err(e) = crate::approvals::withdraw_stale_approvals(
-                self.store.as_ref(),
-                OffsetDateTime::now_utc(),
-            )
-        {
-            tracing::warn!(error = %e, "failed to withdraw stale approvals");
-        }
-        // ADR-0080 D4: 期限の過ぎた browser の wait を一度だけ終端化する（起動直後の最初の tick が
-        // 再起動時の照合を兼ねる）。人待ちの task は lease を持たないので worker slot は使っていない。
-        let expired = if verify {
-            Ok(Vec::new())
-        } else {
-            task_ops::browser::expire_due(self.store.as_ref(), OffsetDateTime::now_utc())
-        };
-        match expired {
-            Ok(expired) => {
-                for w in expired {
-                    tracing::info!(
-                        task_id = %w.task_id,
-                        wait_id = %w.wait_id,
-                        reason = w.reason.as_str(),
-                        "browser wait expired"
-                    );
-                }
-            }
-            Err(e) => tracing::warn!(error = %e, "failed to expire browser waits"),
-        }
+        // Phase F7 の承認の照合と ADR-0080 D4 の browser の wait の期限切れ（`housekeeping.rs`）。
+        self.expire_stale_approvals_and_browser_waits();
         self.tick_credential_waits();
         report.reclaimed = self.reclaim_expired_leases()?;
         // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D2: draining の旧 instance が手を離した WU の検査を拾う

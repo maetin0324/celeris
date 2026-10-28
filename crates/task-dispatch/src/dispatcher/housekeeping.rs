@@ -3,6 +3,40 @@
 use super::*;
 
 impl Dispatcher {
+    /// ADR-0040 D3 / ADR-0041 D5: `--mode verify` の煙試験インスタンスか（`set_eligible_tasks` が目印。celeris は
+    /// verify のときだけ呼ぶ）。verify は本番のコピー（staging DB）を検査するだけなので、smoke 以外の task・wait・
+    /// 承認・通知を書き換える裏の処理と、外部（クラスタ・共有の scratch）への副作用を起こさない。
+    pub(super) fn verify_smoke_only(&self) -> bool {
+        self.eligible.is_some()
+    }
+
+    /// Phase F7: 認可元のタスクが終端のまま未決で残った認可の要求を閉じる（照合。通常は遷移が閉じる）。
+    /// ADR-0080 D4: 期限の過ぎた browser の wait を一度だけ終端化する（起動直後の最初の tick が
+    /// 再起動時の照合を兼ねる）。人待ちの task は lease を持たないので worker slot は使っていない。
+    /// ADR-0041 D5: verify は staging DB の承認と browser の wait（とその task）を書き換えない。
+    pub(super) fn expire_stale_approvals_and_browser_waits(&self) {
+        if self.verify_smoke_only() {
+            return;
+        }
+        let now = OffsetDateTime::now_utc();
+        if let Err(e) = crate::approvals::withdraw_stale_approvals(self.store.as_ref(), now) {
+            tracing::warn!(error = %e, "failed to withdraw stale approvals");
+        }
+        match task_ops::browser::expire_due(self.store.as_ref(), now) {
+            Ok(expired) => {
+                for w in expired {
+                    tracing::info!(
+                        task_id = %w.task_id,
+                        wait_id = %w.wait_id,
+                        reason = w.reason.as_str(),
+                        "browser wait expired"
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "failed to expire browser waits"),
+        }
+    }
+
     /// Derive the notice feed once per tick, after task transitions have settled.
     pub(super) fn sync_notice_feed(&self, now: OffsetDateTime) {
         // ADR-0041 D5: verify は staging DB の通知 feed を書かない。

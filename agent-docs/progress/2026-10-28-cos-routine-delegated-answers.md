@@ -51,13 +51,13 @@ ADR: [2026-10-28-cos-routine-delegated-answers](../adr/2026-10-28-cos-routine-de
 
 適用は外部 operator が利用者に告知してから行う。順序は 1 → 2 → 3（新しい release を昇格する前に 1・2 を済ませる）。
 
-1. 本番 config（`~/.config/celeris/celeris.toml`）の `[cos.triage]` を確かめる。
+1. 本番 config（`~/.config/celeris/config.toml`）の `[cos.triage]` を確かめる。
    - `human_required` を書いていれば、旧名を新名へ置き換える（`fundamental_change` → `objective_change`、`resource_overrun` → `beyond_frame`、
      `security` → `secret_or_security`、`standing_permission` を足す）。書いていなければ既定が使われるので変えなくてよい。
      旧名のままだと新しい binary は config の読み込みで止まる（verify も落ちる）。
    - `policy_version` を書いていれば `"6"` にする（skill の `metadata.version` と同じ値）。書いていなければ既定 "6"。
      版 "5" は窓口 1 本（ADR 2026-10-28-single-human-window-general-cos）の版。本 task の方針は版 "6"。
-   - 確認: `grep -n -A6 '^\[cos.triage\]' ~/.config/celeris/celeris.toml`。
+   - 確認: `grep -n -A6 '^\[cos.triage\]' ~/.config/celeris/config.toml`。
 2. 本番 KB の skill を更新する: `celerisctl skills import config/skills --name cos-inbox-triage --root <kb_root>`
    （リポジトリはこの release の checkout）。確認: `<kb_root>/skills/cos-inbox-triage/SKILL.md` の `version: "6"`。
 3. release を昇格し、`GET /api/v1/health` の `cos_policy_version` が "6" であることを確かめる

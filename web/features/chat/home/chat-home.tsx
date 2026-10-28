@@ -1,16 +1,20 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { ChatMessage } from "../../../api/generated/types";
+import type { ChatMessage, ChatThread } from "../../../api/generated/types";
 import { ScreenFrame } from "../../../components/shell/screen-frame";
-import { ChatCardItem } from "../cards/chat-card";
+import { Button } from "../../../components/ui/button";
+import { CardLink, ChatCardItem } from "../cards/chat-card";
 import { useChatSession } from "../data/use-chat-session";
 import { attachmentIdsOf, useAttachmentMap, useOlderMessages } from "../messages/history";
 import { MessageList } from "../messages/message-list";
 import { ThreadsModel } from "../threads/model";
-import { ChatThreads } from "../threads/threads";
 import { ConversationInput } from "./conversation-input";
 
-/** URL は選択した会話の正本。未指定のときは統括 CoS を開く（ADR 2026-10-22-cos-fixed-threads D5）。 */
+/**
+ * ホームは統括 CoS を開く（ADR 2026-10-28-single-human-window-general-cos D5）。人は統括で話し、案件 CoS の件は
+ * 統括の札（escalation）で届く。案件スレッドは札の「元のスレッドを開く」と案件の画面から `?thread=` で読むだけで、
+ * スレッドを選ぶ一覧は置かない。
+ */
 export function ChatHome() {
   const { thread } = useSearch({ from: "/" });
   const navigate = useNavigate();
@@ -30,6 +34,7 @@ export function ChatHome() {
     choosing.current = true;
     const general = model.general();
     if (general) {
+      choosing.current = false;
       void navigate({ to: "/", search: { thread: general.id }, replace: true });
       return;
     }
@@ -70,33 +75,78 @@ export function ChatHome() {
     };
   }, []);
 
-  const select = (id: string) => void navigate({ to: "/", search: { thread: id } });
+  const backToGeneral = () => {
+    const general = model.general();
+    void navigate({ to: "/", search: general ? { thread: general.id } : {} });
+  };
   return (
     <ScreenFrame title="ホーム" route="/">
       <div
         ref={frame}
         data-chat-home
-        className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-background md:flex-row"
+        className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-background"
         style={{ height }}
       >
-        <div className="shrink-0 border-b border-border p-2 md:flex md:h-full md:min-h-0 md:flex-col md:border-r md:border-b-0 md:p-0">
-          <ChatThreads model={model} selectedThreadId={thread} onSelectThread={select} />
-        </div>
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {thread ? (
-            <ChatConversation key={thread} threadId={thread} model={model} />
-          ) : (
-            <p role="status" className="flex-1 p-4 text-muted-foreground">
-              会話を準備しています
-            </p>
-          )}
-        </div>
+        {thread ? (
+          <ChatConversation key={thread} threadId={thread} model={model} onBackToGeneral={backToGeneral} />
+        ) : threads.error ? (
+          <p role="alert" className="flex-1 p-4 text-destructive">
+            {threads.error}
+          </p>
+        ) : (
+          <p role="status" className="flex-1 p-4 text-muted-foreground">
+            統括 CoS を開いています
+          </p>
+        )}
       </div>
     </ScreenFrame>
   );
 }
 
-function ChatConversation({ threadId, model }: { threadId: string; model: ThreadsModel }) {
+/** 会話の上の帯。統括なら題名だけ、案件スレッドなら読む用であることと統括へ戻る導線を出す。 */
+export function ThreadBar({ thread, onBackToGeneral }: { thread: ChatThread | null; onBackToGeneral: () => void }) {
+  if (!thread) return null;
+  if (thread.kind === "general")
+    return (
+      <div data-thread-bar="general" className="shrink-0 border-b border-border px-3 py-2 font-medium">
+        {thread.title}
+      </div>
+    );
+  return (
+    <div
+      data-thread-bar={thread.kind}
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2"
+    >
+      <span className="min-w-0 truncate font-medium">{thread.title}</span>
+      <span className="text-label text-muted-foreground">読む用です。話すときは統括 CoS で。</span>
+      <Button size="sm" className="min-h-11" onClick={onBackToGeneral}>
+        統括 CoS に戻る
+      </Button>
+    </div>
+  );
+}
+
+/** 札（案件 CoS が人へ回した件）から、その件の案件スレッドへ読みに行くリンク。 */
+export function EscalationSourceLink({ message }: { message: Pick<ChatMessage, "escalation"> }) {
+  const escalation = message.escalation;
+  if (!escalation) return null;
+  return (
+    <p data-escalation-state={escalation.open ? "open" : "resolved"} className="text-label text-muted-foreground">
+      {escalation.open ? "人の判断を待っています。" : "解消しました。"}
+      <CardLink href={`/?thread=${encodeURIComponent(escalation.source_thread_id)}`}>元のスレッドを開く</CardLink>
+    </p>
+  );
+}
+
+function ChatConversation({
+  threadId,
+  model,
+  onBackToGeneral,
+}: {
+  threadId: string;
+  model: ThreadsModel;
+  onBackToGeneral: () => void;
+}) {
   const { session, snapshot } = useChatSession(threadId);
   const chat = snapshot.chat;
   const lastSeq = latestSeq(chat.messages);
@@ -108,6 +158,7 @@ function ChatConversation({ threadId, model }: { threadId: string; model: Thread
   const attachments = useAttachmentMap(attachmentIdsOf(chat));
   return (
     <>
+      <ThreadBar thread={chat.thread ?? null} onBackToGeneral={onBackToGeneral} />
       {snapshot.loadError ? (
         <p role="alert" className="p-3 text-destructive">
           会話を読み込めませんでした。
@@ -116,7 +167,14 @@ function ChatConversation({ threadId, model }: { threadId: string; model: Thread
       <MessageList
         state={chat}
         attachments={attachments}
-        renderCards={(cards) => cards.map((card) => <ChatCardItem key={`${card.kind}:${card.id}`} card={card} />)}
+        renderCards={(cards, message) => (
+          <>
+            {cards.map((card) => (
+              <ChatCardItem key={`${card.kind}:${card.id}`} card={card} />
+            ))}
+            <EscalationSourceLink message={message} />
+          </>
+        )}
         hasOlder={history.hasOlder}
         loadingOlder={history.loading}
         onLoadOlder={history.loadOlder}

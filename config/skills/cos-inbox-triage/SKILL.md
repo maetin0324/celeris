@@ -1,12 +1,12 @@
 ---
 name: cos-inbox-triage
-description: Celeris の受信箱の一次対応 policy（policy_version 4）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
+description: Celeris の受信箱の一次対応 policy（policy_version 5）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
 metadata:
   author: celeris
-  version: "4"
+  version: "5"
 ---
 
-# CoS inbox triage（policy_version "4"）
+# CoS inbox triage（policy_version "5"）
 
 受信箱に届く待ちは全て最初に CoS（あなた）に渡る。あなたは各 item について
 **answer / observe / escalate** のどれかを選び、`POST /api/v1/cos/inbox/{i}/resolve` で 1 件ずつ記録する。
@@ -142,3 +142,20 @@ metadata:
 - 人待ち（escalated / fallback）の件は `resolve` では閉じられない（終端済み）。人の指示を伝える経路は上だけ。
 - 返事には、どの件にどう答えたか（件名・選択肢・operation の id と state）、聞き返したこと、答えられなかった理由を書く。
 - 人の発言と新しい件が重なったときは、人の発言の run が先に走る。前の run が中断されて残った件は次の run に戻る。
+
+## 10. 窓口は統括 CoS 1 本（ADR 2026-10-28-single-human-window-general-cos）
+
+人は統括 CoS のスレッドだけで話す。案件の文脈（session・履歴・受信箱の一次対応）は案件スレッドに残る。
+
+- 案件 CoS が人へ回した件（escalate・fallback・直送）は、daemon が統括スレッドに**札**として 1 件だけ書く
+  （案件名・task・何を決めるか・選択肢・元のスレッド）。札は元の件が閉じると自動で解消表示になる。あなたは札を書かない。
+- 統括 CoS: 案件の状態は prompt の案件一覧（案件の状態の要約）で読む。詳しく要る案件だけ、その案件スレッドの履歴を
+  `GET /api/v1/chat/threads/<t>/messages` で読む。全案件の履歴を毎回読まない。
+- 統括 CoS: 人が統括スレッドで札に答えたら、**自分では回答 operation を実行しない**（案件の件に `instructed_by` を付けた
+  operation は 422 で却下される）。その人の発言を `chat.relay_forward`（`POST /api/v1/chat/threads/<案件スレッド>/forwards`、
+  body `{"client_message_id":"forward:<message_id>:<案件スレッド>","message_id":"<人の発言>","task_ids":["<札の task>"],"expires_at":"<24 時間後>"}`）
+  で案件スレッドへ取り次ぐ。本文は渡さない（人の原文と発言時刻が写される）。どの札への答えか読めなければ取り次がずに聞き返す。
+  1 つの発言が複数の案件に当たるときは案件ごとに取り次ぐ。取り次いだら、どの案件のどの件へ取り次いだかを返事に書く。
+- 案件 CoS: 統括から取り次がれた発言（`relay.relayed_by` が `cos:<統括スレッド>`）は §9 の取り次ぎと同じく `instructed_by` の
+  根拠になる（期限内・task の範囲内だけ）。それを根拠に既存の回答・retry などの operation を実行し、結果を返事に書く。
+- 人が札のボタンで直接答えた件は閉じている。その後に届いた取り次ぎで答え直さない（領域 API が 404／409 で断る）。

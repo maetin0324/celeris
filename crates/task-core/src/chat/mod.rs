@@ -22,6 +22,9 @@ mod store_tests;
 pub mod triage;
 #[cfg(test)]
 mod triage_tests;
+mod window;
+#[cfg(test)]
+mod window_tests;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
 pub use operations::{AuditContext, CosOperation};
 pub use override_op::{OverrideAction, OverrideResult};
@@ -43,6 +46,7 @@ pub use store::{
     chat_thread_patch_tx, chat_thread_resume_queue_tx, cos_thread_ensure_tx, cos_thread_label,
     cos_thread_open_tx, relay_expired,
 };
+pub use window::{COS_ESCALATION_CARD_KEY_PREFIX, chat_relay_forward_tx};
 
 macro_rules! wire_enum {
     ($name:ident { $($variant:ident),+ $(,)? }) => {
@@ -178,6 +182,11 @@ pub struct ChatMessage {
     /// person's instruction relayed by an external operator or an MCP client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay: Option<ChatRelay>,
+    /// ADR 2026-10-28-single-human-window-general-cos D2: present on a card (札) of the general
+    /// thread that stands for an item a project CoS routed to the person. `state` / `open` are
+    /// read from the item every time (the card is resolved when the item is).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalation: Option<Box<ChatEscalationRef>>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -191,6 +200,38 @@ pub struct ChatRelay {
     /// RFC 3339: when the person said it (not after the post).
     pub said_at: String,
     pub scope: ChatRelayScope,
+    /// ADR 2026-10-28-single-human-window-general-cos D3: the person's message of the general
+    /// thread this relay forwards (`chat.relay_forward`). Absent for operator / MCP relays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ChatRelaySource>,
+}
+/// The original message a forwarded relay copies (D3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChatRelaySource {
+    pub thread_id: String,
+    pub message_id: String,
+    /// The original message's `author` (`human:<name>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+}
+/// D2: the item a card of the general thread stands for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChatEscalationRef {
+    /// `cos_inbox_items.id`.
+    pub item_id: String,
+    pub source_kind: String,
+    /// The inbox item id (the card's id).
+    pub source_key: String,
+    /// The project CoS thread that holds the item (the card links to it).
+    pub source_thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    /// The item's current state.
+    pub state: String,
+    /// `pending` / `running` / `escalated` / `fallback`: still waiting.
+    pub open: bool,
 }
 /// Where a relayed instruction applies.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -377,6 +418,20 @@ pub struct ChatRelayRequest {
     /// RFC 3339: optional expiry (must be after `said_at`).
     #[serde(default)]
     pub expires_at: Option<String>,
+}
+/// ADR 2026-10-28-single-human-window-general-cos D3: `POST /chat/threads/{t}/forwards`
+/// (CoS operation `chat.relay_forward` only). No text: the forwarded text is the person's
+/// message `message_id` of the general thread, verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChatForwardRequest {
+    pub client_message_id: String,
+    /// The person's message of the general thread.
+    pub message_id: String,
+    /// Tasks of the target project the instruction applies to (1..=`CHAT_RELAY_TASKS_MAX`).
+    pub task_ids: Vec<String>,
+    /// RFC 3339 expiry (required, after now).
+    pub expires_at: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

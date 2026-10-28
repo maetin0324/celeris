@@ -553,6 +553,8 @@ async fn resolve(
                         "recommendation_reason": packet.recommendation_reason,
                         "blocking": source.map(|s| s.blocking.summary.clone()),
                         "web_path": packet.web_path,
+                        // ADR 2026-10-28-single-human-window-general-cos D2: the general card names the task.
+                        "task_id": source.and_then(|s| s.task.as_ref()).map(|t| t.id.to_string()),
                     });
                     // Claim first: a crash after the claim leaves the outbox, and a retried resolve
                     // finds the route taken and still records the outcome.

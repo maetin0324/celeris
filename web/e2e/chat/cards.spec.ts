@@ -235,19 +235,6 @@ test("詳細 link は web 内の実在画面へ SPA で行き、戻るで元会�
   }
 });
 
-test("案件 CoS の行は要対応の数を示す（ADR 2026-10-22-cos-fixed-threads D5）", async ({ page }) => {
-  const gateway = await startChatGateway();
-  try {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto(`${gateway.base}/?thread=chat-main`);
-    const sidebar = page.locator("#chat-thread-sidebar");
-    await expect(sidebar.getByText("要対応 2")).toBeVisible();
-    await expect(sidebar.getByText(/CoS 3 件・要対応 2/)).toBeVisible();
-  } finally {
-    await gateway.close();
-  }
-});
-
 test.describe("受信箱の通知だけの CoS digest", () => {
   test.use({ bypassCSP: true });
 

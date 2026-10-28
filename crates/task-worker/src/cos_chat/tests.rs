@@ -516,6 +516,7 @@ fn cos_chat_prompt_inbox_items_section_lists_open_items_and_relay_rules() {
             web_path: "/tasks/t1".into(),
         }),
         answer_path: Some("/api/v1/inbox/items/q1/answer".into()),
+        thread_id: None,
     }];
     let p = prompt(&request(Path::new("/tmp/w"), Some(c)));
     assert!(p.contains("## 受信箱の未解決の件"), "{p}");
@@ -592,6 +593,7 @@ fn inbox_item(created_at: &str) -> crate::protocol::CosChatInboxItem {
         created_at: created_at.into(),
         decision: None,
         answer_path: Some("/api/v1/inbox/items/q1/answer".into()),
+        thread_id: None,
     }
 }
 

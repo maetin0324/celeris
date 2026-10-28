@@ -13,3 +13,4 @@ license: このリポジトリと同じ（外部の license は無い）
   mount するようにした（`task-dispatch` の `cos_chat_skills`）。通常のスレッドには載らない。policy（version 2）は変えていない。
   cos-operator の §5・§10 への参照を production.md・explaining.md に直した。
 - 2026-10-27（ADR 2026-10-27-yomiyasu-human-text）: §6 に人が読む文面の規則（yomiyasu の要点）を足し、policy_version を 3 に上げた。config の `[cos.triage] policy_version` の既定も "3"。
+- 2026-10-28（ADR 2026-10-28-single-human-window-general-cos）: §10（窓口は統括 CoS 1 本、札、`chat.relay_forward` による取り次ぎ、統括 CoS は案件の件に答えない）を足し、policy_version を 5 に上げた。config の `[cos.triage] policy_version` の既定も "5"。

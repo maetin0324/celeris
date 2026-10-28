@@ -284,6 +284,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/chat/threads/{t}/resume-queue` | A | `chat/mod.rs` | 共通 |
 | POST | `/chat/threads/{t}/stop` | A | `chat/mod.rs` | 共通 |
 | POST | `/chat/threads/{t}/relays` | X: `human_instruction_relay` | `chat/mod.rs` | router のみ |
+| POST | `/chat/threads/{t}/forwards` | A | `chat/mod.rs` | router のみ |
 | POST | `/console/instruct` | X: `console_instruction_chain` | `console.rs` | 共通 |
 | POST | `/cos/inbox/{i}/resolve` | X: `recursive_cos` | `cos/inbox.rs` | 共通 |
 | POST | `/cos/operations` | X: `recursive_cos` | `cos/operations.rs` | 共通 |

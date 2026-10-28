@@ -140,3 +140,10 @@ task-api `console_instruct.rs`（Console・org の入力が統括／案件の Co
 `chat_api_legacy_thread_is_read_only`、task-core `chat_store_legacy_thread_is_read_only`・
 `chat_console_projection_lands_on_fixed_cos_threads_without_legacy_threads`・
 `chat_console_projection_reuses_legacy_threads_kept_by_migration_0092`、web `conversation-input.test.tsx`。
+
+## 付記（2026-10-28、[2026-10-28-single-human-window-general-cos](2026-10-28-single-human-window-general-cos.md)）
+
+人が話す窓口は統括 CoS の 1 本にする。D1（固定スレッド）と D4（session はスレッドごと）は変えない。
+案件スレッドの item が人へ回されると、統括スレッドに札（source triple で冪等、元の件の state から解消表示）が出る。
+D5 の「web のホームは統括 CoS を先頭に各案件 CoS を一覧し、選ぶと切り替わる」は置き換えた: ホームは統括 CoS を開き、
+案件スレッドは札の参照と案件の画面から `/?thread=<id>` で開く読む用の導線だけにする。

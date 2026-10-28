@@ -3501,6 +3501,7 @@ REST の旧 Console エンドポイントは既定 legacy スレッドを使う�
 | GET `/chat/threads/{t}/messages` | `before_seq`、`after_seq`（両方は不可）、`limit` | 200 `ChatMessageListResponse`（seq 昇順） |
 | POST `/chat/threads/{t}/messages` | `{"client_message_id","text","attachment_ids","reply_to_id","mode":"queue\|interrupt","resume_queue"}` | 202 `ChatPostMessageResponse`（`run_id`・`queue_position`） |
 | POST `/chat/threads/{t}/relays` | `{client_message_id, text, said_at, task_ids?, expires_at?}` | operator principal のみ。202 `ChatPostMessageResponse`。原文・発言時刻・範囲を保存 |
+| POST `/chat/threads/{t}/forwards` | `{client_message_id, message_id, task_ids, expires_at}` | CoS operation `chat.relay_forward` のみ（直接の呼び出しは 403 `chat_forward_cos_only`）。統括スレッドの人の発言 `message_id` の原文と時刻を案件スレッド `{t}` へ取り次ぐ（`relay.relayed_by = cos:<統括スレッド id>`、`relay.source`）。task 1〜20 件と期限が必須。202 `ChatPostMessageResponse`（ADR 2026-10-28-single-human-window-general-cos D3） |
 | DELETE `/chat/threads/{t}/messages/{m}` | なし | 200 `ChatMessageResponse`（`state=cancelled`）。queued の人の発言だけ可、開始済みは 409 |
 | POST `/chat/threads/{t}/stop` | `{"run_id"}` | 202 `ChatStopResponse`。終端への再送は 200、現在の run と違えば 409 |
 | POST `/chat/threads/{t}/resume-queue` | `{"expected_revision"}` | 200 `ChatThreadResponse` |
@@ -3622,6 +3623,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | surface | `POST /chat/threads/{t}/messages` | `chat.message_post`（CoS の書き込みは完了済みの `assistant` 発言として入り待ち行列に入らないので CoS run を起こさない。`mode=interrupt`・`resume_queue=true` は 422 `validation`） |
 | surface | `DELETE /chat/threads/{t}/messages/{m}` | `chat.message_cancel` |
 | surface | `POST /chat/threads/{t}/stop` | `chat.run_stop` |
+| surface | `POST /chat/threads/{t}/forwards` | `chat.relay_forward`（統括スレッドの run だけ。統括の人の発言の原文を案件スレッドへ取り次ぐ。ADR 2026-10-28-single-human-window-general-cos D3） |
 | surface | `POST /chat/threads/{t}/resume-queue` | `chat.queue_resume` |
 | surface | `POST /chat/threads/{t}/attachments` | `chat.attachment_upload`（外部効果: file。本文は `{"client_upload_id","name","content_base64"}`、記録に中身は残さない） |
 | surface | `DELETE /chat/attachments/{a}` | `chat.attachment_delete`（外部効果: file） |

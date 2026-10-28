@@ -156,6 +156,11 @@ pub struct CosChatInboxItem {
     /// (`POST /api/v1/inbox/items/{source_key}/answer`); absent for notices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer_path: Option<String>,
+    /// The CoS thread that holds the item (`cos_inbox_items.thread_id`). In the general CoS a
+    /// project item names its project thread: the person's answer is forwarded there
+    /// (`chat.relay_forward`, ADR 2026-10-28-single-human-window-general-cos D3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
 }
 
 /// The decision packet of a routed item.

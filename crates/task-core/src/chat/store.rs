@@ -342,7 +342,7 @@ pub(crate) fn message_raw(row: &Row<'_>) -> rusqlite::Result<MessageRaw> {
 }
 
 /// metadata_json keys used here: `mode`, `interrupt`, `attachment_ids` (ordered), `cards`,
-/// `workspace_files`, `author`, `relay`, `mcp_receipt`.
+/// `workspace_files`, `author`, `relay`, `mcp_receipt`, `escalation` (ADR 2026-10-28 D2).
 /// Other keys (legacy provenance etc.) are preserved and ignored.
 pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatMessage, ChatError> {
     let meta: Value = serde_json::from_str(&r.metadata_json).unwrap_or(Value::Null);
@@ -373,6 +373,15 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         Some(v) if !v.is_null() => Some(serde_json::from_value(v.clone())?),
         _ => None,
     };
+    let mut cards = cards;
+    let escalation = match meta.get("escalation") {
+        Some(v) if !v.is_null() => Some(Box::new(super::window::live_escalation(
+            conn,
+            serde_json::from_value(v.clone())?,
+            &mut cards,
+        )?)),
+        _ => None,
+    };
     Ok(ChatMessage {
         role: enum_from(&r.role)?,
         state: enum_from(&r.state)?,
@@ -388,6 +397,7 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         workspace_files,
         author,
         relay,
+        escalation,
         created_at: r.created_at,
         updated_at: r.updated_at,
     })
@@ -1190,7 +1200,7 @@ pub(crate) fn message_post_conn(
 
 /// ADR 2026-10-27-relayed-instructions D1/D2: builds the relay record of `req` for `thread_id`
 /// inside the write transaction (reference checks included).
-fn relay_record(
+pub(crate) fn relay_record(
     tx: &Connection,
     thread_id: &str,
     req: &ChatRelayRequest,
@@ -1257,6 +1267,7 @@ fn relay_record(
     Ok(ChatRelay {
         relayed_by: relayed_by.to_owned(),
         said_at: chat_ts(said_at),
+        source: None,
         scope: ChatRelayScope {
             project_id: thread.project_id,
             task_ids: req.task_ids.clone(),
@@ -1269,7 +1280,7 @@ fn relay_record(
     })
 }
 
-fn message_post_with(
+pub(crate) fn message_post_with(
     tx: &Connection,
     thread_id: &str,
     req: &ChatPostMessageRequest,

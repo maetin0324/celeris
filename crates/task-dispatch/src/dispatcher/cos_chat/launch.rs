@@ -98,6 +98,7 @@ pub(crate) fn inbox_context_item(item: CosTriageItemReport) -> CosChatInboxItem 
         .then(|| format!("/api/v1/inbox/items/{}/answer", item.source_key));
     let summary = item.title();
     CosChatInboxItem {
+        thread_id: Some(item.thread_id.clone()),
         item_id: item.item_id,
         source_kind: item.source_kind,
         source_key: item.source_key,

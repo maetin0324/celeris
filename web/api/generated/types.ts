@@ -658,6 +658,17 @@ export type ChatCheckpointSaved = {
   "thread_id": string;
 };
 
+export type ChatEscalationRef = {
+  "item_id": string;
+  "open": boolean;
+  "project_id"?: string | null;
+  "source_key": string;
+  "source_kind": string;
+  "source_thread_id": string;
+  "state": string;
+  "task_id"?: string | null;
+};
+
 export type ChatEvent = {
   "at": string;
   "data": ChatEventData;
@@ -677,12 +688,20 @@ export type ChatEventListResponse = {
 
 export type ChatEventType = "message" | "text_delta" | "status" | "tool" | "run" | "queue" | "card" | "thread";
 
+export type ChatForwardRequest = {
+  "client_message_id": string;
+  "expires_at": string;
+  "message_id": string;
+  "task_ids": Array<string>;
+};
+
 export type ChatMessage = {
   "attachment_ids": Array<string>;
   "author"?: string | null;
   "cards": Array<ChatCard>;
   "client_message_id"?: string | null;
   "created_at": string;
+  "escalation"?: ChatEscalationRef | null;
   "id": string;
   "relay"?: ChatRelay | null;
   "reply_to_id"?: string | null;
@@ -767,6 +786,7 @@ export type ChatRelay = {
   "relayed_by": string;
   "said_at": string;
   "scope": ChatRelayScope;
+  "source"?: ChatRelaySource | null;
 };
 
 export type ChatRelayRequest = {
@@ -781,6 +801,12 @@ export type ChatRelayScope = {
   "expires_at"?: string | null;
   "project_id"?: string | null;
   "task_ids"?: Array<string>;
+};
+
+export type ChatRelaySource = {
+  "author"?: string | null;
+  "message_id": string;
+  "thread_id": string;
 };
 
 export type ChatResumeQueueRequest = {

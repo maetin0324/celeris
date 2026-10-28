@@ -763,7 +763,7 @@ worker_reserve_five_hour = 0.90
 
 [cos.triage]
 policy_skill = "cos-inbox-triage"
-policy_version = "4"  # cos-inbox-triage の metadata.version と同じ（ADR 2026-10-27-relayed-instructions D4）
+policy_version = "5"  # cos-inbox-triage の metadata.version と同じ（ADR 2026-10-28-single-human-window-general-cos D6）
 min_confidence = 0.85
 human_required = ["fundamental_change", "external_publish", "destructive", "resource_overrun", "security", "explicit_human"]
 unavailable_after_secs = 120

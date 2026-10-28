@@ -7,9 +7,9 @@ use super::super::operations::{
 use crate::problem::ApiProblem;
 use serde_json::Value;
 use task_core::chat::{
-    self, ChatError, ChatMessageResponse, ChatOpenThreadRequest, ChatPatchThreadRequest,
-    ChatPostMessageRequest, ChatReadThreadRequest, ChatResumeQueueRequest, ChatStopRequest,
-    ChatThreadResponse, CosOperation,
+    self, ChatError, ChatForwardRequest, ChatMessageResponse, ChatOpenThreadRequest,
+    ChatPatchThreadRequest, ChatPostMessageRequest, ChatReadThreadRequest, ChatResumeQueueRequest,
+    ChatStopRequest, ChatThreadResponse, CosOperation,
 };
 use task_core::store::SqliteStore;
 
@@ -36,6 +36,11 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     ("POST", "/api/v1/chat/threads/{t}/stop", "chat.run_stop"),
     ("POST", "/api/v1/chat/threads/{t}/read", "chat.thread_read"),
+    (
+        "POST",
+        "/api/v1/chat/threads/{t}/forwards",
+        "chat.relay_forward",
+    ),
     (
         "POST",
         "/api/v1/chat/threads/{t}/resume-queue",
@@ -392,6 +397,24 @@ pub(crate) fn dispatch(
                 |tx| {
                     chat::chat_thread_mark_read_tx(tx, &thread, &req, now)
                         .map(|thread| ChatThreadResponse { thread })
+                },
+            )
+        }
+        "chat.relay_forward" => {
+            // ADR 2026-10-28-single-human-window-general-cos D3: the general CoS forwards the
+            // person's own message (verbatim) to the project thread `{t}` as a relay.
+            let thread = thread_of(path);
+            let req: ChatForwardRequest = serde_json::from_value(body).map_err(decode)?;
+            let from = audit.ctx.thread_id.clone();
+            let relayed_by = audit.by();
+            chat_apply(
+                store,
+                audit,
+                ("chat_thread", &thread),
+                matched.action,
+                |tx| {
+                    chat::chat_relay_forward_tx(tx, &from, &thread, &req, &relayed_by, now)
+                        .map(|posted| posted.response)
                 },
             )
         }

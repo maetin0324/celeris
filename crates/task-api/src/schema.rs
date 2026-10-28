@@ -327,6 +327,7 @@ pub struct ApiV1Schema {
     pub chat_thread_patch: ChatPatchThreadRequest,
     pub chat_post_message: ChatPostMessageRequest,
     pub chat_relay: task_core::chat::ChatRelayRequest,
+    pub chat_forward: task_core::chat::ChatForwardRequest,
     pub chat_stop: ChatStopRequest,
     pub chat_resume_queue: ChatResumeQueueRequest,
     pub chat_reference: ChatReferenceRequest,

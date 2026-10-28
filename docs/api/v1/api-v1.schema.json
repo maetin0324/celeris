@@ -3190,6 +3190,55 @@
       ],
       "type": "object"
     },
+    "ChatEscalationRef": {
+      "description": "D2: the item a card of the general thread stands for.",
+      "properties": {
+        "item_id": {
+          "description": "`cos_inbox_items.id`.",
+          "type": "string"
+        },
+        "open": {
+          "description": "`pending` / `running` / `escalated` / `fallback`: still waiting.",
+          "type": "boolean"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_key": {
+          "description": "The inbox item id (the card's id).",
+          "type": "string"
+        },
+        "source_kind": {
+          "type": "string"
+        },
+        "source_thread_id": {
+          "description": "The project CoS thread that holds the item (the card links to it).",
+          "type": "string"
+        },
+        "state": {
+          "description": "The item's current state.",
+          "type": "string"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "item_id",
+        "source_kind",
+        "source_key",
+        "source_thread_id",
+        "state",
+        "open"
+      ],
+      "type": "object"
+    },
     "ChatEvent": {
       "properties": {
         "at": {
@@ -3290,6 +3339,37 @@
       ],
       "type": "string"
     },
+    "ChatForwardRequest": {
+      "additionalProperties": false,
+      "description": "ADR 2026-10-28-single-human-window-general-cos D3: `POST /chat/threads/{t}/forwards`\n(CoS operation `chat.relay_forward` only). No text: the forwarded text is the person's\nmessage `message_id` of the general thread, verbatim.",
+      "properties": {
+        "client_message_id": {
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "RFC 3339 expiry (required, after now).",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "The person's message of the general thread.",
+          "type": "string"
+        },
+        "task_ids": {
+          "description": "Tasks of the target project the instruction applies to (1..=`CHAT_RELAY_TASKS_MAX`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "client_message_id",
+        "message_id",
+        "task_ids",
+        "expires_at"
+      ],
+      "type": "object"
+    },
     "ChatMessage": {
       "properties": {
         "attachment_ids": {
@@ -3319,6 +3399,17 @@
         },
         "created_at": {
           "type": "string"
+        },
+        "escalation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatEscalationRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-28-single-human-window-general-cos D2: present on a card (札) of the general\nthread that stands for an item a project CoS routed to the person. `state` / `open` are\nread from the item every time (the card is resolved when the item is)."
         },
         "id": {
           "type": "string"
@@ -3661,6 +3752,17 @@
         },
         "scope": {
           "$ref": "#/$defs/ChatRelayScope"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatRelaySource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-28-single-human-window-general-cos D3: the person's message of the general\nthread this relay forwards (`chat.relay_forward`). Absent for operator / MCP relays."
         }
       },
       "required": [
@@ -3733,6 +3835,29 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "ChatRelaySource": {
+      "description": "The original message a forwarded relay copies (D3).",
+      "properties": {
+        "author": {
+          "description": "The original message's `author` (`human:<name>`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "message_id"
+      ],
       "type": "object"
     },
     "ChatResumeQueueRequest": {
@@ -32948,6 +33073,9 @@
     "chat_event_list": {
       "$ref": "#/$defs/ChatEventListResponse"
     },
+    "chat_forward": {
+      "$ref": "#/$defs/ChatForwardRequest"
+    },
     "chat_message": {
       "$ref": "#/$defs/ChatMessage"
     },
@@ -33864,6 +33992,7 @@
     "chat_thread_patch",
     "chat_post_message",
     "chat_relay",
+    "chat_forward",
     "chat_stop",
     "chat_resume_queue",
     "chat_reference",

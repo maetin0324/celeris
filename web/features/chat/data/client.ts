@@ -13,7 +13,6 @@ import type {
   ChatMessageListResponse,
   ChatMessageResponse,
   ChatOpenThreadRequest,
-  ChatPatchThreadRequest,
   ChatPostMessageRequest,
   ChatPostMessageResponse,
   ChatReadThreadRequest,
@@ -87,10 +86,6 @@ export function readThread(threadId: string, body: ChatReadThreadRequest, signal
 
 export function getThread(threadId: string, signal?: AbortSignal) {
   return apiGet<ChatThreadDetailResponse>(chatPaths.thread(threadId), signal);
-}
-
-export function patchThread(threadId: string, body: ChatPatchThreadRequest, signal?: AbortSignal) {
-  return apiMutate<ChatThreadResponse>("PATCH", chatPaths.thread(threadId), body, signal);
 }
 
 export function resumeQueue(threadId: string, expectedRevision: number, signal?: AbortSignal) {

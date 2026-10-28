@@ -21,6 +21,57 @@ impl SqliteStore {
     ) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        Self::task_integration_write_tx(&tx, value)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(super) fn task_integration_save_sweep_impl(
+        &self,
+        value: &TaskRepoIntegrationState,
+        previous: Option<&TaskRepoIntegrationState>,
+        delivery: Option<&crate::Delivery>,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let json: Option<String> = tx
+            .query_row(
+                "SELECT json FROM deliveries WHERE task_id=?1",
+                [value.task_id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let current: Option<crate::Delivery> = json
+            .map(|s| serde_json::from_str(&s).map_err(|e| StoreError::Invalid(e.to_string())))
+            .transpose()?;
+        if current.as_ref() != delivery
+            || Self::task_integration_read(&tx, value.task_id, value.repo_id)?.as_ref() != previous
+        {
+            return Ok(false);
+        }
+        if value.state == TaskRepoIntegrationStatus::Unintegrated
+            && current.as_ref().is_some_and(|d| {
+                d.repo_id == value.repo_id
+                    && matches!(
+                        d.state,
+                        crate::DeliveryState::Reviewing
+                            | crate::DeliveryState::MergeQueued
+                            | crate::DeliveryState::Merging
+                            | crate::DeliveryState::Preparing
+                    )
+            })
+        {
+            return Ok(false);
+        }
+        Self::task_integration_write_tx(&tx, value)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    fn task_integration_write_tx(
+        tx: &rusqlite::Transaction<'_>,
+        value: &TaskRepoIntegrationState,
+    ) -> Result<(), StoreError> {
         let old: Option<String> = tx
             .query_row(
                 "SELECT state FROM task_integrations WHERE task_id=?1 AND repo_id=?2",
@@ -78,10 +129,9 @@ impl SqliteStore {
                 }
             };
             if let Some(event) = event {
-                Self::append_event_tx(&tx, value.task_id, &event)?;
+                Self::append_event_tx(tx, value.task_id, &event)?;
             }
         }
-        tx.commit()?;
         Ok(())
     }
     pub(super) fn task_integration_get_impl(
@@ -89,8 +139,33 @@ impl SqliteStore {
         task_id: TaskId,
         repo_id: RepoId,
     ) -> Result<Option<TaskRepoIntegrationState>, StoreError> {
-        self.with_read_conn(|c| { let raw: Option<IntegrationStateRow> = c.query_row("SELECT branch,head_sha,state,reason,actor,checked_at,updated_at FROM task_integrations WHERE task_id=?1 AND repo_id=?2", params![task_id.to_string(),repo_id.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
-            raw.map(|(branch,head_sha,state,reason,actor,checked_at,updated_at)| { let state=TaskRepoIntegrationStatus::parse(&state).ok_or_else(|| StoreError::Invalid("invalid task integration state".into()))?; Ok(TaskRepoIntegrationState{task_id,repo_id,branch,head_sha,state,reason,actor,checked_at:parse_rfc3339(&checked_at)?,updated_at:parse_rfc3339(&updated_at)?}) }).transpose() })
+        self.with_read_conn(|c| Self::task_integration_read(c, task_id, repo_id))
+    }
+
+    fn task_integration_read(
+        c: &rusqlite::Connection,
+        task_id: TaskId,
+        repo_id: RepoId,
+    ) -> Result<Option<TaskRepoIntegrationState>, StoreError> {
+        let raw: Option<IntegrationStateRow> = c.query_row("SELECT branch,head_sha,state,reason,actor,checked_at,updated_at FROM task_integrations WHERE task_id=?1 AND repo_id=?2", params![task_id.to_string(),repo_id.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
+        raw.map(
+            |(branch, head_sha, state, reason, actor, checked_at, updated_at)| {
+                let state = TaskRepoIntegrationStatus::parse(&state)
+                    .ok_or_else(|| StoreError::Invalid("invalid task integration state".into()))?;
+                Ok(TaskRepoIntegrationState {
+                    task_id,
+                    repo_id,
+                    branch,
+                    head_sha,
+                    state,
+                    reason,
+                    actor,
+                    checked_at: parse_rfc3339(&checked_at)?,
+                    updated_at: parse_rfc3339(&updated_at)?,
+                })
+            },
+        )
+        .transpose()
     }
     pub(super) fn task_integration_list_impl(
         &self,

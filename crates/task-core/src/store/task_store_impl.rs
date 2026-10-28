@@ -181,6 +181,14 @@ impl TaskStore for SqliteStore {
     ) -> Result<(), StoreError> {
         self.task_integration_upsert_impl(s)
     }
+    fn task_integration_save_sweep(
+        &self,
+        state: &crate::TaskRepoIntegrationState,
+        previous: Option<&crate::TaskRepoIntegrationState>,
+        delivery: Option<&crate::Delivery>,
+    ) -> Result<bool, StoreError> {
+        self.task_integration_save_sweep_impl(state, previous, delivery)
+    }
     fn task_integration_get(
         &self,
         t: crate::model::TaskId,

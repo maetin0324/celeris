@@ -550,6 +550,16 @@ pub fn sweep(
     records: &[BranchRecord],
     now: OffsetDateTime,
 ) -> Result<usize, StoreError> {
+    sweep_inner(store, records, now, |_, _| {})
+}
+
+// Hook points keep interleavings deterministic in tests, without clocks or global hooks.
+fn sweep_inner(
+    store: &dyn TaskStore,
+    records: &[BranchRecord],
+    now: OffsetDateTime,
+    mut hook: impl FnMut(&BranchRecord, bool),
+) -> Result<usize, StoreError> {
     let mut changed = 0;
     for record in records
         .iter()
@@ -564,6 +574,8 @@ pub fn sweep(
         if unchanged_integrated(record, head, previous.as_ref()) {
             continue;
         }
+        let delivery = store.delivery_get(record.task_id)?;
+        hook(record, false);
         let reason = if record.not_applicable {
             Some("remote repository: not checked by the sweep".to_owned())
         } else if record.repo_path.is_none() {
@@ -599,6 +611,7 @@ pub fn sweep(
                 Ok(_) => None,
             }
         };
+        hook(record, true);
         let state = TaskRepoIntegrationState {
             task_id: record.task_id,
             repo_id: record.repo_id,
@@ -622,10 +635,11 @@ pub fn sweep(
                 || p.head_sha != state.head_sha
                 || p.reason != state.reason
         });
-        if differs {
-            store.task_integration_upsert(&state)?;
+        if differs
+            && store.task_integration_save_sweep(&state, previous.as_ref(), delivery.as_ref())?
+        {
+            changed += 1;
         }
-        changed += usize::from(differs);
     }
     Ok(changed)
 }
@@ -633,3 +647,7 @@ pub fn sweep(
 #[cfg(test)]
 #[path = "stranded/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "stranded/sweep_race_tests.rs"]
+mod sweep_race_tests;

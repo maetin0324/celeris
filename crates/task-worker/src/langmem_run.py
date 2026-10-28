@@ -59,6 +59,10 @@ Extract knowledge-base candidates as structured records. Each candidate has:
   title: a short page title
   tags: a short list of lowercase tags
   scope: one of "user" | "environment" | "project:<slug>" | "experience"
+         (use project:<slug> / projects/<slug>/ only with a slug from the
+         supplied `projects` list, defaulting to the cited report's `project`;
+         never guess a slug from a title. A report without a project goes to
+         experience, environment or user)
   body: the full markdown body (for update/merge: the *complete* rewritten
         page body, not a diff or an addendum; for retire: optional, a short
         reason)
@@ -159,7 +163,7 @@ def candidate_schema():
         path: str = Field(description="KB-relative Markdown path, e.g. environment/servers/home-dev.md or experience/2026/09/<slug>.md")
         title: str
         tags: List[str] = Field(default_factory=list)
-        scope: str = Field(description="user | environment | project:<id> | experience")
+        scope: str = Field(description="user | environment | project:<slug> (slug from the supplied projects list) | experience")
         body: str = Field(description="Markdown body: the fact, why it matters, how to apply it")
         sources: List[str] = Field(description="where this came from, e.g. task:<id>, message:<id>, human:instruction, url:<...>")
         confidence: Literal["high", "medium", "low"] = "medium"
@@ -217,6 +221,25 @@ def parse_candidates(raw):
     return out
 
 
+def is_trustcall_patch_state_bug(exc):
+    """trustcall 0.0.39: a tool call fails schema validation and the patch reply calls no tool;
+    the graph's `sync` node then re-enters `patch` with `ExtractionState`, which has no
+    `tool_call_id` (ADR 2026-10-28-knowledge-extraction-placement-repair D4)."""
+    return isinstance(exc, AttributeError) and "tool_call_id" in str(exc)
+
+
+def invoke_extraction(manager, request, progress):
+    """Run the memory manager. On the trustcall patch-state bug, run once more without the
+    patch loop (`max_attempts=1`): valid tool calls are kept, invalid ones are dropped."""
+    try:
+        return manager.invoke(request)
+    except Exception as exc:
+        if not is_trustcall_patch_state_bug(exc):
+            raise
+        progress("trustcall patch failed (no tool_call_id); retrying once without the patch step")
+        return manager.invoke(request, config={"configurable": {"max_attempts": 1}})
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: langmem_run.py <input.json>", file=sys.stderr)
@@ -254,16 +277,15 @@ def main():
             enable_updates=False,
             enable_deletes=False,
         )
-        result = manager.invoke(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": objective + f"\n\n(task id: {task_id})",
-                    }
-                ]
-            }
-        )
+        request = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": objective + f"\n\n(task id: {task_id})",
+                }
+            ]
+        }
+        result = invoke_extraction(manager, request, progress)
     except Exception as exc:
         print(f"langmem extraction failed: {exc}", file=sys.stderr)
         return 1

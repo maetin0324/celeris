@@ -4,23 +4,26 @@ use serde_json::Value;
 use task_core::{TaskStore, chat::AuditContext, store::SqliteStore};
 
 /// The task an operation acts on, for the scope check of a relayed instruction: the task of a
-/// `/api/v1/tasks/{id}/…` route, or the task behind an inbox item (`inbox.answer`). Other
-/// targets (a project, a release, …) carry no task; a task-scoped relay then does not cover them.
+/// `/api/v1/tasks/{id}/…` route, or the task behind an inbox item (`inbox.answer`). An item that
+/// has left the derived inbox (answered meanwhile) is mapped from its id (ADR
+/// 2026-10-27-relayed-instructions 付記 A2 R3), so the domain route reports it closed. Other targets
+/// (a project, a release, …) carry no task; a task-scoped relay then does not cover them.
 pub(super) fn operation_target(
+    store: &SqliteStore,
     matched: &Matched,
     path: &str,
     env: &DispatchEnv,
 ) -> Option<OperationTarget> {
     let id = matched.id.as_deref()?;
     if matched.action == "inbox.answer" {
-        let task = env
+        let live = env
             .inbox_feed
-            .as_ref()?
-            .iter()
-            .find(|item| item.id == id)?
-            .task
             .as_ref()
-            .map(|task| task.id.to_string());
+            .and_then(|feed| feed.iter().find(|item| item.id == id));
+        let task = match live {
+            Some(item) => item.task.as_ref().map(|task| task.id.to_string()),
+            None => task_ops::human_inbox::item_task_id(store, id).map(|t| t.to_string()),
+        };
         return Some(OperationTarget {
             kind: "inbox",
             id: id.to_owned(),

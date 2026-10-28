@@ -237,6 +237,11 @@ impl Dispatcher {
             if let Err(error) = launch.claim_queued(self) {
                 tracing::warn!(%error, "CoS chat launch tick failed");
             }
+            // ADR 2026-10-27-relayed-instructions 付記 A2: after the queued messages (a relay's own
+            // run goes first) and before new triage items.
+            if let Err(error) = launch.relay_rejudge(self) {
+                tracing::warn!(%error, "CoS relay re-judging failed");
+            }
             if let Err(error) = launch.triage_launch(self) {
                 tracing::warn!(%error, "CoS triage launch failed");
             }

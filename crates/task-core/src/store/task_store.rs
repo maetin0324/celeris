@@ -531,6 +531,14 @@ pub trait TaskStore:
         &self,
         state: &crate::TaskRepoIntegrationState,
     ) -> Result<(), StoreError>;
+    /// Sweep CAS: persist only while delivery and integration snapshots remain unchanged.
+    /// Active delivery for this repo suppresses Unintegrated, but allows Integrated reconciliation.
+    fn task_integration_save_sweep(
+        &self,
+        state: &crate::TaskRepoIntegrationState,
+        previous: Option<&crate::TaskRepoIntegrationState>,
+        delivery: Option<&crate::Delivery>,
+    ) -> Result<bool, StoreError>;
     fn task_integration_get(
         &self,
         task_id: TaskId,

@@ -683,7 +683,7 @@ async fn create_operation(
                 // of another thread or a human thread cannot waive human_required.
                 let target = matched
                     .as_ref()
-                    .and_then(|m| operation_target(m, &path, &env));
+                    .and_then(|m| operation_target(store, m, &path, &env));
                 let instruction = match instructed_message(
                     store,
                     &audit.ctx,

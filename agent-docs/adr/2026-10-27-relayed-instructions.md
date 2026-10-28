@@ -110,3 +110,27 @@ operator は利用者の発言を要約せず原文で、発言時刻と範囲�
 - D3 に排他を足す: 統括スレッドの run が案件の対象に `instructed_by` 付きで operation を実行するのは 422
   `cos_instruction_invalid`（統括 CoS は案件の件を取り次ぐだけで、答えるのは案件 CoS）。
 - `POST /chat/threads/{t}/relays` は operator 専用のまま（CoS からは除外のまま）。
+
+## 付記 A2（2026-10-28、取り次ぎ後の再判断。task 01M60JC1QB4K9MD2Z73CYMQB9Y）
+
+背景: 2026-10-28T05:20Z、BenchFS の一次対応 run が走っている間に operator が人の指示 3 件を取り次いだ（seq 95〜97）。
+run は prompt を作った後に届いた取り次ぎを見ずに件を escalate し、取り次ぎは次の run の入力として待つだけだった。
+escalated の件を取り次ぎで再判断する入口が無い。また 06:15Z、CoS が `authorization-…` に `instructed_by` 付きで答えたとき、
+件は 06:14Z に operator が答えて受信箱から消えていた。D3 の範囲検査は件 → task を生きた受信箱だけから引くので、
+対象を「task 無し」と見て「applies to project …, not this target」で拒否した（本当の理由は「件はもう待っていない」）。
+
+- **R1（再判断の入力）**: dispatcher は tick ごとに、CoS スレッドの `escalated` の件（CoS の一次対応 run が判断したもの。
+  直送の件は除く）と、同じスレッドの未取消・期限内の取り次ぎのうち、**件を判断した一次対応の入力 message より後の seq** の
+  ものを組にする。件の task（受信箱の件の `task`・`blocking` の task）が取り次ぎの `task_ids` に入るとき（`task_ids` が空なら
+  スレッドの案件全体）、その件を再判断の対象にする。対象は一次対応と同じ claim（system message 1 件 + chat run 1 件、
+  件は `running`）で CoS に渡す。入力 message は 1 行目が従来どおり `CoS 受信箱の一次対応: item_ids=[…]`、2 行目が
+  `取り次ぎによる再判断: [{"item_id","source_key","relay_message_ids":[…]}]` で、CoS は取り次ぎを根拠に `instructed_by`
+  付きで答えるか、範囲外と判断すれば理由を付けて再び escalate する。受信箱の件が消えていれば（人が答えた等）対象にしない。
+- **R2（二重回答を防ぐ）**: 同じスレッドに `running`/`stopping` の chat run があれば再判断の claim をしない（claim の transaction で
+  確かめる）。走っている一次対応 run が終わってから次の tick で渡す。再判断の claim で件の入力 message が取り次ぎより後の seq に
+  なるので、同じ取り次ぎで同じ件を 2 度渡さない（状態は SQLite の `cos_inbox_items.message_id` と `chat_messages.seq` だけで決まる）。
+  取り次ぎ自身の run が先に答えた件は受信箱から消えるので R1 の対象にならない。消えた件への 2 度目の回答は領域 API が拒否する。
+- **R3（範囲検査の写像）**: D3 の範囲検査で受信箱の件が生きた受信箱に無いとき、件 id から task を引く
+  （`authorization-`・`acceptance_check-` は approvals の task、`decision-` は decisions の task、`question-`・`failed-` 等の
+  `<kind>-<task id>…` はその task）。範囲に入れば領域 API が「件はもう開いていない」（409 `cos_revision_conflict`）と答える。
+- migration は無い（既存の列だけで決まる）。`cos-inbox-triage` skill に再判断の入力の読み方を足す（判断の基準は変えないので policy_version は 6 のまま）。

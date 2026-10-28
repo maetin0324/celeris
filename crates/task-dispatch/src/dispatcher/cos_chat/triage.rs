@@ -92,6 +92,10 @@ pub(crate) struct CosTriageState {
     pub(crate) live_runs: HashSet<String>,
     /// Root-done steps that already logged a failure in this process (log once, retry every tick).
     pub(crate) root_done_warned: HashSet<String>,
+    /// (item, relay) pairs found outside the relay's task scope in this process, so the relay
+    /// re-judging pass does not rebuild the inbox for them every tick (ADR
+    /// 2026-10-27-relayed-instructions 付記 A2). Not task state: after a restart they are checked once.
+    pub(super) rejudge_out_of_scope: HashSet<(String, String)>,
 }
 
 impl Dispatcher {
@@ -208,7 +212,7 @@ fn direct_body(item: &InboxItem) -> String {
     .to_string()
 }
 
-fn item_tasks(item: &InboxItem) -> impl Iterator<Item = TaskId> + '_ {
+pub(super) fn item_tasks(item: &InboxItem) -> impl Iterator<Item = TaskId> + '_ {
     item.task
         .iter()
         .chain(item.blocking.root.iter())

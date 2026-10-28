@@ -9,6 +9,7 @@ mod common;
 use common::*;
 use serde_json::{Value, json};
 use task_api::{ApiToken, Principal};
+use task_core::approval::ApprovalStore;
 use task_core::chat::triage::CosTriageSource;
 use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
@@ -567,4 +568,232 @@ async fn a_person_message_records_its_author_without_a_relay() {
     let message = resp.json()["message"].clone();
     assert_eq!(message["author"], "human:web");
     assert!(message.get("relay").is_none(), "{message}");
+}
+
+/// Posts a relay through the operator route; returns the message id.
+async fn post_relay(
+    app: &axum::Router,
+    thread: &str,
+    key: &str,
+    said_at: OffsetDateTime,
+    task_ids: &[String],
+) -> String {
+    let resp = send(
+        app,
+        post_json_with(
+            &format!("/api/v1/chat/threads/{thread}/relays"),
+            &relay_request(key, "それは続けてよい", said_at, task_ids),
+            &[("authorization", &bearer(OPERATOR_TOKEN))],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
+    resp.json()["message"]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned()
+}
+
+/// ADR 2026-10-27-relayed-instructions 付記 A2: the project CoS escalated a wait; a relay for its
+/// task arrived while that triage run ran. After the run, the re-judging claim hands the item and
+/// the relay id to a new run, which answers with `instructed_by` = the relay. A second answer of
+/// the same wait (e.g. the relay's own run) is refused by the domain route, so it is answered once.
+#[tokio::test]
+async fn relay_after_escalation_is_answered_by_the_rejudging_run_once() {
+    let env = env();
+    let app = env.router();
+    let now = OffsetDateTime::now_utc();
+    let thread = project_cos_thread(&env.store, "benchfs");
+    let project = thread.project_id.clone().expect("project thread");
+    let (task, inbox_id) = human_required_wait(&env, Some(&project), "dec-rejudge");
+    env.store
+        .cos_triage_ingest_batch(
+            "decision",
+            "batch-1",
+            &[CosTriageSource {
+                source_kind: "decision".into(),
+                source_key: inbox_id.clone(),
+                source_revision: "r1".into(),
+                source_event_id: None,
+                operation_id: None,
+                summary: "decision dec-rejudge".into(),
+                policy_version: "6".into(),
+                task_id: Some(task.id.to_string()),
+            }],
+            now,
+        )
+        .expect("ingest");
+    let triage = env
+        .store
+        .cos_triage_claim(&thread.id, "run-triage", now)
+        .expect("claim")
+        .expect("triage run");
+    let item = triage.item_ids[0].clone();
+    let relay = post_relay(
+        &app,
+        &thread.id,
+        "r-1",
+        now - Duration::minutes(1),
+        &[task.id.to_string()],
+    )
+    .await;
+    assert!(
+        env.store
+            .cos_triage_resolve(&item, "escalated", None, Some("人に回す"), now)
+            .expect("escalate")
+    );
+    let rejudge = env
+        .store
+        .cos_triage_relay_candidates(now)
+        .expect("candidates")
+        .into_iter()
+        .map(|c| task_core::chat::relay_rejudge::RelayRejudge {
+            item_id: c.item_id,
+            source_key: c.source_key,
+            relay_message_ids: c.relays.into_iter().map(|m| m.id).collect(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rejudge,
+        [task_core::chat::relay_rejudge::RelayRejudge {
+            item_id: item.clone(),
+            source_key: inbox_id.clone(),
+            relay_message_ids: vec![relay.clone()],
+        }]
+    );
+    // R2: no re-judging run while the triage run runs.
+    assert!(
+        env.store
+            .cos_triage_relay_claim(&thread.id, "run-rejudge", &rejudge, now)
+            .expect("claim")
+            .is_none()
+    );
+    env.store
+        .chat_run_finish(
+            "run-triage",
+            task_core::chat::ChatRunState::Completed,
+            None,
+            None,
+            now,
+        )
+        .expect("finish");
+    env.store
+        .cos_triage_relay_claim(&thread.id, "run-rejudge", &rejudge, now)
+        .expect("claim")
+        .expect("re-judging run");
+
+    let cos = run_bearer(&env, &thread.id, "run-rejudge");
+    let headers = [("authorization", cos.as_str())];
+    let resp = send(
+        &app,
+        post_json_with(OPS, &answer_op("k-1", &inbox_id, Some(&relay)), &headers),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let op = resp.json()["operation"].clone();
+    assert_eq!(op["state"], "applied");
+    assert_eq!(op["payload"]["instructed_by"]["message_id"], json!(relay));
+    assert_eq!(
+        op["payload"]["instructed_by"]["executed_by"],
+        json!({"kind": "cos_project", "id": thread.id})
+    );
+    assert_eq!(decision_answered_by(&env, &task).len(), 1);
+
+    // A second answer of the same wait: the scope still covers the closed item (A2 R3), and the
+    // domain route says it is no longer open. The decision is answered once.
+    let resp = send(
+        &app,
+        post_json_with(OPS, &answer_op("k-2", &inbox_id, Some(&relay)), &headers),
+    )
+    .await;
+    assert_problem(&resp, 409, "cos_revision_conflict");
+    assert_eq!(decision_answered_by(&env, &task).len(), 1);
+}
+
+/// A2 R3 (2026-10-28T06:15Z): an authorization item the person answered just before CoS left the
+/// derived inbox. The relay scoped to its task still covers it (the task is read from the
+/// approval), so CoS is told the item is no longer open instead of "applies to project …, not this target".
+#[tokio::test]
+async fn relay_scope_maps_a_closed_authorization_item_to_its_task() {
+    let env = env();
+    let app = env.router();
+    let now = OffsetDateTime::now_utc();
+    let thread = project_cos_thread(&env.store, "benchfs");
+    let project = thread.project_id.clone().expect("project thread");
+    let mut task = new_task(TaskKind::Execute, Status::Running);
+    task.project_id = Some(project.parse().expect("project id"));
+    env.seed(&task);
+    let mut other = new_task(TaskKind::Execute, Status::Running);
+    other.project_id = task.project_id;
+    env.seed(&other);
+    let approval = |task: &task_core::Task| task_core::approval::Approval {
+        id: task_core::approval::ApprovalId::new(),
+        project_id: task.project_id,
+        node_id: "systems-performance".into(),
+        task_id: Some(task.id),
+        question: "node-hours を足してよいか".into(),
+        decision: Some(task_core::approval::Decision::Once),
+        answer: Some("a で".into()),
+        created_at: now - Duration::hours(1),
+        decided_at: Some(now - Duration::minutes(1)),
+    };
+    let (mine, others) = (approval(&task), approval(&other));
+    for a in [&mine, &others] {
+        env.store.approval_append(a).expect("approval");
+    }
+    let relay = post_relay(
+        &app,
+        &thread.id,
+        "r-auth",
+        now - Duration::minutes(2),
+        &[task.id.to_string()],
+    )
+    .await;
+    // The relay's own run cites it.
+    let run = env
+        .store
+        .chat_run_claim_next(&thread.id, "run-relay", &json!({}), now)
+        .expect("claim")
+        .expect("run");
+    assert_eq!(run.input_message_id, relay);
+    let cos = run_bearer(&env, &thread.id, "run-relay");
+    let headers = [("authorization", cos.as_str())];
+    let answer = |key: &str, item: String| {
+        json!({
+            "idempotency_key": key,
+            "expected_revision": null,
+            "reason": "人の指示どおり",
+            "policy_version": "6",
+            "instructed_by": relay,
+            "request": {"method": "POST", "path": format!("/api/v1/inbox/items/{item}/answer"),
+                        "body": {"option": "once"}},
+        })
+    };
+    let resp = send(
+        &app,
+        post_json_with(
+            OPS,
+            &answer("k-mine", format!("authorization-{}", mine.id)),
+            &headers,
+        ),
+    )
+    .await;
+    assert_problem(&resp, 409, "cos_revision_conflict");
+    // Another task's closed item stays outside the relay's task scope.
+    let resp = send(
+        &app,
+        post_json_with(
+            OPS,
+            &answer("k-other", format!("authorization-{}", others.id)),
+            &headers,
+        ),
+    )
+    .await;
+    let problem = assert_problem(&resp, 422, "cos_instruction_invalid");
+    assert!(
+        problem["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("applies to tasks")),
+        "{problem}"
+    );
 }

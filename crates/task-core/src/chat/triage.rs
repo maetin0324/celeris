@@ -95,6 +95,37 @@ fn insert_items(
     Ok(inserted)
 }
 
+/// The first line of a triage run's input message (`request_ledger` reads the item ids from it).
+pub const COS_TRIAGE_CLAIM_PREFIX: &str = "CoS 受信箱の一次対応: item_ids=";
+
+/// One system message and one chat run of `thread_id` bound to `ids` (the items become `running`).
+/// The caller has checked that no run of the thread is live, in the same transaction.
+pub(super) fn bind_claim_tx(
+    tx: &Transaction<'_>,
+    thread_id: &str,
+    run_id: &str,
+    ids: &[String],
+    body: &str,
+    at: &str,
+) -> Result<String, ChatError> {
+    let seq: i64 = tx.query_row(
+        "SELECT next_seq FROM chat_threads WHERE id=?1",
+        [thread_id],
+        |r| r.get(0),
+    )?;
+    let message_id = Ulid::new().to_string();
+    tx.execute("INSERT INTO chat_messages(id,thread_id,seq,role,text,state,run_id,metadata_json,created_at,updated_at) VALUES(?1,?2,?3,'system',?4,'running',?5,'{}',?6,?6)", params![message_id,thread_id,seq,body,run_id,at])?;
+    tx.execute(
+        "UPDATE chat_threads SET next_seq=next_seq+1,updated_at=?2 WHERE id=?1",
+        params![thread_id, at],
+    )?;
+    tx.execute("INSERT INTO chat_runs(run_id,thread_id,input_message_id,state,started_at) VALUES(?1,?2,?3,'running',?4)", params![run_id,thread_id,message_id,at])?;
+    for id in ids {
+        tx.execute("UPDATE cos_inbox_items SET state='running',run_id=?2,message_id=?3,updated_at=?4 WHERE id=?1", params![id,run_id,message_id,at])?;
+    }
+    Ok(message_id)
+}
+
 fn put_cursor(tx: &Transaction<'_>, name: &str, value: &str) -> Result<(), ChatError> {
     tx.execute(
         "INSERT INTO feed_cursor(name,value) VALUES(?1,?2) ON CONFLICT(name) DO UPDATE SET value=excluded.value",
@@ -239,25 +270,8 @@ impl SqliteStore {
         if ids.is_empty() {
             return Ok(None);
         }
-        let seq: i64 = tx.query_row(
-            "SELECT next_seq FROM chat_threads WHERE id=?1",
-            [&thread_id],
-            |r| r.get(0),
-        )?;
-        let message_id = Ulid::new().to_string();
-        let body = format!(
-            "CoS 受信箱の一次対応: item_ids={}",
-            serde_json::to_string(&ids)?
-        );
-        tx.execute("INSERT INTO chat_messages(id,thread_id,seq,role,text,state,run_id,metadata_json,created_at,updated_at) VALUES(?1,?2,?3,'system',?4,'running',?5,'{}',?6,?6)", params![message_id,thread_id,seq,body,run_id,at])?;
-        tx.execute(
-            "UPDATE chat_threads SET next_seq=next_seq+1,updated_at=?2 WHERE id=?1",
-            params![thread_id, at],
-        )?;
-        tx.execute("INSERT INTO chat_runs(run_id,thread_id,input_message_id,state,started_at) VALUES(?1,?2,?3,'running',?4)", params![run_id,thread_id,message_id,at])?;
-        for id in &ids {
-            tx.execute("UPDATE cos_inbox_items SET state='running',run_id=?2,message_id=?3,updated_at=?4 WHERE id=?1 AND state='pending'", params![id,run_id,message_id,at])?;
-        }
+        let body = format!("{COS_TRIAGE_CLAIM_PREFIX}{}", serde_json::to_string(&ids)?);
+        let message_id = bind_claim_tx(&tx, &thread_id, run_id, &ids, &body, &at)?;
         tx.commit()?;
         Ok(Some(CosTriageClaim {
             thread_id,

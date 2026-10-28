@@ -69,7 +69,7 @@ fn stranded_promotion_tracks_latest_promoted_release_independently() {
     );
 }
 
-fn git(dir: &Path, args: &[&str]) -> String {
+pub(super) fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)

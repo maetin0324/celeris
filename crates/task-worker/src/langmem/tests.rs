@@ -585,3 +585,71 @@ print(json.dumps(built))
         }])
     );
 }
+
+/// ADR 2026-10-28-knowledge-extraction-placement-repair D4: trustcall の patch 節点の
+/// `'ExtractionState' object has no attribute 'tool_call_id'` だけは patch 無し（`max_attempts=1`）で
+/// 1 回やり直し、他の例外はそのまま上げる（偽の manager で決定的に確かめる。langmem は要らない）。
+#[test]
+fn invoke_extraction_retries_the_trustcall_patch_state_bug_once_without_patch() {
+    let Ok(python) = std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+    else {
+        eprintln!("skipping: python3 not available");
+        return;
+    };
+    if !python.status.success() {
+        eprintln!("skipping: python3 not available");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("langmem_run.py");
+    std::fs::write(&script_path, RUNNER_SCRIPT).unwrap();
+    let checker = r#"
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("langmem_run", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+class Manager:
+    def __init__(self, first):
+        self.first, self.calls = first, []
+    def invoke(self, request, config=None):
+        self.calls.append(config)
+        if len(self.calls) == 1 and self.first:
+            raise self.first
+        return [{"op": "create", "path": "experience/2026/10/a.md", "title": "t", "scope": "experience", "body": "b", "sources": ["task:1"]}]
+bug = Manager(AttributeError("'ExtractionState' object has no attribute 'tool_call_id'"))
+out = mod.invoke_extraction(bug, {"messages": []}, lambda _t: None)
+other = Manager(AttributeError("'X' object has no attribute 'y'"))
+try:
+    mod.invoke_extraction(other, {"messages": []}, lambda _t: None)
+    raised = False
+except AttributeError:
+    raised = True
+ok = Manager(None)
+mod.invoke_extraction(ok, {"messages": []}, lambda _t: None)
+print(json.dumps({"bug": bug.calls, "found": len(mod.parse_candidates(out)), "other": other.calls, "raised": raised, "ok": ok.calls}))
+"#;
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(checker)
+        .arg(&script_path)
+        .output()
+        .expect("failed to run python3");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let seen: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(
+        seen,
+        serde_json::json!({
+            "bug": [null, {"configurable": {"max_attempts": 1}}],
+            "found": 1,
+            "other": [null],
+            "raised": true,
+            "ok": [null],
+        })
+    );
+}

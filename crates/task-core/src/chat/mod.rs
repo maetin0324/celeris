@@ -12,6 +12,9 @@ mod operations;
 #[cfg(test)]
 mod operations_tests;
 mod override_op;
+pub mod relay_rejudge;
+#[cfg(test)]
+mod relay_rejudge_tests;
 mod run_store;
 mod session;
 #[cfg(test)]

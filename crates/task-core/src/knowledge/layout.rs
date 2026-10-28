@@ -321,6 +321,52 @@ pub fn resolve_project(value: &str, layout: &Layout) -> Result<String, Placement
     }
 }
 
+/// 日次の知識候補抽出の候補が「未知の案件」だけで置き場の検査に落ちたときの直し先
+/// （ADR 2026-10-28-knowledge-extraction-placement-repair D2）。`(path, scope)` を返す。
+///
+/// - 未知の案件以外で落ちる・通る候補は `None`（直さない）。
+/// - `retire` はパスを変えず scope を空にする（置き場はパスが決める）。
+/// - `default_project` が既知の slug なら `projects/<slug>/<元の projects/<x>/ より後ろ>`
+///   （`projects/` の外のパスならファイル名だけ）と `project:<slug>`。
+/// - 既定の案件が無ければ `experience/YYYY/MM/<ファイル名>` と `experience`。
+pub fn repair_unknown_project(
+    req: &PlacementRequest<'_>,
+    default_project: Option<&str>,
+    layout: &Layout,
+) -> Option<(String, String)> {
+    if !matches!(
+        place(req, layout),
+        Err(PlacementError::UnknownProject { .. })
+    ) {
+        return None;
+    }
+    let path = req
+        .path
+        .map(str::trim)
+        .unwrap_or_default()
+        .trim_matches('/');
+    if req.op == Some(CandidateOp::Retire) {
+        return Some((path.to_string(), String::new()));
+    }
+    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    let file = parts.last().copied().unwrap_or_default();
+    let rest = match parts.as_slice() {
+        ["projects", _, rest @ ..] if !rest.is_empty() => rest.join("/"),
+        _ => file.to_string(),
+    };
+    let known = default_project.and_then(|d| resolve_project(d, layout).ok());
+    Some(match known {
+        Some(slug) => (format!("projects/{slug}/{rest}"), format!("project:{slug}")),
+        None => {
+            let (y, m) = (
+                layout.today.get(0..4).unwrap_or("0000"),
+                layout.today.get(5..7).unwrap_or("00"),
+            );
+            (format!("experience/{y}/{m}/{file}"), "experience".into())
+        }
+    })
+}
+
 /// `scope` の値を正規化する（`project:<ULID>` は `project:<slug>` に。`projects/<x>`・
 /// `environment/<分類>` のようなパスの形も受ける）。ラベルを返す。
 pub fn resolve_scope_label(raw: &str, layout: &Layout) -> Result<String, PlacementError> {

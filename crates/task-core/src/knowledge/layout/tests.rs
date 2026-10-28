@@ -319,3 +319,93 @@ fn the_hint_lists_categories_and_projects() {
     assert!(hint.contains("`project:agent-platform` = agent-platform の自己改善"));
     assert!(hint.contains("celeris, clusters, hosts, servers, tools"));
 }
+
+/// ADR 2026-10-28-knowledge-extraction-placement-repair D2: 未知の案件だけで落ちる候補の直し先。
+#[test]
+fn repair_unknown_project_uses_the_default_project_or_experience() {
+    let l = layout();
+    let create = |path: &'static str, scope: &'static str| PlacementRequest {
+        op: Some(CandidateOp::Create),
+        ..req(Some(path), Some(scope), "Archive layout", &[])
+    };
+    // 既定の案件があれば、その slug の下へ（projects/<x>/ より後ろは保つ）。
+    assert_eq!(
+        repair_unknown_project(
+            &create(
+                "projects/asmr-archive/notes/layout.md",
+                "project:asmr-archive"
+            ),
+            Some("benchfs"),
+            &l
+        ),
+        Some((
+            "projects/benchfs/notes/layout.md".into(),
+            "project:benchfs".into()
+        ))
+    );
+    // 案件 ID の既定も slug に直す。
+    assert_eq!(
+        repair_unknown_project(
+            &create("projects/pra/layout.md", "project:pra"),
+            Some(AP),
+            &l
+        ),
+        Some((
+            "projects/agent-platform/layout.md".into(),
+            "project:agent-platform".into()
+        ))
+    );
+    // 既定の案件が無い・未知なら experience/YYYY/MM/ へ。
+    for default in [None, Some("asmr")] {
+        assert_eq!(
+            repair_unknown_project(
+                &create("projects/asmr/layout.md", "project:asmr"),
+                default,
+                &l
+            ),
+            Some(("experience/2026/09/layout.md".into(), "experience".into()))
+        );
+    }
+    // 直した先は検査を通る。
+    let fixed = PlacementRequest {
+        op: Some(CandidateOp::Create),
+        ..req(
+            Some("experience/2026/09/layout.md"),
+            Some("experience"),
+            "Archive layout",
+            &[],
+        )
+    };
+    assert!(place(&fixed, &l).is_ok());
+    // retire はパスを保ち scope だけ外す。
+    let retire = PlacementRequest {
+        op: Some(CandidateOp::Retire),
+        ..req(
+            Some("projects/agent-platform/design.md"),
+            Some("project:asmr-archive"),
+            "Celeris: 上位方針",
+            &[],
+        )
+    };
+    assert_eq!(
+        repair_unknown_project(&retire, Some("benchfs"), &l),
+        Some(("projects/agent-platform/design.md".into(), String::new()))
+    );
+    // 既知の案件・未知の案件以外の誤りは直さない。
+    assert_eq!(
+        repair_unknown_project(
+            &create("projects/benchfs/layout.md", "project:benchfs"),
+            Some("agent-platform"),
+            &l
+        ),
+        None
+    );
+    assert_eq!(
+        repair_unknown_project(
+            &create("environment/unknown-cat/x.md", "environment"),
+            Some("benchfs"),
+            &l
+        ),
+        None
+    );
+}

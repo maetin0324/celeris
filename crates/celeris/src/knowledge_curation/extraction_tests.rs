@@ -424,3 +424,93 @@ fn daily_extraction_caps_sources_and_reports_the_overflow_days() {
         .count();
     assert_eq!(unclaimed, 3);
 }
+
+/// ADR 2026-10-28-knowledge-extraction-placement-repair: 抽出の入力に有効な slug と報告ごとの
+/// 案件があり、偽の LLM 出力の推測 slug（asmr-archive・pra）は捨てられずに直される。
+#[test]
+fn guessed_project_slugs_are_repaired_to_the_source_project_or_experience() {
+    let env = setup("dry_run");
+    env.git_init(Remote::None);
+    let project = task_core::org::Project {
+        auto_advance: false,
+        auto_integrate: false,
+        slug: Some("asmr-one-remix-rust".into()),
+        id: task_core::org::ProjectId::new(),
+        title: "ASMR one remix".into(),
+        request: String::new(),
+        status: task_core::org::ProjectStatus::Active,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        created_at: env.t0,
+        updated_at: env.t0,
+    };
+    env.store.project_create(&project).unwrap();
+    let spec = serde_json::from_value(serde_json::json!({"title":"Archive layout", "objective":"Implement", "acceptance":[], "assignee":"coding", "project_id": project.id})).unwrap();
+    let in_project =
+        task_ops::add::create_support_task(&env.store, spec, &[], &[], env.t0).unwrap();
+    for trigger in [Trigger::Dispatch, Trigger::WorkerDone, Trigger::ReviewPass] {
+        env.store
+            .apply_transition(in_project.id, trigger, None)
+            .unwrap();
+    }
+    let loose = source(&env);
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    let extraction = pending(&env);
+    let input: serde_json::Value = serde_json::from_str(&extraction.objective).unwrap();
+    assert_eq!(
+        input["projects"],
+        serde_json::json!(["asmr-one-remix-rust"])
+    );
+    let project_of = |id: TaskId| {
+        input["reports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["task_id"] == id.to_string())
+            .map(|r| r["project"].clone())
+            .unwrap()
+    };
+    assert_eq!(project_of(in_project.id), "asmr-one-remix-rust");
+    assert_eq!(project_of(loose.id), serde_json::Value::Null);
+    let guess = |id: TaskId, slug: &str, file: &str| {
+        serde_json::json!({"op":"create","path":format!("projects/{slug}/{file}"),"title":file,
+            "tags":["layout"],"scope":format!("project:{slug}"),"body":"Keep archives per work.",
+            "sources":[format!("task:{id}")],"confidence":"medium"})
+    };
+    complete(
+        &env,
+        &extraction,
+        serde_json::json!({"candidates":[
+            guess(in_project.id, "asmr-archive", "archive-layout.md"),
+            guess(loose.id, "pra", "reply-rules.md"),
+        ]}),
+    );
+    assert_eq!(env.tick(now).prepared, vec![task.id]);
+    let summary = extraction::summary(&env.store, &task).unwrap().unwrap();
+    assert_eq!(summary.discarded, 0, "{summary:?}");
+    assert_eq!(summary.inbox, 2);
+    assert_eq!(summary.corrected.len(), 2, "{summary:?}");
+    let mut targets: Vec<_> = task_ops::knowledge::inbox_list(env.kb.path())
+        .into_iter()
+        .map(|i| i.target)
+        .collect();
+    targets.sort();
+    let today = time::OffsetDateTime::now_utc().date();
+    assert_eq!(
+        targets,
+        vec![
+            format!(
+                "experience/{}/{:02}/reply-rules.md",
+                today.year(),
+                today.month() as u8
+            ),
+            "projects/asmr-one-remix-rust/archive-layout.md".to_string(),
+        ]
+    );
+    let text = extraction::render(&env.store, &task).unwrap();
+    assert!(text.contains("置き場の修正 2"), "{text}");
+    assert!(text.contains("projects/asmr-archive/archive-layout.md → projects/asmr-one-remix-rust/archive-layout.md"), "{text}");
+}

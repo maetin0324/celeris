@@ -518,6 +518,7 @@ async fn knowledge_blocks_show_the_applied_summary_and_respect_scope() {
                 inbox: 2,
                 discarded: 0,
                 discarded_reasons: Vec::new(),
+                corrected: Vec::new(),
                 via: Some(task_core::VIA_LANGMEM.to_string()),
             }),
             Some(task_core::VIA_LANGMEM),

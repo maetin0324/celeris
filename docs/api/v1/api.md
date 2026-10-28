@@ -3648,7 +3648,7 @@ tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`ex
 ADR-0079 で撤去済みの入口（`removed_by_adr_0079`）。
 path の placeholder は 1 segment（英数字・`-`・`_`・`.`・`:`）に一致する。
 
-外部 URL、任意 proxy、`/cos` 以下の再帰操作、未登録 path は 422 で拒否理由付き監査 event に残す。`reason`・`policy_version`・`idempotency_key` は必須（reason は空白不可）。`expected_revision` は対象が revision を持つ操作で必須。idempotency key は thread 内一意で、同じ key の異なる request hash は 409。適用結果・`cos_operations` 行・監査 envelope event・chat card は同じ transaction に記録する。checkpoint は credential の run/thread に限り、run に配送済みの `through_seq` 以下、本文 32 KiB 以下。現在の checkpoint revision と `expected_summary_through_seq` が異なる場合は 409。
+外部 URL、任意 proxy、`/cos` 以下の再帰操作、未登録 path は 422 で拒否理由付き監査 event に残す。`reason`・`policy_version`・`idempotency_key` は必須（reason は空白不可）。`policy_version` は daemon がその run に渡した版（`chat_runs.resolved_config_json.policy_version`。run には `cos_chat.policy_version` と環境変数 `CELERIS_COS_POLICY_VERSION` で渡す）と一致しなければならず、違う値や記録の無い run は 422 `cos_policy_version_mismatch`（拒否理由付きで daemon の版の rejected 行を残す。`/cos/inbox/{i}/resolve` も同じ。ADR 2026-10-28-cos-session-policy-key D2）。`expected_revision` は対象が revision を持つ操作で必須。idempotency key は thread 内一意で、同じ key の異なる request hash は 409。適用結果・`cos_operations` 行・監査 envelope event・chat card は同じ transaction に記録する。checkpoint は credential の run/thread に限り、run に配送済みの `through_seq` 以下、本文 32 KiB 以下。現在の checkpoint revision と `expected_summary_through_seq` が異なる場合は 409。
 
 スレッドの種類 `kind`（`human` / `inbox` / `legacy`）は人からは指定できない。`inbox` の thread は archive できない。`legacy` は旧 Console の履歴を移したもの（ADR D6）。
 

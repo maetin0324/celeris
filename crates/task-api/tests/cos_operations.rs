@@ -40,6 +40,9 @@ fn cos_bearer(env: &TestEnv, key: &str) -> (String, String, String) {
         .expect("run");
     let bearer = task_api::cos::issue_run_bearer(store, &thread.id, &run, Duration::hours(1))
         .expect("issue");
+    store
+        .chat_run_record_policy(&run, "1", "test")
+        .expect("policy");
     (thread.id, run, format!("Bearer {bearer}"))
 }
 
@@ -520,4 +523,45 @@ async fn cos_chat_ops_api_rejects_unregistered_operations_regardless_of_skill() 
         ),
         cases.len() as i64
     );
+}
+
+/// ADR 2026-10-28-cos-session-policy-key D2: `/cos/operations` refuses a `policy_version` other
+/// than the one the daemon recorded on the run (422, no domain write, rejected row under the
+/// daemon's version).
+#[tokio::test]
+async fn cos_chat_ops_api_policy_version_must_match_the_run() {
+    let env = admin_env();
+    let app = env.router();
+    let (_, _, bearer) = cos_bearer(&env, "policy");
+    let task = new_task(TaskKind::Execute, Status::Ready);
+    env.seed(&task);
+    let path = format!("/api/v1/tasks/{}/comments", task.id);
+    let mut body = op_body("comment-pv", "POST", &path, json!({"body": "補足"}));
+    body["policy_version"] = json!("2");
+    let resp = post_op(&app, &bearer, &body).await;
+    assert_problem(&resp, 422, "cos_policy_version_mismatch");
+    assert!(
+        env.store
+            .comments_for(task.id)
+            .expect("comments")
+            .is_empty()
+    );
+    let version: String = db(&env)
+        .query_row(
+            "SELECT policy_version FROM cos_operations WHERE idempotency_key='comment-pv' AND state='rejected'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("rejected row");
+    assert_eq!(version, "1");
+
+    let resp = post_op(
+        &app,
+        &bearer,
+        &op_body("comment-pv2", "POST", &path, json!({"body": "補足"})),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(resp.json()["operation"]["policy_version"], "1");
+    assert_eq!(env.store.comments_for(task.id).expect("comments").len(), 1);
 }

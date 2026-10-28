@@ -63,6 +63,9 @@ pub struct CosChatContext {
     /// Names of the skills mounted for this run (`cos-operator`, `cos-inbox-triage`, ...).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,
+    /// ADR 2026-10-28-cos-session-policy-key D2: the policy version (`[cos.triage] policy_version`)
+    /// the daemon handed this run. `/cos/operations` and the inbox resolve accept only this value.
+    pub policy_version: String,
     /// Name of the environment variable holding the run credential. Never the value.
     pub credential_env: String,
     /// Base URL of the Celeris API ending in `/api/v1` (for checkpoint and history requests).

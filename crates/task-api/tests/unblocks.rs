@@ -183,6 +183,9 @@ async fn unblocks_cos_task_create_writes_the_link_in_the_audited_transaction() {
         task_api::cos::issue_run_bearer(&env.store, &thread, "run-unblocks", Duration::hours(1))
             .expect("issue")
     );
+    env.store
+        .chat_run_record_policy("run-unblocks", "1", "test")
+        .expect("policy");
     let created = send(
         &app,
         post_json_with(

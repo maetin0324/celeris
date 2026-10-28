@@ -463,6 +463,7 @@ fn main() -> ExitCode {
         idempotency_key: cli.idempotency_key.take(),
         expected_revision: cli.expected_revision.take(),
         api_url: cli.api_url.take(),
+        policy_version: None,
     };
     if let Command::ApiRequest(args) = cli.command {
         return match cos_ops::run(args, &cos_options) {

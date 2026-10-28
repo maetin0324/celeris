@@ -3,6 +3,7 @@ pub(crate) mod control;
 pub(crate) mod digest;
 pub(crate) mod fallback;
 pub mod launch;
+pub(crate) mod policy;
 pub(crate) mod projects;
 mod relay_rejudge;
 pub(crate) mod review;

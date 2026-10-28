@@ -131,6 +131,9 @@ fn live_cos_bearer(env: &TestEnv, key: &str) -> String {
         .chat_run_claim_next(&thread.id, &run, &json!({}), now)
         .expect("claim")
         .expect("run");
+    env.store
+        .chat_run_record_policy(&run, "1", "test")
+        .expect("policy");
     format!(
         "Bearer {}",
         task_api::cos::issue_run_bearer(&env.store, &thread.id, &run, Duration::hours(1))
@@ -324,6 +327,9 @@ async fn cos_chat_triage_override_rejects_cos_credential_and_missing_reason() {
         .expect("run");
     let bearer = task_api::cos::issue_run_bearer(&env.store, &thread.id, run, Duration::hours(1))
         .expect("bearer");
+    env.store
+        .chat_run_record_policy(run, "1", "test")
+        .expect("policy");
     let auth = format!("Bearer {bearer}");
     let cos = send(
         &app,

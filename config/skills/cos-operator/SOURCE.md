@@ -31,3 +31,4 @@ license: このリポジトリと同じ（外部の license は無い）
 - 2026-10-28（ADR 2026-10-28-cos-integrate-task）: operations.md の tasks 表に `integration.integrate_task`（統合の衝突を解く
   integrate task の起票）を足した。cos-inbox-triage には、統合の依頼は `integrate_task` で答え、失敗した依頼は escalate する規則を足した。
   version は変えない（既存の規則の意味は変わらない）。本番 KB への取り込みは人が行う。
+- 2026-10-28（ADR 2026-10-28-cos-session-policy-key D2）: OP の `policy_version` の例を固定の数字から run の `<policy_version>` に変えた。daemon が run に渡した版だけが通る（違えば 422）。metadata.version は変えていない（判断の基準は同じ）。

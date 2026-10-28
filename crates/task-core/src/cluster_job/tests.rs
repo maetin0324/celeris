@@ -455,14 +455,14 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              ALTER TABLE mcp_calls DROP COLUMN request; \
              DROP TABLE task_idempotency_keys; DROP TABLE task_unblocks; \
              DROP TABLE project_briefs; ALTER TABLE projects ADD COLUMN secretary_summary TEXT; \
-             DROP TABLE terminal_session_events; \
+             DROP TABLE terminal_session_events; ALTER TABLE node_sessions DROP COLUMN policy_key; \
              DELETE FROM schema_migrations WHERE version >= 34;",
         )
         .unwrap();
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 99);
+    assert_eq!(crate::SCHEMA_VERSION, 100);
     assert!(store.cluster_job_waits_waiting().unwrap().is_empty());
     assert!(store.get(t.id).unwrap().is_some());
 }

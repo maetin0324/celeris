@@ -41,6 +41,7 @@ fn cos_chat_ops_ctl_credential_wraps_domain_mutation_and_uses_run_bearer() {
         reason: Some("requested by the operator".into()),
         idempotency_key: Some("retry-1".into()),
         expected_revision: Some("7".into()),
+        policy_version: Some("6".into()),
         ..Default::default()
     };
     let result = send(
@@ -60,6 +61,7 @@ fn cos_chat_ops_ctl_credential_wraps_domain_mutation_and_uses_run_bearer() {
     assert_eq!(body["idempotency_key"], "retry-1");
     assert_eq!(body["expected_revision"], "7");
     assert_eq!(body["reason"], "requested by the operator");
+    assert_eq!(body["policy_version"], "6");
     assert_eq!(
         body["request"],
         json!({"method":"POST","path":"/api/v1/tasks/01ABC/comments","body":{"body":"hello"}})

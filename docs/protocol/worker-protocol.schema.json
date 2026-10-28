@@ -1075,6 +1075,10 @@
           },
           "type": "array"
         },
+        "policy_version": {
+          "description": "ADR 2026-10-28-cos-session-policy-key D2: the policy version (`[cos.triage] policy_version`)\nthe daemon handed this run. `/cos/operations` and the inbox resolve accept only this value.",
+          "type": "string"
+        },
         "projects": {
           "description": "ADR 2026-10-27-project-brief D5: the project summaries. Every non-archived project in the\ngeneral CoS thread, the thread's own project in a project CoS thread, empty otherwise.",
           "items": {
@@ -1130,6 +1134,7 @@
         "thread_id",
         "run_id",
         "inputs",
+        "policy_version",
         "credential_env",
         "api_base_url"
       ],

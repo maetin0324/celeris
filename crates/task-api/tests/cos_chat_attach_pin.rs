@@ -66,6 +66,9 @@ async fn attachment_and_bearer(env: &TestEnv, app: &axum::Router) -> (String, St
         .expect("run");
     let bearer = task_api::cos::issue_run_bearer(store, &thread.id, "run-pin", Duration::hours(1))
         .expect("issue");
+    store
+        .chat_run_record_policy("run-pin", "1", "test")
+        .expect("policy");
     (id, format!("Bearer {bearer}"))
 }
 

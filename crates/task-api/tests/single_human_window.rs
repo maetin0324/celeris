@@ -101,6 +101,9 @@ fn wait(env: &TestEnv, project: &str, decision_id: &str) -> (task_core::Task, St
 fn run_bearer(env: &TestEnv, thread: &str, run: &str) -> String {
     let bearer = task_api::cos::issue_run_bearer(&env.store, thread, run, Duration::hours(1))
         .expect("issue");
+    env.store
+        .chat_run_record_policy(run, "5", "test")
+        .expect("policy");
     format!("Bearer {bearer}")
 }
 

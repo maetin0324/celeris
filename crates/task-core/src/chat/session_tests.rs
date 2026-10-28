@@ -49,6 +49,7 @@ fn key(t: &str) -> ChatSessionKey {
         account_id: Some("a1".into()),
         cwd: Some(format!("/data/cos/threads/{t}/workspace")),
         model: Some("m1".into()),
+        policy_key: Some("policy_version=1;cos-operator=aa".into()),
     }
 }
 

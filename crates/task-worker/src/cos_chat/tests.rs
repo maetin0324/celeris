@@ -85,6 +85,7 @@ fn chat() -> CosChatContext {
         ],
         harness_capabilities: None,
         skills: vec!["cos-operator".into(), "cos-inbox-triage".into()],
+        policy_version: "6".into(),
         credential_env: COS_RUN_CREDENTIAL_ENV.into(),
         api_base_url: "http://127.0.0.1:7070/api/v1".into(),
         inbox_items: vec![],
@@ -684,6 +685,11 @@ fn cos_chat_core_is_byte_identical_across_runs_and_free_of_run_values() {
     assert!(moved.contains("http://127.0.0.1:9999/api/v1/cos/operations"));
     assert!(moved.contains("`$OTHER_TOKEN`"));
     assert_ne!(moved, a.core);
+    // ADR 2026-10-28-cos-session-policy-key D2: the policy version is a run value, not in the Core.
+    let mut c = chat();
+    c.policy_version = "99".into();
+    assert_eq!(super::core(&c), a.core);
+    assert!(a.core.contains("\"policy_version\":\"<policy_version>\""));
 }
 
 /// ADR 2026-10-08-cos-chat-prompt-cache D6: the run specific part keeps every value the run needs.
@@ -700,6 +706,7 @@ fn cos_chat_core_variable_part_keeps_every_run_value() {
         "- `<thread id>` = `thr1`",
         "- `<chat run id>` = `crun1`",
         "`<through_seq>` = 11、`<expected>` = 2",
+        "- `<policy_version>` = `6`",
         "worker run `wrun1`",
         task_id.as_str(),
         "### seq 10 (message m10) 【割り込み】",

@@ -58,6 +58,9 @@ fn cos_bearer(env: &TestEnv, key: &str) -> String {
         .expect("run");
     let bearer = task_api::cos::issue_run_bearer(store, &thread.id, &run, Duration::hours(1))
         .expect("issue");
+    store
+        .chat_run_record_policy(&run, "1", "test")
+        .expect("policy");
     format!("Bearer {bearer}")
 }
 

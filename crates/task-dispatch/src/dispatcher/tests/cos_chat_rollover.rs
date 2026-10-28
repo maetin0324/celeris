@@ -902,3 +902,126 @@ async fn cos_chat_launch_delivers_stored_relay_evidence_to_later_runs() {
     assert_eq!(relay.text, "この案件は進めて");
     assert_eq!(relay.relayed_by, "operator:test");
 }
+
+/// ADR 2026-10-28-cos-session-policy-key D1/D2: a change of `[cos.triage] policy_version` or of a
+/// mounted skill's content makes the next run fresh (`policy_changed`, summary + unsummarized
+/// history instead of the old harness session), and the run gets and records the new version.
+/// An unchanged policy resumes. Deterministic: worker joins, no sleeps.
+#[tokio::test]
+async fn cos_chat_policy_change_makes_next_run_fresh_and_records_new_version() {
+    let (dir, store) = open_store();
+    let (probe, adapter) = refusing(&store, usize::MAX, false);
+    let mut d = fixture(adapter, store.clone(), dir.path());
+    let t = thread(&store);
+    let last = |probe: &RefusingFake| {
+        probe
+            .attempts
+            .lock()
+            .expect("attempts")
+            .last()
+            .cloned()
+            .expect("attempt")
+    };
+
+    post(&store, &t, "one");
+    let first = tick_and_join(&mut d, &store, &t).await;
+    assert_eq!(
+        store.chat_run_policy_version(&first).expect("policy"),
+        Some("1".into()),
+        "the fixture's CosTriageSettings::default() version"
+    );
+    let live = store.chat_session_active(&t).expect("s").expect("live");
+    assert!(
+        live.key
+            .policy_key
+            .as_deref()
+            .is_some_and(|k| k.starts_with("policy_version=1;cos-inbox-triage=")),
+        "{:?}",
+        live.key.policy_key
+    );
+    post(&store, &t, "two");
+    let second = tick_and_join(&mut d, &store, &t).await;
+    let record = store.chat_run_session_record(&second).expect("record");
+    assert_eq!(
+        record.detail.as_deref(),
+        Some("resumed"),
+        "same policy resumes"
+    );
+
+    // The operator raises the version and reloads.
+    let mut cfg = d.cos_chat_launch.as_ref().expect("launch").config.clone();
+    cfg.triage.policy_version = "7".into();
+    d.reload_cos_chat_launch(cfg);
+    post(&store, &t, "three");
+    let third = tick_and_join(&mut d, &store, &t).await;
+    let record = store.chat_run_session_record(&third).expect("record");
+    assert_eq!(record.detail.as_deref(), Some("fresh"));
+    assert_eq!(record.reason.as_deref(), Some("policy_changed"));
+    assert_ne!(record.session_row_id.as_deref(), Some(live.id.as_str()));
+    assert_eq!(
+        store.chat_run_policy_version(&third).expect("policy"),
+        Some("7".into())
+    );
+    let attempt = last(&probe);
+    assert!(!attempt.context.session.as_ref().expect("session").resume);
+    let chat = attempt.context.cos_chat.as_ref().expect("chat");
+    assert_eq!(chat.policy_version, "7");
+    let texts: Vec<_> = chat
+        .unsummarized
+        .messages
+        .iter()
+        .map(|m| m.text.as_str())
+        .collect();
+    assert!(
+        texts.contains(&"one") && texts.contains(&"two"),
+        "a fresh run gets the unsummarized history: {texts:?}"
+    );
+
+    // The KB skill is replaced (same version string): fresh again.
+    let fresh = store.chat_session_active(&t).expect("s").expect("live");
+    std::fs::write(
+        d.config
+            .knowledge
+            .root
+            .join("skills/cos-inbox-triage/SKILL.md"),
+        "---\nname: cos-inbox-triage\ndescription: test skill\n---\n# v8 body\n",
+    )
+    .expect("skill");
+    post(&store, &t, "four");
+    let fourth = tick_and_join(&mut d, &store, &t).await;
+    let record = store.chat_run_session_record(&fourth).expect("record");
+    assert_eq!(record.reason.as_deref(), Some("policy_changed"));
+    assert_ne!(record.session_row_id.as_deref(), Some(fresh.id.as_str()));
+    assert_eq!(
+        store.chat_run_policy_version(&fourth).expect("policy"),
+        Some("7".into())
+    );
+
+    post(&store, &t, "five");
+    let fifth = tick_and_join(&mut d, &store, &t).await;
+    let record = store.chat_run_session_record(&fifth).expect("record");
+    assert_eq!(record.detail.as_deref(), Some("resumed"));
+}
+
+/// D1: a session row written before migration 0100 (NULL `policy_key`) is never resumed.
+#[tokio::test]
+async fn cos_chat_session_without_policy_key_is_retired_as_policy_changed() {
+    let (dir, store) = open_store();
+    let (_probe, adapter) = refusing(&store, usize::MAX, false);
+    let mut d = fixture(adapter, store.clone(), dir.path());
+    let t = thread(&store);
+    post(&store, &t, "one");
+    tick_and_join(&mut d, &store, &t).await;
+    let live = store.chat_session_active(&t).expect("s").expect("live");
+    rusqlite::Connection::open(dir.path().join("celeris.db"))
+        .expect("db")
+        .execute(
+            "UPDATE node_sessions SET policy_key=NULL WHERE id=?1",
+            [&live.id],
+        )
+        .expect("legacy row");
+    post(&store, &t, "two");
+    let second = tick_and_join(&mut d, &store, &t).await;
+    let record = store.chat_run_session_record(&second).expect("record");
+    assert_eq!(record.reason.as_deref(), Some("policy_changed"));
+}

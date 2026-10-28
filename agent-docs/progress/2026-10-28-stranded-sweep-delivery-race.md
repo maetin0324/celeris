@@ -69,6 +69,13 @@ invalid config: [cos.triage] human_required: unknown reason "fundamental_change"
   にし、`policy_version` を `"6"` にする。その後 `celerisctl skills import config/skills --name cos-inbox-triage --root <kb_root>` で
   本番 KB の skill を版 6 にし、release を昇格して `GET /api/v1/health` の `cos_policy_version` が `6` であることを確かめる。
 
+### 配送の修復（2026-10-28、attempt 3）
+
+- 人が回答した: 本番 `~/.config/celeris/config.toml` の `[cos.triage]` を新名 7 件と `policy_version = "6"` に直し、
+  本番 KB の cos-inbox-triage skill を版 6 にした。読み取りで確かめた: `human_required` に旧名は無く、`policy_version = "6"`。
+- コードは変えていない。branch は main（`phase 1: 日次の知識候補抽出で推測した案件 slug の候補を元 task の案件か experience へ直す`）の上に
+  進捗の commit だけを持つ。配送の再試行で verify が通るかは未確認（再試行は celeris が行う）。
+
 ## 提案
 
 なし。

@@ -22,11 +22,11 @@ ADR: [2026-10-28-cos-routine-delegated-answers](../adr/2026-10-28-cos-routine-de
 - `POST /cos/operations`: 開いている待ちに答える操作（decision・approval・phase/plan gate・question・inbox answer）で
   `instructed_by` が無ければ `basis` 必須。閉じた待ちは従来どおり domain の 409 等。
 - 通った代答は監査の reason が「定型の代答（<category>）: …」、payload に `basis`。
-- `[cos.triage]`: `policy_version` の既定 "5"。`human_required` の分類を `objective_change`・`beyond_frame`・`external_publish`・
+- `[cos.triage]`: `policy_version` の既定 "6"（版 "5" は窓口 ADR が使ったので 6 に上げた）。`human_required` の分類を `objective_change`・`beyond_frame`・`external_publish`・
   `destructive`・`secret_or_security`・`standing_permission`・`explicit_human` に改め、未知・旧名は読み込みエラー。
 - `config/skills/cos-inbox-triage`（version 5）: 表の分類名、§3 の定型の代答 4 種類と basis、§5 の本文例。
 - 文書: `docs/api/v1/api.md` §3.130・取り次ぎ節、`docs/ops/cos-chat.md`、`config/celeris.example.toml`、
-  `docs/ops/mlsys-main-4-ops-r1.md` §8 方針の版の変更記録（"4" → "5"）。API schema と web の生成型を再生成。
+  `docs/ops/mlsys-main-4-ops-r1.md` §8 方針の版の変更記録（窓口の "4" → "5" の行と本 task の "5" → "6" の行を別に置く）。API schema と web の生成型を再生成。
 - 試験: `crates/task-api/tests/cos_routine_answers.rs`（新規 5 件。fake harness = CoS run の credential で API を呼ぶ試験、LLM なし）、
   `crates/celeris/src/config/cos_tests.rs` の分類名の試験。既存の CoS 試験は代答に basis を付けた
   （phase gate の代答は推奨の無い途中確認なので、人の入力を `instructed_by` にする形に変えた）。
@@ -41,6 +41,10 @@ ADR: [2026-10-28-cos-routine-delegated-answers](../adr/2026-10-28-cos-routine-de
 - attempt 2: attempt 1 は `check-doc-links` で落ちた（試験の fixture の `agent-docs/progress/2026-10-19-multi-axis-eval.md` と `agent-docs/adr/../../etc/x.md` を実在しない参照と判定）。前者を実在する本 task の進捗ファイルへ替え、後者は `concat!` で分けて書いた。`sh scripts/dev/check-doc-links.sh`: ok。
 - attempt 3: `cargo nextest run -p task-api --test cos_integrate_task`: 3 passed。`bash scripts/dev/test-affected.sh`: exit 0（Rust 5380 passed・21 skipped、web の unit 689 passed、web/server 105 pass）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- policy-v6（提出時の HEAD で実行）: 版を "6" に上げた（skill・SOURCE.md・`[cos.triage]` の既定と試験・example config・cos-chat.md・ADR D3 と付記 2 件・§8 の行・本番への移行）。
+  `bash scripts/dev/test-affected.sh`: exit 0（Rust 4706 passed・20 skipped、web の unit 685 passed、文書検査 ok）。
+  `cargo nextest run -p task-api --test cos_integrate_task --test cos_routine_answers --test single_human_window`: 9 passed。
+  `cargo nextest run -p celeris --lib config::cos`: 10 passed。clippy・fmt: exit 0。
 - `python3 scripts/dev/check-human-text.py`: 0 findings。`sh scripts/dev/progress-index.sh --check`: ok。
 
 ## 本番への移行
@@ -51,12 +55,14 @@ ADR: [2026-10-28-cos-routine-delegated-answers](../adr/2026-10-28-cos-routine-de
    - `human_required` を書いていれば、旧名を新名へ置き換える（`fundamental_change` → `objective_change`、`resource_overrun` → `beyond_frame`、
      `security` → `secret_or_security`、`standing_permission` を足す）。書いていなければ既定が使われるので変えなくてよい。
      旧名のままだと新しい binary は config の読み込みで止まる（verify も落ちる）。
-   - `policy_version` を書いていれば `"5"` にする（skill の `metadata.version` と同じ値）。書いていなければ既定 "5"。
+   - `policy_version` を書いていれば `"6"` にする（skill の `metadata.version` と同じ値）。書いていなければ既定 "6"。
+     版 "5" は窓口 1 本（ADR 2026-10-28-single-human-window-general-cos）の版。本 task の方針は版 "6"。
    - 確認: `grep -n -A6 '^\[cos.triage\]' ~/.config/celeris/celeris.toml`。
 2. 本番 KB の skill を更新する: `celerisctl skills import config/skills --name cos-inbox-triage --root <kb_root>`
-   （リポジトリはこの release の checkout）。確認: `<kb_root>/skills/cos-inbox-triage/SKILL.md` の `version: "5"`。
-3. release を昇格し、`GET /api/v1/health` の `cos_policy_version` が "5" であることを確かめる。
-   評価の試行は版 "5" から新しい `condition_id` で始める（`docs/ops/mlsys-main-4-ops-r1.md` §8）。
+   （リポジトリはこの release の checkout）。確認: `<kb_root>/skills/cos-inbox-triage/SKILL.md` の `version: "6"`。
+3. release を昇格し、`GET /api/v1/health` の `cos_policy_version` が "6" であることを確かめる
+   （例: `curl -fsS -H "Authorization: Bearer $(cat ~/.config/celeris/api.token)" http://127.0.0.1:7710/api/v1/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["cos_policy_version"])'` が `6`）。
+   "5" なら config の `policy_version` が旧い値のまま。評価の試行は版 "6" から新しい `condition_id` で始める（`docs/ops/mlsys-main-4-ops-r1.md` §8）。
 
 ## 未解決事項
 

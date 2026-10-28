@@ -79,15 +79,15 @@ skill の表は「上限超過/引上げ」を一律に人へ回し、「定型�
 - 通った代答は、監査の reason を「定型の代答（<category>）: <CoS の reason>」とし、payload に `basis` を残す。
   `instructed_by` の付いた操作は人の判断なので `basis` を要らない（付けても検査しない。payload にも入れない）。
 
-### D3. policy_version 5 と `[cos.triage] human_required` の分類
+### D3. policy_version 6 と `[cos.triage] human_required` の分類
 
-- `cos-inbox-triage` skill を D1・D2 に合わせて書き直し、`metadata.version` と `[cos.triage] policy_version` の既定を "5" にする。
+- `cos-inbox-triage` skill を D1・D2 に合わせて書き直し、`metadata.version` と `[cos.triage] policy_version` の既定を "6" にする（版 "5" は同じ日の [2026-10-28-single-human-window-general-cos](2026-10-28-single-human-window-general-cos.md) D6 が使った）。
 - `human_required`（escalate する理由の分類。CoS への指示の語彙）を D1 の境界に合わせて改める。
   既定は `objective_change`・`beyond_frame`・`external_publish`・`destructive`・`secret_or_security`・`standing_permission`・`explicit_human`。
   旧い `fundamental_change`・`resource_overrun`・`security` は削り、config に書かれていれば読み込みエラーにする
   （未知の分類も読み込みエラー）。`resource_overrun` は「上限超過/引上げ」全体を指したが、新しい `beyond_frame` は枠を超える
   ものだけを指す（枠内の続行と一度だけの引き上げは D1 の代答）。
-- 評価契約（`docs/ops/mlsys-main-4-ops-r1.md` §8 方針の版の変更記録）に "4" → "5" を追記する。
+- 評価契約（`docs/ops/mlsys-main-4-ops-r1.md` §8 方針の版の変更記録）に "5" → "6" を追記する（窓口の "4" → "5" とは別の行）。
 
 ## 検証
 

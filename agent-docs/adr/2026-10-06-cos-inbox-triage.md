@@ -1,7 +1,7 @@
 # ADR 2026-10-06: CoS 受信箱の投入・通知 route・切替の永続化
 
 - 2026-10-22 付記: [2026-10-22-cos-fixed-threads](2026-10-22-cos-fixed-threads.md) により受信箱スレッド 1 本の前提は置き換え済み。項目は task の root の案件の CoS スレッド（無ければ統括 CoS）へ入り、triage run もスレッドごと。
-- 2026-10-28 付記: [2026-10-28-cos-routine-delegated-answers](2026-10-28-cos-routine-delegated-answers.md) により、item を answer で閉じる resolve は `basis`（定型の代答の 4 種類と根拠）を必須とする。根拠の欠けた代答は 422 で rejected に残る。
+- 2026-10-28 付記: [2026-10-28-cos-routine-delegated-answers](2026-10-28-cos-routine-delegated-answers.md) により、item を answer で閉じる resolve は `basis`（定型の代答の 4 種類と根拠）を必須とする。根拠の欠けた代答は 422 で rejected に残る。skill の policy_version は 6。
 
 ---
 tasks: [01M47VN95D8QQ65ATZVGHFFXA7]

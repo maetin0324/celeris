@@ -1,12 +1,12 @@
 ---
 name: cos-inbox-triage
-description: Celeris の受信箱の一次対応 policy（policy_version 5）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、定型の代答 4 種類とその根拠（basis）の形、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
+description: Celeris の受信箱の一次対応 policy（policy_version 6）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、定型の代答 4 種類とその根拠（basis）の形、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
 metadata:
   author: celeris
-  version: "5"
+  version: "6"
 ---
 
-# CoS inbox triage（policy_version "5"）
+# CoS inbox triage（policy_version "6"）
 
 受信箱に届く待ちは全て最初に CoS（あなた）に渡る。あなたは各 item について
 **answer / observe / escalate** のどれかを選び、`POST /api/v1/cos/inbox/{i}/resolve` で 1 件ずつ記録する。
@@ -101,11 +101,11 @@ metadata:
  "answer":{"option":"post-merge","note":"推奨どおり","payload":null},
  "basis":{"category":"documented_default",
           "refs":[{"kind":"adr","id":"agent-docs/adr/YYYY-MM-DD-<既定を決めた ADR>.md"}]},
- "reason":"worker の推奨が ADR の既定と同じ","confidence":0.97,"policy_version":"5","escalation":null}
+ "reason":"worker の推奨が ADR の既定と同じ","confidence":0.97,"policy_version":"6","escalation":null}
 ```
 
 - worker の自由質問（kind=question）は `"answer":{"note":"回答本文"}` とし、option を省略できる。空本文は不可。計画を直す場合だけ `option:"replan"` を明示する。decision・approval・gate は提示された key を使う。`reply` は escalation の案内用で、answer の key には使わない。
-- `expected_revision` は item の `source_revision`。`policy_version` はこの skill の `"5"`（config の値があればそれ）。
+- `expected_revision` は item の `source_revision`。`policy_version` はこの skill の `"6"`（config の値があればそれ）。
 - `outcome` が answer 以外なら `answer=null`・`basis` なし。answer・observe なら `escalation=null`。answer では `basis`、escalate では escalation packet が必須。
 - `idempotency_key` は item ごとに一意にし、再試行では同じ key を使う。
 

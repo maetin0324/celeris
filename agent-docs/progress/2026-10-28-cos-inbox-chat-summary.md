@@ -14,6 +14,8 @@ updated: 2026-10-28
 
 - `cos-inbox-chat-summary: 受信箱の件を切らずにチャットへ出し、CoS 不在の件は後から要約させる`
 - `cos-inbox-chat-summary: schema 版数の試験と進捗を合わせる`
+- `cos-inbox-chat-summary: 進捗に検査結果を書く`
+- `cos-inbox-chat-summary: daemon の要約の依頼を人の送信待ちと分け、取消と失敗時の積み直しを足す`
 
 ## 何をしたか
 
@@ -25,6 +27,9 @@ updated: 2026-10-28
 - escalation packet の選択肢に任意の `detail` を足し、digest・札・prompt で「label: detail」を 1 行ずつ出す。
 - CoS 不在で人へ回した件は、daemon が統括スレッドに queued の system message（`CoS 不在で人へ直接回した件の要約: items=[…]`）を積み、
   CoS が戻ると通常の queue claim で run になり、最終文が要約としてチャットに残る。`instructed_by` には使えない（role=system）。
+- 差し戻し（attempt 1 の review）への対応: queue の並びを「割り込み → 人の発言 → daemon の依頼」にした。queued の system の依頼も
+  取り消せるようにし、web の composer では「CoS への自動の依頼」として人の送信待ちと分けて出す。run が失敗した依頼は daemon が
+  `#2`・`#3` の key で積み直す（合わせて 3 回）。ADR D4 の「人が web の再送で行う」という誤った記述を直した。
 - skill `cos-inbox-triage`（§6 packet の書き方・§11 新設）・`cos-operator`（説明の行）・prompt の受信箱節を新しい動きに合わせた。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
@@ -35,7 +40,8 @@ updated: 2026-10-28
 
 ## 未解決事項
 
-- 要約の依頼の run が失敗した場合（起動後の quota 切れなど）、依頼は failed のまま残り、自動の再試行は無い（人が web で再送する）。
+- 要約の依頼の run が 3 回とも失敗すると、要約は出ない（退避の行は残る）。
+- web の「CoS への自動の依頼」の表示はブラウザで未確認（vitest の静的描画だけ）。
 - 実際の CoS（LLM）が依頼から書く要約の質は実機で未確認。試験は依頼が run になるところまで（fake adapter）。
 - Discord の通知本文は従来どおり 1,900 字で切れ、web へのリンクが付く。
 
@@ -45,4 +51,4 @@ updated: 2026-10-28
 
 ## 提案
 
-- 依頼の run が失敗したときの再試行（回数の上限付き）を、要約の依頼の行の状態から決定的に行う。
+- なし。

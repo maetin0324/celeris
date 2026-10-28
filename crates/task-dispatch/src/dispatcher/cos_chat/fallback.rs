@@ -39,7 +39,9 @@ use time::format_description::well_known::Rfc3339;
 use super::launch::CosChatLaunch;
 use super::triage::COS_TRIAGE_NOTICE_KIND;
 use crate::dispatcher::Dispatcher;
-use task_core::chat::triage::{COS_FALLBACK_SUMMARY_KEY_PREFIX, COS_FALLBACK_SUMMARY_PREFIX};
+use task_core::chat::triage::{
+    COS_FALLBACK_SUMMARY_KEY_PREFIX, COS_FALLBACK_SUMMARY_MAX_ATTEMPTS, COS_FALLBACK_SUMMARY_PREFIX,
+};
 
 /// Fixed headline of every fallback (D6).
 pub const COS_FALLBACK_HEADLINE: &str = "CoS 不在のため直接通知";
@@ -408,6 +410,9 @@ impl CosChatLaunch {
     /// One fallback pass. Errors are logged per item and retried next tick;
     /// they never create a new wait.
     pub(crate) fn triage_fallback(&mut self, dispatcher: &Dispatcher, now: OffsetDateTime) {
+        if self.config.enabled && self.config.unavailable_reason.is_none() {
+            self.retry_failed_summary_requests(now);
+        }
         let found = match candidates(&self.config.db_path) {
             Ok(found) => found,
             Err(error) => {
@@ -546,6 +551,32 @@ impl CosChatLaunch {
     /// ADR 2026-10-28-cos-inbox-chat-summary D4: queue the summary request in the general CoS
     /// thread (the person's single window, ADR 2026-10-28-single-human-window-general-cos). The
     /// normal queue claim runs it once CoS is available; its final text is the chat reply.
+    /// D4: a summary request whose CoS run failed is queued again, up to
+    /// `COS_FALLBACK_SUMMARY_MAX_ATTEMPTS` runs in all.
+    fn retry_failed_summary_requests(&mut self, now: OffsetDateTime) {
+        let general = match self.store.cos_general_thread_id() {
+            Ok(Some(thread)) => thread,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(%error, "CoS general thread lookup failed");
+                return;
+            }
+        };
+        match self.store.chat_system_queue_retry_failed(
+            &general,
+            COS_FALLBACK_SUMMARY_KEY_PREFIX,
+            COS_FALLBACK_SUMMARY_MAX_ATTEMPTS,
+            now,
+        ) {
+            Ok(queued) => {
+                for message in queued {
+                    tracing::info!(message_id = %message.id, "CoS fallback summary request queued again");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "CoS fallback summary retry failed"),
+        }
+    }
+
     fn queue_summary_request(
         &mut self,
         items: &[(

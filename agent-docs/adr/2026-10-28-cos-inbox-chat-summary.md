@@ -56,9 +56,15 @@ tasks: [01M61HWT7Q8CPF0WTYX5R7NM71]
   本文は件ごとの題名・種類・元のスレッドと、読むべき API（`GET /api/v1/tasks/<id>` 等）。dispatcher は推論しない。
 - chat の queue（`queue_order`・`queued_count`）は `role IN ('user','system')` の queued を扱う。通常の queue claim が CoS run を起こし、
   run の最終文が assistant の返事としてスレッドに残る。`instructed_by` は `role=user` を要するので、この依頼を根拠に人の判断を代えることはできない。
-- 新しい一次対応の件があるスレッドでは、system の依頼より一次対応を先に走らせる（人の発言は従来どおり先）。
-- CoS が無効（`cos.enabled=false`）か起動が失敗すると分かっている（`unavailable_reason`）ときは積まない。積んだ依頼の run が失敗したら
-  その依頼は失敗のまま残る（再試行は人が web の再送で行う）。
+- 並び順: 割り込み → 人の発言（`role=user`）→ daemon の依頼（`role=system`）、同じ組の中は seq 順。CoS 不在の間に人が送った発言は、
+  先に積まれた依頼より先に走る。新しい一次対応の件があるスレッドでは、system の依頼より一次対応を先に走らせる（人の発言は従来どおり先）。
+- 取消: `POST /chat/threads/{t}/messages/{m}/cancel` は queued の `role=system` も取り消す（従来は `role=user` だけ）。web の composer は
+  system の依頼を人の「送信待ち」と分け、「CoS への自動の依頼」として 1 行目と取消ボタンを出す。依頼を積むときと積み直すときは
+  queue event を出す。
+- 再試行: run が失敗した（message の state が `failed`）依頼は、daemon の退避の pass ごとに同じ本文で積み直す。key は
+  `<元の key>#2`・`#3` で、合わせて 3 回（`COS_FALLBACK_SUMMARY_MAX_ATTEMPTS`）まで。取り消された（`cancelled`）依頼と、人が止めた
+  （`interrupted`）依頼は積み直さない。3 回とも失敗したら要約は出ないが、退避の行（本文の全文・選択肢・回答の画面）は残る。
+- CoS が無効（`cos.enabled=false`）か起動が失敗すると分かっている（`unavailable_reason`）ときは、積むことも積み直すこともしない。
 - 退避の行は「CoS が戻り次第、統括 CoS のスレッドにこの件の要約を書く」と書く。
 
 ## 3. 帰結
@@ -75,3 +81,10 @@ tasks: [01M61HWT7Q8CPF0WTYX5R7NM71]
   `cos_chat_triage_fallback_disabled_queues_no_summary`、`cos_chat_triage_fallback_notice_title_and_body_stay_together`
   （束が育っても revision 1 の退避は「日次整理が完了 — KB の受信箱を 3 件整理した」で、別 task の本文が入らない）。
 - task-worker: `cos_chat_prompt_inbox_items_section`（本文と選択肢の detail）。
+- task-core: `chat_store_system_request_queues_after_people_and_can_be_cancelled`（依頼は queued_count に入り、後から送った人の発言が
+  先に claim され、取消でき、取消した依頼は積み直さない）、`chat_store_system_request_failed_run_is_queued_again_up_to_the_limit`
+  （`#2`・`#3` まで、同じ pass を重ねても増えない）。
+- task-dispatch: `cos_chat_triage_fallback_summary_request_failed_run_is_retried_up_to_the_limit`（CoS が常に失敗する script で、
+  依頼の message が key `…`・`…#2`・`…#3` の 3 件で止まる）。
+- web: `chat_composer_daemon_request_is_listed_apart_from_the_person_queue`（system の依頼は送信待ちの番号に入らず、
+  「CoS への自動の依頼」に 1 行目と取消が出る）。

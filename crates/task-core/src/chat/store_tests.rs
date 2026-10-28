@@ -698,6 +698,89 @@ fn chat_store_cancel_only_queued_user_input() {
     );
 }
 
+/// ADR 2026-10-28-cos-inbox-chat-summary D4: a daemon request (`role=system`, queued) is in the
+/// queue event, waits behind a person's later message, and a person can cancel it.
+#[test]
+fn chat_store_system_request_queues_after_people_and_can_be_cancelled() {
+    let s = store();
+    let t = create(&s, "sys", "Sys", 0);
+    let request = s
+        .chat_system_queue_once(&t.id, "cos-fallback-summary:i1", "要約の依頼", at(1))
+        .expect("queue");
+    assert_eq!(request.state, ChatMessageState::Queued);
+    let again = s
+        .chat_system_queue_once(&t.id, "cos-fallback-summary:i1", "要約の依頼", at(2))
+        .expect("idempotent");
+    assert_eq!(again.id, request.id);
+    let person = post(&s, &t.id, "m1", "人の発言", 3);
+    let snapshot = s.chat_thread_get(&t.id).expect("thread").expect("exists");
+    assert_eq!(snapshot.queued_count, 2);
+    let run = claim(&s, &t.id, "r1", 4).expect("claim");
+    assert_eq!(
+        run.input_message_id, person.id,
+        "a person's message goes first"
+    );
+    s.chat_run_finish("r1", ChatRunState::Completed, None, None, at(5))
+        .expect("finish");
+    let cancelled = s
+        .chat_message_cancel(&t.id, &request.id, at(6))
+        .expect("cancel the daemon request");
+    assert_eq!(cancelled.state, ChatMessageState::Cancelled);
+    assert!(
+        claim(&s, &t.id, "r2", 7).is_none(),
+        "cancelled request is not claimed"
+    );
+    let retried = s
+        .chat_system_queue_retry_failed(&t.id, "cos-fallback-summary:", 3, at(8))
+        .expect("retry");
+    assert!(retried.is_empty(), "a cancelled request is not retried");
+}
+
+/// D4: a failed request is queued again as `<key>#2`, `<key>#3`, then no more.
+#[test]
+fn chat_store_system_request_failed_run_is_queued_again_up_to_the_limit() {
+    let s = store();
+    let t = create(&s, "sys-retry", "Sys", 0);
+    let first = s
+        .chat_system_queue_once(&t.id, "cos-fallback-summary:i1", "要約の依頼", at(1))
+        .expect("queue");
+    let mut keys = vec![first.client_message_id.clone()];
+    for n in 0..4_i64 {
+        let run_id = format!("r{n}");
+        if claim(&s, &t.id, &run_id, 10 * n + 2).is_none() {
+            break;
+        }
+        s.chat_run_finish(
+            &run_id,
+            ChatRunState::Failed,
+            None,
+            Some("boom"),
+            at(10 * n + 3),
+        )
+        .expect("fail");
+        let retried = s
+            .chat_system_queue_retry_failed(&t.id, "cos-fallback-summary:", 3, at(10 * n + 4))
+            .expect("retry");
+        let again = s
+            .chat_system_queue_retry_failed(&t.id, "cos-fallback-summary:", 3, at(10 * n + 5))
+            .expect("retry is idempotent");
+        assert!(again.is_empty());
+        for m in retried {
+            assert_eq!(m.role, ChatMessageRole::System);
+            assert_eq!(m.text, "要約の依頼");
+            keys.push(m.client_message_id.clone());
+        }
+    }
+    assert_eq!(
+        keys,
+        vec![
+            Some("cos-fallback-summary:i1".to_owned()),
+            Some("cos-fallback-summary:i1#2".to_owned()),
+            Some("cos-fallback-summary:i1#3".to_owned()),
+        ]
+    );
+}
+
 #[test]
 fn chat_store_claim_is_fifo_with_one_live_run() {
     let s = store();

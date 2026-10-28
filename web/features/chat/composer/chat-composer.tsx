@@ -49,7 +49,12 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi, placehold
   const activeRun = selectActiveRun(chat);
   // キュー（停止含む）は chat.queue が正本（snapshot でも queue event でも導かれる）。
   const paused = chat.queue.paused;
-  const queued = chat.queue.message_ids.map((id) => chat.messages[id]).filter((message) => message?.state === "queued");
+  const waiting = chat.queue.message_ids
+    .map((id) => chat.messages[id])
+    .filter((message) => message?.state === "queued");
+  // ADR 2026-10-28-cos-inbox-chat-summary D4: daemon の依頼（role=system）は人の送信待ちと分けて出す。
+  const queued = waiting.filter((message) => message.role !== "system");
+  const requests = waiting.filter((message) => message.role === "system");
   const uploading = uploads.some((item) => item.state !== "ready");
   const canSend = !busy && !uploading && (text.trim().length > 0 || uploads.length > 0);
   const disconnected =
@@ -164,6 +169,25 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi, placehold
                 size="sm"
                 variant="ghost"
                 aria-label={`${index + 1}番目を取り消す`}
+                onClick={() => void action(() => cancelMessage(threadId, message.id))}
+              >
+                取消
+              </Button>
+            </li>
+          ))}
+        </ol>
+      )}
+      {requests.length > 0 && (
+        <ol aria-label="CoS への自動の依頼" className="max-h-24 overflow-y-auto">
+          {requests.map((message, index) => (
+            <li key={message.id} className="flex min-w-0 items-center gap-2 border-b border-border py-1">
+              <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                自動の依頼: {message.text.split("\n")[0]}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={`自動の依頼 ${index + 1} を取り消す`}
                 onClick={() => void action(() => cancelMessage(threadId, message.id))}
               >
                 取消

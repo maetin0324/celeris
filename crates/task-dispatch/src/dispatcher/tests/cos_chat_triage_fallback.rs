@@ -593,3 +593,50 @@ async fn cos_chat_triage_fallback_notice_title_and_body_stay_together() {
     assert_eq!(summary, "日次整理が完了 — KB の受信箱を 3 件整理した");
     assert!(!summary.contains("task X"), "{summary}");
 }
+
+/// ADR 2026-10-28-cos-inbox-chat-summary D4: a summary request whose CoS run fails is queued
+/// again (`<key>#2`, `<key>#3`) and stops after `COS_FALLBACK_SUMMARY_MAX_ATTEMPTS` runs in all.
+#[tokio::test]
+async fn cos_chat_triage_fallback_summary_request_failed_run_is_retried_up_to_the_limit() {
+    let mut f = fixture_script(true, FAIL);
+    f.tick();
+    f.question("deploy", vec![]);
+    f.tick();
+    assert_eq!(f.inbox_runs(), 1);
+    assert!(f.join_inbox().await);
+    // Each pass: the failed run is reaped, the request is queued (again) and claimed.
+    for _ in 0..8 {
+        f.tick();
+        let _ = f.join_inbox().await;
+    }
+    for _ in 0..3 {
+        f.tick();
+    }
+    let requests: Vec<(String, String)> = f
+        .general_messages()
+        .into_iter()
+        .filter_map(|(role, state, key, _)| {
+            let key = key?;
+            key.starts_with(task_core::chat::triage::COS_FALLBACK_SUMMARY_KEY_PREFIX)
+                .then(|| {
+                    assert_eq!(role, "system");
+                    (key, state)
+                })
+        })
+        .collect();
+    let item = f.only_item();
+    let base = format!(
+        "{}{item}",
+        task_core::chat::triage::COS_FALLBACK_SUMMARY_KEY_PREFIX
+    );
+    assert_eq!(
+        requests,
+        vec![
+            (base.clone(), "failed".to_owned()),
+            (format!("{base}#2"), "failed".to_owned()),
+            (format!("{base}#3"), "failed".to_owned()),
+        ],
+        "three runs in all, then no more"
+    );
+    assert_eq!(f.fallback_outbox(), 1, "the item is handed over once");
+}

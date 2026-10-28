@@ -122,6 +122,26 @@ describe("chat composer", () => {
     expect(html).toContain('aria-label="1番目を取り消す"');
   });
 
+  it("chat_composer_daemon_request_is_listed_apart_from_the_person_queue", () => {
+    const chat = initialChatState("t1");
+    chat.thread = thread();
+    chat.messages.s1 = message("s1", 1, {
+      role: "system",
+      text: 'CoS 不在で人へ直接回した件の要約: items=["i1"]\n（daemon からの依頼）',
+      state: "queued",
+    });
+    chat.messages.m2 = message("m2", 2, { text: "人の発言", state: "queued" });
+    chat.queue = { message_ids: ["m2", "s1"], paused: false };
+    const snapshot: ChatSessionSnapshot = { chat, stream: "open", loading: false, loadError: undefined };
+    const html = renderToStaticMarkup(<ChatComposer threadId="t1" snapshot={snapshot} session={{} as ChatSession} />);
+    expect(html).toContain("1. 人の発言");
+    expect(html).not.toContain("2. CoS 不在");
+    expect(html).toContain('aria-label="CoS への自動の依頼"');
+    expect(html).toContain("自動の依頼: CoS 不在で人へ直接回した件の要約");
+    expect(html).not.toContain("daemon からの依頼");
+    expect(html).toContain('aria-label="自動の依頼 1 を取り消す"');
+  });
+
   it("chat_composer_quota_disconnected_and_failed_states", () => {
     const chat = initialChatState("t1");
     chat.thread = thread({ active_run_id: "r1" });

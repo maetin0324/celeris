@@ -426,11 +426,13 @@ pub(crate) fn message_require(
     message_get_conn(conn, thread_id, id)?.ok_or_else(|| ChatError::not_found("message", id))
 }
 
-/// Queued user messages in claim order: interrupt messages first, then seq (D2).
+/// Queued inputs in claim order: interrupt messages first, then a person's messages before the
+/// daemon's requests (`role=system`, ADR 2026-10-28-cos-inbox-chat-summary D4), then seq (D2).
 pub(crate) fn queue_order(conn: &Connection, thread_id: &str) -> Result<Vec<String>, ChatError> {
     let mut stmt = conn.prepare_cached(
         "SELECT id FROM chat_messages WHERE thread_id=?1 AND role IN ('user','system') AND state='queued' \
-         ORDER BY CASE WHEN json_extract(metadata_json,'$.interrupt')=1 THEN 0 ELSE 1 END, seq",
+         ORDER BY CASE WHEN json_extract(metadata_json,'$.interrupt')=1 THEN 0 ELSE 1 END, \
+         CASE WHEN role='user' THEN 0 ELSE 1 END, seq",
     )?;
     let ids = stmt
         .query_map(params![thread_id], |row| row.get(0))?
@@ -685,6 +687,18 @@ impl SqliteStore {
             [thread_id],
             |r| r.get(0),
         )?)
+    }
+
+    /// The general CoS thread id, if it exists (ADR 2026-10-28-cos-inbox-chat-summary D4).
+    pub fn cos_general_thread_id(&self) -> Result<Option<String>, ChatError> {
+        let conn = writer(self)?;
+        Ok(conn
+            .query_row(
+                "SELECT id FROM chat_threads WHERE kind='general'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?)
     }
 
     /// The general CoS thread id, created on first use (ADR 2026-10-28-cos-inbox-chat-summary D4).
@@ -1182,9 +1196,83 @@ impl SqliteStore {
             &at,
         )?;
         let message = message_require(&tx, thread_id, &id)?;
+        touch_thread(&tx, thread_id, &at)?;
         emit_message(&tx, &message, &at)?;
+        emit_queue(&tx, thread_id, &at)?;
         tx.commit()?;
         Ok(message)
+    }
+
+    /// ADR 2026-10-28-cos-inbox-chat-summary D4: queues again each daemon request (`role=system`,
+    /// key starting with `key_prefix`) whose CoS run failed, as a new message with key
+    /// `<base>#<n>`, until `max_attempts` runs in all. A cancelled or interrupted request (a person
+    /// stopped it) is not retried. Returns the requests queued by this call.
+    pub fn chat_system_queue_retry_failed(
+        &self,
+        thread_id: &str,
+        key_prefix: &str,
+        max_attempts: u32,
+        now: OffsetDateTime,
+    ) -> Result<Vec<ChatMessage>, ChatError> {
+        let at = chat_ts(now);
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        thread_require(&tx, thread_id)?;
+        let failed: Vec<(String, String)> = {
+            let mut stmt = tx.prepare(
+                "SELECT client_message_id,text FROM chat_messages WHERE thread_id=?1 AND state='failed' \
+                 AND role='system' AND substr(client_message_id,1,length(?2))=?2 ORDER BY seq",
+            )?;
+            stmt.query_map(params![thread_id, key_prefix], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect::<Result<_, _>>()?
+        };
+        let mut queued = Vec::new();
+        for (key, text) in failed {
+            let (base, attempt) = match key.rsplit_once('#') {
+                Some((base, n)) => match n.parse::<u32>() {
+                    Ok(n) => (base, n),
+                    Err(_) => (key.as_str(), 1),
+                },
+                None => (key.as_str(), 1),
+            };
+            if attempt >= max_attempts {
+                continue;
+            }
+            let next = format!("{base}#{}", attempt + 1);
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE thread_id=?1 AND client_message_id=?2)",
+                params![thread_id, next],
+                |r| r.get(0),
+            )?;
+            if exists {
+                continue;
+            }
+            let id = insert_message(
+                &tx,
+                NewMessage {
+                    thread_id,
+                    role: ChatMessageRole::System,
+                    text: &text,
+                    state: ChatMessageState::Queued,
+                    client_message_id: Some(&next),
+                    reply_to_id: None,
+                    run_id: None,
+                    metadata: &json!({}),
+                },
+                &at,
+            )?;
+            let message = message_require(&tx, thread_id, &id)?;
+            emit_message(&tx, &message, &at)?;
+            queued.push(message);
+        }
+        if !queued.is_empty() {
+            touch_thread(&tx, thread_id, &at)?;
+            emit_queue(&tx, thread_id, &at)?;
+        }
+        tx.commit()?;
+        Ok(queued)
     }
 
     fn chat_system_message_add_keyed(
@@ -1843,9 +1931,15 @@ pub fn chat_message_cancel_tx(
     if message.state == ChatMessageState::Cancelled {
         return Ok(message);
     }
-    if message.role != ChatMessageRole::User || message.state != ChatMessageState::Queued {
+    // ADR 2026-10-28-cos-inbox-chat-summary D4: the daemon's queued request (`role=system`) can be
+    // cancelled like a person's queued message.
+    if !matches!(
+        message.role,
+        ChatMessageRole::User | ChatMessageRole::System
+    ) || message.state != ChatMessageState::Queued
+    {
         return Err(ChatError::Conflict(format!(
-            "message {message_id} is not a queued user input"
+            "message {message_id} is not a queued input"
         )));
     }
     tx.execute(

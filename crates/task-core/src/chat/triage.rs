@@ -490,6 +490,8 @@ impl SqliteStore {
 pub const COS_FALLBACK_SUMMARY_PREFIX: &str = "CoS 不在で人へ直接回した件の要約: items=";
 /// Idempotency key prefix of that request (`<prefix><item_id>`).
 pub const COS_FALLBACK_SUMMARY_KEY_PREFIX: &str = "cos-fallback-summary:";
+/// Runs in all for one summary request: a failed run is queued again as `<key>#2`, `<key>#3`.
+pub const COS_FALLBACK_SUMMARY_MAX_ATTEMPTS: u32 = 3;
 
 /// Prefix of the idempotency key of one run's digest message (`<prefix><run_id>`).
 pub const COS_TRIAGE_DIGEST_KEY_PREFIX: &str = "cos-triage-digest:";

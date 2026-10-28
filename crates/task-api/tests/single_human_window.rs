@@ -501,8 +501,14 @@ async fn project_escalation_is_answered_through_the_general_cos_and_relayed_to_t
         task_id: None,
     })
     .collect();
-    assert!(current.iter().all(|c| c.source_key != inbox_id), "answered wait closed");
-    assert!(current.iter().any(|c| c.source_key == other_inbox), "other wait still open");
+    assert!(
+        current.iter().all(|c| c.source_key != inbox_id),
+        "answered wait closed"
+    );
+    assert!(
+        current.iter().any(|c| c.source_key == other_inbox),
+        "other wait still open"
+    );
     env.store
         .cos_triage_reconcile("decision", &current, OffsetDateTime::now_utc())
         .expect("reconcile");

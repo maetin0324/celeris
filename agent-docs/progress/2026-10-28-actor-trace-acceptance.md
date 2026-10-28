@@ -51,6 +51,8 @@ WorkUnit ごとの詳細は `agent-docs/progress/2026-10-28-actor-trace-acceptan
 - HTTP の認証（operator だけが relays を呼べる等）と実 LLM harness の起動は、この試験の境界外。既存の task-api・task-worker の試験が受け持つ。
 - 流れ 5 の human-ops report には人の操作の観測記録を入れていない（CoS 操作の記録だけ）。人の介入の report 側の重複なしは流れ 2 の素材で export・requests では確かめたが、report の人の観測記録の再送は流れ 5 では未確認。
 
+- closeout の check（WU 基準の test-affected.sh の log を `actor_trace_flowN` で grep する）は、成果を直しても通らない。理由は 2 つ。(1) `CELERIS_WU_BASE` は流れ 1〜5 の統合後の snapshot なので、closeout の差分は文書だけになり、test-affected は「試験対象の変更なし」で試験を走らせない。(2) `.config/nextest.toml` の `status-level = "fail"` のため、main 基準で試験を走らせても、合格した試験の名前は log に出ない（6,640 件合格の log で grep は 0 件）。計画には plan_issue として返した。
+
 ## 提案
 
 - 台帳 ADR（`2026-10-27-eval-request-ledger.md`）と取り次ぎ ADR（`2026-10-27-relayed-instructions.md`）から、この ADR の流れ 2 の付記へ参照を足す（WU の範囲外なので人が判断する）。

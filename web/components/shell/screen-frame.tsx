@@ -15,6 +15,8 @@ export type ScreenFrameProps = {
   description?: ReactNode;
   /** 画面の主操作の slot。狭い幅では見出しの下へ折り返す。 */
   actions?: ReactNode;
+  /** 見出しを読み上げと focus 先だけに残し、画面には出さない（ホームの会話は縦の長さを優先する）。 */
+  titleHidden?: boolean;
 };
 
 // 画面見出し（h1 tabIndex=-1）は遷移後に shell が script で focus を移す先（S4）。直接開いた画面の
@@ -61,11 +63,19 @@ if (typeof document !== "undefined") {
 // 画面の見出しと枠（P2-02）。h1 は tabIndex=-1 で、遷移後の focus 先になる（S4）。
 // focus 枠は focus-visible のときだけ出す。pointer で遷移した後の script focus には枠を出さず、keyboard の遷移では出す。
 // page header は パンくず → 見出し・説明 → 主操作 の順で、DOM 順と見た目の順を揃える（DESIGN.md「原則」）。
-export function ScreenFrame({ title, route, children, breadcrumb, description, actions }: ScreenFrameProps) {
+export function ScreenFrame({
+  title,
+  route,
+  children,
+  breadcrumb,
+  description,
+  actions,
+  titleHidden,
+}: ScreenFrameProps) {
   const heading = (
     <h1
       tabIndex={-1}
-      className="break-words text-title font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:text-title-wide"
+      className={`${titleHidden ? "sr-only " : ""}break-words text-title font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:text-title-wide`}
     >
       {title}
     </h1>

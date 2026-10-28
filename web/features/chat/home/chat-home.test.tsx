@@ -10,7 +10,8 @@ describe("chat_home_single_window", () => {
     const html = renderToStaticMarkup(
       <ThreadBar thread={thread({ kind: "general", title: "統括 CoS" })} onBackToGeneral={() => {}} />,
     );
-    expect(html).toContain("統括 CoS");
+    // 題名は読み上げだけに残し、会話の縦の長さを取るため帯は画面に出さない。
+    expect(html).toBe('<h2 data-thread-bar="general" class="sr-only">統括 CoS</h2>');
     expect(html).not.toContain("統括 CoS に戻る");
     expect(html).not.toContain("会話一覧");
   });
@@ -26,6 +27,9 @@ describe("chat_home_single_window", () => {
     expect(html).toContain("CoS: 案件A");
     expect(html).toContain("読む用です");
     expect(html).toContain("統括 CoS に戻る");
+    // 1 行に詰める（折り返さない）。電話幅は短い「読む用」を見せ、全文は読み上げに残す。
+    expect(html).not.toContain("flex-wrap");
+    expect(html).toContain('class="max-md:sr-only">読む用です。話すときは統括 CoS で。</span>');
   });
 
   it("chat_home_escalation_card_links_to_the_project_thread_and_shows_resolution", () => {

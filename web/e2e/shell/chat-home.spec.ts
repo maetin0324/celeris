@@ -67,3 +67,34 @@ test("人の会話が無ければ新しい thread を作る", async ({ page }) =
     await gateway.close();
   }
 });
+
+// 会話の縦の長さを優先する: 「ホーム」の見出しと統括の題名の帯は読み上げだけに残し、会話が画面の高さを使う。
+// 変更前の会話の高さは 1280x800 で 569px、390x844 で 523px（見出し・帯・枠の余白の分だけ低かった）。
+for (const [width, height, minList] of [
+  [1280, 800, 680],
+  [390, 844, 620],
+] as const) {
+  test(`${width}x${height}: 見出しと帯を出さず、会話の表示部分に縦の長さを使う`, async ({ page }) => {
+    const gateway = await startFixtureGateway();
+    try {
+      await page.setViewportSize({ width, height });
+      await page.goto(`${gateway.base}/?thread=chat-main`);
+      const composer = page.getByRole("region", { name: "メッセージ入力" });
+      await expect(composer).toBeInViewport({ ratio: 1 });
+      const heading = page.getByRole("heading", { level: 1, name: "ホーム" });
+      await expect(heading).toHaveClass(/sr-only/);
+      await expect(page.locator('[data-thread-bar="general"]')).toHaveClass(/sr-only/);
+      await expect(page.getByText("統括 CoS を開いています")).toHaveCount(0);
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () => document.querySelector('[data-slot="chat-messages"]')?.getBoundingClientRect().height ?? 0,
+          ),
+        )
+        .toBeGreaterThanOrEqual(minList);
+      expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(height);
+    } finally {
+      await gateway.close();
+    }
+  });
+}

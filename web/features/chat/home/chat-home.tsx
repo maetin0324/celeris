@@ -52,14 +52,28 @@ export function ChatHome() {
     const resize = () => {
       const main = element.closest("main");
       const column = main?.parentElement;
-      const mainBottom = main ? Number.parseFloat(getComputedStyle(main).paddingBottom) || 0 : 0;
+      // 枠は負の margin で main の余白に張り出す。下の余白から張り出した分を差し引く。
+      const frameBottom = Number.parseFloat(getComputedStyle(element).marginBottom) || 0;
+      const mainBottom = main
+        ? Math.max(0, (Number.parseFloat(getComputedStyle(main).paddingBottom) || 0) + frameBottom)
+        : 0;
       const shellBottom = column ? Number.parseFloat(getComputedStyle(column).paddingBottom) || 0 : 0;
+      // main の後ろに続く列の中身（Console の置き場の枠線）の分も引き、ページを 1px も伸ばさない。
+      const afterMain =
+        main && column
+          ? Math.max(0, column.getBoundingClientRect().bottom - shellBottom - main.getBoundingClientRect().bottom)
+          : 0;
       const viewport = window.visualViewport;
       const visibleBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
       // keyboard が layout viewport の下部タブを覆う間は、その退避余白を重ねて引かない。
       const keyboardInset = Math.max(0, window.innerHeight - visibleBottom);
       const tabInset = Math.max(0, shellBottom - keyboardInset);
-      setHeight(Math.max(160, Math.floor(visibleBottom - element.getBoundingClientRect().top - mainBottom - tabInset)));
+      setHeight(
+        Math.max(
+          160,
+          Math.floor(visibleBottom - element.getBoundingClientRect().top - mainBottom - afterMain - tabInset),
+        ),
+      );
     };
     resize();
     window.addEventListener("resize", resize);
@@ -80,11 +94,12 @@ export function ChatHome() {
     void navigate({ to: "/", search: general ? { thread: general.id } : {} });
   };
   return (
-    <ScreenFrame title="ホーム" route="/">
+    // 会話の縦の長さを優先する: 見出しは読み上げだけに残し、枠は main の余白まで広げる。
+    <ScreenFrame title="ホーム" route="/" titleHidden>
       <div
         ref={frame}
         data-chat-home
-        className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-background"
+        className="-m-4 flex min-w-0 flex-col overflow-hidden bg-background md:-m-6"
         style={{ height }}
       >
         {thread ? (
@@ -94,7 +109,7 @@ export function ChatHome() {
             {threads.error}
           </p>
         ) : (
-          <p role="status" className="flex-1 p-4 text-muted-foreground">
+          <p role="status" className="sr-only">
             統括 CoS を開いています
           </p>
         )}
@@ -103,23 +118,33 @@ export function ChatHome() {
   );
 }
 
-/** 会話の上の帯。統括なら題名だけ、案件スレッドなら読む用であることと統括へ戻る導線を出す。 */
+/**
+ * 会話の上の帯。統括なら題名を読み上げだけに残して帯を出さない。案件スレッドなら読む用であることと統括へ戻る導線を
+ * 1 行に詰めて出す（電話幅は「読む用」だけを見せ、全文は読み上げに残す）。
+ */
 export function ThreadBar({ thread, onBackToGeneral }: { thread: ChatThread | null; onBackToGeneral: () => void }) {
   if (!thread) return null;
   if (thread.kind === "general")
     return (
-      <div data-thread-bar="general" className="shrink-0 border-b border-border px-3 py-2 font-medium">
+      <h2 data-thread-bar="general" className="sr-only">
         {thread.title}
-      </div>
+      </h2>
     );
   return (
     <div
       data-thread-bar={thread.kind}
-      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2"
+      className="flex min-w-0 shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-0.5"
     >
-      <span className="min-w-0 truncate font-medium">{thread.title}</span>
-      <span className="text-label text-muted-foreground">読む用です。話すときは統括 CoS で。</span>
-      <Button size="sm" className="min-h-11" onClick={onBackToGeneral}>
+      <span className="min-w-0 flex-1 truncate font-medium" title={thread.title}>
+        {thread.title}
+      </span>
+      <span className="shrink-0 whitespace-nowrap text-label text-muted-foreground">
+        <span aria-hidden="true" className="md:hidden">
+          読む用
+        </span>
+        <span className="max-md:sr-only">読む用です。話すときは統括 CoS で。</span>
+      </span>
+      <Button size="sm" className="min-h-11 shrink-0" onClick={onBackToGeneral}>
         統括 CoS に戻る
       </Button>
     </div>

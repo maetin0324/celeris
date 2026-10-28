@@ -281,6 +281,56 @@ pub struct Outputs {
     pub requests: Value,
 }
 
+impl Outputs {
+    /// Reconcile a logical request and its executor across all three real outputs.
+    pub fn assert_actor_trace(&self, request_ref: &str, operation: &str, kind: &str, actor: &str) {
+        let request = self.requests["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["request_ref"] == request_ref)
+            .expect("request ledger row");
+        assert!(
+            request["operations"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(operation))
+        );
+        assert_eq!(request["resolved"]["actor_kind"], kind);
+        assert_eq!(request["resolved"]["actor_id"], actor);
+        assert!(
+            self.export
+                .records
+                .iter()
+                .any(|r| r["record_type"] == "intervention"
+                    && r["actor_kind"] == kind
+                    && r["actor_id"] == actor
+                    && request["tasks"].as_array().unwrap().contains(&r["task_id"]))
+        );
+        let reported = self.report["trials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|t| {
+                t["intervention_items"]["value"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+            })
+            .find(|i| i["request_ref"] == request_ref)
+            .expect("human-ops report item");
+        assert!(
+            reported["history"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|h| h["logical_op_id"] == operation
+                    && h["executed_by"]["kind"] == kind
+                    && h["executed_by"]["id"] == actor)
+        );
+    }
+}
+
 /// Existing fake HTTP framing handles shared-host probes; response is fixed, local and one-shot.
 pub async fn fake_cos_response() -> Value {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

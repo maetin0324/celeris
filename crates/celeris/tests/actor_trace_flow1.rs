@@ -50,6 +50,12 @@ async fn authorized_project_cos_keeps_actor_and_consumption_through_evaluation()
     );
     let observed = record_observed_operation(&h, &op, &revision);
     let out = h.outputs(&observed);
+    out.assert_actor_trace(
+        &format!("decision:decision-{DECISION}"),
+        &op.id,
+        "cos_project",
+        &h.thread,
+    );
     let summary = serde_json::to_value(&out.export.summary).unwrap();
     assert_eq!(summary["interventions_by_actor_kind"]["human"], 0);
     assert_eq!(summary["interventions_by_actor_kind"]["cos_project"], 1);

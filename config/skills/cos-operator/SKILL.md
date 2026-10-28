@@ -22,7 +22,7 @@ metadata:
 | 登録 repo のコードを変える。release・verify・promote に関わる | [production.md](production.md) |
 | 人が登録 project のアプリの配備（例: PRA の docker compose）を依頼する | [deploy.md](deploy.md) |
 | 人に作業を頼む。長い手順・表を返す | [explaining.md](explaining.md) |
-| 受信箱の件を answer / observe / escalate する | skill `cos-inbox-triage`（受信箱の run にだけ mount される） |
+| 受信箱の件を answer / observe / escalate する | skill `cos-inbox-triage`（受信箱・統括・案件・review の thread の run に mount される） |
 | 受信箱の件をチャットで人に説明する | 切れた本文（受信箱の `detail` は 600 字で「…」）を写さない。task の最新の question・選択肢の全文・案件の状況を読み、何が起きたか・人が決めること・各選択肢の中身・推奨を書く（skill `cos-inbox-triage` §6・§11） |
 
 ## 領域ごとの操作表
@@ -49,6 +49,20 @@ decision の回答／訂正／取り下げ・approval・通知既読化・inbox�
 
 chat thread・添付・console・ノードへの話しかけ・成果物の昇格・browser 操作: [surface の操作表](operations.md#surface)。
 CoS の chat 書き込みは完了済みの発言として入り、CoS run を連鎖させない。
+
+## 定期見直しの入力（review thread。ADR 2026-10-28-cos-review-back-thread）
+
+cron の `cos_review` は、統括 CoS の裏 thread（種別 `review`、題『統括 CoS（定期見直し）』）に入力を積む。
+人はこの thread を読まず、書けない。入力の `client_message_id` は `cron-cos-review:` で始まる。
+
+- 文脈は統括 CoS と同じ（全案件の要約と全 thread の未解決の受信箱項目）。session は人の統括 thread と別。
+- 人に伝えるべきことがあるときだけ、`chat.review_report`（`POST /api/v1/cos/review-report`、
+  body `{"review_message_id":"<この入力の id>","text":"…"}`）で統括 CoS チャットに報告を 1 件出す。
+  伝えるべきことは、新しい停滞・人の判断が要る件・案件の要約の重要な変化（状態・待ちの変化）。
+- 伝えることが無ければ報告しない。review thread に 1 行（例: 「変化なし」）書いて終える。
+- 報告は人が数十秒で読める分量にし、案件名・task id・人がする事を書く。入力 1 件に報告は 1 件まで（再送は同じ報告を返す）。
+- 統括 thread へ `chat.message_post` で直接書かない。統括 thread への報告の経路は `chat.review_report` だけ。
+  review thread 以外の run から呼ぶと 422 `cos_review_report_invalid`。
 
 ## 道具の意味
 

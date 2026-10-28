@@ -12,7 +12,7 @@ metadata:
 **answer / observe / escalate** のどれかを選び、`POST /api/v1/cos/inbox/{i}/resolve` で 1 件ずつ記録する。
 契約の正本は [ADR 2026-10-05 cos-chat-home](../../../agent-docs/adr/2026-10-05-cos-chat-home.md) の D3。
 操作の経路・秘密・信頼しない入力の扱いは prompt の Core と cos-operator skill に従う。
-この skill は受信箱スレッドの run（または受信箱の件を渡された run）にだけ mount される。通常のスレッドでは使わない。
+この skill は受信箱スレッド・統括/案件の CoS スレッド・定期見直しの review thread の run（または受信箱の件を渡された run）に mount される。
 
 ## 1. 判定の前に読むもの
 
@@ -207,3 +207,16 @@ metadata:
   取り消された依頼は再び積まれない。
 - run が失敗した依頼は、daemon が同じ本文で 2 回まで積み直す（合わせて 3 回）。3 回とも失敗したら要約は出ない。
   そのときも退避の行（本文の全文・選択肢・回答の画面）はスレッドに残っている。
+
+## 12. 定期見直しの run（review thread。ADR 2026-10-28-cos-review-back-thread）
+
+cron の `cos_review` の入力（`client_message_id` が `cron-cos-review:` で始まる）は、人が読まない統括 CoS の裏 thread
+（種別 `review`）で走る。統括 thread には入力も返事も積まれない。
+
+- 受信箱の件を読むが、この run から answer / observe / escalate しない。受信箱の一次対応は従来どおり統括・受信箱の
+  thread の run が行う。
+- 人に伝えるべきこと（新しい停滞・人の判断が要る件・案件の要約の重要な変化）があるときだけ、`chat.review_report`
+  （`POST /api/v1/cos/review-report`、body `{"review_message_id":"<この入力の id>","text":"…"}`）で統括 CoS チャットに
+  1 件報告する。報告は人が数十秒で読める分量にし、案件名・task id・人がする事を書く。
+- 伝えることが無い（変化 0・対応不要）なら報告しない。review thread に 1 行（例: 「変化なし」）書いて終える。
+- 統括 thread に `chat.message_post` で直接書かない。前回の報告と同じ内容を繰り返さない。

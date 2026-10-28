@@ -32,3 +32,7 @@ license: このリポジトリと同じ（外部の license は無い）
   integrate task の起票）を足した。cos-inbox-triage には、統合の依頼は `integrate_task` で答え、失敗した依頼は escalate する規則を足した。
   version は変えない（既存の規則の意味は変わらない）。本番 KB への取り込みは人が行う。
 - 2026-10-28（ADR 2026-10-28-cos-session-policy-key D2）: OP の `policy_version` の例を固定の数字から run の `<policy_version>` に変えた。daemon が run に渡した版だけが通る（違えば 422）。metadata.version は変えていない（判断の基準は同じ）。
+- 2026-10-28（ADR 2026-10-28-cos-review-back-thread D3'〜D5'）: SKILL.md に「定期見直しの入力（review thread）」の節を足した。
+  人に伝えるべきことがあるときだけ `chat.review_report` で統括 CoS チャットに 1 件報告し、無ければ review thread に 1 行書いて
+  終える。統括 thread へ直接書かない。operations.md の surface 表の `chat.review_report` の行は api-op の葉が足した。
+  metadata.version は変えない（他の操作の規則は同じ）。本番 KB への取り込みは人が行う。

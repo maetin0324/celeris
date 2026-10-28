@@ -64,6 +64,10 @@ pub struct KnowledgeRunSummary {
     /// 落とした候補の `path` と理由（実機 2026-09-20: 件数だけでは、なぜ捨てられたかを後から追えなかった）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub discarded_reasons: Vec<String>,
+    /// 日次の抽出で置き場を直して検査に通した候補（`<元のパス> → <新しいパス>（理由）`。
+    /// ADR 2026-10-28-knowledge-extraction-placement-repair D3）。人の判断待ちにはしない。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrected: Vec<String>,
     /// ADR-0052 D2（Phase 64）: どの経路で抽出したか。`"langmem"`（`[knowledge.langmem]` の接続先、
     /// proxy の場合は `<source_id>/<model_id>` を受け取り、source と model は route_defaults / model routing が選ぶ。
     /// `"fallback:<adapter>"` は接続先に届かず tier cheap の汎用ハーネスに倒した経路。
@@ -424,6 +428,7 @@ mod tests {
             inbox: 2,
             discarded: 0,
             discarded_reasons: Vec::new(),
+            corrected: Vec::new(),
             via: Some(VIA_LANGMEM.to_string()),
         };
         let applied_at = now + time::Duration::minutes(5);

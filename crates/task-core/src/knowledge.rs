@@ -22,6 +22,7 @@ pub mod layout;
 pub use layout::{
     ENVIRONMENT_CATEGORIES, Layout, Placement, PlacementError, PlacementRequest, ProjectRef,
     Redirect, USER_CANONICAL, derive_project_slug, is_valid_project_slug, looks_like_ulid, place,
+    repair_unknown_project,
 };
 
 /// ADR-0047 D1: `[knowledge] root` を設定しなかったときの正本の置き場。

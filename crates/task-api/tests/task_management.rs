@@ -776,6 +776,7 @@ async fn the_timeline_shows_the_knowledge_maintenance_run() {
                 inbox: 1,
                 discarded: 0,
                 discarded_reasons: Vec::new(),
+                corrected: Vec::new(),
                 // ADR-0052 D2（Phase 64）: どの経路で抽出したか。
                 via: Some("fallback:codex".to_string()),
             }),

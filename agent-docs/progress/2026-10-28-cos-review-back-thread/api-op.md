@@ -57,7 +57,7 @@ ADR [2026-10-28-cos-review-back-thread](../../adr/2026-10-28-cos-review-back-thr
 - `cargo nextest run -p task-api`（sandbox の TMPDIR のまま）→ 736 passed・4 failed。落ちたのは browser_live_cross 3 件と
   browser_waits 1 件で、launcher・credentiald の socket の bind 待ち（深い TMPDIR で bind できない既知の事象。
   `scripts/dev/test-affected.sh` は TMPDIR を短くして走らせる）。今回の変更の試験は全て通った。
-- `bash scripts/dev/test-affected.sh` → 下の「最終の検査」。
+- `bash scripts/dev/test-affected.sh` → exit 0、4733 passed・20 skipped（cargo）。web は tsc -b 通過、vitest 100 files・690 passed。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
 - `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema::` と `corepack pnpm@12.6.0 -C web gen:types` で再生成した。

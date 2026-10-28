@@ -16,15 +16,18 @@ import { TaskWaitReason } from "../tasks/wait-reason";
 import {
   type BoardColumnId,
   type BoardFilters,
+  type BoardGroup,
   boardColumns,
   boardFilterFromSearch,
   boardGroup,
+  boardGroupCountLabel,
   boardHref,
   boardQueryFields,
-  boardTasksPath,
   categoryLabels,
+  fetchBoard,
   labelOf,
   priorityLabels,
+  terminalLimit,
   tierLabels,
 } from "./board-model";
 import { projectListQuery } from "./project-queries";
@@ -254,6 +257,18 @@ function RunStateFilter({ filter, total }: { filter: BoardFilters; total: number
   );
 }
 
+/** 終端の列を件数制限で切ったとき、表示している範囲と件数の意味を知らせる。 */
+export function BoardTruncatedNotice({ groups, showSupport }: { groups: BoardGroup[]; showSupport: boolean }) {
+  const truncated = groups.filter((group) => group.truncated);
+  if (truncated.length === 0) return null;
+  return (
+    <p className="text-label text-muted-foreground" data-testid="board-truncated">
+      {truncated.map((group) => group.title).join("・")}は作成の新しい {terminalLimit}{" "}
+      件まで表示しています。件数は全件の数です{showSupport ? "" : "（裏方を含む）"}。
+    </p>
+  );
+}
+
 const extraFields = [
   { name: "label", title: "ラベル" },
   { name: "category", title: "種類" },
@@ -268,7 +283,11 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
   const filter = boardFilterFromSearch(new URLSearchParams(searchStr));
   const key = boardKeys.list(filter);
   const projects = useQuery(projectListQuery({}));
-  const tasks = useQuery({ queryKey: key, queryFn: ({ signal }) => apiGet<TaskList>(boardTasksPath(filter), signal) });
+  // 終端でない task は全件、終端の task は状態ごとに新しい順の terminalLimit 件を読む。
+  const tasks = useQuery({
+    queryKey: key,
+    queryFn: ({ signal }) => fetchBoard(filter, (path) => apiGet<TaskList>(path, signal)),
+  });
   // Browser history is the source of truth. Keep the controls in sync after Back/Forward.
   useEffect(() => {
     if (!form.current || !projects.data?.items) return;
@@ -288,12 +307,12 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
     router.history.push(boardHref(next), {});
   }
   const visible = (filter.show_support ? tasks.data?.items : tasks.data?.items.filter((task) => !task.support)) ?? [];
-  const groups = boardGroup(visible);
-  const counts = Object.fromEntries(groups.map((group) => [group.id, group.items.length])) as Record<
-    BoardColumnId,
-    number
-  >;
-  const shown = groups.filter((group) => (filter.column ? group.id === filter.column : group.items.length > 0));
+  const groups = boardGroup(visible, tasks.data?.terminal);
+  const counts = Object.fromEntries(groups.map((group) => [group.id, group.count])) as Record<BoardColumnId, number>;
+  const total = groups.reduce((sum, group) => sum + group.count, 0);
+  const shown = groups.filter((group) =>
+    filter.column ? group.id === filter.column : group.items.length > 0 || group.truncated,
+  );
   const projectTitles = new Map((projects.data?.items ?? []).map((project) => [project.id, project.title]));
   const extraOpen = extraFields.some((field) => filter[field.name]) || !!filter.priority || !!filter.show_support;
   return (
@@ -360,10 +379,11 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
           <FetchFrame query={tasks}>
             {tasks.data && (
               <div className="min-w-0 space-y-3">
-                <StateFilter filter={filter} counts={counts} total={visible.length} />
+                <StateFilter filter={filter} counts={counts} total={total} />
                 {!filter.column || filter.column === "waiting" ? (
-                  <RunStateFilter filter={filter} total={visible.length} />
+                  <RunStateFilter filter={filter} total={total} />
                 ) : null}
+                <BoardTruncatedNotice groups={groups} showSupport={!!filter.show_support} />
                 {shown.length === 0 || shown.every((group) => group.items.length === 0) ? (
                   <p className="text-muted-foreground" data-testid="board-empty">
                     {filter.column ? "この状態のタスクはありません。" : "条件に合うタスクはありません。"}
@@ -393,7 +413,7 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
                           <TableHead scope="colgroup" colSpan={columnCount} className="px-3 text-foreground">
                             <h2 className="text-label font-semibold">
                               {group.title}{" "}
-                              <span className="tabular-nums text-muted-foreground">{group.items.length} 件</span>
+                              <span className="tabular-nums text-muted-foreground">{boardGroupCountLabel(group)}</span>
                             </h2>
                           </TableHead>
                         </TableRow>

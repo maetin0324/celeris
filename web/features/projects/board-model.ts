@@ -63,21 +63,97 @@ export function boardHref(filters: BoardFilters): string {
   if (filters.run_state) params.set("run_state", filters.run_state);
   return `/board${params.size ? `?${params}` : ""}`;
 }
-export function boardTasksPath(filters: BoardFilters): string {
+/** 終端でない状態。絞り込みに合えば作成日時や件数に関係なく全件をボードに出す。 */
+export const liveStatuses = ["draft", "ready", "running", "reviewing", "blocked"] as const;
+/** 終端の状態。列ごとに作成の新しい順で `terminalLimit` 件だけ読む。 */
+export const terminalStatuses = ["done", "failed", "cancelled"] as const;
+export type TerminalStatus = (typeof terminalStatuses)[number];
+export const terminalLimit = 200;
+/** daemon の `limit` の上限。終端でない task はこの大きさの頁で `next_cursor` を辿って全件読む。 */
+const livePageLimit = 500;
+
+function baseParams(filters: BoardFilters): URLSearchParams {
   const params = new URLSearchParams();
   for (const key of boardQueryFields) {
     const value = filters[key];
     if (value) params.set(key, value);
   }
-  params.set("limit", "200");
+  return params;
+}
+
+/** 終端でない task の 1 頁。`cursor` は前の頁の `next_cursor`。 */
+export function boardLiveTasksPath(filters: BoardFilters, cursor?: string): string {
+  const params = baseParams(filters);
+  params.set("status", liveStatuses.join(","));
+  params.set("limit", String(livePageLimit));
   params.set("order", "created_desc");
   if (filters.run_state) params.set("run_state", filters.run_state);
+  if (cursor) params.set("cursor", cursor);
   return `/api/tasks?${params}`;
 }
-export function boardGroup(items: TaskSummary[]) {
-  return boardColumns.map((column) => ({
-    ...column,
-    items: items
+
+/** 終端の 1 状態の新しい `terminalLimit` 件。`total` がその状態の実際の件数になる。 */
+export function boardTerminalTasksPath(filters: BoardFilters, status: TerminalStatus): string {
+  const params = baseParams(filters);
+  params.set("status", status);
+  params.set("limit", String(terminalLimit));
+  params.set("order", "created_desc");
+  return `/api/tasks?${params}`;
+}
+
+/** 終端の列の読み込み範囲。`total` は daemon が数えた件数（裏方を含む）、`loaded` は読んだ件数。 */
+export type TerminalRange = { loaded: number; total: number };
+export type BoardData = {
+  items: TaskSummary[];
+  terminal: Partial<Record<TerminalStatus, TerminalRange>>;
+};
+
+type TaskPage = { items: TaskSummary[]; next_cursor?: string | null; total: number };
+
+/**
+ * ボードの task を読む。終端でない task は全頁を辿って全件、終端の task は状態ごとに新しい順の
+ * `terminalLimit` 件だけ読む。`run_state` は終端でない task だけの絞り込みなので、そのときは終端を読まない。
+ */
+export async function fetchBoard(filters: BoardFilters, get: (path: string) => Promise<TaskPage>): Promise<BoardData> {
+  const liveTask = (async () => {
+    const items: TaskSummary[] = [];
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    for (;;) {
+      const page = await get(boardLiveTasksPath(filters, cursor));
+      items.push(...page.items);
+      const next = page.next_cursor ?? undefined;
+      // 同じ cursor が返ったら打ち切る（無限に読まない）。
+      if (!next || seen.has(next)) return items;
+      seen.add(next);
+      cursor = next;
+    }
+  })();
+  const statuses = filters.run_state ? [] : terminalStatuses;
+  const terminalPages = Promise.all(
+    statuses.map(async (status) => [status, await get(boardTerminalTasksPath(filters, status))] as const),
+  );
+  const [live, pages] = await Promise.all([liveTask, terminalPages]);
+  const terminal: BoardData["terminal"] = {};
+  const items = [...live];
+  for (const [status, page] of pages) {
+    items.push(...page.items);
+    terminal[status] = { loaded: page.items.length, total: Math.max(page.total, page.items.length) };
+  }
+  return { items, terminal };
+}
+
+export type BoardGroup = (typeof boardColumns)[number] & {
+  items: TaskSummary[];
+  /** 列の件数。読み切った列は表示する件数、件数制限で切った列は daemon が数えた件数。 */
+  count: number;
+  /** 件数制限で一部しか読んでいない列の範囲。読み切った列は `undefined`。 */
+  truncated?: TerminalRange;
+};
+
+export function boardGroup(items: TaskSummary[], terminal: BoardData["terminal"] = {}): BoardGroup[] {
+  return boardColumns.map((column) => {
+    const columnItems = items
       .filter((item) => (column.statuses as readonly string[]).includes(item.status))
       .sort(
         (a, b) =>
@@ -85,8 +161,18 @@ export function boardGroup(items: TaskSummary[]) {
           b.priority - a.priority ||
           a.created_at.localeCompare(b.created_at) ||
           a.id.localeCompare(b.id),
-      ),
-  }));
+      );
+    const range = column.statuses.length === 1 ? terminal[column.statuses[0] as TerminalStatus] : undefined;
+    const truncated = range && range.total > range.loaded ? range : undefined;
+    return { ...column, items: columnItems, count: truncated ? truncated.total : columnItems.length, truncated };
+  });
+}
+
+/** 列見出しの件数。件数制限で切った列は全件の数と表示している件数を並べる。 */
+export function boardGroupCountLabel(group: BoardGroup): string {
+  return group.truncated
+    ? `全 ${group.truncated.total} 件のうち新しい ${group.truncated.loaded} 件を表示`
+    : `${group.items.length} 件`;
 }
 
 // 内部の英語値を画面の言葉へ。未知の値は「未確認」にして英語を出さない（W-23）。

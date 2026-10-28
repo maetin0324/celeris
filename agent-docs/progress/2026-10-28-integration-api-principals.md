@@ -34,6 +34,31 @@ updated: 2026-10-28
 web 依存の offline install はキャッシュ不足で失敗したため、`pnpm install --frozen-lockfile` で補完（exit 0）。
 Rust の試験用ビルドでは既存の `dagbench_pbs_e2e.rs` に未使用 import 警告が1件出たが、指定検査はすべて成功。
 
+## 不安定な試験の修正
+
+最終 review の test-affected で `browser_launcher::tests::client_identifies_the_responding_process_not_the_listener_creator`
+が `request: Io(Os { code: 32, kind: BrokenPipe })` で落ちた。本体ではなく試験の欠陥。
+
+- 原因: client の `write_frame` は長さの prefix（4 byte）と本文を別の `write_all` で送る。fork した子（launcher の役）は
+  1 回の `read` だけで返事を書き、socket を閉じていた。子の `read` が prefix だけを受けて戻ると、
+  親が本文を書く前に socket が閉じ、親の write が EPIPE になる。EINTR で `accept`・`read` が早く戻る場合も同じ。
+- 直し方（`fix-launcher-flake: responder 試験の子が要求 frame を読み切ってから返事する`）: 子は `accept`・`read`・`write` を
+  EINTR で再試行し、prefix と本文を読み切ってから返事を書き切る。その後は EOF まで読み、親が client を閉じるまで
+  socket を閉じない。親は client を閉じてから子を `waitpid` する。子は async-signal-safe な syscall だけを使う。
+  sleep・busy loop は使っていない。
+- 同じファイルで fork した子が応答する試験はこの 1 件だけ。`client_records_a_consistent_responder_across_requests` は
+  in-process の `LauncherServer`（`read_frame` で frame を読み切る）が応答するので変えていない。
+
+証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）:
+
+- `cargo test -p task-worker --lib browser_launcher::tests` → 25 passed、0 failed。
+- `cargo test -p task-worker --lib browser_launcher::tests::client_` を続けて 30 回 → 30 回とも 2 passed。
+- `bash scripts/dev/test-affected.sh` → exit 0（4729 passed、20 skipped）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+
+注: この run の `TMPDIR`（93 byte）では unix socket の path が `SUN_LEN` を超え、browser_launcher の試験は bind で落ちる。
+上の試験は短い `TMPDIR`（`/local/celeris/data/scratch/t60jc`）で実行した。
+
 ## 未解決
 
 なし。

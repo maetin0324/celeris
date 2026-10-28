@@ -1,7 +1,7 @@
 # 行為者と消費の追跡を評価出力まで照合する受け入れ試験
 
 - 日付: 2026-10-28
-- 状態: 採用
+- 状態: 実装済み（流れ 1〜5 の試験は `crates/celeris/tests/actor_trace_flow1.rs`〜`actor_trace_flow5.rs`。各流れの記録は `agent-docs/progress/2026-10-28-actor-trace-acceptance/`）
 - Task: 01M60AKVZEB61PRBKX5AX44H3A
 
 ## 決定

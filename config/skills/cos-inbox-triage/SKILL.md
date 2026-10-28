@@ -49,7 +49,8 @@ metadata:
   `/cos/operations` の standing_rule.create・release.promote は人の決定で CoS にも登録されているが（cos-operator の operations.md）、
   人の依頼がある chat の run で使うもので、人の指示の無い一次対応では使わず escalate する。
 - 統合の依頼（`integration_request`）で選択肢 `integrate_task` があるものは、`integrate_task` で answer する
-  （衝突を解く task を起票する。ADR 2026-10-28-cos-integrate-task）。「統合した」「見送る」「再試行する」を CoS が選ばない
+  （衝突を解く task を起票する。ADR 2026-10-28-cos-integrate-task）。推奨は `integrate_task` なので、basis は
+  `documented_default`、`refs` に `{"kind":"adr","id":"agent-docs/adr/2026-10-28-cos-integrate-task.md"}` を書く。「統合した」「見送る」「再試行する」を CoS が選ばない
   （手 merge の代わりにならない）。題が「integrate task が失敗」の依頼は API が answer を拒むので escalate する。
 - 人が本番操作を人だけに限定しているもの（`promote.sh`・`rollback.sh`・`systemctl` 等。cos-operator の production.md）は、
   代わりに実行せず escalate する。技術手順は「運用者の作業」に分け、packet では web での判断・承認だけを依頼する

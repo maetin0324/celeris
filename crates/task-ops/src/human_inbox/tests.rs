@@ -964,6 +964,7 @@ fn human_inbox_integration_request_preserves_decision_material() {
     let out = from_inbox(&offered, &by_id, now());
     let item = one(&out, InboxKind::IntegrationRequest);
     assert_eq!(item.options[0].key, "integrate_task");
+    assert_eq!(item.recommended.as_deref(), Some("integrate_task"));
     assert_eq!(
         item.answer.native.as_ref().map(|n| n.path.clone()),
         Some(crate::human_inbox::integrate_task_path(

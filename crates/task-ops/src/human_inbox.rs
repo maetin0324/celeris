@@ -1137,7 +1137,10 @@ impl Builder<'_> {
                     title,
                     detail: Some(detail),
                     options,
-                    recommended: None,
+                    // ADR 2026-10-28-cos-routine-delegated-answers 付記: integrate task は ADR が定めた既定の
+                    // 答え方なので推奨にする（CoS は documented_default の根拠で代答する）。
+                    recommended: integrate_task_offered
+                        .then(|| task_core::integration_request::INTEGRATE_TASK_OPTION.to_string()),
                     due_at: None,
                     blocking: self.only_task(task),
                     blocked_by: Vec::new(),

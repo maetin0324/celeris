@@ -96,3 +96,11 @@ skill の表は「上限超過/引上げ」を一律に人へ回し、「定型�
 - `instructed_by` の付いた操作は basis 無しで通る。
 - config の旧い分類名は読み込みエラー。
 - `bash scripts/dev/test-affected.sh`、`cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check`。
+
+## 付記 A1（2026-10-28）: 統合の依頼の `integrate_task` は documented_default で代答する
+
+ADR 2026-10-28-cos-integrate-task D4 は、統合の依頼を CoS が `integrate_task` で答えると決めた。D1 の 4 種類に載せるため、
+`integrate_task` を選べる統合の依頼（origin `delivery`、結び無し、escalated でない）の受信箱項目は `recommended` を
+`integrate_task` にする。CoS はこれを `documented_default`（`refs` に `agent-docs/adr/2026-10-28-cos-integrate-task.md`）で
+代答する。basis の無い `integrate_task` の答えは他と同じく 422（`cos_basis_missing`）。escalated の依頼は従来どおり
+`human_required_reason` で 403 になり、推奨も選択肢も出さない。

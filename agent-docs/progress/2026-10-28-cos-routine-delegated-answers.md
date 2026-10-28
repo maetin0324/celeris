@@ -30,12 +30,16 @@ ADR: [2026-10-28-cos-routine-delegated-answers](../adr/2026-10-28-cos-routine-de
 - 試験: `crates/task-api/tests/cos_routine_answers.rs`（新規 5 件。fake harness = CoS run の credential で API を呼ぶ試験、LLM なし）、
   `crates/celeris/src/config/cos_tests.rs` の分類名の試験。既存の CoS 試験は代答に basis を付けた
   （phase gate の代答は推奨の無い途中確認なので、人の入力を `instructed_by` にする形に変えた）。
+- attempt 3（ADR 付記 A1）: main から入った `cos_integrate_task` の試験が basis 無しの `integrate_task` の代答で 422 になった。
+  `integrate_task` を選べる統合の依頼の受信箱項目は `recommended` を `integrate_task` にし（`task-ops` の `human_inbox.rs`）、
+  CoS は `documented_default`（refs に `agent-docs/adr/2026-10-28-cos-integrate-task.md`）で代答する。skill の統合の依頼の節にも書いた。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
 - `cargo nextest run -p task-api --test cos_routine_answers`: 5 passed。
 - `bash scripts/dev/test-affected.sh`: exit 0（Rust 4702 passed・20 skipped、web の unit 689 passed、文書検査・source-size gate 通過）。
 - attempt 2: attempt 1 は `check-doc-links` で落ちた（試験の fixture の `agent-docs/progress/2026-10-19-multi-axis-eval.md` と `agent-docs/adr/../../etc/x.md` を実在しない参照と判定）。前者を実在する本 task の進捗ファイルへ替え、後者は `concat!` で分けて書いた。`sh scripts/dev/check-doc-links.sh`: ok。
+- attempt 3: `cargo nextest run -p task-api --test cos_integrate_task`: 3 passed。`bash scripts/dev/test-affected.sh`: exit 0（Rust 5380 passed・21 skipped、web の unit 689 passed、web/server 105 pass）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 - `python3 scripts/dev/check-human-text.py`: 0 findings。`sh scripts/dev/progress-index.sh --check`: ok。
 

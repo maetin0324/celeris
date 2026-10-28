@@ -9,6 +9,7 @@ mod common;
 use std::path::Path;
 use std::process::Command;
 
+use common::cos_ops::with_basis;
 use common::*;
 use serde_json::{Value, json};
 use task_core::chat::triage::CosTriageSource;
@@ -268,6 +269,7 @@ async fn cos_integrate_task_resolves_the_conflict_and_closes_the_original_reques
     assert_eq!(items.len(), 1, "{items:?}");
     let item = &items[0];
     assert_eq!(item["options"][0]["key"], "integrate_task");
+    assert_eq!(item["recommended"], "integrate_task");
     let native = format!(
         "/api/v1/tasks/{}/integration-requests/{}/integrate-task",
         fx.original.id, fx.request_id
@@ -281,11 +283,15 @@ async fn cos_integrate_task_resolves_the_conflict_and_closes_the_original_reques
         &app,
         post_json_with(
             &format!("/api/v1/cos/inbox/{triage}/resolve"),
-            &resolve_body(
-                "k-it",
-                "r1",
-                "answer",
-                json!({"answer": {"option": "integrate_task", "note": "両方の呼び出しを残す"}}),
+            &with_basis(
+                resolve_body(
+                    "k-it",
+                    "r1",
+                    "answer",
+                    json!({"answer": {"option": "integrate_task", "note": "両方の呼び出しを残す"}}),
+                ),
+                json!({"category": "documented_default",
+                       "refs": [{"kind": "adr", "id": "agent-docs/adr/2026-10-28-cos-integrate-task.md"}]}),
             ),
             &[("authorization", bearer.as_str())],
         ),

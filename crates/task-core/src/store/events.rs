@@ -310,12 +310,22 @@ impl SqliteStore {
         task_id: TaskId,
         event: &Event,
     ) -> Result<u64, StoreError> {
+        Self::append_event_tx_at(conn, task_id, event, OffsetDateTime::now_utc())
+    }
+
+    /// Append an event using the caller's clock, including its derived rows.
+    pub fn append_event_tx_at(
+        conn: &Connection,
+        task_id: TaskId,
+        event: &Event,
+        now: OffsetDateTime,
+    ) -> Result<u64, StoreError> {
         let next_seq: i64 = conn.query_row(
             "SELECT COALESCE(MAX(seq), -1) + 1 FROM events WHERE task_id = ?1",
             params![task_id.to_string()],
             |row| row.get(0),
         )?;
-        let ts = format_rfc3339(OffsetDateTime::now_utc())?;
+        let ts = format_rfc3339(now)?;
         let json = serde_json::to_string(event)?;
         conn.execute(
             "INSERT INTO events (task_id, seq, ts, json) VALUES (?1, ?2, ?3, ?4)",

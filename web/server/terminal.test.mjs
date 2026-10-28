@@ -110,7 +110,7 @@ after(async () => {
   daemon.close();
 });
 
-async function startWeb(overrides = {}, { password = true, extraEnv = {} } = {}) {
+async function startWeb(overrides = {}, { password = true, extraEnv = {}, app: appOptions = {} } = {}) {
   const config = {
     ...terminalConfig({
       CELERIS_WEB_TERMINAL_LAUNCHER: "inline",
@@ -129,6 +129,7 @@ async function startWeb(overrides = {}, { password = true, extraEnv = {} } = {})
     failedLoginDelayMs: 0,
     log: () => {},
     terminal: { config },
+    ...appOptions,
   });
   const server = http.createServer(app);
   server.on("upgrade", app.locals.browserLiveUpgrade);
@@ -181,9 +182,13 @@ async function ready(port) {
 }
 
 // WebSocket を開く。upgrade の拒否は { rejected: status, code }、開けば { ws, messages, text }。
-function connect(port, cookie, { target = "local", host = `127.0.0.1:${port}`, origin = `http://${host}` } = {}) {
+function connect(
+  port,
+  cookie,
+  { target = "local", host = `127.0.0.1:${port}`, origin = `http://${host}`, extra = {} } = {},
+) {
   return new Promise((resolve) => {
-    const headers = { host };
+    const headers = { host, ...extra };
     if (cookie) headers.cookie = cookie;
     if (origin !== null) headers.origin = origin;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/terminal/ws?target=${target}&cols=90&rows=30`, { headers });
@@ -353,6 +358,44 @@ test("terminal: upgrade requires login, step-up, same origin and an allowed entr
   assert.equal(opens.length, before + 1);
   // 形の違う target。
   assert.deepEqual(await connect(port, cookie, { target: "cluster:a%20b" }), { rejected: 403, code: "invalid_target" });
+});
+
+test("terminal: behind the HTTPS front the public origin opens and its http origin is rejected", async () => {
+  // tailscale serve が TLS を終端し、Host を保って X-Forwarded-Proto: https で loopback から渡す（ADR 2026-10-28-web-https-front-pwa）。
+  const ts = "celeris.example.ts.net";
+  const { port } = await startWeb(
+    {},
+    { extraEnv: { CELERIS_WEB_TERMINAL_HOSTS: ts }, app: { publicOrigins: `https://${ts}` } },
+  );
+  const proxy = { "x-forwarded-proto": "https" };
+  const raw = await request(port, "POST", "/login", {
+    headers: { host: ts, origin: `https://${ts}`, accept: "application/json", ...proxy },
+    body: { password: "pw" },
+  });
+  assert.equal(raw.status, 200);
+  assert.match(raw.headers["set-cookie"][0], /; Secure/i);
+  const cookie = raw.headers["set-cookie"][0].split(";")[0];
+  const step = await request(port, "POST", "/terminal/step-up", {
+    headers: { host: ts, origin: `https://${ts}`, cookie, ...proxy },
+    body: { password: "pw" },
+  });
+  assert.equal(step.status, 200, step.text);
+  assert.deepEqual(await connect(port, cookie, { host: ts, origin: `http://${ts}`, extra: proxy }), {
+    rejected: 403,
+    code: "origin_mismatch",
+  });
+  const state = await connect(port, cookie, { host: ts, origin: `https://${ts}`, extra: proxy });
+  assert.ok(state.ws, `rejected: ${state.code}`);
+  const { id } = await opened(state);
+  state.ws.close();
+  await closedRecord(id);
+  // 直の 127.0.0.1 は従来どおり http の Origin で開く。
+  const local = await ready(port);
+  const direct = await connect(port, local);
+  assert.ok(direct.ws, `rejected: ${direct.code}`);
+  const opened2 = await opened(direct);
+  direct.ws.close();
+  await closedRecord(opened2.id);
 });
 
 test("terminal: a disconnected cluster is not opened and the screen is told why", async () => {

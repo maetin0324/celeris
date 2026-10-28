@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer } from "ws";
 import { guardUpgradeSocket, rejectUpgrade } from "./browser-live.js";
+import { createOriginPolicy } from "./origin.js";
 import { parseUpstream, readTokenFile } from "./relay.js";
 
 // web 端末（ADR 2026-10-27-web-terminal）。
@@ -99,6 +100,7 @@ function size(value, fallback, max) {
 
 export function createTerminal({
   auth,
+  origins = createOriginPolicy(),
   daemonUrl,
   daemonTokenFile,
   config = terminalConfig(),
@@ -424,7 +426,7 @@ export function createTerminal({
     if (url.pathname !== "/terminal/ws") return reject(socket, 403, "not_found");
     const verdict = admission(req);
     if (verdict.code) return reject(socket, verdict.status, verdict.code);
-    const self = `${socket.encrypted ? "https" : "http"}://${req.headers.host}`.toLowerCase();
+    const self = origins.selfOrigin(req).toLowerCase();
     const origin = req.headers.origin;
     if (typeof origin !== "string" || origin.toLowerCase() !== self) return reject(socket, 403, "origin_mismatch");
     if (!stepUpUntil(verdict.key)) return reject(socket, 403, "step_up_required");

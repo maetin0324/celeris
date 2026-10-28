@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import express from "express";
+import { createOriginPolicy } from "./origin.js";
 
 // 認証と session（agent-docs/web/implementation-plan.md P1-05、H3 の決まるまでの扱い）。
 // - 認証が有効になるのは CELERIS_WEB_PASSWORD_FILE があるとき（非 loopback では app.js が必須にする）。
@@ -71,6 +72,7 @@ export function createAuth({
   passwordFile = process.env.CELERIS_WEB_PASSWORD_FILE,
   secretFile = process.env.CELERIS_WEB_SESSION_SECRET_FILE,
   now = () => Date.now(),
+  origins = createOriginPolicy(),
   failedDelayMs = FAILED_LOGIN_DELAY_MS,
 } = {}) {
   const passwordDigest = passwordFile ? digest(readTrimmed(passwordFile, "CELERIS_WEB_PASSWORD_FILE")) : null;
@@ -126,7 +128,7 @@ export function createAuth({
   }
 
   function cookieOptions(req) {
-    return { httpOnly: true, sameSite: "strict", secure: Boolean(req.socket.encrypted), path: "/" };
+    return { httpOnly: true, sameSite: "strict", secure: origins.secure(req), path: "/" };
   }
 
   function register(app) {

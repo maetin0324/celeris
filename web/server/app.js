@@ -10,6 +10,7 @@ import { createChat } from "./chat.js";
 import { createConsole } from "./console.js";
 import { createEvents } from "./events.js";
 import { createFiles } from "./files.js";
+import { createOriginPolicy, parsePublicOrigins } from "./origin.js";
 import { createRelay } from "./relay.js";
 import { isSpaRoute } from "./spa-routes.js";
 import { createTerminal, terminalConfig } from "./terminal.js";
@@ -22,7 +23,7 @@ const defaultCsp = "default-src 'none'; base-uri 'none'; object-src 'none'; fram
 // composer のローカル添付 preview（URL.createObjectURL）は画像だけ blob: を許可する。
 // web 端末の xterm.js は描画用の `<style>` 要素を作る（ADR 2026-10-27-web-terminal D5）。`style-src-elem` だけ広げ、
 // script と style 属性は従来どおり。
-const htmlCsp = `${defaultCsp.replace("object-src 'none'", "object-src 'self'")}; frame-src 'self'; script-src 'self'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self'`;
+const htmlCsp = `${defaultCsp.replace("object-src 'none'", "object-src 'self'")}; frame-src 'self'; script-src 'self'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; connect-src 'self'; manifest-src 'self'; img-src 'self' data: blob:; font-src 'self'`;
 const fingerprint = /-[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9]+$/;
 
 export function parseBind(value = "127.0.0.1:7720") {
@@ -47,9 +48,11 @@ export function readPasswordFile(file) {
   return password;
 }
 
-export function validateConfig({ bind, passwordFile }) {
+export function validateConfig({ bind, passwordFile, publicOrigins = [] }) {
   if (!isLoopback(bind.host) && !passwordFile)
     throw new Error("CELERIS_WEB_PASSWORD_FILE is required for non-loopback bind");
+  if (publicOrigins.length > 0 && !passwordFile)
+    throw new Error("CELERIS_WEB_PASSWORD_FILE is required with CELERIS_WEB_PUBLIC_ORIGINS");
   if (passwordFile) readPasswordFile(passwordFile);
 }
 
@@ -63,14 +66,12 @@ function hostName(authority) {
   return (match[1] ?? match[2]).toLowerCase();
 }
 
-function selfOrigin(req) {
-  return `${req.socket.encrypted ? "https" : "http"}://${req.headers.host}`;
-}
-
 export function createApp({
   bind = parseBind(process.env.CELERIS_WEB_BIND),
   passwordFile = process.env.CELERIS_WEB_PASSWORD_FILE,
   allowedHosts = process.env.CELERIS_WEB_ALLOWED_HOSTS ?? "",
+  // HTTPS 前段（tailscale serve 等）の公開 origin。origin.js を参照。
+  publicOrigins = process.env.CELERIS_WEB_PUBLIC_ORIGINS ?? "",
   distDir = path.join(webRoot, "dist"),
   release = process.env.CELERIS_WEB_RELEASE ?? packageInfo.release ?? "dev",
   log = (entry) => process.stderr.write(`${JSON.stringify(entry)}\n`),
@@ -90,10 +91,12 @@ export function createApp({
   now = Date.now,
   registerRoutes = () => {},
 } = {}) {
-  validateConfig({ bind, passwordFile });
-  const auth = createAuth({ passwordFile, secretFile, now, failedDelayMs: failedLoginDelayMs });
+  const origins = createOriginPolicy({ publicOrigins: parsePublicOrigins(publicOrigins) });
+  validateConfig({ bind, passwordFile, publicOrigins: origins.publicOrigins });
+  const auth = createAuth({ passwordFile, secretFile, now, failedDelayMs: failedLoginDelayMs, origins });
   const browser = createBrowserLive({
     auth,
+    origins,
     daemonUrl,
     daemonTokenFile,
     liveUpstream,
@@ -107,6 +110,7 @@ export function createApp({
   // web 端末（ADR 2026-10-27-web-terminal）。daemon が無ければ開けない（状態は `terminal_unavailable`）。
   const terminal = createTerminal({
     auth,
+    origins,
     daemonUrl,
     daemonTokenFile,
     log,
@@ -137,6 +141,8 @@ export function createApp({
     const host = hostName(value.trim());
     if (host) allowed.add(host);
   }
+  // 公開 origin の host は Allowed Host にも入る（CELERIS_WEB_ALLOWED_HOSTS に重ねて書かなくてよい）。
+  for (const host of origins.hosts()) allowed.add(host);
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", false);
@@ -164,7 +170,7 @@ export function createApp({
       const site = req.headers["sec-fetch-site"];
       if (
         (origin !== undefined &&
-          (typeof origin !== "string" || origin.trim().toLowerCase() !== selfOrigin(req).toLowerCase())) ||
+          (typeof origin !== "string" || origin.trim().toLowerCase() !== origins.selfOrigin(req).toLowerCase())) ||
         (site !== undefined &&
           (typeof site !== "string" || !["same-origin", "none"].includes(site.trim().toLowerCase())))
       )
@@ -186,6 +192,17 @@ export function createApp({
       },
     }),
   );
+  // ホーム画面に置くための manifest と icon（ADR 2026-10-28-web-https-front-pwa D2）。login 前にも読める。
+  app.get("/manifest.webmanifest", (_req, res, next) =>
+    res.sendFile(
+      "manifest.webmanifest",
+      { root: distDir, headers: { "Content-Type": "application/manifest+json" } },
+      (error) => {
+        if (error && !res.headersSent) next(error);
+      },
+    ),
+  );
+  app.use("/icons", express.static(path.join(distDir, "icons"), { fallthrough: false }));
   auth.register(app);
   browser.register(app);
   terminal.register(app);

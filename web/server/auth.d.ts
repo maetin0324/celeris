@@ -1,4 +1,5 @@
 import type { Express, Request } from "express";
+import type { OriginPolicy } from "./origin.js";
 
 export const SESSION_COOKIE_NAME: string;
 export const SESSION_MAX_AGE_SECONDS: number;
@@ -8,6 +9,7 @@ export function createAuth(options?: {
   passwordFile?: string;
   secretFile?: string;
   now?: () => number;
+  origins?: OriginPolicy;
   failedDelayMs?: number;
 }): {
   enabled: boolean;

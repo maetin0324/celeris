@@ -5,6 +5,7 @@ import { request as httpsRequest } from "node:https";
 import { createServer as createSocketServer } from "node:net";
 import path from "node:path";
 import express from "express";
+import { createOriginPolicy } from "./origin.js";
 import { parseUpstream, readTokenFile } from "./relay.js";
 import { assertSocketPath } from "./socket-path.js";
 
@@ -149,6 +150,7 @@ function pathFor(task, run, session, suffix) {
 
 export function createBrowserLive({
   auth,
+  origins = createOriginPolicy(),
   daemonUrl,
   daemonTokenFile,
   liveUpstream,
@@ -189,7 +191,7 @@ export function createBrowserLive({
     return x.length === y.length && timingSafeEqual(x, y);
   }
   function mutation(req, session, candidate) {
-    const origin = `${req.socket.encrypted ? "https" : "http"}://${req.headers.host}`;
+    const origin = origins.selfOrigin(req);
     return req.headers.origin === origin && same(candidate, csrf(session));
   }
   function assertion(task, run, session, ownerSession) {
@@ -243,7 +245,7 @@ export function createBrowserLive({
     return {
       httpOnly: true,
       sameSite: "strict",
-      secure: Boolean(req.socket.encrypted),
+      secure: origins.secure(req),
       path: DEVICE_COOKIE_PATH,
       ...(expiresAtSecs === undefined ? {} : { maxAge: Math.max(0, expiresAtSecs * 1000 - now()) }),
     };
@@ -255,7 +257,7 @@ export function createBrowserLive({
     res.cookie(DEVICE_COOKIE_NAME, `${device.id}.${secret}`, deviceCookieOptions(req, device.expires_at));
   }
   function sameOrigin(req) {
-    return req.headers.origin === `${req.socket.encrypted ? "https" : "http"}://${req.headers.host}`;
+    return req.headers.origin === origins.selfOrigin(req);
   }
   function isOwner(session) {
     return Boolean(owner && owner.session === session && owner.expires > now());
@@ -769,8 +771,7 @@ export function createBrowserLive({
       if (!auth.enabled) return problem(res, 403, "owner_unavailable");
       const session = auth.sessionKey(req);
       if (!session) return problem(res, 401, "unauthenticated");
-      if (req.headers.origin !== `${req.socket.encrypted ? "https" : "http"}://${req.headers.host}`)
-        return problem(res, 403, "origin_mismatch");
+      if (req.headers.origin !== origins.selfOrigin(req)) return problem(res, 403, "origin_mismatch");
       for (const [key, item] of challenges)
         if (item.expires <= now() || item.session === session) challenges.delete(key);
       const challenge = randomBytes(6).toString("hex").toUpperCase();
@@ -1069,7 +1070,7 @@ export function createBrowserLive({
         `HTTP/1.1 ${status} Rejected\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n${JSON.stringify({ code })}`,
       );
     };
-    const origin = `${req.socket.encrypted ? "https" : "http"}://${req.headers.host}`;
+    const origin = origins.selfOrigin(req);
     if (req.headers.origin !== origin) return reject(403, "origin_mismatch");
     const who = ownerKey(req);
     if (!who.session) return reject(who.status, who.code);
@@ -1283,7 +1284,7 @@ export function createBrowserLive({
     };
     if (head.length) return reject(400, "invalid_websocket");
     if (!daemon || !token) return reject(503, "live_frame_stream_unavailable");
-    const origin = `${req.socket.encrypted ? "https" : "http"}://${req.headers.host}`;
+    const origin = origins.selfOrigin(req);
     if (req.headers.origin !== origin) return reject(403, "origin_mismatch");
     let binding = bindings.get(who.session);
     if (!binding) {

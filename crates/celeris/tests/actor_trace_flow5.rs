@@ -138,7 +138,7 @@ async fn redelivery_and_restart_duplicate_no_operation_or_count() {
     };
     assert_eq!(
         h.store
-            .cos_triage_ingest_batch("events", "1", &[source.clone()], at(11))
+            .cos_triage_ingest_batch("events", "1", std::slice::from_ref(&source), at(11))
             .unwrap(),
         0
     );

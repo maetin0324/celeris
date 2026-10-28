@@ -22,6 +22,7 @@ mod session_tests;
 pub(crate) mod store;
 #[cfg(test)]
 mod store_tests;
+mod system_request;
 pub mod triage;
 #[cfg(test)]
 mod triage_tests;

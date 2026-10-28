@@ -1,5 +1,6 @@
 //! Flow 5: redelivery of the same request/event and a restarted CoS run duplicate neither
-//! operations nor any evaluation count.
+//! operations nor any evaluation count. The person's observed answer (wait and active work) is
+//! re-sent and re-read after reopening the log and the store; the human-ops report must not move.
 #[path = "actor_trace/support.rs"]
 mod support;
 use serde_json::{Value, json};
@@ -12,6 +13,10 @@ use task_core::{Event, SqliteStore, TaskStore};
 const HUMAN_DECISION: &str = "human-budget";
 const HUMAN: &str = "human:web";
 const RESTARTED_RUN: &str = "actor-trace-cos-2";
+/// The person's question is open from the request (6) to the answer (8): human wait 2 s.
+const WAIT: (i64, i64) = (6, 8);
+/// The person works on the answer from 7 to the answer (8): human active time 1 s.
+const ACTIVE: (i64, i64) = (7, 8);
 
 /// Flow 2 material: a request outside the authorization, answered by the person.
 fn raise_human_decision(h: &Harness) -> DecisionRequest {
@@ -44,7 +49,7 @@ fn raise_human_decision(h: &Harness) -> DecisionRequest {
         &Event::DecisionRequested {
             decision: Box::new(request.clone()),
         },
-        6,
+        WAIT.0,
     );
     request
 }
@@ -64,6 +69,42 @@ fn relay(h: &Harness) -> task_core::chat::ChatMessagePosted {
             at(7),
         )
         .unwrap()
+}
+
+/// The human-ops view of the report: counts, times, actor counts and the history of every item.
+fn human_view(report: &Value) -> Value {
+    let trial = &report["trials"][0];
+    json!({
+        "interventions": trial["interventions"],
+        "by_actor_kind": trial["interventions_by_actor_kind"],
+        "human_time": trial["human_time"],
+        "human_wait": trial["human_wait"],
+        "items": trial["intervention_items"],
+        "history": trial["intervention_items"]["value"].as_array().unwrap().iter()
+            .map(|i| i["history"].clone()).collect::<Vec<_>>(),
+    })
+}
+
+/// Re-send the person's observation with the same record_ids and rebuild the report.
+fn resend_human_answer(
+    h: &Harness,
+    observed: &std::path::Path,
+    base: &Outputs,
+    base_counts: &Value,
+) {
+    let lines = std::fs::read_to_string(observed).unwrap();
+    let outcomes = record_human_answer(observed, h, HUMAN_DECISION, "web", WAIT, ACTIVE);
+    assert_eq!(outcomes.len(), 4);
+    assert!(
+        outcomes
+            .iter()
+            .all(|o| *o == celeris_campaign::human_ops::AppendOutcome::Duplicate)
+    );
+    assert_eq!(std::fs::read_to_string(observed).unwrap(), lines);
+    let again = h.outputs(observed);
+    assert_eq!(human_view(&again.report), human_view(&base.report));
+    assert_eq!(counts(h, &again), *base_counts);
+    assert_eq!(again.report, base.report);
 }
 
 /// Every count the evaluation reads, taken from the real outputs and the store.
@@ -107,11 +148,73 @@ async fn redelivery_and_restart_duplicate_no_operation_or_count() {
     let reply = fake_cos_response().await;
     let op = h.answer(&item, &revision, &reply);
     raise_human_decision(&h);
-    task_ops::decision::answer(&h.store, HUMAN_DECISION, Some("keep"), None, HUMAN, at(8)).unwrap();
+    task_ops::decision::answer(
+        &h.store,
+        HUMAN_DECISION,
+        Some("keep"),
+        None,
+        HUMAN,
+        at(WAIT.1),
+    )
+    .unwrap();
     assert!(relay(&h).created);
     let observed = record_observed_operation(&h, &op, &revision);
+    let outcomes = record_human_answer(&observed, &h, HUMAN_DECISION, "web", WAIT, ACTIVE);
+    assert_eq!(outcomes.len(), 4);
+    assert!(
+        outcomes
+            .iter()
+            .all(|o| *o == celeris_campaign::human_ops::AppendOutcome::Appended)
+    );
     let first = h.outputs(&observed);
     let before = counts(&h, &first);
+    // Baseline: one human intervention with known positive active time, kept apart from the wait.
+    let base = human_view(&first.report);
+    assert_eq!(
+        base["interventions"]["value"]["safety_approval"], 1,
+        "{base}"
+    );
+    assert_eq!(
+        base["by_actor_kind"]["value"],
+        json!({"cos_project": 1, "human": 1})
+    );
+    assert_eq!(
+        base["human_time"]["value"]["union_secs"],
+        ACTIVE.1 - ACTIVE.0
+    );
+    assert_eq!(base["human_time"]["value"]["sum_secs"], ACTIVE.1 - ACTIVE.0);
+    assert_eq!(base["human_time"]["value"]["observed"], 1);
+    assert_eq!(base["human_time"]["value"]["lower_bound"], false);
+    assert_eq!(base["human_wait"]["value"]["union_secs"], WAIT.1 - WAIT.0);
+    assert_eq!(base["human_wait"]["value"]["lower_bound"], false);
+    assert_ne!(
+        base["human_wait"]["value"]["union_secs"],
+        base["human_time"]["value"]["union_secs"]
+    );
+    let answer = first
+        .export
+        .records
+        .iter()
+        .find(|r| r["record_type"] == "intervention" && r["actor_kind"] == "human")
+        .unwrap();
+    // The observation's person and task are the ones of the exported answer.
+    assert_eq!(answer["actor_id"], "web");
+    assert_eq!(answer["task_id"], h.task.id.to_string());
+    let item = base["items"]["value"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["request_ref"] == format!("decision:decision-{HUMAN_DECISION}"))
+        .unwrap();
+    assert_eq!(item["human"], true);
+    let history = item["history"].as_array().unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(
+        history[0]["executed_by"],
+        json!({"kind": "human", "id": "web"})
+    );
+    assert_eq!(history[0]["counts_as_human"], true);
+    assert_eq!(history[0]["duration_secs"], ACTIVE.1 - ACTIVE.0);
     assert_eq!(before["cos_operations"], 1, "{before}");
     assert_eq!(before["decision_answered"], 2, "{before}");
     assert_eq!(before["interventions_by_actor_kind"]["cos_project"], 1);
@@ -123,7 +226,7 @@ async fn redelivery_and_restart_duplicate_no_operation_or_count() {
     assert_eq!(before["chat_runs"], 1);
     assert_eq!(before["requests"], 1, "{before}");
     assert_eq!(before["report_excluded"]["non_human"]["cos_project"], 1);
-    assert_eq!(before["report_items"], 1, "{before}");
+    assert_eq!(before["report_items"], 2, "{before}");
 
     // Redelivery of the same event: the inbox source is re-ingested with the same revision.
     let source = CosTriageSource {
@@ -159,6 +262,8 @@ async fn redelivery_and_restart_duplicate_no_operation_or_count() {
     // Evaluator's observation re-sent: same record_id, no new line.
     let resent = record_observed_operation(&h, &op, &revision);
     assert_eq!(resent, observed);
+    // The person's observation re-sent with the same record_ids: the report does not move.
+    resend_human_answer(&h, &observed, &first, &before);
 
     // Restart: the store (dispatcher side) is reopened; run-loss recovery and re-claim find nothing.
     h.store = SqliteStore::open(&h.db).unwrap();
@@ -214,6 +319,9 @@ async fn redelivery_and_restart_duplicate_no_operation_or_count() {
             Some(at(14)),
         )
         .unwrap();
+
+    // After reopening the log and the store, the person's observation is re-sent once more.
+    resend_human_answer(&h, &observed, &first, &before);
 
     // Projections and exports run again after the restart.
     let second = h.outputs(&observed);

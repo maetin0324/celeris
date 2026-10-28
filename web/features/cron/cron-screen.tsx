@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import type { CronJobRun, CronJobView, CronRunOutcome } from "../../api/generated/types";
+import type { ChatMessage, CronJobRun, CronJobView, CronRunOutcome } from "../../api/generated/types";
 import { ActionResultView, useActionResult } from "../../components/actions/use-action-result";
+import { Markdown } from "../../components/content/markdown";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Badge } from "../../components/ui/badge";
@@ -9,7 +10,7 @@ import { Button } from "../../components/ui/button";
 import { CodeBlock } from "../../components/ui/code-block";
 import { DataList } from "../../components/ui/data-list";
 import { formatAbsolute } from "../../lib/time";
-import { cronDetailQuery, cronKey, cronListQuery, cronPath } from "./queries";
+import { cronDetailQuery, cronKey, cronListQuery, cronPath, REVIEW_THREAD_PAGE, reviewThreadQuery } from "./queries";
 
 const outcomes: Record<CronRunOutcome, string> = {
   created: "タスクを作成",
@@ -84,9 +85,71 @@ function Job({ job, disabled, showTitle = true }: { job: CronJobView; disabled: 
           { label: "実行予定", value: `${job.schedule} · ${job.timezone}` },
           { label: "次回", value: <Time value={job.next_fire_at} /> },
           { label: "前回の結果", value: job.last_run ? <RunSummary run={job.last_run} /> : "実行履歴なし" },
+          ...(job.review_thread_id ? [{ label: "見直しの記録", value: <ReviewThreadLink jobId={job.id} /> }] : []),
         ]}
       />
       <Actions job={job} disabled={disabled} />
+    </section>
+  );
+}
+// ADR 2026-10-28-cos-review-back-thread D6: the cos_review job runs in the review thread (裏 thread), which
+// the home never shows. The cron screen links to it and shows its messages read only: no composer, no actions.
+export const REVIEW_THREAD_ANCHOR = "review-thread";
+function ReviewThreadLink({ jobId }: { jobId: string }) {
+  return (
+    <Link
+      to="/cron/$id"
+      params={{ id: jobId }}
+      hash={REVIEW_THREAD_ANCHOR}
+      className="inline-flex min-h-11 min-w-11 items-center text-primary underline"
+    >
+      見直しの記録を読む（読み取り専用）
+    </Link>
+  );
+}
+const speakers: Record<ChatMessage["role"], string> = {
+  user: "見直しの依頼",
+  assistant: "CoS",
+  system: "システム",
+};
+const messageStates: Partial<Record<ChatMessage["state"], string>> = {
+  queued: "順番待ち",
+  running: "実行中",
+  cancelled: "取り消し済み",
+  interrupted: "中断",
+  failed: "失敗",
+};
+/** The review thread's messages, newest first. Read only: there is no form to post with. */
+export function ReviewThreadMessages({ messages }: { messages: ChatMessage[] }) {
+  if (messages.length === 0) return <p>見直しの記録はまだありません。</p>;
+  return (
+    <ol className="space-y-3">
+      {messages.map((message) => (
+        <li
+          key={message.id}
+          className="min-w-0 space-y-1 break-words border-b border-border pb-3"
+          data-role={message.role}
+        >
+          <p className="text-label text-muted-foreground">
+            {speakers[message.role]} · <Time value={message.created_at} />
+            {messageStates[message.state] && <> · {messageStates[message.state]}</>}
+          </p>
+          <Markdown source={message.text} />
+        </li>
+      ))}
+    </ol>
+  );
+}
+function ReviewThreadHistory({ threadId }: { threadId: string }) {
+  const query = useQuery(reviewThreadQuery(threadId));
+  return (
+    <section id={REVIEW_THREAD_ANCHOR} aria-label="見直しの記録" className="space-y-3">
+      <h2 className="text-section font-semibold">見直しの記録（読み取り専用）</h2>
+      <p className="text-label text-muted-foreground">
+        統括 CoS が人の会話とは別の裏の会話で行った定期見直しの入力と返事です。新しい順に最大 {REVIEW_THREAD_PAGE}{" "}
+        件。人に伝える事があった回だけ、CoS がホームの会話に報告します。ここからは書き込めません。
+      </p>
+      <FetchFrame query={query}>{query.data && <ReviewThreadMessages messages={query.data} />}</FetchFrame>
     </section>
   );
 }
@@ -120,6 +183,7 @@ export function CronDetailScreen({ id }: { id: string }) {
                 {JSON.stringify(query.data.job.template, null, 2)}
               </CodeBlock>
             </details>
+            {query.data.job.review_thread_id && <ReviewThreadHistory threadId={query.data.job.review_thread_id} />}
             <section aria-label="実行履歴" className="space-y-3">
               <h2 className="text-section font-semibold">実行履歴</h2>
               <p className="text-label text-muted-foreground">新しい順に最大 50 件</p>

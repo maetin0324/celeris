@@ -43,4 +43,16 @@ describe("chat threads model", () => {
     expect(api.read).toHaveBeenCalledWith("pa", { through_seq: 9 });
     expect(model.state.items[0].unread_count).toBe(0);
   });
+
+  it("chat_threads_drop_the_review_thread_even_if_the_api_returns_it", async () => {
+    const api = mockApi();
+    const model = new ThreadsModel(api);
+    const review = thread({ id: "rv", kind: "review", title: "統括 CoS（定期見直し）" });
+    api.list.mockResolvedValue({ items: [general, review, projectA], next_cursor: null });
+    await model.load();
+    expect(model.state.items.map((item) => item.id)).toEqual(["general", "pa"]);
+    api.read.mockResolvedValue({ thread: { ...review, read_through_seq: 3 } });
+    await model.markRead("rv", 3);
+    expect(model.state.items.map((item) => item.id)).toEqual(["general", "pa"]);
+  });
 });

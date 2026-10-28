@@ -4,6 +4,13 @@ import { listThreads, openThread, readThread } from "../data/client";
 // ADR 2026-10-28-single-human-window-general-cos D5: the person talks to the general CoS. The home
 // opens it; a project's CoS thread is opened for reading from a card (札) or the project page.
 // Nobody creates threads: `open` returns the fixed CoS thread of a scope.
+// ADR 2026-10-28-cos-review-back-thread D1: the review thread (定期見直しの裏 thread) never shows on the home.
+// The API leaves it out of the list; the model drops `kind = review` too, so the home stays clean either way.
+
+/** The threads the home may show: everything but the review thread. */
+export function homeThreads(items: ChatThread[]): ChatThread[] {
+  return items.filter((item) => item.kind !== "review");
+}
 
 export type ThreadApi = {
   list: typeof listThreads;
@@ -39,7 +46,7 @@ export class ThreadsModel {
     for (const listener of this.listeners) listener();
   }
   private replace(thread: ChatThread) {
-    this.set({ items: [...this.state.items.filter((item) => item.id !== thread.id), thread] });
+    this.set({ items: homeThreads([...this.state.items.filter((item) => item.id !== thread.id), thread]) });
   }
 
   /** The general CoS thread once loaded or opened. */
@@ -52,7 +59,7 @@ export class ThreadsModel {
     this.set({ loading: true, error: null });
     try {
       const response = await this.api.list({ status: "open", limit: 100 });
-      this.set({ items: response.items, loading: false });
+      this.set({ items: homeThreads(response.items), loading: false });
     } catch {
       this.set({ loading: false, error: OPEN_ERROR });
     }

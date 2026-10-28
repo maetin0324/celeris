@@ -33,6 +33,27 @@
 監査 event も注入した時刻で追記し、保存済み events の時刻を書き換えて試験を成立させない。
 機能や保存形式は変えない。
 
+## 付記（2026-10-28、流れ 2）: 人へ回した後の CoS の operation を要求に寄せる
+
+[論理要求の台帳](2026-10-27-eval-request-ledger.md) の欠落を流れ 2 で見つけて直した（付記はこの ADR に置く。台帳 ADR の本文は変えていない）。
+人へ回した item は `escalated` のまま `operation_id` を持たない。その後に CoS が取り次ぎ（`instructed_by`）を根拠に
+答えた operation は item から辿れず、`operations` と台帳 ADR D8 の `instructed_by:`・`relay:` が台帳から落ちていた。
+
+- 要求の item から辿れない operation のうち、対象が要求の decision（`target_kind=decision`、`target_id` が key の decision id）か
+  受信箱の件（`target_kind=inbox`、`target_id` が key）で、作成が最初の revision の開始以後、state が
+  `applied`・`superseded`・`needs_remediation` のものを同じ要求に寄せる（`rejected`・`pending` は寄せない）。
+- 寄せた operation は `operations` と `policy_refs`（方針版・`instructed_by:`・`relay:`）に出す。解決の主体は従来どおり
+  解決 event の `by` で決める。migration は無い。
+- 試験: `request_ledger_tests::later_operation_on_an_escalated_request_is_linked_by_its_target`、
+  `crates/celeris/tests/actor_trace_flow2.rs`。
+
+## 付記（2026-10-28、流れ 2）: 取り次ぎの検査（D3）に時刻を渡す入口
+
+流れ 2 は固定時計で [指示の取り次ぎ](2026-10-27-relayed-instructions.md) D3 の検査を通す。
+`task_api::cos::operations::inbox_answer_instruction_at(store, ctx, message_id, item_id, task_id, now)` を足した。
+route が `inbox.answer` で使う検査（`instructed_message`）と payload・reason の頭を、時刻を受け取って返す。
+route は従来どおり壁時計を渡し、検査の内容と保存形式は変えていない。
+
 ## 関連
 
 - [介入の主体](2026-10-27-decision-log-intervention-actors.md)

@@ -95,6 +95,36 @@ fn relayer_actor(relayed_by: &str) -> (&'static str, &str) {
     }
 }
 
+/// The audit reason prefix and the `instructed_by` payload an operation records for a valid instruction.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstructionRecord {
+    pub reason_prefix: String,
+    pub payload: Value,
+}
+
+/// D3 at the time `now`, for `inbox.answer` on human inbox item `item_id` whose task is `task_id`
+/// (the target the route derives from the inbox feed). The same check and payload as the route,
+/// for callers that inject the clock.
+pub fn inbox_answer_instruction_at(
+    store: &SqliteStore,
+    ctx: &AuditContext,
+    message_id: &str,
+    item_id: &str,
+    task_id: Option<&str>,
+    now: time::OffsetDateTime,
+) -> Result<InstructionRecord, String> {
+    let target = OperationTarget {
+        kind: "inbox",
+        id: item_id.to_owned(),
+        task_id: task_id.map(str::to_owned),
+    };
+    let instruction = instructed_message(store, ctx, message_id, Some(&target), now)?;
+    Ok(InstructionRecord {
+        reason_prefix: instruction.reason_prefix(),
+        payload: instruction.payload(),
+    })
+}
+
 /// D3: the message `instructed_by` names, when it is the `role=user` input of the caller's run
 /// in a CoS thread, or a relayed instruction of that thread in scope at `now`
 /// (ADR 2026-10-27-relayed-instructions D3). Otherwise the reason it is refused

@@ -22,6 +22,7 @@ use task_core::store::SqliteStore;
 use ulid::Ulid;
 
 mod instructions;
+pub use instructions::{InstructionRecord, inbox_answer_instruction_at};
 use instructions::{instructed_message, operation_target};
 
 use super::{CosCaller, cos_only, cos_problem, reject_identity_claims};

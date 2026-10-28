@@ -388,3 +388,80 @@ fn renotified_notice_is_one_row_and_unknowns_stay_null() {
     assert!(json["requests"][0]["resolved"].is_null());
     assert!(json["requests"][0]["campaign"].is_null());
 }
+
+/// 人へ回した要求（item は escalated のまま operation を持たない）に後から CoS が取り次ぎを根拠に答えた operation は、
+/// 対象の decision で同じ要求に寄り、根拠の参照が `policy_refs` に残る。別の decision への operation は寄せない。
+#[test]
+fn later_operation_on_an_escalated_request_is_linked_by_its_target() {
+    use crate::chat::{AuditContext, ChatActor, ChatOpenThreadRequest};
+    let s = SqliteStore::open_in_memory().unwrap();
+    let task = super::super::tests::sample_task(Status::Draft);
+    s.create_task(&task, vec![]).unwrap();
+    let t = task.id;
+    append_at(&s, t, &requested("D9", t), "2026-10-27T10:00:00Z");
+    let src = source("decision", "decision-D9", "2026-10-27T10:00:00Z", t);
+    s.cos_triage_ingest_batch("events", "1", &[src], at("2026-10-27T10:00:01Z"))
+        .unwrap();
+    let item = item_id(&s, "decision-D9", "2026-10-27T10:00:00Z");
+    let thread = thread_of(&s, &item);
+    s.cos_triage_claim(&thread, "run-triage", at("2026-10-27T10:00:02Z"))
+        .unwrap()
+        .unwrap();
+    assert!(
+        s.cos_triage_resolve(&item, "escalated", None, None, at("2026-10-27T10:00:03Z"))
+            .unwrap()
+    );
+    let other = s
+        .cos_thread_open(
+            &ChatOpenThreadRequest { project_id: None },
+            at("2026-10-27T10:00:00Z"),
+        )
+        .unwrap()
+        .thread
+        .id;
+    let apply = |thread: &str, key: &str, decision: &str, ts: &str| {
+        let ctx = AuditContext {
+            actor: ChatActor::Cos,
+            thread_id: thread.into(),
+            run_id: "run-relay".into(),
+            operation_id: ulid::Ulid::new().to_string(),
+            reason: "人の指示".into(),
+            policy_version: "5".into(),
+        };
+        let payload = serde_json::json!({"instructed_by": {"message_id": "m-relay",
+            "decided_by": {"kind": "human", "id": null,
+                "relayed_by": {"kind": "external_operator", "id": "claude-code"}}}});
+        s.cos_operation_apply_at(
+            &ctx,
+            key,
+            "h",
+            "decision",
+            decision,
+            None,
+            "decision.answer",
+            &payload,
+            at(ts),
+            |_, _| Ok(serde_json::json!({})),
+        )
+        .unwrap()
+    };
+    let op = apply(&thread, "k1", "D9", "2026-10-27T10:05:00Z");
+    apply(&other, "k2", "D-other", "2026-10-27T10:06:00Z");
+    let ledger = s
+        .request_ledger(at("2026-10-27T09:00:00Z"), at("2026-10-27T11:00:00Z"))
+        .unwrap();
+    assert_eq!(ledger.requests.len(), 1);
+    let row = &ledger.requests[0];
+    assert_eq!(row.operations, vec![op.id]);
+    for r in [
+        "instructed_by:m-relay",
+        "relay:external_operator:claude-code",
+        "cos_operation_policy:5",
+    ] {
+        assert!(
+            row.policy_refs.iter().any(|p| p == r),
+            "{r}: {:?}",
+            row.policy_refs
+        );
+    }
+}

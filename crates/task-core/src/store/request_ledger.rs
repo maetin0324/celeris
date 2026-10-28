@@ -34,9 +34,12 @@ struct Item {
 
 struct Op {
     state: String,
+    created_at: String,
     updated_at: String,
     policy_version: String,
     payload_json: String,
+    target_kind: String,
+    target_id: String,
 }
 
 struct ChatRun {
@@ -90,16 +93,19 @@ fn read_raw(conn: &Connection) -> Result<Raw, StoreError> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
     let mut stmt =
-        conn.prepare("SELECT id,state,updated_at,policy_version,payload_json FROM cos_operations")?;
+        conn.prepare("SELECT id,state,created_at,updated_at,policy_version,payload_json,target_kind,target_id FROM cos_operations")?;
     let ops = stmt
         .query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 Op {
                     state: r.get(1)?,
-                    updated_at: r.get(2)?,
-                    policy_version: r.get(3)?,
-                    payload_json: r.get(4)?,
+                    created_at: r.get(2)?,
+                    updated_at: r.get(3)?,
+                    policy_version: r.get(4)?,
+                    payload_json: r.get(5)?,
+                    target_kind: r.get(6)?,
+                    target_id: r.get(7)?,
                 },
             ))
         })?
@@ -445,19 +451,7 @@ impl SqliteStore {
             };
             if let Some((op_id, op)) = op {
                 operations.insert(op_id.clone());
-                policy.insert(format!("cos_operation_policy:{}", op.policy_version));
-                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&op.payload_json)
-                    && let Some(by) = payload.get("instructed_by")
-                {
-                    if let Some(m) = by.get("message_id").and_then(|v| v.as_str()) {
-                        policy.insert(format!("instructed_by:{m}"));
-                    }
-                    if let Some(r) = by.get("decided_by").and_then(|d| d.get("relayed_by")) {
-                        let kind = r.get("kind").and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let id = r.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                        policy.insert(format!("relay:{kind}:{id}"));
-                    }
-                }
+                operation_refs(op, &mut policy);
                 if is_overridden(&op.state) {
                     let to = items[n + 1..]
                         .iter()
@@ -561,10 +555,35 @@ impl SqliteStore {
                 resolved,
             });
         }
-        // 外部 operator の一次対応（D4）: 関係 task への operator の comment か、`by = operator:` の event。
         let first_start = starts[0];
         let after_first =
             |at: Option<OffsetDateTime>| at.is_some_and(|at| first_start.is_none_or(|s| at >= s));
+        // 人へ回した item は escalated のまま operation を持たないので、その後に CoS が要求の対象（decision・
+        // 受信箱の件）へ行った operation を同じ要求に寄せる（D8 の根拠の参照を落とさない。却下・未決は除く）。
+        let decisions: Vec<&str> = decision_ids.iter().flatten().map(String::as_str).collect();
+        let mut later: Vec<(&String, &Op)> = raw
+            .ops
+            .iter()
+            .filter(|(id, op)| {
+                !operations.contains(*id)
+                    && matches!(
+                        op.state.as_str(),
+                        "applied" | "superseded" | "needs_remediation"
+                    )
+                    && match op.target_kind.as_str() {
+                        "decision" => decisions.contains(&op.target_id.as_str()),
+                        "inbox" => keys.contains(&op.target_id),
+                        _ => false,
+                    }
+                    && after_first(ts(&op.created_at))
+            })
+            .collect();
+        later.sort_by(|a, b| a.0.cmp(b.0));
+        for (op_id, op) in later {
+            operations.insert(op_id.clone());
+            operation_refs(op, &mut policy);
+        }
+        // 外部 operator の一次対応（D4）: 関係 task への operator の comment か、`by = operator:` の event。
         let mut stmt = conn.prepare(
             "SELECT id,author,created_at FROM task_comments WHERE task_id=?1 AND author_kind='operator'",
         )?;
@@ -642,6 +661,23 @@ impl SqliteStore {
             operations: operations.into_iter().collect(),
             campaign: None,
         })
+    }
+}
+
+/// operation の方針版と、根拠にした人の発言・取り次ぎの参照（D8）。
+fn operation_refs(op: &Op, policy: &mut BTreeSet<String>) {
+    policy.insert(format!("cos_operation_policy:{}", op.policy_version));
+    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&op.payload_json)
+        && let Some(by) = payload.get("instructed_by")
+    {
+        if let Some(m) = by.get("message_id").and_then(|v| v.as_str()) {
+            policy.insert(format!("instructed_by:{m}"));
+        }
+        if let Some(r) = by.get("decided_by").and_then(|d| d.get("relayed_by")) {
+            let kind = r.get("kind").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let id = r.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            policy.insert(format!("relay:{kind}:{id}"));
+        }
     }
 }
 

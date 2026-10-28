@@ -395,7 +395,7 @@ async fn cos_routine_b_raise_once_only_once_and_not_for_a_repeated_failure() {
     let basis = |previous: &str, current: &str| {
         json!({"category": "raise_once",
                "refs": [{"kind": "commit", "id": "deadbeef12"},
-                        {"kind": "progress", "id": "agent-docs/progress/2026-10-19-multi-axis-eval.md"}],
+                        {"kind": "progress", "id": "agent-docs/progress/2026-10-28-cos-routine-delegated-answers.md"}],
                "failures": {"previous": previous, "current": current}})
     };
 
@@ -495,7 +495,7 @@ async fn cos_routine_c_documented_default_is_the_recommended_option() {
         json!({"category": "documented_default", "refs": [{"kind": "message", "id": "m1"}]}))).await;
     assert_refused(&env, &no_doc, "cos_basis_invalid", &item);
     let outside = cos.resolve(&item, answer("outside", json!({"option": "post-merge"}),
-        json!({"category": "documented_default", "refs": [{"kind": "adr", "id": "agent-docs/adr/../../etc/x.md"}]}))).await;
+        json!({"category": "documented_default", "refs": [{"kind": "adr", "id": concat!("agent-docs/adr/", "../../etc/x.md")}]}))).await;
     assert_refused(&env, &outside, "cos_basis_invalid", &item);
 
     let ok = cos

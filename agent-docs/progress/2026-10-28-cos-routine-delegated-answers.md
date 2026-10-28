@@ -35,6 +35,7 @@ ADR: [2026-10-28-cos-routine-delegated-answers](../adr/2026-10-28-cos-routine-de
 
 - `cargo nextest run -p task-api --test cos_routine_answers`: 5 passed。
 - `bash scripts/dev/test-affected.sh`: exit 0（Rust 4702 passed・20 skipped、web の unit 689 passed、文書検査・source-size gate 通過）。
+- attempt 2: attempt 1 は `check-doc-links` で落ちた（試験の fixture の `agent-docs/progress/2026-10-19-multi-axis-eval.md` と `agent-docs/adr/../../etc/x.md` を実在しない参照と判定）。前者を実在する本 task の進捗ファイルへ替え、後者は `concat!` で分けて書いた。`sh scripts/dev/check-doc-links.sh`: ok。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 - `python3 scripts/dev/check-human-text.py`: 0 findings。`sh scripts/dev/progress-index.sh --check`: ok。
 

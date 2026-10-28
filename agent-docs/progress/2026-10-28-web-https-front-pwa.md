@@ -21,7 +21,9 @@ updated: 2026-10-28
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - `cd web && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test` → exit 0（vitest 697 passed、node --test 113 passed）
 - `node --test web/server/origin.test.mjs` → 7 passed、`node --test web/server/terminal.test.mjs` → 7 passed
-- `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` → 報告本文に記載
+- `bash scripts/dev/test-affected.sh` → exit 0（対象は web: typecheck+unit。node --test 113 passed）
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0
+- `sh scripts/dev/progress-index.sh --check`・`python3 scripts/dev/check-architecture-map.py`・`check-doc-layout.sh`・`check-doc-links.sh` → exit 0
 
 ## 本番への移行
 - 人が行う: `tailscale serve --bg --https=443 http://127.0.0.1:7720`、`~/.config/celeris/web.env` に

@@ -16,6 +16,8 @@ updated: 2026-10-28
 - `cos-inbox-chat-summary: schema 版数の試験と進捗を合わせる`
 - `cos-inbox-chat-summary: 進捗に検査結果を書く`
 - `cos-inbox-chat-summary: daemon の要約の依頼を人の送信待ちと分け、取消と失敗時の積み直しを足す`
+- `cos-inbox-chat-summary: daemon の依頼の store 関数を chat/system_request.rs へ移す`（store.rs の行数上限 2000 のため）
+- `cos-inbox-chat-summary: 進捗を差し戻し対応後の検査結果に合わせる`
 
 ## 何をしたか
 
@@ -34,7 +36,7 @@ updated: 2026-10-28
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
-- `bash scripts/dev/test-affected.sh` → exit 0。nextest 6688 件 passed（21 skipped）、web vitest 100 files / 690 tests passed、tsc -b 通過。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 6691 件 passed（21 skipped）、web vitest 100 files / 691 tests passed、tsc -b 通過。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
 

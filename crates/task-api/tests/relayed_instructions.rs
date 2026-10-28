@@ -109,12 +109,16 @@ fn relay_request(key: &str, text: &str, said_at: OffsetDateTime, task_ids: &[Str
     })
 }
 
+/// The policy version the daemon records for each CoS run in these tests;
+/// `/cos/operations` rejects any other version with 422.
+const RUN_POLICY_VERSION: &str = "4";
+
 fn answer_op(key: &str, inbox_id: &str, instructed_by: Option<&str>) -> Value {
     json!({
         "idempotency_key": key,
         "expected_revision": null,
         "reason": "manual で続ける",
-        "policy_version": "4",
+        "policy_version": RUN_POLICY_VERSION,
         "instructed_by": instructed_by,
         "request": {"method": "POST", "path": format!("/api/v1/inbox/items/{inbox_id}/answer"),
                     "body": {"option": "manual", "note": "人の指示どおり"}},
@@ -125,7 +129,7 @@ fn run_bearer(env: &TestEnv, thread: &str, run: &str) -> String {
     let bearer = task_api::cos::issue_run_bearer(&env.store, thread, run, Duration::hours(1))
         .expect("issue");
     env.store
-        .chat_run_record_policy(run, "4", "test")
+        .chat_run_record_policy(run, RUN_POLICY_VERSION, "test")
         .expect("policy");
     format!("Bearer {bearer}")
 }
@@ -766,7 +770,7 @@ async fn relay_scope_maps_a_closed_authorization_item_to_its_task() {
             "idempotency_key": key,
             "expected_revision": null,
             "reason": "人の指示どおり",
-            "policy_version": "6",
+            "policy_version": RUN_POLICY_VERSION,
             "instructed_by": relay,
             "request": {"method": "POST", "path": format!("/api/v1/inbox/items/{item}/answer"),
                         "body": {"option": "once"}},

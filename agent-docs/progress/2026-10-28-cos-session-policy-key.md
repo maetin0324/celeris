@@ -58,6 +58,22 @@ commit（件名）:
 - `bash scripts/dev/test-affected.sh` → exit 0（6655 passed、21 skipped。web の tsc と unit も通過）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
+## main から入った試験の修正（fix-relay-test）
+
+- 原因: main から入った `crates/task-api/tests/relayed_instructions.rs` の
+  `relay_scope_maps_a_closed_authorization_item_to_its_task` は、CoS 操作の body に自己申告の版 "6" を書いていた。
+  `run_bearer` は run に版 "4" を記録する。本 task で `/cos/operations` は daemon が run に記録した版と照合するので、
+  期待の 409 `cos_revision_conflict` の前に 422 `cos_policy_version_mismatch` になった。
+- 修正: 試験ファイルに定数 `RUN_POLICY_VERSION`（"4"）を置き、`run_bearer`・`answer_op`・当該試験で共有した。
+  `CosTriageSource` の `policy_version`（triage 取り込みの記録で照合対象ではない）は変えていない。本体コードは変えていない。
+- 他の試験: `crates/task-api/tests` と `crates/task-dispatch` の CoS 操作の `policy_version` と `chat_run_record_policy` の版を
+  grep で照合した。食い違いは他に無かった。
+- commit: 「phase 1: relayed_instructions 試験の送る版を run の方針の版に合わせる」
+- 検査（提出時の HEAD で実行。基準は `git merge-base HEAD main`）:
+  - `cargo test -p task-api --test relayed_instructions` → 5 passed。
+  - `bash scripts/dev/test-affected.sh` → exit 0（nextest 4718 passed、20 skipped。web unit 105 pass）。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+
 ## 本番への移行
 
 - migration 0100 は昇格時に自動で当たる。既存の session 行は `policy_key` が NULL なので、配備後の最初の run はどの thread も

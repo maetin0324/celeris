@@ -12,7 +12,7 @@ use serde_json::json;
 use task_core::SqliteStore;
 use task_core::chat::{
     ChatMessage, ChatMessageQuery, ChatRunSessionMode, ChatRunState, ChatSessionKey,
-    ChatThreadQuery,
+    ChatThreadKind, ChatThreadQuery,
 };
 use task_worker::adapter::{RunLimits, WorkerAdapter};
 use task_worker::protocol::{
@@ -85,7 +85,7 @@ pub(crate) fn path_with_first(
 const COS_INBOX_CONTEXT_ITEMS: usize = 50;
 
 /// ADR 2026-10-08-cos-chat-prompt-cache T5: the skills mounted for a CoS chat run.
-/// `cos-operator` always; `cos-inbox-triage` in a general/project CoS thread or when the run is
+/// `cos-operator` always; `cos-inbox-triage` in a general/project/review CoS thread or when the run is
 /// handed inbox items, so a legacy thread does not get the triage procedure. Authorization does not
 /// depend on this: `/cos/operations` and the inbox resolve API enforce it whatever was mounted.
 pub(crate) fn cos_chat_skills(
@@ -97,6 +97,29 @@ pub(crate) fn cos_chat_skills(
         skills.push("cos-inbox-triage".to_string());
     }
     skills
+}
+
+/// What a CoS chat run of a thread is handed: project summaries and unresolved inbox items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CosContextScope {
+    /// Every project's summary and every thread's items.
+    All,
+    /// The thread's own project and the thread's own items.
+    Project,
+    /// Neither.
+    None,
+}
+
+/// ADR 2026-10-22-cos-fixed-threads D3 and 2026-10-27-project-brief D5: the general CoS overlooks
+/// every project and thread, a project CoS its own, a legacy thread gets nothing. ADR
+/// 2026-10-28-cos-review-back-thread D3': the review thread's run is the general CoS's, so it gets
+/// the same as the general thread (and the same skills through [`cos_chat_skills`]).
+pub(crate) fn cos_context_scope(kind: Option<ChatThreadKind>) -> CosContextScope {
+    match kind {
+        Some(ChatThreadKind::General | ChatThreadKind::Review) => CosContextScope::All,
+        Some(ChatThreadKind::Project) => CosContextScope::Project,
+        Some(ChatThreadKind::Legacy) | None => CosContextScope::None,
+    }
 }
 
 /// `cos_inbox_items` row → worker context item (no judgment; the packet is copied as recorded).
@@ -368,20 +391,14 @@ impl CosChatLaunch {
         selection_metadata: serde_json::Value,
         now: OffsetDateTime,
     ) -> Result<(), String> {
-        // ADR 2026-10-22-cos-fixed-threads D3: a project CoS sees its project's unresolved items;
-        // the general CoS overlooks every thread's. Legacy threads get none.
         let thread = self
             .store
             .chat_thread_get(thread_id)
             .map_err(|e| e.to_string())?;
-        let kind = thread.as_ref().map(|t| t.kind);
-        // ADR 2026-10-27-project-brief D5: the general CoS sees every project's summary; a project
-        // CoS its own project's. Legacy threads get none.
-        let projects = match kind {
-            Some(task_core::chat::ChatThreadKind::General) => {
-                super::projects::project_summaries(&self.store, None)?
-            }
-            Some(task_core::chat::ChatThreadKind::Project) => {
+        let context_scope = cos_context_scope(thread.as_ref().map(|t| t.kind));
+        let projects = match context_scope {
+            CosContextScope::All => super::projects::project_summaries(&self.store, None)?,
+            CosContextScope::Project => {
                 match thread
                     .as_ref()
                     .and_then(|t| t.project_id.as_deref())
@@ -391,12 +408,12 @@ impl CosChatLaunch {
                     None => Vec::new(),
                 }
             }
-            _ => Vec::new(),
+            CosContextScope::None => Vec::new(),
         };
-        let scope = match kind {
-            Some(task_core::chat::ChatThreadKind::General) => Some(None),
-            Some(task_core::chat::ChatThreadKind::Project) => Some(Some(thread_id)),
-            _ => None,
+        let scope = match context_scope {
+            CosContextScope::All => Some(None),
+            CosContextScope::Project => Some(Some(thread_id)),
+            CosContextScope::None => None,
         };
         let in_inbox_thread = scope.is_some();
         let inbox_items = match scope {

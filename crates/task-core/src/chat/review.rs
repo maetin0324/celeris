@@ -91,6 +91,8 @@ impl SqliteStore {
     /// D2: the cron's review input, queued (`mode = queue`) in the review thread (created on
     /// first use). The only post the review thread accepts. `client_message_id` must start with
     /// [`COS_REVIEW_INPUT_KEY_PREFIX`]; a replay of the same key returns the same message.
+    /// A new input also clears `queue_paused` (a person's stop of a review run pauses the queue and
+    /// nobody may call `resume-queue` on the review thread), so the next review runs.
     pub fn cos_review_input_post(
         &self,
         client_message_id: &str,
@@ -114,7 +116,7 @@ impl SqliteStore {
                 attachment_ids: Vec::new(),
                 reply_to_id: None,
                 mode: ChatSendMode::Queue,
-                resume_queue: false,
+                resume_queue: true,
             },
             &MessageProvenance {
                 review_input: true,

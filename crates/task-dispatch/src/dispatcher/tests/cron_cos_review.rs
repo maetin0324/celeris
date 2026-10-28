@@ -1,11 +1,16 @@
-//! ADR 2026-10-27-cron-cos-review: a `cos_review` cron job queues one input per scheduled time in
-//! the general CoS thread. Injected clock; no CoS capacity, so no run (and no LLM) is started and
-//! the test only sees what the dispatcher itself wrote.
+//! ADR 2026-10-27-cron-cos-review: a `cos_review` cron job queues one input per scheduled time.
+//! ADR 2026-10-28-cos-review-back-thread D2: the input goes to the review (back) thread, never to
+//! the general CoS thread. Injected clock; most tests leave no CoS capacity, so no run (and no LLM)
+//! is started and they only see what the dispatcher itself wrote. The run-context test starts a
+//! fake-harness run (a shell script, no LLM).
 
 use super::*;
 use crate::dispatcher::cos_chat::launch::CosChatLaunchConfig;
 use crate::dispatcher::cos_chat::review::review_key;
-use task_core::chat::{ChatMessageRole, ChatMessageState, ChatOpenThreadRequest};
+use task_core::chat::{
+    ChatMessageRole, ChatMessageState, ChatOpenThreadRequest, ChatPostMessageRequest, ChatRunState,
+    ChatSendMode,
+};
 use task_core::{
     Project, ProjectBrief, ProjectBriefInput, ProjectId, ProjectStatus, WaitingOn, WaitingOnKind,
 };
@@ -27,7 +32,17 @@ fn daemon(
     // The worker command would fail if it ran. No worker slot and max_cos_runs = 0 (CoS shares
     // the worker slots) leave no CoS capacity, so it never does.
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(vec!["false".into()]));
-    let mut d = dispatcher(store.clone(), adapter, 0);
+    daemon_with(dir, store, clock, adapter, 0)
+}
+
+fn daemon_with(
+    dir: &crate::test_support::WritableTempDir,
+    store: &Arc<SqliteStore>,
+    clock: &Arc<StdMutex<OffsetDateTime>>,
+    adapter: Arc<dyn WorkerAdapter>,
+    slots: usize,
+) -> Dispatcher {
+    let mut d = dispatcher(store.clone(), adapter, slots);
     d.test_now = Some(clock.clone());
     d.config.execution.max_cos_runs = 0;
     d.config.min_free_disk_mb = 0;
@@ -140,17 +155,38 @@ fn general_thread(store: &SqliteStore) -> String {
         .id
 }
 
-/// User inputs of the general thread, oldest first: (client key, text, state).
-fn inputs(store: &SqliteStore) -> Vec<(String, String, ChatMessageState)> {
-    let thread = general_thread(store);
+fn review_thread(store: &SqliteStore) -> String {
     store
-        .chat_message_list(&thread, &Default::default())
+        .cos_review_thread_get()
+        .unwrap()
+        .expect("review thread")
+        .id
+}
+
+/// User inputs of the review thread, oldest first: (client key, text, state). Empty before the
+/// review thread exists.
+fn inputs(store: &SqliteStore) -> Vec<(String, String, ChatMessageState)> {
+    let Some(thread) = store.cos_review_thread_get().unwrap() else {
+        return Vec::new();
+    };
+    store
+        .chat_message_list(&thread.id, &Default::default())
         .unwrap()
         .items
         .into_iter()
         .filter(|m| m.role == ChatMessageRole::User)
         .map(|m| (m.client_message_id.unwrap_or_default(), m.text, m.state))
         .collect()
+}
+
+/// Every message of the general (person's) thread: the review never writes one.
+fn general_messages(store: &SqliteStore) -> usize {
+    let thread = general_thread(store);
+    store
+        .chat_message_list(&thread, &Default::default())
+        .unwrap()
+        .items
+        .len()
 }
 
 fn outcomes(store: &SqliteStore, job: &CronJob) -> Vec<(String, CronRunOutcome)> {
@@ -179,6 +215,7 @@ async fn cos_review_queues_one_input_per_period_and_a_restart_does_not_duplicate
 
     tick_at(&mut d, &clock, "2026-10-27T00:59:59Z");
     assert!(inputs(&store).is_empty(), "not before the scheduled time");
+    assert!(store.cos_review_thread_get().unwrap().is_none());
 
     tick_at(&mut d, &clock, "2026-10-27T01:00:00Z");
     let first = inputs(&store);
@@ -202,8 +239,10 @@ async fn cos_review_queues_one_input_per_period_and_a_restart_does_not_duplicate
         outcomes(&store, &job),
         vec![("2026-10-27T01:00:00Z".into(), CronRunOutcome::Created)]
     );
-    // The dispatcher only queued the input: no CoS run was started.
+    // The dispatcher only queued the input: no CoS run was started, and the person's general
+    // thread got neither the input nor a reply.
     assert_eq!(chat_runs(&dir), 0);
+    assert_eq!(general_messages(&store), 0);
 
     // Later ticks of the same period add nothing.
     tick_at(&mut d, &clock, "2026-10-27T01:00:30Z");
@@ -243,7 +282,7 @@ async fn cos_review_queues_one_input_per_period_and_a_restart_does_not_duplicate
 
     // Once the first input left the queue, the next period queues a second input; the brief
     // did not change since the previous review, so it is not listed again.
-    let thread = general_thread(&store);
+    let thread = review_thread(&store);
     let first_id = store
         .chat_message_by_client_id(&thread, &first_key)
         .unwrap()
@@ -273,6 +312,7 @@ async fn cos_review_queues_one_input_per_period_and_a_restart_does_not_duplicate
     tick_at(&mut d, &clock, "2026-10-27T03:00:30Z");
     assert_eq!(inputs(&store).len(), 2);
     assert_eq!(chat_runs(&dir), 0);
+    assert_eq!(general_messages(&store), 0);
 }
 
 #[tokio::test]
@@ -287,6 +327,7 @@ async fn cos_review_without_cos_chat_records_an_error_and_posts_nothing() {
     d.config.min_free_disk_mb = 0;
     tick_at(&mut d, &clock, "2026-10-27T01:00:00Z");
     assert!(inputs(&store).is_empty());
+    assert!(store.cos_review_thread_get().unwrap().is_none());
     let runs = store.cron_job_runs(job.id, None).unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].outcome, CronRunOutcome::Error);
@@ -298,4 +339,265 @@ async fn cos_review_without_cos_chat_records_an_error_and_posts_nothing() {
             .contains("not configured"),
         "{runs:?}"
     );
+}
+
+/// D4: only the review thread's queue holds a review back. A person's queued message in the general
+/// thread does not make the review `skipped_overlap`.
+#[tokio::test]
+async fn cos_review_is_not_held_back_by_the_persons_queued_message_in_the_general_thread() {
+    let dir = crate::test_support::WritableTempDir::new();
+    let store = Arc::new(SqliteStore::open(&dir.path().join("celeris.db")).unwrap());
+    let clock = Arc::new(StdMutex::new(at("2026-10-27T00:59:00Z")));
+    let job = review_job(&store);
+    let general = general_thread(&store);
+    store
+        .chat_message_post(
+            &general,
+            &ChatPostMessageRequest {
+                client_message_id: "human-1".into(),
+                text: "進捗は?".into(),
+                attachment_ids: Vec::new(),
+                reply_to_id: None,
+                mode: ChatSendMode::Queue,
+                resume_queue: false,
+            },
+            at("2026-10-27T00:59:30Z"),
+        )
+        .unwrap();
+    let mut d = daemon(&dir, &store, &clock);
+    tick_at(&mut d, &clock, "2026-10-27T01:00:00Z");
+    assert_eq!(
+        outcomes(&store, &job),
+        vec![("2026-10-27T01:00:00Z".into(), CronRunOutcome::Created)]
+    );
+    assert_eq!(inputs(&store).len(), 1);
+    // The general thread still holds only the person's message.
+    assert_eq!(general_messages(&store), 1);
+}
+
+/// A person's stop of a review run pauses the review thread's queue, and nobody may resume it
+/// (`resume-queue` is 403 on the review thread). The next period still queues its review: an input
+/// left waiting is cancelled and the new input, which covers its period too, resumes the queue.
+#[tokio::test]
+async fn cos_review_queues_the_next_period_after_a_person_stopped_a_review_run() {
+    let dir = crate::test_support::WritableTempDir::new();
+    let store = Arc::new(SqliteStore::open(&dir.path().join("celeris.db")).unwrap());
+    let clock = Arc::new(StdMutex::new(at("2026-10-27T00:59:00Z")));
+    let job = review_job(&store);
+    project_with_brief(&store, "案件A", at("2026-10-27T01:30:00Z"));
+    let mut d = daemon(&dir, &store, &clock);
+    let paused = |store: &SqliteStore| {
+        store
+            .chat_thread_get(&review_thread(store))
+            .unwrap()
+            .unwrap()
+            .queue_paused
+    };
+
+    tick_at(&mut d, &clock, "2026-10-27T01:00:00Z");
+    let thread = review_thread(&store);
+    // A run takes the 01:00 input; the 02:00 input waits behind it; the person stops the run.
+    store
+        .chat_run_claim_next(
+            &thread,
+            "r1",
+            &serde_json::json!({}),
+            at("2026-10-27T01:01:00Z"),
+        )
+        .unwrap()
+        .expect("claim r1");
+    tick_at(&mut d, &clock, "2026-10-27T02:00:00Z");
+    assert_eq!(inputs(&store).len(), 2);
+    let stop = store
+        .chat_run_stop(&thread, "r1", at("2026-10-27T02:05:00Z"))
+        .unwrap();
+    assert!(stop.accepted && stop.response.queue_paused);
+    store
+        .chat_run_finish(
+            "r1",
+            ChatRunState::Stopped,
+            None,
+            None,
+            at("2026-10-27T02:06:00Z"),
+        )
+        .unwrap();
+    assert!(
+        store
+            .chat_thread_resume_queue(&thread, 0, at("2026-10-27T02:07:00Z"))
+            .is_err()
+    );
+
+    // The paused queue with a waiting input does not turn every later period into an overlap.
+    tick_at(&mut d, &clock, "2026-10-27T03:00:00Z");
+    let all = inputs(&store);
+    assert_eq!(all.len(), 3, "{all:?}");
+    assert_eq!(all[1].0, review_key(job.id, at("2026-10-27T02:00:00Z")));
+    assert_eq!(all[1].2, ChatMessageState::Cancelled);
+    assert_eq!(all[2].0, review_key(job.id, at("2026-10-27T03:00:00Z")));
+    assert_eq!(all[2].2, ChatMessageState::Queued);
+    // The new input covers the cancelled one's period: from the input the stopped run took.
+    assert!(
+        all[2].1.contains("前回の見直し 2026-10-27T01:00:00Z"),
+        "{}",
+        all[2].1
+    );
+    assert!(all[2].1.contains("案件A"), "{}", all[2].1);
+    assert!(!paused(&store), "the new input resumed the queue");
+    assert_eq!(
+        outcomes(&store, &job).last().unwrap(),
+        &("2026-10-27T03:00:00Z".into(), CronRunOutcome::Created)
+    );
+
+    // Stopped again with nothing waiting: the next period queues normally and resumes the queue.
+    store
+        .chat_run_claim_next(
+            &thread,
+            "r2",
+            &serde_json::json!({}),
+            at("2026-10-27T03:01:00Z"),
+        )
+        .unwrap()
+        .expect("claim r2");
+    store
+        .chat_run_stop(&thread, "r2", at("2026-10-27T03:05:00Z"))
+        .unwrap();
+    store
+        .chat_run_finish(
+            "r2",
+            ChatRunState::Stopped,
+            None,
+            None,
+            at("2026-10-27T03:06:00Z"),
+        )
+        .unwrap();
+    assert!(paused(&store));
+    tick_at(&mut d, &clock, "2026-10-27T04:00:00Z");
+    let all = inputs(&store);
+    assert_eq!(all.len(), 4, "{all:?}");
+    assert_eq!(all[3].0, review_key(job.id, at("2026-10-27T04:00:00Z")));
+    assert!(
+        all[3].1.contains("前回の見直し 2026-10-27T03:00:00Z"),
+        "{}",
+        all[3].1
+    );
+    assert!(!paused(&store));
+    assert_eq!(
+        outcomes(&store, &job).last().unwrap(),
+        &("2026-10-27T04:00:00Z".into(), CronRunOutcome::Created)
+    );
+    assert_eq!(general_messages(&store), 0);
+}
+
+/// D3': the review thread's run gets what a general CoS run gets (every project's summary, every
+/// thread's open inbox items, the same skills) in its own session, not the person's.
+#[test]
+fn cos_review_thread_runs_get_the_general_cos_context_scope() {
+    use crate::dispatcher::cos_chat::launch::{CosContextScope, cos_context_scope};
+    use task_core::chat::ChatThreadKind;
+    assert_eq!(
+        cos_context_scope(Some(ChatThreadKind::Review)),
+        cos_context_scope(Some(ChatThreadKind::General))
+    );
+    assert_eq!(
+        cos_context_scope(Some(ChatThreadKind::Review)),
+        CosContextScope::All
+    );
+    assert_eq!(
+        cos_context_scope(Some(ChatThreadKind::Project)),
+        CosContextScope::Project
+    );
+    assert_eq!(
+        cos_context_scope(Some(ChatThreadKind::Legacy)),
+        CosContextScope::None
+    );
+}
+
+#[tokio::test]
+async fn cos_review_run_has_the_general_cos_context_and_its_own_session() {
+    let dir = crate::test_support::WritableTempDir::new();
+    let store = Arc::new(SqliteStore::open(&dir.path().join("celeris.db")).unwrap());
+    let clock = Arc::new(StdMutex::new(at("2026-10-27T00:59:00Z")));
+    review_job(&store);
+    let a = project_with_brief(&store, "案件A", at("2026-10-27T00:30:00Z"));
+    let b = project_with_brief(&store, "案件B", at("2026-10-27T00:40:00Z"));
+    let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(vec![
+        "sh".into(),
+        "-c".into(),
+        "cat >/dev/null; echo '{\"type\":\"done\",\"summary\":\"変化なし\",\"evidence\":[]}'"
+            .into(),
+    ]));
+    let mut d = daemon_with(&dir, &store, &clock, adapter, 2);
+    d.config.execution.max_cos_runs = 1;
+    d.config.knowledge.root = dir.path().join("knowledge");
+    for name in ["cos-operator", "cos-inbox-triage"] {
+        let skill_dir = d.config.knowledge.root.join("skills").join(name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: test skill\n---\n# {name}\n"),
+        )
+        .unwrap();
+    }
+
+    tick_at(&mut d, &clock, "2026-10-27T01:00:00Z");
+    tick_at(&mut d, &clock, "2026-10-27T01:00:01Z");
+    let thread = review_thread(&store);
+    let handle = d
+        .cos_chat_launch
+        .as_mut()
+        .unwrap()
+        .running
+        .remove(&thread)
+        .expect("review run launched");
+    tokio::time::timeout(std::time::Duration::from_secs(30), handle)
+        .await
+        .expect("review run deadline")
+        .unwrap();
+
+    let runs = store.chat_run_list(&thread, None, None).unwrap().items;
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0].state, ChatRunState::Completed, "{runs:?}");
+    let request = dir
+        .path()
+        .join("cos/threads")
+        .join(&thread)
+        .join("workspace/runs")
+        .join(&runs[0].id)
+        .join("request.json");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&request).unwrap()).unwrap();
+    let chat = &json["context"]["cos_chat"];
+    assert_eq!(
+        chat["skills"],
+        serde_json::json!(["cos-operator", "cos-inbox-triage"]),
+        "{chat}"
+    );
+    let mut projects: Vec<String> = chat["projects"]
+        .as_array()
+        .expect("every project's summary")
+        .iter()
+        .map(|p| p["project_id"].as_str().unwrap_or_default().to_string())
+        .collect();
+    projects.sort();
+    let mut expected = vec![a.id.to_string(), b.id.to_string()];
+    expected.sort();
+    assert_eq!(projects, expected, "{chat}");
+
+    // The run's session belongs to the review thread, not to the person's general thread.
+    let session = store
+        .chat_run_session_record(&runs[0].id)
+        .unwrap()
+        .session_row_id
+        .expect("session");
+    let owner: String = rusqlite::Connection::open(dir.path().join("celeris.db"))
+        .unwrap()
+        .query_row(
+            "SELECT thread_id FROM node_sessions WHERE id=?1",
+            [&session],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(owner, thread);
+    assert_ne!(owner, general_thread(&store));
+    assert_eq!(general_messages(&store), 0);
 }

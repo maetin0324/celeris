@@ -1,10 +1,13 @@
-//! ADR 2026-10-27-cron-cos-review: a `cos_review` cron job posts one input per scheduled time to
-//! the general CoS thread. The input lists what changed since the previous review (project
-//! briefs, ADR 2026-10-27-project-brief) and the open stagnation findings (ADR
-//! 2026-10-27-project-stagnation-inbox). Store reads and one queued message only: the CoS run is
-//! started later by the normal queue claim, the dispatcher never calls an LLM here.
+//! ADR 2026-10-27-cron-cos-review: a `cos_review` cron job posts one input per scheduled time.
+//! ADR 2026-10-28-cos-review-back-thread D2: the input goes to the general CoS's back thread
+//! (kind `review`, hidden from the person's lists), never to the general thread. The input lists
+//! what changed since the previous review (project briefs, ADR 2026-10-27-project-brief) and the
+//! open stagnation findings (ADR 2026-10-27-project-stagnation-inbox). Store reads and one queued
+//! message only: the CoS run is started later by the normal queue claim, the dispatcher never
+//! calls an LLM here. The run reports to the person with `chat.review_report` only when there is
+//! something to tell (D4'/D5').
 
-use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
+use task_core::chat::{COS_REVIEW_INPUT_KEY_PREFIX, ChatMessageRole, ChatMessageState, ChatThread};
 use task_core::{CronJob, CronJobId, SqliteStore, TaskStore};
 use task_ops::cron_jobs::{CronInputPost, CronInputSink};
 use task_ops::stagnation::StagnationFinding;
@@ -19,9 +22,15 @@ pub(crate) const REVIEW_LIST_MAX: usize = 20;
 const REVIEW_STATE_CHARS: usize = 200;
 
 /// The instruction used when the job's `template.objective` is empty.
-pub(crate) const COS_REVIEW_INSTRUCTION: &str = "定期の見直しです。下は DB から決定的に集めた、前回の見直しから変わった案件の要約と、\
-いま出ている停滞の一覧です。案件をまたいで、人の操作待ちの長さ・停滞・優先・資源を確かめ、手を打つ必要がある案件だけ \
-GET /api/v1/projects/{id} で詳しく読んでください。変化が無く手を打つ必要も無ければ、そう 1 行だけ書いてください。";
+/// ADR 2026-10-28-cos-review-back-thread D5': report to the person only when there is something to
+/// tell, through `chat.review_report`; otherwise one line in this (review) thread.
+pub(crate) const COS_REVIEW_INSTRUCTION: &str = "定期の見直しです。この thread は統括 CoS の裏 thread で、人は読みません。\
+下は DB から決定的に集めた、前回の見直しから変わった案件の要約と、いま出ている停滞の一覧です。案件をまたいで、\
+人の操作待ちの長さ・停滞・優先・資源を確かめ、手を打つ必要がある案件だけ GET /api/v1/projects/{id} で詳しく読んでください。\
+人に伝えるべきこと（新しい停滞、人の判断が要る件、案件の要約の重要な変化）があるときだけ、chat.review_report \
+（POST /api/v1/cos/review-report、review_message_id はこの入力の id）で統括 CoS チャットに 1 件報告してください。\
+報告は人が数十秒で読める分量にし、案件名・task id・人がする事を書きます。伝えることが無ければ報告せず、\
+この thread に「変化なし」と 1 行だけ書いて終えてください。";
 
 /// The input's `client_message_id`: one per job and scheduled time, so a retry after a restart
 /// finds the same input instead of posting a second one.
@@ -54,7 +63,7 @@ impl CronInputSink for CosReviewSink<'_> {
         }
         let store = launch.store.as_ref();
         let thread = store
-            .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, self.now)
+            .cos_review_thread_open(self.now)
             .map_err(|e| e.to_string())?
             .thread;
         let key = review_key(job.id, scheduled_for);
@@ -63,36 +72,97 @@ impl CronInputSink for CosReviewSink<'_> {
             .map_err(|e| e.to_string())?
         {
             return Ok(CronInputPost::Posted(format!(
-                "input {} already in the general CoS thread {}",
+                "input {} already in the review thread {}",
                 existing.id, thread.id
             )));
         }
-        if thread.queued_count > 0 {
+        let mut previous = previous;
+        let mut note = String::new();
+        if thread.queue_paused {
+            // A person stopped a review run (`…/stop` pauses the queue) and nobody may resume the
+            // review thread's queue. The waiting inputs are dropped and this input, which resumes
+            // the queue, covers their period too, so the review does not skip forever.
+            let dropped = drop_queued_inputs(store, &thread, self.now)?;
+            if dropped > 0 {
+                previous = last_reviewed(store, &thread, job.id)?;
+                note = format!(
+                    " (the queue was paused: {dropped} waiting input(s) cancelled, period from {})",
+                    previous.map_or_else(|| "the first review".to_string(), rfc3339)
+                );
+            } else {
+                note = " (the paused queue was resumed)".into();
+            }
+        } else if thread.queued_count > 0 {
             return Ok(CronInputPost::Busy(format!(
-                "the general CoS thread {} still has {} queued input(s)",
+                "the review thread {} still has {} queued input(s)",
                 thread.id, thread.queued_count
             )));
         }
         let text = review_text(store, job, scheduled_for, previous, self.findings)?;
         let posted = store
-            .chat_message_post(
-                &thread.id,
-                &ChatPostMessageRequest {
-                    client_message_id: key,
-                    text,
-                    attachment_ids: Vec::new(),
-                    reply_to_id: None,
-                    mode: ChatSendMode::Queue,
-                    resume_queue: false,
-                },
-                self.now,
-            )
+            .cos_review_input_post(&key, &text, self.now)
             .map_err(|e| e.to_string())?;
         Ok(CronInputPost::Posted(format!(
-            "posted input {} to the general CoS thread {}",
+            "posted input {} to the review thread {}{note}",
             posted.response.message.id, thread.id
         )))
     }
+}
+
+/// Cancels the queued inputs of the (paused) review thread. Only cron inputs can be there.
+fn drop_queued_inputs(
+    store: &SqliteStore,
+    thread: &ChatThread,
+    now: OffsetDateTime,
+) -> Result<usize, String> {
+    if thread.queued_count == 0 {
+        return Ok(0);
+    }
+    let mut dropped = 0;
+    for message in queued_page(store, thread)? {
+        if message.role == ChatMessageRole::User && message.state == ChatMessageState::Queued {
+            store
+                .chat_message_cancel(&thread.id, &message.id, now)
+                .map_err(|e| e.to_string())?;
+            dropped += 1;
+        }
+    }
+    Ok(dropped)
+}
+
+fn queued_page(
+    store: &SqliteStore,
+    thread: &ChatThread,
+) -> Result<Vec<task_core::chat::ChatMessage>, String> {
+    Ok(store
+        .chat_message_list(&thread.id, &Default::default())
+        .map_err(|e| e.to_string())?
+        .items)
+}
+
+/// The scheduled time of this job's latest input a run took (not cancelled, not waiting): the
+/// start of the period an input replacing cancelled ones covers. `None` (every brief) when the
+/// recent messages hold none.
+fn last_reviewed(
+    store: &SqliteStore,
+    thread: &ChatThread,
+    job: CronJobId,
+) -> Result<Option<OffsetDateTime>, String> {
+    let prefix = format!("{COS_REVIEW_INPUT_KEY_PREFIX}{job}:");
+    Ok(queued_page(store, thread)?
+        .into_iter()
+        .rev()
+        .filter(|m| {
+            m.role == ChatMessageRole::User
+                && !matches!(
+                    m.state,
+                    ChatMessageState::Queued | ChatMessageState::Cancelled
+                )
+        })
+        .find_map(|m| {
+            let secs = m.client_message_id.as_deref()?.strip_prefix(&prefix)?;
+            OffsetDateTime::from_unix_timestamp(secs.parse().ok()?).ok()
+        }))
 }
 
 fn rfc3339(at: OffsetDateTime) -> String {

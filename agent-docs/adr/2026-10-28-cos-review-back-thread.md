@@ -1,7 +1,7 @@
 # ADR 2026-10-28: 定期見直しを統括 CoS の裏 thread で回し、変化があるときだけ統括 CoS チャットに報告する
 
 - 日付: 2026-10-28
-- 状態: 採用（実装は後の葉。名前はこの ADR に従う）
+- 状態: 採用・実装済み（2026-10-28。付記に実装との突き合わせ）
 - tasks: [01M61HW6RGHHRVAGRMQASDF9YY]
 - 改める ADR: [2026-10-27-cron-cos-review](2026-10-27-cron-cos-review.md)（D2 の積み先を置き換える。D1・D3〜D5 は保つ。旧 ADR に付記した）
 - 関連: [2026-10-22-cos-fixed-threads](2026-10-22-cos-fixed-threads.md)（統括・案件の固定 thread、session は thread ごと）、
@@ -131,3 +131,17 @@ skill（`cos-operator` の operation 表、`cos-inbox-triage` の定期見直し
 - 統括 thread の人の発言が見直しを止めなくなる（D4 の判定が review thread だけを見る）。
 - 名前（`review` 種別・`chat.review_report`・`POST /api/v1/cos/review-report`・`GET /api/v1/cos/review-thread`・
   `chat_thread_read_only`・`cos_review_report_invalid`）は後の葉がこの ADR に従う。
+
+## 付記（2026-10-28、実装との突き合わせ）
+
+- D4' の拒否の code: 呼び出した run が review thread の run でないとき（統括・案件の run）は 403 ではなく 422
+  `cos_review_report_invalid`（rejected で監査に残る）にした。人・operator・MCP の token が `POST /api/v1/cos/review-report` を
+  直接呼ぶと 422 `cos_review_report_invalid`、CoS run が operation を経ずに直接呼ぶと 422 `cos_audit_context_required`。
+  試験は `crates/task-api/tests/cos_operations_review_report.rs`（D8 の `cos_review_report.rs` の役）。
+- D1 の forwards: 宛先が review thread の `POST …/forwards` は task-core の `chat_relay_forward_tx` が 422 `validation`
+  （宛先は案件 thread だけ）で拒否し、`chat_thread_read_only` ではない。書き込みは起きない。
+- D4 の補足（止まった queue）: 人が review run を止めて queue が止まると、review thread の `resume-queue` は 403 なので
+  誰も戻せない。sink は次の周期に、待っている入力を取り消し、新しい入力を積んで queue を再開する（`cos_review_input_post` が
+  `queue_paused` を解く）。新しい入力の期間は run が取った最後の入力の予定時刻から始める。
+- D6 の 3 点目（統括 thread の報告の message から review thread へ移る導線）は web に置いていない。provenance
+  （`review_thread_id`・`review_message_id`）は message に入っており、cron の画面（`/cron/<job id>#review-thread`）から読める。

@@ -33,7 +33,7 @@ updated: 2026-10-28
 
 ### 未解決
 
-main基準の最終全5target検査・ADR/親進捗更新は後続WorkUnitの担当。
+main基準の最終全5target検査・ADR/親進捗更新は record で済ませた（下の「全検査と記録」）。
 
 ### 提案
 
@@ -59,8 +59,31 @@ main基準の最終全5target検査・ADR/親進捗更新は後続WorkUnitの担
 
 ### 未解決（流れ5）
 
-なし。全5targetの一括実行とADR・親進捗の更新は後続のrecordが担当する。
+なし。全5targetの一括実行とADR・親進捗の更新は record で済ませた。
 
 ### 提案（流れ5）
+
+なし。
+
+## 全検査と記録（record）
+
+完了日: 2026-10-28
+
+- `phase 2: 全検査の結果を記録し、ADRと進捗を証拠に合わせる` — コードは変えていない。ADR の「試験境界と共有部品」を流れ 4・5 の report 照合に合わせて書き直した（古い「本 WU は土台と流れ1のみ」を削除）。全体進捗の結果表に流れ 4 の report 照合と流れ 5 の人の観測記録の再送を足し、『未解決』と『提案』の流れ 5 の項目を解消済みに直した。
+
+### 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
+
+- `cargo test -p celeris --test actor_trace_flow1 --test actor_trace_flow2 --test actor_trace_flow3 --test actor_trace_flow4 --test actor_trace_flow5` → exit 0。5 target・6 試験が合格（1・1・2・1・1 件）、失敗 0。
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh --list` → exit 0。celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker の 13 crate と web（typecheck+unit）。
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` → exit 0。nextest 6,655 passed・21 skipped（307 binaries）、web vitest 685 passed（99 files）、node test 105 passed・fail 0、doc test 通過。前段の check-doc-links・check-adr-numbers（329 files）・check-human-text（0 findings）・progress-index --check・progress_index_commit_hashes も ok。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0、差分なし。
+- `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check` → 文書更新後に実行し、いずれも exit 0。
+
+### 未解決（record）
+
+なし。
+
+### 提案（record）
 
 なし。

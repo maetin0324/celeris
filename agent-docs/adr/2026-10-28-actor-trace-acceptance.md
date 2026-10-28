@@ -23,8 +23,10 @@
 - `crates/celeris/tests/actor_trace/support.rs` を各 flow の `#[path]` で読む。共有関数は追加で拡張し、既存の意味を変えない。root の tests/support は変更しない。
 - 一時 SQLite と固定 UTC を使う。既存の `tests/support/http_async.rs` の偽 HTTP を再利用し、決まった CoS 応答・usage を返す。接続先は loopback のみ。LLM、外部ネットワーク、sleep、負荷試験を使わない。
 - 流れ1は API と同じ decision の計画・transaction 適用、CoS 監査、triage claim/resolve、chat run 終了、daemon と同じ decision log 投影を通す。HTTP 認証・LLM harness 起動自体は既存の task-api/task-worker 試験の責務で、この試験の対象外。
-- export は `SqliteStore::decision_log_export_campaign`、report は `celeris_campaign::human_ops_report::build`、requests は `SqliteStore::request_ledger`。report の入力となる評価者の生記録は、成功した操作の実測 fixture を記録する。期待する report JSON を手で作らない。未観測の人の総労働時間を 0 と主張しない。
-- 本 WU は土台と流れ1のみ。流れ2〜5は後続 WU が実装する。`test-affected.sh` が通常の celeris integration test として選ぶ。
+- export は `SqliteStore::decision_log_export_campaign`、report は `celeris_campaign::human_ops_report::build`、requests は `SqliteStore::request_ledger`。report の入力となる評価者の生記録（human-ops /2）は、試験の中で実際に行った操作（一時 DB の人の回答、隔離 fixture の配備結果）から作り、`Harness::outputs` で既存 builder へ渡す。期待する report JSON を手で作らない。未観測の人の総労働時間・消費・人待ちを 0 と主張せず null のまま残す。
+- 流れ 4 は人の判断（human/manual の観測記録、判断者 human）と operator の実行（external_operator、promote・rollback 成功と start 失敗）を生記録にし、report の history・主体別件数・人の介入数と時間を、export・requests・deployment_audit の release・decision・task・request_ref・policy と照合する。report の history は targets・outcome を持たないので、logical_op_id で入力の生記録に結んで照合する。operator の所要時間は人の時間に足さない。
+- 流れ 5 は既存の人の回答に結ぶ human/manual の記録（人待ちと人の能動作業）を観測ログに足し、人の介入 1・人の能動時間が既知の正値の report を基準にする。同じ record_id の再送（request・event 再配送の直後と、SQLite store とログを開き直した後の 2 回）はどちらも重複として捨てられ、report の件数・時間・主体別件数・history と全体が変わらない。
+- 生記録は support.rs の既存 helper（流れ 4 は `human_record_base`）と、流れ 5 の補修で足した `record_human_answer` で書く。`test-affected.sh` が通常の celeris integration test として選ぶ。
 
 ## 付記: 固定時計の入口
 

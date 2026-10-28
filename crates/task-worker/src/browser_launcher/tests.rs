@@ -1050,14 +1050,29 @@ fn client_identifies_the_responding_process_not_the_listener_creator() {
     .expect("encode reply");
     let lfd = listener.as_raw_fd();
     // 応答は fork した子（launcher の役）が accept して書く。子は async-signal-safe な syscall だけを使う。
+    // client は長さの prefix と本文を別の write で送るので、子は要求の 1 frame を読み切ってから返事を
+    // 書く（1 回の read で返すと、本文を書く前の親が閉じた socket に書いて EPIPE になる）。返事の後は
+    // 親が client を閉じる（EOF）まで閉じない。
     // SAFETY: 子は accept/read/write/close/_exit だけを呼んで終わる。
     let child = match unsafe { nix::unistd::fork() }.expect("fork") {
         nix::unistd::ForkResult::Child => unsafe {
-            let c = libc::accept(lfd, std::ptr::null_mut(), std::ptr::null_mut());
+            let c = loop {
+                let c = libc::accept(lfd, std::ptr::null_mut(), std::ptr::null_mut());
+                if c >= 0 || *libc::__errno_location() != libc::EINTR {
+                    break c;
+                }
+            };
             if c >= 0 {
                 let mut buf = [0u8; 4096];
-                libc::read(c, buf.as_mut_ptr().cast(), buf.len());
-                libc::write(c, reply.as_ptr().cast(), reply.len());
+                let mut prefix = [0u8; 4];
+                let read_ok = child_read_exact(c, &mut prefix) && {
+                    let len = u32::from_be_bytes(prefix) as usize;
+                    len <= buf.len() && child_read_exact(c, &mut buf[..len])
+                };
+                if read_ok && child_write_all(c, &reply) {
+                    // 親が応答を読み終えて client を閉じるまで待つ。
+                    while child_read_some(c, &mut buf) > 0 {}
+                }
                 libc::close(c);
             }
             libc::_exit(0)
@@ -1092,7 +1107,57 @@ fn client_identifies_the_responding_process_not_the_listener_creator() {
     assert_ne!(responder.pid, me);
     assert_eq!(responder.uid, uid());
     assert_eq!(client.responder_uid(), Some(uid()));
+    // 子は EOF まで読むので、client を閉じてから回収する。
+    drop(client);
     nix::sys::wait::waitpid(child, None).expect("reap child");
+}
+
+/// fork した子の read。EINTR は再試行し、読めた byte 数（EOF は 0、失敗は負）を返す。
+/// async-signal-safe な syscall だけを使う。
+unsafe fn child_read_some(fd: nix::libc::c_int, buf: &mut [u8]) -> isize {
+    use nix::libc;
+    loop {
+        // SAFETY: buf は書ける長さ buf.len() の領域。
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+        // SAFETY: errno は thread ごとの値で、読むだけ。
+        if n >= 0 || unsafe { *libc::__errno_location() } != libc::EINTR {
+            return n;
+        }
+    }
+}
+
+/// fork した子で buf を埋めるまで読む（部分 read・EINTR を続ける）。EOF・失敗は false。
+unsafe fn child_read_exact(fd: nix::libc::c_int, buf: &mut [u8]) -> bool {
+    let mut got = 0;
+    while got < buf.len() {
+        // SAFETY: 呼び手と同じ条件（async-signal-safe な read だけ）。
+        let n = unsafe { child_read_some(fd, &mut buf[got..]) };
+        if n <= 0 {
+            return false;
+        }
+        got += n as usize;
+    }
+    true
+}
+
+/// fork した子で data を書き切る（部分 write・EINTR を続ける）。失敗は false。
+unsafe fn child_write_all(fd: nix::libc::c_int, data: &[u8]) -> bool {
+    use nix::libc;
+    let mut sent = 0;
+    while sent < data.len() {
+        let rest = &data[sent..];
+        // SAFETY: rest は読める長さ rest.len() の領域。
+        let n = unsafe { libc::write(fd, rest.as_ptr().cast(), rest.len()) };
+        if n < 0 {
+            // SAFETY: errno は thread ごとの値で、読むだけ。
+            if unsafe { *libc::__errno_location() } == libc::EINTR {
+                continue;
+            }
+            return false;
+        }
+        sent += n as usize;
+    }
+    true
 }
 
 /// 実 launcher（in-process の `LauncherServer`）の応答でも送り手が記録され、全応答で一致する。

@@ -46,6 +46,24 @@ pub fn op_body(key: &str, method: &str, path: &str, body: Value) -> Value {
     })
 }
 
+/// ADR 2026-10-28-cos-routine-delegated-answers D2: (c) the recommended option is a written default.
+pub fn documented_default_basis() -> Value {
+    json!({"category": "documented_default",
+           "refs": [{"kind": "adr", "id": "agent-docs/adr/2026-10-28-cos-routine-delegated-answers.md"}]})
+}
+
+/// D2: (d) a note that guides the work without changing objective or acceptance.
+pub fn work_guidance_basis() -> Value {
+    json!({"category": "work_guidance",
+           "refs": [{"kind": "progress", "id": "agent-docs/progress/2026-10-28-cos-routine-delegated-answers.md"}]})
+}
+
+/// `body` (a resolve or `/cos/operations` body) with `basis` set.
+pub fn with_basis(mut body: Value, basis: Value) -> Value {
+    body["basis"] = basis;
+    body
+}
+
 pub fn db(env: &TestEnv) -> rusqlite::Connection {
     rusqlite::Connection::open(&env.db_path).expect("open db")
 }
@@ -63,6 +81,21 @@ pub async fn run_domain(
     run_domain_with_revision(env, key, method, path, body, action, None).await
 }
 
+/// [`run_domain`] for a request that answers a human wait (ADR 2026-10-28-cos-routine-delegated-
+/// answers D2): `basis` is the routine basis, or `None` to cite the run's own human input message
+/// as `instructed_by` (the person decided).
+pub async fn run_domain_answering(
+    env: &TestEnv,
+    key: &str,
+    method: &str,
+    path: &str,
+    body: Value,
+    action: &str,
+    basis: Option<Value>,
+) -> Value {
+    run_domain_inner(env, key, method, path, body, action, None, Some(basis)).await
+}
+
 /// The same checks with a domain-specific envelope revision, for optimistic conflict tests.
 pub async fn run_domain_with_revision(
     env: &TestEnv,
@@ -72,6 +105,30 @@ pub async fn run_domain_with_revision(
     body: Value,
     action: &str,
     expected_revision: Option<&str>,
+) -> Value {
+    run_domain_inner(
+        env,
+        key,
+        method,
+        path,
+        body,
+        action,
+        expected_revision,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_domain_inner(
+    env: &TestEnv,
+    key: &str,
+    method: &str,
+    path: &str,
+    body: Value,
+    action: &str,
+    expected_revision: Option<&str>,
+    answering: Option<Option<Value>>,
 ) -> Value {
     let app = env.router();
     let (thread, run, bearer) = cos_bearer(env, key);
@@ -101,6 +158,20 @@ pub async fn run_domain_with_revision(
 
     let mut envelope = op_body(key, method, path, body);
     envelope["expected_revision"] = json!(expected_revision);
+    match &answering {
+        None => {}
+        Some(Some(basis)) => envelope["basis"] = basis.clone(),
+        Some(None) => {
+            let input: String = db(env)
+                .query_row(
+                    "SELECT id FROM chat_messages WHERE thread_id=?1 AND role='user'",
+                    [&thread],
+                    |row| row.get(0),
+                )
+                .expect("run input message");
+            envelope["instructed_by"] = json!(input);
+        }
+    }
     let resp = send(&app, post_json_with(OPS, &envelope, &headers)).await;
     assert_eq!(resp.status.as_u16(), 200, "{key}: {}", resp.text());
     let op = resp.json()["operation"].clone();
@@ -123,11 +194,18 @@ pub async fn run_domain_with_revision(
         .filter(|e| e["type"] == "cos_operation" && e["operation_id"] == op_id.as_str())
         .collect();
     assert_eq!(audits.len(), 1, "{key}: {audits:?}");
+    // An answer to a wait prefixes the reason with its basis or the human instruction.
+    let reason = audits[0]["reason"].as_str().unwrap_or_default();
+    match answering {
+        None => assert_eq!(reason, "人が依頼した", "{key}"),
+        Some(Some(_)) => assert!(reason.starts_with("定型の代答（"), "{key}: {reason}"),
+        Some(None) => assert!(reason.starts_with("人の指示（"), "{key}: {reason}"),
+    }
+    assert!(reason.ends_with("人が依頼した"), "{key}: {reason}");
     for (field, want) in [
         ("actor", "cos"),
         ("thread_id", thread.as_str()),
         ("run_id", run.as_str()),
-        ("reason", "人が依頼した"),
         ("policy_version", "1"),
         ("state", "applied"),
     ] {

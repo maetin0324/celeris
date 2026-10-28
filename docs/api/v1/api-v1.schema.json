@@ -1844,6 +1844,119 @@
       ],
       "type": "string"
     },
+    "BasisCategory": {
+      "description": "D1: the four routine judgments CoS may answer without a human instruction.",
+      "oneOf": [
+        {
+          "const": "within_approved_frame",
+          "description": "(a) Continue inside a resource / budget / node-hour frame a person approved.",
+          "type": "string"
+        },
+        {
+          "const": "raise_once",
+          "description": "(b) Raise a run-time tree limit (replan, retry, …) once, with progress and a new failure.",
+          "type": "string"
+        },
+        {
+          "const": "documented_default",
+          "description": "(c) The worker's recommendation equals a documented default or an existing ADR.",
+          "type": "string"
+        },
+        {
+          "const": "work_guidance",
+          "description": "(d) Work guidance for a worker question that changes neither objective nor acceptance.",
+          "type": "string"
+        }
+      ]
+    },
+    "BasisFailures": {
+      "additionalProperties": false,
+      "description": "D1 (b): the failure before the previous allowance and the current one.",
+      "properties": {
+        "current": {
+          "type": "string"
+        },
+        "previous": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "previous",
+        "current"
+      ],
+      "type": "object"
+    },
+    "BasisFrame": {
+      "additionalProperties": false,
+      "description": "D1 (a): the approved frame and the usage CoS checked against it.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/FrameKind"
+        },
+        "limit": {
+          "format": "double",
+          "type": "number"
+        },
+        "requested": {
+          "format": "double",
+          "type": "number"
+        },
+        "unit": {
+          "description": "What is counted (`tokens`, `usd`, `node_hours`, …).",
+          "type": "string"
+        },
+        "used": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "unit",
+        "limit",
+        "used",
+        "requested"
+      ],
+      "type": "object"
+    },
+    "BasisRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "The id, commit hash, repository-relative `.md` path or the API path read (with its time).",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/BasisRefKind"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "BasisRefKind": {
+      "description": "D2 `refs[].kind`: what a piece of evidence is.",
+      "enum": [
+        "standing_rule",
+        "decision",
+        "approval",
+        "usage",
+        "ledger",
+        "commit",
+        "artifact",
+        "progress",
+        "adr",
+        "doc",
+        "message"
+      ],
+      "type": "string"
+    },
     "BehindTarget": {
       "description": "Task value: the repo with the largest behind commits (ADR-0130 D4), plus all repos.",
       "properties": {
@@ -8799,6 +8912,46 @@
       ],
       "type": "object"
     },
+    "DelegatedBasis": {
+      "additionalProperties": false,
+      "description": "D2: the basis of a routine answer (`resolve` with outcome=answer, or a wait-answering\n`/cos/operations` request without `instructed_by`).",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/BasisCategory"
+        },
+        "failures": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BasisFailures"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "frame": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BasisFrame"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refs": {
+          "items": {
+            "$ref": "#/$defs/BasisRef"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "category",
+        "refs"
+      ],
+      "type": "object"
+    },
     "DelegatedView": {
       "description": "ADR-0016 D2: 1 回の `delegate`（`Event::Delegated`）の要約。",
       "properties": {
@@ -15398,6 +15551,15 @@
       ],
       "type": "object"
     },
+    "FrameKind": {
+      "description": "D2 `frame.kind`: the human approval that set the frame.",
+      "enum": [
+        "standing_rule",
+        "decision",
+        "approval"
+      ],
+      "type": "string"
+    },
     "GateSignal": {
       "description": "D13: 当たった信号 1 件（規則表の行、または強制規則・対象外規則）。",
       "properties": {
@@ -20324,6 +20486,18 @@
     "OperationBody": {
       "additionalProperties": false,
       "properties": {
+        "basis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DelegatedBasis"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ADR 2026-10-28-cos-routine-delegated-answers D2: required when the request answers a human\nwait without `instructed_by` (which routine judgment and its evidence). Ignored with\n`instructed_by` (the person decided)."
+        },
         "expected_revision": {
           "type": [
             "string",
@@ -24803,6 +24977,18 @@
               "type": "null"
             }
           ]
+        },
+        "basis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DelegatedBasis"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ADR 2026-10-28-cos-routine-delegated-answers D2: required for outcome=answer (which routine\njudgment this is and its evidence); must be null otherwise."
         },
         "confidence": {
           "default": null,

@@ -5,6 +5,7 @@ tasks: [01M5XXF7QGZ69112THK8RE3TEB]
 ---
 
 - 状態: 採用（実装済み）
+- 2026-10-28 付記: 取り次ぎの無い代答の範囲と根拠の形は [2026-10-28-cos-routine-delegated-answers](2026-10-28-cos-routine-delegated-answers.md)。`instructed_by` の付いた操作は人の判断なので `basis` を要らない。skill の policy_version は 5。
 - 関係: [2026-10-27-api-principals](2026-10-27-api-principals.md)（A1 の principal）、
   [2026-10-27-external-operator](2026-10-27-external-operator.md) D4（B3 の取り次ぎ経路）、
   [2026-10-27-human-ops-actor-roles-request-ref](2026-10-27-human-ops-actor-roles-request-ref.md) D2・D4（主体の語彙、判断者・実行者）、

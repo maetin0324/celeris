@@ -3,7 +3,9 @@
 //! context, and the same mutation called directly with the CoS run credential is 422.
 mod common;
 
-use common::cos_ops::{OPS, cos_bearer, op_body, run_domain};
+use common::cos_ops::{
+    OPS, cos_bearer, documented_default_basis, op_body, run_domain, run_domain_answering,
+};
 use common::*;
 use serde_json::json;
 use task_core::approval::{Approval, ApprovalId, ApprovalStore, Decision};
@@ -105,13 +107,14 @@ async fn cos_chat_ops_domain_decision_answer() {
     let task = new_task(TaskKind::Execute, Status::Ready);
     env.seed(&task);
     raise_decision(&env, &task, "dec-d");
-    run_domain(
+    run_domain_answering(
         &env,
         "decision",
         "POST",
         "/api/v1/decisions/dec-d/answer",
         json!({"option": "vault"}),
         "decision.answer",
+        Some(documented_default_basis()),
     )
     .await;
     let events = env.store.events_for(task.id).expect("events");
@@ -194,13 +197,16 @@ async fn cos_chat_ops_domain_execution_phase_gate() {
             }],
         )
         .expect("phase gate");
-    let op = run_domain(
+    // A phase gate is a human checkpoint with no recommendation: CoS passes it on a person's
+    // instruction (ADR 2026-10-28-cos-routine-delegated-answers D1).
+    let op = run_domain_answering(
         &env,
         "execution",
         "POST",
         &format!("/api/v1/tasks/{}/execution/phase-gate", task.id),
         json!({"action": "continue", "note": "build は小さく"}),
         "execution.phase_gate",
+        None,
     )
     .await;
     assert_eq!(op["result"]["to"], "ready", "{op}");

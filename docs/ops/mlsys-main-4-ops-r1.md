@@ -147,3 +147,4 @@ raw と集計の参照を添え、結果に影響する外部 AI 支援を共有
 | 日付 | 変更 | 版 | 根拠 | 既存の試行への影響 |
 |---|---|---|---|---|
 | 2026-10-27 | 人に返す文面の規則（yomiyasu の要点）を CoS の Core と skill、worker の結果・質問の指示に入れた | `cos_policy_version` "1" → "3"（`cos-inbox-triage` 3、`cos-operator` 5） | [ADR](../../agent-docs/adr/2026-10-27-yomiyasu-human-text.md) | main-4 の pinned 測定（RELEASE a28184889f56、別 daemon）は固定した release と config で動くので変わらない。版 "3" の release を配備した daemon の試行は、版 "1" の試行と別の condition |
+| 2026-10-28 | 承認済みの枠の内側の定型の判断（枠内の続行・上限の一度だけの引き上げ・文書化済みの既定・作業方針の補足）を CoS が根拠（`basis`）つきで代答する。根拠の欠けた代答は API が 422。`[cos.triage] human_required` の分類を改めた（旧名は読み込みエラー）。版 "4" は 2026-10-27 の取り次ぎ（relayed-instructions）で上げた版 | `cos_policy_version` "4" → "5"（`cos-inbox-triage` 5） | [ADR](../../agent-docs/adr/2026-10-28-cos-routine-delegated-answers.md) | 固定した release と config で動く pinned 測定は変わらない。版 "5" の release を配備した daemon の試行は、版 "4" 以前の試行と別の condition。CoS が代答する件が増えるので、人・operator の介入数を版の間で比べない |

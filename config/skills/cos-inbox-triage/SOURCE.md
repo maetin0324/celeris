@@ -14,3 +14,6 @@ license: このリポジトリと同じ（外部の license は無い）
   cos-operator の §5・§10 への参照を production.md・explaining.md に直した。
 - 2026-10-27（ADR 2026-10-27-yomiyasu-human-text）: §6 に人が読む文面の規則（yomiyasu の要点）を足し、policy_version を 3 に上げた。config の `[cos.triage] policy_version` の既定も "3"。
 - 2026-10-28（ADR 2026-10-28-single-human-window-general-cos）: §10（窓口は統括 CoS 1 本、札、`chat.relay_forward` による取り次ぎ、統括 CoS は案件の件に答えない）を足し、policy_version を 5 に上げた。config の `[cos.triage] policy_version` の既定も "5"。
+- 2026-10-28（ADR 2026-10-28-cos-routine-delegated-answers）: §2 の表を `[cos.triage] human_required` の新しい分類に合わせ、
+  §3 に定型の代答 4 種類（承認済みの枠の内側・上限の一度だけの引き上げ・文書化済みの既定・作業方針の補足）と `basis` の形を足した。
+  answer は `basis` 必須（API が 422 で拒否する）。policy_version を 5 に上げた。config の `[cos.triage] policy_version` の既定も "5"。

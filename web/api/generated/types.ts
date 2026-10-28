@@ -372,6 +372,29 @@ export type AutoReplanSource = "integration" | "work_unit";
 
 export type BackoffCause = "retry" | "infra";
 
+export type BasisCategory = "within_approved_frame" | "raise_once" | "documented_default" | "work_guidance";
+
+export type BasisFailures = {
+  "current": string;
+  "previous": string;
+};
+
+export type BasisFrame = {
+  "id": string;
+  "kind": FrameKind;
+  "limit": number;
+  "requested": number;
+  "unit": string;
+  "used": number;
+};
+
+export type BasisRef = {
+  "id": string;
+  "kind": BasisRefKind;
+};
+
+export type BasisRefKind = "standing_rule" | "decision" | "approval" | "usage" | "ledger" | "commit" | "artifact" | "progress" | "adr" | "doc" | "message";
+
 export type BehindTarget = {
   "behind_target_age_seconds"?: number | null;
   "behind_target_commits"?: number | null;
@@ -1845,6 +1868,13 @@ export type DecomposeResult = {
   "task": Task;
 };
 
+export type DelegatedBasis = {
+  "category": BasisCategory;
+  "failures"?: BasisFailures | null;
+  "frame"?: BasisFrame | null;
+  "refs": Array<BasisRef>;
+};
+
 export type DelegatedView = {
   "run_id": string;
   "tasks": Array<TaskRef>;
@@ -3109,6 +3139,8 @@ export type FileIntent = {
   "target": SideIntent;
 };
 
+export type FrameKind = "standing_rule" | "decision" | "approval";
+
 export type GateSignal = {
   "detail": string;
   "name": string;
@@ -4080,6 +4112,7 @@ export type NotifyView = {
 export type OnChildFailure = "retry_then_ask" | "ignore";
 
 export type OperationBody = {
+  "basis"?: DelegatedBasis | null;
   "expected_revision"?: string | null;
   "idempotency_key": string;
   "instructed_by"?: string | null;
@@ -4979,6 +5012,7 @@ export type ResolutionAction = {
 
 export type ResolveBody = {
   "answer"?: InboxAnswerBody | null;
+  "basis"?: DelegatedBasis | null;
   "confidence"?: number | null;
   "escalation"?: EscalationPacket | null;
   "expected_revision": string;

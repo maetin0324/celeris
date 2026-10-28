@@ -372,6 +372,11 @@ pub struct OperationBody {
     /// person decided, CoS only relays).
     #[serde(default)]
     instructed_by: Option<String>,
+    /// ADR 2026-10-28-cos-routine-delegated-answers D2: required when the request answers a human
+    /// wait without `instructed_by` (which routine judgment and its evidence). Ignored with
+    /// `instructed_by` (the person decided).
+    #[serde(default)]
+    basis: Option<super::basis::DelegatedBasis>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -616,8 +621,10 @@ async fn create_operation(
     }
     let mut env = DispatchEnv::of(&state);
     let matched = match_operation(&method, &path).ok();
-    let mut human_required = match &matched {
-        Some(matched) => super::inbox::human_required_for_operation(&state, matched, &path).await?,
+    let mut wait = match &matched {
+        Some(matched) => {
+            super::inbox::wait_for_operation(&state, matched, &path, &req.request.body).await?
+        }
         None => None,
     };
     if matched.as_ref().is_some_and(|m| m.action == "inbox.answer") {
@@ -633,12 +640,20 @@ async fn create_operation(
             && let Ok((dm, dp, _)) = crate::inbox_notifications::delegated_request(found, &input)
             && let Ok(delegated) = match_operation(dm.as_str(), &dp)
         {
-            human_required =
-                super::inbox::human_required_for_operation(&state, &delegated, &dp).await?;
+            let human_required =
+                super::inbox::wait_for_operation(&state, &delegated, &dp, &Value::Null)
+                    .await?
+                    .and_then(|w| w.human_required);
+            wait = Some(super::inbox::OperationWait {
+                human_required,
+                target: super::inbox::answer_target(found, &input),
+            });
         }
         env.inbox_feed = Some(std::sync::Arc::new(feed.items));
     }
     let instructed_by = req.instructed_by.clone();
+    let routine = req.basis.clone();
+    let mut human_required = wait.as_ref().and_then(|w| w.human_required.clone());
     let operation = state
         .blocking(move |store| {
             if let Some(existing) = store
@@ -699,6 +714,29 @@ async fn create_operation(
                     &path,
                     super::inbox::human_required_problem(&why),
                 ));
+            }
+            // ADR 2026-10-28-cos-routine-delegated-answers D2: CoS answering a wait on its own
+            // judgment names the routine category and its evidence.
+            // A wait that is no longer open (kind unknown) is left to the domain's own refusal.
+            if instructed_by.is_none()
+                && let Some(wait) = wait.as_ref().filter(|w| w.target.kind.is_some())
+            {
+                let Some(routine) = routine.as_ref() else {
+                    return Err(audit.reject(store, "api", &path, super::basis::missing()));
+                };
+                if let Err(problem) = super::basis::validate(store, routine, &wait.target) {
+                    return Err(audit.reject(store, "api", &path, problem));
+                }
+                audit.ctx.reason = format!(
+                    "{}: {}",
+                    super::basis::reason_prefix(routine),
+                    audit.ctx.reason
+                );
+                if let (Value::Object(payload), Ok(value)) =
+                    (&mut audit.payload, serde_json::to_value(routine))
+                {
+                    payload.insert("basis".into(), value);
+                }
             }
             dispatch(store, &env, &audit, &method, &path, req.request.body)
         })

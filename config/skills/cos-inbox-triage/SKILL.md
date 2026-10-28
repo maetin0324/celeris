@@ -1,6 +1,6 @@
 ---
 name: cos-inbox-triage
-description: Celeris の受信箱の一次対応 policy（policy_version 5）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
+description: Celeris の受信箱の一次対応 policy（policy_version 5）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、定型の代答 4 種類とその根拠（basis）の形、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
 metadata:
   author: celeris
   version: "5"
@@ -28,19 +28,22 @@ metadata:
 
 | 条件 | 既定の扱い |
 |---|---|
-| 仕様・設計の根本変更、目的/受け入れ条件の変更 | escalate（人の決定を task に結びつける） |
-| 外部公開、外部への push、外部への送信・契約の新規認可 | escalate。既に対象/範囲が認可された操作はその evidence を付ける。CoS 自身の Discord 判断依頼は本決定で認可済み |
-| 不可逆・破壊的な操作 | escalate。確認を「CoS 全権限」で代用しない |
-| node-hours・費用・quota 等の上限超過/引上げ | escalate。待つ/規定範囲内の代替案は CoS が選べる |
-| 秘密、権限、セキュリティ方針の変更、認証/TOTP | escalate。既存 standing authorization の範囲での利用は再認可不要 |
-| 人が「人の判断」と指定、human check、human_required の gate | 必ず escalate。config/skill で無効にできない |
+| 仕様・設計の根本変更、目的/受け入れ条件の変更（`objective_change`） | escalate（人の決定を task に結びつける） |
+| 外部公開、外部への push、外部への送信・契約の新規認可（`external_publish`） | escalate。既に対象/範囲が認可された操作はその evidence を付ける。CoS 自身の Discord 判断依頼は本決定で認可済み |
+| 不可逆・破壊的な操作（`destructive`） | escalate。確認を「CoS 全権限」で代用しない |
+| node-hours・費用・quota 等が人の承認済みの枠を超える、枠を確かめられない（`beyond_frame`） | escalate。枠の内側の続行と上限の一度だけの引き上げは §3 の (a)(b) で代答できる |
+| 秘密、権限、セキュリティ方針の変更、認証/TOTP（`secret_or_security`） | escalate。既存 standing authorization の範囲での利用は再認可不要 |
+| 恒久の認可（standing rule）の新設（`standing_permission`） | escalate |
+| 人が「人の判断」と指定、human check、human_required の gate（`explicit_human`） | 必ず escalate。config/skill で無効にできない |
 | CoS の confidence が min_confidence 未満、情報不足・矛盾、外部副作用の結果不明 | escalate。confidence 欠落も低確信と扱う |
-| 上記以外で、人の既存指示・仕様・予算・認可内の定型選択/再試行 | reason と根拠付きで answer。plan gate も既承認計画の具体化だけなら回答可 |
+| 上記以外で、§3 の定型の代答 4 種類 (a)〜(d) のどれかに当たり、その条件を basis で示せる | basis と reason 付きで answer |
+| 上記以外で、(a)〜(d) のどれにも当たらない判断（phase gate の途中確認を含む） | escalate |
 | 判断不要の通知・復旧済みの失敗 | observe しチャットに要点を残す。人への割込み通知は出さない |
 
 追加の規則:
 
 - 表の上の行ほど強い。1 つでも escalate の行に当たれば escalate。
+- 括弧の名前は config の `[cos.triage] human_required` の分類（ADR 2026-10-28-cos-routine-delegated-answers D3）。
 - 対象に人が設定した `human_required` と API の既存認可は、この skill でも config でも解除できない。
 - CoS が新しい standing permission（永続の認可）を自分で作ることは「秘密・権限・セキュリティ」の行として escalate。
   `/cos/operations` の standing_rule.create・release.promote は人の決定で CoS にも登録されているが（cos-operator の operations.md）、
@@ -54,12 +57,31 @@ metadata:
 
 ## 3. answer / observe / escalate の選び方
 
-- **answer**: 表の「定型選択/再試行」の行に当たり、根拠（人の既存指示・仕様・予算・認可・承認済み計画のどれか）を
-  具体的に指せ、confidence が `min_confidence` 以上のときだけ。`answer` には既存の InboxAnswerBody
-  （`option`・`note`・`payload`）を入れる。元の問いの選択肢以外を作らない。plan gate は既承認計画の具体化だけなら回答できる。
+- **answer**: 下の定型の代答 4 種類のどれかに当たり、その条件を `basis` で示せ、confidence が `min_confidence` 以上のときだけ。
+  `answer` には既存の InboxAnswerBody（`option`・`note`・`payload`）を入れる。元の問いの選択肢以外を作らない。
 - **observe**: 判断の必要が無いもの（知らせ・復旧済みの失敗・進捗）。要点をスレッドに残し、`answer=null`・`escalation=null`。
   判断の必要な未解決の待ちには使えない（API は 422 を返す）。迷ったら observe ではなく escalate。
-- **escalate**: 上の表で escalate に当たるもの、根拠を指せないもの、確信が足りないもの全て。
+- **escalate**: 上の表で escalate に当たるもの、4 種類のどれにも当たらないもの、根拠を指せないもの、確信が足りないもの全て。
+
+### 定型の代答 4 種類（ADR 2026-10-28-cos-routine-delegated-answers D1）
+
+人の取り次ぎ（§9 の `instructed_by`）の無い代答は、次のどれかとして `basis.category` に書く。条件は API が検査し、
+外れれば 422（`cos_basis_*`）で rejected として記録に残る。422 になったら同じ件を escalate する。
+
+| category | 代答してよいもの | 条件 |
+|---|---|---|
+| `within_approved_frame` (a) | 人が承認済みの資源・予算・node-h の枠の内側での続行（decision・authorization・plan/phase gate） | `frame` が人の承認（standing rule・人が答えた decision・認めた approval）を指す。`used + requested <= limit`。使用量を読んだ出典（`usage` か `ledger`）を refs に入れる |
+| `raise_once` (b) | replan・retry 等の木の上限（kind=limit の決定）への `raise-once` | 進捗の出典（`commit` か `artifact`）を refs に入れる。`failures.previous`（前の失敗）と `failures.current`（今の失敗）が違う。同じ task で CoS が `raise-once` を答えるのは 1 回だけ |
+| `documented_default` (c) | worker の推奨が文書化済みの既定値・既存 ADR と一致する選択 | 答えが元の待ちの推奨（`recommended`）と同じ option。既定・ADR の path（`adr`: `agent-docs/adr/*.md`、`doc`: `docs/**.md`・`agent-docs/**.md`）を refs に入れる |
+| `work_guidance` (d) | 受け入れ条件・目的を変えない範囲の作業方針の補足（worker の自由質問） | note で答える（option は省略か `answer`。`replan` は不可） |
+
+- 例: 10-25 の d-release の post-merge は推奨どおりなので (c)。10-20 の予算延長は人が答えた予算の決定を frame にした (a)。
+  10-13・10-19 の replan 上限は commit で進捗を確かめ、前と違う失敗なら (b)。
+- 枠を超える、同じ失敗の繰り返し、2 回目の引き上げ、推奨と違う選択、目的・受け入れ条件・計画を変える答えは escalate。
+- `refs[]` は `{kind, id}` を 1〜20 件。kind は `standing_rule`・`decision`・`approval`・`usage`・`ledger`・`commit`（7〜40 桁の 16 進）・
+  `artifact`・`progress`（`agent-docs/progress/*.md`）・`adr`・`doc`・`message`。読んだ API の path と時刻、commit の hash を具体的に書く。
+- 通った代答は監査の reason が「定型の代答（<category>）: <reason>」になり、payload に `basis` が残る。
+- `/cos/operations` で開いている待ちに答えるときも、`instructed_by` が無ければ同じ `basis` を body の最上位に付ける。
 
 `reason` には判定の理由を、参照した根拠（指示の seq・ADR・standing rule の id・計画の id 等）とともに書く。
 「定型だから」のような根拠の無い reason は書かない。
@@ -75,13 +97,15 @@ metadata:
 
 ```json
 {"idempotency_key":"k","expected_revision":"1","outcome":"answer",
- "answer":{"option":"continue","note":"既定手順内","payload":null},
- "reason":"承認済み計画と一致","confidence":0.97,"policy_version":"3","escalation":null}
+ "answer":{"option":"post-merge","note":"推奨どおり","payload":null},
+ "basis":{"category":"documented_default",
+          "refs":[{"kind":"adr","id":"agent-docs/adr/YYYY-MM-DD-<既定を決めた ADR>.md"}]},
+ "reason":"worker の推奨が ADR の既定と同じ","confidence":0.97,"policy_version":"5","escalation":null}
 ```
 
 - worker の自由質問（kind=question）は `"answer":{"note":"回答本文"}` とし、option を省略できる。空本文は不可。計画を直す場合だけ `option:"replan"` を明示する。decision・approval・gate は提示された key を使う。`reply` は escalation の案内用で、answer の key には使わない。
-- `expected_revision` は item の `source_revision`。`policy_version` はこの skill の `"3"`（config の値があればそれ）。
-- `outcome` が answer 以外なら `answer=null`。answer・observe なら `escalation=null`。escalate では escalation packet が必須。
+- `expected_revision` は item の `source_revision`。`policy_version` はこの skill の `"5"`（config の値があればそれ）。
+- `outcome` が answer 以外なら `answer=null`・`basis` なし。answer・observe なら `escalation=null`。answer では `basis`、escalate では escalation packet が必須。
 - `idempotency_key` は item ごとに一意にし、再試行では同じ key を使う。
 
 ## 6. escalation packet の形

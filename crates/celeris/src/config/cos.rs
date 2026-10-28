@@ -143,18 +143,23 @@ fn default_policy_version() -> String {
 fn default_min_confidence() -> f64 {
     0.85
 }
+/// ADR 2026-10-28-cos-routine-delegated-answers D3: the reasons CoS escalates instead of answering.
+/// Routine judgments inside an approved frame are answered with a basis, not listed here.
+pub const HUMAN_REQUIRED_REASONS: [&str; 7] = [
+    "objective_change",
+    "beyond_frame",
+    "external_publish",
+    "destructive",
+    "secret_or_security",
+    "standing_permission",
+    "explicit_human",
+];
+
 fn default_human_required() -> Vec<String> {
-    [
-        "fundamental_change",
-        "external_publish",
-        "destructive",
-        "resource_overrun",
-        "security",
-        "explicit_human",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect()
+    HUMAN_REQUIRED_REASONS
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
 }
 fn default_unavailable_after_secs() -> u64 {
     120
@@ -278,6 +283,14 @@ impl CosConfig {
                 return Err(ConfigError::Invalid(
                     "[cos.triage] human_required must contain unique nonempty reasons".into(),
                 ));
+            }
+            if !HUMAN_REQUIRED_REASONS.contains(&reason.as_str()) {
+                return Err(ConfigError::Invalid(format!(
+                    "[cos.triage] human_required: unknown reason {reason:?} (known: {}; \
+                     fundamental_change, resource_overrun and security were replaced by \
+                     objective_change, beyond_frame and secret_or_security)",
+                    HUMAN_REQUIRED_REASONS.join(", ")
+                )));
             }
         }
         let a = &self.attachments;

@@ -142,6 +142,15 @@ fn resolve_body(key: &str, revision: &str, outcome: &str, extra: Value) -> Value
             object.insert(k.clone(), v.clone());
         }
     }
+    // ADR 2026-10-28-cos-routine-delegated-answers D2: an answer carries its routine basis — the
+    // recommended `vault` is a documented default, a free-text note is work guidance.
+    if outcome == "answer" && body.get("basis").is_none() {
+        body["basis"] = if body["answer"]["option"] == "vault" {
+            common::cos_ops::documented_default_basis()
+        } else {
+            common::cos_ops::work_guidance_basis()
+        };
+    }
     body
 }
 
@@ -1116,11 +1125,14 @@ async fn cos_free_text_question_resumes_through_resolve_and_relay() {
         };
         let request = |key: &str, answer: Value| {
             if relay {
-                common::cos_ops::op_body(
-                    key,
-                    "POST",
-                    &format!("/api/v1/inbox/items/{inbox_id}/answer"),
-                    answer,
+                common::cos_ops::with_basis(
+                    common::cos_ops::op_body(
+                        key,
+                        "POST",
+                        &format!("/api/v1/inbox/items/{inbox_id}/answer"),
+                        answer,
+                    ),
+                    common::cos_ops::work_guidance_basis(),
                 )
             } else {
                 resolve_body(key, "r1", "answer", json!({"answer": answer}))

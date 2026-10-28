@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::approval::{Approval, ApprovalId, ApprovalStore};
+use task_core::approval::{Approval, ApprovalId, ApprovalStore, StandingRule, StandingRuleId};
 use task_core::chat::triage::CosTriageSource;
 use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
 use task_core::decision::{
@@ -261,26 +261,42 @@ async fn cos_chat_triage_a_answers_each_wait_kind_without_webhook() {
     assert_eq!(rows.len(), 4, "{rows:?}");
     let bearer = cos_bearer(&env, "a");
     let headers = [("authorization", bearer.as_str())];
+    // ADR 2026-10-28-cos-routine-delegated-answers: each answer names its routine basis; the
+    // queue approval sits inside a node-hour frame a person granted as a standing rule.
+    let frame_rule = StandingRule {
+        id: StandingRuleId::new(),
+        node_id: None,
+        rule: "既定の queue は月 100 node-h まで使ってよい".into(),
+        created_at: OffsetDateTime::now_utc(),
+    };
+    env.store.standing_rule_append(&frame_rule).expect("rule");
     let cases = [
         (
             "decision-",
             json!({"option": "vault", "note": "既定どおり"}),
+            common::cos_ops::documented_default_basis(),
         ),
         (
             "question-",
             json!({"option": "answer", "note": "main に入れる"}),
+            common::cos_ops::work_guidance_basis(),
         ),
         (
             "authorization-",
             json!({"option": "once", "note": "既定の queue"}),
+            json!({"category": "within_approved_frame",
+                   "refs": [{"kind": "usage", "id": "GET /api/v1/usage 2026-10-28"}],
+                   "frame": {"kind": "standing_rule", "id": frame_rule.id.to_string(),
+                             "unit": "node_hours", "limit": 100.0, "used": 40.0, "requested": 8.0}}),
         ),
         (
             "plan_gate-",
             json!({"option": "approve", "note": "既承認計画の具体化"}),
+            common::cos_ops::documented_default_basis(),
         ),
     ];
     let mut ops = Vec::new();
-    for (prefix, answer) in cases {
+    for (prefix, answer, basis) in cases {
         let (_, item, revision) = find(&rows, prefix);
         let resp = send(
             &app,
@@ -291,7 +307,7 @@ async fn cos_chat_triage_a_answers_each_wait_kind_without_webhook() {
                     revision,
                     "answer",
                     &format!("{prefix} は既存の指示の範囲内"),
-                    json!({"answer": answer}),
+                    json!({"answer": answer, "basis": basis}),
                 ),
                 &headers,
             ),
@@ -393,7 +409,7 @@ async fn cos_chat_triage_b_escalates_human_matters_and_keeps_the_wait() {
                 explicit_rev,
                 "answer",
                 "定型",
-                json!({"answer": {"option": "vault"}}),
+                json!({"answer": {"option": "vault"}, "basis": common::cos_ops::documented_default_basis()}),
             ),
             &headers,
         ),
@@ -539,7 +555,7 @@ async fn cos_chat_triage_override_revokes_a_resolved_answer_end_to_end() {
                 revision,
                 "answer",
                 "定型",
-                json!({"answer": {"option": "vault"}}),
+                json!({"answer": {"option": "vault"}, "basis": common::cos_ops::documented_default_basis()}),
             ),
             &headers,
         ),

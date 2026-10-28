@@ -3659,10 +3659,12 @@ path の placeholder は 1 segment（英数字・`-`・`_`・`.`・`:`）に一�
 | メソッド・endpoint | 認証 | 入力 | 成功 |
 |---|---|---|---|
 | GET `/cos/inbox` | CoS credential | `?state=<pending\|running\|answered\|observed\|escalated\|fallback\|resolved>`・`?limit=1..=500`（既定 100） | 200 `CosInboxList {items[]:CosInboxItem}`（新しい順） |
-| POST `/cos/inbox/{i}/resolve` | CoS credential | `{"idempotency_key","expected_revision","outcome":"answer\|observe\|escalate","reason","policy_version","confidence"?,"answer"?,"escalation"?}` | 200 `ResolveResponse {item?,operation,notification_id?}` |
+| POST `/cos/inbox/{i}/resolve` | CoS credential | `{"idempotency_key","expected_revision","outcome":"answer\|observe\|escalate","reason","policy_version","confidence"?,"answer"?,"escalation"?,"basis"?}` | 200 `ResolveResponse {item?,operation,notification_id?}` |
 | POST `/cos/operations/{o}/override` | 人（管理系） | `{"action":"revoke\|return","reason"}` | 200 `OverrideResponse` |
 
 `CosInboxItem` は `cos_inbox_items` の 1 行（`id`・`source_kind`・`source_key`・`source_revision`・`state` など。§6）。`resolve` は判断そのものは worker が行うが、構造・credential・現在の revision（`expected_revision` と不一致は 409 `cos_inbox_revision_conflict`）・`human_required`（403 `cos_human_required`）は API が決定的に検査する。worker の自由質問（`kind=question`）には `answer: {"note":"回答本文"}` として option を省略できる（空本文は拒否）。明示する option は提示された key に限り、`replan` は明示時のみ計画変更を要求する。他の kind の受信箱回答は option が必須。`answer` は `InboxAnswerBody` を既存の受信箱 answer と同じ domain request へ変えて `dispatch` する（`/cos/operations` と同じ操作層）。`observe` は判断を要さない待ち（notice）にだけ許され、判断を要する待ちへは 422 `cos_observe_needs_judgment`。`escalate` は escalation packet（`EscalationPacket`）を検証し永続 outbox を claim する（`web_path` は対象から導出、`recommended` は `options[].key` の 1 つか null）。`idempotency_key` は thread 内一意で、同じ key の異なる request は 409。`confidence` は任意の 0..=1（範囲外・非有限は 422 `validation`）で、`reason` に混ぜず、`cos_operations` の `payload`（本文そのもの）と observe / escalate の `result` に残る（skill cos-inbox-triage §4・§5。欠落は拒否せず、低確信の扱いは skill 側）。
+
+定型の代答の根拠（ADR 2026-10-28-cos-routine-delegated-answers）: `outcome=answer` と、`POST /cos/operations` で開いている待ちに答える操作（`decision.answer`・`approval.decide`・`execution.phase_gate`・`execution.plan_gate`・`question.answer`・`inbox.answer`）のうち `instructed_by` の無いものは `basis`（`DelegatedBasis`）が必須。`basis` は `{"category":"within_approved_frame|raise_once|documented_default|work_guidance","refs":[{"kind","id"}],"frame"?,"failures"?}`。API は category ごとの条件（承認済みの枠の実在と `used + requested <= limit`、`raise-once` の一度だけと失敗の違い、推奨 option との一致と ADR・文書の参照、自由質問への note だけの回答）を決定的に検査する。欠けは 422 `cos_basis_missing`、形・対象の誤りは 422 `cos_basis_invalid`、枠超えは 422 `cos_basis_over_frame`、同じ失敗は 422 `cos_basis_repeated_failure`、同じ task の 2 回目の `raise-once` は 422 `cos_basis_raise_once_used`（どれも監査に rejected で残る）。通った代答は監査の reason が「定型の代答（<category>）: …」になり、payload に `basis` が残る。observe・escalate に `basis` を付けると 422 `validation`。明示の `human_required` の 403 が先に効く。
 
 `override` は適用済み（`applied`）の CoS 操作を 1 回だけ修正する。`revoke` / `return` で、元の payload・event は残し現在状態を投影として書き換える。不可逆な操作（decision/approval 以外）は `state=needs_remediation` にし `remediation_task_id`（人が確認する修正 task）を返す。decision/approval は `superseded` にし、`new_wait_id` / `new_revision` で代わった人の待ちを返す（CoS は代答できない）。run が既に消費していた操作は対象 task の subtree を pause し `paused_task_ids` を返す。
 
@@ -4077,4 +4079,5 @@ policy_version, reasons, escalation, outcome, cost_usd, input_tokens, output_tok
 `POST /cos/operations` の `instructed_by` は当該 run の人の入力に加え、同じスレッドの有効な取り次ぎを受け付ける。
 案件・task の適用範囲から外れる対象、期限切れ、取消済み、他スレッドの指示は422 `cos_instruction_invalid`。
 監査の `payload.instructed_by` に `message_id`・`seq`・`relay`・`decided_by`・`executed_by` を残す。
+`instructed_by` の無い待ちへの回答は `basis` が必須（§3.130 の「定型の代答の根拠」）。`instructed_by` があれば `basis` は検査せず payload にも入れない。
 判断者は human（取り次ぎ主体を併記）、実行者は cos_project / cos_general。token 値は保存しない。

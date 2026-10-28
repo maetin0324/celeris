@@ -154,6 +154,36 @@ fn cos_chat_config_defaults_to_fixed_harness_and_route_candidates() {
     assert_eq!(cfg.cos.triage.policy_skill, "cos-inbox-triage");
 }
 
+/// ADR 2026-10-28-cos-routine-delegated-answers D3: the escalation vocabulary and policy version 5.
+#[test]
+fn cos_triage_human_required_uses_the_routine_answer_vocabulary() {
+    let cfg = load("").unwrap();
+    assert_eq!(cfg.cos.triage.policy_version, "5");
+    assert_eq!(
+        cfg.cos.triage.human_required,
+        [
+            "objective_change",
+            "beyond_frame",
+            "external_publish",
+            "destructive",
+            "secret_or_security",
+            "standing_permission",
+            "explicit_human",
+        ]
+    );
+    for old in [
+        "fundamental_change",
+        "resource_overrun",
+        "security",
+        "unknown",
+    ] {
+        let text = format!("[cos.triage]\nhuman_required = [\"{old}\"]\n");
+        let err = load(&text).expect_err(old).to_string();
+        assert!(err.contains("unknown reason"), "{old}: {err}");
+    }
+    assert!(load("[cos.triage]\nhuman_required = [\"beyond_frame\"]\n").is_ok());
+}
+
 #[test]
 fn cos_chat_config_rejects_legacy_route_fields() {
     for text in [

@@ -401,6 +401,75 @@ async fn a_wait_parks_the_task_polls_and_resumes_as_a_continuation() {
 }
 
 /// 上限を過ぎた wait は `timed_out` と人への質問。回答で ready に戻り、次の run は job の状態と回答を受け取る。
+/// release e676a115a5a0 の verify（2026-10-28）: `--mode verify` の新版が staging DB の cluster 待ちを poll し、実の
+/// Sirius に問い合わせて BenchFS task を Ready に書き換え、検査 5（n-1-compat）の tasks_digest を食い違わせた。
+/// verify（`set_eligible_tasks` の目印）は poll を起こさず（クラスタに問い合わせない）、job が終わっていても
+/// 上限を過ぎていても、待ち task・wait の行・event を書き換えない。
+#[tokio::test]
+async fn verify_mode_neither_polls_nor_resumes_nor_times_out_a_cluster_job_wait() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, mut d, task, _adapter, polls) = setup(
+        dir.path(),
+        vec![wait_terminal(&["48069"], None)],
+        // 本番の daemon の poll では走っている。次に問い合わせれば「終わった」と返る（本番で task を Ready に
+        // 戻した状況）。
+        vec![
+            qstat(&[("48069", "R", None)]),
+            qstat(&[("48069", "F", Some(0))]),
+        ],
+    );
+    let id = task.id;
+    // 本番の daemon が task を wait に入れ、1 回 poll した状態（staging DB はこれのコピー）。
+    tick_until(&mut d, |d| {
+        store.get(id).unwrap().unwrap().status == Status::Blocked
+            && polls.lock().unwrap().len() == 1
+            && d.cluster_job_polls.is_empty()
+    })
+    .await;
+    let before_task = store.get(id).unwrap().unwrap();
+    let before_events = store.events_for(id).unwrap().len();
+    let before_waits = store.cluster_job_waits_for_task(id).unwrap();
+    assert_eq!(before_waits.len(), 1);
+    assert_eq!(before_waits[0].state, ClusterJobWaitState::Waiting);
+
+    // ADR-0041 D5: `--mode verify` の目印（celeris は verify のときだけこれを呼ぶ）。
+    d.set_eligible_tasks(Arc::new(|task: &Task| {
+        task.genre.as_deref() == Some("smoke")
+    }));
+    // poll_secs（30）を過ぎた時点と、上限（3600）を過ぎた時点の両方で tick する。
+    for secs in [31, 3600] {
+        advance(&d, secs);
+        for _ in 0..3 {
+            d.tick().unwrap();
+            assert!(
+                d.cluster_job_polls.is_empty(),
+                "verify started a cluster job poll"
+            );
+        }
+    }
+
+    assert_eq!(
+        polls.lock().unwrap().len(),
+        1,
+        "verify asked the cluster about the jobs"
+    );
+    let after_task = store.get(id).unwrap().unwrap();
+    assert_eq!(after_task.status, Status::Blocked);
+    assert_eq!(after_task.updated_at, before_task.updated_at);
+    assert_eq!(
+        last_reason(&store, id).as_deref(),
+        Some(task_core::cluster_job::REASON_WAITING)
+    );
+    assert_eq!(store.events_for(id).unwrap().len(), before_events);
+    let after_waits = store.cluster_job_waits_for_task(id).unwrap();
+    assert_eq!(after_waits.len(), 1);
+    assert_eq!(after_waits[0].state, ClusterJobWaitState::Waiting);
+    assert_eq!(
+        after_waits[0].last_polled_at,
+        before_waits[0].last_polled_at
+    );
+}
+
 #[tokio::test]
 async fn a_timed_out_wait_asks_a_human_and_the_answer_resumes() {
     let dir = tempfile::tempdir().unwrap();

@@ -245,6 +245,10 @@ impl Dispatcher {
     /// tick の段: 木の生存確認（ADR-0079 D10）と、続けて案件単位の停滞（ADR 2026-10-27-project-stagnation-inbox D3）。
     /// 停滞は生存確認の `stalled` に載った task を除くので、この順に呼ぶ。失敗は log だけで tick を止めない。
     pub(super) fn check_liveness_and_stagnation(&mut self) {
+        // ADR-0041 D5: verify は staging DB の木に `StallDetected`・障害通知を書かない。
+        if self.verify_smoke_only() {
+            return;
+        }
         if let Err(e) = self.check_tree_liveness() {
             tracing::warn!(error = %e, "tree liveness check failed (ADR-0079 D10)");
         }
@@ -861,6 +865,10 @@ impl Dispatcher {
     /// 親の状態は変えない（子だけを待つ親は `Ready` のまま `WuDispatchGate::Skip`、段階が揃えば次の
     /// dispatch で統合）。親が終端なら何もしない（中止の連鎖は store が子へ伝える）。
     pub(super) fn reconcile_tree_units(&mut self) -> Result<(), DispatchError> {
+        // ADR-0041 D5: verify は staging DB の親 task の unit を閉じず、子 task も作らない（smoke は葉）。
+        if self.verify_smoke_only() {
+            return Ok(());
+        }
         let now = OffsetDateTime::now_utc();
         for task_id in self.store.tasks_with_open_task_units()? {
             let Some(parent) = self.store.get(task_id)? else {

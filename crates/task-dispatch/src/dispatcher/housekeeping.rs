@@ -5,6 +5,10 @@ use super::*;
 impl Dispatcher {
     /// Derive the notice feed once per tick, after task transitions have settled.
     pub(super) fn sync_notice_feed(&self, now: OffsetDateTime) {
+        // ADR-0041 D5: verify は staging DB の通知 feed を書かない。
+        if self.verify_smoke_only() {
+            return;
+        }
         if let Err(error) = task_ops::notify_feed::sync_notifications(self.store.as_ref(), now) {
             tracing::warn!(%error, "failed to synchronize notice feed");
         }
@@ -19,6 +23,10 @@ impl Dispatcher {
     /// `min_free_disk_mb` のときの緊急モード。rename した件数を返す。
     pub(super) fn scratch_gc(&mut self, emergency: bool) -> usize {
         use task_worker::scratch::{GIB, Pressure};
+        // ADR-0041 D5: verify は本番と同じ scratch pool を見る。staging DB の状態で本番の target を消さない。
+        if self.verify_smoke_only() {
+            return 0;
+        }
         let settings = self.config.scratch.clone();
         let legacy = crate::scratch_gc::legacy_paths(
             &self.config.build_cache_dir,
@@ -158,6 +166,10 @@ impl Dispatcher {
     /// seed は owner の semantic GC（`scratch_gc`）の対象にしない。
     pub(super) fn seed_housekeeping(&mut self, now: Instant) {
         use std::sync::atomic::Ordering;
+        // ADR-0041 D5: verify は本番と共有の seed を作り直さない。
+        if self.verify_smoke_only() {
+            return;
+        }
         if !self.scratch_active() || !self.config.scratch.seed_reflink {
             return;
         }
@@ -453,6 +465,10 @@ impl Dispatcher {
     /// 行う（数 GB になりうるため tick を止めない）。前回途中で残った `.deleting-*` も消す。
     /// 行が見つからない WU（別の DB・消えた Task）の target には触れない。
     pub(super) fn cleanup_work_unit_build_caches(&mut self) {
+        // ADR-0041 D5: verify は staging DB の状態で本番と共有の WU target を消さない。
+        if self.verify_smoke_only() {
+            return;
+        }
         if !self.config.shared_build_cache {
             return;
         }

@@ -96,6 +96,10 @@ impl Dispatcher {
 
     /// tick の段 `disk_watch`（前回から 60 秒経っていれば測る。時計は注入時計）。
     pub(super) fn tick_disk_watch(&mut self) {
+        // ADR-0041 D5: verify は staging DB に disk の監視の通知・依頼を書かない。
+        if self.verify_smoke_only() {
+            return;
+        }
         let now = self.now_utc();
         let store = self.store.clone();
         if let Some(runner) = self.disk_watch.as_mut() {

@@ -222,6 +222,12 @@ impl Dispatcher {
     /// ADR-0090 D2: tick の poll。`waiting` の wait ごとに (1) 終わった poll の結果を拾う → (2) 上限を過ぎていれば
     /// `timed_out` → (3) `poll_secs` が経っていて poll が走っていなければ、次の poll を OS スレッドで起こす。
     pub(super) fn poll_cluster_job_waits(&mut self) -> Result<(), DispatchError> {
+        // ADR-0041 D5: `--mode verify` は staging DB の wait を poll しない。poll は実クラスタへ `qstat`/`sacct` を
+        // 打ち、終わっていれば待ち task を Ready に戻す（release e676a115a5a0 の verify で BenchFS task を Ready に
+        // 書き換え、検査 5 の tasks_digest を食い違わせた）。上限の判定（task を質問待ちにする）も同じく行わない。
+        if self.verify_smoke_only() {
+            return Ok(());
+        }
         let waits = self.store.cluster_job_waits_waiting()?;
         let live: std::collections::HashSet<String> =
             waits.iter().map(|w| w.wait_id.clone()).collect();

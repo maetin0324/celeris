@@ -84,6 +84,23 @@ async fn tick_fires_once_skips_nonterminal_overlap_and_ignores_disabled_job() {
     assert!(store.cron_job_runs(disabled.id, None).unwrap().is_empty());
 }
 
+/// ADR-0041 D5: `--mode verify` は staging DB の cron job を発火しない（task も実行記録も作らない）。
+#[tokio::test]
+async fn verify_mode_does_not_fire_cron_jobs() {
+    let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let scheduled = job(&store, "scheduled", CronCatchUp::Latest);
+    let (mut d, clock) = setup(store.clone());
+    let tasks_before = store.list(None).unwrap().len();
+    d.set_eligible_tasks(Arc::new(|task: &Task| {
+        task.genre.as_deref() == Some("smoke")
+    }));
+
+    tick_at(&mut d, &clock, "2026-10-01T03:00:01Z");
+    tick_at(&mut d, &clock, "2026-10-03T12:00:00Z");
+    assert!(store.cron_job_runs(scheduled.id, None).unwrap().is_empty());
+    assert_eq!(store.list(None).unwrap().len(), tasks_before);
+}
+
 #[tokio::test]
 async fn tick_after_daemon_gap_applies_each_job_misfire_rule() {
     let store = Arc::new(SqliteStore::open_in_memory().unwrap());

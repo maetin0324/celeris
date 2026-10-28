@@ -98,6 +98,10 @@ impl Dispatcher {
     /// tick ごと: 台帳が変わった（または一定 tick ごと）なら、`browser_prerequisite` で止めた task を
     /// 見直し、前提が揃ったものを `ready` に戻す。code が変わっただけなら event を 1 回足す。
     pub(super) fn resume_browser_prereq_blocked(&mut self) -> Result<usize, DispatchError> {
+        // ADR-0041 D5: verify は staging DB の Blocked な browser task を Ready に戻さない。
+        if self.verify_smoke_only() {
+            return Ok(0);
+        }
         self.refresh_browser_ledger();
         let ledger_changed = std::mem::take(&mut self.browser_prereq_rescan);
         if !ledger_changed && !self.ticks.is_multiple_of(RESCAN_EVERY_TICKS) {

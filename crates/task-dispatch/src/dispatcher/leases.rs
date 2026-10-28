@@ -530,6 +530,10 @@ impl Dispatcher {
     /// 見つからない）。終端への遷移は store が同じトランザクションで閉じるので、見つかるのは R6-1 より前の行だけ。
     /// 同じ周期で終端 task の未回答統合依頼も `task_terminal` で閉じる。
     pub(super) fn reconcile_terminal_records(&mut self) {
+        // ADR-0041 D5: verify は staging DB の runs 行・統合依頼を閉じない（smoke の run は手元で閉じる）。
+        if self.verify_smoke_only() {
+            return;
+        }
         let now = self.now_utc();
         if let Some(last) = self.terminal_records_reconciled_at
             && (now - last).whole_seconds() < RUNS_RECONCILE_INTERVAL_SECS

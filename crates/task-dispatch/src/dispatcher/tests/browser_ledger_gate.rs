@@ -197,6 +197,40 @@ async fn browser_ledger_gate_stale_release_blocks_and_resumes_after_regeneration
     );
 }
 
+/// ADR-0041 D5: `--mode verify` は staging DB の `blocked(browser_prerequisite)` を、台帳が揃っても Ready に戻さない
+/// （本番のコピーの task の状態を変えない）。
+#[tokio::test]
+async fn verify_mode_does_not_resume_browser_prerequisite_blocked_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let ledger = ledger_dir.path().join("conformance.json");
+    write_ledger(&ledger, "ffffffffffff", false);
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = browser_task(dir.path());
+    store.insert(&task).unwrap();
+    let adapter = Arc::new(CountingBrowserAdapter {
+        calls: AtomicUsize::new(0),
+    });
+    let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+    d.set_browser_ledger_watch(LedgerWatch::fixed(
+        Some(ledger.clone()),
+        Some(RELEASE.into()),
+        None,
+    ));
+    tick_n(&mut d, 5).await;
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Blocked);
+    let events_before = store.events_for(task.id).unwrap().len();
+
+    d.set_eligible_tasks(Arc::new(|task: &Task| {
+        task.genre.as_deref() == Some("smoke")
+    }));
+    write_ledger(&ledger, RELEASE, true);
+    tick_n(&mut d, 5).await;
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Blocked);
+    assert_eq!(store.events_for(task.id).unwrap().len(), events_before);
+    assert_eq!(adapter.calls.load(Ordering::SeqCst), 0);
+}
+
 /// 配置済み: gate を通って従来どおり dispatch する（worker 側で台帳が読めなければ、それも
 /// infra_requeue ではなく `browser_prerequisite` で止まり、変わらない台帳では往復しない）。
 #[tokio::test]

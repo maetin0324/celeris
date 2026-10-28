@@ -8,6 +8,10 @@ use super::cos_chat::review::CosReviewSink;
 impl Dispatcher {
     /// A draining instance or one short of disk creates nothing. Uses the injectable clock.
     pub(super) fn tick_cron_jobs(&mut self) {
+        // ADR-0041 D5: verify は cron job を発火しない（staging DB に task・CoS 入力を作らない）。
+        if self.verify_smoke_only() {
+            return;
+        }
         if !(self.accepting_new_work && self.disk_ready) {
             return;
         }

@@ -498,6 +498,7 @@ fn cos_chat_prompt_inbox_items_section_lists_open_items_and_relay_rules() {
         source_revision: "r1".into(),
         state: "escalated".into(),
         summary: "公開前の確認".into(),
+        detail: "公開先は https://example.org/a\n選択肢 A: 今すぐ公開".into(),
         reason: Some("外部公開なので人の判断".into()),
         created_at: "2026-10-07T00:00:00.000Z".into(),
         decision: Some(CosChatInboxDecision {
@@ -506,10 +507,12 @@ fn cos_chat_prompt_inbox_items_section_lists_open_items_and_relay_rules() {
                 CosChatInboxOption {
                     key: "publish".into(),
                     label: "公開する".into(),
+                    detail: Some("公開ページを今すぐ外部へ出す".into()),
                 },
                 CosChatInboxOption {
                     key: "hold".into(),
                     label: "保留".into(),
+                    detail: None,
                 },
             ],
             recommended: Some("hold".into()),
@@ -528,7 +531,14 @@ fn cos_chat_prompt_inbox_items_section_lists_open_items_and_relay_rules() {
     assert!(p.contains("CoS の理由: 外部公開なので人の判断"), "{p}");
     assert!(p.contains("決めること: 公開してよいか"), "{p}");
     assert!(
-        p.contains("選択肢: 公開する (key `publish`) / 保留 (key `hold`, 推奨)"),
+        p.contains(
+            "選択肢: 公開する (key `publish`: 公開ページを今すぐ外部へ出す) / 保留 (key `hold`, 推奨)"
+        ),
+        "{p}"
+    );
+    // ADR 2026-10-28-cos-inbox-chat-summary D2: the body of the revision, not the clipped detail.
+    assert!(
+        p.contains("本文: 公開先は https://example.org/a\n    選択肢 A: 今すぐ公開"),
         "{p}"
     );
     assert!(
@@ -590,6 +600,7 @@ fn inbox_item(created_at: &str) -> crate::protocol::CosChatInboxItem {
         source_revision: "r1".into(),
         state: "pending".into(),
         summary: "確認".into(),
+        detail: String::new(),
         reason: None,
         created_at: created_at.into(),
         decision: None,

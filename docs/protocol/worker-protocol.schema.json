@@ -1266,6 +1266,10 @@
           ],
           "description": "What the person must decide (from the escalation / fallback packet), if routed."
         },
+        "detail": {
+          "description": "The body of the same revision as ingested (unclipped; ADR 2026-10-28-cos-inbox-chat-summary D2).",
+          "type": "string"
+        },
         "item_id": {
           "description": "`cos_inbox_items.id` (the triage item; `/cos/inbox/{i}/resolve` while `pending`/`running`).",
           "type": "string"
@@ -1317,6 +1321,13 @@
     },
     "CosChatInboxOption": {
       "properties": {
+        "detail": {
+          "description": "What choosing it means, in full (the escalation packet's `options[].detail`, ADR\n2026-10-28-cos-inbox-chat-summary D3).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "key": {
           "type": "string"
         },

@@ -112,6 +112,7 @@ pub(crate) fn inbox_context_item(item: CosTriageItemReport) -> CosChatInboxItem 
         source_revision: item.source_revision,
         state: item.state,
         summary,
+        detail: item.detail,
         reason: item.reason,
         created_at: item.created_at,
         decision: item.decision.map(|d| CosChatInboxDecision {
@@ -122,6 +123,7 @@ pub(crate) fn inbox_context_item(item: CosTriageItemReport) -> CosChatInboxItem 
                 .map(|o| CosChatInboxOption {
                     key: o.key,
                     label: o.label,
+                    detail: o.detail,
                 })
                 .collect(),
             recommended: d.recommended,
@@ -266,6 +268,14 @@ impl Dispatcher {
 
 impl CosChatLaunch {
     fn claim_queued(&mut self, dispatcher: &mut Dispatcher) -> Result<(), String> {
+        // ADR 2026-10-28-cos-inbox-chat-summary D4: a thread with new triage items runs the triage
+        // before a queued daemon request (role=system); a person's message still goes first.
+        let triage_pending: std::collections::HashSet<String> = self
+            .store
+            .cos_triage_pending_threads()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .collect();
         let mut before = None;
         loop {
             let page = self
@@ -281,6 +291,14 @@ impl CosChatLaunch {
                     continue;
                 }
                 if self.running.contains_key(&thread.id) {
+                    continue;
+                }
+                if triage_pending.contains(&thread.id)
+                    && !self
+                        .store
+                        .chat_thread_has_queued_user(&thread.id)
+                        .map_err(|e| e.to_string())?
+                {
                     continue;
                 }
                 if !self.has_capacity(dispatcher) {

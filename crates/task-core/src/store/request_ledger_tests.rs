@@ -22,6 +22,7 @@ fn source(kind: &str, key: &str, revision: &str, task: TaskId) -> CosTriageSourc
         source_event_id: None,
         operation_id: None,
         summary: "要求".into(),
+        detail: String::new(),
         policy_version: "4".into(),
         task_id: Some(task.to_string()),
     }

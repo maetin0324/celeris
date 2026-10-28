@@ -204,6 +204,7 @@ async fn project_escalation_is_answered_through_the_general_cos_and_relayed_to_t
                 source_event_id: None,
                 operation_id: None,
                 summary: "decision dec-window".into(),
+                detail: String::new(),
                 policy_version: "5".into(),
                 task_id: Some(task.id.to_string()),
             }],
@@ -500,6 +501,7 @@ async fn project_escalation_is_answered_through_the_general_cos_and_relayed_to_t
         source_event_id: None,
         operation_id: None,
         summary: i.title,
+        detail: String::new(),
         policy_version: "5".into(),
         task_id: None,
     })

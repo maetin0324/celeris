@@ -108,7 +108,7 @@ async fn cos_chat_triage_fallback_run_failure_routes_once() {
     }
     assert_eq!(f.fallback_outbox(), 1);
     assert_eq!(
-        f.inbox_runs(),
+        f.triage_runs(),
         1,
         "the fallback item is never claimed again"
     );
@@ -325,6 +325,8 @@ fn cos_chat_triage_fallback_reason_is_deterministic() {
         run_state: None,
         run_reason: None,
         route: None,
+        summary: String::new(),
+        detail: String::new(),
     };
     let fresh = FallbackCandidate {
         created_at: (now - time::Duration::seconds(10))
@@ -363,4 +365,231 @@ fn cos_chat_triage_fallback_reason_is_deterministic() {
             .expect("quota")
             .contains("quota")
     );
+}
+
+impl Fixture {
+    /// Triage runs (input is the claim line), as opposed to runs on queued requests.
+    fn triage_runs(&self) -> i64 {
+        self.count(&format!(
+            "SELECT COUNT(*) FROM chat_runs r JOIN chat_messages m ON m.id=r.input_message_id \
+             WHERE m.text LIKE '{}%'",
+            task_core::chat::triage::COS_TRIAGE_CLAIM_PREFIX
+        ))
+    }
+
+    /// Messages of the general CoS thread: `(role, state, client key, text)`.
+    fn general_messages(&self) -> Vec<(String, String, Option<String>, String)> {
+        let thread = self.inbox_thread().expect("general thread");
+        let conn = rusqlite::Connection::open(&self.db_path).expect("db");
+        let mut stmt = conn
+            .prepare(
+                "SELECT role,state,client_message_id,text FROM chat_messages \
+                 WHERE thread_id=?1 ORDER BY seq",
+            )
+            .expect("prepare");
+        stmt.query_map([thread], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows")
+    }
+
+    /// A blocked task whose question is `text` (the whole body of the wait).
+    fn long_question(&self, title: &str, text: &str) -> TaskId {
+        let mut task = new_task(self.dir.path(), Check::Human, 0);
+        task.title = title.into();
+        task.status = Status::Blocked;
+        self.store
+            .create_task(
+                &task,
+                vec![Event::QuestionRaised {
+                    run_id: "r0".into(),
+                    text: text.into(),
+                }],
+            )
+            .expect("task");
+        task.id
+    }
+}
+
+/// ADR 2026-10-28-cos-inbox-chat-summary D1/D4 (受け入れ条件 0・1): a wait whose options are
+/// spelled out past the 600-char inbox detail reaches the chat whole, and CoS is asked to add its
+/// summary once it can run. The request is a queued system message: CoS runs on it, and it is
+/// never a person's instruction.
+#[tokio::test]
+async fn cos_chat_triage_fallback_hands_over_the_whole_body_and_queues_a_summary() {
+    let mut f = fixture(true);
+    // Stopped intake of new work: CoS never starts, so only the deadline fires.
+    f.d.accepting_new_work = false;
+    f.tick();
+    let body = format!(
+        "{}\nA: cluster-hpc へ今回だけ委譲する\nB: software-engineering が自分で実行する\nC: 委譲をやめて人が手で行う",
+        "委譲の背景。".repeat(120)
+    );
+    f.long_question("長い質問", &body);
+    f.tick();
+    f.advance(130);
+    f.tick();
+    f.assert_one_fallback("120 秒");
+    assert_eq!(f.inbox_runs(), 0);
+    let messages = f.general_messages();
+    let handoff = messages
+        .iter()
+        .find(|(_, _, key, _)| {
+            key.as_deref()
+                .is_some_and(|k| k.starts_with("cos-fallback:"))
+        })
+        .expect("hand-off line");
+    assert!(
+        handoff.3.contains("C: 委譲をやめて人が手で行う"),
+        "{}",
+        handoff.3
+    );
+    assert!(handoff.3.contains("CoS が戻り次第"), "{}", handoff.3);
+    assert!(!handoff.3.contains('…'), "not clipped: {}", handoff.3);
+    let requests: Vec<_> = messages
+        .iter()
+        .filter(|(_, _, key, _)| {
+            key.as_deref().is_some_and(|k| {
+                k.starts_with(task_core::chat::triage::COS_FALLBACK_SUMMARY_KEY_PREFIX)
+            })
+        })
+        .collect();
+    assert_eq!(requests.len(), 1, "{messages:?}");
+    let (role, state, _, text) = requests[0];
+    assert_eq!((role.as_str(), state.as_str()), ("system", "queued"));
+    assert!(
+        text.starts_with(task_core::chat::triage::COS_FALLBACK_SUMMARY_PREFIX),
+        "{text}"
+    );
+    assert!(text.contains("人の発言ではない"), "{text}");
+    assert!(text.contains("GET /api/v1/tasks/"), "{text}");
+    assert!(text.contains("長い質問"), "{text}");
+
+    // Ticks while CoS is still away neither duplicate the line nor the request.
+    f.tick();
+    f.tick();
+    assert_eq!(
+        f.count(
+            "SELECT COUNT(*) FROM chat_messages WHERE client_message_id LIKE 'cos-fallback-summary:%'"
+        ),
+        1
+    );
+
+    // CoS is back: the normal queue claim runs CoS on the request.
+    f.d.accepting_new_work = true;
+    f.tick();
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM chat_runs"),
+        1,
+        "a run on the queued request"
+    );
+    assert_eq!(
+        f.triage_runs(),
+        0,
+        "the handed-over item is not triaged again"
+    );
+    let input_text = f.count_text(
+        "SELECT m.text FROM chat_runs r JOIN chat_messages m ON m.id=r.input_message_id \
+         ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1",
+    );
+    assert!(
+        input_text.starts_with(task_core::chat::triage::COS_FALLBACK_SUMMARY_PREFIX),
+        "{input_text}"
+    );
+    assert!(f.join_inbox().await);
+}
+
+/// CoS disabled: the hand-off line does not promise a summary and nothing is queued.
+#[tokio::test]
+async fn cos_chat_triage_fallback_disabled_queues_no_summary() {
+    let mut f = fixture(false);
+    f.tick();
+    f.question("disabled", vec![]);
+    f.tick();
+    f.assert_one_fallback("cos.enabled=false");
+    let messages = f.general_messages();
+    assert!(
+        messages
+            .iter()
+            .all(|(_, _, _, t)| !t.contains("CoS が戻り次第"))
+    );
+    assert_eq!(
+        f.count(
+            "SELECT COUNT(*) FROM chat_messages WHERE client_message_id LIKE 'cos-fallback-summary:%'"
+        ),
+        0
+    );
+}
+
+/// ADR 2026-10-28-cos-inbox-chat-summary D2 (受け入れ条件 2): a notice bundle that grows after
+/// ingestion keeps its title and body together. The fallback of the first revision quotes that
+/// revision's body, never the later event's body under the earlier title.
+#[tokio::test]
+async fn cos_chat_triage_fallback_notice_title_and_body_stay_together() {
+    let mut f = fixture(false);
+    f.tick();
+    let record = |f: &Fixture, key: &str, title: &str, summary: &str| {
+        f.store
+            .notice_record(&NoticeEvent {
+                source_key: key.into(),
+                kind: NoticeKind::Report,
+                group_key: "report:bundle".into(),
+                title: title.into(),
+                summary: summary.into(),
+                project_id: None,
+                task_id: None,
+                target: None,
+                links: Vec::new(),
+                at: f.d.now_utc(),
+            })
+            .expect("notice")
+            .notice_id()
+    };
+    record(
+        &f,
+        "report:1",
+        "日次整理が完了",
+        "KB の受信箱を 3 件整理した",
+    );
+    f.tick();
+    // The bundle grows before the fallback of revision 1 is written.
+    record(&f, "report:2", "task X が完了", "task X の成果を統合した");
+    let conn = rusqlite::Connection::open(&f.db_path).expect("db");
+    let rows: Vec<(String, String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT source_revision,summary,detail FROM cos_inbox_items ORDER BY source_revision")
+            .expect("prepare");
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows")
+    };
+    assert_eq!(
+        rows[0],
+        (
+            "1".to_string(),
+            "日次整理が完了".to_string(),
+            "KB の受信箱を 3 件整理した".to_string()
+        )
+    );
+    f.tick();
+    let bodies: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT n.body FROM notifications n JOIN cos_notification_routes r ON r.notification_id=n.id \
+                 JOIN cos_inbox_items i ON i.id=r.item_id WHERE i.source_revision='1'",
+            )
+            .expect("prepare");
+        stmt.query_map([], |r| r.get(0))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows")
+    };
+    assert_eq!(bodies.len(), 1, "revision 1 handed over once");
+    let body: serde_json::Value = serde_json::from_str(&bodies[0]).expect("json");
+    let summary = body["summary"].as_str().expect("summary");
+    assert_eq!(summary, "日次整理が完了 — KB の受信箱を 3 件整理した");
+    assert!(!summary.contains("task X"), "{summary}");
 }

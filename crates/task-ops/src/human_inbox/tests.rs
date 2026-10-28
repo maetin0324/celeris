@@ -1080,3 +1080,39 @@ fn human_inbox_answered_items_disappear() {
     );
     assert_eq!(after.counts.total, 0);
 }
+
+/// ADR 2026-10-28-cos-inbox-chat-summary D1: a long authorization (選択肢 A〜C の本文が 600 字の後ろ)
+/// keeps a clipped `detail` for the list, the whole text in `detail_full`, and a link to the full text.
+#[test]
+fn human_inbox_long_authorization_keeps_full_text_and_link() {
+    let mut f = fixture();
+    let filler = "委譲の背景。".repeat(120);
+    let question = format!(
+        "{filler}\nA: cluster-hpc へ今回だけ委譲する\nB: software-engineering が自分で実行する\nC: 委譲をやめて人が手で行う"
+    );
+    for q in &mut f.inbox.questions {
+        if q.approval_id.is_some() {
+            q.question = question.clone();
+        }
+    }
+    let out = from_inbox(&f.inbox, &f.by_id, now());
+    let a = one(&out, InboxKind::Authorization);
+    let detail = a.detail.as_deref().expect("detail");
+    assert!(detail.ends_with('…'), "{detail}");
+    assert_eq!(detail.chars().count(), DETAIL_CLIP_CHARS + 1);
+    assert!(!detail.contains("C: 委譲をやめて"), "clipped for the list");
+    assert_eq!(a.detail_full.as_deref(), Some(question.as_str()));
+    let task = a.task.as_ref().expect("task");
+    assert!(
+        a.links
+            .iter()
+            .any(|l| l.label == FULL_TEXT_LINK_LABEL
+                && l.href == format!("/api/v1/tasks/{}", task.id)),
+        "{:?}",
+        a.links
+    );
+    // 短い本文は切らず、全文の link も足さない。
+    let q = one(&out, InboxKind::Question);
+    assert_eq!(q.detail, q.detail_full);
+    assert!(q.links.iter().all(|l| l.label != FULL_TEXT_LINK_LABEL));
+}

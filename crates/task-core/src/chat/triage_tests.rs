@@ -15,6 +15,7 @@ fn item(key: &str, revision: &str) -> CosTriageSource {
         source_event_id: Some(7),
         operation_id: None,
         summary: "approve?".into(),
+        detail: String::new(),
         policy_version: "v1".into(),
         task_id: None,
     }

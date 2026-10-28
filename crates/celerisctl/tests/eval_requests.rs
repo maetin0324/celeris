@@ -31,6 +31,7 @@ fn question(key: &str, revision: &str) -> CosTriageSource {
         source_event_id: None,
         operation_id: None,
         summary: "q".into(),
+        detail: String::new(),
         policy_version: "4".into(),
         task_id: None,
     }

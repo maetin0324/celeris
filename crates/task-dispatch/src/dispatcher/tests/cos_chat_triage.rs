@@ -92,11 +92,15 @@ impl Fixture {
         self.count("SELECT COUNT(*) FROM cos_inbox_items")
     }
 
+    /// Runs of the general thread, except runs on the post-fallback summary requests (ADR
+    /// 2026-10-28-cos-inbox-chat-summary D4; `fallback::triage_runs` counts those apart).
     fn inbox_runs(&self) -> i64 {
-        self.count(
+        self.count(&format!(
             "SELECT COUNT(*) FROM chat_runs r JOIN chat_threads t ON t.id=r.thread_id \
-             WHERE t.kind='general'",
-        )
+             JOIN chat_messages m ON m.id=r.input_message_id \
+             WHERE t.kind='general' AND m.text NOT LIKE '{}%'",
+            task_core::chat::triage::COS_FALLBACK_SUMMARY_PREFIX
+        ))
     }
 
     fn inbox_thread(&self) -> Option<String> {
@@ -243,7 +247,9 @@ async fn cos_chat_triage_ingest_one_wait_makes_one_item_one_message_one_run() {
     assert_eq!(f.items(), 1);
     assert_eq!(f.triage_messages().len(), 1);
     assert_eq!(f.inbox_runs(), 1, "no second run for the same wait");
-    assert!(!f.join_inbox().await);
+    // ADR 2026-10-28-cos-inbox-chat-summary D4: only the post-fallback summary request may run.
+    f.join_inbox().await;
+    assert_eq!(f.inbox_runs(), 1, "no second triage run");
 }
 
 #[tokio::test]
@@ -286,7 +292,9 @@ async fn cos_chat_triage_ingest_redelivery_title_and_read_do_not_duplicate() {
     assert_eq!(f.items(), 2);
     assert_eq!(f.triage_messages().len(), 1);
     assert_eq!(f.inbox_runs(), 1);
-    assert!(!f.join_inbox().await);
+    // ADR 2026-10-28-cos-inbox-chat-summary D4: only the post-fallback summary request may run.
+    f.join_inbox().await;
+    assert_eq!(f.inbox_runs(), 1, "no second triage run");
 }
 
 #[tokio::test]
@@ -416,6 +424,7 @@ async fn cos_chat_triage_reconcile_resolves_closed_escalated_unintegrated_with_z
         source_event_id: Some(1),
         operation_id: None,
         summary: "unintegrated".into(),
+        detail: String::new(),
         policy_version: "v1".into(),
         task_id: None,
     };
@@ -447,6 +456,7 @@ fn stale_source(kind: &str, key: String) -> task_core::chat::triage::CosTriageSo
         source_event_id: None,
         operation_id: None,
         summary: "stale".into(),
+        detail: String::new(),
         policy_version: "v1".into(),
         task_id: None,
     }

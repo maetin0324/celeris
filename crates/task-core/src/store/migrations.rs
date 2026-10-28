@@ -190,6 +190,9 @@ pub(crate) const MIGRATION_0099: &str =
 /// ADR 2026-10-28-cos-session-policy-key D1: `node_sessions.policy_key`（CoS session の照合 key の方針の部分）。
 pub(crate) const MIGRATION_0100: &str =
     include_str!("../../migrations/0100_cos_session_policy_key.sql");
+/// ADR 2026-10-28-cos-inbox-chat-summary D2: `cos_inbox_items.detail`（取り込んだ revision の本文の写し）。
+pub(crate) const MIGRATION_0101: &str =
+    include_str!("../../migrations/0101_cos_inbox_item_detail.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration）。`migrate` は飛ばし、
@@ -199,7 +202,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 100;
+pub const SCHEMA_VERSION: u32 = 101;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -333,6 +336,7 @@ impl SqliteStore {
             98 => Ok(MIGRATION_0098),
             99 => Ok(MIGRATION_0099),
             100 => Ok(MIGRATION_0100),
+            101 => Ok(MIGRATION_0101),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

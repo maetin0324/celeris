@@ -113,6 +113,7 @@ fn ingest(env: &TestEnv, kind: &str, key: &str, revision: &str, secs: i64) -> St
         source_event_id: None,
         operation_id: None,
         summary: format!("{kind} {key}"),
+        detail: String::new(),
         policy_version: "1".into(),
         task_id: None,
     };

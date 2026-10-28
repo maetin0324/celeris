@@ -189,6 +189,7 @@ fn ingest_all(env: &TestEnv, cursor: i64) -> Vec<(String, String, String)> {
             source_event_id: None,
             operation_id: None,
             summary: item.title.clone(),
+            detail: String::new(),
             policy_version: "1".into(),
             task_id: None,
         })

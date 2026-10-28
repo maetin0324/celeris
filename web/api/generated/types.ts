@@ -2107,6 +2107,7 @@ export type EscalationAudit = {
 };
 
 export type EscalationOption = {
+  "detail"?: string | null;
   "key": string;
   "label": string;
 };

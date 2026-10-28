@@ -88,6 +88,7 @@ fn ingest_and_claim(h: &Harness) -> Vec<(String, String, String)> {
             source_event_id: None,
             operation_id: None,
             summary: item.title.clone(),
+            detail: String::new(),
             policy_version: POLICY.into(),
             task_id: Some(h.task.id.to_string()),
         });

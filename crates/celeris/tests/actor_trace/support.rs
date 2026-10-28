@@ -163,6 +163,7 @@ impl Harness {
             source_event_id: None,
             operation_id: None,
             summary: item.title.clone(),
+            detail: String::new(),
             policy_version: POLICY.into(),
             task_id: Some(self.task.id.to_string()),
         };

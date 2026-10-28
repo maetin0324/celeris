@@ -227,7 +227,7 @@ pub fn chat_fts_literal(q: &str) -> Option<String> {
 pub(crate) const THREAD_SELECT: &str = "SELECT t.id,t.kind,t.title,t.project_id,t.status,t.queue_paused,\
  t.revision,t.created_at,t.updated_at,\
  (SELECT r.run_id FROM chat_runs r WHERE r.thread_id=t.id AND r.state IN ('running','stopping')),\
- (SELECT COUNT(*) FROM chat_messages m WHERE m.thread_id=t.id AND m.role='user' AND m.state='queued'),\
+ (SELECT COUNT(*) FROM chat_messages m WHERE m.thread_id=t.id AND m.role IN ('user','system') AND m.state='queued'),\
  t.read_through_seq,\
  (SELECT COUNT(*) FROM chat_messages u WHERE u.thread_id=t.id AND u.role<>'user' AND u.seq>t.read_through_seq),\
  (SELECT COUNT(*) FROM cos_inbox_items i WHERE i.thread_id=t.id AND i.state IN ('pending','running','escalated','fallback')) \
@@ -429,7 +429,7 @@ pub(crate) fn message_require(
 /// Queued user messages in claim order: interrupt messages first, then seq (D2).
 pub(crate) fn queue_order(conn: &Connection, thread_id: &str) -> Result<Vec<String>, ChatError> {
     let mut stmt = conn.prepare_cached(
-        "SELECT id FROM chat_messages WHERE thread_id=?1 AND role='user' AND state='queued' \
+        "SELECT id FROM chat_messages WHERE thread_id=?1 AND role IN ('user','system') AND state='queued' \
          ORDER BY CASE WHEN json_extract(metadata_json,'$.interrupt')=1 THEN 0 ELSE 1 END, seq",
     )?;
     let ids = stmt
@@ -674,6 +674,26 @@ impl SqliteStore {
         let thread = thread_require(&tx, &id)?;
         tx.commit()?;
         Ok(thread)
+    }
+
+    /// Whether a person's message waits in the thread's queue (ADR 2026-10-28-cos-inbox-chat-summary
+    /// D4: a daemon request queued as `role=system` yields to new triage items, a person's does not).
+    pub fn chat_thread_has_queued_user(&self, thread_id: &str) -> Result<bool, ChatError> {
+        let conn = writer(self)?;
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE thread_id=?1 AND role='user' AND state='queued')",
+            [thread_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// The general CoS thread id, created on first use (ADR 2026-10-28-cos-inbox-chat-summary D4).
+    pub fn cos_general_thread_ensure(&self, now: OffsetDateTime) -> Result<String, ChatError> {
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let id = cos_thread_ensure_tx(&tx, None, &chat_ts(now))?;
+        tx.commit()?;
+        Ok(id)
     }
 
     /// D5 `POST /chat/threads/{t}/read`: raise the read watermark, capped at the last seq.
@@ -1108,6 +1128,63 @@ impl SqliteStore {
             run_id,
             now,
         )
+    }
+
+    /// ADR 2026-10-28-cos-inbox-chat-summary D4: a daemon request queued as a CoS run input. It is
+    /// a `role=system` message in state `queued`, so the normal queue claim runs CoS on it and the
+    /// run's final text becomes the assistant reply, while `instructed_by` (which requires
+    /// `role=user`) can never cite it. The stable key makes it idempotent across ticks and restarts.
+    pub fn chat_system_queue_once(
+        &self,
+        thread_id: &str,
+        key: &str,
+        text: &str,
+        now: OffsetDateTime,
+    ) -> Result<ChatMessage, ChatError> {
+        if key.len() > CHAT_CLIENT_KEY_MAX_BYTES {
+            return Err(ChatError::TooLarge("system message key".into()));
+        }
+        if text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
+            return Err(ChatError::TooLarge("system message text".into()));
+        }
+        let at = chat_ts(now);
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        thread_require(&tx, thread_id)?;
+        let existing = tx
+            .query_row(
+                &format!("{MESSAGE_SELECT} WHERE thread_id=?1 AND client_message_id=?2"),
+                params![thread_id, key],
+                message_raw,
+            )
+            .optional()?;
+        if let Some(raw) = existing {
+            let message = message_from_raw(&tx, raw)?;
+            if message.role == ChatMessageRole::System && message.text == text {
+                return Ok(message);
+            }
+            return Err(ChatError::Conflict(format!(
+                "system message key {key} reused"
+            )));
+        }
+        let id = insert_message(
+            &tx,
+            NewMessage {
+                thread_id,
+                role: ChatMessageRole::System,
+                text,
+                state: ChatMessageState::Queued,
+                client_message_id: Some(key),
+                reply_to_id: None,
+                run_id: None,
+                metadata: &json!({}),
+            },
+            &at,
+        )?;
+        let message = message_require(&tx, thread_id, &id)?;
+        emit_message(&tx, &message, &at)?;
+        tx.commit()?;
+        Ok(message)
     }
 
     fn chat_system_message_add_keyed(

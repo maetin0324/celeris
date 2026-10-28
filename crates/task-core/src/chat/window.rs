@@ -86,13 +86,21 @@ pub(crate) fn post_escalation_card_tx(
                 .filter(|id| !id.is_empty() && !id.contains('/'))
         })
         .map(str::to_owned);
-    let options: Vec<String> = packet["options"]
+    // ADR 2026-10-28-cos-inbox-chat-summary D3: an option with CoS's text says what choosing it means.
+    let options: Vec<(String, Option<String>)> = packet["options"]
         .as_array()
         .map(|items| {
             items
                 .iter()
-                .filter_map(|o| o.as_str().or_else(|| o["label"].as_str()))
-                .map(str::to_owned)
+                .filter_map(|o| {
+                    let label = o.as_str().or_else(|| o["label"].as_str())?;
+                    let detail = o["detail"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|d| !d.is_empty())
+                        .map(str::to_owned);
+                    Some((label.to_owned(), detail))
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -100,8 +108,20 @@ pub(crate) fn post_escalation_card_tx(
     if let Some(task) = &task_id {
         text.push_str(&format!("\ntask: {task}"));
     }
-    if !options.is_empty() {
-        text.push_str(&format!("\n選択肢: {}", options.join(" / ")));
+    if options.iter().any(|(_, d)| d.is_some()) {
+        text.push_str("\n選択肢:");
+        for (label, detail) in &options {
+            match detail {
+                Some(detail) => text.push_str(&format!("\n- {label}: {detail}")),
+                None => text.push_str(&format!("\n- {label}")),
+            }
+        }
+        if let Some(recommended) = packet["recommended"].as_str() {
+            text.push_str(&format!("\n推奨: {recommended}"));
+        }
+    } else if !options.is_empty() {
+        let labels: Vec<&str> = options.iter().map(|(l, _)| l.as_str()).collect();
+        text.push_str(&format!("\n選択肢: {}", labels.join(" / ")));
         if let Some(recommended) = packet["recommended"].as_str() {
             text.push_str(&format!("（推奨: {recommended}）"));
         }
@@ -120,7 +140,12 @@ pub(crate) fn post_escalation_card_tx(
     let card = ChatCard {
         kind: card_kind(&kind),
         id: key,
-        title: summary,
+        // The fallback body names the wait's title; its summary carries the whole body.
+        title: packet["title"]
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map_or(summary, str::to_owned),
         state,
         href: packet["web_path"].as_str().unwrap_or_default().to_owned(),
         actor: ChatActor::Cos,

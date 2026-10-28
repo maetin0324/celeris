@@ -398,6 +398,9 @@ fn relayed_section(chat: &CosChatContext) -> String {
     out
 }
 
+/// The body of one inbox item quoted in the prompt (the rest is read through the API).
+const INBOX_BODY_PROMPT_CHARS: usize = 1500;
+
 fn inbox_section(chat: &CosChatContext) -> String {
     if chat.inbox_items.is_empty() {
         return String::new();
@@ -410,7 +413,11 @@ fn inbox_section(chat: &CosChatContext) -> String {
             other => other,
         }
     }
-    let mut out = String::from("## 受信箱の未解決の件 (open inbox items, newest first)\n");
+    let mut out = String::from(
+        "## 受信箱の未解決の件 (open inbox items, newest first)\n\
+         人に件を説明するときは、受信箱の切れた detail を写さず、本文・task の最新の question・選択肢の中身・案件の状況を\
+         読んで、何が起きたか・人が決めること・各選択肢の中身・推奨を書く（skill cos-inbox-triage §6・§11）。\n",
+    );
     for item in &chat.inbox_items {
         out.push_str(&format!(
             "- item {} [{}] {}: 「{}」 (source {}:{} rev {}, {})
@@ -430,6 +437,21 @@ fn inbox_section(chat: &CosChatContext) -> String {
 "
             ));
         }
+        // ADR 2026-10-28-cos-inbox-chat-summary D2: the body of the same revision as the title.
+        let body = item.detail.trim();
+        if !body.is_empty() {
+            let shown: String = body.chars().take(INBOX_BODY_PROMPT_CHARS).collect();
+            let rest = if body.chars().count() > INBOX_BODY_PROMPT_CHARS {
+                "…（続きは元の待ちを API で読む）"
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "  本文: {}{rest}
+",
+                shown.replace('\n', "\n    ")
+            ));
+        }
         if let Some(d) = &item.decision {
             if !d.summary.is_empty() {
                 out.push_str(&format!(
@@ -443,10 +465,16 @@ fn inbox_section(chat: &CosChatContext) -> String {
                     .options
                     .iter()
                     .map(|o| {
-                        if d.recommended.as_deref() == Some(o.key.as_str()) {
-                            format!("{} (key `{}`, 推奨)", o.label, o.key)
+                        let mark = if d.recommended.as_deref() == Some(o.key.as_str()) {
+                            ", 推奨"
                         } else {
-                            format!("{} (key `{}`)", o.label, o.key)
+                            ""
+                        };
+                        match o.detail.as_deref().filter(|t| !t.is_empty()) {
+                            Some(detail) => {
+                                format!("{} (key `{}`{mark}: {detail})", o.label, o.key)
+                            }
+                            None => format!("{} (key `{}`{mark})", o.label, o.key),
                         }
                     })
                     .collect();

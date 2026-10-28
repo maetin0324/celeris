@@ -184,6 +184,8 @@ fn inbox_source(item: &InboxItem, policy_version: &str) -> CosTriageSource {
         source_event_id: None,
         operation_id: None,
         summary: item.title.clone(),
+        // ADR 2026-10-28-cos-inbox-chat-summary D1/D2: the unclipped body of this revision.
+        detail: item.detail_full.clone().unwrap_or_default(),
         policy_version: policy_version.to_owned(),
         task_id: item_tasks(item).next().map(|t| t.to_string()),
     }
@@ -197,7 +199,7 @@ fn is_direct(item: &InboxItem) -> bool {
 /// 直送する item の escalation outbox の本文。値は載せない（用途・待ち task・登録リンクだけ）。
 fn direct_body(item: &InboxItem) -> String {
     let mut summary = item.title.clone();
-    if let Some(detail) = item.detail.as_deref().filter(|d| !d.is_empty()) {
+    if let Some(detail) = item.detail_full.as_deref().filter(|d| !d.is_empty()) {
         summary.push_str(" — ");
         summary.push_str(detail);
     }
@@ -280,6 +282,9 @@ pub(crate) fn notice_source(notice: &Notice, policy_version: &str) -> Option<Cos
         source_event_id: None,
         operation_id,
         summary: notice.title.clone(),
+        // ADR 2026-10-28-cos-inbox-chat-summary D2: the body of the same bundle state as the title.
+        // A later event of the bundle is a new revision with its own row; never mix the two.
+        detail: notice.summary.clone(),
         policy_version: policy_version.to_owned(),
         task_id: notice.task_id.clone(),
     })

@@ -155,6 +155,7 @@ fn cos_chat_triage_resolved_source_is_withdrawn_before_post() {
         source_event_id: None,
         operation_id: None,
         summary: "wait".into(),
+        detail: String::new(),
         policy_version: "1".into(),
         task_id: None,
     };
@@ -192,6 +193,7 @@ fn cos_chat_triage_three_send_failures_keep_the_unresolved_item() {
         source_event_id: None,
         operation_id: None,
         summary: "wait".into(),
+        detail: String::new(),
         policy_version: "1".into(),
         task_id: None,
     };
@@ -269,6 +271,7 @@ fn cos_chat_triage_notice_revision_is_checked_before_post() {
         source_event_id: None,
         operation_id: None,
         summary: notice.title.clone(),
+        detail: String::new(),
         policy_version: "1".into(),
         task_id: None,
     };

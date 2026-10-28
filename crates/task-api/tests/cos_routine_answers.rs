@@ -91,6 +91,7 @@ fn ingest(env: &TestEnv, inbox_id: &str, secs: i64) -> String {
         source_event_id: None,
         operation_id: None,
         summary: inbox_id.into(),
+        detail: String::new(),
         policy_version: "6".into(),
         task_id: None,
     };

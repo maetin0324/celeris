@@ -375,7 +375,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 100);
+    assert_eq!(SCHEMA_VERSION, 101);
     assert_eq!(
         store
             .cluster_settings_get("pegasus")

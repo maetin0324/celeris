@@ -10075,6 +10075,13 @@
     "EscalationOption": {
       "additionalProperties": false,
       "properties": {
+        "detail": {
+          "description": "What choosing it means, in full sentences (ADR 2026-10-28-cos-inbox-chat-summary D3). The\nchat shows it under the label; a label alone (「今回だけ認める」) does not say what is allowed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "key": {
           "type": "string"
         },
@@ -16389,6 +16396,7 @@
           "type": "string"
         },
         "detail": {
+          "description": "判断材料の本文。長い本文は `DETAIL_CLIP_CHARS` 字で切り、末尾を「…」にする。切ったときは\n`links` に全文の在りか（「全文」）を足す（ADR 2026-10-28-cos-inbox-chat-summary D1）。",
           "type": [
             "string",
             "null"

@@ -52,6 +52,7 @@ fn escalated_item(s: &SqliteStore, thread: &str) -> (String, String) {
             source_event_id: None,
             operation_id: None,
             summary: "node-hours".into(),
+            detail: String::new(),
             policy_version: "6".into(),
             task_id: None,
         }],

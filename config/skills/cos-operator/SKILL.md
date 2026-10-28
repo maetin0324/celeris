@@ -23,6 +23,7 @@ metadata:
 | 人が登録 project のアプリの配備（例: PRA の docker compose）を依頼する | [deploy.md](deploy.md) |
 | 人に作業を頼む。長い手順・表を返す | [explaining.md](explaining.md) |
 | 受信箱の件を answer / observe / escalate する | skill `cos-inbox-triage`（受信箱の run にだけ mount される） |
+| 受信箱の件をチャットで人に説明する | 切れた本文（受信箱の `detail` は 600 字で「…」）を写さない。task の最新の question・選択肢の全文・案件の状況を読み、何が起きたか・人が決めること・各選択肢の中身・推奨を書く（skill `cos-inbox-triage` §6・§11） |
 
 ## 領域ごとの操作表
 

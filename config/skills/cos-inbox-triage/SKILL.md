@@ -112,8 +112,9 @@ metadata:
 ## 6. escalation packet の形
 
 ```json
-{"summary":"公開前の確認",
- "options":[{"key":"publish","label":"公開する"},{"key":"hold","label":"保留"}],
+{"summary":"task X の成果を公開するかを決めてください。公開先 https://… の確認が済んでいません。",
+ "options":[{"key":"publish","label":"公開する","detail":"成果ページを今すぐ外部に公開する。取り消すには人が手で非公開にする"},
+            {"key":"hold","label":"保留","detail":"公開先を確かめるまで task X を止めたままにする"}],
  "recommended":"hold","recommendation_reason":"公開先が未確認",
  "web_path":"/tasks/task-id"}
 ```
@@ -121,7 +122,11 @@ metadata:
 - `summary`: 人が数十秒で読める要点（何が止まっていて、何を決めてほしいか）。**最初の 1 文が結論**（人が今何をすればよいか）。
   人への依頼は web の画面名とボタン名で書く（例: 「受信箱」画面で「続ける」を押す）。curl・config・systemd の作業を
   人に求めない。運用者の作業が要るなら運用者向けの task を起票し、人にはその判断だけを頼む（cos-operator の explaining.md）。
+  本文は受信箱の `detail`（600 字で切れる）を写さない。task の最新の question（`GET /api/v1/tasks/<id>`）・選択肢の全文・
+  案件の状況を読み、何が起きたか → 人が決めることの順に自分の言葉でまとめる（ADR 2026-10-28-cos-inbox-chat-summary）。
 - `options`: 元の問いの現在の選択肢。自由記述の問いには `{"key":"reply","label":"web で回答"}` を使う。
+  `detail`（任意、1〜600 字）に、選んだら何が起きるか・何を認めるかを書く。認可の「今回だけ認める」のように label だけでは
+  中身が分からない選択肢には必ず書く（question 本文の選択肢 A〜C の中身をここへ写す）。チャットは label の下に detail を出す。
 - `recommended`: 推奨する option の key。推奨しないなら `null` にして `recommendation_reason` に理由を書く。
 - `web_path`: 対象の web 画面の、同じアプリ内の path（`/tasks/<id>` など）。サーバが対象から導く path と照合するので、
   外部 URL や推測の path を書かない。
@@ -170,6 +175,17 @@ metadata:
 - 人待ち（escalated / fallback）の件は `resolve` では閉じられない（終端済み）。人の指示を伝える経路は上だけ。
 - 返事には、どの件にどう答えたか（件名・選択肢・operation の id と state）、聞き返したこと、答えられなかった理由を書く。
 - 人の発言と新しい件が重なったときは、人の発言の run が先に走る。前の run が中断されて残った件は次の run に戻る。
+
+## 11. CoS 不在で人へ回った件の要約（ADR 2026-10-28-cos-inbox-chat-summary）
+
+- CoS が 120 秒以内に答えられず人へ直接回った件は、daemon が退避の行（件の本文の全文・選択肢・回答の画面）を残し、
+  統括スレッドに `CoS 不在で人へ直接回した件の要約: items=[…]` で始まる依頼を積む。この入力は daemon の依頼で、人の発言ではない
+  （`instructed_by` には使えない）。
+- この run では、挙がった件ごとに task の最新の question・選択肢の全文・案件の状況を API で読み、(1) 何が起きたか
+  (2) 人が決めること (3) 各選択肢の中身 (4) CoS の推奨と理由 を、人が数十秒で読める分量で返事に書く。
+  回答の operation は実行しない（人の指示が無い）。元の待ちが閉じていた件は閉じたことだけを 1 行で書く。
+- prompt の「受信箱の未解決の件」の `本文` は取り込んだ revision の本文（題名と同じ時点）。知らせの束が後で育っても、
+  その件の題名と本文はこの行のものを使う。別の通知の本文を混ぜない。
 
 ## 10. 窓口は統括 CoS 1 本（ADR 2026-10-28-single-human-window-general-cos）
 

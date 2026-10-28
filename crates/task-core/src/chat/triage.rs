@@ -22,6 +22,9 @@ pub struct CosTriageSource {
     pub source_event_id: Option<i64>,
     pub operation_id: Option<String>,
     pub summary: String,
+    /// ADR 2026-10-28-cos-inbox-chat-summary D2: the body of this revision as ingested (the
+    /// unclipped inbox detail, or the notice summary of the same bundle state as `summary`).
+    pub detail: String,
     pub policy_version: String,
     /// ADR 2026-10-22-cos-fixed-threads D3: the task the item is about. Its root's project picks
     /// the CoS thread; `None` (or no project) goes to the general CoS.
@@ -86,10 +89,10 @@ fn insert_items(
         }
         let thread_id = item_thread(tx, item, at)?;
         inserted += tx.execute(
-            "INSERT INTO cos_inbox_items(id,source_kind,source_key,source_revision,source_event_id,thread_id,message_id,state,policy_version,summary,created_at,updated_at) \
-             VALUES(?1,?2,?3,?4,?5,?6,'','pending',?7,?9,?8,?8) \
+            "INSERT INTO cos_inbox_items(id,source_kind,source_key,source_revision,source_event_id,thread_id,message_id,state,policy_version,summary,detail,created_at,updated_at) \
+             VALUES(?1,?2,?3,?4,?5,?6,'','pending',?7,?9,?10,?8,?8) \
              ON CONFLICT(source_kind,source_key,source_revision) DO NOTHING",
-            params![Ulid::new().to_string(),item.source_kind,item.source_key,item.source_revision,item.source_event_id,thread_id,item.policy_version,at,item.summary],
+            params![Ulid::new().to_string(),item.source_kind,item.source_key,item.source_revision,item.source_event_id,thread_id,item.policy_version,at,item.summary,item.detail],
         )?;
     }
     Ok(inserted)
@@ -481,6 +484,13 @@ impl SqliteStore {
 // items passed to a run in the inbox thread as context (D3). SQLite only.
 // ---------------------------------------------------------------------------
 
+/// ADR 2026-10-28-cos-inbox-chat-summary D4: first line of the daemon's request that CoS add a
+/// summary to an item the fallback handed to the person (`<prefix>["<item_id>"]`; not `item_ids=`,
+/// which marks a triage claim).
+pub const COS_FALLBACK_SUMMARY_PREFIX: &str = "CoS 不在で人へ直接回した件の要約: items=";
+/// Idempotency key prefix of that request (`<prefix><item_id>`).
+pub const COS_FALLBACK_SUMMARY_KEY_PREFIX: &str = "cos-fallback-summary:";
+
 /// Prefix of the idempotency key of one run's digest message (`<prefix><run_id>`).
 pub const COS_TRIAGE_DIGEST_KEY_PREFIX: &str = "cos-triage-digest:";
 
@@ -489,6 +499,8 @@ pub const COS_TRIAGE_DIGEST_KEY_PREFIX: &str = "cos-triage-digest:";
 pub struct CosTriageOption {
     pub key: String,
     pub label: String,
+    /// ADR 2026-10-28-cos-inbox-chat-summary D3: what choosing it means, in full (escalation only).
+    pub detail: Option<String>,
 }
 
 /// What the person must decide, as the escalation / fallback outbox body recorded it.
@@ -512,6 +524,8 @@ pub struct CosTriageItemReport {
     pub source_revision: String,
     pub state: String,
     pub summary: String,
+    /// ADR 2026-10-28-cos-inbox-chat-summary D2: the body of the ingested revision (empty before 0101).
+    pub detail: String,
     pub reason: Option<String>,
     pub operation_id: Option<String>,
     pub run_id: Option<String>,
@@ -545,10 +559,16 @@ pub fn decision_from_outbox(body: &str) -> Option<CosTriageDecision> {
                     serde_json::Value::String(label) => Some(CosTriageOption {
                         key: label.clone(),
                         label: label.clone(),
+                        detail: None,
                     }),
                     serde_json::Value::Object(_) => Some(CosTriageOption {
                         key: o["key"].as_str()?.to_owned(),
                         label: o["label"].as_str().unwrap_or(o["key"].as_str()?).to_owned(),
+                        detail: o["detail"]
+                            .as_str()
+                            .map(str::trim)
+                            .filter(|d| !d.is_empty())
+                            .map(str::to_owned),
                     }),
                     _ => None,
                 })
@@ -567,7 +587,7 @@ pub fn decision_from_outbox(body: &str) -> Option<CosTriageDecision> {
     })
 }
 
-const REPORT_SELECT: &str = "SELECT i.id,i.source_kind,i.source_key,i.source_revision,i.state,i.summary,i.reason,i.operation_id,i.run_id,i.created_at,n.route,nt.body,i.thread_id \
+const REPORT_SELECT: &str = "SELECT i.id,i.source_kind,i.source_key,i.source_revision,i.state,i.summary,i.reason,i.operation_id,i.run_id,i.created_at,n.route,nt.body,i.thread_id,i.detail \
     FROM cos_inbox_items i \
     LEFT JOIN cos_notification_routes n ON n.item_id=i.id \
     LEFT JOIN notifications nt ON nt.id=n.notification_id";
@@ -582,6 +602,7 @@ fn report_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CosTriageItemReport> {
         source_revision: r.get(3)?,
         state: r.get(4)?,
         summary: r.get(5)?,
+        detail: r.get(13)?,
         reason: r.get(6)?,
         operation_id: r.get(7)?,
         run_id: r.get(8)?,

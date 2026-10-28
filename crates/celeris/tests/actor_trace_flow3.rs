@@ -201,6 +201,7 @@ async fn run_flow(escalate: bool) {
             source_event_id: None,
             operation_id: None,
             summary: item.title.clone(),
+            detail: String::new(),
             policy_version: POLICY3.into(),
             task_id: None,
         })
@@ -366,6 +367,7 @@ async fn run_flow(escalate: bool) {
         source_event_id: None,
         operation_id: None,
         summary: reason.clone(),
+        detail: String::new(),
         policy_version: POLICY3.into(),
         task_id: None,
     };

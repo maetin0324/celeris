@@ -182,7 +182,14 @@ pub struct InboxItem {
     pub kind: InboxKind,
     /// 何を決めるか（1 行）。
     pub title: String,
+    /// 判断材料の本文。長い本文は `DETAIL_CLIP_CHARS` 字で切り、末尾を「…」にする。切ったときは
+    /// `links` に全文の在りか（「全文」）を足す（ADR 2026-10-28-cos-inbox-chat-summary D1）。
     pub detail: Option<String>,
+    /// 切る前の本文（process 内の利用者だけ。API には出さない）。CoS 不在の退避と一次対応の取り込みが、
+    /// 切れた `detail` ではなくこれを使う（ADR 2026-10-28-cos-inbox-chat-summary D1）。
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub detail_full: Option<String>,
     pub options: Vec<InboxOption>,
     pub recommended: Option<String>,
     pub due_at: Option<String>,
@@ -376,18 +383,23 @@ fn ts_part(ts: &str) -> String {
     ts.chars().filter(|c| c.is_ascii_digit()).collect()
 }
 
-/// D2 `detail`: 600 字で切る。空は `None`。
-fn clip(s: &str) -> Option<String> {
+/// D2 `detail` の字数の上限。超えた本文は切り、全文の在りかを `links` に残す。
+pub const DETAIL_CLIP_CHARS: usize = 600;
+
+/// `links` に足す全文の在りかの label（ADR 2026-10-28-cos-inbox-chat-summary D1）。
+pub const FULL_TEXT_LINK_LABEL: &str = "全文";
+
+/// Draft の本文。`Clipped` は `finish` が `DETAIL_CLIP_CHARS` 字で切る。`Whole` は切らない
+/// （統合の依頼の Markdown など、全体が判断材料のもの）。
+enum Detail {
+    Clipped(String),
+    Whole(String),
+}
+
+/// D2 `detail`: `finish` で 600 字に切る本文。空は `None`。
+fn clip(s: &str) -> Option<Detail> {
     let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    const MAX: usize = 600;
-    if s.chars().count() <= MAX {
-        Some(s.to_string())
-    } else {
-        Some(format!("{}…", s.chars().take(MAX).collect::<String>()))
-    }
+    (!s.is_empty()).then(|| Detail::Clipped(s.to_string()))
 }
 
 fn opt(key: &str, label: &str, needs_note: bool, effect: &str) -> InboxOption {
@@ -428,7 +440,7 @@ struct Draft {
     id: String,
     kind: InboxKind,
     title: String,
-    detail: Option<String>,
+    detail: Option<Detail>,
     options: Vec<InboxOption>,
     recommended: Option<String>,
     due_at: Option<String>,
@@ -452,6 +464,31 @@ impl Builder<'_> {
             "note".to_string(),
             "string? (needs_note なら必須)".to_string(),
         );
+        let mut links = d.links;
+        let (detail, detail_full) = match d.detail {
+            None => (None, None),
+            Some(Detail::Whole(text)) => (Some(text.clone()), Some(text)),
+            Some(Detail::Clipped(text)) if text.chars().count() <= DETAIL_CLIP_CHARS => {
+                (Some(text.clone()), Some(text))
+            }
+            Some(Detail::Clipped(text)) => {
+                // ADR 2026-10-28-cos-inbox-chat-summary D1: 切ったら全文の在りかを残す。
+                // question・認可の本文は task の最新の問い、それ以外も task 詳細に全文がある。
+                if let Some(task) = &d.task
+                    && !links.iter().any(|l| l.label == FULL_TEXT_LINK_LABEL)
+                {
+                    links.push(link(
+                        FULL_TEXT_LINK_LABEL,
+                        format!("/api/v1/tasks/{}", task.id),
+                    ));
+                }
+                let clipped = format!(
+                    "{}…",
+                    text.chars().take(DETAIL_CLIP_CHARS).collect::<String>()
+                );
+                (Some(clipped), Some(text))
+            }
+        };
         InboxItem {
             answer: InboxAnswer {
                 method: "POST".to_string(),
@@ -462,7 +499,8 @@ impl Builder<'_> {
             id: d.id,
             kind: d.kind,
             title: d.title,
-            detail: d.detail,
+            detail,
+            detail_full,
             options: d.options,
             recommended: d.recommended,
             due_at: d.due_at,
@@ -472,7 +510,7 @@ impl Builder<'_> {
             project_id: d.project_id,
             created_at: d.created_at,
             age_secs,
-            links: d.links,
+            links,
         }
     }
 
@@ -1135,7 +1173,7 @@ impl Builder<'_> {
                     id: format!("integration_request-{}", id_part(request_id)),
                     kind: InboxKind::IntegrationRequest,
                     title,
-                    detail: Some(detail),
+                    detail: Some(Detail::Whole(detail)),
                     options,
                     // ADR 2026-10-28-cos-routine-delegated-answers 付記: integrate task は ADR が定めた既定の
                     // 答え方なので推奨にする（CoS は documented_default の根拠で代答する）。
@@ -1244,10 +1282,10 @@ impl Builder<'_> {
                 id: format!("unintegrated-{}-{repo_id}", task.id),
                 kind: InboxKind::Unintegrated,
                 title: format!("未取り込み: {}", task.title),
-                detail: Some(format!(
+                detail: Some(Detail::Whole(format!(
                     "repository `{repo}` / state `{state:?}` / branch `{branch}` / head `{head_sha}`\n{}",
                     reason.as_deref().unwrap_or("default branch に未到達")
-                )),
+                ))),
                 options: vec![
                     opt(
                         "merge",

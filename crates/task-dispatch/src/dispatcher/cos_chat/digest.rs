@@ -48,22 +48,32 @@ fn judgment(item: &CosTriageItemReport, run_state: &str) -> &'static str {
     }
 }
 
+/// The options of a routed item. With CoS's text for each option (ADR
+/// 2026-10-28-cos-inbox-chat-summary D3) every option gets its own line; labels alone stay on one.
 fn options_line(item: &CosTriageItemReport) -> Option<String> {
     let d = item.decision.as_ref()?;
     if d.options.is_empty() {
         return None;
     }
-    let labels: Vec<String> = d
-        .options
-        .iter()
-        .map(|o| {
-            if d.recommended.as_deref() == Some(o.key.as_str()) {
-                format!("{}（推奨）", o.label)
-            } else {
-                o.label.clone()
-            }
-        })
-        .collect();
+    let label = |o: &task_core::chat::triage::CosTriageOption| {
+        if d.recommended.as_deref() == Some(o.key.as_str()) {
+            format!("{}（推奨）", o.label)
+        } else {
+            o.label.clone()
+        }
+    };
+    if d.options.iter().any(|o| o.detail.is_some()) {
+        let lines: Vec<String> = d
+            .options
+            .iter()
+            .map(|o| match &o.detail {
+                Some(detail) => format!("\n  - {}: {detail}", label(o)),
+                None => format!("\n  - {}", label(o)),
+            })
+            .collect();
+        return Some(lines.concat());
+    }
+    let labels: Vec<String> = d.options.iter().map(label).collect();
     Some(labels.join(" / "))
 }
 

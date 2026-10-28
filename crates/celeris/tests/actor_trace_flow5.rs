@@ -236,6 +236,7 @@ async fn redelivery_and_restart_duplicate_no_operation_or_count() {
         source_event_id: None,
         operation_id: None,
         summary: "認可済みの queue を選ぶ".into(),
+        detail: String::new(),
         policy_version: POLICY.into(),
         task_id: Some(h.task.id.to_string()),
     };

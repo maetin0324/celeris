@@ -214,6 +214,7 @@ fn escalate(store: &SqliteStore, db: &std::path::Path, task: &Task, summary: &st
         source_event_id: None,
         operation_id: None,
         summary: summary.into(),
+        detail: String::new(),
         policy_version: "1".into(),
         task_id: None,
     };

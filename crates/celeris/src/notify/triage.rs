@@ -211,6 +211,7 @@ pub fn cutover(store: &SqliteStore, view: &ViewContext, now: OffsetDateTime) -> 
             source_event_id: None,
             operation_id: None,
             summary: i.title.clone(),
+            detail: String::new(),
             policy_version: "1".into(),
             task_id: i
                 .task
@@ -237,6 +238,7 @@ pub fn cutover(store: &SqliteStore, view: &ViewContext, now: OffsetDateTime) -> 
             source_event_id: None,
             operation_id: None,
             summary: excerpt(&row.body, 120),
+            detail: String::new(),
             policy_version: "1".into(),
             task_id: None,
         });

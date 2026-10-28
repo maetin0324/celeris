@@ -148,6 +148,9 @@ pub struct CosChatInboxItem {
     pub state: String,
     /// The title of the wait as ingested.
     pub summary: String,
+    /// The body of the same revision as ingested (unclipped; ADR 2026-10-28-cos-inbox-chat-summary D2).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
     /// CoS's recorded reason for the outcome, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -183,6 +186,10 @@ pub struct CosChatInboxDecision {
 pub struct CosChatInboxOption {
     pub key: String,
     pub label: String,
+    /// What choosing it means, in full (the escalation packet's `options[].detail`, ADR
+    /// 2026-10-28-cos-inbox-chat-summary D3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// One message delivered to the run.

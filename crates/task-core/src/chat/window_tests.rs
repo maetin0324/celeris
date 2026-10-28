@@ -21,6 +21,7 @@ fn source(key: &str, task: Option<String>) -> CosTriageSource {
         source_event_id: None,
         operation_id: None,
         summary: "公開先の確認".into(),
+        detail: String::new(),
         policy_version: "5".into(),
         task_id: task,
     }

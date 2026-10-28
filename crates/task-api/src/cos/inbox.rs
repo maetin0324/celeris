@@ -51,6 +51,8 @@ pub const REPLY_OPTION: &str = "reply";
 /// Task labels a person sets to keep every wait of the task with the human.
 const HUMAN_REQUIRED_LABELS: &[&str] = &["human_required", "human-required"];
 const MAX_SUMMARY_CHARS: usize = 600;
+/// ADR 2026-10-28-cos-inbox-chat-summary D3: bound of one option's text.
+const MAX_OPTION_DETAIL_CHARS: usize = 600;
 
 pub(crate) fn routes() -> axum::Router<ApiState> {
     axum::Router::new()
@@ -76,6 +78,10 @@ pub enum ResolveOutcome {
 pub struct EscalationOption {
     pub key: String,
     pub label: String,
+    /// What choosing it means, in full sentences (ADR 2026-10-28-cos-inbox-chat-summary D3). The
+    /// chat shows it under the label; a label alone (「今回だけ認める」) does not say what is allowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// D3 escalation packet. `recommended` is one of `options[].key` or null (then the reason says why).
@@ -333,6 +339,16 @@ fn validate_packet(
     for option in &packet.options {
         if option.label.trim().is_empty() {
             return Err(invalid(format!("option {} has an empty label", option.key)));
+        }
+        if option
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.trim().is_empty() || d.chars().count() > MAX_OPTION_DETAIL_CHARS)
+        {
+            return Err(invalid(format!(
+                "option {} detail must be 1..={MAX_OPTION_DETAIL_CHARS} characters when present",
+                option.key
+            )));
         }
         if !seen.insert(option.key.as_str()) {
             return Err(invalid(format!("option key {} is repeated", option.key)));

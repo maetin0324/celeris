@@ -589,3 +589,109 @@ async fn cos_chat_triage_routes_items_to_the_project_or_general_cos_thread() {
         handle.await.expect("worker did not panic");
     }
 }
+
+/// The `cos_inbox_items.id` of the item whose source is the question of `task`.
+fn question_item(f: &Fixture, task: TaskId) -> String {
+    f.count_text(&format!(
+        "SELECT id FROM cos_inbox_items WHERE source_key='question-{task}'"
+    ))
+}
+
+/// ADR 2026-10-27-relayed-instructions 付記 A2: a relay posted while the triage run runs reaches
+/// that run's escalated items only after the run (R2): the relay's own queued run goes first,
+/// then one re-judging run gets the covered item with the relay id (R1), never the item outside
+/// the relay's tasks, and the same relay does not hand the item over twice.
+#[tokio::test]
+async fn cos_chat_triage_relay_after_escalation_rejudges_covered_items_after_the_running_run() {
+    let mut f = fixture(true);
+    f.tick();
+    let covered = f.question("node-hours", vec![]);
+    let other = f.question("unrelated", vec![]);
+    f.tick();
+    assert_eq!(f.inbox_runs(), 1, "the triage run is running");
+    let thread = f.inbox_thread().expect("thread");
+    let (covered_item, other_item) = (question_item(&f, covered), question_item(&f, other));
+    for item in [&covered_item, &other_item] {
+        assert!(
+            f.store
+                .cos_triage_resolve(item, "escalated", None, Some("人に回す"), f.d.now_utc())
+                .expect("escalate")
+        );
+    }
+    // The operator relays the person's instruction for `covered` while the run still runs.
+    let said_at =
+        f.d.now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("rfc3339");
+    let relay = f
+        .store
+        .chat_relay_post(
+            &thread,
+            &task_core::chat::ChatRelayRequest {
+                client_message_id: "relay-1".into(),
+                text: "node-hours は 40 まで使ってよい".into(),
+                said_at,
+                task_ids: vec![covered.to_string()],
+                expires_at: None,
+            },
+            "operator:claude-code",
+            f.d.now_utc(),
+        )
+        .expect("relay")
+        .response
+        .message
+        .id;
+    f.tick();
+    assert_eq!(
+        f.inbox_runs(),
+        1,
+        "R2: nothing starts while the triage run runs"
+    );
+    assert_eq!(f.triage_messages().len(), 1);
+
+    assert!(f.join_inbox().await);
+    f.tick();
+    assert_eq!(f.inbox_runs(), 2, "the relay's own queued run goes first");
+    assert_eq!(f.triage_messages().len(), 1, "no re-judging run beside it");
+    assert!(f.join_inbox().await);
+
+    f.tick();
+    assert_eq!(f.inbox_runs(), 3);
+    let messages = f.triage_messages();
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_eq!(
+        messages[1],
+        format!(
+            "CoS 受信箱の一次対応: item_ids=[\"{covered_item}\"]\n取り次ぎによる再判断: \
+             [{{\"item_id\":\"{covered_item}\",\"source_key\":\"question-{covered}\",\
+             \"relay_message_ids\":[\"{relay}\"]}}]"
+        )
+    );
+    assert_eq!(
+        f.count_text(&format!(
+            "SELECT state FROM cos_inbox_items WHERE id='{other_item}'"
+        )),
+        "escalated",
+        "outside the relay's task_ids"
+    );
+    assert!(f.join_inbox().await);
+
+    // The re-judging run escalates it again: the same relay never hands it over twice.
+    assert!(
+        f.store
+            .cos_triage_resolve(
+                &covered_item,
+                "escalated",
+                None,
+                Some("範囲外"),
+                f.d.now_utc()
+            )
+            .expect("escalate")
+    );
+    for _ in 0..3 {
+        f.tick();
+        assert!(!f.join_inbox().await);
+    }
+    assert_eq!(f.inbox_runs(), 3);
+    assert_eq!(f.triage_messages().len(), 2);
+}

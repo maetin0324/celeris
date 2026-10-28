@@ -15,7 +15,7 @@ use crate::request_ledger::{
 };
 
 /// 一次対応の入力 message の本文の頭（`cos_triage_claim` が書く）。
-const CLAIM_PREFIX: &str = "CoS 受信箱の一次対応: item_ids=";
+const CLAIM_PREFIX: &str = crate::chat::triage::COS_TRIAGE_CLAIM_PREFIX;
 
 struct Item {
     id: String,
@@ -116,7 +116,12 @@ fn read_raw(conn: &Connection) -> Result<Raw, StoreError> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
     for (run_id, text) in rows {
-        let Some(json) = text.strip_prefix(CLAIM_PREFIX) else {
+        // 取り次ぎの再判断の run は 2 行目に取り次ぎを書く（ADR relayed-instructions 付記 A2）。
+        let Some(json) = text
+            .lines()
+            .next()
+            .and_then(|l| l.strip_prefix(CLAIM_PREFIX))
+        else {
             continue;
         };
         let Ok(ids) = serde_json::from_str::<Vec<String>>(json) else {

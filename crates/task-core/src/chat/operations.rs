@@ -116,6 +116,24 @@ fn audit_event(
     target_id: &str,
     state: &str,
 ) -> Result<(), ChatError> {
+    audit_event_at(
+        tx,
+        ctx,
+        target_kind,
+        target_id,
+        state,
+        OffsetDateTime::now_utc(),
+    )
+}
+
+fn audit_event_at(
+    tx: &Transaction<'_>,
+    ctx: &AuditContext,
+    target_kind: &str,
+    target_id: &str,
+    state: &str,
+    now: OffsetDateTime,
+) -> Result<(), ChatError> {
     // Non-task operations use their operation ID as an audit stream key. Task operations
     // join the task's existing append-only event stream.
     let operation_stream = ctx
@@ -126,7 +144,7 @@ fn audit_event(
         ("task", Ok(task_id)) => task_id,
         _ => operation_stream,
     };
-    SqliteStore::append_event_tx(
+    SqliteStore::append_event_tx_at(
         tx,
         task_id,
         &Event::CosOperation {
@@ -140,6 +158,7 @@ fn audit_event(
             target_kind: target_kind.into(),
             target_id: target_id.into(),
         },
+        now,
     )?;
     Ok(())
 }
@@ -455,8 +474,40 @@ impl SqliteStore {
     where
         F: FnOnce(&Transaction<'_>, &AuditContext) -> Result<Value, ChatError>,
     {
+        self.cos_operation_apply_at(
+            ctx,
+            idempotency_key,
+            request_hash,
+            target_kind,
+            target_id,
+            expected_revision,
+            action,
+            payload,
+            OffsetDateTime::now_utc(),
+            apply,
+        )
+    }
+
+    /// Apply an audited operation using an injected clock.
+    #[allow(clippy::too_many_arguments)]
+    pub fn cos_operation_apply_at<F>(
+        &self,
+        ctx: &AuditContext,
+        idempotency_key: &str,
+        request_hash: &str,
+        target_kind: &str,
+        target_id: &str,
+        expected_revision: Option<&str>,
+        action: &str,
+        payload: &Value,
+        at: OffsetDateTime,
+        apply: F,
+    ) -> Result<CosOperation, ChatError>
+    where
+        F: FnOnce(&Transaction<'_>, &AuditContext) -> Result<Value, ChatError>,
+    {
         let mut conn = self.lock()?;
-        let now = chat_ts(OffsetDateTime::now_utc());
+        let now = chat_ts(at);
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if let Some((id, hash)) = tx.query_row(
             "SELECT id,request_hash FROM cos_operations WHERE thread_id=?1 AND idempotency_key=?2",
@@ -501,7 +552,7 @@ impl SqliteStore {
                 action,
                 payload,
                 message,
-                &now,
+                at,
             )?;
             return Err(ChatError::Invalid(message.into()));
         }
@@ -522,7 +573,7 @@ impl SqliteStore {
                 &result,
                 &now,
             )?;
-            audit_event(&tx, ctx, target_kind, target_id, "applied")?;
+            audit_event_at(&tx, ctx, target_kind, target_id, "applied", at)?;
             let card = ChatCard {
                 kind: ChatCardKind::Operation,
                 id: ctx.operation_id.clone(),
@@ -567,7 +618,7 @@ impl SqliteStore {
                     action,
                     payload,
                     &error.to_string(),
-                    &now,
+                    at,
                 )?;
                 Err(error)
             }
@@ -587,8 +638,9 @@ impl SqliteStore {
         action: &str,
         payload: &Value,
         error: &str,
-        now: &str,
+        at: OffsetDateTime,
     ) -> Result<(), ChatError> {
+        let now = chat_ts(at);
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let result = json!({"error":error});
         let mut rejected_ctx = ctx.clone();
@@ -610,9 +662,9 @@ impl SqliteStore {
             payload,
             "rejected",
             &result,
-            now,
+            &now,
         )?;
-        audit_event(&tx, &rejected_ctx, target_kind, target_id, "rejected")?;
+        audit_event_at(&tx, &rejected_ctx, target_kind, target_id, "rejected", at)?;
         tx.commit()?;
         Ok(())
     }

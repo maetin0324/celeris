@@ -149,6 +149,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/tasks/{id}/integrations/{repo}/discard` | X: `integration_human_decision` | `integrations.rs` | 共通 |
 | POST | `/tasks/{id}/integrations/{repo}/hold` | X: `integration_human_decision` | `integrations.rs` | 共通 |
 | POST | `/tasks/{id}/integrations/{repo}/reopen` | X: `integration_human_decision` | `integrations.rs` | 共通 |
+| POST | `/tasks/{id}/integration-requests/{request}/integrate-task` | A | `integrate_task.rs` | 共通 |
 | POST | `/tasks/{id}/comments` | A | `handlers.rs` | 共通 |
 | POST | `/tasks/{id}/execution-plan` | A | `execution.rs` | 共通 |
 | PUT | `/tasks/{id}/execution-plan` | A | `execution.rs` | 共通 |
@@ -283,6 +284,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/chat/threads/{t}/resume-queue` | A | `chat/mod.rs` | 共通 |
 | POST | `/chat/threads/{t}/stop` | A | `chat/mod.rs` | 共通 |
 | POST | `/chat/threads/{t}/relays` | X: `human_instruction_relay` | `chat/mod.rs` | router のみ |
+| POST | `/chat/threads/{t}/forwards` | A | `chat/mod.rs` | router のみ |
 | POST | `/console/instruct` | X: `console_instruction_chain` | `console.rs` | 共通 |
 | POST | `/cos/inbox/{i}/resolve` | X: `recursive_cos` | `cos/inbox.rs` | 共通 |
 | POST | `/cos/operations` | X: `recursive_cos` | `cos/operations.rs` | 共通 |
@@ -461,3 +463,9 @@ ADR 2026-10-11-llm-source-model-routing-evaluation D3 の `POST /routing/stages`
 
 ADR 2026-10-22-dynamic-config の `PATCH /config/fields`（config.toml の動的な欄の書き戻しと稼働中の差し替え）を
 `human_only` で除外する。CoS は `daemon.reload`（人が書き換えたファイルの読み直し）だけを持つ。
+
+## 付記: 統合の衝突を解く integrate task（2026-10-28）
+
+ADR 2026-10-28-cos-integrate-task の `POST /tasks/{id}/integration-requests/{request}/integrate-task` を tasks 領域の ALLOWED
+（`integration.integrate_task`）に加えた。task の起票と元の task への `IntegrateTaskRequested` の追記・`cos_operations` 行・監査 envelope が
+1 transaction で、git には触らない。手 merge の `/integrations/{repo}/merge` は人だけの操作（EXCLUDED）のまま。

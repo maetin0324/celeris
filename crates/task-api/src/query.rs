@@ -287,6 +287,8 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::ReviewResyncResumed { .. } => "review_resync_resumed",
         Event::DoneReintegrationStarted { .. } => "done_reintegration_started",
         Event::DoneReintegrationDeferred { .. } => "done_reintegration_deferred",
+        Event::IntegrateTaskRequested { .. } => "integrate_task_requested",
+        Event::IntegrateTaskSettled { .. } => "integrate_task_settled",
         Event::IntegrationRepairScheduled { .. } => "integration_repair_scheduled",
         Event::IntegrationRepairResolved { .. } => "integration_repair_resolved",
         Event::IntegrationRepairExhausted { .. } => "integration_repair_exhausted",

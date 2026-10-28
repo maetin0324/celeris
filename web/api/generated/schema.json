@@ -1683,6 +1683,17 @@
             "at": {
               "type": "string"
             },
+            "integrate_task_escalated": {
+              "description": "同 ADR D4: 結んだ integrate task が失敗して人に回した説明（task id と状態）。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "integrate_task_offered": {
+              "description": "ADR 2026-10-28-cos-integrate-task D4: integrate task に解かせられる（origin `delivery`・未結び）。",
+              "type": "boolean"
+            },
             "request": {
               "$ref": "#/$defs/IntegrationRequest"
             },
@@ -1702,6 +1713,7 @@
             "task",
             "request_id",
             "request",
+            "integrate_task_offered",
             "at"
           ],
           "type": "object"
@@ -1829,6 +1841,119 @@
       "enum": [
         "retry",
         "infra"
+      ],
+      "type": "string"
+    },
+    "BasisCategory": {
+      "description": "D1: the four routine judgments CoS may answer without a human instruction.",
+      "oneOf": [
+        {
+          "const": "within_approved_frame",
+          "description": "(a) Continue inside a resource / budget / node-hour frame a person approved.",
+          "type": "string"
+        },
+        {
+          "const": "raise_once",
+          "description": "(b) Raise a run-time tree limit (replan, retry, …) once, with progress and a new failure.",
+          "type": "string"
+        },
+        {
+          "const": "documented_default",
+          "description": "(c) The worker's recommendation equals a documented default or an existing ADR.",
+          "type": "string"
+        },
+        {
+          "const": "work_guidance",
+          "description": "(d) Work guidance for a worker question that changes neither objective nor acceptance.",
+          "type": "string"
+        }
+      ]
+    },
+    "BasisFailures": {
+      "additionalProperties": false,
+      "description": "D1 (b): the failure before the previous allowance and the current one.",
+      "properties": {
+        "current": {
+          "type": "string"
+        },
+        "previous": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "previous",
+        "current"
+      ],
+      "type": "object"
+    },
+    "BasisFrame": {
+      "additionalProperties": false,
+      "description": "D1 (a): the approved frame and the usage CoS checked against it.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/FrameKind"
+        },
+        "limit": {
+          "format": "double",
+          "type": "number"
+        },
+        "requested": {
+          "format": "double",
+          "type": "number"
+        },
+        "unit": {
+          "description": "What is counted (`tokens`, `usd`, `node_hours`, …).",
+          "type": "string"
+        },
+        "used": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "unit",
+        "limit",
+        "used",
+        "requested"
+      ],
+      "type": "object"
+    },
+    "BasisRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "The id, commit hash, repository-relative `.md` path or the API path read (with its time).",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/BasisRefKind"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "BasisRefKind": {
+      "description": "D2 `refs[].kind`: what a piece of evidence is.",
+      "enum": [
+        "standing_rule",
+        "decision",
+        "approval",
+        "usage",
+        "ledger",
+        "commit",
+        "artifact",
+        "progress",
+        "adr",
+        "doc",
+        "message"
       ],
       "type": "string"
     },
@@ -3178,6 +3303,55 @@
       ],
       "type": "object"
     },
+    "ChatEscalationRef": {
+      "description": "D2: the item a card of the general thread stands for.",
+      "properties": {
+        "item_id": {
+          "description": "`cos_inbox_items.id`.",
+          "type": "string"
+        },
+        "open": {
+          "description": "`pending` / `running` / `escalated` / `fallback`: still waiting.",
+          "type": "boolean"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_key": {
+          "description": "The inbox item id (the card's id).",
+          "type": "string"
+        },
+        "source_kind": {
+          "type": "string"
+        },
+        "source_thread_id": {
+          "description": "The project CoS thread that holds the item (the card links to it).",
+          "type": "string"
+        },
+        "state": {
+          "description": "The item's current state.",
+          "type": "string"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "item_id",
+        "source_kind",
+        "source_key",
+        "source_thread_id",
+        "state",
+        "open"
+      ],
+      "type": "object"
+    },
     "ChatEvent": {
       "properties": {
         "at": {
@@ -3278,6 +3452,37 @@
       ],
       "type": "string"
     },
+    "ChatForwardRequest": {
+      "additionalProperties": false,
+      "description": "ADR 2026-10-28-single-human-window-general-cos D3: `POST /chat/threads/{t}/forwards`\n(CoS operation `chat.relay_forward` only). No text: the forwarded text is the person's\nmessage `message_id` of the general thread, verbatim.",
+      "properties": {
+        "client_message_id": {
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "RFC 3339 expiry (required, after now).",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "The person's message of the general thread.",
+          "type": "string"
+        },
+        "task_ids": {
+          "description": "Tasks of the target project the instruction applies to (1..=`CHAT_RELAY_TASKS_MAX`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "client_message_id",
+        "message_id",
+        "task_ids",
+        "expires_at"
+      ],
+      "type": "object"
+    },
     "ChatMessage": {
       "properties": {
         "attachment_ids": {
@@ -3307,6 +3512,17 @@
         },
         "created_at": {
           "type": "string"
+        },
+        "escalation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatEscalationRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-28-single-human-window-general-cos D2: present on a card (札) of the general\nthread that stands for an item a project CoS routed to the person. `state` / `open` are\nread from the item every time (the card is resolved when the item is)."
         },
         "id": {
           "type": "string"
@@ -3649,6 +3865,17 @@
         },
         "scope": {
           "$ref": "#/$defs/ChatRelayScope"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatRelaySource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-28-single-human-window-general-cos D3: the person's message of the general\nthread this relay forwards (`chat.relay_forward`). Absent for operator / MCP relays."
         }
       },
       "required": [
@@ -3721,6 +3948,29 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "ChatRelaySource": {
+      "description": "The original message a forwarded relay copies (D3).",
+      "properties": {
+        "author": {
+          "description": "The original message's `author` (`human:<name>`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "message_id"
+      ],
       "type": "object"
     },
     "ChatResumeQueueRequest": {
@@ -8662,6 +8912,46 @@
       ],
       "type": "object"
     },
+    "DelegatedBasis": {
+      "additionalProperties": false,
+      "description": "D2: the basis of a routine answer (`resolve` with outcome=answer, or a wait-answering\n`/cos/operations` request without `instructed_by`).",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/BasisCategory"
+        },
+        "failures": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BasisFailures"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "frame": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BasisFrame"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refs": {
+          "items": {
+            "$ref": "#/$defs/BasisRef"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "category",
+        "refs"
+      ],
+      "type": "object"
+    },
     "DelegatedView": {
       "description": "ADR-0016 D2: 1 回の `delegate`（`Event::Delegated`）の要約。",
       "properties": {
@@ -13533,6 +13823,60 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-28-cos-integrate-task D2: 統合の依頼 `request_id` を解く integrate task を起票した（起票と同じ\ntransaction で元の task に 1 回）。`by` は起票した主体。状態は変えない。",
+          "properties": {
+            "by": {
+              "type": "string"
+            },
+            "integrate_task_id": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "integrate_task_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "integrate_task_id",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "同 ADR D3: integrate task の決着。`outcome` は `integrated`（元の依頼を閉じた）か `escalated`（integrate task が\nfailed / cancelled で、依頼を人に回した）。`detail` は人が読む説明。状態は変えない。",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "integrate_task_id": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "outcome": {
+              "type": "string"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "integrate_task_settled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "integrate_task_id",
+            "outcome",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR 2026-10-06 D4: モデル catalog の変化（追加・消失・復活）。task に属さない監査イベントで、\n`model_catalog::catalog_event_task_id()` の疑似 task の列に追記する。状態は変えない。",
           "properties": {
             "added": {
@@ -15206,6 +15550,15 @@
         "source"
       ],
       "type": "object"
+    },
+    "FrameKind": {
+      "description": "D2 `frame.kind`: the human approval that set the frame.",
+      "enum": [
+        "standing_rule",
+        "decision",
+        "approval"
+      ],
+      "type": "string"
     },
     "GateSignal": {
       "description": "D13: 当たった信号 1 件（規則表の行、または強制規則・対象外規則）。",
@@ -20133,6 +20486,18 @@
     "OperationBody": {
       "additionalProperties": false,
       "properties": {
+        "basis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DelegatedBasis"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ADR 2026-10-28-cos-routine-delegated-answers D2: required when the request answers a human\nwait without `instructed_by` (which routine judgment and its evidence). Ignored with\n`instructed_by` (the person decided)."
+        },
         "expected_revision": {
           "type": [
             "string",
@@ -24612,6 +24977,18 @@
               "type": "null"
             }
           ]
+        },
+        "basis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DelegatedBasis"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ADR 2026-10-28-cos-routine-delegated-answers D2: required for outcome=answer (which routine\njudgment this is and its evidence); must be null otherwise."
         },
         "confidence": {
           "default": null,
@@ -32882,6 +33259,9 @@
     "chat_event_list": {
       "$ref": "#/$defs/ChatEventListResponse"
     },
+    "chat_forward": {
+      "$ref": "#/$defs/ChatForwardRequest"
+    },
     "chat_message": {
       "$ref": "#/$defs/ChatMessage"
     },
@@ -33798,6 +34178,7 @@
     "chat_thread_patch",
     "chat_post_message",
     "chat_relay",
+    "chat_forward",
     "chat_stop",
     "chat_resume_queue",
     "chat_reference",

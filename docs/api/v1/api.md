@@ -3,6 +3,12 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-28（ADR 2026-10-28-cos-integrate-task D1〜D5）— **追加。v1 のまま**。`POST /tasks/{id}/integration-requests/{request}/integrate-task`
+  （body `{note?}`、**管理系**。CoS は `/cos/operations` の `integration.integrate_task`）を足した。元の task の未回答の統合の依頼（origin `delivery`）を解く
+  root task を起票し、元の task に event `integrate_task_requested`（`request_id`・`integrate_task_id`・`by`）を同じ transaction で追記する。決着は
+  daemon の sweep が event `integrate_task_settled`（`request_id`・`integrate_task_id`・`outcome`（`integrated`|`escalated`）・`detail`）で記録する。
+  受信箱の `integration_request` に選択肢 `integrate_task` と native を足し、進行中は項目を出さず、`escalated` は人に回す（CoS は answer できない）。
+  エラー: 410 `integration_request_gone`、409 `integrate_task_exists` / `integrate_task_escalated`、422 `integrate_task_unsupported_origin` / `repository_required`。
 - 改訂: 2026-10-27（ADR 2026-10-27-done-task-auto-reintegrate D4・D6）— **追加。v1 のまま**。task の event に `done_reintegration_started`
   （`repo_id`・`head_sha`・`target_sha`・`class`（`disjoint`|`overlap`）・`attempt`）と `done_reintegration_deferred`（`repo_id`・`head_sha`・
   `target_sha`・`reason`）を足した。受信箱 `unintegrated` の理由に `auto reintegrate: merge conflict in <files>`・
@@ -401,6 +407,7 @@ token_file = "api.token"
 | 76 | POST | `/tasks/{id}/integrations/{repo}/discard` | 取り込みを破棄（`reason` 必須）。`not_applicable` の行は 409 `invalid_transition`（遷移不可） | `IntegrationActionResult` | store |
 | 77 | POST | `/tasks/{id}/integrations/{repo}/hold` | 取り込みを保留（`reason` 必須）。`not_applicable` の行は 409 `invalid_transition`（遷移不可） | `IntegrationActionResult` | store |
 | 78 | POST | `/tasks/{id}/integrations/{repo}/reopen` | held/discarded を unintegrated に戻す。`not_applicable` の行は 409 `invalid_transition`（遷移不可） | `IntegrationActionResult` | store |
+| 78a | POST | `/tasks/{id}/integration-requests/{request}/integrate-task` | 未回答の統合の依頼（origin `delivery`）の衝突を解く integrate task を起票し、依頼と結ぶ（**管理系**。ADR 2026-10-28-cos-integrate-task）。410 `integration_request_gone`、409 `integrate_task_exists`・`integrate_task_escalated`、422 `integrate_task_unsupported_origin`・`repository_required` | 201 `IntegrateTaskResult` | store |
 | 73 | POST | `/projects/{id}/cancel` | 案件を中止し、属する非終端タスクと途中目標を連鎖で `cancelled` にする（ADR-0044 D6、Phase 55。**管理系: `token_file` 未設定でも 401**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 74 | POST | `/projects/{id}/pause` | 案件を一時停止する（属するタスクは dispatch されない。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 75 | POST | `/projects/{id}/resume` | 一時停止を解く（`paused_from` へ戻す。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
@@ -3494,6 +3501,7 @@ REST の旧 Console エンドポイントは既定 legacy スレッドを使う�
 | GET `/chat/threads/{t}/messages` | `before_seq`、`after_seq`（両方は不可）、`limit` | 200 `ChatMessageListResponse`（seq 昇順） |
 | POST `/chat/threads/{t}/messages` | `{"client_message_id","text","attachment_ids","reply_to_id","mode":"queue\|interrupt","resume_queue"}` | 202 `ChatPostMessageResponse`（`run_id`・`queue_position`） |
 | POST `/chat/threads/{t}/relays` | `{client_message_id, text, said_at, task_ids?, expires_at?}` | operator principal のみ。202 `ChatPostMessageResponse`。原文・発言時刻・範囲を保存 |
+| POST `/chat/threads/{t}/forwards` | `{client_message_id, message_id, task_ids, expires_at}` | CoS operation `chat.relay_forward` のみ（直接の呼び出しは 403 `chat_forward_cos_only`）。統括スレッドの人の発言 `message_id` の原文と時刻を案件スレッド `{t}` へ取り次ぐ（`relay.relayed_by = cos:<統括スレッド id>`、`relay.source`）。task 1〜20 件と期限が必須。202 `ChatPostMessageResponse`（ADR 2026-10-28-single-human-window-general-cos D3） |
 | DELETE `/chat/threads/{t}/messages/{m}` | なし | 200 `ChatMessageResponse`（`state=cancelled`）。queued の人の発言だけ可、開始済みは 409 |
 | POST `/chat/threads/{t}/stop` | `{"run_id"}` | 202 `ChatStopResponse`。終端への再送は 200、現在の run と違えば 409 |
 | POST `/chat/threads/{t}/resume-queue` | `{"expected_revision"}` | 200 `ChatThreadResponse` |
@@ -3538,6 +3546,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | tasks | `POST /tasks/{id}/accept` | `task.accept` |
 | tasks | `POST /tasks/{id}/cancel` | `task.cancel` |
 | tasks | `POST /tasks/{id}/rereview` | `task.rereview` |
+| tasks | `POST /tasks/{id}/integration-requests/{request}/integrate-task` | `integration.integrate_task`（task の起票と元の task への結びの event が 1 transaction） |
 | tasks | `POST /tasks/{id}/execution-plan` | `execution.plan_adopt` |
 | tasks | `POST /tasks/{id}/tree/adopt` | `tree.adopt` |
 | tasks | `POST /tasks/{id}/execution/decompose` | `execution.decompose` |
@@ -3614,6 +3623,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | surface | `POST /chat/threads/{t}/messages` | `chat.message_post`（CoS の書き込みは完了済みの `assistant` 発言として入り待ち行列に入らないので CoS run を起こさない。`mode=interrupt`・`resume_queue=true` は 422 `validation`） |
 | surface | `DELETE /chat/threads/{t}/messages/{m}` | `chat.message_cancel` |
 | surface | `POST /chat/threads/{t}/stop` | `chat.run_stop` |
+| surface | `POST /chat/threads/{t}/forwards` | `chat.relay_forward`（統括スレッドの run だけ。統括の人の発言の原文を案件スレッドへ取り次ぐ。ADR 2026-10-28-single-human-window-general-cos D3） |
 | surface | `POST /chat/threads/{t}/resume-queue` | `chat.queue_resume` |
 | surface | `POST /chat/threads/{t}/attachments` | `chat.attachment_upload`（外部効果: file。本文は `{"client_upload_id","name","content_base64"}`、記録に中身は残さない） |
 | surface | `DELETE /chat/attachments/{a}` | `chat.attachment_delete`（外部効果: file） |
@@ -3649,10 +3659,12 @@ path の placeholder は 1 segment（英数字・`-`・`_`・`.`・`:`）に一�
 | メソッド・endpoint | 認証 | 入力 | 成功 |
 |---|---|---|---|
 | GET `/cos/inbox` | CoS credential | `?state=<pending\|running\|answered\|observed\|escalated\|fallback\|resolved>`・`?limit=1..=500`（既定 100） | 200 `CosInboxList {items[]:CosInboxItem}`（新しい順） |
-| POST `/cos/inbox/{i}/resolve` | CoS credential | `{"idempotency_key","expected_revision","outcome":"answer\|observe\|escalate","reason","policy_version","confidence"?,"answer"?,"escalation"?}` | 200 `ResolveResponse {item?,operation,notification_id?}` |
+| POST `/cos/inbox/{i}/resolve` | CoS credential | `{"idempotency_key","expected_revision","outcome":"answer\|observe\|escalate","reason","policy_version","confidence"?,"answer"?,"escalation"?,"basis"?}` | 200 `ResolveResponse {item?,operation,notification_id?}` |
 | POST `/cos/operations/{o}/override` | 人（管理系） | `{"action":"revoke\|return","reason"}` | 200 `OverrideResponse` |
 
 `CosInboxItem` は `cos_inbox_items` の 1 行（`id`・`source_kind`・`source_key`・`source_revision`・`state` など。§6）。`resolve` は判断そのものは worker が行うが、構造・credential・現在の revision（`expected_revision` と不一致は 409 `cos_inbox_revision_conflict`）・`human_required`（403 `cos_human_required`）は API が決定的に検査する。worker の自由質問（`kind=question`）には `answer: {"note":"回答本文"}` として option を省略できる（空本文は拒否）。明示する option は提示された key に限り、`replan` は明示時のみ計画変更を要求する。他の kind の受信箱回答は option が必須。`answer` は `InboxAnswerBody` を既存の受信箱 answer と同じ domain request へ変えて `dispatch` する（`/cos/operations` と同じ操作層）。`observe` は判断を要さない待ち（notice）にだけ許され、判断を要する待ちへは 422 `cos_observe_needs_judgment`。`escalate` は escalation packet（`EscalationPacket`）を検証し永続 outbox を claim する（`web_path` は対象から導出、`recommended` は `options[].key` の 1 つか null）。`idempotency_key` は thread 内一意で、同じ key の異なる request は 409。`confidence` は任意の 0..=1（範囲外・非有限は 422 `validation`）で、`reason` に混ぜず、`cos_operations` の `payload`（本文そのもの）と observe / escalate の `result` に残る（skill cos-inbox-triage §4・§5。欠落は拒否せず、低確信の扱いは skill 側）。
+
+定型の代答の根拠（ADR 2026-10-28-cos-routine-delegated-answers）: `outcome=answer` と、`POST /cos/operations` で開いている待ちに答える操作（`decision.answer`・`approval.decide`・`execution.phase_gate`・`execution.plan_gate`・`question.answer`・`inbox.answer`）のうち `instructed_by` の無いものは `basis`（`DelegatedBasis`）が必須。`basis` は `{"category":"within_approved_frame|raise_once|documented_default|work_guidance","refs":[{"kind","id"}],"frame"?,"failures"?}`。API は category ごとの条件（承認済みの枠の実在と `used + requested <= limit`、`raise-once` の一度だけと失敗の違い、推奨 option との一致と ADR・文書の参照、自由質問への note だけの回答）を決定的に検査する。欠けは 422 `cos_basis_missing`、形・対象の誤りは 422 `cos_basis_invalid`、枠超えは 422 `cos_basis_over_frame`、同じ失敗は 422 `cos_basis_repeated_failure`、同じ task の 2 回目の `raise-once` は 422 `cos_basis_raise_once_used`（どれも監査に rejected で残る）。通った代答は監査の reason が「定型の代答（<category>）: …」になり、payload に `basis` が残る。observe・escalate に `basis` を付けると 422 `validation`。明示の `human_required` の 403 が先に効く。
 
 `override` は適用済み（`applied`）の CoS 操作を 1 回だけ修正する。`revoke` / `return` で、元の payload・event は残し現在状態を投影として書き換える。不可逆な操作（decision/approval 以外）は `state=needs_remediation` にし `remediation_task_id`（人が確認する修正 task）を返す。decision/approval は `superseded` にし、`new_wait_id` / `new_revision` で代わった人の待ちを返す（CoS は代答できない）。run が既に消費していた操作は対象 task の subtree を pause し `paused_task_ids` を返す。
 
@@ -4067,4 +4079,5 @@ policy_version, reasons, escalation, outcome, cost_usd, input_tokens, output_tok
 `POST /cos/operations` の `instructed_by` は当該 run の人の入力に加え、同じスレッドの有効な取り次ぎを受け付ける。
 案件・task の適用範囲から外れる対象、期限切れ、取消済み、他スレッドの指示は422 `cos_instruction_invalid`。
 監査の `payload.instructed_by` に `message_id`・`seq`・`relay`・`decided_by`・`executed_by` を残す。
+`instructed_by` の無い待ちへの回答は `basis` が必須（§3.130 の「定型の代答の根拠」）。`instructed_by` があれば `basis` は検査せず payload にも入れない。
 判断者は human（取り次ぎ主体を併記）、実行者は cos_project / cos_general。token 値は保存しない。

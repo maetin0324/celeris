@@ -1290,6 +1290,13 @@
         "summary": {
           "description": "The title of the wait as ingested.",
           "type": "string"
+        },
+        "thread_id": {
+          "description": "The CoS thread that holds the item (`cos_inbox_items.thread_id`). In the general CoS a\nproject item names its project thread: the person's answer is forwarded there\n(`chat.relay_forward`, ADR 2026-10-28-single-human-window-general-cos D3).",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

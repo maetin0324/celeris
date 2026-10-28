@@ -1,5 +1,5 @@
 // モバイル（320 px / 390 px）の e2e（ADR 2026-10-05-cos-chat-home D6）。
-// 横溢れ 0・44 px 操作領域・drawer（会話一覧）の開閉と focus 復元・下部タブバーと composer の共存・
+// 横溢れ 0・44 px 操作領域・案件スレッドから統括 CoS へ戻る導線・下部タブバーと composer の共存・
 // visualViewport の縮小（キーボード）でも入力/送信/停止が見えること。
 // 44 px と横溢れの検査は mobile-audit.mjs と同じ方式（画面内 evaluate で box を測る）。
 
@@ -49,43 +49,19 @@ test("320 px と 390 px で横溢れは 0、操作領域は 44 px 以上", async
 });
 
 for (const width of [320, 390]) {
-  test(`${width} px: 狭い幅では会話一覧は drawer になり、開閉と Escape の focus 復元が成り立つ`, async ({ page }) => {
+  test(`${width} px: 会話一覧の drawer は無く、案件スレッドから統括 CoS へ戻れる`, async ({ page }) => {
     const gateway = await startChatGateway();
     try {
       await page.setViewportSize({ width, height: 700 });
-      await page.goto(`${gateway.base}/?thread=chat-main`);
-      const trigger = page.getByRole("button", { name: "会話一覧を開く" });
-      await expect(trigger).toBeVisible();
-
-      // 開く: dialog（会話一覧）が出る。
-      await trigger.click();
-      const dialog = page.getByRole("dialog", { name: "会話一覧" });
-      await expect(dialog).toBeVisible();
-      await expect(dialog.getByRole("button", { name: "CoS と相談", exact: true })).toBeVisible();
+      await page.goto(`${gateway.base}/?thread=chat-history`);
+      await expect(page.getByRole("button", { name: "会話一覧を開く" })).toHaveCount(0);
+      const back = page.locator('[data-thread-bar="project"]').getByRole("button", { name: "統括 CoS に戻る" });
+      await expect(back).toBeVisible();
       const shots = process.env.CHAT_SHOT_DIR;
-      if (shots && width === 320) await page.screenshot({ path: `${shots}/chat-drawer-320.png` });
+      if (shots && width === 320) await page.screenshot({ path: `${shots}/chat-project-320.png` });
       expect(await audit(page)).toEqual({ overflow: 0, small: [] });
-      await dialog.getByRole("button", { name: "閉じる", exact: true }).click();
-      await expect(dialog).toBeHidden();
-      await expect(trigger).toBeFocused();
-      await trigger.click();
-      await expect(dialog).toBeVisible();
-
-      // Escape: 閉じて focus は trigger に戻る。
-      await page.keyboard.press("Escape");
-      await expect(dialog).toBeHidden();
-      await expect
-        .poll(async () => await page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? ""), {
-          timeout: 5_000,
-        })
-        .toBe("会話一覧を開く");
-
-      // 項目を選ぶと drawer は閉じ、会話の選択は ?thread= に残る。
-      await trigger.click();
-      await expect(dialog).toBeVisible();
-      await dialog.getByRole("button", { name: "長い会話の確認", exact: true }).click();
-      await expect(dialog).toBeHidden();
-      await expect(page).toHaveURL(/\?thread=chat-history$/);
+      await back.click();
+      await expect(page).toHaveURL(/\?thread=chat-main$/);
       const result = await audit(page);
       expect(result.overflow).toBe(0);
       expect(result.small).toEqual([]);

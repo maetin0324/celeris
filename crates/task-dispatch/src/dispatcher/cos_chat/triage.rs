@@ -62,11 +62,12 @@ impl Default for CosTriageSettings {
             policy_version: "1".into(),
             min_confidence: 0.85,
             human_required: [
-                "fundamental_change",
+                "objective_change",
+                "beyond_frame",
                 "external_publish",
                 "destructive",
-                "resource_overrun",
-                "security",
+                "secret_or_security",
+                "standing_permission",
                 "explicit_human",
             ]
             .into_iter()

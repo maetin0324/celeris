@@ -5,6 +5,7 @@ tasks: [01M5XXF7QGZ69112THK8RE3TEB]
 ---
 
 - 状態: 採用（実装済み）
+- 2026-10-28 付記: 取り次ぎの無い代答の範囲と根拠の形は [2026-10-28-cos-routine-delegated-answers](2026-10-28-cos-routine-delegated-answers.md)。`instructed_by` の付いた操作は人の判断なので `basis` を要らない。skill の policy_version は 6。
 - 関係: [2026-10-27-api-principals](2026-10-27-api-principals.md)（A1 の principal）、
   [2026-10-27-external-operator](2026-10-27-external-operator.md) D4（B3 の取り次ぎ経路）、
   [2026-10-27-human-ops-actor-roles-request-ref](2026-10-27-human-ops-actor-roles-request-ref.md) D2・D4（主体の語彙、判断者・実行者）、
@@ -98,3 +99,14 @@ operator は利用者の発言を要約せず原文で、発言時刻と範囲�
 - MCP の `console_instruct` に `relay` を付けると `relayed_by = mcp:<client_id>` で同じ記録になる。
 - prompt の「取り次がれた人の指示」節に期限内の取り次ぎだけが載る。
 - `bash scripts/dev/test-affected.sh`、`cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check`。
+
+## 付記（2026-10-28、[2026-10-28-single-human-window-general-cos](2026-10-28-single-human-window-general-cos.md)）
+
+- 取り次ぎの主体に統括 CoS を足す。CoS operation `chat.relay_forward`（`POST /chat/threads/{t}/forwards`、CoS operation 専用）が、
+  統括スレッドの人の発言（`author` が `human:<name>`）の原文と `created_at`（`said_at`）を案件スレッドへ写す。
+  `relay.relayed_by` は `cos:<統括スレッド id>`、`relay.source` は元の `{thread_id, message_id, author}`。範囲は task 1〜20 件と期限が必須。
+- D3 の payload: 統括 CoS の取り次ぎを引いた operation は `decided_by = {kind: human, id: <元の author の name>,
+  relayed_by: {kind: cos_general, id: <統括スレッド id>}}`、`executed_by = {kind: cos_project, …}`。
+- D3 に排他を足す: 統括スレッドの run が案件の対象に `instructed_by` 付きで operation を実行するのは 422
+  `cos_instruction_invalid`（統括 CoS は案件の件を取り次ぐだけで、答えるのは案件 CoS）。
+- `POST /chat/threads/{t}/relays` は operator 専用のまま（CoS からは除外のまま）。

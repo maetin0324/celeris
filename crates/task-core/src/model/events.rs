@@ -997,6 +997,21 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         by: Option<String>,
     },
+    /// ADR 2026-10-28-cos-integrate-task D2: 統合の依頼 `request_id` を解く integrate task を起票した（起票と同じ
+    /// transaction で元の task に 1 回）。`by` は起票した主体。状態は変えない。
+    IntegrateTaskRequested {
+        request_id: String,
+        integrate_task_id: TaskId,
+        by: String,
+    },
+    /// 同 ADR D3: integrate task の決着。`outcome` は `integrated`（元の依頼を閉じた）か `escalated`（integrate task が
+    /// failed / cancelled で、依頼を人に回した）。`detail` は人が読む説明。状態は変えない。
+    IntegrateTaskSettled {
+        request_id: String,
+        integrate_task_id: TaskId,
+        outcome: String,
+        detail: String,
+    },
     /// ADR 2026-10-06 D4: モデル catalog の変化（追加・消失・復活）。task に属さない監査イベントで、
     /// `model_catalog::catalog_event_task_id()` の疑似 task の列に追記する。状態は変えない。
     ModelCatalogChanged {

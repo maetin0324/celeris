@@ -468,7 +468,12 @@ fn inbox_section(chat: &CosChatContext) -> String {
                 ));
             }
         }
-        if let Some(path) = &item.answer_path {
+        if let Some(thread) = item.thread_id.as_deref().filter(|t| *t != chat.thread_id) {
+            out.push_str(&format!(
+                "  案件スレッド: {thread}（人がここで答えたら chat.relay_forward でこのスレッドへ取り次ぐ。自分では答えない）
+"
+            ));
+        } else if let Some(path) = &item.answer_path {
             out.push_str(&format!(
                 "  回答の経路: POST {path}
 "

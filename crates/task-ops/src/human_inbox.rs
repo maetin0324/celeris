@@ -399,6 +399,11 @@ fn opt(key: &str, label: &str, needs_note: bool, effect: &str) -> InboxOption {
     }
 }
 
+/// ADR 2026-10-28-cos-integrate-task D1: integrate task を起票する endpoint の path。
+pub fn integrate_task_path(task: task_core::TaskId, request_id: &str) -> String {
+    format!("/api/v1/tasks/{task}/integration-requests/{request_id}/integrate-task")
+}
+
 fn native(method: &str, path: String) -> Option<InboxNativeOp> {
     Some(InboxNativeOp {
         method: method.to_string(),
@@ -1083,9 +1088,15 @@ impl Builder<'_> {
                 task,
                 request_id,
                 request,
+                integrate_task_offered,
+                integrate_task_escalated,
                 at,
             } => {
-                let mut detail = request.to_markdown();
+                let mut detail = String::new();
+                if let Some(why) = integrate_task_escalated {
+                    detail.push_str(&format!("人の判断が必要: {why}\n\n"));
+                }
+                detail.push_str(&request.to_markdown());
                 if !request.conflict_files.is_empty() {
                     detail.push_str("\n## 衝突 file\n");
                     for path in &request.conflict_files {
@@ -1095,26 +1106,52 @@ impl Builder<'_> {
                 if let Some(sha) = &request.candidate_sha {
                     detail.push_str(&format!("\n- 候補 SHA: `{sha}`\n"));
                 }
+                // ADR 2026-10-28-cos-integrate-task D4: 衝突を解く integrate task を起票する選択肢と native。
+                let mut options = Vec::new();
+                if *integrate_task_offered {
+                    options.push(opt(
+                        task_core::integration_request::INTEGRATE_TASK_OPTION,
+                        "integrate task に解かせる",
+                        false,
+                        "衝突を解く task を起票し、検査と reviewer の判定を経て取り込む",
+                    ));
+                }
+                options.extend([
+                    opt(
+                        "integrated",
+                        "統合した",
+                        false,
+                        "統合済みとして回答を記録する",
+                    ),
+                    opt("declined", "見送る", false, "見送りとして回答を記録する"),
+                    opt("retry", "再試行する", false, "再試行として回答を記録する"),
+                ]);
+                let title = if integrate_task_escalated.is_some() {
+                    format!("統合の依頼（integrate task が失敗）: {}", task.title)
+                } else {
+                    format!("統合の依頼: {}", task.title)
+                };
                 self.finish(Draft {
                     id: format!("integration_request-{}", id_part(request_id)),
                     kind: InboxKind::IntegrationRequest,
-                    title: format!("統合の依頼: {}", task.title),
+                    title,
                     detail: Some(detail),
-                    options: vec![
-                        opt(
-                            "integrated",
-                            "統合した",
-                            false,
-                            "統合済みとして回答を記録する",
-                        ),
-                        opt("declined", "見送る", false, "見送りとして回答を記録する"),
-                        opt("retry", "再試行する", false, "再試行として回答を記録する"),
-                    ],
-                    recommended: None,
+                    options,
+                    // ADR 2026-10-28-cos-routine-delegated-answers 付記: integrate task は ADR が定めた既定の
+                    // 答え方なので推奨にする（CoS は documented_default の根拠で代答する）。
+                    recommended: integrate_task_offered
+                        .then(|| task_core::integration_request::INTEGRATE_TASK_OPTION.to_string()),
                     due_at: None,
                     blocking: self.only_task(task),
                     blocked_by: Vec::new(),
-                    native: None,
+                    native: integrate_task_offered
+                        .then(|| {
+                            native(
+                                "POST",
+                                integrate_task_path(task.id, request_id),
+                            )
+                        })
+                        .flatten(),
                     project_id: self.project_of(task.id),
                     task: Some(task.clone()),
                     created_at: at.clone(),

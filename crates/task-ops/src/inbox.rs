@@ -266,6 +266,11 @@ pub enum AttentionItem {
         task: TaskRef,
         request_id: String,
         request: Box<task_core::integration_request::IntegrationRequest>,
+        /// ADR 2026-10-28-cos-integrate-task D4: integrate task に解かせられる（origin `delivery`・未結び）。
+        integrate_task_offered: bool,
+        /// 同 ADR D4: 結んだ integrate task が失敗して人に回した説明（task id と状態）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        integrate_task_escalated: Option<String>,
         at: String,
     },
     /// Completed task changes not yet reachable from the repository default branch.
@@ -1150,14 +1155,26 @@ fn build_attention(
         let Some(task) = by_id.get(&row.task_id) else {
             continue;
         };
-        let Event::IntegrationRequested { request, .. } = row.event else {
+        let Event::IntegrationRequested { request, origin } = row.event else {
             continue;
         };
         let request_id = request.id_for(task.id);
+        // ADR 2026-10-28-cos-integrate-task D4: 結んだ integrate task が扱っている間は出さない。
+        let link = crate::integrate_task::link_for(store, task.id, &request_id)?;
+        let integrate_task_escalated = match &link {
+            None => None,
+            Some(task_core::integration_request::IntegrateTaskLink::Escalated {
+                task_id,
+                detail,
+            }) => Some(format!("integrate task {task_id} が失敗した（{detail}）")),
+            Some(_) => continue,
+        };
         items.push(AttentionItem::IntegrationRequest {
             task: view::task_ref(task),
             request_id,
             request,
+            integrate_task_offered: crate::integrate_task::offerable(&origin, link.as_ref()),
+            integrate_task_escalated,
             at: row.ts,
         });
     }

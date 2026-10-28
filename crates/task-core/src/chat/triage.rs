@@ -330,6 +330,7 @@ impl SqliteStore {
         if claimed == 0 {
             return Ok(None);
         }
+        super::window::post_escalation_card_tx(&tx, item_id, body, &at)?;
         let body = with_cos_label(&tx, &thread_id, body)?;
         tx.execute(
             "INSERT INTO notifications(id,kind,key,body,created_at) VALUES(?1,?2,?3,?4,?5)",
@@ -370,6 +371,19 @@ impl SqliteStore {
             return Ok(None);
         }
         let notification_id = Ulid::new().to_string();
+        // ADR 2026-10-28-single-human-window-general-cos D2: the card names the task.
+        let card_body = match serde_json::from_str::<serde_json::Value>(body) {
+            Ok(serde_json::Value::Object(mut packet)) => {
+                if let Some(task) = &source.task_id {
+                    packet
+                        .entry("task_id")
+                        .or_insert_with(|| serde_json::Value::String(task.clone()));
+                }
+                serde_json::Value::Object(packet).to_string()
+            }
+            _ => body.to_owned(),
+        };
+        super::window::post_escalation_card_tx(&tx, &item_id, &card_body, &at)?;
         let body = with_cos_label(&tx, &thread_id, body)?;
         tx.execute(
             "INSERT INTO cos_notification_routes(item_id,notification_id,route,source_kind,source_key,source_revision,created_at,updated_at) VALUES(?1,?2,'escalation',?3,?4,?5,?6,?6)",

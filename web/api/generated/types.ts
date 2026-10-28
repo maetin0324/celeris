@@ -337,6 +337,8 @@ export type AttentionItem = {
   "type": "review_resync_halted";
 } | {
   "at": string;
+  "integrate_task_escalated"?: string | null;
+  "integrate_task_offered": boolean;
   "request": IntegrationRequest;
   "request_id": string;
   "task": TaskRef;
@@ -369,6 +371,29 @@ export type AttestationClaims = {
 export type AutoReplanSource = "integration" | "work_unit";
 
 export type BackoffCause = "retry" | "infra";
+
+export type BasisCategory = "within_approved_frame" | "raise_once" | "documented_default" | "work_guidance";
+
+export type BasisFailures = {
+  "current": string;
+  "previous": string;
+};
+
+export type BasisFrame = {
+  "id": string;
+  "kind": FrameKind;
+  "limit": number;
+  "requested": number;
+  "unit": string;
+  "used": number;
+};
+
+export type BasisRef = {
+  "id": string;
+  "kind": BasisRefKind;
+};
+
+export type BasisRefKind = "standing_rule" | "decision" | "approval" | "usage" | "ledger" | "commit" | "artifact" | "progress" | "adr" | "doc" | "message";
 
 export type BehindTarget = {
   "behind_target_age_seconds"?: number | null;
@@ -656,6 +681,17 @@ export type ChatCheckpointSaved = {
   "thread_id": string;
 };
 
+export type ChatEscalationRef = {
+  "item_id": string;
+  "open": boolean;
+  "project_id"?: string | null;
+  "source_key": string;
+  "source_kind": string;
+  "source_thread_id": string;
+  "state": string;
+  "task_id"?: string | null;
+};
+
 export type ChatEvent = {
   "at": string;
   "data": ChatEventData;
@@ -675,12 +711,20 @@ export type ChatEventListResponse = {
 
 export type ChatEventType = "message" | "text_delta" | "status" | "tool" | "run" | "queue" | "card" | "thread";
 
+export type ChatForwardRequest = {
+  "client_message_id": string;
+  "expires_at": string;
+  "message_id": string;
+  "task_ids": Array<string>;
+};
+
 export type ChatMessage = {
   "attachment_ids": Array<string>;
   "author"?: string | null;
   "cards": Array<ChatCard>;
   "client_message_id"?: string | null;
   "created_at": string;
+  "escalation"?: ChatEscalationRef | null;
   "id": string;
   "relay"?: ChatRelay | null;
   "reply_to_id"?: string | null;
@@ -765,6 +809,7 @@ export type ChatRelay = {
   "relayed_by": string;
   "said_at": string;
   "scope": ChatRelayScope;
+  "source"?: ChatRelaySource | null;
 };
 
 export type ChatRelayRequest = {
@@ -779,6 +824,12 @@ export type ChatRelayScope = {
   "expires_at"?: string | null;
   "project_id"?: string | null;
   "task_ids"?: Array<string>;
+};
+
+export type ChatRelaySource = {
+  "author"?: string | null;
+  "message_id": string;
+  "thread_id": string;
 };
 
 export type ChatResumeQueueRequest = {
@@ -1817,6 +1868,13 @@ export type DecomposeResult = {
   "task": Task;
 };
 
+export type DelegatedBasis = {
+  "category": BasisCategory;
+  "failures"?: BasisFailures | null;
+  "frame"?: BasisFrame | null;
+  "refs": Array<BasisRef>;
+};
+
 export type DelegatedView = {
   "run_id": string;
   "tasks": Array<TaskRef>;
@@ -2759,6 +2817,17 @@ export type Event = {
   "request_id": string;
   "type": "integration_answered";
 } | {
+  "by": string;
+  "integrate_task_id": TaskId;
+  "request_id": string;
+  "type": "integrate_task_requested";
+} | {
+  "detail": string;
+  "integrate_task_id": TaskId;
+  "outcome": string;
+  "request_id": string;
+  "type": "integrate_task_settled";
+} | {
   "added"?: Array<string>;
   "removed"?: Array<string>;
   "restored"?: Array<string>;
@@ -3069,6 +3138,8 @@ export type FileIntent = {
   "source": SideIntent;
   "target": SideIntent;
 };
+
+export type FrameKind = "standing_rule" | "decision" | "approval";
 
 export type GateSignal = {
   "detail": string;
@@ -4041,6 +4112,7 @@ export type NotifyView = {
 export type OnChildFailure = "retry_then_ask" | "ignore";
 
 export type OperationBody = {
+  "basis"?: DelegatedBasis | null;
   "expected_revision"?: string | null;
   "idempotency_key": string;
   "instructed_by"?: string | null;
@@ -4940,6 +5012,7 @@ export type ResolutionAction = {
 
 export type ResolveBody = {
   "answer"?: InboxAnswerBody | null;
+  "basis"?: DelegatedBasis | null;
   "confidence"?: number | null;
   "escalation"?: EscalationPacket | null;
   "expected_revision": string;

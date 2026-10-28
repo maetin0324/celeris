@@ -28,3 +28,6 @@ license: このリポジトリと同じ（外部の license は無い）
   `PATCH /api/v1/tasks/<id>` が登録済みになったので起票節の「PATCH は操作表に無い」を直した。cos-inbox-triage には
   standing_rule.create・release.promote を一次対応では使わない旨を足した。
 - 2026-10-27（ADR 2026-10-27-yomiyasu-human-text）: explaining.md に「文面の推敲（yomiyasu の要点）」を足し、metadata.version を 5 に上げた。Core と operations.md・attachments.md の OP の `policy_version` 例も "5" にそろえた（Core は "3"、operations.md は "4" とずれていた）。
+- 2026-10-28（ADR 2026-10-28-cos-integrate-task）: operations.md の tasks 表に `integration.integrate_task`（統合の衝突を解く
+  integrate task の起票）を足した。cos-inbox-triage には、統合の依頼は `integrate_task` で答え、失敗した依頼は escalate する規則を足した。
+  version は変えない（既存の規則の意味は変わらない）。本番 KB への取り込みは人が行う。

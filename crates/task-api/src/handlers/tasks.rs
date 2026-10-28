@@ -149,6 +149,21 @@ pub struct NewTaskBody {
     pub unblocks: Vec<task_core::TaskId>,
 }
 
+impl NewTaskBody {
+    /// A body that carries only the task spec (the derived creations such as the integrate task).
+    pub(crate) fn from_spec(task: NewTaskSpec) -> Self {
+        Self {
+            task,
+            expected_write_paths: None,
+            attachment_ids: Vec::new(),
+            routing_override: None,
+            campaign: None,
+            idempotency_key: None,
+            unblocks: Vec::new(),
+        }
+    }
+}
+
 fn created_task(task: &Task) -> Response {
     let mut response = json_response(StatusCode::CREATED, task);
     if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/tasks/{}", task.id)) {
@@ -485,6 +500,37 @@ pub(crate) fn create_task_op(
     by: &str,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<Task>, ApiProblem> {
+    create_task_linked_op(
+        store,
+        roles,
+        genres,
+        body,
+        claim,
+        by,
+        audit,
+        "task.create",
+        None,
+    )
+}
+
+/// A link event the new task's creation appends to another task in the same transaction
+/// (ADR 2026-10-28-cos-integrate-task D2): given the new task id, `(task to append to, event)`.
+pub(crate) type CreationLink<'a> =
+    &'a dyn Fn(task_core::TaskId) -> (task_core::TaskId, task_core::Event);
+
+/// [`create_task_op`] with the CoS action name of the operation and an optional [`CreationLink`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_task_linked_op(
+    store: &task_core::store::SqliteStore,
+    roles: &[task_core::RoleSpec],
+    genres: &[task_core::GenreSpec],
+    body: NewTaskBody,
+    claim: Option<&task_core::store::IdempotencyClaim>,
+    by: &str,
+    audit: Option<&OperationAudit>,
+    action: &str,
+    link: Option<CreationLink<'_>>,
+) -> Result<Applied<Task>, ApiProblem> {
     let NewTaskBody {
         mut task,
         expected_write_paths,
@@ -615,6 +661,10 @@ pub(crate) fn create_task_op(
             failure = Some(problem);
             return Err(StoreError::Invalid(detail));
         }
+        if let Some(link) = link {
+            let (other, event) = link(built.id);
+            task_core::store::SqliteStore::append_event_tx(tx, other, &event)?;
+        }
         Ok(())
     };
     let Some(audit) = audit else {
@@ -626,7 +676,7 @@ pub(crate) fn create_task_op(
         return Ok(Applied::Direct(built));
     };
     let target_id = built.id.to_string();
-    let outcome = audit.apply(store, "task", &target_id, "task.create", |tx| {
+    let outcome = audit.apply(store, "task", &target_id, action, |tx| {
         task_core::store::SqliteStore::create_task_tx(tx, &built, None, by, pinned_events.clone())?;
         write(tx).map_err(|e| task_core::chat::ChatError::Invalid(e.to_string()))?;
         Ok(serde_json::json!({

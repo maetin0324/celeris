@@ -363,6 +363,18 @@ pub(crate) fn delegated_request(
             )
         }
         InboxKind::IntegrationRequest
+            if input.option == task_core::integration_request::INTEGRATE_TASK_OPTION =>
+        {
+            let path = base.ok_or_else(|| {
+                ApiProblem::new(
+                    StatusCode::CONFLICT,
+                    "native_action_required",
+                    "this integration request cannot be given to an integrate task",
+                )
+            })?;
+            (Method::POST, path, serde_json::json!({"note": input.note}))
+        }
+        InboxKind::IntegrationRequest
         | InboxKind::DeliverySkipped
         | InboxKind::ClusterLogin
         | InboxKind::DiskFull
@@ -400,7 +412,10 @@ async fn answer(
         .find(|x| x.id == id)
         .ok_or_else(|| gone(&id))?;
     validate_answer(&found, &input)?;
-    if found.kind == InboxKind::IntegrationRequest {
+    // ADR 2026-10-28-cos-integrate-task D4: `integrate_task` は記録だけの回答でなく、native の起票へ委ねる。
+    if found.kind == InboxKind::IntegrationRequest
+        && input.option != task_core::integration_request::INTEGRATE_TASK_OPTION
+    {
         let task_id = found.task.as_ref().ok_or_else(|| gone(&id))?.id;
         let item_id = id.clone();
         let answer = input.option.clone();

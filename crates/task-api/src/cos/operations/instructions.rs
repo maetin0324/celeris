@@ -77,6 +77,15 @@ impl Instruction {
         if let Some(relay) = &self.message.relay {
             let (kind, id) = relayer_actor(&relay.relayed_by);
             decided_by["relayed_by"] = serde_json::json!({"kind": kind, "id": id});
+            // ADR 2026-10-28-single-human-window-general-cos D3: a forward knows the person.
+            if let Some(name) = relay
+                .source
+                .as_ref()
+                .and_then(|s| s.author.as_deref())
+                .and_then(|a| a.strip_prefix("human:"))
+            {
+                decided_by["id"] = Value::String(name.to_owned());
+            }
             out["relay"] = serde_json::to_value(relay).unwrap_or(Value::Null);
         }
         out["decided_by"] = decided_by;
@@ -85,12 +94,14 @@ impl Instruction {
     }
 }
 
-/// `operator:<name>` → (`external_operator`, name); `mcp:<id>` → (`mcp_client`, id)
-/// (human-ops D2 vocabulary). Any other author is recorded as `unknown` with the raw value.
+/// `operator:<name>` → (`external_operator`, name); `mcp:<id>` → (`mcp_client`, id);
+/// `cos:<general thread>` → (`cos_general`, thread) (human-ops D2 vocabulary; ADR
+/// 2026-10-28-single-human-window-general-cos D3). Any other author is recorded as `unknown`.
 fn relayer_actor(relayed_by: &str) -> (&'static str, &str) {
     match relayed_by.split_once(':') {
         Some(("operator", name)) => ("external_operator", name),
         Some(("mcp", id)) => ("mcp_client", id),
+        Some(("cos", thread)) => ("cos_general", thread),
         _ => ("unknown", relayed_by),
     }
 }
@@ -162,6 +173,16 @@ pub(super) fn instructed_message(
             ));
         }
     };
+    // ADR 2026-10-28-single-human-window-general-cos D4: the general CoS forwards a project's
+    // matter (chat.relay_forward); only the project CoS answers it, so nothing is answered twice.
+    if executor_kind == "cos_general"
+        && let Some(project) = target_project(store, target)
+    {
+        return Err(format!(
+            "the general CoS does not act on project {project} itself: forward the person's \
+             message to the project CoS (POST /api/v1/chat/threads/{{t}}/forwards)"
+        ));
+    }
     let Ok(run) = store.chat_run_get(thread_id, &ctx.run_id) else {
         return Err(format!(
             "run {} is not a run of thread {thread_id}",
@@ -170,22 +191,12 @@ pub(super) fn instructed_message(
     };
     if let Some(relay) = &message.relay {
         // A relayed instruction grounds any run of its thread while in scope.
-        if let Some(project) = &relay.scope.project_id {
-            let target_project = match target {
-                Some(t) if t.kind == "project" => Some(t.id.clone()),
-                Some(t) => t
-                    .task_id
-                    .as_ref()
-                    .and_then(|id| id.parse().ok())
-                    .and_then(|id| store.get(id).ok().flatten())
-                    .and_then(|task| task.project_id.map(|id| id.to_string())),
-                None => None,
-            };
-            if target_project.as_ref() != Some(project) {
-                return Err(format!(
-                    "instructed_by {message_id} applies to project {project}, not this target"
-                ));
-            }
+        if let Some(project) = &relay.scope.project_id
+            && target_project(store, target).as_ref() != Some(project)
+        {
+            return Err(format!(
+                "instructed_by {message_id} applies to project {project}, not this target"
+            ));
         }
 
         if task_core::chat::relay_expired(relay, now) {
@@ -219,4 +230,19 @@ pub(super) fn instructed_message(
         executor_kind,
         thread_id: thread_id.clone(),
     })
+}
+
+/// The project an operation's target belongs to: the project itself, or the project of the
+/// target task (`None` for targets with neither).
+fn target_project(store: &SqliteStore, target: Option<&OperationTarget>) -> Option<String> {
+    match target {
+        Some(t) if t.kind == "project" => Some(t.id.clone()),
+        Some(t) => t
+            .task_id
+            .as_ref()
+            .and_then(|id| id.parse().ok())
+            .and_then(|id| store.get(id).ok().flatten())
+            .and_then(|task| task.project_id.map(|id| id.to_string())),
+        None => None,
+    }
 }

@@ -5,6 +5,7 @@
 //! secret after the prefix is verified by `task_core`. The verified `{thread_id, run_id}` becomes the
 //! [`CosCaller`] request extension; actor, thread and run claims in headers or JSON are never read.
 
+pub mod basis;
 pub mod inbox;
 pub mod operations;
 pub(crate) mod ops;

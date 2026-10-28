@@ -4868,6 +4868,60 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-28-cos-integrate-task D2: 統合の依頼 `request_id` を解く integrate task を起票した（起票と同じ\ntransaction で元の task に 1 回）。`by` は起票した主体。状態は変えない。",
+          "properties": {
+            "by": {
+              "type": "string"
+            },
+            "integrate_task_id": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "integrate_task_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "integrate_task_id",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "同 ADR D3: integrate task の決着。`outcome` は `integrated`（元の依頼を閉じた）か `escalated`（integrate task が\nfailed / cancelled で、依頼を人に回した）。`detail` は人が読む説明。状態は変えない。",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "integrate_task_id": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "outcome": {
+              "type": "string"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "integrate_task_settled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "integrate_task_id",
+            "outcome",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR 2026-10-06 D4: モデル catalog の変化（追加・消失・復活）。task に属さない監査イベントで、\n`model_catalog::catalog_event_task_id()` の疑似 task の列に追記する。状態は変えない。",
           "properties": {
             "added": {

@@ -68,6 +68,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
             axum::routing::delete(cancel_message),
         )
         .route("/api/v1/chat/threads/{t}/relays", post(post_relay))
+        .route("/api/v1/chat/threads/{t}/forwards", post(post_forward))
         .route("/api/v1/chat/threads/{t}/read", post(mark_read))
         .route("/api/v1/chat/threads/{t}/stop", post(stop_run))
         .route("/api/v1/chat/threads/{t}/resume-queue", post(resume_queue))
@@ -326,6 +327,19 @@ async fn post_relay(
         .await?;
     changed(&state);
     Ok(json_response(StatusCode::ACCEPTED, &result.response))
+}
+
+/// ADR 2026-10-28-single-human-window-general-cos D3: `POST /chat/threads/{t}/forwards` is the
+/// general CoS forwarding a person's message to a project thread. It runs only as the CoS
+/// operation `chat.relay_forward` (`/cos/operations`); a direct call is 403.
+async fn post_forward(Params(_t): Params<String>, RawQuery(raw): RawQuery) -> ApiResult {
+    no_query(&raw)?;
+    Err(ApiProblem::new(
+        StatusCode::FORBIDDEN,
+        "chat_forward_cos_only",
+        "forwards are made only by the general CoS through /cos/operations (chat.relay_forward); \
+         a person speaks in POST /chat/threads/{t}/messages, an operator relays in …/relays",
+    ))
 }
 
 async fn cancel_message(

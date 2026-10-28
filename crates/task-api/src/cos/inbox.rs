@@ -22,6 +22,7 @@ use task_ops::human_inbox::{InboxItem, InboxKind};
 use time::OffsetDateTime;
 use ulid::Ulid;
 
+use super::basis::{self, BasisTarget, DelegatedBasis};
 use super::operations::{
     DispatchEnv, ItemMark, Matched, OperationAudit, OperationView, dispatch, request_hash,
 };
@@ -105,6 +106,10 @@ pub struct ResolveBody {
     pub answer: Option<InboxAnswerBody>,
     #[serde(default)]
     pub escalation: Option<EscalationPacket>,
+    /// ADR 2026-10-28-cos-routine-delegated-answers D2: required for outcome=answer (which routine
+    /// judgment this is and its evidence); must be null otherwise.
+    #[serde(default)]
+    pub basis: Option<DelegatedBasis>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -201,23 +206,42 @@ pub(crate) fn human_required_reason(
     {
         return Ok(Some("the task is labeled human_required".into()));
     }
+    // ADR 2026-10-28-cos-integrate-task D4: the integrate task failed; the person decides the request.
+    if kind == Some(InboxKind::IntegrationRequest) {
+        return task_ops::integrate_task::escalated_reason(store, task_id).map_err(store_problem);
+    }
     Ok(None)
 }
 
-/// `human_required` of a `/cos/operations` request that answers a wait (decision・approval・gate).
-pub(crate) async fn human_required_for_operation(
-    state: &ApiState,
-    matched: &Matched,
-    path: &str,
-) -> Result<Option<String>, ApiProblem> {
-    if !matches!(
-        matched.action,
+/// Actions of `/cos/operations` that answer a human wait (decision・approval・gate・question).
+pub(crate) fn answers_wait(action: &str) -> bool {
+    matches!(
+        action,
         "decision.answer"
             | "approval.decide"
             | "execution.phase_gate"
             | "execution.plan_gate"
             | "question.answer"
-    ) {
+    )
+}
+
+/// The wait a `/cos/operations` request answers: its explicit `human_required` and what a routine
+/// basis is checked against (ADR 2026-10-28-cos-routine-delegated-answers D2). `None` when the
+/// action answers no wait.
+pub(crate) struct OperationWait {
+    pub human_required: Option<String>,
+    pub target: BasisTarget,
+}
+
+/// `human_required` and the basis target of a `/cos/operations` request that answers a wait.
+/// `body` gives the chosen `option` and `note` of the direct domain route.
+pub(crate) async fn wait_for_operation(
+    state: &ApiState,
+    matched: &Matched,
+    path: &str,
+    body: &Value,
+) -> Result<Option<OperationWait>, ApiProblem> {
+    if !answers_wait(matched.action) {
         return Ok(None);
     }
     let feed = human_feed(state).await?;
@@ -246,7 +270,25 @@ pub(crate) async fn human_required_for_operation(
         "approval.decide" => matched.id.as_ref().map(|id| ("authorization", id.clone())),
         _ => None,
     };
-    state
+    let text = |name: &str| {
+        body.get(name)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    // Only an open wait (found in the derived inbox) needs a basis; a closed one is the domain's
+    // own refusal (409 and the like).
+    let target = BasisTarget {
+        kind: found.map(|x| x.kind),
+        recommended: found.and_then(|x| x.recommended.clone()),
+        task_id,
+        // The chosen key: `option` (decision・inbox), `action` (gates) or `decision` (approval).
+        option: text("option")
+            .or_else(|| text("action"))
+            .or_else(|| text("decision")),
+        note: text("note"),
+    };
+    let human_required = state
         .blocking(move |store| {
             if let Some((source_kind, id)) = override_source
                 && store
@@ -257,7 +299,11 @@ pub(crate) async fn human_required_for_operation(
             }
             human_required_reason(store, kind, task_id)
         })
-        .await
+        .await?;
+    Ok(Some(OperationWait {
+        human_required,
+        target,
+    }))
 }
 
 fn validate_packet(
@@ -480,6 +526,12 @@ async fn resolve(
                     }
                     crate::inbox_notifications::validate_answer(found, input)
                         .map_err(|e| reject(unprocessable("validation", e.detail())))?;
+                    let Some(routine) = req.basis.as_ref() else {
+                        return Err(reject(basis::missing()));
+                    };
+                    basis::validate(store, routine, &answer_target(found, input)).map_err(&reject)?;
+                    audit.ctx.reason =
+                        format!("{}: {}", basis::reason_prefix(routine), audit.ctx.reason);
                     let (method, domain_path, domain_body) =
                         delegated_request(found, input).map_err(&reject)?;
                     audit.item = Some(ItemMark {
@@ -497,10 +549,10 @@ async fn resolve(
                     Ok((op, None))
                 }
                 ResolveOutcome::Observe => {
-                    if req.escalation.is_some() || req.answer.is_some() {
+                    if req.escalation.is_some() || req.answer.is_some() || req.basis.is_some() {
                         return Err(reject(unprocessable(
                             "validation",
-                            "answer and escalation must be null for outcome=observe",
+                            "answer, escalation and basis must be null for outcome=observe",
                         )));
                     }
                     if source.is_some() {
@@ -519,10 +571,10 @@ async fn resolve(
                     Ok((op, None))
                 }
                 ResolveOutcome::Escalate => {
-                    if req.answer.is_some() {
+                    if req.answer.is_some() || req.basis.is_some() {
                         return Err(reject(unprocessable(
                             "validation",
-                            "answer must be null for outcome=escalate",
+                            "answer and basis must be null for outcome=escalate",
                         )));
                     }
                     let Some(packet) = req.escalation.as_ref() else {
@@ -549,6 +601,8 @@ async fn resolve(
                         "recommendation_reason": packet.recommendation_reason,
                         "blocking": source.map(|s| s.blocking.summary.clone()),
                         "web_path": packet.web_path,
+                        // ADR 2026-10-28-single-human-window-general-cos D2: the general card names the task.
+                        "task_id": source.and_then(|s| s.task.as_ref()).map(|t| t.id.to_string()),
                     });
                     // Claim first: a crash after the claim leaves the outbox, and a retried resolve
                     // finds the route taken and still records the outcome.
@@ -591,6 +645,17 @@ async fn resolve(
             notification_id,
         },
     ))
+}
+
+/// What a routine-answer basis is checked against: the derived wait and the chosen answer.
+pub(crate) fn answer_target(found: &InboxItem, input: &InboxAnswerBody) -> BasisTarget {
+    BasisTarget {
+        kind: Some(found.kind),
+        recommended: found.recommended.clone(),
+        task_id: found.task.as_ref().map(|t| t.id),
+        option: (!input.option.is_empty()).then(|| input.option.clone()),
+        note: input.note.clone(),
+    }
 }
 
 /// The daemon DB the triage view reads (the API's own connection; see [`triage_view`]).

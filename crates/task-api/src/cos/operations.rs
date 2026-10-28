@@ -551,7 +551,12 @@ pub(crate) fn match_operation(method: &str, path: &str) -> Result<Matched, Strin
             }
         }
     }
-    if path == "/api/v1/cos" || path.starts_with("/api/v1/cos/") {
+    // ADR 2026-10-28-cos-review-back-thread D4': `chat.review_report` is the one registered
+    // operation under `/api/v1/cos/` (it is not a CoS control API).
+    let registered_cos = allowed().any(|(_, (m, p, _))| {
+        p.starts_with("/api/v1/cos/") && method.eq_ignore_ascii_case(m) && path_matches(p, path)
+    });
+    if (path == "/api/v1/cos" || path.starts_with("/api/v1/cos/")) && !registered_cos {
         return Err("recursive_cos: request.path must not call the CoS API recursively".into());
     }
     for (index, (allowed_method, pattern, action)) in allowed() {

@@ -3,6 +3,13 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-28（ADR 2026-10-28-cos-review-back-thread D1・D4'・D6）— **追加。v1 のまま**。エンドポイント 227〜228:
+  `POST /cos/review-report`（CoS operation `chat.review_report` だけ。直接の呼び出しは 422）と `GET /cos/review-thread`
+  （無ければ 404 `chat_not_found`、作らない）を足した（§3.129a）。`ChatThreadKind` に `review`（統括 CoS の裏 thread）を足し、
+  `GET /chat/threads` の一覧・検索は `review` を返さない。`GET /chat/threads/{t}`・`…/messages` は直接指定で読める。`review` thread への
+  `POST …/messages`・`…/attachments`・`PATCH /chat/threads/{t}`・`…/resume-queue` は 403 `chat_thread_read_only`。
+  `ChatMessage.provenance`（`{kind: cos_review_report, review_thread_id, review_message_id, run_id}`）と
+  `CronJobView.review_thread_id`（`cos_review` の job だけ。まだ無ければ `null`）を足した。
 - 改訂: 2026-10-28（ADR 2026-10-28-cos-integrate-task D1〜D5）— **追加。v1 のまま**。`POST /tasks/{id}/integration-requests/{request}/integrate-task`
   （body `{note?}`、**管理系**。CoS は `/cos/operations` の `integration.integrate_task`）を足した。元の task の未回答の統合の依頼（origin `delivery`）を解く
   root task を起票し、元の task に event `integrate_task_requested`（`request_id`・`integrate_task_id`・`by`）を同じ transaction で追記する。決着は
@@ -537,6 +544,8 @@ token_file = "api.token"
 | 199 | GET | `/cos/inbox` | 受信箱の一次対応 item（`?state` / `?limit`） | 200 `CosInboxList` | `crate::cos::inbox` |
 | 200 | POST | `/cos/inbox/{i}/resolve` | CoS の一次対応（answer / observe / escalate） | 200 `ResolveResponse` | `crate::cos::inbox` |
 | 201 | POST | `/cos/operations/{o}/override` | 人の取消・差し戻し（revoke / return。管理系） | 200 `OverrideResponse` | `crate::cos::override_op` |
+| 227 | POST | `/cos/review-report` | 定期見直しの報告を統括 CoS チャットに 1 件出す（CoS operation `chat.review_report` だけ。§3.129a） | 200 `OperationView` | `crate::cos::review` |
+| 228 | GET | `/cos/review-thread` | 統括 CoS の裏 thread（review thread。無ければ 404、作らない。§3.129a） | 200 `ChatThreadResponse` | `crate::cos::review` |
 | 203 | GET | `/llm/models` | 自動発見したモデル catalog と上書き・最終発見記録（§3.127。ADR 2026-10-06 D5） | `ModelCatalogView` | store `model_catalog_list` |
 | 204 | PUT | `/llm/models/{source}/{model_id}/override` | モデルの上書き（`disabled` / `tier` / `alias` / `note`）を置く | `ModelCatalogItem` | store `model_catalog_set_override` |
 | 205 | DELETE | `/llm/models/{source}/{model_id}/override` | 上書きを消す（204。無ければ 404 `model_override_not_found`） | なし | store `model_catalog_delete_override` |
@@ -3532,8 +3541,8 @@ KB を直接書かず `knowledge.record` を送る（ADR 2026-10-07 cos-live-fix
 
 操作の範囲は ADR 2026-10-09-cos-operations-all-mutations（人の決定「API で人ができる変更操作の全て」）で決まり、
 registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surface}.rs` の `ALLOWED`（登録済み）・
-`EXCLUDED`（人の決定による除外。理由コード付き）の 2 つに分かれる。変更 route（router と本書 §2 の表の和集合、142 行）は
-必ずどちらか一方だけに入る（ALLOWED 106・EXCLUDED 36。試験 `cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded`）。
+`EXCLUDED`（人の決定による除外。理由コード付き）の 2 つに分かれる。変更 route（router と本書 §2 の表の和集合、143 行）は
+必ずどちらか一方だけに入る（ALLOWED 107・EXCLUDED 36。試験 `cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded`）。
 登録済みの操作（action）:
 
 | 領域 | method と path | action |
@@ -3627,6 +3636,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | surface | `POST /chat/threads/{t}/resume-queue` | `chat.queue_resume` |
 | surface | `POST /chat/threads/{t}/attachments` | `chat.attachment_upload`（外部効果: file。本文は `{"client_upload_id","name","content_base64"}`、記録に中身は残さない） |
 | surface | `DELETE /chat/attachments/{a}` | `chat.attachment_delete`（外部効果: file） |
+| surface | `POST /cos/review-report` | `chat.review_report`（review thread の run だけ。統括 thread に assistant の報告を 1 件。§3.129a） |
 | surface | `POST /org/{id}/messages` | `org.message`（外部効果: run の起動。`{id}`=cos は 422 `cos_self_chain`） |
 | surface | `POST /tasks/{id}/artifacts/promote` | `artifact.promote`（外部効果: docs git） |
 | surface | `PUT /browser/site-policies/{policy_id}` | `browser.site_policy_put`（外部効果） |
@@ -3644,13 +3654,40 @@ tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`ex
 
 除外（422 `cos_operation_not_allowed`、detail に理由コード）: 秘密の値を扱う操作（`secret_operations`。`/secrets/*`・
 `/llm/sources/{source_id}/accounts/{account_id}/login*`・`/clusters/{id}/connect*`）、browser の credential/attestation 系
-（`browser_credential_attestation`）、`/console/instruct`（`console_instruction_chain`）、`/cos/*`（`recursive_cos`）、
+（`browser_credential_attestation`）、`/console/instruct`（`console_instruction_chain`）、`/cos/*`（`recursive_cos`。登録済みの `POST /cos/review-report` を除く）、
 ADR-0079 で撤去済みの入口（`removed_by_adr_0079`）。
 path の placeholder は 1 segment（英数字・`-`・`_`・`.`・`:`）に一致する。
 
 外部 URL、任意 proxy、`/cos` 以下の再帰操作、未登録 path は 422 で拒否理由付き監査 event に残す。`reason`・`policy_version`・`idempotency_key` は必須（reason は空白不可）。`policy_version` は daemon がその run に渡した版（`chat_runs.resolved_config_json.policy_version`。run には `cos_chat.policy_version` と環境変数 `CELERIS_COS_POLICY_VERSION` で渡す）と一致しなければならず、違う値や記録の無い run は 422 `cos_policy_version_mismatch`（拒否理由付きで daemon の版の rejected 行を残す。`/cos/inbox/{i}/resolve` も同じ。ADR 2026-10-28-cos-session-policy-key D2）。`expected_revision` は対象が revision を持つ操作で必須。idempotency key は thread 内一意で、同じ key の異なる request hash は 409。適用結果・`cos_operations` 行・監査 envelope event・chat card は同じ transaction に記録する。checkpoint は credential の run/thread に限り、run に配送済みの `through_seq` 以下、本文 32 KiB 以下。現在の checkpoint revision と `expected_summary_through_seq` が異なる場合は 409。
 
 スレッドの種類 `kind`（`human` / `inbox` / `legacy`）は人からは指定できない。`inbox` の thread は archive できない。`legacy` は旧 Console の履歴を移したもの（ADR D6）。
+
+### 3.129a 定期見直しの報告と統括 CoS の裏 thread（ADR 2026-10-28-cos-review-back-thread D1・D4'・D6）
+
+cron の `cos_review` job は統括 CoS の裏 thread（`ChatThreadKind` `review`。daemon 全体で 1 件、`project_id` なし、題
+『統括 CoS（定期見直し）』）に入力を積み、その thread の CoS run が見直す。人に伝える事があるときだけ、run は
+`chat.review_report` で統括 thread に報告を 1 件出す。
+
+| メソッド・endpoint | 入力 | 成功 |
+|---|---|---|
+| POST `/cos/operations` の `request` が `POST /cos/review-report` | `request.body` = `{"review_message_id","text"}`（`ReviewReportBody`） | 200 `OperationView`。`result` は `{message, created}`（`ReviewReportResult`） |
+| GET `/cos/review-thread` | なし | 200 `ChatThreadResponse`。まだ無ければ 404 `chat_not_found`（作らない） |
+
+- `chat.review_report` は呼び出した run の credential の thread が review thread のときだけ受ける。統括・案件・legacy の
+  thread の run、`review_message_id` が review thread の入力（`role=user`、`client_message_id` が `cron-cos-review:` で始まる）
+  でないとき、`text` が空か 4000 字を超えるときは 422 `cos_review_report_invalid`（`cos_operations` に rejected の行が残る）。
+- 書くもの: 統括 thread に `role=assistant`・`state=completed` の message を 1 件（`client_message_id`
+  `cos-review-report:<入力 id>`、`provenance` `{kind: cos_review_report, review_thread_id, review_message_id, run_id}`）。
+  message と `cos_operations` の行（`target_kind` `chat_thread`、`target_id` `general`）は同じ transaction で書く。同じ入力への 2 回目は
+  最初の報告を `created: false` で返し何も書かない。報告は待ち行列に入らないので統括 CoS の run は起きない。未読には数える。
+- `POST /cos/review-report` を直接呼ぶと 422: CoS run の credential は `cos_audit_context_required`（`instead`:
+  `/cos/operations`。rejected の行を残す）、人・operator・MCP の token は `cos_review_report_invalid`。
+- review thread は `GET /chat/threads` の一覧・検索・未読の合計に出ない。`GET /chat/threads/{t}`・`…/messages`・`…/stream` は
+  id の直接指定で読める。`POST …/messages`・`…/relays`・`…/attachments`・`PATCH /chat/threads/{t}`・`…/resume-queue` は
+  人・operator・MCP・CoS のどの主体からも 403 `chat_thread_read_only`（CoS operation でも同じ）。`…/forwards` の宛先は案件 thread
+  だけなので、review thread 宛ては CoS operation で 422 `validation`（直接の呼び出しは従来どおり 403 `chat_forward_cos_only`）。
+  `…/stop`・`…/read` は受ける。
+- `GET /cron-jobs`・`GET /cron-jobs/{id}` の `review_thread_id` は `cos_review` の job で review thread の id（まだ無ければ `null`）。
 
 ### 3.130 CoS 受信箱の一次対応と代答の取消（ADR 2026-10-06-cos-inbox-triage / 2026-10-05-cos-chat-home D3・D6）
 

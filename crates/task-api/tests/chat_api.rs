@@ -465,6 +465,85 @@ async fn chat_api_legacy_thread_is_read_only() {
     assert_eq!(accepted.status.as_u16(), 202, "{}", accepted.text());
 }
 
+/// ADR 2026-10-28-cos-review-back-thread D1: the review thread is not listed or searched, is read
+/// by id, and refuses the person's writes (403 `chat_thread_read_only`).
+#[tokio::test]
+async fn chat_api_review_thread_is_hidden_from_the_list_and_read_only() {
+    let env = admin_env();
+    let app = env.router();
+    let general = send(&app, post_admin(BASE, &thread_body(None)))
+        .await
+        .json()["thread"]["id"]
+        .as_str()
+        .expect("general id")
+        .to_string();
+    let review = env
+        .store
+        .cos_review_input_post(
+            "cron-cos-review:job:1",
+            "定期見直し",
+            OffsetDateTime::now_utc(),
+        )
+        .expect("review input")
+        .response
+        .message
+        .thread_id;
+
+    let listed = send(&app, get_admin(BASE)).await;
+    assert_eq!(listed.status.as_u16(), 200, "{}", listed.text());
+    let ids: Vec<String> = listed.json()["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter_map(|t| t["id"].as_str().map(str::to_owned))
+        .collect();
+    assert!(ids.contains(&general), "{ids:?}");
+    assert!(!ids.contains(&review), "{ids:?}");
+    let searched = send(&app, get_admin(&format!("{BASE}?q=定期見直し"))).await;
+    assert_eq!(searched.status.as_u16(), 200, "{}", searched.text());
+    assert!(
+        searched.json()["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|t| t["id"] != review.as_str()),
+        "{}",
+        searched.text()
+    );
+
+    let shown = send(&app, get_admin(&format!("{BASE}/{review}"))).await;
+    assert_eq!(shown.status.as_u16(), 200, "{}", shown.text());
+    assert_eq!(shown.json()["thread"]["kind"], "review");
+    let messages = send(&app, get_admin(&format!("{BASE}/{review}/messages"))).await;
+    assert_eq!(messages.status.as_u16(), 200, "{}", messages.text());
+    assert_eq!(messages.json()["items"][0]["text"], "定期見直し");
+
+    assert_problem(
+        &send(
+            &app,
+            post_admin(
+                &format!("{BASE}/{review}/messages"),
+                &message_body("post", "裏へ"),
+            ),
+        )
+        .await,
+        403,
+        "chat_thread_read_only",
+    );
+    assert_problem(
+        &send(
+            &app,
+            patch_admin(
+                &format!("{BASE}/{review}"),
+                &json!({"title": "改題", "expected_revision": shown.json()["thread"]["revision"]}),
+            ),
+        )
+        .await,
+        403,
+        "chat_thread_read_only",
+    );
+}
+
 #[tokio::test]
 async fn chat_api_archived_thread_rejects_send() {
     let env = admin_env();

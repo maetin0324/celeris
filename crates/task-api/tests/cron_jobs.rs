@@ -269,6 +269,8 @@ async fn cos_review_job_is_created_without_task_fields_and_refuses_a_manual_run(
     let resp = send(&app, post_json(BASE, &body)).await;
     assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
     assert_eq!(resp.json()["template"]["kind"], "cos_review");
+    // ADR 2026-10-28-cos-review-back-thread D6: the review thread id, null until the first input.
+    assert!(resp.json()["review_thread_id"].is_null(), "{}", resp.text());
 
     let run = send(&app, post_empty(&format!("{BASE}/cos-review/run"))).await;
     assert_eq!(run.status.as_u16(), 422, "{}", run.text());
@@ -281,6 +283,33 @@ async fn cos_review_job_is_created_without_task_fields_and_refuses_a_manual_run(
         .await
         .json();
     assert_eq!(hist["items"].as_array().map(Vec::len), Some(0), "{hist}");
+    let job = send(&app, get(&format!("{BASE}/cos-review"))).await.json();
+    assert!(
+        job["review_thread_id"].is_null(),
+        "the lookup does not create it: {job}"
+    );
+
+    let review = env
+        .store
+        .cos_review_input_post(
+            "cron-cos-review:job:1",
+            "定期見直し",
+            time::OffsetDateTime::now_utc(),
+        )
+        .expect("review input")
+        .response
+        .message
+        .thread_id;
+    let job = send(&app, get(&format!("{BASE}/cos-review"))).await.json();
+    assert_eq!(job["review_thread_id"], review.as_str(), "{job}");
+    let listed = send(&app, get(BASE)).await.json();
+    assert_eq!(
+        listed["items"][0]["review_thread_id"],
+        review.as_str(),
+        "{listed}"
+    );
+    let task_job = send(&app, post_json(BASE, &job_body("daily"))).await.json();
+    assert!(task_job["review_thread_id"].is_null(), "{task_job}");
 
     let mut with_task_field = body.clone();
     with_task_field["name"] = json!("cos-review-2");

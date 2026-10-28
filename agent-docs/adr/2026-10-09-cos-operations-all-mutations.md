@@ -286,6 +286,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/chat/threads/{t}/relays` | X: `human_instruction_relay` | `chat/mod.rs` | router のみ |
 | POST | `/chat/threads/{t}/forwards` | A | `chat/mod.rs` | router のみ |
 | POST | `/console/instruct` | X: `console_instruction_chain` | `console.rs` | 共通 |
+| POST | `/cos/review-report` | A | `cos/review.rs` | 共通 |
 | POST | `/cos/inbox/{i}/resolve` | X: `recursive_cos` | `cos/inbox.rs` | 共通 |
 | POST | `/cos/operations` | X: `recursive_cos` | `cos/operations.rs` | 共通 |
 | POST | `/cos/operations/{o}/override` | X: `recursive_cos` | `cos/override_op.rs` | 共通 |
@@ -469,3 +470,11 @@ ADR 2026-10-22-dynamic-config の `PATCH /config/fields`（config.toml の動的
 ADR 2026-10-28-cos-integrate-task の `POST /tasks/{id}/integration-requests/{request}/integrate-task` を tasks 領域の ALLOWED
 （`integration.integrate_task`）に加えた。task の起票と元の task への `IntegrateTaskRequested` の追記・`cos_operations` 行・監査 envelope が
 1 transaction で、git には触らない。手 merge の `/integrations/{repo}/merge` は人だけの操作（EXCLUDED）のまま。
+
+## 付記: 定期見直しの報告（2026-10-28、task 01M61HW6RGHHRVAGRMQASDF9YY）
+
+- surface に `POST /cos/review-report`（`chat.review_report`）を ALLOWED で足した（ADR
+  [2026-10-28-cos-review-back-thread](2026-10-28-cos-review-back-thread.md) D4'）。`/cos/` の下で登録済みの操作はこの 1 行だけで、
+  `match_operation` は登録済みの `/cos/` の行を `recursive_cos` の拒否より先に通す。分類は ALLOWED 107・EXCLUDED 36（計 143 行。
+  surface は ALLOWED 23）。route を直接呼ぶと 422（CoS run は `cos_audit_context_required`、人・operator・MCP は
+  `cos_review_report_invalid`）。

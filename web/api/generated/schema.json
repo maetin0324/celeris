@@ -7804,6 +7804,13 @@
         "overlap": {
           "$ref": "#/$defs/CronOverlap"
         },
+        "review_thread_id": {
+          "description": "`cos_review` の job では統括 CoS の裏 thread（review thread）の id。最初の発火の前と他の job では\n`null`（ADR 2026-10-28-cos-review-back-thread D6。ここでは作らない）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "schedule": {
           "type": "string"
         },
@@ -25274,6 +25281,43 @@
       },
       "type": "object"
     },
+    "ReviewReportBody": {
+      "additionalProperties": false,
+      "description": "Body of `chat.review_report`.",
+      "properties": {
+        "review_message_id": {
+          "description": "The review input (`role=user`, key `cron-cos-review:…`) of the review thread this report\nanswers.",
+          "type": "string"
+        },
+        "text": {
+          "description": "1 to 4000 characters, written to the general thread as is.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "review_message_id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "ReviewReportResult": {
+      "description": "Result of `chat.review_report` (`operation.result`).",
+      "properties": {
+        "created": {
+          "description": "`false` when the review input already had its report: the first one is returned and\nnothing is written.",
+          "type": "boolean"
+        },
+        "message": {
+          "$ref": "#/$defs/ChatMessage",
+          "description": "The report in the general thread (`provenance.kind = cos_review_report`)."
+        }
+      },
+      "required": [
+        "message",
+        "created"
+      ],
+      "type": "object"
+    },
     "ReviewResult": {
       "description": "レビューの結果（その run の後の `review_pass` / `review_fail`）。",
       "properties": {
@@ -33491,6 +33535,14 @@
       "$ref": "#/$defs/ResolveResponse",
       "description": "`POST /cos/inbox/{i}/resolve` の応答。"
     },
+    "cos_review_report_request": {
+      "$ref": "#/$defs/ReviewReportBody",
+      "description": "ADR 2026-10-28-cos-review-back-thread D4': `request.body` of `chat.review_report`\n(`POST /cos/review-report` through `POST /cos/operations`)."
+    },
+    "cos_review_report_result": {
+      "$ref": "#/$defs/ReviewReportResult",
+      "description": "`operation.result` of `chat.review_report`."
+    },
     "cron_job": {
       "$ref": "#/$defs/CronJobView"
     },
@@ -34255,6 +34307,8 @@
     "cos_operation_response",
     "cos_checkpoint_request",
     "cos_checkpoint_response",
+    "cos_review_report_request",
+    "cos_review_report_result",
     "cos_inbox_item",
     "cos_inbox_list",
     "cos_resolve_request",

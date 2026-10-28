@@ -56,6 +56,7 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/chat/attachments/{a}",
         "chat.attachment_delete",
     ),
+    ("POST", "/api/v1/cos/review-report", "chat.review_report"),
     ("POST", "/api/v1/org/{id}/messages", "org.message"),
     (
         "POST",
@@ -431,6 +432,12 @@ pub(crate) fn dispatch(
                         .map(|thread| ChatThreadResponse { thread })
                 },
             )
+        }
+        "chat.review_report" => {
+            // ADR 2026-10-28-cos-review-back-thread D4': the review run's report to the person.
+            let input: crate::cos::review::ReviewReportBody =
+                serde_json::from_value(body).map_err(decode)?;
+            crate::cos::review::report_op(store, audit, input)
         }
         "chat.attachment_upload" => {
             let thread = thread_of(path);

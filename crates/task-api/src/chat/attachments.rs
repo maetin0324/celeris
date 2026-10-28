@@ -8,8 +8,8 @@ use axum::routing::{get, post};
 use rusqlite::{OptionalExtension, params};
 use task_core::chat::attachments::{AttachmentError, ChatAttachmentStore, StoredAttachment};
 use task_core::chat::{
-    ChatAttachment, ChatAttachmentResponse, ChatAttachmentState, ChatReferenceOwnerKind,
-    ChatReferenceRequest, ChatReferenceResponse,
+    ChatAttachment, ChatAttachmentResponse, ChatAttachmentState, ChatError, ChatReferenceOwnerKind,
+    ChatReferenceRequest, ChatReferenceResponse, ChatThreadKind,
 };
 use time::OffsetDateTime;
 use tokio::io::AsyncWriteExt;
@@ -46,6 +46,19 @@ fn error(err: AttachmentError) -> ApiProblem {
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "attachment_store_error"),
     };
     ApiProblem::new(status, code, err.to_string())
+}
+
+/// The upload target must be an existing thread that takes input: the review thread (ADR
+/// 2026-10-28-cos-review-back-thread D1) is read-only, so an upload there is 403
+/// `chat_thread_read_only`.
+fn upload_thread(db: &task_core::store::SqliteStore, thread: &str) -> Result<(), ApiProblem> {
+    let detail = db.chat_thread_detail(thread).map_err(chat_problem)?;
+    if detail.thread.kind == ChatThreadKind::Review {
+        return Err(chat_problem(ChatError::ReadOnly(format!(
+            "thread {thread} is the general CoS's review thread; it takes no attachments"
+        ))));
+    }
+    Ok(())
 }
 
 fn multipart_error(err: axum::extract::multipart::MultipartError) -> ApiProblem {
@@ -146,6 +159,10 @@ async fn upload(
 ) -> ApiResult {
     no_query(&raw)?;
     authorize(&state, &headers)?;
+    let thread_check = thread.clone();
+    state
+        .blocking(move |db| upload_thread(db, &thread_check))
+        .await?;
     let store = open(&state)?;
     let limit = state.chat.attachment_limits.max_file_bytes;
     let mut key = None;
@@ -223,14 +240,6 @@ async fn upload(
     };
     file.seek(SeekFrom::Start(0))
         .map_err(|e| error(AttachmentError::Io(e)))?;
-    let thread_check = thread.clone();
-    state
-        .blocking(move |db| {
-            db.chat_thread_detail(&thread_check)
-                .map(|_| ())
-                .map_err(chat_problem)
-        })
-        .await?;
     let db_path = state.chat.attachment_db_path.as_ref().ok_or_else(|| {
         ApiProblem::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -551,7 +560,7 @@ pub(crate) fn upload_effect(
     body: &CosUploadBody,
     bytes: Vec<u8>,
 ) -> crate::cos::operations::Effect<ChatAttachmentResponse> {
-    if let Err(problem) = db.chat_thread_detail(thread).map_err(chat_problem) {
+    if let Err(problem) = upload_thread(db, thread) {
         return Ok(Err(problem));
     }
     let store = match open(state) {

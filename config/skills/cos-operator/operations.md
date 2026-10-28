@@ -135,6 +135,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 待ち行列の入力の取消 | `DELETE /api/v1/chat/threads/<t>/messages/<m>` | chat.message_cancel | body なし。queued の user 入力だけ |
 | 既読の水位を上げる | `POST /api/v1/chat/threads/<t>/read` | chat.thread_read | `{"through_seq"}`。下げない |
 | 統括で人が答えた発言を案件スレッドへ取り次ぐ | `POST /api/v1/chat/threads/<t>/forwards` | chat.relay_forward | `{"client_message_id":"forward:<message_id>:<t>","message_id","task_ids","expires_at"}`。統括 CoS の run だけ。原文は写される（本文は渡さない） |
+| 定期見直しの報告を統括 CoS チャットに出す | `POST /api/v1/cos/review-report` | chat.review_report | `{"review_message_id","text"}`。review thread の run だけ（他は 422 `cos_review_report_invalid`）。入力 1 件につき 1 件、text は 1〜4000 字 |
 | chat run の停止 | `POST /api/v1/chat/threads/<t>/stop` | chat.run_stop | `{"run_id"}`。待ち行列は一時停止になる |
 | 待ち行列の再開 | `POST /api/v1/chat/threads/<t>/resume-queue` | chat.queue_resume | `{"expected_revision"}` |
 | chat 添付のアップロード | `POST /api/v1/chat/threads/<t>/attachments` | chat.attachment_upload | `{"client_upload_id","name","content_base64"}`。外部効果（file）。記録に中身は残らない |

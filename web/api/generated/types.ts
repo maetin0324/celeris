@@ -1655,6 +1655,7 @@ export type CronJobView = {
   "name": string;
   "next_fire_at"?: string | null;
   "overlap": CronOverlap;
+  "review_thread_id"?: string | null;
   "schedule": string;
   "template": CronTaskTemplate;
   "timezone": string;
@@ -5072,6 +5073,16 @@ export type ReviewPrefs = {
   "escalate_on_fail"?: boolean | null;
   "harness"?: string | null;
   "tier"?: Tier | null;
+};
+
+export type ReviewReportBody = {
+  "review_message_id": string;
+  "text": string;
+};
+
+export type ReviewReportResult = {
+  "created": boolean;
+  "message": ChatMessage;
 };
 
 export type ReviewResult = {

@@ -355,6 +355,11 @@ pub struct ApiV1Schema {
     pub cos_checkpoint_request: crate::cos::CheckpointRequest,
     /// Response for `POST /cos/threads/{t}/checkpoint`.
     pub cos_checkpoint_response: crate::cos::CheckpointResponse,
+    /// ADR 2026-10-28-cos-review-back-thread D4': `request.body` of `chat.review_report`
+    /// (`POST /cos/review-report` through `POST /cos/operations`).
+    pub cos_review_report_request: crate::cos::review::ReviewReportBody,
+    /// `operation.result` of `chat.review_report`.
+    pub cos_review_report_result: crate::cos::review::ReviewReportResult,
     // ---- ADR 2026-10-06-cos-inbox-triage: 受信箱の一次対応（resolve・override） ----
     /// `GET /cos/inbox` の 1 件（`cos_inbox_items` 行）。
     pub cos_inbox_item: crate::cos::triage_view::CosInboxItem,

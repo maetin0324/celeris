@@ -89,6 +89,9 @@ pub struct CronJobView {
     pub job: CronJob,
     /// 最後に記録した履歴（無ければ `null`）。
     pub last_run: Option<CronJobRun>,
+    /// `cos_review` の job では統括 CoS の裏 thread（review thread）の id。最初の発火の前と他の job では
+    /// `null`（ADR 2026-10-28-cos-review-back-thread D6。ここでは作らない）。
+    pub review_thread_id: Option<String>,
 }
 
 /// `GET /cron-jobs` の応答。
@@ -168,7 +171,18 @@ fn view(store: &SqliteStore, job: CronJob) -> Result<CronJobView, ApiProblem> {
         .map_err(crate::problem::store_problem)?
         .into_iter()
         .next();
-    Ok(CronJobView { job, last_run })
+    let review_thread_id = match task_ops::cron_jobs::template_kind(&job.template) {
+        Ok(task_ops::cron_jobs::CronJobKind::CosReview) => store
+            .cos_review_thread_get()
+            .map_err(crate::chat::chat_problem)?
+            .map(|thread| thread.id),
+        _ => None,
+    };
+    Ok(CronJobView {
+        job,
+        last_run,
+        review_thread_id,
+    })
 }
 
 fn fire_context(state: &ApiState) -> (Vec<task_core::RoleSpec>, Vec<task_core::GenreSpec>) {

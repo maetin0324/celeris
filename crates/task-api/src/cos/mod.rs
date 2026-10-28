@@ -10,6 +10,7 @@ pub mod inbox;
 pub mod operations;
 pub(crate) mod ops;
 pub mod override_op;
+pub mod review;
 pub mod triage_view;
 
 use axum::Extension;
@@ -199,6 +200,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         .merge(operations::routes())
         .merge(inbox::routes())
         .merge(override_op::routes())
+        .merge(review::routes())
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

@@ -90,6 +90,7 @@ pub(crate) fn chat_problem(error: ChatError) -> ApiProblem {
         ChatError::TooLarge(_) => "payload_too_large",
         ChatError::QueueFull { .. } => "chat_queue_full",
         ChatError::CursorExpired(_) => "chat_cursor_expired",
+        ChatError::ReadOnly(_) => "chat_thread_read_only",
     };
     ApiProblem::new(status, code, error.to_string())
 }
@@ -133,6 +134,7 @@ async fn list_threads(
         status,
         before: params.single("before")?.map(str::to_owned),
         limit: Some(params.limit("limit", 50, 100)? as u32),
+        include_review: false,
     };
     let result = state
         .blocking(move |store| store.chat_thread_list(&query).map_err(chat_problem))

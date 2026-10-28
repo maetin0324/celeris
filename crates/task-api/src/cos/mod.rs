@@ -228,6 +228,7 @@ pub(crate) fn cos_problem(error: ChatError) -> ApiProblem {
         ChatError::TooLarge(_) => "payload_too_large",
         ChatError::QueueFull { .. } => "chat_queue_full",
         ChatError::CursorExpired(_) => "chat_cursor_expired",
+        ChatError::ReadOnly(_) => "chat_thread_read_only",
     };
     ApiProblem::new(status, code, error.to_string())
 }

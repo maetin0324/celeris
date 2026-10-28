@@ -169,7 +169,8 @@ pub(super) fn instructed_message(
     let executor_kind = match thread.kind {
         task_core::chat::ChatThreadKind::General => "cos_general",
         task_core::chat::ChatThreadKind::Project => "cos_project",
-        task_core::chat::ChatThreadKind::Legacy => {
+        // The review thread has no person's message (ADR 2026-10-28-cos-review-back-thread D1).
+        task_core::chat::ChatThreadKind::Legacy | task_core::chat::ChatThreadKind::Review => {
             return Err(format!(
                 "instructed_by is accepted only in a CoS thread (thread {thread_id} is {:?})",
                 thread.kind

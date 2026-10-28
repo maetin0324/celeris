@@ -74,6 +74,8 @@ impl CosChatLaunch {
             let page = match self.store.chat_thread_list(&ChatThreadQuery {
                 before: before.clone(),
                 limit: Some(100),
+                // ADR 2026-10-28-cos-review-back-thread D2: control the review thread's run too.
+                include_review: true,
                 ..ChatThreadQuery::default()
             }) {
                 Ok(page) => page,

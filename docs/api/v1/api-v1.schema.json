@@ -3527,6 +3527,17 @@
         "id": {
           "type": "string"
         },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-28-cos-review-back-thread D4': where this message came from when another\nthread produced it (a periodic review report names its review input)."
+        },
         "relay": {
           "anyOf": [
             {
@@ -3771,6 +3782,41 @@
         "queue_position"
       ],
       "type": "object"
+    },
+    "ChatProvenance": {
+      "description": "D4': the origin of a message written into the general thread by the review thread's run.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ChatProvenanceKind"
+        },
+        "review_message_id": {
+          "description": "The review input (the cron's `role=user` message) the report answers.",
+          "type": "string"
+        },
+        "review_thread_id": {
+          "description": "The review thread (`kind = review`) the report came from.",
+          "type": "string"
+        },
+        "run_id": {
+          "description": "The review thread's CoS run that sent the report.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "review_thread_id",
+        "review_message_id"
+      ],
+      "type": "object"
+    },
+    "ChatProvenanceKind": {
+      "enum": [
+        "cos_review_report"
+      ],
+      "type": "string"
     },
     "ChatQueueData": {
       "additionalProperties": false,
@@ -4387,7 +4433,8 @@
       "enum": [
         "general",
         "project",
-        "legacy"
+        "legacy",
+        "review"
       ],
       "type": "string"
     },

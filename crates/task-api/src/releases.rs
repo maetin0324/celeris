@@ -84,7 +84,10 @@ pub fn cos_deployment_actor(
 ) -> Result<String, String> {
     use task_core::chat::ChatThreadKind;
     match kind {
-        Some(ChatThreadKind::General) => Ok(format!("cos_general:{thread_id}")),
+        // ADR 2026-10-28-cos-review-back-thread D1: the review thread's run is the general CoS.
+        Some(ChatThreadKind::General | ChatThreadKind::Review) => {
+            Ok(format!("cos_general:{thread_id}"))
+        }
         Some(ChatThreadKind::Project) => Ok(format!("cos_project:{thread_id}")),
         Some(ChatThreadKind::Legacy) => Err(format!(
             "thread {thread_id} is a legacy thread, not a general or project CoS thread"

@@ -283,6 +283,8 @@ impl CosChatLaunch {
                 .chat_thread_list(&ChatThreadQuery {
                     before: before.clone(),
                     limit: Some(100),
+                    // ADR 2026-10-28-cos-review-back-thread D2: the review thread's queue runs too.
+                    include_review: true,
                     ..ChatThreadQuery::default()
                 })
                 .map_err(|e| e.to_string())?;

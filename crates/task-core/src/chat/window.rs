@@ -275,6 +275,7 @@ pub fn chat_relay_forward_tx(
             author: Some(relayed_by.to_owned()),
             relay: Some(relay),
             mcp_receipt: false,
+            review_input: false,
         },
         now,
     )

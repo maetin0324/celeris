@@ -726,6 +726,7 @@ export type ChatMessage = {
   "created_at": string;
   "escalation"?: ChatEscalationRef | null;
   "id": string;
+  "provenance"?: ChatProvenance | null;
   "relay"?: ChatRelay | null;
   "reply_to_id"?: string | null;
   "role": ChatMessageRole;
@@ -781,6 +782,15 @@ export type ChatPostMessageResponse = {
   "queue_position": number;
   "run_id"?: string | null;
 };
+
+export type ChatProvenance = {
+  "kind": ChatProvenanceKind;
+  "review_message_id": string;
+  "review_thread_id": string;
+  "run_id"?: string | null;
+};
+
+export type ChatProvenanceKind = "cos_review_report";
 
 export type ChatQueueData = {
   "message_ids": Array<string>;
@@ -926,7 +936,7 @@ export type ChatThreadDetailResponse = {
   "thread": ChatThread;
 };
 
-export type ChatThreadKind = "general" | "project" | "legacy";
+export type ChatThreadKind = "general" | "project" | "legacy" | "review";
 
 export type ChatThreadListResponse = {
   "items": Array<ChatThread>;

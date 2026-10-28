@@ -882,6 +882,7 @@ fn actor_classification_keeps_unknown_for_rounded_or_missing_by() {
         InterventionActorKind::classify(by, |t| match t {
             "g" => Some(ChatThreadKind::General),
             "p" => Some(ChatThreadKind::Project),
+            "r" => Some(ChatThreadKind::Review),
             _ => None,
         })
     };
@@ -901,6 +902,8 @@ fn actor_classification_keeps_unknown_for_rounded_or_missing_by() {
         ),
         (Some("human:bob"), InterventionActorKind::Human, Some("bob")),
         (Some("cos:g"), InterventionActorKind::CosGeneral, Some("g")),
+        // ADR 2026-10-28-cos-review-back-thread D1: the review thread's run is the general CoS.
+        (Some("cos:r"), InterventionActorKind::CosGeneral, Some("r")),
         (
             Some("cos_project:x"),
             InterventionActorKind::CosProject,

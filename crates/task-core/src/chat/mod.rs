@@ -15,6 +15,7 @@ mod override_op;
 pub mod relay_rejudge;
 #[cfg(test)]
 mod relay_rejudge_tests;
+mod review;
 mod run_store;
 mod session;
 #[cfg(test)]
@@ -32,6 +33,10 @@ mod window_tests;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
 pub use operations::{AuditContext, CosOperation};
 pub use override_op::{OverrideAction, OverrideResult};
+pub use review::{
+    COS_REVIEW_INPUT_KEY_PREFIX, COS_REVIEW_REPORT_KEY_PREFIX, COS_REVIEW_REPORT_TEXT_MAX_CHARS,
+    COS_REVIEW_THREAD_TITLE, ChatReviewReported, cos_review_report_tx, cos_review_thread_ensure_tx,
+};
 pub use run_store::{
     CHAT_EVENT_PAGE_DEFAULT, CHAT_EVENT_PAGE_MAX, CHAT_EVENT_RETENTION_DAYS,
     CHAT_TOOL_DETAIL_MAX_BYTES, ChatEventQuery, ChatStopOutcome, chat_run_state_is_terminal,
@@ -60,11 +65,13 @@ macro_rules! wire_enum {
     };
 }
 // ADR 2026-10-22-cos-fixed-threads D1: the general CoS (one), one CoS per project, and the
-// read-only threads kept by migration 0092.
+// read-only threads kept by migration 0092. ADR 2026-10-28-cos-review-back-thread D1: `review` is
+// the general CoS's back thread for the periodic review (one; hidden from the person's lists).
 wire_enum!(ChatThreadKind {
     General,
     Project,
-    Legacy
+    Legacy,
+    Review
 });
 wire_enum!(ChatThreadStatus { Open, Archived });
 wire_enum!(ChatMessageRole {
@@ -191,8 +198,25 @@ pub struct ChatMessage {
     /// read from the item every time (the card is resolved when the item is).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalation: Option<Box<ChatEscalationRef>>,
+    /// ADR 2026-10-28-cos-review-back-thread D4': where this message came from when another
+    /// thread produced it (a periodic review report names its review input).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<ChatProvenance>,
     pub created_at: String,
     pub updated_at: String,
+}
+wire_enum!(ChatProvenanceKind { CosReviewReport });
+/// D4': the origin of a message written into the general thread by the review thread's run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChatProvenance {
+    pub kind: ChatProvenanceKind,
+    /// The review thread (`kind = review`) the report came from.
+    pub review_thread_id: String,
+    /// The review input (the cron's `role=user` message) the report answers.
+    pub review_message_id: String,
+    /// The review thread's CoS run that sent the report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 /// ADR 2026-10-27-relayed-instructions D1: the relay record of a `role=user` message. The text
 /// of the message is the person's own words; this says who carried them, when the person said

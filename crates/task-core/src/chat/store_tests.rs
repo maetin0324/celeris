@@ -1566,3 +1566,257 @@ fn cos_chat_mcp_instruct_relay_is_recorded_with_the_client_as_relayer() {
     assert_eq!(plain.author.as_deref(), Some("mcp:chatgpt"));
     assert_eq!(plain.relay, None);
 }
+
+/// ADR 2026-10-28-cos-review-back-thread D1: the review thread is one thread, opened
+/// idempotently, and is left out of the person's list, search and unread counts.
+#[test]
+fn cos_review_thread_is_one_and_hidden_from_lists_search_and_counts() {
+    let s = store();
+    let general = s
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, at(0))
+        .expect("general")
+        .thread;
+    assert!(s.cos_review_thread_get().expect("get").is_none());
+    let first = s.cos_review_thread_open(at(1)).expect("open review");
+    assert!(first.created);
+    assert_eq!(first.thread.kind, ChatThreadKind::Review);
+    assert_eq!(first.thread.title, COS_REVIEW_THREAD_TITLE);
+    assert_eq!(first.thread.project_id, None);
+    let again = s.cos_review_thread_open(at(2)).expect("open again");
+    assert!(!again.created);
+    assert_eq!(again.thread.id, first.thread.id);
+    assert_eq!(
+        s.cos_review_thread_get().expect("get").map(|t| t.id),
+        Some(first.thread.id.clone())
+    );
+    // The partial UNIQUE index allows one review thread only.
+    let dup = s.lock().expect("lock").execute(
+        "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) \
+         VALUES('r2','review','x','open','2026-10-28T00:00:00.000Z','2026-10-28T00:00:00.000Z')",
+        [],
+    );
+    assert!(dup.is_err(), "a second review thread is refused");
+    // A completed reply in the review thread would be unread there; it is not counted anywhere
+    // the person looks.
+    let review = first.thread.id.clone();
+    s.cos_review_input_post("cron-cos-review:job:1", "定期見直し 独自語彙", at(3))
+        .expect("review input");
+    s.chat_system_message_add(&review, "変化なし", &[], at(4))
+        .expect("review reply");
+    let shown = s
+        .chat_thread_get(&review)
+        .expect("get")
+        .expect("review thread");
+    assert_eq!(shown.unread_count, 1);
+    let plain = s
+        .chat_thread_list(&ChatThreadQuery::default())
+        .expect("list");
+    assert_eq!(
+        plain
+            .items
+            .iter()
+            .map(|t| t.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![general.id.as_str()]
+    );
+    let unread_total: u32 = plain.items.iter().map(|t| t.unread_count).sum();
+    assert_eq!(unread_total, 0);
+    for q in ["独自語彙", "定期見直し"] {
+        let found = s
+            .chat_thread_list(&ChatThreadQuery {
+                q: Some(q.into()),
+                ..ChatThreadQuery::default()
+            })
+            .expect("search");
+        assert!(found.items.is_empty(), "{q}: {:?}", found.items);
+    }
+    // The dispatcher's queue claim and run control still see it.
+    let all = s
+        .chat_thread_list(&ChatThreadQuery {
+            include_review: true,
+            ..ChatThreadQuery::default()
+        })
+        .expect("list with review");
+    assert!(all.items.iter().any(|t| t.id == review));
+    assert_eq!(cos_thread_label(&shown), None);
+}
+
+/// D1: nobody posts to the review thread (403 chat_thread_read_only); only the cron's review
+/// input goes in, idempotently per key, and the review run claims it as usual.
+#[test]
+fn cos_review_thread_refuses_every_input_but_the_review_input() {
+    let s = store();
+    let review = s.cos_review_thread_open(at(0)).expect("review").thread.id;
+    let e = s
+        .chat_message_post(&review, &req("h", "人の発言"), at(1))
+        .expect_err("post");
+    assert!(matches!(e, ChatError::ReadOnly(_)), "{e}");
+    assert_eq!(status(e), 403);
+    let e = s
+        .chat_message_post_as(&review, &req("h", "人の発言"), "human:me", at(1))
+        .expect_err("post as");
+    assert_eq!(status(e), 403);
+    let relay = ChatRelayRequest {
+        client_message_id: "relay".into(),
+        text: "続けて".into(),
+        said_at: super::store::chat_ts(at(0)),
+        task_ids: vec![],
+        expires_at: None,
+    };
+    let e = s
+        .chat_relay_post(&review, &relay, "operator:claude-code", at(1))
+        .expect_err("relay");
+    assert_eq!(status(e), 403);
+    let e = s
+        .chat_mcp_instruct("c", Some(&review), None, "続けて", None, at(1))
+        .expect_err("mcp");
+    assert_eq!(status(e), 403);
+    let rev = s
+        .chat_thread_get(&review)
+        .expect("get")
+        .expect("t")
+        .revision;
+    let e = s
+        .chat_thread_patch(
+            &review,
+            &ChatPatchThreadRequest {
+                expected_revision: rev,
+                title: Some("改名".into()),
+                status: None,
+            },
+            at(1),
+        )
+        .expect_err("patch");
+    assert_eq!(status(e), 403);
+    let e = s
+        .chat_thread_resume_queue(&review, rev, at(1))
+        .expect_err("resume");
+    assert_eq!(status(e), 403);
+    {
+        let mut conn = s.lock().expect("lock");
+        let tx = conn.transaction().expect("tx");
+        let e = chat_message_post_cos_tx(&tx, &review, &req("cos", "CoS の投稿"), "op-1", at(1))
+            .expect_err("cos post");
+        assert_eq!(status(e), 403);
+    }
+    // The review input key is fixed by the cron (ADR 2026-10-27-cron-cos-review D3).
+    let e = s
+        .cos_review_input_post("other:1", "定期見直し", at(1))
+        .expect_err("key prefix");
+    assert_eq!(status(e), 422);
+    let first = s
+        .cos_review_input_post("cron-cos-review:job:60", "定期見直し", at(2))
+        .expect("input");
+    assert!(first.created);
+    let m = &first.response.message;
+    assert_eq!(
+        (m.role, m.state),
+        (ChatMessageRole::User, ChatMessageState::Queued)
+    );
+    let replay = s
+        .cos_review_input_post("cron-cos-review:job:60", "定期見直し", at(3))
+        .expect("replay");
+    assert!(!replay.created);
+    assert_eq!(replay.response.message.id, m.id);
+    let listed = s
+        .chat_message_list(&review, &ChatMessageQuery::default())
+        .expect("messages");
+    assert_eq!(listed.items.len(), 1);
+    let run = claim(&s, &review, "review-run", 4).expect("claimed");
+    assert_eq!(run.input_message_id, m.id);
+}
+
+/// D4': a report is one assistant message of the general thread per review input, with its
+/// provenance; a resend returns the same message, and no general CoS run starts.
+#[test]
+fn cos_review_report_writes_one_message_per_review_input() {
+    let s = store();
+    let general = s
+        .cos_thread_open(&ChatOpenThreadRequest { project_id: None }, at(0))
+        .expect("general")
+        .thread
+        .id;
+    let report = |id: &str, text: &str, now: i64| {
+        let mut conn = s.lock().expect("lock");
+        let tx = conn.transaction().expect("tx");
+        let out = cos_review_report_tx(&tx, id, text, Some("review-run"), "op-1", at(now));
+        tx.commit().expect("commit");
+        out
+    };
+    // No review thread yet: nothing to report on.
+    assert_eq!(status(report("x", "報告", 1).expect_err("no review")), 422);
+    let input = s
+        .cos_review_input_post("cron-cos-review:job:60", "定期見直し", at(2))
+        .expect("input")
+        .response
+        .message;
+    let review = input.thread_id.clone();
+    let first = report(&input.id, "案件 A の task T が 2 日止まっています。", 3).expect("report");
+    assert!(first.created);
+    let m = &first.message;
+    assert_eq!(m.thread_id, general);
+    assert_eq!(
+        (m.role, m.state),
+        (ChatMessageRole::Assistant, ChatMessageState::Completed)
+    );
+    assert_eq!(
+        m.client_message_id.as_deref(),
+        Some(format!("cos-review-report:{}", input.id).as_str())
+    );
+    assert_eq!(m.run_id, None);
+    assert_eq!(
+        m.provenance,
+        Some(ChatProvenance {
+            kind: ChatProvenanceKind::CosReviewReport,
+            review_thread_id: review.clone(),
+            review_message_id: input.id.clone(),
+            run_id: Some("review-run".into()),
+        })
+    );
+    // A resend (even with other text) returns the first report and writes nothing.
+    let again = report(&input.id, "別の文面", 4).expect("resend");
+    assert!(!again.created);
+    assert_eq!(again.message.id, m.id);
+    assert_eq!(again.message.text, m.text);
+    let listed = s
+        .chat_message_list(&general, &ChatMessageQuery::default())
+        .expect("general messages");
+    assert_eq!(listed.items.len(), 1);
+    // The person sees it as unread; it is not a queued input, so no general run starts.
+    let shown = s.chat_thread_get(&general).expect("get").expect("general");
+    assert_eq!((shown.unread_count, shown.queued_count), (1, 0));
+    assert!(claim(&s, &general, "general-run", 5).is_none());
+    // Wrong targets and text.
+    assert_eq!(
+        status(report("missing", "報告", 6).expect_err("unknown")),
+        422
+    );
+    let person = post(&s, &general, "h", "人の発言", 7);
+    assert_eq!(
+        status(report(&person.id, "報告", 8).expect_err("general msg")),
+        422
+    );
+    let reply = s
+        .chat_system_message_add(&review, "変化なし", &[], at(9))
+        .expect("review reply");
+    assert_eq!(
+        status(report(&reply.id, "報告", 10).expect_err("not input")),
+        422
+    );
+    let second = s
+        .cos_review_input_post("cron-cos-review:job:120", "定期見直し", at(11))
+        .expect("input 2")
+        .response
+        .message;
+    assert_eq!(
+        status(report(&second.id, "  ", 12).expect_err("blank")),
+        422
+    );
+    let long = "あ".repeat(COS_REVIEW_REPORT_TEXT_MAX_CHARS + 1);
+    assert_eq!(
+        status(report(&second.id, &long, 13).expect_err("long")),
+        422
+    );
+    let max = "あ".repeat(COS_REVIEW_REPORT_TEXT_MAX_CHARS);
+    assert!(report(&second.id, &max, 14).expect("max length").created);
+}

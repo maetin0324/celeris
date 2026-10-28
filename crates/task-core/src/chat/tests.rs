@@ -426,3 +426,129 @@ fn chat_migration_0092_maps_threads_without_losing_data() {
     assert_eq!(found.items.len(), 1);
     assert_eq!(found.items[0].id, "h");
 }
+
+/// ADR 2026-10-28-cos-review-back-thread D1/D7: migration 0102 rebuilds chat_threads to accept
+/// `review` without losing thread rows, messages, search rows or the one-general-thread index,
+/// and creates no thread.
+#[test]
+fn chat_migration_0102_adds_review_without_losing_rows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("v100.sqlite3");
+    let mut conn = Connection::open(&path).expect("open");
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
+    )
+    .expect("ledger");
+    for version in (1..=37).chain(41..=67).chain(70..=100) {
+        SqliteStore::apply_migration_version(&mut conn, version).expect("schema 100");
+    }
+    let now = "2026-10-27T00:00:00.000Z";
+    conn.execute_batch(&format!(
+        "INSERT INTO chat_threads(id,kind,title,status,queue_paused,next_seq,revision,summary,\
+           summary_through_seq,read_through_seq,created_at,updated_at) \
+           VALUES('g','general','統括 CoS','open',1,4,7,'要約',2,1,'{now}','{now}');
+         INSERT INTO chat_threads(id,kind,title,project_id,status,next_seq,created_at,updated_at) \
+           VALUES('p','project','CoS: A','P1','open',2,'{now}','{now}');
+         INSERT INTO chat_threads(id,kind,title,project_id,status,next_seq,created_at,updated_at,archived_at) \
+           VALUES('l','legacy','旧会話','P1','archived',2,'{now}','{now}','{now}');
+         INSERT INTO chat_messages(id,thread_id,seq,role,text,state,client_message_id,metadata_json,created_at,updated_at) \
+           VALUES('m1','g',1,'user','定期見直し','completed','cron-cos-review:j:1','{{\"mode\":\"queue\"}}','{now}','{now}'),
+                 ('m2','g',2,'assistant','変化 0','completed',NULL,'{{}}','{now}','{now}'),
+                 ('m3','g',3,'assistant','知らせ','completed',NULL,'{{}}','{now}','{now}'),
+                 ('m4','p',1,'user','案件の話','completed',NULL,'{{}}','{now}','{now}'),
+                 ('m5','l',1,'user','旧会話の本文','completed',NULL,'{{}}','{now}','{now}');"
+    ))
+    .expect("v100 rows");
+    let snapshot = |conn: &Connection, table: &str| -> Vec<String> {
+        let mut stmt = conn
+            .prepare(&format!("SELECT * FROM {table} ORDER BY 1"))
+            .expect("prepare");
+        let n = stmt.column_count();
+        stmt.query_map([], |row| {
+            (0..n)
+                .map(|i| {
+                    row.get::<_, rusqlite::types::Value>(i)
+                        .map(|v| format!("{v:?}"))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(|cols| cols.join("|"))
+        })
+        .expect("query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("rows")
+    };
+    let threads = snapshot(&conn, "chat_threads");
+    let messages = snapshot(&conn, "chat_messages");
+    let search = snapshot(&conn, "chat_search");
+    drop(conn);
+
+    let store = SqliteStore::open(&path).expect("upgrade to 102");
+    {
+        let conn = store.lock().expect("lock");
+        let version: u32 = conn
+            .query_row("SELECT max(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .expect("version");
+        assert!(version >= 102);
+        assert_eq!(snapshot(&conn, "chat_threads"), threads);
+        assert_eq!(snapshot(&conn, "chat_messages"), messages);
+        assert_eq!(snapshot(&conn, "chat_search"), search);
+        let reviews: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_threads WHERE kind='review'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(reviews, 0, "the migration creates no thread");
+        // The general index still allows one general thread.
+        let dup = conn.execute(
+            "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) \
+             VALUES('g2','general','x','open',?1,?1)",
+            [now],
+        );
+        assert!(dup.is_err());
+        // A review thread with a project is refused by the CHECK.
+        let bad = conn.execute(
+            "INSERT INTO chat_threads(id,kind,title,project_id,status,created_at,updated_at) \
+             VALUES('r','review','x','P1','open',?1,?1)",
+            [now],
+        );
+        assert!(bad.is_err());
+    }
+    let general = store.chat_thread_get("g").expect("read").expect("general");
+    assert_eq!(general.kind, ChatThreadKind::General);
+    assert_eq!((general.revision, general.read_through_seq), (7, 1));
+    assert!(general.queue_paused);
+    // The search triggers work on the rebuilt table: a new review thread gets its title row,
+    // which the person's search still does not show.
+    let review = store
+        .cos_review_thread_open(time::OffsetDateTime::now_utc())
+        .expect("open review");
+    assert!(review.created);
+    let found = store
+        .chat_thread_list(&ChatThreadQuery {
+            q: Some("旧会話の本文".into()),
+            ..ChatThreadQuery::default()
+        })
+        .expect("search");
+    assert_eq!(
+        found
+            .items
+            .iter()
+            .map(|t| t.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["l"]
+    );
+    let titled: i64 = store
+        .lock()
+        .expect("lock")
+        .query_row(
+            "SELECT COUNT(*) FROM chat_search WHERE thread_id=?1 AND message_id IS NULL",
+            [&review.thread.id],
+            |r| r.get(0),
+        )
+        .expect("search row");
+    assert_eq!(titled, 1);
+}

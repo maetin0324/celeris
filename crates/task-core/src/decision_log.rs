@@ -891,7 +891,10 @@ impl InterventionActorKind {
             Some(("worker", rest)) if !rest.is_empty() => (Self::System, Some(by.to_string())),
             Some(("cos", rest)) if !rest.is_empty() => match thread_kind(rest) {
                 Some(ChatThreadKind::Project) => (Self::CosProject, Some(rest.to_string())),
-                Some(ChatThreadKind::General) => (Self::CosGeneral, Some(rest.to_string())),
+                // ADR 2026-10-28-cos-review-back-thread D1: the review thread is the general CoS.
+                Some(ChatThreadKind::General | ChatThreadKind::Review) => {
+                    (Self::CosGeneral, Some(rest.to_string()))
+                }
                 Some(ChatThreadKind::Legacy) | None => (Self::Unknown, Some(by.to_string())),
             },
             _ => (Self::Unknown, Some(by.to_string())),

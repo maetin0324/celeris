@@ -58,6 +58,9 @@ pub(crate) struct MessageProvenance {
     pub relay: Option<ChatRelay>,
     /// `console_instruct` receipts (`chat_mcp_reply` resolves them).
     pub mcp_receipt: bool,
+    /// ADR 2026-10-28-cos-review-back-thread D1: the cron's review input, the only post the
+    /// review thread accepts.
+    pub review_input: bool,
 }
 
 /// Store-level chat error. Each variant maps to one D2 HTTP status (`http_status`).
@@ -79,6 +82,10 @@ pub enum ChatError {
     /// Size limit exceeded (413).
     #[error("too large: {0}")]
     TooLarge(String),
+    /// ADR 2026-10-28-cos-review-back-thread D1: the review thread takes no input from a person,
+    /// an operator, an MCP client or a CoS operation (403, code chat_thread_read_only).
+    #[error("read-only: {0}")]
+    ReadOnly(String),
     /// Queue limit reached (429).
     #[error("queue full: {limit} queued messages")]
     QueueFull { limit: usize },
@@ -109,6 +116,7 @@ impl ChatError {
             Self::Conflict(_) => 409,
             Self::TooLarge(_) => 413,
             Self::QueueFull { .. } => 429,
+            Self::ReadOnly(_) => 403,
             Self::CursorExpired(_) => 410,
         }
     }
@@ -127,6 +135,9 @@ pub struct ChatThreadQuery {
     pub status: Option<ChatThreadStatus>,
     pub before: Option<String>,
     pub limit: Option<u32>,
+    /// ADR 2026-10-28-cos-review-back-thread D1: the review thread is left out of the person's
+    /// list and search unless this is set (the dispatcher's queue claim and run control set it).
+    pub include_review: bool,
 }
 
 /// `GET /chat/threads/{t}/messages` query (`before_seq` and `after_seq` are exclusive).
@@ -342,7 +353,8 @@ pub(crate) fn message_raw(row: &Row<'_>) -> rusqlite::Result<MessageRaw> {
 }
 
 /// metadata_json keys used here: `mode`, `interrupt`, `attachment_ids` (ordered), `cards`,
-/// `workspace_files`, `author`, `relay`, `mcp_receipt`, `escalation` (ADR 2026-10-28 D2).
+/// `workspace_files`, `author`, `relay`, `mcp_receipt`, `escalation` (ADR 2026-10-28 D2),
+/// `provenance` (ADR 2026-10-28-cos-review-back-thread D4').
 /// Other keys (legacy provenance etc.) are preserved and ignored.
 pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatMessage, ChatError> {
     let meta: Value = serde_json::from_str(&r.metadata_json).unwrap_or(Value::Null);
@@ -382,6 +394,10 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         )?)),
         _ => None,
     };
+    let provenance: Option<ChatProvenance> = match meta.get("provenance") {
+        Some(v) if !v.is_null() => Some(serde_json::from_value(v.clone())?),
+        _ => None,
+    };
     Ok(ChatMessage {
         role: enum_from(&r.role)?,
         state: enum_from(&r.state)?,
@@ -398,6 +414,7 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         author,
         relay,
         escalation,
+        provenance,
         created_at: r.created_at,
         updated_at: r.updated_at,
     })
@@ -571,6 +588,9 @@ impl SqliteStore {
         let id = match thread_id {
             Some(id) => {
                 let thread = thread_require(&tx, id)?;
+                if thread.kind == ChatThreadKind::Review {
+                    return Err(review_read_only(id));
+                }
                 if thread.status == ChatThreadStatus::Archived
                     || thread.kind == ChatThreadKind::Legacy
                 {
@@ -607,6 +627,7 @@ impl SqliteStore {
                 author: Some(author),
                 relay,
                 mcp_receipt: true,
+                review_input: false,
             },
             now,
         )?;
@@ -748,6 +769,9 @@ impl SqliteStore {
         let fts = query.q.as_deref().and_then(chat_fts_literal);
         read_tx(self, |conn| {
             let mut sql = format!("{THREAD_SELECT} WHERE 1=1");
+            if !query.include_review {
+                sql.push_str(" AND t.kind<>'review'");
+            }
             let mut args: Vec<Value> = Vec::new();
             if let Some(s) = &status {
                 args.push(Value::String(s.clone()));
@@ -897,6 +921,7 @@ impl SqliteStore {
                 author: Some(relayed_by.to_owned()),
                 relay: Some(relay),
                 mcp_receipt: false,
+                review_input: false,
             },
             now,
         )?;
@@ -1313,6 +1338,13 @@ pub(crate) fn message_post_with(
     let mode = enum_str(&req.mode)?;
     let at = chat_ts(now);
     let thread = thread_require(tx, thread_id)?;
+    if (thread.kind == ChatThreadKind::Review) != provenance.review_input {
+        return Err(if provenance.review_input {
+            ChatError::Invalid(format!("thread {thread_id} is not the review thread"))
+        } else {
+            review_read_only(thread_id)
+        });
+    }
     let existing = tx
         .query_row(
             &format!("{MESSAGE_SELECT} WHERE thread_id=?1 AND client_message_id=?2"),
@@ -1666,12 +1698,20 @@ pub fn cos_thread_open_tx(
 }
 
 /// D3: the sender label of an outside notification about a thread: `[統括 CoS]` or
-/// `[CoS: <project>]` (the thread title). Legacy or unknown threads have no label.
+/// `[CoS: <project>]` (the thread title). Legacy, review or unknown threads have no label (the
+/// review thread never notifies; ADR 2026-10-28-cos-review-back-thread D1).
 pub fn cos_thread_label(thread: &ChatThread) -> Option<String> {
     match thread.kind {
         ChatThreadKind::General | ChatThreadKind::Project => Some(format!("[{}]", thread.title)),
-        ChatThreadKind::Legacy => None,
+        ChatThreadKind::Legacy | ChatThreadKind::Review => None,
     }
+}
+
+/// ADR 2026-10-28-cos-review-back-thread D1: the refusal of any input to the review thread.
+pub(crate) fn review_read_only(thread_id: &str) -> ChatError {
+    ChatError::ReadOnly(format!(
+        "thread {thread_id} is the general CoS's review thread; it takes no input"
+    ))
 }
 
 /// [`SqliteStore::chat_thread_patch`] inside the caller's transaction.
@@ -1689,6 +1729,9 @@ pub fn chat_thread_patch_tx(
     }
     let at = chat_ts(now);
     let thread = thread_require(tx, id)?;
+    if thread.kind == ChatThreadKind::Review {
+        return Err(review_read_only(id));
+    }
     if thread.revision != req.expected_revision {
         return Err(ChatError::Conflict(format!(
             "thread {id} revision is {}, expected {}",
@@ -1743,6 +1786,9 @@ pub fn chat_thread_resume_queue_tx(
 ) -> Result<ChatThread, ChatError> {
     let at = chat_ts(now);
     let thread = thread_require(tx, id)?;
+    if thread.kind == ChatThreadKind::Review {
+        return Err(review_read_only(id));
+    }
     if thread.revision != expected_revision {
         return Err(ChatError::Conflict(format!(
             "thread {id} revision is {}, expected {expected_revision}",
@@ -1829,6 +1875,9 @@ pub fn chat_message_post_cos_tx(
     }
     let at = chat_ts(now);
     let thread = thread_require(tx, thread_id)?;
+    if thread.kind == ChatThreadKind::Review {
+        return Err(review_read_only(thread_id));
+    }
     let existing = tx
         .query_row(
             &format!("{MESSAGE_SELECT} WHERE thread_id=?1 AND client_message_id=?2"),

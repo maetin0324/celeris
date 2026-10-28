@@ -29,7 +29,7 @@ updated: 2026-10-28
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
-- `bash scripts/dev/test-affected.sh` → 報告本文を参照。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 6688 件 passed（21 skipped）、web vitest 100 files / 690 tests passed、tsc -b 通過。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
 

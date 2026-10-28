@@ -63,7 +63,7 @@ CoS の chat 書き込みは完了済みの発言として入り、CoS run を�
   それを経由する `celerisctl` だけ。run credential が actor=cos・thread_id・run_id を確定する。
 - 領域 API（`/api/v1/tasks/...` 等）を CoS credential で直接叩いても監査 context が無ければ 422。経路を変えて監査を外さない。
 - 毎回 `idempotency_key`（thread 内で一意。再試行・再送は同じ key）・空でない `reason`・`expected_revision`・
-  `policy_version` を付ける。409 は状態が変わった合図なので読み直して判断し直す。
+  `policy_version`（入力の「run 固有の操作パラメータ」の `<policy_version>`。`celerisctl` は環境変数から自動で付ける。違う値は 422）を付ける。409 は状態が変わった合図なので読み直して判断し直す。
 - API で人ができる変更操作は全て [operations.md](operations.md) の表にある。表に無いのは人の決定で**除外**した操作
   （秘密の値・`/console/instruct`・browser の credential/attestation 系・`/cos/*` 自身・撤去済みの入口）だけで、
   送ると理由付きの 422 になる。拒否を回避する別経路を探さず、人に回す。

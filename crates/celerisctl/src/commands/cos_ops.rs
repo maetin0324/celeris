@@ -137,11 +137,11 @@ pub(crate) fn send(
             "CoS operation needs --reason or CELERIS_COS_REASON",
         ));
     }
-    let policy_version =
-        std::env::var("CELERIS_COS_POLICY_VERSION").unwrap_or_else(|_| "1".to_string());
+    // ADR 2026-10-28-cos-session-policy-key D2: the daemon sets the version it handed the run.
+    let policy_version = std::env::var("CELERIS_COS_POLICY_VERSION").unwrap_or_default();
     if policy_version.trim().is_empty() {
         return Err(CliError::msg(
-            "CELERIS_COS_POLICY_VERSION must not be empty",
+            "CoS operation needs CELERIS_COS_POLICY_VERSION (set by the daemon for a CoS run)",
         ));
     }
     let key = options

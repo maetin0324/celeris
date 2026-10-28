@@ -462,6 +462,7 @@ async fn resolve(
                 }
                 return Ok((existing, None));
             }
+            super::operations::bind_run_policy(store, &mut audit, "cos_inbox_item", &item_key)?;
             let rejecter = audit.clone();
             let reject =
                 |problem: ApiProblem| rejecter.reject(store, "cos_inbox_item", &item_key, problem);

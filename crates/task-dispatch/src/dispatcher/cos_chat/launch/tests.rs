@@ -1,6 +1,8 @@
 //! The env every CoS chat/triage run gets (`cos_run_env`, passed to `with_env` at launch).
 
-use super::{COS_API_URL_ENV, COS_RUN_CREDENTIAL_ENV, cos_run_env, path_with_first};
+use super::{
+    COS_API_URL_ENV, COS_POLICY_VERSION_ENV, COS_RUN_CREDENTIAL_ENV, cos_run_env, path_with_first,
+};
 use std::path::{Path, PathBuf};
 
 fn value<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
@@ -9,7 +11,12 @@ fn value<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
 
 #[test]
 fn cos_chat_run_launch_sets_api_url_env_and_path() {
-    let env = cos_run_env("http://127.0.0.1:7700/api/v1", "celeris-cos-run.x", None);
+    let env = cos_run_env(
+        "http://127.0.0.1:7700/api/v1",
+        "celeris-cos-run.x",
+        "6",
+        None,
+    );
     assert_eq!(
         value(&env, COS_API_URL_ENV),
         Some("http://127.0.0.1:7700/api/v1")
@@ -18,6 +25,7 @@ fn cos_chat_run_launch_sets_api_url_env_and_path() {
         value(&env, COS_RUN_CREDENTIAL_ENV),
         Some("celeris-cos-run.x")
     );
+    assert_eq!(value(&env, COS_POLICY_VERSION_ENV), Some("6"));
 
     // The daemon's own executable dir (where its release's celerisctl lives) comes first, once.
     let exe_dir: PathBuf = std::env::current_exe()
@@ -37,7 +45,7 @@ fn cos_chat_run_launch_sets_api_url_env_and_path() {
     }
 
     // No `[api] listen`: no CELERIS_API_URL; the prompt's own explanation applies.
-    let env = cos_run_env("", "celeris-cos-run.x", None);
+    let env = cos_run_env("", "celeris-cos-run.x", "6", None);
     assert!(value(&env, COS_API_URL_ENV).is_none());
     assert_eq!(
         value(&env, COS_RUN_CREDENTIAL_ENV),
@@ -174,11 +182,11 @@ mod resume_delta {
 fn cos_run_env_sets_tmpdir_to_the_run_tmp_dir() {
     let ws = tempfile::tempdir().expect("ws");
     let tmp = task_worker::run_tmpdir::RunTmpDir::create(ws.path(), "run1").expect("tmp");
-    let env = cos_run_env("", "celeris-cos-run.x", Some(&tmp));
+    let env = cos_run_env("", "celeris-cos-run.x", "6", Some(&tmp));
     let want = tmp.path().display().to_string();
     for key in ["TMPDIR", "TMP", "TEMP"] {
         assert_eq!(value(&env, key), Some(want.as_str()), "{key}");
     }
     assert!(tmp.path().is_dir());
-    assert!(value(&cos_run_env("", "t", None), "TMPDIR").is_none());
+    assert!(value(&cos_run_env("", "t", "6", None), "TMPDIR").is_none());
 }

@@ -1,8 +1,8 @@
 //! CoS chat thread sessions (ADR 2026-10-05 D1/D2, on ADR-0054 `node_sessions`).
 //!
 //! One live `kind='cos_chat'` row per thread (partial UNIQUE index of migration 0050). The match
-//! key is `(thread_id, harness, provider, llm_source, account_id, cwd, model)`; `harness` is the
-//! `adapter` column. This module is SQL only: whether to resume or retire is decided by the
+//! key is `(thread_id, harness, provider, llm_source, account_id, cwd, model, policy_key)`;
+//! `harness` is the `adapter` column, `policy_key` the policy part (ADR 2026-10-28-cos-session-policy-key D1). This module is SQL only: whether to resume or retire is decided by the
 //! dispatcher's pure function (`task_dispatch::sessions::cos_chat`). No LLM call here.
 //!
 //! The run's session choice is recorded on `chat_runs`: `session_row_id` (column) and, inside
@@ -32,6 +32,9 @@ pub struct ChatSessionKey {
     pub account_id: Option<String>,
     pub cwd: Option<String>,
     pub model: Option<String>,
+    /// ADR 2026-10-28-cos-session-policy-key D1: `policy_version=<v>;<skill>=<sha256>;…` (NULL on
+    /// rows made before migration 0100, so they never match a launch key).
+    pub policy_key: Option<String>,
 }
 
 /// What one run adds to a session row ([`SqliteStore::chat_session_touch`]).
@@ -141,7 +144,7 @@ pub struct ChatRunSessionRecord {
 
 const SELECT: &str = "SELECT id,thread_id,adapter,provider,llm_source,account_id,cwd,model,\
  session_id,turns,approx_tokens,summary_through_seq,created_at,last_used_at,retired_at,last_context_tokens,billed_input_tokens,\
- delivered_through_seq FROM node_sessions WHERE kind='cos_chat'";
+ delivered_through_seq,policy_key FROM node_sessions WHERE kind='cos_chat'";
 
 type RawRow = (ChatSession, String, String, Option<String>);
 
@@ -157,6 +160,7 @@ fn raw(row: &Row<'_>) -> rusqlite::Result<RawRow> {
                 account_id: row.get(5)?,
                 cwd: row.get(6)?,
                 model: row.get(7)?,
+                policy_key: row.get(18)?,
             },
             session_id: row.get(8)?,
             turns: row.get(9)?,
@@ -234,8 +238,8 @@ impl SqliteStore {
         tx.execute(
             "INSERT INTO node_sessions(id,node_id,kind,project_id,adapter,account_id,session_id,\
              turns,approx_tokens,created_at,last_used_at,retired_at,thread_id,llm_source,model,\
-             summary_through_seq,provider,cwd,delivered_through_seq) \
-             VALUES(?1,?2,'cos_chat',NULL,?3,?4,?5,?6,?7,?8,?9,NULL,?10,?11,?12,?13,?14,?15,?16)",
+             summary_through_seq,provider,cwd,delivered_through_seq,policy_key) \
+             VALUES(?1,?2,'cos_chat',NULL,?3,?4,?5,?6,?7,?8,?9,NULL,?10,?11,?12,?13,?14,?15,?16,?17)",
             params![
                 session.id,
                 COS_CHAT_SESSION_NODE,
@@ -253,6 +257,7 @@ impl SqliteStore {
                 k.provider,
                 k.cwd,
                 session.delivered_through_seq,
+                k.policy_key,
             ],
         )?;
         tx.commit()?;
@@ -408,6 +413,49 @@ impl SqliteStore {
         )?;
         tx.commit()?;
         Ok(run)
+    }
+
+    /// ADR 2026-10-28-cos-session-policy-key D2: records the policy the daemon handed this run
+    /// (`policy_version` and `policy_key` in `resolved_config_json`) before its credential exists.
+    /// Only a live run accepts it. No event (the route record carries the human-facing status).
+    pub fn chat_run_record_policy(
+        &self,
+        run_id: &str,
+        policy_version: &str,
+        policy_key: &str,
+    ) -> Result<(), ChatError> {
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let changed = tx.execute(
+            "UPDATE chat_runs SET resolved_config_json=json_set(\
+             CASE WHEN json_valid(resolved_config_json) THEN resolved_config_json ELSE '{}' END,\
+             '$.policy_version',?2,'$.policy_key',?3) WHERE run_id=?1 \
+             AND state IN ('running','stopping')",
+            params![run_id, policy_version, policy_key],
+        )?;
+        if changed == 0 {
+            return Err(ChatError::Conflict(format!(
+                "run {run_id} is unknown or already finished"
+            )));
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The `policy_version` the daemon recorded on a run ([`Self::chat_run_record_policy`]);
+    /// `None` when the run is unknown or has no record.
+    pub fn chat_run_policy_version(&self, run_id: &str) -> Result<Option<String>, ChatError> {
+        read_tx(self, |conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT json_extract(resolved_config_json,'$.policy_version') FROM chat_runs \
+                     WHERE run_id=?1 AND json_valid(resolved_config_json)",
+                    params![run_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten())
+        })
     }
 
     /// The session choice recorded on a run (all `None` before [`Self::chat_run_record_session`]).

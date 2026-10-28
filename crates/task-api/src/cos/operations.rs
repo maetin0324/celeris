@@ -449,6 +449,41 @@ fn operation_response(op: CosOperation) -> axum::response::Response {
     )
 }
 
+/// ADR 2026-10-28-cos-session-policy-key D2: the request's `policy_version` is not the one the
+/// daemon handed the caller's run.
+pub(crate) const POLICY_VERSION_MISMATCH: &str = "cos_policy_version_mismatch";
+
+/// ADR 2026-10-28-cos-session-policy-key D2: binds the audit to the policy version the daemon
+/// recorded on the caller's run (`chat_runs.resolved_config_json.policy_version`). A different
+/// version in the request, or a run without a record, is refused (422, recorded as rejected under
+/// the daemon's version or `unrecorded`); nothing is applied.
+pub(crate) fn bind_run_policy(
+    store: &SqliteStore,
+    audit: &mut OperationAudit,
+    target_kind: &str,
+    target_id: &str,
+) -> Result<(), ApiProblem> {
+    let handed = store
+        .chat_run_policy_version(&audit.ctx.run_id)
+        .map_err(cos_problem)?;
+    let claimed = audit.ctx.policy_version.clone();
+    let detail = match handed.as_deref() {
+        Some(handed) if handed == claimed => return Ok(()),
+        Some(handed) => format!(
+            "policy_version {claimed} is not the policy version this run was given ({handed}); \
+             send the run's <policy_version>"
+        ),
+        None => format!("this run has no policy version recorded by the daemon (sent {claimed})"),
+    };
+    audit.ctx.policy_version = handed.unwrap_or_else(|| "unrecorded".into());
+    Err(audit.reject(
+        store,
+        target_kind,
+        target_id,
+        unprocessable(POLICY_VERSION_MISMATCH, detail),
+    ))
+}
+
 pub(crate) fn unprocessable(code: &'static str, detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::UNPROCESSABLE_ENTITY, code, detail)
 }
@@ -670,6 +705,7 @@ async fn create_operation(
                 }
                 return Ok(existing);
             }
+            bind_run_policy(store, &mut audit, "api", &path)?;
             // Refuse excluded/unknown routes before interpreting a relayed instruction or body.
             // The registry reason is authoritative and no secret body reaches domain validation.
             if matched.is_none() {

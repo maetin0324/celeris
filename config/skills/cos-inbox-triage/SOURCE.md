@@ -17,3 +17,4 @@ license: このリポジトリと同じ（外部の license は無い）
 - 2026-10-28（ADR 2026-10-28-cos-routine-delegated-answers）: §2 の表を `[cos.triage] human_required` の新しい分類に合わせ、
   §3 に定型の代答 4 種類（承認済みの枠の内側・上限の一度だけの引き上げ・文書化済みの既定・作業方針の補足）と `basis` の形を足した。
   answer は `basis` 必須（API が 422 で拒否する）。policy_version を 6 に上げた（版 5 は同じ日の窓口 ADR が使った）。config の `[cos.triage] policy_version` の既定も "6"。
+- 2026-10-28（ADR 2026-10-28-cos-session-policy-key D2）: resolve の `policy_version` を run の `<policy_version>` から取るように §の例と説明を直した。daemon が run に渡した版だけが通る（違えば 422）。判断の基準は変えていないので policy_version は 6 のまま。

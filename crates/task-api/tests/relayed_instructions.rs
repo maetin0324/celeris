@@ -124,6 +124,9 @@ fn answer_op(key: &str, inbox_id: &str, instructed_by: Option<&str>) -> Value {
 fn run_bearer(env: &TestEnv, thread: &str, run: &str) -> String {
     let bearer = task_api::cos::issue_run_bearer(&env.store, thread, run, Duration::hours(1))
         .expect("issue");
+    env.store
+        .chat_run_record_policy(run, "4", "test")
+        .expect("policy");
     format!("Bearer {bearer}")
 }
 

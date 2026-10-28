@@ -32,6 +32,9 @@ fn bearer(env: &TestEnv) -> String {
         .chat_run_claim_next(&thread.id, "run-repo", &json!({}), now)
         .unwrap()
         .unwrap();
+    env.store
+        .chat_run_record_policy("run-repo", "4", "test")
+        .expect("policy");
     format!(
         "Bearer {}",
         task_api::cos::issue_run_bearer(&env.store, &thread.id, "run-repo", Duration::hours(1))

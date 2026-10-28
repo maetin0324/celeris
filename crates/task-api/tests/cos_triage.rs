@@ -49,6 +49,9 @@ fn cos_bearer(env: &TestEnv, key: &str) -> (String, String, String) {
         .expect("run");
     let bearer = task_api::cos::issue_run_bearer(store, &thread.id, &run, Duration::hours(1))
         .expect("issue");
+    store
+        .chat_run_record_policy(&run, "1", "test")
+        .expect("policy");
     (thread.id, run, format!("Bearer {bearer}"))
 }
 
@@ -839,6 +842,9 @@ fn inbox_human_run(env: &TestEnv, key: &str) -> (String, String, String) {
         .expect("run");
     let bearer = task_api::cos::issue_run_bearer(&env.store, &thread, &run, Duration::hours(1))
         .expect("issue");
+    env.store
+        .chat_run_record_policy(&run, "1", "test")
+        .expect("policy");
     (run, claimed.input_message_id, format!("Bearer {bearer}"))
 }
 
@@ -865,6 +871,9 @@ fn inbox_triage_run(env: &TestEnv, key: &str) -> (String, String, String) {
     let bearer =
         task_api::cos::issue_run_bearer(&env.store, &claim.thread_id, &run, Duration::hours(1))
             .expect("issue");
+    env.store
+        .chat_run_record_policy(&run, "1", "test")
+        .expect("policy");
     (run, claim.message_id, format!("Bearer {bearer}"))
 }
 
@@ -1213,4 +1222,71 @@ async fn cos_choice_still_requires_an_offered_option() {
     }
     assert!(decision_answered_by(&env, &task).is_empty());
     assert_eq!(item_state(&env, &item), "pending");
+}
+
+/// ADR 2026-10-28-cos-session-policy-key D2: the resolve accepts only the policy version the daemon
+/// recorded on the caller's run. A stale version (a resumed session that read an old skill) or a
+/// run without a record is 422 and nothing is applied; the rejection is audited under the daemon's
+/// version. The accepted operation records the daemon's version.
+#[tokio::test]
+async fn cos_chat_triage_resolve_policy_version_must_match_the_run() {
+    let env = admin_env();
+    let app = env.router();
+    let notice = ingest(&env, "notice", "notice-pv", "v1", 1);
+    let (_t, run, bearer) = cos_bearer(&env, "policy");
+    let headers = [("authorization", bearer.as_str())];
+
+    let mut stale = resolve_body("k-pv1", "v1", "observe", json!({}));
+    stale["policy_version"] = json!("2");
+    let resp = send(
+        &app,
+        post_json_with(&resolve_path(&notice), &stale, &headers),
+    )
+    .await;
+    assert_problem(&resp, 422, "cos_policy_version_mismatch");
+    assert!(resp.text().contains("(1)"), "{}", resp.text());
+    assert_eq!(item_state(&env, &notice), "pending");
+    let (state, version): (String, String) = db(&env)
+        .query_row(
+            "SELECT state,policy_version FROM cos_operations WHERE idempotency_key='k-pv1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("rejected row");
+    assert_eq!((state.as_str(), version.as_str()), ("rejected", "1"));
+
+    let resp = send(
+        &app,
+        post_json_with(
+            &resolve_path(&notice),
+            &resolve_body("k-pv2", "v1", "observe", json!({})),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(resp.json()["operation"]["policy_version"], "1");
+    assert_eq!(item_state(&env, &notice), "observed");
+
+    // A run the daemon recorded no version for is refused whatever it sends.
+    let other = ingest(&env, "notice", "notice-pv2", "v1", 2);
+    let (_t, run2, bearer2) = cos_bearer(&env, "policy-none");
+    db(&env)
+        .execute(
+            "UPDATE chat_runs SET resolved_config_json='{}' WHERE run_id=?1",
+            [&run2],
+        )
+        .expect("drop record");
+    let resp = send(
+        &app,
+        post_json_with(
+            &resolve_path(&other),
+            &resolve_body("k-pv3", "v1", "observe", json!({})),
+            &[("authorization", bearer2.as_str())],
+        ),
+    )
+    .await;
+    assert_problem(&resp, 422, "cos_policy_version_mismatch");
+    assert_eq!(item_state(&env, &other), "pending");
+    assert_ne!(run, run2);
 }

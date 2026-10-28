@@ -1,18 +1,21 @@
 //! ADR 2026-10-05 D2: CoS chat thread session の resume / retire の**決定的な判断**（純粋関数、I/O 無し）。
 //!
-//! 照合 key は `(thread_id, harness, provider, llm_source, account_id, cwd, model)`。一致し harness の
-//! session cache があれば resume。key 変更・cache 消失・前回の resume 拒否・context 上限
+//! 照合 key は `(thread_id, harness, provider, llm_source, account_id, cwd, model, policy_key)`。一致し harness の
+//! session cache があれば resume。key 変更・方針の変更（ADR 2026-10-28-cos-session-policy-key D1）・cache 消失・前回の resume 拒否・context 上限
 //! （`[sessions] rollover_tokens` 超過、または harness の context 枯渇 event）なら旧 session を retire して
 //! fresh にする（理由付き）。DB の読み書き（`chat_session_rotate` 等）と cache の有無の確認は呼び出し側。
 //! Claude の UUID 形式（ADR-0054 Phase 67b）は [`super::session_id_is_valid_for_adapter`] を共用する。
 
 use task_core::chat::{ChatRunSessionMode, ChatSession, ChatSessionKey};
 
-/// 旧 session を retire して fresh にする理由（5 種）。
+/// 旧 session を retire して fresh にする理由（6 種）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CosChatRetireReason {
     /// 照合 key（harness・provider・llm_source・account・cwd・model）のどれかが変わった。
     KeyChanged,
+    /// 照合 key のうち方針の部分（`policy_key`: `[cos.triage] policy_version` と mount する skill の
+    /// 中身の hash）だけが変わった（ADR 2026-10-28-cos-session-policy-key D1）。
+    PolicyChanged,
     /// harness の session cache が無い（account の config dir から消えた）か、保存された id が使えない
     /// （claude-code の UUID でない・codex/acp で未確定の空文字）。
     CacheMissing,
@@ -29,6 +32,7 @@ impl CosChatRetireReason {
     pub fn as_str(self) -> &'static str {
         match self {
             CosChatRetireReason::KeyChanged => "key_changed",
+            CosChatRetireReason::PolicyChanged => "policy_changed",
             CosChatRetireReason::CacheMissing => "cache_missing",
             CosChatRetireReason::ResumeRefused => "resume_refused",
             CosChatRetireReason::TokenRollover => "token_rollover",
@@ -99,7 +103,7 @@ pub fn rollover_measure(stored: &ChatSession) -> u64 {
         .max(0) as u64
 }
 
-/// 上から順に見る: 現役なし → New、key 変更 → 前回の拒否 → cache 消失・不正 id → context 枯渇 →
+/// 上から順に見る: 現役なし → New、key 変更（方針以外 → 方針）→ 前回の拒否 → cache 消失・不正 id → context 枯渇 →
 /// token 超過 → Resume。
 pub fn decide_cos_chat_session(f: &CosChatSessionFacts<'_>) -> CosChatSessionDecision {
     use CosChatRetireReason as R;
@@ -108,7 +112,15 @@ pub fn decide_cos_chat_session(f: &CosChatSessionFacts<'_>) -> CosChatSessionDec
         return D::New;
     };
     if stored.key != *f.key {
-        return D::Retire(R::KeyChanged);
+        let same_but_policy = ChatSessionKey {
+            policy_key: f.key.policy_key.clone(),
+            ..stored.key.clone()
+        } == *f.key;
+        return D::Retire(if same_but_policy {
+            R::PolicyChanged
+        } else {
+            R::KeyChanged
+        });
     }
     if f.previous_resume_refused {
         return D::Retire(R::ResumeRefused);

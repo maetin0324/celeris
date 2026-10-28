@@ -101,11 +101,11 @@ metadata:
  "answer":{"option":"post-merge","note":"推奨どおり","payload":null},
  "basis":{"category":"documented_default",
           "refs":[{"kind":"adr","id":"agent-docs/adr/YYYY-MM-DD-<既定を決めた ADR>.md"}]},
- "reason":"worker の推奨が ADR の既定と同じ","confidence":0.97,"policy_version":"6","escalation":null}
+ "reason":"worker の推奨が ADR の既定と同じ","confidence":0.97,"policy_version":"<policy_version>","escalation":null}
 ```
 
 - worker の自由質問（kind=question）は `"answer":{"note":"回答本文"}` とし、option を省略できる。空本文は不可。計画を直す場合だけ `option:"replan"` を明示する。decision・approval・gate は提示された key を使う。`reply` は escalation の案内用で、answer の key には使わない。
-- `expected_revision` は item の `source_revision`。`policy_version` はこの skill の `"6"`（config の値があればそれ）。
+- `expected_revision` は item の `source_revision`。`policy_version` は入力の「run 固有の操作パラメータ」の `<policy_version>`（daemon が渡した `[cos.triage] policy_version`）。この skill の見出しの版や前の会話の値は使わない。違う値は 422 `cos_policy_version_mismatch`。
 - `outcome` が answer 以外なら `answer=null`・`basis` なし。answer・observe なら `escalation=null`。answer では `basis`、escalate では escalation packet が必須。
 - `idempotency_key` は item ごとに一意にし、再試行では同じ key を使う。
 

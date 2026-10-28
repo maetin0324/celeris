@@ -35,17 +35,24 @@ const COS_RUN_BEARER_PREFIX: &str = "celeris-cos-run.";
 
 /// The API base the worker's `celerisctl` reads when no `--api-url` is given.
 pub const COS_API_URL_ENV: &str = "CELERIS_API_URL";
+/// The policy version the daemon handed the run (`celerisctl` reads it; ADR 2026-10-28-cos-session-policy-key D2).
+pub const COS_POLICY_VERSION_ENV: &str = "CELERIS_COS_POLICY_VERSION";
 
 /// Environment for a CoS chat or triage run: the run credential, the daemon's own API
 /// base (only when `[api] listen` is set) and a `PATH` that finds the daemon's own
 /// release of `celerisctl` first. Without these the worker's `celerisctl` would read the
 /// default `~/.config/celeris` and talk to a different daemon.
+/// ADR 2026-10-28-cos-session-policy-key D2: `celerisctl`'s CoS path sends this as `policy_version`.
 pub(crate) fn cos_run_env(
     api_base_url: &str,
     token: &str,
+    policy_version: &str,
     run_tmp: Option<&task_worker::run_tmpdir::RunTmpDir>,
 ) -> Vec<(String, String)> {
-    let mut env = vec![(COS_RUN_CREDENTIAL_ENV.to_owned(), token.to_owned())];
+    let mut env = vec![
+        (COS_RUN_CREDENTIAL_ENV.to_owned(), token.to_owned()),
+        (COS_POLICY_VERSION_ENV.to_owned(), policy_version.to_owned()),
+    ];
     if !api_base_url.is_empty() {
         env.push((COS_API_URL_ENV.to_owned(), api_base_url.to_owned()));
     }
@@ -386,6 +393,24 @@ impl CosChatLaunch {
         if let Some(reason) = cfg.unavailable_reason.clone() {
             return Err(reason);
         }
+        let (skills, missing_skills) =
+            dispatcher.skills_context(&skill_names, task_ops::knowledge::SkillUse::Work);
+        if !missing_skills.is_empty() {
+            return Err(format!(
+                "CoS skills unavailable: {}",
+                missing_skills.join(", ")
+            ));
+        }
+        // ADR 2026-10-28-cos-session-policy-key D1: the policy this run gets is part of the key.
+        let policy_version = cfg.triage.policy_version.clone();
+        let policy_key = super::policy::policy_key(
+            &policy_version,
+            &skills
+                .iter()
+                .map(|s| (s.name.clone(), PathBuf::from(&s.path)))
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|e| format!("CoS skills unavailable: {e}"))?;
         let provider = pick.candidate.source.to_string();
         let account = Some(pick.account.to_string());
         let selected_route = dispatcher
@@ -427,6 +452,7 @@ impl CosChatLaunch {
             model: Some(pick.candidate.model.to_string()),
             account_id: account.clone(),
             cwd: Some(workspace.to_string_lossy().into_owned()),
+            policy_key: Some(policy_key.clone()),
         };
         let choice = if route_index > 0 {
             // Even two configured routes with the same session key must not reuse the failed
@@ -539,6 +565,7 @@ impl CosChatLaunch {
                 _ => None,
             },
             skills: skill_names.clone(),
+            policy_version: policy_version.clone(),
             credential_env: COS_RUN_CREDENTIAL_ENV.into(),
             api_base_url: cfg.api_base_url.clone(),
             inbox_items,
@@ -561,14 +588,6 @@ impl CosChatLaunch {
         let artifacts_dir = workspace.join(".taskd").join("chat-runs").join(run_id);
         if let Err(e) = std::fs::create_dir_all(&artifacts_dir) {
             return Err(format!("CoS artifacts unavailable: {e}"));
-        }
-        let (skills, missing_skills) =
-            dispatcher.skills_context(&skill_names, task_ops::knowledge::SkillUse::Work);
-        if !missing_skills.is_empty() {
-            return Err(format!(
-                "CoS skills unavailable: {}",
-                missing_skills.join(", ")
-            ));
         }
         let context = RunContext {
             cos_chat: Some(chat),
@@ -595,6 +614,10 @@ impl CosChatLaunch {
             .ok()
             .and_then(|secs| secs.checked_add(60))
             .ok_or_else(|| "CoS max_wall_secs exceeds credential lifetime range".to_string())?;
+        // D2: the version handed to the run is what `/cos/operations` checks and records.
+        self.store
+            .chat_run_record_policy(run_id, &policy_version, &policy_key)
+            .map_err(|e| format!("CoS policy record failed: {e}"))?;
         let secret = self
             .store
             .cos_run_credential_issue_at(thread_id, run_id, time::Duration::seconds(ttl_secs), now)
@@ -609,7 +632,7 @@ impl CosChatLaunch {
                 None
             }
         };
-        let run_env = cos_run_env(&cfg.api_base_url, &token, run_tmp.as_ref());
+        let run_env = cos_run_env(&cfg.api_base_url, &token, &policy_version, run_tmp.as_ref());
         let Some(adapter) = adapter.with_env(&run_env) else {
             if let Err(error) = self.store.cos_run_credential_revoke(run_id, now) {
                 tracing::warn!(%error, %run_id, "CoS credential revoke after launch failure failed");

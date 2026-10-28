@@ -195,6 +195,9 @@ async fn cos_chat_attach_handoff_pin_missing_owner_404() {
         .expect("run");
     let bearer = task_api::cos::issue_run_bearer(&env.store, &thread, "run-kb", Duration::hours(1))
         .expect("issue");
+    env.store
+        .chat_run_record_policy("run-kb", "1", "test")
+        .expect("policy");
     let op = send(
         &app,
         post_json_with(

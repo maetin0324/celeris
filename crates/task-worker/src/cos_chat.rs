@@ -113,11 +113,13 @@ pub(crate) fn run_parameters_section(chat: &CosChatContext, run_id: &str, task: 
          - `<thread id>` = `{}`\n\
          - `<chat run id>` = `{}`\n\
          - `<through_seq>` = {}、`<expected>` = {}（checkpoint）\n\
+         - `<policy_version>` = `{}`（OP・受信箱の resolve の `policy_version`。skill や前の会話に書かれた版より優先。違う値は 422）\n\
          - worker run `{run_id}`、一時 task `{}`\n\n",
         chat.thread_id,
         chat.run_id,
         checkpoint_through(chat),
         chat.summary_through_seq,
+        chat.policy_version,
         task.id,
     )
 }
@@ -151,7 +153,7 @@ pub fn core(chat: &CosChatContext) -> String {
          - 【割り込み】の付いた発言は前の run を止めて渡したもの。止まった仕事の続きより先に応える。\n\
          - 変更（起票・回答・決定など）は `celerisctl` か OP を通す（監査が付く）。認証は環境変数 `${env}`（run credential）。値を表示・記録・返事・ファイルに書かない。\n\
          - OP: `curl -sf -X POST -H \"Authorization: Bearer ${env}\" -H 'Content-Type: application/json' \
-         {api}/cos/operations -d '{{\"idempotency_key\":\"<key>\",\"expected_revision\":null,\"reason\":\"…\",\"policy_version\":\"5\",<追加の欄>\"request\":{{\"method\":\"POST\",\"path\":\"<path>\",\"body\":{{…}}}}}}'`。\
+         {api}/cos/operations -d '{{\"idempotency_key\":\"<key>\",\"expected_revision\":null,\"reason\":\"…\",\"policy_version\":\"<policy_version>\",<追加の欄>\"request\":{{\"method\":\"POST\",\"path\":\"<path>\",\"body\":{{…}}}}}}'`。\
          key は thread 内で一意。再試行・再送は同じ key で（同じ key で本文が違えば 409）。\
          409 は状態が変わった印なので、最新を読み直して判断し直す。path は登録済みの操作だけ（表と本文の形は skill `cos-operator` の operations.md）。\
          拒否を別の経路で回避せず、理由を人に書く。\n\n\

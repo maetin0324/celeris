@@ -48,6 +48,7 @@ fn cos_chat_ops_ctl_add_uses_audited_http_without_opening_database() {
             "check it",
         ])
         .env("CELERIS_COS_RUN_CREDENTIAL", "celeris-cos-run.test")
+        .env("CELERIS_COS_POLICY_VERSION", "6")
         .env_remove("CELERIS_FOLLOWUPS_FILE")
         .output()
         .unwrap();
@@ -88,6 +89,7 @@ fn cos_chat_ops_ctl_api_request_can_send_registered_comment_shape() {
             r#"{"body":"hello"}"#,
         ])
         .env("CELERIS_COS_RUN_CREDENTIAL", "celeris-cos-run.test")
+        .env("CELERIS_COS_POLICY_VERSION", "6")
         .output()
         .unwrap();
     assert!(
@@ -136,6 +138,29 @@ fn cos_chat_ops_ctl_reason_and_policy_can_come_from_environment() {
     );
 }
 
+/// ADR 2026-10-28-cos-session-policy-key D2: no default version; the daemon sets the env.
+#[test]
+fn cos_chat_ops_ctl_without_policy_version_env_fails() {
+    let out = Command::new(common::celerisctl_path())
+        .args([
+            "--api-url",
+            "http://127.0.0.1:1",
+            "api-request",
+            "POST",
+            "/api/v1/decisions/decision-1/answer",
+            "--body",
+            r#"{"option":"yes"}"#,
+        ])
+        .env("CELERIS_COS_RUN_CREDENTIAL", "celeris-cos-run.test")
+        .env("CELERIS_COS_REASON", "operator decision")
+        .env_remove("CELERIS_COS_POLICY_VERSION")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let error = String::from_utf8_lossy(&out.stderr);
+    assert!(error.contains("CELERIS_COS_POLICY_VERSION"), "{error}");
+}
+
 #[test]
 fn cos_chat_ops_ctl_unsupported_db_mutation_is_rejected_before_db_open() {
     let out = Command::new(common::celerisctl_path())
@@ -147,6 +172,7 @@ fn cos_chat_ops_ctl_unsupported_db_mutation_is_rejected_before_db_open() {
             "01ABC",
         ])
         .env("CELERIS_COS_RUN_CREDENTIAL", "celeris-cos-run.test")
+        .env("CELERIS_COS_POLICY_VERSION", "6")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -194,6 +220,7 @@ fn cos_chat_ops_ctl_prefers_api_url_env_over_config() {
             r#"{"body":"hi"}"#,
         ])
         .env("CELERIS_COS_RUN_CREDENTIAL", "celeris-cos-run.test")
+        .env("CELERIS_COS_POLICY_VERSION", "6")
         .env("CELERIS_API_URL", &url)
         .env("CELERIS_CONFIG", "/a/nonexistent/celeris/config.toml")
         .output()
@@ -221,6 +248,7 @@ fn cos_chat_ops_ctl_prefers_api_url_env_over_config() {
             "/api/v1/tasks/01ABC/comments",
         ])
         .env("CELERIS_COS_RUN_CREDENTIAL", "celeris-cos-run.test")
+        .env("CELERIS_COS_POLICY_VERSION", "6")
         .env("CELERIS_API_URL", "http://127.0.0.1:1/not-api")
         .env("CELERIS_CONFIG", "/a/nonexistent/celeris/config.toml")
         .output()
@@ -243,6 +271,7 @@ fn cos_chat_ops_ctl_prefers_api_url_env_over_config() {
             "/api/v1/tasks/01ABC/comments",
         ])
         .env("CELERIS_COS_RUN_CREDENTIAL", "celeris-cos-run.test")
+        .env("CELERIS_COS_POLICY_VERSION", "6")
         .env("CELERIS_API_URL", "http://127.0.0.1:1/not-api")
         .output()
         .unwrap();

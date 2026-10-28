@@ -16,6 +16,7 @@ fn key() -> ChatSessionKey {
         account_id: Some("a1".into()),
         cwd: Some("/data/cos/threads/t1/workspace".into()),
         model: Some("m1".into()),
+        policy_key: Some("policy_version=1;cos-operator=aa".into()),
     }
 }
 
@@ -73,6 +74,38 @@ fn cos_chat_run_session_any_key_change_retires() {
         assert_eq!(d.run_mode(), ChatRunSessionMode::Fresh);
         assert_eq!(d.reason(), Some("key_changed"));
     }
+}
+
+/// ADR 2026-10-28-cos-session-policy-key D1: a policy change alone (version, a skill's content,
+/// the mounted set, or a pre-0100 row's NULL) retires with `policy_changed`; another key change
+/// together with it is still `key_changed`.
+#[test]
+fn cos_chat_run_session_policy_change_retires_as_policy_changed() {
+    let s = stored(0);
+    for policy in [
+        Some("policy_version=2;cos-operator=aa".to_string()),
+        Some("policy_version=1;cos-operator=bb".to_string()),
+        Some("policy_version=1;cos-inbox-triage=cc;cos-operator=aa".to_string()),
+        None,
+    ] {
+        let mut k = key();
+        k.policy_key = policy;
+        let d = decide_cos_chat_session(&facts(&k, Some(&s)));
+        assert_eq!(
+            d,
+            CosChatSessionDecision::Retire(CosChatRetireReason::PolicyChanged),
+            "{k:?}"
+        );
+        assert_eq!(d.run_mode(), ChatRunSessionMode::Fresh);
+        assert_eq!(d.reason(), Some("policy_changed"));
+    }
+    let mut k = key();
+    k.policy_key = Some("policy_version=2".into());
+    k.model = Some("m2".into());
+    assert_eq!(
+        decide_cos_chat_session(&facts(&k, Some(&s))).reason(),
+        Some("key_changed")
+    );
 }
 
 #[test]

@@ -49,3 +49,7 @@ CoS が起きるきっかけは、人の発言・受信箱の新着（triage）�
   `crates/task-dispatch/src/dispatcher/tests/cron_cos_review.rs`（時計を差し替えて周期ごとに 1 件、同じ周期の再 tick・
   post 後の落ちを模した再起動・素の再起動で増えない、待ち行列が残る間は `skipped_overlap`、CoS run を起こさない）、
   `crates/task-api/tests/cron_jobs.rs`（作成と手動実行の拒否）。
+
+## 付記（2026-10-28）
+
+- D2 の積み先（統括 CoS の thread）は [2026-10-28-cos-review-back-thread](2026-10-28-cos-review-back-thread.md) で統括 CoS の裏 thread（種別 `review`）に置き換えた。D1・D3〜D5 は保つ。

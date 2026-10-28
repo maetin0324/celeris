@@ -44,7 +44,10 @@ ADR [2026-10-28-cos-review-back-thread](../../adr/2026-10-28-cos-review-back-thr
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
 - `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema::` と `corepack pnpm@12.6.0 -C web gen:types` で
-  `docs/api/v1/api-v1.schema.json`・`web/api/generated/*` を再生成した。
+  `docs/api/v1/api-v1.schema.json`・`web/api/generated/*` を再生成した。再実行しても差分は出ない。
+- 範囲: task-core の外の変更は、型の追加に合わせた compile の追従 6 file だけ（`crates/task-api/src/{releases.rs,
+  cos/operations/instructions.rs,chat/mod.rs,cos/mod.rs}`、`crates/task-dispatch/src/dispatcher/cos_chat/{launch,control}.rs`）。
+  初回の範囲 check は task-core だけを許していたため落ち、計画の問題として申告して許可が広がった。
 
 ## 未解決事項
 

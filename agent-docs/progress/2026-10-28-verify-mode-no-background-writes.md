@@ -21,7 +21,8 @@ release e676a115a5a0 の verify（2026-10-28 18:34）で、`--mode verify` の�
   - `poll_cluster_job_waits`: poll（クラスタへの問い合わせ）、終わった wait からの task の再開、上限超過の質問待ち化をしない。
   - staging DB の既存 task・記録を書き換える段: `reconcile_tree_units`（unit を閉じる・子 task を作る）、
     `check_liveness_and_stagnation`（`StallDetected`・障害通知）、`withdraw_stale_approvals`（承認を閉じる）、
-    `task_ops::browser::expire_due`（browser の wait の期限切れで task を遷移）、`tick_credential_waits`
+    `task_ops::browser::expire_due`（browser の wait の期限切れで task を遷移。この 2 つは
+    `housekeeping.rs` の `expire_stale_approvals_and_browser_waits` にまとめた）、`tick_credential_waits`
     （credential 待ちの再開・却下）、`reconcile_terminal_records`（runs 行・統合依頼を閉じる）、`tick_cron_jobs`
     （task・CoS 入力の作成）、`resume_browser_prereq_blocked`（Blocked → Ready）、`sync_notice_feed`（通知 feed）、
     `tick_disk_watch`（disk 監視の通知）。
@@ -44,7 +45,11 @@ release e676a115a5a0 の verify（2026-10-28 18:34）で、`--mode verify` の�
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - `cargo test -p task-dispatch` → exit 0（lib 1055 passed、doc 7 passed）
-- 結果は下の検査の節に追記する。
+- `bash scripts/dev/test-affected.sh` → exit 0（対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、
+  nextest 2790 passed・9 skipped。初回は dispatcher.rs の production_size 2450 > 2430 で落ち、承認と browser の wait の
+  照合を `housekeeping.rs` の `expire_stale_approvals_and_browser_waits` へ移して収めた）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
 
 ## 未解決
 - なし。本番の daemon・systemd・config には触れていない。

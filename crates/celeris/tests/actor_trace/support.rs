@@ -522,3 +522,59 @@ pub fn record_observed_operation(
     }
     file
 }
+
+/// Evaluator observations of a person's answer to `decision`: the question was open over
+/// `wait` (human wait) and the person worked over `active` (human active time). Appends the
+/// same body every call, so a resend reuses each record_id; returns the per-line outcome.
+pub fn record_human_answer(
+    file: &std::path::Path,
+    h: &Harness,
+    decision: &str,
+    person: &str,
+    wait: (i64, i64),
+    active: (i64, i64),
+) -> Vec<AppendOutcome> {
+    let log = HumanOpLog::new(file);
+    let request_ref = format!("decision:decision-{decision}");
+    let actor = Actor {
+        kind: ActorKind::Human,
+        id: person.into(),
+    };
+    let mut lines = Vec::new();
+    for (rt, start, end) in [
+        (RecordType::WaitStart, Some(wait.0), None),
+        (RecordType::WaitEnd, None, Some(wait.1)),
+        (RecordType::OpStart, Some(active.0), None),
+        (RecordType::OpEnd, None, Some(active.1)),
+    ] {
+        let mut r = human_record_base(ExperimentSet::MainAb, ConfigId::B, rt);
+        r.task_id = Some(h.task.id.to_string());
+        r.attempt = Some(1);
+        r.start = start.map(ts);
+        r.end = end.map(ts);
+        r.time_basis = Some(TimeBasis::HarnessTranscript);
+        r.time_precision = Some(TimePrecision::Second);
+        r.request_ref = Some(request_ref.clone());
+        r.request_revision = Some("1".into());
+        if matches!(rt, RecordType::WaitStart | RecordType::WaitEnd) {
+            r.logical_op_id = Some(format!("human-wait:{decision}"));
+            r.wait_kind = Some("question".into());
+        } else {
+            r.logical_op_id = Some(format!("human-answer:{decision}"));
+            r.op_kind = Some(OpKind::SafetyApproval);
+            r.mode = Some(Mode::Manual);
+            r.intent = Some(Intent::Safety);
+            r.credential = Some("web".into());
+            r.actor = Some(actor.clone());
+            r.decided_by = Some(actor.clone());
+            r.executed_by = Some(actor.clone());
+            r.policy_ref = Some(format!("decision:{decision}"));
+            r.trigger = Some(Trigger::SystemRequest);
+            if rt == RecordType::OpEnd {
+                r.outcome = Some(Outcome::Ok);
+            }
+        }
+        lines.push(log.append(&r.with_record_id()).unwrap());
+    }
+    lines
+}

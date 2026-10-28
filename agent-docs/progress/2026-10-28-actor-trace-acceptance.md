@@ -10,7 +10,7 @@ updated: 2026-10-28
 
 5 つの流れの試験が統合後の branch にそろい、`bash scripts/dev/test-affected.sh` の通常の celeris integration test として走って通る。
 設計は [ADR 2026-10-28-actor-trace-acceptance](../adr/2026-10-28-actor-trace-acceptance.md)（状態: 実装済み）。
-WorkUnit ごとの詳細は `agent-docs/progress/2026-10-28-actor-trace-acceptance/` の harness.md・flow2.md〜flow5.md にある。
+WorkUnit ごとの詳細は `agent-docs/progress/2026-10-28-actor-trace-acceptance/` の harness.md・flow2.md〜flow5.md にある。流れ 4・5 の human-ops report 照合の補修（task 01M60KY19FKVMTYM7AFPK32W4V）は同ディレクトリの report-coverage-repair.md にある。
 
 ## 変更（commit の件名）
 
@@ -19,6 +19,7 @@ WorkUnit ごとの詳細は `agent-docs/progress/2026-10-28-actor-trace-acceptan
 - `phase 1: 案件横断の停滞から統括CoSと人の判断を照合する試験を追加` — 流れ 3。
 - `phase 1: 配備とrollbackの監査を判断記録まで照合する試験を追加` — 流れ 4。
 - `phase 1: 再配送と担当の再起動で操作も集計も増えないことを確かめる流れ5の試験を追加`、`phase 1: 流れ5の進捗を書き、clippy の指摘を直す` — 流れ 5。
+- report 照合の補修: `phase 1: 流れ4の配備観測をhuman-ops reportまで照合`、`phase 1: 流れ5の人の観測記録を再送・再オープンしてもreportが不変であることを固定`、`phase 2: 全検査の結果を記録し、ADRと進捗を証拠に合わせる`。
 - closeout: ADR の状態を実装済みにし、`docs/architecture-map.md` に通しの試験の入口を 1 行足し、この進捗を書いた。統合で壊れた所は無く、コードは変えていない。
 
 ## 5 つの流れの結果
@@ -28,8 +29,8 @@ WorkUnit ごとの詳細は `agent-docs/progress/2026-10-28-actor-trace-acceptan
 | 1 認可内の要求を案件 CoS が処理 | `actor_trace_flow1.rs`（1 件） | pass。人の介入 0、cos_project の操作 1、usage の thread・案件・token・定価換算・壁時間と共有小計を照合 |
 | 2 人へ転送し判断者と実行者を分離（B3 取り次ぎ） | `actor_trace_flow2.rs`（1 件） | pass。判断者は 3 要求とも human。実行者は human 1・cos_project 1・external_operator 1。人の時間 9 秒と人待ち 16 秒を別に数える |
 | 3 案件横断の停滞 | `actor_trace_flow3.rs`（2 件） | pass。統括 CoS の根拠付き対応と、人への escalation・人の回答の両方。消費は cos:general で案件へ割り振らない |
-| 4 operator の配備・rollback | `actor_trace_flow4.rs`（1 件） | pass。promote・rollback 各 1 回成功と start 失敗 1 回の deployment_audit を、人の判断・task・要求と照合 |
-| 5 再配送・担当の再起動 | `actor_trace_flow5.rs`（1 件） | pass。再取り込み・取り次ぎ再送・回答再送・観測記録再送・store 再オープン後の再実行で、操作・介入・usage・要求・report の件数と全体が不変 |
+| 4 operator の配備・rollback | `actor_trace_flow4.rs`（1 件） | pass。promote・rollback 各 1 回成功と start 失敗 1 回の deployment_audit を、人の判断・task・要求と照合。補修で、人の判断と operator の実行から作った human-ops /2 の生記録 8 件を report へ通し、判断者 human・実行者 external_operator:flow4、主体別件数 human 1・external_operator 1、人の介入 safety_approval 1・人の時間 1 秒（配備の計 6 秒は足さない）、消費・人待ちは null を assert。release・decision・task・request_ref・policy を report・export・requests・deployment_audit の 4 出力で照合 |
+| 5 再配送・担当の再起動 | `actor_trace_flow5.rs`（1 件） | pass。再取り込み・取り次ぎ再送・回答再送・観測記録再送・store 再オープン後の再実行で、操作・介入・usage・要求・report の件数と全体が不変。補修で人の回答に結ぶ human/manual の記録 4 行を足し、人の介入 1・人の時間 1 秒・人待ち 2 秒の report を基準に、再配送直後とログ・store 再オープン後の 2 回の再送が全行 Duplicate で report が不変であることを assert |
 
 本物の LLM・外部ネットワーク・sleep・負荷試験は使っていない（固定 UTC・loopback の偽 HTTP・shell fixture）。
 
@@ -39,25 +40,26 @@ WorkUnit ごとの詳細は `agent-docs/progress/2026-10-28-actor-trace-acceptan
 - flow2: 人へ回した後に CoS が取り次ぎ（`instructed_by`）を根拠に答えた operation が、request ledger の `operations` と `instructed_by:`・`relay:` から落ちていた。`request_ledger` で対象の decision か受信箱の件が一致する operation を同じ要求に寄せる（ADR 付記、試験 `later_operation_on_an_escalated_request_is_linked_by_its_target`）。あわせて取り次ぎ検査（D3）に時刻を渡す `inbox_answer_instruction_at` を足した。
 - flow3・flow4・flow5: 製品側の欠陥は見つからず、製品コードは変えていない。
 
-## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
+## 証拠（report 照合の補修の提出時の HEAD で実行。基準は git merge-base HEAD main）
 
-- `bash scripts/dev/test-affected.sh`（main 基準。WU 基準では docs だけの差分になるので `env -u CELERIS_WU_BASE` で実行）→ exit 0。Rust 6,640 passed・21 skipped、web 689 passed と 105 passed、doc test 通過。文書検査（check-architecture-map・check-doc-links・check-adr-numbers・progress-index --check）も ok。
-- `cargo test -p celeris --test actor_trace_flow1` 〜 `--test actor_trace_flow5` → exit 0。5 target・6 試験が合格（1・1・2・1・1 件）。
-- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh --list` → 対象に celeris を含む 13 crate と web。
+- `cargo test -p celeris --test actor_trace_flow1 --test actor_trace_flow2 --test actor_trace_flow3 --test actor_trace_flow4 --test actor_trace_flow5` → exit 0。5 target・6 試験が合格（1・1・2・1・1 件）。
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh --list` → exit 0。対象は celeris を含む 13 crate と web（typecheck+unit）。
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` → exit 0。Rust 6,655 passed・21 skipped（307 binaries）、web 685 passed（99 files）と 105 passed、doc test 通過。前段の文書検査（check-doc-links・check-adr-numbers 329 files・check-human-text・progress-index --check）も ok。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check` → いずれも exit 0（文書更新後に実行）。
 
 ## 未解決
 
 - HTTP の認証（operator だけが relays を呼べる等）と実 LLM harness の起動は、この試験の境界外。既存の task-api・task-worker の試験が受け持つ。
-- 流れ 5 の human-ops report には人の操作の観測記録を入れていない（CoS 操作の記録だけ）。人の介入の report 側の重複なしは流れ 2 の素材で export・requests では確かめたが、report の人の観測記録の再送は流れ 5 では未確認。
+- （解消済み）流れ 5 の human-ops report の人の観測記録の再送は、report 照合の補修で確かめた。人の回答に結ぶ human/manual の記録を足し、ログと store の再オープン後も report が不変であることを `actor_trace_flow5.rs` が assert する。
 
 - closeout の最初の check（WU 基準の test-affected.sh の log を `actor_trace_flowN` で grep する）は通らなかった。`CELERIS_WU_BASE` が流れの統合後の snapshot なので差分は文書だけになり Rust 試験が走らないこと、`.config/nextest.toml` の `status-level = "fail"` で合格した試験名が log に出ないことの 2 つが理由。plan_issue を返し、check は「`cargo test -p celeris --test actor_trace_flow1`〜`5`」と「main 基準の `test-affected.sh --list` に celeris が入り本体が exit 0」の 2 本に差し替わった。
 
 ## 提案
 
 - 台帳 ADR（`2026-10-27-eval-request-ledger.md`）と取り次ぎ ADR（`2026-10-27-relayed-instructions.md`）から、この ADR の流れ 2 の付記へ参照を足す（WU の範囲外なので人が判断する）。
-- 流れ 5 に人の操作の観測記録の再送を足し、human-ops report 側の人の介入の重複なしも固定する。
+- （解消済み）流れ 5 の人の観測記録の再送と human-ops report 側の人の介入の重複なしは、report 照合の補修で固定した。
 
 ## 本番への移行
 

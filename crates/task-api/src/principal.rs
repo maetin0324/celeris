@@ -14,6 +14,7 @@
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
+use axum::response::IntoResponse;
 
 /// MCP の客の id を運ぶ header。MCP 専用 token と一緒のときだけ読む。
 pub const MCP_CLIENT_HEADER: &str = "x-celeris-mcp-client";
@@ -139,7 +140,7 @@ impl std::fmt::Debug for ApiToken {
     }
 }
 
-/// handler が主体を受け取る extractor。guard を通った要求には必ず載っている（無ければ認証の無い主体）。
+/// handler が主体を受け取る extractor。guard を通った要求には必ず載っている（無ければ拒否）。
 #[derive(Debug, Clone)]
 pub struct Caller(pub Principal);
 
@@ -150,7 +151,7 @@ impl Caller {
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for Caller {
-    type Rejection = std::convert::Infallible;
+    type Rejection = axum::response::Response;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         Ok(Caller(
@@ -158,7 +159,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
                 .extensions
                 .get::<Principal>()
                 .cloned()
-                .unwrap_or(Principal::Unauthenticated),
+                .ok_or_else(|| crate::problem::ApiProblem::unauthorized().into_response())?,
         ))
     }
 }
@@ -195,6 +196,20 @@ mod tests {
             }
             .actor(),
             "mcp:C1"
+        );
+    }
+
+    #[tokio::test]
+    async fn caller_requires_a_principal_from_the_guard() {
+        let (mut parts, _) = axum::http::Request::new(()).into_parts();
+        assert!(Caller::from_request_parts(&mut parts, &()).await.is_err());
+        parts.extensions.insert(Principal::Unauthenticated);
+        assert_eq!(
+            Caller::from_request_parts(&mut parts, &())
+                .await
+                .unwrap()
+                .actor(),
+            "human:local"
         );
     }
 

@@ -554,3 +554,51 @@ async fn cos_integrate_task_refuses_unknown_and_non_delivery_requests() {
             .all(|(_, e)| !matches!(e, Event::IntegrateTaskRequested { .. }))
     );
 }
+
+#[tokio::test]
+async fn integrate_task_direct_api_preserves_each_token_principal() {
+    let env = TestEnv::with(EnvOptions {
+        extra_tokens: vec![
+            task_api::ApiToken::new(
+                task_api::Principal::Human { name: "web".into() },
+                "web-token",
+            ),
+            task_api::ApiToken::new(
+                task_api::Principal::Operator {
+                    name: "claude-code".into(),
+                },
+                "op-token",
+            ),
+        ],
+        ..Default::default()
+    });
+    let app = env.router();
+    for (token, actor) in [
+        ("web-token", "human:web"),
+        ("op-token", "operator:claude-code"),
+    ] {
+        let fx = fixture(&env);
+        let path = format!(
+            "/api/v1/tasks/{}/integration-requests/{}/integrate-task",
+            fx.original.id, fx.request_id
+        );
+        let response = send(
+            &app,
+            post_json_with(
+                &path,
+                &json!({}),
+                &[("authorization", &format!("Bearer {token}"))],
+            ),
+        )
+        .await;
+        assert_eq!(response.status, 201, "{}", response.text());
+        assert!(
+            env.store
+                .events_for(fx.original.id)
+                .unwrap()
+                .iter()
+                .any(|(_, e)| matches!(e,
+            Event::IntegrateTaskRequested { by, .. } if by == actor))
+        );
+    }
+}

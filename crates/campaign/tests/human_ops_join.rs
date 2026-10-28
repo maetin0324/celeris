@@ -212,7 +212,10 @@ fn write_records(dir: &Path, hash: &str, dup: bool) {
         "task_id":"t-b-p0","at":"2026-10-19T00:12:00Z","wall_ms":null});
     let stray = json!({"record_type":"intervention","dedup_key":"intervention:i9","campaign_id":"e2e",
         "intervention_id":"i9","kind":"recovery","task_id":"t-unknown","at":"2026-10-19T00:11:00Z","wall_ms":null});
-    let mut rows = vec![run_row, outcome, iv, cos, stray];
+    let integration = json!({"record_type":"intervention","dedup_key":"intervention:i3","campaign_id":"e2e",
+        "intervention_id":"i3","kind":"recovery","actor_kind":"external_operator","actor_id":"claude-code",
+        "source_event":"t-b-p0:3","task_id":"t-b-p0","at":"2026-10-19T00:13:00Z","wall_ms":null});
+    let mut rows = vec![run_row, outcome, iv, cos, integration, stray];
     if dup {
         rows.extend(rows.clone());
     }
@@ -262,7 +265,7 @@ fn joins_on_same_identity_without_duplicates_and_a_arm_keeps_missing() {
     );
     assert_eq!(
         b["event_interventions_by_actor_kind"]["value"],
-        json!({"cos_project": 1, "human": 1})
+        json!({"cos_project": 1, "human": 1, "external_operator": 1})
     );
     assert_eq!(src(b, "human_ops"), "evaluator");
     assert_eq!(

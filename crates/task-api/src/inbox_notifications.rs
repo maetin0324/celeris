@@ -582,7 +582,6 @@ async fn answer(
             })?))
             .map_err(|_| ApiProblem::internal("answer request failed"))?;
         let response = crate::handlers::router(state.clone())
-            .merge(crate::integrations::routes().with_state(state.clone()))
             .oneshot(req)
             .await
             .map_err(|_| ApiProblem::internal("answer routing failed"))?;

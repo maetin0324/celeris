@@ -388,7 +388,7 @@ pub enum ApiError {
 
 /// `/api/v1` の全エンドポイントと共通の検査（Host / 認証 / Origin / Content-Type / 本文サイズ）を持つルータ。
 pub fn router(state: ApiState) -> axum::Router {
-    handlers::router(state.clone()).merge(integrations::routes().with_state(state))
+    handlers::router(state)
 }
 
 /// `settings.listen` に bind し、`shutdown` が完了したら SSE を閉じて graceful に止める。

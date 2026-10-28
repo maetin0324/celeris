@@ -931,3 +931,95 @@ fn actor_classification_keeps_unknown_for_rounded_or_missing_by() {
         assert_eq!(k(by), (kind, id.map(str::to_string)), "{by:?}");
     }
 }
+
+#[test]
+fn integration_dispositions_project_recovery_with_each_actor() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    let task = super::tests::sample_task(Status::Draft);
+    s.create_task(&task, vec![]).unwrap();
+    s.task_campaign_set(
+        &task.id.to_string(),
+        &CampaignIdentity {
+            campaign_id: "integration-actors".into(),
+            case_id: None,
+            arm: None,
+            repetition: None,
+            manifest_hash: None,
+            routing_setting: None,
+            variant: None,
+            variant_org: None,
+        },
+        now(),
+    )
+    .unwrap();
+    for (actor, kind, id) in [
+        ("human:web", InterventionActorKind::Human, "web"),
+        (
+            "operator:claude-code",
+            InterventionActorKind::ExternalOperator,
+            "claude-code",
+        ),
+        ("mcp:client", InterventionActorKind::McpClient, "client"),
+        (
+            "cos_general:thread",
+            InterventionActorKind::CosGeneral,
+            "thread",
+        ),
+        ("human:local", InterventionActorKind::Human, "local"),
+    ] {
+        let repo_id = crate::RepoId::new();
+        for event in [
+            Event::IntegrateTaskRequested {
+                request_id: "request".into(),
+                integrate_task_id: task.id,
+                by: actor.into(),
+            },
+            Event::IntegrationMerged {
+                repo_id,
+                branch: "b".into(),
+                head_sha: "h".into(),
+                actor: actor.into(),
+            },
+            Event::IntegrationDiscarded {
+                repo_id,
+                branch: "b".into(),
+                head_sha: "h".into(),
+                reason: "r".into(),
+                actor: actor.into(),
+            },
+            Event::IntegrationHeld {
+                repo_id,
+                branch: "b".into(),
+                head_sha: "h".into(),
+                reason: "r".into(),
+                actor: actor.into(),
+            },
+            Event::IntegrationReopened {
+                repo_id,
+                branch: "b".into(),
+                head_sha: "h".into(),
+                reason: None,
+                actor: actor.into(),
+            },
+        ] {
+            s.append_event(task.id, &event).unwrap();
+        }
+        for _ in 0..2 {
+            s.decision_log_project_interventions(&task.id.to_string())
+                .unwrap();
+        }
+        let rows = s
+            .decision_log_interventions_list(Some("integration-actors"))
+            .unwrap();
+        let found: Vec<_> = rows
+            .iter()
+            .filter(|r| r.actor_id.as_deref() == Some(id))
+            .collect();
+        assert_eq!(found.len(), 5);
+        assert!(
+            found
+                .iter()
+                .all(|r| r.kind == InterventionKind::Recovery && r.actor_kind == kind)
+        );
+    }
+}

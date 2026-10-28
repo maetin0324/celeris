@@ -183,6 +183,7 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::changes::routes())
         // ADR 2026-10-28-cos-integrate-task: 統合の衝突を解く integrate task の起票。
         .merge(crate::integrate_task::routes())
+        .merge(crate::integrations::routes())
         // ADR-0044 D7（Phase 57）: 案件の文書（git が正本）。実装は `crate::docs`。
         .merge(crate::docs::routes())
         // ADR-0047（Phase 61）: 知識ベース。実装は `crate::knowledge`。

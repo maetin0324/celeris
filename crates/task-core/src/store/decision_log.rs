@@ -1000,6 +1000,13 @@ pub(crate) fn intervention_of(event: &crate::Event) -> Option<(InterventionKind,
         Event::Retried { by, .. } | Event::IntegrationAnswered { by, .. } => {
             (InterventionKind::Recovery, by.as_deref())
         }
+        Event::IntegrateTaskRequested { by: actor, .. }
+        | Event::IntegrationMerged { actor, .. }
+        | Event::IntegrationDiscarded { actor, .. }
+        | Event::IntegrationHeld { actor, .. }
+        | Event::IntegrationReopened { actor, .. } => {
+            (InterventionKind::Recovery, Some(actor.as_str()))
+        }
         Event::ApprovalDecided { by, .. } | Event::Edited { by, .. } => {
             (InterventionKind::Unclassified, Some(by.as_str()))
         }

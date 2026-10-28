@@ -3,6 +3,12 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-28（ADR 2026-10-28-cos-integrate-task D1〜D5）— **追加。v1 のまま**。`POST /tasks/{id}/integration-requests/{request}/integrate-task`
+  （body `{note?}`、**管理系**。CoS は `/cos/operations` の `integration.integrate_task`）を足した。元の task の未回答の統合の依頼（origin `delivery`）を解く
+  root task を起票し、元の task に event `integrate_task_requested`（`request_id`・`integrate_task_id`・`by`）を同じ transaction で追記する。決着は
+  daemon の sweep が event `integrate_task_settled`（`request_id`・`integrate_task_id`・`outcome`（`integrated`|`escalated`）・`detail`）で記録する。
+  受信箱の `integration_request` に選択肢 `integrate_task` と native を足し、進行中は項目を出さず、`escalated` は人に回す（CoS は answer できない）。
+  エラー: 410 `integration_request_gone`、409 `integrate_task_exists` / `integrate_task_escalated`、422 `integrate_task_unsupported_origin` / `repository_required`。
 - 改訂: 2026-10-27（ADR 2026-10-27-done-task-auto-reintegrate D4・D6）— **追加。v1 のまま**。task の event に `done_reintegration_started`
   （`repo_id`・`head_sha`・`target_sha`・`class`（`disjoint`|`overlap`）・`attempt`）と `done_reintegration_deferred`（`repo_id`・`head_sha`・
   `target_sha`・`reason`）を足した。受信箱 `unintegrated` の理由に `auto reintegrate: merge conflict in <files>`・
@@ -401,6 +407,7 @@ token_file = "api.token"
 | 76 | POST | `/tasks/{id}/integrations/{repo}/discard` | 取り込みを破棄（`reason` 必須）。`not_applicable` の行は 409 `invalid_transition`（遷移不可） | `IntegrationActionResult` | store |
 | 77 | POST | `/tasks/{id}/integrations/{repo}/hold` | 取り込みを保留（`reason` 必須）。`not_applicable` の行は 409 `invalid_transition`（遷移不可） | `IntegrationActionResult` | store |
 | 78 | POST | `/tasks/{id}/integrations/{repo}/reopen` | held/discarded を unintegrated に戻す。`not_applicable` の行は 409 `invalid_transition`（遷移不可） | `IntegrationActionResult` | store |
+| 78a | POST | `/tasks/{id}/integration-requests/{request}/integrate-task` | 未回答の統合の依頼（origin `delivery`）の衝突を解く integrate task を起票し、依頼と結ぶ（**管理系**。ADR 2026-10-28-cos-integrate-task）。410 `integration_request_gone`、409 `integrate_task_exists`・`integrate_task_escalated`、422 `integrate_task_unsupported_origin`・`repository_required` | 201 `IntegrateTaskResult` | store |
 | 73 | POST | `/projects/{id}/cancel` | 案件を中止し、属する非終端タスクと途中目標を連鎖で `cancelled` にする（ADR-0044 D6、Phase 55。**管理系: `token_file` 未設定でも 401**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 74 | POST | `/projects/{id}/pause` | 案件を一時停止する（属するタスクは dispatch されない。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 75 | POST | `/projects/{id}/resume` | 一時停止を解く（`paused_from` へ戻す。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
@@ -3538,6 +3545,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | tasks | `POST /tasks/{id}/accept` | `task.accept` |
 | tasks | `POST /tasks/{id}/cancel` | `task.cancel` |
 | tasks | `POST /tasks/{id}/rereview` | `task.rereview` |
+| tasks | `POST /tasks/{id}/integration-requests/{request}/integrate-task` | `integration.integrate_task`（task の起票と元の task への結びの event が 1 transaction） |
 | tasks | `POST /tasks/{id}/execution-plan` | `execution.plan_adopt` |
 | tasks | `POST /tasks/{id}/tree/adopt` | `tree.adopt` |
 | tasks | `POST /tasks/{id}/execution/decompose` | `execution.decompose` |

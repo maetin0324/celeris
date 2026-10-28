@@ -110,3 +110,76 @@ impl IntegrationRequest {
         out
     }
 }
+
+/// ADR 2026-10-28-cos-integrate-task D4: 受信箱の統合の依頼で「integrate task に解かせる」を選ぶ option の key。
+pub const INTEGRATE_TASK_OPTION: &str = "integrate_task";
+/// 同 ADR D3: `IntegrateTaskSettled.outcome`。元の依頼を閉じた。
+pub const INTEGRATE_TASK_INTEGRATED: &str = "integrated";
+/// 同 ADR D3: `IntegrateTaskSettled.outcome`。integrate task が失敗し、依頼を人に回した。
+pub const INTEGRATE_TASK_ESCALATED: &str = "escalated";
+
+/// 同 ADR D2・D3: 統合の依頼 1 件と integrate task の結びの今の状態。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntegrateTaskLink {
+    /// 結んだ integrate task がまだ決着していない。
+    Active { task_id: crate::model::TaskId },
+    /// integrate task が失敗し、依頼を人に回した。
+    Escalated {
+        task_id: crate::model::TaskId,
+        detail: String,
+    },
+    /// integrate task の取り込みで依頼を閉じた。
+    Integrated { task_id: crate::model::TaskId },
+}
+
+impl IntegrateTaskLink {
+    pub fn task_id(&self) -> crate::model::TaskId {
+        match self {
+            IntegrateTaskLink::Active { task_id }
+            | IntegrateTaskLink::Escalated { task_id, .. }
+            | IntegrateTaskLink::Integrated { task_id } => *task_id,
+        }
+    }
+}
+
+/// 元の task の events から、依頼 `request_id` の最新の結びを畳む（無ければ `None`）。
+pub fn integrate_task_link<'a>(
+    events: impl IntoIterator<Item = &'a crate::model::Event>,
+    request_id: &str,
+) -> Option<IntegrateTaskLink> {
+    let mut link = None;
+    for event in events {
+        match event {
+            crate::model::Event::IntegrateTaskRequested {
+                request_id: id,
+                integrate_task_id,
+                ..
+            } if id == request_id => {
+                link = Some(IntegrateTaskLink::Active {
+                    task_id: *integrate_task_id,
+                });
+            }
+            crate::model::Event::IntegrateTaskSettled {
+                request_id: id,
+                integrate_task_id,
+                outcome,
+                detail,
+            } if id == request_id
+                && link.as_ref().map(IntegrateTaskLink::task_id) == Some(*integrate_task_id) =>
+            {
+                link = Some(if outcome == INTEGRATE_TASK_ESCALATED {
+                    IntegrateTaskLink::Escalated {
+                        task_id: *integrate_task_id,
+                        detail: detail.clone(),
+                    }
+                } else {
+                    IntegrateTaskLink::Integrated {
+                        task_id: *integrate_task_id,
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+    link
+}

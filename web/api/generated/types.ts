@@ -337,6 +337,8 @@ export type AttentionItem = {
   "type": "review_resync_halted";
 } | {
   "at": string;
+  "integrate_task_escalated"?: string | null;
+  "integrate_task_offered": boolean;
   "request": IntegrationRequest;
   "request_id": string;
   "task": TaskRef;
@@ -2758,6 +2760,17 @@ export type Event = {
   "note"?: string | null;
   "request_id": string;
   "type": "integration_answered";
+} | {
+  "by": string;
+  "integrate_task_id": TaskId;
+  "request_id": string;
+  "type": "integrate_task_requested";
+} | {
+  "detail": string;
+  "integrate_task_id": TaskId;
+  "outcome": string;
+  "request_id": string;
+  "type": "integrate_task_settled";
 } | {
   "added"?: Array<string>;
   "removed"?: Array<string>;

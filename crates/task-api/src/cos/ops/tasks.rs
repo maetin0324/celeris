@@ -48,6 +48,11 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/tasks/{id}/rereview", "task.rereview"),
     (
         "POST",
+        "/api/v1/tasks/{id}/integration-requests/{request}/integrate-task",
+        "integration.integrate_task",
+    ),
+    (
+        "POST",
         "/api/v1/tasks/{id}/execution/decompose",
         "execution.decompose",
     ),
@@ -151,6 +156,23 @@ pub(crate) fn dispatch(
                 store,
                 id,
                 input.expected_status,
+                Some(audit),
+            )?)
+        }
+        "integration.integrate_task" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = parse_task_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
+            let request = path_param(crate::integrate_task::PATTERN, path, "{request}");
+            let input = decode_optional(body).map_err(decode)?;
+            audited(crate::integrate_task::integrate_task_op(
+                store,
+                &env.roles,
+                &env.genres,
+                id,
+                &request,
+                input,
+                &audit.by(),
                 Some(audit),
             )?)
         }

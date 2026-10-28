@@ -85,6 +85,11 @@ pub(crate) fn run(store: &dyn TaskStore, now: OffsetDateTime) -> Result<usize, S
     for outcome in outcomes {
         tracing::info!(?outcome, "auto reintegrate");
     }
+    // ADR 2026-10-28-cos-integrate-task D3: 結んだ integrate task の決着（取り込みで依頼を閉じる・失敗を人に回す）。
+    let settled = task_ops::integrate_task::settle(store).map_err(|e| e.to_string())?;
+    for outcome in settled {
+        tracing::info!(?outcome, "integrate task settled");
+    }
     Ok(changed)
 }
 

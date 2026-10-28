@@ -180,6 +180,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   // ADR 2026-10-27-done-task-auto-reintegrate: done 後の自動の再取り込み（開始は状態が reviewing に戻る、見送りは受信箱 unintegrated の理由が変わる）。
   done_reintegration_started: { sets: ["T", "E", "R"] },
   done_reintegration_deferred: { sets: ["T", "E", "R"] },
+  integrate_task_requested: { sets: ["T", "E", "R"] },
+  integrate_task_settled: { sets: ["T", "E", "R"] },
   // ADR 2026-10-23: review が評価した必須検査の結果を基底・候補 SHA に束縛して残す（状態は変えない。詳細と timeline のみ）。
   required_checks_evaluated: { sets: ["T", "E"] },
   merge_candidate_stale: { sets: ["T", "E", "L"] },

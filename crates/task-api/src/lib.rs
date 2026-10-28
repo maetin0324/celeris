@@ -48,6 +48,7 @@ mod files;
 mod handlers;
 pub mod harnesses;
 mod inbox_notifications;
+mod integrate_task;
 mod integrations;
 /// ADR-0047（Phase 61）: 知識ベース（`~/.local/share/celeris/knowledge` の Markdown が正本）。ツリー・ページ・`_inbox`。
 pub mod knowledge;

@@ -307,6 +307,8 @@ fn fixture() -> Fixture {
                 actions: Vec::new(),
                 candidate_sha: None,
             }),
+            integrate_task_offered: false,
+            integrate_task_escalated: None,
             at: AT.to_string(),
         },
         AttentionItem::Unintegrated {
@@ -910,7 +912,9 @@ fn human_inbox_integration_request_preserves_decision_material() {
     inbox.attention.push(AttentionItem::IntegrationRequest {
         task: view::task_ref(&task),
         request_id: request.id_for(task.id),
-        request: Box::new(request),
+        request: Box::new(request.clone()),
+        integrate_task_offered: false,
+        integrate_task_escalated: None,
         at: AT.into(),
     });
     let by_id = [(task.id, task.clone())].into();
@@ -945,6 +949,54 @@ fn human_inbox_integration_request_preserves_decision_material() {
         item.answer.path,
         format!("/api/v1/inbox/items/{}/answer", item.id)
     );
+    assert!(item.answer.native.is_none());
+
+    // ADR 2026-10-28-cos-integrate-task D4: 選べる依頼は integrate_task を先頭に出し、native が起票の endpoint。
+    let mut offered = empty_inbox();
+    offered.attention.push(AttentionItem::IntegrationRequest {
+        task: view::task_ref(&task),
+        request_id: request.id_for(task.id),
+        request: Box::new(request.clone()),
+        integrate_task_offered: true,
+        integrate_task_escalated: None,
+        at: AT.into(),
+    });
+    let out = from_inbox(&offered, &by_id, now());
+    let item = one(&out, InboxKind::IntegrationRequest);
+    assert_eq!(item.options[0].key, "integrate_task");
+    assert_eq!(
+        item.answer.native.as_ref().map(|n| n.path.clone()),
+        Some(crate::human_inbox::integrate_task_path(
+            task.id,
+            &request.id_for(task.id)
+        ))
+    );
+
+    // 失敗して人に回した依頼は題と本文で分かり、integrate_task を出さない。
+    let mut escalated = empty_inbox();
+    escalated.attention.push(AttentionItem::IntegrationRequest {
+        task: view::task_ref(&task),
+        request_id: request.id_for(task.id),
+        request: Box::new(request),
+        integrate_task_offered: false,
+        integrate_task_escalated: Some("integrate task X が失敗した（failed）".into()),
+        at: AT.into(),
+    });
+    let out = from_inbox(&escalated, &by_id, now());
+    let item = one(&out, InboxKind::IntegrationRequest);
+    assert!(
+        item.title.contains("integrate task が失敗"),
+        "{}",
+        item.title
+    );
+    assert!(
+        item.detail
+            .as_deref()
+            .unwrap()
+            .starts_with("人の判断が必要")
+    );
+    assert!(item.options.iter().all(|o| o.key != "integrate_task"));
+    assert!(item.answer.native.is_none());
 }
 
 #[test]

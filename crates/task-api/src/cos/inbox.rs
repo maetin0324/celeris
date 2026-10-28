@@ -201,6 +201,10 @@ pub(crate) fn human_required_reason(
     {
         return Ok(Some("the task is labeled human_required".into()));
     }
+    // ADR 2026-10-28-cos-integrate-task D4: the integrate task failed; the person decides the request.
+    if kind == Some(InboxKind::IntegrationRequest) {
+        return task_ops::integrate_task::escalated_reason(store, task_id).map_err(store_problem);
+    }
     Ok(None)
 }
 

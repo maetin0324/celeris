@@ -44,6 +44,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | task の再開（done/failed → ready） | `POST /api/v1/tasks/<id>/reopen` | task.reopen | `{"expected_status":"failed"}` か `{}` |
 | task のやり直し（failed/cancelled を複製） | `POST /api/v1/tasks/<id>/retry` | task.retry | `{"accept":true}`（省略なら draft）。`workspace`・`execution` も人の経路と同じ |
 | task の再レビュー依頼 | `POST /api/v1/tasks/<id>/rereview` | task.rereview | `{"expected_status":"done"}` |
+| 統合の衝突を解く integrate task の起票 | `POST /api/v1/tasks/<id>/integration-requests/<request>/integrate-task` | integration.integrate_task | `{"note":"…"}`（省略可）。`<request>` は統合の依頼の id（`<task>:<target_sha>:<source_sha>`）。origin `delivery` の未回答の依頼だけ。worker が main に元の head を merge して衝突を解き、検査と reviewer の判定を経て配送が取り込む。CoS は git を触らない。受信箱の統合の依頼は選択肢 `integrate_task` の answer で同じ操作になる。1 依頼 1 件（進行中・失敗後は 409）。失敗した依頼は人に回る |
 | task の subtree の一時停止 | `POST /api/v1/tasks/<id>/pause` | task.pause | body は `{}`。走っている run は止めない |
 | 一時停止の解除 | `POST /api/v1/tasks/<id>/resume` | task.resume | body は `{}` |
 | 初回の実行計画採用 | `POST /api/v1/tasks/<id>/execution-plan` | execution.plan_adopt | 計画 JSON。active な計画が無い task 用。`celerisctl execution plan set` |

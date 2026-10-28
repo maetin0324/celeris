@@ -21,7 +21,7 @@ updated: 2026-10-28
   thread 種別 `review`、報告 operation `chat.review_report`、`GET /api/v1/cos/review-thread` などの名前を決めた。
 - core-thread（[core-thread.md](2026-10-28-cos-review-back-thread/core-thread.md)）—
   `phase 1: task-core に統括 CoS の裏 thread（review）と定期見直しの報告の書き込み関数を足す`、
-  `phase 1: core-thread の進捗に範囲と再実行の結果を足す`。`ChatThreadKind::Review`、migration 0101
+  `phase 1: core-thread の進捗に範囲と再実行の結果を足す`。`ChatThreadKind::Review`、migration 0102
   （CHECK と部分 UNIQUE index だけ。`chat_messages` に触らない）、`cos_review_thread_open`・`cos_review_input_post`・
   `cos_review_report_tx`、一覧・検索・未読から review を外す、投稿経路の 403 `chat_thread_read_only`。
 - api-op（[api-op.md](2026-10-28-cos-review-back-thread/api-op.md)）—
@@ -68,7 +68,7 @@ updated: 2026-10-28
 
 - config の変更は無い。cron job の雛形（`template.kind = "cos_review"`、schedule・timezone・`template.objective`）も
   変わらない。既存の job をそのまま使う。
-- migration 0101 は release の起動時に走る。`chat_threads` を作り直して CHECK と index を足すだけで、`chat_messages` には
+- migration 0102 は release の起動時に走る。`chat_threads` を作り直して CHECK と index を足すだけで、`chat_messages` には
   触らない。統括 thread に溜まった過去の定期見直しの message は残る（ADR D7）。
 - CoS skill を本番 KB に取り込む（人が行う）:
   `celerisctl skills import config/skills --name cos-operator --name cos-inbox-triage`。

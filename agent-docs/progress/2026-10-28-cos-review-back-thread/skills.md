@@ -17,7 +17,7 @@ ADR [2026-10-28-cos-review-back-thread](../../adr/2026-10-28-cos-review-back-thr
   body `{review_message_id, text}`）で統括 CoS チャットに 1 件報告し、無ければ review thread に 1 行書いて終える。報告は
   人が数十秒で読める分量にする。統括 thread へ `chat.message_post` で直接書かない。入口の表の `cos-inbox-triage` の
   mount 先の説明を `launch.rs` の現行に合わせた。
-- `config/skills/cos-inbox-triage/SKILL.md`: §11（定期見直しの run）を足した。review thread の run は受信箱の件を読むが
+- `config/skills/cos-inbox-triage/SKILL.md`: §12（定期見直しの run）を足した。review thread の run は受信箱の件を読むが
   resolve しない（ADR D3'）。冒頭の mount 先の説明を現行に合わせた。policy_version は 6 のまま（判定基準は変えていない）。
 - `config/skills/cos-operator/operations.md`: `chat.review_report` の行は api-op の葉が既に足していた
   （review thread の run だけ、入力 1 件に 1 件、text 1〜4000 字）。この葉では変えていない。

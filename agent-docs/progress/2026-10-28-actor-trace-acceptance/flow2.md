@@ -27,6 +27,7 @@ updated: 2026-10-28
 - `bash scripts/dev/test-affected.sh` → exit 0。Rust 6,636 passed・21 skipped、web 689 passed。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
+- WU の範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` と計画の grep）→ exit 0。`check-doc-links.sh`・`progress-index.sh --check` → exit 0。
 
 ## 未解決
 

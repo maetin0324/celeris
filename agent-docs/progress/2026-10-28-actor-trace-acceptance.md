@@ -42,7 +42,8 @@ WorkUnit ごとの詳細は `agent-docs/progress/2026-10-28-actor-trace-acceptan
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 
 - `bash scripts/dev/test-affected.sh`（main 基準。WU 基準では docs だけの差分になるので `env -u CELERIS_WU_BASE` で実行）→ exit 0。Rust 6,640 passed・21 skipped、web 689 passed と 105 passed、doc test 通過。文書検査（check-architecture-map・check-doc-links・check-adr-numbers・progress-index --check）も ok。
-- `cargo nextest list -p celeris` → `actor_trace_flow1`〜`actor_trace_flow5` の 6 試験が celeris の integration test に含まれる。
+- `cargo test -p celeris --test actor_trace_flow1` 〜 `--test actor_trace_flow5` → exit 0。5 target・6 試験が合格（1・1・2・1・1 件）。
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh --list` → 対象に celeris を含む 13 crate と web。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
 
@@ -51,7 +52,7 @@ WorkUnit ごとの詳細は `agent-docs/progress/2026-10-28-actor-trace-acceptan
 - HTTP の認証（operator だけが relays を呼べる等）と実 LLM harness の起動は、この試験の境界外。既存の task-api・task-worker の試験が受け持つ。
 - 流れ 5 の human-ops report には人の操作の観測記録を入れていない（CoS 操作の記録だけ）。人の介入の report 側の重複なしは流れ 2 の素材で export・requests では確かめたが、report の人の観測記録の再送は流れ 5 では未確認。
 
-- closeout の check（WU 基準の test-affected.sh の log を `actor_trace_flowN` で grep する）は、成果を直しても通らない。理由は 2 つ。(1) `CELERIS_WU_BASE` は流れ 1〜5 の統合後の snapshot なので、closeout の差分は文書だけになり、test-affected は「試験対象の変更なし」で試験を走らせない。(2) `.config/nextest.toml` の `status-level = "fail"` のため、main 基準で試験を走らせても、合格した試験の名前は log に出ない（6,640 件合格の log で grep は 0 件）。計画には plan_issue として返した。
+- closeout の最初の check（WU 基準の test-affected.sh の log を `actor_trace_flowN` で grep する）は通らなかった。`CELERIS_WU_BASE` が流れの統合後の snapshot なので差分は文書だけになり Rust 試験が走らないこと、`.config/nextest.toml` の `status-level = "fail"` で合格した試験名が log に出ないことの 2 つが理由。plan_issue を返し、check は「`cargo test -p celeris --test actor_trace_flow1`〜`5`」と「main 基準の `test-affected.sh --list` に celeris が入り本体が exit 0」の 2 本に差し替わった。
 
 ## 提案
 

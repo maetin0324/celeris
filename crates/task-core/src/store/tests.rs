@@ -1403,14 +1403,14 @@ fn open_rejects_db_with_schema_version_newer_than_supported() {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);\
-             INSERT INTO schema_migrations (version, applied_at) VALUES (101, '2020-01-01T00:00:00Z');",
+             INSERT INTO schema_migrations (version, applied_at) VALUES (102, '2020-01-01T00:00:00Z');",
         )
         .unwrap();
     }
     let result = SqliteStore::open(&path);
     assert!(matches!(
         result,
-        Err(StoreError::SchemaTooNew { found: 101, supported }) if supported == SCHEMA_VERSION
+        Err(StoreError::SchemaTooNew { found: 102, supported }) if supported == SCHEMA_VERSION
     ));
 }
 

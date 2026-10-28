@@ -106,9 +106,13 @@ impl Fixture {
 
     /// `(run_id, state, reason)` of every run of a thread, oldest first.
     fn runs(&self, thread: &str) -> Vec<(String, String, Option<String>)> {
+        // ADR 2026-10-28-cos-inbox-chat-summary D4: runs on the post-fallback summary request are
+        // new inputs, not continuations; they are left out here.
         self.rows(&format!(
-            "SELECT run_id,state,reason FROM chat_runs WHERE thread_id='{thread}' \
-             ORDER BY started_at, run_id"
+            "SELECT r.run_id,r.state,r.reason FROM chat_runs r \
+             JOIN chat_messages m ON m.id=r.input_message_id WHERE r.thread_id='{thread}' \
+             AND m.text NOT LIKE '{}%' ORDER BY r.started_at, r.run_id",
+            task_core::chat::triage::COS_FALLBACK_SUMMARY_PREFIX
         ))
     }
 

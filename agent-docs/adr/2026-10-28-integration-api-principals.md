@@ -21,3 +21,18 @@ Caller の extension が無く、actor が human:local になった。受信箱�
 
 根拠: [A1](2026-10-27-api-principals.md)、[A2](2026-10-27-event-principals.md)、
 [介入の主体](2026-10-27-decision-log-intervention-actors.md)。schema・本番 config の移行は不要。
+
+## 付記 A1（2026-10-28、実装の突き合わせ: 写す条件は principal の接頭辞）
+
+最初の実装は決定 4 の統合 event 5 種を actor を問わず recovery へ写していた。sweep が通常配送を検出すると
+`task_integration_save_sweep` 経由で `IntegrationMerged{actor:"sweep"}` を追記するため、正常に配送された task にも
+recovery 介入（actor_kind unknown）が 1 件ずつ数えられ、決定 4 の「sweep の検出は介入に含めない」に反した。
+
+- `task-core/src/store/decision_log.rs` の `intervention_of` は、統合 event 5 種を actor が認証した principal の形
+  （`human:`・`operator:`・`mcp:`・`cos:`、および CoS の分類済みの形 `cos_project:`・`cos_general:` で始まり、後ろが空でない）
+  のときだけ recovery に写す。それ以外（`sweep` などの自動処理・空の id）は `None`。旧値 `human:local` は介入のまま。
+- Retried・IntegrationAnswered など他の event の扱いは変えない。
+- wait の終了主体（`event_by`）は同じ関数を使うが、wait を閉じる event は question・approval・decision の系統だけで、
+  統合 event は wait を閉じない。sweep の event で `end_actor_kind` は変わらない。
+- human-ops の `event_interventions` は export の `intervention` 行を読む（`campaign/src/human_ops_join.rs`）ので、
+  同じ写像の結果になる。Python の写し（`scripts/dev/jev_*.py`）に統合 event を数える規則は無い。

@@ -6,6 +6,7 @@ use super::*;
 use crate::decision_log::*;
 use crate::decision_log_export::{ExportParams, build_campaign_export};
 use crate::execution::{BudgetKind, RunEnd};
+use crate::store::decision_log::intervention_of;
 
 fn now() -> OffsetDateTime {
     OffsetDateTime::UNIX_EPOCH
@@ -1022,4 +1023,140 @@ fn integration_dispositions_project_recovery_with_each_actor() {
                 .all(|r| r.kind == InterventionKind::Recovery && r.actor_kind == kind)
         );
     }
+}
+
+/// sweep が通常配送を検出して書いた統合の記録は介入に数えない。同じ task への operator の
+/// 処分だけが recovery の介入になる（ADR 2026-10-28-integration-api-principals 付記 A1）。
+#[test]
+fn sweep_integration_record_is_not_an_intervention() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    let task = super::tests::sample_task(Status::Draft);
+    s.create_task(&task, vec![]).unwrap();
+    s.task_campaign_set(
+        &task.id.to_string(),
+        &CampaignIdentity {
+            campaign_id: "sweep-integration".into(),
+            case_id: None,
+            arm: None,
+            repetition: None,
+            manifest_hash: None,
+            routing_setting: None,
+            variant: None,
+            variant_org: None,
+        },
+        now(),
+    )
+    .unwrap();
+    let repo_id = crate::RepoId::new();
+    let params = ExportParams {
+        campaign_id: "sweep-integration".into(),
+        manifest_hash: None,
+        export_cursor: None,
+    };
+    let intervention_rows =
+        |e: &crate::decision_log_export::CampaignExport| -> Vec<serde_json::Value> {
+            e.records
+                .iter()
+                .filter(|r| r["record_type"] == "intervention")
+                .cloned()
+                .collect()
+        };
+
+    // (1) sweep の IntegrationMerged だけ: 介入行なし、unknown も増えない。
+    s.append_event(
+        task.id,
+        &Event::IntegrationMerged {
+            repo_id,
+            branch: "b".into(),
+            head_sha: "h".into(),
+            actor: "sweep".into(),
+        },
+    )
+    .unwrap();
+    s.decision_log_project_interventions(&task.id.to_string())
+        .unwrap();
+    assert!(
+        s.decision_log_interventions_list(Some("sweep-integration"))
+            .unwrap()
+            .is_empty()
+    );
+    let e = s.decision_log_export_campaign(&params).unwrap();
+    assert!(intervention_rows(&e).is_empty());
+    assert!(
+        e.summary
+            .interventions_by_actor_kind
+            .values()
+            .all(|n| *n == 0)
+    );
+
+    // (2) 同じ task に operator の IntegrationHeld: recovery 1 件・operator で残る。
+    s.append_event(
+        task.id,
+        &Event::IntegrationHeld {
+            repo_id,
+            branch: "b".into(),
+            head_sha: "h".into(),
+            reason: "r".into(),
+            actor: "operator:claude-code".into(),
+        },
+    )
+    .unwrap();
+    for _ in 0..2 {
+        s.decision_log_project_interventions(&task.id.to_string())
+            .unwrap();
+    }
+    let rows = s
+        .decision_log_interventions_list(Some("sweep-integration"))
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].kind, InterventionKind::Recovery);
+    assert_eq!(rows[0].actor_kind, InterventionActorKind::ExternalOperator);
+    assert_eq!(rows[0].actor_id.as_deref(), Some("claude-code"));
+    let e = s.decision_log_export_campaign(&params).unwrap();
+    let ivs = intervention_rows(&e);
+    assert_eq!(ivs.len(), 1);
+    assert_eq!(ivs[0]["kind"], "recovery");
+    assert_eq!(ivs[0]["actor_kind"], "external_operator");
+    assert_eq!(
+        e.summary.interventions_by_actor_kind["external_operator"],
+        1
+    );
+    assert_eq!(e.summary.interventions_by_actor_kind["unknown"], 0);
+}
+
+#[test]
+fn integration_events_count_only_for_authenticated_principals() {
+    let repo_id = crate::RepoId::new();
+    let merged = |actor: &str| Event::IntegrationMerged {
+        repo_id,
+        branch: "b".into(),
+        head_sha: "h".into(),
+        actor: actor.into(),
+    };
+    for actor in ["human:local", "human:web", "operator:x", "mcp:c", "cos:t"] {
+        assert_eq!(
+            intervention_of(&merged(actor)),
+            Some((InterventionKind::Recovery, Some(actor))),
+            "{actor}"
+        );
+    }
+    for actor in [
+        "sweep",
+        "human:",
+        "operator:",
+        "cos:",
+        "daemon",
+        "auto-reintegrate",
+    ] {
+        assert_eq!(intervention_of(&merged(actor)), None, "{actor}");
+    }
+    // 他の event の扱いは変えない（主体が sweep でも Retried は介入）。
+    assert_eq!(
+        intervention_of(&Event::Retried {
+            from: crate::TaskId::new(),
+            by: Some("sweep".into()),
+        })
+        .map(|(k, _)| k),
+        Some(InterventionKind::Recovery)
+    );
 }

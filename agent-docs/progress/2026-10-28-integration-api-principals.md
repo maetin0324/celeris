@@ -59,6 +59,27 @@ Rust の試験用ビルドでは既存の `dagbench_pbs_e2e.rs` に未使用 imp
 注: この run の `TMPDIR`（93 byte）では unix socket の path が `SUN_LEN` を超え、browser_launcher の試験は bind で落ちる。
 上の試験は短い `TMPDIR`（`/local/celeris/data/scratch/t60jc`）で実行した。
 
+## sweep の統合記録を介入に数えない
+
+最終 review の指摘: sweep が書く `IntegrationMerged{actor:"sweep"}` が decision log で recovery 介入（unknown）に数えられ、
+ADR 決定 4 に反していた。
+
+- 修正（`sweep-not-intervention: 統合 event は認証した主体のときだけ介入に写す`）: `intervention_of` は統合 event 5 種を
+  actor が `human:`・`operator:`・`mcp:`・`cos:`（`cos_project:`・`cos_general:` を含む）で始まり後ろが空でないときだけ recovery に写す。
+  ADR に付記 A1 を足した。
+- 試験: `decision_log_tests::sweep_integration_record_is_not_an_intervention`（sweep の IntegrationMerged だけでは
+  介入行が無く interventions_by_actor_kind は全て 0、同じ task に operator:claude-code の IntegrationHeld を足すと
+  recovery 1 件・external_operator）と `integration_events_count_only_for_authenticated_principals`（sweep・空 id は None、
+  Retried は従来どおり）。
+- human-ops の event_interventions は export の intervention 行を読むので同じ結果。wait の終了主体は統合 event で閉じないので変わらない。
+  Python の写しに統合 event の規則は無い。
+
+証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）:
+
+- `cargo test -p task-core --lib -- decision_log` → 27 passed、0 failed。
+- `bash scripts/dev/test-affected.sh` → exit 0（6684 passed、21 skipped）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+
 ## 未解決
 
 なし。

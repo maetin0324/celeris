@@ -1005,6 +1005,11 @@ pub(crate) fn intervention_of(event: &crate::Event) -> Option<(InterventionKind,
         | Event::IntegrationDiscarded { actor, .. }
         | Event::IntegrationHeld { actor, .. }
         | Event::IntegrationReopened { actor, .. } => {
+            // 統合の処分は認証した主体の操作だけを介入に数える。sweep などの自動処理が
+            // 書いた記録は操作ではない（ADR 2026-10-28-integration-api-principals 付記 A1）。
+            if !is_operating_principal(actor) {
+                return None;
+            }
             (InterventionKind::Recovery, Some(actor.as_str()))
         }
         Event::ApprovalDecided { by, .. } | Event::Edited { by, .. } => {
@@ -1012,6 +1017,16 @@ pub(crate) fn intervention_of(event: &crate::Event) -> Option<(InterventionKind,
         }
         _ => return None,
     })
+}
+
+/// 認証した主体の形（`human:`・`operator:`・`mcp:`・`cos:`（`cos_project:`・`cos_general:` を含む）で
+/// 始まり、後ろが空でない）か。旧値 `human:local` も含む。
+fn is_operating_principal(actor: &str) -> bool {
+    matches!(
+        actor.split_once(':'),
+        Some(("human" | "operator" | "mcp" | "cos" | "cos_project" | "cos_general", rest))
+            if !rest.is_empty()
+    )
 }
 
 /// event の終了の主体（wait の `end_actor_kind`）。`by` を持たない event は `None`。

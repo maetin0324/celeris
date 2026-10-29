@@ -49,6 +49,14 @@ ADR: [2026-10-29-phase-integration-auto-repair](../adr/2026-10-29-phase-integrat
     [2026-10-29-sqlite-memstatus-off](../adr/2026-10-29-sqlite-memstatus-off.md)。
   - task-core の unit 試験 148 → 12 秒、task-dispatch 375 → 37 秒、`cargo test --workspace` 1772 → 829 秒。
 
+- `phase 1: 空の KB の根で cwd に index.json を書かないようにし、誤って入れた index.json を消す`（attempt 4。前回は repo の根に
+  `index.json`（KB 索引の派生物、items 0 件）を commit して差し戻し）
+  - 原因: `CELERIS_KNOWLEDGE_ROOT=`（空）で `celerisctl knowledge search` を repo の根で走らせると、根が `""` になり
+    `ensure_index` が cwd に `index.json` を書く（手元で再現）。前回 run の手元の操作で出た file とみられる。どの試験も
+    `CELERIS_KNOWLEDGE_ROOT` を空にしていない。
+  - `task-ops` `knowledge.rs`: `resolve_root` は空の path（flag・env・config）を指定なしとして扱う。`reindex` は空の根を拒む。
+    試験 `an_empty_root_writes_no_index`（新）と `the_root_comes_from_the_flag_then_the_env_then_the_config`（改）。
+
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - `cargo test --workspace`（run の TMPDIR、93 字のまま）→ exit 0、失敗 0（`test result: ok` 326 行）、829 秒
 - `bash scripts/dev/test-affected.sh` → exit 0（nextest 6729 passed、21 skipped）

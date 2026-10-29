@@ -48,10 +48,17 @@ fn is_retired(path: &str) -> bool {
 /// 知識ベースの根を決める。`~` は展開する。
 pub fn resolve_root(explicit: Option<&Path>, configured: Option<&Path>) -> PathBuf {
     let home = task_core::home_dir();
+    // 空の path は「指定なし」と同じ。空の根は cwd を指し、索引を作業ツリーに書いてしまう。
+    let given = |p: PathBuf| (!p.as_os_str().is_empty()).then_some(p);
     let raw = explicit
         .map(Path::to_path_buf)
-        .or_else(|| std::env::var_os("CELERIS_KNOWLEDGE_ROOT").map(PathBuf::from))
-        .or_else(|| configured.map(Path::to_path_buf))
+        .and_then(given)
+        .or_else(|| {
+            std::env::var_os("CELERIS_KNOWLEDGE_ROOT")
+                .map(PathBuf::from)
+                .and_then(given)
+        })
+        .or_else(|| configured.map(Path::to_path_buf).and_then(given))
         .unwrap_or_else(kb::default_root);
     task_core::expand_home(&raw, home.as_deref())
 }
@@ -401,6 +408,11 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
 
 /// ADR-0047 D1 / D3: `index.json` を作り直す（`_inbox` は入れない）。
 pub fn reindex(root: &Path) -> Result<Index, String> {
+    if root.as_os_str().is_empty() {
+        return Err(format!(
+            "知識ベースの根が空なので {INDEX_FILE} を書きません"
+        ));
+    }
     let last = last_commits(root);
     let mut items = Vec::new();
     for path in list_pages(root) {

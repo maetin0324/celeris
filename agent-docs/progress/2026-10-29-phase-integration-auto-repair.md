@@ -25,6 +25,15 @@ ADR: [2026-10-29-phase-integration-auto-repair](../adr/2026-10-29-phase-integrat
   - `browser_doctor_tests.rs`: unix socket を短い dir（`/tmp` の下の tempdir）に置く（run の TMPDIR は 93 字で `SUN_LEN` を超える）。
   - `classify_stage/tests.rs`: `set_default` の後に `tracing::callsite::rebuild_interest_cache()`（同じ process の他の試験が
     callsite の interest を無効で覚えていると log が出ない）。
+- `phase 1: 深い TMPDIR で socket を bind できない試験と tracing の interest 競合を直す`（attempt 2。前回は `cargo test --workspace` が
+  credentiald の broker 試験で落ちて不合格）
+  - unix socket を置く試験の一時 dir を `short_tempdir()`（TMPDIR が 40 字を超えるときは `/tmp` の下）に寄せた:
+    `task-worker` は `test_support::short_tempdir`、`celeris-credentiald`・`task-api`・`task-worker` の結合試験は各 file の同名 helper、
+    `celerisctl` と `task-api` `browser_waits` は `/tmp` の tempdir。
+  - `classify_stage/tests.rs`: dispatcher が 1 つだけだと tracing-core は callsite の interest を登録した thread の既定で決める
+    （`has_just_one`）。subscriber の無い別 thread が先に登録すると無効で固まるので、2 つ目の `Dispatch` を試験の間だけ生かす。
+- `phase 1: python の browser 試験にも短い TMPDIR を渡す`: `python_transport_security_regressions_are_part_of_workspace_gate` が
+  起動する python の unittest に短い `TMPDIR` を渡す（`AF_UNIX path too long`）。
 
 ## 試験
 - `dispatcher::tests::work_units::phase_integration_conflict_is_resolved_by_a_merge_repair_without_a_person`（新）: 内容衝突 →
@@ -35,14 +44,11 @@ ADR: [2026-10-29-phase-integration-auto-repair](../adr/2026-10-29-phase-integrat
   `sweep_leaves_requests_after_the_automatic_repair_and_delivery_requests`（新）。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
-- `bash scripts/dev/test-affected.sh` → exit 0（nextest 5448 passed、web の tsc・vitest も通過）
+- `cargo test --workspace`（run の TMPDIR、93 字のまま）→ exit 0、失敗 0（`test result: ok` 326 行）
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 5531 passed、21 skipped）
 - `cargo clippy --workspace -- -D warnings` → exit 0（`--all-targets` も exit 0）
 - `cargo fmt --all -- --check` → exit 0
-- `cargo test --workspace --no-fail-fast`（run の TMPDIR、93 字）→ exit 101、6672 passed / 104 failed。失敗は全て unix socket の
-  `SUN_LEN` 超過とその連鎖（credentiald・task-worker の browser・task-api の browser 試験・celerisctl）。
-- 同（TMPDIR を workspace 直下の短い dir にした）→ exit 101、6746 passed / 30 failed。残りは `celeris-credentiald` の
-  broker・injection 系、`task-worker` の browser launcher と `process_group`、`task-api` `browser_waits` の 1 件で、この変更が触れていない
-  crate の sandbox 由来の失敗（KB: credentiald broker 試験は sandbox でのみ失敗、worker sandbox は userns 不可）。main でも同じかは未確認。
+- 試験後に `/tmp/cz*` の残りは 0 件
 
 ## 本番への移行
 - config・migration の変更は無い。配備（release・promote）は人が行う。
@@ -53,7 +59,7 @@ ADR: [2026-10-29-phase-integration-auto-repair](../adr/2026-10-29-phase-integrat
 
 ## 未解決
 - 木の親 task（子が kind task の unit）の段の統合で repair WU が走る経路は、コードを読んで同じ経路と判断した。実 daemon での確認は未実施。
-- `cargo test --workspace` を sandbox の外で exit 0 にできるかは未確認（上の 30 件）。
 
 ## 提案
-- run の TMPDIR を短くする（例 `runs/<run>/t`）か、unix socket を bind する試験を共通の短い dir の helper に寄せる。
+- run の TMPDIR を短くする（例 `runs/<run>/t`）。今回は試験側を短い dir に寄せたが、新しい socket 試験が `tempfile::tempdir()` を
+  使うと同じ失敗が戻る。

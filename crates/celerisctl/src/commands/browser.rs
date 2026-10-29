@@ -207,7 +207,11 @@ mod tests {
 
     #[test]
     fn approve_talks_one_line_to_a_private_socket() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        // socket の path は sun_path（108 byte）に収まる必要がある。run の深い TMPDIR を避けて /tmp に置く。
+        let dir = tempfile::Builder::new()
+            .prefix("cz")
+            .tempdir_in("/tmp")
+            .expect("tempdir");
         let run = dir.path().join("run");
         std::fs::create_dir(&run).expect("mkdir");
         std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o700)).expect("chmod");

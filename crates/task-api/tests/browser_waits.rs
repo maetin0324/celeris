@@ -67,7 +67,12 @@ async fn real_broker_registration_keeps_sentinel_out_of_db_events_artifacts_and_
     use std::os::unix::fs::DirBuilderExt;
     let env = admin_env();
     let root = env.dir.path();
-    let runtime = root.join("runtime");
+    // socket の path は sun_path（108 byte）に収まる必要がある。run の深い TMPDIR を避けて /tmp に置く。
+    let sockets = tempfile::Builder::new()
+        .prefix("cz")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let runtime = sockets.path().join("runtime");
     let config = root.join("broker-config");
     let data = root.join("broker-data");
     for dir in [&runtime, &config, &data] {

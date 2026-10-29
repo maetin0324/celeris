@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn tmpdir_long_path_bind_unix_listener_binds_in_place() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = crate::test_support::short_tempdir().expect("tempdir");
         let dir = long_dir(tmp.path());
         let socket = dir.join("cdp-relay.sock");
         assert!(socket.as_os_str().len() > crate::browser_action::SUN_PATH_MAX);
@@ -750,7 +750,7 @@ mod tests {
 
     #[test]
     fn tmpdir_long_path_bind_unix_listener_short_path_unchanged() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = crate::test_support::short_tempdir().expect("tempdir");
         let socket = tmp.path().join("s.sock");
         let listener = bind_unix_listener(&socket).expect("bind");
         let addr = listener.local_addr().expect("addr");
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn tmpdir_long_path_bind_unix_listener_rejects_overlong_name_explicitly() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = crate::test_support::short_tempdir().expect("tempdir");
         let socket = tmp.path().join("n".repeat(120));
         let err = bind_unix_listener(&socket).expect_err("name alone exceeds sun_path");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
@@ -768,7 +768,7 @@ mod tests {
 
     #[test]
     fn tmpdir_long_path_shared_cdp_starts_and_cleans_up() {
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp = crate::test_support::short_tempdir().expect("tempdir");
         let dir = long_dir(tmp.path());
         let socket = dir.join("cdp-relay.sock");
         let devnull = || {

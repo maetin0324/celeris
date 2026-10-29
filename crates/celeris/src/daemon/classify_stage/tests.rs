@@ -383,7 +383,10 @@ async fn classification_log_shows_specificity_and_confidence_but_no_input_text()
             .with_ansi(false)
             .finish(),
     );
-    // 同じ process の他の試験が callsite の interest を「無効」で覚えていても、この subscriber で出す。
+    // dispatcher が 1 つだけだと、tracing-core は callsite の interest を「登録した thread の既定」で決める。
+    // subscriber の無い別の試験 thread が先に callsite を登録すると「無効」で固まるので、2 つ目の dispatcher を
+    // 試験の間だけ生かし、全 dispatcher に問い合わせる経路にする。そのうえで既に覚えた interest を作り直す。
+    let _second = tracing::Dispatch::new(tracing_subscriber::registry());
     tracing::callsite::rebuild_interest_cache();
     let mut missing = classified(Specificity::NeedsImplementation, 0.9);
     if let ClassifyOutcome::Classified { classification, .. } = &mut missing {

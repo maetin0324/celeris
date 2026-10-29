@@ -148,7 +148,7 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("l.sock");
     let registry = Registry::open(dir.path().join("state"), "inst-live").expect("registry");
     let backend = Arc::new(LiveBackend::default());
@@ -284,7 +284,7 @@ fn proxy(upstream: &Path, dir: &Path, rewrite: Option<u32>) -> Proxy {
 /// slot を閉じる（別 session の frame は誰にも届かない）。
 #[tokio::test]
 async fn browser_live_frame_session_mismatch_rejected() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("raw.sock");
     let listener = UnixListener::bind(&sock).expect("bind");
     // 2 枚目は 1 枚目を受け取った後に送る（close は保持中の frame を捨てるので順を固定する）。
@@ -651,7 +651,7 @@ async fn run_through(f: &Fixture, rewrite: Option<u32>) -> RunResult {
     let p = proxy(&f.sock, f.dir.path(), rewrite);
     let registry = Arc::new(LiveSessions::default());
     let seen = Arc::new(Mutex::new(None));
-    let workspace = tempfile::tempdir().expect("workspace");
+    let workspace = crate::test_support::short_tempdir().expect("workspace");
     let sink = RecordingSink::default();
     let policy = prepared();
     let outcome = run_registered(

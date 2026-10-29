@@ -136,7 +136,7 @@ fn task_policy(actions: &[BrowserAction]) -> BrowserTaskPolicy {
 
 #[test]
 fn p4c_fallback_ledger_parsing_and_refusal() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_support::short_tempdir().unwrap();
     let record = test_record(dir.path());
     let ids = conformant_backend_ids(&record).unwrap();
     assert!(ids.contains("acp") && ids.contains("claude-code"));
@@ -260,7 +260,7 @@ async fn p4c_conformance_backend_protocol() {
 
 #[test]
 fn production_backend_route_checks_existing_loop_without_claiming_sensitive_capabilities() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let mut req = request(temp.path());
     let grant = req
         .context
@@ -440,7 +440,7 @@ fn credential_policy(workspace: &Path) -> crate::browser_policy::PreparedBrowser
 /// evidence; the same case names without evidence stay refused.
 #[test]
 fn credential_use_is_released_only_by_p4b_evidence_in_the_ledger() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let policy = credential_policy(temp.path());
     let bare = p4b_record(temp.path(), &["acp"], false);
     let error = route_existing_backend("acp", &policy, &bare).unwrap_err();
@@ -465,7 +465,7 @@ fn credential_use_is_released_only_by_p4b_evidence_in_the_ledger() {
 /// not isolated are still refused.
 #[test]
 fn released_ledger_still_refuses_unconformant_backend_and_unisolated_runtime() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let policy = credential_policy(temp.path());
     let released = p4b_record(temp.path(), &["acp"], true);
     assert!(route_existing_backend("acp", &policy, &released).is_ok());
@@ -535,7 +535,7 @@ fn task_and_execution_isolate_sessions_and_prompt_describes_capability() {
 
 #[test]
 fn credential_segment_keeps_paths_when_policy_changes_to_harness() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let policy = temp.path().join("policy.json");
     write_private(&policy, crate::browser_credential::segment_policy()).unwrap();
     let before: serde_json::Value =
@@ -581,13 +581,13 @@ fn credential_harness_policy_removes_plugin_and_auth_actions() {
 
 #[test]
 fn event_forwarding_discards_untrusted_fields_and_constrains_artifact_paths() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let req = request(temp.path());
     let output = req.artifacts_dir.join("browser");
     std::fs::create_dir_all(&output).unwrap();
     std::fs::write(output.join("extract-a.json"), "{\"untrusted\":true}").unwrap();
     let secret = "PASSWORD_TOTP_DO_NOT_FORWARD";
-    let outside = tempfile::tempdir().unwrap();
+    let outside = crate::test_support::short_tempdir().unwrap();
     std::fs::write(outside.path().join("private"), secret).unwrap();
     std::os::unix::fs::symlink(
         outside.path().join("private"),
@@ -660,7 +660,7 @@ async fn execution_fallback_uses_fresh_session_and_refuses_without_conformance()
     if crate::test_support::skip_unless_userns_tests() {
         return;
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let record = test_record(temp.path());
     let executable = substrate(temp.path());
     let sink = RecordingSink::default();
@@ -698,7 +698,7 @@ async fn execution_fallback_uses_fresh_session_and_refuses_without_conformance()
         br#"{"schema":1,"source":"celeris-browser-conformance","results":[]}"#,
     )
     .unwrap();
-    let empty = tempfile::tempdir().unwrap();
+    let empty = crate::test_support::short_tempdir().unwrap();
     let error = run_with_executable_candidates_record(
         Arc::new(FailingHarness),
         vec![Arc::new(CliHarness {
@@ -727,7 +727,7 @@ async fn p4c_runner_record_routes_and_falls_back() {
     let record = PathBuf::from(
         std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE").expect("runner record path"),
     );
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let req = request(temp.path());
     let grant = req
         .context
@@ -1039,7 +1039,7 @@ async fn specialist_wraps_existing_harness_and_runs_same_browser_task() {
     if crate::test_support::skip_unless_userns_tests() {
         return;
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let record = test_record(temp.path());
     let executable = substrate(temp.path());
     let sink = RecordingSink::default();
@@ -1198,7 +1198,7 @@ impl EventSink for WaitSink {
 #[tokio::test]
 async fn sensitive_backend_is_refused_before_substrate_harness_and_wait_creation() {
     for id in ["acp", "claude-code"] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::test_support::short_tempdir().unwrap();
         let mut req = request(temp.path());
         req.task.status = Status::Ready;
         let grant = req
@@ -1254,7 +1254,7 @@ async fn sensitive_backend_is_refused_before_substrate_harness_and_wait_creation
 
 #[test]
 fn credential_request_origin_outside_effective_domain_is_denied() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let mut req = request(temp.path());
     let grant = req
         .context
@@ -1286,7 +1286,7 @@ async fn opencode_and_claude_share_supervised_browser_lifecycle_artifacts_and_cl
         return;
     }
     for (id, question) in [("acp", false), ("claude-code", true)] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::test_support::short_tempdir().unwrap();
         let executable = substrate(temp.path());
         let req = request(temp.path());
         let task_id = req.task.id;
@@ -1348,7 +1348,7 @@ async fn opencode_and_claude_share_supervised_browser_lifecycle_artifacts_and_cl
 
 #[tokio::test]
 async fn unsupported_adapter_and_missing_administrator_grant_fail_before_harness_execution() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let sink = RecordingSink::default();
     let absent = temp.path().join("must-not-launch");
     let req = request(temp.path());
@@ -1392,7 +1392,7 @@ async fn cleanup_failure_marks_browser_failed_instead_of_reporting_completion() 
     if crate::test_support::skip_unless_userns_tests() {
         return;
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let executable = substrate(temp.path());
     let script = std::fs::read_to_string(&executable).unwrap().replace(
         "command = args[args.index('--json') + 1:]",
@@ -1457,7 +1457,7 @@ async fn launch_uses_generated_policy_and_binds_its_hash_to_the_run() {
     if crate::test_support::skip_unless_userns_tests() {
         return;
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let executable = substrate(temp.path());
     let sink = RecordingSink::default();
     let mut req = request(temp.path());
@@ -1558,7 +1558,7 @@ async fn actions_and_domains_outside_task_policy_are_stopped_before_the_substrat
     if crate::test_support::skip_unless_userns_tests() {
         return;
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let executable = substrate(temp.path());
     let sink = RecordingSink::default();
     let outcome = run_with_executable(
@@ -1595,7 +1595,7 @@ async fn actions_and_domains_outside_task_policy_are_stopped_before_the_substrat
 
 #[tokio::test]
 async fn missing_empty_or_widening_task_policy_fails_before_any_process_starts() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let absent = temp.path().join("must-not-launch");
     let sink = RecordingSink::default();
     let mut credential = task_policy(&[BrowserAction::Snapshot]);
@@ -1656,7 +1656,7 @@ async fn missing_egress_resolver_inner() {
     if std::env::var("CELERIS_MISSING_EGRESS_INNER").is_err() {
         return;
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let exe = std::env::current_exe().unwrap();
     let bin = exe.parent().unwrap().parent().unwrap();
     configure_isolated_runtime(IsolatedBrowserConfig {
@@ -1795,7 +1795,7 @@ async fn production_action_path_inner() {
     }
     use std::net::TcpStream;
     use std::time::Instant;
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let sh = |command: &str| {
         assert!(
             std::process::Command::new("/bin/sh")
@@ -1963,7 +1963,7 @@ mod live_wiring {
 
     #[test]
     fn h3_injected_session_forward_events_stays_stopped_after_injection() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::test_support::short_tempdir().unwrap();
         let req = request(temp.path());
         let output = req.artifacts_dir.join("browser");
         std::fs::create_dir_all(&output).unwrap();
@@ -2016,7 +2016,7 @@ mod live_wiring {
 
     #[test]
     fn browser_live_forwarded_events_are_scrubbed_status_only() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::test_support::short_tempdir().unwrap();
         let req = request(temp.path());
         let output = req.artifacts_dir.join("browser");
         std::fs::create_dir_all(&output).unwrap();
@@ -2066,7 +2066,7 @@ mod live_wiring {
     /// consumes the lines instead of buffering them.
     #[test]
     fn browser_auth_section_forward_events_drops_progress_artifact_and_live() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::test_support::short_tempdir().unwrap();
         let req = request(temp.path());
         let output = req.artifacts_dir.join("browser");
         std::fs::create_dir_all(&output).unwrap();
@@ -2120,7 +2120,7 @@ mod live_wiring {
     /// progress・artifact・live event を流さず、session の終わりまで戻らない。
     #[test]
     fn browser_restored_session_forward_events_drops_until_session_end() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::test_support::short_tempdir().unwrap();
         let req = request(temp.path());
         let output = req.artifacts_dir.join("browser");
         std::fs::create_dir_all(&output).unwrap();
@@ -2224,7 +2224,7 @@ fn approved_click_wait(policy: &crate::browser_policy::PreparedBrowserPolicy) ->
 /// before it becomes a wait, and an approved operation only resumes under the same policy.
 #[test]
 fn approval_request_is_bound_to_the_policy_and_resumes_only_under_the_same_policy() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let req = click_approval_request(temp.path());
     let policy = prepared(&req);
     assert_eq!(
@@ -2489,7 +2489,7 @@ async fn click_approval_opens_a_wait_and_resumes_the_same_session_once() {
     if crate::test_support::skip_unless_userns_tests() {
         return;
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_support::short_tempdir().unwrap();
     let executable = substrate(temp.path());
     let mut req = click_approval_request(temp.path());
     req.task.status = Status::Ready;
@@ -2661,7 +2661,7 @@ async fn click_approval_opens_a_wait_and_resumes_the_same_session_once() {
 /// is retried, so an already-closed session is not reported as a cleanup failure.
 #[tokio::test]
 async fn cleanup_close_retries_a_prompt_failure() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_support::short_tempdir().unwrap();
     let cli = dir.path().join("fake-cli.py");
     crate::test_support::write_executable(
         &cli,

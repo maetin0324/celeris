@@ -183,3 +183,15 @@ pub(crate) fn assert_required_rules_in(prompt: &str) {
     // 現行の禁止事項（例）が実際に届く。
     assert!(prompt.contains("`unwrap()`（テスト以外）"), "{prompt}");
 }
+
+/// Unix socket を置く試験用の一時 dir。socket の path は `sun_path`（108 byte）に収まる必要があり、
+/// run の `TMPDIR` のような深い path の下では bind できないので、そのときは `/tmp` に作る。
+pub(crate) fn short_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let base = std::env::temp_dir();
+    let base = if base.as_os_str().len() > 40 {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        base
+    };
+    tempfile::Builder::new().prefix("cz").tempdir_in(base)
+}

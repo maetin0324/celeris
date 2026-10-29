@@ -64,7 +64,8 @@ impl SessionBackend for FakeBackend {
                 facts: self.facts.clone(),
                 log: Arc::clone(&self.log),
                 child,
-                output: tempfile::tempdir().map_err(|_| ErrorCode::LaunchFailed)?,
+                output: crate::test_support::short_tempdir()
+                    .map_err(|_| ErrorCode::LaunchFailed)?,
                 produced: Vec::new(),
             }),
             pid,
@@ -207,7 +208,7 @@ fn fake_launcher(facts: SessionFacts) -> FakeLauncher {
 }
 
 fn fake_launcher_with(facts: SessionFacts, test_loopback: Vec<String>) -> FakeLauncher {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("launcher.sock");
     let registry = Registry::open(dir.path().join("state"), "inst-test").expect("registry");
     let log = Arc::new(Mutex::new(Log::default()));
@@ -341,7 +342,7 @@ fn dropping_the_runtime_stops_the_launcher_session() {
 
 #[test]
 fn unreachable_launcher_fails_closed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let err = LauncherRuntime::start(&dir.path().join("missing.sock"), "t", "r", policy())
         .expect_err("no launcher");
     assert_eq!(err, UNAVAILABLE);
@@ -485,7 +486,7 @@ fn harness_actions_reach_the_launcher_through_the_gated_action_server() {
     )
     .expect("start");
     let runtime = Arc::new(runtime);
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("browser.action.sock");
     let server = ActionServer::start_with(
         &sock,
@@ -549,7 +550,7 @@ fn single_use_action_reaches_the_launcher_once() {
     )
     .expect("start");
     let runtime = Arc::new(runtime);
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("browser.action.sock");
     let server = ActionServer::start_with(
         &sock,
@@ -585,7 +586,7 @@ fn launcher_executor_refuses_unknown_and_malformed_artifact_requests() {
     let launcher = fake_launcher(good_facts());
     let (runtime, _) =
         LauncherRuntime::start(&launcher.sock, "task-1", "run-4", policy()).expect("start");
-    let out = tempfile::tempdir().expect("out");
+    let out = crate::test_support::short_tempdir().expect("out");
     let exec = LauncherExecutor::new(
         Arc::new(runtime),
         out.path().to_path_buf(),
@@ -632,7 +633,7 @@ fn default_runtime_is_the_daemon_path_and_launcher_skips_local_binaries() {
         super::super::BrowserRuntimeKind::default(),
         super::super::BrowserRuntimeKind::Daemon
     );
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let cfg = |runtime| super::super::IsolatedBrowserConfig {
         resolver: None,
         record_dir: dir.path().join("records"),
@@ -815,7 +816,7 @@ fn launcher_credential_rejects_uid_mismatch() {
 fn launcher_credential_shim_flags_follow_admission() {
     let policy = prepared("example.com");
     for admitted in [false, true] {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_support::short_tempdir().expect("tempdir");
         let runtime = dir.path().join("browser");
         write_shim_files(&runtime, "s", &policy, &policy.action_policy, &[], admitted)
             .expect("shim");
@@ -1023,7 +1024,7 @@ fn action_socket_path_is_short_and_fixed_length_for_a_deep_workspace() {
 
 #[test]
 fn action_socket_path_over_the_limit_fails_before_bind_with_path_and_length() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let base = dir.path().join("b".repeat(100));
     let err = crate::browser_action::action_socket_path_in(&base, &deep_session_dir())
         .expect_err("too long");
@@ -1046,7 +1047,7 @@ fn action_socket_path_over_the_limit_fails_before_bind_with_path_and_length() {
 #[test]
 fn action_socket_dir_must_be_private_to_this_user() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sockets = dir.path().join(format!(
         "celeris-browser-{}",
         nix::unistd::geteuid().as_raw()
@@ -1117,7 +1118,7 @@ fn launcher_shim_files_pass_load_policy_and_gate_navigation_by_origin() {
     {
         let policy = prepared(origin);
         let launcher = fake_launcher(good_facts());
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_support::short_tempdir().expect("tempdir");
         let runtime_dir = dir
             .path()
             .join("runs")
@@ -1253,7 +1254,7 @@ fn egress_test_loopback_production_daemon_refuses_launcher_without_hello() {
     use crate::browser_launcher::Response;
     use crate::browser_launcher::protocol::{read_frame, write_message};
     // hello を知らない（旧版の）launcher: 未知の要求に bad_request を返して閉じる。
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("old.sock");
     let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
     let server = std::thread::spawn(move || {
@@ -1317,7 +1318,7 @@ fn denied_text(err: AdapterError) -> String {
 /// socket 未設定）がどれか欠ければ、launcher socket に 1 度も接続せず従来の文言で拒否する。
 #[tokio::test]
 async fn launcher_credential_preconnect_unmet_conditions_refuse_without_connecting() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("launcher.sock");
     let listener = counting_listener(&sock);
     let credd = dir.path().join("credd-runtime");
@@ -1354,7 +1355,7 @@ async fn launcher_credential_preconnect_unmet_conditions_refuse_without_connecti
 /// 接続後に必ず拒否されるので接続前に拒否する。
 #[tokio::test]
 async fn launcher_credential_preconnect_unadmittable_wait_refuses_without_connecting() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("launcher.sock");
     let listener = counting_listener(&sock);
     let credd = dir.path().join("credd-runtime");
@@ -1385,7 +1386,7 @@ async fn launcher_credential_preconnect_unadmittable_wait_refuses_without_connec
 #[tokio::test]
 async fn launcher_credential_preconnect_proof_failure_stops_session_before_credentiald() {
     let launcher = fake_launcher(good_facts());
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let control = celeris_credentiald::injection_ipc::injection_socket(dir.path())
         .with_file_name("control.sock");
     let credd = counting_listener(&control);
@@ -1414,7 +1415,7 @@ async fn launcher_credential_preconnect_proof_failure_stops_session_before_crede
 #[tokio::test]
 async fn launcher_credential_preconnect_met_conditions_connect_to_the_launcher() {
     let launcher = fake_launcher(good_facts());
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let _ = open_launcher_session(
         LauncherTarget {
             socket: &launcher.sock,
@@ -1598,7 +1599,7 @@ fn done_outcome() -> Result<RunOutcome, AdapterError> {
 /// wait に入るのは origin / purpose / policy_id だけ（credential 値も operation intent も無し）。
 #[test]
 fn launcher_credential_request_opens_a_waiting_for_auth_wait_and_questions() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let runtime = dir.path().join("browser");
     write_request(
         &runtime,
@@ -1679,7 +1680,7 @@ fn launcher_credential_request_outside_policy_is_refused_without_a_wait() {
         ),
     ];
     for (name, request, policy) in cases {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_support::short_tempdir().expect("tempdir");
         let runtime = dir.path().join("browser");
         write_request(&runtime, "credential-request.json", &request);
         let sink = RecordingWaitSink::new(true);
@@ -1721,7 +1722,7 @@ fn launcher_credential_request_takes_priority_over_approval_request() {
         "origin": "https://example.com",
         "purpose": "Press export",
     });
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let runtime = dir.path().join("browser");
     write_request(
         &runtime,
@@ -1772,7 +1773,7 @@ fn launcher_credential_request_takes_priority_over_approval_request() {
 /// wait を開けなければ `Err`（fail closed）。Question を返して人に届かない wait を作らない。
 #[test]
 fn launcher_credential_request_without_a_wait_store_is_an_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let runtime = dir.path().join("browser");
     write_request(
         &runtime,
@@ -1807,7 +1808,7 @@ fn launcher_credential_request_keeps_the_secret_out_of_wait_events_and_state() {
     let task_id = task_core::TaskId::new();
 
     // 秘密を未知の欄に混ぜた request: 拒否され、wait は開かず、文言にも出ない。
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let runtime = dir.path().join("browser");
     let mut smuggled = credential_request_json("pol-example", "https://example.com", "Register");
     smuggled["credential"] = serde_json::json!(SECRET);
@@ -1833,7 +1834,7 @@ fn launcher_credential_request_keeps_the_secret_out_of_wait_events_and_state() {
 
     // 正しい request: shim が同じ runtime dir に秘密を書き残していても、wait・browser 更新・
     // outcome のどこにも秘密は出ない（wait の `credential` は常に `None`）。
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let runtime = dir.path().join("browser");
     write_request(
         &runtime,
@@ -1917,7 +1918,7 @@ fn launcher_run_request(workspace: &Path) -> RunRequest {
 #[tokio::test]
 async fn launcher_run_creates_shim_files_once_and_reaches_the_harness() {
     let launcher = fake_launcher(good_facts());
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let policy = prepared("example.com");
     let sink = LauncherRunSink::default();
     let outcome = run(
@@ -1979,7 +1980,7 @@ fn launcher_admitted_shim_config_replaces_only_the_config() {
         ],
         &[],
     );
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let runtime_dir = dir.path().join("browser");
     write_shim_files(
         &runtime_dir,
@@ -2168,7 +2169,7 @@ fn limits() -> RunLimits {
 /// 最後の wait が承認待ちなので、承認 wait を二度開かない（再要求の繰り返しにならない）。
 #[tokio::test]
 async fn launcher_registered_credential_opens_an_approval_wait_without_a_session() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("launcher.sock");
     let listener = counting_listener(&sock);
     let credd = dir.path().join("credd");
@@ -2261,7 +2262,7 @@ async fn launcher_registered_credential_opens_an_approval_wait_without_a_session
 /// 無し）は承認 wait を開かず、launcher にも接続しない。
 #[tokio::test]
 async fn launcher_registered_credential_outside_policy_fails_closed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("launcher.sock");
     let listener = counting_listener(&sock);
     let policy = credential_policy();
@@ -2300,7 +2301,7 @@ async fn launcher_registered_credential_outside_policy_fails_closed() {
 /// 接続する前に拒否し、承認を消費しない。
 #[tokio::test]
 async fn launcher_stale_credential_approval_is_refused_before_connecting() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("launcher.sock");
     let listener = counting_listener(&sock);
     let credd = dir.path().join("credd");
@@ -2608,7 +2609,7 @@ mod launcher_login {
     async fn launcher_credential_login_navigates_injects_submits_and_consumes_the_granted_lease() {
         let chrome = ChromeFixture::start();
         let brokers = Arc::new(Mutex::new(0));
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_support::short_tempdir().expect("tempdir");
         let sock = dir.path().join("launcher.sock");
         let server = LauncherServer::bind(
             &sock,
@@ -2626,7 +2627,7 @@ mod launcher_login {
         .expect("bind");
         let _handle = server.spawn().expect("spawn");
         let task_id = task_core::TaskId::new();
-        let credd = tempfile::tempdir().expect("credd");
+        let credd = crate::test_support::short_tempdir().expect("credd");
         credentiald(credd.path(), &chrome.origin, &task_id.to_string());
         let run_dir = credd.path().join("run");
         let (runtime, _) = LauncherRuntime::start(&sock, "task-1", "run-login", policy())
@@ -2734,7 +2735,7 @@ mod launcher_login {
         std::fs::write(chrome.directory.path().join("consent"), "1").expect("consent flag");
         let o = origins(&chrome);
         let brokers = Arc::new(Mutex::new(0));
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_support::short_tempdir().expect("tempdir");
         let sock = dir.path().join("launcher.sock");
         let server = LauncherServer::bind(
             &sock,
@@ -2761,7 +2762,7 @@ mod launcher_login {
                 "input[name=_shib_idp_consentOptions][value=_shib_idp_doNotRememberConsent]".into(),
             ),
         });
-        let credd = tempfile::tempdir().expect("credd");
+        let credd = crate::test_support::short_tempdir().expect("credd");
         credentiald_with(
             credd.path(),
             &CredentialPolicy {
@@ -2859,7 +2860,7 @@ mod launcher_login {
         std::fs::write(chrome.directory.path().join("consent"), "1").expect("consent flag");
         let o = origins(&chrome);
         let brokers = Arc::new(Mutex::new(0));
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_support::short_tempdir().expect("tempdir");
         let sock = dir.path().join("launcher.sock");
         let server = LauncherServer::bind(
             &sock,
@@ -2879,7 +2880,7 @@ mod launcher_login {
         let task_id = task_core::TaskId::new();
         let mut trusted = post_login_trusted(&o, &[o.lms.as_str()]);
         trusted.policy_id = POLICY_ID.into();
-        let credd = tempfile::tempdir().expect("credd");
+        let credd = crate::test_support::short_tempdir().expect("credd");
         credentiald_with(
             credd.path(),
             &CredentialPolicy {
@@ -2993,7 +2994,7 @@ mod launcher_login {
         let chrome = ChromeFixture::start_with(&FIXTURE);
         let o = origins(&chrome);
         let brokers = Arc::new(Mutex::new(0));
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_support::short_tempdir().expect("tempdir");
         let sock = dir.path().join("launcher.sock");
         let server = LauncherServer::bind(
             &sock,
@@ -3013,7 +3014,7 @@ mod launcher_login {
         let task_id = task_core::TaskId::new();
         let mut trusted = post_login_trusted(&o, &[o.lms.as_str()]);
         trusted.policy_id = POLICY_ID.into();
-        let credd = tempfile::tempdir().expect("credd");
+        let credd = crate::test_support::short_tempdir().expect("credd");
         credentiald_with(
             credd.path(),
             &CredentialPolicy {
@@ -3158,7 +3159,7 @@ mod launcher_login {
                 .is_some_and(|t| t.contains("Due 2026-10-20"))
         );
         agent.goto(&format!("{}/ct/home", o.lms), &format!("{}/ct/home", o.lms));
-        let downloads = tempfile::tempdir().expect("downloads");
+        let downloads = crate::test_support::short_tempdir().expect("downloads");
         chrome
             .controller
             .lock()
@@ -3671,7 +3672,7 @@ fn launcher_artifacts_reach_the_run_output_through_the_v8_transfer() {
         LauncherRuntime::start(&launcher.sock, "task-1", "run-a1", artifact_policy())
             .expect("start");
     let runtime = Arc::new(runtime);
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let output = dir.path().join("output");
     std::fs::create_dir(&output).expect("output");
     let executor = Arc::new(LauncherExecutor::new(
@@ -3732,7 +3733,7 @@ fn launcher_artifacts_refuse_types_sizes_counts_and_canceled_downloads() {
     let (runtime, _) =
         LauncherRuntime::start(&launcher.sock, "task-1", "run-a2", artifact_policy())
             .expect("start");
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let exec = LauncherExecutor::new(
         Arc::new(runtime),
         dir.path().to_path_buf(),
@@ -3809,7 +3810,7 @@ fn launcher_artifacts_fail_closed_with_a_reason_below_protocol_8() {
     let (runtime, _) =
         LauncherRuntime::start(&launcher.sock, "task-1", "run-a3", artifact_policy())
             .expect("start");
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let exec = LauncherExecutor::new(Arc::new(runtime), dir.path().to_path_buf(), 7);
     for (verb, args) in [
         ("download", vec!["@e1".to_string()]),
@@ -3922,7 +3923,7 @@ fn launcher_shim_download_lands_in_the_run_output_as_a_readable_pdf() {
     let launcher = fake_launcher(good_facts());
     let pdf = big_pdf();
     launcher.log.lock().expect("lock").artifact_body = Some(Ok(pdf.clone()));
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let runtime_dir = dir.path().join("runs").join("run-pdf").join("browser");
     let (cli, action_socket) = write_shim_files(
         &runtime_dir,
@@ -4051,7 +4052,7 @@ fn registered_credential_describe_failures_reopen_manual_registration() {
     let policy = credential_policy();
     let wait = registered_wait(&policy);
     for code in ["denied", "vault_locked", "not_found", "invalid_request"] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_support::short_tempdir().unwrap();
         let answered =
             fake_credentiald_reply(dir.path(), serde_json::json!({"success":false,"code":code}));
         let sink = RegisteredSink::new(vec![wait.clone()]);
@@ -4070,7 +4071,7 @@ fn registered_credential_describe_failures_reopen_manual_registration() {
         assert!(sink.opened()[0].credential.is_none());
         answered.join().unwrap();
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_support::short_tempdir().unwrap();
     let sink = RegisteredSink::new(vec![wait.clone()]);
     assert!(
         crate::browser::registered_credential_approval(
@@ -4121,7 +4122,7 @@ fn launcher_shim_download_failure_carries_the_fixed_tokens_only() {
         ],
     );
     let launcher = fake_launcher(good_facts());
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let runtime_dir = dir.path().join("runs").join("run-fail").join("browser");
     let (cli, action_socket) = write_shim_files(
         &runtime_dir,
@@ -4222,7 +4223,7 @@ fn saved_credential_reuse_waits_every_run_and_falls_back_without_secrets() {
         fn progress(&self, _: &str) {}
         fn artifact(&self, _: &task_core::ArtifactRef) {}
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_support::short_tempdir().unwrap();
     std::fs::set_permissions(
         dir.path(),
         <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),

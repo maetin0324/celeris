@@ -28,7 +28,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let root = tempfile::tempdir().expect("tempdir");
+        let root = short_tempdir().expect("tempdir");
         let config = root.path().join("config");
         let data = root.path().join("data");
         fs::create_dir(&config).expect("config");
@@ -299,7 +299,7 @@ fn concurrent_resolve_only_one_wins() {
 #[test]
 fn retired_plugin_bridge_never_connects_or_echoes_input() {
     use std::os::unix::net::UnixListener;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = short_tempdir().expect("tempdir");
     let path: PathBuf = dir.path().join("resolve.sock");
     let listener = UnixListener::bind(&path).expect("bind");
     listener.set_nonblocking(true).unwrap();
@@ -323,7 +323,7 @@ fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
             let _ = self.0.wait();
         }
     }
-    let root = tempfile::tempdir().expect("tempdir");
+    let root = short_tempdir().expect("tempdir");
     let home = root.path().join("home");
     let runtime = root.path().join("runtime");
     fs::create_dir(&home).expect("home");
@@ -589,7 +589,7 @@ fn different_run_session_or_revision_cannot_reuse_lease() {
 #[test]
 fn invalid_control_process_id_is_rejected() {
     use std::process::{Command, Stdio};
-    let root = tempfile::tempdir().expect("tempdir");
+    let root = short_tempdir().expect("tempdir");
     let home = root.path().join("home");
     let runtime = root.path().join("runtime");
     fs::create_dir(&home).expect("home");
@@ -915,4 +915,16 @@ fn multiple_saved_credentials_revalidate_the_selected_reference() {
             .reusable_reference("owner", &second, "https://example.test", &login)
             .unwrap()
     );
+}
+
+/// Unix socket を置く試験用の一時 dir。socket の path は `sun_path`（108 byte）に収まる必要があり、
+/// run の `TMPDIR` のような深い path の下では bind できないので、そのときは `/tmp` に作る。
+fn short_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let base = std::env::temp_dir();
+    let base = if base.as_os_str().len() > 40 {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        base
+    };
+    tempfile::Builder::new().prefix("cz").tempdir_in(base)
 }

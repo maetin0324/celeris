@@ -3,6 +3,7 @@
 //! `post_webhook` → `record`）を偽 webhook（127.0.0.1 の TCP）に向けて回す。外部ネットワークに出ず、
 //! 時刻は固定値を渡す。待ちは webhook の受信を出来事として待ち、sleep しない。
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../tests/support/http_async.rs"]
 mod fake_http;
 

@@ -11,7 +11,7 @@ pub const OPS: &str = "/api/v1/cos/operations";
 pub fn cos_bearer(env: &TestEnv, key: &str) -> (String, String, String) {
     let store = &env.store;
     let now = OffsetDateTime::now_utc();
-    let thread = super::project_cos_thread(&store, &task_core::ProjectId::new().to_string());
+    let thread = super::project_cos_thread(store, &task_core::ProjectId::new().to_string());
     store
         .chat_message_post(
             &thread.id,

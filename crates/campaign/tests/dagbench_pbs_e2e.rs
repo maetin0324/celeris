@@ -19,7 +19,7 @@ use celeris_campaign::{
     celeris_exec::{HttpResponse, Transport},
     dagbench::{
         celeris_side::{CelerisSide, Paths, RunSpec},
-        ext::{ExtBackend, ExtConfig},
+        ext::ExtConfig,
         pbs::{
             backend::{Arm, CONSUMED_LEDGER, RecoverySpec},
             entry::{

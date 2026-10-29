@@ -1,8 +1,11 @@
 //! Shared fixture reader regression: probes must not consume a one-shot reply.
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../tests/support/http_async.rs"]
 mod asynchronous;
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../tests/support/http_request.rs"]
 mod framing;
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../tests/support/http_sync.rs"]
 mod synchronous;
 

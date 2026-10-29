@@ -1,5 +1,6 @@
 //! Shared fake-server reader. Reject probes before recording or consuming scripted replies.
 #![allow(dead_code)]
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "http_request.rs"]
 mod framing;
 pub use framing::matches;

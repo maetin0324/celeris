@@ -1,5 +1,6 @@
 //! Shared actor-trace fixture. Extend by adding helpers; keep existing semantics stable.
 #![allow(dead_code)]
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../../tests/support/http_async.rs"]
 mod fake_http;
 

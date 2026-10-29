@@ -124,9 +124,7 @@ pub fn k3_grading(root: &Path) -> Option<Grading> {
             std::path::PathBuf::from("/local/celeris/data/workspaces/01M45ACZQWTW9BP8WVY8KAW9TC/artifacts/locusta-latency/raw/main-43223.tgz"),
         ])
         .find(|p| p.is_file());
-    let Some(tgz) = tgz else {
-        return None;
-    };
+    let tgz = tgz?;
     assert_eq!(
         sha(&fs::read(&tgz).unwrap()),
         "bdb155d4c1690ae5743621d129c270fcc53c919751d62c56d0c4395b74d2e90f",

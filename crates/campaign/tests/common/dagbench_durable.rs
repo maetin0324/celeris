@@ -160,13 +160,12 @@ fn run_inner(p: &Params, s: &RunSpec) -> Result<(), Box<dyn std::error::Error>> 
         p.out.join("durable-wait.json"),
         serde_json::to_vec_pretty(&snapshot)?,
     )?;
-    if let Some(g) = &s.grading {
-        if p.out
+    if let Some(g) = &s.grading
+        && p.out
             .join(format!("artifacts/c0/{}.attempts", g.node))
             .exists()
-        {
-            return Err("graded downstream ran before external recovery".into());
-        }
+    {
+        return Err("graded downstream ran before external recovery".into());
     }
     let before = read_ledger(&ledger)?;
     if before.iter().any(|e| {

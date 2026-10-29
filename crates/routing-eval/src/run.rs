@@ -1,5 +1,6 @@
 //! Submit frozen manifest problems as Celeris evaluation trials.
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../tests/support/http_sync.rs"]
 mod fake_http;
 

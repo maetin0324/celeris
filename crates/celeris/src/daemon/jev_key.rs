@@ -4,6 +4,7 @@
 //! 未登録・空・読めない場合は `None`（`JevError::KeyMissing` → 既存の credential 待ちへ）。値は log・Debug・エラーに出さない。
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../../tests/support/http_async.rs"]
 mod fake_http;
 

@@ -11,6 +11,7 @@
 //! 時間に依存しない（fallback は run の失敗で即決まり、待ち時間の経過に頼らない）。
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../tests/support/http_async.rs"]
 mod fake_http;
 

@@ -55,10 +55,11 @@ impl ExtBackend for DurableBackend {
     fn wait_started(&mut self, l: &str) -> io::Result<()> {
         self.inner.wait_started(l)?;
         self.seen.insert(l.into());
-        if self.nth == Some(self.seen.len()) && self.selected.is_none() {
-            if let Lookup::Known { physical_id, .. } = self.inner.lookup(l)? {
-                self.selected = Some((l.into(), physical_id));
-            }
+        if self.nth == Some(self.seen.len())
+            && self.selected.is_none()
+            && let Lookup::Known { physical_id, .. } = self.inner.lookup(l)?
+        {
+            self.selected = Some((l.into(), physical_id));
         }
         Ok(())
     }

@@ -7,6 +7,7 @@
 //! → 同じ work unit が一度だけ再キューされる。待ちは DB の状態の出来事で判定し、時間では待たない。
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../tests/support/http_async.rs"]
 mod fake_http;
 

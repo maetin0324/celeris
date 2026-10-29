@@ -7,6 +7,7 @@
 //! 走らない（userns の実走は不要）。
 #![allow(dead_code)]
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../tests/support/http_sync.rs"]
 mod fake_http;
 

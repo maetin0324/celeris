@@ -627,7 +627,7 @@ fn pbs_backend_baseline_stops_on_unresolved_submit() {
         )
         .expect("open");
         let mut b = baseline(dir.path());
-        let err = b.run(&mut ext).err().expect("stops");
+        let err = b.run(&mut ext).expect_err("stops");
         assert!(format!("{err:?}").contains("unresolved"), "{err:?}");
         for id in ["exp-uring", "exp-posix"] {
             assert_ne!(b.state().nodes[id].status, Status::Done, "{id}");
@@ -662,7 +662,7 @@ fn pbs_backend_history_loss_and_record_mismatch_are_not_unknown() {
         &[("queue", "debug")],
     )));
     b.submit("exp-uring", 0).expect("io").expect("accepted");
-    let err = b.lookup("exp-uring").err().expect("history missing");
+    let err = b.lookup("exp-uring").expect_err("history missing");
     assert!(err.to_string().contains("history missing"), "{err}");
     match b.lookup("exp-uring").expect("lookup") {
         Lookup::Unresolved { reason, .. } => assert!(reason.contains("queue"), "{reason}"),

@@ -1,6 +1,7 @@
 //! ローカルの fake HTTP server（127.0.0.1 の TcpListener）に対する結合試験。実 API・外部ネットワークには出ない。
 //! 遅延は server 側の注入フック（`Reply::Delay`）で作り、timeout の試験は tokio の時計を pause する。CPU 負荷は掛けない。
 
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../tests/support/http_async.rs"]
 mod fake_http;
 

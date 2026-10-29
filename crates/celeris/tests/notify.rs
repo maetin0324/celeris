@@ -10,6 +10,7 @@
 //!   `bad_news` の束ね、`milestone_ready` の新しい意味。
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../tests/support/http_async.rs"]
 mod fake_http;
 

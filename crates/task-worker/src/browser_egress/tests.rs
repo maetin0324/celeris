@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../../tests/support/http_async.rs"]
 mod fake_http;
 
@@ -691,7 +692,7 @@ async fn echo_listener() -> (u16, tokio::task::JoinHandle<()>) {
                     tokio::spawn(async move {
                         let mut b = [0u8; 1];
                         if socket.read_exact(&mut b).await.is_ok()
-                            && b == [b'x']
+                            && b == *b"x"
                             && socket.write_all(&b).await.is_ok()
                         {
                             let _ = echoed.send(()).await;

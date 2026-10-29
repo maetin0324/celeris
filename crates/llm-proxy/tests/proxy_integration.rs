@@ -858,7 +858,7 @@ async fn claude_429_without_unified_status_is_refused_without_a_cooldown() {
     let guard = book.lock().expect("lock");
     for id in ["acct-a", "acct-b"] {
         assert!(
-            guard.state(id).and_then(|s| s.cooldown.clone()).is_none(),
+            guard.state(id).and_then(|s| s.cooldown).is_none(),
             "{id} must not get a Throttled cooldown"
         );
     }

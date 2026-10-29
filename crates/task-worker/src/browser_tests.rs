@@ -1430,7 +1430,10 @@ async fn cleanup_failure_marks_browser_failed_instead_of_reporting_completion() 
 #[test]
 fn python_transport_security_regressions_are_part_of_workspace_gate() {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // python 側の試験も TMPDIR の下に AF_UNIX socket を作るので、深い TMPDIR を短い dir に差し替える。
+    let tmp = crate::test_support::short_tempdir().unwrap();
     let result = std::process::Command::new("python3")
+        .env("TMPDIR", tmp.path())
         .args([
             "-m",
             "unittest",

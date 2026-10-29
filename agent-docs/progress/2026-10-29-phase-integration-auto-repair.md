@@ -42,10 +42,16 @@ ADR: [2026-10-29-phase-integration-auto-repair](../adr/2026-10-29-phase-integrat
   「自動の解消が失敗」と repair WU の key が出る。
 - `task-ops` `sweep_hands_unrepaired_phase_requests_back_to_the_automatic_repair`・
   `sweep_leaves_requests_after_the_automatic_repair_and_delivery_requests`（新）。
+- `phase 1: SQLite の memory 統計を load 時に切り、cargo test の futex 競合をなくす`（attempt 3。前回は `cargo test --workspace` が
+  評価器の上限 1200 秒で打ち切られた。手元でも 1772 秒）
+  - 1 process の試験 thread 群が bundled SQLite の memory 統計の mutex で競合していた（task-dispatch の unit 試験で kernel 時間 6563 秒）。
+    `task-core` `sqlite_process.rs`（新）が `.init_array` で `SQLITE_CONFIG_MEMSTATUS` を 0 にする。ADR
+    [2026-10-29-sqlite-memstatus-off](../adr/2026-10-29-sqlite-memstatus-off.md)。
+  - task-core の unit 試験 148 → 12 秒、task-dispatch 375 → 37 秒、`cargo test --workspace` 1772 → 829 秒。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
-- `cargo test --workspace`（run の TMPDIR、93 字のまま）→ exit 0、失敗 0（`test result: ok` 326 行）
-- `bash scripts/dev/test-affected.sh` → exit 0（nextest 5531 passed、21 skipped）
+- `cargo test --workspace`（run の TMPDIR、93 字のまま）→ exit 0、失敗 0（`test result: ok` 326 行）、829 秒
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 6729 passed、21 skipped）
 - `cargo clippy --workspace -- -D warnings` → exit 0（`--all-targets` も exit 0）
 - `cargo fmt --all -- --check` → exit 0
 - 試験後に `/tmp/cz*` の残りは 0 件

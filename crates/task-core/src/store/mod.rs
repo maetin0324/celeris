@@ -870,6 +870,7 @@ impl SqliteStore {
         options: &StoreOptions,
         path: Option<&Path>,
     ) -> Result<Self, StoreError> {
+        crate::sqlite_process::keep_linked();
         Self::configure_pragmas(&conn, options)?;
         Self::migrate(&mut conn)?;
         Self::backfill_legacy_cos(&mut conn)?;

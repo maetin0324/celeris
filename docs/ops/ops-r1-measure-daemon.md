@@ -26,7 +26,7 @@ sh scripts/campaign/ops-r1-measure-config.sh \
 - 無 LLM の通し（試験・preflight）は `--harness stub --stub-command <stub>`。harness id は `claude_code` のまま `kind = "fake"` になり、`[adapters.fake]` が stub を起こす。実測定との差は harness・source・adapter の 3 節だけ。
 
 書かれるもの:
-- daemon.toml: db・`[[api.tokens]]` の token・`[knowledge] root`（`default_mounts = ["kb:trial"]`、langmem・gc 無効）・workspace・scratch を `--state` の下、`[cos] enabled = true`・`[cos.triage] policy_version = "6"`・`[cos] route_candidates`・`[route_defaults.claude_code]`、`max_concurrency = 1`・`max_requeues = 0`・`[execution] max_parallel_work_units = 1`・`[execution.tree] max_parallel_child_tasks = 1`。
+- daemon.toml: db・`[[api.tokens]]` の token・`[knowledge] root`（`default_mounts = ["kb:trial"]`、langmem・gc 無効）・workspace・scratch を `--state` の下、`[cos] enabled = true`・`[cos.triage] policy_version = "6"`・`[cos] route_candidates`・`[route_defaults.claude_code]`・`[harness_selection]`（全 task を claude_code へ。無いと CoS が起票した task が route されない）、`max_concurrency = 1`・`max_requeues = 0`・`[execution] max_parallel_work_units = 1`・`[execution.tree] max_parallel_child_tasks = 1`。
 - `--state` の下: `token`（0600、既にあれば保つ）、`kb/skills/<name>/`（repo の `config/skills` の各 skill。毎回作り直す）、`ws/`、`scratch/`、`setup/project.json`（試行専用の案件の body）。
 
 ## 2. 起動と確認
@@ -50,7 +50,9 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"project_id":"<project_id>"}' http://127.0.0.1:<port>/api/v1/chat/threads  # → 案件 CoS thread
 ```
 
-人の依頼は `POST /api/v1/chat/threads/<thread_id>/messages` で入れる（ops-r1 では `celeris-campaign ops-r1-intake`）。
+人の依頼は `POST /api/v1/chat/threads/<thread_id>/messages` で入れる（ops-r1 では `celeris-campaign ops-r1-intake`）。生成 config の token は `operator:ops-r1` なので、この token で送った message の author は operator になる（人の principal で送る経路は未決定）。
+
+無 LLM の通しは `cargo nextest run -p celeris --test ops_r1_measure` が確かめる（stub harness で 人の message → CoS の起票 → worker run → CoS の報告 message、health の `cos_policy_version` = "6"）。
 
 ## 試行 1 回の上限
 

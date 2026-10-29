@@ -211,6 +211,12 @@ policy_version = "6"
 [route_defaults.claude_code]
 candidates = [{ source = "$SOURCE", model = "$RUN_MODEL" }]
 
+# 全 task（genre・role・execution class によらず）を claude_code に送る。無いと CoS が起票した task が
+# 「no eligible harness is declared」で route されない（measure-e2e で判明）。
+[harness_selection]
+rules = [{ required_capabilities = [], harness = "claude_code" }]
+execution_class_defaults = { coding = ["claude_code"], planner = ["claude_code"], review = ["claude_code"] }
+
 EOF
     if [ "$HARNESS" = real ]; then
         cat <<EOF

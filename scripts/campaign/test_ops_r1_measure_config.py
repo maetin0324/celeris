@@ -103,6 +103,11 @@ class MeasureConfigTest(unittest.TestCase):
         self.assertEqual(cfg["cos"]["triage"], {"policy_skill": "cos-inbox-triage", "policy_version": "6"})
         self.assertEqual(cfg["cos"]["route_candidates"], [{"source": "stub", "model": "claude-opus-5-5"}])
         self.assertEqual(cfg["route_defaults"], {"claude_code": {"candidates": [{"source": "stub", "model": "claude-sonnet-5-5"}]}})
+        # 全 task を claude_code へ（無いと CoS が起票した task が route されない）。
+        self.assertEqual(cfg["harness_selection"], {
+            "rules": [{"required_capabilities": [], "harness": "claude_code"}],
+            "execution_class_defaults": {"coding": ["claude_code"], "planner": ["claude_code"],
+                                         "review": ["claude_code"]}})
         # stub: harness id は claude_code のまま kind = fake、adapter は --stub-command。
         self.assertEqual(cfg["harnesses"], {"claude_code": {"kind": "fake", "api_formats": ["fake"], "source_kinds": ["fake"]}})
         self.assertEqual(cfg["adapters"], {"fake": {"command": [self.stub]}})

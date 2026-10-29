@@ -1,10 +1,41 @@
 ---
 title: ops-r1 B の trace と trial 別消費の読み取り専用 export
 tasks: [01M62VP61K6XHRJW0H2YVX7N4D]
-status: running
+status: done
 updated: 2026-10-29
 ---
 # ops-r1 B の trace と trial 別消費の export
+
+完了日: 2026-10-29
+
+## 結論
+
+棚卸しの不足 2 件を解消した。daemon（release 94f86928dc13）のコードは変えていない。
+
+- g-b-trace-export: 解消。`celeris-campaign ops-r1-trace` が測定 daemon の DB の写しから 6 段（受付・起票・実行・
+  成果確定・報告・cutoff）の時刻と参照を出す。欠けた段は null と reason。
+- g-b-trial-attribution: 解消。`celeris-campaign ops-r1-attribution` が runs と chat_runs を 1 行ずつ trial_id・
+  condition_id・role に帰属し、token 4 欄・wall・観測コストを出す。未帰属行は null と reason。監督 CoS の行は入れない。
+- 使い方（DB の写しの作り方、読み取り専用であること、exit code）は `docs/ops/ops-r1-trace-attribution.md` §5。
+
+## 変更（件名、基準は `git merge-base HEAD main`）
+
+- `phase 1: ops-r1 trace・attribution の入力源と出力形を決める（verdict: feasible）`
+- `phase 1: celeris-campaign ops-r1-trace（6 段の工程 trace の読み取り専用 export）と ops_r1_trace 試験を足す`
+- `phase 1: celeris-campaign ops-r1-attribution（trial 別消費の読み取り専用 export）と ops_r1_attr 試験を足す`
+- `phase 1: ops-r1 attr の進捗を書く`
+- `phase 1: ops-r1 fix-trace の close（実行例と検査結果）` — 文書に実行例を足し、この進捗をまとめた
+
+## 証拠（close、提出時の HEAD で実行）
+
+- `cargo test -p celeris --test ops_r1_trace --test ops_r1_attr`: exit 0、ops_r1_attr 5 passed・ops_r1_trace 5 passed
+- `bash scripts/dev/test-affected.sh`（基準 `$CELERIS_WU_BASE`）: exit 0、「試験対象の変更なし（docs のみ等）」
+- `CELERIS_WU_BASE=$(git merge-base HEAD main) bash scripts/dev/test-affected.sh`（task 全体の差分）: exit 0、
+  nextest 2824 passed / 9 skipped
+- `cargo clippy --workspace -- -D warnings`: exit 0
+- `cargo fmt --all -- --check`: exit 0
+- 文書検査 3 本: 下の「文書検査」節
+- `git diff --name-only $(git merge-base HEAD main) | grep -v '^crates/campaign/\|^crates/celeris/tests/\|^scripts/campaign/\|^docs/ops/\|^agent-docs/'`: 0 行
 
 ## design（WU design、2026-10-29 完了）
 
@@ -47,22 +78,6 @@ verdict は feasible。daemon（release 94f86928dc13、schema 版 102）のコ�
 - `cargo fmt --all -- --check`: exit 0
 - `git diff --name-only "$CELERIS_WU_BASE" -- crates/ | grep -v '^crates/campaign/\|^crates/celeris/tests/'`: 空
 
-## 検査（提出時の HEAD で実行）
-
-- `sh scripts/dev/check-doc-links.sh docs/ops/ops-r1-trace-attribution.md agent-docs/adr/2026-10-29-ops-r1-trace-attribution-export.md`: ok
-- `git diff --name-only "$CELERIS_WU_BASE" -- crates/`: 空
-
-## 未解決事項
-
-- ADR 2026-10-29-ops-r1-cos-intake-record（task 01M62TJ5V2B65Y0C804HHQ4E3Q）はこの branch に未取り込み。取り込まれたら ADR の関係欄をリンクにする。
-- 統括 CoS が読むだけで操作しない turn は試行に結べず `no_trial_reference` で未帰属に残る。
-- `chat_runs` の model を出すかは未確認（`resolved_config_json` の key を実装葉で確かめる）。今の行の形には model を入れていない。
-
-## 提案
-
-- 実装の葉（trace・attr）は試験を `crates/celeris/tests/ops_r1_trace*.rs`・`ops_r1_attr*.rs` に置き、
-  `actor_trace/support.rs` に helper を足して fixture を作る。
-
 ## attr（WU attr、2026-10-29 完了）
 
 `celeris-campaign ops-r1-attribution --db <写し> --thread <id> --trial-id <id> --condition-id <id> --cutoff <RFC3339>
@@ -83,3 +98,27 @@ verdict は feasible。daemon（release 94f86928dc13、schema 版 102）のコ�
   - `cargo clippy --workspace -- -D warnings`: exit 0
   - `cargo fmt --all -- --check`: exit 0
   - `git diff --name-only $CELERIS_WU_BASE -- 'crates/task-*' crates/celeris/src web`: 0 行
+
+design の検査（WU design の提出時）: `sh scripts/dev/check-doc-links.sh docs/ops/ops-r1-trace-attribution.md
+agent-docs/adr/2026-10-29-ops-r1-trace-attribution-export.md` → ok。
+
+## 文書検査（close、提出時の HEAD で実行）
+
+- `sh scripts/dev/check-doc-links.sh docs/ops/ops-r1-trace-attribution.md agent-docs/adr/2026-10-29-ops-r1-trace-attribution-export.md agent-docs/progress/2026-10-29-k4-ops-r1-pilot/fix-trace.md`: exit 0、`check-doc-links: ok`
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`: exit 0、`check-doc-layout: ok`
+- `sh scripts/dev/progress-index.sh --check`: exit 0、`progress-index --check: ok`
+
+## 未解決事項
+
+- ADR 2026-10-29-ops-r1-cos-intake-record（task 01M62TJ5V2B65Y0C804HHQ4E3Q）はこの branch に未取り込み。取り込まれたら
+  ADR 2026-10-29-ops-r1-trace-attribution-export の関係欄をリンクにする。`--intake-record` は `message_id`・`thread_id`・
+  `trial_id` の 3 欄だけを見ており、ops-r1-intake の記録の実物との突き合わせは未確認。
+- 統括 CoS が読むだけで操作しない turn は試行に結べず `no_trial_reference` で未帰属に残る。
+- 出力に chat run の model は入れていない（`resolved_config_json` の key は未確認）。
+- 実の測定 daemon の DB の写しではまだ実行していない。試験は fixture の DB だけで確かめた。
+
+## 提案
+
+- runbook（K4 pilot の prep）に §5 の手順（`.backup` で写し → 2 つの subcommand → 写しの sha256 照合）を入れ、
+  試行ごとに `db-copy.sha256`・`trace.json`・`attribution.json` と標準出力の sha256 を記録に残す。
+- celeris-campaign の binary は daemon と別に pin する（daemon は 94f86928dc13 のまま）。

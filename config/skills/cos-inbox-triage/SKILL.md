@@ -52,6 +52,11 @@ metadata:
   （衝突を解く task を起票する。ADR 2026-10-28-cos-integrate-task）。推奨は `integrate_task` なので、basis は
   `documented_default`、`refs` に `{"kind":"adr","id":"agent-docs/adr/2026-10-28-cos-integrate-task.md"}` を書く。「統合した」「見送る」「再試行する」を CoS が選ばない
   （手 merge の代わりにならない）。題が「integrate task が失敗」の依頼は API が answer を拒むので escalate する。
+- 段の統合（子 task・WU の branch を親 task の branch に取り込む。origin `phase:*`）の衝突は、daemon が merge の repair WU
+  に自動で解かせる（ADR 2026-10-29-phase-integration-auto-repair）。受信箱に出る段の統合の依頼は、repair WU が上限（2 回）まで
+  失敗した後のものだけで、本文の「理由」が「自動の解消が失敗」で始まり、選択肢に `integrate_task` が無い。CoS は答えず escalate
+  する（packet に理由の文と衝突 file を写す）。ADR の前に記録された古い段の依頼は daemon の sweep が自動の解消へ戻すので、
+  CoS が「再試行する」で代わりに戻さない。
 - 人が本番操作を人だけに限定しているもの（`promote.sh`・`rollback.sh`・`systemctl` 等。cos-operator の production.md）は、
   代わりに実行せず escalate する。技術手順は「運用者の作業」に分け、packet では web での判断・承認だけを依頼する
   （cos-operator の explaining.md）。運用者向け task を起票しても人だけの実行認可は解除されない。

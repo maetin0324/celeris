@@ -90,6 +90,13 @@ pub(crate) fn run(store: &dyn TaskStore, now: OffsetDateTime) -> Result<usize, S
     for outcome in settled {
         tracing::info!(?outcome, "integrate task settled");
     }
+    // ADR 2026-10-29-phase-integration-auto-repair D3: 自動の解消を経ずに人に回した段の統合の依頼を、統合のやり直し
+    // （衝突は merge の repair WU が解く）へ戻す。
+    let retried = task_ops::integrate_task::phase::retry_unrepaired_requests(store)
+        .map_err(|e| e.to_string())?;
+    for (task_id, request_id) in retried {
+        tracing::info!(%task_id, %request_id, "phase integration request handed to the automatic merge repair");
+    }
     Ok(changed)
 }
 

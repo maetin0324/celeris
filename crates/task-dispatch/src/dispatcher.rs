@@ -377,8 +377,8 @@ fn rustc_version(dir: &std::path::Path) -> Option<String> {
 pub type TaskFilter = Arc<dyn Fn(&Task) -> bool + Send + Sync>;
 
 /// RFC 3339 の文字列（デーモンのスナップショット用）。書式化に失敗することは実質無いが、その場合は空文字列。
-/// ADR-0074 §4（Phase F2b）: 工程ごとの merge の repair の上限。
-const MAX_MERGE_REPAIRS_PER_PHASE: usize = 2;
+/// ADR-0074 §4（Phase F2b）・ADR 2026-10-29-phase-integration-auto-repair D2: 衝突した WU ごとの merge の repair の上限。
+const MAX_MERGE_REPAIRS_PER_UNIT: usize = 2;
 
 /// ADR-0074 D1.5（Phase F2）: v2 の Task の lease の保持者（run ではなく工程）の接頭辞。
 const PHASE_LEASE_PREFIX: &str = "phase:";

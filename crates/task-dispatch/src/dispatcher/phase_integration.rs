@@ -3,6 +3,8 @@
 use super::*;
 use std::collections::BTreeMap;
 
+pub(super) mod merge_repair;
+
 /// ADR-0118 D4 / D5: 同じ子の merge candidate が古くなったときの自動の再 sync・再レビューの回数
 /// （初回に加えて 2 回 = 合計 3 attempt）。超えたら統合を諦めて理由を残す。
 const MAX_STALE_CANDIDATE_RETRIES: usize = 2;
@@ -793,11 +795,8 @@ impl Dispatcher {
             }
         };
         if let Some(conflict) = run.conflict.clone() {
-            if let Some(request) = &conflict.request {
-                // 同じ origin の古い組の依頼は store が `superseded` で閉じる（D4 付記）。
-                self.record_integration_request(&task, &integ, request)?;
-                return self.block_for_integration_request(&task, &integ);
-            }
+            // ADR 2026-10-29-phase-integration-auto-repair D1: auto_resolve で解けない衝突も、人に回す前に
+            // merge の repair WU に解かせる。上限を超えたときだけ統合の依頼にする（D2）。
             return self.schedule_merge_repair(&task, &integ, &units, &conflict);
         }
         // D4 付記: merge が衝突なしで通った（人が手で統合した後の再実行で source が既に祖先、または merge
@@ -836,19 +835,29 @@ impl Dispatcher {
     ) -> Result<(), DispatchError> {
         let phase = integ.phase.clone().unwrap_or_default();
         let prefix = format!("merge-{phase}-");
-        let merge_repairs = units
-            .iter()
-            .filter(|u| u.kind == task_core::WorkUnitKind::Repair && u.key.starts_with(&prefix))
-            .count();
-        if merge_repairs >= MAX_MERGE_REPAIRS_PER_PHASE {
-            return self.integration_gives_up(
-                task,
-                integ,
-                &format!(
-                    "phase {phase} の統合で WorkUnit {} の merge が衝突し、merge の repair の上限（{MAX_MERGE_REPAIRS_PER_PHASE} 回）に達しました",
-                    conflict.key
-                ),
+        let repairs = merge_repair::merge_repairs_of(units, &integ.plan_id, &phase, &conflict.key);
+        if repairs.len() >= MAX_MERGE_REPAIRS_PER_UNIT {
+            let why = format!(
+                "自動の解消が失敗: phase {phase} の統合で WorkUnit {} の merge が衝突し、merge の repair WU（{}）を上限の {MAX_MERGE_REPAIRS_PER_UNIT} 回走らせても衝突が残った",
+                conflict.key,
+                repairs
+                    .iter()
+                    .map(|u| match u.status {
+                        task_core::WorkUnitStatus::Cancelled => format!("{} 失敗", u.key),
+                        status => format!("{} {}", u.key, status.as_str()),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("、"),
             );
+            // D2: 自動の解消が尽きたときだけ人に回す。依頼の本文（理由）に自動の解消の経過を書く。
+            if let Some(request) = &conflict.request {
+                let mut request = (**request).clone();
+                request.reason = format!("{why}。auto_resolve の判定: {}", request.reason);
+                // 同じ origin の古い組の依頼は store が `superseded` で閉じる（D4 付記）。
+                self.record_integration_request(task, integ, &request)?;
+                return self.block_for_integration_request(task, integ);
+            }
+            return self.integration_gives_up(task, integ, &why);
         }
         let mut key = format!("{prefix}{}", conflict.key);
         let mut n = 2;
@@ -908,6 +917,13 @@ impl Dispatcher {
                 "\n`git diff --stat HEAD...{}`:\n{diff_stat}\n",
                 conflict.branch
             ));
+        }
+        // D1: auto_resolve が人に回すと判定した理由と両側の commit（意図）を渡す。
+        if let Some(request) = &conflict.request {
+            objective.push_str(
+                "\n両側の意図を比べ、両方の変更を保って解くこと。片側を捨てて解かないこと。\n\n",
+            );
+            objective.push_str(&request.to_markdown());
         }
         let (max_turns, max_wall_secs) = task_core::execution::RepairClass::MergeConflict.budget();
         let spec = task_core::WorkUnitSpec {

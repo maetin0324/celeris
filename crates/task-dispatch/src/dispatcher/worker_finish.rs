@@ -799,6 +799,7 @@ impl Dispatcher {
                         count: 1,
                     });
                 }
+                super::phase_integration::merge_repair::retire_if_failed(wu, &mut decision);
                 if !reset_only {
                     trigger = decision.trigger;
                     match decision.reason {
@@ -812,7 +813,7 @@ impl Dispatcher {
                                 wu.key
                             );
                         }
-                        "limit" | "continuation_cap" => {
+                        "limit" | "continuation_cap" | "merge_repair_failed" => {
                             if let Some(question) = &decision.outcome_override {
                                 outcome_str = question.clone();
                             }
@@ -857,8 +858,7 @@ impl Dispatcher {
                     // 進捗なし/continuation の上限（"limit"）に達した、または `plan_issue` を
                     // 申告したら、replan の余地（`max_replans`）があれば Task を failed/blocked に
                     // する代わりに replan の planner run を起こす（`ContinueWhy::Replan`）。
-                    // D12「失敗にしないもの」: 進捗なし・継続の上限到達は元々失敗にしない。
-                    // D12 3.: WU failed は「replan できない」ときだけ failed にする。
+                    // D12「失敗にしないもの」: 進捗なし・継続の上限到達は元々失敗にしない。D12 3.: WU failed は「replan できない」ときだけ failed にする。
                     if task_core::is_integration_repair_unit(wu.kind, &wu.spec.title)
                         && (matches!(decision.reason, "failed" | "limit" | "plan_issue")
                             || (decision.reason == "completed"

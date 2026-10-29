@@ -22,3 +22,7 @@ license: このリポジトリと同じ（外部の license は無い）
   ときだけ `chat.review_report` で統括 CoS チャットに報告する。この run からは受信箱の件を resolve しない）を足し、mount 先の
   説明を `launch.rs` の現行（統括・案件・review の thread にも mount）に合わせた。受信箱の件の判定基準は変えていないので
   policy_version は 6 のまま（config の `[cos.triage] policy_version` も変えない）。
+- 2026-10-29（ADR 2026-10-29-phase-integration-auto-repair）: §2 の追加の規則に、段の統合の依頼は daemon の merge repair WU が
+  尽きた後にだけ受信箱に出て CoS は escalate すること、古い依頼は daemon の sweep が自動の解消へ戻すことを足した。段の依頼には
+  前から `integrate_task` の選択肢が無く CoS は escalate していたので、判断の基準は変わらない。policy_version は 6 のまま
+  （config の `[cos.triage] policy_version` も変えない）。

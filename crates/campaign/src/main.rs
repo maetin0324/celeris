@@ -17,7 +17,7 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <operator-usage|ops-r1-trace|human-op|jev-stages|dry-run|validate|lock|collect-observed|collect-observed-out|stage-grader-inputs|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|ledger-init|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <operator-usage|ops-r1-trace|ops-r1-attribution|human-op|jev-stages|dry-run|validate|lock|collect-observed|collect-observed-out|stage-grader-inputs|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|ledger-init|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--approval <json>] [--variant-b0-sha256 <hex>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -812,6 +812,11 @@ fn main() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("ops-r1-trace") {
         let args: Vec<String> = std::env::args().skip(1).collect();
         return ExitCode::from(celeris_campaign::ops_r1_trace::cli(&args));
+    }
+    // ops-r1 B の trial 別消費（読み取り専用の export。exit code は ops-r1-trace と同じ）。
+    if std::env::args().nth(1).as_deref() == Some("ops-r1-attribution") {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        return ExitCode::from(celeris_campaign::ops_r1_attr::cli(&args));
     }
     match run(std::env::args().skip(1).collect()) {
         Ok(out) => {

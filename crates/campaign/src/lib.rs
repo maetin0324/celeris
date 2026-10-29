@@ -42,6 +42,7 @@ pub mod measure_env;
 pub mod observe;
 pub mod offline_lock;
 pub mod operator_usage;
+pub mod ops_r1_attr;
 pub mod ops_r1_trace;
 pub mod preflight;
 pub mod record;

@@ -5,6 +5,8 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::Value;
 use task_core::chat::triage::CosTriageSource;
 use task_core::{Notification, NotificationKind, NotificationStore, SqliteStore, TaskStore};
+use task_ops::daemon::DaemonSnapshot;
+use task_ops::human_inbox::InboxKind;
 use task_ops::view::ViewContext;
 use time::OffsetDateTime;
 
@@ -119,14 +121,45 @@ fn db(db: &Path) -> Result<Connection, String> {
     Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| e.to_string())
 }
 
+/// The source of a CoS outbound row, checked immediately before POST.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceCheck {
+    /// The same revision is still unresolved.
+    Live,
+    /// Closed, superseded by a newer revision, or never linked.
+    Resolved,
+    /// ADR 2026-10-29-stagnation-triage-notify-wiring D2: a stagnation kind and no stagnation
+    /// snapshot. Not knowing is neither live nor resolved.
+    Unknown,
+}
+
+/// What the tick does with a CoS outbound row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sendable {
+    Send,
+    /// Marked superseded in the same transaction (and the item resolved if its source closed).
+    Withdrawn,
+    /// Left pending, untouched: the source could not be checked (stagnation unknown).
+    Held,
+}
+
+impl Sendable {
+    pub fn is_send(self) -> bool {
+        self == Sendable::Send
+    }
+}
+
 /// Confirm the source is still the same unresolved revision immediately before POST.
+/// `snapshot` carries the daemon's stagnation check (`Dispatcher::stagnation_snapshot`); the
+/// stagnation kinds are `Unknown` without it, never `Resolved`.
 pub fn source_unresolved(
     db_path: &Path,
     store: &dyn TaskStore,
     view: &ViewContext,
+    snapshot: Option<&DaemonSnapshot>,
     row: &Notification,
     now: OffsetDateTime,
-) -> Result<bool, String> {
+) -> Result<SourceCheck, String> {
     let conn = db(db_path)?;
     let source: Option<(String, String, String)> = conn
         .query_row(
@@ -137,14 +170,14 @@ pub fn source_unresolved(
         .optional()
         .map_err(|e| e.to_string())?;
     let Some((kind, key, revision)) = source else {
-        return Ok(false);
+        return Ok(SourceCheck::Resolved);
     };
     let newer: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM cos_inbox_items WHERE source_kind=?1 AND source_key=?2 AND created_at>(SELECT created_at FROM cos_inbox_items WHERE id=?3))",
         params![kind, key, row.key], |r| r.get(0),
     ).map_err(|e| e.to_string())?;
     if newer {
-        return Ok(false);
+        return Ok(SourceCheck::Resolved);
     }
     if kind == "notice" {
         use task_core::feed::NoticeQuery;
@@ -157,21 +190,29 @@ pub fn source_unresolved(
             if page.items.iter().any(|n| {
                 n.is_unread() && n.id.to_string() == key && n.count.to_string() == revision
             }) {
-                return Ok(true);
+                return Ok(SourceCheck::Live);
             }
             let count = page.items.len();
             query.offset += count;
             if count == 0 || query.offset >= page.total as usize {
-                return Ok(false);
+                return Ok(SourceCheck::Resolved);
             }
         }
     }
-    let inbox = task_ops::human_inbox::human_inbox(store, None, view, now, &|_, _| Vec::new())
+    if snapshot.is_none() && InboxKind::is_stagnation_kind(&kind) {
+        return Ok(SourceCheck::Unknown);
+    }
+    let inbox = task_ops::human_inbox::human_inbox(store, snapshot, view, now, &|_, _| Vec::new())
         .map_err(|e| e.to_string())?;
-    Ok(inbox
+    let live = inbox
         .items
         .iter()
-        .any(|i| i.kind.as_str() == kind && i.id == key && i.created_at == revision))
+        .any(|i| i.kind.as_str() == kind && i.id == key && i.created_at == revision);
+    Ok(if live {
+        SourceCheck::Live
+    } else {
+        SourceCheck::Resolved
+    })
 }
 
 /// The store makes the final withdrawal atomic with the notification state.
@@ -179,13 +220,21 @@ pub fn withdraw_if_resolved(
     store: &SqliteStore,
     db_path: &Path,
     view: &ViewContext,
+    snapshot: Option<&DaemonSnapshot>,
     row: &Notification,
     now: OffsetDateTime,
-) -> Result<bool, String> {
-    let live = source_unresolved(db_path, store, view, row, now)?;
-    store
-        .cos_triage_outbox_sendable(&row.id.to_string(), live, now)
-        .map_err(|e| e.to_string())
+) -> Result<Sendable, String> {
+    let check = source_unresolved(db_path, store, view, snapshot, row, now)?;
+    // Unknown is checked as live: an answered/observed/resolved item or a sent row is still
+    // withdrawn by the store, but an open one is held instead of sent.
+    let sendable = store
+        .cos_triage_outbox_sendable(&row.id.to_string(), check != SourceCheck::Resolved, now)
+        .map_err(|e| e.to_string())?;
+    Ok(match (sendable, check) {
+        (false, _) => Sendable::Withdrawn,
+        (true, SourceCheck::Unknown) => Sendable::Held,
+        (true, _) => Sendable::Send,
+    })
 }
 
 /// Call once at daemon startup. Legacy unsent rows become CoS input and are

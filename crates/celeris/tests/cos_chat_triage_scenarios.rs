@@ -109,7 +109,10 @@ async fn tick(
         .find(|n| batch.ids.contains(&n.id))
         .expect("row")
         .clone();
-    if !notify::triage::withdraw_if_resolved(store, db, view, &row, at()).expect("recheck") {
+    if !notify::triage::withdraw_if_resolved(store, db, view, None, &row, at())
+        .expect("recheck")
+        .is_send()
+    {
         return false;
     }
     batch.content = notify::triage::render(&row, &config()).expect("render");

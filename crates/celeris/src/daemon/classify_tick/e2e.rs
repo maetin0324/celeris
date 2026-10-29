@@ -410,10 +410,12 @@ impl Env {
             &self.store,
             &self.config.db.path,
             &self.view(),
+            None,
             &row,
             now,
         )
         .expect("recheck")
+        .is_send()
         {
             return false;
         }

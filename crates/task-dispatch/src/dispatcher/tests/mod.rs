@@ -3005,6 +3005,7 @@ mod cos_chat_harness_tests;
 mod cos_chat_launch;
 mod cos_chat_rollover;
 mod cos_chat_triage;
+mod cos_chat_triage_stagnation;
 mod cos_live_fix_d4;
 /// ADR 2026-10-11-task-wait-reasons: 見送りの理由（snapshot の task_waits と共有の待ち判定）。
 mod dep_integration;

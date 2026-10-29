@@ -238,7 +238,7 @@ fn unpromoted_releases_are_verified_newer_than_the_promoted_one() {
     );
     std::fs::create_dir_all(root.path().join(".build")).expect("mkdir");
 
-    let found = read_unpromoted_releases(root.path());
+    let found = read_unpromoted_releases(root.path()).expect("read");
     assert_eq!(
         found,
         vec![ReleaseFact {
@@ -252,7 +252,20 @@ fn unpromoted_releases_are_verified_newer_than_the_promoted_one() {
         "promoted.json",
         serde_json::json!({"promoted_at": "2026-10-26T14:04:00Z"}),
     );
-    assert!(read_unpromoted_releases(root.path()).is_empty());
+    assert!(
+        read_unpromoted_releases(root.path())
+            .expect("read")
+            .is_empty()
+    );
+    // ADR 2026-10-29-stagnation-triage-notify-wiring D2: 無い dir は空、読めない dir（file）は Err（昇格扱いにしない）。
+    assert!(
+        read_unpromoted_releases(&root.path().join("missing"))
+            .expect("missing")
+            .is_empty()
+    );
+    let file = root.path().join("not-a-dir");
+    std::fs::write(&file, "x").expect("file");
+    assert!(read_unpromoted_releases(&file).is_err());
 }
 
 fn task(status: Status, project: Option<ProjectId>) -> Task {

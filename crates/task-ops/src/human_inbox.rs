@@ -101,6 +101,20 @@ impl InboxKind {
         InboxKind::IntegrationRequest,
     ];
 
+    /// ADR 2026-10-29-stagnation-triage-notify-wiring D2: daemon の停滞の判定（snapshot）が無いと判定できない種類。
+    /// snapshot が無いとき、この種類が一覧に無いことは「解消」を意味しない。
+    pub const STAGNATION_KINDS: [InboxKind; 4] = [
+        InboxKind::ProjectStalled,
+        InboxKind::HumanWaitAging,
+        InboxKind::ReleaseUnpromoted,
+        InboxKind::TaskUnscheduled,
+    ];
+
+    /// `STAGNATION_KINDS` に入る種類の文字列か（CoS triage の `source_kind` を照合する）。
+    pub fn is_stagnation_kind(kind: &str) -> bool {
+        Self::STAGNATION_KINDS.iter().any(|k| k.as_str() == kind)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             InboxKind::Decision => "decision",

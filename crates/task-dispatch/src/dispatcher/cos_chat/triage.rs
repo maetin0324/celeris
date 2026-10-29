@@ -16,6 +16,10 @@
 //! - Startup/reconcile compares the current derived inbox with stored rows
 //!   (never the event history). The first run without a cursor ingests the
 //!   unresolved waits once and starts the cursors at the current head.
+//! - Stagnation (ADR 2026-10-29-stagnation-triage-notify-wiring): the four stagnation kinds
+//!   come from the dispatcher's stagnation check, not from events. Each new check result
+//!   (`stagnation_generation`) reconciles those kinds once. While the check result is unknown
+//!   (`stagnation_snapshot()` is `None`), rows of those kinds are never resolved (held).
 //! - Waits written by a CoS operation (the operation transaction ends with the
 //!   `CosOperation` audit event) and CoS's own replies carry an operation id
 //!   and are dropped by the store.
@@ -103,6 +107,9 @@ pub(crate) struct CosTriageState {
     /// re-judging pass does not rebuild the inbox for them every tick (ADR
     /// 2026-10-27-relayed-instructions 付記 A2). Not task state: after a restart they are checked once.
     pub(super) rejudge_out_of_scope: HashSet<(String, String)>,
+    /// The stagnation check result (`Dispatcher::stagnation_generation`) whose four kinds were
+    /// last reconciled (ADR 2026-10-29-stagnation-triage-notify-wiring D3).
+    pub(super) stagnation_generation: Option<u64>,
 }
 
 impl Dispatcher {
@@ -181,6 +188,27 @@ pub(crate) fn touched_tasks(rows: &[EventRow]) -> TouchedTasks {
         }
     }
     out
+}
+
+/// The current sources per kind, for the stale sweeps. Every kind is present (an empty list
+/// resolves that kind's open rows), except the stagnation kinds while the stagnation check is
+/// unknown: those rows are held, never resolved (ADR 2026-10-29-stagnation-triage-notify-wiring D2).
+fn sources_by_kind(
+    inbox: &HumanInbox,
+    policy: &str,
+    stagnation_known: bool,
+) -> BTreeMap<&'static str, Vec<CosTriageSource>> {
+    let mut by_kind: BTreeMap<&'static str, Vec<CosTriageSource>> = InboxKind::ALL
+        .iter()
+        .filter(|k| stagnation_known || !InboxKind::STAGNATION_KINDS.contains(k))
+        .map(|k| (k.as_str(), Vec::new()))
+        .collect();
+    for item in &inbox.items {
+        if let Some(current) = by_kind.get_mut(item.kind.as_str()) {
+            current.push(inbox_source(item, policy));
+        }
+    }
+    by_kind
 }
 
 fn inbox_source(item: &InboxItem, policy_version: &str) -> CosTriageSource {
@@ -333,6 +361,9 @@ impl CosChatLaunch {
         if let Err(error) = self.triage_notices(now) {
             tracing::warn!(%error, "CoS triage notice intake failed");
         }
+        if let Err(error) = self.triage_stagnation(dispatcher, now) {
+            tracing::warn!(%error, "CoS triage stagnation intake failed");
+        }
         // D1 of the inbox-thread ADR: the judgment of each finished triage run as an
         // assistant message (and the requeue of an interrupted run's items), before the
         // fallback looks at what is left.
@@ -365,8 +396,50 @@ impl CosChatLaunch {
             clusters: HashMap::new(),
         };
         let store: &dyn TaskStore = self.store.as_ref();
-        task_ops::human_inbox::human_inbox(store, None, &ctx, now, &|_, _| Vec::new())
+        // ADR 2026-10-29-stagnation-triage-notify-wiring D1: the stagnation kinds come from the
+        // dispatcher's last stagnation check (`None` while it is unknown).
+        let snapshot = dispatcher.stagnation_snapshot();
+        task_ops::human_inbox::human_inbox(store, snapshot.as_ref(), &ctx, now, &|_, _| Vec::new())
             .map_err(|e| e.to_string())
+    }
+
+    /// ADR 2026-10-29-stagnation-triage-notify-wiring D3: when the stagnation check has a new
+    /// result, reconcile the four stagnation kinds with stored rows (insert the new triples,
+    /// resolve the rows that left the list or whose revision changed). Stagnation is "nothing
+    /// happened", so no event brings these items in.
+    fn triage_stagnation(
+        &mut self,
+        dispatcher: &Dispatcher,
+        now: OffsetDateTime,
+    ) -> Result<(), String> {
+        if !dispatcher.stagnation_known() {
+            return Ok(());
+        }
+        let generation = dispatcher.stagnation_generation();
+        if self.triage.stagnation_generation == Some(generation) {
+            return Ok(());
+        }
+        let policy = self.config.triage.policy_version.clone();
+        let inbox = self.human_inbox(dispatcher, now)?;
+        let mut inserted = 0;
+        for kind in InboxKind::STAGNATION_KINDS {
+            let current: Vec<CosTriageSource> = inbox
+                .items
+                .iter()
+                .filter(|i| i.kind == kind)
+                .map(|i| inbox_source(i, &policy))
+                .collect();
+            inserted += self
+                .store
+                .cos_triage_reconcile(kind.as_str(), &current, now)
+                .map_err(|e| e.to_string())?;
+        }
+        self.triage.stagnation_generation = Some(generation);
+        if inserted > 0 {
+            self.triage.dirty = true;
+            tracing::info!(inserted, "CoS triage added stagnation waits");
+        }
+        Ok(())
     }
 
     /// Compare the current derived inbox with stored rows per kind (never the
@@ -380,17 +453,10 @@ impl CosChatLaunch {
         let policy = self.config.triage.policy_version.clone();
         // Read the head first: events after it are re-read (idempotently).
         let head = self.store.latest_event_id().map_err(|e| e.to_string())?;
+        let known = dispatcher.stagnation_known();
+        let generation = dispatcher.stagnation_generation();
         let inbox = self.human_inbox(dispatcher, now)?;
-        let mut by_kind: BTreeMap<&'static str, Vec<CosTriageSource>> = InboxKind::ALL
-            .iter()
-            .map(|k| (k.as_str(), Vec::new()))
-            .collect();
-        for item in &inbox.items {
-            by_kind
-                .entry(item.kind.as_str())
-                .or_default()
-                .push(inbox_source(item, &policy));
-        }
+        let mut by_kind = sources_by_kind(&inbox, &policy, known);
         for item in inbox.items.iter().filter(|i| is_direct(i)) {
             self.direct_escalate(item, &policy, now)?;
         }
@@ -444,6 +510,9 @@ impl CosChatLaunch {
             self.store
                 .cos_triage_ingest_batch(COS_TRIAGE_NOTICES_SOURCE, &cursor, &[], now)
                 .map_err(|e| e.to_string())?;
+        }
+        if known {
+            self.triage.stagnation_generation = Some(generation);
         }
         if inserted > 0 {
             tracing::info!(inserted, "CoS triage reconcile added waits");
@@ -510,16 +579,7 @@ impl CosChatLaunch {
             if !touched.tasks.is_empty()
                 && let Some(inbox) = &inbox
             {
-                let mut by_kind: BTreeMap<&'static str, Vec<CosTriageSource>> = InboxKind::ALL
-                    .iter()
-                    .map(|k| (k.as_str(), Vec::new()))
-                    .collect();
-                for item in &inbox.items {
-                    by_kind
-                        .entry(item.kind.as_str())
-                        .or_default()
-                        .push(inbox_source(item, &policy));
-                }
+                let by_kind = sources_by_kind(inbox, &policy, dispatcher.stagnation_known());
                 let current: Vec<_> = by_kind.into_iter().collect();
                 let ids: Vec<String> = touched.tasks.keys().map(|id| id.to_string()).collect();
                 self.store

@@ -49,6 +49,9 @@ pub(crate) async fn tick_loop(
     let notify_interval = Duration::from_secs(config.notify.interval_secs);
     let mut notify_in_flight: HashSet<task_core::NotificationId> = HashSet::new();
     let mut notify_pending: Vec<task_core::Notification> = Vec::new();
+    // ADR 2026-10-29-stagnation-triage-notify-wiring D2: CoS rows held because the stagnation check
+    // was unknown. Skipped so they do not block the rows behind them; retried once it is known.
+    let mut notify_held: HashSet<task_core::NotificationId> = HashSet::new();
     let mut notify_last: Option<std::time::Instant> = None;
     // ADR-0037 D5: 429 が返っている間は次の送信を控える（`Retry-After` 秒）。
     let mut notify_blocked_until: Option<std::time::Instant> = None;
@@ -446,9 +449,16 @@ pub(crate) async fn tick_loop(
                             {
                                 tracing::warn!(error = %e, "notify: could not retire legacy rows");
                             }
+                            let stagnation = dispatcher.stagnation_snapshot();
+                            if stagnation.is_some() {
+                                notify_held.clear();
+                            }
                             let available: Vec<_> = pending
                                 .iter()
-                                .filter(|n| !notify_in_flight.contains(&n.id))
+                                .filter(|n| {
+                                    !notify_in_flight.contains(&n.id)
+                                        && !notify_held.contains(&n.id)
+                                })
                                 .cloned()
                                 .collect();
                             if triage_ready
@@ -463,18 +473,19 @@ pub(crate) async fn tick_loop(
                                         let sendable = if row.kind
                                             == task_core::NotificationKind::RootDoneSummary
                                         {
-                                            Ok(true)
+                                            Ok(notify::triage::Sendable::Send)
                                         } else {
                                             notify::triage::withdraw_if_resolved(
                                                 outbox,
                                                 &config.db.path,
                                                 &view,
+                                                stagnation.as_ref(),
                                                 row,
                                                 now,
                                             )
                                         };
                                         match sendable {
-                                            Ok(true) => {
+                                            Ok(notify::triage::Sendable::Send) => {
                                                 match notify::triage::render(row, &config.notify) {
                                                     Ok(content) => {
                                                         batch.content = content;
@@ -534,7 +545,11 @@ pub(crate) async fn tick_loop(
                                                     }
                                                 }
                                             }
-                                            Ok(false) => {}
+                                            Ok(notify::triage::Sendable::Withdrawn) => {}
+                                            Ok(notify::triage::Sendable::Held) => {
+                                                tracing::warn!(notification = %row.id, "notify: CoS wait held, stagnation check unknown");
+                                                notify_held.insert(row.id);
+                                            }
                                             Err(error) => {
                                                 tracing::warn!(%error, "notify: could not recheck CoS wait")
                                             }

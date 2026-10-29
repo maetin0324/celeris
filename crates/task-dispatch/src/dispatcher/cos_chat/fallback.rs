@@ -531,6 +531,12 @@ impl CosChatLaunch {
                     .map(FallbackSource::from_inbox)
             };
             let Some(source) = source else {
+                // ADR 2026-10-29-stagnation-triage-notify-wiring D2: without a stagnation check
+                // result, a missing stagnation item is unknown, not closed. Hold it for a later pass.
+                if InboxKind::is_stagnation_kind(&c.source_kind) && !dispatcher.stagnation_known() {
+                    tracing::debug!(item_id = %c.item_id, "CoS fallback held: stagnation unknown");
+                    return Ok(None);
+                }
                 // The wait closed meanwhile: nothing to tell the person.
                 self.store
                     .cos_triage_resolve(&c.item_id, "resolved", None, Some("source closed"), now)

@@ -324,7 +324,9 @@ pub fn gather(
     if policy.release_unpromoted_secs > 0
         && let Some(dir) = releases_dir
     {
-        facts.releases = read_unpromoted_releases(dir);
+        facts.releases = read_unpromoted_releases(dir).map_err(|e| {
+            OpsError::Validation(format!("releases_dir {} unreadable: {e}", dir.display()))
+        })?;
     }
     Ok(facts)
 }
@@ -339,7 +341,10 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
 
 /// D1 `release_unpromoted` の事実: `verify.json` の `ok = true`・`promoted.json` が無い・最新の昇格済み release
 /// （`promoted_at` 最大）より `built_at` が新しい release。読めない file の release は飛ばす（落ちない）。
-pub fn read_unpromoted_releases(releases_dir: &Path) -> Vec<ReleaseFact> {
+///
+/// releases_dir が無いなら空（release がまだ無い）。それ以外で読めないなら Err で、判定を失敗させる
+/// （読めないことを「昇格された」と扱わない。ADR 2026-10-29-stagnation-triage-notify-wiring D2）。
+pub fn read_unpromoted_releases(releases_dir: &Path) -> std::io::Result<Vec<ReleaseFact>> {
     struct Entry {
         sha12: String,
         built_at: Option<OffsetDateTime>,
@@ -347,12 +352,12 @@ pub fn read_unpromoted_releases(releases_dir: &Path) -> Vec<ReleaseFact> {
         verified_at: Option<OffsetDateTime>,
     }
     let mut entries = Vec::new();
-    for entry in std::fs::read_dir(releases_dir)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-    {
+    let listing = match std::fs::read_dir(releases_dir) {
+        Ok(listing) => listing,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    for entry in listing.filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') || name.ends_with(".partial") {
             continue;
@@ -407,7 +412,7 @@ pub fn read_unpromoted_releases(releases_dir: &Path) -> Vec<ReleaseFact> {
         })
         .collect();
     out.sort_by(|a, b| a.sha12.cmp(&b.sha12));
-    out
+    Ok(out)
 }
 
 /// D1 `human_wait_aging` の入力: 受信箱の人の操作待ちの項目 1 件。

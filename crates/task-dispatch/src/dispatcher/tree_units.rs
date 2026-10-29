@@ -238,8 +238,32 @@ impl Dispatcher {
         self.stagnation = StagnationWatch {
             policy,
             scan_interval_secs,
+            // 取り込み側が照合済みの generation と食い違うよう、作り直しても番号は戻さない。
+            generation: self.stagnation.generation,
             ..Default::default()
         };
+    }
+
+    /// ADR 2026-10-29-stagnation-triage-notify-wiring D1: 最後の停滞の判定を停滞の欄だけの snapshot にして返す。
+    /// 判定が一度も成功していない・最後の判定が失敗した・verify mode なら `None`（停滞は「分からない」）。
+    pub fn stagnation_snapshot(&self) -> Option<task_ops::daemon::DaemonSnapshot> {
+        if !self.stagnation_known() {
+            return None;
+        }
+        Some(task_ops::daemon::DaemonSnapshot::stagnation_only(
+            self.stagnation.findings.clone(),
+            self.stagnation.policy,
+        ))
+    }
+
+    /// 同 D1: 最後の停滞の判定が今の状態として使えるか（`stagnation_snapshot` が `Some` になるか）。
+    pub(crate) fn stagnation_known(&self) -> bool {
+        !self.verify_smoke_only() && self.stagnation.available
+    }
+
+    /// 同 D3: 停滞の判定が成功するたびに 1 進む番号。CoS の取り込みは番号が変わったときだけ照合し直す。
+    pub(crate) fn stagnation_generation(&self) -> u64 {
+        self.stagnation.generation
     }
 
     /// tick の段: 木の生存確認（ADR-0079 D10）と、続けて案件単位の停滞（ADR 2026-10-27-project-stagnation-inbox D3）。
@@ -269,6 +293,8 @@ impl Dispatcher {
             return Ok(());
         }
         self.stagnation.checked_at = Some(now);
+        // 判定が失敗したら、前の結果は今の状態として使わない（ADR 2026-10-29-stagnation-triage-notify-wiring D2）。
+        self.stagnation.available = false;
         let in_flight: std::collections::HashSet<TaskId> = self
             .running
             .keys()
@@ -294,6 +320,8 @@ impl Dispatcher {
         .map_err(ops_to_store)?;
         self.stagnation.findings =
             task_ops::stagnation::detect(&facts, &self.stagnation.policy, now);
+        self.stagnation.available = true;
+        self.stagnation.generation += 1;
         Ok(())
     }
 
@@ -1327,6 +1355,10 @@ pub(crate) struct StagnationWatch {
     pub(crate) scan_interval_secs: u64,
     pub(crate) findings: Vec<task_ops::stagnation::StagnationFinding>,
     pub(crate) checked_at: Option<OffsetDateTime>,
+    /// 最後の判定が成功し、`findings` が今の状態か（ADR 2026-10-29-stagnation-triage-notify-wiring D1）。
+    pub(crate) available: bool,
+    /// 判定が成功するたびに 1 進む（同 D3）。
+    pub(crate) generation: u64,
 }
 
 impl Default for StagnationWatch {
@@ -1336,6 +1368,8 @@ impl Default for StagnationWatch {
             scan_interval_secs: task_ops::stagnation::DEFAULT_SCAN_INTERVAL_SECS,
             findings: Vec::new(),
             checked_at: None,
+            available: false,
+            generation: 0,
         }
     }
 }

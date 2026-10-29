@@ -177,7 +177,11 @@ fn cos_chat_triage_resolved_source_is_withdrawn_before_post() {
         max_requeues: 3,
         clusters: Default::default(),
     };
-    assert!(!notify::triage::withdraw_if_resolved(&store, &db, &view, &row, at()).expect("check"));
+    assert!(
+        !notify::triage::withdraw_if_resolved(&store, &db, &view, None, &row, at())
+            .expect("check")
+            .is_send()
+    );
     assert!(store.notification_pending().expect("pending").is_empty());
 }
 
@@ -293,10 +297,16 @@ fn cos_chat_triage_notice_revision_is_checked_before_post() {
         max_requeues: 3,
         clusters: Default::default(),
     };
-    assert!(notify::triage::withdraw_if_resolved(&store, &db, &view, &row, at()).expect("live"));
+    assert!(
+        notify::triage::withdraw_if_resolved(&store, &db, &view, None, &row, at())
+            .expect("live")
+            .is_send()
+    );
     store.notice_mark_read(notice.id, at()).expect("read");
     assert!(
-        !notify::triage::withdraw_if_resolved(&store, &db, &view, &row, at()).expect("withdraw")
+        !notify::triage::withdraw_if_resolved(&store, &db, &view, None, &row, at())
+            .expect("withdraw")
+            .is_send()
     );
     assert!(store.notification_pending().expect("pending").is_empty());
 }

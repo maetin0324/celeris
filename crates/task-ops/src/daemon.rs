@@ -87,6 +87,44 @@ pub struct DaemonSnapshot {
     pub scratch: Option<ScratchStatus>,
 }
 
+impl DaemonSnapshot {
+    /// ADR 2026-10-29-stagnation-triage-notify-wiring D1: 停滞の欄（`stagnation`・`stagnation_policy`）だけを埋めた
+    /// snapshot。CoS の一次対応の取り込みと送信直前の照合が `human_inbox` に渡す。他の欄は空で、snapshot 由来の
+    /// 他の種類（`unroutable`・`stalled`・`review_resync_halted`）は出ない。
+    pub fn stagnation_only(
+        findings: Vec<crate::stagnation::StagnationFinding>,
+        policy: crate::stagnation::StagnationPolicy,
+    ) -> Self {
+        Self {
+            instance_id: String::new(),
+            pid: 0,
+            hostname: String::new(),
+            started_at: String::new(),
+            last_tick_at: String::new(),
+            ticks: 0,
+            tick_ms: 0,
+            in_flight: Vec::new(),
+            cooldowns: Vec::new(),
+            task_waits: Vec::new(),
+            stalled_tasks: Vec::new(),
+            stagnation: findings,
+            stagnation_policy: Some(policy),
+            review_resync_halted: Vec::new(),
+            reports: None,
+            approvals_pending: 0,
+            decisions_open: 0,
+            clusters: Vec::new(),
+            accounts_root: None,
+            max_runs_per_account: None,
+            accounts_roots: std::collections::HashMap::new(),
+            accounts: Vec::new(),
+            implicit_accounts: Vec::new(),
+            containers: None,
+            scratch: None,
+        }
+    }
+}
+
 /// `ScratchStatus.schema` の値。
 pub const SCRATCH_STATUS_SCHEMA: &str = "celeris.scratch-status/1";
 

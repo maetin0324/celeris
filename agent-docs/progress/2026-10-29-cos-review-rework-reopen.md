@@ -28,11 +28,12 @@ ADR: [2026-10-29-cos-review-rework-reopen](../adr/2026-10-29-cos-review-rework-r
 
 ## 証拠（提出時の HEAD で実行）
 
+- `bash scripts/dev/test-affected.sh`: exit 0（celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker と web の tsc -b・unit 697 passed）。
 - `cargo test -p task-api --test cos_review_rework`: 4 passed。
 - `UPDATE_SCHEMA=1 cargo test -p task-api`: cos 系を含め通過（browser_live_cross は下の TMPDIR 問題で失敗）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo clippy -p task-api --all-targets -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
-- web: `tsc -b` exit 0。vitest の `e2e/support/fake-daemon.test.ts` は test-affected の中で 1 件落ち、単独では 17 passed（時間依存の不安定）。
+- web: 1 回目の test-affected で vitest の `e2e/support/fake-daemon.test.ts` が 1 件落ちた（単独では 17 passed、2 回目の test-affected では 697 passed。時間依存の不安定）。
 - `cargo test --workspace --no-fail-fast`（この run の TMPDIR、93 字）: exit 101。失敗は全て unix socket の SUN_LEN 超過と、それに続く
   fixture の待ち切れ（credentiald・task-worker の browser・celeris の browser_doctor・task-api の browser_waits/browser_live_cross）。
   短い TMPDIR（/tmp 下）で `cargo test -p celeris-credentiald -p task-worker -p celerisctl` は exit 0、task-api の browser_waits・browser_live_cross と

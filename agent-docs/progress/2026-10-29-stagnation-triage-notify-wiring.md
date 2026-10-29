@@ -51,8 +51,8 @@ updated: 2026-10-29
 - (5) 権限・自動回答は増やしていない（CoS の operation・registry は未変更）。監査・idempotency（triple の一意制約）・通知の
   制限（1 tick 1 通・`cos_triage_outbox_sendable`）は既存の経路をそのまま使う。
 - (6) 定期 cos_review（`cos_chat/review.rs`・cron）は変更していない。`cron_cos_review` 等の既存試験は test-affected で通過。
-- `bash scripts/dev/test-affected.sh` → exit 0（nextest 5445 passed / 21 skipped、web tsc と vitest 697 passed）。
-  clippy の修正の後に再実行した結果は result の報告に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（clippy の修正の後に再実行。対象に celeris-campaign 等が加わり
+  nextest 6769 passed / 21 skipped、web tsc と vitest 101 files・697 passed）。
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
 

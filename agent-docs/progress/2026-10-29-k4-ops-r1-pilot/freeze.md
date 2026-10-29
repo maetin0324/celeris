@@ -22,7 +22,7 @@ completed: 2026-10-29
 
 attempt 1（03:09Z）は inventory の blocking_gaps が 5 件で止めた。fix 段（task 01M62TJ5V2・01M62TJ5WB・01M62V0FQM・01M62VP61K）の後、道具がある tree で確かめ直した。
 
-attempt 2 の run は、この WU の branch に統合先 branch（celeris/01M62S8XWCZDCY2ZBVQ35176MH）の fix 段を merge した。そのため計画の check 2 件（`crates/ web/ scripts/ config/` の差分 0、範囲は進捗ファイルだけ）が落ちた。attempt 3 で merge を外し、この branch の変更を進捗ファイルだけに戻した（統合先に merge すると fix 段の削除になるので revert は使わなかった）。試験と build は、統合先 branch の tree（fix 段を含む。crates/campaign の git tree 6409f58b7810827100bb2c581598e7b732f32b94）と同じ中身で走らせた。外した merge commit と統合先の差は、この進捗ファイル 1 つだけだった。
+attempt 2 の run は、この WU の branch に統合先 branch（celeris/01M62S8XWCZDCY2ZBVQ35176MH）の fix 段を merge した。そのため計画の check 2 件（`crates/ web/ scripts/ config/` の差分 0、範囲は進捗ファイルだけ）が落ちた。attempt 3 で merge を外し、この branch の変更を進捗ファイルだけに戻した（統合先に merge すると fix 段の削除になるので revert は使わなかった）。試験と build は、統合先 branch の tree（fix 段を含む。crates/campaign の git tree の id は fixed-ticket.json の tool_binaries.celeris-campaign.built_from）と同じ中身で走らせた。外した merge commit と統合先の差は、この進捗ファイル 1 つだけだった。
 
 ## 証拠（試験・build は統合先 branch と同じ tree で実行。範囲の check は提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 

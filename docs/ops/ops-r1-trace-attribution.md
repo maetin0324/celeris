@@ -108,7 +108,40 @@ operator_usage・human_ops の記録（外部 AI による支援）で別に数�
 - JSON は struct の欄順で整形し（`serde_json::to_string_pretty`）、末尾に改行 1 つ。cost の合計は上の並び順で足す。
 - `--out` は毎回上書きし、出力の sha256 を標準出力に 1 行出す。
 
-## 5. 試験（次の葉）
+## 5. 実行例
+
+測定 daemon の DB は直接読まず、先に単一ファイルの写しを作る。daemon が動いていても `.backup` は一貫した写しを作る。
+
+```sh
+# 1. 写しを作る（測定 daemon の state 配下の DB を、試行の記録の置き場へ）
+sqlite3 <測定 daemon の state>/celeris.db ".backup <rec>/db-copy.sqlite"
+test ! -e <rec>/db-copy.sqlite-wal   # -wal があると両 subcommand は exit 2
+sha256sum <rec>/db-copy.sqlite > <rec>/db-copy.sha256
+
+# 2. 工程 trace
+celeris-campaign ops-r1-trace --db <rec>/db-copy.sqlite --thread <案件 CoS thread id> \
+  --trial-id <trial id> --cutoff 2026-10-30T09:00:00Z \
+  --intake-record <rec>/ops-r1-intake/1.json --out <rec>/trace.json
+
+# 3. trial 別消費
+celeris-campaign ops-r1-attribution --db <rec>/db-copy.sqlite --thread <案件 CoS thread id> \
+  --trial-id <trial id> --condition-id <condition id> --cutoff 2026-10-30T09:00:00Z \
+  --intake-record <rec>/ops-r1-intake/1.json --out <rec>/attribution.json
+
+# 4. 写しが変わっていないこと
+sha256sum -c <rec>/db-copy.sha256
+```
+
+- 両 subcommand は写しを `mode=ro&immutable=1` の URI と `SQLITE_OPEN_READ_ONLY` で開き、migration を走らせない。
+  写しにも測定 daemon の DB にも書かず、`-wal`・`-shm` も作らない（`ops_r1_trace`・`ops_r1_attr` の試験が
+  写しの sha256 不変と `-wal`・`-shm` が無いことを確かめる）。
+- 標準出力には `--out` に書いた JSON の sha256 が 1 行出る。同じ写しと同じ引数で 2 回実行すると同じ値になる。
+- exit 0 は出力した（欠けた段・未帰属行があっても 0）、2 は入力の誤り（schema 版が 102 でない、`--thread` が
+  `project` の thread でない、`-wal` がある、`--cutoff` が RFC3339 でない、`--intake-record` と引数の食い違い）、
+  1 は読み取りの失敗。エラーは標準エラーに `error: ...` で出る。
+- `--intake-record` は省略できる。省略すると受付 message を `client_message_id='ops-r1-intake:<trial id>'` で探す。
+
+## 6. 試験
 
 試験名は `ops_r1_trace`・`ops_r1_attr` で始め、`crates/celeris/tests/actor_trace/support.rs` の Harness に
 helper を足して flow1 相当の fixture を作る（受付 message・`task.create` の CoS operation・子 task と planner/worker/reviewer

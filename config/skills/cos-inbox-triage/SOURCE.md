@@ -26,3 +26,6 @@ license: このリポジトリと同じ（外部の license は無い）
   尽きた後にだけ受信箱に出て CoS は escalate すること、古い依頼は daemon の sweep が自動の解消へ戻すことを足した。段の依頼には
   前から `integrate_task` の選択肢が無く CoS は escalate していたので、判断の基準は変わらない。policy_version は 6 のまま
   （config の `[cos.triage] policy_version` も変えない）。
+- 2026-10-29（ADR 2026-10-29-cos-review-rework-reopen）: §2・§3 に定型の代答 (e) `review_rework`（reviewer の技術的な差し戻しで
+  failed になった task の開き直し、同じ task で 2 回まで、同じ差し戻し文の繰り返しは不可）と、(e) にせず人へ回す条件を足した。
+  policy_version を 7 に上げた。config の `[cos.triage] policy_version` の既定も "7"。

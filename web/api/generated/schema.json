@@ -1866,6 +1866,11 @@
           "const": "work_guidance",
           "description": "(d) Work guidance for a worker question that changes neither objective nor acceptance.",
           "type": "string"
+        },
+        {
+          "const": "review_rework",
+          "description": "(e) Reopen a task the reviewer failed for a technical defect (ADR 2026-10-29-cos-review-rework-reopen).",
+          "type": "string"
         }
       ]
     },
@@ -1942,20 +1947,29 @@
     },
     "BasisRefKind": {
       "description": "D2 `refs[].kind`: what a piece of evidence is.",
-      "enum": [
-        "standing_rule",
-        "decision",
-        "approval",
-        "usage",
-        "ledger",
-        "commit",
-        "artifact",
-        "progress",
-        "adr",
-        "doc",
-        "message"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "standing_rule",
+            "decision",
+            "approval",
+            "usage",
+            "ledger",
+            "commit",
+            "artifact",
+            "progress",
+            "adr",
+            "doc",
+            "message"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "review",
+          "description": "The reviewer run whose verdict failed the task (the id in `reviewer(<id>): …`).",
+          "type": "string"
+        }
+      ]
     },
     "BehindTarget": {
       "description": "Task value: the repo with the largest behind commits (ADR-0130 D4), plus all repos.",

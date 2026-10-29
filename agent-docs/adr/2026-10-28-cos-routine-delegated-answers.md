@@ -104,3 +104,10 @@ ADR 2026-10-28-cos-integrate-task D4 は、統合の依頼を CoS が `integrate
 `integrate_task` にする。CoS はこれを `documented_default`（`refs` に `agent-docs/adr/2026-10-28-cos-integrate-task.md`）で
 代答する。basis の無い `integrate_task` の答えは他と同じく 422（`cos_basis_missing`）。escalated の依頼は従来どおり
 `human_required_reason` で 403 になり、推奨も選択肢も出さない。
+
+## 付記 A2（2026-10-29）: 5 種類目 `review_rework`
+
+[2026-10-29-cos-review-rework-reopen](2026-10-29-cos-review-rework-reopen.md) が、reviewer の技術的な差し戻しで failed になった
+task の開き直し（失敗の件への `reopen`）を 5 種類目 `review_rework` として足した。D1 の「4 種類だけ」はこの付記で 5 種類になる。
+refs の kind に `review`（差し戻した reviewer run の id）を足し、problem code に `cos_basis_rework_limit` を足した。policy_version は "7"。
+

@@ -18,6 +18,9 @@ use task_ops::human_inbox::InboxKind;
 
 use crate::problem::{ApiProblem, store_problem};
 
+mod review_rework;
+pub(crate) use review_rework::REOPEN_OPTION;
+
 /// The option key of a run-time tree limit decision that adds one allowance (ADR-0079 D7).
 pub const RAISE_ONCE_OPTION: &str = "raise-once";
 const MAX_REFS: usize = 20;
@@ -36,6 +39,8 @@ pub enum BasisCategory {
     DocumentedDefault,
     /// (d) Work guidance for a worker question that changes neither objective nor acceptance.
     WorkGuidance,
+    /// (e) Reopen a task the reviewer failed for a technical defect (ADR 2026-10-29-cos-review-rework-reopen).
+    ReviewRework,
 }
 
 impl BasisCategory {
@@ -45,6 +50,7 @@ impl BasisCategory {
             BasisCategory::RaiseOnce => "raise_once",
             BasisCategory::DocumentedDefault => "documented_default",
             BasisCategory::WorkGuidance => "work_guidance",
+            BasisCategory::ReviewRework => "review_rework",
         }
     }
 }
@@ -64,6 +70,8 @@ pub enum BasisRefKind {
     Adr,
     Doc,
     Message,
+    /// The reviewer run whose verdict failed the task (the id in `reviewer(<id>): …`).
+    Review,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -133,6 +141,7 @@ pub(crate) const BASIS_INVALID: &str = "cos_basis_invalid";
 pub(crate) const BASIS_OVER_FRAME: &str = "cos_basis_over_frame";
 pub(crate) const BASIS_REPEATED_FAILURE: &str = "cos_basis_repeated_failure";
 pub(crate) const BASIS_RAISE_ONCE_USED: &str = "cos_basis_raise_once_used";
+pub(crate) const BASIS_REWORK_LIMIT: &str = "cos_basis_rework_limit";
 
 fn problem(code: &'static str, detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::UNPROCESSABLE_ENTITY, code, detail)
@@ -142,7 +151,7 @@ pub(crate) fn missing() -> ApiProblem {
     problem(
         BASIS_MISSING,
         "a CoS answer without instructed_by needs basis (within_approved_frame, raise_once, \
-         documented_default or work_guidance with its evidence); otherwise escalate",
+         documented_default, work_guidance or review_rework with its evidence); otherwise escalate",
     )
 }
 
@@ -226,6 +235,14 @@ pub(crate) fn validate(
         return Err(invalid("basis.failures belongs to raise_once only".into()));
     }
     let option = target.option.as_deref();
+    if option == Some(review_rework::REOPEN_OPTION)
+        && target.kind == Some(InboxKind::Failed)
+        && category != BasisCategory::ReviewRework
+    {
+        return Err(invalid(
+            "reopening a failed task needs basis.category=review_rework".into(),
+        ));
+    }
     if option == Some(RAISE_ONCE_OPTION) && category != BasisCategory::RaiseOnce {
         return Err(invalid(format!(
             "answering {RAISE_ONCE_OPTION} needs basis.category=raise_once"
@@ -369,6 +386,7 @@ pub(crate) fn validate(
                 ));
             }
         }
+        BasisCategory::ReviewRework => review_rework::validate(store, basis, target)?,
     }
     Ok(())
 }

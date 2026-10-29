@@ -197,3 +197,35 @@ fn cos_chat_config_rejects_legacy_route_fields() {
     }
     assert!(load("[cos]\nmax_turns = 0\n").is_err());
 }
+
+/// ADR 2026-10-29-cos-authorization-fallback-after-triage D2: the safety net of an authorization
+/// item defaults to `max_wall_secs + 300`, follows `max_wall_secs`, and an explicit value wins.
+#[test]
+fn cos_triage_authorization_safety_net_default_and_override() {
+    let cfg = load("").expect("empty config loads");
+    assert_eq!(cfg.cos.triage.authorization_unavailable_after_secs, None);
+    assert_eq!(cfg.cos.authorization_unavailable_after_secs(), 1200);
+    let cfg = load("[cos]\nmax_wall_secs = 1800\n").expect("loads");
+    assert_eq!(cfg.cos.authorization_unavailable_after_secs(), 2100);
+    let cfg = load("[cos.triage]\nunavailable_after_secs = 5000\n").expect("loads");
+    assert_eq!(
+        cfg.cos.authorization_unavailable_after_secs(),
+        5000,
+        "never shorter than unavailable_after_secs"
+    );
+    let cfg = load("[cos.triage]\nauthorization_unavailable_after_secs = 3600\n").expect("loads");
+    assert_eq!(cfg.cos.authorization_unavailable_after_secs(), 3600);
+    let err = load("[cos.triage]\nauthorization_unavailable_after_secs = 120\n")
+        .expect_err("not longer than unavailable_after_secs");
+    assert!(
+        err.to_string()
+            .contains("authorization_unavailable_after_secs must be greater"),
+        "{err}"
+    );
+    let example = Config::load(Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../config/celeris.example.toml"
+    )))
+    .expect("example loads");
+    assert_eq!(example.cos.authorization_unavailable_after_secs(), 1200);
+}

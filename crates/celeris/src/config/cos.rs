@@ -111,6 +111,11 @@ pub struct CosTriageConfig {
     pub human_required: Vec<String>,
     #[serde(default = "default_unavailable_after_secs")]
     pub unavailable_after_secs: u64,
+    /// ADR 2026-10-29-cos-authorization-fallback-after-triage D2: the safety net of an
+    /// authorization item whose CoS run has not started, or is still live, after this many
+    /// seconds. Unset means `max_wall_secs + AUTHORIZATION_FALLBACK_MARGIN_SECS` (1200 by default).
+    #[serde(default)]
+    pub authorization_unavailable_after_secs: Option<u64>,
 }
 
 impl Default for CosTriageConfig {
@@ -121,6 +126,7 @@ impl Default for CosTriageConfig {
             min_confidence: default_min_confidence(),
             human_required: default_human_required(),
             unavailable_after_secs: default_unavailable_after_secs(),
+            authorization_unavailable_after_secs: None,
         }
     }
 }
@@ -164,6 +170,9 @@ fn default_human_required() -> Vec<String> {
 fn default_unavailable_after_secs() -> u64 {
     120
 }
+/// The margin added to `max_wall_secs` for the default authorization safety net: the run's own
+/// wall-clock limit ends a live run first, and the reaping tick and the item's queue wait fit in it.
+pub const AUTHORIZATION_FALLBACK_MARGIN_SECS: u64 = 300;
 
 /// `[cos.attachments]`。既定は 1 ファイル 25 MiB、1 メッセージ 100 MiB/10 件、保存量 10 GiB、
 /// 未送信 24 時間、最後の参照が外れてから 30 日。
@@ -240,6 +249,19 @@ impl CosConfig {
             .unwrap_or_else(|| PathBuf::from("."))
     }
 
+    /// ADR 2026-10-29-cos-authorization-fallback-after-triage D2: the resolved safety net of an
+    /// authorization item. Unset: `max_wall_secs + AUTHORIZATION_FALLBACK_MARGIN_SECS`, and never
+    /// shorter than `unavailable_after_secs`.
+    pub fn authorization_unavailable_after_secs(&self) -> u64 {
+        self.triage
+            .authorization_unavailable_after_secs
+            .unwrap_or_else(|| {
+                self.max_wall_secs
+                    .saturating_add(AUTHORIZATION_FALLBACK_MARGIN_SECS)
+                    .max(self.triage.unavailable_after_secs)
+            })
+    }
+
     pub fn stream_retention(&self) -> time::Duration {
         time::Duration::days(i64::from(self.stream_retention_days))
     }
@@ -275,6 +297,15 @@ impl CosConfig {
         if self.triage.unavailable_after_secs == 0 {
             return Err(ConfigError::Invalid(
                 "[cos.triage] unavailable_after_secs must be >= 1".into(),
+            ));
+        }
+        if let Some(secs) = self.triage.authorization_unavailable_after_secs
+            && secs <= self.triage.unavailable_after_secs
+        {
+            return Err(ConfigError::Invalid(
+                "[cos.triage] authorization_unavailable_after_secs must be greater than \
+                 unavailable_after_secs"
+                    .into(),
             ));
         }
         let mut seen = std::collections::HashSet::new();

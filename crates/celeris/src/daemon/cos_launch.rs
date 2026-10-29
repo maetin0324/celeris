@@ -38,6 +38,7 @@ pub(super) fn build_cos_chat_launch(
             min_confidence: config.cos.triage.min_confidence,
             human_required: config.cos.triage.human_required.clone(),
             unavailable_after_secs: config.cos.triage.unavailable_after_secs,
+            authorization_unavailable_after_secs: config.cos.authorization_unavailable_after_secs(),
         },
     }
 }

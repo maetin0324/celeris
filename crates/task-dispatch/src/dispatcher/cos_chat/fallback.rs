@@ -11,7 +11,13 @@
 //!   out), stopped/interrupted, or even completed successfully;
 //! - nothing answered it within `unavailable_after_secs` of its arrival,
 //!   whatever the reason (capacity wait, stopped queue, disk guard, a run still
-//!   going). This deadline is independent of the run's wall-clock limit.
+//!   going). This deadline is independent of the run's wall-clock limit;
+//! - an authorization item (ADR 2026-10-29-cos-authorization-fallback-after-triage)
+//!   is not timed out by `unavailable_after_secs` while CoS works on it: the
+//!   person is told only after CoS escalates it or its run ends without an
+//!   outcome. Its safety net is `authorization_unavailable_after_secs`, counted
+//!   from its arrival while no run has started and from the run's start while
+//!   the run is live.
 //!
 //! The route is taken through the store's outbox claim (`route=fallback`, one
 //! row per source triple, shared with escalation), so a fallback and an
@@ -32,7 +38,7 @@ use rusqlite::Connection;
 use serde_json::json;
 use task_core::chat::{ChatActor, ChatCard};
 use task_core::{NoticeId, NoticeStore};
-use task_ops::human_inbox::InboxItem;
+use task_ops::human_inbox::{InboxItem, InboxKind};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -67,20 +73,43 @@ pub(crate) struct FallbackCandidate {
     pub run_id: Option<String>,
     pub run_state: Option<String>,
     pub run_reason: Option<String>,
+    /// `chat_runs.started_at` of that run.
+    pub run_started_at: Option<String>,
     /// `cos_notification_routes.route` already claimed for this item.
     pub route: Option<String>,
+}
+
+/// The deadlines of the fallback (`[cos.triage]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FallbackDeadlines {
+    /// `unavailable_after_secs`: every item except authorization.
+    pub after_secs: u64,
+    /// `authorization_unavailable_after_secs`: the safety net of an authorization item.
+    pub authorization_after_secs: u64,
+}
+
+/// The items whose Discord message waits for CoS's first response
+/// (ADR 2026-10-29-cos-authorization-fallback-after-triage D1).
+pub(crate) fn waits_for_first_response(source_kind: &str) -> bool {
+    source_kind == InboxKind::Authorization.as_str()
+}
+
+fn seconds_since(at: &str, now: OffsetDateTime) -> Option<i64> {
+    let at = OffsetDateTime::parse(at, &Rfc3339).ok()?;
+    Some((now - at).whole_seconds())
 }
 
 /// Why CoS is considered absent for one item, or `None` while it may still answer.
 pub(crate) fn unavailable_reason(
     c: &FallbackCandidate,
     enabled: bool,
-    unavailable_after_secs: u64,
+    deadlines: FallbackDeadlines,
     now: OffsetDateTime,
 ) -> Option<String> {
     if !enabled {
         return Some("CoS が無効（cos.enabled=false）".into());
     }
+    let mut live = false;
     if c.run_id.is_some() {
         let detail = c.run_reason.as_deref().unwrap_or("理由なし");
         match c.run_state.as_deref() {
@@ -105,12 +134,29 @@ pub(crate) fn unavailable_reason(
             }
             // The claim writes the run in the same transaction; a missing row is a lost run.
             None => return Some("CoS run の記録が無い（crash）".into()),
-            _ => {}
+            _ => live = true,
         }
     }
-    let created = OffsetDateTime::parse(&c.created_at, &Rfc3339).ok()?;
-    let waited = (now - created).whole_seconds();
-    let limit = i64::try_from(unavailable_after_secs).unwrap_or(i64::MAX);
+    if waits_for_first_response(&c.source_kind) {
+        let limit = i64::try_from(deadlines.authorization_after_secs).unwrap_or(i64::MAX);
+        return if live {
+            // The run's own wall-clock limit ends it first; this only catches a run that hangs.
+            let since = c.run_started_at.as_deref().unwrap_or(&c.created_at);
+            let ran = seconds_since(since, now)?;
+            (ran > limit).then(|| {
+                format!("CoS の一次対応が {limit} 秒を超えて終わらない（run の経過 {ran} 秒）")
+            })
+        } else {
+            let waited = seconds_since(&c.created_at, now)?;
+            (waited > limit).then(|| {
+                format!(
+                    "CoS の一次対応が {limit} 秒を超えても始まらない（容量待ち・停止を含む。待ち {waited} 秒）"
+                )
+            })
+        };
+    }
+    let waited = seconds_since(&c.created_at, now)?;
+    let limit = i64::try_from(deadlines.after_secs).unwrap_or(i64::MAX);
     (waited > limit).then(|| {
         format!("CoS の未応答が {limit} 秒を超えた（容量待ち・停止を含む。待ち {waited} 秒）")
     })
@@ -130,7 +176,7 @@ pub(crate) fn candidates(db: &Path) -> Result<Vec<FallbackCandidate>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT i.id,i.source_kind,i.source_key,i.source_revision,i.created_at,i.run_id,\
-             r.state,r.reason,n.route,i.summary,i.detail \
+             r.state,r.reason,n.route,i.summary,i.detail,r.started_at \
              FROM cos_inbox_items i \
              LEFT JOIN chat_runs r ON r.run_id=i.run_id \
              LEFT JOIN cos_notification_routes n ON n.item_id=i.id \
@@ -152,6 +198,7 @@ pub(crate) fn candidates(db: &Path) -> Result<Vec<FallbackCandidate>, String> {
                 route: r.get(8)?,
                 summary: r.get(9)?,
                 detail: r.get(10)?,
+                run_started_at: r.get(11)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -421,7 +468,10 @@ impl CosChatLaunch {
             }
         };
         let enabled = self.config.enabled;
-        let after = self.config.triage.unavailable_after_secs;
+        let deadlines = FallbackDeadlines {
+            after_secs: self.config.triage.unavailable_after_secs,
+            authorization_after_secs: self.config.triage.authorization_unavailable_after_secs,
+        };
         let due: Vec<(FallbackCandidate, String)> = found
             .into_iter()
             .filter_map(|c| {
@@ -429,7 +479,7 @@ impl CosChatLaunch {
                     // Claimed before a crash: only the state mark is missing.
                     return Some((c, "退避の記録を回収（再起動）".to_owned()));
                 }
-                unavailable_reason(&c, enabled, after, now).map(|r| (c, r))
+                unavailable_reason(&c, enabled, deadlines, now).map(|r| (c, r))
             })
             .collect();
         if due.is_empty() {

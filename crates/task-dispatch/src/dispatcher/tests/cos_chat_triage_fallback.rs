@@ -4,7 +4,13 @@
 
 use super::*;
 use crate::dispatcher::cos_chat::fallback::{
-    COS_FALLBACK_HEADLINE, COS_FALLBACK_NO_RECOMMENDATION, FallbackCandidate, unavailable_reason,
+    COS_FALLBACK_HEADLINE, COS_FALLBACK_NO_RECOMMENDATION, FallbackCandidate, FallbackDeadlines,
+    unavailable_reason,
+};
+
+const DEADLINES: FallbackDeadlines = FallbackDeadlines {
+    after_secs: 120,
+    authorization_after_secs: 1200,
 };
 
 const FAIL: &str = "cat >/dev/null; echo boom >&2; exit 3";
@@ -324,6 +330,7 @@ fn cos_chat_triage_fallback_reason_is_deterministic() {
         run_id: None,
         run_state: None,
         run_reason: None,
+        run_started_at: None,
         route: None,
         summary: String::new(),
         detail: String::new(),
@@ -334,14 +341,14 @@ fn cos_chat_triage_fallback_reason_is_deterministic() {
             .expect("ts"),
         ..base.clone()
     };
-    assert!(unavailable_reason(&fresh, true, 120, now).is_none());
-    assert!(unavailable_reason(&fresh, false, 120, now).is_some());
+    assert!(unavailable_reason(&fresh, true, DEADLINES, now).is_none());
+    assert!(unavailable_reason(&fresh, false, DEADLINES, now).is_some());
     let running = FallbackCandidate {
         run_id: Some("r".into()),
         run_state: Some("running".into()),
         ..fresh.clone()
     };
-    assert!(unavailable_reason(&running, true, 120, now).is_none());
+    assert!(unavailable_reason(&running, true, DEADLINES, now).is_none());
     for (state, part) in [
         ("failed", "失敗"),
         ("interrupted", "止まった"),
@@ -352,7 +359,7 @@ fn cos_chat_triage_fallback_reason_is_deterministic() {
             run_state: Some(state.into()),
             ..running.clone()
         };
-        let reason = unavailable_reason(&c, true, 120, now).expect(state);
+        let reason = unavailable_reason(&c, true, DEADLINES, now).expect(state);
         assert!(reason.contains(part), "{state}: {reason}");
     }
     let quota = FallbackCandidate {
@@ -361,7 +368,7 @@ fn cos_chat_triage_fallback_reason_is_deterministic() {
         ..running
     };
     assert!(
-        unavailable_reason(&quota, true, 120, now)
+        unavailable_reason(&quota, true, DEADLINES, now)
             .expect("quota")
             .contains("quota")
     );
@@ -640,3 +647,6 @@ async fn cos_chat_triage_fallback_summary_request_failed_run_is_retried_up_to_th
     );
     assert_eq!(f.fallback_outbox(), 1, "the item is handed over once");
 }
+
+#[path = "cos_chat_triage_fallback_authorization.rs"]
+mod authorization;

@@ -53,6 +53,12 @@ pub struct CosTriageSettings {
     /// D6: a wait with no CoS outcome after this many seconds goes to the
     /// unavailable fallback (fallback leaf).
     pub unavailable_after_secs: u64,
+    /// ADR 2026-10-29-cos-authorization-fallback-after-triage D2: the safety net of an
+    /// authorization item. While its CoS run is live (queued・running・stopping) the
+    /// `unavailable_after_secs` deadline does not apply; the item goes to the person only when no
+    /// run starts within this many seconds of its arrival, or when its run is still live this many
+    /// seconds after it started. The daemon resolves the default as `max_wall_secs + 300`.
+    pub authorization_unavailable_after_secs: u64,
 }
 
 impl Default for CosTriageSettings {
@@ -74,6 +80,7 @@ impl Default for CosTriageSettings {
             .map(String::from)
             .collect(),
             unavailable_after_secs: 120,
+            authorization_unavailable_after_secs: 1200,
         }
     }
 }

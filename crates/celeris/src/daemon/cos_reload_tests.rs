@@ -153,6 +153,7 @@ fn cos_reload_builder_resolves_accounts_triage_and_running_endpoints() {
     config.cos.triage.min_confidence = 0.91;
     config.cos.triage.human_required = vec!["explicit_human".into()];
     config.cos.triage.unavailable_after_secs = 42;
+    config.cos.triage.authorization_unavailable_after_secs = Some(4242);
     let original_db = config.db.path.clone();
     config.db.path = dir.path().join("not-running.db");
     config.api.listen = None;
@@ -170,6 +171,7 @@ fn cos_reload_builder_resolves_accounts_triage_and_running_endpoints() {
     assert_eq!(built.triage.min_confidence, 0.91);
     assert_eq!(built.triage.human_required, ["explicit_human"]);
     assert_eq!(built.triage.unavailable_after_secs, 42);
+    assert_eq!(built.triage.authorization_unavailable_after_secs, 4242);
     let no_api = super::cos_launch::build_cos_chat_launch(&config, &original_db, None);
     assert!(no_api.unavailable_reason.unwrap().contains("listen"));
 }

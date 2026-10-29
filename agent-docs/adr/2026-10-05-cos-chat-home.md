@@ -85,6 +85,7 @@ policy_version = "1"
 min_confidence = 0.85
 human_required = ["fundamental_change", "external_publish", "destructive", "resource_overrun", "security", "explicit_human"]
 unavailable_after_secs = 120
+# authorization_unavailable_after_secs = 1200  # 付記 2026-10-29。未設定なら max_wall_secs + 300
 ```
 
 `llm_source` は ADR-0132 の `LlmSourceRef` と同じ文字列（claude_oauth/codex_oauth/celeris/openai_compatible:<id>）。none/unknown は CoS では不可。明示の組合せが provider/adapter/model/account と矛盾するなら config reload を拒否し、以前の設定を保つ。初回起動で不正なら起動失敗。省略時は claude-code に適合する有効 provider を既存規則で解決する。候補が無い場合は理由付き unavailable とし、勝手に別 harness/source に変更しない。実効値を chat_runs に保存し、変更は次 run から適用する。
@@ -284,6 +285,8 @@ task-api の cos_chat_legacy_console_instruct_queues_and_keeps_ids。
 切替 transaction でルート版 `cos_v1` と source cursor を保存し、旧未送信 outbox はその source を CoS item へ結び、旧送信を superseded にする。既に sent の履歴は消さない。導入時は現在の未解決待ちを 1 回だけ取り込み、過去の解決済み/終端通知を一斉送信しない。以後は daemon 再起動をまたいで source revision と outbox key を保持する。
 
 **CoS が動けない場合だけ決定的な直接通知へ退避する**。条件は CoS run の失敗/crash、全候補の quota 切れ/ログイン不可、`cos.enabled=false`、または容量待ち/停止を含め未応答が `unavailable_after_secs`（既定 120 秒）を超えた場合。run が成功終了しても item が未処理なら未応答として検出する。worker 内に LLM を再度呼ばせて退避を判断する必要はない。CoS の run wall-clock 上限とは別に待ちの期限を監視する。CoS daemon 自体が停止している間に送信できるとは約束せず、再起動時に未解決行を回収する。
+
+付記 2026-10-29（[2026-10-29-cos-authorization-fallback-after-triage](2026-10-29-cos-authorization-fallback-after-triage.md)）: 認可の件は CoS の一次対応が終わるまで送らない。CoS run が動いている間は `unavailable_after_secs` で退避せず、escalate・run の失敗/停止/crash・completed 未処理・`cos.enabled=false` のときだけ送る。安全網は `[cos.triage] authorization_unavailable_after_secs`（未設定なら `max_wall_secs + 300`、既定 1200 秒）。認可以外の件は上のとおり。
 
 fallback は「**CoS 不在のため直接通知**」、不在理由、元の待ちの要点・既存選択肢（自由文は web 回答）・推奨（無ければ「CoS の推奨なし」）、該当 web link を定型で送る。回答は人に残し、自動で approve しない。CoS が回復しても、同じ revision の fallback を再度 escalation で送らず、既に人へ委ねた項目として session に渡す。人の回答を優先し、CoS が勝手に引き取って代答しない。送信前にも元待ちの解決を再確認し、解決済みなら outbox を取り下げる。
 

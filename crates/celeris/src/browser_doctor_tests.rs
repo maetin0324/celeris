@@ -104,6 +104,14 @@ fn fake_credentiald(path: &std::path::Path, success: bool) -> std::thread::JoinH
     })
 }
 
+/// Unix socket の path は `sun_path`（108 byte）に収まる必要がある。run の `TMPDIR` は長いので socket は短い dir に置く。
+fn short_socket_dir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("bd")
+        .tempdir_in("/tmp")
+        .expect("socket dir")
+}
+
 fn fake_launcher(path: &std::path::Path, loopback: bool) -> std::thread::JoinHandle<()> {
     use task_worker::browser_launcher::protocol::{DEFAULT_MAX_FRAME, read_frame, write_message};
     use task_worker::browser_launcher::{PROTOCOL_VERSION, Request, Response};
@@ -225,10 +233,11 @@ fn browser_doctor_launcher_dns_credential_ping_and_versions_are_checked() {
     install_ledger(&doctor);
     add_policy_grant(&store);
     doctor.config.browser.runtime = "launcher".into();
-    let launcher = dir.path().join("launcher.sock");
+    let sockets = short_socket_dir();
+    let launcher = sockets.path().join("launcher.sock");
     doctor.config.browser.launcher_socket = Some(launcher.clone());
     let launcher_server = fake_launcher(&launcher, false);
-    let credential = dir.path().join("credential.sock");
+    let credential = sockets.path().join("credential.sock");
     doctor.config.api.browser_credentiald_control_socket = Some(credential.clone());
     let credential_server = fake_credentiald(&credential, true);
     let key = dir.path().join("key.pub");
@@ -273,10 +282,11 @@ fn browser_doctor_rejects_test_launcher_broker_denial_stale_ledger_and_bad_key()
     install_ledger(&doctor);
     doctor.release = Some("ffffffffffff".into());
     doctor.config.browser.runtime = "launcher".into();
-    let launcher = dir.path().join("launcher.sock");
+    let sockets = short_socket_dir();
+    let launcher = sockets.path().join("launcher.sock");
     doctor.config.browser.launcher_socket = Some(launcher.clone());
     let launcher_server = fake_launcher(&launcher, true);
-    let credential = dir.path().join("credential.sock");
+    let credential = sockets.path().join("credential.sock");
     doctor.config.api.browser_credentiald_control_socket = Some(credential.clone());
     let credential_server = fake_credentiald(&credential, false);
     let key = dir.path().join("key.pub");

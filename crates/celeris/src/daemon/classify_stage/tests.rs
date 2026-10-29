@@ -383,6 +383,8 @@ async fn classification_log_shows_specificity_and_confidence_but_no_input_text()
             .with_ansi(false)
             .finish(),
     );
+    // 同じ process の他の試験が callsite の interest を「無効」で覚えていても、この subscriber で出す。
+    tracing::callsite::rebuild_interest_cache();
     let mut missing = classified(Specificity::NeedsImplementation, 0.9);
     if let ClassifyOutcome::Classified { classification, .. } = &mut missing {
         classification.specificity.classification_confidence = None;

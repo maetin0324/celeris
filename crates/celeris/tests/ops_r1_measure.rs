@@ -416,7 +416,12 @@ fn ops_r1_measure_cos_path_with_stub_harness() {
             .and_then(|items| items.into_iter().find(|t| t["title"] == TASK_TITLE))
     });
     let task_id = task["id"].as_str().expect("task id").to_owned();
-    let status = fs::read_to_string(d.stub_dir().join("created/status")).expect("status");
+    // stub の curl は応答を受けてから status を書くので、task が見えた後も書き終わりを待つ。
+    let status = d.wait_for("the stub to record the operation status", || {
+        fs::read_to_string(d.stub_dir().join("created/status"))
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+    });
     let response = fs::read_to_string(d.stub_dir().join("created/response.json")).expect("resp");
     assert_eq!(status.trim(), "200", "{response}");
     let op: Value = serde_json::from_str(&response).expect("operation json");

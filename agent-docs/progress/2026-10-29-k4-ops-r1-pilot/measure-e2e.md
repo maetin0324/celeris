@@ -25,8 +25,10 @@ completed: 2026-10-29
 - 生成した config には `[harness_selection]` が無く、CoS が起票した task が `route refused: harness selection failed: no eligible harness is declared` で止まった。CoS run は harness を明示するので通るが、通常の task は genre・role・execution class の規則か既定が要る。実測定（`--harness real`）でも同じく止まる。
 - 直し: script が `[harness_selection] rules = [{ required_capabilities = [], harness = "claude_code" }]` と `execution_class_defaults = { coding/planner/review = ["claude_code"] }` を書く（通常運用 config の最後の「条件なし → claude_code」と同じ形）。offline 試験 `test_stub_config_fields` にこの節の assert を足した。
 
+- 前回提出の check で試験が 1 回落ちた（`assertion left == right: left "" right "200"`）。原因は試験側の競合: daemon が起票を commit すると task は API に見えるが、stub の `curl -w '%{http_code}' >status` はまだ応答を書き終えていない（shell の redirect で status は空のまま開かれている）。直し: task を見つけた後に、status file が空でなくなるまでも出来事待ちで待つ（`-w` は本文の後に書かれるので、そのとき response.json も書き終わっている）。daemon のコードは変えていない。
+
 ## 証拠（提出時の HEAD で実行）
-- 条件 0: `cargo nextest run -p celeris --test ops_r1_measure` → exit 0、`1 test run: 1 passed`（9.0 秒）。
+- 条件 0: `cargo nextest run -p celeris --test ops_r1_measure` → exit 0、`1 test run: 1 passed`（7〜9 秒）。競合の直しの後に 4 回続けて実行し 4 回とも pass。
 - 条件 1: 上の assert 1〜5（試験の本文）。値は一度 `--no-capture` で確かめた: runs = `[["worker","completed"]]`、報告 run の入力 = `root-done:<task_id>:16`、報告 text = `OPS_R1_E2E_REPORT: 依頼の task が完了しました。`。
 - 条件 2: `git diff $CELERIS_WU_BASE -- crates/celeris/src 'crates/task-*' web | wc -l` → 0。`git merge-base HEAD main` からも 0。`sh "$CELERIS_WU_SCOPE_PATHS"` → `crates/celeris/tests/ops_r1_measure.rs`・`scripts/campaign/ops-r1-measure-config.sh`・`scripts/campaign/test_ops_r1_measure_config.py`（と本ファイル・docs/ops）。
 - 条件 3:

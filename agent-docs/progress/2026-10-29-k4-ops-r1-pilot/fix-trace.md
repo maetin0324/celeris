@@ -62,3 +62,24 @@ verdict は feasible。daemon（release 94f86928dc13、schema 版 102）のコ�
 
 - 実装の葉（trace・attr）は試験を `crates/celeris/tests/ops_r1_trace*.rs`・`ops_r1_attr*.rs` に置き、
   `actor_trace/support.rs` に helper を足して fixture を作る。
+
+## attr（WU attr、2026-10-29 完了）
+
+`celeris-campaign ops-r1-attribution --db <写し> --thread <id> --trial-id <id> --condition-id <id> --cutoff <RFC3339>
+[--intake-record <JSON>] --out <path>` を足した。daemon 側の crate は変えていない。
+
+- 実装: `crates/campaign/src/ops_r1_attr.rs`。DB の開き方・受付・起票・子孫の解決は `ops_r1_trace` の関数
+  （`open_copy`・`intake_stage`・`created_stage`・`trial_tasks`）を共有する。main.rs は `ops-r1-attribution` の分岐だけ。
+- 設計に足した細部: chat run の `started_at` が NULL の行は `time_reason: "not_started"`、`usage_json` が JSON でない行は
+  `usage_reason: "usage_invalid"`。`role` が決まらない帰属行は `totals` の key を `other:<role_raw>` にする。
+  `role_raw` は常に元の値（runs.role か thread の kind）を出す。
+- 試験: `crates/celeris/tests/ops_r1_attr.rs`（fixture は `ops_r1/trace_fixture.rs` の写しに試行外の run・統括 CoS の
+  参照あり/なしの turn・受付前の turn を足す `ops_r1/attr_fixture.rs`）。5 件: role ごとの行と合計、試行外 run の除外、
+  未帰属の null と reason（`no_trial_reference`・`before_intake`・`trial_roots_unknown`）、2 回の出力の byte 一致と
+  写しの sha256 不変、入力の誤りで exit 2。
+- 検査（提出時の HEAD で実行、基準は `$CELERIS_WU_BASE`）:
+  - `cargo test -p celeris --test ops_r1_trace --test ops_r1_attr`: exit 0、5 + 5 passed
+  - `bash scripts/dev/test-affected.sh`: exit 0、2824 passed / 9 skipped
+  - `cargo clippy --workspace -- -D warnings`: exit 0
+  - `cargo fmt --all -- --check`: exit 0
+  - `git diff --name-only $CELERIS_WU_BASE -- 'crates/task-*' crates/celeris/src web`: 0 行

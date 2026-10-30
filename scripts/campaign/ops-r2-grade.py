@@ -2,7 +2,7 @@
 """ops-r2 の採点 wrapper（/var/lib/celeris-eval-bin/grade として celeris-eval 持ち 0555 で置く）。
 
 drop box の tgz を sha256 で照合して EVAL_ROOT/work/ に展開し、celeris-campaign を
---grader-root EVAL_ROOT/private で走らせ、判定 JSON を check-ops-r1-leak.py に通してから
+--grader-root EVAL_ROOT/private --grade-case-root EVAL_ROOT/grade-cases で走らせ、判定 JSON を check-ops-r1-leak.py に通してから
 outbox に 0644 で置く（docs/ops/ops-r2-isolation.md §4.3、ADR 2026-10-30-ops-r2-isolation-principal D4）。
 
 stdout に出すのは outbox の判定 JSON の path だけ。失敗は短い理由だけを stderr に出す。
@@ -11,7 +11,8 @@ private の中身・EVAL_ROOT の path 一覧・celeris-campaign の出力は st
 
 usage: grade --tgz <drop box の tgz> --sha256 <hex> --case <case id> -- <celeris-campaign の引数...>
   引数の {work} は展開先の dir、{verdict} は判定 JSON の書き先に置き換える（{verdict} は必須）。
-  --grader-root は wrapper が付ける。引数に --grader-root・'..'・work の外の絶対 path は書けない。
+  --grader-root と --grade-case-root は wrapper が付ける（repo の漏洩済み grade-case を使わせない）。
+  引数に --grader-root・--grade-case-root・'..'・work の外の絶対 path は書けない。
 """
 import hashlib
 import os
@@ -112,8 +113,9 @@ def main(argv):
         if "{verdict}" in a:
             seen_verdict = True
         a = a.replace("{work}", art).replace("{verdict}", verdict)
-        if a == "--grader-root" or a.startswith("--grader-root="):
-            fail(64, "--grader-root is set by the wrapper")
+        for fixed in ("--grader-root", "--grade-case-root"):
+            if a == fixed or a.startswith(fixed + "="):
+                fail(64, f"{fixed} is set by the wrapper")
         if ".." in a.split("/"):
             fail(64, "argument must not contain '..'")
         if a.startswith("/") and not (a == work or a.startswith(work + "/")):
@@ -123,7 +125,9 @@ def main(argv):
         fail(64, "celeris-campaign arguments must contain {verdict}")
 
     private_root = os.path.join(eval_root, "private")
-    cc = [os.path.join(bin_dir, "celeris-campaign"), *args, "--grader-root", private_root]
+    grade_case_root = os.path.join(eval_root, "grade-cases")
+    cc = [os.path.join(bin_dir, "celeris-campaign"), *args, "--grader-root", private_root,
+          "--grade-case-root", grade_case_root]
     with open(os.path.join(work, "celeris-campaign.log"), "wb") as log:
         r = subprocess.run(cc, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, cwd=work)
     if r.returncode != 0 or not os.path.isfile(verdict):

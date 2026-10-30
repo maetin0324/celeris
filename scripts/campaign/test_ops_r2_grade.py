@@ -27,6 +27,8 @@ FAKE_CC = r'''#!/usr/bin/env python3
 import json, os, sys
 a = sys.argv[1:]
 root = a[a.index('--grader-root') + 1]
+gcr = a[a.index('--grade-case-root') + 1]
+assert a.count('--grade-case-root') == 1 and gcr == os.path.join(os.path.dirname(root), 'grade-cases'), gcr
 out = a[a.index('--out') + 1]
 art = a[a.index('--artifact') + 1]
 priv = json.load(open(os.path.join(root, 'final', '%s', 'private.json')))
@@ -127,6 +129,8 @@ class GradeTest(unittest.TestCase):
 
     def test_caller_cannot_redirect_grader_root_or_output(self):
         for extra in (['grade', '--out', '{verdict}', '--grader-root', '/x'],
+                      ['grade', '--out', '{verdict}', '--grade-case-root', 'crates/campaign/fixtures/grade-cases'],
+                      ['grade', '--out', '{verdict}', '--grade-case-root={work}'],
                       ['grade', '--out', '{verdict}', '--report', '/tmp/report.json'],
                       ['grade', '--out', '{work}/../../x'],
                       ['grade', '--artifact', '{work}']):
@@ -173,6 +177,25 @@ class SetShaTest(unittest.TestCase):
         old = json.loads(text)['private_ref']['sha256']
         self.assertEqual(self.run_set(old).returncode, 65)
         self.assertEqual(self.run_set('xyz').returncode, 64)
+        self.assertEqual(self.case.read_text(), text)
+
+    def test_sets_grade_case_sha(self):
+        before = json.loads(self.case.read_text())
+        r = self.run_set('ab' * 32, '--grade-case-sha256', 'cd' * 32)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        after = json.loads(self.case.read_text())
+        self.assertEqual(after['private_ref']['sha256'], 'ab' * 32)
+        self.assertEqual(after['grade_case_ref']['sha256'], 'cd' * 32)
+        for k in ('private_ref', 'grade_case_ref'):
+            after[k]['sha256'] = before[k]['sha256']
+        self.assertEqual(after, before)
+
+    def test_refuses_repo_grade_case_sha(self):
+        text = self.case.read_text()
+        old = json.loads(text)['grade_case_ref']['sha256']
+        r = self.run_set('ab' * 32, '--grade-case-sha256', old)
+        self.assertEqual(r.returncode, 65)
+        self.assertIn('leaked', r.stderr)
         self.assertEqual(self.case.read_text(), text)
 
     def test_does_not_read_private(self):

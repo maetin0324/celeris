@@ -297,3 +297,26 @@ task 01M669QB069GND2ZKA1T97QPY9 の final review（criterion 4）の差し戻し
 - E1 採点 wrapper は `scripts/campaign/ops-r2-grade.py`（install 先 `/var/lib/celeris-eval-bin/grade`）。tgz の sha256 照合 → `EVAL_ROOT/work/` に安全展開 → `celeris-campaign ... --grader-root EVAL_ROOT/private` → `check-ops-r1-leak.py` → outbox に 0644。stdout は outbox の path だけ、private と `celeris-campaign` の出力は `work/` の外に出さない。呼び出し側は `--grader-root`・`work/` の外の絶対 path・`..` を渡せない。起動 uid が `EVAL_ROOT` の持ち主でなければ止まる（試験は `CELERIS_EVAL_TEST_EUID` で注入、実 uid は人が §4.7 で確かめる）。承認票に wrapper の sha256 欄は足さず、開始前チェックで install 先と repo の file の sha256 一致を確かめる。
 - E2 新 private の sha256 の公開部への反映は `scripts/campaign/ops-r2-set-private-sha.py`。入力は sha256 の文字列だけで private を読まない。漏洩済みの旧値（`d02126077a47495b121e1e678f055ba4e2493f92d05cd010f2bda32d30694760`）は拒否する。frozen manifest の `materials_sha256` は `private_ref` を除く公開部から作る（`Case::public_json`）ので再 freeze は要らず、script は公開部が変わらないことを確かめる。承認票の値での反映は人の値が出てから。
 - E3 `celeris-eval` の shell は `/usr/sbin/nologin` に一本化し、評価器の shell には `sudo -u celeris-eval /bin/bash` で入る（`sudo -iu` の記述は消した）。
+
+## 付記 2026-10-30「K2 の grade-case を EVAL_ROOT で作る・人の sudo と L1 probe の食い違い」（task 01M673C32XMMPZ83Z6WK818WZV）
+
+- G1 採点は repo の grade-case を使わない。repo の `crates/campaign/fixtures/grade-cases/final/k2-bf-xattr-restart-campaign/` 一式は
+  旧 private から生成され、旧い hidden command と hidden 試験を含む漏洩済みの旧解答として扱う。採点の grade-case は評価器 uid が
+  `EVAL_ROOT/grade-cases/final/<case>/` に生成する。生成の道具は `celeris-campaign gen-grade-case`（既存の `grade_case_gen::generate` を使う。
+  入力は `EVAL_ROOT/private/final/<case>/private.json` と、評価器が置く hidden 試験 file の dir `EVAL_ROOT/hidden-tests/final/<case>/`）。
+  stdout には生成物の sha256 だけを出し、中身・path の一覧は stdout/stderr に出さない。hidden 試験の dir が無い・空のときは拒否する
+  （private の expected が hidden 試験を求めるのに hidden_command だけの grade-case を作ると、採点が仕様より弱くなるため）。
+- G2 `ops-r2-grade.py` は `--grade-case-root EVAL_ROOT/grade-cases` を固定で付け、引数の `--grade-case-root` を拒む（`--grader-root` と同じ扱い）。
+- G3 `ops-r2-set-private-sha.py` は `--grade-case-sha256` を受け、人が渡す 2 つの値で `case.json` の `private_ref.sha256` と
+  `grade_case_ref.sha256` を替える。repo の旧 grade-case の sha256（`f84089bcf161edab75bfc619574c112de446b75622f893323f43405190aca593`）は拒否する。
+  `Case::public_json` は `private_ref` と `grade_case_ref` を除くので、frozen manifest の `materials_sha256` は変わらず再 freeze は要らない。
+- G4 repo の旧 grade-case の file は HEAD に残す（fixture の試験が使う。git の履歴からは消せない）。deny list の最低限の項目に
+  `crates/campaign/fixtures/grade-cases/final/k2-bf-xattr-restart-campaign/` を足し、開始前チェック §0 で `grade_case_ref.sha256` が
+  `EVAL_ROOT` の grade-case の値と一致し、repo の旧値でないことを確かめる。
+- G5 L1 の限界: この host の人の uid は sudoers で `(ALL) NOPASSWD: ALL` を持つ。bwrap の外の人の uid の process は
+  `sudo -u celeris-eval` で private を読める。L1（持ち主の uid の分離）が塞ぐのは bwrap に包まれた試行の主体だけで、
+  bwrap の中では no_new_privs で sudo が拒否される（実機で確認）。人の sudoers は変えない。§4.4 の確認は
+  「人の shell からの sudo は通る（限界）」「`ops-r2-sandbox.sh -- sudo -n -u celeris-eval ...` は no new privileges で失敗する」に改める。
+- G6 L1 probe の mount 判定: `probe-read --principal l1` は持ち主の uid の分離だけを確かめる主体なので、`mounts_outside_allow`
+  （bwrap の mount の外への到達）は判定に入れず、報告欄に残すだけにする。`--allow` が無い l1 の probe は deny path が全て
+  readable:false・listable:false なら ok:true・exit 0 とする（§4.7 の期待に合わせる）。runtime principal の判定は変えない。

@@ -71,6 +71,16 @@ updated: 2026-10-30
 
 ### commit
 - phase 1: 試験 daemon の API port を予約し、spawn した子本人の応答か確かめる（cap_probe_real_daemon・routing_eval_run）
+- phase 1: probe-flake の検査の結果を進捗に書く
+
+### 検証（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `cargo test -p celeris --test cap_probe_real_daemon --test credential_wait_notify` を 3 回続けて実行: 3 回とも exit 0（6 passed + 2 passed、cap_probe は約 2.5 秒）
+- `cargo test -p celeris --test routing_eval_run`: 1 passed
+- `bash scripts/dev/test-affected.sh`: exit 0（対象 celeris・celerisctl、nextest 820 passed・0 skipped。新しい試験も一覧に入る）
+- `cargo clippy --workspace -- -D warnings`・`--all-targets`: exit 0
+- `cargo fmt --all -- --check`: exit 0（差分なし）
+- `sh scripts/dev/progress-index.sh --check`: ok
+- `cargo test --workspace` はこの WU では走らせていない（release gate と最終レビューの検査で走る）
 
 ## 提案
 - 計画の段に構造化した危うさの欄が無いので、kind は CoS の申告のまま。planner の出力に kind を持たせると API が申告漏れを検査できる（別 ADR）。

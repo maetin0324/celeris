@@ -56,9 +56,15 @@ cron の `cos_review` は、統括 CoS の裏 thread（種別 `review`、題『�
 人はこの thread を読まず、書けない。入力の `client_message_id` は `cron-cos-review:` で始まる。
 
 - 文脈は統括 CoS と同じ（全案件の要約と全 thread の未解決の受信箱項目）。session は人の統括 thread と別。
+- 入力には DB から決定的に集めた「いま開いている人待ち」（task id・種類・開いた時刻）と
+  「前回から閉じた人待ち（報告しない）」が入る（ADR 2026-10-30-cos-review-open-waits-and-plan-rejudge）。
+- 報告に書く人待ち・待ちの状態は、「いま開いている人待ち」にあるものか、報告直前に API
+  （`celerisctl show <task>`・`GET /api/v1/cos/inbox`）で開いていると確かめたものだけにする。
+  前の session の記憶だけで状態を書かない。task が done・回答済みの決定・人の待ちが無い待機（クラスタ job 待ちなど）を人待ちと書かない。
+- 「前回から閉じた人待ち」と、前回までに報告した件を「増えた」「新しい」と書かない。
 - 人に伝えるべきことがあるときだけ、`chat.review_report`（`POST /api/v1/cos/review-report`、
   body `{"review_message_id":"<この入力の id>","text":"…"}`）で統括 CoS チャットに報告を 1 件出す。
-  伝えるべきことは、新しい停滞・人の判断が要る件・案件の要約の重要な変化（状態・待ちの変化）。
+  伝えるべきことは、新しい停滞・前回から増えた人の判断が要る件・案件の要約の重要な変化（状態・待ちの変化）。
 - 伝えることが無ければ報告しない。review thread に 1 行（例: 「変化なし」）書いて終える。
 - 報告は人が数十秒で読める分量にし、案件名・task id・人がする事を書く。入力 1 件に報告は 1 件まで（再送は同じ報告を返す）。
 - 統括 thread へ `chat.message_post` で直接書かない。統括 thread への報告の経路は `chat.review_report` だけ。

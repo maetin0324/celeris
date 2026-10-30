@@ -416,7 +416,8 @@ fn inbox_section(chat: &CosChatContext) -> String {
     let mut out = String::from(
         "## 受信箱の未解決の件 (open inbox items, newest first)\n\
          人に件を説明するときは、受信箱の切れた detail を写さず、本文・task の最新の question・選択肢の中身・案件の状況を\
-         読んで、何が起きたか・人が決めること・各選択肢の中身・推奨を書く（skill cos-inbox-triage §6・§11）。\n",
+         読んで、背景（どの依頼・task から来たか、なぜ今か）・人が決めること・各選択肢の中身・推奨・答えると何が起きるかを書く。\
+         task 内部の語には短い言い換えを添える（skill cos-inbox-triage §6・§11）。\n",
     );
     for item in &chat.inbox_items {
         out.push_str(&format!(

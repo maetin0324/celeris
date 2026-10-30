@@ -780,12 +780,14 @@ fn cutoff_or_job_only_records_leave_human_time_and_rework_unobserved() {
     assert_eq!(arm["rework_missing_trials"], 1);
     assert_eq!(arm.get("human_union_secs"), None, "欠測を 0 秒に足さない");
 
+    // 人の op が 0 件の試行は、介入は観測済みの 0 だが、人の時間は未記録（「人の op なし」の宣言記録が無い）。
     let b = &j["trials"][1];
-    assert_eq!(b["human_time"]["source"], "evaluator", "{b}");
-    assert_eq!(b["human_time"]["value"]["union_secs"], 0);
+    assert_eq!(b["human_time"]["source"], "not_recorded", "{b}");
+    assert_eq!(b["human_time"]["value"], Value::Null);
     assert_eq!(b["interventions"]["value"], json!({}));
     assert_eq!(b["rework"]["source"], "evaluator");
-    assert_eq!(j["arms"]["B0"]["human_union_secs"], 0);
+    assert_eq!(j["arms"]["B0"].get("human_union_secs"), None);
+    assert_eq!(j["arms"]["B0"]["human_time_not_recorded_trials"], 1);
     assert_eq!(j["arms"]["B0"].get("human_time_missing_trials"), None);
 
     let md = fs::read_to_string(d.path().join("o/report.md")).expect("md");
@@ -1005,4 +1007,330 @@ fn request_revisions_count_once_and_only_human_manual_time_counts() {
         md.contains("主体別介入") && md.contains("unknown 主体"),
         "{md}"
     );
+}
+
+/// 人の時間の記録が無い試行は 0 ではなく欠測（null）で、合計は下限と coverage（記録のある試行・区間の割合）で出す。
+/// 時刻の無い人の op・主体不明の op は推測で埋めず、長さを持たない件数と unknown 主体に残す
+/// （ADR 2026-10-30-ops-r1-human-time-coverage）。
+#[test]
+fn unrecorded_human_time_is_missing_with_coverage_not_zero() {
+    let d = tempfile::tempdir().expect("tmp");
+    write_trials(d.path());
+    let f = d.path().join("human-ops.jsonl");
+    let f = f.to_str().expect("p");
+    // A0: 区間のある人の op（600 秒）と、始点の記録が無い人の op（長さを持たない）。
+    rec(
+        f,
+        "A0",
+        &[
+            "--op-kind",
+            "status_check",
+            "--intent",
+            "monitoring",
+            "--logical-op",
+            "h1",
+            "--started-at",
+            "2026-10-22T00:10:00Z",
+            "--ended-at",
+            "2026-10-22T00:20:00Z",
+        ],
+    );
+    rec(
+        f,
+        "A0",
+        &[
+            "--op-kind",
+            "research_direction",
+            "--intent",
+            "research",
+            "--logical-op",
+            "h2",
+            "--ended-at",
+            "2026-10-22T00:40:00Z",
+        ],
+    );
+    // 主体の分からない発言（時刻も無い）。人に寄せない。
+    rec_as(
+        f,
+        "unknown",
+        "unrecorded",
+        &[
+            "--mode",
+            "manual",
+            "--op-kind",
+            "research_direction",
+            "--intent",
+            "research",
+            "--logical-op",
+            "u1",
+        ],
+    );
+    // B: 評価者記録なし（arm の label は join の arm 名のまま）。
+    let j = run_report(f, d.path(), &d.path().join("o"));
+    let a = j["trials"]
+        .as_array()
+        .expect("t")
+        .iter()
+        .find(|t| t["arm"] == "A")
+        .expect("A");
+    assert_eq!(a["human_time"]["value"]["union_secs"], 600, "{a}");
+    assert_eq!(a["human_time"]["value"]["missing_start"], 1);
+    assert_eq!(a["human_time"]["value"]["lower_bound"], true);
+    let c = &a["human_time_coverage"];
+    assert_eq!(c["source"], "evaluator", "{c}");
+    assert_eq!(c["value"]["bound"], "lower_bound");
+    assert_eq!(
+        c["value"]["human_ops"], 2,
+        "unknown 主体は人の op に入れない"
+    );
+    assert_eq!(c["value"]["ops_with_interval"], 1);
+    assert_eq!(c["value"]["op_interval_ratio"], 0.5);
+    assert_eq!(a["unknown_actor"]["value"]["interventions"], 1);
+    assert_eq!(a["unknown_actor"]["value"]["time"]["union_secs"], 0);
+    assert_eq!(a["unknown_actor"]["value"]["time"]["missing_start"], 1);
+
+    let b = j["trials"]
+        .as_array()
+        .expect("t")
+        .iter()
+        .find(|t| t["arm"] == "B")
+        .expect("B");
+    assert_eq!(b["human_time"]["source"], "missing", "{b}");
+    assert_eq!(b["human_time"]["value"], Value::Null);
+    let c = &b["human_time_coverage"];
+    assert_eq!(c["source"], "missing", "{c}");
+    assert_eq!(c["value"]["bound"], "missing");
+    assert_eq!(c["value"]["union_secs"], Value::Null, "欠測を 0 秒にしない");
+    assert_eq!(c["value"]["op_interval_ratio"], Value::Null);
+    assert_eq!(j["arms"]["B"].get("human_union_secs"), None);
+    assert_eq!(j["arms"]["B"]["human_time_coverage"]["bound"], "missing");
+    assert_eq!(
+        j["arms"]["B"]["human_time_coverage"]["union_secs"],
+        Value::Null
+    );
+
+    let all = &j["human_time_coverage"];
+    assert_eq!(all["bound"], "lower_bound", "{all}");
+    assert_eq!(all["union_secs"], 600);
+    assert_eq!(all["trials"], 2);
+    assert_eq!(all["observed_trials"], 1);
+    assert_eq!(all["missing_trials"], 1);
+    assert_eq!(all["trial_ratio"], 0.5);
+    assert_eq!(all["op_interval_ratio"], 0.5);
+
+    let md = fs::read_to_string(d.path().join("o/report.md")).expect("md");
+    assert!(
+        md.contains("- 全体 lower_bound: union 600 秒、人の op を記録した試行 1/2（0.500）、欠測の試行 1、未記録（人の op 0 件）の試行 0"),
+        "{md}"
+    );
+    assert!(md.contains("- arm B missing: union 欠測 秒"), "{md}");
+    let b_row = md.lines().find(|l| l.starts_with("| B |")).expect("B row");
+    assert!(
+        b_row.contains("| 欠測 (欠測・1・0) |"),
+        "人の時間を 0 と書かない: {b_row}"
+    );
+
+    // 同じ入力からは同じ出力。
+    let j2 = run_report(f, d.path(), &d.path().join("o2"));
+    assert_eq!(j, j2);
+}
+
+/// trials.jsonl の A・B の 2 試行に、評価者の記録を書いて report を作る。
+fn coverage_case(write: impl Fn(&str)) -> (Value, String) {
+    let d = tempfile::tempdir().expect("tmp");
+    write_trials(d.path());
+    let f = d.path().join("human-ops.jsonl");
+    let f = f.to_str().expect("p");
+    write(f);
+    let j = run_report(f, d.path(), &d.path().join("o"));
+    let md = fs::read_to_string(d.path().join("o/report.md")).expect("md");
+    (j, md)
+}
+
+fn human_op(f: &str, arm: &str, id: &str, start: Option<&str>, end: &str) {
+    let mut a = vec![
+        "--op-kind",
+        "status_check",
+        "--intent",
+        "monitoring",
+        "--logical-op",
+        id,
+        "--ended-at",
+        end,
+    ];
+    if let Some(s) = start {
+        a.extend(["--started-at", s]);
+    }
+    rec(f, arm, &a);
+}
+
+fn protocol_op(f: &str, arm: &str) {
+    rec(
+        f,
+        arm,
+        &[
+            "--op-kind",
+            "protocol_step",
+            "--intent",
+            "protocol",
+            "--logical-op",
+            "trial-start",
+            "--started-at",
+            "2026-10-22T00:00:00Z",
+            "--ended-at",
+            "2026-10-22T00:00:10Z",
+        ],
+    );
+}
+
+fn trial<'a>(j: &'a Value, arm: &str) -> &'a Value {
+    j["trials"]
+        .as_array()
+        .expect("t")
+        .iter()
+        .find(|t| t["arm"] == arm)
+        .expect("trial")
+}
+
+/// 回帰（final review の差し戻し）: attempt・protocol の op はあるが人の op が 0 件の集合を exact・0 秒にしない。
+/// human-op の schema に「人の op なし」を宣言する記録が無いので、試行・arm・全体とも not_recorded（union_secs null）。
+/// （ADR 2026-10-30-ops-r1-human-time-coverage 付記）
+#[test]
+fn attempts_without_human_ops_are_not_recorded_not_exact_zero() {
+    let (j, md) = coverage_case(|f| {
+        protocol_op(f, "A0");
+        protocol_op(f, "B0");
+        // A0 には外部 operator の attempt もある（人の op ではない）。
+        rec_as(
+            f,
+            "external_operator",
+            "op1",
+            &[
+                "--mode",
+                "manual",
+                "--op-kind",
+                "status_check",
+                "--intent",
+                "monitoring",
+                "--logical-op",
+                "x1",
+                "--attempt",
+                "1",
+                "--started-at",
+                "2026-10-22T00:01:00Z",
+                "--ended-at",
+                "2026-10-22T00:02:00Z",
+            ],
+        );
+    });
+    for arm in ["A", "B"] {
+        let t = trial(&j, arm);
+        assert_eq!(
+            t["rework"]["source"], "evaluator",
+            "attempt は観測済み: {t}"
+        );
+        assert_eq!(t["human_time"]["source"], "not_recorded", "{t}");
+        assert_eq!(t["human_time"]["value"], Value::Null);
+        let c = &t["human_time_coverage"];
+        assert_eq!(c["source"], "not_recorded", "{c}");
+        assert_eq!(c["value"]["bound"], "not_recorded");
+        assert_eq!(c["value"]["union_secs"], Value::Null);
+        assert_eq!(c["value"]["not_recorded_trials"], 1);
+        assert_eq!(c["value"]["trial_ratio"], 0.0);
+    }
+    for arm in ["A0", "B0"] {
+        let a = &j["arms"][arm];
+        assert_eq!(a["human_time_coverage"]["bound"], "not_recorded", "{a}");
+        assert_eq!(a["human_time_coverage"]["union_secs"], Value::Null);
+        assert_eq!(a.get("human_union_secs"), None, "0 秒を足さない");
+        assert_eq!(a["human_time_not_recorded_trials"], 1);
+        assert_eq!(a.get("human_time_missing_trials"), None);
+    }
+    let all = &j["human_time_coverage"];
+    assert_eq!(all["bound"], "not_recorded", "{all}");
+    assert_eq!(all["union_secs"], Value::Null);
+    assert_eq!(all["observed_trials"], 2);
+    assert_eq!(all["recorded_trials"], 0);
+    assert_eq!(all["human_ops"], 0);
+    assert!(
+        md.contains("- 全体 not_recorded: union 未記録 秒、人の op を記録した試行 0/2（0.000）"),
+        "{md}"
+    );
+    assert!(
+        !md.lines()
+            .any(|l| l.starts_with("- ") && l.contains(" exact: ")),
+        "被覆の行に exact と書かない: {md}"
+    );
+    let a_row = md
+        .lines()
+        .find(|l| l.starts_with("| A0 |"))
+        .expect("A0 row");
+    assert!(a_row.contains("| 欠測 (欠測・0・1) |"), "{a_row}");
+}
+
+/// 回帰: 全試行に区間のそろった人の op があれば従来どおり exact。
+#[test]
+fn complete_human_op_intervals_stay_exact() {
+    let (j, _) = coverage_case(|f| {
+        human_op(
+            f,
+            "A0",
+            "h1",
+            Some("2026-10-22T00:10:00Z"),
+            "2026-10-22T00:20:00Z",
+        );
+        human_op(
+            f,
+            "B0",
+            "h2",
+            Some("2026-10-22T00:00:00Z"),
+            "2026-10-22T00:01:00Z",
+        );
+    });
+    let a = trial(&j, "A");
+    assert_eq!(a["human_time_coverage"]["source"], "evaluator", "{a}");
+    assert_eq!(a["human_time_coverage"]["value"]["bound"], "exact");
+    assert_eq!(a["human_time_coverage"]["value"]["union_secs"], 600);
+    assert_eq!(j["arms"]["A0"]["human_time_coverage"]["bound"], "exact");
+    assert_eq!(j["arms"]["A0"]["human_union_secs"], 600);
+    let all = &j["human_time_coverage"];
+    assert_eq!(all["bound"], "exact", "{all}");
+    assert_eq!(all["union_secs"], 660);
+    assert_eq!(all["recorded_trials"], 2);
+    assert_eq!(all["not_recorded_trials"], 0);
+    assert_eq!(all["trial_ratio"], 1.0);
+    assert_eq!(all["op_interval_ratio"], 1.0);
+}
+
+/// 回帰: 人の op の一部が欠ける集合は lower_bound。欠け方は 2 通り:
+/// 試行の中で区間を持てない人の op（missing_start）と、人の op が 0 件の試行（not_recorded）の混在。
+#[test]
+fn partially_missing_human_ops_are_lower_bound() {
+    let (j, _) = coverage_case(|f| {
+        human_op(
+            f,
+            "A0",
+            "h1",
+            Some("2026-10-22T00:10:00Z"),
+            "2026-10-22T00:20:00Z",
+        );
+        human_op(f, "A0", "h2", None, "2026-10-22T00:30:00Z");
+        protocol_op(f, "B0");
+    });
+    let a = trial(&j, "A");
+    let c = &a["human_time_coverage"]["value"];
+    assert_eq!(c["bound"], "lower_bound", "{c}");
+    assert_eq!(c["union_secs"], 600);
+    assert_eq!(c["ops_without_interval"], 1);
+    assert_eq!(
+        trial(&j, "B")["human_time_coverage"]["value"]["bound"],
+        "not_recorded"
+    );
+    let all = &j["human_time_coverage"];
+    assert_eq!(all["bound"], "lower_bound", "{all}");
+    assert_eq!(all["union_secs"], 600);
+    assert_eq!(all["recorded_trials"], 1);
+    assert_eq!(all["not_recorded_trials"], 1);
+    assert_eq!(all["lower_bound_trials"], 1);
+    assert_eq!(all["trial_ratio"], 0.5);
 }

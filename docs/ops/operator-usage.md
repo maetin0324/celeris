@@ -51,8 +51,11 @@ transcript 本体は会話・コマンド・秘密を含み得るためアクセ
 
 JSON 配列。`trial_key` は対象の `ledger.jsonl` の `idempotency_key`（既存 TrialKey 由来）をそのまま写し、
 `trials.jsonl` の campaign・config・problem・rep・trial_no と照合する。
-区分は prep（準備）、observe（観測）、intervene（介入）、shared（試行に割れない共有作業）。
-shared の trial_key は null、他の 3 区分は空でない試行鍵が必須。区分不明は対応行を書かない。
+区分は prep（準備）、observe（観測）、intervene（介入）、shared（試行に割れない共有作業）、
+unknown（結果に影響したか断定できない支援。例: 試行の後の一般的な修復で、試行の結果に効いたかを根拠で決められないもの）。
+shared の trial_key は null、prep・observe・intervene は空でない試行鍵が必須。unknown の trial_key は分かれば試行鍵、
+分からなければ null。断定できない支援を shared や observe に寄せない（ADR 2026-10-30-ops-r1-human-time-coverage）。
+区間そのものが分からない応答は対応行を書かない（shared_unattributable になる）。
 以下の trial_key は説明用の値なので、取り込み前に実際の試行鍵に置き換える。
 
 ```json
@@ -99,7 +102,7 @@ start/end は同じ message の最初/最後の transcript timestamp であり�
 
 応答区間全体が一つの対応区間に収まらないもの、未登録 session、欠測時刻は
 `category=shared_unattributable, trial_key=null`。均等配分しない。
-shared と shared_unattributable は個別試行の消費に混ぜず別表に残し、集計時も null を 0 に置き換えない。
+shared・shared_unattributable・unknown は個別試行の消費に混ぜず別表に残し、集計時も null を 0 に置き換えない。
 これは外部 operator の評価記録で、内部 DecisionLogUsage や既存 final-accounting への自動加算は行わない。
 
 同じ dedup_key で内容が違えば conflict としてファイル全体の更新を拒否する。

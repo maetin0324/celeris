@@ -123,7 +123,9 @@ async fn authorized_project_cos_keeps_actor_and_consumption_through_evaluation()
         1
     );
     assert_eq!(trial["excluded_ops"]["non_human"]["cos_project"], 1);
-    assert_eq!(trial["human_time"]["value"]["union_secs"], 0);
+    // 人の op が 0 件なので人の時間は未記録（0 秒と確定しない。ADR 2026-10-30-ops-r1-human-time-coverage 付記）。
+    assert_eq!(trial["human_time"]["source"], "not_recorded", "{trial}");
+    assert_eq!(trial["human_time"]["value"], Value::Null);
     let report_items = trial["intervention_items"]["value"].as_array().unwrap();
     assert_eq!(report_items.len(), 1);
     assert_eq!(report_items[0]["request_ref"], request["request_ref"]);

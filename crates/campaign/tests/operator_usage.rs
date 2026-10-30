@@ -215,3 +215,33 @@ fn timestamps_compare_instants_and_map_schema_is_strict() {
     let bad = json!([{"session_id":"s","start":null,"end":null,"category":"prep","trial_key":"a","typo":true}]);
     assert!(serde_json::from_value::<Vec<Mapping>>(bad).is_err());
 }
+/// 結果に影響したか断定できない支援は unknown で受け付け、shared に寄せない。trial_key は有っても無くてもよい
+/// （ADR 2026-10-30-ops-r1-human-time-coverage）。
+#[test]
+fn unknown_category_is_kept_apart_from_shared() {
+    let map: Vec<Mapping> = serde_json::from_value(json!([
+        {"session_id":"s","start":null,"end":"2026-10-27T00:00:10Z","category":"unknown","trial_key":"trial-a"},
+        {"session_id":"s","start":"2026-10-27T00:00:10Z","end":"2026-10-27T00:00:20Z","category":"unknown","trial_key":null},
+        {"session_id":"s","start":"2026-10-27T00:00:20Z","end":null,"category":"shared","trial_key":null}
+    ]))
+    .unwrap();
+    let input = [0, 10, 20].map(|t| response("s", &t.to_string(), t));
+    let rows = convert(&lines(&input), &map).unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.category, r.trial_key.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            (Category::Unknown, Some("trial-a")),
+            (Category::Unknown, None),
+            (Category::Shared, None)
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(&rows[1]).unwrap()["category"],
+        "unknown"
+    );
+    let mut bad = map;
+    bad[0].trial_key = Some(" ".into());
+    assert!(convert("", &bad).is_err(), "空の試行鍵は unknown でも拒否");
+}

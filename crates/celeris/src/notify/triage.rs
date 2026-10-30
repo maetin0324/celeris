@@ -99,6 +99,15 @@ pub fn render(row: &Notification, config: &NotifyConfig) -> Result<String, &'sta
             blocking
         },
     );
+    // ADR 2026-10-30-cos-review-open-waits D3: where the item comes from and what an answer does.
+    let background = field(&packet, "background");
+    if !background.is_empty() {
+        body.push_str(&format!("\n背景: {}", excerpt(background, 300)));
+    }
+    let on_answer = field(&packet, "on_answer");
+    if !on_answer.is_empty() {
+        body.push_str(&format!("\n答えると: {}", excerpt(on_answer, 200)));
+    }
     if row.kind == NotificationKind::CosFallback && !unavailable.is_empty() {
         body.push_str(&format!("\n不在理由: {}", excerpt(unavailable, 180)));
     }

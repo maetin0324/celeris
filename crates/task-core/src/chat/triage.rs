@@ -509,6 +509,10 @@ pub struct CosTriageOption {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CosTriageDecision {
     pub summary: String,
+    /// ADR 2026-10-30-cos-review-open-waits D3: where the item comes from and why now.
+    pub background: Option<String>,
+    /// D3: what happens once the person answers.
+    pub on_answer: Option<String>,
     pub options: Vec<CosTriageOption>,
     pub recommended: Option<String>,
     pub recommendation_reason: Option<String>,
@@ -579,6 +583,8 @@ pub fn decision_from_outbox(body: &str) -> Option<CosTriageDecision> {
         .unwrap_or_default();
     Some(CosTriageDecision {
         summary: v["summary"].as_str().unwrap_or_default().to_owned(),
+        background: v["background"].as_str().map(str::to_owned),
+        on_answer: v["on_answer"].as_str().map(str::to_owned),
         options,
         recommended: v["recommended"].as_str().map(str::to_owned),
         recommendation_reason: v["recommendation_reason"]
@@ -678,6 +684,26 @@ impl SqliteStore {
         ))?;
         let rows = stmt.query_map(
             params![i64::try_from(limit).unwrap_or(i64::MAX), thread_id],
+            report_row,
+        )?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// ADR 2026-10-30-cos-review-open-waits D1: items that closed (state `resolved`) after `since`,
+    /// newest first. The general CoS review lists them apart from the open ones so a wait that the
+    /// person already answered is not reported as new.
+    pub fn cos_triage_closed_since(
+        &self,
+        since: OffsetDateTime,
+        limit: usize,
+    ) -> Result<Vec<CosTriageItemReport>, ChatError> {
+        let conn = writer(self)?;
+        let mut stmt = conn.prepare(&format!(
+            "{REPORT_SELECT} WHERE i.state='resolved' AND i.updated_at>?2 \
+             ORDER BY i.updated_at DESC,i.id DESC LIMIT ?1"
+        ))?;
+        let rows = stmt.query_map(
+            params![i64::try_from(limit).unwrap_or(i64::MAX), chat_ts(since)],
             report_row,
         )?;
         Ok(rows.collect::<Result<_, _>>()?)

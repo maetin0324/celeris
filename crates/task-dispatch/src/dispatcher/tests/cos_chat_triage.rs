@@ -705,3 +705,65 @@ async fn cos_chat_triage_relay_after_escalation_rejudges_covered_items_after_the
     assert_eq!(f.inbox_runs(), 3);
     assert_eq!(f.triage_messages().len(), 2);
 }
+
+/// ADR 2026-10-30-cos-review-open-waits D4: a plan approval escalated while its task had an open
+/// decision goes back to CoS in one run once the person answers the decision, and not twice.
+/// The plan approval item is simulated by rewriting an escalated item's source (the daemon pass
+/// only reads `cos_inbox_items` and `decisions`).
+#[tokio::test]
+async fn cos_chat_triage_answered_decision_rejudges_the_escalated_plan_approval_once() {
+    let mut f = fixture(true);
+    f.tick();
+    let task = f.question("plan", vec![]);
+    f.tick();
+    assert_eq!(f.inbox_runs(), 1);
+    let item = question_item(&f, task);
+    assert!(
+        f.store
+            .cos_triage_resolve(
+                &item,
+                "escalated",
+                None,
+                Some("未回答の決定がある"),
+                f.d.now_utc()
+            )
+            .expect("escalate")
+    );
+    assert!(f.join_inbox().await);
+    let conn = rusqlite::Connection::open(&f.db_path).expect("db");
+    conn.execute(
+        "UPDATE cos_inbox_items SET source_kind='plan_gate', source_key=?1 WHERE id=?2",
+        rusqlite::params![format!("plan_gate-{task}-v1"), item],
+    )
+    .expect("plan item");
+    conn.execute(
+        "INSERT INTO decisions(id,root_id,task_id,key,kind,status,json,created_at) \
+         VALUES('d1',?1,?1,'iso-boundary','choice','open','{}','2000-01-01T00:00:00Z')",
+        [task.to_string()],
+    )
+    .expect("decision");
+    f.tick();
+    assert_eq!(f.inbox_runs(), 1, "the decision is still open");
+    // 人が決定に答える（判定より後の時刻）。
+    conn.execute(
+        "UPDATE decisions SET status='answered',answered_at='2999-01-01T00:00:00Z' WHERE id='d1'",
+        [],
+    )
+    .expect("answer");
+    f.tick();
+    assert_eq!(f.inbox_runs(), 2, "one re-judging run");
+    let messages = f.triage_messages();
+    assert_eq!(
+        messages.last().expect("message"),
+        &format!(
+            "CoS 受信箱の一次対応: item_ids=[\"{item}\"]\n決定の回答による計画の再判断: [\"{item}\"]"
+        )
+    );
+    assert!(f.join_inbox().await);
+    f.tick();
+    assert_eq!(
+        f.inbox_runs(),
+        2,
+        "the same answer hands the item over once"
+    );
+}

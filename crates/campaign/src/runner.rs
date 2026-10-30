@@ -403,6 +403,8 @@ fn new_record(
         error: None,
         routing: None,
         observed: Vec::new(),
+        execution_path: None,
+        observed_model: None,
         harness: cfg.harness.clone(),
         harness_version: cfg.harness_version.clone(),
         model: cfg.model.clone(),

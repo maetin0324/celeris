@@ -89,6 +89,13 @@ pub struct EscalationOption {
 #[serde(deny_unknown_fields)]
 pub struct EscalationPacket {
     pub summary: String,
+    /// ADR 2026-10-30-cos-review-open-waits D3: which request and task the item comes from and why
+    /// the decision is needed now, with task-internal words paraphrased.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    /// D3: what happens once the person answers (which task resumes, what it does next).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_answer: Option<String>,
     pub options: Vec<EscalationOption>,
     pub recommended: Option<String>,
     pub recommendation_reason: String,
@@ -633,6 +640,8 @@ async fn resolve(
                         "source_revision": item.source_revision,
                         "operation_id": audit.ctx.operation_id,
                         "summary": packet.summary,
+                        "background": packet.background,
+                        "on_answer": packet.on_answer,
                         "options": packet.options,
                         "recommended": packet.recommended,
                         "recommendation_reason": packet.recommendation_reason,

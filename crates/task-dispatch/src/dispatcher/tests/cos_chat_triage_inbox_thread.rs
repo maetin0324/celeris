@@ -51,6 +51,8 @@ impl Fixture {
     fn escalate(&self, item: &str, reason: &str) {
         let body = serde_json::json!({
             "summary": "公開してよいか",
+            "background": "依頼「資料の公開」の task t1 が公開先を決められず止まった",
+            "on_answer": "選んだ方で task t1 が再開する",
             "options": [{"key":"publish","label":"公開する"},{"key":"hold","label":"保留"}],
             "recommended": "hold",
             "recommendation_reason": "公開先が未確認",
@@ -119,6 +121,17 @@ async fn cos_chat_triage_digest_records_each_judgment_with_an_answerable_card() 
     assert!(d.text.contains("- 判断: 人に回した"), "{}", d.text);
     assert!(
         d.text.contains("- 理由: 外部公開なので人の判断"),
+        "{}",
+        d.text
+    );
+    assert!(
+        d.text
+            .contains("- 背景: 依頼「資料の公開」の task t1 が公開先を決められず止まった"),
+        "{}",
+        d.text
+    );
+    assert!(
+        d.text.contains("- 答えると: 選んだ方で task t1 が再開する"),
         "{}",
         d.text
     );
@@ -297,6 +310,8 @@ fn cos_chat_inbox_context_item_maps_the_report_and_answer_path() {
         route: Some("escalation".into()),
         decision: Some(CosTriageDecision {
             summary: "どちらか".into(),
+            background: None,
+            on_answer: None,
             options: vec![CosTriageOption {
                 key: "a".into(),
                 label: "A".into(),

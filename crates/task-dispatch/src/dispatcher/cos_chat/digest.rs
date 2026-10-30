@@ -119,6 +119,9 @@ pub(crate) fn digest_message(
         let mut card_reason = item.reason.clone();
         if matches!(item.state.as_str(), "escalated" | "fallback") {
             if let Some(d) = &item.decision {
+                if let Some(background) = d.background.as_deref().filter(|b| !b.is_empty()) {
+                    text.push_str(&format!("- 背景: {background}\n"));
+                }
                 if !d.summary.is_empty() {
                     text.push_str(&format!("- 人が決めること: {}\n", d.summary));
                 }
@@ -128,6 +131,9 @@ pub(crate) fn digest_message(
                 if let Some(why) = d.recommendation_reason.as_deref().filter(|r| !r.is_empty()) {
                     text.push_str(&format!("- 推奨の理由: {why}\n"));
                     card_reason = Some(why.to_owned());
+                }
+                if let Some(next) = d.on_answer.as_deref().filter(|n| !n.is_empty()) {
+                    text.push_str(&format!("- 答えると: {next}\n"));
                 }
                 if !d.web_path.is_empty() {
                     href = d.web_path.clone();

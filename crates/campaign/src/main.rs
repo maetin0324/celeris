@@ -765,6 +765,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let cases = arg(&args, "--cases").ok_or("--cases <grade-case dir> is required")?;
             let expected = cli_expected_lock(&args, &manifest_path, &m, &out()?)?;
             let initial_trees = arg(&args, "--initial-trees");
+            let work_root = arg(&args, "--work");
             let v = celeris_campaign::grade_out::grade_out_with(
                 &m,
                 &out()?,
@@ -772,6 +773,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 &ProcessRunner::default(),
                 expected.as_ref(),
                 initial_trees.as_deref(),
+                work_root.as_deref(),
             )?;
             let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
             if v["ok"] == true { Ok(s) } else { Err(s) }

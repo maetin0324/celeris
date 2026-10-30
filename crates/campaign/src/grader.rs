@@ -639,7 +639,9 @@ pub mod implementation {
             return false;
         }
         // timeout（exit なし）は成果物の暴走もあり得るので環境不良にしない。
+        // sh/dash の「<name>: not found」（`sh: 1: cargo: not found`）は toolchain が PATH に無い印（ADR 付記 H3）。
         ENV_MARKERS.iter().any(|m| text.contains(m))
+            || text.lines().any(|l| l.trim_end().ends_with(": not found"))
     }
 
     /// rustc が compile error を出した（test は走っていない）。

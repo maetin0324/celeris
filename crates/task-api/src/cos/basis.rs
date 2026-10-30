@@ -1,6 +1,6 @@
 //! ADR 2026-10-28-cos-routine-delegated-answers: the basis of a CoS answer that no human instructed.
 //!
-//! A CoS answer to a wait without `instructed_by` must name one of four routine categories and the
+//! A CoS answer to a wait without `instructed_by` must name one of the routine categories and the
 //! evidence that the category's deterministic conditions hold (D1/D2). This module checks only what
 //! the API can decide from the request and the store: shape, the referenced approval, the
 //! arithmetic of the frame, the repeated failure and the once-only raise. The judgment that the
@@ -18,6 +18,7 @@ use task_ops::human_inbox::InboxKind;
 
 use crate::problem::{ApiProblem, store_problem};
 
+mod job_wait_extend;
 mod plan_conforms;
 mod review_rework;
 pub use plan_conforms::{BasisPlan, GuardedStage, StageGuardKind};
@@ -45,6 +46,8 @@ pub enum BasisCategory {
     ReviewRework,
     /// (f) Approve a plan gate whose plan has nothing out of the ordinary (ADR 2026-10-30-cos-plan-conforms-approve).
     PlanConforms,
+    /// (g) Extend the wait of cluster jobs still queued at the wait limit (ADR 2026-10-30-cos-job-wait-extend).
+    JobWaitExtend,
 }
 
 impl BasisCategory {
@@ -56,6 +59,7 @@ impl BasisCategory {
             BasisCategory::WorkGuidance => "work_guidance",
             BasisCategory::ReviewRework => "review_rework",
             BasisCategory::PlanConforms => "plan_conforms",
+            BasisCategory::JobWaitExtend => "job_wait_extend",
         }
     }
 }
@@ -142,6 +146,8 @@ pub(crate) struct BasisTarget {
     /// The chosen option key (`None` for a free-text answer).
     pub option: Option<String>,
     pub note: Option<String>,
+    /// The approval an authorization answer decides (`authorization-<id>`, `/approvals/<id>/decide`).
+    pub approval_id: Option<String>,
 }
 
 pub(crate) const BASIS_MISSING: &str = "cos_basis_missing";
@@ -152,6 +158,8 @@ pub(crate) const BASIS_RAISE_ONCE_USED: &str = "cos_basis_raise_once_used";
 pub(crate) const BASIS_REWORK_LIMIT: &str = "cos_basis_rework_limit";
 pub(crate) const BASIS_PLAN_UNGUARDED: &str = "cos_basis_plan_unguarded";
 pub(crate) const BASIS_PLAN_CHURN: &str = "cos_basis_plan_churn";
+pub(crate) const BASIS_JOB_NOT_QUEUED: &str = "cos_basis_job_not_queued";
+pub(crate) const BASIS_EXTEND_LIMIT: &str = "cos_basis_extend_limit";
 
 fn problem(code: &'static str, detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::UNPROCESSABLE_ENTITY, code, detail)
@@ -161,7 +169,7 @@ pub(crate) fn missing() -> ApiProblem {
     problem(
         BASIS_MISSING,
         "a CoS answer without instructed_by needs basis (within_approved_frame, raise_once, \
-         documented_default, work_guidance, review_rework or plan_conforms with its evidence); \
+         documented_default, work_guidance, review_rework, plan_conforms or job_wait_extend with its evidence); \
          otherwise escalate",
     )
 }
@@ -416,6 +424,7 @@ pub(crate) fn validate(
         }
         BasisCategory::ReviewRework => review_rework::validate(store, basis, target)?,
         BasisCategory::PlanConforms => plan_conforms::validate(store, basis, target)?,
+        BasisCategory::JobWaitExtend => job_wait_extend::validate(store, basis, target)?,
     }
     Ok(())
 }

@@ -304,7 +304,15 @@ pub(crate) async fn wait_for_operation(
                 .or_else(|| text("action"))
                 .or_else(|| text("decision"))
         },
-        note: text("note"),
+        // `approval.decide` carries the free text in `answer`.
+        note: text("note").or_else(|| {
+            (matched.action == "approval.decide")
+                .then(|| text("answer"))
+                .flatten()
+        }),
+        approval_id: (matched.action == "approval.decide")
+            .then(|| matched.id.clone())
+            .flatten(),
     };
     let human_required = state
         .blocking(move |store| {
@@ -684,6 +692,9 @@ pub(crate) fn answer_target(found: &InboxItem, input: &InboxAnswerBody) -> Basis
         task_id: found.task.as_ref().map(|t| t.id),
         option: (!input.option.is_empty()).then(|| input.option.clone()),
         note: input.note.clone(),
+        approval_id: (found.kind == InboxKind::Authorization)
+            .then(|| found.id.strip_prefix("authorization-").map(str::to_owned))
+            .flatten(),
     }
 }
 

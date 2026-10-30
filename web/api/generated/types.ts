@@ -372,7 +372,7 @@ export type AutoReplanSource = "integration" | "work_unit";
 
 export type BackoffCause = "retry" | "infra";
 
-export type BasisCategory = "within_approved_frame" | "raise_once" | "documented_default" | "work_guidance" | "review_rework" | "plan_conforms";
+export type BasisCategory = "within_approved_frame" | "raise_once" | "documented_default" | "work_guidance" | "review_rework" | "plan_conforms" | "job_wait_extend";
 
 export type BasisFailures = {
   "current": string;

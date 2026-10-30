@@ -1876,6 +1876,11 @@
           "const": "plan_conforms",
           "description": "(f) Approve a plan gate whose plan has nothing out of the ordinary (ADR 2026-10-30-cos-plan-conforms-approve).",
           "type": "string"
+        },
+        {
+          "const": "job_wait_extend",
+          "description": "(g) Extend the wait of cluster jobs still queued at the wait limit (ADR 2026-10-30-cos-job-wait-extend).",
+          "type": "string"
         }
       ]
     },

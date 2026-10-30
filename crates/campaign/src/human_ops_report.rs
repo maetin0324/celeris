@@ -137,7 +137,82 @@ impl Spans {
             "source": source,
         })
     }
+
+    /// 人の op のうち長さを持てた区間（clipped を含む）の件数と、長さを持てなかった件数（open・missing_start・inverted）。
+    /// 窓の外で始まった op は分母に入れない。
+    fn op_counts(&self) -> (u64, u64) {
+        (
+            self.closed.len() as u64,
+            u64::from(self.open + self.missing_start + self.inverted),
+        )
+    }
 }
+
+fn ratio(num: u64, den: u64) -> Value {
+    if den == 0 {
+        Value::Null
+    } else {
+        json!(num as f64 / den as f64)
+    }
+}
+
+/// 人の時間の被覆（記録のある試行・区間の割合）を数える。試行ごと・arm・全体で同じ形にする。
+#[derive(Default, Clone, Copy)]
+struct Coverage {
+    trials: u64,
+    observed_trials: u64,
+    lower_bound_trials: u64,
+    ops_with_interval: u64,
+    ops_without_interval: u64,
+    union_secs: u64,
+}
+
+impl Coverage {
+    fn add_trial(&mut self, ev: Option<&TrialEval>) {
+        self.trials += 1;
+        let Some(e) = ev.filter(|e| e.ops_observed()) else {
+            return;
+        };
+        self.observed_trials += 1;
+        let (with, without) = e.human_time.op_counts();
+        self.ops_with_interval += with;
+        self.ops_without_interval += without;
+        self.union_secs += union_and_sum(&e.human_time.closed).0 as u64;
+        if without > 0 || e.human_time.clipped > 0 {
+            self.lower_bound_trials += 1;
+        }
+    }
+
+    /// `bound`: 全試行が観測済みで欠けた区間も無ければ `exact`、観測済みの試行が 1 つでもあれば `lower_bound`
+    /// （欠測の試行・長さの無い区間を 0 として足していない）、1 つも無ければ `missing`（`union_secs` は null）。
+    fn json(&self) -> Value {
+        let missing_trials = self.trials - self.observed_trials;
+        let bound = if self.observed_trials == 0 {
+            "missing"
+        } else if missing_trials > 0 || self.lower_bound_trials > 0 {
+            "lower_bound"
+        } else {
+            "exact"
+        };
+        let ops = self.ops_with_interval + self.ops_without_interval;
+        json!({
+            "bound": bound,
+            "union_secs": if self.observed_trials == 0 { Value::Null } else { json!(self.union_secs) },
+            "trials": self.trials,
+            "observed_trials": self.observed_trials,
+            "missing_trials": missing_trials,
+            "lower_bound_trials": self.lower_bound_trials,
+            "trial_ratio": ratio(self.observed_trials, self.trials),
+            "human_ops": ops,
+            "ops_with_interval": self.ops_with_interval,
+            "ops_without_interval": self.ops_without_interval,
+            "op_interval_ratio": ratio(self.ops_with_interval, ops),
+            "rule": HUMAN_TIME_COVERAGE_RULE,
+        })
+    }
+}
+
+const HUMAN_TIME_COVERAGE_RULE: &str = "trials without evaluator op records are missing (null), not 0; ops without a usable interval (open, missing_start, inverted) add no seconds; union_secs over a set with any missing trial or interval is a lower bound";
 
 /// やり直しの原因（人が再投入・再開・調整した attempt の op の intent から）。
 fn rework_cause(op: Option<&HumanOpRecord>) -> &'static str {
@@ -572,6 +647,8 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
     let mut trials = Vec::new();
     let mut timeline: Vec<(i64, String, Value)> = Vec::new();
     let mut arms: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    let mut arm_cov: BTreeMap<String, Coverage> = BTreeMap::new();
+    let mut all_cov = Coverage::default();
     let mut other_rows = Vec::new();
     for jr in &join_rows {
         if jr["row_type"] != "trial" {
@@ -812,6 +889,22 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
                        "source": "event"}),
             ));
         }
+        let mut cov = Coverage::default();
+        cov.add_trial(ev.as_ref());
+        t.insert(
+            "human_time_coverage".into(),
+            if cov.observed_trials == 0 {
+                json!({"value": cov.json(), "source": "missing",
+                       "reason": "この試行に評価者の op 記録が無い（人の時間は欠測。0 ではない）"})
+            } else {
+                field(cov.json(), "evaluator")
+            },
+        );
+        arm_cov
+            .entry(arm_label.clone())
+            .or_default()
+            .add_trial(ev.as_ref());
+        all_cov.add_trial(ev.as_ref());
         t.insert("join".into(), jr.clone());
 
         // arm 集計（分母 = 行の数。manifest を渡せば計画 cell すべて）。
@@ -934,6 +1027,12 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
         trials.push(Value::Object(t));
     }
 
+    for (arm, c) in &arm_cov {
+        if let Some(a) = arms.get_mut(arm) {
+            a.insert("human_time_coverage".into(), c.json());
+        }
+    }
+
     let shared_json: Vec<Value> = shared
         .iter()
         .map(|(campaign, rs)| {
@@ -972,6 +1071,7 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
         "cost_scope": crate::export::COST_SCOPE,
         "trials": trials,
         "arms": arms,
+        "human_time_coverage": all_cov.json(),
         "shared_overhead": shared_json,
         "corrections": corrections,
         "other_rows": other_rows,
@@ -987,6 +1087,7 @@ pub fn build(human_ops_file: &Path, events: &[&Path]) -> Result<Report, String> 
 
 fn notices() -> Vec<&'static str> {
     vec![
+        "人の時間の合計は human_time_coverage の bound で読む。exact 以外（lower_bound・missing）は記録の無い試行・区間を 0 として足していない下限または欠測で、coverage（記録のある試行・区間の割合）を併記する。時刻・主体の無い発言を推測で埋めない（missing_start・unknown_actor に残す）。",
         "人の時間は『記録された操作の範囲』の下限で、総労働時間・認知負荷・判断の質ではない（定義書 §6）。端の欠けた区間は長さに入れず件数で併記する。",
         "人の時間・介入は actor.kind=human の manual の op だけ。CoS・外部 operator・MCP client・script は interventions_by_actor_kind に、主体不明（unknown）は unknown_actor に別掲し、人にも 0 にも寄せない。質問が開いていた時間で人の時間を代用しない。",
         "介入は論理要求（request_ref）単位。同じ要求の改訂・再通知・差戻しは件数を増やさず history に並ぶ。",
@@ -1003,6 +1104,31 @@ fn cell(v: &Value, key: &str) -> String {
     v.get(key)
         .and_then(Value::as_u64)
         .map_or("0".into(), |n| n.to_string())
+}
+
+/// 人の時間の arm 合計。観測した試行が無ければ欄が無いので「欠測」と書く（0 と書かない）。
+fn human_cell(v: &Value, key: &str) -> String {
+    v.get(key)
+        .and_then(Value::as_u64)
+        .map_or("欠測".into(), |n| n.to_string())
+}
+
+fn coverage_line(c: &Value) -> String {
+    let r = |k: &str| c[k].as_f64().map_or("欠測".into(), |x| format!("{x:.3}"));
+    format!(
+        "{}: union {} 秒、記録のある試行 {}/{}（{}）、下限の試行 {}、区間のある人の op {}/{}（{}）",
+        c["bound"].as_str().unwrap_or("?"),
+        c["union_secs"]
+            .as_u64()
+            .map_or("欠測".into(), |n| n.to_string()),
+        c["observed_trials"],
+        c["trials"],
+        r("trial_ratio"),
+        c["lower_bound_trials"],
+        c["ops_with_interval"],
+        c["human_ops"],
+        r("op_interval_ratio"),
+    )
 }
 
 fn markdown(j: &Value, timeline: &[(i64, String, Value)]) -> String {
@@ -1024,8 +1150,8 @@ fn markdown(j: &Value, timeline: &[(i64, String, Value)]) -> String {
             o("interventions_by_actor_kind"),
             o("unknown_actor_interventions"),
             o("unknown_actor_union_secs"),
-            cell(a, "human_union_secs"),
-            cell(a, "human_sum_secs"),
+            human_cell(a, "human_union_secs"),
+            human_cell(a, "human_sum_secs"),
             cell(a, "human_time_missing_trials"),
             cell(a, "human_time_lower_bound_trials"),
             cell(a, "human_wait_union_secs"),
@@ -1046,6 +1172,11 @@ fn markdown(j: &Value, timeline: &[(i64, String, Value)]) -> String {
             cell(a, "trials_without_evaluator_records"),
             o("time_basis"),
         );
+    }
+    m += "\n## 人の時間の被覆（記録の無い試行は欠測。0 にしない）\n\n";
+    m += &format!("- 全体 {}\n", coverage_line(&j["human_time_coverage"]));
+    for (arm, a) in j["arms"].as_object().into_iter().flatten() {
+        m += &format!("- arm {arm} {}\n", coverage_line(&a["human_time_coverage"]));
     }
     m += "\n## 共有 overhead（arm へ配分しない）\n\n";
     let sh = j["shared_overhead"].as_array().cloned().unwrap_or_default();

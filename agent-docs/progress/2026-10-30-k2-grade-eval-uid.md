@@ -1,10 +1,12 @@
 ---
 title: K2 の採点を評価器 uid で通す（grade wrapper の引数・sudo 下の toolchain・env_failure・case.json の hash 反映）
 tasks: [01M678HHSHGT3Y5J4H7RRYFXD8]
-status: running
+status: done
 updated: 2026-10-30
 ---
 # K2 の採点を評価器 uid で通す
+
+完了日: 2026-10-30
 
 ADR: [2026-10-30-ops-r2-isolation-principal](../adr/2026-10-30-ops-r2-isolation-principal.md) 付記「K2 の採点を評価器 uid で通す」（H1〜H6）
 
@@ -27,7 +29,7 @@ commit（件名）: 「ADR 付記: K2 の採点を評価器 uid で通す（H1�
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0（`cargo fmt --all` を適用して commit した後）。
 - ダミー値の下で `bash scripts/dev/test-affected.sh`（1 回目）→ exit 100。celeris crate の 11 件（`cap_probe_real_daemon` 5・`campaign_lock_e2e` 4・`ops_r1_pipeline` 2）が `private file hash mismatch`。celeris-campaign の失敗は 0。
 - celeris crate の 3 本を試験用 cases root に替えた後、ダミー値で `cargo nextest run -p celeris -E 'binary(cap_probe_real_daemon)|binary(campaign_lock_e2e)|binary(ops_r1_pipeline)'` → 12 passed。
-- `bash scripts/dev/test-affected.sh`（提出時 HEAD、ダミー値）→ 未実行（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）。
+- `bash scripts/dev/test-affected.sh`（提出時 HEAD に K2 の `case.json` のダミー値だけを足した作業ツリーで実行。対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）→ exit 0、2896 tests run: 2896 passed、9 skipped。実行後に `case.json` は git で戻した（HEAD の `case.json` は旧値のまま。値の反映は operator が行う）。
 
 ## 未解決事項
 

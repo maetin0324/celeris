@@ -233,6 +233,9 @@ fn a_executor(
 fn cap_probe_cli(args: &[String]) -> Result<String, String> {
     use celeris_campaign::{cap_probe, cases::CaseSet, manifest::ConfigId};
     let text = |n: &str| arg(args, n).map(|p| p.to_string_lossy().into_owned());
+    if let Some(p) = arg(args, "--manifest") {
+        CampaignManifest::load(&p)?.reject_ops_r1_submission("cap-probe")?;
+    }
     let id = text("--case").ok_or("--case <id> is required")?;
     let arm = match text("--arm").as_deref() {
         Some("a") => ConfigId::A,
@@ -377,6 +380,13 @@ fn run(args: Vec<String>) -> Result<String, String> {
     }
     let manifest_path = arg(&args, "--manifest").ok_or("--manifest <path> is required")?;
     let m = CampaignManifest::load(&manifest_path)?;
+    // ops-r1 の manifest は採点〜集計の段だけで使う（B を POST /tasks 投入として扱わない）。
+    if matches!(
+        cmd,
+        "run" | "watch" | "dry-run" | "preflight" | "config-check" | "env-check"
+    ) {
+        m.reject_ops_r1_submission(cmd)?;
+    }
     // 絶対 path にする: A の harness は試行の workspace を cwd にして動くので、相対 path の状態 dir は壊れる。
     let out = || -> Result<PathBuf, String> {
         let p = arg(&args, "--out").ok_or("--out <dir> is required")?;

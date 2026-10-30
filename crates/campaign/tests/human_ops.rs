@@ -25,6 +25,7 @@ fn base(set: ExperimentSet, arm: ConfigId, rt: RecordType) -> HumanOpRecord {
         repetition: Some(1),
         trial_no: Some(1),
         trial_key: Some(key.idempotency_key()),
+        condition_id: None,
         task_id: None,
         run_id: None,
         job_ref: None,

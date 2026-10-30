@@ -1,0 +1,105 @@
+{
+  "budget": {
+    "max_disk_bytes": 137438953472,
+    "max_parallel": 1,
+    "max_tokens": 3000000,
+    "max_wall_secs": 36000,
+    "per_arm": {
+      "max_tokens": 1500000,
+      "max_wall_secs": 20000
+    },
+    "per_case": {
+      "max_tokens": 1500000,
+      "max_wall_secs": 1800
+    },
+    "token_basis": "all"
+  },
+  "campaign_id": "mlsys-main-4-v4-pilot-k4",
+  "configs": [
+    {
+      "harness": "claude-code",
+      "harness_version": "2.1.303",
+      "id": "A",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "ops-baseline"
+    },
+    {
+      "harness": "celeris",
+      "harness_version": "a28184889f56",
+      "id": "B",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "fixed",
+      "routing": {
+        "lower_policy": "mlsys-min-1",
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "online_update": false,
+        "run_harnesses": [
+          "claude-code"
+        ]
+      }
+    }
+  ],
+  "experiment_sets": {
+    "main": {
+      "arms": [
+        "A",
+        "B"
+      ],
+      "compare": [
+        [
+          "A",
+          "B"
+        ]
+      ],
+      "fixed": {
+        "approved_trials": 2,
+        "initial_info": "810b9562a7b28e736dbe0ce7a7ee9079a6f79df245f2c9f9092a747bc7b14593",
+        "role_models": {
+          "cos": "claude-sonnet-5-5",
+          "planner": "claude-sonnet-5-5",
+          "reviewer": "claude-sonnet-5-5",
+          "worker": "claude-sonnet-5-5"
+        },
+        "shared_ledger": "/local/celeris/data/measure/main-4/global-ledger"
+      }
+    }
+  },
+  "input": {
+    "path": "final-input-manifest.json",
+    "sha256": "62871a59d5cef7171410dc8b0299ba818a42d35f8d5f54ff199dafb2b9fc0b98"
+  },
+  "primary": [
+    "A",
+    "B"
+  ],
+  "problems": [
+    "k4-cmp4-validity-analysis"
+  ],
+  "schema": "celeris.campaign-manifest/1",
+  "secondary": {
+    "pair": [
+      "B",
+      "C"
+    ],
+    "subset": []
+  },
+  "selected_sets": [
+    "main"
+  ],
+  "snapshot": {
+    "kb_snapshot": "741f24146f5c02f44acf5291e23806416b9956809e55a1474488ecbcc9fe0702",
+    "materials_sha256": "810b9562a7b28e736dbe0ce7a7ee9079a6f79df245f2c9f9092a747bc7b14593",
+    "repo_commit": "final-cases-1: k2=086c4618e2a4d94ea56da78ceeed0f8d6d568d67, k4=none (k4-public-input-v2)"
+  },
+  "split": "final",
+  "termination": {
+    "max_attempts_per_trial": 1,
+    "stop_on_budget": true,
+    "trial_timeout_secs": 1800
+  },
+  "version": "2"
+}

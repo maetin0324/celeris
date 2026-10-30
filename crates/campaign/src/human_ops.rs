@@ -48,7 +48,7 @@ str_enum!(RecordType {
     OpStart = "op_start", OpEnd = "op_end", WaitStart = "wait_start", WaitEnd = "wait_end",
     JobObservation = "job_observation", Attempt = "attempt", Cutoff = "cutoff", Correction = "correction",
 });
-str_enum!(ExperimentSet { MainAb = "main-ab", JevBc = "jev-bc" });
+str_enum!(ExperimentSet { MainAb = "main-ab", JevBc = "jev-bc", OpsR1 = "ops-r1" });
 str_enum!(ClockSource { SystemUtc = "system_utc", SystemUtcNtpSynced = "system_utc_ntp_synced", Unknown = "unknown" });
 str_enum!(TimeBasis {
     EvaluatorLive = "evaluator_live", EvaluatorReported = "evaluator_reported",
@@ -123,6 +123,10 @@ pub struct HumanOpRecord {
     pub trial_no: Option<u32>,
     #[serde(deserialize_with = "req")]
     pub trial_key: Option<String>,
+    /// ops-r1 の condition（manifest の `conditions` の condition_id）。ops-r1 の試行の記録だけが持つ。
+    /// 無ければ直列化しない（旧記録の bytes を変えない）。record_id の材料に入れない（arm と manifest_sha256 で決まる）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition_id: Option<String>,
     #[serde(deserialize_with = "req")]
     pub task_id: Option<String>,
     #[serde(deserialize_with = "req")]
@@ -344,13 +348,15 @@ impl HumanOpRecord {
         })
     }
 
-    /// 表示名（A0/B0/B1/C1）。
+    /// 表示名（A0/B0/B1/C1、ops-r1 は ops-r1-A/ops-r1-B）。
     pub fn arm_label(&self) -> Option<&'static str> {
         match (self.experiment_set, self.arm?) {
             (ExperimentSet::MainAb, ConfigId::A) => Some("A0"),
             (ExperimentSet::MainAb, ConfigId::B) => Some("B0"),
             (ExperimentSet::JevBc, ConfigId::B) => Some("B1"),
             (ExperimentSet::JevBc, ConfigId::C) => Some("C1"),
+            (ExperimentSet::OpsR1, ConfigId::A) => Some("ops-r1-A"),
+            (ExperimentSet::OpsR1, ConfigId::B) => Some("ops-r1-B"),
             _ => None,
         }
     }
@@ -613,6 +619,19 @@ impl HumanOpRecord {
     }
 
     fn validate_arm_trial(&self) -> Result<(), String> {
+        let ops_r1_trial = self.experiment_set == ExperimentSet::OpsR1 && self.arm.is_some();
+        match &self.condition_id {
+            Some(c) if !ops_r1_trial => {
+                return Err(format!(
+                    "condition_id {c:?} は ops-r1 の試行の記録（arm あり）だけが持つ"
+                ));
+            }
+            Some(c) => nonempty("condition_id", c)?,
+            None if ops_r1_trial => {
+                return Err("ops-r1 の試行の記録は condition_id が要る".into());
+            }
+            None => {}
+        }
         let any = self.case_id.is_some()
             || self.arm.is_some()
             || self.repetition.is_some()
@@ -636,6 +655,7 @@ impl HumanOpRecord {
         let ok = match self.experiment_set {
             ExperimentSet::MainAb => matches!(arm, ConfigId::A | ConfigId::B),
             ExperimentSet::JevBc => matches!(arm, ConfigId::B | ConfigId::C),
+            ExperimentSet::OpsR1 => matches!(arm, ConfigId::A | ConfigId::B),
         };
         if !ok {
             return Err(format!(
@@ -1071,14 +1091,14 @@ pub mod cli {
     const USAGE: &str = "usage: celeris-campaign human-op <record|span|validate|list|join> --file <jsonl> ...\n\
 report --file F --events <dir|file>... --out <dir> (join から表 report.md・機械可読 report.json・timeline.jsonl を再生成)\n\
 join --file F --events <export dir|out dir|file> (event 由来/評価者記録/欠測の出所つき JSONL)\n\
-record --file F --campaign ID (--manifest-sha256 H | --manifest M) --case ID --arm A0|B0|B1|C1 --rep N --op-kind K --actor-kind human|script|cos_project|cos_general|external_operator|mcp_client|unknown --actor NAME --mode manual|automatic --intent I \
+record --file F --campaign ID (--manifest-sha256 H | --manifest M) --case ID (--arm A0|B0|B1|C1 | --condition CONDITION_ID [ops-r1。--manifest 必須]) --rep N --op-kind K --actor-kind human|script|cos_project|cos_general|external_operator|mcp_client|unknown --actor NAME --mode manual|automatic --intent I \
 [--decided-by KIND:ID] [--executed-by KIND:ID] [--approved-by KIND:ID] [--credential admin_token|web|operator:<name>|mcp:<id>|cos_run|none|unknown (既定 unknown)] \
 [--request-ref SOURCE_KIND:SOURCE_KEY --request-revision R] [--policy-ref S] [--trigger T] [--logical-op ID] [--attempt N] [--started-at T|now] [--ended-at T|now] [--outcome ok|failed|abandoned] [--reason S] [--target kind:ref]... \
 [--task-id ID] [--run-id ID] [--celeris-event-ref R] [--trial-no N] [--missing-reason R] [--time-basis B] [--time-precision P] [--note S]\n\
 span --kind wait|attempt|job|cutoff (same identity flags) [--wait-kind K] [--request-ref S:K --request-revision R] [--logical-op ID] [--attempt N] [--result R] [--job-ref S:C:ID] [--job-submit|--job-start|--job-end T] [--started-at T] [--ended-at T] [--occurred-at T]\n\
-scope: --scope trial (default; --arm/--case/--rep 必須) | --scope shared [--experiment-set main-ab|jev-bc] (campaign 全体の共有作業。arm へ配分しない)\n\
-correct --file F (--corrects ID... | --logical-op L [--campaign ID] [--arm A0|B0|B1|C1]) (--retract | --set-field k=<JSON>...) --reason S (追記専用の訂正。元の行は残る)\n\
-validate --file F\nlist --file F [--campaign ID] [--arm A0|B0|B1|C1] [--case ID]\n\
+scope: --scope trial (default; --arm か --condition と --case/--rep 必須) | --scope shared [--experiment-set main-ab|jev-bc|ops-r1] (campaign 全体の共有作業。arm へ配分しない)\n\
+correct --file F (--corrects ID... | --logical-op L [--campaign ID] [--arm A0|B0|B1|C1 | --condition C --manifest M]) (--retract | --set-field k=<JSON>...) --reason S (追記専用の訂正。元の行は残る)\n\
+validate --file F\nlist --file F [--campaign ID] [--arm A0|B0|B1|C1 | --condition C --manifest M] [--case ID]\n\
 clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--host H] (env CELERIS_HUMAN_OPS_NOW / CELERIS_HUMAN_OPS_HOST)";
 
     fn opt(args: &[String], name: &str) -> Option<String> {
@@ -1181,15 +1201,54 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
         })
     }
 
+    /// `--condition C`（ops-r1）: `--arm` と排他で、`--manifest`（path）の `conditions` から arm を引く。
+    /// 返り値は (manifest, campaign hash, arm, condition_id)。`--condition` が無ければ None。
+    fn condition(
+        args: &[String],
+    ) -> Result<Option<(CampaignManifest, String, ConfigId, String)>, String> {
+        let Some(c) = opt(args, "--condition") else {
+            return Ok(None);
+        };
+        if opt(args, "--arm").is_some() {
+            return Err("--condition と --arm は同時に書けない".into());
+        }
+        let p = opt(args, "--manifest").ok_or_else(|| {
+            format!("--condition には --manifest（path）が要る（--manifest-sha256 では condition を引けない）\n{USAGE}")
+        })?;
+        let m = CampaignManifest::load(Path::new(&p))?;
+        let sha = m.compute_sha256()?;
+        if opt(args, "--manifest-sha256").is_some_and(|h| h != sha) {
+            return Err(format!(
+                "--manifest-sha256 が --manifest の campaign hash（{sha}）と違う"
+            ));
+        }
+        let (arm, _) = m.condition_arm(&c)?;
+        Ok(Some((m, sha, arm, c)))
+    }
+
     fn ctx(args: &[String]) -> Result<Ctx, String> {
         let clock = clock(args)?;
         let campaign_id = req(args, "--campaign")?;
-        let manifest_sha256 = match (opt(args, "--manifest-sha256"), opt(args, "--manifest")) {
-            (Some(h), _) => h,
+        let cond = condition(args)?;
+        let manifest_sha256 = match (
+            &cond,
+            opt(args, "--manifest-sha256"),
+            opt(args, "--manifest"),
+        ) {
+            (Some((_, h, _, _)), _, _) => h.clone(),
+            (None, Some(h), _) => h,
             // runner・台帳・export と同じ campaign hash（正規化 JSON の sha256）。manifest の `sha256` 欄は読まない。
-            (None, Some(p)) => CampaignManifest::load(Path::new(&p))?.compute_sha256()?,
+            (None, None, Some(p)) => CampaignManifest::load(Path::new(&p))?.compute_sha256()?,
             _ => return Err(format!("--manifest-sha256 か --manifest が必要\n{USAGE}")),
         };
+        if let Some((m, ..)) = &cond
+            && m.campaign_id != campaign_id
+        {
+            return Err(format!(
+                "--campaign {campaign_id:?} が manifest の campaign_id {:?} と違う",
+                m.campaign_id
+            ));
+        }
         // scope: trial（arm/case/rep の 1 試行）か shared（campaign 全体の共有作業。arm へ配分しない）。
         let shared = match opt(args, "--scope").as_deref() {
             None | Some("trial") => false,
@@ -1197,7 +1256,7 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
             Some(o) => return Err(format!("--scope: trial|shared（{o:?}）")),
         };
         let (set, ident) = if shared {
-            for f in ["--arm", "--case", "--rep", "--trial-no"] {
+            for f in ["--arm", "--condition", "--case", "--rep", "--trial-no"] {
                 if opt(args, f).is_some() {
                     return Err(format!(
                         "--scope shared では {f} を書かない（arm へ配分しない）"
@@ -1210,9 +1269,20 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
             )?;
             (set, None)
         } else {
-            let (set, arm) = arm_of(&req(args, "--arm")?)?;
+            let (set, arm) = match &cond {
+                Some((_, _, arm, _)) => (ExperimentSet::OpsR1, *arm),
+                None => arm_of(&req(args, "--arm")?)?,
+            };
             let case = req(args, "--case")?;
             let rep = parse_num("--rep", &req(args, "--rep")?)?;
+            if let Some((m, ..)) = &cond
+                && (!m.problems.contains(&case) || rep == 0 || rep > m.repeats)
+            {
+                return Err(format!(
+                    "--case {case:?} / --rep {rep} は manifest の problems・repeats（{}）の外",
+                    m.repeats
+                ));
+            }
             let trial_no = match opt(args, "--trial-no") {
                 Some(n) => parse_num("--trial-no", &n)?,
                 None => 1,
@@ -1227,6 +1297,7 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
             .idempotency_key();
             (set, Some((arm, case, rep, trial_no, key)))
         };
+        let condition_id = cond.map(|c| c.3);
         let mut missing = BTreeMap::new();
         // A に Celeris の task / run は無い（定義書 §2.1）。
         let a_arm = ident.as_ref().is_some_and(|i| i.0 == ConfigId::A);
@@ -1266,6 +1337,7 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
             repetition: ident.as_ref().map(|i| i.2),
             trial_no: ident.as_ref().map(|i| i.3),
             trial_key: ident.map(|i| i.4),
+            condition_id,
             task_id,
             run_id,
             job_ref: None,
@@ -1537,12 +1609,14 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
         if let Some(l) = opt(args, "--logical-op") {
             let campaign = opt(args, "--campaign");
             let arm = opt(args, "--arm");
+            let cond = condition_filter(args)?;
             let hit: Vec<&HumanOpRecord> = existing
                 .iter()
                 .filter(|r| r.record_type != RecordType::Correction)
                 .filter(|r| r.logical_op_id.as_deref() == Some(l.as_str()))
                 .filter(|r| campaign.as_deref().is_none_or(|c| r.campaign_id == c))
                 .filter(|r| arm.as_deref().is_none_or(|a| r.arm_label() == Some(a)))
+                .filter(|r| cond.as_ref().is_none_or(|c| c.matches(r)))
                 .collect();
             if hit.is_empty() {
                 return Err(format!("--logical-op {l}: 該当する記録が無い"));
@@ -1582,6 +1656,7 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
                 repetition: None,
                 trial_no: None,
                 trial_key: None,
+                condition_id: None,
                 task_id: None,
                 run_id: None,
                 job_ref: None,
@@ -1625,6 +1700,26 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
         append_all(Path::new(&file), recs)
     }
 
+    /// `correct`・`list` の `--condition` の絞り込み（同じ manifest・同じ condition の試行の記録）。
+    struct ConditionFilter {
+        manifest_sha256: String,
+        condition_id: String,
+    }
+
+    impl ConditionFilter {
+        fn matches(&self, r: &HumanOpRecord) -> bool {
+            r.manifest_sha256 == self.manifest_sha256
+                && r.condition_id.as_deref() == Some(self.condition_id.as_str())
+        }
+    }
+
+    fn condition_filter(args: &[String]) -> Result<Option<ConditionFilter>, String> {
+        Ok(condition(args)?.map(|(_, sha, _, c)| ConditionFilter {
+            manifest_sha256: sha,
+            condition_id: c,
+        }))
+    }
+
     fn read(args: &[String]) -> Result<Vec<HumanOpRecord>, String> {
         let file = req(args, "--file")?;
         if !Path::new(&file).exists() {
@@ -1643,10 +1738,12 @@ clock: [--now T] [--clock-source system_utc|system_utc_ntp_synced|unknown] [--ho
     fn list(args: &[String]) -> Result<String, String> {
         let recs = resolve(&read(args)?).map_err(|e| e.to_string())?;
         let arm = opt(args, "--arm");
+        let cond = condition_filter(args)?;
         let (campaign, case) = (opt(args, "--campaign"), opt(args, "--case"));
         let keep: Vec<&HumanOpRecord> = recs
             .iter()
             .filter(|r| arm.as_deref().is_none_or(|a| r.arm_label() == Some(a)))
+            .filter(|r| cond.as_ref().is_none_or(|c| c.matches(r)))
             .filter(|r| campaign.as_deref().is_none_or(|c| r.campaign_id == c))
             .filter(|r| {
                 case.as_deref()

@@ -1,6 +1,6 @@
 //! ADR 2026-10-28-cos-routine-delegated-answers: the basis of a CoS answer that no human instructed.
 //!
-//! A CoS answer to a wait without `instructed_by` must name one of the routine categories and the
+//! A CoS answer to a wait without `instructed_by` must name one of four routine categories and the
 //! evidence that the category's deterministic conditions hold (D1/D2). This module checks only what
 //! the API can decide from the request and the store: shape, the referenced approval, the
 //! arithmetic of the frame, the repeated failure and the once-only raise. The judgment that the
@@ -18,9 +18,7 @@ use task_ops::human_inbox::InboxKind;
 
 use crate::problem::{ApiProblem, store_problem};
 
-mod plan_approval;
 mod review_rework;
-pub use plan_approval::{BasisPlan, PlanCheck};
 pub(crate) use review_rework::REOPEN_OPTION;
 
 /// The option key of a run-time tree limit decision that adds one allowance (ADR-0079 D7).
@@ -29,7 +27,7 @@ const MAX_REFS: usize = 20;
 const MAX_REF_CHARS: usize = 300;
 const MAX_FAILURE_CHARS: usize = 500;
 
-/// D1: the routine judgments CoS may answer without a human instruction.
+/// D1: the four routine judgments CoS may answer without a human instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BasisCategory {
@@ -43,8 +41,6 @@ pub enum BasisCategory {
     WorkGuidance,
     /// (e) Reopen a task the reviewer failed for a technical defect (ADR 2026-10-29-cos-review-rework-reopen).
     ReviewRework,
-    /// (f) Approve a plan (a replanned version included) that needs no person (ADR 2026-10-30-cos-plan-approval).
-    PlanApproval,
 }
 
 impl BasisCategory {
@@ -55,7 +51,6 @@ impl BasisCategory {
             BasisCategory::DocumentedDefault => "documented_default",
             BasisCategory::WorkGuidance => "work_guidance",
             BasisCategory::ReviewRework => "review_rework",
-            BasisCategory::PlanApproval => "plan_approval",
         }
     }
 }
@@ -77,8 +72,6 @@ pub enum BasisRefKind {
     Message,
     /// The reviewer run whose verdict failed the task (the id in `reviewer(<id>): …`).
     Review,
-    /// An execution plan version (`PlanApprovalRequested.plan_id`, `ExecutionPlanned.plan_id`).
-    Plan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -130,8 +123,6 @@ pub struct DelegatedBasis {
     pub frame: Option<BasisFrame>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failures: Option<BasisFailures>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan: Option<BasisPlan>,
 }
 
 /// What the answer targets, as far as the API knows it.
@@ -151,8 +142,6 @@ pub(crate) const BASIS_OVER_FRAME: &str = "cos_basis_over_frame";
 pub(crate) const BASIS_REPEATED_FAILURE: &str = "cos_basis_repeated_failure";
 pub(crate) const BASIS_RAISE_ONCE_USED: &str = "cos_basis_raise_once_used";
 pub(crate) const BASIS_REWORK_LIMIT: &str = "cos_basis_rework_limit";
-pub(crate) const BASIS_PLAN_NEEDS_HUMAN: &str = "cos_basis_plan_needs_human";
-pub(crate) const BASIS_PLAN_LIMIT: &str = "cos_basis_plan_limit";
 
 fn problem(code: &'static str, detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::UNPROCESSABLE_ENTITY, code, detail)
@@ -162,8 +151,7 @@ pub(crate) fn missing() -> ApiProblem {
     problem(
         BASIS_MISSING,
         "a CoS answer without instructed_by needs basis (within_approved_frame, raise_once, \
-         documented_default, work_guidance, review_rework or plan_approval with its evidence); \
-         otherwise escalate",
+         documented_default, work_guidance or review_rework with its evidence); otherwise escalate",
     )
 }
 
@@ -246,9 +234,6 @@ pub(crate) fn validate(
     if basis.failures.is_some() && category != BasisCategory::RaiseOnce {
         return Err(invalid("basis.failures belongs to raise_once only".into()));
     }
-    if basis.plan.is_some() && category != BasisCategory::PlanApproval {
-        return Err(invalid("basis.plan belongs to plan_approval only".into()));
-    }
     let option = target.option.as_deref();
     if option == Some(review_rework::REOPEN_OPTION)
         && target.kind == Some(InboxKind::Failed)
@@ -256,14 +241,6 @@ pub(crate) fn validate(
     {
         return Err(invalid(
             "reopening a failed task needs basis.category=review_rework".into(),
-        ));
-    }
-    if option == Some(plan_approval::APPROVE_OPTION)
-        && target.kind == Some(InboxKind::PlanGate)
-        && category != BasisCategory::PlanApproval
-    {
-        return Err(invalid(
-            "approving a plan gate needs basis.category=plan_approval".into(),
         ));
     }
     if option == Some(RAISE_ONCE_OPTION) && category != BasisCategory::RaiseOnce {
@@ -277,10 +254,15 @@ pub(crate) fn validate(
         BasisCategory::WithinApprovedFrame => {
             if !matches!(
                 kind,
-                Some(InboxKind::Decision | InboxKind::Authorization | InboxKind::PhaseGate)
+                Some(
+                    InboxKind::Decision
+                        | InboxKind::Authorization
+                        | InboxKind::PlanGate
+                        | InboxKind::PhaseGate
+                )
             ) {
                 return Err(invalid(format!(
-                    "within_approved_frame answers a decision, authorization or phase gate, not {kind_name}"
+                    "within_approved_frame answers a decision, authorization or plan/phase gate, not {kind_name}"
                 )));
             }
             let Some(frame) = &basis.frame else {
@@ -405,7 +387,6 @@ pub(crate) fn validate(
             }
         }
         BasisCategory::ReviewRework => review_rework::validate(store, basis, target)?,
-        BasisCategory::PlanApproval => plan_approval::validate(store, basis, target)?,
     }
     Ok(())
 }

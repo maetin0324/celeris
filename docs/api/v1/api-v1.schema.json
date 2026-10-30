@@ -1845,7 +1845,7 @@
       "type": "string"
     },
     "BasisCategory": {
-      "description": "D1: the routine judgments CoS may answer without a human instruction.",
+      "description": "D1: the four routine judgments CoS may answer without a human instruction.",
       "oneOf": [
         {
           "const": "within_approved_frame",
@@ -1870,11 +1870,6 @@
         {
           "const": "review_rework",
           "description": "(e) Reopen a task the reviewer failed for a technical defect (ADR 2026-10-29-cos-review-rework-reopen).",
-          "type": "string"
-        },
-        {
-          "const": "plan_approval",
-          "description": "(f) Approve a plan (a replanned version included) that needs no person (ADR 2026-10-30-cos-plan-approval).",
           "type": "string"
         }
       ]
@@ -1933,28 +1928,6 @@
       ],
       "type": "object"
     },
-    "BasisPlan": {
-      "additionalProperties": false,
-      "description": "D2 (f): what CoS read in the plan. The plan ids themselves are `refs` of kind `plan`.",
-      "properties": {
-        "changes": {
-          "description": "What changed from the previous version (for the first plan: what the plan does).",
-          "type": "string"
-        },
-        "checked": {
-          "description": "The items CoS checked; must list all of them.",
-          "items": {
-            "$ref": "#/$defs/PlanCheck"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "changes",
-        "checked"
-      ],
-      "type": "object"
-    },
     "BasisRef": {
       "additionalProperties": false,
       "properties": {
@@ -1994,11 +1967,6 @@
         {
           "const": "review",
           "description": "The reviewer run whose verdict failed the task (the id in `reviewer(<id>): …`).",
-          "type": "string"
-        },
-        {
-          "const": "plan",
-          "description": "An execution plan version (`PlanApprovalRequested.plan_id`, `ExecutionPlanned.plan_id`).",
           "type": "string"
         }
       ]
@@ -9033,16 +9001,6 @@
           "anyOf": [
             {
               "$ref": "#/$defs/BasisFrame"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "plan": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BasisPlan"
             },
             {
               "type": "null"
@@ -21454,46 +21412,6 @@
         "summary"
       ],
       "type": "object"
-    },
-    "PlanCheck": {
-      "description": "D2: what CoS checked in the plan before approving it. `basis.plan.checked` lists every item.",
-      "oneOf": [
-        {
-          "const": "objective_acceptance",
-          "description": "The plan keeps the task's objective and acceptance (no change asked of the person).",
-          "type": "string"
-        },
-        {
-          "const": "cost_frame",
-          "description": "Billing, paid trials and node-hours stay inside a frame a person approved.",
-          "type": "string"
-        },
-        {
-          "const": "production",
-          "description": "No change to the production daemon, systemd units, releases or production config.",
-          "type": "string"
-        },
-        {
-          "const": "external_publish",
-          "description": "No external publication, external push or sending outside.",
-          "type": "string"
-        },
-        {
-          "const": "destructive",
-          "description": "No irreversible or destructive operation.",
-          "type": "string"
-        },
-        {
-          "const": "secrets_permissions",
-          "description": "No secret, permission or security policy change.",
-          "type": "string"
-        },
-        {
-          "const": "human_steps",
-          "description": "The plan's decisions and `review: human` stages stay human waits.",
-          "type": "string"
-        }
-      ]
     },
     "PlanDagNode": {
       "description": "DAG の 1 節点（= マイルストーン Task）。",

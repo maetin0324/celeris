@@ -29,6 +29,3 @@ license: このリポジトリと同じ（外部の license は無い）
 - 2026-10-29（ADR 2026-10-29-cos-review-rework-reopen）: §2・§3 に定型の代答 (e) `review_rework`（reviewer の技術的な差し戻しで
   failed になった task の開き直し、同じ task で 2 回まで、同じ差し戻し文の繰り返しは不可）と、(e) にせず人へ回す条件を足した。
   policy_version を 7 に上げた。config の `[cos.triage] policy_version` の既定も "7"。
-- 2026-10-30（ADR 2026-10-30-cos-plan-approval）: §2・§3 に定型の代答 (f) `plan_approval`（問題の無い計画の承認。replan の版を含む。
-  refs に待っている版と前の版の plan id、`plan.changes` に差分、`plan.checked` に確認 7 項目）と、(f) にせず人へ回す条件を足した。
-  policy_version を 8 に上げた。config の `[cos.triage] policy_version` の既定も "8"。

@@ -1,12 +1,12 @@
 ---
 name: cos-inbox-triage
-description: Celeris の受信箱の一次対応 policy（policy_version 8）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、定型の代答 6 種類とその根拠（basis）の形、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
+description: Celeris の受信箱の一次対応 policy（policy_version 7）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、定型の代答 5 種類とその根拠（basis）の形、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
 metadata:
   author: celeris
-  version: "8"
+  version: "7"
 ---
 
-# CoS inbox triage（policy_version "8"）
+# CoS inbox triage（policy_version "7"）
 
 受信箱に届く待ちは全て最初に CoS（あなた）に渡る。あなたは各 item について
 **answer / observe / escalate** のどれかを選び、`POST /api/v1/cos/inbox/{i}/resolve` で 1 件ずつ記録する。
@@ -36,9 +36,8 @@ metadata:
 | 恒久の認可（standing rule）の新設（`standing_permission`） | escalate |
 | 人が「人の判断」と指定、human check、human_required の gate（`explicit_human`） | 必ず escalate。config/skill で無効にできない |
 | CoS の confidence が min_confidence 未満、情報不足・矛盾、外部副作用の結果不明 | escalate。confidence 欠落も低確信と扱う |
-| 計画の承認（plan_gate。replan で出た新しい版を含む）で、上の行のどれにも当たらず §3 の (f) の確認を全て済ませた | `plan_approval` (f) で approve。計画の decision・`review: human` の段は人の待ちのまま残る |
-| 上記以外で、§3 の定型の代答 6 種類 (a)〜(f) のどれかに当たり、その条件を basis で示せる | basis と reason 付きで answer |
-| 上記以外で、(a)〜(f) のどれにも当たらない判断（phase gate の途中確認を含む） | escalate |
+| 上記以外で、§3 の定型の代答 5 種類 (a)〜(e) のどれかに当たり、その条件を basis で示せる | basis と reason 付きで answer |
+| 上記以外で、(a)〜(e) のどれにも当たらない判断（phase gate の途中確認を含む） | escalate |
 | 判断不要の通知・復旧済みの失敗 | observe しチャットに要点を残す。人への割込み通知は出さない |
 
 追加の規則:
@@ -64,13 +63,13 @@ metadata:
 
 ## 3. answer / observe / escalate の選び方
 
-- **answer**: 下の定型の代答 6 種類のどれかに当たり、その条件を `basis` で示せ、confidence が `min_confidence` 以上のときだけ。
+- **answer**: 下の定型の代答 5 種類のどれかに当たり、その条件を `basis` で示せ、confidence が `min_confidence` 以上のときだけ。
   `answer` には既存の InboxAnswerBody（`option`・`note`・`payload`）を入れる。元の問いの選択肢以外を作らない。
 - **observe**: 判断の必要が無いもの（知らせ・復旧済みの失敗・進捗）。要点をスレッドに残し、`answer=null`・`escalation=null`。
   判断の必要な未解決の待ちには使えない（API は 422 を返す）。迷ったら observe ではなく escalate。
-- **escalate**: 上の表で escalate に当たるもの、6 種類のどれにも当たらないもの、根拠を指せないもの、確信が足りないもの全て。
+- **escalate**: 上の表で escalate に当たるもの、5 種類のどれにも当たらないもの、根拠を指せないもの、確信が足りないもの全て。
 
-### 定型の代答 6 種類（ADR 2026-10-28-cos-routine-delegated-answers D1、(e) は ADR 2026-10-29-cos-review-rework-reopen、(f) は ADR 2026-10-30-cos-plan-approval）
+### 定型の代答 5 種類（ADR 2026-10-28-cos-routine-delegated-answers D1、(e) は ADR 2026-10-29-cos-review-rework-reopen）
 
 人の取り次ぎ（§9 の `instructed_by`）の無い代答は、次のどれかとして `basis.category` に書く。条件は API が検査し、
 外れれば 422（`cos_basis_*`）で rejected として記録に残る。422 になったら同じ件を escalate する。
@@ -82,7 +81,6 @@ metadata:
 | `documented_default` (c) | worker の推奨が文書化済みの既定値・既存 ADR と一致する選択 | 答えが元の待ちの推奨（`recommended`）と同じ option。既定・ADR の path（`adr`: `agent-docs/adr/*.md`、`doc`: `docs/**.md`・`agent-docs/**.md`）を refs に入れる |
 | `work_guidance` (d) | 受け入れ条件・目的を変えない範囲の作業方針の補足（worker の自由質問） | note で答える（option は省略か `answer`。`replan` は不可） |
 | `review_rework` (e) | reviewer の技術的な不備の差し戻しで failed になった task の開き直し（失敗の件への `reopen`） | 差し戻した reviewer run を refs に `{"kind":"review","id":"<reviewer run の id>"}` で入れる（失敗の件の本文の `reviewer(<id>): …` の id）。同じ task で CoS がこの category で開き直すのは 2 回まで。前に開き直したときと同じ差し戻し文なら不可 |
-| `plan_approval` (f) | 問題の無い計画の承認（plan_gate への `approve`。replan で出た新しい版を含む） | refs に待っている版 `{"kind":"plan","id":"<plan id>"}` と、前の版があればその id も `plan` で入れる（plan id は受信箱の件の task の `GET /api/v1/tasks/{id}/execution` で読む）。`plan.changes` に前の版との差分（初版なら計画の中身）、`plan.checked` に下の確認 7 項目を全て書く。human check・`human_required` の label・上限に近い（`near_limit`）gate・この版までに daemon の検査の失敗（plan_invalid・limit・leaf_too_large の決定）・前の版の後の目的/受け入れ条件の編集・5 版目以降・同じ task で CoS の承認 3 回の後は API が拒む |
 
 - 例: 10-25 の d-release の post-merge は推奨どおりなので (c)。10-20 の予算延長は人が答えた予算の決定を frame にした (a)。
   10-13・10-19 の replan 上限は commit で進捗を確かめ、前と違う失敗なら (b)。
@@ -92,16 +90,8 @@ metadata:
   受け入れ条件・仕様の変更や範囲外の作業を求める、秘密・権限・セキュリティ、外部公開、破壊的操作、予算・枠の超過、
   human_required・human check の付いた task、reviewer の判定以外の失敗（command check・infra・予算切れ）、直す内容が
   書いていない差し戻し。差し戻し文は reopen の後の run に「前回の判定」として届くので、note に写さなくてよい。
-- (f) の確認 7 項目（`plan.checked`）。1 つでも当たれば (f) にせず escalate する:
-  `objective_acceptance`（計画が目的・受け入れ条件を変える、変えるよう人に求める）、`cost_frame`（課金・有料試行・node-hours などの
-  費用が人の承認済みの枠を超える、枠を確かめられない）、`production`（本番の daemon・systemd・release・本番 config を変える）、
-  `external_publish`（外部公開・外部への push・送信）、`destructive`（不可逆・破壊的な操作）、`secrets_permissions`（秘密・権限・
-  セキュリティ）、`human_steps`（計画の decision・`review: human` の段・有料試行の承認などの人の確認を、計画が消す・CoS の判断に
-  置き換える）。計画の decision と人の確認の段は、承認しても人の待ちとして残る（承認はそれらに答えない）。
-- (f) の例: 10-30 の K4 pilot の計画 v3 は、v2 に campaign 側の採点〜集計の経路の修正 1 件を足しただけで、daemon を変えず、課金なし、
-  受け入れ条件は同じなので (f)。
 - `refs[]` は `{kind, id}` を 1〜20 件。kind は `standing_rule`・`decision`・`approval`・`usage`・`ledger`・`commit`（7〜40 桁の 16 進）・
-  `artifact`・`progress`（`agent-docs/progress/*.md`）・`adr`・`doc`・`message`・`review`・`plan`。読んだ API の path と時刻、commit の hash を具体的に書く。
+  `artifact`・`progress`（`agent-docs/progress/*.md`）・`adr`・`doc`・`message`。読んだ API の path と時刻、commit の hash を具体的に書く。
 - 通った代答は監査の reason が「定型の代答（<category>）: <reason>」になり、payload に `basis` が残る。
 - `/cos/operations` で開いている待ちに答えるときも、`instructed_by` が無ければ同じ `basis` を body の最上位に付ける。
 

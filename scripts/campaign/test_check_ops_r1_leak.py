@@ -369,17 +369,60 @@ class LeakCheckTest(unittest.TestCase):
         self.assertEqual([h["path"] for h in hits], [other])
         self.assertIn("host_view", {x["kind"] for x in doc["limits"]})
 
-    def test_runtime_and_l1_denied_clears_same_uid(self):
+    @unittest.skipIf(os.geteuid() == 0, "root の run は全部の path を持ち主として扱う")
+    def test_runtime_and_l1_denied_clears_same_uid_only_without_owned_path(self):
         rt = self.probe("rt.json", "b-daemon", [(self.private, False, False)])
         l1 = self.probe("l1.json", "l1:human-uid", [(self.private, False, False)])
-        rc, doc, _ = self.check("--deny-readable", self.private, "--runtime-probe", rt, "--runtime-probe", l1,
+        probes = ("--runtime-probe", rt, "--runtime-probe", l1)
+        # 判定に別の uid を渡す: private と祖先のどれもその uid の持ち物でない（owned_by_run_uid が空）
+        other = str(os.geteuid() + 12345)
+        rc, doc, _ = self.check("--deny-readable", self.private, *probes, "--run-uid", other, "--run-gid", "54321",
                                 canary=False)
         self.assertEqual(rc, 0, json.dumps(doc, ensure_ascii=False))
         entry = doc["checked"]["deny_readable"][0]
+        self.assertEqual(entry["owned_by_run_uid"], [])
         self.assertFalse(entry["same_uid_limit"])
         self.assertEqual(entry["same_uid_cleared_by"], "runtime_probe_and_l1")
         self.assertNotIn("same_uid", {x["kind"] for x in doc["limits"]})
         self.assertEqual([p["l1"] for p in doc["checked"]["runtime_probe"]], [False, True])
+        # 同じ probe でも run の uid が持ち主なら外さない
+        rc, doc, _ = self.check("--deny-readable", self.private, *probes, canary=False)
+        self.assertEqual(rc, 1, json.dumps(doc, ensure_ascii=False))
+        entry = doc["checked"]["deny_readable"][0]
+        self.assertIn(os.path.realpath(self.private), entry["owned_by_run_uid"])
+        self.assertTrue(entry["same_uid_limit"])
+        self.assertNotIn("same_uid_cleared_by", entry)
+        self.assertIn(("same_uid_without_canary", None), self.kinds(doc))
+
+    @unittest.skipIf(os.geteuid() == 0, "root は mode 000 も読める")
+    def test_same_uid_chmod_000_keeps_same_uid_even_if_both_probes_deny(self):
+        # 自分の dir と file を 0o000 にすると、runtime も L1 も開けない（拒否に見える）が、持ち主は run の uid のまま
+        locked_dir = os.path.join(self.tmp, "eval-root")
+        os.mkdir(locked_dir)
+        locked = os.path.join(locked_dir, "private.json")
+        shutil.copy(self.private, locked)
+        os.chmod(locked, 0o000)
+        os.chmod(locked_dir, 0o000)
+        with self.assertRaises(PermissionError):
+            open(locked, "rb")
+        with self.assertRaises(PermissionError):
+            os.listdir(locked_dir)
+        rt = self.probe("rt.json", "a-agent", [(locked, False, False), (locked_dir, False, False)])
+        l1 = self.probe("l1.json", "l1", [(locked, False, False), (locked_dir, False, False)])
+        args = ("--deny-readable", locked, "--deny-readable", locked_dir, "--runtime-probe", rt, "--runtime-probe", l1)
+        rc, doc, _ = self.check(*args)
+        self.assertEqual(rc, 0, json.dumps(doc, ensure_ascii=False))
+        for entry in doc["checked"]["deny_readable"]:
+            self.assertTrue(entry["runtime_denied"])
+            self.assertTrue(entry["l1_denied"])
+            self.assertIn(locked_dir, entry["owned_by_run_uid"])
+            self.assertTrue(entry["same_uid_limit"])
+            self.assertNotIn("same_uid_cleared_by", entry)
+        self.assertEqual({x["path"] for x in doc["limits"] if x["kind"] == "same_uid"}, {locked, locked_dir})
+        rc, doc, _ = self.check(*args, canary=False)
+        self.assertEqual(rc, 1)
+        self.assertEqual(sorted(h["path"] for h in doc["hits"] if h["kind"] == "same_uid_without_canary"),
+                         sorted([locked, locked_dir]))
 
     def test_runtime_denied_without_l1_keeps_same_uid(self):
         rt = self.probe("rt.json", "b-daemon", [(self.private, False, False)])

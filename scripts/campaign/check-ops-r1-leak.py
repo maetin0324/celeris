@@ -26,7 +26,10 @@ mode bit の判定は host から見た今の状態で、run の sandbox（bwrap
 runtime probe（--runtime-probe、celeris.runtime-probe/1。celeris-campaign probe-read の出力）:
 - probe に載った --deny-readable の path は、host の mode ではなく probe の readable/listable で判定する。
   principal が l1 か l1: で始まる probe は L1 の確認（人の uid の process から包まずに開いた結果）、他は runtime の確認。
-- runtime の probe の拒否（readable=false）と L1 の probe の拒否が揃った path には same_uid の limit を書かない。
+- runtime の probe の拒否（readable=false）と L1 の probe の拒否が揃い、かつ host 側の stat で path と祖先の
+  どれも run の uid の持ち物でない（owned_by_run_uid が空）path にだけ same_uid の limit を書かない。
+  run の uid が持ち主の path が残れば、両方の probe が拒否でも same_uid の limit を残す（同じ uid の chmod 000 は
+  probe では拒否に見えるが、run は chmod・rename で読めるようにできる）。canary が無ければ same_uid_without_canary の hit。
 - probe が無い path は今までどおり host から判定する。
 - どの probe でも readable=true の path、空でない mounts_outside_allow、ok=false は deny_readable の hit（exit 1）。
 - schema が違う・欄が欠けた probe JSON は入力の誤り（exit 2）。
@@ -538,7 +541,9 @@ def check_deny_probe(path, found, uid, scanner, limits, have_canary):
         "runtime_denied": runtime_denied,
         "l1_denied": l1_denied,
     }
-    if runtime_denied and l1_denied:
+    owned = owned_chain(path, uid)
+    entry["owned_by_run_uid"] = owned[:5]
+    if runtime_denied and l1_denied and not owned:
         entry["same_uid_limit"] = False
         entry["same_uid_cleared_by"] = "runtime_probe_and_l1"
     else:

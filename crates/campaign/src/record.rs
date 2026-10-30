@@ -90,8 +90,17 @@ pub struct TrialRecord {
     /// 試行で実際に走った全 run の実測（子・孫・再試行を含む）。executor が観測できた分だけ。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub observed: Vec<ObservedRun>,
+    /// ops-r1 の試行だけ: 実行経路（`ops_r1_assemble::PATH_*`。direct_harness / task_pipeline / cos_self_completed / stopped）。
+    /// 比較範囲（final-accounting の `comparison_scope`）が条件の境界と照らす。runner の試行は持たない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_path: Option<String>,
+    /// ops-r1 の試行だけ: 試行の作業をした run の実際の model（複数なら `|` 区切り、観測できなければ null）。
+    /// 宣言の `model`（manifest の worker model の写し）とは別欄で、宣言名で埋めない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_model: Option<String>,
     pub harness: String,
     pub harness_version: String,
+    /// manifest が宣言した worker の model（宣言の写し。実際の model は `observed_model`・`observed[].model`）。
     pub model: String,
     pub model_version: String,
     pub policy_version: String,

@@ -95,7 +95,10 @@ pub fn compare(m: &CampaignManifest, rc: &Recomputed, text: &str) -> Vec<String>
 /// 報告の消費の主張を最終集計（`final_accounting::compute` の出力）と突き合わせる。
 /// - `consumption metric=<m> total=<n> scope=<complete|observed_partial>`: 値は観測和と一致し、
 ///   欠測のある指標を `complete`（完全な総費用）と呼ばない。
-/// - `reduction metric=<m> confirmed=<true|false>`: 欠測のある指標の削減を確定にしない。
+/// - `reduction metric=<m> confirmed=<true|false>`: 欠測のある指標・比較範囲の外（`comparison_scope.comparable=false`）の
+///   削減を確定にしない。
+/// - `comparison scope=<comparable|not_comparable>`: 最終集計の `comparison_scope` と一致する。
+/// - `lane name=<区分> added_to_total=<true|false>`: 区分の計上（task 実行系だけが試行の合計に入る）と一致する。
 pub fn check_consumption_claims(acct: &serde_json::Value, text: &str) -> Vec<String> {
     let key = |m: &str| match m {
         "tokens" => Some("tokens"),
@@ -107,10 +110,42 @@ pub fn check_consumption_claims(acct: &serde_json::Value, text: &str) -> Vec<Str
     for line in text.lines() {
         let mut it = line.split_whitespace();
         let head = it.next();
-        if !matches!(head, Some("consumption" | "reduction")) {
+        if !matches!(
+            head,
+            Some("consumption" | "reduction" | "comparison" | "lane")
+        ) {
             continue;
         }
         let kv: BTreeMap<&str, &str> = it.filter_map(|t| t.split_once('=')).collect();
+        let comparable = acct["comparison_scope"]["comparable"] == true;
+        if head == Some("comparison") {
+            let want = if comparable {
+                "comparable"
+            } else {
+                "not_comparable"
+            };
+            if kv.get("scope") != Some(&want) {
+                v.push(format!(
+                    "report: comparison scope must be {want} (comparison_scope reasons: {})",
+                    acct["comparison_scope"]["reasons"]
+                ));
+            }
+            continue;
+        }
+        if head == Some("lane") {
+            let name = kv.get("name").copied().unwrap_or_default();
+            if !crate::final_accounting::LANES.contains(&name) {
+                v.push(format!("report: unknown consumption lane in `{line}`"));
+                continue;
+            }
+            let want = acct["consumption_lanes"][name]["added_to_total"].as_bool();
+            if kv.get("added_to_total").map(|x| *x == "true") != want {
+                v.push(format!(
+                    "report: lane {name} added_to_total must be {want:?} (only task_execution is in the trial totals)"
+                ));
+            }
+            continue;
+        }
         let Some(metric) = kv.get("metric").copied().filter(|m| key(m).is_some()) else {
             v.push(format!("report: missing or unknown metric in `{line}`"));
             continue;
@@ -122,9 +157,16 @@ pub fn check_consumption_claims(acct: &serde_json::Value, text: &str) -> Vec<Str
                     .as_bool()
                     .unwrap_or(false)
             {
-                v.push(format!(
-                    "report: reduction on {metric} is confirmed but the accounting has missing data; it cannot be confirmed"
-                ));
+                v.push(if comparable {
+                    format!(
+                        "report: reduction on {metric} is confirmed but the accounting has missing data; it cannot be confirmed"
+                    )
+                } else {
+                    format!(
+                        "report: reduction on {metric} is confirmed but the comparison is outside its scope ({}); it cannot be confirmed",
+                        acct["comparison_scope"]["reasons"]
+                    )
+                });
             }
             continue;
         }

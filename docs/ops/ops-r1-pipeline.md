@@ -240,6 +240,42 @@ condition_drift・非成功、wall 229 秒）と `ops_r1_pipeline_b_stop_rejects
 試験: `ops_r1_pipeline_b_cos_self_completed_passes_the_stages`・`ops_r1_pipeline_b_cos_self_completed_after_cutoff_is_timeout`・
 `ops_r1_pipeline_b_cos_self_completed_rejects_task_trace_and_stop`（`crates/campaign/tests/ops_r1_pipeline_assemble.rs`）。
 
+### 4.8 消費の区分・宣言 model と観測 model・実行経路・比較範囲
+
+決定の記録は `agent-docs/adr/2026-10-30-ops-r1-consumption-labels-model-scope.md`。この節の欄は `--b-cos-self-completed` の有無に
+かかわらず出るので、この変更より前の binary の out・records.jsonl とは byte 一致しない（採点・outcome・reason・wall・tokens の値は同じ）。
+
+- trials.jsonl の試行行: `model` は manifest の宣言（worker model）の写し。実際の model は `observed_model`（作業した run の model。
+  A は transcript、B の task 経路は task run、`cos_self_completed` は受付の CoS run。観測 0 件は null）。実行経路は `execution_path`
+  （`direct_harness`・`task_pipeline`・`cos_self_completed`・`stopped`）。例: B-t002 は `model` claude-sonnet-5-5・`observed_model`
+  claude-opus-5-5・`execution_path` cos_self_completed。
+- records.jsonl の usage 行: `model`（attribution の観測値）と `consumption_lane`（`task_execution`・`project_cos`・`general_cos`・`shared`）。
+- final-accounting の `consumption_lanes`: 6 区分を名前で出す。
+
+  | 区分 | 中身 | 試行の合計（`added_to_total`） |
+  |---|---|---|
+  | `task_execution` | 試行の tokens（A の Claude Code、B の task の planner/worker/reviewer） | 入る（true） |
+  | `project_cos` | 案件 CoS の chat run | 入らない（false） |
+  | `general_cos` | 統括 CoS の chat run | 入らない |
+  | `external_operator` | 外部 operator（records に無い。`outside_records`、operator transcript から別に数える） | 入らない |
+  | `shared` | CoS 以外の共有の行 | 入らない |
+  | `evaluator` | grader・pipeline（決定的な program。`not_called`） | 入らない |
+
+  `task_execution` が 0 でも運用全体の 0 ではない。報告では区分ごとに書き、合計に入るのは `task_execution` だけと書く。
+  lane も cos_role も無い CoS 行は `cos_unclassified` に出す。
+- final-accounting の `comparison_scope`: ops-r1 では実行した試行の経路が条件の境界（A=`direct_harness`、B=`task_pipeline`）の外か欠測、
+  観測 model が欠測か宣言と違う、腕の間で観測 model が違う、のどれかがあれば `comparable=false` で、`reasons` に試行ごとの理由が入る。
+  `reduction_confirmable` は欠測が無く、かつ comparable のときだけ true。`cross_measurement` は常に `not_comparable`（旧 A0/B0 系列と
+  ops-r1 の数値を削減として比べない）。cell 行にも `declared_model`・`observed_model`・`execution_path` が出る。
+- export の表の `consumption` に `comparison_scope`（comparable・reasons）と `lanes_added_to_total` が出る。
+- 報告の検査（`report::check_consumption_claims`）: `comparison scope=<comparable|not_comparable>` と
+  `lane name=<区分> added_to_total=<true|false>` の行は最終集計と一致しなければ違反。比較範囲の外で
+  `reduction metric=<m> confirmed=true` と書くと違反。
+
+試験: `ops_r1_consumption_lanes_keep_the_cos_out_of_the_trial_total`・
+`ops_r1_declared_and_observed_models_and_execution_path_are_separate`・
+`ops_r1_comparison_scope_blocks_reductions_outside_the_boundary`（`crates/campaign/tests/ops_r1_pipeline_assemble.rs`）。
+
 ## 5. 旧系列を変えない根拠
 
 - manifest: 足す欄は `conditions` 1 つで、`skip_serializing_if = "BTreeMap::is_empty"`。旧 manifest（A0/B0/B1/C1、`mlsys-main-4-v4`）は
@@ -249,6 +285,8 @@ condition_drift・非成功、wall 229 秒）と `ops_r1_pipeline_b_stop_rejects
   変更前後で比べる試験を置く。
 - validate・check_resolved: 追加の検査は `conditions` か `contract.revision = main-4-ops-r1` があるときだけ走る。旧 manifest はどちらも持たない。
 - checker・export・final-accounting・grade-out: コードの分岐を足さない（executor 名 `ops-r1-assemble` は既存の `celeris_run` 判定の外に落ちるだけ）。
+  例外は §4.8 の final-accounting の `comparison_scope`: 経路と model の規則は ops-r1 の manifest だけに当て、runner の campaign の
+  `reduction_confirmable` は従来どおり欠測だけで決まる（`consumption_lanes`・`comparison_scope` の欄自体はどちらにも出る）。
 - human-op: `ExperimentSet` に値を足すだけで、`main-ab`・`jev-bc` の文字列・`--arm` の 4 値・record_id の計算は変えない。`condition_id` は
   無ければ直列化しない。旧 human-ops.jsonl の行は byte 単位で同じに読み書きされる。
 - 台帳: assemble は `global-ledger`・`series-ledger` を開かない。旧 `mlsys-main-4-v4` の global-ledger は使わない（固定票 bundle.ledger）。

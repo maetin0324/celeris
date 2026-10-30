@@ -11,6 +11,10 @@
 //! - token は manifest の `token_basis`（cache_read / cache_creation を含むか）で数え、内訳も別に出す。
 //!   定価換算・実支出・executor 報告費用・quota は別項目で、互いに代用しない。
 //! - 完全でない和は `observed_sum` に出し、`total` は完全なときだけ値を持つ。欠測があれば `reduction_confirmable` は false。
+//! - 消費は名前付きの 6 区分（`consumption_lanes`: task 実行系・案件 CoS・統括 CoS・外部 operator・共有・評価器）で出す。
+//!   試行の合計に入るのは task 実行系だけ（ほかは `added_to_total=false`）。task 実行系の 0 は全体の 0 ではない。
+//! - `comparison_scope` は条件の境界（ops-r1 の実行経路）と宣言・観測 model を照らし、外れた組では
+//!   `reduction_confirmable` を false にする（欠測が無くても）。測定系列をまたぐ比較は確認可能にしない。
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -29,6 +33,21 @@ use crate::{
 pub const SCHEMA: &str = "celeris.campaign-final-accounting/1";
 const RECORD_SCHEMA: &str = "celeris.decision-log/1";
 const METRICS: [&str; 3] = ["tokens", "list_cost_usd", "cash_cost_usd"];
+/// 消費の区分（`consumption_lanes` の鍵）。試行の合計に入るのは task 実行系だけ。
+pub const LANE_TASK_EXECUTION: &str = "task_execution";
+pub const LANE_PROJECT_COS: &str = "project_cos";
+pub const LANE_GENERAL_COS: &str = "general_cos";
+pub const LANE_EXTERNAL_OPERATOR: &str = "external_operator";
+pub const LANE_SHARED: &str = "shared";
+pub const LANE_EVALUATOR: &str = "evaluator";
+pub const LANES: [&str; 6] = [
+    LANE_TASK_EXECUTION,
+    LANE_PROJECT_COS,
+    LANE_GENERAL_COS,
+    LANE_EXTERNAL_OPERATOR,
+    LANE_SHARED,
+    LANE_EVALUATOR,
+];
 
 pub struct FinalInputs<'a> {
     /// decision-log export の `records.jsonl`。
@@ -125,6 +144,9 @@ impl Meas {
 #[derive(Clone, Debug)]
 struct Usage {
     role: String,
+    /// 消費区分（ops-r1 の `consumption_lane`。無い CoS 行は `cos_role` から決める）。
+    lane: Option<String>,
+    model: Option<String>,
     is_retry: bool,
     shared: bool,
     run_id: Option<String>,
@@ -164,6 +186,12 @@ fn parse_usage(v: &Value) -> Usage {
     let u = |k: &str| v[k].as_u64();
     Usage {
         role: text(v, "role").unwrap_or_default(),
+        lane: text(v, "consumption_lane").or_else(|| match v["cos_role"].as_str() {
+            Some("cos_project") => Some(LANE_PROJECT_COS.into()),
+            Some("cos_general") => Some(LANE_GENERAL_COS.into()),
+            _ => None,
+        }),
+        model: text(v, "model"),
         is_retry: v["is_retry"].as_bool().unwrap_or(false),
         shared: v["shared_overhead"].as_bool().unwrap_or(false),
         run_id: text(v, "run_id").or_else(|| text(&v["usage_key"], "run_id")),
@@ -193,6 +221,9 @@ struct Cell {
     tasks: BTreeSet<String>,
     classifiers: BTreeSet<String>,
     jev_rows: Meas,
+    declared_models: BTreeSet<String>,
+    observed_models: BTreeSet<String>,
+    paths: BTreeSet<String>,
 }
 
 struct Gap {
@@ -308,6 +339,16 @@ pub fn compute(m: &CampaignManifest, out: &Path, inp: &FinalInputs) -> Result<Va
             continue;
         }
         c.ran = true;
+        c.declared_models.insert(r.model.clone());
+        match &r.observed_model {
+            Some(o) => c.observed_models.extend(o.split('|').map(String::from)),
+            None => c
+                .observed_models
+                .extend(r.observed.iter().filter_map(|o| o.model.clone())),
+        }
+        if let Some(p) = &r.execution_path {
+            c.paths.insert(p.clone());
+        }
         runtime_charged += r.charged_tokens(&m.budget);
         let t = r.tokens;
         let first = !c.outer_tokens_known;
@@ -323,6 +364,8 @@ pub fn compute(m: &CampaignManifest, out: &Path, inp: &FinalInputs) -> Result<Va
         let u = r.token_usage;
         let row = Usage {
             role: String::new(),
+            lane: None,
+            model: None,
             is_retry: false,
             shared: false,
             run_id: None,
@@ -499,6 +542,9 @@ pub fn compute(m: &CampaignManifest, out: &Path, inp: &FinalInputs) -> Result<Va
     let mut jev = Meas::default();
     let mut shared = Meas::default();
     let mut cos = Meas::default();
+    let mut lane_meas: BTreeMap<&str, Meas> = BTreeMap::new();
+    let mut lane_models: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    let mut cos_unclassified = Meas::default();
     let mut unjoined: Vec<String> = Vec::new();
     let mut identity_conflicts: Vec<String> = Vec::new();
     let mut unattributed: Vec<String> = Vec::new();
@@ -506,8 +552,23 @@ pub fn compute(m: &CampaignManifest, out: &Path, inp: &FinalInputs) -> Result<Va
     for (k, u) in &usage {
         if u.shared {
             shared.add(u, basis);
+            let lane = match u.lane.as_deref() {
+                Some(LANE_PROJECT_COS) => Some(LANE_PROJECT_COS),
+                Some(LANE_GENERAL_COS) => Some(LANE_GENERAL_COS),
+                _ if u.role == "cos" => None,
+                _ => Some(LANE_SHARED),
+            };
             if u.role == "cos" {
                 cos.add(u, basis);
+            }
+            match lane {
+                Some(l) => {
+                    lane_meas.entry(l).or_default().add(u, basis);
+                    if let Some(md) = &u.model {
+                        lane_models.entry(l).or_default().insert(md.clone());
+                    }
+                }
+                None => cos_unclassified.add(u, basis),
             }
         } else if u.role == "jev" {
             jev.add(u, basis);
@@ -705,8 +766,13 @@ pub fn compute(m: &CampaignManifest, out: &Path, inp: &FinalInputs) -> Result<Va
                 format!("{tag}: Jev consumption is {jstate}, not 0"),
             ));
         }
+        let join = |s: &BTreeSet<String>| {
+            (!s.is_empty()).then(|| s.iter().cloned().collect::<Vec<_>>().join("|"))
+        };
         cell_rows.push(json!({
             "arm": arm, "case_id": case, "repetition": rp, "ran": c.ran,
+            "declared_model": join(&c.declared_models), "observed_model": join(&c.observed_models),
+            "execution_path": join(&c.paths),
             "trial_tokens": c.outer_tokens, "decision_log_tokens": inner_tokens,
             "decision_log_runs": c.runs.len(), "reconcile": state,
             "jev": {"state": jstate, "basis": jbasis},
@@ -816,10 +882,57 @@ pub fn compute(m: &CampaignManifest, out: &Path, inp: &FinalInputs) -> Result<Va
 
     let by_role_json: BTreeMap<&String, Value> =
         by_role.iter().map(|(k, v)| (k, v.json())).collect();
+    let scope = comparison_scope(m, &cells);
+    let comparable = scope["comparable"] == true;
     let mut reduction = BTreeMap::new();
     for metric in METRICS {
-        reduction.insert(metric, completeness[metric]);
+        reduction.insert(metric, completeness[metric] && comparable);
     }
+    let lane_json = |l: &str| {
+        let mm = lane_meas.get(l).cloned().unwrap_or_default();
+        let state = if mm.n_rows == 0 {
+            "no_rows"
+        } else if mm.basis_tokens.obs + mm.list_cost_micro_usd.obs + mm.cash_cost_micro_usd.obs > 0
+        {
+            "observed"
+        } else {
+            "missing"
+        };
+        json!({
+            "added_to_total": false,
+            "state": state,
+            "models": lane_models.get(l).map(|s| s.iter().cloned().collect::<Vec<_>>()).unwrap_or_default(),
+            "rows": mm.json(),
+        })
+    };
+    let lanes = json!({
+        "total_covers": [LANE_TASK_EXECUTION],
+        "note": "only task_execution is in the trial totals; the other lanes are reported separately and never added. A task_execution of 0 is not a whole-operation 0",
+        LANE_TASK_EXECUTION: {
+            "roles": ["planner", "worker", "reviewer"],
+            "added_to_total": true,
+            "trial_outer": outer_total.tokens_json(),
+            "decision_log_runs": runs_meas.json(),
+        },
+        LANE_PROJECT_COS: lane_json(LANE_PROJECT_COS),
+        LANE_GENERAL_COS: lane_json(LANE_GENERAL_COS),
+        LANE_EXTERNAL_OPERATOR: {
+            "added_to_total": false,
+            "state": "outside_records",
+            "note": "counted from the operator transcripts (docs/ops/operator-usage.md), not from records.jsonl",
+        },
+        LANE_SHARED: lane_json(LANE_SHARED),
+        LANE_EVALUATOR: {
+            "added_to_total": false,
+            "state": "not_called",
+            "basis": "grader_and_pipeline_are_deterministic_programs",
+        },
+        "cos_unclassified": {
+            "added_to_total": false,
+            "rows": cos_unclassified.json(),
+            "note": "CoS rows without consumption_lane or cos_role; not guessed as project or general CoS",
+        },
+    });
     let gaps_json: Vec<Value> = gaps
         .iter()
         .map(|g| json!({"metric": g.metric, "code": g.code, "detail": g.detail}))
@@ -877,6 +990,8 @@ pub fn compute(m: &CampaignManifest, out: &Path, inp: &FinalInputs) -> Result<Va
             "list_cost_micro_usd": pick("list_cost_usd", observed_list),
             "cash_cost_micro_usd": pick("cash_cost_usd", observed_cash),
         },
+        "consumption_lanes": lanes,
+        "comparison_scope": scope,
         "reduction_confirmable": reduction,
         "gaps": gaps_json,
         "quota": match &inp.quota {
@@ -885,6 +1000,81 @@ pub fn compute(m: &CampaignManifest, out: &Path, inp: &FinalInputs) -> Result<Va
         },
         "budget": budget,
     }))
+}
+
+/// 腕ごとの宣言 model・観測 model・実行経路。
+type ArmScope<'a> = (BTreeSet<&'a str>, BTreeSet<&'a str>, BTreeSet<&'a str>);
+
+/// 比較範囲（`comparison_scope`）。ops-r1 は試行の実行経路が条件の境界（A=direct_harness、B=task_pipeline）に
+/// 収まり、観測 model が宣言と一致し、腕の間で同じときだけ comparable。runner の campaign は model の違いを
+/// 腕の設計として持つので経路と model の規則を当てない。測定系列をまたぐ比較はどちらでも確認可能にしない。
+fn comparison_scope(m: &CampaignManifest, cells: &BTreeMap<CellKey, Cell>) -> Value {
+    let ops_r1 = m.is_ops_r1();
+    let mut reasons: BTreeSet<String> = BTreeSet::new();
+    let mut arms: BTreeMap<&str, ArmScope> = BTreeMap::new();
+    for ((arm, case, rp), c) in cells.iter().filter(|(_, c)| c.ran) {
+        let tag = format!("{arm}/{case}/rep{rp}");
+        let e = arms.entry(arm.as_str()).or_default();
+        e.0.extend(c.declared_models.iter().map(String::as_str));
+        e.1.extend(c.observed_models.iter().map(String::as_str));
+        e.2.extend(c.paths.iter().map(String::as_str));
+        if !ops_r1 {
+            continue;
+        }
+        let want = match arm.as_str() {
+            "A" => crate::ops_r1_assemble::PATH_DIRECT_HARNESS,
+            _ => crate::ops_r1_assemble::PATH_TASK_PIPELINE,
+        };
+        if c.paths.is_empty() {
+            reasons.insert(format!("execution_path_missing:{tag}"));
+        }
+        for p in c.paths.iter().filter(|p| p.as_str() != want) {
+            reasons.insert(format!(
+                "execution_path_outside_condition:{tag}={p} (condition boundary {want})"
+            ));
+        }
+        if c.observed_models.is_empty() {
+            reasons.insert(format!("observed_model_missing:{tag}"));
+        } else if c.observed_models != c.declared_models {
+            reasons.insert(format!(
+                "observed_model_differs_from_declared:{tag} declared={} observed={}",
+                c.declared_models
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("|"),
+                c.observed_models
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ));
+        }
+    }
+    if ops_r1 {
+        let observed: BTreeSet<&BTreeSet<&str>> = arms.values().map(|a| &a.1).collect();
+        if observed.len() > 1 {
+            reasons.insert("observed_model_differs_between_arms".into());
+        }
+    }
+    let list = |s: &BTreeSet<&str>| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let arms_json: BTreeMap<&str, Value> = arms
+        .iter()
+        .map(|(a, (d, o, p))| {
+            (
+                *a,
+                json!({"declared_models": list(d), "observed_models": list(o), "execution_paths": list(p)}),
+            )
+        })
+        .collect();
+    json!({
+        "measurement": if ops_r1 { "ops_r1" } else { "campaign" },
+        "comparable": reasons.is_empty(),
+        "reasons": reasons,
+        "arms": arms_json,
+        "cross_measurement": "not_comparable",
+        "note": "reductions or superiority are confirmable only inside this measurement, on the condition boundary, with observed models equal to the declared ones; numbers from another measurement (e.g. the earlier A0/B0 series) are never compared as a reduction",
+    })
 }
 
 fn sum_meas<'a>(it: impl Iterator<Item = &'a Meas>) -> Meas {
@@ -968,6 +1158,14 @@ pub fn recheck(acct: &Value) -> Vec<String> {
     }
     // 完全でない和を総費用にしない。欠測があれば削減は確定しない。
     let gaps = acct["gaps"].as_array().cloned().unwrap_or_default();
+    let scope = &acct["comparison_scope"];
+    let comparable = scope["comparable"] == true;
+    if scope["reasons"]
+        .as_array()
+        .is_none_or(|r| r.is_empty() != comparable)
+    {
+        v.push("comparison_scope.comparable must be true exactly when it has no reasons".into());
+    }
     for metric in METRICS {
         let blocked = gaps
             .iter()
@@ -975,8 +1173,8 @@ pub fn recheck(acct: &Value) -> Vec<String> {
         if acct["total"]["complete"][metric].as_bool() != Some(!blocked) {
             v.push(format!("total.complete.{metric} disagrees with the gaps"));
         }
-        if acct["reduction_confirmable"][metric].as_bool() != Some(!blocked) {
-            v.push(format!("reduction_confirmable.{metric} disagrees with the gaps (reductions need no missing data)"));
+        if acct["reduction_confirmable"][metric].as_bool() != Some(!blocked && comparable) {
+            v.push(format!("reduction_confirmable.{metric} disagrees with the gaps and comparison_scope (reductions need no missing data and a comparable scope)"));
         }
     }
     for (metric, key) in [
@@ -996,6 +1194,18 @@ pub fn recheck(acct: &Value) -> Vec<String> {
     }
     if acct["shared_unattributable"]["added_to_total"] != false {
         v.push("shared_unattributable must not be added to the total".into());
+    }
+    let lanes = &acct["consumption_lanes"];
+    for lane in LANES {
+        let want = lane == LANE_TASK_EXECUTION;
+        if lanes[lane]["added_to_total"].as_bool() != Some(want) {
+            v.push(format!(
+                "consumption_lanes.{lane}.added_to_total must be {want}"
+            ));
+        }
+    }
+    if lanes[LANE_TASK_EXECUTION]["trial_outer"] != acct["trials"]["outer"] {
+        v.push("consumption_lanes.task_execution.trial_outer differs from trials.outer".into());
     }
     v
 }

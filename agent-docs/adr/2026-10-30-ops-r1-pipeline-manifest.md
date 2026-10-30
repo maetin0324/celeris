@@ -3,7 +3,7 @@ tasks: [01M655T6CGPRQ2HSQPYQFXYGZX]
 ---
 # ADR 2026-10-30: ops-r1 の condition は manifest の `conditions` 欄で表し、記録は ops-r1-assemble で runner の out に組み立てる
 
-- 状態: 採用（設計。実装は同じ task の pipe-manifest・pipe-entry・pipe-e2e の葉）
+- 状態: 採用（設計。実装は同じ task の pipe-manifest・pipe-raw・pipe-assemble・pipe-e2e の葉）
 - 関係: [2026-10-29-ops-r1-trace-attribution-export](2026-10-29-ops-r1-trace-attribution-export.md)（B の trace と消費）、
   [2026-10-29-ops-r1-cos-intake-record](2026-10-29-ops-r1-cos-intake-record.md)（B の受付の記録）、[2026-10-27-trial-observed-versions](2026-10-27-trial-observed-versions.md)
   （契約 revision `main-4-ops-r1`）、[2026-10-19-experiment-sets](2026-10-19-experiment-sets.md)、ops-r1 preflight の不足
@@ -51,4 +51,4 @@ B=測定 daemon の案件 CoS thread で受け付ける通常運用（`…-B-cel
 
 - daemon（crates/campaign 以外の crate）の変更は要らない（verdict: feasible）。
 - 未確認の点（set 宣言の照合が routing の無い B を通すか、自由文の reason を checker が受けるか、check-out-consistency.py が executor を見るか）は
-  pipe-entry が試験で確かめる。外す必要があれば executor 名ではなく `conditions.B.intake` を読んで外す。
+  pipe-assemble が試験で確かめる。外す必要があれば executor 名ではなく `conditions.B.intake` を読んで外す。

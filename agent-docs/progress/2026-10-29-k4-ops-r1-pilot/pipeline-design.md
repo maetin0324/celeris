@@ -26,7 +26,8 @@ updated: 2026-10-30
 - コードは書いていないので cargo の試験・clippy・fmt は走らせていない（Rust の変更が無い）。
 
 ## 未解決事項
-- 設計書 §6 の未確認 3 点（set 宣言の照合が routing の無い B を通すか、自由文の reason を checker が受けるか、check-out-consistency.py が executor を見るか）は pipe-entry が試験で確かめる。
+- 設計書 §6 の未確認 3 点（set 宣言の照合が routing の無い B を通すか、自由文の reason を checker が受けるか、check-out-consistency.py が executor を見るか）は pipe-assemble が試験で確かめる。
+- 計画の replan で pipe-entry は pipe-raw（A の raw・attribution/2）と pipe-assemble（入口・雛形・既存段の通し）に分かれた。設計書 §7 と ADR の葉の名前をこれに合わせた。
 - B の workspace_sha256_initial と成果物 dir の取り方は runbook（固定票の開始前条件 2）で決める。
 
 ## 提案

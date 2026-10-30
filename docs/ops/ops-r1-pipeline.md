@@ -4,7 +4,7 @@ tasks: [01M655T6CGPRQ2HSQPYQFXYGZX]
 # ops-r1 の採点〜集計の経路（manifest・human-op condition・各段の入口）
 
 ops-r1（measurement_id `mlsys-main-4-ops-r1-k4p1`）の 2 condition を既存の campaign 道具で採点・照合・集計するための形を決める。
-判断の理由は ADR `agent-docs/adr/2026-10-30-ops-r1-pipeline-manifest.md`。実装は同じ task の pipe-manifest・pipe-entry・pipe-e2e の葉が行う。
+判断の理由は ADR `agent-docs/adr/2026-10-30-ops-r1-pipeline-manifest.md`。実装は同じ task の pipe-manifest・pipe-raw・pipe-assemble・pipe-e2e の葉が行う。
 
 verdict: feasible
 
@@ -67,7 +67,7 @@ condition を表す欄」だけで、どちらも crates/campaign の中で足�
   （`check_b0_all_sonnet`）に当たらないよう ops-r1 では書かない。B の CoS だけ opus という model の差は `conditions` ではなく固定票と
   attribution の `role`・model で照合する（下の §4.2）。
 
-ops-r1 manifest の例（実値は pipe-entry が freeze の固定票から作る。ここは形だけ）:
+ops-r1 manifest の例（実値は pipe-assemble が freeze の固定票から作る。ここは形だけ）:
 
 | 欄 | 値 |
 |---|---|
@@ -102,7 +102,7 @@ ops-r1 manifest の例（実値は pipe-entry が freeze の固定票から作�
 - lock の材料（`--cases-root`・`--grader-root`・`--grade-case-root`・`--measurement-id`。`run` と同じ `expected_lock` で lock.json を作る）
 - `--out <dir>`（空であること）、`--records-out <file>`
 
-A の raw（`ops-r1-a-raw/1`）は pipe-entry が crates/campaign に足す小さな記録で、測定者が runbook の手順で作る。欄は
+A の raw（`ops-r1-a-raw/1`）は pipe-raw が crates/campaign に足す小さな記録で、測定者が runbook の手順で作る。欄は
 trial_id・condition_id・started_at・ended_at・stop（`exited`|`cutoff`|`token_cap`|`operator_stop`）・exit_code・claude_code{version, sha256}・
 models（transcript の assistant message の model の集合）・token_usage 4 欄（transcript の usage を message id で重複を除いて和）・
 cost_usd（Claude Code の報告額。無ければ null）・workspace_sha256_initial・session_id。transcript の読み方は
@@ -142,7 +142,7 @@ cost_usd（Claude Code の報告額。無ければ null）・workspace_sha256_in
 | inputs | 公開入力 tgz の name・sha256（両腕で同じ） | 同左 |
 
 `no_artifact`・`case_budget` 以外の reason（`harness_exit`・`operator_stop`・`task_failed`・`task_cancelled`）は checker の reason 規則
-（`checker.rs` の budget 系・blocked・no_artifact の検査）に当たらない自由文で、分母にも残る。pipe-entry は checker がこれらを
+（`checker.rs` の budget 系・blocked・no_artifact の検査）に当たらない自由文で、分母にも残る。pipe-assemble は checker がこれらを
 違反にしないことを試験で確かめる（未確認）。
 
 ### 4.3 合否
@@ -201,7 +201,7 @@ arm 別の表は `arm_labels` が `ops-r1-A`・`ops-r1-B` になる。
 - (A, B) 組の B0 検査（B の observed run が全部 Sonnet）は ops-r1 でもそのまま効かせる。固定票では planner・worker・reviewer が
   claude-sonnet-5-5 なので、正しく動いた試行は通り、別 model の run は違反になる。observed に model が入ることが前提（§4.2）。
 - set 宣言の照合（`reconcile_set_fixed`）は「宣言した欄の証拠が無いと違反」になる。fixed に `policy`・`harnesses`・`role_models` を書かず、
-  `models`・`initial_info`・`success` だけにしたとき routing の無い B が通るかは未確認。pipe-entry が試験で確かめ、違反になるなら
+  `models`・`initial_info`・`success` だけにしたとき routing の無い B が通るかは未確認。pipe-assemble が試験で確かめ、違反になるなら
   executor 名で検査を外すのではなく、`conditions.B.intake = cos_thread` を読んで外す。
 - `harness_exit`・`operator_stop`・`task_failed`・`task_cancelled` を checker が受けることは未確認（§4.2）。
 - check-out-consistency.py が `run-meta.executor` の値を見るかは未確認。見るなら `ops-r1-assemble` を受けるように scripts/campaign で直す。
@@ -212,5 +212,6 @@ arm 別の表は `arm_labels` が `ops-r1-A`・`ops-r1-B` になる。
 | unit | 作るもの |
 |---|---|
 | pipe-manifest | `conditions` 欄と検査、投入系 subcommand の拒否、human-op の `--condition`・`ExperimentSet::OpsR1`・`condition_id`、旧 manifest・旧記録の不変の試験 |
-| pipe-entry | `ops-r1-a-raw`（A の raw）と `ops-r1-assemble`、attribution の model・harness 欄（`ops-r1-attribution/2`）、ops-r1 manifest の雛形、§6 の未確認の点の確認 |
+| pipe-raw | A の raw 記録 `ops-r1-a-raw/1`、attribution の model・harness 欄（`runs.model`・`runs.adapter`、schema `ops-r1-attribution/2`） |
+| pipe-assemble | `ops-r1-assemble` 入口、ops-r1 manifest の雛形、既存段（stage-grader-inputs・grade-out・check・export・final-accounting）の ops-r1 での通し、§6 の未確認の点の確認 |
 | pipe-e2e | `crates/celeris/tests/` か `crates/campaign/tests/` の `ops_r1_pipeline*` 試験: A・B の stub 記録で assemble → stage-grader-inputs → grade-out → check → export → human-op report → final-accounting → check-out-consistency.py が全段 exit 0、試行数・分母・終了理由・合否の一致、同じ raw から 2 回作った out と records.jsonl の byte 一致 |

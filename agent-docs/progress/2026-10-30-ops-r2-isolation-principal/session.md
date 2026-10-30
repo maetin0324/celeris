@@ -30,7 +30,7 @@ ADR 2026-10-30-ops-r2-isolation-principal の D6・D7（後続 unit の表の se
   （同じ snapshot と途中 snapshot の再取り込みで added=0・byte 一致）、区間外 = shared_unattributable、欠けた usage は null と
   `usage_missing:1`・transcript 無しは全 null と `transcript_missing`、終了の無い介入・他試行にかかる介入で map を作らない）
 - `python3 -m unittest test_ops_r2_session`（scripts/campaign）→ exit 0（3 passed）
-- `bash scripts/dev/test-affected.sh` → 下の「検査」を参照
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 2861 passed、9 skipped。progress_index_commit_hashes も通過）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 

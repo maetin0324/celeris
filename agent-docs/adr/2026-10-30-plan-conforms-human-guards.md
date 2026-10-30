@@ -68,7 +68,8 @@ kind で守りの要否は変えない。kind は監査（`cos_operations.payloa
 
 - 計画の decision と `review: human` の段は承認で消えない（従来どおり）。
 - churn の上限（24 時間に 2 版、D2 (4)）と `human_required` の label（403）は変えない。
-- policy_version は変えない（次の WU が 10 に上げ、skill の §2・§3 を揃える）。
+- この付記の実装の commit では policy_version を変えない。続く WU policy-close が cos-inbox-triage の §2・§3 を揃え、policy_version を "10" に上げた
+  （[2026-10-28-cos-routine-delegated-answers](2026-10-28-cos-routine-delegated-answers.md) 付記 A5）。
 
 ## 採らなかった案
 

@@ -36,3 +36,8 @@ license: このリポジトリと同じ（外部の license は無い）
 - 2026-10-30（ADR 2026-10-30-cos-job-wait-extend）: §2 にクラスタ job の待ちの上限の認可の行を、§3 に定型の代答 (g) `job_wait_extend`
   （job が全て待ちのままの上限到達に `once` ＋ note「延長」だけで答える、同じ job で 3 回まで）と、(g) にせず人へ回す条件を足した。
   policy_version を 9 に上げた。config の `[cos.triage] policy_version` の既定も "9"。
+- 2026-10-30（ADR 2026-10-30-plan-conforms-human-guards、ADR 2026-10-28-cos-routine-delegated-answers 付記 A5）: §2 の表に計画の承認の
+  人へ回す行（human check、計画の検査の失敗、`near_limit:` など費用・上限の理由、前の版の承認以降の目的・受け入れ条件の編集、守りの無い
+  危うい段）を、追加の規則に危うい段の 6 種（`billing`・`node_hours`・`production`・`external_publish`・`destructive`・`secrets_permissions`）を、
+  §3 の (f) に `guarded_stages[].kind`（必須）と新しい拒否（403 `cos_human_required`・422 `cos_basis_plan_needs_human`）を足した。
+  policy_version を 10 に上げた。config の `[cos.triage] policy_version` の既定も "10"。

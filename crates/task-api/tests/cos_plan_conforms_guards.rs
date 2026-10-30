@@ -214,7 +214,7 @@ async fn ingest_plan_gate(env: &TestEnv, app: &axum::Router, id: task_core::Task
         operation_id: None,
         summary: inbox_id.clone(),
         detail: String::new(),
-        policy_version: "8".into(),
+        policy_version: "10".into(),
         task_id: None,
     };
     env.store

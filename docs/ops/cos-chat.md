@@ -26,7 +26,7 @@ worker_reserve_five_hour = 0.90
 
 [cos.triage]
 policy_skill = "cos-inbox-triage"
-policy_version = "9"
+policy_version = "10"
 min_confidence = 0.85
 human_required = ["objective_change", "beyond_frame", "external_publish", "destructive", "secret_or_security", "standing_permission", "explicit_human"]
 unavailable_after_secs = 120

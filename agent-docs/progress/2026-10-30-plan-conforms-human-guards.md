@@ -82,5 +82,37 @@ updated: 2026-10-30
 - `sh scripts/dev/progress-index.sh --check`: ok
 - `cargo test --workspace` はこの WU では走らせていない（release gate と最終レビューの検査で走る）
 
+## WU policy-close: policy_version を 10 に上げる
+
+完了日: 2026-10-30
+
+### 変更
+- `config/skills/cos-inbox-triage/SKILL.md`: `metadata.version`・description・見出しを "10" にした。§2 の表に計画の承認（`plan_gate`）の
+  人へ回す行（human check、計画の検査の失敗 `plan_invalid`・`limit`・`leaf_too_large`、`near_limit:` など費用・上限の理由、前の版の承認以降の
+  目的・受け入れ条件の編集、守りの無い危うい段）を足した。追加の規則に危うい段の 6 種と、計画内の decision・`review: human` の段が人に残ることを書いた。
+  §3 の (f) に `guarded_stages[].kind`（必須）・新しい拒否・basis の例を足した。
+- `config/skills/cos-inbox-triage/SOURCE.md`: 変更履歴に版 10 の項を足した（各項の版の行は 8・9・10 の順で、ずれていないことを確かめた）。
+- `crates/celeris/src/config/cos.rs` の `default_policy_version` と `cos_tests.rs`、`config/celeris.example.toml`、`docs/ops/cos-chat.md` を "10" にした。
+- `docs/ops/mlsys-main-4-ops-r1.md` §8 に "9" → "10" の行を足した。
+- ADR `2026-10-28-cos-routine-delegated-answers` に付記 A5、`2026-10-30-plan-conforms-human-guards` の G3 に版を上げた WU を書いた。
+- 試験: `crates/task-api/tests/cos_job_wait_extend.rs`（"9"）、`cos_plan_conforms.rs`・`cos_plan_conforms_guards.rs`（"8"）の policy_version を "10" にした。
+
+### commit
+- phase 1: cos-inbox-triage の policy_version を 10 に上げ、skill・config・文書を揃える
+
+### 検証（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+CHECKS_PLACEHOLDER
+
+### 本番への移行（人が行う手順）
+1. 本番 config（`~/.config/celeris/config.toml`）の `[cos.triage]` に `policy_version` を書いていれば `"10"` に書き換える。書いていなければ既定の "10" が使われる。
+   確認: `grep -n policy_version ~/.config/celeris/config.toml`
+2. KB の skill の写し（`cos-inbox-triage`）を、この release の `config/skills/cos-inbox-triage/` に差し替える（ADR-0122 の skill 配置の手順）。
+   版が config と skill で違うと、CoS の resolve が 422 `cos_policy_version_mismatch` になる。
+3. release を配備した後、`GET /api/v1/health` の `cos_policy_version` が "10" であることを確かめる。
+   版が変わると CoS の session は fresh で始まる（policy_changed）。
+
+### 未解決事項
+- `cargo test --workspace` はこの WU では走らせていない（release gate と最終レビューの検査で走る）。
+
 ## 提案
 - 計画の段に構造化した危うさの欄が無いので、kind は CoS の申告のまま。planner の出力に kind を持たせると API が申告漏れを検査できる（別 ADR）。

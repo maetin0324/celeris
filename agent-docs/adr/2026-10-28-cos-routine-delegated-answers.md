@@ -124,3 +124,10 @@ problem code に `cos_basis_plan_unguarded`・`cos_basis_plan_churn` を足し�
 [2026-10-30-cos-job-wait-extend](2026-10-30-cos-job-wait-extend.md) が、クラスタ job の待ち上限の認可への「延長」（`once` ＋ note「延長」だけ）を
 7 種類目 `job_wait_extend` として足した。job が全て待ち（Q）のまま、同じ job の上限到達が 3 回以内のときだけ通る。refs には答える
 approval を `approval` で入れる。problem code に `cos_basis_job_not_queued`・`cos_basis_extend_limit` を足した。policy_version は "9"。
+
+## 付記 A5（2026-10-30）: `plan_conforms` の人へ回す条件と危うい段の種類
+
+[2026-10-30-plan-conforms-human-guards](2026-10-30-plan-conforms-human-guards.md) が、6 種類目 `plan_conforms` に人へ回す決定的な条件
+（task の受け入れ条件の human check は 403、承認の理由の `near_limit:` など費用・上限の理由と前の版の承認以降の目的・受け入れ条件の編集は
+422 `cos_basis_plan_needs_human`）と、`guarded_stages[].kind`（必須の 6 種）を足した。category の数は 7 のまま。problem code に
+`cos_basis_plan_needs_human` を足した。skill の §2 の表・§3 の (f) をこれに合わせ、policy_version は "10"。

@@ -322,6 +322,9 @@ celeris-campaign export $M $L --out <rec>/out --records <rec>/dl/records.jsonl -
 #      --manifest <m> --condition "$A_COND" --case k4-cmp4-validity-analysis --rep 1 --op-kind protocol_step \
 #      --actor-kind human --actor <名前> --mode manual --intent protocol --logical-op a-start \
 #      --started-at <RFC3339> --ended-at <RFC3339>
+#    生記録が別の manifest の行も持つとき（同じ measurement で試行を測り直したとき）は、<rec>/out/trials.jsonl の
+#    campaign_sha256 と同じ manifest_sha256 の行だけを順序のまま <rec>/out/human-ops.jsonl に写して使う。混ぜると human-op report が
+#    別 manifest の試行を同じ arm に数え、整合性 checker が arm の試行数の不一致で落ちる。
 celeris-campaign human-op report --file <rec>/human-ops.jsonl --events <rec>/out --events <rec>/dl --out <rec>/human-ops-report
 
 # 7. 最終集計

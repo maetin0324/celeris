@@ -128,7 +128,7 @@ sudo useradd --system --gid celeris-eval --home-dir /var/lib/celeris-eval --no-c
 ```
 
 確認: `id celeris-eval` が uid・gid を出し、`id rmaeda` の groups に `celeris-eval` が無いこと。
-（`sudo -iu` で入る案（§4.4 案 2）を選ぶなら、shell は `/bin/bash` にする。）
+shell は `/usr/sbin/nologin` のままにする。評価器の uid の shell に入るときは login shell を使わず `sudo -u celeris-eval /bin/bash` で入る（§4.4 案 2・§4.5 も同じ入り方）。
 
 ### 4.2 `EVAL_ROOT`（0700）・drop box（1733）・outbox（0755）を作る
 
@@ -163,12 +163,18 @@ getfacl -p /var/lib/celeris-eval | grep -v '^#'   # ACL の追加エントリが
 sudo install -d -o celeris-eval -g celeris-eval -m 0755 /var/lib/celeris-eval-bin
 sudo install -o celeris-eval -g celeris-eval -m 0555 <release の celeris-campaign> /var/lib/celeris-eval-bin/celeris-campaign
 sudo install -o celeris-eval -g celeris-eval -m 0555 scripts/campaign/check-ops-r1-leak.py /var/lib/celeris-eval-bin/check-ops-r1-leak.py
-sudo install -o celeris-eval -g celeris-eval -m 0555 <採点 wrapper> /var/lib/celeris-eval-bin/grade
+sudo install -o celeris-eval -g celeris-eval -m 0555 scripts/campaign/ops-r2-grade.py /var/lib/celeris-eval-bin/grade
 ```
 
 採点 wrapper は、drop box の tgz を sha256 で照合して `work/` に展開し、`celeris-campaign` を `--grader-root /var/lib/celeris-eval/private` で走らせ、
 判定 JSON を `check-ops-r1-leak.py --private <EVAL_ROOT の private.json> --scan <判定 JSON>` に通してから outbox に 0644 で置く（ADR D4）。
-wrapper 自体はこの repo にまだ無い（§6）。
+wrapper は `scripts/campaign/ops-r2-grade.py`（試験は `scripts/campaign/test_ops_r2_grade.py`）。起動は
+`grade --tgz <drop box の tgz> --sha256 <その sha256> --case <case id> -- <celeris-campaign の引数>` で、引数の `{work}` は展開先、`{verdict}` は判定 JSON の書き先に置き換わる（`{verdict}` は必須）。
+`--grader-root` は wrapper が付け、引数に `--grader-root`・`..`・`work/` の外の絶対 path は書けない。stdout に出すのは outbox の判定 JSON の path だけで、
+失敗は短い理由だけを返す。`celeris-campaign` と漏洩検査の出力は `EVAL_ROOT/work/` の中にだけ残す。漏洩検査が通らなければ outbox に何も置かない。
+起動した uid が `EVAL_ROOT` の持ち主でない、または `EVAL_ROOT` が group/other に開いていれば止まる。
+wrapper の sha256 を書く欄は承認票に足さない。install 元は repo の commit で決まるので、開始前チェック（`ops-r2-k2-preflight.md` §0）で
+`/var/lib/celeris-eval-bin/grade` と repo の `scripts/campaign/ops-r2-grade.py` の sha256 が一致することを確かめる。
 
 確認: `stat -c '%U %a %n' /var/lib/celeris-eval-bin /var/lib/celeris-eval-bin/*` がすべて `celeris-eval` で、`test -w /var/lib/celeris-eval-bin/grade || echo ok` が `ok`。
 
@@ -182,7 +188,7 @@ wrapper 自体はこの repo にまだ無い（§6）。
 
   起動: `sudo -u celeris-eval /var/lib/celeris-eval-bin/grade <引数>`。
   確認: `sudo -l -U rmaeda` の celeris-eval の行が `/var/lib/celeris-eval-bin/grade` だけであること、`sudo -n -u celeris-eval /bin/cat /var/lib/celeris-eval/private/...` が拒否されること。
-- 案 2（`sudo -iu`）: sudoers は変えず、人が `sudo -iu celeris-eval` で入った shell で `/var/lib/celeris-eval-bin/grade` を実行する。
+- 案 2（評価器の shell）: sudoers は変えず、人が `sudo -u celeris-eval /bin/bash` で入った shell で `/var/lib/celeris-eval-bin/grade` を実行する。
   人の対話が毎回要るが、自動の経路は作らない。確認: その shell で `id -un` が `celeris-eval`。
 
 案 1 では人の uid の process（bwrap の外の普段の operator session を含む）が `grade` を起動できる。`grade` が返すのは漏洩検査を通した判定 JSON だけなので、private は出ない。
@@ -194,14 +200,14 @@ wrapper 自体はこの repo にまだ無い（§6）。
 K2 の private は作り直す（人の決定 k2-private-in-git = reauthor、ADR 付記 2026-10-30「K2 の private の作り直し」）。
 repo にある K2 の private は git の履歴と clone に残る漏洩済みの旧解答で、採点にも照合にも使わない。
 
-- 作る主体: 人、または人が `sudo -iu celeris-eval` で入った評価器 uid の shell。Celeris の worker・CoS・外部 operator は新しい private を見ない・作らない。
+- 作る主体: 人、または人が `sudo -u celeris-eval /bin/bash` で入った評価器 uid の shell。Celeris の worker・CoS・外部 operator は新しい private を見ない・作らない。
 - 置き場所: `/var/lib/celeris-eval/private/final/<case>/private.json`（持ち主 `celeris-eval`、0400）。repo の作業ツリー・Celeris の作業場所・KB・artifacts・`/tmp` には置かない。commit しない。
 - `--grader-root /var/lib/celeris-eval/private` は `<root>/final/<case>/private.json` を読むので、この配置にする。
 
 ```sh
 case=k2-bf-xattr-restart-campaign
 sudo install -d -o celeris-eval -g celeris-eval -m 0700 /var/lib/celeris-eval/private/final /var/lib/celeris-eval/private/final/$case
-sudo -iu celeris-eval            # 以下は celeris-eval の shell
+sudo -u celeris-eval /bin/bash            # 以下は celeris-eval の shell
 umask 077
 case=k2-bf-xattr-restart-campaign
 f=/var/lib/celeris-eval/private/final/$case/private.json
@@ -252,7 +258,10 @@ sha256 の記録先は承認票（人が書く。operator は書かない）。�
 
 `CaseSet::load` は公開部 `case.json` の `private_ref.sha256` と private の実 file の sha256 も照合する。repo の K2 の `case.json` は
 旧 private の値のままなので、このままでは `--grader-root /var/lib/celeris-eval/private` で `private file hash mismatch` になる。
-正式試行の前に、`case.json` の `private_ref.sha256` を承認票の値に替える変更（hash だけを公開部に書く。manifest の再 freeze を伴う）が要る（未対応、§6）。
+正式試行の前に、人が承認票の値を渡して `python3 -I scripts/campaign/ops-r2-set-private-sha.py --case k2-bf-xattr-restart-campaign --sha256 <承認票の値>` を実行し、
+`case.json` の `private_ref.sha256` だけを替えて commit する（script は private を読まない。漏洩済みの旧値 `d02126077a47…0694760` は拒否する）。
+frozen manifest が固定する `materials_sha256` は `private_ref` を除いた公開部から作るので、manifest の再 freeze は要らない（script が公開部の不変を確かめ、変われば止まる）。
+値の反映は承認票の値が出てから行う（2026-10-30 の時点では未実施）。
 
 旧 private の repo の path は、漏洩済みの旧解答として deny list に残す。git の履歴と既存の clone にも残るので L2 で塞ぎ、
 deny list に clone の `crates/campaign/fixtures/grader-private/final/<case>/private.json` を載せる（その中身は採点に使わない）。
@@ -292,11 +301,11 @@ probe の拒否だけでは L1 の確認にならない（同じ uid の chmod 0
 
 ## 6. 残っていること
 
-- 採点 wrapper（§4.3 の `grade`）はまだ無い。今の採点は人の uid で `--grader-root` を読む。
+- 採点 wrapper（§4.3）の試験は、試験の uid が持つ `EVAL_ROOT` で行い、uid の不一致は `CELERIS_EVAL_TEST_EUID` で注入する。実 uid（`celeris-eval`）での起動と sudo 規則は人の準備の後に §4.4・§4.7 で確かめる。
 - release dir に repo の source（fixtures）が入っていないことは未確認（ADR「残る経路と限界」）。
 - network namespace は共有するので、bwrap の中から認証の要らない loopback の endpoint（health 等）は読める。
 - 別 uid（`celeris-eval`）が持つ `EVAL_ROOT` の中に実在する private で L1 が通る e2e は無い（試験は別の uid を作れない）。
   通る規則は `l1_owner` の単体試験で run の uid を注入して確かめ、実 binary の通過は host にある他 uid 持ちの dir（中の path は存在しない）で確かめている。
   実 uid での確認は人の準備の後に §4.7 で行う。
 - K2 の新しい private は人が作る（§4.5、未実施）。repo の K2 の `case.json` の `private_ref.sha256` は旧 private の値のままで、
-  新しい private を `--grader-root` で読むと `private file hash mismatch` になる。値を承認票の sha256 に替える変更（manifest の再 freeze を伴う）は未対応。
+  新しい private を `--grader-root` で読むと `private file hash mismatch` になる。替える手順は §4.5 の `ops-r2-set-private-sha.py`。承認票の値での反映は人の値待ち。

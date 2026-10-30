@@ -21,7 +21,8 @@ K2（`k2-bf-xattr-restart-campaign`）を ops-r2 の条件で正式に試行す�
 | 項目 | 確かめ方 | 期待 |
 |---|---|---|
 | K2 の新しい private（人の決定 k2-private-in-git = reauthor。ADR 付記 2026-10-30「K2 の private の作り直し」） | 承認票の「K2 の新しい private の sha256」欄。作成は [入力隔離 §4.5](ops-r2-isolation.md#45-正式-case-の新しい-private-を-repo-の外で作り-eval_root-に置く) | 人（または評価器 uid の shell）が repo の外で作り、`$EVAL_ROOT/private/final/$case/private.json` に `celeris-eval` 持ち 0400 で置き、§4.5 の書式確認が `ok`、sha256 を人が承認票に書いている。欄が空なら始めない |
-| K2 の `case.json` の `private_ref.sha256` | `python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["private_ref"]["sha256"])' crates/campaign/cases/final/$case/case.json` | 承認票の新しい private の sha256 と同じ。違えば grader の読込が `private file hash mismatch` で止まるので始めない（2026-10-30 の時点では未対応で、一致しない） |
+| K2 の `case.json` の `private_ref.sha256` | `python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["private_ref"]["sha256"])' crates/campaign/cases/final/$case/case.json` | 承認票の新しい private の sha256 と同じ。違えば grader の読込が `private file hash mismatch` で止まるので始めない（2026-10-30 の時点では承認票の値が無く、一致しない。値が出たら [入力隔離 §4.5](ops-r2-isolation.md) の `ops-r2-set-private-sha.py` で替えて commit する） |
+| 採点 wrapper の install | `sha256sum /var/lib/celeris-eval-bin/grade scripts/campaign/ops-r2-grade.py` | 2 つの sha256 が同じ（install は [入力隔離 §4.3](ops-r2-isolation.md)） |
 | 承認票の欄（試行数・上限・model・account・停止条件・期限・固定依頼文の sha256・K2 の新しい private の sha256・deny list・実験専用 session の id・評価器の起動方法） | 承認票を開く | すべて人が埋めている。operator が空欄を埋めていない（K4 の逸脱を繰り返さない） |
 | 評価器の uid | `id celeris-eval`、`id -nG` | uid がある。人の uid の groups に `celeris-eval` が無い |
 | 測定専用 account dir（B 用・operator 用の 2 つ） | `ls -A <dir>` | `.credentials.json` があり、`projects/`・`memory/` が無い |
@@ -96,8 +97,9 @@ python3 -I scripts/campaign/check-ops-r1-leak.py --private "$EVAL_ROOT/private/f
 
 期待: probe 2 本が exit 0、漏洩検査が `exit=0`・`pass: true`。`same_uid_limit: false` は、持ち主の uid が人の uid でない path だけに付く。
 漏洩検査は `--private` に `EVAL_ROOT` の private を読むので、評価器の uid で走らせる（[入力隔離 §4.4](ops-r2-isolation.md#44-評価器の起動方法どちらかを選ぶ) の案 2 の shell。
-案 1 では採点 wrapper に含めるが、wrapper はまだ無い）。人の uid から private を開けないのが正しい状態で、人の uid で走らせると入力の誤りで止まる。
-評価器の uid が試行の出力をどう読むか（drop box の tgz を展開して `--scan` に渡す）は wrapper と同じく未実装で、人の準備のときに手で行う。
+案 1 では採点 wrapper `grade` が判定 JSON について行う）。人の uid から private を開けないのが正しい状態で、人の uid で走らせると入力の誤りで止まる。
+採点の判定 JSON は wrapper が drop box の tgz を sha256 で照合・展開して採点し、漏洩検査を通してから outbox に置く。
+試行の出力そのものを `--scan` に渡す上の検査は wrapper に含めず、評価器の shell（`sudo -u celeris-eval /bin/bash`）で手で行う（残す）。
 `check-ops-r1-leak.py` の probe の欄（`errno` は整数）は `celeris.runtime-probe/1` のまま。
 
 bwrap の中から評価器の sudo が効かないことも確かめる（[入力隔離 §4.4](ops-r2-isolation.md#44-評価器の起動方法どちらかを選ぶ)、実機では未確認）。

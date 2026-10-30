@@ -291,3 +291,9 @@ task 01M669QB069GND2ZKA1T97QPY9 の final review（criterion 4）の差し戻し
   2026-10-27-human-ops-actor-roles-request-ref、2026-10-27-operator-usage、2026-10-29-ops-r1-cos-intake-record、
   2026-10-17-mlsys-pilot2-fixes（A の bwrap）、2026-10-18-a-trial-scoped-state、0095（db_guard）、0126（userns 試験の opt-in）、
   2026-10-29-stagnation-triage-notify-wiring（stall unit の対象）。
+
+## 付記 2026-10-30「評価器側の穴を塞ぐ」（task 01M671KM6XYYSXNFWEBF3Q6ZM8）
+
+- E1 採点 wrapper は `scripts/campaign/ops-r2-grade.py`（install 先 `/var/lib/celeris-eval-bin/grade`）。tgz の sha256 照合 → `EVAL_ROOT/work/` に安全展開 → `celeris-campaign ... --grader-root EVAL_ROOT/private` → `check-ops-r1-leak.py` → outbox に 0644。stdout は outbox の path だけ、private と `celeris-campaign` の出力は `work/` の外に出さない。呼び出し側は `--grader-root`・`work/` の外の絶対 path・`..` を渡せない。起動 uid が `EVAL_ROOT` の持ち主でなければ止まる（試験は `CELERIS_EVAL_TEST_EUID` で注入、実 uid は人が §4.7 で確かめる）。承認票に wrapper の sha256 欄は足さず、開始前チェックで install 先と repo の file の sha256 一致を確かめる。
+- E2 新 private の sha256 の公開部への反映は `scripts/campaign/ops-r2-set-private-sha.py`。入力は sha256 の文字列だけで private を読まない。漏洩済みの旧値（`d02126077a47495b121e1e678f055ba4e2493f92d05cd010f2bda32d30694760`）は拒否する。frozen manifest の `materials_sha256` は `private_ref` を除く公開部から作る（`Case::public_json`）ので再 freeze は要らず、script は公開部が変わらないことを確かめる。承認票の値での反映は人の値が出てから。
+- E3 `celeris-eval` の shell は `/usr/sbin/nologin` に一本化し、評価器の shell には `sudo -u celeris-eval /bin/bash` で入る（`sudo -iu` の記述は消した）。

@@ -99,9 +99,15 @@ updated: 2026-10-30
 
 ### commit
 - phase 1: cos-inbox-triage の policy_version を 10 に上げ、skill・config・文書を揃える
+- phase 1: policy-close の検査の結果を進捗に書く
 
 ### 検証（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-CHECKS_PLACEHOLDER
+- `git grep -n -E 'policy_version.{0,6}"9"' -- crates web scripts`: 該当なし（残る "9" は SOURCE.md と mlsys-main-4-ops-r1.md §8 の変更履歴だけ）
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 4789 passed・20 skipped。`cap_probe_real_daemon` を含む。vitest 101 files・697 passed）
+- `cargo clippy --workspace -- -D warnings`: exit 0
+- `cargo fmt --all -- --check`: exit 0（差分なし）
+- 文書検査: `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`bash scripts/dev/check-doc-links.sh`・`bash scripts/dev/check-adr-numbers.sh` が全て ok
+- `sh scripts/dev/progress-index.sh --check`: ok
 
 ### 本番への移行（人が行う手順）
 1. 本番 config（`~/.config/celeris/config.toml`）の `[cos.triage]` に `policy_version` を書いていれば `"10"` に書き換える。書いていなければ既定の "10" が使われる。

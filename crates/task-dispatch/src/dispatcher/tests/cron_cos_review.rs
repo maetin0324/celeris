@@ -601,3 +601,82 @@ async fn cos_review_run_has_the_general_cos_context_and_its_own_session() {
     assert_ne!(owner, general_thread(&store));
     assert_eq!(general_messages(&store), 0);
 }
+
+fn wait_source(kind: &str, key: &str, summary: &str) -> task_core::chat::triage::CosTriageSource {
+    task_core::chat::triage::CosTriageSource {
+        source_kind: kind.into(),
+        source_key: key.into(),
+        source_revision: "1".into(),
+        source_event_id: Some(1),
+        operation_id: None,
+        summary: summary.into(),
+        detail: String::new(),
+        policy_version: "v1".into(),
+        task_id: None,
+    }
+}
+
+/// ADR 2026-10-30-cos-review-open-waits D1: the review input lists the waits open at the review
+/// time and, apart from them, the ones closed since the previous review. The three errors of the
+/// 2026-10-30 12:00Z report do not reappear: the answered decision is only on the closed side, and
+/// a task waiting on cluster jobs or a done task (no inbox item) is not an open wait.
+#[test]
+fn review_text_lists_open_waits_apart_from_closed_ones() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let job = review_job(&store);
+    store
+        .cos_triage_reconcile(
+            "decision",
+            &[
+                wait_source("decision", "T-ISO:iso-boundary", "iso-boundary を決める"),
+                wait_source("decision", "T-OTHER:pick", "どちらを採るか"),
+            ],
+            at("2026-10-30T11:00:00Z"),
+        )
+        .unwrap();
+    store
+        .cos_triage_reconcile(
+            "plan_approval",
+            &[wait_source("plan_approval", "T-ISO", "計画の承認")],
+            at("2026-10-30T11:00:00Z"),
+        )
+        .unwrap();
+    // 11:43:38Z: the person answers iso-boundary; the next snapshot no longer has it.
+    store
+        .cos_triage_reconcile(
+            "decision",
+            &[wait_source("decision", "T-OTHER:pick", "どちらを採るか")],
+            at("2026-10-30T11:43:38Z"),
+        )
+        .unwrap();
+    let previous = Some(at("2026-10-30T11:00:00Z"));
+    let text = crate::dispatcher::cos_chat::review::review_text(
+        &store,
+        &job,
+        at("2026-10-30T12:00:00Z"),
+        previous,
+        &[],
+    )
+    .unwrap();
+    let (open, closed) = text
+        .split_once("前回から閉じた人待ち（報告しない）")
+        .expect("closed section");
+    let open = open.split_once("いま開いている人待ち").expect("open").1;
+    assert!(open.contains("（2 件）"), "{text}");
+    assert!(open.contains("decision T-OTHER:pick"), "{text}");
+    assert!(open.contains("plan_approval T-ISO"), "{text}");
+    assert!(!open.contains("iso-boundary"), "{text}");
+    assert!(closed.contains("（1 件）"), "{text}");
+    assert!(closed.contains("decision T-ISO:iso-boundary"), "{text}");
+    assert!(closed.contains("開いた 2026-10-30T11:00:00.000Z"), "{text}");
+    // A second review with the same previous time is identical (deterministic input).
+    let again = crate::dispatcher::cos_chat::review::review_text(
+        &store,
+        &job,
+        at("2026-10-30T12:00:00Z"),
+        previous,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(text, again);
+}

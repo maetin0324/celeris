@@ -18,6 +18,8 @@ use super::launch::CosChatLaunch;
 
 /// Items of each list an input carries (the rest is counted, CoS reads details on demand).
 pub(crate) const REVIEW_LIST_MAX: usize = 20;
+/// Inbox items one review input reads (open, and closed since the previous review).
+const REVIEW_WAITS_MAX: usize = 100;
 /// Characters of a changed brief's `state` an input keeps.
 const REVIEW_STATE_CHARS: usize = 200;
 
@@ -25,7 +27,9 @@ const REVIEW_STATE_CHARS: usize = 200;
 /// ADR 2026-10-28-cos-review-back-thread D5': report to the person only when there is something to
 /// tell, through `chat.review_report`; otherwise one line in this (review) thread.
 pub(crate) const COS_REVIEW_INSTRUCTION: &str = "定期の見直しです。この thread は統括 CoS の裏 thread で、人は読みません。\
-下は DB から決定的に集めた、前回の見直しから変わった案件の要約と、いま出ている停滞の一覧です。案件をまたいで、\
+下は DB から決定的に集めた、前回の見直しから変わった案件の要約、いま出ている停滞、いま開いている人待ち、前回から閉じた人待ちの一覧です。\
+報告に書く人待ちは「いま開いている人待ち」にあるものか、報告直前に API で開いていると確かめたものだけにし、\
+前の session の記憶で状態を書かないでください。閉じた人待ちと前回までに報告した件は「増えた」と書きません。案件をまたいで、\
 人の操作待ちの長さ・停滞・優先・資源を確かめ、手を打つ必要がある案件だけ GET /api/v1/projects/{id} で詳しく読んでください。\
 人に伝えるべきこと（新しい停滞、人の判断が要る件、案件の要約の重要な変化）があるときだけ、chat.review_report \
 （POST /api/v1/cos/review-report、review_message_id はこの入力の id）で統括 CoS チャットに 1 件報告してください。\
@@ -243,7 +247,37 @@ pub(crate) fn review_text(
         })
         .collect();
     push_list(&mut out, "停滞", &stalls);
+    // ADR 2026-10-30-cos-review-open-waits D1: the waits on the person open at this review, read
+    // from the inbox items, and the ones that closed since the previous review.
+    let open: Vec<String> = store
+        .cos_triage_open_items(None, REVIEW_WAITS_MAX)
+        .map_err(|e| e.to_string())?
+        .iter()
+        .map(wait_line)
+        .collect();
+    push_list(&mut out, "いま開いている人待ち", &open);
+    if let Some(since) = previous {
+        let closed: Vec<String> = store
+            .cos_triage_closed_since(since, REVIEW_WAITS_MAX)
+            .map_err(|e| e.to_string())?
+            .iter()
+            .map(wait_line)
+            .collect();
+        push_list(&mut out, "前回から閉じた人待ち（報告しない）", &closed);
+    }
     Ok(out)
+}
+
+/// One wait: kind, source (the task id for task items), state, opened time and title.
+fn wait_line(item: &task_core::chat::triage::CosTriageItemReport) -> String {
+    format!(
+        "- {} {} [{}] 開いた {} {}",
+        item.source_kind,
+        item.source_key,
+        item.state,
+        item.created_at,
+        cut(&item.title(), 80)
+    )
 }
 
 fn push_list(out: &mut String, heading: &str, items: &[String]) {

@@ -1,7 +1,7 @@
 //! toolchain が PATH に無いときの sh/dash の「<name>: not found」を env_failure に数える（ADR 2026-10-30-ops-r2-isolation-principal 付記 H3）。
 
-use celeris_campaign::grader::implementation::output_is_env_failure;
 use celeris_campaign::grader::CommandOutput;
+use celeris_campaign::grader::implementation::output_is_env_failure;
 
 fn out(stderr: &str) -> CommandOutput {
     CommandOutput {
@@ -14,8 +14,12 @@ fn out(stderr: &str) -> CommandOutput {
 #[test]
 fn dash_cargo_not_found_is_env_failure() {
     assert!(output_is_env_failure(&out("sh: 1: cargo: not found\n")));
-    assert!(output_is_env_failure(&out(".grader/run.sh: 3: cargo: not found")));
-    assert!(output_is_env_failure(&out("bash: cargo: command not found\n")));
+    assert!(output_is_env_failure(&out(
+        ".grader/run.sh: 3: cargo: not found"
+    )));
+    assert!(output_is_env_failure(&out(
+        "bash: cargo: command not found\n"
+    )));
 }
 
 #[test]

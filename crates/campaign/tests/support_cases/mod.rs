@@ -64,7 +64,10 @@ fn build() -> PathBuf {
         h.update(sha_hex(b).as_bytes());
     }
     let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let dest = base.join(format!("test-cases-{}", &format!("{:x}", h.finalize())[..16]));
+    let dest = base.join(format!(
+        "test-cases-{}",
+        &format!("{:x}", h.finalize())[..16]
+    ));
     if dest.is_dir() {
         return dest;
     }

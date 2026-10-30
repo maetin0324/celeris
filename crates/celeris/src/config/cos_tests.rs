@@ -158,7 +158,7 @@ fn cos_chat_config_defaults_to_fixed_harness_and_route_candidates() {
 #[test]
 fn cos_triage_human_required_uses_the_routine_answer_vocabulary() {
     let cfg = load("").unwrap();
-    assert_eq!(cfg.cos.triage.policy_version, "7");
+    assert_eq!(cfg.cos.triage.policy_version, "9");
     assert_eq!(
         cfg.cos.triage.human_required,
         [

@@ -111,3 +111,16 @@ ADR 2026-10-28-cos-integrate-task D4 は、統合の依頼を CoS が `integrate
 task の開き直し（失敗の件への `reopen`）を 5 種類目 `review_rework` として足した。D1 の「4 種類だけ」はこの付記で 5 種類になる。
 refs の kind に `review`（差し戻した reviewer run の id）を足し、problem code に `cos_basis_rework_limit` を足した。policy_version は "7"。
 
+
+## 付記 A3（2026-10-30）: 6 種類目 `plan_conforms`
+
+[2026-10-30-cos-plan-conforms-approve](2026-10-30-cos-plan-conforms-approve.md) が、おかしなところの無い計画の承認（plan gate の推奨 `approve`）を
+6 種類目 `plan_conforms` として足した。D1 の (a) の「plan gate」はそのまま残すが、plan gate の `approve` は `plan_conforms` か
+`within_approved_frame` でだけ答えられ、`documented_default` では 422 になる。`basis` に `plan`（`plan_id`・`guarded_stages`）を足し、
+problem code に `cos_basis_plan_unguarded`・`cos_basis_plan_churn` を足した。policy_version は "8"。
+
+## 付記 A4（2026-10-30）: 7 種類目 `job_wait_extend`
+
+[2026-10-30-cos-job-wait-extend](2026-10-30-cos-job-wait-extend.md) が、クラスタ job の待ち上限の認可への「延長」（`once` ＋ note「延長」だけ）を
+7 種類目 `job_wait_extend` として足した。job が全て待ち（Q）のまま、同じ job の上限到達が 3 回以内のときだけ通る。refs には答える
+approval を `approval` で入れる。problem code に `cos_basis_job_not_queued`・`cos_basis_extend_limit` を足した。policy_version は "9"。

@@ -105,3 +105,14 @@ shared と shared_unattributable は個別試行の消費に混ぜず別表に�
 同じ dedup_key で内容が違えば conflict としてファイル全体の更新を拒否する。
 途中 snapshot の更新や対応表の訂正では、旧証跡・旧出力を残し、訂正理由を記録し、
 確定した全 transcript と新版対応表から新しい出力ファイルへ再生成する。旧版と新版を加算しない。
+
+## ops-r2 以降: 実験専用 session を開始前に用意する
+
+ops-r2 からは、人が普段使う Claude Code の session を測定に使わない。試行の前に
+`scripts/campaign/ops-r2-session-prep.sh` で実験専用 session の起動票・測定専用の `CLAUDE_CONFIG_DIR`・初期 context・
+`session-map.base.json`（上の schema のまま。prep と observe の区間）・`session-trials.json`（trial_key と
+condition_id・request_ref の対応）を作り、試行の後に `scripts/campaign/ops-r2-session-map.py final` が human-op の
+介入の op 区間で observe を分けて `session-map.json` を作る。取り込みはこの節の前の手順のまま。
+transcript が無い・usage が欠けた消費は `ops-r2-session-map.py summary` が null と理由（`transcript_missing`・
+`usage_missing:<件数>`・`not_recorded`）で残す。手順は [ops-r2 の実験専用 operator session](ops-r2-operator-session.md)、
+設計は [ADR 2026-10-30-ops-r2-isolation-principal](../../agent-docs/adr/2026-10-30-ops-r2-isolation-principal.md) D7。

@@ -79,7 +79,7 @@ pub fn is_taskless_reason(reason: Option<&str>) -> bool {
 }
 
 const USAGE: &str = "usage: celeris-campaign ops-r1-assemble --manifest <ops-r1 manifest> --input-manifest <json> \
---a-raw <ops-r1-a-raw/1> --a-artifact <dir> --b-intake <ops-r1-intake/1> --b-trace <ops-r1-trace/1> \
+--a-raw <ops-r1-a-raw/1> --a-artifact <dir> --b-intake <ops-r1-intake/1 or /2> --b-trace <ops-r1-trace/1> \
 --b-attribution <ops-r1-attribution/2> --b-artifact <dir> --b-observed-versions <json> --b-workspace-sha256-initial <hex> \
 --cases-root <dir> --grader-root <dir> --grade-case-root <dir> [--measurement-id <id>] [--b-stop <ops-r1-stop/1> | --b-cos-self-completed] \
 --out <empty dir> --records-out <file>";
@@ -465,13 +465,24 @@ fn arm_b(ctx: &Ctx, out: &Path, cond: &ConditionDecl, a: &Args) -> Result<Arm, S
     let trace = read_json(&a.b_trace)?;
     let attr = read_json(&a.b_attribution)?;
     for (what, v, schema) in [
-        ("--b-intake", &intake, crate::ops_r1_intake::SCHEMA),
         ("--b-trace", &trace, crate::ops_r1_trace::SCHEMA),
         ("--b-attribution", &attr, crate::ops_r1_attr::SCHEMA),
     ] {
         if v["schema"] != schema {
             return Err(format!("{what}: schema {} is not {schema}", v["schema"]));
         }
+    }
+    // 受付は K4 の `/1`（人の token）と ops-r2 の `/2`（operator の relay と出典）を読む。
+    if !intake["schema"]
+        .as_str()
+        .is_some_and(crate::ops_r1_intake::is_intake_schema)
+    {
+        return Err(format!(
+            "--b-intake: schema {} is not {} or {}",
+            intake["schema"],
+            crate::ops_r1_intake::SCHEMA,
+            crate::ops_r1_intake::SCHEMA_V1
+        ));
     }
     let trial = intake["trial_id"].as_str().unwrap_or_default().to_string();
     if trace["trial_id"] != trial.as_str() || attr["trial_id"] != trial.as_str() {

@@ -50,9 +50,9 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"project_id":"<project_id>"}' http://127.0.0.1:<port>/api/v1/chat/threads  # → 案件 CoS thread
 ```
 
-人の依頼は `POST /api/v1/chat/threads/<thread_id>/messages` で入れる（ops-r1 では `celeris-campaign ops-r1-intake`）。生成 config の token は `operator:ops-r1` なので、この token で送った message の author は operator になる（人の principal で送る経路は未決定）。
+人の依頼は、生成 config の token（`operator:ops-r1`）で `POST /api/v1/chat/threads/<thread_id>/relays` に relay として入れる（`celeris-campaign ops-r1-intake --relay --source <出典>`、`docs/ops/ops-r1-intake.md`）。config に人の token を足さない。relay の message は author と `relay.relayed_by` が `operator:ops-r1`、`said_at` が人の承認の時刻になり、出典は intake の記録に残る（ADR `agent-docs/adr/2026-10-30-ops-r2-isolation-principal.md` D5）。
 
-無 LLM の通しは `cargo nextest run -p celeris --test ops_r1_measure` が確かめる（stub harness で 人の message → CoS の起票 → worker run → CoS の報告 message、health の `cos_policy_version` = "6"）。
+無 LLM の通しは `cargo nextest run -p celeris --test ops_r1_measure` が確かめる（stub harness で 依頼の message → CoS の起票 → worker run → CoS の報告 message、health の `cos_policy_version` = "6"）。この試験は今も試験の中だけで人の token を足して message を送る（ops-r1 の依頼受付の手順ではない。relay への書き換えは別 task、`agent-docs/progress/2026-10-30-ops-r2-isolation-principal/principal.md` の提案）。relay の受付は `cargo test -p celeris-campaign --test ops_r1_intake` が確かめる。
 
 ## 試行 1 回の上限
 

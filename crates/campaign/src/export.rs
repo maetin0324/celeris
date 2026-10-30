@@ -269,6 +269,11 @@ pub fn export_full(
             "file": FINAL_ACCOUNTING_FILE,
             "scope": {"tokens": scope("tokens"), "list_cost_usd": scope("list_cost_usd"), "cash_cost_usd": scope("cash_cost_usd")},
             "reduction_confirmable": a["reduction_confirmable"],
+            "comparison_scope": {
+                "comparable": a["comparison_scope"]["comparable"],
+                "reasons": a["comparison_scope"]["reasons"],
+            },
+            "lanes_added_to_total": a["consumption_lanes"]["total_covers"],
             "gaps": a["gaps"].as_array().map_or(0, Vec::len),
         });
     } else {
@@ -277,6 +282,7 @@ pub fn export_full(
             "file": Value::Null,
             "scope": {"tokens": "missing", "list_cost_usd": "missing", "cash_cost_usd": "missing"},
             "reduction_confirmable": false,
+            "comparison_scope": Value::Null,
             "reason": NO_RECORDS_REASON,
         });
     }

@@ -916,3 +916,267 @@ fn ops_r1_pipeline_b_cos_self_completed_rejects_task_trace_and_stop() {
     assert!(err.contains("exclusive"), "{err}");
     assert!(!fx.d.join("out-both").join("trials.jsonl").exists());
 }
+
+/// grade-out → final-accounting → export を通し、final-accounting の JSON と export の表を返す。
+fn account(fx: &Fx, out: &Path, rec: &Path, tag: &str) -> (Value, Value) {
+    let cases = ["--cases".to_string(), fx.grade.display().to_string()];
+    ok(&stage(fx, "grade-out", out, &cases), "grade-out");
+    let records = ["--records".to_string(), rec.display().to_string()];
+    let fa: Value = serde_json::from_str(&ok(
+        &stage(fx, "final-accounting", out, &records),
+        "final-accounting",
+    ))
+    .expect("fa json");
+    let dest = fx.d.join(format!("export-{tag}"));
+    let mut ex = records.to_vec();
+    ex.extend(["--dest".into(), dest.display().to_string()]);
+    let table: Value =
+        serde_json::from_str(&ok(&stage(fx, "export", out, &ex), "export")).expect("export json");
+    (fa, table)
+}
+
+/// §4.8: 消費は 6 区分の名前で出て、試行の合計に入るのは task 実行系だけ。案件 CoS の消費（550,684）は
+/// 試行の tokens にも観測和にも入らない。task 実行系が 0 の B でも CoS の区分は observed のまま残る。
+#[test]
+fn ops_r1_consumption_lanes_keep_the_cos_out_of_the_trial_total() {
+    let fx = fixture();
+    let mut args = taskless_b(&fx, "lanes", "2026-10-30T02:01:29.900Z");
+    args.push("--b-cos-self-completed".into());
+    ok(
+        &bin()
+            .args(with_out(&fx, "lanes", args))
+            .output()
+            .expect("spawn"),
+        "assemble",
+    );
+    let (out, rec) = (fx.d.join("out-lanes"), fx.d.join("records-lanes.jsonl"));
+    let text = fs::read_to_string(&rec).expect("records");
+    let cos_row: Value = text
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).expect("line"))
+        .find(|v| v["role"] == "cos")
+        .expect("cos usage row");
+    assert_eq!(cos_row["consumption_lane"], "project_cos");
+    assert_eq!(cos_row["model"], OPUS, "the observed CoS model is kept");
+    let (fa, table) = account(&fx, &out, &rec, "lanes");
+    let lanes = &fa["consumption_lanes"];
+    for lane in celeris_campaign::final_accounting::LANES {
+        assert_eq!(
+            lanes[lane]["added_to_total"],
+            lane == "task_execution",
+            "{lane}: {lanes}"
+        );
+    }
+    assert_eq!(lanes["total_covers"], json!(["task_execution"]));
+    assert_eq!(lanes["project_cos"]["state"], "observed");
+    assert_eq!(lanes["project_cos"]["models"], json!([OPUS]));
+    assert_eq!(
+        lanes["project_cos"]["rows"]["basis_tokens"]["sum"], 550_684,
+        "{lanes}"
+    );
+    assert_eq!(lanes["general_cos"]["state"], "no_rows");
+    assert_eq!(lanes["external_operator"]["state"], "outside_records");
+    assert_eq!(lanes["evaluator"]["state"], "not_called");
+    // 試行の合計は A の 4,600（1000+200+3000+400）と B の task 実行系 0 だけ。CoS は足さない。
+    assert_eq!(
+        lanes["task_execution"]["trial_outer"],
+        fa["trials"]["outer"]
+    );
+    assert_eq!(fa["trials"]["outer"]["basis_tokens"]["sum"], 4_600);
+    assert_eq!(fa["observed_sum"]["tokens"], 4_600);
+    assert_eq!(fa["shared_unattributable"]["added_to_total"], false);
+    assert!(
+        celeris_campaign::final_accounting::recheck(&fa).is_empty(),
+        "{:?}",
+        celeris_campaign::final_accounting::recheck(&fa)
+    );
+    assert_eq!(
+        table["consumption"]["lanes_added_to_total"],
+        json!(["task_execution"])
+    );
+    // CoS を試行の合計に入れた集計は recheck が拒む。
+    let mut bad = fa.clone();
+    bad["consumption_lanes"]["project_cos"]["added_to_total"] = json!(true);
+    assert!(
+        celeris_campaign::final_accounting::recheck(&bad)
+            .iter()
+            .any(|v| v.contains("project_cos.added_to_total")),
+        "{:?}",
+        celeris_campaign::final_accounting::recheck(&bad)
+    );
+    let v = celeris_campaign::report::check_consumption_claims(
+        &fa,
+        "lane name=project_cos added_to_total=true\n",
+    );
+    assert!(v.iter().any(|x| x.contains("project_cos")), "{v:?}");
+    assert!(
+        celeris_campaign::report::check_consumption_claims(
+            &fa,
+            "lane name=project_cos added_to_total=false\nlane name=task_execution added_to_total=true\n",
+        )
+        .is_empty()
+    );
+}
+
+/// §4.8: 宣言 model（manifest の worker model）と観測 model（作業した run の model）は別欄。
+/// CoS が自分で済ませた B は宣言 Sonnet・観測 Opus、実行経路 cos_self_completed で、trials・final-accounting に出る。
+#[test]
+fn ops_r1_declared_and_observed_models_and_execution_path_are_separate() {
+    let fx = fixture();
+    let mut args = taskless_b(&fx, "models", "2026-10-30T02:01:29.900Z");
+    args.push("--b-cos-self-completed".into());
+    ok(
+        &bin()
+            .args(with_out(&fx, "models", args))
+            .output()
+            .expect("spawn"),
+        "assemble",
+    );
+    let (out, rec) = (fx.d.join("out-models"), fx.d.join("records-models.jsonl"));
+    let tr = trials(&out);
+    let (a, b) = (&tr[0], &tr[1]);
+    assert_eq!(
+        (
+            a["model"].as_str(),
+            a["observed_model"].as_str(),
+            a["execution_path"].as_str()
+        ),
+        (Some(SONNET), Some(SONNET), Some("direct_harness"))
+    );
+    assert_eq!(
+        (
+            b["model"].as_str(),
+            b["observed_model"].as_str(),
+            b["execution_path"].as_str()
+        ),
+        (Some(SONNET), Some(OPUS), Some("cos_self_completed"))
+    );
+    let (fa, _) = account(&fx, &out, &rec, "models");
+    let cell_b = fa["trials"]["cells"]
+        .as_array()
+        .and_then(|c| c.iter().find(|c| c["arm"] == "B"))
+        .expect("B cell");
+    assert_eq!(cell_b["declared_model"], SONNET);
+    assert_eq!(cell_b["observed_model"], OPUS);
+    assert_eq!(cell_b["execution_path"], "cos_self_completed");
+
+    // task の経路で走った B は task run の model を観測 model にし、CoS の model とは混ぜない。
+    let (o, out, _) = assemble(&fx, &Stub::default(), "pipe-models");
+    ok(&o, "assemble");
+    let b = &trials(&out)[1];
+    assert_eq!(
+        (b["observed_model"].as_str(), b["execution_path"].as_str()),
+        (Some(SONNET), Some("task_pipeline"))
+    );
+}
+
+/// §4.8: 条件の境界の外（cos_self_completed・stopped）や観測 model が宣言と違う組では、欠測が無くても
+/// 削減を確認可能と出さない。境界の内（direct_harness と task_pipeline、model 一致）なら comparable。
+#[test]
+fn ops_r1_comparison_scope_blocks_reductions_outside_the_boundary() {
+    let fx = fixture();
+    let mut args = taskless_b(&fx, "scope", "2026-10-30T02:01:29.900Z");
+    args.push("--b-cos-self-completed".into());
+    ok(
+        &bin()
+            .args(with_out(&fx, "scope", args))
+            .output()
+            .expect("spawn"),
+        "assemble",
+    );
+    let (fa, table) = account(
+        &fx,
+        &fx.d.join("out-scope"),
+        &fx.d.join("records-scope.jsonl"),
+        "scope",
+    );
+    let scope = &fa["comparison_scope"];
+    assert_eq!(scope["measurement"], "ops_r1");
+    assert_eq!(scope["comparable"], false, "{scope}");
+    assert_eq!(scope["cross_measurement"], "not_comparable");
+    let reasons: Vec<&str> = scope["reasons"]
+        .as_array()
+        .expect("reasons")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    for want in [
+        "execution_path_outside_condition:B/",
+        "observed_model_differs_from_declared:B/",
+        "observed_model_differs_between_arms",
+    ] {
+        assert!(
+            reasons.iter().any(|r| r.starts_with(want)),
+            "{want}: {reasons:?}"
+        );
+    }
+    for metric in ["tokens", "list_cost_usd", "cash_cost_usd"] {
+        assert_eq!(fa["reduction_confirmable"][metric], false, "{metric}");
+    }
+    assert_eq!(
+        table["consumption"]["comparison_scope"]["comparable"],
+        false
+    );
+    assert!(celeris_campaign::final_accounting::recheck(&fa).is_empty());
+    // 削減を確認可能に書き換えた集計・報告は拒まれる。
+    let mut bad = fa.clone();
+    bad["reduction_confirmable"]["tokens"] = json!(true);
+    assert!(
+        celeris_campaign::final_accounting::recheck(&bad)
+            .iter()
+            .any(|v| v.contains("reduction_confirmable.tokens")),
+    );
+    let v = celeris_campaign::report::check_consumption_claims(
+        &fa,
+        "reduction metric=tokens confirmed=true\ncomparison scope=comparable\n",
+    );
+    assert!(v.iter().any(|x| x.contains("outside its scope")), "{v:?}");
+    assert!(
+        v.iter().any(|x| x.contains("must be not_comparable")),
+        "{v:?}"
+    );
+    assert!(
+        celeris_campaign::report::check_consumption_claims(
+            &fa,
+            "reduction metric=tokens confirmed=false\ncomparison scope=not_comparable\n",
+        )
+        .is_empty()
+    );
+
+    // 停止で終わった B も境界の外。
+    let args = stopped_b(&fx, "scope-stop", B_TRIAL);
+    ok(
+        &bin().args(&args).output().expect("spawn"),
+        "assemble --b-stop",
+    );
+    let (fa, _) = account(
+        &fx,
+        &fx.d.join("out-scope-stop"),
+        &fx.d.join("records-scope-stop.jsonl"),
+        "scope-stop",
+    );
+    assert_eq!(fa["comparison_scope"]["comparable"], false);
+    assert!(
+        fa["comparison_scope"]["reasons"]
+            .as_array()
+            .expect("reasons")
+            .iter()
+            .any(|r| r.as_str().is_some_and(|r| r.contains("=stopped"))),
+        "{}",
+        fa["comparison_scope"]
+    );
+
+    // 境界の内（A direct_harness・B task_pipeline、model は宣言どおり Sonnet）は comparable。
+    let (o, out, rec) = assemble(&fx, &Stub::default(), "scope-in");
+    ok(&o, "assemble");
+    let (fa, _) = account(&fx, &out, &rec, "scope-in");
+    assert_eq!(
+        fa["comparison_scope"]["comparable"], true,
+        "{}",
+        fa["comparison_scope"]
+    );
+    assert_eq!(
+        fa["reduction_confirmable"]["tokens"],
+        fa["total"]["complete"]["tokens"]
+    );
+}

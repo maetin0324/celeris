@@ -14,6 +14,9 @@ pub enum Category {
     Intervene,
     Shared,
     SharedUnattributable,
+    /// 結果に影響したか断定できない支援（ADR 2026-10-30-ops-r1-human-time-coverage）。shared に寄せない。
+    /// trial_key は分かれば付け、分からなければ null。
+    Unknown,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,7 +61,8 @@ fn validate_map(map: &[Mapping]) -> Result<(), String> {
     for (i, m) in map.iter().enumerate() {
         if m.session_id.trim().is_empty()
             || m.category == Category::SharedUnattributable
-            || (m.category == Category::Shared) != m.trial_key.is_none()
+            || (m.category != Category::Unknown
+                && (m.category == Category::Shared) != m.trial_key.is_none())
             || m.trial_key.as_ref().is_some_and(|s| s.trim().is_empty())
         {
             return Err(format!("mapping {i}: invalid session/category/trial_key"));

@@ -65,6 +65,14 @@ pub const STOP_REASONS: &[&str] = &[
 pub const STOP_SCHEMA: &str = "ops-r1-stop/1";
 /// records.jsonl の停止の行（final-accounting は usage・run・trial 以外を読まない）。
 pub const STOP_RECORD_TYPE: &str = "trial_stop";
+/// 試行行の `execution_path`（§4.8）。A は Claude Code を直接起動した経路。
+pub const PATH_DIRECT_HARNESS: &str = "direct_harness";
+/// B: 案件 CoS が起票し、task の planner/worker/reviewer が作業した経路（条件 B の境界）。
+pub const PATH_TASK_PIPELINE: &str = "task_pipeline";
+/// B: 案件 CoS が起票せず自分で済ませた経路（`--b-cos-self-completed`）。task の経路は動いていない。
+pub const PATH_COS_SELF_COMPLETED: &str = "cos_self_completed";
+/// B: 測定者の停止で終わった経路（`--b-stop`）。
+pub const PATH_STOPPED: &str = "stopped";
 /// A は Claude Code を直接起動する（daemon の adapter 名ではない）。
 pub const A_HARNESS: &str = "claude_code";
 
@@ -245,6 +253,8 @@ impl Ctx<'_> {
             error: None,
             routing: None,
             observed: Vec::new(),
+            execution_path: None,
+            observed_model: None,
             harness: c.harness.clone(),
             harness_version: c.harness_version.clone(),
             model: c.model.clone(),
@@ -371,6 +381,8 @@ fn arm_a(ctx: &Ctx, out: &Path, cond: &ConditionDecl, a: &Args) -> Result<Arm, S
         },
         ..ObservedRun::default()
     }];
+    rec.execution_path = Some(PATH_DIRECT_HARNESS.into());
+    rec.observed_model = join_models(raw.models.iter().map(|m| Some(m.as_str())));
     rec.observed_versions = Some(ObservedVersions {
         claude_code: Some(ProgramPin {
             // 実行 path は出さない（観測した版と sha256 だけ）。
@@ -386,6 +398,22 @@ fn arm_a(ctx: &Ctx, out: &Path, cond: &ConditionDecl, a: &Args) -> Result<Arm, S
         ledger,
         records: Vec::new(),
     })
+}
+
+/// 観測した model の重複を除いて `|` でつなぐ（観測 0 件は None。宣言名で埋めない）。
+fn join_models<'a>(it: impl Iterator<Item = Option<&'a str>>) -> Option<String> {
+    let set: std::collections::BTreeSet<&str> = it.flatten().collect();
+    (!set.is_empty()).then(|| set.into_iter().collect::<Vec<_>>().join("|"))
+}
+
+/// attribution の行の消費区分（final-accounting の `consumption_lanes` の名前）。
+fn lane_of(r: &Value) -> &'static str {
+    match (r["source"].as_str(), r["role"].as_str()) {
+        (Some("runs"), _) => crate::final_accounting::LANE_TASK_EXECUTION,
+        (Some("chat_runs"), Some("cos_project")) => crate::final_accounting::LANE_PROJECT_COS,
+        (Some("chat_runs"), Some("cos_general")) => crate::final_accounting::LANE_GENERAL_COS,
+        _ => crate::final_accounting::LANE_SHARED,
+    }
 }
 
 fn stage<'a>(trace: &'a Value, name: &str) -> Option<&'a Value> {
@@ -645,6 +673,22 @@ fn arm_b(ctx: &Ctx, out: &Path, cond: &ConditionDecl, a: &Args) -> Result<Arm, S
         rec.reason = Some(REASON_COS_SELF_COMPLETED.into());
     }
     rec.passed = rec.outcome == Outcome::Passed;
+    // 実行経路と、試行の作業をした run の実際の model（§4.8）。CoS が自分で済ませた B は CoS の model。
+    let (path, workers): (&str, Vec<&Value>) = if a.b_cos_self_completed {
+        (
+            PATH_COS_SELF_COMPLETED,
+            rows.iter()
+                .copied()
+                .filter(|r| r["source"] == "chat_runs")
+                .collect(),
+        )
+    } else if stop.is_some() {
+        (PATH_STOPPED, task_rows.clone())
+    } else {
+        (PATH_TASK_PIPELINE, task_rows.clone())
+    };
+    rec.execution_path = Some(path.into());
+    rec.observed_model = join_models(workers.iter().map(|r| r["model"].as_str()));
     rec.observed = task_rows
         .iter()
         .map(|r| ObservedRun {
@@ -778,6 +822,9 @@ fn decision_log(ctx: &Ctx, rec: &TrialRecord, rows: &[&Value]) -> Result<Vec<Val
             o.insert("list_cost_usd".into(), list);
             o.insert("is_retry".into(), json!(false));
             o.insert("shared_overhead".into(), json!(cos));
+            // 実際の model と消費区分（§4.8）。宣言 model は trials.jsonl の `model`。
+            o.insert("model".into(), r["model"].clone());
+            o.insert("consumption_lane".into(), json!(lane_of(r)));
             if cos {
                 o.insert("role".into(), json!("cos"));
                 o.insert("cos_role".into(), r["role"].clone());

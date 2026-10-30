@@ -3200,6 +3200,7 @@ export type GraphNode = {
 export type GuardedStage = {
   "guard": StageGuardKind;
   "id": string;
+  "kind": StageRiskKind;
   "stage": string;
 };
 
@@ -5734,6 +5735,8 @@ export type StageHint = {
 export type StageName = "shadow" | "enforce";
 
 export type StageReview = "none" | "human";
+
+export type StageRiskKind = "billing" | "node_hours" | "production" | "external_publish" | "destructive" | "secrets_permissions";
 
 export type StageSpec = {
   "key": string;

@@ -21,7 +21,7 @@ use crate::problem::{ApiProblem, store_problem};
 mod job_wait_extend;
 mod plan_conforms;
 mod review_rework;
-pub use plan_conforms::{BasisPlan, GuardedStage, StageGuardKind};
+pub use plan_conforms::{BasisPlan, GuardedStage, StageGuardKind, StageRiskKind};
 pub(crate) use review_rework::REOPEN_OPTION;
 
 /// The option key of a run-time tree limit decision that adds one allowance (ADR-0079 D7).
@@ -158,6 +158,7 @@ pub(crate) const BASIS_RAISE_ONCE_USED: &str = "cos_basis_raise_once_used";
 pub(crate) const BASIS_REWORK_LIMIT: &str = "cos_basis_rework_limit";
 pub(crate) const BASIS_PLAN_UNGUARDED: &str = "cos_basis_plan_unguarded";
 pub(crate) const BASIS_PLAN_CHURN: &str = "cos_basis_plan_churn";
+pub(crate) const BASIS_PLAN_NEEDS_HUMAN: &str = "cos_basis_plan_needs_human";
 pub(crate) const BASIS_JOB_NOT_QUEUED: &str = "cos_basis_job_not_queued";
 pub(crate) const BASIS_EXTEND_LIMIT: &str = "cos_basis_extend_limit";
 
@@ -301,6 +302,7 @@ pub(crate) fn validate(
                     "within_approved_frame answers a decision, authorization or plan/phase gate, not {kind_name}"
                 )));
             }
+            plan_conforms::needs_human(store, target)?;
             let Some(frame) = &basis.frame else {
                 return Err(invalid("within_approved_frame needs basis.frame".into()));
             };

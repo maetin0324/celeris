@@ -66,6 +66,8 @@ fn plan_task(
 ) -> (task_core::Task, String) {
     let mut task = new_task(TaskKind::Execute, Status::Ready);
     task.labels = labels.iter().map(|l| (*l).to_string()).collect();
+    // A human check sends the plan to a person (ADR 2026-10-30-plan-conforms-human-guards G2 (1)).
+    task.acceptance[0].check = task_core::Check::Reviewer;
     env.seed(&task);
     let rows: Vec<ExecutionPlanRow> = created
         .iter()
@@ -284,8 +286,8 @@ async fn plan_conforms_approves_a_plan_whose_sensitive_stages_are_guarded() {
     let item = ingest_plan_gate(&env, &cos.app, task.id).await;
     let basis = conforms(
         &plan_id,
-        json!([{"stage": "run", "guard": "review_human", "id": "prep"},
-               {"stage": "grade", "guard": "standing_rule", "id": rule.id.to_string()}]),
+        json!([{"stage": "run", "kind": "billing", "guard": "review_human", "id": "prep"},
+               {"stage": "grade", "kind": "node_hours", "guard": "standing_rule", "id": rule.id.to_string()}]),
     );
     let resp = cos.resolve(&item, answer("ok", "approve", basis)).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
@@ -372,7 +374,7 @@ async fn plan_conforms_refuses_other_answers_stale_versions_and_unguarded_stages
             "approve",
             conforms(
                 &plan_id,
-                json!([{"stage": "publish", "guard": "review_human", "id": "prep"}]),
+                json!([{"stage": "publish", "kind": "external_publish", "guard": "review_human", "id": "prep"}]),
             ),
             "cos_basis_invalid",
         ),
@@ -382,7 +384,7 @@ async fn plan_conforms_refuses_other_answers_stale_versions_and_unguarded_stages
             "approve",
             conforms(
                 &plan_id,
-                json!([{"stage": "prep", "guard": "review_human", "id": "prep"}]),
+                json!([{"stage": "prep", "kind": "production", "guard": "review_human", "id": "prep"}]),
             ),
             "cos_basis_plan_unguarded",
         ),
@@ -392,7 +394,7 @@ async fn plan_conforms_refuses_other_answers_stale_versions_and_unguarded_stages
             "approve",
             conforms(
                 &plan_id,
-                json!([{"stage": "grade", "guard": "review_human", "id": "run"}]),
+                json!([{"stage": "grade", "kind": "destructive", "guard": "review_human", "id": "run"}]),
             ),
             "cos_basis_plan_unguarded",
         ),
@@ -401,7 +403,7 @@ async fn plan_conforms_refuses_other_answers_stale_versions_and_unguarded_stages
             "approve",
             conforms(
                 &plan_id,
-                json!([{"stage": "run", "guard": "decision", "id": "dec-none"}]),
+                json!([{"stage": "run", "kind": "secrets_permissions", "guard": "decision", "id": "dec-none"}]),
             ),
             "cos_basis_plan_unguarded",
         ),

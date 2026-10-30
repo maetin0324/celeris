@@ -7,20 +7,26 @@
 //! waits, the task has no open decision, every sensitive stage CoS declared runs only after an
 //! earlier `review: human` stage or inside a human approval, and the task has not adopted more than
 //! [`PLAN_CHURN_MAX_VERSIONS`] plan versions within [`PLAN_CHURN_WINDOW`].
+//!
+//! ADR 2026-10-30-plan-conforms-human-guards adds what a person decides regardless of CoS's
+//! reading ([`needs_human`], also for `within_approved_frame`): a human check in the acceptance,
+//! an approval reason other than the plan's own human steps, and an edit of objective or acceptance
+//! since the previous version was approved. Each guarded stage names its kind.
 
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 use task_core::store::SqliteStore;
-use task_core::{DecisionStatus, ExecutionPlanRow, StageReview, TaskStore};
+use task_core::{Check, DecisionStatus, Event, ExecutionPlanRow, StageReview, Task, TaskStore};
 use task_ops::human_inbox::InboxKind;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::{
-    BASIS_INVALID, BASIS_PLAN_CHURN, BASIS_PLAN_UNGUARDED, BasisTarget, DelegatedBasis, FrameError,
-    FrameKind, approved_frame, problem,
+    BASIS_INVALID, BASIS_PLAN_CHURN, BASIS_PLAN_NEEDS_HUMAN, BASIS_PLAN_UNGUARDED, BasisTarget,
+    DelegatedBasis, FrameError, FrameKind, approved_frame, problem,
 };
+use crate::cos::inbox::human_required_problem;
 use crate::problem::{ApiProblem, store_problem};
 
 /// The option key of a plan gate that runs the plan as written.
@@ -31,6 +37,42 @@ pub(crate) const PLAN_CHURN_MAX_VERSIONS: usize = 2;
 /// D2 (4): the window of the churn count.
 pub(crate) const PLAN_CHURN_WINDOW: time::Duration = time::Duration::hours(24);
 const MAX_GUARDED_STAGES: usize = 32;
+/// Plan approval reasons (R3b) that only describe the plan's own human steps; they stay after
+/// the approval. Any other reason (`near_limit:` …) is for a person (G2 (2)).
+const OWN_HUMAN_STEP_REASONS: &[&str] = &["review_human:", "decisions:"];
+/// `Edited.fields` that change what the task must do (G2 (4)).
+const GOAL_FIELDS: &[&str] = &["objective", "acceptance"];
+
+/// G1: what makes a stage sensitive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StageRiskKind {
+    /// Billing or paid trials.
+    Billing,
+    /// Cluster node-hours.
+    NodeHours,
+    /// Production changes (daemon, systemd, release, production config).
+    Production,
+    /// Publishing or sending outside.
+    ExternalPublish,
+    /// Deleting, overwriting or other irreversible operations.
+    Destructive,
+    /// Secrets, permissions or security.
+    SecretsPermissions,
+}
+
+impl StageRiskKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            StageRiskKind::Billing => "billing",
+            StageRiskKind::NodeHours => "node_hours",
+            StageRiskKind::Production => "production",
+            StageRiskKind::ExternalPublish => "external_publish",
+            StageRiskKind::Destructive => "destructive",
+            StageRiskKind::SecretsPermissions => "secrets_permissions",
+        }
+    }
+}
 
 /// D2: what guards a sensitive stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -53,6 +95,8 @@ pub enum StageGuardKind {
 pub struct GuardedStage {
     /// The stage key of the plan.
     pub stage: String,
+    /// G1: why the stage is sensitive.
+    pub kind: StageRiskKind,
     pub guard: StageGuardKind,
     /// The `review: human` stage key, or the standing rule / decision / approval id.
     pub id: String,
@@ -115,6 +159,7 @@ fn check_guards(
             )));
         }
         let id = g.id.trim();
+        let key = format!("{key} ({})", g.kind.as_str());
         let frame_kind = match g.guard {
             StageGuardKind::ReviewHuman => {
                 let reviewed_before = order[..at]
@@ -135,6 +180,86 @@ fn check_guards(
             FrameError::Store(p) => p,
             FrameError::Invalid(detail) => unguarded(format!("stage {key}: {detail}")),
         })?;
+    }
+    Ok(())
+}
+
+/// ADR 2026-10-30-plan-conforms-human-guards G2 (1)(2)(4): what a person decides however CoS
+/// read the plan. Applies to every CoS approve of a plan gate (`plan_conforms` and
+/// `within_approved_frame`).
+pub(super) fn needs_human(store: &SqliteStore, target: &BasisTarget) -> Result<(), ApiProblem> {
+    if target.kind != Some(InboxKind::PlanGate) || target.option.as_deref() != Some(APPROVE_OPTION)
+    {
+        return Ok(());
+    }
+    let Some(task_id) = target.task_id else {
+        return Ok(());
+    };
+    let Some(task) = store.get(task_id).map_err(store_problem)? else {
+        return Ok(());
+    };
+    let events = store.events_for(task_id).map_err(store_problem)?;
+    gate_needs_human(&task, &events)
+}
+
+fn gate_needs_human(task: &Task, events: &[(u64, Event)]) -> Result<(), ApiProblem> {
+    let needs = |detail: String| problem(BASIS_PLAN_NEEDS_HUMAN, format!("{detail}; escalate it"));
+    // (1) A human check: the person judges the task, so the person approves its plan.
+    if task
+        .acceptance
+        .iter()
+        .any(|c| matches!(c.check, Check::Human))
+    {
+        return Err(human_required_problem(
+            "the task's acceptance has a human check",
+        ));
+    }
+    // (2) Approval reasons beyond the plan's own human steps (near a tree limit, …).
+    if let Some(waiting) = task_ops::plan_gate::latest_plan_approval(task, events) {
+        let other: Vec<&str> = waiting
+            .reasons
+            .iter()
+            .map(String::as_str)
+            .filter(|r| !OWN_HUMAN_STEP_REASONS.iter().any(|p| r.starts_with(p)))
+            .collect();
+        if !other.is_empty() {
+            return Err(needs(format!(
+                "plan {} needs approval for {}",
+                waiting.plan_id,
+                other.join(", ")
+            )));
+        }
+    }
+    // (4) Objective or acceptance edited since the previous version was approved (or since the
+    // task was created).
+    let since = events
+        .iter()
+        .rev()
+        .find_map(|(seq, e)| match e {
+            Event::PlanGateDecided { action, .. } if action == APPROVE_OPTION => Some(*seq),
+            _ => None,
+        })
+        .unwrap_or(0);
+    let edited: Vec<&str> = events
+        .iter()
+        .filter(|(seq, _)| *seq > since)
+        .filter_map(|(_, e)| match e {
+            Event::Edited { fields, .. } => Some(fields),
+            _ => None,
+        })
+        .flatten()
+        .map(String::as_str)
+        .filter(|f| GOAL_FIELDS.contains(f))
+        .collect();
+    if !edited.is_empty() {
+        let mut fields = edited;
+        fields.sort_unstable();
+        fields.dedup();
+        return Err(needs(format!(
+            "task {} edited its {} since the previous plan was approved",
+            task.id,
+            fields.join(" and ")
+        )));
     }
     Ok(())
 }
@@ -170,6 +295,7 @@ pub(super) fn validate(
     let Some(claimed) = &basis.plan else {
         return Err(invalid("plan_conforms needs basis.plan".into()));
     };
+    needs_human(store, target)?;
     let Some(task_id) = target.task_id else {
         return Err(invalid(
             "plan_conforms needs the task of the plan gate".into(),
@@ -199,12 +325,14 @@ pub(super) fn validate(
     };
     // D2 (1): a decision of the plan is a choice a person (or another routine answer) makes first.
     let root = task_core::tree::root_id_of(&task);
+    // G2 (3): the detail names the kind, so a failed plan check (plan_invalid, limit,
+    // leaf_too_large) reads as such.
     let open: Vec<String> = store
         .decisions_list(Some(root))
         .map_err(store_problem)?
         .into_iter()
         .filter(|d| d.task_id == task_id && d.status == DecisionStatus::Open)
-        .map(|d| d.key)
+        .map(|d| format!("{} ({})", d.key, d.kind.as_str()))
         .collect();
     if !open.is_empty() {
         return Err(invalid(format!(

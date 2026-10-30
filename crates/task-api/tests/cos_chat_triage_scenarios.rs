@@ -145,7 +145,9 @@ fn approval(env: &TestEnv) -> Approval {
 
 /// A root task waiting for its plan approval (`blocked(awaiting_plan_approval)`).
 fn plan_gate_task(env: &TestEnv) -> task_core::Task {
-    let task = new_task(TaskKind::Execute, Status::Ready);
+    let mut task = new_task(TaskKind::Execute, Status::Ready);
+    // A human check sends the plan to a person (ADR 2026-10-30-plan-conforms-human-guards G2 (1)).
+    task.acceptance[0].check = task_core::Check::Reviewer;
     env.seed(&task);
     let plan = task_core::ExecutionPlanRow {
         id: "plan-1".into(),

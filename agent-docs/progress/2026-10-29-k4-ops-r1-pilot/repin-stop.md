@@ -11,14 +11,14 @@ completed: 2026-10-30
 
 成果物（repo の外）: `/local/celeris/data/workspaces/01M62S8XWCZDCY2ZBVQ35176MH/artifacts/ops-r1/freeze/`
 
-- `bin/celeris-campaign-repin-stop-<build 時の WU HEAD の 12 字>`（path と sha256 は固定票の `tool_binaries.celeris-campaign`）。旧 `bin/celeris-campaign`・`bin/celeris-campaign-repin-c702b9d35ff3` は残した（前の値は `tool_binaries.previous.celeris-campaign_history`）
+- `bin/celeris-campaign-repin-stop-<build 時の WU HEAD の 12 字>`（path と sha256 は固定票の `tool_binaries.celeris-campaign`）。旧 `bin/celeris-campaign`・前回の repin の binary は残した（前の値は `tool_binaries.previous.celeris-campaign_history`）
 - `fixed-ticket.json`・`fixed-ticket.md`: `tool_binaries.celeris-campaign` を更新し、`revisions`（kind「試行の後の採点・集計の道具だけの改訂（--b-stop。試行の条件・入力・model・daemon は変わらない）」、理由 grade-pipeline の plan_issue）と「改訂履歴」の repin-stop 節を足した。JSON で変えた key は tool_binaries・gap_resolution・revised_at・revisions だけ
 - `gap-resolution.json`: `g-ops-r1-b-stop` を resolved=true で足した（証拠は fix-b-stop の試験 2 件と exit 0。all_resolved true）
 - `digests.sha256`: 作り直した（9 件。既存 6 件の bin・measure の hash は前と同じ）
 
 ## 結論
 
-- WU の HEAD（件名「fix-b-stop: ops-r1-assemble に --b-stop を足し、停止した B を分母に残して集計する」）は段 fixpipe の統合と fix-b-stop を含むので、一時 merge なしでそのまま build した。crates/campaign の git tree は 2d0c7f3291ee58c937effe619345ca8bd794e646。
+- WU の HEAD（件名「fix-b-stop: ops-r1-assemble に --b-stop を足し、停止した B を分母に残して集計する」）は段 fixpipe の統合と fix-b-stop を含むので、一時 merge なしでそのまま build した。crates/campaign の git tree hash は固定票の `tool_binaries.celeris-campaign.built_from` に書いた。
 - measurement_id・condition_id・trial_id は変えない。変わるのは試行の後に流す採点・集計の道具だけで、入力・model・limits・grader・release・B の daemon.toml は変わらない。
 - 旧 bundle・台帳・raw（artifacts/ops-r1/raw を含む）は読み書きしていない。
 

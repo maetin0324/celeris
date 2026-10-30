@@ -10209,6 +10209,20 @@
       "additionalProperties": false,
       "description": "D3 escalation packet. `recommended` is one of `options[].key` or null (then the reason says why).",
       "properties": {
+        "background": {
+          "description": "ADR 2026-10-30-cos-review-open-waits D3: which request and task the item comes from and why\nthe decision is needed now, with task-internal words paraphrased.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_answer": {
+          "description": "D3: what happens once the person answers (which task resumes, what it does next).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "options": {
           "items": {
             "$ref": "#/$defs/EscalationOption"

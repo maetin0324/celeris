@@ -37,12 +37,16 @@ final review（reviewer run 01M66FWZSG6WFQ5YFYCPFPVSC5）が受け入れ条件 3
 - 採点（grade）の code は触っていない。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- 前回の run（attempt 2 の 1 回目）は範囲 check が `crates/celeris/tests/actor_trace_flow1.rs` を範囲外として落とし、plan_issue で止めた。
+  計画が範囲を `crates/celeris/tests/actor_trace_flow*.rs` まで広げたので、code は変えずに検査をやり直した。
+- `actor_trace_flow*.rs` で期待値を変えたのは flow1 の 1 か所（人の op 0 件の試行）だけ。flow2・flow4・flow5 は区間を持つ人の op が
+  ある試行で、期待値（union_secs 9・1 など）は変えていない。
 - `cargo nextest run -p celeris-campaign --test human_ops_report` → 10 passed（新規 3 件を含む）
-- `bash scripts/dev/test-affected.sh` → exit 0（2867 passed、9 skipped）。1 回目は
-  `celeris::routing_eval_run daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records` が「daemon API became ready」の
-  待ちで落ちた（human-op と無関係、単独再実行で pass）。2 回目の全体実行で exit 0。
+- `cargo nextest run -p celeris --test actor_trace_flow1` → 1 passed
+- `bash scripts/dev/test-affected.sh` → exit 0（2867 passed、9 skipped）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
+- 範囲の確認: `git diff --name-only $CELERIS_WU_BASE` の 7 file はすべて許可範囲（campaign・actor_trace_flow1・docs/ops・ADR・進捗）。
 
 ## 未解決事項
 - K4 の t001・t002 の report の再生成（`not_recorded` になること・採点不変の確認）は WU regrade-v2 の担当。

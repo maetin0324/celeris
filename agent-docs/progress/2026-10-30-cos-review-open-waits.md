@@ -1,7 +1,7 @@
 ---
 title: 統括 CoS の定期見直し・人に回す件の背景・決定回答後の計画再判定
 tasks: [01M66BSZJECRFA8KBT8T3048FY]
-status: running
+status: done
 updated: 2026-10-30
 ---
 
@@ -23,8 +23,10 @@ updated: 2026-10-30
 
 12:00Z の 3 つの誤りとの対応: (i) 回答済みの決定は「前回から閉じた人待ち（報告しない）」にだけ出る（`review_text_lists_open_waits_apart_from_closed_ones`）。(ii) BenchFS（waiting_for_cluster_jobs）と (iii) done の K4 は受信箱の項目を持たないので「いま開いている人待ち」に出ない（同試験で受信箱の項目だけが開いた側に並ぶことを確認）。skill D2 で記憶からの補完を禁じた。
 
-## 検査
-（下に追記）
+## 検査（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+- `bash scripts/dev/test-affected.sh` — exit 0。nextest 6806 tests run: 6806 passed, 21 skipped。web: tsc -b 通過、vitest Test Files 101 passed / Tests 697 passed。文書検査（architecture-map・doc-links・adr-numbers・human-text・progress front matter）通過。
+- `cargo clippy --workspace -- -D warnings` — exit 0。
+- `cargo fmt --all -- --check` — exit 0。
 
 ## 未検証（実 LLM）
 - CoS が `background`・`on_answer` を実際に書くか、言い換えが人に数十秒で読める分量になるか、再判断 run で §3 (f) を満たす計画を approve するかは、実 LLM で確かめていない。daemon 側の入力・整形・配線だけを試験した。

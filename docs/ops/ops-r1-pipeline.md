@@ -101,7 +101,7 @@ ops-r1 manifest の例（実値は pipe-assemble が freeze の固定票から�
 
 - `--manifest`（上の ops-r1 manifest）、`--input-manifest`（既存の input manifest。`input.sha256` と一致）
 - A: `--a-raw <ops-r1-a-raw/1 の JSON>`、`--a-artifact <A の作業 dir の写し>`
-- B: `--b-intake <ops-r1-intake/1>`、`--b-trace <ops-r1-trace/1>`、`--b-attribution <ops-r1-attribution/1>`、`--b-artifact <B の成果物 dir の写し>`、
+- B: `--b-intake <ops-r1-intake/1>`、`--b-trace <ops-r1-trace/1>`、`--b-attribution <ops-r1-attribution/2>`、`--b-artifact <B の成果物 dir の写し>`、
   `--b-observed-versions <health と claude --version の記録>`
 - lock の材料（`--cases-root`・`--grader-root`・`--grade-case-root`・`--measurement-id`。`run` と同じ `expected_lock` で lock.json を作る）
 - `--out <dir>`（空であること）、`--records-out <file>`
@@ -111,6 +111,13 @@ trial_id・condition_id・started_at・ended_at・stop（`exited`|`cutoff`|`toke
 models（transcript の assistant message の model の集合）・token_usage 4 欄（transcript の usage を message id で重複を除いて和）・
 cost_usd（Claude Code の報告額。無ければ null）・workspace_sha256_initial・session_id。transcript の読み方は
 `operator_usage.rs` の transcript 読みを再利用する。
+
+A raw の生成は `celeris-campaign ops-r1-a-raw --transcript <Claude Code JSONL> --metadata <JSON> --out <JSON>`。
+metadata は上記の欄から schema・models・token_usage を除いたもの。started_at・ended_at は RFC3339、
+stop は測定者が記録する。exited は exit_code 必須。cost_usd は報告額を指定し、不明なら null にする。
+指定した session_id の assistant message だけを集計し、各 message id の重複 snapshot は usage の各欄の最大値を採る。
+token_usage の欄名は input・output・cache_read・cache_creation。欠測のある欄と空 transcript の usage は null とする。
+models は重複を除いてソートする。同じ transcript・metadata からの出力は byte 一致する。
 
 ### 4.1 試行の識別・試行数・分母
 

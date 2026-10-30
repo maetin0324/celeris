@@ -31,6 +31,9 @@ ADR: [2026-10-30-cos-job-wait-extend](../adr/2026-10-30-cos-job-wait-extend.md)
 
 - `cargo test -p task-api --test cos_job_wait_extend`: 3 passed。
 - `cargo test -p task-api --lib job_wait_extend`: 3 passed。
+- `bash scripts/dev/test-affected.sh`: exit 0（celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker の nextest 4776 passed / 20 skipped、web の tsc -b と vitest 697 passed / 101 files、node --test）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
 
 ## 本番への移行
 

@@ -208,7 +208,7 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
   （protocol 上の trial-start `attempt=2` は科学的な redo ではない）。
 - 観測の有無は項目ごと: その試行に op 記録（`op_start`/`op_end`。protocol・automatic を含む）が 1 件も無ければ介入件数・人の時間は欠測（`source=missing`、
   値 null）、attempt を持つ記録（`op_start`・`attempt`）が無ければ再作業は欠測。`cutoff`・`job_observation`・`wait_*` だけの試行を 0 にしない。
-  arm 集計は欠測の試行を `human_time_missing_trials`・`rework_missing_trials` に数え、秒数・件数に 0 を足さない。被覆は `human_time_coverage`（試行・arm・全体、`bound` と割合）で出す。
+  arm 集計は欠測の試行を `human_time_missing_trials`・`rework_missing_trials` に数え、秒数・件数に 0 を足さない。op 記録はあるが人の op が 0 件の試行は人の時間を `source=not_recorded`（null）とし、`human_time_not_recorded_trials` に数える（「人の op なし」を宣言する記録が無いので 0 秒にしない）。被覆は `human_time_coverage`（試行・arm・全体、`bound` と割合）で出す。
 - 失敗・cancel・timeout の attempt も分母に残す（`runs_by_end` と同じ方針）。
 
 ## 6. 記録できない指標と主張の限定

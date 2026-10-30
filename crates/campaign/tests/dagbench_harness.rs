@@ -827,12 +827,8 @@ fn real_k3_repetitions_from_formal_entry() {
     let root = PathBuf::from(std::env::var("DAGBENCH_SUITE_OUT").expect("DAGBENCH_SUITE_OUT"));
     assert!(!root.exists(), "fresh output directory required");
     fs::create_dir_all(&root).unwrap();
-    let mut g = grading_fixture::k3_grading(&root.join("inputs")).expect("missing CAMPAIGN_K3_TGZ");
-    // Cargo may rebuild the shared target binary while a repetition is in flight.
-    // Freeze the exact evaluator used by every child and every arm.
-    let frozen_grader = root.join("grader");
-    fs::copy(&g.grader_bin, &frozen_grader).unwrap();
-    g.grader_bin = frozen_grader;
+    // k3_grading freezes the evaluator copy used by every child and every arm.
+    let g = grading_fixture::k3_grading(&root.join("inputs")).expect("missing CAMPAIGN_K3_TGZ");
     fs::write(
         root.join("grading.json"),
         serde_json::to_vec_pretty(&g).unwrap(),

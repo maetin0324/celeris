@@ -24,7 +24,7 @@ use celeris_campaign::{
 use serde_json::Value;
 use task_core::{Status, TaskStore};
 
-use grading_fixture::{FABRICATED_REPORT, fixture, k3_grading, write};
+use grading_fixture::{FABRICATED_REPORT, fixture, fixture_with_grader, k3_grading, write};
 #[path = "common/dagbench_grading.rs"]
 mod grading_fixture;
 
@@ -238,4 +238,69 @@ fn baseline_stops_when_the_attempt_limit_is_exhausted() {
     let raw = dir.path().join("braw");
     let r = std::panic::catch_unwind(|| run_baseline_graded(&s, &raw));
     assert!(r.is_err(), "must not complete");
+}
+
+/// 段 fixpipe の統合 check の失敗の回帰（`graded run pins changed`）。同じ nextest の別の試験が共有 target の
+/// `celeris-campaign` を作り直す（relink）と、その path を直に pin した graded run は RunHeader の 2 回目の
+/// 書き込みで止まる。relink を file の差し替えで決定的に起こし、(1) 直に pin すると再現し、(2) fixture の固定
+/// した写しなら同じ run を書き続けられ、(3) 固定した grader そのものが変われば今までどおり拒むことを確かめる。
+#[test]
+fn graded_pins_survive_a_relinked_shared_grader_but_reject_a_changed_one() {
+    let root = tempfile::tempdir().unwrap();
+    let shared = root.path().join("target/debug/celeris-campaign");
+    fs::create_dir_all(shared.parent().unwrap()).unwrap();
+    let real = std::env::var("CARGO_BIN_EXE_celeris-campaign").unwrap();
+    let place_original = || {
+        assert!(
+            std::process::Command::new("cp")
+                .arg(&real)
+                .arg(&shared)
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    // cargo の uplift と同じく別 file を rename で置く（内容は別の build）。
+    let relink = |path: &Path| {
+        let next = path.with_extension("relinked");
+        fs::write(&next, b"another build of the grader").unwrap();
+        fs::rename(&next, path).unwrap();
+    };
+    let header =
+        |g: &Grading| RunHeader::from_spec(&spec(Some(g.clone())), "baseline", BASELINE_SCOPE);
+    place_original();
+    let g = fixture_with_grader(
+        &root.path().join("inputs"),
+        vec![("report.md".into(), FABRICATED_REPORT.into())],
+        &shared,
+    );
+    assert_ne!(g.grader_bin, shared, "the fixture must pin its own copy");
+
+    // (1) 共有 path を直に pin: relink の後の書き込みで落ちる（統合 check の失敗の形）。
+    let mut unfrozen = g.clone();
+    unfrozen.grader_bin = shared.clone();
+    let raw = root.path().join("raw-unfrozen");
+    header(&unfrozen).write(&raw).unwrap();
+    relink(&shared);
+    let err = header(&unfrozen).write(&raw).unwrap_err();
+    assert!(err.to_string().contains("graded run pins changed"), "{err}");
+
+    // (2) 固定した写し: 共有 path の relink の前後で pin が同じで、同じ raw に書き続けられる。
+    place_original();
+    let raw = root.path().join("raw-frozen");
+    header(&g).write(&raw).unwrap();
+    relink(&shared);
+    header(&g).write(&raw).unwrap();
+    assert_eq!(
+        header(&g).grading,
+        serde_json::from_slice::<Value>(&fs::read(raw.join("run.json")).unwrap()).unwrap()
+            ["grading"]
+            .clone()
+            .into()
+    );
+
+    // (3) 固定した grader が変われば、固定済みの graded run の再開は今までどおり拒む。
+    relink(&g.grader_bin);
+    let err = header(&g).write(&raw).unwrap_err();
+    assert!(err.to_string().contains("graded run pins changed"), "{err}");
 }

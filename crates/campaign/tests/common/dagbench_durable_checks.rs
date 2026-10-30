@@ -22,7 +22,7 @@ fn real_k3_a2_repetitions() {
 }
 
 fn exercise(root: &Path, real: bool, seeds: &[u64]) {
-    let mut grading = if real {
+    let grading = if real {
         grading_fixture::k3_grading(&root.join("inputs")).expect("missing K3 archive")
     } else {
         grading_fixture::fixture(
@@ -33,9 +33,6 @@ fn exercise(root: &Path, real: bool, seeds: &[u64]) {
             )],
         )
     };
-    let grader = root.join("grader");
-    fs::copy(&grading.grader_bin, &grader).unwrap();
-    grading.grader_bin = grader;
     let mut summary = vec![];
     for &seed in seeds {
         for attempts in [1, 2] {

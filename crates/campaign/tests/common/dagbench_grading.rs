@@ -1,7 +1,11 @@
 use celeris_campaign::{dagbench::graded::Grading, grader::GradeCase};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 const PRISTINE_TEST: &str =
     "use demo::add;\n\n#[test]\nfn adds_small_numbers() {\n    assert_eq!(add(1, 2), 3);\n}\n";
@@ -19,8 +23,45 @@ pub fn write(p: &Path, s: &str) {
     fs::write(p, s).unwrap();
 }
 
+/// 共有 target の `celeris-campaign`（cargo が試験の途中で作り直しうる）。
+fn shared_grader() -> PathBuf {
+    std::env::var("CARGO_BIN_EXE_celeris-campaign")
+        .expect("binary path")
+        .into()
+}
+
+/// grader の写しを `dir` に固定する。grading の pin は grader の sha256 を含み、graded run は RunHeader を
+/// 何度も書いて pin の一致を確かめる。共有 target の binary は同じ nextest の別の試験（例
+/// `crates/celeris/tests/ops_r1_pipeline.rs` の `cargo build -p celeris-campaign`）が別の feature 集合で
+/// 作り直すので、それを直に pin すると run の途中で「graded run pins changed」になる。
+/// 写しは別 process（`cp`）で書く（自 process で書いた fd が fork に漏れて exec が ETXTBSY になるのを避ける）。
+pub fn freeze_grader(dir: &Path, source: &Path) -> PathBuf {
+    fs::create_dir_all(dir).unwrap();
+    let frozen = dir.join("grader");
+    assert!(
+        Command::new("cp")
+            .arg(source)
+            .arg(&frozen)
+            .status()
+            .unwrap()
+            .success(),
+        "copy grader {}",
+        source.display()
+    );
+    frozen
+}
+
 /// 固定入力から作る成果物・case・評価側の scheduler 記録。
 pub fn fixture(root: &Path, overrides: Vec<(String, String)>) -> Grading {
+    fixture_with_grader(root, overrides, &shared_grader())
+}
+
+/// [`fixture`] の grader の出所を指定する版（grader は `root` の下に固定した写しを使う）。
+pub fn fixture_with_grader(
+    root: &Path,
+    overrides: Vec<(String, String)>,
+    grader: &Path,
+) -> Grading {
     let (case_dir, art, obs) = (
         root.join("case"),
         root.join("good"),
@@ -100,9 +141,7 @@ pub fn fixture(root: &Path, overrides: Vec<(String, String)>) -> Grading {
     );
     Grading {
         node: "analyze".into(),
-        grader_bin: std::env::var("CARGO_BIN_EXE_celeris-campaign")
-            .expect("binary path")
-            .into(),
+        grader_bin: freeze_grader(root, grader),
         case: case_dir.join("case.json"),
         observed: Some(obs),
         work: root.join("grade-work"),
@@ -179,9 +218,7 @@ pub fn k3_grading(root: &Path) -> Option<Grading> {
     write(&good.join("report.md"), &ok);
     Some(Grading {
         node: "analyze".into(),
-        grader_bin: std::env::var("CARGO_BIN_EXE_celeris-campaign")
-            .expect("binary path")
-            .into(),
+        grader_bin: freeze_grader(root, &shared_grader()),
         case,
         observed: None,
         work: root.join("grade-work"),

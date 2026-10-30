@@ -25,7 +25,7 @@ updated: 2026-10-30
 - `bash scripts/dev/test-affected.sh` → exit 0、nextest 2894 件 passed・9 skipped、`progress_index_commit_hashes: all checks passed`
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- `python3 -I scripts/campaign/test_ops_r2_grade.py` → 15 件 OK
+- `python3 -I scripts/campaign/test_ops_r2_grade.py` → 13 件 OK
 
 ## 本番への移行（operator が評価器 uid の shell で行う。順に）
 1. 隠しテスト file を `/var/lib/celeris-eval/hidden-tests/final/k2-bf-xattr-restart-campaign/hidden/` の下に置く（相対 path がそのまま作業 dir に挿入される。wrapper にするなら `.grader/run.sh`）。持ち主 `celeris-eval`。

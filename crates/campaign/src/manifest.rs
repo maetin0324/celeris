@@ -506,6 +506,10 @@ pub const CONTRACT_REVISION_OPS_R1: &str = "main-4-ops-r1";
 pub struct ContractRevision {
     pub revision: String,
     pub pinned_versions: BTreeMap<ConfigId, PinnedVersions>,
+    /// ops-r1 の condition 宣言（arm → condition_id・受付経路・trial_id。`ops_r1_conditions`）。
+    /// 省略時は直列化しない（既存の contract 付き manifest の hash を変えない）。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub conditions: BTreeMap<ConfigId, crate::ops_r1_conditions::ConditionDecl>,
 }
 
 /// arm ごとに試行の開始時の観測と照合する宣言。B/C の release は `Config::harness_version`（12 桁 hex）を使う。
@@ -965,6 +969,7 @@ impl CampaignManifest {
         if let Some(c) = &self.contract {
             c.validate(&ids)?;
         }
+        self.validate_conditions(&ids)?;
         if self.experiment_sets.is_empty() && side {
             if ids != [ConfigId::B, ConfigId::C] {
                 return Err("side manifest configs must contain exactly B and C once each".into());
@@ -1109,6 +1114,16 @@ impl CampaignManifest {
             if c.id == ConfigId::A {
                 continue;
             }
+            // CoS 受付の B（ops-r1）: CoS が起票する task に campaign は routing を固定しない。
+            if c.id == ConfigId::B && self.b_is_cos_thread() {
+                if c.routing.is_some() {
+                    return Err(
+                        "config B: routing must not be pinned for the cos_thread intake (ops-r1)"
+                            .into(),
+                    );
+                }
+                continue;
+            }
             let Some(r) = &c.routing else {
                 return Err(format!("config {:?}: routing must be pinned", c.id));
             };
@@ -1158,7 +1173,9 @@ impl CampaignManifest {
         };
         let cfg = |id| self.configs.iter().find(|c| c.id == id);
         for s in sel {
-            if s.compare.contains(&(ConfigId::A, ConfigId::B)) {
+            // ops-r1 は役割の model を宣言しない（CoS だけ別 model）。B0 の observed 検査は checker が続ける。
+            let ops_r1_undeclared = self.is_ops_r1() && s.fixed.role_models.is_empty();
+            if s.compare.contains(&(ConfigId::A, ConfigId::B)) && !ops_r1_undeclared {
                 check_b0_all_sonnet(&s.fixed.role_models)?;
             }
             if s.compare.contains(&(ConfigId::B, ConfigId::C))

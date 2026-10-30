@@ -1157,6 +1157,7 @@ fn ops_r1(sha: &str) -> ContractRevision {
             (ConfigId::C, pin(Some(p))),
         ]
         .into(),
+        conditions: Default::default(),
     }
 }
 

@@ -45,6 +45,9 @@ condition を表す欄」だけで、どちらも crates/campaign の中で足�
 
 ### 3.1 manifest の追加欄
 
+実装（pipe-manifest）では、下の `conditions` は manifest の最上位ではなく `contract` の下（`contract.conditions`）に置いた。
+理由と、`contract.revision` との必須関係の向きは ADR の付記 2026-10-30 にある。
+
 ```json
 "conditions": {
   "A": {"condition_id": "mlsys-main-4-ops-r1-k4p1-A-direct-claude-code", "intake": "direct_claude_code",
@@ -58,7 +61,8 @@ condition を表す欄」だけで、どちらも crates/campaign の中で足�
   無い manifest の直列化・sha256 は今と同じ bytes になる。
 - `intake` は `direct_claude_code`（A だけ）と `cos_thread`（B だけ）の 2 値。`trial_ids` の長さは `repeats` と同じで、`rep` 番目（1 始まり）の trial_id を表す。
 - 検査（`validate`）: `conditions` を書くなら有効 arm を全部覆う、condition_id は互いに違い空でない、`contract.revision = main-4-ops-r1` を必須にする。
-  逆に `contract.revision = main-4-ops-r1` で `conditions` が無いのも拒否する（ops-r1 契約の manifest は必ず condition を持つ）。
+  逆向き（`contract.revision = main-4-ops-r1` で `conditions` が無いのを拒否する）は実装しなかった（既存の trial-observed-versions の試験が
+  conditions の無い ops-r1 契約で `run` を通すため。ADR の付記）。
 - `check_resolved`: `conditions.B.intake = cos_thread` なら B の routing 欠落を拒否しない。B の routing を書いたら拒否する（CoS が起票する task に campaign は routing を固定しない）。
 - 投入の拒否: `run`・`dry-run`・`preflight`・`cap-probe`・`config-check`・`env-check` は `conditions` のある manifest を
   「ops-r1 の manifest は ops-r1-assemble と採点〜集計の段だけで使う」で拒否する（B を `POST /tasks` で流す道を塞ぐ）。

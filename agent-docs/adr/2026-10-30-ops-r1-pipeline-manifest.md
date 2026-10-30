@@ -52,3 +52,17 @@ B=測定 daemon の案件 CoS thread で受け付ける通常運用（`…-B-cel
 - daemon（crates/campaign 以外の crate）の変更は要らない（verdict: feasible）。
 - 未確認の点（set 宣言の照合が routing の無い B を通すか、自由文の reason を checker が受けるか、check-out-consistency.py が executor を見るか）は
   pipe-assemble が試験で確かめる。外す必要があれば executor 名ではなく `conditions.B.intake` を読んで外す。
+
+## 付記 2026-10-30（pipe-manifest の実装との突き合わせ）
+
+- D1 の置き場所: `conditions` は manifest の最上位ではなく `contract.conditions`（`ContractRevision` の任意欄、空なら直列化しない）に置いた。
+  最上位に欄を足すと、既存の試験が構造体リテラルで組む `CampaignManifest` 約 45 か所が compile できなくなり、旧試験を無修正で通せない。
+  `contract` の下なら直す既存試験は `crates/campaign/tests/celeris_exec.rs` の `ops_r1()` の 1 行（`conditions: Default::default()`）だけで、
+  「condition は ops-r1 契約の manifest だけが持つ」も型で表せる。読み出しは `CampaignManifest::conditions()`（`crates/campaign/src/ops_r1_conditions.rs`）。
+- D1 の「互いに必須」のうち「`contract.revision = main-4-ops-r1` なら `conditions` 必須」は入れなかった。既存の
+  `celeris_exec.rs` の試験（trial-observed-versions）が conditions の無い ops-r1 契約で A/B/C の `run` を通しており、必須にすると旧試験が落ちる。
+  検査は「`conditions` があれば revision は main-4-ops-r1」の向きだけ。
+- B0 の宣言検査（`check_b0_all_sonnet`）は、ops-r1（conditions あり）で `fixed.role_models` が空のときだけ外した（設計書 §3.1 の「role_models を書かない」を通すため）。
+  `role_models` を書けば従来どおり検査する。observed の Sonnet 照合（checker の `check_b0_observed`）は変えていない。
+- `HumanOpRecord.condition_id` の追加で、既存試験の構造体リテラル 2 か所（`crates/campaign/tests/human_ops.rs` の `base`、
+  `crates/celeris/tests/actor_trace/support.rs` の `human_record_base`）に `condition_id: None` を 1 行ずつ足した。assert は変えていない。

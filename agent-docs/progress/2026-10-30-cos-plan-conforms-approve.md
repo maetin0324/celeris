@@ -30,7 +30,8 @@ ADR: [2026-10-30-cos-plan-conforms-approve](../adr/2026-10-30-cos-plan-conforms-
 - `cargo test -p task-api --test cos_plan_conforms --test cos_chat_triage_scenarios --test cos_routine_answers --test cos_review_rework`: 全件 ok（4・3・5・4 件）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo clippy -p task-api --all-targets -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 結果は下の「test-affected」に書く。
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 4775 件 run・4775 passed・20 skipped、web の tsc -b と vitest 101 files・697 tests passed、doc test ok）。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。
 
 ## 本番への移行
 

@@ -55,7 +55,7 @@ celeris-campaign ops-r1-attribution --db <DB の写し> --thread <id> --trial-id
 
 ## 3. attribution の行の形
 
-出力は `{"schema":"ops-r1-attribution/1", trial_id, condition_id, thread_id, project_id, cutoff, window:{from, to},
+出力は `{"schema":"ops-r1-attribution/2", trial_id, condition_id, thread_id, project_id, cutoff, window:{from, to},
 root_task_ids, db:{schema_version, sha256}, rows:[…], totals, unattributed}`。`window.from` は受付の時刻、
 `window.to` は cutoff。
 
@@ -65,6 +65,7 @@ state なので、取りこぼしを見えるように全部出す）。1 run �
 | 欄 | 中身 |
 |---|---|
 | `source` | `runs` か `chat_runs` |
+| `model`・`harness` | `runs` は `runs.model`・`runs.adapter`、`chat_runs` は `chat_runs.resolved_config_json` の `$.model`・`$.harness`。欠測は null |
 | `run_id`・`task_id`・`thread_id` | 元の行の値（持たない側は null） |
 | `trial_id`・`condition_id` | 帰属したときだけ引数の値、未帰属なら null |
 | `role` | `runs.role` の `planner`・`worker`・`reviewer`。chat run は thread の kind で `project` → `cos_project`、`general`・`review` → `cos_general`。それ以外は null で `role_raw` に元の値 |

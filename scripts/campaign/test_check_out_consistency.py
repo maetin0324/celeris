@@ -201,6 +201,20 @@ class Consistency(unittest.TestCase):
         self.assertEqual(p.returncode, 1)
         self.assertIn("A.final_passed: export=2 raw=1", d["mismatches"])
 
+    def test_report_arms_keyed_by_human_op_label_are_found_through_trial_rows(self):
+        # human-op の記録がある試行は report の arm 表が arm_label（ops-r1-A・A0 など）で引かれる。
+        r = self.fx.report
+        r["arms"] = {f"ops-r1-{k}": v for k, v in r["arms"].items()}
+        for t in r["trials"]:
+            t["arm_labels"] = [f"ops-r1-{t['arm']}"]
+        p, d = self.fx.run()
+        self.assertEqual(p.returncode, 0, d and d["mismatches"])
+        self.assertEqual(d["counts"]["B"]["not_run"], {"raw": 1, "report": 1})
+        r["arms"]["ops-r1-A"]["validated_success"] = 2
+        p, d = self.fx.run()
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("A.final_passed: report.validated_success=2 raw=1", d["mismatches"])
+
     def test_report_counting_not_run_cells_as_missing_is_a_mismatch(self):
         b = self.fx.report["arms"]["B"]
         b["tokens_missing_trials"], b["tokens_not_run_trials"] = 2, 0

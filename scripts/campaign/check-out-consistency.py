@@ -251,6 +251,12 @@ def compare(arms, raw, checker, export, report):
     if export.get("table"):
         rows = {r.get("config"): r for r in export["table"].get("configs", [])}
     rarms = (report or {}).get("arms") or {}
+    # report の arm 表は human-op 記録の arm_label（A0・ops-r1-A など）で引かれる。試行行の arm（config）から label を引く。
+    labels = {}
+    for t in (report or {}).get("trials", []):
+        lab = (t.get("arm_labels") or [None])[0]
+        if t.get("arm") and lab:
+            labels.setdefault(t["arm"], lab)
     for a in arms:
         rw = raw[a]
         entry = {}
@@ -273,7 +279,7 @@ def compare(arms, raw, checker, export, report):
         elif export.get("table"):
             mismatches.append(f"{a}: export table has no row")
         if report is not None:
-            ra = rarms.get(a)
+            ra = rarms.get(a, rarms.get(labels.get(a)))
             if ra is None:
                 mismatches.append(f"{a}: human-op report has no arm")
             else:

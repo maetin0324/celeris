@@ -167,6 +167,10 @@ dir = {secrets:?}
 [notify]
 web_base_url = "{WEB}"
 
+# host の本番 release 置き場（既定 /local/celeris/state/releases）を読まない。読むと未昇格 release の停滞通知が混ざる。
+[selfdeploy]
+releases_dir = "releases"
+
 [cos]
 enabled = true
 max_turns = 2

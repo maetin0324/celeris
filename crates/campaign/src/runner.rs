@@ -1484,6 +1484,27 @@ fn publish_global(
     ))
 }
 
+/// ops-r1-assemble の out に runner と同じ summary.json を書く（記録は組み立て済み・台帳は全行 done）。
+pub(crate) fn write_assembled_summary(
+    m: &CampaignManifest,
+    hash: &str,
+    records: &[TrialRecord],
+    out: &Path,
+) -> Result<(), String> {
+    let mut rep = RunReport::default();
+    for r in records.iter().filter(|r| r.ran()) {
+        rep.executed += 1;
+        rep.tokens_total += r.tokens.unwrap_or(0);
+        rep.tokens_charged_total += r.charged_tokens(&m.budget);
+        rep.tokens_missing += u64::from(r.tokens.is_none());
+        rep.wall_secs_total += r.wall_secs;
+        rep.no_artifact += u64::from(r.reason.as_deref() == Some(REASON_NO_ARTIFACT));
+        rep.case_budget_cancelled += u64::from(r.reason.as_deref() == Some(REASON_CASE_BUDGET));
+    }
+    let ledger = Ledger::open(out)?;
+    write_summary(m, hash, records, &rep, &ledger, out, false)
+}
+
 /// runner 自身の集計（checker は別実装で再計算して突き合わせる）。
 fn write_summary(
     m: &CampaignManifest,

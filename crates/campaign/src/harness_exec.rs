@@ -305,6 +305,18 @@ impl Sandbox {
         real: &Path,
         env: &[(String, String)],
     ) -> Vec<String> {
+        self.runtime_args(workspace, state, real, env)
+    }
+
+    /// A と runtime probe が共有する bwrap 引数。実行する command は呼び出し側が末尾に足す。
+    /// probe binary は workspace 内に stage すれば、A の実行ファイル mount も同じまま検査できる。
+    pub fn runtime_args(
+        &self,
+        workspace: &Path,
+        state: &Path,
+        real: &Path,
+        env: &[(String, String)],
+    ) -> Vec<String> {
         let mut a: Vec<String> = Vec::new();
         let mut add = |xs: &[&str]| a.extend(xs.iter().map(|x| x.to_string()));
         add(&[

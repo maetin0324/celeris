@@ -274,6 +274,11 @@ impl Dispatcher {
             if let Err(error) = launch.relay_rejudge(self) {
                 tracing::warn!(%error, "CoS relay re-judging failed");
             }
+            // ADR 2026-10-30-cos-review-open-waits D4: a plan approval escalated for an open
+            // decision goes back to CoS once the person answered it.
+            if let Err(error) = launch.plan_rejudge(self) {
+                tracing::warn!(%error, "CoS plan re-judging failed");
+            }
             if let Err(error) = launch.triage_launch(self) {
                 tracing::warn!(%error, "CoS triage launch failed");
             }

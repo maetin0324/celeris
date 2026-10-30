@@ -91,3 +91,42 @@ impl CosChatLaunch {
         Ok(())
     }
 }
+
+impl CosChatLaunch {
+    /// ADR 2026-10-30-cos-review-open-waits D4: one pass that hands each escalated plan approval
+    /// whose task's decisions the person has answered since the judgment to one run per idle
+    /// thread. The store holds the state (the item's input message); no LLM, no judgment here.
+    pub(super) fn plan_rejudge(&mut self, dispatcher: &mut Dispatcher) -> Result<(), String> {
+        let now = dispatcher.now_utc();
+        let candidates = self
+            .store
+            .cos_triage_plan_rejudge_candidates()
+            .map_err(|e| e.to_string())?;
+        let mut per_thread: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for c in candidates {
+            if !self.running.contains_key(&c.thread_id) {
+                per_thread.entry(c.thread_id).or_default().push(c.item_id);
+            }
+        }
+        for (thread, items) in per_thread {
+            if self.running.contains_key(&thread) || !self.has_capacity(dispatcher) {
+                continue;
+            }
+            let run_id = ulid::Ulid::new().to_string();
+            let Some(claim) = self
+                .store
+                .cos_triage_plan_rejudge_claim(&thread, &run_id, &items, now)
+                .map_err(|e| e.to_string())?
+            else {
+                continue;
+            };
+            let run = self
+                .store
+                .chat_run_get(&claim.thread_id, &claim.run_id)
+                .map_err(|e| e.to_string())?;
+            self.run_configs.insert(thread.clone(), self.config.clone());
+            self.launch_routes(dispatcher, &thread, &run, 0, None, now);
+        }
+        Ok(())
+    }
+}

@@ -11,7 +11,7 @@ completed: 2026-10-30
 
 成果物（repo の外）: `/local/celeris/data/workspaces/01M62S8XWCZDCY2ZBVQ35176MH/artifacts/ops-r1/freeze/`
 
-- `authorization-addendum.json`（sha256 `ab21d4ee7370eee0dde5b50e368429f8bb67b0de9040c4873a315a6b2e583aac`）と同じ内容の `authorization-addendum.md`（人向け）
+- `authorization-addendum.json`（sha256 `a7ad66cd8b78202cf6ec473354a1ce2bef2a2c4d394d470de3022f7c17a17dda`）と同じ内容の `authorization-addendum.md`（人向け）
 - `../report.md` の「承認」の行を照合結果と追補の path に書き換えた（「未照合」の記述を消した）
 - `fixed-ticket.json` は変えていない（sha256 `98494634b98ef8efa45828a835471627f6b66f0ef702c1a5ace64225f7869c82`、追補が参照）
 
@@ -36,6 +36,7 @@ completed: 2026-10-30
 - `python3 -I -c 'import json;json.load(open(".../authorization-addendum.json"))'` → exit 0
 - `grep -c 未照合 /local/celeris/data/workspaces/01M62S8XWCZDCY2ZBVQ35176MH/artifacts/ops-r1/report.md` → 0
 - repo の変更はこの進捗ファイルだけ（`git diff --name-only $CELERIS_WU_BASE`）。Rust のコードを変えていないので test-affected の対象 crate は 0
+- 計画の check（追補の欄の assert）→ exit 0。前回の run では `scope.trials` が完全な ID（mlsys-main-4-ops-r1-k4p1-A-t001 など）で、check の `['A-t001','B-t001']` と合わず `AssertionError: scope` で落ちた。`scope.trials` を短い ID にし、完全な ID は `scope.trial_ids_full` に移した（.md も同じ）
 
 ## 未解決
 

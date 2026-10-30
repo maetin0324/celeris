@@ -33,6 +33,7 @@ pub mod inputs;
 pub mod isolation;
 pub mod jev_smoke;
 pub mod jev_stages;
+pub mod l1_owner;
 pub mod ledger;
 pub mod lock;
 pub mod lock_exec;

@@ -74,6 +74,10 @@ pub trait Host {
     ) -> Result<crate::runtime_probe::RuntimeProbe, String> {
         crate::preflight_isolation::run(req)
     }
+    /// L1 の持ち主の判定に使う run の uid と group。試験は別の uid を注入する（判定は実 lstat のまま）。
+    fn run_ids(&self) -> Result<crate::l1_owner::RunIds, String> {
+        crate::l1_owner::RunIds::current()
+    }
     fn probe_runner(&self) -> Box<dyn crate::cap_probe::ProbeRunner> {
         Box::new(crate::cap_probe::ProcessProbeRunner {
             timeout: std::time::Duration::from_secs(300),
@@ -570,12 +574,16 @@ fn check_isolation(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn H
         real.as_deref(),
         (&ws, &cfg),
     ) {
+        let owner = r
+            .as_ref()
+            .map_or(Vec::new(), |r| iso::owner_findings(r, &inp.isolation, host));
         match r.and_then(|r| {
             host.runtime_probe(&r)
                 .map_err(|e| format!("{}:{}:probe:{e}", iso::CHECK, r.principal))
         }) {
             Ok(p) => iso::findings(&p)
                 .into_iter()
+                .chain(owner)
                 .for_each(|d| a.miss(iso::CHECK, d)),
             Err(d) => a.miss(iso::CHECK, d),
         }

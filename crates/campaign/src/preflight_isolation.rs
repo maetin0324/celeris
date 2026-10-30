@@ -3,7 +3,8 @@
 //! mountinfo に許可表の外の source があるかを調べる。1 件でも残れば `deny_readable` で止める（fail-closed）。
 //! - A: `Sandbox::runtime_args`（A の実起動と同じ関数）
 //! - B・operator: `scripts/campaign/ops-r2-sandbox.sh`（`--print-args` と同じ許可表で実際に起動する）
-//! - L1: 人の uid の process 自身から `--eval-root` の下の deny path を開く
+//! - L1: 人の uid の process 自身から `--eval-root` の下の deny path を開き、持ち主の uid と書き換えの可否を lstat で確かめる
+//!   （同じ uid の chmod 000 では通さない。`l1_owner`）
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -241,6 +242,22 @@ pub fn findings(r: &RuntimeProbe) -> Vec<String> {
         out.push(format!("{CHECK}:{p}:probe reported ok=false"));
     }
     out
+}
+
+/// L1 の持ち主の判定（`l1_owner`）。L1 以外の主体と入力不足の要求は空を返す（後者は `requests` が止める）。
+/// open が拒否されても、path と EVAL_ROOT までの dir の持ち主が run の uid・0 なら、また祖先を run の uid が書き換えられるなら止める。
+pub fn owner_findings(
+    r: &ProbeRequest,
+    iso: &IsolationInputs,
+    host: &dyn crate::preflight::Host,
+) -> Vec<String> {
+    let (Wrap::Host, Some(root)) = (&r.wrap, iso.eval_root.as_deref()) else {
+        return Vec::new();
+    };
+    match host.run_ids() {
+        Ok(run) => crate::l1_owner::owner_findings(&run, root, &r.deny, &crate::l1_owner::lstat),
+        Err(e) => vec![format!("{CHECK}:L1:{e}")],
+    }
 }
 
 // ---- 実行（RealHost の既定実装） ----

@@ -8,6 +8,9 @@
 //! 境界の fake JSON も campaign 情報の DB 直挿入も無い。mock にしてよい「実行内部」だけを test が担う:
 //! dispatcher 相当の状態遷移、worker の run イベントと成果物、A arm の harness、grader の評価 command。
 //! 時計は注入（`Clock::sleep` が実行内部を 1 歩進める）。外部 LLM・有料 job・本番変更・userns は使わない。
+#[path = "../../campaign/tests/support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     collections::BTreeMap,
     fs,
@@ -691,7 +694,7 @@ impl World {
         .expect("input manifest");
         fs::write(d.join("final.json"), resolved_manifest().to_string()).expect("manifest");
         let (cases, grade, ins) = (d.join("cases"), d.join("grade-cases"), d.join("inputs-src"));
-        copy(&c.join("cases"), &cases);
+        copy(&support_cases::cases_root(), &cases);
         copy(&c.join("fixtures/grade-cases"), &grade);
         fs::create_dir_all(&ins).expect("ins");
         let repo = d.join("repo");

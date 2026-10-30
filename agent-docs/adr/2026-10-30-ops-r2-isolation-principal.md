@@ -343,6 +343,6 @@ release 0acf217a2c89 の実機確認で、wrapper 経由の採点が exit 64 で
   `<work>/grade`（EVAL_ROOT/work の下）を使う。
 - H5 試行の出力の tgz は `tar --dereference --hard-dereference` で作る（symlink は中身にし、hard link を作らない）。
   wrapper の展開検査（symlink・hard link の拒否）は変えない。
-- H6 試験は K2 の real case を repo の旧 private と組で読まない。repo の試験は試験用の cases root（`cases/` を一時 dir に写し、
+- H6 試験（celeris-campaign と celeris の crate の試験）は K2 の real case を repo の旧 private と組で読まない。repo の試験は試験用の cases root（`cases/` を一時 dir に写し、
   K2 の `private_ref`・`grade_case_ref` を repo の旧 fixture の sha256 に替えたもの）を読む。旧 private・旧 grade-case は G1・G4 の
   とおり漏洩済みの試験専用 fixture として HEAD に残り、K2 の正式試行の採点には使わない。`case.json` の値は operator が反映して commit する。

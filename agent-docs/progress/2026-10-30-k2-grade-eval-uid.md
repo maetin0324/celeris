@@ -15,9 +15,9 @@ ADR: [2026-10-30-ops-r2-isolation-principal](../adr/2026-10-30-ops-r2-isolation-
 - H3 `crates/campaign/src/grader.rs` `output_is_env_failure`: 行末が `: not found`（dash の `sh: 1: cargo: not found`）を env_failure に。試験 `crates/campaign/tests/grade_env_marker.rs`。
 - H4 `grade_out_with` に `work_root`、`celeris-campaign grade-out --work <dir>`。
 - H5 `docs/ops/ops-r2-isolation.md` §4.3・§4.4・§4.5: 新しい呼び方、toolchain と crate cache の準備、`tar --dereference --hard-dereference` による tgz の作り方。
-- H6 `crates/campaign/tests/support_cases/mod.rs`: `cases/` を `CARGO_TARGET_TMPDIR` に写し、K2 の `private_ref`・`grade_case_ref` を repo の旧 fixture（漏洩済みの試験専用。付記 G1・G4）の実 hash に替えた試験用 cases root。`fixtures/grader-private` と組で K2 を読む試験 15 本と `k2_scope.rs`・`real_asset_grade.rs` をこれに替えた。
+- H6 `crates/campaign/tests/support_cases/mod.rs`: `cases/` を `CARGO_TARGET_TMPDIR` に写し、K2 の `private_ref`・`grade_case_ref` を repo の旧 fixture（漏洩済みの試験専用。付記 G1・G4）の実 hash に替えた試験用 cases root。`fixtures/grader-private` と組で K2 を読む試験 15 本と `k2_scope.rs`・`real_asset_grade.rs`、celeris crate の `cap_probe_real_daemon.rs`・`campaign_lock_e2e.rs`・`ops_r1_pipeline.rs` をこれに替えた（helper は `CARGO_MANIFEST_DIR/../campaign` を root にし、celeris 側は `#[path]` で読む）。
 
-commit（件名）: 「ADR 付記: K2 の採点を評価器 uid で通す（H1〜H6）」「campaign: dash の '<name>: not found' を env_failure に、grade-out に --work（H3・H4）」「ops-r2 grade wrapper: celeris-campaign grade の argv と toolchain の環境を wrapper が固定で組む（H1・H2）」「campaign tests: K2 の参照 hash を旧 fixture に合わせた試験用 cases root を読む（H6）」「campaign tests: k2_scope・real_asset_grade も試験用 cases root の K2 pin を読む（H6）」「docs: ops-r2 §4.3〜4.5 を wrapper の新しい呼び方・toolchain の準備・tgz の作り方に合わせる（H5）」「cargo fmt」。基準は `git merge-base HEAD main`。
+commit（件名）: 「ADR 付記: K2 の採点を評価器 uid で通す（H1〜H6）」「campaign: dash の '<name>: not found' を env_failure に、grade-out に --work（H3・H4）」「ops-r2 grade wrapper: celeris-campaign grade の argv と toolchain の環境を wrapper が固定で組む（H1・H2）」「campaign tests: K2 の参照 hash を旧 fixture に合わせた試験用 cases root を読む（H6）」「campaign tests: k2_scope・real_asset_grade も試験用 cases root の K2 pin を読む（H6）」「campaign tests: celeris crate の試験も試験用 cases root を読む（H6）」「docs: ops-r2 §4.3〜4.5 を wrapper の新しい呼び方・toolchain の準備・tgz の作り方に合わせる（H5）」「cargo fmt」。基準は `git merge-base HEAD main`。
 
 ## 証拠
 
@@ -25,7 +25,9 @@ commit（件名）: 「ADR 付記: K2 の採点を評価器 uid で通す（H1�
 - `cargo test -p celeris-campaign --test grade_env_marker` → 2 passed。
 - ダミー値（private `ab`×32、grade-case `cd`×32）を `ops-r2-set-private-sha.py` で K2 の `case.json` に入れて `cargo nextest run -p celeris-campaign --no-fail-fast`: H6 前は 126 件が `private file hash mismatch`、H6 の 1 段目の後は 912 件中 910 passed・2 failed（`k2_scope`・`real_asset_grade` の pin 照合）、2 件を直した後に `-E 'binary(k2_scope)|binary(real_asset_grade)|binary(cap_probe)|binary(cases_load)'` → 49 passed。確認後に `case.json` は git で戻した。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0（`cargo fmt --all` を適用して commit した後）。
-- `bash scripts/dev/test-affected.sh` → 未実行（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）。
+- ダミー値の下で `bash scripts/dev/test-affected.sh`（1 回目）→ exit 100。celeris crate の 11 件（`cap_probe_real_daemon` 5・`campaign_lock_e2e` 4・`ops_r1_pipeline` 2）が `private file hash mismatch`。celeris-campaign の失敗は 0。
+- celeris crate の 3 本を試験用 cases root に替えた後、ダミー値で `cargo nextest run -p celeris -E 'binary(cap_probe_real_daemon)|binary(campaign_lock_e2e)|binary(ops_r1_pipeline)'` → 12 passed。
+- `bash scripts/dev/test-affected.sh`（提出時 HEAD、ダミー値）→ 未実行（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）。
 
 ## 未解決事項
 

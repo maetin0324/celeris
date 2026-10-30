@@ -3,7 +3,7 @@
 //! repo の `cases/` を写し、K2 の `private_ref`・`grade_case_ref` の sha256 を repo の旧 fixture
 //! （`fixtures/grader-private`・`fixtures/grade-cases`。漏洩済みの試験専用。付記 G1・G4）の実 hash に替える。
 //! `cases/` の K2 の値は operator が EVAL_ROOT の新しい private・grade-case の値に替えて commit するので、
-//! 試験は repo の `cases/` を fixture の private と組で読まない。
+//! 試験は repo の `cases/` を fixture の private と組で読まない（celeris-campaign と celeris の試験が使う）。
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -12,8 +12,9 @@ use std::sync::OnceLock;
 
 const K2: &str = "final/k2-bf-xattr-restart-campaign/case.json";
 
+/// celeris-campaign の crate root（campaign と celeris の両方の試験から読む）。
 fn crate_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../campaign")
 }
 
 fn sha_hex(b: &[u8]) -> String {

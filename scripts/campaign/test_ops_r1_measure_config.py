@@ -129,6 +129,18 @@ class MeasureConfigTest(unittest.TestCase):
         for d in ("ws", "scratch"):
             self.assertTrue(os.path.isdir(os.path.join(state, d)))
 
+    def test_trial_state_and_home(self):
+        for trial in ("B-t001", "B-t002"):
+            state = os.path.join(self.root, trial)
+            r = self.run_script("--port", "17861", "--harness", "stub",
+                                "--stub-command", self.stub, state=state)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn(f"state={state}\nHOME={state}/home\n", r.stdout)
+            self.assertTrue(os.path.isdir(os.path.join(state, "home")))
+            cfg = tomllib.loads(rd(os.path.join(self.root, "cfg", "daemon.toml")))
+            self.assertEqual(cfg["api"]["tokens"], [
+                {"principal": "operator:ops-r1", "token_file": state + "/token"}])
+
     def test_real_config_all_sonnet_with_accounts_and_clusters(self):
         normal = os.path.join(self.root, "normal.toml")
         wr(normal, 'db = "x"\n\n[[clusters]]\nid = "pegasus"\nhost = "pegasus"\n\n[[clusters.forwards]]\n'

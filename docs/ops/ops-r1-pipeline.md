@@ -221,6 +221,25 @@ runbook §5 の停止記録（`raw/stop.json`、schema `ops-r1-stop/1`）で B �
 B で assemble・grade-out・check・final-accounting・export・human-op report・check-out-consistency.py が exit 0、分母 2、B は cancelled・
 condition_drift・非成功、wall 229 秒）と `ops_r1_pipeline_b_stop_rejects_a_foreign_trial`（trial_id 不一致で error）。
 
+### 4.7 案件 CoS が起票せず自分で済ませた B（`--b-cos-self-completed`）
+
+人の判断（2026-10-30、「CoSがやったのも通常運用で」）により、案件 CoS が task を起票せず自分で分析を済ませた B も条件 B の結果として
+扱う。測定者がこの扱いを試行に当てるときは `ops-r1-assemble` に `--b-cos-self-completed` を渡す。渡さなければ出力は従来と byte 一致する。
+決定の記録は `agent-docs/adr/2026-10-30-ops-r1-b-cos-self-completed.md`。
+
+- 検査: trace の created の reason が `no_task_create_operation`、trace の intake が `cos_run_id` を持ち、attribution にその `chat_runs` 行と
+  `finished_at` がある。`--b-stop` と同時は error。外れたら out を作らない。
+- outcome・reason: 受付の CoS run の `finished_at` が cutoff 以前なら `passed`・`cos_self_completed`、後なら `timeout`・`cos_self_completed`。
+  成功は従来どおり独立 grader の final_pass だけで数える。
+- wall: 受付の `accepted_at` から CoS run の `finished_at` までの秒（切り捨て）。timeout のときは `trial_timeout_secs`。
+- 消費: 試行の tokens は task の run の和（task が無ければ 0）。受付の CoS run は §4.6 と同じ共有の CoS 行として records.jsonl に写し、
+  final-accounting の `shared_unattributable.cos` に出る。CoS の model は `contract.conditions.B.cos_model` と照合する。
+- checker: reason `cos_self_completed` の試行は停止の試行と同じく、task の run が 0 件でも違反にしない（`is_taskless_reason`）。
+- trace は変えない（report stage は null のまま）。CoS の報告の時刻は attribution の chat run の終了時刻で受ける。
+
+試験: `ops_r1_pipeline_b_cos_self_completed_passes_the_stages`・`ops_r1_pipeline_b_cos_self_completed_after_cutoff_is_timeout`・
+`ops_r1_pipeline_b_cos_self_completed_rejects_task_trace_and_stop`（`crates/campaign/tests/ops_r1_pipeline_assemble.rs`）。
+
 ## 5. 旧系列を変えない根拠
 
 - manifest: 足す欄は `conditions` 1 つで、`skip_serializing_if = "BTreeMap::is_empty"`。旧 manifest（A0/B0/B1/C1、`mlsys-main-4-v4`）は
@@ -283,13 +302,14 @@ celeris-campaign ops-r1-attribution --db <rec>/db-copy.sqlite --thread <案件 C
 # 3. 公開入力 tgz を grade-case の隣に置く（置いてあれば何もしない）
 celeris-campaign stage-grader-inputs --manifest <m> --grade-case-root <grade-case> --inputs-src <公開入力の置き場>
 
-# 4. runner と同じ形の out と records.jsonl を組み立てる（--out は空 dir。B を停止記録で止めたときは --b-stop、§4.6）
+# 4. runner と同じ形の out と records.jsonl を組み立てる（--out は空 dir。B を停止記録で止めたときは --b-stop、§4.6。
+#    案件 CoS が起票せず自分で済ませた B を通常運用として閉じるときは --b-cos-self-completed、§4.7）
 celeris-campaign ops-r1-assemble $M $L \
   --a-raw <rec>/a/raw.json --a-artifact <A の成果物 dir の写し> \
   --b-intake <rec>/ops-r1-intake/1.json --b-trace <rec>/b/trace.json --b-attribution <rec>/b/attribution.json \
   --b-artifact <B の成果物 dir の写し> --b-observed-versions <rec>/b/observed-versions.json \
   --b-workspace-sha256-initial <B の初期 workspace の sha256> \
-  [--b-stop <rec>/stop.json] \
+  [--b-stop <rec>/stop.json | --b-cos-self-completed] \
   --out <rec>/out --records-out <rec>/dl/records.jsonl
 
 # 5. 採点・照合・export

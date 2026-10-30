@@ -574,10 +574,10 @@ fn ops_r1_pipeline_assemble_rejects_old_manifest_and_dirty_out() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("must be empty"));
 }
 
-/// B を停止記録（`ops-r1-stop/1`）で止めた形に stub を書き換え、`--b-stop` を足す（§4.5）。
-/// CoS が task を作らずに止まった B-t001 の形: trace は created 以降が欠測、attribution は試行に帰属しない CoS の行だけ。
-fn stopped_b(fx: &Fx, tag: &str, stop_trial: &str) -> Vec<String> {
-    let mut args = stubs(fx, &Stub::default(), tag);
+/// CoS が task を作らなかった B の形に stub を書き換える（B-t001・B-t002）: trace は created 以降が欠測、
+/// attribution は試行に帰属しない CoS の行だけ（`finished_at` は受付の CoS run の終了）。`--out` は足さない。
+fn taskless_b(fx: &Fx, tag: &str, cos_finished_at: &str) -> Vec<String> {
+    let args = stubs(fx, &Stub::default(), tag);
     let path_of = |args: &[String], k: &str| {
         let i = args.iter().position(|a| a == k).expect("arg");
         PathBuf::from(&args[i + 1])
@@ -599,18 +599,13 @@ fn stopped_b(fx: &Fx, tag: &str, stop_trial: &str) -> Vec<String> {
             "trial_id": null, "condition_id": null, "role": "cos_project", "role_raw": "project",
             "model": OPUS, "harness": "claude_code", "input_tokens": 30, "output_tokens": 12785,
             "cache_read_tokens": 485960, "cache_write_tokens": 51909, "wall_ms": 165976,
-            "cost_usd": 0.61, "cost_basis": "pricing_estimate"}]});
+            "cost_usd": 0.61, "cost_basis": "pricing_estimate",
+            "started_at": "2026-10-30T02:00:02Z", "finished_at": cos_finished_at}]});
     fs::write(path_of(&args, "--b-attribution"), attr.to_string()).expect("attr");
-    let stop = json!({"schema": "ops-r1-stop/1", "measurement_id": "mlsys-main-4-ops-r1-k4p1",
-        "stopped_at": "2026-10-30T02:03:49Z", "stop_id": "condition_drift", "trial_id": stop_trial,
-        "started_trials": [A_TRIAL, B_TRIAL], "not_started": [], "evidence": [],
-        "what": "the CoS ran the analysis itself without inputs/",
-        "decided_by": "external_operator:claude-code-x",
-        "decided_by_note": "applied runbook 4.2/8; no human has reviewed this stop yet",
-        "next": "人の判断待ち"});
-    let p = fx.d.join(format!("stub-{tag}")).join("stop.json");
-    fs::write(&p, stop.to_string()).expect("stop");
-    args.extend(["--b-stop".into(), p.display().to_string()]);
+    args
+}
+
+fn with_out(fx: &Fx, tag: &str, mut args: Vec<String>) -> Vec<String> {
     let out = fx.d.join(format!("out-{tag}"));
     args.extend([
         "--out".into(),
@@ -621,6 +616,22 @@ fn stopped_b(fx: &Fx, tag: &str, stop_trial: &str) -> Vec<String> {
             .to_string(),
     ]);
     args
+}
+
+/// B を停止記録（`ops-r1-stop/1`）で止めた形に stub を書き換え、`--b-stop` を足す（§4.6）。
+fn stopped_b(fx: &Fx, tag: &str, stop_trial: &str) -> Vec<String> {
+    let mut args = taskless_b(fx, tag, "2026-10-30T02:02:48Z");
+    let stop = json!({"schema": "ops-r1-stop/1", "measurement_id": "mlsys-main-4-ops-r1-k4p1",
+        "stopped_at": "2026-10-30T02:03:49Z", "stop_id": "condition_drift", "trial_id": stop_trial,
+        "started_trials": [A_TRIAL, B_TRIAL], "not_started": [], "evidence": [],
+        "what": "the CoS ran the analysis itself without inputs/",
+        "decided_by": "external_operator:claude-code-x",
+        "decided_by_note": "applied runbook 4.2/8; no human has reviewed this stop yet",
+        "next": "人の判断待ち"});
+    let p = fx.d.join(format!("stub-{tag}")).join("stop.json");
+    fs::write(&p, stop.to_string()).expect("stop");
+    args.extend(["--b-stop".into(), p.display().to_string()]);
+    with_out(fx, tag, args)
 }
 
 /// §4.5・§6: condition_drift で止めた B（task run 0 件）は分母に残り、非成功のまま check・grade-out・export・
@@ -791,4 +802,117 @@ fn ops_r1_pipeline_b_stop_rejects_a_foreign_trial() {
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(err.contains("--b-stop: trial_id"), "{err}");
     assert!(!fx.d.join("out-foreign").join("trials.jsonl").exists());
+}
+
+/// §4.7（人の判断 3）: 案件 CoS が起票せず自分で済ませた B は `--b-cos-self-completed` で受付の CoS run の終了に閉じる。
+/// 分母に残り、outcome は passed・reason cos_self_completed、試行の tokens は task の run の和（0）、CoS は共有の行。
+/// checker は task run 0 件を違反にせず、check・grade-out・final-accounting・export が通る。
+#[test]
+fn ops_r1_pipeline_b_cos_self_completed_passes_the_stages() {
+    let fx = fixture();
+    let mut args = taskless_b(&fx, "self", "2026-10-30T02:01:29.900Z");
+    args.push("--b-cos-self-completed".into());
+    let o = bin()
+        .args(with_out(&fx, "self", args))
+        .output()
+        .expect("spawn");
+    ok(&o, "assemble --b-cos-self-completed");
+    let (out, rec) = (fx.d.join("out-self"), fx.d.join("records-self.jsonl"));
+    let tr = trials(&out);
+    assert_eq!(tr.len(), 2, "denominator");
+    let b = &tr[1];
+    assert_eq!(
+        (
+            b["config"].as_str(),
+            b["outcome"].as_str(),
+            b["reason"].as_str()
+        ),
+        (Some("B"), Some("passed"), Some("cos_self_completed"))
+    );
+    assert_eq!(
+        b["wall_secs"], 89,
+        "accepted 02:00:00 → CoS run finished 02:01:29.9"
+    );
+    assert_eq!(b["tokens"], 0, "the CoS run is not trial consumption");
+    assert!(
+        b["observed"].as_array().is_none_or(|o| o.is_empty()),
+        "no task run is invented: {}",
+        b["observed"]
+    );
+    let text = fs::read_to_string(&rec).expect("records");
+    assert_eq!(
+        text.lines()
+            .filter(|l| l.contains("\"role\":\"cos\""))
+            .count(),
+        1,
+        "the CoS run named by the trace intake is a shared row: {text}"
+    );
+    assert!(!text.contains("trial_stop"), "{text}");
+
+    let cases = ["--cases".to_string(), fx.grade.display().to_string()];
+    ok(&stage(&fx, "grade-out", &out, &cases), "grade-out");
+    let rep = check(&fx, &out);
+    assert_eq!(rep["ok"], true, "check violations: {}", rep["violations"]);
+    assert_eq!(rep["recomputed"]["totals"]["B"]["n"], 1);
+    assert_eq!(rep["recomputed"]["totals"]["B"]["ran_trials"], 1);
+    let records = ["--records".to_string(), rec.display().to_string()];
+    let fa: Value = serde_json::from_str(&ok(
+        &stage(&fx, "final-accounting", &out, &records),
+        "final-accounting",
+    ))
+    .expect("fa json");
+    assert_eq!(
+        fa["shared_unattributable"]["cos"]["state"], "observed",
+        "{fa}"
+    );
+    let dest = fx.d.join("export-self");
+    let mut ex = records.to_vec();
+    ex.extend(["--dest".into(), dest.display().to_string()]);
+    ok(&stage(&fx, "export", &out, &ex), "export");
+}
+
+/// CoS run が cutoff の後に終わったら timeout（wall は trial_timeout）。reason は cos_self_completed のまま。
+#[test]
+fn ops_r1_pipeline_b_cos_self_completed_after_cutoff_is_timeout() {
+    let fx = fixture();
+    let mut args = taskless_b(&fx, "late", "2026-10-30T02:31:00Z");
+    args.push("--b-cos-self-completed".into());
+    ok(
+        &bin()
+            .args(with_out(&fx, "late", args))
+            .output()
+            .expect("spawn"),
+        "assemble",
+    );
+    let b = &trials(&fx.d.join("out-late"))[1];
+    assert_eq!(
+        (b["outcome"].as_str(), b["reason"].as_str()),
+        (Some("timeout"), Some("cos_self_completed"))
+    );
+    assert_eq!(b["wall_secs"], 1800);
+    assert_eq!(b["passed"], false);
+}
+
+/// trace に root task があるとき・`--b-stop` と同時のときは error で out を作らない。
+#[test]
+fn ops_r1_pipeline_b_cos_self_completed_rejects_task_trace_and_stop() {
+    let fx = fixture();
+    let mut args = stubs(&fx, &Stub::default(), "withtask");
+    args.push("--b-cos-self-completed".into());
+    let o = bin()
+        .args(with_out(&fx, "withtask", args))
+        .output()
+        .expect("spawn");
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("not no_task_create_operation"), "{err}");
+    assert!(!fx.d.join("out-withtask").join("trials.jsonl").exists());
+
+    let mut args = stopped_b(&fx, "both", B_TRIAL);
+    args.push("--b-cos-self-completed".into());
+    let o = bin().args(&args).output().expect("spawn");
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("exclusive"), "{err}");
+    assert!(!fx.d.join("out-both").join("trials.jsonl").exists());
 }

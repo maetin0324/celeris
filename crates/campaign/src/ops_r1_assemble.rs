@@ -6,6 +6,7 @@
 //! - 時刻・host・実行 path を出さない。同じ入力から 2 回作れば out と records.jsonl は byte 一致する。
 //! - B の CoS run の model が manifest の `contract.conditions.B.cos_model` と違えば条件逸脱として止める。
 //! - `--b-stop` に停止記録（`ops-r1-stop/1`）を渡すと、B は停止の理由で分母に残す（§4.5）。渡さなければ出力は変わらない。
+//! - `--b-cos-self-completed` を渡すと、案件 CoS が起票せず自分で済ませた B を受付の CoS run の終了で閉じる（§4.7）。
 use std::{
     collections::BTreeMap,
     fs,
@@ -49,6 +50,8 @@ pub const REASON_SAME_CAUSE_TWICE: &str = "same_cause_twice";
 pub const REASON_LIMIT_REACHED: &str = "limit_reached";
 pub const REASON_UNOBSERVED_USAGE: &str = "unobserved_usage";
 pub const REASON_LEAK: &str = "leak";
+/// 案件 CoS が task を起票せず自分で済ませた B（人の判断 3、§4.7）。
+pub const REASON_COS_SELF_COMPLETED: &str = "cos_self_completed";
 /// 測定者の停止で終わった試行の reason。checker は task run が 0 件でも違反にしない（§6）。
 pub const STOP_REASONS: &[&str] = &[
     REASON_OPERATOR_STOP,
@@ -70,10 +73,15 @@ pub fn is_stop_reason(reason: Option<&str>) -> bool {
     reason.is_some_and(|r| STOP_REASONS.contains(&r))
 }
 
+/// task の run が無くてよい試行の reason か（停止と、CoS が自分で済ませた B）。checker が使う。
+pub fn is_taskless_reason(reason: Option<&str>) -> bool {
+    is_stop_reason(reason) || reason == Some(REASON_COS_SELF_COMPLETED)
+}
+
 const USAGE: &str = "usage: celeris-campaign ops-r1-assemble --manifest <ops-r1 manifest> --input-manifest <json> \
 --a-raw <ops-r1-a-raw/1> --a-artifact <dir> --b-intake <ops-r1-intake/1> --b-trace <ops-r1-trace/1> \
 --b-attribution <ops-r1-attribution/2> --b-artifact <dir> --b-observed-versions <json> --b-workspace-sha256-initial <hex> \
---cases-root <dir> --grader-root <dir> --grade-case-root <dir> [--measurement-id <id>] [--b-stop <ops-r1-stop/1>] \
+--cases-root <dir> --grader-root <dir> --grade-case-root <dir> [--measurement-id <id>] [--b-stop <ops-r1-stop/1> | --b-cos-self-completed] \
 --out <empty dir> --records-out <file>";
 
 /// 引数。path は読むだけで、出力には書かない。
@@ -95,6 +103,8 @@ pub struct Args {
     pub measurement_id: Option<String>,
     /// B を止めた停止記録（`ops-r1-stop/1`）。
     pub b_stop: Option<PathBuf>,
+    /// 案件 CoS が起票せず自分で済ませた B を通常運用として閉じる（人の判断 3）。
+    pub b_cos_self_completed: bool,
     pub out: PathBuf,
     pub records_out: PathBuf,
 }
@@ -125,6 +135,7 @@ impl Args {
             grade_case_root: p("--grade-case-root")?,
             measurement_id: get("--measurement-id"),
             b_stop: get("--b-stop").map(PathBuf::from),
+            b_cos_self_completed: args.iter().any(|a| a == "--b-cos-self-completed"),
             out: p("--out")?,
             records_out: p("--records-out")?,
         })
@@ -483,6 +494,9 @@ fn arm_b(ctx: &Ctx, out: &Path, cond: &ConditionDecl, a: &Args) -> Result<Arm, S
         .as_deref()
         .map(|p| load_b_stop(p, &ctx.measurement_id, &trial))
         .transpose()?;
+    if stop.is_some() && a.b_cos_self_completed {
+        return Err("--b-stop and --b-cos-self-completed are exclusive".into());
+    }
     let all_rows = attr["rows"]
         .as_array()
         .ok_or("--b-attribution: rows missing")?;
@@ -492,7 +506,7 @@ fn arm_b(ctx: &Ctx, out: &Path, cond: &ConditionDecl, a: &Args) -> Result<Arm, S
         .collect();
     // 停止（§4.5）: root task が無いと attribution は CoS の chat run を試行に帰属させない（trial_id null）。
     // trace の受付が指す CoS run（intake.ref.cos_run_id）だけを共有の CoS 行として足す。
-    if stop.is_some()
+    if (stop.is_some() || a.b_cos_self_completed)
         && let Some(id) = intake_cos_run(&trace)
         && !rows.iter().any(|r| r["run_id"] == id)
     {
@@ -609,6 +623,27 @@ fn arm_b(ctx: &Ctx, out: &Path, cond: &ConditionDecl, a: &Args) -> Result<Arm, S
         rec.reason = Some((*reason).into());
         rec.wall_secs = secs_between(accepted, end);
     }
+    if a.b_cos_self_completed {
+        let end = cos_self_end(&trace, all_rows)?;
+        if end < accepted {
+            return Err(format!(
+                "--b-cos-self-completed: the CoS run finished before the intake {}",
+                intake["accepted_at"].as_str().unwrap_or_default()
+            ));
+        }
+        let cutoff = trace["cutoff"]
+            .as_str()
+            .map(|c| ts(c, "--b-trace cutoff"))
+            .transpose()?;
+        if cutoff.is_some_and(|c| end > c) {
+            rec.outcome = Outcome::Timeout;
+            rec.wall_secs = timeout;
+        } else {
+            rec.outcome = Outcome::Passed;
+            rec.wall_secs = secs_between(accepted, end).min(timeout);
+        }
+        rec.reason = Some(REASON_COS_SELF_COMPLETED.into());
+    }
     rec.passed = rec.outcome == Outcome::Passed;
     rec.observed = task_rows
         .iter()
@@ -661,6 +696,27 @@ fn arm_b(ctx: &Ctx, out: &Path, cond: &ConditionDecl, a: &Args) -> Result<Arm, S
         ledger,
         records,
     })
+}
+
+/// `--b-cos-self-completed`（§4.7）: CoS が起票しなかった trace で、受付の CoS run が終わった時刻。
+fn cos_self_end(trace: &Value, rows: &[Value]) -> Result<OffsetDateTime, String> {
+    let created = stage(trace, "created");
+    if created.is_none_or(|s| s["reason"] != "no_task_create_operation") {
+        return Err(
+            "--b-cos-self-completed: the trace created stage is not no_task_create_operation"
+                .into(),
+        );
+    }
+    let id =
+        intake_cos_run(trace).ok_or("--b-cos-self-completed: the trace intake names no CoS run")?;
+    let row = rows
+        .iter()
+        .find(|r| r["source"] == "chat_runs" && r["run_id"] == id)
+        .ok_or_else(|| format!("--b-cos-self-completed: CoS run {id} is not in the attribution"))?;
+    let at = row["finished_at"]
+        .as_str()
+        .ok_or_else(|| format!("--b-cos-self-completed: CoS run {id} has no finished_at"))?;
+    ts(at, "--b-attribution finished_at")
 }
 
 /// CoS（chat_runs の行）の model が宣言と一致するか。欠測も逸脱として止める。

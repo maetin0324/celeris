@@ -206,9 +206,9 @@ fn reconcile_set_fixed(
     let mut run_ids: BTreeMap<&str, &str> = BTreeMap::new();
     for (arm, tag, r) in trials.iter().filter(|(a, _, _)| arms.contains(a)) {
         let _ = arm;
-        // 測定者の停止で終わった試行（ops-r1 §4.5）は task の run に届く前に止まりうる。run が 0 件・worker が
-        // 居ないことだけでは違反にせず、観測できた run は下の固定欄の照合にかける。
-        let stopped = crate::ops_r1_assemble::is_stop_reason(r.reason.as_deref());
+        // 測定者の停止で終わった試行（ops-r1 §4.6）と CoS が起票せず済ませた B（§4.7）は task の run が無くてよい。
+        // run が 0 件・worker が居ないことだけでは違反にせず、観測できた run は下の固定欄の照合にかける。
+        let stopped = crate::ops_r1_assemble::is_taskless_reason(r.reason.as_deref());
         if r.observed.is_empty() {
             if !stopped {
                 out.insert(format!("{tag}: set fixed declared but no run was observed"));

@@ -207,7 +207,7 @@ config は `ops-r1-measure-config.sh` の生成物を使い、`--state` を試�
 
 - OS: `celeris-eval` の uid・group の作成、`EVAL_ROOT`（0700）・drop box（1733）・outbox（0755）の作成、採点 wrapper と
   採点 binary の配置（`celeris-eval` 持ち、人の uid は書けない）、評価器の起動方法（狭い sudo 規則か `sudo -iu`）の設定。sudo は人が実行する。
-- 評価材料の移動: 正式試行に使う case の private を `EVAL_ROOT/private/<case>/` に置き、repo の HEAD から消す（「人に決めてもらう点」の 1 の答えによる）。
+- 評価材料の移動: 正式試行に使う case の private を `EVAL_ROOT/private/<case>/` に置き、repo の HEAD から消す（「人に決めてもらう点」の 1 の答えによる）。K2 は作り直した private を repo の外で作って置く（付記 2026-10-30、K2 の private の作り直し）。
 - credential: 測定専用の Claude account dir を B の測定 daemon 用と実験専用 operator session 用に用意する（人が `CLAUDE_CONFIG_DIR=<新しい dir>` で 1 回 login）。
   人が普段使う account dir をそのまま渡さない（`projects/` に過去の解答が入るため）。既存の credential は消さない。
 - 本番設定: 変更なし。本番 daemon・本番 DB・`~/.config/celeris` は触らない。測定 daemon の config は試行ごとに生成する。
@@ -216,6 +216,7 @@ config は `ops-r1-measure-config.sh` の生成物を使い、`--state` を試�
 ## 人に決めてもらう点
 
 1. K2 の private.json は git の履歴に残っている。L2（runtime の mount 許可表）で試行の主体から塞いだうえで K2 をそのまま使うか、K2 の private を作り直すか。
+   **回答済み（2026-10-30、人の決定 k2-private-in-git = reauthor）**: K2 の private を作り直し、新しいものは repo に入れない。決定と影響は付記（2026-10-30、K2 の private の作り直し）。
 2. 固定依頼文を operator が relay するとき、取り次ぐ本文を「人が承認票で承認した文」（`source.kind=approved_request`）として扱ってよいか。
    代わりの案は、人が自分の画面で測定 daemon の案件 CoS thread に依頼文を送る（人の token は人だけが持つ。web の gateway を測定 daemon に向ける準備が要る）。
 
@@ -264,6 +265,25 @@ open は EACCES になり、`deny_readable` 0 件で preflight が通った。�
   （library と実 binary）が止まり、漏洩検査が `same_uid` を残すことを確かめる。通過の規則は run の uid を注入した単体試験で確かめ、
   実 binary の通過は host にある他 uid 持ちの dir（中の path は存在しない）で確かめる。`celeris-eval` が持つ実在の private で通る確認は、
   人の準備の後に人が行う（運用文書 §4.7）。
+
+## 付記（2026-10-30）: K2 の private の作り直し（人の決定 k2-private-in-git = reauthor）
+
+task 01M669QB069GND2ZKA1T97QPY9 の final review（criterion 4）の差し戻しによる。「人に決めてもらう点」1 に人が reauthor と答えた。
+
+- **決定**: K2（`k2-bf-xattr-restart-campaign`）の private.json を作り直す。新しい private は repo に入れない（commit しない、
+  repo の作業ツリー・Celeris の作業場所・KB・artifacts にも置かない）。
+- **作る主体と置き場所**: 人（または人が `sudo -iu celeris-eval` で入った評価器 uid の shell）が repo の外で作り、
+  `EVAL_ROOT/private/final/<case>/private.json`（`/var/lib/celeris-eval/private/final/k2-bf-xattr-restart-campaign/private.json`）に
+  持ち主 `celeris-eval`・0400 で置く。Celeris の worker・CoS・外部 operator は新しい private を見ない・作らない。
+- **照合**: 新しい private の sha256 を人が承認票に書く。開始前チェックと採点の照合は、承認票に書いたこの値だけで行う。
+  旧 private（repo の `crates/campaign/fixtures/grader-private/final/<case>/private.json` と git の履歴にあるもの）の sha256 では照合しない。
+- **旧 private の扱い**: 漏洩済みの旧解答として扱い、K2 の正式試行の採点には使わない。repo の path は deny list に残す
+  （旧解答として L2 で試行の主体から塞ぐ。D1・D3 のまま）。repo の旧 file を HEAD から消すかは、この付記では決めない（消す変更は別に行う）。
+- **影響（未対応で残る点）**: `CaseSet::load`（`crates/campaign/src/cases.rs`）は公開部 `case.json` の `private_ref.sha256` と
+  private の実 file の sha256 を照合する。repo の K2 の `case.json` は旧 private の値を持つので、新しい private を `--grader-root` で
+  読むと `private file hash mismatch` で止まる。正式試行の前に、`case.json` の `private_ref.sha256` を新しい値に替える変更（中身ではなく
+  hash だけを公開部に書く。manifest の再 freeze を伴う）が要る。この付記ではコードと fixture を変えない（運用文書と進捗の残件に書く）。
+- 手順は `docs/ops/ops-r2-isolation.md` §4.5、開始前チェックは `docs/ops/ops-r2-k2-preflight.md` §0・§1。
 
 ## 関連
 

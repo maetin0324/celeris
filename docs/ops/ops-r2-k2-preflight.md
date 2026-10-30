@@ -16,12 +16,13 @@ K2（`k2-bf-xattr-restart-campaign`）を ops-r2 の条件で正式に試行す�
 
 ## 0. 人の準備が済んでいる
 
-[入力隔離 §4](ops-r2-isolation.md#4-人が実行する準備手順) の 4.1〜4.7 を人が済ませている。加えて次を人が決めている。
+[入力隔離 §4](ops-r2-isolation.md#4-人が実行する準備手順) の 4.1〜4.7 を人が済ませている。加えて次が済んでいる。
 
 | 項目 | 確かめ方 | 期待 |
 |---|---|---|
-| K2 の private の扱い（ADR「人に決めてもらう点」1。git の履歴に残る private をそのまま使うか、作り直すか） | 承認票の欄 | 答えが書いてある。未回答なら始めない |
-| 承認票の欄（試行数・上限・model・account・停止条件・期限・固定依頼文の sha256・deny list・実験専用 session の id・評価器の起動方法） | 承認票を開く | すべて人が埋めている。operator が空欄を埋めていない（K4 の逸脱を繰り返さない） |
+| K2 の新しい private（人の決定 k2-private-in-git = reauthor。ADR 付記 2026-10-30「K2 の private の作り直し」） | 承認票の「K2 の新しい private の sha256」欄。作成は [入力隔離 §4.5](ops-r2-isolation.md#45-正式-case-の新しい-private-を-repo-の外で作り-eval_root-に置く) | 人（または評価器 uid の shell）が repo の外で作り、`$EVAL_ROOT/private/final/$case/private.json` に `celeris-eval` 持ち 0400 で置き、§4.5 の書式確認が `ok`、sha256 を人が承認票に書いている。欄が空なら始めない |
+| K2 の `case.json` の `private_ref.sha256` | `python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["private_ref"]["sha256"])' crates/campaign/cases/final/$case/case.json` | 承認票の新しい private の sha256 と同じ。違えば grader の読込が `private file hash mismatch` で止まるので始めない（2026-10-30 の時点では未対応で、一致しない） |
+| 承認票の欄（試行数・上限・model・account・停止条件・期限・固定依頼文の sha256・K2 の新しい private の sha256・deny list・実験専用 session の id・評価器の起動方法） | 承認票を開く | すべて人が埋めている。operator が空欄を埋めていない（K4 の逸脱を繰り返さない） |
 | 評価器の uid | `id celeris-eval`、`id -nG` | uid がある。人の uid の groups に `celeris-eval` が無い |
 | 測定専用 account dir（B 用・operator 用の 2 つ） | `ls -A <dir>` | `.credentials.json` があり、`projects/`・`memory/` が無い |
 
@@ -30,13 +31,15 @@ K2（`k2-bf-xattr-restart-campaign`）を ops-r2 の条件で正式に試行す�
 試行の主体は release dir を ro で見る（L2 の許可表の中）。ここに private の写しがあると deny list と mountinfo では見つからない。
 
 ```sh
-sha256sum "$EVAL_ROOT/private/final/$case/private.json"   # 評価器の uid で。承認票の sha256 と一致
+sha256sum "$EVAL_ROOT/private/final/$case/private.json"   # 評価器の uid（celeris-eval の shell）で。承認票の「K2 の新しい private の sha256」と一致
 grep -rlaF false_claim_traps "$R" | wc -l                  # 0
 find "$R" -path '*grader-private*' | wc -l                 # 0
 ```
 
+照合に使うのは承認票の新しい private の sha256 だけ。repo と git の履歴にある旧 private（漏洩済みの旧解答）の sha256 とは比べない。
+
 `grep -rlaF grader-private "$R"` が `notes.md`・`notes.json`・`promote.log` だけを返すのは、release の変更記録に path 名が出るためで問題ない。
-2026-10-30 に `/local/celeris/state/releases` の 4 件で確かめた結果: `false_claim_traps` 0 件、K2 の hidden command の先頭 60 byte 0 件、
+2026-10-30 に `/local/celeris/state/releases` の 4 件で確かめた結果: `false_claim_traps` 0 件、K2 の旧 private の hidden command の先頭 60 byte 0 件（新しい private は repo に入らないので release にも入らない）、
 `grader-private` の文字列は notes と promote.log だけ（release に `celeris-campaign` の binary は入っていない）。
 
 ## 2. 測定 daemon の config に人の token が無い
@@ -55,7 +58,7 @@ grep -c 'principal = "operator:ops-r1"' "$S/../daemon.toml"   # 1
 deny list（1 行 1 絶対 path）は承認票の deny list を実在の path に展開して書く。最低限、次を入れる。
 
 - `$EVAL_ROOT/private/final/$case/private.json`
-- 人の repo clone と Celeris の作業場所の clone の `crates/campaign/fixtures/grader-private/final/$case/private.json`
+- 人の repo clone と Celeris の作業場所の clone の `crates/campaign/fixtures/grader-private/final/$case/private.json`（漏洩済みの旧 private。旧解答として塞ぐ）
   （`/home/rmaeda/workspace/agent-platform/...` と `/local/celeris/data/workspaces/*/repos/agent-platform/...` を展開した path）
 - 過去の campaign の out と試行の artifacts の中の file（K4 の `artifacts/ops-r1/` 等）
 - 本番 KB の root の中の file、`~/.claude` と `~/.config/celeris` の中の file、測定用以外の account dir の中の file

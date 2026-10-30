@@ -52,6 +52,7 @@ pub mod preflight;
 pub mod record;
 pub mod report;
 pub mod runner;
+pub mod runtime_probe;
 pub mod series;
 pub mod snapshot;
 pub mod ssh_qstat;

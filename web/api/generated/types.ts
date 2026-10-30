@@ -372,7 +372,7 @@ export type AutoReplanSource = "integration" | "work_unit";
 
 export type BackoffCause = "retry" | "infra";
 
-export type BasisCategory = "within_approved_frame" | "raise_once" | "documented_default" | "work_guidance" | "review_rework";
+export type BasisCategory = "within_approved_frame" | "raise_once" | "documented_default" | "work_guidance" | "review_rework" | "plan_conforms";
 
 export type BasisFailures = {
   "current": string;
@@ -386,6 +386,11 @@ export type BasisFrame = {
   "requested": number;
   "unit": string;
   "used": number;
+};
+
+export type BasisPlan = {
+  "guarded_stages"?: Array<GuardedStage>;
+  "plan_id": string;
 };
 
 export type BasisRef = {
@@ -1883,6 +1888,7 @@ export type DelegatedBasis = {
   "category": BasisCategory;
   "failures"?: BasisFailures | null;
   "frame"?: BasisFrame | null;
+  "plan"?: BasisPlan | null;
   "refs": Array<BasisRef>;
 };
 
@@ -3189,6 +3195,12 @@ export type GraphNode = {
   "role"?: string | null;
   "status": Status;
   "title": string;
+};
+
+export type GuardedStage = {
+  "guard": StageGuardKind;
+  "id": string;
+  "stage": string;
 };
 
 export type HaltState = "paused" | "cancelled" | "archived";
@@ -5711,6 +5723,8 @@ export type SnapshotTaskWait = {
   "task_id": TaskId;
   "wait": TaskWait;
 };
+
+export type StageGuardKind = "review_human" | "standing_rule" | "decision" | "approval";
 
 export type StageHint = {
   "scope"?: string;

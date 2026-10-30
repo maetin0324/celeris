@@ -18,7 +18,9 @@ use task_ops::human_inbox::InboxKind;
 
 use crate::problem::{ApiProblem, store_problem};
 
+mod plan_conforms;
 mod review_rework;
+pub use plan_conforms::{BasisPlan, GuardedStage, StageGuardKind};
 pub(crate) use review_rework::REOPEN_OPTION;
 
 /// The option key of a run-time tree limit decision that adds one allowance (ADR-0079 D7).
@@ -41,6 +43,8 @@ pub enum BasisCategory {
     WorkGuidance,
     /// (e) Reopen a task the reviewer failed for a technical defect (ADR 2026-10-29-cos-review-rework-reopen).
     ReviewRework,
+    /// (f) Approve a plan gate whose plan has nothing out of the ordinary (ADR 2026-10-30-cos-plan-conforms-approve).
+    PlanConforms,
 }
 
 impl BasisCategory {
@@ -51,6 +55,7 @@ impl BasisCategory {
             BasisCategory::DocumentedDefault => "documented_default",
             BasisCategory::WorkGuidance => "work_guidance",
             BasisCategory::ReviewRework => "review_rework",
+            BasisCategory::PlanConforms => "plan_conforms",
         }
     }
 }
@@ -123,6 +128,9 @@ pub struct DelegatedBasis {
     pub frame: Option<BasisFrame>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failures: Option<BasisFailures>,
+    /// (f) `plan_conforms` only: the plan version CoS read and the guard of each sensitive stage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<BasisPlan>,
 }
 
 /// What the answer targets, as far as the API knows it.
@@ -142,6 +150,8 @@ pub(crate) const BASIS_OVER_FRAME: &str = "cos_basis_over_frame";
 pub(crate) const BASIS_REPEATED_FAILURE: &str = "cos_basis_repeated_failure";
 pub(crate) const BASIS_RAISE_ONCE_USED: &str = "cos_basis_raise_once_used";
 pub(crate) const BASIS_REWORK_LIMIT: &str = "cos_basis_rework_limit";
+pub(crate) const BASIS_PLAN_UNGUARDED: &str = "cos_basis_plan_unguarded";
+pub(crate) const BASIS_PLAN_CHURN: &str = "cos_basis_plan_churn";
 
 fn problem(code: &'static str, detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::UNPROCESSABLE_ENTITY, code, detail)
@@ -151,7 +161,8 @@ pub(crate) fn missing() -> ApiProblem {
     problem(
         BASIS_MISSING,
         "a CoS answer without instructed_by needs basis (within_approved_frame, raise_once, \
-         documented_default, work_guidance or review_rework with its evidence); otherwise escalate",
+         documented_default, work_guidance, review_rework or plan_conforms with its evidence); \
+         otherwise escalate",
     )
 }
 
@@ -234,7 +245,24 @@ pub(crate) fn validate(
     if basis.failures.is_some() && category != BasisCategory::RaiseOnce {
         return Err(invalid("basis.failures belongs to raise_once only".into()));
     }
+    if basis.plan.is_some() && category != BasisCategory::PlanConforms {
+        return Err(invalid("basis.plan belongs to plan_conforms only".into()));
+    }
     let option = target.option.as_deref();
+    // ADR 2026-10-30-cos-plan-conforms-approve D3: approving a plan takes the plan checks (or a
+    // numeric frame); the gate always recommends approve, so documented_default would skip them.
+    if target.kind == Some(InboxKind::PlanGate)
+        && option == Some(plan_conforms::APPROVE_OPTION)
+        && !matches!(
+            category,
+            BasisCategory::PlanConforms | BasisCategory::WithinApprovedFrame
+        )
+    {
+        return Err(invalid(
+            "approving a plan gate needs basis.category=plan_conforms (or within_approved_frame)"
+                .into(),
+        ));
+    }
     if option == Some(review_rework::REOPEN_OPTION)
         && target.kind == Some(InboxKind::Failed)
         && category != BasisCategory::ReviewRework
@@ -287,7 +315,7 @@ pub(crate) fn validate(
                     "basis.frame needs finite limit > 0, used >= 0 and requested > 0".into(),
                 ));
             }
-            approved_frame(store, frame).map_err(|why| match why {
+            approved_frame(store, frame.kind, &frame.id).map_err(|why| match why {
                 FrameError::Store(p) => p,
                 FrameError::Invalid(detail) => invalid(detail),
             })?;
@@ -387,6 +415,7 @@ pub(crate) fn validate(
             }
         }
         BasisCategory::ReviewRework => review_rework::validate(store, basis, target)?,
+        BasisCategory::PlanConforms => plan_conforms::validate(store, basis, target)?,
     }
     Ok(())
 }
@@ -396,11 +425,11 @@ enum FrameError {
     Invalid(String),
 }
 
-/// The frame must point at a human approval in the store.
-fn approved_frame(store: &SqliteStore, frame: &BasisFrame) -> Result<(), FrameError> {
-    let id = frame.id.trim();
+/// The frame (or a plan stage guard) must point at a human approval in the store.
+fn approved_frame(store: &SqliteStore, kind: FrameKind, id: &str) -> Result<(), FrameError> {
+    let id = id.trim();
     let store_err = |e| FrameError::Store(store_problem(e));
-    match frame.kind {
+    match kind {
         FrameKind::StandingRule => {
             let rules = store.standing_rule_list(None).map_err(store_err)?;
             if rules.iter().any(|r| r.id.to_string() == id) {

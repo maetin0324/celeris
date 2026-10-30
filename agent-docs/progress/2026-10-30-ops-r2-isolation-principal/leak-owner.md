@@ -27,7 +27,10 @@ ADR は `agent-docs/adr/2026-10-30-ops-r2-isolation-principal.md`。前の attem
 
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
 - `python3 -I scripts/campaign/test_check_ops_r1_leak.py` → exit 0（Ran 35 tests, OK）
-- `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` の結果は下の追記に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（Rust の試験対象なし。scripts・docs の検査は合格）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `sh scripts/dev/progress-index.sh --check` → exit 0
 
 ## 未解決事項
 - `agent-docs/progress/2026-10-30-ops-r2-isolation-principal/leak-runtime.md` と isolate.md・ADR 付記・`docs/ops/ops-r2-isolation.md` の記述は、後段の WU docs-align が新しい規則に合わせる（この WU の範囲外）。

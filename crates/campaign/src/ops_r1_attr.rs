@@ -20,7 +20,7 @@ use crate::ops_r1_trace::{
     open_copy, parse_ts, project_thread, trial_tasks,
 };
 
-pub const SCHEMA: &str = "ops-r1-attribution/1";
+pub const SCHEMA: &str = "ops-r1-attribution/2";
 
 const USAGE: &str = "usage: celeris-campaign ops-r1-attribution --db <DB の写し> --thread <案件 CoS thread id> \
 --trial-id <id> --condition-id <id> --cutoff <RFC3339 UTC> [--intake-record <ops-r1-intake の JSON>] --out <attribution.json>";
@@ -81,6 +81,8 @@ pub struct Row {
     pub condition_id: Option<String>,
     pub role: Option<String>,
     pub role_raw: Option<String>,
+    pub model: Option<String>,
+    pub harness: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub input_tokens: Option<u64>,
@@ -229,6 +231,8 @@ struct Raw {
     task_id: Option<String>,
     thread_id: Option<String>,
     role_raw: Option<String>,
+    model: Option<String>,
+    harness: Option<String>,
     started: Option<String>,
     finished: Option<String>,
     usage_json: Option<String>,
@@ -239,10 +243,12 @@ struct Raw {
 
 fn runs_rows(conn: &Connection) -> Result<Vec<Raw>, TraceError> {
     let mut stmt = conn
-        .prepare("SELECT run_id, task_id, role, started_at, finished_at, usage_json FROM runs")
+        .prepare("SELECT run_id, task_id, role, started_at, finished_at, usage_json, model, adapter FROM runs")
         .map_err(read_err)?;
     stmt.query_map([], |r| {
         Ok(Raw {
+            model: r.get(6)?,
+            harness: r.get(7)?,
             source: "runs",
             run_id: r.get(0)?,
             task_id: Some(r.get(1)?),
@@ -270,6 +276,8 @@ fn chat_rows(conn: &Connection) -> Result<Vec<Raw>, TraceError> {
     stmt.query_map([], |r| {
         let kind: Option<String> = r.get(2)?;
         Ok(Raw {
+            model: None,
+            harness: None,
             source: "chat_runs",
             run_id: r.get(0)?,
             task_id: None,
@@ -467,6 +475,8 @@ pub fn build(args: &AttrArgs) -> Result<Attribution, TraceError> {
             source: raw.source,
             role: role_of(&raw),
             role_raw: raw.role_raw.clone(),
+            model: raw.model.clone(),
+            harness: raw.harness.clone(),
             run_id: raw.run_id,
             task_id: raw.task_id,
             thread_id: raw.thread_id,

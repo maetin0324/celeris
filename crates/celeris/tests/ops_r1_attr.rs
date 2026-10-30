@@ -40,7 +40,7 @@ fn ops_r1_attr_rows_and_totals_match_fixture() {
     let f = AttrFixture::new(Shape { report: true });
     let (code, v, _) = attr(&f, "attr.json", CUTOFF);
     assert_eq!(code, 0);
-    assert_eq!(v["schema"], "ops-r1-attribution/1");
+    assert_eq!(v["schema"], "ops-r1-attribution/2");
     assert_eq!(v["trial_id"], TRIAL);
     assert_eq!(v["condition_id"], CONDITION);
     assert_eq!(v["thread_id"], f.base.thread);
@@ -252,4 +252,44 @@ fn ops_r1_attr_rejects_bad_input_with_exit_2() {
     args[i + 1] = f.general_thread.clone();
     assert_eq!(ops_r1_attr::cli(&args), 2);
     assert!(!out.exists());
+}
+
+#[test]
+fn ops_r1_pipeline_attribution_v2_copies_model_and_harness_read_only() {
+    let f = AttrFixture::new(Shape { report: true });
+    {
+        let conn = rusqlite::Connection::open(&f.base.copy).unwrap();
+        for (run, model, harness) in [
+            ("run-planner-1", "claude-sonnet-5-5", "claude_code"),
+            ("run-worker-1", "stub-model", "stub-harness"),
+        ] {
+            conn.execute(
+                "UPDATE runs SET model=?1, adapter=?2 WHERE run_id=?3",
+                rusqlite::params![model, harness, run],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "UPDATE runs SET model=NULL, adapter=NULL WHERE run_id='run-reviewer-1'",
+            [],
+        )
+        .unwrap();
+    }
+    let before = sha(&f.base.copy);
+    let (code, v, first) = attr(&f, "v2-first.json", CUTOFF);
+    assert_eq!(code, 0);
+    assert_eq!(v["schema"], "ops-r1-attribution/2");
+    assert_eq!(row(&v, "run-planner-1")["model"], "claude-sonnet-5-5");
+    assert_eq!(row(&v, "run-planner-1")["harness"], "claude_code");
+    assert_eq!(row(&v, "run-worker-1")["model"], "stub-model");
+    assert_eq!(row(&v, "run-worker-1")["harness"], "stub-harness");
+    for run in ["run-reviewer-1", COS_RUN] {
+        assert!(row(&v, run)["model"].is_null());
+        assert!(row(&v, run)["harness"].is_null());
+    }
+    assert_eq!(attr(&f, "v2-second.json", CUTOFF).2, first);
+    assert_eq!(sha(&f.base.copy), before);
+    for suffix in ["-wal", "-shm", "-journal"] {
+        assert!(!std::path::PathBuf::from(format!("{}{suffix}", f.base.copy.display())).exists());
+    }
 }

@@ -303,9 +303,12 @@ task 01M669QB069GND2ZKA1T97QPY9 の final review（criterion 4）の差し戻し
 - G1 採点は repo の grade-case を使わない。repo の `crates/campaign/fixtures/grade-cases/final/k2-bf-xattr-restart-campaign/` 一式は
   旧 private から生成され、旧い hidden command と hidden 試験を含む漏洩済みの旧解答として扱う。採点の grade-case は評価器 uid が
   `EVAL_ROOT/grade-cases/final/<case>/` に生成する。生成の道具は `celeris-campaign gen-grade-case`（既存の `grade_case_gen::generate` を使う。
-  入力は `EVAL_ROOT/private/final/<case>/private.json` と、評価器が置く hidden 試験 file の dir `EVAL_ROOT/hidden-tests/final/<case>/`）。
-  stdout には生成物の sha256 だけを出し、中身・path の一覧は stdout/stderr に出さない。hidden 試験の dir が無い・空のときは拒否する
+  入力は `EVAL_ROOT/private/final/<case>/private.json` と、評価器が置く hidden 試験 file の dir `EVAL_ROOT/hidden-tests/final/<case>/hidden/`。
+  その下の相対 path がそのまま grade-case の `hidden/` に入り、作業 dir に挿入される。`.grader/run.sh` があれば評価 command の wrapper にする）。
+  stdout には生成物 `<case>.json` の sha256 だけを出し、中身・path の一覧は stdout/stderr に出さない（誤りは固定の短い文。
+  `generate` の誤り文は private の command を含みうるので返さない）。hidden 試験の dir が無い・空のとき、symlink・特殊 file があるときは拒否する
   （private の expected が hidden 試験を求めるのに hidden_command だけの grade-case を作ると、採点が仕様より弱くなるため）。
+  出力先の dir が既にあれば拒否する（古い file が混ざらないように。作り直すときは評価器が先に退ける）。
 - G2 `ops-r2-grade.py` は `--grade-case-root EVAL_ROOT/grade-cases` を固定で付け、引数の `--grade-case-root` を拒む（`--grader-root` と同じ扱い）。
 - G3 `ops-r2-set-private-sha.py` は `--grade-case-sha256` を受け、人が渡す 2 つの値で `case.json` の `private_ref.sha256` と
   `grade_case_ref.sha256` を替える。repo の旧 grade-case の sha256（`f84089bcf161edab75bfc619574c112de446b75622f893323f43405190aca593`）は拒否する。

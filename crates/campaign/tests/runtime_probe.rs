@@ -297,3 +297,20 @@ fn preflight_principals_probe_with_their_real_wrapping() {
         [format!("deny_readable:L1:{}", hidden.display())]
     );
 }
+
+/// l1 は持ち主の uid の分離だけを確かめる。mount の外への到達は報告に残すが判定に入れない
+/// （ADR 2026-10-30-ops-r2-isolation-principal 付記 G6、運用文書 §4.7）。他の principal は従来どおり mount で落ちる。
+#[test]
+fn l1_principal_reports_mounts_but_does_not_fail_on_them() {
+    let d = tempfile::tempdir().unwrap();
+    let deny = [d.path().join("absent/secret")];
+    let other = probe("runtime", &deny, &[]).unwrap();
+    assert!(!other.mounts_outside_allow.is_empty());
+    assert!(!other.ok);
+    let l1 = probe("l1", &deny, &[]).unwrap();
+    assert!(!l1.mounts_outside_allow.is_empty());
+    assert!(l1.ok);
+    let file = d.path().join("secret");
+    fs::write(&file, "x").unwrap();
+    assert!(!probe("l1", &[file], &[]).unwrap().ok);
+}

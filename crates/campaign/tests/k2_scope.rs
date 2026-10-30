@@ -1,4 +1,7 @@
 //! K2 の判定範囲（ADR 2026-10-18-k2-judged-scope）: 実装と実験だけを判定し、分析・レビューは判定せず主張もさせない。
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -24,7 +27,7 @@ fn root() -> PathBuf {
 
 fn case() -> Case {
     serde_json::from_slice(
-        &fs::read(root().join("cases/final").join(K2).join("case.json")).expect("read"),
+        &fs::read(support_cases::cases_root().join("final").join(K2).join("case.json")).expect("read"),
     )
     .expect("case")
 }
@@ -53,7 +56,7 @@ fn k2_case_declares_what_is_and_is_not_judged() {
 #[test]
 fn judged_scope_outside_stages_is_rejected() {
     let mut v: serde_json::Value = serde_json::from_slice(
-        &fs::read(root().join("cases/final").join(K2).join("case.json")).expect("r"),
+        &fs::read(support_cases::cases_root().join("final").join(K2).join("case.json")).expect("r"),
     )
     .expect("j");
     v["judged_scope"] = serde_json::json!(["implementation", "deploy"]);

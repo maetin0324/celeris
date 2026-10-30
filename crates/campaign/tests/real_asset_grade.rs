@@ -3,6 +3,9 @@
 //! (2) env_failure と model_failure の分離。(3) grader/入力を変えたら lock と合わない（旧 lock で採点できない）。
 //! (4) 実物検証: `CAMPAIGN_ASSET_DIR=<dir>` のときだけ asset store の実物で同じ手順を通す
 //!     （`sh crates/campaign/scripts/verify-real-assets.sh <asset_dir>` が設定する。設定時は欠落・不一致を必ず失敗にする）。
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -303,7 +306,7 @@ fn k2_build_command_enables_the_transport_feature_the_initial_tree_needs() {
         "baseline は隠しテストを挿入しない"
     );
     let cj: Value = serde_json::from_str(
-        &fs::read_to_string(root().join("cases/final").join(K2).join("case.json")).expect("case"),
+        &fs::read_to_string(support_cases::cases_root().join("final").join(K2).join("case.json")).expect("case"),
     )
     .expect("json");
     assert_eq!(
@@ -599,7 +602,7 @@ fn committed_case_pins_equal_the_grade_case_files_on_disk() {
     // case.json の grade_case_ref と、実際の grade-case file の hash が一致する（変えたら更新を強いる）。
     for id in [K2, K4] {
         let cj: Value = serde_json::from_str(
-            &fs::read_to_string(root().join("cases/final").join(id).join("case.json"))
+            &fs::read_to_string(support_cases::cases_root().join("final").join(id).join("case.json"))
                 .expect("case.json"),
         )
         .expect("json");

@@ -323,3 +323,26 @@ task 01M669QB069GND2ZKA1T97QPY9 の final review（criterion 4）の差し戻し
 - G6 L1 probe の mount 判定: `probe-read --principal l1` は持ち主の uid の分離だけを確かめる主体なので、`mounts_outside_allow`
   （bwrap の mount の外への到達）は判定に入れず、報告欄に残すだけにする。`--allow` が無い l1 の probe は deny path が全て
   readable:false・listable:false なら ok:true・exit 0 とする（§4.7 の期待に合わせる）。runtime principal の判定は変えない。
+
+## 付記 2026-10-30「K2 の採点を評価器 uid で通す」（task 01M678HHSHGT3Y5J4H7RRYFXD8）
+
+release 0acf217a2c89 の実機確認で、wrapper 経由の採点が exit 64 で止まり、sudo 下で cargo が見つからなかったことによる。
+
+- H1 wrapper は `celeris-campaign` の argv を自分で組み、呼び出し側の自由な引数を受けない。呼び出しは
+  `grade <case> <tgz> <sha256>` だけで、wrapper は `celeris-campaign grade --case EVAL_ROOT/grade-cases/final/<case>/<case>.json
+  --artifact <work>/artifact --work <work>/grade` を走らせ、stdout の判定 JSON を `<work>/verdict.json` に書く。leak 検査は
+  `EVAL_ROOT/private/final/<case>/private.json` を使う。G2 の `--grade-case-root` 付与・`--grader-root` 付与と、引数の
+  `{work}`・`{verdict}` 置換・`..`・絶対 path の検査は消す（`grade`・`grade-out` はどちらもこの欄を読まない）。
+  grade の exit 1（不合格）は採点の成功として扱い、判定 JSON が無いときだけ失敗にする。
+- H2 wrapper は子 process の環境を固定で組む。評価器 uid の home（`pwd.getpwuid(os.getuid())`）から
+  `PATH=<home>/.cargo/bin:/usr/local/bin:/usr/bin:/bin`・`CARGO_HOME=<home>/.cargo`・`RUSTUP_HOME=<home>/.rustup`・`HOME`・
+  `CARGO_NET_OFFLINE=true` を与え、呼び出し側の環境は継がない。sudo の env_reset・secure_path（§4.4 案 1 の 1 行）のままで動く。
+  toolchain と crate cache（K2 初期 tree の `cargo fetch --locked`）の準備は §4.3・§4.4 に書く。
+- H3 grader の env 判定は sh/dash の「`<name>: not found`」（行末が `: not found`）を env_failure に数える。
+- H4 `grade-out` は `--work <dir>` を受け、work_root にする（無ければ system temp dir のまま）。wrapper の `grade` は
+  `<work>/grade`（EVAL_ROOT/work の下）を使う。
+- H5 試行の出力の tgz は `tar --dereference --hard-dereference` で作る（symlink は中身にし、hard link を作らない）。
+  wrapper の展開検査（symlink・hard link の拒否）は変えない。
+- H6 試験は K2 の real case を repo の旧 private と組で読まない。repo の試験は試験用の cases root（`cases/` を一時 dir に写し、
+  K2 の `private_ref`・`grade_case_ref` を repo の旧 fixture の sha256 に替えたもの）を読む。旧 private・旧 grade-case は G1・G4 の
+  とおり漏洩済みの試験専用 fixture として HEAD に残り、K2 の正式試行の採点には使わない。`case.json` の値は operator が反映して commit する。

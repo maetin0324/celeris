@@ -153,6 +153,21 @@ tasks: [01M59KXY854W5C65GTG9GVQVAC]
 - 評価者自身の測定作業は `protocol_step`。人の介入の集計からは除き、別に件数だけ出す。
 - CoS が人の代わりに答えた操作は `actor.kind=cos_project|cos_general`。人が CoS に判断を委ねた・CoS の案を人が承認したときは
   `decided_by`・`approved_by` に人を書く（`actor` は実際に操作した CoS）。
+- operator（または MCP）principal が人の承認した依頼文・人の発言を relay した操作（ops-r2。ADR
+  `agent-docs/adr/2026-10-30-ops-r2-isolation-principal.md` D5）は、`actor`=`executed_by`=`external_operator`（実験専用 session の id。
+  MCP なら `mcp_client`）、`decided_by`=`approved_by`=`human`、`credential`=relay を認証した principal（`operator:ops-r1` 等）、
+  `request_ref`=`chat-message:<relay の message id>`、`request_revision`=その message の seq、`policy_ref`=出典（`decision:<承認の id>` か
+  `chat-message:<本番の人の message id>`）、`celeris_event_ref`=relay の message id とする。値は `celeris-campaign ops-r1-intake` の記録の
+  `human_op` 欄がそのまま `human-op record` の引数の書式で持つ。出典の無い operator の message は人の依頼の行にしない。
+- 包括の委任（「runbook を実行して」）を個々の判断の `decided_by=human` にしない。operator が自分で決めた停止・回復は
+  `decided_by=external_operator` とし、`note` に委任元の出典を書く。
+
+人の能動時間（ops-r2。同 ADR D6）:
+- 人の能動時間は `actor.kind=human` の op 行のうち `start`・`end` の両方がある区間の和集合だけにする。CoS の実行時間・回答待ち・
+  operator・relay の区間から推定しない（relay の op は `actor` が人でないので数えない）。
+- 人の行為の区間は、人が自分の shell で `human-op record --actor-kind human` を打って残す（`time_basis=evaluator_live`）。web での承認・
+  回答のように点でしか残らないものは `occurred_at` の点として残し、長さ 0 として足さない。
+- 人の op 行が 0 件の試行は、人の能動時間を 0 ではなく null（`missing` に `not_recorded`）とする。
 
 ## 4. event 由来（記録しない）と評価者記録の区分表
 

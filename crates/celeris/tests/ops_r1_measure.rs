@@ -8,8 +8,9 @@
 //! （cos operation の監査行・actor=cos）であることと、`GET /api/v1/health` の `cos_policy_version` が "6" で
 //! あることも確かめる。LLM・外部ネットワーク・本番の state/DB/port/token は使わない。
 //!
-//! 試験だけの追加: 生成した daemon.toml の末尾に人の token（`human:ops-r1-e2e`）を 1 つ足す。人の message は
-//! 人の principal で送る（`celeris-campaign ops-r1-intake` は author が `human:` の message だけを記録する）。
+//! 生成した daemon.toml の token（`operator:ops-r1`）だけを使う。人の依頼は operator principal の relay
+//! （`POST …/relays`、`said_at` は人が承認した時刻）として入れ、人の token は足さない
+//! （ADR 2026-10-30-ops-r2-isolation-principal D5。`celeris-campaign ops-r1-intake --relay` と同じ経路）。
 
 use std::{
     fs,
@@ -87,7 +88,6 @@ struct Daemon {
     dir: tempfile::TempDir,
     url: String,
     operator: String,
-    human: String,
 }
 
 impl Drop for Daemon {
@@ -277,17 +277,6 @@ fn start_daemon() -> Daemon {
         .and_then(|l| l.strip_suffix('"'))
         .expect("loopback listen")
         .to_owned();
-    // 試験だけの追加: 人の token。
-    let human = "ops-r1-e2e-human-token".to_owned();
-    fs::write(root.join("human.token"), format!("{human}\n")).expect("human token");
-    fs::write(
-        &config,
-        format!(
-            "{generated}\n[[api.tokens]]\nprincipal = \"human:ops-r1-e2e\"\ntoken_file = {:?}\n",
-            root.join("human.token").display().to_string()
-        ),
-    )
-    .expect("append human token");
     let operator = fs::read_to_string(state.join("token"))
         .expect("token")
         .trim()
@@ -312,7 +301,6 @@ fn start_daemon() -> Daemon {
         dir,
         url: format!("http://127.0.0.1:{port}"),
         operator,
-        human,
     };
     d.wait_for("the daemon to answer /api/v1/health", || {
         (d.get("/api/v1/health").0 == 200).then_some(())
@@ -390,20 +378,31 @@ fn ops_r1_measure_cos_path_with_stub_harness() {
     )
     .expect("task body");
 
-    // 人の message。
+    // 人が承認した依頼文を operator principal が relay する（人の token は無い）。
     let (s, posted) = d.call(
-        &d.human,
+        &d.operator,
         "POST",
-        &format!("/api/v1/chat/threads/{thread_id}/messages"),
+        &format!("/api/v1/chat/threads/{thread_id}/relays"),
         Some(&json!({
-            "client_message_id": "ops-r1-e2e-1",
+            "client_message_id": "ops-r1-intake:ops-r1-e2e-1",
             "text": format!("{REQUEST_MARK}: 調べものを 1 件お願いします"),
-            "attachment_ids": [], "reply_to_id": null, "mode": "queue", "resume_queue": false,
+            "said_at": "2026-10-30T00:00:00Z", "task_ids": [], "expires_at": null,
         })),
     );
     assert_eq!(s, 202, "{posted}");
     assert_eq!(posted["message"]["role"], "user", "{posted}");
-    let human_message_id = posted["message"]["id"]
+    assert_eq!(posted["message"]["author"], "operator:ops-r1", "{posted}");
+    assert_eq!(
+        posted["message"]["relay"]["relayed_by"], "operator:ops-r1",
+        "{posted}"
+    );
+    assert!(
+        !fs::read_to_string(d.dir.path().join("daemon.toml"))
+            .expect("daemon.toml")
+            .contains("principal = \"human:"),
+        "the generated config has no person's token"
+    );
+    let relay_message_id = posted["message"]["id"]
         .as_str()
         .expect("message id")
         .to_owned();
@@ -446,7 +445,7 @@ fn ops_r1_measure_cos_path_with_stub_harness() {
             "task.create".to_owned(),
             "applied".to_owned(),
             "6".to_owned(),
-            human_message_id.clone()
+            relay_message_id.clone()
         ]],
         "audit rows"
     );
@@ -506,7 +505,7 @@ fn ops_r1_measure_cos_path_with_stub_harness() {
         input.len() == 1 && input[0][0].starts_with(&format!("root-done:{task_id}:")),
         "the report answers the root-done input: {input:?}"
     );
-    // 人の message への CoS の返事（起票の知らせ）も同じ thread に残る。
+    // relay された依頼への CoS の返事（起票の知らせ）も同じ thread に残る。
     assert!(
         messages(&d, &thread_id)
             .iter()
@@ -514,6 +513,6 @@ fn ops_r1_measure_cos_path_with_stub_harness() {
                 && m["text"]
                     .as_str()
                     .is_some_and(|t| t.contains("起票しました"))),
-        "the CoS reply to the human message"
+        "the CoS reply to the relayed request"
     );
 }

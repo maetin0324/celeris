@@ -125,7 +125,8 @@ async fn cos_chat_triage_digest_records_each_judgment_with_an_answerable_card() 
         d.text
     );
     assert!(
-        d.text.contains("- 背景: 依頼「資料の公開」の task t1 が公開先を決められず止まった"),
+        d.text
+            .contains("- 背景: 依頼「資料の公開」の task t1 が公開先を決められず止まった"),
         "{}",
         d.text
     );

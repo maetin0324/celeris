@@ -98,19 +98,19 @@ config は `ops-r1-measure-config.sh` の生成物を使い、`--state` を試�
   mount の source が許可表の外にあれば記録する。LLM・network は使わない。
 - preflight は主体ごとに、**その主体を起動するのと同じ包み方**で probe を走らせる。
   A は `Sandbox::args` と同じ引数（同じ関数から作る）、B は `ops-r2-sandbox.sh` と同じ許可表、外部 operator は D6 の起動 script と同じ許可表。
-  人の uid の process 自身からも `EVAL_ROOT` の private を開く（L1 の確認。開けたら失敗）。
+  人の uid の process 自身からも `EVAL_ROOT` の private を開く（L1 の確認。開けたら失敗）。開けなくても持ち主の uid で判定する（付記 2026-10-30）。
 - 拒否すべき path（deny list）は承認票と同じ固定の入力にする: `EVAL_ROOT` の private、repo の clone の
   `crates/campaign/fixtures/grader-private`（`/home/rmaeda/workspace/agent-platform` と `/local/celeris/data/workspaces/*/repos/*`）、
   過去の campaign の out と試行の artifacts、本番 KB の root、`~/.claude`、`~/.config/celeris`、測定用以外の account dir。
 - 1 件でも読めれば、`preflight::check` の `missing` に `deny_readable:<主体>:<path>` を入れる。`run_gated` は既存どおり
   有料実行・task 作成・relay を 0 件で止める。mountinfo に許可表の外の source があっても同じ扱いにする。
 - `check-ops-r1-leak.py` は `--runtime-probe <probe の JSON>` を受け、その主体の可読判定を probe の結果で置き換える。
-  runtime の拒否と L1 の確認が揃った path には `same_uid` の limit を書かない。probe が無い path は今までどおり host から判定する。
+  runtime の拒否と L1 の確認が揃い、かつ `owned_by_run_uid` が空の path には `same_uid` の limit を書かない（付記 2026-10-30）。probe が無い path は今までどおり host から判定する。
   canary の出現検査は残す（読んだ後の書き出しの痕跡を見る副次の証拠）。
 
 ### D4. 評価器の境界
 
-- `EVAL_ROOT`（例 `/local/celeris/eval`、持ち主 `celeris-eval`、0700）の下に `private/<case>/`（private.json・pristine 試験）、
+- `EVAL_ROOT`（例 `/local/celeris/eval`。付記 2026-10-30 で `/var/lib/celeris-eval` に改めた。持ち主 `celeris-eval`、0700）の下に `private/<case>/`（private.json・pristine 試験）、
   `work/`（採点の作業）、`out/` を置く。
 - 人の uid → 評価器: `EVAL_ROOT` とは別の drop box（例 `/local/celeris/eval-inbox`、持ち主 `celeris-eval`、mode 1733）に
   試行の出力の tgz と sha256 を置く。人の uid は書けるが一覧・読み出しはできない。
@@ -234,6 +234,36 @@ config は `ops-r1-measure-config.sh` の生成物を使い、`--state` を試�
 - `unshare -Ur true` → exit 0。`bwrap --ro-bind /usr /usr ... --unshare-pid /usr/bin/unshare -Ur /usr/bin/true` → exit 0（bwrap の中の user namespace が作れる）。
 - 同じ bwrap で `cat /home/rmaeda/workspace/agent-platform/Cargo.toml` → `No such file or directory`（許可表に無い path は存在しない）。
 - `ls -ld /home/rmaeda/workspace/agent-platform/crates/campaign/fixtures/grader-private/final` → 持ち主 rmaeda、mode `drwxrwxr-x+`（人の uid から読める。K2・K4 の final private がある）。
+
+## 付記（2026-10-30）: L1 は open の拒否でなく持ち主の uid で判定する
+
+final review（task 01M66JYQ249SZHNXK0AEVTZNEC の criterion 3）の差し戻しによる。前の実装の L1 は、人の uid の process から
+deny path を `open`・`readdir` した成否だけで判定した。人の uid が持つ `EVAL_ROOT` の dir と file を chmod 000 にすると
+open は EACCES になり、`deny_readable` 0 件で preflight が通った。持ち主は chmod で読めるように戻せるので、これは本文の
+「同じ uid の chmod・mode 000 はどちらの層にも数えない」に反していた。漏洩検査も、runtime と L1 の probe が両方拒否なら
+持ち主を見ずに `same_uid` の limit を外していた。
+
+- **L1 の判定（D3 を改める）**: probe の拒否に加えて、preflight は `--eval-root` の下の deny path について lstat で次を確かめ、
+  1 つでも満たさなければ `deny_readable:L1:<path>:<理由> <要素> (uid <n>, mode <o>)` で止める（`crates/campaign/src/l1_owner.rs`）。
+  - `EVAL_ROOT` から path までの各要素: 持ち主の uid が run の uid でも 0 でもない（run の uid が chmod できない）、
+    run の uid から書けない（sticky でも不可）、symlink でない。
+  - `EVAL_ROOT` の祖先（`/` まで）: 持ち主が run の uid でなく、run の uid から書けない（run の uid が `EVAL_ROOT` を rename で
+    差し替えられない。sticky の dir は他人の entry を rename できないので可）、symlink でない。
+  - run の uid は preflight を走らせた process の実効 uid と所属 group。書けるかは持ち主・group・その他のうち当てはまる 1 組の bit で決める。
+    run の uid が 0 なら常に書けるとみなす（root の preflight は L1 で必ず止まる）。`EVAL_ROOT` と祖先を stat できなければ止める。
+    `EVAL_ROOT` より下で ENOENT・EACCES になった所では歩みを止めて通す（親が条件を満たすので run の uid は作ることも覗くこともできない）。
+  - 迂回の env 変数・CLI flag は置かない。`celeris.runtime-probe/1` の JSON の形は変えない（持ち主の判定は probe の外で行う）。
+- **漏洩検査（D3 を改める）**: `check-ops-r1-leak.py` は probe で判定した path も host の stat で、path と祖先のうち run の uid が
+  持ち主のものを `owned_by_run_uid` に書く。`same_uid` の limit を外す（`same_uid_cleared_by: runtime_probe_and_l1`）のは、
+  runtime と L1 の probe が両方 `readable=false` で、かつ `owned_by_run_uid` が空のときだけ。空でなければ limit を残し、
+  `--canary` が無ければ `same_uid_without_canary` の hit にする。
+- **`EVAL_ROOT` の置き場所（D4 の例を改める）**: `/local` と `/local/celeris` は人の uid が持つので、`/local/celeris/eval` は
+  `ancestor_owned_by_run_uid` で止まる。例は `/var/lib/celeris-eval`（drop box・outbox・採点 wrapper の dir も `/var/lib` の下）に改める。
+  手順は `docs/ops/ops-r2-isolation.md` §2.3・§4.2。
+- **試験（「後続 unit の作業範囲」の isolate の行を補う）**: 試験は別の uid を作れない。同じ uid の chmod 000 の実 fixture で preflight
+  （library と実 binary）が止まり、漏洩検査が `same_uid` を残すことを確かめる。通過の規則は run の uid を注入した単体試験で確かめ、
+  実 binary の通過は host にある他 uid 持ちの dir（中の path は存在しない）で確かめる。`celeris-eval` が持つ実在の private で通る確認は、
+  人の準備の後に人が行う（運用文書 §4.7）。
 
 ## 関連
 

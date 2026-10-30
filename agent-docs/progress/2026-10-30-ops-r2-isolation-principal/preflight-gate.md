@@ -28,6 +28,11 @@ updated: 2026-10-30
 - 既存の CLI e2e 試験（launcher・arm_set_cli_normal・trial_state_cli_e2e・preflight の CLI 試験）と Inputs を組む試験に隔離の入力を足した。B・operator は stub の sandbox script、bwrap を stub にした launcher 試験は `--probe-program` の stub を使う。実 bwrap が使える試験では A の probe は実 bwrap で走る。
 - `runner_checker` の「子 process を起こしてよい module」に `preflight_isolation.rs` を追加（bwrap と sandbox script だけを起動し、LLM・network は使わない）。
 
+## 計画 v2 の範囲 check の不合格と v3
+
+- v2 の run の後、範囲 check（許可は campaign の src 6 本・tests/preflight.rs・tests/runtime_probe.rs・agent-docs のみ）が不合格になった。fail-closed の結果、measure 指定で preflight を通す既存試験・共通 fixture・runner_checker の許可一覧・`campaign_lock_e2e.rs`・`measure-launcher.sh` の変更が必須なため。試験だけで fail-closed を外す迂回は入れず、plan_issue で返した。
+- 計画 v3 でこれらが範囲に入った。code は変えず、v3 の run で下の検査を再実行した。
+
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
 
 - `bash scripts/dev/test-affected.sh` → exit 0、2,866 passed・9 skipped（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）。
@@ -40,7 +45,7 @@ updated: 2026-10-30
   - `measured_run_without_deny_list_or_principal_inputs_stops`: deny list 無し・空、operator の account 無し、eval root の不一致で止まる。測定でなく deny list も無ければ走らない。
 - `CELERIS_USERNS_TESTS=require cargo nextest run -p celeris-campaign --test runtime_probe` → 6 passed。新規 `preflight_principals_probe_with_their_real_wrapping` が実 bwrap（A）と実 `ops-r2-sandbox.sh`（B・operator）の中で、許可表の外の file を読めず・親を一覧できず・mount 外 source 0 件、`--state` の中に置いた file は読める（probe が実際に開いている）ことを確認。L1 は同じ uid の file を開けるので `deny_readable:L1:<path>` になる（chmod では防げない）。
 - 同じ試験を env 無しで実行 → stderr に `skip: preflight principal probes require CELERIS_USERNS_TESTS=1 (or require)`。
-- `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0、変更は campaign の src・tests、`crates/celeris/tests/campaign_lock_e2e.rs`、`scripts/campaign/measure-launcher.sh`、この進捗。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0、変更は campaign の src 5 本・tests 15 本、`crates/celeris/tests/campaign_lock_e2e.rs`、`scripts/campaign/measure-launcher.sh`、この進捗（計 23 path、v3 の範囲内）。
 
 ## 未解決
 

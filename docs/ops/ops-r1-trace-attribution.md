@@ -65,7 +65,7 @@ state なので、取りこぼしを見えるように全部出す）。1 run �
 | 欄 | 中身 |
 |---|---|
 | `source` | `runs` か `chat_runs` |
-| `model`・`harness` | `runs.model`・`runs.adapter` の値。欠測と `chat_runs` は null |
+| `model`・`harness` | `runs` は `runs.model`・`runs.adapter`、`chat_runs` は `chat_runs.resolved_config_json` の `$.model`・`$.harness`。欠測は null |
 | `run_id`・`task_id`・`thread_id` | 元の行の値（持たない側は null） |
 | `trial_id`・`condition_id` | 帰属したときだけ引数の値、未帰属なら null |
 | `role` | `runs.role` の `planner`・`worker`・`reviewer`。chat run は thread の kind で `project` → `cos_project`、`general`・`review` → `cos_general`。それ以外は null で `role_raw` に元の値 |

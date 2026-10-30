@@ -269,15 +269,18 @@ fn runs_rows(conn: &Connection) -> Result<Vec<Raw>, TraceError> {
 fn chat_rows(conn: &Connection) -> Result<Vec<Raw>, TraceError> {
     let mut stmt = conn
         .prepare(
-            "SELECT r.run_id, r.thread_id, t.kind, r.started_at, r.finished_at, r.usage_json, r.input_message_id \
+            "SELECT r.run_id, r.thread_id, t.kind, r.started_at, r.finished_at, r.usage_json, r.input_message_id, \
+             json_extract(CASE WHEN json_valid(r.resolved_config_json) THEN r.resolved_config_json END,'$.model'), \
+             json_extract(CASE WHEN json_valid(r.resolved_config_json) THEN r.resolved_config_json END,'$.harness') \
              FROM chat_runs r LEFT JOIN chat_threads t ON t.id=r.thread_id",
         )
         .map_err(read_err)?;
     stmt.query_map([], |r| {
         let kind: Option<String> = r.get(2)?;
         Ok(Raw {
-            model: None,
-            harness: None,
+            // CoS の model・harness は run が解決した設定（`resolved_config_json`）にある。
+            model: r.get(7)?,
+            harness: r.get(8)?,
             source: "chat_runs",
             run_id: r.get(0)?,
             task_id: None,

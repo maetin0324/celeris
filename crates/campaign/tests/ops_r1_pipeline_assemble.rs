@@ -22,6 +22,11 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// repo の根（crates/campaign の 2 つ上）。
+fn repo() -> PathBuf {
+    root().join("..").join("..")
+}
+
 fn bin() -> Command {
     Command::new(std::env::var("CARGO_BIN_EXE_celeris-campaign").expect("binary path"))
 }
@@ -96,7 +101,7 @@ impl Fx {
 
 /// ops-r1 の manifest（docs/ops/ops-r1-manifest.template.json と同じ形。hash の値は試験の資産に合わせる）。
 fn manifest_json(success: Option<&str>) -> Value {
-    let text = fs::read_to_string(root().join("../../docs/ops/ops-r1-manifest.template.json"))
+    let text = fs::read_to_string(repo().join("docs/ops/ops-r1-manifest.template.json"))
         .expect("template");
     let mut m: Value = serde_json::from_str(&text).expect("json");
     let k4: Value = serde_json::from_slice(
@@ -105,8 +110,7 @@ fn manifest_json(success: Option<&str>) -> Value {
     .expect("k4 json");
     let input: Value = serde_json::from_slice(
         &fs::read(
-            root()
-                .join("../../agent-docs/progress/2026-10-16-mlsys-final/final-input-manifest.json"),
+            repo().join("agent-docs/progress/2026-10-16-mlsys-final/final-input-manifest.json"),
         )
         .expect("input manifest"),
     )
@@ -143,7 +147,7 @@ fn fixture() -> Fx {
         .expect("k4 fixture");
     let input = d.join("final-input-manifest.json");
     fs::copy(
-        root().join("../../agent-docs/progress/2026-10-16-mlsys-final/final-input-manifest.json"),
+        repo().join("agent-docs/progress/2026-10-16-mlsys-final/final-input-manifest.json"),
         &input,
     )
     .expect("input manifest");

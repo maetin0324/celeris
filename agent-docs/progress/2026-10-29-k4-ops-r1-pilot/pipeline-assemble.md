@@ -54,7 +54,7 @@ updated: 2026-10-30
 - 条件0・1・2: `cargo test -p celeris-campaign --test ops_r1_pipeline_assemble` → exit 0、5 passed。
   2 回の assemble で out の全 file と records.jsonl が byte 一致、stdout も一致。stage-grader-inputs・grade-out（ok true）・
   check（ok true）・final-accounting・export が exit 0。CoS model 逸脱で停止。旧 manifest と空でない out を拒否。
-- 条件3: `bash scripts/dev/test-affected.sh` の結果は下に追記。
+- 条件3: `bash scripts/dev/test-affected.sh`（対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）→ exit 0、nextest 2847 tests run: 2847 passed、9 skipped、check-doc-links ok。既存の試験（旧系列の ops_r1_pipeline_manifest・final_accounting・runner_checker など）は無修正。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 ## 未解決事項

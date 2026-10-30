@@ -38,7 +38,39 @@ updated: 2026-10-30
 - `sh scripts/dev/progress-index.sh --check`: ok
 
 ## 未解決事項
-- `cargo test --workspace` の `cap_probe_real_daemon`（probe の task が 404）は WU probe-flake が直す。この WU では未調査。
+- `cargo test --workspace` の `cap_probe_real_daemon`（probe の task が 404）は WU probe-flake で直した（下の節）。
+
+## WU probe-flake: cap_probe_real_daemon の 404 task_not_found
+
+完了日: 2026-10-30
+
+### 原因
+- celeris は主 API を `SO_REUSEPORT`（+ `SO_REUSEADDR`）で bind する（`crates/celeris/src/daemon/api.rs` の `bind_reuseport`、ADR-0040 D4）。
+  同じ uid の 2 つ目の daemon が同じ port を bind しても失敗せず、kernel が新しい接続ごとにどちらかへ振り分ける。
+- `start_daemon_with` は `127.0.0.1:0` に bind して port を取り、すぐ閉じて config に書いていた。閉じた後は、並行する
+  別の試験（同じ binary の 5 試験、nextest では別 process）が同じ port を取れ、その daemon も bind に成功する。
+- そのとき probe の `POST /tasks` は片方の daemon に、`GET /tasks/<id>` はもう片方の daemon に届き、404 `task_not_found` になる。
+  子 daemon は bind に失敗しないので終了せず、daemon.log にも bind の失敗は出ない。応答した daemon の identity.pid は
+  spawn した子の pid と違うものが混ざる。
+- 失敗した run の daemon.log は残っていない（一時 dir）。仕組みは新しい試験
+  `a_second_daemon_on_the_same_port_is_detected` で決定的に再現した: 同じ config の 2 つ目の celeris を起こすと
+  `/proc/net/tcp` の LISTEN が 2 process になり、`GET /config` の identity.pid が 2 つ目の daemon の pid になる接続が出る。
+- `credential_wait_notify.rs` は API を開かない（dispatcher と notifier を直接回す）ので、この穴は無い。
+  同じ「port を取って閉じてから daemon に渡す」型は `routing_eval_run.rs`（同じ process で `celeris::run`）にもあった。
+  他の試験は listener を持ったまま `serve_with_listener` に渡すか `listen = "127.0.0.1:0"` で、穴は無い。
+
+### 直し方
+- `crates/celeris/tests/daemon_port/mod.rs`（新規）:
+  - `PortReservation` は `SO_REUSEPORT` だけを立てた socket を bind したまま（listen しない）daemon の寿命の間持つ。
+    daemon の bind（同じ uid の `SO_REUSEPORT`）は通る。port 0 への bind は使用中の port を選ばない。`SO_REUSEPORT` の無い明示 bind は `EADDRINUSE` で落ちる（この host の kernel 6.8 で確認）。
+  - `listening_pids(port)` は `/proc/net/tcp` の LISTEN の inode と `/proc/<pid>/fd` から持ち主の pid を返す。
+  - `check_sole_owner(port, expected, identity_pid)` は identity.pid が spawn した子と一致し、port の listener が子だけであることを確かめる。
+- `cap_probe_real_daemon.rs`: 起動待ちで `child.try_wait()` が `Some` なら daemon.log 付きで失敗する。`GET /config` が 200 になったら
+  `check_sole_owner` を通す。通らなければ子を止め、新しい予約の port で起こし直す（3 回まで。尽きたら理由の一覧で失敗）。sleep は延ばしていない。
+- `routing_eval_run.rs`: 予約を持ったまま `listen` に渡し、API が答えた後に listener が自 process だけであることを確かめる。
+
+### commit
+- phase 1: 試験 daemon の API port を予約し、spawn した子本人の応答か確かめる（cap_probe_real_daemon・routing_eval_run）
 
 ## 提案
 - 計画の段に構造化した危うさの欄が無いので、kind は CoS の申告のまま。planner の出力に kind を持たせると API が申告漏れを検査できる（別 ADR）。

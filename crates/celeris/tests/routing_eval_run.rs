@@ -8,6 +8,8 @@ use celeris::{Config, RunOptions};
 use serde_json::json;
 use task_core::{DaemonMode, SqliteStore, TaskStore};
 
+mod daemon_port;
+
 const TOKEN: &str = "routing-eval-test-token";
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -65,11 +67,9 @@ async fn daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records() {
         std::env::set_var("PATH", path);
     }
     std::fs::write(root.join("api.token"), format!("{TOKEN}\n")).expect("token");
-    let probe = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("port");
-    let addr = probe.local_addr().expect("addr");
-    drop(probe);
+    // 予約を持ったまま渡す（閉じると別の試験の daemon が同じ port に `SO_REUSEPORT` で相乗りできる）。
+    let reservation = daemon_port::PortReservation::new();
+    let addr = reservation.addr();
     let config_path = root.join("config.toml");
     std::fs::write(
         &config_path,
@@ -144,6 +144,9 @@ candidates = [{{ source = "local", model = "model-1" }}]
     })
     .await;
     assert!(api_ready.is_ok(), "daemon API became ready");
+    // 答えたのはこの試験 process の中の daemon だけ（同じ port に別の daemon がいない）。
+    let me = std::process::id();
+    daemon_port::check_sole_owner(addr.port(), me, me).expect("sole owner of the API port");
 
     let body = json!({"manifest_sha":"sha256:fixture", "trials": (0..2).map(|trial_no| json!({
         "problem_id":"problem-1", "trial_no":trial_no, "source_id":"local", "model_id":"model-1",

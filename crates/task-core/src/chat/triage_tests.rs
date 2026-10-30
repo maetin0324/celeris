@@ -516,3 +516,37 @@ fn cos_triage_failure_escalated_matches_only_the_open_item_of_that_task() {
         .expect("stale");
     assert!(!s.cos_triage_failure_escalated("01ABC").expect("query"));
 }
+
+#[test]
+fn cos_triage_closed_since_lists_answered_waits_apart_from_open_ones() {
+    // ADR 2026-10-30-cos-review-open-waits D1: 人が答えた決定は閉じた側にだけ出る。
+    let s = SqliteStore::open_in_memory().expect("store");
+    s.cos_triage_reconcile(
+        "decision",
+        &[item("answered", "1"), item("open", "1")],
+        at(0),
+    )
+    .expect("reconcile");
+    s.lock()
+        .expect("lock")
+        .execute("UPDATE cos_inbox_items SET state='escalated'", [])
+        .expect("escalate");
+    s.cos_triage_reconcile("decision", &[item("open", "1")], at(10))
+        .expect("reconcile");
+    let keys = |v: Vec<super::triage::CosTriageItemReport>| -> Vec<String> {
+        v.into_iter().map(|i| i.source_key).collect()
+    };
+    assert_eq!(
+        keys(s.cos_triage_open_items(None, 10).expect("open")),
+        vec!["open".to_string()]
+    );
+    assert_eq!(
+        keys(s.cos_triage_closed_since(at(5), 10).expect("closed")),
+        vec!["answered".to_string()]
+    );
+    assert!(
+        s.cos_triage_closed_since(at(10), 10)
+            .expect("closed")
+            .is_empty()
+    );
+}

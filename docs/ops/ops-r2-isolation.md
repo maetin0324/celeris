@@ -187,13 +187,17 @@ wrapper の sha256 を書く欄は承認票に足さない。install 元は repo
   ```
 
   起動: `sudo -u celeris-eval /var/lib/celeris-eval-bin/grade <引数>`。
-  確認: `sudo -l -U rmaeda` の celeris-eval の行が `/var/lib/celeris-eval-bin/grade` だけであること、`sudo -n -u celeris-eval /bin/cat /var/lib/celeris-eval/private/...` が拒否されること。
+  確認: `sudo -l -U rmaeda` の celeris-eval の行に `/var/lib/celeris-eval-bin/grade` があること。
+  限界: この host の人の uid は sudoers の別の行で `(ALL) NOPASSWD: ALL` を持つので、bwrap の外の人の uid の process は
+  `sudo -n -u celeris-eval /bin/cat <private>` で private を読める（拒否されない）。人の sudoers は変えない。L1 が塞ぐのは
+  bwrap に包まれた試行の主体（A・B・operator）だけで、bwrap の外の人の uid の process は塞がない（ADR 付記 G5）。
 - 案 2（評価器の shell）: sudoers は変えず、人が `sudo -u celeris-eval /bin/bash` で入った shell で `/var/lib/celeris-eval-bin/grade` を実行する。
   人の対話が毎回要るが、自動の経路は作らない。確認: その shell で `id -un` が `celeris-eval`。
 
 案 1 では人の uid の process（bwrap の外の普段の operator session を含む）が `grade` を起動できる。`grade` が返すのは漏洩検査を通した判定 JSON だけなので、private は出ない。
-試行の主体（A・B・operator）は bwrap の中で動く。bwrap は no_new_privs を立てるので、中から sudo の setuid は効かないはずだが、実機では未確認。
-準備後に `sh scripts/campaign/ops-r2-sandbox.sh ... -- /usr/bin/sudo -n -u celeris-eval /var/lib/celeris-eval-bin/grade` が失敗することを確かめる。
+試行の主体（A・B・operator）は bwrap の中で動く。bwrap は no_new_privs を立てるので、中から sudo の setuid は効かない
+（2026-10-30 に実機で確認: `sh scripts/campaign/ops-r2-sandbox.sh ... -- /usr/bin/sudo -n -u celeris-eval /var/lib/celeris-eval-bin/grade` が
+"no new privileges" で失敗）。準備後にこの確認を繰り返し、失敗することを確かめる。
 
 ### 4.5 正式 case の新しい private を repo の外で作り `EVAL_ROOT` に置く
 
@@ -258,13 +262,27 @@ sha256 の記録先は承認票（人が書く。operator は書かない）。�
 
 `CaseSet::load` は公開部 `case.json` の `private_ref.sha256` と private の実 file の sha256 も照合する。repo の K2 の `case.json` は
 旧 private の値のままなので、このままでは `--grader-root /var/lib/celeris-eval/private` で `private file hash mismatch` になる。
-正式試行の前に、人が承認票の値を渡して `python3 -I scripts/campaign/ops-r2-set-private-sha.py --case k2-bf-xattr-restart-campaign --sha256 <承認票の値>` を実行し、
-`case.json` の `private_ref.sha256` だけを替えて commit する（script は private を読まない。漏洩済みの旧値 `d02126077a47…0694760` は拒否する）。
-frozen manifest が固定する `materials_sha256` は `private_ref` を除いた公開部から作るので、manifest の再 freeze は要らない（script が公開部の不変を確かめ、変われば止まる）。
+
+採点は private の hidden_command を直接読まず grade-case（`celeris.grade-case/1`）を走らせる。repo の
+`crates/campaign/fixtures/grade-cases/final/k2-bf-xattr-restart-campaign/` 一式は旧 private から作った漏洩済みの旧解答なので使わない
+（`ops-r2-grade.py` は `--grade-case-root /var/lib/celeris-eval/grade-cases` を固定で付ける）。評価器の shell で次を行う。
+
+1. hidden 試験 file を `/var/lib/celeris-eval/hidden-tests/final/<case>/hidden/` の下に置く（相対 path がそのまま作業 dir に挿入される。
+   `.grader/run.sh` があれば評価 command の wrapper になる）。dir が無い・空なら次の手順は拒否する。
+2. `/var/lib/celeris-eval-bin/celeris-campaign gen-grade-case --case <case> --cases-root <repo>/crates/campaign/cases
+   --private-root /var/lib/celeris-eval/private --hidden-root /var/lib/celeris-eval/hidden-tests --out-root /var/lib/celeris-eval/grade-cases`
+   を実行する。stdout は生成した `<case>.json` の sha256 の 1 行だけ。出力 dir が既にあれば拒否する。
+3. 人が private と grade-case の 2 つの sha256 を承認票に書き、`python3 -I scripts/campaign/ops-r2-set-private-sha.py --case <case> --sha256 <private の値>
+   --grade-case-sha256 <grade-case の値>` を実行して `case.json` の `private_ref.sha256` と `grade_case_ref.sha256` を替え、commit する
+   （script は private・grade-case を読まない。漏洩済みの旧 private の値と repo の旧 grade-case の値は拒否する）。
+   frozen manifest が固定する `materials_sha256` は `private_ref`・`grade_case_ref` を除いた公開部から作るので、manifest の再 freeze は要らない
+   （script が公開部の不変を確かめ、変われば止まる）。
+
 値の反映は承認票の値が出てから行う（2026-10-30 の時点では未実施）。
 
 旧 private の repo の path は、漏洩済みの旧解答として deny list に残す。git の履歴と既存の clone にも残るので L2 で塞ぎ、
-deny list に clone の `crates/campaign/fixtures/grader-private/final/<case>/private.json` を載せる（その中身は採点に使わない）。
+deny list に clone の `crates/campaign/fixtures/grader-private/final/<case>/private.json` と、旧 private から作った
+`crates/campaign/fixtures/grade-cases/final/<case>/` の中の file を載せる（どちらも採点に使わない。repo の file は fixture の試験が使うので HEAD に残す。ADR 付記 G4）。
 
 ### 4.6 測定専用 Claude account dir に login する
 
@@ -288,7 +306,8 @@ celeris-campaign probe-read --principal l1 \
   --deny /var/lib/celeris-eval/private/final/<case>/private.json --out l1.json; echo "exit=$?"
 ```
 
-期待: `exit=0`、`l1.json` の該当 path が `readable: false`。exit 1 なら L1 が成り立っていない（持ち主・mode・ACL・group を §4.1〜4.2 の確認で見直す）。
+期待: `exit=0`、`l1.json` の該当 path が `readable: false`・`listable: false`。`--principal l1` の判定は path だけで決まり、
+`mounts_outside_allow` は報告に出る（bwrap の外なので host の mount が並ぶ）が判定に入れない（ADR 付記 G6）。exit 1 なら L1 が成り立っていない（持ち主・mode・ACL・group を §4.1〜4.2 の確認で見直す）。
 probe の拒否だけでは L1 の確認にならない（同じ uid の chmod 000 でも拒否になる）。
 その後、正式試行の deny list で `celeris-campaign preflight --deny-list ... --eval-root /var/lib/celeris-eval ...` を実行し、
 `deny_readable` の missing が 0 件であることを確かめる。`deny_readable:L1:<path>:<理由> ...` が出たら、§2.3 の表の理由と、

@@ -22,6 +22,7 @@ K2（`k2-bf-xattr-restart-campaign`）を ops-r2 の条件で正式に試行す�
 |---|---|---|
 | K2 の新しい private（人の決定 k2-private-in-git = reauthor。ADR 付記 2026-10-30「K2 の private の作り直し」） | 承認票の「K2 の新しい private の sha256」欄。作成は [入力隔離 §4.5](ops-r2-isolation.md#45-正式-case-の新しい-private-を-repo-の外で作り-eval_root-に置く) | 人（または評価器 uid の shell）が repo の外で作り、`$EVAL_ROOT/private/final/$case/private.json` に `celeris-eval` 持ち 0400 で置き、§4.5 の書式確認が `ok`、sha256 を人が承認票に書いている。欄が空なら始めない |
 | K2 の `case.json` の `private_ref.sha256` | `python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["private_ref"]["sha256"])' crates/campaign/cases/final/$case/case.json` | 承認票の新しい private の sha256 と同じ。違えば grader の読込が `private file hash mismatch` で止まるので始めない（2026-10-30 の時点では承認票の値が無く、一致しない。値が出たら [入力隔離 §4.5](ops-r2-isolation.md) の `ops-r2-set-private-sha.py` で替えて commit する） |
+| K2 の `case.json` の `grade_case_ref.sha256` | `python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["grade_case_ref"]["sha256"])' crates/campaign/cases/final/$case/case.json` | 承認票の grade-case の sha256（評価器が `$EVAL_ROOT/grade-cases` に `gen-grade-case` で作ったもの）と同じで、repo の旧 grade-case の値 `f84089bcf161…190aca593` ではない。旧値のままなら始めない（[入力隔離 §4.5](ops-r2-isolation.md)） |
 | 採点 wrapper の install | `sha256sum /var/lib/celeris-eval-bin/grade scripts/campaign/ops-r2-grade.py` | 2 つの sha256 が同じ（install は [入力隔離 §4.3](ops-r2-isolation.md)） |
 | 承認票の欄（試行数・上限・model・account・停止条件・期限・固定依頼文の sha256・K2 の新しい private の sha256・deny list・実験専用 session の id・評価器の起動方法） | 承認票を開く | すべて人が埋めている。operator が空欄を埋めていない（K4 の逸脱を繰り返さない） |
 | 評価器の uid | `id celeris-eval`、`id -nG` | uid がある。人の uid の groups に `celeris-eval` が無い |
@@ -61,6 +62,7 @@ deny list（1 行 1 絶対 path）は承認票の deny list を実在の path �
 - `$EVAL_ROOT/private/final/$case/private.json`
 - 人の repo clone と Celeris の作業場所の clone の `crates/campaign/fixtures/grader-private/final/$case/private.json`（漏洩済みの旧 private。旧解答として塞ぐ）
   （`/home/rmaeda/workspace/agent-platform/...` と `/local/celeris/data/workspaces/*/repos/agent-platform/...` を展開した path）
+- 同じ clone の `crates/campaign/fixtures/grade-cases/final/$case/` の中の file（`$case.json`・`hidden/.grader/` の試験。旧 private から作った漏洩済みの grade-case）
 - 過去の campaign の out と試行の artifacts の中の file（K4 の `artifacts/ops-r1/` 等）
 - 本番 KB の root の中の file、`~/.claude` と `~/.config/celeris` の中の file、測定用以外の account dir の中の file
 

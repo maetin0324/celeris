@@ -67,6 +67,13 @@ pub trait Host {
         )
     }
     /// A の cap-probe の実行器。既定は実 bwrap（試験は stub を返す）。
+    /// 主体の包み方で runtime probe を走らせる（ADR 2026-10-30-ops-r2-isolation-principal D3）。試験は結果を差し替える。
+    fn runtime_probe(
+        &self,
+        req: &crate::preflight_isolation::ProbeRequest,
+    ) -> Result<crate::runtime_probe::RuntimeProbe, String> {
+        crate::preflight_isolation::run(req)
+    }
     fn probe_runner(&self) -> Box<dyn crate::cap_probe::ProbeRunner> {
         Box::new(crate::cap_probe::ProcessProbeRunner {
             timeout: std::time::Duration::from_secs(300),
@@ -213,6 +220,8 @@ pub struct Inputs {
     pub variant_b0_sha256: Option<String>,
     /// worker harness の実行ファイル（`<name>=<program>`）。env-lock の照合で watch と同じ値を使う。
     pub worker_programs: Vec<String>,
+    /// deny list と主体ごとの許可表（正式試行で必須。`preflight_isolation`）。
+    pub isolation: crate::preflight_isolation::IsolationInputs,
 }
 
 /// 測定環境の汚染検査の入力。
@@ -500,6 +509,7 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
     check_candidates(a, m, inp, host);
     check_snapshot_src(a, m, inp);
     check_measure_env(a, m, inp, host);
+    check_isolation(a, m, inp, host);
     if m.is_active(ConfigId::A)
         && let Some(out) = inp.measure.as_ref().and_then(|me| me.out.as_deref())
     {
@@ -536,6 +546,39 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
         && let Some(set) = &set
     {
         check_bc_capabilities(a, m, set, inp, host);
+    }
+}
+
+/// 主体ごとの runtime probe で deny_readable を探す。正式試行（measure 指定）か `--deny-list` 指定時に走る。
+fn check_isolation(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) {
+    use crate::preflight_isolation as iso;
+    if inp.measure.is_none() && inp.isolation.deny_list.is_none() {
+        return;
+    }
+    a.checked.push(iso::CHECK);
+    let tmp = match tempfile::tempdir() {
+        Ok(t) => t,
+        Err(e) => return a.miss(iso::CHECK, format!("{}:{e}", iso::CHECK)),
+    };
+    let (ws, cfg) = (tmp.path().join("ws"), tmp.path().join("cfg"));
+    let _ = fs::create_dir_all(&ws);
+    let real = a.a_program.as_ref().map(|p| p.path.clone());
+    for r in iso::requests(
+        &inp.isolation,
+        m,
+        inp.cap_env.as_deref(),
+        real.as_deref(),
+        (&ws, &cfg),
+    ) {
+        match r.and_then(|r| {
+            host.runtime_probe(&r)
+                .map_err(|e| format!("{}:{}:probe:{e}", iso::CHECK, r.principal))
+        }) {
+            Ok(p) => iso::findings(&p)
+                .into_iter()
+                .for_each(|d| a.miss(iso::CHECK, d)),
+            Err(d) => a.miss(iso::CHECK, d),
+        }
     }
 }
 

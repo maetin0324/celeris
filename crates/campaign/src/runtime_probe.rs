@@ -35,7 +35,7 @@ fn errno(e: &io::Error) -> String {
 }
 
 /// mountinfo の octal escaping（空白・tab・改行・backslash）を戻す。
-fn unescape(s: &str) -> String {
+pub fn unescape(s: &str) -> String {
     let mut out = Vec::new();
     let b = s.as_bytes();
     let mut i = 0;

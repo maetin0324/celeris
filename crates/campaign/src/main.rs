@@ -13,7 +13,7 @@ use celeris_campaign::{
     ledger::Ledger,
     manifest::CampaignManifest,
     preflight::{self, Inputs, RealHost},
-    runner,
+    preflight_isolation, runner,
     watch::{self, SystemClock, WatchOptions},
 };
 
@@ -99,6 +99,30 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
         cap_env: arg(args, "--cap-env"),
         variant_b0_sha256: text("--variant-b0-sha256"),
         worker_programs: worker_program_args(args),
+        isolation: isolation_inputs(args),
+    }
+}
+
+/// `--deny-list`・`--eval-root`・`--sandbox-script` と B・operator の許可表（`--b-*`・`--operator-*`）。
+fn isolation_inputs(args: &[String]) -> preflight_isolation::IsolationInputs {
+    let sandbox = |p: &str| preflight_isolation::ScriptSandbox {
+        state: arg(args, &format!("--{p}-state")),
+        release: arg(args, &format!("--{p}-release")),
+        account: arg(args, &format!("--{p}-account")),
+        ro: args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| **a == format!("--{p}-ro"))
+            .filter_map(|(i, _)| args.get(i + 1).map(PathBuf::from))
+            .collect(),
+    };
+    preflight_isolation::IsolationInputs {
+        deny_list: arg(args, "--deny-list"),
+        eval_root: arg(args, "--eval-root"),
+        sandbox_script: arg(args, "--sandbox-script"),
+        b: sandbox("b"),
+        operator: sandbox("operator"),
+        probe_program: arg(args, "--probe-program"),
     }
 }
 

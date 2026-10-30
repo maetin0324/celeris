@@ -128,6 +128,12 @@ struct RouterHost {
 }
 
 impl Host for RouterHost {
+    fn runtime_probe(
+        &self,
+        r: &celeris_campaign::preflight_isolation::ProbeRequest,
+    ) -> Result<celeris_campaign::runtime_probe::RuntimeProbe, String> {
+        Ok(r.all_denied())
+    }
     fn probe_runner(&self) -> Box<dyn celeris_campaign::cap_probe::ProbeRunner> {
         Box::new(preflight_setup::OkRunner)
     }

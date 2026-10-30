@@ -81,6 +81,12 @@ struct DaemonHost {
 }
 
 impl Host for DaemonHost {
+    fn runtime_probe(
+        &self,
+        r: &celeris_campaign::preflight_isolation::ProbeRequest,
+    ) -> Result<celeris_campaign::runtime_probe::RuntimeProbe, String> {
+        Ok(r.all_denied())
+    }
     fn env_nonempty(&self, name: &str) -> bool {
         name == "CELERIS_CAMPAIGN_TOKEN"
     }

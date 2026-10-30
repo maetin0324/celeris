@@ -300,6 +300,12 @@ impl StubHost {
     }
 }
 impl Host for StubHost {
+    fn runtime_probe(
+        &self,
+        r: &celeris_campaign::preflight_isolation::ProbeRequest,
+    ) -> Result<celeris_campaign::runtime_probe::RuntimeProbe, String> {
+        Ok(r.all_denied())
+    }
     fn env_nonempty(&self, _: &str) -> bool {
         true
     }

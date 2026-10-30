@@ -173,3 +173,127 @@ fn real_bwrap_probe_cannot_read_outside_a_allowlist() {
     // source の許可表を省略したため、mount 違反で exit 1（path の拒否とは別の判定）。
     assert_eq!(result.status.code(), Some(1));
 }
+
+/// preflight と同じ経路（`preflight_isolation::run`）で、A は `Sandbox::runtime_args`、B・operator は実
+/// `ops-r2-sandbox.sh`、L1 は人の uid の process 自身から probe する。許可表の外の path は読めず、
+/// 許可表の中に置いた path は読めることを確かめる（probe が拒否を偽って出していない）。
+#[test]
+fn preflight_principals_probe_with_their_real_wrapping() {
+    use celeris_campaign::preflight_isolation::{ProbeRequest, ScriptSandbox, Wrap, findings, run};
+    let setting = std::env::var("CELERIS_USERNS_TESTS").unwrap_or_default();
+    if setting != "1" && setting != "require" {
+        eprintln!("skip: preflight principal probes require CELERIS_USERNS_TESTS=1 (or require)");
+        return;
+    }
+    let usable = Command::new("bwrap")
+        .args([
+            "--ro-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--unshare-pid",
+            "--",
+            "true",
+        ])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !usable {
+        assert_ne!(setting, "require", "bwrap user namespace is required");
+        eprintln!("skip: bwrap cannot create a namespace here");
+        return;
+    }
+    // ops-r2-sandbox.sh は workspaces・state の下の path を拒むので、cargo の target の一時 dir を使う。
+    let d = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let root = d.path();
+    let hidden = root.join("private/secret");
+    let (ws, cfg) = (root.join("ws"), root.join("cfg"));
+    let sb = ScriptSandbox {
+        state: Some(root.join("state")),
+        release: Some(root.join("release")),
+        account: Some(root.join("account")),
+        ro: Vec::new(),
+    };
+    for p in [hidden.parent().unwrap(), &ws, &cfg].into_iter().chain(
+        [&sb.state, &sb.release, &sb.account]
+            .into_iter()
+            .flatten()
+            .map(|p| p.as_path()),
+    ) {
+        fs::create_dir_all(p).unwrap();
+    }
+    fs::write(&hidden, "grader-private").unwrap();
+    fs::write(cfg.join(".credentials.json"), "").unwrap();
+    let inside = sb.state.as_ref().unwrap().join("visible");
+    fs::write(&inside, "trial").unwrap();
+    let script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/campaign/ops-r2-sandbox.sh");
+    let a = Sandbox {
+        account_id: "probe".into(),
+        auth_dir: cfg.clone(),
+        state_root: cfg.clone(),
+        toolchain: Default::default(),
+    };
+    let reqs = [
+        ProbeRequest {
+            principal: "A",
+            program: bin().into(),
+            wrap: Wrap::Bwrap {
+                args: a.runtime_args(&ws, &cfg, "/usr/bin/true".as_ref(), &[]),
+                stage: ws.clone(),
+            },
+            deny: vec![hidden.clone()],
+        },
+        ProbeRequest {
+            principal: "B",
+            program: bin().into(),
+            wrap: Wrap::Script {
+                script: script.clone(),
+                sandbox: sb.clone(),
+            },
+            deny: vec![hidden.clone(), inside.clone()],
+        },
+        ProbeRequest {
+            principal: "operator",
+            program: bin().into(),
+            wrap: Wrap::Script {
+                script,
+                sandbox: sb.clone(),
+            },
+            deny: vec![hidden.clone()],
+        },
+    ];
+    for r in &reqs {
+        let p = run(r).unwrap_or_else(|e| panic!("{}: {e}", r.principal));
+        assert!(
+            !p.paths[0].readable && !p.paths[0].listable,
+            "{}: {p:?}",
+            r.principal
+        );
+        assert!(p.mounts_outside_allow.is_empty(), "{}: {p:?}", r.principal);
+        if r.principal == "B" {
+            // 許可表の中（--state）に置いた path は読める = probe は実際に開いている。
+            assert!(p.paths[1].readable, "{p:?}");
+            assert_eq!(
+                findings(&p),
+                [format!("deny_readable:B:{}", inside.display())]
+            );
+        } else {
+            assert!(p.ok && findings(&p).is_empty(), "{p:?}");
+        }
+    }
+    // probe binary の一時 stage は残さない。
+    assert!(!sb.state.as_ref().unwrap().join(".preflight-probe").exists());
+    // L1: 人の uid の process は同じ uid の file を開ける（chmod では防げない = 別 uid が要る理由）。
+    let l1 = run(&ProbeRequest {
+        principal: "L1",
+        program: bin().into(),
+        wrap: Wrap::Host,
+        deny: vec![hidden.clone()],
+    })
+    .unwrap();
+    assert_eq!(
+        findings(&l1),
+        [format!("deny_readable:L1:{}", hidden.display())]
+    );
+}

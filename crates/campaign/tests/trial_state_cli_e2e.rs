@@ -369,6 +369,8 @@ impl Env {
             .arg(d.join("normal.toml"))
             .arg("--canaries")
             .arg(d.join("canaries.json"))
+            // A の runtime probe は実 bwrap で走る。B・operator は stub の sandbox script。
+            .args(preflight_setup::isolation_args(&i.isolation))
             // CLI の PATH は worker の PATH と別（B/C の probe は daemon process の環境を見る）。
             .env("CELERIS_E2E_TOKEN", TOKEN);
         c

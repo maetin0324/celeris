@@ -61,3 +61,6 @@ review の差し戻し（rebase の衝突解消で SOURCE.md の変更履歴が�
 ### 証拠（提出時の HEAD で実行、基準は `git merge-base HEAD main`）
 
 - `cargo test -p task-api --test cos_job_wait_extend`: 3 passed。
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 4781 passed / 20 skipped、web vitest 697 passed、node --test 113 passed）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。

@@ -32,6 +32,7 @@ license: このリポジトリと同じ（外部の license は無い）
 - 2026-10-30（ADR 2026-10-30-cos-plan-conforms-approve）: §2・§3 に定型の代答 (f) `plan_conforms`（おかしなところの無い計画の
   承認。推奨の `approve` だけ、待っている版の id、未回答の決定なし、課金・node-h・外部公開・破壊的・本番の段は前の `review: human` の段か
   人の承認の内側、24 時間に 3 版以上の再版は不可）と、(f) にせず人へ回す条件を足した。計画の承認の `approve` は (a) か (f) でだけ答える。
+  policy_version を 8 に上げた。config の `[cos.triage] policy_version` の既定も "8"。
 - 2026-10-30（ADR 2026-10-30-cos-job-wait-extend）: §2 にクラスタ job の待ちの上限の認可の行を、§3 に定型の代答 (g) `job_wait_extend`
   （job が全て待ちのままの上限到達に `once` ＋ note「延長」だけで答える、同じ job で 3 回まで）と、(g) にせず人へ回す条件を足した。
-  policy_version を 8 に上げた。config の `[cos.triage] policy_version` の既定も "8"。
+  policy_version を 9 に上げた。config の `[cos.triage] policy_version` の既定も "9"。

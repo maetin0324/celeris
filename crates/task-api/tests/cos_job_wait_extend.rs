@@ -113,7 +113,7 @@ fn ingest(env: &TestEnv, approval: ApprovalId) -> String {
         operation_id: None,
         summary: inbox_id.clone(),
         detail: String::new(),
-        policy_version: "8".into(),
+        policy_version: "9".into(),
         task_id: None,
     };
     env.store

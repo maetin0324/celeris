@@ -47,3 +47,17 @@ ADR: [2026-10-30-cos-job-wait-extend](../adr/2026-10-30-cos-job-wait-extend.md)
 
 - 延長の後の run が同じ job を待ち直すことは worker の指示（ADR-0090 の質問文）に頼っている。答えが「延長」のときに daemon が
   同じ job の wait を決定的に作り直せば、run を 1 回省ける。
+
+## 修正（WU fix-source、2026-10-30）
+
+review の差し戻し（rebase の衝突解消で SOURCE.md の変更履歴が崩れた）を直した。
+
+- `config/skills/cos-inbox-triage/SOURCE.md`: plan_conforms（ADR 2026-10-30-cos-plan-conforms-approve）の項の末尾に
+  「policy_version を 8 に上げた。既定も "8"」を戻した。job_wait_extend（ADR 2026-10-30-cos-job-wait-extend）の項の末行を
+  「policy_version を 9 に上げた。既定も "9"」に直した。
+- `crates/task-api/tests/cos_job_wait_extend.rs`: ingest の `policy_version` を "8" から "9" に揃えた。
+- commit: 「phase 1: SOURCE.md の変更履歴の版を直し、job_wait_extend 試験の policy_version を 9 に揃える」。
+
+### 証拠（提出時の HEAD で実行、基準は `git merge-base HEAD main`）
+
+- `cargo test -p task-api --test cos_job_wait_extend`: 3 passed。

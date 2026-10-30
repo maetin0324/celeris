@@ -80,7 +80,7 @@ impl ProbeRequest {
                     path: p.clone(),
                     readable: false,
                     listable: false,
-                    errno: Some("errno:13".into()),
+                    errno: Some(13),
                 })
                 .collect(),
             mounts_outside_allow: Vec::new(),

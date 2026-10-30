@@ -14,8 +14,9 @@ pub struct PathProbe {
     pub path: PathBuf,
     pub readable: bool,
     pub listable: bool,
-    /// 読み取り・親の一覧取得で最初に起きた OS error。成功時は null。
-    pub errno: Option<String>,
+    /// 読み取り・親の一覧取得で最初に起きた OS error の番号（`docs/ops/ops-r1-leak-check.md` と
+    /// `check-ops-r1-leak.py` が読む整数）。OS の番号を持たない error は -1。成功時は null。
+    pub errno: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,10 +29,8 @@ pub struct RuntimeProbe {
     pub ok: bool,
 }
 
-fn errno(e: &io::Error) -> String {
-    e.raw_os_error()
-        .map(|n| format!("errno:{n}"))
-        .unwrap_or_else(|| e.to_string())
+fn errno(e: &io::Error) -> i32 {
+    e.raw_os_error().unwrap_or(-1)
 }
 
 /// mountinfo の octal escaping（空白・tab・改行・backslash）を戻す。

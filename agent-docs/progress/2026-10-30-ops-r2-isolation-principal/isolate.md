@@ -45,7 +45,13 @@ ADR は `agent-docs/adr/2026-10-30-ops-r2-isolation-principal.md`、人の決定
 | preflight-gate | `CELERIS_USERNS_TESTS=require cargo nextest run -p celeris-campaign --test runtime_probe` | 6 passed（実 bwrap と実 `ops-r2-sandbox.sh` の中で許可表の外を読めない。L1 は同じ uid なので hit） |
 | preflight-gate | `bash scripts/dev/test-affected.sh` / clippy / fmt | exit 0、2,866 passed・9 skipped / exit 0 / exit 0 |
 
-close-docs（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）: 報告本文に書く。
+close-docs（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）:
+
+- `python3 scripts/campaign/test_check_ops_r1_leak.py` → exit 0、34 tests OK。`python3 scripts/campaign/test_ops_r2_sandbox.py` → exit 0、5 tests OK
+- `sh scripts/dev/check-doc-links.sh` → ok。`sh scripts/dev/check-adr-numbers.sh` → ok（350 files）。`sh scripts/dev/progress-index.sh --check` → ok
+- `bash scripts/dev/test-affected.sh` → exit 0（試験対象の変更なし。docs のみ）
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → この 2 file だけ（範囲内）
 
 ## 実 runtime の拒否確認
 

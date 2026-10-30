@@ -22,6 +22,12 @@ struct OrgHost {
 }
 
 impl Host for OrgHost {
+    fn runtime_probe(
+        &self,
+        r: &celeris_campaign::preflight_isolation::ProbeRequest,
+    ) -> Result<celeris_campaign::runtime_probe::RuntimeProbe, String> {
+        Ok(r.all_denied())
+    }
     fn probe_runner(&self) -> Box<dyn ProbeRunner> {
         Box::new(preflight_setup::OkRunner)
     }

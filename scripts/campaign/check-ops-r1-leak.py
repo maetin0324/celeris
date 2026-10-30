@@ -3,7 +3,7 @@
 
     python3 -I scripts/campaign/check-ops-r1-leak.py --private <private.json> [--private ...] \
         [--forbidden-sha <sha256> ...] [--canary <文字列> ...] --scan <dir|file> [--scan ...] \
-        [--deny-readable <path> ...] --out <json>
+        [--deny-readable <path> ...] [--runtime-probe <probe.json> ...] --out <json>
 
 検出するもの（どれか 1 つでも見つかれば exit 1。入力の誤りは exit 2。見つからなければ exit 0）:
 
@@ -23,6 +23,17 @@
 mode bit の判定は host から見た今の状態で、run の sandbox（bwrap の mount 等）が見える範囲を狭めることは数えない
 （多めに読めると判定する側に倒れる）。
 
+runtime probe（--runtime-probe、celeris.runtime-probe/1。celeris-campaign probe-read の出力）:
+- probe に載った --deny-readable の path は、host の mode ではなく probe の readable/listable で判定する。
+  principal が l1 か l1: で始まる probe は L1 の確認（人の uid の process から包まずに開いた結果）、他は runtime の確認。
+- runtime の probe の拒否（readable=false）と L1 の probe の拒否が揃い、かつ host 側の stat で path と祖先の
+  どれも run の uid の持ち物でない（owned_by_run_uid が空）path にだけ same_uid の limit を書かない。
+  run の uid が持ち主の path が残れば、両方の probe が拒否でも same_uid の limit を残す（同じ uid の chmod 000 は
+  probe では拒否に見えるが、run は chmod・rename で読めるようにできる）。canary が無ければ same_uid_without_canary の hit。
+- probe が無い path は今までどおり host から判定する。
+- どの probe でも readable=true の path、空でない mounts_outside_allow、ok=false は deny_readable の hit（exit 1）。
+- schema が違う・欄が欠けた probe JSON は入力の誤り（exit 2）。
+
 結果 JSON（--out）には pass・hits・checked・limits を書く。hit には文字列そのものを書かず、needle の id・
 長さ・sha256 だけを書く（結果 file 自体が漏洩源にならないように）。ただし checked.private[].sha256 は
 private.json の hash なので、結果 file を scan 先に置かない（--out の path は scan から外す）。
@@ -40,6 +51,7 @@ import tarfile
 import zipfile
 
 SCHEMA = "celeris.ops-r1-leak-check/1"
+PROBE_SCHEMA = "celeris.runtime-probe/1"
 DEFAULT_MIN_LEN = 12
 DEFAULT_PUBLIC_PATHS = (".schema", ".case_id", ".split")
 DEFAULT_CHUNK = 1 << 20
@@ -422,7 +434,127 @@ def owned_chain(path, uid):
     return owned
 
 
-def check_deny(path, uid, gids, same_process, scanner, limits, have_canary):
+# ---------------------------------------------------------------- runtime probe
+
+
+def is_l1_principal(principal):
+    return principal == "l1" or principal.startswith("l1:")
+
+
+def load_probe(path, index):
+    try:
+        with open(path, "rb") as f:
+            doc = json.loads(f.read().decode("utf-8"))
+    except OSError as e:
+        raise InputError(f"--runtime-probe {path}: {e}")
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise InputError(f"--runtime-probe {path}: JSON でない: {e}")
+    if not isinstance(doc, dict) or doc.get("schema") != PROBE_SCHEMA:
+        got = doc.get("schema") if isinstance(doc, dict) else None
+        raise InputError(f"--runtime-probe {path}: schema が {PROBE_SCHEMA} でない: {got!r}")
+
+    def bad(what):
+        return InputError(f"--runtime-probe {path}: {what}")
+    principal = doc.get("principal")
+    if not isinstance(principal, str) or not principal:
+        raise bad("principal が空でない文字列でない")
+    uid = doc.get("uid")
+    if not isinstance(uid, int) or isinstance(uid, bool):
+        raise bad("uid が整数でない")
+    if not isinstance(doc.get("ok"), bool):
+        raise bad("ok が真偽値でない")
+    mounts = doc.get("mounts_outside_allow")
+    if not isinstance(mounts, list):
+        raise bad("mounts_outside_allow が配列でない")
+    paths = doc.get("paths")
+    if not isinstance(paths, list):
+        raise bad("paths が配列でない")
+    for j, e in enumerate(paths):
+        if not isinstance(e, dict) or not isinstance(e.get("path"), str) or not e["path"]:
+            raise bad(f"paths[{j}].path が空でない文字列でない")
+        for k in ("readable", "listable"):
+            if not isinstance(e.get(k), bool):
+                raise bad(f"paths[{j}].{k} が真偽値でない")
+        errno = e.get("errno")
+        if errno is not None and (not isinstance(errno, int) or isinstance(errno, bool)):
+            raise bad(f"paths[{j}].errno が整数か null でない")
+    return {"index": index, "file": path, "principal": principal, "uid": uid, "ok": doc["ok"],
+            "l1": is_l1_principal(principal), "paths": paths, "mounts_outside_allow": mounts}
+
+
+def probe_hits(probes, scanner):
+    """probe そのものが示す漏洩（readable=true・許可表の外の mount・ok=false）を hit にする。"""
+    for pr in probes:
+        base = {"kind": "deny_readable", "source": "runtime_probe", "principal": pr["principal"],
+                "probe_uid": pr["uid"], "needle_id": f"runtime_probe[{pr['index']}]"}
+        for e in pr["paths"]:
+            if e["readable"]:
+                scanner.add_hit(dict(base, path=e["path"],
+                                     detail={"readable": True, "listable": e["listable"], "errno": e.get("errno")}))
+        if pr["mounts_outside_allow"]:
+            scanner.add_hit(dict(base, path=pr["file"], member="mounts_outside_allow",
+                                 detail={"mounts_outside_allow": len(pr["mounts_outside_allow"])}))
+        if not pr["ok"]:
+            scanner.add_hit(dict(base, path=pr["file"], member="ok=false",
+                                 detail="probe 自身が ok=false を返した"))
+
+
+def probe_entries_for(path, probes):
+    """--deny-readable の path に当たる probe の行を (probe, 行) の組で返す。"""
+    keys = {os.path.normpath(path), os.path.realpath(path)}
+    found = []
+    for pr in probes:
+        for e in pr["paths"]:
+            if os.path.normpath(e["path"]) in keys:
+                found.append((pr, e))
+    return found
+
+
+def same_uid_limit(path, uid, limits, scanner, have_canary):
+    owned = owned_chain(path, uid)
+    if owned:
+        limits.append({
+            "kind": "same_uid", "path": path, "owned_by_run_uid": owned[:5],
+            "note": "run の uid がこの path か祖先の持ち主なので、mode を絞っても run は chmod・rename で読める。"
+                    "可読でないことの判定では漏洩を防げない",
+            "alternative": "canary の出現検査（--canary を private の写しに入れ、scan 先に現れないことを見る）",
+            "canary_given": have_canary,
+        })
+        if not have_canary:
+            scanner.add_hit({"kind": "same_uid_without_canary", "path": path,
+                             "detail": "同じ uid の限界があるのに --canary が無く、代わりの検出が無い"})
+    return bool(owned)
+
+
+def check_deny_probe(path, found, uid, scanner, limits, have_canary):
+    """probe に載った path の判定。hit は probe_hits が出すので、ここでは entry と same_uid だけを決める。"""
+    runtime = [e for pr, e in found if not pr["l1"]]
+    l1 = [e for pr, e in found if pr["l1"]]
+    runtime_denied = bool(runtime) and not any(e["readable"] for e in runtime)
+    l1_denied = bool(l1) and not any(e["readable"] for e in l1)
+    entry = {
+        "path": path, "exists": os.path.lexists(path), "method": "runtime_probe",
+        "readable": any(e["readable"] for _, e in found),
+        "listable": any(e["listable"] for _, e in found),
+        "probes": [{"principal": pr["principal"], "uid": pr["uid"], "l1": pr["l1"], "readable": e["readable"],
+                    "listable": e["listable"], "errno": e.get("errno")} for pr, e in found],
+        "runtime_denied": runtime_denied,
+        "l1_denied": l1_denied,
+    }
+    owned = owned_chain(path, uid)
+    entry["owned_by_run_uid"] = owned[:5]
+    if runtime_denied and l1_denied and not owned:
+        entry["same_uid_limit"] = False
+        entry["same_uid_cleared_by"] = "runtime_probe_and_l1"
+    else:
+        entry["same_uid_limit"] = same_uid_limit(path, uid, limits, scanner, have_canary)
+    return entry
+
+
+def check_deny(path, uid, gids, same_process, scanner, limits, have_canary, probes=()):
+    found = probe_entries_for(path, probes)
+    if found:
+        return check_deny_probe(path, found, uid, scanner, limits, have_canary)
     entry = {"path": path, "exists": os.path.lexists(path)}
     if not entry["exists"]:
         entry["readable"] = False
@@ -441,19 +573,7 @@ def check_deny(path, uid, gids, same_process, scanner, limits, have_canary):
                     readable_children += 1
                     scanner.add_hit({"kind": "deny_readable", "path": fp, "detail": det})
     entry["readable_children"] = readable_children
-    owned = owned_chain(path, uid)
-    entry["same_uid_limit"] = bool(owned)
-    if owned:
-        limits.append({
-            "kind": "same_uid", "path": path, "owned_by_run_uid": owned[:5],
-            "note": "run の uid がこの path か祖先の持ち主なので、mode を絞っても run は chmod・rename で読める。"
-                    "可読でないことの判定では漏洩を防げない",
-            "alternative": "canary の出現検査（--canary を private の写しに入れ、scan 先に現れないことを見る）",
-            "canary_given": have_canary,
-        })
-        if not have_canary:
-            scanner.add_hit({"kind": "same_uid_without_canary", "path": path,
-                             "detail": "同じ uid の限界があるのに --canary が無く、代わりの検出が無い"})
+    entry["same_uid_limit"] = same_uid_limit(path, uid, limits, scanner, have_canary)
     return entry
 
 
@@ -467,6 +587,8 @@ def parse_args(argv):
     ap.add_argument("--canary", action="append", default=[])
     ap.add_argument("--scan", action="append", default=[], required=True)
     ap.add_argument("--deny-readable", action="append", default=[])
+    ap.add_argument("--runtime-probe", action="append", default=[],
+                    help="celeris.runtime-probe/1 の JSON（複数可）。載った path の可読判定を probe の結果で置き換える")
     ap.add_argument("--out", required=True)
     ap.add_argument("--run-uid", type=int, default=None, help="測定の run の uid（既定はこの process の uid）")
     ap.add_argument("--run-gid", type=int, action="append", default=None,
@@ -490,6 +612,7 @@ def run(args):
     for p in args.scan:
         if not os.path.lexists(p):
             raise InputError(f"--scan {p} が無い")
+    probes = [load_probe(p, i) for i, p in enumerate(args.runtime_probe)]
 
     needles, content_hashes, link_targets = [], {}, {}
     checked_private = []
@@ -528,10 +651,12 @@ def run(args):
     uid = os.geteuid() if args.run_uid is None else args.run_uid
     gids = set(args.run_gid) if args.run_gid else ({os.getegid()} | set(os.getgroups()))
     same_process = args.run_uid in (None, os.geteuid()) and args.run_gid is None
-    deny = [check_deny(p, uid, gids, same_process, scanner, limits, bool(args.canary))
+    probe_hits(probes, scanner)
+    deny = [check_deny(p, uid, gids, same_process, scanner, limits, bool(args.canary), probes)
             for p in args.deny_readable]
-    limits.append({"kind": "host_view", "note": "可読の判定は host から見た今の mode・owner で行う。run の sandbox が"
-                                                "見える範囲を狭める効果は数えない（多めに読めると判定する）"})
+    if not deny or any(d.get("method") != "runtime_probe" for d in deny):
+        limits.append({"kind": "host_view", "note": "probe に載らない path の可読の判定は host から見た今の mode・owner で"
+                                                    "行う。run の sandbox が見える範囲を狭める効果は数えない（多めに読めると判定する）"})
 
     return {
         "schema": SCHEMA,
@@ -547,6 +672,10 @@ def run(args):
             "public_identifier_paths": list(DEFAULT_PUBLIC_PATHS),
             "scan": scans,
             "deny_readable": deny,
+            "runtime_probe": [{"file": pr["file"], "principal": pr["principal"], "uid": pr["uid"], "l1": pr["l1"],
+                               "ok": pr["ok"], "paths": len(pr["paths"]),
+                               "readable": sum(1 for e in pr["paths"] if e["readable"]),
+                               "mounts_outside_allow": len(pr["mounts_outside_allow"])} for pr in probes],
             "run_identity": {"uid": uid, "gids": sorted(gids),
                              "source": "process" if args.run_uid is None and args.run_gid is None else "args"},
         },

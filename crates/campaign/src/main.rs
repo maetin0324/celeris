@@ -13,11 +13,11 @@ use celeris_campaign::{
     ledger::Ledger,
     manifest::CampaignManifest,
     preflight::{self, Inputs, RealHost},
-    runner,
+    preflight_isolation, runner,
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <ops-r1-a-raw|ops-r1-assemble|operator-usage|ops-r1-intake|ops-r1-trace|ops-r1-attribution|human-op|jev-stages|dry-run|validate|lock|collect-observed|collect-observed-out|stage-grader-inputs|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|ledger-init|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <probe-read|ops-r1-a-raw|ops-r1-assemble|operator-usage|ops-r1-intake|ops-r1-trace|ops-r1-attribution|human-op|jev-stages|dry-run|validate|lock|collect-observed|collect-observed-out|stage-grader-inputs|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|ledger-init|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--approval <json>] [--variant-b0-sha256 <hex>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -99,6 +99,30 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
         cap_env: arg(args, "--cap-env"),
         variant_b0_sha256: text("--variant-b0-sha256"),
         worker_programs: worker_program_args(args),
+        isolation: isolation_inputs(args),
+    }
+}
+
+/// `--deny-list`・`--eval-root`・`--sandbox-script` と B・operator の許可表（`--b-*`・`--operator-*`）。
+fn isolation_inputs(args: &[String]) -> preflight_isolation::IsolationInputs {
+    let sandbox = |p: &str| preflight_isolation::ScriptSandbox {
+        state: arg(args, &format!("--{p}-state")),
+        release: arg(args, &format!("--{p}-release")),
+        account: arg(args, &format!("--{p}-account")),
+        ro: args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| **a == format!("--{p}-ro"))
+            .filter_map(|(i, _)| args.get(i + 1).map(PathBuf::from))
+            .collect(),
+    };
+    preflight_isolation::IsolationInputs {
+        deny_list: arg(args, "--deny-list"),
+        eval_root: arg(args, "--eval-root"),
+        sandbox_script: arg(args, "--sandbox-script"),
+        b: sandbox("b"),
+        operator: sandbox("operator"),
+        probe_program: arg(args, "--probe-program"),
     }
 }
 
@@ -815,6 +839,17 @@ fn run(args: Vec<String>) -> Result<String, String> {
 }
 
 fn main() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("probe-read") {
+        return match celeris_campaign::runtime_probe::cli(
+            &std::env::args().skip(2).collect::<Vec<_>>(),
+        ) {
+            Ok(ok) => ExitCode::from(u8::from(!ok)),
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(1)
+            }
+        };
+    }
     // 測定専用 daemon が `[adapters.fake] command` として起こす無 LLM の検査 worker（stdin の run → stdout の done 1 行）。
     if std::env::args().nth(1).as_deref() == Some("cap-worker") {
         return match celeris_campaign::cap_probe::cap_worker_main() {

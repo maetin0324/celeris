@@ -30,6 +30,12 @@ struct FakeHost {
 }
 
 impl Host for FakeHost {
+    fn runtime_probe(
+        &self,
+        r: &celeris_campaign::preflight_isolation::ProbeRequest,
+    ) -> Result<celeris_campaign::runtime_probe::RuntimeProbe, String> {
+        Ok(r.all_denied())
+    }
     fn probe_runner(&self) -> Box<dyn celeris_campaign::cap_probe::ProbeRunner> {
         Box::new(preflight_setup::OkRunner)
     }
@@ -783,7 +789,8 @@ fn bin(args: &[&str], s: &Setup, env: &[(&str, &str)]) -> std::process::Output {
         .arg("--normal-config")
         .arg(s.dir.path().join("normal.toml"))
         .arg("--canaries")
-        .arg(s.dir.path().join("canaries.json"));
+        .arg(s.dir.path().join("canaries.json"))
+        .args(isolation_args(&s.inp.isolation));
     for (k, v) in env {
         c.env(k, v);
     }
@@ -799,7 +806,7 @@ fn cli_preflight_exit_codes_and_secret_never_printed() {
         &[("CELERIS_PREFLIGHT_TEST_TOKEN", SECRET)],
     );
     // 実 bwrap の可否は host 依存（userns の無い sandbox では使えない）。使えるときだけ全件 OK を求め、
-    // 使えないときは不足が隔離の 1 件だけであることを確かめる。
+    // 使えないときは不足が隔離（bwrap）のものだけであることを確かめる。A の runtime probe は実 bwrap で走る。
     let userns = Command::new("bwrap")
         .args([
             "--ro-bind",
@@ -830,8 +837,12 @@ fn cli_preflight_exit_codes_and_secret_never_printed() {
     if userns {
         assert!(others.is_empty(), "{v}");
     } else {
+        // bwrap の可否の 1 件と、同じ理由で走らない A の runtime probe（deny_readable:A:probe:）。
         assert!(
-            others.len() == 1 && others[0]["detail"].as_str().unwrap().contains("bwrap"),
+            (1..=2).contains(&others.len())
+                && others
+                    .iter()
+                    .all(|o| o["detail"].as_str().unwrap().contains("bwrap")),
             "{v}"
         );
     }
@@ -1180,4 +1191,356 @@ fn preflight_accepts_an_env_lock_built_from_the_measurement_daemon() {
     assert!(r.ok, "{:?}", r.missing);
     assert!(r.checked.contains(&"env-lock"));
     assert_eq!(r.failure_class, None);
+}
+
+/// runtime probe の結果を差し替える Host（ADR 2026-10-30-ops-r2-isolation-principal D3）。
+/// `readable` に挙げた (主体, path) だけ読めたことにし、`mounts` の主体には許可表の外の source を返す。
+struct ProbeHost {
+    inner: FakeHost,
+    readable: Vec<(&'static str, PathBuf)>,
+    mounts: Vec<(&'static str, &'static str)>,
+    fail: Option<&'static str>,
+    seen: std::sync::Mutex<Vec<celeris_campaign::preflight_isolation::ProbeRequest>>,
+    /// L1 の持ち主の判定に注入する run の uid（None は実 uid）。
+    run: Option<celeris_campaign::l1_owner::RunIds>,
+}
+
+impl Host for ProbeHost {
+    fn runtime_probe(
+        &self,
+        r: &celeris_campaign::preflight_isolation::ProbeRequest,
+    ) -> Result<celeris_campaign::runtime_probe::RuntimeProbe, String> {
+        self.seen.lock().unwrap().push(r.clone());
+        if self.fail == Some(r.principal) {
+            return Err("bwrap: cannot create namespace".into());
+        }
+        let mut p = r.all_denied();
+        for x in &mut p.paths {
+            if self
+                .readable
+                .iter()
+                .any(|(who, path)| *who == r.principal && *path == x.path)
+            {
+                x.readable = true;
+                x.errno = None;
+            }
+        }
+        p.mounts_outside_allow = self
+            .mounts
+            .iter()
+            .filter(|(who, _)| *who == r.principal)
+            .map(|(_, s)| s.to_string())
+            .collect();
+        p.ok = p.paths.iter().all(|x| !x.readable) && p.mounts_outside_allow.is_empty();
+        Ok(p)
+    }
+    fn run_ids(&self) -> Result<celeris_campaign::l1_owner::RunIds, String> {
+        self.run
+            .clone()
+            .map_or_else(celeris_campaign::l1_owner::RunIds::current, Ok)
+    }
+    fn probe_runner(&self) -> Box<dyn celeris_campaign::cap_probe::ProbeRunner> {
+        self.inner.probe_runner()
+    }
+    fn probe_daemon_worker(
+        &self,
+        u: &str,
+        t: &str,
+        spec: &celeris_campaign::cap_probe::WorkerProbeSpec,
+    ) -> Result<celeris_campaign::cap_probe::WorkerProbeRun, String> {
+        self.inner.probe_daemon_worker(u, t, spec)
+    }
+    fn env_nonempty(&self, name: &str) -> bool {
+        self.inner.env_nonempty(name)
+    }
+    fn resolve_program(&self, p: &Path) -> Result<ResolvedProgram, String> {
+        self.inner.resolve_program(p)
+    }
+    fn api_get(&self, u: &str, t: &str, path: &str) -> Result<Value, String> {
+        self.inner.api_get(u, t, path)
+    }
+    fn sandbox_usable(&self) -> Result<(), String> {
+        self.inner.sandbox_usable()
+    }
+}
+
+fn probe_host(readable: Vec<(&'static str, PathBuf)>) -> ProbeHost {
+    ProbeHost {
+        inner: host(),
+        readable,
+        mounts: Vec::new(),
+        fail: None,
+        seen: Default::default(),
+        run: None,
+    }
+}
+
+fn deny_misses(inp: &Inputs, h: &dyn Host) -> Vec<String> {
+    check(inp, h)
+        .missing
+        .into_iter()
+        .filter(|m| m.check == "deny_readable")
+        .map(|m| m.detail)
+        .collect()
+}
+
+/// 全 path が拒否されれば通り、4 主体（A・B・operator・L1）がそれぞれの包み方で probe される。
+#[test]
+fn isolation_probe_passes_when_every_principal_is_denied() {
+    use celeris_campaign::preflight_isolation::Wrap;
+    let s = setup();
+    let h = probe_host(Vec::new());
+    let r = check(&s.inp, &h);
+    assert!(r.ok, "{:?}", r.missing);
+    assert!(r.checked.contains(&"deny_readable"));
+    let seen = h.seen.lock().unwrap();
+    let who: Vec<_> = seen.iter().map(|r| r.principal).collect();
+    assert_eq!(who, ["A", "B", "operator", "L1"]);
+    let iso = &s.inp.isolation;
+    for r in seen.iter() {
+        match (&r.wrap, r.principal) {
+            (Wrap::Bwrap { args, stage }, "A") => {
+                // A の実起動と同じ関数（Sandbox::runtime_args）で作った引数。workspace は probe の stage 先。
+                assert!(
+                    args.windows(3)
+                        .any(|w| w[0] == "--bind" && Path::new(&w[1]) == stage)
+                );
+                assert!(args.contains(&"--clearenv".to_string()));
+                assert_eq!(r.deny.len(), 2);
+            }
+            (Wrap::Script { script, sandbox }, "B") => {
+                assert_eq!(Some(script), iso.sandbox_script.as_ref());
+                assert_eq!(sandbox.state, iso.b.state);
+            }
+            (Wrap::Script { sandbox, .. }, "operator") => {
+                assert_eq!(sandbox.state, iso.operator.state);
+            }
+            (Wrap::Host, "L1") => {
+                // L1 は評価器 root の下の path だけを人の uid から開く。
+                assert_eq!(r.deny.len(), 1);
+                assert!(r.deny[0].starts_with(iso.eval_root.as_ref().unwrap()));
+            }
+            (w, p) => panic!("unexpected wrap for {p}: {w:?}"),
+        }
+    }
+}
+
+/// どの主体でも 1 件読めれば deny_readable:<主体>:<path> で止まり、run_gated は有料実行・task 作成 0 件。
+#[test]
+fn one_readable_path_in_any_principal_stops_the_run() {
+    let s = setup();
+    let deny = celeris_campaign::preflight_isolation::load_deny_list(
+        s.inp.isolation.deny_list.as_ref().unwrap(),
+    )
+    .unwrap();
+    for who in ["A", "B", "operator", "L1"] {
+        let h = probe_host(vec![(who, deny[0].clone())]);
+        let m = deny_misses(&s.inp, &h);
+        assert_eq!(
+            m,
+            [format!("deny_readable:{who}:{}", deny[0].display())],
+            "{who}"
+        );
+        let mf = CampaignManifest::load(&s.inp.manifest_path).unwrap();
+        let input = mf.load_input(&s.inp.manifest_path, None).unwrap();
+        let out = s.dir.path().join(format!("out-{who}"));
+        let t = CountingTransport(AtomicUsize::new(0));
+        let exec = CelerisExecutor::new(&t, serde_json::Map::new(), 1800, out.join("cancel.jsonl"));
+        let e = run_gated(
+            &s.inp,
+            &h,
+            &mf,
+            &input,
+            &exec,
+            &RunOptions {
+                global_ledger: None,
+                out: out.clone(),
+                ..Default::default()
+            },
+        )
+        .expect_err("gate");
+        assert!(e.contains("deny_readable"), "{e}");
+        assert_eq!(t.0.load(Ordering::SeqCst), 0, "task 作成・有料実行 0 件");
+        assert!(!out.exists());
+    }
+    // mountinfo の許可表の外の source も同じ扱い。probe が走らない（namespace を作れない）ときも止める。
+    let mut h = probe_host(Vec::new());
+    h.mounts = vec![("operator", "/dev/nfs-home")];
+    h.fail = Some("A");
+    let m = deny_misses(&s.inp, &h);
+    assert!(
+        m.contains(&"deny_readable:operator:mount:/dev/nfs-home".to_string()),
+        "{m:?}"
+    );
+    assert!(
+        m.iter().any(|d| d.starts_with("deny_readable:A:probe:")),
+        "{m:?}"
+    );
+}
+
+/// 正式試行（measure 指定）では deny list・B と operator の許可表・評価器 root が欠けても止まる（fail-closed）。
+#[test]
+fn measured_run_without_deny_list_or_principal_inputs_stops() {
+    let s = setup();
+    let h = probe_host(Vec::new());
+    let mut inp = s.inp.clone();
+    inp.isolation.deny_list = None;
+    let r = check(&inp, &h);
+    assert!(!r.ok);
+    assert!(
+        deny_misses(&inp, &h)
+            .iter()
+            .any(|d| d.contains("--deny-list <file> is required")),
+        "{:?}",
+        r.missing
+    );
+    let empty = s.dir.path().join("empty-deny.txt");
+    fs::write(&empty, "# nothing\n").unwrap();
+    inp.isolation.deny_list = Some(empty);
+    assert!(deny_misses(&inp, &h).iter().any(|d| d.contains("no path")));
+
+    let mut inp = s.inp.clone();
+    inp.isolation.operator.account = None;
+    inp.isolation.eval_root = Some(s.dir.path().join("elsewhere"));
+    let m = deny_misses(&inp, &h);
+    assert!(
+        m.iter()
+            .any(|d| d.starts_with("deny_readable:operator:--operator-state")),
+        "{m:?}"
+    );
+    assert!(
+        m.iter()
+            .any(|d| d.starts_with("deny_readable:L1:--eval-root")),
+        "{m:?}"
+    );
+    // 正式試行でない（measure 無し・deny list 無し）ときは走らせない。
+    let mut inp = s.inp.clone();
+    inp.measure = None;
+    inp.isolation.deny_list = None;
+    assert!(!check(&inp, &h).checked.contains(&"deny_readable"));
+}
+
+/// 人の uid が持つ EVAL_ROOT の下を chmod 000 にした実 fixture（open も read_dir も EACCES）。
+/// deny list と `--eval-root` をそこへ向ける。drop で mode を戻す（tempdir を消せるように）。
+struct OwnChmod000(PathBuf);
+
+impl OwnChmod000 {
+    fn new(s: &mut Setup) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let root = s.dir.path().join("own-eval");
+        let file = root.join("k4/private.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "private grader").unwrap();
+        let deny = s.dir.path().join("deny-own.txt");
+        fs::write(&deny, format!("{}\n", file.display())).unwrap();
+        for p in [&file, &root.join("k4"), &root] {
+            fs::set_permissions(p, fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        s.inp.isolation.deny_list = Some(deny);
+        s.inp.isolation.eval_root = Some(root.clone());
+        Self(root)
+    }
+    fn file(&self) -> PathBuf {
+        self.0.join("k4/private.json")
+    }
+}
+
+impl Drop for OwnChmod000 {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        for p in [self.0.clone(), self.0.join("k4")] {
+            let _ = fs::set_permissions(p, fs::Permissions::from_mode(0o755));
+        }
+    }
+}
+
+/// 同じ uid の chmod 000 は open を拒否するが、持ち主（run の uid）が chmod で戻せるので L1 は止める
+/// （deny_readable:L1:<path>:owned_by_run_uid、有料実行・task 作成 0 件）。同じ fixture でも、Host に別の
+/// run uid を注入すれば通る（判定は持ち主の uid で決まり、open の成否では決まらない）。
+#[test]
+fn same_uid_chmod_000_eval_root_stops_l1_and_an_injected_other_uid_passes() {
+    let mut s = setup();
+    let own = OwnChmod000::new(&mut s);
+    let mut h = probe_host(Vec::new());
+    let m = deny_misses(&s.inp, &h);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert!(
+        m[0].starts_with(&format!(
+            "deny_readable:L1:{}:owned_by_run_uid {}",
+            own.file().display(),
+            own.0.display()
+        )),
+        "{m:?}"
+    );
+    let mf = CampaignManifest::load(&s.inp.manifest_path).unwrap();
+    let input = mf.load_input(&s.inp.manifest_path, None).unwrap();
+    let out = s.dir.path().join("out-own");
+    let t = CountingTransport(AtomicUsize::new(0));
+    let exec = CelerisExecutor::new(&t, serde_json::Map::new(), 1800, out.join("cancel.jsonl"));
+    let e = run_gated(
+        &s.inp,
+        &h,
+        &mf,
+        &input,
+        &exec,
+        &RunOptions {
+            global_ledger: None,
+            out: out.clone(),
+            ..Default::default()
+        },
+    )
+    .expect_err("gate");
+    assert!(e.contains("deny_readable:L1"), "{e}");
+    assert_eq!(t.0.load(Ordering::SeqCst), 0, "task 作成・有料実行 0 件");
+    assert!(!out.exists());
+
+    h.run = Some(celeris_campaign::l1_owner::RunIds {
+        uid: 4_242_424,
+        gids: Vec::new(),
+    });
+    assert_eq!(deny_misses(&s.inp, &h), Vec::<String>::new());
+}
+
+/// 実 binary（RealHost・実 uid・実 lstat）でも、同じ uid の chmod 000 の EVAL_ROOT では preflight が
+/// deny_readable:L1 で exit 1、run は out を作らない。迂回の env 変数・flag は無い。
+#[test]
+fn cli_preflight_stops_on_a_same_uid_chmod_000_eval_root() {
+    let mut s = setup();
+    let own = OwnChmod000::new(&mut s);
+    let env = [("CELERIS_PREFLIGHT_TEST_TOKEN", SECRET)];
+    let o = bin(&["preflight"], &s, &env);
+    assert_eq!(o.status.code(), Some(1));
+    let v: Value = serde_json::from_slice(&o.stderr_json()).unwrap();
+    assert_eq!(v["paid_calls_made"], json!(0));
+    let l1: Vec<&str> = v["missing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["check"] == "deny_readable")
+        .filter_map(|m| m["detail"].as_str())
+        .filter(|d| d.starts_with("deny_readable:L1:"))
+        .collect();
+    assert_eq!(l1.len(), 1, "{v}");
+    assert!(
+        l1[0].starts_with(&format!(
+            "deny_readable:L1:{}:owned_by_run_uid",
+            own.file().display()
+        )),
+        "{v}"
+    );
+    let out = s.dir.path().join("o");
+    let r = bin(
+        &[
+            "run",
+            "--executor",
+            "celeris",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+        &s,
+        &env,
+    );
+    assert_eq!(r.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&r.stderr).contains("deny_readable:L1:"));
+    assert!(!out.exists());
 }

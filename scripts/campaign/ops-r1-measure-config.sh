@@ -123,7 +123,7 @@ q() {
 }
 
 # ---- state（db・token・knowledge・workspace・scratch を全部この下に置く）
-mkdir -p "$STATE/kb/skills" "$STATE/ws" "$STATE/scratch" "$STATE/setup" "$(dirname "$OUT")"
+mkdir -p "$STATE/kb/skills" "$STATE/ws" "$STATE/scratch" "$STATE/setup" "$STATE/home" "$(dirname "$OUT")"
 if [ ! -s "$STATE/token" ]; then
     (umask 077 && od -An -N32 -tx1 /dev/urandom | tr -d ' \n' >"$STATE/token" && echo >>"$STATE/token")
 fi
@@ -265,3 +265,6 @@ EOF
 mv "$TMP_OUT" "$OUT"
 trap - EXIT
 echo "wrote $OUT (port $PORT, release $RELEASE_SHA12, models $MODELS, harness $HARNESS, skills:$SKILLS)"
+
+# The caller starts each trial with its own --state and HOME.
+printf 'state=%s\nHOME=%s\n' "$STATE" "$STATE/home"

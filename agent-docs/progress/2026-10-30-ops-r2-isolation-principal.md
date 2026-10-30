@@ -9,7 +9,7 @@ updated: 2026-10-30
 完了日: 2026-10-30
 
 結論: 実装は完了した（main に入る code と試験。fixture・実 bwrap の範囲で確認済み）。配備は未完了で、人の準備（評価器の uid・dir、
-測定専用 account の login、K2 の private の扱いの決定）と release 後の実 runtime の確認が残る。**実試行（K2 の正式試行・実 LLM の測定）は 1 件も行っていない。**
+測定専用 account の login、K2 の新しい private の作成。K2 の private の扱いは人が reauthor と決めた）と release 後の実 runtime の確認が残る。**実試行（K2 の正式試行・実 LLM の測定）は 1 件も行っていない。**
 K2 を始める前の確認は `docs/ops/ops-r2-k2-preflight.md` の 1 本の手順にまとめた。人の準備が済むまで、その §3（隔離 preflight）は L1 で必ず止まる。
 
 unit ごとの記録は `agent-docs/progress/2026-10-30-ops-r2-isolation-principal/<unit>.md`（isolate・principal・session・probe・stall ほか）。
@@ -23,7 +23,7 @@ unit ごとの記録は `agent-docs/progress/2026-10-30-ops-r2-isolation-princip
 | 1 | operator/MCP principal と出典付き relay。人の token を借りない。判断者・実行者・承認者を区別。人の能動時間は記録区間だけ。新しい権限・恒久承認なし | 実装完了。試験 1 file に人の token が残る（下の残件） | principal.md（`--send` を消し `--relay`＋必須の `--source`、`ops-r1-intake/2` に decided_by・executed_by・approved_by・relayed_by、人の token の `--relay` は 403）、probe.md 3 件目（relay の op は人の時間に数えない、人の op 行の無い試行は値を作らない） |
 | 2 | 開始前の実験専用 session と session-map で親/子の transcript を重複なく取り込む。外部 AI の介入は別 op/区間。trial/condition/request と対応。取れない消費は null と理由。schema 再利用、監視基盤なし | 実装完了・fixture で確認。実 Claude Code の起動と transcript の実 path は未確認 | session.md（`ops_r2_session` 4 passed、再取り込みで added=0・byte 一致、`usage_missing`・`transcript_missing`）、probe.md（親と subagent を 2 回ずつ取り込んで message ごとに 1 行） |
 | 3 | 実験 LLM・実 HPC 負荷なしの probe で CoS 直接遂行と task 経由の両方、二重計上なし、漏洩時の fail-closed、固定時計の停滞 source→triage→解消。実 LLM で未検証の範囲を明記。CoS 方針・reviewer 経路は不変 | 確認済み（fixture・偽の時計の範囲） | probe.md（`ops_r2_probe` 3 passed）、stall.md（`cos_chat_triage_stagnation` 3 passed、`cos_chat_stagnation_notify` 3 passed、`crates/` と `docs/ops/cos-chat.md` の差分なし） |
-| 4 | 回帰試験と test-affected/clippy/fmt。報告に本番設定・OS 権限・credential の範囲、K2 開始前チェック、実装完了と配備完了の区別、証拠・未検証範囲・残件 | この close の検査は下の「証拠」。各 unit の test-affected は exit 0（probe の時点で 2882 passed、9 skipped） | この file の各節、`docs/ops/ops-r2-k2-preflight.md` |
+| 4 | 回帰試験と test-affected/clippy/fmt。報告に本番設定・OS 権限・credential の範囲、K2 開始前チェック、実装完了と配備完了の区別、証拠・未検証範囲・残件 | final review で 1 回差し戻し（人の決定 reauthor が文書に未反映）。reauthor-docs で ADR 付記・`ops-r2-isolation.md` §4.5・`ops-r2-k2-preflight.md` §0〜§1・この file を新しい private の手順に直した。検査は下の「証拠」と reauthor-docs 節。各 unit の test-affected は exit 0（probe の時点で 2882 passed、9 skipped） | この file の各節、`docs/ops/ops-r2-k2-preflight.md` |
 
 ## 実装完了と配備完了
 
@@ -71,17 +71,24 @@ unit ごとの記録は `agent-docs/progress/2026-10-30-ops-r2-isolation-princip
    `/`・`/var`・`/var/lib` が root 持ちで人が書けず、残りが `celeris-eval 700` / `1733` / `755`。人の uid から `ls /var/lib/celeris-eval` が Permission denied。
    `getfacl -p /var/lib/celeris-eval` に追加の ACL が無い。`/local/celeris` の下は使わない（祖先を人の uid が持ち、L1 が `ancestor_owned_by_run_uid` で止まる）。
 
-3. K2 の private を `EVAL_ROOT` に置く（評価材料）
+3. K2 の新しい private を repo の外で作り `EVAL_ROOT` に置く（評価材料。人の決定 k2-private-in-git = reauthor）
+
+   人（または `sudo -iu celeris-eval` の shell）が作る。Celeris の worker・CoS・外部 operator は新しい private を見ない・作らない。repo には入れない。
 
    ```sh
    case=k2-bf-xattr-restart-campaign
    sudo install -d -o celeris-eval -g celeris-eval -m 0700 /var/lib/celeris-eval/private/final /var/lib/celeris-eval/private/final/$case
-   sudo install -o celeris-eval -g celeris-eval -m 0400 crates/campaign/fixtures/grader-private/final/$case/private.json /var/lib/celeris-eval/private/final/$case/private.json
-   sudo -u celeris-eval sha256sum /var/lib/celeris-eval/private/final/$case/private.json
+   sudo -iu celeris-eval     # 以下は celeris-eval の shell。umask 077 で
+   f=/var/lib/celeris-eval/private/final/k2-bf-xattr-restart-campaign/private.json
+   vi "$f"; chmod 0400 "$f"   # 新しい private を直接書く
+   sha256sum "$f"             # この値を人が承認票の「K2 の新しい private の sha256」欄に書く
    ```
 
-   確認: sha256 が承認票の値と一致（repo の現物は `d02126077a47495b121e1e678f055ba4e2493f92d05cd010f2bda32d30694760`、2026-10-30 に計算）。
-   K2 の private は git の履歴に残るので、そのまま使うか作り直すかを人が決める（ADR「人に決めてもらう点」1、未回答）。
+   確認: `docs/ops/ops-r2-isolation.md` §4.5 の書式確認（`CasePrivate` の 8 欄・`known_defects`/`false_claim_traps` が 1 件以上・id 重複なし）が `ok`、
+   `stat -c '%U %a'` が `celeris-eval 400`、sha256 が承認票の値と一致。照合は承認票の新しい private の sha256 だけで行う。
+   repo と git の履歴にある旧 private は漏洩済みの旧解答として採点に使わず、その path は deny list に残す。
+   repo の K2 の `case.json` の `private_ref.sha256` は旧 private の値のままで、新しい private を読むと `private file hash mismatch` になる。
+   正式試行の前に、その値を承認票の sha256 に替える変更（manifest の再 freeze を伴う）が要る（残件）。
 
 4. 評価器の起動方法（OS 権限。どちらか 1 つ）
 
@@ -131,6 +138,10 @@ unit ごとの記録は `agent-docs/progress/2026-10-30-ops-r2-isolation-princip
 
 ## 残件
 
+- K2 の新しい private は人が作る（未実施）。作成・置き場所・書式確認・sha256 の承認票への記載は「本番への移行」3 と `docs/ops/ops-r2-isolation.md` §4.5。
+- repo の K2 の `case.json` の `private_ref.sha256` を新しい private の sha256 に替える変更が要る（未対応。替えないと grader の読込が `private file hash mismatch` で止まる。manifest の再 freeze を伴う）。
+- `docs/ops/mlsys-main-4-pilot-runbook.md` の pin 表（main-4 pilot の記録）は K2 の旧 private の sha256 を持つ。K2 の正式試行の照合には使わない（直すかは pin を作り直すときに決める）。
+- repo の K2 の旧 private（漏洩済み）を HEAD から消すかは決めていない（ADR 付記 2026-10-30「K2 の private の作り直し」）。
 - `crates/celeris/tests/ops_r1_measure.rs` が試験の中だけで人の token（`human:ops-r1-e2e`）を config に足している。relay に書き換える unit が要る（principal.md の提案）。
 - 採点 wrapper（drop box → 採点 → 漏洩検査 → outbox）が無い。今の採点は人の uid で `--grader-root` を読む。
 - B の測定 daemon を bwrap の中で起動する通し試験（`crates/celeris/tests/`、stub harness）が無い（probe.md の提案）。
@@ -186,7 +197,7 @@ unit ごとの記録は `agent-docs/progress/2026-10-30-ops-r2-isolation-princip
 ### 見つけた事実
 
 - K2 と K4 の final の private.json が repo（`crates/campaign/fixtures/grader-private/final/`）に入っており、人の uid のすべての clone と git object から読める。
-  L1 だけでは塞げない（ADR の「人に決めてもらう点」1）。
+  L1 だけでは塞げない（ADR の「人に決めてもらう点」1。人の答えは reauthor）。
 - B の測定 daemon に渡す account dir には過去の session の transcript が入る。測定専用の account dir が要る。
 - K4 の measure-e2e の試験（`crates/celeris/tests/ops_r1_measure.rs`）は daemon.toml に人の token（`human:ops-r1-e2e`）を足している。principal unit で relay に替える。
 
@@ -206,4 +217,16 @@ unit ごとの記録は `agent-docs/progress/2026-10-30-ops-r2-isolation-princip
 
 ### 提案
 
-- 人に決めてもらう点 2 件（K2 の private の扱い、承認した依頼文の relay）を decisions として出した（result.json）。
+- 人に決めてもらう点 2 件（K2 の private の扱い、承認した依頼文の relay）を decisions として出した（result.json）。K2 の private の扱いは人が reauthor と答えた（2026-10-30）。
+
+## reauthor-docs WU の記録（final review 差し戻し criterion 4 の修正）
+
+人の決定 k2-private-in-git = reauthor（K2 の private を作り直し、新しいものは repo に入れない）を文書に反映した。コード（`crates/`・`scripts/`）は変えていない。
+
+- ADR `2026-10-30-ops-r2-isolation-principal.md`: 「人に決めてもらう点」1 を回答済みにし、付記「K2 の private の作り直し」に決定・作る主体・置き場所・照合（承認票の新しい private の sha256 だけ）・旧 private の扱い（漏洩済み、採点に使わない、deny list に残す）・`case.json` の hash の影響を書いた。
+- `docs/ops/ops-r2-isolation.md` §4.5: repo から install する手順を、`celeris-eval` の shell で `EVAL_ROOT` に直接書き 0400 にし、書式を確かめ、sha256 を承認票に書く手順に替えた。§6 に残件を足した。
+- `docs/ops/ops-r2-k2-preflight.md` §0・§1: 決定待ちの行を新しい private と `case.json` の hash の確認に替え、§1 の照合を承認票の新しい private の sha256 にした。
+- この file: 「本番への移行」3・受入結果・残件・結論を更新した。
+
+証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）は報告本文と result.json に書く。§4.5 の書式確認の script は、repo の旧 private（dev の試験用の読込と同じ形）に対して `ok`、case id を違えると `AssertionError: case_id/split` で止まることを確かめた（中身は出力していない）。
+

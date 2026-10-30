@@ -189,20 +189,73 @@ wrapper 自体はこの repo にまだ無い（§6）。
 試行の主体（A・B・operator）は bwrap の中で動く。bwrap は no_new_privs を立てるので、中から sudo の setuid は効かないはずだが、実機では未確認。
 準備後に `sh scripts/campaign/ops-r2-sandbox.sh ... -- /usr/bin/sudo -n -u celeris-eval /var/lib/celeris-eval-bin/grade` が失敗することを確かめる。
 
-### 4.5 正式 case の private を `EVAL_ROOT` へ移す
+### 4.5 正式 case の新しい private を repo の外で作り `EVAL_ROOT` に置く
 
-`--grader-root` は `<root>/final/<case>/private.json` の配置を読むので、同じ配置で置く。
+K2 の private は作り直す（人の決定 k2-private-in-git = reauthor、ADR 付記 2026-10-30「K2 の private の作り直し」）。
+repo にある K2 の private は git の履歴と clone に残る漏洩済みの旧解答で、採点にも照合にも使わない。
+
+- 作る主体: 人、または人が `sudo -iu celeris-eval` で入った評価器 uid の shell。Celeris の worker・CoS・外部 operator は新しい private を見ない・作らない。
+- 置き場所: `/var/lib/celeris-eval/private/final/<case>/private.json`（持ち主 `celeris-eval`、0400）。repo の作業ツリー・Celeris の作業場所・KB・artifacts・`/tmp` には置かない。commit しない。
+- `--grader-root /var/lib/celeris-eval/private` は `<root>/final/<case>/private.json` を読むので、この配置にする。
 
 ```sh
-case=<正式試行の case id>
+case=k2-bf-xattr-restart-campaign
 sudo install -d -o celeris-eval -g celeris-eval -m 0700 /var/lib/celeris-eval/private/final /var/lib/celeris-eval/private/final/$case
-sudo install -o celeris-eval -g celeris-eval -m 0400 \
-  crates/campaign/fixtures/grader-private/final/$case/private.json /var/lib/celeris-eval/private/final/$case/private.json
-sudo -u celeris-eval sha256sum /var/lib/celeris-eval/private/final/$case/private.json   # 承認票の sha256 と一致すること
+sudo -iu celeris-eval            # 以下は celeris-eval の shell
+umask 077
+case=k2-bf-xattr-restart-campaign
+f=/var/lib/celeris-eval/private/final/$case/private.json
+vi "$f"                          # 新しい private をここで直接書く（書式は下）
+chmod 0400 "$f"
 ```
 
-repo の HEAD から消すか（ADR D4）は、K2 については人の決定待ち（ADR「人に決めてもらう点」1）。消しても git の履歴と既存の clone には残るので、
-それらは L2 で塞ぎ、deny list に clone の `crates/campaign/fixtures/grader-private/final/<case>/private.json` を載せる。
+書式は grader の読込（`crates/campaign/src/cases.rs` の `CasePrivate` と `CasePrivate::validate`）に合わせる。
+
+| 欄 | 条件 |
+|---|---|
+| `schema` | `"celeris.campaign-case-private/1"` |
+| `case_id`・`split` | case の id（`k2-bf-xattr-restart-campaign`）と `"final"` |
+| `hidden_command` | 空でない文字列（隠し受入 command） |
+| `baseline_command` | 任意。文字列 |
+| `known_defects` | 1 件以上。各要素は `{id, description}` だけ |
+| `false_claim_traps` | 1 件以上。各要素は `{id, claim, why_wrong}` だけ |
+| `expected` | 参照値・再計算の仕様（任意の JSON） |
+
+上の 8 欄以外の key は読込で拒否される。`known_defects` と `false_claim_traps` の `id` は合わせて重複しない。
+同じ shell で次を実行し、`ok` だけが出ることを確かめる（中身は出さない）。
+
+```sh
+python3 -I - "$f" "$case" <<'PY'
+import json, sys
+p, cid = sys.argv[1], sys.argv[2]
+d = json.load(open(p))
+req = {"schema", "case_id", "split", "hidden_command", "known_defects", "false_claim_traps", "expected"}
+assert req <= d.keys() <= req | {"baseline_command"}, "keys"
+assert d["schema"] == "celeris.campaign-case-private/1", "schema"
+assert d["case_id"] == cid and d["split"] == "final", "case_id/split"
+assert isinstance(d["hidden_command"], str) and d["hidden_command"].strip(), "hidden_command"
+assert isinstance(d.get("baseline_command", ""), str), "baseline_command"
+kd, ft = d["known_defects"], d["false_claim_traps"]
+assert kd and ft, "real case needs known_defects and false_claim_traps"
+assert all(isinstance(x, dict) and set(x) == {"id", "description"} and all(isinstance(v, str) for v in x.values()) for x in kd), "known_defects"
+assert all(isinstance(x, dict) and set(x) == {"id", "claim", "why_wrong"} and all(isinstance(v, str) for v in x.values()) for x in ft), "false_claim_traps"
+ids = [x["id"] for x in kd + ft]
+assert len(ids) == len(set(ids)), "duplicate defect/trap id"
+print("ok")
+PY
+stat -c '%U %a' "$f"             # celeris-eval 400
+sha256sum "$f"                   # この値を人が承認票の「K2 の新しい private の sha256」欄に書く
+```
+
+sha256 の記録先は承認票（人が書く。operator は書かない）。開始前チェック（`ops-r2-k2-preflight.md` §0・§1）と採点の前の照合は、承認票のこの値とだけ比べる。
+新しい private の中身・sha256 を Celeris の task・進捗・KB には書かない（承認票の sha256 だけを試行の証跡で参照する）。
+
+`CaseSet::load` は公開部 `case.json` の `private_ref.sha256` と private の実 file の sha256 も照合する。repo の K2 の `case.json` は
+旧 private の値のままなので、このままでは `--grader-root /var/lib/celeris-eval/private` で `private file hash mismatch` になる。
+正式試行の前に、`case.json` の `private_ref.sha256` を承認票の値に替える変更（hash だけを公開部に書く。manifest の再 freeze を伴う）が要る（未対応、§6）。
+
+旧 private の repo の path は、漏洩済みの旧解答として deny list に残す。git の履歴と既存の clone にも残るので L2 で塞ぎ、
+deny list に clone の `crates/campaign/fixtures/grader-private/final/<case>/private.json` を載せる（その中身は採点に使わない）。
 
 ### 4.6 測定専用 Claude account dir に login する
 
@@ -245,3 +298,5 @@ probe の拒否だけでは L1 の確認にならない（同じ uid の chmod 0
 - 別 uid（`celeris-eval`）が持つ `EVAL_ROOT` の中に実在する private で L1 が通る e2e は無い（試験は別の uid を作れない）。
   通る規則は `l1_owner` の単体試験で run の uid を注入して確かめ、実 binary の通過は host にある他 uid 持ちの dir（中の path は存在しない）で確かめている。
   実 uid での確認は人の準備の後に §4.7 で行う。
+- K2 の新しい private は人が作る（§4.5、未実施）。repo の K2 の `case.json` の `private_ref.sha256` は旧 private の値のままで、
+  新しい private を `--grader-root` で読むと `private file hash mismatch` になる。値を承認票の sha256 に替える変更（manifest の再 freeze を伴う）は未対応。

@@ -1866,6 +1866,21 @@
           "const": "work_guidance",
           "description": "(d) Work guidance for a worker question that changes neither objective nor acceptance.",
           "type": "string"
+        },
+        {
+          "const": "review_rework",
+          "description": "(e) Reopen a task the reviewer failed for a technical defect (ADR 2026-10-29-cos-review-rework-reopen).",
+          "type": "string"
+        },
+        {
+          "const": "plan_conforms",
+          "description": "(f) Approve a plan gate whose plan has nothing out of the ordinary (ADR 2026-10-30-cos-plan-conforms-approve).",
+          "type": "string"
+        },
+        {
+          "const": "job_wait_extend",
+          "description": "(g) Extend the wait of cluster jobs still queued at the wait limit (ADR 2026-10-30-cos-job-wait-extend).",
+          "type": "string"
         }
       ]
     },
@@ -1923,6 +1938,27 @@
       ],
       "type": "object"
     },
+    "BasisPlan": {
+      "additionalProperties": false,
+      "description": "D2: the plan version CoS read and its sensitive stages (empty when none).",
+      "properties": {
+        "guarded_stages": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/GuardedStage"
+          },
+          "type": "array"
+        },
+        "plan_id": {
+          "description": "The id of the plan version waiting for approval (`PlanApprovalRequested.plan_id`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id"
+      ],
+      "type": "object"
+    },
     "BasisRef": {
       "additionalProperties": false,
       "properties": {
@@ -1942,20 +1978,29 @@
     },
     "BasisRefKind": {
       "description": "D2 `refs[].kind`: what a piece of evidence is.",
-      "enum": [
-        "standing_rule",
-        "decision",
-        "approval",
-        "usage",
-        "ledger",
-        "commit",
-        "artifact",
-        "progress",
-        "adr",
-        "doc",
-        "message"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "standing_rule",
+            "decision",
+            "approval",
+            "usage",
+            "ledger",
+            "commit",
+            "artifact",
+            "progress",
+            "adr",
+            "doc",
+            "message"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "review",
+          "description": "The reviewer run whose verdict failed the task (the id in `reviewer(<id>): …`).",
+          "type": "string"
+        }
+      ]
     },
     "BehindTarget": {
       "description": "Task value: the repo with the largest behind commits (ADR-0130 D4), plus all repos.",
@@ -8993,6 +9038,17 @@
             }
           ]
         },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BasisPlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "(f) `plan_conforms` only: the plan version CoS read and the guard of each sensitive stage."
+        },
         "refs": {
           "items": {
             "$ref": "#/$defs/BasisRef"
@@ -15782,6 +15838,34 @@
         "title",
         "status",
         "kind"
+      ],
+      "type": "object"
+    },
+    "GuardedStage": {
+      "additionalProperties": false,
+      "description": "D2: a stage that bills, spends node-hours, publishes, destroys or changes production, and its\nguard.",
+      "properties": {
+        "guard": {
+          "$ref": "#/$defs/StageGuardKind"
+        },
+        "id": {
+          "description": "The `review: human` stage key, or the standing rule / decision / approval id.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/StageRiskKind",
+          "description": "G1: why the stage is sensitive."
+        },
+        "stage": {
+          "description": "The stage key of the plan.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage",
+        "kind",
+        "guard",
+        "id"
       ],
       "type": "object"
     },
@@ -28524,6 +28608,31 @@
       ],
       "type": "object"
     },
+    "StageGuardKind": {
+      "description": "D2: what guards a sensitive stage.",
+      "oneOf": [
+        {
+          "const": "review_human",
+          "description": "An earlier stage of the same plan with `review: human` (the person checks before it runs).",
+          "type": "string"
+        },
+        {
+          "const": "standing_rule",
+          "description": "A standing rule a person set.",
+          "type": "string"
+        },
+        {
+          "const": "decision",
+          "description": "A decision a person answered.",
+          "type": "string"
+        },
+        {
+          "const": "approval",
+          "description": "An approval a person granted.",
+          "type": "string"
+        }
+      ]
+    },
     "StageHint": {
       "additionalProperties": false,
       "description": "ADR-0079 D12（Phase R2b）: 人が名指しした段階（`Task.routing.stages_hint`）。planner への入力で、\n構造の強制ではない（段階の数・名前は planner が決める）。CoS の `create_task` から写すのは R5a。",
@@ -28555,6 +28664,41 @@
         "human"
       ],
       "type": "string"
+    },
+    "StageRiskKind": {
+      "description": "G1: what makes a stage sensitive.",
+      "oneOf": [
+        {
+          "const": "billing",
+          "description": "Billing or paid trials.",
+          "type": "string"
+        },
+        {
+          "const": "node_hours",
+          "description": "Cluster node-hours.",
+          "type": "string"
+        },
+        {
+          "const": "production",
+          "description": "Production changes (daemon, systemd, release, production config).",
+          "type": "string"
+        },
+        {
+          "const": "external_publish",
+          "description": "Publishing or sending outside.",
+          "type": "string"
+        },
+        {
+          "const": "destructive",
+          "description": "Deleting, overwriting or other irreversible operations.",
+          "type": "string"
+        },
+        {
+          "const": "secrets_permissions",
+          "description": "Secrets, permissions or security.",
+          "type": "string"
+        }
+      ]
     },
     "StageSpec": {
       "additionalProperties": false,

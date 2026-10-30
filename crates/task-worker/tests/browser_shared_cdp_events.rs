@@ -59,7 +59,7 @@ fn ws_recv(stream: &mut UnixStream) -> Value {
 
 #[test]
 fn relay_delivers_events_emitted_after_the_reply() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = short_tempdir().expect("dir");
     let (controller_end, mut browser) = UnixStream::pair().expect("pair");
     let read = std::fs::File::from(std::os::fd::OwnedFd::from(
         controller_end.try_clone().expect("clone"),
@@ -158,4 +158,16 @@ fn relay_delivers_events_emitted_after_the_reply() {
         json!({"method":"Page.loadEventFired","params":{"timestamp":4.0},"sessionId":"S1"}),
     );
     assert_eq!(ws_recv(&mut agent)["params"]["timestamp"], 4.0);
+}
+
+/// Unix socket を置く試験用の一時 dir。socket の path は `sun_path`（108 byte）に収まる必要があり、
+/// run の `TMPDIR` のような深い path の下では bind できないので、そのときは `/tmp` に作る。
+fn short_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let base = std::env::temp_dir();
+    let base = if base.as_os_str().len() > 40 {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        base
+    };
+    tempfile::Builder::new().prefix("cz").tempdir_in(base)
 }

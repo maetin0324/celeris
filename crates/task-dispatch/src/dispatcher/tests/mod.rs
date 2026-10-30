@@ -2207,6 +2207,8 @@ struct ParallelWuAdapter {
     met: tokio::sync::Notify,
     /// planner run（`context.execution_planner`）が順に書く `execution-plan.json`（F5-fix）。
     planner_outputs: StdMutex<std::collections::VecDeque<String>>,
+    /// reviewer run（`TaskKind::Review`）が書く `review.json`（無ければ書かない）。
+    review_json: Option<String>,
 }
 
 impl ParallelWuAdapter {
@@ -2225,7 +2227,13 @@ impl ParallelWuAdapter {
             meet: None,
             met: tokio::sync::Notify::new(),
             planner_outputs: StdMutex::new(std::collections::VecDeque::new()),
+            review_json: None,
         }
+    }
+
+    fn with_review(mut self, json: &str) -> Self {
+        self.review_json = Some(json.to_string());
+        self
     }
 
     fn with_planner_output(self, json: String) -> Self {
@@ -2300,6 +2308,20 @@ impl WorkerAdapter for ParallelWuAdapter {
         _sink: &dyn EventSink,
     ) -> Result<RunOutcome, AdapterError> {
         use std::sync::atomic::Ordering;
+        if req.task.kind == TaskKind::Review
+            && let Some(json) = &self.review_json
+        {
+            std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+            std::fs::write(req.artifacts_dir.join("review.json"), json).unwrap();
+            return Ok(RunOutcome {
+                terminal: Terminal::Done {
+                    summary: "reviewed".into(),
+                    evidence: vec![],
+                    usage: None,
+                },
+                exit_code: Some(0),
+            });
+        }
         if req.context.execution_planner.is_some() {
             let next = self.planner_outputs.lock().unwrap().pop_front();
             if let Some(json) = next {

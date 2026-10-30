@@ -496,7 +496,7 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("l.sock");
     let registry = Registry::open(dir.path().join("state"), "inst-live").expect("registry");
     let backend = Arc::new(LiveBackend::default());
@@ -802,7 +802,7 @@ fn browser_launcher_live_view_rejects_input() {
 
 /// Serves `live_started` for session `s1` and then `script` verbatim.
 fn fake_launcher(script: Vec<Vec<u8>>) -> (tempfile::TempDir, PathBuf) {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("fake.sock");
     let listener = UnixListener::bind(&sock).expect("bind");
     std::thread::spawn(move || {

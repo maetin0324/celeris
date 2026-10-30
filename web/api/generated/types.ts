@@ -372,7 +372,7 @@ export type AutoReplanSource = "integration" | "work_unit";
 
 export type BackoffCause = "retry" | "infra";
 
-export type BasisCategory = "within_approved_frame" | "raise_once" | "documented_default" | "work_guidance";
+export type BasisCategory = "within_approved_frame" | "raise_once" | "documented_default" | "work_guidance" | "review_rework" | "plan_conforms" | "job_wait_extend";
 
 export type BasisFailures = {
   "current": string;
@@ -388,12 +388,17 @@ export type BasisFrame = {
   "used": number;
 };
 
+export type BasisPlan = {
+  "guarded_stages"?: Array<GuardedStage>;
+  "plan_id": string;
+};
+
 export type BasisRef = {
   "id": string;
   "kind": BasisRefKind;
 };
 
-export type BasisRefKind = "standing_rule" | "decision" | "approval" | "usage" | "ledger" | "commit" | "artifact" | "progress" | "adr" | "doc" | "message";
+export type BasisRefKind = "standing_rule" | "decision" | "approval" | "usage" | "ledger" | "commit" | "artifact" | "progress" | "adr" | "doc" | "message" | "review";
 
 export type BehindTarget = {
   "behind_target_age_seconds"?: number | null;
@@ -1883,6 +1888,7 @@ export type DelegatedBasis = {
   "category": BasisCategory;
   "failures"?: BasisFailures | null;
   "frame"?: BasisFrame | null;
+  "plan"?: BasisPlan | null;
   "refs": Array<BasisRef>;
 };
 
@@ -3189,6 +3195,13 @@ export type GraphNode = {
   "role"?: string | null;
   "status": Status;
   "title": string;
+};
+
+export type GuardedStage = {
+  "guard": StageGuardKind;
+  "id": string;
+  "kind": StageRiskKind;
+  "stage": string;
 };
 
 export type HaltState = "paused" | "cancelled" | "archived";
@@ -5712,6 +5725,8 @@ export type SnapshotTaskWait = {
   "wait": TaskWait;
 };
 
+export type StageGuardKind = "review_human" | "standing_rule" | "decision" | "approval";
+
 export type StageHint = {
   "scope"?: string;
   "title": string;
@@ -5720,6 +5735,8 @@ export type StageHint = {
 export type StageName = "shadow" | "enforce";
 
 export type StageReview = "none" | "human";
+
+export type StageRiskKind = "billing" | "node_hours" | "production" | "external_publish" | "destructive" | "secrets_permissions";
 
 export type StageSpec = {
   "key": string;

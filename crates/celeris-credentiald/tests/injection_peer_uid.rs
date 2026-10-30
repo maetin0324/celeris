@@ -205,7 +205,7 @@ struct Fixture {
 impl Fixture {
     /// 本番と同じ `serve_attested`（設定上の launcher UID 付き）で実 broker を起こす。
     fn serve(launcher_uid: u32) -> Self {
-        let root = tempfile::tempdir().expect("tempdir");
+        let root = short_tempdir().expect("tempdir");
         for d in ["config", "data", "run"] {
             let p = root.path().join(d);
             fs::create_dir(&p).expect("mkdir");
@@ -496,4 +496,16 @@ fn same_uid_control_is_worker_not_allowed() {
     );
     let my_uid = unsafe { libc::geteuid() };
     assert_eq!(fx.journal_count(my_uid, "injection_worker_not_allowed"), 1);
+}
+
+/// Unix socket を置く試験用の一時 dir。socket の path は `sun_path`（108 byte）に収まる必要があり、
+/// run の `TMPDIR` のような深い path の下では bind できないので、そのときは `/tmp` に作る。
+fn short_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let base = std::env::temp_dir();
+    let base = if base.as_os_str().len() > 40 {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        base
+    };
+    tempfile::Builder::new().prefix("cz").tempdir_in(base)
 }

@@ -35,7 +35,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = short_tempdir().unwrap();
         let runtime = dir.path().join("runtime");
         let output = dir.path().join("output");
         std::fs::create_dir_all(runtime.join("actions")).unwrap();
@@ -292,4 +292,16 @@ fn gate_wire_stopped_closes_session_once_and_never_runs_actions() {
         ["snapshot", "close"],
         "stop closes once, runs nothing"
     );
+}
+
+/// Unix socket を置く試験用の一時 dir。socket の path は `sun_path`（108 byte）に収まる必要があり、
+/// run の `TMPDIR` のような深い path の下では bind できないので、そのときは `/tmp` に作る。
+fn short_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let base = std::env::temp_dir();
+    let base = if base.as_os_str().len() > 40 {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        base
+    };
+    tempfile::Builder::new().prefix("cz").tempdir_in(base)
 }

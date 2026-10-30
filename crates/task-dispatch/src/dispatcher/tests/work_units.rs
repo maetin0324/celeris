@@ -1471,9 +1471,118 @@ async fn phase_gate_replan_requires_a_note() {
     );
 }
 
-/// ADR-0074 §6 F2 (e): 衝突する 2 つの WU で `merge-<phase>-<key>` の repair WU ができ、done の後に
-/// 内容衝突は人の受信箱へ統合の依頼を出し、修復 run を自動投入しない。統合の依頼は追記事象 1 件で
-/// 残り（ADR parallel integration D4）、一般通知には載らない。
+/// ADR 2026-10-29-phase-integration-auto-repair D1: auto_resolve で解けない内容衝突（両側が README.md の同じ行を
+/// 変えた）でも、人の回答なしに merge の repair WU（Task の worktree）が両側の変更を残して解き、統合が
+/// 続きから再開して段の検査を通り、最終 review（reviewer の合格）を経て親の branch に入る。統合の依頼は出ない。
+#[tokio::test]
+async fn phase_integration_conflict_is_resolved_by_a_merge_repair_without_a_person() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = parallel_task(repo.path(), "grep -q A README.md && grep -q B README.md");
+    task.acceptance.push(Criterion {
+        text: "両側の変更が残る".into(),
+        check: Check::Reviewer,
+    });
+    store.insert(&task).unwrap();
+    adopt_v2_plan(
+        &store,
+        task.id,
+        &["build"],
+        vec![v2_wu("a", "build", &[]), v2_wu("b", "build", &[])],
+    );
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::from_millis(50))
+            .with_file("a", "README.md", "A\n")
+            .with_file("b", "README.md", "B\n")
+            .with_review(r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"A と B が残る"}]}"#)
+            // repair WU（Task の worktree で走る）: b のブランチを merge し、衝突を両側を残して解く。
+            .with_action("merge-build-b", |cwd| {
+                let refs = git_out(
+                    cwd,
+                    &[
+                        "for-each-ref",
+                        "--format=%(refname:short)",
+                        "refs/heads/celeris-wu/",
+                    ],
+                );
+                let branch = refs
+                    .lines()
+                    .find(|l| l.ends_with("/b"))
+                    .expect("b branch")
+                    .to_string();
+                let _ = git_ok(cwd, &["merge", "--no-ff", "--no-edit", &branch]);
+                std::fs::write(cwd.join("README.md"), "A\nB\n").unwrap();
+                git_out(cwd, &["add", "-A"]);
+                git_out(cwd, &["commit", "-q", "--no-edit"]);
+            }),
+    );
+    let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+    run_until_idle(&mut d, 800).await;
+    let stored = store.get(task.id).unwrap().unwrap();
+    assert_eq!(stored.status, Status::Done, "{stored:?}");
+    let units = store.work_units_for(task.id).unwrap();
+    let repair = units
+        .iter()
+        .find(|u| u.key == "merge-build-b")
+        .expect("merge repair work unit");
+    assert_eq!(repair.kind, task_core::WorkUnitKind::Repair);
+    assert_eq!(repair.status, task_core::WorkUnitStatus::Done);
+    assert!(repair.branch.is_none(), "repair は Task の worktree で走る");
+    assert!(
+        repair.spec.objective.contains("# 統合の依頼")
+            && repair.spec.objective.contains("両方の変更を保って解く"),
+        "repair に auto_resolve の判定と両側の意図を渡す: {}",
+        repair.spec.objective
+    );
+    let integ = units.iter().find(|u| u.key == "integrate-build").unwrap();
+    assert_eq!(integ.status, task_core::WorkUnitStatus::Done);
+    let events = events_of(&store, task.id);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::RepairScheduled { key, class, origin, .. }
+            if key == "merge-build-b"
+                && class == "merge_conflict"
+                && *origin == task_core::execution::RepairOrigin::Integration
+    )));
+    assert!(
+        events
+            .iter()
+            .all(|e| !matches!(e, Event::IntegrationRequested { .. })),
+        "自動で解けた衝突は人に依頼しない"
+    );
+    // 最終 review: 決定的な検査（両側の変更が残る）と reviewer の合格を経た。
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::ReviewVerdict {
+            criterion_idx: 0,
+            pass: true,
+            ..
+        }
+    )));
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::ReviewVerdict {
+                criterion_idx: 1,
+                pass: true,
+                ..
+            }
+        )),
+        "reviewer の判定が残る: {events:?}"
+    );
+    assert!(store.open_integration_requests().unwrap().is_empty());
+    let task_branch = format!("celeris/{}", task.id);
+    assert_eq!(
+        git_out(repo.path(), &["show", &format!("{task_branch}:README.md")]),
+        "A\nB"
+    );
+}
+
+/// ADR 2026-10-29-phase-integration-auto-repair D2: 内容衝突は先に merge の repair WU に解かせ、repair が
+/// 上限（2 回）まで失敗したときだけ人の受信箱へ統合の依頼を出す。依頼の本文（理由）に自動の解消の経過が出る。
+/// 統合の依頼は追記事象 1 件で残り（ADR parallel integration D4）、一般通知には載らない。
 #[tokio::test]
 async fn phase_integration_request_is_the_only_inbox_item() {
     let repo = tempfile::tempdir().unwrap();
@@ -1507,10 +1616,24 @@ async fn phase_integration_request_is_the_only_inbox_item() {
         integ.blocked_reason,
         Some(task_core::WorkUnitBlockedReason::Question)
     );
+    // 自動の解消: repair WU を 2 回作り、どちらも衝突を解けずに退いた（replan しない）。
+    let repairs: Vec<_> = units
+        .iter()
+        .filter(|u| u.kind == task_core::WorkUnitKind::Repair)
+        .map(|u| (u.key.as_str(), u.status))
+        .collect();
+    assert_eq!(
+        repairs,
+        vec![
+            ("merge-build-b", task_core::WorkUnitStatus::Cancelled),
+            ("merge-build-b-2", task_core::WorkUnitStatus::Cancelled),
+        ]
+    );
     assert!(
-        !units
+        events_of(&store, task.id)
             .iter()
-            .any(|u| u.kind == task_core::WorkUnitKind::Repair)
+            .all(|e| !matches!(e, Event::AutoReplanRequested { .. })),
+        "merge の repair WU の失敗で replan しない"
     );
     let open = store.open_integration_requests().unwrap();
     assert_eq!(open.len(), 1, "{open:?}");
@@ -1521,6 +1644,14 @@ async fn phase_integration_request_is_the_only_inbox_item() {
     assert!(
         request.conflict_files.iter().any(|f| f == "README.md"),
         "{request:?}"
+    );
+    assert!(
+        request.reason.starts_with("自動の解消が失敗")
+            && request
+                .reason
+                .contains("merge-build-b 失敗、merge-build-b-2 失敗"),
+        "{}",
+        request.reason
     );
     let events = store.events_for(task.id).unwrap();
     assert!(
@@ -1564,6 +1695,14 @@ async fn phase_integration_request_is_the_only_inbox_item() {
     assert_eq!(
         for_task[0].kind,
         task_ops::human_inbox::InboxKind::IntegrationRequest
+    );
+    assert!(
+        for_task[0]
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("理由: 自動の解消が失敗")),
+        "{:?}",
+        for_task[0].detail
     );
     // 再 tick でも同じ両端の head の依頼は 1 件のまま。
     run_until_idle(&mut d, 800).await;

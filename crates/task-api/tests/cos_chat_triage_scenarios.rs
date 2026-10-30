@@ -145,8 +145,31 @@ fn approval(env: &TestEnv) -> Approval {
 
 /// A root task waiting for its plan approval (`blocked(awaiting_plan_approval)`).
 fn plan_gate_task(env: &TestEnv) -> task_core::Task {
-    let task = new_task(TaskKind::Execute, Status::Ready);
+    let mut task = new_task(TaskKind::Execute, Status::Ready);
+    // A human check sends the plan to a person (ADR 2026-10-30-plan-conforms-human-guards G2 (1)).
+    task.acceptance[0].check = task_core::Check::Reviewer;
     env.seed(&task);
+    let plan = task_core::ExecutionPlanRow {
+        id: "plan-1".into(),
+        task_id: task.id.to_string(),
+        version: 1,
+        origin: task_core::PlanOrigin::Planner,
+        planner_run_id: None,
+        status: task_core::PlanStatus::Active,
+        spec: serde_json::from_value(json!({
+            "schema": task_core::EXECUTION_PLAN_SCHEMA_V3, "rationale": "",
+            "stages": [{"key": "phase-1", "kind": "implement", "title": "実装"},
+                       {"key": "phase-2", "kind": "test", "title": "確認", "review": "human"}],
+        }))
+        .expect("spec"),
+        created_at: OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("time"),
+        superseded_at: None,
+    };
+    env.store
+        .execution_plans_replace(task.id, vec![plan])
+        .expect("plan");
     env.store
         .apply_transition(task.id, task_core::Trigger::Dispatch, None)
         .expect("dispatch");
@@ -296,7 +319,9 @@ async fn cos_chat_triage_a_answers_each_wait_kind_without_webhook() {
         (
             "plan_gate-",
             json!({"option": "approve", "note": "既承認計画の具体化"}),
-            common::cos_ops::documented_default_basis(),
+            json!({"category": "plan_conforms",
+                   "refs": [{"kind": "message", "id": "GET /api/v1/tasks/x/tree"}],
+                   "plan": {"plan_id": "plan-1"}}),
         ),
     ];
     let mut ops = Vec::new();

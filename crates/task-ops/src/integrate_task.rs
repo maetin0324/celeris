@@ -277,5 +277,7 @@ fn git_ok(repo: &Path, args: &[&str]) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+pub mod phase;
+
 #[cfg(test)]
 mod tests;

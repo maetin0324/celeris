@@ -14,7 +14,7 @@ impl Drop for Guard {
 #[test]
 fn browser_doctor_ping_requires_control_pid_admission() {
     for admitted in [true, false] {
-        let root = tempfile::tempdir().unwrap();
+        let root = short_tempdir().unwrap();
         let home = root.path().join("home");
         let runtime = root.path().join("run");
         for dir in [
@@ -66,4 +66,16 @@ fn browser_doctor_ping_requires_control_pid_admission() {
         assert!(reply.binding_token.is_none());
         assert!(reply.lease_id.is_none());
     }
+}
+
+/// Unix socket を置く試験用の一時 dir。socket の path は `sun_path`（108 byte）に収まる必要があり、
+/// run の `TMPDIR` のような深い path の下では bind できないので、そのときは `/tmp` に作る。
+fn short_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let base = std::env::temp_dir();
+    let base = if base.as_os_str().len() > 40 {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        base
+    };
+    tempfile::Builder::new().prefix("cz").tempdir_in(base)
 }

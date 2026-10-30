@@ -437,6 +437,10 @@ fn the_root_comes_from_the_flag_then_the_env_then_the_config() {
     let configured = PathBuf::from("/tmp/kb-config");
     assert_eq!(resolve_root(Some(&explicit), Some(&configured)), explicit);
     assert_eq!(resolve_root(None, Some(&configured)), configured);
+    // 空の path は指定なしと同じ（空の根は cwd に index.json を書いてしまう）。
+    let empty = PathBuf::new();
+    assert_eq!(resolve_root(Some(&empty), Some(&configured)), configured);
+    assert_eq!(resolve_root(None, Some(&empty)), resolve_root(None, None));
     // 既定は `~/.local/share/celeris/knowledge`（`~` は展開される）。
     let fallback = resolve_root(None, None);
     assert!(fallback.ends_with("knowledge"), "{}", fallback.display());
@@ -1091,4 +1095,12 @@ fn projects_readme_has_no_project_scope() {
         default_scope("projects/agent-platform/design.md").as_deref(),
         Some("project:agent-platform")
     );
+}
+
+/// 空の根では索引を書かない（cwd の作業ツリーに `index.json` を作らない）。
+#[test]
+fn an_empty_root_writes_no_index() {
+    assert!(reindex(Path::new("")).is_err());
+    assert!(ensure_index(Path::new("")).items.is_empty());
+    assert!(!Path::new(INDEX_FILE).exists());
 }

@@ -228,6 +228,7 @@ pub(crate) fn answers_wait(action: &str) -> bool {
             | "execution.phase_gate"
             | "execution.plan_gate"
             | "question.answer"
+            | "task.reopen"
     )
 }
 
@@ -251,11 +252,18 @@ pub(crate) async fn wait_for_operation(
         return Ok(None);
     }
     let feed = human_feed(state).await?;
+    // ADR 2026-10-29-cos-review-rework-reopen D3: reopening a task whose failure waits in the inbox
+    // answers that wait (its native route is `retry`, so it is found by the task).
+    let reopen = matched.action == "task.reopen";
     let found = feed.items.iter().find(|x| {
-        x.answer
-            .native
-            .as_ref()
-            .is_some_and(|native| native.path == path)
+        if reopen {
+            x.kind == InboxKind::Failed && x.task.as_ref().map(|t| t.id.to_string()) == matched.id
+        } else {
+            x.answer
+                .native
+                .as_ref()
+                .is_some_and(|native| native.path == path)
+        }
     });
     let task_scoped = match matched.action {
         "execution.phase_gate" => Some(InboxKind::PhaseGate),
@@ -289,10 +297,22 @@ pub(crate) async fn wait_for_operation(
         recommended: found.and_then(|x| x.recommended.clone()),
         task_id,
         // The chosen key: `option` (decision・inbox), `action` (gates) or `decision` (approval).
-        option: text("option")
-            .or_else(|| text("action"))
-            .or_else(|| text("decision")),
-        note: text("note"),
+        option: if reopen {
+            Some(basis::REOPEN_OPTION.to_owned())
+        } else {
+            text("option")
+                .or_else(|| text("action"))
+                .or_else(|| text("decision"))
+        },
+        // `approval.decide` carries the free text in `answer`.
+        note: text("note").or_else(|| {
+            (matched.action == "approval.decide")
+                .then(|| text("answer"))
+                .flatten()
+        }),
+        approval_id: (matched.action == "approval.decide")
+            .then(|| matched.id.clone())
+            .flatten(),
     };
     let human_required = state
         .blocking(move |store| {
@@ -672,6 +692,9 @@ pub(crate) fn answer_target(found: &InboxItem, input: &InboxAnswerBody) -> Basis
         task_id: found.task.as_ref().map(|t| t.id),
         option: (!input.option.is_empty()).then(|| input.option.clone()),
         note: input.note.clone(),
+        approval_id: (found.kind == InboxKind::Authorization)
+            .then(|| found.id.strip_prefix("authorization-").map(str::to_owned))
+            .flatten(),
     }
 }
 

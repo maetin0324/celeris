@@ -7,10 +7,7 @@ use axum::http::{HeaderValue, header};
 use axum::routing::{get, post};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{
-    Event, Notice, NoticeId, NoticeKind, NoticeQuery, NoticeStore, Status, TaskStore,
-    WorkUnitBlockedReason, WorkUnitStatus,
-};
+use task_core::{Event, Notice, NoticeId, NoticeKind, NoticeQuery, NoticeStore, TaskStore};
 use task_ops::human_inbox::{HumanInbox, InboxItem, InboxKind};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -458,67 +455,27 @@ async fn answer(
                 // D4 付記（2026-10-04）: 統合 WU がこの依頼で止まっている（task blocked・WU blocked(question)）
                 // ときだけ再開・cancel まで行う。既に別の経路（汎用の回答・replan）で再開・完了した WU の
                 // 依頼は、回答の記録だけ行って受信箱から消す（410 にして残り続けさせない）。
-                let phase_unit = if let Some(key) = origin.strip_prefix("phase:") {
-                    let task = store
-                        .get(task_id)
-                        .map_err(store_problem)?
-                        .ok_or_else(|| gone(&item_id))?;
-                    store
-                        .work_units_for(task_id)
-                        .map_err(store_problem)?
-                        .into_iter()
-                        .find(|unit| {
-                            unit.key == key && unit.kind == task_core::WorkUnitKind::Integrate
-                        })
-                        .filter(|unit| {
-                            task.status == Status::Blocked
-                                && unit.status == WorkUnitStatus::Blocked
-                                && matches!(
-                                    unit.blocked_reason,
-                                    Some(WorkUnitBlockedReason::Question)
-                                        | Some(WorkUnitBlockedReason::ContinuationCap)
-                                )
-                        })
-                } else {
-                    None
-                };
+                let phase_unit = task_ops::integrate_task::phase::blocked_integration_unit(
+                    store, task_id, &origin,
+                )
+                .map_err(store_problem)?;
                 if !store
                     .integration_request_answer(task_id, &request_id, &answer, note.as_deref(), &by)
                     .map_err(store_problem)?
                 {
                     return Err(gone(&item_id));
                 }
-                if let Some(mut unit) = phase_unit {
+                if let Some(unit) = phase_unit {
                     if answer == "declined" {
                         task_ops::gate::cancel(store, task_id, None)
                             .map_err(|e| ops_problem(store, e, Some("cancel")))?;
                     } else {
-                        let previous = unit.status;
-                        unit.status = WorkUnitStatus::Pending;
-                        unit.blocked_reason = None;
-                        unit.updated_at = time::OffsetDateTime::now_utc()
-                            .format(&Rfc3339)
-                            .map_err(|_| ApiProblem::internal("timestamp encoding failed"))?;
-                        store
-                            .work_unit_transition(
-                                task_id,
-                                unit.clone(),
-                                Event::WorkUnitTransitioned {
-                                    work_unit_id: unit.id,
-                                    key: unit.key,
-                                    from: previous,
-                                    to: WorkUnitStatus::Pending,
-                                    reason: "integration_answer".to_string(),
-                                    run_id: None,
-                                },
-                            )
-                            .map_err(store_problem)?;
-                        task_ops::gate::answer(
+                        task_ops::integrate_task::phase::resume_integration_unit(
                             store,
                             task_id,
+                            unit,
                             note.unwrap_or_else(|| answer.clone()),
                             &by,
-                            Some(Status::Blocked),
                         )
                         .map_err(|e| ops_problem(store, e, Some("answer")))?;
                     }

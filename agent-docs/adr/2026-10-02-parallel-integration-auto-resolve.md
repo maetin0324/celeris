@@ -217,3 +217,8 @@ task ごとの進捗ファイル（`agent-docs/progress/*.md` とその入れ子
 本番 `01M420EMSFS1VP5RWF2FGCV6XR`（done）の残留 2 件は origin が `phase:integrate-impl` と `phase:integrate-close` で、回収の対象に入る
 （本番 DB を `sqlite3 -readonly` で確認）。
 本番の取り残しはこの版を含む release の昇格後、最初の tick で閉じる。本 task の worker は本番 DB の書き込みや昇格を行わない。
+
+## 付記（2026-10-29、ADR 2026-10-29-phase-integration-auto-repair）
+
+段の統合では、D3 の `NeedsHuman` を即座に人へ回さない。まず merge の repair WU（ADR-0074 D1.4）が衝突を解き、衝突した WU ごとに
+2 回失敗したときだけ D4 の統合の依頼を記録する（理由に自動の解消の経過を書く）。配送（origin `delivery`）の扱いは変えない。

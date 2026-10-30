@@ -123,7 +123,7 @@ impl Fx {
         Self::serve(Admission::Attested, Some(launcher_uid))
     }
     fn serve(admission: Admission, launcher_uid: Option<u32>) -> Self {
-        let root = tempfile::tempdir().expect("tempdir");
+        let root = short_tempdir().expect("tempdir");
         for d in ["config", "data", "run"] {
             let p = root.path().join(d);
             fs::create_dir(&p).expect("mkdir");
@@ -989,4 +989,16 @@ fn pair_injection_selector_and_shape_mismatches_never_consume_the_lease() {
     assert!(reply.ok, "{:?}", reply.code);
     let (reply, _, _) = inject(&fx, &request("sess-2", "auth-2", &single));
     assert!(reply.ok, "{:?}", reply.code);
+}
+
+/// Unix socket を置く試験用の一時 dir。socket の path は `sun_path`（108 byte）に収まる必要があり、
+/// run の `TMPDIR` のような深い path の下では bind できないので、そのときは `/tmp` に作る。
+fn short_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let base = std::env::temp_dir();
+    let base = if base.as_os_str().len() > 40 {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        base
+    };
+    tempfile::Builder::new().prefix("cz").tempdir_in(base)
 }

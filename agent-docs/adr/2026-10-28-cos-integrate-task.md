@@ -88,3 +88,10 @@ reviewer の合格の束縛（`(repo, target_sha, reviewed_sha)`）と配送の 
 - 機械的に解けない衝突も、CoS が integrate task を起票すれば、worker が解き、決定的な検査と reviewer が判定してから main に入る。
 - 失敗した件だけが人に回り、受信箱に task id と状態が残る。
 - integrate task の分だけ worker と reviewer の費用がかかる。1 依頼 1 件に限るので連鎖はしない。
+
+## 付記（2026-10-29、ADR 2026-10-29-phase-integration-auto-repair）
+
+- 段の統合（origin `phase:*`）の衝突は、人に回す前に daemon が merge の repair WU に解かせる（同 ADR D1・D2）。段の依頼が受信箱に
+  出るのは repair WU が尽きた後だけで、理由の文が「自動の解消が失敗」で始まる。段の依頼の 422 `integrate_task_unsupported_origin` は残す。
+- delivery の依頼の integrate task は daemon が自動で起票しない。受信箱の推奨 `integrate_task` に CoS の一次対応が答える（同 ADR D4）。
+- 古い段の依頼は stranded sweep の `retry_unrepaired_requests` が自動の解消へ戻す（同 ADR D3）。

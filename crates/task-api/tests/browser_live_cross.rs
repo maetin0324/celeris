@@ -335,7 +335,7 @@ struct FakeLauncher {
 
 impl FakeLauncher {
     fn new() -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = short_tempdir().expect("tempdir");
         let sock = dir.path().join("l.sock");
         // daemon（この process）の UID: 自分で作った dir の持ち主。
         let daemon_uid = std::fs::metadata(dir.path()).expect("tempdir meta").uid();
@@ -1038,4 +1038,16 @@ async fn browser_live_view_existing_takeover_policy() {
         "input reached CDP: {methods:?}"
     );
     h.stop().await;
+}
+
+/// Unix socket を置く試験用の一時 dir。socket の path は `sun_path`（108 byte）に収まる必要があり、
+/// run の `TMPDIR` のような深い path の下では bind できないので、そのときは `/tmp` に作る。
+fn short_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let base = std::env::temp_dir();
+    let base = if base.as_os_str().len() > 40 {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        base
+    };
+    tempfile::Builder::new().prefix("cz").tempdir_in(base)
 }

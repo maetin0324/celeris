@@ -22,3 +22,22 @@ license: このリポジトリと同じ（外部の license は無い）
   ときだけ `chat.review_report` で統括 CoS チャットに報告する。この run からは受信箱の件を resolve しない）を足し、mount 先の
   説明を `launch.rs` の現行（統括・案件・review の thread にも mount）に合わせた。受信箱の件の判定基準は変えていないので
   policy_version は 6 のまま（config の `[cos.triage] policy_version` も変えない）。
+- 2026-10-29（ADR 2026-10-29-phase-integration-auto-repair）: §2 の追加の規則に、段の統合の依頼は daemon の merge repair WU が
+  尽きた後にだけ受信箱に出て CoS は escalate すること、古い依頼は daemon の sweep が自動の解消へ戻すことを足した。段の依頼には
+  前から `integrate_task` の選択肢が無く CoS は escalate していたので、判断の基準は変わらない。policy_version は 6 のまま
+  （config の `[cos.triage] policy_version` も変えない）。
+- 2026-10-29（ADR 2026-10-29-cos-review-rework-reopen）: §2・§3 に定型の代答 (e) `review_rework`（reviewer の技術的な差し戻しで
+  failed になった task の開き直し、同じ task で 2 回まで、同じ差し戻し文の繰り返しは不可）と、(e) にせず人へ回す条件を足した。
+  policy_version を 7 に上げた。config の `[cos.triage] policy_version` の既定も "7"。
+- 2026-10-30（ADR 2026-10-30-cos-plan-conforms-approve）: §2・§3 に定型の代答 (f) `plan_conforms`（おかしなところの無い計画の
+  承認。推奨の `approve` だけ、待っている版の id、未回答の決定なし、課金・node-h・外部公開・破壊的・本番の段は前の `review: human` の段か
+  人の承認の内側、24 時間に 3 版以上の再版は不可）と、(f) にせず人へ回す条件を足した。計画の承認の `approve` は (a) か (f) でだけ答える。
+  policy_version を 8 に上げた。config の `[cos.triage] policy_version` の既定も "8"。
+- 2026-10-30（ADR 2026-10-30-cos-job-wait-extend）: §2 にクラスタ job の待ちの上限の認可の行を、§3 に定型の代答 (g) `job_wait_extend`
+  （job が全て待ちのままの上限到達に `once` ＋ note「延長」だけで答える、同じ job で 3 回まで）と、(g) にせず人へ回す条件を足した。
+  policy_version を 9 に上げた。config の `[cos.triage] policy_version` の既定も "9"。
+- 2026-10-30（ADR 2026-10-30-plan-conforms-human-guards、ADR 2026-10-28-cos-routine-delegated-answers 付記 A5）: §2 の表に計画の承認の
+  人へ回す行（human check、計画の検査の失敗、`near_limit:` など費用・上限の理由、前の版の承認以降の目的・受け入れ条件の編集、守りの無い
+  危うい段）を、追加の規則に危うい段の 6 種（`billing`・`node_hours`・`production`・`external_publish`・`destructive`・`secrets_permissions`）を、
+  §3 の (f) に `guarded_stages[].kind`（必須）と新しい拒否（403 `cos_human_required`・422 `cos_basis_plan_needs_human`）を足した。
+  policy_version を 10 に上げた。config の `[cos.triage] policy_version` の既定も "10"。

@@ -104,3 +104,30 @@ ADR 2026-10-28-cos-integrate-task D4 は、統合の依頼を CoS が `integrate
 `integrate_task` にする。CoS はこれを `documented_default`（`refs` に `agent-docs/adr/2026-10-28-cos-integrate-task.md`）で
 代答する。basis の無い `integrate_task` の答えは他と同じく 422（`cos_basis_missing`）。escalated の依頼は従来どおり
 `human_required_reason` で 403 になり、推奨も選択肢も出さない。
+
+## 付記 A2（2026-10-29）: 5 種類目 `review_rework`
+
+[2026-10-29-cos-review-rework-reopen](2026-10-29-cos-review-rework-reopen.md) が、reviewer の技術的な差し戻しで failed になった
+task の開き直し（失敗の件への `reopen`）を 5 種類目 `review_rework` として足した。D1 の「4 種類だけ」はこの付記で 5 種類になる。
+refs の kind に `review`（差し戻した reviewer run の id）を足し、problem code に `cos_basis_rework_limit` を足した。policy_version は "7"。
+
+
+## 付記 A3（2026-10-30）: 6 種類目 `plan_conforms`
+
+[2026-10-30-cos-plan-conforms-approve](2026-10-30-cos-plan-conforms-approve.md) が、おかしなところの無い計画の承認（plan gate の推奨 `approve`）を
+6 種類目 `plan_conforms` として足した。D1 の (a) の「plan gate」はそのまま残すが、plan gate の `approve` は `plan_conforms` か
+`within_approved_frame` でだけ答えられ、`documented_default` では 422 になる。`basis` に `plan`（`plan_id`・`guarded_stages`）を足し、
+problem code に `cos_basis_plan_unguarded`・`cos_basis_plan_churn` を足した。policy_version は "8"。
+
+## 付記 A4（2026-10-30）: 7 種類目 `job_wait_extend`
+
+[2026-10-30-cos-job-wait-extend](2026-10-30-cos-job-wait-extend.md) が、クラスタ job の待ち上限の認可への「延長」（`once` ＋ note「延長」だけ）を
+7 種類目 `job_wait_extend` として足した。job が全て待ち（Q）のまま、同じ job の上限到達が 3 回以内のときだけ通る。refs には答える
+approval を `approval` で入れる。problem code に `cos_basis_job_not_queued`・`cos_basis_extend_limit` を足した。policy_version は "9"。
+
+## 付記 A5（2026-10-30）: `plan_conforms` の人へ回す条件と危うい段の種類
+
+[2026-10-30-plan-conforms-human-guards](2026-10-30-plan-conforms-human-guards.md) が、6 種類目 `plan_conforms` に人へ回す決定的な条件
+（task の受け入れ条件の human check は 403、承認の理由の `near_limit:` など費用・上限の理由と前の版の承認以降の目的・受け入れ条件の編集は
+422 `cos_basis_plan_needs_human`）と、`guarded_stages[].kind`（必須の 6 種）を足した。category の数は 7 のまま。problem code に
+`cos_basis_plan_needs_human` を足した。skill の §2 の表・§3 の (f) をこれに合わせ、policy_version は "10"。

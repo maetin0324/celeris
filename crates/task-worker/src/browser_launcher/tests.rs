@@ -133,7 +133,7 @@ struct Fixture {
 }
 
 fn fixture_with(allowed: Vec<u32>, limits: LauncherLimits, backend: FakeBackend) -> Fixture {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("l.sock");
     let state_dir = dir.path().join("state");
     let registry = Registry::open(&state_dir, "inst-now").expect("registry");
@@ -159,7 +159,7 @@ fn fixture_with(allowed: Vec<u32>, limits: LauncherLimits, backend: FakeBackend)
 }
 
 fn fixture_hooked(hook: TestHookFn) -> Fixture {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("l.sock");
     let state_dir = dir.path().join("state");
     let registry = Registry::open(&state_dir, "inst-now").expect("registry");
@@ -911,7 +911,7 @@ fn rec(session_id: &str, instance_id: &str, pid: i32, starttime: u64) -> Session
 
 #[test]
 fn reap_orphans_kills_only_matching_starttime_of_other_instances() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let reg = Registry::open(dir.path(), "inst-new").expect("registry");
     let (mut reused, reused_pid, reused_st) = spawn_group();
     let (mut orphan, orphan_pid, orphan_st) = spawn_group();
@@ -953,7 +953,7 @@ fn reap_orphans_kills_only_matching_starttime_of_other_instances() {
 #[test]
 fn registry_rejects_path_like_session_ids_and_writes_private_files() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let reg = Registry::open(dir.path().join("s"), "i").expect("registry");
     assert!(reg.write(&rec("../x", "i", 2, 0)).is_err());
     reg.write(&rec("ok", "i", 2, 0)).expect("write");
@@ -971,7 +971,7 @@ fn registry_rejects_path_like_session_ids_and_writes_private_files() {
 
 /// 1 要求を読み、決めた生の応答 body を 1 個返す偽 launcher（版ずれの再現用）。
 fn reply_once(body: &'static [u8]) -> (tempfile::TempDir, PathBuf, std::thread::JoinHandle<()>) {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let sock = dir.path().join("skew.sock");
     let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
     let handle = std::thread::spawn(move || {
@@ -1034,7 +1034,7 @@ fn client_identifies_the_responding_process_not_the_listener_creator() {
     use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixListener;
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::short_tempdir().expect("tempdir");
     let path = dir.path().join("launcher.sock");
     // listen socket はこの process（systemd の役）が作る。
     let listener = UnixListener::bind(&path).expect("bind");

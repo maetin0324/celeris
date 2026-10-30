@@ -27,6 +27,9 @@ use celeris_campaign::{
 };
 use serde_json::{Value, json};
 
+mod daemon_port;
+use daemon_port::PortReservation;
+
 const TOKEN_ENV: &str = "CAP_PROBE_REAL_DAEMON_TOKEN";
 const SECRET: &str = "super-secret-value-must-not-leak";
 
@@ -108,6 +111,8 @@ struct Daemon {
     child: Child,
     _dir: tempfile::TempDir,
     url: String,
+    /// child を止めた後に放す（`Drop::drop` の後に field が drop される）。
+    _port: PortReservation,
 }
 
 impl Drop for Daemon {
@@ -125,15 +130,24 @@ fn start_daemon(env: &[(&str, &str)]) -> Daemon {
 /// `claude_env` は `[adapters.claude_code].env`（実 B/C harness の adapter 環境）。codex は adapter env なし。
 fn start_daemon_with(env: &[(&str, &str)], claude_env: &[(&str, &str)]) -> Daemon {
     cli_tools();
+    let mut refused = Vec::new();
+    for _ in 0..3 {
+        match spawn_daemon(env, claude_env) {
+            Ok(d) => return d,
+            Err(why) => refused.push(why),
+        }
+    }
+    panic!("daemon did not come up as the sole owner of its port: {refused:?}");
+}
+
+/// 1 回の起動。応答が spawn した子本人でなければ（別の daemon が同じ port にいる）子を止めて `Err`。
+fn spawn_daemon(env: &[(&str, &str)], claude_env: &[(&str, &str)]) -> Result<Daemon, String> {
     let dir = tempfile::tempdir().expect("daemon dir");
     let h = dir.path();
     fs::create_dir_all(h.join("ws")).expect("ws");
     fs::write(h.join("api.token"), "real-daemon-token\n").expect("token");
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("port")
-        .local_addr()
-        .expect("addr")
-        .port();
+    let reservation = PortReservation::new();
+    let port = reservation.port();
     fs::write(
         h.join("config.toml"),
         format!(
@@ -218,18 +232,26 @@ rules = [
     for (k, v) in env {
         c.env(k, v);
     }
-    let d = Daemon {
+    let mut d = Daemon {
         child: c.spawn().expect("spawn celeris"),
         url: format!("http://127.0.0.1:{port}"),
         _dir: dir,
+        _port: reservation,
     };
     let t = CurlTransport::new(&d.url, TOKEN_ENV).expect("transport");
     let start = Instant::now();
     loop {
-        if t.request("GET", "/api/v1/config", None)
-            .is_ok_and(|r| r.status == 200)
+        if let Some(status) = d.child.try_wait().expect("try_wait") {
+            panic!(
+                "daemon exited before answering ({status}): {}",
+                fs::read_to_string(d._dir.path().join("daemon.log")).unwrap_or_default()
+            );
+        }
+        if let Ok(r) = t.request("GET", "/api/v1/config", None)
+            && r.status == 200
         {
-            return d;
+            let pid = r.body["identity"]["pid"].as_u64().expect("identity.pid") as u32;
+            return daemon_port::check_sole_owner(port, d.child.id(), pid).map(|()| d);
         }
         assert!(
             start.elapsed() < Duration::from_secs(60),
@@ -498,4 +520,58 @@ fn probe_runs_under_each_real_harness_adapter_env() {
     assert_eq!(bad.failure_class, Some("env_failure"));
     assert_eq!(failing(&bad), vec!["claude-code/worker-env"]);
     assert_eq!(bad.paid_calls_made, 0);
+}
+
+/// 404 `task_not_found` の原因の再現: 同じ config（同じ port）の 2 つ目の celeris も `SO_REUSEPORT` で bind に成功し、
+/// 接続の一部が 2 つ目に届く。起動待ちの照合（[`daemon_port::check_sole_owner`]）はこれを本人以外の応答として拒む。
+/// 試験 helper の port 予約は autobind と `SO_REUSEPORT` の無い bind を防ぐが、同じ port を明示した daemon は防げない。
+#[test]
+fn a_second_daemon_on_the_same_port_is_detected() {
+    let t = tools("intruder");
+    let d = start_daemon(&[("PATH", &base_path(&t))]);
+    let port = d._port.port();
+    daemon_port::check_sole_owner(port, d.child.id(), identity(&d).pid).expect("sole owner");
+
+    let other = tempfile::tempdir().expect("intruder dir");
+    for f in ["config.toml", "api.token"] {
+        fs::copy(d._dir.path().join(f), other.path().join(f)).expect("copy");
+    }
+    fs::create_dir_all(other.path().join("ws")).expect("ws");
+    let log = fs::File::create(other.path().join("daemon.log")).expect("log");
+    let mut intruder = Daemon {
+        child: Command::new(env!("CARGO_BIN_EXE_celeris"))
+            .arg("--config")
+            .arg(other.path().join("config.toml"))
+            .args(["--log-format", "text"])
+            .env_clear()
+            .env("PATH", base_path(&t))
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log.try_clone().expect("log")))
+            .stderr(Stdio::from(log))
+            .spawn()
+            .expect("spawn intruder"),
+        url: d.url.clone(),
+        _dir: other,
+        _port: PortReservation::new(),
+    };
+    let start = Instant::now();
+    while !daemon_port::listening_pids(port).contains(&intruder.child.id()) {
+        assert!(
+            intruder.child.try_wait().expect("try_wait").is_none(),
+            "intruder exited: {}",
+            fs::read_to_string(intruder._dir.path().join("daemon.log")).unwrap_or_default()
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(60),
+            "intruder never listened"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let err = daemon_port::check_sole_owner(port, d.child.id(), d.child.id())
+        .expect_err("two listeners on one port");
+    assert!(err.contains("listeners"), "{err}");
+    // 新しい接続ごとに kernel が振り分ける。2 つ目の daemon が答える接続がある（= 404 の原因）。
+    let reached_intruder = (0..200).any(|_| identity(&d).pid == intruder.child.id());
+    assert!(reached_intruder, "no connection reached the second daemon");
+    let _ = intruder.child.kill();
 }

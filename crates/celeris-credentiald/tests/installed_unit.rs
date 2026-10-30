@@ -20,7 +20,7 @@ impl Drop for Guard {
 fn installed_credentiald_reads_config_in_home_and_hot_layouts() {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     for hot in [false, true] {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = short_tempdir().unwrap();
         let home = tmp.path().join("home");
         let runtime = tmp.path().join("run");
         let state = if hot {
@@ -150,4 +150,16 @@ fn installed_credentiald_reads_config_in_home_and_hot_layouts() {
         fs::remove_file(config).unwrap();
         assert!(!command.output().unwrap().status.success());
     }
+}
+
+/// Unix socket を置く試験用の一時 dir。socket の path は `sun_path`（108 byte）に収まる必要があり、
+/// run の `TMPDIR` のような深い path の下では bind できないので、そのときは `/tmp` に作る。
+fn short_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let base = std::env::temp_dir();
+    let base = if base.as_os_str().len() > 40 {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        base
+    };
+    tempfile::Builder::new().prefix("cz").tempdir_in(base)
 }

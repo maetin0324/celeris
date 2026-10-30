@@ -164,6 +164,12 @@ token_file = "api.token"
 [secrets]
 dir = {secrets:?}
 
+# 本番 host の release 置き場を読まない（verify 済みで未昇格の release があると停滞の通知が混ざる）。
+[selfdeploy]
+releases_dir = "releases"
+repo = "repo"
+detach = "inline"
+
 [notify]
 web_base_url = "{WEB}"
 

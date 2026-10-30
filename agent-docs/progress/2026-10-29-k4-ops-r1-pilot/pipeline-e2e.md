@@ -29,15 +29,19 @@ updated: 2026-10-30
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - `cargo test -p celeris --test ops_r1_pipeline` → exit 0、2 passed。`cargo nextest run -p celeris --test ops_r1_pipeline` → 2 passed。
 - `python3 scripts/campaign/test_check_out_consistency.py` → 16 tests OK。
-- `bash scripts/dev/test-affected.sh`（対象 celeris・celerisctl）→ exit 100、833 tests run: 832 passed、1 failed。
-  落ちたのは `celeris::credential_wait_notify wait_notify_register_verify_and_resume_once_through_the_fake_webhook` で、
-  単独の再実行でも落ちた（1 回目は 456 行、2 回目は 433 行と落ちる assert が変わる）。この試験は今回の変更（新しい試験 file と
-  scripts/campaign の 2 file）を読まない。base で落ちるかは未確認。
+- `bash scripts/dev/test-affected.sh && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`
+  → exit 0、833 tests run: 833 passed。
+- 前回の check で落ちた `celeris::credential_wait_notify wait_notify_register_verify_and_resume_once_through_the_fake_webhook`
+  の原因: 試験の config に `[selfdeploy] releases_dir` が無く、既定の host の `/local/celeris/state/releases` を読んでいた。
+  host に未昇格の verify 済み release が 2 件あり、停滞の `release_unpromoted` 通知（CosFallback）が outbox に混ざって
+  pending が 2 件になった（host の状態しだいで落ちる）。試験の config に `releases_dir = "releases"`（config dir 基準の
+  一時 dir）を足した。単独実行で 2 passed。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo clippy -p celeris --test ops_r1_pipeline -- -D warnings` → exit 0。
   `cargo fmt --all -- --check` → exit 0。
 
 ## 未解決事項
-- `credential_wait_notify` の失敗（上記）。pipe-close か別 task で確認する。
+- `crates/celeris/tests/` の他の試験にも `[selfdeploy] releases_dir` を書かない config があれば、同じく host の release
+  置き場を読む（今は落ちていない。未調査）。
 - grader の失敗分類が出る理由（report.md だけの成果物は model_failure）は合成資料の採点の仕様どおり。
 
 ## 提案

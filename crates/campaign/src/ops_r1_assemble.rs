@@ -5,6 +5,7 @@
 //!   両腕の成果物 dir の写しと、lock の材料（cases・grader・grade-case の root）だけ。
 //! - 時刻・host・実行 path を出さない。同じ入力から 2 回作れば out と records.jsonl は byte 一致する。
 //! - B の CoS run の model が manifest の `contract.conditions.B.cos_model` と違えば条件逸脱として止める。
+//! - `--b-stop` に停止記録（`ops-r1-stop/1`）を渡すと、B は停止の理由で分母に残す（§4.5）。渡さなければ出力は変わらない。
 use std::{
     collections::BTreeMap,
     fs,
@@ -41,13 +42,39 @@ pub const REASON_OPERATOR_STOP: &str = "operator_stop";
 pub const REASON_TASK_FAILED: &str = "task_failed";
 /// B の root task が cancelled で終わった。
 pub const REASON_TASK_CANCELLED: &str = "task_cancelled";
+/// 測定者が条件の逸脱（runbook §5 の condition_drift）で B を止めた。
+pub const REASON_CONDITION_DRIFT: &str = "condition_drift";
+/// runbook §5 のほかの停止（stop_id をそのまま reason にする）。
+pub const REASON_SAME_CAUSE_TWICE: &str = "same_cause_twice";
+pub const REASON_LIMIT_REACHED: &str = "limit_reached";
+pub const REASON_UNOBSERVED_USAGE: &str = "unobserved_usage";
+pub const REASON_LEAK: &str = "leak";
+/// 測定者の停止で終わった試行の reason。checker は task run が 0 件でも違反にしない（§6）。
+pub const STOP_REASONS: &[&str] = &[
+    REASON_OPERATOR_STOP,
+    REASON_CONDITION_DRIFT,
+    REASON_SAME_CAUSE_TWICE,
+    REASON_LIMIT_REACHED,
+    REASON_UNOBSERVED_USAGE,
+    REASON_LEAK,
+];
+/// 停止記録の schema（runbook §5）。
+pub const STOP_SCHEMA: &str = "ops-r1-stop/1";
+/// records.jsonl の停止の行（final-accounting は usage・run・trial 以外を読まない）。
+pub const STOP_RECORD_TYPE: &str = "trial_stop";
 /// A は Claude Code を直接起動する（daemon の adapter 名ではない）。
 pub const A_HARNESS: &str = "claude_code";
+
+/// 測定者の停止で終わった試行の reason か。
+pub fn is_stop_reason(reason: Option<&str>) -> bool {
+    reason.is_some_and(|r| STOP_REASONS.contains(&r))
+}
 
 const USAGE: &str = "usage: celeris-campaign ops-r1-assemble --manifest <ops-r1 manifest> --input-manifest <json> \
 --a-raw <ops-r1-a-raw/1> --a-artifact <dir> --b-intake <ops-r1-intake/1> --b-trace <ops-r1-trace/1> \
 --b-attribution <ops-r1-attribution/2> --b-artifact <dir> --b-observed-versions <json> --b-workspace-sha256-initial <hex> \
---cases-root <dir> --grader-root <dir> --grade-case-root <dir> [--measurement-id <id>] --out <empty dir> --records-out <file>";
+--cases-root <dir> --grader-root <dir> --grade-case-root <dir> [--measurement-id <id>] [--b-stop <ops-r1-stop/1>] \
+--out <empty dir> --records-out <file>";
 
 /// 引数。path は読むだけで、出力には書かない。
 #[derive(Clone, Debug)]
@@ -66,6 +93,8 @@ pub struct Args {
     pub grader_root: PathBuf,
     pub grade_case_root: PathBuf,
     pub measurement_id: Option<String>,
+    /// B を止めた停止記録（`ops-r1-stop/1`）。
+    pub b_stop: Option<PathBuf>,
     pub out: PathBuf,
     pub records_out: PathBuf,
 }
@@ -95,6 +124,7 @@ impl Args {
             grader_root: p("--grader-root")?,
             grade_case_root: p("--grade-case-root")?,
             measurement_id: get("--measurement-id"),
+            b_stop: get("--b-stop").map(PathBuf::from),
             out: p("--out")?,
             records_out: p("--records-out")?,
         })
@@ -159,6 +189,8 @@ struct Arm {
 /// out の共通部（manifest hash・入力 hash・snapshot・公開入力）。
 struct Ctx<'a> {
     m: &'a CampaignManifest,
+    /// lock の measurement_id（停止記録と照合する）。
+    measurement_id: String,
     hash: String,
     input_sha: String,
     kb_sha: String,
@@ -352,12 +384,71 @@ fn stage<'a>(trace: &'a Value, name: &str) -> Option<&'a Value> {
         .find(|s| s["stage"] == name)
 }
 
+/// trace の受付が指す CoS の chat run（受付が観測できたときだけ）。
+fn intake_cos_run(trace: &Value) -> Option<&str> {
+    let s = stage(trace, "intake");
+    found_at(s).and(s)?["ref"]["cos_run_id"].as_str()
+}
+
 fn found_at(s: Option<&Value>) -> Option<&str> {
     s.filter(|s| s["reason"].is_null())
         .and_then(|s| s["at"].as_str())
 }
 
-/// B（CoS 受付）。§4.1・§4.2・§4.4 の B 列。
+/// 停止記録（runbook §5 の `raw/stop.json`）。assemble が使う欄だけ読む。
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct StopRecord {
+    pub schema: String,
+    pub measurement_id: String,
+    pub stopped_at: String,
+    pub stop_id: String,
+    /// 止めた試行。試行を始める前の停止は null（assemble では B の試行を指していなければ error）。
+    pub trial_id: Option<String>,
+    pub decided_by: String,
+    #[serde(default)]
+    pub decided_by_note: Option<String>,
+    #[serde(default)]
+    pub what: Option<String>,
+}
+
+/// `--b-stop` を読み、schema・measurement_id・trial_id・stop_id・decided_by を検査して reason を返す。
+fn load_b_stop(
+    p: &Path,
+    measurement_id: &str,
+    trial: &str,
+) -> Result<(StopRecord, &'static str), String> {
+    let st: StopRecord =
+        serde_json::from_value(read_json(p)?).map_err(|e| format!("--b-stop: {e}"))?;
+    if st.schema != STOP_SCHEMA {
+        return Err(format!(
+            "--b-stop: schema {} is not {STOP_SCHEMA}",
+            st.schema
+        ));
+    }
+    if st.measurement_id != measurement_id {
+        return Err(format!(
+            "--b-stop: measurement_id {:?} differs from the lock's {measurement_id:?}",
+            st.measurement_id
+        ));
+    }
+    if st.trial_id.as_deref() != Some(trial) {
+        return Err(format!(
+            "--b-stop: trial_id {:?} is not the B trial {trial:?}",
+            st.trial_id
+        ));
+    }
+    let reason = STOP_REASONS
+        .iter()
+        .copied()
+        .find(|r| *r == st.stop_id)
+        .ok_or_else(|| format!("--b-stop: unknown stop_id {:?}", st.stop_id))?;
+    if st.decided_by.trim().is_empty() {
+        return Err("--b-stop: decided_by is empty".into());
+    }
+    Ok((st, reason))
+}
+
+/// B（CoS 受付）。§4.1・§4.2・§4.4 の B 列。停止記録があれば §4.5。
 fn arm_b(ctx: &Ctx, out: &Path, cond: &ConditionDecl, a: &Args) -> Result<Arm, String> {
     let intake = read_json(&a.b_intake)?;
     let trace = read_json(&a.b_trace)?;
@@ -387,12 +478,30 @@ fn arm_b(ctx: &Ctx, out: &Path, cond: &ConditionDecl, a: &Args) -> Result<Arm, S
         }
     }
     let rep = rep_of(cond, &trial, ConfigId::B)?;
-    let rows: Vec<&Value> = attr["rows"]
+    let stop = a
+        .b_stop
+        .as_deref()
+        .map(|p| load_b_stop(p, &ctx.measurement_id, &trial))
+        .transpose()?;
+    let all_rows = attr["rows"]
         .as_array()
-        .ok_or("--b-attribution: rows missing")?
+        .ok_or("--b-attribution: rows missing")?;
+    let mut rows: Vec<&Value> = all_rows
         .iter()
         .filter(|r| r["trial_id"] == trial.as_str())
         .collect();
+    // 停止（§4.5）: root task が無いと attribution は CoS の chat run を試行に帰属させない（trial_id null）。
+    // trace の受付が指す CoS run（intake.ref.cos_run_id）だけを共有の CoS 行として足す。
+    if stop.is_some()
+        && let Some(id) = intake_cos_run(&trace)
+        && !rows.iter().any(|r| r["run_id"] == id)
+    {
+        rows.extend(
+            all_rows
+                .iter()
+                .filter(|r| r["source"] == "chat_runs" && r["run_id"] == id),
+        );
+    }
     check_cos_model(cond, &rows)?;
     if !is_hex64(&a.b_workspace_sha256_initial) {
         return Err("--b-workspace-sha256-initial must be a sha256 hex".into());
@@ -481,6 +590,25 @@ fn arm_b(ctx: &Ctx, out: &Path, cond: &ConditionDecl, a: &Args) -> Result<Arm, S
         rec.outcome = Outcome::Cancelled;
         rec.reason = Some(REASON_CASE_BUDGET.into());
     }
+    // 停止（§4.5）: trace の終わり方にかかわらず、停止の reason で成功に数えない（A の operator_stop と同じ cancelled）。
+    // wall は受付から停止（cutoff が先ならその時刻）までの実測。
+    if let Some((st, reason)) = &stop {
+        let stopped = ts(&st.stopped_at, "--b-stop stopped_at")?;
+        let end = match trace["cutoff"].as_str() {
+            Some(c) => stopped.min(ts(c, "--b-trace cutoff")?),
+            None => stopped,
+        };
+        if end < accepted {
+            return Err(format!(
+                "--b-stop: stopped_at {} is before the intake {}",
+                st.stopped_at,
+                intake["accepted_at"].as_str().unwrap_or_default()
+            ));
+        }
+        rec.outcome = Outcome::Cancelled;
+        rec.reason = Some((*reason).into());
+        rec.wall_secs = secs_between(accepted, end);
+    }
     rec.passed = rec.outcome == Outcome::Passed;
     rec.observed = task_rows
         .iter()
@@ -524,7 +652,10 @@ fn arm_b(ctx: &Ctx, out: &Path, cond: &ConditionDecl, a: &Args) -> Result<Arm, S
     }
     ledger.child_task_ids = children;
 
-    let records = decision_log(ctx, &rec, &rows)?;
+    let mut records = decision_log(ctx, &rec, &rows)?;
+    if let Some((st, _)) = &stop {
+        records.push(stop_record(ctx, &rec, st, &trace));
+    }
     Ok(Arm {
         rec,
         ledger,
@@ -609,6 +740,34 @@ fn decision_log(ctx: &Ctx, rec: &TrialRecord, rows: &[&Value]) -> Result<Vec<Val
     Ok(out)
 }
 
+/// 停止の行（§4.5）。誰が止めたか（decided_by・decided_by_note）と、trace の受付に見えた CoS の chat run を role 付きで残す。
+/// CoS の run は試行の `observed`（task の run の照合先）には入れない（§4.5）。
+fn stop_record(ctx: &Ctx, rec: &TrialRecord, st: &StopRecord, trace: &Value) -> Value {
+    let cos_runs: Vec<Value> = intake_cos_run(trace)
+        .map(|id| json!({"run_id": id, "role": "cos_project", "source": "trace.intake"}))
+        .into_iter()
+        .collect();
+    json!({
+        "schema": RECORD_SCHEMA,
+        "record_type": STOP_RECORD_TYPE,
+        "campaign_id": ctx.m.campaign_id,
+        "manifest_hash": ctx.hash,
+        "arm": format!("{:?}", rec.config),
+        "case_id": rec.problem_id,
+        "repetition": rec.rep,
+        "trial_id": st.trial_id,
+        "stop_schema": st.schema,
+        "stop_id": st.stop_id,
+        "reason": rec.reason,
+        "stopped_at": st.stopped_at,
+        "decided_by": st.decided_by,
+        "decided_by_note": st.decided_by_note,
+        "what": st.what,
+        "observed_cos_runs": cos_runs,
+        "dedup_key": format!("ops-r1-stop:{}", st.trial_id.as_deref().unwrap_or_default()),
+    })
+}
+
 /// out と records.jsonl を作り、件数と出力の sha256 を返す。
 pub fn assemble(a: &Args) -> Result<Value, String> {
     let m = CampaignManifest::load(&a.manifest)?;
@@ -649,6 +808,7 @@ pub fn assemble(a: &Args) -> Result<Value, String> {
     let hash = m.compute_sha256()?;
     let ctx = Ctx {
         m: &m,
+        measurement_id: lock.measurement_id.clone(),
         hash: hash.clone(),
         input_sha: input.sha256.clone(),
         kb_sha: m.snapshot.kb_snapshot.clone(),

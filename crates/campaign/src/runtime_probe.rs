@@ -117,7 +117,10 @@ pub fn probe(principal: &str, deny: &[PathBuf], allow: &[PathBuf]) -> Result<Run
             }
         })
         .collect();
-    let ok = paths.iter().all(|p| !p.readable && !p.listable) && mounts_outside_allow.is_empty();
+    // l1 は持ち主の uid の分離だけを確かめる主体で、bwrap の mount を持たない。mount の外への到達は
+    // 報告欄に残すだけで判定に入れない（ADR 2026-10-30-ops-r2-isolation-principal 付記 G6）。
+    let ok = paths.iter().all(|p| !p.readable && !p.listable)
+        && (principal == "l1" || mounts_outside_allow.is_empty());
     Ok(RuntimeProbe {
         schema: "celeris.runtime-probe/1".into(),
         principal: principal.into(),

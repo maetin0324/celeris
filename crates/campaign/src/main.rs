@@ -359,6 +359,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
     let cmd = args.first().map(String::as_str).unwrap_or("");
     match cmd {
         "grade" => return celeris_campaign::grader::cli(&args, &ProcessRunner::default()),
+        "gen-grade-case" => return celeris_campaign::grade_case_gen::cli(&args[1..]),
         "human-op" => return celeris_campaign::human_ops::cli::cli(&args),
         "ops-r1-a-raw" => return celeris_campaign::ops_r1_a_raw::cli(&args),
         "ops-r1-assemble" => return celeris_campaign::ops_r1_assemble::cli(&args),

@@ -188,3 +188,96 @@ pub fn generate(
         case: g,
     })
 }
+
+/// 隠しテストの file を `dir` の下から相対 path で集める（symlink・特殊 file は拒否）。
+fn list_hidden(dir: &Path, rel: &Path, out: &mut Vec<String>) -> Result<(), String> {
+    let rd = fs::read_dir(dir.join(rel)).map_err(|_| "cannot read hidden tests".to_string())?;
+    for e in rd {
+        let e = e.map_err(|_| "cannot read hidden tests".to_string())?;
+        let t = e
+            .file_type()
+            .map_err(|_| "cannot read hidden tests".to_string())?;
+        let r = rel.join(e.file_name());
+        if t.is_dir() {
+            list_hidden(dir, &r, out)?;
+        } else if t.is_file() {
+            out.push(r.to_string_lossy().into_owned());
+        } else {
+            return Err("hidden tests must be regular files".into());
+        }
+    }
+    Ok(())
+}
+
+/// `celeris-campaign gen-grade-case`（ADR 2026-10-30-ops-r2-isolation-principal 付記 G1）。評価器 uid が
+/// `EVAL_ROOT` で走らせ、`<private-root>/<split>/<id>/private.json` と `<hidden-root>/<split>/<id>/hidden/` から
+/// `<out-root>/<split>/<id>/` に grade-case を作る。返す（stdout に出す）のは `<id>.json` の sha256 だけ。
+/// 誤りは固定の短い文だけを返し、private の中身・path の一覧を出さない。隠しテストが無い・空なら拒否する。
+pub fn cli(args: &[String]) -> Result<String, String> {
+    let mut opt = std::collections::BTreeMap::new();
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let v = it.next().ok_or_else(|| format!("missing value for {flag}"))?;
+        match flag.as_str() {
+            "--case" | "--cases-root" | "--private-root" | "--hidden-root" | "--out-root"
+            | "--repo" => {
+                opt.insert(flag.as_str(), v.clone());
+            }
+            _ => return Err(format!("unknown gen-grade-case option: {flag}")),
+        }
+    }
+    let get = |k: &str| opt.get(k).cloned().ok_or(format!("{k} is required"));
+    let id = get("--case")?;
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        || id.is_empty()
+    {
+        return Err("invalid case id".into());
+    }
+    let split = "final";
+    let case_path = Path::new(&get("--cases-root")?)
+        .join(split)
+        .join(&id)
+        .join("case.json");
+    let case: Case = fs::read_to_string(&case_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .ok_or("cannot load public case.json")?;
+    let private: CasePrivate = fs::read_to_string(
+        Path::new(&get("--private-root")?)
+            .join(split)
+            .join(&id)
+            .join("private.json"),
+    )
+    .ok()
+    .and_then(|s| serde_json::from_str(&s).ok())
+    .ok_or("cannot load private")?;
+    let files_dir = Path::new(&get("--hidden-root")?).join(split).join(&id);
+    let mut hidden = Vec::new();
+    if files_dir.join("hidden").is_dir() {
+        list_hidden(&files_dir.join("hidden"), Path::new(""), &mut hidden)?;
+    }
+    if hidden.is_empty() {
+        return Err("hidden tests are missing; refusing to build a hidden_command-only grade-case".into());
+    }
+    hidden.sort();
+    let wrapper = ".grader/run.sh".to_string();
+    let wrapper = hidden.contains(&wrapper).then_some(wrapper);
+    let out_dir = Path::new(&get("--out-root")?).join(split).join(&id);
+    if out_dir.exists() {
+        return Err("output grade-case dir already exists; move it away first".into());
+    }
+    let src = GenSource {
+        repo: opt.get("--repo").cloned().unwrap_or_else(|| "src".into()),
+        public_tests: vec![],
+        hidden_tests: hidden,
+        wrapper,
+        files_dir,
+    };
+    // generate の誤りは private の command を含みうるので、そのまま返さない。
+    generate(&case, &private, &src, &out_dir).map_err(|_| "grade-case generation failed".to_string())?;
+    let body = fs::read(out_dir.join(format!("{id}.json")))
+        .map_err(|_| "cannot read generated grade-case".to_string())?;
+    Ok(format!("{:x}", Sha256::digest(body)))
+}

@@ -683,6 +683,26 @@ impl SqliteStore {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    /// ADR 2026-10-30-cos-review-open-waits D1: items that closed (state `resolved`) after `since`,
+    /// newest first. The general CoS review lists them apart from the open ones so a wait that the
+    /// person already answered is not reported as new.
+    pub fn cos_triage_closed_since(
+        &self,
+        since: OffsetDateTime,
+        limit: usize,
+    ) -> Result<Vec<CosTriageItemReport>, ChatError> {
+        let conn = writer(self)?;
+        let mut stmt = conn.prepare(&format!(
+            "{REPORT_SELECT} WHERE i.state='resolved' AND i.updated_at>?2 \
+             ORDER BY i.updated_at DESC,i.id DESC LIMIT ?1"
+        ))?;
+        let rows = stmt.query_map(
+            params![i64::try_from(limit).unwrap_or(i64::MAX), chat_ts(since)],
+            report_row,
+        )?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     /// D1: finished triage runs (system input message, at least one item) of any CoS thread that
     /// have no digest message yet: `(thread_id, run_id, run state)` oldest first.
     pub fn cos_triage_runs_without_digest(

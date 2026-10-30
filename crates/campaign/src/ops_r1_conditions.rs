@@ -26,6 +26,9 @@ pub struct ConditionDecl {
     pub condition_id: String,
     pub intake: Intake,
     pub trial_ids: Vec<String>,
+    /// B の CoS（案件 CoS・統括 CoS）が動く model。`ops-r1-assemble` が CoS run の実測と照合する。A は書かない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cos_model: Option<String>,
 }
 
 /// 投入系の道具が ops-r1 の manifest を拒否するときの文。
@@ -115,6 +118,14 @@ impl CampaignManifest {
                 return Err(format!(
                     "contract.conditions.{arm:?}.condition_id must be non-empty and unique"
                 ));
+            }
+            if *arm != ConfigId::B && c.cos_model.is_some() {
+                return Err(format!(
+                    "contract.conditions.{arm:?}.cos_model is only for B"
+                ));
+            }
+            if c.cos_model.as_deref().is_some_and(|m| m.trim().is_empty()) {
+                return Err("contract.conditions.B.cos_model must be non-empty".into());
             }
             if c.trial_ids.len() != self.repeats as usize {
                 return Err(format!(

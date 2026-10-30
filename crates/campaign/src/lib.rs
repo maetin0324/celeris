@@ -43,6 +43,7 @@ pub mod observe;
 pub mod offline_lock;
 pub mod operator_usage;
 pub mod ops_r1_a_raw;
+pub mod ops_r1_assemble;
 pub mod ops_r1_attr;
 pub mod ops_r1_conditions;
 pub mod ops_r1_intake;

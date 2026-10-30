@@ -1,0 +1,124 @@
+{
+  "schema": "celeris.campaign-manifest/1",
+  "version": "2",
+  "campaign_id": "mlsys-main-4-ops-r1-k4p1",
+  "split": "final",
+  "problems": [
+    "k4-cmp4-validity-analysis"
+  ],
+  "repeats": 1,
+  "input": {
+    "path": "final-input-manifest.json",
+    "sha256": "REPLACE: freeze の input manifest の sha256"
+  },
+  "snapshot": {
+    "repo_commit": "REPLACE: freeze の repo_commit",
+    "materials_sha256": "REPLACE: freeze の materials の hash_tree",
+    "kb_snapshot": "REPLACE: freeze の kb/snapshot.md の hash"
+  },
+  "configs": [
+    {
+      "id": "A",
+      "harness": "claude-code",
+      "harness_version": "2.1.303",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "ops-baseline"
+    },
+    {
+      "id": "B",
+      "harness": "celeris",
+      "harness_version": "94f86928dc13",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "cos-v6"
+    }
+  ],
+  "primary": [
+    "A",
+    "B"
+  ],
+  "secondary": {
+    "pair": [
+      "B",
+      "C"
+    ],
+    "subset": []
+  },
+  "budget": {
+    "max_disk_bytes": 137438953472,
+    "max_parallel": 1,
+    "max_tokens": 3000000,
+    "max_wall_secs": 3600,
+    "per_arm": {
+      "max_tokens": 1500000,
+      "max_wall_secs": 1800
+    },
+    "per_case": {
+      "max_tokens": 1500000,
+      "max_wall_secs": 1800
+    },
+    "token_basis": "all"
+  },
+  "termination": {
+    "max_attempts_per_trial": 1,
+    "stop_on_budget": true,
+    "trial_timeout_secs": 1800
+  },
+  "experiment_sets": {
+    "ops-r1": {
+      "arms": [
+        "A",
+        "B"
+      ],
+      "compare": [
+        [
+          "A",
+          "B"
+        ]
+      ],
+      "fixed": {
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "initial_info": "REPLACE: snapshot.materials_sha256 と同じ値",
+        "success": "REPLACE: lock の grader_set_sha256"
+      }
+    }
+  },
+  "selected_sets": [
+    "ops-r1"
+  ],
+  "contract": {
+    "revision": "main-4-ops-r1",
+    "pinned_versions": {
+      "A": {
+        "claude_code_version": "2.1.303",
+        "claude_code_sha256": "REPLACE: A の claude 実体の sha256"
+      },
+      "B": {
+        "claude_code_version": "2.1.303",
+        "claude_code_sha256": "REPLACE: 測定 daemon の worker が起動する claude 実体の sha256",
+        "pricing_version": "REPLACE: 測定 daemon の GET /health の pricing_version",
+        "cos_policy_version": "cos-v6"
+      }
+    },
+    "conditions": {
+      "A": {
+        "condition_id": "mlsys-main-4-ops-r1-k4p1-A-direct-claude-code",
+        "intake": "direct_claude_code",
+        "trial_ids": [
+          "mlsys-main-4-ops-r1-k4p1-A-t001"
+        ]
+      },
+      "B": {
+        "condition_id": "mlsys-main-4-ops-r1-k4p1-B-celeris-ops",
+        "intake": "cos_thread",
+        "trial_ids": [
+          "mlsys-main-4-ops-r1-k4p1-B-t001"
+        ],
+        "cos_model": "claude-opus-5-5"
+      }
+    }
+  }
+}

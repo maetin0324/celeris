@@ -11,7 +11,6 @@ mod preflight_setup;
 
 use std::{
     fs,
-    net::TcpListener,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Output},
@@ -24,6 +23,7 @@ use daemon_identity::{
 };
 use preflight_setup::{MEASURE_RELEASE, Setup, measure_config, setup};
 use serde_json::{Value, json};
+use tokio::net::TcpSocket;
 
 /// 来るはずの状態を待つ保険の上限（ADR-0125）。主判定は出来事の到着。
 const WAIT: Duration = Duration::from_secs(120);
@@ -118,7 +118,18 @@ async fn serve_role(config: PathBuf, release: String) {
     let (tx, rx) = tokio::sync::watch::channel(None);
     let state = task_api::ApiState::new(s, rx).unwrap();
     let app = task_api::router(state);
-    let listener = match tokio::net::TcpListener::bind(&listen).await {
+    // 本物の celeris と同じく `SO_REUSEPORT` で bind する（試験は port を `reserve_port` で押さえたまま渡す）。
+    let bound = listen
+        .parse()
+        .map_err(std::io::Error::other)
+        .and_then(|addr| {
+            let socket = TcpSocket::new_v4()?;
+            socket.set_reuseaddr(true)?;
+            socket.set_reuseport(true)?;
+            socket.bind(addr)?;
+            socket.listen(1024)
+        });
+    let listener = match bound {
         Ok(l) => l,
         Err(e) => {
             eprintln!("daemon role: bind {listen}: {e}");
@@ -237,12 +248,20 @@ fn write_exec(p: &Path, body: &str) {
     fs::rename(&tmp, p).unwrap();
 }
 
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+/// 試験 daemon の API port を、試験の間 `SO_REUSEPORT` だけを立てた socket で押さえる（listen しない）。
+///
+/// `127.0.0.1:0` に bind してすぐ閉じると、daemon が bind するまでに別の process（並走する試験の一時 listener など）が
+/// 同じ port を取り、`SO_REUSEPORT` の無い相手なら daemon の bind が `EADDRINUSE` で落ちる（launcher の start は
+/// 「daemon exited before becoming healthy」になる）。押さえている間は port 0 への bind がこの port を選ばず、
+/// daemon の bind（同じ uid・`SO_REUSEPORT`）は通る（crates/celeris/tests/daemon_port と同じ方式）。
+fn reserve_port() -> (TcpSocket, u16) {
+    let socket = TcpSocket::new_v4().expect("reserve socket");
+    socket.set_reuseport(true).expect("SO_REUSEPORT");
+    socket
+        .bind("127.0.0.1:0".parse().unwrap())
+        .expect("reserve bind");
+    let port = socket.local_addr().expect("reserve addr").port();
+    (socket, port)
 }
 
 fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
@@ -300,6 +319,8 @@ exec /bin/sh "$@"
 struct Fx {
     s: Setup,
     port: u16,
+    /// `port` を押さえる socket（drop で放す。daemon は Drop の stop で先に止まる）。
+    _port_reservation: TcpSocket,
 }
 
 impl Fx {
@@ -485,7 +506,7 @@ impl Drop for Foreign {
 fn fixture() -> Fx {
     let s = setup();
     let d = s.dir.path().to_path_buf();
-    let port = free_port();
+    let (port_reservation, port) = reserve_port();
     let measure = format!(
         "{}[accounts]\nclaude_dir = \"{}\"\n",
         measure_config(&d, "measure").replace("127.0.0.1:7701", &format!("127.0.0.1:{port}")),
@@ -544,7 +565,11 @@ fn fixture() -> Fx {
         json!({"schema": "celeris.campaign-cap-env/1", "a": tc, "worker": tc}).to_string(),
     )
     .unwrap();
-    let f = Fx { s, port };
+    let f = Fx {
+        s,
+        port,
+        _port_reservation: port_reservation,
+    };
     f.write_daemon_wrapper(&std::env::current_exe().unwrap(), "");
     f.write_env("");
     f
@@ -570,7 +595,12 @@ fn text(o: &Output) -> String {
 
 fn ok(f: &Fx, sub: &str) -> String {
     let o = launch(f, sub);
-    assert!(o.status.success(), "{sub}: {}", text(&o));
+    assert!(
+        o.status.success(),
+        "{sub}: {}\n--- daemon.log ---\n{}",
+        text(&o),
+        fs::read_to_string(f.state().join("daemon.log")).unwrap_or_default()
+    );
     assert!(!text(&o).contains(TOKEN), "token leaked by {sub}");
     text(&o)
 }

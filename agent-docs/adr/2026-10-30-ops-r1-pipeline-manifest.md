@@ -66,3 +66,21 @@ B=測定 daemon の案件 CoS thread で受け付ける通常運用（`…-B-cel
   `role_models` を書けば従来どおり検査する。observed の Sonnet 照合（checker の `check_b0_observed`）は変えていない。
 - `HumanOpRecord.condition_id` の追加で、既存試験の構造体リテラル 2 か所（`crates/campaign/tests/human_ops.rs` の `base`、
   `crates/celeris/tests/actor_trace/support.rs` の `human_record_base`）に `condition_id: None` を 1 行ずつ足した。assert は変えていない。
+
+## 付記 2026-10-30（停止記録で止めた B の集計、WU fix-b-stop）
+
+B-t001 は runbook §5 の停止記録（`ops-r1-stop/1`、stop_id `condition_drift`）で止まり、CoS が task を作らなかったので task の run が 0 件だった。
+`ops-r1-assemble` は停止記録を読めず B を `timeout`・reason null・wall=`trial_timeout_secs` で組み、checker が
+「set fixed declared but no run was observed」で拒否していた。次のように決めた（詳細は `docs/ops/ops-r1-pipeline.md` §4.6）。
+
+- D-stop-1: `ops-r1-assemble` に任意の `--b-stop` を足す。schema・measurement_id（lock の値）・trial_id（B の intake）・stop_id・decided_by を検査する。
+  渡さない経路の出力は変えない。
+- D-stop-2: 停止した B は分母に残し、outcome は `cancelled`（A の operator_stop と同じ）、reason は stop_id（`condition_drift` は新しい定数）。
+  `cancelled` は `executor_cancelled` に分類されるので、grader の結果にかかわらず成功に数えない。
+- D-stop-3: wall は受付〜`min(stopped_at, cutoff)` の実測。`trial_timeout_secs` を代入しない。
+- D-stop-4: 停止を決めた主体（decided_by・decided_by_note）は records.jsonl の `trial_stop` 行に残す。trial 記録（`TrialRecord`）の欄は増やさない
+  （runner の記録の形と既存の hash を変えないため）。
+- D-stop-5: task の run は捏造しない。trace の intake が指す CoS の chat run は、`trial_stop` 行の `observed_cos_runs` に role `cos_project` で載せ、
+  消費は共有の CoS 行として records.jsonl に写す。`observed` には入れない（set 宣言の照合先は task の run で、CoS は試行の外側の共有消費のため）。
+- D-stop-6: checker は停止の reason の試行について、observed が 0 件・worker が居ないことだけでは違反にしない。observed の run は従来どおり照合する。
+  `executor_error` と同じく照合から外す案は、止める前に動いた task の run を照合しなくなるので採らなかった。

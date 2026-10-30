@@ -573,3 +573,222 @@ fn ops_r1_pipeline_assemble_rejects_old_manifest_and_dirty_out() {
     let o = bin().args(&args).output().expect("spawn");
     assert!(String::from_utf8_lossy(&o.stderr).contains("must be empty"));
 }
+
+/// B を停止記録（`ops-r1-stop/1`）で止めた形に stub を書き換え、`--b-stop` を足す（§4.5）。
+/// CoS が task を作らずに止まった B-t001 の形: trace は created 以降が欠測、attribution は試行に帰属しない CoS の行だけ。
+fn stopped_b(fx: &Fx, tag: &str, stop_trial: &str) -> Vec<String> {
+    let mut args = stubs(fx, &Stub::default(), tag);
+    let path_of = |args: &[String], k: &str| {
+        let i = args.iter().position(|a| a == k).expect("arg");
+        PathBuf::from(&args[i + 1])
+    };
+    let trace = json!({"schema": "ops-r1-trace/1", "trial_id": B_TRIAL, "thread_id": "th-1",
+        "project_id": "p-1", "cutoff": "2026-10-30T02:30:00Z", "stages": [
+        {"stage": "intake", "at": "2026-10-30T02:00:00Z",
+         "ref": {"author": "human:rmaeda", "cos_run_id": "C-1", "message_id": "msg-1"}, "reason": null},
+        {"stage": "created", "at": null, "ref": null, "reason": "no_task_create_operation"},
+        {"stage": "executed", "at": null, "ref": null, "reason": "upstream_missing:created"},
+        {"stage": "outcome", "at": null, "ref": null, "reason": "upstream_missing:created"},
+        {"stage": "report", "at": null, "ref": null, "reason": "upstream_missing:outcome"},
+        {"stage": "cutoff", "at": "2026-10-30T02:30:00Z",
+         "ref": {"report_before_cutoff": null, "source": "argument"}, "reason": null}]});
+    fs::write(path_of(&args, "--b-trace"), trace.to_string()).expect("trace");
+    let attr = json!({"schema": "ops-r1-attribution/2", "trial_id": B_TRIAL, "condition_id": B_COND,
+        "thread_id": "th-1", "project_id": "p-1", "cutoff": "2026-10-30T02:30:00Z", "root_task_ids": [],
+        "rows": [{"source": "chat_runs", "run_id": "C-1", "task_id": null, "thread_id": "th-1",
+            "trial_id": null, "condition_id": null, "role": "cos_project", "role_raw": "project",
+            "model": OPUS, "harness": "claude_code", "input_tokens": 30, "output_tokens": 12785,
+            "cache_read_tokens": 485960, "cache_write_tokens": 51909, "wall_ms": 165976,
+            "cost_usd": 0.61, "cost_basis": "pricing_estimate"}]});
+    fs::write(path_of(&args, "--b-attribution"), attr.to_string()).expect("attr");
+    let stop = json!({"schema": "ops-r1-stop/1", "measurement_id": "mlsys-main-4-ops-r1-k4p1",
+        "stopped_at": "2026-10-30T02:03:49Z", "stop_id": "condition_drift", "trial_id": stop_trial,
+        "started_trials": [A_TRIAL, B_TRIAL], "not_started": [], "evidence": [],
+        "what": "the CoS ran the analysis itself without inputs/",
+        "decided_by": "external_operator:claude-code-x",
+        "decided_by_note": "applied runbook 4.2/8; no human has reviewed this stop yet",
+        "next": "人の判断待ち"});
+    let p = fx.d.join(format!("stub-{tag}")).join("stop.json");
+    fs::write(&p, stop.to_string()).expect("stop");
+    args.extend(["--b-stop".into(), p.display().to_string()]);
+    let out = fx.d.join(format!("out-{tag}"));
+    args.extend([
+        "--out".into(),
+        out.display().to_string(),
+        "--records-out".into(),
+        fx.d.join(format!("records-{tag}.jsonl"))
+            .display()
+            .to_string(),
+    ]);
+    args
+}
+
+/// §4.5・§6: condition_drift で止めた B（task run 0 件）は分母に残り、非成功のまま check・grade-out・export・
+/// final-accounting を通る。wall は受付〜停止の実測で、停止を決めた主体は records の停止の行に残る。
+#[test]
+fn ops_r1_pipeline_b_stop_condition_drift_passes_the_stages() {
+    let fx = fixture();
+    let args = stopped_b(&fx, "drift", B_TRIAL);
+    let o = bin().args(&args).output().expect("spawn");
+    ok(&o, "assemble --b-stop");
+    let (out, rec) = (fx.d.join("out-drift"), fx.d.join("records-drift.jsonl"));
+    let tr = trials(&out);
+    assert_eq!(tr.len(), 2, "denominator");
+    let b = &tr[1];
+    assert_eq!(
+        (
+            b["config"].as_str(),
+            b["outcome"].as_str(),
+            b["reason"].as_str()
+        ),
+        (Some("B"), Some("cancelled"), Some("condition_drift"))
+    );
+    assert_eq!(b["passed"], false);
+    assert_eq!(b["wall_secs"], 229, "accepted 02:00:00 → stopped 02:03:49");
+    assert!(
+        b["observed"].as_array().is_none_or(|o| o.is_empty()),
+        "no task run is invented: {}",
+        b["observed"]
+    );
+    let text = fs::read_to_string(&rec).expect("records");
+    let stops: Vec<Value> = text
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).expect("line"))
+        .filter(|v| v["record_type"] == "trial_stop")
+        .collect();
+    assert_eq!(stops.len(), 1, "{text}");
+    assert_eq!(stops[0]["decided_by"], "external_operator:claude-code-x");
+    assert_eq!(
+        stops[0]["decided_by_note"],
+        "applied runbook 4.2/8; no human has reviewed this stop yet"
+    );
+    let cos: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("\"role\":\"cos\""))
+        .collect();
+    assert_eq!(
+        cos.len(),
+        1,
+        "the CoS run named by the trace intake is a shared row"
+    );
+    assert_eq!(
+        stops[0]["observed_cos_runs"],
+        json!([{"run_id": "C-1", "role": "cos_project", "source": "trace.intake"}])
+    );
+
+    let cases = ["--cases".to_string(), fx.grade.display().to_string()];
+    ok(&stage(&fx, "grade-out", &out, &cases), "grade-out");
+    let rep = check(&fx, &out);
+    assert_eq!(rep["ok"], true, "check violations: {}", rep["violations"]);
+    let records = ["--records".to_string(), rec.display().to_string()];
+    let fa: Value = serde_json::from_str(&ok(
+        &stage(&fx, "final-accounting", &out, &records),
+        "final-accounting",
+    ))
+    .expect("fa json");
+    assert_eq!(fa["schema"], "celeris.campaign-final-accounting/1");
+    let totals = &rep["recomputed"]["totals"];
+    assert_eq!(
+        totals["A"]["n"].as_u64().zip(totals["B"]["n"].as_u64()),
+        Some((1, 1))
+    );
+    assert_eq!(totals["B"]["ran_trials"], 1);
+    assert_eq!(totals["B"]["cancelled"], 1);
+    assert_eq!(totals["B"]["final_passed"], 0);
+    // CoS の消費は共有の CoS 行（試行の tokens には足さない）。
+    assert_eq!(
+        fa["shared_unattributable"]["cos"]["state"], "observed",
+        "{fa}"
+    );
+    let dest = fx.d.join("export-drift");
+    let mut ex = records.to_vec();
+    ex.extend(["--dest".into(), dest.display().to_string()]);
+    ok(&stage(&fx, "export", &out, &ex), "export");
+
+    // human-op report と整合性 checker（停止の B も分母 2 のまま一致する）。
+    let ho = fx.d.join("human-ops-drift.jsonl");
+    for (cond, op, from, to) in [
+        (
+            A_COND,
+            "a-start",
+            "2026-10-30T00:58:00Z",
+            "2026-10-30T01:00:00Z",
+        ),
+        (
+            B_COND,
+            "b-intake",
+            "2026-10-30T01:59:00Z",
+            "2026-10-30T02:00:10Z",
+        ),
+        (
+            B_COND,
+            "b-stop",
+            "2026-10-30T02:03:00Z",
+            "2026-10-30T02:03:49Z",
+        ),
+    ] {
+        let o = bin()
+            .args(["human-op", "record", "--file"])
+            .arg(&ho)
+            .args(["--campaign", "mlsys-main-4-ops-r1-k4p1", "--manifest"])
+            .arg(&fx.manifest)
+            .args(["--condition", cond, "--case", K4, "--rep", "1"])
+            .args(["--op-kind", "protocol_step", "--actor-kind", "human"])
+            .args([
+                "--actor",
+                "evaluator",
+                "--mode",
+                "manual",
+                "--intent",
+                "protocol",
+            ])
+            .args(["--logical-op", op, "--started-at", from, "--ended-at", to])
+            .output()
+            .expect("spawn");
+        ok(&o, "human-op record");
+    }
+    let report = fx.d.join("human-ops-report-drift");
+    let o = bin()
+        .args(["human-op", "report", "--file"])
+        .arg(&ho)
+        .arg("--events")
+        .arg(&out)
+        .arg("--events")
+        .arg(&rec)
+        .arg("--out")
+        .arg(&report)
+        .output()
+        .expect("spawn");
+    ok(&o, "human-op report");
+    let (check_p, fa_p) = (fx.d.join("check-drift.json"), fx.d.join("fa-drift.json"));
+    fs::write(&check_p, rep.to_string()).expect("check json");
+    fs::write(&fa_p, fa.to_string()).expect("fa json");
+    let o = Command::new("python3")
+        .arg(repo().join("scripts/campaign/check-out-consistency.py"))
+        .arg("--out")
+        .arg(&out)
+        .arg("--check-json")
+        .arg(&check_p)
+        .arg("--export-dir")
+        .arg(&dest)
+        .arg("--human-ops-report")
+        .arg(&report)
+        .arg("--final-accounting")
+        .arg(&fa_p)
+        .arg("--records")
+        .arg(&rec)
+        .output()
+        .expect("python3");
+    ok(&o, "check-out-consistency.py");
+}
+
+#[test]
+fn ops_r1_pipeline_b_stop_rejects_a_foreign_trial() {
+    let fx = fixture();
+    let args = stopped_b(&fx, "foreign", "mlsys-main-4-ops-r1-k4p1-B-t002");
+    let o = bin().args(&args).output().expect("spawn");
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("--b-stop: trial_id"), "{err}");
+    assert!(!fx.d.join("out-foreign").join("trials.jsonl").exists());
+}

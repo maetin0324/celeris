@@ -190,6 +190,37 @@ A は decision-log を持たないので records.jsonl に行を書かない。f
 `(manifest_sha256, case, arm, rep)` で結ぶので、`--condition` で書いた記録（arm A/B・同じ manifest_sha256）は assemble の out と結び付く。
 arm 別の表は `arm_labels` が `ops-r1-A`・`ops-r1-B` になる。
 
+### 4.6 停止記録で止めた B（`--b-stop`）
+
+runbook §5 の停止記録（`raw/stop.json`、schema `ops-r1-stop/1`）で B を止めたときは、`ops-r1-assemble` に `--b-stop <path>` を渡す。
+渡さなければ出力は従来と byte 一致する（停止の無い経路のコードは変えていない）。
+
+- 検査: `schema = ops-r1-stop/1`、`measurement_id` が lock の measurement_id（`--measurement-id`）と一致、`trial_id` が B の intake の
+  trial_id と一致、`stop_id` が既知の値、`decided_by` が空でない。どれかが外れたら error で、out は作らない。
+- reason: `stop_id` をそのまま使う。`condition_drift`（新しい定数 `REASON_CONDITION_DRIFT`）、`operator_stop`（既存の
+  `REASON_OPERATOR_STOP`）と、runbook §5 の `same_cause_twice`・`limit_reached`・`unobserved_usage`・`leak`。一覧は `STOP_REASONS`。
+- outcome: `cancelled`。A の `operator_stop` と同じ値にした。測定者が途中で止めた試行は「実行器が成功を報告しなかった」ので `failed`
+  ではなく、cutoff に達したわけでもないので `timeout` でもない。`cancelled` は success.rs で `executor_cancelled` に分類され、grader が
+  pass を返しても成功（`final_passed`）に数えない。trace の outcome・case_budget より停止の reason を優先する。
+- 分母: B の行は trials.jsonl に残す（`ran()` は true）。checker の `ran_trials`・totals の `n` は A・B で 1 ずつ。
+- wall: intake の `accepted_at` から `min(stopped_at, trace.cutoff)` までの秒数。`trial_timeout_secs` を代入しない。stopped_at が受付より前なら error。
+- 消費: 試行の tokens は従来どおり task の run（attribution の `source=runs` で trial に帰属した行）の和。task が無ければ 4 欄とも 0。
+  root task が無いと attribution は CoS の chat run を trial に帰属させない（trial_id null）ので、trace の intake が指す
+  `cos_run_id` の chat_runs 行だけを §4.4 と同じ共有の CoS 行（`role=cos`・`shared_overhead=true`）として records.jsonl に写す。
+  その行の model も `contract.conditions.B.cos_model` と照合する。
+- 観測 run: `observed` には task の run だけを入れる。CoS の chat run は入れない（`observed` は set 宣言の model・role の照合先で、
+  CoS は §4.4 で試行の外側の共有消費として扱うため）。task の run を捏造しない。
+- 停止の主体: records.jsonl に `record_type = trial_stop` の行を 1 行足す。欄は `trial_id`・`stop_id`・`reason`・`stopped_at`・
+  `decided_by`・`decided_by_note`・`what`・`observed_cos_runs`（`[{run_id, role: "cos_project", source: "trace.intake"}]`）、
+  `dedup_key = ops-r1-stop:<trial_id>`。final-accounting と check-out-consistency.py は `usage`・`run`・`trial` 以外の行を読まない。
+- checker: 停止の reason（`STOP_REASONS`）の試行は、observed が 0 件でも「set fixed declared but no run was observed」にせず、worker が
+  居なくても「no worker run observed」にしない。observed に run があれば model・role などの照合は従来どおり行う。
+  `executor_error` と同じく照合から外す案は採らなかった。止める前に動いた task の run があれば、それは固定条件で照合すべきだから。
+
+試験: `crates/campaign/tests/ops_r1_pipeline_assemble.rs` の `ops_r1_pipeline_b_stop_condition_drift_passes_the_stages`（condition_drift の
+B で assemble・grade-out・check・final-accounting・export・human-op report・check-out-consistency.py が exit 0、分母 2、B は cancelled・
+condition_drift・非成功、wall 229 秒）と `ops_r1_pipeline_b_stop_rejects_a_foreign_trial`（trial_id 不一致で error）。
+
 ## 5. 旧系列を変えない根拠
 
 - manifest: 足す欄は `conditions` 1 つで、`skip_serializing_if = "BTreeMap::is_empty"`。旧 manifest（A0/B0/B1/C1、`mlsys-main-4-v4`）は
@@ -252,12 +283,13 @@ celeris-campaign ops-r1-attribution --db <rec>/db-copy.sqlite --thread <案件 C
 # 3. 公開入力 tgz を grade-case の隣に置く（置いてあれば何もしない）
 celeris-campaign stage-grader-inputs --manifest <m> --grade-case-root <grade-case> --inputs-src <公開入力の置き場>
 
-# 4. runner と同じ形の out と records.jsonl を組み立てる（--out は空 dir）
+# 4. runner と同じ形の out と records.jsonl を組み立てる（--out は空 dir。B を停止記録で止めたときは --b-stop、§4.6）
 celeris-campaign ops-r1-assemble $M $L \
   --a-raw <rec>/a/raw.json --a-artifact <A の成果物 dir の写し> \
   --b-intake <rec>/ops-r1-intake/1.json --b-trace <rec>/b/trace.json --b-attribution <rec>/b/attribution.json \
   --b-artifact <B の成果物 dir の写し> --b-observed-versions <rec>/b/observed-versions.json \
   --b-workspace-sha256-initial <B の初期 workspace の sha256> \
+  [--b-stop <rec>/stop.json] \
   --out <rec>/out --records-out <rec>/dl/records.jsonl
 
 # 5. 採点・照合・export

@@ -63,9 +63,13 @@ probe は試行の主体を起動するのと同じ包み方（A は `Sandbox::a
 - `--deny-readable` の path が probe の `paths[].path` に載っていれば（文字列の正規化か host の realpath が一致）、host の mode ではなく
   probe の `readable`・`listable` で判定する。`checked.deny_readable[]` は `method: runtime_probe` と、載った probe ごとの結果（`probes`）、
   `runtime_denied`（runtime の probe が 1 つ以上あり、どれも `readable=false`）、`l1_denied`（L1 の probe について同じ）を持つ。
-- `runtime_denied` と `l1_denied` が両方 true の path には `same_uid` の limit を書かない（`same_uid_limit: false`、
-  `same_uid_cleared_by: runtime_probe_and_l1`）。片方だけなら今までどおり持ち主の連鎖から `same_uid` を判定し、canary が無ければ
-  `same_uid_without_canary` の hit になる。
+- probe で判定した path も、host 側の stat で path と祖先のうち run の uid が持ち主のもの（root の run なら全部）を
+  `owned_by_run_uid` に書く（最大 5 件）。
+- `same_uid` の limit を書かない（`same_uid_limit: false`、`same_uid_cleared_by: runtime_probe_and_l1`）のは、
+  `runtime_denied` と `l1_denied` が両方 true で、かつ `owned_by_run_uid` が空の path だけ。
+  `owned_by_run_uid` が空でなければ、両方の probe が拒否でも `same_uid` の limit を残す。同じ uid の chmod 000（自分の dir と file を 0o000）は
+  probe では拒否に見えるが、run は chmod・rename で読めるようにできるので、隔離とは数えない。
+  片方の probe だけが拒否のときも持ち主の連鎖から `same_uid` を判定する。どちらの場合も canary が無ければ `same_uid_without_canary` の hit になる。
 - probe に載らない path は今までどおり host から判定する（`limits` に `host_view` が残る。全部が probe で判定されたときは書かない）。
 - hit になるのは、どの probe（L1 を含む）でも `readable=true` の path・空でない `mounts_outside_allow`・`ok=false`。
   `--deny-readable` に無い path でも probe が読めたと書いていれば hit にする。`listable` は結果に書くが、それだけでは hit にしない。

@@ -226,3 +226,65 @@ arm 別の表は `arm_labels` が `ops-r1-A`・`ops-r1-B` になる。
 | pipe-raw | A の raw 記録 `ops-r1-a-raw/1`、attribution の model・harness 欄（`runs.model`・`runs.adapter`、schema `ops-r1-attribution/2`） |
 | pipe-assemble | `ops-r1-assemble` 入口、ops-r1 manifest の雛形、既存段（stage-grader-inputs・grade-out・check・export・final-accounting）の ops-r1 での通し、§6 の未確認の点の確認 |
 | pipe-e2e | `crates/celeris/tests/` か `crates/campaign/tests/` の `ops_r1_pipeline*` 試験: A・B の stub 記録で assemble → stage-grader-inputs → grade-out → check → export → human-op report → final-accounting → check-out-consistency.py が全段 exit 0、試行数・分母・終了理由・合否の一致、同じ raw から 2 回作った out と records.jsonl の byte 一致 |
+
+## 8. 実行例（本測定の後に人/operator が流すコマンド列）
+
+本測定の 2 試行が終わった後、人か外部 operator が下の順に流す。全段は `crates/celeris/tests/ops_r1_pipeline.rs` の試験と同じ引数で、
+LLM を呼ばず、測定 daemon にも本番 daemon にも書かない（B の DB は写しを読む）。`<rec>` は試行の記録の置き場、`<m>` は ops-r1 manifest
+（`docs/ops/ops-r1-manifest.template.json` の `REPLACE:` を freeze が埋めたもの）、`<im>` は input manifest。各段が exit 0 でなければ次へ進まない。
+
+```sh
+# 共通の引数（lock の材料は run と同じ値。measurement_id は mlsys-main-4-ops-r1-k4p1）
+M="--manifest <m> --input-manifest <im>"
+L="--cases-root <cases> --grader-root <grader-private> --grade-case-root <grade-case> --measurement-id mlsys-main-4-ops-r1-k4p1"
+A_COND=mlsys-main-4-ops-r1-k4p1-A-direct-claude-code
+B_COND=mlsys-main-4-ops-r1-k4p1-B-celeris-ops
+
+# 1. A の raw（Claude Code の transcript と測定者の metadata から。§4）
+celeris-campaign ops-r1-a-raw --transcript <rec>/a/transcript.jsonl --metadata <rec>/a/metadata.json --out <rec>/a/raw.json
+
+# 2. B の trace と attribution（DB の写しの作り方は docs/ops/ops-r1-trace-attribution.md §5）
+celeris-campaign ops-r1-trace --db <rec>/db-copy.sqlite --thread <案件 CoS thread id> --trial-id mlsys-main-4-ops-r1-k4p1-B-t001 \
+  --cutoff <B の cutoff, RFC3339 UTC> --intake-record <rec>/ops-r1-intake/1.json --out <rec>/b/trace.json
+celeris-campaign ops-r1-attribution --db <rec>/db-copy.sqlite --thread <案件 CoS thread id> --trial-id mlsys-main-4-ops-r1-k4p1-B-t001 \
+  --condition-id "$B_COND" --cutoff <B の cutoff> --intake-record <rec>/ops-r1-intake/1.json --out <rec>/b/attribution.json
+
+# 3. 公開入力 tgz を grade-case の隣に置く（置いてあれば何もしない）
+celeris-campaign stage-grader-inputs --manifest <m> --grade-case-root <grade-case> --inputs-src <公開入力の置き場>
+
+# 4. runner と同じ形の out と records.jsonl を組み立てる（--out は空 dir）
+celeris-campaign ops-r1-assemble $M $L \
+  --a-raw <rec>/a/raw.json --a-artifact <A の成果物 dir の写し> \
+  --b-intake <rec>/ops-r1-intake/1.json --b-trace <rec>/b/trace.json --b-attribution <rec>/b/attribution.json \
+  --b-artifact <B の成果物 dir の写し> --b-observed-versions <rec>/b/observed-versions.json \
+  --b-workspace-sha256-initial <B の初期 workspace の sha256> \
+  --out <rec>/out --records-out <rec>/dl/records.jsonl
+
+# 5. 採点・照合・export
+celeris-campaign grade-out $M $L --out <rec>/out --cases <grade-case>
+celeris-campaign check $M $L --out <rec>/out > <rec>/check.json
+celeris-campaign export $M $L --out <rec>/out --records <rec>/dl/records.jsonl --dest <rec>/out/export
+
+# 6. 人の操作の生記録（試行中に --condition で書いたもの）を out と結ぶ
+#    記録の例: celeris-campaign human-op record --file <rec>/human-ops.jsonl --campaign mlsys-main-4-ops-r1-k4p1 \
+#      --manifest <m> --condition "$A_COND" --case k4-cmp4-validity-analysis --rep 1 --op-kind protocol_step \
+#      --actor-kind human --actor <名前> --mode manual --intent protocol --logical-op a-start \
+#      --started-at <RFC3339> --ended-at <RFC3339>
+celeris-campaign human-op report --file <rec>/human-ops.jsonl --events <rec>/out --events <rec>/dl --out <rec>/human-ops-report
+
+# 7. 最終集計
+celeris-campaign final-accounting $M $L --out <rec>/out --records <rec>/dl/records.jsonl > <rec>/final-accounting.json
+
+# 8. 件数・分母・終了理由・合否の独立な照合
+python3 scripts/campaign/check-out-consistency.py --out <rec>/out --check-json <rec>/check.json \
+  --export-dir <rec>/out/export --human-ops-report <rec>/human-ops-report \
+  --final-accounting <rec>/final-accounting.json --records <rec>/dl/records.jsonl --json-out <rec>/consistency.json
+```
+
+- 試行数・分母は arm ごとに 1。A の消費は records.jsonl に行が無く、final-accounting では `undecomposed` に出る（§4.4）。
+- B の CoS の消費は試行の tokens に入れず、records.jsonl の `role=cos`・`shared_overhead=true` の usage 行として
+  final-accounting の `shared_unattributable.cos` に出る（pipe-assemble の実装。設計 §4.2 との差は未決。
+  `agent-docs/progress/2026-10-29-k4-ops-r1-pilot/fix-pipeline.md` の提案）。
+- 同じ入力から 1〜8 を 2 回流すと、`consistency.json` 以外の出力は byte 一致する。`consistency.json` は照合した file の絶対 path を含む。
+- `ops-r1-assemble` は CoS の model が manifest の `contract.conditions.B.cos_model` と違う・欠測なら「condition deviation」で止まり、
+  out に trials.jsonl を書かない。両腕の初期 workspace hash が違うときと、`<im>` の sha256 が manifest の `input.sha256` と違うときも止まる。

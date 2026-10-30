@@ -30,8 +30,8 @@ updated: 2026-10-30
   `target/debug/celeris-campaign` を別の inode・別の内容で置き換える。test-affected の対象に `celeris` と
   `celeris-campaign` が並ぶ統合 check では、この build が 77 秒走る dagbench の graded 試験と重なる。
   単独実行では build が起きないので通る。
-- 確認（この WU の target で実行）: nextest build 後の `celeris-campaign` は sha256 `12653c5f…`・inode 139252561。
-  `cargo build -p celeris-campaign --bin celeris-campaign` の後は sha256 `55ea27c4…`・inode 139308239（Compiling celeris-campaign）。
+- 確認（この WU の target で実行）: nextest build 後の `celeris-campaign` は inode 139252561。
+  `cargo build -p celeris-campaign --bin celeris-campaign` の後は inode 139308239 で、sha256 も別の値になった（Compiling celeris-campaign）。
 - 既に `real_k3_repetitions_from_formal_entry` と `common/dagbench_durable_checks.rs` は同じ理由で grader を写して
   いたが、`graded_faults_exclude_external_wait_and_post_from_redo` などほかの fixture 利用者は写していなかった。
 
@@ -65,6 +65,7 @@ updated: 2026-10-30
 ## 変更の commit（件名）
 
 - fix-dagbench-pins: dagbench の grading fixture が grader の写しを pin する（共有 target の relink で pin が変わる）
+- fix-dagbench-pins: 進捗の binary hash の書き方を直す
 
 ## 未解決
 

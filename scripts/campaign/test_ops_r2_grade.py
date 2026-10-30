@@ -26,18 +26,28 @@ SECRET = 'hidden-acceptance-command-zq81-bbf0-private-only-answer'
 FAKE_CC = r'''#!/usr/bin/env python3
 import json, os, sys
 a = sys.argv[1:]
-root = a[a.index('--grader-root') + 1]
-gcr = a[a.index('--grade-case-root') + 1]
-assert a.count('--grade-case-root') == 1 and gcr == os.path.join(os.path.dirname(root), 'grade-cases'), gcr
-out = a[a.index('--out') + 1]
+assert a[0] == 'grade', a
+case = a[a.index('--case') + 1]
 art = a[a.index('--artifact') + 1]
-priv = json.load(open(os.path.join(root, 'final', '%s', 'private.json')))
-print('debug private:', json.dumps(priv))
-v = {'pass': os.path.exists(os.path.join(art, 'result.txt'))}
-if os.environ.get('FAKE_CC_LEAK'):
+work = a[a.index('--work') + 1]
+root = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'eval_root')).read()
+assert case == os.path.join(root, 'grade-cases', 'final', '%s', '%s.json'), case
+assert work.startswith(os.path.join(root, 'work') + '/') and os.path.isdir(work), work
+assert '--grader-root' not in a and '--grade-case-root' not in a, a
+env = dict(os.environ)
+home = env['HOME']
+assert env['PATH'].split(':')[0] == os.path.join(home, '.cargo', 'bin'), env['PATH']
+assert env['CARGO_HOME'] == os.path.join(home, '.cargo') and env['RUSTUP_HOME'] == os.path.join(home, '.rustup')
+assert 'CALLER_ONLY' not in env
+priv = json.load(open(os.path.join(root, 'private', 'final', '%s', 'private.json')))
+print('debug private:', json.dumps(priv), file=sys.stderr)
+ok = os.path.exists(os.path.join(art, 'result.txt'))
+v = {'pass': ok}
+if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'leak')):
     v['note'] = priv['answer']
-json.dump(v, open(out, 'w'))
-''' % CASE
+print(json.dumps(v))
+sys.exit(0 if ok else 1)
+''' % (CASE, CASE, CASE)
 
 
 class GradeTest(unittest.TestCase):
@@ -53,13 +63,21 @@ class GradeTest(unittest.TestCase):
         self.bin.mkdir()
         (self.bin / 'celeris-campaign').write_text(FAKE_CC)
         os.chmod(self.bin / 'celeris-campaign', 0o755)
+        (self.bin / 'eval_root').write_text(str(self.eval_root))
+        gc = self.eval_root / 'grade-cases' / 'final' / CASE
+        gc.mkdir(parents=True)
+        (gc / f'{CASE}.json').write_text('{}')
+        self.home = r / 'home'
+        self.home.mkdir()
         shutil.copy(LEAK, self.bin / 'check-ops-r1-leak.py')
         self.outbox = r / 'outbox'
         self.outbox.mkdir()
         self.tgz = r / 'drop.tgz'
         self.make_tgz({'result.txt': b'ok'})
         self.env = dict(os.environ, CELERIS_EVAL_ROOT=str(self.eval_root),
-                        CELERIS_EVAL_BIN=str(self.bin), CELERIS_EVAL_OUTBOX=str(self.outbox))
+                        CELERIS_EVAL_BIN=str(self.bin), CELERIS_EVAL_OUTBOX=str(self.outbox),
+                        CELERIS_EVAL_TEST_HOME=str(self.home), CALLER_ONLY='1',
+                        PATH='/nonexistent-caller-path')
         self.env.pop('CELERIS_EVAL_TEST_EUID', None)
 
     def tearDown(self):
@@ -76,9 +94,8 @@ class GradeTest(unittest.TestCase):
         return hashlib.sha256(self.tgz.read_bytes()).hexdigest()
 
     def grade(self, sha=None, extra=None, env=None):
-        args = extra if extra is not None else ['grade', '--artifact', '{work}', '--out', '{verdict}']
         return subprocess.run([sys.executable, '-I', str(GRADE), '--tgz', str(self.tgz),
-                               '--sha256', sha or self.sha(), '--case', CASE, '--', *args],
+                               '--sha256', sha or self.sha(), '--case', CASE, *(extra or [])],
                               capture_output=True, text=True, env=dict(self.env, **(env or {})))
 
     def assert_no_private(self, r):
@@ -98,7 +115,8 @@ class GradeTest(unittest.TestCase):
         self.assertEqual(json.loads(files[0].read_text()), {'pass': True})
 
     def test_leaking_verdict_is_not_published(self):
-        r = self.grade(env={'FAKE_CC_LEAK': '1'})
+        (self.bin / 'leak').write_text('1')
+        r = self.grade()
         self.assertEqual(r.returncode, 71, r.stderr)
         self.assert_no_private(r)
         self.assertEqual(list(self.outbox.iterdir()), [])
@@ -127,13 +145,26 @@ class GradeTest(unittest.TestCase):
         self.assertEqual(r.returncode, 65)
         self.assertEqual(list(self.outbox.iterdir()), [])
 
-    def test_caller_cannot_redirect_grader_root_or_output(self):
-        for extra in (['grade', '--out', '{verdict}', '--grader-root', '/x'],
-                      ['grade', '--out', '{verdict}', '--grade-case-root', 'crates/campaign/fixtures/grade-cases'],
-                      ['grade', '--out', '{verdict}', '--grade-case-root={work}'],
-                      ['grade', '--out', '{verdict}', '--report', '/tmp/report.json'],
-                      ['grade', '--out', '{work}/../../x'],
-                      ['grade', '--artifact', '{work}']):
+    def test_failing_artifact_verdict_is_published(self):
+        # grade の exit 1（不合格）も採点の成功。判定 JSON を outbox に置く。
+        self.make_tgz({'other.txt': b'x'})
+        r = self.grade()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(Path(r.stdout.strip()).read_text()), {'pass': False})
+
+    def test_missing_grade_case_refused(self):
+        shutil.rmtree(self.eval_root / 'grade-cases')
+        r = self.grade()
+        self.assertEqual(r.returncode, 66)
+        self.assertEqual(list(self.outbox.iterdir()), [])
+
+    def test_caller_cannot_pass_campaign_args(self):
+        # grade-case・private・作業 dir の場所を差し替える引数は受けない（argv は wrapper が組む）。
+        for extra in (['--', 'grade', '--case', 'crates/campaign/fixtures/grade-cases/final/x.json'],
+                      ['--grader-root', '/x'],
+                      ['--grade-case-root', 'crates/campaign/fixtures/grade-cases'],
+                      ['--work', '/tmp'],
+                      ['--case', 'k2-other']):
             r = self.grade(extra=extra)
             self.assertEqual(r.returncode, 64, (extra, r.stderr))
         self.assertEqual(list(self.outbox.iterdir()), [])

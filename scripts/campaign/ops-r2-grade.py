@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """ops-r2 の採点 wrapper（/var/lib/celeris-eval-bin/grade として celeris-eval 持ち 0555 で置く）。
 
-drop box の tgz を sha256 で照合して EVAL_ROOT/work/ に展開し、celeris-campaign を
---grader-root EVAL_ROOT/private --grade-case-root EVAL_ROOT/grade-cases で走らせ、判定 JSON を check-ops-r1-leak.py に通してから
+drop box の tgz を sha256 で照合して EVAL_ROOT/work/ に展開し、celeris-campaign grade を
+EVAL_ROOT/grade-cases の grade-case で走らせ、判定 JSON を check-ops-r1-leak.py に通してから
 outbox に 0644 で置く（docs/ops/ops-r2-isolation.md §4.3、ADR 2026-10-30-ops-r2-isolation-principal D4）。
 
 stdout に出すのは outbox の判定 JSON の path だけ。失敗は短い理由だけを stderr に出す。
 private の中身・EVAL_ROOT の path 一覧・celeris-campaign の出力は stdout/stderr・outbox に出さない
 （celeris-campaign と漏洩検査の出力は EVAL_ROOT/work/ の中にだけ残す）。
 
-usage: grade --tgz <drop box の tgz> --sha256 <hex> --case <case id> -- <celeris-campaign の引数...>
-  引数の {work} は展開先の dir、{verdict} は判定 JSON の書き先に置き換える（{verdict} は必須）。
-  --grader-root と --grade-case-root は wrapper が付ける（repo の漏洩済み grade-case を使わせない）。
-  引数に --grader-root・--grade-case-root・'..'・work の外の絶対 path は書けない。
+usage: grade --tgz <drop box の tgz> --sha256 <hex> --case <case id>
+  celeris-campaign の argv は wrapper が組む（ADR 付記 H1）:
+  grade --case EVAL_ROOT/grade-cases/final/<case>/<case>.json --artifact <work>/artifact --work <work>/grade
+  呼び出し側は grade-case・private・作業 dir の場所を渡せない。子 process の環境は wrapper が固定で組み（H2）、
+  評価器 uid の home の .cargo/bin・CARGO_HOME・RUSTUP_HOME を与える（sudo の env_reset・secure_path の下でも cargo が見つかる）。
 """
 import hashlib
+import json
 import os
+import pwd
 import re
 import stat
 import subprocess
@@ -37,21 +40,31 @@ def fail(code, msg):
 
 def parse(argv):
     opts = {"--tgz": None, "--sha256": None, "--case": None}
-    rest = []
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a == "--":
-            rest = argv[i + 1:]
-            break
-        if a in opts and i + 1 < len(argv):
+        if a in opts and opts[a] is None and i + 1 < len(argv):
             opts[a] = argv[i + 1]
             i += 2
             continue
         fail(64, f"unknown argument: {a}")
-    if not all(opts.values()) or not rest:
-        fail(64, "usage: grade --tgz <tgz> --sha256 <hex> --case <id> -- <celeris-campaign args>")
-    return opts["--tgz"], opts["--sha256"].lower(), opts["--case"], rest
+    if not all(opts.values()):
+        fail(64, "usage: grade --tgz <tgz> --sha256 <hex> --case <id>")
+    return opts["--tgz"], opts["--sha256"].lower(), opts["--case"]
+
+
+def child_env():
+    # 呼び出し側の環境は継がない。toolchain は評価器 uid の home の rustup のものだけを使う（ADR 付記 H2）。
+    home = os.environ.get("CELERIS_EVAL_TEST_HOME") or pwd.getpwuid(os.getuid()).pw_dir
+    cargo_home = os.path.join(home, ".cargo")
+    return {
+        "PATH": os.path.join(cargo_home, "bin") + ":/usr/local/bin:/usr/bin:/bin",
+        "HOME": home,
+        "CARGO_HOME": cargo_home,
+        "RUSTUP_HOME": os.path.join(home, ".rustup"),
+        "CARGO_NET_OFFLINE": "true",
+        "LANG": "C.UTF-8",
+    }
 
 
 def euid():
@@ -80,7 +93,7 @@ def safe_extract(tgz, dest):
 
 
 def main(argv):
-    tgz, want, case, rest = parse(argv)
+    tgz, want, case = parse(argv)
     eval_root = os.environ.get("CELERIS_EVAL_ROOT", EVAL_ROOT)
     bin_dir = os.environ.get("CELERIS_EVAL_BIN", BIN_DIR)
     outbox = os.environ.get("CELERIS_EVAL_OUTBOX", OUTBOX)
@@ -106,33 +119,24 @@ def main(argv):
     os.mkdir(art, 0o700)
     safe_extract(tgz, art)
     verdict = os.path.join(work, "verdict.json")
-
-    args = []
-    seen_verdict = False
-    for a in rest:
-        if "{verdict}" in a:
-            seen_verdict = True
-        a = a.replace("{work}", art).replace("{verdict}", verdict)
-        for fixed in ("--grader-root", "--grade-case-root"):
-            if a == fixed or a.startswith(fixed + "="):
-                fail(64, f"{fixed} is set by the wrapper")
-        if ".." in a.split("/"):
-            fail(64, "argument must not contain '..'")
-        if a.startswith("/") and not (a == work or a.startswith(work + "/")):
-            fail(64, "absolute paths outside the work dir are not allowed")
-        args.append(a)
-    if not seen_verdict:
-        fail(64, "celeris-campaign arguments must contain {verdict}")
-
-    private_root = os.path.join(eval_root, "private")
-    grade_case_root = os.path.join(eval_root, "grade-cases")
-    cc = [os.path.join(bin_dir, "celeris-campaign"), *args, "--grader-root", private_root,
-          "--grade-case-root", grade_case_root]
-    with open(os.path.join(work, "celeris-campaign.log"), "wb") as log:
-        r = subprocess.run(cc, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, cwd=work)
-    if r.returncode != 0 or not os.path.isfile(verdict):
+    grade_case = os.path.join(eval_root, "grade-cases", "final", case, f"{case}.json")
+    if not os.path.isfile(grade_case):
+        fail(66, "grade-case for this case is not prepared under EVAL_ROOT")
+    cc = [os.path.join(bin_dir, "celeris-campaign"), "grade", "--case", grade_case,
+          "--artifact", art, "--work", os.path.join(work, "grade")]
+    os.mkdir(os.path.join(work, "grade"), 0o700)
+    # grade は合格で exit 0、不合格で exit 1（どちらも判定 JSON を stdout に出す）。判定 JSON が無いときだけ失敗。
+    with open(verdict, "wb") as out, open(os.path.join(work, "celeris-campaign.log"), "wb") as log:
+        r = subprocess.run(cc, stdin=subprocess.DEVNULL, stdout=out, stderr=log, cwd=work, env=child_env())
+    try:
+        with open(verdict, "rb") as f:
+            json.load(f)
+    except (OSError, ValueError):
+        fail(70, f"celeris-campaign failed (exit {r.returncode}); log is kept under EVAL_ROOT/work")
+    if r.returncode not in (0, 1):
         fail(70, f"celeris-campaign failed (exit {r.returncode}); log is kept under EVAL_ROOT/work")
 
+    private_root = os.path.join(eval_root, "private")
     private = os.path.join(private_root, "final", case, "private.json")
     leak = [sys.executable, "-I", os.path.join(bin_dir, "check-ops-r1-leak.py"),
             "--private", private, "--scan", verdict, "--out", os.path.join(work, "leak.json")]

@@ -1,8 +1,8 @@
 ---
-task: 01M66BSZJECRFA8KBT8T3048FY
+title: 統括 CoS の定期見直し・人に回す件の背景・決定回答後の計画再判定
+tasks: [01M66BSZJECRFA8KBT8T3048FY]
 status: running
-started: 2026-10-30
-adr: agent-docs/adr/2026-10-30-cos-review-open-waits-and-plan-rejudge.md
+updated: 2026-10-30
 ---
 
 # 統括 CoS の定期見直し・人に回す件の背景・決定回答後の計画再判定

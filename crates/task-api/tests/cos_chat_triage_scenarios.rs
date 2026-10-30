@@ -145,11 +145,36 @@ fn approval(env: &TestEnv) -> Approval {
 
 /// A root task waiting for its plan approval (`blocked(awaiting_plan_approval)`).
 fn plan_gate_task(env: &TestEnv) -> task_core::Task {
-    let task = new_task(TaskKind::Execute, Status::Ready);
+    let mut task = new_task(TaskKind::Execute, Status::Ready);
+    task.acceptance = vec![task_core::Criterion {
+        text: "the reviewer accepts the plan's result".into(),
+        check: task_core::Check::Reviewer,
+    }];
     env.seed(&task);
     env.store
         .apply_transition(task.id, task_core::Trigger::Dispatch, None)
         .expect("dispatch");
+    env.store
+        .append_event(
+            task.id,
+            &Event::ExecutionPlanned {
+                plan_id: "plan-1".into(),
+                version: 1,
+                origin: task_core::PlanOrigin::Planner,
+                supersedes: None,
+                reason: None,
+                plan: Box::new(
+                    serde_json::from_value(json!({
+                        "schema": "celeris.execution-plan/1",
+                        "rationale": "1 段階",
+                        "work_units": [{"key": "a", "kind": "implement", "title": "A",
+                                        "objective": "do A thoroughly and well"}]
+                    }))
+                    .expect("plan spec"),
+                ),
+            },
+        )
+        .expect("planned");
     env.store
         .apply_transition_with_events(
             task.id,
@@ -296,7 +321,11 @@ async fn cos_chat_triage_a_answers_each_wait_kind_without_webhook() {
         (
             "plan_gate-",
             json!({"option": "approve", "note": "既承認計画の具体化"}),
-            common::cos_ops::documented_default_basis(),
+            json!({"category": "plan_approval", "refs": [{"kind": "plan", "id": "plan-1"}],
+                   "plan": {"changes": "初版。既承認の方針を段に分けただけ",
+                            "checked": ["objective_acceptance", "cost_frame", "production",
+                                        "external_publish", "destructive",
+                                        "secrets_permissions", "human_steps"]}}),
         ),
     ];
     let mut ops = Vec::new();

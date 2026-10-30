@@ -127,6 +127,7 @@ pub(super) fn validate(
         refs: Vec::new(),
         frame: None,
         failures: None,
+        plan: None,
     });
     let previous: Vec<Rejection> = events
         .iter()

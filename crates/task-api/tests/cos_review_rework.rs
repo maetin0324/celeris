@@ -90,7 +90,7 @@ async fn ingest_failed(env: &TestEnv, app: &axum::Router, id: TaskId, rev: &str)
         operation_id: None,
         summary: inbox_id.clone(),
         detail: String::new(),
-        policy_version: "7".into(),
+        policy_version: "8".into(),
         task_id: None,
     };
     env.store

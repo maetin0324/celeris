@@ -111,3 +111,10 @@ ADR 2026-10-28-cos-integrate-task D4 は、統合の依頼を CoS が `integrate
 task の開き直し（失敗の件への `reopen`）を 5 種類目 `review_rework` として足した。D1 の「4 種類だけ」はこの付記で 5 種類になる。
 refs の kind に `review`（差し戻した reviewer run の id）を足し、problem code に `cos_basis_rework_limit` を足した。policy_version は "7"。
 
+
+## 付記 A3（2026-10-30）: 6 種類目 `plan_approval`
+
+[2026-10-30-cos-plan-approval](2026-10-30-cos-plan-approval.md) が、問題の無い計画の承認（plan_gate への `approve`、replan の版を含む）を
+6 種類目 `plan_approval` として足した。plan gate への `approve` は他の category では 422 `cos_basis_invalid` になり、
+(a) `within_approved_frame` の対象から plan gate を外した（phase gate は残る）。refs の kind に `plan` を、basis に `plan`
+（`changes`・`checked`）を、problem code に `cos_basis_plan_needs_human`・`cos_basis_plan_limit` を足した。policy_version は "8"。

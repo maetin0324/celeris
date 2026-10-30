@@ -372,7 +372,7 @@ export type AutoReplanSource = "integration" | "work_unit";
 
 export type BackoffCause = "retry" | "infra";
 
-export type BasisCategory = "within_approved_frame" | "raise_once" | "documented_default" | "work_guidance" | "review_rework";
+export type BasisCategory = "within_approved_frame" | "raise_once" | "documented_default" | "work_guidance" | "review_rework" | "plan_approval";
 
 export type BasisFailures = {
   "current": string;
@@ -388,12 +388,17 @@ export type BasisFrame = {
   "used": number;
 };
 
+export type BasisPlan = {
+  "changes": string;
+  "checked": Array<PlanCheck>;
+};
+
 export type BasisRef = {
   "id": string;
   "kind": BasisRefKind;
 };
 
-export type BasisRefKind = "standing_rule" | "decision" | "approval" | "usage" | "ledger" | "commit" | "artifact" | "progress" | "adr" | "doc" | "message" | "review";
+export type BasisRefKind = "standing_rule" | "decision" | "approval" | "usage" | "ledger" | "commit" | "artifact" | "progress" | "adr" | "doc" | "message" | "review" | "plan";
 
 export type BehindTarget = {
   "behind_target_age_seconds"?: number | null;
@@ -1883,6 +1888,7 @@ export type DelegatedBasis = {
   "category": BasisCategory;
   "failures"?: BasisFailures | null;
   "frame"?: BasisFrame | null;
+  "plan"?: BasisPlan | null;
   "refs": Array<BasisRef>;
 };
 
@@ -4308,6 +4314,8 @@ export type PlanApprovalView = {
   "reasons": Array<string>;
   "summary": string;
 };
+
+export type PlanCheck = "objective_acceptance" | "cost_frame" | "production" | "external_publish" | "destructive" | "secrets_permissions" | "human_steps";
 
 export type PlanDagNode = {
   "change"?: PlanNodeChange | null;

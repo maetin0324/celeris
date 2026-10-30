@@ -645,7 +645,10 @@ fn gen_grade_case_cli_prints_only_sha_and_refuses_without_hidden() {
     let priv_dir = eval.join("private/final").join(id);
     fs::create_dir_all(&priv_dir).unwrap();
     fs::copy(
-        root().join("fixtures/grader-private/final").join(id).join("private.json"),
+        root()
+            .join("fixtures/grader-private/final")
+            .join(id)
+            .join("private.json"),
         priv_dir.join("private.json"),
     )
     .unwrap();
@@ -672,7 +675,10 @@ fn gen_grade_case_cli_prints_only_sha_and_refuses_without_hidden() {
     assert!(!err.contains(eval.to_str().unwrap()));
     assert!(!eval.join("grade-cases").exists());
 
-    let hidden = eval.join("hidden-tests/final").join(id).join("hidden/.grader");
+    let hidden = eval
+        .join("hidden-tests/final")
+        .join(id)
+        .join("hidden/.grader");
     fs::create_dir_all(&hidden).unwrap();
     let repo_hidden = grade_root().join("final").join(id).join("hidden/.grader");
     for f in ["run.sh", "k2_metadata_ops_hidden.rs"] {

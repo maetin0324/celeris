@@ -217,7 +217,9 @@ pub fn cli(args: &[String]) -> Result<String, String> {
     let mut opt = std::collections::BTreeMap::new();
     let mut it = args.iter();
     while let Some(flag) = it.next() {
-        let v = it.next().ok_or_else(|| format!("missing value for {flag}"))?;
+        let v = it
+            .next()
+            .ok_or_else(|| format!("missing value for {flag}"))?;
         match flag.as_str() {
             "--case" | "--cases-root" | "--private-root" | "--hidden-root" | "--out-root"
             | "--repo" => {
@@ -259,7 +261,9 @@ pub fn cli(args: &[String]) -> Result<String, String> {
         list_hidden(&files_dir.join("hidden"), Path::new(""), &mut hidden)?;
     }
     if hidden.is_empty() {
-        return Err("hidden tests are missing; refusing to build a hidden_command-only grade-case".into());
+        return Err(
+            "hidden tests are missing; refusing to build a hidden_command-only grade-case".into(),
+        );
     }
     hidden.sort();
     let wrapper = ".grader/run.sh".to_string();
@@ -276,7 +280,8 @@ pub fn cli(args: &[String]) -> Result<String, String> {
         files_dir,
     };
     // generate の誤りは private の command を含みうるので、そのまま返さない。
-    generate(&case, &private, &src, &out_dir).map_err(|_| "grade-case generation failed".to_string())?;
+    generate(&case, &private, &src, &out_dir)
+        .map_err(|_| "grade-case generation failed".to_string())?;
     let body = fs::read(out_dir.join(format!("{id}.json")))
         .map_err(|_| "cannot read generated grade-case".to_string())?;
     Ok(format!("{:x}", Sha256::digest(body)))

@@ -1,5 +1,8 @@
 //! preflight 試験の共有部品: 解決済みの final 一式を一時 dir に作る（`preflight.rs` と `preflight_contract.rs`）。
 #![allow(dead_code)]
+#[path = "../support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -176,7 +179,7 @@ pub fn setup() -> Setup {
     let (m, k) = (d.join("materials"), d.join("kb"));
     // 外部入力: 実物（本番の asset）は無いので、case を写して k4 の宣言 sha256 を試験用の中身に合わせる。
     let (cases, ins) = (d.join("cases"), d.join("inputs-src"));
-    copy(&root().join("cases"), &cases);
+    copy(&support_cases::cases_root(), &cases);
     fs::create_dir_all(&ins).unwrap();
     let repo = d.join("repo");
     fs::create_dir_all(&repo).unwrap();

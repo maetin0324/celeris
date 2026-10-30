@@ -2,6 +2,9 @@
 //! 実 binary `celeris-campaign` で確かめる（P1-5）。外部 LLM・ネットワーク・有料実行なし。
 //! locked な out は通常経路 `run_gated`（CLI の run と同じ関数）で作り、check / grade-out / export / run を binary で叩く。
 #![allow(dead_code)]
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -193,7 +196,7 @@ fn fx() -> Fx {
     .unwrap();
     fs::write(d.join("final.json"), resolved_manifest().to_string()).unwrap();
     let (cases, grade, ins) = (d.join("cases"), d.join("grade-cases"), d.join("inputs-src"));
-    copy(&root().join("cases"), &cases);
+    copy(&support_cases::cases_root(), &cases);
     copy(&root().join("fixtures/grade-cases"), &grade);
     fs::create_dir_all(&ins).unwrap();
     let repo = d.join("repo");

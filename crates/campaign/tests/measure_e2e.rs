@@ -1,5 +1,8 @@
 //! case × grader × isolation の統合試験（実 cluster・実 LLM は使わない。制御用 mock のみ）。
 //! dev case を 3 config の分離 workspace に展開し、mock 実行器の成果を grader に通す。
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -38,7 +41,7 @@ fn root() -> PathBuf {
 
 fn load_set() -> CaseSet {
     CaseSet::load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures/grader-private"),
     )
     .unwrap()

@@ -2,6 +2,9 @@
 //! 通常経路: `expected_lock` → `run_gated` → `grade_out_expected` → `checker::check_expected` → `export_expected`（CLI と同じ関数）。
 //! 同一 case id/split で別の grader・公開/隠しテストを渡すと、grader command を走らせる前に拒否される。
 #![allow(dead_code, clippy::type_complexity)]
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -198,7 +201,7 @@ fn fx() -> Fx {
     .unwrap();
     fs::write(d.join("final.json"), resolved_manifest().to_string()).unwrap();
     let (cases, grade, ins) = (d.join("cases"), d.join("grade-cases"), d.join("inputs-src"));
-    copy(&root().join("cases"), &cases);
+    copy(&support_cases::cases_root(), &cases);
     copy(&root().join("fixtures/grade-cases"), &grade);
     fs::create_dir_all(&ins).unwrap();
     let repo = d.join("repo");

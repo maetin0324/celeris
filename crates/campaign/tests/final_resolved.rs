@@ -1,6 +1,9 @@
 //! final.json の解決検査: 未解決の placeholder・installed alias・C の routing 欠落は validate が落とす。
 //! K2/K4 の時間は manifest の per_case 上限（30 分）に収まる。外部実行はしない。
 
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::path::{Path, PathBuf};
 
 use celeris_campaign::cases::CaseSet;
@@ -77,7 +80,7 @@ fn alias_and_missing_routing_are_rejected() {
 #[test]
 fn k2_k4_case_time_fits_manifest_per_case() {
     let set = CaseSet::load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures/grader-private"),
     )
     .expect("load");

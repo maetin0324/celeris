@@ -1,6 +1,9 @@
 //! 必要能力 probe: case 固定・A の sandbox argv・不足は env_failure で最初の LLM 呼出し前に停止・B/C は同じ能力を
 //! 測定専用 daemon の worker で検査する。userns が要る実走は worker sandbox で出来ないので、A は argv 組立・判定・
 //! 停止順序を stub runner で、B/C は結果の判定を stub で確かめる（daemon の worker 起動経路は別 file の実 process 試験）。
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{cell::RefCell, fs, path::Path};
 
 use celeris_campaign::{
@@ -23,7 +26,7 @@ fn env_json(extra: Value) -> CapEnv {
 
 fn cases() -> CaseSet {
     CaseSet::load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures/grader-private"),
     )
     .expect("cases")

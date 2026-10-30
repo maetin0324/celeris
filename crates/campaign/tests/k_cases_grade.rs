@@ -2,6 +2,9 @@
 //! 隠しテスト挿入つきの「既知の誤実装=不合格／修正版=合格」の model 無し試験。
 //! cargo は textual stub に差し替える（BenchFS は submodule 未固定・UCX 要で本 repo では build できない）。
 //! stub は挿入した隠し module の宣言と、修正の印（修正版にだけ在る記述）を見るだけで、実コンパイルではない。
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -30,7 +33,7 @@ fn grade_root() -> PathBuf {
 
 fn set() -> CaseSet {
     CaseSet::load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures/grader-private"),
     )
     .expect("load")
@@ -147,7 +150,7 @@ fn missing_or_altered_grade_case_makes_the_case_set_unusable() {
     // grade_case_ref の無い real case は loader が拒否する。
     let t = tempfile::tempdir().unwrap();
     let c = t.path().join("cases");
-    copy(&root().join("cases"), &c);
+    copy(&support_cases::cases_root(), &c);
     let g = root().join("fixtures/grader-private");
     let cj = c.join("final/k4-cmp4-validity-analysis/case.json");
     let mut v: Value = serde_json::from_str(&fs::read_to_string(&cj).unwrap()).unwrap();
@@ -156,7 +159,7 @@ fn missing_or_altered_grade_case_makes_the_case_set_unusable() {
     let e = CaseSet::load(&c, &g).expect_err("grade_case_ref 無しは拒否");
     assert!(e.contains("grade_case_ref"), "{e}");
     // 短縮 hash の submodule は拒否する。
-    copy(&root().join("cases"), &t.path().join("c2"));
+    copy(&support_cases::cases_root(), &t.path().join("c2"));
     let cj = t
         .path()
         .join("c2/final/k2-bf-xattr-restart-campaign/case.json");
@@ -657,7 +660,7 @@ fn gen_grade_case_cli_prints_only_sha_and_refuses_without_hidden() {
             "--case",
             id,
             "--cases-root",
-            root().join("cases").to_str().unwrap(),
+            support_cases::cases_root().to_str().unwrap(),
             "--private-root",
             eval.join("private").to_str().unwrap(),
             "--hidden-root",

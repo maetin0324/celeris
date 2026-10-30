@@ -1,5 +1,8 @@
 //! `ops-r1-assemble` と既存段（stage-grader-inputs・grade-out・check・export・final-accounting）の ops-r1 での通し
 //! （docs/ops/ops-r1-pipeline.md §4・§6）。A・B は stub 記録で、LLM も daemon も使わない。
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     collections::BTreeMap,
     fs,
@@ -139,7 +142,7 @@ fn fixture() -> Fx {
     let dir = tempfile::tempdir().expect("dir");
     let d = dir.path().to_path_buf();
     let (cases, grade, ins) = (d.join("cases"), d.join("grade-cases"), d.join("inputs-src"));
-    copy(&root().join("cases"), &cases);
+    copy(&support_cases::cases_root(), &cases);
     copy(&root().join("fixtures/grade-cases"), &grade);
     fs::create_dir_all(&ins).expect("ins");
     celeris_campaign::cells_validity::synth::healthy()

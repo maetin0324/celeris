@@ -1,6 +1,9 @@
 //! campaign lock の実行・再開・監視への接続（P1-5 run-resume）。外部 LLM・ネットワーク・有料実行なし。
 //! 通常経路は `preflight::expected_lock`（CLI の run/watch と同じ関数）→ `run_gated` / `runner::run` / `watch::watch`。
 //! 誤った実体では executor 呼び出し 0・out 未作成で止まる。
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -202,7 +205,7 @@ fn fx() -> Fx {
     .unwrap();
     fs::write(d.join("final.json"), resolved_manifest().to_string()).unwrap();
     let (cases, grade, ins) = (d.join("cases"), d.join("grade-cases"), d.join("inputs-src"));
-    copy(&root().join("cases"), &cases);
+    copy(&support_cases::cases_root(), &cases);
     copy(&root().join("fixtures/grade-cases"), &grade);
     fs::create_dir_all(&ins).unwrap();
     let repo = d.join("repo");

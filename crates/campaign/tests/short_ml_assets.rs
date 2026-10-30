@@ -1,6 +1,9 @@
 //! short-ml-campaign（dev 専用 C2 case）の固定資産の決定的検証。実 job は投入せず、LLM・network も使わない。
 //! 通常 loader での読み込み・hash pin・実行前契約と環境 lock の一致・入力隔離（評価側の目的変数と参照値が trial に渡らない）・
 //! 既存 case の保持を見る。python/numpy の版は要求値であり、ここでは測定済みとして扱わない。
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -37,7 +40,7 @@ fn json(p: &Path) -> Value {
 }
 fn load() -> CaseSet {
     CaseSet::load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures/grader-private"),
     )
     .unwrap()
@@ -305,7 +308,7 @@ fn nothing_evaluator_side_reaches_the_trial() {
 
 fn copy() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let t = tempfile::tempdir().unwrap();
-    copy_tree(&root().join("cases"), &t.path().join("cases")).unwrap();
+    copy_tree(&support_cases::cases_root(), &t.path().join("cases")).unwrap();
     copy_tree(
         &root().join("fixtures/grader-private"),
         &t.path().join("grader-private"),

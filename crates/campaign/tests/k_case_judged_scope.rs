@@ -1,4 +1,7 @@
 //! Public case scope must describe the stages actually checked by the evaluator.
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::path::Path;
 
 use celeris_campaign::{
@@ -11,7 +14,7 @@ use celeris_campaign::{
 #[test]
 fn all_cases_match_their_evaluator_checks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let cases = CaseSet::load(&root.join("cases"), &root.join("fixtures/grader-private"))
+    let cases = CaseSet::load(&support_cases::cases_root(), &root.join("fixtures/grader-private"))
         .expect("load all public cases");
     let mut checked = 0;
     for loaded in &cases.cases {
@@ -50,7 +53,7 @@ fn k4_campaign_report_judges_analysis_and_excludes_review() {
         CampaignManifest::load(&root.join("fixtures/pilot.json")).expect("load manifest fixture");
     manifest.split = Split::Final;
     manifest.problems = vec!["k4-cmp4-validity-analysis".into()];
-    let (judged, not_judged) = campaign_scope(&manifest, &root.join("cases")).expect("scope");
+    let (judged, not_judged) = campaign_scope(&manifest, &support_cases::cases_root()).expect("scope");
     assert_eq!(judged, ["analysis"]);
     assert_eq!(not_judged, ["review"]);
     assert_eq!(

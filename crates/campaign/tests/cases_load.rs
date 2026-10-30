@@ -1,6 +1,9 @@
 //! 代表 case の読み込み・検証の試験。
 //! 固定 hash は `CAMPAIGN_UPDATE_CASES=1 cargo test -p celeris-campaign --test cases_load -- --ignored` で作り直す。
 //! 通常は「置いてある case の hash が現物と一致する」ことを確かめる。
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -62,7 +65,7 @@ fn update_hashes(base: &Path) {
 /// 実 case 一式の写し。(tempdir, cases_root, grader_root)
 fn copy() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let t = tempfile::tempdir().unwrap();
-    copy_tree(&root().join("cases"), &t.path().join("cases")).unwrap();
+    copy_tree(&support_cases::cases_root(), &t.path().join("cases")).unwrap();
     copy_tree(
         &root().join("fixtures").join("grader-private"),
         &t.path().join("fixtures").join("grader-private"),
@@ -93,7 +96,7 @@ fn update_pins() {
 #[test]
 fn shipped_cases_are_pinned_and_load() {
     let set = load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures").join("grader-private"),
     )
     .unwrap();
@@ -120,7 +123,7 @@ fn shipped_cases_are_pinned_and_load() {
 #[test]
 fn final_expectations_are_not_reachable_from_dev_layout() {
     let (r, g) = (
-        root().join("cases"),
+        support_cases::cases_root(),
         root().join("fixtures").join("grader-private"),
     );
     let set = load(&r, &g).unwrap();
@@ -249,7 +252,7 @@ fn rejects_grader_root_inside_cases_root() {
 #[test]
 fn control_cannot_enter_measurement_or_final() {
     let set = load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures").join("grader-private"),
     )
     .unwrap();
@@ -276,7 +279,7 @@ fn control_cannot_enter_measurement_or_final() {
 #[test]
 fn measurement_selection_rejects_mixed_unknown_duplicate_empty() {
     let set = load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures").join("grader-private"),
     )
     .unwrap();
@@ -380,7 +383,7 @@ fn external_input_hash_is_verified() {
 #[test]
 fn real_cases_pin_distinct_inputs_between_splits() {
     let set = load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures").join("grader-private"),
     )
     .unwrap();

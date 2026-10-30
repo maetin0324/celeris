@@ -1,5 +1,8 @@
 //! 公開 case 定義が全腕の trial workspace の `materials/<case>/case.json` に届き、private_ref が漏れないこと、
 //! objective が A・B・C で同じ参照先を指すこと（ADR 2026-10-20-mlsys-main2-fixes D2-4）。network・LLM なし。
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     collections::BTreeMap,
     fs,
@@ -23,7 +26,7 @@ fn root() -> PathBuf {
 
 fn set() -> CaseSet {
     CaseSet::load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures/grader-private"),
     )
     .expect("load")

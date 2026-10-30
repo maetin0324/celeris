@@ -1201,6 +1201,8 @@ struct ProbeHost {
     mounts: Vec<(&'static str, &'static str)>,
     fail: Option<&'static str>,
     seen: std::sync::Mutex<Vec<celeris_campaign::preflight_isolation::ProbeRequest>>,
+    /// L1 の持ち主の判定に注入する run の uid（None は実 uid）。
+    run: Option<celeris_campaign::l1_owner::RunIds>,
 }
 
 impl Host for ProbeHost {
@@ -1231,6 +1233,11 @@ impl Host for ProbeHost {
             .collect();
         p.ok = p.paths.iter().all(|x| !x.readable) && p.mounts_outside_allow.is_empty();
         Ok(p)
+    }
+    fn run_ids(&self) -> Result<celeris_campaign::l1_owner::RunIds, String> {
+        self.run
+            .clone()
+            .map_or_else(celeris_campaign::l1_owner::RunIds::current, Ok)
     }
     fn probe_runner(&self) -> Box<dyn celeris_campaign::cap_probe::ProbeRunner> {
         self.inner.probe_runner()
@@ -1264,6 +1271,7 @@ fn probe_host(readable: Vec<(&'static str, PathBuf)>) -> ProbeHost {
         mounts: Vec::new(),
         fail: None,
         seen: Default::default(),
+        run: None,
     }
 }
 
@@ -1410,4 +1418,129 @@ fn measured_run_without_deny_list_or_principal_inputs_stops() {
     inp.measure = None;
     inp.isolation.deny_list = None;
     assert!(!check(&inp, &h).checked.contains(&"deny_readable"));
+}
+
+/// 人の uid が持つ EVAL_ROOT の下を chmod 000 にした実 fixture（open も read_dir も EACCES）。
+/// deny list と `--eval-root` をそこへ向ける。drop で mode を戻す（tempdir を消せるように）。
+struct OwnChmod000(PathBuf);
+
+impl OwnChmod000 {
+    fn new(s: &mut Setup) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let root = s.dir.path().join("own-eval");
+        let file = root.join("k4/private.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "private grader").unwrap();
+        let deny = s.dir.path().join("deny-own.txt");
+        fs::write(&deny, format!("{}\n", file.display())).unwrap();
+        for p in [&file, &root.join("k4"), &root] {
+            fs::set_permissions(p, fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        s.inp.isolation.deny_list = Some(deny);
+        s.inp.isolation.eval_root = Some(root.clone());
+        Self(root)
+    }
+    fn file(&self) -> PathBuf {
+        self.0.join("k4/private.json")
+    }
+}
+
+impl Drop for OwnChmod000 {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        for p in [self.0.clone(), self.0.join("k4")] {
+            let _ = fs::set_permissions(p, fs::Permissions::from_mode(0o755));
+        }
+    }
+}
+
+/// 同じ uid の chmod 000 は open を拒否するが、持ち主（run の uid）が chmod で戻せるので L1 は止める
+/// （deny_readable:L1:<path>:owned_by_run_uid、有料実行・task 作成 0 件）。同じ fixture でも、Host に別の
+/// run uid を注入すれば通る（判定は持ち主の uid で決まり、open の成否では決まらない）。
+#[test]
+fn same_uid_chmod_000_eval_root_stops_l1_and_an_injected_other_uid_passes() {
+    let mut s = setup();
+    let own = OwnChmod000::new(&mut s);
+    let mut h = probe_host(Vec::new());
+    let m = deny_misses(&s.inp, &h);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert!(
+        m[0].starts_with(&format!(
+            "deny_readable:L1:{}:owned_by_run_uid {}",
+            own.file().display(),
+            own.0.display()
+        )),
+        "{m:?}"
+    );
+    let mf = CampaignManifest::load(&s.inp.manifest_path).unwrap();
+    let input = mf.load_input(&s.inp.manifest_path, None).unwrap();
+    let out = s.dir.path().join("out-own");
+    let t = CountingTransport(AtomicUsize::new(0));
+    let exec = CelerisExecutor::new(&t, serde_json::Map::new(), 1800, out.join("cancel.jsonl"));
+    let e = run_gated(
+        &s.inp,
+        &h,
+        &mf,
+        &input,
+        &exec,
+        &RunOptions {
+            global_ledger: None,
+            out: out.clone(),
+            ..Default::default()
+        },
+    )
+    .expect_err("gate");
+    assert!(e.contains("deny_readable:L1"), "{e}");
+    assert_eq!(t.0.load(Ordering::SeqCst), 0, "task 作成・有料実行 0 件");
+    assert!(!out.exists());
+
+    h.run = Some(celeris_campaign::l1_owner::RunIds {
+        uid: 4_242_424,
+        gids: Vec::new(),
+    });
+    assert_eq!(deny_misses(&s.inp, &h), Vec::<String>::new());
+}
+
+/// 実 binary（RealHost・実 uid・実 lstat）でも、同じ uid の chmod 000 の EVAL_ROOT では preflight が
+/// deny_readable:L1 で exit 1、run は out を作らない。迂回の env 変数・flag は無い。
+#[test]
+fn cli_preflight_stops_on_a_same_uid_chmod_000_eval_root() {
+    let mut s = setup();
+    let own = OwnChmod000::new(&mut s);
+    let env = [("CELERIS_PREFLIGHT_TEST_TOKEN", SECRET)];
+    let o = bin(&["preflight"], &s, &env);
+    assert_eq!(o.status.code(), Some(1));
+    let v: Value = serde_json::from_slice(&o.stderr_json()).unwrap();
+    assert_eq!(v["paid_calls_made"], json!(0));
+    let l1: Vec<&str> = v["missing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["check"] == "deny_readable")
+        .filter_map(|m| m["detail"].as_str())
+        .filter(|d| d.starts_with("deny_readable:L1:"))
+        .collect();
+    assert_eq!(l1.len(), 1, "{v}");
+    assert!(
+        l1[0].starts_with(&format!(
+            "deny_readable:L1:{}:owned_by_run_uid",
+            own.file().display()
+        )),
+        "{v}"
+    );
+    let out = s.dir.path().join("o");
+    let r = bin(
+        &[
+            "run",
+            "--executor",
+            "celeris",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+        &s,
+        &env,
+    );
+    assert_eq!(r.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&r.stderr).contains("deny_readable:L1:"));
+    assert!(!out.exists());
 }

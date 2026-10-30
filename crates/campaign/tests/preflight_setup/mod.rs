@@ -345,10 +345,36 @@ pub fn isolation_env(i: &IsolationInputs) -> String {
     out
 }
 
+/// この host で別の uid が持つ dir（L1 の EVAL_ROOT の代わり）。L1 は実 lstat と実 uid で持ち主を確かめ、
+/// 自分の uid が持つ tempdir では通らない（同じ uid の chmod 000 で通さない）。試験は別の uid を作れないので、
+/// `/var/lib` などから L1 の判定（`l1_owner::owner_findings`）を通る dir を探す。中には何も作らない
+/// （deny path は `<dir>/celeris-preflight-absent/...` で、run の uid は覗くことも作ることもできない）。
+pub fn foreign_eval_root() -> PathBuf {
+    use celeris_campaign::l1_owner::{RunIds, lstat, owner_findings};
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let run = RunIds::current().unwrap();
+        let parents = ["/var/lib", "/var/cache", "/var/spool", "/var/log", "/var", "/run", "/opt", "/srv", "/home"];
+        for parent in parents {
+            let Ok(rd) = fs::read_dir(parent) else { continue };
+            let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+            dirs.sort();
+            if let Some(d) = dirs.into_iter().find(|d| {
+                owner_findings(&run, d, &[d.join("celeris-preflight-absent/x")], &lstat).is_empty()
+            }) {
+                return d;
+            }
+        }
+        panic!("no directory owned by another uid under {parents:?}: the L1 owner check of preflight needs one");
+    })
+    .clone()
+}
+
 /// 正式試行の隔離検査の入力（deny list・評価器 root・B と operator の許可表）を `d/iso` に作る。
+/// 評価器 root は `foreign_eval_root`（別の uid が持つ dir）の下。
 pub fn isolation(d: &Path) -> IsolationInputs {
     let iso = d.join("iso");
-    let eval = iso.join("eval");
+    let eval = foreign_eval_root();
     let sb = |p: &str| {
         let s = ScriptSandbox {
             state: Some(iso.join(format!("{p}-state"))),
@@ -366,7 +392,8 @@ pub fn isolation(d: &Path) -> IsolationInputs {
         iso.join("deny.txt"),
         format!(
             "# 承認票と同じ deny list\n{}\n{}\n",
-            eval.join("private/k4/private.json").display(),
+            eval.join("celeris-preflight-absent/k4/private.json")
+                .display(),
             iso.join("old-out/answer.json").display()
         ),
     )

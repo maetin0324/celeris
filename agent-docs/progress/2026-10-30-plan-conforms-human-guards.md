@@ -28,7 +28,10 @@ updated: 2026-10-30
 
 ## 検証（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - `cargo test -p task-api --test cos_plan_conforms_guards --test cos_plan_conforms --test cos_chat_triage_scenarios`: 7 + 4 + 3 passed
-- `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`: 下の結果節
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 4788 passed・20 skipped、web tsc -b 通過、vitest 101 files passed）
+- `cargo clippy --workspace -- -D warnings`: exit 0
+- `cargo fmt --all -- --check`: exit 0（差分なし）
+- `sh scripts/dev/progress-index.sh --check`: ok
 
 ## 未解決事項
 - 前回の task review で `cargo test --workspace` の `cap_probe_real_daemon`（probe の task が 404）が落ちていた。この WU の変更とは別の箇所で、未調査。

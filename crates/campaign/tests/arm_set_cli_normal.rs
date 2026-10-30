@@ -394,6 +394,7 @@ struct Fx {
     a_program: PathBuf,
     config: PathBuf,
     stub: Option<Stub>,
+    isolation: celeris_campaign::preflight_isolation::IsolationInputs,
 }
 
 fn input() -> Input {
@@ -711,6 +712,7 @@ fn fixture(which: &'static str, repeats: u32) -> Fx {
         a_program,
         config: me.config,
         stub: Some(stub),
+        isolation: preflight_setup::isolation(d),
         dir,
     }
 }
@@ -750,6 +752,7 @@ impl Fx {
         add("--task-template", &self.p("task-template.json"));
         add("--cap-env", &self.p("cap-env.json"));
         add("--out", &self.out());
+        v.extend(preflight_setup::isolation_args(&self.isolation));
         v.extend([
             "--daemon-pid".to_string(),
             DAEMON_PID.to_string(),
@@ -1469,6 +1472,12 @@ mod unused_arm_requests {
     }
 
     impl Host for CountingHost {
+        fn runtime_probe(
+            &self,
+            r: &celeris_campaign::preflight_isolation::ProbeRequest,
+        ) -> Result<celeris_campaign::runtime_probe::RuntimeProbe, String> {
+            Ok(r.all_denied())
+        }
         fn env_nonempty(&self, name: &str) -> bool {
             self.env_names.borrow_mut().push(name.to_string());
             true

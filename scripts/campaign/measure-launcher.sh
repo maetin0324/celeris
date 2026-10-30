@@ -45,6 +45,8 @@ RELEASE= RUN_PATH= A_PROGRAM=claude A_ACCOUNT= WORKER_PROGRAMS= MEASUREMENT_ID=
 GLOBAL_LEDGER= VARIANT_B0_SHA256= INITIAL_TREES=
 MATERIALS_SRC= KB_SRC= REPO_SRC= INPUTS_SRC= CASES_ROOT= GRADER_ROOT= GRADE_CASES_ROOT=
 SERIES_ROOT= SERIES_IMPORT_OUTS=
+DENY_LIST= EVAL_ROOT= SANDBOX_SCRIPT= PROBE_PROGRAM= B_STATE= B_RELEASE= B_ACCOUNT=
+OPERATOR_STATE= OPERATOR_RELEASE= OPERATOR_ACCOUNT=
 RECORDS= CAP_ENV= EXECUTOR=celeris INTERVAL_SECS=60 MAX_ITERATIONS=1440 HEALTH_WAIT_SECS=60
 # shellcheck disable=SC1090
 . "$ENV_FILE"
@@ -82,6 +84,23 @@ MATERIALS_SRC=$(abs "$MATERIALS_SRC") KB_SRC=$(abs "$KB_SRC") INPUTS_SRC=$(abs "
 [ -z "$GLOBAL_LEDGER" ] || GLOBAL_LEDGER=$(abs "$GLOBAL_LEDGER")
 [ -z "$INITIAL_TREES" ] || INITIAL_TREES=$(abs "$INITIAL_TREES")
 [ -z "$CAP_ENV" ] || CAP_ENV=$(abs "$CAP_ENV")
+# 隔離検査（ADR 2026-10-30-ops-r2-isolation-principal D3）の入力。必須かどうかは CLI の preflight が決める（正式試行で欠ければ拒否）。
+# 1 行 1 項目（campaign() は IFS を改行にして common_args を呼ぶ）。
+ISOLATION_KEYS='DENY_LIST:--deny-list
+EVAL_ROOT:--eval-root
+SANDBOX_SCRIPT:--sandbox-script
+PROBE_PROGRAM:--probe-program
+B_STATE:--b-state
+B_RELEASE:--b-release
+B_ACCOUNT:--b-account
+OPERATOR_STATE:--operator-state
+OPERATOR_RELEASE:--operator-release
+OPERATOR_ACCOUNT:--operator-account'
+for kv in $ISOLATION_KEYS; do
+    k=${kv%%:*}
+    eval "v=\${$k}"
+    [ -z "$v" ] || eval "$k=\$(abs \"\$v\")"
+done
 case $CAMPAIGN_BIN in */*) CAMPAIGN_BIN=$(abs "$CAMPAIGN_BIN") ;; esac
 [ -z "$RUN_PATH" ] || PATH="$RUN_PATH:$PATH"
 export PATH
@@ -147,6 +166,10 @@ common_args() {
     # worker harness の実行ファイル。preflight（run・watch 内のものを含む）の env-lock 照合で env-lock と同じ値を使う。
     for w in $WORKER_PROGRAMS; do
         set -- "$@" --worker-program "$w"
+    done
+    for kv in $ISOLATION_KEYS; do
+        eval "v=\${${kv%%:*}}"
+        [ -z "$v" ] || set -- "$@" "${kv#*:}" "$v"
     done
     printf '%s\n' "$@"
 }

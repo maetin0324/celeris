@@ -49,6 +49,7 @@ pub mod ops_r1_conditions;
 pub mod ops_r1_intake;
 pub mod ops_r1_trace;
 pub mod preflight;
+pub mod preflight_isolation;
 pub mod record;
 pub mod report;
 pub mod runner;

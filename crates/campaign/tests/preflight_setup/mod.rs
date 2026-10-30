@@ -9,6 +9,7 @@ use std::{
 use celeris_campaign::{
     lock_tree,
     preflight::{Inputs, MeasureEnv},
+    preflight_isolation::{IsolationInputs, ScriptSandbox},
     snapshot::hash_tree,
 };
 use serde_json::{Value, json};
@@ -224,6 +225,7 @@ pub fn setup() -> Setup {
         cap_env: Some(write_cap_env(d)),
         variant_b0_sha256: None,
         worker_programs: Vec::new(),
+        isolation: isolation(d),
     };
     Setup { dir, inp }
 }
@@ -312,4 +314,94 @@ pub fn ok_worker_run(
         task_id: "01TESTPROBETASK".into(),
         results,
     }
+}
+
+/// 試験用の sandbox script（ops-r2-sandbox.sh の代わり）。probe-read には全 path 拒否の JSON を返す。
+/// 実 script と実 bwrap の中の probe は `runtime_probe.rs` の opt-in 試験が確かめる。
+pub const SANDBOX_STUB: &str = r#"#!/bin/sh
+for a; do [ "$a" = --print-args ] && { printf '%s\n' --ro-bind /usr /usr; exit 0; }; done
+while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+printf '{"schema":"celeris.runtime-probe/1","principal":"%s","uid":0,"paths":[],"mounts_outside_allow":[],"ok":true}\n' "$5"
+"#;
+
+/// bwrap を stub にした CLI 試験の probe（`--probe-program`）。全 path 拒否の JSON を返す。
+pub const PROBE_STUB: &str = r#"#!/bin/sh
+printf '{"schema":"celeris.runtime-probe/1","principal":"%s","uid":0,"paths":[],"mounts_outside_allow":[],"ok":true}\n' "$3"
+"#;
+
+/// launcher の env file に書く隔離検査の設定（`isolation` と同じ値。probe は `PROBE_STUB`）。
+pub fn isolation_env(i: &IsolationInputs) -> String {
+    let args = isolation_args(i);
+    let mut out = String::new();
+    for kv in args.chunks(2) {
+        let key = kv[0]
+            .trim_start_matches("--")
+            .replace('-', "_")
+            .to_uppercase();
+        out.push_str(&format!("{key}={}\n", kv[1]));
+    }
+    let probe = i.deny_list.as_ref().unwrap().with_file_name("probe-stub");
+    out.push_str(&format!("PROBE_PROGRAM={}\n", probe.display()));
+    out
+}
+
+/// 正式試行の隔離検査の入力（deny list・評価器 root・B と operator の許可表）を `d/iso` に作る。
+pub fn isolation(d: &Path) -> IsolationInputs {
+    let iso = d.join("iso");
+    let eval = iso.join("eval");
+    let sb = |p: &str| {
+        let s = ScriptSandbox {
+            state: Some(iso.join(format!("{p}-state"))),
+            release: Some(iso.join("release")),
+            account: Some(iso.join(format!("{p}-account"))),
+            ro: Vec::new(),
+        };
+        for x in [&s.state, &s.release, &s.account].into_iter().flatten() {
+            fs::create_dir_all(x).unwrap();
+        }
+        s
+    };
+    let (b, operator) = (sb("b"), sb("operator"));
+    fs::write(
+        iso.join("deny.txt"),
+        format!(
+            "# 承認票と同じ deny list\n{}\n{}\n",
+            eval.join("private/k4/private.json").display(),
+            iso.join("old-out/answer.json").display()
+        ),
+    )
+    .unwrap();
+    let script = iso.join("sandbox-stub.sh");
+    fs::write(&script, SANDBOX_STUB).unwrap();
+    let probe = iso.join("probe-stub");
+    fs::write(&probe, PROBE_STUB).unwrap();
+    fs::set_permissions(&probe, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    IsolationInputs {
+        deny_list: Some(iso.join("deny.txt")),
+        eval_root: Some(eval),
+        sandbox_script: Some(script),
+        b,
+        operator,
+        probe_program: None,
+    }
+}
+
+/// `isolation` の入力を CLI 引数にする。
+pub fn isolation_args(i: &IsolationInputs) -> Vec<String> {
+    let mut v = Vec::new();
+    let mut add = |k: &str, p: &Option<PathBuf>| {
+        if let Some(p) = p {
+            v.push(k.to_string());
+            v.push(p.to_string_lossy().into_owned());
+        }
+    };
+    add("--deny-list", &i.deny_list);
+    add("--eval-root", &i.eval_root);
+    add("--sandbox-script", &i.sandbox_script);
+    for (n, s) in [("b", &i.b), ("operator", &i.operator)] {
+        add(&format!("--{n}-state"), &s.state);
+        add(&format!("--{n}-release"), &s.release);
+        add(&format!("--{n}-account"), &s.account);
+    }
+    v
 }

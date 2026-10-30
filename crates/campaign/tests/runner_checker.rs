@@ -499,7 +499,8 @@ fn run_refuses_split_mix_and_unknown_executor_path_has_no_network_code() {
             t = t.replace("std::net::Shutdown", "");
         }
         // 子 process は A arm の harness_exec.rs、grade の評価 command の grade_runner.rs、
-        // asset 組立の git/tar の asset_assembly.rs、評価側の read-only `ssh qstat -x -f` の ssh_qstat.rs だけが起動する
+        // asset 組立の git/tar の asset_assembly.rs、評価側の read-only `ssh qstat -x -f` の ssh_qstat.rs、
+        // preflight の runtime probe を bwrap・ops-r2-sandbox.sh で包む preflight_isolation.rs だけが起動する
         // （command は注入・固定、実 LLM は呼ばない）。
         let spawns = dagbench_files.contains(&p)
             || p.file_name().is_some_and(|n| {
@@ -507,6 +508,7 @@ fn run_refuses_split_mix_and_unknown_executor_path_has_no_network_code() {
                     || n == "grade_runner.rs"
                     || n == "asset_assembly.rs"
                     || n == "ssh_qstat.rs"
+                    || n == "preflight_isolation.rs"
             });
         for bad in [
             "reqwest",

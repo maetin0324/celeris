@@ -79,6 +79,12 @@ impl Executor for Counting {
 
 struct OkHost;
 impl Host for OkHost {
+    fn runtime_probe(
+        &self,
+        r: &celeris_campaign::preflight_isolation::ProbeRequest,
+    ) -> Result<celeris_campaign::runtime_probe::RuntimeProbe, String> {
+        Ok(r.all_denied())
+    }
     fn probe_runner(&self) -> Box<dyn celeris_campaign::cap_probe::ProbeRunner> {
         Box::new(preflight_setup::OkRunner)
     }
@@ -258,6 +264,7 @@ fn fx() -> Fx {
         cap_env: Some(preflight_setup::write_cap_env(d)),
         variant_b0_sha256: None,
         worker_programs: Vec::new(),
+        isolation: preflight_setup::isolation(d),
     };
     Fx { dir, inp }
 }

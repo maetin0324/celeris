@@ -509,6 +509,10 @@ pub struct CosTriageOption {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CosTriageDecision {
     pub summary: String,
+    /// ADR 2026-10-30-cos-review-open-waits D3: where the item comes from and why now.
+    pub background: Option<String>,
+    /// D3: what happens once the person answers.
+    pub on_answer: Option<String>,
     pub options: Vec<CosTriageOption>,
     pub recommended: Option<String>,
     pub recommendation_reason: Option<String>,
@@ -579,6 +583,8 @@ pub fn decision_from_outbox(body: &str) -> Option<CosTriageDecision> {
         .unwrap_or_default();
     Some(CosTriageDecision {
         summary: v["summary"].as_str().unwrap_or_default().to_owned(),
+        background: v["background"].as_str().map(str::to_owned),
+        on_answer: v["on_answer"].as_str().map(str::to_owned),
         options,
         recommended: v["recommended"].as_str().map(str::to_owned),
         recommendation_reason: v["recommendation_reason"]

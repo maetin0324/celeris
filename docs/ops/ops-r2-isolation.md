@@ -7,6 +7,7 @@ tasks: [01M66JYQ249SZHNXK0AEVTZNEC]
 設計は [ADR 2026-10-30-ops-r2-isolation-principal](../../agent-docs/adr/2026-10-30-ops-r2-isolation-principal.md)（人の決定 iso-boundary: 評価器専用の別 uid）。
 この文書は、道具の使い方と、人が 1 回実行する準備手順を書く。**準備（§4）が終わるまで、正式試行の preflight は L1 の確認で必ず止まる**
 （人の uid が `EVAL_ROOT` か祖先を持っている、または書けるため。§2.3）。本番 daemon・本番 DB・`~/.config/celeris` はこの手順では変えない。
+K2 の試行前に通す確認の順序は [K2 の開始前チェック](ops-r2-k2-preflight.md) にまとめた。
 
 ## 1. 境界は 2 層
 

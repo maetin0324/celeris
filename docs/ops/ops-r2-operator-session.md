@@ -7,6 +7,7 @@ schema のまま記録し、session-map は試行の前に作る。設計は
 
 ここに挙げる script は LLM・Claude Code・daemon を起動しない。Claude Code の起動（`launch.sh`）は人が行う。
 汎用の監視基盤ではなく、証跡 dir の中だけで動く。
+試行前の確認全体の順序は [K2 の開始前チェック](ops-r2-k2-preflight.md) の §6。
 
 ## 1. 試行の前: session を用意する
 

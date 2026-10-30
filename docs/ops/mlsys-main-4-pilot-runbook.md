@@ -95,6 +95,8 @@ repin で新 binary の lock を取り直した結果、R2 の lock.json・env-l
 8. K2 で、cluster job が試行後も終端していない（`cluster-cancel.jsonl` の手順で人が消す。自動では消さない）。
 9. 人の操作が記録されないまま入った（§5 の記録を後で足せないもの）。
 
+ops-r2 の試行では、[K2 の開始前チェック](ops-r2-k2-preflight.md) §7 の 6 項目を足す。
+
 ## 4. 共有台帳・既承認枠・残枠
 
 | 項目 | 現在値（2026-10-26 に `$RR/ledger.json` と台帳の現物から読んだ値） |

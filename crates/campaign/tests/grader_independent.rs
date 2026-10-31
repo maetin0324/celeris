@@ -677,7 +677,11 @@ fn cli_grade_error_is_exit_2_with_empty_stdout() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
-    assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        out.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
     assert!(!out.stderr.is_empty());
 }
 

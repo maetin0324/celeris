@@ -19,7 +19,11 @@ ADR: `agent-docs/adr/2026-10-31-ops-r2-preflight-fixes.md` の付記 2026-10-31�
 - 試験 `crates/campaign/tests/preflight_ops_r2.rs`（7 件）。
 
 ## 証拠（提出時の HEAD で実行）
-EVIDENCE_PLACEHOLDER
+- `cargo test -p celeris-campaign --test preflight_ops_r2` → 7 passed
+- `bash scripts/dev/test-affected.sh` → exit 0（2909 tests passed、9 skipped。docs・ADR 番号・human-text 検査 ok）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- 範囲 check（`CELERIS_WU_SCOPE_PATHS`）→ 変更 path は ADR・自分の進捗・campaign の crate・fixtures だけ
 
 ## 未解決・手順書への引き継ぎ（docs unit）
 - ops-r2 の preflight に渡す引数は `--manifest crates/campaign/fixtures/frozen-manifests/ops-r2-k2.json`・`--repo-src`・`--inputs-src`・`--measure-config`・`--normal-config`・`--a-program`（local の固定 copy）と隔離の引数。`--api-url`・`--token-env`・`--task-template`・`--materials-src`・`--kb-src`・`--canaries`・`--cap-env` は要らない。

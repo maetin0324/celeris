@@ -5,6 +5,10 @@
         [--forbidden-sha <sha256> ...] [--canary <文字列> ...] --scan <dir|file> [--scan ...] \
         [--deny-readable-file <list>] [--eval-root <dir>] [--runtime-probe <probe.json> ...] --out <json>
 
+試験の起動例（試験には -I を付けない。-I は cwd を sys.path に入れず試験を import できない）:
+
+    cd scripts/campaign && python3 -m unittest test_check_ops_r1_leak
+
 検出するもの（どれか 1 つでも見つかれば exit 1。入力の誤りは exit 2。見つからなければ exit 0）:
 
 - scan 先の file（tar/tgz・zip・gzip の member と git の object を含む）に、次のどれかが現れること。

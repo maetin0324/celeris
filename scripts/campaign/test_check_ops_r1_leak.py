@@ -2,6 +2,8 @@
 """check-ops-r1-leak.py の試験。合成した private.json・scan 先・可読 path で、検出と見逃しの無さを確かめる。
 
     cd scripts/campaign && python3 -m unittest test_check_ops_r1_leak
+
+直接 `python3 scripts/campaign/test_check_ops_r1_leak.py` でも通る（-I は cwd を sys.path に入れないので付けない）。
 """
 import gzip
 import hashlib
@@ -15,6 +17,8 @@ import tarfile
 import tempfile
 import unittest
 import zipfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check-ops-r1-leak.py")
 

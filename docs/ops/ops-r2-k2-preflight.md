@@ -90,6 +90,15 @@ grep -A4 '^\[maintenance.stagnation\]' "$S/daemon.toml"   # 4 閾値がすべて
 生成した config は langmem・gc を無効、`[maintenance.stagnation]` の閾値を 0、`[memory]`・`[llm_proxy]`・`[[mcp.listeners]]`・`[[cron.seed]]` なしにする。
 試行と無関係に LLM を呼ぶ常駐の経路はこれで切る。CoS の受信箱 triage だけは config で切れない（§7-7）。
 
+生成器は `$S/release-store/`（`releases/<sha12>` → `$R`、`current` → `releases/<sha12>`）を作り、`[selfdeploy] releases_dir` をそこに向ける（付記 D-store）。
+本番の `/local/celeris/state/releases` は読みも書きもしない。daemon は起動時の promotion gate でこの写しの `current` を見る。
+
+```sh
+readlink "$S/release-store/current"                 # releases/<sha12>
+readlink "$S/release-store/releases/<sha12>"        # $R
+grep -A2 '^\[selfdeploy\]' "$S/daemon.toml"        # releases_dir = "$S/release-store/releases"
+```
+
 ## 3. 隔離 preflight（deny_readable が 0 件）
 
 deny list は 1 行 1 絶対 path の file で、承認票の deny list を実在の path に展開して書く。件数に上限は無い（9000 件を超える全件でよい。
@@ -207,9 +216,13 @@ config の dir を `--ro "$SSHCFG_DIR"` で渡す。`~/.ssh` と `/run/user/1001
 
 ```sh
 sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /local/celeris/measure-accounts/b \
-  --ro "$SSHCFG_DIR" --socket "$MUX" -- \
-  /usr/bin/ssh -F "$SSHCFG_DIR/config" -o BatchMode=yes -o ConnectTimeout=10 sirius 'echo ok; command -v qsub qstat'; echo "exit=$?"
+  --ssh-config "$SSHCFG_DIR/config" --socket "$MUX" -- \
+  /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=10 sirius 'echo ok; command -v qsub qstat'; echo "exit=$?"
 ```
+
+`--ssh-config` は専用 config の file だけを包みの `/etc/ssh/ssh_config` に bind し、`/etc/ssh` の残り（`ssh_config.d` を含む）は空の tmpfs で隠す（付記 D-ssh）。
+`-F` を付けずに `ssh sirius` が通るので、A・B の試行と B の remote exec に `-F` を教えない。専用 config には `ControlPath "$MUX"`・`UserKnownHostsFile`（`$SSHCFG_DIR` の下の file）を書く。
+A の包み（§6.2）にも同じ `--ssh-config`・`--socket` を渡す。`--print-args` で `/etc/ssh/ssh_config` の bind と socket の bind が出て、`$SSHCFG_DIR` の dir そのものが出ないことを確かめる。
 
 userns の限界: 包みの中では host の root と人以外の uid が 65534（nobody）に見える。ssh は持ち主が自分でも root でもない config を
 `Bad owner or permissions` で拒むので、`$SSHCFG_DIR/config` は人の uid の持ち物にし（root 持ちにしない）、group・other に書き込み権を付けない。
@@ -239,11 +252,12 @@ operator は上の socket と config 以外の ssh の鍵・config・socket を�
 
 ```sh
 sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /local/celeris/measure-accounts/b \
-  --ro "$(dirname "$CLAUDE")" -- "$R/bin/celeris" --config "$S/daemon.toml" --release <sha12> &
+  --ro "$(dirname "$CLAUDE")" --ssh-config "$SSHCFG_DIR/config" --socket "$MUX" -- \
+  sh -c "sh $S/bin/ops-r2-seed.sh unpack --seed $S/seed/benchfs.tar --sha256 $SEED_SHA --into $S/work/benchfs && exec $R/bin/celeris --config $S/daemon.toml --release <sha12>" &
 curl -s http://127.0.0.1:<測定 daemon の port>/api/v1/health   # cos_policy_version が "10"、release が sha12
 ```
 
-`cos_policy_version` が承認票の方針版と違えば §7-6 で止める。この起動の形（包みの中で release の `bin/celeris` が `--config` を読む）を実機で通した記録は無い（未確認）。
+`cos_policy_version` が承認票の方針版と違えば §7-6 で止める。promotion gate が `current does not exist` で exit 4 を返すなら、`$S/release-store` が §2.2 の形でない。この起動の形（包みの中で release の `bin/celeris` が `--config` を読む）を実機で通した記録は無い（未確認）。
 
 
 ```sh
@@ -263,6 +277,36 @@ sh scripts/campaign/ops-r2-session-prep.sh --evidence "$P/operator-session" --tr
 operator の介入は 1 件ずつ開始と終了のある `human-op record --actor-kind external_operator` にし、人の能動時間は
 `bin/ops-r2-human-span.sh begin|end` で人が記録した区間だけを数える（[実験専用 operator session §2](ops-r2-operator-session.md#2-試行の間-poll-と記録)）。
 初回の起動で `transcript_expected` と実物の path を照合する（未確認）。
+
+### 6.1 A・B の初期作業ツリー（同じ種）
+
+A と B は同じ種（同じ sha256 の非圧縮 tar、`.git` なし）から始める（付記 D-seed）。種は §3・§4 の前に state に置き、漏洩検査が tar の中身も読む。
+
+```sh
+SEED_SHA=$(sh scripts/campaign/ops-r2-seed.sh make --repo <preflight の repo-src> --rev <承認票の rev> --out "$P/benchfs.tar")
+for X in "$S_A" "$S"; do
+  sh scripts/campaign/ops-r2-seed.sh place --seed "$P/benchfs.tar" --sha256 "$SEED_SHA" --state "$X"
+  mkdir -p "$X/bin" && cp scripts/campaign/ops-r2-seed.sh "$X/bin/"     # 包みの中で unpack に使う
+done
+sha256sum "$S_A/seed/benchfs.tar" "$S/seed/benchfs.tar"                # 2 行とも $SEED_SHA
+```
+
+展開は包みの中で行う（§6 の B、§6.2 の A）。repo-src を `--ro` で渡さない（`.git` を拒む）。
+
+### 6.2 試行 A の起動（人が別の端末で実行する）
+
+`celeris-campaign run` は ops-r2 の manifest を拒むので、A は単体の Claude Code として A の包みで起動する（付記 D-trial-a）。
+operator は次の script で command を出し、人がそれを別の端末で実行する。script は何も起動しない。
+
+```sh
+cp <承認済みの固定依頼文> "$S_A/prompt.md"
+sh scripts/campaign/ops-r2-trial-a-command.sh --state "$S_A" --claude-dir "$(dirname "$CLAUDE")" \
+  --account /local/celeris/measure-accounts/a --ssh-config "$SSHCFG_DIR/config" --socket "$MUX" --seed-sha256 "$SEED_SHA"
+```
+
+出る command は、包みの中で種を展開し、`CLAUDE_CONFIG_DIR=<A の account>` で `timeout 3600 claude-2.1.303 -p --model claude-sonnet-5-5` を起動し、
+transcript を `$S_A/a-transcript.jsonl` に書く。承認票の 3600 秒は `timeout` で強制する。1,500,000 token は CLI で強制できないので、
+operator が transcript の usage を見て停止規則（§7）で止める。依頼文に `-F` や ssh の説明を足さない。
 
 ## 7. 停止規則の確認
 

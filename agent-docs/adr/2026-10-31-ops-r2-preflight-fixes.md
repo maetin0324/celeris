@@ -239,3 +239,12 @@ case.json と manifest の参照が違えば `graders` で止まる、入力 man
   - どの段も tar の member を検査し、`.git`・絶対 path・`..`・木の外を指す link・特殊 file を含めば exit 1。
 - 圧縮しないので、漏洩検査（`check-ops-r1-leak.py --scan <state>`）が tar の member の中身を読み、private の文字列・canary・禁止 hash を見つける。木の外を指す link を拒むので、種から deny list の path へ届く link は作れない。
 - 試験: `crates/campaign/tests/ops_r2_seed.rs`（A・B が同じ bytes、.git なしで展開、展開後の state を sandbox が受ける、hash 違い・.git・外向き symlink の拒否、漏洩検査が tar の中の canary を見つける）。
+
+## 付記 D-trial-a（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）試行 A の起動
+- 背景: ops-r2 の manifest では `celeris-campaign run` が拒まれ、A を A の包みで単体の Claude Code として起動する道具が無かった。
+- 決定: `scripts/campaign/ops-r2-trial-a-command.sh` が起動 command を 1 行出す。script は起動しない（LLM を呼ぶ試行は人が別の端末で始める）。
+  command は `ops-r2-sandbox.sh --state <A> --release <claude 2.1.303 の固定 copy の dir> --account <A の account> --ssh-config --socket` の中で
+  `ops-r2-seed.sh unpack` の後に `CLAUDE_CONFIG_DIR=<A の account> timeout 3600 claude-2.1.303 -p --model claude-sonnet-5-5` を exec する。
+- 上限: 3600 秒は `timeout` で強制する。1,500,000 token は claude CLI に上限の引数が無いので、operator が transcript の usage で停止規則に従い止める。
+- B と同じ ssh の形（付記 D-ssh）にし、`-F` を command にも依頼文にも入れない。
+- 試験: `crates/campaign/tests/ops_r2_trial_a_command.rs`（版・model・3600 秒・sandbox の引数・種の sha256 が command に入る、`-F` が無い、引数誤りは exit 2、前提の欠けは exit 1）。

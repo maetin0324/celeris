@@ -23,7 +23,7 @@ commit（件名）:
 - ops-r2: A・B の初期作業ツリーの種（.git なしの非圧縮 tar）を作り・置き・展開する ops-r2-seed.sh
 
 ## daemon.toml の差分（main の生成器との比較）
-同じ入力（合成 release `0e2e0e2e0e2e`、`--models cos-opus --harness stub --port 18999`、state の path だけ置き換えて比較）で
+同じ入力（試験用の合成 release、`--models cos-opus --harness stub --port 18999`、state の path だけ置き換えて比較）で
 `git show main:scripts/campaign/ops-r1-measure-config.sh` と現在の生成器の出力を diff した。違いは 2 行だけ:
 
 ```

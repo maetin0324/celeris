@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check-ops-r1-leak.py の試験。合成した private.json・scan 先・可読 path で、検出と見逃しの無さを確かめる。
 
-    python3 -I scripts/campaign/test_check_ops_r1_leak.py
+    cd scripts/campaign && python3 -m unittest test_check_ops_r1_leak
 """
 import gzip
 import hashlib

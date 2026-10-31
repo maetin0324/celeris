@@ -158,7 +158,8 @@ impl Grading {
             .join(" ")
     }
 
-    /// grader を実際に走らせる。合格で Ok、不合格で Err（判定 JSON の stderr）。
+    /// grader を実際に走らせる。合格で Ok、不合格で Err（exit 1 の stdout にある判定 JSON）、
+    /// 判定を作れないエラー（exit 2 など）は Err（stderr の理由）。
     pub fn grade(&self, artifact: &Path) -> Result<(), String> {
         fs::create_dir_all(&self.work).map_err(|e| e.to_string())?;
         let a = self.argv(artifact);
@@ -189,10 +190,10 @@ impl Grading {
             )
             .map_err(|e| e.to_string())?;
         }
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(String::from_utf8_lossy(&out.stderr).into_owned())
+        match out.status.code() {
+            Some(0) => Ok(()),
+            Some(1) => Err(String::from_utf8_lossy(&out.stdout).into_owned()),
+            _ => Err(String::from_utf8_lossy(&out.stderr).into_owned()),
         }
     }
 }

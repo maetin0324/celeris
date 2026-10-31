@@ -225,6 +225,24 @@ fn start_daemon() -> Daemon {
     )
     .expect("manifest");
     let config = root.join("daemon.toml");
+    // この試験は K4 の方針版 "6" を期待する。release の skill は版が進んでいるので、
+    // 版だけ "6" にした写しを --skills-src に渡す（script は --policy-version と skill 版の一致を要求する）。
+    let skills_src = root.join("skills-src");
+    let cp = Command::new("cp")
+        .arg("-R")
+        .arg(repo_root().join("config/skills"))
+        .arg(&skills_src)
+        .status()
+        .expect("cp skills");
+    assert!(cp.success());
+    let triage = skills_src.join("cos-inbox-triage/SKILL.md");
+    let text = fs::read_to_string(&triage).expect("triage skill");
+    fs::write(
+        &triage,
+        text.replace("version: \"10\"", "version: \"6\"")
+            .replace("policy_version \"10\"", "policy_version \"6\""),
+    )
+    .expect("write triage skill");
     let out = Command::new("sh")
         .arg(repo_root().join("scripts/campaign/ops-r1-measure-config.sh"))
         .arg("--state")
@@ -234,10 +252,12 @@ fn start_daemon() -> Daemon {
         .args([
             "--models",
             "cos-opus",
-            "--harness",
-            "stub",
-            "--stub-command",
+            "--policy-version",
+            "6",
+            "--skills-src",
         ])
+        .arg(&skills_src)
+        .args(["--harness", "stub", "--stub-command"])
         .arg(&stub)
         .arg("--out")
         .arg(&config)

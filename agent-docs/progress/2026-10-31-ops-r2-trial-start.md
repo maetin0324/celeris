@@ -11,6 +11,7 @@ updated: 2026-10-31
 ## やったこと
 - 項目 1（promotion gate）: `scripts/campaign/ops-r1-measure-config.sh` が `$STATE/release-store/releases/<sha12>`（→ release dir）と `$STATE/release-store/current`（→ `releases/<sha12>`）を作り、`[selfdeploy] releases_dir` をその写しに向ける。本番の release store は変えない。ADR 付記 D-store。
 - 項目 3（sandbox の ssh）: `scripts/campaign/ops-r2-sandbox.sh --ssh-config <file>`。ADR 付記 D-ssh。
+- 項目 2（初期作業ツリー）: `scripts/campaign/ops-r2-seed.sh`（make/place/unpack、.git なしの非圧縮 tar、sha256 照合、危ない member の拒否）。ADR 付記 D-seed。
 - 項目 6（K4 文言）: 生成器の `setup/project.json` と daemon.toml 冒頭注記を `ops-r2 K2` に。ADR 付記 D-k2text。
 - 項目 5（intake の decision_id）: 書式 `approval:<承認票の task id>:<file 名>:<選択肢 key>` を手順書 §5 と ADR 付記 D-decision に書いた（コード変更なし）。
 
@@ -19,6 +20,7 @@ commit（件名）:
 - ops-r2: 測定 config 生成が state の下に release store の写し（current → sha12）を作り releases_dir をそこへ向ける
 - ops-r1 measure 試験: release store の写しと releases_dir を確かめる
 - ops-r2: intake の decision_id を承認票の参照で書く書式を決める
+- ops-r2: A・B の初期作業ツリーの種（.git なしの非圧縮 tar）を作り・置き・展開する ops-r2-seed.sh
 
 ## daemon.toml の差分（main の生成器との比較）
 同じ入力（合成 release `0e2e0e2e0e2e`、`--models cos-opus --harness stub --port 18999`、state の path だけ置き換えて比較）で
@@ -37,7 +39,8 @@ commit（件名）:
 
 ## 証拠（提出時の HEAD で実行）
 - `cargo test -p celeris --test ops_r1_measure`: exit 0、1 passed（生成した daemon.toml の releases_dir・current の行き先・元の release store の中身が sha12 1 つのまま、を確かめ、その config で daemon を起動）。
+- `cargo test -p celeris-campaign --test ops_r2_seed`: exit 0、3 passed。
 - `cargo test -p celeris-campaign --test ops_r2_ssh_config --test ops_r2_socket`: exit 0、6 passed。
 
 ## 未解決事項
-- 項目 2（A・B の初期作業ツリーの種）、項目 4（試行 A の起動 command）、手順書の反映、test-affected・clippy は未実施。
+- 項目 4（試行 A の起動 command）、手順書の反映、test-affected・clippy は未実施。

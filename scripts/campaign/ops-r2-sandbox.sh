@@ -8,12 +8,12 @@ canon() {
 '*) refuse 'empty path or newline in path' ;; esac
     realpath -m -- "$1"
 }
-STATE= RELEASE= ACCOUNT= ROS= SOCKS= PRINT=0 SEPARATOR=0
+STATE= RELEASE= ACCOUNT= ROS= SOCKS= SSHCFG= PRINT=0 SEPARATOR=0
 while [ $# -gt 0 ]; do
     case $1 in
         --print-args) PRINT=1; shift ;;
         --) SEPARATOR=1; shift; break ;;
-        --state|--release|--account|--ro|--socket)
+        --state|--release|--account|--ro|--socket|--ssh-config)
             [ $# -ge 2 ] || refuse "missing value for $1"
             path=$(canon "$2")
             case $1 in
@@ -23,6 +23,10 @@ while [ $# -gt 0 ]; do
                 --ro) ROS="$ROS
 $path" ;;
                 # One unix socket per flag (e.g. an ssh master); only the socket itself is bound, never its parent dir.
+                # ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-ssh: the dedicated ssh config becomes the
+                # system /etc/ssh/ssh_config so `ssh sirius` works without -F; /etc/ssh/ssh_config.d is hidden.
+                --ssh-config) [ -f "$path" ] || refuse "not a file: $path"
+                    SSHCFG=$path ;;
                 --socket) [ -S "$path" ] || refuse "not a unix socket: $path"
                     SOCKS="$SOCKS
 $path" ;;
@@ -35,7 +39,8 @@ done
 # Validate canonical sources, including ancestors that would expose forbidden trees.
 # Python is used only for path validation; the mount argument table below is shared
 # unchanged by --print-args and the actual exec.
-python3 -I - "$STATE" "$RELEASE" "$ACCOUNT" "$ROS" "$SOCKS" <<'PY' || exit 2
+python3 -I - "$STATE" "$RELEASE" "$ACCOUNT" "$ROS
+$SSHCFG" "$SOCKS" <<'PY' || exit 2
 import os
 import sys
 from pathlib import Path
@@ -95,6 +100,8 @@ for path in $ROS; do
     set -- --ro-bind "$path" "$path" "$@"
 done
 IFS=$OLD_IFS
+# Only the file is bound over an empty /etc/ssh (after the /etc bind), never its parent dir.
+[ -z "$SSHCFG" ] || set -- --tmpfs /etc/ssh --ro-bind "$SSHCFG" /etc/ssh/ssh_config "$@"
 set -- --bind "$STATE" "$STATE" --setenv HOME "$STATE/home" --chdir "$STATE" --bind "$ACCOUNT" "$ACCOUNT" "$@"
 for path in /usr /bin /sbin /lib /lib64 /etc; do
     [ -e "$path" ] || continue

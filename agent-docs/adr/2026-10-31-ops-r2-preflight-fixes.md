@@ -210,3 +210,13 @@ case.json と manifest の参照が違えば `graders` で止まる、入力 man
 4. 漏洩検査の run uid: 道具に合わせ、手順書で `--run-uid`・`--run-gid` に人の uid を渡す。
 5. measure-bin の持ち主と ssh: userns の中では人以外の uid が 65534 に見え、ssh は root 持ち（に見える）config を拒む。この限界を手順書に書き、config と親 dir は人の uid 持ちにする。
 6. socket: 付記 D-socket の `--socket`・`--b-socket` を手順書の preflight・probe・§4.1 の sirius 確認に入れた。
+
+## 付記 D-ssh（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）試行に -F を教えずに `ssh sirius` を通す
+- 背景: sandbox の中では `/etc` を ro-bind で見せるため、`/etc/ssh/ssh_config` の `Include /etc/ssh/ssh_config.d/*` が userns の中で持ち主 65534 に見える dir を読み、`Bad owner` で止まる。固定依頼文は承認済みなので A・B の試行に `-F` を教えられない。
+- 決定: `ops-r2-sandbox.sh` に `--ssh-config <file>` を足す。bwrap の引数で `/etc` の bind の後に `--tmpfs /etc/ssh --ro-bind <file> /etc/ssh/ssh_config` を置き、専用 config（`/local/celeris/data/measure-bin/ssh/config`）を system config にする。`ssh_config.d` と system の known_hosts は見えなくなる。専用 config に `UserKnownHostsFile`・`ControlPath`（人が開いた master の socket、`--socket` で bind）を書く。
+- bind するのは file 1 つだけで、親 dir は見せない。受けるのは通常 file だけ（dir は exit 2）。禁止 path の検査は `--ro` と同じ規則で掛ける。
+- A と B は同じ `--ssh-config` を渡す（同じ形）。Celeris の remote exec helper は `$HOME/.ssh/config` が無ければ `-F` を足さないので、B の remote exec も同じ system config で通る。
+- 試験: `crates/campaign/tests/ops_r2_ssh_config.rs`（print-args の順序・親 dir を出さない・-F を足さない・A/B で同じ・dir を拒む）。実 ssh での確認は operator の step 8 のやり直し（未確認）。
+
+## 付記 D-k2text（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）
+- `ops-r1-measure-config.sh` が生成する `setup/project.json` と daemon.toml 冒頭の注記から K4 の文言（`ops-r1 K4 pilot`）を消し、`ops-r2 K2` に直した。daemon の挙動には効かない文言だけの変更。

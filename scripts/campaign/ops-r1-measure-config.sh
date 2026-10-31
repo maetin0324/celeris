@@ -181,7 +181,7 @@ if [ -n "$B_ACCOUNT_DIR" ]; then
     fi
 fi
 cat >"$STATE/setup/project.json" <<'EOF'
-{"title": "ops-r1 trial", "request": "ops-r1 K4 pilot の試行専用の案件。人の依頼は案件 CoS thread に入れる。"}
+{"title": "ops-r2 K2 trial", "request": "ops-r2 K2 pilot の試行専用の案件。人の依頼は案件 CoS thread に入れる。"}
 EOF
 
 # ---- daemon.toml
@@ -199,7 +199,7 @@ TMP_OUT="$OUT.tmp.$$"
 trap 'rm -f "$TMP_OUT"' EXIT
 {
     cat <<EOF
-# ops-r1 測定 daemon の config（scripts/campaign/ops-r1-measure-config.sh が生成。手で書き換えない）。秘密値なし。
+# ops-r2 K2 測定 daemon の config（scripts/campaign/ops-r1-measure-config.sh が生成。手で書き換えない）。秘密値なし。
 # release $RELEASE_SHA12（bin/celeris sha256 $CELERIS_SHA256）、models $MODELS、harness $HARNESS。
 # 本番と別: db・token・knowledge・workspace・scratch は $STATE の下、api は 127.0.0.1:$PORT。
 # 切ってある LLM 経路: [maintenance.stagnation]（4 閾値 0）・[knowledge.langmem]・[knowledge.gc]。

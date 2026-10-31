@@ -4,6 +4,9 @@
 //! grade-out → check → export → human-op report → final-accounting → `scripts/campaign/check-out-consistency.py` を
 //! 実 binary で走らせ、全段 exit 0、試行数・分母・終了理由・合否が段の間で一致すること、同じ raw から 2 回出した
 //! 出力が byte 一致することを確かめる。LLM・daemon・本番 DB・~/.config/celeris は使わない。
+#[path = "../../campaign/tests/support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 #[path = "ops_r1/trace_fixture.rs"]
 mod trace_fixture;
 
@@ -185,7 +188,7 @@ impl Inputs {
         let d = dir.path().to_path_buf();
         let (cases, grade, ins) = (d.join("cases"), d.join("grade-cases"), d.join("inputs-src"));
         let copy = |a: &Path, b: &Path| celeris_campaign::snapshot::copy_tree(a, b).expect("copy");
-        copy(&campaign_root().join("cases"), &cases);
+        copy(&support_cases::cases_root(), &cases);
         copy(&campaign_root().join("fixtures/grade-cases"), &grade);
         fs::create_dir_all(&ins).expect("ins");
         celeris_campaign::cells_validity::synth::healthy()

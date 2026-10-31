@@ -1,3 +1,6 @@
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::process::Command;
 
 use serde_json::{Value, json};
@@ -89,7 +92,7 @@ fn cap_probe_cli_refuses_undeclared_probe_harness_before_any_submission() {
                 .arg("--cap-env")
                 .arg(dir.path().join("cap.json"))
                 .arg("--cases-root")
-                .arg(root.join("cases"))
+                .arg(support_cases::cases_root())
                 .arg("--grader-root")
                 .arg(root.join("fixtures/grader-private"))
                 .arg("--manifest")

@@ -2,6 +2,9 @@
 //! 隠しテスト挿入つきの「既知の誤実装=不合格／修正版=合格」の model 無し試験。
 //! cargo は textual stub に差し替える（BenchFS は submodule 未固定・UCX 要で本 repo では build できない）。
 //! stub は挿入した隠し module の宣言と、修正の印（修正版にだけ在る記述）を見るだけで、実コンパイルではない。
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -30,7 +33,7 @@ fn grade_root() -> PathBuf {
 
 fn set() -> CaseSet {
     CaseSet::load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures/grader-private"),
     )
     .expect("load")
@@ -147,7 +150,7 @@ fn missing_or_altered_grade_case_makes_the_case_set_unusable() {
     // grade_case_ref の無い real case は loader が拒否する。
     let t = tempfile::tempdir().unwrap();
     let c = t.path().join("cases");
-    copy(&root().join("cases"), &c);
+    copy(&support_cases::cases_root(), &c);
     let g = root().join("fixtures/grader-private");
     let cj = c.join("final/k4-cmp4-validity-analysis/case.json");
     let mut v: Value = serde_json::from_str(&fs::read_to_string(&cj).unwrap()).unwrap();
@@ -156,7 +159,7 @@ fn missing_or_altered_grade_case_makes_the_case_set_unusable() {
     let e = CaseSet::load(&c, &g).expect_err("grade_case_ref 無しは拒否");
     assert!(e.contains("grade_case_ref"), "{e}");
     // 短縮 hash の submodule は拒否する。
-    copy(&root().join("cases"), &t.path().join("c2"));
+    copy(&support_cases::cases_root(), &t.path().join("c2"));
     let cj = t
         .path()
         .join("c2/final/k2-bf-xattr-restart-campaign/case.json");
@@ -633,4 +636,67 @@ fn k3_k4_recompute_rejects_a_wrong_report_and_accepts_the_raw_derived_one() {
             "{id}: 6% ずれた報告"
         );
     }
+}
+
+/// `gen-grade-case`（ADR 付記 G1）: fixture の private と hidden から EVAL_ROOT 形の dir に作り、返すのは sha256 だけ。
+/// 隠しテストが無ければ拒否し、誤りに path・private の中身を出さない。
+#[test]
+fn gen_grade_case_cli_prints_only_sha_and_refuses_without_hidden() {
+    let id = "k2-bf-xattr-restart-campaign";
+    let tmp = tempfile::tempdir().expect("tmp");
+    let eval = tmp.path();
+    let priv_dir = eval.join("private/final").join(id);
+    fs::create_dir_all(&priv_dir).unwrap();
+    fs::copy(
+        root()
+            .join("fixtures/grader-private/final")
+            .join(id)
+            .join("private.json"),
+        priv_dir.join("private.json"),
+    )
+    .unwrap();
+    let args = |out: &str| -> Vec<String> {
+        [
+            "--case",
+            id,
+            "--cases-root",
+            support_cases::cases_root().to_str().unwrap(),
+            "--private-root",
+            eval.join("private").to_str().unwrap(),
+            "--hidden-root",
+            eval.join("hidden-tests").to_str().unwrap(),
+            "--out-root",
+            eval.join(out).to_str().unwrap(),
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+    };
+    let private = fs::read_to_string(priv_dir.join("private.json")).unwrap();
+    let err = celeris_campaign::grade_case_gen::cli(&args("grade-cases")).unwrap_err();
+    assert!(err.contains("hidden tests are missing"), "{err}");
+    assert!(!err.contains(eval.to_str().unwrap()));
+    assert!(!eval.join("grade-cases").exists());
+
+    let hidden = eval
+        .join("hidden-tests/final")
+        .join(id)
+        .join("hidden/.grader");
+    fs::create_dir_all(&hidden).unwrap();
+    let repo_hidden = grade_root().join("final").join(id).join("hidden/.grader");
+    for f in ["run.sh", "k2_metadata_ops_hidden.rs"] {
+        fs::copy(repo_hidden.join(f), hidden.join(f)).unwrap();
+    }
+    let out = celeris_campaign::grade_case_gen::cli(&args("grade-cases")).expect("gen");
+    assert_eq!(out.len(), 64);
+    assert!(out.chars().all(|c| c.is_ascii_hexdigit()));
+    for line in private.lines().filter(|l| l.contains("hidden_command")) {
+        assert!(!out.contains(line.trim()));
+    }
+    let made = eval.join("grade-cases/final").join(id);
+    assert_eq!(out, sha(&made.join(format!("{id}.json"))));
+    assert!(made.join("hidden/.grader/run.sh").is_file());
+    // 既存の出力 dir は上書きしない。
+    let again = celeris_campaign::grade_case_gen::cli(&args("grade-cases")).unwrap_err();
+    assert!(again.contains("already exists"), "{again}");
 }

@@ -17,7 +17,7 @@ use celeris_campaign::{
     watch::{self, SystemClock, WatchOptions},
 };
 
-const USAGE: &str = "usage: celeris-campaign <probe-read|ops-r1-a-raw|ops-r1-assemble|operator-usage|ops-r1-intake|ops-r1-trace|ops-r1-attribution|human-op|jev-stages|dry-run|validate|lock|collect-observed|collect-observed-out|stage-grader-inputs|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|ledger-init|usage> --manifest <path> \
+const USAGE: &str = "usage: celeris-campaign <probe-read|gen-grade-case|ops-r1-a-raw|ops-r1-assemble|operator-usage|ops-r1-intake|ops-r1-trace|ops-r1-attribution|human-op|jev-stages|dry-run|validate|lock|collect-observed|collect-observed-out|stage-grader-inputs|series-init|env-lock|offline-lock|config-check|env-check|preflight|cap-probe|cap-worker|run|watch|check|check-report|export|final-accounting|grade-out|ledger-init|usage> --manifest <path> \
 [--interval-secs N] [--max-iterations M] [--cases <grade-case dir> [--initial-trees <dir>]] \
 [--input-manifest <path>] [--out <dir>] [--executor mock|harness|celeris] [--api-url <url> --token-env <ENV_NAME> [--task-template <json>]] [--dest <dir>] \
 [--cases-root <dir>] [--grader-root <dir>] [--grade-case-root <dir>] [--a-program <path>] [--report <file>] [--measurement-id <id>] [--repo-src <dir>] [--materials-src <dir>] [--kb-src <dir>] [--inputs-src <dir>] [--records <records.jsonl>] [--cos-not-called <basis>] [--quota <usage.json>] [--a-account <account_id>] [--measure-config <toml> --normal-config <toml> --canaries <json>] [--models-evidence <json> --models-evidence-sha256 <hex>] [--verify] [--approval <json>] [--variant-b0-sha256 <hex>] [--max-7d <ratio>] [--max-7d-codex <ratio>]";
@@ -355,10 +355,13 @@ fn cap_probe_cli(args: &[String]) -> Result<String, String> {
     if rep.ok { Ok(s) } else { Err(s) }
 }
 
+/// grade-out の判定が不合格だったことを main に伝える（判定 JSON は Ok で stdout へ、exit は 1）。
+static VERDICT_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn run(args: Vec<String>) -> Result<String, String> {
     let cmd = args.first().map(String::as_str).unwrap_or("");
     match cmd {
-        "grade" => return celeris_campaign::grader::cli(&args, &ProcessRunner::default()),
+        "gen-grade-case" => return celeris_campaign::grade_case_gen::cli(&args[1..]),
         "human-op" => return celeris_campaign::human_ops::cli::cli(&args),
         "ops-r1-a-raw" => return celeris_campaign::ops_r1_a_raw::cli(&args),
         "ops-r1-assemble" => return celeris_campaign::ops_r1_assemble::cli(&args),
@@ -764,6 +767,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let cases = arg(&args, "--cases").ok_or("--cases <grade-case dir> is required")?;
             let expected = cli_expected_lock(&args, &manifest_path, &m, &out()?)?;
             let initial_trees = arg(&args, "--initial-trees");
+            let work_root = arg(&args, "--work");
             let v = celeris_campaign::grade_out::grade_out_with(
                 &m,
                 &out()?,
@@ -771,9 +775,14 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 &ProcessRunner::default(),
                 expected.as_ref(),
                 initial_trees.as_deref(),
+                work_root.as_deref(),
             )?;
             let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
-            if v["ok"] == true { Ok(s) } else { Err(s) }
+            // 判定の不合格は stdout の判定 JSON と exit 1（エラーの exit 2 と分ける。grade と同じ契約）。
+            if v["ok"] != true {
+                VERDICT_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(s)
         }
         "ledger-init" => {
             // 人の承認（出典・範囲・期限・試行数）を共有台帳に記録する（冪等）。宣言した台帳の path だけを受ける。
@@ -870,10 +879,34 @@ fn main() -> ExitCode {
         let args: Vec<String> = std::env::args().skip(1).collect();
         return ExitCode::from(celeris_campaign::ops_r1_attr::cli(&args));
     }
+    // grade と grade-out の出力の契約（ADR 2026-10-30-ops-r2-isolation-principal 付記「grade の出力の契約」）:
+    // 判定 JSON は合格・不合格とも stdout、合格 exit 0・不合格 exit 1。判定 JSON を作れないエラーは stderr に理由、exit 2。
+    if std::env::args().nth(1).as_deref() == Some("grade") {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        return match celeris_campaign::grader::cli(&args, &ProcessRunner::default()) {
+            Ok((verdict, pass)) => {
+                println!("{verdict}");
+                ExitCode::from(u8::from(!pass))
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    let grade_out = std::env::args().nth(1).as_deref() == Some("grade-out");
     match run(std::env::args().skip(1).collect()) {
         Ok(out) => {
             println!("{out}");
-            ExitCode::SUCCESS
+            if VERDICT_FAILED.load(std::sync::atomic::Ordering::SeqCst) {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(e) if grade_out => {
+            eprintln!("error: {e}");
+            ExitCode::from(2)
         }
         Err(e) => {
             eprintln!("error: {e}");

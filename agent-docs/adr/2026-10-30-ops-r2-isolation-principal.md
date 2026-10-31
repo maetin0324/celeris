@@ -291,3 +291,71 @@ task 01M669QB069GND2ZKA1T97QPY9 の final review（criterion 4）の差し戻し
   2026-10-27-human-ops-actor-roles-request-ref、2026-10-27-operator-usage、2026-10-29-ops-r1-cos-intake-record、
   2026-10-17-mlsys-pilot2-fixes（A の bwrap）、2026-10-18-a-trial-scoped-state、0095（db_guard）、0126（userns 試験の opt-in）、
   2026-10-29-stagnation-triage-notify-wiring（stall unit の対象）。
+
+## 付記 2026-10-30「評価器側の穴を塞ぐ」（task 01M671KM6XYYSXNFWEBF3Q6ZM8）
+
+- E1 採点 wrapper は `scripts/campaign/ops-r2-grade.py`（install 先 `/var/lib/celeris-eval-bin/grade`）。tgz の sha256 照合 → `EVAL_ROOT/work/` に安全展開 → `celeris-campaign ... --grader-root EVAL_ROOT/private` → `check-ops-r1-leak.py` → outbox に 0644。stdout は outbox の path だけ、private と `celeris-campaign` の出力は `work/` の外に出さない。呼び出し側は `--grader-root`・`work/` の外の絶対 path・`..` を渡せない。起動 uid が `EVAL_ROOT` の持ち主でなければ止まる（試験は `CELERIS_EVAL_TEST_EUID` で注入、実 uid は人が §4.7 で確かめる）。承認票に wrapper の sha256 欄は足さず、開始前チェックで install 先と repo の file の sha256 一致を確かめる。
+- E2 新 private の sha256 の公開部への反映は `scripts/campaign/ops-r2-set-private-sha.py`。入力は sha256 の文字列だけで private を読まない。漏洩済みの旧値（`d02126077a47495b121e1e678f055ba4e2493f92d05cd010f2bda32d30694760`）は拒否する。frozen manifest の `materials_sha256` は `private_ref` を除く公開部から作る（`Case::public_json`）ので再 freeze は要らず、script は公開部が変わらないことを確かめる。承認票の値での反映は人の値が出てから。
+- E3 `celeris-eval` の shell は `/usr/sbin/nologin` に一本化し、評価器の shell には `sudo -u celeris-eval /bin/bash` で入る（`sudo -iu` の記述は消した）。
+
+## 付記 2026-10-30「K2 の grade-case を EVAL_ROOT で作る・人の sudo と L1 probe の食い違い」（task 01M673C32XMMPZ83Z6WK818WZV）
+
+- G1 採点は repo の grade-case を使わない。repo の `crates/campaign/fixtures/grade-cases/final/k2-bf-xattr-restart-campaign/` 一式は
+  旧 private から生成され、旧い hidden command と hidden 試験を含む漏洩済みの旧解答として扱う。採点の grade-case は評価器 uid が
+  `EVAL_ROOT/grade-cases/final/<case>/` に生成する。生成の道具は `celeris-campaign gen-grade-case`（既存の `grade_case_gen::generate` を使う。
+  入力は `EVAL_ROOT/private/final/<case>/private.json` と、評価器が置く hidden 試験 file の dir `EVAL_ROOT/hidden-tests/final/<case>/hidden/`。
+  その下の相対 path がそのまま grade-case の `hidden/` に入り、作業 dir に挿入される。`.grader/run.sh` があれば評価 command の wrapper にする）。
+  stdout には生成物 `<case>.json` の sha256 だけを出し、中身・path の一覧は stdout/stderr に出さない（誤りは固定の短い文。
+  `generate` の誤り文は private の command を含みうるので返さない）。hidden 試験の dir が無い・空のとき、symlink・特殊 file があるときは拒否する
+  （private の expected が hidden 試験を求めるのに hidden_command だけの grade-case を作ると、採点が仕様より弱くなるため）。
+  出力先の dir が既にあれば拒否する（古い file が混ざらないように。作り直すときは評価器が先に退ける）。
+- G2 `ops-r2-grade.py` は `--grade-case-root EVAL_ROOT/grade-cases` を固定で付け、引数の `--grade-case-root` を拒む（`--grader-root` と同じ扱い）。
+- G3 `ops-r2-set-private-sha.py` は `--grade-case-sha256` を受け、人が渡す 2 つの値で `case.json` の `private_ref.sha256` と
+  `grade_case_ref.sha256` を替える。repo の旧 grade-case の sha256（`f84089bcf161edab75bfc619574c112de446b75622f893323f43405190aca593`）は拒否する。
+  `Case::public_json` は `private_ref` と `grade_case_ref` を除くので、frozen manifest の `materials_sha256` は変わらず再 freeze は要らない。
+- G4 repo の旧 grade-case の file は HEAD に残す（fixture の試験が使う。git の履歴からは消せない）。deny list の最低限の項目に
+  `crates/campaign/fixtures/grade-cases/final/k2-bf-xattr-restart-campaign/` を足し、開始前チェック §0 で `grade_case_ref.sha256` が
+  `EVAL_ROOT` の grade-case の値と一致し、repo の旧値でないことを確かめる。
+- G5 L1 の限界: この host の人の uid は sudoers で `(ALL) NOPASSWD: ALL` を持つ。bwrap の外の人の uid の process は
+  `sudo -u celeris-eval` で private を読める。L1（持ち主の uid の分離）が塞ぐのは bwrap に包まれた試行の主体だけで、
+  bwrap の中では no_new_privs で sudo が拒否される（実機で確認）。人の sudoers は変えない。§4.4 の確認は
+  「人の shell からの sudo は通る（限界）」「`ops-r2-sandbox.sh -- sudo -n -u celeris-eval ...` は no new privileges で失敗する」に改める。
+- G6 L1 probe の mount 判定: `probe-read --principal l1` は持ち主の uid の分離だけを確かめる主体なので、`mounts_outside_allow`
+  （bwrap の mount の外への到達）は判定に入れず、報告欄に残すだけにする。`--allow` が無い l1 の probe は deny path が全て
+  readable:false・listable:false なら ok:true・exit 0 とする（§4.7 の期待に合わせる）。runtime principal の判定は変えない。
+
+## 付記 2026-10-30「K2 の採点を評価器 uid で通す」（task 01M678HHSHGT3Y5J4H7RRYFXD8）
+
+release 0acf217a2c89 の実機確認で、wrapper 経由の採点が exit 64 で止まり、sudo 下で cargo が見つからなかったことによる。
+
+- H1 wrapper は `celeris-campaign` の argv を自分で組み、呼び出し側の自由な引数を受けない。呼び出しは
+  `grade <case> <tgz> <sha256>` だけで、wrapper は `celeris-campaign grade --case EVAL_ROOT/grade-cases/final/<case>/<case>.json
+  --artifact <work>/artifact --work <work>/grade` を走らせ、stdout の判定 JSON を `<work>/verdict.json` に書く。leak 検査は
+  `EVAL_ROOT/private/final/<case>/private.json` を使う。G2 の `--grade-case-root` 付与・`--grader-root` 付与と、引数の
+  `{work}`・`{verdict}` 置換・`..`・絶対 path の検査は消す（`grade`・`grade-out` はどちらもこの欄を読まない）。
+  grade の exit 1（不合格）は採点の成功として扱い、判定 JSON が無いときだけ失敗にする。
+- H2 wrapper は子 process の環境を固定で組む。評価器 uid の home（`pwd.getpwuid(os.getuid())`）から
+  `PATH=<home>/.cargo/bin:/usr/local/bin:/usr/bin:/bin`・`CARGO_HOME=<home>/.cargo`・`RUSTUP_HOME=<home>/.rustup`・`HOME`・
+  `CARGO_NET_OFFLINE=true` を与え、呼び出し側の環境は継がない。sudo の env_reset・secure_path（§4.4 案 1 の 1 行）のままで動く。
+  toolchain と crate cache（K2 初期 tree の `cargo fetch --locked`）の準備は §4.3・§4.4 に書く。
+- H3 grader の env 判定は sh/dash の「`<name>: not found`」（行末が `: not found`）を env_failure に数える。
+- H4 `grade-out` は `--work <dir>` を受け、work_root にする（無ければ system temp dir のまま）。wrapper の `grade` は
+  `<work>/grade`（EVAL_ROOT/work の下）を使う。
+- H5 試行の出力の tgz は `tar --dereference --hard-dereference` で作る（symlink は中身にし、hard link を作らない）。
+  wrapper の展開検査（symlink・hard link の拒否）は変えない。
+- H6 試験（celeris-campaign と celeris の crate の試験）は K2 の real case を repo の旧 private と組で読まない。repo の試験は試験用の cases root（`cases/` を一時 dir に写し、
+  K2 の `private_ref`・`grade_case_ref` を repo の旧 fixture の sha256 に替えたもの）を読む。旧 private・旧 grade-case は G1・G4 の
+  とおり漏洩済みの試験専用 fixture として HEAD に残り、K2 の正式試行の採点には使わない。`case.json` の値は operator が反映して commit する。
+
+## 付記 2026-10-31「grade の出力の契約」（task 01M67RK397A0VJXGC60J5BFEJN）
+
+release 2a0647cba878 の実機確認で、wrapper 経由の採点が不合格の判定で exit 70 になり outbox に何も置かれなかった。
+`celeris-campaign grade` が不合格の判定 JSON を `Err` として返し、`main` が stderr に `error: ` 付きで出していたため
+（wrapper は stdout を読む）。exit 1 は本当のエラーとも同じだった。
+
+- H7 `celeris-campaign grade` と `grade-out` の出力の契約: 判定 JSON は合格・不合格とも stdout に出す。合格 exit 0、不合格 exit 1。
+  判定 JSON を作れないエラー（引数・grade-case の読込・private の hash 不一致など）は stdout を空にし、stderr に短い理由、exit 2。
+  `grader::cli` は不合格も `Ok((判定 JSON, final_pass))` で返し、`Err` は判定を作れないエラーだけにする。不合格の判定 JSON を
+  stderr に出す旧い経路は消した（`grade-out` も同じ形に揃え、別の扱いは残さない）。
+- H8 wrapper（`scripts/campaign/ops-r2-grade.py`）は exit 0/1 かつ stdout が判定 JSON のときだけ漏洩検査に進み、通れば outbox に置く
+  （不合格も置く）。exit 2 やほかの exit、判定 JSON が無いときは exit 70 で outbox に何も置かない。grade-case の形式は変えない。

@@ -1,5 +1,8 @@
 //! 公開 case → celeris.grade-case/1 の変換と、公開テスト改変／隠しテスト挿入の区別の試験。
 //! 偽 workspace と temp dir だけを使う（ネットワーク・モデル無し）。評価 command は `sh` の script。
+#[path = "support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -36,7 +39,7 @@ struct Fx {
 
 fn fixture() -> Fx {
     let set = CaseSet::load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures/grader-private"),
     )
     .expect("load");
@@ -201,7 +204,7 @@ fn hidden_path_overlapping_a_public_test_is_rejected() {
 #[test]
 fn shell_command_is_rejected_by_the_converter() {
     let set = CaseSet::load(
-        &root().join("cases"),
+        &support_cases::cases_root(),
         &root().join("fixtures/grader-private"),
     )
     .expect("load");

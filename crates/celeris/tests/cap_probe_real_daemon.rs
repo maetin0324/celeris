@@ -8,6 +8,9 @@
 //! この試験 process（= CLI 側）には、daemon とは別の toolchain dir と変数を持たせる。daemon にだけある toolchain は通り、
 //! CLI にあって daemon に無い toolchain・変数・socket は該当 arm の `env_failure` になる。
 
+#[path = "../../campaign/tests/support_cases/mod.rs"]
+#[allow(dead_code)]
+mod support_cases;
 use std::{
     fs,
     io::Write,
@@ -264,7 +267,7 @@ rules = [
 
 fn k4() -> celeris_campaign::cases::Case {
     CaseSet::load(
-        &campaign_root().join("cases"),
+        &support_cases::cases_root(),
         &campaign_root().join("fixtures/grader-private"),
     )
     .expect("cases")

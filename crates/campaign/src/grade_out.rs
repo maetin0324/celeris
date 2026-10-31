@@ -61,7 +61,7 @@ pub fn grade_out_expected(
     runner: &dyn CommandRunner,
     expected: Option<&crate::lock::CampaignLock>,
 ) -> Result<Value, String> {
-    grade_out_with(m, out, cases, runner, expected, None)
+    grade_out_with(m, out, cases, runner, expected, None, None)
 }
 
 /// `grade_out_expected` に、grader 側で組んだ初期 tree の置き場（`<dir>/<problem_id>`）を足したもの。
@@ -72,6 +72,7 @@ pub fn grade_out_with(
     runner: &dyn CommandRunner,
     expected: Option<&crate::lock::CampaignLock>,
     initial_trees: Option<&Path>,
+    work_root: Option<&Path>,
 ) -> Result<Value, String> {
     let lock = crate::lock_exec::load_saved(m, out, expected)?;
     let hash = m.compute_sha256()?;
@@ -163,7 +164,10 @@ pub fn grade_out_with(
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_default(),
-            work_root: std::env::temp_dir(),
+            // 評価器は EVAL_ROOT/work の下を渡す（ADR 付記 H4）。無ければ system temp dir。
+            work_root: work_root
+                .map(Path::to_path_buf)
+                .unwrap_or_else(std::env::temp_dir),
             runner,
             // 評価側の取得記録は out/observed/<problem>/<config>-rep<N>.json（成果物の外）。
             observed_jobs: Some(observed_path).filter(|p| p.is_file()),

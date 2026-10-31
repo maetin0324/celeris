@@ -44,3 +44,16 @@ commit（件名）:
 
 ## 未解決事項
 - 項目 4（試行 A の起動 command）、手順書の反映、test-affected・clippy は未実施。
+
+## 項目 4・手順書の反映（Run #6）
+- commit「ops-r2: 試行 A の起動 command を出す ops-r2-trial-a-command.sh と手順書の反映（ssh-config・release-store・種）」
+- 試験: `cargo nextest run -p celeris-campaign --test ops_r2_trial_a_command` → 1 passed。`cargo fmt --all -- --check` → exit 0。
+- 未実行: `bash scripts/dev/test-affected.sh`（run の壁時計 600 秒に収まらず次の run で実行）。`cargo clippy --workspace --tests` は既存の
+  `cap_probe`（duplicate_mod）・`ops_r2_probe.rs:212`（needless_borrow）で落ちる。この task の変更ではない。
+
+## 本番への移行（operator が実行する）
+1. 新しい release（この branch を取り込んだもの）の道具で §2.2 をやり直し、`$S/release-store/current` が `releases/1239fab2bc36` を指し、daemon.toml の差分が `releases_dir` だけであることを確かめる。本番の `/local/celeris/state/releases` は変えない。
+2. §6.1 で種を A・B の state に置き、§3・§4 をやり直す（漏洩検査が tar の中身を読む）。
+3. 専用 ssh config に `ControlPath`・`UserKnownHostsFile` を書き、§4.1（step 8）を `--ssh-config` の形で `-F` なしにやり直す。
+4. §6 の形で測定 daemon を起動し、health の `cos_policy_version` が "10" であることを確かめる。
+5. §6.2 の command を出し、人が別の端末で試行 A を起動する。

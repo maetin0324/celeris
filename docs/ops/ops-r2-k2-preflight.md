@@ -70,7 +70,7 @@ sha256sum "$CLAUDE"                                                   # 375988f4
 
 B の account は `--b-account-dir`（`.credentials.json` を直に持つ 1 つの測定専用 dir）で渡す。script が `$S/pool/` を作り、b の basename の symlink を 1 つだけ置いて
 `[accounts] claude_dir` をその pool にする（Celeris は claude_dir の各 subdir を 1 account として読む。b そのものを渡すと backups・cache 等が account と見なされる）。
-a と operator の dir は渡せない。旧引数 `--claude-accounts` は使えない（usage で止まる）。
+a と operator の dir は渡せない。旧い引数名は使えない（usage で止まる）。
 
 ```sh
 sh scripts/campaign/ops-r1-measure-config.sh --state "$S" --release-dir "$R" --models <cos-opus|all-sonnet> \

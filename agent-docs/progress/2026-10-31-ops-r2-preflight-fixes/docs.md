@@ -16,7 +16,7 @@ updated: 2026-10-31
   - §4.1 sirius への接続: B の包みの中から ssh・qsub・qstat が使えるかを確かめる手順。通らなければ試行・daemon 起動を止めて人に返す。
   - §6 測定 daemon を包みの中で起動し、health の方針版を確かめる手順。§7 の停止規則に 7（試行と無関係な CoS run）・8（sirius 不達、claude copy 不一致）を足した。
 - `docs/ops/ops-r2-isolation.md`: §2.1〜§2.4・§4.7 を `--deny-readable-file`・`--allow`・`--claude`/`--claude-sha256`・`--eval-root`・same_uid 規則・L1 mount 非 hit・pool に合わせた。
-- `docs/ops/ops-r1-measure-daemon.md`: `--claude-accounts` を `--b-account-dir`、固定の方針版 6 を `--policy-version` に直した。stagnation 等の off を注記した。
+- `docs/ops/ops-r1-measure-daemon.md`: 旧い B account 引数を `--b-account-dir`、固定の方針版 6 を `--policy-version` に直した。stagnation 等の off を注記した。
 - `docs/ops/ops-r1-leak-check.md` は leakdoc unit の担当なので触っていない。
 - commit 件名: `docs: ops-r2 の手順書を実装済みの引数に合わせ、本番への移行を書く`
 

@@ -53,7 +53,7 @@
   },
   "grade_case_ref": {
     "path": "final/k2-bf-xattr-restart-campaign/k2-bf-xattr-restart-campaign.json",
-    "sha256": "f84089bcf161edab75bfc619574c112de446b75622f893323f43405190aca593"
+    "sha256": "8ae2a1706f1cb63afed8877921d486ffe12871a4b006f9dfe638aa6740616b1d"
   },
   "id": "k2-bf-xattr-restart-campaign",
   "initial": {
@@ -82,7 +82,7 @@
   "kind": "real",
   "private_ref": {
     "path": "final/k2-bf-xattr-restart-campaign/private.json",
-    "sha256": "d02126077a47495b121e1e678f055ba4e2493f92d05cd010f2bda32d30694760"
+    "sha256": "e1bf18e72a921f227584867a4c0bc0664db58c3a1b1bfa7a0805832027cf8313"
   },
   "required_capabilities": [
     {

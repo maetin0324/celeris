@@ -229,3 +229,13 @@ case.json と manifest の参照が違えば `graders` で止まる、入力 man
 ## 付記 D-decision（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）intake の decision_id
 - 背景: K2 の承認は対話 session の選択肢で行い、承認票（`approval-request.md`）に記録する。Celeris の decision id は無いが、`ops-r1-intake` の `source.decision_id` は `approved_request` で必須。
 - 決定: コードは変えず、書式を `approval:<承認票の task id>:<承認票の file 名>:<選択肢 key>` と決める（intake の `[A-Za-z0-9._:-]` 検査を通る）。手順書 `docs/ops/ops-r2-k2-preflight.md` §5 に書いた。承認と依頼文の結び付きは今までどおり `request_sha256` の一致で検査する。
+
+## 付記 D-seed（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）A・B の初期作業ツリー
+- 背景: `ops-r2-sandbox.sh` は `--state`・`--ro` の下の `.git` を拒む（試行の主体に履歴を見せない。付記 D2）。preflight の repo-src は `.git` を持つので、そのまま bind できない。
+- 決定: `scripts/campaign/ops-r2-seed.sh` を足す。
+  - `make`: operator が `git archive --format=tar` で `.git` を含まない非圧縮の tar を 1 つ作り、sha256 を出す。
+  - `place`: sha256 を照合して A・B の `<state>/seed/benchfs.tar` に同じ bytes を写す（0444）。
+  - `unpack`: sandbox の中で sha256 を照合してから空の dir に展開する。試行の command はこの後に claude・daemon を起動する。
+  - どの段も tar の member を検査し、`.git`・絶対 path・`..`・木の外を指す link・特殊 file を含めば exit 1。
+- 圧縮しないので、漏洩検査（`check-ops-r1-leak.py --scan <state>`）が tar の member の中身を読み、private の文字列・canary・禁止 hash を見つける。木の外を指す link を拒むので、種から deny list の path へ届く link は作れない。
+- 試験: `crates/campaign/tests/ops_r2_seed.rs`（A・B が同じ bytes、.git なしで展開、展開後の state を sandbox が受ける、hash 違い・.git・外向き symlink の拒否、漏洩検査が tar の中の canary を見つける）。

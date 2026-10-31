@@ -10,12 +10,20 @@ fn bin() -> String {
     std::env::var("CARGO_BIN_EXE_celeris-campaign").expect("binary path")
 }
 
+/// deny list file を `dir/deny.list` に書いて path を返す。
+fn deny_file(dir: &std::path::Path, paths: &[PathBuf]) -> PathBuf {
+    let f = dir.join("deny.list");
+    let text: String = paths.iter().map(|p| format!("{}\n", p.display())).collect();
+    fs::write(&f, text).unwrap();
+    f
+}
+
 #[test]
 fn file_empty_file_missing_path_and_parent_listing() {
     let d = tempfile::tempdir().unwrap();
     let file = d.path().join("secret");
     fs::write(&file, "private").unwrap();
-    let r = probe("A", &[file.clone()], &[]).unwrap();
+    let r = probe("A", std::slice::from_ref(&file), &[]).unwrap();
     assert!(r.paths[0].readable && r.paths[0].listable);
     assert!(r.paths[0].errno.is_none());
     assert!(!r.ok);
@@ -52,8 +60,13 @@ fn cli_json_output_and_exit_codes() {
     fs::write(&secret, "x").unwrap();
     let out = d.path().join("probe.json");
     let result = Command::new(bin())
-        .args(["probe-read", "--principal", "operator", "--deny"])
-        .arg(&secret)
+        .args([
+            "probe-read",
+            "--principal",
+            "operator",
+            "--deny-readable-file",
+        ])
+        .arg(deny_file(d.path(), std::slice::from_ref(&secret)))
         .arg("--out")
         .arg(&out)
         .output()
@@ -78,8 +91,8 @@ fn cli_json_output_and_exit_codes() {
     let info = fs::read_to_string("/proc/self/mountinfo").unwrap();
     let sources = mounts_outside_allow(&info, &[]).unwrap();
     let mut cmd = Command::new(bin());
-    cmd.args(["probe-read", "--principal", "A", "--deny"])
-        .arg(d.path().join("missing/secret"));
+    cmd.args(["probe-read", "--principal", "A", "--deny-readable-file"])
+        .arg(deny_file(d.path(), &[d.path().join("missing/secret")]));
     for source in sources {
         cmd.arg("--allow").arg(source);
     }
@@ -163,8 +176,8 @@ fn real_bwrap_probe_cannot_read_outside_a_allowlist() {
     cmd.args(sb.runtime_args(&ws, &state, "/usr/bin/true".as_ref(), &[]))
         .arg("--")
         .arg(staged)
-        .args(["probe-read", "--principal", "A", "--deny"])
-        .arg(hidden);
+        .args(["probe-read", "--principal", "A", "--deny-readable-file"])
+        .arg(deny_file(&state, &[hidden]));
     let result = cmd.output().unwrap();
     let v: Value =
         serde_json::from_slice(&result.stdout).unwrap_or_else(|e| panic!("{e}: {result:?}"));
@@ -313,4 +326,54 @@ fn l1_principal_reports_mounts_but_does_not_fail_on_them() {
     let file = d.path().join("secret");
     fs::write(&file, "x").unwrap();
     assert!(!probe("l1", &[file], &[]).unwrap().ok);
+}
+
+/// 引数に path を並べない: 15,000 件（Linux の 1 引数 128KiB・全体 2MiB 前後の上限を超える長さ）の
+/// deny file を 1 つ渡して probe-read が走り、全件を検査する。旧 `--deny` は受け付けない。
+#[test]
+fn probe_read_checks_15000_paths_from_one_deny_file() {
+    let d = tempfile::tempdir().unwrap();
+    let long = "x".repeat(200);
+    let paths: Vec<PathBuf> = (0..15_000)
+        .map(|i| d.path().join(format!("absent-{i}-{long}")).join("secret"))
+        .collect();
+    let total: usize = paths.iter().map(|p| p.as_os_str().len() + 1).sum();
+    assert!(
+        total > 2 * 1024 * 1024,
+        "must exceed the argv limit: {total}"
+    );
+    let f = deny_file(d.path(), &paths);
+    let r = Command::new(bin())
+        .args(["probe-read", "--principal", "l1", "--deny-readable-file"])
+        .arg(&f)
+        .output()
+        .unwrap();
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    let v: Value = serde_json::from_slice(&r.stdout).unwrap();
+    assert_eq!(v["paths"].as_array().unwrap().len(), 15_000);
+    assert_eq!(v["ok"], true);
+    // 読めた 1 件は 15,000 件の最後でも見逃さない。
+    let secret = d.path().join("last-secret");
+    fs::write(&secret, "x").unwrap();
+    let mut with = paths.clone();
+    with.push(secret.clone());
+    let f = deny_file(d.path(), &with);
+    let r = Command::new(bin())
+        .args(["probe-read", "--principal", "l1", "--deny-readable-file"])
+        .arg(&f)
+        .output()
+        .unwrap();
+    assert_eq!(r.status.code(), Some(1));
+    let v: Value = serde_json::from_slice(&r.stdout).unwrap();
+    assert_eq!(v["paths"].as_array().unwrap().len(), 15_001);
+    assert_eq!(v["paths"][15_000]["readable"], true);
+    // 旧引数は削除済み。
+    assert!(
+        !Command::new(bin())
+            .args(["probe-read", "--principal", "A", "--deny"])
+            .arg(&secret)
+            .status()
+            .unwrap()
+            .success()
+    );
 }

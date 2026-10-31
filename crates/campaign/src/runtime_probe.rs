@@ -131,6 +131,26 @@ pub fn probe(principal: &str, deny: &[PathBuf], allow: &[PathBuf]) -> Result<Run
     })
 }
 
+/// deny list file（1 行 1 絶対 path、空行と `#` 行は無視）を読む。path を bwrap の引数に並べないための入口。
+pub fn load_deny_file(p: &Path) -> Result<Vec<PathBuf>, String> {
+    let text =
+        fs::read_to_string(p).map_err(|e| format!("--deny-readable-file {}: {e}", p.display()))?;
+    let mut out = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let path = PathBuf::from(line);
+        if !path.is_absolute() {
+            return Err(format!(
+                "--deny-readable-file: not an absolute path: {line}"
+            ));
+        }
+        out.push(path);
+    }
+    Ok(out)
+}
+
 /// args は subcommand を含まない。out 指定時も同じ JSON を stdout に返す。
 pub fn cli(args: &[String]) -> Result<bool, String> {
     let mut principal = None;
@@ -144,7 +164,7 @@ pub fn cli(args: &[String]) -> Result<bool, String> {
             .ok_or_else(|| format!("missing value for {flag}"))?;
         match flag.as_str() {
             "--principal" => principal = Some(value.clone()),
-            "--deny" => deny.push(PathBuf::from(value)),
+            "--deny-readable-file" => deny = load_deny_file(Path::new(value))?,
             "--allow" => allow.push(PathBuf::from(value)),
             "--out" => out = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown probe-read option: {flag}")),
@@ -154,7 +174,7 @@ pub fn cli(args: &[String]) -> Result<bool, String> {
         .filter(|p| !p.trim().is_empty())
         .ok_or("--principal is required")?;
     if deny.is_empty() {
-        return Err("--deny is required".into());
+        return Err("--deny-readable-file is required".into());
     }
     let result = probe(&principal, &deny, &allow)?;
     let json = serde_json::to_string(&result).map_err(|e| e.to_string())?;

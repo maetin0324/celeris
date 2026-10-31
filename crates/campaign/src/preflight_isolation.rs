@@ -35,6 +35,10 @@ pub struct IsolationInputs {
     pub deny_list: Option<PathBuf>,
     /// 評価器の root（`EVAL_ROOT`）。deny list のうちこの下の path を L1 で人の uid から開く。
     pub eval_root: Option<PathBuf>,
+    /// 測定用 claude の固定 copy（local）。`claude_sha256` と一緒に指定する。
+    pub claude: Option<PathBuf>,
+    /// 承認票の claude copy の sha256。copy の内容 hash と一致しなければ `deny_readable` で止める。
+    pub claude_sha256: Option<String>,
     /// 既定 `scripts/campaign/ops-r2-sandbox.sh`。
     pub sandbox_script: Option<PathBuf>,
     pub b: ScriptSandbox,
@@ -91,18 +95,7 @@ impl ProbeRequest {
 
 /// deny list を読む。空・相対 path・読めない file は Err。
 pub fn load_deny_list(p: &Path) -> Result<Vec<PathBuf>, String> {
-    let text = fs::read_to_string(p).map_err(|e| format!("--deny-list {}: {e}", p.display()))?;
-    let mut out = Vec::new();
-    for line in text.lines().map(str::trim) {
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let path = PathBuf::from(line);
-        if !path.is_absolute() {
-            return Err(format!("--deny-list: not an absolute path: {line}"));
-        }
-        out.push(path);
-    }
+    let out = runtime_probe::load_deny_file(p)?;
     if out.is_empty() {
         return Err(format!("--deny-list {}: no path", p.display()));
     }
@@ -317,19 +310,33 @@ pub fn allow_sources(bwrap_args: &[String], host_mountinfo: &str) -> Vec<PathBuf
     srcs
 }
 
-fn probe_args(r: &ProbeRequest, allow: &[PathBuf]) -> Vec<String> {
+/// `deny_file` は包みの中から見える path（stage dir の中）。deny list 全体を 1 file として渡し、引数に並べない。
+fn probe_args(r: &ProbeRequest, deny_file: &Path, allow: &[PathBuf]) -> Vec<String> {
     let mut a = vec![
         "probe-read".into(),
         "--principal".into(),
         r.principal.into(),
     ];
-    for d in &r.deny {
-        a.extend(["--deny".into(), d.to_string_lossy().into_owned()]);
-    }
+    a.extend([
+        "--deny-readable-file".into(),
+        deny_file.to_string_lossy().into_owned(),
+    ]);
     for s in allow {
         a.extend(["--allow".into(), s.to_string_lossy().into_owned()]);
     }
     a
+}
+
+/// deny list を `dir/deny.list` に 1 行 1 path で書く。
+fn write_deny_file(dir: &Path, deny: &[PathBuf]) -> Result<PathBuf, String> {
+    let mut text = String::new();
+    for d in deny {
+        text.push_str(&d.to_string_lossy());
+        text.push('\n');
+    }
+    let f = dir.join("deny.list");
+    fs::write(&f, text).map_err(|e| format!("stage deny list: {e}"))?;
+    Ok(f)
 }
 
 /// 包んだ probe を走らせ、stdout の JSON を返す（exit 1 は「拒否されていない」の意味なので JSON を読む）。
@@ -378,12 +385,14 @@ pub fn run(r: &ProbeRequest) -> Result<RuntimeProbe, String> {
         Wrap::Bwrap { args, stage } => {
             let staged = stage.join("celeris-campaign-probe");
             fs::copy(&r.program, &staged).map_err(|e| format!("stage probe: {e}"))?;
+            let deny_file = write_deny_file(stage, &r.deny)?;
             let mut a = args.clone();
             a.push("--".into());
             a.push(staged.to_string_lossy().into_owned());
-            a.extend(probe_args(r, &allow_sources(args, &host_info)));
+            a.extend(probe_args(r, &deny_file, &allow_sources(args, &host_info)));
             let res = run_json("bwrap", &a);
             let _ = fs::remove_file(&staged);
+            let _ = fs::remove_file(&deny_file);
             res
         }
         Wrap::Script { script, sandbox } => {
@@ -410,15 +419,50 @@ pub fn run(r: &ProbeRequest) -> Result<RuntimeProbe, String> {
             let staged = stage.join("celeris-campaign-probe");
             let res = fs::copy(&r.program, &staged)
                 .map_err(|e| format!("stage probe: {e}"))
-                .and_then(|_| {
+                .and_then(|_| write_deny_file(&stage, &r.deny))
+                .and_then(|deny_file| {
                     let mut a = script_base(script, sandbox);
                     a.push("--".into());
                     a.push(staged.to_string_lossy().into_owned());
-                    a.extend(probe_args(r, &allow_sources(&printed, &host_info)));
+                    a.extend(probe_args(
+                        r,
+                        &deny_file,
+                        &allow_sources(&printed, &host_info),
+                    ));
                     run_json("sh", &a)
                 });
             let _ = fs::remove_dir_all(&stage);
             res
         }
+    }
+}
+
+/// `--claude` の copy の sha256 を承認票の `--claude-sha256` と照合する。どちらも無ければ検査しない。
+/// 片方だけ、読めない、不一致はすべて `deny_readable:claude:...` の拒否理由で返す。
+pub fn claude_findings(iso: &IsolationInputs) -> Vec<String> {
+    use sha2::{Digest, Sha256};
+    let want = iso.claude_sha256.as_deref().map(str::to_lowercase);
+    match (&iso.claude, want) {
+        (None, None) => Vec::new(),
+        (Some(_), None) => vec![format!(
+            "{CHECK}:claude:--claude-sha256 is required with --claude"
+        )],
+        (None, Some(_)) => vec![format!(
+            "{CHECK}:claude:--claude <local copy> is required with --claude-sha256"
+        )],
+        (Some(p), Some(want)) => match fs::read(p) {
+            Err(e) => vec![format!("{CHECK}:claude:{}: {e}", p.display())],
+            Ok(b) => {
+                let got = format!("{:x}", Sha256::digest(b));
+                if got == want {
+                    Vec::new()
+                } else {
+                    vec![format!(
+                        "{CHECK}:claude:{} sha256 {got} differs from the approved {want}",
+                        p.display()
+                    )]
+                }
+            }
+        },
     }
 }

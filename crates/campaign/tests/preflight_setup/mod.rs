@@ -413,6 +413,8 @@ pub fn isolation(d: &Path) -> IsolationInputs {
         b,
         operator,
         probe_program: None,
+        claude: None,
+        claude_sha256: None,
     }
 }
 

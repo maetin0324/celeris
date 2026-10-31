@@ -118,6 +118,8 @@ fn isolation_inputs(args: &[String]) -> preflight_isolation::IsolationInputs {
     };
     preflight_isolation::IsolationInputs {
         deny_list: arg(args, "--deny-list"),
+        claude: arg(args, "--claude"),
+        claude_sha256: arg(args, "--claude-sha256").map(|p| p.to_string_lossy().into_owned()),
         eval_root: arg(args, "--eval-root"),
         sandbox_script: arg(args, "--sandbox-script"),
         b: sandbox("b"),

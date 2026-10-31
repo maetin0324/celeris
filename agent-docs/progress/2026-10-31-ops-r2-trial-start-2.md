@@ -42,6 +42,7 @@ commit（件名。基準は `git merge-base HEAD main`、子 3 件の分は main
 - ops-r2: B の案件 repo を種の作業ツリーにし、preflight に --ssh-config を足し、B の daemon の起動 command と試験を足す
 - 進捗: b-workspace の提出時の検査結果
 - 進捗: ops-r2 trial start 2 のまとめと本番への移行（この task）
+- 進捗: ops-r2 trial start 2 の検査結果の文言を出力に合わせる（この task）
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 - `bash scripts/dev/test-affected.sh` → exit 0。この task の変更は進捗ファイル 1 件だけで、出力は「試験対象の変更なし（docs のみ等）」と check-doc-links の self-test ok。

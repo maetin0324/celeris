@@ -31,7 +31,7 @@ commit（件名）:
 ## case.json の初期ツリーの定義と採点の関係
 - case.json の `initial.archive_sha256` は `git archive <initial.commit>` の tar の sha256 で、submodule を含まない
   （`crates/campaign/src/cases.rs` の `Initial` の注記「submodule は含まない」）。gitlink の path（`lib/pluvio`・`lib/locusta`・`ior_integration/ior`）は空の dir になる。
-- asset store の bundle（`benchfs-086c4618.bundle`）から `git archive` した tar の sha256 は
+- asset store の benchfs の bundle（初期 commit を含む）から `git archive` した tar の sha256 は
   b1ae8f58dd48c8fdb451dfb6b26287c188eeba62bfbdeaa8a518a760c6c980bf で、case.json の値と一致した（2026-10-31）。
 - submodule 5 件（入れ子 2 件を含む）は `initial.submodules` の `<path>@<40 桁 commit>` で固定され、実体は asset store の
   `submodules/<末尾名>-<commit 先頭 8 桁>.tar`（`SHA256SUMS` に載る）。

@@ -1,0 +1,41 @@
+---
+title: K2 ops-r2 の試行開始の残り（promotion gate・初期作業ツリー・sandbox の ssh・試行 A の起動）
+tasks: [01M69BAM9SMW8YE1Y4GJXV0NFT]
+status: running
+started: 2026-10-31
+updated: 2026-10-31
+---
+
+# K2 ops-r2 の試行開始の残り
+
+## やったこと
+- 項目 1（promotion gate）: `scripts/campaign/ops-r1-measure-config.sh` が `$STATE/release-store/releases/<sha12>`（→ release dir）と `$STATE/release-store/current`（→ `releases/<sha12>`）を作り、`[selfdeploy] releases_dir` をその写しに向ける。本番の release store は変えない。ADR 付記 D-store。
+- 項目 3（sandbox の ssh）: `scripts/campaign/ops-r2-sandbox.sh --ssh-config <file>`。ADR 付記 D-ssh。
+- 項目 6（K4 文言）: 生成器の `setup/project.json` と daemon.toml 冒頭注記を `ops-r2 K2` に。ADR 付記 D-k2text。
+
+commit（件名）:
+- ops-r2: sandbox の --ssh-config（-F なしの ssh sirius）と測定 config 生成の K2 文言
+- ops-r2: 測定 config 生成が state の下に release store の写し（current → sha12）を作り releases_dir をそこへ向ける
+- ops-r1 measure 試験: release store の写しと releases_dir を確かめる
+
+## daemon.toml の差分（main の生成器との比較）
+同じ入力（合成 release `0e2e0e2e0e2e`、`--models cos-opus --harness stub --port 18999`、state の path だけ置き換えて比較）で
+`git show main:scripts/campaign/ops-r1-measure-config.sh` と現在の生成器の出力を diff した。違いは 2 行だけ:
+
+```
+1c1
+< # ops-r1 測定 daemon の config（…）
+> # ops-r2 K2 測定 daemon の config（…）
+33c33
+< releases_dir = "<release dir の親>"
+> releases_dir = "<state>/release-store/releases"
+```
+
+1 行目は注記（コメント）で daemon の挙動に効かない。設定の欄で変わるのは `releases_dir` だけ。
+
+## 証拠（提出時の HEAD で実行）
+- `cargo test -p celeris --test ops_r1_measure`: exit 0、1 passed（生成した daemon.toml の releases_dir・current の行き先・元の release store の中身が sha12 1 つのまま、を確かめ、その config で daemon を起動）。
+- `cargo test -p celeris-campaign --test ops_r2_ssh_config --test ops_r2_socket`: exit 0、6 passed。
+
+## 未解決事項
+- 項目 2（A・B の初期作業ツリーの種）、項目 4（試行 A の起動 command）、項目 5（intake の decision_id の書式）、手順書の反映、test-affected・clippy は未実施。

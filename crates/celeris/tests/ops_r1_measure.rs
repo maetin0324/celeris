@@ -281,6 +281,29 @@ fn start_daemon() -> Daemon {
     ] {
         assert!(generated.contains(line), "{line:?} in\n{generated}");
     }
+    // 測定用の release store の写し（ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-store）。
+    // releases_dir は state の下の写しを指し、その親の current が release の sha12 を指す。
+    let store = state.join("release-store");
+    assert!(
+        generated.contains(&format!(
+            "releases_dir = \"{}\"",
+            store.join("releases").display()
+        )),
+        "releases_dir in\n{generated}"
+    );
+    assert_eq!(
+        fs::read_link(store.join("current")).expect("current"),
+        PathBuf::from("releases/0e2e0e2e0e2e")
+    );
+    assert_eq!(
+        fs::read_link(store.join("releases/0e2e0e2e0e2e")).expect("release link"),
+        release
+    );
+    let names: Vec<_> = fs::read_dir(root.join("releases"))
+        .expect("source store")
+        .map(|e| e.expect("entry").file_name())
+        .collect();
+    assert_eq!(names, ["0e2e0e2e0e2e"], "source store untouched");
     for skill in ["cos-operator", "cos-inbox-triage"] {
         assert!(
             state

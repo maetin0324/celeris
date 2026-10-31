@@ -36,11 +36,11 @@ K2 ops-r2 pilot（task 01M669QGFJRZ2MY7VRA1BSSZ5H）は人の承認が出た。�
 
 ### D2. B の account pool は生成時に作る 1 entry の pool dir にする
 
-- `--claude-accounts <dir>` を消し、`--claude-account <dir>`（1 つの account dir。`.credentials.json` を直に持つ）に替える。
+- `--claude-accounts <dir>` を消し、`--b-account-dir <dir>`（1 つの account dir。`.credentials.json` を直に持つ）に替える。
   旧い引数は usage で止める（ADR 2026-10-11-breaking-changes-by-default）。
-- 生成時に `$STATE/claude-pool/` を新しく作り、その中に account dir の basename を名前にした symlink を 1 つだけ置く
-  （例 `$STATE/claude-pool/b -> /local/celeris/measure-accounts/b`）。`[accounts] claude_dir` は `$STATE/claude-pool` を指す。
-  `$STATE/claude-pool/` が既にあって中身が違えば止める。
+- 生成時に `$STATE/pool/` を新しく作り、その中に account dir の basename を名前にした symlink を 1 つだけ置く
+  （例 `$STATE/pool/b -> /local/celeris/measure-accounts/b`）。`[accounts] claude_dir` は `$STATE/pool` を指す。
+  `$STATE/pool/` が既にあって中身が違えば止める。
 - symlink を選ぶ理由: Celeris の account の走査（`task_api::accounts::scan_accounts`、`model_discovery::first_logged_in`）は
   `Path::is_dir` で symlink の先を辿るので、symlink の entry が 1 account になる。bind mount は host 側で mount の権限が要る。
   測定 daemon は `ops-r2-sandbox.sh --account <b>` が b の実 path をそのまま mount するので、bwrap の中でも symlink の先が解決する。

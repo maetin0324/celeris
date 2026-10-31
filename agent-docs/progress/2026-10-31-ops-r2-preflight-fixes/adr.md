@@ -14,7 +14,7 @@ ADR: `agent-docs/adr/2026-10-31-ops-r2-preflight-fixes.md`（上位 ADR `2026-10
 ## 変更
 - ADR を新規に書いた。決定は 8 件。
   - D1 方針版は `ops-r1-measure-config.sh` の必須引数 `--policy-version`、固定の 6 を廃止、skill の版と不一致なら止める
-  - D2 `--claude-accounts` を廃止し `--claude-account <dir>`、`$STATE/claude-pool/` に symlink 1 つの pool を作る（a・operator は入れない）
+  - D2 `--claude-accounts` を廃止し `--b-account-dir <dir>`、`$STATE/pool/` に symlink 1 つの pool を作る（a・operator は入れない）
   - D3 deny list は file 渡し（probe-read `--deny-file`、preflight は file を bwrap に ro bind、漏洩検査 `--deny-readable-file`）、旧い引数は廃止
   - D4 測定用 claude は local の固定 copy（版を承認票と照合し sha256 を記録）、probe の mount 照合は変えない
   - D5 ops-r2 は canary なし。same_uid は runtime probe と L1 probe の合格（4 条件）で外し `same_uid_cleared_by: runtime_probe_and_l1` を記録。根拠と緩めない点を書いた

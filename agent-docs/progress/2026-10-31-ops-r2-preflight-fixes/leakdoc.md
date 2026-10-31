@@ -13,6 +13,7 @@ updated: 2026-10-31
 - 呼び方を `--deny-readable-file <list>`（1 行 1 絶対 path）に変え、旧 `--deny-readable`（廃止、exit 2）の記述を消した。`--eval-root` を足した。
 - same_uid の規則を ops-r1 と ops-r2 に分けた。ops-r2 は runtime と L1 の probe の 4 条件で外し、canary は要らない（D5）。
 - L1 の `mounts_outside_allow` は hit にせず `checked.l1_mounts_outside_allow` に残す（G6）。
+- 呼び方の例で `--canary` を省略可（ops-r1 のみ）と明示した。
 - 試験の起動を `sh scripts/campaign/run-ops-r1-leak-tests.sh` に直した（`python3 -I` の例を消した）。
 
 ## 検査

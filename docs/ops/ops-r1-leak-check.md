@@ -14,7 +14,7 @@ tasks: [01M62TJ5WBDD0VH5Z1EM264NWV, 01M66JYQ249SZHNXK0AEVTZNEC]
 python3 -I scripts/campaign/check-ops-r1-leak.py \
   --private <grader-private の private.json> \
   --forbidden-sha <旧 v1 tgz の sha256> --forbidden-sha <旧判定 file の sha256> \
-  --canary <private の写しに入れた canary 文字列> \
+  [--canary <private の写しに入れた canary 文字列>（ops-r1 のみ）] \
   --scan <公開入力> --scan <KB snapshot> --scan <memory> --scan <CoS 初期会話> \
   --scan <外部 operator への材料> --scan <run の作業場所> \
   --deny-readable-file <deny list の file> \

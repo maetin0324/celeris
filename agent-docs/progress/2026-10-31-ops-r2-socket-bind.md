@@ -41,7 +41,7 @@ sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /loc
 §4 の B の probe を同じ bind 集合（`--ro "$SSHCFG_DIR" --socket "$MUX"`、`--allow` は /dev の下を含む新しい snippet）でやり直し、`missing` 0 件・probe exit 0・漏洩検査 `pass: true` を steps に残す。
 
 ## 未解決事項
-- preflight 経由で socket の bind が `mounts_outside_allow` に出ないことの userns 試験（ops_r2_probe.rs の fixture に socket を足す）は未完（未確認）。
+なし。preflight 経由で socket の bind が `mounts_outside_allow` に出ないことは ops_r2_probe.rs の fixture（試験用 socket を `--socket` で bind）で確かめた（上の証拠欄）。
 
 ## 提案
 なし。

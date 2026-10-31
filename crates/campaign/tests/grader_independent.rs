@@ -600,9 +600,11 @@ fn cli_grade_outputs_json_and_exit_code() {
         .arg(&fx.observed)
         .output()
         .unwrap();
+    // 不合格の判定 JSON は stdout に出て exit 1。stderr に判定 JSON は出ない（ADR ops-r2 付記 H7）。
     assert_eq!(out.status.code(), Some(1));
     let err = String::from_utf8_lossy(&out.stderr);
-    let v: Value = serde_json::from_str(err.trim_start_matches("error: ")).unwrap();
+    assert!(!err.contains("\"verdict\""), "{err}");
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["verdict"], "fail");
     assert_eq!(v["final_pass"], false);
     assert_eq!(v["checks"]["implementation"]["status"], "fail");
@@ -644,7 +646,7 @@ fn cli_grade_outputs_json_and_exit_code() {
     assert_eq!(v["final_pass"], true);
     assert_eq!(v["checks"]["implementation"]["status"], "pass");
 
-    // 成功宣言だけの成果物は exit 1、判定 JSON は stderr に出る
+    // 成功宣言だけの成果物は exit 1、判定 JSON は stdout に出る
     let claim = fx.work.join("claim");
     write(&claim.join("report.md"), "# 完了\n全て成功\n");
     let out = bin()
@@ -655,12 +657,28 @@ fn cli_grade_outputs_json_and_exit_code() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
-    let err = String::from_utf8_lossy(&out.stderr);
-    let v: Value = serde_json::from_str(err.trim_start_matches("error: ")).unwrap();
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("\"verdict\""));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["verdict"], "fail");
     for k in ["implementation", "evidence", "recompute", "review"] {
         assert_eq!(v["checks"][k]["status"], "fail", "{k}");
     }
+}
+
+#[test]
+fn cli_grade_error_is_exit_2_with_empty_stdout() {
+    // 判定 JSON を作れないエラー（grade-case が無い）は stdout 空・stderr に理由・exit 2（不合格の 1 と別）。
+    let (fx, _case) = fixture(CaseSplit::Dev);
+    let out = bin()
+        .args(["grade", "--case"])
+        .arg(fx.case_dir.join("no-such-case.json"))
+        .arg("--artifact")
+        .arg(&fx.art)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(!out.stderr.is_empty());
 }
 
 fn observed_doc(fx: &Fx) -> Value {

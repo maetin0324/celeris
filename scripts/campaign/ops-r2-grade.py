@@ -125,16 +125,17 @@ def main(argv):
     cc = [os.path.join(bin_dir, "celeris-campaign"), "grade", "--case", grade_case,
           "--artifact", art, "--work", os.path.join(work, "grade")]
     os.mkdir(os.path.join(work, "grade"), 0o700)
-    # grade は合格で exit 0、不合格で exit 1（どちらも判定 JSON を stdout に出す）。判定 JSON が無いときだけ失敗。
+    # grade は判定 JSON を合否とも stdout に出し、合格 exit 0・不合格 exit 1。判定を作れないエラーは stdout 空・exit 2
+    # （ADR ops-r2 付記 H7）。exit 0/1 で判定 JSON があるときだけ漏洩検査へ進み、それ以外は outbox に何も置かない。
     with open(verdict, "wb") as out, open(os.path.join(work, "celeris-campaign.log"), "wb") as log:
         r = subprocess.run(cc, stdin=subprocess.DEVNULL, stdout=out, stderr=log, cwd=work, env=child_env())
+    if r.returncode not in (0, 1):
+        fail(70, f"celeris-campaign failed (exit {r.returncode}); log is kept under EVAL_ROOT/work")
     try:
         with open(verdict, "rb") as f:
             json.load(f)
     except (OSError, ValueError):
-        fail(70, f"celeris-campaign failed (exit {r.returncode}); log is kept under EVAL_ROOT/work")
-    if r.returncode not in (0, 1):
-        fail(70, f"celeris-campaign failed (exit {r.returncode}); log is kept under EVAL_ROOT/work")
+        fail(70, f"celeris-campaign gave no verdict JSON (exit {r.returncode}); log is kept under EVAL_ROOT/work")
 
     private_root = os.path.join(eval_root, "private")
     private = os.path.join(private_root, "final", case, "private.json")

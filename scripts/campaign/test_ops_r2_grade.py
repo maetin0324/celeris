@@ -41,6 +41,10 @@ assert env['CARGO_HOME'] == os.path.join(home, '.cargo') and env['RUSTUP_HOME'] 
 assert 'CALLER_ONLY' not in env
 priv = json.load(open(os.path.join(root, 'private', 'final', '%s', 'private.json')))
 print('debug private:', json.dumps(priv), file=sys.stderr)
+if os.path.exists(os.path.join(art, 'error.txt')):
+    # 新しい契約: 判定を作れないエラーは stdout 空・stderr に理由・exit 2
+    print('error: cannot read grade-case', file=sys.stderr)
+    sys.exit(2)
 ok = os.path.exists(os.path.join(art, 'result.txt'))
 v = {'pass': ok}
 if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'leak')):
@@ -151,6 +155,25 @@ class GradeTest(unittest.TestCase):
         r = self.grade()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(Path(r.stdout.strip()).read_text()), {'pass': False})
+
+    def test_failing_verdict_goes_through_leak_check(self):
+        # 不合格の判定も漏洩検査を通す。漏れていれば outbox に置かない。
+        self.make_tgz({'other.txt': b'x'})
+        (self.bin / 'leak').write_text('')
+        r = self.grade()
+        self.assertEqual(r.returncode, 71)
+        self.assertEqual(list(self.outbox.iterdir()), [])
+        self.assert_no_private(r)
+
+    def test_campaign_error_publishes_nothing(self):
+        # exit 2（判定 JSON なし）は採点の失敗。outbox に何も置かない。
+        self.make_tgz({'error.txt': b'x'})
+        r = self.grade()
+        self.assertEqual(r.returncode, 70)
+        self.assertEqual(r.stdout, '')
+        self.assertIn('exit 2', r.stderr)
+        self.assertEqual(list(self.outbox.iterdir()), [])
+        self.assert_no_private(r)
 
     def test_missing_grade_case_refused(self):
         shutil.rmtree(self.eval_root / 'grade-cases')

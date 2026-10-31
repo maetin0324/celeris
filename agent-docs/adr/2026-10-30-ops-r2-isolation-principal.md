@@ -346,3 +346,16 @@ release 0acf217a2c89 の実機確認で、wrapper 経由の採点が exit 64 で
 - H6 試験（celeris-campaign と celeris の crate の試験）は K2 の real case を repo の旧 private と組で読まない。repo の試験は試験用の cases root（`cases/` を一時 dir に写し、
   K2 の `private_ref`・`grade_case_ref` を repo の旧 fixture の sha256 に替えたもの）を読む。旧 private・旧 grade-case は G1・G4 の
   とおり漏洩済みの試験専用 fixture として HEAD に残り、K2 の正式試行の採点には使わない。`case.json` の値は operator が反映して commit する。
+
+## 付記 2026-10-31「grade の出力の契約」（task 01M67RK397A0VJXGC60J5BFEJN）
+
+release 2a0647cba878 の実機確認で、wrapper 経由の採点が不合格の判定で exit 70 になり outbox に何も置かれなかった。
+`celeris-campaign grade` が不合格の判定 JSON を `Err` として返し、`main` が stderr に `error: ` 付きで出していたため
+（wrapper は stdout を読む）。exit 1 は本当のエラーとも同じだった。
+
+- H7 `celeris-campaign grade` と `grade-out` の出力の契約: 判定 JSON は合格・不合格とも stdout に出す。合格 exit 0、不合格 exit 1。
+  判定 JSON を作れないエラー（引数・grade-case の読込・private の hash 不一致など）は stdout を空にし、stderr に短い理由、exit 2。
+  `grader::cli` は不合格も `Ok((判定 JSON, final_pass))` で返し、`Err` は判定を作れないエラーだけにする。不合格の判定 JSON を
+  stderr に出す旧い経路は消した（`grade-out` も同じ形に揃え、別の扱いは残さない）。
+- H8 wrapper（`scripts/campaign/ops-r2-grade.py`）は exit 0/1 かつ stdout が判定 JSON のときだけ漏洩検査に進み、通れば outbox に置く
+  （不合格も置く）。exit 2 やほかの exit、判定 JSON が無いときは exit 70 で outbox に何も置かない。grade-case の形式は変えない。

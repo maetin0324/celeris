@@ -172,7 +172,8 @@ wrapper は `scripts/campaign/ops-r2-grade.py`（試験は `scripts/campaign/tes
 `grade --tgz <drop box の tgz> --sha256 <その sha256> --case <case id>` だけで、ほかの引数は受けない（exit 64）。
 `celeris-campaign` の引数は wrapper が組む: `grade --case /var/lib/celeris-eval/grade-cases/final/<case>/<case>.json --artifact <work>/artifact --work <work>/grade`。
 grade-case・private・作業 dir（`EVAL_ROOT/work/` の下）の場所は呼び出し側から差し替えられない。grade-case が無ければ exit 66。
-grade の不合格（exit 1）も判定 JSON があれば outbox に置く。stdout に出すのは outbox の判定 JSON の path だけで、
+`celeris-campaign grade` は判定 JSON を合格・不合格とも stdout に出し、合格 exit 0・不合格 exit 1、判定を作れないエラー（引数・grade-case の読込・private の hash 不一致など）は stdout 空・stderr に理由・exit 2 で返す（ADR 付記 H7）。
+wrapper は exit 0/1 で判定 JSON があれば漏洩検査に通して outbox に置き（不合格も置く）、exit 2 など判定 JSON が無いときは exit 70 で outbox に何も置かない。stdout に出すのは outbox の判定 JSON の path だけで、
 失敗は短い理由だけを返す。`celeris-campaign` と漏洩検査の出力は `EVAL_ROOT/work/` の中にだけ残す。漏洩検査が通らなければ outbox に何も置かない。
 起動した uid が `EVAL_ROOT` の持ち主でない、または `EVAL_ROOT` が group/other に開いていれば止まる。
 wrapper の sha256 を書く欄は承認票に足さない。install 元は repo の commit で決まるので、開始前チェック（`ops-r2-k2-preflight.md` §0）で

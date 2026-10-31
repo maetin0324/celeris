@@ -25,7 +25,7 @@ commit（件名）:
 - `CELERIS_USERNS_TESTS=1 cargo nextest run -p celeris-campaign --test ops_r2_probe --test ops_r2_socket`: 6 passed、skip 0 件。ops_r2_probe の fixture は試験用 socket を `--socket` で bind し、CoS run・worker run の probe で mounts_outside_allow 0 件、deny_readable は control の 1 件だけ（従来と同じ）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 結果は報告（result.json）に記す。
+- `bash scripts/dev/test-affected.sh`: exit 0。nextest 2912 tests run、2912 passed、9 skipped。文書検査（地図・リンク・ADR 番号・human-text・進捗 front matter）も通過。
 
 ## 本番への移行
 release 後に operator が実行する（測定 daemon は起動しない）。

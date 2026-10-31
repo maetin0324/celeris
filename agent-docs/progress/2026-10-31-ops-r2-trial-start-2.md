@@ -44,7 +44,7 @@ commit（件名。基準は `git merge-base HEAD main`、子 3 件の分は main
 - 進捗: ops-r2 trial start 2 のまとめと本番への移行（この task）
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
-- `bash scripts/dev/test-affected.sh` → exit 0。この task の変更は進捗ファイル 1 件だけなので、走ったのは文書検査（doc-links・human-text・progress-index ほか）。
+- `bash scripts/dev/test-affected.sh` → exit 0。この task の変更は進捗ファイル 1 件だけで、出力は「試験対象の変更なし（docs のみ等）」と check-doc-links の self-test ok。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
 - `sh scripts/dev/progress-index.sh --check` → ok。

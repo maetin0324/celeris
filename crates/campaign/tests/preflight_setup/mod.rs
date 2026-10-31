@@ -384,6 +384,7 @@ pub fn isolation(d: &Path) -> IsolationInputs {
             release: Some(iso.join("release")),
             account: Some(iso.join(format!("{p}-account"))),
             ro: Vec::new(),
+            sockets: Vec::new(),
         };
         for x in [&s.state, &s.release, &s.account].into_iter().flatten() {
             fs::create_dir_all(x).unwrap();

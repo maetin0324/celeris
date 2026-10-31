@@ -191,3 +191,9 @@ case.json と manifest の参照が違えば `graders` で止まる、入力 man
 ### M4. 未確認
 
 実機の operator 環境での実行（`--repo-src`・`--inputs-src`・`--measure-config` に実物を渡した preflight）は worker の run では行えない。手順書への反映は docs unit、実機のやり直しは operator。
+
+## 付記 D-socket（2026-10-31、task 01M690TDXQ4GX9A2Z0AVBKTB2D）
+- `ops-r2-sandbox.sh` に `--socket <path>`（複数可）を足す。受けるのは unix socket（`test -S`）だけで、bwrap には `--bind <sock> <sock>` として socket の path そのものだけを渡す。親 dir（例 `/run/user/1001`）は見せない。禁止 path の検査は `--ro` と同じ規則で掛ける。
+- `--ro` は通常 file・dir だけを受け、socket を混ぜない。
+- preflight は `--b-socket`・`--operator-socket` を `ScriptSandbox.sockets` として script に渡す。許可表（`allow_sources`）は script の `--print-args` から作るので、socket の載る filesystem が許可表に入る。deny_readable の判定は変えない。
+- 試験: `crates/campaign/tests/ops_r2_socket.rs`。

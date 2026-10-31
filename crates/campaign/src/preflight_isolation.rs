@@ -26,6 +26,8 @@ pub struct ScriptSandbox {
     pub release: Option<PathBuf>,
     pub account: Option<PathBuf>,
     pub ro: Vec<PathBuf>,
+    /// `--socket`: unix socket を 1 つずつ bind する（ssh master 等。親 dir は見せない）。
+    pub sockets: Vec<PathBuf>,
 }
 
 /// preflight の隔離検査の入力（CLI の `--deny-list` ほか）。
@@ -367,6 +369,9 @@ fn script_base(script: &Path, sb: &ScriptSandbox) -> Vec<String> {
     }
     for r in &sb.ro {
         a.extend(["--ro".into(), r.to_string_lossy().into_owned()]);
+    }
+    for r in &sb.sockets {
+        a.extend(["--socket".into(), r.to_string_lossy().into_owned()]);
     }
     a
 }

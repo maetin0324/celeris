@@ -119,6 +119,7 @@ fn fixture() -> Fixture {
             release: Some(release),
             account: Some(account),
             ro: Vec::new(),
+            sockets: Vec::new(),
         },
         deny: vec![private.clone(), old, other],
         root,

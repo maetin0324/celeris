@@ -114,10 +114,8 @@ fn hidden_absent_in_workspace_is_not_deletion_and_fixed_passes() {
         "{:?}",
         r.checks.implementation
     );
-    assert_eq!(
-        r.checks.implementation.details["hidden_inserted"][0],
-        "tests/hidden.txt"
-    );
+    assert_eq!(r.checks.implementation.details["hidden_inserted_count"], 1);
+    assert_no_hidden_name(&r);
     // k1 は実験工程も持つので、証拠が無い試験全体は不合格のまま（実装検査だけが通る）。
     assert_eq!(r.verdict, Verdict::Fail);
 }
@@ -220,4 +218,45 @@ fn shell_command_is_rejected_by_the_converter() {
         files_dir: d.path().to_path_buf(),
     };
     assert!(generate(&l.case, &p, &src, &d.path().join("o")).is_err());
+}
+
+/// 判定 JSON 全体に隠しテストの相対 path・file 名が出ていない（ADR 付記 2026-10-31「判定 JSON に隠しテストの
+/// path を出さない」）。
+fn assert_no_hidden_name(r: &GradeReport) {
+    let j = serde_json::to_string(r).unwrap();
+    assert!(!j.contains("tests/hidden.txt"), "{j}");
+    assert!(!j.contains("hidden.txt"), "{j}");
+}
+
+/// 隠しテストを重ねた tree が compile error になり、出力が隠しテストの path（相対・絶対・file 名）を含んでも、
+/// tail では `<hidden[0]>` に置き換わる。
+#[test]
+fn compile_error_output_naming_hidden_test_is_redacted() {
+    let mut fx = fixture();
+    let sh = "echo \"error[E0425]: cannot find value in $(pwd)/tests/hidden.txt\" >&2; \
+              echo ' --> tests/hidden.txt:3:5' >&2; echo 'see hidden.txt' ; \
+              echo 'error: could not compile' >&2; exit 101";
+    fx.case.implementation.as_mut().unwrap().command = vec!["sh".into(), "-c".into(), sh.into()];
+    workspace(&fx, "fixed\n");
+    let r = run(&fx, &ProcessRunner::default());
+    assert_eq!(
+        impl_status(&r),
+        Status::Fail,
+        "{:?}",
+        r.checks.implementation
+    );
+    assert_no_hidden_name(&r);
+    let d = &r.checks.implementation.details;
+    let err = d["stderr_tail"].as_str().unwrap();
+    assert!(
+        err.contains("/scratch/") && err.contains("/<hidden[0]>\n"),
+        "{err}"
+    );
+    assert!(err.contains(" --> <hidden[0]>:3:5"), "{err}");
+    assert!(
+        d["stdout_tail"]
+            .as_str()
+            .unwrap()
+            .contains("see <hidden[0]>")
+    );
 }

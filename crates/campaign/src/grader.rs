@@ -513,7 +513,8 @@ pub mod implementation {
     use serde_json::{Value, json};
 
     use super::{
-        CheckResult, GradeOptions, case::ImplementationSpec, safe_join, sha256_file, tail,
+        CheckResult, GradeOptions, case::ImplementationSpec, redact_hidden, safe_join, sha256_file,
+        tail,
     };
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -656,6 +657,7 @@ pub mod implementation {
     fn initial_tree_defect(
         baseline: &[String],
         opts: &GradeOptions,
+        redact: &dyn Fn(&str) -> String,
     ) -> (Option<(String, bool)>, Value) {
         let Some(init) = opts.initial_tree.as_deref().filter(|p| p.is_dir()) else {
             return (
@@ -687,11 +689,14 @@ pub mod implementation {
                     "ran": true,
                     "exit": o.exit,
                     "initial_tree_builds": false,
-                    "stderr_tail": tail(&o.stderr, 2048),
+                    "stderr_tail": tail(&redact(&o.stderr), 2048),
                 }),
             ),
             Err(e) => (
-                Some((format!("baseline build could not run: {e}"), false)),
+                Some((
+                    format!("baseline build could not run: {}", redact(&e)),
+                    false,
+                )),
                 json!({"ran": false, "error": e}),
             ),
         }
@@ -790,21 +795,23 @@ pub mod implementation {
         let mut hidden = Vec::new();
         if let Some(hd) = &spec.hidden_dir {
             let hroot = opts.case_dir.join(hd);
-            for t in &spec.hidden_tests {
+            for (i, t) in spec.hidden_tests.iter().enumerate() {
                 let hp = match safe_join(&hroot, &t.path) {
                     Ok(p) => p,
                     Err(e) => {
-                        reasons.push(e);
+                        reasons.push(redact_hidden(&e, &spec.hidden_tests));
                         continue;
                     }
                 };
                 match sha256_file(&hp) {
                     Ok(s) if s == t.sha256 => hidden.push((t.path.clone(), hp)),
                     Ok(_) => env.push(format!(
-                        "grader hidden test {} does not match the case sha256 (grader-side copy altered)",
-                        t.path
+                        "grader hidden test <hidden[{i}]> does not match the case sha256 (grader-side copy altered)"
                     )),
-                    Err(e) => env.push(format!("grader hidden test unreadable: {e}")),
+                    Err(e) => env.push(format!(
+                        "grader hidden test unreadable: {}",
+                        redact_hidden(&e, &spec.hidden_tests)
+                    )),
                 }
             }
         }
@@ -816,6 +823,7 @@ pub mod implementation {
             // 改変・削除があれば失格。評価 command は走らせない。
             return CheckResult::from_reasons(reasons, json!({"tests": files, "ran": false}));
         }
+        let redact = |s: &str| redact_hidden(s, &spec.hidden_tests);
         let wd = work_dir(&opts.work_root);
         let result = (|| -> Result<CommandOutput, String> {
             copy_tree(&repo, &wd)?;
@@ -833,7 +841,7 @@ pub mod implementation {
             Ok(o) => o,
             Err(e) => {
                 return CheckResult::env_failure(
-                    vec![format!("evaluation command could not run: {e}")],
+                    vec![format!("evaluation command could not run: {}", redact(&e))],
                     json!({"tests": files, "ran": false}),
                 );
             }
@@ -875,7 +883,7 @@ pub mod implementation {
             && output_is_compile_error(&out)
             && let Some(cmd) = &spec.baseline_command
         {
-            let (defect, detail) = initial_tree_defect(cmd, opts);
+            let (defect, detail) = initial_tree_defect(cmd, opts, &redact);
             baseline = detail;
             if let Some((why, unattributed)) = defect {
                 reasons.push(why);
@@ -901,12 +909,12 @@ pub mod implementation {
                 "tests": files,
                 "ran": true,
                 "env_failure": env_failed,
-                "hidden_inserted": hidden.iter().map(|(p, _)| p).collect::<Vec<_>>(),
+                "hidden_inserted_count": hidden.len(),
                 "exit": out.exit,
                 "missing_ok": missing,
                 "baseline": baseline,
-                "stdout_tail": tail(&out.stdout, 2048),
-                "stderr_tail": tail(&out.stderr, 2048),
+                "stdout_tail": tail(&redact(&out.stdout), 2048),
+                "stderr_tail": tail(&redact(&out.stderr), 2048),
             }),
         )
     }
@@ -1620,6 +1628,37 @@ pub fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
 pub fn read_json(p: &Path) -> Result<Value, String> {
     let b = fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
     serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// 判定 JSON に出す文字列から隠しテストの path を消す。各隠しテストの相対 path と file 名を
+/// `<hidden[i]>` に置き換える（絶対 path は相対 path を末尾に含むので一緒に消える）。長い語から置き換え、
+/// 短い語（file 名）が長い語（相対 path）の一部だけを置き換えて残りを漏らすことを避ける（ADR 付記
+/// 2026-10-31「判定 JSON に隠しテストの path を出さない」）。
+pub fn redact_hidden(s: &str, hidden: &[case::PristineTest]) -> String {
+    let mut pats: Vec<(&str, usize)> = Vec::new();
+    for (i, t) in hidden.iter().enumerate() {
+        pats.push((t.path.as_str(), i));
+        if let Some(n) = Path::new(&t.path).file_name().and_then(|n| n.to_str()) {
+            pats.push((n, i));
+        }
+    }
+    pats.retain(|(p, _)| !p.is_empty());
+    pats.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    // 一度で走査する（置き換えた `<hidden[i]>` の中を後の語で再び置き換えない）。
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    'scan: while let Some(c) = rest.chars().next() {
+        for (p, i) in &pats {
+            if let Some(r) = rest.strip_prefix(p) {
+                out.push_str(&format!("<hidden[{i}]>"));
+                rest = r;
+                continue 'scan;
+            }
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
 }
 
 /// 出力の末尾だけを残す（秘密値の大量流出と判定 JSON の肥大を避ける）。

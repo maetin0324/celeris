@@ -1,7 +1,8 @@
 ---
 title: K2 ops-r2 の試行開始の残り（promotion gate・初期作業ツリー・sandbox の ssh・試行 A の起動）
 tasks: [01M69BAM9SMW8YE1Y4GJXV0NFT]
-status: running
+status: done
+completed: 2026-10-31
 started: 2026-10-31
 updated: 2026-10-31
 ---
@@ -42,8 +43,14 @@ commit（件名）:
 - `cargo test -p celeris-campaign --test ops_r2_seed`: exit 0、3 passed。
 - `cargo test -p celeris-campaign --test ops_r2_ssh_config --test ops_r2_socket`: exit 0、6 passed。
 
+## 提出時の検査（提出時の HEAD で実行、基準は `git merge-base HEAD main`）
+- `bash scripts/dev/test-affected.sh`: exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest 2919 tests run: 2919 passed、9 skipped。文書検査（architecture-map・doc-links・adr-numbers・human-text・progress-index）も通過。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+
 ## 未解決事項
-- 項目 4（試行 A の起動 command）、手順書の反映、test-affected・clippy は未実施。
+- 実機での確認（daemon 起動・step 2・step 8 のやり直し）は operator が下の「本番への移行」で行う。この run では実 sirius・実 LLM に出ていない。
+- `cargo clippy -p celeris-campaign --tests` は既存の `cap_probe`（duplicate_mod）・`ops_r2_probe.rs:212`（needless_borrow）で落ちる。この task の変更ではなく、受け入れの command の対象外。
 
 ## 項目 4・手順書の反映（Run #6）
 - commit「ops-r2: 試行 A の起動 command を出す ops-r2-trial-a-command.sh と手順書の反映（ssh-config・release-store・種）」

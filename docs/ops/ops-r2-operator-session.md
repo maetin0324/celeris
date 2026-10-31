@@ -37,6 +37,13 @@ sh scripts/campaign/ops-r2-session-prep.sh --evidence /測定証跡の絶対パ�
 - `launch.sh` は bwrap の中で `claude --session-id <id>` を起動する。見えるのは `/usr`・`/etc` 等の ro、証跡 dir（rw）、
   `.credentials.json`・3 つの道具・token（ro）だけ。repo・人の `~/.claude` は見えない。
 
+### 1.1 試行 A の Claude Code の session と区別する
+
+試行 A（単体の Claude Code）は operator の session ではなく測定対象の harness で、`ops-r2-trial-a-command.sh --session-id <別の UUID>` で
+起動する（[K2 の開始前チェック](ops-r2-k2-preflight.md) §6.2）。権限の形は K4 ops-r1 の A と同じ
+`--permission-mode bypassPermissions --disallowedTools Task` で、この session の `claude-config/settings.json` の拒否とは別に command で渡す。
+A の session id は `session-map.base.json` に書かない（operator-usage に取り込まない。二重計上の防止）。operator の `--session-id` と同じ UUID を使わない。
+
 ## 2. 試行の間: poll と記録
 
 状態の確認は LLM でなく script が行う。

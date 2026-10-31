@@ -300,12 +300,19 @@ operator は次の script で command を出し、人がそれを別の端末で
 
 ```sh
 cp <承認済みの固定依頼文> "$S_A/prompt.md"
+A_SID=$(python3 -I -c 'import uuid;print(uuid.uuid4())'); echo "$A_SID" > "$P/a-session-id"
 sh scripts/campaign/ops-r2-trial-a-command.sh --state "$S_A" --claude-dir "$(dirname "$CLAUDE")" \
-  --account /local/celeris/measure-accounts/a --ssh-config "$SSHCFG_DIR/config" --socket "$MUX" --seed-sha256 "$SEED_SHA"
+  --account /local/celeris/measure-accounts/a --ssh-config "$SSHCFG_DIR/config" --socket "$MUX" --seed-sha256 "$SEED_SHA" \
+  --session-id "$A_SID"
 ```
 
-出る command は、包みの中で種を展開し、`CLAUDE_CONFIG_DIR=<A の account>` で `timeout 3600 claude-2.1.303 -p --model claude-sonnet-5-5` を起動し、
-transcript を `$S_A/a-transcript.jsonl` に書く。承認票の 3600 秒は `timeout` で強制する。1,500,000 token は CLI で強制できないので、
+出る command は、包みの中で種を展開し、`CLAUDE_CONFIG_DIR=<A の account>` で
+`timeout 3600 claude-2.1.303 -p --model claude-sonnet-5-5 --session-id <A_SID> --output-format stream-json --verbose --permission-mode bypassPermissions --disallowedTools Task`
+を起動し、transcript を `$S_A/a-transcript.jsonl` に書く。権限の引数は K4 ops-r1 の A と同じ形（付記 D-trial-a2）。A の account の設定は権限を
+与えないので、`--permission-mode bypassPermissions` が無いと headless の `-p` では Bash・Edit が拒まれる。`--disallowedTools Task` は K4 と同じく
+subagent を使わせないため。session id は operator が起動の前に決めて `$P/a-session-id` に残す（script は生成しない。小文字の UUID 以外は exit 2）。
+A の session は測定対象の harness なので、operator-usage の session-map には入れない。
+path は絶対 path で改行を含まなければ文字を問わない。`$MUX` のように `@`・`:` を含む socket path も、出る 1 行では単一引用符で quote される。承認票の 3600 秒は `timeout` で強制する。1,500,000 token は CLI で強制できないので、
 operator が transcript の usage を見て停止規則（§7）で止める。依頼文に `-F` や ssh の説明を足さない。
 
 ## 7. 停止規則の確認
@@ -327,5 +334,5 @@ K2 は cluster job を使う。試行後も job が終端していなければ�
 
 ## 8. 記録を残す
 
-`$P` に `deny.list`（sha256 付き）・`l1-deny.list`・preflight の出力・`probe-*.json`・`leak-pre.json`・`intake.json`・`operator-session/` を残し、sha256 を進捗に書く。
+`$P` に `deny.list`（sha256 付き）・`l1-deny.list`・preflight の出力・`probe-*.json`・`leak-pre.json`・`intake.json`・`a-session-id`・`operator-session/` を残し、sha256 を進捗に書く。
 取れなかった値（消費・人の時間）は null と理由（`not_recorded`・`transcript_missing`・`usage_missing:<件数>`）で残し、0 で埋めない。

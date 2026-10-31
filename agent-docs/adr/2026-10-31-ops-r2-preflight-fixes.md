@@ -248,3 +248,13 @@ case.json と manifest の参照が違えば `graders` で止まる、入力 man
 - 上限: 3600 秒は `timeout` で強制する。1,500,000 token は claude CLI に上限の引数が無いので、operator が transcript の usage で停止規則に従い止める。
 - B と同じ ssh の形（付記 D-ssh）にし、`-F` を command にも依頼文にも入れない。
 - 試験: `crates/campaign/tests/ops_r2_trial_a_command.rs`（版・model・3600 秒・sandbox の引数・種の sha256 が command に入る、`-F` が無い、引数誤りは exit 2、前提の欠けは exit 1）。
+
+## 付記 D-trial-a2（2026-10-31、task 01M69YZVW2AA2QPYS5KKAN20SR）試行 A の権限の形と socket path の quoting
+- 背景: D-trial-a の command は `--permission-mode`・`--disallowedTools`・`--session-id` を出さなかった。A の account（`CLAUDE_CONFIG_DIR`）の設定は権限を与えないので、headless の `-p` では Bash・Edit が拒まれる（ADR 2026-10-16-mlsys-pilot-wiring-fixes D4 と同じ起動の誤り）。
+  また path を `[A-Za-z0-9._/+-]` に限っていたため、人が開いた ssh master の socket `/run/user/1001/ssh-mux-rmaeda@130.158.241.2:22`（`@`・`:` を含む）を拒んでいた。
+- 決定（権限の形）: K4 ops-r1 の A（K4 runbook §3.1。成果物 `01M62S8XWCZDCY2ZBVQ35176MH/artifacts/ops-r1/runbook.md`）と同じ引数にする。
+  `claude-2.1.303 -p --model claude-sonnet-5-5 --session-id <uuid> --output-format stream-json --verbose --permission-mode bypassPermissions --disallowedTools Task`。
+  `--disallowedTools` の値は K4 と同じ `Task` だけにし、K4 と比べられる形を保つ（B の worker の `Agent,Task,Workflow` とは違う。違いは K4 と同じ）。
+- 決定（session id）: `--session-id <小文字の UUID>` を必須の引数にする。operator が起動の前に決めて記録し（K4 の `$RA/session_id` と同じ）、script は生成しない。A の session は測定対象の harness で、operator-usage の session-map には入れない（K4 runbook §3.3 と同じ）。
+- 決定（quoting）: path は絶対 path で改行を含まないことだけを確かめ、文字の種類で拒まない。`sh -c` に渡す内側の command の各 path と、外側の各引数（内側の command 全体を含む）を、POSIX sh の単一引用符（`'` は `'\''`）で 2 段に quote して出す。path に空白・`'`・`@`・`:` があっても、出した 1 行を sh が評価すると元の bytes の argv になる。
+- 試験: `crates/campaign/tests/ops_r2_trial_a_command.rs`。script の写しの隣に argv を記録する偽の `ops-r2-sandbox.sh` を置き、偽の `ops-r2-seed.sh`・`claude-2.1.303` で出した 1 行を実際に sh で評価する（実 sirius・LLM・bwrap に出ない）。claude の argv が上の形と一致すること、`--socket` に `ssh-mux-rmaeda@130.158.241.2:22` の形の path がそのまま渡ること、空白と `'` を含む path が保たれること、UUID 以外の session id は exit 2 を確かめる。

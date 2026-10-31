@@ -1643,7 +1643,7 @@ pub fn redact_hidden(s: &str, hidden: &[case::PristineTest]) -> String {
         }
     }
     pats.retain(|(p, _)| !p.is_empty());
-    pats.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    pats.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
     // 一度で走査する（置き換えた `<hidden[i]>` の中を後の語で再び置き換えない）。
     let mut out = String::with_capacity(s.len());
     let mut rest = s;

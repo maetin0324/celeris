@@ -27,6 +27,8 @@ updated: 2026-10-31
 
 commit（件名）:
 - ops-r2: 漏洩検査が公開の初期 archive の needle を外し、種に submodule の中身を入れる
+- 進捗: leak-seed の bundle 名から hash 様の表記を外す
+- 進捗: leak-seed の提出時の検査結果
 
 ## case.json の初期ツリーの定義と採点の関係
 - case.json の `initial.archive_sha256` は `git archive <initial.commit>` の tar の sha256 で、submodule を含まない
@@ -44,7 +46,11 @@ commit（件名）:
 - 限界: `ops-r2-seed.sh` は tar の sha256 で照合する。`initial.lock.json` の内容 hash での照合は採点器の `assemble_initial` だけが行う。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
-- `bash scripts/campaign/run-ops-r1-leak-tests.sh` → 下の「提出時の検査」に結果
+- `bash scripts/campaign/run-ops-r1-leak-tests.sh` → exit 0、61 tests OK（漏洩検査 53・種 8）
+- `bash scripts/dev/test-affected.sh` → exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
+  nextest 2919 tests run: 2919 passed、9 skipped。文書検査（doc-links・human-text・progress-index ほか）も通過
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
 - `cargo nextest run -p celeris-campaign --test ops_r2_seed --test ops_r2_trial_a_command` → 4 passed
 - 実 asset での漏洩検査（private は合成の dummy、本物の private は開いていない）: 種の state を `--scan`、公開 tar と submodule tar 5 件を
   `--public-archive` → exit 0、0.5 秒、`excluded=1 private_strings=2->1 warning=most_private_strings_removed`

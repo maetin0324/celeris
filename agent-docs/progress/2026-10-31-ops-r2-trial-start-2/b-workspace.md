@@ -46,9 +46,11 @@ commit（件名）:
 - `cargo test -p celeris-campaign --test ops_r2_ssh_config` → exit 0、4 passed。
 - `cargo test -p celeris --test ops_r1_measure` → exit 0、1 passed。
 - `python3 -m unittest scripts/campaign/test_ops_r1_measure_config.py` → OK、16 tests。
-- `bash scripts/dev/test-affected.sh` → 下の「提出時の検査」。
-- `cargo clippy --workspace -- -D warnings` → 下の「提出時の検査」。
-- `cargo fmt --all -- --check` → 下の「提出時の検査」。
+- `bash scripts/dev/test-affected.sh` → exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
+  nextest 2924 tests run: 2924 passed、9 skipped。文書検査（progress-index ほか）も通過。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → ok。
 
 ## 未解決事項
 - 本物の release の `bin/celeris` が B の包みの中で `--config` を読んで起動することは実機で通していない（試験の daemon は偽物）。

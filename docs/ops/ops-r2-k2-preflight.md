@@ -222,6 +222,9 @@ operator は上の socket と config 以外の ssh の鍵・config・socket を�
 ## 5. operator principal と出典
 
 - `--source` の file（`approved_request`）に、承認の `decision_id`・承認の時刻 `said_at`・承認票の依頼文 sha256・`decided_by`・`approved_by` を書く。
+  承認は対話 session の選択肢で行い Celeris の decision id を持たないので、`decision_id` は承認票の参照で書く（ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-decision）:
+  `approval:<承認票の置かれた task id>:<承認票の file 名>:<承認の選択肢 key>`（例 `approval:01M669QGFJRZ2MY7VRA1BSSZ5H:approval-request.md:approve`）。
+  使える文字は `[A-Za-z0-9._:-]` だけ（intake が検査する）。承認票の file 名に別の文字があれば `_` に置き換え、元の名前を `note` に書く。
   `sha256sum <固定依頼文>` が `request_sha256` と一致すること。
 - `ops-r1-intake --relay` は operator の token（`$S/token`）で呼ぶ。人の token を環境変数に置かない。
 - 試行区間に、人の普段の session が測定 daemon を操作しない（照合で見つかればその試行は正式にしない。ADR D5）。

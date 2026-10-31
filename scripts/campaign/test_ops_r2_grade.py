@@ -5,6 +5,7 @@
 CELERIS_EVAL_TEST_EUID で注入する。実 uid（celeris-eval）での確認は docs/ops/ops-r2-isolation.md §4.7 の手順で人が行う。
 """
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -193,6 +194,14 @@ class GradeTest(unittest.TestCase):
         self.assertEqual(list(self.outbox.iterdir()), [])
 
 
+def _leaked(name):
+    # 漏れた旧 hash は set-private-sha 側の定数が正本（case.json は新しい hash に替わった）。
+    spec = importlib.util.spec_from_file_location('ops_r2_set_private_sha', SETSHA)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return sorted(getattr(mod, name)[CASE])[0]
+
+
 class SetShaTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR'))
@@ -228,7 +237,8 @@ class SetShaTest(unittest.TestCase):
 
     def test_refuses_leaked_and_bad_sha(self):
         text = self.case.read_text()
-        old = json.loads(text)['private_ref']['sha256']
+        old = _leaked('LEAKED')
+        self.assertNotIn(old, text)
         self.assertEqual(self.run_set(old).returncode, 65)
         self.assertEqual(self.run_set('xyz').returncode, 64)
         self.assertEqual(self.case.read_text(), text)
@@ -246,7 +256,8 @@ class SetShaTest(unittest.TestCase):
 
     def test_refuses_repo_grade_case_sha(self):
         text = self.case.read_text()
-        old = json.loads(text)['grade_case_ref']['sha256']
+        old = _leaked('LEAKED_GRADE_CASE')
+        self.assertNotIn(old, text)
         r = self.run_set('ab' * 32, '--grade-case-sha256', old)
         self.assertEqual(r.returncode, 65)
         self.assertIn('leaked', r.stderr)

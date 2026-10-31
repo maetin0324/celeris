@@ -180,6 +180,20 @@ if [ -n "$B_ACCOUNT_DIR" ]; then
         ln -s "$B_ACCOUNT_DIR" "$POOL/$B_ID"
     fi
 fi
+# 測定用の release store の写し（ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-store）。daemon の promotion gate は
+# releases_dir の親の `current` の行き先の名前が自分の sha12 であることを見る。本番の release store は変えず、
+# $STATE/release-store/{releases/<sha12> -> release dir, current -> releases/<sha12>} を作る。
+STORE="$STATE/release-store"
+if [ -e "$STORE" ] || [ -L "$STORE" ]; then
+    [ "$(readlink "$STORE/releases/$RELEASE_SHA12")" = "$RELEASE_DIR" ] &&
+        [ "$(readlink "$STORE/current")" = "releases/$RELEASE_SHA12" ] &&
+        [ "$(ls -A "$STORE/releases")" = "$RELEASE_SHA12" ] ||
+        die "existing release store differs from the requested release: $STORE"
+else
+    mkdir -p "$STORE/releases"
+    ln -s "$RELEASE_DIR" "$STORE/releases/$RELEASE_SHA12"
+    ln -s "releases/$RELEASE_SHA12" "$STORE/current"
+fi
 cat >"$STATE/setup/project.json" <<'EOF'
 {"title": "ops-r2 K2 trial", "request": "ops-r2 K2 pilot の試行専用の案件。人の依頼は案件 CoS thread に入れる。"}
 EOF
@@ -231,7 +245,7 @@ enabled = false
 dir = $(q "$STATE/scratch")
 
 [selfdeploy]
-releases_dir = $(q "$(dirname "$RELEASE_DIR")")
+releases_dir = $(q "$STORE/releases")
 
 # 試行と無関係に LLM を呼ぶ経路を切る（停滞の finding を作らない = CoS triage の run が起きない）。
 [maintenance.stagnation]

@@ -220,3 +220,8 @@ case.json と manifest の参照が違えば `graders` で止まる、入力 man
 
 ## 付記 D-k2text（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）
 - `ops-r1-measure-config.sh` が生成する `setup/project.json` と daemon.toml 冒頭の注記から K4 の文言（`ops-r1 K4 pilot`）を消し、`ops-r2 K2` に直した。daemon の挙動には効かない文言だけの変更。
+
+## 付記 D-store（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）測定 daemon の promotion gate
+- 背景: daemon は `[selfdeploy] releases_dir` の親の `current` の行き先の名前が自分の sha12 のときだけ起動する（`crates/celeris/src/instance.rs` `read_promotion_evidence`）。生成器は releases_dir を release dir の親（本番の `/local/celeris/state/releases`）にしていたので、その親に `current` が無く、sandbox にも見えず exit 4 になった。
+- 決定: `ops-r1-measure-config.sh` が `$STATE/release-store/releases/<sha12>`（→ release dir の symlink）と `$STATE/release-store/current`（→ `releases/<sha12>`）を作り、`releases_dir = $STATE/release-store/releases` を書く。本番の release store は変えない。既にあって中身が違えば exit 1。
+- daemon.toml で変わる欄は `[selfdeploy] releases_dir` だけ。release dir は sandbox に `--release` で同じ path に bind されるので、symlink はその中で解ける。

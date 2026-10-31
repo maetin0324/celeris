@@ -428,6 +428,9 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
     let _ = a.res("manifest", m.validate());
     a.checked.push("versions");
     let _ = a.res("versions", m.check_resolved());
+    if m.is_ops_r2() {
+        return run_checks_ops_r2(a, m, inp, host);
+    }
 
     // 2. 入力 manifest（hash・split・自己完結）。
     a.checked.push("input-manifest");
@@ -550,6 +553,142 @@ fn run_checks(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) 
         && let Some(set) = &set
     {
         check_bc_capabilities(a, m, set, inp, host);
+    }
+}
+
+/// ops-r2（K2 pilot）の開始前チェック。ADR 2026-10-31-ops-r2-preflight-fixes 付記 M1〜M4。
+/// ops-r1 の経路との違い（旧 private に依る検査は外し、実在する入力の検査に直した）:
+/// - private は評価器領域（`EVAL_ROOT`、0700）にあり読まない。case.json の `private_ref`・`grade_case_ref` の sha256 を
+///   manifest の `contract.grader_refs`（承認票の値）と照合する。repo の旧 private（漏洩済み）は採点に使わず、読み込みも照合もしない。
+/// - B は CoS 受付で、campaign は task API に投入しない。`--api-url`・`--token-env`・`--task-template` は見ない。
+/// - 資料・KB は case 自身の `materials/`・`kb/`（`CaseSet::load_public` が case.json の snapshot に照合済み）と manifest の pin を照合する。
+/// - canary は置かない（ADR D5）。測定 daemon の config は通常運用の config との分離だけを見る。
+/// - campaign lock は作らない（lock は private の hash を封印する。ops-r2 は runner で走らない）。
+/// - 能力 probe（`--cap-env`）は走らせない。runner の A の sandbox を組んで調べる検査で、ops-r2 の A は `ops-r2-sandbox.sh` の
+///   中で動く（別の包み方）。A・B・operator の包み方は `check_isolation` の runtime probe が同じ包み方で見る。
+fn run_checks_ops_r2(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn Host) {
+    a.checked.push("input-manifest");
+    let input: Option<InputManifest> = a
+        .res(
+            "input-manifest",
+            m.load_input(&inp.manifest_path, inp.input_override.as_deref()),
+        )
+        .and_then(|i| {
+            a.res("input-manifest", m.check_against_input(&i))
+                .map(|()| i)
+        });
+
+    a.checked.push("case-inputs");
+    let set = a.res("case-inputs", CaseSet::load_public(&inp.cases_root));
+    if let Some(set) = &set {
+        let refs = m.contract.as_ref().map(|c| &c.grader_refs);
+        for id in &m.problems {
+            let Some(c) = set.get(id) else {
+                a.miss(
+                    "case-inputs",
+                    format!("{id}: no case.json under cases root"),
+                );
+                continue;
+            };
+            if c.case.kind == CaseKind::Control {
+                a.miss(
+                    "case-inputs",
+                    format!("{id}: control case in a measurement"),
+                );
+            }
+            if c.case.split != m.split {
+                a.miss(
+                    "case-inputs",
+                    format!(
+                        "{id}: case split {:?} != campaign {:?}",
+                        c.case.split, m.split
+                    ),
+                );
+            }
+            if c.case.snapshot.materials_sha256 != m.snapshot.materials_sha256
+                || c.case.snapshot.kb_snapshot != m.snapshot.kb_snapshot
+            {
+                a.miss(
+                    "case-inputs",
+                    format!(
+                        "{id}: manifest snapshot pins differ from the case's materials/kb snapshot"
+                    ),
+                );
+            }
+            a.checked.push("graders");
+            match refs.and_then(|r| r.get(id)) {
+                None => a.miss("graders", format!("{id}: no contract.grader_refs entry")),
+                Some(r) => {
+                    if c.case.private_ref.sha256 != r.private_sha256 {
+                        a.miss(
+                            "graders",
+                            format!(
+                                "{id}: case.json private_ref.sha256 {} differs from the manifest's {}",
+                                c.case.private_ref.sha256, r.private_sha256
+                            ),
+                        );
+                    }
+                    match &c.case.grade_case_ref {
+                        Some(g) if g.sha256 == r.grade_case_sha256 => {}
+                        Some(g) => a.miss(
+                            "graders",
+                            format!(
+                                "{id}: case.json grade_case_ref.sha256 {} differs from the manifest's {}",
+                                g.sha256, r.grade_case_sha256
+                            ),
+                        ),
+                        None => a.miss("graders", format!("{id}: no grade_case_ref")),
+                    }
+                }
+            }
+        }
+        a.checked.push("case-time");
+        let _ = a.res("budget", set.check_within_budget(&m.problems, &m.budget));
+        for id in &m.problems {
+            if let Some(e) = set.get(id).and_then(|c| c.case.experiment.as_ref())
+                && e.walltime_secs > m.termination.trial_timeout_secs
+            {
+                a.miss(
+                    "budget",
+                    format!(
+                        "{id}: experiment walltime {}s exceeds termination.trial_timeout_secs {}s",
+                        e.walltime_secs, m.termination.trial_timeout_secs
+                    ),
+                );
+            }
+        }
+        a.checked.push("inputs");
+        check_inputs(a, m, set, inp);
+    }
+
+    check_candidates(a, m, inp, host);
+    check_snapshot_src(a, m, inp);
+
+    a.checked.push("measure-env");
+    match &inp.measure {
+        None => a.miss(
+            "measure-env",
+            "--measure-config is required (the measurement daemon's config, checked against --normal-config)",
+        ),
+        Some(me) => {
+            for e in measure_env::check_config(&me.config, &me.normal_config, inp.kb_src.as_deref())
+            {
+                a.miss("measure-env", e);
+            }
+        }
+    }
+    check_isolation(a, m, inp, host);
+
+    a.checked.push("budget");
+    check_budget(a, m);
+    if let Some(i) = &input
+        && let Ok(v) = dryrun::estimate(m, i)
+        && v["acceptance"]["within_budget"] != true
+    {
+        a.miss(
+            "budget",
+            format!("dry-run estimate: {}", v["acceptance"]["reasons"]),
+        );
     }
 }
 
@@ -820,6 +959,13 @@ fn check_candidates(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn 
                 format!("A harness program {}: {e}", inp.a_program.display()),
             ),
         }
+    }
+    // ops-r2 の B は CoS 受付で task API に投入しない。api-url・token・task-template は見ない（付記 M2）。
+    if m.is_ops_r2() {
+        if a_active && let Err(e) = host.sandbox_usable() {
+            a.miss("a-arm", format!("A isolation (bwrap) is not usable: {e}"));
+        }
+        return;
     }
     // B/C: task-api の origin と token の環境変数（名前だけ）。
     match (&inp.api_url, &inp.token_env) {
@@ -1397,7 +1543,11 @@ fn check_api_dependent(
 /// 配る入力が揃い、材料の hash が manifest の固定値と一致するか（run が拒否する前に見る）。
 fn check_snapshot_src(a: &mut Acc, m: &CampaignManifest, inp: &Inputs) {
     a.checked.push("snapshot-src");
+    // ops-r2 は case 自身の materials/kb を使う（run_checks_ops_r2 が case.json の snapshot に照合済み）。
+    // --materials-src・--kb-src は任意で、渡されたら manifest の pin に照合する（付記 M3）。
+    let required = !m.is_ops_r2();
     match &inp.materials_src {
+        None if !required => {}
         None => a.miss(
             "case-inputs",
             "--materials-src is required for a measured run",
@@ -1417,7 +1567,7 @@ fn check_snapshot_src(a: &mut Acc, m: &CampaignManifest, inp: &Inputs) {
         }
     }
     for (name, p, required) in [
-        ("--kb-src", &inp.kb_src, true),
+        ("--kb-src", &inp.kb_src, required),
         ("--repo-src", &inp.repo_src, false),
     ] {
         match p {

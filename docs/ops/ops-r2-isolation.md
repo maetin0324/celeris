@@ -31,13 +31,15 @@ run の uid がそれらと祖先に chmod・rename できないことで判定�
 ### 2.1 `celeris-campaign probe-read`（runtime の中から読めるかを確かめる）
 
 ```sh
-celeris-campaign probe-read --principal <名前> --deny <path> [--deny <path> ...] \
+celeris-campaign probe-read --principal <名前> --deny-readable-file <deny list の file> \
   [--allow <許可する mount source> ...] [--out <probe.json>]
 ```
 
-- 各 `--deny` の path を open して 1 byte 読み、親 dir を readdir する。`/proc/self/mountinfo` の source が `--allow` の外にあれば記録する。
+- `--deny-readable-file` は 1 行 1 絶対 path の file（件数に上限は無い。path を引数に並べないので bwrap の引数上限 9000 に当たらない。旧 `--deny <path>` は無い）。
+  file の path を open して 1 byte 読み、親 dir を readdir する。`/proc/self/mountinfo` の source が `--allow` の外にあれば記録する。`--allow` は host の mount の source（device 名）で、包みに bind する path の mount の source と
+  `tmpfs`・`proc`・`devpts`・`mqueue`。B の probe は preflight と同じ `--allow` を付ける（付けないと包みの中の mount がすべて `mounts_outside_allow` に出る）。
 - 出力は schema `celeris.runtime-probe/1` の JSON（stdout。`--out` があれば file にも）。読めた・一覧できた・許可外の source があれば exit 1。
-- 主体の包み方の中で走らせる。例: `ops-r2-sandbox.sh ... -- <probe binary> probe-read --principal B --deny ...`。
+- 主体の包み方の中で走らせる。例: `ops-r2-sandbox.sh ... --ro <probe binary> --ro <deny list> -- <probe binary> probe-read --principal B --deny-readable-file <deny list> --allow ...`（[K2 の開始前チェック §4](ops-r2-k2-preflight.md#4-漏洩検査runtime-の-probe-と-l1-の-probe-を渡す)）。
 - principal が `l1` か `l1:` で始まる probe は、人の uid の process から包まずに開いた L1 の確認として扱われる。
 
 ### 2.2 `scripts/campaign/ops-r2-sandbox.sh`（B・operator の L2）
@@ -52,7 +54,8 @@ sh scripts/campaign/ops-r2-sandbox.sh --state <試行の state> --release <relea
 - `--print-args` は実行と同じ bwrap 引数を 1 行 1 引数で出し、bwrap を起動しない（preflight もこれで許可表を得る）。
 - 人の `~/.claude`・`~/.config/celeris`・本番 state・workspaces・repo clone と、それらの祖先を指定すると exit 2。
   `projects/` か `memory/` を持つ account dir も exit 2（過去の transcript を持つ account は渡せない）。
-- 試行ごとの state と HOME は `scripts/campaign/ops-r1-measure-config.sh` が作る。
+- 試行ごとの state と HOME は `scripts/campaign/ops-r1-measure-config.sh` が作る。B の測定 daemon の account pool もこの script が `<state>/pool` に作る
+  （`--b-account-dir` の 1 dir だけの symlink。`--account` に渡すのは pool の symlink ではなく account dir の実 path）。
 
 ### 2.3 `celeris-campaign preflight --deny-list`（deny_readable で止める）
 
@@ -60,13 +63,13 @@ sh scripts/campaign/ops-r2-sandbox.sh --state <試行の state> --release <relea
 
 ```sh
 celeris-campaign preflight ... \
-  --deny-list <file> --eval-root <EVAL_ROOT> \
+  --deny-list <file> --eval-root <EVAL_ROOT> [--claude <local の claude copy> --claude-sha256 <承認票の sha256>] \
   [--sandbox-script scripts/campaign/ops-r2-sandbox.sh] [--probe-program <celeris-campaign>] \
   --b-state <dir> --b-release <dir> --b-account <dir> [--b-ro <path> ...] \
   --operator-state <dir> --operator-release <dir> --operator-account <dir> [--operator-ro <path> ...]
 ```
 
-- `--deny-list` は 1 行 1 絶対 path（`#` 行と空行は無視、glob は展開しない）。承認票の deny list を実在の path に展開して書く。
+- `--deny-list` は 1 行 1 絶対 path（`#` 行と空行は無視、glob は展開しない）。preflight は file のまま包みの中へ渡し、probe は `--deny-readable-file` で読む（9000 件を超えても走る）。承認票の deny list を実在の path に展開して書く。
   dir より中の file を書く（親を一覧できるだけでも hit になるため）。`--eval-root` の下の path を 1 件以上含める。
 - 主体は A・B（A 以外の arm が有効なとき）・operator（正式試行では常に）・L1。missing は次の形で出る。
   - `deny_readable:<主体>:<path>`（読めた・親を一覧できた）
@@ -85,21 +88,28 @@ celeris-campaign preflight ... \
 
   書けるかは、持ち主・group・その他のうち run の uid に当てはまる 1 組の bit で決める。run の uid が 0 なら常に書けるとみなすので、root で走らせた preflight は L1 で必ず止まる。
   同じ uid の dir と file を chmod 000 にした `EVAL_ROOT` は、open が EACCES でも `owned_by_run_uid` で止まる。
+- `--claude`・`--claude-sha256` は測定用 claude の local の固定 copy の検査で、組で渡す（片方だけ、読めない、sha256 の不一致は `deny_readable:claude:...`）。
+  NFS 上の claude は許可表の外の mount になり `deny_readable:A:mount:...` で止まる。許可表に NFS を足さず、local の copy を使う（ADR 2026-10-31-ops-r2-preflight-fixes D4）。
 - 迂回の env 変数・CLI flag は無い。`celeris.runtime-probe/1` の JSON の形は変えていない（持ち主の判定は probe の外で行う）。
-- `measure-launcher.sh` は env file の `DENY_LIST`・`EVAL_ROOT`・`SANDBOX_SCRIPT`・`PROBE_PROGRAM`・`B_STATE`・`B_RELEASE`・`B_ACCOUNT`・
+- `measure-launcher.sh` は `--claude`・`--claude-sha256` を渡さないので、ops-r2 の preflight は `celeris-campaign preflight` を直接実行する。env file の `DENY_LIST`・`EVAL_ROOT`・`SANDBOX_SCRIPT`・`PROBE_PROGRAM`・`B_STATE`・`B_RELEASE`・`B_ACCOUNT`・
   `OPERATOR_STATE`・`OPERATOR_RELEASE`・`OPERATOR_ACCOUNT` を同じ引数で渡す。
 
 ### 2.4 `check-ops-r1-leak.py --runtime-probe`（漏洩検査の可読判定を probe で置き換える）
 
 ```sh
 python3 -I scripts/campaign/check-ops-r1-leak.py --private <private.json> --scan <dir> \
-  --deny-readable <path> ... --runtime-probe <B の probe.json> --runtime-probe <L1 の probe.json> --out <json>
+  --deny-readable-file <deny list> --eval-root <EVAL_ROOT> --runtime-probe <B の probe.json> --runtime-probe <L1 の probe.json> --out <json>
 ```
 
 - probe に載った path は host の mode ではなく probe の結果で判定する。
-- `same_uid` の limit を外す（`same_uid_limit: false`、`same_uid_cleared_by: runtime_probe_and_l1`）のは、runtime と L1 の両方の probe で拒否され、
-  かつ `owned_by_run_uid`（host の stat で、path と祖先のうち run の uid が持ち主のもの）が空の path だけ。
-  `owned_by_run_uid` が空でなければ、両方の probe が拒否でも `same_uid` の limit を残し、`--canary` が無ければ `same_uid_without_canary` の hit（exit 1）になる。
+- `--deny-readable-file` は 1 行 1 絶対 path の file（複数可、件数に上限は無い。旧 `--deny-readable <path>` は入力の誤り）。結果に file の sha256 と件数が出る。
+- `same_uid` の limit は、`--eval-root` を渡すと ops-r2 の規則（canary は要らない）で外す。次の 4 条件がすべて揃う path が
+  `same_uid_limit: false`・`same_uid_cleared_by: runtime_probe_and_l1` になる。
+  (1) runtime の probe（l1 以外）の全部がその path を持ち、どれも `readable`・`listable` が false、(2) その runtime の probe の全部が `ok=true` で `mounts_outside_allow` が空、
+  (3) L1 の probe が渡され、その全 path が `readable`・`listable` とも false、(4) path が `--eval-root` の下なら、L1 の probe にその path があり `owned_by_run_uid` が空。
+  1 つでも欠ければ limit を残し、`--canary` が無ければ `same_uid_without_canary` の hit（exit 1）になる。`--eval-root` を渡さない入力は ops-r1 の規則（canary 必須）のまま。
+  canary を置かない理由と根拠は ADR 2026-10-31-ops-r2-preflight-fixes D5。
+- L1 の probe（`principal: l1`）は包まずに走るので `mounts_outside_allow` が出るのが正しい。件数は `l1_mounts_outside_allow` に残し、hit にしない（付記 G6、ADR D6）。
 - どれかの probe で読めた path、許可外の mount source、`ok=false` の probe は `deny_readable` の hit（exit 1）。詳細は [ops-r1 漏洩検査](ops-r1-leak-check.md)。
 
 ## 3. 実 bwrap の試験は userns が使えない場所では skip になる
@@ -327,14 +337,14 @@ login 後に試し起動すると `projects/` ができるので、できたら�
 
 ```sh
 cat /var/lib/celeris-eval/private/final/<case>/private.json        # Permission denied
-celeris-campaign probe-read --principal l1 \
-  --deny /var/lib/celeris-eval/private/final/<case>/private.json --out l1.json; echo "exit=$?"
+printf '%s\n' /var/lib/celeris-eval/private/final/<case>/private.json > l1-deny.list
+celeris-campaign probe-read --principal l1 --deny-readable-file l1-deny.list --out l1.json; echo "exit=$?"
 ```
 
 期待: `exit=0`、`l1.json` の該当 path が `readable: false`・`listable: false`。`--principal l1` の判定は path だけで決まり、
-`mounts_outside_allow` は報告に出る（bwrap の外なので host の mount が並ぶ）が判定に入れない（ADR 付記 G6）。exit 1 なら L1 が成り立っていない（持ち主・mode・ACL・group を §4.1〜4.2 の確認で見直す）。
+`mounts_outside_allow` は報告に出る（bwrap の外なので host の mount が並ぶ。2026-10-31 の実機で 19 件）が判定に入れず、漏洩検査も hit にしない（ADR 付記 G6、ADR 2026-10-31-ops-r2-preflight-fixes D6）。exit 1 なら L1 が成り立っていない（持ち主・mode・ACL・group を §4.1〜4.2 の確認で見直す）。
 probe の拒否だけでは L1 の確認にならない（同じ uid の chmod 000 でも拒否になる）。
-その後、正式試行の deny list で `celeris-campaign preflight --deny-list ... --eval-root /var/lib/celeris-eval ...` を実行し、
+その後、正式試行の deny list で `celeris-campaign preflight --deny-list ... --eval-root /var/lib/celeris-eval ...`（引数の全体は [K2 の開始前チェック §3](ops-r2-k2-preflight.md#3-隔離-preflightdeny_readable-が-0-件)） を実行し、
 `deny_readable` の missing が 0 件であることを確かめる。`deny_readable:L1:<path>:<理由> ...` が出たら、§2.3 の表の理由と、
 示された要素の uid・mode を直す。
 

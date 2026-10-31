@@ -17,14 +17,15 @@ python3 -I scripts/campaign/check-ops-r1-leak.py \
   --canary <private の写しに入れた canary 文字列> \
   --scan <公開入力> --scan <KB snapshot> --scan <memory> --scan <CoS 初期会話> \
   --scan <外部 operator への材料> --scan <run の作業場所> \
-  --deny-readable <private.json> --deny-readable <旧 bundle の写し> \
+  --deny-readable-file <deny list> [--eval-root <EVAL_ROOT>] \
   [--allow-string <公開入力にも載る文字列>] [--run-uid <uid> --run-gid <gid>] \
   [--runtime-probe <主体の probe JSON> --runtime-probe <L1 の probe JSON>] \
   --out <結果 JSON>
 ```
 
 exit 0 は見つからなかったこと、1 は見つかったこと（または代わりの検出が無いこと）、2 は入力の誤り（scan 先が無い、hash が 64 桁の 16 進でない、probe JSON の schema が違う等）。
-`--private`・`--forbidden-sha`・`--canary`・`--scan`・`--deny-readable`・`--runtime-probe` は何度でも書ける。
+`--private`・`--forbidden-sha`・`--canary`・`--scan`・`--deny-readable-file`・`--runtime-probe` は何度でも書ける。
+`--deny-readable-file` は UTF-8・1 行 1 絶対 path（空行は飛ばす）の file で、件数に上限は無い（15,000 件で試験済み）。絶対 path でない行・NUL を含む行は exit 2。旧い `--deny-readable` は exit 2。結果に file の sha256 と件数（`checked.deny_readable_files`）を書く。
 結果 JSON は scan 先の外に置く（`checked.private[].sha256` は private.json の hash なので、scan 先に置くと次の検査で漏洩として数える。`--out` の path だけは scan から外す）。
 
 ## 2. 何を見つけるか
@@ -36,8 +37,8 @@ exit 0 は見つからなかったこと、1 は見つかったこと（また�
 | `content` / `canary` | `--canary` の文字列が現れる |
 | `content` / `forbidden_sha256` | `--forbidden-sha` の 16 進が現れる |
 | `file_sha256` | file（または archive の member）の内容の sha256 が private.json か `--forbidden-sha` と一致する（改名した写し） |
-| `symlink` | scan 先の symlink が private.json・`--deny-readable` の path を指すか、それを含むディレクトリを指す |
-| `deny_readable` | `--deny-readable` の path（ディレクトリなら中の file も）が run の uid/gid から読める（probe に載らない path。host の判定） |
+| `symlink` | scan 先の symlink が private.json・`--deny-readable-file` の path を指すか、それを含むディレクトリを指す |
+| `deny_readable` | `--deny-readable-file` の path（ディレクトリなら中の file も）が run の uid/gid から読める（probe に載らない path。host の判定） |
 | `deny_readable`（`source: runtime_probe`） | `--runtime-probe` のどれかで `readable=true` の path がある、`mounts_outside_allow` が空でない（`member: mounts_outside_allow`）、`ok=false`（`member: ok=false`）。hit に `principal` と `probe_uid` を書く |
 | `same_uid_without_canary` | 同じ uid の限界（§4）がある path があるのに `--canary` が無い |
 
@@ -60,7 +61,7 @@ probe は試行の主体を起動するのと同じ包み方（A は `Sandbox::a
 
 - `principal` が `l1` か `l1:` で始まる probe は **L1 の確認**（人の uid の process から包まずに `EVAL_ROOT` の private を開いた結果）として扱う。
   それ以外は **runtime の確認**（その主体の包み方の中から開いた結果）。主体ごとに 1 file を渡す。
-- `--deny-readable` の path が probe の `paths[].path` に載っていれば（文字列の正規化か host の realpath が一致）、host の mode ではなく
+- `--deny-readable-file` の path が probe の `paths[].path` に載っていれば（文字列の正規化か host の realpath が一致）、host の mode ではなく
   probe の `readable`・`listable` で判定する。`checked.deny_readable[]` は `method: runtime_probe` と、載った probe ごとの結果（`probes`）、
   `runtime_denied`（runtime の probe が 1 つ以上あり、どれも `readable=false`）、`l1_denied`（L1 の probe について同じ）を持つ。
 - probe で判定した path も、host 側の stat で path と祖先のうち run の uid が持ち主のもの（root の run なら全部）を
@@ -71,8 +72,15 @@ probe は試行の主体を起動するのと同じ包み方（A は `Sandbox::a
   probe では拒否に見えるが、run は chmod・rename で読めるようにできるので、隔離とは数えない。
   片方の probe だけが拒否のときも持ち主の連鎖から `same_uid` を判定する。どちらの場合も canary が無ければ `same_uid_without_canary` の hit になる。
 - probe に載らない path は今までどおり host から判定する（`limits` に `host_view` が残る。全部が probe で判定されたときは書かない）。
-- hit になるのは、どの probe（L1 を含む）でも `readable=true` の path・空でない `mounts_outside_allow`・`ok=false`。
-  `--deny-readable` に無い path でも probe が読めたと書いていれば hit にする。`listable` は結果に書くが、それだけでは hit にしない。
+- hit になるのは、どの probe（L1 を含む）でも `readable=true` の path、runtime の probe の空でない `mounts_outside_allow` と `ok=false`。
+  L1 の probe は包まずに走り host の mount が見えるので、`mounts_outside_allow` は hit にせず `checked.l1_mounts_outside_allow` に残す
+  （ADR 2026-10-31-ops-r2-preflight-fixes D6）。L1 の `ok=false` は、`readable=true` でも mount でも説明できないときだけ hit。
+- **ops-r2 の規則**（`--eval-root` を渡したとき。ADR 2026-10-31-ops-r2-preflight-fixes D5）: ops-r2 は canary を置けない。
+  次の 4 条件が揃った path は `same_uid_limit: false`・`same_uid_cleared_by: runtime_probe_and_l1`。
+  (1) runtime の probe の全部がその path を持ち、どれも `readable=false`・`listable=false`。(2) runtime の probe の全部が `ok=true` で `mounts_outside_allow` が空。
+  (3) L1 の probe があり、その全 path が `readable=false`・`listable=false`。(4) path が `--eval-root` の下なら、L1 の probe にその path があり `owned_by_run_uid` が空。
+  1 つでも欠ければ `same_uid` の limit を残し、canary が無ければ `same_uid_without_canary` の hit。`--eval-root` が無い入力（ops-r1）は上の従来の規則のまま。
+  deny list に無い path でも probe が読めたと書いていれば hit にする。`listable` は結果に書くが、それだけでは hit にしない。
 - canary の出現検査は probe があっても行う（読んだ後に書き出した痕跡を見る副次の証拠）。
 - 結果の `checked.runtime_probe[]` に probe ごとの file・principal・uid・L1 か・ok・path 数・readable の数・mounts_outside_allow の数を書く。
 

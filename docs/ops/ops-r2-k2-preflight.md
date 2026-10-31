@@ -76,6 +76,9 @@ a と operator の dir は渡せない。旧い引数名は使えない（usage 
 sh scripts/campaign/ops-r1-measure-config.sh --state "$S" --release-dir "$R" --models <cos-opus|all-sonnet> \
   --policy-version 10 --b-account-dir /local/celeris/measure-accounts/b --claude-bin "$CLAUDE" \
   --clusters-from ~/.config/celeris/config.toml --out "$S/daemon.toml"
+KB0=/local/celeris/data/measure-bin/kb-init-<sha12>   # 固定の初期 KB（作業場所の外、人の uid 持ち）
+[ -e "$KB0" ] || cp -R "$S/kb" "$KB0"                  # 生成直後の $S/kb（skills/<name>/ だけ）を写す。daemon 起動前に 1 度だけ
+diff -r "$KB0" "$S/kb"; echo "exit=$?"                # exit=0（同じ中身）
 grep -c 'principal = "human:' "$S/daemon.toml"            # 0
 grep -c 'principal = "operator:ops-r1"' "$S/daemon.toml"  # 1
 grep -A1 '^\[cos.triage\]' "$S/daemon.toml"               # policy_version = "10"
@@ -100,27 +103,34 @@ bwrap の引数に並べず、file のまま包みの中へ渡す）。最低限
 - 本番 KB の root の中の file、`~/.claude` と `~/.config/celeris` の中の file、測定用以外の account dir の中の file
 
 dir ではなく中の file を書く（親を一覧できるだけで hit になる）。deny list は絶対 path でない行・NUL を含む行があると入力の誤りで止まる。
-`sha256sum "$P/deny.list"` を承認票の deny list の欄と照合し、steps に残す。
+deny list は作業場所（`/local/celeris/data/workspaces` の下。task の artifacts を含む）の外に置く。`ops-r2-sandbox.sh` は workspaces の下の path を
+`--ro` で拒む（exit 2）ので、`$P` に置いた deny list は B の包みへ渡せない。置き場所は `DL=/local/celeris/data/measure-bin/deny-$case.list` に決める。
+記録用の写しは `cp "$DL" "$P/deny.list"` で `$P` に残す（包みに渡すのは `$DL`）。
+`sha256sum "$DL"` を承認票の deny list の欄と照合し、steps に残す。
 
 K2 ops-r2 の manifest は `crates/campaign/fixtures/frozen-manifests/ops-r2-k2.json`（契約 revision `main-4-ops-r2`）。
-`preflight` だけがこれを受ける（`run`・`dry-run` 等の投入系は拒否する）。api-url・token-env・task-template・materials-src・kb-src・canaries・cap-env は要らない。
-`--repo-src`（K2 の初期 repo）・`--inputs-src`（外部入力）・`--measure-config`・`--normal-config` は実物を渡す。
+`preflight` だけがこれを受ける（`run`・`dry-run` 等の投入系は拒否する）。api-url・token-env・task-template・materials-src・canaries・cap-env は要らない。
+`--repo-src`（K2 の初期 repo）・`--inputs-src`（外部入力）・`--measure-config`・`--normal-config`・`--kb-src`（§2.2 の `$KB0`）は実物を渡す。
+`--kb-src` は要る。`--measure-config` の `[knowledge] root`（`$S/kb`）は生成時に skills を入れるので空でなく、preflight は
+「空か、`--kb-src` と同じ中身」でなければ止まる（`measurement knowledge root ... (--kb-src)`）。
 
 ```sh
 "$CC" preflight --manifest crates/campaign/fixtures/frozen-manifests/ops-r2-k2.json \
-  --repo-src <K2 の初期 repo> --inputs-src <外部入力の dir> \
+  --repo-src <K2 の初期 repo> --inputs-src <外部入力の dir> --kb-src "$KB0" \
   --measure-config "$S/daemon.toml" --normal-config ~/.config/celeris/config.toml \
   --a-program "$CLAUDE" --claude "$CLAUDE" --claude-sha256 "$CLAUDE_SHA" \
-  --deny-list "$P/deny.list" --eval-root "$EVAL_ROOT" \
+  --deny-list "$DL" --eval-root "$EVAL_ROOT" \
   --sandbox-script scripts/campaign/ops-r2-sandbox.sh --probe-program "$CC" \
-  --b-state "$S" --b-release "$R" --b-account /local/celeris/measure-accounts/b --b-ro "$(dirname "$CLAUDE")" \
+  --b-state "$S" --b-release "$R" --b-account /local/celeris/measure-accounts/b --b-ro "$(dirname "$CLAUDE")" --b-ro "$SSHCFG_DIR" --b-socket "$MUX" \
   --operator-state "$O" --operator-release "$R" --operator-account <operator 用 account dir> --operator-ro "$(dirname "$CLAUDE")"
 echo "exit=$?"
 ```
 
 期待: `exit=0` で、`missing` が 0 件（特に `deny_readable:` で始まる行が 0 件）。
 `--claude` と `--claude-sha256` は組で、片方だけだと `deny_readable:claude:...` で止まる。copy の sha256 が違っても止まる。
-`--b-ro`・`--operator-ro` は実際に包みへ渡す `--ro` と同じにする（preflight は同じ許可表で probe する）。
+`--b-ro`・`--operator-ro` は実際に包みへ渡す `--ro` と、`--b-socket`・`--operator-socket` は `--socket` と同じにする（preflight は同じ許可表で probe する）。
+`MUX` は人が開いた sirius の ssh master の socket（例 `/run/user/1001/ssh-mux-rmaeda@130.158.241.2:22`）、`SSHCFG_DIR` は sirius だけを書いた ssh config の dir
+（`/local/celeris/data/measure-bin/ssh`）。socket は `--ro` に混ぜない（`--ro` は通常 file と dir だけを受ける）。
 B の account は pool の symlink ではなく b の実 path（`ops-r2-sandbox.sh --account` に渡す値）を渡す。
 `scripts/campaign/measure-launcher.sh preflight` は `--claude`・`--claude-sha256` を渡す欄が無いので、ops-r2 の preflight には使わず、上の command を直接実行する。
 出た行の読み方は [入力隔離 §2.3](ops-r2-isolation.md#23-celeris-campaign-preflight---deny-listdeny_readable-で止める)。
@@ -140,24 +150,28 @@ B の probe には preflight が渡すのと同じ `--allow` を付ける。`--a
 
 ```sh
 ALLOW="tmpfs proc devpts mqueue"
-for d in /usr /bin /sbin /lib /lib64 /etc /dev "$R" "$S" /local/celeris/measure-accounts/b "$(dirname "$CLAUDE")" "$CC" "$P/deny.list"; do
+for d in /usr /bin /sbin /lib /lib64 /etc "$R" "$S" /local/celeris/measure-accounts/b "$(dirname "$CLAUDE")" "$CC" "$DL" "$SSHCFG_DIR" "$MUX"; do
   ALLOW="$ALLOW $(findmnt -n -o SOURCE --target "$d" | sed 's/\[.*//')"
 done
+# --dev と同じ規則: /dev とその下に載る mount の source をすべて足す（/dev だけを見ると udev 等が落ちて probe が exit 1）
+ALLOW="$ALLOW $(findmnt -n -r -o TARGET,SOURCE | awk '$1 == "/dev" || index($1, "/dev/") == 1 {sub(/\[.*/, "", $2); print $2}')"
 set --; for a in $ALLOW; do set -- "$@" --allow "$a"; done
 
 sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /local/celeris/measure-accounts/b \
-  --ro "$CC" --ro "$P/deny.list" --ro "$(dirname "$CLAUDE")" -- \
-  "$CC" probe-read --principal B --deny-readable-file "$P/deny.list" "$@" --out "$S/probe-B.json"   # exit 0
+  --ro "$CC" --ro "$DL" --ro "$(dirname "$CLAUDE")" --ro "$SSHCFG_DIR" --socket "$MUX" -- \
+  "$CC" probe-read --principal B --deny-readable-file "$DL" "$@" --out "$S/probe-B.json"   # exit 0
 
 printf '%s\n' "$EVAL_ROOT/private/final/$case/private.json" > "$P/l1-deny.list"
 "$CC" probe-read --principal l1 --deny-readable-file "$P/l1-deny.list" --out "$P/probe-l1.json"   # exit 0
 
 python3 -I scripts/campaign/check-ops-r1-leak.py --private "$EVAL_ROOT/private/final/$case/private.json" \
-  --scan <試行の出力の写し> --deny-readable-file "$P/deny.list" --eval-root "$EVAL_ROOT" \
+  --scan <試行の出力の写し> --deny-readable-file "$DL" --eval-root "$EVAL_ROOT" --run-uid "$(id -u rmaeda)" --run-gid "$(id -g rmaeda)" \
   --runtime-probe "$S/probe-B.json" --runtime-probe "$P/probe-l1.json" --out <outbox>/leak-pre.json; echo "exit=$?"
 ```
 
-`findmnt` の source の取り方は preflight（`allow_sources`）と同じ考え方の手書きで、実機で通した記録は無い（未確認）。許可表の食い違いで B の probe が
+`--run-uid`・`--run-gid` は測定の run の uid（人の uid）を渡す。漏洩検査を評価器の uid（celeris-eval）で走らせると、既定では run の uid が
+celeris-eval になり、人の uid の持ち物の判定（`owned_by_run_uid`）が外れる。
+`findmnt` の source の取り方は preflight（`allow_sources`。`--dev` は /dev の下の mount の source をすべて足す）と同じ規則の手書きで、実機で通した記録は無い（未確認）。許可表の食い違いで B の probe が
 `mounts_outside_allow` を出したら、先に §3 の preflight の B の結果（同じ許可表で判定する）と見比べる。
 
 期待: probe 2 本が exit 0、漏洩検査が `exit=0`・`pass: true`。
@@ -187,16 +201,22 @@ sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /loc
 
 ### 4.1 sirius への接続（B の包みの中から）
 
-K2 の B は sirius で計測する。測定 daemon は bwrap の中で動き、HOME は `$S/home`、許可表に `~/.ssh` も ssh の control master の socket も無い。
-bwrap の中から sirius に届くかは未確認。試行の前に operator が確かめ、結果を steps に記録する。
+K2 の B は sirius で計測する。人の決定（2026-10-31）で、人が開いた既存の sirius の ssh master の socket（`$MUX`）と、sirius だけを書いた
+専用の ssh config（`$SSHCFG_DIR/config`）を A・B の包みに見せる。B の包みには socket を `--socket "$MUX"`（socket の path だけを bind、親 dir は見せない）、
+config の dir を `--ro "$SSHCFG_DIR"` で渡す。`~/.ssh` と `/run/user/1001` は渡さない。試行の前に operator が確かめ、結果を steps に記録する。
 
 ```sh
-sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /local/celeris/measure-accounts/b -- \
-  /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=10 <sirius の host 名> 'echo ok; command -v qsub qstat'; echo "exit=$?"
+sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /local/celeris/measure-accounts/b \
+  --ro "$SSHCFG_DIR" --socket "$MUX" -- \
+  /usr/bin/ssh -F "$SSHCFG_DIR/config" -o BatchMode=yes -o ConnectTimeout=10 sirius 'echo ok; command -v qsub qstat'; echo "exit=$?"
 ```
 
+userns の限界: 包みの中では host の root と人以外の uid が 65534（nobody）に見える。ssh は持ち主が自分でも root でもない config を
+`Bad owner or permissions` で拒むので、`$SSHCFG_DIR/config` は人の uid の持ち物にし（root 持ちにしない）、group・other に書き込み権を付けない。
+`/local/celeris/data/measure-bin`（claude の copy・固定 KB・ssh config・deny list を置く dir）の親も人の uid 持ちで、group・other に書き込み権を付けない。
+
 期待: `exit=0`、`ok` と qsub・qstat の path が出る。exit が 0 でない、または qsub・qstat が出なければ、**試行を始めず、測定 daemon も起動せず、exit code と stderr の 1 行目を添えて人に返す**。
-operator は許可表に ssh の鍵・config・socket を足さない（credential を試行の主体に見せるかは人が決める）。`[[clusters]]` の ssh 設定（`--clusters-from` で写した値）が
+operator は上の socket と config 以外の ssh の鍵・config・socket を許可表に足さない（credential を試行の主体に見せるかは人が決める）。`[[clusters]]` の ssh 設定（`--clusters-from` で写した値）が
 `$S/home` の下の config を要るなら、その形で届くかも同じ command で見える。
 
 ## 5. operator principal と出典

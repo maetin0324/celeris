@@ -197,3 +197,16 @@ case.json と manifest の参照が違えば `graders` で止まる、入力 man
 - `--ro` は通常 file・dir だけを受け、socket を混ぜない。
 - preflight は `--b-socket`・`--operator-socket` を `ScriptSandbox.sockets` として script に渡す。許可表（`allow_sources`）は script の `--print-args` から作るので、socket の載る filesystem が許可表に入る。deny_readable の判定は変えない。
 - 試験: `crates/campaign/tests/ops_r2_socket.rs`。
+
+## 付記 D-docs（2026-10-31、task 01M690TDXQ4GX9A2Z0AVBKTB2D）実機の preflight で見つかった手順書と道具の食い違い
+
+どれも道具を正とし、手順書（`docs/ops/ops-r2-k2-preflight.md`・`docs/ops/ops-r2-isolation.md`）を道具に合わせた。道具の検査は緩めない。
+
+1. `--kb-src`: 道具に合わせた。`measure_env::check_config` は測定 KB root が「空か `--kb-src` と同じ中身」でなければ止まり、
+   `ops-r1-measure-config.sh` は root に `skills/<name>/` を作るので空にならない。手順書は「kb-src は要らない」を消し、生成直後の `$S/kb` を
+   `/local/celeris/data/measure-bin/kb-init-<sha12>` へ 1 度だけ写して固定の初期 KB とし、以後の試行と preflight はそれを `--kb-src` に渡す（operator が実機でした方法）。
+2. deny list の置き場所: 道具に合わせた。`ops-r2-sandbox.sh` の workspaces 拒否は残し、deny list は `/local/celeris/data/measure-bin/deny-<case>.list` に置く。`$P` には記録用の写しだけを置く。
+3. B の probe の `--allow`: preflight（`allow_sources` の `--dev` 規則: /dev とその下の mount の source をすべて足す）に合わせた。
+4. 漏洩検査の run uid: 道具に合わせ、手順書で `--run-uid`・`--run-gid` に人の uid を渡す。
+5. measure-bin の持ち主と ssh: userns の中では人以外の uid が 65534 に見え、ssh は root 持ち（に見える）config を拒む。この限界を手順書に書き、config と親 dir は人の uid 持ちにする。
+6. socket: 付記 D-socket の `--socket`・`--b-socket` を手順書の preflight・probe・§4.1 の sirius 確認に入れた。

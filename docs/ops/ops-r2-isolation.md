@@ -39,18 +39,21 @@ celeris-campaign probe-read --principal <名前> --deny-readable-file <deny list
   file の path を open して 1 byte 読み、親 dir を readdir する。`/proc/self/mountinfo` の source が `--allow` の外にあれば記録する。`--allow` は host の mount の source（device 名）で、包みに bind する path の mount の source と
   `tmpfs`・`proc`・`devpts`・`mqueue`。B の probe は preflight と同じ `--allow` を付ける（付けないと包みの中の mount がすべて `mounts_outside_allow` に出る）。
 - 出力は schema `celeris.runtime-probe/1` の JSON（stdout。`--out` があれば file にも）。読めた・一覧できた・許可外の source があれば exit 1。
-- 主体の包み方の中で走らせる。例: `ops-r2-sandbox.sh ... --ro <probe binary> --ro <deny list> -- <probe binary> probe-read --principal B --deny-readable-file <deny list> --allow ...`（[K2 の開始前チェック §4](ops-r2-k2-preflight.md#4-漏洩検査runtime-の-probe-と-l1-の-probe-を渡す)）。
+- 主体の包み方の中で走らせる。例: `ops-r2-sandbox.sh ... --ro <probe binary> --ro <作業場所の外の deny list> [--socket <socket>] -- <probe binary> probe-read --principal B --deny-readable-file <deny list> --allow ...`（[K2 の開始前チェック §4](ops-r2-k2-preflight.md#4-漏洩検査runtime-の-probe-と-l1-の-probe-を渡す)）。
 - principal が `l1` か `l1:` で始まる probe は、人の uid の process から包まずに開いた L1 の確認として扱われる。
 
 ### 2.2 `scripts/campaign/ops-r2-sandbox.sh`（B・operator の L2）
 
 ```sh
 sh scripts/campaign/ops-r2-sandbox.sh --state <試行の state> --release <release dir> \
-  --account <測定専用 account dir> [--ro <追加の ro path> ...] [--print-args] -- <command> [args...]
+  --account <測定専用 account dir> [--ro <追加の ro path> ...] [--socket <unix socket> ...] [--print-args] -- <command> [args...]
 ```
 
 - mount は ro の `/usr` `/bin` `/sbin` `/lib` `/lib64` `/etc`・release dir・`--ro`、rw の `--state` と account dir、tmpfs の `/tmp`、新しい `/proc` と `/dev` だけ。
   HOME は `--state/home`、環境変数は PATH と HOME だけ。network は共有する。
+- `--ro` は通常 file と dir だけを受ける。unix socket は `--socket` で 1 つずつ渡す（`test -S` が通る path だけ。socket の path そのものだけを `--bind` し、親 dir は見せない）。
+  socket 以外を `--socket` に渡すと exit 2。preflight の `--b-socket`・`--operator-socket` は同じ値を包みに渡す。
+- workspaces（`/local/celeris/data/workspaces`）の下の path は `--ro` でも拒む。deny list は作業場所の外（`/local/celeris/data/measure-bin`）に置く。
 - `--print-args` は実行と同じ bwrap 引数を 1 行 1 引数で出し、bwrap を起動しない（preflight もこれで許可表を得る）。
 - 人の `~/.claude`・`~/.config/celeris`・本番 state・workspaces・repo clone と、それらの祖先を指定すると exit 2。
   `projects/` か `memory/` を持つ account dir も exit 2（過去の transcript を持つ account は渡せない）。

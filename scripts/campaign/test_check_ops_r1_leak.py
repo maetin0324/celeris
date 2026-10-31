@@ -69,7 +69,18 @@ class LeakCheckTest(unittest.TestCase):
                 "--scan", scan or self.scan, "--out", out or self.out]
         if canary:
             args += ["--canary", CANARY]
-        args += list(extra)
+        extra = list(extra)
+        denies = []
+        while "--deny-readable" in extra:  # 試験の書きやすさのため。実体は deny list の file で渡す
+            i = extra.index("--deny-readable")
+            denies.append(extra[i + 1])
+            del extra[i:i + 2]
+        if denies:
+            self.deny_file = os.path.join(self.tmp, "deny.list")
+            with open(self.deny_file, "w", encoding="utf-8") as f:
+                f.write("\n".join(denies) + "\n")
+            args += ["--deny-readable-file", self.deny_file]
+        args += extra
         p = subprocess.run(args, capture_output=True, text=True)
         with open(out or self.out, encoding="utf-8") as f:
             doc = json.load(f)
@@ -461,7 +472,7 @@ class LeakCheckTest(unittest.TestCase):
         hits = [h for h in doc["hits"] if h["kind"] == "deny_readable"]
         self.assertEqual({(h["principal"], h["path"]) for h in hits if "member" not in h},
                          {("l1", "/eval/private/k4/private.json")})
-        self.assertTrue(any(h.get("member") == "ok=false" for h in hits))  # 既定の fixture は ok=false も返す
+        self.assertFalse(any(h.get("member") == "ok=false" for h in hits))  # readable で説明できる ok=false は重ねない
 
     def test_probe_mounts_outside_allow_is_hit(self):
         rt = self.probe("rt.json", "operator", [(self.private, False, False)],
@@ -500,6 +511,154 @@ class LeakCheckTest(unittest.TestCase):
             f.write("not json")
         rc, _, _ = self.check("--runtime-probe", os.path.join(self.tmp, "nojson.json"))
         self.assertEqual(rc, 2)
+
+    # ---- ops-r2: L1 の mount・same_uid の新規則・deny list file（ADR 2026-10-31-ops-r2-preflight-fixes D3・D5・D6）
+
+    def r2(self, paths, rt_paths=None, l1_paths=None, rt_kw=None, l1_kw=None, eval_root=None, canary=False,
+           extra=()):
+        rt = self.probe("rt.json", "b-daemon", [(p, False, False) for p in (rt_paths if rt_paths is not None else paths)],
+                        **(rt_kw or {}))
+        l1 = self.probe("l1.json", "l1", [(p, False, False) for p in (l1_paths if l1_paths is not None else paths)],
+                        **(l1_kw or {}))
+        return self.check("--deny-readable", *paths, "--runtime-probe", rt, "--runtime-probe", l1,
+                          "--eval-root", eval_root or os.path.join(self.tmp, "eval-root"), *extra, canary=canary)
+
+    L1_MOUNTS = [{"source": "/home/rmaeda", "target": "/home/rmaeda"}]
+
+    def test_l1_mounts_outside_allow_is_not_a_hit(self):
+        l1 = self.probe("l1.json", "l1", [(self.private, False, False)], mounts=self.L1_MOUNTS)
+        rt = self.probe("rt.json", "b-daemon", [(self.private, False, False)])
+        rc, doc, _ = self.check("--deny-readable", self.private, "--runtime-probe", rt, "--runtime-probe", l1)
+        self.assertEqual(rc, 0, json.dumps(doc, ensure_ascii=False))
+        self.assertFalse([h for h in doc["hits"] if h["kind"] == "deny_readable"])
+        self.assertEqual(doc["checked"]["l1_mounts_outside_allow"][0]["count"], 1)
+        self.assertEqual(doc["checked"]["runtime_probe"][1]["mounts_outside_allow"], 1)
+
+    def test_l1_ok_false_unexplained_is_hit(self):
+        l1 = self.probe("l1.json", "l1", [(self.private, False, False)], ok=False)
+        rc, doc, _ = self.check("--runtime-probe", l1)
+        self.assertEqual(rc, 1)
+
+    def test_ops_r2_same_uid_cleared_by_probes_without_canary(self):
+        # run の uid が持ち主の path でも、EVAL_ROOT の外なら runtime と L1 の合格で外す（canary なし）
+        rc, doc, _ = self.r2([self.private], l1_kw={"mounts": self.L1_MOUNTS})
+        self.assertEqual(rc, 0, json.dumps(doc, ensure_ascii=False))
+        entry = doc["checked"]["deny_readable"][0]
+        self.assertTrue(entry["owned_by_run_uid"] or os.geteuid() == 0)
+        self.assertFalse(entry["same_uid_limit"])
+        self.assertEqual(entry["same_uid_cleared_by"], "runtime_probe_and_l1")
+        self.assertNotIn("same_uid", {x["kind"] for x in doc["limits"]})
+        self.assertNotIn("same_uid_without_canary", {h["kind"] for h in doc["hits"]})
+
+    def test_ops_r2_eval_root_keeps_owned_condition(self):
+        rc, doc, _ = self.r2([self.private], eval_root=self.priv_dir)
+        entry = doc["checked"]["deny_readable"][0]
+        if os.geteuid() == 0:
+            self.skipTest("root は全部の path を持ち主として扱う")
+        self.assertEqual(rc, 1)
+        self.assertTrue(entry["same_uid_limit"])
+        self.assertIn("same_uid_without_canary", {h["kind"] for h in doc["hits"]})
+        # 持ち主が別の uid なら外れる
+        other = str(os.geteuid() + 12345)
+        rc, doc, _ = self.r2([self.private], eval_root=self.priv_dir, extra=("--run-uid", other, "--run-gid", "54321"))
+        self.assertEqual(rc, 0, json.dumps(doc, ensure_ascii=False))
+
+    def test_ops_r2_failed_probe_does_not_clear(self):
+        cases = {
+            "runtime mounts": dict(rt_kw={"mounts": self.L1_MOUNTS}),
+            "runtime ok=false": dict(rt_kw={"ok": False}),
+            "l1 readable": dict(l1_kw={"entries_readable": True}),
+        }
+        for name, kw in cases.items():
+            with self.subTest(name):
+                if "entries_readable" in (kw.get("l1_kw") or {}):
+                    l1 = self.probe("l1.json", "l1", [(self.private, True, True)], ok=True)
+                    rt = self.probe("rt.json", "b-daemon", [(self.private, False, False)])
+                    rc, doc, _ = self.check("--deny-readable", self.private, "--runtime-probe", rt,
+                                            "--runtime-probe", l1, "--eval-root", os.path.join(self.tmp, "er"),
+                                            canary=False)
+                else:
+                    rc, doc, _ = self.r2([self.private], **kw)
+                self.assertEqual(rc, 1, json.dumps(doc, ensure_ascii=False))
+                entry = doc["checked"]["deny_readable"][0]
+                self.assertTrue(entry["same_uid_limit"])
+                self.assertNotIn("same_uid_cleared_by", entry)
+                self.assertIn("same_uid_without_canary", {h["kind"] for h in doc["hits"]})
+
+    def test_ops_r2_listable_runtime_does_not_clear(self):
+        rt = self.probe("rt.json", "b-daemon", [(self.private, False, True)], ok=True)
+        l1 = self.probe("l1.json", "l1", [(self.private, False, False)])
+        rc, doc, _ = self.check("--deny-readable", self.private, "--runtime-probe", rt, "--runtime-probe", l1,
+                                "--eval-root", os.path.join(self.tmp, "er"), canary=False)
+        self.assertEqual(rc, 1)
+        self.assertNotIn("same_uid_cleared_by", doc["checked"]["deny_readable"][0])
+
+    def test_ops_r2_missing_l1_or_path_missing_in_a_probe_does_not_clear(self):
+        rt = self.probe("rt.json", "b-daemon", [(self.private, False, False)])
+        rc, doc, _ = self.check("--deny-readable", self.private, "--runtime-probe", rt,
+                                "--eval-root", os.path.join(self.tmp, "er"), canary=False)
+        self.assertEqual(rc, 1)
+        self.assertNotIn("same_uid_cleared_by", doc["checked"]["deny_readable"][0])
+        # 2 つ目の runtime probe がその path を持たない
+        rt2 = self.probe("rt2.json", "a-agent", [("/nowhere/else", False, False)])
+        l1 = self.probe("l1.json", "l1", [(self.private, False, False)])
+        rc, doc, _ = self.check("--deny-readable", self.private, "--runtime-probe", rt, "--runtime-probe", rt2,
+                                "--runtime-probe", l1, "--eval-root", os.path.join(self.tmp, "er"), canary=False)
+        self.assertEqual(rc, 1)
+        self.assertNotIn("same_uid_cleared_by", doc["checked"]["deny_readable"][0])
+
+    def test_without_eval_root_keeps_ops_r1_rule(self):
+        # eval-root が無い入力（ops-r1）は L1 の合格だけでは持ち主の path を外さず、canary 無しなら hit のまま
+        rt = self.probe("rt.json", "b-daemon", [(self.private, False, False)])
+        l1 = self.probe("l1.json", "l1", [(self.private, False, False)])
+        rc, doc, _ = self.check("--deny-readable", self.private, "--runtime-probe", rt, "--runtime-probe", l1,
+                                canary=False)
+        if os.geteuid() != 0:
+            self.assertEqual(rc, 1)
+            self.assertIn("same_uid_without_canary", {h["kind"] for h in doc["hits"]})
+
+    def big_deny(self, n):
+        paths = [f"/nonexistent-deny/dir{i % 97}/file{i}" for i in range(n)]
+        lst = os.path.join(self.tmp, "big.list")
+        with open(lst, "w", encoding="utf-8") as f:
+            f.write("\n\n".join(paths) + "\n")
+        return paths, lst
+
+    def test_deny_list_15000_with_probes(self):
+        paths, lst = self.big_deny(15000)
+        rt = self.probe("rt.json", "b-daemon", [(p, False, False) for p in paths])
+        l1 = self.probe("l1.json", "l1", [(p, False, False) for p in paths], mounts=self.L1_MOUNTS)
+        rc, doc, _ = self.check("--deny-readable-file", lst, "--runtime-probe", rt, "--runtime-probe", l1,
+                                "--eval-root", os.path.join(self.tmp, "er"), canary=False)
+        self.assertEqual(rc, 0, json.dumps(doc["hits"][:3], ensure_ascii=False))
+        self.assertEqual(len(doc["checked"]["deny_readable"]), 15000)
+        self.assertEqual(doc["checked"]["deny_readable_files"][0]["paths"], 15000)
+        with open(lst, "rb") as f:
+            self.assertEqual(doc["checked"]["deny_readable_files"][0]["sha256"], hashlib.sha256(f.read()).hexdigest())
+        self.assertTrue(all(d["same_uid_cleared_by"] == "runtime_probe_and_l1" for d in doc["checked"]["deny_readable"]))
+
+    def test_deny_list_15000_without_probes_runs(self):
+        _, lst = self.big_deny(15000)
+        rc, doc, _ = self.check("--deny-readable-file", lst, canary=False)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(doc["checked"]["deny_readable"]), 15000)
+
+    def test_deny_list_file_errors(self):
+        for name, body in (("rel", "relative/path\n"), ("nul", "/a\x00b\n")):
+            lst = os.path.join(self.tmp, f"{name}.list")
+            with open(lst, "w") as f:
+                f.write(body)
+            rc, doc, _ = self.check("--deny-readable-file", lst)
+            self.assertEqual(rc, 2, name)
+        rc, doc, _ = self.check("--deny-readable-file", os.path.join(self.tmp, "none.list"))
+        self.assertEqual(rc, 2)
+
+    def test_old_deny_readable_option_is_input_error(self):
+        p = subprocess.run([sys.executable, "-I", SCRIPT, "--private", self.private, "--scan", self.scan,
+                            "--out", self.out, "--deny-readable", self.private], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 2)
+        with open(self.out, encoding="utf-8") as f:
+            self.assertIn("--deny-readable-file", json.load(f)["error"])
 
     # ---- 入力の誤り
 

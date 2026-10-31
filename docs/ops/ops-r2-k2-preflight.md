@@ -130,14 +130,16 @@ K2 ops-r2 の manifest は `crates/campaign/fixtures/frozen-manifests/ops-r2-k2.
   --a-program "$CLAUDE" --claude "$CLAUDE" --claude-sha256 "$CLAUDE_SHA" \
   --deny-list "$DL" --eval-root "$EVAL_ROOT" \
   --sandbox-script scripts/campaign/ops-r2-sandbox.sh --probe-program "$CC" \
-  --b-state "$S" --b-release "$R" --b-account /local/celeris/measure-accounts/b --b-ro "$(dirname "$CLAUDE")" --b-ro "$SSHCFG_DIR" --b-socket "$MUX" \
+  --b-state "$S" --b-release "$R" --b-account /local/celeris/measure-accounts/b --b-ro "$(dirname "$CLAUDE")" --b-ssh-config "$SSHCFG_DIR/config" --b-socket "$MUX" \
   --operator-state "$O" --operator-release "$R" --operator-account <operator 用 account dir> --operator-ro "$(dirname "$CLAUDE")"
 echo "exit=$?"
 ```
 
 期待: `exit=0` で、`missing` が 0 件（特に `deny_readable:` で始まる行が 0 件）。
 `--claude` と `--claude-sha256` は組で、片方だけだと `deny_readable:claude:...` で止まる。copy の sha256 が違っても止まる。
-`--b-ro`・`--operator-ro` は実際に包みへ渡す `--ro` と、`--b-socket`・`--operator-socket` は `--socket` と同じにする（preflight は同じ許可表で probe する）。
+`--b-ro`・`--operator-ro` は実際に包みへ渡す `--ro` と、`--b-socket`・`--operator-socket` は `--socket` と、`--b-ssh-config`・`--operator-ssh-config` は `--ssh-config` と同じにする
+（preflight は同じ許可表で probe する）。B の値は §6 の daemon の起動の形（`ops-r2-b-daemon-command.sh` が出す `--ro`・`--ssh-config`・`--socket`）と同じにする（付記 D-bssh）。
+`$SSHCFG_DIR` の dir を `--b-ro` で渡さない（daemon の包みには config の file だけが見える）。
 `MUX` は人が開いた sirius の ssh master の socket（例 `/run/user/1001/ssh-mux-rmaeda@130.158.241.2:22`）、`SSHCFG_DIR` は sirius だけを書いた ssh config の dir
 （`/local/celeris/data/measure-bin/ssh`）。socket は `--ro` に混ぜない（`--ro` は通常 file と dir だけを受ける）。
 B の account は pool の symlink ではなく b の実 path（`ops-r2-sandbox.sh --account` に渡す値）を渡す。
@@ -159,7 +161,7 @@ B の probe には preflight が渡すのと同じ `--allow` を付ける。`--a
 
 ```sh
 ALLOW="tmpfs proc devpts mqueue"
-for d in /usr /bin /sbin /lib /lib64 /etc "$R" "$S" /local/celeris/measure-accounts/b "$(dirname "$CLAUDE")" "$CC" "$DL" "$SSHCFG_DIR" "$MUX"; do
+for d in /usr /bin /sbin /lib /lib64 /etc "$R" "$S" /local/celeris/measure-accounts/b "$(dirname "$CLAUDE")" "$CC" "$DL" "$SSHCFG_DIR/config" "$MUX"; do
   ALLOW="$ALLOW $(findmnt -n -o SOURCE --target "$d" | sed 's/\[.*//')"
 done
 # --dev と同じ規則: /dev とその下に載る mount の source をすべて足す（/dev だけを見ると udev 等が落ちて probe が exit 1）
@@ -167,7 +169,7 @@ ALLOW="$ALLOW $(findmnt -n -r -o TARGET,SOURCE | awk '$1 == "/dev" || index($1, 
 set --; for a in $ALLOW; do set -- "$@" --allow "$a"; done
 
 sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /local/celeris/measure-accounts/b \
-  --ro "$CC" --ro "$DL" --ro "$(dirname "$CLAUDE")" --ro "$SSHCFG_DIR" --socket "$MUX" -- \
+  --ro "$CC" --ro "$DL" --ro "$(dirname "$CLAUDE")" --ssh-config "$SSHCFG_DIR/config" --socket "$MUX" -- \
   "$CC" probe-read --principal B --deny-readable-file "$DL" "$@" --out "$S/probe-B.json"   # exit 0
 
 printf '%s\n' "$EVAL_ROOT/private/final/$case/private.json" > "$P/l1-deny.list"
@@ -218,7 +220,7 @@ sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /loc
 
 K2 の B は sirius で計測する。人の決定（2026-10-31）で、人が開いた既存の sirius の ssh master の socket（`$MUX`）と、sirius だけを書いた
 専用の ssh config（`$SSHCFG_DIR/config`）を A・B の包みに見せる。B の包みには socket を `--socket "$MUX"`（socket の path だけを bind、親 dir は見せない）、
-config の dir を `--ro "$SSHCFG_DIR"` で渡す。`~/.ssh` と `/run/user/1001` は渡さない。試行の前に operator が確かめ、結果を steps に記録する。
+config の file を `--ssh-config "$SSHCFG_DIR/config"` で渡す（dir は渡さない）。`~/.ssh` と `/run/user/1001` は渡さない。試行の前に operator が確かめ、結果を steps に記録する。
 
 ```sh
 sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /local/celeris/measure-accounts/b \
@@ -255,15 +257,29 @@ operator は上の socket と config 以外の ssh の鍵・config・socket を�
 ## 6. 測定 daemon の起動と、実験専用 operator session・session-map の準備
 
 測定 daemon は B の包み（`ops-r2-sandbox.sh`）の中で起動する。§3 の preflight と §4 の漏洩検査が通った後、§4.1 が通った後にだけ行う。
+種は §6.1 で `$S/seed` に置いておく。起動 command は `ops-r2-b-daemon-command.sh` が 1 行出し（付記 D-bstart）、人が別の端末で実行する。script は何も起動しない。
 
 ```sh
-sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /local/celeris/measure-accounts/b \
-  --ro "$(dirname "$CLAUDE")" --ssh-config "$SSHCFG_DIR/config" --socket "$MUX" -- \
-  sh -c "sh $S/bin/ops-r2-seed.sh unpack --seed $S/seed/benchfs.tar --sha256 $SEED_SHA --into $S/work/benchfs && exec $R/bin/celeris --config $S/daemon.toml --release <sha12>" &
+sh scripts/campaign/ops-r2-b-daemon-command.sh --state "$S" --release "$R" --claude-dir "$(dirname "$CLAUDE")" \
+  --account /local/celeris/measure-accounts/b --ssh-config "$SSHCFG_DIR/config" --socket "$MUX" --seed-sha256 "$SEED_SHA"
+# 出た 1 行を別の端末で実行する。続けて:
 curl -s http://127.0.0.1:<測定 daemon の port>/api/v1/health   # cos_policy_version が "10"、release が sha12
 ```
 
-`cos_policy_version` が承認票の方針版と違えば §7-6 で止める。promotion gate が `current does not exist` で exit 4 を返すなら、`$S/release-store` が §2.2 の形でない。この起動の形（包みの中で release の `bin/celeris` が `--config` を読む）を実機で通した記録は無い（未確認）。
+出る command は、包み（`--ro <claude の dir> --ssh-config --socket`、§3 の `--b-*` と同じ形）の中で `ops-r2-seed.sh unpack` が種の sha256 を照合して
+`$S/work/benchfs` に展開し、その後に `$R/bin/celeris --config $S/daemon.toml --release <sha12>` を exec する。展開が失敗すれば daemon は起動しない。
+script は出す前に、種・`$S/bin/ops-r2-seed.sh`・`$S/daemon.toml`・`$R/bin/celeris` と `manifest.json` の sha12・`$S/release-store` の
+`current → releases/<sha12> → $R`（§2.2）・`$S/setup/project.json` の workspace が `$S/work/benchfs` を指すこと・`$S/work/benchfs` が無いか空であることを確かめ、
+欠ければ exit 1 で止まる（引数の誤りは exit 2）。同じ state で 2 回目は出さない（作業ツリーが空でない）。daemon を起動し直すなら新しい state で §2.2 からやり直す。
+
+daemon の起動後、試行専用の案件と案件 CoS thread を作る（[測定 daemon](ops-r1-measure-daemon.md) の手順。`-d @"$S/setup/project.json"` で `POST /api/v1/projects`）。
+`setup/project.json` の `workspace` は `$S/work/benchfs` で（付記 D-bwork）、案件の primary repo（名前 `benchfs`、`.git` が無いので種類は `dir`）になる。
+`GET /api/v1/projects/<id>/repos` で repo が 1 件、`kind` が `dir`、`location.path` が `$S/work/benchfs` であることを確かめる。
+B の CoS が起票する task がこの repo を選ぶと、worker の run には木への symlink が置かれる（worktree を切らない）。A は同じ種を `$S_A/work/benchfs` に展開するので、A と B の初期ツリーは同じになる。
+
+`cos_policy_version` が承認票の方針版と違えば §7-6 で止める。promotion gate が `current does not exist` で exit 4 を返すなら、`$S/release-store` が §2.2 の形でない。
+種の展開から daemon の exec までは試験（`crates/campaign/tests/ops_r2_b_start.rs`。偽の daemon、実 bwrap の包みは `CELERIS_USERNS_TESTS=1` のとき）で確かめた。
+本物の release の `bin/celeris` が包みの中で `--config` を読んで起動すること、B の CoS が実機でこの repo を選んで起票することは実機で通した記録が無い（未確認）。
 
 
 ```sh
@@ -315,7 +331,7 @@ while read -r h f; do case $f in submodules/*.tar) PUB+=(--public-archive "$ASSE
 同じ入力からは同じ bytes の種になる（2026-10-31 に実 asset で 2 回作り、sha256 `233d38cbbc390cd9374287b9eb618e715c4088e4e858f4eb179d1ed6e08b4d60` が一致。展開した木は、bundle の checkout に submodule の tar を
 展開した木と `diff -r` と mode の一覧で差が無かった）。`$P/benchfs-src` は `.git` を持つので `--ro` で包みに渡さない。
 
-展開は包みの中で行う（§6 の B、§6.2 の A）。repo-src を `--ro` で渡さない（`.git` を拒む）。
+展開は包みの中で行う（§6 の B は `ops-r2-b-daemon-command.sh`、§6.2 の A は `ops-r2-trial-a-command.sh`。どちらも `<state>/work/benchfs`）。repo-src を `--ro` で渡さない（`.git` を拒む）。
 
 ### 6.2 試行 A の起動（人が別の端末で実行する）
 

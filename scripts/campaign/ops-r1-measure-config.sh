@@ -25,6 +25,7 @@
 # --port を省くと 127.0.0.1 の空き port を選ぶ。同じ入力（--port を含む）なら daemon.toml は byte 一致する。
 #
 # 書くもの: --out（daemon.toml）と --state の下（token・kb/skills・ws・scratch・setup/project.json）。
+# setup/project.json の workspace は <state>/work/benchfs（B の作業ツリー。ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-bwork）。
 # 試行専用の案件と案件 CoS thread は daemon 起動後に API で作る（setup/project.json の body で
 # POST /api/v1/projects、続けて POST /api/v1/chat/threads {project_id}。docs/ops/ops-r1-measure-daemon.md）。
 # exit: 0 書いた / 1 入力の不備（release dir に bin/celeris が無い等）/ 2 使い方の誤り・本番 path・未知の --models。
@@ -194,9 +195,18 @@ else
     ln -s "$RELEASE_DIR" "$STORE/releases/$RELEASE_SHA12"
     ln -s "releases/$RELEASE_SHA12" "$STORE/current"
 fi
-cat >"$STATE/setup/project.json" <<'EOF'
-{"title": "ops-r2 K2 trial", "request": "ops-r2 K2 pilot の試行専用の案件。人の依頼は案件 CoS thread に入れる。"}
-EOF
+# 案件の作業場所 = B の作業ツリー（付記 D-bwork）。種は daemon の起動前に包みの中でここへ展開する（ops-r2-b-daemon-command.sh）。
+# .git を持たないので POST /projects は repo の種類を dir にし、run には木への symlink を置く。A と同じ <state>/work/benchfs。
+python3 -I - "$STATE/setup/project.json" "$STATE/work/benchfs" <<'PY' || die "cannot write $STATE/setup/project.json"
+import json
+import sys
+body = {"title": "ops-r2 K2 trial",
+        "request": "ops-r2 K2 pilot の試行専用の案件。人の依頼は案件 CoS thread に入れる。",
+        "workspace": {"kind": "local", "path": sys.argv[2]}}
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump(body, f, ensure_ascii=False)
+    f.write("\n")
+PY
 
 # ---- daemon.toml
 if [ "$HARNESS" = real ]; then

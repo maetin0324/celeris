@@ -288,3 +288,29 @@ case.json と manifest の参照が違えば `graders` で止まる、入力 man
 - 試験: `scripts/campaign/test_check_ops_r1_leak.py`（公開 archive の除外・数と長さだけの出力・hash 違いは exit 2・大きく減った警告・canary は外さない）と
   `scripts/campaign/test_ops_r2_seed.py`（submodule 込みの種・入れ子・sha 違い・未登録・file の重なりの拒否・A/B 同 bytes・漏洩検査が submodule の中身を読む）。
   どちらも `scripts/campaign/run-ops-r1-leak-tests.sh` で走る。`crates/campaign/tests/ops_r2_seed.rs` も新しい `make` に合わせる。
+
+## 付記 D-bwork・D-bssh・D-bstart（2026-10-31、task 01M69YZVW2BBP82R6ZY45BMW3J）B の案件 repo・preflight の ssh config・B の daemon の起動
+- 背景 1: `ops-r1-measure-config.sh` が書く `setup/project.json` は `title`・`request` だけで、B の state に展開した種（`<state>/work/benchfs`）を
+  B の Celeris の repo として結ぶ欄が無かった。案件に repo が無いと、B の CoS は coding の task を起票できず（repo 無しは 422）、worker も種の木で作業しない。
+- 背景 2: preflight の隔離検査（`preflight_isolation`）は B・operator の包みに `--ro` と `--socket` しか渡せず、`--ssh-config`（付記 D-ssh）を持つ実際の B の起動の形と
+  bind が違った。preflight が通っても、ssh config の bind を足した包みは検査されていない。
+- 背景 3: §6 の B の起動（包みの中で種を展開し daemon を起動する）は手書きの `sh -c` で、試験が無かった。
+- 決定 D-bwork: B の作業ツリーは A と同じ `<state>/work/benchfs`（`ops-r2-trial-a-command.sh` と同じ path）に固定する。
+  `ops-r1-measure-config.sh` は `setup/project.json` に `"workspace": {"kind": "local", "path": "<state>/work/benchfs"}` を書く（新しい引数は足さない。path は state から決まる）。
+  `POST /api/v1/projects` はこの workspace を案件の primary repo（名前 `benchfs`）にする。木は `.git` を持たないので repo の種類は `dir` になり、
+  run の作業場所には木への symlink が置かれる（worktree を切らない）。B の CoS・worker は種を展開した木そのものを変える。
+  A と B は同じ sha256 の種（付記 D-seed2）を同じ相対 path に展開するので、初期ツリーは同じになる。
+- 決定 D-bssh: preflight に `--b-ssh-config <file>`・`--operator-ssh-config <file>` を足し、`ops-r2-sandbox.sh` に `--ssh-config` として渡す
+  （`--print-args` と probe の起動の両方）。mount の照合の許可表は従来どおり `--print-args` の引数から作るので、ssh config の bind 元も許可表に入る。
+- 決定 D-bstart: `scripts/campaign/ops-r2-b-daemon-command.sh` が B の daemon の起動 command を 1 行出す（A の `ops-r2-trial-a-command.sh` と同じ流儀。script は起動しない）。
+  command は `ops-r2-sandbox.sh --state <S> --release <R> --account <B の account> --ro <claude の dir> --ssh-config <file> --socket <socket>` の中で
+  `ops-r2-seed.sh unpack --into <S>/work/benchfs` の後に `<R>/bin/celeris --config <S>/daemon.toml --release <sha12>` を exec する。
+  script は出す前に次を確かめ、欠ければ exit 1 で止める: 種と `bin/ops-r2-seed.sh` がある、`daemon.toml` がある、`<R>/bin/celeris` が実行でき `manifest.json` に sha12 がある、
+  `<S>/release-store` が `current → releases/<sha12> → <R>` の形（付記 D-store）、`setup/project.json` の workspace が `<S>/work/benchfs` を指す、
+  `<S>/work/benchfs` が無いか空（`unpack` と同じ条件。試行ごとに新しい state で始める）。path は A と同じく単一引用符で 2 段に quote する。
+- 試験: `crates/campaign/tests/ops_r2_b_start.rs`。種を `make` で作り A・B の state に `place` し、A の command（偽の claude）と B の command（偽の celeris）を
+  偽の sandbox で実際に sh で評価する。偽の celeris は起動時に作業ツリーの一覧と argv を記録するので、daemon の起動前に展開が済み、A と B の木が同じで、
+  `project.json` の workspace がその木を指すことを確かめる。実 bwrap の包みで同じ command を通す試験は `CELERIS_USERNS_TESTS=1` のときだけ走る。
+  preflight の `--b-ssh-config` は、偽の sandbox script で `run` が `--ssh-config` を `--print-args` と probe の起動の両方に渡すことを確かめる。
+  実 sirius・LLM・外部ネットワークには出ない。
+- 限界: `dir` の repo の task で B の delivery（取り込み）が何をするかは試験していない（試行の成果は作業ツリーの状態で採点する）。実機の B で CoS が repo を選んで起票することは未確認。

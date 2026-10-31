@@ -227,6 +227,7 @@ fn preflight_principals_probe_with_their_real_wrapping() {
         account: Some(root.join("account")),
         ro: Vec::new(),
         sockets: Vec::new(),
+        ssh_config: None,
     };
     for p in [hidden.parent().unwrap(), &ws, &cfg].into_iter().chain(
         [&sb.state, &sb.release, &sb.account]

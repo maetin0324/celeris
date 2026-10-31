@@ -314,6 +314,11 @@ fn start_daemon() -> Daemon {
             "skill {skill} delivered"
         );
     }
+    // B の作業ツリー（付記 D-bwork）。本番の手順では daemon の起動前に包みの中で種をここへ展開する
+    // （ops-r2-b-daemon-command.sh。展開そのものは crates/campaign/tests/ops_r2_b_start.rs）。ここでは展開済みの木の代わりを置く。
+    let work = state.join("work/benchfs");
+    fs::create_dir_all(work.join("src")).expect("work tree");
+    fs::write(work.join("src/lib.c"), "int x;\n").expect("work tree file");
     let port = generated
         .lines()
         .find_map(|l| l.strip_prefix("listen = \"127.0.0.1:"))
@@ -406,6 +411,23 @@ fn ops_r1_measure_cos_path_with_stub_harness() {
     let (s, project) = d.call(&d.operator, "POST", "/api/v1/projects", Some(&project_body));
     assert!(s == 200 || s == 201, "{s} {project}");
     let project_id = project["id"].as_str().expect("project id").to_owned();
+    // 案件の primary repo = B の state の作業ツリー（.git なしなので dir。run には木への symlink が置かれる）。
+    let work = d.state().join("work/benchfs");
+    assert_eq!(
+        project_body["workspace"],
+        json!({"kind": "local", "path": work.display().to_string()})
+    );
+    let (s, repos) = d.get(&format!("/api/v1/projects/{project_id}/repos"));
+    assert_eq!(s, 200, "{repos}");
+    let repos = repos["items"].as_array().cloned().unwrap_or_default();
+    assert_eq!(repos.len(), 1, "{repos:?}");
+    assert_eq!(repos[0]["name"], "benchfs", "{repos:?}");
+    assert_eq!(repos[0]["kind"], "dir", "{repos:?}");
+    assert_eq!(repos[0]["is_primary"], true, "{repos:?}");
+    assert_eq!(
+        repos[0]["location"],
+        json!({"kind": "local", "path": work.display().to_string()})
+    );
     let (s, thread) = d.call(
         &d.operator,
         "POST",

@@ -1,6 +1,7 @@
 //! ops-r2-sandbox.sh の `--ssh-config`（ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-ssh）。
 //! 専用 ssh config 1 file だけを /etc/ssh/ssh_config に bind し（親 dir は見せない）、/etc/ssh は空の tmpfs で
 //! 覆って ssh_config.d（Bad owner の原因）を隠す。/etc の bind より後に置かれることを print-args で確かめる。
+//! preflight の隔離検査（`preflight_isolation::run`）も B の daemon と同じ `--ssh-config` を包みに渡す（付記 D-bssh）。
 //! 実 ssh・実 sirius には出ない。
 use std::{path::PathBuf, process::Command};
 
@@ -94,4 +95,64 @@ fn ssh_config_rejects_dirs_and_forbidden_paths() {
     );
     assert_eq!(o.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&o.stderr).contains("not a file"));
+}
+
+/// preflight の `--b-ssh-config`（`ScriptSandbox.ssh_config`）が、許可表を作る `--print-args` と probe の起動の
+/// 両方に `--ssh-config <file>` として渡ることを、argv を記録する偽の sandbox script で確かめる（bwrap は使わない）。
+#[test]
+fn preflight_passes_ssh_config_to_print_args_and_the_probe() {
+    use celeris_campaign::preflight_isolation::{ProbeRequest, ScriptSandbox, Wrap, run};
+    let d = fixture();
+    let log = d.path().join("sandbox-argv.txt");
+    let fake = d.path().join("fake-sandbox.sh");
+    // 呼ばれるたびに argv を 1 行（NUL 区切りでなく改行区切り、呼び出しの区切りは空行）で記録する。
+    // --print-args なら bwrap の引数の形を、そうでなければ probe の JSON を出す。
+    std::fs::write(
+        &fake,
+        format!(
+            "for a in \"$@\"; do printf '%s\\n' \"$a\"; done >> '{}'\necho >> '{}'\n\
+             for a in \"$@\"; do [ \"$a\" = --print-args ] && {{ printf '%s\\n' --ro-bind /usr /usr; exit 0; }}; done\n\
+             printf '%s' '{{\"schema\":\"celeris.runtime-probe/1\",\"principal\":\"B\",\"uid\":1,\"paths\":[],\"mounts_outside_allow\":[],\"ok\":true}}'\n",
+            log.display(),
+            log.display()
+        ),
+    )
+    .unwrap();
+    let cfg = d.path().join("ssh/config");
+    let req = ProbeRequest {
+        principal: "B",
+        program: fake.clone(),
+        wrap: Wrap::Script {
+            script: fake.clone(),
+            sandbox: ScriptSandbox {
+                state: Some(d.path().join("state")),
+                release: Some(d.path().join("release")),
+                account: Some(d.path().join("account")),
+                ro: Vec::new(),
+                sockets: Vec::new(),
+                ssh_config: Some(cfg.clone()),
+            },
+        },
+        deny: vec![d.path().join("ssh/other")],
+    };
+    let probe = run(&req).expect("probe");
+    assert!(probe.ok);
+    let text = std::fs::read_to_string(&log).unwrap();
+    let calls: Vec<Vec<&str>> = text
+        .split("\n\n")
+        .filter(|c| !c.trim().is_empty())
+        .map(|c| c.lines().collect())
+        .collect();
+    assert_eq!(calls.len(), 2, "print-args and the probe: {text}");
+    let c = cfg.to_string_lossy();
+    for call in &calls {
+        let sep = call.iter().position(|a| *a == "--").expect("--");
+        let at = call
+            .windows(2)
+            .position(|w| w[0] == "--ssh-config" && w[1] == c)
+            .unwrap_or_else(|| panic!("--ssh-config {c} in {call:?}"));
+        assert!(at < sep, "{call:?}");
+    }
+    assert!(calls[0].contains(&"--print-args"));
+    assert!(calls[1].contains(&"probe-read"));
 }

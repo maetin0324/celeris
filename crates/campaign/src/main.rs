@@ -118,6 +118,7 @@ fn isolation_inputs(args: &[String]) -> preflight_isolation::IsolationInputs {
         account: arg(args, &format!("--{p}-account")),
         ro: many(format!("--{p}-ro")),
         sockets: many(format!("--{p}-socket")),
+        ssh_config: arg(args, &format!("--{p}-ssh-config")),
     };
     preflight_isolation::IsolationInputs {
         deny_list: arg(args, "--deny-list"),

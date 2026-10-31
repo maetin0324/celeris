@@ -128,6 +128,7 @@ fn fixture() -> Fixture {
             account: Some(account),
             ro: Vec::new(),
             sockets: vec![sock],
+            ssh_config: None,
         },
         deny: vec![private.clone(), old, other],
         root,

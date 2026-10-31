@@ -32,6 +32,9 @@ sh scripts/campaign/ops-r1-measure-config.sh \
 書かれるもの:
 - daemon.toml: db・`[[api.tokens]]` の token・`[knowledge] root`（`default_mounts = ["kb:trial"]`、langmem・gc 無効）・workspace・scratch を `--state` の下、`[cos] enabled = true`・`[cos.triage] policy_version`（`--policy-version` の値）・`[cos] route_candidates`・`[route_defaults.claude_code]`・`[harness_selection]`（全 task を claude_code へ。無いと CoS が起票した task が route されない）、`max_concurrency = 1`・`max_requeues = 0`・`[execution] max_parallel_work_units = 1`・`[execution.tree] max_parallel_child_tasks = 1`。
 - `--state` の下: `token`（0600、既にあれば保つ）、`kb/skills/<name>/`（repo の `config/skills` の各 skill。毎回作り直す）、`ws/`、`scratch/`、`setup/project.json`（試行専用の案件の body）。
+- `setup/project.json` の `workspace` は `{"kind": "local", "path": "<state>/work/benchfs"}`（B の作業ツリー。ADR `agent-docs/adr/2026-10-31-ops-r2-preflight-fixes.md` 付記 D-bwork）。
+  生成時には木は無く、ops-r2 では daemon の起動前に包みの中で種をここへ展開する（`scripts/campaign/ops-r2-b-daemon-command.sh`、`docs/ops/ops-r2-k2-preflight.md` §6）。
+  `POST /api/v1/projects` はこれを案件の primary repo（名前 `benchfs`、`.git` が無いので種類 `dir`）にする。木が無いまま task の run を始めると worker の起動が失敗する。
 
 ## 2. 起動と確認
 
@@ -56,7 +59,7 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
 
 人の依頼は、生成 config の token（`operator:ops-r1`）で `POST /api/v1/chat/threads/<thread_id>/relays` に relay として入れる（`celeris-campaign ops-r1-intake --relay --source <出典>`、`docs/ops/ops-r1-intake.md`）。config に人の token を足さない。relay の message は author と `relay.relayed_by` が `operator:ops-r1`、`said_at` が人の承認の時刻になり、出典は intake の記録に残る（ADR `agent-docs/adr/2026-10-30-ops-r2-isolation-principal.md` D5）。
 
-無 LLM の通しは `cargo nextest run -p celeris --test ops_r1_measure` が確かめる（stub harness で 依頼の message → CoS の起票 → worker run → CoS の報告 message、health の `cos_policy_version` = 試験が渡す `--policy-version` の値）。この試験は今も試験の中だけで人の token を足して message を送る（ops-r1 の依頼受付の手順ではない。relay への書き換えは別 task、`agent-docs/progress/2026-10-30-ops-r2-isolation-principal/principal.md` の提案）。relay の受付は `cargo test -p celeris-campaign --test ops_r1_intake` が確かめる。
+無 LLM の通しは `cargo nextest run -p celeris --test ops_r1_measure` が確かめる（展開済みの木の代わりを `<state>/work/benchfs` に置き、案件の repo が `dir` でその path を指すこと、stub harness で 依頼の message → CoS の起票 → worker run → CoS の報告 message、health の `cos_policy_version` = 試験が渡す `--policy-version` の値）。この試験は今も試験の中だけで人の token を足して message を送る（ops-r1 の依頼受付の手順ではない。relay への書き換えは別 task、`agent-docs/progress/2026-10-30-ops-r2-isolation-principal/principal.md` の提案）。relay の受付は `cargo test -p celeris-campaign --test ops_r1_intake` が確かめる。
 
 ## 試行 1 回の上限
 

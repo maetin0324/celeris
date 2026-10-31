@@ -90,7 +90,7 @@ class MeasureConfigTest(unittest.TestCase):
         self.assertFalse(cfg["knowledge"]["langmem"]["enabled"])
         self.assertFalse(cfg["knowledge"]["gc"]["enabled"])
         self.assertEqual(cfg["scratch"]["dir"], os.path.join(state, "scratch"))
-        self.assertEqual(cfg["selfdeploy"]["releases_dir"], os.path.join(self.root, "releases"))
+        self.assertEqual(cfg["selfdeploy"]["releases_dir"], os.path.join(state, "release-store", "releases"))  # 付記 D-store
         for absent in ("memory", "llm_proxy", "mcp", "cron", "accounts", "clusters"):
             self.assertNotIn(absent, cfg)
         # 並列 1・試行 1。
@@ -125,7 +125,9 @@ class MeasureConfigTest(unittest.TestCase):
         for rel in ("cos-operator/SKILL.md", "cos-operator/references/ops.md", "cos-inbox-triage/SKILL.md"):
             self.assertEqual(rd(os.path.join(kb_skills, rel)), rd(os.path.join(self.skills, rel)))
         body = json.loads(rd(os.path.join(state, "setup", "project.json")))
-        self.assertEqual(sorted(body), ["request", "title"])
+        self.assertEqual(sorted(body), ["request", "title", "workspace"])
+        # B の作業ツリー（付記 D-bwork）: A と同じ <state>/work/benchfs を案件の repo にする。
+        self.assertEqual(body["workspace"], {"kind": "local", "path": os.path.join(state, "work", "benchfs")})
         for d in ("ws", "scratch"):
             self.assertTrue(os.path.isdir(os.path.join(state, d)))
 

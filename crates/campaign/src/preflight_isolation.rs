@@ -28,6 +28,9 @@ pub struct ScriptSandbox {
     pub ro: Vec<PathBuf>,
     /// `--socket`: unix socket を 1 つずつ bind する（ssh master 等。親 dir は見せない）。
     pub sockets: Vec<PathBuf>,
+    /// `--ssh-config`: 専用の ssh config 1 file を包みの `/etc/ssh/ssh_config` にする（付記 D-ssh・D-bssh）。
+    /// B の daemon の起動の形と同じ bind で probe する。
+    pub ssh_config: Option<PathBuf>,
 }
 
 /// preflight の隔離検査の入力（CLI の `--deny-list` ほか）。
@@ -372,6 +375,9 @@ fn script_base(script: &Path, sb: &ScriptSandbox) -> Vec<String> {
     }
     for r in &sb.sockets {
         a.extend(["--socket".into(), r.to_string_lossy().into_owned()]);
+    }
+    if let Some(c) = &sb.ssh_config {
+        a.extend(["--ssh-config".into(), c.to_string_lossy().into_owned()]);
     }
     a
 }

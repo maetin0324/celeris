@@ -53,6 +53,7 @@ sh scripts/campaign/ops-r2-sandbox.sh --state <試行の state> --release <relea
   HOME は `--state/home`、環境変数は PATH と HOME だけ。network は共有する。
 - `--ro` は通常 file と dir だけを受ける。unix socket は `--socket` で 1 つずつ渡す（`test -S` が通る path だけ。socket の path そのものだけを `--bind` し、親 dir は見せない）。
   socket 以外を `--socket` に渡すと exit 2。preflight の `--b-socket`・`--operator-socket` は同じ値を包みに渡す。
+  `--ssh-config` も preflight の `--b-ssh-config`・`--operator-ssh-config` で同じ file を包みに渡す（ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-bssh）。
 - workspaces（`/local/celeris/data/workspaces`）の下の path は `--ro` でも拒む。deny list は作業場所の外（`/local/celeris/data/measure-bin`）に置く。
 - `--print-args` は実行と同じ bwrap 引数を 1 行 1 引数で出し、bwrap を起動しない（preflight もこれで許可表を得る）。
 - 人の `~/.claude`・`~/.config/celeris`・本番 state・workspaces・repo clone と、それらの祖先を指定すると exit 2。

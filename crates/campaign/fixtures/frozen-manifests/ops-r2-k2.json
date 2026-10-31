@@ -1,0 +1,125 @@
+{
+  "budget": {
+    "max_disk_bytes": 137438953472,
+    "max_parallel": 1,
+    "max_tokens": 3000000,
+    "max_wall_secs": 7200,
+    "per_arm": {
+      "max_tokens": 1500000,
+      "max_wall_secs": 3600
+    },
+    "per_case": {
+      "max_tokens": 1500000,
+      "max_wall_secs": 3600
+    },
+    "token_basis": "all"
+  },
+  "campaign_id": "mlsys-main-4-ops-r2-k2p1",
+  "configs": [
+    {
+      "harness": "claude-code",
+      "harness_version": "2.1.303",
+      "id": "A",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "ops-baseline"
+    },
+    {
+      "harness": "celeris",
+      "harness_version": "1239fab2bc36",
+      "id": "B",
+      "model": "claude-sonnet-5-5",
+      "model_version": "claude-sonnet-5-5",
+      "policy_version": "cos-v10"
+    }
+  ],
+  "contract": {
+    "conditions": {
+      "A": {
+        "condition_id": "mlsys-main-4-ops-r2-k2p1-A1-direct-claude-code",
+        "intake": "direct_claude_code",
+        "trial_ids": [
+          "mlsys-main-4-ops-r2-k2p1-A-t001"
+        ]
+      },
+      "B": {
+        "condition_id": "mlsys-main-4-ops-r2-k2p1-B1-celeris-ops",
+        "cos_model": "claude-opus-5-5",
+        "intake": "cos_thread",
+        "trial_ids": [
+          "mlsys-main-4-ops-r2-k2p1-B-t001"
+        ]
+      }
+    },
+    "grader_refs": {
+      "k2-bf-xattr-restart-campaign": {
+        "grade_case_sha256": "8ae2a1706f1cb63afed8877921d486ffe12871a4b006f9dfe638aa6740616b1d",
+        "private_sha256": "e1bf18e72a921f227584867a4c0bc0664db58c3a1b1bfa7a0805832027cf8313"
+      }
+    },
+    "pinned_versions": {
+      "A": {
+        "claude_code_sha256": "375988f457756524234695cf2d8f64ace99c5f68682e47ea24862a843c191450",
+        "claude_code_version": "2.1.303"
+      },
+      "B": {
+        "claude_code_sha256": "375988f457756524234695cf2d8f64ace99c5f68682e47ea24862a843c191450",
+        "claude_code_version": "2.1.303",
+        "cos_policy_version": "10",
+        "pricing_version": "2026-09-approx-1"
+      }
+    },
+    "revision": "main-4-ops-r2"
+  },
+  "experiment_sets": {
+    "ops-r2": {
+      "arms": [
+        "A",
+        "B"
+      ],
+      "compare": [
+        [
+          "A",
+          "B"
+        ]
+      ],
+      "fixed": {
+        "initial_info": "d3246d4077f8d6905c7b13e5a466efb4d9716c3a7b739399fc98c9127a3c4169"
+      }
+    }
+  },
+  "input": {
+    "path": "ops-r2-k2-input-manifest.json",
+    "sha256": "6fa8f0ecf197d731a36ea7c7152b088be99a18c0cf229cdf01340aec28b06e4b"
+  },
+  "primary": [
+    "A",
+    "B"
+  ],
+  "problems": [
+    "k2-bf-xattr-restart-campaign"
+  ],
+  "schema": "celeris.campaign-manifest/1",
+  "secondary": {
+    "pair": [
+      "B",
+      "C"
+    ],
+    "subset": []
+  },
+  "selected_sets": [
+    "ops-r2"
+  ],
+  "snapshot": {
+    "kb_snapshot": "741f24146f5c02f44acf5291e23806416b9956809e55a1474488ecbcc9fe0702",
+    "materials_sha256": "d3246d4077f8d6905c7b13e5a466efb4d9716c3a7b739399fc98c9127a3c4169",
+    "repo_commit": "final-cases-1: k2=086c4618e2a4d94ea56da78ceeed0f8d6d568d67 (ops-r2 pilot)"
+  },
+  "split": "final",
+  "termination": {
+    "max_attempts_per_trial": 1,
+    "stop_on_budget": true,
+    "trial_timeout_secs": 3600
+  },
+  "version": "2"
+}

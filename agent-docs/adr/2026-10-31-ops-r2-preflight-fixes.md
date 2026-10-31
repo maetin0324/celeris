@@ -148,3 +148,46 @@ K2 ops-r2 pilot（task 01M669QGFJRZ2MY7VRA1BSSZ5H）は人の承認が出た。�
 
 - [ADR 2026-10-30-ops-r2-isolation-principal](2026-10-30-ops-r2-isolation-principal.md)（D1〜D7、付記 L1・G1〜G6）
 - ADR 2026-10-27-project-stagnation-inbox（`[maintenance.stagnation]`）、ADR 2026-10-11-breaking-changes-by-default
+
+## 付記 2026-10-31（manifest unit: K2 ops-r2 の manifest と preflight の受け入れ形。不備 3）
+
+preflight が `missing` に出した 8 件を、ops-r2 では次のとおり扱う。ops-r1 の経路と旧 manifest（`main-4-v4-pilot-k2.json` ほか）は変えない（campaign_sha256 も不変）。
+
+### M1. ops-r2 の manifest は契約 revision `main-4-ops-r2` で、private・grade-case は sha256 の参照だけを持つ
+
+- `crates/campaign/fixtures/frozen-manifests/ops-r2-k2.json`。契約 revision `main-4-ops-r2`（`main-4-ops-r1` と同じ `contract.conditions` を使い、B は CoS 受付）。
+  固定値は承認票のとおり: A=Claude Code 2.1.303・model claude-sonnet-5-5、B=release 1239fab2bc36（CoS は `cos_model` claude-opus-5-5、方針版 10）、
+  condition は A1・B1、1 試行 1,500,000 token・3600 秒、合計 3,000,000 token・7200 秒、case `final/k2-bf-xattr-restart-campaign`。
+  claude の sha256 は local の固定 copy（D4）の値、`pricing_version` は `task_core::pricing::PRICE_TABLE_VERSION`。
+- 新しい private と grade-case の sha256 は `contract.grader_refs`（problem id → `private_sha256`・`grade_case_sha256`）に値だけを置く。
+  中身は読まない（評価器領域は評価器の uid が持つ）。`grader_refs` は `main-4-ops-r2` だけが持て、manifest の problems を過不足なく覆う。
+  省略時は直列化しないので、ops-r1・旧 manifest の hash は変わらない。`case.json` は変えない。
+- `main-4-ops-r2` の manifest を受けるのは `preflight` だけ。`run`・`dry-run`・`config-check`・`env-check` 等の投入系は ops-r2 でも拒否する（B は POST /tasks で投入しない）。
+  ops-r1 の manifest は従来どおり preflight でも拒否する。
+
+### M2. missing 8 件の扱い
+
+| 旧 missing | ops-r2 の扱い |
+|---|---|
+| `input-manifest`（`final-input-manifest.json` が無い） | 実在する入力に直した。`frozen-manifests/ops-r2-k2-input-manifest.json`（`agent-docs/progress/2026-10-16-mlsys-final/final-input-manifest.json` の写し。内容 hash は同じ）を manifest の pin で照合する |
+| `case-inputs: private file hash mismatch`（CaseSet の読み込み） | 外した。ops-r2 は `CaseSet::load_public`（case.json と materials・kb の snapshot hash だけ。private を読まない）。理由: 新しい private は `EVAL_ROOT`（0700、持ち主 celeris-eval）にあり、人の uid の preflight は読めず、読んではいけない。repo の旧 private は漏洩済みで採点に使わない（G1）。旧 private を読んで新 private の hash と食い違うまま通す経路は作らない |
+| `lock: private file hash mismatch` | 外した。campaign lock は private の hash を grader root から封印する検査で、ops-r2 は runner（`run`）で走らせず lock を使わない |
+| `auth-env: --api-url/--token-env` | 外した。B は CoS thread への relay（operator の token は `ops-r1-intake --relay` が使う）で、campaign は task API に投入しない。preflight は API を呼ばない（試験の Host は呼ぶと panic） |
+| `auth-env: --task-template` | 外した。同上（POST /tasks の body を作らない） |
+| `case-inputs: --materials-src` | 外した。資料は case 自身の `materials/` で、`CaseSet::load_public` が case.json の snapshot に照合する。manifest の `snapshot.materials_sha256`・`kb_snapshot` も case の値と一致を見る。`--materials-src`・`--kb-src` は渡せば manifest の pin に照合する（任意） |
+| `case-inputs: --kb-src` | 同上 |
+| `measure-env: --measure-config, --normal-config and --canaries` | `--measure-config` は必須のまま。`--canaries` は外した（D5: canary を置かない）。測定 config は通常運用の config との分離（`measure_env::check_config`）だけを見る。identity 照合（`GET /config`）は daemon を起こしてから使うので preflight では見ない |
+
+代わりに足した検査（`graders`）: case.json の `private_ref.sha256`・`grade_case_ref.sha256` が manifest の `grader_refs`（承認票の値）と一致する。
+grade-case 実体の hash 照合（`check_grader`）は評価器の wrapper `grade`（`ops-r2-grade.py`）が `EVAL_ROOT` で行うので、preflight では行わない。
+残した検査: manifest・版・入力 manifest・case の split・control・予算・実験 walltime・初期 repo と外部入力（`--repo-src`・`--inputs-src`）・A の実行ファイル（版・bwrap）・隔離 probe（deny list）・予算の承認上限。
+外した検査: 能力 probe（`--cap-env`）。runner の A の sandbox を組んで調べる検査で、ops-r2 の A は `ops-r2-sandbox.sh` の中で動く別の包み方になる。隔離は runtime probe が同じ包み方で見る。
+
+### M3. 試験
+
+`crates/campaign/tests/preflight_ops_r2.rs`: 固定値、api-url・token・task-template・materials/kb・canary・cap-env なしで通る、旧 private を読まない（grader root が無くても実在する旧 fixtures でも同じ結果）、
+case.json と manifest の参照が違えば `graders` で止まる、入力 manifest・`--repo-src`・`--measure-config` が無ければ止まる、`grader_refs` の形、CLI の preflight が ops-r2 を受け他の投入系が拒否する。
+
+### M4. 未確認
+
+実機の operator 環境での実行（`--repo-src`・`--inputs-src`・`--measure-config` に実物を渡した preflight）は worker の run では行えない。手順書への反映は docs unit、実機のやり直しは operator。

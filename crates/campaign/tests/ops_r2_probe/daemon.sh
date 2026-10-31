@@ -5,7 +5,7 @@
 #   - task 経由の経路: worker run（daemon → worker → harness の孫、cwd は task の作業場所）
 # どちらも probe-read を走らせ、結果を <state>/probe/{cos,worker}.json、exit を *.exit、pid namespace を *.ns に書く。
 # LLM・network・本物の daemon は使わない。
-# usage: daemon.sh <state> <probe binary> [probe-read の --deny/--allow ...]
+# usage: daemon.sh <state> <probe binary> [probe-read の --deny-readable-file/--allow ...]
 set -eu
 [ $# -ge 2 ] || { echo 'usage: daemon.sh <state> <probe> [args...]' >&2; exit 2; }
 STATE=$1 PROBE=$2

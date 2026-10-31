@@ -560,6 +560,9 @@ fn check_isolation(a: &mut Acc, m: &CampaignManifest, inp: &Inputs, host: &dyn H
         return;
     }
     a.checked.push(iso::CHECK);
+    for d in iso::claude_findings(&inp.isolation) {
+        a.miss(iso::CHECK, d);
+    }
     let tmp = match tempfile::tempdir() {
         Ok(t) => t,
         Err(e) => return a.miss(iso::CHECK, format!("{}:{e}", iso::CHECK)),

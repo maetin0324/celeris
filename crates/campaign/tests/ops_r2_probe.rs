@@ -165,9 +165,10 @@ fn run_daemon_fixture(fx: &Fixture, deny: &[PathBuf]) -> [(RuntimeProbe, i32, St
         s(state).into(),
         s(&release.join("celeris-campaign")).into(),
     ]);
-    for d in deny {
-        a.extend(["--deny".into(), s(d).into()]);
-    }
+    let deny_file = state.join("deny.list");
+    let text: String = deny.iter().map(|d| format!("{}\n", d.display())).collect();
+    fs::write(&deny_file, text).expect("deny file");
+    a.extend(["--deny-readable-file".into(), s(&deny_file).into()]);
     for src in allow_sources(&printed, &host) {
         a.extend(["--allow".into(), s(&src).into()]);
     }

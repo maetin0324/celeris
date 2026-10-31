@@ -1,7 +1,10 @@
 ---
-task: 01M690TDXQ4GX9A2Z0AVBKTB2D
-status: running
+title: ops-r2-sandbox の socket bind と K2 preflight 手順書の修正
+tasks: [01M690TDXQ4GX9A2Z0AVBKTB2D]
+status: done
 started: 2026-10-31
+updated: 2026-10-31
+completed: 2026-10-31
 ---
 
 # ops-r2-sandbox の socket bind と K2 preflight 手順書の修正
@@ -11,15 +14,18 @@ started: 2026-10-31
 - preflight の `--b-socket`・`--operator-socket`（`ScriptSandbox.sockets`）。preflight の許可表（`allow_sources`）は `--bind` の host path の mount を含むので socket も許可表に入る。
 - ADR `agent-docs/adr/2026-10-31-ops-r2-preflight-fixes.md` に付記 D-socket・D-docs（手順書と道具の食い違い 5 点。すべて道具に合わせた）。
 - 手順書 `docs/ops/ops-r2-k2-preflight.md`・`docs/ops/ops-r2-isolation.md` を修正。
-- 試験 `crates/campaign/tests/ops_r2_socket.rs`。
+- 試験 `crates/campaign/tests/ops_r2_socket.rs`、`crates/campaign/tests/ops_r2_probe.rs` の fixture に試験用 socket の bind を追加。
 
 commit（件名）:
 - ops-r2-sandbox: --socket で unix socket を 1 つずつ bind（preflight の --b-socket/--operator-socket）
 - ops-r2 手順書: --kb-src と固定初期 KB・deny list の置き場所・--dev の allow・run uid・ssh の userns 制約
+- ops_r2_probe 試験: 試験用 socket を --socket で bind し probe・preflight が mounts_outside_allow にせず deny_readable が変わらないことを確かめる
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
-- `cargo nextest run -p celeris-campaign --test ops_r2_socket`: 3 件 pass（connect 試験は `CELERIS_USERNS_TESTS=1`）
-- test-affected.sh・clippy・fmt: 下の「検査」に追記する（未実行なら未実行と書く）
+- `CELERIS_USERNS_TESTS=1 cargo nextest run -p celeris-campaign --test ops_r2_probe --test ops_r2_socket`: 6 passed、skip 0 件。ops_r2_probe の fixture は試験用 socket を `--socket` で bind し、CoS run・worker run の probe で mounts_outside_allow 0 件、deny_readable は control の 1 件だけ（従来と同じ）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/test-affected.sh`: 結果は報告（result.json）に記す。
 
 ## 本番への移行
 release 後に operator が実行する（測定 daemon は起動しない）。

@@ -355,10 +355,12 @@ fn cap_probe_cli(args: &[String]) -> Result<String, String> {
     if rep.ok { Ok(s) } else { Err(s) }
 }
 
+/// grade-out の判定が不合格だったことを main に伝える（判定 JSON は Ok で stdout へ、exit は 1）。
+static VERDICT_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn run(args: Vec<String>) -> Result<String, String> {
     let cmd = args.first().map(String::as_str).unwrap_or("");
     match cmd {
-        "grade" => return celeris_campaign::grader::cli(&args, &ProcessRunner::default()),
         "gen-grade-case" => return celeris_campaign::grade_case_gen::cli(&args[1..]),
         "human-op" => return celeris_campaign::human_ops::cli::cli(&args),
         "ops-r1-a-raw" => return celeris_campaign::ops_r1_a_raw::cli(&args),
@@ -776,7 +778,11 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 work_root.as_deref(),
             )?;
             let s = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
-            if v["ok"] == true { Ok(s) } else { Err(s) }
+            // 判定の不合格は stdout の判定 JSON と exit 1（エラーの exit 2 と分ける。grade と同じ契約）。
+            if v["ok"] != true {
+                VERDICT_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(s)
         }
         "ledger-init" => {
             // 人の承認（出典・範囲・期限・試行数）を共有台帳に記録する（冪等）。宣言した台帳の path だけを受ける。
@@ -873,10 +879,34 @@ fn main() -> ExitCode {
         let args: Vec<String> = std::env::args().skip(1).collect();
         return ExitCode::from(celeris_campaign::ops_r1_attr::cli(&args));
     }
+    // grade と grade-out の出力の契約（ADR 2026-10-30-ops-r2-isolation-principal 付記「grade の出力の契約」）:
+    // 判定 JSON は合格・不合格とも stdout、合格 exit 0・不合格 exit 1。判定 JSON を作れないエラーは stderr に理由、exit 2。
+    if std::env::args().nth(1).as_deref() == Some("grade") {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        return match celeris_campaign::grader::cli(&args, &ProcessRunner::default()) {
+            Ok((verdict, pass)) => {
+                println!("{verdict}");
+                ExitCode::from(u8::from(!pass))
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    let grade_out = std::env::args().nth(1).as_deref() == Some("grade-out");
     match run(std::env::args().skip(1).collect()) {
         Ok(out) => {
             println!("{out}");
-            ExitCode::SUCCESS
+            if VERDICT_FAILED.load(std::sync::atomic::Ordering::SeqCst) {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(e) if grade_out => {
+            eprintln!("error: {e}");
+            ExitCode::from(2)
         }
         Err(e) => {
             eprintln!("error: {e}");

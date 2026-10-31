@@ -1563,9 +1563,11 @@ pub fn apply_observation_failure(rep: &mut GradeReport, class: FailureClass, rea
     });
 }
 
-/// `celeris-campaign grade --case <file> --artifact <dir> [--work <dir>] [--observed <file>] [--initial-tree <dir>]`。合格で Ok、不合格で Err（どちらも判定 JSON）。
+/// `celeris-campaign grade --case <file> --artifact <dir> [--work <dir>] [--observed <file>] [--initial-tree <dir>]`。
+/// 判定できたら合格・不合格とも `Ok((判定 JSON, final_pass))`。`Err` は判定 JSON を作れないエラー（引数・grade-case 読込など）だけ。
+/// main は判定 JSON を stdout に出し、合格 exit 0・不合格 exit 1、エラーは stderr に理由・exit 2（ADR 2026-10-30-ops-r2 付記「grade の出力の契約」）。
 /// 評価 command は `runner`（CLI では `grade_runner::ProcessRunner`）が grade の作業 dir の中で実際に走らせる。
-pub fn cli(args: &[String], runner: &dyn CommandRunner) -> Result<String, String> {
+pub fn cli(args: &[String], runner: &dyn CommandRunner) -> Result<(String, bool), String> {
     let arg = |name: &str| {
         args.iter()
             .position(|a| a == name)
@@ -1587,7 +1589,7 @@ pub fn cli(args: &[String], runner: &dyn CommandRunner) -> Result<String, String
     };
     let rep = grade(&case, &artifact, &opts);
     let s = serde_json::to_string_pretty(&rep).map_err(|e| e.to_string())?;
-    if rep.final_pass { Ok(s) } else { Err(s) }
+    Ok((s, rep.final_pass))
 }
 
 pub(crate) fn sha256_file(p: &Path) -> Result<String, String> {

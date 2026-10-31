@@ -258,3 +258,33 @@ case.json と manifest の参照が違えば `graders` で止まる、入力 man
 - 決定（session id）: `--session-id <小文字の UUID>` を必須の引数にする。operator が起動の前に決めて記録し（K4 の `$RA/session_id` と同じ）、script は生成しない。A の session は測定対象の harness で、operator-usage の session-map には入れない（K4 runbook §3.3 と同じ）。
 - 決定（quoting）: path は絶対 path で改行を含まないことだけを確かめ、文字の種類で拒まない。`sh -c` に渡す内側の command の各 path と、外側の各引数（内側の command 全体を含む）を、POSIX sh の単一引用符（`'` は `'\''`）で 2 段に quote して出す。path に空白・`'`・`@`・`:` があっても、出した 1 行を sh が評価すると元の bytes の argv になる。
 - 試験: `crates/campaign/tests/ops_r2_trial_a_command.rs`。script の写しの隣に argv を記録する偽の `ops-r2-sandbox.sh` を置き、偽の `ops-r2-seed.sh`・`claude-2.1.303` で出した 1 行を実際に sh で評価する（実 sirius・LLM・bwrap に出ない）。claude の argv が上の形と一致すること、`--socket` に `ssh-mux-rmaeda@130.158.241.2:22` の形の path がそのまま渡ること、空白と `'` を含む path が保たれること、UUID 以外の session id は exit 2 を確かめる。
+
+## 付記 D-public・D-seed2（2026-10-31、task 01M69YZVW27JDDR1115KFCD6NH）公開の初期 archive の needle を外す・種に submodule を入れる
+- 背景 1: K2 の private の文字列には、公開の初期 archive（case.json の `initial`）にも載る識別子・path が含まれうる。種を `--scan` に渡すと、
+  試行に元から見せている文字列が漏洩の hit になり、検査が常に exit 1 になる。`--allow-string` は文字列を command 行と結果に書く必要があり使えない。
+- 背景 2: 付記 D-seed の `make` は `git archive` で作るので、submodule（`lib/pluvio`・`lib/locusta`・`ior_integration/ior` と入れ子 2 件）が空の dir になり、
+  初期ツリーが build できない。
+- 初期ツリーの定義と採点の関係（コードで確かめた）:
+  - case.json の `initial.archive_sha256` は `git archive <initial.commit>` の tar（submodule を含まない）の sha256（`crates/campaign/src/cases.rs` の `Initial`）。
+    asset store の bundle から作った tar の sha256 が case.json の値と一致することを 2026-10-31 に確かめた。
+  - submodule は `initial.submodules` の `<path>@<40 桁 commit>` で固定し、実体は asset store の `submodules/<末尾名>-<commit 先頭 8 桁>.tar`（`SHA256SUMS` に載る）。
+  - 採点器は試行の種を使わない。`grade --initial-tree`（ADR 2026-10-18-grade-initial-tree-baseline D2）は grader 側で `asset_assembly::assemble_initial`
+    （bundle → 固定 commit → submodule tar を各 path に展開 → `initial.lock.json` の内容 hash で照合）が組んだ木で、submodule を含む。
+    したがって「試行に渡す初期ツリー」と「採点の baseline の木」は、どちらも「公開 tar ＋ 同じ submodule tar」を同じ path に置いた内容になる。
+- 決定 D-public: `check-ops-r1-leak.py --public-archive <tar> <sha256>`（複数可）。
+  - tar の sha256 が引数と違えば入力の誤り（exit 2）。初期 archive には case.json の `initial.archive_sha256`、submodule tar には asset store の `SHA256SUMS` の値を渡す。
+  - tar の生 byte と member（入れ子 archive を含む）に現れる private の文字列 needle を検査から外す。外すのは private の文字列だけで、
+    private の sha256・`--forbidden-sha`・`--canary` は外さない（公開物に現れてはいけないものなので、現れれば種の scan で hit になる）。
+  - 結果には外した数と長さ（`checked.public_archive.excluded_lengths`）だけを書き、文字列・hash・JSON path は書かない。
+    外した後に private の文字列 needle が 0 件、または外す前の半分以上を外したときは `checked.public_archive.warning` と `limits` に書き、stdout にも出す。pass/fail は変えない。
+- 決定 D-seed2: `ops-r2-seed.sh make` を `--archive <公開 tar> --case <case.json> --assets <asset store> --out <tar>` に置き換える（旧 `--repo`・`--rev` は使い方の誤り）。
+  - 公開 tar の sha256 を case.json の `initial.archive_sha256` と照合する。公開 tar 自体は変えない。
+  - case.json の `initial.submodules` の各 tar を `SHA256SUMS` と照合し、浅い path から順に `<path>/` の下に入れて、非圧縮の tar 1 つ（種）にする。
+    member の順・mode・mtime は元の tar のまま、owner は 0、pax の global header（commit id の comment）は落とす。同じ入力からは同じ bytes になる。
+  - 同じ path の file が 2 つの tar にあれば拒む（dir の重なりは 1 つにまとめる）。`.git`・絶対 path・`..`・木の外を指す link の拒否は従来どおり。
+  - `place`・`unpack` は変えない。A・B は同じ bytes の種を置き、包みの中で展開する。
+  - 種は非圧縮なので、漏洩検査の `--scan <state>` は submodule の中身も読む。
+- 限界: 種の内容 hash を `initial.lock.json` の `content_sha256` と照合するのは採点器の `assemble_initial` だけで、`ops-r2-seed.sh` は tar の sha256 で照合する。
+- 試験: `scripts/campaign/test_check_ops_r1_leak.py`（公開 archive の除外・数と長さだけの出力・hash 違いは exit 2・大きく減った警告・canary は外さない）と
+  `scripts/campaign/test_ops_r2_seed.py`（submodule 込みの種・入れ子・sha 違い・未登録・file の重なりの拒否・A/B 同 bytes・漏洩検査が submodule の中身を読む）。
+  どちらも `scripts/campaign/run-ops-r1-leak-tests.sh` で走る。`crates/campaign/tests/ops_r2_seed.rs` も新しい `make` に合わせる。

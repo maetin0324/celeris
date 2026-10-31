@@ -1,5 +1,6 @@
-//! ops-r2-seed.sh（ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-seed）。A・B が同じ種（同じ sha256）から始まり、
-//! 種は .git なしの非圧縮 tar で、漏洩検査が tar の中身を読めることを確かめる。network には出ない。
+//! ops-r2-seed.sh（ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-seed・D-seed2）。A・B が同じ種（同じ sha256）から始まり、
+//! 種は公開の初期 tar（git archive）に submodule の tar を入れた .git なしの非圧縮 tar で、漏洩検査が tar の中身を読めることを
+//! 確かめる。make の照合・拒否の細部は scripts/campaign/test_ops_r2_seed.py。network には出ない。
 use std::{
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -29,21 +30,76 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 const CANARY: &str = "OPSR2-SEED-CANARY-7f3a91";
+const SUB_COMMIT: &str = "9ecd51ee9b5fe62831f8e46c3d98a371359664c0";
 
+fn sha256(p: &Path) -> String {
+    String::from_utf8(Command::new("sha256sum").arg(p).output().unwrap().stdout).unwrap()[..64]
+        .to_string()
+}
+
+/// 公開の初期 tar（git archive）・case.json・asset store（submodule 1 件）から種を作る。
 fn make(root: &Path) -> (PathBuf, String) {
     let repo = root.join("repo");
     std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::create_dir_all(repo.join("lib/pluvio")).unwrap();
     std::fs::write(repo.join("src/lib.c"), format!("int x; /* {CANARY} */\n")).unwrap();
+    std::fs::write(repo.join("lib/pluvio/.placeholder"), "").unwrap();
     git(&repo, &["init", "-q"]);
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-qm", "seed"]);
+    let archive = root.join("initial.tar");
+    git(
+        &repo,
+        &[
+            "archive",
+            "--format=tar",
+            "-o",
+            archive.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+    let assets = root.join("assets");
+    let sub_src = root.join("sub-src");
+    std::fs::create_dir_all(assets.join("submodules")).unwrap();
+    std::fs::create_dir_all(&sub_src).unwrap();
+    std::fs::write(sub_src.join("Cargo.toml"), "[package]\n").unwrap();
+    let sub_tar = assets.join(format!("submodules/pluvio-{}.tar", &SUB_COMMIT[..8]));
+    let s = Command::new("tar")
+        .arg("-cf")
+        .arg(&sub_tar)
+        .arg("-C")
+        .arg(&sub_src)
+        .arg("Cargo.toml")
+        .status()
+        .unwrap();
+    assert!(s.success());
+    std::fs::write(
+        assets.join("SHA256SUMS"),
+        format!(
+            "{}  submodules/pluvio-{}.tar\n",
+            sha256(&sub_tar),
+            &SUB_COMMIT[..8]
+        ),
+    )
+    .unwrap();
+    let case = root.join("case.json");
+    std::fs::write(
+        &case,
+        format!(
+            r#"{{"initial":{{"archive_sha256":"{}","submodules":["lib/pluvio@{SUB_COMMIT}"]}}}}"#,
+            sha256(&archive)
+        ),
+    )
+    .unwrap();
     let tar = root.join("benchfs.tar");
     let o = seed(&[
         "make".as_ref(),
-        "--repo".as_ref(),
-        repo.as_os_str(),
-        "--rev".as_ref(),
-        "HEAD".as_ref(),
+        "--archive".as_ref(),
+        archive.as_os_str(),
+        "--case".as_ref(),
+        case.as_os_str(),
+        "--assets".as_ref(),
+        assets.as_os_str(),
         "--out".as_ref(),
         tar.as_os_str(),
     ]);
@@ -85,6 +141,10 @@ fn a_and_b_get_the_same_seed_without_git_and_unpack_it() {
     ]);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert!(into.join("src/lib.c").is_file());
+    assert!(
+        into.join("lib/pluvio/Cargo.toml").is_file(),
+        "submodule content"
+    );
     assert!(!into.join(".git").exists());
     // 展開後の state は ops-r2-sandbox.sh の .git 拒否に掛からない（--state に渡せる）。
     std::fs::create_dir_all(d.path().join("rel")).unwrap();

@@ -675,6 +675,99 @@ class LeakCheckTest(unittest.TestCase):
         self.assertFalse(doc["pass"])
         self.assertIn("forbidden-sha", doc["error"])
 
+    # ---- 公開の初期 archive（ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-public）
+
+    def public_tar(self, files, name="public.tar"):
+        """files: {member: str}。scan 先の外に非圧縮の tar を作り (path, sha256) を返す。"""
+        path = os.path.join(self.tmp, name)
+        with tarfile.open(path, "w") as t:
+            for member, text in files.items():
+                data = text.encode("utf-8")
+                info = tarfile.TarInfo(member)
+                info.size = len(data)
+                t.addfile(info, io.BytesIO(data))
+        with open(path, "rb") as f:
+            return path, hashlib.sha256(f.read()).hexdigest()
+
+    def test_public_archive_excludes_needles_and_reports_only_count_and_length(self):
+        tar, sha = self.public_tar({"src/defects.rs": f"// {SECRET_ID}\n"})
+        # 種（公開 tar と同じ中身）を scan 先に置く。公開物に元からある文字列は hit にならない
+        shutil.copy(tar, os.path.join(self.scan, "seed.tar"))
+        rc, doc, p = self.check("--public-archive", tar, sha)
+        self.assertEqual(rc, 0, p.stderr + json.dumps(doc, ensure_ascii=False))
+        pub = doc["checked"]["public_archive"]
+        self.assertEqual(pub["excluded_count"], 1)
+        self.assertEqual(pub["excluded_lengths"], [len(SECRET_ID)])
+        self.assertEqual(pub["private_strings_before"], 4)
+        self.assertEqual(pub["private_strings_after"], 3)
+        self.assertIsNone(pub["warning"])
+        self.assertEqual(pub["archives"][0]["sha256"], sha)
+        self.assertIn("excluded=1", p.stdout)
+        with open(self.out, encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotIn(SECRET_ID, text)
+        self.assertNotIn(hashlib.sha256(SECRET_ID.encode()).hexdigest(), text)
+        self.assertNotIn("known_defects", text)  # JSON path も書かない
+
+    def test_public_archive_keeps_other_needles(self):
+        tar, sha = self.public_tar({"a.txt": f"{SECRET_ID}\n"})
+        self.write("leak.md", SECRET)
+        rc, doc, _ = self.check("--public-archive", tar, sha)
+        self.assertEqual(rc, 1)
+        self.assertIn(("content", "private_string"), self.kinds(doc))
+
+    def test_public_archive_does_not_exclude_canary_or_hashes(self):
+        tar, sha = self.public_tar({"a.txt": f"{CANARY} {OLD_V1_SHA}\n"})
+        shutil.copy(tar, os.path.join(self.scan, "seed.tar"))
+        rc, doc, _ = self.check("--public-archive", tar, sha)
+        self.assertEqual(rc, 1)
+        self.assertIn(("content", "canary"), self.kinds(doc))
+        self.assertIn(("content", "forbidden_sha256"), self.kinds(doc))
+        # private.json の .canary の文字列としては外れる（1 件）が、--canary の needle は残って hit になる
+        self.assertEqual(doc["checked"]["public_archive"]["excluded_count"], 1)
+
+    def test_public_archive_sha_mismatch_is_input_error(self):
+        tar, sha = self.public_tar({"a.txt": "x\n"})
+        rc, doc, p = self.check("--public-archive", tar, "0" * 64)
+        self.assertEqual(rc, 2)
+        self.assertIn("sha256", doc["error"])
+        rc, doc, _ = self.check("--public-archive", tar, "nothex")
+        self.assertEqual(rc, 2)
+
+    def test_public_archive_nested_and_multiple(self):
+        inner = io.BytesIO()
+        with tarfile.open(fileobj=inner, mode="w:gz") as t:
+            data = SECRET.encode("utf-8")
+            info = tarfile.TarInfo("deep.txt")
+            info.size = len(data)
+            t.addfile(info, io.BytesIO(data))
+        path = os.path.join(self.tmp, "sub.tar")
+        with tarfile.open(path, "w") as t:
+            info = tarfile.TarInfo("vendor.tgz")
+            info.size = len(inner.getvalue())
+            t.addfile(info, io.BytesIO(inner.getvalue()))
+        with open(path, "rb") as f:
+            sub_sha = hashlib.sha256(f.read()).hexdigest()
+        tar, sha = self.public_tar({"a.txt": "f" + f"{SECRET_ID}\n"})
+        rc, doc, p = self.check("--public-archive", tar, sha, "--public-archive", path, sub_sha)
+        self.assertEqual(rc, 0, p.stderr)
+        pub = doc["checked"]["public_archive"]
+        self.assertEqual(pub["excluded_count"], 2)
+        self.assertEqual(len(pub["archives"]), 2)
+        self.assertEqual(pub["warning"], "most_private_strings_removed")
+        self.assertIn("public_archive_exclusion", {lim["kind"] for lim in doc["limits"]})
+        self.assertIn("warning=most_private_strings_removed", p.stdout)
+
+    def test_public_archive_removing_all_strings_is_explicit(self):
+        tar, sha = self.public_tar({"a.txt": f"{SECRET} {SECRET_ID} {CANARY} public-input-v2.tgz\n"})
+        rc, doc, p = self.check("--public-archive", tar, sha, canary=False)
+        self.assertEqual(rc, 0, p.stderr)
+        pub = doc["checked"]["public_archive"]
+        self.assertEqual(pub["private_strings_after"], 0)
+        self.assertEqual(pub["warning"], "no_private_strings_left")
+        # private の sha256 の needle は残る
+        self.assertGreaterEqual(doc["checked"]["needles"], 2)
+
     def test_missing_scan_is_input_error(self):
         p = subprocess.run([sys.executable, "-I", SCRIPT, "--private", self.private,
                             "--scan", os.path.join(self.tmp, "nope"), "--out", self.out],

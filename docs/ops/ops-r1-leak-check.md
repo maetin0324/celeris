@@ -21,11 +21,12 @@ python3 -I scripts/campaign/check-ops-r1-leak.py \
   [--eval-root <EVAL_ROOT>] \
   [--allow-string <公開入力にも載る文字列>] [--run-uid <uid> --run-gid <gid>] \
   [--runtime-probe <主体の probe JSON> --runtime-probe <L1 の probe JSON>] \
+  [--public-archive <公開の初期 tar> <照合用 sha256> ...] \
   --out <結果 JSON>
 ```
 
 exit 0 は見つからなかったこと、1 は見つかったこと（または代わりの検出が無いこと）、2 は入力の誤り（scan 先が無い、hash が 64 桁の 16 進でない、probe JSON の schema が違う等）。
-`--private`・`--forbidden-sha`・`--canary`・`--scan`・`--deny-readable-file`・`--runtime-probe` は何度でも書ける。
+`--private`・`--forbidden-sha`・`--canary`・`--scan`・`--deny-readable-file`・`--runtime-probe`・`--public-archive` は何度でも書ける。
 `--canary` は ops-r1 だけで使う。ops-r2 は private の写しに canary を置けないので渡さない（§4）。
 
 deny list は file で渡す（`--deny-readable-file`）。UTF-8、1 行 1 絶対 path、空行は飛ばす。
@@ -51,6 +52,12 @@ deny list は file で渡す（`--deny-readable-file`）。UTF-8、1 行 1 絶�
 
 - scan は file・ディレクトリを再帰で読み、tar（gz・bz2・xz）・zip・gzip の中身（入れ子は 3 段まで）と、`.git` を持つディレクトリの全 object（`git cat-file --batch-all-objects`。消した file の履歴も含む）を読む。
 - 既定で JSON の `.schema`・`.case_id`・`.split` の値は公開の識別子として検査から外す。公開入力にも載る他の文字列（例: 公開入力 tgz の名前 `expected.input`）は `--allow-string` で外す。外したものは `checked.private[].excluded` に path・長さ・sha256 で残る。
+- `--public-archive <tar> <sha256>`（ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-public）は、試行に元から見せている公開の初期 archive に現れる
+  private の文字列を検査から外す。tar の sha256 が引数と違えば exit 2。初期 archive には case.json の `initial.archive_sha256`、submodule の tar には
+  asset store の `SHA256SUMS` の値を渡す。外すのは private の文字列だけで、private の sha256・`--forbidden-sha`・`--canary` は外さない。
+  外したものは `checked.public_archive` に数（`excluded_count`）と長さ（`excluded_lengths`）だけを書き、文字列・hash・JSON path は書かない。
+  外した後に private の文字列が 0 件なら `warning: no_private_strings_left`、外す前の半分以上を外したら `warning: most_private_strings_removed` を
+  `checked.public_archive` と `limits` の `public_archive_exclusion` に書き、stdout にも出す（pass/fail は変えない）。
 - 結果 JSON の hit には文字列そのものを書かず、`needle_id`・`needle_len`・`needle_sha256` だけを書く。
 - この process が読めなかった file は `checked.scan[].unreadable` と `limits` の `unreadable_in_scan` に出る（検査していない）。
 
@@ -113,5 +120,5 @@ probe は試行の主体を起動するのと同じ包み方（A は `Sandbox::a
 
 - `pass`: hit が 0 件なら true。
 - `hit_count`・`hits`: 見つかったもの（`hits` は先頭 1000 件まで、`hit_count` は全件）。
-- `checked`: `private`（path・sha256・検査した文字列数・外した文字列）、`forbidden_sha256`、`canary`（長さと sha256 だけ）、`scan`（file 数・byte 数・archive member 数・git object 数・symlink 数・読めなかった file）、`deny_readable`（存在・可読・owner・mode・判定方法・`same_uid_limit`。probe で判定した path は §3 の欄）、`deny_readable_files`（deny list の path・sha256・件数）、`eval_root`、`l1_mounts_outside_allow`、`runtime_probe`、`run_identity`。
-- `limits`: `same_uid`・`unreadable_in_scan`・`git_objects_unscanned`・`host_view`。
+- `checked`: `private`（path・sha256・検査した文字列数・外した文字列）、`forbidden_sha256`、`canary`（長さと sha256 だけ）、`scan`（file 数・byte 数・archive member 数・git object 数・symlink 数・読めなかった file）、`deny_readable`（存在・可読・owner・mode・判定方法・`same_uid_limit`。probe で判定した path は §3 の欄）、`deny_readable_files`（deny list の path・sha256・件数）、`public_archive`（照合した tar の path・sha256・member 数、外した文字列の数と長さ、前後の文字列数、`warning`）、`eval_root`、`l1_mounts_outside_allow`、`runtime_probe`、`run_identity`。
+- `limits`: `same_uid`・`unreadable_in_scan`・`git_objects_unscanned`・`host_view`・`public_archive_exclusion`。

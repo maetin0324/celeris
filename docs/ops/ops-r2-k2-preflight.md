@@ -174,9 +174,15 @@ printf '%s\n' "$EVAL_ROOT/private/final/$case/private.json" > "$P/l1-deny.list"
 "$CC" probe-read --principal l1 --deny-readable-file "$P/l1-deny.list" --out "$P/probe-l1.json"   # exit 0
 
 python3 -I scripts/campaign/check-ops-r1-leak.py --private "$EVAL_ROOT/private/final/$case/private.json" \
-  --scan <試行の出力の写し> --deny-readable-file "$DL" --eval-root "$EVAL_ROOT" --run-uid "$(id -u rmaeda)" --run-gid "$(id -g rmaeda)" \
+  --scan "$S_A/seed" --scan "$S/seed" --scan <試行の出力の写し> "${PUB[@]}" --deny-readable-file "$DL" --eval-root "$EVAL_ROOT" --run-uid "$(id -u rmaeda)" --run-gid "$(id -g rmaeda)" \
   --runtime-probe "$S/probe-B.json" --runtime-probe "$P/probe-l1.json" --out <outbox>/leak-pre.json; echo "exit=$?"
 ```
+
+`PUB` は §6.1 で作る公開の初期 tar と submodule の tar 5 件を `--public-archive <tar> <sha256>` の形で並べた配列（bash）。
+初期 tar の sha256 は case.json の `initial.archive_sha256`、submodule の tar の sha256 は asset store の `SHA256SUMS` の値。
+これらに元から現れる private の文字列は検査から外し、結果の `checked.public_archive` に数と長さだけが出る（付記 D-public）。
+`warning` が `no_private_strings_left` か `most_private_strings_removed` なら、文字列の検査がほとんど効いていない。private の sha256 と禁止 hash の検査は残る。
+`--scan "$S_A/seed" --scan "$S/seed"` は種（`seed/benchfs.tar`、非圧縮）を含み、submodule の中身も読む。
 
 `--run-uid`・`--run-gid` は測定の run の uid（人の uid）を渡す。漏洩検査を評価器の uid（celeris-eval）で走らせると、既定では run の uid が
 celeris-eval になり、人の uid の持ち物の判定（`owned_by_run_uid`）が外れる。
@@ -280,16 +286,34 @@ operator の介入は 1 件ずつ開始と終了のある `human-op record --act
 
 ### 6.1 A・B の初期作業ツリー（同じ種）
 
-A と B は同じ種（同じ sha256 の非圧縮 tar、`.git` なし）から始める（付記 D-seed）。種は §3・§4 の前に state に置き、漏洩検査が tar の中身も読む。
+A と B は同じ種（同じ sha256 の非圧縮 tar、`.git` なし、submodule 込み）から始める（付記 D-seed・D-seed2）。種は §3・§4 の前に state に置き、漏洩検査が tar の中身も読む。
+
+初期ツリーの定義: case.json の `initial.archive_sha256` は `git archive <initial.commit>` の tar（submodule を含まない）の sha256 で、
+`lib/pluvio`・`lib/locusta`・`ior_integration/ior` は空の dir になる。submodule 5 件（入れ子 2 件を含む）は `initial.submodules` の 40 桁 commit に固定され、
+実体は asset store の `submodules/<末尾名>-<commit 先頭 8 桁>.tar`（`SHA256SUMS` に載る）。採点器の `--initial-tree` は grader 側で bundle と同じ submodule の tar から
+組み、`initial.lock.json` で照合した木で、種を展開した木と同じ内容になる。`make` は公開 tar の sha256 を変えず、submodule の tar を別に照合して種に入れる。
 
 ```sh
-SEED_SHA=$(sh scripts/campaign/ops-r2-seed.sh make --repo <preflight の repo-src> --rev <承認票の rev> --out "$P/benchfs.tar")
+CASE_JSON=crates/campaign/cases/final/k2-bf-xattr-restart-campaign/case.json
+ASSETS=/local/celeris/data/campaign-assets/k2
+git clone -q "$ASSETS/benchfs-086c4618.bundle" "$P/benchfs-src"
+git -C "$P/benchfs-src" archive --format=tar -o "$P/k2-initial.tar" 086c4618e2a4d94ea56da78ceeed0f8d6d568d67
+ARCHIVE_SHA=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["initial"]["archive_sha256"])' "$CASE_JSON")
+sha256sum "$P/k2-initial.tar"                                          # $ARCHIVE_SHA（b1ae8f58dd48c8fdb451dfb6b26287c188eeba62bfbdeaa8a518a760c6c980bf）と一致
+SEED_SHA=$(sh scripts/campaign/ops-r2-seed.sh make --archive "$P/k2-initial.tar" --case "$CASE_JSON" --assets "$ASSETS" --out "$P/benchfs.tar")
 for X in "$S_A" "$S"; do
   sh scripts/campaign/ops-r2-seed.sh place --seed "$P/benchfs.tar" --sha256 "$SEED_SHA" --state "$X"
   mkdir -p "$X/bin" && cp scripts/campaign/ops-r2-seed.sh "$X/bin/"     # 包みの中で unpack に使う
 done
 sha256sum "$S_A/seed/benchfs.tar" "$S/seed/benchfs.tar"                # 2 行とも $SEED_SHA
+# §4 の漏洩検査に渡す公開 archive（bash の配列）
+PUB=(--public-archive "$P/k2-initial.tar" "$ARCHIVE_SHA")
+while read -r h f; do case $f in submodules/*.tar) PUB+=(--public-archive "$ASSETS/$f" "$h") ;; esac; done < "$ASSETS/SHA256SUMS"
 ```
+
+`make` は公開 tar の sha256 が case.json と違う、submodule の tar が `SHA256SUMS` に無いか違う、同じ path の file が 2 つの tar にある、のどれかで exit 1。
+同じ入力からは同じ bytes の種になる（2026-10-31 に実 asset で 2 回作り、sha256 `233d38cbbc390cd9374287b9eb618e715c4088e4e858f4eb179d1ed6e08b4d60` が一致。展開した木は、bundle の checkout に submodule の tar を
+展開した木と `diff -r` と mode の一覧で差が無かった）。`$P/benchfs-src` は `.git` を持つので `--ro` で包みに渡さない。
 
 展開は包みの中で行う（§6 の B、§6.2 の A）。repo-src を `--ro` で渡さない（`.git` を拒む）。
 

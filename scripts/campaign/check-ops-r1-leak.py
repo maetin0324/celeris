@@ -3,7 +3,8 @@
 
     python3 -I scripts/campaign/check-ops-r1-leak.py --private <private.json> [--private ...] \
         [--forbidden-sha <sha256> ...] [--canary <文字列> ...] --scan <dir|file> [--scan ...] \
-        [--deny-readable-file <list>] [--eval-root <dir>] [--runtime-probe <probe.json> ...] --out <json>
+        [--deny-readable-file <list>] [--eval-root <dir>] [--runtime-probe <probe.json> ...] \
+        [--public-archive <tar> <sha256> ...] --out <json>
 
 試験の起動例（試験には -I を付けない。-I は cwd を sys.path に入れず試験を import できない）:
 
@@ -51,6 +52,12 @@ runtime probe（--runtime-probe、celeris.runtime-probe/1。celeris-campaign pro
   1 つでも欠ければ same_uid の limit を残し、canary が無ければ same_uid_without_canary の hit。
   --eval-root が無い入力（ops-r1）は従来どおり（runtime と L1 の拒否と owned_by_run_uid が空のとき外す）。
 - schema が違う・欄が欠けた probe JSON は入力の誤り（exit 2）。
+
+公開の初期 archive（--public-archive <tar> <sha256>、複数可。ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-public）:
+- tar の sha256 が引数と違えば入力の誤り（exit 2）。case.json の initial.archive_sha256 と、submodule tar の SHA256SUMS の値を渡す。
+- tar（生 byte と member）に現れる private の文字列 needle を検査から外す。private の sha256・--forbidden-sha・--canary は外さない。
+- 結果の checked.public_archive には外した数と長さだけを書く（文字列・hash・JSON path は書かない）。外した後に private の文字列が
+  0 件、または外す前の半分以上を外したら warning と limits に書き、stdout にも出す（pass/fail は変えない）。
 
 結果 JSON（--out）には pass・hits・checked・limits を書く。hit には文字列そのものを書かず、needle の id・
 長さ・sha256 だけを書く（結果 file 自体が漏洩源にならないように）。ただし checked.private[].sha256 は
@@ -168,12 +175,15 @@ class Scanner:
         self.hits = []
         self.hit_count = 0
         self.seen_hits = set()
+        self.hit_needles = set()
 
     def add_hit(self, hit):
         key = (hit.get("kind"), hit.get("path"), hit.get("member"), hit.get("needle_id"))
         if key in self.seen_hits:
             return
         self.seen_hits.add(key)
+        if hit.get("needle_id") is not None:
+            self.hit_needles.add(hit["needle_id"])
         self.hit_count += 1
         if len(self.hits) < HIT_LIST_CAP:
             self.hits.append(hit)
@@ -371,6 +381,58 @@ class Scanner:
 
 def is_tar_head(head):
     return len(head) >= 262 and head[257:262] == b"ustar"
+
+
+# ---------------------------------------------------------------- public archive
+
+
+def exclude_public(needles, archives, chunk):
+    """公開 archive に現れる private の文字列 needle を外す。(残す needle, 結果に書く記録, limit か None) を返す。"""
+    strings = [n for n in needles if n.kind == "private_string"]
+    found = set()
+    checked = []
+    for tar, want in archives:
+        try:
+            with open(tar, "rb") as f:
+                h = hashlib.sha256()
+                for block in iter(lambda: f.read(DEFAULT_CHUNK), b""):
+                    h.update(block)
+        except OSError as e:
+            raise InputError(f"--public-archive {tar}: {e}")
+        got = h.hexdigest()
+        if got != want.lower():
+            raise InputError(f"--public-archive {tar}: sha256 が {got} で、照合用の {want.lower()} と違う")
+        if not tarfile.is_tarfile(tar):
+            raise InputError(f"--public-archive {tar}: tar でない")
+        scanner = Scanner(strings, {}, {}, chunk, set())
+        stats = {"files": 0, "bytes": 0, "archive_members": 0, "unreadable": []}
+        scanner.scan_file(tar, stats)
+        if stats["unreadable"]:
+            raise InputError(f"--public-archive {tar}: 読めない member がある（{len(stats['unreadable'])} 件）")
+        found |= scanner.hit_needles
+        checked.append({"path": tar, "sha256": got, "members": stats["archive_members"], "bytes": stats["bytes"]})
+    removed = [n for n in strings if n.id in found]
+    kept = [n for n in needles if n.id not in found]
+    before, after = len(strings), len(strings) - len(removed)
+    record = {
+        "archives": checked,
+        "private_strings_before": before,
+        "private_strings_after": after,
+        "excluded_count": len(removed),
+        "excluded_lengths": sorted(n.length for n in removed),
+    }
+    warning = None
+    if before and after == 0:
+        warning = "no_private_strings_left"
+    elif before and len(removed) * 2 >= before:
+        warning = "most_private_strings_removed"
+    record["warning"] = warning
+    limit = None
+    if warning:
+        limit = {"kind": "public_archive_exclusion", "warning": warning, "before": before, "after": after,
+                 "note": "公開 archive に現れる private の文字列を外した結果、文字列の検査が 0 件か大きく減った。"
+                         "private の sha256・禁止 hash・canary の検査は残る"}
+    return kept, record, limit
 
 
 # ---------------------------------------------------------------- readability
@@ -680,6 +742,8 @@ def parse_args(argv):
                     help="測定の run の gid（複数可。既定はこの process の gid と補助 group）")
     ap.add_argument("--allow-string", action="append", default=[],
                     help="private の文字列のうち公開入力にも載るもの（検査から外し、結果に書く）")
+    ap.add_argument("--public-archive", nargs=2, action="append", default=[], metavar=("TAR", "SHA256"),
+                    help="公開の初期 archive（tar）と照合用の sha256。中に現れる private の文字列を検査から外す。複数可")
     ap.add_argument("--min-len", type=int, default=DEFAULT_MIN_LEN)
     ap.add_argument("--chunk-bytes", type=int, default=DEFAULT_CHUNK, help=argparse.SUPPRESS)
     return ap.parse_args(argv)
@@ -694,6 +758,9 @@ def run(args):
     for c in args.canary:
         if not c:
             raise InputError("--canary が空")
+    for _, s in args.public_archive:
+        if not is_hex64(s):
+            raise InputError(f"--public-archive の sha256 が 64 桁の 16 進でない: {s!r}")
     for p in args.scan:
         if not os.path.lexists(p):
             raise InputError(f"--scan {p} が無い")
@@ -729,9 +796,14 @@ def run(args):
     for i, p in enumerate(deny_paths):
         link_targets.setdefault(os.path.realpath(p), ("deny_readable", f"deny_readable[{i}]"))
 
+    public, limits = None, []
+    if args.public_archive:
+        needles, public, limit = exclude_public(needles, args.public_archive, args.chunk_bytes)
+        if limit:
+            limits.append(limit)
+
     exclude_real = {os.path.realpath(args.out)}
     scanner = Scanner(needles, content_hashes, link_targets, args.chunk_bytes, exclude_real)
-    limits = []
     scans = []
     for root in args.scan:
         stats = {"path": root, "files": 0, "bytes": 0, "archive_members": 0, "git_objects": 0,
@@ -764,6 +836,7 @@ def run(args):
             "canary": [{"len": len(c), "sha256": sha256_hex(c.encode("utf-8"))} for c in args.canary],
             "needles": len(needles),
             "min_len": args.min_len,
+            "public_archive": public,
             "public_identifier_paths": list(DEFAULT_PUBLIC_PATHS),
             "scan": scans,
             "deny_readable": deny,
@@ -800,6 +873,10 @@ def main(argv):
         return 2
     write_out(args.out, doc)
     print(f"pass={str(doc['pass']).lower()} hits={doc['hit_count']} needles={doc['checked']['needles']}")
+    pub = doc["checked"].get("public_archive")
+    if pub:
+        print(f"public_archive: excluded={pub['excluded_count']} private_strings={pub['private_strings_before']}"
+              f"->{pub['private_strings_after']}" + (f" warning={pub['warning']}" if pub["warning"] else ""))
     return 0 if doc["pass"] else 1
 
 

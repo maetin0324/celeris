@@ -77,6 +77,8 @@ struct Fixture {
     _dir: tempfile::TempDir,
     root: PathBuf,
     sb: ScriptSandbox,
+    /// `--socket` で bind する試験用の unix socket（ssh master の代わり。外部 network に出ない）。
+    _listener: std::os::unix::net::UnixListener,
     /// private grader・旧解答・他試行の出力（どの主体からも読めないはず）。
     deny: Vec<PathBuf>,
     private: PathBuf,
@@ -113,13 +115,19 @@ fn fixture() -> Fixture {
     .expect("stage daemon fixture");
     let account = root.join("account");
     write(&account.join(".credentials.json"), "{}");
+    // ssh master の socket の代わり。preflight・probe はこの bind を許可表に含め、mounts_outside_allow にしない。
+    let mux = root.join("mux");
+    fs::create_dir_all(&mux).expect("mux");
+    let sock = mux.join("ssh-mux.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind socket");
     Fixture {
+        _listener: listener,
         sb: ScriptSandbox {
             state: Some(state),
             release: Some(release),
             account: Some(account),
             ro: Vec::new(),
-            sockets: Vec::new(),
+            sockets: vec![sock],
         },
         deny: vec![private.clone(), old, other],
         root,
@@ -140,6 +148,9 @@ fn sandbox_base(sb: &ScriptSandbox) -> Vec<String> {
     }
     for r in &sb.ro {
         a.extend(["--ro".into(), s(r).into()]);
+    }
+    for k in &sb.sockets {
+        a.extend(["--socket".into(), s(k).into()]);
     }
     a
 }

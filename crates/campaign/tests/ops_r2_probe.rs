@@ -198,9 +198,14 @@ fn leak_check(fx: &Fixture, probes: &[PathBuf], out: &Path) -> (i32, Value) {
         .arg(scripts().join("check-ops-r1-leak.py"))
         .args(["--private", s(&fx.private), "--canary", CANARY])
         .args(["--scan", s(&fx.public.parent().expect("inputs"))]);
-    for d in &fx.deny {
-        cmd.args(["--deny-readable", s(d)]);
-    }
+    let deny_file = out.with_extension("deny.list");
+    let text: String = fx
+        .deny
+        .iter()
+        .map(|d| format!("{}\n", d.display()))
+        .collect();
+    fs::write(&deny_file, text).expect("deny file");
+    cmd.args(["--deny-readable-file", s(&deny_file)]);
     for p in probes {
         cmd.args(["--runtime-probe", s(p)]);
     }

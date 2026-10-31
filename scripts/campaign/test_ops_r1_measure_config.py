@@ -45,7 +45,7 @@ class MeasureConfigTest(unittest.TestCase):
         # 合成の skills（cos-operator・cos-inbox-triage と、その他 1 つ。SKILL.md の無い dir は写さない）。
         self.skills = os.path.join(self.root, "skills")
         for name in ("cos-operator", "cos-inbox-triage", "yomiyasu"):
-            wr(os.path.join(self.skills, name, "SKILL.md"), f"---\nname: {name}\n---\n# {name}\n")
+            wr(os.path.join(self.skills, name, "SKILL.md"), f"---\nname: {name}\nmetadata:\n  version: \"10\"\n---\n# {name}\n")
         wr(os.path.join(self.skills, "cos-operator", "references", "ops.md"), "ref\n")
         os.makedirs(os.path.join(self.skills, "not-a-skill"))
         wr(os.path.join(self.skills, "README.md"), "readme\n")
@@ -69,7 +69,7 @@ class MeasureConfigTest(unittest.TestCase):
         return subprocess.run(argv, capture_output=True, text=True, env=env)
 
     def gen_stub(self, *extra, state=None, out=None, models="cos-opus"):
-        r = self.run_script("--port", "17861", "--harness", "stub", "--stub-command", self.stub, *extra,
+        r = self.run_script("--port", "17861", "--policy-version", "10", "--harness", "stub", "--stub-command", self.stub, *extra,
                             state=state, out=out, models=models)
         self.assertEqual(r.returncode, 0, r.stderr)
         return out or os.path.join(self.root, "cfg", "daemon.toml")
@@ -100,7 +100,7 @@ class MeasureConfigTest(unittest.TestCase):
         self.assertEqual(cfg["execution"]["tree"]["max_parallel_child_tasks"], 1)
         # CoS: enabled・policy 6・route（cos-opus = CoS opus、他 sonnet）。
         self.assertTrue(cfg["cos"]["enabled"])
-        self.assertEqual(cfg["cos"]["triage"], {"policy_skill": "cos-inbox-triage", "policy_version": "6"})
+        self.assertEqual(cfg["cos"]["triage"], {"policy_skill": "cos-inbox-triage", "policy_version": "10"})
         self.assertEqual(cfg["cos"]["route_candidates"], [{"source": "stub", "model": "claude-opus-5-5"}])
         self.assertEqual(cfg["route_defaults"], {"claude_code": {"candidates": [{"source": "stub", "model": "claude-sonnet-5-5"}]}})
         # 全 task を claude_code へ（無いと CoS が起票した task が route されない）。
@@ -132,7 +132,7 @@ class MeasureConfigTest(unittest.TestCase):
     def test_trial_state_and_home(self):
         for trial in ("B-t001", "B-t002"):
             state = os.path.join(self.root, trial)
-            r = self.run_script("--port", "17861", "--harness", "stub",
+            r = self.run_script("--port", "17861", "--policy-version", "10", "--harness", "stub",
                                 "--stub-command", self.stub, state=state)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn(f"state={state}\nHOME={state}/home\n", r.stdout)
@@ -146,8 +146,9 @@ class MeasureConfigTest(unittest.TestCase):
         wr(normal, 'db = "x"\n\n[[clusters]]\nid = "pegasus"\nhost = "pegasus"\n\n[[clusters.forwards]]\n'
                    'listen = "127.0.0.1:18000"\ntarget = "10.0.0.1:18000"\n\n[api]\nlisten = "127.0.0.1:7721"\n\n'
                    '[[clusters]]\nid = "fern03"\nhost = "fern03"\n')
-        accounts = os.path.join(self.root, "accounts")
-        r = self.run_script("--port", "17862", "--claude-bin", "/opt/claude", "--claude-accounts", accounts,
+        accounts = self.make_account("b")
+        r = self.run_script("--port", "17862", "--policy-version", "10", "--claude-bin", "/opt/claude",
+                            "--b-account-dir", accounts,
                             "--clusters-from", normal, models="all-sonnet")
         self.assertEqual(r.returncode, 0, r.stderr)
         cfg = tomllib.loads(rd(os.path.join(self.root, "cfg", "daemon.toml")))
@@ -158,12 +159,83 @@ class MeasureConfigTest(unittest.TestCase):
         self.assertEqual(cfg["harnesses"]["claude_code"]["source_kinds"], ["claude_oauth"])
         self.assertEqual(cfg["adapters"], {"claude_code": {"command": "/opt/claude"}})
         self.assertEqual(cfg["llm_sources"]["claude_oauth"]["models"], ["claude-sonnet-5-5"])
-        self.assertEqual(cfg["accounts"], {"claude_dir": accounts, "max_runs_per_account": 1})
+        pool = os.path.join(self.root, "state", "pool")
+        self.assertEqual(cfg["accounts"], {"claude_dir": pool, "max_runs_per_account": 1})
+        self.assertEqual(os.listdir(pool), ["b"])
+        self.assertTrue(os.path.islink(os.path.join(pool, "b")))
+        self.assertEqual(os.path.realpath(os.path.join(pool, "b")), accounts)
         self.assertEqual(cfg["clusters"], tomllib.loads(rd(normal))["clusters"])
         self.assertEqual(cfg["api"]["listen"], "127.0.0.1:17862")
 
-    def test_free_port_when_omitted(self):
+    def make_account(self, name):
+        d = os.path.join(self.root, "measure-accounts", name)
+        wr(os.path.join(d, ".credentials.json"), "{}")
+        for sub in ("backups", "cache", "plugins", "sessions"):
+            os.makedirs(os.path.join(d, sub))
+        return d
+
+    def test_policy_version_follows_argument(self):
+        for sk in ("cos-inbox-triage",):
+            wr(os.path.join(self.skills, sk, "SKILL.md"), '---\nname: x\nmetadata:\n  version: "11"\n---\n')
+        r = self.run_script("--port", "1111", "--policy-version", "11", "--harness", "stub",
+                            "--stub-command", self.stub)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = tomllib.loads(rd(os.path.join(self.root, "cfg", "daemon.toml")))
+        self.assertEqual(cfg["cos"]["triage"]["policy_version"], "11")
+
+    def test_policy_version_required_and_checked(self):
         r = self.run_script("--harness", "stub", "--stub-command", self.stub)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        r = self.run_script("--policy-version", "x6", "--harness", "stub", "--stub-command", self.stub)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        r = self.run_script("--policy-version", "6", "--harness", "stub", "--stub-command", self.stub)
+        self.assert_refused(r, "differs from cos-inbox-triage skill version")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "cfg")))
+
+    def test_pool_holds_only_b(self):
+        b = self.make_account("b")
+        self.make_account("a")
+        self.make_account("operator")
+        r = self.run_script("--policy-version", "10", "--b-account-dir", b, "--claude-bin", "/opt/claude")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pool = os.path.join(self.root, "state", "pool")
+        self.assertEqual(os.listdir(pool), ["b"])
+        # Celeris の走査（Path::is_dir で symlink を辿り、.credentials.json の有無で login 済みを判定）と同じ見え方。
+        entries = [e for e in sorted(os.listdir(pool)) if os.path.isdir(os.path.join(pool, e))]
+        self.assertEqual(entries, ["b"])
+        self.assertTrue(os.path.isfile(os.path.join(pool, "b", ".credentials.json")))
+        # 同じ入力の再実行は通り、別の account では止まる。
+        r = self.run_script("--policy-version", "10", "--b-account-dir", b, "--claude-bin", "/opt/claude")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = self.run_script("--policy-version", "10", "--b-account-dir", self.make_account("c"),
+                            "--claude-bin", "/opt/claude")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("existing pool differs", r.stderr)
+
+    def test_account_dir_rejections(self):
+        b = self.make_account("b")
+        os.makedirs(os.path.join(b, "projects"))
+        r = self.run_script("--policy-version", "10", "--b-account-dir", b)
+        self.assert_refused(r, "past session state")
+        r = self.run_script("--policy-version", "10", "--b-account-dir", os.path.join(self.root, "nope"))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        r = self.run_script("--policy-version", "10")  # real には --b-account-dir が要る
+        self.assert_refused(r, "--b-account-dir")
+
+    def test_old_claude_accounts_argument_rejected(self):
+        r = self.run_script("--policy-version", "10", "--claude-accounts", self.make_account("b"),
+                            "--harness", "stub", "--stub-command", self.stub)
+        self.assertEqual(r.returncode, 2, r.stderr)
+
+    def test_llm_paths_off(self):
+        cfg = tomllib.loads(rd(self.gen_stub()))
+        self.assertEqual(cfg["maintenance"]["stagnation"], {
+            "project_idle_secs": 0, "human_wait_secs": 0, "release_unpromoted_secs": 0, "task_unscheduled_secs": 0})
+        self.assertFalse(cfg["knowledge"]["langmem"]["enabled"])
+        self.assertFalse(cfg["knowledge"]["gc"]["enabled"])
+
+    def test_free_port_when_omitted(self):
+        r = self.run_script("--policy-version", "10", "--harness", "stub", "--stub-command", self.stub)
         self.assertEqual(r.returncode, 0, r.stderr)
         cfg = tomllib.loads(rd(os.path.join(self.root, "cfg", "daemon.toml")))
         host, port = cfg["api"]["listen"].rsplit(":", 1)
@@ -184,7 +256,7 @@ class MeasureConfigTest(unittest.TestCase):
 
     def test_refuse_state_under_config_celeris(self):
         state = os.path.join(self.home, ".config", "celeris", "measure")
-        r = self.run_script("--harness", "stub", "--stub-command", self.stub, state=state)
+        r = self.run_script("--policy-version", "10", "--harness", "stub", "--stub-command", self.stub, state=state)
         self.assert_refused(r, "production path")
         self.assertFalse(os.path.exists(os.path.join(self.home, ".config")))
         self.assertFalse(os.path.exists(os.path.join(self.root, "cfg")))
@@ -192,27 +264,27 @@ class MeasureConfigTest(unittest.TestCase):
     def test_refuse_out_under_local_celeris_via_symlink(self):
         link = os.path.join(self.root, "link")
         os.symlink(os.path.join(self.home, ".local", "celeris"), link)
-        r = self.run_script("--harness", "stub", "--stub-command", self.stub, out=os.path.join(link, "daemon.toml"))
+        r = self.run_script("--policy-version", "10", "--harness", "stub", "--stub-command", self.stub, out=os.path.join(link, "daemon.toml"))
         self.assert_refused(r, "production path")
         self.assertFalse(os.path.exists(os.path.join(self.root, "state")))
 
     def test_refuse_out_under_production_state(self):
-        r = self.run_script("--harness", "stub", "--stub-command", self.stub,
+        r = self.run_script("--policy-version", "10", "--harness", "stub", "--stub-command", self.stub,
                             out="/local/celeris/state/ops-r1-test-never-written/daemon.toml")
         self.assert_refused(r, "production path")
         self.assertFalse(os.path.exists("/local/celeris/state/ops-r1-test-never-written"))
         self.assertFalse(os.path.exists(os.path.join(self.root, "state")))
 
     def test_refuse_unknown_models(self):
-        r = self.run_script("--harness", "stub", "--stub-command", self.stub, models="opus-everywhere")
+        r = self.run_script("--policy-version", "10", "--harness", "stub", "--stub-command", self.stub, models="opus-everywhere")
         self.assert_refused(r, "unknown --models")
         self.assertFalse(os.path.exists(os.path.join(self.root, "state")))
 
     def test_usage_and_input_errors(self):
         self.assertEqual(self.run_script(base=False).returncode, 2)
-        self.assertEqual(self.run_script("--harness", "stub").returncode, 2)  # --stub-command が無い
+        self.assertEqual(self.run_script("--policy-version", "10", "--harness", "stub").returncode, 2)  # --stub-command が無い
         os.remove(os.path.join(self.release, "bin", "celeris"))
-        r = self.run_script("--harness", "stub", "--stub-command", self.stub)
+        r = self.run_script("--policy-version", "10", "--harness", "stub", "--stub-command", self.stub)
         self.assertEqual(r.returncode, 1, r.stderr)
         self.assertIn("bin/celeris", r.stderr)
 

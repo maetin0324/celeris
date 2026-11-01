@@ -614,7 +614,7 @@ fn normalize_outcome(result: Result<RunOutcome, AdapterError>) -> (WorkerMessage
                 },
                 0,
             ),
-            Terminal::Question { text } => (WorkerMessage::Question { text }, 3),
+            Terminal::Question { text, usage } => (WorkerMessage::Question { text, usage }, 3),
             Terminal::Error {
                 message, retryable, ..
             } => (

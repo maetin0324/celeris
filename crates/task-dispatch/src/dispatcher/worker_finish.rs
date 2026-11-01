@@ -405,7 +405,7 @@ impl Dispatcher {
             // よいので、そのまま `Done` 扱いにする（`approvals` の行は作らない。実機で秘書が「最終試行なので
             // 自分の一般知識で答えた」まま `Question` の代わりに走った事故の反省）。
             Ok(RunOutcome {
-                terminal: Terminal::Question { text },
+                terminal: Terminal::Question { text, usage },
                 ..
             }) if task_core::is_conversation(&task) => {
                 subject = ReviewSubject {
@@ -416,19 +416,19 @@ impl Dispatcher {
                 (
                     Trigger::WorkerDone,
                     format!("done: {text}"),
-                    None,
+                    usage,
                     ProviderOutcome::Ok,
                 )
             }
             Ok(RunOutcome {
-                terminal: Terminal::Question { text },
+                terminal: Terminal::Question { text, usage },
                 ..
             }) => {
                 run_end = Some(task_core::RunEnd::Question);
                 (
                     Trigger::WorkerQuestion,
                     format!("question: {text}"),
-                    None,
+                    usage,
                     ProviderOutcome::Ok,
                 )
             }

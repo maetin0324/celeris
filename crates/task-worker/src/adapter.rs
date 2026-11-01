@@ -24,6 +24,8 @@ pub enum Terminal {
     },
     Question {
         text: String,
+        /// question で終わるまでに観測できた usage（取れた値だけ。無ければ `None`）。
+        usage: Option<Usage>,
     },
     Error {
         message: String,

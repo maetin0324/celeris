@@ -364,7 +364,10 @@ async fn terminal_from_result(
         Ok(rf) => {
             // ADR-0072 D9: 優先順位は `question` > `summary` > `yield`。
             if let Some(question) = rf.question {
-                Terminal::Question { text: question }
+                Terminal::Question {
+                    text: question,
+                    usage: usage,
+                }
             } else if let Some(summary) = rf.summary {
                 Terminal::Done {
                     summary,

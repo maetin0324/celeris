@@ -1437,7 +1437,10 @@ async fn terminal_from_result(
         Ok(rf) => {
             // ADR-0072 D9: 優先順位は `question` > `summary` > `yield`（ADR-0090: `wait` は `summary` の前）。
             if let Some(question) = rf.question {
-                Terminal::Question { text: question }
+                Terminal::Question {
+                    text: question,
+                    usage: usage_with_cost(last_result.usage, model),
+                }
             } else if let Some(summary) = rf.summary {
                 Terminal::Done {
                     summary,

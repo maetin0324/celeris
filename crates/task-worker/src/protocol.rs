@@ -1177,14 +1177,10 @@ pub enum WorkerMessage {
     /// ADR-0044 D2（Phase 53）: タスクのコメント（任意回、非終端）。`progress` と違って**残る**
     /// （`task_comments` に `author_kind = node` で入り、次の run の前置きにも載る）。
     /// **追加のみ**なので `PROTOCOL_VERSION` は 4 のまま（この行を出さないワーカーはそのまま動く）。
-    Comment {
-        body: String,
-    },
+    Comment { body: String },
     /// ADR-0016 D2: 実行中の委譲の提案（任意回、非終端）。celeris は検証を通ったものだけ子タスクとして挿入し、
     /// 拒否した提案は理由を `WorkerProgress` に残す。run は失敗しない。
-    Delegate {
-        tasks: Vec<DelegateTask>,
-    },
+    Delegate { tasks: Vec<DelegateTask> },
     Artifact {
         name: String,
         /// ワークスペース相対。絶対パス・`..`・ワークスペース外は拒否（ADR-0003 D5）。
@@ -1194,6 +1190,9 @@ pub enum WorkerMessage {
     },
     Question {
         text: String,
+        /// question で終わるまでに観測できた usage（取れた値だけ。追加のみ）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
     },
     Done {
         summary: String,
@@ -1213,9 +1212,7 @@ pub enum WorkerMessage {
     },
     /// 非終端: run 内で累積した usage（累積値。単調に増える）。追加のみ
     /// （`PROTOCOL_VERSION` は変えない。この行を出さないワーカーはそのまま動く）。
-    UsageProgress {
-        usage: Usage,
-    },
+    UsageProgress { usage: Usage },
     /// ADR-0072 D9/D10（Phase E1）: graceful yield（`result.json` の `{"yield": {...}}`）。`checkpoint`
     /// は checkpoint の意味の欄を寛容に持つ生の JSON（`task_core::WorkerCheckpointInput` と同じ形）。
     /// この行を出さないワーカーはそのまま動く（追加のみ。`PROTOCOL_VERSION` は変えない）。

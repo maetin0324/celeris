@@ -2741,7 +2741,7 @@ fn terminal_from_run_dir(dir: &std::path::Path, run_id: &str) -> Option<Terminal
             evidence,
             usage,
         }),
-        WorkerMessage::Question { text } => Some(Terminal::Question { text }),
+        WorkerMessage::Question { text, usage } => Some(Terminal::Question { text, usage }),
         WorkerMessage::Error {
             message,
             retryable,

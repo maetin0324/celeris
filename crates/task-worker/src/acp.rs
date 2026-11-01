@@ -854,7 +854,10 @@ async fn terminal_from_result_file(
         Ok(rf) => {
             // ADR-0072 D9: 優先順位は `question` > `summary` > `yield`。
             if let Some(question) = rf.question {
-                Terminal::Question { text: question }
+                Terminal::Question {
+                    text: question,
+                    usage: None,
+                }
             } else if let Some(summary) = rf.summary {
                 // ADR-0026: PromptResponse の token 使用量は `unstable_end_turn_token_usage`
                 // （安定版 ACP には無い）でしか運ばれず、opencode の実機確認でも観測されていないため

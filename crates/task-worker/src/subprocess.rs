@@ -300,9 +300,9 @@ pub async fn run_subprocess(
                                 }
                             }
                         }
-                        WorkerMessage::Question { text } => {
+                        WorkerMessage::Question { text, usage } => {
                             terminal_raw = Some(trimmed.to_string());
-                            terminal = Some(Terminal::Question { text });
+                            terminal = Some(Terminal::Question { text, usage });
                         }
                         WorkerMessage::Done {
                             summary,
@@ -447,7 +447,10 @@ pub(crate) async fn write_result_json(
             evidence: evidence.clone(),
             usage: *usage,
         },
-        Terminal::Question { text } => WorkerMessage::Question { text: text.clone() },
+        Terminal::Question { text, usage } => WorkerMessage::Question {
+            text: text.clone(),
+            usage: *usage,
+        },
         Terminal::Error {
             message,
             retryable,

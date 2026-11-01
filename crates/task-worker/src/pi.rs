@@ -524,7 +524,10 @@ async fn terminal_from_result(
     match serde_json::from_str::<ResultFile>(&text) {
         Ok(rf) => {
             if let Some(question) = rf.question {
-                Terminal::Question { text: question }
+                Terminal::Question {
+                    text: question,
+                    usage: usage,
+                }
             } else if let Some(summary) = rf.summary {
                 Terminal::Done {
                     summary,

@@ -562,7 +562,7 @@ pub(crate) fn shim_request_wait(
 ) -> (Result<RunOutcome, AdapterError>, Option<BrowserRunState>) {
     let question = |text: String| {
         Ok(RunOutcome {
-            terminal: Terminal::Question { text },
+            terminal: Terminal::Question { text, usage: None },
             exit_code: None,
         })
     };
@@ -667,6 +667,7 @@ pub(crate) fn credential_reentry(
     Ok(RunOutcome {
         terminal: Terminal::Question {
             text: CREDENTIAL_REQUEST_QUESTION.into(),
+            usage: None,
         },
         exit_code: None,
     })
@@ -813,6 +814,7 @@ pub(crate) fn registered_credential_approval(
     Ok(Some(RunOutcome {
         terminal: Terminal::Question {
             text: "Browser credential use approval requested".into(),
+            usage: None,
         },
         exit_code: None,
     }))

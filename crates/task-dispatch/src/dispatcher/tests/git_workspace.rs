@@ -423,6 +423,7 @@ async fn cancelling_a_task_removes_its_worktree_and_branch() {
     // 質問で止まる run（`blocked`）にして、終端になる前に人が中止できるようにする。
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Question {
+            usage: None,
             text: "どちらで進めますか".into(),
         },
         delay: Duration::ZERO,

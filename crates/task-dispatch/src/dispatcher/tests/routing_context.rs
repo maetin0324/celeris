@@ -300,6 +300,7 @@ async fn routing_context_is_registered_recorded_once_and_released_at_run_end() {
     let registry = Arc::new(RecordingRegistry::default());
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(InstantAdapter {
         terminal: Terminal::Question {
+            usage: None,
             text: "not needed".into(),
         },
         delay: Duration::ZERO,

@@ -519,6 +519,7 @@ async fn a_conversation_run_turns_a_question_into_a_reply_without_an_approval() 
     .unwrap();
 
     let adapter = Arc::new(person_adapter(Terminal::Question {
+        usage: None,
         text: "予算とクラスタを教えてください".into(),
     }));
     let mut d = person_dispatcher(store.clone(), adapter, workspace_root, None);
@@ -999,6 +1000,7 @@ async fn a_question_without_an_assignee_goes_to_the_secretary() {
     store.insert(&q).unwrap();
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Question {
+            usage: None,
             text: "続けますか".into(),
         },
         delay: Duration::ZERO,

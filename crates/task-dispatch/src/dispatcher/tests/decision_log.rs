@@ -26,6 +26,7 @@ async fn dispatch_fills_decision_log_fields_at_run_time() {
     store.insert(&task).unwrap();
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(InstantAdapter {
         terminal: Terminal::Question {
+            usage: None,
             text: "not needed".into(),
         },
         delay: Duration::ZERO,

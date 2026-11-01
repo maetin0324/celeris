@@ -297,6 +297,7 @@ async fn question_blocks_task_and_review_fail_retries_until_budget() {
     store.insert(&q).unwrap();
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Question {
+            usage: None,
             text: "which?".into(),
         },
         delay: Duration::ZERO,
@@ -1622,6 +1623,7 @@ async fn a_question_from_an_assigned_run_creates_a_pending_approval() {
     store.create_task(&task, vec![]).unwrap();
 
     let adapter = Arc::new(person_adapter(Terminal::Question {
+        usage: None,
         text: "どのクラスタを使いますか".into(),
     }));
     let mut d = person_dispatcher(store.clone(), adapter, workspace_root, None);

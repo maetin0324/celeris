@@ -504,6 +504,7 @@ fn cos_chat_run_sink_terminal_mapping() {
     let f = chat_finish_for(
         &Ok(RunOutcome {
             terminal: Terminal::Question {
+                usage: None,
                 text: "どれ?".into(),
             },
             exit_code: Some(0),

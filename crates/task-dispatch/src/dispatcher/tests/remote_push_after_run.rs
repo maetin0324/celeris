@@ -23,7 +23,10 @@ impl task_worker::EventSink for RecordingSink {
 
 fn done() -> Result<RunOutcome, AdapterError> {
     Ok(RunOutcome {
-        terminal: Terminal::Question { text: "q".into() },
+        terminal: Terminal::Question {
+            usage: None,
+            text: "q".into(),
+        },
         exit_code: Some(0),
     })
 }

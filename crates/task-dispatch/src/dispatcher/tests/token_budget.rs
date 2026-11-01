@@ -402,3 +402,37 @@ async fn failed_reviewer_run_records_usage() {
     assert_eq!(row.status, task_core::RunIndexStatus::Failed);
     assert_runs_replay_clean(&store, task_id);
 }
+
+/// question で終わった worker run（`worker_question` で blocked）でも、観測できた usage が
+/// `worker_finished.usage` と runs 索引の `usage_json` に入る。replay とも一致する。
+#[tokio::test]
+async fn question_run_records_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = new_task(dir.path(), Check::Reviewer, 0);
+    let task_id = task.id;
+    store.insert(&task).unwrap();
+    let adapter = Arc::new(ScriptedAdapter::new(vec![Terminal::Question {
+        text: "which one?".into(),
+        usage: Some(tokens(7_654)),
+    }]));
+    let mut d = dispatcher(store.clone(), adapter, 1);
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Blocked);
+    let finished = worker_finished(&store, task_id);
+    assert_eq!(finished.len(), 1, "{finished:?}");
+    match &finished[0] {
+        Event::WorkerFinished { usage, .. } => {
+            assert_eq!(usage.as_ref().map(|u| u.budget_tokens()), Some(7_654));
+        }
+        other => panic!("{other:?}"),
+    }
+    let rows = store.runs_for_task(task_id).unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        rows[0].usage.as_ref().map(|u| u.budget_tokens()),
+        Some(7_654)
+    );
+    assert_runs_replay_clean(&store, task_id);
+}

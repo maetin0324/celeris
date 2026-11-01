@@ -91,7 +91,10 @@ impl Fx {
         let mut d = dispatcher(
             self.store.clone(),
             Arc::new(InstantAdapter {
-                terminal: Terminal::Question { text: "x".into() },
+                terminal: Terminal::Question {
+                    usage: None,
+                    text: "x".into(),
+                },
                 delay: Duration::ZERO,
             }),
             1,
@@ -211,7 +214,10 @@ fn checker(f: &Fx) -> Dispatcher {
     dispatcher(
         f.store.clone(),
         Arc::new(InstantAdapter {
-            terminal: Terminal::Question { text: "x".into() },
+            terminal: Terminal::Question {
+                usage: None,
+                text: "x".into(),
+            },
             delay: Duration::ZERO,
         }),
         1,
@@ -319,7 +325,10 @@ impl WorkerAdapter for CampaignCapture {
     ) -> Result<RunOutcome, AdapterError> {
         self.seen.lock().unwrap().push(req.context.campaign.clone());
         Ok(RunOutcome {
-            terminal: Terminal::Question { text: "x".into() },
+            terminal: Terminal::Question {
+                usage: None,
+                text: "x".into(),
+            },
             exit_code: Some(0),
         })
     }

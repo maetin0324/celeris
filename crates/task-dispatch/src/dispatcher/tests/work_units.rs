@@ -701,6 +701,7 @@ async fn a_work_unit_question_blocks_the_task_and_an_answer_resumes_it() {
     script.insert(
         "a".to_string(),
         vec![Terminal::Question {
+            usage: None,
             text: "どちらの方針にしますか".into(),
         }],
     );
@@ -2820,6 +2821,7 @@ async fn sibling_question_waits_for_in_flight_units_before_blocking() {
             .with_script(
                 "a",
                 vec![Terminal::Question {
+                    usage: None,
                     text: "どちらの API を使いますか".into(),
                 }],
             ),
@@ -3952,6 +3954,7 @@ async fn a_plan_issue_answer_with_resume_keeps_the_check_and_replan_needs_a_plan
     script.insert(
         "a".to_string(),
         vec![Terminal::Question {
+            usage: None,
             text: "どちらの方針にしますか".into(),
         }],
     );

@@ -50,6 +50,7 @@ fn lane_assist_of(rec: &task_core::RoutingRecord) -> Option<LaneAssistRecord> {
 pub(super) fn question_adapter() -> Arc<dyn WorkerAdapter> {
     Arc::new(InstantAdapter {
         terminal: Terminal::Question {
+            usage: None,
             text: "not needed".into(),
         },
         delay: Duration::ZERO,

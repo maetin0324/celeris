@@ -68,6 +68,7 @@ impl WorkerAdapter for WritesArtifactsAdapter {
 
 fn question() -> Terminal {
     Terminal::Question {
+        usage: None,
         text: "which figure set?".into(),
     }
 }

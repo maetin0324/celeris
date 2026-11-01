@@ -296,6 +296,7 @@ fn a_question_run_becomes_a_question_report() {
     store.insert(&task).expect("insert");
     let result: Result<RunOutcome, AdapterError> = Ok(RunOutcome {
         terminal: Terminal::Question {
+            usage: None,
             text: "どのクラスタを使いますか".into(),
         },
         exit_code: Some(0),

@@ -166,6 +166,7 @@ fn terminal_wants_scan_for_done_question_and_waiting_only() {
         usage: None,
     }));
     assert!(terminal_wants_scan(&Terminal::Question {
+        usage: None,
         text: "q".into()
     }));
     assert!(terminal_wants_scan(&Terminal::Waiting {

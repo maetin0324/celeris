@@ -72,6 +72,7 @@ fn hinted_task(dir: &std::path::Path) -> Task {
 fn question_adapter() -> Arc<dyn WorkerAdapter> {
     Arc::new(InstantAdapter {
         terminal: Terminal::Question {
+            usage: None,
             text: "not needed".into(),
         },
         delay: Duration::ZERO,

@@ -5253,6 +5253,75 @@ fn run_index_round_trips_start_and_finish() {
     );
 }
 
+/// 終端の usage が無いまま閉じる run（cancelled 等）でも、途中で書いた累積 usage は NULL で上書きされない。
+/// 終端の usage があればそれで置き換わる。
+#[test]
+fn run_index_finish_without_usage_keeps_progress_usage() {
+    let usage = |input: u64| crate::model::Usage {
+        input_tokens: Some(input),
+        output_tokens: Some(0),
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
+        cost_usd: None,
+        duplicate_reads: None,
+        session_resumed: None,
+        context_tokens: None,
+    };
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Draft);
+    store.insert(&task).unwrap();
+    for run_id in ["run-cancel", "run-final"] {
+        store
+            .run_index_start(RunRow {
+                run_id: run_id.into(),
+                task_id: task.id.to_string(),
+                work_unit_id: None,
+                role: RunIndexRole::Worker,
+                seq: 1,
+                status: RunIndexStatus::Running,
+                adapter: Some("claude-code".into()),
+                model: Some("m".into()),
+                account: None,
+                session_id: None,
+                checkpoint: None,
+                usage: None,
+                metrics: None,
+                started_at: "2026-09-24T00:00:00Z".into(),
+                finished_at: None,
+            })
+            .unwrap();
+        store
+            .run_index_progress_usage(run_id, &usage(1_234))
+            .unwrap();
+    }
+    let finished = OffsetDateTime::parse("2026-09-24T00:05:00Z", &Rfc3339).unwrap();
+    store
+        .run_index_finish(
+            "run-cancel",
+            RunIndexStatus::Cancelled,
+            None,
+            None,
+            None,
+            finished,
+        )
+        .unwrap();
+    store
+        .run_index_finish(
+            "run-final",
+            RunIndexStatus::Completed,
+            None,
+            Some(usage(5_678)),
+            None,
+            finished,
+        )
+        .unwrap();
+    let cancelled = store.run_index_get("run-cancel").unwrap().unwrap();
+    assert_eq!(cancelled.status, RunIndexStatus::Cancelled);
+    assert_eq!(cancelled.usage.and_then(|u| u.input_tokens), Some(1_234));
+    let completed = store.run_index_get("run-final").unwrap().unwrap();
+    assert_eq!(completed.usage.and_then(|u| u.input_tokens), Some(5_678));
+}
+
 #[test]
 fn run_selections_for_task_returns_only_complete_persisted_selections() {
     let store = SqliteStore::open_in_memory().unwrap();

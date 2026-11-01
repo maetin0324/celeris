@@ -1,7 +1,7 @@
 ---
 title: question で終わった run の usage が記録されない
 tasks: [01M6B3APKYSRQH9ZF14QYVTXNV]
-status: running
+status: done
 updated: 2026-11-01
 ---
 
@@ -20,7 +20,11 @@ updated: 2026-11-01
 - `cargo nextest run -p task-worker -E 'test(claude_code)'`: 132 passed
 - `cargo nextest run -p task-core -E 'test(run_index)'`: 2 passed（`run_index_finish_without_usage_keeps_progress_usage` を含む）
 
+- `bash scripts/dev/test-affected.sh`（基準は `git merge-base HEAD main`）: Rust 6873 件中 6872 passed・1 failed（`protocol::tests::committed_schema_matches_generated`。Question の usage 欄の追加で `docs/protocol/worker-protocol.schema.json` が古かった）。`UPDATE_SCHEMA=1` で再生成した後、同じ試験を単独で実行して 1 passed。web は vitest 101 files・697 passed、node test 113 passed。再生成後の test-affected.sh 全体の再実行はしていない
+- `cargo clippy --workspace -- -D warnings`: exit 0
+- `cargo fmt --all -- --check`: exit 0
+
 ## 未解決事項
 
-- cancelled・completed の NULL の原因
-- test-affected.sh・clippy・fmt
+- usage を出さない harness（aider・acp）の run は usage が NULL のまま残る
+- 本番 DB の既存の NULL 行は埋め戻さない（events にも usage が無く、復元の元が無い）。本番 DB の status・harness 別の内訳は未確認

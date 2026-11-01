@@ -4711,6 +4711,17 @@
             "type": {
               "const": "question",
               "type": "string"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Usage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "question で終わるまでに観測できた usage（取れた値だけ。追加のみ）。"
             }
           },
           "required": [

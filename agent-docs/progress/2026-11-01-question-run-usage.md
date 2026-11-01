@@ -1,8 +1,8 @@
 ---
-task: 01M6B3APKYSRQH9ZF14QYVTXNV
 title: question で終わった run の usage が記録されない
+tasks: [01M6B3APKYSRQH9ZF14QYVTXNV]
 status: running
-started: 2026-11-01
+updated: 2026-11-01
 ---
 
 # question で終わった run の usage が記録されない
@@ -18,6 +18,7 @@ started: 2026-11-01
 
 - `cargo nextest run -p task-dispatch -E 'test(question_run_records_usage) | test(token_budget)'`: 4 passed
 - `cargo nextest run -p task-worker -E 'test(claude_code)'`: 132 passed
+- `cargo nextest run -p task-core -E 'test(run_index)'`: 2 passed（`run_index_finish_without_usage_keeps_progress_usage` を含む）
 
 ## 未解決事項
 

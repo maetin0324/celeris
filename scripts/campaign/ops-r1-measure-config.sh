@@ -1,11 +1,20 @@
 #!/bin/sh
 # ops-r1 測定 daemon の config 生成（POSIX sh、dash で動く）。設計は
 # agent-docs/progress/2026-10-29-k4-ops-r1-pilot/measure-probe.md。daemon のコードは変えず、config だけで
-# CoS 経路（[cos] enabled・policy 6・CoS skill・route）を測定専用の state に閉じる。
+# CoS 経路（[cos] enabled・policy 版は引数・CoS skill・route）を測定専用の state に閉じる。
 #
-#   ops-r1-measure-config.sh --state <dir> --release-dir <release の dir> --models <key> --out <daemon.toml>
-#       [--port <n>] [--harness real|stub] [--stub-command <path>] [--claude-bin <path>]
-#       [--claude-accounts <dir>] [--clusters-from <通常運用の config.toml>] [--skills-src <dir>]
+#   ops-r1-measure-config.sh --state <dir> --release-dir <release の dir> --models <key> --policy-version <N>
+#       --out <daemon.toml> [--port <n>] [--harness real|stub] [--stub-command <path>] [--claude-bin <path>]
+#       [--b-account-dir <dir>] [--clusters-from <通常運用の config.toml>] [--skills-src <dir>]
+#
+# --policy-version は必須（[cos.triage] policy_version に書く。承認票の方針版。--skills-src の
+# cos-inbox-triage の front matter version と違えば止める）。
+# --b-account-dir は B の account dir（1 dir = 1 account、.credentials.json を直に持つ）。生成時に <state>/pool を作り、
+# b の basename の symlink を 1 つだけ置いて [accounts] claude_dir をその pool にする（a・operator は入れない）。
+# --harness real では必須。
+# 試行と無関係な LLM 経路は config で切る: [maintenance.stagnation] の 4 閾値 = 0、[knowledge.langmem]・[knowledge.gc]
+# 無効、[memory]・[llm_proxy]・[[mcp.listeners]]・[[cron.seed]] なし。CoS の受信箱 triage は config で切れない
+# （agent-docs/adr/2026-10-31-ops-r2-preflight-fixes.md D8）。
 #
 # --models の key（d-ops-r1-models の option）:
 #   cos-opus    CoS = claude-opus-5-5、planner/worker/reviewer = claude-sonnet-5-5
@@ -16,13 +25,14 @@
 # --port を省くと 127.0.0.1 の空き port を選ぶ。同じ入力（--port を含む）なら daemon.toml は byte 一致する。
 #
 # 書くもの: --out（daemon.toml）と --state の下（token・kb/skills・ws・scratch・setup/project.json）。
+# setup/project.json の workspace は <state>/work/benchfs（B の作業ツリー。ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-bwork）。
 # 試行専用の案件と案件 CoS thread は daemon 起動後に API で作る（setup/project.json の body で
 # POST /api/v1/projects、続けて POST /api/v1/chat/threads {project_id}。docs/ops/ops-r1-measure-daemon.md）。
 # exit: 0 書いた / 1 入力の不備（release dir に bin/celeris が無い等）/ 2 使い方の誤り・本番 path・未知の --models。
 set -eu
 
 usage() {
-    echo "usage: $0 --state <dir> --release-dir <dir> --models <cos-opus|all-sonnet> --out <daemon.toml> [--port <n>] [--harness real|stub] [--stub-command <path>] [--claude-bin <path>] [--claude-accounts <dir>] [--clusters-from <config.toml>] [--skills-src <dir>]" >&2
+    echo "usage: $0 --state <dir> --release-dir <dir> --models <cos-opus|all-sonnet> --policy-version <N> --out <daemon.toml> [--port <n>] [--harness real|stub] [--stub-command <path>] [--claude-bin <path>] [--b-account-dir <dir>] [--clusters-from <config.toml>] [--skills-src <dir>]" >&2
     exit 2
 }
 refuse() {
@@ -36,7 +46,7 @@ die() {
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 STATE= RELEASE_DIR= MODELS= OUT= PORT= HARNESS=real STUB_COMMAND= CLAUDE_BIN=claude
-CLAUDE_ACCOUNTS= CLUSTERS_FROM= SKILLS_SRC=$HERE/../../config/skills
+B_ACCOUNT_DIR= POLICY_VERSION= CLUSTERS_FROM= SKILLS_SRC=$HERE/../../config/skills
 while [ $# -gt 0 ]; do
     [ $# -ge 2 ] || usage
     case $1 in
@@ -48,7 +58,8 @@ while [ $# -gt 0 ]; do
         --harness) HARNESS=$2 ;;
         --stub-command) STUB_COMMAND=$2 ;;
         --claude-bin) CLAUDE_BIN=$2 ;;
-        --claude-accounts) CLAUDE_ACCOUNTS=$2 ;;
+        --b-account-dir) B_ACCOUNT_DIR=$2 ;;
+        --policy-version) POLICY_VERSION=$2 ;;
         --clusters-from) CLUSTERS_FROM=$2 ;;
         --skills-src) SKILLS_SRC=$2 ;;
         *) usage ;;
@@ -56,6 +67,10 @@ while [ $# -gt 0 ]; do
     shift 2
 done
 [ -n "$STATE" ] && [ -n "$RELEASE_DIR" ] && [ -n "$MODELS" ] && [ -n "$OUT" ] || usage
+[ -n "$POLICY_VERSION" ] || usage
+case $POLICY_VERSION in
+    *[!0-9]*) usage ;;
+esac
 
 # ---- models（決定の option key → model）
 case $MODELS in
@@ -68,6 +83,9 @@ case $HARNESS in
     stub) [ -n "$STUB_COMMAND" ] || refuse "--harness stub needs --stub-command" ;;
     *) refuse "unknown --harness $HARNESS (real | stub)" ;;
 esac
+if [ "$HARNESS" = real ] && [ -z "$B_ACCOUNT_DIR" ]; then
+    refuse "--harness real needs --b-account-dir"
+fi
 if [ -n "$PORT" ]; then
     case $PORT in
         *[!0-9]*) refuse "--port must be a number: $PORT" ;;
@@ -105,6 +123,24 @@ CELERIS_SHA256=$(sha256sum "$RELEASE_DIR/bin/celeris" | cut -d ' ' -f 1)
 for name in cos-operator cos-inbox-triage; do
     [ -f "$SKILLS_SRC/$name/SKILL.md" ] || die "skills source lacks $name/SKILL.md: $SKILLS_SRC"
 done
+SKILL_VERSION=$(sed -n '/^---$/,/^---$/s/^[[:space:]]*version:[[:space:]]*"\{0,1\}\([0-9]*\)"\{0,1\}[[:space:]]*$/\1/p' "$SKILLS_SRC/cos-inbox-triage/SKILL.md" | head -n 1)
+[ "$SKILL_VERSION" = "$POLICY_VERSION" ] ||
+    refuse "--policy-version $POLICY_VERSION differs from cos-inbox-triage skill version '${SKILL_VERSION}' ($SKILLS_SRC)"
+if [ -n "$B_ACCOUNT_DIR" ]; then
+    B_ACCOUNT_DIR=$(canon "$B_ACCOUNT_DIR")
+    B_ID=$(basename "$B_ACCOUNT_DIR")
+    case $B_ID in
+        "" | . | .. | .* | *[!A-Za-z0-9_-]*) refuse "invalid account id (basename of --b-account-dir): $B_ID" ;;
+    esac
+    [ -f "$B_ACCOUNT_DIR/.credentials.json" ] || die "--b-account-dir lacks .credentials.json: $B_ACCOUNT_DIR"
+    for sub in projects memory; do
+        [ ! -e "$B_ACCOUNT_DIR/$sub" ] || refuse "--b-account-dir has $sub/ (past session state): $B_ACCOUNT_DIR"
+    done
+    if [ -n "${HOME:-}" ]; then
+        under "$B_ACCOUNT_DIR" "$(canon "$HOME/.claude")" && refuse "--b-account-dir is under ~/.claude: $B_ACCOUNT_DIR"
+    fi
+    POOL=$STATE/pool
+fi
 if [ -n "$CLUSTERS_FROM" ]; then
     [ -f "$CLUSTERS_FROM" ] || die "--clusters-from not found: $CLUSTERS_FROM"
 fi
@@ -136,9 +172,41 @@ for dir in "$SKILLS_SRC"/*/; do
     cp -R "$SKILLS_SRC/$name" "$STATE/kb/skills/$name"
     SKILLS="$SKILLS $name"
 done
-cat >"$STATE/setup/project.json" <<'EOF'
-{"title": "ops-r1 trial", "request": "ops-r1 K4 pilot の試行専用の案件。人の依頼は案件 CoS thread に入れる。"}
-EOF
+if [ -n "$B_ACCOUNT_DIR" ]; then
+    if [ -e "$POOL" ] || [ -L "$POOL" ]; then
+        [ -d "$POOL" ] && [ "$(ls -A "$POOL")" = "$B_ID" ] && [ "$(readlink "$POOL/$B_ID")" = "$B_ACCOUNT_DIR" ] ||
+            die "existing pool differs from the requested single entry: $POOL"
+    else
+        mkdir "$POOL"
+        ln -s "$B_ACCOUNT_DIR" "$POOL/$B_ID"
+    fi
+fi
+# 測定用の release store の写し（ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-store）。daemon の promotion gate は
+# releases_dir の親の `current` の行き先の名前が自分の sha12 であることを見る。本番の release store は変えず、
+# $STATE/release-store/{releases/<sha12> -> release dir, current -> releases/<sha12>} を作る。
+STORE="$STATE/release-store"
+if [ -e "$STORE" ] || [ -L "$STORE" ]; then
+    [ "$(readlink "$STORE/releases/$RELEASE_SHA12")" = "$RELEASE_DIR" ] &&
+        [ "$(readlink "$STORE/current")" = "releases/$RELEASE_SHA12" ] &&
+        [ "$(ls -A "$STORE/releases")" = "$RELEASE_SHA12" ] ||
+        die "existing release store differs from the requested release: $STORE"
+else
+    mkdir -p "$STORE/releases"
+    ln -s "$RELEASE_DIR" "$STORE/releases/$RELEASE_SHA12"
+    ln -s "releases/$RELEASE_SHA12" "$STORE/current"
+fi
+# 案件の作業場所 = B の作業ツリー（付記 D-bwork）。種は daemon の起動前に包みの中でここへ展開する（ops-r2-b-daemon-command.sh）。
+# .git を持たないので POST /projects は repo の種類を dir にし、run には木への symlink を置く。A と同じ <state>/work/benchfs。
+python3 -I - "$STATE/setup/project.json" "$STATE/work/benchfs" <<'PY' || die "cannot write $STATE/setup/project.json"
+import json
+import sys
+body = {"title": "ops-r2 K2 trial",
+        "request": "ops-r2 K2 pilot の試行専用の案件。人の依頼は案件 CoS thread に入れる。",
+        "workspace": {"kind": "local", "path": sys.argv[2]}}
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump(body, f, ensure_ascii=False)
+    f.write("\n")
+PY
 
 # ---- daemon.toml
 if [ "$HARNESS" = real ]; then
@@ -155,9 +223,11 @@ TMP_OUT="$OUT.tmp.$$"
 trap 'rm -f "$TMP_OUT"' EXIT
 {
     cat <<EOF
-# ops-r1 測定 daemon の config（scripts/campaign/ops-r1-measure-config.sh が生成。手で書き換えない）。秘密値なし。
+# ops-r2 K2 測定 daemon の config（scripts/campaign/ops-r1-measure-config.sh が生成。手で書き換えない）。秘密値なし。
 # release $RELEASE_SHA12（bin/celeris sha256 $CELERIS_SHA256）、models $MODELS、harness $HARNESS。
 # 本番と別: db・token・knowledge・workspace・scratch は $STATE の下、api は 127.0.0.1:$PORT。
+# 切ってある LLM 経路: [maintenance.stagnation]（4 閾値 0）・[knowledge.langmem]・[knowledge.gc]。
+# CoS の受信箱 triage は config で切れない（試行の task の待ちだけが載る）。
 # [memory]・[llm_proxy]・[[mcp.listeners]]・[[cron.seed]] は置かない（既定で無効）。
 
 db = $(q "$STATE/celeris.db")
@@ -185,18 +255,25 @@ enabled = false
 dir = $(q "$STATE/scratch")
 
 [selfdeploy]
-releases_dir = $(q "$(dirname "$RELEASE_DIR")")
+releases_dir = $(q "$STORE/releases")
+
+# 試行と無関係に LLM を呼ぶ経路を切る（停滞の finding を作らない = CoS triage の run が起きない）。
+[maintenance.stagnation]
+project_idle_secs = 0
+human_wait_secs = 0
+release_unpromoted_secs = 0
+task_unscheduled_secs = 0
 
 [execution]
 max_parallel_work_units = 1
 [execution.tree]
 max_parallel_child_tasks = 1
 EOF
-    # [accounts] は claude_dir 無しでは読み込みエラーになるので、--claude-accounts のときだけ書く。
-    if [ -n "$CLAUDE_ACCOUNTS" ]; then
+    # [accounts] は claude_dir 無しでは読み込みエラーになるので、--b-account-dir のときだけ書く。
+    if [ -n "$B_ACCOUNT_DIR" ]; then
         echo
         echo "[accounts]"
-        echo "claude_dir = $(q "$(canon "$CLAUDE_ACCOUNTS")")"
+        echo "claude_dir = $(q "$POOL")"
         echo "max_runs_per_account = 1"
     fi
     cat <<EOF
@@ -206,7 +283,7 @@ enabled = true
 route_candidates = [{ source = "$SOURCE", model = "$COS_MODEL" }]
 [cos.triage]
 policy_skill = "cos-inbox-triage"
-policy_version = "6"
+policy_version = "$POLICY_VERSION"
 
 [route_defaults.claude_code]
 candidates = [{ source = "$SOURCE", model = "$RUN_MODEL" }]

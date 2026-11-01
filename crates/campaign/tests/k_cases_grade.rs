@@ -341,8 +341,17 @@ fn known_bad_fails_and_fixed_passes(id: &str, rules: &[Rule], bad: &Path, fixed:
     let (st, d) = impl_check(&fixed_r);
     assert_eq!(st, Status::Pass, "{id}: 修正版は合格のはず: {d}");
     // 隠しテストは成果物に無かったが、挿入されて走った（削除判定にならない）。
-    let det = &fixed_r.checks.implementation.details["hidden_inserted"];
-    assert!(det.as_array().is_some_and(|a| !a.is_empty()), "{det}");
+    let det = &fixed_r.checks.implementation.details["hidden_inserted_count"];
+    assert!(det.as_u64().is_some_and(|n| n > 0), "{det}");
+    assert!(
+        fixed_r
+            .checks
+            .implementation
+            .details
+            .get("hidden_inserted")
+            .is_none(),
+        "隠しテストの path 一覧は判定 JSON に出さない"
+    );
     // 実験工程の証拠が無いので試験全体は合格にならない（実装検査だけを見ている）。
     assert_ne!(fixed_r.verdict, Verdict::Pass);
     let _ = implementation::marks; // grader の公開面に依存していることの確認

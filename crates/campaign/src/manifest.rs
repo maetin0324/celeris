@@ -499,6 +499,9 @@ pub struct CampaignManifest {
 
 /// 試行ごとの観測版を必須にする契約 revision（ADR 2026-10-27-trial-observed-versions D1）。
 pub const CONTRACT_REVISION_OPS_R1: &str = "main-4-ops-r1";
+/// ops-r2（K2 pilot）の契約 revision。ops-r1 と同じ `conditions` に加えて、評価器領域の private・grade-case の sha256 参照
+/// （`grader_refs`）を持つ。ADR 2026-10-31-ops-r2-preflight-fixes 付記 M1。
+pub const CONTRACT_REVISION_OPS_R2: &str = "main-4-ops-r2";
 
 /// 契約 revision の宣言。`revision` は既知の名前だけ。有効 arm は全部 `pinned_versions` を持つ。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -510,6 +513,18 @@ pub struct ContractRevision {
     /// 省略時は直列化しない（既存の contract 付き manifest の hash を変えない）。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub conditions: BTreeMap<ConfigId, crate::ops_r1_conditions::ConditionDecl>,
+    /// ops-r2 の problem id → 評価器領域の private・grade-case の sha256 参照（値だけ。中身は読まない）。
+    /// `main-4-ops-r2` だけが持てる。省略時は直列化しない（ops-r1 と既存 manifest の hash を変えない）。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub grader_refs: BTreeMap<String, GraderRefs>,
+}
+
+/// 評価器が `EVAL_ROOT` に持つ private と grade-case の sha256（承認票の値）。preflight は case.json の同名欄と照合する。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GraderRefs {
+    pub private_sha256: String,
+    pub grade_case_sha256: String,
 }
 
 /// arm ごとに試行の開始時の観測と照合する宣言。B/C の release は `Config::harness_version`（12 桁 hex）を使う。
@@ -535,11 +550,25 @@ fn is_hex(s: &str, n: usize) -> bool {
 impl ContractRevision {
     /// 宣言の形の検査（revision 名・有効 arm の網羅・各欄）。
     pub fn validate(&self, active: &[ConfigId]) -> Result<(), String> {
-        if self.revision != CONTRACT_REVISION_OPS_R1 {
+        if self.revision != CONTRACT_REVISION_OPS_R1 && self.revision != CONTRACT_REVISION_OPS_R2 {
             return Err(format!(
-                "contract.revision {:?} is unknown (known: {CONTRACT_REVISION_OPS_R1})",
+                "contract.revision {:?} is unknown (known: {CONTRACT_REVISION_OPS_R1}, {CONTRACT_REVISION_OPS_R2})",
                 self.revision
             ));
+        }
+        if self.revision == CONTRACT_REVISION_OPS_R2 {
+            if self.grader_refs.is_empty() {
+                return Err("contract.grader_refs is required for main-4-ops-r2".into());
+            }
+        } else if !self.grader_refs.is_empty() {
+            return Err("contract.grader_refs is only for main-4-ops-r2".into());
+        }
+        for (id, r) in &self.grader_refs {
+            if !is_hex(&r.private_sha256, 64) || !is_hex(&r.grade_case_sha256, 64) {
+                return Err(format!(
+                    "contract.grader_refs.{id}: private_sha256 and grade_case_sha256 must be 64 hex"
+                ));
+            }
         }
         for id in active {
             if !self.pinned_versions.contains_key(id) {
@@ -970,6 +999,15 @@ impl CampaignManifest {
             c.validate(&ids)?;
         }
         self.validate_conditions(&ids)?;
+        if let Some(c) = self.contract.as_ref().filter(|c| !c.grader_refs.is_empty()) {
+            let want: BTreeSet<&String> = self.problems.iter().collect();
+            let got: BTreeSet<&String> = c.grader_refs.keys().collect();
+            if want != got {
+                return Err(
+                    "contract.grader_refs must cover exactly the problems of the manifest".into(),
+                );
+            }
+        }
         if self.experiment_sets.is_empty() && side {
             if ids != [ConfigId::B, ConfigId::C] {
                 return Err("side manifest configs must contain exactly B and C once each".into());

@@ -3,7 +3,12 @@
 
     python3 -I scripts/campaign/check-ops-r1-leak.py --private <private.json> [--private ...] \
         [--forbidden-sha <sha256> ...] [--canary <文字列> ...] --scan <dir|file> [--scan ...] \
-        [--deny-readable <path> ...] [--runtime-probe <probe.json> ...] --out <json>
+        [--deny-readable-file <list>] [--eval-root <dir>] [--runtime-probe <probe.json> ...] \
+        [--public-archive <tar> <sha256> ...] --out <json>
+
+試験の起動例（試験には -I を付けない。-I は cwd を sys.path に入れず試験を import できない）:
+
+    cd scripts/campaign && python3 -m unittest test_check_ops_r1_leak
 
 検出するもの（どれか 1 つでも見つかれば exit 1。入力の誤りは exit 2。見つからなければ exit 0）:
 
@@ -13,9 +18,12 @@
     識別子（既定は JSON の .schema・.case_id・.split）と --allow-string の文字列は除く。除いたものは結果に書く
   - --canary の文字列
   - --forbidden-sha の sha256（16 進の記載と、内容がその hash になる file の両方。旧 v1 tgz・旧判定の写し等）
-- scan 先の symlink が private.json・--deny-readable の path・禁止 hash の file を指すこと。
-- --deny-readable の path が測定の run の uid/gid（既定はこの process の uid/gid。--run-uid・--run-gid で指定）
+- scan 先の symlink が private.json・--deny-readable-file の path・禁止 hash の file を指すこと。
+- --deny-readable-file の path が測定の run の uid/gid（既定はこの process の uid/gid。--run-uid・--run-gid で指定）
   から読めること。ディレクトリなら中の file も 1 つずつ見る。
+
+deny list は file で渡す（--deny-readable-file。UTF-8・1 行 1 絶対 path・空行は飛ばす。絶対 path でない行・NUL を含む行は
+入力の誤り。旧い --deny-readable は入力の誤り）。件数に上限は無い。結果に file の sha256 と件数を書く。
 
 同じ uid の限界: run の uid が path か祖先ディレクトリの持ち主なら、run は chmod・rename で読めるようにできる。
 この検査はその path を「今読めない」と判定しても漏洩を防げないので、limits に same_uid を書き、代わりの検出として
@@ -31,8 +39,25 @@ runtime probe（--runtime-probe、celeris.runtime-probe/1。celeris-campaign pro
   run の uid が持ち主の path が残れば、両方の probe が拒否でも same_uid の limit を残す（同じ uid の chmod 000 は
   probe では拒否に見えるが、run は chmod・rename で読めるようにできる）。canary が無ければ same_uid_without_canary の hit。
 - probe が無い path は今までどおり host から判定する。
-- どの probe でも readable=true の path、空でない mounts_outside_allow、ok=false は deny_readable の hit（exit 1）。
+- どの probe でも readable=true の path は deny_readable の hit（exit 1）。runtime の probe の空でない
+  mounts_outside_allow と ok=false も hit。L1 の probe は包まずに走るので host の mount が見え、mounts_outside_allow は
+  正常（ADR 2026-10-31-ops-r2-preflight-fixes D6、付記 G6）。hit にせず結果の l1_mounts_outside_allow に残す。
+  L1 の ok=false は、readable=true でも mounts でも説明できないときだけ hit。
+- --eval-root を渡すと ops-r2 の規則（ADR 2026-10-31-ops-r2-preflight-fixes D5）。same_uid を次の 4 条件で外す
+  （same_uid_cleared_by: runtime_probe_and_l1。canary は要らない。ops-r2 は canary を置けない）。
+  1. runtime の probe の全部がその path を持ち、どれも readable=false・listable=false
+  2. runtime の probe の全部が ok=true で mounts_outside_allow が空
+  3. L1 の probe が渡され、その全 path が readable=false・listable=false
+  4. path が --eval-root の下なら、L1 の probe にその path があり、owned_by_run_uid が空
+  1 つでも欠ければ same_uid の limit を残し、canary が無ければ same_uid_without_canary の hit。
+  --eval-root が無い入力（ops-r1）は従来どおり（runtime と L1 の拒否と owned_by_run_uid が空のとき外す）。
 - schema が違う・欄が欠けた probe JSON は入力の誤り（exit 2）。
+
+公開の初期 archive（--public-archive <tar> <sha256>、複数可。ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-public）:
+- tar の sha256 が引数と違えば入力の誤り（exit 2）。case.json の initial.archive_sha256 と、submodule tar の SHA256SUMS の値を渡す。
+- tar（生 byte と member）に現れる private の文字列 needle を検査から外す。private の sha256・--forbidden-sha・--canary は外さない。
+- 結果の checked.public_archive には外した数と長さだけを書く（文字列・hash・JSON path は書かない）。外した後に private の文字列が
+  0 件、または外す前の半分以上を外したら warning と limits に書き、stdout にも出す（pass/fail は変えない）。
 
 結果 JSON（--out）には pass・hits・checked・limits を書く。hit には文字列そのものを書かず、needle の id・
 長さ・sha256 だけを書く（結果 file 自体が漏洩源にならないように）。ただし checked.private[].sha256 は
@@ -150,12 +175,15 @@ class Scanner:
         self.hits = []
         self.hit_count = 0
         self.seen_hits = set()
+        self.hit_needles = set()
 
     def add_hit(self, hit):
         key = (hit.get("kind"), hit.get("path"), hit.get("member"), hit.get("needle_id"))
         if key in self.seen_hits:
             return
         self.seen_hits.add(key)
+        if hit.get("needle_id") is not None:
+            self.hit_needles.add(hit["needle_id"])
         self.hit_count += 1
         if len(self.hits) < HIT_LIST_CAP:
             self.hits.append(hit)
@@ -355,6 +383,58 @@ def is_tar_head(head):
     return len(head) >= 262 and head[257:262] == b"ustar"
 
 
+# ---------------------------------------------------------------- public archive
+
+
+def exclude_public(needles, archives, chunk):
+    """公開 archive に現れる private の文字列 needle を外す。(残す needle, 結果に書く記録, limit か None) を返す。"""
+    strings = [n for n in needles if n.kind == "private_string"]
+    found = set()
+    checked = []
+    for tar, want in archives:
+        try:
+            with open(tar, "rb") as f:
+                h = hashlib.sha256()
+                for block in iter(lambda: f.read(DEFAULT_CHUNK), b""):
+                    h.update(block)
+        except OSError as e:
+            raise InputError(f"--public-archive {tar}: {e}")
+        got = h.hexdigest()
+        if got != want.lower():
+            raise InputError(f"--public-archive {tar}: sha256 が {got} で、照合用の {want.lower()} と違う")
+        if not tarfile.is_tarfile(tar):
+            raise InputError(f"--public-archive {tar}: tar でない")
+        scanner = Scanner(strings, {}, {}, chunk, set())
+        stats = {"files": 0, "bytes": 0, "archive_members": 0, "unreadable": []}
+        scanner.scan_file(tar, stats)
+        if stats["unreadable"]:
+            raise InputError(f"--public-archive {tar}: 読めない member がある（{len(stats['unreadable'])} 件）")
+        found |= scanner.hit_needles
+        checked.append({"path": tar, "sha256": got, "members": stats["archive_members"], "bytes": stats["bytes"]})
+    removed = [n for n in strings if n.id in found]
+    kept = [n for n in needles if n.id not in found]
+    before, after = len(strings), len(strings) - len(removed)
+    record = {
+        "archives": checked,
+        "private_strings_before": before,
+        "private_strings_after": after,
+        "excluded_count": len(removed),
+        "excluded_lengths": sorted(n.length for n in removed),
+    }
+    warning = None
+    if before and after == 0:
+        warning = "no_private_strings_left"
+    elif before and len(removed) * 2 >= before:
+        warning = "most_private_strings_removed"
+    record["warning"] = warning
+    limit = None
+    if warning:
+        limit = {"kind": "public_archive_exclusion", "warning": warning, "before": before, "after": after,
+                 "note": "公開 archive に現れる private の文字列を外した結果、文字列の検査が 0 件か大きく減った。"
+                         "private の sha256・禁止 hash・canary の検査は残る"}
+    return kept, record, limit
+
+
 # ---------------------------------------------------------------- readability
 
 
@@ -434,6 +514,29 @@ def owned_chain(path, uid):
     return owned
 
 
+def load_deny_file(path):
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError as e:
+        raise InputError(f"--deny-readable-file {path}: {e}")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise InputError(f"--deny-readable-file {path}: UTF-8 でない: {e}")
+    paths = []
+    for n, line in enumerate(text.split("\n"), 1):
+        line = line.rstrip("\r")
+        if not line:
+            continue
+        if "\x00" in line:
+            raise InputError(f"--deny-readable-file {path}:{n}: NUL を含む")
+        if not line.startswith("/"):
+            raise InputError(f"--deny-readable-file {path}:{n}: 絶対 path でない")
+        paths.append(line)
+    return paths, {"path": path, "sha256": sha256_hex(raw), "paths": len(paths)}
+
+
 # ---------------------------------------------------------------- runtime probe
 
 
@@ -483,55 +586,86 @@ def load_probe(path, index):
 
 
 def probe_hits(probes, scanner):
-    """probe そのものが示す漏洩（readable=true・許可表の外の mount・ok=false）を hit にする。"""
+    """probe そのものが示す漏洩（readable=true・runtime の許可表の外の mount・ok=false）を hit にする。"""
     for pr in probes:
         base = {"kind": "deny_readable", "source": "runtime_probe", "principal": pr["principal"],
                 "probe_uid": pr["uid"], "needle_id": f"runtime_probe[{pr['index']}]"}
+        any_readable = False
         for e in pr["paths"]:
             if e["readable"]:
+                any_readable = True
                 scanner.add_hit(dict(base, path=e["path"],
                                      detail={"readable": True, "listable": e["listable"], "errno": e.get("errno")}))
-        if pr["mounts_outside_allow"]:
+        if pr["mounts_outside_allow"] and not pr["l1"]:
             scanner.add_hit(dict(base, path=pr["file"], member="mounts_outside_allow",
                                  detail={"mounts_outside_allow": len(pr["mounts_outside_allow"])}))
         if not pr["ok"]:
+            # L1 は readable=true か host の mount（正常）で ok=false になる。それ以外の理由のときだけ hit
+            if pr["l1"] and (any_readable or pr["mounts_outside_allow"]):
+                continue
             scanner.add_hit(dict(base, path=pr["file"], member="ok=false",
                                  detail="probe 自身が ok=false を返した"))
 
 
-def probe_entries_for(path, probes):
-    """--deny-readable の path に当たる probe の行を (probe, 行) の組で返す。"""
-    keys = {os.path.normpath(path), os.path.realpath(path)}
-    found = []
+def index_probes(probes):
+    """path（normpath）→ [(probe, 行)]。deny list が大きくても 1 path の照合を定数時間にする。"""
+    idx = {}
     for pr in probes:
         for e in pr["paths"]:
-            if os.path.normpath(e["path"]) in keys:
-                found.append((pr, e))
+            idx.setdefault(os.path.normpath(e["path"]), []).append((pr, e))
+    return idx
+
+
+def probe_entries_for(path, index):
+    """--deny-readable-file の path に当たる probe の行を (probe, 行) の組で返す。"""
+    found = []
+    for key in {os.path.normpath(path), os.path.realpath(path)}:
+        found.extend(index.get(key, ()))
     return found
 
 
-def same_uid_limit(path, uid, limits, scanner, have_canary):
+def probe_state(probes):
+    """ops-r2 の same_uid 条件のうち path に依らない部分（条件 2 と 3）。"""
+    runtime = [pr for pr in probes if not pr["l1"]]
+    l1 = [pr for pr in probes if pr["l1"]]
+    return {
+        "runtime": runtime,
+        "l1": l1,
+        "runtime_clean": bool(runtime) and all(pr["ok"] and not pr["mounts_outside_allow"] for pr in runtime),
+        "l1_clean": bool(l1) and all(not e["readable"] and not e["listable"] for pr in l1 for e in pr["paths"]),
+    }
+
+
+def same_uid_limit(path, uid, limits, scanner, have_canary, force=False):
+    """force: ops-r2 で 4 条件が欠けた path。持ち主でなくても限界を残す（probe が見ていない経路が残る）。"""
     owned = owned_chain(path, uid)
-    if owned:
+    if owned or force:
         limits.append({
             "kind": "same_uid", "path": path, "owned_by_run_uid": owned[:5],
             "note": "run の uid がこの path か祖先の持ち主なので、mode を絞っても run は chmod・rename で読める。"
-                    "可読でないことの判定では漏洩を防げない",
+                    "可読でないことの判定では漏洩を防げない" if owned else
+                    "runtime probe と L1 probe の合格条件（ADR 2026-10-31-ops-r2-preflight-fixes D5）が揃わない",
             "alternative": "canary の出現検査（--canary を private の写しに入れ、scan 先に現れないことを見る）",
             "canary_given": have_canary,
         })
         if not have_canary:
             scanner.add_hit({"kind": "same_uid_without_canary", "path": path,
                              "detail": "同じ uid の限界があるのに --canary が無く、代わりの検出が無い"})
-    return bool(owned)
+    return bool(owned) or force
 
 
-def check_deny_probe(path, found, uid, scanner, limits, have_canary):
+def under(path, root):
+    root = os.path.realpath(root).rstrip(os.sep)
+    real = os.path.realpath(path)
+    return real == root or real.startswith(root + os.sep)
+
+
+def check_deny_probe(path, found, uid, scanner, limits, have_canary, state, eval_root):
     """probe に載った path の判定。hit は probe_hits が出すので、ここでは entry と same_uid だけを決める。"""
     runtime = [e for pr, e in found if not pr["l1"]]
     l1 = [e for pr, e in found if pr["l1"]]
-    runtime_denied = bool(runtime) and not any(e["readable"] for e in runtime)
-    l1_denied = bool(l1) and not any(e["readable"] for e in l1)
+    runtime_denied = bool(runtime) and not any(e["readable"] or e["listable"] for e in runtime)
+    l1_denied = bool(l1) and not any(e["readable"] or e["listable"] for e in l1)
     entry = {
         "path": path, "exists": os.path.lexists(path), "method": "runtime_probe",
         "readable": any(e["readable"] for _, e in found),
@@ -543,18 +677,27 @@ def check_deny_probe(path, found, uid, scanner, limits, have_canary):
     }
     owned = owned_chain(path, uid)
     entry["owned_by_run_uid"] = owned[:5]
-    if runtime_denied and l1_denied and not owned:
+    if eval_root is None:
+        cleared = runtime_denied and l1_denied and not owned
+    else:
+        # ops-r2（ADR 2026-10-31-ops-r2-preflight-fixes D5）の 4 条件
+        have_runtime = {pr["index"] for pr, _ in found if not pr["l1"]}
+        all_runtime_have = bool(state["runtime"]) and have_runtime == {pr["index"] for pr in state["runtime"]}
+        cleared = (runtime_denied and all_runtime_have and state["runtime_clean"] and state["l1_clean"])
+        if cleared and under(path, eval_root):
+            cleared = l1_denied and not owned
+    if cleared:
         entry["same_uid_limit"] = False
         entry["same_uid_cleared_by"] = "runtime_probe_and_l1"
     else:
-        entry["same_uid_limit"] = same_uid_limit(path, uid, limits, scanner, have_canary)
+        entry["same_uid_limit"] = same_uid_limit(path, uid, limits, scanner, have_canary, force=eval_root is not None)
     return entry
 
 
-def check_deny(path, uid, gids, same_process, scanner, limits, have_canary, probes=()):
-    found = probe_entries_for(path, probes)
+def check_deny(path, uid, gids, same_process, scanner, limits, have_canary, index, state, eval_root):
+    found = probe_entries_for(path, index)
     if found:
-        return check_deny_probe(path, found, uid, scanner, limits, have_canary)
+        return check_deny_probe(path, found, uid, scanner, limits, have_canary, state, eval_root)
     entry = {"path": path, "exists": os.path.lexists(path)}
     if not entry["exists"]:
         entry["readable"] = False
@@ -586,7 +729,11 @@ def parse_args(argv):
     ap.add_argument("--forbidden-sha", action="append", default=[])
     ap.add_argument("--canary", action="append", default=[])
     ap.add_argument("--scan", action="append", default=[], required=True)
-    ap.add_argument("--deny-readable", action="append", default=[])
+    ap.add_argument("--deny-readable-file", action="append", default=[],
+                    help="読めてはいけない path の一覧（UTF-8、1 行 1 絶対 path、空行は飛ばす）。複数可")
+    ap.add_argument("--deny-readable", action="append", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--eval-root", default=None,
+                    help="ops-r2 の EVAL_ROOT。渡すと same_uid の外し方が ops-r2 の規則（ADR D5）になる")
     ap.add_argument("--runtime-probe", action="append", default=[],
                     help="celeris.runtime-probe/1 の JSON（複数可）。載った path の可読判定を probe の結果で置き換える")
     ap.add_argument("--out", required=True)
@@ -595,6 +742,8 @@ def parse_args(argv):
                     help="測定の run の gid（複数可。既定はこの process の gid と補助 group）")
     ap.add_argument("--allow-string", action="append", default=[],
                     help="private の文字列のうち公開入力にも載るもの（検査から外し、結果に書く）")
+    ap.add_argument("--public-archive", nargs=2, action="append", default=[], metavar=("TAR", "SHA256"),
+                    help="公開の初期 archive（tar）と照合用の sha256。中に現れる private の文字列を検査から外す。複数可")
     ap.add_argument("--min-len", type=int, default=DEFAULT_MIN_LEN)
     ap.add_argument("--chunk-bytes", type=int, default=DEFAULT_CHUNK, help=argparse.SUPPRESS)
     return ap.parse_args(argv)
@@ -609,10 +758,22 @@ def run(args):
     for c in args.canary:
         if not c:
             raise InputError("--canary が空")
+    for _, s in args.public_archive:
+        if not is_hex64(s):
+            raise InputError(f"--public-archive の sha256 が 64 桁の 16 進でない: {s!r}")
     for p in args.scan:
         if not os.path.lexists(p):
             raise InputError(f"--scan {p} が無い")
+    if args.deny_readable is not None:
+        raise InputError("--deny-readable は廃止した。--deny-readable-file <list> で渡す")
+    if args.eval_root is not None and not os.path.isabs(args.eval_root):
+        raise InputError("--eval-root は絶対 path")
     probes = [load_probe(p, i) for i, p in enumerate(args.runtime_probe)]
+    deny_paths, deny_files = [], []
+    for f in args.deny_readable_file:
+        ps, info = load_deny_file(f)
+        deny_paths.extend(ps)
+        deny_files.append(info)
 
     needles, content_hashes, link_targets = [], {}, {}
     checked_private = []
@@ -632,12 +793,17 @@ def run(args):
         content_hashes.setdefault(s.lower(), ("forbidden_sha256", f"forbidden_sha[{i}]"))
     for i, c in enumerate(args.canary):
         needles.append(Needle(f"canary[{i}]", "canary", c))
-    for i, p in enumerate(args.deny_readable):
+    for i, p in enumerate(deny_paths):
         link_targets.setdefault(os.path.realpath(p), ("deny_readable", f"deny_readable[{i}]"))
+
+    public, limits = None, []
+    if args.public_archive:
+        needles, public, limit = exclude_public(needles, args.public_archive, args.chunk_bytes)
+        if limit:
+            limits.append(limit)
 
     exclude_real = {os.path.realpath(args.out)}
     scanner = Scanner(needles, content_hashes, link_targets, args.chunk_bytes, exclude_real)
-    limits = []
     scans = []
     for root in args.scan:
         stats = {"path": root, "files": 0, "bytes": 0, "archive_members": 0, "git_objects": 0,
@@ -652,8 +818,9 @@ def run(args):
     gids = set(args.run_gid) if args.run_gid else ({os.getegid()} | set(os.getgroups()))
     same_process = args.run_uid in (None, os.geteuid()) and args.run_gid is None
     probe_hits(probes, scanner)
-    deny = [check_deny(p, uid, gids, same_process, scanner, limits, bool(args.canary), probes)
-            for p in args.deny_readable]
+    index, state = index_probes(probes), probe_state(probes)
+    deny = [check_deny(p, uid, gids, same_process, scanner, limits, bool(args.canary), index, state,
+                       args.eval_root) for p in deny_paths]
     if not deny or any(d.get("method") != "runtime_probe" for d in deny):
         limits.append({"kind": "host_view", "note": "probe に載らない path の可読の判定は host から見た今の mode・owner で"
                                                     "行う。run の sandbox が見える範囲を狭める効果は数えない（多めに読めると判定する）"})
@@ -669,9 +836,14 @@ def run(args):
             "canary": [{"len": len(c), "sha256": sha256_hex(c.encode("utf-8"))} for c in args.canary],
             "needles": len(needles),
             "min_len": args.min_len,
+            "public_archive": public,
             "public_identifier_paths": list(DEFAULT_PUBLIC_PATHS),
             "scan": scans,
             "deny_readable": deny,
+            "deny_readable_files": deny_files,
+            "eval_root": args.eval_root,
+            "l1_mounts_outside_allow": [{"file": pr["file"], "count": len(pr["mounts_outside_allow"])}
+                                        for pr in probes if pr["l1"]],
             "runtime_probe": [{"file": pr["file"], "principal": pr["principal"], "uid": pr["uid"], "l1": pr["l1"],
                                "ok": pr["ok"], "paths": len(pr["paths"]),
                                "readable": sum(1 for e in pr["paths"] if e["readable"]),
@@ -701,6 +873,10 @@ def main(argv):
         return 2
     write_out(args.out, doc)
     print(f"pass={str(doc['pass']).lower()} hits={doc['hit_count']} needles={doc['checked']['needles']}")
+    pub = doc["checked"].get("public_archive")
+    if pub:
+        print(f"public_archive: excluded={pub['excluded_count']} private_strings={pub['private_strings_before']}"
+              f"->{pub['private_strings_after']}" + (f" warning={pub['warning']}" if pub["warning"] else ""))
     return 0 if doc["pass"] else 1
 
 

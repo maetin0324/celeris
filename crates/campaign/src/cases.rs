@@ -408,6 +408,20 @@ impl Case {
 }
 
 impl CasePrivate {
+    /// 読まなかった private の placeholder（`CaseSet::load_public`）。中身は空で、採点・照合には使えない。
+    fn withheld(case: &Case) -> Self {
+        CasePrivate {
+            schema: PRIVATE_SCHEMA.into(),
+            case_id: case.id.clone(),
+            split: case.split,
+            hidden_command: String::new(),
+            baseline_command: None,
+            known_defects: Vec::new(),
+            false_claim_traps: Vec::new(),
+            expected: Value::Null,
+        }
+    }
+
     pub fn validate(&self, case: &Case) -> Result<(), String> {
         let id = &case.id;
         if self.schema != PRIVATE_SCHEMA {
@@ -466,17 +480,32 @@ fn subdirs(p: &Path) -> Result<Vec<std::path::PathBuf>, String> {
 impl CaseSet {
     /// `cases_root/{dev,final}/<id>/case.json` と `grader_root/<split>/<id>/private.json` を読んで検証する。
     pub fn load(cases_root: &Path, grader_root: &Path) -> Result<Self, String> {
-        let (cr, gr) = (
-            cases_root
-                .canonicalize()
-                .map_err(|e| format!("{}: {e}", cases_root.display()))?,
-            grader_root
-                .canonicalize()
-                .map_err(|e| format!("{}: {e}", grader_root.display()))?,
-        );
-        if gr.starts_with(&cr) || cr.starts_with(&gr) {
-            return Err("grader root must be isolated from the cases root".into());
-        }
+        Self::load_with(cases_root, Some(grader_root))
+    }
+
+    /// `case.json` と materials・kb の hash だけを読む（private は読まない。`private` は空の placeholder）。
+    /// ops-r2 の preflight 用: 新しい private は評価器領域（`EVAL_ROOT`）にあり、呼び出し側は読まない。
+    /// private の sha256 は manifest の `grader_refs` と case.json の `private_ref` の一致で見る。
+    pub fn load_public(cases_root: &Path) -> Result<Self, String> {
+        Self::load_with(cases_root, None)
+    }
+
+    fn load_with(cases_root: &Path, grader_root: Option<&Path>) -> Result<Self, String> {
+        let cr = cases_root
+            .canonicalize()
+            .map_err(|e| format!("{}: {e}", cases_root.display()))?;
+        let gr = match grader_root {
+            Some(g) => {
+                let gr = g
+                    .canonicalize()
+                    .map_err(|e| format!("{}: {e}", g.display()))?;
+                if gr.starts_with(&cr) || cr.starts_with(&gr) {
+                    return Err("grader root must be isolated from the cases root".into());
+                }
+                Some(gr)
+            }
+            None => None,
+        };
         let mut cases = Vec::new();
         let mut ids = BTreeSet::new();
         for split in [Split::Dev, Split::Final] {
@@ -499,13 +528,19 @@ impl CaseSet {
                     return Err(format!("duplicate case id {}", case.id));
                 }
                 check_snapshot(&case, &dir)?;
-                let ppath = gr.join(&case.private_ref.path);
-                let got = sha256_file(&ppath)?;
-                if got != case.private_ref.sha256 {
-                    return Err(format!("{}: private file hash mismatch", case.id));
-                }
-                let private: CasePrivate = read_json(&ppath)?;
-                private.validate(&case)?;
+                let private = match &gr {
+                    Some(gr) => {
+                        let ppath = gr.join(&case.private_ref.path);
+                        let got = sha256_file(&ppath)?;
+                        if got != case.private_ref.sha256 {
+                            return Err(format!("{}: private file hash mismatch", case.id));
+                        }
+                        let private: CasePrivate = read_json(&ppath)?;
+                        private.validate(&case)?;
+                        private
+                    }
+                    None => CasePrivate::withheld(&case),
+                };
                 cases.push(LoadedCase { case, private });
             }
         }
@@ -513,7 +548,9 @@ impl CaseSet {
             return Err("no cases found".into());
         }
         let set = CaseSet { cases };
-        check_isolation(&set, &cr, &gr)?;
+        if let Some(gr) = &gr {
+            check_isolation(&set, &cr, gr)?;
+        }
         Ok(set)
     }
 

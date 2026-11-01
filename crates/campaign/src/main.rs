@@ -105,19 +105,25 @@ fn preflight_inputs(args: &[String], manifest_path: &std::path::Path) -> Inputs 
 
 /// `--deny-list`・`--eval-root`・`--sandbox-script` と B・operator の許可表（`--b-*`・`--operator-*`）。
 fn isolation_inputs(args: &[String]) -> preflight_isolation::IsolationInputs {
+    let many = |flag: String| -> Vec<PathBuf> {
+        args.iter()
+            .enumerate()
+            .filter(|(_, a)| **a == flag)
+            .filter_map(|(i, _)| args.get(i + 1).map(PathBuf::from))
+            .collect()
+    };
     let sandbox = |p: &str| preflight_isolation::ScriptSandbox {
         state: arg(args, &format!("--{p}-state")),
         release: arg(args, &format!("--{p}-release")),
         account: arg(args, &format!("--{p}-account")),
-        ro: args
-            .iter()
-            .enumerate()
-            .filter(|(_, a)| **a == format!("--{p}-ro"))
-            .filter_map(|(i, _)| args.get(i + 1).map(PathBuf::from))
-            .collect(),
+        ro: many(format!("--{p}-ro")),
+        sockets: many(format!("--{p}-socket")),
+        ssh_config: arg(args, &format!("--{p}-ssh-config")),
     };
     preflight_isolation::IsolationInputs {
         deny_list: arg(args, "--deny-list"),
+        claude: arg(args, "--claude"),
+        claude_sha256: arg(args, "--claude-sha256").map(|p| p.to_string_lossy().into_owned()),
         eval_root: arg(args, "--eval-root"),
         sandbox_script: arg(args, "--sandbox-script"),
         b: sandbox("b"),

@@ -8,12 +8,12 @@ canon() {
 '*) refuse 'empty path or newline in path' ;; esac
     realpath -m -- "$1"
 }
-STATE= RELEASE= ACCOUNT= ROS= PRINT=0 SEPARATOR=0
+STATE= RELEASE= ACCOUNT= ROS= SOCKS= SSHCFG= PRINT=0 SEPARATOR=0
 while [ $# -gt 0 ]; do
     case $1 in
         --print-args) PRINT=1; shift ;;
         --) SEPARATOR=1; shift; break ;;
-        --state|--release|--account|--ro)
+        --state|--release|--account|--ro|--socket|--ssh-config)
             [ $# -ge 2 ] || refuse "missing value for $1"
             path=$(canon "$2")
             case $1 in
@@ -21,6 +21,14 @@ while [ $# -gt 0 ]; do
                 --release) RELEASE=$path ;;
                 --account) ACCOUNT=$path ;;
                 --ro) ROS="$ROS
+$path" ;;
+                # One unix socket per flag (e.g. an ssh master); only the socket itself is bound, never its parent dir.
+                # ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-ssh: the dedicated ssh config becomes the
+                # system /etc/ssh/ssh_config so `ssh sirius` works without -F; /etc/ssh/ssh_config.d is hidden.
+                --ssh-config) [ -f "$path" ] || refuse "not a file: $path"
+                    SSHCFG=$path ;;
+                --socket) [ -S "$path" ] || refuse "not a unix socket: $path"
+                    SOCKS="$SOCKS
 $path" ;;
             esac
             shift 2 ;;
@@ -31,11 +39,13 @@ done
 # Validate canonical sources, including ancestors that would expose forbidden trees.
 # Python is used only for path validation; the mount argument table below is shared
 # unchanged by --print-args and the actual exec.
-python3 -I - "$STATE" "$RELEASE" "$ACCOUNT" "$ROS" <<'PY' || exit 2
+python3 -I - "$STATE" "$RELEASE" "$ACCOUNT" "$ROS
+$SSHCFG" "$SOCKS" <<'PY' || exit 2
 import os
 import sys
 from pathlib import Path
-sources = sys.argv[1:4] + sys.argv[4].splitlines()
+sockets = sys.argv[5].splitlines()
+sources = sys.argv[1:4] + sys.argv[4].splitlines() + sockets
 home = Path.home()
 forbidden = [home / '.claude', home / '.config/celeris',
              home / '.local/share/celeris', home / '.local/celeris',
@@ -59,6 +69,8 @@ for source in filter(None, sources):
         return overlaps(p, f)
     if any(denied(f) for f in forbidden):
         sys.exit(f'ops-r2-sandbox: forbidden path: {p}')
+    if source in sockets:
+        continue
     if not p.is_dir() and not p.is_file():
         sys.exit(f'ops-r2-sandbox: path does not exist: {p}')
     if any((a / '.git').is_file() or (a / '.git/HEAD').is_file()
@@ -79,11 +91,17 @@ set -- -- "$@"
 OLD_IFS=$IFS
 IFS='
 '
+for path in $SOCKS; do
+    [ -n "$path" ] || continue
+    set -- --bind "$path" "$path" "$@"
+done
 for path in $ROS; do
     [ -n "$path" ] || continue
     set -- --ro-bind "$path" "$path" "$@"
 done
 IFS=$OLD_IFS
+# Only the file is bound over an empty /etc/ssh (after the /etc bind), never its parent dir.
+[ -z "$SSHCFG" ] || set -- --tmpfs /etc/ssh --ro-bind "$SSHCFG" /etc/ssh/ssh_config "$@"
 set -- --bind "$STATE" "$STATE" --setenv HOME "$STATE/home" --chdir "$STATE" --bind "$ACCOUNT" "$ACCOUNT" "$@"
 for path in /usr /bin /sbin /lib /lib64 /etc; do
     [ -e "$path" ] || continue

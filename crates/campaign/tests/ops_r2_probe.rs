@@ -77,6 +77,8 @@ struct Fixture {
     _dir: tempfile::TempDir,
     root: PathBuf,
     sb: ScriptSandbox,
+    /// `--socket` で bind する試験用の unix socket（ssh master の代わり。外部 network に出ない）。
+    _listener: std::os::unix::net::UnixListener,
     /// private grader・旧解答・他試行の出力（どの主体からも読めないはず）。
     deny: Vec<PathBuf>,
     private: PathBuf,
@@ -113,12 +115,20 @@ fn fixture() -> Fixture {
     .expect("stage daemon fixture");
     let account = root.join("account");
     write(&account.join(".credentials.json"), "{}");
+    // ssh master の socket の代わり。preflight・probe はこの bind を許可表に含め、mounts_outside_allow にしない。
+    let mux = root.join("mux");
+    fs::create_dir_all(&mux).expect("mux");
+    let sock = mux.join("ssh-mux.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind socket");
     Fixture {
+        _listener: listener,
         sb: ScriptSandbox {
             state: Some(state),
             release: Some(release),
             account: Some(account),
             ro: Vec::new(),
+            sockets: vec![sock],
+            ssh_config: None,
         },
         deny: vec![private.clone(), old, other],
         root,
@@ -139,6 +149,9 @@ fn sandbox_base(sb: &ScriptSandbox) -> Vec<String> {
     }
     for r in &sb.ro {
         a.extend(["--ro".into(), s(r).into()]);
+    }
+    for k in &sb.sockets {
+        a.extend(["--socket".into(), s(k).into()]);
     }
     a
 }
@@ -165,9 +178,10 @@ fn run_daemon_fixture(fx: &Fixture, deny: &[PathBuf]) -> [(RuntimeProbe, i32, St
         s(state).into(),
         s(&release.join("celeris-campaign")).into(),
     ]);
-    for d in deny {
-        a.extend(["--deny".into(), s(d).into()]);
-    }
+    let deny_file = state.join("deny.list");
+    let text: String = deny.iter().map(|d| format!("{}\n", d.display())).collect();
+    fs::write(&deny_file, text).expect("deny file");
+    a.extend(["--deny-readable-file".into(), s(&deny_file).into()]);
     for src in allow_sources(&printed, &host) {
         a.extend(["--allow".into(), s(&src).into()]);
     }
@@ -197,9 +211,14 @@ fn leak_check(fx: &Fixture, probes: &[PathBuf], out: &Path) -> (i32, Value) {
         .arg(scripts().join("check-ops-r1-leak.py"))
         .args(["--private", s(&fx.private), "--canary", CANARY])
         .args(["--scan", s(&fx.public.parent().expect("inputs"))]);
-    for d in &fx.deny {
-        cmd.args(["--deny-readable", s(d)]);
-    }
+    let deny_file = out.with_extension("deny.list");
+    let text: String = fx
+        .deny
+        .iter()
+        .map(|d| format!("{}\n", d.display()))
+        .collect();
+    fs::write(&deny_file, text).expect("deny file");
+    cmd.args(["--deny-readable-file", s(&deny_file)]);
     for p in probes {
         cmd.args(["--runtime-probe", s(p)]);
     }

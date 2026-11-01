@@ -359,3 +359,9 @@ release 2a0647cba878 の実機確認で、wrapper 経由の採点が不合格の
   stderr に出す旧い経路は消した（`grade-out` も同じ形に揃え、別の扱いは残さない）。
 - H8 wrapper（`scripts/campaign/ops-r2-grade.py`）は exit 0/1 かつ stdout が判定 JSON のときだけ漏洩検査に進み、通れば outbox に置く
   （不合格も置く）。exit 2 やほかの exit、判定 JSON が無いときは exit 70 で outbox に何も置かない。grade-case の形式は変えない。
+
+## 付記 2026-10-31「判定 JSON に隠しテストの path を出さない」（task 01M67YEFQQHB054QWVS3GG33GX）
+
+- 実装検査の details は隠しテストの path 一覧（旧 `hidden_inserted`）を出さず、件数 `hidden_inserted_count` だけを出す。旧い欄は消した（読む側は試験だけだった）。
+- 判定 JSON に出す実装検査の `stdout_tail`・`stderr_tail`、baseline の `stderr_tail`、隠しテストの読み込み・複写・評価 command 起動の失敗理由は、`grader::redact_hidden` で隠しテストの各相対 path と file 名を `<hidden[i]>`（i は case の `hidden_tests` の順番）に置き換えてから出す。絶対 path は相対 path を末尾に含むので同じ置換で消える。置換は末尾切り詰め（tail）の前に全文へ一度の走査でかけ、長い語を先に当てる。
+- grade-case の形式は変えない。wrapper の漏洩検査（12 字以上の private 文字列）は緩めない。

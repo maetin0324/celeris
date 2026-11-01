@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::manifest::{CONTRACT_REVISION_OPS_R1, CampaignManifest, ConfigId};
+use crate::manifest::{
+    CONTRACT_REVISION_OPS_R1, CONTRACT_REVISION_OPS_R2, CampaignManifest, ConfigId,
+};
 
 /// 試行の受付経路。A は人が Claude Code を直接起動し、B は案件の CoS thread が受け付ける。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,8 +58,18 @@ impl CampaignManifest {
             .is_some_and(|c| c.intake == Intake::CosThread)
     }
 
+    /// `main-4-ops-r2`（K2 pilot）の manifest か。preflight だけがこれを受ける（`reject_ops_r1_submission`）。
+    pub fn is_ops_r2(&self) -> bool {
+        self.is_ops_r1()
+            && self.contract.as_ref().map(|c| c.revision.as_str()) == Some(CONTRACT_REVISION_OPS_R2)
+    }
+
     /// 投入系の subcommand（`cmd`）の入口で呼ぶ。ops-r1 の manifest なら拒否する。
+    /// ops-r2 の manifest は `preflight` だけを通す（開始前チェック。有料実行・task 作成はしない）。他の投入系は ops-r2 でも拒否する。
     pub fn reject_ops_r1_submission(&self, cmd: &str) -> Result<(), String> {
+        if self.is_ops_r2() && cmd == "preflight" {
+            return Ok(());
+        }
         if self.is_ops_r1() {
             return Err(format!("{cmd}: {OPS_R1_SUBMIT_REJECTED}"));
         }
@@ -86,9 +98,12 @@ impl CampaignManifest {
         if conditions.is_empty() {
             return Ok(());
         }
-        if self.contract.as_ref().map(|c| c.revision.as_str()) != Some(CONTRACT_REVISION_OPS_R1) {
+        if !matches!(
+            self.contract.as_ref().map(|c| c.revision.as_str()),
+            Some(CONTRACT_REVISION_OPS_R1 | CONTRACT_REVISION_OPS_R2)
+        ) {
             return Err(format!(
-                "contract.conditions: contract.revision must be {CONTRACT_REVISION_OPS_R1}"
+                "contract.conditions: contract.revision must be {CONTRACT_REVISION_OPS_R1} or {CONTRACT_REVISION_OPS_R2}"
             ));
         }
         let keys: Vec<ConfigId> = conditions.keys().copied().collect();

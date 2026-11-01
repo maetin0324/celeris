@@ -1158,6 +1158,7 @@ fn ops_r1(sha: &str) -> ContractRevision {
         ]
         .into(),
         conditions: Default::default(),
+        grader_refs: Default::default(),
     }
 }
 

@@ -1,0 +1,316 @@
+---
+tasks: [01M68D4ECCN4V367TYHAKRQZMF]
+---
+# ADR 2026-10-31: K2 ops-r2 の開始前チェック（§2〜§6）を実機で通すための修正
+
+状態: 採用（設計）。実装は同じ task の後続 unit（cfg・leak・probe・manifest・docs）。この ADR ではコードを変えない。
+上位の決定は [ADR 2026-10-30-ops-r2-isolation-principal](2026-10-30-ops-r2-isolation-principal.md)（D1〜D7、付記 L1・G1〜G6）。
+この ADR はその付記として読み、矛盾するところはこの ADR の D1〜D8 が上書きする（上書きする箇所は各決定に書く）。
+
+## 背景
+
+K2 ops-r2 pilot（task 01M669QGFJRZ2MY7VRA1BSSZ5H）は人の承認が出た。外部 operator が `docs/ops/ops-r2-k2-preflight.md` の
+§1〜§6 を実機で実行し、§4 で止まった。有料の試行は 0 件、測定 daemon は起動していない。
+証跡は task 01M669QGFJRZ2MY7VRA1BSSZ5H の `artifacts/ops-r2/preflight/`（`steps.tsv` ほか）。要点は次のとおり。
+
+| 段 | 結果 | 原因 |
+|---|---|---|
+| §1 | 合格 | `EVAL_ROOT` の private の sha256 が承認票と一致、release dir に private 系の file 0 件 |
+| §2 `ops-r1-measure-config.sh` | exit 0 だが不備 | `[cos.triage] policy_version = "6"` を固定で書く（承認票は 10）。`--claude-accounts <b>` が `[accounts] claude_dir` になり、b の subdir（backups・cache・plugins・sessions）が account と見なされ、login 済みの account が 0 |
+| §3 preflight | exit 1 | deny list 7129 件を bwrap の引数に展開して `Exceeded maximum number of arguments 9000`。3276 件に絞っても、NFS 上の claude binary の mount が A の `deny_readable` に当たる。ops-r2 の K2 manifest が無く、ops-r1 の manifest・`private file hash mismatch` 等 8 件が `missing` |
+| §4 probe | B は `--allow` なしの手順書の command で `mounts_outside_allow` 6（`--allow` 付きで 0）。L1 は readable 0・`mounts_outside_allow` 19 |
+| §4 漏洩検査 | exit 1 | `same_uid_without_canary` 3275 件（ops-r2 は canary を置けない）と、L1 probe の `mounts_outside_allow` を `deny_readable` の hit にした 1 件。内容の hit は 0 |
+| §5・§6・§8 | 未実行 | §4 で止めた |
+
+## 決定
+
+### D1. 方針版は `ops-r1-measure-config.sh` の必須引数 `--policy-version` で決める
+
+- `ops-r1-measure-config.sh` に `--policy-version <数字>` を必須で足し、`[cos.triage] policy_version` にその値を書く。固定の `"6"` は消す。
+  省略・空・数字以外は usage で止める（既定値は置かない。release ごとの既定を推測すると承認票と食い違ったときに気づけない）。
+- 生成時に `--skills-src` の `cos-inbox-triage/SKILL.md` の front matter の `version` と引数を比べ、違えば止める。
+  daemon が渡す方針版と CoS が読む skill の版が別の値になる測定 daemon を作らない。
+- operator は承認票の方針版（K2 ops-r2 では 10）を引数に渡す。開始前チェック 5 と停止規則 §7-6 は今までどおり
+  測定 daemon の `/api/v1/health` の値と承認票の値を比べる。K4（ops-r1）の固定値 6 には依存しない。
+- 試験は、引数の値が config に出ること、省略と skill の版との不一致で止まることを確かめる（cfg unit）。
+
+### D2. B の account pool は生成時に作る 1 entry の pool dir にする
+
+- `--claude-accounts <dir>` を消し、`--b-account-dir <dir>`（1 つの account dir。`.credentials.json` を直に持つ）に替える。
+  旧い引数は usage で止める（ADR 2026-10-11-breaking-changes-by-default）。
+- 生成時に `$STATE/pool/` を新しく作り、その中に account dir の basename を名前にした symlink を 1 つだけ置く
+  （例 `$STATE/pool/b -> /local/celeris/measure-accounts/b`）。`[accounts] claude_dir` は `$STATE/pool` を指す。
+  `$STATE/pool/` が既にあって中身が違えば止める。
+- symlink を選ぶ理由: Celeris の account の走査（`task_api::accounts::scan_accounts`、`model_discovery::first_logged_in`）は
+  `Path::is_dir` で symlink の先を辿るので、symlink の entry が 1 account になる。bind mount は host 側で mount の権限が要る。
+  測定 daemon は `ops-r2-sandbox.sh --account <b>` が b の実 path をそのまま mount するので、bwrap の中でも symlink の先が解決する。
+- 生成時の拒否: account dir に `.credentials.json` が無い、`projects/` か `memory/` がある（`ops-r2-sandbox.sh` と同じ規則）、
+  basename が account id として無効、実 path が `~/.claude` か `~/.claude` の下。
+- a（A 腕の account）と operator（実験専用 operator session）の account dir は pool に入れない。pool の entry は引数の 1 つだけなので、
+  別の dir が載る経路は無い。
+- 試験は、生成した config を読み込み、Celeris の account の走査が `b` 1 件・login 済みだけを返すことを確かめる（cfg unit）。
+
+### D3. deny list は file で渡す
+
+- `celeris-campaign probe-read` は `--deny-file <path>`（1 行 1 絶対 path）で deny list を読む。繰り返しの `--deny` は消す。
+  L1 の probe も 1 行の file を渡す。
+- `celeris-campaign preflight` は既存の `--deny-list` の file を、probe を起動するときに file のまま bwrap の中へ ro で bind し、
+  probe には `--deny-file` で渡す。deny list の path を bwrap・probe の引数に展開しない（bwrap の引数上限 9000 に当たらない）。
+- `check-ops-r1-leak.py` は `--deny-readable-file <path>` で読み、`--deny-readable` は消す（渡せば入力の誤りで止まる）。
+- file の形は 3 つで同じにする: UTF-8、1 行 1 path、空行は飛ばす、絶対 path でない行・NUL を含む行は入力の誤りで止まる。
+  出力の JSON に file の sha256 を書き、承認票の deny list と照合できるようにする。
+- 試験は 9000 件を超える deny list で probe・preflight・漏洩検査が走ることを確かめる（probe unit・leak unit）。
+
+### D4. 測定用の claude は local の固定 copy を使い、probe の照合は変えない
+
+- 測定（A 腕・B の測定 daemon・実験専用 operator session）で使う claude は、operator が NFS 上の install から local の dir
+  （例 `/local/celeris/measure-bin/claude-<版>/`）へ写した固定 copy にする。写した後は書き換えない。
+- operator は copy の `--version` の出力が承認票の Claude Code 版と一致すること、copy の sha256 を steps に記録する。
+  `--claude-bin`（config 生成）と A 腕の Toolchain 宣言はこの copy を指す。
+- probe の mount 照合（mount の source が許可表の外なら `deny_readable`）は変えない。NFS の source を許可に足す変更はしない。
+  NFS の mount は他の利用者の書き換えを受け、許可表の外の木を見せるため。
+- 版を上げるときは新しい dir に写し、承認票の版と sha256 を人が改める。
+
+### D5. ops-r2 には canary を置かず、same_uid は runtime probe と L1 probe の合格で外す
+
+付記（2026-10-30、L1 は持ち主の uid で判定）の「`--canary` が無ければ `same_uid_without_canary` の hit」を次のとおり改める。
+
+- **canary を置かない理由**: K2 の新しい private は `EVAL_ROOT`（持ち主 `celeris-eval`、0700）にあり、sha256 が承認票に結ばれている。
+  canary の文字列を足すと private の sha256 が変わり、承認票と照合できなくなる。repo の旧 private（漏洩済み）に足すのは repo と
+  git の履歴を変える。どちらも ops-r2 では行えない。
+- **same_uid を外す条件**（漏洩検査が deny path ごとに判定。満たせば `same_uid_limit: false`、`same_uid_cleared_by: runtime_probe_and_l1` を記録）:
+  1. 渡した runtime probe（l1 以外の主体）の全部がその path を持ち、どれも `readable: false`・`listable: false`。
+  2. その runtime probe の全部が `ok: true` で `mounts_outside_allow` が 0（許可表の外の木を mount していない）。
+  3. L1 probe が渡され、その全 deny path が `readable: false`・`listable: false`。
+  4. path が `EVAL_ROOT` の下なら、L1 probe にその path があり、`owned_by_run_uid` が空（付記どおり）。
+- **根拠**: same_uid の limit は「run の uid は chmod・rename で読めるようにできる」ことを指す。`EVAL_ROOT` の外の deny path
+  （repo の clone の旧 private・旧 grade-case、過去の試行の出力、本番 KB、`~/.claude` 等）は人の uid が持つので L1 では塞げず、
+  L2（bwrap の mount 許可表）で塞ぐ（上位 ADR D1）。試行の主体は probe と同じ包み方の bwrap の中で動き（D3 の「同じ包み方」）、
+  その中では path が存在せず、mountinfo に許可表の外の source が無い（条件 2）。存在しない path の inode には chmod も rename も
+  届かないので、`owned_by_run_uid` が空でなくても試行の主体からは読めるようにできない。`EVAL_ROOT` の下は L1（持ち主の分離）が
+  塞ぐので、付記の条件（`owned_by_run_uid` が空）をそのまま残す。
+- **緩めない点**: 4 条件の 1 つでも欠ければ limit を残し、canary が無いので `same_uid_without_canary` の hit で exit 1 にする
+  （probe に載っていない path、`mounts_outside_allow` のある runtime probe、L1 probe なしは通らない）。内容の検査
+  （`--private` の文字列・`--forbidden-sha`）は変えない。bwrap の外の人の uid の process（普段の operator・人の shell）が読める点は
+  付記 G5 の限界のままで、この規則では外さない（承認票と D5 の照合で扱う）。
+- 漏洩検査が `EVAL_ROOT` の下かを判定できるよう、`check-ops-r1-leak.py` に `--eval-root` を足す（leak unit）。
+
+### D6. L1 probe の `mounts_outside_allow` は hit にしない。B の probe の手順書の command に `--allow` を入れる
+
+- 付記 G6 を漏洩検査にも当てはめる。L1 probe（`principal: l1`）は包まずに走るので host の mount が見え、`mounts_outside_allow` が
+  出るのは正しい状態である。漏洩検査はその値を報告欄（例 `l1_mounts_outside_allow`）に残し、`deny_readable` の hit にしない。
+  runtime の主体の `mounts_outside_allow` は今までどおり hit にする（D5 の条件 2 でも使う）。
+- 手順書 §4 の B の probe の command は、preflight が B の probe に渡すのと同じ `--allow`（`ops-r2-sandbox.sh` が mount する
+  release・state・account・`--ro` と system の dir）を含む形に直す。`--allow` の無い command で `mounts_outside_allow` 6 が出たのは
+  手順書の誤りで、probe の判定の誤りではない（`--allow` 付きで 0 を確認済み）。
+
+### D7. sirius への接続は operator が実機で確かめ、使えなければ止めて人に返す
+
+- K2 は B の worker が sirius で計測する。測定 daemon は bwrap の中で動き、許可表に `~/.ssh` も ssh の control master の socket も無い。
+  bwrap の中から sirius に届くかは未確認。
+- 開始前チェックに operator の手順を足す（docs unit）: `ops-r2-sandbox.sh --state "$S" --release "$R" --account <b> -- ssh -o BatchMode=yes -o ConnectTimeout=10 <sirius の host 名> true`
+  の exit code と stderr の 1 行目を steps に記録する。既存の control master を使う設定なら、その socket が bwrap の中に見えるかも記録する。
+- exit 0 でなければ、operator は試行を始めず、結果を人に返す。ssh の鍵・config・socket を許可表に足すかは credential を
+  試行の主体に見せる判断なので人が決める。operator とコードは許可表を広げない。
+- コードの試験では確かめない（外部 network に出ない規則）。
+
+### D8. 測定 daemon は試行と無関係に LLM を呼ぶ経路を config で切る
+
+- `ops-r1-measure-config.sh` は `[maintenance.stagnation]` の 4 つの閾値（`project_idle_secs`・`human_wait_secs`・
+  `release_unpromoted_secs`・`task_unscheduled_secs`）を 0 にして書く。停滞の finding が出ないので、それを CoS の triage に回す
+  LLM の run も起きない。
+- 既に切っている経路（`[knowledge.langmem]`・`[knowledge.gc]` の `enabled = false`、`[memory]`・`[llm_proxy]`・`[[mcp.listeners]]`・
+  `[[cron.seed]]` を置かない）は残し、生成した config にその一覧を注記する。
+- CoS の受信箱 triage は config で切れない。測定 daemon の受信箱に載るのは試行の task から出た待ちだけになるので、その triage は
+  B の処理の一部として試行に計上する。試行と無関係な起点（停滞の finding・cron の定期見直し等）の CoS run が測定 daemon に
+  現れたら、その試行を正式な試行にせず、消費を別に記録する（docs unit が停止規則に書く）。
+- cfg unit は、上の一覧の他に daemon が account の credential で外部の LLM を呼ぶ常駐の経路が無いかを実装から確かめ、
+  あれば config で切るか、切れない理由と記録の仕方を進捗に書く。
+- 試験は、生成した config で停滞の閾値が 0、langmem・gc が無効であることを確かめる（cfg unit）。
+
+## 後続 unit の作業範囲
+
+| unit | 決定 | 主な file |
+|---|---|---|
+| cfg | D1・D2・D8 | `scripts/campaign/ops-r1-measure-config.sh`・`test_ops_r1_measure_config.py`、account の走査を使う試験 |
+| leak | D3（漏洩検査）・D5・D6（漏洩検査） | `scripts/campaign/check-ops-r1-leak.py`・`test_check_ops_r1_leak.py`、`docs/ops/ops-r1-leak-check.md` |
+| probe | D3（probe・preflight）・D4 | `crates/campaign/src/runtime_probe.rs`・`preflight.rs`・`main.rs` とその試験 |
+| manifest | 不備 3（K2 ops-r2 の manifest） | `crates/campaign/fixtures/` の manifest と preflight の受け入れ |
+| docs | D4・D6（手順書）・D7・D8（停止規則）、本番への移行 | `docs/ops/ops-r2-k2-preflight.md`・`ops-r2-isolation.md`、進捗 |
+
+## 人の準備・決定が要る点
+
+- D4: local の固定 copy を置く dir と、承認票の Claude Code 版と copy の版が合うこと（operator が確かめ、合わなければ人に返す）。
+- D7: bwrap の中から sirius に届かないとき、ssh の鍵・config・socket を許可表に足すか（人の決定）。
+- 本番設定・本番 daemon は変えない。測定 daemon の config は試行ごとに生成する。
+
+## 関連
+
+- [ADR 2026-10-30-ops-r2-isolation-principal](2026-10-30-ops-r2-isolation-principal.md)（D1〜D7、付記 L1・G1〜G6）
+- ADR 2026-10-27-project-stagnation-inbox（`[maintenance.stagnation]`）、ADR 2026-10-11-breaking-changes-by-default
+
+## 付記 2026-10-31（manifest unit: K2 ops-r2 の manifest と preflight の受け入れ形。不備 3）
+
+preflight が `missing` に出した 8 件を、ops-r2 では次のとおり扱う。ops-r1 の経路と旧 manifest（`main-4-v4-pilot-k2.json` ほか）は変えない（campaign_sha256 も不変）。
+
+### M1. ops-r2 の manifest は契約 revision `main-4-ops-r2` で、private・grade-case は sha256 の参照だけを持つ
+
+- `crates/campaign/fixtures/frozen-manifests/ops-r2-k2.json`。契約 revision `main-4-ops-r2`（`main-4-ops-r1` と同じ `contract.conditions` を使い、B は CoS 受付）。
+  固定値は承認票のとおり: A=Claude Code 2.1.303・model claude-sonnet-5-5、B=release 1239fab2bc36（CoS は `cos_model` claude-opus-5-5、方針版 10）、
+  condition は A1・B1、1 試行 1,500,000 token・3600 秒、合計 3,000,000 token・7200 秒、case `final/k2-bf-xattr-restart-campaign`。
+  claude の sha256 は local の固定 copy（D4）の値、`pricing_version` は `task_core::pricing::PRICE_TABLE_VERSION`。
+- 新しい private と grade-case の sha256 は `contract.grader_refs`（problem id → `private_sha256`・`grade_case_sha256`）に値だけを置く。
+  中身は読まない（評価器領域は評価器の uid が持つ）。`grader_refs` は `main-4-ops-r2` だけが持て、manifest の problems を過不足なく覆う。
+  省略時は直列化しないので、ops-r1・旧 manifest の hash は変わらない。`case.json` は変えない。
+- `main-4-ops-r2` の manifest を受けるのは `preflight` だけ。`run`・`dry-run`・`config-check`・`env-check` 等の投入系は ops-r2 でも拒否する（B は POST /tasks で投入しない）。
+  ops-r1 の manifest は従来どおり preflight でも拒否する。
+
+### M2. missing 8 件の扱い
+
+| 旧 missing | ops-r2 の扱い |
+|---|---|
+| `input-manifest`（`final-input-manifest.json` が無い） | 実在する入力に直した。`frozen-manifests/ops-r2-k2-input-manifest.json`（`agent-docs/progress/2026-10-16-mlsys-final/final-input-manifest.json` の写し。内容 hash は同じ）を manifest の pin で照合する |
+| `case-inputs: private file hash mismatch`（CaseSet の読み込み） | 外した。ops-r2 は `CaseSet::load_public`（case.json と materials・kb の snapshot hash だけ。private を読まない）。理由: 新しい private は `EVAL_ROOT`（0700、持ち主 celeris-eval）にあり、人の uid の preflight は読めず、読んではいけない。repo の旧 private は漏洩済みで採点に使わない（G1）。旧 private を読んで新 private の hash と食い違うまま通す経路は作らない |
+| `lock: private file hash mismatch` | 外した。campaign lock は private の hash を grader root から封印する検査で、ops-r2 は runner（`run`）で走らせず lock を使わない |
+| `auth-env: --api-url/--token-env` | 外した。B は CoS thread への relay（operator の token は `ops-r1-intake --relay` が使う）で、campaign は task API に投入しない。preflight は API を呼ばない（試験の Host は呼ぶと panic） |
+| `auth-env: --task-template` | 外した。同上（POST /tasks の body を作らない） |
+| `case-inputs: --materials-src` | 外した。資料は case 自身の `materials/` で、`CaseSet::load_public` が case.json の snapshot に照合する。manifest の `snapshot.materials_sha256`・`kb_snapshot` も case の値と一致を見る。`--materials-src`・`--kb-src` は渡せば manifest の pin に照合する（任意） |
+| `case-inputs: --kb-src` | 同上 |
+| `measure-env: --measure-config, --normal-config and --canaries` | `--measure-config` は必須のまま。`--canaries` は外した（D5: canary を置かない）。測定 config は通常運用の config との分離（`measure_env::check_config`）だけを見る。identity 照合（`GET /config`）は daemon を起こしてから使うので preflight では見ない |
+
+代わりに足した検査（`graders`）: case.json の `private_ref.sha256`・`grade_case_ref.sha256` が manifest の `grader_refs`（承認票の値）と一致する。
+grade-case 実体の hash 照合（`check_grader`）は評価器の wrapper `grade`（`ops-r2-grade.py`）が `EVAL_ROOT` で行うので、preflight では行わない。
+残した検査: manifest・版・入力 manifest・case の split・control・予算・実験 walltime・初期 repo と外部入力（`--repo-src`・`--inputs-src`）・A の実行ファイル（版・bwrap）・隔離 probe（deny list）・予算の承認上限。
+外した検査: 能力 probe（`--cap-env`）。runner の A の sandbox を組んで調べる検査で、ops-r2 の A は `ops-r2-sandbox.sh` の中で動く別の包み方になる。隔離は runtime probe が同じ包み方で見る。
+
+### M3. 試験
+
+`crates/campaign/tests/preflight_ops_r2.rs`: 固定値、api-url・token・task-template・materials/kb・canary・cap-env なしで通る、旧 private を読まない（grader root が無くても実在する旧 fixtures でも同じ結果）、
+case.json と manifest の参照が違えば `graders` で止まる、入力 manifest・`--repo-src`・`--measure-config` が無ければ止まる、`grader_refs` の形、CLI の preflight が ops-r2 を受け他の投入系が拒否する。
+
+### M4. 未確認
+
+実機の operator 環境での実行（`--repo-src`・`--inputs-src`・`--measure-config` に実物を渡した preflight）は worker の run では行えない。手順書への反映は docs unit、実機のやり直しは operator。
+
+## 付記 D-socket（2026-10-31、task 01M690TDXQ4GX9A2Z0AVBKTB2D）
+- `ops-r2-sandbox.sh` に `--socket <path>`（複数可）を足す。受けるのは unix socket（`test -S`）だけで、bwrap には `--bind <sock> <sock>` として socket の path そのものだけを渡す。親 dir（例 `/run/user/1001`）は見せない。禁止 path の検査は `--ro` と同じ規則で掛ける。
+- `--ro` は通常 file・dir だけを受け、socket を混ぜない。
+- preflight は `--b-socket`・`--operator-socket` を `ScriptSandbox.sockets` として script に渡す。許可表（`allow_sources`）は script の `--print-args` から作るので、socket の載る filesystem が許可表に入る。deny_readable の判定は変えない。
+- 試験: `crates/campaign/tests/ops_r2_socket.rs`。
+
+## 付記 D-docs（2026-10-31、task 01M690TDXQ4GX9A2Z0AVBKTB2D）実機の preflight で見つかった手順書と道具の食い違い
+
+どれも道具を正とし、手順書（`docs/ops/ops-r2-k2-preflight.md`・`docs/ops/ops-r2-isolation.md`）を道具に合わせた。道具の検査は緩めない。
+
+1. `--kb-src`: 道具に合わせた。`measure_env::check_config` は測定 KB root が「空か `--kb-src` と同じ中身」でなければ止まり、
+   `ops-r1-measure-config.sh` は root に `skills/<name>/` を作るので空にならない。手順書は「kb-src は要らない」を消し、生成直後の `$S/kb` を
+   `/local/celeris/data/measure-bin/kb-init-<sha12>` へ 1 度だけ写して固定の初期 KB とし、以後の試行と preflight はそれを `--kb-src` に渡す（operator が実機でした方法）。
+2. deny list の置き場所: 道具に合わせた。`ops-r2-sandbox.sh` の workspaces 拒否は残し、deny list は `/local/celeris/data/measure-bin/deny-<case>.list` に置く。`$P` には記録用の写しだけを置く。
+3. B の probe の `--allow`: preflight（`allow_sources` の `--dev` 規則: /dev とその下の mount の source をすべて足す）に合わせた。
+4. 漏洩検査の run uid: 道具に合わせ、手順書で `--run-uid`・`--run-gid` に人の uid を渡す。
+5. measure-bin の持ち主と ssh: userns の中では人以外の uid が 65534 に見え、ssh は root 持ち（に見える）config を拒む。この限界を手順書に書き、config と親 dir は人の uid 持ちにする。
+6. socket: 付記 D-socket の `--socket`・`--b-socket` を手順書の preflight・probe・§4.1 の sirius 確認に入れた。
+
+## 付記 D-ssh（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）試行に -F を教えずに `ssh sirius` を通す
+- 背景: sandbox の中では `/etc` を ro-bind で見せるため、`/etc/ssh/ssh_config` の `Include /etc/ssh/ssh_config.d/*` が userns の中で持ち主 65534 に見える dir を読み、`Bad owner` で止まる。固定依頼文は承認済みなので A・B の試行に `-F` を教えられない。
+- 決定: `ops-r2-sandbox.sh` に `--ssh-config <file>` を足す。bwrap の引数で `/etc` の bind の後に `--tmpfs /etc/ssh --ro-bind <file> /etc/ssh/ssh_config` を置き、専用 config（`/local/celeris/data/measure-bin/ssh/config`）を system config にする。`ssh_config.d` と system の known_hosts は見えなくなる。専用 config に `UserKnownHostsFile`・`ControlPath`（人が開いた master の socket、`--socket` で bind）を書く。
+- bind するのは file 1 つだけで、親 dir は見せない。受けるのは通常 file だけ（dir は exit 2）。禁止 path の検査は `--ro` と同じ規則で掛ける。
+- A と B は同じ `--ssh-config` を渡す（同じ形）。Celeris の remote exec helper は `$HOME/.ssh/config` が無ければ `-F` を足さないので、B の remote exec も同じ system config で通る。
+- 試験: `crates/campaign/tests/ops_r2_ssh_config.rs`（print-args の順序・親 dir を出さない・-F を足さない・A/B で同じ・dir を拒む）。実 ssh での確認は operator の step 8 のやり直し（未確認）。
+
+## 付記 D-k2text（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）
+- `ops-r1-measure-config.sh` が生成する `setup/project.json` と daemon.toml 冒頭の注記から K4 の文言（`ops-r1 K4 pilot`）を消し、`ops-r2 K2` に直した。daemon の挙動には効かない文言だけの変更。
+
+## 付記 D-store（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）測定 daemon の promotion gate
+- 背景: daemon は `[selfdeploy] releases_dir` の親の `current` の行き先の名前が自分の sha12 のときだけ起動する（`crates/celeris/src/instance.rs` `read_promotion_evidence`）。生成器は releases_dir を release dir の親（本番の `/local/celeris/state/releases`）にしていたので、その親に `current` が無く、sandbox にも見えず exit 4 になった。
+- 決定: `ops-r1-measure-config.sh` が `$STATE/release-store/releases/<sha12>`（→ release dir の symlink）と `$STATE/release-store/current`（→ `releases/<sha12>`）を作り、`releases_dir = $STATE/release-store/releases` を書く。本番の release store は変えない。既にあって中身が違えば exit 1。
+- daemon.toml で変わる欄は `[selfdeploy] releases_dir` だけ。release dir は sandbox に `--release` で同じ path に bind されるので、symlink はその中で解ける。
+
+## 付記 D-decision（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）intake の decision_id
+- 背景: K2 の承認は対話 session の選択肢で行い、承認票（`approval-request.md`）に記録する。Celeris の decision id は無いが、`ops-r1-intake` の `source.decision_id` は `approved_request` で必須。
+- 決定: コードは変えず、書式を `approval:<承認票の task id>:<承認票の file 名>:<選択肢 key>` と決める（intake の `[A-Za-z0-9._:-]` 検査を通る）。手順書 `docs/ops/ops-r2-k2-preflight.md` §5 に書いた。承認と依頼文の結び付きは今までどおり `request_sha256` の一致で検査する。
+
+## 付記 D-seed（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）A・B の初期作業ツリー
+- 背景: `ops-r2-sandbox.sh` は `--state`・`--ro` の下の `.git` を拒む（試行の主体に履歴を見せない。付記 D2）。preflight の repo-src は `.git` を持つので、そのまま bind できない。
+- 決定: `scripts/campaign/ops-r2-seed.sh` を足す。
+  - `make`: operator が `git archive --format=tar` で `.git` を含まない非圧縮の tar を 1 つ作り、sha256 を出す。
+  - `place`: sha256 を照合して A・B の `<state>/seed/benchfs.tar` に同じ bytes を写す（0444）。
+  - `unpack`: sandbox の中で sha256 を照合してから空の dir に展開する。試行の command はこの後に claude・daemon を起動する。
+  - どの段も tar の member を検査し、`.git`・絶対 path・`..`・木の外を指す link・特殊 file を含めば exit 1。
+- 圧縮しないので、漏洩検査（`check-ops-r1-leak.py --scan <state>`）が tar の member の中身を読み、private の文字列・canary・禁止 hash を見つける。木の外を指す link を拒むので、種から deny list の path へ届く link は作れない。
+- 試験: `crates/campaign/tests/ops_r2_seed.rs`（A・B が同じ bytes、.git なしで展開、展開後の state を sandbox が受ける、hash 違い・.git・外向き symlink の拒否、漏洩検査が tar の中の canary を見つける）。
+
+## 付記 D-trial-a（2026-10-31、task 01M69BAM9SMW8YE1Y4GJXV0NFT）試行 A の起動
+- 背景: ops-r2 の manifest では `celeris-campaign run` が拒まれ、A を A の包みで単体の Claude Code として起動する道具が無かった。
+- 決定: `scripts/campaign/ops-r2-trial-a-command.sh` が起動 command を 1 行出す。script は起動しない（LLM を呼ぶ試行は人が別の端末で始める）。
+  command は `ops-r2-sandbox.sh --state <A> --release <claude 2.1.303 の固定 copy の dir> --account <A の account> --ssh-config --socket` の中で
+  `ops-r2-seed.sh unpack` の後に `CLAUDE_CONFIG_DIR=<A の account> timeout 3600 claude-2.1.303 -p --model claude-sonnet-5-5` を exec する。
+- 上限: 3600 秒は `timeout` で強制する。1,500,000 token は claude CLI に上限の引数が無いので、operator が transcript の usage で停止規則に従い止める。
+- B と同じ ssh の形（付記 D-ssh）にし、`-F` を command にも依頼文にも入れない。
+- 試験: `crates/campaign/tests/ops_r2_trial_a_command.rs`（版・model・3600 秒・sandbox の引数・種の sha256 が command に入る、`-F` が無い、引数誤りは exit 2、前提の欠けは exit 1）。
+
+## 付記 D-trial-a2（2026-10-31、task 01M69YZVW2AA2QPYS5KKAN20SR）試行 A の権限の形と socket path の quoting
+- 背景: D-trial-a の command は `--permission-mode`・`--disallowedTools`・`--session-id` を出さなかった。A の account（`CLAUDE_CONFIG_DIR`）の設定は権限を与えないので、headless の `-p` では Bash・Edit が拒まれる（ADR 2026-10-16-mlsys-pilot-wiring-fixes D4 と同じ起動の誤り）。
+  また path を `[A-Za-z0-9._/+-]` に限っていたため、人が開いた ssh master の socket `/run/user/1001/ssh-mux-rmaeda@130.158.241.2:22`（`@`・`:` を含む）を拒んでいた。
+- 決定（権限の形）: K4 ops-r1 の A（K4 runbook §3.1。成果物 `01M62S8XWCZDCY2ZBVQ35176MH/artifacts/ops-r1/runbook.md`）と同じ引数にする。
+  `claude-2.1.303 -p --model claude-sonnet-5-5 --session-id <uuid> --output-format stream-json --verbose --permission-mode bypassPermissions --disallowedTools Task`。
+  `--disallowedTools` の値は K4 と同じ `Task` だけにし、K4 と比べられる形を保つ（B の worker の `Agent,Task,Workflow` とは違う。違いは K4 と同じ）。
+- 決定（session id）: `--session-id <小文字の UUID>` を必須の引数にする。operator が起動の前に決めて記録し（K4 の `$RA/session_id` と同じ）、script は生成しない。A の session は測定対象の harness で、operator-usage の session-map には入れない（K4 runbook §3.3 と同じ）。
+- 決定（quoting）: path は絶対 path で改行を含まないことだけを確かめ、文字の種類で拒まない。`sh -c` に渡す内側の command の各 path と、外側の各引数（内側の command 全体を含む）を、POSIX sh の単一引用符（`'` は `'\''`）で 2 段に quote して出す。path に空白・`'`・`@`・`:` があっても、出した 1 行を sh が評価すると元の bytes の argv になる。
+- 試験: `crates/campaign/tests/ops_r2_trial_a_command.rs`。script の写しの隣に argv を記録する偽の `ops-r2-sandbox.sh` を置き、偽の `ops-r2-seed.sh`・`claude-2.1.303` で出した 1 行を実際に sh で評価する（実 sirius・LLM・bwrap に出ない）。claude の argv が上の形と一致すること、`--socket` に `ssh-mux-rmaeda@130.158.241.2:22` の形の path がそのまま渡ること、空白と `'` を含む path が保たれること、UUID 以外の session id は exit 2 を確かめる。
+
+## 付記 D-public・D-seed2（2026-10-31、task 01M69YZVW27JDDR1115KFCD6NH）公開の初期 archive の needle を外す・種に submodule を入れる
+- 背景 1: K2 の private の文字列には、公開の初期 archive（case.json の `initial`）にも載る識別子・path が含まれうる。種を `--scan` に渡すと、
+  試行に元から見せている文字列が漏洩の hit になり、検査が常に exit 1 になる。`--allow-string` は文字列を command 行と結果に書く必要があり使えない。
+- 背景 2: 付記 D-seed の `make` は `git archive` で作るので、submodule（`lib/pluvio`・`lib/locusta`・`ior_integration/ior` と入れ子 2 件）が空の dir になり、
+  初期ツリーが build できない。
+- 初期ツリーの定義と採点の関係（コードで確かめた）:
+  - case.json の `initial.archive_sha256` は `git archive <initial.commit>` の tar（submodule を含まない）の sha256（`crates/campaign/src/cases.rs` の `Initial`）。
+    asset store の bundle から作った tar の sha256 が case.json の値と一致することを 2026-10-31 に確かめた。
+  - submodule は `initial.submodules` の `<path>@<40 桁 commit>` で固定し、実体は asset store の `submodules/<末尾名>-<commit 先頭 8 桁>.tar`（`SHA256SUMS` に載る）。
+  - 採点器は試行の種を使わない。`grade --initial-tree`（ADR 2026-10-18-grade-initial-tree-baseline D2）は grader 側で `asset_assembly::assemble_initial`
+    （bundle → 固定 commit → submodule tar を各 path に展開 → `initial.lock.json` の内容 hash で照合）が組んだ木で、submodule を含む。
+    したがって「試行に渡す初期ツリー」と「採点の baseline の木」は、どちらも「公開 tar ＋ 同じ submodule tar」を同じ path に置いた内容になる。
+- 決定 D-public: `check-ops-r1-leak.py --public-archive <tar> <sha256>`（複数可）。
+  - tar の sha256 が引数と違えば入力の誤り（exit 2）。初期 archive には case.json の `initial.archive_sha256`、submodule tar には asset store の `SHA256SUMS` の値を渡す。
+  - tar の生 byte と member（入れ子 archive を含む）に現れる private の文字列 needle を検査から外す。外すのは private の文字列だけで、
+    private の sha256・`--forbidden-sha`・`--canary` は外さない（公開物に現れてはいけないものなので、現れれば種の scan で hit になる）。
+  - 結果には外した数と長さ（`checked.public_archive.excluded_lengths`）だけを書き、文字列・hash・JSON path は書かない。
+    外した後に private の文字列 needle が 0 件、または外す前の半分以上を外したときは `checked.public_archive.warning` と `limits` に書き、stdout にも出す。pass/fail は変えない。
+- 決定 D-seed2: `ops-r2-seed.sh make` を `--archive <公開 tar> --case <case.json> --assets <asset store> --out <tar>` に置き換える（旧 `--repo`・`--rev` は使い方の誤り）。
+  - 公開 tar の sha256 を case.json の `initial.archive_sha256` と照合する。公開 tar 自体は変えない。
+  - case.json の `initial.submodules` の各 tar を `SHA256SUMS` と照合し、浅い path から順に `<path>/` の下に入れて、非圧縮の tar 1 つ（種）にする。
+    member の順・mode・mtime は元の tar のまま、owner は 0、pax の global header（commit id の comment）は落とす。同じ入力からは同じ bytes になる。
+  - 同じ path の file が 2 つの tar にあれば拒む（dir の重なりは 1 つにまとめる）。`.git`・絶対 path・`..`・木の外を指す link の拒否は従来どおり。
+  - `place`・`unpack` は変えない。A・B は同じ bytes の種を置き、包みの中で展開する。
+  - 種は非圧縮なので、漏洩検査の `--scan <state>` は submodule の中身も読む。
+- 限界: 種の内容 hash を `initial.lock.json` の `content_sha256` と照合するのは採点器の `assemble_initial` だけで、`ops-r2-seed.sh` は tar の sha256 で照合する。
+- 試験: `scripts/campaign/test_check_ops_r1_leak.py`（公開 archive の除外・数と長さだけの出力・hash 違いは exit 2・大きく減った警告・canary は外さない）と
+  `scripts/campaign/test_ops_r2_seed.py`（submodule 込みの種・入れ子・sha 違い・未登録・file の重なりの拒否・A/B 同 bytes・漏洩検査が submodule の中身を読む）。
+  どちらも `scripts/campaign/run-ops-r1-leak-tests.sh` で走る。`crates/campaign/tests/ops_r2_seed.rs` も新しい `make` に合わせる。
+
+## 付記 D-bwork・D-bssh・D-bstart（2026-10-31、task 01M69YZVW2BBP82R6ZY45BMW3J）B の案件 repo・preflight の ssh config・B の daemon の起動
+- 背景 1: `ops-r1-measure-config.sh` が書く `setup/project.json` は `title`・`request` だけで、B の state に展開した種（`<state>/work/benchfs`）を
+  B の Celeris の repo として結ぶ欄が無かった。案件に repo が無いと、B の CoS は coding の task を起票できず（repo 無しは 422）、worker も種の木で作業しない。
+- 背景 2: preflight の隔離検査（`preflight_isolation`）は B・operator の包みに `--ro` と `--socket` しか渡せず、`--ssh-config`（付記 D-ssh）を持つ実際の B の起動の形と
+  bind が違った。preflight が通っても、ssh config の bind を足した包みは検査されていない。
+- 背景 3: §6 の B の起動（包みの中で種を展開し daemon を起動する）は手書きの `sh -c` で、試験が無かった。
+- 決定 D-bwork: B の作業ツリーは A と同じ `<state>/work/benchfs`（`ops-r2-trial-a-command.sh` と同じ path）に固定する。
+  `ops-r1-measure-config.sh` は `setup/project.json` に `"workspace": {"kind": "local", "path": "<state>/work/benchfs"}` を書く（新しい引数は足さない。path は state から決まる）。
+  `POST /api/v1/projects` はこの workspace を案件の primary repo（名前 `benchfs`）にする。木は `.git` を持たないので repo の種類は `dir` になり、
+  run の作業場所には木への symlink が置かれる（worktree を切らない）。B の CoS・worker は種を展開した木そのものを変える。
+  A と B は同じ sha256 の種（付記 D-seed2）を同じ相対 path に展開するので、初期ツリーは同じになる。
+- 決定 D-bssh: preflight に `--b-ssh-config <file>`・`--operator-ssh-config <file>` を足し、`ops-r2-sandbox.sh` に `--ssh-config` として渡す
+  （`--print-args` と probe の起動の両方）。mount の照合の許可表は従来どおり `--print-args` の引数から作るので、ssh config の bind 元も許可表に入る。
+- 決定 D-bstart: `scripts/campaign/ops-r2-b-daemon-command.sh` が B の daemon の起動 command を 1 行出す（A の `ops-r2-trial-a-command.sh` と同じ流儀。script は起動しない）。
+  command は `ops-r2-sandbox.sh --state <S> --release <R> --account <B の account> --ro <claude の dir> --ssh-config <file> --socket <socket>` の中で
+  `ops-r2-seed.sh unpack --into <S>/work/benchfs` の後に `<R>/bin/celeris --config <S>/daemon.toml --release <sha12>` を exec する。
+  script は出す前に次を確かめ、欠ければ exit 1 で止める: 種と `bin/ops-r2-seed.sh` がある、`daemon.toml` がある、`<R>/bin/celeris` が実行でき `manifest.json` に sha12 がある、
+  `<S>/release-store` が `current → releases/<sha12> → <R>` の形（付記 D-store）、`setup/project.json` の workspace が `<S>/work/benchfs` を指す、
+  `<S>/work/benchfs` が無いか空（`unpack` と同じ条件。試行ごとに新しい state で始める）。path は A と同じく単一引用符で 2 段に quote する。
+- 試験: `crates/campaign/tests/ops_r2_b_start.rs`。種を `make` で作り A・B の state に `place` し、A の command（偽の claude）と B の command（偽の celeris）を
+  偽の sandbox で実際に sh で評価する。偽の celeris は起動時に作業ツリーの一覧と argv を記録するので、daemon の起動前に展開が済み、A と B の木が同じで、
+  `project.json` の workspace がその木を指すことを確かめる。実 bwrap の包みで同じ command を通す試験は `CELERIS_USERNS_TESTS=1` のときだけ走る。
+  preflight の `--b-ssh-config` は、偽の sandbox script で `run` が `--ssh-config` を `--print-args` と probe の起動の両方に渡すことを確かめる。
+  実 sirius・LLM・外部ネットワークには出ない。
+- 限界: `dir` の repo の task で B の delivery（取り込み）が何をするかは試験していない（試行の成果は作業ツリーの状態で採点する）。実機の B で CoS が repo を選んで起票することは未確認。

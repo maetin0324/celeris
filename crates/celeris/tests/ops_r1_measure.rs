@@ -225,6 +225,24 @@ fn start_daemon() -> Daemon {
     )
     .expect("manifest");
     let config = root.join("daemon.toml");
+    // この試験は K4 の方針版 "6" を期待する。release の skill は版が進んでいるので、
+    // 版だけ "6" にした写しを --skills-src に渡す（script は --policy-version と skill 版の一致を要求する）。
+    let skills_src = root.join("skills-src");
+    let cp = Command::new("cp")
+        .arg("-R")
+        .arg(repo_root().join("config/skills"))
+        .arg(&skills_src)
+        .status()
+        .expect("cp skills");
+    assert!(cp.success());
+    let triage = skills_src.join("cos-inbox-triage/SKILL.md");
+    let text = fs::read_to_string(&triage).expect("triage skill");
+    fs::write(
+        &triage,
+        text.replace("version: \"10\"", "version: \"6\"")
+            .replace("policy_version \"10\"", "policy_version \"6\""),
+    )
+    .expect("write triage skill");
     let out = Command::new("sh")
         .arg(repo_root().join("scripts/campaign/ops-r1-measure-config.sh"))
         .arg("--state")
@@ -234,10 +252,12 @@ fn start_daemon() -> Daemon {
         .args([
             "--models",
             "cos-opus",
-            "--harness",
-            "stub",
-            "--stub-command",
+            "--policy-version",
+            "6",
+            "--skills-src",
         ])
+        .arg(&skills_src)
+        .args(["--harness", "stub", "--stub-command"])
         .arg(&stub)
         .arg("--out")
         .arg(&config)
@@ -261,6 +281,29 @@ fn start_daemon() -> Daemon {
     ] {
         assert!(generated.contains(line), "{line:?} in\n{generated}");
     }
+    // 測定用の release store の写し（ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-store）。
+    // releases_dir は state の下の写しを指し、その親の current が release の sha12 を指す。
+    let store = state.join("release-store");
+    assert!(
+        generated.contains(&format!(
+            "releases_dir = \"{}\"",
+            store.join("releases").display()
+        )),
+        "releases_dir in\n{generated}"
+    );
+    assert_eq!(
+        fs::read_link(store.join("current")).expect("current"),
+        PathBuf::from("releases/0e2e0e2e0e2e")
+    );
+    assert_eq!(
+        fs::read_link(store.join("releases/0e2e0e2e0e2e")).expect("release link"),
+        release
+    );
+    let names: Vec<_> = fs::read_dir(root.join("releases"))
+        .expect("source store")
+        .map(|e| e.expect("entry").file_name())
+        .collect();
+    assert_eq!(names, ["0e2e0e2e0e2e"], "source store untouched");
     for skill in ["cos-operator", "cos-inbox-triage"] {
         assert!(
             state
@@ -271,6 +314,11 @@ fn start_daemon() -> Daemon {
             "skill {skill} delivered"
         );
     }
+    // B の作業ツリー（付記 D-bwork）。本番の手順では daemon の起動前に包みの中で種をここへ展開する
+    // （ops-r2-b-daemon-command.sh。展開そのものは crates/campaign/tests/ops_r2_b_start.rs）。ここでは展開済みの木の代わりを置く。
+    let work = state.join("work/benchfs");
+    fs::create_dir_all(work.join("src")).expect("work tree");
+    fs::write(work.join("src/lib.c"), "int x;\n").expect("work tree file");
     let port = generated
         .lines()
         .find_map(|l| l.strip_prefix("listen = \"127.0.0.1:"))
@@ -363,6 +411,23 @@ fn ops_r1_measure_cos_path_with_stub_harness() {
     let (s, project) = d.call(&d.operator, "POST", "/api/v1/projects", Some(&project_body));
     assert!(s == 200 || s == 201, "{s} {project}");
     let project_id = project["id"].as_str().expect("project id").to_owned();
+    // 案件の primary repo = B の state の作業ツリー（.git なしなので dir。run には木への symlink が置かれる）。
+    let work = d.state().join("work/benchfs");
+    assert_eq!(
+        project_body["workspace"],
+        json!({"kind": "local", "path": work.display().to_string()})
+    );
+    let (s, repos) = d.get(&format!("/api/v1/projects/{project_id}/repos"));
+    assert_eq!(s, 200, "{repos}");
+    let repos = repos["items"].as_array().cloned().unwrap_or_default();
+    assert_eq!(repos.len(), 1, "{repos:?}");
+    assert_eq!(repos[0]["name"], "benchfs", "{repos:?}");
+    assert_eq!(repos[0]["kind"], "dir", "{repos:?}");
+    assert_eq!(repos[0]["is_primary"], true, "{repos:?}");
+    assert_eq!(
+        repos[0]["location"],
+        json!({"kind": "local", "path": work.display().to_string()})
+    );
     let (s, thread) = d.call(
         &d.operator,
         "POST",

@@ -9,10 +9,12 @@ K2（`k2-bf-xattr-restart-campaign`）を ops-r2 の条件で正式に試行す�
 [実験専用 operator session](ops-r2-operator-session.md)・[測定 daemon](ops-r1-measure-daemon.md)・[pilot runbook](mlsys-main-4-pilot-runbook.md) にある。
 
 このチェックは LLM・実 HPC 負荷を使わない。本番 daemon・本番 DB・`~/.config/celeris` は変えない。
-2026-10-30 の時点で、このチェックを K2 で通した試行は無い（人の準備 §0 が未実施のため、§3 の L1 で必ず止まる）。
+2026-10-31 に operator が §1〜§4 を実機で実行し、§1 は合格、§2〜§4 は旧い手順の不備（方針版が固定の 6、B の account の置き方、manifest の欠け、
+deny list の引数上限、NFS 上の claude、漏洩検査の canary と L1 の mount）で止まった。この版はその不備を直した手順で、新しい手順で §2〜§6 を通した記録はまだ無い（未確認）。
+やり直しの順序は [進捗](../../agent-docs/progress/2026-10-31-ops-r2-preflight-fixes/docs.md) の「本番への移行」にある。
 
-以下の変数は例。`P` は試行の証跡 dir（試行ごとに新しい dir）、`S` は B の試行 state、`O` は operator session の state、
-`R` は固定した release dir、`CC` は固定した `celeris-campaign`、`EVAL_ROOT=/var/lib/celeris-eval`、`case=k2-bf-xattr-restart-campaign`。
+以下の変数は例。`CC` は固定した `celeris-campaign`、`CLAUDE`・`CLAUDE_SHA` は §2.1 の local の claude copy とその sha256。`P` は試行の証跡 dir（試行ごとに新しい dir）、`S` は B の試行 state、`O` は operator session の state、
+`R` は固定した release dir、`EVAL_ROOT=/var/lib/celeris-eval`、`case=k2-bf-xattr-restart-campaign`。
 
 ## 0. 人の準備が済んでいる
 
@@ -26,7 +28,8 @@ K2（`k2-bf-xattr-restart-campaign`）を ops-r2 の条件で正式に試行す�
 | 採点 wrapper の install | `sha256sum /var/lib/celeris-eval-bin/grade scripts/campaign/ops-r2-grade.py` | 2 つの sha256 が同じ（install は [入力隔離 §4.3](ops-r2-isolation.md)） |
 | 承認票の欄（試行数・上限・model・account・停止条件・期限・固定依頼文の sha256・K2 の新しい private の sha256・deny list・実験専用 session の id・評価器の起動方法） | 承認票を開く | すべて人が埋めている。operator が空欄を埋めていない（K4 の逸脱を繰り返さない） |
 | 評価器の uid | `id celeris-eval`、`id -nG` | uid がある。人の uid の groups に `celeris-eval` が無い |
-| 測定専用 account dir（B 用・operator 用の 2 つ） | `ls -A <dir>` | `.credentials.json` があり、`projects/`・`memory/` が無い |
+| 測定専用 account dir（B 用・operator 用の 2 つ） | `ls -A <dir>` | `.credentials.json` があり、`projects/`・`memory/` が無い。1 dir = 1 account で、B の測定 daemon の pool には B 用の 1 つだけを載せる（§2.2）。A・operator の dir は pool に入れない |
+| 測定専用の local の claude copy | `"$CLAUDE" --version`、`sha256sum "$CLAUDE"` | 版と sha256 が承認票と同じ（§2.1）。NFS 上の claude を測定に使わない |
 
 ## 1. release dir に private が入っていない
 
@@ -44,20 +47,62 @@ find "$R" -path '*grader-private*' | wc -l                 # 0
 2026-10-30 に `/local/celeris/state/releases` の 4 件で確かめた結果: `false_claim_traps` 0 件、K2 の旧 private の hidden command の先頭 60 byte 0 件（新しい private は repo に入らないので release にも入らない）、
 `grader-private` の文字列は notes と promote.log だけ（release に `celeris-campaign` の binary は入っていない）。
 
-## 2. 測定 daemon の config に人の token が無い
+## 2. 測定専用の local claude と、測定 daemon の config
+
+### 2.1 local の claude copy
+
+NFS 上の claude を A・B・operator の包みの中に見せると、NFS の mount が許可表の外の source になり、preflight が `deny_readable:A:mount:...` で止まる
+（許可表に NFS を足さない。他の利用者の書き換えを受け、許可表の外の木を見せるため。ADR 2026-10-31-ops-r2-preflight-fixes D4）。
+測定で使う claude は local の固定 copy だけにする。写した後は書き換えない。K2 ops-r2 の manifest が pin するのは次の copy。
+
+```sh
+CLAUDE=/local/celeris/data/measure/ops-r2-k2-p1/bin/claude-2.1.303   # 版を上げるときは新しい dir に写し、承認票と manifest を人が改める
+"$CLAUDE" --version                                                   # 2.1.303（承認票の版と同じ）
+sha256sum "$CLAUDE"                                                   # 375988f457756524234695cf2d8f64ace99c5f68682e47ea24862a843c191450（manifest の claude_code_sha256、承認票の値）
+```
+
+版か sha256 が承認票と違えば始めずに人へ返す。この sha256 を `CLAUDE_SHA` として §3 の `--claude-sha256` に渡す。
+
+### 2.2 config を作る
+
+方針版は引数で決める。`--policy-version` は必須で、承認票の方針版（K2 ops-r2 では 10）を渡す。固定の既定値は無い。
+`--skills-src`（既定 `config/skills`）の `cos-inbox-triage` の front matter version と違えば script が止まる。
+
+B の account は `--b-account-dir`（`.credentials.json` を直に持つ 1 つの測定専用 dir）で渡す。script が `$S/pool/` を作り、b の basename の symlink を 1 つだけ置いて
+`[accounts] claude_dir` をその pool にする（Celeris は claude_dir の各 subdir を 1 account として読む。b そのものを渡すと backups・cache 等が account と見なされる）。
+a と operator の dir は渡せない。旧い引数名は使えない（usage で止まる）。
 
 ```sh
 sh scripts/campaign/ops-r1-measure-config.sh --state "$S" --release-dir "$R" --models <cos-opus|all-sonnet> \
-  --claude-accounts <B 用の測定専用 account dir> --clusters-from ~/.config/celeris/config.toml --out "$S/../daemon.toml"
-grep -c 'principal = "human:' "$S/../daemon.toml"   # 0
-grep -c 'principal = "operator:ops-r1"' "$S/../daemon.toml"   # 1
+  --policy-version 10 --b-account-dir /local/celeris/measure-accounts/b --claude-bin "$CLAUDE" \
+  --clusters-from ~/.config/celeris/config.toml --out "$S/daemon.toml"
+KB0=/local/celeris/data/measure-bin/kb-init-<sha12>   # 固定の初期 KB（作業場所の外、人の uid 持ち）
+[ -e "$KB0" ] || cp -R "$S/kb" "$KB0"                  # 生成直後の $S/kb（skills/<name>/ だけ）を写す。daemon 起動前に 1 度だけ
+diff -r "$KB0" "$S/kb"; echo "exit=$?"                # exit=0（同じ中身）
+grep -c 'principal = "human:' "$S/daemon.toml"            # 0
+grep -c 'principal = "operator:ops-r1"' "$S/daemon.toml"  # 1
+grep -A1 '^\[cos.triage\]' "$S/daemon.toml"               # policy_version = "10"
+ls -A "$S/pool"                                           # b だけ（1 件）
+grep -A4 '^\[maintenance.stagnation\]' "$S/daemon.toml"   # 4 閾値がすべて 0
 ```
 
-期待: token は `operator:ops-r1` だけ。`--state` は試行ごとに新しい dir（他試行の `ws/` を見せない）。
+期待: token は `operator:ops-r1` だけ。`--state` は試行ごとに新しい dir（他試行の `ws/` を見せない）。`--out` は bwrap の中の daemon が読むので `$S` の下に置く。
+生成した config は langmem・gc を無効、`[maintenance.stagnation]` の閾値を 0、`[memory]`・`[llm_proxy]`・`[[mcp.listeners]]`・`[[cron.seed]]` なしにする。
+試行と無関係に LLM を呼ぶ常駐の経路はこれで切る。CoS の受信箱 triage だけは config で切れない（§7-7）。
+
+生成器は `$S/release-store/`（`releases/<sha12>` → `$R`、`current` → `releases/<sha12>`）を作り、`[selfdeploy] releases_dir` をそこに向ける（付記 D-store）。
+本番の `/local/celeris/state/releases` は読みも書きもしない。daemon は起動時の promotion gate でこの写しの `current` を見る。
+
+```sh
+readlink "$S/release-store/current"                 # releases/<sha12>
+readlink "$S/release-store/releases/<sha12>"        # $R
+grep -A2 '^\[selfdeploy\]' "$S/daemon.toml"        # releases_dir = "$S/release-store/releases"
+```
 
 ## 3. 隔離 preflight（deny_readable が 0 件）
 
-deny list（1 行 1 絶対 path）は承認票の deny list を実在の path に展開して書く。最低限、次を入れる。
+deny list は 1 行 1 絶対 path の file で、承認票の deny list を実在の path に展開して書く。件数に上限は無い（9000 件を超える全件でよい。
+bwrap の引数に並べず、file のまま包みの中へ渡す）。最低限、次を入れる。
 
 - `$EVAL_ROOT/private/final/$case/private.json`
 - 人の repo clone と Celeris の作業場所の clone の `crates/campaign/fixtures/grader-private/final/$case/private.json`（漏洩済みの旧 private。旧解答として塞ぐ）
@@ -66,54 +111,141 @@ deny list（1 行 1 絶対 path）は承認票の deny list を実在の path �
 - 過去の campaign の out と試行の artifacts の中の file（K4 の `artifacts/ops-r1/` 等）
 - 本番 KB の root の中の file、`~/.claude` と `~/.config/celeris` の中の file、測定用以外の account dir の中の file
 
-dir ではなく中の file を書く（親を一覧できるだけで hit になる）。
+dir ではなく中の file を書く（親を一覧できるだけで hit になる）。deny list は絶対 path でない行・NUL を含む行があると入力の誤りで止まる。
+deny list は作業場所（`/local/celeris/data/workspaces` の下。task の artifacts を含む）の外に置く。`ops-r2-sandbox.sh` は workspaces の下の path を
+`--ro` で拒む（exit 2）ので、`$P` に置いた deny list は B の包みへ渡せない。置き場所は `DL=/local/celeris/data/measure-bin/deny-$case.list` に決める。
+記録用の写しは `cp "$DL" "$P/deny.list"` で `$P` に残す（包みに渡すのは `$DL`）。
+`sha256sum "$DL"` を承認票の deny list の欄と照合し、steps に残す。
+
+K2 ops-r2 の manifest は `crates/campaign/fixtures/frozen-manifests/ops-r2-k2.json`（契約 revision `main-4-ops-r2`）。
+`preflight` だけがこれを受ける（`run`・`dry-run` 等の投入系は拒否する）。api-url・token-env・task-template・materials-src・canaries・cap-env は要らない。
+`--repo-src`（K2 の初期 repo）・`--inputs-src`（外部入力）・`--measure-config`・`--normal-config`・`--kb-src`（§2.2 の `$KB0`）は実物を渡す。
+`--kb-src` は要る。`--measure-config` の `[knowledge] root`（`$S/kb`）は生成時に skills を入れるので空でなく、preflight は
+「空か、`--kb-src` と同じ中身」でなければ止まる（`measurement knowledge root ... (--kb-src)`）。
 
 ```sh
-"$CC" preflight <manifest・measure-config 等の通常の引数> \
-  --deny-list "$P/deny.list" --eval-root "$EVAL_ROOT" \
+"$CC" preflight --manifest crates/campaign/fixtures/frozen-manifests/ops-r2-k2.json \
+  --repo-src <K2 の初期 repo> --inputs-src <外部入力の dir> --kb-src "$KB0" \
+  --measure-config "$S/daemon.toml" --normal-config ~/.config/celeris/config.toml \
+  --a-program "$CLAUDE" --claude "$CLAUDE" --claude-sha256 "$CLAUDE_SHA" \
+  --deny-list "$DL" --eval-root "$EVAL_ROOT" \
   --sandbox-script scripts/campaign/ops-r2-sandbox.sh --probe-program "$CC" \
-  --b-state "$S" --b-release "$R" --b-account <B 用 account dir> \
-  --operator-state "$O" --operator-release "$R" --operator-account <operator 用 account dir>
+  --b-state "$S" --b-release "$R" --b-account /local/celeris/measure-accounts/b --b-ro "$(dirname "$CLAUDE")" --b-ssh-config "$SSHCFG_DIR/config" --b-socket "$MUX" \
+  --operator-state "$O" --operator-release "$R" --operator-account <operator 用 account dir> --operator-ro "$(dirname "$CLAUDE")"
 echo "exit=$?"
 ```
 
-期待: `exit=0` で、`missing` に `deny_readable:` で始まる行が 0 件。`measure-launcher.sh preflight` で走らせるときは env file の
-`DENY_LIST`・`EVAL_ROOT`・`SANDBOX_SCRIPT`・`PROBE_PROGRAM`・`B_*`・`OPERATOR_*` に同じ値を書く。
+期待: `exit=0` で、`missing` が 0 件（特に `deny_readable:` で始まる行が 0 件）。
+`--claude` と `--claude-sha256` は組で、片方だけだと `deny_readable:claude:...` で止まる。copy の sha256 が違っても止まる。
+`--b-ro`・`--operator-ro` は実際に包みへ渡す `--ro` と、`--b-socket`・`--operator-socket` は `--socket` と、`--b-ssh-config`・`--operator-ssh-config` は `--ssh-config` と同じにする
+（preflight は同じ許可表で probe する）。B の値は §6 の daemon の起動の形（`ops-r2-b-daemon-command.sh` が出す `--ro`・`--ssh-config`・`--socket`）と同じにする（付記 D-bssh）。
+`$SSHCFG_DIR` の dir を `--b-ro` で渡さない（daemon の包みには config の file だけが見える）。
+`MUX` は人が開いた sirius の ssh master の socket（例 `/run/user/1001/ssh-mux-rmaeda@130.158.241.2:22`）、`SSHCFG_DIR` は sirius だけを書いた ssh config の dir
+（`/local/celeris/data/measure-bin/ssh`）。socket は `--ro` に混ぜない（`--ro` は通常 file と dir だけを受ける）。
+B の account は pool の symlink ではなく b の実 path（`ops-r2-sandbox.sh --account` に渡す値）を渡す。
+`scripts/campaign/measure-launcher.sh preflight` は `--claude`・`--claude-sha256` を渡す欄が無いので、ops-r2 の preflight には使わず、上の command を直接実行する。
 出た行の読み方は [入力隔離 §2.3](ops-r2-isolation.md#23-celeris-campaign-preflight---deny-listdeny_readable-で止める)。
 `deny_readable:L1:...:ancestor_owned_by_run_uid` は `EVAL_ROOT` を人の uid が持つ dir の下に置いたとき、`owned_by_run_uid` は人の準備が済んでいないときに出る。
+`graders` の missing は、`case.json` の `private_ref.sha256`・`grade_case_ref.sha256` が manifest の `grader_refs`（承認票の値）と違うときに出る（§0 の 2 行）。
 
 正式試行（`--measure-config` 指定）では、この検査を外す env 変数・flag は無い。1 件でも残れば preflight は有料実行・task 作成を 0 件で止める。
+この command を `--repo-src` 等の実物で通した実績はまだ無い（未確認）。
 
 ## 4. 漏洩検査（runtime の probe と L1 の probe を渡す）
 
-B と operator の包み方の中から probe を取り、L1 は人の uid から包まずに取る。
+B の包み方の中から probe を取り、L1 は人の uid から包まずに取る。
+
+B の probe には preflight が渡すのと同じ `--allow` を付ける。`--allow` は host の mount の source（device 名）の許可表で、包みに bind する path
+（`/usr` `/bin` `/sbin` `/lib` `/lib64` `/etc` `/dev`・`$R`・`$S`・B の account dir・`--ro` の path）が載っている mount の source と、`tmpfs`・`proc`・`devpts`・`mqueue`。
+`--allow` が無いと包みの中の mount がすべて `mounts_outside_allow` に出る（2026-10-31 の実機では 6 件）。
 
 ```sh
-sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account <B 用 account dir> --ro "$CC" -- \
-  "$CC" probe-read --principal B $(sed 's/^/--deny /' "$P/deny.list") --out "$S/probe-B.json"   # exit 0
-"$CC" probe-read --principal l1 --deny "$EVAL_ROOT/private/final/$case/private.json" --out "$P/probe-l1.json"   # exit 0
+ALLOW="tmpfs proc devpts mqueue"
+for d in /usr /bin /sbin /lib /lib64 /etc "$R" "$S" /local/celeris/measure-accounts/b "$(dirname "$CLAUDE")" "$CC" "$DL" "$SSHCFG_DIR/config" "$MUX"; do
+  ALLOW="$ALLOW $(findmnt -n -o SOURCE --target "$d" | sed 's/\[.*//')"
+done
+# --dev と同じ規則: /dev とその下に載る mount の source をすべて足す（/dev だけを見ると udev 等が落ちて probe が exit 1）
+ALLOW="$ALLOW $(findmnt -n -r -o TARGET,SOURCE | awk '$1 == "/dev" || index($1, "/dev/") == 1 {sub(/\[.*/, "", $2); print $2}')"
+set --; for a in $ALLOW; do set -- "$@" --allow "$a"; done
+
+sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /local/celeris/measure-accounts/b \
+  --ro "$CC" --ro "$DL" --ro "$(dirname "$CLAUDE")" --ssh-config "$SSHCFG_DIR/config" --socket "$MUX" -- \
+  "$CC" probe-read --principal B --deny-readable-file "$DL" "$@" --out "$S/probe-B.json"   # exit 0
+
+printf '%s\n' "$EVAL_ROOT/private/final/$case/private.json" > "$P/l1-deny.list"
+"$CC" probe-read --principal l1 --deny-readable-file "$P/l1-deny.list" --out "$P/probe-l1.json"   # exit 0
+
 python3 -I scripts/campaign/check-ops-r1-leak.py --private "$EVAL_ROOT/private/final/$case/private.json" \
-  --scan <試行の出力の写し> --deny-readable $(cat "$P/deny.list") \
+  --scan "$S_A/seed" --scan "$S/seed" --scan <試行の出力の写し> "${PUB[@]}" --deny-readable-file "$DL" --eval-root "$EVAL_ROOT" --run-uid "$(id -u rmaeda)" --run-gid "$(id -g rmaeda)" \
   --runtime-probe "$S/probe-B.json" --runtime-probe "$P/probe-l1.json" --out <outbox>/leak-pre.json; echo "exit=$?"
 ```
 
-期待: probe 2 本が exit 0、漏洩検査が `exit=0`・`pass: true`。`same_uid_limit: false` は、持ち主の uid が人の uid でない path だけに付く。
+`PUB` は §6.1 で作る公開の初期 tar と submodule の tar 5 件を `--public-archive <tar> <sha256>` の形で並べた配列（bash）。
+初期 tar の sha256 は case.json の `initial.archive_sha256`、submodule の tar の sha256 は asset store の `SHA256SUMS` の値。
+これらに元から現れる private の文字列は検査から外し、結果の `checked.public_archive` に数と長さだけが出る（付記 D-public）。
+`warning` が `no_private_strings_left` か `most_private_strings_removed` なら、文字列の検査がほとんど効いていない。private の sha256 と禁止 hash の検査は残る。
+`--scan "$S_A/seed" --scan "$S/seed"` は種（`seed/benchfs.tar`、非圧縮）を含み、submodule の中身も読む。
+
+`--run-uid`・`--run-gid` は測定の run の uid（人の uid）を渡す。漏洩検査を評価器の uid（celeris-eval）で走らせると、既定では run の uid が
+celeris-eval になり、人の uid の持ち物の判定（`owned_by_run_uid`）が外れる。
+`findmnt` の source の取り方は preflight（`allow_sources`。`--dev` は /dev の下の mount の source をすべて足す）と同じ規則の手書きで、実機で通した記録は無い（未確認）。許可表の食い違いで B の probe が
+`mounts_outside_allow` を出したら、先に §3 の preflight の B の結果（同じ許可表で判定する）と見比べる。
+
+期待: probe 2 本が exit 0、漏洩検査が `exit=0`・`pass: true`。
+
+- **L1 の `mounts_outside_allow` は hit にしない。** L1 の probe は包まずに走るので host の mount が並ぶ（2026-10-31 の実機では 19 件）。
+  漏洩検査はその件数を `l1_mounts_outside_allow` に残すだけで `deny_readable` の hit にしない。B の probe（包みの中）の `mounts_outside_allow` と `ok=false` は hit にする。
+- **same_uid に canary は要らない。** `--eval-root` を渡すと、次の 4 条件がすべて揃う path は `same_uid_limit: false`・`same_uid_cleared_by: runtime_probe_and_l1` になる。
+  (1) B の probe の全部がその path を持ち `readable`・`listable` とも false、(2) B の probe の全部が `ok=true` で `mounts_outside_allow` が空、
+  (3) L1 の probe が渡され、その全 path が `readable`・`listable` とも false、(4) path が `EVAL_ROOT` の下なら L1 の probe にその path があり `owned_by_run_uid` が空。
+  1 つでも欠ければ same_uid の limit が残り、canary が無いので `same_uid_without_canary` の hit で exit 1。probe に載っていない path、L1 の probe なしも通らない。
+  `--eval-root` を渡さないと ops-r1 の規則（canary 必須）のまま。K2 の新しい private に canary を足すと sha256 が承認票と合わなくなるため、canary は置かない。
+  bwrap の外の人の uid の process（普段の operator・人の shell）が読める点はこの規則で外さない（承認票と §5 で扱う）。
+- `--deny-readable-file` は 1 行 1 絶対 path の file で、件数に上限は無い（旧 `--deny-readable <path>` は入力の誤りで止まる）。結果に file の sha256 と件数が出る。
+
 漏洩検査は `--private` に `EVAL_ROOT` の private を読むので、評価器の uid で走らせる（[入力隔離 §4.4](ops-r2-isolation.md#44-評価器の起動方法どちらかを選ぶ) の案 2 の shell。
 案 1 では採点 wrapper `grade` が判定 JSON について行う）。人の uid から private を開けないのが正しい状態で、人の uid で走らせると入力の誤りで止まる。
 採点の判定 JSON は wrapper が drop box の tgz を sha256 で照合・展開して採点し、漏洩検査を通してから outbox に置く。
 試行の出力そのものを `--scan` に渡す上の検査は wrapper に含めず、評価器の shell（`sudo -u celeris-eval /bin/bash`）で手で行う（残す）。
 `check-ops-r1-leak.py` の probe の欄（`errno` は整数）は `celeris.runtime-probe/1` のまま。
 
-bwrap の中から評価器の sudo が効かないことも確かめる（[入力隔離 §4.4](ops-r2-isolation.md#44-評価器の起動方法どちらかを選ぶ)、実機では未確認）。
+bwrap の中から評価器の sudo が効かないことも確かめる（[入力隔離 §4.4](ops-r2-isolation.md#44-評価器の起動方法どちらかを選ぶ)。2026-10-31 の実機で exit 1、`no new privileges`）。
 
 ```sh
-sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account <B 用 account dir> -- \
+sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /local/celeris/measure-accounts/b -- \
   /usr/bin/sudo -n -u celeris-eval /var/lib/celeris-eval-bin/grade; echo "exit=$?"   # 0 以外
 ```
+
+### 4.1 sirius への接続（B の包みの中から）
+
+K2 の B は sirius で計測する。人の決定（2026-10-31）で、人が開いた既存の sirius の ssh master の socket（`$MUX`）と、sirius だけを書いた
+専用の ssh config（`$SSHCFG_DIR/config`）を A・B の包みに見せる。B の包みには socket を `--socket "$MUX"`（socket の path だけを bind、親 dir は見せない）、
+config の file を `--ssh-config "$SSHCFG_DIR/config"` で渡す（dir は渡さない）。`~/.ssh` と `/run/user/1001` は渡さない。試行の前に operator が確かめ、結果を steps に記録する。
+
+```sh
+sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account /local/celeris/measure-accounts/b \
+  --ssh-config "$SSHCFG_DIR/config" --socket "$MUX" -- \
+  /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=10 sirius 'echo ok; command -v qsub qstat'; echo "exit=$?"
+```
+
+`--ssh-config` は専用 config の file だけを包みの `/etc/ssh/ssh_config` に bind し、`/etc/ssh` の残り（`ssh_config.d` を含む）は空の tmpfs で隠す（付記 D-ssh）。
+`-F` を付けずに `ssh sirius` が通るので、A・B の試行と B の remote exec に `-F` を教えない。専用 config には `ControlPath "$MUX"`・`UserKnownHostsFile`（`$SSHCFG_DIR` の下の file）を書く。
+A の包み（§6.2）にも同じ `--ssh-config`・`--socket` を渡す。`--print-args` で `/etc/ssh/ssh_config` の bind と socket の bind が出て、`$SSHCFG_DIR` の dir そのものが出ないことを確かめる。
+
+userns の限界: 包みの中では host の root と人以外の uid が 65534（nobody）に見える。ssh は持ち主が自分でも root でもない config を
+`Bad owner or permissions` で拒むので、`$SSHCFG_DIR/config` は人の uid の持ち物にし（root 持ちにしない）、group・other に書き込み権を付けない。
+`/local/celeris/data/measure-bin`（claude の copy・固定 KB・ssh config・deny list を置く dir）の親も人の uid 持ちで、group・other に書き込み権を付けない。
+
+期待: `exit=0`、`ok` と qsub・qstat の path が出る。exit が 0 でない、または qsub・qstat が出なければ、**試行を始めず、測定 daemon も起動せず、exit code と stderr の 1 行目を添えて人に返す**。
+operator は上の socket と config 以外の ssh の鍵・config・socket を許可表に足さない（credential を試行の主体に見せるかは人が決める）。`[[clusters]]` の ssh 設定（`--clusters-from` で写した値）が
+`$S/home` の下の config を要るなら、その形で届くかも同じ command で見える。
 
 ## 5. operator principal と出典
 
 - `--source` の file（`approved_request`）に、承認の `decision_id`・承認の時刻 `said_at`・承認票の依頼文 sha256・`decided_by`・`approved_by` を書く。
+  承認は対話 session の選択肢で行い Celeris の decision id を持たないので、`decision_id` は承認票の参照で書く（ADR 2026-10-31-ops-r2-preflight-fixes 付記 D-decision）:
+  `approval:<承認票の置かれた task id>:<承認票の file 名>:<承認の選択肢 key>`（例 `approval:01M669QGFJRZ2MY7VRA1BSSZ5H:approval-request.md:approve`）。
+  使える文字は `[A-Za-z0-9._:-]` だけ（intake が検査する）。承認票の file 名に別の文字があれば `_` に置き換え、元の名前を `note` に書く。
   `sha256sum <固定依頼文>` が `request_sha256` と一致すること。
 - `ops-r1-intake --relay` は operator の token（`$S/token`）で呼ぶ。人の token を環境変数に置かない。
 - 試行区間に、人の普段の session が測定 daemon を操作しない（照合で見つかればその試行は正式にしない。ADR D5）。
@@ -122,12 +254,38 @@ sh scripts/campaign/ops-r2-sandbox.sh --state "$S" --release "$R" --account <B �
 確かめ方: relay の後で `$P/intake.json` の `executed_by`・`relayed_by` が `operator:ops-r1`、`decided_by`・`approved_by` が `human:<name>`。
 記録が書かれない（exit 1）なら、理由は [CoS 受付の記録](ops-r1-intake.md) の「拒否する場合」を見る。
 
-## 6. 実験専用 operator session と session-map の準備
+## 6. 測定 daemon の起動と、実験専用 operator session・session-map の準備
+
+測定 daemon は B の包み（`ops-r2-sandbox.sh`）の中で起動する。§3 の preflight と §4 の漏洩検査が通った後、§4.1 が通った後にだけ行う。
+種は §6.1 で `$S/seed` に置いておく。起動 command は `ops-r2-b-daemon-command.sh` が 1 行出し（付記 D-bstart）、人が別の端末で実行する。script は何も起動しない。
+
+```sh
+sh scripts/campaign/ops-r2-b-daemon-command.sh --state "$S" --release "$R" --claude-dir "$(dirname "$CLAUDE")" \
+  --account /local/celeris/measure-accounts/b --ssh-config "$SSHCFG_DIR/config" --socket "$MUX" --seed-sha256 "$SEED_SHA"
+# 出た 1 行を別の端末で実行する。続けて:
+curl -s http://127.0.0.1:<測定 daemon の port>/api/v1/health   # cos_policy_version が "10"、release が sha12
+```
+
+出る command は、包み（`--ro <claude の dir> --ssh-config --socket`、§3 の `--b-*` と同じ形）の中で `ops-r2-seed.sh unpack` が種の sha256 を照合して
+`$S/work/benchfs` に展開し、その後に `$R/bin/celeris --config $S/daemon.toml --release <sha12>` を exec する。展開が失敗すれば daemon は起動しない。
+script は出す前に、種・`$S/bin/ops-r2-seed.sh`・`$S/daemon.toml`・`$R/bin/celeris` と `manifest.json` の sha12・`$S/release-store` の
+`current → releases/<sha12> → $R`（§2.2）・`$S/setup/project.json` の workspace が `$S/work/benchfs` を指すこと・`$S/work/benchfs` が無いか空であることを確かめ、
+欠ければ exit 1 で止まる（引数の誤りは exit 2）。同じ state で 2 回目は出さない（作業ツリーが空でない）。daemon を起動し直すなら新しい state で §2.2 からやり直す。
+
+daemon の起動後、試行専用の案件と案件 CoS thread を作る（[測定 daemon](ops-r1-measure-daemon.md) の手順。`-d @"$S/setup/project.json"` で `POST /api/v1/projects`）。
+`setup/project.json` の `workspace` は `$S/work/benchfs` で（付記 D-bwork）、案件の primary repo（名前 `benchfs`、`.git` が無いので種類は `dir`）になる。
+`GET /api/v1/projects/<id>/repos` で repo が 1 件、`kind` が `dir`、`location.path` が `$S/work/benchfs` であることを確かめる。
+B の CoS が起票する task がこの repo を選ぶと、worker の run には木への symlink が置かれる（worktree を切らない）。A は同じ種を `$S_A/work/benchfs` に展開するので、A と B の初期ツリーは同じになる。
+
+`cos_policy_version` が承認票の方針版と違えば §7-6 で止める。promotion gate が `current does not exist` で exit 4 を返すなら、`$S/release-store` が §2.2 の形でない。
+種の展開から daemon の exec までは試験（`crates/campaign/tests/ops_r2_b_start.rs`。偽の daemon、実 bwrap の包みは `CELERIS_USERNS_TESTS=1` のとき）で確かめた。
+本物の release の `bin/celeris` が包みの中で `--config` を読んで起動すること、B の CoS が実機でこの repo を選んで起票することは実機で通した記録が無い（未確認）。
+
 
 ```sh
 sh scripts/campaign/ops-r2-session-prep.sh --evidence "$P/operator-session" --trials "$P/trials.json" \
   --claude-version <版> --model <model> --account-dir <operator 用 account dir> --policy-version <方針版> \
-  --claude-bin <claude> --campaign-bin "$CC" --celerisctl <固定した celerisctl> \
+  --claude-bin "$CLAUDE" --campaign-bin "$CC" --celerisctl <固定した celerisctl> \
   --token-file "$S/token" --api-url http://127.0.0.1:<測定 daemon の port>
 (cd "$P/operator-session" && sha256sum -c SHA256SUMS)   # すべて OK
 ```
@@ -142,6 +300,61 @@ operator の介入は 1 件ずつ開始と終了のある `human-op record --act
 `bin/ops-r2-human-span.sh begin|end` で人が記録した区間だけを数える（[実験専用 operator session §2](ops-r2-operator-session.md#2-試行の間-poll-と記録)）。
 初回の起動で `transcript_expected` と実物の path を照合する（未確認）。
 
+### 6.1 A・B の初期作業ツリー（同じ種）
+
+A と B は同じ種（同じ sha256 の非圧縮 tar、`.git` なし、submodule 込み）から始める（付記 D-seed・D-seed2）。種は §3・§4 の前に state に置き、漏洩検査が tar の中身も読む。
+
+初期ツリーの定義: case.json の `initial.archive_sha256` は `git archive <initial.commit>` の tar（submodule を含まない）の sha256 で、
+`lib/pluvio`・`lib/locusta`・`ior_integration/ior` は空の dir になる。submodule 5 件（入れ子 2 件を含む）は `initial.submodules` の 40 桁 commit に固定され、
+実体は asset store の `submodules/<末尾名>-<commit 先頭 8 桁>.tar`（`SHA256SUMS` に載る）。採点器の `--initial-tree` は grader 側で bundle と同じ submodule の tar から
+組み、`initial.lock.json` で照合した木で、種を展開した木と同じ内容になる。`make` は公開 tar の sha256 を変えず、submodule の tar を別に照合して種に入れる。
+
+```sh
+CASE_JSON=crates/campaign/cases/final/k2-bf-xattr-restart-campaign/case.json
+ASSETS=/local/celeris/data/campaign-assets/k2
+git clone -q "$ASSETS/benchfs-086c4618.bundle" "$P/benchfs-src"
+git -C "$P/benchfs-src" archive --format=tar -o "$P/k2-initial.tar" 086c4618e2a4d94ea56da78ceeed0f8d6d568d67
+ARCHIVE_SHA=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["initial"]["archive_sha256"])' "$CASE_JSON")
+sha256sum "$P/k2-initial.tar"                                          # $ARCHIVE_SHA（b1ae8f58dd48c8fdb451dfb6b26287c188eeba62bfbdeaa8a518a760c6c980bf）と一致
+SEED_SHA=$(sh scripts/campaign/ops-r2-seed.sh make --archive "$P/k2-initial.tar" --case "$CASE_JSON" --assets "$ASSETS" --out "$P/benchfs.tar")
+for X in "$S_A" "$S"; do
+  sh scripts/campaign/ops-r2-seed.sh place --seed "$P/benchfs.tar" --sha256 "$SEED_SHA" --state "$X"
+  mkdir -p "$X/bin" && cp scripts/campaign/ops-r2-seed.sh "$X/bin/"     # 包みの中で unpack に使う
+done
+sha256sum "$S_A/seed/benchfs.tar" "$S/seed/benchfs.tar"                # 2 行とも $SEED_SHA
+# §4 の漏洩検査に渡す公開 archive（bash の配列）
+PUB=(--public-archive "$P/k2-initial.tar" "$ARCHIVE_SHA")
+while read -r h f; do case $f in submodules/*.tar) PUB+=(--public-archive "$ASSETS/$f" "$h") ;; esac; done < "$ASSETS/SHA256SUMS"
+```
+
+`make` は公開 tar の sha256 が case.json と違う、submodule の tar が `SHA256SUMS` に無いか違う、同じ path の file が 2 つの tar にある、のどれかで exit 1。
+同じ入力からは同じ bytes の種になる（2026-10-31 に実 asset で 2 回作り、sha256 `233d38cbbc390cd9374287b9eb618e715c4088e4e858f4eb179d1ed6e08b4d60` が一致。展開した木は、bundle の checkout に submodule の tar を
+展開した木と `diff -r` と mode の一覧で差が無かった）。`$P/benchfs-src` は `.git` を持つので `--ro` で包みに渡さない。
+
+展開は包みの中で行う（§6 の B は `ops-r2-b-daemon-command.sh`、§6.2 の A は `ops-r2-trial-a-command.sh`。どちらも `<state>/work/benchfs`）。repo-src を `--ro` で渡さない（`.git` を拒む）。
+
+### 6.2 試行 A の起動（人が別の端末で実行する）
+
+`celeris-campaign run` は ops-r2 の manifest を拒むので、A は単体の Claude Code として A の包みで起動する（付記 D-trial-a）。
+operator は次の script で command を出し、人がそれを別の端末で実行する。script は何も起動しない。
+
+```sh
+cp <承認済みの固定依頼文> "$S_A/prompt.md"
+A_SID=$(python3 -I -c 'import uuid;print(uuid.uuid4())'); echo "$A_SID" > "$P/a-session-id"
+sh scripts/campaign/ops-r2-trial-a-command.sh --state "$S_A" --claude-dir "$(dirname "$CLAUDE")" \
+  --account /local/celeris/measure-accounts/a --ssh-config "$SSHCFG_DIR/config" --socket "$MUX" --seed-sha256 "$SEED_SHA" \
+  --session-id "$A_SID"
+```
+
+出る command は、包みの中で種を展開し、`CLAUDE_CONFIG_DIR=<A の account>` で
+`timeout 3600 claude-2.1.303 -p --model claude-sonnet-5-5 --session-id <A_SID> --output-format stream-json --verbose --permission-mode bypassPermissions --disallowedTools Task`
+を起動し、transcript を `$S_A/a-transcript.jsonl` に書く。権限の引数は K4 ops-r1 の A と同じ形（付記 D-trial-a2）。A の account の設定は権限を
+与えないので、`--permission-mode bypassPermissions` が無いと headless の `-p` では Bash・Edit が拒まれる。`--disallowedTools Task` は K4 と同じく
+subagent を使わせないため。session id は operator が起動の前に決めて `$P/a-session-id` に残す（script は生成しない。小文字の UUID 以外は exit 2）。
+A の session は測定対象の harness なので、operator-usage の session-map には入れない。
+path は絶対 path で改行を含まなければ文字を問わない。`$MUX` のように `@`・`:` を含む socket path も、出る 1 行では単一引用符で quote される。承認票の 3600 秒は `timeout` で強制する。1,500,000 token は CLI で強制できないので、
+operator が transcript の usage を見て停止規則（§7）で止める。依頼文に `-F` や ssh の説明を足さない。
+
 ## 7. 停止規則の確認
 
 [pilot runbook §3](mlsys-main-4-pilot-runbook.md#3-停止条件) の 9 項目に、ops-r2 では次を足す。どれかに当たったら、その試行の後に進まず、
@@ -152,11 +365,14 @@ operator の介入は 1 件ずつ開始と終了のある `human-op record --act
 3. 人の普段の session が試行区間に測定 daemon を操作した。
 4. `ops-r2-session-map.py final` が exit 2（終了の無い介入、他試行にかかる介入、trial_key・condition_id の不一致）。
 5. `ops-r2-poll.sh` が exit 2（取得か記録の失敗）で、記録を後から足せない。
-6. 測定 daemon の `cos_policy_version`（`/api/v1/health`）が承認票の方針版と違う。
+6. 測定 daemon の `cos_policy_version`（`/api/v1/health`）が承認票の方針版（K2 ops-r2 は 10）と違う。config を作り直すのではなく、止めて人に返す。
+7. 試行と無関係な起点の CoS run（停滞の finding・cron の定期見直し等）が測定 daemon に現れた。その試行は正式な試行にせず、消費を別に記録して人に返す。
+   B の受信箱の triage（試行の task から出た待ちへの CoS の応答）は B の処理の一部として試行に計上する。
+8. B の包みの中から sirius に届かない（§4.1）、または local の claude copy の版・sha256 が承認票と違う（§2.1）。
 
 K2 は cluster job を使う。試行後も job が終端していなければ、pilot runbook §3 の 8 どおり人が `cluster-cancel.jsonl` の手順で消す（自動では消さない）。
 
 ## 8. 記録を残す
 
-`$P` に `deny.list`・preflight の出力・`probe-*.json`・`leak-pre.json`・`intake.json`・`operator-session/` を残し、sha256 を進捗に書く。
+`$P` に `deny.list`（sha256 付き）・`l1-deny.list`・preflight の出力・`probe-*.json`・`leak-pre.json`・`intake.json`・`a-session-id`・`operator-session/` を残し、sha256 を進捗に書く。
 取れなかった値（消費・人の時間）は null と理由（`not_recorded`・`transcript_missing`・`usage_missing:<件数>`）で残し、0 で埋めない。

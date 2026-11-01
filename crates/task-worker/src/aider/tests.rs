@@ -224,7 +224,8 @@ printf '%s' '{"question": "which file?"}' > artifacts/result.json
     assert_eq!(
         outcome.terminal,
         Terminal::Question {
-            text: "which file?".into()
+            text: "which file?".into(),
+            usage: None
         }
     );
 }

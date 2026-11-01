@@ -758,7 +758,7 @@ echo '{"type":"turn.completed"}'
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Question { text } => assert_eq!(text, "which crate version?"),
+        Terminal::Question { text, .. } => assert_eq!(text, "which crate version?"),
         other => panic!("expected question, got {other:?}"),
     }
 }

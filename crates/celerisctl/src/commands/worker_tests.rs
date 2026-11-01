@@ -14,7 +14,10 @@ fn normalize_outcome_maps_done_question_and_error_to_exit_codes() {
     assert_eq!(exit, 0);
 
     let (msg, exit) = normalize_outcome(Ok(RunOutcome {
-        terminal: Terminal::Question { text: "q?".into() },
+        terminal: Terminal::Question {
+            text: "q?".into(),
+            usage: None,
+        },
         exit_code: Some(0),
     }));
     assert!(matches!(msg, WorkerMessage::Question { .. }));

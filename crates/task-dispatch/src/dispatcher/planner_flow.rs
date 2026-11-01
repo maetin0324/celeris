@@ -38,7 +38,7 @@ impl Dispatcher {
                 *usage,
             ),
             Ok(RunOutcome {
-                terminal: Terminal::Question { text },
+                terminal: Terminal::Question { text, .. },
                 ..
             }) => (
                 Some(task_core::RunEnd::Question),

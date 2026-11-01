@@ -651,7 +651,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Question { text } => assert_eq!(text, "which crate version?"),
+        Terminal::Question { text, .. } => assert_eq!(text, "which crate version?"),
         other => panic!("expected question, got {other:?}"),
     }
 }

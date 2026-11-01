@@ -1115,6 +1115,7 @@ impl WorkerAdapter for CliHarness {
         let terminal = if self.question {
             Terminal::Question {
                 text: "Human approval required".into(),
+                usage: None,
             }
         } else {
             Terminal::Done {
@@ -2528,7 +2529,7 @@ async fn click_approval_opens_a_wait_and_resumes_the_same_session_once() {
     )
     .await
     .unwrap();
-    let Terminal::Question { text } = outcome.terminal else {
+    let Terminal::Question { text, .. } = outcome.terminal else {
         panic!("expected a question, got {:?}", outcome.terminal);
     };
     assert_eq!(text, "Browser click approval requested");

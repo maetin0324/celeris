@@ -99,7 +99,7 @@ pub(crate) fn chat_finish_for(
     match &outcome.terminal {
         Terminal::Done { summary, .. } => finish(ChatRunState::Completed, non_empty(summary), None),
         // CoS の問いは会話の返事として人に届ける（人はそのまま次の発言で答える）。
-        Terminal::Question { text } => finish(ChatRunState::Completed, non_empty(text), None),
+        Terminal::Question { text, .. } => finish(ChatRunState::Completed, non_empty(text), None),
         Terminal::Error { message, .. } => finish(
             ChatRunState::Failed,
             None,

@@ -1625,7 +1625,7 @@ fn launcher_credential_request_opens_a_waiting_for_auth_wait_and_questions() {
     assert_eq!(state, Some(BrowserRunState::WaitingForAuth));
     match outcome {
         Ok(RunOutcome {
-            terminal: crate::Terminal::Question { text },
+            terminal: crate::Terminal::Question { text, .. },
             exit_code: None,
         }) => assert_eq!(text, super::super::CREDENTIAL_REQUEST_QUESTION),
         other => panic!("expected a question, got {other:?}"),
@@ -2200,7 +2200,7 @@ async fn launcher_registered_credential_opens_an_approval_wait_without_a_session
     assert!(
         matches!(
             &outcome.terminal,
-            crate::Terminal::Question { text } if text == "Browser credential use approval requested"
+            crate::Terminal::Question { text, .. } if text == "Browser credential use approval requested"
         ),
         "{:?}",
         outcome.terminal

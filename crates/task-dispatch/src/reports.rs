@@ -77,7 +77,7 @@ pub(crate) fn terminal_report(result: &Result<RunOutcome, AdapterError>) -> Opti
             retryable: *retryable,
         }),
         Ok(RunOutcome {
-            terminal: Terminal::Question { text },
+            terminal: Terminal::Question { text, .. },
             ..
         }) => Some(TerminalReport::Question { text: text.clone() }),
         // ADR-0072 D9/D11（Phase E1）: yield / 予算切れは `Continue` で続くので、この時点では
@@ -197,7 +197,7 @@ pub(crate) fn record_run_report(
             *retryable,
             now,
         ),
-        TerminalReport::Question { text } => report::report_for_question(
+        TerminalReport::Question { text, .. } => report::report_for_question(
             assignee,
             level,
             task.project_id,

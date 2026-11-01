@@ -1156,7 +1156,7 @@ async fn run_reviewer_inner(
             record.outcome = format!("done: {summary}");
             record.usage = usage;
         }
-        Terminal::Question { text } => {
+        Terminal::Question { text, .. } => {
             run.sink.progress(&format!("question: {text}"));
             record.outcome = format!("question: {text}");
             return fail_all(format!(

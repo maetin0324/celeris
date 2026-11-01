@@ -1146,7 +1146,7 @@ async fn question_in_result_file_blocks_task() {
         dir.path(),
         r#"mkdir -p artifacts
 printf '%s' '{"question":"which crate version?"}' > artifacts/result.json
-echo '{"type":"result","subtype":"success","is_error":false}'
+echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":30,"output_tokens":40}}'
 "#,
     );
     let adapter = ClaudeCodeAdapter::new(config);
@@ -1157,7 +1157,13 @@ echo '{"type":"result","subtype":"success","is_error":false}'
         .await
         .unwrap();
     match outcome.terminal {
-        Terminal::Question { text } => assert_eq!(text, "which crate version?"),
+        Terminal::Question { text, usage } => {
+            assert_eq!(text, "which crate version?");
+            // question 終了でも result 行の usage を運ぶ（runs.usage_json / worker_finished に残る）。
+            let usage = usage.expect("question run carries usage");
+            assert_eq!(usage.input_tokens, Some(30));
+            assert_eq!(usage.output_tokens, Some(40));
+        }
         other => panic!("expected question, got {other:?}"),
     }
 }

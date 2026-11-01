@@ -1468,7 +1468,7 @@ fn terminal_reason(terminal: &Terminal) -> String {
         Terminal::Error { message, .. } | Terminal::BudgetExhausted { message, .. } => {
             message.clone()
         }
-        Terminal::Question { text } => text.clone(),
+        Terminal::Question { text, .. } => text.clone(),
         Terminal::Yielded { checkpoint, .. } => checkpoint.to_string(),
         Terminal::Waiting { request, .. } if !request.summary.is_empty() => request.summary.clone(),
         Terminal::Waiting { request, .. } => format!("cluster jobs {}", request.jobs.join(",")),

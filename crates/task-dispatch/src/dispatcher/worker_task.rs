@@ -254,7 +254,10 @@ pub(super) async fn run_worker(
         ContainerDecision::Unavailable { question } => {
             tracing::warn!(task_id = %task_id, %question, "no container runtime; asking a human");
             return Ok(RunOutcome {
-                terminal: Terminal::Question { text: question },
+                terminal: Terminal::Question {
+                    text: question,
+                    usage: None,
+                },
                 exit_code: None,
             });
         }
@@ -272,6 +275,7 @@ pub(super) async fn run_worker(
                     return Ok(RunOutcome {
                         terminal: Terminal::Question {
                             text: task_worker::container::image_question(&run.repo, &e, &log_path),
+                            usage: None,
                         },
                         exit_code: None,
                     });
@@ -298,6 +302,7 @@ pub(super) async fn run_worker(
                                 text: task_worker::container::image_question(
                                     &run.repo, &e, &log_path,
                                 ),
+                                usage: None,
                             },
                             exit_code: None,
                         });
@@ -341,6 +346,7 @@ pub(super) async fn run_worker(
                                 .join(task_worker::task_repos::SETUP_LOG)
                                 .display()
                         ),
+                        usage: None,
                     },
                     exit_code: None,
                 });
@@ -353,6 +359,7 @@ pub(super) async fn run_worker(
                             "setup が失敗しました（`.config/celeris/workspace.toml` の `[commands] setup` を流せませんでした）: {e}。\
                              直し方を教えてください（設定を直す／この手順を飛ばす）。"
                         ),
+                        usage: None,
                     },
                     exit_code: None,
                 });

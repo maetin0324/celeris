@@ -182,7 +182,7 @@ impl SqliteStore {
     ) -> Result<bool, StoreError> {
         let conn = self.lock()?;
         let n = conn.execute(
-            "UPDATE runs SET status = ?1, checkpoint_json = ?2, usage_json = ?3, \
+            "UPDATE runs SET status = ?1, checkpoint_json = ?2, usage_json = COALESCE(?3, usage_json), \
              metrics_json = ?4, finished_at = ?5 WHERE run_id = ?6",
             params![
                 status.as_str(),

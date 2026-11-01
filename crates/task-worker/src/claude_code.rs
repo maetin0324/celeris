@@ -418,7 +418,6 @@ fn terminal_usage_slot(terminal: &mut Terminal) -> Option<&mut Option<Usage>> {
         | Terminal::Error { usage, .. }
         | Terminal::Question { usage, .. }
         | Terminal::Waiting { usage, .. } => Some(usage),
-        _ => None,
     }
 }
 

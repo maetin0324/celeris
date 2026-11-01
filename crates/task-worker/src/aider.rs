@@ -366,7 +366,7 @@ async fn terminal_from_result(
             if let Some(question) = rf.question {
                 Terminal::Question {
                     text: question,
-                    usage: usage,
+                    usage,
                 }
             } else if let Some(summary) = rf.summary {
                 Terminal::Done {

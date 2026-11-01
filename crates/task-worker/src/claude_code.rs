@@ -406,12 +406,18 @@ fn normalize_path(path: &Path) -> std::path::PathBuf {
 
 /// `Terminal` が運ぶ usage（無い variant・`None` なら `None`）。
 fn terminal_usage_mut(terminal: &mut Terminal) -> Option<&mut Usage> {
+    terminal_usage_slot(terminal).and_then(|usage| usage.as_mut())
+}
+
+/// usage 欄を持つ終端の、その欄（`None` の欄も含む）。
+fn terminal_usage_slot(terminal: &mut Terminal) -> Option<&mut Option<Usage>> {
     match terminal {
         Terminal::Done { usage, .. }
         | Terminal::Yielded { usage, .. }
         | Terminal::BudgetExhausted { usage, .. }
         | Terminal::Error { usage, .. }
-        | Terminal::Waiting { usage, .. } => usage.as_mut(),
+        | Terminal::Question { usage, .. }
+        | Terminal::Waiting { usage, .. } => Some(usage),
         _ => None,
     }
 }
@@ -960,8 +966,9 @@ async fn run_claude_code(
             outcome
         }
     };
-    // result を観測できずに終わった失敗（crash・idle timeout）も、ここまでに累積した usage を運ぶ。
-    if let Terminal::Error { usage, .. } = &mut terminal
+    // result を観測できずに終わった run（crash・idle timeout・wall-clock 打ち切り・result.json の
+    // 欠落・background task 残り・question）も、ここまでに累積した usage を運ぶ。
+    if let Some(usage) = terminal_usage_slot(&mut terminal)
         && usage.is_none()
     {
         *usage = exploration.cumulative_usage();

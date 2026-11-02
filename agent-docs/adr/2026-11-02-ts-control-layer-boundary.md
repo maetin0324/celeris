@@ -209,3 +209,58 @@ baseline（[baseline.md](../progress/2026-11-02-ts-control-layer-s0/baseline.md)
 - 直した制約: `deno_core` を推移的に持つ workspace crate は `celeris-script`・`celeris`・`celerisctl` の 3 つまで。`task-core`・`task-dispatch`・`task-api` は 0 件のまま（目的の「これらの test binary に V8 を link しない」は変わらない）。
 - 直した検査: `cargo tree -i deno_core --workspace -e normal --prefix none | awk '{print $1}' | sort -u` が `celeris`・`celeris-script`・`celerisctl`・`deno_core` だけを出す。
 - 後の段への提案（未決）: V8 を持たない lib の package と `celeris` の binary の package に分け、`celerisctl` を lib だけに依存させる（案 B）。`crates/celerisctl/Cargo.toml`・`scripts/selfdeploy/release.sh`・`-p celeris` を使う検査・`crates/celeris/tests/` に影響し、全量は未確認。
+
+## 付記 2026-11-02: S1 で決めたこと（S1 close、task 01M6DJ6QCMCWT80MTYJ7SNE0XK）
+S1 の各 unit の記録は [S1 の進捗](../progress/2026-11-02-ts-control-layer-s1.md) と同じ名前の dir にある。
+
+### TS の置き場と配備先（(d) の補い）
+- TS の package は repo 直下の `control-ts/`。`tsc --noEmit`（型検査）と esbuild（変換と bundle）を別の段にし、
+  `control-ts/dist/bundle.mjs` と `control-ts/dist/manifest.json` を作る。`dist/` は commit しない（作る物）。
+- 配備先は `<state_dir>/script-bundles/<bundle_sha256>/`（`bundle.mjs` と `manifest.json` の 2 file）。`state_dir` は config の `[script] state_dir`。
+  配備は一時 dir `.tmp-<ULID>` に書いて fsync し、rename する。同じ hash の dir が在れば検証して再利用し、
+  `host_api`・`schema_sha256`・`domains`・`capabilities`・`checkpoint_versions` が違えば上書きせず拒否する。
+- daemon は起動時に `active_bundle_sha256` の dir を読み、dir 名・manifest・bundle の hash と `host_api`・`schema_sha256` を照合する。
+  合わなければ isolate を使わず、log と通知（束ね key `script_bundle_rejected`）を出す（fail-closed）。`[script]` が無ければ isolate を起こさない。
+
+### `Math.random`・`Date.now`（(c) の「S1 で決める」の答え）
+- 置き換えず、呼ぶと `TypeError` を throw させる。引数なしの `Date`（`new Date()`・`Date()`）も同じ。`performance` は消す。
+  現在時刻は入力 DTO の `Timestamp`（RFC 3339、UTC、末尾 `Z`）で渡す。
+- 理由: 置き換えると全入力 DTO に seed と時刻の欄が要り、渡し忘れても黙って同じ値で動く。throw なら渡し忘れが試験で落ちる。
+  S2 の `compare` で Rust と TS を比べるには、TS が隠れた入力を持たないことが要る。試験は `runtime_clock_random_policy`。
+
+### terminate 後の isolate（(b) の「S1 で試験して決める」の答え）
+- 再利用しない。watchdog（deadline 超過）か heap 上限で止めた generation は捨て、同じ bundle で isolate を作り直す（generation 番号 +1）。
+  止めた要求には `Timeout`（heap なら `HeapLimit`）、同じ generation の他の未完の要求には `GenerationGone` を返す。
+- 理由: `cancel_terminate_execution` の後の再利用は技術的にはできるが、止めた時点の途中の状態が残る
+  （`globalThis.pairA = 1; for (;;) {} globalThis.pairB = 1;` を止めると再利用した isolate では `[1, null]`。unit 試験
+  `terminate_then_reuse_keeps_half_written_state`）。作り直せば global は初期状態に戻る（`runtime_timeout_sync_loop`）。
+- `ScriptError` には (c) の 7 種に加えて `InputTooLarge { size, limit }` と `HeapLimit` がある（runtime-guard unit で足した）。
+
+### V8 archive（(e) の「archive の大きさと sha256 は未確認」の答え）
+- `deno_core` 0.413.0 は `v8` の `simdutf` feature を必須にする。必要な archive は
+  `librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz`（v150.4.0、38,799,023 byte）。simdutf 無しの
+  `librusty_v8_release_x86_64-unknown-linux-gnu.a.gz` では link が `undefined symbol simdutf__*` で落ちる。
+- 入手元は GitHub の `denoland/rusty_v8` の release `v150.4.0` の asset。人が 2026-11-02 に
+  `/local/celeris/data/scratch/rusty-v8/v150.4.0/` に読み取り専用で置き、同じ dir の `SHA256SUMS` に hash を書いた。
+  確かめる command: `sha256sum /local/celeris/data/scratch/rusty-v8/v150.4.0/librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz`
+  の出力が `SHA256SUMS` の同じ file の行と一致し、release の asset digest
+  （`f48762ca10d1f1fc605a441c5ae430ec8ce1e9e80f14d78fbc42cb878c30b476`）と一致すること。`gzip -t` も通る。
+- 設定: host の `~/.cargo/config.toml` の `[env]` に `RUSTY_V8_ARCHIVE = "<上の path>"` を書く。`v8` の build.rs はこの file を展開して使い、
+  network に出ない。repo の `.cargo/config.toml`（worktree ごとに生成）と config には書かない。値を替えると `v8` の build script が走り直す。
+- debug profile の試験も release の archive で link できる（S1 の全試験はこの形で通った）。
+
+### `deno_core` の写しと serde_json の feature（(b)・(e) の補い）
+- crates.io の `deno_core` 0.413.0 は serde_json に `preserve_order`・`float_roundtrip` を付け、cargo の feature 統合で workspace 全体の
+  JSON の key 順と f64 の parse を変える。そこで写し `crates/script-runtime/vendor/deno_core/` を root の `[patch.crates-io]` で使い、
+  写しの `Cargo.toml` から 2 つの feature だけを外した（`raw_value` は残す）。判断と作り直しの手順は
+  [ADR 2026-11-02-deno-core-vendored-serde-json-features](2026-11-02-deno-core-vendored-serde-json-features.md)。
+- 確かめる command: `sh crates/script-runtime/vendor/vendor-deno-core.sh --check`（`.crate` の sha256 と Cargo.toml の差分 2 行を照合）、
+  `cargo tree --workspace -e features -i serde_json | grep -cE 'preserve_order|float_roundtrip'` が 0。
+
+### `cargo tree -d` の結果（(e) の「他の依存の衝突は未確認」の答え）
+- `cargo tree -d -p celeris-script -e normal --depth 0 --locked`: 版の違う重複は `getrandom` 0.3.4/0.4.3 と `syn` 2.0.119/3.0.5 の 2 組。
+  `serde`・`serde_core`・`smallvec` は同じ版が host 用と target 用で 2 回出るだけ。
+- `cargo tree -d --workspace -e normal --depth 0 --locked`: 版の違う重複は 10 組（`base64`・`getrandom` 3 版・`hashbrown`・`miniz_oxide`・
+  `rand_core`・`socket2`・`syn`・`toml_datetime`・`winnow`）。どの版も `deno_core` を持たない crate（`task-api`・`task-core` 等や `celeris` の他の依存）からも使われており、
+  `deno_core` だけが持ち込んだ版は無い（`cargo tree --workspace -e normal -i <crate>@<版>` で各版を確かめた）。build を妨げる衝突は無い。
+- rustc 1.98.1・cargo 1.98.1 で build できる。写しの `deno_core` に rustc の deprecated の警告が 1 件出る（path 依存なので cap-lints されない。error ではない）。

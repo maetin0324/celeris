@@ -1,0 +1,73 @@
+{
+  "latency_ms": {
+    "p50": 0.087,
+    "p99": 0.117
+  },
+  "rss_mib": {
+    "one": 24.0,
+    "two": 31.125
+  },
+  "release_build_secs": {
+    "base": 132.254,
+    "head": 134.641,
+    "delta": 2.387
+  },
+  "binary_mib": {
+    "base": 79.565,
+    "head": 143.72,
+    "delta": 64.155
+  },
+  "celerisctl_binary_mib_reference": {
+    "base": 36.506,
+    "head": 93.187,
+    "delta": 56.681
+  },
+  "bench_runs": [
+    {
+      "p50": 0.084928,
+      "p99": 0.113075,
+      "rss_one": 23.8125,
+      "rss_two": 31.125,
+      "rss_baseline_mib": 6.375
+    },
+    {
+      "p50": 0.086814,
+      "p99": 0.115659,
+      "rss_one": 24.0,
+      "rss_two": 31.125,
+      "rss_baseline_mib": 6.1875
+    },
+    {
+      "p50": 0.086396,
+      "p99": 0.117196,
+      "rss_one": 23.4375,
+      "rss_two": 30.375,
+      "rss_baseline_mib": 6.375
+    }
+  ],
+  "bundle_sha256": "b2f49a878841541ee3492933277ed1d8cc07fa0e5165c4ec0ac604453daf0557",
+  "host": {
+    "name": "home-dev (shared host)",
+    "cpu": "AMD Ryzen Threadripper PRO 3945WX 12-Cores, 24 threads",
+    "mem_gib": 125,
+    "kernel": "6.8.12-9-pve",
+    "rustc": "1.98.1",
+    "cargo": "1.98.1",
+    "node": "v24.14.1",
+    "load_avg_1m_during_builds": "9-14",
+    "rusty_v8_archive": "librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz (v150.4.0, prebuilt)"
+  },
+  "commands": [
+    "git archive $(git merge-base HEAD main) | tar -x -C $TMPDIR/src-base; git archive HEAD | tar -x -C $TMPDIR/src-head",
+    "cd $TMPDIR/src-base && SCCACHE_BIN=/nonexistent CARGO_TARGET_DIR=$CARGO_TARGET_DIR/overhead-cold-base2 cargo build --release --locked -p celeris --bin celeris  # wall secs by date +%s%N",
+    "cd $TMPDIR/src-head && SCCACHE_BIN=/nonexistent CARGO_TARGET_DIR=$CARGO_TARGET_DIR/overhead-cold-head cargo build --release --locked -p celeris --bin celeris",
+    "cargo build --release --locked -p celerisctl --bin celerisctl  # same target subdir, after the timed build (reference size)",
+    "stat -c %s <target>/release/celeris <target>/release/celerisctl",
+    "cargo build --release --locked -p celeris-script --bin script-bench  # head target subdir",
+    "cd control-ts && corepack pnpm@12.6.0 install --offline --frozen-lockfile && corepack pnpm@12.6.0 run typecheck && corepack pnpm@12.6.0 run bundle",
+    "<head target>/release/script-bench --bundle-dir control-ts/dist --iters 1000 --out $TMPDIR/bench{1,2,3}.json  # 3 runs, max of each field",
+    "rm -rf $CARGO_TARGET_DIR/overhead-cold-*",
+    "cargo tree --locked -e normal -p task-dispatch -i deno_core; cargo tree --locked -e normal -p task-api -i deno_core  # both: did not match any packages",
+    "cargo tree --locked -p task-dispatch | grep -cE 'deno_core|\\bv8\\b|serde_v8'; same for task-api  # both 0"
+  ]
+}

@@ -1081,6 +1081,26 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         path: Vec<crate::decision::DecisionPathEntry>,
     },
+    /// ADR 2026-11-02-ts-control-layer-boundary 付記 S2-4: `compare` mode の領域で、Rust の参照実装と TS の
+    /// 出力を比べた結果 1 件。追記先は判定した task。状態は変えない（`replay` は無視する）。Rust の結果は
+    /// これで変わらない。入力は機密を除いた DTO（`script_compare::recorded_input`）。
+    ScriptCompareRecorded {
+        #[serde(flatten)]
+        record: Box<crate::script_compare::ScriptCompareRecord>,
+    },
+    /// 同 S2-4: 領域の mode の変更（version の CAS 更新と同じ transaction）。特定の task に属さないので
+    /// `events` ではなく追記専用の表 `script_domain_events` に、この形の直列化で書く。
+    ScriptDomainModeChanged {
+        domain: crate::script_compare::ScriptDomain,
+        from_mode: crate::script_compare::ScriptMode,
+        to_mode: crate::script_compare::ScriptMode,
+        from_generation: Option<String>,
+        to_generation: Option<String>,
+        /// 更新後の `version`。
+        version: u64,
+        actor: String,
+        reason: String,
+    },
 }
 
 /// `Event::ProjectPlanProposed.milestones[]`（ADR-0074 D3.3）。

@@ -90,6 +90,13 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/cron-jobs/{id}/pause", "cron_job.pause"),
     ("POST", "/api/v1/cron-jobs/{id}/resume", "cron_job.resume"),
     ("POST", "/api/v1/cron-jobs/{id}/run", "cron_job.run"),
+    // ADR 2026-11-02-ts-control-layer-boundary (d)・付記 S2-5: rust→compare と rust への戻しは挙動を変えないので
+    // CoS に許可する。`canary`・`ts` は route と同じ関数が 422 で拒む（本番の挙動を変える変更は人の承認）。
+    (
+        "PUT",
+        "/api/v1/script/domains/{domain}/mode",
+        "script_domain.mode_set",
+    ),
 ];
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
@@ -160,6 +167,7 @@ const SKILL: &str = "/api/v1/skills/{name}";
 const UNMOUNT: &str = "/api/v1/org/{id}/skills/{skill}";
 const PROMOTE: &str = "/api/v1/releases/{sha12}/promote";
 const OVERRIDE: &str = "/api/v1/llm/models/{source}/{model_id}/override";
+const SCRIPT_MODE: &str = "/api/v1/script/domains/{domain}/mode";
 
 /// The CoS form of a route whose domain request has no body: `null` or `{}` only.
 fn require_empty_body(
@@ -597,6 +605,27 @@ pub(crate) fn dispatch(
                     time::OffsetDateTime::now_utc(),
                 )?),
             }
+        }
+        "script_domain.mode_set" => {
+            let domain = path_param(SCRIPT_MODE, path, "{domain}");
+            let input: crate::script_domains::ScriptDomainModeBody =
+                serde_json::from_value(body).map_err(decode)?;
+            let actor = audit.by();
+            crate::cos::operations::external_store(
+                store,
+                audit,
+                ("script_domain", &domain),
+                matched.action,
+                || {
+                    crate::script_domains::set_mode_effect(
+                        store,
+                        &domain,
+                        input,
+                        &actor,
+                        &audit.ctx.reason,
+                    )
+                },
+            )
         }
         other => Err(ApiProblem::internal(format!(
             "registered CoS operation {other} has no implementation in admin"

@@ -54,6 +54,8 @@ pub mod retry;
 pub mod routing;
 /// ADR-0075（Phase G1）: `celerisctl scratch status|gc|lease|touch|release|env`。
 pub mod scratch;
+/// ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: `celerisctl script domains|mode`（daemon の API 経由）。
+pub mod script;
 /// ADR-0122 D1: `celerisctl skills import <dir>`（repo の skill を KB へ。DB を開かない）。
 pub mod skills;
 pub mod target_sweep;

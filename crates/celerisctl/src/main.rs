@@ -42,6 +42,7 @@ use commands::rereview::{self, RereviewArgs};
 use commands::retry::{self, RetryArgs};
 use commands::routing::{self as routing_cmd, RoutingCommand};
 use commands::scratch::{self as scratch_cmd, ScratchCommand};
+use commands::script::{self as script_cmd, ScriptCommand};
 use commands::skills::{self as skills_cmd, SkillsCommand};
 use commands::target_sweep::{self as target_cmd, TargetCommand};
 use commands::terminal_pty::{self, TerminalPtyArgs};
@@ -188,6 +189,14 @@ enum Command {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+    /// ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: TS 制御層の領域の mode を daemon の API で
+    /// 読む・切り替える（`script domains|mode`）。DB は開かない。
+    Script {
+        #[command(subcommand)]
+        command: ScriptCommand,
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
     /// ADR-0131 付記 D12: 日次知識整理の `curation-plan.json` を daemon と同じ規則で点検する
     /// （`curation validate`）。DB を開かず、ネットワークも使わない。
     Curation {
@@ -302,6 +311,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
         Command::Cron { .. } => unreachable!("handled before store open"),
         Command::Integration { .. } => unreachable!("handled before store open"),
         Command::Models { .. } => unreachable!("handled before store open"),
+        Command::Script { .. } => unreachable!("handled before store open"),
         Command::Curation { .. } => unreachable!("handled before store open"),
         Command::BuildCache { .. } => unreachable!("handled before store open"),
         Command::Browser { .. } => unreachable!("handled before store open"),
@@ -444,6 +454,8 @@ fn cos_mapped(
                 )
             })
         }
+        Command::Script { command, .. } => script_cmd::request_of(command)
+            .map(|(method, path, body)| (method, format!("/api/v1{path}"), body)),
         // The API replay is the plain check; `--check`/`--apply` rebuild indexes in the local DB
         // and have no API operation.
         Command::Replay(args) if !args.check && !args.apply => {
@@ -550,6 +562,10 @@ fn main() -> ExitCode {
                     command: ModelsCommand::List(_),
                     ..
                 }
+                | Command::Script {
+                    command: ScriptCommand::Domains(_),
+                    ..
+                }
                 | Command::Knowledge {
                     command: KnowledgeCommand::Search(_) | KnowledgeCommand::Get(_)
                 }
@@ -640,6 +656,15 @@ fn main() -> ExitCode {
     }
     if let Command::Integration { command, config } = cli.command {
         return match integration_cmd::run(config, command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {}", error::render(&e));
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Command::Script { command, config } = cli.command {
+        return match script_cmd::run(config, command) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {}", error::render(&e));
@@ -1064,6 +1089,11 @@ mod cos_mapping_tests {
                 "/api/v1/llm/models/discover".into(),
             ),
             (vec!["replay"], "POST", "/api/v1/replay".into()),
+            (
+                vec!["script", "mode", "x", "rust", "--expected-version", "1"],
+                "PUT",
+                "/api/v1/script/domains/x/mode".into(),
+            ),
         ];
         let rows = skill_allowed_rows();
         assert!(rows.len() > 50, "operations.md table not parsed: {rows:?}");
@@ -1085,6 +1115,7 @@ mod cos_mapping_tests {
         for argv in [
             vec!["cron", "list"],
             vec!["models", "list"],
+            vec!["script", "domains"],
             vec!["replay", "--apply"],
             vec!["knowledge", "reindex"],
         ] {

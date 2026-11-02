@@ -213,7 +213,7 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 84);
+    assert_eq!(EVENT_TYPES.len(), 86);
 }
 
 #[test]
@@ -422,7 +422,7 @@ fn routing_feedback_event_types_match_their_serde_names() {
         assert_eq!(serde_name, event_type_name(&event));
         assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
     }
-    assert_eq!(EVENT_TYPES.len(), 84);
+    assert_eq!(EVENT_TYPES.len(), 86);
 }
 
 /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `WorkerPolicyViolation` の `type` 名が serde の名前・
@@ -486,6 +486,54 @@ fn trusted_device_event_types_match_their_serde_names() {
         let value = serde_json::to_value(&event).unwrap();
         let serde_name = value["type"].as_str().unwrap();
         assert!(serde_name.starts_with("trusted_device_"), "{serde_name}");
+        assert_eq!(serde_name, event_type_name(&event));
+        assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
+    }
+}
+
+/// ADR 2026-11-02-ts-control-layer-boundary 付記 S2-4: script の 2 つの Event の `type` 名が serde の名前・
+/// `event_type_name`・`EVENT_TYPES` で一致する。
+#[test]
+fn script_compare_event_types_match_their_serde_names() {
+    use task_core::script_compare::{
+        CompareOutcome, ScriptCompareRecord, ScriptDomain, ScriptMode,
+    };
+    let events = [
+        Event::ScriptCompareRecorded {
+            record: Box::new(ScriptCompareRecord {
+                domain: ScriptDomain::LaneRules,
+                generation: "G".into(),
+                isolate_epoch: 1,
+                bundle_sha256: "0".repeat(64),
+                host_api: "1.0.0".into(),
+                call_site: "dispatch_run.decide_lane".into(),
+                run_id: None,
+                input_digest: "sha256:00".into(),
+                input: None,
+                input_truncated: false,
+                rust: serde_json::json!({}),
+                ts: None,
+                outcome: CompareOutcome::Unavailable,
+                error: None,
+                normalized: vec![],
+                safety_violations: vec![],
+                elapsed_us: 0,
+            }),
+        },
+        Event::ScriptDomainModeChanged {
+            domain: ScriptDomain::RoutePriority,
+            from_mode: ScriptMode::Rust,
+            to_mode: ScriptMode::Compare,
+            from_generation: None,
+            to_generation: Some("G".into()),
+            version: 1,
+            actor: "human:web".into(),
+            reason: String::new(),
+        },
+    ];
+    for event in events {
+        let value = serde_json::to_value(&event).unwrap();
+        let serde_name = value["type"].as_str().unwrap();
         assert_eq!(serde_name, event_type_name(&event));
         assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
     }

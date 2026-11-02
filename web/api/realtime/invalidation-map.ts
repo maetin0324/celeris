@@ -123,6 +123,10 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   // ADR 2026-10-11-llm-source-model-routing-evaluation D3: genre×harness の段階（shadow/enforce）の遷移。
   // 対象 task の timeline と routing 監査（R）だけを古くする。
   routing_stage_changed: { sets: ["T", "R"] },
+  // ADR 2026-11-02-ts-control-layer-boundary 付記 S2-4: compare の記録（Rust の結果は変えない）。timeline だけ。
+  script_compare_recorded: { sets: ["T"] },
+  // 同: 領域の mode の変更は script_domain_events に書き、task.event には現れない。来ても timeline だけ。
+  script_domain_mode_changed: { sets: ["T"] },
   checkpoint_saved: { sets: ["T", "R", "E"] },
   execution_planned: { sets: TLE },
   work_unit_transitioned: { sets: TLE },

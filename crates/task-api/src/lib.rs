@@ -78,6 +78,8 @@ pub mod routing_eval;
 /// ADR 2026-10-11-llm-source-model-routing-evaluation D3: 段階・根拠表の読み取りと人の段階変更。
 pub mod routing_stage;
 pub mod schema;
+/// ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: TS 制御層の領域ごとの mode の読み出しと切り替え。
+pub mod script_domains;
 pub mod secrets;
 /// Phase 82（ADR-0056 D3 続き）: skills を GUI から見る・作る・mount する（`GET/PUT/DELETE /skills…`、
 /// `POST/DELETE /org/{id}/skills…`）。

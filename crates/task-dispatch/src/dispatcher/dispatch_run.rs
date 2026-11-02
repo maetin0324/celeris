@@ -2,6 +2,17 @@
 
 use super::*;
 
+/// 付記 S2: `lane_rules` の compare の結線（`decide_lane` から呼ぶ）。`dispatcher.rs` を大きくしないよう、ここで宣言する。
+#[path = "script_compare.rs"]
+mod script_compare;
+pub(in crate::dispatcher) use script_compare::ScriptCompareState;
+
+/// lane の決定（`decide_lane`）が使う routing の設定（retry の escalation の閾値）。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DispatchRoutingSettings {
+    pub escalation: task_core::EscalationThresholds,
+}
+
 impl Dispatcher {
     // Verify must skip snapshot tasks before dependency/child lookups and maintenance.
     // Filtering only in dispatch_one still scans the snapshot on every smoke tick.
@@ -599,6 +610,8 @@ impl Dispatcher {
                     .and_then(|o| o.evidence_table_id.clone()),
             },
         );
+        // 付記 S2-11: `route_priority` の compare（mode compare の時だけ。記録だけで、route と trace は変えない）。
+        self.compare_route_priority(task.id, &run_id, &route_input, &route_trace);
         if let (Some(record), Some(decision)) = (lane_assist_record, route_trace.decision.as_mut())
         {
             decision.lane_assist = Some(record);
@@ -1359,7 +1372,7 @@ impl Dispatcher {
     /// `EscalationPolicy::decide_trajectory` で 1 段まで上げる。上げた/上げなかった決定を
     /// `EscalationAudit` として返す（`RoutingRecord.escalation` に残す）。LLM は使わない（DESIGN 原則 1）。
     pub(super) fn decide_lane(
-        &self,
+        &mut self,
         task: &Task,
     ) -> Result<Option<(task_core::LaneDecision, Option<task_core::EscalationAudit>)>, DispatchError>
     {
@@ -1379,6 +1392,12 @@ impl Dispatcher {
         let Some(mut decision) = task_core::model_policy::decide_for_task(task, &ceiling) else {
             return Ok(None);
         };
+        // 付記 S2-1・S2-6: `lane_rules` の mode が compare のときだけ、同じ features を TS に渡して比べ、記録だけを残す。
+        // policy が決める task（`Hint`・`Default`）だけが対象で、人の明示・System の task では TS を呼ばない。
+        // ここで使う lane は Rust の結果のまま（retry の escalation の前の、天井で丸めた lane を比べる）。
+        if decision.source.policy_decides() {
+            self.compare_lane_rules(task.id, &decision.features, decision.lane, &ceiling);
+        }
         let mut audit = None;
         // 人の明示・System の lane も評価する（上げず、理由を audit に残す。`decide_trajectory` が判定）。
         if task.attempts > 0 {

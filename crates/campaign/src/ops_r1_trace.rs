@@ -13,8 +13,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
-/// 読む表・欄を確かめた schema 版（release 94f86928dc13）。
-pub const SCHEMA_VERSION: i64 = 102;
+/// 読む表・欄を確かめた schema 版。102 は release 94f86928dc13 で確かめた。103（migration 0103）は
+/// TS 制御層の表 `script_*` を足しただけで、この export が読む表・欄は 102 と同じ。
+pub const SUPPORTED_SCHEMA_VERSIONS: &[i64] = &[102, 103];
 pub const SCHEMA: &str = "ops-r1-trace/1";
 
 const USAGE: &str = "usage: celeris-campaign ops-r1-trace --db <DB の写し> --thread <案件 CoS thread id> \
@@ -222,9 +223,9 @@ pub fn open_copy(db: &Path) -> Result<(Connection, DbIdentity), TraceError> {
             |r| r.get(0),
         )
         .map_err(read_err)?;
-    if schema_version != SCHEMA_VERSION {
+    if !SUPPORTED_SCHEMA_VERSIONS.contains(&schema_version) {
         return Err(TraceError::Input(format!(
-            "--db {}: schema version {schema_version}, expected {SCHEMA_VERSION}",
+            "--db {}: schema version {schema_version}, expected one of {SUPPORTED_SCHEMA_VERSIONS:?}",
             db.display()
         )));
     }

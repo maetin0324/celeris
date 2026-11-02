@@ -118,6 +118,8 @@ export const EVENT_KINDS = [
   "harness_selected",
   "llm_route_selected",
   "harness_migration_unresolved",
+  "script_compare_recorded",
+  "script_domain_mode_changed",
 ] as const satisfies readonly EventKind[];
 
 /** EVENT_KINDS が EventKind を漏れなく含むことの型検査（漏れがあると never でなくなり代入できない）。 */

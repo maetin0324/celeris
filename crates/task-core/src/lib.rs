@@ -111,6 +111,8 @@ pub mod route_select;
 pub mod routing_eval_trial;
 pub mod routing_evidence;
 pub mod routing_shadow_history;
+/// ADR 2026-11-02-ts-control-layer-boundary 付記 S2: TS 制御層の領域・mode・compare の記録と比較入力の機密除去。
+pub mod script_compare;
 pub mod store;
 pub mod transition;
 /// ADR-0079（Phase R1a）: 再帰的な task 分解の木（`Task.tree`・`[execution.tree]` の上限・深さ）。

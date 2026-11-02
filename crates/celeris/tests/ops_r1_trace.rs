@@ -40,7 +40,10 @@ fn ops_r1_trace_emits_all_six_stages() {
     assert_eq!(v["trial_id"], TRIAL);
     assert_eq!(v["thread_id"], f.thread);
     assert_eq!(v["project_id"], f.project);
-    assert_eq!(v["db"]["schema_version"], 102);
+    assert_eq!(
+        v["db"]["schema_version"],
+        i64::from(task_core::SCHEMA_VERSION)
+    );
     assert_eq!(v["db"]["sha256"], sha(&f.copy));
     assert_eq!(v["cutoff"], "2026-10-29T02:00:00.000Z");
     let names: Vec<_> = v["stages"]

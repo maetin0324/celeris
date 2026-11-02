@@ -1240,6 +1240,13 @@ export type CommitIntent = {
   "subject": string;
 };
 
+export type CompareError = {
+  "kind": string;
+  "message": string;
+};
+
+export type CompareOutcome = "match" | "mismatch" | "ts_error" | "invalid_output" | "unavailable";
+
 export type Confidence = "high" | "medium" | "low";
 
 export type ConfigChangeView = {
@@ -2130,6 +2137,8 @@ export type EscalationOption = {
 };
 
 export type EscalationPacket = {
+  "background"?: string | null;
+  "on_answer"?: string | null;
   "options": Array<EscalationOption>;
   "recommendation_reason": string;
   "recommended"?: string | null;
@@ -2888,6 +2897,35 @@ export type Event = {
   "since"?: string;
   "task_id": TaskId;
   "type": "stall_detected";
+} | {
+  "bundle_sha256": string;
+  "call_site": string;
+  "domain": ScriptDomain;
+  "elapsed_us": number;
+  "error"?: CompareError | null;
+  "generation": string;
+  "host_api": string;
+  "input"?: unknown;
+  "input_digest": string;
+  "input_truncated": boolean;
+  "isolate_epoch": number;
+  "normalized": Array<string>;
+  "outcome": CompareOutcome;
+  "run_id"?: string | null;
+  "rust": unknown;
+  "safety_violations": Array<string>;
+  "ts"?: unknown;
+  "type": "script_compare_recorded";
+} | {
+  "actor": string;
+  "domain": ScriptDomain;
+  "from_generation"?: string | null;
+  "from_mode": ScriptMode;
+  "reason": string;
+  "to_generation"?: string | null;
+  "to_mode": ScriptMode;
+  "type": "script_domain_mode_changed";
+  "version": number;
 };
 
 export type EventRow = {
@@ -5608,6 +5646,10 @@ export type ScratchStatus = {
   "targets_max_bytes": number;
   "total_max_bytes": number;
 };
+
+export type ScriptDomain = "lane_rules" | "route_priority";
+
+export type ScriptMode = "rust" | "compare" | "canary" | "ts";
 
 export type SecretList = {
   "dir"?: string | null;

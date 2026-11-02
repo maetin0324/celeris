@@ -5919,6 +5919,35 @@
       ],
       "type": "object"
     },
+    "CompareError": {
+      "description": "`script_compare_recorded.error`（`ts_error` の `ScriptError` の種類と文、`invalid_output` の理由）。",
+      "properties": {
+        "kind": {
+          "description": "snake_case の種類（`exception`・`timeout`・…・`invalid_output`）。",
+          "type": "string"
+        },
+        "message": {
+          "description": "`ERROR_MESSAGE_MAX` byte で切った文（[`truncate_error_message`]）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ],
+      "type": "object"
+    },
+    "CompareOutcome": {
+      "description": "`script_compare_recorded.outcome`（S2-4）。",
+      "enum": [
+        "match",
+        "mismatch",
+        "ts_error",
+        "invalid_output",
+        "unavailable"
+      ],
+      "type": "string"
+    },
     "Confidence": {
       "description": "ADR-0047 D1 / D4。",
       "enum": [
@@ -14237,6 +14266,161 @@
             "type",
             "task_id",
             "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-11-02-ts-control-layer-boundary 付記 S2-4: `compare` mode の領域で、Rust の参照実装と TS の\n出力を比べた結果 1 件。追記先は判定した task。状態は変えない（`replay` は無視する）。Rust の結果は\nこれで変わらない。入力は機密を除いた DTO（`script_compare::recorded_input`）。",
+          "properties": {
+            "bundle_sha256": {
+              "type": "string"
+            },
+            "call_site": {
+              "description": "`dispatch_run.decide_lane`・`route_select.route_select_one`。",
+              "type": "string"
+            },
+            "domain": {
+              "$ref": "#/$defs/ScriptDomain"
+            },
+            "elapsed_us": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CompareError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "generation": {
+              "description": "使った `script_generations.id`（ULID）。",
+              "type": "string"
+            },
+            "host_api": {
+              "type": "string"
+            },
+            "input": {
+              "description": "機密を除いた入力 DTO（64 KiB 超えは `None`）。"
+            },
+            "input_digest": {
+              "description": "`sha256:` + 入力 DTO の直列化の sha256。",
+              "type": "string"
+            },
+            "input_truncated": {
+              "type": "boolean"
+            },
+            "isolate_epoch": {
+              "description": "actor が isolate を作り直した回数。",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "normalized": {
+              "description": "当てた正規化の規則名（S2 では常に空）。",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "outcome": {
+              "$ref": "#/$defs/CompareOutcome"
+            },
+            "run_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "rust": {
+              "description": "Rust の出力 DTO。"
+            },
+            "safety_violations": {
+              "description": "S2-8 の code。",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "ts": {
+              "description": "TS の出力 DTO（`ts_error`・`unavailable` は `None`）。"
+            },
+            "type": {
+              "const": "script_compare_recorded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "domain",
+            "generation",
+            "isolate_epoch",
+            "bundle_sha256",
+            "host_api",
+            "call_site",
+            "input_digest",
+            "input_truncated",
+            "rust",
+            "outcome",
+            "normalized",
+            "safety_violations",
+            "elapsed_us"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "同 S2-4: 領域の mode の変更（version の CAS 更新と同じ transaction）。特定の task に属さないので\n`events` ではなく追記専用の表 `script_domain_events` に、この形の直列化で書く。",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "domain": {
+              "$ref": "#/$defs/ScriptDomain"
+            },
+            "from_generation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "from_mode": {
+              "$ref": "#/$defs/ScriptMode"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "to_generation": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "to_mode": {
+              "$ref": "#/$defs/ScriptMode"
+            },
+            "type": {
+              "const": "script_domain_mode_changed",
+              "type": "string"
+            },
+            "version": {
+              "description": "更新後の `version`。",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "domain",
+            "from_mode",
+            "to_mode",
+            "version",
+            "actor",
+            "reason"
           ],
           "type": "object"
         }
@@ -28126,6 +28310,24 @@
         "legacy"
       ],
       "type": "object"
+    },
+    "ScriptDomain": {
+      "description": "TS 制御層の領域（S2-1）。表 `script_domain_modes` の `domain`。",
+      "enum": [
+        "lane_rules",
+        "route_priority"
+      ],
+      "type": "string"
+    },
+    "ScriptMode": {
+      "description": "領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。S2 で受け付けるのは `rust` と `compare` だけ（S2-5）。",
+      "enum": [
+        "rust",
+        "compare",
+        "canary",
+        "ts"
+      ],
+      "type": "string"
     },
     "SecretList": {
       "description": "`GET /secrets`。`[secrets]` が未設定なら 409 `secrets_unavailable`（`dir: None` の応答は返さない）。",

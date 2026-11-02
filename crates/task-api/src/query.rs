@@ -137,7 +137,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 84] = [
+pub(crate) const EVENT_TYPES: [&str; 86] = [
     "browser_updated",
     // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: subagent 道具・別 LLM CLI/API の起動の検出。
     "worker_policy_violation",
@@ -254,6 +254,10 @@ pub(crate) const EVENT_TYPES: [&str; 84] = [
     "integration_held",
     "integration_reopened",
     "integration_not_applicable",
+    // ADR 2026-11-02-ts-control-layer-boundary 付記 S2-4: compare の記録と領域の mode の変更
+    // （後者は `script_domain_events` に書き、task の events には現れない）。
+    "script_compare_recorded",
+    "script_domain_mode_changed",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
@@ -352,6 +356,8 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::DecisionWithdrawn { .. } => "decision_withdrawn",
         Event::PlanApprovalRequested { .. } => "plan_approval_requested",
         Event::StallDetected { .. } => "stall_detected",
+        Event::ScriptCompareRecorded { .. } => "script_compare_recorded",
+        Event::ScriptDomainModeChanged { .. } => "script_domain_mode_changed",
         Event::DeliverySkipped { .. } => "delivery_skipped",
         Event::KnowledgeCurationApplied { .. } => "knowledge_curation_applied",
         Event::IntegrationRequested { .. } => "integration_requested",

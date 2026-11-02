@@ -46,6 +46,7 @@ pub use daemon::bootstrap::{
 };
 pub use daemon::clusters::{ClusterMasters, wire_cluster_liveness_hooks};
 pub use daemon::run::run;
+pub use daemon::script_policy::ScriptPolicy;
 pub use instance::InstanceIdentity;
 
 /// ADR 2026-10-11 D6: one pass of the daemon's stranded-branch sweep (the same records the periodic

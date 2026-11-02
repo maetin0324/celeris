@@ -27,6 +27,8 @@ pub(crate) mod reports;
 pub mod review;
 /// ADR-0075 D2 / D6（Phase G1）: scratch pool の走査・GC の実行・削除と測定のスレッド・状態の組み立て。
 pub mod scratch_gc;
+/// ADR 2026-11-02-ts-control-layer-boundary 付記 S2: TS 制御層の判定を呼ぶ口（`PolicyScript`）と compare の判定。
+pub mod script_policy;
 /// ADR-0054 D1（Phase 67）: ノードごとの継続セッションの決定的な判断（純粋関数）。
 pub mod sessions;
 /// ADR 2026-10-07-build-tmp-hygiene D1.3: 共有 cargo target の掃除の I/O 層（走査・`.cargo-lock` の flock・rename・削除）。

@@ -1,15 +1,16 @@
 ---
 title: S1 daemon-wire — daemon への結線と celerisctl への deno_core の波及
 tasks: [01M6DJ6QCMCWT80MTYJ7SNE0XK]
-status: blocked
+status: done
+completed: 2026-11-02
 updated: 2026-11-02
 ---
 # S1 daemon-wire — daemon への結線
 
 ## 結論
 - `[script]` の結線は動く。`script_runtime_` の試験と architecture-map の検査は通る。
-- 受け入れ条件 1（`deno_core` を推移的に持つ workspace crate が `celeris-script`・`celeris` だけ）は満たせない。`celerisctl` が `celeris` の lib に通常依存しているので、`cargo tree -i deno_core --workspace -e normal` に `celerisctl` が出る。
-- この check と範囲 check（`crates/celeris/` などだけを許可）を同時に通す変更は無い。範囲外の試験 1 file の変更も要る。計画の問題として `plan_issue` で申告した。
+- 計画 v4（案 A）で受け入れ条件 1 は「`deno_core` を推移的に持つ workspace crate が `celeris-script`・`celeris`・`celerisctl` だけ」になった。`task-core`・`task-dispatch`・`task-api` は 0 件。
+- 境界 ADR に (b) の前提の誤りと `celerisctl` への波及の付記を足した。
 
 ## 変更
 `phase 1: daemon-wire: [script] の結線と architecture-map`
@@ -18,7 +19,7 @@ updated: 2026-11-02
 - `crates/celeris/src/daemon/run.rs`: `?` で抜ける経路の後で起動し、MCP を止めた後で止める。S1 では handle を判定に使わない。
 - `crates/celeris/tests/script_runtime.rs`: `celeris::run` を試験 process で動かし、`/proc/self/task` で actor thread を観察する。
 - `config/celeris.example.toml`・`docs/architecture-map.md`。
-- `crates/celerisctl/src/commands/worker_tests.rs`: `script: None`（範囲外。未解決事項 2）。
+- `crates/celerisctl/src/commands/worker_tests.rs`: `script: None`（計画 v4 で範囲内になった）。
 
 ## 決めごと
 - `state_dir` は必須にした。既存の config に state dir の欄が無く、DB の dir から推測すると verify の `--db` 上書きで読む先が変わるため。
@@ -34,12 +35,12 @@ updated: 2026-11-02
 - 範囲 check: 範囲外は `crates/celerisctl/src/commands/worker_tests.rs` の 1 件で、落ちる（未解決事項 2）。
 
 ## 未解決事項
-1. 受け入れ条件 1。依存の実測と選択肢は次のとおり。
+1. 解決済み（計画 v4 で案 A を採用し、境界 ADR に付記を足した）。受け入れ条件 1。依存の実測と選択肢は次のとおり。
    - debug build の `celerisctl` に `v8::`・`deno_core::` の定義が 57044 個ある（`nm -C --defined-only`、`celeris` は 68020 個）。release build でも linker は消さない（attempt 2 で `cargo build --release -p celerisctl` を実測。binary 97,713,712 byte、`v8::`・`deno_core::`・`simdutf` の定義 58423 個、`nm -S` の大きさの和 21.0 MiB。V8 を持たない base の release binary との比較は未測定）。
    - 案 A（check と ADR (b) を直す）: `celerisctl` を許可リストに足す。`task-core`・`task-dispatch`・`task-api` に V8 を持たせないという ADR の目的は保てるが、`celerisctl` の build と binary は重くなる。
    - 案 B（package を分ける）: V8 を持たない lib の package と、`celeris` の binary の package に分け、`celerisctl` は lib だけに依存する。ADR (b) のとおりになるが、`crates/celerisctl/Cargo.toml`、`scripts/selfdeploy/release.sh`、`-p celeris` を使う検査、`crates/celeris/tests/` が影響を受ける。script layer は `run` へ注入する形に変わる。影響の全量は未確認。
    - 不採用（feature で分ける）: `celeris` に既定 feature を、`celerisctl` に `default-features = false` を一時的に指定して確かめた。`cargo tree --workspace` には `celerisctl` が残る。`-p celerisctl` 単独なら `deno_core` は 0 件だが、`cargo build -p celeris -p celerisctl`（`release.sh`）では feature が統合される。
-2. `crates/celerisctl/src/commands/worker_tests.rs` に `script: None` を 1 行足した。`Config` を欄ごとに書く試験で、足さないと `test-affected.sh` がコンパイルで落ちる。範囲 check の許可の外なので、範囲を直す必要がある。
+2. 解決済み（計画 v4 で範囲内になった）。`crates/celerisctl/src/commands/worker_tests.rs` に `script: None` を 1 行足した。`Config` を欄ごとに書く試験で、足さないと `test-affected.sh` がコンパイルで落ちる。範囲 check の許可の外なので、範囲を直す必要がある。
 3. bundle の top-level の同期無限ループで daemon の起動が止まらないことは試験していない。CPU を焼く試験を置かない規則のため。コードでは actor の `LOAD_TIMEOUT`（10 秒）で watchdog が止める形だが、この経路の実測は無い。
 4. `state_dir` を worker の run から書けなくする保護は入れていない。S1 では bundle を判定に使わない。業務領域を切り替える段より前に要否を決める。
 

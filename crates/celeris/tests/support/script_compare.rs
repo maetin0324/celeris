@@ -1,5 +1,5 @@
-//! 付記 S2: 本物の deno_core host で compare を確かめる試験（`script_compare_lane_rules.rs`・
-//! `script_compare_route_priority.rs`）の共通部分。userns を使わない。外部ネットワークに出ない。
+//! 付記 S2・S4: 本物の deno_core host で compare を確かめる試験（`script_compare_lane_rules.rs`・
+//! `script_compare_route_priority.rs`・`script_compare_cos_digest.rs`）の共通部分。userns を使わない。外部ネットワークに出ない。
 //!
 //! 待ちの方針: dispatcher の deadline は 50 ms の固定で、host が忙しいと正しい bundle でも `timeout` になりうる。
 //! `timeout` は環境の遅さであって比較の結果ではないので、`timeout` のときだけ新しい task で比較をやり直す。
@@ -190,9 +190,14 @@ impl Env {
     }
 
     pub fn with_sources(domain: &'static str, sources: &str) -> Self {
+        Self::with_config(domain, sources, "")
+    }
+
+    /// `extra` は config の末尾に足す表（`[cos]` など）。
+    pub fn with_config(domain: &'static str, sources: &str, extra: &str) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path().join("ws")).expect("ws");
-        let config = write_config(dir.path(), &config_text(sources, ""));
+        let config = write_config(dir.path(), &config_text(sources, extra));
         let store = SqliteStore::open(&config.db.path).expect("store");
         Self {
             dir,

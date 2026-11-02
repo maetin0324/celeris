@@ -1,7 +1,7 @@
 # ops-r2 の入力隔離: 評価器の別 uid（L1）と runtime の mount 許可表（L2）、人の準備手順
 
 ---
-tasks: [01M66JYQ249SZHNXK0AEVTZNEC]
+tasks: [01M66JYQ249SZHNXK0AEVTZNEC, 01M6DR4ADPVWJ6MDDYAQA2CK44]
 ---
 
 設計は [ADR 2026-10-30-ops-r2-isolation-principal](../../agent-docs/adr/2026-10-30-ops-r2-isolation-principal.md)（人の決定 iso-boundary: 評価器専用の別 uid）。
@@ -212,10 +212,24 @@ cd <K2 の公開初期 tree の写し> && ~/.cargo/bin/cargo fetch --locked
 試行の出力の tgz（付記 H5）: wrapper は symlink・hard link・特殊 file を含む tgz を拒む（exit 65）。K2 の公開 submodule には symlink があるので、
 drop box に置く tgz は symlink を中身に置き換え、hard link を作らずに作る。
 
+tgz の配置（付記 H9）: 試行の tree は tgz の `src/` の下に置く。root に置かない。wrapper は tgz を `<work>/artifact` に展開し、grader は `<work>/artifact/<repo>` を
+成果物の repo として扱う（`crates/campaign/src/grader.rs` の `ImplementationSpec::repo`）。`gen-grade-case` の `--repo` の既定は `src` で、K2 の手順（§4.5）はこの既定を使う。
+
 ```sh
-tar --dereference --hard-dereference -C <試行の出力 dir> -czf <drop box>/<名前>.tgz .
+tar --dereference --hard-dereference --transform 's,^\.,src,' -C <試行の tree> -czf <drop box>/<名前>.tgz .
+tar -tzf <drop box>/<名前>.tgz | grep -v '^src\(/\|$\)'             # 何も出ないこと
+tar -tzf <drop box>/<名前>.tgz | grep -qx 'src/Cargo.toml' && echo ok   # ok が出ること
 sha256sum <drop box>/<名前>.tgz   # この値を grade --sha256 に渡す
 ```
+
+tree を root に置くと、wrapper は exit 0 で判定 JSON を outbox に置くが、判定は成果物の出来を表さない。誤判定は 2 通りある。
+
+- tree の root に `src/` がある場合（K2 の crate はこれに当たる）: grader は crate 自身の `src/` を repo と見なす。そこは crate root ではないので評価 command が失敗し、
+  implementation が fail する。K2 ops-r2 第 1 回（2026-11-01）は A・B とも reasons が `evaluation command exited with Some(2)` と `required tests did not report ok: ...` で、
+  `failure_class` は `model_failure` だった。理由に配置のことは出ないので、判定 JSON だけでは試行の失敗と区別できない。
+- tree の root に `src/` が無い場合: reasons が `artifact repo <path> is missing` になり、implementation が fail する。
+
+root に置いた tgz の判定は無効として集計に入れず、上の command で tgz を作り直して採点し直す。
 
 ### 4.4 評価器の起動方法（どちらかを選ぶ）
 

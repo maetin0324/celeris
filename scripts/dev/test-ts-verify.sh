@@ -15,6 +15,9 @@
 #   G @ts-nocheck の追加・.only( の追加 → classify で exit 1
 #   H Host API（host.d.ts・schema）の変更 → host-api、test-affected.sh --list が celeris-script の cargo 側を選ぶ
 #   I TS だけの変更では test-affected.sh --list が ts-verify に委ね、cargo を起動しない
+#   J 規則を壊し compare.test.mjs の該当試験を test.skip にする（host-api）→ test-affected.sh --list が ts-verify-grade を選び、
+#     ts-verify.sh --grade は段 golden（Rust の runner の採点）で exit 1（引数なしは「従来の経路へ」で exit 0）。
+#     無害な host-api の変更（compare.mjs の注記）では ts-verify.sh --grade が 10 段を通して exit 0（ADR 付記 grade-gate）
 # exit: 0 = すべて通った、1 = どれかが期待と違う、2 = 準備の失敗。
 set -euo pipefail
 
@@ -235,6 +238,48 @@ if [ "$ta" = "control-ts: ts-verify (理由: TS だけの変更（control-ts/src
   ok "I test-affected.sh --list: TS だけの変更を ts-verify に委ね、cargo 0 回"
 else
   ng "I test-affected.sh --list: [$ta] 偽 cargo [$(cat "$work/fake-cargo.log")] $(cat "$work/i.err")"
+fi
+
+# ---- J host-api の候補を --grade で採点する（reviewer の破壊: 規則の破壊と test.skip） ----
+reset
+break_rule
+python3 -I - control-ts/scripts/compare.test.mjs <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = 'test("lane_rules matches every line of the committed fixture"'
+assert old in s, "test not found"
+open(p, "w").write(s.replace(old, 'test.skip("lane_rules matches every line of the committed fixture"'))
+PY
+j_class="$(list_class)"
+# --list は crate の選択に cargo metadata を使う（H と同じく本物の cargo）。
+ta="$(bash "$here/scripts/dev/test-affected.sh" --list 2>/dev/null || true)"
+rc_plain=0
+nocargo bash "$tsv" >"$work/j0.log" 2>&1 || rc_plain=$?
+rc=0
+nocargo bash "$tsv" --grade --record "$work/j.json" >"$work/j.log" 2>&1 || rc=$?
+j_failed="$(rec_get "$work/j.json" '",".join(s["name"] for s in r["stages"] if s["exit"] != 0)' 2>/dev/null || true)"
+j_passed="$(rec_get "$work/j.json" '",".join(s["name"] for s in r["stages"] if s["exit"] == 0)' 2>/dev/null || true)"
+if [ "$j_class" = host-api ] && printf '%s\n' "$ta" | grep -q '^control-ts: ts-verify-grade (理由: ' &&
+  [ "$rc_plain" -eq 0 ] && grep -q '従来の経路へ' "$work/j0.log" &&
+  [ "$rc" -eq 1 ] && [ "$(rec_get "$work/j.json" 'r["class"]')" = host-api ] && [ "$(rec_get "$work/j.json" 'r["grade"]')" = True ] &&
+  [ "$j_failed" = golden ] && [ "$j_passed" = "classify,runner-cache,install,typecheck,bundle,unit" ]; then
+  ok "J 規則の破壊と test.skip: host-api、test-affected は ts-verify-grade を選び、--grade は段 golden（runner）で exit 1（段 unit は通った）"
+else
+  ng "J 規則の破壊と test.skip: class [$j_class]、引数なし exit $rc_plain、--grade exit $rc、通った段 [$j_passed]、失敗の段 [$j_failed]、test-affected [$(printf '%s' "$ta" | tr '\n' ' ')]"
+  tail -30 "$work/j.log" >&2
+fi
+reset
+printf '\n// 無害な編集（test-ts-verify の場合 J）\n' >>control-ts/scripts/compare.mjs
+rc=0
+nocargo bash "$tsv" --grade --record "$work/j2.json" >"$work/j2.log" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ] && [ "$(rec_get "$work/j2.json" 'r["class"]')" = host-api ] &&
+  [ "$(rec_get "$work/j2.json" '",".join(s["name"] for s in r["stages"] if s["exit"] == 0)')" = \
+    "classify,runner-cache,install,typecheck,bundle,unit,golden,safety,integration,activate" ]; then
+  ok "J 無害な host-api の変更: --grade は 10 段 exit 0（cargo $(rec_get "$work/j2.json" 'r["cargo_invocations"]') 回）"
+else
+  ng "J 無害な host-api の変更: --grade exit $rc、記録 $(tr -d '\n' <"$work/j2.json" 2>/dev/null | cut -c1-600)"
+  tail -30 "$work/j2.log" >&2
 fi
 
 echo "test-ts-verify: $pass passed, $failed failed"

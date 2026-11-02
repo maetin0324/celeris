@@ -5,6 +5,11 @@
 #   bash scripts/dev/ts-verify.sh [--record <file>] [--no-build]
 #                                                   ts-only なら段を順に走らせ、最初の失敗で止まる。ts-only でなければ
 #                                                   「従来の経路へ」と出して exit 0（cargo の試験は test-affected.sh が走らせる）
+#   bash scripts/dev/ts-verify.sh --grade [--record <file>] [--no-build]
+#                                                   ts-only か host-api なら、候補の作業ツリーで 10 段を通す（付記 grade-gate）。
+#                                                   単体試験は全部。golden の段は compare.mjs を使わず、cache の golden との cmp と
+#                                                   runner の領域ごとの採点で決める。rust・none・追加の禁止の扱いは引数なしと同じ。
+#                                                   test-affected.sh が ts-only でない control-ts/・docs/api/script-host/ の変更で呼ぶ
 # 基準は ${CELERIS_WU_BASE:-$(git merge-base HEAD main)}。差分は基準との git diff --name-status（rename は両側）と未追跡 file。
 # 段: classify → runner-cache → install → typecheck → bundle → unit → golden → safety → integration → activate。
 # bundle は毎回 $TMPDIR の使い捨て dir に作り直す（control-ts/dist は読まない・使わない）。
@@ -13,12 +18,13 @@
 # --record <file>: 段ごとの秒と exit、cargo の起動回数（PATH の先頭に置く数える wrapper）、link_count
 #   （CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER を数える wrapper にする）を JSON で書く。
 # --no-build: runner の cache が無ければ build せず exit 3。
-# exit: 0 = 通った（または ts-only でない）、1 = 段の失敗・追加の禁止に当たった、2 = 使い方の誤り、3 = --no-build で runner が無い。
+# exit: 0 = 通った（または ts-only でない。--grade では ts-only・host-api でない）、1 = 段の失敗・追加の禁止に当たった、2 = 使い方の誤り、3 = --no-build で runner が無い。
 # この script と runner は検証の道具で、daemon・celerisctl の経路に入らない。
 set -euo pipefail
 
-usage() { echo "usage: ts-verify.sh --list | [--record <file>] [--no-build]" >&2; exit 2; }
+usage() { echo "usage: ts-verify.sh --list | [--grade] [--record <file>] [--no-build]" >&2; exit 2; }
 list_only=0
+grade=0
 record=""
 no_build=0
 while [ "$#" -gt 0 ]; do
@@ -26,11 +32,12 @@ while [ "$#" -gt 0 ]; do
     --list) list_only=1 ;;
     --record) [ "$#" -ge 2 ] || usage; record="$2"; shift ;;
     --no-build) no_build=1 ;;
+    --grade) grade=1 ;;
     *) usage ;;
   esac
   shift
 done
-[ "$list_only" -eq 0 ] || [ -z "$record" ] || usage
+[ "$list_only" -eq 0 ] || { [ -z "$record" ] && [ "$grade" -eq 0 ]; } || usage
 if [ -n "$record" ]; then
   case "$record" in /*) ;; *) record="$PWD/$record" ;; esac
 fi
@@ -55,9 +62,9 @@ final_exit=0
 
 write_record() {
   [ -n "$record" ] || return 0
-  python3 -I - "$work" "$record" "$base" "$klass" "$final_exit" "$t_start" "$(now)" <<'PY'
+  python3 -I - "$work" "$record" "$base" "$klass" "$final_exit" "$t_start" "$(now)" "$grade" <<'PY'
 import json, os, sys
-work, out, base, klass, code, t0, t1 = sys.argv[1:8]
+work, out, base, klass, code, t0, t1, grade = sys.argv[1:9]
 stages = []
 for line in open(os.path.join(work, "stages.tsv")):
     name, secs, rc, note = (line.rstrip("\n").split("\t") + [""])[:4]
@@ -72,6 +79,7 @@ rec = {
     "schema": "celeris.ts-verify-record/1",
     "base": base,
     "class": klass,
+    "grade": grade == "1",
     "exit": int(code),
     "total_secs": round(float(t1) - float(t0), 3),
     "stages": stages,
@@ -396,7 +404,11 @@ do_classify() {
   fi
 }
 stage classify "$klass" do_classify
-if [ "$klass" != ts-only ]; then
+# --grade は host-api でも段を通す（付記 grade-gate）。rust・none は引数なしと同じく抜ける。
+if [ "$grade" -eq 1 ] && [ "$klass" = host-api ]; then
+  echo "ts-verify: --grade: host-api の変更。候補の作業ツリーで 10 段を通し、Rust の runner と cache の golden で採点する" >&2
+  echo ALL >"$work/units.txt"
+elif [ "$klass" != ts-only ]; then
   if [ "$klass" = none ]; then
     echo "ts-verify: 試験の対象が無い（$klass）" >&2
   else
@@ -452,6 +464,7 @@ do_unit() {
   [ "${#scripts[@]}" -gt 0 ] || { echo "ts-verify: control-ts/scripts/*.test.mjs が無い" >&2; return 1; }
   (cd "$cts" && node --test "${scripts[@]}")
 }
+if [ "$grade" -eq 1 ]; then echo ALL >"$work/units.txt"; fi
 stage unit "$(tr '\n' ' ' <"$work/units.txt")" do_unit
 
 # 領域の一覧は runner の domains（Rust の表）から取る。1 行 = "<domain> <fixture の相対 path>"。
@@ -479,7 +492,16 @@ do_golden() {
   while read -r domain fixture; do
     cmp "$cts/fixtures/$fixture" "$golden/$fixture" || {
       echo "ts-verify: control-ts/fixtures/$fixture が Rust の golden と違う" >&2; return 1; }
-    node "$cts/scripts/compare.mjs" "$domain" --fixture "$golden/$fixture" || return 1
+    if [ "$grade" -eq 1 ]; then
+      # --grade: 候補の control-ts/scripts（compare.mjs）は採点に使わない。runner が領域ごとに cache の golden で採点する。
+      # --domain で絞ると complete は false なので ok だけを見る（全領域の complete は段 integration が見る）。
+      "$runner" run --bundle-dir "$dist" --fixtures "$golden" --suite golden --domain "$domain" >"$work/golden-$domain.json" || {
+        echo "ts-verify: runner の golden の採点が失敗した（$domain）" >&2; return 1; }
+      python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("ok") is True else 1)' "$work/golden-$domain.json" || {
+        echo "ts-verify: runner の出力が ok でない（golden $domain）" >&2; return 1; }
+    else
+      node "$cts/scripts/compare.mjs" "$domain" --fixture "$golden/$fixture" || return 1
+    fi
   done <"$work/domains.txt"
 }
 stage golden "" do_golden
@@ -506,5 +528,5 @@ do_activate() {
 }
 stage activate "" do_activate
 
-echo "ts-verify: ts-only の検証が通った（cargo $(wc -l <"$work/cargo.log") 回、link $(wc -l <"$work/link.log") 回）" >&2
+echo "ts-verify: $klass の検証が通った（--grade $grade、cargo $(wc -l <"$work/cargo.log") 回、link $(wc -l <"$work/link.log") 回）" >&2
 finish 0

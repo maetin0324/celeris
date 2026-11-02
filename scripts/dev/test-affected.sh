@@ -16,6 +16,8 @@
 # 変わった path を自分で見て決め、ts-verify の記録の class が ts-only であることも確かめる。
 # それ以外の control-ts/・docs/api/script-host/ の変更（Host API・検証の道具・golden）は従来の control-ts の検査に加え
 # celeris-script とその逆依存の cargo の試験を走らせる。control-ts/fixtures/ の変更は fixture を書く・読む crate も足す。
+# さらに `bash scripts/dev/ts-verify.sh --grade` で候補の作業ツリーを本物の runner で 10 段採点し、非 0 ならこの script も
+# 非 0 で終わる（ADR 2026-11-02-ts-fast-verify 付記 grade-gate。--list では `control-ts: ts-verify-grade (理由: …)` の行）。
 # runner の cache key の入力（crates/script-runtime/・crates/task-core/・Cargo.lock・ルート Cargo.toml・
 # host-v1.schema.json）か検証の道具（scripts/dev/ts-verify*・script-runner-cache.sh・test-ts-verify.sh・この script）が
 # 変われば scripts/dev/test-ts-verify.sh も走らせる（runner を作り直して TS の段を通す）。
@@ -187,6 +189,12 @@ print("\n".join(out))
 crates="$(printf '%s\n' "$picked" | grep -v '^@api ' || true)"
 api_hit="$(printf '%s\n' "$picked" | sed -n 's/^@api //p')"
 
+# ts-only でない control-ts/・docs/api/script-host/ の変更（ts-only はこの前で ts-verify.sh に委ねて抜けている）。
+# control-ts の試験・compare.mjs は候補が書き換えうるので、候補の tree を Rust の runner と cache の golden で採点する。
+grade_reason=""
+[ -z "$control_ts_reason" ] ||
+  grade_reason="TS だけでない $(printf '%s' "$control_ts_reason" | sed 's/ の変更.*$//') の変更。候補の作業ツリーを本物の runner で採点する"
+
 web_reason=""
 add_reason() { web_reason="${web_reason:+$web_reason; }$1"; }
 [ "$web_dir" -eq 0 ] || add_reason "web/ の変更"
@@ -198,6 +206,7 @@ if [ "$list_only" -eq 1 ]; then
   [ -z "$crates" ] || printf '%s\n' "$crates"
   [ -z "$web_reason" ] || printf 'web: typecheck+unit (理由: %s)\n' "$web_reason"
   [ -z "$control_ts_reason" ] || printf 'control-ts: typecheck+test (理由: %s)\n' "$control_ts_reason"
+  [ -z "$grade_reason" ] || printf 'control-ts: ts-verify-grade (理由: %s)\n' "$grade_reason"
   [ -z "$tsv_reason" ] || printf 'ts-verify: test-ts-verify (理由: %s)\n' "$tsv_reason"
   exit 0
 fi
@@ -273,6 +282,28 @@ fi
 if [ -n "$control_ts_reason" ]; then
   echo "test-affected: control-ts typecheck+test を走らせる（理由: $control_ts_reason）" >&2
   run_js_package control-ts
+  ran=1
+fi
+
+if [ -n "$grade_reason" ]; then
+  echo "test-affected: bash scripts/dev/ts-verify.sh --grade を走らせる（理由: $grade_reason）" >&2
+  grec="$changed.grade.json"
+  trap 'rm -f "$changed" "$changed.status" "$grec"' EXIT
+  if ! bash scripts/dev/ts-verify.sh --grade --record "$grec"; then
+    echo "test-affected: ts-verify.sh --grade が失敗した" >&2
+    exit 1
+  fi
+  # 採点した（ts-only・host-api）なら 10 段すべてが exit 0 であること。rust は ts-verify が従来の経路へ回す。
+  python3 -I -c '
+import json, sys
+r = json.load(open(sys.argv[1]))
+want = "classify runner-cache install typecheck bundle unit golden safety integration activate".split()
+if r.get("exit") != 0:
+    sys.exit("test-affected: ts-verify --grade の記録の exit が 0 でない: %s" % r.get("exit"))
+if r.get("class") in ("ts-only", "host-api") and [s.get("name") for s in r.get("stages", []) if s.get("exit") == 0] != want:
+    sys.exit("test-affected: ts-verify --grade の記録が 10 段の通過を示さない: class=%s" % r.get("class"))
+' "$grec"
+  rm -f "$grec"
   ran=1
 fi
 

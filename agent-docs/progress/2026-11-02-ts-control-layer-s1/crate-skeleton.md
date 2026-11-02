@@ -45,7 +45,7 @@ updated: 2026-11-02
 | 項目 | コマンド | 結果 |
 |---|---|---|
 | rustc の版 | `rustc --version` | rustc 1.98.1（2026-09-01）、cargo 1.98.1。`cargo build -p celeris-script` は警告なしで通る |
-| 4 試験 | `RUSTY_V8_ARCHIVE=$TMPDIR/v8dl/librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz cargo nextest run -p celeris-script` | exit 0、4 tests run: 4 passed |
+| 4 試験 | `RUSTY_V8_ARCHIVE=$TMPDIR/v8dl/librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz cargo nextest run -p celeris-script` | exit 0、4 tests run: 4 passed（この run でも再実行。archive の sha256 と `gzip -t` も一致） |
 | 4 試験（host の設定のまま） | `cargo nextest run -p celeris-script` | exit 101。link 失敗: `wild: error: Undefined symbol simdutf__utf8_length_from_latin1, referenced by libdeno_core-*.rlib` |
 | debug profile で release archive を link | 上の 4 試験（`test` profile は debug、archive は `release`） | link でき、試験が通る（simdutf 版のとき） |
 | deno_core を推移的に持つ crate | `cargo tree -i deno_core --workspace -e normal --prefix none \| awk '{print $1}' \| sort -u` | `celeris-script`・`deno_core` だけ |
@@ -54,7 +54,7 @@ updated: 2026-11-02
 | fmt | `cargo fmt --all -- --check` | exit 0 |
 | clippy（crate） | `cargo clippy -p celeris-script --tests -- -D warnings` | exit 0 |
 | clippy（workspace） | `cargo clippy --workspace -- -D warnings` | exit 101: task-api の `result_large_err` 851 件（関数 556・closure 295、`ApiProblem` 144 byte）。`crates/script-runtime` を members から外すと 0 件 |
-| test-affected | `bash scripts/dev/test-affected.sh` | 未実行。Cargo.lock の変更で全 crate と web が対象になり、上の 2 件の決定で結果が変わるため |
+| test-affected | `bash scripts/dev/test-affected.sh` | exit 101（celeris の check の記録）。web の試験は 113 passed、Rust は celeris-script の試験 binary の link 失敗で試験の実行に進まない。この run では再実行していない |
 
 ## V8 archive の使い方
 - v8 150.4.0 の build.rs は `RUSTY_V8_ARCHIVE` があればその file を `target/<profile>/gn_out/obj/librusty_v8.a` に展開して使い、
@@ -83,11 +83,13 @@ updated: 2026-11-02
 1. V8 archive の差し替え（決定 `v8-archive-simdutf`）。人の手順:
    ```sh
    cd /local/celeris/data/scratch/rusty-v8/v150.4.0
+   chmod u+w . SHA256SUMS
    curl -fL -o librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz \
      https://github.com/denoland/rusty_v8/releases/download/v150.4.0/librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz
    echo "f48762ca10d1f1fc605a441c5ae430ec8ce1e9e80f14d78fbc42cb878c30b476  librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz" | sha256sum -c
    gzip -t librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz
-   sha256sum librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz >> SHA256SUMS
+   sha256sum "$PWD/librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz" >> SHA256SUMS
+   chmod a-w librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz SHA256SUMS
    # ~/.cargo/config.toml の [env] RUSTY_V8_ARCHIVE を上の file の絶対 path に替える
    ```
    確認: worktree で `cargo nextest run -p celeris-script` が 4 passed になる。
@@ -96,9 +98,18 @@ updated: 2026-11-02
      残り 70 件の監査は `daemon-wire` の前に別 unit で行う。
    - deno_core の写しを repo に置いて 3 feature を外す（`[patch.crates-io]`）: workspace の JSON の意味は変わらないが、
      deno_core の版を上げるたびに写しを作り直す。前の run で写しに patch を当てて 4 試験は通った。
-   - 前の run の記録: 写しを `--config patch.crates-io.deno_core.path=…` で当てたとき `cargo clippy --workspace` の task-api は同じ誤りで落ちた。理由は未確認。
+   - 前の run の記録「写しを当てても task-api の clippy が同じ誤りで落ちた」は、この run の実測と合わない。この run では 3 feature を外した写し（2.6 MB）を
+     `--config patch.crates-io.deno_core.path=…` で当てて `cargo clippy --workspace -- -D warnings` が exit 0（`result_large_err` 0 件）、
+     simdutf 版 archive との組で `cargo nextest run -p celeris-script` が 4 passed。前の run で落ちた理由は未確認。
+     写しを repo に置く形（root の `Cargo.toml` の `exclude` と `cargo fmt --all` の対象の扱いを含む）は未実施で、その動作は未確認。
+   - serde_json の 3 feature を有効にする crate は workspace の中では deno_core だけ（`raw_value` は axum も有効にする。`cargo tree --workspace -e features -i serde_json`）。
+   - 親 task の共通の制約「言語移行と挙動・方針の変更を同じ差分に混ぜない」に合うのは写しの案なので、質問では写しの案を推奨した。
+3. 決定の出し方: 前の run は `decisions` を `result.json` に書いたが、決定は記録されなかった。`worker_finish.rs` は WU の判定が `completed`
+   （check 合格）のときだけ `decisions` を読むので、check が落ちると捨てられ、run は retry になる。この run は `question` で聞く。
 
 ## 提案
+- `crates/task-dispatch/src/dispatcher/worker_finish.rs`: check が不合格の run の `decisions`（`needed_before: self`）も記録して WU を `blocked(decision)` にする。
+  今は人の決定が要るせいで check が落ちる run の決定が黙って捨てられ、retry を消費する（この WU で実際に起きた）。
 - 境界 ADR (e) の表の `v8` の行に「deno_core は `simdutf` feature を必須にするので archive は `librusty_v8_simdutf_release_<target>.a.gz`」と付記する
   （S1 の close unit）。
 - 境界 ADR (b) の依存の制約に「deno_core が serde_json の feature を workspace 全体へ広げる」ことと、決定 `serde-json-unify` の答えを付記する。

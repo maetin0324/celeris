@@ -1,165 +1,22 @@
 //! ADR 2026-10-07-cos-inbox-thread-conversation D1/D4: the deterministic digest of one triage
 //! run, written as an assistant message of the inbox thread after the run ends.
 //!
-//! No LLM and no judgment: the text is assembled from `cos_inbox_items` (state, reason,
-//! summary) and the decision packet CoS put in the escalation outbox. Items a stopped or
-//! interrupted run left `running` go back to `pending` (a human interrupt must not push them
-//! to the unavailable fallback); items a completed run left `running` are reported as
-//! unhandled and the fallback leaf takes them.
+//! S4 (ADR 2026-11-02-ts-control-layer-boundary S4-9): `digest_one` reads a snapshot
+//! (`CosDigestInput`), decides with the pure `cos_digest_decide` (task-core), validates the
+//! commands, then applies them. The text, cards and the requeue rule live in
+//! `task_core::chat::digest`.
 
-use task_core::chat::triage::{COS_TRIAGE_DIGEST_KEY_PREFIX, CosTriageItemReport};
-use task_core::chat::{ChatActor, ChatCard};
+use task_core::chat::digest::{
+    CosDigestCommand, CosDigestInput, cos_digest_decide, validate_cos_digest_commands,
+};
 use time::OffsetDateTime;
 
 use super::launch::CosChatLaunch;
-use super::triage::card_kind;
+
+pub(crate) use task_core::chat::digest::cos_kind_label as kind_label;
 
 /// Runs digested per pass (bounded work per tick).
 const DIGEST_RUNS_PER_PASS: usize = 20;
-
-/// Japanese name of a `cos_inbox_items.source_kind`.
-pub(crate) fn kind_label(source_kind: &str) -> &'static str {
-    match source_kind {
-        "decision" => "決定",
-        "question" => "質問",
-        "authorization" => "認可",
-        "acceptance_check" => "受け入れ検査",
-        "plan_gate" => "計画の承認",
-        "phase_gate" => "段の承認",
-        "notice" => "知らせ",
-        _ => "項目",
-    }
-}
-
-/// The judgment line of one item, and whether the person still has to act on it.
-fn judgment(item: &CosTriageItemReport, run_state: &str) -> &'static str {
-    match item.state.as_str() {
-        "answered" => "代わりに答えた",
-        "observed" => "見ただけ（判断は不要）",
-        "escalated" => "人に回した",
-        "fallback" => "未処理のまま人へ直接通知した（CoS 不在の退避）",
-        "resolved" => "元の待ちが閉じていた（何もしていない）",
-        "pending" => "中断されたので次の run で扱う",
-        "running" if matches!(run_state, "stopped" | "interrupted") => {
-            "中断されたので次の run で扱う"
-        }
-        "running" => "未処理（人へ直接通知する）",
-        _ => "状態不明",
-    }
-}
-
-/// The options of a routed item. With CoS's text for each option (ADR
-/// 2026-10-28-cos-inbox-chat-summary D3) every option gets its own line; labels alone stay on one.
-fn options_line(item: &CosTriageItemReport) -> Option<String> {
-    let d = item.decision.as_ref()?;
-    if d.options.is_empty() {
-        return None;
-    }
-    let label = |o: &task_core::chat::triage::CosTriageOption| {
-        if d.recommended.as_deref() == Some(o.key.as_str()) {
-            format!("{}（推奨）", o.label)
-        } else {
-            o.label.clone()
-        }
-    };
-    if d.options.iter().any(|o| o.detail.is_some()) {
-        let lines: Vec<String> = d
-            .options
-            .iter()
-            .map(|o| match &o.detail {
-                Some(detail) => format!("\n  - {}: {detail}", label(o)),
-                None => format!("\n  - {}", label(o)),
-            })
-            .collect();
-        return Some(lines.concat());
-    }
-    let labels: Vec<String> = d.options.iter().map(label).collect();
-    Some(labels.join(" / "))
-}
-
-/// The digest text and cards of one run. Pure.
-pub(crate) fn digest_message(
-    run_id: &str,
-    run_state: &str,
-    reason: Option<&str>,
-    items: &[CosTriageItemReport],
-) -> (String, Vec<ChatCard>) {
-    let mut text = format!("受信箱の一次対応の結果（{} 件", items.len());
-    match run_state {
-        "completed" => text.push(')'),
-        "failed" => {
-            text.push_str("。run は失敗");
-            if let Some(reason) = reason.filter(|r| !r.trim().is_empty()) {
-                text.push_str(&format!(": {reason}"));
-            }
-            text.push(')');
-        }
-        other => text.push_str(&format!("。run は {other} で終わった)")),
-    }
-    text.push('\n');
-    let mut cards = Vec::new();
-    for item in items {
-        let title = item.title();
-        text.push_str(&format!(
-            "\n### {}（{}）\n- 判断: {}\n",
-            title,
-            kind_label(&item.source_kind),
-            judgment(item, run_state)
-        ));
-        text.push_str(&format!(
-            "- 理由: {}\n",
-            item.reason
-                .as_deref()
-                .map(str::trim)
-                .filter(|r| !r.is_empty())
-                .unwrap_or("理由の記録なし")
-        ));
-        let mut state = item.state.clone();
-        let mut href = "/inbox".to_owned();
-        let mut card_reason = item.reason.clone();
-        if matches!(item.state.as_str(), "escalated" | "fallback") {
-            if let Some(d) = &item.decision {
-                if let Some(background) = d.background.as_deref().filter(|b| !b.is_empty()) {
-                    text.push_str(&format!("- 背景: {background}\n"));
-                }
-                if !d.summary.is_empty() {
-                    text.push_str(&format!("- 人が決めること: {}\n", d.summary));
-                }
-                if let Some(options) = options_line(item) {
-                    text.push_str(&format!("- 選択肢: {options}\n"));
-                }
-                if let Some(why) = d.recommendation_reason.as_deref().filter(|r| !r.is_empty()) {
-                    text.push_str(&format!("- 推奨の理由: {why}\n"));
-                    card_reason = Some(why.to_owned());
-                }
-                if let Some(next) = d.on_answer.as_deref().filter(|n| !n.is_empty()) {
-                    text.push_str(&format!("- 答えると: {next}\n"));
-                }
-                if !d.web_path.is_empty() {
-                    href = d.web_path.clone();
-                }
-            }
-            if item.state == "fallback" {
-                // The original wait is still open: the card stays answerable.
-                state = "pending".into();
-            }
-        } else if item.state == "running" && matches!(run_state, "stopped" | "interrupted") {
-            state = "pending".into();
-        }
-        cards.push(ChatCard {
-            kind: card_kind(&item.source_kind),
-            id: item.source_key.clone(),
-            title,
-            state,
-            href,
-            actor: ChatActor::Cos,
-            reason: card_reason,
-            operation_id: item.operation_id.clone(),
-        });
-    }
-    text.push_str(&format!("\n(run {run_id})\n"));
-    (text, cards)
-}
 
 impl CosChatLaunch {
     /// One digest pass: every finished triage run without a digest gets its message; stopped
@@ -196,6 +53,20 @@ impl CosChatLaunch {
         run_state: &str,
         now: OffsetDateTime,
     ) -> Result<(), String> {
+        let input = self.digest_snapshot(thread, run_id, run_state)?;
+        let commands = cos_digest_decide(&input);
+        validate_cos_digest_commands(&input, &commands).map_err(|e| e.to_string())?;
+        self.apply_digest_commands(&commands, now)
+    }
+
+    /// The snapshot one digest decision reads: the run's items in report order and the chat
+    /// run's reason (`None` when the run cannot be read).
+    fn digest_snapshot(
+        &self,
+        thread: &str,
+        run_id: &str,
+        run_state: &str,
+    ) -> Result<CosDigestInput, String> {
         let items = self
             .store
             .cos_triage_run_report(run_id)
@@ -205,24 +76,51 @@ impl CosChatLaunch {
             .chat_run_get(thread, run_id)
             .ok()
             .and_then(|run| run.reason);
-        let (text, cards) = digest_message(run_id, run_state, reason.as_deref(), &items);
-        self.store
-            .chat_assistant_message_add_once(
-                thread,
-                &format!("{COS_TRIAGE_DIGEST_KEY_PREFIX}{run_id}"),
-                &text,
-                &cards,
-                Some(run_id),
-                now,
-            )
-            .map_err(|e| e.to_string())?;
-        if matches!(run_state, "stopped" | "interrupted") {
-            let requeued = self
-                .store
-                .cos_triage_requeue_run(run_id, now)
-                .map_err(|e| e.to_string())?;
-            if requeued > 0 {
-                self.triage.dirty = true;
+        Ok(CosDigestInput {
+            thread: thread.to_owned(),
+            run_id: run_id.to_owned(),
+            run_state: run_state.to_owned(),
+            reason,
+            items,
+        })
+    }
+
+    /// Apply validated commands in order; the first failure stops the rest (a failed message
+    /// write leaves the items `running` for the next pass).
+    fn apply_digest_commands(
+        &mut self,
+        commands: &[CosDigestCommand],
+        now: OffsetDateTime,
+    ) -> Result<(), String> {
+        for command in commands {
+            match command {
+                CosDigestCommand::PostDigest {
+                    thread,
+                    idempotency_key,
+                    text,
+                    cards,
+                    run_id,
+                } => {
+                    self.store
+                        .chat_assistant_message_add_once(
+                            thread,
+                            idempotency_key,
+                            text,
+                            cards,
+                            Some(run_id),
+                            now,
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
+                CosDigestCommand::RequeueRun { run_id } => {
+                    let requeued = self
+                        .store
+                        .cos_triage_requeue_run(run_id, now)
+                        .map_err(|e| e.to_string())?;
+                    if requeued > 0 {
+                        self.triage.dirty = true;
+                    }
+                }
             }
         }
         Ok(())

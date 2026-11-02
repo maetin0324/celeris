@@ -26,8 +26,8 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use task_core::chat::ChatRun;
 use task_core::chat::triage::{COS_TRIAGE_BATCH_MAX, CosTriageSource};
-use task_core::chat::{ChatCardKind, ChatRun};
 use task_core::{Event, EventRow, Notice, NoticeKind, NoticeQuery, NoticeStore, TaskId, TaskStore};
 use task_ops::human_inbox::{HumanInbox, InboxItem, InboxKind};
 use time::OffsetDateTime;
@@ -325,16 +325,8 @@ pub(crate) fn notice_source(notice: &Notice, policy_version: &str) -> Option<Cos
     })
 }
 
-pub(super) fn card_kind(source_kind: &str) -> ChatCardKind {
-    match source_kind {
-        "decision" => ChatCardKind::Decision,
-        "question" => ChatCardKind::Question,
-        "authorization" | "acceptance_check" => ChatCardKind::Approval,
-        "plan_gate" | "phase_gate" => ChatCardKind::PlanGate,
-        COS_TRIAGE_NOTICE_KIND => ChatCardKind::Notice,
-        _ => ChatCardKind::Task,
-    }
-}
+/// The card kind of a triage source kind (shared with the digest in `task_core::chat::digest`).
+pub(super) use task_core::chat::digest::cos_card_kind as card_kind;
 
 impl CosChatLaunch {
     /// One intake pass: startup/reconcile, events after the cursor, notices

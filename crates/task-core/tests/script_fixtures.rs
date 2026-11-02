@@ -78,7 +78,7 @@ fn route_priority_fixture_path() -> PathBuf {
         .join("../../control-ts/fixtures/route_priority/cases.jsonl")
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RoutePriorityLine {
     case: String,
@@ -337,4 +337,293 @@ fn script_fixtures_route_priority_output_dto_shape() {
     assert!(
         serde_json::from_str::<RoutePriorityOutput>(r#"{"basis":"None","candidates":[]}"#).is_err()
     );
+}
+
+// --- cos_digest（S4 の CoS digest 経路）------------------------------------------------------
+// commit 済みの control-ts/fixtures/cos_digest/cases.jsonl が `cos_digest_decide` の現在の出力と
+// 一致することを確かめる。食い違ったら
+// `cargo run -q -p task-core --example dump-cos-digest-fixtures > control-ts/fixtures/cos_digest/cases.jsonl`
+// で作り直し、digest の文面・判定の変更として扱う。
+
+use task_core::chat::digest::{
+    CosDigestCommand, CosDigestInput, CosDigestViolation, cos_digest_decide,
+    validate_cos_digest_commands,
+};
+use task_core::chat::{COS_DIGEST_GENERATED_CASES, cos_digest_fixture_jsonl};
+
+fn cos_digest_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../control-ts/fixtures/cos_digest/cases.jsonl")
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CosDigestLine {
+    name: String,
+    input: CosDigestInput,
+    commands: Vec<CosDigestCommand>,
+}
+
+#[test]
+fn script_fixtures_cos_digest_match_committed_fixture() {
+    let generated = cos_digest_fixture_jsonl().expect("serialize fixture");
+    let committed =
+        std::fs::read_to_string(cos_digest_fixture_path()).expect("read committed fixture");
+    assert!(generated.lines().count() >= 2000);
+    assert!(
+        generated == committed,
+        "cos_digest fixture differs from cos_digest_decide output; regenerate with the dump-cos-digest-fixtures example"
+    );
+}
+
+#[test]
+fn script_fixtures_cos_digest_cases_are_valid_and_cover_boundaries() {
+    let body = cos_digest_fixture_jsonl().expect("serialize fixture");
+    let mut names = BTreeSet::new();
+    let mut inputs = BTreeSet::new();
+    let mut run_states = BTreeSet::new();
+    let mut item_states = BTreeSet::new();
+    let mut generated = 0usize;
+    for line in body.lines() {
+        let case: CosDigestLine =
+            serde_json::from_str(line).expect("line parses with deny_unknown_fields");
+        assert!(
+            names.insert(case.name.clone()),
+            "duplicate name {}",
+            case.name
+        );
+        assert!(
+            inputs.insert(serde_json::to_string(&case.input).expect("ser")),
+            "duplicate input {}",
+            case.name
+        );
+        if case.name.starts_with("gen/") {
+            generated += 1;
+        } else {
+            assert!(case.name.starts_with("hand/"), "{}", case.name);
+        }
+        // The reference output passes its own validation (a failure is a Rust bug).
+        assert_eq!(
+            cos_digest_decide(&case.input),
+            case.commands,
+            "{}",
+            case.name
+        );
+        validate_cos_digest_commands(&case.input, &case.commands)
+            .unwrap_or_else(|v| panic!("{}: reference output rejected: {v}", case.name));
+        // Round trip: the line is the serialization of the typed values.
+        assert_eq!(serde_json::to_string(&case).expect("ser"), line);
+        let requeue = matches!(case.input.run_state.as_str(), "stopped" | "interrupted");
+        assert_eq!(
+            case.commands.len(),
+            if requeue { 2 } else { 1 },
+            "{}",
+            case.name
+        );
+        run_states.insert(case.input.run_state.clone());
+        for item in &case.input.items {
+            item_states.insert(item.state.clone());
+        }
+    }
+    assert_eq!(generated, COS_DIGEST_GENERATED_CASES);
+    for s in ["completed", "failed", "stopped", "interrupted", "cancelled"] {
+        assert!(run_states.contains(s), "run_state {s} missing");
+    }
+    for s in ["escalated", "fallback", "running", "handled"] {
+        assert!(item_states.contains(s), "item state {s} missing");
+    }
+}
+
+fn cos_digest_stopped_input() -> CosDigestInput {
+    let line = std::fs::read_to_string(cos_digest_fixture_path())
+        .expect("read committed fixture")
+        .lines()
+        .map(|l| serde_json::from_str::<CosDigestLine>(l).expect("parse"))
+        .find(|c| c.name == "hand/run-state/stopped")
+        .expect("hand/run-state/stopped case");
+    line.input
+}
+
+fn cos_digest_post_mut(
+    commands: &mut [CosDigestCommand],
+) -> (
+    &mut String,
+    &mut String,
+    &mut String,
+    &mut Vec<task_core::chat::ChatCard>,
+    &mut String,
+) {
+    match &mut commands[0] {
+        CosDigestCommand::PostDigest {
+            thread,
+            idempotency_key,
+            text,
+            cards,
+            run_id,
+        } => (thread, idempotency_key, text, cards, run_id),
+        CosDigestCommand::RequeueRun { .. } => panic!("first command is post_digest"),
+    }
+}
+
+/// S4-3: every rule rejects one broken command list (one mutation per rule), with its code.
+#[test]
+fn script_fixtures_cos_digest_validation_rejects_each_rule() {
+    let input = cos_digest_stopped_input();
+    let good = cos_digest_decide(&input);
+    assert_eq!(validate_cos_digest_commands(&input, &good), Ok(()));
+    type Mutation = (
+        &'static str,
+        CosDigestViolation,
+        Option<&'static str>,
+        Box<dyn Fn(&mut Vec<CosDigestCommand>)>,
+    );
+    let mutations: Vec<Mutation> = vec![
+        (
+            "rule1 key",
+            CosDigestViolation::KeyMismatch,
+            Some("key_mismatch"),
+            Box::new(|c| *cos_digest_post_mut(c).1 = "cos-triage-digest:other".into()),
+        ),
+        (
+            "rule2 thread",
+            CosDigestViolation::ScopeMismatch,
+            Some("scope_mismatch"),
+            Box::new(|c| *cos_digest_post_mut(c).0 = "thread-2".into()),
+        ),
+        (
+            "rule2 post run",
+            CosDigestViolation::ScopeMismatch,
+            Some("scope_mismatch"),
+            Box::new(|c| *cos_digest_post_mut(c).4 = "run-2".into()),
+        ),
+        (
+            "rule2 requeue run",
+            CosDigestViolation::ScopeMismatch,
+            Some("scope_mismatch"),
+            Box::new(|c| {
+                c[1] = CosDigestCommand::RequeueRun {
+                    run_id: "run-2".into(),
+                }
+            }),
+        ),
+        (
+            "rule3 unknown card",
+            CosDigestViolation::CardOutsideItems,
+            Some("card_outside_items"),
+            Box::new(|c| cos_digest_post_mut(c).3[0].id = "decision:elsewhere".into()),
+        ),
+        (
+            "rule3 too many cards",
+            CosDigestViolation::CardOutsideItems,
+            Some("card_outside_items"),
+            Box::new(|c| {
+                let cards = cos_digest_post_mut(c).3;
+                let first = cards[0].clone();
+                cards.push(first);
+            }),
+        ),
+        (
+            "rule5 two posts",
+            CosDigestViolation::DuplicateCommand,
+            Some("duplicate_command"),
+            Box::new(|c| {
+                let p = c[0].clone();
+                c.push(p);
+            }),
+        ),
+        (
+            "rule5 two requeues",
+            CosDigestViolation::DuplicateCommand,
+            Some("duplicate_command"),
+            Box::new(|c| {
+                let r = c[1].clone();
+                c.push(r);
+            }),
+        ),
+        (
+            "rule6 no post",
+            CosDigestViolation::MissingPostDigest,
+            None,
+            Box::new(|c| {
+                c.remove(0);
+            }),
+        ),
+        (
+            "rule6 text size",
+            CosDigestViolation::TextTooLarge,
+            None,
+            Box::new(|c| *cos_digest_post_mut(c).2 = "x".repeat(64 * 1024 + 1)),
+        ),
+        (
+            "rule6 key size",
+            CosDigestViolation::KeyTooLarge,
+            None,
+            Box::new(|c| {
+                *cos_digest_post_mut(c).1 = format!("cos-triage-digest:{}", "r".repeat(128))
+            }),
+        ),
+    ];
+    for (name, expected, code, mutate) in mutations {
+        let mut commands = good.clone();
+        mutate(&mut commands);
+        let got = validate_cos_digest_commands(&input, &commands);
+        assert_eq!(got, Err(expected.clone()), "{name}");
+        assert_eq!(expected.code(), code, "{name}");
+    }
+    // Rule 4: a requeue for a run that was not stopped or interrupted.
+    for run_state in ["completed", "failed", "cancelled"] {
+        let mut other = input.clone();
+        other.run_state = run_state.into();
+        let mut commands = cos_digest_decide(&other);
+        assert_eq!(
+            validate_cos_digest_commands(&other, &commands),
+            Ok(()),
+            "{run_state}"
+        );
+        commands.push(CosDigestCommand::RequeueRun {
+            run_id: other.run_id.clone(),
+        });
+        let got = validate_cos_digest_commands(&other, &commands);
+        assert_eq!(
+            got,
+            Err(CosDigestViolation::RequeueStateInvalid),
+            "{run_state}"
+        );
+        assert_eq!(
+            CosDigestViolation::RequeueStateInvalid.code(),
+            Some("requeue_state_invalid")
+        );
+    }
+}
+
+/// S4-2: the DTOs reject unknown fields (deny_unknown_fields on the input, items, decision,
+/// options and commands).
+#[test]
+fn script_fixtures_cos_digest_dtos_deny_unknown_fields() {
+    let input = cos_digest_stopped_input();
+    let mut value = serde_json::to_value(&input).expect("ser");
+    value["extra"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<CosDigestInput>(value).is_err());
+    let mut value = serde_json::to_value(&input).expect("ser");
+    value["items"][0]["extra"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<CosDigestInput>(value).is_err());
+    let mut decided = input.clone();
+    decided.items[0].decision = Some(task_core::chat::triage::CosTriageDecision {
+        options: vec![task_core::chat::triage::CosTriageOption {
+            key: "a".into(),
+            label: "A".into(),
+            detail: None,
+        }],
+        ..Default::default()
+    });
+    let mut value = serde_json::to_value(&decided).expect("ser");
+    value["items"][0]["decision"]["extra"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<CosDigestInput>(value).is_err());
+    let mut value = serde_json::to_value(&decided).expect("ser");
+    value["items"][0]["decision"]["options"][0]["extra"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<CosDigestInput>(value).is_err());
+    let cmd = serde_json::json!({"kind": "requeue_run", "run_id": "run-1", "extra": 1});
+    assert!(serde_json::from_value::<CosDigestCommand>(cmd).is_err());
+    let cmd = serde_json::json!({"kind": "requeue_run", "run_id": "run-1"});
+    assert!(serde_json::from_value::<CosDigestCommand>(cmd).is_ok());
 }

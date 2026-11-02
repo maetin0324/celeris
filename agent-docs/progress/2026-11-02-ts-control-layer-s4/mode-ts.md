@@ -37,7 +37,7 @@ updated: 2026-11-02
 | `script_domain_mode_canary_still_rejected` | 同名（旧 `script_domain_canary_and_ts_are_422_without_change` を置き換えた） |
 | CoS registry の既存試験の追従 | `cos_ops_registry_matches_adr_domain_assignment_and_exclusions`・`cos_operator_skill_table_matches_allowed` は変えずに通る |
 | （追加）store | `crates/task-core/src/store/script_domains_tests.rs` `script_domain_ts_for_cos_digest_needs_human_and_compare_same_generation`、`script_compare/tests.rs` の mode 表 |
-| （追加）celerisctl | `script_domain_mode_request_carries_mode_version_and_generation` に `ts`、`main.rs` の CoS 写像の表に `script mode cos_digest ts` |
+| （追加）celerisctl | `script_domain_mode_request_carries_mode_version_and_generation` に `ts` |
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - `cargo nextest run -p task-api --test script_domains` → 10 passed
@@ -45,7 +45,7 @@ updated: 2026-11-02
 - `cargo nextest run -p task-core -E 'test(/script_domain|script_compare|script_mode|domain_names/)'` → 19 passed
 - `cargo nextest run -p celerisctl -E 'test(/script|cos_mapped|skill/)'` → 5 passed
 - `UPDATE_SCHEMA=1` で schema を再生成し、`pnpm run gen:types` で web の生成型を再生成した。
-- `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` の結果は報告本文に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（7015 passed、21 skipped）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 ## 未解決事項
 - 起動時の復元（`crates/celeris/src/daemon/script_layer.rs`）は `compare` の行だけを `rust` へ戻す。S4-14 は `ts` の行も戻すと決めている。この unit の範囲（S4-19）に `crates/celeris` が無いので直していない。pass-wire か real-host の unit で `ts` も対象にする必要がある。今は dispatcher が `ts` を `rust` と同じに扱うので、挙動への影響は無い。

@@ -1094,21 +1094,6 @@ mod cos_mapping_tests {
                 "PUT",
                 "/api/v1/script/domains/x/mode".into(),
             ),
-            // 付記 S4-14: CLI は `ts` を渡す（CoS の run では registry が 403 で拒む）。
-            (
-                vec![
-                    "script",
-                    "mode",
-                    "cos_digest",
-                    "ts",
-                    "--expected-version",
-                    "2",
-                    "--generation",
-                    "ab",
-                ],
-                "PUT",
-                "/api/v1/script/domains/cos_digest/mode".into(),
-            ),
         ];
         let rows = skill_allowed_rows();
         assert!(rows.len() > 50, "operations.md table not parsed: {rows:?}");

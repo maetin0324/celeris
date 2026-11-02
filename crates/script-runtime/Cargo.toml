@@ -30,6 +30,10 @@ name = "script-load-check"
 path = "src/bin/script-load-check.rs"
 
 [[bin]]
+name = "script-deploy"
+path = "src/bin/script-deploy.rs"
+
+[[bin]]
 name = "script-bench"
 path = "src/bin/script-bench.rs"
 

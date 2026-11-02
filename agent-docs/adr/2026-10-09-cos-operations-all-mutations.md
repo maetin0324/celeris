@@ -247,6 +247,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/reload` | A | `handlers.rs` | 共通 |
 | POST | `/replay` | R | `handlers.rs` | 共通 |
 | DELETE | `/repos/{id}` | A | `repos.rs` | 共通 |
+| PUT | `/script/domains/{domain}/mode` | A | `script_domains.rs` | 共通 |
 | PATCH | `/repos/{id}` | A | `repos.rs` | 共通 |
 | PATCH | `/config/fields` | X: `human_only` | `handlers.rs` | 共通 |
 | POST | `/terminals` | X: `human_only` | `handlers.rs` | 共通 |
@@ -478,3 +479,11 @@ ADR 2026-10-28-cos-integrate-task の `POST /tasks/{id}/integration-requests/{re
   `match_operation` は登録済みの `/cos/` の行を `recursive_cos` の拒否より先に通す。分類は ALLOWED 107・EXCLUDED 36（計 143 行。
   surface は ALLOWED 23）。route を直接呼ぶと 422（CoS run は `cos_audit_context_required`、人・operator・MCP は
   `cos_review_report_invalid`）。
+
+## 付記: TS 制御層の領域の mode の切り替え（2026-11-02、task 01M6E6HEH7CPZX9KX4Y2SAZKTG）
+
+- admin に `PUT /script/domains/{domain}/mode`（`script_domain.mode_set`）を ALLOWED で足した（ADR
+  [2026-11-02-ts-control-layer-boundary](2026-11-02-ts-control-layer-boundary.md) の (d) の権限と付記 S2-5）。`rust`→`compare` と
+  `rust` への戻しは挙動を変えないので CoS に許可する。`canary`・`ts` は route と同じ関数が 422 `script_mode_not_enabled` で拒み、
+  表を変えない（本番の挙動を変える変更は人の承認が要る。S5 で別に決める）。store の CAS が 1 transaction で表を更新して
+  `script_domain_events` に追記するので、CoS の操作は書き込み 1 回の外部効果の手順（`external_store`）で記録する。

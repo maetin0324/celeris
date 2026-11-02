@@ -207,6 +207,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::routing::routes())
         // ADR 2026-10-11 D3: genre×harness の段階・根拠表と人の段階変更。
         .merge(crate::routing_stage::routes())
+        // ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: TS 制御層の領域の mode（rust / compare）。
+        .merge(crate::script_domains::routes())
         // ADR-0080 D5: browser の人待ち（登録依頼・承認）。
         .merge(crate::browser::routes())
         .merge(crate::browser_readiness::routes())

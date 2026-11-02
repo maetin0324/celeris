@@ -5649,6 +5649,33 @@ export type ScratchStatus = {
 
 export type ScriptDomain = "lane_rules" | "route_priority";
 
+export type ScriptDomainList = {
+  "domains": Array<ScriptDomainView>;
+};
+
+export type ScriptDomainModeBody = {
+  "expected_version": number;
+  "generation"?: string | null;
+  "mode": ScriptMode;
+  "reason"?: string | null;
+};
+
+export type ScriptDomainModeResult = {
+  "changed": boolean;
+  "domain": ScriptDomainView;
+  "event_id"?: number | null;
+};
+
+export type ScriptDomainView = {
+  "bundle_sha256"?: string | null;
+  "domain": ScriptDomain;
+  "generation_id"?: string | null;
+  "mode": ScriptMode;
+  "updated_at": string;
+  "updated_by": string;
+  "version": number;
+};
+
 export type ScriptMode = "rust" | "compare" | "canary" | "ts";
 
 export type SecretList = {

@@ -28319,6 +28319,129 @@
       ],
       "type": "string"
     },
+    "ScriptDomainList": {
+      "description": "`GET /script/domains` の応答（`domain` の順）。",
+      "properties": {
+        "domains": {
+          "items": {
+            "$ref": "#/$defs/ScriptDomainView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "domains"
+      ],
+      "type": "object"
+    },
+    "ScriptDomainModeBody": {
+      "additionalProperties": false,
+      "description": "`PUT /script/domains/{domain}/mode` の本文。",
+      "properties": {
+        "expected_version": {
+          "description": "読んだ時点の `version`。表の値と違えば 409。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "generation": {
+          "default": null,
+          "description": "`compare` で使う generation の `bundle_sha256`（必須）。`rust` では書かない。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/ScriptMode",
+          "description": "`rust` | `compare`（`canary`・`ts` は S2 では 422）。"
+        },
+        "reason": {
+          "default": null,
+          "description": "変更の理由（`script_domain_mode_changed` の `reason`）。CoS の操作では省略すると操作の理由を使う。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mode",
+        "expected_version"
+      ],
+      "type": "object"
+    },
+    "ScriptDomainModeResult": {
+      "description": "`PUT /script/domains/{domain}/mode` の応答。",
+      "properties": {
+        "changed": {
+          "description": "表を変えたか（同じ mode・同じ generation なら `false`）。",
+          "type": "boolean"
+        },
+        "domain": {
+          "$ref": "#/$defs/ScriptDomainView"
+        },
+        "event_id": {
+          "description": "追記した `script_domain_events` の id（`changed: false` では `null`）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "changed",
+        "domain"
+      ],
+      "type": "object"
+    },
+    "ScriptDomainView": {
+      "description": "領域 1 つの現在の mode（`GET /script/domains` の 1 行、変更の応答）。",
+      "properties": {
+        "bundle_sha256": {
+          "description": "active generation の bundle の sha256（64 桁 hex）。`rust` では `null`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "domain": {
+          "$ref": "#/$defs/ScriptDomain"
+        },
+        "generation_id": {
+          "description": "active generation の id（`script_generations.id`）。`rust` では `null`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/ScriptMode"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "updated_by": {
+          "type": "string"
+        },
+        "version": {
+          "description": "CAS の版。変更の要求の `expected_version` に渡す。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "domain",
+        "mode",
+        "version",
+        "updated_at",
+        "updated_by"
+      ],
+      "type": "object"
+    },
     "ScriptMode": {
       "description": "領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。S2 で受け付けるのは `rust` と `compare` だけ（S2-5）。",
       "enum": [
@@ -34303,6 +34426,16 @@
     "saved_credential_list": {
       "$ref": "#/$defs/SavedCredentialList"
     },
+    "script_domain_mode_body": {
+      "$ref": "#/$defs/ScriptDomainModeBody"
+    },
+    "script_domain_mode_result": {
+      "$ref": "#/$defs/ScriptDomainModeResult"
+    },
+    "script_domains": {
+      "$ref": "#/$defs/ScriptDomainList",
+      "description": "ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: `GET /script/domains` と `PUT /script/domains/{domain}/mode`。"
+    },
     "secret_put": {
       "$ref": "#/$defs/SecretPutResult"
     },
@@ -34583,6 +34716,9 @@
     "routing_stage",
     "routing_stage_change",
     "routing_evidence",
+    "script_domains",
+    "script_domain_mode_body",
+    "script_domain_mode_result",
     "mcp_clients",
     "mcp_calls",
     "skill_list",

@@ -241,6 +241,10 @@ pub struct ApiV1Schema {
     pub routing_stage: task_ops::routing_stage::RoutingStageView,
     pub routing_stage_change: crate::routing_stage::RoutingStageChangeBody,
     pub routing_evidence: task_ops::routing_stage::RoutingEvidenceList,
+    /// ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: `GET /script/domains` と `PUT /script/domains/{domain}/mode`。
+    pub script_domains: crate::script_domains::ScriptDomainList,
+    pub script_domain_mode_body: crate::script_domains::ScriptDomainModeBody,
+    pub script_domain_mode_result: crate::script_domains::ScriptDomainModeResult,
     /// Phase 78（ADR-0056 D4）: `GET /mcp/clients` と `GET /mcp/calls?client=`。
     pub mcp_clients: crate::mcp_admin::McpClientsView,
     pub mcp_calls: crate::mcp_admin::McpCallsView,

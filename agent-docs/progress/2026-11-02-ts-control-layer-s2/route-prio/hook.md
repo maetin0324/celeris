@@ -28,7 +28,7 @@ updated: 2026-11-02
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - `cargo nextest run -p task-dispatch -E 'test(script_compare) | test(review_route) | test(lane_assist)'` → 51 passed。
-- `bash scripts/dev/test-affected.sh` → 結果は下の「検査」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 2981 passed・9 skipped。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `python3 scripts/dev/check-source-size.py` → 0 failure(s)。`dispatch_run.rs` は +2 行（1708→1710）。
 
@@ -37,4 +37,4 @@ updated: 2026-11-02
 
 ## 提案
 - compare が比べるのは `route_select_one` の最初の `route_priority` の列で、frontier lane のときに frontier 列を前に足した後の `RouteTrace.candidates` ではない（S2-1 の範囲どおり）。frontier 列の前置きを TS に移すなら別の領域として DTO を決める。
-- 現行の挙動の観察（bug かは未確認、直していない）: `route_select` が全 harness で断ったとき `RouteTrace.harness` は最後に試した harness で、`aggregate.candidates` は空のまま残る。`llm_route_selected` の metadata の候補が空になるのはこのため。
+- 現行の挙動の観察（コードを読んで確かめた。bug かは未確認で、直していない）: `route_select` が全 harness で断ったとき、`RouteTrace.harness` は最後に試した harness になり、`RouteTrace.candidates` は設定されず空のまま残る（成功の分岐だけが設定する）。

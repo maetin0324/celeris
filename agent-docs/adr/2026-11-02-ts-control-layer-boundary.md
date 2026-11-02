@@ -264,3 +264,142 @@ S1 の各 unit の記録は [S1 の進捗](../progress/2026-11-02-ts-control-lay
   `rand_core`・`socket2`・`syn`・`toml_datetime`・`winnow`）。どの版も `deno_core` を持たない crate（`task-api`・`task-core` 等や `celeris` の他の依存）からも使われており、
   `deno_core` だけが持ち込んだ版は無い（`cargo tree --workspace -e normal -i <crate>@<版>` で各版を確かめた）。build を妨げる衝突は無い。
 - rustc 1.98.1・cargo 1.98.1 で build できる。写しの `deno_core` に rustc の deprecated の警告が 1 件出る（path 依存なので cap-lints されない。error ではない）。
+
+## 付記 2026-11-02: S2 の compare mode（S2 adr-compare、task 01M6E6HEH7CPZX9KX4Y2SAZKTG）
+S2 の作業の前に、(d) の `compare` を実装できる粒度で決める。根拠は [S0 の計画](../progress/2026-11-02-ts-control-layer-s0.md) の §2 S2・§3 と
+[S1 の未解決](../progress/2026-11-02-ts-control-layer-s1.md)。記録は [S2 adr-compare](../progress/2026-11-02-ts-control-layer-s2/adr-compare.md)。
+この付記はコードを変えない。
+
+### S2-1 対象の領域と順序
+| 順 | 領域名（`domain`） | Rust の参照実装 | 本物の呼び出し経路（compare を付ける所） |
+|---|---|---|---|
+| 1 | `lane_rules` | `model_policy::RULES` を上から当てる部分。policy-split unit が `match_rule(&TaskFeatures) -> RuleMatch` に切り出す（挙動不変、言語移行と別 commit） | `dispatch_run.rs` の `decide_lane` の中の `decide_for_task` の 1 か所。`work_units.rs` の呼び出しは Rust のまま |
+| 2 | `route_priority` | `llm_route::route_priority`（候補列の選び方） | `route_select.rs` の `route_select_one` の最初の `route_priority` の 1 か所で、`cos == false` の task の run だけ。harness balance の得点（`order_harnesses` の前）と frontier 列の後ろの列の呼び出しは Rust のまま |
+
+- `direct_route::evaluate` は Rust に残す（(a) の表と ADR-0124）。S2 では TS の写しも作らない。
+- 2 つ目は 1 つ目の受け入れ（fixture 全件一致・本物の経路での compare・`rust` への切り戻し）の後に足す。
+- 両領域とも時刻・乱数を使わない。入力 DTO に時刻・seed の欄を置かない（TS で `Date.now`・`Math.random` を呼ぶと throw する。S1 の付記）。
+
+### S2-2 入力 DTO・出力 DTO と比べる欄
+DTO の正本は Rust の型（(c)）。全 struct に `deny_unknown_fields`。`docs/api/script-host/host-v1.schema.json` に足し、TS の型は生成する。
+
+**`lane_rules`**
+- 入力 `LaneRulesInput { features: TaskFeatures }`。`features` は `TaskFeatures::infer_with_hints` の後の 9 軸（`Level` = `low|medium|high`）。
+  Rust は `routing.tier_source.policy_decides()` が真（`Hint`・`Default`）のときだけ TS を呼ぶ。`Human`・`System` の task では TS を呼ばず、記録もしない。
+- 出力 `LaneRulesOutput { rule_id: string, proposed: Tier, condition: string }`（`Tier` = `frontier|standard|cheap`）。
+- `LaneCeiling::clamp`・`source`・`hint`・`reasons`・retry の escalation は Rust が出力の後に当てる。これらは比較しない。
+- byte 一致を求める欄: `rule_id`・`proposed`・`condition` の 3 欄すべて。
+
+**`route_priority`**
+- 入力 `RoutePriorityInput { harness: string, lane: string | null, cos: bool, execution_class: string | null, table: RouteTable }`。
+  `RouteTable { route_defaults: CandidateKey[], lane_route_defaults: { lane: string, candidates: CandidateKey[] }[], class_defaults: { execution_class: string, candidates: CandidateKey[] }[], cos_route_candidates: CandidateKey[] }`、
+  `CandidateKey { source: string, model: string }`。`table` は `Registry` のうち、その `harness` の行だけを写す（配列は Rust の `BTreeMap` の key 順）。
+- 出力 `RoutePriorityOutput { basis: "cos" | "execution_class" | "lane" | "harness" | "none", candidates: CandidateKey[] }`。
+  `basis` はどの列を選んだかの理由コード。route-prio unit が `route_priority` を「列と basis を返す関数」と既存の薄い包みに分ける（挙動不変、別 commit）。
+- 空の `candidates`（`basis = "none"`）は正しい出力。その後の `NoDeclaredDefault` の fail-closed は Rust が行う。
+- byte 一致を求める欄: `basis` と `candidates`（順序を含む全要素）。
+
+**正規化する非本質差分**: 両領域とも「なし」。比較は、TS の戻り値を出力 DTO に deserialize し直し、Rust の出力と同じ serde_json の直列化（空白なし、struct は宣言順）にした byte 列どうしで行う。
+TS の生の JSON の key 順・空白は deserialize で消えるので比較に現れない。これは値の正規化ではない。値の正規化（大小文字・順序の並べ替え・重複除去）は一切しない。
+正規化を足すときは、この付記に規則を足す変更と同じ差分で行う。
+
+### S2-3 比較入力の機密除去
+- 方針は許可列挙（allowlist）。記録する入力は S2-2 の入力 DTO そのもので、DTO に無い値は記録しない。DTO を広げる変更は、この節の表を同じ差分で直す。
+- 保存するもの: `lane_rules` は 9 軸の `Level` だけ。`route_priority` は `harness`・`lane`・`cos`・`execution_class` と、その harness の候補列の `source` id・`model` id。
+- 捨てるもの（DTO に入れない）: credential・secret・API token・OAuth の値、account の id と名前、Host API の要求 token（S1 の `ctx.token`）、
+  task の title・objective・acceptance・budget の本文、prompt・message・log の本文、`SourceSpec` の全欄（base URL・環境変数名・鍵の参照）、
+  `llm_routes`（`via`・API 形式）、他の harness の行、quota・残量（`source_headroom`）、利用者・組織の名前。
+- task の id は event を追記する行（`events.task_id`）が持つので、payload には書かない。run の id は書いてよい（機密でない）。
+- 記録する入力の直列化が 64 KiB を超えたら、`input` を `null` にし `input_digest` だけを残す（`input_truncated: true`）。
+- TS の例外の `message` は 512 byte で切る。入力が機密を持たないので、例外文に機密は入らない。
+
+### S2-4 event と表
+**event `script_compare_recorded`**（`Event` の新しい variant。追記先は比較した task の `events`。状態は変えず、`replay` は無視する）
+| 欄 | 型 | 中身 |
+|---|---|---|
+| `domain` | `"lane_rules" \| "route_priority"` | 領域 |
+| `generation` | string（ULID） | 使った `script_generations.id` |
+| `isolate_epoch` | number | actor が isolate を作り直した回数（S1 の generation 番号 +1）。同じ `generation` の中の区別 |
+| `bundle_sha256` | string（64 桁 hex） | 使った bundle |
+| `host_api` | string | host の Host API 版（`1.0.0`） |
+| `call_site` | string | `dispatch_run.decide_lane`・`route_select.route_select_one` |
+| `run_id` | string \| null | 判定した run（作る前なら null） |
+| `input_digest` | string | `sha256:` + S2-2 の直列化の sha256（64 桁 hex） |
+| `input` | object \| null | S2-3 で除去した後の入力 DTO |
+| `input_truncated` | bool | S2-3 の 64 KiB 超え |
+| `rust` | object | Rust の出力 DTO |
+| `ts` | object \| null | TS の出力 DTO（`ts_error`・`unavailable` は null。`invalid_output` は生の値を 64 KiB まで） |
+| `outcome` | `"match" \| "mismatch" \| "ts_error" \| "invalid_output" \| "unavailable"` | 下の定義 |
+| `error` | `{ kind, message } \| null` | `ts_error` の `ScriptError` の種類（snake_case）と文。`invalid_output` は deserialize・検証の失敗理由 |
+| `normalized` | string[] | 当てた正規化の規則名。S2 では常に `[]` |
+| `safety_violations` | string[] | S2-8 の code。無ければ `[]` |
+| `elapsed_us` | number | actor への送信から応答（または打ち切り）まで |
+
+`outcome` の定義:
+- `match`: TS の出力が DTO として正しく、S2-2 の比較欄がすべて byte 一致。
+- `mismatch`: TS の出力は DTO として正しいが、比較欄のどれかが違う。
+- `ts_error`: TS を呼んだが `ScriptError`（`Exception`・`Timeout`・`Busy`・`Terminated`・`GenerationGone`・`HeapLimit`・`InputTooLarge`・`Denied`）で終わった。
+- `invalid_output`: 戻り値が出力 DTO に deserialize できない（未知の欄・欠けた欄・未知の enum 値）か、領域の検証に通らない
+  （`lane_rules` の `rule_id` が空または 128 byte 超、`condition` が 512 byte 超。`route_priority` の候補が 256 件超）。
+- `unavailable`: TS を呼ばなかった（runtime が無い、mode が `compare` なのに generation が load されていない、manifest の `domains` にその領域が無い）。
+
+重複の抑え: 同じ task・同じ `domain` の直前の `script_compare_recorded` と `generation`・`input_digest`・`outcome` が同じなら追記しない
+（dispatcher が tick ごとに同じ判定を繰り返すため）。S5 の件数はこの抑えの後の event の件数で数える。
+
+**表 `script_generations`**（migration は compare-store unit。番号はその時の空き）
+- 列: `id` TEXT PK（ULID）、`bundle_sha256` TEXT NOT NULL UNIQUE、`host_api` TEXT、`schema_sha256` TEXT、`manifest_json` TEXT（manifest の全文）、
+  `state` TEXT CHECK IN (`loaded`,`rejected`)、`created_at`、`updated_at`。
+- daemon が bundle を load して検証に通ったら `loaded` の行を作る（同じ hash の行が在れば再利用）。検証に落ちたら `rejected`。isolate の作り直しでは行を足さない。
+  drain・退役の状態は S5 で migration を足して加える。
+
+**表 `script_domain_modes`**
+- 列: `domain` TEXT PK、`mode` TEXT NOT NULL CHECK IN (`rust`,`compare`,`canary`,`ts`)、`generation_id` TEXT NULL（`script_generations.id`）、
+  `version` INTEGER NOT NULL、`updated_at`、`updated_by`（actor）。CHECK で `mode = 'rust' OR generation_id IS NOT NULL`。
+- migration で `lane_rules`・`route_priority` の行を `rust`・`generation_id` NULL・`version` 0 で入れる。CHECK に `canary`・`ts` を含めるのは S5 で表を作り直さないためで、S2 の API は受け付けない（S2-5）。
+- 更新は CAS だけ: `UPDATE … SET mode=?, generation_id=?, version=version+1, updated_at=?, updated_by=? WHERE domain=? AND version=?`。
+  更新した行が 0 なら 409（版の競合）。同じ transaction で `script_domain_mode_changed` を追記する。
+- **`script_domain_mode_changed`**: 欄は `domain`・`from_mode`・`to_mode`・`from_generation`・`to_generation`・`version`（更新後）・`actor`・`reason`。
+  mode の変更は特定の task に属さないので、`events`（`task_id` が NOT NULL）ではなく追記専用の表 `script_domain_events`（`id` INTEGER PK、`ts`、`domain`、`json`）に書く。
+  `json` は `Event::ScriptDomainModeChanged` の直列化と同じ形にする。store にこの表の UPDATE・DELETE の経路を作らない。
+- dispatcher は tick ごとに `script_domain_modes` を 1 回読み、その tick の判定に使う。
+
+**旧 routing_shadow を使わない**: `routing_shadow` の表・`RoutingShadowRecorded`（`routing_shadow_recorded`）・`routing_shadow_history`・
+旧 `[model_routing]` と tier binding の config 欄は、compare の記録・集計・API・config のどれにも使わない。S2 は config 欄を足さない（mode は DB の表が持つ）。
+
+### S2-5 S2 で使う mode と権限
+- S2 で受け付ける mode は `rust` と `compare` だけ。API が `canary`・`ts` を受けたら 422（code `script_mode_not_enabled`）を返し、表を変えない。
+- `rust`→`compare`: 人の API token か、CoS operations（`/cos/operations` の registry に ALLOWED で足す操作。mode-api unit）で行う。
+  要求は `generation`（`bundle_sha256`）と `expected_version` を持つ。対象の generation が `loaded` で、manifest の `domains` にその領域が無ければ 422。
+- `compare`→`rust`（戻し）: 認証された誰でも（人・CoS・外部 operator の token）と daemon 自身が行える。daemon は起動時に active generation の bundle が
+  無い・hash が違う・`host_api` が合わない場合に、actor `system:script-startup` で戻す（(d) の再起動後の復元）。
+- 同じ mode・同じ generation への変更は、表も event も変えずに 200 を返す。
+- 本番で `compare` にするのは人の手順（S2 close unit が進捗の「本番への移行」に書く）。進行中の測定 daemon では切り替えない（(g)）。
+
+### S2-6 compare が守ること
+- Rust の結果を一切変えない。dispatcher が使う値は常に Rust の参照実装の出力で、TS の出力は `script_compare_recorded` に書くだけ。
+  `routing_decided` などの既存 event・run の行・lane・候補列は `rust` のときと byte 一致する（host-adapter unit の試験で、常に違う答えを返す bundle を使って固定する）。
+- TS の失敗・timeout・不正な出力・runtime 不在のどれでも、Rust の結果をそのまま使い、dispatch を止めない。
+- deadline は 1 呼び出し 50 ms（(f)）。超えたら待つのをやめ、`ts_error`（`error.kind = "timeout"`）を記録する。dispatcher が 1 判定で待つ時間は最大 50 ms。
+- LLM と外部 tool を呼ばない。両領域の TS は op を呼ばない純粋関数で、Rust 側も compare のために store の書き込み（記録の追記を除く）・process・network を使わない。
+- 記録の追記に失敗しても dispatch は続ける（warn の log だけ）。記録は判定の後に別の書き込みで行い、判定の transaction に入れない。
+
+### S2-7 要求ごとの V8 context（S1 未解決 4）
+- S2 では要求ごとに V8 context を分けない。理由: 両領域は op を呼ばない純粋判定で、領域ごとの許可表を空にする。要求の `scope_task_ids` も空で送る。
+  他の要求の token を盗んでも呼べる op が無いので、S1 で見つけた「相手の scope で op を呼ぶ」経路が開かない。
+- 許可表が空の領域の manifest が `capabilities` を宣言していたら、その領域を load で拒否する（`script_generations` は `rejected`）。
+- 残る危険は、bundle が global に値を残して後の要求の答えを変えること（隠れた入力）。対策は 2 つ:
+  fixture の比較 runner は同じ isolate に全件を正順と逆順の 2 回流し、同じ出力を要求する。本番の compare では違いが `mismatch` として出る。
+- 要求ごとの context の分離は、op を使う最初の領域（S4 の digest）より前に決める。決めるまで、どの領域にも capability を許可しない。
+
+### S2-8 安全違反の数え方（S5 の停止基準の分母）
+- `script_compare_recorded` の `safety_violations` に code を入れる。code:
+  - 共通: `denied_capability`・`denied_scope`（呼び出し中に `ScriptError::Denied`。outcome は `ts_error` で、安全違反にも数える）。
+  - `lane_rules`: `ceiling_exceeded`（TS の `proposed` に Rust と同じ `clamp` を当てた lane が天井で許されないのに、Rust の lane は許される）。
+  - `route_priority`: `undeclared_candidate`（TS の候補が入力 `table` のどの列にも無い。(a) の「registry に在る route だけを残す検査」に当たる）。
+  - TS を呼ぶ前提の破れ（`Human`・`System` の task で TS を呼んだ）は Rust の bug なので code にせず、試験で落とす。
+- 数え方: 領域と generation ごとに、`safety_violations` が空でない event の件数を数える（1 event に code が複数あっても 1 件）。
+  分母は同じ領域・generation の `outcome != "unavailable"` の event の件数（S2-4 の重複の抑えの後）。不一致率・timeout 率・失敗率も同じ分母で数える。
+  - timeout: `ts_error` で `error.kind` が `timeout`・`terminated`。
+  - 失敗: `ts_error` のそれ以外と `invalid_output`。
+  - 説明のつかない不一致: `mismatch` のすべて（S2 は正規化が無いので、説明は S2-2 の規則を足す変更でしか付かない）。
+- 「Rust の検証を通らずに副作用が実行された」は compare では構造上起きない。S2-6 の byte 一致の試験で固定し、起きたら S5 全体を止める（(f)）。

@@ -39,9 +39,16 @@ updated: 2026-11-02
 
 ## commit（件名）
 1. `phase s2: mode-api: 領域の mode を読む・切り替える API・CoS 操作・celerisctl script`
+2. `phase s2: mode-api: celerisctl の cos_mapped 試験の表を source-size の上限に収める`
+3. `phase s2: mode-api: 進捗の証拠`
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-- 結果は result.json と報告本文に書く（下の「未解決」1 を参照）。
+- `cargo nextest run -p task-api -E 'test(script_domain)'` — exit 0、6 passed。
+- `bash scripts/dev/test-affected.sh` — exit 0。cargo 4922 passed・20 skipped、web tsc -b と unit 697 passed、source-size gate 0 failure。
+  （初回は celerisctl `main.rs` の inline 試験 `cos_mapping_tests` が 320 行で source-size の上限 300 を超えたので、表の追加を 1 行に減らした。`--generation` 付きの本文は `script.rs` の試験で見る。）
+- `cargo clippy --workspace -- -D warnings` — exit 0。
+- `cargo fmt --all -- --check` — exit 0。
+- 範囲 check — exit 1。範囲外は `agent-docs/adr/2026-10-09-cos-operations-all-mutations.md` と `config/skills/cos-operator/operations.md` の 2 file だけ（下の未解決 1）。
 
 ## 未解決
 1. 範囲 check（`crates/task-api/`・`crates/celerisctl/`・`docs/`・`web/`・`agent-docs/progress/`・境界 ADR）は、上の範囲外の 2 file で落ちる。

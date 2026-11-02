@@ -10,7 +10,8 @@
 //! | `api` | `config_view`・`api_settings`・`bind_reuseport`・`start_api` |
 //! | `services` | llm-proxy と MCP の組み立て・起動・停止 |
 //! | `run` | `run`: 起動順と停止順（interrupt → api → llm_proxy → mcp → script → checkpoint → backup → deregister） |
-//! | `script_layer` | `[script]` の bundle の検証と actor の起動・停止。失敗しても起動を続ける（境界 ADR 2026-11-02） |
+//! | `script_layer` | `[script]` の bundle の検証と actor の起動・停止、起動時の generation と mode の整合。失敗しても起動を続ける（境界 ADR 2026-11-02） |
+//! | `script_policy` | `task_dispatch::PolicyScript` を `ScriptRuntimeHandle` で実装する（付記 S2-6） |
 //! | `tick_loop` | tick ループ本体（シグナル・役割の変化・裏方の定期処理） |
 //! | `admin` | API から委譲された reload / provider check / notify test |
 //! | `classify_stage` / `classify_tick` | Jev 分類段と、tick の直前に ready の WU を分類して `ClassificationBoard` に置く連携（ADR 2026-10-15-jev-wire D3） |
@@ -34,6 +35,7 @@ pub(crate) mod jev_key;
 pub(crate) mod routing_guardrail;
 pub(crate) mod run;
 pub(crate) mod script_layer;
+pub(crate) mod script_policy;
 pub(crate) mod secrets;
 pub(crate) mod services;
 pub(crate) mod stranded_sweep;

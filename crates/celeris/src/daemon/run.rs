@@ -293,12 +293,11 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         None => None,
     };
     // 境界 ADR 2026-11-02: `?` で抜ける経路の後に置く。`[script]` が無ければ thread も isolate も作らない。
-    let script_layer = ScriptLayer::start(
-        config.script.as_ref(),
-        dispatcher.store().as_ref(),
-        &identity.instance_id,
-    )
-    .await;
+    let script_layer =
+        ScriptLayer::start(&config, dispatcher.store().as_ref(), &identity.instance_id).await;
+    if let Some(script_layer) = &script_layer {
+        dispatcher.set_policy_script(Some(script_layer.policy_script()));
+    }
     let mut roles = RoleState {
         role,
         supervisor,
@@ -335,6 +334,8 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         mcp.stop().await;
     }
     if let Some(script_layer) = script_layer {
+        // 走っている compare を先に終わらせる（actor を止めてから `terminated` と記録しない）。
+        dispatcher.wait_script_compares().await;
         script_layer.stop().await;
     }
     // ADR-0064 D3/D5: 背景チェックポイント・定期バックアップは draining でも動き続けてよい

@@ -403,3 +403,11 @@ TS の生の JSON の key 順・空白は deserialize で消えるので比較�
   - 失敗: `ts_error` のそれ以外と `invalid_output`。
   - 説明のつかない不一致: `mismatch` のすべて（S2 は正規化が無いので、説明は S2-2 の規則を足す変更でしか付かない）。
 - 「Rust の検証を通らずに副作用が実行された」は compare では構造上起きない。S2-6 の byte 一致の試験で固定し、起きたら S5 全体を止める（(f)）。
+
+### S2-9 host-adapter の実装で決めたこと（2026-11-02）
+記録は [S2 host-adapter](../progress/2026-11-02-ts-control-layer-s2/host-adapter.md)。
+- S2-4 の「検証に落ちたら `rejected`」は S2 では行を作らない。`script_generation_record` は同じ hash の行を再利用し、`rejected` から `loaded` へ戻す経路が store に無い。
+  ファイルが一時的に無いだけで `rejected` の行を作ると、その hash を二度と `compare` にできなくなる。拒否の理由は既存の通知（`script_bundle_rejected`）に残る。
+- S2-5 の起動時の戻しは、generation の bundle と読み込めた bundle の hash の比較に一本化する。`[script]` が無い・bundle を読めない場合は「読み込めた bundle なし」として戻す。
+  `host_api` の不一致は manifest の検証で load が失敗するので、この場合に含まれる。
+- `Denied` の S2-8 の code は host の op の理由文で分ける。`outside the request scope` を含めば `denied_scope`、それ以外は `denied_capability`。

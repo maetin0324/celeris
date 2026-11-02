@@ -585,6 +585,8 @@ pub fn build_dispatcher(
     seed_org_if_empty(store.as_ref(), config)?;
     seed_cron_if_empty(store.as_ref(), config, OffsetDateTime::now_utc())?;
     let mut dispatcher = Dispatcher::new(store.clone(), config.dispatch_config());
+    // 付記 S2-4: `[script]` の有無によらず渡す。無ければ compare の領域は `unavailable` を記録する。
+    dispatcher.set_script_domain_store(sqlite.clone());
     // ADR 2026-10-11 llm-source-harness-selection: harness and source×model are chosen from these.
     let mut llm_routes = config.llm_route_registry()?;
     if let (Ok(entries), Ok(overrides)) =

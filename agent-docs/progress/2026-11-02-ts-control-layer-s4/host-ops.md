@@ -12,7 +12,7 @@ updated: 2026-11-02
 
 ## 結論
 - `crates/script-runtime` に async op `op_cos_digest_list_runs`・`op_cos_digest_read_run`（JS では `cosDigestListRuns`・`cosDigestReadRun`）を足した。Host API は 1.1.0。
-- op は store を持たない。引数を DTO で検証し、要求ごとに Rust 側が渡す host sink（`ScriptCall.host_sink`、容量 64 の bounded `mpsc`、応答は要求ごとの `oneshot`）へ送って await する。応答も DTO で検証してから script に渡す。
+- op は store を持たない。引数を DTO で検証し、要求ごとに Rust 側が渡す host sink（`ScriptRuntimeHandle::call_with_host_sink(call, Some(sink))`、容量 64 の bounded `mpsc`、応答は要求ごとの `oneshot`）へ送って await する。応答も DTO で検証してから script に渡す。
 - 許可表 `DOMAIN_CAPABILITIES` に `("cos_digest", [cos_digest:list_runs, cos_digest:read_run])` を足した。`lane_rules`・`route_priority` は空のまま。
 - 要求ごとの分離は S4-13 のとおり V8 context を分けず、次で実装した。
   1. 排他: capability を持つ要求は isolate の中で同時に 1 件まで。actor は後から来た capability 付きの要求を `held` に置き、前の要求が終わってから来た順に始める。capability の無い要求は並行して走る。
@@ -28,7 +28,7 @@ updated: 2026-11-02
 - **schema の hash**: schema が変わったので `crates/script-runtime/tests/fixtures/selftest-bundle/manifest.json` の `schema_sha256` を直した。control-ts の bundle は build 時に schema から hash を取るので、作り直せば合う。
 - **deadline と終わりの知らせ**: actor は deadline で要求を終わらせるので、op の中で両方が同時に起きる。deadline を過ぎていれば `timeout` を優先して返す。
 - **control-ts の試験 stub**: `control-ts/src/testing/host-stub.ts` に `cosDigestListRuns`・`cosDigestReadRun` と差し替え用の `setCosDigestListRuns`・`setCosDigestReadRun` を足した（`domains.test.ts` の型検査が host の export 全部を要求するため）。pass replay runner は ts-pass unit が書く。
-- `crates/celeris/src/daemon/script_policy.rs` は `ScriptCall.host_sink: None` を足しただけ。
+- host sink は `ScriptCall` の欄にせず、`call_with_host_sink` の引数にした（attempt 2）。`ScriptCall` を変えないので `crates/celeris/src/daemon/script_policy.rs` などの既存の呼び出し側は無変更。`call` は sink 無しの `call_with_host_sink`。
 
 ## 試験（S4-19 の名前のまま。`crates/script-runtime/tests/cos_digest_ops.rs`）
 | 試験 | 確かめること |
@@ -53,6 +53,8 @@ updated: 2026-11-02
 ## 未解決事項
 - 本番に deploy 済みの bundle は schema の hash が変わるので、新しい binary では load の照合で合わない。`cos_digest` は本番で `rust` のままなので挙動は変わらないが、bundle は作り直して deploy する必要がある（本番への移行の節）。
 - 付記 S4-13 のとおり、capability の無い要求（純粋判定）が走っている `cos_digest` の要求の token を global から読めば、その要求の scope で op を呼べる。scope は広がらない（同じ pass の scope だけ）。要求ごとに isolate を作り直す方式は S5 以降で見直す。
+
+- 計画の範囲 check（attempt 1 で不合格）は `control-ts/src/testing/host-stub.ts` を許していない。`host.d.ts` に op を足すと `domains.test.ts` の型検査（stub が `celeris:host` の export 全部を持つこと）が stub の追記を要求するので、stub を戻すと control-ts の tsc が TS2739 で落ちる。plan_issue として範囲に足すよう申告した。
 
 ## 本番への移行
 - celeris の新しい binary を入れる前後で、`control-ts` の bundle を作り直して deploy する（`pnpm bundle` → `script-deploy`）。作り直さなければ起動時の復元で `system:script-startup` が各領域を `rust` へ戻す。本番の `cos_digest` は `rust` のままなので挙動は変わらない。

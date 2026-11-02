@@ -85,7 +85,6 @@ fn call(domain: &str, input: serde_json::Value) -> ScriptCall {
         input,
         scope_task_ids: Default::default(),
         timeout: Duration::from_secs(30),
-        host_sink: None,
     }
 }
 
@@ -282,7 +281,6 @@ async fn runtime_timeout_sync_loop() {
             input: json!({"mark": "spinning"}),
             scope_task_ids: Default::default(),
             timeout: Duration::from_millis(200),
-            host_sink: None,
         })
         .await;
     assert_eq!(r, Err(ScriptError::Timeout));
@@ -580,7 +578,6 @@ fn host_call(domain: &str, input: serde_json::Value, scope: &[&str]) -> ScriptCa
         input,
         scope_task_ids: scope.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>(),
         timeout: Duration::from_secs(30),
-        host_sink: None,
     }
 }
 

@@ -94,7 +94,7 @@ impl Default for RuntimeLimits {
 }
 
 /// 1 回の呼び出しの入力。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScriptCall {
     /// 判定の領域（例 `lane_policy`）。script の入口へ第 1 引数で渡す。
     pub domain: String,
@@ -105,9 +105,6 @@ pub struct ScriptCall {
     /// 送ってから応答までの上限。watchdog も同じ deadline で V8 を止める。capability 付きの op の待ちも
     /// この deadline で `timeout` になる。
     pub timeout: Duration,
-    /// capability 付きの op の送り先（付記 S4-12）。無ければその要求の op は `exception`。
-    /// 純粋判定の領域は `None` を渡す。
-    pub host_sink: Option<HostSink>,
 }
 
 /// 1 回の呼び出しの結果。
@@ -238,7 +235,17 @@ impl ScriptRuntimeHandle {
     ///
     /// この future を途中で落とすと、actor は後から来た結果を捨てる（cancel）。
     pub async fn call(&self, call: ScriptCall) -> Result<ScriptReply, ScriptError> {
-        let result = self.call_inner(call).await;
+        self.call_with_host_sink(call, None).await
+    }
+
+    /// [`Self::call`] に、capability 付きの op の送り先（付記 S4-12）を添えて送る。
+    /// `host_sink` が `None` の要求の op は `exception`。純粋判定の領域は [`Self::call`] を使う。
+    pub async fn call_with_host_sink(
+        &self,
+        call: ScriptCall,
+        host_sink: Option<HostSink>,
+    ) -> Result<ScriptReply, ScriptError> {
+        let result = self.call_inner(call, host_sink).await;
         let counter = match &result {
             Ok(_) => None,
             Err(ScriptError::Busy) => Some(&self.inner.counters.busy),
@@ -251,7 +258,11 @@ impl ScriptRuntimeHandle {
         result
     }
 
-    async fn call_inner(&self, call: ScriptCall) -> Result<ScriptReply, ScriptError> {
+    async fn call_inner(
+        &self,
+        call: ScriptCall,
+        host_sink: Option<HostSink>,
+    ) -> Result<ScriptReply, ScriptError> {
         let size = input_size(&call.domain, &call.input);
         let limit = self.inner.limits.input_limit_bytes;
         if size > limit {
@@ -265,7 +276,7 @@ impl ScriptRuntimeHandle {
             domain: call.domain,
             input: call.input,
             scope_task_ids: call.scope_task_ids,
-            host_sink: call.host_sink,
+            host_sink,
             deadline: deadline.into_std(),
             reply: reply_tx,
         };

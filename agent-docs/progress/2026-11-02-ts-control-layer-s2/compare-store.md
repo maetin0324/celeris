@@ -23,7 +23,7 @@ updated: 2026-11-02
   - `script_domain_set_mode`: 1 つの IMMEDIATE transaction で、`UPDATE … WHERE domain=? AND version=?` の CAS と `script_domain_events` への `Event::ScriptDomainModeChanged` の追記を行う。`canary`・`ts` は `ModeNotEnabled` で拒み、表を変えない。同じ mode・同じ generation は `Unchanged`（表も記録も変えない）。`compare` は `loaded` で manifest の `domains` にその領域がある generation を要る。
   - `script_compare_append`: 同じ task・同じ `domain` の直前の記録と `generation`・`input_digest`・`outcome` が同じなら追記しない。
 - `Event` に `ScriptCompareRecorded`（record を flatten）と `ScriptDomainModeChanged` を足した。状態は変えない。
-- 範囲外の追従（build と試験を通すために必須だった。下の「未解決」1）:
+- Event の追加に伴う追従（replan で範囲内になった）:
   - `crates/task-api/src/query.rs`・`query/tests.rs`: `EVENT_TYPES`（84 → 86）と網羅 match の `event_type_name`。
   - `web/api/generated/{schema.json,types.ts}`（`node web/scripts/gen-types.mjs`）・`web/api/realtime/event-kinds.ts`・`invalidation-map.ts`（両種とも `T` だけ）。
   - `crates/campaign/src/ops_r1_trace.rs`: schema 版の固定 102 を `SUPPORTED_SCHEMA_VERSIONS = [102, 103]` にした。103 は `script_*` の表を足しただけで、trace が読む表・欄は同じ。凍結した 102 の DB は今までどおり読める。`crates/celeris/tests/ops_r1_trace.rs` の期待値は `task_core::SCHEMA_VERSION` にした。
@@ -47,13 +47,14 @@ updated: 2026-11-02
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - `cargo nextest run -p task-core -E 'test(script_domain) | test(script_compare)'` — exit 0、17 passed。
-- `bash scripts/dev/test-affected.sh` — 結果は報告本文に書く（Cargo.lock は変えていないが task-core の変更で逆依存の全 crate と web が対象）。
+- `bash scripts/dev/test-affected.sh` — exit 0。cargo 6903 passed・21 skipped、web 697 passed（task-core の変更で逆依存の全 crate と web が対象）。
+- 範囲 check（replan 後の計画のもの）— exit 0、範囲外の path なし。
 - `cargo clippy --workspace -- -D warnings` — exit 0。
 - `cargo fmt --all -- --check` — exit 0。
 - web: `pnpm exec tsc -b` exit 0、`pnpm exec vitest run api/realtime` 61 passed。
 
 ## 未解決
-1. この unit の範囲 check は `crates/task-core/`・`docs/api/`・`web/src/`・`agent-docs/progress/`・境界 ADR だけを許す。`Event` の variant を足すと、`crates/task-api/src/query.rs` の網羅 match（compile が落ちる）、`web/api/`（生成型と event 種別の網羅の型検査）、`crates/campaign/src/ops_r1_trace.rs` と `crates/celeris/tests/ops_r1_trace.rs`（schema 版 102 の固定で試験が落ちる）も変える必要がある。web の生成物は `web/src/` ではなく `web/api/` にある。範囲 check に `crates/task-api/src/query.rs`・`crates/task-api/src/query/`・`web/api/`・`crates/campaign/src/ops_r1_trace.rs`・`crates/celeris/tests/ops_r1_trace.rs` を足す replan を申告した。
+1. 初回の run では範囲 check が `crates/task-api/src/query.rs`・`web/api/`・ops_r1_trace の 2 file を許さず、plan_issue で申告した。replan で範囲に足され、同じ commit のまま check を再実行して通った（下の証拠）。
 2. `cargo clippy --workspace --all-targets -- -D warnings` は、この unit が触っていない `crates/task-core/src/chat/plan_rejudge_tests.rs:78` の `cloned_ref_to_slice_refs` で落ちる（必須の検査は `--all-targets` なしで、こちらは exit 0）。
 
 ## 提案

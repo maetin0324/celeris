@@ -41,7 +41,12 @@ updated: 2026-11-02
 1. `phase s2: host-adapter: PolicyScript を ScriptRuntimeHandle で実装し daemon から注入、本物の host で試す`
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-EVIDENCE
+- `cd control-ts && corepack pnpm@12.6.0 install --offline --frozen-lockfile && corepack pnpm@12.6.0 run bundle && cd .. && CELERIS_SCRIPT_REQUIRE_BUNDLE=1 cargo nextest run -p celeris --test script_compare_lane_rules` — exit 0、5 passed、0 skipped。
+- dist を退避して実行: env 無しは dist を使う 3 試験が SKIP を出して抜け、exit 0。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` では同じ 3 試験が失敗する。
+- `bash scripts/dev/test-affected.sh` — exit 0。source-size gate は 0 failure。対象は celeris・celerisctl、853 passed、0 skipped。
+- `cargo clippy --workspace -- -D warnings` — exit 0。`cargo clippy -p celeris --lib --test script_compare_lane_rules -- -D warnings` — exit 0。`cargo fmt --all -- --check` — exit 0。
+- 範囲 check（計画のもの）— exit 0、範囲外の path なし。
+- `cargo clippy -p celeris --tests` は `campaign_lock_e2e` の `duplicate_mod` で落ちる。この unit が触っていない試験で、検査コマンドの対象外。
 
 ## 未解決
 1. `release.sh` と `test-affected.sh` は `control-ts/dist` を作らないので、dist が無い環境では dist を使う 3 試験が SKIP になる。release gate で `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` にするかは close unit で決める（下の提案 1）。範囲外なのでここでは変えていない。

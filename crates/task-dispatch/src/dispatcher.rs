@@ -160,6 +160,10 @@ pub use cluster::{
     TUNNEL_PROBE_MAX_INTERVAL_SECS, TunnelEvent, TunnelEventKind, TunnelForwardEnsurer,
     TunnelListenerProbe, TunnelProbe,
 };
+pub use dispatch_run::DispatchRoutingSettings;
+pub use lane_assist::{
+    BoardCall, BoardItem, CallProvenance, ClassificationBoard, lane_facts, task_routing_override,
+};
 pub use route_failure::{FailureAction, FailureOrigin, classify_failure, provider_failure_outcome};
 pub use route_launch::{
     LaunchAdmission, RouteLaunchError, admit_by_availability, selected_llm_route,
@@ -168,13 +172,6 @@ pub use route_select::{
     RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for, route_select,
 };
 pub use route_select::{account_adapter_for_source_kind, source_account_pool};
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct DispatchRoutingSettings {
-    pub escalation: task_core::EscalationThresholds,
-}
-pub use lane_assist::{
-    BoardCall, BoardItem, CallProvenance, ClassificationBoard, lane_facts, task_routing_override,
-};
 pub use snapshot::SnapshotPublisher;
 
 #[cfg(test)]
@@ -1465,6 +1462,7 @@ pub struct Dispatcher {
     quota_activity: crate::accounts::QuotaActivity,
     /// ADR-0074 D4.2（Phase F3 quota）: `estimated` の較正材料（source × 窓ごとの直近 `measured`）。
     quota_calibration: crate::accounts::QuotaCalibrationBook,
+    script_compare: dispatch_run::ScriptCompareState,
 }
 
 impl Drop for Dispatcher {
@@ -1691,6 +1689,7 @@ impl Dispatcher {
             last_cluster_tunnel_refresh: None,
             quota_activity: crate::accounts::QuotaActivity::new(),
             quota_calibration: crate::accounts::QuotaCalibrationBook::new(),
+            script_compare: Default::default(),
         }
     }
 

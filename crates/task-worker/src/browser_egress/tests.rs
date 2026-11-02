@@ -333,18 +333,16 @@ async fn actual_dns_transport_refuses_private_ipv6_and_rebinding() {
 
 #[tokio::test]
 async fn denied_origin_never_reaches_even_the_configured_dns_socket() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    // Not 127.0.0.1: strays aimed at a dropped 127.0.0.1 port cannot land here, so
+    // any connection at all is the proxy's and one observation is enough.
+    let listener = TcpListener::bind((UNREACHED_LOOPBACK, 0)).await.unwrap();
     let (mut client, mut server) = UnixStream::pair().unwrap();
     client.write_all(&connect("evil.com:443")).await.unwrap();
     assert_eq!(
         destination(&mut server, &policy(), listener.local_addr().unwrap()).await,
         Err(EgressError::Denied)
     );
-    assert!(
-        timeout(Duration::from_millis(30), listener.accept())
-            .await
-            .is_err()
-    );
+    assert_eq!(observe_unreached(&listener, "evil").await, Unreached::Quiet);
 }
 
 #[tokio::test]
@@ -934,27 +932,241 @@ async fn egress_get_serves_one_request_per_connection() {
     assert!(!seen.contains("/b"), "{seen}");
 }
 
-#[tokio::test]
-async fn egress_get_switching_origin_on_the_same_connection_never_connects() {
+/// A loopback address other than 127.0.0.1, for listeners that must see nothing.
+const UNREACHED_LOOPBACK: &str = "127.83.0.1";
+
+/// A real regression connects on every attempt, a stray only by chance.
+const NEVER_CONNECTS_ATTEMPTS: u32 = 3;
+
+/// Upper limit for reading one accepted connection. Only a silent connection that
+/// stays open waits this long, and it then counts as `Unreached::Unmarked`.
+const MARKER_READ_LIMIT: Duration = Duration::from_secs(2);
+
+/// What a listener that must stay untouched saw.
+#[derive(Debug, PartialEq, Eq)]
+enum Unreached {
+    Quiet,
+    /// Connections came but none carried the marker: possibly strays.
+    Unmarked,
+    Marked,
+}
+
+/// Why `never_connects` judged that the proxy reached the listener.
+#[derive(Debug, PartialEq, Eq)]
+enum Reached {
+    Marker { attempt: u32 },
+    EveryAttempt,
+}
+
+async fn carries_marker(mut socket: TcpStream, marker: &str) -> bool {
+    let reading = async {
+        let mut seen = vec![];
+        let mut chunk = [0u8; 4096];
+        loop {
+            match socket.read(&mut chunk).await {
+                Ok(0) | Err(_) => return false,
+                Ok(n) => seen.extend_from_slice(&chunk[..n]),
+            }
+            if seen
+                .windows(marker.len())
+                .any(|window| window == marker.as_bytes())
+            {
+                return true;
+            }
+        }
+    };
+    timeout(MARKER_READ_LIMIT, reading).await.unwrap_or(false)
+}
+
+/// Reports every connection made before this call, without waiting for a quiet
+/// period: our own sentinel connection queues behind them, so accepting up to it
+/// has seen them all. Call this after the code under test has finished.
+async fn observe_unreached(listener: &TcpListener, marker: &str) -> Unreached {
+    let sentinel = TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let sentinel = sentinel.local_addr().unwrap();
+    let mut seen = Unreached::Quiet;
+    loop {
+        let (socket, peer) = timeout(Duration::from_secs(30), listener.accept())
+            .await
+            .expect("the sentinel connection is in the accept queue")
+            .unwrap();
+        if peer == sentinel {
+            return seen;
+        }
+        if carries_marker(socket, marker).await {
+            return Unreached::Marked;
+        }
+        seen = Unreached::Unmarked;
+    }
+}
+
+/// Runs `scenario(attempt, port, marker)`, which sends `marker` to the port only if
+/// the proxy wrongly connects there, then looks at what the listener got. A marked
+/// connection fails at once. An unmarked one may be a stray from elsewhere on the
+/// host (a probe of a port that was bound and dropped), so the whole scenario runs
+/// again on a new port. Returns the attempt that stayed quiet.
+async fn never_connects<F, Fut>(mut scenario: F) -> Result<u32, Reached>
+where
+    F: FnMut(u32, u16, String) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    // Held until the end so that each attempt really gets a new port.
+    let mut used = vec![];
+    for attempt in 1..=NEVER_CONNECTS_ATTEMPTS {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let marker = format!(
+            "/egress-never-reached-{}-{attempt}-{port}",
+            std::process::id()
+        );
+        scenario(attempt, port, marker.clone()).await;
+        match observe_unreached(&listener, &marker).await {
+            Unreached::Quiet => return Ok(attempt),
+            Unreached::Marked => return Err(Reached::Marker { attempt }),
+            Unreached::Unmarked => used.push(listener),
+        }
+    }
+    Err(Reached::EveryAttempt)
+}
+
+/// Two pipelined GETs on one connection: the allowed fixture, then `marker` on the
+/// other origin. Only the first may be served.
+async fn switching_origin_exchange(other_port: u16, marker: &str) {
     let (port, origin) = http_origin(REPLY, "GET", "/fixture").await;
-    let other = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let other_port = other.local_addr().unwrap().port();
     let mut policy = loopback_policy(port);
+    policy.allow.insert(format!("127.0.0.1:{other_port}"));
     policy
         .test_loopback_allow
         .insert(format!("127.0.0.1:{other_port}"));
     let request = format!(
         "GET http://127.0.0.1:{port}/fixture HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n\
-         GET http://127.0.0.1:{other_port}/ HTTP/1.1\r\nHost: 127.0.0.1:{other_port}\r\n\r\n"
+         GET http://127.0.0.1:{other_port}{marker} HTTP/1.1\r\nHost: 127.0.0.1:{other_port}\r\n\r\n"
     );
     let (output, result, _) = forward_exchange(request.into_bytes(), policy).await;
     assert_eq!(result, Ok(()));
     assert_eq!(output, REPLY);
     origin.await.unwrap();
-    assert!(
-        timeout(Duration::from_millis(50), other.accept())
-            .await
-            .is_err()
+}
+
+#[tokio::test]
+async fn egress_get_switching_origin_on_the_same_connection_never_connects() {
+    let verdict = never_connects(|_, other_port, marker| async move {
+        switching_origin_exchange(other_port, &marker).await;
+    })
+    .await;
+    assert!(verdict.is_ok(), "{verdict:?}");
+}
+
+#[tokio::test]
+async fn egress_stray_on_the_first_attempt_only_still_passes() {
+    let held = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
+    let strays = held.clone();
+    let verdict = never_connects(move |attempt, other_port, marker| {
+        let strays = strays.clone();
+        async move {
+            if attempt == 1 {
+                // Closed at once, carrying other bytes, and open and silent.
+                let address = ("127.0.0.1", other_port);
+                drop(TcpStream::connect(address).await.unwrap());
+                let mut noise = TcpStream::connect(address).await.unwrap();
+                noise.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
+                drop(noise);
+                let silent = TcpStream::connect(address).await.unwrap();
+                strays.lock().unwrap().push(silent);
+            }
+            switching_origin_exchange(other_port, &marker).await;
+        }
+    })
+    .await;
+    // 3 only if a real stray also hit attempt 2; 1 would mean the strays went unseen.
+    assert!(matches!(verdict, Ok(2 | 3)), "{verdict:?}");
+    assert_eq!(held.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn egress_stray_quiet_listener_stops_at_the_quiet_attempt() {
+    let mut calls = 0;
+    let verdict = never_connects(|_, _, _| {
+        calls += 1;
+        async {}
+    })
+    .await;
+    // Normally 1; a real stray can add attempts, and the verdict counts the same ones.
+    assert_eq!(verdict, Ok(calls));
+}
+
+#[tokio::test]
+async fn egress_stray_connection_on_every_attempt_fails() {
+    let mut ports = vec![];
+    let verdict = never_connects(|_, port, _| {
+        ports.push(port);
+        async move {
+            drop(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+        }
+    })
+    .await;
+    assert_eq!(verdict, Err(Reached::EveryAttempt));
+    assert_eq!(ports.len(), NEVER_CONNECTS_ATTEMPTS as usize);
+    ports.sort_unstable();
+    ports.dedup();
+    assert_eq!(ports.len(), NEVER_CONNECTS_ATTEMPTS as usize);
+}
+
+#[tokio::test]
+async fn egress_stray_marker_fails_on_the_first_attempt() {
+    let mut calls = 0;
+    let verdict = never_connects(|_, port, marker| {
+        calls += 1;
+        async move {
+            // A stray queued ahead of the marked connection does not hide it.
+            drop(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+            let mut proxy = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let request = format!("GET {marker} HTTP/1.1\r\n\r\n");
+            proxy.write_all(request.as_bytes()).await.unwrap();
+        }
+    })
+    .await;
+    assert_eq!(verdict, Err(Reached::Marker { attempt: 1 }));
+    assert_eq!(calls, 1);
+}
+
+/// The marker has to survive what the real proxy does to a request, or a real
+/// regression would look like a stray.
+#[tokio::test]
+async fn egress_stray_marker_survives_the_real_forward_path() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let marker = format!("/egress-never-reached-{port}");
+    let policy = loopback_policy(port);
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let job = tokio::spawn(async move { serve_recorded(server, &policy).await });
+    let request =
+        format!("GET http://127.0.0.1:{port}{marker} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+    client.write_all(request.as_bytes()).await.unwrap();
+    timeout(Duration::from_secs(60), async {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            if carries_marker(socket, &marker).await {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the proxy forwards the marked request");
+    job.abort();
+}
+
+#[tokio::test]
+async fn egress_stray_to_127_0_0_1_cannot_reach_the_other_loopback_listener() {
+    let listener = TcpListener::bind((UNREACHED_LOOPBACK, 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // Refused unless something else holds this port on 127.0.0.1; either is fine.
+    let _ = TcpStream::connect(("127.0.0.1", port)).await;
+    assert_eq!(
+        observe_unreached(&listener, "marker").await,
+        Unreached::Quiet
     );
 }
 

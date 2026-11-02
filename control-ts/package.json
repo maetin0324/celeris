@@ -1,0 +1,22 @@
+{
+  "name": "celeris-control-ts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Celeris の TS 制御層（境界 ADR 2026-11-02）。型検査と bundle を分け、daemon は dist の ESM bundle と manifest だけを読む",
+  "packageManager": "pnpm@12.6.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "gen:types": "node scripts/gen-host-types.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run && node --test scripts/*.test.mjs",
+    "bundle": "node scripts/build-bundle.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
+  }
+}

@@ -5,9 +5,14 @@
 //! `deno_core` と `v8` の型はこの crate の外に出さない。
 
 mod actor;
+pub mod dto;
 mod error;
 mod handle;
+mod loader;
+mod ops;
 mod watchdog;
+
+pub use ops::{DISABLED_BUILTIN_OPS, domain_capabilities};
 
 pub use error::ScriptError;
 pub use handle::{

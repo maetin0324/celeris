@@ -3,7 +3,7 @@ tasks: [01M6EVP95S9VM3DBMZFRD8FS35]
 ---
 # ADR 2026-11-02: TS だけの変更の高速検証経路（変更の 3 分類・script-host-runner・cache key・grader の保護・計測の定義）
 
-- 状態: 採用（設計）。この ADR ではコードを変えない。実装は task 01M6EVP95S9VM3DBMZFRD8FS35（親 task 01M6DCMB75G5F0DSE58ZNZMBAK の S3）の
+- 状態: 採用（実装済み。実装との違いは末尾の付記 wire・付記 close）。実装は task 01M6EVP95S9VM3DBMZFRD8FS35（親 task 01M6DCMB75G5F0DSE58ZNZMBAK の S3）の
   unit runner・verify-sh・wire・bench・measure-warm・measure-cold。
 - 関係: [TS 制御層の境界 ADR](2026-11-02-ts-control-layer-boundary.md)（(b) 接続・(d) 配備・(f) 数値目標・付記 S2-2〜S2-12）、
   [全体試験は release だけ](2026-10-20-full-tests-at-release-only.md)、
@@ -289,3 +289,39 @@ fixture を手で書き換えた変更は `host-api` に分類されるうえ、
   先に段 5（TS の単体試験）で落ちるので、同じ壊れた bundle を runner（`run --suite golden`）に直に渡し、Rust の採点だけでも
   `mismatch` で exit 1 になることを別に確かめる。`compare.mjs`・fixture・`package.json`・`bundle.config.json` の編集は host-api になることと、
   領域を消した bundle を runner が exit 3 で拒否することを確かめる。
+
+## 付記 close（2026-11-02、unit close の実装との突き合わせ）
+(1)〜(7) を `scripts/dev/ts-verify.sh`・`scripts/dev/script-runner-cache.sh`・`scripts/dev/test-ts-verify.sh`・`scripts/dev/test-affected.sh`・
+`scripts/dev/edit-activate-baseline.sh`・`crates/script-runtime/src/bin/script-host-runner.rs` と突き合わせた。下に挙げない決定は本文のとおり実装されている。
+本文と違う点は、この付記を正とする。実際に走らせた結果は [S3 の進捗](../progress/2026-11-02-ts-control-layer-s3.md)。
+
+- **close-1（(1)-1・(5) の helper）**: `scripts/dev/ts-verify-graph.mjs` は無い。import グラフの計算は `ts-verify.sh` が `$TMPDIR` の使い捨て dir に書く
+  heredoc（`graph.mjs`）で行い、規則は (1)-1 のとおり。合否を決める物が `scripts/dev/ts-verify.sh` にあることは変わらない。
+- **close-2（(1)-1 の cold の単体試験）**: 単体試験の選択は段 `classify` で行う。`node_modules` が無い cold では import グラフを計算できないので、常に全部を走らせる
+  （「計算が失敗したら全部」の規則どおり）。
+- **close-3（(3) の runner の細部）**: 判定に `host_error`（`Busy`・`GenerationGone`・`InputTooLarge`。失敗に数える）と `too_few_rows` を足した。
+  `route_priority` の候補は `{source, model}` の順に組み直してから比べる（`classify_route_priority` が DTO で比べるのと同じく、欄の順を見ない）。
+  安全シナリオの行は manifest 2 件と壊した入力 15 件（`lane_rules` 7・`route_priority` 8）の計 17 件。シナリオ 3（空の scope）と 4（時間）は別の行を持たず、
+  各呼び出しの判定 `denied`・`timeout` で数える。exit 3 でも stdout に `{ok:false, exit, error}` を出す。
+- **close-4（(4)）**: `script-runner-cache.sh` に key の元を出す子 command `inputs` を足した。1 個の dir は 74 MB（`du -sh`）、`ensure` の `build_secs` は 60.3 秒だった。
+  (4) の末尾の「手で書き換えた fixture は `cmp` でも落ちる」は段 6 の話ではない。fixture の変更は `host-api` なので `ts-verify.sh` は段 0 で exit 0 で抜け、段 6 に届かない。
+  検出するのは `test-affected.sh` が対象に足す `task-core` の試験 `script_fixtures`（exit 100 を確かめた）と、key が変わったときの `ensure` の `cmp` である。
+- **close-5（(5) の試験の 8 場合）**: `test-ts-verify.sh`（12 件）の確認は本文より狭い。足りない部分は unit close が写しで 1 回だけ確かめた（試験には入っていない）。
+  | 場合 | 試験が確かめること | 本文との違いと、写しで確かめた結果 |
+  |---|---|---|
+  | 2 | 規則を壊した編集の exit 1 と、同じ bundle の runner の mismatch | 「試験を消しても exit 1」は無い。試験 file を消すと `host-api` になり、`ts-verify.sh` は exit 0 で「従来の経路へ」と出す。このとき `compare.test.mjs`・`compare.mjs`・runner はどれも exit 1（1,458 件の mismatch）。試験の中身だけを無害に書き換えると `ts-only` のままで、段 unit の `compare.test.mjs` により exit 1 |
+  | 3 | `compare.mjs` の書き換えで `host-api` | runner の exit 1 は場合 B が確かめる（同じ壊し方） |
+  | 4 | `bundle.config.json` から消すと runner が exit 3 | `src/domains/index.ts` から消す編集は試験に無い。これは `ts-only` で、段 unit で exit 1。同じ bundle の runner は領域の検査ではなく `exception` 2,026 件の exit 1（manifest の領域の集合は `bundle.config.json` から作るため exit 3 にならない） |
+  | 5 | `host-api` と `cmp` の違い | 試験は `cmp` を直に呼ぶ。`ts-verify.sh` 自身は close-4 のとおり exit 0 で抜ける |
+- **close-6（(6) の `host-api`）**: 「key が変わるので TS の段も runner を作り直して走らせる」は、key の入力（`docs/api/script-host/host-v1.schema.json`・`crates/script-runtime/`・`crates/task-core/`・
+  `Cargo.lock`・ルート `Cargo.toml`）か検証の道具（`scripts/dev/` の 4 file）が変わったときだけ成り立つ。そのとき走るのは `test-ts-verify.sh` で、作業ツリーの写しに無害な編集を足して 10 段を通す。
+  `control-ts/src/host.d.ts`・`control-ts/scripts/**`・`control-ts/fixtures/**`・`control-ts/package.json` などの変更では key が変わらず、`test-ts-verify.sh` は走らない。
+  走るのは `celeris-script` と逆依存の cargo の試験と control-ts の型検査・単体試験（fixture では `script_fixtures` の crate も）である（進捗の未解決に残す）。
+- **close-7（(6) の nightly）**: nightly の gate はこの repo で見つからなかった（`git grep -il nightly -- scripts config` の当たりは `edit-activate-baseline.sh` の「nightly を使わない」という注記だけで、`.github/` は無い）。全体試験の gate は `scripts/selfdeploy/release.sh` だけで、
+  `git diff` で `scripts/selfdeploy/` に差分が無いことを確かめた。
+- **close-8（(7) の prime と記録の形）**: warm の prime は「編集なしで 1 回」ではなく、`step=runner-ensure` と、編集を当てて 1 回走らせる `step=ts-verify` の 2 行にした。編集なしでは ts-verify が分類 `none` で抜け、何も温まらないため。
+  cold の prime は `step=runner-ensure` の 1 行。cache が当たれば `runner_build_secs` は 0.2 秒ほどで、作り直しの秒ではない（作り直しは wire の 60.6 秒）。
+  記録は S0 の 1 行 1 段と違い、1 試行 1 行（`kind=trial`）で段の秒を `stages` に持つ。cargo と link の数が試行全体の値で、段ごとに分けられないため。
+  `--check-targets` は試行数の下限を持たない。20 試行であることは `modes.<mode>.trials` で確かめる。
+- **close-9（「境界 ADR との関係」の違い 1・2）**: 違い 1（activate の代用）と違い 2（daemon の検査）は境界 ADR の [付記 S3](2026-11-02-ts-control-layer-boundary.md) に書いた。
+  違い 2 の答え: daemon・`manifest.rs` に S2-7 の拒否は無い。領域の値の検査の写しの一致を固定する試験も無い。手で比べると `task-dispatch::script_policy` の上限（`RULE_ID_MAX` 128・`CONDITION_MAX` 512・`ROUTE_PRIORITY_CANDIDATES_MAX` 256）と本文 (3) の値は同じである。

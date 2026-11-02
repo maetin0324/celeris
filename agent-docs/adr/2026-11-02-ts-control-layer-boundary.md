@@ -463,3 +463,17 @@ TS の生の JSON の key 順・空白は deserialize で消えるので比較�
 | S2-8 | `denied_capability`・`denied_scope`（S2-9 の理由文で分ける）・`ceiling_exceeded`・`undeclared_candidate` | (2) `ceiling_exceeded` は今の `LaneCeiling::clamp` では起きない（許される lane が 1 つでもあれば clamp はそれを返す）。試験は「違反なし」だけを確かめる |
 | S2-9〜S2-11 | 付記のとおり | (3) compare の記録の `run_id` は `lane_rules` では `null`（`decide_lane` は run の id を作る前に走る）、`route_priority` では run の id |
 | 試験の dist | 本物の host の試験は `control-ts/dist` の manifest の domains が `bundle.config.json` と違えば SKIP、`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` で失敗 | (4) `release.sh`・`test-affected.sh` は dist を作らないので、dist の無い環境では 5 件が SKIP で通る。release gate への組み込みは別 task の候補 |
+
+## 付記 2026-11-02: S3 の高速検証経路との違い（S3 close、task 01M6EVP95S9VM3DBMZFRD8FS35）
+根拠は [TS だけの変更の高速検証の ADR](2026-11-02-ts-fast-verify.md) と [S3 の進捗](../progress/2026-11-02-ts-control-layer-s3.md)。
+
+- **(f) の edit→activate の定義**: S3 の計測（`policy-ts`）では「generation の load と `compare` での有効化」を、`script-host-runner activate` による一時 state dir への配備と load で代用した。
+  DB の `script_generations` の行と `script_domain_modes` の CAS は含まない。これらは Rust のコードで、TS だけの変更では変わらず、`crates/celeris/tests/script_compare_*` が受け持つ。
+  (f) の目標の判定はこの代用で行った（warm p50 5.031 秒・p95 7.406 秒、cold p95 11.525 秒。全 40 試行で cargo の起動 0 回・`link_count` 0）。
+- **(f) の cold**: S3 の cold は `control-ts/node_modules` を消した状態で、runner の cache は当たる。runner の作り直し（約 60 秒）を含む cold は測っていない。
+- **S2-7 の「許可表が空の領域の manifest が `capabilities` を宣言していたら load で拒否する」は実装されていない**（S2-12 の表は S2-7 の違いを「なし」としたが、この点が違う）。
+  `crates/celeris/src/daemon/script*.rs`・`crates/script-runtime/src/manifest.rs` にこの拒否は無い。manifest の `capabilities` は全領域の和で、領域ごとの宣言を持たないので、この形のままでは検査できない。
+  今の守りは次の 2 つで、どちらも S2-7 の拒否とは別の物である。
+  1. 実効の権限は `Grant::new` が「manifest の宣言 ∩ 領域の許可表」に絞る。`lane_rules`・`route_priority` の許可表は空なので、宣言があっても op を呼べない。
+  2. 検証の経路では、`script-host-runner` の安全シナリオが「和 ⊆ 各領域の許可表の和」を検査し、外れると exit 3 にする。daemon の経路にこの検査は無い。
+  S2-7 の末尾「要求ごとの context の分離を決めるまで、どの領域にも capability を許可しない」は変えない。拒否を実装するか S2-7 からこの文を消すかは、op を使う最初の領域（S4 の digest）の前に決める（S3 の進捗の提案）。

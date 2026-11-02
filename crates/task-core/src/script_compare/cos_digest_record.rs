@@ -9,7 +9,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{CompareError, CompareOutcome, ScriptDomain, sha256_digest, truncate_error_message};
+use super::{
+    CompareError, CompareOutcome, ScriptDomain, ScriptMode, sha256_digest, truncate_error_message,
+};
 use crate::chat::digest::CosDigestCommand;
 
 /// command 列の要約（本文を持たない）。
@@ -50,7 +52,7 @@ pub fn cos_digest_text_head(commands: &[CosDigestCommand]) -> Option<String> {
     })
 }
 
-/// Rust が apply した結果。
+/// apply した結果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CosDigestApplied {
@@ -60,7 +62,58 @@ pub struct CosDigestApplied {
     pub requeued: u64,
 }
 
-/// `script_compare_log.json` の 1 行（付記 S4-5）。
+/// その run に apply した command を出した側（付記 S4-15）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CosDigestAppliedBy {
+    Rust,
+    Ts,
+}
+
+impl CosDigestAppliedBy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::Ts => "ts",
+        }
+    }
+}
+
+/// mode `ts` で Rust の command を apply した理由（付記 S4-15）。`message` は 512 byte で切る。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestFallback {
+    /// `ts_error`・`invalid_output`・`run_outside_list`・`run_missing`・`run_unreadable`・`run_order`・
+    /// `mode_changed`・`unavailable`。
+    pub code: String,
+    pub message: String,
+}
+
+impl CosDigestFallback {
+    pub fn new(code: &str, message: &str) -> Self {
+        Self {
+            code: code.to_owned(),
+            message: truncate_error_message(message),
+        }
+    }
+}
+
+/// その run に関わる op 呼び出し 1 回（付記 S4-15）。本文は残さない。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestOpLog {
+    /// `cos_digest:list_runs`・`cos_digest:read_run`。
+    pub op: String,
+    /// `sha256:` + 要求の直列化の sha256。
+    pub request_digest: String,
+    /// `sha256:` + 応答（`{kind:"ok",value}`・`{kind:"error",error}`）の直列化の sha256。
+    pub reply_digest: String,
+    /// `ok`・`error`・`denied`・`memo`（memo から答えた 2 回目以降）。
+    pub outcome: String,
+    pub elapsed_us: u64,
+}
+
+/// `script_compare_log.json` の 1 行（付記 S4-5・S4-15）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CosDigestCompareRecord {
@@ -70,8 +123,18 @@ pub struct CosDigestCompareRecord {
     pub isolate_epoch: u64,
     pub bundle_sha256: String,
     pub host_api: String,
-    /// `cos_digest.digest_one`。
+    /// `cos_digest.pass`。
     pub call_site: String,
+    /// pass の始めに読んだ mode（`compare`・`ts`）。
+    pub mode: ScriptMode,
+    /// 同じ pass の行どうしで同じ値（ULID）。
+    pub pass_id: String,
+    /// その run に apply した command を出した側。`compare` では常に `rust`。
+    pub applied_by: CosDigestAppliedBy,
+    /// mode `ts` で Rust を apply した理由（`compare` と TS を apply した行では `null`）。
+    pub fallback: Option<CosDigestFallback>,
+    /// その run に関わる op 呼び出し（その pass の `list_runs` と、その run の `read_run`）。
+    pub ops: Vec<CosDigestOpLog>,
     pub thread_id: String,
     pub run_id: String,
     /// `sha256:` + `CosDigestInput` の直列化の sha256。

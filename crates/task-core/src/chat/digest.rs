@@ -344,3 +344,332 @@ pub fn validate_cos_digest_commands(
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------------------------
+// S4-12/S4-14 (ADR 2026-11-02-ts-control-layer-boundary): the digest pass as one async TS call.
+// The op DTOs (`cos_digest:list_runs`, `cos_digest:read_run`) and the pass output, and the pass
+// rules 7–9 on top of the per-run rules 1–6.
+// ---------------------------------------------------------------------------------------------
+
+/// `cos_digest:list_runs` request (no fields; the bound of 20 is Rust's constant).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestListRunsRequest {}
+
+/// One run waiting for its digest (`cos_triage_runs_without_digest`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestRunRef {
+    pub thread: String,
+    pub run_id: String,
+    pub run_state: String,
+}
+
+/// `cos_digest:list_runs` reply, in scan order (`started_at`, `run_id`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestListRunsReply {
+    pub runs: Vec<CosDigestRunRef>,
+}
+
+/// `cos_digest:read_run` request; the reply is a [`CosDigestInput`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestReadRunRequest {
+    pub thread: String,
+    pub run_id: String,
+}
+
+/// The commands of one run in a pass output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestPassRun {
+    pub run_id: String,
+    pub commands: Vec<CosDigestCommand>,
+}
+
+/// The output of `cosDigestPass(ctx)` (and of the Rust reference pass).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestPassOutput {
+    pub runs: Vec<CosDigestPassRun>,
+}
+
+/// One listed run and what its read gave (`None`: `read_run` failed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CosDigestPassRead {
+    pub run: CosDigestRunRef,
+    pub input: Option<CosDigestInput>,
+}
+
+/// Why a pass output must not be applied (S4-14). Any violation rejects the whole pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CosDigestPassViolation {
+    /// Rules 1–6 on the commands of one run.
+    Run {
+        run_id: String,
+        violation: CosDigestViolation,
+    },
+    /// Rule 7: a run id that is not in the pass's `list_runs` answer.
+    RunOutsideList { run_id: String },
+    /// Rule 8: a readable run is absent from the output or appears more than once.
+    RunMissing { run_id: String },
+    /// Rule 8: a run whose `read_run` failed appears in the output.
+    RunUnreadable { run_id: String },
+    /// Rule 9: the runs are not in the order of the `list_runs` answer.
+    RunOrder,
+}
+
+impl CosDigestPassViolation {
+    /// The `fallback.code` of the log line (S4-15).
+    pub fn fallback_code(&self) -> &'static str {
+        match self {
+            Self::Run { .. } => "invalid_output",
+            Self::RunOutsideList { .. } => "run_outside_list",
+            Self::RunMissing { .. } => "run_missing",
+            Self::RunUnreadable { .. } => "run_unreadable",
+            Self::RunOrder => "run_order",
+        }
+    }
+
+    /// The `safety_violations` code (`None` for format violations).
+    pub fn safety_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Run { violation, .. } => violation.code(),
+            Self::RunOutsideList { .. } => Some("run_outside_list"),
+            Self::RunMissing { .. } | Self::RunUnreadable { .. } | Self::RunOrder => None,
+        }
+    }
+
+    /// The run the violation names (`None` for the order rule).
+    pub fn run_id(&self) -> Option<&str> {
+        match self {
+            Self::Run { run_id, .. }
+            | Self::RunOutsideList { run_id }
+            | Self::RunMissing { run_id }
+            | Self::RunUnreadable { run_id } => Some(run_id),
+            Self::RunOrder => None,
+        }
+    }
+}
+
+impl std::fmt::Display for CosDigestPassViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Run { run_id, violation } => write!(f, "run {run_id}: {violation}"),
+            Self::RunOutsideList { run_id } => write!(f, "run {run_id} is not in list_runs"),
+            Self::RunMissing { run_id } => {
+                write!(f, "readable run {run_id} is not in the output exactly once")
+            }
+            Self::RunUnreadable { run_id } => {
+                write!(f, "run {run_id} could not be read but is in the output")
+            }
+            Self::RunOrder => f.write_str("runs are not in list_runs order"),
+        }
+    }
+}
+
+impl std::error::Error for CosDigestPassViolation {}
+
+/// The Rust reference pass: every readable run in list order, decided by [`cos_digest_decide`].
+pub fn cos_digest_pass_decide(reads: &[CosDigestPassRead]) -> CosDigestPassOutput {
+    CosDigestPassOutput {
+        runs: reads
+            .iter()
+            .filter_map(|r| r.input.as_ref())
+            .map(|input| CosDigestPassRun {
+                run_id: input.run_id.clone(),
+                commands: cos_digest_decide(input),
+            })
+            .collect(),
+    }
+}
+
+/// S4-14: rules 7–9 on the pass, then rules 1–6 on each run against its read snapshot.
+/// `reads` is the `list_runs` answer in order, each with its read (every listed run is read).
+pub fn validate_cos_digest_pass(
+    reads: &[CosDigestPassRead],
+    output: &CosDigestPassOutput,
+) -> Result<(), CosDigestPassViolation> {
+    for run in &output.runs {
+        if !reads.iter().any(|r| r.run.run_id == run.run_id) {
+            return Err(CosDigestPassViolation::RunOutsideList {
+                run_id: run.run_id.clone(),
+            });
+        }
+    }
+    for read in reads {
+        let n = output
+            .runs
+            .iter()
+            .filter(|r| r.run_id == read.run.run_id)
+            .count();
+        match (&read.input, n) {
+            (Some(_), 1) | (None, 0) => {}
+            (Some(_), _) => {
+                return Err(CosDigestPassViolation::RunMissing {
+                    run_id: read.run.run_id.clone(),
+                });
+            }
+            (None, _) => {
+                return Err(CosDigestPassViolation::RunUnreadable {
+                    run_id: read.run.run_id.clone(),
+                });
+            }
+        }
+    }
+    let expected = reads
+        .iter()
+        .filter(|r| r.input.is_some())
+        .map(|r| r.run.run_id.as_str());
+    if !expected.eq(output.runs.iter().map(|r| r.run_id.as_str())) {
+        return Err(CosDigestPassViolation::RunOrder);
+    }
+    for run in &output.runs {
+        let input = reads
+            .iter()
+            .find(|r| r.run.run_id == run.run_id)
+            .and_then(|r| r.input.as_ref());
+        if let Some(input) = input {
+            validate_cos_digest_commands(input, &run.commands).map_err(|violation| {
+                CosDigestPassViolation::Run {
+                    run_id: run.run_id.clone(),
+                    violation,
+                }
+            })?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod pass_tests {
+    use super::*;
+
+    fn read(run_id: &str, state: &str, readable: bool) -> CosDigestPassRead {
+        let run = CosDigestRunRef {
+            thread: "t".into(),
+            run_id: run_id.into(),
+            run_state: state.into(),
+        };
+        let input = readable.then(|| CosDigestInput {
+            thread: "t".into(),
+            run_id: run_id.into(),
+            run_state: state.into(),
+            reason: None,
+            items: Vec::new(),
+        });
+        CosDigestPassRead { run, input }
+    }
+
+    #[test]
+    fn cos_digest_pass_validation_rejects_each_rule() {
+        let reads = vec![
+            read("r1", "completed", true),
+            read("r2", "interrupted", true),
+            read("r3", "stopped", false),
+        ];
+        let good = cos_digest_pass_decide(&reads);
+        assert_eq!(good.runs.len(), 2);
+        assert_eq!(validate_cos_digest_pass(&reads, &good), Ok(()));
+        let code = |out: &CosDigestPassOutput| {
+            validate_cos_digest_pass(&reads, out)
+                .err()
+                .map(|v| (v.fallback_code(), v.safety_code()))
+        };
+        let with = |f: &dyn Fn(&mut CosDigestPassOutput)| {
+            let mut out = good.clone();
+            f(&mut out);
+            out
+        };
+        fn post(out: &mut CosDigestPassOutput) -> &mut CosDigestCommand {
+            &mut out.runs[0].commands[0]
+        }
+        // Rules 1–6 per run.
+        let rule1 = with(&|o| {
+            if let CosDigestCommand::PostDigest {
+                idempotency_key, ..
+            } = post(o)
+            {
+                *idempotency_key = "cos-triage-digest:other".into();
+            }
+        });
+        assert_eq!(code(&rule1), Some(("invalid_output", Some("key_mismatch"))));
+        let rule2 = with(&|o| {
+            if let CosDigestCommand::PostDigest { thread, .. } = post(o) {
+                *thread = "other".into();
+            }
+        });
+        assert_eq!(
+            code(&rule2),
+            Some(("invalid_output", Some("scope_mismatch")))
+        );
+        let rule3 = with(&|o| {
+            if let CosDigestCommand::PostDigest { cards, .. } = post(o) {
+                cards.push(ChatCard {
+                    kind: ChatCardKind::Question,
+                    id: "nope".into(),
+                    title: "x".into(),
+                    state: "running".into(),
+                    href: String::new(),
+                    actor: ChatActor::Cos,
+                    reason: None,
+                    operation_id: None,
+                });
+            }
+        });
+        assert_eq!(
+            code(&rule3),
+            Some(("invalid_output", Some("card_outside_items")))
+        );
+        let rule4 = with(&|o| {
+            o.runs[0].commands.push(CosDigestCommand::RequeueRun {
+                run_id: "r1".into(),
+            })
+        });
+        assert_eq!(
+            code(&rule4),
+            Some(("invalid_output", Some("requeue_state_invalid")))
+        );
+        let rule5 = with(&|o| {
+            let c = o.runs[0].commands[0].clone();
+            o.runs[0].commands.push(c);
+        });
+        assert_eq!(
+            code(&rule5),
+            Some(("invalid_output", Some("duplicate_command")))
+        );
+        let rule6 = with(&|o| o.runs[0].commands.clear());
+        assert_eq!(code(&rule6), Some(("invalid_output", None)));
+        // Rule 7.
+        let rule7 = with(&|o| {
+            let mut extra = o.runs[0].clone();
+            extra.run_id = "r9".into();
+            o.runs.push(extra);
+        });
+        assert_eq!(
+            code(&rule7),
+            Some(("run_outside_list", Some("run_outside_list")))
+        );
+        // Rule 8: a readable run missing, a readable run twice, an unreadable run present.
+        let missing = with(&|o| {
+            o.runs.remove(1);
+        });
+        assert_eq!(code(&missing), Some(("run_missing", None)));
+        let twice = with(&|o| {
+            let again = o.runs[0].clone();
+            o.runs.push(again);
+        });
+        assert_eq!(code(&twice), Some(("run_missing", None)));
+        let unreadable = with(&|o| {
+            o.runs.push(CosDigestPassRun {
+                run_id: "r3".into(),
+                commands: Vec::new(),
+            })
+        });
+        assert_eq!(code(&unreadable), Some(("run_unreadable", None)));
+        // Rule 9.
+        let order = with(&|o| o.runs.reverse());
+        assert_eq!(code(&order), Some(("run_order", None)));
+    }
+}

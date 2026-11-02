@@ -21,8 +21,8 @@ mod route_priority_fixture;
 use crate::model_policy::TaskFeatures;
 use crate::store::StoreError;
 pub use cos_digest_record::{
-    CosDigestApplied, CosDigestCommandsSummary, CosDigestCompareRecord, cos_digest_command_kind,
-    cos_digest_text_head,
+    CosDigestApplied, CosDigestAppliedBy, CosDigestCommandsSummary, CosDigestCompareRecord,
+    CosDigestFallback, CosDigestOpLog, cos_digest_command_kind, cos_digest_text_head,
 };
 pub use route_priority_fixture::route_priority_fixture_jsonl;
 

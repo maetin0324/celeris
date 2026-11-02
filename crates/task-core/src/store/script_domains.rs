@@ -315,6 +315,7 @@ impl SqliteStore {
     ) -> Result<bool, StoreError> {
         let outcome = serde_json::to_value(record.outcome)?;
         let outcome = outcome.as_str().unwrap_or_default().to_owned();
+        let applied_by = record.applied_by.as_str();
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists = tx
@@ -323,7 +324,8 @@ impl SqliteStore {
                  WHERE thread_id = ?1 AND run_id = ?2 AND domain = ?3 \
                  AND json_extract(json, '$.generation') = ?4 \
                  AND json_extract(json, '$.input_digest') = ?5 \
-                 AND json_extract(json, '$.outcome') = ?6 LIMIT 1",
+                 AND json_extract(json, '$.outcome') = ?6 \
+                 AND json_extract(json, '$.applied_by') = ?7 LIMIT 1",
                 params![
                     record.thread_id,
                     record.run_id,
@@ -331,6 +333,7 @@ impl SqliteStore {
                     record.generation,
                     record.input_digest,
                     outcome,
+                    applied_by,
                 ],
                 |_| Ok(()),
             )

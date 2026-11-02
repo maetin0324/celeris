@@ -612,7 +612,12 @@ fn script_compare_log_appends_once_per_outcome_and_is_append_only() {
         isolate_epoch: 1,
         bundle_sha256: "ab".repeat(32),
         host_api: "1.0.0".into(),
-        call_site: "cos_digest.digest_one".into(),
+        call_site: "cos_digest.pass".into(),
+        mode: crate::script_compare::ScriptMode::Ts,
+        pass_id: "p1".into(),
+        applied_by: crate::script_compare::CosDigestAppliedBy::Ts,
+        fallback: None,
+        ops: Vec::new(),
         thread_id: "t1".into(),
         run_id: "r1".into(),
         input_digest: "sha256:11".into(),
@@ -635,8 +640,13 @@ fn script_compare_log_appends_once_per_outcome_and_is_append_only() {
     let mut other = record.clone();
     other.outcome = CompareOutcome::Mismatch;
     assert!(store.script_compare_log_append(&other, now).unwrap());
+    // S4-15: `applied_by` is part of the duplicate key.
+    let mut by_rust = record.clone();
+    by_rust.applied_by = crate::script_compare::CosDigestAppliedBy::Rust;
+    assert!(store.script_compare_log_append(&by_rust, now).unwrap());
+    assert!(!store.script_compare_log_append(&by_rust, now).unwrap());
     let rows = store.script_compare_log(Some("r1")).unwrap();
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 3);
     assert_eq!(rows[0].record, record);
     assert_eq!(rows[1].record, other);
     assert!(store.script_compare_log(Some("r2")).unwrap().is_empty());

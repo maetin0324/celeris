@@ -174,11 +174,7 @@ impl PolicyScript for Slow {
         self.lane_rules(LaneRulesInput::redacted(&features()), deadline)
     }
 
-    fn cos_digest(
-        &self,
-        _input: task_core::chat::digest::CosDigestInput,
-        deadline: Duration,
-    ) -> PolicyFuture<'_> {
+    fn cos_digest_pass(&self, _call: CosDigestPassCall, deadline: Duration) -> PolicyFuture<'_> {
         self.lane_rules(LaneRulesInput::redacted(&features()), deadline)
     }
 }

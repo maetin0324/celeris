@@ -1,17 +1,18 @@
 //! `task_dispatch::PolicyScript` の本物の実装（境界 ADR 2026-11-02 付記 S2-6）。`ScriptRuntimeHandle` で TS を呼ぶ。
 //!
 //! 入出力は DTO だけで、Rust の判定を変えない。結果の分類と記録は dispatcher が行う。
-//! `lane_rules`・`route_priority`・`cos_digest` は op を呼ばない純粋関数なので、要求の scope は空で送る（S2-7・S4-6）。
+//! `lane_rules`・`route_priority` は op を呼ばない純粋関数なので、要求の scope は空で送る（S2-7）。
+//! `cos_digest` は pass 1 回を要求 1 件として host sink 付きで送り、op を dispatcher の op server へ写す（付記 S4-12）。
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use celeris_script::dto::HOST_API_VERSION;
-use celeris_script::{ScriptCall, ScriptError, ScriptRuntimeHandle};
-use task_core::chat::digest::CosDigestInput;
+use celeris_script::dto::{Capability, HOST_API_VERSION, HostError, HostErrorCode, HostResult};
+use celeris_script::{HostOpCall, ScriptCall, ScriptError, ScriptRuntimeHandle};
 use task_core::script_compare::{LaneRulesInput, RoutePriorityInput, ScriptDomain};
 use task_dispatch::script_policy::{
-    PolicyFuture, PolicyReply, PolicyScript, PolicyScriptBundle, PolicyScriptError,
+    CosDigestOp, CosDigestOpCall, CosDigestOpReply, CosDigestPassCall, PolicyFuture, PolicyReply,
+    PolicyScript, PolicyScriptBundle, PolicyScriptError,
 };
 
 /// 読み込んだ bundle の actor へ判定を送る口。clone した handle を持つだけで、actor の停止は持ち主が決める。
@@ -54,13 +55,71 @@ impl PolicyScript for ScriptPolicy {
         )
     }
 
-    fn cos_digest(&self, input: CosDigestInput, deadline: Duration) -> PolicyFuture<'_> {
-        self.call_domain(
-            ScriptDomain::CosDigest,
-            serde_json::to_value(&input),
-            deadline,
-        )
+    /// 付記 S4-12: pass 1 回を `cos_digest` の要求 1 件として送る。TS の op（host sink に届く `HostOpCall`）は
+    /// dispatcher の op server（`call.sink`）へ写し、応答を `HostResult` の形で返す。写しは呼び出しと同じ
+    /// future の中で走る（別の task を作らない）。呼び出しが終われば写しも止まる。
+    fn cos_digest_pass(&self, call: CosDigestPassCall, deadline: Duration) -> PolicyFuture<'_> {
+        Box::pin(async move {
+            let (host_sink, mut host_rx) = celeris_script::host_sink();
+            let request = ScriptCall {
+                domain: ScriptDomain::CosDigest.as_str().to_owned(),
+                input: serde_json::json!({}),
+                scope_task_ids: BTreeSet::new(),
+                timeout: deadline,
+            };
+            let reply = self.handle.call_with_host_sink(request, Some(host_sink));
+            tokio::pin!(reply);
+            let result = loop {
+                tokio::select! {
+                    result = &mut reply => break result,
+                    Some(op) = host_rx.recv() => forward_op(&call, op).await,
+                }
+            };
+            self.reply(result)
+        })
     }
+}
+
+/// TS の op 1 回を dispatcher の op server へ写す。送れない・答えが無いときは `terminated`。
+async fn forward_op(call: &CosDigestPassCall, op: HostOpCall) {
+    let kind = match op.op {
+        Capability::CosDigestListRuns => CosDigestOp::ListRuns,
+        Capability::CosDigestReadRun => CosDigestOp::ReadRun,
+        other => {
+            let _ = op.reply.send(HostResult::Error {
+                error: HostError::new(
+                    HostErrorCode::Denied,
+                    format!("{} is not a cos_digest op", other.as_str()),
+                ),
+            });
+            return;
+        }
+    };
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let sent = call
+        .sink
+        .send(CosDigestOpCall {
+            op: kind,
+            request: op.request,
+            reply: tx,
+        })
+        .await;
+    let answer = match (sent, rx.await) {
+        (Ok(()), Ok(CosDigestOpReply::Ok(value))) => HostResult::Ok { value },
+        (Ok(()), Ok(CosDigestOpReply::Error { code, message })) => HostResult::Error {
+            error: HostError::new(host_code(&code), message),
+        },
+        _ => HostResult::Error {
+            error: HostError::new(HostErrorCode::Terminated, "cos_digest op server is gone"),
+        },
+    };
+    let _ = op.reply.send(answer);
+}
+
+/// op server の `code` を `HostErrorCode` にする（知らない code は `exception`）。
+fn host_code(code: &str) -> HostErrorCode {
+    serde_json::from_value(serde_json::Value::String(code.to_owned()))
+        .unwrap_or(HostErrorCode::Exception)
 }
 
 impl ScriptPolicy {
@@ -81,18 +140,27 @@ impl ScriptPolicy {
                 scope_task_ids: BTreeSet::new(),
                 timeout: deadline,
             };
-            match self.handle.call(call).await {
-                Ok(reply) => Ok(PolicyReply {
-                    output: reply.output,
-                    isolate_epoch: isolate_epoch(reply.generation),
-                }),
-                Err(error) => {
-                    let mut mapped = policy_error(&error);
-                    mapped.isolate_epoch = Some(isolate_epoch(self.handle.stats().generation));
-                    Err(mapped)
-                }
-            }
+            let result = self.handle.call(call).await;
+            self.reply(result)
         })
+    }
+
+    /// actor の結果を DTO にする。
+    fn reply(
+        &self,
+        result: Result<celeris_script::ScriptReply, ScriptError>,
+    ) -> Result<PolicyReply, PolicyScriptError> {
+        match result {
+            Ok(reply) => Ok(PolicyReply {
+                output: reply.output,
+                isolate_epoch: isolate_epoch(reply.generation),
+            }),
+            Err(error) => {
+                let mut mapped = policy_error(&error);
+                mapped.isolate_epoch = Some(isolate_epoch(self.handle.stats().generation));
+                Err(mapped)
+            }
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-//! ADR 2026-11-02-ts-control-layer-boundary 付記 S4-4: digest pass の `cos_digest` の compare。偽の `PolicyScript`
+//! ADR 2026-11-02-ts-control-layer-boundary 付記 S4-14: digest pass の mode `compare`（TS の pass を影で走らせる）。偽の `PolicyScript`
 //! だけを使い、V8 は起こさない。どの場合も inbox thread の message と `cos_inbox_items` が mode `rust`・
 //! PolicyScript 無しのときと byte 一致であること（apply するのは常に Rust の command）を確かめる。
 
@@ -69,21 +69,53 @@ impl PolicyScript for DigestScript {
         Box::pin(async { Err(PolicyScriptError::new("exception", "not this domain")) })
     }
 
-    fn cos_digest(&self, input: CosDigestInput, _deadline: Duration) -> PolicyFuture<'_> {
+    /// 付記 S4-12: 参照の pass と同じく list・read を op で行い、run ごとに `answer` で答える。
+    /// `answer` が `{ "commands" }` 以外を返したら、それを pass の出力として返す（形の誤り）。
+    fn cos_digest_pass(
+        &self,
+        call: crate::script_policy::CosDigestPassCall,
+        _deadline: Duration,
+    ) -> PolicyFuture<'_> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        let reply = (self.answer)(&input);
         Box::pin(async move {
-            match reply {
-                Reply::Ok(output) => Ok(PolicyReply {
-                    output,
-                    isolate_epoch: 3,
-                }),
-                Reply::Err(e) => Err(e),
-                Reply::Hang => {
-                    tokio::time::sleep(Duration::from_secs(3600)).await;
-                    Err(PolicyScriptError::new("exception", "woke up"))
+            use crate::script_policy::{CosDigestOp, CosDigestOpReply, test_pass::op};
+            let list = match op(&call.sink, CosDigestOp::ListRuns, serde_json::json!({})).await {
+                CosDigestOpReply::Ok(v) => v,
+                CosDigestOpReply::Error { message, .. } => {
+                    return Err(PolicyScriptError::new("exception", message));
+                }
+            };
+            let mut runs = Vec::new();
+            for run in list["runs"].as_array().cloned().unwrap_or_default() {
+                let request =
+                    serde_json::json!({ "thread": run["thread"], "run_id": run["run_id"] });
+                let CosDigestOpReply::Ok(v) = op(&call.sink, CosDigestOp::ReadRun, request).await
+                else {
+                    continue;
+                };
+                let input: CosDigestInput = serde_json::from_value(v).expect("input");
+                match (self.answer)(&input) {
+                    Reply::Ok(v) if v.get("commands").is_some() => runs.push(serde_json::json!({
+                        "run_id": input.run_id,
+                        "commands": v["commands"],
+                    })),
+                    Reply::Ok(v) => {
+                        return Ok(PolicyReply {
+                            output: v,
+                            isolate_epoch: 3,
+                        });
+                    }
+                    Reply::Err(e) => return Err(e),
+                    Reply::Hang => {
+                        tokio::time::sleep(Duration::from_secs(3600)).await;
+                        return Err(PolicyScriptError::new("exception", "woke up"));
+                    }
                 }
             }
+            Ok(PolicyReply {
+                output: serde_json::json!({ "runs": runs }),
+                isolate_epoch: 3,
+            })
         })
     }
 }
@@ -297,12 +329,25 @@ async fn compare_with(script: Arc<DigestScript>) -> Vec<CosDigestCompareRecord> 
         "{}",
         base.items
     );
-    assert_eq!(script.calls.load(Ordering::SeqCst), 2, "one call per run");
+    assert_eq!(script.calls.load(Ordering::SeqCst), 1, "one call per pass");
     assert_eq!(world.records.len(), 2);
     let mut records = world.records;
     records.sort_by(|a, b| a.run_id.cmp(&b.run_id));
     for r in &records {
-        assert_eq!(r.call_site, "cos_digest.digest_one");
+        assert_eq!(r.call_site, "cos_digest.pass");
+        assert_eq!(r.mode, ScriptMode::Compare);
+        assert_eq!(
+            r.applied_by,
+            task_core::script_compare::CosDigestAppliedBy::Rust
+        );
+        assert_eq!(r.fallback, None);
+        assert!(
+            r.ops
+                .iter()
+                .any(|o| o.op == "cos_digest:list_runs" && o.outcome == "memo"),
+            "{:?}",
+            r.ops
+        );
         assert_eq!(r.input, None, "no body in the log");
         assert!(r.input_digest.starts_with("sha256:"));
         assert!(!r.applied.message_id.is_empty());

@@ -8,8 +8,8 @@
 //!   記録（`script_compare_recorded`）だけを書く。lane・候補列・run・既存の event は Rust の結果のまま（S2-6）。
 //! - `PolicyScript` が無い・bundle が generation と違う・tokio の runtime が無いときは TS を呼ばず `unavailable` を記録する。
 //! - generation の確認・`unavailable`・deadline・in-flight の上限・記録は両領域で同じ経路（[`Dispatcher::compare_domain`]）を通る。
-//! - 付記 S4: 領域 `cos_digest` は digest pass が Rust の command を apply した後に [`Dispatcher::compare_cos_digest`] で
-//!   同じ経路（`compare_target`・`spawn_compare`）を通る。記録は task の events でなく `script_compare_log`（S4-5）。
+//! - 付記 S4-14: 領域 `cos_digest` は digest pass（`cos_chat/digest.rs`）が [`Dispatcher::script_target`] で
+//!   `compare`・`ts` の宛先を得て、`compare` は同じ `spawn_compare` を通る。記録は `script_compare_log`（S4-15）。
 
 use std::sync::Arc;
 
@@ -22,8 +22,7 @@ use tokio::task::JoinHandle;
 use super::route_select::{RouteInput, RouteTrace};
 use super::*;
 use crate::script_policy::{
-    CompareDraft, CosDigestDraft, MAX_IN_FLIGHT_COMPARES, PolicyScript, SCRIPT_CALL_DEADLINE,
-    ScriptDomainStore,
+    CompareDraft, MAX_IN_FLIGHT_COMPARES, PolicyScript, SCRIPT_CALL_DEADLINE, ScriptDomainStore,
 };
 
 /// dispatcher が持つ compare の状態。既定は何も注入しない（mode を読まず、TS を呼ばない）。
@@ -164,52 +163,35 @@ impl Dispatcher {
         });
     }
 
-    /// 付記 S4-4: digest pass が Rust の command を apply した後に呼ぶ。mode が `compare` の領域 `cos_digest` だけ、
-    /// 同じ `CosDigestInput` を別の tokio task で TS に渡し、Rust の command と比べて `script_compare_log` に追記する。
-    /// mode `rust`・store 無しでは何もしない（TS を呼ばない）。message・requeue は変えない（戻り値も無い）。
-    pub(in crate::dispatcher) fn compare_cos_digest(&mut self, digests: Vec<CosDigestApplication>) {
-        if digests.is_empty() {
-            return;
-        }
-        for digest in digests {
-            let Some(target) = self.compare_target(ScriptDomain::CosDigest) else {
-                return;
-            };
-            let draft = CosDigestDraft {
-                generation: target.generation_id,
-                bundle_sha256: target.bundle_sha256,
-                host_api: target.host_api,
-                input: digest.input,
-                rust: digest.commands,
-                applied: digest.applied,
-            };
-            let store = target.store;
-            let (script, runtime) = match target.call {
-                Err(reason) => {
-                    append_compare_log(store.as_ref(), draft.unavailable(&reason));
-                    continue;
-                }
-                Ok(call) => call,
-            };
-            self.spawn_compare(ScriptDomain::CosDigest, &runtime, async move {
-                let (result, elapsed) = draft.call(script.as_ref(), SCRIPT_CALL_DEADLINE).await;
-                append_compare_log(store.as_ref(), draft.finish(&result, elapsed));
-            });
-        }
+    /// 付記 S4-15: `script_compare_log` の store（無ければ記録しない）。
+    pub(in crate::dispatcher) fn script_compare_log_store(
+        &self,
+    ) -> Option<Arc<dyn ScriptDomainStore>> {
+        self.script_compare.store.clone()
     }
 
     /// mode が `compare` で generation の id があれば比較の宛先を返す（無ければ `None` = 何もしない）。
     /// `call` が `Err` なら TS を呼ばず、その理由で `unavailable` を記録する。
     fn compare_target(&mut self, domain: ScriptDomain) -> Option<CompareTarget> {
+        self.script_target(domain, &[ScriptMode::Compare])
+    }
+
+    /// mode が `modes` のどれかで generation の id があれば宛先を返す（付記 S4-14: `cos_digest` は `ts` も）。
+    pub(in crate::dispatcher) fn script_target(
+        &mut self,
+        domain: ScriptDomain,
+        modes: &[ScriptMode],
+    ) -> Option<CompareTarget> {
         self.refresh_script_modes();
         let row = self
             .script_compare
             .modes
             .iter()
             .find(|r| r.domain == domain)?;
-        if row.mode != ScriptMode::Compare {
+        if !modes.contains(&row.mode) {
             return None;
         }
+        let (mode, row_generation, version) = (row.mode, row.generation_id.clone(), row.version);
         let store = self.script_compare.store.clone()?;
         let generation_id = row.generation_id.clone()?;
         let generation = match store.script_generation_get(&generation_id) {
@@ -252,6 +234,9 @@ impl Dispatcher {
         };
         Some(CompareTarget {
             store,
+            mode,
+            row_generation,
+            version,
             generation_id,
             bundle_sha256,
             host_api,
@@ -260,7 +245,7 @@ impl Dispatcher {
     }
 
     /// in-flight の上限（全領域の合計 `MAX_IN_FLIGHT_COMPARES`）の内で比較の task を走らせる。超えたら捨てる。
-    fn spawn_compare(
+    pub(in crate::dispatcher) fn spawn_compare(
         &mut self,
         domain: ScriptDomain,
         runtime: &tokio::runtime::Handle,
@@ -279,33 +264,17 @@ impl Dispatcher {
     }
 }
 
-/// [`Dispatcher::compare_target`] の結果。
-struct CompareTarget {
-    store: Arc<dyn ScriptDomainStore>,
-    generation_id: String,
-    bundle_sha256: String,
-    host_api: String,
-    call: Result<(Arc<dyn PolicyScript>, tokio::runtime::Handle), String>,
-}
-
-/// digest pass が apply した 1 run（付記 S4-4 の compare の入力）。
-pub(crate) struct CosDigestApplication {
-    pub input: task_core::chat::digest::CosDigestInput,
-    pub commands: Vec<task_core::chat::digest::CosDigestCommand>,
-    pub applied: task_core::script_compare::CosDigestApplied,
-}
-
-/// `cos_digest` の記録を追記する。失敗しても digest pass は続ける（warn の log だけ。S4-4）。
-fn append_compare_log(
-    store: &dyn ScriptDomainStore,
-    record: Result<task_core::script_compare::CosDigestCompareRecord, serde_json::Error>,
-) {
-    let result = record
-        .map_err(StoreError::from)
-        .and_then(|r| store.script_compare_log_append(&r, time::OffsetDateTime::now_utc()));
-    if let Err(e) = result {
-        tracing::warn!(error = %e, "script_compare_log append failed");
-    }
+/// [`Dispatcher::script_target`] の結果。
+pub(in crate::dispatcher) struct CompareTarget {
+    pub store: Arc<dyn ScriptDomainStore>,
+    /// pass・tick の始めの mode の行（mode・generation・version。付記 S4-14 の `mode_changed`）。
+    pub mode: ScriptMode,
+    pub row_generation: Option<String>,
+    pub version: u64,
+    pub generation_id: String,
+    pub bundle_sha256: String,
+    pub host_api: String,
+    pub call: Result<(Arc<dyn PolicyScript>, tokio::runtime::Handle), String>,
 }
 
 /// 記録を追記する。失敗しても dispatch は続ける（warn の log だけ。S2-6）。

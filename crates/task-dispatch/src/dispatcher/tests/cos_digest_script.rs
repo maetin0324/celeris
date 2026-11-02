@@ -11,11 +11,8 @@
 //! 次の tick で回収されることを見る。
 
 use super::*;
-use crate::script_policy::{
-    PolicyFuture, PolicyReply, PolicyScript, PolicyScriptBundle, PolicyScriptError,
-};
+use crate::script_policy::{PolicyFuture, PolicyScript, PolicyScriptBundle, PolicyScriptError};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use task_core::chat::digest::{CosDigestInput, cos_digest_decide};
 use task_core::chat::{ChatMessageRole, ChatRunState};
 use task_core::script_compare::{
     CompareOutcome, CosDigestCompareRecord, LaneRulesInput, NewScriptGeneration,
@@ -71,15 +68,16 @@ impl PolicyScript for FakeDigest {
         Box::pin(async { Err(PolicyScriptError::new("exception", "not this domain")) })
     }
 
-    fn cos_digest(&self, input: CosDigestInput, _deadline: Duration) -> PolicyFuture<'_> {
+    fn cos_digest_pass(
+        &self,
+        call: crate::script_policy::CosDigestPassCall,
+        _deadline: Duration,
+    ) -> PolicyFuture<'_> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let answer = self.answer;
         Box::pin(async move {
             match answer {
-                Answer::Echo => Ok(PolicyReply {
-                    output: serde_json::json!({ "commands": cos_digest_decide(&input) }),
-                    isolate_epoch: 1,
-                }),
+                Answer::Echo => crate::script_policy::test_pass::reference_reply(&call).await,
                 Answer::Hang => {
                     tokio::time::sleep(Duration::from_secs(3600)).await;
                     Err(PolicyScriptError::new("exception", "woke up"))
@@ -525,7 +523,7 @@ async fn cos_digest_script_redelivery_same_run_twice() {
         assert_eq!(world.items, first.items);
         assert_eq!(world.requeues.len(), 1, "{:?}", world.requeues);
         if let Some(script) = script {
-            assert_eq!(script.calls(), 2, "one TS call per run");
+            assert_eq!(script.calls(), 1, "one TS call per pass");
         }
         world
     }
@@ -652,7 +650,7 @@ async fn cos_digest_script_ts_cancelled_at_deadline() {
         let world = settle(&mut f).await;
         assert_eq!(world.requeues.len(), 2, "{:?}", world.requeues);
         if let Some(script) = script {
-            assert_eq!(script.calls(), 2);
+            assert_eq!(script.calls(), 1, "one TS call per pass");
             assert_eq!(world.records.len(), 2);
             for r in &world.records {
                 assert_eq!(r.outcome, CompareOutcome::TsError, "{r:?}");
@@ -896,3 +894,6 @@ async fn cos_digest_script_policy_version_change_and_fresh_session() {
     assert!(base.records.is_empty());
     assert_all_match(&with, 2);
 }
+
+#[path = "cos_digest_pass.rs"]
+mod cos_digest_pass;

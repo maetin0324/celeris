@@ -48,13 +48,13 @@ updated: 2026-11-02
 - `cargo nextest run -p celeris-script`: 51 passed, 0 skipped（exit 0）。`--test cos_digest_ops --test dto` を 10 回続けて 15 passed ×10。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 - `cd control-ts && pnpm typecheck && pnpm test`: tsc exit 0、vitest 81 passed、node --test 34 passed。`node scripts/gen-host-types.mjs --check`: exit 0。
+- attempt 2: 範囲 check（host-stub.ts を許可した版）を `sh "$CELERIS_WU_SCOPE_PATHS"` で実行し、範囲外 0 件。
 - `bash scripts/dev/test-affected.sh`: exit 0。Cargo.lock の変更で workspace 全体が対象になり、nextest 7105 passed・21 skipped、web vitest 697 passed、control-ts vitest 81 passed。
 
 ## 未解決事項
 - 本番に deploy 済みの bundle は schema の hash が変わるので、新しい binary では load の照合で合わない。`cos_digest` は本番で `rust` のままなので挙動は変わらないが、bundle は作り直して deploy する必要がある（本番への移行の節）。
 - 付記 S4-13 のとおり、capability の無い要求（純粋判定）が走っている `cos_digest` の要求の token を global から読めば、その要求の scope で op を呼べる。scope は広がらない（同じ pass の scope だけ）。要求ごとに isolate を作り直す方式は S5 以降で見直す。
-
-- 計画の範囲 check（attempt 1 で不合格）は `control-ts/src/testing/host-stub.ts` を許していない。`host.d.ts` に op を足すと `domains.test.ts` の型検査（stub が `celeris:host` の export 全部を持つこと）が stub の追記を要求するので、stub を戻すと control-ts の tsc が TS2739 で落ちる。plan_issue として範囲に足すよう申告した。
+- 計画の範囲 check は attempt 1 で `control-ts/src/testing/host-stub.ts` を許していなかった。stub を base に戻すと control-ts の tsc が TS2739 で落ちる（`domains.test.ts` の型検査が `celeris:host` の export 全部を要求する）ため plan_issue で申告し、計画が stub を範囲と objective に足した（attempt 2）。stub の変更は attempt 1 のまま。
 
 ## 本番への移行
 - celeris の新しい binary を入れる前後で、`control-ts` の bundle を作り直して deploy する（`pnpm bundle` → `script-deploy`）。作り直さなければ起動時の復元で `system:script-startup` が各領域を `rust` へ戻す。本番の `cos_digest` は `rust` のままなので挙動は変わらない。

@@ -9,7 +9,9 @@
 # sccache・cargo の fingerprint が前の試行の成果を使い回さない。編集は trap（EXIT/INT/TERM/HUP）で必ず戻し、戻した後に
 # 元の内容と cmp で一致を確かめる（一致しなければ exit 3）。
 #   policy: crates/task-core/src/model_policy.rs の RULES に、実際には当たらない規則を 1 件足す（ADR-0069 D3 の規則表）
-#   cos:    crates/task-api/src/cos/basis/job_wait_extend.rs の validate に、実際には当たらない分岐を 1 件足す（CoS 定型判断）
+#   cos:    crates/task-api/src/cos/basis/job_wait_extend.rs の validate に、実際には当たらない制御（CoS 定型判断の
+#           数十行の分岐。集計 → match → 拒否）を足す。編集中に test-affected.sh --list（基準 HEAD = この編集だけ）を
+#           kind=affected の行に残す
 #
 # 段（1 行 1 段の JSONL）:
 #   check         cargo check -p <対象 crate>
@@ -18,8 +20,12 @@
 #   test-build    cargo nextest run -p <対象 crate> --no-run
 #   test-run      cargo nextest run -p <対象 crate>（build 済みの実行だけ）
 #   release-build cargo build --release -p celeris（release gate の cargo-build 段と同じ profile）
+# 既定に入らない段（BASELINE_STEPS で指定）:
+#   affected-test   CELERIS_WU_BASE=HEAD の test-affected.sh（編集だけを基準に、逆依存 crate の試験 build + 実行 + web）
+#   affected-rerun  同じものをもう 1 回（build 済みなので差が test build の分）
 # compile と link は、linker を時間を記録する wrapper（中身は host の linker のまま）に差し替えて分ける
-# （-Z も nightly も使わない）。link_secs は段の間に走った link の壁時計の和、compile_secs = secs - link_secs。
+# （-Z も nightly も使わない）。link_secs は段の間に走った link の秒の和（並列なら壁時計を超える）、
+# link_union_secs は link が 1 つでも走っていた壁時計、compile_secs = secs - link_union_secs。
 # 反映（activate）は本番で promote できないので計らない。release 記録（$RELEASES_DIR/*/gate.json、読むだけ）の
 # 段の秒を "estimate" 行として別に出す（--mode の計測と混ぜない。kind 欄で分ける）。
 #
@@ -37,7 +43,7 @@ ALL_STEPS="check build clippy test-build test-run release-build"
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
 
-usage() { sed -n '2,6p' "$0" >&2; exit 2; }
+usage() { sed -n "2,6p" "$0" >&2; exit 2; }
 
 scenario="" mode="" reps="" out="" dry=0 validate=""
 while [ $# -gt 0 ]; do
@@ -65,6 +71,7 @@ need = {
     "step": ["step", "cmd", "secs", "exit", "compile_secs", "link_secs", "link_count", "edit", "reverted"],
     "prime": ["step", "cmd", "secs", "exit", "compile_secs", "link_secs", "link_count"],
     "skipped": ["reason"],
+    "affected": ["cmd", "lines", "edit"],
     "estimate": ["source", "release", "step", "secs"],
 }
 bad, n, kinds = [], 0, {}
@@ -126,6 +133,7 @@ step_cmd() { # step → command line（表示用と実行用で同じ）
     test-build) echo "cargo nextest run ${jobs_arg[*]:-} -p $crate --no-run" ;;
     test-run) echo "cargo nextest run ${jobs_arg[*]:-} -p $crate --no-fail-fast" ;;
     release-build) echo "cargo build ${jobs_arg[*]:-} --release -p celeris" ;;
+    affected-test|affected-rerun) echo "env CELERIS_WU_BASE=HEAD bash scripts/dev/test-affected.sh" ;;
     *) echo "unknown step $1" >&2; return 2 ;;
   esac
 }
@@ -146,11 +154,38 @@ if scenario == "policy":
            '    },\n')
 else:
     anchor = '    // D3: the limit on extensions of the same jobs.\n'
-    add = (f'    // edit-activate-baseline probe {nonce}: never taken (no task has this many jobs).\n'
-           f'    if current.jobs.len() > usize::MAX - {int(nonce, 16) % 1000 + 1} {{\n'
+    # 数十行の制御: job の状態を集計して、順に判定して拒否する（CoS 定型判断の条件を足す変更の形）。実際には当たらない。
+    add = (f'    // edit-activate-baseline probe {nonce}: a block of control that is never taken\n'
+           '    // (no task has this many jobs, and a queued job counts as neither of the others).\n'
+           '    let mut probe_queued = 0usize;\n'
+           '    let mut probe_active = 0usize;\n'
+           '    let mut probe_ended = 0usize;\n'
+           '    for status in &current.jobs {\n'
+           '        match status.state {\n'
+           '            ClusterJobState::Queued => probe_queued += 1,\n'
+           '            ClusterJobState::Held | ClusterJobState::Running | ClusterJobState::Exiting => {\n'
+           '                probe_active += 1\n'
+           '            }\n'
+           '            _ => probe_ended += 1,\n'
+           '        }\n'
+           '    }\n'
+           f'    let probe_limit = usize::MAX - {int(nonce, 16) % 1000 + 1};\n'
+           '    let probe_reason = if probe_queued > probe_limit {\n'
+           '        Some("too many queued jobs")\n'
+           '    } else if probe_active > 0 {\n'
+           '        Some("a job left the queue after the check above")\n'
+           '    } else if probe_ended > 0 {\n'
+           '        Some("a job ended after the check above")\n'
+           '    } else {\n'
+           '        None\n'
+           '    };\n'
+           '    if let Some(reason) = probe_reason {\n'
            '        return Err(problem(\n'
            '            BASIS_JOB_NOT_QUEUED,\n'
-           f'            "baseline probe {nonce}; escalate it".to_string(),\n'
+           '            format!(\n'
+           f'                "baseline probe {nonce}: {{reason}} ({{probe_queued}} queued, \\\n'
+           '                 {probe_active} active, {probe_ended} ended); escalate it"\n'
+           '            ),\n'
            '        ));\n'
            '    }\n')
 if src.count(anchor) != 1:
@@ -162,7 +197,7 @@ PY
 if [ "$dry" -eq 1 ]; then
   echo "scenario: $scenario（編集: $edit_file、対象 crate: $crate）"
   echo "1. 元の $edit_file を \$TMPDIR に写し、trap で必ず戻す（戻した後に cmp で一致を確認）"
-  echo "2. 試行ごとに nonce を変えた編集を当てる（policy: RULES に当たらない規則 1 件 / cos: validate に当たらない分岐 1 件）"
+  echo "2. 試行ごとに nonce を変えた編集を当てる（policy: RULES に当たらない規則 1 件 / cos: validate に当たらない数十行の分岐）"
   echo "3. linker を時間記録 wrapper に差し替え（CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER）、段を順に計る:"
   for s in $steps; do echo "   - $s: $(step_cmd "$s")"; done
   echo "4. warm: CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-<unset>} を編集なしで 1 回温める（kind=prime）"
@@ -272,39 +307,80 @@ PY
 }
 
 emit() { echo "$1" >>"$out"; echo "$1" | cut -c1-240 >&2; }
+
+# 段の間 5 秒ごとに、この計測以外の cargo/rustc（CARGO_TARGET_DIR が $1 と違う process）の数と 1 分 loadavg の最大を $2 に書く
+sample_load() {
+  exec python3 -I - "$1" "$2" <<'PY'
+import json, os, sys, time
+tdir, path = sys.argv[1:3]
+n, other_max, load_max = 0, 0, 0.0
+parent = os.getppid()
+while os.getppid() == parent:  # 計測が kill -9 されても残らない
+    other = 0
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            if open(f"/proc/{pid}/comm").read().strip() not in ("cargo", "rustc"):
+                continue
+            env = open(f"/proc/{pid}/environ", "rb").read().split(b"\0")
+        except OSError:
+            continue
+        if f"CARGO_TARGET_DIR={tdir}".encode() not in env:
+            other += 1
+    n += 1
+    other_max = max(other_max, other)
+    load_max = max(load_max, float(open("/proc/loadavg").read().split()[0]))
+    with open(path + ".tmp", "w") as f:
+        json.dump({"samples": n, "other_cargo_rustc_max": other_max, "loadavg1_max": load_max}, f)
+    os.replace(path + ".tmp", path)
+    time.sleep(5)
+PY
+}
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # $1 kind $2 rep $3 step $4 target $5 edit(nonce or "")
 run_step() {
-  local kind="$1" rep="$2" step="$3" tdir="$4" nonce="$5" cmd s e rc c0 c1 envj link
+  local kind="$1" rep="$2" step="$3" tdir="$4" nonce="$5" cmd s e rc envj link sampler during
   cmd="$(step_cmd "$step")"
   : >"$linklog"
   read -r h0 m0 < <(sccache_counts)
   envj_pre_load="$(cut -d' ' -f1-3 /proc/loadavg)"
+  during="$work/during.json"
+  rm -f "$during"
+  sample_load "$tdir" "$during" </dev/null &
+  sampler=$!
   s=$(date +%s.%N)
   set +e
   CARGO_TARGET_DIR="$tdir" $cmd >"$work/step.log" 2>&1
   rc=$?
   set -e
   e=$(date +%s.%N)
+  kill "$sampler" 2>/dev/null || true
+  wait "$sampler" 2>/dev/null || true
   read -r h1 m1 < <(sccache_counts)
   [ "$rc" -eq 0 ] || tail -n 20 "$work/step.log" >&2
   envj="$(env_json "$tdir" "$h0" "$m0" "$h1" "$m1")"
-  link="$(awk 'BEGIN{t=0;n=0} {t+=$2-$1;n++} END{printf "%.3f %d", t, n}' "$linklog")"
-  python3 -I - "$SCHEMA" "$kind" "$scenario" "$mode" "$rep" "$step" "$cmd" "$s" "$e" "$rc" "$link" "$nonce" "$envj" "$(now)" "$envj_pre_load" "$edit_file" <<'PY' >"$work/rec.json"
+  # link は並列に走る（test binary が多い段で和が壁時計を超える）。和と、区間の和集合（壁時計に占める分）の両方を出す
+  link="$(sort -n "$linklog" | awk 'BEGIN{t=0;n=0;u=0;end=0} {t+=$2-$1;n++; b=($1>end)?$1:end; if($2>b){u+=$2-b;end=$2}} END{printf "%.3f %d %.3f", t, n, u}')"
+  python3 -I - "$SCHEMA" "$kind" "$scenario" "$mode" "$rep" "$step" "$cmd" "$s" "$e" "$rc" "$link" "$nonce" "$envj" "$(now)" "$envj_pre_load" "$edit_file" "$during" <<'PY' >"$work/rec.json"
 import json, sys
-(schema, kind, scen, mode, rep, step, cmd, s, e, rc, link, nonce, envj, at, preload, efile) = sys.argv[1:17]
+(schema, kind, scen, mode, rep, step, cmd, s, e, rc, link, nonce, envj, at, preload, efile, during) = sys.argv[1:18]
 secs = round(float(e) - float(s), 3)
-lsecs, lcount = link.split()
+lsecs, lcount, lunion = link.split()
 rec = {"schema": schema, "kind": kind, "scenario": scen, "mode": mode, "rep": int(rep), "at": at,
        "step": step, "cmd": cmd, "secs": secs, "exit": int(rc),
-       "link_secs": float(lsecs), "link_count": int(lcount),
-       "compile_secs": round(secs - float(lsecs), 3)}
+       "link_secs": float(lsecs), "link_count": int(lcount), "link_union_secs": float(lunion),
+       "compile_secs": round(secs - float(lunion), 3)}
 if kind == "step":
     rec["edit"] = {"file": efile, "nonce": nonce}
     rec["reverted"] = None  # 試行の終わりに埋める
 env = json.loads(envj)
 env["loadavg_before"] = [float(x) for x in preload.split()]
+try:
+    env["during"] = json.load(open(during))
+except (OSError, ValueError):
+    env["during"] = None
 rec["env"] = env
 print(json.dumps(rec, ensure_ascii=False))
 PY
@@ -322,6 +398,12 @@ for l in open(sys.argv[1]):
   while IFS= read -r l; do emit "$l"; done <"$work/pending.done"
   rm -f "$work/pending" "$work/pending.done"
   [ "$ok" = true ] || { echo "edit-activate-baseline: edit not reverted" >&2; exit 3; }
+}
+
+record_affected() { # 編集中の test-affected.sh --list（基準 HEAD = この編集だけ）を残す。何も走らせない
+  local lines
+  lines="$(CELERIS_WU_BASE=HEAD bash scripts/dev/test-affected.sh --list)"
+  emit "$(python3 -I -c 'import json,sys;print(json.dumps({"schema":sys.argv[1],"kind":"affected","scenario":sys.argv[2],"mode":sys.argv[3],"rep":1,"at":sys.argv[4],"env":None,"cmd":"CELERIS_WU_BASE=HEAD bash scripts/dev/test-affected.sh --list","lines":sys.argv[5].splitlines(),"edit":{"file":sys.argv[6],"nonce":sys.argv[7]}},ensure_ascii=False))' "$SCHEMA" "$scenario" "$mode" "$(now)" "$lines" "$edit_file" "$1")"
 }
 
 estimate() { # release 記録（gate.json）を読むだけ。反映の推定の材料
@@ -368,6 +450,7 @@ for rep in $(seq 1 "$reps"); do
   fi
   nonce="$(od -An -N4 -tx4 /dev/urandom | tr -d ' \n')"
   apply_edit "$nonce"
+  if [ "$scenario" = cos ] && [ "$rep" -eq 1 ]; then record_affected "$nonce"; fi
   for st in $steps; do run_step step "$rep" "$st" "$tdir" "$nonce"; done
   flush_trial
   if [ -n "$cold_target" ]; then rm -rf "$cold_target"; cold_target=""; fi

@@ -411,3 +411,16 @@ TS の生の JSON の key 順・空白は deserialize で消えるので比較�
 - S2-5 の起動時の戻しは、generation の bundle と読み込めた bundle の hash の比較に一本化する。`[script]` が無い・bundle を読めない場合は「読み込めた bundle なし」として戻す。
   `host_api` の不一致は manifest の検証で load が失敗するので、この場合に含まれる。
 - `Denied` の S2-8 の code は host の op の理由文で分ける。`outside the request scope` を含めば `denied_scope`、それ以外は `denied_capability`。
+
+### S2-10 route_priority の basis の規則（2026-11-02）
+記録は [S2 route-prio core](../progress/2026-11-02-ts-control-layer-s2/route-prio/core.md)。
+- `llm_route::route_priority_decide(registry, harness, lane, cos, execution_class) -> (RoutePriorityBasis, &[CandidateKey])` が列と basis を返す。`route_priority` は同じ signature の薄い包みで、列だけを返す（挙動不変）。
+- 列の選び方は分ける前と同じ。上から最初に当たった列を使う。
+  1. `cos == true` → `cos_route_candidates`（basis `cos`）。
+  2. `execution_class` があり、その harness に同じ class の行が宣言されている → その行（basis `execution_class`）。
+  3. harness×lane の行が宣言されている → その行（basis `lane`）。lane が `null` のときは空文字 `""` の lane として引く（`unwrap_or_default`）。したがって `""` の行があれば lane `null` でもその行が当たる。
+  4. harness 全体の `route_defaults` が宣言されている → その行（basis `harness`）。
+  5. どれも無い → 空（basis `none`）。
+- 選んだ列が空なら、列の種類によらず basis は `none` にする。空の列は宣言されていても下の列へ落ちない（空の class 行・空の lane 行・空の `cos_route_candidates` は、そのまま空の出力になる）。
+- 未知の class（その harness に行が無い class）は 2 に当たらず 3 以降へ進む。未知の lane も同じく 4 へ進む。
+- 候補の重複は除かない。列の要素はそのままの順で返す。

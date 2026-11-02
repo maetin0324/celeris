@@ -1,0 +1,7 @@
+{
+  "host_api": "^1",
+  "domains": {
+    "host_selftest": ["selftest:echo_task"]
+  },
+  "checkpoint_versions": []
+}

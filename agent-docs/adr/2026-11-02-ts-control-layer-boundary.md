@@ -580,3 +580,144 @@ Rust は TS の output を apply の前に次で検証する。1 つでも落ち
 | S4-7 | 新しい event の variant なし。行為の追跡は `chat_messages`・`cos_inbox_items`・`script_compare_log` | なし |
 | S4-8 | `crates/task-dispatch/src/dispatcher/tests/cos_digest_script.rs`（11 件）、`crates/task-dispatch/src/dispatcher/tests/cos_chat_triage_digest_script_compare.rs`（10 件）、`crates/celeris/tests/script_compare_cos_digest.rs`（5 件）、`control-ts/src/domains/cos_digest.test.ts` | (8) TS の試験の置き場所は `control-ts/test/` でなく `control-ts/src/domains/`（他の領域と同じ）。(9) 同等性の行は既存 11 件の入力でなく、cases 2,066 行と traces 17 行で確かめた。(10) 安全の行は「規則を 1 件ずつ破る bundle」でなく、検証関数を 14 通りの command で試し（`script_fixtures_cos_digest_validation_rejects_each_rule`）、dispatcher の経路では偽の `PolicyScript` で 3 つの code（`card_outside_items`・`key_mismatch`・`requeue_state_invalid`）を試す。`scope_mismatch`・`duplicate_command`・digest の場面の `generation_gone` は dispatcher の経路で試していない。(11) item state の `handled` は `cos_inbox_items` の CHECK の外にある未知の state で、試験だけで作る |
 | S4-9 | (S4-1 の行のとおり) | (12) 名前は `digest_decide`・`validate_digest_output`・`DigestViolation` でなく `cos_digest_decide(&CosDigestInput) -> Vec<CosDigestCommand>`・`validate_cos_digest_commands`・`CosDigestViolation`。置き場所は dispatcher でなく task-core |
+
+## 付記 2026-11-02: S4 の digest pass 全体を TS の async 経路にする（S4 adr-async、task 01M6EVP9GT07K2G01EMW0E6HNC）
+前回の final review は S4 の受け入れ条件 0 を不合格にした。理由は次の 3 点である。TS に移ったのは同期の `decide()` だけである。async の読み出しも apply も Rust に残っている。TS の command はどの mode でも Rust の検証→apply に渡らない。
+この付記は、その 3 点を解消する仕様を決める。コードは変えない。記録は [S4 adr-async](../progress/2026-11-02-ts-control-layer-s4/adr-async.md)。
+S4-1〜S4-10 のうち、この付記が改める点は S4-11 の表にまとめる。改めない点は元の節のまま有効である。用語は S4 の付記と同じ。旧 `routing_shadow` は使わない。
+
+### S4-11 S4-1〜S4-10 のうち改める点
+| 元の節 | 元の決定 | 改めた決定 | 節 |
+|---|---|---|---|
+| S4-1 | TS は run ごとの判定だけを行う。走査・読み出し・apply は Rust が行う | TS の `cosDigestPass(ctx)` が pass 全体を動かす。走査と読み出しは op を await して行う。DB の更新は今までどおり Rust の検証→apply だけが行う | S4-12 |
+| S4-2 | 入口は run ごとの `cos_digest(CosDigestInput) -> { commands }` | 入口は pass ごとの `cosDigestPass(ctx) -> CosDigestPassOutput`。`CosDigestInput`・`CosDigestCommand` は op の応答と run ごとの command としてそのまま使う | S4-12 |
+| S4-3 | 検証規則は 1〜6 | 規則 1〜6 を run ごとに当てる。pass には規則 7〜9 を足す | S4-14 |
+| S4-4 | compare だけを行う。TS は run ごとに別の tokio task で呼ぶ。`canary`・`ts` は S5 で扱う | mode `compare` は pass 1 回を TS へ 1 回送る。TS の op は Rust が読んだ snapshot から答える。`cos_digest` に限って mode `ts` を S4 で受ける。`canary` は S5 のまま | S4-14 |
+| S4-5 | `script_compare_log` は 1 run 1 行。欄は S4-5 の表のとおり | 1 run 1 行は変えない。`applied_by`・`fallback`・`mode`・`pass_id`・`ops` の欄を足す | S4-15 |
+| S4-6 | op・capability を足さない。S2-7 の context 分離は決めない | op 2 つと capability 2 つを足す。scope と要求ごとの分離をここで決める。S4-6 の本文は全部置き換える | S4-13 |
+| S4-7 | TS の command を apply した記録は S5 で決める | `applied_by` で記録する。新しい event の variant は足さない（この点は S4-7 のまま） | S4-15 |
+| S4-8 | `cases.jsonl`・`traces.jsonl` を run ごとに replay する | pass の trace `pass_traces.jsonl` を fake host で replay する。`traces.jsonl` と run ごとの trace の書き出しは消す | S4-16・S4-17 |
+| S4-9 | `digest_one` を 4 つに分ける | 分けた 4 つは残す。読み出しを pass の memo（S4-12）へ移し、apply を pass の最後にまとめる | S4-12 |
+
+### S4-12 pass の流れ（目的の (1)）
+- **Rust に残るもの（S4-6 を改める）**: `digest_due`・`dirty`・pass の起点（`triage_launch` の tick で `digest_due` が立っていること）・次の tick での retry・20 件の上限・空の走査で `digest_due` を下ろす規則・message の書き込みと requeue の SQL。scheduler の実行責任はこれまでどおり Rust が持つ。
+- **TS に移るもの**: pass の中の手順。TS が list を読み、run ごとに read し、run ごとの command 列を決めて返す。読む順と、read が失敗した run を飛ばす判断も TS が持つ。
+- TS の入口: `export async function cosDigestPass(ctx: RequestContext): Promise<CosDigestPassOutput>`（`control-ts/src/domains/cos_digest.ts`）。run ごとの判定は既存の純粋関数 `decide()` を使う。
+- op（Host API 1.1.0。op の追加なので minor を上げる。(c) の規則による）:
+  | op（JS の関数 / native op） | 要求 | 応答 | Rust が行う読み出し |
+  |---|---|---|---|
+  | `cos_digest:list_runs`（`cosDigestListRuns` / `op_cos_digest_list_runs`） | `CosDigestListRunsRequest {}`（欄なし） | `CosDigestListRunsReply { runs: { thread, run_id, run_state }[] }` | `cos_triage_runs_without_digest(20)`。上限は Rust の定数で、TS は変えられない |
+  | `cos_digest:read_run`（`cosDigestReadRun` / `op_cos_digest_read_run`） | `CosDigestReadRunRequest { thread, run_id }` | `CosDigestInput`（S4-2 の型のまま） | `cos_triage_run_report(run_id)` と `chat_run_get(thread, run_id)`。後者の失敗は今と同じく `reason: null`。前者の失敗は op の error（code `exception`） |
+- 出力 `CosDigestPassOutput { runs: { run_id: string, commands: CosDigestCommand[] }[] }`。全 struct に `deny_unknown_fields` を付ける。DTO の正本は task-core の Rust の型で、`docs/api/script-host/host-v1.schema.json` に足す。
+- **pass の memo**: Rust は pass 1 回ごとに `CosDigestPassReads` を 1 つ作る。読み出しはすべて memo を通す。同じ要求の 2 回目は store を読まず、memo の答えを返す。1 pass で store を読むのは、list が 1 回、run ごとの read が 1 回ずつまでである。
+  memo は要求と応答の組を最初に読んだ順に持つ。これが S4-15 の `ops` と S4-16 の trace の元になる。
+- **op の運び方**（(b) の「op は Rust 側の bounded channel を通して既存の tokio サービスへ渡す」の具体化）: native op は引数を JSON のまま要求の host sink（容量 64 の bounded `mpsc`、応答は要求ごとの `oneshot`）へ送る。
+  dispatcher は TS の呼び出しと op の server（memo と store を持つ future）を同じ async fn の中で並べて await する。store を V8 の thread に渡さない。`celeris-script` は task-core・store の型を知らない。op の要求と応答は dispatcher 側で DTO に deserialize して検証する。
+- `PolicyScript::cos_digest(input, deadline)` を `PolicyScript::cos_digest_pass(call: CosDigestPassCall, deadline) -> PolicyFuture` に置き換える。`CosDigestPassCall` は `pass_id`（ULID）と host sink の送り口を持つ。
+- pass の deadline は 1 pass で 200 ms（`COS_DIGEST_PASS_DEADLINE`）。op の待ちも含む。純粋判定の 1 呼び出し 50 ms（(f)・S2-6）は変えない。dispatcher が 1 tick で TS を待つのは mode `ts` のときだけで、待つ時間は最大 200 ms。
+- 1 pass の op 呼び出しは 64 回まで。65 回目以降の op は `busy` を返す。TS は時計・乱数を持たない（S1 の付記）。checkpoint は使わない。pass は 1 tick の中で終わり、op の間に永続の状態を作らないので、`checkpoint_versions` は `[]` のままにする。
+
+### S4-13 capability・scope・要求ごとの分離（目的の (2)。S4-6・S2-7 を改める）
+- capability は `cos_digest:list_runs` と `cos_digest:read_run` の 2 つ。`crates/script-runtime/src/ops.rs` の許可表に `("cos_digest", [CosDigestListRuns, CosDigestReadRun])` を足す。
+  manifest（`control-ts/bundle.config.json`）の `cos_digest` もこの 2 つを宣言する。有効になるのは (c) の「宣言 ∩ 許可表」だけである。S4-6 の「`cos_digest` が capability を宣言したら load で拒否する」は削除する。他の領域（`lane_rules`・`route_priority`）の許可表は空のまま。
+- grant は要求の token と `domain` に結び付ける。op は自分の領域（`cos_digest:*` なら `cos_digest`）の grant の token でだけ通る。他の領域の要求の token では `denied`（`denied_capability`）になる。
+- scope は pass ごとに Rust の op server が持つ。`scope_task_ids` は空のまま使わない（digest は task でなく thread・run に属する）。
+  - `list_runs` は pass の中で何回呼んでも、memo の同じ答えを返す。
+  - `read_run` は、その pass の `list_runs` の答えにある `(thread, run_id)` の組だけを読める。`list_runs` の前の呼び出しや、答えに無い組の呼び出しは `denied` になり、`safety_violations` に `denied_scope` を入れる（S2-8）。組の照合は thread と run_id の両方で行う。
+- **要求ごとの V8 context の分離（S2-7 の宿題の答え）**: V8 context は要求ごとに分けない。代わりに次の 4 つで、S1 の未解決 4（並行する要求の token を盗み、相手の scope で op を呼ぶ経路）を塞ぐ。
+  1. **排他**: capability を 1 つ以上持つ要求は、1 つの isolate の中で同時に 1 件までしか走らせない。actor は、その要求の走っている間は capability を持つ別の要求を始めず、待ち行列に置く。capability の無い要求（純粋判定）は並行してよい。
+     盗む相手の token（別の scope）が同時に存在しないので、token を盗んでも scope は広がらない。digest pass は 1 tick に高々 1 回なので、排他の待ちは実運用では生じない。
+  2. **domain への結び付け**: 上の grant の規則。純粋判定の領域のコードが `cos_digest` の token を global から読んでも、許可表が空の領域では op が通らない。token と grant の両方が `cos_digest` のものでなければ op は通らない。
+  3. **失効**: 要求が終わる（返事・deadline・cancel・generation の作り直し）と、`GrantGuard` が token を消す。終わった要求の token は、後の要求からは使えない（S4-18）。
+  4. **隠れた入力**: fixture の runner と pass の replay runner は、全件を正順と逆順に 2 回流し、同じ出力を要求する（S2-7 と同じ）。
+  - 要求ごとに context を分けない理由: vendor の `deno_core` に、追加の context（realm）を作る公開 API が無い。`crates/script-runtime/vendor/deno_core` を `grep` したところ、`create_realm` が無かった。`v8::Context::new` は runtime の初期化の中だけにある。
+    要求ごとに isolate を作り直す方式は、pass ごとに bundle の評価が要り、200 ms の deadline に収まるかが未確認である。この方式は S5 以降で、op を使う領域が 2 つ以上になったときに見直す。
+
+### S4-14 mode（目的の (3)。S4-3・S4-4 を改める）
+mode は pass の始めに `script_domain_modes` から 1 回読み、その pass の間は固定する。actor も、要求を受けた時点の generation を要求に固定する（(d)）。
+| mode | 読み出し | apply する command | TS の呼び出し |
+|---|---|---|---|
+| `rust` | Rust が memo を通して読む（今と同じ回数） | Rust | しない |
+| `compare` | Rust が memo を通して読み、Rust の command を apply する。memo は apply の前に凍結する | Rust | apply の後、別の tokio task で 1 pass に 1 回送る。op は凍結した memo からだけ答え、store を読まない。memo に無い要求（例: list に無い run の read）は `denied`（`denied_scope`）を返す。二重の読み出しも、apply との競合も起きない |
+| `ts` | TS の op が呼んだときに memo を通して store を読む。TS が返った後、Rust の参照実装が同じ memo で判定する。TS が読んでいない run だけを Rust が読み足す | 検証に通れば TS、通らなければ Rust（下の fallback） | dispatcher が 200 ms を上限に待つ |
+- `compare` の in-flight は、1 pass で `MAX_IN_FLIGHT_COMPARES`（全領域の合計 32）の 1 枠を使う。S4-4 の「20 run が 20 枠を使い、上限を超えた run の記録を落とす」は無くなる。
+- **`ts` の検証**: TS の出力を、run ごとに S4-3 の規則 1〜6 で検証する（入力は memo のその run の `CosDigestInput`）。それに加えて、pass に次の規則を当てる。
+  7. 出力のどの `run_id` も、その pass の `list_runs` の答えにある（code `run_outside_list`。安全違反に数える）。
+  8. `read_run` が成功した run は、出力にちょうど 1 回ずつ現れる。`read_run` が失敗した run は出力に現れない（code なし。理由文 `run_missing`・`run_unreadable`。形式の違反）。
+     Rust の参照実装は、読み出しに失敗した run を digest しない（今の `digest_one` の `Err`）。規則 8 はこれと同じにするためのものである。
+  9. 出力の `runs` の並びは `list_runs` の答えの並び（`started_at`・`run_id` 順）と同じ（code なし。理由文 `run_order`。形式の違反）。apply の順序を Rust と揃える。
+- **fallback**: 次のどれかが起きたら、その pass の TS の出力は 1 件も apply しない。pass 全体を Rust の command で apply する。
+  - TS の失敗（`ScriptError` の全種類。`timeout` を含む）
+  - 規則 1〜9 のどれかに落ちる
+  - runtime・generation が使えない
+  - apply の直前に読み直した `script_domain_modes` の行が、pass の始めと違う（mode・generation・`version` のどれか。code `mode_changed`）
+  検証は apply の前に pass 全体に当てる。一部の run だけ TS の command を apply することはしない。
+- **apply**: run ごとに、`post_digest`→`requeue_run` の順に今の `apply_digest_commands` で書く。ある run の書き込みが失敗したら、その run の残りは書かずに次の run へ進む。`digest_due` は空の走査まで下ろさない（S4-3 の既存の規則を動かさない）。
+  apply の失敗は TS の責任ではないので fallback にしない。その run は次の pass で再び list に現れ、冪等 key が 2 件目の message を作らない。
+- **`ts` を受ける範囲と権限**（S2-5・(d) の権限の具体化）:
+  - API が `ts` を受けるのは domain `cos_digest` だけ。`lane_rules`・`route_priority` の `ts`、どの domain の `canary` も、今までどおり 422（`script_mode_not_enabled`）で拒否し、表を変えない。
+  - `→ts` は、人の API token の actor だけが行える。CoS operations・外部 operator の token・daemon（`system:*`）の要求は 403 にする（code `script_mode_requires_human`）。CoS operations の registry では、`to_mode = ts` を EXCLUDED の理由付きで拒否する。
+  - `→ts` の元は、同じ generation の `compare` に限る。`rust` から直接 `ts` にする要求と、generation を同時に変える要求は 422（`script_mode_ts_requires_compare`）にする。
+  - `ts→rust`・`ts→compare`（戻し）は、S2-5 の戻しと同じく、認証された誰でも・daemon 自身が行える。起動時の復元（bundle が無い・hash が違う・`host_api` が合わない・manifest の `cos_digest` に capability が足りない）では、actor `system:script-startup` が `rust` へ戻す。
+- **本番**: 本番の `cos_digest` は `rust` のまま変えない。S4 は `ts` を試験と非本番の daemon でだけ使う。本番で `compare`・`ts` にする手順と、canary・停止基準・他の領域への拡大は S5 で決める。進行中の測定 daemon では切り替えない（(g)）。
+
+### S4-15 記録（目的の (4)。S4-5・S4-7 を改める）
+- `script_compare_log` は今までどおり 1 run 1 行で書く。`mode` が `compare`・`ts` の pass で、出力（Rust・TS のどちらか）に現れた run ごとに 1 行。mode `rust` では書かない。表の列と migration は変えず、`json` に次の欄を足す。
+  | 欄 | 型 | 中身 |
+  |---|---|---|
+  | `mode` | `"compare" \| "ts"` | pass の始めに読んだ mode |
+  | `pass_id` | string（ULID） | 同じ pass の行どうしで同じ値 |
+  | `applied_by` | `"rust" \| "ts"` | その run に apply した command を出した側。`compare` では常に `rust` |
+  | `fallback` | `{ code, message } \| null` | `ts` で Rust の command を apply した理由。code は `ts_error`・`invalid_output`・`run_outside_list`・`run_missing`・`run_unreadable`・`run_order`・`mode_changed`・`unavailable`。`message` は 512 byte で切る。`compare` と、TS を apply した行では `null` |
+  | `ops` | `{ op, request_digest, reply_digest, outcome, elapsed_us }[]` | その run に関わる op 呼び出し（その pass の `list_runs` と、その run の `read_run`）。`request_digest`・`reply_digest` は `sha256:` + 直列化の sha256。`outcome` は `ok`・`error`・`denied`・`memo`（memo から答えた 2 回目以降）。本文は残さない（S4-5 の理由のまま） |
+- `call_site` は `cos_digest.pass` に変える。`outcome`（`match` ほか）と `rust`・`ts` の `commands_digest`・`command_kinds` は run ごとの比較のまま残す。`ts` mode でも、Rust の参照実装の command と比べた結果を入れる。
+- 重複の抑え（S4-5）の比べる欄に `applied_by` を足す。同じ run・同じ `generation`・`input_digest`・`outcome`・`applied_by` の行は足さない。
+- message の冪等 key `cos-triage-digest:<run_id>` は変えない。TS が出した `post_digest` も、規則 1 で同じ key に限る。
+  どちらの側が apply しても、再配送・retry・再起動・fallback の後に 2 件目の message は作られない。requeue の `WHERE state='running'` も変えない。
+- 新しい `Event` の variant は足さない（S4-7 のまま）。task-api の query・`web/api` の生成型は変わらない。
+
+### S4-16 trace の形と replay（目的の (5)。S4-5 の replay・S4-8 を改める）
+- 置き場は `control-ts/fixtures/cos_digest/pass_traces.jsonl`。1 行が 1 pass で、形は次のとおり。
+  `{ "name": string, "ops": { "op": "cos_digest:list_runs" | "cos_digest:read_run", "request": object, "reply": { "kind": "ok", "value": object } | { "kind": "error", "error": HostError } }[], "output": CosDigestPassOutput }`
+  - `ops` は Rust の pass の memo の中身で、最初に読んだ順に並べる。
+  - `output` は Rust の参照実装の出力。TS の手書きにしない（S4-2 と同じ）。
+- 書き出し: 本物の dispatcher の経路から書き出す。triage run は FakeAdapter で終えさせる。`CELERIS_UPDATE_FIXTURES=1` で書き直し、無ければ byte 一致を確かめる（`cos_digest_trace.rs` と同じ方式）。
+  場面は、1 run・20 run を超える drain・stopped / interrupted / completed / failed の混在・`read_run` の失敗・`chat_run_get` の失敗（`reason: null`）を含める。
+- replay: fake host（`control-ts/src/testing/` の pass replay runner）が、TS の op 呼び出しに trace の `ops` から答える。照合は `op` と `request` の直列化の一致で行う。
+  trace に無い要求には `denied` を返し、その pass を不一致にする。合格は次の 2 つがそろうことである。
+  - TS の `output` が trace の `output` と byte 一致する。
+  - TS が呼んだ op の集合が trace の `ops` に含まれる。
+  全 pass を正順と逆順に 2 回流す（S4-13 の 4）。`node control-ts/scripts/compare.mjs cos_digest` は pass の replay を行い、合否を exit code で返す。
+- `cases.jsonl` は純粋関数 `decide()` の単体の fixture として残す。compare.mjs は各行を「run 1 つの pass」に機械的に組み直して replay する（list の答え = その行の `thread`・`run_id`・`run_state`、read の答え = `input`、`output` = `commands`）。手書きの期待値は足さない。
+- LLM は呼ばない。digest の pass は終わった triage run の結果を読むだけである。LLM の応答（CoS の判断）は `cos_inbox_items` の `decision` として記録済みで、trace の `read_run` の応答に入っている。live で LLM を二重に呼ばない。
+- 本番の log の replay の道具は作らない（S4-10 の (7) のまま）。log は本文を持たないので、本番の log からは trace を作れない。
+
+### S4-17 旧い経路を消す（目的の (6)。破壊的変更、ADR 2026-10-11-breaking-changes-by-default）
+pass-wire・ts-pass・traces-async の各 unit が、新しい経路を入れるのと同じ差分で次を消す。互換の分岐・新旧の切替 flag は残さない。
+- Rust: `PolicyScript::cos_digest`（run ごと）とその実装（`crates/celeris/src/daemon/script_policy.rs`）、`Dispatcher::compare_cos_digest` の run ごとの spawn、`CosDigestDraft` の run ごとの呼び出し、`CosDigestApplication` を run ごとに compare へ渡す経路。
+- TS: `cosDigest`（run ごとの入口）の export と、`domains/index.ts` の登録。`compare.mjs` の `cos_digest` の `entry: "cosDigest"`。
+- fixture と試験: `control-ts/fixtures/cos_digest/traces.jsonl`、`crates/task-dispatch/src/dispatcher/tests/cos_digest_trace.rs`。run ごとの compare を前提にした試験は、pass の試験に書き換えるか消す（`cos_chat_triage_digest_script_compare.rs`、`crates/celeris/tests/script_compare_cos_digest.rs`）。
+- 文書: S4-6 は S4-13 で置き換えた。architecture-map の cos_digest の行は close-async unit が直す。
+
+### S4-18 await 中の op が返す error（目的の (7)）
+| 起きたこと | await 中・後の op が返す error（`HostError.code`） | 呼び出しの結果 | mode `ts` の pass |
+|---|---|---|---|
+| pass の deadline（200 ms）を過ぎた | `timeout`。op server は deadline の時点で受け付けを止め、その後は store を読まない | `ScriptError::Timeout`。同期のループは watchdog が止める（(b)） | Rust で apply（`fallback.code = ts_error`） |
+| 呼び出し側の cancel（dispatcher の停止・tick の future の破棄） | `terminated`。開始時に有効だった token の grant が await の後に消えていたら、この code を返す。開始時から知らない token の場合だけ `denied` を返す | 結果は捨てる | 何も apply しない。apply は TS が返った後の 1 か所だけなので、cancel で副作用は起きない。次の tick（再起動後は reconcile で立つ `digest_due`）で pass をやり直す |
+| generation の作り直し（isolate の再生成・heap 上限・terminate 後の作り直し） | `generation_gone` | `ScriptError::GenerationGone` | Rust で apply（`ts_error`） |
+| pass 中の mode・generation の切り替え（API の CAS） | op は続けて答える。pass は始めの generation で最後まで走る（Promise を新 generation へ移さない。(d)） | 通常どおり | apply の直前の読み直しで違いを見つけたら Rust で apply（`mode_changed`） |
+| op server の store の読み出しの失敗 | `exception`（op の error。memo に error として残す） | TS が扱う（その run を飛ばす） | 規則 8 で照合する（Rust も同じ run を飛ばす） |
+- `terminated`・`timeout`・`generation_gone` は安全違反に数えない（S2-8 の timeout・失敗の数え方のとおり）。`denied` だけを `denied_capability`・`denied_scope` として数える。
+
+### S4-19 後続の unit の作業範囲と試験名
+試験名は unit が実装時に変えてよい。変えたら進捗ファイルに対応を書き、close-async unit がこの表と突き合わせる。
+| unit | 作業範囲（path） | 足す・直す試験 |
+|---|---|---|
+| host-ops | `crates/script-runtime/src/{ops.rs,dto.rs,actor.rs,handle.rs,host.js}`、`crates/script-runtime/tests/`、`docs/api/script-host/host-v1.schema.json`、`control-ts/src/host.d.ts`（生成物）、`crates/celeris/src/daemon/script_policy.rs`（`ScriptCall` の欄が増えた分の追従だけ） | `crates/script-runtime/tests/cos_digest_ops.rs`: `cos_digest_ops_denied_without_manifest_declaration`、`cos_digest_ops_forward_to_host_sink_and_return_reply`、`cos_digest_ops_grant_bound_to_domain`、`cos_digest_ops_terminated_after_request_end`、`cos_digest_ops_timeout_at_deadline`、`cos_digest_ops_generation_gone_on_rebuild`、`capability_requests_are_exclusive_per_isolate`、`cos_digest_ops_busy_after_64_calls`。schema と生成型の再生成で差分 0 |
+| mode-ts | `crates/task-api/src/script_domains.rs`、`crates/task-api/tests/script_domains.rs`、`crates/task-api/src/cos/operations.rs`・`cos/ops/`、`agent-docs/adr/2026-10-09-cos-operations-all-mutations.md`、`config/skills/cos-operator/operations.md`、`crates/task-core/src/script_compare.rs`（mode の検証だけ） | `script_domain_mode_ts_only_for_cos_digest`、`script_domain_mode_ts_requires_human_actor`（CoS・外部 operator・`system:*` を拒否）、`script_domain_mode_ts_requires_compare_same_generation`、`script_domain_mode_ts_rollback_by_anyone`、`script_domain_mode_canary_still_rejected`、CoS registry の既存試験の追従。dispatcher は pass-wire が入るまで `ts` を `rust` と同じに扱う（`compare_target` は `compare` 以外で何もしない） |
+| pass-wire | `crates/task-dispatch/src/dispatcher/cos_chat/{digest.rs,triage.rs}`、`crates/task-dispatch/src/dispatcher/script_compare.rs`、`crates/task-dispatch/src/script_policy.rs`、`crates/task-core/src/chat/digest.rs`（pass の DTO・規則 7〜9）、`crates/task-core/src/script_compare.rs`・`script_compare/cos_digest_record.rs`（S4-15 の欄）、`crates/celeris/src/daemon/script_policy.rs`（`cos_digest_pass` の実装。trait を変える unit が同じ差分で直す）、S4-17 の Rust の削除 | `crates/task-dispatch/src/dispatcher/tests/cos_digest_pass.rs`: `cos_digest_pass_rust_reads_each_once_and_applies_rust`、`cos_digest_pass_compare_answers_ops_from_frozen_snapshot`、`cos_digest_pass_compare_denies_unlisted_read`、`cos_digest_pass_ts_applies_validated_ts_commands`、`cos_digest_pass_ts_falls_back_on_error_timeout_invalid`、`cos_digest_pass_ts_rejects_run_outside_list`、`cos_digest_pass_ts_mode_changed_before_apply_uses_rust`、`cos_digest_pass_log_records_applied_by_and_ops`。task-core: `cos_digest_pass_validation_rejects_each_rule`（規則 1〜9）。既存 11 件（`cos_digest_script.rs`）を通す |
+| ts-pass | `control-ts/src/domains/{cos_digest.ts,cos_digest.test.ts,index.ts}`、`control-ts/src/testing/`（pass replay runner）、`control-ts/scripts/{compare.mjs,compare.test.mjs}`、`control-ts/bundle.config.json`（`cos_digest` の capability）、S4-17 の TS の削除 | `cos_digest.test.ts`: `cosDigestPass reads list then each listed run`、`skips a run whose read_run throws`、`never reads a run outside the list`、`replay forward and reverse give the same output`。`node control-ts/scripts/compare.mjs cos_digest` が `cases.jsonl` を組み直した pass で全件一致し exit 0。TS の規則を 1 か所壊した写しで exit 1 |
+| traces-async | `crates/task-dispatch/src/dispatcher/tests/cos_digest_pass_trace.rs`（新）、`control-ts/fixtures/cos_digest/pass_traces.jsonl`（新）、`traces.jsonl` と `cos_digest_trace.rs` の削除 | `cos_digest_pass_trace_fixture_is_current`（`CELERIS_UPDATE_FIXTURES` 無しで byte 一致）。`node control-ts/scripts/compare.mjs cos_digest` が `pass_traces.jsonl` を含めて全件一致 |
+| real-host | `crates/celeris/tests/script_cos_digest_pass.rs`（`script_compare_cos_digest.rs` を置き換え） | `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` で: `script_cos_digest_pass_compare_real_host_match`、`script_cos_digest_pass_ts_applies_ts_commands`、`script_cos_digest_pass_ts_throwing_bundle_falls_back_to_rust`、`script_cos_digest_pass_ts_daemon_restart_without_bundle_restores_rust`、`script_cos_digest_pass_ts_restart_keeps_one_message`。mode `ts` で apply した `chat_messages`・`cos_inbox_items` が、mode `rust` の基準と byte 一致する |
+| robust-ts | `crates/task-dispatch/src/dispatcher/tests/cos_digest_script.rs`（mode `ts` の場面を足す） | `cos_digest_script_ts_order_item_update_before_and_after_run_end`、`…_ts_redelivery_same_run_twice`、`…_ts_retry_message_write_failure`、`…_ts_retry_scan_failure`、`…_ts_retry_requeue_write_failure`、`…_ts_cancel_deadline_during_op_await`、`…_ts_cancel_dispatcher_stop_during_op_await`、`…_ts_restart_mid_pass_applies_once`、`…_ts_policy_version_bump_session_fresh`、`…_ts_generation_gone_during_await_falls_back`。共通の不変条件は 3 つ: message は冪等 key ごとに 1 件、requeue は item ごとに 1 回まで、記録は run・`applied_by` ごとに 1 件まで |
+| close-async | 進捗のまとめ、`docs/architecture-map.md` の cos_digest の行、この付記の実装との突き合わせ（S4-20 として足す） | 文書の検査（`check-doc-links.sh`・`check-adr-numbers.sh`・`progress-index.sh --check`） |

@@ -12,7 +12,8 @@
     "gen:types": "node scripts/gen-host-types.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run && node --test scripts/*.test.mjs",
-    "bundle": "node scripts/build-bundle.mjs"
+    "bundle": "node scripts/build-bundle.mjs",
+    "compare": "node scripts/compare.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

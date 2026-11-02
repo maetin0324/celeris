@@ -64,11 +64,11 @@ updated: 2026-11-02
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
 
+## 範囲 check と Cargo.lock（解決済み）
+- 計画の範囲 check が当初 `Cargo.lock` を範囲外としていた。Objective が求める schemars を `celeris-script` の依存に足すと `Cargo.lock` の依存一覧が必ず変わる
+  （差分は 3 行で、新しい外部 crate は入らない）ので plan_issue で申告し、replan で check が直った。コードは作り直していない。
+
 ## 未解決事項
-- 計画の範囲 check が `Cargo.lock` を範囲外としているため、この unit は check を通せない（plan_issue で申告した）。Objective が求める schemars を
-  `celeris-script` の依存に足すと `Cargo.lock` の `celeris-script` の依存一覧が必ず変わる（変更は依存 3 行だけで、新しい外部 crate は入らない）。
-  base の `Cargo.lock` に戻すと `cargo metadata --locked --offline` は exit 101、この branch の `Cargo.lock` では exit 0。
-  check の allowlist に `Cargo\.lock$` を足す replan が要る。成果のコードは変えていない。
 - この WU の `CARGO_TARGET_DIR` の `debug/build/v8-*/output` が別の WU の target dir（seed 元）の `gn_out/obj` を指しており、
   初回の build が `could not find native static library rusty_v8` で落ちた。自分の target dir の `debug/build/v8-*` と
   `.fingerprint/v8-*` を消して build script を再実行させると直った。target の seed（reflink）を使う WU では同じことが起きうる。

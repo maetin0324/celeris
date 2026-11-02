@@ -59,13 +59,18 @@ MIGRATIONS_PATTERN = re.compile(r"(^|/)migrations/")
 TOOLING_DIR = re.compile(r"^(web/scripts/|scripts/|deploy/|tools/)")
 LOCKFILES = re.compile(r"(Cargo\.lock|pnpm-lock\.yaml|package-lock\.json|yarn\.lock)$")
 FIXTURE = re.compile(r"(^|/)(fixtures?|testdata|mock-celeris)/")
+# 外部 crate の写し（[patch.crates-io]）。手書きの code ではないので大きさを測らない
+# （ADR agent-docs/adr/2026-11-02-deno-core-vendored-serde-json-features.md）。
+VENDORED = re.compile(r"^crates/[^/]+/vendor/")
 DOCS = re.compile(r"^docs/|(^|/)docs/|\.md$")
 
 
 def classify_path(path: str) -> str:
     """Coarse, extension/location-based classification, independent of file
     contents. One of: rust, ts, generated, schema, lockfile, fixture,
-    migrations, docs, tooling, other."""
+    migrations, docs, tooling, vendored, other."""
+    if VENDORED.search(path):
+        return "vendored"
     if path in GENERATED_EXACT:
         return "generated"
     if LOCKFILES.search(path):

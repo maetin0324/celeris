@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "celeris:host v1",
+  "description": "schema の根。Host API v1 の DTO を 1 つの文書に集める（値として使わない）。",
+  "type": "object",
+  "properties": {
+    "capability": {
+      "$ref": "#/$defs/Capability"
+    },
+    "host_error": {
+      "$ref": "#/$defs/HostError"
+    },
+    "selftest_echo_request": {
+      "$ref": "#/$defs/SelftestEchoRequest"
+    },
+    "selftest_echo_result": {
+      "$ref": "#/$defs/HostResult"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "capability",
+    "host_error",
+    "selftest_echo_request",
+    "selftest_echo_result"
+  ],
+  "$defs": {
+    "Capability": {
+      "description": "bundle の manifest が宣言する capability。Rust は「宣言 ∩ 領域ごとの許可表」だけを有効にする。",
+      "oneOf": [
+        {
+          "description": "試験用 async op `op_host_selftest_echo`（要求の scope の task を写し返すだけ）。",
+          "type": "string",
+          "const": "selftest:echo_task"
+        }
+      ]
+    },
+    "HostError": {
+      "description": "Host API の誤り。op は `{ kind: \"error\", error }` で返し、`celeris:host` が `HostError` として throw する。",
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/HostErrorCode"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "HostErrorCode": {
+      "description": "`HostError.code`。[`ScriptError`] の種類と 1 対 1。",
+      "type": "string",
+      "enum": [
+        "exception",
+        "timeout",
+        "busy",
+        "invalid_output",
+        "denied",
+        "terminated",
+        "generation_gone"
+      ]
+    },
+    "HostResult": {
+      "description": "op の戻り値。`celeris:host` は `ok` なら `value` を返し、`error` なら `HostError` を throw する。",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ok"
+            },
+            "value": {
+              "$ref": "#/$defs/SelftestEchoReply"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/HostError"
+            },
+            "kind": {
+              "type": "string",
+              "const": "error"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "error"
+          ]
+        }
+      ]
+    },
+    "SelftestEchoReply": {
+      "description": "`op_host_selftest_echo` の戻り値（Rust → TS）。",
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "note": {
+          "type": "string"
+        },
+        "observation": {
+          "$ref": "#/$defs/SelftestObservation"
+        },
+        "priority": {
+          "$ref": "#/$defs/SelftestPriority"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "tokens": {
+          "$ref": "#/$defs/U64String"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "note",
+        "tokens",
+        "priority",
+        "at",
+        "observation"
+      ]
+    },
+    "SelftestEchoRequest": {
+      "description": "`op_host_selftest_echo` の引数（TS → Rust）。",
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "note": {
+          "description": "無ければ `null`（欄は省かない）。",
+          "type": "string"
+        },
+        "priority": {
+          "$ref": "#/$defs/SelftestPriority"
+        },
+        "task_id": {
+          "description": "対象の task の id（ULID の文字列）。要求の scope に無ければ `denied`。",
+          "type": "string"
+        },
+        "tokens": {
+          "description": "token 数など 2^53−1 を超えうる値。",
+          "$ref": "#/$defs/U64String"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "note",
+        "tokens",
+        "priority",
+        "at"
+      ]
+    },
+    "SelftestObservation": {
+      "description": "`op_host_selftest_echo` が見たもの（データ付きの enum の写像を確かめる）。",
+      "oneOf": [
+        {
+          "description": "note があった。",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "noted"
+            },
+            "length": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "length"
+          ]
+        },
+        {
+          "description": "note が null だった。",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "empty"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "SelftestPriority": {
+      "description": "試験用の優先度（unit の enum の写像を確かめる）。",
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high"
+      ]
+    },
+    "Timestamp": {
+      "description": "RFC 3339 の UTC 時刻（末尾 Z）",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "U64String": {
+      "description": "0 以上 2^64−1 以下の整数の 10 進表記（2^53−1 を超えうる値は number にしない）",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    }
+  }
+}

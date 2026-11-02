@@ -1,0 +1,38 @@
+[package]
+name = "celeris-script"
+version = "0.1.0"
+edition.workspace = true
+description = "TS 制御層の埋込み ScriptRuntime（deno_core を専用 thread の actor に閉じ込める。境界 ADR 2026-11-02 (b)）"
+
+[lib]
+name = "celeris_script"
+
+[dependencies]
+# 境界 ADR 2026-11-02 (e): 版は `=` で固定し、既定 feature だけを使う。deno_core の型は crate の外に出さない。
+deno_core = "=0.413.0"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+ulid = { version = "1", features = ["serde"] }
+# deno_core の ModuleLoader・op の誤りの型（deno_core と同じ版）。
+deno_error = "=0.7.1"
+schemars = "1"
+time = { version = "0.3", features = ["parsing"] }
+sha2 = "0.10"
+
+[[bin]]
+name = "script-schema"
+path = "src/bin/script-schema.rs"
+
+[[bin]]
+name = "script-load-check"
+path = "src/bin/script-load-check.rs"
+
+[[bin]]
+name = "script-bench"
+path = "src/bin/script-bench.rs"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tempfile = "3"

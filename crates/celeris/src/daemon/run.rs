@@ -12,6 +12,7 @@ use super::bootstrap::{
     refuse_production_db_in_worker_run, warn_if_db_on_network_filesystem,
 };
 use super::clusters::{ClusterMasters, spawn_control_path_inspection, wire_cluster_liveness_hooks};
+use super::script_layer::ScriptLayer;
 use super::services::{
     RunningLlmProxy, RunningMcp, build_llm_proxy_state, build_mcp_state, start_llm_proxy, start_mcp,
 };
@@ -291,6 +292,13 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         Some(state) => Some(start_mcp(&config, state).await?),
         None => None,
     };
+    // 境界 ADR 2026-11-02: `?` で抜ける経路の後に置く。`[script]` が無ければ thread も isolate も作らない。
+    let script_layer = ScriptLayer::start(
+        config.script.as_ref(),
+        dispatcher.store().as_ref(),
+        &identity.instance_id,
+    )
+    .await;
     let mut roles = RoleState {
         role,
         supervisor,
@@ -325,6 +333,9 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     }
     if let Some(mcp) = roles.mcp.take() {
         mcp.stop().await;
+    }
+    if let Some(script_layer) = script_layer {
+        script_layer.stop().await;
     }
     // ADR-0064 D3/D5: 背景チェックポイント・定期バックアップは draining でも動き続けてよい
     // （DB への書き込みではなく、既存の WAL をさばく／バックアップするだけ）ので、プロセスが本当に

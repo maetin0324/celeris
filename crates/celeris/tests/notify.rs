@@ -13,6 +13,10 @@
 #[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../tests/support/http_async.rs"]
 mod fake_http;
+#[cfg(test)]
+#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
+#[path = "../../../tests/support/http_request.rs"]
+mod http_framing;
 
 use std::path::Path;
 use std::time::Duration;
@@ -779,8 +783,14 @@ fn links_are_added_only_when_a_web_base_url_is_configured() {
 
 // ---- 送信（偽の HTTP サーバ。外部ネットワークには出ない）----
 
-/// `127.0.0.1:0` で待ち受け、リクエストを `max` 件受けて `response` をそのまま返す。返るのは URL と、
+/// `127.0.0.1:0` で待ち受け、`POST /hook` を `max` 件受けて `response` をそのまま返す。返るのは URL と、
 /// 受け取った本文を集めるハンドル。
+///
+/// 接続は 1 本ずつ別の task で読み、受けた接続は必ず応答してから閉じる。`fake_http::accept` は最初に
+/// 読み終えた 1 本を返して残りの接続を捨てるので、迷い込み（同じ port を一度取って捨てた別の試験の
+/// 送信など）が先に終わると本物の送信が応答なしに切られ、送信側は "invalid request" になった
+/// （2026-11-02 の flaky。`the_fake_webhook_answers_a_connection_even_if_another_request_finishes_first`）。
+/// 読みに時間切れも置かない（負荷で送信が遅れても 404 で切らない）。
 async fn fake_webhook_raw(
     max: usize,
     response: &str,
@@ -791,20 +801,52 @@ async fn fake_webhook_raw(
     let addr = listener
         .local_addr()
         .unwrap_or_else(|e| panic!("addr: {e}"));
-    let response = response.to_string();
+    let response: std::sync::Arc<str> = response.into();
     let handle = tokio::spawn(async move {
-        use tokio::io::AsyncWriteExt;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let mut bodies = Vec::new();
-        for _ in 0..max {
-            let (mut socket, request) = fake_http::accept(&listener, "POST", "/hook").await;
-            bodies.push(request);
-            let _ = socket.write_all(response.as_bytes()).await;
-            let _ = socket.flush().await;
-            let _ = socket.shutdown().await;
+        while bodies.len() < max {
+            tokio::select! {
+                Some(body) = rx.recv() => bodies.push(body),
+                connection = listener.accept() => {
+                    let (socket, _) = connection.unwrap_or_else(|e| panic!("accept: {e}"));
+                    tokio::spawn(answer_hook(socket, response.clone(), tx.clone()));
+                }
+            }
         }
         bodies
     });
     (format!("http://{addr}/hook"), handle)
+}
+
+/// 1 本の接続から要求を読み切り、`POST /hook` なら本文を `tx` に送って `response` を、違えば 404 を返す。
+async fn answer_hook(
+    mut socket: tokio::net::TcpStream,
+    response: std::sync::Arc<str>,
+    tx: tokio::sync::mpsc::UnboundedSender<String>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut bytes = Vec::new();
+    let mut buf = [0u8; 8192];
+    let request = loop {
+        match socket.read(&mut buf).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => bytes.extend_from_slice(&buf[..n]),
+        }
+        match http_framing::complete(&bytes) {
+            Ok(Some(_)) => break String::from_utf8_lossy(&bytes).into_owned(),
+            Ok(None) => {}
+            Err(()) => break String::new(),
+        }
+    };
+    if fake_http::matches(&request, "POST", "/hook") {
+        let _ = socket.write_all(response.as_bytes()).await;
+        let _ = tx.send(request);
+    } else {
+        let _ = socket.write_all(http_framing::NOT_FOUND).await;
+    }
+    let _ = socket.flush().await;
+    let _ = socket.shutdown().await;
 }
 
 /// `max` 件を受けて、毎回 `status` だけの空応答を返す（`connection: close`）。
@@ -814,6 +856,77 @@ async fn fake_webhook(max: usize, status: u16) -> (String, tokio::task::JoinHand
         &format!("HTTP/1.1 {status} X\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"),
     )
     .await
+}
+
+/// 待ち受け socket の accept 待ちの列（`/proc/net/tcp` の LISTEN 行の rx_queue）が空になるまで待つ。
+/// 偽サーバが接続を accept し終えたことを、時間でなく出来事で確かめる。
+async fn wait_until_accepted(port: u16) {
+    let local = format!("0100007F:{port:04X}");
+    for _ in 0..1000 {
+        let table = std::fs::read_to_string("/proc/net/tcp").unwrap_or_default();
+        let backlog = table.lines().skip(1).find_map(|line| {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            (cols.get(1) == Some(&local.as_str()) && cols.get(3) == Some(&"0A"))
+                .then(|| {
+                    cols.get(4)
+                        .and_then(|q| q.split(':').nth(1))
+                        .map(str::to_owned)
+                })
+                .flatten()
+        });
+        if backlog.as_deref() == Some("00000000") {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the fake server did not accept the connection");
+}
+
+/// 2026-11-02 の flaky（`a_failing_webhook_is_retried_three_times_and_then_given_up` が 1 回だけ
+/// "invalid request"）の再現: 偽サーバが受けた接続のうち、別の接続が先に要求を読み終えても、
+/// 受けた接続を応答なしに捨てない。迷い込み（A）が先に終わる順序を接続の順序で決める。
+#[tokio::test]
+async fn the_fake_webhook_answers_a_connection_even_if_another_request_finishes_first() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (url, _server) = fake_webhook(4, 500).await;
+    let authority = url
+        .strip_prefix("http://")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or_else(|| panic!("authority"))
+        .to_string();
+    let port: u16 = authority
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or_else(|| panic!("port"));
+    let request = "POST /hook HTTP/1.1\r\nhost: x\r\ncontent-length: 2\r\n\r\n{}";
+    let (head, last) = request.split_at(request.len() - 1);
+    // B（本物の送信の代わり）: 接続して最後の 1 byte を残して送り、偽サーバが accept するまで待つ。
+    let mut b = tokio::net::TcpStream::connect(&authority)
+        .await
+        .unwrap_or_else(|e| panic!("connect b: {e}"));
+    b.write_all(head.as_bytes())
+        .await
+        .unwrap_or_else(|e| panic!("write b: {e}"));
+    wait_until_accepted(port).await;
+    // A（迷い込み）: 要求を全部送り、応答を読み終える。
+    let mut a = tokio::net::TcpStream::connect(&authority)
+        .await
+        .unwrap_or_else(|e| panic!("connect a: {e}"));
+    a.write_all(request.as_bytes())
+        .await
+        .unwrap_or_else(|e| panic!("write a: {e}"));
+    let mut reply_a = Vec::new();
+    let _ = a.read_to_end(&mut reply_a).await;
+    assert!(reply_a.starts_with(b"HTTP/1.1 500"), "{reply_a:?}");
+    // B の残りを送る。B にも応答が返る。
+    let _ = b.write_all(last.as_bytes()).await;
+    let mut reply_b = Vec::new();
+    let read = b.read_to_end(&mut reply_b).await;
+    assert!(
+        reply_b.starts_with(b"HTTP/1.1 500"),
+        "B got no response: {read:?} {reply_b:?}"
+    );
 }
 
 #[tokio::test]

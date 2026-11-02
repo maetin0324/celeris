@@ -1,0 +1,9 @@
+packages:
+  - "."
+# 公開から7日未満の版は使わない。
+minimumReleaseAge: 10080
+# install script は許可リスト外なら失敗させる。esbuild の postinstall は最適化だけで、
+# 実行 file は optional 依存の @esbuild/<platform> にあるので走らせない。
+strictDepBuilds: true
+allowBuilds:
+  esbuild: false

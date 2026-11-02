@@ -203,6 +203,7 @@ pub const RULES: &[FieldRule] = &[
     startup("containers", "コンテナ runtime を起動時に 1 度だけ調べる"),
     startup("cron", "cron の executor 表は起動時に組む"),
     startup("storage", "保存先の基盤"),
+    startup("script", "TS 制御層の bundle は起動時に検証して読む"),
     startup("knowledge", "知識の根と langmem の接続を起動時に作る"),
     startup("docs_maintenance", "docs の整理の executor は起動時に組む"),
     startup("llm_proxy", "proxy の listener は起動時に開く"),

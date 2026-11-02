@@ -18,7 +18,8 @@ MIGRATION_EXCLUDE="agent-docs/PROGRESS.md agent-docs/progress/phase-F.md scripts
 
 # 素のパスを見ない・Markdown も見ないもの（前方一致）。
 # retired-doc-links.tsv は廃止済み target の完全一致台帳（検査対象の参照ではない）。
-ALWAYS_EXCLUDE="scripts/dev/testdata/ scripts/dev/docs-layout.tsv scripts/dev/retired-doc-links.tsv scripts/dev/check-doc-links.sh"
+# crates/script-runtime/vendor/ は crates.io の deno_core の写し（ADR 2026-11-02-deno-core-vendored-serde-json-features）。中の文書の link は元の repo を指す。
+ALWAYS_EXCLUDE="crates/script-runtime/vendor/ scripts/dev/testdata/ scripts/dev/docs-layout.tsv scripts/dev/retired-doc-links.tsv scripts/dev/check-doc-links.sh"
 
 # docs/… が「このリポジトリ」ではなく別の文書リポジトリ・試験の作業場所を指すファイル（前方一致）。
 # celeris の文書機能（docs/ を持つ案件リポジトリ）と、その試験の fixture。(2) の素のパスを見ない。

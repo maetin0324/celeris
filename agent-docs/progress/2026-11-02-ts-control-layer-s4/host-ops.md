@@ -48,7 +48,7 @@ updated: 2026-11-02
 - `cargo nextest run -p celeris-script`: 51 passed, 0 skipped（exit 0）。`--test cos_digest_ops --test dto` を 10 回続けて 15 passed ×10。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 - `cd control-ts && pnpm typecheck && pnpm test`: tsc exit 0、vitest 81 passed、node --test 34 passed。`node scripts/gen-host-types.mjs --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 結果は報告本文に書く（Cargo.lock の変更で workspace 全体が対象になる）。
+- `bash scripts/dev/test-affected.sh`: exit 0。Cargo.lock の変更で workspace 全体が対象になり、nextest 7105 passed・21 skipped、web vitest 697 passed、control-ts vitest 81 passed。
 
 ## 未解決事項
 - 本番に deploy 済みの bundle は schema の hash が変わるので、新しい binary では load の照合で合わない。`cos_digest` は本番で `rust` のままなので挙動は変わらないが、bundle は作り直して deploy する必要がある（本番への移行の節）。

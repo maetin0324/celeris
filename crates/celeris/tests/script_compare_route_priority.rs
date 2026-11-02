@@ -10,7 +10,7 @@ mod support;
 use std::sync::Arc;
 
 use support::script_compare::{
-    Env, LONG_DEADLINE, dist_bundle, repo_root, start_code, start_policy,
+    Env, LONG_DEADLINE, dist_bundle, repo_root, start_code, start_policy, usable_bundle,
 };
 use task_core::llm_route::{
     CandidateKey, ExecutionClass, HarnessId, ModelId, Registry, SourceId, route_priority_decide,
@@ -187,9 +187,10 @@ fn fixture_cases() -> Vec<(String, RoutePriorityInput, RoutePriorityOutput)> {
 /// 同じ isolate に正順と逆順で流し、global に残した値で答えが変わらないことも見る（付記 S2-7）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn script_compare_route_priority_real_host_matches_rust_on_all_fixtures() {
-    let Some(bundle) =
-        dist_bundle("script_compare_route_priority_real_host_matches_rust_on_all_fixtures")
-    else {
+    let Some(bundle) = dist_bundle(
+        "script_compare_route_priority_real_host_matches_rust_on_all_fixtures",
+        DOMAIN,
+    ) else {
         return;
     };
     assert!(bundle.manifest.domains.iter().any(|d| d == DOMAIN));
@@ -231,9 +232,10 @@ fn assert_route_record(record: &ScriptCompareRecord) {
 /// (5) 記録の入力に S2-3 で捨てる値が無く、digest が合い、TS に通し直すと同じ出力が出る（replay）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn script_compare_route_priority_dispatch_match_rollback_and_replay() {
-    let Some(bundle) =
-        dist_bundle("script_compare_route_priority_dispatch_match_rollback_and_replay")
-    else {
+    let Some(bundle) = dist_bundle(
+        "script_compare_route_priority_dispatch_match_rollback_and_replay",
+        DOMAIN,
+    ) else {
         return;
     };
     let env = Env::with_sources(DOMAIN, &secret_sources());
@@ -364,5 +366,84 @@ async fn script_compare_route_priority_undeclared_candidate_keeps_rust_route() {
     assert_eq!(
         record.ts.as_ref().expect("ts")["candidates"][0]["source"],
         "elsewhere"
+    );
+}
+
+/// tempdir に `domains` の manifest を持つ検証の通る bundle を置き、`bundle.config.json` には
+/// `host_selftest`・`lane_rules`・`route_priority` を宣言する。
+fn stale_dist_fixture(
+    domains: &[&str],
+) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    use celeris_script::manifest::{
+        BUNDLE_FILE, MANIFEST_FILE, MANIFEST_SCHEMA, host_schema_sha256, sha256_hex,
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dist = dir.path().join("dist");
+    std::fs::create_dir_all(&dist).expect("dist");
+    let code = "globalThis.__celerisDispatch = () => null;\n";
+    std::fs::write(dist.join(BUNDLE_FILE), code).expect("bundle");
+    let manifest = serde_json::json!({
+        "schema": MANIFEST_SCHEMA,
+        "bundle_sha256": sha256_hex(code.as_bytes()),
+        "host_api": "^1",
+        "schema_sha256": host_schema_sha256(),
+        "toolchain": { "typescript": "0", "esbuild": "0", "node": "0" },
+        "source_commit": "0000000",
+        "domains": domains,
+        "capabilities": [],
+        "checkpoint_versions": [],
+    });
+    std::fs::write(dist.join(MANIFEST_FILE), manifest.to_string()).expect("manifest");
+    let config = dir.path().join("bundle.config.json");
+    let config_json = serde_json::json!({
+        "host_api": "^1",
+        "domains": { "host_selftest": [], "lane_rules": [], "route_priority": [] },
+        "checkpoint_versions": [],
+    });
+    std::fs::write(&config, config_json.to_string()).expect("config");
+    (dir, dist, config)
+}
+
+/// route_priority を足す前の bundle（domains が host_selftest・lane_rules だけ）は SKIP。
+/// config の領域の集合と違うので、manifest に在る lane_rules の試験からも SKIP にする。
+#[test]
+fn script_compare_stale_dist_missing_domain_is_skipped() {
+    let (_dir, dist, config) = stale_dist_fixture(&["host_selftest", "lane_rules"]);
+    let test = "script_compare_stale_dist_missing_domain_is_skipped";
+    assert!(usable_bundle(&dist, &config, test, DOMAIN, false).is_none());
+    assert!(usable_bundle(&dist, &config, test, "lane_rules", false).is_none());
+}
+
+/// manifest の domains が config と揃っていれば使う。
+#[test]
+fn script_compare_stale_dist_matching_domains_is_used() {
+    let (_dir, dist, config) =
+        stale_dist_fixture(&["host_selftest", "lane_rules", "route_priority"]);
+    let test = "script_compare_stale_dist_matching_domains_is_used";
+    let bundle = usable_bundle(&dist, &config, test, DOMAIN, false).expect("usable");
+    assert!(bundle.manifest.domains.iter().any(|d| d == DOMAIN));
+    assert!(usable_bundle(&dist, &config, test, "lane_rules", true).is_some());
+}
+
+/// config に無い領域を要る試験は、揃った bundle でも SKIP。
+#[test]
+fn script_compare_stale_dist_unknown_domain_is_skipped() {
+    let (_dir, dist, config) =
+        stale_dist_fixture(&["host_selftest", "lane_rules", "route_priority"]);
+    let test = "script_compare_stale_dist_unknown_domain_is_skipped";
+    assert!(usable_bundle(&dist, &config, test, "no_such_domain", false).is_none());
+}
+
+/// `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` 相当（`require`）では古い bundle を失敗にする。
+#[test]
+#[should_panic(expected = "stale bundle")]
+fn script_compare_stale_dist_required_panics() {
+    let (_dir, dist, config) = stale_dist_fixture(&["host_selftest", "lane_rules"]);
+    let _ = usable_bundle(
+        &dist,
+        &config,
+        "script_compare_stale_dist_required_panics",
+        DOMAIN,
+        true,
     );
 }

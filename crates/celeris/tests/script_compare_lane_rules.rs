@@ -102,7 +102,10 @@ fn fixture_features() -> Vec<TaskFeatures> {
 /// 同じ isolate に正順と逆順で流し、global に残した値で答えが変わらないことも見る（付記 S2-7）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn script_compare_real_host_matches_rust_on_all_fixtures() {
-    let Some(bundle) = dist_bundle("script_compare_real_host_matches_rust_on_all_fixtures") else {
+    let Some(bundle) = dist_bundle(
+        "script_compare_real_host_matches_rust_on_all_fixtures",
+        DOMAIN,
+    ) else {
         return;
     };
     assert!(bundle.manifest.domains.iter().any(|d| d == "lane_rules"));
@@ -139,7 +142,8 @@ async fn script_compare_real_host_matches_rust_on_all_fixtures() {
 /// (5) 記録の入力を TS に通し直すと同じ出力が出る（replay）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn script_compare_dispatch_match_rollback_and_replay() {
-    let Some(bundle) = dist_bundle("script_compare_dispatch_match_rollback_and_replay") else {
+    let Some(bundle) = dist_bundle("script_compare_dispatch_match_rollback_and_replay", DOMAIN)
+    else {
         return;
     };
     let env = Env::new(DOMAIN);
@@ -260,7 +264,12 @@ async fn run_daemon(config: Config) -> Exit {
 /// `[script]` を外す・別の bundle にすると、起動時に `system:script-startup` が rust へ戻す。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn script_compare_daemon_injects_records_and_restores_rust() {
-    if dist_bundle("script_compare_daemon_injects_records_and_restores_rust").is_none() {
+    if dist_bundle(
+        "script_compare_daemon_injects_records_and_restores_rust",
+        DOMAIN,
+    )
+    .is_none()
+    {
         return;
     }
     let env = Env::new(DOMAIN);

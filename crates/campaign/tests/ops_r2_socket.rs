@@ -57,11 +57,7 @@ fn base(f: &Fx) -> Command {
 #[test]
 fn socket_flag_rejects_non_sockets() {
     let f = fx();
-    for bad in [
-        f.mux.join("other"),
-        f.mux.clone(),
-        f.mux.join("none"),
-    ] {
+    for bad in [f.mux.join("other"), f.mux.clone(), f.mux.join("none")] {
         let o = base(&f)
             .arg("--socket")
             .arg(&bad)

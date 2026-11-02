@@ -6,7 +6,7 @@ updated: 2026-11-02
 ---
 # S1 crate-skeleton — celeris-script の骨組み
 
-完了日: 2026-11-02（範囲 check の広げ方は「未解決事項」1）
+完了日: 2026-11-02（再実行の run で test-affected の 4 件の失敗と `--check` の network を直した）
 
 ## 結論
 - `crates/script-runtime/`（package `celeris-script`、`deno_core = "=0.413.0"`、既定 feature のみ）を作り、
@@ -18,19 +18,29 @@ updated: 2026-11-02
   workspace の serde_json に `preserve_order`・`float_roundtrip` は入らない（`cargo tree --workspace -e features -i serde_json | grep -cE 'preserve_order|float_roundtrip'` → 0）。
 - `float_roundtrip` は外せる。外して落ちる deno_core 自身の試験は inspector の経路の 3 件だけで、`celeris-script` は inspector を使わない（下の表）。
 - 写しを置いたことで、repo の文書・大きさの検査 2 本（`check-source-size.py`・`check-doc-links.sh`）が写しを読んで落ちたので、写しを対象から外した。
-  この 2 本と ADR は計画の範囲 check（`Cargo.toml|Cargo.lock|crates/script-runtime/|agent-docs/progress/2026-11-02-ts-control-layer-s1`）の外にある。
+  この 2 本と ADR は計画 v2 の範囲 check に入った。
+- 再実行の run: `crates/campaign/tests/ops_r2_socket.rs`・`ops_r2_b_start.rs` の unix socket の dir を `/tmp` 直下の tempdir に移し、
+  WU の長い `CARGO_TARGET_DIR`（104 文字）でも 4 試験が通る。`vendor-deno-core.sh --check` は cargo の cache に `.crate` が無ければ
+  network に出ず exit 1 で止まる。
 
 ## 変更
 - `Cargo.toml`: workspace の `members` に `crates/script-runtime` を足し、`exclude` に `crates/script-runtime/vendor`、
   `[patch.crates-io] deno_core = { path = "crates/script-runtime/vendor/deno_core" }` を足した。
 - `crates/script-runtime/vendor/`: `deno_core/`（写し、2.6 MB）、`deno_core.lock.toml`（版 0.413.0、`.crate` の sha256
   `7ad7d5294f640fd99db08c455e2453c9860b1fa728b76fbdacf0eed3e308d48a`、消した feature）、`vendor-deno-core.sh`（作り直し、`--check` で照合）。
-- `agent-docs/adr/2026-11-02-deno-core-vendored-serde-json-features.md`: 写しの置き方の ADR（範囲外）。
-- `scripts/dev/source-size-report.py`: `^crates/[^/]+/vendor/` を `vendored` に分類し大きさを測らない（範囲外）。
-- `scripts/dev/check-doc-links.sh`: `ALWAYS_EXCLUDE` に `crates/script-runtime/vendor/` を足した（範囲外。写しの README.md 等の link は元の repo を指す）。
+- `agent-docs/adr/2026-11-02-deno-core-vendored-serde-json-features.md`: 写しの置き方の ADR。
+- `scripts/dev/source-size-report.py`: `^crates/[^/]+/vendor/` を `vendored` に分類し大きさを測らない。
+- `scripts/dev/check-doc-links.sh`: `ALWAYS_EXCLUDE` に `crates/script-runtime/vendor/` を足した（写しの README.md 等の link は元の repo を指す）。
 - `Cargo.lock`: deno_core 0.413.0 と推移的依存（新規 package 93 件）を足した。既存の package では icu 系 7 件が semver の範囲で上がった
   （`icu_locale_core` 2.3.0→2.4.0、`icu_provider` 2.3.1→2.4.0、`tinystr` 0.8.4→0.8.5、`yoke`・`yoke-derive` 0.8.3→0.8.4、
   `zerovec` 0.11.8→0.11.9、`zerovec-derive` 0.11.6→0.11.7）。
+- `crates/campaign/tests/ops_r2_socket.rs`・`ops_r2_b_start.rs`（再実行の run）: socket を置く dir だけを `tempfile::Builder::new().prefix("r2s"|"r2b").tempdir_in("/tmp")`
+  にした（path は約 30 byte）。他の fixture（state・release・account 等）は `CARGO_TARGET_TMPDIR` の下のまま。試験の意図は変えていない:
+  socket 1 つだけを bind し親 dir は bind しない、socket 以外（通常 file・dir・無い path）と `--ro` の socket は拒む、`/tmp` は
+  `ops-r2-sandbox.sh` が拒む workspaces・state の下ではない。sandbox は `--tmpfs /tmp` の後に socket を bind するので、包みの中から connect でき
+  兄弟の file は見えない（`CELERIS_USERNS_TESTS=1` の実 bwrap の試験で確認）。campaign の本体と `scripts/campaign/` は変えていない。
+- `crates/script-runtime/vendor/vendor-deno-core.sh`（再実行の run）: `--check` のとき cargo の registry cache に `.crate` が無ければ
+  `cargo fetch` を促して exit 1。curl に進まない（書き込みの mode だけが crates.io から取る）。
 - `crates/script-runtime/Cargo.toml`・`src/lib.rs`・`src/error.rs`・`src/handle.rs`・`src/actor.rs`・`tests/runtime.rs` を追加した。
   - `lib.rs`: 公開は `ScriptRuntimeHandle`・DTO（`ScriptSource`・`ScriptCall`・`ScriptReply`・`RuntimeStats`）・`ScriptError` と定数
     （`QUEUE_CAPACITY` 64・`MAX_IN_FLIGHT` 64・`DISPATCH_FUNCTION`）だけ。`deno_core`・`v8` の型は公開しない。
@@ -46,7 +56,7 @@ updated: 2026-11-02
 - watchdog（同期無限ループの V8 中断）・generation の破棄・heap/input 上限は並行の unit `runtime-guard` の範囲なので入れていない。
   `ActorRequest.deadline` は watchdog が読む欄として置いた。
 
-## 確かめたこと（提出時の HEAD で実行。base は `$CELERIS_WU_BASE`）
+## 確かめたこと（提出時の HEAD で実行。base は `$CELERIS_WU_BASE`。test-affected・clippy・fmt・照合・4 試験は再実行の run で取り直した）
 | 項目 | コマンド | 結果 |
 |---|---|---|
 | rustc の版 | `rustc --version` | rustc 1.98.1（2026-09-01）、cargo 1.98.1。`cargo build -p celeris-script` は通る（写しの deno_core に rustc の警告 1 件: `TcpStream::set_linger` の deprecated。path 依存なので cap-lints されない。error ではない） |
@@ -58,6 +68,9 @@ updated: 2026-11-02
 | 版の衝突 | `cargo tree -d -p celeris-script -e normal --depth 0` | `getrandom` 0.3.4/0.4.3、`syn` 2.0.119/3.0.5（どちらも workspace に既にあった組）。`serde`・`serde_core`・`smallvec` は同じ版が host 用と target 用で出るだけ |
 | serde_json の feature | `cargo tree --workspace -e features -i serde_json \| grep -cE 'preserve_order\|float_roundtrip'` | 0 |
 | 写しの照合 | `sh crates/script-runtime/vendor/vendor-deno-core.sh --check` | exit 0（`.crate` の sha256 一致、Cargo.toml の差分は 2 行だけ） |
+| 照合が network に出ない | `CARGO_HOME=$TMPDIR/nohome sh crates/script-runtime/vendor/vendor-deno-core.sh --check` | exit 1、`no deno_core-0.413.0.crate in the cargo registry cache; run cargo fetch first (--check does not download)` |
+| campaign の 4 試験 | `cargo nextest run -p celeris-campaign --test ops_r2_socket --test ops_r2_b_start`（`CARGO_TARGET_DIR` 104 文字） | exit 0、6 tests run: 6 passed（userns の 2 件は skip で pass） |
+| 同・実 bwrap | 同じ command に `CELERIS_USERNS_TESTS=1` | exit 0、6 passed（skip の行なし。試験後 `/tmp` に `r2s*`・`r2b*` は残らない） |
 | deno_core 自身の試験（写し） | 写しを `$TMPDIR` に複写し `[workspace]` を足して `cargo test --lib` | 473 passed・7 failed・2 ignored |
 | deno_core 自身の試験（元の crate） | `.crate` を展開した物で同じ | 476 passed・4 failed・2 ignored |
 | 差の 3 件 | 上の 2 つの比較 | `runtime::tests::misc::test_preserve_float_precision_from_local_inspector_evaluate` の case 1〜3（入力 0.9999999999999999 等。inspector の protocol の JSON を `serde_json::from_str` で読むと最後の桁が変わる。deno の issue 29059）。deno_core の中で serde_json の文字列 parse を使うのは `inspector.rs` の 4 か所だけで、`celeris-script` は inspector を有効にしない |
@@ -66,7 +79,7 @@ updated: 2026-11-02
 | fmt | `cargo fmt --all -- --check` | exit 0（写しは member でないので対象外） |
 | clippy（workspace） | `cargo clippy --workspace -- -D warnings` | exit 0（前の run の task-api の `result_large_err` 851 件は 0 件） |
 | health | `bash scripts/dev/check-health.sh` | exit 0（source-size gate 0 failure、check-doc-links ok） |
-| test-affected | `bash scripts/dev/test-affected.sh` | exit 100。web: typecheck 通過、vitest 101 file・697 passed。Rust: 6921 tests run: 6917 passed・4 failed・21 skipped。落ちた 4 件は下の「未解決事項」2 |
+| test-affected | `bash scripts/dev/test-affected.sh` | exit 0。web: typecheck 通過、vitest 101 file・697 passed、node test 113 passed。Rust: 6921 tests run: 6921 passed・21 skipped |
 
 ## V8 archive の使い方
 - v8 150.4.0 の build.rs は `RUSTY_V8_ARCHIVE` があればその file を `target/<profile>/gn_out/obj/librusty_v8.a` に展開して使い、
@@ -93,15 +106,9 @@ updated: 2026-11-02
 - 未監査: sha256 と `serde_json::Value`/`json!` を同じ file で使う file は crates/ に 80 件あり、上の 10 件以外は読んでいない。
 
 ## 未解決事項
-1. 範囲 check: ADR と `scripts/dev/source-size-report.py`・`scripts/dev/check-doc-links.sh` の変更は、計画の範囲 check の外にある。
-   ADR は人の条件「置き方の判断は実装前に ADR に書く」と CLAUDE.md の規則によるもの、2 本の検査は写しを repo に置くと
-   `test-affected.sh`（`check-health.sh`）が落ちるための変更。範囲 check に `agent-docs/adr/2026-11-02-deno-core-vendored-serde-json-features.md`、
-   `scripts/dev/source-size-report.py`、`scripts/dev/check-doc-links.sh` を足す replan が要る。
-2. test-affected の 4 件の失敗: `celeris-campaign` の `ops_r2_socket::{socket_bind_is_only_the_socket_and_in_the_allow_table, socket_flag_rejects_non_sockets}`、
-   `ops_r2_b_start::{b_daemon_starts_after_the_seed_is_unpacked_into_the_project_repo_and_matches_a, b_command_refuses_bad_arguments_and_missing_prerequisites}`。
-   どれも `UnixListener::bind` が `path must be shorter than SUN_LEN` で落ちる。この run の `CARGO_TARGET_DIR` は 104 文字で、
-   `CARGO_TARGET_TMPDIR` の下の tempdir に `mux/master.sock` を作ると 108 byte を超える。この unit の変更（celeris-script・写し）とは無関係で、
-   直すのは campaign の試験の範囲（tempdir を短い path に置く）。
+1. 解決済み（計画 v2）: ADR と `scripts/dev/source-size-report.py`・`scripts/dev/check-doc-links.sh` は計画 v2 の範囲 check に入った。
+2. 解決済み（再実行の run）: test-affected の 4 件の失敗（`ops_r2_socket` の 2 件・`ops_r2_b_start` の 2 件、`UnixListener::bind` の
+   `path must be shorter than SUN_LEN`）は、socket の dir を `/tmp` 直下の短い tempdir に移して直した。test-affected は exit 0。
 3. 決定の出し方（前の run の記録）: `worker_finish.rs` は WU の判定が `completed` のときだけ `decisions` を読むので、check が落ちる run の決定は捨てられる。
 
 ## 提案
@@ -109,4 +116,3 @@ updated: 2026-11-02
 - 境界 ADR (e) の表の `v8` の行に「deno_core は `simdutf` feature を必須にするので archive は `librusty_v8_simdutf_release_<target>.a.gz`」と付記する（S1 の close unit）。
 - 境界 ADR (b) の依存の制約に、deno_core の写しと serde_json の feature の扱い（ADR 2026-11-02-deno-core-vendored-serde-json-features）を付記する（S1 の close unit）。
 - S1 の host-api unit: inspector を有効にしないこと、数値を serde_json の文字列 parse で渡さないことを試験で固定する。
-- campaign の試験の unix socket は `CARGO_TARGET_TMPDIR` の深さに依らない短い path に置く（未解決事項 2）。

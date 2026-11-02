@@ -152,11 +152,26 @@ impl Default for RouteSelectionSettings {
 }
 impl Registry {
     pub fn route_defaults_for(&self, harness: &HarnessId, lane: &str) -> &[CandidateKey] {
-        self.lane_route_defaults
+        self.route_defaults_column(harness, lane).1
+    }
+
+    /// The harness×lane column, falling back to the harness-wide column, with the column it took
+    /// (`None` when the harness declares neither). An empty declared column is returned as is.
+    fn route_defaults_column(
+        &self,
+        harness: &HarnessId,
+        lane: &str,
+    ) -> (RoutePriorityBasis, &[CandidateKey]) {
+        if let Some(list) = self
+            .lane_route_defaults
             .get(&(harness.clone(), lane.to_owned()))
-            .or_else(|| self.route_defaults.get(harness))
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        {
+            return (RoutePriorityBasis::Lane, list.as_slice());
+        }
+        match self.route_defaults.get(harness) {
+            Some(list) => (RoutePriorityBasis::Harness, list.as_slice()),
+            None => (RoutePriorityBasis::None, &[]),
+        }
     }
 }
 
@@ -479,20 +494,49 @@ pub fn admit_source(
             .unwrap_or(ExclusionReason::AccountUnavailable),
     )
 }
+/// Which column `route_priority` took (ADR 2026-11-02-ts-control-layer-boundary 付記 S2-2・S2-10).
+/// `None` whenever the chosen column is empty, whatever column it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutePriorityBasis {
+    Cos,
+    ExecutionClass,
+    Lane,
+    Harness,
+    None,
+}
+
 /// The one default priority path (ADR 2026-10-11-llm-source-model-routing-evaluation D2):
 /// CoS chat uses `cos.route_candidates`. Otherwise a declared `route_class_defaults` list for the
 /// execution class replaces every other column (ADR 2026-10-11-llm-source-harness-selection 付記
 /// 2026-10-13 §5: no fallback from a class list); without one, the harness×lane `route_defaults`
 /// column, falling back to the harness-wide column. There is no lexicographic fallback.
-pub fn route_priority<'a>(
+/// Returns the column with its basis; an empty column (declared or not) has basis `None` and does
+/// not fall through to a lower column (付記 S2-10).
+pub fn route_priority_decide<'a>(
     registry: &'a Registry,
     harness: &HarnessId,
     lane: Option<&str>,
     cos: bool,
     execution_class: Option<&ExecutionClass>,
-) -> &'a [CandidateKey] {
+) -> (RoutePriorityBasis, &'a [CandidateKey]) {
+    let (basis, list) = route_priority_column(registry, harness, lane, cos, execution_class);
+    if list.is_empty() {
+        (RoutePriorityBasis::None, list)
+    } else {
+        (basis, list)
+    }
+}
+
+fn route_priority_column<'a>(
+    registry: &'a Registry,
+    harness: &HarnessId,
+    lane: Option<&str>,
+    cos: bool,
+    execution_class: Option<&ExecutionClass>,
+) -> (RoutePriorityBasis, &'a [CandidateKey]) {
     if cos {
-        return &registry.cos_route_candidates;
+        return (RoutePriorityBasis::Cos, &registry.cos_route_candidates);
     }
     if let Some(class) = execution_class
         && let Some(list) = registry
@@ -500,9 +544,20 @@ pub fn route_priority<'a>(
             .get(harness)
             .and_then(|classes| classes.get(class))
     {
-        return list.as_slice();
+        return (RoutePriorityBasis::ExecutionClass, list.as_slice());
     }
-    registry.route_defaults_for(harness, lane.unwrap_or_default())
+    registry.route_defaults_column(harness, lane.unwrap_or_default())
+}
+
+/// The candidate column of [`route_priority_decide`] without its basis.
+pub fn route_priority<'a>(
+    registry: &'a Registry,
+    harness: &HarnessId,
+    lane: Option<&str>,
+    cos: bool,
+    execution_class: Option<&ExecutionClass>,
+) -> &'a [CandidateKey] {
+    route_priority_decide(registry, harness, lane, cos, execution_class).1
 }
 
 /// What the dispatcher persists on the run row once a route is admitted.

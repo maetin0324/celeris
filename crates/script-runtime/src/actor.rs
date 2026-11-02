@@ -8,6 +8,10 @@
 //! 4. `JsRuntime::poll_event_loop` で event loop を進める（op・microtask・Promise の解決）。
 //! 5. 未完の要求の結果を見て、解決したものを oneshot で返す。受け手が落ちた要求（cancel・timeout）は結果を捨てる。
 //!
+//! capability を 1 つ以上持つ要求（op で読み出す要求）は、isolate の中で同時に 1 件までしか走らせない
+//! （境界 ADR の付記 S4-13 の 1。要求ごとに V8 context を分けない代わり）。走っている間に来た別の capability 付きの
+//! 要求は `held` に置き、前の要求が終わってから来た順に始める。capability の無い要求は並行して走る。
+//!
 //! V8 に入る 2 か所（3 の入口の呼び出しと 4 の event loop）は watchdog に deadline を渡してから入る。
 //! watchdog が V8 を止めた・heap 上限で止めた generation は再利用せず作り直す（理由は進捗
 //! `agent-docs/progress/2026-11-02-ts-control-layer-s1/runtime-guard.md`。試験は下の `tests`）。
@@ -15,7 +19,7 @@
 //! V8 の値（`v8::Global` 等）はこの thread から出さない。
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -33,9 +37,11 @@ use ulid::Ulid;
 
 use crate::dto::{HostError, HostErrorCode};
 use crate::error::ScriptError;
-use crate::handle::{DISPATCH_FUNCTION, MAX_IN_FLIGHT, RuntimeLimits, RuntimeStats, ScriptSource};
+use crate::handle::{
+    DISPATCH_FUNCTION, HostSink, MAX_IN_FLIGHT, RuntimeLimits, RuntimeStats, ScriptSource,
+};
 use crate::loader::BundleLoader;
-use crate::ops::{self, Grant, GrantGuard, Grants};
+use crate::ops::{self, Grant, GrantGuard, GrantSpec, Grants};
 use crate::watchdog::Watchdog;
 
 type Reply = oneshot::Sender<Result<(u64, serde_json::Value), ScriptError>>;
@@ -47,6 +53,8 @@ pub(crate) struct ActorRequest {
     pub(crate) input: serde_json::Value,
     /// 要求に結び付いた scope（op が読んでよい task の id）。
     pub(crate) scope_task_ids: BTreeSet<String>,
+    /// capability 付きの op の送り先（付記 S4-12）。
+    pub(crate) host_sink: Option<HostSink>,
     /// 呼び出し側の deadline。watchdog が V8 を止める時刻。
     pub(crate) deadline: Instant,
     pub(crate) reply: Reply,
@@ -84,6 +92,8 @@ struct Pending {
     deadline: Instant,
     future: CallFuture,
     reply: Reply,
+    /// capability を持つ要求（isolate の中で排他）。
+    exclusive: bool,
     /// 要求が終わったら op の権限表から消す。
     _grant: GrantGuard,
 }
@@ -245,6 +255,7 @@ pub(crate) fn run(
         watchdog,
         generation: Some(generation),
         pending: Vec::new(),
+        held: VecDeque::new(),
         rx,
         ctl,
         shutdown,
@@ -262,6 +273,8 @@ struct Actor {
     /// 作り直しの途中（と作り直しに失敗した後）だけ None。
     generation: Option<Generation>,
     pending: Vec<Pending>,
+    /// 別の capability 付きの要求が走っているので始めずに置いている要求（来た順）。
+    held: VecDeque<ActorRequest>,
     rx: mpsc::Receiver<ActorRequest>,
     ctl: mpsc::UnboundedReceiver<Control>,
     shutdown: oneshot::Receiver<()>,
@@ -299,8 +312,15 @@ impl Actor {
                 progressed = true;
             }
 
+            // 置いていた capability 付きの要求を、走っている排他の要求が無ければ 1 件始める。
+            match self.start_held() {
+                Ok(true) => progressed = true,
+                Ok(false) => {}
+                Err(_) => return Poll::Ready(()),
+            }
+
             // 要求を取り出して script に渡す。未完が上限なら queue に残す（backpressure）。
-            while self.pending.len() < MAX_IN_FLIGHT {
+            while self.pending.len() + self.held.len() < MAX_IN_FLIGHT {
                 match self.rx.poll_recv(cx) {
                     Poll::Ready(Some(req)) => {
                         progressed = true;
@@ -308,6 +328,12 @@ impl Actor {
                             // 送った側が既に待つのをやめている。
                             self.stats.completed += 1;
                             self.stats.discarded += 1;
+                            continue;
+                        }
+                        if self.needs_exclusive(&req)
+                            && (self.exclusive_running() || !self.held.is_empty())
+                        {
+                            self.held.push_back(req);
                             continue;
                         }
                         if self.start(req).is_err() {
@@ -334,6 +360,42 @@ impl Actor {
         }
     }
 
+    /// 要求が capability を持つ（排他にする）か。有効な capability は宣言 ∩ 許可表。
+    fn needs_exclusive(&self, req: &ActorRequest) -> bool {
+        ops::domain_capabilities(&req.domain)
+            .iter()
+            .any(|c| self.source.capabilities.contains(c))
+    }
+
+    /// capability 付きの要求が走っているか。
+    fn exclusive_running(&self) -> bool {
+        self.pending.iter().any(|p| p.exclusive)
+    }
+
+    /// 置いていた要求を 1 件始める。始めた（または待つのをやめた要求を捨てた）なら true。
+    fn start_held(&mut self) -> Result<bool, ScriptError> {
+        let mut progressed = false;
+        // 待つのをやめた要求（cancel・timeout）は捨てる。
+        let before = self.held.len();
+        self.held.retain(|r| !r.reply.is_closed());
+        let dropped = before - self.held.len();
+        if dropped > 0 {
+            self.stats.completed += dropped as u64;
+            self.stats.discarded += dropped as u64;
+            progressed = true;
+        }
+        if self.exclusive_running() {
+            return Ok(progressed);
+        }
+        match self.held.pop_front() {
+            Some(req) => {
+                self.start(req)?;
+                Ok(true)
+            }
+            None => Ok(progressed),
+        }
+    }
+
     /// script の入口を呼ぶ。同期の部分はこの中で走るので watchdog で守る。
     /// Err は generation を作り直せなかったこと（actor を止める）。
     fn start(&mut self, req: ActorRequest) -> Result<(), ScriptError> {
@@ -342,16 +404,22 @@ impl Actor {
             domain,
             input,
             scope_task_ids,
+            host_sink,
             deadline,
             reply,
         } = req;
         let generation = self.generation.as_mut().ok_or(ScriptError::Terminated)?;
         let token = request_id.to_string();
-        let grant = GrantGuard::insert(
-            &generation.grants,
-            token.clone(),
-            Grant::new(&self.source.capabilities, &domain, &scope_task_ids),
-        );
+        let (grant, end) = Grant::new(GrantSpec {
+            declared: &self.source.capabilities,
+            domain: &domain,
+            scope_task_ids: &scope_task_ids,
+            request_id,
+            deadline,
+            sink: host_sink,
+        });
+        let exclusive = grant.is_exclusive();
+        let grant = GrantGuard::insert(&generation.grants, token.clone(), grant, end);
         self.watchdog.arm(deadline);
         let future = call_dispatch(generation, &domain, &input, &token);
         let fired = self.watchdog.disarm();
@@ -361,6 +429,7 @@ impl Actor {
             deadline,
             future,
             reply,
+            exclusive,
             _grant: grant,
         };
         if heap {
@@ -518,6 +587,10 @@ impl Actor {
         self.rx.close();
         for p in self.pending.drain(..) {
             let _ = p.reply.send(Err(ScriptError::Terminated));
+            self.stats.completed += 1;
+        }
+        for req in self.held.drain(..) {
+            let _ = req.reply.send(Err(ScriptError::Terminated));
             self.stats.completed += 1;
         }
         while let Ok(req) = self.rx.try_recv() {

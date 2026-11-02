@@ -38,5 +38,7 @@ name = "script-bench"
 path = "src/bin/script-bench.rs"
 
 [dev-dependencies]
+# 試験だけ: cos_digest の op の DTO が task-core の正本と同じ形かを照合する（tests/dto.rs）。本体は task-core を知らない（付記 S4-12）。
+task-core = { path = "../task-core" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tempfile = "3"

@@ -8,6 +8,8 @@
   const hostOps = Object.freeze({
     version: coreOps.op_host_version,
     selftestEcho: coreOps.op_host_selftest_echo,
+    cosDigestListRuns: coreOps.op_cos_digest_list_runs,
+    cosDigestReadRun: coreOps.op_cos_digest_read_run,
   });
   let claimed = false;
   Object.defineProperty(globalThis, "__celerisHostOps", {

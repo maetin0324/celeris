@@ -52,11 +52,17 @@ dispatch-hook の run が同じ修正を follow-up「script_runtime_valid_bundle
 1. `phase s2: thread-census: thread の観察を tid 単位にして親の名前の引き継ぎを actor と数えない`
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-CHECKS_PLACEHOLDER
+- `cargo nextest run -p celeris --test script_runtime` — exit 0、14 passed（script_runtime_ の 6 試験と script_thread_census の 8 試験）。
+- `bash scripts/dev/test-affected.sh` — exit 0。対象は celeris・celerisctl、cargo 861 passed・0 skipped。source-size gate は 0 failure。
+- `cargo clippy --workspace -- -D warnings` — exit 0。`cargo clippy -p celeris --test script_runtime -- -D warnings` — exit 0。
+- `cargo fmt --all -- --check` — exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` — 変更は `crates/celeris/tests/script_runtime.rs` とこの進捗ファイルだけ。
+- `sh scripts/dev/progress-index.sh --check` — exit 0。
 
 ## 未解決
 1. 上記の follow-up の取り消し。
 2. `assert_eq!(script_threads(), 0)`（join の直後の 1 回の読み取り）は変えていない。Linux では join が返った後も thread が `/proc/self/task` に短い間残る可能性があるが、未確認である。今回の file 全体 40 回では 1 度も落ちなかった。
+3. `cargo clippy -p celeris --tests -- -D warnings` は exit 101 で落ちる。原因は `campaign_lock_e2e` の `support_cases/mod.rs` の多重読み込み（`file is loaded as a module multiple times`）で、この unit が触っていない file である。必須の検査ではないので直していない。
 
 ## 提案
 なし。

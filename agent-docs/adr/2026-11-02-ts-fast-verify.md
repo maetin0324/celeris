@@ -325,3 +325,34 @@ fixture を手で書き換えた変更は `host-api` に分類されるうえ、
   `--check-targets` は試行数の下限を持たない。20 試行であることは `modes.<mode>.trials` で確かめる。
 - **close-9（「境界 ADR との関係」の違い 1・2）**: 違い 1（activate の代用）と違い 2（daemon の検査）は境界 ADR の [付記 S3](2026-11-02-ts-control-layer-boundary.md) に書いた。
   違い 2 の答え: daemon・`manifest.rs` に S2-7 の拒否は無い。領域の値の検査の写しの一致を固定する試験も無い。手で比べると `task-dispatch::script_policy` の上限（`RULE_ID_MAX` 128・`CONDITION_MAX` 512・`ROUTE_PRIORITY_CANDIDATES_MAX` 256）と本文 (3) の値は同じである。
+
+## 付記 grade-gate（2026-11-02、final review の指摘への対応）
+final review（reviewer 01M6F3NCYFQAZ49VRMZW8BDAJ9、条件 3）は次の抜け道を指摘した。`control-ts/scripts/**`・`src/host.d.ts`・`src/testing/**`・`package.json`・
+lockfile・`bundle.config.json`・`fixtures/**` と `docs/api/script-host/` の変更は `host-api` で、`ts-verify.sh` は段 0 のあと「従来の経路へ」と exit 0 で抜ける。
+`test-affected.sh` も（key の入力か検証の道具が変わらない限り）`test-ts-verify.sh` を走らせない。このため `lane_rules.ts` の規則を壊し
+`control-ts/scripts/compare.test.mjs` の該当試験を `test.skip` にした候補が、型検査・単体試験・選ばれた crate の nextest（実 host の試験は dist が無く SKIP）をすべて通った。
+この付記を (2) の段 0・(5)・(6)・付記 close-6 より優先する。
+
+- **grade-gate-1（(6) の `host-api` の実現方法）**: `test-affected.sh` は、変更に `control-ts/` か `docs/api/script-host/` が含まれ `ts-only` でないとき、
+  従来の control-ts の型検査・単体試験と cargo の crate の選択に加えて `bash scripts/dev/ts-verify.sh --grade --record <file>` を走らせる。
+  非 0 なら `test-affected.sh` も exit 1 で終わる。記録の `class` が `ts-only`・`host-api` なら 10 段すべてが exit 0 であることも確かめる。
+  `--list` は `control-ts: ts-verify-grade (理由: TS だけでない <control-ts/ か docs/api/script-host/> の変更。候補の作業ツリーを本物の runner で採点する)` の行を出す。
+  cargo の crate の選択・`ts-only` の経路・`test-ts-verify.sh` の選択・release gate（`scripts/selfdeploy/`・`.config/nextest.toml`）は変えない。
+- **grade-gate-2（`--grade` の段と合否）**: `ts-verify.sh --grade` は分類が `ts-only` か `host-api` なら、候補の作業ツリー（未 commit の編集を含む）で (2) の 10 段を通す。
+  | 段 | 引数なしとの違い |
+  |---|---|
+  | `classify` | 同じ。追加の禁止に当たれば exit 1、`rust`・`none` は「従来の経路へ」・「対象が無い」で exit 0（引数なしと同じ） |
+  | `runner-cache` | 同じ。key が変われば `ensure` で runner と golden を作り直す（cargo を起動する）。`--no-build` なら exit 3 |
+  | `unit` | 単体試験の選択をせず、`vitest` を全部と `control-ts/scripts/*.test.mjs`（`test-affected.test.mjs` を除く）を走らせる。合否の下限ではない |
+  | `golden` | `compare.mjs` を使わない。commit 済みの fixture と cache の golden の `cmp` のあと、`script-host-runner run --suite golden --domain <d>` を領域ごとに走らせ、`ok` を見る |
+  | `safety`・`integration`・`activate` | 同じ（runner の `--suite safety`・`--suite golden`・`activate`） |
+  合否は Rust の runner と cache の golden（`task-core` の example が作る）が決め、control-ts の試験・`compare.mjs` の結果には頼らない。
+  記録に `grade: true` を足した。引数なし（`test-affected.sh` が `ts-only` で呼ぶ経路）の挙動は変えていない。
+- **grade-gate-3（close-6 の置き換え）**: close-6 の「`control-ts/src/host.d.ts`・`control-ts/scripts/**`・`control-ts/fixtures/**`・`control-ts/package.json` などの変更では
+  `test-ts-verify.sh` は走らない」は残るが、これらの変更では grade-gate-1 の `ts-verify.sh --grade` が候補の作業ツリーを runner で採点する。
+  `test-ts-verify.sh` の場合 J が、reviewer の破壊（規則の破壊と `test.skip`）で `--list` が `ts-verify-grade` を選び、`--grade` が段 `golden` で exit 1（段 `unit` は通る）になること、
+  無害な `host-api` の変更では 10 段 exit 0 になることを固定する。`control-ts/scripts/test-affected.test.mjs` が、偽の `ts-verify.sh` で `--grade` の呼び出しと失敗の伝播を固定する。
+- **grade-gate-4（残る限界）**: (a) 分類が `rust`（例: `crates/celeris/` と `control-ts/` の同時の変更）では `--grade` も引数なしと同じく従来の経路へ抜ける。
+  key の入力（`crates/script-runtime/`・`crates/task-core/` など）か検証の道具が変われば `test-ts-verify.sh` が写しで 10 段を通すが、それ以外の Rust の変更と組んだ
+  `control-ts/` の破壊は runner で採点されない。(b) 段 `bundle` は候補の `control-ts/scripts/build-bundle.mjs` と `bundle.config.json` を使う。
+  領域の集合は runner が Rust の表と照合する（exit 3）が、bundle の作り方そのものを書き換える変更は差分として reviewer に渡る。(c) (5) の限界（branch 自身の `scripts/dev/` の書き換え）は変わらない。この unit の差分も `scripts/dev/` を含むので分類は `rust` で、`test-affected.sh` の `--grade` は従来の経路へ抜けた（代わりに `test-ts-verify.sh` が写しで 14 件を確かめた）。

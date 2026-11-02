@@ -2,17 +2,21 @@
 //! どの場合も、route 選択の event（`harness_selected`・`llm_route_selected`・`routing_decided`）・run の行・
 //! route の拒否の理由は mode rust・PolicyScript 無しのときと byte 一致する（run id だけを伏せて比べる）。
 
-use super::lane_assist::{hinted_task, jev_ok, question_adapter};
-use super::review_route::{CapturingReviewer, reviewer_registry, worker_adapter};
-use super::script_compare::{Behavior, FakeScript, bundle_sha};
-use super::*;
+// `script_compare.rs` の子 module（`#[path]`）。`super::super` が dispatcher の試験 module。
+use super::super::lane_assist::{hinted_task, jev_ok, question_adapter};
+use super::super::*;
+use super::{Behavior, FakeScript, bundle_sha};
 use crate::script_policy::{PolicyScript, PolicyScriptError, SCRIPT_CALL_DEADLINE};
-use task_core::llm_route::{HarnessId, Registry};
+use std::collections::BTreeMap;
+use task_core::llm_route::{
+    CandidateKey, HarnessId, HarnessRule, HarnessSpec, Registry, SourceSpec,
+};
 use task_core::route_select::{RoutingMode, SpecificityHint};
 use task_core::script_compare::{
     CompareOutcome, NewScriptGeneration, ScriptCompareRecord, ScriptDomain, ScriptGenerationState,
     ScriptMode, ScriptModeChange,
 };
+use task_worker::protocol::SelectedLlmRoute;
 
 /// 固定の task id（基準の run と compare の run で event の byte 列を揃える）。
 const TASK_ID: &str = "01M6EJYCFFSJXYBVH87Q8FSNYB";
@@ -448,4 +452,105 @@ async fn script_compare_route_priority_skips_review_spawn() {
     assert_eq!(script.route_calls(), 1);
     let r = only(&records_of(&store, task.id)).clone();
     assert_eq!(r.input.as_ref().unwrap()["harness"], "h1");
+}
+
+// 以下は `review_route.rs` と同じ形の reviewer の registry と adapter（範囲の外の file を変えないために写した）。
+
+fn source(kind: &str, account: &str, model: &str) -> SourceSpec {
+    SourceSpec {
+        kind: kind.into(),
+        api_format: "fake".into(),
+        accounts: vec![account.into()],
+        models: vec![model.into()],
+        max_runs: None,
+        account_max_runs: BTreeMap::new(),
+        quota: None,
+        endpoint: None,
+        credential_ref: None,
+    }
+}
+
+fn harness(kind: &str, source_kind: &str) -> HarnessSpec {
+    HarnessSpec {
+        kind: kind.into(),
+        api_formats: ["fake".into()].into(),
+        source_kinds: [source_kind.into()].into(),
+        capabilities: Default::default(),
+        command: None,
+        args: vec![],
+    }
+}
+
+fn key(source: &str, model: &str) -> CandidateKey {
+    CandidateKey {
+        source: source.into(),
+        model: model.into(),
+    }
+}
+
+/// worker の harness `h1`（`s1`）と、`role = "reviewer"` の規則で選ばれる `review_h`（`rs`）。
+fn reviewer_registry(review_source_kind: &str) -> Registry {
+    let mut r = Registry::default();
+    r.sources.insert("s1".into(), source("fake", "a1", "m"));
+    r.sources.insert("rs".into(), source("fake", "ra", "rm"));
+    r.harnesses.insert("h1".into(), harness("instant", "fake"));
+    r.harnesses
+        .insert("review_h".into(), harness("review", review_source_kind));
+    r.harness_selection.rules.push(HarnessRule {
+        harness: "h1".into(),
+        ..Default::default()
+    });
+    r.harness_selection.rules.push(HarnessRule {
+        role: Some("reviewer".into()),
+        harness: "review_h".into(),
+        ..Default::default()
+    });
+    r.route_defaults.insert("h1".into(), vec![key("s1", "m")]);
+    r.route_defaults
+        .insert("review_h".into(), vec![key("rs", "rm")]);
+    r
+}
+
+/// 合格の `review.json` を書き、起動時の route を残す reviewer。
+struct CapturingReviewer {
+    seen: Arc<StdMutex<Vec<Option<SelectedLlmRoute>>>>,
+}
+
+#[async_trait]
+impl WorkerAdapter for CapturingReviewer {
+    fn id(&self) -> &str {
+        "review"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        assert_eq!(req.task.kind, TaskKind::Review);
+        self.seen.lock().unwrap().push(req.llm_route.clone());
+        std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+        std::fs::write(
+            req.artifacts_dir.join("review.json"),
+            r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#,
+        )
+        .unwrap();
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: "reviewed".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            exit_code: Some(0),
+        })
+    }
+}
+
+fn worker_adapter() -> Arc<dyn WorkerAdapter> {
+    Arc::new(FileAdapter {
+        plan_json: String::new(),
+        review_json: String::new(),
+        delay: Duration::ZERO,
+    })
 }

@@ -44,7 +44,7 @@ fn key(source: &str, model: &str) -> CandidateKey {
 /// The worker harness `h1` on `s1`, plus a reviewer harness `review_h` picked by the
 /// `role = "reviewer"` rule on its own source `rs` (model `rm`, account `ra`).
 /// `review_source_kind` is the source kind `review_h` accepts.
-pub(super) fn reviewer_registry(review_source_kind: &str) -> Registry {
+fn reviewer_registry(review_source_kind: &str) -> Registry {
     let mut r = Registry::default();
     r.sources.insert("s1".into(), source("fake", "a1", "m"));
     r.sources.insert("rs".into(), source("fake", "ra", "rm"));
@@ -67,8 +67,8 @@ pub(super) fn reviewer_registry(review_source_kind: &str) -> Registry {
 }
 
 /// Writes a passing `review.json` and keeps the route it was started with.
-pub(super) struct CapturingReviewer {
-    pub(super) seen: Arc<StdMutex<Vec<Option<SelectedLlmRoute>>>>,
+struct CapturingReviewer {
+    seen: Arc<StdMutex<Vec<Option<SelectedLlmRoute>>>>,
 }
 
 #[async_trait]
@@ -102,7 +102,7 @@ impl WorkerAdapter for CapturingReviewer {
     }
 }
 
-pub(super) fn worker_adapter() -> Arc<dyn WorkerAdapter> {
+fn worker_adapter() -> Arc<dyn WorkerAdapter> {
     Arc::new(FileAdapter {
         plan_json: String::new(),
         review_json: String::new(),

@@ -479,3 +479,7 @@ async fn script_compare_lane_after_ceiling_is_rust() {
         assert!(r.safety_violations.is_empty());
     }
 }
+
+/// 付記 S2-11: `route_priority` の compare の試験（`tests/mod.rs` を変えずに足すため子 module にした）。
+#[path = "script_compare_route.rs"]
+mod script_compare_route;

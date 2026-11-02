@@ -3076,7 +3076,6 @@ mod routing_context;
 /// （`src/dispatcher/tests/scope_checks.rs`）。
 mod scope_checks;
 mod script_compare;
-mod script_compare_route;
 /// ADR-0140 D1: WU の execute continuation の同一 session resume と checkpoint fallback
 /// （`src/dispatcher/tests/session_resume.rs`）。
 mod session_resume;

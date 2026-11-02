@@ -85,10 +85,28 @@ impl ScriptMode {
             .find(|m| m.as_str() == name)
     }
 
-    /// S2-5: S2 で変更先として受け付ける mode か（`canary`・`ts` は偽）。
-    pub fn enabled_in_s2(self) -> bool {
-        matches!(self, ScriptMode::Rust | ScriptMode::Compare)
+    /// S2-5・S4-14: `domain` の変更先として受け付ける mode か。`rust`・`compare` はどの領域でも受ける。
+    /// `ts` は `cos_digest` だけで受ける。`canary` はどの領域でも受けない（S5）。
+    pub fn accepted_for(self, domain: ScriptDomain) -> bool {
+        match self {
+            ScriptMode::Rust | ScriptMode::Compare => true,
+            ScriptMode::Ts => domain == ScriptDomain::CosDigest,
+            ScriptMode::Canary => false,
+        }
     }
+
+    /// 動かすのに active generation が要る mode か（`compare`・`canary`・`ts`）。
+    pub fn needs_generation(self) -> bool {
+        !matches!(self, ScriptMode::Rust)
+    }
+}
+
+/// S4-14: `ts` へ切り替えてよい actor か。人の API token の主体（`human:<name>`）だけが真。
+/// CoS（`cos:*`）・外部 operator（`operator:*`）・MCP（`mcp:*`）・daemon（`system:*`）は偽。
+pub fn actor_may_enable_ts(actor: &str) -> bool {
+    actor
+        .strip_prefix("human:")
+        .is_some_and(|name| !name.trim().is_empty())
 }
 
 /// 表 `script_generations.state`（S2-4）。
@@ -453,8 +471,15 @@ pub struct NewScriptGeneration {
 pub enum ScriptDomainError {
     #[error("unknown script domain `{0}`")]
     UnknownDomain(String),
-    #[error("script mode `{}` is not enabled in S2 (only rust and compare)", .0.as_str())]
-    ModeNotEnabled(ScriptMode),
+    #[error("script mode `{}` is not enabled for domain `{}` (rust and compare everywhere, ts only for cos_digest)", .mode.as_str(), .domain.as_str())]
+    ModeNotEnabled {
+        domain: ScriptDomain,
+        mode: ScriptMode,
+    },
+    #[error("switching to mode `ts` needs a human actor (got `{0}`)")]
+    TsRequiresHuman(String),
+    #[error("mode `ts` can only be entered from `compare` with the same generation (current mode `{}`)", .current.as_str())]
+    TsRequiresCompare { current: ScriptMode },
     #[error("script domain `{domain}` version conflict: expected {expected}, found {found}")]
     VersionConflict {
         domain: String,

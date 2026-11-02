@@ -2,11 +2,16 @@
 //!
 //! - `GET /script/domains` → 200 `ScriptDomainList`（領域ごとの mode・active generation・version）。
 //! - `PUT /script/domains/{domain}/mode` → 200 `ScriptDomainModeResult`。本文は `ScriptDomainModeBody`。
-//!   S2 で受けるのは `rust` と `compare` だけ。`canary`・`ts` は 422 `script_mode_not_enabled`、
-//!   `expected_version` が表の `version` と違えば 409 `script_domain_version_conflict`（どちらも表を変えない）。
+//!   `rust`・`compare` はどの領域でも受ける。`ts` は `cos_digest` だけで受ける（付記 S4-14）。
+//!   `canary` と `cos_digest` 以外の `ts` は 422 `script_mode_not_enabled`。
+//!   `→ts` は人の API token の主体（`human:*`）だけが行える。CoS・外部 operator・MCP・`system:*` は
+//!   403 `script_mode_requires_human`。`→ts` の元が同じ generation の `compare` でなければ 422
+//!   `script_mode_ts_requires_compare`。戻し（`ts→rust`・`ts→compare`）は誰でも行える。
+//!   `expected_version` が表の `version` と違えば 409 `script_domain_version_conflict`（どの拒否でも表を変えない）。
 //!   同じ mode・同じ generation への変更は表も記録も変えずに 200（`changed: false`）。
 //! - 本体は `task_core` の store（`script_domain_set_mode` の CAS）。CoS は `/cos/operations` の
-//!   `script_domain.mode_set`（admin の ALLOWED）で同じ関数 [`set_mode_effect`] を呼ぶ。
+//!   `script_domain.mode_set`（admin の ALLOWED）で同じ関数 [`set_mode_effect`] を呼ぶ。CoS の操作の
+//!   `ts` は registry が effect の前に 403 で拒み、rejected として記録する（S4-14）。
 
 use axum::{
     body::Body,
@@ -16,7 +21,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use task_core::script_compare::{
     ScriptDomain, ScriptDomainError, ScriptDomainModeRow, ScriptMode, ScriptModeChange,
-    ScriptModeChangeOutcome,
+    ScriptModeChangeOutcome, actor_may_enable_ts,
 };
 use task_core::store::SqliteStore;
 
@@ -28,8 +33,12 @@ use crate::{
 
 /// 未知の領域名（404）。
 pub const SCRIPT_DOMAIN_NOT_FOUND: &str = "script_domain_not_found";
-/// S2 で受けない mode（`canary`・`ts`）。422。
+/// その領域で受けない mode（`canary`、`cos_digest` 以外の `ts`）。422。
 pub const SCRIPT_MODE_NOT_ENABLED: &str = "script_mode_not_enabled";
+/// `→ts` を人以外の主体が求めた（S4-14）。403。
+pub const SCRIPT_MODE_REQUIRES_HUMAN: &str = "script_mode_requires_human";
+/// `→ts` の元が同じ generation の `compare` でない（S4-14）。422。
+pub const SCRIPT_MODE_TS_REQUIRES_COMPARE: &str = "script_mode_ts_requires_compare";
 /// `expected_version` が表の `version` と違う（他の更新が先に入った）。409。
 pub const SCRIPT_DOMAIN_VERSION_CONFLICT: &str = "script_domain_version_conflict";
 /// generation の不備（指定が無い・余分・未登録・`loaded` でない・manifest にその領域が無い）。422。
@@ -60,11 +69,12 @@ pub struct ScriptDomainList {
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScriptDomainModeBody {
-    /// `rust` | `compare`（`canary`・`ts` は S2 では 422）。
+    /// `rust` | `compare` | `ts`（`ts` は `cos_digest` だけ・人の主体だけ。`canary` は 422）。
     pub mode: ScriptMode,
     /// 読んだ時点の `version`。表の値と違えば 409。
     pub expected_version: u64,
-    /// `compare` で使う generation の `bundle_sha256`（必須）。`rust` では書かない。
+    /// `compare`・`ts` で使う generation の `bundle_sha256`（必須。`ts` では今の `compare` と同じ値）。
+    /// `rust` では書かない。
     #[serde(default)]
     pub generation: Option<String>,
     /// 変更の理由（`script_domain_mode_changed` の `reason`）。CoS の操作では省略すると操作の理由を使う。
@@ -152,8 +162,8 @@ fn view_of(store: &SqliteStore, row: ScriptDomainModeRow) -> Result<ScriptDomain
 
 /// mode を変える（route と CoS の操作が共有する）。`fallback_reason` は本文に `reason` が無いときの理由。
 ///
-/// 検査の順: 領域名（404）→ S2 で受ける mode か（422）→ generation の解決（422）→ store の CAS
-/// （409・422）。どの失敗でも表と `script_domain_events` は変わらない。
+/// 検査の順: 領域名（404）→ その領域で受ける mode か（422）→ `ts` の主体（403）→ generation の解決
+/// （422）→ store の CAS（409・422。`ts` の元の検査を含む）。どの失敗でも表と `script_domain_events` は変わらない。
 pub(crate) fn set_mode_effect(
     store: &SqliteStore,
     domain: &str,
@@ -161,13 +171,21 @@ pub(crate) fn set_mode_effect(
     actor: &str,
     fallback_reason: &str,
 ) -> Result<ScriptDomainModeResult, ApiProblem> {
-    if ScriptDomain::parse(domain).is_none() {
+    let Some(parsed) = ScriptDomain::parse(domain) else {
         return Err(domain_problem(ScriptDomainError::UnknownDomain(
             domain.to_owned(),
         )));
+    };
+    if !body.mode.accepted_for(parsed) {
+        return Err(domain_problem(ScriptDomainError::ModeNotEnabled {
+            domain: parsed,
+            mode: body.mode,
+        }));
     }
-    if !body.mode.enabled_in_s2() {
-        return Err(domain_problem(ScriptDomainError::ModeNotEnabled(body.mode)));
+    if body.mode == ScriptMode::Ts && !actor_may_enable_ts(actor) {
+        return Err(domain_problem(ScriptDomainError::TsRequiresHuman(
+            actor.to_owned(),
+        )));
     }
     let to_generation = match body.generation.as_deref() {
         None => None,
@@ -218,9 +236,17 @@ fn domain_problem(err: ScriptDomainError) -> ApiProblem {
         ScriptDomainError::UnknownDomain(_) => {
             ApiProblem::new(StatusCode::NOT_FOUND, SCRIPT_DOMAIN_NOT_FOUND, detail)
         }
-        ScriptDomainError::ModeNotEnabled(_) => ApiProblem::new(
+        ScriptDomainError::ModeNotEnabled { .. } => ApiProblem::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             SCRIPT_MODE_NOT_ENABLED,
+            detail,
+        ),
+        ScriptDomainError::TsRequiresHuman(_) => {
+            ApiProblem::new(StatusCode::FORBIDDEN, SCRIPT_MODE_REQUIRES_HUMAN, detail)
+        }
+        ScriptDomainError::TsRequiresCompare { .. } => ApiProblem::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            SCRIPT_MODE_TS_REQUIRES_COMPARE,
             detail,
         ),
         ScriptDomainError::VersionConflict {

@@ -28355,7 +28355,7 @@
         },
         "generation": {
           "default": null,
-          "description": "`compare` で使う generation の `bundle_sha256`（必須）。`rust` では書かない。",
+          "description": "`compare`・`ts` で使う generation の `bundle_sha256`（必須。`ts` では今の `compare` と同じ値）。\n`rust` では書かない。",
           "type": [
             "string",
             "null"
@@ -28363,7 +28363,7 @@
         },
         "mode": {
           "$ref": "#/$defs/ScriptMode",
-          "description": "`rust` | `compare`（`canary`・`ts` は S2 では 422）。"
+          "description": "`rust` | `compare` | `ts`（`ts` は `cos_digest` だけ・人の主体だけ。`canary` は 422）。"
         },
         "reason": {
           "default": null,

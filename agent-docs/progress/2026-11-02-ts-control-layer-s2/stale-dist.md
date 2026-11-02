@@ -37,8 +37,9 @@ tempdir に検証の通る bundle と、domains を変えた manifest、3 領域
 |---|---|
 | `CELERIS_SCRIPT_REQUIRE_BUNDLE=1 cargo nextest run -p celeris --test script_compare_route_priority --test script_compare_lane_rules` | 14 件合格、0 件 skip |
 | dist の manifest の domains を一時的に `host_selftest`・`lane_rules` に書き換えて同じ 2 件を実行（確認後に戻した） | REQUIRE なし: 2 件とも SKIP（stale bundle の理由付き）。REQUIRE=1: 2 件とも `stale bundle` で panic |
-| `bash scripts/dev/test-affected.sh` | 下の報告に記載 |
-| `cargo clippy --workspace -- -D warnings` | 下の報告に記載 |
+| `bash scripts/dev/test-affected.sh` | exit 0、870 件合格、0 件 skip |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `cargo clippy -p celeris --test script_compare_route_priority --test script_compare_lane_rules -- -D warnings` | exit 0 |
 | `cargo fmt --all -- --check` | exit 0 |
 
 ## commit
@@ -46,6 +47,8 @@ tempdir に検証の通る bundle と、domains を変えた manifest、3 領域
 
 ## 未確認の点
 - task 根の worktree の古い dist は残ったまま。integrate-second ではその dist の試験が SKIP になり、REQUIRE=1 のときだけ失敗する。本物の host で比べるには、統合の前に dist を作り直す必要がある（作業ツリー外の操作なのでこの WU ではしていない）。
+
+- `cargo clippy -p celeris --tests -- -D warnings` は、この WU が触っていない `campaign_lock_e2e` の `clippy::duplicate_mod` で落ちる（base から在る。workspace の clippy は tests を見ないので通る）。
 
 ## 提案
 - integrate の check で `pnpm bundle` を先に走らせるか、`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` の試験の前に dist を作り直す手順を置く。

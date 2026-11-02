@@ -517,6 +517,8 @@ async fn cos_chat_triage_events_resolve_escalated_only_for_touched_tasks() {
     );
 }
 
+#[path = "cos_chat_triage_digest_script_compare.rs"]
+mod digest_script_compare;
 #[path = "cos_chat_triage_fallback.rs"]
 mod fallback;
 #[path = "cos_chat_triage_inbox_thread.rs"]

@@ -173,6 +173,14 @@ impl PolicyScript for Slow {
     fn route_priority(&self, _input: RoutePriorityInput, deadline: Duration) -> PolicyFuture<'_> {
         self.lane_rules(LaneRulesInput::redacted(&features()), deadline)
     }
+
+    fn cos_digest(
+        &self,
+        _input: task_core::chat::digest::CosDigestInput,
+        deadline: Duration,
+    ) -> PolicyFuture<'_> {
+        self.lane_rules(LaneRulesInput::redacted(&features()), deadline)
+    }
 }
 
 #[tokio::test(start_paused = true)]

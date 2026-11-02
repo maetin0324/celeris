@@ -28313,11 +28313,20 @@
     },
     "ScriptDomain": {
       "description": "TS 制御層の領域（S2-1）。表 `script_domain_modes` の `domain`。",
-      "enum": [
-        "lane_rules",
-        "route_priority"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "lane_rules",
+            "route_priority"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "cos_digest",
+          "description": "付記 S4: CoS の受信箱 digest pass（migration 0104）。記録は `script_compare_log`。",
+          "type": "string"
+        }
+      ]
     },
     "ScriptDomainList": {
       "description": "`GET /script/domains` の応答（`domain` の順）。",

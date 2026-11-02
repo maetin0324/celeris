@@ -5647,7 +5647,7 @@ export type ScratchStatus = {
   "total_max_bytes": number;
 };
 
-export type ScriptDomain = "lane_rules" | "route_priority";
+export type ScriptDomain = "lane_rules" | "route_priority" | "cos_digest";
 
 export type ScriptDomainList = {
   "domains": Array<ScriptDomainView>;

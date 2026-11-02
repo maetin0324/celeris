@@ -77,7 +77,7 @@ async fn script_domain_list_starts_rust_without_generation() {
         .iter()
         .map(|d| d["domain"].as_str().expect("name"))
         .collect();
-    assert_eq!(names, vec!["lane_rules", "route_priority"]);
+    assert_eq!(names, vec!["cos_digest", "lane_rules", "route_priority"]);
     for d in domains {
         assert_eq!(d["mode"], "rust", "{d}");
         assert_eq!(d["version"], 0, "{d}");

@@ -37,6 +37,8 @@ pub(super) struct FakeScript {
     pub(super) calls: AtomicUsize,
     /// `route_priority` の呼び出し回数と受けた入力。
     pub(super) route_inputs: StdMutex<Vec<RoutePriorityInput>>,
+    /// `cos_digest` の呼び出し回数と受けた入力（付記 S4）。
+    pub(super) digest_inputs: StdMutex<Vec<task_core::chat::digest::CosDigestInput>>,
 }
 
 impl FakeScript {
@@ -50,6 +52,7 @@ impl FakeScript {
             behavior,
             calls: AtomicUsize::new(0),
             route_inputs: StdMutex::new(Vec::new()),
+            digest_inputs: StdMutex::new(Vec::new()),
         })
     }
 
@@ -128,6 +131,34 @@ impl PolicyScript for FakeScript {
             match behavior {
                 Behavior::Echo => Ok(PolicyReply {
                     output: serde_json::to_value(echo_route_priority(&input)).unwrap(),
+                    isolate_epoch: 1,
+                }),
+                Behavior::Fixed(output) => Ok(PolicyReply {
+                    output,
+                    isolate_epoch: 1,
+                }),
+                Behavior::Fail(e) => Err(e),
+                Behavior::Hang => {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                    Err(PolicyScriptError::new("exception", "woke up"))
+                }
+            }
+        })
+    }
+
+    fn cos_digest(
+        &self,
+        input: task_core::chat::digest::CosDigestInput,
+        _deadline: Duration,
+    ) -> PolicyFuture<'_> {
+        self.digest_inputs.lock().unwrap().push(input.clone());
+        let behavior = self.behavior.clone();
+        Box::pin(async move {
+            match behavior {
+                Behavior::Echo => Ok(PolicyReply {
+                    output: serde_json::json!({
+                        "commands": task_core::chat::digest::cos_digest_decide(&input),
+                    }),
                     isolate_epoch: 1,
                 }),
                 Behavior::Fixed(output) => Ok(PolicyReply {

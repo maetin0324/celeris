@@ -3829,7 +3829,7 @@ browser wait が参照していれば 409 `site_policy_in_use`（`node_ids`・`w
 
 ### 3.134 TS 制御層の領域の mode（ADR 2026-11-02-ts-control-layer-boundary (d)・付記 S2-4・S2-5）
 
-領域（`lane_rules`・`route_priority`）ごとの mode と active generation の正本は表 `script_domain_modes`（migration 0103）。
+領域（`lane_rules`・`route_priority`・`cos_digest`）ごとの mode と active generation の正本は表 `script_domain_modes`（migration 0103、`cos_digest` の行は migration 0104。付記 S4-4）。
 mode は `rust` → `compare` → `canary` → `ts`。S2 の API が変更先として受けるのは `rust` と `compare` だけ。
 config の欄は無い（mode は DB の表が持つ）。CLI は `celerisctl script domains` と `celerisctl script mode <domain> rust|compare`。
 

@@ -1,5 +1,6 @@
 //! ADR 2026-11-02-ts-control-layer-boundary 付記 S2-4・S2-5: 表 `script_generations`・`script_domain_modes`・
-//! `script_domain_events`（migration 0103）と event `script_compare_recorded` の追記。
+//! `script_domain_events`（migration 0103）と event `script_compare_recorded` の追記、
+//! `cos_digest` の compare の記録 `script_compare_log`（migration 0104、付記 S4-5）。
 //!
 //! - mode の更新は `version` の CAS だけ。更新と `script_domain_mode_changed` の追記は 1 つの IMMEDIATE transaction。
 //! - S2 では `canary`・`ts` への変更を store でも拒む（表を変えない）。
@@ -11,9 +12,21 @@ use time::OffsetDateTime;
 use super::{SqliteStore, StoreError, format_rfc3339};
 use crate::model::{Event, TaskId};
 use crate::script_compare::{
-    NewScriptGeneration, ScriptCompareRecord, ScriptDomain, ScriptDomainError, ScriptDomainModeRow,
-    ScriptGeneration, ScriptGenerationState, ScriptMode, ScriptModeChange, ScriptModeChangeOutcome,
+    CosDigestCompareRecord, NewScriptGeneration, ScriptCompareRecord, ScriptDomain,
+    ScriptDomainError, ScriptDomainModeRow, ScriptGeneration, ScriptGenerationState, ScriptMode,
+    ScriptModeChange, ScriptModeChangeOutcome,
 };
+
+/// `script_compare_log` の 1 行（付記 S4-5）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScriptCompareLogRow {
+    pub id: u64,
+    pub ts: String,
+    pub domain: ScriptDomain,
+    pub thread_id: String,
+    pub run_id: String,
+    pub record: CosDigestCompareRecord,
+}
 
 /// `script_domain_events` の 1 行。`event` は `Event::ScriptDomainModeChanged`。
 #[derive(Debug, Clone, PartialEq)]
@@ -272,6 +285,95 @@ impl SqliteStore {
         Self::append_event_tx_at(&tx, task_id, &event, now)?;
         tx.commit()?;
         Ok(true)
+    }
+}
+
+impl SqliteStore {
+    /// 付記 S4-5: `cos_digest` の compare の記録を `script_compare_log` に追記する。同じ `thread_id`・`run_id`・
+    /// `domain` に `generation`・`input_digest`・`outcome` が同じ行が既にあれば追記せず `Ok(false)`。
+    pub fn script_compare_log_append(
+        &self,
+        record: &CosDigestCompareRecord,
+        now: OffsetDateTime,
+    ) -> Result<bool, StoreError> {
+        let outcome = serde_json::to_value(record.outcome)?;
+        let outcome = outcome.as_str().unwrap_or_default().to_owned();
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists = tx
+            .query_row(
+                "SELECT 1 FROM script_compare_log \
+                 WHERE thread_id = ?1 AND run_id = ?2 AND domain = ?3 \
+                 AND json_extract(json, '$.generation') = ?4 \
+                 AND json_extract(json, '$.input_digest') = ?5 \
+                 AND json_extract(json, '$.outcome') = ?6 LIMIT 1",
+                params![
+                    record.thread_id,
+                    record.run_id,
+                    record.domain.as_str(),
+                    record.generation,
+                    record.input_digest,
+                    outcome,
+                ],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if exists {
+            tx.commit()?;
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO script_compare_log (ts, domain, thread_id, run_id, json) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                format_rfc3339(now)?,
+                record.domain.as_str(),
+                record.thread_id,
+                record.run_id,
+                serde_json::to_string(record)?,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// `script_compare_log` を古い順に読む（`run_id` を渡せばその run だけ）。
+    pub fn script_compare_log(
+        &self,
+        run_id: Option<&str>,
+    ) -> Result<Vec<ScriptCompareLogRow>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, ts, domain, thread_id, run_id, json FROM script_compare_log \
+                 WHERE ?1 IS NULL OR run_id = ?1 ORDER BY id",
+            )?;
+            let rows = stmt.query_map(params![run_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?;
+            rows.map(|r| {
+                let (id, ts, domain, thread_id, run_id, json) = r?;
+                Ok(ScriptCompareLogRow {
+                    id: u64::try_from(id)
+                        .map_err(|_| StoreError::Invalid(format!("script_compare_log id {id}")))?,
+                    ts,
+                    domain: parse_domain(&domain).map_err(|_| {
+                        StoreError::Invalid(format!("unknown script domain `{domain}`"))
+                    })?,
+                    thread_id,
+                    run_id,
+                    record: serde_json::from_str(&json)?,
+                })
+            })
+            .collect()
+        })
     }
 }
 

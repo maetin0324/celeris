@@ -2,6 +2,8 @@
 use std::collections::HashSet;
 
 use rusqlite::{OptionalExtension, Transaction, params};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use ulid::Ulid;
 
@@ -497,7 +499,8 @@ pub const COS_FALLBACK_SUMMARY_MAX_ATTEMPTS: u32 = 3;
 pub const COS_TRIAGE_DIGEST_KEY_PREFIX: &str = "cos-triage-digest:";
 
 /// One option of the original wait as the outbox body recorded it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CosTriageOption {
     pub key: String,
     pub label: String,
@@ -506,7 +509,8 @@ pub struct CosTriageOption {
 }
 
 /// What the person must decide, as the escalation / fallback outbox body recorded it.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CosTriageDecision {
     pub summary: String,
     /// ADR 2026-10-30-cos-review-open-waits D3: where the item comes from and why now.
@@ -520,7 +524,9 @@ pub struct CosTriageDecision {
 }
 
 /// One `cos_inbox_items` row with its route and decision packet (if routed to the person).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// S4 (ADR 2026-11-02-ts-control-layer-boundary S4-2): also the `items` of the `cos_digest` input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CosTriageItemReport {
     pub item_id: String,
     /// The CoS thread the item belongs to (ADR 2026-10-22-cos-fixed-threads D3).

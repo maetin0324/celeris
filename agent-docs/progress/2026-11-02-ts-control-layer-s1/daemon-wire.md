@@ -35,7 +35,7 @@ updated: 2026-11-02
 
 ## 未解決事項
 1. 受け入れ条件 1。依存の実測と選択肢は次のとおり。
-   - debug build の `celerisctl` に `v8::`・`deno_core::` の定義が 57044 個ある（`nm -C --defined-only`、`celeris` は 68020 個）。release build で linker が消すかは未確認。
+   - debug build の `celerisctl` に `v8::`・`deno_core::` の定義が 57044 個ある（`nm -C --defined-only`、`celeris` は 68020 個）。release build でも linker は消さない（attempt 2 で `cargo build --release -p celerisctl` を実測。binary 97,713,712 byte、`v8::`・`deno_core::`・`simdutf` の定義 58423 個、`nm -S` の大きさの和 21.0 MiB。V8 を持たない base の release binary との比較は未測定）。
    - 案 A（check と ADR (b) を直す）: `celerisctl` を許可リストに足す。`task-core`・`task-dispatch`・`task-api` に V8 を持たせないという ADR の目的は保てるが、`celerisctl` の build と binary は重くなる。
    - 案 B（package を分ける）: V8 を持たない lib の package と、`celeris` の binary の package に分け、`celerisctl` は lib だけに依存する。ADR (b) のとおりになるが、`crates/celerisctl/Cargo.toml`、`scripts/selfdeploy/release.sh`、`-p celeris` を使う検査、`crates/celeris/tests/` が影響を受ける。script layer は `run` へ注入する形に変わる。影響の全量は未確認。
    - 不採用（feature で分ける）: `celeris` に既定 feature を、`celerisctl` に `default-features = false` を一時的に指定して確かめた。`cargo tree --workspace` には `celerisctl` が残る。`-p celerisctl` 単独なら `deno_core` は 0 件だが、`cargo build -p celeris -p celerisctl`（`release.sh`）では feature が統合される。
@@ -44,4 +44,5 @@ updated: 2026-11-02
 4. `state_dir` を worker の run から書けなくする保護は入れていない。S1 では bundle を判定に使わない。業務領域を切り替える段より前に要否を決める。
 
 ## 提案
+2. 前回の run は `result.json` に `summary` と `yield.plan_issue` を両方書いた。`summary` が `yield` より優先されるため（`crates/task-worker/src/adapter.rs` の優先順位）、run は done として扱われ、plan_issue は捨てられて同じ check で retry になった。worker の手引き（plan_issue の書き方）に「`summary` を一緒に書かない」と明記するか、両方あるときは plan_issue を優先するよう直す。attempt 2 は `yield` だけを書く。
 1. 境界 ADR (b) の「`celeris`（binary）」の前提を直す。`celeris` は lib でもあり、`celerisctl` が依存している。S0 の棚卸しはこの依存を見落としていた。

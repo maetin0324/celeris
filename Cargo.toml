@@ -14,6 +14,7 @@ members = [
     "crates/celeris-mcp",
     "crates/celeris",
     "crates/celerisctl",
+    "crates/script-runtime",
     "tests/e2e",
 ]
 exclude = ["examples/hello-crate"]

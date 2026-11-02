@@ -463,3 +463,105 @@ TS の生の JSON の key 順・空白は deserialize で消えるので比較�
 | S2-8 | `denied_capability`・`denied_scope`（S2-9 の理由文で分ける）・`ceiling_exceeded`・`undeclared_candidate` | (2) `ceiling_exceeded` は今の `LaneCeiling::clamp` では起きない（許される lane が 1 つでもあれば clamp はそれを返す）。試験は「違反なし」だけを確かめる |
 | S2-9〜S2-11 | 付記のとおり | (3) compare の記録の `run_id` は `lane_rules` では `null`（`decide_lane` は run の id を作る前に走る）、`route_priority` では run の id |
 | 試験の dist | 本物の host の試験は `control-ts/dist` の manifest の domains が `bundle.config.json` と違えば SKIP、`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` で失敗 | (4) `release.sh`・`test-affected.sh` は dist を作らないので、dist の無い環境では 5 件が SKIP で通る。release gate への組み込みは別 task の候補 |
+
+## 付記 2026-11-02: S4 の CoS digest 経路（S4 adr-s4、task 01M6EVP9GT07K2G01EMW0E6HNC）
+S4 の作業の前に、CoS の非同期経路 1 つを TS へ同等移行する仕様を決める。根拠は [S0 の計画](../progress/2026-11-02-ts-control-layer-s0.md) §2 S4、
+[S0 inventory §4](../progress/2026-11-02-ts-control-layer-s0/inventory.md)、S2 の付記（S2-1〜S2-12）、`crates/task-dispatch/src/dispatcher/cos_chat/digest.rs`、
+`crates/task-core/src/chat/triage.rs`（`cos_triage_runs_without_digest`・`cos_triage_requeue_run`）、`crates/task-core/src/chat/store.rs`（`chat_assistant_message_add_once`）。
+記録は [S4 adr-s4](../progress/2026-11-02-ts-control-layer-s4/adr-s4.md)。この付記はコードを変えない。
+用語: この付記の「compare」は S2 の `compare` mode のこと。旧 `routing_shadow`（表・`RoutingShadowRecorded`・`routing_shadow_history`・旧 `[model_routing]`・tier binding）は使わない。
+
+### S4-1 移す経路と理由
+- 移すのは、受信箱一次対応の **digest pass 全体**: `CosChatLaunch::triage_digest`（`digest_due` の立った tick で走る）→ `digest_one`。
+  triage run の終了 → Rust が `cos_triage_runs_without_digest` で未 digest の run を読む → `cos_triage_run_report`・`chat_run_get` で snapshot を作る →
+  **TS が判定する（text・cards の組み立てと、stopped/interrupted の requeue をするかの判断）** → Rust が検証して apply（message 投入、requeue）。
+- S0 の計画は `digest_message` の文面だけを移す案だった。それでは「単なる rule 関数」になるので、requeue をするかの判断も出力 command に含める（S0 から範囲を広げた点）。
+  requeue の SQL・message の書き込み・`digest_due`・`dirty` の更新・走査・20 件の上限は Rust のまま。
+- 選んだ理由:
+  1. 境界が既にある。`digest_message` は I/O と時計を持たず、`digest_one` の副作用は 2 つ（message 投入、requeue）だけ。前段の Rust の変更は「判定を値にして返す」分割で、挙動は変えない。
+  2. 実運用の非同期の流れ（run の終了、tick をまたぐ再配送、write の失敗の retry、人の割り込み、daemon の再起動後の回収）を全部通る。試験が既に 11 件ある（`cos_chat_triage_inbox_thread.rs`）。
+  3. 安全条件に触れない。認可・予算・human_required・`policy_version` の検査は digest の外にある。
+  4. 変更頻度が文面側に偏る（日本語の文面と card の調整）。S3 の高速経路の効果が出る場所である。
+- B（定期見直しの入力文）を後に回す理由: 冪等 key の確認・`project_brief_list` の読み出しが判定の前に混じり、先に store 読み出しを外へ出す Rust の変更が要る。
+- C（取り込み分類）を後に回す理由: cursor・挿入 transaction・`policy_version` に近く、入力が `EventRow`・`InboxItem`・`Notice` と大きい。変更頻度は最大だが、S4 の最初には重い。
+- D（CoS 不在時の退避）は Rust のまま。期限判定が安全網（ADR 2026-10-27 系の fallback）で、文面だけを切り出す価値が小さい。
+- B・C・D への広げ方は S4 の対象外。
+
+### S4-2 領域 `cos_digest`・DTO・fixture
+DTO の正本は Rust の型。全 struct に `deny_unknown_fields`、`docs/api/script-host/host-v1.schema.json` に足す。
+- 領域名 `cos_digest`。manifest の `domains` に載せる。`capabilities` は空（S4-6）。
+- 入力 `CosDigestInput { thread: string, run_id: string, run_state: "completed"|"failed"|"stopped"|"interrupted", reason: string | null, items: CosTriageItemReport[] }`。
+  `items` は `cos_triage_run_report(run_id)` の並びのまま。`CosTriageItemReport`（`task_core::chat::triage`）に `Serialize`・`Deserialize`・`JsonSchema`・`deny_unknown_fields` を足す（前段、別 commit）。
+  `reason` は `chat_run_get(thread, run_id)` の `reason`（読めなければ `null`）。時刻・乱数・`policy_version` の欄は置かない。
+- 出力 `CosDigestOutput { commands: DigestCommand[] }`。`DigestCommand` は `kind` で分かれる:
+  - `{ "kind": "post_digest", "thread": string, "idempotency_key": string, "text": string, "cards": ChatCard[], "run_id": string }`
+  - `{ "kind": "requeue_run", "run_id": string }`
+- Rust の参照実装の出力: 常に `post_digest` を 1 件、`run_state` が `stopped`・`interrupted` ならその後ろに `requeue_run` を 1 件。順序は今の `digest_one` と同じ（投入が先）。
+- fixture の 1 行は `{ "name": string, "input": CosDigestInput, "commands": DigestCommand[] }`（`control-ts/fixtures/cos_digest/*.jsonl`）。`commands` は Rust の参照実装が書き出した期待値で、TS の手書きにしない。
+- 比べる欄: `commands` の全要素（`text` と `cards` を含む byte 一致、順序込み）。正規化は S2-2 と同じく「なし」。
+
+### S4-3 Rust の検証規則と安全違反
+Rust は TS の output を apply の前に次で検証する。1 つでも落ちたら、その run の TS の output 全体を使わない（apply しない）。
+1. `post_digest.idempotency_key == COS_TRIAGE_DIGEST_KEY_PREFIX + run_id`（`cos-triage-digest:<run_id>`）。
+2. `post_digest.thread` と `run_id`、`requeue_run.run_id` が入力 snapshot と一致する。
+3. 全 `ChatCard.id` が `items[].source_key` の部分集合。card の数は `items` の数以下。
+4. `requeue_run` は `run_state` が `stopped`・`interrupted` のときだけ。
+5. run ごとに `post_digest` と `requeue_run` はそれぞれ高々 1 件。
+6. `post_digest` が無い output は不正（digest は run ごとに必ず 1 件）。`text` は `CHAT_MESSAGE_TEXT_MAX_BYTES` 以下、`idempotency_key` は `CHAT_CLIENT_KEY_MAX_BYTES` 以下。
+- 数え方（S2-8 と同じ枠）: 検証落ちは outcome を `invalid_output` にし、`safety_violations` に code を入れる。
+  code: `key_mismatch`（1）・`scope_mismatch`（2）・`card_outside_items`（3）・`requeue_state_invalid`（4）・`duplicate_command`（5）。6 は code を持たず `invalid_output` の理由文だけ（安全でなく形式の違反）。
+  TS が呼んだ op の拒否は S2-8 の `denied_capability`・`denied_scope`。空でない event の件数で数え、分母は `outcome != unavailable` の件数（S2-8 と同じ）。
+- 検証は TS の output にだけ当てる。Rust の参照実装の output も同じ検証関数を試験で通す（参照実装が検証に落ちたら Rust の bug。code にせず試験で落とす）。
+- 既存の安全検査は動かさない: `cos_triage_requeue_run` の `WHERE state='running'`、message の冪等 key、`digest_due` を空の走査で初めて下ろす規則。
+
+### S4-4 compare と apply
+- compare は Rust の command を **常に apply し、TS を待たない**（S2-12 の (1) と同じ）。`digest_one` は snapshot → Rust の参照実装 → apply の順で今と同じに動き、その後で別の tokio task が TS を 50 ms の deadline で呼ぶ。
+- 結果は S4-5 の log に追記する。追記の失敗・TS の失敗・timeout・runtime 不在・generation 不在・mode `rust` のどれでも、digest pass は止めず Rust の結果のまま。
+- mode は S2 の表 `script_domain_modes` の行（`cos_digest` を migration で `rust`・version 0 で足す）。tick ごとに 1 回読む。S2-5 と同じく S4 で受け付けるのは `rust` と `compare` だけ。
+- in-flight の上限は S2 の `MAX_IN_FLIGHT_COMPARES`（全領域の合計 32）を共用する。digest pass は 1 回に最大 20 run なので、上限を超えた run は記録を落とす（件数を `unavailable` として数えない。log の欠けとして warn する）。S5 の分母は log の行数。
+- `canary`・`ts` は S5。S4 の TS の output は apply されない。
+
+### S4-5 比較入力の保存規則
+- 追記先: `events` ではなく新しい追記専用の表 `script_compare_log`（migration は hook unit。番号はその時の空き）。理由は、`events.task_id` が NOT NULL で digest が task でなく thread・run に属すること（S2-4）。
+  列は `id` INTEGER PK、`ts`、`domain`、`thread_id`、`run_id`、`json`。UPDATE・DELETE の経路を作らない。`script_compare_recorded` の event は使わない。
+- `json` の欄は S2-4 の `script_compare_recorded` と同じ（`domain`・`generation`・`isolate_epoch`・`bundle_sha256`・`host_api`・`call_site`＝`cos_digest.digest_one`・`run_id`・`outcome`・`error`・`normalized`・`safety_violations`・`elapsed_us`）に、次の違いを持つ。
+  - `input` は常に `null`。`input_digest`（`sha256:` + S4-2 の入力の直列化の sha256）と `thread_id`・`run_id` だけを残す。`input_truncated` は欄ごと無い。
+  - `rust`・`ts` は `commands` を直接ではなく `commands_digest`（`sha256:` + 直列化の sha256）と `command_kinds`（`["post_digest","requeue_run"]` の並び）で残す。本文は残さない。`mismatch` のときだけ `ts_commands_head`（TS の `text` の先頭 512 byte）を足す。
+  - `applied: { message_id: string, requeued: number }`（Rust が実際に apply した結果）。
+- 本文を残さない理由: items の `summary`・`detail`・`reason` は task・案件の本文で、S2-3 の「本文を捨てる」に当たる。同じ本文は chat の message と `cos_inbox_items` に既にあり、log に写すと二重に持つ。
+- replay: 本番では、`thread_id`・`run_id` から store で入力を組み直し（`cos_triage_run_report`・`chat_run_get`）、`input_digest` が log と同じ run だけを再実行する。違う run（digest 後に item の state が変わった）は `drifted` として数え、不一致に入れない。
+  試験用の記録済み trace は、trace-capture unit が dispatcher の本物の経路（fake adapter で triage run を終えさせる）から書き出し、`control-ts/fixtures/cos_digest/` に本文つきで置く。これは repo の試験 fixture で、本番の log ではない。
+- 重複の抑え: 同じ `thread_id`・`run_id` に、同じ `generation`・`input_digest`・`outcome` の行は足さない。digest pass の再配送（tick の繰り返し）で行が増えない。
+
+### S4-6 async の読み出し・LLM を bridge しない理由
+- digest が使う入力は、Rust が TS を呼ぶ前に作る snapshot で全部そろう。TS は `CosDigestInput` だけを読み、store・chat・process・network・LLM を呼ばない。
+  非同期なのは経路（run の終了 → tick → 読み出し → 判定 → 書き込み、tick をまたぐ retry・再配送・再起動）で、TS の中の判定は同期の純粋関数である。経路の主体（`digest_due`・走査・apply）は Rust のまま。
+- したがって S4 では op と capability を足さない。`cos_digest` の許可表は空、要求の `scope_task_ids` も空。manifest が `cos_digest` に `capabilities` を宣言したら load で拒否する（S2-7 と同じ。`script_generations` に `rejected` の行は作らない。S2-9）。
+- S2-7 の「要求ごとの V8 context の分離は op を使う最初の領域より前に決める」は、S4 では op を使わないので **不要のまま**。分離を決めるのは、最初に op を使う領域（B・C の拡張、または S6）の前に延ばす。
+- 隠れた入力（global に値を残す）の対策は S2-7 と同じ。fixture runner が全件を正順・逆順の 2 回流し、同じ出力を要求する。本番の compare の差は `mismatch` に出る。
+- LLM は digest 経路に無い（triage run は終わっていて、digest は記録済みの run の結果を読むだけ）。記録済みの LLM 応答の replay は、triage run の結果が `cos_inbox_items` に記録されている形で行う。live で LLM を二重に呼ばない。
+
+### S4-7 行為の追跡
+- 新しい event kind は足さない（`Event` の variant を変えず、task-api の query・web/api の生成型に波及させない）。
+- post_digest の実行記録は chat の message（`chat_messages` の `client_message_id = cos-triage-digest:<run_id>`、`run_id` 付き）。冪等 key が thread 内で一意なので、再配送・retry・再起動で 2 件目は作られない。
+- requeue の実行記録は `cos_inbox_items` の行（`state` が `pending`、`run_id` が `NULL`）と S4-5 の `applied.requeued`。`WHERE run_id=? AND state='running'` なので繰り返しても 0 件で、冪等。
+- compare の記録は S4-5 の `script_compare_log`。以上で足りる。S5 の `ts` mode で TS の command を apply するようになったら、`applied` と同じ欄で「TS の command を apply した」ことを `script_compare_log` に残す（S5 で決める。S4 では行わない）。
+
+### S4-8 試験の表
+旧 `routing_shadow` の名前は試験名・fixture 名・表名のどれにも使わない。試験は `crates/task-dispatch/src/dispatcher/tests/cos_digest_script.rs`（robustness unit）と `control-ts/test/cos_digest.test.ts`。
+| 観点 | 場面 | 期待 |
+|---|---|---|
+| 順序 | 1 pass に 2 run 以上。stopped の run | `post_digest` の後に `requeue_run`。投入が失敗したら requeue しない（今の `?` と同じ）。run の並びは `started_at`・`run_id` 順 |
+| 再配送 | `digest_due` が複数回立つ。同じ run が 2 pass に現れる | message は 1 件。`script_compare_log` は同じ `input_digest`・`outcome` で 1 行 |
+| retry | message の書き込み失敗、走査の失敗、20 件超の drain | 次の tick で再試行。`digest_due` は空の走査まで残る。compare の有無で結果が同じ |
+| cancel | stopped・interrupted の run、人の割り込み | items が `pending` に戻り、人の message が先に走る。completed・failed の run は requeue しない（`requeue_state_invalid` を TS が出したら検証で落ちる） |
+| 再起動 | daemon 再起動後の reconcile、起動後の orphan 回収 | `digest_due` が立ち、message は 1 件のまま。mode `compare` の復元（`script_domain_modes`）後に log が続く |
+| policy_version・session freshness | `[cos.triage] policy_version` の変更で session が fresh になった後の run | digest の入力に `policy_version` は無く、run_id が key。版が変わる前の run の digest も 1 件で、文面が変わらない。版の整合の 422 は動かさない |
+| generation 切替 | pass の途中で mode が `rust` ↔ `compare`、generation の差し替え、`GenerationGone` | Rust の message・requeue は byte 一致。log の `generation` が呼んだ版を指す。TS 失敗は `ts_error`、digest pass は止まらない |
+| 同等性 | 11 件の既存入力の replay | `commands` が byte 一致。fixture を正順・逆順の 2 回流して一致 |
+| 安全 | 検証規則 1〜6 を 1 件ずつ破る bundle | `invalid_output` と対応する code。apply されない |
+| 結果不変 | 常に違う答えを返す bundle（compare） | `chat_messages`・`cos_inbox_items` が `rust` のときと byte 一致 |
+
+### S4-9 Rust の分割（rust-split unit が行う。挙動不変）
+- `digest_one` を 4 つに分ける: snapshot の組み立て（`cos_triage_run_report`・`chat_run_get`）→ `digest_decide(&CosDigestInput) -> CosDigestOutput`（純粋、`digest_message` を使う）→ `validate_digest_output(&CosDigestInput, &CosDigestOutput) -> Result<(), DigestViolation>` → `apply_digest_commands`。
+- 分割の commit では出力 message・requeue・log の無い今の挙動を変えない。11 件の既存試験がそのまま通ることを確かめる。

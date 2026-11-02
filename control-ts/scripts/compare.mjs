@@ -18,6 +18,13 @@ const DOMAINS = {
     input: (row) => ({ features: row.features }),
     fields: ["rule_id", "proposed", "condition"],
   },
+  route_priority: {
+    module: "src/domains/route_priority.ts",
+    entry: "routePriority",
+    fixture: "fixtures/route_priority/cases.jsonl",
+    input: (row) => row.input,
+    fields: ["basis", "candidates"],
+  },
 };
 
 export async function compare(domain, { fixture } = {}) {

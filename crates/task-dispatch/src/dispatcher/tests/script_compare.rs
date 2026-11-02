@@ -8,19 +8,20 @@ use crate::script_policy::{
     PolicyScriptError, SCRIPT_CALL_DEADLINE,
 };
 use task_core::script_compare::{
-    CompareOutcome, LaneRulesInput, NewScriptGeneration, ScriptCompareRecord,
-    ScriptGenerationState, ScriptMode, ScriptModeChange,
+    CompareOutcome, LaneRulesInput, NewScriptGeneration, RoutePriorityInput, RoutePriorityOutput,
+    ScriptCompareRecord, ScriptGenerationState, ScriptMode, ScriptModeChange,
 };
 
 const BUNDLE: &str = "ab";
 
-fn bundle_sha() -> String {
+pub(super) fn bundle_sha() -> String {
     BUNDLE.repeat(32)
 }
 
+/// 偽の TS の振る舞い（両領域に同じ振る舞いを当てる）。
 #[derive(Clone)]
-enum Behavior {
-    /// Rust の `match_rule` と同じ答え。
+pub(super) enum Behavior {
+    /// Rust と同じ答え（`lane_rules` は `match_rule`、`route_priority` は付記 S2-10 の規則を入力 DTO に当てる）。
     Echo,
     /// 決まった値を返す。
     Fixed(serde_json::Value),
@@ -29,24 +30,62 @@ enum Behavior {
     Hang,
 }
 
-struct FakeScript {
-    sha: String,
-    behavior: Behavior,
-    calls: AtomicUsize,
+pub(super) struct FakeScript {
+    pub(super) sha: String,
+    pub(super) behavior: Behavior,
+    /// `lane_rules` の呼び出し回数。
+    pub(super) calls: AtomicUsize,
+    /// `route_priority` の呼び出し回数と受けた入力。
+    pub(super) route_inputs: StdMutex<Vec<RoutePriorityInput>>,
 }
 
 impl FakeScript {
-    fn new(behavior: Behavior) -> Arc<Self> {
+    pub(super) fn new(behavior: Behavior) -> Arc<Self> {
+        Self::with_sha(bundle_sha(), behavior)
+    }
+
+    pub(super) fn with_sha(sha: String, behavior: Behavior) -> Arc<Self> {
         Arc::new(Self {
-            sha: bundle_sha(),
+            sha,
             behavior,
             calls: AtomicUsize::new(0),
+            route_inputs: StdMutex::new(Vec::new()),
         })
     }
 
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
+
+    pub(super) fn route_calls(&self) -> usize {
+        self.route_inputs.lock().unwrap().len()
+    }
+}
+
+/// 付記 S2-10 の規則を入力 DTO だけから当てる（偽の TS の「Rust と同じ答え」）。
+fn echo_route_priority(input: &RoutePriorityInput) -> RoutePriorityOutput {
+    use task_core::script_compare::RoutePriorityBasis as B;
+    let t = &input.table;
+    let lane = input.lane.clone().unwrap_or_default();
+    let class = input
+        .execution_class
+        .as_ref()
+        .and_then(|c| t.class_defaults.iter().find(|x| &x.execution_class == c));
+    let (basis, candidates) = if input.cos {
+        (B::Cos, t.cos_route_candidates.clone())
+    } else if let Some(class) = class {
+        (B::ExecutionClass, class.candidates.clone())
+    } else if let Some(l) = t.lane_route_defaults.iter().find(|x| x.lane == lane) {
+        (B::Lane, l.candidates.clone())
+    } else {
+        (B::Harness, t.route_defaults.clone())
+    };
+    let basis = if candidates.is_empty() {
+        B::None
+    } else {
+        basis
+    };
+    RoutePriorityOutput { basis, candidates }
 }
 
 impl PolicyScript for FakeScript {
@@ -67,6 +106,28 @@ impl PolicyScript for FakeScript {
                         task_core::model_policy::match_rule(&input.features),
                     ))
                     .unwrap(),
+                    isolate_epoch: 1,
+                }),
+                Behavior::Fixed(output) => Ok(PolicyReply {
+                    output,
+                    isolate_epoch: 1,
+                }),
+                Behavior::Fail(e) => Err(e),
+                Behavior::Hang => {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                    Err(PolicyScriptError::new("exception", "woke up"))
+                }
+            }
+        })
+    }
+
+    fn route_priority(&self, input: RoutePriorityInput, _deadline: Duration) -> PolicyFuture<'_> {
+        self.route_inputs.lock().unwrap().push(input.clone());
+        let behavior = self.behavior.clone();
+        Box::pin(async move {
+            match behavior {
+                Behavior::Echo => Ok(PolicyReply {
+                    output: serde_json::to_value(echo_route_priority(&input)).unwrap(),
                     isolate_epoch: 1,
                 }),
                 Behavior::Fixed(output) => Ok(PolicyReply {
@@ -320,11 +381,7 @@ async fn script_compare_without_policy_script_records_unavailable() {
 #[tokio::test]
 async fn script_compare_other_bundle_is_unavailable_and_not_called() {
     let base = baseline(task_core::TierSource::Hint, |_, _| {}).await;
-    let script = Arc::new(FakeScript {
-        sha: "cd".repeat(32),
-        behavior: Behavior::Echo,
-        calls: AtomicUsize::new(0),
-    });
+    let script = FakeScript::with_sha("cd".repeat(32), Behavior::Echo);
     let out = run_once(
         true,
         Some(script.clone()),
@@ -422,3 +479,7 @@ async fn script_compare_lane_after_ceiling_is_rust() {
         assert!(r.safety_violations.is_empty());
     }
 }
+
+/// 付記 S2-11: `route_priority` の compare の試験（`tests/mod.rs` を変えずに足すため子 module にした）。
+#[path = "script_compare_route.rs"]
+mod script_compare_route;

@@ -1,14 +1,14 @@
 //! `task_dispatch::PolicyScript` の本物の実装（境界 ADR 2026-11-02 付記 S2-6）。`ScriptRuntimeHandle` で TS を呼ぶ。
 //!
 //! 入出力は DTO だけで、Rust の判定を変えない。結果の分類と記録は dispatcher が行う。
-//! `lane_rules` は op を呼ばない純粋関数なので、要求の scope は空で送る（S2-7）。
+//! `lane_rules`・`route_priority` は op を呼ばない純粋関数なので、要求の scope は空で送る（S2-7）。
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
 use celeris_script::dto::HOST_API_VERSION;
 use celeris_script::{ScriptCall, ScriptError, ScriptRuntimeHandle};
-use task_core::script_compare::{LaneRulesInput, ScriptDomain};
+use task_core::script_compare::{LaneRulesInput, RoutePriorityInput, ScriptDomain};
 use task_dispatch::script_policy::{
     PolicyFuture, PolicyReply, PolicyScript, PolicyScriptBundle, PolicyScriptError,
 };
@@ -38,12 +38,36 @@ impl PolicyScript for ScriptPolicy {
     }
 
     fn lane_rules(&self, input: LaneRulesInput, deadline: Duration) -> PolicyFuture<'_> {
+        self.call_domain(
+            ScriptDomain::LaneRules,
+            serde_json::to_value(&input),
+            deadline,
+        )
+    }
+
+    fn route_priority(&self, input: RoutePriorityInput, deadline: Duration) -> PolicyFuture<'_> {
+        self.call_domain(
+            ScriptDomain::RoutePriority,
+            serde_json::to_value(&input),
+            deadline,
+        )
+    }
+}
+
+impl ScriptPolicy {
+    /// 領域の入力 DTO を scope 空（S2-7）で actor に送る。
+    fn call_domain(
+        &self,
+        domain: ScriptDomain,
+        input: Result<serde_json::Value, serde_json::Error>,
+        deadline: Duration,
+    ) -> PolicyFuture<'_> {
         Box::pin(async move {
-            let input = serde_json::to_value(&input).map_err(|e| {
-                PolicyScriptError::new("invalid_output", format!("lane_rules input: {e}"))
+            let input = input.map_err(|e| {
+                PolicyScriptError::new("invalid_output", format!("{} input: {e}", domain.as_str()))
             })?;
             let call = ScriptCall {
-                domain: ScriptDomain::LaneRules.as_str().to_owned(),
+                domain: domain.as_str().to_owned(),
                 input,
                 scope_task_ids: BTreeSet::new(),
                 timeout: deadline,

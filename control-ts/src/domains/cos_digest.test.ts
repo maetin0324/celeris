@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import type { HostErrorCode } from "celeris:host";
+import { beforeEach, describe, expect, it } from "vitest";
 import "../main";
+import * as stub from "../testing/host-stub";
+import { fakeHost, type PassTrace, passFromCase, type TraceOp } from "../testing/pass-replay";
 import {
   type CosDigestInput,
   type CosTriageDecision,
   type CosTriageItemReport,
-  cosDigest,
+  cosDigestPass,
   decide,
   parseInput,
   rustTrim,
@@ -189,8 +192,8 @@ describe("cos_digest decision packet", () => {
 });
 
 describe("cos_digest input checks", () => {
-  it("an unknown field is rejected", async () => {
-    await expect(cosDigest({ ...input(), policy_version: 7 })).rejects.toThrow("unknown field in input: policy_version");
+  it("an unknown field is rejected", () => {
+    expect(() => parseInput({ ...input(), policy_version: 7 })).toThrow("unknown field in input: policy_version");
   });
 
   it("a missing field is rejected (Option fields must be explicit null)", () => {
@@ -219,9 +222,12 @@ describe("cos_digest input checks", () => {
 });
 
 describe("cos_digest dispatch", () => {
-  it("is reachable through __celerisDispatch and returns { commands }", async () => {
-    const out = await globalThis.__celerisDispatch("cos_digest", input({ run_state: "stopped" }), ctx);
-    expect(Object.keys(out as object)).toEqual(["commands"]);
+  it("is reachable through __celerisDispatch, ignores the input and returns { runs }", async () => {
+    const host = install(passFromCase("one", input({ run_state: "stopped" }), null).ops);
+    const out = await globalThis.__celerisDispatch("cos_digest", null, ctx);
+    expect(Object.keys(out as object)).toEqual(["runs"]);
+    expect(JSON.stringify(out)).toBe(JSON.stringify({ runs: [{ run_id: "run-1", ...decide(input({ run_state: "stopped" })) }] }));
+    expect(host.finish()).toEqual([]);
   });
 
   it("serialises commands in the Rust field order", () => {
@@ -229,5 +235,133 @@ describe("cos_digest dispatch", () => {
     expect(json.startsWith('[{"kind":"post_digest","thread":"thread-1","idempotency_key":')).toBe(true);
     expect(json).toContain('"actor":"cos","reason":"理由 0","operation_id":null}],"run_id":"run-1"}');
     expect(json.endsWith(',{"kind":"requeue_run","run_id":"run-1"}]')).toBe(true);
+  });
+});
+
+// pass（付記 S4-12・S4-16）。trace はこの試験だけの小さな手書きの例。Rust の参照出力は pass_traces.jsonl（traces-async unit）が持つ。
+function install(ops: readonly TraceOp[]) {
+  const host = fakeHost(ops, stub.HostError, ctx.token);
+  stub.setCosDigestListRuns(host.cosDigestListRuns);
+  stub.setCosDigestReadRun(host.cosDigestReadRun);
+  return host;
+}
+
+const runA = input({ thread: "thread-a", run_id: "run-a", run_state: "completed", items: [item({ thread_id: "thread-a", run_id: "run-a" })] });
+const runB = input({ thread: "thread-b", run_id: "run-b", run_state: "interrupted", items: [item({ thread_id: "thread-b", run_id: "run-b", state: "running" })] });
+const runC = input({ thread: "thread-a", run_id: "run-c", run_state: "failed", reason: "boom", items: [] });
+const ref = (i: CosDigestInput) => ({ thread: i.thread, run_id: i.run_id, run_state: i.run_state });
+const list = (...runs: CosDigestInput[]): TraceOp => ({ op: "cos_digest:list_runs", request: {}, reply: { kind: "ok", value: { runs: runs.map(ref) } } });
+const read = (i: CosDigestInput): TraceOp => ({ op: "cos_digest:read_run", request: { thread: i.thread, run_id: i.run_id }, reply: { kind: "ok", value: i } });
+const readError = (i: CosDigestInput, code: HostErrorCode): TraceOp => ({
+  op: "cos_digest:read_run",
+  request: { thread: i.thread, run_id: i.run_id },
+  reply: { kind: "error", error: { code, message: `read ${code}` } },
+});
+const expected = (...runs: CosDigestInput[]) => ({ runs: runs.map((i) => ({ run_id: i.run_id, commands: decide(i).commands })) });
+
+describe("cosDigestPass", () => {
+  beforeEach(() => {
+    install([]);
+  });
+
+  it("cosDigestPass reads list then each listed run", async () => {
+    const host = install([list(runA, runB, runC), read(runA), read(runB), read(runC)]);
+    const out = await cosDigestPass(ctx);
+    expect(host.calls.map((c) => `${c.op} ${c.request}`)).toEqual([
+      "cos_digest:list_runs {}",
+      'cos_digest:read_run {"thread":"thread-a","run_id":"run-a"}',
+      'cos_digest:read_run {"thread":"thread-b","run_id":"run-b"}',
+      'cos_digest:read_run {"thread":"thread-a","run_id":"run-c"}',
+    ]);
+    expect(JSON.stringify(out)).toBe(JSON.stringify(expected(runA, runB, runC)));
+    expect(out.runs[1]?.commands.map((c) => c.kind)).toEqual(["post_digest", "requeue_run"]);
+    expect(host.finish()).toEqual([]);
+  });
+
+  it("an empty list gives no runs and reads nothing", async () => {
+    const host = install([list()]);
+    expect(await cosDigestPass(ctx)).toEqual({ runs: [] });
+    expect(host.calls.map((c) => c.op)).toEqual(["cos_digest:list_runs"]);
+    expect(host.finish()).toEqual([]);
+  });
+
+  it("skips a run whose read_run throws exception", async () => {
+    const host = install([list(runA, runB), readError(runA, "exception"), read(runB)]);
+    const out = await cosDigestPass(ctx);
+    expect(JSON.stringify(out)).toBe(JSON.stringify(expected(runB)));
+    expect(host.finish()).toEqual([]);
+  });
+
+  it.each(["denied", "terminated", "generation_gone", "timeout", "busy"] as const)(
+    "a %s from read_run is thrown to Rust (no partial output)",
+    async (code) => {
+      install([list(runA, runB), read(runA), readError(runB, code)]);
+      await expect(cosDigestPass(ctx)).rejects.toMatchObject({ name: "HostError", code });
+    },
+  );
+
+  it.each(["denied", "terminated", "generation_gone", "timeout", "exception"] as const)(
+    "a %s from list_runs is thrown and nothing is read",
+    async (code) => {
+      const host = install([{ op: "cos_digest:list_runs", request: {}, reply: { kind: "error", error: { code, message: "x" } } }]);
+      await expect(cosDigestPass(ctx)).rejects.toMatchObject({ name: "HostError", code });
+      expect(host.calls.map((c) => c.op)).toEqual(["cos_digest:list_runs"]);
+    },
+  );
+
+  it("never reads a run outside the list", async () => {
+    const host = install([list(runA), read(runA), read(runB)]);
+    await cosDigestPass(ctx);
+    expect(host.calls.some((c) => c.request.includes("run-b"))).toBe(false);
+    expect(host.finish()).toEqual(['recorded op not called: cos_digest:read_run {"thread":"thread-b","run_id":"run-b"}']);
+  });
+
+  it("a read reply for another run is rejected", async () => {
+    install([list(runA), { ...read(runA), reply: { kind: "ok", value: runC } }]);
+    await expect(cosDigestPass(ctx)).rejects.toThrow("read_run answered thread-a/run-c for thread-a/run-a");
+  });
+
+  it("a malformed list reply or read reply is rejected", async () => {
+    install([{ op: "cos_digest:list_runs", request: {}, reply: { kind: "ok", value: { runs: [], limit: 20 } } }]);
+    await expect(cosDigestPass(ctx)).rejects.toThrow("unknown field in list_runs reply: limit");
+    install([list(runA), { ...read(runA), reply: { kind: "ok", value: { ...runA, extra: 1 } } }]);
+    await expect(cosDigestPass(ctx)).rejects.toThrow("unknown field in input: extra");
+  });
+
+  it("a request that is not in the trace is denied by the fake host and reported", async () => {
+    const host = install([list(runA), { ...read(runA), request: { run_id: "run-a", thread: "thread-a" } }]);
+    await expect(cosDigestPass(ctx)).rejects.toMatchObject({ code: "denied" });
+    expect(host.finish()).toEqual([
+      'unrecorded op: cos_digest:read_run {"thread":"thread-a","run_id":"run-a"}',
+      'recorded op not called: cos_digest:read_run {"run_id":"run-a","thread":"thread-a"}',
+    ]);
+  });
+
+  it("passes the request context to every op", async () => {
+    const host = fakeHost([list(runA), read(runA)], stub.HostError, "another-token");
+    stub.setCosDigestListRuns(host.cosDigestListRuns);
+    stub.setCosDigestReadRun(host.cosDigestReadRun);
+    await expect(cosDigestPass(ctx)).rejects.toMatchObject({ code: "denied" });
+    expect(host.problems).toEqual(["cos_digest:list_runs called with another request token"]);
+  });
+
+  it("replay forward and reverse give the same output", async () => {
+    const traces: PassTrace[] = [
+      { name: "abc", ops: [list(runA, runB, runC), read(runA), read(runB), read(runC)], output: expected(runA, runB, runC) },
+      { name: "skip", ops: [list(runC, runA), readError(runC, "exception"), read(runA)], output: expected(runA) },
+      { name: "empty", ops: [list()], output: { runs: [] } },
+    ];
+    const run = async (t: PassTrace) => {
+      const host = install(t.ops);
+      const out = JSON.stringify(await cosDigestPass(ctx));
+      expect(host.finish()).toEqual([]);
+      return out;
+    };
+    const forward: string[] = [];
+    for (const t of traces) forward.push(await run(t));
+    const reverse: string[] = [];
+    for (const t of [...traces].reverse()) reverse.unshift(await run(t));
+    expect(reverse).toEqual(forward);
+    expect(forward).toEqual(traces.map((t) => JSON.stringify(t.output)));
   });
 });

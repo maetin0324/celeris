@@ -32,7 +32,7 @@ test("manifest records the hash of the bundle and of the schema", async () => {
   assert.equal(manifest.schema_sha256, sha256(path.resolve(pkg, "../docs/api/script-host/host-v1.schema.json")));
   assert.equal(manifest.host_api, "^1");
   assert.deepEqual(manifest.domains, ["cos_digest", "host_selftest", "lane_rules", "route_priority"]);
-  assert.deepEqual(manifest.capabilities, ["selftest:echo_task"]);
+  assert.deepEqual(manifest.capabilities, ["cos_digest:list_runs", "cos_digest:read_run", "selftest:echo_task"]);
   assert.deepEqual(manifest.checkpoint_versions, []);
   assert.equal(manifest.toolchain.typescript, "7.0.2");
   assert.equal(manifest.toolchain.esbuild, "0.28.2");
@@ -51,7 +51,8 @@ test("the bundle is one ESM file that imports only celeris:host", async () => {
   await buildBundle({ outDir });
   const text = readFileSync(path.join(outDir, "bundle.mjs"), "utf8");
   const imports = [...text.matchAll(/^import .* from "([^"]+)";$/gm)].map((match) => match[1]);
-  assert.deepEqual(imports, ["celeris:host"]);
+  // 領域ごとの import は esbuild が 1 文にまとめないので、文の数でなく import 先の集合を見る。
+  assert.deepEqual([...new Set(imports)], ["celeris:host"]);
   assert.match(text, /__celerisDispatch/);
 });
 

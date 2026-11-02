@@ -309,8 +309,9 @@ impl Actor {
         while i < self.pending.len() {
             if self.pending[i].deadline <= now {
                 let p = self.pending.swap_remove(i);
-                let _ = p.reply.send(Err(ScriptError::Timeout));
                 self.stats.completed += 1;
+                self.publish();
+                let _ = p.reply.send(Err(ScriptError::Timeout));
             } else {
                 i += 1;
             }
@@ -372,8 +373,10 @@ impl Actor {
                         Some(g) => result.and_then(|value| to_json(&mut g.runtime, value)),
                         None => Err(ScriptError::GenerationGone),
                     };
-                    let _ = p.reply.send(out.map(|v| (number, v)));
                     self.stats.completed += 1;
+                    // 呼び出し側が結果を受け取った時点で stats が完了を映しているよう、返す前に公開する。
+                    self.publish();
+                    let _ = p.reply.send(out.map(|v| (number, v)));
                     progressed = true;
                 }
                 Poll::Pending => i += 1,
@@ -405,23 +408,33 @@ impl Actor {
                 (culprit, ScriptError::HeapLimit, rest)
             }
         };
+        // 返事は stats を公開してから送る（受け取った側が見る stats に完了が映っているように）。
+        let mut replies = Vec::with_capacity(self.pending.len() + 1);
         if let Some(p) = culprit {
-            let _ = p.reply.send(Err(culprit_err));
+            replies.push((p.reply, culprit_err));
             self.stats.completed += 1;
         }
         // 未完の future は古い isolate の Promise を持つので、isolate より先に落とす。
         for p in self.pending.drain(..) {
-            let _ = p.reply.send(Err(rest_err.clone()));
+            replies.push((p.reply, rest_err.clone()));
             self.stats.completed += 1;
         }
         // isolate は作成と逆順に drop しなければならないので、古い方を落としてから新しい方を作る。
         drop(self.generation.take());
-        let next = new_generation(&self.source, &self.limits, &self.watchdog)?;
-        self.generation = Some(next);
-        self.stats.generation += 1;
-        self.stats.restarts += 1;
+        let result = match new_generation(&self.source, &self.limits, &self.watchdog) {
+            Ok(next) => {
+                self.generation = Some(next);
+                self.stats.generation += 1;
+                self.stats.restarts += 1;
+                Ok(self.stats.generation)
+            }
+            Err(err) => Err(err),
+        };
         self.publish();
-        Ok(self.stats.generation)
+        for (reply, err) in replies {
+            let _ = reply.send(Err(err));
+        }
+        result
     }
 
     /// shutdown: 未完と queue に残った要求へ Terminated を返し、isolate を落とす。

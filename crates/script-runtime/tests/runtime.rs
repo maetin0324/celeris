@@ -85,6 +85,7 @@ fn call(domain: &str, input: serde_json::Value) -> ScriptCall {
         input,
         scope_task_ids: Default::default(),
         timeout: Duration::from_secs(30),
+        host_sink: None,
     }
 }
 
@@ -281,6 +282,7 @@ async fn runtime_timeout_sync_loop() {
             input: json!({"mark": "spinning"}),
             scope_task_ids: Default::default(),
             timeout: Duration::from_millis(200),
+            host_sink: None,
         })
         .await;
     assert_eq!(r, Err(ScriptError::Timeout));
@@ -578,6 +580,7 @@ fn host_call(domain: &str, input: serde_json::Value, scope: &[&str]) -> ScriptCa
         input,
         scope_task_ids: scope.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>(),
         timeout: Duration::from_secs(30),
+        host_sink: None,
     }
 }
 
@@ -625,7 +628,7 @@ async fn runtime_denied_capability() {
         .call(host_call("lane_policy", json!({"op": "version"}), &[]))
         .await
         .expect("version needs no capability");
-    assert_eq!(v.output, json!({"version": "1.0.0", "constant": "1.0.0"}));
+    assert_eq!(v.output, json!({"version": "1.1.0", "constant": "1.1.0"}));
 
     // 宣言あり、許可表に無い領域: Denied（script が catch しなければ ScriptError::Denied）。
     let denied = rt

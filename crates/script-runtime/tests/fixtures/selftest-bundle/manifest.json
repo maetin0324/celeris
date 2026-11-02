@@ -2,7 +2,7 @@
   "schema": "celeris.script-manifest/1",
   "bundle_sha256": "84f8c0fa019f739582d7391d3489e20697f42c2ae69d13d5e6c17208ec6e564a",
   "host_api": "^1",
-  "schema_sha256": "69a4deb0e185a7984b2c86b0c66d6ea1c8ee6ce3473d83889d81f57d0a23e953",
+  "schema_sha256": "fc1ff1807d19c38272e0d39244cbd7dbc85744529f5573d8ac69cfde658efc34",
   "toolchain": { "typescript": "fixture", "esbuild": "fixture", "node": "fixture" },
   "source_commit": "fixture",
   "domains": ["host_selftest"],

@@ -46,7 +46,11 @@ export class HostError extends Error {
 
 export function hostVersion(): string;
 
-export function selftestEcho(ctx: RequestContext, request: SelftestEchoRequest): Promise<SelftestEchoReply>;`;
+export function selftestEcho(ctx: RequestContext, request: SelftestEchoRequest): Promise<SelftestEchoReply>;
+
+export function cosDigestListRuns(ctx: RequestContext, request: CosDigestListRunsRequest): Promise<CosDigestListRunsReply>;
+
+export function cosDigestReadRun(ctx: RequestContext, request: CosDigestReadRunRequest): Promise<CosDigestInput>;`;
 
 export function renderHostTypes(schema) {
   // schema の HostError は TS では上の class で表す（code と message を持つ）。同じ名前の type を出さない。

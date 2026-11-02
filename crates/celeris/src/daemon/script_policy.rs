@@ -80,6 +80,7 @@ impl ScriptPolicy {
                 input,
                 scope_task_ids: BTreeSet::new(),
                 timeout: deadline,
+                host_sink: None,
             };
             match self.handle.call(call).await {
                 Ok(reply) => Ok(PolicyReply {

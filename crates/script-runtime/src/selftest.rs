@@ -43,6 +43,7 @@ pub fn selftest_call(timeout: Duration) -> ScriptCall {
         }),
         scope_task_ids: BTreeSet::from([TASK_ID.to_owned()]),
         timeout,
+        host_sink: None,
     }
 }
 

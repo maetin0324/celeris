@@ -22,7 +22,7 @@ use tokio::time::Instant;
 use ulid::Ulid;
 
 use crate::actor::{self, ActorRequest, Control as ActorControl};
-use crate::dto::Capability;
+use crate::dto::{Capability, HostResult};
 use crate::error::ScriptError;
 
 /// 要求 queue の容量（境界 ADR (b)）。
@@ -35,6 +35,34 @@ pub const DEFAULT_INPUT_LIMIT_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_HEAP_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 /// script が定義する入口の関数名。`globalThis[DISPATCH_FUNCTION](domain, input)` を呼ぶ。
 pub const DISPATCH_FUNCTION: &str = "__celerisDispatch";
+
+/// 要求ごとの host sink の容量（付記 S4-12。容量 64 の bounded `mpsc`）。
+pub const HOST_SINK_CAPACITY: usize = 64;
+/// 1 回の要求が呼べる capability 付き op の回数の上限（付記 S4-12）。これを超えた op は `busy`。
+pub const MAX_OPS_PER_REQUEST: u32 = 64;
+
+/// native op が host sink へ送る 1 回の op 呼び出し（付記 S4-12「op の運び方」）。
+///
+/// `request` は op の DTO（`CosDigestListRunsRequest` など）を検証してから JSON に戻したもの。
+/// 受け手（dispatcher の op server）は `reply` に `HostResult` の JSON を返す。op は応答を DTO で検証してから
+/// script に渡す。受け手は store を持ち、V8 の thread には store を渡さない。
+#[derive(Debug)]
+pub struct HostOpCall {
+    /// op を呼んだ要求の ID（[`ScriptReply::request_id`] と同じ）。
+    pub request_id: Ulid,
+    /// 呼ばれた op（capability と同じ名前）。
+    pub op: Capability,
+    pub request: serde_json::Value,
+    pub reply: oneshot::Sender<HostResult<serde_json::Value>>,
+}
+
+/// 要求ごとに Rust 側が注入する読み出し口の送り口。
+pub type HostSink = mpsc::Sender<HostOpCall>;
+
+/// 容量 [`HOST_SINK_CAPACITY`] の host sink を作る。
+pub fn host_sink() -> (HostSink, mpsc::Receiver<HostOpCall>) {
+    mpsc::channel(HOST_SINK_CAPACITY)
+}
 
 /// actor が起動時（と generation を作り直すたび）に main module として評価する bundle（単一の ESM）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +94,7 @@ impl Default for RuntimeLimits {
 }
 
 /// 1 回の呼び出しの入力。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ScriptCall {
     /// 判定の領域（例 `lane_policy`）。script の入口へ第 1 引数で渡す。
     pub domain: String,
@@ -74,8 +102,12 @@ pub struct ScriptCall {
     pub input: serde_json::Value,
     /// この要求で op が読んでよい task の id（scope）。範囲外の読み出しは `Denied`。
     pub scope_task_ids: BTreeSet<String>,
-    /// 送ってから応答までの上限。watchdog も同じ deadline で V8 を止める。
+    /// 送ってから応答までの上限。watchdog も同じ deadline で V8 を止める。capability 付きの op の待ちも
+    /// この deadline で `timeout` になる。
     pub timeout: Duration,
+    /// capability 付きの op の送り先（付記 S4-12）。無ければその要求の op は `exception`。
+    /// 純粋判定の領域は `None` を渡す。
+    pub host_sink: Option<HostSink>,
 }
 
 /// 1 回の呼び出しの結果。
@@ -233,6 +265,7 @@ impl ScriptRuntimeHandle {
             domain: call.domain,
             input: call.input,
             scope_task_ids: call.scope_task_ids,
+            host_sink: call.host_sink,
             deadline: deadline.into_std(),
             reply: reply_tx,
         };

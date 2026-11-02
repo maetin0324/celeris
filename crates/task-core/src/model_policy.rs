@@ -650,6 +650,54 @@ pub fn decide_with(
     }
 }
 
+/// S2（TS 制御層の比較 fixture）: 9 軸 × 3 値の全組み合わせ（19,683 件）。軸の宣言順
+/// （judgment が最上位）で、各軸は low < medium < high の辞書順。
+pub fn all_features() -> Vec<TaskFeatures> {
+    const LEVELS: [Level; 3] = [Level::Low, Level::Medium, Level::High];
+    let total = 3usize.pow(9);
+    (0..total)
+        .map(|i| {
+            let digit = |axis: u32| LEVELS[(i / 3usize.pow(8 - axis)) % 3];
+            TaskFeatures {
+                judgment: digit(0),
+                ambiguity: digit(1),
+                verifiability: digit(2),
+                reversibility: digit(3),
+                consequence: digit(4),
+                context_size: digit(5),
+                tool_intensity: digit(6),
+                expected_length: digit(7),
+                cross_cutting: digit(8),
+            }
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+struct LaneFixtureLine<'a> {
+    features: &'a TaskFeatures,
+    rule_id: &'a str,
+    proposed: Tier,
+    condition: &'a str,
+}
+
+/// S2: `all_features` の各件を `match_rule` に通した 1 行 1 件の JSONL（末尾改行つき）。
+/// `examples/dump-lane-fixtures.rs` と `tests/script_fixtures.rs` が同じこの関数を使う。
+pub fn lane_fixture_jsonl() -> Result<String, serde_json::Error> {
+    let mut out = String::new();
+    for features in all_features() {
+        let m = match_rule(&features);
+        out.push_str(&serde_json::to_string(&LaneFixtureLine {
+            features: &features,
+            rule_id: m.rule_id,
+            proposed: m.lane,
+            condition: m.condition,
+        })?);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
 /// ADR-0069 D3: 決定的な lane policy。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ModelPolicy;

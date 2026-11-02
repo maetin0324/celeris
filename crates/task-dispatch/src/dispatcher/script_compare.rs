@@ -59,6 +59,15 @@ impl Dispatcher {
         }
     }
 
+    /// 走っている compare を打ち切って待つ（試験で「dispatcher が落ちた」を作る）。
+    #[cfg(test)]
+    pub(in crate::dispatcher) async fn abort_script_compares(&mut self) {
+        for handle in std::mem::take(&mut self.script_compare.in_flight) {
+            handle.abort();
+            let _ = handle.await;
+        }
+    }
+
     /// 付記 S2-4: mode を tick ごとに 1 回だけ読む。
     fn refresh_script_modes(&mut self) {
         if self.script_compare.read_at_tick == Some(self.ticks) {

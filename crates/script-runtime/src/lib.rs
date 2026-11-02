@@ -9,7 +9,9 @@ pub mod dto;
 mod error;
 mod handle;
 mod loader;
+pub mod manifest;
 mod ops;
+pub mod selftest;
 mod watchdog;
 
 pub use ops::{DISABLED_BUILTIN_OPS, domain_capabilities};

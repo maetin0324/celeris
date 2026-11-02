@@ -141,6 +141,7 @@ fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
         maintenance: Default::default(),
         cos: Default::default(),
         storage: Default::default(),
+        script: None,
         knowledge: Default::default(),
         docs_maintenance: Default::default(),
         llm_proxy: Default::default(),

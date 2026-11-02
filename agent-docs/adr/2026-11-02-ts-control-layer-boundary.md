@@ -200,3 +200,12 @@ baseline（[baseline.md](../progress/2026-11-02-ts-control-layer-s0/baseline.md)
 ## 後続（S1 で行うこと）
 - `crates/script-runtime/`（`celeris-script`）を作り、`docs/architecture-map.md` に行を足す（この ADR の変更では、実在しない path を地図に書かないので足さない）。
 - 本番 config の書き換えは不要（全領域 `rust` が既定で、`[script]` 欄が無ければ TS 制御層は動かない）。
+
+## 付記 2026-11-02: (b) の依存の制約を直す（S1 daemon-wire、task 01M6DJ6QCMCWT80MTYJ7SNE0XK）
+- (b) は `celeris` を binary だけの crate と見ていた。実際の `celeris` は lib でもあり、`celerisctl` が `celeris` の lib（主に `celeris::config`）に通常依存している。S0 の棚卸しはこの依存を見落とした。
+- そのため `celeris` が `celeris-script` に依存すると、`celerisctl` にも `deno_core` と V8 が推移的に入る。S1 の計画 v4 でこれを受け入れた（案 A）。
+  - 実測: `cargo build --release -p celerisctl` の binary は 97,713,712 byte。`v8::`・`deno_core::`・`simdutf` の定義は 58423 個、`nm -S` の大きさの和は 21.0 MiB。V8 を持たない base の release binary との比較は未測定（S1 の overhead unit で測る）。
+  - debug build の `celerisctl` にも `v8::`・`deno_core::` の定義が 57044 個残る。feature で分けても `cargo build -p celeris -p celerisctl`（`release.sh`）では feature が統合されるので外せない。
+- 直した制約: `deno_core` を推移的に持つ workspace crate は `celeris-script`・`celeris`・`celerisctl` の 3 つまで。`task-core`・`task-dispatch`・`task-api` は 0 件のまま（目的の「これらの test binary に V8 を link しない」は変わらない）。
+- 直した検査: `cargo tree -i deno_core --workspace -e normal --prefix none | awk '{print $1}' | sort -u` が `celeris`・`celeris-script`・`celerisctl`・`deno_core` だけを出す。
+- 後の段への提案（未決）: V8 を持たない lib の package と `celeris` の binary の package に分け、`celerisctl` を lib だけに依存させる（案 B）。`crates/celerisctl/Cargo.toml`・`scripts/selfdeploy/release.sh`・`-p celeris` を使う検査・`crates/celeris/tests/` に影響し、全量は未確認。

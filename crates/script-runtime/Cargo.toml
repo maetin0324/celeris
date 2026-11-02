@@ -19,10 +19,20 @@ ulid = { version = "1", features = ["serde"] }
 deno_error = "=0.7.1"
 schemars = "1"
 time = { version = "0.3", features = ["parsing"] }
+sha2 = "0.10"
 
 [[bin]]
 name = "script-schema"
 path = "src/bin/script-schema.rs"
 
+[[bin]]
+name = "script-load-check"
+path = "src/bin/script-load-check.rs"
+
+[[bin]]
+name = "script-bench"
+path = "src/bin/script-bench.rs"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tempfile = "3"

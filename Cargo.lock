@@ -366,6 +366,7 @@ dependencies = [
  "celeris-campaign",
  "celeris-credentiald",
  "celeris-mcp",
+ "celeris-script",
  "clap",
  "jev-classifier",
  "llm-proxy",

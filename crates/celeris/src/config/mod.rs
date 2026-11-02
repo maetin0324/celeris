@@ -11,7 +11,7 @@
 //! `harness`（`[[harnesses]]`・`[[roles]]`・`[[genres]]`）/ `org` / `delegation` / `dispatch`
 //! （`[reviewer]`・`[review]`・`[dispatch]`・`[plan]`・`[sessions]`）/ `execution` / `cluster` /
 //! `workspace`（＋`[containers]`）/ `scratch` / `github` / `selfdeploy`（＋`[handoff]`）/
-//! `knowledge`（＋`[memory]`）/ `storage`（`[storage]`、ADR-0136）。公開型はすべて `crate::config::*` から従来どおり引ける。
+//! `knowledge`（＋`[memory]`）/ `storage`（`[storage]`、ADR-0136）/ `script`（`[script]`、境界 ADR 2026-11-02）。公開型はすべて `crate::config::*` から従来どおり引ける。
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -43,6 +43,7 @@ mod proxy;
 mod routing_eval;
 mod routing_mode;
 mod scratch;
+mod script;
 mod selfdeploy;
 mod storage;
 mod workspace;
@@ -69,6 +70,7 @@ pub use org::*;
 pub use routing_eval::*;
 pub use routing_mode::*;
 pub use scratch::*;
+pub use script::*;
 pub use selfdeploy::*;
 pub use storage::*;
 pub use workspace::*;
@@ -248,6 +250,9 @@ pub struct Config {
     /// ADR-0136: `[storage]`。hot データの正本を置く mount（`/local`）の起動前検査。省略時は検査しない。
     #[serde(default)]
     pub storage: StorageConfig,
+    /// 境界 ADR 2026-11-02: `[script]`（TS 制御層の active bundle と上限）。無ければ TS 層を起こさない。
+    #[serde(default)]
+    pub script: Option<ScriptConfig>,
     // ---- ADR-0047（Phase 61）: 知識ベース。ここから ----
     /// ADR-0047 D1: `[knowledge]`。正本の置き場と、実効 profile が何も言わないときの既定のマウント。
     #[serde(default)]
@@ -549,6 +554,9 @@ impl Config {
         cfg.knowledge.resolve_paths(&base);
         cfg.selfdeploy.resolve_paths(&base);
         cfg.storage.resolve_paths();
+        if let Some(script) = &mut cfg.script {
+            script.resolve_paths(&base);
+        }
         cfg.adapters.paperqa.resolve_paths(&base);
         for harness in cfg.harness_declarations.values_mut() {
             if harness.kind.replace('_', "-") == task_worker::PiAdapter::ID {
@@ -602,6 +610,9 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if let Some(script) = &self.script {
+            script.validate()?;
+        }
         let registry = self.llm_route_registry()?;
         for (id, harness) in &self.harness_declarations {
             if let Some(namespace) = &harness.model_namespace {

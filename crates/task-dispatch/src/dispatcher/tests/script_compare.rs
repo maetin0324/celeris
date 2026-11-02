@@ -37,8 +37,8 @@ pub(super) struct FakeScript {
     pub(super) calls: AtomicUsize,
     /// `route_priority` の呼び出し回数と受けた入力。
     pub(super) route_inputs: StdMutex<Vec<RoutePriorityInput>>,
-    /// `cos_digest` の呼び出し回数と受けた入力（付記 S4）。
-    pub(super) digest_inputs: StdMutex<Vec<task_core::chat::digest::CosDigestInput>>,
+    /// `cos_digest_pass` の呼び出しの `pass_id`（付記 S4-12）。
+    pub(super) digest_passes: StdMutex<Vec<String>>,
 }
 
 impl FakeScript {
@@ -52,7 +52,7 @@ impl FakeScript {
             behavior,
             calls: AtomicUsize::new(0),
             route_inputs: StdMutex::new(Vec::new()),
-            digest_inputs: StdMutex::new(Vec::new()),
+            digest_passes: StdMutex::new(Vec::new()),
         })
     }
 
@@ -146,21 +146,19 @@ impl PolicyScript for FakeScript {
         })
     }
 
-    fn cos_digest(
+    fn cos_digest_pass(
         &self,
-        input: task_core::chat::digest::CosDigestInput,
+        call: crate::script_policy::CosDigestPassCall,
         _deadline: Duration,
     ) -> PolicyFuture<'_> {
-        self.digest_inputs.lock().unwrap().push(input.clone());
+        self.digest_passes
+            .lock()
+            .unwrap()
+            .push(call.pass_id.clone());
         let behavior = self.behavior.clone();
         Box::pin(async move {
             match behavior {
-                Behavior::Echo => Ok(PolicyReply {
-                    output: serde_json::json!({
-                        "commands": task_core::chat::digest::cos_digest_decide(&input),
-                    }),
-                    isolate_epoch: 1,
-                }),
+                Behavior::Echo => crate::script_policy::test_pass::reference_reply(&call).await,
                 Behavior::Fixed(output) => Ok(PolicyReply {
                     output,
                     isolate_epoch: 1,

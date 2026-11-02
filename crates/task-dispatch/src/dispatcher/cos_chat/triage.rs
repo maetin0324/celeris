@@ -332,11 +332,8 @@ impl CosChatLaunch {
     /// One intake pass: startup/reconcile, events after the cursor, notices
     /// after the cursor. Errors are logged; the cursor only advances with the
     /// items it covers, so the next tick retries.
-    /// Returns the digests this pass applied (S4-4: the launch tick compares them in mode `compare`).
-    pub(crate) fn triage_ingest(
-        &mut self,
-        dispatcher: &Dispatcher,
-    ) -> Vec<crate::dispatcher::dispatch_run::CosDigestApplication> {
+    /// The digest pass reads the mode of `cos_digest` (S4-14) through `dispatcher`.
+    pub(crate) fn triage_ingest(&mut self, dispatcher: &mut Dispatcher) {
         let now = dispatcher.now_utc();
         if !self.triage.reconciled {
             match self.triage_reconcile(dispatcher, now) {
@@ -347,7 +344,7 @@ impl CosChatLaunch {
                 }
                 Err(error) => {
                     tracing::warn!(%error, "CoS triage reconcile failed");
-                    return Vec::new();
+                    return;
                 }
             }
         }
@@ -363,14 +360,11 @@ impl CosChatLaunch {
         // D1 of the inbox-thread ADR: the judgment of each finished triage run as an
         // assistant message (and the requeue of an interrupted run's items), before the
         // fallback looks at what is left.
-        let digests = if self.triage.digest_due {
-            self.triage_digest(now)
-        } else {
-            Vec::new()
-        };
+        if self.triage.digest_due {
+            dispatcher.cos_digest_pass(self, now);
+        }
         // D6: LLM-free direct notice for items CoS cannot answer.
         self.triage_fallback(dispatcher, now);
-        digests
     }
 
     /// Items of the current derived inbox (shared with the fallback leaf).

@@ -22,6 +22,9 @@ use support::script_compare::{
     start_policy,
 };
 use task_core::chat::digest::{CosDigestCommand, CosDigestInput, cos_digest_decide};
+use task_core::chat::digest::{
+    CosDigestPassOutput, CosDigestPassRead, CosDigestPassRun, CosDigestRunRef,
+};
 use task_core::chat::triage::CosTriageSource;
 use task_core::chat::{ChatMessageQuery, ChatMessageRole, ChatOpenThreadRequest, ChatRunState};
 use task_core::script_compare::{
@@ -29,20 +32,21 @@ use task_core::script_compare::{
     ScriptGenerationState, ScriptMode, sha256_digest,
 };
 use task_core::{DaemonMode, SqliteStore};
-use task_dispatch::script_policy::{CosDigestOutput, PolicyScript, TsResult, classify_cos_digest};
+use task_dispatch::script_policy::{
+    CosDigestOp, CosDigestOpReply, CosDigestPassCall, PolicyScript, TsResult,
+    classify_cos_digest_pass,
+};
 use time::OffsetDateTime;
 
 const DOMAIN: &str = "cos_digest";
-const CALL_SITE: &str = "cos_digest.digest_one";
+const CALL_SITE: &str = "cos_digest.pass";
 /// CoS の run を起動しない（偽 harness も呼ばない）。
 const COS_OFF: &str = "[cos]\nenabled = false\n";
 const DIGEST_KEY_PREFIX: &str = "cos-triage-digest:";
 const THROWING_BUNDLE: &str =
     "globalThis.__celerisDispatch = () => { throw new Error(\"boom in cos_digest\"); };\n";
-/// 検証（S4-3）には通るが、文面が常に違い、requeue も出さない。
-const DIFFERENT_BUNDLE: &str = "globalThis.__celerisDispatch = (domain, input) => ({ commands: [{ \
-     kind: \"post_digest\", thread: input.thread, idempotency_key: \"cos-triage-digest:\" + input.run_id, \
-     text: \"always a different digest\", cards: [], run_id: input.run_id }] });\n";
+/// op を呼ばず（capability が無い）、どの run も digest しない pass（規則 8 の `run_missing`）。
+const DIFFERENT_BUNDLE: &str = "globalThis.__celerisDispatch = () => ({ runs: [] });\n";
 
 fn env() -> Env {
     Env::with_config(DOMAIN, "", COS_OFF)
@@ -73,32 +77,74 @@ fn fixture_rows(file: &str) -> Vec<(String, CosDigestInput, Vec<CosDigestCommand
         .collect()
 }
 
-/// TS の答えを Rust の command と比べ、`match` で byte 一致であることを確かめる。
+/// run 1 つの pass を本物の host で走らせる（付記 S4-16 の組み直し: list の答え = その run、read の答え = `input`）。
+/// op は試験の中の op server が答える。
+async fn one_run_pass(policy: &dyn PolicyScript, input: &CosDigestInput) -> TsResult {
+    let (sink, mut rx) = tokio::sync::mpsc::channel(64);
+    let list = serde_json::json!({ "runs": [{
+        "thread": input.thread, "run_id": input.run_id, "run_state": input.run_state,
+    }] });
+    let read = serde_json::to_value(input).expect("input json");
+    let server = tokio::spawn(async move {
+        while let Some(op) = rx.recv().await {
+            let op: task_dispatch::script_policy::CosDigestOpCall = op;
+            let reply = match op.op {
+                CosDigestOp::ListRuns => CosDigestOpReply::Ok(list.clone()),
+                CosDigestOp::ReadRun => CosDigestOpReply::Ok(read.clone()),
+            };
+            let _ = op.reply.send(reply);
+        }
+    });
+    let call = CosDigestPassCall {
+        pass_id: "01M6TEST000000000000000000".into(),
+        sink,
+    };
+    let result = match policy.cos_digest_pass(call, LONG_DEADLINE).await {
+        Ok(reply) => TsResult::Reply(reply),
+        Err(e) => TsResult::Error(e),
+    };
+    server.abort();
+    result
+}
+
+/// TS の pass の答えを Rust の command と比べ、`match` で byte 一致であることを確かめる。
 async fn assert_ts_matches(
     policy: &dyn PolicyScript,
     name: &str,
     input: &CosDigestInput,
     rust: &[CosDigestCommand],
 ) -> CosDigestCommandsSummary {
-    let reply = policy
-        .cos_digest(input.clone(), LONG_DEADLINE)
-        .await
-        .unwrap_or_else(|e| panic!("{name}: {e:?}"));
-    let ts: CosDigestOutput =
+    let result = one_run_pass(policy, input).await;
+    let TsResult::Reply(reply) = &result else {
+        panic!("{name}: {result:?}")
+    };
+    let ts: CosDigestPassOutput =
         serde_json::from_value(reply.output.clone()).unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert_eq!(ts.runs.len(), 1, "{name}");
     assert_eq!(
-        serde_json::to_string(&ts.commands).expect("ts json"),
+        serde_json::to_string(&ts.runs[0].commands).expect("ts json"),
         serde_json::to_string(rust).expect("rust json"),
         "{name}"
     );
-    let classified = classify_cos_digest(input, rust, &TsResult::Reply(reply));
-    assert_eq!(
-        classified.outcome,
-        CompareOutcome::Match,
-        "{name}: {classified:?}"
-    );
-    assert!(classified.safety_violations.is_empty(), "{name}");
-    classified.ts.expect("ts summary")
+    let reads = [CosDigestPassRead {
+        run: CosDigestRunRef {
+            thread: input.thread.clone(),
+            run_id: input.run_id.clone(),
+            run_state: input.run_state.clone(),
+        },
+        input: Some(input.clone()),
+    }];
+    let rust_out = CosDigestPassOutput {
+        runs: vec![CosDigestPassRun {
+            run_id: input.run_id.clone(),
+            commands: rust.to_vec(),
+        }],
+    };
+    let classified = classify_cos_digest_pass(&reads, &rust_out, &result);
+    let run = classified.run(&input.run_id).expect("run").clone();
+    assert_eq!(run.outcome, CompareOutcome::Match, "{name}: {run:?}");
+    assert!(run.safety_violations.is_empty(), "{name}");
+    run.ts.expect("ts summary")
 }
 
 /// (1) cases.jsonl と traces.jsonl の全行が本物の host で Rust の `cos_digest_decide` と byte 一致する。
@@ -463,20 +509,21 @@ async fn script_compare_cos_digest_throwing_bundle_keeps_rust_digest() {
     handle.shutdown();
 }
 
-/// (4) 検証に通るが違う答えを返す bundle は `mismatch`、安全違反なし、TS の文面の先頭が残る。
+/// (4) どの run も digest しない pass を返す bundle は `invalid_output`（規則 8 の `run_missing`）。
+/// 安全違反は無く、message と requeue は Rust の結果のまま。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn script_compare_cos_digest_different_answer_keeps_rust_digest() {
     let (handle, records) = compare_with_code(DIFFERENT_BUNDLE).await;
     for record in &records {
-        assert_eq!(record.outcome, CompareOutcome::Mismatch, "{record:?}");
+        assert_eq!(record.outcome, CompareOutcome::InvalidOutput, "{record:?}");
         assert!(record.safety_violations.is_empty(), "{record:?}");
-        assert_eq!(
-            record.ts.as_ref().expect("ts").command_kinds,
-            vec!["post_digest"]
-        );
-        assert_eq!(
-            record.ts_commands_head.as_deref(),
-            Some("always a different digest")
+        assert!(
+            record
+                .error
+                .as_ref()
+                .is_some_and(|e| e.message.contains("is missing")
+                    || e.message.contains("is not in the output exactly once")),
+            "{record:?}"
         );
     }
     handle.shutdown();

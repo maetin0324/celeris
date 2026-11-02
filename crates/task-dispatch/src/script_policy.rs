@@ -16,13 +16,17 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use task_core::chat::digest::{CosDigestCommand, CosDigestInput, validate_cos_digest_commands};
+use task_core::chat::digest::{
+    CosDigestCommand, CosDigestInput, CosDigestPassOutput, CosDigestPassRead,
+    CosDigestPassViolation, validate_cos_digest_commands, validate_cos_digest_pass,
+};
 use task_core::llm_route::{ExecutionClass, HarnessId, Registry, route_priority_decide};
 use task_core::model_policy::{LaneCeiling, RuleMatch, TaskFeatures};
 use task_core::script_compare::{
-    CompareCandidate, CompareError, CompareOutcome, CosDigestApplied, CosDigestCommandsSummary,
-    CosDigestCompareRecord, LaneRulesInput, RoutePriorityInput, RoutePriorityOutput,
-    ScriptCompareRecord, ScriptDomain, ScriptDomainModeRow, ScriptGeneration, recorded_input,
+    CompareCandidate, CompareError, CompareOutcome, CosDigestApplied, CosDigestAppliedBy,
+    CosDigestCommandsSummary, CosDigestCompareRecord, CosDigestFallback, CosDigestOpLog,
+    LaneRulesInput, RoutePriorityInput, RoutePriorityOutput, ScriptCompareRecord, ScriptDomain,
+    ScriptDomainModeRow, ScriptGeneration, ScriptMode, recorded_input,
 };
 use task_core::{SqliteStore, StoreError, TaskId, Tier};
 
@@ -35,8 +39,8 @@ pub const LANE_RULES_CALL_SITE: &str = "dispatch_run.decide_lane";
 /// `route_priority` の比較を付けた呼び出し箇所（S2-4 の `call_site`・付記 S2-11）。
 pub const ROUTE_PRIORITY_CALL_SITE: &str = "route_select.route_select_one";
 
-/// `cos_digest` の比較を付けた呼び出し箇所（付記 S4-5 の `call_site`）。
-pub const COS_DIGEST_CALL_SITE: &str = "cos_digest.digest_one";
+/// `cos_digest` の pass の記録の呼び出し箇所（付記 S4-15 の `call_site`）。
+pub const COS_DIGEST_CALL_SITE: &str = "cos_digest.pass";
 
 /// `route_priority` の候補の上限（S2-4 の `invalid_output`）。
 pub const ROUTE_PRIORITY_CANDIDATES_MAX: usize = 256;
@@ -126,8 +130,9 @@ pub trait PolicyScript: Send + Sync {
     /// `route_priority` を評価する。入力は 1 つの harness の候補列の `source`・`model` の id だけ（S2-3）。
     fn route_priority(&self, input: RoutePriorityInput, deadline: Duration) -> PolicyFuture<'_>;
 
-    /// `cos_digest` を評価する（付記 S4-2）。入力は digest の snapshot、出力は `{ "commands": [...] }`。
-    fn cos_digest(&self, input: CosDigestInput, deadline: Duration) -> PolicyFuture<'_>;
+    /// `cos_digest` の digest pass を 1 回走らせる（付記 S4-12）。TS は `call.sink` へ op を送って読み、
+    /// 出力 `CosDigestPassOutput`（`{ "runs": [{ run_id, commands }] }`）を返す。
+    fn cos_digest_pass(&self, call: CosDigestPassCall, deadline: Duration) -> PolicyFuture<'_>;
 }
 
 /// mode の表と compare の記録の store（`SqliteStore` が実装する）。
@@ -553,14 +558,7 @@ impl CompareDraft {
     }
 }
 
-/// `cos_digest` の TS の出力 DTO（付記 S4-2）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CosDigestOutput {
-    pub commands: Vec<CosDigestCommand>,
-}
-
-/// [`classify_cos_digest`] の結果。
+/// [`classify_cos_digest_pass`] の run ごとの結果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct CosDigestClassified {
     pub ts: Option<CosDigestCommandsSummary>,
@@ -570,91 +568,305 @@ pub struct CosDigestClassified {
     pub safety_violations: Vec<String>,
 }
 
-/// TS の結果を Rust の command 列と比べる（付記 S4-2・S4-3）。TS の command は
-/// `validate_cos_digest_commands` に通し、落ちたら `invalid_output` にして S4-3 の code を `safety_violations` に入れる。
-/// 正規化はしない。command 列（順序込み）を同じ直列化の byte 列で比べる。
-pub fn classify_cos_digest(
-    input: &CosDigestInput,
-    rust: &[CosDigestCommand],
+impl CosDigestClassified {
+    fn from_classified(c: Classified) -> Self {
+        Self {
+            ts: None,
+            ts_commands_head: None,
+            outcome: c.outcome,
+            error: c.error,
+            safety_violations: c.safety_violations,
+        }
+    }
+
+    fn invalid(ts: Option<CosDigestCommandsSummary>, message: &str, code: Option<&str>) -> Self {
+        Self {
+            ts,
+            ts_commands_head: None,
+            outcome: CompareOutcome::InvalidOutput,
+            error: Some(CompareError::new("invalid_output", message)),
+            safety_violations: code.map(str::to_owned).into_iter().collect(),
+        }
+    }
+
+    /// TS を呼ばなかった（`unavailable`）。
+    pub fn unavailable(reason: &str) -> Self {
+        Self {
+            ts: None,
+            ts_commands_head: None,
+            outcome: CompareOutcome::Unavailable,
+            error: Some(CompareError::new("unavailable", reason)),
+            safety_violations: Vec::new(),
+        }
+    }
+}
+
+/// [`classify_cos_digest_pass`] の結果（付記 S4-14・S4-15）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CosDigestPassClassified {
+    /// 規則 1〜9 に通った TS の出力（mode `ts` で apply してよい）。通らなければ `None`。
+    pub output: Option<CosDigestPassOutput>,
+    /// TS の出力を使えない理由（mode `ts` の `fallback`）。`output` が `Some` なら `None`。
+    pub fallback: Option<CosDigestFallback>,
+    /// Rust の参照実装の出力の run ごと（並びも同じ）の比較。
+    pub runs: Vec<(String, CosDigestClassified)>,
+}
+
+impl CosDigestPassClassified {
+    /// TS を呼ばなかった pass（`unavailable`）。
+    pub fn unavailable(rust: &CosDigestPassOutput, reason: &str) -> Self {
+        Self {
+            output: None,
+            fallback: Some(CosDigestFallback::new("unavailable", reason)),
+            runs: rust
+                .runs
+                .iter()
+                .map(|r| (r.run_id.clone(), CosDigestClassified::unavailable(reason)))
+                .collect(),
+        }
+    }
+
+    pub fn run(&self, run_id: &str) -> Option<&CosDigestClassified> {
+        self.runs
+            .iter()
+            .find(|(id, _)| id == run_id)
+            .map(|(_, c)| c)
+    }
+}
+
+/// pass の TS の結果を Rust の参照実装と比べ、規則 1〜9（付記 S4-14）で検証する。
+/// 正規化はしない。run ごとに command 列（順序込み）を同じ直列化の byte 列で比べる。
+pub fn classify_cos_digest_pass(
+    reads: &[CosDigestPassRead],
+    rust: &CosDigestPassOutput,
     result: &TsResult,
-) -> CosDigestClassified {
-    let from = |c: Classified| CosDigestClassified {
-        ts: None,
-        ts_commands_head: None,
-        outcome: c.outcome,
-        error: c.error,
-        safety_violations: c.safety_violations,
+) -> CosDigestPassClassified {
+    let every = |c: &dyn Fn() -> CosDigestClassified| -> Vec<(String, CosDigestClassified)> {
+        rust.runs.iter().map(|r| (r.run_id.clone(), c())).collect()
     };
     let raw = match result {
         TsResult::Reply(reply) => &reply.output,
-        TsResult::DeadlineExceeded(d) => return from(deadline_exceeded(*d)),
-        TsResult::Error(e) => return from(script_error(e)),
-    };
-    let ts: CosDigestOutput = match serde_json::from_value(raw.clone()) {
-        Ok(ts) => ts,
-        Err(e) => {
-            return CosDigestClassified {
-                ts: None,
-                ts_commands_head: None,
-                outcome: CompareOutcome::InvalidOutput,
-                error: Some(CompareError::new(
-                    "invalid_output",
-                    &format!("cos_digest output: {e}"),
+        TsResult::DeadlineExceeded(d) => {
+            let c = deadline_exceeded(*d);
+            return CosDigestPassClassified {
+                output: None,
+                fallback: Some(CosDigestFallback::new(
+                    "ts_error",
+                    &format!("timeout: no reply within {} ms", d.as_millis()),
                 )),
-                safety_violations: Vec::new(),
+                runs: every(&|| CosDigestClassified::from_classified(c.clone())),
+            };
+        }
+        TsResult::Error(e) => {
+            let c = script_error(e);
+            return CosDigestPassClassified {
+                output: None,
+                fallback: Some(CosDigestFallback::new(
+                    "ts_error",
+                    &format!("{}: {}", e.kind, e.message),
+                )),
+                runs: every(&|| CosDigestClassified::from_classified(c.clone())),
             };
         }
     };
-    let summary = CosDigestCommandsSummary::of(&ts.commands).ok();
-    if let Err(violation) = validate_cos_digest_commands(input, &ts.commands) {
-        return CosDigestClassified {
-            ts: summary,
-            ts_commands_head: None,
-            outcome: CompareOutcome::InvalidOutput,
-            error: Some(CompareError::new(
-                "invalid_output",
-                &format!("cos_digest output: {violation}"),
-            )),
-            safety_violations: violation.code().map(str::to_owned).into_iter().collect(),
-        };
-    }
-    let same = same_bytes(&ts.commands.as_slice(), &rust);
-    CosDigestClassified {
-        ts: summary,
-        ts_commands_head: if same {
-            None
-        } else {
-            task_core::script_compare::cos_digest_text_head(&ts.commands)
+    let ts: CosDigestPassOutput = match serde_json::from_value(raw.clone()) {
+        Ok(ts) => ts,
+        Err(e) => {
+            let message = format!("cos_digest pass output: {e}");
+            return CosDigestPassClassified {
+                output: None,
+                fallback: Some(CosDigestFallback::new("invalid_output", &message)),
+                runs: every(&|| CosDigestClassified::invalid(None, &message, None)),
+            };
+        }
+    };
+    let violation = validate_cos_digest_pass(reads, &ts).err();
+    // 規則 1〜6 は run ごとに当てる。規則 7〜9 の違反（run を名指さない・Rust の出力に無い run）は全行に付ける。
+    let whole_pass = violation.as_ref().filter(|v| {
+        !matches!(v, CosDigestPassViolation::Run { .. })
+            && v.run_id()
+                .is_none_or(|id| !rust.runs.iter().any(|r| r.run_id == id))
+    });
+    let runs = rust
+        .runs
+        .iter()
+        .map(|r| {
+            let ts_run = ts.runs.iter().find(|t| t.run_id == r.run_id);
+            let summary = ts_run.and_then(|t| CosDigestCommandsSummary::of(&t.commands).ok());
+            let input = reads
+                .iter()
+                .find(|x| x.run.run_id == r.run_id)
+                .and_then(|x| x.input.as_ref());
+            let per_run = match (ts_run, input) {
+                (Some(t), Some(input)) => validate_cos_digest_commands(input, &t.commands).err(),
+                _ => None,
+            };
+            let named = violation
+                .as_ref()
+                .filter(|v| v.run_id() == Some(r.run_id.as_str()));
+            let c = match (whole_pass.or(named), per_run, ts_run) {
+                (_, Some(v), _) => CosDigestClassified::invalid(
+                    summary,
+                    &format!("cos_digest pass output: run {}: {v}", r.run_id),
+                    v.code(),
+                ),
+                (Some(v), None, _) => CosDigestClassified::invalid(
+                    summary,
+                    &format!("cos_digest pass output: {v}"),
+                    v.safety_code(),
+                ),
+                (None, None, None) => CosDigestClassified::invalid(
+                    None,
+                    &format!("cos_digest pass output: run {} is missing", r.run_id),
+                    None,
+                ),
+                (None, None, Some(t)) => {
+                    let same = same_bytes(&t.commands.as_slice(), &r.commands.as_slice());
+                    CosDigestClassified {
+                        ts: summary,
+                        ts_commands_head: if same {
+                            None
+                        } else {
+                            task_core::script_compare::cos_digest_text_head(&t.commands)
+                        },
+                        outcome: if same {
+                            CompareOutcome::Match
+                        } else {
+                            CompareOutcome::Mismatch
+                        },
+                        error: None,
+                        safety_violations: Vec::new(),
+                    }
+                }
+            };
+            (r.run_id.clone(), c)
+        })
+        .collect();
+    match violation {
+        Some(v) => CosDigestPassClassified {
+            output: None,
+            fallback: Some(CosDigestFallback::new(v.fallback_code(), &v.to_string())),
+            runs,
         },
-        outcome: if same {
-            CompareOutcome::Match
-        } else {
-            CompareOutcome::Mismatch
+        None => CosDigestPassClassified {
+            output: Some(ts),
+            fallback: None,
+            runs,
         },
-        error: None,
-        safety_violations: Vec::new(),
     }
 }
 
-/// `cos_digest` の記録の共通部分（付記 S4-4・S4-5）。digest pass が Rust の command を apply した後に作る。
+/// `cos_digest` の pass の op（付記 S4-12）。名前は capability と同じ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CosDigestOp {
+    ListRuns,
+    ReadRun,
+}
+
+impl CosDigestOp {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ListRuns => "cos_digest:list_runs",
+            Self::ReadRun => "cos_digest:read_run",
+        }
+    }
+}
+
+/// op の応答（Host API の `HostResult` の形）。`code` は `HostError.code`（`exception`・`denied`・`busy`・
+/// `invalid_output`・`timeout`・`terminated`）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum CosDigestOpReply {
+    Ok(serde_json::Value),
+    Error { code: String, message: String },
+}
+
+impl CosDigestOpReply {
+    pub fn error(code: &str, message: impl Into<String>) -> Self {
+        Self::Error {
+            code: code.to_owned(),
+            message: message.into(),
+        }
+    }
+
+    /// `{ "kind": "ok", "value" }`・`{ "kind": "error", "error": { code, message } }`。
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::Ok(value) => serde_json::json!({ "kind": "ok", "value": value }),
+            Self::Error { code, message } => serde_json::json!({
+                "kind": "error",
+                "error": { "code": code, "message": message },
+            }),
+        }
+    }
+}
+
+/// TS が呼んだ op 1 回。dispatcher の op server が `reply` で答える。
+#[derive(Debug)]
+pub struct CosDigestOpCall {
+    pub op: CosDigestOp,
+    pub request: serde_json::Value,
+    pub reply: tokio::sync::oneshot::Sender<CosDigestOpReply>,
+}
+
+/// op の送り口（容量 [`COS_DIGEST_OP_SINK_CAPACITY`] の bounded channel）。
+pub type CosDigestOpSink = tokio::sync::mpsc::Sender<CosDigestOpCall>;
+
+/// op の送り口の容量（付記 S4-12）。
+pub const COS_DIGEST_OP_SINK_CAPACITY: usize = 64;
+
+/// 1 pass の op 呼び出しの上限。超えた op は `busy`（付記 S4-12）。
+pub const COS_DIGEST_PASS_MAX_OPS: usize = 64;
+
+/// 1 pass の deadline（付記 S4-12。op の待ちも含む）。
+pub const COS_DIGEST_PASS_DEADLINE: Duration = Duration::from_millis(200);
+
+/// [`PolicyScript::cos_digest_pass`] の引数（付記 S4-12）。
 #[derive(Debug, Clone)]
-pub struct CosDigestDraft {
+pub struct CosDigestPassCall {
+    /// ULID。記録の `pass_id`。
+    pub pass_id: String,
+    pub sink: CosDigestOpSink,
+}
+
+/// pass の TS を `deadline` 付きで呼ぶ。
+pub async fn call_cos_digest_pass(
+    script: &dyn PolicyScript,
+    call: CosDigestPassCall,
+    deadline: Duration,
+) -> (TsResult, Duration) {
+    with_deadline(script.cos_digest_pass(call, deadline), deadline).await
+}
+
+/// `cos_digest` の pass の記録の共通部分（付記 S4-15）。
+#[derive(Debug, Clone)]
+pub struct CosDigestPassDraft {
     pub generation: String,
     pub bundle_sha256: String,
     pub host_api: String,
-    pub input: CosDigestInput,
-    /// Rust の参照実装の command 列（apply したもの）。
-    pub rust: Vec<CosDigestCommand>,
-    pub applied: CosDigestApplied,
+    pub mode: ScriptMode,
+    pub pass_id: String,
 }
 
-impl CosDigestDraft {
-    fn record(
+/// 記録 1 行に要る run の値。
+pub struct CosDigestRunRecord<'a> {
+    pub input: &'a CosDigestInput,
+    pub rust: &'a [CosDigestCommand],
+    pub classified: &'a CosDigestClassified,
+    pub applied_by: CosDigestAppliedBy,
+    pub fallback: Option<CosDigestFallback>,
+    pub applied: CosDigestApplied,
+    pub ops: Vec<CosDigestOpLog>,
+}
+
+impl CosDigestPassDraft {
+    /// run 1 つの記録を作る。
+    pub fn record(
         &self,
+        run: CosDigestRunRecord<'_>,
         isolate_epoch: u64,
-        classified: CosDigestClassified,
         elapsed: Duration,
     ) -> Result<CosDigestCompareRecord, serde_json::Error> {
+        let c = run.classified.clone();
         Ok(CosDigestCompareRecord {
             domain: ScriptDomain::CosDigest,
             generation: self.generation.clone(),
@@ -662,64 +874,34 @@ impl CosDigestDraft {
             bundle_sha256: self.bundle_sha256.clone(),
             host_api: self.host_api.clone(),
             call_site: COS_DIGEST_CALL_SITE.to_owned(),
-            thread_id: self.input.thread.clone(),
-            run_id: self.input.run_id.clone(),
-            input_digest: task_core::script_compare::sha256_digest(&serde_json::to_vec(
-                &self.input,
-            )?),
+            mode: self.mode,
+            pass_id: self.pass_id.clone(),
+            applied_by: run.applied_by,
+            fallback: run.fallback,
+            ops: run.ops,
+            thread_id: run.input.thread.clone(),
+            run_id: run.input.run_id.clone(),
+            input_digest: task_core::script_compare::sha256_digest(&serde_json::to_vec(run.input)?),
             input: None,
-            rust: CosDigestCommandsSummary::of(&self.rust)?,
-            ts: classified.ts,
-            ts_commands_head: classified.ts_commands_head,
-            outcome: classified.outcome,
-            error: classified.error,
+            rust: CosDigestCommandsSummary::of(run.rust)?,
+            ts: c.ts,
+            ts_commands_head: c.ts_commands_head,
+            outcome: c.outcome,
+            error: c.error,
             normalized: Vec::new(),
-            safety_violations: classified.safety_violations,
+            safety_violations: c.safety_violations,
             elapsed_us: u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX),
-            applied: self.applied.clone(),
+            applied: run.applied,
         })
     }
+}
 
-    /// TS の結果から記録を作る。
-    pub fn finish(
-        &self,
-        result: &TsResult,
-        elapsed: Duration,
-    ) -> Result<CosDigestCompareRecord, serde_json::Error> {
-        let epoch = match result {
-            TsResult::Reply(r) => r.isolate_epoch,
-            TsResult::Error(e) => e.isolate_epoch.unwrap_or(0),
-            TsResult::DeadlineExceeded(_) => 0,
-        };
-        self.record(
-            epoch,
-            classify_cos_digest(&self.input, &self.rust, result),
-            elapsed,
-        )
-    }
-
-    /// TS を呼ばなかった記録（`unavailable`）。
-    pub fn unavailable(&self, reason: &str) -> Result<CosDigestCompareRecord, serde_json::Error> {
-        self.record(
-            0,
-            CosDigestClassified {
-                ts: None,
-                ts_commands_head: None,
-                outcome: CompareOutcome::Unavailable,
-                error: Some(CompareError::new("unavailable", reason)),
-                safety_violations: Vec::new(),
-            },
-            Duration::ZERO,
-        )
-    }
-
-    /// TS を `deadline` 付きで呼ぶ。
-    pub async fn call(
-        &self,
-        script: &dyn PolicyScript,
-        deadline: Duration,
-    ) -> (TsResult, Duration) {
-        with_deadline(script.cos_digest(self.input.clone(), deadline), deadline).await
+/// TS の結果の isolate の作り直し回数（分からなければ 0）。
+pub fn ts_isolate_epoch(result: &TsResult) -> u64 {
+    match result {
+        TsResult::Reply(r) => r.isolate_epoch,
+        TsResult::Error(e) => e.isolate_epoch.unwrap_or(0),
+        TsResult::DeadlineExceeded(_) => 0,
     }
 }
 
@@ -750,6 +932,82 @@ pub async fn call_route_priority(
     deadline: Duration,
 ) -> (TsResult, Duration) {
     with_deadline(script.route_priority(input, deadline), deadline).await
+}
+
+/// 試験の偽の TS が使う、op の送り口越しの参照の pass（`cosDigestPass` と同じ手順）。
+#[cfg(test)]
+pub(crate) mod test_pass {
+    use super::*;
+    use task_core::chat::digest::{
+        CosDigestListRunsReply, CosDigestPassRun, CosDigestReadRunRequest, cos_digest_decide,
+    };
+
+    /// op 1 回を送って応答を待つ（送れない・答えが無いときは `terminated`）。
+    pub(crate) async fn op(
+        sink: &CosDigestOpSink,
+        op: CosDigestOp,
+        request: serde_json::Value,
+    ) -> CosDigestOpReply {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if sink
+            .send(CosDigestOpCall {
+                op,
+                request,
+                reply: tx,
+            })
+            .await
+            .is_err()
+        {
+            return CosDigestOpReply::error("terminated", "sink closed");
+        }
+        rx.await
+            .unwrap_or_else(|_| CosDigestOpReply::error("terminated", "no reply"))
+    }
+
+    /// list を読み、list の run を順に read し（失敗した run は飛ばす）、`cos_digest_decide` で決める。
+    pub(crate) async fn reference_pass(
+        sink: &CosDigestOpSink,
+    ) -> Result<CosDigestPassOutput, PolicyScriptError> {
+        let list = match op(sink, CosDigestOp::ListRuns, serde_json::json!({})).await {
+            CosDigestOpReply::Ok(v) => serde_json::from_value::<CosDigestListRunsReply>(v)
+                .map_err(|e| PolicyScriptError::new("exception", e.to_string()))?,
+            CosDigestOpReply::Error { code, message } => {
+                return Err(PolicyScriptError::new(
+                    "exception",
+                    format!("{code}: {message}"),
+                ));
+            }
+        };
+        let mut runs = Vec::new();
+        for run in list.runs {
+            let request = serde_json::to_value(CosDigestReadRunRequest {
+                thread: run.thread.clone(),
+                run_id: run.run_id.clone(),
+            })
+            .map_err(|e| PolicyScriptError::new("exception", e.to_string()))?;
+            if let CosDigestOpReply::Ok(v) = op(sink, CosDigestOp::ReadRun, request).await {
+                let input: CosDigestInput = serde_json::from_value(v)
+                    .map_err(|e| PolicyScriptError::new("exception", e.to_string()))?;
+                runs.push(CosDigestPassRun {
+                    run_id: input.run_id.clone(),
+                    commands: cos_digest_decide(&input),
+                });
+            }
+        }
+        Ok(CosDigestPassOutput { runs })
+    }
+
+    /// 参照の pass を `PolicyReply` にする。
+    pub(crate) async fn reference_reply(
+        call: &CosDigestPassCall,
+    ) -> Result<PolicyReply, PolicyScriptError> {
+        let output = reference_pass(&call.sink).await?;
+        Ok(PolicyReply {
+            output: serde_json::to_value(output)
+                .map_err(|e| PolicyScriptError::new("exception", e.to_string()))?,
+            isolate_epoch: 1,
+        })
+    }
 }
 
 #[cfg(test)]

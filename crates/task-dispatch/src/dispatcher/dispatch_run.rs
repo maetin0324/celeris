@@ -5,7 +5,7 @@ use super::*;
 /// 付記 S2: `lane_rules` の compare の結線（`decide_lane` から呼ぶ）。`dispatcher.rs` を大きくしないよう、ここで宣言する。
 #[path = "script_compare.rs"]
 mod script_compare;
-pub(in crate::dispatcher) use script_compare::{CosDigestApplication, ScriptCompareState};
+pub(in crate::dispatcher) use script_compare::ScriptCompareState;
 
 /// lane の決定（`decide_lane`）が使う routing の設定（retry の escalation の閾値）。
 #[derive(Debug, Clone, Default, PartialEq)]

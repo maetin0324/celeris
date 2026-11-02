@@ -380,6 +380,7 @@ TS の生の JSON の key 順・空白は deserialize で消えるので比較�
   `routing_decided` などの既存 event・run の行・lane・候補列は `rust` のときと byte 一致する（host-adapter unit の試験で、常に違う答えを返す bundle を使って固定する）。
 - TS の失敗・timeout・不正な出力・runtime 不在のどれでも、Rust の結果をそのまま使い、dispatch を止めない。
 - deadline は 1 呼び出し 50 ms（(f)）。超えたら待つのをやめ、`ts_error`（`error.kind = "timeout"`）を記録する。dispatcher が 1 判定で待つ時間は最大 50 ms。
+  （実装では dispatcher は待たない。比較は別の tokio task で 50 ms の deadline 付きで走る。S2-12 の (1)）
 - LLM と外部 tool を呼ばない。両領域の TS は op を呼ばない純粋関数で、Rust 側も compare のために store の書き込み（記録の追記を除く）・process・network を使わない。
 - 記録の追記に失敗しても dispatch は続ける（warn の log だけ）。記録は判定の後に別の書き込みで行い、判定の transaction に入れない。
 
@@ -446,3 +447,19 @@ TS の生の JSON の key 順・空白は deserialize で消えるので比較�
 - `classify_route_priority` の判定: `basis` と `candidates` の byte 一致で `match`／`mismatch`、候補 256 件超・未知の basis・
   未知の欄は `invalid_output`。TS の候補のどれかが入力 `table` のどの列（`route_defaults`・`lane_route_defaults`・`class_defaults`・
   `cos_route_candidates`）にも無ければ、outcome は `mismatch` のまま `safety_violations` に `undeclared_candidate` を入れる。
+
+### S2-12 実装との突き合わせ（S2 close、2026-11-02）
+記録は [S2 の進捗](../progress/2026-11-02-ts-control-layer-s2.md)。S2-1〜S2-11 を実装と突き合わせた結果。違いは 4 つで、どれも安全側か範囲の明確化。
+
+| 節 | 実装 | 付記との違い |
+|---|---|---|
+| S2-1 | `lane_rules`（`dispatch_run.rs` の `decide_lane`）、`route_priority`（`dispatch_run.rs` の `select_route_with` の直後）。`direct_route` は Rust のまま | `route_priority` の結線の場所は S2-11 で `route_select.rs` の中から `dispatch_run.rs` へ決め直した（`route_select` は不変） |
+| S2-2 | `LaneRulesOutput`（`task_dispatch::script_policy`）、`RoutePriorityOutput`（`task_core::script_compare`）。全 struct `deny_unknown_fields`、正規化なし（`normalized` は常に `[]`） | TS の型は手書きで、`host-v1.schema.json` からの生成は未実施（S2 進捗の未解決 1） |
+| S2-3 | `LaneRulesInput::redacted`・`RoutePriorityInput::redacted`・`recorded_input`（64 KiB）・`truncate_error_message`（512 byte） | なし |
+| S2-4 | migration `0103_script_domains.sql`、`Event::ScriptCompareRecorded`・`ScriptDomainModeChanged`、`script_compare_append` の重複の抑え | `rejected` の行は作らない（S2-9） |
+| S2-5 | `GET /api/v1/script/domains`・`PUT /api/v1/script/domains/{domain}/mode`、CoS 操作 `script_domain.mode_set`、`celerisctl script domains`・`script mode`、起動時の戻し（`system:script-startup`） | なし |
+| S2-6 | `call_lane_rules`・`call_route_priority` の `tokio::time::timeout(50 ms)`、in-flight 上限 32（両領域の合計） | (1) dispatcher は TS を待たない（0 ms）。`tick()` は同期の関数で、待つには `block_in_place` が要り `current_thread` の runtime では panic するため。記録は判定より少し遅れて追記される。Rust の結果と dispatch の速さは compare の有無で変わらない |
+| S2-7 | 要求の scope は空。両領域の capability は空（`bundle.config.json`） | なし |
+| S2-8 | `denied_capability`・`denied_scope`（S2-9 の理由文で分ける）・`ceiling_exceeded`・`undeclared_candidate` | (2) `ceiling_exceeded` は今の `LaneCeiling::clamp` では起きない（許される lane が 1 つでもあれば clamp はそれを返す）。試験は「違反なし」だけを確かめる |
+| S2-9〜S2-11 | 付記のとおり | (3) compare の記録の `run_id` は `lane_rules` では `null`（`decide_lane` は run の id を作る前に走る）、`route_priority` では run の id |
+| 試験の dist | 本物の host の試験は `control-ts/dist` の manifest の domains が `bundle.config.json` と違えば SKIP、`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` で失敗 | (4) `release.sh`・`test-affected.sh` は dist を作らないので、dist の無い環境では 5 件が SKIP で通る。release gate への組み込みは別 task の候補 |

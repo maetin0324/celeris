@@ -13,7 +13,7 @@ updated: 2026-11-02
 - 境界 ADR に (b) の前提の誤りと `celerisctl` への波及の付記を足した。
 
 ## 変更
-`phase 1: daemon-wire: [script] の結線と architecture-map`
+`phase 1: daemon-wire: [script] の結線と architecture-map`、`phase 1: daemon-wire: 境界 ADR に celerisctl への波及の付記、進捗を done に`
 - `crates/celeris/src/config/script.rs`: 任意の `[script]`（`state_dir`・`active_bundle_sha256`・`input_limit_bytes`・`heap_limit_bytes`）。値の形の誤りは設定エラー。`config::fields` では起動時のみの欄。
 - `crates/celeris/src/daemon/script_layer.rs`: 起動時の検証と actor の起動、失敗時の log と通知（`BadNews`、束ね key `script_bundle_rejected`）、停止時の join。
 - `crates/celeris/src/daemon/run.rs`: `?` で抜ける経路の後で起動し、MCP を止めた後で止める。S1 では handle を判定に使わない。
@@ -28,11 +28,12 @@ updated: 2026-11-02
 ## 証拠（提出時の HEAD で実行）
 - `cargo nextest run -p celeris -E 'test(script_runtime_)'`: exit 0、9 tests passed。`script_runtime_absent_no_thread`・`script_runtime_valid_bundle_loads`・`script_runtime_bad_bundle_fail_closed` を含む。
 - `python3 -I scripts/dev/check-architecture-map.py`: exit 0、818 件のパスを確認。
-- `bash scripts/dev/test-affected.sh`: exit 0。Rust 6963 tests passed、21 skipped。web の unit 113 tests passed。
+- `bash scripts/dev/test-affected.sh`: exit 0。Rust 6963 tests passed、21 skipped。web の unit 697 tests passed（101 file）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `cargo tree -i deno_core --workspace -e normal --prefix none`: `celeris`・`celeris-script`・`celerisctl`・`deno_core`。受け入れ条件 1 の check は `celerisctl` のために落ちる。
+- `cargo tree -i deno_core --workspace -e normal --prefix none`: `celeris`・`celeris-script`・`celerisctl`・`deno_core`。計画 v4 の受け入れ条件 1 を満たす。
 - `cargo tree -p task-api -p task-dispatch -p task-core -e normal`: `deno_core` は 0 件。
-- 範囲 check: 範囲外は `crates/celerisctl/src/commands/worker_tests.rs` の 1 件で、落ちる（未解決事項 2）。
+- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）: 変更 14 path はすべて計画 v4 の範囲内。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。
 
 ## 未解決事項
 1. 解決済み（計画 v4 で案 A を採用し、境界 ADR に付記を足した）。受け入れ条件 1。依存の実測と選択肢は次のとおり。

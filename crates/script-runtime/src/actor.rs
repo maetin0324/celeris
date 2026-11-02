@@ -14,21 +14,28 @@
 //!
 //! V8 の値（`v8::Global` 等）はこの thread から出さない。
 
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use deno_core::error::JsError;
 use deno_core::futures::FutureExt;
-use deno_core::{JsRuntime, PollEventLoopOptions, RuntimeOptions, serde_v8, v8};
+use deno_core::{JsRuntime, ModuleSpecifier, PollEventLoopOptions, RuntimeOptions, serde_v8, v8};
 use tokio::sync::{mpsc, oneshot, watch};
 use ulid::Ulid;
 
+use crate::dto::{HostError, HostErrorCode};
 use crate::error::ScriptError;
 use crate::handle::{DISPATCH_FUNCTION, MAX_IN_FLIGHT, RuntimeLimits, RuntimeStats, ScriptSource};
+use crate::loader::BundleLoader;
+use crate::ops::{self, Grant, GrantGuard, Grants};
 use crate::watchdog::Watchdog;
 
 type Reply = oneshot::Sender<Result<(u64, serde_json::Value), ScriptError>>;
@@ -38,6 +45,8 @@ pub(crate) struct ActorRequest {
     pub(crate) request_id: Ulid,
     pub(crate) domain: String,
     pub(crate) input: serde_json::Value,
+    /// 要求に結び付いた scope（op が読んでよい task の id）。
+    pub(crate) scope_task_ids: BTreeSet<String>,
     /// 呼び出し側の deadline。watchdog が V8 を止める時刻。
     pub(crate) deadline: Instant,
     pub(crate) reply: Reply,
@@ -59,6 +68,13 @@ pub(crate) struct Channels {
     pub(crate) stats: watch::Sender<RuntimeStats>,
 }
 
+/// actor の起動の結果。inspector を有効にしたかを handle に伝える（常に false。`runtime_no_inspector`）。
+pub(crate) struct Started {
+    pub(crate) inspector: bool,
+    /// isolate に登録した op の名前（`runtime_no_ambient_io` が fs・network 等の op が無いことを確かめる）。
+    pub(crate) op_names: Vec<String>,
+}
+
 type CallFuture = Pin<Box<dyn Future<Output = Result<v8::Global<v8::Value>, ScriptError>>>>;
 
 /// script に渡して結果を待っている要求。
@@ -68,6 +84,8 @@ struct Pending {
     deadline: Instant,
     future: CallFuture,
     reply: Reply,
+    /// 要求が終わったら op の権限表から消す。
+    _grant: GrantGuard,
 }
 
 /// 1 つの isolate とその上で評価した script。作り直すたびに番号が 1 増える。
@@ -76,6 +94,8 @@ struct Pending {
 struct Generation {
     dispatch: v8::Global<v8::Function>,
     runtime: JsRuntime,
+    /// 要求 token → 権限。op と共有する。
+    grants: Grants,
     /// near_heap_limit_callback が立てる。
     heap_hit: Arc<AtomicBool>,
 }
@@ -90,18 +110,48 @@ fn init_platform() {
 /// heap 上限で止めた後、V8 が実行を畳むまでの猶予として上限を何倍にするか（generation ごとに 1 回）。
 const HEAP_GRACE_FACTOR: usize = 2;
 
+/// bundle の評価（top-level）の上限。超えたら watchdog が止め、起動・作り直しは失敗する。
+const LOAD_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 静的 bootstrap（Deno.* の除去・時計と乱数の禁止・celeris:host への op の受け渡し）。
+const BOOTSTRAP_JS: &str = include_str!("bootstrap.js");
+
+/// inspector は有効にしない（境界 ADR (c)。debugger の接続口を作らない）。
+pub(crate) const INSPECTOR: bool = false;
+
+/// generation 1 つ分の JsRuntime の設定。
+fn runtime_options(
+    limits: &RuntimeLimits,
+    loader: BundleLoader,
+    grants: &Grants,
+) -> RuntimeOptions {
+    let params = v8::CreateParams::default().heap_limits(0, limits.heap_limit_bytes);
+    RuntimeOptions {
+        create_params: Some(params),
+        module_loader: Some(Rc::new(loader)),
+        extensions: vec![ops::extension(Rc::clone(grants))],
+        inspector: INSPECTOR,
+        ..Default::default()
+    }
+}
+
 /// isolate を作り、heap 上限と watchdog を付けて script を評価する。
 fn new_generation(
     source: &ScriptSource,
     limits: &RuntimeLimits,
     watchdog: &Watchdog,
 ) -> Result<Generation, ScriptError> {
-    let params = v8::CreateParams::default().heap_limits(0, limits.heap_limit_bytes);
-    let mut runtime = JsRuntime::try_new(RuntimeOptions {
-        create_params: Some(params),
-        ..Default::default()
-    })
-    .map_err(|_| ScriptError::Terminated)?;
+    let specifier = ModuleSpecifier::parse(&source.name).map_err(|e| ScriptError::Exception {
+        message: format!("invalid bundle specifier {:?}: {e}", source.name),
+    })?;
+    let loader = BundleLoader::new(specifier.clone(), source.code.clone()).map_err(|e| {
+        ScriptError::Exception {
+            message: e.to_string(),
+        }
+    })?;
+    let grants: Grants = Rc::new(RefCell::new(HashMap::new()));
+    let mut runtime = JsRuntime::try_new(runtime_options(limits, loader, &grants))
+        .map_err(|_| ScriptError::Terminated)?;
     let isolate = runtime.v8_isolate().thread_safe_handle();
     let heap_hit = Arc::new(AtomicBool::new(false));
     {
@@ -119,10 +169,16 @@ fn new_generation(
         });
     }
     watchdog.set_isolate(isolate);
-    let dispatch = load(&mut runtime, source)?;
+    watchdog.arm(Instant::now() + LOAD_TIMEOUT);
+    let loaded = load(&mut runtime, &specifier, source);
+    if watchdog.disarm() {
+        return Err(ScriptError::Timeout);
+    }
+    let dispatch = loaded?;
     Ok(Generation {
         dispatch,
         runtime,
+        grants,
         heap_hit,
     })
 }
@@ -132,7 +188,7 @@ pub(crate) fn run(
     source: ScriptSource,
     limits: RuntimeLimits,
     channels: Channels,
-    ready: std::sync::mpsc::SyncSender<Result<(), ScriptError>>,
+    ready: std::sync::mpsc::SyncSender<Result<Started, ScriptError>>,
 ) {
     let tokio_rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -161,7 +217,19 @@ pub(crate) fn run(
             return;
         }
     };
-    if ready.send(Ok(())).is_err() {
+    let op_names = generation
+        .runtime
+        .op_names()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    if ready
+        .send(Ok(Started {
+            inspector: INSPECTOR,
+            op_names,
+        }))
+        .is_err()
+    {
         return;
     }
 
@@ -273,12 +341,19 @@ impl Actor {
             request_id,
             domain,
             input,
+            scope_task_ids,
             deadline,
             reply,
         } = req;
         let generation = self.generation.as_mut().ok_or(ScriptError::Terminated)?;
+        let token = request_id.to_string();
+        let grant = GrantGuard::insert(
+            &generation.grants,
+            token.clone(),
+            Grant::new(&self.source.capabilities, &domain, &scope_task_ids),
+        );
         self.watchdog.arm(deadline);
-        let future = call_dispatch(generation, &domain, &input);
+        let future = call_dispatch(generation, &domain, &input, &token);
         let fired = self.watchdog.disarm();
         let heap = generation.heap_hit.load(Ordering::SeqCst);
         let pending = Pending {
@@ -286,6 +361,7 @@ impl Actor {
             deadline,
             future,
             reply,
+            _grant: grant,
         };
         if heap {
             self.recycle(Recycle::Heap {
@@ -470,22 +546,63 @@ impl Actor {
     }
 }
 
-/// script を評価し、入口の関数を取り出す。
+/// bootstrap を評価し、bundle を main module として load・評価して、入口の関数を取り出す。
 fn load(
     runtime: &mut JsRuntime,
+    specifier: &ModuleSpecifier,
     source: &ScriptSource,
 ) -> Result<v8::Global<v8::Function>, ScriptError> {
     runtime
-        .execute_script(source.name.clone(), source.code.clone())
-        .map_err(|e| ScriptError::Exception {
-            message: e.exception_message.clone(),
-        })?;
+        .execute_script("celeris:bootstrap.js", BOOTSTRAP_JS)
+        .map_err(|e| js_error_to_script_error(&e))?;
+    // loader は同期で返すので、load と評価は外の event loop を待たずに終わる。
+    deno_core::futures::executor::block_on(async {
+        let id = runtime
+            .load_main_es_module_from_code(specifier, source.code.clone())
+            .await
+            .map_err(core_error)?;
+        let evaluated = runtime.mod_evaluate(id);
+        runtime
+            .run_event_loop(PollEventLoopOptions::default())
+            .await
+            .map_err(core_error)?;
+        evaluated.await.map_err(core_error)
+    })?;
     deno_core::scope!(scope, runtime);
     let global = scope.get_current_context().global(scope);
     let key = v8::String::new(scope, DISPATCH_FUNCTION).ok_or(ScriptError::Terminated)?;
     let value = global.get(scope, key.into()).ok_or_else(missing_dispatch)?;
     let function = v8::Local::<v8::Function>::try_from(value).map_err(|_| missing_dispatch())?;
     Ok(v8::Global::new(scope, function))
+}
+
+/// load・評価の誤り。JS の例外なら [`js_error_to_script_error`] で写す。
+fn core_error(e: deno_core::error::CoreError) -> ScriptError {
+    match *e.0 {
+        deno_core::error::CoreErrorKind::Js(js) => js_error_to_script_error(&js),
+        other => ScriptError::Exception {
+            message: other.to_string(),
+        },
+    }
+}
+
+/// JS の例外を写す。`HostError { code, message }` は code の種類へ、それ以外は `Exception`。
+pub(crate) fn js_error_to_script_error(e: &JsError) -> ScriptError {
+    if e.name.as_deref() == Some("HostError") {
+        let code = e
+            .additional_properties
+            .iter()
+            .find(|(k, _)| k == "code")
+            .and_then(|(_, v)| {
+                serde_json::from_value::<HostErrorCode>(serde_json::Value::String(v.clone())).ok()
+            });
+        if let Some(code) = code {
+            return HostError::new(code, e.message.clone().unwrap_or_default()).into();
+        }
+    }
+    ScriptError::Exception {
+        message: e.exception_message.clone(),
+    }
 }
 
 fn missing_dispatch() -> ScriptError {
@@ -499,24 +616,24 @@ fn call_dispatch(
     generation: &mut Generation,
     domain: &str,
     input: &serde_json::Value,
+    token: &str,
 ) -> CallFuture {
     let runtime = &mut generation.runtime;
     deno_core::scope!(scope, runtime);
     let args = (|| {
         let domain = serde_v8::to_v8(scope, domain).ok()?;
         let input = serde_v8::to_v8(scope, input).ok()?;
+        let ctx = serde_v8::to_v8(scope, serde_json::json!({ "token": token })).ok()?;
         Some([
             v8::Global::new(scope, domain),
             v8::Global::new(scope, input),
+            v8::Global::new(scope, ctx),
         ])
     })();
     match args {
         Some(args) => Box::pin(
-            JsRuntime::scoped_call_with_args(scope, &generation.dispatch, &args).map(|r| {
-                r.map_err(|e| ScriptError::Exception {
-                    message: e.exception_message.clone(),
-                })
-            }),
+            JsRuntime::scoped_call_with_args(scope, &generation.dispatch, &args)
+                .map(|r| r.map_err(|e| js_error_to_script_error(&e))),
         ),
         // 入力が V8 の値にできない。
         None => Box::pin(std::future::ready(Err(ScriptError::Exception {

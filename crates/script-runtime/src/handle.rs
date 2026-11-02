@@ -10,6 +10,7 @@
 //!   [`ScriptError::GenerationGone`]。
 //! - 最後の handle の Drop か [`ScriptRuntimeHandle::shutdown`] で actor thread を止めて join する。
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -21,6 +22,7 @@ use tokio::time::Instant;
 use ulid::Ulid;
 
 use crate::actor::{self, ActorRequest, Control as ActorControl};
+use crate::dto::Capability;
 use crate::error::ScriptError;
 
 /// 要求 queue の容量（境界 ADR (b)）。
@@ -34,13 +36,15 @@ pub const DEFAULT_HEAP_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 /// script が定義する入口の関数名。`globalThis[DISPATCH_FUNCTION](domain, input)` を呼ぶ。
 pub const DISPATCH_FUNCTION: &str = "__celerisDispatch";
 
-/// actor が起動時（と generation を作り直すたび）に評価する script（classic script）。
+/// actor が起動時（と generation を作り直すたび）に main module として評価する bundle（単一の ESM）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptSource {
-    /// stack trace に出る名前（例 `celeris:test/fixture.js`）。
+    /// bundle の module specifier（URL。例 `celeris:test/fixture.js`）。import してよいのはこれと `celeris:host` だけ。
     pub name: String,
-    /// script の本文。`globalThis.__celerisDispatch` を関数として定義する。
+    /// bundle の本文。`globalThis.__celerisDispatch(domain, input, ctx)` を関数として定義する。
     pub code: String,
+    /// manifest が宣言した capability。有効になるのは領域ごとの許可表との積だけ。
+    pub capabilities: BTreeSet<Capability>,
 }
 
 /// runtime の上限。
@@ -68,6 +72,8 @@ pub struct ScriptCall {
     pub domain: String,
     /// 入力 DTO（JSON）。script の入口へ第 2 引数で渡す。
     pub input: serde_json::Value,
+    /// この要求で op が読んでよい task の id（scope）。範囲外の読み出しは `Denied`。
+    pub scope_task_ids: BTreeSet<String>,
     /// 送ってから応答までの上限。watchdog も同じ deadline で V8 を止める。
     pub timeout: Duration,
 }
@@ -130,6 +136,8 @@ struct Inner {
     limits: RuntimeLimits,
     counters: Counters,
     control: Mutex<Control>,
+    inspector: bool,
+    op_names: Vec<String>,
 }
 
 struct Control {
@@ -165,8 +173,8 @@ impl ScriptRuntimeHandle {
             .name("celeris-script".into())
             .spawn(move || actor::run(source, limits, channels, ready_tx))
             .map_err(|_| ScriptError::Terminated)?;
-        match ready_rx.recv() {
-            Ok(Ok(())) => {}
+        let started = match ready_rx.recv() {
+            Ok(Ok(started)) => started,
             Ok(Err(err)) => {
                 let _ = thread.join();
                 return Err(err);
@@ -176,7 +184,7 @@ impl ScriptRuntimeHandle {
                 let _ = thread.join();
                 return Err(ScriptError::Terminated);
             }
-        }
+        };
         Ok(Self {
             inner: Arc::new(Inner {
                 tx,
@@ -188,6 +196,8 @@ impl ScriptRuntimeHandle {
                     shutdown: Some(shutdown_tx),
                     thread: Some(thread),
                 }),
+                inspector: started.inspector,
+                op_names: started.op_names,
             }),
         })
     }
@@ -222,6 +232,7 @@ impl ScriptRuntimeHandle {
             request_id,
             domain: call.domain,
             input: call.input,
+            scope_task_ids: call.scope_task_ids,
             deadline: deadline.into_std(),
             reply: reply_tx,
         };
@@ -270,6 +281,16 @@ impl ScriptRuntimeHandle {
     /// 0 のままなので [`Self::stats`] で読む。
     pub fn watch_stats(&self) -> watch::Receiver<RuntimeStats> {
         self.inner.stats.clone()
+    }
+
+    /// isolate に inspector（debugger の接続口）を付けたか。常に false（境界 ADR (c)）。
+    pub fn inspector_enabled(&self) -> bool {
+        self.inner.inspector
+    }
+
+    /// isolate に登録した op の名前（deno_core の組み込みを含む。無効にした組み込みも名前は残る）。
+    pub fn op_names(&self) -> &[String] {
+        &self.inner.op_names
     }
 
     /// queue に積まれて actor がまだ取り出していない要求の数。

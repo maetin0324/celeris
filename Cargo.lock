@@ -460,9 +460,12 @@ name = "celeris-script"
 version = "0.1.0"
 dependencies = [
  "deno_core",
+ "deno_error",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror",
+ "time",
  "tokio",
  "ulid",
 ]

@@ -51,7 +51,8 @@ task-core: `chat::digest::pass_tests::cos_digest_pass_validation_rejects_each_ru
 - `cargo nextest run -p task-dispatch -p task-core -E 'test(/cos_digest|cos_chat_triage|script_compare/)'`: 139 passed（exit 0）。
 - `cargo nextest run -p celeris -E 'test(/script_compare/)'`: 19 passed（dist が無いので real-host の試験は SKIP で通る）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 結果は報告本文に書く。
+- `bash scripts/dev/test-affected.sh`: exit 0。task-core の変更で workspace 全体が対象になり、nextest 7075 passed・21 skipped、doc test も通った。
+- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を計画の許可 path と照合）: 範囲外 0 件。
 
 ## 未解決事項
 - 本物の bundle の `cosDigestPass` は ts-pass unit が書く。この unit の branch の `control-ts` は旧い `cosDigest` のままで、`bundle.config.json` の `cos_digest` の capability も空。本物の host での mode compare・ts の確認は real-host unit が行う。

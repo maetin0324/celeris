@@ -593,35 +593,120 @@ const RULES: &[LaneRule] = &[
     },
 ];
 
+/// ADR-0069 D3: 規則表で当たった規則（天井で丸める前）。`lane` は規則が出した lane
+/// （`LaneDecision.proposed` になる）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuleMatch {
+    pub rule_id: &'static str,
+    pub lane: Tier,
+    pub condition: &'static str,
+}
+
+/// 規則表を上から当て、最初に当たった規則を返す（天井は当てない）。
+pub fn match_rule(features: &TaskFeatures) -> RuleMatch {
+    RULES
+        .iter()
+        .find(|r| (r.when)(features))
+        .map(|r| RuleMatch {
+            rule_id: r.id,
+            lane: r.lane,
+            condition: r.condition,
+        })
+        .unwrap_or(RuleMatch {
+            rule_id: "standard/default",
+            lane: Tier::Standard,
+            condition: "no rule matched",
+        })
+}
+
+/// 当たった規則に天井（`LaneCeiling::clamp`）を当てて `LaneDecision` を作る。`source` は
+/// `Default`（呼び出し側が上書きする）。
+pub fn decide_with(
+    features: &TaskFeatures,
+    ceiling: &LaneCeiling,
+    matched: RuleMatch,
+) -> LaneDecision {
+    let RuleMatch {
+        rule_id: id,
+        lane: proposed,
+        condition,
+    } = matched;
+    let (lane, clamped_by) = ceiling.clamp(proposed);
+    let mut reasons = vec![format!("{id}: {condition}")];
+    if let Some(c) = &clamped_by {
+        reasons.push(c.clone());
+    }
+    LaneDecision {
+        lane,
+        proposed,
+        source: TierSource::Default,
+        rule_id: id.to_string(),
+        policy_version: LANE_POLICY_VERSION.to_string(),
+        features: *features,
+        reasons,
+        clamped_by,
+        hint: None,
+        escalation: None,
+    }
+}
+
+/// S2（TS 制御層の比較 fixture）: 9 軸 × 3 値の全組み合わせ（19,683 件）。軸の宣言順
+/// （judgment が最上位）で、各軸は low < medium < high の辞書順。
+pub fn all_features() -> Vec<TaskFeatures> {
+    const LEVELS: [Level; 3] = [Level::Low, Level::Medium, Level::High];
+    let total = 3usize.pow(9);
+    (0..total)
+        .map(|i| {
+            let digit = |axis: u32| LEVELS[(i / 3usize.pow(8 - axis)) % 3];
+            TaskFeatures {
+                judgment: digit(0),
+                ambiguity: digit(1),
+                verifiability: digit(2),
+                reversibility: digit(3),
+                consequence: digit(4),
+                context_size: digit(5),
+                tool_intensity: digit(6),
+                expected_length: digit(7),
+                cross_cutting: digit(8),
+            }
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+struct LaneFixtureLine<'a> {
+    features: &'a TaskFeatures,
+    rule_id: &'a str,
+    proposed: Tier,
+    condition: &'a str,
+}
+
+/// S2: `all_features` の各件を `match_rule` に通した 1 行 1 件の JSONL（末尾改行つき）。
+/// `examples/dump-lane-fixtures.rs` と `tests/script_fixtures.rs` が同じこの関数を使う。
+pub fn lane_fixture_jsonl() -> Result<String, serde_json::Error> {
+    let mut out = String::new();
+    for features in all_features() {
+        let m = match_rule(&features);
+        out.push_str(&serde_json::to_string(&LaneFixtureLine {
+            features: &features,
+            rule_id: m.rule_id,
+            proposed: m.lane,
+            condition: m.condition,
+        })?);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
 /// ADR-0069 D3: 決定的な lane policy。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ModelPolicy;
 
 impl ModelPolicy {
-    /// 規則表を上から当て、天井で丸める。`source` は `Default`（呼び出し側が上書きする）。
+    /// 規則表を上から当て（`match_rule`）、天井で丸める（`decide_with`）。`source` は `Default`
+    /// （呼び出し側が上書きする）。
     pub fn decide(&self, features: &TaskFeatures, ceiling: &LaneCeiling) -> LaneDecision {
-        let (id, proposed, condition) = RULES
-            .iter()
-            .find(|r| (r.when)(features))
-            .map(|r| (r.id, r.lane, r.condition))
-            .unwrap_or(("standard/default", Tier::Standard, "no rule matched"));
-        let (lane, clamped_by) = ceiling.clamp(proposed);
-        let mut reasons = vec![format!("{id}: {condition}")];
-        if let Some(c) = &clamped_by {
-            reasons.push(c.clone());
-        }
-        LaneDecision {
-            lane,
-            proposed,
-            source: TierSource::Default,
-            rule_id: id.to_string(),
-            policy_version: LANE_POLICY_VERSION.to_string(),
-            features: *features,
-            reasons,
-            clamped_by,
-            hint: None,
-            escalation: None,
-        }
+        decide_with(features, ceiling, match_rule(features))
     }
 }
 

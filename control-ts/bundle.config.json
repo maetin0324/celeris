@@ -1,6 +1,7 @@
 {
   "host_api": "^1",
   "domains": {
+    "cos_digest": [],
     "host_selftest": ["selftest:echo_task"],
     "lane_rules": [],
     "route_priority": []

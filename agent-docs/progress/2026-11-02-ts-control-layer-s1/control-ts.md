@@ -36,7 +36,15 @@ store（`/local/.pnpm-store/v11`）に必要な版が揃っておらず、最初
 その後 `node_modules` を消して `corepack pnpm@12.6.0 install --offline --frozen-lockfile` が exit 0 で通ることを確かめた。
 
 ## 証拠（提出時の HEAD で実行）
-result.json と報告本文に書く。
+- `corepack pnpm@12.6.0 install --offline --frozen-lockfile`（`node_modules` を消した後）: exit 0。
+- `run gen:types` の後の `git diff --exit-code src/host.d.ts`: 差分 0。
+- `run typecheck`: exit 0。`run test`: vitest 4 passed、`node --test` 21 passed・0 failed。
+- `run bundle` と manifest の照合: exit 0。`bundle_sha256` は `dist/bundle.mjs` の sha256 と一致し、8 欄すべて在る。
+- `node:` の import で bundle が落ちる試験: `control-ts/scripts/build-bundle.test.mjs`（静的・動的・require の 3 形、ほか `fs`・`bun:`・`https:`・`//`）。
+- `bash scripts/dev/test-affected.sh`: exit 0。control-ts の typecheck と test が走った。`--list` と実行の試験は `control-ts/scripts/test-affected.test.mjs`。
+- `sh scripts/dev/tests/test-affected-list.sh`: `test-affected-list: ok`（web の選択は変わらない）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- 範囲 check: 範囲外の path なし。
 
 ## 未解決事項
 1. schema の nullable の欠け: `crates/script-runtime/src/dto.rs` の `#[schemars(required)]` は、schemars 1 では `Option<T>` の欄を `T` の schema にする。このため `host-v1.schema.json` の `SelftestEchoRequest.note`・`SelftestEchoReply.note` は `{"type":"string"}` で、null が入らない形になっている。実行時の DTO は null を受けて返す（`dto_null_required`）。生成型 `note: string` も同じ誤りを持ち、ADR (c) の `T | null` と合わない。

@@ -1,7 +1,8 @@
 ---
 title: S2 mode-api — 領域の mode を読む・rust/compare に切り替える API と celerisctl
 tasks: [01M6E6HEH7CPZX9KX4Y2SAZKTG]
-status: blocked
+status: done
+completed: 2026-11-02
 updated: 2026-11-02
 ---
 # S2 mode-api
@@ -24,7 +25,7 @@ updated: 2026-11-02
   変更は API 経由（DB を開かない）。CoS の run では `cos_mapped` が `/cos/operations` に包む。理由の option は全体の `--reason`（CoS の操作の理由）と衝突しないよう `--mode-reason` にした。
 - 文書: `docs/api/v1/api.md` の一覧 #227・#228、CoS 操作表の行、§3.134。`docs/api/v1/api-v1.schema.json`（`UPDATE_SCHEMA=1`）と
   `web/api/generated/{schema.json,types.ts}`（`node web/scripts/gen-types.mjs`）を再生成した。
-- 範囲外の 2 file（既存の試験が新しい変更 route に要求する）:
+- 既存の試験が新しい変更 route に要求する 2 file（replan で範囲に入った）:
   - `agent-docs/adr/2026-10-09-cos-operations-all-mutations.md`: admin の表に行と付記（試験 `cos_ops_registry_matches_adr_domain_assignment_and_exclusions`）。
   - `config/skills/cos-operator/operations.md`: 登録表に行（試験 `cos_operator_skill_table_matches_allowed` と celerisctl の `cos_mapped_table_wraps_every_allowed_subcommand`）。
 
@@ -47,12 +48,11 @@ updated: 2026-11-02
   （初回は celerisctl `main.rs` の inline 試験 `cos_mapping_tests` が 320 行で source-size の上限 300 を超えたので、表の追加を 1 行に減らした。`--generation` 付きの本文は `script.rs` の試験で見る。）
 - `cargo clippy --workspace -- -D warnings` — exit 0。
 - `cargo fmt --all -- --check` — exit 0。
-- 範囲 check — exit 1。範囲外は `agent-docs/adr/2026-10-09-cos-operations-all-mutations.md` と `config/skills/cos-operator/operations.md` の 2 file だけ（下の未解決 1）。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path 16 件は、replan 後の objective の範囲（task-api・celerisctl・docs/api・web/api・進捗・cos-operations ADR・cos-operator skill）にすべて入る。
+- replan 後の再 run（提出時の HEAD で再実行）: test-affected exit 0（cargo 4922 passed・20 skipped、web tsc -b と unit 697 passed、source-size gate 0 failure）、clippy exit 0、fmt exit 0、`test(script_domain)` 6 passed。
 
 ## 未解決
-1. 範囲 check（`crates/task-api/`・`crates/celerisctl/`・`docs/`・`web/`・`agent-docs/progress/`・境界 ADR）は、上の範囲外の 2 file で落ちる。
-   新しい変更 route を足すと、既存の registry 試験がこの 2 file の行を要るので避けられない。plan_issue で申告し、replan で範囲に足すことを求めた。
-   attempt 1 の再 run で確かめた: 2 file を `$CELERIS_WU_BASE` の内容に戻して `cargo nextest run -p task-api -p celerisctl` で該当 3 試験を走らせると exit 100、3 件とも失敗（`cos_ops_registry_matches_adr_domain_assignment_and_exclusions`・`cos_operator_skill_table_matches_allowed`・`cos_mapped_table_wraps_every_allowed_subcommand`）。確認後に 2 file は HEAD の内容へ戻した。
+- なし。範囲外の 2 file の件は replan で objective に入って解消した（attempt 1 の確認では、2 file を base の内容に戻すと registry の試験 3 件が失敗した）。
 
 ## 本番への移行
 - 本番 KB の cos-operator skill を差し替える（人の手順: `celerisctl skills import config/skills --name cos-operator --root <kb_root>`）。差し替えるまで CoS の skill の表にこの操作が出ないが、操作自体は registry で通る。

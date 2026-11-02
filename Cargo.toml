@@ -17,7 +17,8 @@ members = [
     "crates/script-runtime",
     "tests/e2e",
 ]
-exclude = ["examples/hello-crate"]
+# crates/script-runtime/vendor は deno_core の写し（[patch.crates-io]）。member にしない（ADR 2026-11-02-deno-core-vendored-serde-json-features）。
+exclude = ["examples/hello-crate", "crates/script-runtime/vendor"]
 
 [workspace.package]
 edition = "2024"
@@ -28,3 +29,8 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = 0
+
+# deno_core の写し: serde_json の float_roundtrip・preserve_order を外し、workspace の JSON の挙動を変えない。
+# 作り直しは crates/script-runtime/vendor/vendor-deno-core.sh（ADR 2026-11-02-deno-core-vendored-serde-json-features）。
+[patch.crates-io]
+deno_core = { path = "crates/script-runtime/vendor/deno_core" }

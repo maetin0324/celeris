@@ -24,7 +24,14 @@ pub enum ScriptError {
     /// actor が止まった（shutdown・thread の異常終了・起動失敗）。
     #[error("script runtime terminated")]
     Terminated,
-    /// 要求を固定した generation が既に破棄された。
+    /// 要求を固定した generation が既に破棄された（restart・watchdog・heap 上限で作り直した）。
+    /// 古い generation の未完の結果は返さない。
     #[error("script generation is gone")]
     GenerationGone,
+    /// 入力（domain と input の JSON）が上限を超えた。actor に送らない。
+    #[error("script input too large: {size} bytes (limit {limit})")]
+    InputTooLarge { size: usize, limit: usize },
+    /// V8 heap が上限に近づき、その generation の実行を止めた。
+    #[error("script heap limit reached")]
+    HeapLimit,
 }

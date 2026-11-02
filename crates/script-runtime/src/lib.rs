@@ -7,9 +7,11 @@
 mod actor;
 mod error;
 mod handle;
+mod watchdog;
 
 pub use error::ScriptError;
 pub use handle::{
-    DISPATCH_FUNCTION, MAX_IN_FLIGHT, QUEUE_CAPACITY, RuntimeStats, ScriptCall, ScriptReply,
-    ScriptRuntimeHandle, ScriptSource,
+    DEFAULT_HEAP_LIMIT_BYTES, DEFAULT_INPUT_LIMIT_BYTES, DISPATCH_FUNCTION, MAX_IN_FLIGHT,
+    QUEUE_CAPACITY, RuntimeLimits, RuntimeStats, ScriptCall, ScriptReply, ScriptRuntimeHandle,
+    ScriptSource,
 };

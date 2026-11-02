@@ -24,6 +24,24 @@ fn fixture_script(enabled: bool, script: &str) -> Fixture {
     let dir = crate::test_support::WritableTempDir::new();
     let db_path = dir.path().join("celeris.db");
     let store = Arc::new(SqliteStore::open(&db_path).expect("store"));
+    let d = triage_dispatcher(dir.path(), &db_path, store.clone(), enabled, script);
+    Fixture {
+        dir,
+        db_path,
+        store,
+        d,
+    }
+}
+
+/// The dispatcher of [`fixture_script`] over an existing DB (also used to rebuild it after a
+/// simulated daemon restart).
+fn triage_dispatcher(
+    root: &std::path::Path,
+    db_path: &std::path::Path,
+    store: Arc<SqliteStore>,
+    enabled: bool,
+    script: &str,
+) -> Dispatcher {
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(vec![
         "sh".into(),
         "-c".into(),
@@ -35,7 +53,7 @@ fn fixture_script(enabled: bool, script: &str) -> Fixture {
     )));
     d.config.execution.max_cos_runs = 1;
     d.config.min_free_disk_mb = 0;
-    d.config.knowledge.root = dir.path().join("knowledge");
+    d.config.knowledge.root = root.join("knowledge");
     for name in ["cos-operator", "cos-inbox-triage"] {
         let skill_dir = d.config.knowledge.root.join("skills").join(name);
         std::fs::create_dir_all(&skill_dir).expect("skill dir");
@@ -46,7 +64,7 @@ fn fixture_script(enabled: bool, script: &str) -> Fixture {
         .expect("skill");
     }
     d.set_cos_chat_launch(
-        store.clone(),
+        store,
         CosChatLaunchConfig {
             worker_reserve_five_hour: 0.90,
             enabled,
@@ -54,20 +72,15 @@ fn fixture_script(enabled: bool, script: &str) -> Fixture {
             max_turns: 2,
             max_wall_secs: 30,
             unavailable_reason: None,
-            data_dir: dir.path().to_path_buf(),
-            db_path: db_path.clone(),
+            data_dir: root.to_path_buf(),
+            db_path: db_path.to_path_buf(),
             attachment_limits: Default::default(),
             api_base_url: "http://127.0.0.1:7700/api/v1".into(),
             web_base_url: Some("http://celeris.test".into()),
             triage: Default::default(),
         },
     );
-    Fixture {
-        dir,
-        db_path,
-        store,
-        d,
-    }
+    d
 }
 
 impl Fixture {
@@ -517,6 +530,8 @@ async fn cos_chat_triage_events_resolve_escalated_only_for_touched_tasks() {
     );
 }
 
+#[path = "cos_digest_script.rs"]
+mod cos_digest_script;
 #[path = "cos_chat_triage_digest_script_compare.rs"]
 mod digest_script_compare;
 #[path = "cos_chat_triage_fallback.rs"]

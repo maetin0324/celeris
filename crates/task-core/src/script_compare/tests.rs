@@ -201,8 +201,24 @@ fn script_domain_names_and_modes_parse() {
     for m in ["rust", "compare", "canary", "ts"] {
         assert_eq!(ScriptMode::parse(m).map(ScriptMode::as_str), Some(m));
     }
-    assert!(ScriptMode::Rust.enabled_in_s2());
-    assert!(ScriptMode::Compare.enabled_in_s2());
-    assert!(!ScriptMode::Canary.enabled_in_s2());
-    assert!(!ScriptMode::Ts.enabled_in_s2());
+    for domain in ScriptDomain::ALL {
+        assert!(ScriptMode::Rust.accepted_for(domain));
+        assert!(ScriptMode::Compare.accepted_for(domain));
+        assert!(!ScriptMode::Canary.accepted_for(domain));
+        assert_eq!(
+            ScriptMode::Ts.accepted_for(domain),
+            domain == ScriptDomain::CosDigest
+        );
+    }
+    assert!(super::actor_may_enable_ts("human:web"));
+    for actor in [
+        "human:",
+        "cos:t",
+        "operator:claude-code",
+        "mcp:c",
+        "system:script-startup",
+        "",
+    ] {
+        assert!(!super::actor_may_enable_ts(actor), "{actor}");
+    }
 }

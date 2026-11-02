@@ -14,7 +14,7 @@ use crate::model::{Event, TaskId};
 use crate::script_compare::{
     CosDigestCompareRecord, NewScriptGeneration, ScriptCompareRecord, ScriptDomain,
     ScriptDomainError, ScriptDomainModeRow, ScriptGeneration, ScriptGenerationState, ScriptMode,
-    ScriptModeChange, ScriptModeChangeOutcome,
+    ScriptModeChange, ScriptModeChangeOutcome, actor_may_enable_ts,
 };
 
 /// `script_compare_log` の 1 行（付記 S4-5）。
@@ -123,23 +123,31 @@ impl SqliteStore {
 
     /// mode を変える（S2-4 の CAS・S2-5）。表の更新と `script_domain_events` への追記は同じ transaction。
     ///
-    /// - 未知の領域 → `UnknownDomain`。`canary`・`ts` → `ModeNotEnabled`（表を変えない）。
+    /// - 未知の領域 → `UnknownDomain`。`canary`、`cos_digest` 以外の `ts` → `ModeNotEnabled`（表を変えない）。
+    /// - `ts` は actor が `human:*` でなければ `TsRequiresHuman`、元が同じ generation の `compare` でなければ
+    ///   `TsRequiresCompare`（S4-14）。戻し（`ts→rust`・`ts→compare`）は誰の actor でも受ける。
     /// - 同じ mode・同じ generation → `Unchanged`（表も記録も変えない）。
     /// - `version` が `expected_version` と違う（他の更新が先に入った）→ `VersionConflict`。
-    /// - `compare` は `loaded` で manifest の `domains` にその領域がある generation が要る。
+    /// - `compare`・`ts` は `loaded` で manifest の `domains` にその領域がある generation が要る。
     pub fn script_domain_set_mode(
         &self,
         change: &ScriptModeChange,
         now: OffsetDateTime,
     ) -> Result<ScriptModeChangeOutcome, ScriptDomainError> {
         let domain = parse_domain(&change.domain)?;
-        if !change.to_mode.enabled_in_s2() {
-            return Err(ScriptDomainError::ModeNotEnabled(change.to_mode));
+        if !change.to_mode.accepted_for(domain) {
+            return Err(ScriptDomainError::ModeNotEnabled {
+                domain,
+                mode: change.to_mode,
+            });
         }
-        match (change.to_mode, &change.to_generation) {
-            (ScriptMode::Compare, None) => return Err(ScriptDomainError::GenerationRequired),
-            (ScriptMode::Rust, Some(_)) => return Err(ScriptDomainError::GenerationNotAllowed),
+        match (change.to_mode.needs_generation(), &change.to_generation) {
+            (true, None) => return Err(ScriptDomainError::GenerationRequired),
+            (false, Some(_)) => return Err(ScriptDomainError::GenerationNotAllowed),
             _ => {}
+        }
+        if change.to_mode == ScriptMode::Ts && !actor_may_enable_ts(&change.actor) {
+            return Err(ScriptDomainError::TsRequiresHuman(change.actor.clone()));
         }
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -154,6 +162,15 @@ impl SqliteStore {
                 domain: domain.as_str().to_owned(),
                 expected: change.expected_version,
                 found: current.version,
+            });
+        }
+        // S4-14: `→ts` の元は同じ generation の `compare` だけ（`rust` からの直行・generation の同時変更は拒む）。
+        if change.to_mode == ScriptMode::Ts
+            && (current.mode != ScriptMode::Compare
+                || current.generation_id != change.to_generation)
+        {
+            return Err(ScriptDomainError::TsRequiresCompare {
+                current: current.mode,
             });
         }
         if let Some(id) = &change.to_generation {

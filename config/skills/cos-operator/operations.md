@@ -123,7 +123,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 定期実行の一時停止 | `POST /api/v1/cron-jobs/<id>/pause` | cron_job.pause | body は `{}` |
 | 定期実行の再開 | `POST /api/v1/cron-jobs/<id>/resume` | cron_job.resume | body は `{}` |
 | 定期実行の手動実行 | `POST /api/v1/cron-jobs/<id>/run` | cron_job.run | body は `{}`。外部効果扱い（pending → applied）。同じ idempotency_key の再送は再実行しない |
-| TS 制御層の領域の mode の切り替え | `PUT /api/v1/script/domains/<domain>/mode` | script_domain.mode_set | `celerisctl script mode <domain> rust\|compare [--generation <bundle_sha256>] --expected-version <n>`。本文 `{"mode":"rust"\|"compare","expected_version","generation"?,"reason"?}`（`compare` は generation 必須）。`canary`・`ts` は 422（人の承認が要る）、版の不一致は 409。今の版は `celerisctl script domains`。進行中の測定 daemon では切り替えない |
+| TS 制御層の領域の mode の切り替え | `PUT /api/v1/script/domains/<domain>/mode` | script_domain.mode_set | `celerisctl script mode <domain> rust\|compare [--generation <bundle_sha256>] --expected-version <n>`。本文 `{"mode":"rust"\|"compare","expected_version","generation"?,"reason"?}`（`compare` は generation 必須）。`ts` への切り替えは人だけが行う（CoS は 403 `script_mode_requires_human` で rejected が残る）。`ts` からの戻し（`compare`・`rust`）は CoS も行える。`canary` と `cos_digest` 以外の `ts` は 422、版の不一致は 409。今の版は `celerisctl script domains`。進行中の測定 daemon では切り替えない |
 
 ### surface
 

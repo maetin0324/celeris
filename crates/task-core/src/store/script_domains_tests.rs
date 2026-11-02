@@ -96,7 +96,7 @@ fn script_domain_canary_and_ts_are_rejected_without_change() {
             .script_domain_set_mode(&change("lane_rules", to, Some(&g.id), 0), now())
             .unwrap_err();
         assert!(
-            matches!(err, ScriptDomainError::ModeNotEnabled(m) if m == to),
+            matches!(err, ScriptDomainError::ModeNotEnabled { mode, .. } if mode == to),
             "{err}"
         );
     }
@@ -110,12 +110,138 @@ fn script_domain_canary_and_ts_are_rejected_without_change() {
     for to in [ScriptMode::Canary, ScriptMode::Ts] {
         assert!(matches!(
             store.script_domain_set_mode(&change("lane_rules", to, Some(&g.id), 1), now()),
-            Err(ScriptDomainError::ModeNotEnabled(_))
+            Err(ScriptDomainError::ModeNotEnabled { .. })
         ));
     }
     let row = store.script_domain_mode("lane_rules").unwrap();
     assert_eq!((row.mode, row.version), (ScriptMode::Compare, 1));
     assert_eq!(event_count(&store), 1);
+}
+
+fn change_by(
+    domain: &str,
+    to: ScriptMode,
+    generation: Option<&str>,
+    expected: u64,
+    actor: &str,
+) -> ScriptModeChange {
+    ScriptModeChange {
+        actor: actor.into(),
+        ..change(domain, to, generation, expected)
+    }
+}
+
+/// S4-14: `ts` は `cos_digest` だけ・人の actor だけ・同じ generation の `compare` からだけ。戻しは誰でも。
+#[test]
+fn script_domain_ts_for_cos_digest_needs_human_and_compare_same_generation() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let g = loaded_generation(&store, &"c".repeat(64), &["cos_digest", "route_priority"]);
+    let g2 = loaded_generation(&store, &"d".repeat(64), &["cos_digest"]);
+    // rust からの直行は拒む。
+    assert!(matches!(
+        store.script_domain_set_mode(&change("cos_digest", ScriptMode::Ts, Some(&g.id), 0), now()),
+        Err(ScriptDomainError::TsRequiresCompare {
+            current: ScriptMode::Rust
+        })
+    ));
+    // generation が無い ts は拒む。
+    assert!(matches!(
+        store.script_domain_set_mode(&change("cos_digest", ScriptMode::Ts, None, 0), now()),
+        Err(ScriptDomainError::GenerationRequired)
+    ));
+    store
+        .script_domain_set_mode(
+            &change("cos_digest", ScriptMode::Compare, Some(&g.id), 0),
+            now(),
+        )
+        .unwrap();
+    // 人以外の actor は compare の後でも拒む。
+    for actor in [
+        "cos:01THREAD",
+        "operator:claude-code",
+        "mcp:client",
+        "system:script-startup",
+        "human:",
+    ] {
+        assert!(
+            matches!(
+                store.script_domain_set_mode(
+                    &change_by("cos_digest", ScriptMode::Ts, Some(&g.id), 1, actor),
+                    now()
+                ),
+                Err(ScriptDomainError::TsRequiresHuman(ref a)) if a == actor
+            ),
+            "{actor}"
+        );
+    }
+    // generation を同時に変える要求は拒む。
+    assert!(matches!(
+        store.script_domain_set_mode(
+            &change("cos_digest", ScriptMode::Ts, Some(&g2.id), 1),
+            now()
+        ),
+        Err(ScriptDomainError::TsRequiresCompare {
+            current: ScriptMode::Compare
+        })
+    ));
+    // 他の領域の ts は compare の後でも ModeNotEnabled。
+    store
+        .script_domain_set_mode(
+            &change("route_priority", ScriptMode::Compare, Some(&g.id), 0),
+            now(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store.script_domain_set_mode(
+            &change("route_priority", ScriptMode::Ts, Some(&g.id), 1),
+            now()
+        ),
+        Err(ScriptDomainError::ModeNotEnabled {
+            domain: ScriptDomain::RoutePriority,
+            mode: ScriptMode::Ts
+        })
+    ));
+    assert_eq!(event_count(&store), 2);
+    // 人の actor で compare → ts。
+    let out = store
+        .script_domain_set_mode(&change("cos_digest", ScriptMode::Ts, Some(&g.id), 1), now())
+        .unwrap();
+    let ScriptModeChangeOutcome::Changed { row, .. } = out else {
+        panic!("changed expected");
+    };
+    assert_eq!(
+        (row.mode, row.generation_id.as_deref(), row.version),
+        (ScriptMode::Ts, Some(g.id.as_str()), 2)
+    );
+    assert_eq!(row.updated_by, "human:web");
+    // 戻しは daemon でもできる（ts→compare、compare→rust）。
+    store
+        .script_domain_set_mode(
+            &change_by(
+                "cos_digest",
+                ScriptMode::Compare,
+                Some(&g.id),
+                2,
+                "cos:01THREAD",
+            ),
+            now(),
+        )
+        .unwrap();
+    store
+        .script_domain_set_mode(
+            &change_by(
+                "cos_digest",
+                ScriptMode::Rust,
+                None,
+                3,
+                "system:script-startup",
+            ),
+            now(),
+        )
+        .unwrap();
+    let row = store.script_domain_mode("cos_digest").unwrap();
+    assert_eq!((row.mode, row.version), (ScriptMode::Rust, 4));
+    assert_eq!(event_count(&store), 5);
 }
 
 #[test]

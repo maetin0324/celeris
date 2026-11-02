@@ -40,19 +40,77 @@ pub fn dist_dir() -> PathBuf {
     repo_root().join("control-ts/dist")
 }
 
-/// `control-ts/dist` の bundle。無い・読めないなら SKIP（`None`）。env が要求していれば失敗にする。
-pub fn dist_bundle(test: &str) -> Option<VerifiedBundle> {
-    match load_bundle_dir(&dist_dir()) {
-        Ok(bundle) => Some(bundle),
+/// bundle を作る設定（`domains` の key が bundle の manifest の `domains` になる）。
+pub fn bundle_config_path() -> PathBuf {
+    repo_root().join("control-ts/bundle.config.json")
+}
+
+/// `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら、使えない bundle を SKIP でなく失敗にする。
+pub fn require_bundle() -> bool {
+    std::env::var("CELERIS_SCRIPT_REQUIRE_BUNDLE").as_deref() == Ok("1")
+}
+
+/// `control-ts/dist` の bundle のうち、`domain` を含み、いまの `bundle.config.json` と同じ領域の集合を持つもの。
+/// 無い・読めない・古いなら SKIP（`None`）。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら失敗にする。
+pub fn dist_bundle(test: &str, domain: &str) -> Option<VerifiedBundle> {
+    usable_bundle(
+        &dist_dir(),
+        &bundle_config_path(),
+        test,
+        domain,
+        require_bundle(),
+    )
+}
+
+/// `dir` の bundle を使えるか判定する。`config` は `bundle.config.json` の path。
+///
+/// `control-ts/dist` は git 管理外なので、領域を足す前の source で作った古い bundle が作業ツリーに残りうる。
+/// 古い bundle（manifest の `domains` が config の `domains` の key 集合と違う、または `domain` を含まない）を
+/// 正として比べると、TS の実装でなく bundle の古さで落ちる。だから使えない bundle と同じく SKIP にする。
+/// `require` が真なら SKIP せず panic する。
+pub fn usable_bundle(
+    dir: &Path,
+    config: &Path,
+    test: &str,
+    domain: &str,
+    require: bool,
+) -> Option<VerifiedBundle> {
+    let skip = |why: String| {
+        assert!(
+            !require,
+            "CELERIS_SCRIPT_REQUIRE_BUNDLE=1 but {} is not usable: {why}",
+            dir.display()
+        );
+        eprintln!("SKIP {test}: {} is not usable: {why}", dir.display());
+    };
+    let bundle = match load_bundle_dir(dir) {
+        Ok(bundle) => bundle,
         Err(e) => {
-            assert!(
-                std::env::var("CELERIS_SCRIPT_REQUIRE_BUNDLE").as_deref() != Ok("1"),
-                "CELERIS_SCRIPT_REQUIRE_BUNDLE=1 but control-ts/dist is not usable: {e}"
-            );
-            eprintln!("SKIP {test}: control-ts/dist is not usable: {e}");
-            None
+            skip(e.to_string());
+            return None;
         }
+    };
+    let text = std::fs::read_to_string(config)
+        .unwrap_or_else(|e| panic!("read {}: {e}", config.display()));
+    let value: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", config.display()));
+    let expected: BTreeSet<String> = value["domains"]
+        .as_object()
+        .unwrap_or_else(|| panic!("{} has no domains object", config.display()))
+        .keys()
+        .cloned()
+        .collect();
+    let actual: BTreeSet<String> = bundle.manifest.domains.iter().cloned().collect();
+    if !actual.contains(domain) || actual != expected {
+        skip(format!(
+            "stale bundle: manifest domains {actual:?} (source_commit {}) do not match \
+             {} domains {expected:?} or lack {domain:?}; rebuild control-ts/dist",
+            bundle.manifest.source_commit,
+            config.display()
+        ));
+        return None;
     }
+    Some(bundle)
 }
 
 /// 同じ host（deno_core の actor）で bundle を起こし、判定の口にする。

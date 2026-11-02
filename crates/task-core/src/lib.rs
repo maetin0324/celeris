@@ -356,8 +356,8 @@ pub mod routing_audit;
 pub mod variant_wire;
 pub use model_policy::{
     LANE_POLICY_VERSION, LaneCeiling, LaneDecision, Level, ModelPolicy, RouteFeaturesRef,
-    RoutingRecord, TaskFeatureHints, TaskFeatures, WorkUnitLaneCap, decide_for_task,
-    decide_for_work_unit,
+    RoutingRecord, RuleMatch, TaskFeatureHints, TaskFeatures, WorkUnitLaneCap, decide_for_task,
+    decide_for_work_unit, decide_with, match_rule,
 };
 pub use retry_policy::{
     AttemptOutcome, AttemptRecord, BudgetState, EscalationAudit, EscalationPolicy,

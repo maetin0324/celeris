@@ -593,35 +593,72 @@ const RULES: &[LaneRule] = &[
     },
 ];
 
+/// ADR-0069 D3: 規則表で当たった規則（天井で丸める前）。`lane` は規則が出した lane
+/// （`LaneDecision.proposed` になる）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuleMatch {
+    pub rule_id: &'static str,
+    pub lane: Tier,
+    pub condition: &'static str,
+}
+
+/// 規則表を上から当て、最初に当たった規則を返す（天井は当てない）。
+pub fn match_rule(features: &TaskFeatures) -> RuleMatch {
+    RULES
+        .iter()
+        .find(|r| (r.when)(features))
+        .map(|r| RuleMatch {
+            rule_id: r.id,
+            lane: r.lane,
+            condition: r.condition,
+        })
+        .unwrap_or(RuleMatch {
+            rule_id: "standard/default",
+            lane: Tier::Standard,
+            condition: "no rule matched",
+        })
+}
+
+/// 当たった規則に天井（`LaneCeiling::clamp`）を当てて `LaneDecision` を作る。`source` は
+/// `Default`（呼び出し側が上書きする）。
+pub fn decide_with(
+    features: &TaskFeatures,
+    ceiling: &LaneCeiling,
+    matched: RuleMatch,
+) -> LaneDecision {
+    let RuleMatch {
+        rule_id: id,
+        lane: proposed,
+        condition,
+    } = matched;
+    let (lane, clamped_by) = ceiling.clamp(proposed);
+    let mut reasons = vec![format!("{id}: {condition}")];
+    if let Some(c) = &clamped_by {
+        reasons.push(c.clone());
+    }
+    LaneDecision {
+        lane,
+        proposed,
+        source: TierSource::Default,
+        rule_id: id.to_string(),
+        policy_version: LANE_POLICY_VERSION.to_string(),
+        features: *features,
+        reasons,
+        clamped_by,
+        hint: None,
+        escalation: None,
+    }
+}
+
 /// ADR-0069 D3: 決定的な lane policy。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ModelPolicy;
 
 impl ModelPolicy {
-    /// 規則表を上から当て、天井で丸める。`source` は `Default`（呼び出し側が上書きする）。
+    /// 規則表を上から当て（`match_rule`）、天井で丸める（`decide_with`）。`source` は `Default`
+    /// （呼び出し側が上書きする）。
     pub fn decide(&self, features: &TaskFeatures, ceiling: &LaneCeiling) -> LaneDecision {
-        let (id, proposed, condition) = RULES
-            .iter()
-            .find(|r| (r.when)(features))
-            .map(|r| (r.id, r.lane, r.condition))
-            .unwrap_or(("standard/default", Tier::Standard, "no rule matched"));
-        let (lane, clamped_by) = ceiling.clamp(proposed);
-        let mut reasons = vec![format!("{id}: {condition}")];
-        if let Some(c) = &clamped_by {
-            reasons.push(c.clone());
-        }
-        LaneDecision {
-            lane,
-            proposed,
-            source: TierSource::Default,
-            rule_id: id.to_string(),
-            policy_version: LANE_POLICY_VERSION.to_string(),
-            features: *features,
-            reasons,
-            clamped_by,
-            hint: None,
-            escalation: None,
-        }
+        decide_with(features, ceiling, match_rule(features))
     }
 }
 

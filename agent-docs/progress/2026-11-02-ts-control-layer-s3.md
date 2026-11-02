@@ -12,12 +12,12 @@ updated: 2026-11-02
 ## 結論
 - TS だけの編集を `bash scripts/dev/ts-verify.sh` で cargo を起動せずに検証できるようにした。`policy-ts`（`lane_rules.ts` の規則 1 件）は warm p50 5.031 秒・p95 7.406 秒、cold p95 11.525 秒で、目標（30 秒・60 秒・120 秒）を満たした。全 40 試行で cargo の起動 0 回、`link_count` 0。
 - warm p50 は S0 の baseline（policy warm 中央値 221.0 秒）の 2.3%。ただし検証の中身と cold の条件が違う（「時間の内訳」の注意）。
-- 合否は Rust の runner（`script-host-runner`）と `scripts/dev/` が決める。`control-ts/` の検証の道具・fixture・設定を変えると `ts-only` にならず、cargo の試験へ回る。
-- release gate は変えていない。全体試験は減っていない。
+- 合否は Rust の runner（`script-host-runner`）と `scripts/dev/` が決める。`control-ts/` の検証の道具・fixture・設定を変えると `ts-only` にならず、cargo の試験に加えて `ts-verify.sh --grade` が候補の作業ツリーを runner で採点する（unit grade-gate）。
+- release gate は変えていない。全体試験は減っていない。release gate は control-ts の採点を持たないままで、これは未解決 10 に残した。
 - 本番の操作は無い。runner は検証専用で daemon の経路に入らず、本番への移行はない。
 - 人に残る判断は無い。後続への申し送りは「未解決」と「提案」に書いた（cos の TS scenario は S4 の後に S6 で測る）。
 
-設計は [ADR 2026-11-02-ts-fast-verify](../adr/2026-11-02-ts-fast-verify.md)（本文 (1)〜(7)、付記 wire・close）。境界 ADR への付記は [付記 S3](../adr/2026-11-02-ts-control-layer-boundary.md)。
+設計は [ADR 2026-11-02-ts-fast-verify](../adr/2026-11-02-ts-fast-verify.md)（本文 (1)〜(7)、付記 wire・close・grade-gate）。境界 ADR への付記は [付記 S3](../adr/2026-11-02-ts-control-layer-boundary.md)。
 
 ## unit と commit
 記録は `agent-docs/progress/2026-11-02-ts-control-layer-s3/<unit>.md`。
@@ -33,9 +33,11 @@ updated: 2026-11-02
 | [measure-warm](2026-11-02-ts-control-layer-s3/measure-warm.md) | `phase s3: measure-warm: policy-ts の warm 20 試行を測り目標と照合する` | [policy-ts-warm.jsonl](2026-11-02-ts-control-layer-s3/policy-ts-warm.jsonl) |
 | [measure-cold](2026-11-02-ts-control-layer-s3/measure-cold.md) | `phase s3: measure-cold: policy-ts の cold 20 試行を測り目標と照合する` | [policy-ts-cold.jsonl](2026-11-02-ts-control-layer-s3/policy-ts-cold.jsonl) |
 | close | `phase s3: close: S3 の進捗まとめ・ADR と実装の突き合わせ・地図の確認` | この記録、ADR の付記 close、境界 ADR の付記 S3、地図の行 |
+| [grade-gate](2026-11-02-ts-control-layer-s3/grade-gate.md) | `phase s3: grade-gate: ts-verify --grade と test-affected の採点の接続` | final review の条件 3 への対応。`ts-verify.sh --grade`、`test-affected.sh` の接続、場合 J、ADR の付記 grade-gate |
+| reclose | `phase s3: reclose: S3 の記録と ADR の付記を grade-gate に合わせて直す` | この記録の直し、ADR の close-6 と grade-gate-4 (d)、地図の行 |
 
 ## 受け入れ条件ごとの証拠
-結果は提出時の HEAD で実行した（基準は `$CELERIS_WU_BASE`）。「写し」は `$TMPDIR` に作業ツリーを写して commit した基準で、1 回だけ確かめたもの。試験には入っていない。
+結果は unit close の提出時の HEAD で実行した（基準は `$CELERIS_WU_BASE`）。grade-gate の後に再実行した結果は「unit reclose の検査」に書いた（`test-ts-verify.sh` は場合 J を足して 12 件から 14 件になった）。「写し」は `$TMPDIR` に作業ツリーを写して commit した基準で、1 回だけ確かめたもの。試験には入っていない。
 
 ### 0. 代表的な TS 変更の検証が Rust の再 compile・relink なしで通る
 - 分類（写しで `bash scripts/dev/ts-verify.sh --list` と `bash scripts/dev/test-affected.sh --list`。各 file に空行を 1 行足した）:
@@ -67,6 +69,11 @@ updated: 2026-11-02
 | `src/domains/index.ts` から `route_priority` を消す | `ts-only`、段 unit で exit 1。runner は `exception` 2,026 件で exit 1 | 写し |
 
 grader の保護: 合否の表は `script-host-runner.rs`（Rust）と `scripts/dev/` が持つ。`crates/script-runtime/tests/script_host_runner.rs` が一致・不一致・例外・宣言外と bundle の拒否を固定する（`cargo nextest run -p celeris-script --test script_host_runner` の結果は下の検査）。`scripts/dev/` 自身の書き換えは `rust` になり、`test-ts-verify.sh` が走る（`--list` で確かめた）。
+
+`host-api` の変更でも `ts-verify.sh --grade` が本物の runner で採点する（ADR 付記 grade-gate、unit grade-gate）。`control-ts/` か `docs/api/script-host/` を含み `ts-only` でない変更では、`test-affected.sh` が `ts-verify.sh --grade --record` を走らせ、非 0 なら exit 1 で終わる。段 `golden` は `compare.mjs` を使わず、fixture と cache の golden の `cmp` と `script-host-runner run --suite golden` で決める。
+- 場合 J（`test-ts-verify.sh` の 2 件の確認）: final review の破壊（`lane_rules.ts` の規則を壊し、`compare.test.mjs` の該当試験を `test.skip` にする）は `host-api` で、`test-affected.sh --list` が `ts-verify-grade` を選ぶ。引数なしの `ts-verify.sh` は「従来の経路へ」で exit 0 だが、`--grade` は段 `unit` を通ったあと段 `golden`（runner）で exit 1 になる。無害な `host-api` の変更は `--grade` で 10 段 exit 0、cargo 0 回。
+- `control-ts/scripts/test-affected.test.mjs` が、偽の `ts-verify.sh` で `--grade --record` の呼び出しと失敗の伝播を固定する。
+- 残る限界: 分類が `rust` の変更では `--grade` も従来の経路へ抜ける（未解決 8）。
 
 ### cache key と golden の無効化
 `bash scripts/dev/tests/script-runner-cache-key.sh` → exit 0、30 passed。host の source（`script-runtime`・`task-core`・ルート `Cargo.toml`・未追跡 file・未 commit の編集）などで key が変わること、golden が meta と違えば `path` が exit 1、Rust の golden が fixture と違えば `ensure` が exit 1、golden の元の crate の閉包が一覧と違えば `ensure` が exit 1 になることを固定した。
@@ -100,8 +107,9 @@ grader の保護: 合否の表は `script-host-runner.rs`（Rust）と `scripts/
 - 試行数は policy-ts 20 に対し baseline は warm 3・cold 1。時期と host の負荷も違う。遅い試行の原因は未確認（measure-warm・measure-cold の記録）。
 
 ### 3. full regression を削らず、API・Rust の変更で full が走る
+- `host-api` の変更では、cargo の試験に加えて `ts-verify.sh --grade` が候補を runner で採点する（条件 1 の「grader の保護」）。条件 0 の表は unit close の時点の分類で、`control-ts/` か `docs/api/script-host/` を含み `ts-only` でない行には今は `control-ts: ts-verify-grade` の行が足される。
 - Host API・Rust の変更で cargo の試験が残る: 条件 0 の表。`bash scripts/dev/test-ts-verify.sh` の場合 H（`host.d.ts`・schema で `celeris-script` を選ぶ）、`bash scripts/dev/tests/test-affected-list.sh` → exit 0（`test-affected-list: ok`）。wire の記録で `celeris-script` と逆依存の nextest 915 passed。
-- release gate を変えていない: `git diff --stat "$(git merge-base HEAD main)" HEAD -- scripts/selfdeploy/ .config/nextest.toml` → 差分なし。`scripts/selfdeploy/release.sh` は ts-verify を呼ばない。全体試験は release gate だけで走る（[全体試験は release だけ](../adr/2026-10-20-full-tests-at-release-only.md)）。
+- release gate を変えていない: `git diff --stat "$(git merge-base HEAD main)" HEAD -- scripts/selfdeploy/ .config/nextest.toml` → 差分なし。`scripts/selfdeploy/release.sh` は ts-verify を呼ばない（`--grade` の採点も `test-affected.sh` の経路だけにあり、release gate には入らない。未解決 10）。全体試験は release gate だけで走る（[全体試験は release だけ](../adr/2026-10-20-full-tests-at-release-only.md)）。
 - nightly の gate はこの repo に無い（ADR 付記 close-7）。
 
 ### WorkUnit close の条件
@@ -119,18 +127,33 @@ grader の保護: 合否の表は `script-host-runner.rs`（Rust）と `scripts/
   - `cargo fmt --all -- --check` → exit 0。
   - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` → この記録、2 つの ADR、`docs/architecture-map.md` の 4 file だけ。
 
+### unit reclose の検査
+提出時の HEAD で実行した。この unit の差分は文書だけである。基準は `$CELERIS_WU_BASE`。
+- `sh scripts/dev/check-doc-links.sh` → exit 0。`sh scripts/dev/check-adr-numbers.sh` → exit 0（357 files）。`sh scripts/dev/progress-index.sh --check` → exit 0。
+- `python3 scripts/dev/check-architecture-map.py` → exit 0、850 件のパスを確認した。
+- `bash scripts/dev/test-affected.sh` → exit 0、`試験対象の変更なし（docs のみ等）`。grade-gate の試験はこの中では走らないので、次の 2 件を直に走らせた。
+- `bash scripts/dev/test-ts-verify.sh` → exit 0、14 passed、0 failed（場合 J の 2 件を含む）。
+- `cd control-ts && node --test scripts/test-affected.test.mjs` → exit 0、pass 8、fail 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- release gate の確かめ: `git diff --stat "$(git merge-base HEAD main)" HEAD -- scripts/selfdeploy .config/nextest.toml` → 差分なし。`git grep -n 'control-ts\|ts-verify\|test-affected' -- scripts/selfdeploy` の当たりは `release.sh` の注記 1 行だけ。release gate 自体は実行していない。
+
 ## 未解決
-1. **検証の道具を変えた変更で、作り直した bundle を runner に通さない場合がある**（ADR 付記 close-6）。`control-ts/scripts/**`（`build-bundle.mjs` など）・`host.d.ts`・`package.json` の変更では key が変わらず、`test-ts-verify.sh` が走らない。`test-affected.sh` は control-ts の試験と `celeris-script` の cargo の試験を走らせるが、`crates/celeris` の本物の host の試験は古い dist で SKIP することがある（S2-12 (4)）。
+1. **解決済み（unit grade-gate）**: 検証の道具を変えた変更で、作り直した bundle を runner に通さない場合があった（ADR 付記 close-6）。`control-ts/scripts/**`（`build-bundle.mjs` など）・`host.d.ts`・`package.json` の変更でも、今は `test-affected.sh` が `ts-verify.sh --grade` を走らせ、候補の作業ツリーを runner で採点する。場合 J が固定している（ADR 付記 grade-gate-3）。これらの変更で `test-ts-verify.sh` が走らないことは変わらない。
 2. **S2-7 の capability の拒否が daemon に無い**（境界 ADR の付記 S3）。今は `Grant` で実効の権限を絞っており、`lane_rules`・`route_priority` は op を呼べない。
 3. `integrate-build` の検査で repair-build-1 が走り、範囲外の `crates/task-dispatch` の試験（`integration_ready_race.rs:293` の `expired_lease_during_stage_integration_is_extended_not_reclaimed`）を原因として plan_issue を返した。負荷下の flaky と推定しているが、再現は未確認。S3 では直していない。
 4. runner の値の検査の上限は `task-dispatch::script_policy` の写しで、一致を固定する試験が無い（手で比べて同じ。ADR 付記 close-9）。
 5. runner の cache が外れた状態の cold は測っていない。60.6 秒に cold の最大 14.352 秒を足すと約 75 秒で 120 秒以下だが、足し算の推定である。
 6. cos の TS scenario は測っていない。S4 の後に S6 で測る。条件 2 の cos の比は編集の中身が違う参考値である。
 7. 実際の activate（DB の generation の行と `compare` への CAS）を含む edit→activate は測っていない（境界 ADR の付記 S3）。S6 で測る。
+8. 分類が `rust` の変更（例: `crates/celeris/` と `control-ts/` の同時の変更）では `--grade` も従来の経路へ抜け、key の入力か検証の道具が変わらない限り候補の control-ts は runner で採点されない（ADR 付記 grade-gate-4 (a)）。
+9. `--grade` の段 `bundle` は候補の `build-bundle.mjs` を使う。bundle の作り方を書き換える変更は差分として reviewer に渡る（ADR 付記 grade-gate-4 (b)）。
+10. **release gate は control-ts の採点を持たない。grade-gate では直しておらず、今も残る**（ADR 付記 grade-gate-4 (d)。release gate は実行せず、script を読んで確かめた）。`scripts/selfdeploy/release.sh` と `scripts/dev/test-parallel.sh` は `test-affected.sh`・`ts-verify.sh`・bundle の作成を呼ばず、`CELERIS_SCRIPT_REQUIRE_BUNDLE` を設定しない（`release.sh` の `test-affected.sh` の文字は注記だけ）。build tree は `git clean -ffdx` か新しい worktree で作るので git 管理外の `control-ts/dist` が無く、`crates/celeris/tests` の dist を読む試験は SKIP で passed に数えられる。S2 の提案 1 と同じ穴で、解決の案は提案 7。
 
 ## 提案
 1. **S6**: cos の TS scenario を、S4 の後に `edit-activate-baseline.sh` へ足して warm・cold を各 20 試行測る。本物の activate を含めた秒も同じ場で測る。
 2. **S4 の前に決める**: S2-7 の拒否を daemon に実装するか、S2-7 からこの文を消すか。op を使う最初の領域（digest）で許可表が空でなくなる前に決める。manifest に領域ごとの宣言が無いので、実装するなら manifest の形の変更を伴う。
-3. **別 task**: `test-affected.sh` で `control-ts/` の `src/` 以外の変更と `host.d.ts` の変更にも `test-ts-verify.sh` を走らせる（未解決 1）。
+3. **解決済み（unit grade-gate）**: `control-ts/` の `src/` 以外の変更と `host.d.ts` の変更でも runner で採点する（未解決 1）。`test-ts-verify.sh` ではなく `ts-verify.sh --grade` を走らせる形にした。
 4. **別 task**: `crates/celeris/tests` に、runner の値の検査と `classify_lane_rules`・`classify_route_priority` の一致を固定する試験を置く（未解決 4）。
 5. **別 task**: `integration_ready_race.rs:293` の flaky の推定を、時計の差し替えで確かめて直す（未解決 3）。
+6. **別 task**: `--grade` を、分類が `rust` でも `control-ts/`・`docs/api/script-host/` に変更があれば 10 段を通すようにする（未解決 8）。
+7. **別 task**: release gate で `control-ts` の bundle を作り、`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` で本物の host の試験を走らせる（未解決 10。S2 の提案 1 と同じ）。

@@ -316,7 +316,7 @@ fixture を手で書き換えた変更は `host-api` に分類されるうえ、
 - **close-6（(6) の `host-api`）**: 「key が変わるので TS の段も runner を作り直して走らせる」は、key の入力（`docs/api/script-host/host-v1.schema.json`・`crates/script-runtime/`・`crates/task-core/`・
   `Cargo.lock`・ルート `Cargo.toml`）か検証の道具（`scripts/dev/` の 4 file）が変わったときだけ成り立つ。そのとき走るのは `test-ts-verify.sh` で、作業ツリーの写しに無害な編集を足して 10 段を通す。
   `control-ts/src/host.d.ts`・`control-ts/scripts/**`・`control-ts/fixtures/**`・`control-ts/package.json` などの変更では key が変わらず、`test-ts-verify.sh` は走らない。
-  走るのは `celeris-script` と逆依存の cargo の試験と control-ts の型検査・単体試験（fixture では `script_fixtures` の crate も）である（進捗の未解決に残す）。
+  走るのは `celeris-script` と逆依存の cargo の試験と control-ts の型検査・単体試験（fixture では `script_fixtures` の crate も）である。これらの変更の採点は下の付記 grade-gate の `ts-verify.sh --grade` が担う（grade-gate-1・grade-gate-3）。この close-6 の時点で残した抜け道は grade-gate で塞いだ。残る限界は grade-gate-4 に書いた。
 - **close-7（(6) の nightly）**: nightly の gate はこの repo で見つからなかった（`git grep -il nightly -- scripts config` の当たりは `edit-activate-baseline.sh` の「nightly を使わない」という注記だけで、`.github/` は無い）。全体試験の gate は `scripts/selfdeploy/release.sh` だけで、
   `git diff` で `scripts/selfdeploy/` に差分が無いことを確かめた。
 - **close-8（(7) の prime と記録の形）**: warm の prime は「編集なしで 1 回」ではなく、`step=runner-ensure` と、編集を当てて 1 回走らせる `step=ts-verify` の 2 行にした。編集なしでは ts-verify が分類 `none` で抜け、何も温まらないため。
@@ -355,4 +355,4 @@ lockfile・`bundle.config.json`・`fixtures/**` と `docs/api/script-host/` の�
 - **grade-gate-4（残る限界）**: (a) 分類が `rust`（例: `crates/celeris/` と `control-ts/` の同時の変更）では `--grade` も引数なしと同じく従来の経路へ抜ける。
   key の入力（`crates/script-runtime/`・`crates/task-core/` など）か検証の道具が変われば `test-ts-verify.sh` が写しで 10 段を通すが、それ以外の Rust の変更と組んだ
   `control-ts/` の破壊は runner で採点されない。(b) 段 `bundle` は候補の `control-ts/scripts/build-bundle.mjs` と `bundle.config.json` を使う。
-  領域の集合は runner が Rust の表と照合する（exit 3）が、bundle の作り方そのものを書き換える変更は差分として reviewer に渡る。(c) (5) の限界（branch 自身の `scripts/dev/` の書き換え）は変わらない。この unit の差分も `scripts/dev/` を含むので分類は `rust` で、`test-affected.sh` の `--grade` は従来の経路へ抜けた（代わりに `test-ts-verify.sh` が写しで 14 件を確かめた）。
+  領域の集合は runner が Rust の表と照合する（exit 3）が、bundle の作り方そのものを書き換える変更は差分として reviewer に渡る。(c) (5) の限界（branch 自身の `scripts/dev/` の書き換え）は変わらない。この unit の差分も `scripts/dev/` を含むので分類は `rust` で、`test-affected.sh` の `--grade` は従来の経路へ抜けた（代わりに `test-ts-verify.sh` が写しで 14 件を確かめた）。(d) release gate は control-ts の採点を持たないまま残る。grade-gate-1 の `--grade` は `test-affected.sh` の経路だけにある。`scripts/selfdeploy/release.sh` と `scripts/dev/test-parallel.sh` は `test-affected.sh`・`ts-verify.sh`・bundle の作成を呼ばず、`CELERIS_SCRIPT_REQUIRE_BUNDLE` を設定しない。build tree に `control-ts/dist` は無いので、`crates/celeris/tests` の dist を読む試験は SKIP で通る（release gate は実行せず、script を読んで確かめた。(6) のとおり別 task）。

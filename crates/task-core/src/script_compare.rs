@@ -12,9 +12,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// `route_priority` の出力の `basis`（S2-2・S2-10）。正本は `llm_route` の enum（snake_case）。
+pub use crate::llm_route::RoutePriorityBasis;
 use crate::llm_route::{CandidateKey, ExecutionClass, HarnessId, Registry};
+
+mod route_priority_fixture;
 use crate::model_policy::TaskFeatures;
 use crate::store::StoreError;
+pub use route_priority_fixture::route_priority_fixture_jsonl;
 
 /// TS 制御層の領域（S2-1）。表 `script_domain_modes` の `domain`。
 #[derive(
@@ -285,6 +290,25 @@ impl RoutePriorityInput {
                 class_defaults,
                 cos_route_candidates: list(&registry.cos_route_candidates),
             },
+        }
+    }
+}
+
+/// `route_priority` の出力 DTO（S2-2）。`llm_route::route_priority_decide` の結果をそのまま写す。
+/// 欄の順は宣言順（`basis`・`candidates`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RoutePriorityOutput {
+    pub basis: RoutePriorityBasis,
+    pub candidates: Vec<CompareCandidate>,
+}
+
+impl RoutePriorityOutput {
+    /// `route_priority_decide` の `(basis, 列)` から作る（列の順・重複はそのまま）。
+    pub fn from_decision((basis, candidates): (RoutePriorityBasis, &[CandidateKey])) -> Self {
+        Self {
+            basis,
+            candidates: candidates.iter().map(CompareCandidate::from).collect(),
         }
     }
 }

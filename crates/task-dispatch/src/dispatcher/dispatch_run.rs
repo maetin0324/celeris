@@ -610,6 +610,8 @@ impl Dispatcher {
                     .and_then(|o| o.evidence_table_id.clone()),
             },
         );
+        // 付記 S2-11: `route_priority` の compare（mode compare の時だけ。記録だけで、route と trace は変えない）。
+        self.compare_route_priority(task.id, &run_id, &route_input, &route_trace);
         if let (Some(record), Some(decision)) = (lane_assist_record, route_trace.decision.as_mut())
         {
             decision.lane_assist = Some(record);

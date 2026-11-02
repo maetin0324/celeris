@@ -411,3 +411,38 @@ TS の生の JSON の key 順・空白は deserialize で消えるので比較�
 - S2-5 の起動時の戻しは、generation の bundle と読み込めた bundle の hash の比較に一本化する。`[script]` が無い・bundle を読めない場合は「読み込めた bundle なし」として戻す。
   `host_api` の不一致は manifest の検証で load が失敗するので、この場合に含まれる。
 - `Denied` の S2-8 の code は host の op の理由文で分ける。`outside the request scope` を含めば `denied_scope`、それ以外は `denied_capability`。
+
+### S2-10 route_priority の basis の規則（2026-11-02）
+記録は [S2 route-prio core](../progress/2026-11-02-ts-control-layer-s2/route-prio/core.md)。
+- `llm_route::route_priority_decide(registry, harness, lane, cos, execution_class) -> (RoutePriorityBasis, &[CandidateKey])` が列と basis を返す。`route_priority` は同じ signature の薄い包みで、列だけを返す（挙動不変）。
+- 列の選び方は分ける前と同じ。上から最初に当たった列を使う。
+  1. `cos == true` → `cos_route_candidates`（basis `cos`）。
+  2. `execution_class` があり、その harness に同じ class の行が宣言されている → その行（basis `execution_class`）。
+  3. harness×lane の行が宣言されている → その行（basis `lane`）。lane が `null` のときは空文字 `""` の lane として引く（`unwrap_or_default`）。したがって `""` の行があれば lane `null` でもその行が当たる。
+  4. harness 全体の `route_defaults` が宣言されている → その行（basis `harness`）。
+  5. どれも無い → 空（basis `none`）。
+- 選んだ列が空なら、列の種類によらず basis は `none` にする。空の列は宣言されていても下の列へ落ちない（空の class 行・空の lane 行・空の `cos_route_candidates` は、そのまま空の出力になる）。
+- 未知の class（その harness に行が無い class）は 2 に当たらず 3 以降へ進む。未知の lane も同じく 4 へ進む。
+- 候補の重複は除かない。列の要素はそのままの順で返す。
+
+### S2-11 route_priority の compare の結線（2026-11-02）
+記録は [S2 route-prio hook](../progress/2026-11-02-ts-control-layer-s2/route-prio/hook.md)。S2-1 の「`route_select_one` の最初の `route_priority` の 1 か所」を次のように実装する。
+- `route_select`（`route_select.rs` の純粋関数）は変えない。結線は `dispatch_run.rs` の `select_route_with` の直後の 1 か所だけで、
+  `Dispatcher::compare_route_priority(task_id, run_id, route_input, route_trace)`（本体は `dispatcher/script_compare.rs`）を呼ぶ。
+  `review_spawn` の reviewer の route 選択、`lane_assist` の試走（lane ごとの `select_route`）、CoS chat の route 選択、
+  `order_by_headroom` の得点の `route_priority`、frontier 列の後ろの列の `route_priority` では呼ばない。
+- `route_input.cos == true` なら比べない（dispatch_run の CoS task の run も含む）。
+- 1 判定で 1 件だけ記録する。比べる harness は `RouteTrace.harness`（選んだ harness、全部が断ったときは最後に試した harness）。
+  `None`（harness の選択そのものが失敗）なら記録しない。failover で試した harness を全部記録しないのは、毎回 2 件になり
+  S2-4 の「同じ task・同じ domain の直前の記録」との重複の抑えが効かなくなるため。
+- 入力 DTO と Rust の出力は、その harness・`route_input.lane`・`cos = false`・`route_input.harness.execution_class` で
+  `RoutePriorityInput::redacted` と `route_priority_decide` を当て直して作る（`route_select_one` の最初の `route_priority` と同じ引数）。
+  比べるのはこの列で、frontier 列を前に足した後の `RouteTrace.candidates` ではない。
+- `call_site` は `route_select.route_select_one`、`run_id` は dispatch_run が作った run の id。`input_digest` は run id を含まないので、
+  同じ入力の判定が run ごとに繰り返されても重複の抑えが効く。
+- mode が `rust` なら DTO を作らず TS を呼ばない。mode は tick ごとに 1 回、両領域の行を一度に読む。generation の確認・`unavailable`・
+  deadline・in-flight の上限（両領域の合計で `MAX_IN_FLIGHT_COMPARES`）・記録は `lane_rules` と同じ経路を通る。dispatcher は TS を待たない。
+- 空の列（basis `none`）も記録する。route はそのまま `NoDeclaredDefault` で断る（TS が候補を返しても変わらない）。
+- `classify_route_priority` の判定: `basis` と `candidates` の byte 一致で `match`／`mismatch`、候補 256 件超・未知の basis・
+  未知の欄は `invalid_output`。TS の候補のどれかが入力 `table` のどの列（`route_defaults`・`lane_route_defaults`・`class_defaults`・
+  `cos_route_candidates`）にも無ければ、outcome は `mismatch` のまま `safety_violations` に `undeclared_candidate` を入れる。

@@ -169,6 +169,10 @@ impl PolicyScript for Slow {
             })
         })
     }
+
+    fn route_priority(&self, _input: RoutePriorityInput, deadline: Duration) -> PolicyFuture<'_> {
+        self.lane_rules(LaneRulesInput::redacted(&features()), deadline)
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -181,4 +185,149 @@ async fn script_compare_call_stops_waiting_at_deadline() {
     .await;
     assert_eq!(result, TsResult::DeadlineExceeded(SCRIPT_CALL_DEADLINE));
     assert_eq!(elapsed, SCRIPT_CALL_DEADLINE);
+}
+
+fn key(source: &str, model: &str) -> task_core::llm_route::CandidateKey {
+    task_core::llm_route::CandidateKey {
+        source: source.into(),
+        model: model.into(),
+    }
+}
+
+/// harness `h` の lane `cheap` の列 [a/m, b/m]、harness 全体の列 [c/m]、CoS の列 [d/m]。
+fn route_registry() -> Registry {
+    let mut r = Registry::default();
+    r.route_defaults.insert("h".into(), vec![key("c", "m")]);
+    r.lane_route_defaults.insert(
+        ("h".into(), "cheap".to_owned()),
+        vec![key("a", "m"), key("b", "m")],
+    );
+    r.route_defaults.insert("other".into(), vec![key("z", "m")]);
+    r.cos_route_candidates = vec![key("d", "m")];
+    r
+}
+
+fn route_draft(lane: Option<&str>) -> CompareDraft {
+    CompareDraft::route_priority(
+        "01GEN".into(),
+        "ab".repeat(32),
+        "1.0.0".into(),
+        Some("01RUN".into()),
+        &route_registry(),
+        &"h".into(),
+        lane,
+        false,
+        None,
+    )
+}
+
+fn route_parts(draft: &CompareDraft) -> (RoutePriorityOutput, RoutePriorityInput) {
+    match &draft.domain {
+        DraftDomain::RoutePriority { input, rust } => (rust.clone(), input.clone()),
+        DraftDomain::LaneRules { .. } => panic!("not route_priority"),
+    }
+}
+
+#[test]
+fn script_compare_route_priority_classify_match_mismatch_and_undeclared() {
+    let (rust, input) = route_parts(&route_draft(Some("cheap")));
+    assert_eq!(
+        serde_json::to_value(&rust).unwrap(),
+        serde_json::json!({"basis": "lane", "candidates": [
+            {"source": "a", "model": "m"}, {"source": "b", "model": "m"}]})
+    );
+    let c = classify_route_priority(&rust, &input, &reply(serde_json::to_value(&rust).unwrap()));
+    assert_eq!(c.outcome, CompareOutcome::Match);
+    assert!(c.safety_violations.is_empty() && c.error.is_none());
+    // 順序だけ違う・basis だけ違う・他の列の宣言済み候補は mismatch で、安全違反ではない。
+    for ts in [
+        serde_json::json!({"basis": "lane", "candidates": [
+            {"source": "b", "model": "m"}, {"source": "a", "model": "m"}]}),
+        serde_json::json!({"basis": "harness", "candidates": [
+            {"source": "a", "model": "m"}, {"source": "b", "model": "m"}]}),
+        serde_json::json!({"basis": "cos", "candidates": [{"source": "d", "model": "m"}]}),
+        serde_json::json!({"basis": "none", "candidates": []}),
+    ] {
+        let c = classify_route_priority(&rust, &input, &reply(ts.clone()));
+        assert_eq!(c.outcome, CompareOutcome::Mismatch, "{ts}");
+        assert!(c.safety_violations.is_empty(), "{ts}");
+        assert_eq!(c.ts, Some(ts));
+    }
+    // 他の harness の列（入力に無い）や存在しない候補は undeclared_candidate。
+    for ts in [
+        serde_json::json!({"basis": "harness", "candidates": [{"source": "z", "model": "m"}]}),
+        serde_json::json!({"basis": "lane", "candidates": [
+            {"source": "a", "model": "m"}, {"source": "a", "model": "other"}]}),
+    ] {
+        let c = classify_route_priority(&rust, &input, &reply(ts.clone()));
+        assert_eq!(c.outcome, CompareOutcome::Mismatch, "{ts}");
+        assert_eq!(c.safety_violations, vec!["undeclared_candidate".to_owned()]);
+    }
+}
+
+#[test]
+fn script_compare_route_priority_classify_invalid_and_errors() {
+    let (rust, input) = route_parts(&route_draft(Some("cheap")));
+    let many: Vec<serde_json::Value> = (0..=ROUTE_PRIORITY_CANDIDATES_MAX)
+        .map(|_| serde_json::json!({"source": "a", "model": "m"}))
+        .collect();
+    let at_max = serde_json::json!({"basis": "lane", "candidates": many[1..].to_vec()});
+    assert_eq!(
+        classify_route_priority(&rust, &input, &reply(at_max)).outcome,
+        CompareOutcome::Mismatch
+    );
+    for raw in [
+        serde_json::json!({"basis": "lane", "candidates": many}),
+        serde_json::json!({"basis": "unknown", "candidates": []}),
+        serde_json::json!({"basis": "lane"}),
+        serde_json::json!({"basis": "lane", "candidates": [], "extra": 1}),
+        serde_json::json!({"basis": "lane", "candidates": [{"source": "a"}]}),
+        serde_json::Value::Null,
+    ] {
+        let c = classify_route_priority(&rust, &input, &reply(raw.clone()));
+        assert_eq!(c.outcome, CompareOutcome::InvalidOutput, "{raw}");
+        assert_eq!(c.error.as_ref().unwrap().kind, "invalid_output");
+        assert!(c.safety_violations.is_empty());
+    }
+    let mut denied = PolicyScriptError::new("denied", "capability");
+    denied.safety_violation = Some("denied_capability".into());
+    let c = classify_route_priority(&rust, &input, &TsResult::Error(denied));
+    assert_eq!(c.outcome, CompareOutcome::TsError);
+    assert_eq!(c.safety_violations, vec!["denied_capability".to_owned()]);
+    let c = classify_route_priority(
+        &rust,
+        &input,
+        &TsResult::DeadlineExceeded(SCRIPT_CALL_DEADLINE),
+    );
+    assert_eq!(c.outcome, CompareOutcome::TsError);
+    assert_eq!(c.error.unwrap().kind, "timeout");
+}
+
+#[test]
+fn script_compare_route_priority_draft_records_run_and_table_of_one_harness() {
+    let draft = route_draft(None);
+    let (rust, _) = route_parts(&draft);
+    assert_eq!(
+        serde_json::to_value(&rust).unwrap(),
+        serde_json::json!({"basis": "harness", "candidates": [{"source": "c", "model": "m"}]})
+    );
+    let rec = draft
+        .finish(
+            &reply(serde_json::to_value(&rust).unwrap()),
+            Duration::from_micros(5),
+        )
+        .unwrap();
+    assert_eq!(rec.domain, ScriptDomain::RoutePriority);
+    assert_eq!(rec.call_site, ROUTE_PRIORITY_CALL_SITE);
+    assert_eq!(rec.run_id.as_deref(), Some("01RUN"));
+    assert_eq!(rec.outcome, CompareOutcome::Match);
+    let input = rec.input.unwrap();
+    assert_eq!(input["harness"], "h");
+    assert_eq!(input["lane"], serde_json::Value::Null);
+    assert_eq!(input["cos"], false);
+    // 他の harness（`other`）の列は入力に写さない（S2-3）。
+    assert!(!input.to_string().contains("\"z\""), "{input}");
+    let un = draft.unavailable("no policy script runtime").unwrap();
+    assert_eq!(un.outcome, CompareOutcome::Unavailable);
+    assert_eq!(un.call_site, ROUTE_PRIORITY_CALL_SITE);
 }

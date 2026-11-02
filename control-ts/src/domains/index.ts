@@ -1,6 +1,7 @@
 import type { RequestContext } from "celeris:host";
 import { hostSelftest } from "./host_selftest";
 import { laneRules } from "./lane_rules";
+import { routePriority } from "./route_priority";
 
 export type DomainHandler = (input: unknown, ctx: RequestContext) => Promise<unknown>;
 
@@ -8,4 +9,5 @@ export type DomainHandler = (input: unknown, ctx: RequestContext) => Promise<unk
 export const domains: Record<string, DomainHandler> = {
   host_selftest: hostSelftest,
   lane_rules: laneRules,
+  route_priority: routePriority,
 };

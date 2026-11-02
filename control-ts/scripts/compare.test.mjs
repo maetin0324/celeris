@@ -44,3 +44,33 @@ test("a TS error is reported as a failure", async () => {
 test("an unknown domain is rejected", async () => {
   await assert.rejects(compare("nope"), /unknown domain: nope/);
 });
+
+const routeLines = readFileSync(path.join(pkg, "fixtures/route_priority/cases.jsonl"), "utf8").split("\n");
+routeLines.pop();
+
+test("route_priority matches every line of the committed fixture", async () => {
+  const r = await compare("route_priority");
+  assert.equal(r.total, routeLines.length);
+  assert.equal(r.matched, routeLines.length);
+  assert.deepEqual(r.failures, []);
+});
+
+test("route_priority: a changed candidate order is reported as a mismatch", async () => {
+  const row = JSON.parse(routeLines.find((l) => JSON.parse(l).candidates.length >= 2));
+  row.candidates.reverse();
+  const file = path.join(work, "route-bad.jsonl");
+  writeFileSync(file, `${JSON.stringify(row)}\n`);
+  const r = await compare("route_priority", { fixture: file });
+  assert.equal(r.matched, 0);
+  assert.deepEqual(r.failures[0].fields, ["candidates"]);
+});
+
+test("route_priority: an extra input field is reported as a TS error", async () => {
+  const row = JSON.parse(routeLines[0]);
+  row.input.extra = 1;
+  const file = path.join(work, "route-err.jsonl");
+  writeFileSync(file, `${JSON.stringify(row)}\n`);
+  const r = await compare("route_priority", { fixture: file });
+  assert.equal(r.matched, 0);
+  assert.match(r.failures[0].error, /unknown field in input: extra/);
+});

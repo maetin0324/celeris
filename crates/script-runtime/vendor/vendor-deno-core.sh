@@ -2,7 +2,7 @@
 # deno_core の写しを crates.io の .crate から機械的に作り直す。
 # ADR agent-docs/adr/2026-11-02-deno-core-vendored-serde-json-features.md D2。
 #   sh crates/script-runtime/vendor/vendor-deno-core.sh          # 写しを置き換える
-#   sh crates/script-runtime/vendor/vendor-deno-core.sh --check  # repo の写しが作り直した物と同じか確かめる
+#   sh crates/script-runtime/vendor/vendor-deno-core.sh --check  # repo の写しが作り直した物と同じか確かめる（network に出ない。cache に .crate が無ければ exit 1）
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 lock="$here/deno_core.lock.toml"
@@ -28,6 +28,11 @@ crate=""
 for c in "${CARGO_HOME:-$HOME/.cargo}"/registry/cache/*/"$name-$version.crate"; do
   [ -f "$c" ] && { crate=$c; break; }
 done
+if [ -z "$crate" ] && [ "$mode" = check ]; then
+  # --check は network に出ない。cargo fetch 等で cache に .crate を入れてから走らせる。
+  echo "no $name-$version.crate in the cargo registry cache; run cargo fetch first (--check does not download)" >&2
+  exit 1
+fi
 if [ -z "$crate" ]; then
   crate="$work/$name-$version.crate"
   curl -fsSL -o "$crate" "https://static.crates.io/crates/$name/$name-$version.crate"

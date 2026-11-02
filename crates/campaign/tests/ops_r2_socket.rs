@@ -11,7 +11,9 @@ fn script() -> PathBuf {
 
 struct Fx {
     _d: tempfile::TempDir,
+    _m: tempfile::TempDir,
     root: PathBuf,
+    mux: PathBuf,
     sock: PathBuf,
     _l: UnixListener,
 }
@@ -20,15 +22,24 @@ fn fx() -> Fx {
     // workspaces・state の下は拒まれるので cargo の target の一時 dir を使う。
     let d = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let root = d.path().to_path_buf();
-    for p in ["state", "release", "account", "mux"] {
+    for p in ["state", "release", "account"] {
         std::fs::create_dir_all(root.join(p)).unwrap();
     }
-    std::fs::write(root.join("mux/other"), "sibling").unwrap();
-    let sock = root.join("mux/master.sock");
+    // unix socket の path は 108 byte 未満（SUN_LEN）。target の深さに依らないよう socket の dir だけを /tmp 直下に置く
+    // （/tmp は workspaces・state の下ではないので ops-r2-sandbox.sh に拒まれない）。
+    let m = tempfile::Builder::new()
+        .prefix("r2s")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let mux = m.path().to_path_buf();
+    std::fs::write(mux.join("other"), "sibling").unwrap();
+    let sock = mux.join("master.sock");
     let l = UnixListener::bind(&sock).unwrap();
     Fx {
         _d: d,
+        _m: m,
         root,
+        mux,
         sock,
         _l: l,
     }
@@ -47,9 +58,9 @@ fn base(f: &Fx) -> Command {
 fn socket_flag_rejects_non_sockets() {
     let f = fx();
     for bad in [
-        f.root.join("mux/other"),
-        f.root.join("mux"),
-        f.root.join("mux/none"),
+        f.mux.join("other"),
+        f.mux.clone(),
+        f.mux.join("none"),
     ] {
         let o = base(&f)
             .arg("--socket")
@@ -90,7 +101,7 @@ fn socket_bind_is_only_the_socket_and_in_the_allow_table() {
             .any(|w| w[0] == "--bind" && w[1] == s && w[2] == s),
         "{args:?}"
     );
-    let mux = f.root.join("mux").to_string_lossy().into_owned();
+    let mux = f.mux.to_string_lossy().into_owned();
     assert!(
         !args.contains(&mux),
         "parent dir must not be bound: {args:?}"
@@ -124,7 +135,7 @@ fn connect_to_socket_inside_wrap_and_parent_hidden() {
     let code = format!(
         "import os,socket;s=socket.socket(socket.AF_UNIX);s.connect({:?});print(os.path.exists({:?}))",
         f.sock.to_string_lossy(),
-        f.root.join("mux/other").to_string_lossy()
+        f.mux.join("other").to_string_lossy()
     );
     let o = base(&f)
         .arg("--socket")

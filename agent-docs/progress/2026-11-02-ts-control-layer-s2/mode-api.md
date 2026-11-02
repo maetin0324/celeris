@@ -1,8 +1,7 @@
 ---
 title: S2 mode-api — 領域の mode を読む・rust/compare に切り替える API と celerisctl
 tasks: [01M6E6HEH7CPZX9KX4Y2SAZKTG]
-status: done
-completed: 2026-11-02
+status: blocked
 updated: 2026-11-02
 ---
 # S2 mode-api
@@ -53,6 +52,7 @@ updated: 2026-11-02
 ## 未解決
 1. 範囲 check（`crates/task-api/`・`crates/celerisctl/`・`docs/`・`web/`・`agent-docs/progress/`・境界 ADR）は、上の範囲外の 2 file で落ちる。
    新しい変更 route を足すと、既存の registry 試験がこの 2 file の行を要るので避けられない。plan_issue で申告し、replan で範囲に足すことを求めた。
+   attempt 1 の再 run で確かめた: 2 file を `$CELERIS_WU_BASE` の内容に戻して `cargo nextest run -p task-api -p celerisctl` で該当 3 試験を走らせると exit 100、3 件とも失敗（`cos_ops_registry_matches_adr_domain_assignment_and_exclusions`・`cos_operator_skill_table_matches_allowed`・`cos_mapped_table_wraps_every_allowed_subcommand`）。確認後に 2 file は HEAD の内容へ戻した。
 
 ## 本番への移行
 - 本番 KB の cos-operator skill を差し替える（人の手順: `celerisctl skills import config/skills --name cos-operator --root <kb_root>`）。差し替えるまで CoS の skill の表にこの操作が出ないが、操作自体は registry で通る。

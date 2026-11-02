@@ -1,5 +1,7 @@
 // scripts/dev/test-affected.sh が control-ts の検査を選んで走らせることを小さな git fixture で確かめる
 // （web の選択は scripts/dev/tests/test-affected-list.sh が確かめる）。偽の pnpm を使い、cargo の試験は走らせない。
+// TS だけの変更（control-ts/src の業務 TS）は scripts/dev/ts-verify.sh に委ねる（ADR 2026-11-02-ts-fast-verify (5)(6)）。
+// fixture には偽の ts-verify.sh を置く。それ以外の control-ts/ の変更は従来どおり typecheck と test を走らせる。
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -31,6 +33,14 @@ write("docs/api/script-host/host-v1.schema.json", "{}\n");
 write("docs/api/v1/api-v1.schema.json", "{}\n");
 write(".gitignore", "node_modules\ntarget\n");
 write("scripts/dev/check-health.sh", "#!/usr/bin/env bash\nexit 0\n");
+// 偽の ts-verify.sh: 呼ばれたことを CALLS に残し、--record の file に ts-only の記録を書く。
+write(
+  "scripts/dev/ts-verify.sh",
+  `#!/bin/sh
+echo "ts-verify $1" >>"$CALLS"
+printf '{"class":"ts-only","exit":0,"stages":[{},{}]}' >"$2"
+`,
+);
 // 偽の pnpm は install で偽の tsc と vitest を置く。呼ばれた順を CALLS に残す。
 const calls = path.join(work, ".calls");
 const fake = write(
@@ -65,9 +75,18 @@ const reset = () => {
   rmSync(calls, { force: true });
 };
 
-test("--list selects control-ts on a change under control-ts/", () => {
+test("--list delegates a TS-only change to ts-verify", () => {
   reset();
   write("control-ts/src/x.ts", "");
+  assert.equal(
+    run(["--list"]).stdout,
+    "control-ts: ts-verify (理由: TS だけの変更（control-ts/src の業務 TS）。cargo は走らせない)\n",
+  );
+});
+
+test("--list selects control-ts typecheck+test on a tooling change under control-ts/", () => {
+  reset();
+  write("control-ts/tsconfig.json", "{}\n");
   assert.equal(run(["--list"]).stdout, "control-ts: typecheck+test (理由: control-ts/ の変更)\n");
 });
 
@@ -85,9 +104,17 @@ test("--list does not select control-ts on other changes", () => {
   assert.doesNotMatch(run(["--list"]).stdout, /control-ts/);
 });
 
-test("a run installs, typechecks and tests control-ts", () => {
+test("a TS-only run calls ts-verify and not pnpm", () => {
   reset();
   write("control-ts/src/x.ts", "");
+  const result = run([]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(calls, "utf8"), "ts-verify --record\n");
+});
+
+test("a run installs, typechecks and tests control-ts", () => {
+  reset();
+  write("control-ts/src/testing/x.ts", "");
   const result = run([]);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(
@@ -98,7 +125,7 @@ test("a run installs, typechecks and tests control-ts", () => {
 
 test("a failed typecheck fails test-affected before the unit tests", () => {
   reset();
-  write("control-ts/src/x.ts", "");
+  write("control-ts/src/testing/x.ts", "");
   const result = run([], { FAKE_TSC_RC: "2" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /control-ts typecheck が失敗した \(exit 2\)/);

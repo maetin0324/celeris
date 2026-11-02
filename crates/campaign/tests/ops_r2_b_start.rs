@@ -81,6 +81,7 @@ fn tree(dir: &Path) -> BTreeMap<String, String> {
 /// 手順書の §2.2・§6.1 まで済んだ A・B の state と、起動 command に渡す path。
 struct Fixture {
     _dir: tempfile::TempDir,
+    _mux_dir: tempfile::TempDir,
     root: PathBuf,
     /// 2 つの command script と sandbox（偽物か実物）を置いた dir。
     scripts: PathBuf,
@@ -214,8 +215,13 @@ impl Fixture {
         let cdir = root.join("claude-bin");
         let (acct_a, acct_b) = (root.join("acct-a"), root.join("acct-b"));
         let ssh = root.join("ssh");
-        // unix socket の path は 108 byte 未満。ssh master と同じく `@`・`:` を含む短い名前を tempdir の直下に置く。
-        let mux = dir.path().canonicalize().unwrap();
+        // unix socket の path は 108 byte 未満（SUN_LEN）。target の深さに依らないよう socket の dir だけを /tmp 直下の
+        // tempdir に置き（/tmp は workspaces・state の下ではない）、ssh master と同じく `@`・`:` を含む短い名前にする。
+        let mux_dir = tempfile::Builder::new()
+            .prefix("r2b")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let mux = mux_dir.path().canonicalize().unwrap();
         for d in [&release.join("bin"), &cdir, &acct_a, &acct_b, &ssh, &mux] {
             fs::create_dir_all(d).unwrap();
         }
@@ -286,6 +292,7 @@ impl Fixture {
         fs::write(s_a.join("prompt.md"), "the prompt").unwrap();
         Fixture {
             _dir: dir,
+            _mux_dir: mux_dir,
             root,
             scripts,
             s_a,

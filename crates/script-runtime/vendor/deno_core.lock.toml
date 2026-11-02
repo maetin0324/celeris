@@ -1,0 +1,8 @@
+# deno_core の写しの元（ADR agent-docs/adr/2026-11-02-deno-core-vendored-serde-json-features.md）。
+# 写しは vendor-deno-core.sh が作る。版を上げたら name 以外を替えて script を走らせる。
+name = "deno_core"
+version = "0.413.0"
+# crates.io の deno_core-<version>.crate（tar.gz）の sha256。index の cksum と同じ値。
+crate_sha256 = "7ad7d5294f640fd99db08c455e2453c9860b1fa728b76fbdacf0eed3e308d48a"
+# Cargo.toml の [dependencies.serde_json] の features から消す feature。Cargo.toml 以外は変えない。
+removed_serde_json_features = ["float_roundtrip", "preserve_order"]

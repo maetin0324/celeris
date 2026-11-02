@@ -132,6 +132,7 @@ mod route_records;
 mod routing_evidence;
 mod routing_log;
 mod routing_overrides;
+mod script_domains;
 mod site_policies;
 pub use account_limits::AccountLimit;
 pub use credential_wait::{
@@ -148,6 +149,7 @@ pub use site_policies::{
 };
 mod task_store;
 mod terminal_sessions;
+pub use script_domains::ScriptDomainEventRow;
 pub use terminal_sessions::TerminalSessionEvent;
 mod task_store_impl;
 mod tasks;

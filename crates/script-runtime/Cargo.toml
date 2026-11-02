@@ -37,6 +37,10 @@ path = "src/bin/script-deploy.rs"
 name = "script-bench"
 path = "src/bin/script-bench.rs"
 
+[[bin]]
+name = "script-host-runner"
+path = "src/bin/script-host-runner.rs"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tempfile = "3"

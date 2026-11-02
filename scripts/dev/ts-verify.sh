@@ -441,7 +441,16 @@ do_unit() {
   mapfile -t units < <(grep -v '^ALL$' "$work/units.txt" | sed 's|^control-ts/||' || true)
   if grep -qx ALL "$work/units.txt"; then units=(); fi
   (cd "$cts" && "$tsbin/vitest" run --config vitest.config.mjs "${units[@]}") || return 1
-  (cd "$cts" && node --test scripts/*.test.mjs)
+  # control-ts/scripts/*.test.mjs は全部走らせる。ただし test-affected.test.mjs は除く: これは
+  # scripts/dev/test-affected.sh（Rust の経路の道具。ts-only では基準から変わらない）の試験で、fixture の中で
+  # cargo metadata を起動する。ts-only の経路は cargo を 1 回も起動しない（ADR (2)・付記 wire-1）。
+  # この試験は scripts/dev か control-ts/scripts の変更（rust・host-api）で test-affected.sh の control-ts の段が走らせる。
+  local scripts=() f
+  for f in "$cts"/scripts/*.test.mjs; do
+    case "${f##*/}" in test-affected.test.mjs) ;; *) scripts+=("scripts/${f##*/}") ;; esac
+  done
+  [ "${#scripts[@]}" -gt 0 ] || { echo "ts-verify: control-ts/scripts/*.test.mjs が無い" >&2; return 1; }
+  (cd "$cts" && node --test "${scripts[@]}")
 }
 stage unit "$(tr '\n' ' ' <"$work/units.txt")" do_unit
 

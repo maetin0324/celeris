@@ -11,6 +11,14 @@
 # （ADR 2026-10-23-test-affected-web-typecheck）: web/・docs/api/（生成型の元の schema）・workspace 共通 file・
 # task-api とその通常依存の crate（schema の型と event kind の元）。e2e・browser は release gate だけ。
 # control-ts の型検査と試験は control-ts/ と docs/api/script-host/（生成型の元の schema）の変更で走る。
+# TS だけの変更（中立の agent-docs/・docs/ を除く変更がすべて control-ts/src/ の業務 TS）は、control-ts の検査を
+# scripts/dev/ts-verify.sh に委ね、cargo を起動しない（ADR 2026-11-02-ts-fast-verify (5)(6)）。判定はこの script が
+# 変わった path を自分で見て決め、ts-verify の記録の class が ts-only であることも確かめる。
+# それ以外の control-ts/・docs/api/script-host/ の変更（Host API・検証の道具・golden）は従来の control-ts の検査に加え
+# celeris-script とその逆依存の cargo の試験を走らせる。control-ts/fixtures/ の変更は fixture を書く・読む crate も足す。
+# runner の cache key の入力（crates/script-runtime/・crates/task-core/・Cargo.lock・ルート Cargo.toml・
+# host-v1.schema.json）か検証の道具（scripts/dev/ts-verify*・script-runner-cache.sh・test-ts-verify.sh・この script）が
+# 変われば scripts/dev/test-ts-verify.sh も走らせる（runner を作り直して TS の段を通す）。
 # node_modules が無い・lockfile が変わったときは先に `pnpm install --offline --frozen-lockfile`。
 # 何も対象が無ければ（docs だけ等）何もせず exit 0。
 set -euo pipefail
@@ -31,16 +39,58 @@ fi
 base="${CELERIS_WU_BASE:-$(git merge-base HEAD main)}"
 
 changed="$(mktemp "${TMPDIR:-/tmp}/test-affected.XXXXXX")"
-trap 'rm -f "$changed"' EXIT
+trap 'rm -f "$changed" "$changed.status"' EXIT
+# rename は両側の path（--no-renames で削除と追加に分ける）。1 行 = "<status>\t<path>"。
 {
-  git diff --name-only "$base" --
-  git ls-files --others --exclude-standard
-} | sort -u >"$changed"
+  git diff --name-status --no-renames "$base" --
+  git ls-files --others --exclude-standard | sed 's/^/A\t/'
+} | sort -u -k2 >"$changed.status"
+cut -f2- "$changed.status" | sort -u >"$changed"
+
+# TS だけの変更か（ADR 2026-11-02-ts-fast-verify (1) の ts-only の path。ts-verify.sh の分類とは別にここで見る）。
+ts_only=1
+ts_seen=0
+while IFS="$(printf '\t')" read -r st f; do
+  case "$f" in
+    agent-docs/*) ;;
+    docs/api/*) ts_only=0 ;;
+    docs/*) ;;
+    control-ts/src/testing/*|control-ts/src/host.d.ts) ts_only=0 ;;
+    control-ts/src/*.test.ts) if [ "$st" = D ]; then ts_only=0; else ts_seen=1; fi ;;
+    control-ts/src/*.ts) ts_seen=1 ;;
+    *) ts_only=0 ;;
+  esac
+done <"$changed.status"
+[ "$ts_seen" -eq 1 ] || ts_only=0
+
+if [ "$ts_only" -eq 1 ]; then
+  ts_reason="TS だけの変更（control-ts/src の業務 TS）。cargo は走らせない"
+  if [ "$list_only" -eq 1 ]; then
+    printf 'control-ts: ts-verify (理由: %s)\n' "$ts_reason"
+    exit 0
+  fi
+  echo "test-affected: control-ts の検査を scripts/dev/ts-verify.sh に委ねる（理由: $ts_reason）" >&2
+  rec="$changed.ts-verify.json"
+  trap 'rm -f "$changed" "$changed.status" "$rec"' EXIT
+  bash scripts/dev/ts-verify.sh --record "$rec"
+  # ts-verify が ts-only と判断して段を走らせたこと（「従来の経路へ」で何もせず抜けていないこと）を確かめる。
+  python3 -I -c '
+import json, sys
+r = json.load(open(sys.argv[1]))
+if r.get("class") != "ts-only" or r.get("exit") != 0 or len(r.get("stages", [])) < 2:
+    sys.exit("test-affected: ts-verify の記録が ts-only の検証の通過を示さない: class=%s exit=%s" % (r.get("class"), r.get("exit")))
+' "$rec"
+  exit 0
+fi
 
 all=0
 web_dir=0
 docs_api=0
 control_ts_reason=""
+# 変わった path から足す crate（Host API・検証の道具・golden の変更。名前は workspace に在るものだけ使う）。
+extra_crates=""
+fixtures=0
+tsv_reason=""
 while IFS= read -r f; do
   case "$f" in
     Cargo.lock|Cargo.toml|.config/nextest.toml|rust-toolchain|rust-toolchain.toml|tests/support/*) all=1 ;;
@@ -48,10 +98,27 @@ while IFS= read -r f; do
     docs/api/*) docs_api=1 ;;
   esac
   case "$f" in
-    control-ts/*) control_ts_reason="control-ts/ の変更" ;;
-    docs/api/script-host/*) [ -n "$control_ts_reason" ] || control_ts_reason="docs/api/script-host/ の変更（生成型の元の schema）" ;;
+    control-ts/*) control_ts_reason="control-ts/ の変更"; extra_crates="celeris-script" ;;
+    docs/api/script-host/*) [ -n "$control_ts_reason" ] || control_ts_reason="docs/api/script-host/ の変更（生成型の元の schema）"
+                            extra_crates="celeris-script" ;;
+  esac
+  case "$f" in control-ts/fixtures/*) fixtures=1 ;; esac
+  case "$f" in
+    scripts/dev/ts-verify*|scripts/dev/script-runner-cache.sh|scripts/dev/test-ts-verify.sh|scripts/dev/test-affected.sh)
+      tsv_reason="検証の道具の変更"; extra_crates="celeris-script" ;;
+    crates/script-runtime/*|crates/task-core/*|Cargo.lock|Cargo.toml|docs/api/script-host/host-v1.schema.json)
+      [ -n "$tsv_reason" ] || tsv_reason="runner の cache key の入力の変更" ;;
   esac
 done <"$changed"
+if [ "$fixtures" -eq 1 ]; then
+  # fixture を書く・読む crate（crates/*/{src,examples,tests} で path control-ts/fixtures/ を参照する crate）の dir 名。
+  fx="$(git grep -l -F 'control-ts/fixtures/' -- ':(glob)crates/*/src/**' ':(glob)crates/*/examples/**' ':(glob)crates/*/tests/**' |
+    cut -d/ -f2 | sort -u || true)"
+  for d in $fx; do
+    n="$(sed -n 's/^name *= *"\([^"]*\)".*/\1/p' "crates/$d/Cargo.toml" | head -1)"
+    extra_crates="$extra_crates ${n:-$d}"
+  done
+fi
 
 if [ "$all" -eq 1 ]; then
   echo "test-affected: workspace 共通 file が変わったため全 crate を対象にする" >&2
@@ -94,6 +161,7 @@ for f in open(sys.argv[2]).read().split("\n"):
                 best = n
     if best:
         direct.add(best)
+direct |= {n for n in sys.argv[4].split() if n in names}
 hit = set(names) if all_crates else set(direct)
 todo = list(hit)
 while todo:
@@ -115,7 +183,7 @@ api_hit = sorted(direct & api_src)
 if api_hit:
     out.append("@api " + " ".join(api_hit))
 print("\n".join(out))
-' "$all" "$changed" "$web_api_roots")"
+' "$all" "$changed" "$web_api_roots" "$extra_crates")"
 crates="$(printf '%s\n' "$picked" | grep -v '^@api ' || true)"
 api_hit="$(printf '%s\n' "$picked" | sed -n 's/^@api //p')"
 
@@ -130,6 +198,7 @@ if [ "$list_only" -eq 1 ]; then
   [ -z "$crates" ] || printf '%s\n' "$crates"
   [ -z "$web_reason" ] || printf 'web: typecheck+unit (理由: %s)\n' "$web_reason"
   [ -z "$control_ts_reason" ] || printf 'control-ts: typecheck+test (理由: %s)\n' "$control_ts_reason"
+  [ -z "$tsv_reason" ] || printf 'ts-verify: test-ts-verify (理由: %s)\n' "$tsv_reason"
   exit 0
 fi
 
@@ -207,6 +276,13 @@ if [ -n "$control_ts_reason" ]; then
   ran=1
 fi
 
+if [ -n "$tsv_reason" ]; then
+  # runner を作り直し（cargo を使う）、$TMPDIR の写しで ts-only の経路と意図的な破壊の検出を確かめる。
+  echo "test-affected: bash scripts/dev/test-ts-verify.sh を走らせる（理由: $tsv_reason）" >&2
+  bash scripts/dev/test-ts-verify.sh
+  ran=1
+fi
+
 if [ -n "$crates" ]; then
   args=()
   while IFS= read -r c; do args+=(-p "$c"); done <<<"$crates"
@@ -214,7 +290,7 @@ if [ -n "$crates" ]; then
   # test-parallel.sh と同じく、試験の一時 dir を /tmp 直下の短い path に閉じ込める。Unix socket の sun_path は短く、
   # 深い TMPDIR の下では credentiald・browser の IPC 試験が socket を bind できず起動待ちで時間切れになる。
   tmproot="$(mktemp -d "/tmp/celeris-test-affected.XXXXXX")"
-  trap 'rm -f "$changed"; chmod -R u+w "$tmproot" 2>/dev/null || true; rm -rf "$tmproot" 2>/dev/null || true' EXIT
+  trap 'rm -f "$changed" "$changed.status"; chmod -R u+w "$tmproot" 2>/dev/null || true; rm -rf "$tmproot" 2>/dev/null || true' EXIT
   mkdir -p "$tmproot/tmp"
   export TMPDIR="$tmproot/tmp"
   cargo nextest run "${args[@]}"

@@ -270,3 +270,22 @@ fixture を手で書き換えた変更は `host-api` に分類されるうえ、
 - verify-sh unit: `ts-verify.sh`（(1)(2)、`--list`・`--record`・`--no-build`）、`script-runner-cache.sh`（(4) の `key`・`path`・`ensure`）と 2 つの試験。
 - wire unit: runner への接続、`test-ts-verify.sh`（(5) の 8 場合）、`test-affected.sh` の委譲と fixture の crate への写し。
 - bench・measure unit: (7) の `policy-ts` と `--check-targets`。
+
+## 付記 wire（2026-11-02、unit wire の実装との突き合わせ）
+- **wire-1（unit 段から `test-affected.test.mjs` を外す）**: (2) の段 5 は `control-ts/scripts/*.test.mjs` を全部走らせるとしたが、
+  `test-affected.test.mjs` は fixture の中で `scripts/dev/test-affected.sh` を走らせ、`cargo metadata` を起動する。
+  ts-only の経路で cargo の起動 0 回（(2)(7)）と両立しないため、`ts-verify.sh` の段 5 はこの 1 file だけを除く。
+  この試験の対象（`scripts/dev/test-affected.sh`）は ts-only では基準から変わらない。`scripts/dev/` か `control-ts/scripts/` の変更
+  （rust・host-api）で `test-affected.sh` の control-ts の段（`pnpm` の `test`）が従来どおり走らせる。
+  verify-sh の記録の未解決 (a)（目標を compile の起動 0 回に緩める）は採らない。
+- **wire-2（`test-affected.sh` の委譲）**: `test-affected.sh` は ts-verify の分類と別に、変わった path を自分で見る
+  （`git diff --name-status --no-renames` と未追跡 file。中立の `agent-docs/`・`docs/`（`docs/api/` を除く）以外がすべて
+  `control-ts/src/**/*.ts` で、`src/testing/`・`src/host.d.ts`・試験の削除を含まない）。当たれば cargo を起動せず
+  `bash scripts/dev/ts-verify.sh --record <file>` に委ね、記録の `class` が `ts-only`・`exit` が 0 であることを確かめる
+  （ts-verify が「従来の経路へ」で何も走らせずに抜けた場合を通さない）。
+  それ以外では、`control-ts/`・`docs/api/script-host/` の変更に `celeris-script`（と逆依存）を、`control-ts/fixtures/` の変更に
+  fixture を参照する crate を cargo の試験の対象に足す。runner の cache key の入力か検証の道具の変更では `bash scripts/dev/test-ts-verify.sh` も走らせる。
+- **wire-3（試験）**: `scripts/dev/test-ts-verify.sh` は (5) の 8 場合を 12 件の確認で固定する。規則を壊した編集は ts-only の経路では
+  先に段 5（TS の単体試験）で落ちるので、同じ壊れた bundle を runner（`run --suite golden`）に直に渡し、Rust の採点だけでも
+  `mismatch` で exit 1 になることを別に確かめる。`compare.mjs`・fixture・`package.json`・`bundle.config.json` の編集は host-api になることと、
+  領域を消した bundle を runner が exit 3 で拒否することを確かめる。

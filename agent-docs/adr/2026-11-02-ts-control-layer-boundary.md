@@ -565,3 +565,18 @@ Rust は TS の output を apply の前に次で検証する。1 つでも落ち
 ### S4-9 Rust の分割（rust-split unit が行う。挙動不変）
 - `digest_one` を 4 つに分ける: snapshot の組み立て（`cos_triage_run_report`・`chat_run_get`）→ `digest_decide(&CosDigestInput) -> CosDigestOutput`（純粋、`digest_message` を使う）→ `validate_digest_output(&CosDigestInput, &CosDigestOutput) -> Result<(), DigestViolation>` → `apply_digest_commands`。
 - 分割の commit では出力 message・requeue・log の無い今の挙動を変えない。11 件の既存試験がそのまま通ることを確かめる。
+
+### S4-10 実装との突き合わせ（S4 close、2026-11-02）
+記録は [S4 の進捗](../progress/2026-11-02-ts-control-layer-s4.md)。S4-1〜S4-9 を実装と突き合わせた結果。挙動に関わる違いは無く、名前・置き場所・試験の範囲の違いである。
+
+| 節 | 実装 | 付記との違い |
+|---|---|---|
+| S4-1 | `digest_one` は `digest_snapshot`→`cos_digest_decide`→`validate_cos_digest_commands`→`apply_digest_commands`。TS は `control-ts/src/domains/cos_digest.ts` | なし |
+| S4-2 | DTO は `crates/task-core/src/chat/digest.rs`。出力の包み `CosDigestOutput` は `task_dispatch::script_policy`。command の型は `CosDigestCommand` | (1) `run_state` は 4 値の enum でなく文字列。今の文面が未知の値を `run は <state> で終わった` と書くので、enum にすると挙動が変わる。TS も文字列で受ける。(2) `host-v1.schema.json` に DTO を足していない。S2 の領域と揃え、host の呼び出しの包みだけを載せる。(3) fixture は `control-ts/fixtures/cos_digest/{cases,traces}.jsonl` |
+| S4-3 | `validate_cos_digest_commands`、`CosDigestViolation::code()`。`classify_cos_digest` が検証落ちを `invalid_output` にして code を `safety_violations` に入れる | (4) 規則 6 の違反は `MissingPostDigest`・`TextTooLarge`・`KeyTooLarge` の 3 つに分けた（どれも code なし） |
+| S4-4 | `Dispatcher::compare_cos_digest`。`SCRIPT_CALL_DEADLINE`（50 ms）、`MAX_IN_FLIGHT_COMPARES`（合計 32）。上限を超えた run は warn の log だけで記録を落とす | (5) 記録は apply が全部成功した run だけに作る。message の後で requeue が失敗した run は digest 済みになるので、その run の記録は作られない |
+| S4-5 | migration `0104_script_cos_digest.sql`、`CosDigestCompareRecord`（`script_compare/cos_digest_record.rs`）、`script_compare_log_append` の重複の抑え | (6) `applied.message_id` は、冪等 key で既にあった message の id にもなる。(7) replay は試験の中だけにあり、本番の log の replay の道具は無い。stopped・interrupted の run は requeue で item の `run_id` が消え、組み直した入力の `input_digest` が必ず合わないので常に `drifted` になる（`script_compare_cos_digest_dispatch_match_replay_and_rollback`）。本番の log の replay で確かめられるのは requeue の無い run だけで、requeue の判断の同等性は fixture の replay で確かめる |
+| S4-6 | `bundle.config.json` の `cos_digest` は `[]`。scope は空 | なし |
+| S4-7 | 新しい event の variant なし。行為の追跡は `chat_messages`・`cos_inbox_items`・`script_compare_log` | なし |
+| S4-8 | `crates/task-dispatch/src/dispatcher/tests/cos_digest_script.rs`（11 件）、`crates/task-dispatch/src/dispatcher/tests/cos_chat_triage_digest_script_compare.rs`（10 件）、`crates/celeris/tests/script_compare_cos_digest.rs`（5 件）、`control-ts/src/domains/cos_digest.test.ts` | (8) TS の試験の置き場所は `control-ts/test/` でなく `control-ts/src/domains/`（他の領域と同じ）。(9) 同等性の行は既存 11 件の入力でなく、cases 2,066 行と traces 17 行で確かめた。(10) 安全の行は「規則を 1 件ずつ破る bundle」でなく、検証関数を 14 通りの command で試し（`script_fixtures_cos_digest_validation_rejects_each_rule`）、dispatcher の経路では偽の `PolicyScript` で 3 つの code（`card_outside_items`・`key_mismatch`・`requeue_state_invalid`）を試す。`scope_mismatch`・`duplicate_command`・digest の場面の `generation_gone` は dispatcher の経路で試していない。(11) item state の `handled` は `cos_inbox_items` の CHECK の外にある未知の state で、試験だけで作る |
+| S4-9 | (S4-1 の行のとおり) | (12) 名前は `digest_decide`・`validate_digest_output`・`DigestViolation` でなく `cos_digest_decide(&CosDigestInput) -> Vec<CosDigestCommand>`・`validate_cos_digest_commands`・`CosDigestViolation`。置き場所は dispatcher でなく task-core |

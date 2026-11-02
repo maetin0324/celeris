@@ -5,13 +5,19 @@
 //! (`CosDigestInput`), decides with the pure `cos_digest_decide` (task-core), validates the
 //! commands, then applies them. The text, cards and the requeue rule live in
 //! `task_core::chat::digest`.
+//!
+//! The pass returns what it applied (`CosDigestApplication`); the launch tick hands it to
+//! `Dispatcher::compare_cos_digest`, which calls TS only in mode `compare` (S4-4). The applied
+//! commands are always Rust's.
 
 use task_core::chat::digest::{
     CosDigestCommand, CosDigestInput, cos_digest_decide, validate_cos_digest_commands,
 };
+use task_core::script_compare::CosDigestApplied;
 use time::OffsetDateTime;
 
 use super::launch::CosChatLaunch;
+use crate::dispatcher::dispatch_run::CosDigestApplication;
 
 pub(crate) use task_core::chat::digest::cos_kind_label as kind_label;
 
@@ -21,7 +27,8 @@ const DIGEST_RUNS_PER_PASS: usize = 20;
 impl CosChatLaunch {
     /// One digest pass: every finished triage run without a digest gets its message; stopped
     /// and interrupted runs give their unhandled items back to the queue.
-    pub(crate) fn triage_digest(&mut self, now: OffsetDateTime) {
+    /// Returns the runs whose commands were applied (for the compare of S4-4).
+    pub(crate) fn triage_digest(&mut self, now: OffsetDateTime) -> Vec<CosDigestApplication> {
         // Keep the reservation until an empty scan succeeds. A bounded pass or any
         // lookup/write failure must continue on the next tick without another run.
         self.triage.digest_due = true;
@@ -32,18 +39,21 @@ impl CosChatLaunch {
             Ok(runs) => runs,
             Err(error) => {
                 tracing::warn!(%error, "CoS triage digest scan failed");
-                return;
+                return Vec::new();
             }
         };
         if runs.is_empty() {
             self.triage.digest_due = false;
-            return;
+            return Vec::new();
         }
+        let mut applied = Vec::new();
         for (thread, run_id, run_state) in runs {
-            if let Err(error) = self.digest_one(&thread, &run_id, &run_state, now) {
-                tracing::warn!(%error, %run_id, "CoS triage digest failed");
+            match self.digest_one(&thread, &run_id, &run_state, now) {
+                Ok(digest) => applied.push(digest),
+                Err(error) => tracing::warn!(%error, %run_id, "CoS triage digest failed"),
             }
         }
+        applied
     }
 
     fn digest_one(
@@ -52,11 +62,16 @@ impl CosChatLaunch {
         run_id: &str,
         run_state: &str,
         now: OffsetDateTime,
-    ) -> Result<(), String> {
+    ) -> Result<CosDigestApplication, String> {
         let input = self.digest_snapshot(thread, run_id, run_state)?;
         let commands = cos_digest_decide(&input);
         validate_cos_digest_commands(&input, &commands).map_err(|e| e.to_string())?;
-        self.apply_digest_commands(&commands, now)
+        let applied = self.apply_digest_commands(&commands, now)?;
+        Ok(CosDigestApplication {
+            input,
+            commands,
+            applied,
+        })
     }
 
     /// The snapshot one digest decision reads: the run's items in report order and the chat
@@ -91,7 +106,11 @@ impl CosChatLaunch {
         &mut self,
         commands: &[CosDigestCommand],
         now: OffsetDateTime,
-    ) -> Result<(), String> {
+    ) -> Result<CosDigestApplied, String> {
+        let mut applied = CosDigestApplied {
+            message_id: String::new(),
+            requeued: 0,
+        };
         for command in commands {
             match command {
                 CosDigestCommand::PostDigest {
@@ -101,7 +120,8 @@ impl CosChatLaunch {
                     cards,
                     run_id,
                 } => {
-                    self.store
+                    let message = self
+                        .store
                         .chat_assistant_message_add_once(
                             thread,
                             idempotency_key,
@@ -111,6 +131,7 @@ impl CosChatLaunch {
                             now,
                         )
                         .map_err(|e| e.to_string())?;
+                    applied.message_id = message.id;
                 }
                 CosDigestCommand::RequeueRun { run_id } => {
                     let requeued = self
@@ -120,9 +141,10 @@ impl CosChatLaunch {
                     if requeued > 0 {
                         self.triage.dirty = true;
                     }
+                    applied.requeued = u64::try_from(requeued).unwrap_or(u64::MAX);
                 }
             }
         }
-        Ok(())
+        Ok(applied)
     }
 }

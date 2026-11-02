@@ -1,13 +1,14 @@
 //! `task_dispatch::PolicyScript` の本物の実装（境界 ADR 2026-11-02 付記 S2-6）。`ScriptRuntimeHandle` で TS を呼ぶ。
 //!
 //! 入出力は DTO だけで、Rust の判定を変えない。結果の分類と記録は dispatcher が行う。
-//! `lane_rules`・`route_priority` は op を呼ばない純粋関数なので、要求の scope は空で送る（S2-7）。
+//! `lane_rules`・`route_priority`・`cos_digest` は op を呼ばない純粋関数なので、要求の scope は空で送る（S2-7・S4-6）。
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
 use celeris_script::dto::HOST_API_VERSION;
 use celeris_script::{ScriptCall, ScriptError, ScriptRuntimeHandle};
+use task_core::chat::digest::CosDigestInput;
 use task_core::script_compare::{LaneRulesInput, RoutePriorityInput, ScriptDomain};
 use task_dispatch::script_policy::{
     PolicyFuture, PolicyReply, PolicyScript, PolicyScriptBundle, PolicyScriptError,
@@ -48,6 +49,14 @@ impl PolicyScript for ScriptPolicy {
     fn route_priority(&self, input: RoutePriorityInput, deadline: Duration) -> PolicyFuture<'_> {
         self.call_domain(
             ScriptDomain::RoutePriority,
+            serde_json::to_value(&input),
+            deadline,
+        )
+    }
+
+    fn cos_digest(&self, input: CosDigestInput, deadline: Duration) -> PolicyFuture<'_> {
+        self.call_domain(
+            ScriptDomain::CosDigest,
             serde_json::to_value(&input),
             deadline,
         )

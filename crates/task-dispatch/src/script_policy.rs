@@ -16,12 +16,13 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use task_core::chat::digest::{CosDigestCommand, CosDigestInput, validate_cos_digest_commands};
 use task_core::llm_route::{ExecutionClass, HarnessId, Registry, route_priority_decide};
 use task_core::model_policy::{LaneCeiling, RuleMatch, TaskFeatures};
 use task_core::script_compare::{
-    CompareCandidate, CompareError, CompareOutcome, LaneRulesInput, RoutePriorityInput,
-    RoutePriorityOutput, ScriptCompareRecord, ScriptDomain, ScriptDomainModeRow, ScriptGeneration,
-    recorded_input,
+    CompareCandidate, CompareError, CompareOutcome, CosDigestApplied, CosDigestCommandsSummary,
+    CosDigestCompareRecord, LaneRulesInput, RoutePriorityInput, RoutePriorityOutput,
+    ScriptCompareRecord, ScriptDomain, ScriptDomainModeRow, ScriptGeneration, recorded_input,
 };
 use task_core::{SqliteStore, StoreError, TaskId, Tier};
 
@@ -33,6 +34,9 @@ pub const LANE_RULES_CALL_SITE: &str = "dispatch_run.decide_lane";
 
 /// `route_priority` の比較を付けた呼び出し箇所（S2-4 の `call_site`・付記 S2-11）。
 pub const ROUTE_PRIORITY_CALL_SITE: &str = "route_select.route_select_one";
+
+/// `cos_digest` の比較を付けた呼び出し箇所（付記 S4-5 の `call_site`）。
+pub const COS_DIGEST_CALL_SITE: &str = "cos_digest.digest_one";
 
 /// `route_priority` の候補の上限（S2-4 の `invalid_output`）。
 pub const ROUTE_PRIORITY_CANDIDATES_MAX: usize = 256;
@@ -121,6 +125,9 @@ pub trait PolicyScript: Send + Sync {
 
     /// `route_priority` を評価する。入力は 1 つの harness の候補列の `source`・`model` の id だけ（S2-3）。
     fn route_priority(&self, input: RoutePriorityInput, deadline: Duration) -> PolicyFuture<'_>;
+
+    /// `cos_digest` を評価する（付記 S4-2）。入力は digest の snapshot、出力は `{ "commands": [...] }`。
+    fn cos_digest(&self, input: CosDigestInput, deadline: Duration) -> PolicyFuture<'_>;
 }
 
 /// mode の表と compare の記録の store（`SqliteStore` が実装する）。
@@ -132,6 +139,12 @@ pub trait ScriptDomainStore: Send + Sync {
         &self,
         task_id: TaskId,
         record: &ScriptCompareRecord,
+        now: OffsetDateTime,
+    ) -> Result<bool, StoreError>;
+    /// 付記 S4-5: `cos_digest` の記録を `script_compare_log` に追記したら `true`（重複の抑えの後）。
+    fn script_compare_log_append(
+        &self,
+        record: &CosDigestCompareRecord,
         now: OffsetDateTime,
     ) -> Result<bool, StoreError>;
 }
@@ -152,6 +165,14 @@ impl ScriptDomainStore for SqliteStore {
         now: OffsetDateTime,
     ) -> Result<bool, StoreError> {
         SqliteStore::script_compare_append(self, task_id, record, now)
+    }
+
+    fn script_compare_log_append(
+        &self,
+        record: &CosDigestCompareRecord,
+        now: OffsetDateTime,
+    ) -> Result<bool, StoreError> {
+        SqliteStore::script_compare_log_append(self, record, now)
     }
 }
 
@@ -529,6 +550,176 @@ impl CompareDraft {
                 call_route_priority(script, input.clone(), deadline).await
             }
         }
+    }
+}
+
+/// `cos_digest` の TS の出力 DTO（付記 S4-2）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestOutput {
+    pub commands: Vec<CosDigestCommand>,
+}
+
+/// [`classify_cos_digest`] の結果。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CosDigestClassified {
+    pub ts: Option<CosDigestCommandsSummary>,
+    pub ts_commands_head: Option<String>,
+    pub outcome: CompareOutcome,
+    pub error: Option<CompareError>,
+    pub safety_violations: Vec<String>,
+}
+
+/// TS の結果を Rust の command 列と比べる（付記 S4-2・S4-3）。TS の command は
+/// `validate_cos_digest_commands` に通し、落ちたら `invalid_output` にして S4-3 の code を `safety_violations` に入れる。
+/// 正規化はしない。command 列（順序込み）を同じ直列化の byte 列で比べる。
+pub fn classify_cos_digest(
+    input: &CosDigestInput,
+    rust: &[CosDigestCommand],
+    result: &TsResult,
+) -> CosDigestClassified {
+    let from = |c: Classified| CosDigestClassified {
+        ts: None,
+        ts_commands_head: None,
+        outcome: c.outcome,
+        error: c.error,
+        safety_violations: c.safety_violations,
+    };
+    let raw = match result {
+        TsResult::Reply(reply) => &reply.output,
+        TsResult::DeadlineExceeded(d) => return from(deadline_exceeded(*d)),
+        TsResult::Error(e) => return from(script_error(e)),
+    };
+    let ts: CosDigestOutput = match serde_json::from_value(raw.clone()) {
+        Ok(ts) => ts,
+        Err(e) => {
+            return CosDigestClassified {
+                ts: None,
+                ts_commands_head: None,
+                outcome: CompareOutcome::InvalidOutput,
+                error: Some(CompareError::new(
+                    "invalid_output",
+                    &format!("cos_digest output: {e}"),
+                )),
+                safety_violations: Vec::new(),
+            };
+        }
+    };
+    let summary = CosDigestCommandsSummary::of(&ts.commands).ok();
+    if let Err(violation) = validate_cos_digest_commands(input, &ts.commands) {
+        return CosDigestClassified {
+            ts: summary,
+            ts_commands_head: None,
+            outcome: CompareOutcome::InvalidOutput,
+            error: Some(CompareError::new(
+                "invalid_output",
+                &format!("cos_digest output: {violation}"),
+            )),
+            safety_violations: violation.code().map(str::to_owned).into_iter().collect(),
+        };
+    }
+    let same = same_bytes(&ts.commands.as_slice(), &rust);
+    CosDigestClassified {
+        ts: summary,
+        ts_commands_head: if same {
+            None
+        } else {
+            task_core::script_compare::cos_digest_text_head(&ts.commands)
+        },
+        outcome: if same {
+            CompareOutcome::Match
+        } else {
+            CompareOutcome::Mismatch
+        },
+        error: None,
+        safety_violations: Vec::new(),
+    }
+}
+
+/// `cos_digest` の記録の共通部分（付記 S4-4・S4-5）。digest pass が Rust の command を apply した後に作る。
+#[derive(Debug, Clone)]
+pub struct CosDigestDraft {
+    pub generation: String,
+    pub bundle_sha256: String,
+    pub host_api: String,
+    pub input: CosDigestInput,
+    /// Rust の参照実装の command 列（apply したもの）。
+    pub rust: Vec<CosDigestCommand>,
+    pub applied: CosDigestApplied,
+}
+
+impl CosDigestDraft {
+    fn record(
+        &self,
+        isolate_epoch: u64,
+        classified: CosDigestClassified,
+        elapsed: Duration,
+    ) -> Result<CosDigestCompareRecord, serde_json::Error> {
+        Ok(CosDigestCompareRecord {
+            domain: ScriptDomain::CosDigest,
+            generation: self.generation.clone(),
+            isolate_epoch,
+            bundle_sha256: self.bundle_sha256.clone(),
+            host_api: self.host_api.clone(),
+            call_site: COS_DIGEST_CALL_SITE.to_owned(),
+            thread_id: self.input.thread.clone(),
+            run_id: self.input.run_id.clone(),
+            input_digest: task_core::script_compare::sha256_digest(&serde_json::to_vec(
+                &self.input,
+            )?),
+            input: None,
+            rust: CosDigestCommandsSummary::of(&self.rust)?,
+            ts: classified.ts,
+            ts_commands_head: classified.ts_commands_head,
+            outcome: classified.outcome,
+            error: classified.error,
+            normalized: Vec::new(),
+            safety_violations: classified.safety_violations,
+            elapsed_us: u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX),
+            applied: self.applied.clone(),
+        })
+    }
+
+    /// TS の結果から記録を作る。
+    pub fn finish(
+        &self,
+        result: &TsResult,
+        elapsed: Duration,
+    ) -> Result<CosDigestCompareRecord, serde_json::Error> {
+        let epoch = match result {
+            TsResult::Reply(r) => r.isolate_epoch,
+            TsResult::Error(e) => e.isolate_epoch.unwrap_or(0),
+            TsResult::DeadlineExceeded(_) => 0,
+        };
+        self.record(
+            epoch,
+            classify_cos_digest(&self.input, &self.rust, result),
+            elapsed,
+        )
+    }
+
+    /// TS を呼ばなかった記録（`unavailable`）。
+    pub fn unavailable(&self, reason: &str) -> Result<CosDigestCompareRecord, serde_json::Error> {
+        self.record(
+            0,
+            CosDigestClassified {
+                ts: None,
+                ts_commands_head: None,
+                outcome: CompareOutcome::Unavailable,
+                error: Some(CompareError::new("unavailable", reason)),
+                safety_violations: Vec::new(),
+            },
+            Duration::ZERO,
+        )
+    }
+
+    /// TS を `deadline` 付きで呼ぶ。
+    pub async fn call(
+        &self,
+        script: &dyn PolicyScript,
+        deadline: Duration,
+    ) -> (TsResult, Duration) {
+        with_deadline(script.cos_digest(self.input.clone(), deadline), deadline).await
     }
 }
 

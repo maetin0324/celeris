@@ -51,7 +51,11 @@ fn script_domain_initial_modes_are_rust() {
     let rows = store.script_domain_modes().unwrap();
     assert_eq!(
         rows.iter().map(|r| r.domain).collect::<Vec<_>>(),
-        vec![ScriptDomain::LaneRules, ScriptDomain::RoutePriority]
+        vec![
+            ScriptDomain::CosDigest,
+            ScriptDomain::LaneRules,
+            ScriptDomain::RoutePriority
+        ]
     );
     for r in &rows {
         assert_eq!(r.mode, ScriptMode::Rust);
@@ -462,4 +466,58 @@ fn script_compare_append_dedups_same_generation_digest_outcome() {
     assert_eq!(json["type"], "script_compare_recorded");
     assert_eq!(json["domain"], "lane_rules");
     assert_eq!(json["outcome"], "match");
+}
+
+/// 付記 S4-5: `script_compare_log` は追記専用で、同じ run・generation・input_digest・outcome の行を足さない。
+#[test]
+fn script_compare_log_appends_once_per_outcome_and_is_append_only() {
+    use crate::script_compare::{
+        CosDigestApplied, CosDigestCommandsSummary, CosDigestCompareRecord,
+    };
+    let store = SqliteStore::open_in_memory().unwrap();
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let summary = CosDigestCommandsSummary {
+        commands_digest: "sha256:00".into(),
+        command_kinds: vec!["post_digest".into()],
+    };
+    let record = CosDigestCompareRecord {
+        domain: ScriptDomain::CosDigest,
+        generation: "g1".into(),
+        isolate_epoch: 1,
+        bundle_sha256: "ab".repeat(32),
+        host_api: "1.0.0".into(),
+        call_site: "cos_digest.digest_one".into(),
+        thread_id: "t1".into(),
+        run_id: "r1".into(),
+        input_digest: "sha256:11".into(),
+        input: None,
+        rust: summary.clone(),
+        ts: Some(summary),
+        ts_commands_head: None,
+        outcome: CompareOutcome::Match,
+        error: None,
+        normalized: Vec::new(),
+        safety_violations: Vec::new(),
+        elapsed_us: 5,
+        applied: CosDigestApplied {
+            message_id: "m1".into(),
+            requeued: 0,
+        },
+    };
+    assert!(store.script_compare_log_append(&record, now).unwrap());
+    assert!(!store.script_compare_log_append(&record, now).unwrap());
+    let mut other = record.clone();
+    other.outcome = CompareOutcome::Mismatch;
+    assert!(store.script_compare_log_append(&other, now).unwrap());
+    let rows = store.script_compare_log(Some("r1")).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].record, record);
+    assert_eq!(rows[1].record, other);
+    assert!(store.script_compare_log(Some("r2")).unwrap().is_empty());
+    let conn = store.lock().unwrap();
+    assert!(
+        conn.execute("UPDATE script_compare_log SET json = '{}'", [])
+            .is_err()
+    );
+    assert!(conn.execute("DELETE FROM script_compare_log", []).is_err());
 }

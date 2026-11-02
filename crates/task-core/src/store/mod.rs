@@ -149,7 +149,7 @@ pub use site_policies::{
 };
 mod task_store;
 mod terminal_sessions;
-pub use script_domains::ScriptDomainEventRow;
+pub use script_domains::{ScriptCompareLogRow, ScriptDomainEventRow};
 pub use terminal_sessions::TerminalSessionEvent;
 mod task_store_impl;
 mod tasks;

@@ -16,9 +16,14 @@ use sha2::{Digest, Sha256};
 pub use crate::llm_route::RoutePriorityBasis;
 use crate::llm_route::{CandidateKey, ExecutionClass, HarnessId, Registry};
 
+mod cos_digest_record;
 mod route_priority_fixture;
 use crate::model_policy::TaskFeatures;
 use crate::store::StoreError;
+pub use cos_digest_record::{
+    CosDigestApplied, CosDigestCommandsSummary, CosDigestCompareRecord, cos_digest_command_kind,
+    cos_digest_text_head,
+};
 pub use route_priority_fixture::route_priority_fixture_jsonl;
 
 /// TS 制御層の領域（S2-1）。表 `script_domain_modes` の `domain`。
@@ -29,15 +34,22 @@ pub use route_priority_fixture::route_priority_fixture_jsonl;
 pub enum ScriptDomain {
     LaneRules,
     RoutePriority,
+    /// 付記 S4: CoS の受信箱 digest pass（migration 0104）。記録は `script_compare_log`。
+    CosDigest,
 }
 
 impl ScriptDomain {
-    pub const ALL: [ScriptDomain; 2] = [ScriptDomain::LaneRules, ScriptDomain::RoutePriority];
+    pub const ALL: [ScriptDomain; 3] = [
+        ScriptDomain::LaneRules,
+        ScriptDomain::RoutePriority,
+        ScriptDomain::CosDigest,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             ScriptDomain::LaneRules => "lane_rules",
             ScriptDomain::RoutePriority => "route_priority",
+            ScriptDomain::CosDigest => "cos_digest",
         }
     }
 

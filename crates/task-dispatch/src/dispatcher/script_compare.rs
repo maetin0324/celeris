@@ -8,6 +8,8 @@
 //!   記録（`script_compare_recorded`）だけを書く。lane・候補列・run・既存の event は Rust の結果のまま（S2-6）。
 //! - `PolicyScript` が無い・bundle が generation と違う・tokio の runtime が無いときは TS を呼ばず `unavailable` を記録する。
 //! - generation の確認・`unavailable`・deadline・in-flight の上限・記録は両領域で同じ経路（[`Dispatcher::compare_domain`]）を通る。
+//! - 付記 S4: 領域 `cos_digest` は digest pass が Rust の command を apply した後に [`Dispatcher::compare_cos_digest`] で
+//!   同じ経路（`compare_target`・`spawn_compare`）を通る。記録は task の events でなく `script_compare_log`（S4-5）。
 
 use std::sync::Arc;
 
@@ -20,7 +22,8 @@ use tokio::task::JoinHandle;
 use super::route_select::{RouteInput, RouteTrace};
 use super::*;
 use crate::script_policy::{
-    CompareDraft, MAX_IN_FLIGHT_COMPARES, PolicyScript, SCRIPT_CALL_DEADLINE, ScriptDomainStore,
+    CompareDraft, CosDigestDraft, MAX_IN_FLIGHT_COMPARES, PolicyScript, SCRIPT_CALL_DEADLINE,
+    ScriptDomainStore,
 };
 
 /// dispatcher が持つ compare の状態。既定は何も注入しない（mode を読まず、TS を呼ばない）。
@@ -121,7 +124,7 @@ impl Dispatcher {
         });
     }
 
-    /// 両領域の共通の経路: mode の確認 → generation の確認 → 下書き → `unavailable` か TS の呼び出し。
+    /// 全領域の共通の経路: mode の確認 → generation の確認 → 下書き → `unavailable` か TS の呼び出し。
     /// `draft` は mode が `compare` で generation の id があるときだけ呼ぶ（mode `rust` では DTO を作らない）。
     fn compare_domain(
         &mut self,
@@ -129,36 +132,88 @@ impl Dispatcher {
         domain: ScriptDomain,
         draft: impl FnOnce(&Self, String, String, String) -> CompareDraft,
     ) {
+        let Some(target) = self.compare_target(domain) else {
+            return;
+        };
+        let draft = draft(
+            self,
+            target.generation_id,
+            target.bundle_sha256,
+            target.host_api,
+        );
+        let store = target.store;
+        let (script, runtime) = match target.call {
+            Err(reason) => {
+                append_compare(store.as_ref(), task_id, draft.unavailable(&reason));
+                return;
+            }
+            Ok(call) => call,
+        };
+        self.spawn_compare(domain, &runtime, async move {
+            let (result, elapsed) = draft.call(script.as_ref(), SCRIPT_CALL_DEADLINE).await;
+            append_compare(store.as_ref(), task_id, draft.finish(&result, elapsed));
+        });
+    }
+
+    /// 付記 S4-4: digest pass が Rust の command を apply した後に呼ぶ。mode が `compare` の領域 `cos_digest` だけ、
+    /// 同じ `CosDigestInput` を別の tokio task で TS に渡し、Rust の command と比べて `script_compare_log` に追記する。
+    /// mode `rust`・store 無しでは何もしない（TS を呼ばない）。message・requeue は変えない（戻り値も無い）。
+    pub(in crate::dispatcher) fn compare_cos_digest(&mut self, digests: Vec<CosDigestApplication>) {
+        if digests.is_empty() {
+            return;
+        }
+        for digest in digests {
+            let Some(target) = self.compare_target(ScriptDomain::CosDigest) else {
+                return;
+            };
+            let draft = CosDigestDraft {
+                generation: target.generation_id,
+                bundle_sha256: target.bundle_sha256,
+                host_api: target.host_api,
+                input: digest.input,
+                rust: digest.commands,
+                applied: digest.applied,
+            };
+            let store = target.store;
+            let (script, runtime) = match target.call {
+                Err(reason) => {
+                    append_compare_log(store.as_ref(), draft.unavailable(&reason));
+                    continue;
+                }
+                Ok(call) => call,
+            };
+            self.spawn_compare(ScriptDomain::CosDigest, &runtime, async move {
+                let (result, elapsed) = draft.call(script.as_ref(), SCRIPT_CALL_DEADLINE).await;
+                append_compare_log(store.as_ref(), draft.finish(&result, elapsed));
+            });
+        }
+    }
+
+    /// mode が `compare` で generation の id があれば比較の宛先を返す（無ければ `None` = 何もしない）。
+    /// `call` が `Err` なら TS を呼ばず、その理由で `unavailable` を記録する。
+    fn compare_target(&mut self, domain: ScriptDomain) -> Option<CompareTarget> {
         self.refresh_script_modes();
-        let Some(row) = self
+        let row = self
             .script_compare
             .modes
             .iter()
-            .find(|r| r.domain == domain)
-        else {
-            return;
-        };
+            .find(|r| r.domain == domain)?;
         if row.mode != ScriptMode::Compare {
-            return;
+            return None;
         }
-        let Some(store) = self.script_compare.store.clone() else {
-            return;
-        };
-        let Some(generation_id) = row.generation_id.clone() else {
-            return;
-        };
+        let store = self.script_compare.store.clone()?;
+        let generation_id = row.generation_id.clone()?;
         let generation = match store.script_generation_get(&generation_id) {
             Ok(g) => g,
             Err(e) => {
                 tracing::warn!(error = %e, generation = %generation_id, "script generation unreadable; compare skipped");
-                return;
+                return None;
             }
         };
         let (bundle_sha256, host_api) = generation
             .as_ref()
             .map(|g| (g.bundle_sha256.clone(), g.host_api.clone()))
             .unwrap_or_default();
-        let draft = draft(self, generation_id.clone(), bundle_sha256, host_api);
         let unavailable = match (&generation, &self.script_compare.script) {
             (None, _) => Some(format!("script generation `{generation_id}` not found")),
             (Some(g), _) if g.state != ScriptGenerationState::Loaded => {
@@ -178,29 +233,69 @@ impl Dispatcher {
             }
             _ => None,
         };
-        let runtime = tokio::runtime::Handle::try_current();
-        let unavailable = unavailable.or_else(|| {
-            runtime
-                .is_err()
-                .then(|| "no tokio runtime for the script call".to_owned())
-        });
-        if let Some(reason) = unavailable {
-            append_compare(store.as_ref(), task_id, draft.unavailable(&reason));
-            return;
-        }
-        let (Some(script), Ok(runtime)) = (self.script_compare.script.clone(), runtime) else {
-            return;
+        let call = match (unavailable, &self.script_compare.script) {
+            (Some(reason), _) => Err(reason),
+            (None, Some(script)) => match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => Ok((script.clone(), runtime)),
+                Err(_) => Err("no tokio runtime for the script call".to_owned()),
+            },
+            (None, None) => Err("no policy script runtime".to_owned()),
         };
+        Some(CompareTarget {
+            store,
+            generation_id,
+            bundle_sha256,
+            host_api,
+            call,
+        })
+    }
+
+    /// in-flight の上限（全領域の合計 `MAX_IN_FLIGHT_COMPARES`）の内で比較の task を走らせる。超えたら捨てる。
+    fn spawn_compare(
+        &mut self,
+        domain: ScriptDomain,
+        runtime: &tokio::runtime::Handle,
+        compare: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
         self.script_compare.in_flight.retain(|h| !h.is_finished());
         if self.script_compare.in_flight.len() >= MAX_IN_FLIGHT_COMPARES {
-            tracing::warn!(%task_id, domain = domain.as_str(), "too many script compares in flight; compare skipped");
+            tracing::warn!(
+                domain = domain.as_str(),
+                "too many script compares in flight; compare skipped"
+            );
             return;
         }
-        let handle = runtime.spawn(async move {
-            let (result, elapsed) = draft.call(script.as_ref(), SCRIPT_CALL_DEADLINE).await;
-            append_compare(store.as_ref(), task_id, draft.finish(&result, elapsed));
-        });
+        let handle = runtime.spawn(compare);
         self.script_compare.in_flight.push(handle);
+    }
+}
+
+/// [`Dispatcher::compare_target`] の結果。
+struct CompareTarget {
+    store: Arc<dyn ScriptDomainStore>,
+    generation_id: String,
+    bundle_sha256: String,
+    host_api: String,
+    call: Result<(Arc<dyn PolicyScript>, tokio::runtime::Handle), String>,
+}
+
+/// digest pass が apply した 1 run（付記 S4-4 の compare の入力）。
+pub(crate) struct CosDigestApplication {
+    pub input: task_core::chat::digest::CosDigestInput,
+    pub commands: Vec<task_core::chat::digest::CosDigestCommand>,
+    pub applied: task_core::script_compare::CosDigestApplied,
+}
+
+/// `cos_digest` の記録を追記する。失敗しても digest pass は続ける（warn の log だけ。S4-4）。
+fn append_compare_log(
+    store: &dyn ScriptDomainStore,
+    record: Result<task_core::script_compare::CosDigestCompareRecord, serde_json::Error>,
+) {
+    let result = record
+        .map_err(StoreError::from)
+        .and_then(|r| store.script_compare_log_append(&r, time::OffsetDateTime::now_utc()));
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "script_compare_log append failed");
     }
 }
 

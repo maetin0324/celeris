@@ -262,7 +262,10 @@ impl Dispatcher {
         launch.control_hook(self);
         // Intake is DB-only and runs even when CoS is disabled, so the
         // unavailable fallback can still see every new wait.
-        launch.triage_ingest(self);
+        let digests = launch.triage_ingest(self);
+        // ADR 2026-11-02-ts-control-layer-boundary S4-4: after Rust applied the digests, mode
+        // `compare` hands the same inputs to TS on a separate tokio task (records only).
+        self.compare_cos_digest(digests);
         // ADR 2026-10-15-root-done-cos-summary: root task done → a summary thread and one CoS run.
         launch.root_done_tick(self);
         if self.accepting_new_work && self.disk_ready && launch.config.enabled {

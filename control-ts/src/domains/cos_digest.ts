@@ -1,6 +1,13 @@
-// cos_digest 領域（境界 ADR 2026-11-02 付記 S4-1〜S4-3）: crates/task-core/src/chat/digest.rs の
-// `cos_digest_decide` と同じ command 列（文面・cards・requeue）を同じ文字列・同じ順で返す。
-// 純粋な同期の判定で、op・capability を使わない（S4-6）。Rust は S4 では TS の結果を apply しない（S4-4）。
+// cos_digest 領域（境界 ADR 2026-11-02 付記 S4-1〜S4-3、S4-11〜S4-18）。
+// 入口は pass ごとの `cosDigestPass(ctx)`（S4-12）。Host API の `cos_digest:list_runs` で digest を待つ run の一覧を読み、
+// 一覧の順に `cos_digest:read_run` で run ごとの入力を読み、run ごとの command 列を純粋関数 `decide()` で決めて返す。
+// `decide()` は crates/task-core/src/chat/digest.rs の `cos_digest_decide` と同じ command 列（文面・cards・requeue）を
+// 同じ文字列・同じ順で返す。DB の更新はしない。返した command は Rust が検証してから apply する（S4-14）。
+//
+// op の error の扱い（S4-18）:
+// - `read_run` の `exception`（Rust の store の読み出しの失敗）は、その run を飛ばす（Rust の参照実装と同じ。規則 8）。
+// - それ以外（`denied`・`terminated`・`generation_gone`・`timeout`・`busy` と `list_runs` のすべての error）は throw し、
+//   Rust の fallback に任せる。
 //
 // 入力の扱い:
 // - 余計な欄・欠けた欄・型の違いは throw する（Option の欄も null を明示させる）。
@@ -8,6 +15,7 @@
 //   （`run は <state> で終わった`・`状態不明`・`項目`）。fixture の参照出力と byte 一致させるため、ここも拒まない。
 // - `route` は Rust では文字列だが、書き込む値は `escalation`・`fallback` だけ。それ以外の値は throw する
 //   （digest の出力には使わない欄なので、拒んでも一致は崩れない）。
+import { cosDigestListRuns, cosDigestReadRun, type RequestContext } from "celeris:host";
 
 export type CosDigestRunState = string;
 
@@ -375,6 +383,64 @@ export function decide(input: CosDigestInput): CosDigestOutput {
   return { commands };
 }
 
-export async function cosDigest(input: unknown): Promise<CosDigestOutput> {
-  return decide(parseInput(input));
+/** digest を待つ run 1 つ（Rust の `CosDigestRunRef`）。 */
+export interface CosDigestRunRef {
+  thread: string;
+  run_id: string;
+  run_state: string;
+}
+
+/** S4-12 の出力 `CosDigestPassOutput` の 1 run。 */
+export interface CosDigestPassRun {
+  run_id: string;
+  commands: CosDigestCommand[];
+}
+
+/** S4-12 の出力 `CosDigestPassOutput`（欄の順は Rust の宣言順）。 */
+export interface CosDigestPassOutput {
+  runs: CosDigestPassRun[];
+}
+
+function runRef(v: unknown, where: string): CosDigestRunRef {
+  const o = object(v, where, ["thread", "run_id", "run_state"]);
+  return {
+    thread: string(o.thread, `${where}.thread`),
+    run_id: string(o.run_id, `${where}.run_id`),
+    run_state: string(o.run_state, `${where}.run_state`),
+  };
+}
+
+/** `cos_digest:list_runs` の応答を検査する（余計な欄・欠けた欄を拒む）。 */
+export function parseListReply(reply: unknown): { runs: CosDigestRunRef[] } {
+  const o = object(reply, "list_runs reply", ["runs"]);
+  return { runs: array(o.runs, "list_runs reply.runs", runRef) };
+}
+
+/** Host API の HostError で、code が `code` のものか。bundle の外の差し替え（試験の stub）でも同じに判定するため name と code で見る。 */
+function isHostError(e: unknown, code: string): boolean {
+  return e instanceof Error && e.name === "HostError" && (e as { code?: unknown }).code === code;
+}
+
+/**
+ * digest pass 全体（付記 S4-12）。list を 1 回読み、一覧の順に run を 1 つずつ read して decide する。
+ * 一覧に無い run は読まない。read の `exception` はその run を飛ばし、他の error は throw する。
+ */
+export async function cosDigestPass(ctx: RequestContext): Promise<CosDigestPassOutput> {
+  const list = parseListReply(await cosDigestListRuns(ctx, {}));
+  const runs: CosDigestPassRun[] = [];
+  for (const ref of list.runs) {
+    let reply: unknown;
+    try {
+      reply = await cosDigestReadRun(ctx, { thread: ref.thread, run_id: ref.run_id });
+    } catch (e) {
+      if (isHostError(e, "exception")) continue;
+      throw e;
+    }
+    const input = parseInput(reply);
+    if (input.thread !== ref.thread || input.run_id !== ref.run_id) {
+      throw new Error(`cos_digest: read_run answered ${input.thread}/${input.run_id} for ${ref.thread}/${ref.run_id}`);
+    }
+    runs.push({ run_id: ref.run_id, commands: decide(input).commands });
+  }
+  return { runs };
 }

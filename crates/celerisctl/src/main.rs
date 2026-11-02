@@ -1090,30 +1090,9 @@ mod cos_mapping_tests {
             ),
             (vec!["replay"], "POST", "/api/v1/replay".into()),
             (
-                vec![
-                    "script",
-                    "mode",
-                    "lane_rules",
-                    "compare",
-                    "--expected-version",
-                    "0",
-                    "--generation",
-                    "abc",
-                ],
+                vec!["script", "mode", "x", "rust", "--expected-version", "1"],
                 "PUT",
-                "/api/v1/script/domains/lane_rules/mode".into(),
-            ),
-            (
-                vec![
-                    "script",
-                    "mode",
-                    "lane_rules",
-                    "rust",
-                    "--expected-version",
-                    "1",
-                ],
-                "PUT",
-                "/api/v1/script/domains/lane_rules/mode".into(),
+                "/api/v1/script/domains/x/mode".into(),
             ),
         ];
         let rows = skill_allowed_rows();

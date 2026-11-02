@@ -58,6 +58,13 @@ dispatcher（`crates/task-dispatch/src/dispatcher/tests/script_compare.rs`）。
 1. `ceiling_exceeded` は付記 S2-8 の定義どおりに実装したが、今の `LaneCeiling::clamp` では起きない。許される lane が 1 つでもあれば `clamp` は許される lane を返す。1 つも無ければ Rust の lane も許されない。このため試験は「違反なし」だけを確かめている。
 2. `LaneRulesInput`・`LaneRulesOutput` を `docs/api/script-host/host-v1.schema.json` に入れて TS の型を生成する作業（lane-rules-ts の未解決）は残っている。schema の生成元は `crates/script-runtime` で、この unit の範囲外。
 3. 本物の host での実装（`ScriptRuntimeHandle` の `ScriptError` → `PolicyScriptError` の写像。`Denied` の code は `safety_violation` に入れる）と daemon の注入は host-adapter unit が行う。daemon は `[script]` の有無によらず `set_script_domain_store` を呼ぶ必要がある。呼ばないと、mode が compare でも `unavailable` が記録されない。
+4. `crates/celeris/tests/script_runtime.rs` の `script_runtime_valid_bundle_loads` は flaky で、前回の run の check はこの試験で落ちた（`seen.max_threads` が 2、期待 1）。この unit の差分が原因ではない（下の「check の不合格の調査」）。試験の場所がこの unit の範囲外なので、ここでは直さず follow-up task に起票した。
+
+## check の不合格の調査
+- 原因: Linux の新しい thread は親の comm を引き継ぐ。actor thread（`celeris-script`）が watchdog と V8 の worker を起こすと、子が自分の名前を付けるまでの短い間、子も `celeris-script` と読める。試験の sampler はこの瞬間に 2 本と数える。本物の actor が 2 本走ったのではない。
+- 確かめ方: sampler の間隔を 20 µs に縮め、2 本と読んだ直後の thread 名を出す観察コードを一時的に入れた（確認後に元へ戻した）。40 回中 13 回で 2 本と読み、直後の一覧の `celeris-script` はどの回も 1 本で、他は `celeris-script-`（watchdog）と `V8 DefaultWorke` だった。
+- 元の 5 ms 間隔の試験は、単体では 30 回とも通った。
+- この unit の差分は `crates/task-dispatch/` と進捗ファイルだけで、`crates/celeris`・`crates/script-runtime` を変えていない。
 
 ## 提案
 1. close unit で付記 S2-6 の「最大 50 ms 待つ」を「dispatcher は待たず、比較は別の tokio task で 50 ms の deadline 付きで走る」に直す。

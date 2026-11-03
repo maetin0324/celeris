@@ -1,9 +1,10 @@
 //! 付記 S2: 本物の deno_core host で `route_priority` の compare を確かめる。userns を使わない。外部ネットワークに出ない。
 //!
-//! `control-ts/dist` の bundle を使う試験は、無い・古いなら SKIP を出して抜ける。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら失敗にする。
-//! `CELERIS_SCRIPT_BUNDLE_DIR` が在ればその dir の bundle を使い、使えないなら失敗にする（付記 S5-9）。
+//! bundle を使う試験は、control-ts の source から `$TMPDIR` に作った bundle を読む（`control-ts/dist` は読まない。付記 S5-9）。
+//! 作れない（node・node_modules が無い等）なら SKIP を出して抜ける。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら失敗にする。
+//! `CELERIS_SCRIPT_BUNDLE_DIR` が在ればその dir の bundle を使い、使えないなら失敗にする。
 //! 例外を投げる bundle・常に違う答えを返す bundle・table に無い候補を返す bundle は、この file の中の本文を
-//! 同じ host で評価する（dist が無くても走る）。
+//! 同じ host で評価する（bundle を作れなくても走る）。
 //! 待ちの方針（`timeout` のときだけ新しい task でやり直す）と共通の helper は `support/script_compare.rs`。
 
 mod support;
@@ -11,8 +12,8 @@ mod support;
 use std::sync::Arc;
 
 use support::script_compare::{
-    Env, INPUTS_FILE, LONG_DEADLINE, check_bundle, check_dist, control_ts_inputs_sha256,
-    dist_bundle, repo_root, start_code, start_policy, take_bundle_logged,
+    Env, LONG_DEADLINE, build_bundle_cached, check_bundle, control_ts_inputs_sha256, dist_bundle,
+    repo_root, require_bundle, start_code, start_policy, take_bundle, take_bundle_logged,
 };
 use task_core::llm_route::{
     CandidateKey, ExecutionClass, HarnessId, ModelId, Registry, SourceId, route_priority_decide,
@@ -371,9 +372,8 @@ async fn script_compare_route_priority_undeclared_candidate_keeps_rust_route() {
     );
 }
 
-/// tempdir を `control-ts/` の形にする: `dist/` に `domains` の manifest を持つ検証の通る bundle を置き、
-/// `bundle.config.json` には `host_selftest`・`lane_rules`・`route_priority` を宣言し、`src/` と package の file を置いて
-/// dist の `inputs.sha256` をその内容 hash にする（作り直した直後の dist）。返り値は (tempdir, dist, config)。
+/// tempdir の `dist/` に `domains` の manifest を持つ検証の通る bundle を置き、`bundle.config.json` には
+/// `host_selftest`・`lane_rules`・`route_priority` を宣言する。返り値は (tempdir, dist, config)。
 fn stale_dist_fixture(
     domains: &[&str],
 ) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
@@ -404,12 +404,6 @@ fn stale_dist_fixture(
         "checkpoint_versions": [],
     });
     std::fs::write(&config, config_json.to_string()).expect("config");
-    std::fs::create_dir_all(dir.path().join("src/domains")).expect("src");
-    std::fs::write(dir.path().join("src/main.ts"), "export {};\n").expect("main.ts");
-    std::fs::write(dir.path().join("package.json"), "{}\n").expect("package.json");
-    std::fs::write(dir.path().join("pnpm-lock.yaml"), "lockfileVersion: 9\n").expect("lock");
-    let inputs = control_ts_inputs_sha256(dir.path()).expect("inputs");
-    std::fs::write(dist.join(INPUTS_FILE), format!("{inputs}\n")).expect("inputs.sha256");
     (dir, dist, config)
 }
 
@@ -424,13 +418,13 @@ fn script_compare_stale_dist_missing_domain_is_skipped() {
     assert!(check_bundle(&dist, &config, "lane_rules").is_err());
 }
 
-/// manifest の domains が config と揃い、source の内容 hash が合えば使う。
+/// manifest の domains が config と揃っていれば使う。
 #[test]
 fn script_compare_stale_dist_matching_domains_is_used() {
-    let (dir, dist, config) = stale_dist_fixture(&ALL_DOMAINS);
+    let (_dir, dist, config) = stale_dist_fixture(&ALL_DOMAINS);
     let bundle = check_bundle(&dist, &config, DOMAIN).expect("usable");
     assert!(bundle.manifest.domains.iter().any(|d| d == DOMAIN));
-    assert!(check_dist(dir.path(), "lane_rules").is_ok());
+    assert!(check_bundle(&dist, &config, "lane_rules").is_ok());
 }
 
 /// config に無い領域を要る試験は、揃った bundle でも使わない。
@@ -454,66 +448,132 @@ fn script_compare_stale_dist_required_panics() {
     );
 }
 
-/// 付記 S5-9 (2): 領域と capability が揃っていても、dist を作った後に source が変われば古い dist として使わない。
-/// `inputs.sha256` が無い（S5 より前の build-bundle が作った）dist も同じ。
-#[test]
-fn script_compare_stale_dist_source_changed_is_skipped() {
-    let (dir, _dist, _config) = stale_dist_fixture(&ALL_DOMAINS);
-    assert!(check_dist(dir.path(), DOMAIN).is_ok());
-    std::fs::write(dir.path().join("src/domains/x.ts"), "export const x = 1;\n").expect("edit");
-    let why = check_dist(dir.path(), DOMAIN).expect_err("stale after a source edit");
-    assert!(
-        why.contains("stale bundle") && why.contains(INPUTS_FILE),
-        "{why}"
-    );
+/// `control-ts/` の形の tempdir（`src/`・package の file・`scripts/build-bundle.mjs`・host の schema）。
+/// `build-bundle.mjs` は `buildBundle({ outDir })` で `outDir` に `manifest.json` を書くだけの偽物。
+/// host の schema の置き場（`control-ts/` の親からの相対 path）。
+const SCHEMA: &str = "docs/api/script-host/host-v1.schema.json";
 
-    let (dir, dist, _config) = stale_dist_fixture(&ALL_DOMAINS);
-    std::fs::remove_file(dist.join(INPUTS_FILE)).expect("rm inputs");
-    let why = check_dist(dir.path(), DOMAIN).expect_err("stale without inputs");
-    assert!(why.contains("no inputs.sha256"), "{why}");
-}
-
-/// dist の無い環境は使わない（SKIP）。SKIP は log の file に 1 行（試験名・tab・理由）残り、require なら失敗にする。
-#[test]
-fn script_compare_missing_dist_is_skipped_and_logged() {
-    let (dir, dist, _config) = stale_dist_fixture(&ALL_DOMAINS);
-    std::fs::remove_dir_all(&dist).expect("rm dist");
-    let log = dir.path().join("skip.log");
-    let test = "script_compare_missing_dist_is_skipped_and_logged";
-    for _ in 0..2 {
-        let checked = check_dist(dir.path(), DOMAIN);
-        assert!(take_bundle_logged(checked, &dist, test, false, Some(&log)).is_none());
-    }
-    let text = std::fs::read_to_string(&log).expect("skip log");
-    assert_eq!(text.lines().count(), 2, "{text}");
-    assert!(
-        text.lines().all(|l| l.starts_with(&format!("{test}\t"))),
-        "{text}"
-    );
-    let required = std::panic::catch_unwind(|| {
-        take_bundle_logged(check_dist(dir.path(), DOMAIN), &dist, test, true, None)
-    });
-    assert!(required.is_err(), "require must fail on a missing dist");
-}
-
-/// Rust と `build-bundle.mjs` の `inputsSha256` が同じ値になる（`control-ts/scripts/build-bundle.test.mjs` の固定値と同じ）。
-#[test]
-fn script_compare_inputs_sha256_matches_build_bundle() {
+fn fake_control_ts() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
+    let cts = dir.path().join("control-ts");
     let files = [
         ("src/main.ts", "export {};\n"),
         ("src/domains/x.ts", "export const x = 1;\n"),
         ("bundle.config.json", "{}\n"),
         ("package.json", "{\"name\":\"t\"}\n"),
         ("pnpm-lock.yaml", "lockfileVersion: 9\n"),
+        (
+            "scripts/build-bundle.mjs",
+            "import { mkdirSync, writeFileSync } from \"node:fs\";\n\
+             export async function buildBundle({ outDir }) {\n\
+               mkdirSync(outDir, { recursive: true });\n\
+               writeFileSync(`${outDir}/manifest.json`, \"{}\\n\");\n\
+             }\n",
+        ),
+        ("schema", "{}\n"),
     ];
     for (rel, text) in files {
-        let path = dir.path().join(rel);
+        let path = if rel == "schema" {
+            dir.path().join(SCHEMA)
+        } else {
+            cts.join(rel)
+        };
         std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
         std::fs::write(path, text).expect("write");
     }
-    assert_eq!(
-        control_ts_inputs_sha256(dir.path()).expect("inputs"),
-        "6027c7bbb74688d319212a529039e042018e8f2d2645ef70e939e17676c5e00c"
+    (dir, cts)
+}
+
+/// 付記 S5-9: 試験は source の内容 hash の dir に作った bundle を読む。source を変えると hash が変わり、作り直す
+/// （古い bundle を読まない）。同じ source なら作った dir を使い回す。
+#[test]
+fn script_compare_fresh_bundle_follows_source() {
+    let test = "script_compare_fresh_bundle_follows_source";
+    let node = std::process::Command::new("node").args(["-e", ""]).status();
+    if !node.as_ref().is_ok_and(|s| s.success()) {
+        let why = format!("node does not run: {node:?}");
+        let _ = take_bundle(
+            Err(why),
+            std::path::Path::new("node"),
+            test,
+            require_bundle(),
+        );
+        return;
+    }
+    let (_dir, cts) = fake_control_ts();
+    let before = control_ts_inputs_sha256(&cts).expect("inputs");
+    let cache = cts.join("../cache");
+    let built = build_bundle_cached(&cts, &cache).expect("build");
+    assert_eq!(built, cache.join(&before));
+    assert!(built.join("manifest.json").is_file());
+    // 2 回目は作らない（作った dir に印を置いて、残ることを見る）。
+    std::fs::write(built.join("mark"), "").expect("mark");
+    assert_eq!(build_bundle_cached(&cts, &cache).expect("reuse"), built);
+    assert!(built.join("mark").is_file());
+
+    for path in [
+        cts.join("src/domains/x.ts"),
+        cts.join("scripts/build-bundle.mjs"),
+        cts.join("..").join(SCHEMA),
+    ] {
+        let mut text = std::fs::read_to_string(&path).expect("read");
+        text.push_str("// edit\n");
+        std::fs::write(&path, text).expect("edit");
+        let after = control_ts_inputs_sha256(&cts).expect("inputs");
+        assert_ne!(
+            after,
+            before,
+            "{} must change the inputs hash",
+            path.display()
+        );
+        let rebuilt = build_bundle_cached(&cts, &cache).expect("rebuild");
+        assert_eq!(rebuilt, cache.join(&after));
+        assert!(!rebuilt.join("mark").exists());
+    }
+    // 作業中の dir と lock は残らない。
+    let names: Vec<String> = std::fs::read_dir(&cache)
+        .expect("cache")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        names
+            .iter()
+            .all(|n| !n.contains(".tmp-") && !n.ends_with(".lock")),
+        "{names:?}"
+    );
+}
+
+/// bundle を作れない（build-bundle.mjs が失敗する）環境は SKIP。SKIP は log の file に 1 行（試験名・tab・理由）
+/// 残り、require なら失敗にする。
+#[test]
+fn script_compare_unbuildable_bundle_is_skipped_and_logged() {
+    let (dir, cts) = fake_control_ts();
+    std::fs::write(
+        cts.join("scripts/build-bundle.mjs"),
+        "export async function buildBundle() { throw new Error(\"boom\"); }\n",
+    )
+    .expect("broken build");
+    let cache = dir.path().join("cache");
+    let log = dir.path().join("skip.log");
+    let test = "script_compare_unbuildable_bundle_is_skipped_and_logged";
+    let checked = || {
+        build_bundle_cached(&cts, &cache)
+            .and_then(|d| check_bundle(&d, &cts.join("bundle.config.json"), DOMAIN))
+    };
+    for _ in 0..2 {
+        assert!(take_bundle_logged(checked(), &cts, test, false, Some(&log)).is_none());
+    }
+    let text = std::fs::read_to_string(&log).expect("skip log");
+    assert_eq!(text.lines().count(), 2, "{text}");
+    assert!(
+        text.lines().all(|l| l.starts_with(&format!("{test}\t"))
+            && (l.contains("build-bundle.mjs failed") || l.contains("cannot run node"))),
+        "{text}"
+    );
+    let required =
+        std::panic::catch_unwind(|| take_bundle_logged(checked(), &cts, test, true, None));
+    assert!(
+        required.is_err(),
+        "require must fail when no bundle can be built"
     );
 }

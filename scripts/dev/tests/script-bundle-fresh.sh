@@ -1,14 +1,14 @@
 #!/bin/sh
 # bundle を読む本物の host の試験（crates/celeris/tests/script_compare_*）が、古い dist・dist の無い環境で
-# 黙って誤らないことを確かめる（境界 ADR 2026-11-02-ts-control-layer-boundary 付記 S5-9）。引数なしで実行する。
+# 黙って SKIP せず、誤って落ちないことを確かめる（境界 ADR 2026-11-02-ts-control-layer-boundary 付記 S5-9）。引数なしで実行する。
 #
-# 1. 本物の試験（cargo nextest）を、control-ts の source の写し（$TMPDIR）に向けて走らせる
-#    （CELERIS_SCRIPT_CONTROL_TS_DIR。作業ツリーの control-ts/dist には触れない）:
-#    (a) dist が無い: SKIP して exit 0、SKIP は CELERIS_SCRIPT_SKIP_LOG に残る。CELERIS_SCRIPT_REQUIRE_BUNDLE=1 では非 0。
-#    (b) 偽の古い dist（領域・capability は config と同じ、本文は常に例外を投げる、inputs.sha256 は source と合わない）:
-#        SKIP して exit 0（古い本文で落ちない）。REQUIRE=1 では非 0。
-#    (c) 同じ偽の dist の inputs.sha256 を source の値にする: 古さの判定を通るので使われ、試験が落ちる
-#        （(b) の SKIP が inputs.sha256 の照合によることを確かめる）。
+# 1. 本物の試験（cargo nextest）を、control-ts の写し（$TMPDIR。git の repo にし、node_modules は作業ツリーへの
+#    symlink）に向けて走らせる（CELERIS_SCRIPT_CONTROL_TS_DIR。作業ツリーの control-ts/dist には触れない）。
+#    試験は source から $TMPDIR に bundle を作って読み、control-ts/dist は読まない:
+#    (a) dist が無い: exit 0、SKIP 0。CELERIS_SCRIPT_REQUIRE_BUNDLE=1 でも exit 0。
+#    (b) 偽の古い dist（領域・capability は config と同じ、本文は常に例外を投げる）: exit 0、SKIP 0、REQUIRE=1 でも exit 0。
+#    (c) 同じ偽の dist を CELERIS_SCRIPT_BUNDLE_DIR で渡すと試験が落ちる（(b) で偽の dist が読まれていないことの裏付け）。
+#    (d) node が動かない（bundle を作れない）: SKIP して exit 0、SKIP は CELERIS_SCRIPT_SKIP_LOG に残る。REQUIRE=1 では非 0。
 # 2. scripts/dev/test-affected.sh の結線を、小さな git fixture と偽の cargo・node で確かめる:
 #    bundle を使い捨ての dir に作って CELERIS_SCRIPT_BUNDLE_DIR・REQUIRE=1 を cargo に渡す、control-ts/dist を変えない、
 #    作った bundle で SKIP したら非 0、bundle に届く変更で作れなければ非 0、届かない変更なら渡さずに進む、
@@ -23,34 +23,52 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok: $*"; }
 
 # ---- 1. 本物の試験 ----
-cts="$work/control-ts"
-mkdir -p "$cts"
-cp -R "$here/control-ts/src" "$cts/src"
+if [ ! -f "$here/control-ts/node_modules/.modules.yaml" ]; then
+  pm="corepack pnpm@$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["packageManager"].split("@",1)[1])' "$here/control-ts/package.json")"
+  command -v pnpm >/dev/null 2>&1 && pm=pnpm
+  (cd "$here/control-ts" && $pm install --offline --frozen-lockfile >/dev/null 2>&1) ||
+    fail "control-ts の pnpm install --offline が失敗した"
+fi
+copy="$work/root"
+cts="$copy/control-ts"
+mkdir -p "$cts" "$copy/docs/api/script-host"
+cp -R "$here/control-ts/src" "$here/control-ts/scripts" "$cts/"
 cp "$here/control-ts/bundle.config.json" "$here/control-ts/package.json" "$here/control-ts/pnpm-lock.yaml" "$cts/"
+cp "$here/docs/api/script-host/host-v1.schema.json" "$copy/docs/api/script-host/"
+ln -s "$here/control-ts/node_modules" "$cts/node_modules"
+printf 'node_modules\ndist\n' >"$copy/.gitignore"
+(cd "$copy" && git init -q -b main . && git add -A &&
+  git -c user.email=t@example.com -c user.name=t commit -q -m copy) || fail "写しを git の repo にできない"
 
 (cd "$here" && cargo nextest run --no-run -p celeris -E 'binary(/^script_compare_/)' >/dev/null 2>&1) ||
   fail "cargo nextest --no-run が失敗した"
-real() { # name env...（cargo の exit を返す。出力は $work/<name>.out）
+real() { # name env...（cargo の exit を返す。出力は $work/<name>.out、SKIP は $work/<name>.skip）
   name="$1"; shift
   : >"$work/$name.skip"
+  mkdir -p "$work/tmp-$name"
   set +e
-  (cd "$here" && env CELERIS_SCRIPT_CONTROL_TS_DIR="$cts" CELERIS_SCRIPT_SKIP_LOG="$work/$name.skip" "$@" \
+  (cd "$here" && env TMPDIR="$work/tmp-$name" CELERIS_SCRIPT_CONTROL_TS_DIR="$cts" \
+    CELERIS_SCRIPT_SKIP_LOG="$work/$name.skip" "$@" \
     cargo nextest run --no-fail-fast -p celeris -E 'binary(/^script_compare_/)' >"$work/$name.out" 2>&1)
   rc=$?
   set -e
   return "$rc"
 }
+built() { # name（source から作った bundle が $TMPDIR に在る）
+  ls "$work/tmp-$1/celeris-script-bundle/"*/manifest.json >/dev/null 2>&1
+}
 
 # (a) dist が無い。
-real a-missing || fail "(a) dist が無いのに試験が落ちた: $(tail -5 "$work/a-missing.out")"
-[ -s "$work/a-missing.skip" ] || fail "(a) SKIP が log に残っていない"
-grep -q 'control-ts/dist: .*manifest.json' "$work/a-missing.skip" || fail "(a) SKIP の理由が無い: $(head -1 "$work/a-missing.skip")"
-pass "(a) dist が無い: exit 0、SKIP $(grep -c . "$work/a-missing.skip") 件を log に記録"
-if real a-missing-req CELERIS_SCRIPT_REQUIRE_BUNDLE=1; then fail "(a) REQUIRE=1 で dist が無いのに通った"; fi
-pass "(a) REQUIRE=1 では失敗"
+real a-missing || fail "(a) dist が無いのに試験が落ちた: $(grep -m3 -E 'FAIL|panicked' "$work/a-missing.out")"
+[ ! -s "$work/a-missing.skip" ] || fail "(a) SKIP した: $(head -1 "$work/a-missing.skip")"
+built a-missing || fail "(a) source から bundle を作っていない"
+pass "(a) dist が無い: source から作った bundle で exit 0、SKIP 0"
+real a-missing-req CELERIS_SCRIPT_REQUIRE_BUNDLE=1 ||
+  fail "(a) REQUIRE=1 で落ちた: $(grep -m3 -E 'FAIL|panicked' "$work/a-missing-req.out")"
+pass "(a) REQUIRE=1 でも exit 0"
 
 # (b) 偽の古い dist。常に例外を投げる本文で、manifest は今の config と同じ領域・capability。
-python3 -I - "$cts" "$here/docs/api/script-host/host-v1.schema.json" <<'PY'
+python3 -I - "$cts" "$copy/docs/api/script-host/host-v1.schema.json" <<'PY2'
 import hashlib, json, os, sys
 cts, schema = sys.argv[1], sys.argv[2]
 cfg = json.load(open(os.path.join(cts, "bundle.config.json")))
@@ -70,31 +88,30 @@ manifest = {
     "checkpoint_versions": cfg["checkpoint_versions"],
 }
 open(os.path.join(dist, "manifest.json"), "w").write(json.dumps(manifest))
-open(os.path.join(dist, "inputs.sha256"), "w").write("0" * 64 + "\n")
-PY
+PY2
+stale_sum="$(cat "$cts/dist/bundle.mjs" "$cts/dist/manifest.json" | cksum)"
 real b-stale || fail "(b) 古い dist で試験が落ちた: $(grep -m3 -E 'FAIL|panicked' "$work/b-stale.out")"
-grep -q 'stale bundle: inputs.sha256' "$work/b-stale.skip" || fail "(b) inputs.sha256 の照合で SKIP していない: $(head -1 "$work/b-stale.skip")"
-pass "(b) 古い dist: exit 0、SKIP $(grep -c . "$work/b-stale.skip") 件（inputs.sha256 が合わない）"
-if real b-stale-req CELERIS_SCRIPT_REQUIRE_BUNDLE=1; then fail "(b) REQUIRE=1 で古い dist なのに通った"; fi
-pass "(b) REQUIRE=1 では失敗"
+[ ! -s "$work/b-stale.skip" ] || fail "(b) SKIP した: $(head -1 "$work/b-stale.skip")"
+real b-stale-req CELERIS_SCRIPT_REQUIRE_BUNDLE=1 ||
+  fail "(b) REQUIRE=1 で古い dist で落ちた: $(grep -m3 -E 'FAIL|panicked' "$work/b-stale-req.out")"
+[ "$(cat "$cts/dist/bundle.mjs" "$cts/dist/manifest.json" | cksum)" = "$stale_sum" ] || fail "(b) 試験が dist を書き換えた"
+pass "(b) 偽の古い dist: exit 0、SKIP 0、REQUIRE=1 でも exit 0、dist は不変"
 
-# (c) inputs.sha256 だけを source の値にすると、例外を投げる本文が使われて落ちる。
-python3 -I - "$cts" >"$cts/dist/inputs.sha256" <<'PY'
-import hashlib, os, sys
-root = sys.argv[1]
-files = []
-for d, _, names in os.walk(os.path.join(root, "src")):
-    for n in names:
-        p = os.path.join(d, n)
-        if os.path.isfile(p) and not os.path.islink(p):
-            files.append(os.path.relpath(p, root).replace(os.sep, "/"))
-files += ["bundle.config.json", "package.json", "pnpm-lock.yaml"]
-text = "".join("%s  %s\n" % (hashlib.sha256(open(os.path.join(root, f), "rb").read()).hexdigest(), f) for f in sorted(files))
-print(hashlib.sha256(text.encode()).hexdigest())
-PY
-if real c-used; then fail "(c) 例外を投げる bundle が使われたのに通った"; fi
-[ ! -s "$work/c-used.skip" ] || fail "(c) inputs.sha256 が合うのに SKIP した: $(head -1 "$work/c-used.skip")"
-pass "(c) inputs.sha256 が合う dist は使われる（例外を投げる本文で失敗、SKIP 0）"
+# (c) 同じ偽の dist を読ませると落ちる（(b) が偽の dist を読んでいないことの裏付け）。
+if real c-used CELERIS_SCRIPT_BUNDLE_DIR="$cts/dist"; then fail "(c) 例外を投げる bundle を読ませたのに通った"; fi
+grep -q 'stale dist' "$work/c-used.out" || fail "(c) 偽の dist の例外で落ちていない: $(grep -m3 -E 'FAIL|panicked' "$work/c-used.out")"
+pass "(c) 偽の dist を CELERIS_SCRIPT_BUNDLE_DIR で読ませると落ちる"
+
+# (d) node が動かない（bundle を作れない）。
+nonode="$work/nonode"
+mkdir -p "$nonode"
+printf '#!/bin/sh\necho "node: disabled by script-bundle-fresh" >&2\nexit 127\n' >"$nonode/node"
+chmod +x "$nonode/node"
+real d-nonode PATH="$nonode:$PATH" || fail "(d) bundle を作れないのに試験が落ちた: $(grep -m3 -E 'FAIL|panicked' "$work/d-nonode.out")"
+grep -q 'build-bundle.mjs failed' "$work/d-nonode.skip" || fail "(d) SKIP の理由が log に無い: $(head -1 "$work/d-nonode.skip")"
+pass "(d) bundle を作れない: exit 0、SKIP $(grep -c . "$work/d-nonode.skip") 件を log に記録"
+if real d-nonode-req PATH="$nonode:$PATH" CELERIS_SCRIPT_REQUIRE_BUNDLE=1; then fail "(d) REQUIRE=1 で bundle を作れないのに通った"; fi
+pass "(d) REQUIRE=1 では失敗"
 
 # ---- 2. test-affected.sh の結線 ----
 fx="$work/fx"

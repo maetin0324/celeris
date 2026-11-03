@@ -4,9 +4,10 @@
 //! rust に戻ることも確かめる（file の後半）。
 //! userns を使わない。外部ネットワークに出ない。LLM を呼ばない（triage run の結果は store に直接書く）。
 //!
-//! `control-ts/dist` の bundle を使う試験は、無い・古いなら SKIP を出して抜ける。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1`
-//! なら失敗にする。例外を投げる bundle・常に違う答えを返す bundle は、この file の中の本文を同じ host で評価する
-//! （dist が無くても走る）。`CELERIS_SCRIPT_BUNDLE_DIR` が在ればその dir の bundle を使い、使えないなら失敗にする（付記 S5-9）。
+//! bundle を使う試験は、control-ts の source から `$TMPDIR` に作った bundle を読む（`control-ts/dist` は読まない。付記 S5-9）。
+//! 作れない（node・node_modules が無い等）なら SKIP を出して抜ける。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら失敗にする。
+//! `CELERIS_SCRIPT_BUNDLE_DIR` が在ればその dir の bundle を使い、使えないなら失敗にする。
+//! 例外を投げる bundle・常に違う答えを返す bundle は、この file の中の本文を同じ host で評価する（bundle を作れなくても走る）。
 //!
 //! 待ちの方針: dispatcher の deadline は 50 ms の固定。`timeout` は環境の遅さなので、そのときだけ新しい一時 DB で
 //! 場面をやり直す（`support/script_compare.rs` と同じ方針。digest は run ごとに 1 回なので、同じ DB ではやり直せない）。

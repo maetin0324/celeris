@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { INPUTS_FILE, buildBundle, inputsSha256 } from "./build-bundle.mjs";
+import { buildBundle } from "./build-bundle.mjs";
 
 const pkg = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const work = mkdtempSync(path.join(process.env.TMPDIR ?? tmpdir(), "control-ts-bundle-"));
@@ -74,7 +74,6 @@ for (const [name, source, specifier] of rejected) {
     });
     assert.equal(existsSync(path.join(outDir, "bundle.mjs")), false);
     assert.equal(existsSync(path.join(outDir, "manifest.json")), false);
-    assert.equal(existsSync(path.join(outDir, INPUTS_FILE)), false);
   });
 }
 
@@ -82,30 +81,4 @@ test("bundling fails on a capability the schema does not know", async () => {
   const { entry, outDir } = fixture("");
   const config = { host_api: "^1", domains: { x: ["write:everything"] }, checkpoint_versions: [] };
   await assert.rejects(buildBundle({ entry, outDir, config }), /unknown capability.*write:everything/);
-});
-
-// 付記 S5-9 (2): dist に source の内容 hash を書く。試験の support（Rust）が同じ値を計算して古い dist を見分ける。
-test("dist records the content hash of the control-ts sources", async () => {
-  const { outDir } = fixture("");
-  await buildBundle({ outDir });
-  assert.equal(readFileSync(path.join(outDir, INPUTS_FILE), "utf8"), `${inputsSha256(pkg)}\n`);
-});
-
-// Rust の control_ts_inputs_sha256 と同じ値（crates/celeris/tests/script_compare_route_priority.rs の固定値と同じ）。
-test("the inputs hash covers src/ and the three package files in path order", () => {
-  const root = path.join(work, `inputs${serial++}`);
-  const files = {
-    "src/main.ts": "export {};\n",
-    "src/domains/x.ts": "export const x = 1;\n",
-    "bundle.config.json": "{}\n",
-    "package.json": '{"name":"t"}\n',
-    "pnpm-lock.yaml": "lockfileVersion: 9\n",
-  };
-  for (const [rel, text] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
-    writeFileSync(path.join(root, rel), text);
-  }
-  assert.equal(inputsSha256(root), "6027c7bbb74688d319212a529039e042018e8f2d2645ef70e939e17676c5e00c");
-  writeFileSync(path.join(root, "src/domains/x.ts"), "export const x = 2;\n");
-  assert.notEqual(inputsSha256(root), "6027c7bbb74688d319212a529039e042018e8f2d2645ef70e939e17676c5e00c");
 });

@@ -36,8 +36,8 @@ pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// `control-ts/`（source と既定の dist の置き場）。`CELERIS_SCRIPT_CONTROL_TS_DIR` が在ればその dir
-/// （`scripts/dev/tests/script-bundle-fresh.sh` が source の写しと偽の dist を置き、作業ツリーの dist に触れずに試す）。
+/// `control-ts/`（bundle の source の置き場）。`CELERIS_SCRIPT_CONTROL_TS_DIR` が在ればその dir
+/// （`scripts/dev/tests/script-bundle-fresh.sh` が source の写しと偽の dist を置き、作業ツリーに触れずに試す）。
 pub fn control_ts_dir() -> PathBuf {
     std::env::var_os(CONTROL_TS_DIR_ENV)
         .filter(|v| !v.is_empty())
@@ -48,10 +48,15 @@ pub fn control_ts_dir() -> PathBuf {
 /// [`control_ts_dir`] を差し替える変数（試験の台本だけが使う）。
 pub const CONTROL_TS_DIR_ENV: &str = "CELERIS_SCRIPT_CONTROL_TS_DIR";
 
-/// bundle を読む試験が使う dir。`CELERIS_SCRIPT_BUNDLE_DIR` が在ればそこ、無ければ `control-ts/dist`。
-/// [`dist_bundle`] で使えると判定した dir と、配備（`deploy_bundle`）に渡す dir を揃える。
+/// bundle を読む試験が使う dir。`CELERIS_SCRIPT_BUNDLE_DIR` が在ればそこ、無ければ source から作った bundle の dir
+/// （[`fresh_bundle_dir`]）。[`dist_bundle`] で使えると判定した dir と、配備（`deploy_bundle`）に渡す dir を揃える。
+/// [`dist_bundle`] が `Some` を返した後に呼ぶ。
 pub fn dist_dir() -> PathBuf {
-    bundle_dir_override().unwrap_or_else(|| control_ts_dir().join("dist"))
+    match bundle_dir_override() {
+        Some(dir) => dir,
+        None => fresh_bundle_dir()
+            .unwrap_or_else(|why| panic!("no bundle (call dist_bundle first): {why}")),
+    }
 }
 
 fn bundle_dir_override() -> Option<PathBuf> {
@@ -65,14 +70,19 @@ pub fn bundle_config_path() -> PathBuf {
     control_ts_dir().join("bundle.config.json")
 }
 
-/// 試験に使う bundle の dir を外から渡す変数（付記 S5-9 (1)）。在れば `control-ts/dist` を読まず、使えないなら失敗にする。
+/// 試験に使う bundle の dir を外から渡す変数（付記 S5-9 (1)）。在れば source から作らず、使えないなら失敗にする。
 pub const BUNDLE_DIR_ENV: &str = "CELERIS_SCRIPT_BUNDLE_DIR";
 /// SKIP を 1 行ずつ足す file（付記 S5-9 (5)）。`scripts/dev/test-affected.sh` が数える。
 pub const SKIP_LOG_ENV: &str = "CELERIS_SCRIPT_SKIP_LOG";
-/// `build-bundle.mjs` が dist に書く source の内容 hash の file（付記 S5-9 (2)）。
-pub const INPUTS_FILE: &str = "inputs.sha256";
-/// 内容 hash に入れる `control-ts/` 直下の file（`src/` の下の全 file に加える）。
-const INPUT_FILES: [&str; 3] = ["bundle.config.json", "package.json", "pnpm-lock.yaml"];
+/// 内容 hash に入れる `control-ts/` の file（`src/` の下の全 file に加える）。`build-bundle.mjs` 自身も入れる。
+const INPUT_FILES: [&str; 4] = [
+    "bundle.config.json",
+    "package.json",
+    "pnpm-lock.yaml",
+    "scripts/build-bundle.mjs",
+];
+/// 内容 hash に入れる host の schema（`control-ts/` の親からの相対 path。build-bundle が manifest に hash を書く）。
+const SCHEMA_FILE: &str = "docs/api/script-host/host-v1.schema.json";
 
 /// `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら、使えない bundle を SKIP でなく失敗にする。
 pub fn require_bundle() -> bool {
@@ -81,20 +91,23 @@ pub fn require_bundle() -> bool {
 
 /// 試験に使う bundle のうち、`domain` を含み、いまの `bundle.config.json` と同じ領域の集合を持つもの。
 ///
-/// `CELERIS_SCRIPT_BUNDLE_DIR` が在ればその dir を読み、使えないなら失敗にする。無ければ `control-ts/dist` を読み、
-/// 無い・読めない・古い（[`check_dist`]）なら SKIP（`None`）。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら SKIP せず失敗にする。
+/// `CELERIS_SCRIPT_BUNDLE_DIR` が在ればその dir を読み、使えないなら失敗にする。無ければ control-ts の source から
+/// `$TMPDIR` に bundle を作って読む（[`fresh_bundle_dir`]）。`control-ts/dist` は読まない（task の根に古い物が残り、
+/// 古い本文で試験が誤って落ちる。付記 S5-9）。作れない（node・node_modules が無い等）なら SKIP（`None`）。
+/// `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら SKIP せず失敗にする。
 pub fn dist_bundle(test: &str, domain: &str) -> Option<VerifiedBundle> {
     match bundle_dir_override() {
         Some(dir) => {
             let checked = check_bundle(&dir, &bundle_config_path(), domain);
             take_bundle(checked, &dir, test, true)
         }
-        None => take_bundle(
-            check_dist(&control_ts_dir(), domain),
-            &control_ts_dir().join("dist"),
-            test,
-            require_bundle(),
-        ),
+        None => {
+            let (checked, dir) = match fresh_bundle_dir() {
+                Ok(dir) => (check_bundle(&dir, &bundle_config_path(), domain), dir),
+                Err(why) => (Err(why), control_ts_dir()),
+            };
+            take_bundle(checked, &dir, test, require_bundle())
+        }
     }
 }
 
@@ -143,31 +156,118 @@ pub fn take_bundle_logged(
     None
 }
 
-/// `control_ts` の `dist` の bundle を使えるか判定する。[`check_bundle`] に加えて、dist の `inputs.sha256` が
-/// 作業ツリーの source の内容 hash（[`control_ts_inputs_sha256`]）と合うことを確かめる。
-///
-/// `control-ts/dist` は git 管理外で、task の根に古い物が残る。領域と capability が config と揃っていても、
-/// source を変える前の bundle を正として比べると、TS の実装でなく bundle の古さで落ちる（付記 S5-9）。
-pub fn check_dist(control_ts: &Path, domain: &str) -> Result<VerifiedBundle, String> {
-    let dist = control_ts.join("dist");
-    let bundle = check_bundle(&dist, &control_ts.join("bundle.config.json"), domain)?;
-    let recorded = std::fs::read_to_string(dist.join(INPUTS_FILE))
-        .map_err(|e| format!("stale bundle: no {INPUTS_FILE} ({e}); rebuild control-ts/dist"))?;
-    let actual = control_ts_inputs_sha256(control_ts)?;
-    if recorded.trim() != actual {
-        return Err(format!(
-            "stale bundle: {INPUTS_FILE} {} (source_commit {}) does not match the sources {actual}; \
-             rebuild control-ts/dist",
-            recorded.trim(),
-            bundle.manifest.source_commit
-        ));
-    }
-    Ok(bundle)
+/// control-ts の source から作った bundle の dir（`$TMPDIR/celeris-script-bundle/<内容 hash>`）。
+/// 同じ process の中では 1 回だけ判定する。別の process（nextest は試験ごとに process を分ける）とは、同じ内容 hash の
+/// dir を使い回す。
+pub fn fresh_bundle_dir() -> Result<PathBuf, String> {
+    static DIR: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        build_bundle_cached(
+            &control_ts_dir(),
+            &std::env::temp_dir().join("celeris-script-bundle"),
+        )
+    })
+    .clone()
 }
 
-/// `control-ts/scripts/build-bundle.mjs` の `inputsSha256` と同じ値: `src/` の下の全 file と `bundle.config.json`・
-/// `package.json`・`pnpm-lock.yaml` を、1 行 = `<file の sha256>  <control_ts からの相対 path>\n` で path の昇順に並べた
-/// 本文の sha256。
+/// `control_ts` の source から `cache/<内容 hash>` に bundle を作る（在れば作らない）。
+///
+/// 内容 hash（[`control_ts_inputs_sha256`]）が同じ dir は同じ source から作った物なので、古い bundle を読むことはない。
+/// 並んで走る process が同時に作らないよう `<hash>.lock` を `create_new` で取り、取れない process は出来上がるのを待つ。
+/// 作るのは `control_ts/scripts/build-bundle.mjs` の `buildBundle`（`ts-verify.sh`・`test-affected.sh` と同じ）。
+pub fn build_bundle_cached(control_ts: &Path, cache: &Path) -> Result<PathBuf, String> {
+    let hash = control_ts_inputs_sha256(control_ts)?;
+    let dir = cache.join(&hash);
+    let ready = |d: &Path| d.join("manifest.json").is_file();
+    if ready(&dir) {
+        return Ok(dir);
+    }
+    std::fs::create_dir_all(cache).map_err(|e| format!("mkdir {}: {e}", cache.display()))?;
+    let lock = cache.join(format!("{hash}.lock"));
+    // 待つ上限。持ち主が殺されて lock が残っても、上限の後は自分で作る。
+    let deadline = std::time::Instant::now() + Duration::from_secs(300);
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+        {
+            Ok(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if ready(&dir) {
+                    return Ok(dir);
+                }
+                if std::time::Instant::now() > deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("create {}: {e}", lock.display())),
+        }
+    }
+    let result = (|| {
+        if ready(&dir) {
+            return Ok(dir.clone());
+        }
+        let tmp = cache.join(format!("{hash}.tmp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        run_build_bundle(control_ts, &tmp)?;
+        std::fs::rename(&tmp, &dir).map_err(|e| format!("rename {}: {e}", tmp.display()))?;
+        Ok(dir.clone())
+    })();
+    let _ = std::fs::remove_file(&lock);
+    result
+}
+
+/// `node` で `control_ts/scripts/build-bundle.mjs` の `buildBundle({ outDir: out })` を呼ぶ。
+fn run_build_bundle(control_ts: &Path, out: &Path) -> Result<(), String> {
+    let script = control_ts.join("scripts/build-bundle.mjs");
+    let output = std::process::Command::new("node")
+        .args([
+            "--input-type=module",
+            "-e",
+            "const { buildBundle } = await import(process.env.CELERIS_BUILD_BUNDLE);\n\
+             await buildBundle({ outDir: process.env.CELERIS_BUILD_BUNDLE_OUT });",
+        ])
+        .env(
+            "CELERIS_BUILD_BUNDLE",
+            url_of(&script).ok_or_else(|| format!("{} is not absolute", script.display()))?,
+        )
+        .env("CELERIS_BUILD_BUNDLE_OUT", out)
+        .current_dir(control_ts)
+        .output()
+        .map_err(|e| format!("cannot run node to build the bundle: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail: Vec<&str> = stderr.lines().rev().take(3).collect();
+        return Err(format!(
+            "build-bundle.mjs failed ({}): {}",
+            output.status,
+            tail.into_iter().rev().collect::<Vec<_>>().join(" | ")
+        ));
+    }
+    if !out.join("manifest.json").is_file() {
+        return Err(format!(
+            "build-bundle.mjs wrote no {}/manifest.json",
+            out.display()
+        ));
+    }
+    Ok(())
+}
+
+/// `import()` に渡す file URL（絶対 path のときだけ）。
+fn url_of(path: &Path) -> Option<String> {
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    Some(format!("file://{}", abs.display()))
+}
+
+/// bundle の source の内容 hash: `src/` の下の全 file と `bundle.config.json`・`package.json`・`pnpm-lock.yaml`・
+/// `scripts/build-bundle.mjs` を、1 行 = `<file の sha256>  <control_ts からの相対 path>\n` で path の昇順に並べ、
+/// 最後に host の schema（`control_ts` の親の `docs/api/script-host/`）の行を足した本文の sha256。[`build_bundle_cached`] の dir の名前に使う。
 pub fn control_ts_inputs_sha256(control_ts: &Path) -> Result<String, String> {
     fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) -> Result<(), String> {
         let entries = std::fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
@@ -190,11 +290,15 @@ pub fn control_ts_inputs_sha256(control_ts: &Path) -> Result<String, String> {
     files.extend(INPUT_FILES.iter().map(|f| (*f).to_owned()));
     files.sort();
     let mut text = String::new();
-    for rel in &files {
-        let path = control_ts.join(rel);
+    let mut add = |path: PathBuf, rel: &str| -> Result<(), String> {
         let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
         text.push_str(&format!("{}  {rel}\n", sha256_hex(&bytes)));
+        Ok(())
+    };
+    for rel in &files {
+        add(control_ts.join(rel), rel)?;
     }
+    add(control_ts.join("..").join(SCHEMA_FILE), SCHEMA_FILE)?;
     Ok(sha256_hex(text.as_bytes()))
 }
 
@@ -218,7 +322,7 @@ pub fn check_bundle(dir: &Path, config: &Path, domain: &str) -> Result<VerifiedB
     if !actual.contains(domain) || actual != expected {
         return Err(format!(
             "stale bundle: manifest domains {actual:?} (source_commit {}) do not match \
-             {} domains {expected:?} or lack {domain:?}; rebuild control-ts/dist",
+             {} domains {expected:?} or lack {domain:?}",
             bundle.manifest.source_commit,
             config.display()
         ));
@@ -241,7 +345,7 @@ pub fn check_bundle(dir: &Path, config: &Path, domain: &str) -> Result<VerifiedB
     if actual_caps != expected_caps {
         return Err(format!(
             "stale bundle: manifest capabilities {actual_caps:?} (source_commit {}) do not match \
-             {} capabilities {expected_caps:?}; rebuild control-ts/dist",
+             {} capabilities {expected_caps:?}",
             bundle.manifest.source_commit,
             config.display()
         ));

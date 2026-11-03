@@ -54,7 +54,7 @@ daemon・store・API への配線はこの unit では行っていない（daemo
 
 ## 証拠（提出時の HEAD で実行）
 - `cargo nextest run -p celeris-script --test generation`: 11 件が通過（本物の bundle の 1 件は SKIP の分岐で通過）。3 回続けて実行し、3 回とも全件が通過した。
-- `CELERIS_SCRIPT_BUNDLE_DIR=$TMPDIR/realbundle/control-ts/dist cargo nextest run -p celeris-script --test generation generation_registers_real`: 通過。bundle は `control-ts` の写しを `$TMPDIR` で `pnpm install --offline` してから `build-bundle.mjs` で作った（sha256 `c7c3cce5…`）。
+- `CELERIS_SCRIPT_BUNDLE_DIR=$TMPDIR/realbundle/control-ts/dist cargo nextest run -p celeris-script --test generation generation_registers_real`: 通過。bundle は `control-ts` の写しを `$TMPDIR` で `pnpm install --offline` してから `build-bundle.mjs` で作った。
 - `bash scripts/dev/test-affected.sh`: exit 0。対象は celeris・celeris-script・celerisctl と ts-verify の test-ts-verify。959 件が通過、SKIP 0。
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo fmt --all -- --check`: exit 0

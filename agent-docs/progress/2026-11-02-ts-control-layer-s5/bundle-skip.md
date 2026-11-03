@@ -17,7 +17,7 @@ completed: 2026-11-03
 ## 変更
 commit `phase s5: bundle-skip: 古い・無い dist で bundle を読む試験が誤らないようにする` と、続く記録・clippy 対応の commit。
 - `control-ts/scripts/build-bundle.mjs`: dist に `inputs.sha256` を書く。値は、`src/` の下の全 file と `bundle.config.json`・`package.json`・`pnpm-lock.yaml` を 1 行 `<sha256>  <control-ts からの相対 path>\n` で path 昇順に並べた本文の sha256。build が失敗したときは古い `inputs.sha256` も消す。`inputsSha256` を export した。
-- `control-ts/scripts/build-bundle.test.mjs`: 試験を 2 件足した（dist の `inputs.sha256` が `inputsSha256()` と一致すること、5 file の固定値 `6027c7bb…` と、source を変えると値が変わること）。失敗時に `inputs.sha256` が残らないことの検査も足した。
+- `control-ts/scripts/build-bundle.test.mjs`: 試験を 2 件足した（dist の `inputs.sha256` が `inputsSha256()` と一致すること、5 file の固定値（Rust の試験と同じ値）と、source を変えると値が変わること）。失敗時に `inputs.sha256` が残らないことの検査も足した。
 - `crates/celeris/tests/support/script_compare.rs`:
   - `dist_dir()` は、`CELERIS_SCRIPT_BUNDLE_DIR` があればその dir を返し、無ければ `control-ts/dist` を返す。`deploy_bundle(&dist_dir(), …)` を使う 3 か所（cos_digest 2・lane_rules 1）も、判定と同じ dir を読む。
   - `dist_bundle`: `CELERIS_SCRIPT_BUNDLE_DIR` がある場合、使えない bundle は失敗にする。無い場合は `check_dist`（領域・capability の照合に `inputs.sha256` の照合を加えたもの）で判定する。

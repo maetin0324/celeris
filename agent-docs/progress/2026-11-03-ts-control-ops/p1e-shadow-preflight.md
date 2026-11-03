@@ -34,7 +34,7 @@ task 01M6HGFR1TMY7PTGQ553FQGM7H（親 01M6HG7T6ZKTX239KGH0QY4HFQ の p1e-shadow-
 - `bash scripts/dev/tests/script-compare.sh` → exit 0（33 項目。preflight の判定 19 通り、report の破れ 6 通り、sample 3 通り）。
 - `bash scripts/dev/script-compare-rehearsal.sh --out agent-docs/progress/2026-11-03-ts-control-ops/p1e-rehearsal.jsonl` → exit 0（10 段）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`bash scripts/dev/check-doc-links.sh` → ok。`sh scripts/dev/progress-index.sh --check` → ok。
-- 本番の読み取り: preflight → exit 3（human 6・fail 0）、report → exit 3（表が無い）。前後で本番 config の sha256 は `3f2aff24…` のまま、schema は 102、`current` は `releases/3259e04ea63e` のまま。
+- 本番の読み取り: preflight → exit 3（human 6・fail 0）、report → exit 3（表が無い）。前後で本番 config の sha256 は変わらず、schema は 102、`current` は `releases/3259e04ea63e` のまま。
 - 試験が落ちることの確かめ（変異）: 計数の照合を外すと `script_compare_report_refuses_counts_without_records` が落ちる。streak の判定を外すと `script_compare_report_pure_gate_counts_real_records` が落ちる。match の差分の検査を外すと `tests/script-compare.sh` が「差分を隠した match は exit 1: exit 0」で落ちる。どれも元に戻して通る。
 - TS-only の経路（`scripts/dev/ts-verify.sh`）は変えていない。edit→verify→activate の秒はこの task では測っていない（変える変更が無いため）。
 
@@ -121,3 +121,5 @@ worker は実行していない。どの段も人が決めて実行する。mode
 
 ## commit（件名）
 - p1e: lane_rules の本番 compare の preflight・集計・標本取りの読み取り専用 script と一時 DB の試験、手順の通し
+- p1e: 進捗に検査の結果を書く
+- p1e: 進捗の検査の結果から hash に見える値を外す

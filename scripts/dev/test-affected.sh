@@ -353,6 +353,13 @@ if r.get("class") in ("ts-only", "host-api") and [s.get("name") for s in r.get("
   ran=1
 fi
 
+# 本番 compare の集計・preflight の道具（境界 ADR 付記 P1-E）。cargo を使わない。
+if grep -q -E '^scripts/dev/(script-compare\.py|tests/script-compare\.sh)$' "$changed"; then
+  echo "test-affected: bash scripts/dev/tests/script-compare.sh を走らせる（理由: 集計の道具の変更）" >&2
+  bash scripts/dev/tests/script-compare.sh
+  ran=1
+fi
+
 if [ -n "$tsv_reason" ]; then
   # runner を作り直し（cargo を使う）、$TMPDIR の写しで ts-only の経路と意図的な破壊の検出を確かめる。
   echo "test-affected: bash scripts/dev/test-ts-verify.sh を走らせる（理由: $tsv_reason）" >&2

@@ -1,0 +1,131 @@
+{
+ "baseline": {
+  "daemon_rss_kb": 1190984,
+  "events_max_id": 781877,
+  "schema_version": 102
+ },
+ "checks": [
+  {
+   "detail": "[script] が無い。TS 層は起きない（本番は rust のまま）",
+   "id": "config_script_section",
+   "status": "human"
+  },
+  {
+   "detail": "[{\"pid\": 1178393, \"exe\": \"/local/celeris/state/releases/3259e04ea63e/bin/celeris\", \"config\": \"/home/rmaeda/.config/celeris/config.toml\", \"release\": \"3259e04ea63e\"}]",
+   "id": "target_daemon_running",
+   "status": "pass"
+  },
+  {
+   "detail": "release 3259e04ea63e: 足りない段 ['control-ts-install', 'control-ts-bundle', 'script-bundle-verify', 'script-bundle-tests']、script-bundle/ 無し",
+   "id": "release_gate_has_script_steps",
+   "status": "human"
+  },
+  {
+   "detail": "3259e04ea63e の celerisctl に generations・guard の CLI が 無い",
+   "id": "release_has_ops_cli",
+   "status": "human"
+  },
+  {
+   "detail": "schema 102（要 107 以上。起動の migration で当たる）",
+   "id": "db_schema_version",
+   "status": "human"
+  },
+  {
+   "detail": "無い表: ['script_generations', 'script_domain_modes', 'script_domain_events', 'script_compare_log', 'script_generation_events', 'script_guard_state', 'script_inbox_items', 'cos_digest_shadow_outbox']",
+   "id": "db_script_tables",
+   "status": "human"
+  },
+  {
+   "detail": "参照している測定の dir: []",
+   "id": "prod_config_has_no_measure_path",
+   "status": "pass"
+  },
+  {
+   "detail": "7 件",
+   "id": "measure_configs_found",
+   "status": "pass"
+  },
+  {
+   "detail": "7 件すべて DB・listen が別で [script] 無し",
+   "id": "measure_configs_separate",
+   "status": "pass"
+  },
+  {
+   "detail": "/local/celeris/data/measure/main-2/daemon.toml: /local/celeris/state/releases; /local/celeris/data/measure/main/daemon.toml: /local/celeris/state/releases; /local/celeris/data/measure/ops-r2-k2-p1/daemon.toml: /local/celeris/state/releases; /local/celeris/data/measure/ops-r2-k2-p2/b/daemon.toml: /local/celeris/state/releases",
+   "id": "stopped_measure_configs_refs",
+   "status": "human"
+  },
+  {
+   "detail": "[{\"pid\": 35076, \"config\": \"/local/celeris/data/measure/ops-r2-k2-p7/b/daemon.toml\", \"release\": \"0c0a91965ad5\"}, {\"pid\": 171445, \"config\": \"/tmp/celeris-test-affected.cXfbCD/tmp/ablation-app-spec-off-nhFFqp/config.toml\", \"release\": null}]",
+   "id": "other_daemons_separate",
+   "status": "pass"
+  },
+  {
+   "detail": "['/local/celeris/data/measure-bin/releases'] は本番の state の外",
+   "id": "measure_bin_is_real_copy",
+   "status": "pass"
+  }
+ ],
+ "config": "/home/rmaeda/.config/celeris/config.toml",
+ "db": "/local/celeris/data/db/celeris.sqlite3",
+ "estimate": {
+  "cos_digest_days_to_required": 3.7,
+  "cos_digest_messages": 809,
+  "cos_digest_per_day": 54.4,
+  "cos_digest_span_days": 14.87,
+  "lane_rules_days_to_required": 20.6,
+  "lane_rules_distinct_tasks": 215,
+  "lane_rules_policy_runs": 1648,
+  "lane_rules_records_after_dedup": 724,
+  "lane_rules_records_per_day": 48.45,
+  "lane_rules_span_days": 14.94,
+  "since": "2026-10-20T00:00:00Z"
+ },
+ "listen": "127.0.0.1:7710",
+ "measure_configs": [
+  {
+   "config": "/local/celeris/data/measure/main-2/daemon.toml",
+   "db": "/local/celeris/data/measure/main-2/state/celeris.db",
+   "listen": "127.0.0.1:7731",
+   "script_section": false
+  },
+  {
+   "config": "/local/celeris/data/measure/main/daemon.toml",
+   "db": "/local/celeris/data/measure/main/state/celeris.db",
+   "listen": "127.0.0.1:7731",
+   "script_section": false
+  },
+  {
+   "config": "/local/celeris/data/measure/ops-r2-k2-p1/daemon.toml",
+   "db": "/local/celeris/data/measure/ops-r2-k2-p1/b/celeris.db",
+   "listen": "127.0.0.1:57659",
+   "script_section": false
+  },
+  {
+   "config": "/local/celeris/data/measure/ops-r2-k2-p2/b/daemon.toml",
+   "db": "/local/celeris/data/measure/ops-r2-k2-p2/b/celeris.db",
+   "listen": "127.0.0.1:40019",
+   "script_section": false
+  },
+  {
+   "config": "/local/celeris/data/measure/ops-r2-k2-p3/b/daemon.toml",
+   "db": "/local/celeris/data/measure/ops-r2-k2-p3/b/celeris.db",
+   "listen": "127.0.0.1:54823",
+   "script_section": false
+  },
+  {
+   "config": "/local/celeris/data/measure/ops-r2-k2-p6/b/daemon.toml",
+   "db": "/local/celeris/data/measure/ops-r2-k2-p6/b/celeris.db",
+   "listen": "127.0.0.1:54823",
+   "script_section": false
+  },
+  {
+   "config": "/local/celeris/data/measure/ops-r2-k2-p7/b/daemon.toml",
+   "db": "/local/celeris/data/measure/ops-r2-k2-p7/b/celeris.db",
+   "listen": "127.0.0.1:54827",
+   "script_section": false
+  }
+ ],
+ "release": "3259e04ea63e",
+ "schema": "celeris.script-compare-preflight/1"
+}

@@ -95,7 +95,7 @@ done
 if [ "$before" = "$(sha256sum "$lane")" ] && [ ! -s "$work/fake-cargo.log" ]; then ok; else ng "dry-run が file を変えたか cargo を呼んだ"; fi
 expect "既存の scenario の dry-run は残る" 0 bash "$src" --dry-run --scenario policy
 expect "route_priority の TS scenario は無い" 2 bash "$src" --dry-run --scenario route-priority-ts
-expect "cos の TS scenario は無い" 2 bash "$src" --dry-run --scenario cos-ts
+expect "lane_rules 以外の未知の TS scenario は無い" 2 bash "$src" --dry-run --scenario lane-ts
 
 # ---- 2. --check-targets の warm: 目標の内 ----
 new warm "$(twenty 30 60 500)"
@@ -224,6 +224,11 @@ json.dump({"schema": "celeris.ts-verify-record/1", "class": "ts-only", "exit": r
            "cargo_invocations": 0, "cargo_compile_invocations": 0, "cargo_calls": [], "link_count": 0, "units": ["ALL"]},
           open(sys.argv[1], "w"))
 PY
+# 本物の ts-verify は TS_VERIFY_KEEP_WORK で作業 dir（\$TMPDIR/ts-verify.*）を残し、段 activate の出力がそこに在る
+if [ "\$rc" = 0 ] && [ -n "\${TS_VERIFY_KEEP_WORK:-}" ]; then
+  d="\$(mktemp -d "\$TMPDIR/ts-verify.XXXXXX")"
+  echo '{"command":"activate","ok":true,"bundle_sha256":"fakebundle","host_api":1}' >"\$d/activate.json"
+fi
 exit "\$rc"
 EOF
 cat >"$fx/scripts/dev/script-runner-cache.sh" <<'EOF'

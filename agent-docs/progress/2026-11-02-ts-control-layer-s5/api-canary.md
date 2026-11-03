@@ -53,7 +53,10 @@ updated: 2026-11-03
 足した試験: `script_domain_generation_retire_active_409_and_unknown_404`。消した試験: `script_domain_mode_canary_still_rejected`・`script_domain_mode_ts_only_for_cos_digest`・`script_domain_mode_ts_requires_compare_same_generation`（S5-4 で前提が変わった）。task-core の `script_domain_ts_for_cos_digest_needs_human_and_compare_same_generation` は `script_domain_ts_needs_human_and_same_generation_canary` に改め、`cos_digest` の `compare→ts` が 422 になることを見る。
 
 ## 証拠（基準は `$CELERIS_WU_BASE`、提出時の HEAD で実行）
-- `cargo nextest run -p task-api -E 'test(/script_domain|script_mode|cos_op/)'` → 結果は下の「提出時の検査」。
+- 提出時の HEAD で: `cargo nextest run -p task-api -E 'test(/script_domain|script_mode|cos_op/)'` → 58 passed。
+- 提出時の HEAD で: `bash scripts/dev/test-affected.sh` → exit 0。nextest 7151 passed・21 skipped、web は tsc -b と vitest 101 files・697 tests passed、test-ts-verify 18 passed・0 failed。
+- 提出時の HEAD で: `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` を unit の正規表現で絞る）→ 上の 3 file だけが残る。
 - `cargo nextest run -p task-dispatch -E 'test(/cos_digest/)'` → 48 passed。
 - `cargo nextest run -p celeris -E 'test(/script_compare|script_domain/)'` → 25 passed。
 - 1 回目の `bash scripts/dev/test-affected.sh` は `task-core store::tests::event_row_schema_matches_committed` だけ落ちた（`ScriptMode` の説明を変えたため）。`UPDATE_SCHEMA=1` で `event.schema.json` を再生成した。

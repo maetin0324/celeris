@@ -28,7 +28,8 @@ mode ts へは compare を経てだけ入れる（`TsRequiresCompare`）ので�
 - 条件 1（mode ts で TS の command が apply された記録）: 上の `..._ts_mode_applies_ts_commands` が `applied_by = ts` の記録と、印の付いた TS の文面が DB に入ったことを確かめる。
 - `CELERIS_SCRIPT_REQUIRE_BUNDLE=1 bash scripts/dev/test-affected.sh` → exit 0（対象 crate は celeris・celerisctl、nextest 879 passed・0 skipped）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo clippy -p celeris --test script_compare_cos_digest -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は `crates/celeris/src/daemon/script_layer.rs`・`crates/celeris/tests/script_compare_cos_digest.rs`・この記録。
+- 条件 2（mode ts のまま bundle なしで再起動すると `restore_modes` が rust へ戻す）: `restore_modes` の filter を一時的に旧い `r.mode == ScriptMode::Compare` に戻すと、`CELERIS_SCRIPT_REQUIRE_BUNDLE=1 cargo nextest run -p celeris --test script_compare_cos_digest -E 'test(daemon_ts_restart)'` は 1 failed（`script_compare_cos_digest.rs:1095` の `assert_eq!(env.mode(), ScriptMode::Rust)`）。`needs_generation()` に戻すと 9 passed・0 skipped（attempt 2 で再実行）。
+- 範囲（attempt 2 の範囲 check は `script_layer.rs` を許可）: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は `crates/celeris/src/daemon/script_layer.rs`・`crates/celeris/tests/script_compare_cos_digest.rs`・この記録。
 
 ## commit（件名）
 - phase s4: real-host: 本物の host で mode ts の apply・fallback・再起動を確かめ、起動時の復元を ts にも当てる

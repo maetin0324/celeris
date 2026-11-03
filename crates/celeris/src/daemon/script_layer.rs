@@ -632,11 +632,15 @@ pub(crate) struct ScriptLayer {
 
 impl ScriptLayer {
     /// API より前に呼ぶ。`[script]` が無い・DB を開けなければ `None`（API の登録は 503）。isolate はまだ作らない。
-    pub(crate) fn prepare(config: &Config) -> Option<Arc<ScriptGenerations>> {
+    /// `registry` が在ればそれを使う（試験の入口 `run_with_test_hooks`）。
+    pub(crate) fn prepare(
+        config: &Config,
+        registry: Option<GenerationRegistry>,
+    ) -> Option<Arc<ScriptGenerations>> {
         let script = config.script.as_ref()?;
         let db = open_db(config)?;
         Some(ScriptGenerations::new(
-            GenerationRegistry::new(script.limits()),
+            registry.unwrap_or_else(|| GenerationRegistry::new(script.limits())),
             script.state_dir.clone(),
             Arc::new(db),
         ))

@@ -81,7 +81,9 @@ TS-only の高速経路（`scripts/dev/ts-verify.sh`、cargo 0 回）は変え�
    手で確かめた: `CELERIS_COS_RUN_CREDENTIAL=review-dummy celerisctl script --config /nonexistent/x.toml generations list`（`guard status` も）が
    gate を通り `config /nonexistent/x.toml: failed to read config` まで進む（exit 1、`domains` と同じ）。
 2. `GuardCommand::Clear` の help と module doc: operator・MCP は 403、CoS の run は `/cos/operations` に包まれて 422
-   `cos_operation_not_allowed`（human_only）と書き分けた。試験 `script_cos_read_only_guard_clear_help_names_403_and_422`。
+   `cos_operation_not_allowed`（human_only）と書き分けた。`script guard --help` の一覧には doc の先頭段落だけが出るので、
+   先頭段落にも `operator/MCP 403, CoS run 422 cos_operation_not_allowed` を書いた。試験 `script_cos_read_only_guard_clear_help_names_403_and_422`
+   は一覧と `clear --help` の両方を見る。
 3. `crates/celeris/src/daemon/script_ops_measure_tests.rs`: `inbox_duplicate_items` を消し、`inbox_opened_cumulative`・
    `restore_rollbacks_cumulative` を足した。周ごとに「戻しの周だけ `inbox_opened`=1」を、終わりに「累計 = (周 − 1) / 3」（20 周で 6）を assert する。
    raw を取り直し、上の表を新しい値にした。
@@ -96,6 +98,8 @@ TS-only の高速経路（`scripts/dev/ts-verify.sh`、cargo 0 回）は変え�
 - phase p1c: route_priority の上書きの試験の型を直す
 - phase p1c: 進捗を書く
 - cos-read-fix: CoS の run で script の読み取り CLI を通し、guard clear の help と受信箱の累計の根拠を直す
+- cos-read-fix: 進捗に検査の結果を書く
+- cos-read-fix: guard の help の一覧にも 403 と 422 を書く
 
 ## 未解決
 1. 本番 daemon での `script_tick_wait` の値と RSS の推移は未確認（本番は全領域 `rust`。人が compare 以上にした後に `GET /daemon` で読む）。

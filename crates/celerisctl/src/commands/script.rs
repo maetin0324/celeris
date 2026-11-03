@@ -66,7 +66,7 @@ pub enum GenerationsCommand {
 pub enum GuardCommand {
     /// Print whether the script guard is halted and why.
     Status(DomainsArgs),
-    /// Clear the script-guard halt (human API token only).
+    /// Clear the script-guard halt (human token only; operator/MCP 403, CoS run 422 cos_operation_not_allowed).
     ///
     /// Operator and MCP tokens get 403. In a CoS run the CLI wraps this in `/cos/operations`, which
     /// refuses it with 422 `cos_operation_not_allowed` (human_only).
@@ -587,6 +587,13 @@ mod tests {
             command: GuardCommand,
         }
         let mut cmd = Wrap::command();
+        // `script guard --help` の一覧に出るのは先頭段落だけなので、一覧にも 403 と 422 を書く。
+        let listing = cmd.render_long_help().to_string();
+        assert!(listing.contains("operator/MCP 403"), "{listing}");
+        assert!(
+            listing.contains("422 cos_operation_not_allowed"),
+            "{listing}"
+        );
         let clear = cmd.find_subcommand_mut("clear").expect("clear");
         let help = clear.render_long_help().to_string();
         assert!(help.contains("Operator and MCP tokens get 403"), "{help}");

@@ -10,7 +10,7 @@
 //! | `api` | `config_view`・`api_settings`・`bind_reuseport`・`start_api` |
 //! | `services` | llm-proxy と MCP の組み立て・起動・停止 |
 //! | `run` | `run`: 起動順と停止順（interrupt → api → llm_proxy → mcp → script → checkpoint → backup → deregister） |
-//! | `script_guard` | 付記 S5-7: script の自動の戻し・無効化・停止の記録を cursor で読み、受信箱 `script_control` の項目を作る（LLM なし） |
+//! | `script_guard` | 付記 S5-7: 停止基準の見回り（検証の外の副作用で全領域を `rust` に戻して止める・進む条件の判定を出すだけで昇格しない）と、自動の戻し・無効化・停止の記録を cursor で読み受信箱 `script_control` の項目を作る（LLM なし） |
 //! | `script_layer` | 付記 S5-1・S5-2: generation の登録（新しい isolate で検証）・切替後の drain・起動時の復元（使えない領域は `rust` へ）。失敗しても起動を続ける |
 //! | `script_policy` | `task_dispatch::PolicyScript` を generation の登録簿（または `ScriptRuntimeHandle`）で実装する（付記 S2-6・S5-2） |
 //! | `tick_loop` | tick ループ本体（シグナル・役割の変化・裏方の定期処理） |

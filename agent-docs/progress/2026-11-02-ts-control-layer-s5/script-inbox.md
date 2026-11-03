@@ -20,7 +20,7 @@ updated: 2026-11-03
 - `docs/api/v1/`・`web/api/generated/`: 再生成。`docs/api/v1/api.md` に改訂を 1 件書いた。
 - 境界 ADR 付記 S5-7 の受信箱の節に、種類と永続の置き場を書いた。
 
-CoS の triage と通知は変更していない。triage は `InboxKind::ALL` を走査し（`crates/task-dispatch/src/dispatcher/cos_chat/triage.rs`）、通知はその triage の経路を通るので、種類を足すだけで対象に入る。
+CoS の triage と `crates/celeris/src/notify.rs` は変更していない。triage は `InboxKind::ALL` と受信箱の項目を種類で分けずに読む（`crates/task-dispatch/src/dispatcher/cos_chat/triage.rs` の `sources_by_kind`）ので、種類を足すだけで対象に入る。`notify.rs` も `human_inbox` の一覧を読むだけで、種類ごとの分岐の追加は要らなかった。実際に CoS の run と通知まで通した確認はしていない（未確認）。
 
 ## 項目にする記録・しない記録
 - `script_domain_events`: actor が上の 2 つなら全部項目にする。

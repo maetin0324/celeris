@@ -19,20 +19,20 @@ task 01M6HGFR1TMY7PTGQ553FQGM7H（親 01M6HG7T6ZKTX239KGH0QY4HFQ の p1e-shadow-
 ## 変更（file・関数）
 - `scripts/dev/script-compare.py`（新規。読み取り専用）
   - `cmd_preflight`: `preflight_release`（`gate.json` の 4 段と `script-bundle/`、release の CLI）、`preflight_db`（schema 107 以上、表、全領域 `rust`、全体の停止なし、未処理の受信箱）、`preflight_isolation`（測定の config と動いている daemon の DB・listen・`[script]`・本番への参照、測定の binary の置き場）、`estimate_volume`（`routing_decided` に S2-4 の重複の抑えを当てた見込み）。
-  - `cmd_report`: `read_snapshot`（全部を 1 つの read transaction で読む）、`aggregate`・`finish_group`（match/mismatch/ts_error/invalid_output/unavailable、一致率、latency の p50・p95・最大、`script_guard::readiness` と同じ ready、`script_guard_state` との照合）、`rollback_summary`（mode の変更、rust への戻しを主体ごとに、generation の無効化・停止、受信箱）、`summarize_samples`（RSS・tick の待ち）、`summarize_tick_log`（`slow tick` の行）。
+  - `cmd_report`: `read_snapshot`（全部を 1 つの read transaction で読む）、`aggregate`・`finish_group`（match/mismatch/explained/ts_error/invalid_output/unavailable、一致率（explained は分母に入れ、streak を切らない。`script_guard::ScriptGuardCall::classify` と同じ）、latency の p50・p95・最大、`script_guard::readiness` と同じ ready、`script_guard_state` との照合）、`rollback_summary`（mode の変更、rust への戻しを主体ごとに、generation の無効化・停止、受信箱）、`summarize_samples`（RSS・tick の待ち）、`summarize_tick_log`（`slow tick` の行）。
   - `cmd_sample`: `/proc/<pid>/status` の RSS と `GET /api/v1/daemon` の `script_tick_wait` を 1 行の JSON にする（GET だけ。token は出力しない）。
-  - 差分を隠さない: `normalized` が空でない記録、`match` なのに `rust` と `ts` が違う記録、未知の outcome は problem で exit 1。記録の無い計数も exit 1（synthetic の件数を本番の件数と取り違えない）。
+  - 差分を隠さない: `normalized` が空でない記録、`match` なのに `rust` と `ts` が違う記録、未知の outcome、`explained_by` の無い `explained` は problem で exit 1。記録の無い計数も exit 1（synthetic の件数を本番の件数と取り違えない）。
 - `scripts/dev/script-compare-rehearsal.sh`（新規）: 下の人の手順と同じコマンドを一時 DB の daemon で通す。
-- `crates/celeris/tests/script_compare_report.rs`（新規、7 試験）: 本物の store と dispatcher が書いた一時 DB で集計を確かめる。
+- `crates/celeris/tests/script_compare_report.rs`（新規、8 試験。`script_compare_report_counts_explained_cos_records` は attempt 2 で足した）: 本物の store と dispatcher が書いた一時 DB で集計を確かめる。
 - `scripts/dev/tests/script-compare.sh`（新規）: 実 migration の schema の一時 DB、偽の `/proc`・本番・測定で、store が書かない破れと preflight の 19 通りの判定を確かめる。
 - `scripts/dev/test-affected.sh`: `script-compare.py` か上の試験が変われば `tests/script-compare.sh` を走らせる。
 - 境界 ADR に付記 P1-E。crates/ の本体、config 欄、API、権限、(f) の数値は変えていない。
 
 ## 試験と検査（提出時の HEAD で実行）
-- `bash scripts/dev/test-affected.sh` → exit 0。nextest 1008 passed・0 skipped（celeris・celeris-script・celerisctl）、script bundle の SKIP 0 件（bundle を読む試験は実 bundle で走った）、`tests/script-compare.sh` ok、`test-ts-verify` 18 passed。
-- `cargo nextest run -p celeris --test script_compare_report` → exit 0、7 passed。
-- `bash scripts/dev/tests/script-compare.sh` → exit 0（33 項目。preflight の判定 19 通り、report の破れ 6 通り、sample 3 通り）。
-- `bash scripts/dev/script-compare-rehearsal.sh --out agent-docs/progress/2026-11-03-ts-control-ops/p1e-rehearsal.jsonl` → exit 0（10 段）。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 1009 passed・0 skipped（celeris・celeris-script・celerisctl）、script bundle の SKIP 0 件（bundle を読む試験は実 bundle で走った）、`tests/script-compare.sh` ok、`test-ts-verify` 18 passed。
+- `cargo nextest run -p celeris --test script_compare_report` → exit 0、8 passed。
+- `bash scripts/dev/tests/script-compare.sh` → exit 0（35 項目。preflight の判定 19 通り、report の破れ 8 通り（explained の名指しあり・なしを含む）、sample 3 通り）。
+- `bash scripts/dev/script-compare-rehearsal.sh --out agent-docs/progress/2026-11-03-ts-control-ops/p1e-rehearsal.jsonl` → exit 0（10 段。attempt 2 では `--out $TMPDIR/…` で再実行し exit 0、raw は attempt 1 のもの）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`bash scripts/dev/check-doc-links.sh` → ok。`sh scripts/dev/progress-index.sh --check` → ok。
 - 本番の読み取り: preflight → exit 3（human 6・fail 0）、report → exit 3（表が無い）。前後で本番 config の sha256 は変わらず、schema は 102、`current` は `releases/3259e04ea63e` のまま。
 - 試験が落ちることの確かめ（変異）: 計数の照合を外すと `script_compare_report_refuses_counts_without_records` が落ちる。streak の判定を外すと `script_compare_report_pure_gate_counts_real_records` が落ちる。match の差分の検査を外すと `tests/script-compare.sh` が「差分を隠した match は exit 1: exit 0」で落ちる。どれも元に戻して通る。
@@ -107,7 +107,7 @@ worker は実行していない。どの段も人が決めて実行する。mode
 3. release の `script-bundle/` からの `script-deploy` は未確認（release を作っていないので、通しでは `build-bundle.mjs` の出力を使った）。`script-deploy` は release に入っていないので、人の手順に cargo の build が要る。
 4. `lane_rules` の 1000 件は今の負荷で約 20.6 日の見込み。負荷が変われば変わる。`p1e-shadow-measure` はその間待つ。
 5. 本番での latency・RSS・tick は未計測（compare の後に 6. で取る）。debug build の値は S6・P1-C と同じく本番の値でない。
-6. P1-D の意図した差分の outcome が main に入ると、集計はそれを未知の outcome として exit 1 で止める（fail-closed）。入った後で `OUTCOMES` と定義を直す。
+6. （attempt 2 で解消）P1-D の `explained` outcome と `explained_by` が main に入り、attempt 1 の試験が compile できなかった（test-affected exit 101）。集計に `explained` を足し、`explained_by.id` の無い `explained` は exit 1 にした。`lane_rules` の記録は今 `explained` を出さない（`cos_digest` だけ）。
 7. 集計は `events` を全走査する。本番で 4 秒だった（2026-11-03、78 万行）。読むだけで書き込みを止めない。
 
 ## 次の gate

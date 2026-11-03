@@ -14,6 +14,7 @@ use serde_json::Value;
 use support::script_compare::{Env, dist_bundle, repo_root, start_code, start_policy};
 use task_core::TaskId;
 use task_core::chat::digest_apply::{CosDigestApplyPass, CosDigestApplyRun, CosDigestRecordPlan};
+use task_core::script_behavior_change::ExplainedBy;
 use task_core::script_compare::{
     CompareError, CompareOutcome, CosDigestApplied, CosDigestAppliedBy, CosDigestCommandsSummary,
     CosDigestCompareRecord, ScriptCompareRecord, ScriptDomain, ScriptMode, ScriptModeChange,
@@ -222,7 +223,7 @@ fn script_compare_report_classifies_every_outcome() {
     assert_eq!(
         d["outcomes"],
         serde_json::json!({
-            "match": 2, "mismatch": 1, "ts_error": 2, "invalid_output": 1, "unavailable": 0
+            "match": 2, "mismatch": 1, "explained": 0, "ts_error": 2, "invalid_output": 1, "unavailable": 0
         })
     );
     assert_eq!(d["timeouts"], 1);
@@ -379,6 +380,7 @@ fn digest_record(generation: &str, run: &str, outcome: CompareOutcome) -> CosDig
         },
         canary_selected: false,
         canary_bps: None,
+        explained_by: None,
     }
 }
 
@@ -431,6 +433,40 @@ fn script_compare_report_cos_gate_uses_the_log_table() {
     assert_eq!(d["required"], 200);
     assert_eq!(d["ready"], true, "{d}");
     assert_eq!(d["guard_state"]["calls"], 200);
+}
+
+/// 承認した改善仕様が説明する差分（`explained`、p1d）は数え、streak を切らず、match の率の分母に入れる。
+#[test]
+fn script_compare_report_counts_explained_cos_records() {
+    let (env, generation) = compare_env("cos_digest");
+    for (n, outcome) in [CompareOutcome::Match, CompareOutcome::Explained]
+        .into_iter()
+        .enumerate()
+    {
+        let run = format!("r{n}");
+        shadow_apply(&env, &generation, &run);
+        let mut record = digest_record(&generation, &run, outcome);
+        if outcome == CompareOutcome::Explained {
+            record.explained_by = Some(ExplainedBy {
+                id: "bc-1".into(),
+                version: 1,
+                spec_sha256: "b".repeat(64),
+            });
+        }
+        env.store
+            .cos_digest_shadow_finish(&format!("pass-{run}"), &run, Some(&record), now())
+            .expect("finish")
+            .expect("row");
+    }
+    let (code, r) = report(&env, &[]);
+    assert_eq!(code, 0, "{r}");
+    assert_eq!(r["problems"], serde_json::json!([]));
+    let d = domain(&r, "cos_digest");
+    assert_eq!(d["outcomes"]["explained"], 1, "{d}");
+    assert_eq!(d["outcomes"]["match"], 1, "{d}");
+    assert_eq!(d["clean_streak"], 2, "{d}");
+    assert_eq!(d["match_rate"], 0.5, "{d}");
+    assert_eq!(d["guard_state"]["calls"], 2, "{d}");
 }
 
 /// 本物の dispatcher が書いた event の形を読む（常に違う答えの bundle → `mismatch`、実 bundle → `match`）。

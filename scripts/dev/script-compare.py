@@ -41,7 +41,7 @@ import urllib.request
 # (f) の閾値。正本は crates/task-core/src/script_guard.rs の SCRIPT_GUARD_*。
 REQUIRED = {"lane_rules": 1000, "route_priority": 1000, "cos_digest": 200}
 WINDOW = 1000
-OUTCOMES = ("match", "mismatch", "ts_error", "invalid_output", "unavailable")
+OUTCOMES = ("match", "mismatch", "explained", "ts_error", "invalid_output", "unavailable")
 # compare に要る表（0103〜0107）。
 TABLES = (
     "script_generations",
@@ -104,6 +104,8 @@ def classify(rec):
         return "ok"
     if o == "mismatch":
         return "mismatch"
+    if o == "explained":
+        return "explained"
     if o == "ts_error":
         return "timeout" if rec["error_kind"] in ("timeout", "terminated") else "failure"
     if o == "invalid_output":
@@ -120,7 +122,7 @@ RECORD_FIELDS = """'id',id,'ts',ts,'domain',json_extract(json,'$.domain'),'gener
     'error_kind',json_extract(json,'$.error.kind'),'elapsed_us',json_extract(json,'$.elapsed_us'),
     'normalized',json_array_length(json,'$.normalized'),'safety',json_array_length(json,'$.safety_violations'),
     'canary_selected',json_extract(json,'$.canary_selected'),'applied_by',json_extract(json,'$.applied_by'),
-    'fallback',json_extract(json,'$.fallback.code'),'rust',json_extract(json,'$.rust'),'ts_out',json_extract(json,'$.ts')"""
+    'fallback',json_extract(json,'$.fallback.code'),'explained_by',json_extract(json,'$.explained_by.id'),'rust',json_extract(json,'$.rust'),'ts_out',json_extract(json,'$.ts')"""
 
 
 def read_snapshot(db, upto_event, upto_log):
@@ -205,6 +207,10 @@ def aggregate(records, problems):
         if o == "match" and r["rust"] != r["ts_out"]:
             g["hidden_differences"] += 1
             problems.append(f"{where}: outcome match but rust != ts")
+        # explained は承認した改善仕様の名指しが要る（ADR 2026-11-03-ts-intended-behavior-change D2）。
+        if o == "explained" and not r["explained_by"]:
+            g["hidden_differences"] += 1
+            problems.append(f"{where}: outcome explained without explained_by")
         call = classify(r)
         if call is None:
             continue
@@ -233,7 +239,7 @@ def finish_group(g, guard, mode, promoted, bounded, problems):
     t_win, f_win = window.count("timeout"), window.count("failure")
     g["calls"] = calls
     g["latency"] = latency(lat)
-    denom = out["match"] + out["mismatch"] + out["invalid_output"] + out["ts_error"]
+    denom = out["match"] + out["mismatch"] + out["explained"] + out["invalid_output"] + out["ts_error"]
     g["match_rate"] = round(out["match"] / denom, 6) if denom else None
     g["window"] = {"len": len(window), "timeouts": t_win, "failures": f_win}
     g["required"] = required
@@ -425,12 +431,12 @@ def print_table(r):
     print(f"bounds {r['bounds']}")
     for m in r["modes"]:
         print(f"mode {m['domain']} = {m['mode']} generation={m['generation']} version={m['version']} by={m['updated_by']}")
-    head = "domain generation match mismatch ts_error invalid_output unavailable rate p50_us p95_us max_us streak/req ready"
+    head = "domain generation match mismatch explained ts_error invalid_output unavailable rate p50_us p95_us max_us streak/req ready"
     print(head)
     for d in r["domains"]:
         o, lat = d["outcomes"], d["latency"] or {"p50_us": "-", "p95_us": "-", "max_us": "-"}
         print(
-            d["domain"], d["generation"], o["match"], o["mismatch"], o["ts_error"], o["invalid_output"], o["unavailable"],
+            d["domain"], d["generation"], o["match"], o["mismatch"], o["explained"], o["ts_error"], o["invalid_output"], o["unavailable"],
             d["match_rate"], lat["p50_us"], lat["p95_us"], lat["max_us"], f"{d['effective_clean_streak']}/{d['required']}", d["ready"],
         )
         for b in d["ready_blockers"]:

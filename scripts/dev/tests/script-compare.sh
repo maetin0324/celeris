@@ -42,9 +42,9 @@ schema_db() { # schema_db <path> <schema の版>
     cat "$root"/crates/task-core/migrations/0107_cos_digest_shadow_outbox.sql
   } | sqlite3 "$1"
 }
-insert_record() { # insert_record <db> <id> <outcome> [normalized の JSON] [ts の JSON]
-  local normalized="${4:-[]}" ts="${5:-{\"a\":1\}}"
-  sqlite3 "$1" "INSERT INTO events VALUES ($2,'t',$2,'2026-11-03T00:00:0$2Z',json_object('type','script_compare_recorded','domain','lane_rules','generation','g1','bundle_sha256','s','outcome','$3','error',NULL,'elapsed_us',10,'normalized',json('$normalized'),'safety_violations',json('[]'),'canary_selected',json('false'),'rust',json('{\"a\":1}'),'ts',json('$ts')));"
+insert_record() { # insert_record <db> <id> <outcome> [normalized の JSON] [ts の JSON] [explained_by の JSON]
+  local normalized="${4:-[]}" ts="${5:-{\"a\":1\}}" explained="${6:-null}"
+  sqlite3 "$1" "INSERT INTO events VALUES ($2,'t',$2,'2026-11-03T00:00:0$2Z',json_object('type','script_compare_recorded','domain','lane_rules','generation','g1','bundle_sha256','s','outcome','$3','error',NULL,'elapsed_us',10,'normalized',json('$normalized'),'safety_violations',json('[]'),'canary_selected',json('false'),'rust',json('{\"a\":1}'),'ts',json('$ts'),'explained_by',json('$explained')));"
 }
 guard_row() { sqlite3 "$1" "INSERT OR REPLACE INTO script_guard_state (domain, generation_id, mode, calls, clean_streak, updated_at) VALUES ('lane_rules','g1','compare',$2,$3,'x');"; }
 
@@ -58,7 +58,7 @@ expect 0 "矛盾の無い 1 件は exit 0" run report --db "$db"
 has '"match_rate": 1.0'
 expect 4 "1 件では ready でない" run report --db "$db" --require-ready lane_rules
 expect 0 "表の形式" run report --db "$db" --format table
-has 'lane_rules g1 1 0 0 0 0 1.0'
+has 'lane_rules g1 1 0 0 0 0 0 1.0'
 has 'not ready: clean_streak 1 < 1000'
 
 # report の前後で DB の byte が変わらない。
@@ -70,10 +70,22 @@ if sqlite3 -readonly -batch "$db" "INSERT INTO schema_migrations VALUES (999,'x'
 
 # 未知の outcome（将来の variant を含む）は数えずに止める。
 cp "$db" "$work/unknown.sqlite3"
-insert_record "$work/unknown.sqlite3" 2 explained
+insert_record "$work/unknown.sqlite3" 2 skipped
 guard_row "$work/unknown.sqlite3" 1 1
 expect 1 "未知の outcome は exit 1" run report --db "$work/unknown.sqlite3"
-has "unknown outcome 'explained'"
+has "unknown outcome 'skipped'"
+# explained（承認した改善仕様が説明する差分。p1d）は数え、streak を切らない。仕様の名指しが無ければ止める。
+cp "$db" "$work/explained.sqlite3"
+insert_record "$work/explained.sqlite3" 2 explained '[]' '{"a":2}' '{"id":"bc1","version":1,"spec_sha256":"x"}'
+guard_row "$work/explained.sqlite3" 2 2
+expect 0 "名指しのある explained は exit 0" run report --db "$work/explained.sqlite3"
+has '"explained": 1'
+has '"match_rate": 0.5'
+cp "$db" "$work/explained-bare.sqlite3"
+insert_record "$work/explained-bare.sqlite3" 2 explained '[]' '{"a":2}'
+guard_row "$work/explained-bare.sqlite3" 2 2
+expect 1 "名指しの無い explained は exit 1" run report --db "$work/explained-bare.sqlite3"
+has 'outcome explained without explained_by'
 # 正規化の記録は差分を隠す疑いとして止める（S2-2 に規則が無い）。
 cp "$db" "$work/norm.sqlite3"
 insert_record "$work/norm.sqlite3" 2 match '["lowercase"]'

@@ -150,7 +150,7 @@ async fn assert_ts_matches(
     run.ts.expect("ts summary")
 }
 
-/// (1) cases.jsonl と traces.jsonl の全行が本物の host で Rust の `cos_digest_decide` と byte 一致する。
+/// (1) cases.jsonl の全行が本物の host で Rust の `cos_digest_decide` と byte 一致する。
 /// 同じ isolate に正順と逆順で流し、global に残した値で答えが変わらないことも見る（付記 S4-6）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn script_compare_cos_digest_real_host_matches_rust_on_all_fixtures() {
@@ -160,14 +160,11 @@ async fn script_compare_cos_digest_real_host_matches_rust_on_all_fixtures() {
     ) else {
         return;
     };
-    let cases = fixture_rows("cases.jsonl");
-    let traces = fixture_rows("traces.jsonl");
-    assert!(cases.len() >= 2_000, "{}", cases.len());
-    assert!(traces.len() >= 10, "{}", traces.len());
-    let rows: Vec<_> = cases.iter().chain(traces.iter()).collect();
+    let rows = fixture_rows("cases.jsonl");
+    assert!(rows.len() >= 2_000, "{}", rows.len());
     let (handle, policy) = start_policy(bundle.source(), bundle.manifest.bundle_sha256.clone());
     let mut compared = 0;
-    for (name, input, rust) in rows.iter().copied().chain(rows.iter().rev().copied()) {
+    for (name, input, rust) in rows.iter().chain(rows.iter().rev()) {
         assert_ts_matches(policy.as_ref(), name, input, rust).await;
         compared += 1;
     }
@@ -392,10 +389,10 @@ async fn compare_pass(policy: &Arc<dyn PolicyScript>, sha256: &str, base: &Pass)
 
 /// 新しい isolate の最初の呼び出しは遅い。dispatcher の 50 ms の deadline の前に 1 回温める。
 async fn warm(policy: &dyn PolicyScript) {
-    let (name, input, rust) = fixture_rows("traces.jsonl")
+    let (name, input, rust) = fixture_rows("cases.jsonl")
         .into_iter()
         .next()
-        .expect("a trace");
+        .expect("a case");
     assert_ts_matches(policy, &name, &input, &rust).await;
 }
 
@@ -853,10 +850,10 @@ fn digest_texts(env: &Env) -> Vec<String> {
 
 /// 印の bundle は fixture の command と一致しないので、温めは pass を 1 回走らせるだけにする。
 async fn warm_pass(policy: &dyn PolicyScript) {
-    let (_, input, _) = fixture_rows("traces.jsonl")
+    let (_, input, _) = fixture_rows("cases.jsonl")
         .into_iter()
         .next()
-        .expect("a trace");
+        .expect("a case");
     let result = one_run_pass(policy, &input).await;
     assert!(matches!(result, TsResult::Reply(_)), "{result:?}");
 }

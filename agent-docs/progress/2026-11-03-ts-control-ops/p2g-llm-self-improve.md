@@ -20,6 +20,7 @@ updated: 2026-11-03
 | `crates/task-core/examples/behavior-change-cases.rs` | `gen`: 課題の入力から期待差分 fixture（Rust の参照実装の出力と、仕様の編集を当てた期待出力）を作り、仕様の `cases_sha256` を書き換える。`score`: この build の `cos_digest_decide`（旧 Rust の経路の候補）を旧 fixture と期待差分 fixture で数える（`ts-behavior-eval.sh` と同じ欄・同じ合否） |
 | `scripts/dev/llm-improve/tasks/T1-cap-background/`・`T2-cap-item-title/` | 課題文（`task.md`）・改善仕様（`spec.json`）・入力（`inputs.jsonl`、`make-inputs.py` が旧 fixture から作る）・期待差分 fixture（`spec.cases.jsonl`）。T1 は 16 件（explained 9・equal 7）、T2 は 12 件（explained 8・equal 4） |
 | `scripts/dev/llm-improve/trial.sh` | 候補 patch を TS の経路（scope→eval→pilot）か旧 Rust の経路（scope→check・clippy・test-build・test-run・build・release-build→score）で検証し、1 行の raw record（`celeris.llm-improve-trial/1`）を書く。`--validate` で記録を検査 |
+| `scripts/dev/llm-improve/collect.py` | 試行の子 task の event を DB（読み取り専用）から読み、source・model・token・cost・walltime・run の数・check の失敗・review の差し戻し・人の介入を 1 子 1 行の JSONL（`celeris.llm-improve-usage/1`）に書く |
 | `scripts/dev/ts-behavior-eval.sh` | `--changes <dir>` を足した（課題の期待差分 fixture を渡す。既定は今までどおり `control-ts/behavior-changes/cos_digest`） |
 | `scripts/dev/ts-pilot.sh` | 環境変数 `TS_PILOT_PATCH`（固定の改善の代わりに候補 patch を当てる。`control-ts/src/` の外を変える patch は失敗）・`TS_PILOT_SPEC`（試験 daemon で人でない主体の承認が 403・人の token の承認が 200 になる段 `behavior_change_denied_non_human`・`behavior_change_approve` を足し、段 diff の probe を期待差分 fixture の入力にする）・`TS_PILOT_CHANGE`。無ければ S6 pilot のまま |
 

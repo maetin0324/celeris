@@ -123,3 +123,4 @@ worker は実行していない。どの段も人が決めて実行する。mode
 - p1e: lane_rules の本番 compare の preflight・集計・標本取りの読み取り専用 script と一時 DB の試験、手順の通し
 - p1e: 進捗に検査の結果を書く
 - p1e: 進捗の検査の結果から hash に見える値を外す
+- p1e: 集計に P1-D の explained outcome を足し、試験を main の記録の形に合わせる

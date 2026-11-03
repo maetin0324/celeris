@@ -62,6 +62,13 @@ updated: 2026-11-03
 - 旧 Rust の経路（参照の候補、1 試行）は 417.7 秒（6 段の和）。TS の 8.39 秒の約 50 倍。検証の範囲は同じでない（TS は ts-verify 10 段と一時 daemon の段階昇格・rollback、
   Rust は 2 crate の全試験と release build。Rust の activate・rollback は本番の操作なので測っていない）。
 
+## 1 回目の run の検査（その時点の HEAD で実行。基準は `git merge-base HEAD main`）
+- `bash scripts/dev/test-affected.sh`: 1 回目 exit 100（7237 件中 1 件、下の未解決 2 の flaky）、2 回目 exit 0（nextest 7237 passed・21 skipped、web 697 passed、test-ts-verify 18 passed）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo clippy -p task-core --example behavior-change-cases -- -D warnings`: 警告 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/check-doc-links.sh`・`check-adr-numbers.sh`（362 files）・`sh scripts/dev/progress-index.sh --check`・`python3 scripts/dev/check-architecture-map.py`: すべて ok。
+- 最終の検査は子の取り込みの後の run でやり直す。
+
 ## 未解決
 1. 実 LLM の試行 4 件の結果（source・model・token・cost・walltime・成功率・再試行・人の介入）はまだ無い。次の run で集める。
 2. flaky の疑い: 1 回目の `test-affected.sh`（7237 件）で `celeris::script_generation_e2e script_generation_e2e_switch_error_rollback_restart` が

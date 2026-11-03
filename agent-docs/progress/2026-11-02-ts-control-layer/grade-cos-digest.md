@@ -1,13 +1,10 @@
 ---
 title: grade-cos-digest — script-host-runner の採点に cos_digest を足す
 tasks: [01M6DCMB75G5F0DSE58ZNZMBAK]
-status: done
-completed: 2026-11-03
+status: blocked
 updated: 2026-11-03
 ---
 # grade-cos-digest — script-host-runner の採点に cos_digest を足す
-
-完了日: 2026-11-03
 
 ## 結論
 `script-host-runner` は `cos_digest` を本物の deno_core host で採点する。S3 と S4 の統合で落ちていた `test-ts-verify.sh` の場合 A・B（runner）・J（無害）は通るようになった。
@@ -16,7 +13,7 @@ updated: 2026-11-03
 ## 変更
 - `phase s3-s4: grade-cos-digest: runner の採点に cos_digest を足し、pass を本物の host で replay する`
   - `crates/script-runtime/src/bin/script-host-runner.rs`: 場面（入力と op の記録）、runner 内の op server、壊した op の応答、1 領域複数 file
-  - `crates/script-runtime/tests/script_host_runner.rs`: 試験を 7 件足した（計 12 件）
+  - `crates/script-runtime/tests/script_host_runner.rs`: 試験を 8 件足した（計 13 件）
   - `scripts/dev/script-runner-cache.sh`: `cos_digest/cases.jsonl` の golden と、key に内容を入れて写す `pass_traces.jsonl`
   - `scripts/dev/ts-verify.sh`: 段 `golden` を 1 領域複数 file に合わせ、key の入力の判定に `pass_traces.jsonl` を足した
   - `scripts/dev/test-affected.sh`: `pass_traces.jsonl` の変更で `test-ts-verify.sh` を選ぶ
@@ -38,7 +35,13 @@ updated: 2026-11-03
 - `cargo fmt --all -- --check` → exit 0
 - `bash scripts/dev/tests/script-runner-cache-key.sh` → 35 passed、0 failed
 - `bash scripts/dev/tests/ts-verify-classify.sh` → 45 passed、0 failed
-- `cargo nextest run -p celeris-script --test script_host_runner` → 12 passed
+- `cargo nextest run -p celeris-script --test script_host_runner` → 13 passed
+
+## 範囲 check の不合格（計画への申告）
+範囲 check が `scripts/dev/test-affected.sh`、`scripts/dev/tests/script-runner-cache-key.sh`、`scripts/dev/tests/ts-verify-classify.sh` を拒否する。この unit は `plan_issue` で返した。
+- `script-runner-cache-key.sh`: 目的の 4 で `GOLDEN_SPECS` に足す example を偽の cargo が知らない。変更前の版は `script-runner-cache.sh` の新しい版で exit 1 になる（途中で止まる）。
+- `ts-verify-classify.sh`: 偽の runner の `domains` が旧い `fixture` 欄を返す。変更前の版は 40 passed、5 failed。
+- `test-affected.sh`: `pass_traces.jsonl` は key の入力になったので、変更時に `test-ts-verify.sh` を選ぶ 1 行を足した。場合 L がこの選択を固定する。
 
 ## 作業中の事故
 patch の heredoc の終端を誤り、場合 K・L の破壊の 2 行が作業ツリーで実行された。`control-ts/src/domains/cos_digest.ts` と `control-ts/fixtures/cos_digest/pass_traces.jsonl` が変わったので、`git restore` で戻した。提出の差分に `control-ts/` は無い。

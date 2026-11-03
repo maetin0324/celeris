@@ -368,7 +368,7 @@ S3 と S4 を統合した木で `scripts/dev/test-ts-verify.sh` の場合 A・B�
   - 全件を正順と逆順に 2 回流す。正逆の比較には、呼んだ op の違いも入れる。
   - 出力の値の検査は `CosDigestPassOutput` の形と、一覧に無い run の安全違反 `run_outside_list`（境界 ADR 付記 S4-14 の規則 7）。規則 1〜6・8・9 は golden の一致と `task-dispatch` の検証が持ち、runner には写さない。
 - **grade-cos-digest-3（fixture）**: 領域は複数の fixture の file を持てる。`cos_digest` は `pass_traces.jsonl`（最少 20 行）と `cases.jsonl`（最少 2066 行）で、最少行数は file ごとに見る（合計 2086）。`cases.jsonl` の行は `compare.mjs` と同じ規則で「run 1 つの pass」に組み直す。
-  `domains`・`run` の出力の `fixture` 欄は `fixtures` に置き換えた。`input_rule`・`broken_inputs` も `fixtures[].rule`・`broken` に置き換えた。
+  `domains`・`run` の出力の `fixture` 欄は `fixtures` に置き換えた。`input_rule` も `fixtures[].rule` に置き換えた。`domains` の `broken_inputs`（壊した場面の id の一覧）は欄の名前と形を変えず、`cos_digest` では壊した op の応答の id を載せる。
 - **grade-cos-digest-4（安全シナリオ・activate）**: 壊した場面は入力でも op の応答でも表せる。`cos_digest` は壊した op の応答 7 件を持つ。6 件は `exception` で終わること、`read_run` の `denied` の 1 件は `denied` で終わることを確かめる。
   出力を返したら失敗である。`read_run` の code `exception` は TS がその run を飛ばす（境界 ADR 付記 S4-18）ので、throw の場面には入れない。Rust の DTO の検証に落ちる `read_run` の応答も同じ `exception` になるので入れない。activate は run 1 つの pass を probe する。
 - **grade-cos-digest-5（golden と cache key。(4) を改める）**: `GOLDEN_SPECS` に `cos_digest/cases.jsonl:dump-cos-digest-fixtures` を足した。`pass_traces.jsonl` は `task-dispatch` の試験 `cos_digest_trace.rs` が書くので、`GOLDEN_CRATES` は広げない。

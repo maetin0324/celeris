@@ -626,6 +626,19 @@ fn script_host_runner_cos_digest_broken_op_reply_must_be_rejected() {
     assert_eq!(row["outcome"], "returned_output");
 }
 
+#[test]
+fn domains_lists_cos_digest_with_rows_and_broken_scenes() {
+    let (out, report) = invoke(&["domains"]);
+    assert_eq!(out.status.code(), Some(0), "report: {report}");
+    let d = domain(&report, "cos_digest");
+    assert!(d["min_rows"].as_u64().expect("min_rows") >= 2086, "{d}");
+    let broken = d["broken_inputs"].as_array().expect("broken_inputs");
+    assert!(
+        broken.iter().any(|id| id == "read_reply_denied"),
+        "{broken:?}"
+    );
+}
+
 /// bundle の本文を差し替え、manifest の hash を合わせる。
 fn write_raw_bundle(dir: &Path, code: &str) {
     fs::write(dir.join(BUNDLE_FILE), code).expect("write bundle");

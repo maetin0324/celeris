@@ -1550,7 +1550,7 @@ fn domains_report() -> Value {
             })).collect::<Vec<_>>(),
             "min_rows": s.min_rows(),
             "fields": s.fields,
-            "broken": (s.broken)().into_iter().map(|b| json!({ "id": b.id, "expect": b.expect.name() })).collect::<Vec<_>>(),
+            "broken_inputs": (s.broken)().into_iter().map(|b| b.id).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
 }

@@ -28,11 +28,11 @@ unit m-cosd-c。[境界 ADR](../../adr/2026-11-02-ts-control-layer-boundary.md) 
 - 試行中の load average（1 分）は 9.98〜15.0。他の cargo・rustc は 0 なので自分の build の負荷である。rep 1〜14 の範囲（343.005〜346.576）と同じ幅に収まる。
 
 ## 識別の照合
-| series | host | clean | tree（task-core / task-dispatch） | rustc | commit |
+| series | host | clean | tree hash（task-core / task-dispatch） | rustc | commit |
 |---|---|---|---|---|---|
-| m-cosd-a | home-dev | true | b85f3c34… / efe35b61… | 1.98.1 (48a229cea) | 前半の head |
-| m-cosd-b | home-dev | true | b85f3c34… / efe35b61… | 1.98.1 (48a229cea) | 後半の head |
-| m-cosd-c | home-dev | true | b85f3c34… / efe35b61… | 1.98.1 (48a229cea) | 「integrate wu/overhead (phase s6-pilot)」 |
+| m-cosd-a | home-dev | true | 3 系列で同じ（値は jsonl） | 1.98.1 | 前半の head |
+| m-cosd-b | home-dev | true | 3 系列で同じ（値は jsonl） | 1.98.1 | 後半の head |
+| m-cosd-c | home-dev | true | 3 系列で同じ（値は jsonl） | 1.98.1 | 「integrate wu/overhead (phase s6-pilot)」 |
 
 - 全 prime・step 行で host・clean・tree hash・rustc が 3 系列とも同じ。違うのは `series` と `commit` で、commit の間の差は測る crate の外（tree hash が同じ）。p50・p95 に prime・estimate は入れていない。
 

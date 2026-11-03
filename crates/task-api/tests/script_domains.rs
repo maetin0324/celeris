@@ -14,8 +14,8 @@ use common::*;
 use serde_json::{Value, json};
 use task_api::{ApiToken, Principal};
 use task_core::script_compare::{
-    NewScriptGeneration, ScriptDomain, ScriptDomainError, ScriptGenerationState, ScriptMode,
-    ScriptModeChange,
+    NewScriptGeneration, ScriptDomain, ScriptDomainError, ScriptGenerationState,
+    ScriptGenerationTransition, ScriptMode, ScriptModeChange,
 };
 
 const LIST: &str = "/api/v1/script/domains";
@@ -40,6 +40,42 @@ fn seed_generation(env: &TestEnv, sha_digit: char, domains: &[&str]) -> String {
         )
         .expect("generation");
     sha
+}
+
+/// 付記 S5-4: `rust` に戻した直後の generation は `draining` で、mode の行の行き先にできない。
+/// `retired` にしてから登録し直し、`loaded` に戻す（同じ bundle なら同じ行）。
+fn rearm_generation(env: &TestEnv, sha: &str) {
+    let generation = env
+        .store
+        .script_generation_by_sha256(sha)
+        .expect("read")
+        .expect("generation");
+    env.store
+        .script_generation_transition(
+            &ScriptGenerationTransition {
+                id: generation.id.clone(),
+                to: ScriptGenerationState::Retired,
+                actor: "human:test".into(),
+                reason: "drained".into(),
+                cancelled_in_flight: None,
+            },
+            time::OffsetDateTime::now_utc(),
+        )
+        .expect("retire");
+    let again = env
+        .store
+        .script_generation_record(
+            &NewScriptGeneration {
+                bundle_sha256: sha.to_owned(),
+                host_api: generation.host_api.clone(),
+                schema_sha256: generation.schema_sha256.clone(),
+                manifest_json: generation.manifest_json.clone(),
+                state: ScriptGenerationState::Loaded,
+            },
+            time::OffsetDateTime::now_utc(),
+        )
+        .expect("record again");
+    assert_eq!(again.state, ScriptGenerationState::Loaded);
 }
 
 fn event_count(env: &TestEnv) -> i64 {
@@ -443,6 +479,7 @@ async fn script_domain_mode_ts_rollback_by_anyone() {
     assert_eq!(resp.json()["domain"]["mode"], "rust");
 
     // CoS: ts → compare（/cos/operations で applied）。
+    rearm_generation(&env, &sha);
     compare_then_ts(&app, &sha, 3).await;
     run_external(
         &env,

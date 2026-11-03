@@ -207,8 +207,8 @@ impl Dispatcher {
             .unwrap_or_default();
         let unavailable = match (&generation, &self.script_compare.script) {
             (None, _) => Some(format!("script generation `{generation_id}` not found")),
-            (Some(g), _) if g.state != ScriptGenerationState::Loaded => {
-                Some(format!("script generation `{generation_id}` is not loaded"))
+            (Some(g), _) if g.state != ScriptGenerationState::Active => {
+                Some(format!("script generation `{generation_id}` is not active"))
             }
             (Some(g), _) if !g.declares_domain(domain) => Some(format!(
                 "script generation `{generation_id}` does not declare {}",

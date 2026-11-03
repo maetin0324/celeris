@@ -2276,9 +2276,7 @@ impl Dispatcher {
 
     /// 1 tick。tokio ランタイム内から呼ぶ（ワーカーとレビューを `tokio::spawn` する）。
     pub fn tick(&mut self) -> Result<TickReport, DispatchError> {
-        self.ticks += 1;
-        // 付記 S5-8: 前の tick の TS の待ちを集計し、予算を戻す（S5-6 の戻しの書き直しも）。
-        self.script_tick_rollover();
+        self.begin_tick();
         let tick_started = Instant::now();
         if let Some(prev) = self.last_tick_started.replace(tick_started) {
             self.last_tick_gap_ms =

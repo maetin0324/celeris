@@ -120,7 +120,7 @@ close-async unit の差分は文書だけ（この file・`docs/architecture-map
 | [real-host](2026-11-02-ts-control-layer-s4/real-host.md) | 本物の host の mode ts・compare・再起動、`restore_modes` の修正 | `phase s4: real-host: 本物の host で mode ts の apply・fallback・再起動を確かめ、起動時の復元を ts にも当てる`、`phase s4: real-host: 進捗の記録を足す`、`phase s4: real-host: 起動時の復元の直す前後の試験結果を記録に足す` |
 | [robust-ts](2026-11-02-ts-control-layer-s4/robust-ts.md) | mode ts の頑健性の試験 15 件 | `phase s4: robust-ts: mode ts の async pass の順序・再配送・retry・cancel・再起動・policy_version の試験` |
 | [fixture-ref](2026-11-02-ts-control-layer-s4/fixture-ref.md) | 本物の host の試験を `cases.jsonl` だけで回す | `phase s4: fixture-ref: 本物の host の試験を cases.jsonl だけで回し、消えた traces.jsonl を読まない` |
-| close-async | この file・地図・境界 ADR の S4-20 | `phase s4: close-async: S4 の進捗・architecture-map・境界 ADR を async 経路の実装と突き合わせる` |
+| close-async | この file・地図・境界 ADR の S4-20 | `phase s4: close-async: S4 の進捗・architecture-map・境界 ADR を async 経路の実装と突き合わせる`、`phase s4: close-async: 進捗に提出時の検査結果を書く` |
 
 統合の commit（`integrate wu/…`）は celeris が作った。
 

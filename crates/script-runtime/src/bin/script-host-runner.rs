@@ -1,8 +1,11 @@
 //! TS だけの変更を検証する本物の deno_core host（ADR 2026-11-02 ts-fast-verify (3)）。
 //!
 //! bundle の manifest を検証して load し、採点の表（この file の [`DOMAINS`]）にある領域の Rust golden（JSONL）の全件を
-//! 正順と逆順の 2 回呼んで比べ、安全シナリオ（壊した入力の拒否・宣言外の出力・不正な出力・例外・timeout・拒否）を判定して、
-//! 結果を JSON 1 個で stdout に出す。検証専用の道具で、daemon・celerisctl の経路には入らない。
+//! 正順と逆順の 2 回呼んで比べ、安全シナリオ（壊した入力・壊した op の応答の拒否・宣言外の出力・不正な出力・例外・timeout・拒否）を
+//! 判定して、結果を JSON 1 個で stdout に出す。検証専用の道具で、daemon・celerisctl の経路には入らない。
+//!
+//! op を await する領域（`cos_digest`）は、この file の op server が場面の記録から op に答える（付記 S4-16 の replay を
+//! 本物の deno_core host で行う。ADR 2026-11-02 ts-fast-verify 付記 grade-cos-digest）。
 //!
 //! ```text
 //! script-host-runner run      --bundle-dir <dir> --fixtures <dir> [--suite golden|safety|all]
@@ -24,12 +27,14 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use celeris_script::dto::HOST_API_VERSION;
+use celeris_script::dto::{HOST_API_VERSION, HostError, HostErrorCode, HostResult};
 use celeris_script::manifest::{
     VerifiedBundle, deploy_bundle, deployed_dir, host_schema_sha256, load_bundle_dir, load_deployed,
 };
 use celeris_script::selftest::{SELFTEST_DOMAIN, check_output, selftest_call};
-use celeris_script::{ScriptCall, ScriptError, ScriptRuntimeHandle, domain_capabilities};
+use celeris_script::{
+    HostOpCall, ScriptCall, ScriptError, ScriptRuntimeHandle, domain_capabilities, host_sink,
+};
 use serde_json::{Map, Value, json};
 
 /// 出力の `schema` 欄。
@@ -55,50 +60,131 @@ struct Checked {
     violations: Vec<&'static str>,
 }
 
+/// 記録された op 1 回（`pass_traces.jsonl` の `ops` の 1 件）。
+#[derive(Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedOp {
+    op: String,
+    request: Value,
+    reply: HostResult<Value>,
+}
+
+/// 1 回の呼び出しの場面: 入力と、op を await する領域なら op の答えの記録。`ops` が `None` の領域には host sink を渡さない。
+#[derive(Clone)]
+struct Scene {
+    input: Value,
+    ops: Option<Vec<RecordedOp>>,
+}
+
+impl Scene {
+    fn pure(input: Value) -> Self {
+        Self { input, ops: None }
+    }
+
+    /// 入力を取らない pass（入力は daemon と同じ `{}`。付記 S4-12）。
+    fn pass(ops: Vec<RecordedOp>) -> Self {
+        Self {
+            input: json!({}),
+            ops: Some(ops),
+        }
+    }
+}
+
+/// fixture の 1 行から作った場面と期待値（`expected` の比べる欄を出力と比べる）。
+struct Parsed {
+    scene: Scene,
+    expected: Value,
+}
+
+/// 壊した場面 1 つ。TS は `expect` の結果で終わらなければならない（出力を返したら失敗）。
+struct Broken {
+    id: &'static str,
+    scene: Scene,
+    expect: Outcome,
+}
+
+/// 領域の fixture の file 1 つ。
+struct FixtureSpec {
+    /// `--fixtures` の dir からの相対 path。
+    path: &'static str,
+    /// この file の最少行数。空の file・欠けた file を通さない。領域の最少行数はこの和。
+    min_rows: usize,
+    /// fixture の 1 行から場面を作る規則（`domains` の出力に載せる説明）。
+    rule: &'static str,
+    parse: fn(&Value) -> Result<Parsed, String>,
+}
+
 /// 採点する領域 1 つ。
 struct DomainSpec {
     name: &'static str,
-    /// `--fixtures` の dir からの相対 path。
-    fixture: &'static str,
-    /// これより少ない行の fixture は失敗（空の fixture・欠けた fixture を通さない）。
-    min_rows: usize,
+    fixtures: &'static [FixtureSpec],
     /// 比べる欄。出力の欄の集合はこれと完全に同じでなければならない。
     fields: &'static [&'static str],
-    /// fixture の 1 行から入力を作る規則（`domains` の出力に載せる説明）。
-    input_rule: &'static str,
-    input: fn(&Value) -> Option<Value>,
-    /// 出力の値の検査。`input` は TS に渡した入力。
-    check: fn(&Map<String, Value>, &Value) -> Result<Checked, String>,
-    /// activate で 1 回呼ぶ入力。
-    probe: fn() -> Value,
-    /// TS が throw しなければならない壊した入力。
-    broken: fn() -> Vec<(&'static str, Value)>,
+    /// 出力の値の検査。`scene` は TS に渡した場面。
+    check: fn(&Map<String, Value>, &Scene) -> Result<Checked, String>,
+    /// activate で 1 回呼ぶ場面。
+    probe: fn() -> Scene,
+    /// TS が拒まなければならない壊した場面。
+    broken: fn() -> Vec<Broken>,
+}
+
+impl DomainSpec {
+    fn min_rows(&self) -> usize {
+        self.fixtures.iter().map(|f| f.min_rows).sum()
+    }
 }
 
 static DOMAINS: &[DomainSpec] = &[
     DomainSpec {
         name: "lane_rules",
-        fixture: "lane_rules/all-features.jsonl",
-        // 9 軸 × 3 値の全組み合わせ（3^9）。
-        min_rows: 19_683,
+        fixtures: &[FixtureSpec {
+            path: "lane_rules/all-features.jsonl",
+            // 9 軸 × 3 値の全組み合わせ（3^9）。
+            min_rows: 19_683,
+            rule: "{\"features\": row.features}",
+            parse: lane_rules_row,
+        }],
         fields: &["rule_id", "proposed", "condition"],
-        input_rule: "{\"features\": row.features}",
-        input: lane_rules_input,
         check: lane_rules_check,
         probe: lane_rules_probe,
         broken: lane_rules_broken,
     },
     DomainSpec {
         name: "route_priority",
-        fixture: "route_priority/cases.jsonl",
-        // task-core の dump-route-priority-fixtures が今書く行数。
-        min_rows: 2_026,
+        fixtures: &[FixtureSpec {
+            path: "route_priority/cases.jsonl",
+            // task-core の dump-route-priority-fixtures が今書く行数。
+            min_rows: 2_026,
+            rule: "row.input",
+            parse: route_priority_row,
+        }],
         fields: &["basis", "candidates"],
-        input_rule: "row.input",
-        input: route_priority_input,
         check: route_priority_check,
         probe: route_priority_probe,
         broken: route_priority_broken,
+    },
+    DomainSpec {
+        name: "cos_digest",
+        fixtures: &[
+            FixtureSpec {
+                path: "cos_digest/pass_traces.jsonl",
+                // task-dispatch の cos_digest_trace.rs が今書く行数。
+                min_rows: 20,
+                rule: "{ops: row.ops, output: row.output}",
+                parse: cos_digest_trace_row,
+            },
+            FixtureSpec {
+                path: "cos_digest/cases.jsonl",
+                // task-core の dump-cos-digest-fixtures が今書く行数。
+                min_rows: 2_066,
+                rule: "run 1 つの pass に組み直す（list = input の thread・run_id・run_state、read = input、output = {runs: [{run_id, commands}]}。compare.mjs と同じ）",
+                parse: cos_digest_case_row,
+            },
+        ],
+        fields: &["runs"],
+        check: cos_digest_check,
+        probe: cos_digest_probe,
+        broken: cos_digest_broken,
     },
 ];
 
@@ -121,11 +207,27 @@ const AXES: &[&str] = &[
     "cross_cutting",
 ];
 
-fn lane_rules_input(row: &Value) -> Option<Value> {
-    Some(json!({ "features": row.get("features")?.clone() }))
+/// 行そのものが期待値の領域の `Parsed`（比べる欄が行に無ければ誤り）。
+fn row_expected(input: Value, row: &Value, fields: &[&str]) -> Result<Parsed, String> {
+    if let Some(f) = fields.iter().find(|f| row.get(**f).is_none()) {
+        return Err(format!("missing expected field {f:?}"));
+    }
+    Ok(Parsed {
+        scene: Scene::pure(input),
+        expected: row.clone(),
+    })
 }
 
-fn lane_rules_check(out: &Map<String, Value>, _input: &Value) -> Result<Checked, String> {
+fn lane_rules_row(row: &Value) -> Result<Parsed, String> {
+    let features = row.get("features").ok_or("cannot build the input")?;
+    row_expected(
+        json!({ "features": features.clone() }),
+        row,
+        &["rule_id", "proposed", "condition"],
+    )
+}
+
+fn lane_rules_check(out: &Map<String, Value>, _scene: &Scene) -> Result<Checked, String> {
     let rule_id = str_field(out, "rule_id")?;
     if rule_id.is_empty() || rule_id.len() > RULE_ID_MAX {
         return Err(format!(
@@ -152,7 +254,11 @@ fn lane_rules_check(out: &Map<String, Value>, _input: &Value) -> Result<Checked,
     })
 }
 
-fn lane_rules_probe() -> Value {
+fn lane_rules_probe() -> Scene {
+    Scene::pure(lane_rules_probe_input())
+}
+
+fn lane_rules_probe_input() -> Value {
     let features: Map<String, Value> = AXES
         .iter()
         .map(|a| ((*a).to_owned(), json!("low")))
@@ -160,8 +266,8 @@ fn lane_rules_probe() -> Value {
     json!({ "features": features })
 }
 
-fn lane_rules_broken() -> Vec<(&'static str, Value)> {
-    let base = lane_rules_probe();
+fn lane_rules_broken() -> Vec<Broken> {
+    let base = lane_rules_probe_input();
     let edit = |f: &dyn Fn(&mut Value)| {
         let mut v = base.clone();
         f(&mut v);
@@ -192,13 +298,26 @@ fn lane_rules_broken() -> Vec<(&'static str, Value)> {
             edit(&|v| v["features"]["judgment"] = json!(1)),
         ),
     ]
+    .into_iter()
+    .map(broken_input)
+    .collect()
 }
 
-fn route_priority_input(row: &Value) -> Option<Value> {
-    row.get("input").cloned()
+/// 壊した入力（TS は throw する）。
+fn broken_input((id, input): (&'static str, Value)) -> Broken {
+    Broken {
+        id,
+        scene: Scene::pure(input),
+        expect: Outcome::Exception,
+    }
 }
 
-fn route_priority_check(out: &Map<String, Value>, input: &Value) -> Result<Checked, String> {
+fn route_priority_row(row: &Value) -> Result<Parsed, String> {
+    let input = row.get("input").ok_or("cannot build the input")?;
+    row_expected(input.clone(), row, &["basis", "candidates"])
+}
+
+fn route_priority_check(out: &Map<String, Value>, scene: &Scene) -> Result<Checked, String> {
     let basis = str_field(out, "basis")?;
     if !BASES.contains(&basis) {
         return Err(format!("basis must be one of {BASES:?} (got {basis:?})"));
@@ -219,7 +338,7 @@ fn route_priority_check(out: &Map<String, Value>, input: &Value) -> Result<Check
             format!("candidates[{i}] must be an object of exactly the strings source and model")
         })?);
     }
-    let declared = table_candidates(input);
+    let declared = table_candidates(&scene.input);
     let mut violations = Vec::new();
     if !candidates.iter().all(|c| declared.contains(c)) {
         violations.push("undeclared_candidate");
@@ -267,7 +386,11 @@ fn table_candidates(input: &Value) -> BTreeSet<(String, String)> {
         .collect()
 }
 
-fn route_priority_probe() -> Value {
+fn route_priority_probe() -> Scene {
+    Scene::pure(route_priority_probe_input())
+}
+
+fn route_priority_probe_input() -> Value {
     json!({
         "harness": "claude_code",
         "lane": "standard",
@@ -282,8 +405,8 @@ fn route_priority_probe() -> Value {
     })
 }
 
-fn route_priority_broken() -> Vec<(&'static str, Value)> {
-    let base = route_priority_probe();
+fn route_priority_broken() -> Vec<Broken> {
+    let base = route_priority_probe_input();
     let edit = |f: &dyn Fn(&mut Value)| {
         let mut v = base.clone();
         f(&mut v);
@@ -319,6 +442,248 @@ fn route_priority_broken() -> Vec<(&'static str, Value)> {
             "candidate_wrong_type",
             edit(&|v| v["table"]["route_defaults"] = json!([{ "source": 1, "model": "sonnet" }])),
         ),
+    ]
+    .into_iter()
+    .map(broken_input)
+    .collect()
+}
+
+// ---- cos_digest（pass。op を await する。付記 S4-12・S4-16） ----
+
+const OP_LIST_RUNS: &str = "cos_digest:list_runs";
+const OP_READ_RUN: &str = "cos_digest:read_run";
+
+fn recorded(op: &str, request: Value, reply: HostResult<Value>) -> RecordedOp {
+    RecordedOp {
+        op: op.to_owned(),
+        request,
+        reply,
+    }
+}
+
+fn ok_reply(value: Value) -> HostResult<Value> {
+    HostResult::Ok { value }
+}
+
+fn str_of<'a>(v: &'a Value, field: &str) -> Result<&'a str, String> {
+    v.get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{field} must be a string"))
+}
+
+/// `pass_traces.jsonl` の 1 行（1 pass）。
+fn cos_digest_trace_row(row: &Value) -> Result<Parsed, String> {
+    let ops = row.get("ops").ok_or("missing ops")?;
+    let ops: Vec<RecordedOp> =
+        serde_json::from_value(ops.clone()).map_err(|e| format!("bad ops: {e}"))?;
+    let expected = row.get("output").ok_or("missing output")?;
+    if expected.get("runs").is_none() {
+        return Err("missing expected field \"runs\"".to_owned());
+    }
+    Ok(Parsed {
+        scene: Scene::pass(ops),
+        expected: expected.clone(),
+    })
+}
+
+/// run 1 つの list と read の記録（compare.mjs・pass-replay.ts の `passFromCase` と同じ組み直し）。
+fn one_run_ops(input: &Value) -> Result<Vec<RecordedOp>, String> {
+    let thread = str_of(input, "thread")?;
+    let run_id = str_of(input, "run_id")?;
+    let run_state = str_of(input, "run_state")?;
+    Ok(vec![
+        recorded(
+            OP_LIST_RUNS,
+            json!({}),
+            ok_reply(json!({
+                "runs": [{ "thread": thread, "run_id": run_id, "run_state": run_state }],
+            })),
+        ),
+        recorded(
+            OP_READ_RUN,
+            json!({ "thread": thread, "run_id": run_id }),
+            ok_reply(input.clone()),
+        ),
+    ])
+}
+
+/// `cases.jsonl` の 1 行を「run 1 つの pass」に組み直す（付記 S4-16）。
+fn cos_digest_case_row(row: &Value) -> Result<Parsed, String> {
+    let input = row.get("input").ok_or("missing input")?;
+    let commands = row.get("commands").ok_or("missing commands")?;
+    let run_id = str_of(input, "run_id")?;
+    Ok(Parsed {
+        scene: Scene::pass(one_run_ops(input)?),
+        expected: json!({ "runs": [{ "run_id": run_id, "commands": commands.clone() }] }),
+    })
+}
+
+/// 欄の集合が `fields` と完全に同じ object か。
+fn exact_object<'a>(
+    v: &'a Value,
+    fields: &[&str],
+    where_: &str,
+) -> Result<&'a Map<String, Value>, String> {
+    let m = v
+        .as_object()
+        .ok_or_else(|| format!("{where_} must be an object"))?;
+    if m.len() != fields.len() || !fields.iter().all(|f| m.contains_key(*f)) {
+        return Err(format!(
+            "{where_} must have exactly the fields {fields:?} (got {:?})",
+            m.keys().collect::<Vec<_>>()
+        ));
+    }
+    Ok(m)
+}
+
+/// 出力の形（`CosDigestPassOutput`）を確かめる。値の規則は golden の byte 一致と Rust の検証（規則 1〜9）が持つ。
+/// 一覧に無い run の出力は安全違反（規則 7 の `run_outside_list`）。
+fn cos_digest_check(out: &Map<String, Value>, scene: &Scene) -> Result<Checked, String> {
+    let runs = out
+        .get("runs")
+        .and_then(Value::as_array)
+        .ok_or("runs must be an array")?;
+    let listed: BTreeSet<&str> = scene
+        .ops
+        .iter()
+        .flatten()
+        .filter(|o| o.op == OP_LIST_RUNS)
+        .filter_map(|o| match &o.reply {
+            HostResult::Ok { value } => value.get("runs").and_then(Value::as_array),
+            HostResult::Error { .. } => None,
+        })
+        .flatten()
+        .filter_map(|r| r.get("run_id").and_then(Value::as_str))
+        .collect();
+    let mut violations = Vec::new();
+    for (i, run) in runs.iter().enumerate() {
+        let where_ = format!("runs[{i}]");
+        let m = exact_object(run, &["run_id", "commands"], &where_)?;
+        let run_id = m["run_id"]
+            .as_str()
+            .ok_or_else(|| format!("{where_}.run_id must be a string"))?;
+        if !listed.contains(run_id) {
+            violations.push("run_outside_list");
+        }
+        let commands = m["commands"]
+            .as_array()
+            .ok_or_else(|| format!("{where_}.commands must be an array"))?;
+        for (j, c) in commands.iter().enumerate() {
+            let at = format!("{where_}.commands[{j}]");
+            match c.get("kind").and_then(Value::as_str) {
+                Some("post_digest") => {
+                    exact_object(
+                        c,
+                        &[
+                            "kind",
+                            "thread",
+                            "idempotency_key",
+                            "text",
+                            "cards",
+                            "run_id",
+                        ],
+                        &at,
+                    )?;
+                }
+                Some("requeue_run") => {
+                    exact_object(c, &["kind", "run_id"], &at)?;
+                }
+                other => return Err(format!("{at}.kind is not a command: {other:?}")),
+            }
+        }
+    }
+    Ok(Checked {
+        output: out.clone(),
+        violations,
+    })
+}
+
+const PROBE_THREAD: &str = "probe-thread";
+const PROBE_RUN: &str = "probe-run";
+
+fn cos_digest_probe_input() -> Value {
+    json!({
+        "thread": PROBE_THREAD,
+        "run_id": PROBE_RUN,
+        "run_state": "completed",
+        "reason": null,
+        "items": [],
+    })
+}
+
+/// run 1 つの pass。
+fn cos_digest_probe() -> Scene {
+    // 固定の入力なので組み直しは失敗しない。失敗しても activate の probe が落ちるだけ。
+    Scene::pass(one_run_ops(&cos_digest_probe_input()).unwrap_or_default())
+}
+
+/// 壊した op の応答。TS（または Rust の op の DTO 検証）が拒み、pass は出力を返さない。
+/// `read_run` の code `exception` は TS がその run を飛ばす（S4-18）ので、throw になる壊し方だけを並べる。
+fn cos_digest_broken() -> Vec<Broken> {
+    let list = |reply| recorded(OP_LIST_RUNS, json!({}), reply);
+    let good_list = || {
+        list(ok_reply(json!({
+            "runs": [{ "thread": PROBE_THREAD, "run_id": PROBE_RUN, "run_state": "completed" }],
+        })))
+    };
+    let read = |reply| {
+        recorded(
+            OP_READ_RUN,
+            json!({ "thread": PROBE_THREAD, "run_id": PROBE_RUN }),
+            reply,
+        )
+    };
+    let item = |route: &str| {
+        json!({
+            "item_id": "i", "thread_id": PROBE_THREAD, "source_kind": "question", "source_key": "k",
+            "source_revision": "r", "state": "escalated", "summary": "s", "detail": "", "reason": null,
+            "operation_id": null, "run_id": PROBE_RUN, "created_at": "2026-11-03T00:00:00Z",
+            "route": route, "decision": null,
+        })
+    };
+    let host_error = |code, message: &str| HostResult::Error {
+        error: HostError::new(code, message),
+    };
+    let scene = |ops| Scene::pass(ops);
+    let throw = |id, ops| Broken {
+        id,
+        scene: scene(ops),
+        expect: Outcome::Exception,
+    };
+    let mut other_run = cos_digest_probe_input();
+    other_run["run_id"] = json!("another-run");
+    let mut bad_route = cos_digest_probe_input();
+    bad_route["items"] = json!([item("bogus")]);
+    vec![
+        throw("list_reply_missing_runs", vec![list(ok_reply(json!({})))]),
+        throw(
+            "list_reply_extra_field",
+            vec![list(ok_reply(json!({ "runs": [], "extra": 1 })))],
+        ),
+        throw(
+            "list_reply_wrong_type",
+            vec![list(ok_reply(json!({ "runs": "none" })))],
+        ),
+        throw(
+            "list_reply_error",
+            vec![list(host_error(HostErrorCode::Exception, "store failed"))],
+        ),
+        throw(
+            "read_reply_other_run",
+            vec![good_list(), read(ok_reply(other_run))],
+        ),
+        throw(
+            "read_reply_unknown_route",
+            vec![good_list(), read(ok_reply(bad_route))],
+        ),
+        Broken {
+            id: "read_reply_denied",
+            scene: scene(vec![
+                good_list(),
+                read(host_error(HostErrorCode::Denied, "outside the scope")),
+            ]),
+            expect: Outcome::Denied,
+        },
     ]
 }
 
@@ -381,7 +746,7 @@ fn error_outcome(err: &ScriptError) -> Outcome {
 /// 出力の形と値を検査する（期待値とは比べない）。
 fn check_shape(
     spec: &DomainSpec,
-    input: &Value,
+    scene: &Scene,
     result: &Result<Value, ScriptError>,
 ) -> Result<Checked, Judged> {
     let fail = |outcome, error: String| Judged {
@@ -411,17 +776,14 @@ fn check_shape(
             format!("missing output field {missing:?}"),
         ));
     }
-    (spec.check)(map, input).map_err(|e| fail(Outcome::InvalidOutput, e))
+    (spec.check)(map, scene).map_err(|e| fail(Outcome::InvalidOutput, e))
 }
 
 /// golden の 1 行と比べる。欄ごとの serde_json の直列化が byte 一致なら match（境界 ADR 付記 S2-2）。
-fn judge(
-    spec: &DomainSpec,
-    input: &Value,
-    expected: &Value,
-    result: &Result<Value, ScriptError>,
-) -> Judged {
-    let checked = match check_shape(spec, input, result) {
+/// workspace の serde_json は `preserve_order` を持たない（ルートの Cargo.toml）ので、object の key は整列して直列化される。
+/// TS の出力の key の順はこの比較には見えない（Rust の検証→apply は型で受けるので順に依存しない）。順は compare.mjs が見る。
+fn judge(spec: &DomainSpec, scene: &Scene, expected: &Value, ran: &Ran) -> Judged {
+    let checked = match check_shape_replayed(spec, scene, ran) {
         Ok(c) => c,
         Err(j) => return j,
     };
@@ -441,12 +803,43 @@ fn judge(
     }
 }
 
-/// 正順と逆順の結果を比べるための指紋。
-fn fingerprint(result: &Result<Value, ScriptError>) -> String {
-    match result {
+/// [`check_shape`] に op の replay の判定を足す（付記 S4-16）。記録に無い要求を呼んだ pass は、TS がその `denied` を
+/// 握りつぶして正しい出力を返しても `denied`。記録の op を呼ばなかった pass は `mismatch`。
+fn check_shape_replayed(spec: &DomainSpec, scene: &Scene, ran: &Ran) -> Result<Checked, Judged> {
+    let fail = |outcome, error: String| Judged {
+        outcome,
+        violations: Vec::new(),
+        error: Some(error),
+    };
+    if let Some(first) = ran.unrecorded.first() {
+        return Err(fail(
+            Outcome::Denied,
+            format!(
+                "{} op request(s) not in the record; first: {first}",
+                ran.unrecorded.len()
+            ),
+        ));
+    }
+    let checked = check_shape(spec, scene, &ran.result)?;
+    if let Some(first) = ran.unused.first() {
+        return Err(fail(
+            Outcome::Mismatch,
+            format!(
+                "{} recorded op(s) not called; first: {first}",
+                ran.unused.len()
+            ),
+        ));
+    }
+    Ok(checked)
+}
+
+/// 正順と逆順の結果を比べるための指紋（呼んだ op の違いも入れる）。
+fn fingerprint(ran: &Ran) -> String {
+    let body = match &ran.result {
         Ok(v) => format!("ok:{v}"),
         Err(e) => format!("err:{e}"),
-    }
+    };
+    format!("{body}|{:?}|{:?}", ran.unrecorded, ran.unused)
 }
 
 // ---------------------------------------------------------------------------
@@ -475,20 +868,112 @@ impl Host {
         })
     }
 
-    /// 空の scope で呼ぶ（純粋な領域は op を使わない。使えば `denied`）。
-    fn call(&self, domain: &str, input: Value) -> (Result<Value, ScriptError>, Duration) {
-        self.call_with(ScriptCall {
+    /// 場面を空の scope で呼ぶ。純粋な領域は op を使わない（使えば `denied`）。op を await する領域の op には
+    /// 場面の記録から答える。
+    fn run_scene(&self, domain: &str, scene: &Scene) -> Ran {
+        let call = ScriptCall {
             domain: domain.to_owned(),
-            input,
+            input: scene.input.clone(),
             scope_task_ids: BTreeSet::new(),
             timeout: self.timeout,
-        })
+        };
+        let Some(ops) = &scene.ops else {
+            let (result, took) = self.call_with(call);
+            return Ran {
+                result,
+                took,
+                unrecorded: Vec::new(),
+                unused: Vec::new(),
+            };
+        };
+        let start = Instant::now();
+        let mut server = OpServer::new(ops);
+        let result = self.rt.block_on(async {
+            let (sink, mut rx) = host_sink();
+            let reply = self.handle.call_with_host_sink(call, Some(sink));
+            tokio::pin!(reply);
+            loop {
+                tokio::select! {
+                    result = &mut reply => break result,
+                    Some(op) = rx.recv() => server.answer(op),
+                }
+            }
+        });
+        Ran {
+            result: result.map(|r| r.output),
+            took: start.elapsed(),
+            unused: server.unused(),
+            unrecorded: server.unrecorded,
+        }
     }
 
     fn call_with(&self, call: ScriptCall) -> (Result<Value, ScriptError>, Duration) {
         let start = Instant::now();
         let result = self.rt.block_on(self.handle.call(call)).map(|r| r.output);
         (result, start.elapsed())
+    }
+}
+
+/// 1 回の呼び出しの結果。
+struct Ran {
+    result: Result<Value, ScriptError>,
+    took: Duration,
+    /// 記録に無かった要求（op と request の直列化）。
+    unrecorded: Vec<String>,
+    /// 呼ばれなかった記録の op。
+    unused: Vec<String>,
+}
+
+/// runner の中の op server: TS の op に場面の記録から答える。照合は op と request の直列化の byte 一致
+/// （`control-ts/src/testing/pass-replay.ts` と同じ規則）。記録に無い要求には `denied` を返し、その場面を不一致にする。
+struct OpServer<'a> {
+    ops: &'a [RecordedOp],
+    used: Vec<bool>,
+    unrecorded: Vec<String>,
+}
+
+impl<'a> OpServer<'a> {
+    fn new(ops: &'a [RecordedOp]) -> Self {
+        Self {
+            ops,
+            used: vec![false; ops.len()],
+            unrecorded: Vec::new(),
+        }
+    }
+
+    fn answer(&mut self, call: HostOpCall) {
+        let name = call.op.as_str();
+        let bytes = call.request.to_string();
+        let at = self.ops.iter().position(|o| {
+            let recorded = o.request.to_string();
+            o.op == name && recorded == bytes
+        });
+        let reply = match at {
+            Some(i) => {
+                self.used[i] = true;
+                self.ops[i].reply.clone()
+            }
+            None => {
+                let what = format!("{name} {bytes}");
+                let error = HostError::new(
+                    HostErrorCode::Denied,
+                    format!("request not in the record: {what}"),
+                );
+                self.unrecorded.push(what);
+                HostResult::Error { error }
+            }
+        };
+        // 受け手が居ない = 要求は終わっている。結果は呼び出しの戻り値が持つ。
+        let _ = call.reply.send(reply);
+    }
+
+    fn unused(&self) -> Vec<String> {
+        self.ops
+            .iter()
+            .zip(&self.used)
+            .filter(|(_, used)| !**used)
+            .map(|(o, _)| format!("{} {}", o.op, o.request))
+            .collect()
     }
 }
 
@@ -714,29 +1199,32 @@ fn load_checked(dir: &Path) -> Result<VerifiedBundle, Fatal> {
 // ---------------------------------------------------------------------------
 
 struct Row {
+    /// 行の file（`--fixtures` の dir からの相対 path）。
+    file: &'static str,
     line: usize,
-    input: Value,
+    scene: Scene,
     expected: Value,
 }
 
+/// 領域の fixture の file を全部読む。入出力の誤りは exit 2。
 fn read_fixture(dir: &Path, spec: &DomainSpec) -> Result<Vec<Row>, Fatal> {
-    let path = dir.join(spec.fixture);
-    let text = fs::read_to_string(&path)
-        .map_err(|e| Fatal::usage(format!("cannot read fixture {}: {e}", path.display())))?;
     let mut rows = Vec::new();
-    for (i, raw) in text.lines().enumerate() {
-        let line = i + 1;
-        let bad = |why: &str| Fatal::usage(format!("{}:{line}: {why}", path.display()));
-        let row: Value = serde_json::from_str(raw).map_err(|e| bad(&e.to_string()))?;
-        let input = (spec.input)(&row).ok_or_else(|| bad("cannot build the input"))?;
-        if let Some(f) = spec.fields.iter().find(|f| row.get(**f).is_none()) {
-            return Err(bad(&format!("missing expected field {f:?}")));
+    for fixture in spec.fixtures {
+        let path = dir.join(fixture.path);
+        let text = fs::read_to_string(&path)
+            .map_err(|e| Fatal::usage(format!("cannot read fixture {}: {e}", path.display())))?;
+        for (i, raw) in text.lines().enumerate() {
+            let line = i + 1;
+            let bad = |why: &str| Fatal::usage(format!("{}:{line}: {why}", path.display()));
+            let row: Value = serde_json::from_str(raw).map_err(|e| bad(&e.to_string()))?;
+            let parsed = (fixture.parse)(&row).map_err(|e| bad(&e))?;
+            rows.push(Row {
+                file: fixture.path,
+                line,
+                scene: parsed.scene,
+                expected: parsed.expected,
+            });
         }
-        rows.push(Row {
-            line,
-            input,
-            expected: row,
-        });
     }
     Ok(rows)
 }
@@ -806,9 +1294,9 @@ fn run_golden(
     let mut call_us = Vec::with_capacity(rows.len() * 2);
     let mut first = Vec::with_capacity(rows.len());
     for row in rows {
-        let (result, took) = host.call(spec.name, row.input.clone());
-        call_us.push(micros(took));
-        let j = judge(spec, &row.input, &row.expected, &result);
+        let ran = host.run_scene(spec.name, &row.scene);
+        call_us.push(micros(ran.took));
+        let j = judge(spec, &row.scene, &row.expected, &ran);
         counts.add(j.outcome);
         for v in &j.violations {
             *counts.violations.entry(v).or_default() += 1;
@@ -817,44 +1305,51 @@ fn run_golden(
             failures.push(json!({
                 "kind": if j.outcome == Outcome::Match { j.violations[0] } else { j.outcome.name() },
                 "domain": spec.name,
+                "file": row.file,
                 "line": row.line,
                 "pass": 1,
                 "expected": Value::Object(spec.fields.iter().map(|f| ((*f).to_owned(), row.expected[*f].clone())).collect()),
-                "actual": result.as_ref().ok(),
+                "actual": ran.result.as_ref().ok(),
                 "error": j.error,
                 "safety_violations": j.violations,
             }));
         }
-        first.push(fingerprint(&result));
+        first.push(fingerprint(&ran));
     }
     // 逆順の 2 回目。同じ行の結果が 1 回目と違えば隠れた入力がある（境界 ADR 付記 S2-7）。
     for (i, row) in rows.iter().enumerate().rev() {
-        let (result, took) = host.call(spec.name, row.input.clone());
-        call_us.push(micros(took));
-        if fingerprint(&result) != first[i] {
+        let ran = host.run_scene(spec.name, &row.scene);
+        call_us.push(micros(ran.took));
+        if fingerprint(&ran) != first[i] {
             counts.order_dependent += 1;
             failures.push(json!({
                 "kind": "order_dependent",
                 "domain": spec.name,
+                "file": row.file,
                 "line": row.line,
                 "pass": 2,
                 "expected": first[i],
-                "actual": fingerprint(&result),
+                "actual": fingerprint(&ran),
                 "error": null,
             }));
         }
     }
-    let too_few = rows.len() < spec.min_rows;
-    if too_few {
-        failures.push(json!({
-            "kind": "too_few_rows",
-            "domain": spec.name,
-            "line": null,
-            "pass": null,
-            "expected": spec.min_rows,
-            "actual": rows.len(),
-            "error": format!("{} has {} rows, at least {} required", spec.fixture, rows.len(), spec.min_rows),
-        }));
+    let mut too_few = false;
+    for fixture in spec.fixtures {
+        let n = rows.iter().filter(|r| r.file == fixture.path).count();
+        if n < fixture.min_rows {
+            too_few = true;
+            failures.push(json!({
+                "kind": "too_few_rows",
+                "domain": spec.name,
+                "file": fixture.path,
+                "line": null,
+                "pass": null,
+                "expected": fixture.min_rows,
+                "actual": n,
+                "error": format!("{} has {n} rows, at least {} required", fixture.path, fixture.min_rows),
+            }));
+        }
     }
     let ok = !too_few
         && counts.matched == rows.len() as u64
@@ -863,9 +1358,9 @@ fn run_golden(
     call_us.sort_unstable();
     let report = json!({
         "domain": spec.name,
-        "fixture": spec.fixture,
+        "fixtures": spec.fixtures.iter().map(|f| f.path).collect::<Vec<_>>(),
         "rows": rows.len(),
-        "min_rows": spec.min_rows,
+        "min_rows": spec.min_rows(),
         "passes": 2,
         "matched": counts.matched,
         "mismatch": counts.mismatch,
@@ -888,30 +1383,34 @@ fn run_golden(
     (report, ok)
 }
 
-/// 壊した入力を渡し、TS が throw する（`exception`）ことを確かめる（安全シナリオ 2）。
+/// 壊した場面（入力か op の応答）を渡し、TS が拒むことを確かめる（安全シナリオ 2）。
 fn run_broken(host: &Host, spec: &DomainSpec, failures: &mut Failures) -> (Vec<Value>, bool) {
     let mut rows = Vec::new();
     let mut all_ok = true;
-    for (id, input) in (spec.broken)() {
-        let (result, _) = host.call(spec.name, input);
-        let (outcome, error) = match &result {
+    for broken in (spec.broken)() {
+        let ran = host.run_scene(spec.name, &broken.scene);
+        let result = &ran.result;
+        let (outcome, error) = match result {
             Ok(_) => ("returned_output", None),
             Err(e) => (error_outcome(e).name(), Some(e.to_string())),
         };
-        let ok = outcome == "exception";
+        let expect = broken.expect.name();
+        // 壊した場面の記録に無い要求を呼んだら、結果が期待どおりでも失敗（別の理由で拒まれている）。
+        let ok = outcome == expect && ran.unrecorded.is_empty();
         all_ok &= ok;
-        let id = format!("{}/{id}", spec.name);
+        let id = format!("{}/{}", spec.name, broken.id);
         if !ok {
             failures.push(json!({
                 "kind": "safety",
                 "domain": spec.name,
                 "id": id,
-                "expected": "exception",
+                "expected": expect,
                 "actual": result.as_ref().ok(),
                 "error": error,
+                "unrecorded": ran.unrecorded,
             }));
         }
-        rows.push(json!({ "id": id, "expect": "exception", "outcome": outcome, "ok": ok }));
+        rows.push(json!({ "id": id, "expect": expect, "outcome": outcome, "ok": ok }));
     }
     (rows, all_ok)
 }
@@ -1002,9 +1501,9 @@ fn activate(args: ActivateArgs) -> Result<(Value, bool), Fatal> {
     let mut ok = selftest["ok"] == json!(true);
     let mut probed = Vec::new();
     for spec in DOMAINS {
-        let input = (spec.probe)();
-        let (result, took) = host.call(spec.name, input.clone());
-        let (outcome, error) = match check_shape(spec, &input, &result) {
+        let scene = (spec.probe)();
+        let ran = host.run_scene(spec.name, &scene);
+        let (outcome, error) = match check_shape_replayed(spec, &scene, &ran) {
             Ok(c) if c.violations.is_empty() => ("valid", None),
             Ok(c) => (c.violations[0], None),
             Err(j) => (j.outcome.name(), j.error),
@@ -1015,7 +1514,7 @@ fn activate(args: ActivateArgs) -> Result<(Value, bool), Fatal> {
             "outcome": outcome,
             "ok": outcome == "valid",
             "error": error,
-            "call_us": micros(took),
+            "call_us": micros(ran.took),
         }));
     }
     let report = json!({
@@ -1044,11 +1543,14 @@ fn domains_report() -> Value {
         "selftest_domain": SELFTEST_DOMAIN,
         "domains": DOMAINS.iter().map(|s| json!({
             "domain": s.name,
-            "fixture": s.fixture,
-            "min_rows": s.min_rows,
+            "fixtures": s.fixtures.iter().map(|f| json!({
+                "path": f.path,
+                "min_rows": f.min_rows,
+                "rule": f.rule,
+            })).collect::<Vec<_>>(),
+            "min_rows": s.min_rows(),
             "fields": s.fields,
-            "input_rule": s.input_rule,
-            "broken_inputs": (s.broken)().into_iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            "broken": (s.broken)().into_iter().map(|b| json!({ "id": b.id, "expect": b.expect.name() })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
 }

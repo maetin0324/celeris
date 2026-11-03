@@ -223,7 +223,7 @@ if any(f["path"].startswith("control-ts/fixtures/") for f in files):
 
 # cache key の入力（script-runner-cache.sh）が変わったか。
 KEY_PREFIX = ("crates/script-runtime/", "crates/task-core/")
-KEY_FILES = {"Cargo.lock", "Cargo.toml", "docs/api/script-host/host-v1.schema.json"}
+KEY_FILES = {"Cargo.lock", "Cargo.toml", "docs/api/script-host/host-v1.schema.json", "control-ts/fixtures/cos_digest/pass_traces.jsonl"}
 key_changed = [f["path"] for f in files if f["path"].startswith(KEY_PREFIX) or f["path"] in KEY_FILES]
 
 json.dump({"class": klass, "files": files, "violations": violations, "fixture_crates": fixture_crates,
@@ -467,7 +467,7 @@ do_unit() {
 if [ "$grade" -eq 1 ]; then echo ALL >"$work/units.txt"; fi
 stage unit "$(tr '\n' ' ' <"$work/units.txt")" do_unit
 
-# 領域の一覧は runner の domains（Rust の表）から取る。1 行 = "<domain> <fixture の相対 path>"。
+# 領域の一覧は runner の domains（Rust の表）から取る。1 行 = "<domain> <fixture の相対 path>..."（1 領域に複数 file がありうる）。
 do_domains() {
   "$runner" domains >"$work/domains.json" || return 1
   python3 -I - "$work/domains.json" >"$work/domains.txt" <<'PY'
@@ -477,10 +477,10 @@ items = d["domains"] if isinstance(d, dict) else d
 rows = []
 for it in items:
     name = it.get("domain", it.get("name"))
-    fixture = it["fixture"]
-    if not name or not fixture or "/" not in fixture or ".." in fixture.split("/"):
+    fixtures = [f["path"] for f in it["fixtures"]]
+    if not name or not fixtures or any("/" not in f or ".." in f.split("/") for f in fixtures):
         sys.exit(f"bad domain entry: {it}")
-    rows.append(f"{name} {fixture}")
+    rows.append(" ".join([name, *fixtures]))
 if not rows:
     sys.exit("runner domains is empty")
 print("\n".join(rows))
@@ -488,10 +488,12 @@ PY
 }
 do_golden() {
   do_domains || { echo "ts-verify: runner の domains を読めない" >&2; return 1; }
-  local domain fixture
-  while read -r domain fixture; do
-    cmp "$cts/fixtures/$fixture" "$golden/$fixture" || {
-      echo "ts-verify: control-ts/fixtures/$fixture が Rust の golden と違う" >&2; return 1; }
+  local domain fixtures fixture
+  while read -r domain fixtures; do
+    for fixture in $fixtures; do
+      cmp "$cts/fixtures/$fixture" "$golden/$fixture" || {
+        echo "ts-verify: control-ts/fixtures/$fixture が Rust の golden と違う" >&2; return 1; }
+    done
     if [ "$grade" -eq 1 ]; then
       # --grade: 候補の control-ts/scripts（compare.mjs）は採点に使わない。runner が領域ごとに cache の golden で採点する。
       # --domain で絞ると complete は false なので ok だけを見る（全領域の complete は段 integration が見る）。
@@ -500,7 +502,9 @@ do_golden() {
       python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("ok") is True else 1)' "$work/golden-$domain.json" || {
         echo "ts-verify: runner の出力が ok でない（golden $domain）" >&2; return 1; }
     else
-      node "$cts/scripts/compare.mjs" "$domain" --fixture "$golden/$fixture" || return 1
+      for fixture in $fixtures; do
+        node "$cts/scripts/compare.mjs" "$domain" --fixture "$golden/$fixture" || return 1
+      done
     fi
   done <"$work/domains.txt"
 }

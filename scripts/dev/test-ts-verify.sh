@@ -18,6 +18,10 @@
 #   J 規則を壊し compare.test.mjs の該当試験を test.skip にする（host-api）→ test-affected.sh --list が ts-verify-grade を選び、
 #     ts-verify.sh --grade は段 golden（Rust の runner の採点）で exit 1（引数なしは「従来の経路へ」で exit 0）。
 #     無害な host-api の変更（compare.mjs の注記）では ts-verify.sh --grade が 10 段を通して exit 0（ADR 付記 grade-gate）
+#   K cos_digest の規則（stopped・interrupted の requeue）を壊す → ts-only で exit 1。同じ bundle を runner に直に渡すと
+#     cos_digest の mismatch で exit 1。read_run の答えの検査を外した bundle は --suite safety で exit 1（ADR 付記 grade-cos-digest）
+#   L pass_traces.jsonl を書き換える → host-api、cache key が変わる（古い golden で採点しない）、test-affected.sh --list が
+#     trace の byte 一致を確かめる task-dispatch の cargo 側を選ぶ
 # exit: 0 = すべて通った、1 = どれかが期待と違う、2 = 準備の失敗。
 set -euo pipefail
 
@@ -280,6 +284,68 @@ if [ "$rc" -eq 0 ] && [ "$(rec_get "$work/j2.json" 'r["class"]')" = host-api ] &
 else
   ng "J 無害な host-api の変更: --grade exit $rc、記録 $(tr -d '\n' <"$work/j2.json" 2>/dev/null | cut -c1-600)"
   tail -30 "$work/j2.log" >&2
+fi
+
+# ---- K cos_digest の規則を壊す ----
+reset
+python3 -I - control-ts/src/domains/cos_digest.ts <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = 'return runState === "stopped" || runState === "interrupted";'
+assert old in s, "rule not found"
+open(p, "w").write(s.replace(old, 'return runState === "stopped";'))
+PY
+rc=0
+nocargo bash "$tsv" --record "$work/k.json" >"$work/k.log" 2>&1 || rc=$?
+k_failed="$(rec_get "$work/k.json" '",".join(s["name"] for s in r["stages"] if s["exit"] != 0)' 2>/dev/null || true)"
+if [ "$rc" -eq 1 ] && [ "$(rec_get "$work/k.json" 'r["class"]')" = ts-only ] && [ -n "$k_failed" ]; then
+  ok "K 壊した cos_digest の規則: exit 1（段 $k_failed で失敗）"
+else
+  ng "K 壊した cos_digest の規則: exit $rc（期待 1）、失敗の段 [$k_failed]"
+  tail -30 "$work/k.log" >&2
+fi
+build_bundle "$work/k-dist"
+rc=0
+"$runner" run --bundle-dir "$work/k-dist" --fixtures "$golden" --suite golden --domain cos_digest >"$work/k-run.json" 2>"$work/k-run.err" || rc=$?
+k_mism="$(rec_get "$work/k-run.json" 'r["domains"][0]["mismatch"]' 2>/dev/null || echo "?")"
+k_rows="$(rec_get "$work/k-run.json" 'r["domains"][0]["rows"]' 2>/dev/null || echo "?")"
+if [ "$rc" -eq 1 ] && [ "$k_mism" != "?" ] && [ "$k_mism" -gt 0 ] && [ "$k_rows" -ge 2086 ]; then
+  ok "K runner に直に渡した壊れた bundle: exit 1、cos_digest の mismatch $k_mism 件 / $k_rows 行"
+else
+  ng "K runner: exit $rc（期待 1）、mismatch $k_mism、rows $k_rows"
+fi
+reset
+python3 -I - control-ts/src/domains/cos_digest.ts <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = 'if (input.thread !== ref.thread || input.run_id !== ref.run_id) {'
+assert old in s, "check not found"
+open(p, "w").write(s.replace(old, 'if (false) {'))
+PY
+build_bundle "$work/k2-dist"
+rc=0
+"$runner" run --bundle-dir "$work/k2-dist" --fixtures "$golden" --suite safety --domain cos_digest >"$work/k2-run.json" 2>"$work/k2-run.err" || rc=$?
+k2_out="$(rec_get "$work/k2-run.json" '[s["outcome"] for s in r["safety"] if s["id"] == "cos_digest/read_reply_other_run"][0]' 2>/dev/null || echo "?")"
+if [ "$rc" -eq 1 ] && [ "$k2_out" = returned_output ]; then
+  ok "K 壊した op の応答を受ける bundle: --suite safety で exit 1"
+else
+  ng "K safety: exit $rc（期待 1）、read_reply_other_run の結果 [$k2_out]"
+fi
+
+# ---- L pass_traces.jsonl の書き換え ----
+reset
+key_base="$(bash "$here/scripts/dev/script-runner-cache.sh" key)"
+sed -i '1s/人に回した/答えた/' control-ts/fixtures/cos_digest/pass_traces.jsonl
+l_class="$(list_class)"
+key_new="$(bash "$here/scripts/dev/script-runner-cache.sh" key)"
+ta="$(bash "$here/scripts/dev/test-affected.sh" --list 2>/dev/null || true)"
+if ! git diff --quiet && [ "$l_class" = host-api ] && [ "$key_base" != "$key_new" ] &&
+  printf '%s\n' "$ta" | grep -qx task-dispatch && printf '%s\n' "$ta" | grep -q '^control-ts: ts-verify-grade '; then
+  ok "L pass_traces.jsonl の書き換え: host-api、key が変わる、test-affected は task-dispatch と ts-verify-grade を選ぶ"
+else
+  ng "L pass_traces.jsonl: class [$l_class]、key [$key_base → $key_new]、test-affected [$(printf '%s' "$ta" | tr '\n' ' ')]"
 fi
 
 echo "test-ts-verify: $pass passed, $failed failed"

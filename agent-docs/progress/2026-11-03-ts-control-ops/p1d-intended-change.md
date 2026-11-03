@@ -27,9 +27,11 @@ p0b（[cos_digest の原子化](p0b-cos-digest-persist.md)）で apply・記録�
 | `crates/task-core/src/script_compare.rs` | `CompareOutcome::Explained` | 新しい outcome（D2） |
 | `crates/task-core/src/script_compare/cos_digest_record.rs` | `CosDigestCompareRecord::explained_by` | 説明した仕様（id・version・spec_sha256）。他の行では欄を書かない |
 | `crates/task-core/src/script_guard.rs` | `ScriptGuardCall::Explained`（窓の `e`）・`explained_in_window` | 戻す条件に入らず、`clean_streak` を進める |
-| `crates/task-core/migrations/0108_script_behavior_changes.sql`・`store/script_behavior_changes.rs` | `script_behavior_change_approve`・`_revoke`・`script_behavior_changes`・`_events`・`_approved` | 承認・取り消し・版の置き換え（`supersedes` の鎖）。記録は追記専用 |
+| `crates/task-core/migrations/0108_script_behavior_changes.sql`・`store/script_behavior_changes.rs` | `script_behavior_change_approve`・`_revoke`・`script_behavior_changes`・`_events`・`_approved` | 承認・取り消し・版の置き換え。`supersedes` は同じ `id` の最大の版の hash（行が無ければ `null`）と照合する。記録の表の UPDATE・DELETE は trigger が拒む |
 | `crates/task-dispatch/src/script_policy.rs` | `classify_cos_digest_pass(…, approved)`・`explain_cos_digest_run`・`ScriptDomainStore::script_behavior_changes_approved` | 違った run だけを説明にかける。検証に落ちた出力は説明しない |
 | `crates/task-dispatch/src/dispatcher/cos_chat/digest.rs` | `PassScript::behavior_changes`・`cos_digest_behavior_changes` | pass の始めに承認済みを読む（読めなければ空＝説明しない） |
+| `crates/task-dispatch/src/dispatcher/script_compare.rs`・`cos_chat/digest.rs` | `ScriptCompareState::next_digest_pass_id`（`#[cfg(test)]`） | 試験だけが pass id を決める。canary の側を乱数なしで選ぶため。本番の build には無い |
+| `crates/task-dispatch/src/dispatcher/tests/cos_digest_behavior_change.rs` | `canary_pass`・`cos_digest_behavior_change_canary_*` | mode `canary` の e2e（下の証拠） |
 | `crates/task-api/src/script_behavior_changes.rs` | `GET`・`POST /script/behavior-changes`、`POST …/{spec_sha256}/revoke` | 403・422・409 の code は ADR D4。CoS の operations は EXCLUDED（`human_only`・`script_api_only`） |
 | `control-ts/behavior-changes/cos_digest/cos-digest-cap-run-reason.v1.json`・`.cases.jsonl` | 仕様と期待差分 fixture（19 行） | 期待差分 fixture は Rust の試験が参照実装と仕様から作る（`UPDATE_BEHAVIOR_CASES=1`） |
 | `scripts/dev/ts-behavior-eval.sh` | 独立した評価 | 候補 patch を使い捨ての作業ツリーに当て、旧 fixture と期待差分 fixture で TS を数える。cargo 0 回 |
@@ -39,9 +41,14 @@ CoS の操作の表は `agent-docs/adr/2026-10-09-cos-operations-all-mutations.m
 
 ## 証拠（試験コマンドと exit）
 個別の試験（作業中に実行）:
-- `cargo nextest run -p task-core -E 'test(/behavior_change/)'`: exit 0、10 passed（仕様の検証・期待差分 fixture と参照実装の一致・pilot の 9 件・199 文字/「…」無し/別の差分/曖昧/未承認/別領域/入力条件の否定・承認の人だけ・版の鎖・取り消し）。
+- `cargo nextest run -p task-core -E 'test(/behavior_change/)'`: exit 0、13 passed（仕様の検証・期待差分 fixture と参照実装の一致・pilot の 9 件・199 文字/「…」無し/別の差分/曖昧/未承認/別領域/入力条件の否定・承認の人だけ・版の鎖（最初の版は `null`、取り消した版の次も鎖を切らない、古い版の hash は拒否）・取り消し・記録の UPDATE/DELETE を trigger が拒む）。
 - `cargo nextest run -p task-core -E 'test(/script_guard/)'`: `script_guard_explained_counts_toward_readiness_but_mismatch_still_stops` を含め passed。
 - `cargo nextest run -p task-dispatch -E 'test(/cos_digest_behavior_change/)'`: exit 0、4 passed（e2e: mode `ts` で TS の改善を apply → 記録 `explained`・mode は `ts` のまま、未承認・取り消し・199 文字・「…」無し・「...」は `mismatch` で `rust` へ戻る、compare では `explained` が `clean_streak` を進め `mismatch` が 0 に戻す）。
+- `cargo nextest run -p task-dispatch -E 'test(/cos_digest_behavior_change/)'`: exit 0、8 passed。上の 4 件に mode `canary` の e2e 4 件を足した。実際の digest pass の入力（失敗した run の理由 500 文字）で:
+  - TS の側（選ばれた pass）: TS の改善を apply → 記録 `explained` → `ts_side_clean_streak` が 199 から 200 へ進み、`readiness(CosDigest, Canary, …)` が ready、人の `canary→ts` が通る（段階昇格の候補）。1 件足りないと `ready` にならず `canary→ts` は拒まれる。
+  - Rust の側（選ばれない pass）: Rust を apply、影の比較で `explained`、`clean_streak` だけが進み `ts_side_clean_streak` は進まない。mode は `canary` のまま。
+  - 説明できない差分（承認なしの pilot・承認ありの 199 文字）: 両方の側で `mismatch`、script-guard が `rust` へ戻し（guard の戻しは 1 件）、連続は 0、`ready` にならない。
+  - 新しい 4 件と既存の 4 件は `tokio::test(start_paused = true)` にした（tick の待ちの予算 200 ms に実時間が当たらないように）。
 - `UPDATE_SCHEMA=1 cargo nextest run -p task-api -E 'test(committed_schema_matches_generated) | test(/script_behavior_change/) | test(/cos_ops_/) | test(/script_compare_event_types/)'`: exit 0、42 passed。
 
 独立した評価（`bash scripts/dev/ts-behavior-eval.sh --out agent-docs/progress/2026-11-03-ts-control-ops/p1d-eval [--patch …]`）:
@@ -59,6 +66,11 @@ workspace の検査（提出時の HEAD で実行。結果は下の「提出時�
 - TS だけの変更の経路（`ts-verify.sh`）は変えていない。edit→verify→activate の warm p50 は S6 の 7.47〜7.52 秒のまま（この task で再計測していない。未計測）。
 - 独立した評価は 1 回 1.5〜1.8 秒（上の表）。cargo を起動しない。
 - dispatcher の追加は pass ごとの select 1 回（承認済みの仕様の読み出し）と、違った run だけの JSON の組み直し。計測はしていない（未計測）。
+
+## attempt 2 の修正（review の差し戻し 3 点）
+1. mode `canary` の e2e が無かった → 上の 4 件を足した。
+2. `script_behavior_change_events` に追記専用の trigger が無かった → migration 0108 に足した（0108 は未 release なので file を直した）。試験 `behavior_change_events_append_only`。
+3. 版の鎖を、承認中の版があるときしか照合していなかった → 同じ `id` の最大の版と照合する。ADR D1 の表に規則を書いた。試験 `behavior_change_first_version_must_not_name_a_previous_version`・`behavior_change_chain_continues_across_a_revoked_version`。
 
 ## 未解決
 1. `ts-verify.sh` の golden の段は改善仕様を読まない。旧挙動の fixture に当たる改善（今回の仕様は当たらない。試験で 0 件を固定）を出すと、

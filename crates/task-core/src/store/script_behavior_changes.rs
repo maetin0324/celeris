@@ -1,6 +1,6 @@
 //! ADR 2026-11-03-ts-intended-behavior-change D4: 方針改善の仕様の承認・取り消し（migration 0108）。
 //!
-//! 承認は人の主体（`human:*`）だけ。取り消しは誰でも（説明を減らす向き）。記録の表は追記専用で、UPDATE・DELETE の経路を持たない。
+//! 承認は人の主体（`human:*`）だけ。取り消しは誰でも（説明を減らす向き）。記録の表は追記専用で、UPDATE・DELETE は trigger が拒む。
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use time::OffsetDateTime;
@@ -162,12 +162,22 @@ impl SqliteStore {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        if let Some((current_sha, _)) = &current
-            && spec.supersedes.as_deref() != Some(current_sha.as_str())
-        {
+        // 版の鎖（D1）: 前の版は同じ `id` の最大の `version` の行（状態を問わない）。取り消した版の次も鎖を切らない。
+        // 行が無ければ最初の版で、`supersedes` は `null`。
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT spec_sha256 FROM script_behavior_changes WHERE change_id = ?1 \
+                 ORDER BY version DESC LIMIT 1",
+                params![spec.id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if spec.supersedes != previous {
+            let want = previous.as_deref().unwrap_or("null");
             return Err(BehaviorChangeError::Invalid(
                 crate::script_behavior_change::BehaviorChangeInvalid(format!(
-                    "supersedes must name the approved version {current_sha}"
+                    "supersedes must be the previous version of `{}`: {want}",
+                    spec.id
                 )),
             ));
         }

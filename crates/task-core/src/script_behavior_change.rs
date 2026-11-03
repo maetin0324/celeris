@@ -174,6 +174,9 @@ impl BehaviorChangeSpec {
         {
             return bad("supersedes must be 64 lowercase hex".into());
         }
+        if self.version == 1 && self.supersedes.is_some() {
+            return bad("version 1 has no previous version: supersedes must be null".into());
+        }
         if !is_hex64(&self.cases_sha256) {
             return bad("cases_sha256 must be 64 lowercase hex".into());
         }

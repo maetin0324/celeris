@@ -688,7 +688,14 @@ impl Dispatcher {
             task_core::script_compare::ScriptDomain::CosDigest,
             &[ScriptMode::Compare, ScriptMode::Canary, ScriptMode::Ts],
         )?;
+        #[cfg(not(test))]
         let pass_id = ulid::Ulid::new().to_string();
+        #[cfg(test)]
+        let pass_id = self
+            .script_compare
+            .next_digest_pass_id
+            .take()
+            .unwrap_or_else(|| ulid::Ulid::new().to_string());
         // S5-3: the unit of `cos_digest` is the pass.
         let canary_selected = crate::dispatcher::dispatch_run::script_canary_unit_selected(
             &target,

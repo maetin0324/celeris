@@ -39,7 +39,7 @@ edit→activate の短縮）に反する。
 | `version` | 1 以上。同じ `id` の版は 1 つの hash にだけ結び付く（再利用しない） |
 | `domain` | 領域（今は `cos_digest` だけを承認できる） |
 | `summary` | 改善の説明（1〜512 byte） |
-| `supersedes` | 前の版の `spec_sha256`（最初の版は `null`）。変更履歴の鎖 |
+| `supersedes` | 前の版の `spec_sha256`（最初の版は `null`）。変更履歴の鎖。前の版は、承認の時点で同じ `id` の最大の `version` の行（状態を問わない。取り消した版の次も、取り消した版の hash を書く）。行が無ければ `null` だけが通る。`version` 1 は `null` だけ（形の検証）。違えば 422 `behavior_change_invalid` |
 | `when` | 入力条件（1〜4 個、すべて成り立つとき）。`{path, op, value}`。`path` は入力 DTO の JSON pointer、`op` は `equals`（JSON 値の一致）・`min_chars`・`max_chars`（文字列の code point 数） |
 | `edits` | 期待差分の述語（1〜4 個）。`{path, find, replace}`。`path` は出力の JSON pointer（`*` は配列の全要素）、`find`・`replace` は部品の列で、部品は `{"lit": 文字列}`・`{"input": pointer}`（入力の文字列）・`{"truncate_chars": {input, max, ellipsis}}`（入力の文字列を `max` code point までにし、超えたら `ellipsis` を足す） |
 | `cases_sha256` | 期待差分 fixture（D3）の file の byte 列の sha256（64 桁 hex）。仕様の hash がこの fixture も束ねる |
@@ -66,6 +66,8 @@ file の空白や key の順は hash に影響しない。暗号の署名鍵は�
   進める（(f) の「説明のつかない不一致」ではないため）。失敗・timeout の連続は切る。`mismatch` は今までどおり 1 件で戻す。
 - 昇格の前提（`readiness`）は件数の条件を変えない（純粋判定 1000、CoS 200）。`explained` はその件数に入る。
   つまり「説明済みの差分だけ」の generation は段階昇格の候補になる。昇格は今までどおり人の token の API（付記 S5-4）。
+- mode `canary` の TS の側の `explained` は `ts_side_clean_streak` を進め、`canary→ts` の前提に数える。Rust の側（選ばれない pass の影）の `explained` は `clean_streak` だけを進める。
+  説明できない差分は、どちらの側でも 1 件で `rust` へ戻す。
 - 安全違反・timeout 率・失敗率の判定は変えない。(f) の数値は 1 つも変えない。
 
 ### D3 独立した評価と golden の更新規約
@@ -88,13 +90,13 @@ file の空白や key の順は hash に影響しない。暗号の署名鍵は�
 ### D4 承認・取り消しの記録（migration 0108）
 - 表 `script_behavior_changes`（`spec_sha256` PK、`change_id`・`version`（UNIQUE の組）、`domain`、`spec_json`、`state` ∈ `approved`・`revoked`・
   `superseded`、`approved_by`・`approved_at`・`updated_by`・`updated_at`）。追記専用の `script_behavior_change_events`（`id`・`ts`・`spec_sha256`・
-  `change_id`・`version`・`action`・`actor`・`reason`）。store に event の表の UPDATE・DELETE の経路を作らない。
+  `change_id`・`version`・`action`・`actor`・`reason`）。event の表の UPDATE・DELETE は trigger が拒む（`script_generation_events`・`script_compare_log` と同じ形）。
 - `POST /api/v1/script/behavior-changes`（本文 `{spec, spec_sha256, reason}`）: 人の主体だけ（他は 403 `script_behavior_change_requires_human`、表は不変）。
   仕様の検証に落ちれば 422 `behavior_change_invalid`、`spec_sha256` が計算と違えば 422 `behavior_change_hash_mismatch`、領域が未対応なら
   422 `behavior_change_domain_unsupported`、同じ `id`・`version` に別の hash があれば 409 `behavior_change_version_taken`、
   `version` が承認済み・過去の版以下なら 409 `behavior_change_version_not_newer`。同じ hash がすでに `approved` なら何も変えず 200。
   `revoked`・`superseded` の hash は 409 `behavior_change_retired`（直すなら版を上げる）。新しい版の承認は同じ transaction で同じ `id` の古い `approved` を
-  `superseded` にする。
+  `superseded` にする。取り消した版は `revoked` のまま（鎖は `supersedes` がつなぐ）。
 - `POST /api/v1/script/behavior-changes/{spec_sha256}/revoke`（本文 `{reason}`）: 認証された誰でも。`approved` を `revoked` にする。
 - `GET /api/v1/script/behavior-changes`: 全行と記録。
 - dispatcher は `cos_digest` の pass ごとに承認済みの仕様を読み、その pass の比較に使う（compare の影も同じ集合を持って走る）。

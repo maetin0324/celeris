@@ -291,6 +291,7 @@ fn behavior_change_validate_rejects_wide_or_malformed_specs() {
     reject(&|s| s.summary = String::new());
     reject(&|s| s.cases_sha256 = "abc".into());
     reject(&|s| s.supersedes = Some("zz".into()));
+    reject(&|s| s.supersedes = Some("a".repeat(64)));
     reject(&|s| s.when.clear());
     reject(&|s| s.when[0].path = "/*".into());
     reject(&|s| s.when[1].value = json!("x"));

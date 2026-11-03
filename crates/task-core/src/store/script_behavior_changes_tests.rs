@@ -102,13 +102,15 @@ fn behavior_change_versions_chain_and_never_rebind() {
         store.script_behavior_change_approve(&other, &other.sha256(), "human:a", "r", now()),
         Err(BehaviorChangeError::VersionTaken { .. })
     ));
-    // 次の版は今の承認を supersedes に書かないと通らない。
-    let mut loose = v2(&s1);
-    loose.supersedes = None;
-    assert!(matches!(
-        store.script_behavior_change_approve(&loose, &loose.sha256(), "human:a", "r", now()),
-        Err(BehaviorChangeError::Invalid(_))
-    ));
+    // 次の版は今の承認を supersedes に書かないと通らない（null・別の hash のどちらも）。
+    for wrong in [None, Some("a".repeat(64))] {
+        let mut loose = v2(&s1);
+        loose.supersedes = wrong;
+        assert!(matches!(
+            store.script_behavior_change_approve(&loose, &loose.sha256(), "human:a", "r", now()),
+            Err(BehaviorChangeError::Invalid(_))
+        ));
+    }
     let s2 = v2(&s1);
     let a = store
         .script_behavior_change_approve(&s2, &s2.sha256(), "human:a", "v2", now())
@@ -181,4 +183,92 @@ fn behavior_change_revoke_by_anyone_fails_closed() {
     let events = store.script_behavior_change_events().unwrap();
     assert_eq!(events.len(), 2);
     assert_eq!(events[1].actor, "operator:claude-code");
+}
+
+/// D1: 最初の版は `supersedes` が `null`。`id` に行が無いのに前の版を名乗る仕様は承認しない。
+#[test]
+fn behavior_change_first_version_must_not_name_a_previous_version() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let mut first = spec();
+    first.supersedes = Some("a".repeat(64));
+    let err = store
+        .script_behavior_change_approve(&first, &first.sha256(), "human:a", "r", now())
+        .unwrap_err();
+    assert!(matches!(err, BehaviorChangeError::Invalid(_)), "{err}");
+    assert!(store.script_behavior_changes().unwrap().is_empty());
+    assert!(store.script_behavior_change_events().unwrap().is_empty());
+}
+
+/// D1: 取り消した版の次の版も、取り消した版の hash を `supersedes` に書く。`null` では鎖が切れるので通らない。
+/// 取り消した版は `revoked` のまま（`superseded` にしない）。
+#[test]
+fn behavior_change_chain_continues_across_a_revoked_version() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let s1 = spec();
+    let sha1 = s1.sha256();
+    store
+        .script_behavior_change_approve(&s1, &sha1, "human:a", "v1", now())
+        .unwrap();
+    assert!(
+        store
+            .script_behavior_change_revoke(&sha1, "cos", "やめる", now())
+            .unwrap()
+    );
+    for wrong in [None, Some("a".repeat(64))] {
+        let mut loose = v2(&s1);
+        loose.supersedes = wrong;
+        assert!(matches!(
+            store.script_behavior_change_approve(&loose, &loose.sha256(), "human:a", "r", now()),
+            Err(BehaviorChangeError::Invalid(_))
+        ));
+    }
+    assert_eq!(store.script_behavior_changes().unwrap().len(), 1);
+    let s2 = v2(&s1);
+    let a = store
+        .script_behavior_change_approve(&s2, &s2.sha256(), "human:a", "v2", now())
+        .unwrap();
+    assert_eq!(a.superseded, None);
+    assert_eq!(
+        store
+            .script_behavior_changes()
+            .unwrap()
+            .iter()
+            .map(|r| (r.version, r.state))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, BehaviorChangeState::Revoked),
+            (2, BehaviorChangeState::Approved)
+        ]
+    );
+    // v3 は v2 の hash を書く。v1 の hash では通らない（前の版は最大の `version`）。
+    let mut stale = v2(&s2);
+    stale.version = 3;
+    stale.supersedes = Some(sha1);
+    assert!(matches!(
+        store.script_behavior_change_approve(&stale, &stale.sha256(), "human:a", "r", now()),
+        Err(BehaviorChangeError::Invalid(_))
+    ));
+}
+
+/// D4: 承認の記録は trigger が UPDATE・DELETE を拒む（`script_generation_events`・`script_compare_log` と同じ形）。
+#[test]
+fn behavior_change_events_append_only() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let s = spec();
+    store
+        .script_behavior_change_approve(&s, &s.sha256(), "human:a", "r", now())
+        .unwrap();
+    {
+        let conn = store.lock().unwrap();
+        for sql in [
+            "UPDATE script_behavior_change_events SET actor = 'human:b'",
+            "DELETE FROM script_behavior_change_events",
+        ] {
+            let err = conn.execute(sql, []).unwrap_err().to_string();
+            assert!(err.contains("append-only"), "{sql}: {err}");
+        }
+    }
+    let events = store.script_behavior_change_events().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].actor, "human:a");
 }

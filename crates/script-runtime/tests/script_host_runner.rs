@@ -1,8 +1,9 @@
 //! `script-host-runner` の試験（ADR 2026-11-02 ts-fast-verify (3)）。
 //!
 //! 業務 TS と `control-ts/dist`・`control-ts/fixtures` は使わない。試験の中で小さな手書きの bundle と、
-//! 採点の表の形に合う fixture（`lane_rules` は 9 軸 × 3 値の全組み合わせ、`route_priority` は最少行数ちょうど）を
-//! tempdir に書き、一致・不一致・例外・宣言外の 4 場合と bundle の拒否を固定する。
+//! 採点の表の形に合う fixture（`lane_rules` は 9 軸 × 3 値の全組み合わせ、`route_priority`・`cos_digest` は最少行数ちょうど）を
+//! tempdir に書き、一致・不一致・例外・宣言外の 4 場合と bundle の拒否を固定する。`cos_digest` は op を await する pass なので、
+//! 記録からの replay（一致・不一致・記録外の op・呼ばれない記録・壊した op の応答）も固定する（ADR 付記 grade-cos-digest）。
 
 use std::fs;
 use std::path::Path;
@@ -28,10 +29,20 @@ const AXES: [&str; 9] = [
 const LEVELS: [&str; 3] = ["low", "medium", "high"];
 const LANE_ROWS: usize = 19_683;
 const ROUTE_ROWS: usize = 2_026;
+const TRACE_ROWS: usize = 20;
+const CASE_ROWS: usize = 2_066;
+const DIGEST_ROWS: usize = TRACE_ROWS + CASE_ROWS;
+const RUN_STATES: [&str; 2] = ["completed", "stopped"];
+const ALL_DOMAINS: [&str; 4] = [
+    "cos_digest",
+    "host_selftest",
+    "lane_rules",
+    "route_priority",
+];
 
 /// 試験用の bundle。入力の形を厳しく検査して throw し、`lane_rules` は `__LANE__` の式の値を返す。
 const BUNDLE_TEMPLATE: &str = r#"
-import { hostVersion, selftestEcho } from "celeris:host";
+import { cosDigestListRuns, cosDigestReadRun, hostVersion, selftestEcho } from "celeris:host";
 const AXES = __AXES__;
 const LEVELS = ["low", "medium", "high"];
 function exact(v, keys, where) {
@@ -64,8 +75,31 @@ function route(input) {
   for (const c of arr(t.class_defaults, "class_defaults")) { exact(c, ["execution_class", "candidates"], "class"); arr(c.candidates, "candidates").forEach(cand); }
   return { basis: "harness", candidates: t.route_defaults };
 }
+function commands(r) {
+  const post = { kind: "post_digest", thread: r.thread, idempotency_key: "cos-triage-digest:" + r.run_id, text: "state " + r.run_state, cards: [], run_id: r.run_id };
+  return r.run_state === "stopped" ? [post, { kind: "requeue_run", run_id: r.run_id }] : [post];
+}
+async function digest(ctx) {
+  const list = exact(await cosDigestListRuns(ctx, {}), ["runs"], "list");
+  const runs = [];
+  for (const ref of arr(list.runs, "runs")) {
+    exact(ref, ["thread", "run_id", "run_state"], "ref");
+    let r;
+    try {
+      r = await cosDigestReadRun(ctx, { thread: ref.thread, run_id: ref.run_id });
+    } catch (e) {
+      if (e?.name === "HostError" && e.code === "exception") continue;
+      throw e;
+    }
+    if (r.thread !== ref.thread || r.run_id !== ref.run_id) throw new Error("read_run answered another run");
+    for (const it of r.items) if (it.route !== null && it.route !== "escalation" && it.route !== "fallback") throw new Error("unknown route");
+    runs.push({ run_id: ref.run_id, commands: commands(r) });
+  }
+  return { runs };
+}
 globalThis.__celerisDispatch = async (domain, input, ctx) => {
   switch (domain) {
+    case "cos_digest": return digest(ctx);
     case "host_selftest": return { host_api: hostVersion(), reply: await selftestEcho(ctx, input) };
     case "lane_rules": return lane(input);
     case "route_priority": return route(input);
@@ -96,7 +130,7 @@ fn write_bundle(dir: &Path, lane: &str, domains: &[&str]) {
         "toolchain": { "typescript": "test", "esbuild": "test", "node": "test" },
         "source_commit": "test",
         "domains": domains,
-        "capabilities": ["selftest:echo_task"],
+        "capabilities": ["selftest:echo_task", "cos_digest:list_runs", "cos_digest:read_run"],
         "checkpoint_versions": [],
     });
     fs::write(
@@ -104,6 +138,35 @@ fn write_bundle(dir: &Path, lane: &str, domains: &[&str]) {
         serde_json::to_vec_pretty(&manifest).expect("manifest json"),
     )
     .expect("write manifest");
+}
+
+/// run 1 つの pass の入力（`read_run` の答え）。`n` で run と状態が決まる。
+fn digest_input(prefix: &str, n: usize) -> Value {
+    json!({
+        "thread": format!("thread-{prefix}{n}"),
+        "run_id": format!("run-{prefix}{n}"),
+        "run_state": RUN_STATES[n % 2],
+        "reason": null,
+        "items": [],
+    })
+}
+
+/// 一致する bundle の `commands(r)` の出力。
+fn digest_commands(input: &Value) -> Value {
+    let (thread, run_id, state) = (&input["thread"], &input["run_id"], &input["run_state"]);
+    let post = json!({
+        "kind": "post_digest",
+        "thread": thread,
+        "idempotency_key": format!("cos-triage-digest:{}", run_id.as_str().expect("run_id")),
+        "text": format!("state {}", state.as_str().expect("state")),
+        "cards": [],
+        "run_id": run_id,
+    });
+    if state == "stopped" {
+        json!([post, { "kind": "requeue_run", "run_id": run_id }])
+    } else {
+        json!([post])
+    }
 }
 
 /// 採点の表の形に合う fixture。期待値は一致する bundle（[`LANE_MATCH`]）の出力。
@@ -148,9 +211,52 @@ fn write_fixtures(dir: &Path) {
         route.push_str(&row.to_string());
         route.push('\n');
     }
+    // pass の trace（1 行 1 pass。`run 2 つ` の pass で一覧の順も見る）。
+    let mut traces = String::new();
+    for n in 0..TRACE_ROWS {
+        let inputs = [digest_input("t", 2 * n), digest_input("t", 2 * n + 1)];
+        let mut ops = vec![json!({
+            "op": "cos_digest:list_runs",
+            "request": {},
+            "reply": { "kind": "ok", "value": { "runs": inputs.iter().map(|i| json!({
+                "thread": i["thread"], "run_id": i["run_id"], "run_state": i["run_state"],
+            })).collect::<Vec<_>>() } },
+        })];
+        for i in &inputs {
+            ops.push(json!({
+                "op": "cos_digest:read_run",
+                "request": { "thread": i["thread"], "run_id": i["run_id"] },
+                "reply": { "kind": "ok", "value": i },
+            }));
+        }
+        let row = json!({
+            "name": format!("trace/{n}"),
+            "ops": ops,
+            "writes": { "messages": [], "requeued": [] },
+            "output": { "runs": inputs.iter().map(|i| json!({
+                "run_id": i["run_id"], "commands": digest_commands(i),
+            })).collect::<Vec<_>>() },
+        });
+        traces.push_str(&row.to_string());
+        traces.push('\n');
+    }
+    // `decide` の case（runner が run 1 つの pass に組み直す）。
+    let mut cases = String::new();
+    for n in 0..CASE_ROWS {
+        let input = digest_input("c", n);
+        let row = json!({
+            "name": format!("case/{n}"),
+            "commands": digest_commands(&input),
+            "input": input,
+        });
+        cases.push_str(&row.to_string());
+        cases.push('\n');
+    }
     for (rel, text) in [
         ("lane_rules/all-features.jsonl", lane),
         ("route_priority/cases.jsonl", route),
+        ("cos_digest/pass_traces.jsonl", traces),
+        ("cos_digest/cases.jsonl", cases),
     ] {
         let path = dir.join(rel);
         fs::create_dir_all(path.parent().expect("parent")).expect("fixture dir");
@@ -164,7 +270,7 @@ struct Setup {
 
 impl Setup {
     fn new(lane: &str) -> Self {
-        Self::with_domains(lane, &["host_selftest", "lane_rules", "route_priority"])
+        Self::with_domains(lane, &ALL_DOMAINS)
     }
 
     fn with_domains(lane: &str, domains: &[&str]) -> Self {
@@ -172,6 +278,21 @@ impl Setup {
         write_bundle(&root.path().join("dist"), lane, domains);
         write_fixtures(&root.path().join("fixtures"));
         Self { root }
+    }
+
+    /// 一致する bundle の本文を `from` → `to` に書き換えた場面。
+    fn patched(from: &str, to: &str) -> Self {
+        let setup = Self::new(LANE_MATCH);
+        let dist = setup.root.path().join("dist");
+        let code = fs::read_to_string(dist.join(BUNDLE_FILE)).expect("bundle");
+        assert!(code.contains(from), "{from} is not in the bundle");
+        write_raw_bundle(&dist, &code.replace(from, to));
+        setup
+    }
+
+    /// `cos_digest` だけを golden で回す。
+    fn digest_golden(&self) -> (Output, Value) {
+        self.run(&["--suite", "golden", "--domain", "cos_digest"])
     }
 
     fn path(&self, rel: &str) -> String {
@@ -237,7 +358,11 @@ fn script_host_runner_match_passes_all_suites_and_activates() {
     assert_eq!(report["ok"], true);
     assert_eq!(report["complete"], true);
     assert_eq!(report["failures"], json!([]));
-    for (name, rows) in [("lane_rules", LANE_ROWS), ("route_priority", ROUTE_ROWS)] {
+    for (name, rows) in [
+        ("lane_rules", LANE_ROWS),
+        ("route_priority", ROUTE_ROWS),
+        ("cos_digest", DIGEST_ROWS),
+    ] {
         let d = domain(&report, name);
         assert_eq!(d["rows"], rows as u64, "{d}");
         assert_eq!(d["matched"], rows as u64, "{d}");
@@ -252,6 +377,16 @@ fn script_host_runner_match_passes_all_suites_and_activates() {
             .iter()
             .any(|s| s["id"] == "route_priority/extra_field")
     );
+    assert!(
+        safety
+            .iter()
+            .any(|s| s["id"] == "cos_digest/list_reply_missing_runs" && s["expect"] == "exception")
+    );
+    assert!(
+        safety
+            .iter()
+            .any(|s| s["id"] == "cos_digest/read_reply_denied" && s["outcome"] == "denied")
+    );
     assert!(safety.iter().all(|s| s["ok"] == true), "{report}");
 
     let dist = setup.path("dist");
@@ -260,7 +395,11 @@ fn script_host_runner_match_passes_all_suites_and_activates() {
     assert_eq!(out.status.code(), Some(0), "report: {report}");
     assert_eq!(report["selftest"]["ok"], true);
     let probed = report["probed"].as_array().expect("probed");
-    assert_eq!(probed.len(), 2);
+    assert_eq!(probed.len(), 3);
+    assert!(
+        probed.iter().any(|p| p["domain"] == "cos_digest"),
+        "{report}"
+    );
     assert!(probed.iter().all(|p| p["outcome"] == "valid"), "{report}");
     assert!(Path::new(report["deployed_dir"].as_str().expect("dir")).is_dir());
 }
@@ -329,6 +468,175 @@ fn script_host_runner_rejects_ungraded_domain_set_and_permissive_input() {
         .expect("missing_axis row");
     assert_eq!(missing_axis["outcome"], "returned_output");
     assert_eq!(missing_axis["ok"], false);
+}
+
+#[test]
+fn script_host_runner_rejects_bundle_without_cos_digest() {
+    let setup = Setup::with_domains(
+        LANE_MATCH,
+        &["host_selftest", "lane_rules", "route_priority"],
+    );
+    let (out, report) = setup.run(&["--suite", "safety"]);
+    assert_eq!(out.status.code(), Some(3), "report: {report}");
+    assert!(
+        report["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("cos_digest")),
+        "{report}"
+    );
+}
+
+#[test]
+fn script_host_runner_cos_digest_rule_change_is_mismatch() {
+    // stopped の run の requeue を落とす。trace は全部の pass（各 pass に stopped が 1 つ）、case は半分の行が違う。
+    let setup = Setup::patched(
+        r#"r.run_state === "stopped" ? [post, { kind: "requeue_run", run_id: r.run_id }] : [post]"#,
+        "[post]",
+    );
+    let (out, report) = setup.digest_golden();
+    assert_eq!(out.status.code(), Some(1), "report: {report}");
+    let d = domain(&report, "cos_digest");
+    let expected = (TRACE_ROWS + CASE_ROWS / 2) as u64;
+    assert_eq!(d["mismatch"], expected, "{d}");
+    assert_eq!(d["matched"], DIGEST_ROWS as u64 - expected, "{d}");
+    assert_eq!(d["ok"], false);
+    let first = &report["failures"][0];
+    assert_eq!(first["kind"], "mismatch", "{first}");
+    assert_eq!(first["file"], "cos_digest/pass_traces.jsonl", "{first}");
+}
+
+#[test]
+fn script_host_runner_cos_digest_one_byte_change_is_mismatch() {
+    // 本文の末尾の 1 byte の違いも不一致。全行が違う。
+    let setup = Setup::patched(
+        r#"text: "state " + r.run_state,"#,
+        r#"text: "state " + r.run_state + " ","#,
+    );
+    let (out, report) = setup.digest_golden();
+    assert_eq!(out.status.code(), Some(1), "report: {report}");
+    let d = domain(&report, "cos_digest");
+    assert_eq!(d["mismatch"], DIGEST_ROWS as u64, "{d}");
+    assert_eq!(d["matched"], 0, "{d}");
+}
+
+#[test]
+fn script_host_runner_cos_digest_unrecorded_op_is_denied() {
+    // 記録に無い read_run を呼んで denied を握りつぶす。出力は正しいままでも不一致。
+    let setup = Setup::patched(
+        r#"const runs = [];"#,
+        r#"const runs = []; await cosDigestReadRun(ctx, { thread: "x", run_id: "y" }).catch(() => null);"#,
+    );
+    let (out, report) = setup.digest_golden();
+    assert_eq!(out.status.code(), Some(1), "report: {report}");
+    let d = domain(&report, "cos_digest");
+    assert_eq!(d["denied"], DIGEST_ROWS as u64, "{d}");
+    assert_eq!(d["matched"], 0, "{d}");
+    let first = &report["failures"][0];
+    assert_eq!(first["kind"], "denied", "{first}");
+    assert!(
+        first["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("cos_digest:read_run")),
+        "{first}"
+    );
+}
+
+#[test]
+fn script_host_runner_cos_digest_unused_recorded_op_is_mismatch() {
+    // 記録の 1 行に、TS が呼ばない read_run を足す。出力が一致しても不一致。
+    let setup = Setup::new(LANE_MATCH);
+    let path = setup
+        .root
+        .path()
+        .join("fixtures/cos_digest/pass_traces.jsonl");
+    let text = fs::read_to_string(&path).expect("traces");
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let mut row: Value = serde_json::from_str(&lines[0]).expect("row");
+    row["ops"].as_array_mut().expect("ops").push(json!({
+        "op": "cos_digest:read_run",
+        "request": { "thread": "never", "run_id": "called" },
+        "reply": { "kind": "error", "error": { "code": "exception", "message": "unused" } },
+    }));
+    lines[0] = row.to_string();
+    fs::write(&path, lines.join("\n") + "\n").expect("write traces");
+    let (out, report) = setup.digest_golden();
+    assert_eq!(out.status.code(), Some(1), "report: {report}");
+    let d = domain(&report, "cos_digest");
+    assert_eq!(d["mismatch"], 1, "{d}");
+    assert_eq!(d["matched"], DIGEST_ROWS as u64 - 1, "{d}");
+}
+
+#[test]
+fn script_host_runner_cos_digest_checks_each_fixture_file() {
+    // 合計の行数が足りていても、file ごとの最少行数を割れば落ちる。
+    let setup = Setup::new(LANE_MATCH);
+    let path = setup
+        .root
+        .path()
+        .join("fixtures/cos_digest/pass_traces.jsonl");
+    let text = fs::read_to_string(&path).expect("traces");
+    let kept: Vec<&str> = text.lines().skip(1).collect();
+    fs::write(&path, kept.join("\n") + "\n").expect("write traces");
+    let cases = setup.root.path().join("fixtures/cos_digest/cases.jsonl");
+    let mut more = fs::read_to_string(&cases).expect("cases");
+    let first = more.lines().next().expect("line").to_owned();
+    more.push_str(&first);
+    more.push('\n');
+    fs::write(&cases, more).expect("write cases");
+    let (out, report) = setup.digest_golden();
+    assert_eq!(out.status.code(), Some(1), "report: {report}");
+    let failures = report["failures"].as_array().expect("failures");
+    assert!(
+        failures
+            .iter()
+            .any(|f| f["kind"] == "too_few_rows" && f["file"] == "cos_digest/pass_traces.jsonl"),
+        "{report}"
+    );
+}
+
+#[test]
+fn script_host_runner_cos_digest_broken_op_reply_must_be_rejected() {
+    // 一覧の答えを検査しない TS は、Rust の DTO が通す壊れた応答（他の run の答え）を受ける。
+    let setup = Setup::patched(
+        r#"if (r.thread !== ref.thread || r.run_id !== ref.run_id) throw new Error("read_run answered another run");"#,
+        "",
+    );
+    let (out, report) = setup.run(&["--suite", "safety", "--domain", "cos_digest"]);
+    assert_eq!(out.status.code(), Some(1), "report: {report}");
+    let row = report["safety"]
+        .as_array()
+        .and_then(|s| {
+            s.iter()
+                .find(|r| r["id"] == "cos_digest/read_reply_other_run")
+        })
+        .expect("read_reply_other_run row");
+    assert_eq!(row["outcome"], "returned_output");
+    assert_eq!(row["ok"], false);
+    // denied を飲み込む TS も落ちる。
+    let setup = Setup::patched(
+        r#"if (e?.name === "HostError" && e.code === "exception") continue;"#,
+        r#"if (e?.name === "HostError") continue;"#,
+    );
+    let (out, report) = setup.run(&["--suite", "safety", "--domain", "cos_digest"]);
+    assert_eq!(out.status.code(), Some(1), "report: {report}");
+    let row = report["safety"]
+        .as_array()
+        .and_then(|s| s.iter().find(|r| r["id"] == "cos_digest/read_reply_denied"))
+        .expect("read_reply_denied row");
+    assert_eq!(row["outcome"], "returned_output");
+}
+
+#[test]
+fn domains_lists_cos_digest_with_rows_and_broken_scenes() {
+    let (out, report) = invoke(&["domains"]);
+    assert_eq!(out.status.code(), Some(0), "report: {report}");
+    let d = domain(&report, "cos_digest");
+    assert!(d["min_rows"].as_u64().expect("min_rows") >= 2086, "{d}");
+    let broken = d["broken_inputs"].as_array().expect("broken_inputs");
+    assert!(
+        broken.iter().any(|id| id == "read_reply_denied"),
+        "{broken:?}"
+    );
 }
 
 /// bundle の本文を差し替え、manifest の hash を合わせる。

@@ -108,7 +108,7 @@ while IFS= read -r f; do
   case "$f" in
     scripts/dev/ts-verify*|scripts/dev/script-runner-cache.sh|scripts/dev/test-ts-verify.sh|scripts/dev/test-affected.sh)
       tsv_reason="検証の道具の変更"; extra_crates="celeris-script" ;;
-    crates/script-runtime/*|crates/task-core/*|Cargo.lock|Cargo.toml|docs/api/script-host/host-v1.schema.json)
+    crates/script-runtime/*|crates/task-core/*|Cargo.lock|Cargo.toml|docs/api/script-host/host-v1.schema.json|control-ts/fixtures/cos_digest/pass_traces.jsonl)
       [ -n "$tsv_reason" ] || tsv_reason="runner の cache key の入力の変更" ;;
   esac
 done <"$changed"

@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # 検証専用の script-host-runner と Rust golden の cache（ADR 2026-11-02-ts-fast-verify (4)）。
 #   bash scripts/dev/script-runner-cache.sh key      cache key（64 hex）を出す。cargo を起動しない
-#   bash scripts/dev/script-runner-cache.sh inputs   key の元の文字列（5 入力）を出す。cargo を起動しない
+#   bash scripts/dev/script-runner-cache.sh inputs   key の元の文字列（6 入力）を出す。cargo を起動しない
 #   bash scripts/dev/script-runner-cache.sh path     cache が当たれば runner の path を出して exit 0、無ければ exit 1。
 #                                                    golden は同じ dir の golden/<domain>/<file>.jsonl。cargo を起動しない
 #   bash scripts/dev/script-runner-cache.sh ensure   key の dir が無い（照合に落ちた）ときだけ cargo で runner を build し、
-#                                                    golden を task-core の example で作り直して control-ts/fixtures と cmp する。
+#                                                    golden を task-core の example で作り直して control-ts/fixtures と cmp し、
+#                                                    example で作らない golden（GOLDEN_COPIED）は control-ts/fixtures から写す。
 #                                                    最後に runner の path を出す
 # key = 次の行の sha256: host の source（crates/script-runtime/・golden の元の crate・ルート Cargo.toml）の hash、
-# Cargo.lock の hash、features（profile・bin・features・--locked）、`rustc -vV` の全行、host-v1.schema.json の hash。
+# Cargo.lock の hash、features（profile・bin・features・--locked）、`rustc -vV` の全行、host-v1.schema.json の hash、
+# GOLDEN_COPIED の各 file の hash。
 # 置き場所: ${CELERIS_SCRIPT_RUNNER_CACHE:-${CELERIS_SCRATCH_DIR:-/local/celeris/data/scratch}/script-runner-cache}/<key>/
 # （git の作業ツリーの中・/tmp の下は exit 2 で拒否）。
 # exit: 0 = 成功、1 = cache が無い（path）・build・golden の不一致（ensure）、2 = 使い方・置き場所の誤り。
@@ -31,7 +33,11 @@ HOST_DIRS="crates/script-runtime crates/task-core"
 FEATURES="profile=release bin=script-host-runner features=default locked=1"
 SCHEMA="docs/api/script-host/host-v1.schema.json"
 # golden の file と、それを stdout に書く task-core の example。
-GOLDEN_SPECS="lane_rules/all-features.jsonl:dump-lane-fixtures route_priority/cases.jsonl:dump-route-priority-fixtures"
+GOLDEN_SPECS="lane_rules/all-features.jsonl:dump-lane-fixtures route_priority/cases.jsonl:dump-route-priority-fixtures cos_digest/cases.jsonl:dump-cos-digest-fixtures"
+# example で作らない golden。pass_traces.jsonl は task-dispatch の試験（cos_digest_trace.rs）が書き、その試験が byte 一致を確かめる。
+# task-dispatch を golden の元の crate にすると key の source が広がるので、fixture の内容を key に入れて golden/ へ写す
+# （ADR 2026-11-02-ts-fast-verify 付記 grade-cos-digest）。
+GOLDEN_COPIED="cos_digest/pass_traces.jsonl"
 KEEP=4
 
 sha_file() { # path → sha256 か absent
@@ -65,6 +71,10 @@ key_inputs() {
   printf 'features   %s\n' "$FEATURES"
   printf '%s\n' "$rustc_out" | sed 's/^/rustc      /'
   printf 'schema     %s\n' "$(sha_file "$SCHEMA")"
+  local rel
+  for rel in $GOLDEN_COPIED; do
+    printf 'copied     %s %s\n' "$rel" "$(sha_file "control-ts/fixtures/$rel")"
+  done
 }
 
 if [ "$cmd" = inputs ]; then key_inputs; exit 0; fi
@@ -168,10 +178,14 @@ for spec in $GOLDEN_SPECS; do
     exit 1
   fi
 done
+for rel in $GOLDEN_COPIED; do
+  mkdir -p "$tmp/golden/$(dirname "$rel")"
+  cp "control-ts/fixtures/$rel" "$tmp/golden/$rel"
+done
 end="$(date +%s.%N)"
 
 printf '%s\n' "$inputs" >"$tmp/key-inputs.txt"
-python3 -I - "$tmp" "$key" "$start" "$end" "$GOLDEN_SPECS" <<'PY'
+python3 -I - "$tmp" "$key" "$start" "$end" "$GOLDEN_SPECS $GOLDEN_COPIED" <<'PY'
 import hashlib, json, os, sys, time
 d, key, start, end, specs = sys.argv[1:6]
 def sha(p):

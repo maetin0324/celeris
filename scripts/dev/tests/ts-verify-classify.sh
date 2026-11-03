@@ -60,7 +60,7 @@ cat >"$cache/script-host-runner" <<'EOF'
 #!/bin/sh
 echo "runner $*" >>"$CALLS"
 case "$1" in
-  domains) echo '{"domains":[{"domain":"lane_rules","fixture":"lane_rules/all-features.jsonl"}]}' ;;
+  domains) echo '{"domains":[{"domain":"lane_rules","fixtures":[{"path":"lane_rules/all-features.jsonl"}]}]}' ;;
   run)
     suite=""
     while [ "$#" -gt 0 ]; do [ "$1" = --suite ] && suite="$2"; shift; done

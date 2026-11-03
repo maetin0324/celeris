@@ -356,3 +356,25 @@ lockfile・`bundle.config.json`・`fixtures/**` と `docs/api/script-host/` の�
   key の入力（`crates/script-runtime/`・`crates/task-core/` など）か検証の道具が変われば `test-ts-verify.sh` が写しで 10 段を通すが、それ以外の Rust の変更と組んだ
   `control-ts/` の破壊は runner で採点されない。(b) 段 `bundle` は候補の `control-ts/scripts/build-bundle.mjs` と `bundle.config.json` を使う。
   領域の集合は runner が Rust の表と照合する（exit 3）が、bundle の作り方そのものを書き換える変更は差分として reviewer に渡る。(c) (5) の限界（branch 自身の `scripts/dev/` の書き換え）は変わらない。この unit の差分も `scripts/dev/` を含むので分類は `rust` で、`test-affected.sh` の `--grade` は従来の経路へ抜けた（代わりに `test-ts-verify.sh` が写しで 14 件を確かめた）。(d) release gate は control-ts の採点を持たないまま残る。grade-gate-1 の `--grade` は `test-affected.sh` の経路だけにある。`scripts/selfdeploy/release.sh` と `scripts/dev/test-parallel.sh` は `test-affected.sh`・`ts-verify.sh`・bundle の作成を呼ばず、`CELERIS_SCRIPT_REQUIRE_BUNDLE` を設定しない。build tree に `control-ts/dist` は無いので、`crates/celeris/tests` の dist を読む試験は SKIP で通る（release gate は実行せず、script を読んで確かめた。(6) のとおり別 task）。
+
+## 付記 grade-cos-digest（2026-11-03、S3 と S4 の統合で分かった抜けへの対応）
+S3 と S4 を統合した木で `scripts/dev/test-ts-verify.sh` の場合 A・B（runner）・J（無害）が失敗した。採点の表 `DOMAINS` に `cos_digest` が無く、`check_manifest` が bundle を exit 3 で拒否したためである。
+`cos_digest` は入力を取らず op を await する pass なので、表に 1 行足すだけでは採点できない。runner に op の答えを記録から返す経路を足した。この付記は (3)・(4) の該当部分を改める。`cos_digest` を manifest から外す対応はしていない。
+
+- **grade-cos-digest-1（場面）**: 採点の単位を「入力」から「場面」（入力と、op の答えの記録）に広げた。純粋な領域は記録を持たず、今までどおり host sink なしで呼ぶ。`cos_digest` は入力 `{}`（daemon と同じ）と記録を持ち、`call_with_host_sink` で呼ぶ。
+- **grade-cos-digest-2（op server と判定）**: runner の中の op server が場面の記録から答える。照合は op の名前と request の直列化の byte 一致（境界 ADR 付記 S4-16、`pass-replay.ts` と同じ）。
+  - 記録に無い要求には `denied` を返し、TS がそれを握りつぶして正しい出力を返しても結果は `denied`（不一致）にする。
+  - 記録の op を呼ばなかった場面は `mismatch` にする（`compare.mjs` と同じ）。
+  - 全件を正順と逆順に 2 回流す。正逆の比較には、呼んだ op の違いも入れる。
+  - 出力の値の検査は `CosDigestPassOutput` の形と、一覧に無い run の安全違反 `run_outside_list`（境界 ADR 付記 S4-14 の規則 7）。規則 1〜6・8・9 は golden の一致と `task-dispatch` の検証が持ち、runner には写さない。
+- **grade-cos-digest-3（fixture）**: 領域は複数の fixture の file を持てる。`cos_digest` は `pass_traces.jsonl`（最少 20 行）と `cases.jsonl`（最少 2066 行）で、最少行数は file ごとに見る（合計 2086）。`cases.jsonl` の行は `compare.mjs` と同じ規則で「run 1 つの pass」に組み直す。
+  `domains`・`run` の出力の `fixture` 欄は `fixtures` に置き換えた。`input_rule` も `fixtures[].rule` に置き換えた。`domains` の `broken_inputs`（壊した場面の id の一覧）は欄の名前と形を変えず、`cos_digest` では壊した op の応答の id を載せる。
+- **grade-cos-digest-4（安全シナリオ・activate）**: 壊した場面は入力でも op の応答でも表せる。`cos_digest` は壊した op の応答 7 件を持つ。6 件は `exception` で終わること、`read_run` の `denied` の 1 件は `denied` で終わることを確かめる。
+  出力を返したら失敗である。`read_run` の code `exception` は TS がその run を飛ばす（境界 ADR 付記 S4-18）ので、throw の場面には入れない。Rust の DTO の検証に落ちる `read_run` の応答も同じ `exception` になるので入れない。activate は run 1 つの pass を probe する。
+- **grade-cos-digest-5（golden と cache key。(4) を改める）**: `GOLDEN_SPECS` に `cos_digest/cases.jsonl:dump-cos-digest-fixtures` を足した。`pass_traces.jsonl` は `task-dispatch` の試験 `cos_digest_trace.rs` が書くので、`GOLDEN_CRATES` は広げない。
+  新しい一覧 `GOLDEN_COPIED` の file は内容の sha256 を key に入れ（`copied` の行。入力は 6 つになった）、`ensure` が `control-ts/fixtures` から `golden/` へ写し、meta の照合に入れる。`ts-verify.sh` の段 `golden` は 1 領域の複数 file を `cmp` し、引数なしの経路では `compare.mjs` を file ごとに呼ぶ。
+- **grade-cos-digest-6（写した golden の限界と補い）**: `pass_traces.jsonl` は候補の file を写すので、`cmp` は違いを検出しない。補いは次の 3 つである。この file の変更は `host-api` で `ts-only` にならない。`test-affected.sh` が `ts-verify-grade` と `test-ts-verify.sh`、byte 一致を確かめる `task-dispatch` の cargo の試験を選ぶ。key が変わるので古い golden で採点しない。
+  `test-ts-verify.sh` の場合 L がこの選択を固定する。Rust の変更と trace の書き換えを同時にする差分は、(5) と同じく reviewer に渡る。
+- **grade-cos-digest-7（比較の限界）**: workspace の `serde_json` は `preserve_order` を持たない（ルートの `Cargo.toml`。deno_core の写しで外した）。runner が受ける出力は key が整列した `Value` で、比較は整列した直列化どうしの byte 一致である。
+  TS の出力の key の順は runner には見えない。これは既存の 2 領域と同じである。Rust の検証→apply は型で受けるので順に依存しない。key の順は `compare.mjs`（`JSON.stringify` と生の行の比較）が見る。ただし `--grade` の段 `golden` は `compare.mjs` を使わないので、`--grade` だけの経路では順の違いを検出しない。値（文字列の 1 byte の違いを含む）の違いはどの経路でも不一致になる。
+- **grade-cos-digest-8（試験）**: `test-ts-verify.sh` に場合 K（`cos_digest` の規則の破壊は runner の mismatch で exit 1、`read_run` の答えの検査を外した bundle は `--suite safety` で exit 1）と場合 L を足した。既存の場合の期待値は変えていない。`script_host_runner.rs` に一致・不一致・1 byte の違い・記録外の op・呼ばれない記録・file ごとの行数・壊した op の応答・`cos_digest` の無い manifest の拒否を足した。fixture と `control-ts/` は変えていない。

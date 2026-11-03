@@ -1113,17 +1113,21 @@ async fn trace_scenarios(mode: Mode) -> Vec<(String, Vec<PassCapture>)> {
     let mut s = scene(mode, false, "true");
     trace_direct_run(&s.f, "read-ok", ChatRunState::Completed);
     trace_direct_run(&s.f, "read-fail", ChatRunState::Stopped);
-    out.record_with(&mut s, "read-failure/skip-then-digest", |f, pass| match pass {
-        0 => sql(
-            f,
-            "UPDATE cos_inbox_items SET summary=X'FF' WHERE run_id='read-fail';",
-        ),
-        1 => sql(
-            f,
-            "UPDATE cos_inbox_items SET summary='知らせ read-fail' WHERE run_id='read-fail';",
-        ),
-        _ => {}
-    })
+    out.record_with(
+        &mut s,
+        "read-failure/skip-then-digest",
+        |f, pass| match pass {
+            0 => sql(
+                f,
+                "UPDATE cos_inbox_items SET summary=X'FF' WHERE run_id='read-fail';",
+            ),
+            1 => sql(
+                f,
+                "UPDATE cos_inbox_items SET summary='知らせ read-fail' WHERE run_id='read-fail';",
+            ),
+            _ => {}
+        },
+    )
     .await;
 
     out.passes

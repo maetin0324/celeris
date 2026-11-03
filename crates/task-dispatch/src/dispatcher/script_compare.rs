@@ -6,7 +6,8 @@
 //!   `lane_rules` は `decide_lane` が Rust の判定の後に、`route_priority` は `dispatch_run` が `select_route_with`
 //!   の直後に呼ぶ（付記 S2-11）。dispatcher は TS を待たない。比較は tokio の task で `SCRIPT_CALL_DEADLINE` 付きで走り、
 //!   記録（`script_compare_recorded`）だけを書く。lane・候補列・run・既存の event は Rust の結果のまま（S2-6）。
-//! - `PolicyScript` が無い・bundle が generation と違う・tokio の runtime が無いときは TS を呼ばず `unavailable` を記録する。
+//! - `PolicyScriptSource` が無い・その generation の口を返せない（bundle が違う・isolate が無い・drain 中、付記 S5-2）・
+//!   tokio の runtime が無いときは TS を呼ばず `unavailable` を記録する。
 //! - generation の確認・`unavailable`・deadline・in-flight の上限・記録は両領域で同じ経路（[`Dispatcher::compare_domain`]）を通る。
 //! - 付記 S4-14: 領域 `cos_digest` は digest pass（`cos_chat/digest.rs`）が [`Dispatcher::script_target`] で
 //!   `compare`・`ts` の宛先を得て、`compare` は同じ `spawn_compare` を通る。記録は `script_compare_log`（S4-15）。
@@ -22,14 +23,15 @@ use tokio::task::JoinHandle;
 use super::route_select::{RouteInput, RouteTrace};
 use super::*;
 use crate::script_policy::{
-    CompareDraft, MAX_IN_FLIGHT_COMPARES, PolicyScript, SCRIPT_CALL_DEADLINE, ScriptDomainStore,
+    CompareDraft, MAX_IN_FLIGHT_COMPARES, PolicyScript, PolicyScriptSource, SCRIPT_CALL_DEADLINE,
+    ScriptDomainStore, SingleBundleSource,
 };
 
 /// dispatcher が持つ compare の状態。既定は何も注入しない（mode を読まず、TS を呼ばない）。
 #[derive(Default)]
 pub(in crate::dispatcher) struct ScriptCompareState {
     store: Option<Arc<dyn ScriptDomainStore>>,
-    script: Option<Arc<dyn PolicyScript>>,
+    script: Option<Arc<dyn PolicyScriptSource>>,
     /// この tick の mode の行（読めない・store が無いときは空 = 両領域とも `rust`）。
     modes: Vec<ScriptDomainModeRow>,
     /// mode を読んだ tick（`Dispatcher::ticks`）。
@@ -45,8 +47,16 @@ impl Dispatcher {
     }
 
     /// TS 制御層の判定の口を渡す（`None` で外す）。無いまま mode が `compare` なら `unavailable` を記録する。
+    /// bundle 1 つの口は [`SingleBundleSource`] で包む（generation の `bundle_sha256` と同じときだけ呼ぶ）。
     pub fn set_policy_script(&mut self, script: Option<Arc<dyn PolicyScript>>) {
-        self.script_compare.script = script;
+        self.script_compare.script =
+            script.map(|s| Arc::new(SingleBundleSource(s)) as Arc<dyn PolicyScriptSource>);
+    }
+
+    /// generation ごとの口を渡す（付記 S5-2。daemon の generation の登録簿）。mode の CAS の後に読んだ行の
+    /// generation へ送り、切替の前に送った要求は元の generation で終わる。
+    pub fn set_policy_script_source(&mut self, source: Option<Arc<dyn PolicyScriptSource>>) {
+        self.script_compare.script = source;
     }
 
     /// 走っている compare がすべて終わるまで待つ（試験と停止の前の片付け用）。
@@ -205,33 +215,22 @@ impl Dispatcher {
             .as_ref()
             .map(|g| (g.bundle_sha256.clone(), g.host_api.clone()))
             .unwrap_or_default();
-        let unavailable = match (&generation, &self.script_compare.script) {
-            (None, _) => Some(format!("script generation `{generation_id}` not found")),
+        let pinned = match (&generation, &self.script_compare.script) {
+            (None, _) => Err(format!("script generation `{generation_id}` not found")),
             (Some(g), _) if g.state != ScriptGenerationState::Active => {
-                Some(format!("script generation `{generation_id}` is not active"))
+                Err(format!("script generation `{generation_id}` is not active"))
             }
-            (Some(g), _) if !g.declares_domain(domain) => Some(format!(
+            (Some(g), _) if !g.declares_domain(domain) => Err(format!(
                 "script generation `{generation_id}` does not declare {}",
                 domain.as_str()
             )),
-            (Some(_), None) => Some("no policy script runtime".to_owned()),
-            (Some(g), Some(script)) if script.bundle().bundle_sha256 != g.bundle_sha256 => {
-                Some(format!(
-                    "loaded bundle {} differs from generation bundle {}",
-                    script.bundle().bundle_sha256,
-                    g.bundle_sha256
-                ))
-            }
-            _ => None,
+            (Some(_), None) => Err("no policy script runtime".to_owned()),
+            (Some(g), Some(source)) => source.pinned(g),
         };
-        let call = match (unavailable, &self.script_compare.script) {
-            (Some(reason), _) => Err(reason),
-            (None, Some(script)) => match tokio::runtime::Handle::try_current() {
-                Ok(runtime) => Ok((script.clone(), runtime)),
-                Err(_) => Err("no tokio runtime for the script call".to_owned()),
-            },
-            (None, None) => Err("no policy script runtime".to_owned()),
-        };
+        let call = pinned.and_then(|script| match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => Ok((script, runtime)),
+            Err(_) => Err("no tokio runtime for the script call".to_owned()),
+        });
         Some(CompareTarget {
             store,
             mode,

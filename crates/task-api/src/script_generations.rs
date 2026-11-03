@@ -72,6 +72,10 @@ pub enum ScriptGenerationError {
     /// runtime の内部の失敗（actor の停止など）。500。
     #[error("script runtime failed: {0}")]
     Runtime(String),
+    /// runtime はあるが今は登録・退役を受けない（standby の daemon、起動時の復元の前）。503
+    /// `script_runtime_unavailable`。表を変えない。
+    #[error("script runtime is not ready: {0}")]
+    Unavailable(String),
 }
 
 /// generation 1 つ（一覧・登録・退役の応答）。
@@ -262,6 +266,11 @@ fn generation_problem(err: ScriptGenerationError) -> ApiProblem {
             )
         }
         ScriptGenerationError::Domain(e) => domain_problem(e),
+        ScriptGenerationError::Unavailable(m) => ApiProblem::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            SCRIPT_RUNTIME_UNAVAILABLE,
+            format!("the script runtime is not ready: {m}"),
+        ),
         ScriptGenerationError::Runtime(m) => {
             ApiProblem::internal(format!("script runtime failed: {m}"))
         }

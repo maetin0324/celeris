@@ -1,7 +1,9 @@
-//! `[script]`（境界 ADR 2026-11-02 (b)(d)）: TS 制御層の active bundle と上限。
+//! `[script]`（境界 ADR 2026-11-02 (b)(d)、付記 S5-1）: TS 制御層の bundle の置き場所と上限。
 //!
 //! 節が無ければ TS 層を起こさない（thread も isolate も作らない）。値の形の誤りは設定エラーにする。
-//! bundle の中身の検証は起動時に `daemon::script_layer` が行い、失敗しても daemon は止めない（fail-closed）。
+//! どの bundle を load するかは config ではなく DB（`script_domain_modes` が指す generation）が決める。
+//! 消した欄 `active_bundle_sha256` は未知の欄として読み込みエラーになる（付記 S5-1）。
+//! bundle の検証は登録と起動時の復元で `daemon::script_layer` が行い、失敗しても daemon は止めない（fail-closed）。
 
 use std::path::{Path, PathBuf};
 
@@ -12,15 +14,12 @@ use super::ConfigError;
 /// ```toml
 /// [script]
 /// state_dir = "/local/celeris/state"
-/// active_bundle_sha256 = "<64 桁の小文字 16 進>"
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScriptConfig {
-    /// `<state_dir>/script-bundles/<active_bundle_sha256>/` を読む。相対パスは設定ファイル基準。
+    /// `<state_dir>/script-bundles/<bundle_sha256>/` を読む。相対パスは設定ファイル基準。
     pub state_dir: PathBuf,
-    /// load する bundle の sha256。
-    pub active_bundle_sha256: String,
     /// 1 回の入力の上限（byte）。
     #[serde(default = "default_input_limit_bytes")]
     pub input_limit_bytes: usize,
@@ -46,12 +45,6 @@ impl ScriptConfig {
     }
 
     pub(super) fn validate(&self) -> Result<(), ConfigError> {
-        let sha = &self.active_bundle_sha256;
-        if sha.len() != 64 || !sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
-            return Err(ConfigError::Invalid(format!(
-                "[script] active_bundle_sha256 must be 64 lowercase hex digits (got {sha:?})"
-            )));
-        }
         if self.input_limit_bytes == 0 {
             return Err(ConfigError::Invalid(
                 "[script] input_limit_bytes must be greater than 0".into(),
@@ -80,6 +73,17 @@ mod tests {
 
     const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+    /// 付記 S5-1: 消した欄は読み込みエラー（どの bundle を load するかは DB が決める）。
+    #[test]
+    fn config_active_bundle_sha256_is_rejected() {
+        let err = load(&format!(
+            "[script]\nstate_dir = \"state\"\nactive_bundle_sha256 = \"{SHA}\"\n"
+        ))
+        .expect_err("removed field")
+        .to_string();
+        assert!(err.contains("active_bundle_sha256"), "{err}");
+    }
+
     fn load(extra: &str) -> Result<Config, crate::config::ConfigError> {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("config.toml");
@@ -94,17 +98,18 @@ mod tests {
 
     #[test]
     fn script_runtime_config_reads_values_and_defaults() {
-        let cfg = load(&format!(
-            "[script]\nstate_dir = \"state\"\nactive_bundle_sha256 = \"{SHA}\"\n"
-        ))
-        .expect("config");
+        let cfg = load("[script]\nstate_dir = \"state\"\n").expect("config");
         let script = cfg.script.expect("script");
         assert!(script.state_dir.is_absolute(), "{:?}", script.state_dir);
         assert!(script.state_dir.ends_with("state"));
         assert_eq!(script.limits(), celeris_script::RuntimeLimits::default());
-        let cfg = load(&format!(
-            "[script]\nstate_dir = \"/s\"\nactive_bundle_sha256 = \"{SHA}\"\ninput_limit_bytes = 7\nheap_limit_bytes = 9\n"
-        ))
+        let cfg = load(
+            "[script]
+state_dir = \"/s\"
+input_limit_bytes = 7
+heap_limit_bytes = 9
+",
+        )
         .expect("config");
         let limits = cfg.script.expect("script").limits();
         assert_eq!(limits.input_limit_bytes, 7);
@@ -114,19 +119,9 @@ mod tests {
     #[test]
     fn script_runtime_config_rejects_invalid_values() {
         for (extra, needle) in [
-            ("active_bundle_sha256 = \"../x\"\n", "active_bundle_sha256"),
-            (
-                &format!("active_bundle_sha256 = \"{SHA}\"\ninput_limit_bytes = 0\n"),
-                "input_limit_bytes",
-            ),
-            (
-                &format!("active_bundle_sha256 = \"{SHA}\"\nheap_limit_bytes = 0\n"),
-                "heap_limit_bytes",
-            ),
-            (
-                &format!("active_bundle_sha256 = \"{SHA}\"\nmode = \"ts\"\n"),
-                "mode",
-            ),
+            ("input_limit_bytes = 0\n", "input_limit_bytes"),
+            ("heap_limit_bytes = 0\n", "heap_limit_bytes"),
+            ("mode = \"ts\"\n", "mode"),
         ] {
             let err = load(&format!("[script]\nstate_dir = \"/s\"\n{extra}"))
                 .expect_err(extra)

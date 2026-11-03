@@ -12,7 +12,7 @@ mod support;
 use std::sync::Arc;
 
 use celeris::{Config, Exit, RunOptions};
-use celeris_script::manifest::deploy_bundle;
+use celeris_script::manifest::{deploy_bundle, deployed_dir};
 use support::script_compare::{
     Env, LONG_DEADLINE, TIMEOUT_RETRIES, dist_bundle, dist_dir, is_timeout, load_config, repo_root,
     start_code, start_policy,
@@ -278,20 +278,10 @@ async fn script_compare_daemon_injects_records_and_restores_rust() {
     let state = env.dir.path().join("state");
     let deployed = deploy_bundle(&dist_dir(), &state).expect("deploy");
     let sha256 = deployed.manifest.bundle_sha256.clone();
-    let with_script = |sha: &str| {
-        load_config(
-            env.dir.path(),
-            &format!("[script]\nstate_dir = \"state\"\nactive_bundle_sha256 = \"{sha}\"\n"),
-        )
-    };
+    let with_script = || load_config(env.dir.path(), "[script]\nstate_dir = \"state\"\n");
 
-    // 起動で `loaded` の行ができる。mode は変えない。
-    assert_eq!(run_daemon(with_script(&sha256)).await, Exit::MaxTicks);
-    let generation = env
-        .store
-        .script_generation_by_sha256(&sha256)
-        .expect("read")
-        .expect("generation recorded at startup");
+    // 登録（付記 S5-1）と同じ `loaded` の行。daemon は mode の行が指す generation を起動時に新しい isolate で load する。
+    let generation = env.deployed_generation(&deployed);
     assert_eq!(generation.state, ScriptGenerationState::Loaded);
     assert!(generation.declares_domain(ScriptDomain::LaneRules));
     assert_eq!(env.mode(), ScriptMode::Rust);
@@ -301,7 +291,7 @@ async fn script_compare_daemon_injects_records_and_restores_rust() {
     let mut matched = None;
     for _ in 0..TIMEOUT_RETRIES {
         let task = env.insert_task();
-        assert_eq!(run_daemon(with_script(&sha256)).await, Exit::MaxTicks);
+        assert_eq!(run_daemon(with_script()).await, Exit::MaxTicks);
         let records = env.records(&task);
         assert_eq!(records.len(), 1, "{records:?}");
         if !is_timeout(&records[0]) {
@@ -331,13 +321,13 @@ async fn script_compare_daemon_injects_records_and_restores_rust() {
     // known-good の戻り道（`retired`→再登録）で `loaded` に戻してから compare にする（付記 S5-3）。
     let generation = env.rearm_generation(&generation.id);
 
-    // 配備先に無い bundle を指す daemon も同じ（読めない bundle では compare を続けない）。
+    // 配備先から bundle が消えた daemon も同じ（読めない bundle では compare を続けない。付記 S5-2）。
     env.set_mode(ScriptMode::Compare, Some(generation.id));
+    std::fs::remove_dir_all(deployed_dir(&state, &sha256)).expect("remove the deployed bundle");
     let task = env.insert_task();
-    assert_eq!(
-        run_daemon(with_script(&"b".repeat(64))).await,
-        Exit::MaxTicks
-    );
+    assert_eq!(run_daemon(with_script()).await, Exit::MaxTicks);
     assert_eq!(env.mode(), ScriptMode::Rust);
+    let row = env.store.script_domain_mode(DOMAIN).expect("mode");
+    assert_eq!(row.updated_by, "system:script-startup");
     assert!(env.records(&task).is_empty());
 }

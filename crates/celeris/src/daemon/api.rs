@@ -498,6 +498,7 @@ pub(crate) async fn start_api(
     llm_proxy_state: Option<Arc<llm_proxy::ProxyState>>,
     live_sessions: Arc<task_core::browser_isolation::LiveSessions>,
     mcp_token: Option<String>,
+    script_generations: Option<task_api::script_generations::SharedScriptGenerationControl>,
 ) -> Result<
     (
         RunningApi,
@@ -621,6 +622,11 @@ pub(crate) async fn start_api(
     let state = state.with_browser_readiness(Arc::new(move |store| doctor.inspect(store)));
     let state = state.with_live_sessions(live_sessions);
     let state = with_chat_wiring(state, config);
+    // 付記 S5-1: `[script]` の無い daemon は結線しない（登録・退役は 503 `script_runtime_unavailable`）。
+    let state = match script_generations {
+        Some(control) => state.with_script_generations(control),
+        None => state,
+    };
     let listener = bind_reuseport(listen).map_err(|source| ApiError::Bind {
         addr: listen,
         source,

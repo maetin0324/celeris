@@ -466,6 +466,23 @@ impl Env {
             .expect("generation")
     }
 
+    /// 配備した bundle の generation を、登録（付記 S5-1）と同じ形で `loaded` に記録する。daemon は mode の行が指せば
+    /// 起動時にこの bundle を新しい isolate で load する。
+    pub fn deployed_generation(&self, bundle: &VerifiedBundle) -> ScriptGeneration {
+        self.store
+            .script_generation_record(
+                &NewScriptGeneration {
+                    bundle_sha256: bundle.manifest.bundle_sha256.clone(),
+                    host_api: celeris_script::dto::HOST_API_VERSION.to_owned(),
+                    schema_sha256: bundle.manifest.schema_sha256.clone(),
+                    manifest_json: serde_json::to_string(&bundle.manifest).expect("manifest"),
+                    state: ScriptGenerationState::Loaded,
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .expect("generation")
+    }
+
     /// mode の行から外れて `draining` になった generation を、付記 S5-1・S5-3 の known-good の戻り道
     /// （`retired` にしてから同じ hash を登録し直して `loaded` に戻す）で再び指せるようにする。
     /// `draining` の generation へ直接戻すことは store が拒む（付記 S5-4）ので、その規則は弱めない。
@@ -476,23 +493,30 @@ impl Env {
             .script_generation_get(id)
             .expect("read")
             .expect("generation");
-        assert_eq!(
-            current.state,
-            ScriptGenerationState::Draining,
-            "rearm expects a generation left draining by a rust restore"
+        // daemon の起動時の復元は、指されない `draining` を drain の終わりとして `retired` にする（付記 S5-2）。
+        // daemon を通らずに戻した行は `draining` のまま。
+        assert!(
+            matches!(
+                current.state,
+                ScriptGenerationState::Draining | ScriptGenerationState::Retired
+            ),
+            "rearm expects a generation left draining or retired by a rust restore, got {:?}",
+            current.state
         );
-        self.store
-            .script_generation_transition(
-                &ScriptGenerationTransition {
-                    id: id.to_owned(),
-                    to: ScriptGenerationState::Retired,
-                    actor: "human:test".into(),
-                    reason: "drained (daemon stopped)".into(),
-                    cancelled_in_flight: None,
-                },
-                OffsetDateTime::now_utc(),
-            )
-            .expect("retire");
+        if current.state == ScriptGenerationState::Draining {
+            self.store
+                .script_generation_transition(
+                    &ScriptGenerationTransition {
+                        id: id.to_owned(),
+                        to: ScriptGenerationState::Retired,
+                        actor: "human:test".into(),
+                        reason: "drained (daemon stopped)".into(),
+                        cancelled_in_flight: None,
+                    },
+                    OffsetDateTime::now_utc(),
+                )
+                .expect("retire");
+        }
         let again = self
             .store
             .script_generation_record(

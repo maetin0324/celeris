@@ -41,7 +41,11 @@ updated: 2026-11-03
 4. p0b が原子化できず canary/ts を禁止した場合、その禁止を受け入れるか。
 
 ## 証拠（提出時の HEAD で実行）
-- 下の「検査」に書く。
+- 基準は `git merge-base HEAD main`。この run の差分は進捗ファイル 1 件だけ。
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」、文書検査は ok）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- 子 task の起票は run の成果物の delegate.json（8 件）で行う。受け付けられた件数は run の後に celeris が決める（未確認）。
 
 ## 未解決
 - 子 task の結果は未着。親の完了は子の結果で決まる。

@@ -59,7 +59,7 @@ impl ScriptDomain {
     }
 }
 
-/// 領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。S2 で受け付けるのは `rust` と `compare` だけ（S2-5）。
+/// 領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。全領域で全 mode を受ける（付記 S5-4）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ScriptMode {
@@ -85,23 +85,18 @@ impl ScriptMode {
             .find(|m| m.as_str() == name)
     }
 
-    /// S2-5・S4-14: `domain` の変更先として受け付ける mode か。`rust`・`compare` はどの領域でも受ける。
-    /// `ts` は `cos_digest` だけで受ける。`canary` はどの領域でも受けない（S5）。
-    pub fn accepted_for(self, domain: ScriptDomain) -> bool {
-        match self {
-            ScriptMode::Rust | ScriptMode::Compare => true,
-            ScriptMode::Ts => domain == ScriptDomain::CosDigest,
-            ScriptMode::Canary => false,
-        }
-    }
-
     /// 動かすのに active generation が要る mode か（`compare`・`canary`・`ts`）。
     pub fn needs_generation(self) -> bool {
         !matches!(self, ScriptMode::Rust)
     }
 }
 
-/// S4-14: `ts` へ切り替えてよい actor か。人の API token の主体（`human:<name>`）だけが真。
+/// S5-5: 保存済みの checkpoint の版 `stored` を manifest の `checkpoint_versions` が全部含むか。
+pub fn checkpoint_versions_cover(manifest: &[u32], stored: &[u32]) -> bool {
+    stored.iter().all(|v| manifest.contains(v))
+}
+
+/// S4-14・S5-4: `ts`・`canary` へ切り替えてよい actor か。人の API token の主体（`human:<name>`）だけが真。
 /// CoS（`cos:*`）・外部 operator（`operator:*`）・MCP（`mcp:*`）・daemon（`system:*`）は偽。
 pub fn actor_may_enable_ts(actor: &str) -> bool {
     actor
@@ -109,30 +104,64 @@ pub fn actor_may_enable_ts(actor: &str) -> bool {
         .is_some_and(|name| !name.trim().is_empty())
 }
 
-/// 表 `script_generations.state`（S2-4）。
+/// 表 `script_generations.state`（S5-1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ScriptGenerationState {
+    /// 検証に通り、どの領域の mode の行からも指されていない。
     Loaded,
-    Rejected,
+    /// 1 つ以上の領域の `generation_id` がこれを指す。
+    Active,
+    /// どの領域からも指されなくなったが in-flight が残る。
+    Draining,
+    /// isolate を捨てた。行と bundle の file は残す。
+    Retired,
+    /// 検証に落ちた、または安全違反で無効にした。
+    Invalid,
 }
 
 impl ScriptGenerationState {
+    pub const ALL: [ScriptGenerationState; 5] = [
+        Self::Loaded,
+        Self::Active,
+        Self::Draining,
+        Self::Retired,
+        Self::Invalid,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
-            ScriptGenerationState::Loaded => "loaded",
-            ScriptGenerationState::Rejected => "rejected",
+            Self::Loaded => "loaded",
+            Self::Active => "active",
+            Self::Draining => "draining",
+            Self::Retired => "retired",
+            Self::Invalid => "invalid",
         }
     }
 
     pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "loaded" => Some(Self::Loaded),
-            "rejected" => Some(Self::Rejected),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|s| s.as_str() == name)
+    }
+
+    /// isolate を持つ状態か。S5-1 の「生きた generation は最大 2 つ」の対象。
+    pub fn is_live(self) -> bool {
+        matches!(self, Self::Loaded | Self::Active | Self::Draining)
+    }
+
+    /// S5-1 の遷移の表で許される遷移か。
+    pub fn may_become(self, to: Self) -> bool {
+        matches!(
+            (self, to),
+            (Self::Loaded, Self::Active | Self::Retired | Self::Invalid)
+                | (Self::Active, Self::Draining | Self::Invalid)
+                | (Self::Draining, Self::Retired | Self::Invalid)
+                | (Self::Retired, Self::Loaded | Self::Invalid)
+        )
     }
 }
+
+/// S5-1: 生きた generation（`loaded`・`active`・`draining`）の上限。
+pub const SCRIPT_GENERATIONS_LIVE_MAX: usize = 2;
 
 /// `script_compare_recorded.outcome`（S2-4）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -193,6 +222,42 @@ pub struct ScriptCompareRecord {
     /// S2-8 の code。
     pub safety_violations: Vec<String>,
     pub elapsed_us: u64,
+    /// 付記 S5-3・S5-6: 判定に使った側。`canary` の TS 側・`ts` で TS の結果を検証して使えば `ts`、
+    /// 使わなければ `rust`。mode `compare` は `None`（挙動は常に Rust）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_by: Option<CosDigestAppliedBy>,
+    /// 付記 S5-6: TS の側に選ばれたのに Rust の結果を使った理由（`ts_error`・`invalid_output`・`safety_violation`・
+    /// `unavailable`・`tick_budget` 等）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<CosDigestFallback>,
+    /// 付記 S5-3: mode `canary`・`ts` で、この単位が TS の側に選ばれたか。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub canary_selected: bool,
+    /// 付記 S5-3: mode `canary` の比率（それ以外は `None`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_bps: Option<u32>,
+}
+
+/// 付記 S5-3: canary の決定的な選択。`sha256("celeris.canary/1" 0x00 domain 0x00 generation 0x00 unit_key)` の
+/// 先頭 8 byte を big-endian の u64 にし、`% 10000 < canary_bps` なら TS の側。乱数・時計を使わない。
+pub fn canary_selected(
+    domain: ScriptDomain,
+    generation_id: &str,
+    unit_key: &str,
+    canary_bps: u32,
+) -> bool {
+    let mut hasher = Sha256::new();
+    hasher.update(b"celeris.canary/1");
+    hasher.update([0u8]);
+    hasher.update(domain.as_str().as_bytes());
+    hasher.update([0u8]);
+    hasher.update(generation_id.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(unit_key.as_bytes());
+    let digest = hasher.finalize();
+    let mut head = [0u8; 8];
+    head.copy_from_slice(&digest[..8]);
+    u64::from_be_bytes(head) % 10_000 < u64::from(canary_bps)
 }
 
 /// 記録する入力の直列化の上限（S2-3）。超えたら `input` を捨て `input_digest` だけを残す。
@@ -426,6 +491,8 @@ pub struct ScriptDomainModeRow {
     pub mode: ScriptMode,
     pub generation_id: Option<String>,
     pub version: u64,
+    /// `canary` の比率（1〜9999、S5-3）。`canary` 以外は `None`。
+    pub canary_bps: Option<u32>,
     pub updated_at: String,
     pub updated_by: String,
 }
@@ -453,6 +520,20 @@ impl ScriptGeneration {
             .and_then(|d| d.as_array().cloned())
             .is_some_and(|ds| ds.iter().any(|d| d.as_str() == Some(domain.as_str())))
     }
+
+    /// manifest の `checkpoint_versions`（無い・読めない要素は無視する。形の検証は登録の時に registry が行う）。
+    pub fn checkpoint_versions(&self) -> Vec<u32> {
+        serde_json::from_str::<serde_json::Value>(&self.manifest_json)
+            .ok()
+            .and_then(|v| v.get("checkpoint_versions").cloned())
+            .and_then(|v| v.as_array().cloned())
+            .map(|vs| {
+                vs.iter()
+                    .filter_map(|v| v.as_u64().and_then(|n| u32::try_from(n).ok()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// 新しい generation の行（daemon が bundle を load して検証した結果）。
@@ -462,24 +543,53 @@ pub struct NewScriptGeneration {
     pub host_api: String,
     pub schema_sha256: String,
     pub manifest_json: String,
+    /// `loaded` だけを受ける（`invalid` は理由の要る `script_generation_record_invalid` で書く）。
     pub state: ScriptGenerationState,
 }
 
-/// mode の変更・読み出しの失敗。API は `UnknownDomain` を 404、`ModeNotEnabled` を 422
-/// （`script_mode_not_enabled`）、`VersionConflict` を 409、generation の不備を 422 に写す。
+/// mode の変更・読み出しの失敗。API は `UnknownDomain` を 404、`VersionConflict` を 409、
+/// generation の不備を 422 に写す。
 #[derive(Debug, thiserror::Error)]
 pub enum ScriptDomainError {
     #[error("unknown script domain `{0}`")]
     UnknownDomain(String),
-    #[error("script mode `{}` is not enabled for domain `{}` (rust and compare everywhere, ts only for cos_digest)", .mode.as_str(), .domain.as_str())]
-    ModeNotEnabled {
-        domain: ScriptDomain,
-        mode: ScriptMode,
-    },
     #[error("switching to mode `ts` needs a human actor (got `{0}`)")]
     TsRequiresHuman(String),
-    #[error("mode `ts` can only be entered from `compare` with the same generation (current mode `{}`)", .current.as_str())]
-    TsRequiresCompare { current: ScriptMode },
+    #[error("switching to mode `canary` needs a human actor (got `{0}`)")]
+    CanaryRequiresHuman(String),
+    #[error("mode `{}` can only be entered from the previous stage with the same generation (current mode `{}`)", .to.as_str(), .current.as_str())]
+    RequiresPreviousStage { to: ScriptMode, current: ScriptMode },
+    #[error("mode `canary` needs canary_bps in 1..=9999 (got {0:?})")]
+    CanaryBpsInvalid(Option<u32>),
+    #[error("script domain `{domain}` is not ready for mode `{}`: {detail}", .to.as_str())]
+    CanaryNotReady {
+        domain: String,
+        to: ScriptMode,
+        detail: crate::script_guard::ScriptGuardReadiness,
+    },
+    #[error("script guard is halted: {0}")]
+    GuardHalted(String),
+    #[error("clearing the script guard needs a human actor (got `{0}`)")]
+    GuardClearRequiresHuman(String),
+    #[error(
+        "script generation `{generation}` does not cover the stored checkpoint versions {stored:?}"
+    )]
+    CheckpointIncompatible {
+        generation: String,
+        stored: Vec<u32>,
+    },
+    #[error("too many live script generations: {live} of {max}")]
+    GenerationLimit { live: usize, max: usize },
+    #[error("script generation `{0}` was invalidated; a fixed bundle has another hash")]
+    GenerationInvalidated(String),
+    #[error("script generation `{0}` is active; move its domains away first")]
+    GenerationActive(String),
+    #[error("script generation `{id}` cannot go from `{}` to `{}`", .from.as_str(), .to.as_str())]
+    IllegalTransition {
+        id: String,
+        from: ScriptGenerationState,
+        to: ScriptGenerationState,
+    },
     #[error("script domain `{domain}` version conflict: expected {expected}, found {found}")]
     VersionConflict {
         domain: String,
@@ -492,7 +602,7 @@ pub enum ScriptDomainError {
     GenerationNotAllowed,
     #[error("script generation `{0}` not found")]
     GenerationNotFound(String),
-    #[error("script generation `{0}` is not loaded")]
+    #[error("script generation `{0}` is not loaded or active")]
     GenerationNotLoaded(String),
     #[error("script generation `{generation}` does not declare domain `{domain}`")]
     DomainNotDeclared { domain: String, generation: String },
@@ -510,6 +620,59 @@ impl From<serde_json::Error> for ScriptDomainError {
     fn from(e: serde_json::Error) -> Self {
         Self::Store(StoreError::from(e))
     }
+}
+
+/// generation の状態遷移の記録の種類（S5-1）。`script_guard_*` は全体の停止とその解除（`generation_id` は `*`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptGenerationEventKind {
+    ScriptGenerationLoaded,
+    ScriptGenerationActivated,
+    ScriptGenerationDraining,
+    ScriptGenerationRetired,
+    ScriptGenerationInvalidated,
+    ScriptGuardHalted,
+    ScriptGuardCleared,
+}
+
+impl ScriptGenerationEventKind {
+    /// その状態へ入るときの記録の種類。
+    pub fn entering(state: ScriptGenerationState) -> Self {
+        match state {
+            ScriptGenerationState::Loaded => Self::ScriptGenerationLoaded,
+            ScriptGenerationState::Active => Self::ScriptGenerationActivated,
+            ScriptGenerationState::Draining => Self::ScriptGenerationDraining,
+            ScriptGenerationState::Retired => Self::ScriptGenerationRetired,
+            ScriptGenerationState::Invalid => Self::ScriptGenerationInvalidated,
+        }
+    }
+}
+
+/// 表 `script_generation_events` の `json`（S5-1）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ScriptGenerationEvent {
+    #[serde(rename = "type")]
+    pub kind: ScriptGenerationEventKind,
+    pub generation_id: String,
+    pub bundle_sha256: Option<String>,
+    /// 行が新しく入ったときと、migration 0105 が旧 `rejected` から移したときは `None`。
+    pub from_state: Option<ScriptGenerationState>,
+    pub to_state: Option<ScriptGenerationState>,
+    pub actor: String,
+    pub reason: String,
+    /// `script_generation_retired` で drain の期限に打ち切った要求の数（S5-2）。
+    pub cancelled_in_flight: Option<u64>,
+}
+
+/// `script_generation_transition` の要求（S5-1）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptGenerationTransition {
+    pub id: String,
+    /// `retired`・`invalid` だけを受ける。`loaded` は登録、`active`・`draining` は mode の CAS が書く。
+    pub to: ScriptGenerationState,
+    pub actor: String,
+    pub reason: String,
+    pub cancelled_in_flight: Option<u64>,
 }
 
 #[cfg(test)]

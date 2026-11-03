@@ -255,21 +255,21 @@ fn set_mode_ts(f: &Fixture) {
             now,
         )
         .expect("generation");
-    for to in [ScriptMode::Compare, ScriptMode::Ts] {
-        f.store
-            .script_domain_set_mode(
-                &ScriptModeChange {
-                    domain: "cos_digest".into(),
-                    to_mode: to,
-                    to_generation: Some(generation.id.clone()),
-                    expected_version: cos_digest_version(f),
-                    actor: "human:test".into(),
-                    reason: "cos_digest pass trace".into(),
-                },
-                now,
-            )
-            .expect("mode");
-    }
+    f.store
+        .script_domain_set_mode(
+            &ScriptModeChange {
+                domain: "cos_digest".into(),
+                to_mode: ScriptMode::Compare,
+                to_generation: Some(generation.id.clone()),
+                expected_version: cos_digest_version(f),
+                actor: "human:test".into(),
+                reason: "cos_digest pass trace".into(),
+            },
+            now,
+        )
+        .expect("mode compare");
+    // 付記 S5-4: ts は canary を経る。
+    super::promote_cos_digest_to_ts(&f.store, &generation.id, "cos_digest pass trace", now);
 }
 
 // ---------------------------------------------------------------- 書き込みと照合
@@ -610,6 +610,17 @@ impl Recorder {
     /// 場面を終える: run を待ち、digest が空になるまで pass を回して pass ごとに記録・照合する。
     /// 起動は止めておく（requeue した item をすぐ取り直さない）。
     async fn record(&mut self, s: &mut Scene, name: &str) {
+        self.record_with(s, name, |_, _| {}).await;
+    }
+
+    /// [`Self::record`] と同じ。各 pass の前に `before_pass(fixture, pass の番号（0 始まり）)` を呼ぶ
+    /// （pass の間に DB を壊す・戻す場面）。
+    async fn record_with(
+        &mut self,
+        s: &mut Scene,
+        name: &str,
+        mut before_pass: impl FnMut(&Fixture, usize),
+    ) {
         trace_finish_runs(&mut s.f).await;
         self.scenarios += 1;
         let scenario = self.scenarios;
@@ -622,6 +633,7 @@ impl Recorder {
             if let Some(script) = &s.script {
                 script.take();
             }
+            before_pass(&s.f, captures.len());
             let pending =
                 !s.f.store
                     .cos_triage_runs_without_digest(1)
@@ -1095,6 +1107,29 @@ async fn trace_scenarios(mode: Mode) -> Vec<(String, Vec<PassCapture>)> {
     }
     out.record(&mut s, "drain/23-runs").await;
 
+    // `read_run` fails for one run of the pass (an item's summary is a blob, so its report cannot be
+    // read: op error `exception`). The pass digests the other run and skips that one; it is
+    // digested in the next pass after the summary is repaired.
+    let mut s = scene(mode, false, "true");
+    trace_direct_run(&s.f, "read-ok", ChatRunState::Completed);
+    trace_direct_run(&s.f, "read-fail", ChatRunState::Stopped);
+    out.record_with(
+        &mut s,
+        "read-failure/skip-then-digest",
+        |f, pass| match pass {
+            0 => sql(
+                f,
+                "UPDATE cos_inbox_items SET summary=X'FF' WHERE run_id='read-fail';",
+            ),
+            1 => sql(
+                f,
+                "UPDATE cos_inbox_items SET summary='知らせ read-fail' WHERE run_id='read-fail';",
+            ),
+            _ => {}
+        },
+    )
+    .await;
+
     out.passes
 }
 
@@ -1161,7 +1196,7 @@ async fn cos_digest_pass_trace_fixture_is_current() {
     let reads: Vec<&serde_json::Value> = values
         .iter()
         .flat_map(|v| v["ops"].as_array().expect("ops"))
-        .filter(|o| o["op"] == "cos_digest:read_run")
+        .filter(|o| o["op"] == "cos_digest:read_run" && o["reply"]["kind"] == "ok")
         .map(|o| &o["reply"]["value"])
         .collect();
     let run_states: BTreeSet<&str> = reads
@@ -1214,6 +1249,31 @@ async fn cos_digest_pass_trace_fixture_is_current() {
         reads
             .iter()
             .any(|i| i["run_state"] == "stopped" && i["reason"].is_null())
+    );
+    // A pass where `read_run` failed (`exception`) and the run was skipped, while another run of
+    // the same pass was digested.
+    assert!(
+        values.iter().any(|v| {
+            let ops = v["ops"].as_array().expect("ops");
+            let failed: Vec<&str> = ops
+                .iter()
+                .filter(|o| o["op"] == "cos_digest:read_run" && o["reply"]["kind"] == "error")
+                .map(|o| {
+                    assert_eq!(o["reply"]["error"]["code"], "exception", "{o}");
+                    o["request"]["run_id"].as_str().expect("run id")
+                })
+                .collect();
+            let digested: Vec<&str> = v["output"]["runs"]
+                .as_array()
+                .expect("runs")
+                .iter()
+                .map(|r| r["run_id"].as_str().expect("run id"))
+                .collect();
+            !failed.is_empty()
+                && !digested.is_empty()
+                && failed.iter().all(|id| !digested.contains(id))
+        }),
+        "no pass skips a run whose read_run failed"
     );
 
     let generated = lines.join("\n") + "\n";

@@ -7216,6 +7216,32 @@
       ],
       "type": "object"
     },
+    "CosDigestAppliedBy": {
+      "description": "その run に apply した command を出した側（付記 S4-15）。",
+      "enum": [
+        "rust",
+        "ts"
+      ],
+      "type": "string"
+    },
+    "CosDigestFallback": {
+      "additionalProperties": false,
+      "description": "mode `ts` で Rust の command を apply した理由（付記 S4-15）。`message` は 512 byte で切る。",
+      "properties": {
+        "code": {
+          "description": "`ts_error`・`invalid_output`・`run_outside_list`・`run_missing`・`run_unreadable`・`run_order`・\n`mode_changed`・`unavailable`。",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
     "CosInboxItem": {
       "description": "One `cos_inbox_items` row.",
       "properties": {
@@ -14272,12 +14298,36 @@
         {
           "description": "ADR 2026-11-02-ts-control-layer-boundary 付記 S2-4: `compare` mode の領域で、Rust の参照実装と TS の\n出力を比べた結果 1 件。追記先は判定した task。状態は変えない（`replay` は無視する）。Rust の結果は\nこれで変わらない。入力は機密を除いた DTO（`script_compare::recorded_input`）。",
           "properties": {
+            "applied_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CosDigestAppliedBy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "付記 S5-3・S5-6: 判定に使った側。`canary` の TS 側・`ts` で TS の結果を検証して使えば `ts`、\n使わなければ `rust`。mode `compare` は `None`（挙動は常に Rust）。"
+            },
             "bundle_sha256": {
               "type": "string"
             },
             "call_site": {
               "description": "`dispatch_run.decide_lane`・`route_select.route_select_one`。",
               "type": "string"
+            },
+            "canary_bps": {
+              "description": "付記 S5-3: mode `canary` の比率（それ以外は `None`）。",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "canary_selected": {
+              "description": "付記 S5-3: mode `canary`・`ts` で、この単位が TS の側に選ばれたか。",
+              "type": "boolean"
             },
             "domain": {
               "$ref": "#/$defs/ScriptDomain"
@@ -14296,6 +14346,17 @@
                   "type": "null"
                 }
               ]
+            },
+            "fallback": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CosDigestFallback"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "付記 S5-6: TS の側に選ばれたのに Rust の結果を使った理由（`ts_error`・`invalid_output`・`safety_violation`・\n`unavailable`・`tick_budget` 等）。"
             },
             "generation": {
               "description": "使った `script_generations.id`（ULID）。",
@@ -16829,7 +16890,8 @@
         "human_wait_aging",
         "release_unpromoted",
         "task_unscheduled",
-        "review_resync_halted"
+        "review_resync_halted",
+        "script_control"
       ],
       "type": "string"
     },
@@ -28336,6 +28398,13 @@
             "$ref": "#/$defs/ScriptDomainView"
           },
           "type": "array"
+        },
+        "guard_halted": {
+          "description": "script-guard の全体の停止の理由（S5-7）。止まっていなければ `null`。止まっている間は `rust` 以外へ切り替えられない。",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -28347,6 +28416,16 @@
       "additionalProperties": false,
       "description": "`PUT /script/domains/{domain}/mode` の本文。",
       "properties": {
+        "canary_bps": {
+          "default": null,
+          "description": "`canary` の比率（1〜9999 の万分率。`canary` では必須、他の mode では書かない。S5-3）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "expected_version": {
           "description": "読んだ時点の `version`。表の値と違えば 409。",
           "format": "uint64",
@@ -28355,7 +28434,7 @@
         },
         "generation": {
           "default": null,
-          "description": "`compare`・`ts` で使う generation の `bundle_sha256`（必須。`ts` では今の `compare` と同じ値）。\n`rust` では書かない。",
+          "description": "`compare`・`canary`・`ts` で使う generation の `bundle_sha256`（必須。`canary` では今の `compare`、`ts` では今の\n`canary` と同じ値）。`rust` では書かない。",
           "type": [
             "string",
             "null"
@@ -28363,7 +28442,7 @@
         },
         "mode": {
           "$ref": "#/$defs/ScriptMode",
-          "description": "`rust` | `compare` | `ts`（`ts` は `cos_digest` だけ・人の主体だけ。`canary` は 422）。"
+          "description": "`rust` | `compare` | `canary` | `ts`（`canary`・`ts` は人の主体だけ）。"
         },
         "reason": {
           "default": null,
@@ -28416,6 +28495,15 @@
             "null"
           ]
         },
+        "canary_bps": {
+          "description": "`canary` の比率（1〜9999 の万分率、S5-3）。`canary` 以外では `null`。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "domain": {
           "$ref": "#/$defs/ScriptDomain"
         },
@@ -28425,6 +28513,17 @@
             "string",
             "null"
           ]
+        },
+        "generation_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScriptGenerationState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "active generation の状態（S5-1。ふつうは `active`）。`rust` では `null`。"
         },
         "mode": {
           "$ref": "#/$defs/ScriptMode"
@@ -28451,8 +28550,163 @@
       ],
       "type": "object"
     },
+    "ScriptGenerationList": {
+      "description": "`GET /script/generations` の応答（古い順）。",
+      "properties": {
+        "generations": {
+          "items": {
+            "$ref": "#/$defs/ScriptGenerationView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "generations"
+      ],
+      "type": "object"
+    },
+    "ScriptGenerationRegisterBody": {
+      "additionalProperties": false,
+      "description": "`POST /script/generations` の本文。",
+      "properties": {
+        "bundle_sha256": {
+          "description": "`script-deploy` が置いた bundle の sha256（64 桁の小文字 hex）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle_sha256"
+      ],
+      "type": "object"
+    },
+    "ScriptGenerationRetireBody": {
+      "additionalProperties": false,
+      "description": "`POST /script/generations/{id}/retire` の本文。",
+      "properties": {
+        "reason": {
+          "default": null,
+          "description": "退役の理由（`script_generation_retired` の `reason`）。CoS の操作では省略すると操作の理由を使う。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ScriptGenerationState": {
+      "description": "表 `script_generations.state`（S5-1）。",
+      "oneOf": [
+        {
+          "const": "loaded",
+          "description": "検証に通り、どの領域の mode の行からも指されていない。",
+          "type": "string"
+        },
+        {
+          "const": "active",
+          "description": "1 つ以上の領域の `generation_id` がこれを指す。",
+          "type": "string"
+        },
+        {
+          "const": "draining",
+          "description": "どの領域からも指されなくなったが in-flight が残る。",
+          "type": "string"
+        },
+        {
+          "const": "retired",
+          "description": "isolate を捨てた。行と bundle の file は残す。",
+          "type": "string"
+        },
+        {
+          "const": "invalid",
+          "description": "検証に落ちた、または安全違反で無効にした。",
+          "type": "string"
+        }
+      ]
+    },
+    "ScriptGenerationView": {
+      "description": "generation 1 つ（一覧・登録・退役の応答）。",
+      "properties": {
+        "bundle_sha256": {
+          "type": "string"
+        },
+        "checkpoint_versions": {
+          "description": "manifest の `checkpoint_versions`（S5-5）。",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "domains": {
+          "description": "manifest の `domains`。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "host_api": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "schema_sha256": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ScriptGenerationState"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "bundle_sha256",
+        "host_api",
+        "schema_sha256",
+        "state",
+        "domains",
+        "checkpoint_versions",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "ScriptGuardClearBody": {
+      "additionalProperties": false,
+      "description": "`POST /script/guard/clear` の本文。",
+      "properties": {
+        "reason": {
+          "description": "解除の理由（`script_guard_cleared` の `reason`）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ScriptGuardClearResult": {
+      "description": "`POST /script/guard/clear` の応答。",
+      "properties": {
+        "cleared": {
+          "description": "停止を解いたか（止まっていなければ `false` で、表も記録も変えない）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cleared"
+      ],
+      "type": "object"
+    },
     "ScriptMode": {
-      "description": "領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。S2 で受け付けるのは `rust` と `compare` だけ（S2-5）。",
+      "description": "領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。全領域で全 mode を受ける（付記 S5-4）。",
       "enum": [
         "rust",
         "compare",
@@ -34445,6 +34699,25 @@
       "$ref": "#/$defs/ScriptDomainList",
       "description": "ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: `GET /script/domains` と `PUT /script/domains/{domain}/mode`。"
     },
+    "script_generation": {
+      "$ref": "#/$defs/ScriptGenerationView"
+    },
+    "script_generation_register_body": {
+      "$ref": "#/$defs/ScriptGenerationRegisterBody"
+    },
+    "script_generation_retire_body": {
+      "$ref": "#/$defs/ScriptGenerationRetireBody"
+    },
+    "script_generations": {
+      "$ref": "#/$defs/ScriptGenerationList",
+      "description": "付記 S5-1・S5-4: generation の一覧・登録・退役と、script-guard の停止の解除。"
+    },
+    "script_guard_clear_body": {
+      "$ref": "#/$defs/ScriptGuardClearBody"
+    },
+    "script_guard_clear_result": {
+      "$ref": "#/$defs/ScriptGuardClearResult"
+    },
     "secret_put": {
       "$ref": "#/$defs/SecretPutResult"
     },
@@ -34728,6 +35001,12 @@
     "script_domains",
     "script_domain_mode_body",
     "script_domain_mode_result",
+    "script_generations",
+    "script_generation",
+    "script_generation_register_body",
+    "script_generation_retire_body",
+    "script_guard_clear_body",
+    "script_guard_clear_result",
     "mcp_clients",
     "mcp_calls",
     "skill_list",

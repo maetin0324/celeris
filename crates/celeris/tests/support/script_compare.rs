@@ -18,7 +18,7 @@ use celeris_script::manifest::{VerifiedBundle, load_bundle_dir, sha256_hex};
 use celeris_script::{ScriptRuntimeHandle, ScriptSource};
 use task_core::script_compare::{
     CompareOutcome, NewScriptGeneration, ScriptCompareRecord, ScriptGeneration,
-    ScriptGenerationState, ScriptMode, ScriptModeChange,
+    ScriptGenerationState, ScriptGenerationTransition, ScriptMode, ScriptModeChange,
 };
 use task_core::{
     Budget, Check, Criterion, Event, RoutingRecord, SqliteStore, Status, Task, TaskId, TaskKind,
@@ -36,61 +36,278 @@ pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// `control-ts/`（bundle の source の置き場）。`CELERIS_SCRIPT_CONTROL_TS_DIR` が在ればその dir
+/// （`scripts/dev/tests/script-bundle-fresh.sh` が source の写しと偽の dist を置き、作業ツリーに触れずに試す）。
+pub fn control_ts_dir() -> PathBuf {
+    std::env::var_os(CONTROL_TS_DIR_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_root().join("control-ts"))
+}
+
+/// [`control_ts_dir`] を差し替える変数（試験の台本だけが使う）。
+pub const CONTROL_TS_DIR_ENV: &str = "CELERIS_SCRIPT_CONTROL_TS_DIR";
+
+/// bundle を読む試験が使う dir。`CELERIS_SCRIPT_BUNDLE_DIR` が在ればそこ、無ければ source から作った bundle の dir
+/// （[`fresh_bundle_dir`]）。[`dist_bundle`] で使えると判定した dir と、配備（`deploy_bundle`）に渡す dir を揃える。
+/// [`dist_bundle`] が `Some` を返した後に呼ぶ。
 pub fn dist_dir() -> PathBuf {
-    repo_root().join("control-ts/dist")
+    match bundle_dir_override() {
+        Some(dir) => dir,
+        None => fresh_bundle_dir()
+            .unwrap_or_else(|why| panic!("no bundle (call dist_bundle first): {why}")),
+    }
+}
+
+fn bundle_dir_override() -> Option<PathBuf> {
+    std::env::var_os(BUNDLE_DIR_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
 }
 
 /// bundle を作る設定（`domains` の key が bundle の manifest の `domains` になる）。
 pub fn bundle_config_path() -> PathBuf {
-    repo_root().join("control-ts/bundle.config.json")
+    control_ts_dir().join("bundle.config.json")
 }
+
+/// 試験に使う bundle の dir を外から渡す変数（付記 S5-9 (1)）。在れば source から作らず、使えないなら失敗にする。
+pub const BUNDLE_DIR_ENV: &str = "CELERIS_SCRIPT_BUNDLE_DIR";
+/// SKIP を 1 行ずつ足す file（付記 S5-9 (5)）。`scripts/dev/test-affected.sh` が数える。
+pub const SKIP_LOG_ENV: &str = "CELERIS_SCRIPT_SKIP_LOG";
+/// 内容 hash に入れる `control-ts/` の file（`src/` の下の全 file に加える）。`build-bundle.mjs` 自身も入れる。
+const INPUT_FILES: [&str; 4] = [
+    "bundle.config.json",
+    "package.json",
+    "pnpm-lock.yaml",
+    "scripts/build-bundle.mjs",
+];
+/// 内容 hash に入れる host の schema（`control-ts/` の親からの相対 path。build-bundle が manifest に hash を書く）。
+const SCHEMA_FILE: &str = "docs/api/script-host/host-v1.schema.json";
 
 /// `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら、使えない bundle を SKIP でなく失敗にする。
 pub fn require_bundle() -> bool {
     std::env::var("CELERIS_SCRIPT_REQUIRE_BUNDLE").as_deref() == Ok("1")
 }
 
-/// `control-ts/dist` の bundle のうち、`domain` を含み、いまの `bundle.config.json` と同じ領域の集合を持つもの。
-/// 無い・読めない・古いなら SKIP（`None`）。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら失敗にする。
+/// 試験に使う bundle のうち、`domain` を含み、いまの `bundle.config.json` と同じ領域の集合を持つもの。
+///
+/// `CELERIS_SCRIPT_BUNDLE_DIR` が在ればその dir を読み、使えないなら失敗にする。無ければ control-ts の source から
+/// `$TMPDIR` に bundle を作って読む（[`fresh_bundle_dir`]）。`control-ts/dist` は読まない（task の根に古い物が残り、
+/// 古い本文で試験が誤って落ちる。付記 S5-9）。作れない（node・node_modules が無い等）なら SKIP（`None`）。
+/// `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら SKIP せず失敗にする。
 pub fn dist_bundle(test: &str, domain: &str) -> Option<VerifiedBundle> {
-    usable_bundle(
-        &dist_dir(),
-        &bundle_config_path(),
-        test,
-        domain,
-        require_bundle(),
-    )
+    match bundle_dir_override() {
+        Some(dir) => {
+            let checked = check_bundle(&dir, &bundle_config_path(), domain);
+            take_bundle(checked, &dir, test, true)
+        }
+        None => {
+            let (checked, dir) = match fresh_bundle_dir() {
+                Ok(dir) => (check_bundle(&dir, &bundle_config_path(), domain), dir),
+                Err(why) => (Err(why), control_ts_dir()),
+            };
+            take_bundle(checked, &dir, test, require_bundle())
+        }
+    }
+}
+
+/// [`check_bundle`] の結果を試験に渡す。使えなければ、`require` なら panic し、そうでなければ SKIP を stderr と
+/// `CELERIS_SCRIPT_SKIP_LOG` の file（在れば。1 行 = 試験名・tab・理由）に残して `None` を返す。
+pub fn take_bundle(
+    checked: Result<VerifiedBundle, String>,
+    dir: &Path,
+    test: &str,
+    require: bool,
+) -> Option<VerifiedBundle> {
+    let log = std::env::var_os(SKIP_LOG_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    take_bundle_logged(checked, dir, test, require, log.as_deref())
+}
+
+/// [`take_bundle`] の本体。`log` は SKIP の行を足す file。
+pub fn take_bundle_logged(
+    checked: Result<VerifiedBundle, String>,
+    dir: &Path,
+    test: &str,
+    require: bool,
+    log: Option<&Path>,
+) -> Option<VerifiedBundle> {
+    let why = match checked {
+        Ok(bundle) => return Some(bundle),
+        Err(why) => why,
+    };
+    assert!(
+        !require,
+        "CELERIS_SCRIPT_REQUIRE_BUNDLE=1 or {BUNDLE_DIR_ENV} is set but {} is not usable: {why}",
+        dir.display()
+    );
+    eprintln!("SKIP {test}: {} is not usable: {why}", dir.display());
+    if let Some(log) = log {
+        use std::io::Write as _;
+        let line = format!("{test}\t{}: {}\n", dir.display(), why.replace('\n', " "));
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .and_then(|mut f| f.write_all(line.as_bytes()))
+            .unwrap_or_else(|e| panic!("append {}: {e}", log.display()));
+    }
+    None
+}
+
+/// control-ts の source から作った bundle の dir（`$TMPDIR/celeris-script-bundle/<内容 hash>`）。
+/// 同じ process の中では 1 回だけ判定する。別の process（nextest は試験ごとに process を分ける）とは、同じ内容 hash の
+/// dir を使い回す。
+pub fn fresh_bundle_dir() -> Result<PathBuf, String> {
+    static DIR: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        build_bundle_cached(
+            &control_ts_dir(),
+            &std::env::temp_dir().join("celeris-script-bundle"),
+        )
+    })
+    .clone()
+}
+
+/// `control_ts` の source から `cache/<内容 hash>` に bundle を作る（在れば作らない）。
+///
+/// 内容 hash（[`control_ts_inputs_sha256`]）が同じ dir は同じ source から作った物なので、古い bundle を読むことはない。
+/// 並んで走る process が同時に作らないよう `<hash>.lock` を `create_new` で取り、取れない process は出来上がるのを待つ。
+/// 作るのは `control_ts/scripts/build-bundle.mjs` の `buildBundle`（`ts-verify.sh`・`test-affected.sh` と同じ）。
+pub fn build_bundle_cached(control_ts: &Path, cache: &Path) -> Result<PathBuf, String> {
+    let hash = control_ts_inputs_sha256(control_ts)?;
+    let dir = cache.join(&hash);
+    let ready = |d: &Path| d.join("manifest.json").is_file();
+    if ready(&dir) {
+        return Ok(dir);
+    }
+    std::fs::create_dir_all(cache).map_err(|e| format!("mkdir {}: {e}", cache.display()))?;
+    let lock = cache.join(format!("{hash}.lock"));
+    // 待つ上限。持ち主が殺されて lock が残っても、上限の後は自分で作る。
+    let deadline = std::time::Instant::now() + Duration::from_secs(300);
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+        {
+            Ok(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if ready(&dir) {
+                    return Ok(dir);
+                }
+                if std::time::Instant::now() > deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("create {}: {e}", lock.display())),
+        }
+    }
+    let result = (|| {
+        if ready(&dir) {
+            return Ok(dir.clone());
+        }
+        let tmp = cache.join(format!("{hash}.tmp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        run_build_bundle(control_ts, &tmp)?;
+        std::fs::rename(&tmp, &dir).map_err(|e| format!("rename {}: {e}", tmp.display()))?;
+        Ok(dir.clone())
+    })();
+    let _ = std::fs::remove_file(&lock);
+    result
+}
+
+/// `node` で `control_ts/scripts/build-bundle.mjs` の `buildBundle({ outDir: out })` を呼ぶ。
+fn run_build_bundle(control_ts: &Path, out: &Path) -> Result<(), String> {
+    let script = control_ts.join("scripts/build-bundle.mjs");
+    let output = std::process::Command::new("node")
+        .args([
+            "--input-type=module",
+            "-e",
+            "const { buildBundle } = await import(process.env.CELERIS_BUILD_BUNDLE);\n\
+             await buildBundle({ outDir: process.env.CELERIS_BUILD_BUNDLE_OUT });",
+        ])
+        .env(
+            "CELERIS_BUILD_BUNDLE",
+            url_of(&script).ok_or_else(|| format!("{} is not absolute", script.display()))?,
+        )
+        .env("CELERIS_BUILD_BUNDLE_OUT", out)
+        .current_dir(control_ts)
+        .output()
+        .map_err(|e| format!("cannot run node to build the bundle: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail: Vec<&str> = stderr.lines().rev().take(3).collect();
+        return Err(format!(
+            "build-bundle.mjs failed ({}): {}",
+            output.status,
+            tail.into_iter().rev().collect::<Vec<_>>().join(" | ")
+        ));
+    }
+    if !out.join("manifest.json").is_file() {
+        return Err(format!(
+            "build-bundle.mjs wrote no {}/manifest.json",
+            out.display()
+        ));
+    }
+    Ok(())
+}
+
+/// `import()` に渡す file URL（絶対 path のときだけ）。
+fn url_of(path: &Path) -> Option<String> {
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    Some(format!("file://{}", abs.display()))
+}
+
+/// bundle の source の内容 hash: `src/` の下の全 file と `bundle.config.json`・`package.json`・`pnpm-lock.yaml`・
+/// `scripts/build-bundle.mjs` を、1 行 = `<file の sha256>  <control_ts からの相対 path>\n` で path の昇順に並べ、
+/// 最後に host の schema（`control_ts` の親の `docs/api/script-host/`）の行を足した本文の sha256。[`build_bundle_cached`] の dir の名前に使う。
+pub fn control_ts_inputs_sha256(control_ts: &Path) -> Result<String, String> {
+    fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) -> Result<(), String> {
+        let entries = std::fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("read {}: {e}", dir.display()))?;
+            let kind = entry
+                .file_type()
+                .map_err(|e| format!("stat {}: {e}", entry.path().display()))?;
+            let child = format!("{rel}/{}", entry.file_name().to_string_lossy());
+            if kind.is_dir() {
+                walk(&entry.path(), &child, out)?;
+            } else if kind.is_file() {
+                out.push(child);
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    walk(&control_ts.join("src"), "src", &mut files)?;
+    files.extend(INPUT_FILES.iter().map(|f| (*f).to_owned()));
+    files.sort();
+    let mut text = String::new();
+    let mut add = |path: PathBuf, rel: &str| -> Result<(), String> {
+        let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        text.push_str(&format!("{}  {rel}\n", sha256_hex(&bytes)));
+        Ok(())
+    };
+    for rel in &files {
+        add(control_ts.join(rel), rel)?;
+    }
+    add(control_ts.join("..").join(SCHEMA_FILE), SCHEMA_FILE)?;
+    Ok(sha256_hex(text.as_bytes()))
 }
 
 /// `dir` の bundle を使えるか判定する。`config` は `bundle.config.json` の path。
 ///
-/// `control-ts/dist` は git 管理外なので、領域を足す前の source で作った古い bundle が作業ツリーに残りうる。
 /// 古い bundle（manifest の `domains` が config の `domains` の key 集合と違う、`domain` を含まない、または
-/// manifest の `capabilities` が config の各領域の capability の和集合と違う）を
-/// 正として比べると、TS の実装でなく bundle の古さで落ちる。だから使えない bundle と同じく SKIP にする。
-/// `require` が真なら SKIP せず panic する。
-pub fn usable_bundle(
-    dir: &Path,
-    config: &Path,
-    test: &str,
-    domain: &str,
-    require: bool,
-) -> Option<VerifiedBundle> {
-    let skip = |why: String| {
-        assert!(
-            !require,
-            "CELERIS_SCRIPT_REQUIRE_BUNDLE=1 but {} is not usable: {why}",
-            dir.display()
-        );
-        eprintln!("SKIP {test}: {} is not usable: {why}", dir.display());
-    };
-    let bundle = match load_bundle_dir(dir) {
-        Ok(bundle) => bundle,
-        Err(e) => {
-            skip(e.to_string());
-            return None;
-        }
-    };
+/// manifest の `capabilities` が config の各領域の capability の和集合と違う）と、読めない bundle は `Err`（理由）。
+pub fn check_bundle(dir: &Path, config: &Path, domain: &str) -> Result<VerifiedBundle, String> {
+    let bundle = load_bundle_dir(dir).map_err(|e| e.to_string())?;
     let text = std::fs::read_to_string(config)
         .unwrap_or_else(|e| panic!("read {}: {e}", config.display()));
     let value: serde_json::Value =
@@ -103,13 +320,12 @@ pub fn usable_bundle(
         .collect();
     let actual: BTreeSet<String> = bundle.manifest.domains.iter().cloned().collect();
     if !actual.contains(domain) || actual != expected {
-        skip(format!(
+        return Err(format!(
             "stale bundle: manifest domains {actual:?} (source_commit {}) do not match \
-             {} domains {expected:?} or lack {domain:?}; rebuild control-ts/dist",
+             {} domains {expected:?} or lack {domain:?}",
             bundle.manifest.source_commit,
             config.display()
         ));
-        return None;
     }
     // 付記 S4-13: capability を足した config の前に作った bundle も古い（op が `denied` になる）。
     let expected_caps: BTreeSet<String> = value["domains"]
@@ -127,15 +343,14 @@ pub fn usable_bundle(
         .map(|c| c.as_str().to_owned())
         .collect();
     if actual_caps != expected_caps {
-        skip(format!(
+        return Err(format!(
             "stale bundle: manifest capabilities {actual_caps:?} (source_commit {}) do not match \
-             {} capabilities {expected_caps:?}; rebuild control-ts/dist",
+             {} capabilities {expected_caps:?}",
             bundle.manifest.source_commit,
             config.display()
         ));
-        return None;
     }
-    Some(bundle)
+    Ok(bundle)
 }
 
 /// 同じ host（deno_core の actor）で bundle を起こし、判定の口にする。
@@ -251,7 +466,100 @@ impl Env {
             .expect("generation")
     }
 
+    /// 配備した bundle の generation を、登録（付記 S5-1）と同じ形で `loaded` に記録する。daemon は mode の行が指せば
+    /// 起動時にこの bundle を新しい isolate で load する。
+    pub fn deployed_generation(&self, bundle: &VerifiedBundle) -> ScriptGeneration {
+        self.store
+            .script_generation_record(
+                &NewScriptGeneration {
+                    bundle_sha256: bundle.manifest.bundle_sha256.clone(),
+                    host_api: celeris_script::dto::HOST_API_VERSION.to_owned(),
+                    schema_sha256: bundle.manifest.schema_sha256.clone(),
+                    manifest_json: serde_json::to_string(&bundle.manifest).expect("manifest"),
+                    state: ScriptGenerationState::Loaded,
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .expect("generation")
+    }
+
+    /// mode の行から外れて `draining` になった generation を、付記 S5-1・S5-3 の known-good の戻り道
+    /// （`retired` にしてから同じ hash を登録し直して `loaded` に戻す）で再び指せるようにする。
+    /// `draining` の generation へ直接戻すことは store が拒む（付記 S5-4）ので、その規則は弱めない。
+    /// 試験では daemon は止まっていて in-flight は 0 なので、drain の終わりとして `retired` にしてよい。
+    pub fn rearm_generation(&self, id: &str) -> ScriptGeneration {
+        let current = self
+            .store
+            .script_generation_get(id)
+            .expect("read")
+            .expect("generation");
+        // daemon の起動時の復元は、指されない `draining` を drain の終わりとして `retired` にする（付記 S5-2）。
+        // daemon を通らずに戻した行は `draining` のまま。
+        assert!(
+            matches!(
+                current.state,
+                ScriptGenerationState::Draining | ScriptGenerationState::Retired
+            ),
+            "rearm expects a generation left draining or retired by a rust restore, got {:?}",
+            current.state
+        );
+        if current.state == ScriptGenerationState::Draining {
+            self.store
+                .script_generation_transition(
+                    &ScriptGenerationTransition {
+                        id: id.to_owned(),
+                        to: ScriptGenerationState::Retired,
+                        actor: "human:test".into(),
+                        reason: "drained (daemon stopped)".into(),
+                        cancelled_in_flight: None,
+                    },
+                    OffsetDateTime::now_utc(),
+                )
+                .expect("retire");
+        }
+        let again = self
+            .store
+            .script_generation_record(
+                &NewScriptGeneration {
+                    bundle_sha256: current.bundle_sha256.clone(),
+                    host_api: current.host_api.clone(),
+                    schema_sha256: current.schema_sha256.clone(),
+                    manifest_json: current.manifest_json.clone(),
+                    state: ScriptGenerationState::Loaded,
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .expect("re-register");
+        assert_eq!(again.id, current.id, "re-registration keeps the row");
+        assert_eq!(again.state, ScriptGenerationState::Loaded);
+        again
+    }
+
+    /// mode を変える（人の actor で）。`ts` は付記 S5-4 のとおり同じ generation の `canary` を経る: `compare` からなら
+    /// 昇格の前提の計数を script-guard に積み、`canary`（5000 bps）にしてから `ts` にする。
     pub fn set_mode(&self, mode: ScriptMode, generation: Option<String>) {
+        let current = self.store.script_domain_mode(self.domain).expect("mode");
+        if mode == ScriptMode::Ts
+            && current.mode == ScriptMode::Compare
+            && let Some(id) = generation.as_deref()
+        {
+            self.observe_clean(id, false);
+            self.store
+                .script_domain_set_canary(
+                    &ScriptModeChange {
+                        domain: self.domain.into(),
+                        to_mode: ScriptMode::Canary,
+                        to_generation: generation.clone(),
+                        expected_version: current.version,
+                        actor: "human:test".into(),
+                        reason: "script_compare test".into(),
+                    },
+                    5000,
+                    OffsetDateTime::now_utc(),
+                )
+                .expect("set canary");
+            self.observe_clean(id, true);
+        }
         let version = self
             .store
             .script_domain_mode(self.domain)
@@ -270,6 +578,33 @@ impl Env {
                 OffsetDateTime::now_utc(),
             )
             .expect("set mode");
+    }
+
+    /// 昇格の前提（(f) の「進む条件」）の件数だけ、成功の呼び出しを数える。
+    fn observe_clean(&self, generation_id: &str, ts_side: bool) {
+        use task_core::script_guard::{
+            SCRIPT_GUARD_READY_COS, SCRIPT_GUARD_READY_PURE, ScriptGuardCall,
+            ScriptGuardObservation,
+        };
+        let domain = task_core::script_compare::ScriptDomain::parse(self.domain).expect("domain");
+        let required = match domain {
+            task_core::script_compare::ScriptDomain::CosDigest => SCRIPT_GUARD_READY_COS,
+            _ => SCRIPT_GUARD_READY_PURE,
+        };
+        for _ in 0..required {
+            self.store
+                .script_guard_observe(
+                    domain,
+                    generation_id,
+                    ScriptGuardObservation {
+                        call: ScriptGuardCall::Ok,
+                        safety_violation: false,
+                        ts_side,
+                    },
+                    OffsetDateTime::now_utc(),
+                )
+                .expect("observe");
+        }
     }
 
     pub fn mode(&self) -> ScriptMode {

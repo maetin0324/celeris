@@ -1519,6 +1519,13 @@ export type CooldownView = {
   "until": string;
 };
 
+export type CosDigestAppliedBy = "rust" | "ts";
+
+export type CosDigestFallback = {
+  "code": string;
+  "message": string;
+};
+
 export type CosInboxItem = {
   "created_at": string;
   "id": string;
@@ -2898,11 +2905,15 @@ export type Event = {
   "task_id": TaskId;
   "type": "stall_detected";
 } | {
+  "applied_by"?: CosDigestAppliedBy | null;
   "bundle_sha256": string;
   "call_site": string;
+  "canary_bps"?: number | null;
+  "canary_selected"?: boolean;
   "domain": ScriptDomain;
   "elapsed_us": number;
   "error"?: CompareError | null;
+  "fallback"?: CosDigestFallback | null;
   "generation": string;
   "host_api": string;
   "input"?: unknown;
@@ -3412,7 +3423,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled" | "review_resync_halted";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled" | "review_resync_halted" | "script_control";
 
 export type InboxLink = {
   "href": string;
@@ -5651,9 +5662,11 @@ export type ScriptDomain = "lane_rules" | "route_priority" | "cos_digest";
 
 export type ScriptDomainList = {
   "domains": Array<ScriptDomainView>;
+  "guard_halted"?: string | null;
 };
 
 export type ScriptDomainModeBody = {
+  "canary_bps"?: number | null;
   "expected_version": number;
   "generation"?: string | null;
   "mode": ScriptMode;
@@ -5668,12 +5681,48 @@ export type ScriptDomainModeResult = {
 
 export type ScriptDomainView = {
   "bundle_sha256"?: string | null;
+  "canary_bps"?: number | null;
   "domain": ScriptDomain;
   "generation_id"?: string | null;
+  "generation_state"?: ScriptGenerationState | null;
   "mode": ScriptMode;
   "updated_at": string;
   "updated_by": string;
   "version": number;
+};
+
+export type ScriptGenerationList = {
+  "generations": Array<ScriptGenerationView>;
+};
+
+export type ScriptGenerationRegisterBody = {
+  "bundle_sha256": string;
+};
+
+export type ScriptGenerationRetireBody = {
+  "reason"?: string | null;
+};
+
+export type ScriptGenerationState = "loaded" | "active" | "draining" | "retired" | "invalid";
+
+export type ScriptGenerationView = {
+  "bundle_sha256": string;
+  "checkpoint_versions": Array<number>;
+  "created_at": string;
+  "domains": Array<string>;
+  "host_api": string;
+  "id": string;
+  "schema_sha256": string;
+  "state": ScriptGenerationState;
+  "updated_at": string;
+};
+
+export type ScriptGuardClearBody = {
+  "reason": string;
+};
+
+export type ScriptGuardClearResult = {
+  "cleared": boolean;
 };
 
 export type ScriptMode = "rust" | "compare" | "canary" | "ts";

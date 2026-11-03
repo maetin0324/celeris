@@ -4,9 +4,10 @@
 //! rust に戻ることも確かめる（file の後半）。
 //! userns を使わない。外部ネットワークに出ない。LLM を呼ばない（triage run の結果は store に直接書く）。
 //!
-//! `control-ts/dist` の bundle を使う試験は、無い・古いなら SKIP を出して抜ける。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1`
-//! なら失敗にする。例外を投げる bundle・常に違う答えを返す bundle は、この file の中の本文を同じ host で評価する
-//! （dist が無くても走る）。
+//! bundle を使う試験は、control-ts の source から `$TMPDIR` に作った bundle を読む（`control-ts/dist` は読まない。付記 S5-9）。
+//! 作れない（node・node_modules が無い等）なら SKIP を出して抜ける。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら失敗にする。
+//! `CELERIS_SCRIPT_BUNDLE_DIR` が在ればその dir の bundle を使い、使えないなら失敗にする。
+//! 例外を投げる bundle・常に違う答えを返す bundle は、この file の中の本文を同じ host で評価する（bundle を作れなくても走る）。
 //!
 //! 待ちの方針: dispatcher の deadline は 50 ms の固定。`timeout` は環境の遅さなので、そのときだけ新しい一時 DB で
 //! 場面をやり直す（`support/script_compare.rs` と同じ方針。digest は run ごとに 1 回なので、同じ DB ではやり直せない）。
@@ -19,7 +20,7 @@ use std::sync::Arc;
 
 use celeris::{Config, Exit, RunOptions};
 use celeris_script::ScriptRuntimeHandle;
-use celeris_script::manifest::deploy_bundle;
+use celeris_script::manifest::{deploy_bundle, deployed_dir};
 use support::script_compare::{
     Env, LONG_DEADLINE, TIMEOUT_RETRIES, dist_bundle, dist_dir, load_config, repo_root, start_code,
     start_policy,
@@ -557,26 +558,17 @@ async fn script_compare_cos_digest_daemon_restart_without_bundle_restores_rust()
     }
     let env = env();
     let state = env.dir.path().join("state");
-    let sha256 = deploy_bundle(&dist_dir(), &state)
-        .expect("deploy")
-        .manifest
-        .bundle_sha256;
-    let with_script = |sha: &str| {
+    let deployed = deploy_bundle(&dist_dir(), &state).expect("deploy");
+    let sha256 = deployed.manifest.bundle_sha256.clone();
+    let with_script = || {
         load_config(
             env.dir.path(),
-            &format!(
-                "{COS_OFF}[script]\nstate_dir = \"state\"\nactive_bundle_sha256 = \"{sha}\"\n"
-            ),
+            &format!("{COS_OFF}[script]\nstate_dir = \"state\"\n"),
         )
     };
 
-    // 起動で `loaded` の行ができる。mode は変えない。
-    assert_eq!(run_daemon(with_script(&sha256)).await, Exit::MaxTicks);
-    let generation = env
-        .store
-        .script_generation_by_sha256(&sha256)
-        .expect("read")
-        .expect("generation recorded at startup");
+    // 登録（付記 S5-1）と同じ `loaded` の行。daemon は mode の行が指す generation を起動時に新しい isolate で load する。
+    let generation = env.deployed_generation(&deployed);
     assert_eq!(generation.state, ScriptGenerationState::Loaded);
     assert!(generation.declares_domain(ScriptDomain::CosDigest));
     assert_eq!(env.mode(), ScriptMode::Rust);
@@ -584,7 +576,7 @@ async fn script_compare_cos_digest_daemon_restart_without_bundle_restores_rust()
     // 同じ bundle の daemon は compare を保ち、digest pass の記録を残す（停止前に compare を待つ）。
     env.set_mode(ScriptMode::Compare, Some(generation.id.clone()));
     seed_run(&env.store, "run-a-done", ChatRunState::Completed);
-    assert_eq!(run_daemon(with_script(&sha256)).await, Exit::MaxTicks);
+    assert_eq!(run_daemon(with_script()).await, Exit::MaxTicks);
     assert_eq!(env.mode(), ScriptMode::Compare, "same bundle keeps compare");
     let records = log(&env.store);
     assert_eq!(records.len(), 1, "{records:?}");
@@ -612,13 +604,15 @@ async fn script_compare_cos_digest_daemon_restart_without_bundle_restores_rust()
     );
     assert_eq!(log(&env.store).len(), 1);
 
-    // 配備先に無い bundle を指す daemon も同じ（読めない bundle では compare を続けない）。
+    // 戻した CAS で generation は `draining` になり、そのままでは指せない（付記 S5-4）。
+    // known-good の戻り道（`retired`→再登録）で `loaded` に戻してから compare にする（付記 S5-3）。
+    let generation = env.rearm_generation(&generation.id);
+
+    // 配備先から bundle が消えた daemon も同じ（読めない bundle では compare を続けない。付記 S5-2）。
     env.set_mode(ScriptMode::Compare, Some(generation.id));
+    std::fs::remove_dir_all(deployed_dir(&state, &sha256)).expect("remove the deployed bundle");
     seed_run(&env.store, "run-c-rust", ChatRunState::Completed);
-    assert_eq!(
-        run_daemon(with_script(&"b".repeat(64))).await,
-        Exit::MaxTicks
-    );
+    assert_eq!(run_daemon(with_script()).await, Exit::MaxTicks);
     assert_eq!(env.mode(), ScriptMode::Rust);
     let (messages, _) = world(&env);
     assert!(
@@ -1039,20 +1033,12 @@ async fn script_compare_cos_digest_daemon_ts_restart_keeps_one_message() {
     }
     let env = env();
     let state = env.dir.path().join("state");
-    let sha256 = deploy_bundle(&dist_dir(), &state)
-        .expect("deploy")
-        .manifest
-        .bundle_sha256;
+    let deployed = deploy_bundle(&dist_dir(), &state).expect("deploy");
     let with_script = load_config(
         env.dir.path(),
-        &format!("{COS_OFF}[script]\nstate_dir = \"state\"\nactive_bundle_sha256 = \"{sha256}\"\n"),
+        &format!("{COS_OFF}[script]\nstate_dir = \"state\"\n"),
     );
-    assert_eq!(run_daemon(with_script.clone()).await, Exit::MaxTicks);
-    let generation = env
-        .store
-        .script_generation_by_sha256(&sha256)
-        .expect("read")
-        .expect("generation recorded at startup");
+    let generation = env.deployed_generation(&deployed);
     to_ts(&env, generation.id.clone());
 
     seed_run(&env.store, "run-a-done", ChatRunState::Completed);

@@ -494,13 +494,13 @@ interval_secs = 30                                # 判定と送信の間隔（�
 # [storage]
 # hot_mount = "/local"
 
-# TS 制御層（境界 ADR 2026-11-02）。この節が無ければ thread も isolate も作らない（既定）。
-# 書くと起動時に <state_dir>/script-bundles/<active_bundle_sha256>/ の manifest と hash を検証して読む。
-# 検証や評価に失敗したら TS 層なしで起動を続け、理由を log と通知に残す。全領域は Rust のまま動く。
-# 変更には daemon の再起動が要る。
+# TS 制御層（境界 ADR 2026-11-02、付記 S5-1）。この節が無ければ thread も isolate も作らない（既定）。
+# 書くと API の POST /api/v1/script/generations で <state_dir>/script-bundles/<sha256>/ の bundle を登録できる
+# （新しい isolate で検証してから記録する）。どの bundle を load するかは config ではなく DB の mode の行が決め、
+# 起動時はその generation を load し直す。読めなければその領域を rust に戻し、受信箱に知らせる。
+# 旧欄 active_bundle_sha256 は消した（書くと読み込みエラー）。
 # [script]
 # state_dir = "/local/celeris/state"
-# active_bundle_sha256 = "<64 桁の小文字 16 進>"
 # input_limit_bytes = 1048576    # 1 回の入力の上限（既定 1 MiB）
 # heap_limit_bytes = 67108864    # V8 heap の上限（既定 64 MiB）
 

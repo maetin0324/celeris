@@ -28,6 +28,7 @@ export const INBOX_KINDS: readonly InboxKind[] = [
   "release_unpromoted",
   "task_unscheduled",
   "review_resync_halted",
+  "script_control",
 ];
 
 export const KIND_LABELS: Record<InboxKind, string> = {
@@ -54,6 +55,7 @@ export const KIND_LABELS: Record<InboxKind, string> = {
   release_unpromoted: "release が昇格されていない",
   task_unscheduled: "ready のまま起きない",
   review_resync_halted: "レビューの再同期が止まっている",
+  script_control: "script の自動の戻し・停止",
 };
 
 export function isInboxKind(value: unknown): value is InboxKind {
@@ -90,6 +92,7 @@ const NATIVE_KINDS = new Set<InboxKind>([
   "human_wait_aging",
   "release_unpromoted",
   "task_unscheduled",
+  "script_control",
 ]);
 
 export function needsNativeScreen(item: InboxItem): boolean {
@@ -153,7 +156,7 @@ export function nativeTarget(item: InboxItem, waits: readonly BrowserWait[] = []
   const link = item.links.find((row) => row.href.startsWith("/") && !row.href.startsWith("//"));
   if (link) return { href: link.href, label: link.label };
   if (item.kind === "cluster_login") return { href: "/clusters", label: "クラスタの画面" };
-  if (item.kind === "disk_full") return { href: "/daemon", label: "daemon の画面" };
+  if (item.kind === "disk_full" || item.kind === "script_control") return { href: "/daemon", label: "daemon の画面" };
   if (item.task) return { href: `/tasks/${encodeURIComponent(item.task.id)}`, label: `タスク「${item.task.title}」` };
   return { href: "/tasks", label: "タスクの一覧" };
 }

@@ -45,7 +45,11 @@ pub use daemon::bootstrap::{
     build_daemon_dispatcher, build_dispatcher, seed_cron_if_empty, seed_org_if_empty,
 };
 pub use daemon::clusters::{ClusterMasters, wire_cluster_liveness_hooks};
-pub use daemon::run::run;
+pub use daemon::run::{DaemonTestHooks, run, run_with_test_hooks};
+pub use daemon::script_layer::{
+    RECONCILE_INTERVAL as SCRIPT_RECONCILE_INTERVAL, STARTUP_ACTOR as SCRIPT_STARTUP_ACTOR,
+    ScriptGenerations, restore_reason as script_restore_reason,
+};
 pub use daemon::script_policy::ScriptPolicy;
 pub use instance::InstanceIdentity;
 

@@ -2015,9 +2015,9 @@ impl Dispatcher {
             .map(|p| p.lane_ceiling())
             .unwrap_or_default();
         let task_lane = match self.config.execution.work_unit_lane_cap {
-            task_core::WorkUnitLaneCap::Task => {
+            task_core::WorkUnitLaneCap::Task => self.lane_canary_for(task.id).or_else(|| {
                 task_core::model_policy::decide_for_task(task, &ceiling).map(|d| d.lane)
-            }
+            }),
             task_core::WorkUnitLaneCap::None => None,
         };
         Ok(task_core::model_policy::decide_for_work_unit(

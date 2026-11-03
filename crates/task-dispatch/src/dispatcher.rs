@@ -2276,7 +2276,7 @@ impl Dispatcher {
 
     /// 1 tick。tokio ランタイム内から呼ぶ（ワーカーとレビューを `tokio::spawn` する）。
     pub fn tick(&mut self) -> Result<TickReport, DispatchError> {
-        self.ticks += 1;
+        self.begin_tick();
         let tick_started = Instant::now();
         if let Some(prev) = self.last_tick_started.replace(tick_started) {
             self.last_tick_gap_ms =

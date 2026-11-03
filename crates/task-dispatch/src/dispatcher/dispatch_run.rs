@@ -6,6 +6,11 @@ use super::*;
 #[path = "script_compare.rs"]
 mod script_compare;
 pub(in crate::dispatcher) use script_compare::ScriptCompareState;
+pub(in crate::dispatcher) use script_compare::script_canary::unit_selected as script_canary_unit_selected;
+#[cfg(test)]
+pub(in crate::dispatcher) use script_compare::{
+    SCRIPT_TICK_WAIT_BUDGET, ScriptTickWait, script_canary_target_for_test,
+};
 
 /// lane の決定（`decide_lane`）が使う routing の設定（retry の escalation の閾値）。
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -595,23 +600,32 @@ impl Dispatcher {
         });
         // task 欄の routing 固定（ADR 2026-10-16-mlsys-measure-task-routing）。無ければ従来（config）。
         let routing_override = lane_assist::task_routing_override(self.store.as_ref(), task.id);
-        let (route_outcome, mut route_trace) = self.select_route_with(
-            &route_input,
-            &route_select::RouteContext {
-                run_id: Some(run_id.clone()),
-                features: route_features.clone(),
-                work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
-                evidence_mode: routing_override
-                    .as_ref()
-                    .map(|o| o.evidence_mode)
-                    .unwrap_or_default(),
-                evidence_version: routing_override
-                    .as_ref()
-                    .and_then(|o| o.evidence_table_id.clone()),
-            },
-        );
-        // 付記 S2-11: `route_priority` の compare（mode compare の時だけ。記録だけで、route と trace は変えない）。
-        self.compare_route_priority(task.id, &run_id, &route_input, &route_trace);
+        let route_context = route_select::RouteContext {
+            run_id: Some(run_id.clone()),
+            features: route_features.clone(),
+            work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
+            evidence_mode: routing_override
+                .as_ref()
+                .map(|o| o.evidence_mode)
+                .unwrap_or_default(),
+            evidence_version: routing_override
+                .as_ref()
+                .and_then(|o| o.evidence_table_id.clone()),
+            priority_override: None,
+        };
+        let (mut route_outcome, mut route_trace) =
+            self.select_route_with(&route_input, &route_context);
+        // 付記 S2-11・S5-3: `route_priority` の compare と canary。compare と canary の Rust の側は記録だけ。
+        // TS の側で検証を通った TS の候補列が Rust と違えば、その列で同じ harness を選び直す。
+        if let Some(column) =
+            self.compare_route_priority(task.id, &run_id, &route_input, &route_trace)
+        {
+            let context = route_select::RouteContext {
+                priority_override: Some(column),
+                ..route_context
+            };
+            (route_outcome, route_trace) = self.select_route_with(&route_input, &context);
+        }
         if let (Some(record), Some(decision)) = (lane_assist_record, route_trace.decision.as_mut())
         {
             decision.lane_assist = Some(record);
@@ -1395,8 +1409,12 @@ impl Dispatcher {
         // 付記 S2-1・S2-6: `lane_rules` の mode が compare のときだけ、同じ features を TS に渡して比べ、記録だけを残す。
         // policy が決める task（`Hint`・`Default`）だけが対象で、人の明示・System の task では TS を呼ばない。
         // ここで使う lane は Rust の結果のまま（retry の escalation の前の、天井で丸めた lane を比べる）。
-        if decision.source.policy_decides() {
-            self.compare_lane_rules(task.id, &decision.features, decision.lane, &ceiling);
+        // 付記 S5-3: canary の TS の側と `ts` は、Rust の検証（出力の形・天井）を通った TS の lane を使う。
+        if decision.source.policy_decides()
+            && let Some(lane) =
+                self.compare_lane_rules(task.id, &decision.features, decision.lane, &ceiling)
+        {
+            decision.lane = lane;
         }
         let mut audit = None;
         // 人の明示・System の lane も評価する（上げず、理由を audit に残す。`decide_trajectory` が判定）。

@@ -518,6 +518,10 @@ fn script_compare_event_types_match_their_serde_names() {
                 normalized: vec![],
                 safety_violations: vec![],
                 elapsed_us: 0,
+                applied_by: None,
+                fallback: None,
+                canary_selected: false,
+                canary_bps: None,
             }),
         },
         Event::ScriptDomainModeChanged {

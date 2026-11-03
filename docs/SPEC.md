@@ -144,6 +144,11 @@ gateway は daemon API に直接接続し、認証・SSE・ファイル配信・
 - 迷ったら聞く。認可は「今回だけ / 今後ずっと」。永続認可は記録して注入、可能なら自動化。
 - 報告は上に行くほどレビューと圧縮。人への判断依頼は CoS が一次対応して必要時だけ送る。
 - 成果物は人が普段見る場所に、公開できる形で。
+- 制御の判定を TS（`control-ts/`）へ移すときは、領域ごとに `rust`→`compare`→`canary`→`ts` の順に上げる。既定は `rust`。
+  `canary` と `ts` へ上げられるのは人の API token だけで、自動では上がらない。`rust` への戻しは誰でもできる。
+  停止基準（比較の不一致・timeout・失敗・安全違反）に当たると daemon が自動で `rust` に戻し、受信箱（種類 `script_control`）で人に知らせる。
+  永続状態・scheduler・認可・副作用の実行は Rust に残す。本番の mode の変更は人の手順で行う
+  （[境界 ADR](../agent-docs/adr/2026-11-02-ts-control-layer-boundary.md) の (f) と付記 S5-1〜S5-7・S5-13）。
 
 ## 6. 最初の一本
 

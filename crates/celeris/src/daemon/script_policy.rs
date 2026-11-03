@@ -1,32 +1,86 @@
-//! `task_dispatch::PolicyScript` の本物の実装（境界 ADR 2026-11-02 付記 S2-6）。`ScriptRuntimeHandle` で TS を呼ぶ。
+//! `task_dispatch::PolicyScript` の本物の実装（境界 ADR 2026-11-02 付記 S2-6）。daemon は generation の登録簿
+//! （`GenerationRegistry`、付記 S5-2）の 1 つの generation に固定した口を使い、試験は `ScriptRuntimeHandle` 1 つで呼ぶ。
 //!
 //! 入出力は DTO だけで、Rust の判定を変えない。結果の分類と記録は dispatcher が行う。
 //! `lane_rules`・`route_priority` は op を呼ばない純粋関数なので、要求の scope は空で送る（S2-7）。
 //! `cos_digest` は pass 1 回を要求 1 件として host sink 付きで送り、op を dispatcher の op server へ写す（付記 S4-12）。
 
 use std::collections::BTreeSet;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use celeris_script::dto::{Capability, HOST_API_VERSION, HostError, HostErrorCode, HostResult};
-use celeris_script::{HostOpCall, ScriptCall, ScriptError, ScriptRuntimeHandle};
+use celeris_script::{
+    GenerationRegistry, HostOpCall, HostSink, ScriptCall, ScriptError, ScriptReply,
+    ScriptRuntimeHandle,
+};
 use task_core::script_compare::{LaneRulesInput, RoutePriorityInput, ScriptDomain};
 use task_dispatch::script_policy::{
     CosDigestOp, CosDigestOpCall, CosDigestOpReply, CosDigestPassCall, PolicyFuture, PolicyReply,
     PolicyScript, PolicyScriptBundle, PolicyScriptError,
 };
 
+/// 1 回の呼び出しの future（actor の結果）。
+type ReplyFuture = Pin<Box<dyn Future<Output = Result<ScriptReply, ScriptError>> + Send>>;
+
+/// 判定の送り先。
+enum Backend {
+    /// actor 1 つ（試験・単体の runtime）。
+    Handle(ScriptRuntimeHandle),
+    /// generation の登録簿の 1 つの generation（daemon。付記 S5-2）。登録簿の key は `bundle_sha256`。
+    /// 要求は呼んだ時点でその generation と in-flight の枠を取り、後で切り替わってもその generation で終わる。
+    /// 登録簿に無い・drain 中なら `GenerationGone` で、dispatcher は Rust の参照実装のまま。
+    Generation(GenerationRegistry),
+}
+
 /// 読み込んだ bundle の actor へ判定を送る口。clone した handle を持つだけで、actor の停止は持ち主が決める。
 pub struct ScriptPolicy {
-    handle: ScriptRuntimeHandle,
+    backend: Backend,
     bundle_sha256: String,
+    /// 登録簿の経路で最後に応答した actor の作り直し回数（失敗の記録の `isolate_epoch` に使う）。
+    last_generation: AtomicU64,
 }
 
 impl ScriptPolicy {
     /// `bundle_sha256` は `handle` が評価した bundle の hash（64 桁の小文字 hex）。
     pub fn new(handle: ScriptRuntimeHandle, bundle_sha256: String) -> Self {
         Self {
-            handle,
+            backend: Backend::Handle(handle),
             bundle_sha256,
+            last_generation: AtomicU64::new(0),
+        }
+    }
+
+    /// 登録簿の generation `bundle_sha256` に固定した口（付記 S5-2）。
+    pub fn pinned(registry: GenerationRegistry, bundle_sha256: String) -> Self {
+        Self {
+            backend: Backend::Generation(registry),
+            bundle_sha256,
+            last_generation: AtomicU64::new(0),
+        }
+    }
+
+    /// 要求を送る。登録簿の経路では、この関数を呼んだ時点で generation を固定する。
+    fn send(&self, call: ScriptCall, sink: Option<HostSink>) -> ReplyFuture {
+        match &self.backend {
+            Backend::Handle(handle) => {
+                let handle = handle.clone();
+                Box::pin(async move { handle.call_with_host_sink(call, sink).await })
+            }
+            Backend::Generation(registry) => {
+                let pinned = registry.call(&self.bundle_sha256, call, sink);
+                Box::pin(async move { pinned.await.map(|p| p.reply) })
+            }
+        }
+    }
+
+    /// 失敗の記録に書く actor の作り直し回数。
+    fn current_generation(&self) -> u64 {
+        match &self.backend {
+            Backend::Handle(handle) => handle.stats().generation,
+            Backend::Generation(_) => self.last_generation.load(Ordering::SeqCst),
         }
     }
 }
@@ -67,12 +121,18 @@ impl PolicyScript for ScriptPolicy {
                 scope_task_ids: BTreeSet::new(),
                 timeout: deadline,
             };
-            let reply = self.handle.call_with_host_sink(request, Some(host_sink));
+            let reply = self.send(request, Some(host_sink));
             tokio::pin!(reply);
+            // op の転送の間も actor の結果を見る（drain の打ち切り `GenerationGone` で、答えない op server を待ち続けない）。
             let result = loop {
                 tokio::select! {
                     result = &mut reply => break result,
-                    Some(op) = host_rx.recv() => forward_op(&call, op).await,
+                    Some(op) = host_rx.recv() => {
+                        tokio::select! {
+                            result = &mut reply => break result,
+                            () = forward_op(&call, op) => {}
+                        }
+                    }
                 }
             };
             self.reply(result)
@@ -140,7 +200,7 @@ impl ScriptPolicy {
                 scope_task_ids: BTreeSet::new(),
                 timeout: deadline,
             };
-            let result = self.handle.call(call).await;
+            let result = self.send(call, None).await;
             self.reply(result)
         })
     }
@@ -148,16 +208,20 @@ impl ScriptPolicy {
     /// actor の結果を DTO にする。
     fn reply(
         &self,
-        result: Result<celeris_script::ScriptReply, ScriptError>,
+        result: Result<ScriptReply, ScriptError>,
     ) -> Result<PolicyReply, PolicyScriptError> {
         match result {
-            Ok(reply) => Ok(PolicyReply {
-                output: reply.output,
-                isolate_epoch: isolate_epoch(reply.generation),
-            }),
+            Ok(reply) => {
+                self.last_generation
+                    .fetch_max(reply.generation, Ordering::SeqCst);
+                Ok(PolicyReply {
+                    output: reply.output,
+                    isolate_epoch: isolate_epoch(reply.generation),
+                })
+            }
             Err(error) => {
                 let mut mapped = policy_error(&error);
-                mapped.isolate_epoch = Some(isolate_epoch(self.handle.stats().generation));
+                mapped.isolate_epoch = Some(isolate_epoch(self.current_generation()));
                 Err(mapped)
             }
         }

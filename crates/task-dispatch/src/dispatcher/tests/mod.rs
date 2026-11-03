@@ -2936,6 +2936,58 @@ fn parent_sccache_family() -> String {
     family.iter().map(|kv| format!("{kv} ")).collect()
 }
 
+/// 付記 S5-4: `cos_digest` を同じ generation の `compare` から `canary` を経て `ts` にする（人の actor で）。
+/// 昇格の前提（(f) の「進む条件」）の計数を script-guard に積んでから切り替える。S4 の `compare→ts` は消した。
+pub(super) fn promote_cos_digest_to_ts(
+    store: &SqliteStore,
+    generation: &str,
+    reason: &str,
+    now: time::OffsetDateTime,
+) {
+    use task_core::script_compare::{ScriptDomain, ScriptMode, ScriptModeChange};
+    use task_core::script_guard::{
+        SCRIPT_GUARD_READY_COS, ScriptGuardCall, ScriptGuardObservation,
+    };
+    let version = || {
+        store
+            .script_domain_mode("cos_digest")
+            .expect("cos_digest row")
+            .version
+    };
+    let change = |to_mode, expected_version| ScriptModeChange {
+        domain: "cos_digest".into(),
+        to_mode,
+        to_generation: Some(generation.to_owned()),
+        expected_version,
+        actor: "human:test".into(),
+        reason: reason.into(),
+    };
+    let observe = |ts_side| {
+        for _ in 0..SCRIPT_GUARD_READY_COS {
+            store
+                .script_guard_observe(
+                    ScriptDomain::CosDigest,
+                    generation,
+                    ScriptGuardObservation {
+                        call: ScriptGuardCall::Ok,
+                        safety_violation: false,
+                        ts_side,
+                    },
+                    now,
+                )
+                .expect("observe");
+        }
+    };
+    observe(false);
+    store
+        .script_domain_set_canary(&change(ScriptMode::Canary, version()), 5000, now)
+        .expect("mode canary");
+    observe(true);
+    store
+        .script_domain_set_mode(&change(ScriptMode::Ts, version()), now)
+        .expect("mode ts");
+}
+
 mod account_auth_failure;
 mod build_cache;
 mod class_route;
@@ -3075,6 +3127,8 @@ mod routing_context;
 /// ADR-0074 付記 2026-10-05: 範囲 check（`WorkUnitCheck.scope`）は WU の作業時だけ流す
 /// （`src/dispatcher/tests/scope_checks.rs`）。
 mod scope_checks;
+/// 付記 S5-3・S5-6・S5-8: canary の選択・fallback・tick の予算・戻しの失敗（`src/dispatcher/tests/script_canary.rs`）。
+pub(super) mod script_canary;
 mod script_compare;
 /// ADR-0140 D1: WU の execute continuation の同一 session resume と checkpoint fallback
 /// （`src/dispatcher/tests/session_resume.rs`）。

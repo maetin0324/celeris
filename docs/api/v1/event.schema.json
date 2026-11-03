@@ -1032,6 +1032,32 @@
       ],
       "type": "object"
     },
+    "CosDigestAppliedBy": {
+      "description": "その run に apply した command を出した側（付記 S4-15）。",
+      "enum": [
+        "rust",
+        "ts"
+      ],
+      "type": "string"
+    },
+    "CosDigestFallback": {
+      "additionalProperties": false,
+      "description": "mode `ts` で Rust の command を apply した理由（付記 S4-15）。`message` は 512 byte で切る。",
+      "properties": {
+        "code": {
+          "description": "`ts_error`・`invalid_output`・`run_outside_list`・`run_missing`・`run_unreadable`・`run_order`・\n`mode_changed`・`unavailable`。",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
     "CostOfReversal": {
       "description": "D7: 後戻りの大きさ。",
       "enum": [
@@ -5186,12 +5212,36 @@
         {
           "description": "ADR 2026-11-02-ts-control-layer-boundary 付記 S2-4: `compare` mode の領域で、Rust の参照実装と TS の\n出力を比べた結果 1 件。追記先は判定した task。状態は変えない（`replay` は無視する）。Rust の結果は\nこれで変わらない。入力は機密を除いた DTO（`script_compare::recorded_input`）。",
           "properties": {
+            "applied_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CosDigestAppliedBy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "付記 S5-3・S5-6: 判定に使った側。`canary` の TS 側・`ts` で TS の結果を検証して使えば `ts`、\n使わなければ `rust`。mode `compare` は `None`（挙動は常に Rust）。"
+            },
             "bundle_sha256": {
               "type": "string"
             },
             "call_site": {
               "description": "`dispatch_run.decide_lane`・`route_select.route_select_one`。",
               "type": "string"
+            },
+            "canary_bps": {
+              "description": "付記 S5-3: mode `canary` の比率（それ以外は `None`）。",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "canary_selected": {
+              "description": "付記 S5-3: mode `canary`・`ts` で、この単位が TS の側に選ばれたか。",
+              "type": "boolean"
             },
             "domain": {
               "$ref": "#/$defs/ScriptDomain"
@@ -5210,6 +5260,17 @@
                   "type": "null"
                 }
               ]
+            },
+            "fallback": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CosDigestFallback"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "付記 S5-6: TS の側に選ばれたのに Rust の結果を使った理由（`ts_error`・`invalid_output`・`safety_violation`・\n`unavailable`・`tick_budget` 等）。"
             },
             "generation": {
               "description": "使った `script_generations.id`（ULID）。",
@@ -7954,7 +8015,7 @@
       ]
     },
     "ScriptMode": {
-      "description": "領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。S2 で受け付けるのは `rust` と `compare` だけ（S2-5）。",
+      "description": "領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。全領域で全 mode を受ける（付記 S5-4）。",
       "enum": [
         "rust",
         "compare",

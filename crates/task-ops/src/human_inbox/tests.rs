@@ -102,6 +102,7 @@ fn empty_inbox() -> Inbox {
             by_status: Default::default(),
         },
         disk_full: Vec::new(),
+        script_control: Vec::new(),
         credential_waits: Vec::new(),
         stagnation: Vec::new(),
         stagnation_policy: None,
@@ -352,6 +353,8 @@ fn fixture() -> Fixture {
         last_notified_at: Some(now() - time::Duration::minutes(10)),
         updated_at: now(),
     });
+    // 付記 S5-7: script-guard が領域を rust に戻した記録 1 件。
+    inbox.script_control.push(script_inbox_item());
     // ADR 2026-10-15-mlsys-min D4: 同じ秘密を待つ 2 つの wait は 1 件の item になる。
     for (i, work_unit) in ["wu-a", "wu-b"].into_iter().enumerate() {
         inbox
@@ -630,6 +633,7 @@ fn variant_index(kind: InboxKind) -> usize {
         InboxKind::ReleaseUnpromoted => 20,
         InboxKind::TaskUnscheduled => 21,
         InboxKind::ReviewResyncHalted => 22,
+        InboxKind::ScriptControl => 23,
     }
 }
 
@@ -639,7 +643,7 @@ fn human_inbox_all_contains_every_variant_once() {
     seen.sort_unstable();
     assert_eq!(
         seen,
-        (0..=22).collect::<Vec<_>>(),
+        (0..=23).collect::<Vec<_>>(),
         "ALL must list every variant once"
     );
 }
@@ -1115,4 +1119,41 @@ fn human_inbox_long_authorization_keeps_full_text_and_link() {
     let q = one(&out, InboxKind::Question);
     assert_eq!(q.detail, q.detail_full);
     assert!(q.links.iter().all(|l| l.label != FULL_TEXT_LINK_LABEL));
+}
+
+fn script_inbox_item() -> task_core::ScriptInboxItem {
+    task_core::ScriptInboxItem {
+        id: "domain-7".to_string(),
+        source: task_core::script_inbox::ScriptInboxSource::Domain,
+        event_id: 7,
+        event_type: "script_domain_mode_changed".to_string(),
+        domain: Some("lane_rules".to_string()),
+        generation_id: Some("gen-b".to_string()),
+        change: Some("canary → rust".to_string()),
+        actor: "system:script-guard".to_string(),
+        reason: "guard_mismatch: mismatch=1 calls=40".to_string(),
+        code: "guard_mismatch".to_string(),
+        created_at: now() - time::Duration::minutes(3),
+    }
+}
+
+/// 付記 S5-7: `script_control` は記録 1 件に 1 件、本文に領域・generation・reason の code を出し、答えない。
+#[test]
+fn script_inbox_item_shows_domain_generation_and_code() {
+    let (_, out) = build();
+    let item = one(&out, InboxKind::ScriptControl);
+    assert_eq!(item.id, "script_control-domain-7");
+    assert!(item.title.contains("lane_rules"), "{}", item.title);
+    assert!(item.title.contains("guard_mismatch"), "{}", item.title);
+    let detail = item.detail_full.as_deref().unwrap_or_default();
+    for want in [
+        "領域: lane_rules",
+        "generation: gen-b",
+        "reason の code: guard_mismatch",
+        "system:script-guard",
+    ] {
+        assert!(detail.contains(want), "{want} not in {detail}");
+    }
+    assert!(item.answer.native.is_none());
+    assert!(item.blocking.tasks.is_empty());
 }

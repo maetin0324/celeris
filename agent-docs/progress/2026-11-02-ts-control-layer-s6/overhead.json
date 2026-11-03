@@ -1,0 +1,416 @@
+{
+ "schema": "celeris.s6-overhead/1",
+ "decision_latency": {
+  "unit": "ms",
+  "for_threshold": {
+   "tool": "script-bench（変更なし、release）",
+   "domain": "host_selftest（async op 1 回）",
+   "iters": 1000,
+   "runs": 3,
+   "warmup": 100,
+   "p50": 0.0872,
+   "p99": 0.1291,
+   "each_run": [
+    {
+     "p50": 0.0867,
+     "p99": 0.1291
+    },
+    {
+     "p50": 0.0872,
+     "p99": 0.1215
+    },
+    {
+     "p50": 0.0866,
+     "p99": 0.1211
+    }
+   ]
+  },
+  "split_note": "overhead-probe.patch を当てた $TMPDIR の写しで測った。各欄は 3 回の最大。queue = 送信から actor の取り出し（queue の深さ 0、thread の起床を含む）、boundary_in = Grant の用意と入力の V8 変換、js = script の入口から future の完了（event loop と op の受け渡しを含む）、boundary_out = 出力の JSON 変換と stats、reply_wake = oneshot 送信から呼び手の起床",
+  "split": {
+   "host_selftest": {
+    "iters_per_run": 1000,
+    "runs": 3,
+    "ops": 0,
+    "total": {
+     "p50": 0.0929,
+     "p99": 0.1361
+    },
+    "queue": {
+     "p50": 0.0173,
+     "p99": 0.029
+    },
+    "boundary_in": {
+     "p50": 0.0078,
+     "p99": 0.0138
+    },
+    "js": {
+     "p50": 0.0372,
+     "p99": 0.0661
+    },
+    "boundary_out": {
+     "p50": 0.0062,
+     "p99": 0.011
+    },
+    "reply_wake": {
+     "p50": 0.0186,
+     "p99": 0.0281
+    },
+    "boundary_total_p50": 0.014
+   },
+   "lane_rules": {
+    "iters_per_run": 1000,
+    "runs": 3,
+    "ops": 0,
+    "total": {
+     "p50": 0.0644,
+     "p99": 0.0939
+    },
+    "queue": {
+     "p50": 0.017,
+     "p99": 0.0282
+    },
+    "boundary_in": {
+     "p50": 0.008,
+     "p99": 0.013
+    },
+    "js": {
+     "p50": 0.0133,
+     "p99": 0.0333
+    },
+    "boundary_out": {
+     "p50": 0.0034,
+     "p99": 0.0047
+    },
+    "reply_wake": {
+     "p50": 0.0176,
+     "p99": 0.0271
+    },
+    "boundary_total_p50": 0.0113
+   },
+   "route_priority": {
+    "iters_per_run": 1000,
+    "runs": 3,
+    "ops": 0,
+    "total": {
+     "p50": 0.0856,
+     "p99": 0.2329
+    },
+    "queue": {
+     "p50": 0.0172,
+     "p99": 0.0272
+    },
+    "boundary_in": {
+     "p50": 0.0181,
+     "p99": 0.03
+    },
+    "js": {
+     "p50": 0.02,
+     "p99": 0.1545
+    },
+    "boundary_out": {
+     "p50": 0.0053,
+     "p99": 0.0072
+    },
+    "reply_wake": {
+     "p50": 0.0184,
+     "p99": 0.0267
+    },
+    "boundary_total_p50": 0.0234
+   },
+   "cos_digest_2ops": {
+    "iters_per_run": 1000,
+    "runs": 3,
+    "ops": 2,
+    "total": {
+     "p50": 0.203,
+     "p99": 0.3783
+    },
+    "queue": {
+     "p50": 0.0173,
+     "p99": 0.1168
+    },
+    "boundary_in": {
+     "p50": 0.0062,
+     "p99": 0.0094
+    },
+    "js": {
+     "p50": 0.1374,
+     "p99": 0.1923
+    },
+    "boundary_out": {
+     "p50": 0.0137,
+     "p99": 0.0248
+    },
+    "reply_wake": {
+     "p50": 0.018,
+     "p99": 0.0286
+    },
+    "boundary_total_p50": 0.0199
+   },
+   "cos_digest_21ops": {
+    "iters_per_run": 1000,
+    "runs": 3,
+    "ops": 21,
+    "total": {
+     "p50": 1.7312,
+     "p99": 2.2457
+    },
+    "queue": {
+     "p50": 0.0172,
+     "p99": 0.075
+    },
+    "boundary_in": {
+     "p50": 0.0091,
+     "p99": 0.02
+    },
+    "js": {
+     "p50": 1.4761,
+     "p99": 1.9277
+    },
+    "boundary_out": {
+     "p50": 0.1969,
+     "p99": 0.2644
+    },
+    "reply_wake": {
+     "p50": 0.0187,
+     "p99": 0.0291
+    },
+    "boundary_total_p50": 0.206
+   }
+  }
+ },
+ "rss": {
+  "unit": "MiB",
+  "measure": "一時 DB の非本番 daemon（変更なしの release binary）の VmRSS。baseline は [script] が無い daemon。各段を settle 後に 5 回読んだ中央値（draining の段だけ切替直後の 1 回）",
+  "increment_one_generation_max": 23.18,
+  "increment_two_generations_loaded_max": 27.18,
+  "increment_two_generations_draining_max": 27.3,
+  "increment_after_retire_max": 27.03,
+  "runs": [
+   {
+    "rep": 1,
+    "no_script_section": {
+     "rss_mib": 45.94,
+     "increment_mib": 0.0,
+     "isolates": 0
+    },
+    "script_no_generation": {
+     "rss_mib": 46.99,
+     "increment_mib": 1.05,
+     "isolates": 0
+    },
+    "gen1_active": {
+     "rss_mib": 69.11,
+     "increment_mib": 23.18,
+     "isolates": 1
+    },
+    "gen1_active_gen2_loaded": {
+     "rss_mib": 73.05,
+     "increment_mib": 27.11,
+     "isolates": 2
+    },
+    "gen2_active_gen1_draining": {
+     "rss_mib": 73.24,
+     "increment_mib": 27.3,
+     "isolates": 2,
+     "gen1_state": "draining"
+    },
+    "gen2_active_gen1_retired": {
+     "rss_mib": 72.97,
+     "increment_mib": 27.03,
+     "isolates": 1
+    }
+   },
+   {
+    "rep": 2,
+    "no_script_section": {
+     "rss_mib": 46.62,
+     "increment_mib": 0.0,
+     "isolates": 0
+    },
+    "script_no_generation": {
+     "rss_mib": 46.99,
+     "increment_mib": 0.37,
+     "isolates": 0
+    },
+    "gen1_active": {
+     "rss_mib": 69.68,
+     "increment_mib": 23.06,
+     "isolates": 1
+    },
+    "gen1_active_gen2_loaded": {
+     "rss_mib": 73.8,
+     "increment_mib": 27.18,
+     "isolates": 2
+    },
+    "gen2_active_gen1_draining": {
+     "rss_mib": 73.8,
+     "increment_mib": 27.18,
+     "isolates": 2,
+     "gen1_state": "draining"
+    },
+    "gen2_active_gen1_retired": {
+     "rss_mib": 73.37,
+     "increment_mib": 26.75,
+     "isolates": 1
+    }
+   },
+   {
+    "rep": 3,
+    "no_script_section": {
+     "rss_mib": 46.45,
+     "increment_mib": 0.0,
+     "isolates": 0
+    },
+    "script_no_generation": {
+     "rss_mib": 46.8,
+     "increment_mib": 0.35,
+     "isolates": 0
+    },
+    "gen1_active": {
+     "rss_mib": 68.93,
+     "increment_mib": 22.48,
+     "isolates": 1
+    },
+    "gen1_active_gen2_loaded": {
+     "rss_mib": 72.49,
+     "increment_mib": 26.04,
+     "isolates": 2
+    },
+    "gen2_active_gen1_draining": {
+     "rss_mib": 72.49,
+     "increment_mib": 26.04,
+     "isolates": 2,
+     "gen1_state": "draining"
+    },
+    "gen2_active_gen1_retired": {
+     "rss_mib": 72.02,
+     "increment_mib": 25.57,
+     "isolates": 1
+    }
+   }
+  ],
+  "script_bench_warm": {
+   "one_max": 24.171875,
+   "two_max": 31.296875,
+   "note": "script-bench の isolate 1 個・2 個（warm up と 1000 回の呼び出しの後）。daemon の isolate は呼び出しを受けていない"
+  }
+ },
+ "isolates": {
+  "count": {
+   "no_script_section": 0,
+   "script_no_generation": 0,
+   "one_generation": 1,
+   "two_generations_loaded": 2,
+   "two_generations_draining": 2,
+   "after_retire": 1
+  },
+  "measure": "/proc/<pid>/task/*/comm が celeris-script の thread の数（isolate 1 個に actor thread 1 本）。3 回とも同じ"
+ },
+ "typecheck_secs": {
+  "cos_ts_warm": {
+   "trials": 20,
+   "p50": 0.095,
+   "p95": 0.097,
+   "max": 0.1
+  },
+  "policy_ts_warm": {
+   "trials": 20,
+   "p50": 0.096,
+   "p95": 0.103,
+   "max": 0.103
+  },
+  "cos_ts_cold": {
+   "trials": 20,
+   "p50": 0.095,
+   "p95": 0.099,
+   "max": 0.099
+  }
+ },
+ "bundle_secs": {
+  "cos_ts_warm": {
+   "trials": 20,
+   "p50": 0.075,
+   "p95": 0.079,
+   "max": 0.082
+  },
+  "policy_ts_warm": {
+   "trials": 20,
+   "p50": 0.075,
+   "p95": 0.079,
+   "max": 0.081
+  },
+  "cos_ts_cold": {
+   "trials": 20,
+   "p50": 0.075,
+   "p95": 0.079,
+   "max": 0.079
+  }
+ },
+ "cold_build_secs": 141.116,
+ "cold_build_increment_secs": 9.8,
+ "cold_build_baseline_secs": 131.3,
+ "tick_wait": {
+  "unit": "us",
+  "source": "測定用の log を足した写しの Dispatcher::script_tick_wait_summary（本体に log 行は無い。S5 未解決 4）",
+  "ticks": 59,
+  "p50_us": 0,
+  "p95_us": 4033,
+  "max_us": 5566,
+  "tick_budget": 0,
+  "workload": {
+   "tasks": 20,
+   "runs": 20,
+   "secs": 130.0,
+   "tick_ms": 2000,
+   "mode": "lane_rules・route_priority とも canary 9999 bps（試験 daemon。計数は synthetic）",
+   "script_compare_recorded": 40,
+   "modes_at_end": {
+    "lane_rules": "canary",
+    "route_priority": "canary"
+   }
+  }
+ },
+ "other_f_items": {
+  "release_binary_mib": 146.6,
+  "release_binary_increment_mib": 67.03,
+  "release_binary_base_mib": 79.565,
+  "warm_link_secs_build": {
+   "policy_warm": {
+    "trials": 20,
+    "p50": 1.795,
+    "max": 1.83
+   },
+   "cos_digest_warm": {
+    "trials": 14,
+    "p50": 1.788,
+    "max": 1.813
+   }
+  },
+  "warm_link_baseline_secs": 1.36,
+  "test_build_increment": "未測定（この unit の範囲外）"
+ },
+ "env": {
+  "source": "提出時の HEAD の git archive を $TMPDIR に展開した写し",
+  "host": "home-dev",
+  "cpu": "AMD Ryzen Threadripper PRO 3945WX 12-Cores、論理 24",
+  "kernel": "6.8.12-9-pve",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "node": "v24.14.1",
+  "cargo_incremental": "0",
+  "sccache": "SCCACHE_BIN=/nonexistent で不使用",
+  "cold_target": "$CARGO_TARGET_DIR/overhead-cold-head（新しい subdir、測定後に削除）",
+  "cold_command": "SCCACHE_BIN=/nonexistent cargo build --release --locked -p celeris --bin celeris",
+  "cold_loadavg_1m": {
+   "before": 1.73,
+   "after": 13.08
+  },
+  "other_cargo_rustc_before_cold": 0,
+  "bench_bundle_sha256": "c7c3cce5f82c820d19ecaaa97d08b3d5b573db748a4e3b143c136aaef44f9083",
+  "second_generation_bundle_sha256": "da22171e1c86bcc10731d4d283f7b8f725e4ef173a37e3e6ff92c930844d7d27",
+  "second_generation_source": "pilot/candidate.patch を当てた bundle",
+  "production_touched": false,
+  "measurement_env_touched": false,
+  "load_scripts": "なし"
+ }
+}

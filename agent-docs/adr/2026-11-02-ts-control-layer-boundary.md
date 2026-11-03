@@ -749,3 +749,213 @@ pass-wire・ts-pass・traces-async の各 unit が、新しい経路を入れる
 | S4-17 | 消えたもの: `PolicyScript::cos_digest`、`Dispatcher::compare_cos_digest`、`CosDigestDraft`・`CosDigestApplication` の run ごとの経路、TS の `cosDigest` の export、`compare.mjs` の `entry: "cosDigest"`、`control-ts/fixtures/cos_digest/traces.jsonl` | (18) `cos_digest_trace.rs` は消さず、同じ path で pass の trace の試験に書き換えた。(19) `crates/celeris/tests/script_compare_cos_digest.rs` は `script_cos_digest_pass.rs` に置き換えず、同じ file を pass の形に直して mode `ts` の 4 件を足した（9 件）。`cases.jsonl` だけを読む |
 | S4-18 | `crates/script-runtime/tests/cos_digest_ops.rs` と `crates/task-dispatch/src/dispatcher/tests/cos_digest_script_ts.rs` のとおり | (20) deadline と要求の終わりが同時に起きたら `timeout` を優先して返す |
 | S4-19 | 下の対応のとおり | (21) 試験名の違い: real-host の 5 件は `script_cos_digest_pass_*` でなく `script_compare_cos_digest_*`（`…_ts_mode_applies_ts_commands`・`…_compare_answers_ops_from_rust_snapshot`・`…_ts_mode_falls_back_to_rust`・`…_daemon_ts_restart_keeps_one_message`。throw の fallback と restart の rust への戻しはこの 2 件に含む）。traces-async は `cos_digest_pass_trace.rs` でなく `cos_digest_trace.rs`。robust-ts は `…_ts_retry_scan_failure` を tick 全体の失敗と `…_ts_retry_list_runs_failure_during_op` に分け、`…_ts_retry_read_run_failure_during_op`・`…_ts_item_updated_during_op_await`・`…_ts_restart_after_failed_requeue`・`…_ts_mode_and_generation_change_during_op_await` を足した（15 件）。ts-pass は `skips a run whose read_run throws` を `skips a run whose read_run throws exception` にした |
+
+## 付記 2026-11-03: S5 の generation 管理・段階切替・rollback と S6 の測定の定義（S5 adr-s5、task 01M6FPPJN7A8H427MXFVYFY7H4）
+記録は [S5 の進捗](../progress/2026-11-02-ts-control-layer-s5.md) と [adr-s5](../progress/2026-11-02-ts-control-layer-s5/adr-s5.md)。
+(d)・(f)・(g)、付記 S2-4・S2-5・S4-14・S4-16 と S4 の進捗の未解決 7・8 を具体化する。**(f) の数値は 1 つも変えない。** 下の節が S2-5・S4-14 の mode の権限と S2-4 の表の定義を改めるときは、そう書く。
+言語移行と方針改善を混ぜない。S5 は TS の規則・Rust の参照実装の判定を変えない。
+
+### S5-1 実行中の daemon に新 bundle を足す経路と generation の状態（目的の (1)）
+**登録の経路**
+1. bundle の配備は今の `script-deploy`（`crates/script-runtime/src/bin/script-deploy.rs`）が行う。`<state_dir>/script-bundles/<bundle_sha256>/` に `bundle.mjs` と `manifest.json` を置く。API は bundle の本文を受け取らない（upload の経路を作らない）。
+2. `POST /api/v1/script/generations`（本文 `{ "bundle_sha256": "<64 桁 hex>" }`）で登録を頼む。task-api は trait `ScriptGenerationControl`（`crates/task-api/src/script_generations.rs`。DTO だけを使い `deno_core` に依存しない。(b) の依存の制約）を呼ぶ。daemon（`crates/celeris/src/daemon/script_layer.rs`）がこれを実装し、`celeris-script` の `GenerationRegistry`（`crates/script-runtime/src/generation.rs`）に渡す。
+3. registry は**新しい isolate（新しい actor の thread）**で bundle を load し、次を検証する: 配備先の名前と hash の照合（`manifest.rs` の今の検証）、`host_api` の major、`schema_sha256`、`domains` が既知の領域だけ、`capabilities` ⊆ 許可表 `DOMAIN_CAPABILITIES`、`checkpoint_versions` の形（S5-5）、module の評価と selftest、manifest の各領域の入口が export されていること。既存の isolate は使わない。
+4. 通れば `script_generations` に `loaded` の行を書き、同じ transaction で `script_generation_loaded` を追記する。落ちれば `invalid`（理由付き）を書き、isolate を捨て、422 `script_generation_invalid` を返す。
+5. trait が未接続（`[script]` の無い daemon、task-api の試験の state）なら 503 `script_runtime_unavailable` を返し、表を変えない。
+6. 同じ hash がすでに `loaded`・`active`・`draining` なら、何も変えず 200 で今の行を返す。`retired` の hash は新しい isolate で load し直して `loaded` に戻す（known-good への戻り道。S5-3）。`invalid` の hash は 422 `script_generation_invalidated` で拒む（直した bundle は別の hash になる）。
+- 一覧は `GET /api/v1/script/generations`、退役は `POST /api/v1/script/generations/{id}/retire`（`active` なら 409 `script_generation_active`）。
+- 登録と退役は挙動を変えないので、人の token・外部 operator の token・CoS operations（registry に ALLOWED で `script_generation.register`・`script_generation.retire` を足す）で行える。
+
+**generation の状態**（S2-4 の `state IN ('loaded','rejected')` を改める。migration は store-gen unit が足し、既存の `rejected` の行は `invalid` に移す。`rejected` の語は残さない）
+| 状態 | 意味 | isolate | 入る条件 |
+|---|---|---|---|
+| `loaded` | 検証に通り、どの領域の mode の行からも指されていない | 持つ | 登録の成功、`retired` の再登録 |
+| `active` | 1 つ以上の領域の `script_domain_modes.generation_id` がこれを指す | 持つ | mode の CAS（同じ transaction で状態も変える） |
+| `draining` | どの領域からも指されなくなったが、in-flight が残る | 持つ（新しい要求は受けない） | 最後の領域が別の generation か `rust` に移った CAS |
+| `retired` | isolate を捨てた。行と bundle の file は残す | 持たない | drain の終わり（S5-2）、`loaded` の退役 |
+| `invalid` | 検証に落ちた、または安全違反（S5-7）で無効にした | 持たない | 登録の検証失敗、`script-guard` の安全違反 |
+- 遷移は store の 1 か所（`script_generation_transition`）だけが書き、毎回 `script_generation_{loaded,activated,draining,retired,invalidated}` を追記する。generation は特定の task に属さないので、event は新しい追記専用の表 `script_generation_events`（`id` INTEGER PK、`ts`、`generation_id`、`json`）に書く。UPDATE・DELETE の経路は作らない（S2-4 の `script_domain_events` と同じ扱い）。
+- **生きた generation（`loaded`・`active`・`draining`）は最大 2 つ**（(f) の RSS の上限が generation 2 個で 200 MiB）。3 つ目の登録は 409 `script_generation_limit` で拒む。daemon は自動で `loaded` を退役させない（人か CoS が退役させる）。
+- Celeris は `script-bundles/` の下の file を消さない（`retired`・`invalid` の file も残す）。消すのは人の手順だけ。
+- `[script] active_bundle_sha256` は消す（読み込みエラー）。起動時に load する generation は DB の `script_domain_modes` が決める（S5-2 の起動時の復元）。`[script]` に残すのは `state_dir` と上限だけ。本番の config に欄があれば人が消す（進捗の「本番への移行」）。
+
+### S5-2 要求ごとの generation の固定・in-flight・drain（目的の (3)）
+- **固定**: 呼び出し側（dispatcher の tick・digest の pass）は mode の行を 1 回読み、その行の `generation_id` を要求に入れる（S4-14 のまま）。`GenerationRegistry::call(generation_id, …)` はその generation の actor にだけ送る。registry に無い・`retired` の id への要求は即 `GenerationGone` を返す。呼び出し側は Rust の参照実装で答える。
+- **in-flight**: generation ごとに 64（今の bounded mpsc の容量。超えたら `Busy`）。生きた generation は 2 つまでなので process 全体で 128 まで。compare の別 tokio task は今の `MAX_IN_FLIGHT_COMPARES`（全領域で 32）のまま。registry は generation ごとに in-flight の数を RAII の guard で数える。
+- **切替**: mode の CAS が `generation_id` を A から B に変えたら、同じ transaction で B を `active` にし、A を指す行が残らなければ A を `draining` にする。CAS の後に行を読んだ要求は B へ行く。切替の前に A を読んだ要求は A で最後まで走る。
+- **drain**: `draining` の generation は新しい要求を受けない。in-flight が 0 になったら `retired` にして isolate を捨てる。純粋判定は CAS の時刻から **30 秒**で打ち切る（(d)）。30 秒の時点で残る要求は watchdog が `terminate_execution` で止め、呼び出し側には `GenerationGone` を返す。呼び出し側は Rust の参照実装で答える。打ち切った件数を `script_generation_retired` の `cancelled_in_flight` に書く。
+  - 要求ごとの deadline（純粋判定 50 ms、digest の pass 200 ms）が 30 秒より短いので、ふつうは deadline のうちに drain が終わる。30 秒は退役の上限である。
+- **CoS の digest pass**: pass は始めの generation で最後まで走る（S4-18）。pass の途中で A が `draining` になっても、op は A の要求の token で答え続ける。apply の直前の読み直しで違いを見つけたら Rust で apply する（`mode_changed`）。Promise・closure を B へ移さない。
+- **起動時の復元**（(d)・S4-14 を具体化する）: daemon は起動時に `script_domain_modes` から `generation_id` を集め（最大 2 つ）、それぞれを新しい isolate で S5-1 の 3 と同じ検証で load する。file が無い・hash が違う・`host_api` が合わない・検証に落ちる・manifest にその領域が無い・その領域の capability が足りない、のどれかなら、その generation を指す領域を actor `system:script-startup` で `rust` に戻し、受信箱に項目を出す。load できた generation の mode（`compare`・`canary`・`ts`）は保つ（S4 の `restore_modes` が `needs_generation()` の行を全部 `rust` へ戻すのを改める）。`invalid` を指す行は必ず `rust` に戻す。script-guard の停止（S5-7 の `halted`）が立っていれば、全領域を `rust` で起動する。
+
+### S5-3 canary の選び方（目的の (2) の前半）
+- `script_domain_modes` に `canary_bps` INTEGER を足す（store-gen unit）。CHECK: `mode = 'canary'` なら 1〜9999、それ以外は NULL。
+- 選択は決定的な hash で行う: `h = sha256("celeris.canary/1" || 0x00 || domain || 0x00 || generation_id || 0x00 || unit_key)` の先頭 8 byte を big-endian の u64 にし、`h % 10000 < canary_bps` なら TS の側。generation を key に入れるので、generation ごとに対象の集合が変わり、同じ generation の中では変わらない。乱数・時計を使わない。
+- 単位（`unit_key`）:
+  | 領域 | 単位 | 理由 |
+  |---|---|---|
+  | `lane_rules` | task id | 同じ task の判定が run ごとに TS と Rust を行き来しないようにする |
+  | `route_priority` | task id | 同じ。`route_select` の run id は判定の時点で無いことがある（S2-4 の `run_id` null） |
+  | `cos_digest` | pass（`pass_id`） | thread 単位にしない。1 pass は複数の thread の run を含み（S4 の trace の「2 thread」）、規則 7〜9 の検証と apply は pass 全体で行う（S4-14）。thread で分けると 1 pass の中で TS と Rust の command が混ざる。`pass_id` は Rust が作る ULID で、記録に残るので後から選択を再現できる |
+- canary の Rust 側の単位も compare と同じく TS を影で走らせて記録する。TS 側の単位は TS の結果を Rust が検証してから使い、Rust の参照実装の結果と比べて記録する（(d) の表）。記録の json に `canary_selected`（bool）と `canary_bps` を足す（`script_compare_recorded` と `script_compare_log` の両方）。
+- 戻し先は常に `rust`（または `compare`）にする。以前の TS の generation へ自動で戻さない。known-good の bundle は file と `retired` の行で残り、使うときは再登録して `compare` から昇格し直す。Rust の参照実装は S6 の終了条件まで残す（(d)）。
+
+### S5-4 mode の遷移と権限（目的の (2) の後半。S2-5・S4-14 を改める）
+| 遷移 | 誰が | 前提（満たさなければ 422） |
+|---|---|---|
+| `rust`→`compare`、または任意の mode から別の generation の `compare` へ | 人・CoS operations・外部 operator の token（挙動を変えない） | generation が `loaded`・`active`、manifest にその領域がある、checkpoint の版（S5-5）が合う |
+| `compare`→`canary` | **人の token だけ**（CoS・外部 operator・`system:*` は 403 `script_mode_requires_human`。CoS registry は本文の `mode` が `canary`・`ts` なら effect の前に 403 で拒み、rejected を記録する。S4-20 の (7) と同じ形） | 同じ generation の `compare`。script-guard の計数（S5-7）が (f) の「`compare`→`canary` へ進む条件」を満たす（不足は 422 `script_canary_not_ready`、本文に計数）。`canary_bps` が 1〜9999 |
+| `canary` の `canary_bps` の変更 | 人の token だけ | 同じ generation |
+| `canary`→`ts` | **人の token だけ** | 同じ generation の `canary`。canary の間の計数が (f) の「進む条件」と同じ閾値を満たす（TS 側の単位で数える） |
+| `canary`・`ts`・`compare`→`rust`、`canary`・`ts`→`compare`（戻し） | 認証された誰でも・daemon（`system:script-startup`・`system:script-guard`）。自動でもよい | なし |
+- S4 で許した `compare`→`ts`（`cos_digest` だけ）は消し、全領域で `canary` を経る。`canary`・`ts` を全 3 領域（`lane_rules`・`route_priority`・`cos_digest`）で受ける。`script_mode_not_enabled`（422）は使わなくなるので消す。`script_mode_ts_requires_compare` は `script_mode_requires_previous_stage` に改める（`canary` は同じ generation の `compare` から、`ts` は同じ generation の `canary` から）。
+- script-guard の停止（S5-7 の `halted`）が立っている間は、`rust` 以外への遷移を 409 `script_guard_halted` で拒む。停止を解くのは人の token だけ（`POST /api/v1/script/guard/clear`）。
+- 認可の error（401・403）では表も event も変えない。CAS の版違いは今の 409 のまま。
+- 本番の mode を変えるのは人の手順だけ。worker と CoS は本番で `canary`・`ts` にしない（進捗の「本番への移行」に書く）。進行中の測定 daemon では切り替えない（(g)）。
+
+### S5-5 checkpoint と版の照合（目的の (4)）
+- 形: `celeris.script-checkpoint/1` は JSON の object で、欄は `schema`（`"celeris.script-checkpoint/1"`）・`domain`・`workflow_id`（ULID）・`generation_id`（書いた generation）・`step`（TS が決める文字列、128 byte まで）・`state`（plain な JSON の値だけ。関数・Promise・class instance・`undefined` を入れない。直列化して 64 KiB まで）・`effects`（`{ idempotency_key, kind, applied }` の配列）・`written_at`（RFC 3339、Rust の時計）。
+- 書くのは Rust だけ。TS は「次の checkpoint の `step` と `state`」を提案として返し、Rust が検証して保存する。Promise・closure・V8 の値は checkpoint に入れず、generation をまたいで移さない。新しい generation は保存された checkpoint を入力 DTO として受け、最初から関数を呼ぶ。
+- manifest の `checkpoint_versions`（今の `Vec<u32>`、版の番号 `n` の並び）との照合: ある領域に保存済みの checkpoint の版の集合を V とする。その領域を新しい generation へ移す CAS（S5-4 の 1 行目）は、新しい manifest の `checkpoint_versions` が V を全部含むときだけ通す。含まなければ 422 `script_checkpoint_incompatible`。起動時の復元で含まなければ、その領域を `rust` に戻す（S5-2）。登録（S5-1）では、`checkpoint_versions` が重複なしの昇順で、host が知る版（S5 では `1` だけ）に限ることを検証する。
+- S5 の 3 領域には長期 workflow が無い: `lane_rules`・`route_priority` は純粋判定、`cos_digest` の pass は 200 ms で終わり、続きは Rust の永続状態（`digest_due`・`dirty`・message の冪等 key・`WHERE state='running'`）から次の pass が作り直す。だから S5 では checkpoint の表を作らない（V は常に空で、今の bundle の `checkpoint_versions: []` で通る）。S5 で実装するのは照合の関数・登録の検証・CAS の拒否と、その試験（作り物の V で照合を確かめる）までである。表 `script_checkpoints` は、checkpoint を使う最初の領域を足す変更が、その ADR の付記と一緒に作る。
+
+### S5-6 副作用の前後の扱いと認可の error（目的の (5)）
+- **副作用の前**（`lane_rules`・`route_priority` の判定全部、`cos_digest` の apply より前）: TS の失敗（`ScriptError` の全種類）・検証落ち・`GenerationGone`・tick の予算切れ（S5-8）では、Rust の参照実装の結果を使う。記録に `fallback` の code を残す（S4-15 の形を `lane_rules`・`route_priority` の記録にも足す）。
+- **副作用の後**: 副作用を起こすのは Rust の apply だけである（S4-14）。apply が途中で止まった後（再起動・cancel・generation の切替）の再実行は、command を無条件に繰り返さない。Rust が command ごとに冪等 key と実行記録で照合してから書く。
+  - `post_digest`: 冪等 key `cos-triage-digest:<run_id>` の message が在れば書かない（今のまま）。
+  - `requeue_run`: `WHERE state='running'` の条件付き更新（今のまま）。
+  - 冪等 key を持たない副作用の command の種類は検証で拒む（`invalid_output`。今後 command の種類を足す変更は、冪等 key と照合の方法を同じ差分で決める）。
+- **照合できないとき**（冪等 key の読み出しが失敗した、記録と状態が食い違う）: その run の残りの command を書かずに止める。`digest_due` を下ろさない。actor `system:script-guard` で受信箱に `script_effect_unverified` の項目を出し、その領域を `rust` に戻す（S5-7 の戻しと同じ経路）。次の pass は Rust の経路で照合し直す。照合できるまで同じ run を書かない。
+- **認可の error で fail-open しない**: op の `Denied`、API の 401・403、capability・scope の拒否は、どれも「許可した」とみなす既定値にしない。TS の出力が拒否された読み出しに拠るなら、その pass・判定は Rust の参照実装で答える（Rust は自分の認可を通して読む）。拒否を理由に検査を飛ばす経路、拒否された op の代わりに空の結果を「成功」として返す経路を作らない。
+- **戻しの書き込みが失敗したら**: script-guard や起動時の復元が mode の行を `rust` に戻す書き込みに失敗したら、dispatcher はその領域を process の中で `rust` として扱い（fail-closed）、書けるまで tick ごとに書き直す。
+
+### S5-7 停止基準の監視 `script-guard`（目的の (6)。(f) の数値のまま）
+- **計数の置き場**: 新しい表 `script_guard_state`（store-gen unit が migration を足す）に、(domain, generation_id) ごとに 1 行を持つ。欄: `mode`（数え始めた mode）・`window`（直近 1000 呼び出しの結果の環。各要素は `ok`・`mismatch`・`timeout`・`failure`）・`consecutive_failures`・`timeouts_10min`（直近 10 分の timeout の時刻）・`clean_streak`（説明のつかない不一致の無い連続の呼び出し数。`compare`→`canary` の前提に使う）・`calls`・`safety_violations`・`updated_at`。**再起動の後も残す**: 消すと、再起動のたびに 1000 件の窓と昇格の前提が 0 からになり、率の超過を隠し、`canary` の前提を数え直すことになるからである。generation が変われば別の行で数え直す。領域 `*` の行は全体の停止 `halted`（bool と理由）を持つ。
+- **分母と数え方**: S2-8 のとおり（`outcome != "unavailable"`、重複の抑えの後）。`canary`・`ts` では TS 側の単位と、Rust 側の単位で影に走らせた TS の両方を数える。S5 は正規化の規則を足さないので、`mismatch` は全部「説明のつかない不一致」に数える。tick の予算切れ（S5-8）は `unavailable` で、分母に入れない。
+- **更新**: dispatcher が記録（`script_compare_recorded`・`script_compare_log`）を追記するたびに、store の `script_guard_observe` が同じ transaction で行を更新し、純粋関数 `script_guard::evaluate`（task-core）で (f) の表を当てる。
+- **戻す条件**（(f) の表のまま）: 説明のつかない不一致 1 件、直近 1000 呼び出しの timeout 率 0.1% 超または 10 分間に timeout 3 件、直近 1000 呼び出しの失敗率 0.1% 超または連続 3 件、安全違反 1 件。率は 1000 件に届いた窓で判定する（届く前は件数の条件だけ当てる）。
+- **戻しの動作**: 条件に当たったら、同じ transaction で mode の行を CAS で `rust` に戻し、`script_domain_mode_changed` を actor **`system:script-guard`**、`reason` に code（`guard_mismatch`・`guard_timeout_rate`・`guard_timeout_burst`・`guard_failure_rate`・`guard_failure_streak`・`guard_safety_violation`）と計数を入れて追記する。対象は mode が `canary`・`ts` の領域。`compare` の領域は挙動が Rust のままなので mode を変えず、計数だけを残す（`clean_streak` が 0 になり昇格の前提が崩れる）。
+- **安全違反**: mode にかかわらず、その generation を `invalid` にし、その generation を指す全領域を `rust` に戻し、受信箱に項目を出す。「Rust の検証を通らずに副作用が実行された」を検出したら、全領域を `rust` に戻し、領域 `*` の `halted` を立てる（S5 全体を止める。(f)）。解くのは人だけ（S5-4）。
+- **受信箱**: 自動の戻しは毎回受信箱に項目を出す。daemon の `crates/celeris/src/daemon/script_guard.rs` が `script_domain_events`・`script_generation_events` の actor `system:script-guard` の行を cursor で読み、項目を作る（冪等 key は event の id）。dispatcher は LLM を呼ばない。
+  - **種類 `script_control`**（script-inbox unit が足した。`InboxKind::ScriptControl`）: 受信箱では答えない種類（`project_stalled` と同じく answer は 409 `native_action_required`）。actor `system:script-startup`（S5-2 の起動時の戻し）・`system:script-guard`（S5-6 の `script_effect_unverified`、この節の戻し・無効化・停止）の記録 1 件に項目 1 件。項目にする generation の記録は `script_generation_invalidated` と `script_guard_halted` だけ（mode の CAS が同じ actor で書く `draining`・`retired` 等は同じ出来事の mode の変更の項目と重なるので作らない）。本文には領域・generation（mode の変更は戻した元）・変更（`canary → rust` 等）・`reason` の先頭の code（`guard_*`・`script_effect_unverified`・起動時の失敗の理由）と `reason` の全文を出す。
+  - **永続の置き場**（migration 0106）: 表 `script_inbox_items`（id `<domain|generation>-<event id>`、`UNIQUE (source, event_id)`、`INSERT OR IGNORE`）と `script_inbox_cursors`（記録の表ごとの読み終えた id。前へだけ進む）。項目の作成・閉じる・cursor の更新は 1 つの transaction。cursor を失っても冪等 key で 2 件目を作らない。記録の表は追記専用のまま。
+  - **閉じる規則**: 人の actor（`human:<name>`）の後の記録で閉じる。その領域の mode の変更はその領域の項目と領域を持たない generation の項目（停止を除く）を、その generation の `loaded`・`retired`・`invalid` への遷移はその generation の項目を、`script_guard_cleared` は停止の項目を閉じる。閉じるのはその人の記録より前の項目だけ（同じ表は id、別の表は ms の時刻で比べる）。CoS・外部 operator・`system:*` の記録は項目を作らず、閉じもしない。
+  - daemon の `script_guard::spawn` が active の instance で 30 秒ごと（起動直後に 1 回）に取り込む（`tick_loop` から起動）。
+- 判定の時計は store に渡す `now`（試験では注入した時計）を使う。10 分の窓も同じ時計で数える。
+
+### S5-8 mode ts の 200 ms 待ちと tick の遅れ（目的の (7)。S4 未解決 7）
+- 同期で TS を待つのは `canary` の TS 側と `ts` だけ（純粋判定 1 回 50 ms まで、digest の pass 200 ms まで）。`compare` は待たない（S2-6）。
+- **1 tick で TS を待つ時間の合計を 200 ms までにする**（tick 周期 `tick_ms` 既定 2000 ms の 10%。digest の pass の deadline と同じ値で、新しい数値の目標ではない）。予算を使い切った後のその tick の判定は TS を呼ばず Rust で答え、`fallback.code = tick_budget`・outcome `unavailable` を記録する。timeout・失敗に数えない（TS の誤りでないため）。予算は tick ごとに戻る。
+- **数え方**: dispatcher は tick ごとに `script_wait_us`（その tick で TS を同期で待った合計）を測り、`tick_budget` の件数と一緒に、tick の終わりに process の中の集計（直近 1000 tick の p50・p95・最大）に入れる。daemon は 10 分ごとに `script_tick_wait` の log 行を出す。S6 の overhead の報告はこの値を使う。停止基準には入れない（(f) を変えない）。
+- 許容: tick の遅れの p95 が 200 ms 以下。超えたら（予算の実装の誤り）試験で落とす。`canary_dispatch` の試験で、時計を止めて 50 ms の判定を 5 回待たせ、5 回目が `tick_budget` になることを確かめる。
+
+### S5-9 bundle の無い・古い環境での試験（目的の (8)。S4 未解決 8）
+- 問題: `control-ts/dist` は git の管理外で、task の根に古い物が残り、統合の `test-affected.sh` は dist を作り直す前に走る。今は無い・古い dist で bundle を使う試験が SKIP で黙って通り、古い dist の中身が source とずれると誤って落ちうる。
+- 方式:
+  1. 試験の support（`crates/celeris/tests/support/script_compare.rs` と `crates/script-runtime/tests/script_host_runner.rs`）は、環境変数 `CELERIS_SCRIPT_BUNDLE_DIR` があればそこを、無ければ `control-ts/dist` を読む。
+  2. `control-ts/dist` を読むときは、今の古さの判定（manifest の `domains`・`capabilities` と `bundle.config.json` の照合）に加えて、`build-bundle.mjs` が dist に書く `inputs.sha256`（`control-ts/src/`・`bundle.config.json`・`package.json`・`pnpm-lock.yaml` の内容 hash）を作業ツリーから計算した値と比べる。合わなければ古い dist として SKIP する（落とさない）。manifest の形（`celeris.script-manifest/1`）は変えない。
+  3. `CELERIS_SCRIPT_REQUIRE_BUNDLE=1`、または `CELERIS_SCRIPT_BUNDLE_DIR` がある場合は SKIP しない。使えない・古い bundle は失敗にする。
+  4. `scripts/dev/test-affected.sh` は、選んだ試験に `celeris` か `celeris-script` が入るとき、`ts-verify.sh` と同じ方法（`build-bundle.mjs`、offline の pnpm install）で `$TMPDIR` の使い捨ての dir に bundle を作り、`CELERIS_SCRIPT_BUNDLE_DIR` を渡す。task の根の `control-ts/dist` を読まず、書き換えもしない。作れないとき（node_modules が offline で入らない等）は渡さず、理由を 1 行出す。
+  5. SKIP を数える: 試験は SKIP のとき、`CELERIS_SCRIPT_SKIP_LOG` があればその file に 1 行（試験名と理由）を足す。`test-affected.sh` はこの file を `$TMPDIR` に置いて渡し、終わりに `script bundle SKIP: N 件` を出す。N > 0 で bundle を作れていた場合は exit 1 にする（作った bundle で SKIP するのは誤り）。
+- release gate（`release.sh`）に同じ方式を入れるかは S5 で決めない（進捗の提案）。
+
+### S5-10 S6 の測定の定義（目的の (9)）
+- **対の scenario**（`scripts/dev/edit-activate-baseline.sh`。cos-ts-scenario unit が足す）:
+  | 対 | Rust の経路（旧） | TS の経路 |
+  |---|---|---|
+  | 規則表 | `policy`（`crates/task-core/src/model_policy.rs` の `RULES` に、当たらない規則を 1 つ足す。今のまま） | `policy-ts`（`control-ts/src/domains/lane_rules.ts` に同じ論理の規則を足す。今のまま） |
+  | CoS digest | `cos-digest`（新。Rust の digest の参照実装 `crates/task-core/src/chat/digest.rs` の `cos_digest_decide` に、当たらない条件を 1 つ足す） | `cos-ts`（新。`control-ts/src/domains/cos_digest.ts` の判定に同じ論理の条件を足す） |
+  - `cos-digest` と `cos-ts` の編集は同じ論理にする: 「`reason` が nonce を含む run には digest を出さない」のような、実際には当たらない分岐を 1 つ足す。anchor と挿入の本文は unit が決め、両方の差分を進捗に載せる。
+  - S0 の `cos`（`job_wait_extend::validate`）は TS へ移していない経路なので、対に使わない。S0 の baseline として残す。
+- **同じ検証責任**: 「その領域の判定を変えたとき、出荷できる成果物を作り、その領域の単体試験と Rust/TS の比較を通す」ところまでを両方の経路の 1 試行とする。
+  - Rust の経路: 今の 6 段（`check`・`build`・`clippy`・`test-build`・`test-run`（対象 crate `task-core`）・`release-build`）。`test-run` は `crates/task-core/tests/script_fixtures.rs`（比較 fixture と Rust の出力の一致）を含む。
+  - TS の経路: `ts-verify.sh`（型検査・bundle・領域の TS 試験・比較 fixture の replay・事前 build 済みの host での golden・generation の load と `compare` での有効化）。ADR 2026-11-02-ts-fast-verify (7) の `policy-ts` と同じ手順で、`cos-ts` は領域 `cos_digest` を対象にする。
+  - Rust の経路は crate の全試験を走らせるので、TS の経路より検証が広い。この差を報告に書き、Rust 側を狭めて揃えることはしない（測定のために手順を変えない）。
+- **時間**: 1 試行は 300 秒以内に収まる設計にする（warm の Rust は S0 で約 155〜225 秒、TS は目標 p95 60 秒）。300 秒を超えた試行も捨てずに記録し、`over_300s` の印を付けて p50・p95 に含める。cold の Rust（S0 で 283.5・377.2 秒）は 300 秒を超えるので S6 で測らない（S0 の値を引用する）。
+- **leaf ごとの試行数**（1 leaf の壁時計 3600 秒に収める）:
+  | leaf | scenario・mode | 試行数 | 生データ |
+  |---|---|---|---|
+  | m-ts-warm | `policy-ts` warm、`cos-ts` warm | 各 20 | `policy-ts.jsonl`・`cos-ts.jsonl` |
+  | m-ts-cold | `cos-ts` cold | 20 | `cos-ts-cold.jsonl` |
+  | m-policy-a / m-policy-b | `policy` warm | 10 ずつ（rep 1〜10 / 11〜20） | `policy-a.jsonl`・`policy-b.jsonl` |
+  | m-cosd-a / m-cosd-b | `cos-digest` warm | 10 ずつ（rep 1〜10 / 11〜20） | `cos-digest-a.jsonl`・`cos-digest-b.jsonl` |
+  - 置き場は `agent-docs/progress/2026-11-02-ts-control-layer-s6/`。2 つに分けた scenario は `--rep-start 11`（cos-ts-scenario unit が足す）で rep の番号を続ける。s6-report unit は行を変えずに a・b を順に連結して `policy.jsonl`・`cos.jsonl`（中身の `scenario` は `cos-digest`）を作り、検査（`--validate`）を通す。
+- **識別の記録**（(g)）: 各行の `env` に、`commit`（`git rev-parse HEAD`）、作業ツリーが clean であること、対象の dir の tree hash（Rust は `git rev-parse HEAD:crates/task-core`、TS は `HEAD:control-ts`）、rustc・node・pnpm の版、host 名、`CARGO_TARGET_DIR` の種別（warm の共有か cold の使い捨てか）、TS の経路では候補 bundle の `bundle_sha256` と `host_api`・runner の sha256、測定の系列名（leaf の key）を入れる。tree hash・toolchain・host のどれかが違う行は同じ集計に入れない（a・b を連結するときも照合する）。S6 の言語移行の比較と、移行後の方針改善の性能比較は別の測定として記録する。
+
+### S5-11 S5 の測定規則（S6 の測定 leaf が共通に守る）
+1. **直列**: 測定 leaf は depends_on で 1 本の鎖にし、同時に 2 つ走らせない。
+2. **commit 済みの作業ツリーで測る**: 測る前に `git status --porcelain` が空であること。script の編集は試行ごとに戻し、戻せなければ止める（今の `revert` のまま）。
+3. **重い作業と並べない**: 自分の run の中で、測定と並べて cargo・test-affected・他の build を走らせない。試行の前後に load average（1 分）と、自分以外の `cargo`・`rustc` の process の数を記録し、0 でなかった試行に印を付ける（捨てない。報告で分けて示す）。CPU を焼く負荷をかけない。
+4. **IEEE Access・K2・K4 の環境と state dir に触れない**: 測定用の release・state dir・config・pin した binary を読まず書かない。測定の daemon・state は `$TMPDIR` か run の作業場所の下に作る（(g)）。
+5. **測定のためにコードを変えない**: 測定 leaf はコードと script を変えない（範囲は進捗の file と生データの jsonl だけ）。script の不具合を見つけたら測らずに plan_issue で返す。
+6. **時間切れ**: 残りの壁時計が「1 試行の最大（300 秒）＋後始末 120 秒」を切ったら新しい試行を始めない。測れた試行数を進捗に書き、目標に届かなければ「未達（N/目標）」と書く。届かない分を推定で埋めない。
+7. **混ぜない**: 識別（S5-10）が違う試行、prime の行、skipped の行を p50・p95 に入れない。p95 は最近傍順位（(f)）で出す。
+
+### S5-12 後続の unit の作業範囲と試験名
+試験名は unit が実装時に変えてよい。変えたら進捗ファイルに対応を書き、s5-close unit がこの表と突き合わせる。範囲 check には下の path を最初から入れる（ADR 文書・進捗ファイル・`docs/architecture-map.md` は各 unit の範囲に含める）。
+| unit | 作業範囲（path） | 足す・直す試験 |
+|---|---|---|
+| bundle-skip | `crates/celeris/tests/support/script_compare.rs`、`crates/script-runtime/tests/script_host_runner.rs`、`control-ts/scripts/{build-bundle.mjs,build-bundle.test.mjs}`（`inputs.sha256`）、`scripts/dev/test-affected.sh`、`scripts/dev/tests/`、`control-ts/scripts/test-affected.test.mjs` | `usable_bundle_skips_stale_inputs_hash`、`usable_bundle_fails_when_bundle_dir_env_set`、`usable_bundle_require_fails_on_stale`、`skip_log_records_test_and_reason`、`build-bundle writes inputs.sha256`（node --test）、shell 試験 `scripts/dev/tests/test-affected-script-bundle.sh`（偽の build で `CELERIS_SCRIPT_BUNDLE_DIR` を渡す・作れないとき理由を出す・SKIP 1 件で exit 1） |
+| runtime-gen | `crates/script-runtime/src/{generation.rs,actor.rs,handle.rs,watchdog.rs,manifest.rs,lib.rs,error.rs}`、`crates/script-runtime/tests/generation.rs`、`crates/celeris/src/daemon/script_layer.rs`・`script_policy.rs`（handle の型が変わる分の追従だけ） | `generation_load_uses_new_isolate`、`generation_load_rejects_unknown_domain_capability_or_checkpoint`、`generation_call_pins_requested_generation`、`generation_limit_two_live`、`generation_drain_cuts_pure_call_at_30s`（時計を止める）、`generation_call_to_retired_is_generation_gone`、`generation_in_flight_64_then_busy`、`checkpoint_versions_must_cover_stored`（作り物の V） |
+| store-gen | `crates/task-core/migrations/`（新 migration）、`crates/task-core/src/store/{script_domains.rs,script_domains_tests.rs,script_guard.rs}`、`crates/task-core/src/{script_compare.rs,script_guard.rs}`、`crates/task-core/src/script_compare/` | `script_generation_state_transitions`、`script_generation_rejected_rows_migrate_to_invalid`、`script_generation_events_append_only`、`script_domain_canary_bps_check`、`script_domain_mode_cas_moves_generation_states`、`script_guard_observe_counts_per_generation`、`script_guard_evaluate_each_stop_condition`（(f) の 4 行と 10 分・連続 3 件）、`script_guard_state_survives_reopen` |
+| api-canary | `crates/task-api/src/{script_domains.rs,script_generations.rs,lib.rs}`、`crates/task-api/tests/{script_domains.rs,script_generations.rs}`、`crates/task-api/src/cos/operations.rs`・`cos/ops/`、`agent-docs/adr/2026-10-09-cos-operations-all-mutations.md`、`config/skills/cos-operator/operations.md`、`docs/api/v1/api-v1.schema.json`、`web/api/generated/`（再生成） | `script_generation_register_503_when_unwired`、`script_generation_register_invalid_422`、`script_generation_limit_409`、`script_domain_mode_canary_requires_human`、`script_domain_mode_canary_requires_guard_ready`、`script_domain_mode_ts_requires_same_generation_canary`、`script_domain_mode_rollback_by_anyone`、`script_domain_mode_refused_while_halted`、`script_guard_clear_human_only`、CoS registry の試験の追従 |
+| script-inbox | `crates/task-ops/src/{human_inbox.rs,inbox.rs}`・`human_inbox/tests.rs`、`crates/task-core/src/script_inbox.rs`・`migrations/0106_script_inbox.sql`、`crates/celeris/src/daemon/{script_guard.rs,script_guard_tests.rs,tick_loop.rs}`、`crates/task-api/src/inbox_notifications.rs`、`web/features/inbox/`、`docs/api/v1/`・`web/api/generated/`（再生成） | `script_inbox_item_once_per_event_survives_restart`（S5-7 の `script_guard_inbox_item_once_per_event` に当たる）、`script_inbox_human_actor_creates_no_item_and_closes_open_ones`、`script_inbox_generation_invalidated_and_halt_items`、`script_inbox_reason_code_takes_leading_code`、`script_inbox_item_shows_domain_generation_and_code`（task-ops） |
+| daemon-gen | `crates/celeris/src/daemon/{script_layer.rs,script_policy.rs}`、`crates/celeris/src/config/script.rs`（`active_bundle_sha256` を消す）、`crates/celeris/tests/script_compare_*.rs`（config の追従）、`config/celeris.example.toml` の `[script]` の例（あれば） | `daemon_registers_generation_in_new_isolate`、`daemon_switch_drains_old_generation`、`daemon_restore_keeps_loaded_modes`、`daemon_restore_rolls_back_missing_or_invalid_generation`、`config_active_bundle_sha256_is_rejected` |
+| canary-dispatch | `crates/task-dispatch/src/dispatcher/{script_compare.rs,work_units.rs,route_select.rs}`、`crates/task-dispatch/src/dispatcher/cos_chat/digest.rs`、`crates/task-dispatch/src/script_policy.rs`、`crates/task-dispatch/src/dispatcher/tests/`、`crates/celeris/src/daemon/script_policy.rs`（trait を変える分） | `canary_selection_is_deterministic_per_unit`（3 領域）、`canary_ts_side_uses_validated_ts_result`、`canary_rust_side_still_compares`、`canary_fallback_before_effect_uses_rust`、`canary_effect_unverified_stops_and_rolls_back`、`canary_denied_never_fails_open`、`tick_budget_200ms_falls_back_after_budget`、`rollback_write_failure_treated_as_rust` |
+| guard | `crates/celeris/src/daemon/script_guard.rs`、`crates/celeris/src/daemon.rs`・`crates/celeris/src/daemon/tick_loop.rs`（起動）、`crates/celeris/tests/script_guard.rs` | `script_guard_rolls_back_on_one_mismatch`、`script_guard_rolls_back_on_timeout_rate_and_burst`、`script_guard_rolls_back_on_failure_rate_and_streak`、`script_guard_safety_violation_invalidates_generation`、`script_guard_unvalidated_effect_halts_all`、`script_guard_inbox_item_once_per_event`、`script_guard_counts_survive_restart` |
+| gen-e2e | `crates/celeris/tests/script_generation_e2e.rs`（新）、`crates/celeris/tests/support/` | `CELERIS_SCRIPT_REQUIRE_BUNDLE=1`（または `CELERIS_SCRIPT_BUNDLE_DIR`）で本物の bundle 2 つ（A と印付きの B）を使う `script_generation_e2e_coexist_switch_error_rollback_restart`: A を active にした daemon に B を登録→併存→B に切替（A は drain）→B の途中 error→script-guard が `rust` に戻す→再起動で active generation を復元。event の欠落 0（`script_domain_events`・`script_generation_events` の連番に穴が無い）、message は冪等 key ごとに 1 件 |
+| cos-ts-scenario | `scripts/dev/edit-activate-baseline.sh`、`scripts/dev/tests/`（偽の cargo・runner の試験） | `cos-digest`・`cos-ts` の `--dry-run`、`--rep-start`、`env` の識別の欄（S5-10）、試行の前後の load の記録。shell 試験 `scripts/dev/tests/edit-activate-cos-ts.sh`（anchor が 1 回だけ在る・編集が戻る・`--validate` が新しい欄を検査する） |
+| s5-close | 進捗のまとめ、`docs/SPEC.md`（運用の節）、`docs/architecture-map.md`、この付記の実装との突き合わせ（S5-13 として足す）、「本番への移行」 | 文書の検査（`check-doc-links.sh`・`check-adr-numbers.sh`・`progress-index.sh --check`・`check-architecture-map.py`） |
+
+### S5-13 実装との突き合わせ（S5 s5-close、2026-11-03）
+記録は [S5 の進捗](../progress/2026-11-02-ts-control-layer-s5.md) と各 unit の記録（`../progress/2026-11-02-ts-control-layer-s5/`）。S5-1〜S5-9・S5-12 を実装と突き合わせた結果である。(f) の数値は変わっていない（定数は `crates/task-core/src/script_guard.rs`）。権限・安全・停止基準の規則に関わる違いは無い。違いは置き場所・名前・起点の時刻・試験の範囲である。S5-10・S5-11 は S6 の測定 leaf が使うので、ここでは突き合わせない。
+
+| 節 | 実装 | 付記との違い |
+|---|---|---|
+| S5-1 | 登録は `crates/task-api/src/script_generations.rs`（trait `ScriptGenerationControl`、`GET`・`POST /api/v1/script/generations`、`POST …/{id}/retire`）→ daemon の `crates/celeris/src/daemon/script_layer.rs` の `ScriptGenerations` → `crates/script-runtime/src/generation.rs` の `GenerationRegistry::register_deployed`。状態と遷移は `crates/task-core/migrations/0105_script_generations_s5.sql` と `store/script_domains.rs` の `transition_tx`（状態を書く唯一の場所）、記録は追記専用の `script_generation_events`。`[script] active_bundle_sha256` は読み込みエラー | (1) 登録簿の key は DB の id でなく `bundle_sha256`（検証してから記録する順なので、検証の時点で DB の id が無い）。(2) migration は指されない旧 `loaded` を `retired` にした（再起動で isolate は残らない。再登録で `loaded` に戻る）。(3) 起動時の復元は isolate の無い `loaded` を `retired`（reason `startup_no_isolate`）にする。(4) bundle の file が無い hash の登録も `invalid` になり、同じ hash では登録し直せない（進捗の未解決） |
+| S5-2 | 固定は `GenerationRegistry::call`（future を作った時点で generation の `Arc` と in-flight の枠を取る）、in-flight は generation ごとに 64、drain の打ち切りは `DRAIN_CUTOFF`（30 秒、trait `GenerationClock` の時計）。daemon の見回りは `RECONCILE_INTERVAL`（1 秒）ごとに表の `draining`・`retired`・`invalid` を登録簿に当てる | (5) 30 秒は CAS の時刻でなく、見回りが drain を始めた時刻から数える（最大 1 秒遅れる）。(6) 30 秒の時点の打ち切りは `terminate_execution` でなく、呼び出し側へ `GenerationGone` を返して actor が後から来た結果を捨てる形。同期の実行は要求の deadline（50 ms）で watchdog が止める。(7) 起動時の復元は行から指されない `draining` を `retired`（`cancelled_in_flight` 0、reason `drained`）にする（core-fix の提案を daemon-gen が入れた）。(8) standby の daemon は isolate を作らず、active になってから最初の見回りで復元する |
+| S5-3 | `task_core::script_compare::canary_selected`（付記の sha256 の式のまま）、単位の選択は `crates/task-dispatch/src/dispatcher/script_canary.rs`。記録の `canary_selected`・`canary_bps` は `ScriptCompareRecord`・`CosDigestCompareRecord` の serde default の欄 | 違いなし。`route_priority` の TS 側で候補列が Rust と違うときは `RouteContext::priority_override` で選び直す（付記に無い実装の細部）。その dispatcher の試験は無い（進捗の未解決） |
+| S5-4 | `crates/task-api/src/script_domains.rs`（検査の順: 領域名 404 → `canary`・`ts` の主体 403 → generation の解決 422 → store の CAS）、`POST /api/v1/script/guard/clear`。CoS registry（`crates/task-api/src/cos/ops/admin.rs`）は本文の `mode` が `canary`・`ts` なら effect の前に 403 `human_only` | 違いなし。`script_mode_not_enabled`・`ts_may_skip_canary`・`ScriptMode::accepted_for` は消した。(9) `celerisctl script mode` は `rust`・`compare`・`ts` だけで、`canary`・`canary_bps`・generation の登録・退役・停止の解除の subcommand は無い。help の文面は S4 の「`ts` は `cos_digest` だけ・`compare` から」のまま（`crates/celerisctl/src/commands/script.rs`。進捗の未解決） |
+| S5-5 | 照合は `checkpoint_versions_cover`（runtime と task-core の両方）、保存済みの版は `script_checkpoint_versions_stored`（S5 では常に空）。登録の検証は昇順・重複なし・host の版 `[1]` の中 | 違いなし。表 `script_checkpoints` は作っていない |
+| S5-6 | 副作用の前の fallback の code（`ts_error`・`invalid_output`・`safety_violation`・`denied`・`unavailable`・`tick_budget`）は `script_canary.rs`。副作用の後は `chat_assistant_message_add_once` の `Conflict` と保存済み message の thread・run で照合し、照合できなければ pass の残りを書かず `digest_due` を下ろさず `system:script-guard` の `script_effect_unverified: …` で `rust` に戻す。戻しの書き込みに失敗した領域は process の中で `rust` として扱い、tick ごとに書き直す | (10) op の `denied` は、TS の出力がその読み出しに拠るときだけ fallback にする（拒否された読み出しを使わない出力は検証に回す）。fail-open の経路は無い（`canary_denied_never_fails_open`） |
+| S5-7 | 計数・判定・戻しは store の `script_guard_observe`（`crates/task-core/src/store/script_guard.rs`。`script_compare_append_observed`・`script_compare_log_append_observed` が追記と同じ transaction で呼ぶ）と純粋関数 `crates/task-core/src/script_guard.rs`。daemon の `crates/celeris/src/daemon/script_guard.rs` は 30 秒ごとの見回りで、検証の外の副作用の検出（`guard_unvalidated_effect` で `script_guard_halt`）・進む条件の log・受信箱の取り込みを行う | (11) 計数の「側」は記録の `canary_selected` でなく append 関数の `ts_side` 引数で受ける。`evaluate` は側を見ず、Rust 側の影の不一致・安全違反でも戻す。(12) 検証の外の副作用は `cos_digest` の記録の自己矛盾（`applied_by = ts` と mode・出力・安全違反・fallback の組）で見つける。apply と記録は同じ transaction にない。`crates/task-dispatch/src/dispatcher/cos_chat/digest.rs` は `apply_digest_pass` の後に `append_pass_record` を別に呼ぶ（同じ transaction なのは記録の追記と計数）。その間で process が落ちると TS の apply の記録が残らず計数もされず、この検出でも見つけられない。追記の失敗も warn だけなので、同じく記録と計数が残らない。(13) 見回りは `script_compare_log` を毎回全件読む（進捗の未解決）。(14) 受信箱の `script_control` の項目は CoS の triage の対象にも入る（`InboxKind::ALL`）。項目は受信箱では答えられず（409 `native_action_required`）、CoS は `canary`・`ts` へ上げられない（403）ので、CoS が行えるのは人への知らせと `rust`・`compare` への戻しだけである。gen-e2e で、daemon がこの項目から triage run を起こすことを確かめた |
+| S5-8 | `ScriptTickWait`（1 回 50 ms、1 tick 合計 200 ms）、tick の始めの `begin_tick`、集計 `Dispatcher::script_tick_wait_summary`（直近 1000 tick の p50・p95・最大と `tick_budget` の件数） | (15) daemon が 10 分ごとに出す `script_tick_wait` の log 行は無い（集計の関数だけがある）。(16) 試験 `tick_budget_200ms_falls_back_after_budget` は待ち時間の値の差し替えで確かめる。dispatcher の中で 50 ms の判定を 5 回待たせる試験は無い（TS の待ちは別の current-thread runtime で走り、試験の `tokio::time::pause` が届かない） |
+| S5-9 | 試験の support（`crates/celeris/tests/support/script_compare.rs`）は `control-ts/dist` を読まず、`CELERIS_SCRIPT_BUNDLE_DIR` が無ければ control-ts の source の内容 hash を名前にした `$TMPDIR/celeris-script-bundle/<hash>` に bundle を作って読む。`test-affected.sh` は bundle を作って `CELERIS_SCRIPT_BUNDLE_DIR` と `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` を渡し、SKIP の件数を出す | **S5-9 の (1)(2) を改める**: 試験は `control-ts/dist` を読まない。dist の `inputs.sha256` は使わない（`build-bundle.mjs` は変えていない）。(3)〜(5) はそのまま。release gate で REQUIRE を立てるかは決めていない |
+| S5-12 | 試験名の対応 | runtime-gen・store-gen・canary-dispatch・guard は付記の名前のまま。api-canary は `script_generation_register_503_when_unwired`・`…_invalid_422`・`script_generation_limit_409` を `script_domain_generation_*` の名前で、`script_guard_clear_human_only` を `script_domain_guard_clear_checks`（`script_domains.rs` の中の検査）で作った。script-inbox は `script_guard_inbox_item_once_per_event` を `script_inbox_item_once_per_event_survives_restart` で作った。daemon-gen は各名前に `script_` の接頭辞を付けた（`script_daemon_*`・`script_runtime_daemon_restore_*`）。gen-e2e は `script_generation_e2e_switch_error_rollback_restart`。bundle-skip は (1)(2) を改めたので `usable_bundle_*` の 3 件と node の `inputs.sha256` の試験は無く、`script_compare_fresh_bundle_follows_source`・`script_compare_unbuildable_bundle_is_skipped_and_logged` と shell 試験 `scripts/dev/tests/script-bundle-fresh.sh` に替えた |
+
+## 付記 2026-11-03: S6 の結果と二重実装を整理する終了条件（S6 s6-report、task 01M6FPPJN7A8H427MXFVYFY7H4）
+記録は [S6 の進捗](../progress/2026-11-02-ts-control-layer-s6.md)。(f) の数値は変えていない。
+
+### S6-1 生データの file 名（S5-10 との違い）
+連結 file と TS の file は S5-10 の表の名前のとおりで、部分 file だけ名前が違う。連結は測定 unit が済ませ、改名は [raw-names](../progress/2026-11-02-ts-control-layer-s6/raw-names.md) が `git mv` で行った（中身は 1 byte も変えていない）。中身の `scenario` は S5-10 のとおりで、`cos.jsonl` の scenario は `cos-digest`（S0 の `cos`〈`job_wait_extend`〉とは別）である。
+
+| S5-10 の名前 | 今の file（`../progress/2026-11-02-ts-control-layer-s6/`） | 中身 |
+|---|---|---|
+| `policy-ts.jsonl`・`cos-ts.jsonl` | 同じ | 各 20 試行 |
+| `cos-ts-cold.jsonl` | 同じ | 20 試行 |
+| `policy-a.jsonl`・`policy-b.jsonl` | `policy-warm-a.jsonl`・`policy-warm-b.jsonl` | 各 10 試行 |
+| `policy.jsonl` | 同じ | a+b の連結、20 試行 |
+| `cos-digest-a.jsonl`・`cos-digest-b.jsonl` | `cos-digest-warm-a.jsonl`・`cos-digest-warm-b.jsonl`・`cos-digest-warm-c.jsonl` | 7＋7＋6 試行 |
+| `cos.jsonl` | 同じ | a+b+c の連結、20 試行 |
+
+**検証の範囲（S5-10 との違い）**: S5-10 は Rust の経路の `test-run` を「対象 crate `task-core`」と書く。`policy` はそのとおりだが、`cos-digest` の実測は `check`・`clippy`・`test-build`・`test-run` を `-p task-core -p task-dispatch` の 2 crate で走らせた（`cos.jsonl` の `cmd`。`build`・`release-build` は `policy` と同じ `-p celeris`）。`task-dispatch` は digest の pass と Rust/TS の比較の試験を持つので cos-ts-scenario unit が足した（[cos-ts-scenario](../progress/2026-11-02-ts-control-layer-s6/cos-ts-scenario.md)）。このため `cos-digest` の p50 は `policy` より 110.0 秒長く（344.491 と 234.481）、TS の経路との比の約 46 倍はこの 2 crate の範囲の値である。`task-core` だけの `cos-digest` は測っていない。
+
+- 集計は `python3 -I scripts/dev/edit-activate-summary.py <jsonl>...`。file をまたいで同じ記録を 1 回だけ数え、20 試行未満の scenario・mode があれば exit 1 にする。
+- `cos-digest` warm は 1 試行約 345 秒で、prime と合わせて 1 leaf に 7 試行しか入らない。S5-10 の「10 ずつ」は守れず、3 leaf（7＋7＋6）で 20 試行を取った（推定で埋めていない）。
+
+### S6-2 打ち切り基準の判定
+TS の経路の warm p50 は `policy-ts` 7.519 秒・`cos-ts` 7.470 秒で、(f) の 78 秒を超えない。移行は打ち切らない。
+
+### S6-3 二重実装を整理する終了条件（領域ごと）
+Rust の参照実装（`lane_rules` は `model_policy::match_rule`、`route_priority` は `llm_route::route_priority_decide`、`cos_digest` は `chat::digest::cos_digest_decide`）を消してよいのは、その領域で次の全部が成り立ち、人が承認したときだけである。1 つでも欠けたら残す。
+1. **本番で ts の観測**: 本番でその領域が同じ generation 系列の `ts` のまま連続 30 日続き、その間に script-guard の自動の戻し・説明のつかない不一致・安全違反・検証の外の副作用がどれも 0 件。呼び出しは純粋判定で 1 万件以上、CoS の経路で 2,000 件以上（(f) の進む条件の 10 倍）。
+2. **golden の凍結**: 比較 fixture の期待値を、Rust の出力から生成する形から、repo に commit した凍結 file に移す。ts-verify・runner の golden が Rust の参照実装を呼ばずに採点でき、その状態で全件一致する。
+3. **fallback の置き換え**: Rust 参照へ戻す fallback（副作用の前の `ts_error`・`invalid_output`・`timeout` など。S5-6）の代わりの fail-closed の既定を、領域ごとにこの ADR に書き、試験で固定する（例: `lane_rules` は lane の天井の側、`cos_digest` は digest を出さず受信箱に知らせる）。既定は今の Rust の結果より安全条件を緩めない。
+4. **戻し先の確保**: known-good の TS bundle を 2 世代以上 `<state_dir>/script-bundles/` に残し、その hash を進捗に書く。Rust 参照の削除は 1 commit にまとめ、git revert で戻せるようにする。
+5. **方針改善の手順**: 二重実装をやめた後の方針改善は、凍結した golden の更新を人が review する手順で行う（S6 pilot の「分かったこと」。TS だけの変更は今の compare では不一致として戻される）。
+
+消さないもの: Rust の再検証と安全条件、script-guard、generation の登録・切替・drain、認可・永続状態・scheduler（(a)）。`rust` mode の意味は「Rust 参照で判定する」から「fail-closed の既定で判定する」に変わるので、mode 表と API の説明を同じ変更で直す（ADR 2026-10-11-breaking-changes-by-default）。
+
+### S6-4 今の状態
+- 本番は 3 領域とも `rust` で、S6-3 の 1 を満たす領域は無い。Rust の参照実装はすべて残す。
+- 次に移す領域の選定は、本番で 1 領域が `ts` に上がり S6-3 の 1 の観測が始まってからにする。

@@ -13,11 +13,19 @@
 //!   same memo, and validates the TS output (rules 1–9). A TS failure, a timeout, a rule failure
 //!   or a mode change before the apply apply Rust's commands for the whole pass.
 //!
+//! - `canary` (S5-3): the pass id decides by the deterministic hash; a selected pass runs as `ts`,
+//!   the others as `compare`. A `ts`/selected pass waits at most the rest of the tick budget (S5-8),
+//!   ignores a TS output that read through a denied op (S5-6, never fail open) and checks every
+//!   applied command of a TS output against its idempotency key and the stored record; an effect it
+//!   cannot check stops the pass, keeps `digest_due` and rolls the domain back to `rust` with
+//!   actor `system:script-guard` (`script_effect_unverified`, S5-6).
+//!
 //! `digest_due`, `dirty`, the bound of 20 runs, the idempotency key and the SQL writes stay in Rust.
 
 use std::sync::Arc;
 use std::time::Instant;
 
+use task_core::SqliteStore;
 use task_core::chat::digest::{
     CosDigestCommand, CosDigestInput, CosDigestListRunsReply, CosDigestListRunsRequest,
     CosDigestPassOutput, CosDigestPassRead, CosDigestReadRunRequest, CosDigestRunRef,
@@ -27,7 +35,6 @@ use task_core::script_compare::{
     CosDigestApplied, CosDigestAppliedBy, CosDigestFallback, CosDigestOpLog, ScriptMode,
     sha256_digest,
 };
-use task_core::{SqliteStore, StoreError};
 use time::OffsetDateTime;
 
 use super::launch::CosChatLaunch;
@@ -336,6 +343,20 @@ struct PassScript {
     row: (ScriptMode, Option<String>, u64),
 }
 
+/// An applied command S5-6 could not check against its idempotency key and record.
+#[derive(Debug)]
+struct Unverified(String);
+
+/// Why a verified apply of one run stopped.
+#[derive(Debug)]
+enum VerifiedApplyError {
+    /// The write failed inside its own transaction: nothing of that command was stored, and the
+    /// next pass checks the same key again (the run stays as it was, like a Rust apply).
+    Failed(String),
+    /// The stored record disagrees with the command (S5-6: stop and roll back).
+    Unverified(Unverified),
+}
+
 impl Dispatcher {
     /// One digest pass (S4-12): every finished triage run without a digest gets its message;
     /// stopped and interrupted runs give their unhandled items back to the queue.
@@ -347,28 +368,47 @@ impl Dispatcher {
         let store = launch.store.clone();
         let mut reads = CosDigestPassReads::default();
         let mut ts_result = None;
+        let mut budget_fallback = None;
         if let Some(PassScript {
             draft,
             call: Ok((script, _)),
             ..
-        }) = script.as_ref().filter(|s| s.draft.mode == ScriptMode::Ts)
+        }) = script.as_ref().filter(|s| s.draft.canary_selected)
         {
-            let (script, pass_id, store) = (script.clone(), draft.pass_id.clone(), store.clone());
-            let (back, result) = run_cluster_hooks_off_async(move || {
-                block_on_pass(async move {
-                    let result = serve_pass(
-                        script,
-                        pass_id,
-                        &mut reads,
-                        Some(&store),
-                        COS_DIGEST_PASS_DEADLINE,
-                    )
-                    .await;
-                    (reads, result)
-                })
-            });
-            reads = back;
-            ts_result = result;
+            // S5-8: the pass waits at most the rest of this tick's budget.
+            let remaining = self.script_tick_wait_remaining();
+            let deadline = remaining.min(COS_DIGEST_PASS_DEADLINE);
+            if deadline.is_zero() {
+                self.script_tick_budget_hit();
+                budget_fallback = Some(CosDigestFallback::new(
+                    "tick_budget",
+                    "tick wait budget used up before the pass",
+                ));
+            } else {
+                let (script, pass_id, store) =
+                    (script.clone(), draft.pass_id.clone(), store.clone());
+                let (back, result) = run_cluster_hooks_off_async(move || {
+                    block_on_pass(async move {
+                        let result =
+                            serve_pass(script, pass_id, &mut reads, Some(&store), deadline).await;
+                        (reads, result)
+                    })
+                });
+                reads = back;
+                if let Some((r, elapsed)) = &result {
+                    self.script_tick_charge((*elapsed).min(deadline));
+                    if matches!(r, TsResult::DeadlineExceeded(_))
+                        && deadline < COS_DIGEST_PASS_DEADLINE
+                    {
+                        self.script_tick_budget_hit();
+                        budget_fallback = Some(CosDigestFallback::new(
+                            "tick_budget",
+                            "tick wait budget used up during the pass",
+                        ));
+                    }
+                }
+                ts_result = result.filter(|_| budget_fallback.is_none());
+            }
         }
         let list = match reads.list(&store) {
             Ok(list) => list,
@@ -389,27 +429,56 @@ impl Dispatcher {
         }
         let rust = cos_digest_pass_decide(&pass_reads);
         let Some(script) = script else {
-            self.apply_digest_pass(launch, &pass_reads, &rust, &rust, now);
+            let _ = self.apply_digest_pass(launch, &pass_reads, &rust, &rust, false, now);
             return;
         };
-        match script.draft.mode {
-            ScriptMode::Ts => {
-                let classified = match (&script.call, &ts_result) {
-                    (Ok(_), Some((result, _))) => {
+        match script.draft.canary_selected {
+            true => {
+                let classified = match (&script.call, &ts_result, &budget_fallback) {
+                    (_, _, Some(budget)) => {
+                        CosDigestPassClassified::unavailable(&rust, &budget.message)
+                    }
+                    (Ok(_), Some((result, _)), None) => {
                         classify_cos_digest_pass(&pass_reads, &rust, result)
                     }
-                    (Err(reason), _) => CosDigestPassClassified::unavailable(&rust, reason),
-                    (Ok(_), None) => {
+                    (Err(reason), _, None) => CosDigestPassClassified::unavailable(&rust, reason),
+                    (Ok(_), None, None) => {
                         CosDigestPassClassified::unavailable(&rust, "no script result")
                     }
                 };
                 let mode_changed = self.cos_digest_mode_changed(&script.row);
-                let (apply, applied_by, fallback) = match (&classified.output, mode_changed) {
-                    (Some(ts), None) => (ts, CosDigestAppliedBy::Ts, None),
-                    (_, Some(changed)) => (&rust, CosDigestAppliedBy::Rust, Some(changed)),
-                    (None, None) => (&rust, CosDigestAppliedBy::Rust, classified.fallback.clone()),
-                };
-                let applied = self.apply_digest_pass(launch, &pass_reads, &rust, apply, now);
+                // S5-6: a TS output that read through a denied op is never used (no fail-open).
+                let denied = reads.denied().then(|| {
+                    CosDigestFallback::new("denied", "a cos_digest op of the pass was denied")
+                });
+                let (apply, applied_by, fallback) =
+                    match (&classified.output, mode_changed, denied, budget_fallback) {
+                        (_, Some(changed), _, _) => {
+                            (&rust, CosDigestAppliedBy::Rust, Some(changed))
+                        }
+                        (_, None, _, Some(budget)) => {
+                            (&rust, CosDigestAppliedBy::Rust, Some(budget))
+                        }
+                        (Some(_), None, Some(denied), None) => {
+                            (&rust, CosDigestAppliedBy::Rust, Some(denied))
+                        }
+                        (Some(ts), None, None, None) => (ts, CosDigestAppliedBy::Ts, None),
+                        (None, None, _, None) => {
+                            (&rust, CosDigestAppliedBy::Rust, classified.fallback.clone())
+                        }
+                    };
+                let verify = applied_by == CosDigestAppliedBy::Ts;
+                let (applied, unverified) =
+                    self.apply_digest_pass(launch, &pass_reads, &rust, apply, verify, now);
+                if let Some(Unverified(detail)) = unverified {
+                    // S5-6: stop, keep `digest_due`, roll back with `system:script-guard`; the
+                    // inbox item comes from that event (script-inbox).
+                    self.script_rollback(
+                        task_core::script_compare::ScriptDomain::CosDigest,
+                        script.row.2,
+                        &format!("script_effect_unverified: {detail}"),
+                    );
+                }
                 let (epoch, elapsed) = ts_result
                     .as_ref()
                     .map(|(r, e)| (ts_isolate_epoch(r), *e))
@@ -426,12 +495,13 @@ impl Dispatcher {
                 );
                 if let Some(log) = self.script_compare_log_store() {
                     for record in records {
-                        append_pass_record(log.as_ref(), record);
+                        append_pass_record(log.as_ref(), record, true);
                     }
                 }
             }
-            _ => {
-                let applied = self.apply_digest_pass(launch, &pass_reads, &rust, &rust, now);
+            false => {
+                let (applied, _) =
+                    self.apply_digest_pass(launch, &pass_reads, &rust, &rust, false, now);
                 self.compare_digest_pass(script, reads, pass_reads, rust, applied);
             }
         }
@@ -464,7 +534,7 @@ impl Dispatcher {
                     0,
                     std::time::Duration::ZERO,
                 ) {
-                    append_pass_record(log.as_ref(), record);
+                    append_pass_record(log.as_ref(), record, false);
                 }
                 return;
             }
@@ -493,7 +563,7 @@ impl Dispatcher {
                     ts_isolate_epoch(&result),
                     elapsed,
                 ) {
-                    append_pass_record(log.as_ref(), record);
+                    append_pass_record(log.as_ref(), record, false);
                 }
             },
         );
@@ -503,15 +573,24 @@ impl Dispatcher {
     fn cos_digest_pass_script(&mut self) -> Option<PassScript> {
         let target = self.script_target(
             task_core::script_compare::ScriptDomain::CosDigest,
-            &[ScriptMode::Compare, ScriptMode::Ts],
+            &[ScriptMode::Compare, ScriptMode::Canary, ScriptMode::Ts],
         )?;
+        let pass_id = ulid::Ulid::new().to_string();
+        // S5-3: the unit of `cos_digest` is the pass.
+        let canary_selected = crate::dispatcher::dispatch_run::script_canary_unit_selected(
+            &target,
+            task_core::script_compare::ScriptDomain::CosDigest,
+            &pass_id,
+        );
         Some(PassScript {
             draft: CosDigestPassDraft {
                 generation: target.generation_id,
                 bundle_sha256: target.bundle_sha256,
                 host_api: target.host_api,
                 mode: target.mode,
-                pass_id: ulid::Ulid::new().to_string(),
+                pass_id,
+                canary_selected,
+                canary_bps: target.canary_bps,
             },
             call: target.call,
             row: (target.mode, target.row_generation, target.version),
@@ -556,14 +635,17 @@ impl Dispatcher {
 
     /// Apply `apply` run by run (`post_digest` → `requeue_run`); a failed write skips the rest of
     /// that run (its items stay `running` for the next pass). Returns the runs fully applied.
+    /// `verify` (a TS output, S5-6): every effect is checked against its idempotency key and the
+    /// stored record; one that cannot be checked stops the whole pass (`Unverified`).
     fn apply_digest_pass(
         &mut self,
         launch: &mut CosChatLaunch,
         reads: &[CosDigestPassRead],
         rust: &CosDigestPassOutput,
         apply: &CosDigestPassOutput,
+        verify: bool,
         now: OffsetDateTime,
-    ) -> Vec<AppliedRun> {
+    ) -> (Vec<AppliedRun>, Option<Unverified>) {
         let mut done = Vec::new();
         for run in &apply.runs {
             let Some(input) = reads
@@ -573,7 +655,19 @@ impl Dispatcher {
             else {
                 continue;
             };
-            match launch.apply_digest_commands(&run.commands, now) {
+            let result = if verify {
+                match launch.apply_digest_commands_verified(&run.commands, now) {
+                    Err(VerifiedApplyError::Unverified(unverified)) => {
+                        tracing::warn!(run_id = %run.run_id, detail = %unverified.0, "CoS triage digest effect unverified; pass stopped");
+                        return (done, Some(unverified));
+                    }
+                    Err(VerifiedApplyError::Failed(error)) => Err(error),
+                    Ok(applied) => Ok(applied),
+                }
+            } else {
+                launch.apply_digest_commands(&run.commands, now)
+            };
+            match result {
                 Ok(applied) => done.push(AppliedRun {
                     rust: rust
                         .runs
@@ -589,7 +683,7 @@ impl Dispatcher {
                 }
             }
         }
-        done
+        (done, None)
     }
 }
 
@@ -629,16 +723,24 @@ fn pass_records(
         .collect()
 }
 
-/// Append a record; a failure only warns (the digest pass goes on, S4-4).
+/// Append a record and count it in the same transaction (S5-7); a failure only warns (the
+/// digest pass goes on, S4-4). `ts_side`: the pass was selected for TS (canary/ts).
 fn append_pass_record(
     store: &dyn crate::script_policy::ScriptDomainStore,
     record: Result<task_core::script_compare::CosDigestCompareRecord, serde_json::Error>,
+    ts_side: bool,
 ) {
-    let result = record
-        .map_err(StoreError::from)
-        .and_then(|r| store.script_compare_log_append(&r, OffsetDateTime::now_utc()));
-    if let Err(e) = result {
-        tracing::warn!(error = %e, "script_compare_log append failed");
+    let result = record.map_err(|e| e.to_string()).and_then(|r| {
+        store
+            .script_compare_log_append_observed(&r, ts_side, OffsetDateTime::now_utc())
+            .map_err(|e| e.to_string())
+    });
+    match result {
+        Ok((_, Some(outcome))) if !outcome.rolled_back.is_empty() => {
+            tracing::warn!(stop = ?outcome.stop, "script-guard rolled cos_digest back to rust");
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "script_compare_log append failed"),
     }
 }
 
@@ -664,6 +766,78 @@ where
 }
 
 impl CosChatLaunch {
+    /// S5-6: apply a TS output's commands, checking each effect against its idempotency key and
+    /// the stored record. `post_digest` writes once per key and the stored message must belong to
+    /// the same thread and run; `requeue_run` is the conditional `WHERE state='running'` update.
+    /// A failed write is `Failed` (its transaction stored nothing; the rest of the run is not
+    /// written and the next pass checks the key again). A stored record that disagrees with the
+    /// command is `Unverified`.
+    fn apply_digest_commands_verified(
+        &mut self,
+        commands: &[CosDigestCommand],
+        now: OffsetDateTime,
+    ) -> Result<CosDigestApplied, VerifiedApplyError> {
+        let mut applied = CosDigestApplied {
+            message_id: String::new(),
+            requeued: 0,
+        };
+        for command in commands {
+            match command {
+                CosDigestCommand::PostDigest {
+                    thread,
+                    idempotency_key,
+                    text,
+                    cards,
+                    run_id,
+                } => {
+                    let message = self
+                        .store
+                        .chat_assistant_message_add_once(
+                            thread,
+                            idempotency_key,
+                            text,
+                            cards,
+                            Some(run_id),
+                            now,
+                        )
+                        .map_err(|e| match e {
+                            // The key is stored with another text or cards: the record disagrees.
+                            task_core::chat::ChatError::Conflict(_) => {
+                                VerifiedApplyError::Unverified(Unverified(format!(
+                                    "post_digest {idempotency_key}: {e}"
+                                )))
+                            }
+                            e => VerifiedApplyError::Failed(format!(
+                                "post_digest {idempotency_key}: {e}"
+                            )),
+                        })?;
+                    if message.thread_id != *thread || message.run_id.as_deref() != Some(run_id) {
+                        return Err(VerifiedApplyError::Unverified(Unverified(format!(
+                            "post_digest {idempotency_key}: the stored message {} belongs to {}/{}",
+                            message.id,
+                            message.thread_id,
+                            message.run_id.as_deref().unwrap_or("-")
+                        ))));
+                    }
+                    applied.message_id = message.id;
+                }
+                CosDigestCommand::RequeueRun { run_id } => {
+                    let requeued = self
+                        .store
+                        .cos_triage_requeue_run(run_id, now)
+                        .map_err(|e| {
+                            VerifiedApplyError::Failed(format!("requeue_run {run_id}: {e}"))
+                        })?;
+                    if requeued > 0 {
+                        self.triage.dirty = true;
+                    }
+                    applied.requeued = u64::try_from(requeued).unwrap_or(u64::MAX);
+                }
+            }
+        }
+        Ok(applied)
+    }
+
     /// Apply validated commands in order; the first failure stops the rest (a failed message
     /// write leaves the items `running` for the next pass).
     fn apply_digest_commands(

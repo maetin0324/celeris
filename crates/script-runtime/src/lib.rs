@@ -7,6 +7,7 @@
 mod actor;
 pub mod dto;
 mod error;
+pub mod generation;
 mod handle;
 mod loader;
 pub mod manifest;
@@ -17,6 +18,10 @@ mod watchdog;
 pub use ops::{DISABLED_BUILTIN_OPS, domain_capabilities};
 
 pub use error::ScriptError;
+pub use generation::{
+    GenerationClock, GenerationError, GenerationInfo, GenerationRegistry, ManualClock, PinnedReply,
+    RetireReason, RetiredGeneration, TokioClock,
+};
 pub use handle::{
     DEFAULT_HEAP_LIMIT_BYTES, DEFAULT_INPUT_LIMIT_BYTES, DISPATCH_FUNCTION, HOST_SINK_CAPACITY,
     HostOpCall, HostSink, MAX_IN_FLIGHT, MAX_OPS_PER_REQUEST, QUEUE_CAPACITY, RuntimeLimits,

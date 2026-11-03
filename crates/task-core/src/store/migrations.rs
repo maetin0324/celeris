@@ -202,6 +202,12 @@ pub(crate) const MIGRATION_0103: &str = include_str!("../../migrations/0103_scri
 /// ADR 2026-11-02-ts-control-layer-boundary 付記 S4-4・S4-5: `script_domain_modes` に `cos_digest` の行、
 /// thread・run に属する compare の追記専用の記録 `script_compare_log`。
 pub(crate) const MIGRATION_0104: &str = include_str!("../../migrations/0104_script_cos_digest.sql");
+/// ADR 2026-11-02-ts-control-layer-boundary 付記 S5-1・S5-3・S5-7: generation の状態の拡張、`canary_bps`、
+/// 追記専用の `script_generation_events`、停止基準の計数 `script_guard_state`。
+pub(crate) const MIGRATION_0105: &str =
+    include_str!("../../migrations/0105_script_generations_s5.sql");
+/// ADR 2026-11-02-ts-control-layer-boundary 付記 S5-7: 受信箱 `script_control` の項目と記録の表ごとの cursor。
+pub(crate) const MIGRATION_0106: &str = include_str!("../../migrations/0106_script_inbox.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration）。`migrate` は飛ばし、
@@ -211,7 +217,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 104;
+pub const SCHEMA_VERSION: u32 = 106;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -349,10 +355,31 @@ impl SqliteStore {
             102 => Ok(MIGRATION_0102),
             103 => Ok(MIGRATION_0103),
             104 => Ok(MIGRATION_0104),
+            105 => Ok(MIGRATION_0105),
+            106 => Ok(MIGRATION_0106),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),
         }
+    }
+
+    /// migration 0105 の `script_domain_modes.canary_bps`。CHECK は NULL で通るので `IS NOT NULL` を明示する。
+    fn add_script_canary_bps(tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
+        let exists: bool = tx.query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('script_domain_modes') WHERE name = 'canary_bps'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            tx.execute_batch(
+                "ALTER TABLE script_domain_modes ADD COLUMN canary_bps INTEGER CHECK ( \
+                     CASE WHEN mode = 'canary' \
+                         THEN canary_bps IS NOT NULL AND canary_bps BETWEEN 1 AND 9999 \
+                         ELSE canary_bps IS NULL \
+                     END);",
+            )?;
+        }
+        Ok(())
     }
 
     pub(crate) fn apply_migration_version(
@@ -371,6 +398,10 @@ impl SqliteStore {
         // Phase K-1: 既存の案件に `slug` を付ける（作り方は Rust にしか無い。migration 0029 のコメント参照）。
         if version == 29 {
             Self::backfill_project_slugs(&tx)?;
+        }
+        // 付記 S5-3: `canary_bps`（ADD COLUMN は当て直せないので列が無いときだけ足す）。
+        if version == 105 {
+            Self::add_script_canary_bps(&tx)?;
         }
         let ts = format_rfc3339(OffsetDateTime::now_utc())?;
         tx.execute(

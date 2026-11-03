@@ -13,7 +13,7 @@ updated: 2026-11-03
 - policy の warm は 10 試行すべて exit 0 で、編集もすべて戻った（`reverted: true`）。合計の中央値は 234.943 秒で、S0 の 221.015 秒より 13.928 秒（6.3%）長い。
 - この差を Rust 経路の遅れと断定はできない。S0 と今回は commit が違い、測った対象のコードが増えている（下の「S0 との違い」）。TS 経路との比較には、S0 でなく今回と後半（m-policy-b）の 20 試行を使う。
 - p50・p95 の確定は 20 試行が揃う s6-report で行う。この file の値は前半 10 試行だけの集計である。
-- 生データ: [policy-warm-a.jsonl](policy-warm-a.jsonl)（prime 6 行＋step 60 行＋estimate 40 行）。付記 S5-10 の表の file 名（`policy-a.jsonl`）でなく、unit の objective の名前で置いた。
+- 生データ: [policy-warm-a.jsonl](policy-warm-a.jsonl)（prime 6 行＋step 60 行＋estimate 40 行）。付記 S5-10 の表の file 名（`policy-a.jsonl`）でなく、unit の objective の名前で置いた。部分 file はこの名前のまま残し、連結 file だけを raw-names で `policy.jsonl` に改名した（[raw-names](raw-names.md)）。
 
 ## S0 との比較（warm、秒）
 中央値どうしを並べた。S0 は 3 試行、今回は 10 試行で、試行数が違う。

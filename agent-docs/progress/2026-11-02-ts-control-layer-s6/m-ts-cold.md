@@ -41,7 +41,7 @@ updated: 2026-11-03
 
 ## 識別（env.identity）と warm との照合
 - 全試行で `clean: true`、`reverted: true`、`series: m-ts-cold`、`target_kind: none`、`class: ts-only`
-- warm（cos-ts-warm.jsonl）と同じ値: `tree.control-ts`、rustc 1.98.1、node v24.14.1、pnpm 12.6.0、host home-dev、`host_api` 1.1.0、`runner_sha256`
+- warm（cos-ts.jsonl）と同じ値: `tree.control-ts`、rustc 1.98.1、node v24.14.1、pnpm 12.6.0、host home-dev、`host_api` 1.1.0、`runner_sha256`
 - 違う値: `commit`（間に生データと進捗の commit が入った。control-ts の tree hash は同じ）と `series`。比は同じ tree・toolchain・host の試行どうしで取った
 
 ## 最遅 3 試行の内訳（秒）

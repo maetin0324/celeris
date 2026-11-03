@@ -1,0 +1,69 @@
+{
+ "schema": "celeris.ts-verify-record/1",
+ "base": "b62dc3d472f5910344f6d91e895d97a1f1936ef4",
+ "class": "ts-only",
+ "grade": false,
+ "exit": 0,
+ "total_secs": 7.899,
+ "stages": [
+  {
+   "name": "classify",
+   "secs": 0.036,
+   "exit": 0,
+   "note": "ts-only"
+  },
+  {
+   "name": "runner-cache",
+   "secs": 0.181,
+   "exit": 0
+  },
+  {
+   "name": "install",
+   "secs": 0.325,
+   "exit": 0
+  },
+  {
+   "name": "typecheck",
+   "secs": 0.117,
+   "exit": 0
+  },
+  {
+   "name": "bundle",
+   "secs": 0.099,
+   "exit": 0
+  },
+  {
+   "name": "unit",
+   "secs": 1.754,
+   "exit": 0,
+   "note": "ALL "
+  },
+  {
+   "name": "golden",
+   "secs": 0.832,
+   "exit": 0
+  },
+  {
+   "name": "safety",
+   "secs": 0.039,
+   "exit": 0
+  },
+  {
+   "name": "integration",
+   "secs": 4.188,
+   "exit": 0
+  },
+  {
+   "name": "activate",
+   "secs": 0.068,
+   "exit": 0
+  }
+ ],
+ "cargo_invocations": 0,
+ "cargo_calls": [],
+ "cargo_compile_invocations": 0,
+ "link_count": 0,
+ "units": [
+  "ALL"
+ ]
+}

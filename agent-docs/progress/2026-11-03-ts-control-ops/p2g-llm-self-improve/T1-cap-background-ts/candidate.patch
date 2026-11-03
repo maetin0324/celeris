@@ -1,0 +1,73 @@
+diff --git a/control-ts/src/domains/cos_digest.test.ts b/control-ts/src/domains/cos_digest.test.ts
+index 24575211..e05e4468 100644
+--- a/control-ts/src/domains/cos_digest.test.ts
++++ b/control-ts/src/domains/cos_digest.test.ts
+@@ -164,6 +164,36 @@ describe("cos_digest decision packet", () => {
+     expect(p.cards[0]).toMatchObject({ href: "/tasks/01TASK/decisions", reason: "戻しやすい", state: "escalated" });
+   });
+ 
++  it("background: over 300 code points is cut to 300 plus an ellipsis, 300 or fewer stay as they are", () => {
++    const line = (background: string, state = "escalated") =>
++      post(input({ items: [item({ state, route: "escalation", decision: packet({ background }) })] })).text;
++    const exact = "あ".repeat(300);
++    expect(line(exact)).toContain(`- 背景: ${exact}\n`);
++    expect(line(`${exact}い`)).toContain(`- 背景: ${exact}…\n`);
++    expect(line(`${exact}い`, "fallback")).toContain(`- 背景: ${exact}…\n`);
++  });
++
++  it("background: the cap counts code points, not UTF-16 units", () => {
++    const line = (background: string) =>
++      post(input({ items: [item({ state: "escalated", route: "escalation", decision: packet({ background }) })] })).text;
++    const emoji = "😀".repeat(300);
++    expect(line(emoji)).toContain(`- 背景: ${emoji}\n`);
++    expect(line(`${emoji}😀`)).toContain(`- 背景: ${emoji}…\n`);
++  });
++
++  it("background: the cap leaves the cards and the other lines unchanged", () => {
++    const of = (background: string) =>
++      post(
++        input({
++          items: [item({ state: "escalated", route: "escalation", decision: packet({ background, on_answer: "再開する" }) })],
++        }),
++      );
++    const short = of("短い");
++    const long = of("x".repeat(1000));
++    expect(long.cards).toEqual(short.cards);
++    expect(long.text.replace(`${"x".repeat(300)}…`, "短い")).toBe(short.text);
++  });
++
+   it("an option with a detail puts every option on its own line", () => {
+     const d = packet({
+       options: [
+diff --git a/control-ts/src/domains/cos_digest.ts b/control-ts/src/domains/cos_digest.ts
+index 762f3f4f..2d5a65f9 100644
+--- a/control-ts/src/domains/cos_digest.ts
++++ b/control-ts/src/domains/cos_digest.ts
+@@ -306,6 +306,18 @@ function optionsLine(item: CosTriageItemReport): string | null {
+ }
+ 
+ /** Rust の `cos_digest_message`: digest の文面と cards。 */
++/** `- 背景: ` の行に出す背景の上限（Unicode の code point）。 */
++const BACKGROUND_MAX_CODE_POINTS = 300;
++
++/** 背景が上限を超えたら、先頭の上限分の code point の後ろに `…` を足す。上限以下はそのまま返す。 */
++function capBackground(background: string): string {
++  // UTF-16 の長さは code point 数以上なので、上限以下ならここで返せる。
++  if (background.length <= BACKGROUND_MAX_CODE_POINTS) return background;
++  const codePoints = Array.from(background);
++  if (codePoints.length <= BACKGROUND_MAX_CODE_POINTS) return background;
++  return `${codePoints.slice(0, BACKGROUND_MAX_CODE_POINTS).join("")}…`;
++}
++
+ export function digestMessage(
+   runId: string,
+   runState: string,
+@@ -335,7 +347,7 @@ export function digestMessage(
+     if (it.state === "escalated" || it.state === "fallback") {
+       const d = it.decision;
+       if (d !== null) {
+-        if (d.background !== null && d.background !== "") text += `- 背景: ${d.background}\n`;
++        if (d.background !== null && d.background !== "") text += `- 背景: ${capBackground(d.background)}\n`;
+         if (d.summary !== "") text += `- 人が決めること: ${d.summary}\n`;
+         const options = optionsLine(it);
+         if (options !== null) text += `- 選択肢: ${options}\n`;

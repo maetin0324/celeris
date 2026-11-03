@@ -1,0 +1,21 @@
+ts-pilot: [meta] 0.029 秒
+ts-pilot: [edit] 1.599 秒
+ts-pilot: [ts_verify] 7.944 秒
+ts-pilot: [bundle] 0.146 秒
+ts-pilot: celeris・script-deploy の binary を作る
+ts-pilot: [daemon_start] 0.446 秒
+ts-pilot: [deploy] 0.032 秒
+ts-pilot: [register] 0.036 秒
+ts-pilot: [compare] 0.008 秒
+ts-pilot: [canary_denied_non_human] 0.009 秒
+ts-pilot: [canary_not_ready] 0.005 秒
+ts-pilot: [behavior_change_denied_non_human] 0.003 秒
+ts-pilot: [behavior_change_approve] 0.004 秒
+ts-pilot: [guard_seed] 0.021 秒
+ts-pilot: [canary] 0.008 秒
+ts-pilot: [diff] 0.246 秒
+ts-pilot: [restart_restore_canary] 0.316 秒
+ts-pilot: [rollback] 1.019 秒
+ts-pilot: [restart_restore_rust] 0.276 秒
+ts-pilot: 記録 OK（18 段）
+ts-pilot: 完了。記録 /local/celeris/data/workspaces/01M6HW7NFHTFSG78DHWQNHBTHS/repos/agent-platform/agent-docs/progress/2026-11-03-ts-control-ops/p2g-llm-self-improve/T1-cap-background-ts/T1-cap-background-ts/pilot/record.jsonl

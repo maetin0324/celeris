@@ -244,7 +244,11 @@ fn domain_problem(err: ScriptDomainError) -> ApiProblem {
         ScriptDomainError::TsRequiresHuman(_) => {
             ApiProblem::new(StatusCode::FORBIDDEN, SCRIPT_MODE_REQUIRES_HUMAN, detail)
         }
-        ScriptDomainError::TsRequiresCompare { .. } => ApiProblem::new(
+        ScriptDomainError::CanaryRequiresHuman(_)
+        | ScriptDomainError::GuardClearRequiresHuman(_) => {
+            ApiProblem::new(StatusCode::FORBIDDEN, SCRIPT_MODE_REQUIRES_HUMAN, detail)
+        }
+        ScriptDomainError::RequiresPreviousStage { .. } => ApiProblem::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             SCRIPT_MODE_TS_REQUIRES_COMPARE,
             detail,
@@ -254,7 +258,35 @@ fn domain_problem(err: ScriptDomainError) -> ApiProblem {
         } => ApiProblem::new(StatusCode::CONFLICT, SCRIPT_DOMAIN_VERSION_CONFLICT, detail)
             .with_extra("expected_version", expected)
             .with_extra("version", found),
-        ScriptDomainError::GenerationRequired
+        ScriptDomainError::GuardHalted(_) => {
+            ApiProblem::new(StatusCode::CONFLICT, "script_guard_halted", detail)
+        }
+        ScriptDomainError::CanaryNotReady { .. } => ApiProblem::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "script_canary_not_ready",
+            detail,
+        ),
+        ScriptDomainError::CheckpointIncompatible { .. } => ApiProblem::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "script_checkpoint_incompatible",
+            detail,
+        ),
+        ScriptDomainError::GenerationLimit { .. } => {
+            ApiProblem::new(StatusCode::CONFLICT, "script_generation_limit", detail)
+        }
+        ScriptDomainError::GenerationInvalidated(_) => ApiProblem::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "script_generation_invalidated",
+            detail,
+        ),
+        ScriptDomainError::GenerationActive(_) => {
+            ApiProblem::new(StatusCode::CONFLICT, "script_generation_active", detail)
+        }
+        ScriptDomainError::IllegalTransition { .. } => {
+            ApiProblem::new(StatusCode::CONFLICT, "script_generation_transition", detail)
+        }
+        ScriptDomainError::CanaryBpsInvalid(_)
+        | ScriptDomainError::GenerationRequired
         | ScriptDomainError::GenerationNotAllowed
         | ScriptDomainError::GenerationNotFound(_)
         | ScriptDomainError::GenerationNotLoaded(_)

@@ -26,7 +26,7 @@ unit m-cosd-b。[境界 ADR](../../adr/2026-11-02-ts-control-layer-boundary.md) 
 - Rust の試行の合計（rep 1〜14）: 343.005・344.788・344.824・343.619・345.115・344.341・344.839・346.576・345.653・344.208・344.031・344.510・343.940・344.491。14 試行とも `over_300s: true`、busy 0。
 
 ## 識別の照合
-- 前後半とも全 prime・step 行で `clean: true`、host home-dev、tree hash（`crates/task-core` b85f3c34…、`crates/task-dispatch` efe35b61…）が同じ。違うのは `series`（m-cosd-a / m-cosd-b）と `commit`（間の差は進捗と jsonl だけ）。p50・p95 に prime・estimate は入れていない。
+- 前後半とも全 prime・step 行で `clean: true`、host home-dev、tree hash（`crates/task-core`・`crates/task-dispatch`、値は jsonl）が同じ。違うのは `series`（m-cosd-a / m-cosd-b）と `commit`（間の差は進捗と jsonl だけ）。p50・p95 に prime・estimate は入れていない。
 
 ## 実行したこと（直列）
 1. 開始前（14:01 UTC）: load average 4.44, 7.26, 7.55、cargo・rustc 0、`/local` の空き 129 GB、`git status --porcelain` 空

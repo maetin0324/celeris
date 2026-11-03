@@ -1,0 +1,237 @@
+diff --git a/crates/celeris/src/daemon/tick_loop.rs b/crates/celeris/src/daemon/tick_loop.rs
+--- a/crates/celeris/src/daemon/tick_loop.rs
++++ b/crates/celeris/src/daemon/tick_loop.rs
+@@ -631,6 +631,13 @@ pub(crate) async fn tick_loop(
+             // ADR-0041 D5: `verify` も tick を回すが、`set_eligible_tasks` で `smoke` の煙試験だけに
+             // 絞られている（他の ready なタスクは拾わない・リースも奪わない・レビューもしない）。
+             InstanceRole::Active | InstanceRole::Draining | InstanceRole::Verify => {
++                {
++                    static OVERHEAD_TICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++                    if OVERHEAD_TICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 30 == 29 {
++                        let w = dispatcher.script_tick_wait_summary();
++                        eprintln!("OVERHEAD_TICK_WAIT ticks={} p50_us={} p95_us={} max_us={} tick_budget={}", w.ticks, w.p50_us, w.p95_us, w.max_us, w.tick_budget);
++                    }
++                }
+                 dispatcher.tick()?
+             }
+             InstanceRole::Standby => TickReport::default(),
+diff --git a/crates/script-runtime/Cargo.toml b/crates/script-runtime/Cargo.toml
+--- a/crates/script-runtime/Cargo.toml
++++ b/crates/script-runtime/Cargo.toml
+@@ -33,6 +33,10 @@ path = "src/bin/script-load-check.rs"
+ name = "script-deploy"
+ path = "src/bin/script-deploy.rs"
+ 
++[[bin]]
++name = "overhead-bench"
++path = "src/bin/overhead-bench.rs"
++
+ [[bin]]
+ name = "script-bench"
+ path = "src/bin/script-bench.rs"
+diff --git a/crates/script-runtime/src/actor.rs b/crates/script-runtime/src/actor.rs
+--- a/crates/script-runtime/src/actor.rs
++++ b/crates/script-runtime/src/actor.rs
+@@ -323,6 +323,7 @@ impl Actor {
+             while self.pending.len() + self.held.len() < MAX_IN_FLIGHT {
+                 match self.rx.poll_recv(cx) {
+                     Poll::Ready(Some(req)) => {
++                        crate::overhead_probe::stamp(crate::overhead_probe::DEQUEUED);
+                         progressed = true;
+                         if req.reply.is_closed() {
+                             // 送った側が既に待つのをやめている。
+@@ -513,11 +514,13 @@ impl Actor {
+             }
+             match p.future.as_mut().poll(cx) {
+                 Poll::Ready(result) => {
++                    crate::overhead_probe::stamp(crate::overhead_probe::JS_DONE);
+                     let p = self.pending.swap_remove(i);
+                     let out = match self.generation.as_mut() {
+                         Some(g) => result.and_then(|value| to_json(&mut g.runtime, value)),
+                         None => Err(ScriptError::GenerationGone),
+                     };
++                    crate::overhead_probe::stamp(crate::overhead_probe::OUT_DONE);
+                     self.stats.completed += 1;
+                     // 呼び出し側が結果を受け取った時点で stats が完了を映しているよう、返す前に公開する。
+                     self.publish();
+@@ -703,6 +706,7 @@ fn call_dispatch(
+             v8::Global::new(scope, ctx),
+         ])
+     })();
++    crate::overhead_probe::stamp(crate::overhead_probe::ARGS_DONE);
+     match args {
+         Some(args) => Box::pin(
+             JsRuntime::scoped_call_with_args(scope, &generation.dispatch, &args)
+diff --git a/crates/script-runtime/src/bin/overhead-bench.rs b/crates/script-runtime/src/bin/overhead-bench.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/script-runtime/src/bin/overhead-bench.rs
+@@ -0,0 +1,127 @@
++//! S6 overhead の測定専用（repo には入れない）。判定 1 回の遅延を queue・境界・JS 実行に分ける。
++use std::collections::BTreeSet;
++use std::path::Path;
++use std::time::Duration;
++
++use celeris_script::manifest::load_bundle_dir;
++use celeris_script::overhead_probe as probe;
++use celeris_script::selftest::selftest_call;
++use celeris_script::{ScriptCall, ScriptRuntimeHandle, host_sink};
++use serde_json::{Value, json};
++
++const TIMEOUT: Duration = Duration::from_secs(30);
++const WARMUP: usize = 100;
++
++#[derive(Clone)]
++struct Scene {
++    domain: &'static str,
++    input: Value,
++    ops: Option<Vec<Value>>,
++}
++
++fn pct(v: &mut [f64], p: usize) -> f64 {
++    v.sort_by(f64::total_cmp);
++    let rank = (v.len() * p).div_ceil(100).max(1);
++    v[rank - 1]
++}
++
++fn summary(mut v: Vec<f64>) -> Value {
++    json!({"p50": pct(&mut v, 50), "p99": pct(&mut v, 99), "max": pct(&mut v, 100)})
++}
++
++fn call_one(rt: &tokio::runtime::Runtime, h: &ScriptRuntimeHandle, s: &Scene) -> [u64; 6] {
++    let call = if s.domain == "host_selftest" {
++        selftest_call(TIMEOUT)
++    } else {
++        ScriptCall {
++            domain: s.domain.to_owned(),
++            input: s.input.clone(),
++            scope_task_ids: BTreeSet::new(),
++            timeout: TIMEOUT,
++        }
++    };
++    let begin = probe::now_ns();
++    let reply = match &s.ops {
++        None => rt.block_on(h.call(call)),
++        Some(ops) => rt.block_on(async {
++            let (sink, mut rx) = host_sink();
++            let reply = h.call_with_host_sink(call, Some(sink));
++            tokio::pin!(reply);
++            let mut i = 0;
++            loop {
++                tokio::select! {
++                    r = &mut reply => break r,
++                    Some(op) = rx.recv() => {
++                        let ans: celeris_script::dto::HostResult<Value> =
++                            serde_json::from_value(ops[i]["reply"].clone()).expect("recorded reply");
++                        i += 1;
++                        let _ = op.reply.send(ans);
++                    }
++                }
++            }
++        }),
++    };
++    let end = probe::now_ns();
++    reply.expect("call failed");
++    let st = probe::read();
++    [begin, st[0], st[1], st[2], st[3], end]
++}
++
++fn run_scene(rt: &tokio::runtime::Runtime, h: &ScriptRuntimeHandle, s: &Scene, iters: usize) -> Value {
++    for _ in 0..WARMUP {
++        call_one(rt, h, s);
++    }
++    let (mut total, mut queue, mut bin, mut js, mut bout, mut reply) =
++        (vec![], vec![], vec![], vec![], vec![], vec![]);
++    let ms = |a: u64, b: u64| b.saturating_sub(a) as f64 / 1e6;
++    for _ in 0..iters {
++        let t = call_one(rt, h, s);
++        let st = probe::read();
++        total.push(ms(t[0], t[5]));
++        queue.push(ms(st[0], st[1]));
++        bin.push(ms(st[1], st[2]));
++        js.push(ms(st[2], st[3]));
++        bout.push(ms(st[3], st[4]));
++        reply.push(ms(st[4], t[5]));
++    }
++    json!({
++        "domain": s.domain, "iters": iters, "warmup": WARMUP, "ops": s.ops.as_ref().map(|o| o.len()).unwrap_or(0),
++        "total": summary(total), "queue": summary(queue), "boundary_in": summary(bin),
++        "js": summary(js), "boundary_out": summary(bout), "reply_wake": summary(reply),
++    })
++}
++
++fn main() {
++    let a: Vec<String> = std::env::args().collect();
++    let (dir, fixtures, iters, out) = (&a[1], &a[2], a[3].parse::<usize>().expect("iters"), &a[4]);
++    let bundle = load_bundle_dir(Path::new(dir)).expect("bundle");
++    let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().expect("rt");
++    let h = ScriptRuntimeHandle::start(bundle.source()).expect("isolate");
++    let first = |f: &str| -> Vec<Value> {
++        std::fs::read_to_string(Path::new(fixtures).join(f))
++            .expect("fixture")
++            .lines()
++            .filter(|l| !l.trim().is_empty())
++            .map(|l| serde_json::from_str(l).expect("json"))
++            .collect()
++    };
++    let lane = first("lane_rules/all-features.jsonl");
++    let route = first("route_priority/cases.jsonl");
++    let traces = first("cos_digest/pass_traces.jsonl");
++    let tr = |name: &str| {
++        traces.iter().find(|t| t["name"] == name).expect("trace")["ops"]
++            .as_array()
++            .expect("ops")
++            .clone()
++    };
++    let scenes = vec![
++        Scene { domain: "host_selftest", input: json!({}), ops: None },
++        Scene { domain: "lane_rules", input: json!({"features": lane[0]["features"]}), ops: None },
++        Scene { domain: "route_priority", input: route[0]["input"].clone(), ops: None },
++        Scene { domain: "cos_digest", input: json!({}), ops: Some(tr("completed/escalated-packet/pass-1")) },
++        Scene { domain: "cos_digest", input: json!({}), ops: Some(tr("drain/23-runs/pass-1")) },
++    ];
++    let res: Vec<Value> = scenes.iter().map(|s| run_scene(&rt, &h, s, iters)).collect();
++    h.shutdown();
++    std::fs::write(out, serde_json::to_string_pretty(&json!({"scenes": res})).expect("json")).expect("write");
++}
+diff --git a/crates/script-runtime/src/handle.rs b/crates/script-runtime/src/handle.rs
+--- a/crates/script-runtime/src/handle.rs
++++ b/crates/script-runtime/src/handle.rs
+@@ -280,6 +280,7 @@ impl ScriptRuntimeHandle {
+             deadline: deadline.into_std(),
+             reply: reply_tx,
+         };
++        crate::overhead_probe::stamp(crate::overhead_probe::SENT);
+         match self.inner.tx.try_send(request) {
+             Ok(()) => {}
+             Err(mpsc::error::TrySendError::Full(_)) => return Err(ScriptError::Busy),
+diff --git a/crates/script-runtime/src/lib.rs b/crates/script-runtime/src/lib.rs
+--- a/crates/script-runtime/src/lib.rs
++++ b/crates/script-runtime/src/lib.rs
+@@ -12,6 +12,7 @@ mod handle;
+ mod loader;
+ pub mod manifest;
+ mod ops;
++pub mod overhead_probe;
+ pub mod selftest;
+ mod watchdog;
+ 
+diff --git a/crates/script-runtime/src/overhead_probe.rs b/crates/script-runtime/src/overhead_probe.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/script-runtime/src/overhead_probe.rs
+@@ -0,0 +1,14 @@
++//! S6 overhead の測定専用（repo には入れない）。直列の呼び出しの時刻を残す。
++use std::sync::OnceLock;
++use std::sync::atomic::{AtomicU64, Ordering};
++use std::time::Instant;
++pub const SENT: usize = 0;
++pub const DEQUEUED: usize = 1;
++pub const ARGS_DONE: usize = 2;
++pub const JS_DONE: usize = 3;
++pub const OUT_DONE: usize = 4;
++static BASE: OnceLock<Instant> = OnceLock::new();
++static STAMPS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
++pub fn now_ns() -> u64 { BASE.get_or_init(Instant::now).elapsed().as_nanos() as u64 }
++pub fn stamp(i: usize) { STAMPS[i].store(now_ns(), Ordering::SeqCst); }
++pub fn read() -> [u64; 5] { std::array::from_fn(|i| STAMPS[i].load(Ordering::SeqCst)) }

@@ -933,10 +933,10 @@ pass-wire・ts-pass・traces-async の各 unit が、新しい経路を入れる
 | `policy-ts.jsonl`・`cos-ts.jsonl` | `policy-ts-warm.jsonl`・`cos-ts-warm.jsonl` |
 | `cos-ts-cold.jsonl` | 同じ |
 | `policy-a.jsonl`・`policy-b.jsonl` → `policy.jsonl` | `policy-warm-a.jsonl`・`policy-warm-b.jsonl` → `policy-warm.jsonl` |
-| `cos-digest-a.jsonl`・`cos-digest-b.jsonl` → `cos.jsonl` | `cos-digest-warm-a.jsonl`・`cos-digest-warm-b.jsonl` → `cos-digest-warm.jsonl` |
+| `cos-digest-a.jsonl`・`cos-digest-b.jsonl` → `cos.jsonl` | `cos-digest-warm-a.jsonl`・`cos-digest-warm-b.jsonl`・`cos-digest-warm-c.jsonl` → `cos-digest-warm.jsonl` |
 
 - 集計は `python3 -I scripts/dev/edit-activate-summary.py <jsonl>...`。file をまたいで同じ記録を 1 回だけ数え、20 試行未満の scenario・mode があれば exit 1 にする。
-- `cos-digest` warm は 1 試行約 345 秒で、prime と合わせて 1 leaf に 7 試行しか入らない。S5-10 の「10 ずつ」は守れず、14/20 で未達。残りは 6 試行の leaf を足して埋める（推定で埋めない）。
+- `cos-digest` warm は 1 試行約 345 秒で、prime と合わせて 1 leaf に 7 試行しか入らない。S5-10 の「10 ずつ」は守れず、3 leaf（7＋7＋6）で 20 試行を取った（推定で埋めていない）。
 
 ### S6-2 打ち切り基準の判定
 TS の経路の warm p50 は `policy-ts` 7.519 秒・`cos-ts` 7.470 秒で、(f) の 78 秒を超えない。移行は打ち切らない。
@@ -948,7 +948,6 @@ Rust の参照実装（`lane_rules` は `model_policy::match_rule`、`route_prio
 3. **fallback の置き換え**: Rust 参照へ戻す fallback（副作用の前の `ts_error`・`invalid_output`・`timeout` など。S5-6）の代わりの fail-closed の既定を、領域ごとにこの ADR に書き、試験で固定する（例: `lane_rules` は lane の天井の側、`cos_digest` は digest を出さず受信箱に知らせる）。既定は今の Rust の結果より安全条件を緩めない。
 4. **戻し先の確保**: known-good の TS bundle を 2 世代以上 `<state_dir>/script-bundles/` に残し、その hash を進捗に書く。Rust 参照の削除は 1 commit にまとめ、git revert で戻せるようにする。
 5. **方針改善の手順**: 二重実装をやめた後の方針改善は、凍結した golden の更新を人が review する手順で行う（S6 pilot の「分かったこと」。TS だけの変更は今の compare では不一致として戻される）。
-6. **S6 の数値の確定**: S6-1 の未達（`cos-digest` 14/20）が埋まっている。
 
 消さないもの: Rust の再検証と安全条件、script-guard、generation の登録・切替・drain、認可・永続状態・scheduler（(a)）。`rust` mode の意味は「Rust 参照で判定する」から「fail-closed の既定で判定する」に変わるので、mode 表と API の説明を同じ変更で直す（ADR 2026-10-11-breaking-changes-by-default）。
 

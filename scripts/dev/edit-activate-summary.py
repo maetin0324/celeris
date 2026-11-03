@@ -12,7 +12,7 @@
   release ごとに段の秒を足して release_gate に別に出す（試行の集計とは混ぜない）。
 - p50・p95 は最近傍順位（昇順で ceil(p*n/100) 番目）。
 - exit 0: 全 scenario・mode が 20 試行以上で、どの試行も exit 0。exit 1: 20 試行未満の scenario・mode があるか、
-  exit 0 でない試行・読めない行がある。exit 2: file を読めない・引数が無い。
+  exit 0 でない試行・読めない行、段の数がそろわない Rust の試行がある。exit 2: file を読めない・引数が無い。
 """
 import json
 import math
@@ -108,6 +108,8 @@ def main(paths):
             problems.append(f"{scen} {mode}: {len(values)} trials < {MIN_TRIALS}")
         if failed:
             problems.append(f"{scen} {mode}: trials not exit 0 (rep {failed})")
+        if len(steps) > 1:
+            problems.append(f"{scen} {mode}: trials have different step counts {steps}")
     for at, steps in sorted(gate.items()):
         out["release_gate"].append({"release_at": at, "steps": len(steps),
                                     "total_secs": round(sum(steps.values()), 3), "step_secs": steps})

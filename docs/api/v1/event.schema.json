@@ -994,14 +994,23 @@
     },
     "CompareOutcome": {
       "description": "`script_compare_recorded.outcome`（S2-4）。",
-      "enum": [
-        "match",
-        "mismatch",
-        "ts_error",
-        "invalid_output",
-        "unavailable"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "match",
+            "mismatch",
+            "ts_error",
+            "invalid_output",
+            "unavailable"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "explained",
+          "description": "差分があるが、人が承認した改善仕様の期待差分と byte 一致する（ADR 2026-11-03-ts-intended-behavior-change D2）。",
+          "type": "string"
+        }
+      ]
     },
     "ConflictKind": {
       "enum": [

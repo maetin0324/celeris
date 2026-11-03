@@ -128,7 +128,11 @@ async fn script_domain_generation_register_503_when_unwired() {
 async fn script_domain_generation_register_invalid_422() {
     let env = wired_env();
     let app = env.router();
-    for bad in ["abc".to_owned(), "A".repeat(64), format!("{}g", "a".repeat(63))] {
+    for bad in [
+        "abc".to_owned(),
+        "A".repeat(64),
+        format!("{}g", "a".repeat(63)),
+    ] {
         let resp = register(&app, &bad).await;
         assert_problem(&resp, 422, "script_generation_invalid");
     }
@@ -178,7 +182,11 @@ async fn script_domain_generation_limit_409() {
     let id = first["id"].as_str().expect("id");
     let resp = send(
         &app,
-        post_json_with(&retire_path(id), &json!({"reason": "old"}), &admin_headers()),
+        post_json_with(
+            &retire_path(id),
+            &json!({"reason": "old"}),
+            &admin_headers(),
+        ),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());

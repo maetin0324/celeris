@@ -2945,7 +2945,9 @@ pub(super) fn promote_cos_digest_to_ts(
     now: time::OffsetDateTime,
 ) {
     use task_core::script_compare::{ScriptDomain, ScriptMode, ScriptModeChange};
-    use task_core::script_guard::{SCRIPT_GUARD_READY_COS, ScriptGuardCall, ScriptGuardObservation};
+    use task_core::script_guard::{
+        SCRIPT_GUARD_READY_COS, ScriptGuardCall, ScriptGuardObservation,
+    };
     let version = || {
         store
             .script_domain_mode("cos_digest")

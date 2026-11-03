@@ -141,11 +141,7 @@ async fn list_generations(State(state): State<ApiState>, RawQuery(raw): RawQuery
     Ok(json_response(StatusCode::OK, &list))
 }
 
-async fn register(
-    State(state): State<ApiState>,
-    RawQuery(raw): RawQuery,
-    body: Body,
-) -> ApiResult {
+async fn register(State(state): State<ApiState>, RawQuery(raw): RawQuery, body: Body) -> ApiResult {
     no_query(&raw)?;
     let body: ScriptGenerationRegisterBody = read_json(body, false).await?;
     let control = state.script_generations.clone();
@@ -218,7 +214,11 @@ pub(crate) fn retire_effect(
     fallback_reason: &str,
 ) -> Result<ScriptGenerationView, ApiProblem> {
     let control = control.ok_or_else(unavailable)?;
-    if store.script_generation_get(id).map_err(store_problem)?.is_none() {
+    if store
+        .script_generation_get(id)
+        .map_err(store_problem)?
+        .is_none()
+    {
         return Err(ApiProblem::new(
             StatusCode::NOT_FOUND,
             SCRIPT_GENERATION_NOT_FOUND,

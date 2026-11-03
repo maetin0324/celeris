@@ -204,7 +204,12 @@ fn cos_digest_row_of(store: &SqliteStore) -> task_core::script_compare::ScriptDo
 
 /// `compare`（同じ generation）→ `canary` → `ts`。人の actor で（付記 S5-4）。
 fn set_ts_of(store: &SqliteStore, generation: &str) {
-    super::promote_cos_digest_to_ts(store, generation, "robust-ts", time::OffsetDateTime::now_utc());
+    super::promote_cos_digest_to_ts(
+        store,
+        generation,
+        "robust-ts",
+        time::OffsetDateTime::now_utc(),
+    );
 }
 
 /// `ts` → `rust`（戻しは誰でも行える。ここでは daemon の actor）。

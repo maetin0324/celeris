@@ -694,7 +694,11 @@ async fn script_domain_guard_clear_checks(env: &TestEnv, app: &axum::Router) {
     assert_eq!(guard_events(), 0);
     let resp = send(
         app,
-        post_json_with(GUARD_CLEAR, &json!({"reason": "原因を直した"}), &admin_headers()),
+        post_json_with(
+            GUARD_CLEAR,
+            &json!({"reason": "原因を直した"}),
+            &admin_headers(),
+        ),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
@@ -729,7 +733,11 @@ async fn script_domain_guard_clear_human_only() {
     script_domain_guard_clear_checks(&env, &app).await;
     let resp = send(
         &app,
-        post_json_with(GUARD_CLEAR, &json!({"reason": "x", "extra": 1}), &admin_headers()),
+        post_json_with(
+            GUARD_CLEAR,
+            &json!({"reason": "x", "extra": 1}),
+            &admin_headers(),
+        ),
     )
     .await;
     assert_problem(&resp, 400, "bad_request");

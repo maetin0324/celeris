@@ -44,7 +44,7 @@ updated: 2026-11-03
 | sccache | server に届かない（`reachable: false`） | 同じ |
 | target | S0 の WU の scratch。prime で温めた | この WU の scratch。prime で温めた（開始時 688 MB） |
 | 時刻（UTC） | 2026-11-02 05:56〜06:07 に warm の step を開始 | 2026-11-03 11:44〜12:23 |
-| 段の開始時の 1 分 load average | 3.98〜13.44 | 3.43〜14.52 |
+| 段の行の `env.loadavg` の 1 分値 | 3.98〜13.44 | 3.43〜14.52 |
 
 S0 の commit から今回の HEAD までのコードの差（`git diff --stat`）:
 - `crates/task-core`: 36 file、+7605 / -57

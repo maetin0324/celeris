@@ -76,11 +76,12 @@ file の空白や key の順は hash に影響しない。暗号の署名鍵は�
   `equal`（改善が当たらない境界の入力で、TS は Rust と同じであるべき）。task-core の試験
   （`behavior_change_cases_match_rust_reference_and_spec`）が、`rust` が参照実装の出力と一致し、`expected` が仕様の期待出力と一致し、
   file の sha256 が仕様の `cases_sha256` と一致することを確かめる。
-- **評価**は検証専用の runner（`script-host-runner behavior`。cargo を起動しない事前 build の道具）が行う: 候補の bundle で
+- **評価**は `scripts/dev/ts-behavior-eval.sh`（cargo を起動しない）が行う: 候補の TS で
   (1) 旧挙動の fixture の全件を走らせ、Rust と同じか、仕様が説明するか（説明できない差分は 0 件でないと失敗）、
   (2) 期待差分 fixture の全件を走らせ、TS の出力が `expected` と byte 一致し、`explained` の行は仕様が説明し、`equal` の行は Rust と同じ、
-  を数える。仕様の検証に落ちた file、`cases_sha256` の食い違いも失敗。`scripts/dev/ts-behavior-eval.sh` が候補の patch を使い捨ての
-  作業ツリーに当てて bundle を作り、runner を走らせる。
+  を数える。`cases_sha256` の食い違いも失敗。候補の patch を使い捨ての作業ツリーに当て、`cos_digest.ts` を esbuild で 1 file にして node で走らせる。
+  説明の述語は Rust（task-core）だけが持ち、この評価は TS の出力を Rust の試験が作った `expected` と比べるだけ（述語を JS に写さない）。
+  期待差分 fixture は key を名前順にして書く（serde_json の `preserve_order` の有無で file が変わらないように）。
 - **版の変更**: 承認した仕様の file は変えない。改善を変えるときは `version` を上げた新しい file（`supersedes` に前の hash）と新しい期待差分
   fixture を足し、改めて人が承認する。古い版の file は消さない（変更履歴）。
 
@@ -92,7 +93,7 @@ file の空白や key の順は hash に影響しない。暗号の署名鍵は�
   仕様の検証に落ちれば 422 `behavior_change_invalid`、`spec_sha256` が計算と違えば 422 `behavior_change_hash_mismatch`、領域が未対応なら
   422 `behavior_change_domain_unsupported`、同じ `id`・`version` に別の hash があれば 409 `behavior_change_version_taken`、
   `version` が承認済み・過去の版以下なら 409 `behavior_change_version_not_newer`。同じ hash がすでに `approved` なら何も変えず 200。
-  `revoked` の hash は 409 `behavior_change_revoked`（直すなら版を上げる）。新しい版の承認は同じ transaction で同じ `id` の古い `approved` を
+  `revoked`・`superseded` の hash は 409 `behavior_change_retired`（直すなら版を上げる）。新しい版の承認は同じ transaction で同じ `id` の古い `approved` を
   `superseded` にする。
 - `POST /api/v1/script/behavior-changes/{spec_sha256}/revoke`（本文 `{reason}`）: 認証された誰でも。`approved` を `revoked` にする。
 - `GET /api/v1/script/behavior-changes`: 全行と記録。

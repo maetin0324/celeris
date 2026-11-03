@@ -45,7 +45,7 @@ pub const BEHAVIOR_CHANGE_NOT_FOUND: &str = "behavior_change_not_found";
 pub struct ScriptBehaviorChangeApproveBody {
     /// `control-ts/behavior-changes/<domain>/<id>.v<version>.json` の中身。
     pub spec: BehaviorChangeSpec,
-    /// 人が確かめた仕様の hash（64 桁 hex。`script-host-runner behavior` の出力の `spec_sha256`）。
+    /// 人が確かめた仕様の hash（64 桁 hex。`BehaviorChangeSpec::sha256`。違えば 422 の本文に計算した値が出る）。
     pub spec_sha256: String,
     /// 承認の理由（記録の `reason`）。
     pub reason: String,

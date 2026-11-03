@@ -28633,7 +28633,7 @@
           "description": "`control-ts/behavior-changes/<domain>/<id>.v<version>.json` の中身。"
         },
         "spec_sha256": {
-          "description": "人が確かめた仕様の hash（64 桁 hex。`script-host-runner behavior` の出力の `spec_sha256`）。",
+          "description": "人が確かめた仕様の hash（64 桁 hex。`BehaviorChangeSpec::sha256`。違えば 422 の本文に計算した値が出る）。",
           "type": "string"
         }
       },

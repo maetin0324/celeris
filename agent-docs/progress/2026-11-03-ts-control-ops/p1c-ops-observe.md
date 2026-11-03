@@ -85,6 +85,10 @@ TS-only の高速経路（`scripts/dev/ts-verify.sh`、cargo 0 回）は変え�
 3. `crates/celeris/src/daemon/script_ops_measure_tests.rs`: `inbox_duplicate_items` を消し、`inbox_opened_cumulative`・
    `restore_rollbacks_cumulative` を足した。周ごとに「戻しの周だけ `inbox_opened`=1」を、終わりに「累計 = (周 − 1) / 3」（20 周で 6）を assert する。
    raw を取り直し、上の表を新しい値にした。
+4. 検査（cos-read-fix の commit の後、提出時の HEAD で実行）: 計測コマンド → exit 0（1 passed）。
+   `cargo nextest run -p celerisctl -p task-api -E 'test(/script_cos_read_only|script_cos_wrapped|script_canary_generations|script_domain_guard_clear/)'`
+   → exit 0（8 passed）。`bash scripts/dev/test-affected.sh` → exit 0（nextest 5115 passed・20 skipped、web vitest 697 passed、
+   script bundle の SKIP 0 件）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 ## commit（件名）
 - phase p1c: script 制御の管理 CLI（canary・generations・guard）、未配備の登録を 409 に、tick の待ちの snapshot と log、script-guard の増分の見回り、周回の計測

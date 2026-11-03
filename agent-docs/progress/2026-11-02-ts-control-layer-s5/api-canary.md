@@ -10,7 +10,7 @@ updated: 2026-11-03
 ## 結論
 付記 S5-1・S5-4 の API 側を実装した。`PUT /script/domains/{domain}/mode` は全領域で `canary`・`ts` を受け、`→canary`・`canary_bps` の変更・`→ts` は人の API token の主体だけ（他は 403 `script_mode_requires_human`）。`canary` は同じ generation の `compare` から、`ts` は同じ generation の `canary` からだけ（S4 の `cos_digest` の `compare→ts` は消した）。generation の一覧・登録・退役の API と、script-guard の停止の解除（人だけ）を足した。CoS registry は `canary`・`ts` を effect の前に 403（`human_only`）で拒み rejected を記録する。どの拒否でも表と記録は変わらない。
 
-範囲 check の正規表現に入っていない 3 file を変えた（下の「範囲外の変更」）。いずれも付記 S5-12 の api-canary の作業範囲に挙がっており、変えないと task-api・task-core の試験が通らない。
+再計画（計画 v3）で範囲 check が `agent-docs/adr/2026-10-09-cos-operations-all-mutations.md`・`config/skills/cos-operator/`・`crates/task-core/src/script_compare/` を許すようになった。2 回目の run は作り直さず、`config/skills/cos-operator/SOURCE.md` に今回の変更の 1 行を足して全 check を提出時の HEAD で再実行した。
 
 ## 変更（commit `phase s5: api-canary: …`）
 - `crates/task-api/src/script_domains.rs`
@@ -29,14 +29,14 @@ updated: 2026-11-03
 - 再生成: `docs/api/v1/api-v1.schema.json`（`UPDATE_SCHEMA=1`）、`docs/api/v1/event.schema.json`（`ScriptMode` の説明）、`web/api/generated/{schema.json,types.ts}`（`node web/scripts/gen-types.mjs`）。`docs/api/v1/api.md` の表 228〜232 と §3.134。
 - 試験の追従（`ts` は canary を経る）: `crates/task-dispatch/src/dispatcher/tests/mod.rs` に `promote_cos_digest_to_ts`（計数を積み canary 5000 bps → ts）を足し、`cos_digest_script_ts.rs`・`cos_digest_pass.rs`・`cos_digest_trace.rs` が使う。`crates/celeris/tests/support/script_compare.rs` の `Env::set_mode` は `compare→ts` を canary 経由にする。
 
-## 範囲外の変更（範囲 check の正規表現に無い path）
+## 範囲外の変更
+無い。1 回目の run で範囲 check の正規表現に無かった 3 file（ADR `2026-10-09-cos-operations-all-mutations.md`・`config/skills/cos-operator/operations.md`・`crates/task-core/src/script_compare/tests.rs`）は、計画 v3 で範囲に入った。各 file を変えた理由は次のとおり。
 | path | 理由 |
 |---|---|
 | `agent-docs/adr/2026-10-09-cos-operations-all-mutations.md` | `cos_ops_registry_matches_adr_domain_assignment_and_exclusions` が ADR の表と registry の一致を見る。新しい 3 route の行と除外表の 1 行、付記を足した |
-| `config/skills/cos-operator/operations.md` | `cos_operator_skill_table_matches_allowed` が skill の操作表と ALLOWED の一致を見る。2 行を足し、mode_set の行を S5-4 に合わせた。`metadata.version`（policy_version）は上げていない |
+| `config/skills/cos-operator/operations.md` | `cos_operator_skill_table_matches_allowed` が skill の操作表と ALLOWED の一致を見る。2 行を足し、mode_set の行を S5-4 に合わせた |
+| `config/skills/cos-operator/SOURCE.md` | 2 回目の run で今回の変更の 1 行を足した。`metadata.version`（policy_version）は変えていない（他の操作の規則は同じ。2026-10-28 の review thread の変更と同じ扱い） |
 | `crates/task-core/src/script_compare/tests.rs` | 消した `accepted_for` の表の検査を除いた |
-
-3 file を基準（`$CELERIS_WU_BASE`）の内容に戻して確かめた（確かめた後で戻した）。ADR と skill が基準のままだと `cos_ops_registry_matches_adr_domain_assignment_and_exclusions` と `cos_operator_skill_table_matches_allowed` が落ち（`cargo nextest` exit 100）、`script_compare/tests.rs` が基準のままだと task-core の lib test が `accepted_for` の E0599 で compile できない。範囲 check の正規表現を広げるしかないので、計画の問題として申告した（`plan_issue`）。
 
 ## 試験（付記 S5-12 の名前との対応）
 フィルタ `test(/script_domain|script_mode|cos_op/)` に入るよう、generation の試験は `script_domain_generation_*` にした。

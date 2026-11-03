@@ -927,13 +927,15 @@ pass-wire・ts-pass・traces-async の各 unit が、新しい経路を入れる
 記録は [S6 の進捗](../progress/2026-11-02-ts-control-layer-s6.md)。(f) の数値は変えていない。
 
 ### S6-1 生データの file 名（S5-10 との違い）
-測定 unit は S5-10 の表の名前でなく、次の名前で置いた。連結は測定 unit が済ませたので、s6-report は新しい file を作らない。中身の `scenario` は S5-10 のとおり。
+測定 unit は S5-10 の表の名前でなく、次の名前で置いた（2026-11-03 に連結 file を S5-10 の名前へ改名。表の下の注記）。連結は測定 unit が済ませたので、s6-report は新しい file を作らない。中身の `scenario` は S5-10 のとおり。
 | S5-10 の名前 | 実際の file（`../progress/2026-11-02-ts-control-layer-s6/`） |
 |---|---|
 | `policy-ts.jsonl`・`cos-ts.jsonl` | `policy-ts-warm.jsonl`・`cos-ts-warm.jsonl` |
 | `cos-ts-cold.jsonl` | 同じ |
 | `policy-a.jsonl`・`policy-b.jsonl` → `policy.jsonl` | `policy-warm-a.jsonl`・`policy-warm-b.jsonl` → `policy-warm.jsonl` |
 | `cos-digest-a.jsonl`・`cos-digest-b.jsonl` → `cos.jsonl` | `cos-digest-warm-a.jsonl`・`cos-digest-warm-b.jsonl`・`cos-digest-warm-c.jsonl` → `cos-digest-warm.jsonl` |
+
+**2026-11-03 改める（raw-names）**: 上の表は測定直後の名前である。連結済みの 4 file を S5-10 の表の名前に git mv で揃えた（中身は 1 byte も変えていない）。今の file は `policy.jsonl`（a+b、20 試行）・`cos.jsonl`（a+b+c、20 試行、scenario は `cos-digest` で S0 の `cos`〈`job_wait_extend`〉とは別）・`policy-ts.jsonl`・`cos-ts.jsonl` で、部分 file（`policy-warm-a/b`・`cos-digest-warm-a/b/c`）と `cos-ts-cold.jsonl` は名前を変えていない。記録は [raw-names](../progress/2026-11-02-ts-control-layer-s6/raw-names.md)。
 
 - 集計は `python3 -I scripts/dev/edit-activate-summary.py <jsonl>...`。file をまたいで同じ記録を 1 回だけ数え、20 試行未満の scenario・mode があれば exit 1 にする。
 - `cos-digest` warm は 1 試行約 345 秒で、prime と合わせて 1 leaf に 7 試行しか入らない。S5-10 の「10 ずつ」は守れず、3 leaf（7＋7＋6）で 20 試行を取った（推定で埋めていない）。

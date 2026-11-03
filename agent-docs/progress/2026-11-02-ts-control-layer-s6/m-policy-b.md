@@ -11,12 +11,12 @@ updated: 2026-11-03
 
 ## 結論
 - 後半 10 試行（rep 11〜20）はすべて exit 0 で、編集もすべて戻った（`reverted: true`）。`over_300s` 0 件、busy 0 件。
-- 前半 [policy-warm-a.jsonl](policy-warm-a.jsonl) と後半 [policy-warm-b.jsonl](policy-warm-b.jsonl) を行を変えずに順に連結し、[policy-warm.jsonl](policy-warm.jsonl) を作った。`--validate` は exit 0（records 212: prime 12・step 120・estimate 80、problems 0）。
+- 前半 [policy-warm-a.jsonl](policy-warm-a.jsonl) と後半 [policy-warm-b.jsonl](policy-warm-b.jsonl) を行を変えずに順に連結し、[policy.jsonl](policy.jsonl) を作った。`--validate` は exit 0（records 212: prime 12・step 120・estimate 80、problems 0）。
 - objective の「20 行」は 20 試行の意味に取った。policy の 1 試行は step 6 行で記録されるので、20 試行の連結は 212 行になる（付記 S5-10「行を変えずに a・b を順に連結」に従った）。
 - 前後半の中央値の差は -0.23%（20% 以内）なので、理由の候補は書かない。
 
 ## 20 試行の p50・p95（最近傍順位、秒）
-旧 Rust 経路 policy は試行の合計（6 段の和）、TS 経路 policy-ts は [policy-ts-warm.jsonl](policy-ts-warm.jsonl) の trial 行の `secs`（m-ts-warm の値）。
+旧 Rust 経路 policy は試行の合計（6 段の和）、TS 経路 policy-ts は [policy-ts.jsonl](policy-ts.jsonl) の trial 行の `secs`（m-ts-warm の値）。
 
 | 経路 | scenario | 試行 | p50 | p95 | 最小 | 最大 |
 |---|---|---|---|---|---|---|
@@ -46,12 +46,12 @@ updated: 2026-11-03
 ## 実行したこと（直列。測定と並べて cargo・試験は走らせていない）
 1. `bash scripts/dev/edit-activate-baseline.sh --scenario policy --mode warm --reps 10 --rep-start 11 --series m-policy-b --out agent-docs/progress/2026-11-02-ts-control-layer-s6/policy-warm-b.jsonl` → exit 0（12:25:54〜13:10:13 UTC）
    - `--rep-start 11`・`--series` は付記 S5-10 に従って付けた
-2. `cat policy-warm-a.jsonl policy-warm-b.jsonl > policy-warm.jsonl`
+2. `cat policy-warm-a.jsonl policy-warm-b.jsonl > policy.jsonl`
 3. `--validate` を 2 file に実行し、この file を書いて commit
 
 ## 証拠（提出時の HEAD で実行）
 - `bash scripts/dev/edit-activate-baseline.sh --validate agent-docs/progress/2026-11-02-ts-control-layer-s6/policy-warm-b.jsonl` → exit 0（records 106、problems 0）
-- `bash scripts/dev/edit-activate-baseline.sh --validate agent-docs/progress/2026-11-02-ts-control-layer-s6/policy-warm.jsonl` → exit 0（records 212、problems 0）
+- `bash scripts/dev/edit-activate-baseline.sh --validate agent-docs/progress/2026-11-02-ts-control-layer-s6/policy.jsonl` → exit 0（records 212、problems 0）
 - `sh scripts/dev/progress-index.sh --check` → exit 0（ok）
 - 測定 leaf はコードを変えないので test-affected・clippy・fmt は走らせていない（付記 S5-11 の 5）
 
@@ -59,4 +59,4 @@ updated: 2026-11-03
 - 無し。
 
 ## 提案
-- s6-report は旧 Rust 経路 policy の値に policy-warm.jsonl の 20 試行（p50 234.481、p95 236.162）を使う。付記 S5-10 の表の file 名 `policy.jsonl` でなく、この名前で置いた。
+- s6-report は旧 Rust 経路 policy の値に policy.jsonl の 20 試行（p50 234.481、p95 236.162）を使う。測定時の連結 file は `-warm` 付きの名前で置き、2026-11-03 raw-names で S5-10 の表の名前に改名した。対応は [raw-names](raw-names.md)。この file のコマンドも改名後の名前で書いた。

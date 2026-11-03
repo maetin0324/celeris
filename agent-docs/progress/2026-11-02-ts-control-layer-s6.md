@@ -31,14 +31,14 @@ updated: 2026-11-03
 
 | 経路 | scenario・mode | 試行 | p50（秒） | p95（秒） | 最小〜最大（秒） | 生データ |
 |---|---|---|---|---|---|---|
-| Rust（旧） | `policy` warm | 20 | 234.481 | 236.162 | 233.488〜236.383 | [policy-warm.jsonl](2026-11-02-ts-control-layer-s6/policy-warm.jsonl)（= [-a](2026-11-02-ts-control-layer-s6/policy-warm-a.jsonl)＋[-b](2026-11-02-ts-control-layer-s6/policy-warm-b.jsonl)） |
-| Rust（旧） | `cos-digest` warm | 20 | 344.491 | 346.576 | 342.847〜346.660 | [cos-digest-warm.jsonl](2026-11-02-ts-control-layer-s6/cos-digest-warm.jsonl)（= [-a](2026-11-02-ts-control-layer-s6/cos-digest-warm-a.jsonl)＋[-b](2026-11-02-ts-control-layer-s6/cos-digest-warm-b.jsonl)＋[-c](2026-11-02-ts-control-layer-s6/cos-digest-warm-c.jsonl)） |
-| TS | `policy-ts` warm | 20 | 7.519 | 7.694 | 6.747〜7.722 | [policy-ts-warm.jsonl](2026-11-02-ts-control-layer-s6/policy-ts-warm.jsonl) |
-| TS | `cos-ts` warm | 20 | 7.470 | 7.604 | 7.053〜7.608 | [cos-ts-warm.jsonl](2026-11-02-ts-control-layer-s6/cos-ts-warm.jsonl) |
+| Rust（旧） | `policy` warm | 20 | 234.481 | 236.162 | 233.488〜236.383 | [policy.jsonl](2026-11-02-ts-control-layer-s6/policy.jsonl)（= [-a](2026-11-02-ts-control-layer-s6/policy-warm-a.jsonl)＋[-b](2026-11-02-ts-control-layer-s6/policy-warm-b.jsonl)） |
+| Rust（旧） | `cos-digest` warm | 20 | 344.491 | 346.576 | 342.847〜346.660 | [cos.jsonl](2026-11-02-ts-control-layer-s6/cos.jsonl)（= [-a](2026-11-02-ts-control-layer-s6/cos-digest-warm-a.jsonl)＋[-b](2026-11-02-ts-control-layer-s6/cos-digest-warm-b.jsonl)＋[-c](2026-11-02-ts-control-layer-s6/cos-digest-warm-c.jsonl)） |
+| TS | `policy-ts` warm | 20 | 7.519 | 7.694 | 6.747〜7.722 | [policy-ts.jsonl](2026-11-02-ts-control-layer-s6/policy-ts.jsonl) |
+| TS | `cos-ts` warm | 20 | 7.470 | 7.604 | 7.053〜7.608 | [cos-ts.jsonl](2026-11-02-ts-control-layer-s6/cos-ts.jsonl) |
 | TS | `cos-ts` cold | 20 | 7.622 | 7.795 | 7.052〜7.835 | [cos-ts-cold.jsonl](2026-11-02-ts-control-layer-s6/cos-ts-cold.jsonl) |
 
 - どの試行も exit 0。`over_300s` は `cos-digest` の 20 試行すべて、busy（自分以外の cargo・rustc）は 0 件。TS の試行は全件 `cargo_invocations` 0・`link_count` 0。
-- file 名は付記 S5-10 の表（`policy.jsonl`・`cos.jsonl`・`policy-ts.jsonl`・`cos-ts.jsonl`）でなく、測定 unit が置いた名前のまま使う。対応は付記 S6 の S6-1。中身の `scenario` は S5-10 のとおり `cos-digest` で、S0 の `cos`（`job_wait_extend`）とは別の経路である。
+- file 名は S5-10 の表の名前に揃えた（`policy.jsonl`・`cos.jsonl`・`policy-ts.jsonl`・`cos-ts.jsonl`。2026-11-03 raw-names で git mv、中身は不変。対応は付記 S6 の S6-1 と [raw-names](2026-11-02-ts-control-layer-s6/raw-names.md)）。cos.jsonl の scenario は cos-digest で S0 の cos〈job_wait_extend〉とは別の経路である。前半・後半の部分 file（`-a`・`-b`・`-c`）は測定 unit の名前のまま残す。
 - 検証の範囲は同じでない: Rust の経路は `task-core` の全試験と release build を含み、TS の経路は領域の試験・比較 fixture・golden・統合試験・activate までである（付記 S5-10。測定のために Rust 側を狭めていない）。
 - S0 の baseline（policy 221.0 秒・cos 155.7 秒、3 試行）は S1〜S5 でコードが増える前の値で、比較の相手にしない（[m-policy-a](2026-11-02-ts-control-layer-s6/m-policy-a.md) の提案）。
 
@@ -179,11 +179,11 @@ updated: 2026-11-03
 ## 証拠（提出時の HEAD で実行）
 - `python3 -I scripts/dev/edit-activate-summary.py agent-docs/progress/2026-11-02-ts-control-layer-s6/*.jsonl` → exit 0、problems 0。5 系列とも 20 試行・全件 exit 0。
 - 同じ script の異常系: 1 file だけ（7 試行）と 19 試行の写しは exit 1、無い file は exit 2。a・b・c と連結 file を同時に渡しても 20 試行のまま exit 0。
-- `bash scripts/dev/edit-activate-baseline.sh --validate …/cos-digest-warm.jsonl` → records 258、problems 0。
+- `bash scripts/dev/edit-activate-baseline.sh --validate …/cos.jsonl` → records 258、problems 0。
 - `node control-ts/scripts/compare.mjs lane_rules|route_priority|cos_digest` → exit 0、19683/19683・2026/2026・2088/2088。
 - 文書の検査: `bash scripts/dev/check-doc-links.sh` → ok、`bash scripts/dev/check-adr-numbers.sh` → ok（357 files）、`sh scripts/dev/progress-index.sh --check` → ok、`python3 scripts/dev/check-architecture-map.py` → OK（880 件）。
 - `bash scripts/dev/test-affected.sh` → exit 0（試験対象の変更なし。docs と scripts/dev の python だけ）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` は境界 ADR・この file・`scripts/dev/edit-activate-summary.py` と、統合先から取り込んだ m-cosd-c の 3 file（`cos-digest-warm-c.jsonl`・`cos-digest-warm.jsonl`・`m-cosd-c.md`）。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` は境界 ADR・この file・`scripts/dev/edit-activate-summary.py` と、統合先から取り込んだ m-cosd-c の 3 file（`cos-digest-warm-c.jsonl`・`cos.jsonl`・`m-cosd-c.md`）。
 - m-cosd-c の生データは統合先の branch を merge して取り込んだ（「Merge branch …」の commit）。生データの行は変えていない。
 
 ## 未解決

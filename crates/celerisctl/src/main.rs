@@ -1017,7 +1017,6 @@ mod cos_mapping_tests {
             "/../task-api/tests/fixtures/browser-plan.json"
         );
         let t = |tail: &str| format!("/api/v1/tasks/{id}{tail}");
-        const BUNDLE_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let table: Vec<(Vec<&str>, &str, String)> = vec![
             (vec!["approve", &id], "POST", t("/approve")),
             (vec!["reject", &id], "POST", t("/reject")),
@@ -1095,23 +1094,6 @@ mod cos_mapping_tests {
                 "PUT",
                 "/api/v1/script/domains/x/mode".into(),
             ),
-            (
-                vec!["script", "generations", "register", BUNDLE_A],
-                "POST",
-                "/api/v1/script/generations".into(),
-            ),
-            (
-                vec![
-                    "script",
-                    "generations",
-                    "retire",
-                    "g1",
-                    "--retire-reason",
-                    "old",
-                ],
-                "POST",
-                "/api/v1/script/generations/g1/retire".into(),
-            ),
         ];
         let rows = skill_allowed_rows();
         assert!(rows.len() > 50, "operations.md table not parsed: {rows:?}");
@@ -1130,28 +1112,10 @@ mod cos_mapping_tests {
                 "{argv:?}: {method} {path} is not an ALLOWED row"
             );
         }
-        // `script guard clear` は CoS の run でも `/cos/operations` に包まれるが、ALLOWED の行に無い（registry の
-        // EXCLUDED・human_only で rejected になる）。CLI は権限を足さない。
-        let (method, path, _) =
-            cos_mapped(&parse(&["script", "guard", "clear", "--clear-reason", "x"]))
-                .expect("map")
-                .expect("guard clear is wrapped");
-        assert_eq!(
-            (method, path.as_str()),
-            ("POST", "/api/v1/script/guard/clear")
-        );
-        assert!(
-            !rows
-                .iter()
-                .any(|(m, p)| m == method && matches_row(p, &path)),
-            "guard clear must not be an ALLOWED row"
-        );
         for argv in [
             vec!["cron", "list"],
             vec!["models", "list"],
             vec!["script", "domains"],
-            vec!["script", "generations", "list"],
-            vec!["script", "guard", "status"],
             vec!["replay", "--apply"],
             vec!["knowledge", "reindex"],
         ] {

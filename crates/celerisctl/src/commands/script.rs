@@ -468,4 +468,34 @@ mod tests {
             "guard: running"
         );
     }
+
+    /// CoS の run では変更系が `/cos/operations` に包まれる（`main.rs` の `cos_mapped` は `request_of` に `/api/v1` を足すだけ）。
+    /// 登録・退役は cos-operator skill の操作表の ALLOWED の行で、`guard clear` は行に無い（registry の EXCLUDED・human_only で
+    /// rejected になる）。CLI は権限を足さない。
+    #[test]
+    fn script_cos_wrapped_requests_match_the_operations_table() {
+        let text = include_str!("../../../../config/skills/cos-operator/operations.md");
+        let allowed = text.split("## 除外する操作").next().expect("table");
+        let row = |method: &str, path: &str| {
+            allowed.lines().any(|line| {
+                line.split('|').nth(2).map(|c| c.trim().trim_matches('`'))
+                    == Some(&format!("{method} /api/v1{path}"))
+            })
+        };
+        let register = ScriptCommand::Generations(GenerationsCommand::Register(RegisterArgs {
+            bundle_sha256: "a".repeat(64),
+        }));
+        let retire = ScriptCommand::Generations(GenerationsCommand::Retire(RetireArgs {
+            id: "g1".into(),
+            reason: None,
+        }));
+        let (m, p, _) = request_of(&register).expect("register");
+        assert!(row(m, &p), "{m} {p}");
+        let (m, _, _) = request_of(&retire).expect("retire");
+        assert!(row(m, "/script/generations/<id>/retire"), "{m}");
+        let clear =
+            ScriptCommand::Guard(GuardCommand::Clear(GuardClearArgs { reason: "x".into() }));
+        let (m, p, _) = request_of(&clear).expect("clear");
+        assert!(!row(m, &p), "guard clear must not be an ALLOWED row");
+    }
 }

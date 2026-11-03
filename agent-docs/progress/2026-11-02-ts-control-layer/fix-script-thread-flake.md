@@ -44,6 +44,7 @@ completed: 2026-11-03
 - `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check` → いずれも exit 0
 - 範囲 check（`git diff --name-only $CELERIS_WU_BASE` が許可の正規表現の外に無い）→ 外は 0 件
 - 後の commit（この節の追記）は進捗 md だけの変更で、コードは上の検査のときと同じ。
+- 2 回目の run（attempt 1 の check 不合格の後）: 前回の run 後の check で `celeris::ops_r1_measure ops_r1_measure_cos_path_with_stub_harness` が 1 件落ちた（`crates/celeris/tests/ops_r1_measure.rs:403` の health が status 0）。この WU の変更は `script_runtime.rs` と進捗 md だけで、この試験に触れていない。同じ HEAD で 3 つの検査を再実行し、test-affected は exit 0（914 passed）、clippy・fmt も exit 0 だった。script_runtime の 5 回連続も各回 22 passed。
 
 ## commit
 - `phase s5-s6: fix-script-thread-flake: shutdown 後の thread の数え方から終わりかけの thread を除き、ptrace の遅延フックで再現する`
@@ -52,5 +53,7 @@ completed: 2026-11-03
 ## 未解決
 - `ExitHolder` は ptrace が使える環境を前提にする（Yama の ptrace_scope 0・1 で動く。この run の worker の sandbox（ptrace_scope 1）で動くことは確かめた。release gate の host では未確認）。ptrace_scope 2・3 の host では、2 件の再現試験が `exit-holder: seize failed` で落ちる。
 
+- `ops_r1_measure_cos_path_with_stub_harness` の 1 回の失敗（未確認の推定）: `scripts/campaign/ops-r1-measure-config.sh` は空き port を bind→close で選び、daemon は後でその port を bind する。その間に並走する別の試験の daemon が同じ port を取ると、無認証の `/api/v1/health` がその daemon から 200 を返して起動待ちを抜け、その daemon が終わった後の次の要求が status 0 になる。daemon.log が残っていないため確かめていない。範囲外なので直していない。
+
 ## 提案
-- なし。
+- `ops_r1_measure.rs` の起動待ちを、自分の daemon であること（例: 認証付きの endpoint が operator token で 200、または daemon.log の listen 行）と child が生きていることで判定する。別 task で扱う。

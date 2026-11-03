@@ -36,7 +36,7 @@ completed: 2026-11-03
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 ## 未解決
-- runner の出力の `min_rows` は 2086 のまま（下限なので行が増えても合格する）。下限を上げるかは決めていない。
+- `script-host-runner.rs` の `pass_traces.jsonl` の行数の下限（`min_rows`）は 20 のまま（`cases.jsonl` と合わせて 2086）。下限なので 22 行でも合格する。この unit の範囲外なので変えていない。
 
 ## 提案
-- なし。
+- 下限を 22 に上げ、read_run の失敗の行が消えたら runner の採点でも落ちるようにする（今は cargo の `cos_digest_trace.rs` の検査だけが守る）。

@@ -1,5 +1,5 @@
-//! 付記 S2: 本物の deno_core host で compare を確かめる試験（`script_compare_lane_rules.rs`・
-//! `script_compare_route_priority.rs`）の共通部分。userns を使わない。外部ネットワークに出ない。
+//! 付記 S2・S4: 本物の deno_core host で compare を確かめる試験（`script_compare_lane_rules.rs`・
+//! `script_compare_route_priority.rs`・`script_compare_cos_digest.rs`）の共通部分。userns を使わない。外部ネットワークに出ない。
 //!
 //! 待ちの方針: dispatcher の deadline は 50 ms の固定で、host が忙しいと正しい bundle でも `timeout` になりうる。
 //! `timeout` は環境の遅さであって比較の結果ではないので、`timeout` のときだけ新しい task で比較をやり直す。
@@ -65,7 +65,8 @@ pub fn dist_bundle(test: &str, domain: &str) -> Option<VerifiedBundle> {
 /// `dir` の bundle を使えるか判定する。`config` は `bundle.config.json` の path。
 ///
 /// `control-ts/dist` は git 管理外なので、領域を足す前の source で作った古い bundle が作業ツリーに残りうる。
-/// 古い bundle（manifest の `domains` が config の `domains` の key 集合と違う、または `domain` を含まない）を
+/// 古い bundle（manifest の `domains` が config の `domains` の key 集合と違う、`domain` を含まない、または
+/// manifest の `capabilities` が config の各領域の capability の和集合と違う）を
 /// 正として比べると、TS の実装でなく bundle の古さで落ちる。だから使えない bundle と同じく SKIP にする。
 /// `require` が真なら SKIP せず panic する。
 pub fn usable_bundle(
@@ -105,6 +106,30 @@ pub fn usable_bundle(
         skip(format!(
             "stale bundle: manifest domains {actual:?} (source_commit {}) do not match \
              {} domains {expected:?} or lack {domain:?}; rebuild control-ts/dist",
+            bundle.manifest.source_commit,
+            config.display()
+        ));
+        return None;
+    }
+    // 付記 S4-13: capability を足した config の前に作った bundle も古い（op が `denied` になる）。
+    let expected_caps: BTreeSet<String> = value["domains"]
+        .as_object()
+        .into_iter()
+        .flat_map(|d| d.values())
+        .filter_map(|caps| caps.as_array())
+        .flatten()
+        .filter_map(|c| c.as_str().map(str::to_owned))
+        .collect();
+    let actual_caps: BTreeSet<String> = bundle
+        .manifest
+        .capabilities
+        .iter()
+        .map(|c| c.as_str().to_owned())
+        .collect();
+    if actual_caps != expected_caps {
+        skip(format!(
+            "stale bundle: manifest capabilities {actual_caps:?} (source_commit {}) do not match \
+             {} capabilities {expected_caps:?}; rebuild control-ts/dist",
             bundle.manifest.source_commit,
             config.display()
         ));
@@ -190,9 +215,14 @@ impl Env {
     }
 
     pub fn with_sources(domain: &'static str, sources: &str) -> Self {
+        Self::with_config(domain, sources, "")
+    }
+
+    /// `extra` は config の末尾に足す表（`[cos]` など）。
+    pub fn with_config(domain: &'static str, sources: &str, extra: &str) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path().join("ws")).expect("ws");
-        let config = write_config(dir.path(), &config_text(sources, ""));
+        let config = write_config(dir.path(), &config_text(sources, extra));
         let store = SqliteStore::open(&config.db.path).expect("store");
         Self {
             dir,

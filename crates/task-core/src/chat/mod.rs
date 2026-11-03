@@ -8,6 +8,8 @@ pub mod attachments;
 mod credential;
 #[cfg(test)]
 mod credential_tests;
+pub mod digest;
+mod digest_fixture;
 mod operations;
 #[cfg(test)]
 mod operations_tests;
@@ -34,6 +36,7 @@ mod window;
 #[cfg(test)]
 mod window_tests;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
+pub use digest_fixture::{COS_DIGEST_GENERATED_CASES, cos_digest_fixture_jsonl};
 pub use operations::{AuditContext, CosOperation};
 pub use override_op::{OverrideAction, OverrideResult};
 pub use review::{

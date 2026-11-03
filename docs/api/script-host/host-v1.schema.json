@@ -7,6 +7,18 @@
     "capability": {
       "$ref": "#/$defs/Capability"
     },
+    "cos_digest_list_runs_request": {
+      "$ref": "#/$defs/CosDigestListRunsRequest"
+    },
+    "cos_digest_list_runs_result": {
+      "$ref": "#/$defs/CosDigestListRunsReplyResult"
+    },
+    "cos_digest_read_run_request": {
+      "$ref": "#/$defs/CosDigestReadRunRequest"
+    },
+    "cos_digest_read_run_result": {
+      "$ref": "#/$defs/CosDigestInputResult"
+    },
     "host_error": {
       "$ref": "#/$defs/HostError"
     },
@@ -14,7 +26,7 @@
       "$ref": "#/$defs/SelftestEchoRequest"
     },
     "selftest_echo_result": {
-      "$ref": "#/$defs/HostResult"
+      "$ref": "#/$defs/SelftestEchoReplyResult"
     },
     "version": {
       "type": "string"
@@ -26,7 +38,11 @@
     "capability",
     "host_error",
     "selftest_echo_request",
-    "selftest_echo_result"
+    "selftest_echo_result",
+    "cos_digest_list_runs_request",
+    "cos_digest_list_runs_result",
+    "cos_digest_read_run_request",
+    "cos_digest_read_run_result"
   ],
   "$defs": {
     "Capability": {
@@ -36,7 +52,349 @@
           "description": "試験用 async op `op_host_selftest_echo`（要求の scope の task を写し返すだけ）。",
           "type": "string",
           "const": "selftest:echo_task"
+        },
+        {
+          "description": "`op_cos_digest_list_runs`: digest を待つ triage run の一覧（付記 S4-12）。",
+          "type": "string",
+          "const": "cos_digest:list_runs"
+        },
+        {
+          "description": "`op_cos_digest_read_run`: その pass の一覧にある run 1 つの入力（付記 S4-12）。",
+          "type": "string",
+          "const": "cos_digest:read_run"
         }
+      ]
+    },
+    "CosDigestInput": {
+      "description": "`op_cos_digest_read_run` の戻り値（S4-2 の `CosDigestInput` のまま）。正本は task-core の\n`CosDigestInput`。`celeris-script` は task-core に依存しないので同じ形をここに持ち、\n`tests/dto.rs` が fixture の全行で両方の型を往復させて一致を確かめる。",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CosTriageItemReport"
+          }
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "run_state": {
+          "type": "string"
+        },
+        "thread": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "items",
+        "reason",
+        "run_id",
+        "run_state",
+        "thread"
+      ]
+    },
+    "CosDigestInputResult": {
+      "description": "op の戻り値。`celeris:host` は `ok` なら `value` を返し、`error` なら `HostError` を throw する。",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ok"
+            },
+            "value": {
+              "$ref": "#/$defs/CosDigestInput"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/HostError"
+            },
+            "kind": {
+              "type": "string",
+              "const": "error"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "error"
+          ]
+        }
+      ]
+    },
+    "CosDigestListRunsReply": {
+      "description": "`op_cos_digest_list_runs` の戻り値。",
+      "type": "object",
+      "properties": {
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CosDigestRunRef"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "runs"
+      ]
+    },
+    "CosDigestListRunsReplyResult": {
+      "description": "op の戻り値。`celeris:host` は `ok` なら `value` を返し、`error` なら `HostError` を throw する。",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ok"
+            },
+            "value": {
+              "$ref": "#/$defs/CosDigestListRunsReply"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/HostError"
+            },
+            "kind": {
+              "type": "string",
+              "const": "error"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "error"
+          ]
+        }
+      ]
+    },
+    "CosDigestListRunsRequest": {
+      "description": "`op_cos_digest_list_runs` の引数（欄なし。上限は Rust の定数で、TS は変えられない）。",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "CosDigestReadRunRequest": {
+      "description": "`op_cos_digest_read_run` の引数。その pass の一覧にある `(thread, run_id)` の組だけを読める。",
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "thread": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "thread",
+        "run_id"
+      ]
+    },
+    "CosDigestRunRef": {
+      "description": "digest を待つ triage run 1 つ（`started_at`・`run_id` 順）。",
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "run_state": {
+          "type": "string"
+        },
+        "thread": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "thread",
+        "run_id",
+        "run_state"
+      ]
+    },
+    "CosTriageDecision": {
+      "description": "人が決めること（outbox の本文）。正本は task-core の `CosTriageDecision`。",
+      "type": "object",
+      "properties": {
+        "background": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_answer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CosTriageOption"
+          }
+        },
+        "recommendation_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recommended": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "web_path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "background",
+        "on_answer",
+        "options",
+        "recommendation_reason",
+        "recommended",
+        "summary",
+        "web_path"
+      ]
+    },
+    "CosTriageItemReport": {
+      "description": "`cos_inbox_items` の 1 行。正本は task-core の `CosTriageItemReport`。",
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CosTriageDecision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "route": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_key": {
+          "type": "string"
+        },
+        "source_kind": {
+          "type": "string"
+        },
+        "source_revision": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "created_at",
+        "decision",
+        "detail",
+        "item_id",
+        "operation_id",
+        "reason",
+        "route",
+        "run_id",
+        "source_key",
+        "source_kind",
+        "source_revision",
+        "state",
+        "summary",
+        "thread_id"
+      ]
+    },
+    "CosTriageOption": {
+      "description": "元の待ちの選択肢 1 つ。正本は task-core の `CosTriageOption`（同じ形。`tests/dto.rs` が照合する）。",
+      "type": "object",
+      "properties": {
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "detail",
+        "key",
+        "label"
       ]
     },
     "HostError": {
@@ -69,7 +427,43 @@
         "generation_gone"
       ]
     },
-    "HostResult": {
+    "SelftestEchoReply": {
+      "description": "`op_host_selftest_echo` の戻り値（Rust → TS）。",
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observation": {
+          "$ref": "#/$defs/SelftestObservation"
+        },
+        "priority": {
+          "$ref": "#/$defs/SelftestPriority"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "tokens": {
+          "$ref": "#/$defs/U64String"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "note",
+        "observation",
+        "priority",
+        "task_id",
+        "tokens"
+      ]
+    },
+    "SelftestEchoReplyResult": {
       "description": "op の戻り値。`celeris:host` は `ok` なら `value` を返し、`error` なら `HostError` を throw する。",
       "oneOf": [
         {
@@ -108,39 +502,6 @@
         }
       ]
     },
-    "SelftestEchoReply": {
-      "description": "`op_host_selftest_echo` の戻り値（Rust → TS）。",
-      "type": "object",
-      "properties": {
-        "at": {
-          "$ref": "#/$defs/Timestamp"
-        },
-        "note": {
-          "type": "string"
-        },
-        "observation": {
-          "$ref": "#/$defs/SelftestObservation"
-        },
-        "priority": {
-          "$ref": "#/$defs/SelftestPriority"
-        },
-        "task_id": {
-          "type": "string"
-        },
-        "tokens": {
-          "$ref": "#/$defs/U64String"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "task_id",
-        "note",
-        "tokens",
-        "priority",
-        "at",
-        "observation"
-      ]
-    },
     "SelftestEchoRequest": {
       "description": "`op_host_selftest_echo` の引数（TS → Rust）。",
       "type": "object",
@@ -150,7 +511,10 @@
         },
         "note": {
           "description": "無ければ `null`（欄は省かない）。",
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "priority": {
           "$ref": "#/$defs/SelftestPriority"
@@ -166,11 +530,11 @@
       },
       "additionalProperties": false,
       "required": [
-        "task_id",
+        "at",
         "note",
-        "tokens",
         "priority",
-        "at"
+        "task_id",
+        "tokens"
       ]
     },
     "SelftestObservation": {

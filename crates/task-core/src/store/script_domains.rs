@@ -1,5 +1,6 @@
 //! ADR 2026-11-02-ts-control-layer-boundary 付記 S2-4・S2-5: 表 `script_generations`・`script_domain_modes`・
-//! `script_domain_events`（migration 0103）と event `script_compare_recorded` の追記。
+//! `script_domain_events`（migration 0103）と event `script_compare_recorded` の追記、
+//! `cos_digest` の compare の記録 `script_compare_log`（migration 0104、付記 S4-5）。
 //!
 //! - mode の更新は `version` の CAS だけ。更新と `script_domain_mode_changed` の追記は 1 つの IMMEDIATE transaction。
 //! - S2 では `canary`・`ts` への変更を store でも拒む（表を変えない）。
@@ -11,9 +12,21 @@ use time::OffsetDateTime;
 use super::{SqliteStore, StoreError, format_rfc3339};
 use crate::model::{Event, TaskId};
 use crate::script_compare::{
-    NewScriptGeneration, ScriptCompareRecord, ScriptDomain, ScriptDomainError, ScriptDomainModeRow,
-    ScriptGeneration, ScriptGenerationState, ScriptMode, ScriptModeChange, ScriptModeChangeOutcome,
+    CosDigestCompareRecord, NewScriptGeneration, ScriptCompareRecord, ScriptDomain,
+    ScriptDomainError, ScriptDomainModeRow, ScriptGeneration, ScriptGenerationState, ScriptMode,
+    ScriptModeChange, ScriptModeChangeOutcome, actor_may_enable_ts,
 };
+
+/// `script_compare_log` の 1 行（付記 S4-5）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScriptCompareLogRow {
+    pub id: u64,
+    pub ts: String,
+    pub domain: ScriptDomain,
+    pub thread_id: String,
+    pub run_id: String,
+    pub record: CosDigestCompareRecord,
+}
 
 /// `script_domain_events` の 1 行。`event` は `Event::ScriptDomainModeChanged`。
 #[derive(Debug, Clone, PartialEq)]
@@ -110,23 +123,31 @@ impl SqliteStore {
 
     /// mode を変える（S2-4 の CAS・S2-5）。表の更新と `script_domain_events` への追記は同じ transaction。
     ///
-    /// - 未知の領域 → `UnknownDomain`。`canary`・`ts` → `ModeNotEnabled`（表を変えない）。
+    /// - 未知の領域 → `UnknownDomain`。`canary`、`cos_digest` 以外の `ts` → `ModeNotEnabled`（表を変えない）。
+    /// - `ts` は actor が `human:*` でなければ `TsRequiresHuman`、元が同じ generation の `compare` でなければ
+    ///   `TsRequiresCompare`（S4-14）。戻し（`ts→rust`・`ts→compare`）は誰の actor でも受ける。
     /// - 同じ mode・同じ generation → `Unchanged`（表も記録も変えない）。
     /// - `version` が `expected_version` と違う（他の更新が先に入った）→ `VersionConflict`。
-    /// - `compare` は `loaded` で manifest の `domains` にその領域がある generation が要る。
+    /// - `compare`・`ts` は `loaded` で manifest の `domains` にその領域がある generation が要る。
     pub fn script_domain_set_mode(
         &self,
         change: &ScriptModeChange,
         now: OffsetDateTime,
     ) -> Result<ScriptModeChangeOutcome, ScriptDomainError> {
         let domain = parse_domain(&change.domain)?;
-        if !change.to_mode.enabled_in_s2() {
-            return Err(ScriptDomainError::ModeNotEnabled(change.to_mode));
+        if !change.to_mode.accepted_for(domain) {
+            return Err(ScriptDomainError::ModeNotEnabled {
+                domain,
+                mode: change.to_mode,
+            });
         }
-        match (change.to_mode, &change.to_generation) {
-            (ScriptMode::Compare, None) => return Err(ScriptDomainError::GenerationRequired),
-            (ScriptMode::Rust, Some(_)) => return Err(ScriptDomainError::GenerationNotAllowed),
+        match (change.to_mode.needs_generation(), &change.to_generation) {
+            (true, None) => return Err(ScriptDomainError::GenerationRequired),
+            (false, Some(_)) => return Err(ScriptDomainError::GenerationNotAllowed),
             _ => {}
+        }
+        if change.to_mode == ScriptMode::Ts && !actor_may_enable_ts(&change.actor) {
+            return Err(ScriptDomainError::TsRequiresHuman(change.actor.clone()));
         }
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -141,6 +162,15 @@ impl SqliteStore {
                 domain: domain.as_str().to_owned(),
                 expected: change.expected_version,
                 found: current.version,
+            });
+        }
+        // S4-14: `→ts` の元は同じ generation の `compare` だけ（`rust` からの直行・generation の同時変更は拒む）。
+        if change.to_mode == ScriptMode::Ts
+            && (current.mode != ScriptMode::Compare
+                || current.generation_id != change.to_generation)
+        {
+            return Err(ScriptDomainError::TsRequiresCompare {
+                current: current.mode,
             });
         }
         if let Some(id) = &change.to_generation {
@@ -272,6 +302,98 @@ impl SqliteStore {
         Self::append_event_tx_at(&tx, task_id, &event, now)?;
         tx.commit()?;
         Ok(true)
+    }
+}
+
+impl SqliteStore {
+    /// 付記 S4-5: `cos_digest` の compare の記録を `script_compare_log` に追記する。同じ `thread_id`・`run_id`・
+    /// `domain` に `generation`・`input_digest`・`outcome` が同じ行が既にあれば追記せず `Ok(false)`。
+    pub fn script_compare_log_append(
+        &self,
+        record: &CosDigestCompareRecord,
+        now: OffsetDateTime,
+    ) -> Result<bool, StoreError> {
+        let outcome = serde_json::to_value(record.outcome)?;
+        let outcome = outcome.as_str().unwrap_or_default().to_owned();
+        let applied_by = record.applied_by.as_str();
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists = tx
+            .query_row(
+                "SELECT 1 FROM script_compare_log \
+                 WHERE thread_id = ?1 AND run_id = ?2 AND domain = ?3 \
+                 AND json_extract(json, '$.generation') = ?4 \
+                 AND json_extract(json, '$.input_digest') = ?5 \
+                 AND json_extract(json, '$.outcome') = ?6 \
+                 AND json_extract(json, '$.applied_by') = ?7 LIMIT 1",
+                params![
+                    record.thread_id,
+                    record.run_id,
+                    record.domain.as_str(),
+                    record.generation,
+                    record.input_digest,
+                    outcome,
+                    applied_by,
+                ],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if exists {
+            tx.commit()?;
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO script_compare_log (ts, domain, thread_id, run_id, json) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                format_rfc3339(now)?,
+                record.domain.as_str(),
+                record.thread_id,
+                record.run_id,
+                serde_json::to_string(record)?,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// `script_compare_log` を古い順に読む（`run_id` を渡せばその run だけ）。
+    pub fn script_compare_log(
+        &self,
+        run_id: Option<&str>,
+    ) -> Result<Vec<ScriptCompareLogRow>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, ts, domain, thread_id, run_id, json FROM script_compare_log \
+                 WHERE ?1 IS NULL OR run_id = ?1 ORDER BY id",
+            )?;
+            let rows = stmt.query_map(params![run_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?;
+            rows.map(|r| {
+                let (id, ts, domain, thread_id, run_id, json) = r?;
+                Ok(ScriptCompareLogRow {
+                    id: u64::try_from(id)
+                        .map_err(|_| StoreError::Invalid(format!("script_compare_log id {id}")))?,
+                    ts,
+                    domain: parse_domain(&domain).map_err(|_| {
+                        StoreError::Invalid(format!("unknown script domain `{domain}`"))
+                    })?,
+                    thread_id,
+                    run_id,
+                    record: serde_json::from_str(&json)?,
+                })
+            })
+            .collect()
+        })
     }
 }
 

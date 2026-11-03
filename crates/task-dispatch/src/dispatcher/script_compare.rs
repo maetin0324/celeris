@@ -8,6 +8,8 @@
 //!   記録（`script_compare_recorded`）だけを書く。lane・候補列・run・既存の event は Rust の結果のまま（S2-6）。
 //! - `PolicyScript` が無い・bundle が generation と違う・tokio の runtime が無いときは TS を呼ばず `unavailable` を記録する。
 //! - generation の確認・`unavailable`・deadline・in-flight の上限・記録は両領域で同じ経路（[`Dispatcher::compare_domain`]）を通る。
+//! - 付記 S4-14: 領域 `cos_digest` は digest pass（`cos_chat/digest.rs`）が [`Dispatcher::script_target`] で
+//!   `compare`・`ts` の宛先を得て、`compare` は同じ `spawn_compare` を通る。記録は `script_compare_log`（S4-15）。
 
 use std::sync::Arc;
 
@@ -53,6 +55,15 @@ impl Dispatcher {
             if let Err(e) = handle.await {
                 tracing::warn!(error = %e, "script compare task failed");
             }
+        }
+    }
+
+    /// 走っている compare を打ち切って待つ（試験で「dispatcher が落ちた」を作る）。
+    #[cfg(test)]
+    pub(in crate::dispatcher) async fn abort_script_compares(&mut self) {
+        for handle in std::mem::take(&mut self.script_compare.in_flight) {
+            handle.abort();
+            let _ = handle.await;
         }
     }
 
@@ -121,7 +132,7 @@ impl Dispatcher {
         });
     }
 
-    /// 両領域の共通の経路: mode の確認 → generation の確認 → 下書き → `unavailable` か TS の呼び出し。
+    /// 全領域の共通の経路: mode の確認 → generation の確認 → 下書き → `unavailable` か TS の呼び出し。
     /// `draft` は mode が `compare` で generation の id があるときだけ呼ぶ（mode `rust` では DTO を作らない）。
     fn compare_domain(
         &mut self,
@@ -129,36 +140,71 @@ impl Dispatcher {
         domain: ScriptDomain,
         draft: impl FnOnce(&Self, String, String, String) -> CompareDraft,
     ) {
+        let Some(target) = self.compare_target(domain) else {
+            return;
+        };
+        let draft = draft(
+            self,
+            target.generation_id,
+            target.bundle_sha256,
+            target.host_api,
+        );
+        let store = target.store;
+        let (script, runtime) = match target.call {
+            Err(reason) => {
+                append_compare(store.as_ref(), task_id, draft.unavailable(&reason));
+                return;
+            }
+            Ok(call) => call,
+        };
+        self.spawn_compare(domain, &runtime, async move {
+            let (result, elapsed) = draft.call(script.as_ref(), SCRIPT_CALL_DEADLINE).await;
+            append_compare(store.as_ref(), task_id, draft.finish(&result, elapsed));
+        });
+    }
+
+    /// 付記 S4-15: `script_compare_log` の store（無ければ記録しない）。
+    pub(in crate::dispatcher) fn script_compare_log_store(
+        &self,
+    ) -> Option<Arc<dyn ScriptDomainStore>> {
+        self.script_compare.store.clone()
+    }
+
+    /// mode が `compare` で generation の id があれば比較の宛先を返す（無ければ `None` = 何もしない）。
+    /// `call` が `Err` なら TS を呼ばず、その理由で `unavailable` を記録する。
+    fn compare_target(&mut self, domain: ScriptDomain) -> Option<CompareTarget> {
+        self.script_target(domain, &[ScriptMode::Compare])
+    }
+
+    /// mode が `modes` のどれかで generation の id があれば宛先を返す（付記 S4-14: `cos_digest` は `ts` も）。
+    pub(in crate::dispatcher) fn script_target(
+        &mut self,
+        domain: ScriptDomain,
+        modes: &[ScriptMode],
+    ) -> Option<CompareTarget> {
         self.refresh_script_modes();
-        let Some(row) = self
+        let row = self
             .script_compare
             .modes
             .iter()
-            .find(|r| r.domain == domain)
-        else {
-            return;
-        };
-        if row.mode != ScriptMode::Compare {
-            return;
+            .find(|r| r.domain == domain)?;
+        if !modes.contains(&row.mode) {
+            return None;
         }
-        let Some(store) = self.script_compare.store.clone() else {
-            return;
-        };
-        let Some(generation_id) = row.generation_id.clone() else {
-            return;
-        };
+        let (mode, row_generation, version) = (row.mode, row.generation_id.clone(), row.version);
+        let store = self.script_compare.store.clone()?;
+        let generation_id = row.generation_id.clone()?;
         let generation = match store.script_generation_get(&generation_id) {
             Ok(g) => g,
             Err(e) => {
                 tracing::warn!(error = %e, generation = %generation_id, "script generation unreadable; compare skipped");
-                return;
+                return None;
             }
         };
         let (bundle_sha256, host_api) = generation
             .as_ref()
             .map(|g| (g.bundle_sha256.clone(), g.host_api.clone()))
             .unwrap_or_default();
-        let draft = draft(self, generation_id.clone(), bundle_sha256, host_api);
         let unavailable = match (&generation, &self.script_compare.script) {
             (None, _) => Some(format!("script generation `{generation_id}` not found")),
             (Some(g), _) if g.state != ScriptGenerationState::Loaded => {
@@ -178,30 +224,57 @@ impl Dispatcher {
             }
             _ => None,
         };
-        let runtime = tokio::runtime::Handle::try_current();
-        let unavailable = unavailable.or_else(|| {
-            runtime
-                .is_err()
-                .then(|| "no tokio runtime for the script call".to_owned())
-        });
-        if let Some(reason) = unavailable {
-            append_compare(store.as_ref(), task_id, draft.unavailable(&reason));
-            return;
-        }
-        let (Some(script), Ok(runtime)) = (self.script_compare.script.clone(), runtime) else {
-            return;
+        let call = match (unavailable, &self.script_compare.script) {
+            (Some(reason), _) => Err(reason),
+            (None, Some(script)) => match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => Ok((script.clone(), runtime)),
+                Err(_) => Err("no tokio runtime for the script call".to_owned()),
+            },
+            (None, None) => Err("no policy script runtime".to_owned()),
         };
+        Some(CompareTarget {
+            store,
+            mode,
+            row_generation,
+            version,
+            generation_id,
+            bundle_sha256,
+            host_api,
+            call,
+        })
+    }
+
+    /// in-flight の上限（全領域の合計 `MAX_IN_FLIGHT_COMPARES`）の内で比較の task を走らせる。超えたら捨てる。
+    pub(in crate::dispatcher) fn spawn_compare(
+        &mut self,
+        domain: ScriptDomain,
+        runtime: &tokio::runtime::Handle,
+        compare: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
         self.script_compare.in_flight.retain(|h| !h.is_finished());
         if self.script_compare.in_flight.len() >= MAX_IN_FLIGHT_COMPARES {
-            tracing::warn!(%task_id, domain = domain.as_str(), "too many script compares in flight; compare skipped");
+            tracing::warn!(
+                domain = domain.as_str(),
+                "too many script compares in flight; compare skipped"
+            );
             return;
         }
-        let handle = runtime.spawn(async move {
-            let (result, elapsed) = draft.call(script.as_ref(), SCRIPT_CALL_DEADLINE).await;
-            append_compare(store.as_ref(), task_id, draft.finish(&result, elapsed));
-        });
+        let handle = runtime.spawn(compare);
         self.script_compare.in_flight.push(handle);
     }
+}
+
+/// [`Dispatcher::script_target`] の結果。
+pub(in crate::dispatcher) struct CompareTarget {
+    pub store: Arc<dyn ScriptDomainStore>,
+    /// pass・tick の始めの mode の行（mode・generation・version。付記 S4-14 の `mode_changed`）。
+    pub mode: ScriptMode,
+    pub row_generation: Option<String>,
+    pub version: u64,
+    pub generation_id: String,
+    pub bundle_sha256: String,
+    pub host_api: String,
+    pub call: Result<(Arc<dyn PolicyScript>, tokio::runtime::Handle), String>,
 }
 
 /// 記録を追記する。失敗しても dispatch は続ける（warn の log だけ。S2-6）。

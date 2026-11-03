@@ -247,7 +247,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/reload` | A | `handlers.rs` | 共通 |
 | POST | `/replay` | R | `handlers.rs` | 共通 |
 | DELETE | `/repos/{id}` | A | `repos.rs` | 共通 |
-| PUT | `/script/domains/{domain}/mode` | A | `script_domains.rs` | 共通 |
+| PUT | `/script/domains/{domain}/mode` | A（`to_mode = ts` は `human_only` で拒否。付記 2026-11-02 S4） | `script_domains.rs` | 共通 |
 | PATCH | `/repos/{id}` | A | `repos.rs` | 共通 |
 | PATCH | `/config/fields` | X: `human_only` | `handlers.rs` | 共通 |
 | POST | `/terminals` | X: `human_only` | `handlers.rs` | 共通 |
@@ -487,3 +487,15 @@ ADR 2026-10-28-cos-integrate-task の `POST /tasks/{id}/integration-requests/{re
   `rust` への戻しは挙動を変えないので CoS に許可する。`canary`・`ts` は route と同じ関数が 422 `script_mode_not_enabled` で拒み、
   表を変えない（本番の挙動を変える変更は人の承認が要る。S5 で別に決める）。store の CAS が 1 transaction で表を更新して
   `script_domain_events` に追記するので、CoS の操作は書き込み 1 回の外部効果の手順（`external_store`）で記録する。
+
+## 付記: `cos_digest` の mode `ts` は人の主体だけ（2026-11-02、task 01M6EVP9GT07K2G01EMW0E6HNC）
+
+- ADR [2026-11-02-ts-control-layer-boundary](2026-11-02-ts-control-layer-boundary.md) 付記 S4-14 に従い、
+  `PUT /script/domains/{domain}/mode` は `cos_digest` に限って `ts` を受けるようになった。`ts` は TS の command を apply
+  させる変更なので、人の API token の主体（`human:*`）だけが行える。
+- route の分類は ALLOWED のまま変えない（行数は変わらない）。CoS の `script_domain.mode_set` は、本文の `mode` が `ts` なら
+  effect の前に 403 `script_mode_requires_human`（理由 `human_only`）で拒み、`cos_operations` に rejected として記録する。表と
+  `script_domain_events` は変わらない。実装は `crates/task-api/src/cos/ops/admin.rs` の `script_domain.mode_set`。
+- CoS が行えるのは今までどおり `rust`→`compare`、`compare`→`rust`、それに戻し（`ts`→`compare`・`ts`→`rust`）である。
+  `canary` と `cos_digest` 以外の `ts` は route と同じ関数が 422 `script_mode_not_enabled` で拒む。
+- 同じ規則は store（`script_domain_set_mode`）にもあり、外部 operator（`operator:*`）・MCP・daemon（`system:*`）の `→ts` も拒む。

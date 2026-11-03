@@ -567,7 +567,7 @@ token_file = "api.token"
 | 225 | PATCH | `/config/fields` | 動的な欄を検証してから config.toml に書き戻し（コメント・並びは保つ）、稼働中の daemon に入れる。`{changes:[{key, value}]}`、`value: null` は欄を消す。起動時のみ・種・secret の欄、不正値は 422（`config_restart_required` / `config_invalid`）で何も変えない。人だけ（CoS の operation には無い。**管理系**） | 200 `ConfigPatchResult` | celeris + `config_events` |
 | 226 | GET | `/config/events` | config の変更履歴（新しい順、最大 200 件。誰が・いつ・どの欄を・前後の値。secret の値は出ない） | `ConfigEventList` | store `config_events`（追記専用） |
 | 227 | GET | `/script/domains` | TS 制御層の領域ごとの mode・active generation（id と `bundle_sha256`）・`version`（ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5。§3.134.1） | `ScriptDomainList` | store `script_domain_modes` |
-| 228 | PUT | `/script/domains/{domain}/mode` | TS 制御層の領域の mode を `rust` / `compare` に切り替える（`version` の CAS。`canary`・`ts` は 422 `script_mode_not_enabled`、版の不一致は 409 `script_domain_version_conflict`。§3.134.2） | `ScriptDomainModeResult` | store `script_domain_set_mode` |
+| 228 | PUT | `/script/domains/{domain}/mode` | TS 制御層の領域の mode を `rust` / `compare` / `ts` に切り替える（`version` の CAS。`ts` は `cos_digest` だけ・人の主体だけ。`canary` と他領域の `ts` は 422 `script_mode_not_enabled`、版の不一致は 409 `script_domain_version_conflict`。§3.134.2） | `ScriptDomainModeResult` | store `script_domain_set_mode` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3628,7 +3628,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | admin | `POST /cron-jobs/{id}/pause` | `cron_job.pause` |
 | admin | `POST /cron-jobs/{id}/resume` | `cron_job.resume` |
 | admin | `POST /cron-jobs/{id}/run` | `cron_job.run`（外部効果の手順。`pending` を先に記録して 1 回だけ実行し `applied`。同じ key の再送は記録を返し再実行しない） |
-| admin | `PUT /script/domains/{domain}/mode` | `script_domain.mode_set`（`rust`→`compare` と `rust` への戻し。`canary`・`ts` は 422、版の不一致は 409。書き込み 1 回の外部効果の手順で記録） |
+| admin | `PUT /script/domains/{domain}/mode` | `script_domain.mode_set`（`rust`→`compare` と戻し（`ts`→`compare`・→`rust`）。`→ts` は 403 `script_mode_requires_human` で rejected を記録。`canary` と他領域の `ts` は 422、版の不一致は 409。書き込み 1 回の外部効果の手順で記録） |
 | surface | `POST /chat/attachments/{id}/references` | `attachment.reference` |
 | surface | `POST /chat/threads` | `chat.thread_create` |
 | surface | `PATCH /chat/threads/{t}` | `chat.thread_update` |
@@ -3829,7 +3829,7 @@ browser wait が参照していれば 409 `site_policy_in_use`（`node_ids`・`w
 
 ### 3.134 TS 制御層の領域の mode（ADR 2026-11-02-ts-control-layer-boundary (d)・付記 S2-4・S2-5）
 
-領域（`lane_rules`・`route_priority`）ごとの mode と active generation の正本は表 `script_domain_modes`（migration 0103）。
+領域（`lane_rules`・`route_priority`・`cos_digest`）ごとの mode と active generation の正本は表 `script_domain_modes`（migration 0103、`cos_digest` の行は migration 0104。付記 S4-4）。
 mode は `rust` → `compare` → `canary` → `ts`。S2 の API が変更先として受けるのは `rust` と `compare` だけ。
 config の欄は無い（mode は DB の表が持つ）。CLI は `celerisctl script domains` と `celerisctl script mode <domain> rust|compare`。
 
@@ -3841,20 +3841,23 @@ config の欄は無い（mode は DB の表が持つ）。CLI は `celerisctl sc
 #### 3.134.2 `PUT /script/domains/{domain}/mode` → 200 `ScriptDomainModeResult`
 
 本文 `ScriptDomainModeBody` `{mode, expected_version, generation?, reason?}`（`deny_unknown_fields`）。`generation` は
-`compare` で使う generation の `bundle_sha256`（`compare` では必須、`rust` では書かない）。応答は
+`compare`・`ts` で使う generation の `bundle_sha256`（`compare`・`ts` では必須、`rust` では書かない）。応答は
 `{changed, event_id, domain: ScriptDomainView}`。
 
 - 表の更新は `UPDATE … WHERE domain=? AND version=?` の CAS で、同じ transaction で追記専用の `script_domain_events` に
   `script_domain_mode_changed`（`actor` は要求の主体、`reason` は本文の `reason`）を書く。
 - 同じ mode・同じ generation への変更は表も記録も変えずに 200（`changed: false`、`event_id: null`）。
 - 404 `script_domain_not_found`: 未知の領域名。
-- 422 `script_mode_not_enabled`: `canary`・`ts`（S2 では受けない。表を変えない）。
+- 422 `script_mode_not_enabled`: `canary`（どの領域でも）と `cos_digest` 以外の `ts`（表を変えない。境界 ADR 付記 S4-14）。
+- 403 `script_mode_requires_human`: `ts` への切り替えを人の API token 以外の主体（外部 operator・MCP・CoS・`system:*`）が求めた。
+- 422 `script_mode_ts_requires_compare`: `ts` の元が同じ generation の `compare` でない（`rust` からの直行・generation の同時変更）。
+  戻し（`ts`→`compare`・`ts`→`rust`）は認証された誰でも行える。
 - 409 `script_domain_version_conflict`: `expected_version` が表の `version` と違う（`extra` に `expected_version` と `version`）。
-- 422 `script_generation_invalid`: `compare` に `generation` が無い・`rust` に `generation` がある・その `bundle_sha256` の
+- 422 `script_generation_invalid`: `compare`・`ts` に `generation` が無い・`rust` に `generation` がある・その `bundle_sha256` の
   generation が無い・`loaded` でない・manifest の `domains` にその領域が無い。
 - 400 `bad_request`: JSON の誤り・未知欄・未知の mode 名・query を付けた。
 - CoS は `/cos/operations` の `script_domain.mode_set`（admin の ALLOWED）で同じ関数を呼ぶ。直接の PUT は 422
-  `cos_audit_context_required`。本番で `compare` にするのは人の手順で、進行中の測定 daemon では切り替えない（境界 ADR (g)）。
+  `cos_audit_context_required`。CoS の `ts` は effect の前に 403 `script_mode_requires_human`（`human_only`）で rejected になる。本番で `compare` にするのは人の手順で、進行中の測定 daemon では切り替えない（境界 ADR (g)）。
 
 ---
 

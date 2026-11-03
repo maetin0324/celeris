@@ -51,7 +51,11 @@ fn script_domain_initial_modes_are_rust() {
     let rows = store.script_domain_modes().unwrap();
     assert_eq!(
         rows.iter().map(|r| r.domain).collect::<Vec<_>>(),
-        vec![ScriptDomain::LaneRules, ScriptDomain::RoutePriority]
+        vec![
+            ScriptDomain::CosDigest,
+            ScriptDomain::LaneRules,
+            ScriptDomain::RoutePriority
+        ]
     );
     for r in &rows {
         assert_eq!(r.mode, ScriptMode::Rust);
@@ -92,7 +96,7 @@ fn script_domain_canary_and_ts_are_rejected_without_change() {
             .script_domain_set_mode(&change("lane_rules", to, Some(&g.id), 0), now())
             .unwrap_err();
         assert!(
-            matches!(err, ScriptDomainError::ModeNotEnabled(m) if m == to),
+            matches!(err, ScriptDomainError::ModeNotEnabled { mode, .. } if mode == to),
             "{err}"
         );
     }
@@ -106,12 +110,138 @@ fn script_domain_canary_and_ts_are_rejected_without_change() {
     for to in [ScriptMode::Canary, ScriptMode::Ts] {
         assert!(matches!(
             store.script_domain_set_mode(&change("lane_rules", to, Some(&g.id), 1), now()),
-            Err(ScriptDomainError::ModeNotEnabled(_))
+            Err(ScriptDomainError::ModeNotEnabled { .. })
         ));
     }
     let row = store.script_domain_mode("lane_rules").unwrap();
     assert_eq!((row.mode, row.version), (ScriptMode::Compare, 1));
     assert_eq!(event_count(&store), 1);
+}
+
+fn change_by(
+    domain: &str,
+    to: ScriptMode,
+    generation: Option<&str>,
+    expected: u64,
+    actor: &str,
+) -> ScriptModeChange {
+    ScriptModeChange {
+        actor: actor.into(),
+        ..change(domain, to, generation, expected)
+    }
+}
+
+/// S4-14: `ts` は `cos_digest` だけ・人の actor だけ・同じ generation の `compare` からだけ。戻しは誰でも。
+#[test]
+fn script_domain_ts_for_cos_digest_needs_human_and_compare_same_generation() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let g = loaded_generation(&store, &"c".repeat(64), &["cos_digest", "route_priority"]);
+    let g2 = loaded_generation(&store, &"d".repeat(64), &["cos_digest"]);
+    // rust からの直行は拒む。
+    assert!(matches!(
+        store.script_domain_set_mode(&change("cos_digest", ScriptMode::Ts, Some(&g.id), 0), now()),
+        Err(ScriptDomainError::TsRequiresCompare {
+            current: ScriptMode::Rust
+        })
+    ));
+    // generation が無い ts は拒む。
+    assert!(matches!(
+        store.script_domain_set_mode(&change("cos_digest", ScriptMode::Ts, None, 0), now()),
+        Err(ScriptDomainError::GenerationRequired)
+    ));
+    store
+        .script_domain_set_mode(
+            &change("cos_digest", ScriptMode::Compare, Some(&g.id), 0),
+            now(),
+        )
+        .unwrap();
+    // 人以外の actor は compare の後でも拒む。
+    for actor in [
+        "cos:01THREAD",
+        "operator:claude-code",
+        "mcp:client",
+        "system:script-startup",
+        "human:",
+    ] {
+        assert!(
+            matches!(
+                store.script_domain_set_mode(
+                    &change_by("cos_digest", ScriptMode::Ts, Some(&g.id), 1, actor),
+                    now()
+                ),
+                Err(ScriptDomainError::TsRequiresHuman(ref a)) if a == actor
+            ),
+            "{actor}"
+        );
+    }
+    // generation を同時に変える要求は拒む。
+    assert!(matches!(
+        store.script_domain_set_mode(
+            &change("cos_digest", ScriptMode::Ts, Some(&g2.id), 1),
+            now()
+        ),
+        Err(ScriptDomainError::TsRequiresCompare {
+            current: ScriptMode::Compare
+        })
+    ));
+    // 他の領域の ts は compare の後でも ModeNotEnabled。
+    store
+        .script_domain_set_mode(
+            &change("route_priority", ScriptMode::Compare, Some(&g.id), 0),
+            now(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store.script_domain_set_mode(
+            &change("route_priority", ScriptMode::Ts, Some(&g.id), 1),
+            now()
+        ),
+        Err(ScriptDomainError::ModeNotEnabled {
+            domain: ScriptDomain::RoutePriority,
+            mode: ScriptMode::Ts
+        })
+    ));
+    assert_eq!(event_count(&store), 2);
+    // 人の actor で compare → ts。
+    let out = store
+        .script_domain_set_mode(&change("cos_digest", ScriptMode::Ts, Some(&g.id), 1), now())
+        .unwrap();
+    let ScriptModeChangeOutcome::Changed { row, .. } = out else {
+        panic!("changed expected");
+    };
+    assert_eq!(
+        (row.mode, row.generation_id.as_deref(), row.version),
+        (ScriptMode::Ts, Some(g.id.as_str()), 2)
+    );
+    assert_eq!(row.updated_by, "human:web");
+    // 戻しは daemon でもできる（ts→compare、compare→rust）。
+    store
+        .script_domain_set_mode(
+            &change_by(
+                "cos_digest",
+                ScriptMode::Compare,
+                Some(&g.id),
+                2,
+                "cos:01THREAD",
+            ),
+            now(),
+        )
+        .unwrap();
+    store
+        .script_domain_set_mode(
+            &change_by(
+                "cos_digest",
+                ScriptMode::Rust,
+                None,
+                3,
+                "system:script-startup",
+            ),
+            now(),
+        )
+        .unwrap();
+    let row = store.script_domain_mode("cos_digest").unwrap();
+    assert_eq!((row.mode, row.version), (ScriptMode::Rust, 4));
+    assert_eq!(event_count(&store), 5);
 }
 
 #[test]
@@ -462,4 +592,68 @@ fn script_compare_append_dedups_same_generation_digest_outcome() {
     assert_eq!(json["type"], "script_compare_recorded");
     assert_eq!(json["domain"], "lane_rules");
     assert_eq!(json["outcome"], "match");
+}
+
+/// 付記 S4-5: `script_compare_log` は追記専用で、同じ run・generation・input_digest・outcome の行を足さない。
+#[test]
+fn script_compare_log_appends_once_per_outcome_and_is_append_only() {
+    use crate::script_compare::{
+        CosDigestApplied, CosDigestCommandsSummary, CosDigestCompareRecord,
+    };
+    let store = SqliteStore::open_in_memory().unwrap();
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let summary = CosDigestCommandsSummary {
+        commands_digest: "sha256:00".into(),
+        command_kinds: vec!["post_digest".into()],
+    };
+    let record = CosDigestCompareRecord {
+        domain: ScriptDomain::CosDigest,
+        generation: "g1".into(),
+        isolate_epoch: 1,
+        bundle_sha256: "ab".repeat(32),
+        host_api: "1.0.0".into(),
+        call_site: "cos_digest.pass".into(),
+        mode: crate::script_compare::ScriptMode::Ts,
+        pass_id: "p1".into(),
+        applied_by: crate::script_compare::CosDigestAppliedBy::Ts,
+        fallback: None,
+        ops: Vec::new(),
+        thread_id: "t1".into(),
+        run_id: "r1".into(),
+        input_digest: "sha256:11".into(),
+        input: None,
+        rust: summary.clone(),
+        ts: Some(summary),
+        ts_commands_head: None,
+        outcome: CompareOutcome::Match,
+        error: None,
+        normalized: Vec::new(),
+        safety_violations: Vec::new(),
+        elapsed_us: 5,
+        applied: CosDigestApplied {
+            message_id: "m1".into(),
+            requeued: 0,
+        },
+    };
+    assert!(store.script_compare_log_append(&record, now).unwrap());
+    assert!(!store.script_compare_log_append(&record, now).unwrap());
+    let mut other = record.clone();
+    other.outcome = CompareOutcome::Mismatch;
+    assert!(store.script_compare_log_append(&other, now).unwrap());
+    // S4-15: `applied_by` is part of the duplicate key.
+    let mut by_rust = record.clone();
+    by_rust.applied_by = crate::script_compare::CosDigestAppliedBy::Rust;
+    assert!(store.script_compare_log_append(&by_rust, now).unwrap());
+    assert!(!store.script_compare_log_append(&by_rust, now).unwrap());
+    let rows = store.script_compare_log(Some("r1")).unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].record, record);
+    assert_eq!(rows[1].record, other);
+    assert!(store.script_compare_log(Some("r2")).unwrap().is_empty());
+    let conn = store.lock().unwrap();
+    assert!(
+        conn.execute("UPDATE script_compare_log SET json = '{}'", [])
+            .is_err()
+    );
+    assert!(conn.execute("DELETE FROM script_compare_log", []).is_err());
 }

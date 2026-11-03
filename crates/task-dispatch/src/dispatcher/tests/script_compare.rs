@@ -37,6 +37,8 @@ pub(super) struct FakeScript {
     pub(super) calls: AtomicUsize,
     /// `route_priority` の呼び出し回数と受けた入力。
     pub(super) route_inputs: StdMutex<Vec<RoutePriorityInput>>,
+    /// `cos_digest_pass` の呼び出しの `pass_id`（付記 S4-12）。
+    pub(super) digest_passes: StdMutex<Vec<String>>,
 }
 
 impl FakeScript {
@@ -50,6 +52,7 @@ impl FakeScript {
             behavior,
             calls: AtomicUsize::new(0),
             route_inputs: StdMutex::new(Vec::new()),
+            digest_passes: StdMutex::new(Vec::new()),
         })
     }
 
@@ -130,6 +133,32 @@ impl PolicyScript for FakeScript {
                     output: serde_json::to_value(echo_route_priority(&input)).unwrap(),
                     isolate_epoch: 1,
                 }),
+                Behavior::Fixed(output) => Ok(PolicyReply {
+                    output,
+                    isolate_epoch: 1,
+                }),
+                Behavior::Fail(e) => Err(e),
+                Behavior::Hang => {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                    Err(PolicyScriptError::new("exception", "woke up"))
+                }
+            }
+        })
+    }
+
+    fn cos_digest_pass(
+        &self,
+        call: crate::script_policy::CosDigestPassCall,
+        _deadline: Duration,
+    ) -> PolicyFuture<'_> {
+        self.digest_passes
+            .lock()
+            .unwrap()
+            .push(call.pass_id.clone());
+        let behavior = self.behavior.clone();
+        Box::pin(async move {
+            match behavior {
+                Behavior::Echo => crate::script_policy::test_pass::reference_reply(&call).await,
                 Behavior::Fixed(output) => Ok(PolicyReply {
                     output,
                     isolate_epoch: 1,

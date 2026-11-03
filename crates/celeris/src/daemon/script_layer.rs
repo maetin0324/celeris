@@ -2,12 +2,13 @@
 //!
 //! `[script]` が無ければ何も作らない。在れば `<state_dir>/script-bundles/<sha256>/` を検証して actor を起こす。
 //! 失敗したら TS 層を使わずに daemon の起動を続け、理由を log と通知に残す（fail-closed）。
-//! TS の結果は compare の記録にだけ使う（付記 S2-6）。判定は Rust のまま。
+//! TS の結果は compare の記録に使う（付記 S2-6）。mode `ts` の `cos_digest` だけは、TS の command を Rust が検証してから
+//! apply する（付記 S4-14・S4-15）。
 //!
 //! 起動時の DB の整合（付記 S2-4・S2-5）:
 //! - 検証に通った bundle の `loaded` の行を `script_generations` に作る（同じ hash の行が在れば再利用）。
-//! - `compare` の領域の generation が読み込んだ bundle と違う（`[script]` が無い・bundle を読めなかったを含む）なら、
-//!   actor `system:script-startup` で `rust` へ戻す。
+//! - `compare`・`ts`（generation の要る mode）の領域の generation が読み込んだ bundle と違う（`[script]` が無い・
+//!   bundle を読めなかったを含む）なら、actor `system:script-startup` で `rust` へ戻す（付記 S2-5・S4-14）。
 
 use std::sync::Arc;
 
@@ -152,7 +153,8 @@ fn record_generation(db: &SqliteStore, bundle: &VerifiedBundle) {
     }
 }
 
-/// `compare` の領域のうち、`active` の bundle で動かせないものを `rust` へ戻す（付記 S2-5）。
+/// generation の要る mode（`compare`・`ts` など）の領域のうち、`active` の bundle で動かせないものを `rust` へ戻す
+/// （付記 S2-5・S4-14）。
 fn restore_modes(db: &SqliteStore, active: Option<&str>) {
     let rows = match db.script_domain_modes() {
         Ok(rows) => rows,
@@ -161,7 +163,7 @@ fn restore_modes(db: &SqliteStore, active: Option<&str>) {
             return;
         }
     };
-    for row in rows.into_iter().filter(|r| r.mode == ScriptMode::Compare) {
+    for row in rows.into_iter().filter(|r| r.mode.needs_generation()) {
         let generation = match row.generation_id.as_deref() {
             Some(id) => db.script_generation_get(id),
             None => Ok(None),

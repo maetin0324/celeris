@@ -2,7 +2,7 @@
 //! daemon の HTTP API で読む・切り替える（DB は開かない）。
 //!
 //! - `script domains [--json]` — `GET /script/domains`（既定は表。`--json` で応答そのまま）。
-//! - `script mode <domain> rust|compare --expected-version <n> [--generation <bundle_sha256>] [--reason …]` —
+//! - `script mode <domain> rust|compare|ts --expected-version <n> [--generation <bundle_sha256>] [--reason …]` —
 //!   `PUT /script/domains/{domain}/mode`。CoS の run では `/cos/operations` の `script_domain.mode_set` に包む。
 
 use std::path::PathBuf;
@@ -21,7 +21,8 @@ const DEFAULT_CONFIG: &str = "~/.config/celeris/config.toml";
 pub enum ScriptCommand {
     /// List each domain's mode, active generation and version.
     Domains(DomainsArgs),
-    /// Switch a domain to `rust` or `compare` (compare-and-set on `--expected-version`).
+    /// Switch a domain to `rust`, `compare` or `ts` (compare-and-set on `--expected-version`).
+    /// `ts` is accepted for `cos_digest` only, from `compare` with the same generation, by a human token.
     Mode(ModeArgs),
 }
 
@@ -32,11 +33,13 @@ pub struct DomainsArgs {
     pub json: bool,
 }
 
-/// S2 で切り替え先にできる mode（`canary`・`ts` は人の承認が要るので CLI に無い）。
+/// 切り替え先にできる mode（付記 S4-14）。`ts` の可否（`cos_digest` だけ・人の主体だけ・同じ generation の
+/// `compare` から）は API が決める。`canary` は S5 まで受けないので CLI に無い。
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModeArg {
     Rust,
     Compare,
+    Ts,
 }
 
 impl ModeArg {
@@ -44,19 +47,20 @@ impl ModeArg {
         match self {
             ModeArg::Rust => "rust",
             ModeArg::Compare => "compare",
+            ModeArg::Ts => "ts",
         }
     }
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct ModeArgs {
-    /// lane_rules | route_priority
+    /// lane_rules | route_priority | cos_digest
     pub domain: String,
     pub mode: ModeArg,
     /// The `version` read from `script domains` (a stale value is refused with 409).
     #[arg(long)]
     pub expected_version: u64,
-    /// `bundle_sha256` of the generation to compare against (required for `compare`).
+    /// `bundle_sha256` of the generation (required for `compare` and `ts`; for `ts` the one in `compare`).
     #[arg(long)]
     pub generation: Option<String>,
     /// Reason recorded in `script_domain_mode_changed`.
@@ -184,6 +188,13 @@ mod tests {
         let (_, _, body) =
             request_of(&mode("route_priority", ModeArg::Rust, None)).expect("mutating");
         assert_eq!(body, json!({"mode": "rust", "expected_version": 4}));
+        let (_, path, body) =
+            request_of(&mode("cos_digest", ModeArg::Ts, Some("cd34"))).expect("mutating");
+        assert_eq!(path, "/script/domains/cos_digest/mode");
+        assert_eq!(
+            body,
+            json!({"mode": "ts", "expected_version": 4, "generation": "cd34"})
+        );
         assert!(request_of(&ScriptCommand::Domains(DomainsArgs { json: false })).is_none());
     }
 

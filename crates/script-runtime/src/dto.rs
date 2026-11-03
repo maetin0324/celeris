@@ -17,7 +17,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::error::ScriptError;
 
 /// Host API の版（semver）。bundle の manifest は `host_api: "^1"` の形で要求する。
-pub const HOST_API_VERSION: &str = "1.0.0";
+/// 1.1.0: `cos_digest:list_runs`・`cos_digest:read_run` の op を足した（付記 S4-12。op の追加なので minor）。
+pub const HOST_API_VERSION: &str = "1.1.0";
 /// Host API の module 名。bundle が import してよいのはこれと bundle 自身だけ。
 pub const HOST_MODULE: &str = "celeris:host";
 
@@ -29,6 +30,43 @@ pub enum Capability {
     /// 試験用 async op `op_host_selftest_echo`（要求の scope の task を写し返すだけ）。
     #[serde(rename = "selftest:echo_task")]
     SelftestEchoTask,
+    /// `op_cos_digest_list_runs`: digest を待つ triage run の一覧（付記 S4-12）。
+    #[serde(rename = "cos_digest:list_runs")]
+    CosDigestListRuns,
+    /// `op_cos_digest_read_run`: その pass の一覧にある run 1 つの入力（付記 S4-12）。
+    #[serde(rename = "cos_digest:read_run")]
+    CosDigestReadRun,
+}
+
+impl Capability {
+    /// op の名前（`<domain>:<name>`。capability の名前と同じ）。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::SelftestEchoTask => "selftest:echo_task",
+            Self::CosDigestListRuns => "cos_digest:list_runs",
+            Self::CosDigestReadRun => "cos_digest:read_run",
+        }
+    }
+
+    /// capability が属する領域。op はこの領域の要求の token でだけ通る（付記 S4-13 の 2）。
+    pub fn domain(&self) -> &'static str {
+        match self {
+            Self::SelftestEchoTask => "host_selftest",
+            Self::CosDigestListRuns | Self::CosDigestReadRun => "cos_digest",
+        }
+    }
+}
+
+/// schema の object の欄を全部 `required` にする（`Option` は `null` を許したまま、欄の省略を拒む）。
+///
+/// `#[schemars(required)]` は `Option` の `null` を schema から落とすので使わない。
+fn require_all_properties(schema: &mut schemars::Schema) {
+    let keys: Vec<serde_json::Value> = schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .map(|p| p.keys().cloned().map(serde_json::Value::String).collect())
+        .unwrap_or_default();
+    schema.insert("required".into(), serde_json::Value::Array(keys));
 }
 
 /// 2^53−1 を超えうる符号なし整数。JSON と TS では 10 進の string（先頭 0 なし）。
@@ -173,6 +211,7 @@ impl From<HostError> for ScriptError {
 /// op の戻り値。`celeris:host` は `ok` なら `value` を返し、`error` なら `HostError` を throw する。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[schemars(rename = "{T}Result")]
 pub enum HostResult<T> {
     Ok { value: T },
     Error { error: HostError },
@@ -199,12 +238,12 @@ pub enum SelftestPriority {
 /// `op_host_selftest_echo` の引数（TS → Rust）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(transform = require_all_properties)]
 pub struct SelftestEchoRequest {
     /// 対象の task の id（ULID の文字列）。要求の scope に無ければ `denied`。
     pub task_id: String,
     /// 無ければ `null`（欄は省かない）。
     #[serde(deserialize_with = "Option::deserialize")]
-    #[schemars(required)]
     pub note: Option<String>,
     /// token 数など 2^53−1 を超えうる値。
     pub tokens: U64String,
@@ -225,15 +264,114 @@ pub enum SelftestObservation {
 /// `op_host_selftest_echo` の戻り値（Rust → TS）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(transform = require_all_properties)]
 pub struct SelftestEchoReply {
     pub task_id: String,
     #[serde(deserialize_with = "Option::deserialize")]
-    #[schemars(required)]
     pub note: Option<String>,
     pub tokens: U64String,
     pub priority: SelftestPriority,
     pub at: Timestamp,
     pub observation: SelftestObservation,
+}
+
+/// `op_cos_digest_list_runs` の引数（欄なし。上限は Rust の定数で、TS は変えられない）。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestListRunsRequest {}
+
+/// digest を待つ triage run 1 つ（`started_at`・`run_id` 順）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestRunRef {
+    pub thread: String,
+    pub run_id: String,
+    pub run_state: String,
+}
+
+/// `op_cos_digest_list_runs` の戻り値。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestListRunsReply {
+    pub runs: Vec<CosDigestRunRef>,
+}
+
+/// `op_cos_digest_read_run` の引数。その pass の一覧にある `(thread, run_id)` の組だけを読める。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CosDigestReadRunRequest {
+    pub thread: String,
+    pub run_id: String,
+}
+
+/// 元の待ちの選択肢 1 つ。正本は task-core の `CosTriageOption`（同じ形。`tests/dto.rs` が照合する）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = require_all_properties)]
+pub struct CosTriageOption {
+    pub key: String,
+    pub label: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub detail: Option<String>,
+}
+
+/// 人が決めること（outbox の本文）。正本は task-core の `CosTriageDecision`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = require_all_properties)]
+pub struct CosTriageDecision {
+    pub summary: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub background: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub on_answer: Option<String>,
+    pub options: Vec<CosTriageOption>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub recommended: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub recommendation_reason: Option<String>,
+    pub web_path: String,
+}
+
+/// `cos_inbox_items` の 1 行。正本は task-core の `CosTriageItemReport`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = require_all_properties)]
+pub struct CosTriageItemReport {
+    pub item_id: String,
+    pub thread_id: String,
+    pub source_kind: String,
+    pub source_key: String,
+    pub source_revision: String,
+    pub state: String,
+    pub summary: String,
+    pub detail: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub reason: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub operation_id: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub run_id: Option<String>,
+    pub created_at: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub route: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub decision: Option<CosTriageDecision>,
+}
+
+/// `op_cos_digest_read_run` の戻り値（S4-2 の `CosDigestInput` のまま）。正本は task-core の
+/// `CosDigestInput`。`celeris-script` は task-core に依存しないので同じ形をここに持ち、
+/// `tests/dto.rs` が fixture の全行で両方の型を往復させて一致を確かめる。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = require_all_properties)]
+pub struct CosDigestInput {
+    pub thread: String,
+    pub run_id: String,
+    pub run_state: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub reason: Option<String>,
+    pub items: Vec<CosTriageItemReport>,
 }
 
 /// schema の根。Host API v1 の DTO を 1 つの文書に集める（値として使わない）。
@@ -246,6 +384,10 @@ pub struct HostApiV1 {
     pub host_error: HostError,
     pub selftest_echo_request: SelftestEchoRequest,
     pub selftest_echo_result: HostResult<SelftestEchoReply>,
+    pub cos_digest_list_runs_request: CosDigestListRunsRequest,
+    pub cos_digest_list_runs_result: HostResult<CosDigestListRunsReply>,
+    pub cos_digest_read_run_request: CosDigestReadRunRequest,
+    pub cos_digest_read_run_result: HostResult<CosDigestInput>,
 }
 
 /// Host API v1 の JSON Schema（整形済み、末尾改行付き）。`script-schema` と試験が使う。

@@ -90,8 +90,10 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/cron-jobs/{id}/pause", "cron_job.pause"),
     ("POST", "/api/v1/cron-jobs/{id}/resume", "cron_job.resume"),
     ("POST", "/api/v1/cron-jobs/{id}/run", "cron_job.run"),
-    // ADR 2026-11-02-ts-control-layer-boundary (d)・付記 S2-5: rust→compare と rust への戻しは挙動を変えないので
-    // CoS に許可する。`canary`・`ts` は route と同じ関数が 422 で拒む（本番の挙動を変える変更は人の承認）。
+    // ADR 2026-11-02-ts-control-layer-boundary (d)・付記 S2-5・S4-14: rust→compare と戻し（ts→compare・→rust）は
+    // CoS に許可する。`to_mode = ts` は TS の command を apply させる変更なので人の主体だけが行える。CoS の操作では
+    // effect の前に 403 `script_mode_requires_human`（human_only）で拒み、rejected として記録する。
+    // `canary` と `cos_digest` 以外の `ts` は route と同じ関数が 422 で拒む。
     (
         "PUT",
         "/api/v1/script/domains/{domain}/mode",
@@ -610,6 +612,19 @@ pub(crate) fn dispatch(
             let domain = path_param(SCRIPT_MODE, path, "{domain}");
             let input: crate::script_domains::ScriptDomainModeBody =
                 serde_json::from_value(body).map_err(decode)?;
+            if input.mode == task_core::script_compare::ScriptMode::Ts {
+                return Err(audit.reject(
+                    store,
+                    "script_domain",
+                    &domain,
+                    ApiProblem::new(
+                        axum::http::StatusCode::FORBIDDEN,
+                        crate::script_domains::SCRIPT_MODE_REQUIRES_HUMAN,
+                        "human_only: ADR 2026-11-02-ts-control-layer-boundary 付記 S4-14。mode `ts` への切り替えは \
+                         人の API token の主体だけが行う（CoS は compare・rust への切り替えと戻しだけ）",
+                    ),
+                ));
+            }
             let actor = audit.by();
             crate::cos::operations::external_store(
                 store,

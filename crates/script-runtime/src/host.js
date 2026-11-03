@@ -29,3 +29,13 @@ export function hostVersion() {
 export async function selftestEcho(ctx, request) {
   return unwrap(await ops.selftestEcho(ctx.token, request));
 }
+
+// cos_digest:list_runs（境界 ADR 付記 S4-12）。digest を待つ triage run の一覧。
+export async function cosDigestListRuns(ctx, request) {
+  return unwrap(await ops.cosDigestListRuns(ctx.token, request));
+}
+
+// cos_digest:read_run（付記 S4-12）。その pass の一覧にある run 1 つの入力（CosDigestInput）。
+export async function cosDigestReadRun(ctx, request) {
+  return unwrap(await ops.cosDigestReadRun(ctx.token, request));
+}

@@ -169,3 +169,87 @@ fn dto_schema_matches_committed() {
         "regenerate: cargo run -q -p celeris-script --bin script-schema > docs/api/script-host/host-v1.schema.json"
     );
 }
+
+/// `cos_digest:read_run` の応答 DTO は task-core の `CosDigestInput`（正本）と同じ形（付記 S4-12）。
+/// fixture の全行を両方の型で往復させ、直列化が byte 一致することを確かめる。
+#[test]
+fn cos_digest_input_matches_task_core() {
+    use celeris_script::dto::CosDigestInput as HostInput;
+    use task_core::chat::digest::CosDigestInput as CoreInput;
+
+    let cases = include_str!("../../../control-ts/fixtures/cos_digest/cases.jsonl");
+    let mut seen_decision = false;
+    let mut n = 0usize;
+    for line in cases.lines().filter(|l| !l.trim().is_empty()) {
+        let row: serde_json::Value = serde_json::from_str(line).expect("fixture row");
+        let input = row["input"].clone();
+        let host: HostInput = serde_json::from_value(input.clone()).expect("host DTO");
+        let core: CoreInput = serde_json::from_value(input.clone()).expect("task-core DTO");
+        let host_json = serde_json::to_string(&host).expect("host json");
+        let core_json = serde_json::to_string(&core).expect("core json");
+        assert_eq!(host_json, core_json, "{}", row["name"]);
+        // 一方で直列化したものを他方で読める。
+        let back: CoreInput = serde_json::from_str(&host_json).expect("host -> core");
+        assert_eq!(back, core);
+        seen_decision |= host.items.iter().any(|i| i.decision.is_some());
+        n += 1;
+    }
+    assert!(n > 1000, "fixture rows {n}");
+    assert!(seen_decision, "fixture must cover items with a decision");
+
+    // 両方の schema の欄の名前が同じ。
+    let host_schema: serde_json::Value =
+        serde_json::from_str(&host_api_schema_json()).expect("schema");
+    let core_schema = serde_json::to_value(schemars::schema_for!(CoreInput)).expect("core schema");
+    let names = |v: &serde_json::Value| -> Vec<String> {
+        let mut k: Vec<String> = v["properties"]
+            .as_object()
+            .expect("properties")
+            .keys()
+            .cloned()
+            .collect();
+        k.sort();
+        k
+    };
+    assert_eq!(
+        names(&host_schema["$defs"]["CosDigestInput"]),
+        names(&core_schema)
+    );
+    for def in [
+        "CosTriageItemReport",
+        "CosTriageDecision",
+        "CosTriageOption",
+    ] {
+        assert_eq!(
+            names(&host_schema["$defs"][def]),
+            names(&core_schema["$defs"][def]),
+            "{def}"
+        );
+    }
+}
+
+/// Option の欄は schema でも null を許し、欄の省略は拒む（required に入る）。
+#[test]
+fn cos_digest_schema_nullable_and_required() {
+    let schema: serde_json::Value =
+        serde_json::from_str(&host_api_schema_json()).expect("schema json");
+    let input = &schema["$defs"]["CosDigestInput"];
+    assert_eq!(
+        input["properties"]["reason"]["type"],
+        json!(["string", "null"])
+    );
+    assert!(
+        input["required"]
+            .as_array()
+            .expect("required")
+            .contains(&json!("reason"))
+    );
+    assert_eq!(input["additionalProperties"], json!(false));
+    let note = &schema["$defs"]["SelftestEchoRequest"]["properties"]["note"];
+    assert_eq!(note["type"], json!(["string", "null"]));
+    let caps = &schema["$defs"]["Capability"];
+    let text = caps.to_string();
+    for cap in ["cos_digest:list_runs", "cos_digest:read_run"] {
+        assert!(text.contains(cap), "{text}");
+    }
+}

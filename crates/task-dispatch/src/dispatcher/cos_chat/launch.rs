@@ -262,6 +262,8 @@ impl Dispatcher {
         launch.control_hook(self);
         // Intake is DB-only and runs even when CoS is disabled, so the
         // unavailable fallback can still see every new wait.
+        // The digest pass (ADR 2026-11-02-ts-control-layer-boundary S4-12/S4-14) runs inside the
+        // intake, before the fallback.
         launch.triage_ingest(self);
         // ADR 2026-10-15-root-done-cos-summary: root task done → a summary thread and one CoS run.
         launch.root_done_tick(self);

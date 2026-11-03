@@ -376,6 +376,9 @@ fn digest_record(
             message_id: "m1".into(),
             requeued: 0,
         },
+        // 付記 S5-3: mode `ts` は全単位が TS の側（`unit_selected`）で、`canary_bps` は `canary` のときだけ持つ。
+        canary_selected: true,
+        canary_bps: None,
     }
 }
 
@@ -590,4 +593,98 @@ fn script_guard_counts_survive_restart() {
     assert_eq!(counters.timeouts_10min.len(), 2);
     let out = observe(&store, d, &g, obs(ScriptGuardCall::Failure, true), at(130));
     assert_rolled_back(&store, d, &out, "guard_failure_streak");
+}
+
+/// mode `canary` の `cos_digest` の記録（付記 S5-3）。`canary_selected` が偽なら Rust 側の単位（TS は影で走り、
+/// Rust の結果を使う）、真なら TS 側の単位。
+fn canary_digest_record(
+    g: &str,
+    selected: bool,
+    outcome: CompareOutcome,
+    violations: &[&str],
+    run: &str,
+) -> CosDigestCompareRecord {
+    let applied_by = if selected && violations.is_empty() && outcome == CompareOutcome::Match {
+        CosDigestAppliedBy::Ts
+    } else {
+        CosDigestAppliedBy::Rust
+    };
+    let mut r = digest_record(applied_by, violations, run);
+    r.generation = g.to_owned();
+    r.mode = ScriptMode::Canary;
+    r.outcome = outcome;
+    r.canary_selected = selected;
+    r.canary_bps = Some(5000);
+    r
+}
+
+/// dispatcher と同じく、記録の追記と計数を 1 つの transaction で行い、`ts_side` に `canary_selected` を渡す。
+fn append(store: &SqliteStore, r: &CosDigestCompareRecord) -> ScriptGuardOutcome {
+    let (appended, out) = store
+        .script_compare_log_append_observed(r, r.canary_selected, t0())
+        .expect("append");
+    assert!(appended);
+    out.expect("counted")
+}
+
+#[test]
+fn script_guard_counts_canary_records_on_both_sides() {
+    let d = ScriptDomain::CosDigest;
+
+    // Rust 側の単位（canary_selected=false）の記録も数え、TS 側の連続には入れない。
+    let store = SqliteStore::open_in_memory().expect("store");
+    let g = generation(&store, 'a');
+    canary(&store, d, &g);
+    let out = append(
+        &store,
+        &canary_digest_record(&g, false, CompareOutcome::Match, &[], "r0"),
+    );
+    assert_still_canary(&store, d, &out);
+    let out = append(
+        &store,
+        &canary_digest_record(&g, true, CompareOutcome::Match, &[], "r1"),
+    );
+    assert_still_canary(&store, d, &out);
+    let (counted, c) = store
+        .script_guard_counters(d, &g)
+        .expect("counters")
+        .expect("row");
+    assert_eq!(counted, ScriptMode::Canary);
+    assert_eq!((c.calls, c.clean_streak, c.ts_side_clean_streak), (2, 2, 1));
+
+    // Rust 側の単位の影の不一致 1 件でも `rust` へ戻す（(f) の「説明のつかない不一致 1 件」）。
+    let out = append(
+        &store,
+        &canary_digest_record(&g, false, CompareOutcome::Mismatch, &[], "r2"),
+    );
+    assert_rolled_back(&store, d, &out, "guard_mismatch");
+
+    // Rust 側の単位の安全違反でも generation を `invalid` にして戻す。
+    let store = SqliteStore::open_in_memory().expect("store");
+    let g = generation(&store, 'b');
+    canary(&store, d, &g);
+    let out = append(
+        &store,
+        &canary_digest_record(&g, false, CompareOutcome::Match, &["key_mismatch"], "r0"),
+    );
+    assert_eq!(out.stop.map(|s| s.code()), Some("guard_safety_violation"));
+    assert!(out.invalidated);
+    assert_eq!(mode(&store, d), (ScriptMode::Rust, GUARD.to_owned()));
+    assert_eq!(
+        store
+            .script_generation_get(&g)
+            .expect("get")
+            .map(|x| x.state),
+        Some(ScriptGenerationState::Invalid)
+    );
+
+    // TS 側の単位の不一致でも戻す。
+    let store = SqliteStore::open_in_memory().expect("store");
+    let g = generation(&store, 'c');
+    canary(&store, d, &g);
+    let out = append(
+        &store,
+        &canary_digest_record(&g, true, CompareOutcome::Mismatch, &[], "r0"),
+    );
+    assert_rolled_back(&store, d, &out, "guard_mismatch");
 }

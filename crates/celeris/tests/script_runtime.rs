@@ -1,4 +1,5 @@
-//! `[script]` の daemon への結線（境界 ADR 2026-11-02 (b)(d)）。`celeris::run` を試験 process の中で動かす。
+//! `[script]` の daemon への結線（境界 ADR 2026-11-02 (b)(d)、付記 S5-2 の起動時の復元）。`celeris::run` を試験 process の
+//! 中で動かす。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -7,11 +8,15 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use celeris::{Config, Exit, RunOptions};
-use celeris_script::manifest::{deploy_bundle, deployed_dir, sha256_hex};
-use task_core::{DaemonMode, NoticeKind, NoticeQuery, NoticeStore, SqliteStore};
-
-/// 通知の束ね key（`daemon::script_layer`）。
-const GROUP_KEY: &str = "script_bundle_rejected";
+use celeris_script::manifest::{deploy_bundle, deployed_dir, host_schema_sha256, sha256_hex};
+use serde_json::json;
+use task_core::model::Event;
+use task_core::script_compare::{
+    NewScriptGeneration, ScriptDomain, ScriptGenerationState, ScriptMode, ScriptModeChange,
+};
+use task_core::script_inbox::ScriptInboxStore;
+use task_core::{DaemonMode, SqliteStore};
+use time::OffsetDateTime;
 /// actor thread の名前（`celeris_script::handle`）。
 const THREAD_NAME: &str = "celeris-script";
 /// `cargo test` は同じ process で試験を並べる。thread の観察が混ざらないよう 1 本ずつ動かす。
@@ -125,29 +130,66 @@ impl Env {
         Config::load(&path).expect("config load")
     }
 
-    fn script_config(&self, sha256: &str) -> Config {
-        self.config(&format!(
-            "[script]\nstate_dir = \"state\"\nactive_bundle_sha256 = \"{sha256}\"\n"
-        ))
+    fn script_config(&self) -> Config {
+        self.config("[script]\nstate_dir = \"state\"\n")
     }
 
-    fn rejected(&self) -> Vec<task_core::Notice> {
-        let store = SqliteStore::open(&self.dir.path().join("t.sqlite3")).expect("store");
+    fn store(&self) -> SqliteStore {
+        SqliteStore::open(&self.dir.path().join("t.sqlite3")).expect("store")
+    }
+
+    /// `bundle_sha256` の generation を `loaded` で記録する（mode は変えない）。
+    fn point_loaded(&self, sha256: &str) -> String {
+        self.store()
+            .script_generation_record(
+                &NewScriptGeneration {
+                    bundle_sha256: sha256.to_owned(),
+                    host_api: celeris_script::dto::HOST_API_VERSION.to_owned(),
+                    schema_sha256: "0".repeat(64),
+                    manifest_json: json!({ "domains": ["host_selftest", "lane_rules"] })
+                        .to_string(),
+                    state: ScriptGenerationState::Loaded,
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .expect("generation")
+            .id
+    }
+
+    /// `domain` を `bundle_sha256` の generation の `compare` にする（人の actor。daemon は起動時にこれを load する）。
+    fn point(&self, sha256: &str, domain: ScriptDomain) -> String {
+        let store = self.store();
+        let generation = store
+            .script_generation_record(
+                &NewScriptGeneration {
+                    bundle_sha256: sha256.to_owned(),
+                    host_api: celeris_script::dto::HOST_API_VERSION.to_owned(),
+                    schema_sha256: "0".repeat(64),
+                    manifest_json: json!({ "domains": ["host_selftest", domain.as_str()] })
+                        .to_string(),
+                    state: ScriptGenerationState::Loaded,
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .expect("generation");
+        let row = store.script_domain_mode(domain.as_str()).expect("mode");
         store
-            .notice_list(&NoticeQuery {
-                unread_only: false,
-                kinds: vec![NoticeKind::BadNews],
-                limit: 0,
-                offset: 0,
-            })
-            .expect("notices")
-            .items
-            .into_iter()
-            .filter(|n| n.group_key == GROUP_KEY)
-            .collect()
+            .script_domain_set_mode(
+                &ScriptModeChange {
+                    domain: domain.as_str().to_owned(),
+                    to_mode: ScriptMode::Compare,
+                    to_generation: Some(generation.id.clone()),
+                    expected_version: row.version,
+                    actor: "human:test".into(),
+                    reason: "script_runtime test".into(),
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .expect("set mode");
+        generation.id
     }
 
-    /// 試験用の bundle を配備して hash を返す。
+    /// 試験用の bundle を配備して hash を返す（`host_selftest` だけの手書きの bundle）。
     fn deploy_fixture(&self) -> String {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../script-runtime/tests/fixtures/selftest-bundle");
@@ -157,45 +199,90 @@ impl Env {
             .bundle_sha256
     }
 
-    /// manifest の hash を合わせた本文を配備する（load の段まで届く bundle を作る）。
-    fn deploy_code(&self, code: &str) -> String {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../script-runtime/tests/fixtures/selftest-bundle/manifest.json");
-        let mut manifest: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(fixture).expect("manifest")).expect("json");
+    /// manifest の hash を合わせた本文を、`domains`・`capabilities`・`host_api` を指定して配備先に直接書く
+    /// （`deploy_bundle` が拒む manifest も置ける）。
+    fn deploy_raw(&self, code: &str, domains: &[&str], caps: &[&str], host_api: &str) -> String {
         let sha256 = sha256_hex(code.as_bytes());
-        manifest["bundle_sha256"] = serde_json::Value::String(sha256.clone());
-        let dist = self.dir.path().join(format!("dist-{sha256}"));
-        std::fs::create_dir_all(&dist).expect("dist");
-        std::fs::write(dist.join("bundle.mjs"), code).expect("bundle");
+        let manifest = json!({
+            "schema": "celeris.script-manifest/1",
+            "bundle_sha256": sha256,
+            "host_api": host_api,
+            "schema_sha256": host_schema_sha256(),
+            "toolchain": {"typescript": "fixture", "esbuild": "fixture", "node": "fixture"},
+            "source_commit": "fixture",
+            "domains": domains,
+            "capabilities": caps,
+            "checkpoint_versions": [],
+        });
+        let dir = deployed_dir(&self.state(), &sha256);
+        std::fs::create_dir_all(&dir).expect("deployed dir");
+        std::fs::write(dir.join("bundle.mjs"), code).expect("bundle");
         std::fs::write(
-            dist.join("manifest.json"),
+            dir.join("manifest.json"),
             serde_json::to_vec(&manifest).expect("manifest"),
         )
         .expect("manifest");
-        deploy_bundle(&dist, &self.state()).expect("deploy");
         sha256
     }
 
-    /// daemon が起動を続け、actor thread を残さず、通知に理由を残したことを確かめる。
-    async fn assert_fail_closed(&self, sha256: &str, reason: &str) {
-        let (exit, _) = run_daemon(self.script_config(sha256)).await;
+    /// `lane_rules` と `host_selftest` に答える bundle を配備する。
+    fn deploy_code(&self, code: &str) -> String {
+        self.deploy_raw(
+            code,
+            &["host_selftest", "lane_rules"],
+            &["selftest:echo_task"],
+            "^1",
+        )
+    }
+
+    /// daemon が起動を続け、actor thread を残さず、`domain` を `system:script-startup` で `rust` に戻し、event と
+    /// 受信箱の項目（`script_guard` が event から作る）に理由を残したことを確かめる（付記 S5-2・S4-14）。
+    async fn assert_rolled_back(&self, domain: ScriptDomain, code: &str, needle: &str) {
+        let (exit, _) = run_daemon(self.script_config()).await;
         assert_eq!(exit, Exit::MaxTicks);
         assert_eq!(script_threads(), 0);
-        let notices = self.rejected();
-        assert_eq!(notices.len(), 1, "{notices:?}");
-        assert!(
-            notices[0].summary.contains(sha256),
-            "{}",
-            notices[0].summary
-        );
-        assert!(
-            notices[0].summary.contains(reason),
-            "{}",
-            notices[0].summary
-        );
+        let store = self.store();
+        let row = store.script_domain_mode(domain.as_str()).expect("mode");
+        assert_eq!(row.mode, ScriptMode::Rust);
+        assert_eq!(row.updated_by, celeris::SCRIPT_STARTUP_ACTOR);
+        let events = store.script_domain_events(Some(domain), 1).expect("events");
+        let Some(Event::ScriptDomainModeChanged { actor, reason, .. }) =
+            events.first().map(|e| &e.event)
+        else {
+            panic!("no mode change event: {events:?}");
+        };
+        assert_eq!(actor, celeris::SCRIPT_STARTUP_ACTOR);
+        assert!(reason.starts_with(code), "{reason}");
+        assert!(reason.contains(needle), "{reason}");
+        // 受信箱の取り込みは daemon の起動直後に 1 回走る（blocking の thread）。終わるまで待つ（実時間の保険 30 秒）。
+        let started = std::time::Instant::now();
+        loop {
+            let items = store.script_inbox_open().expect("inbox");
+            if let Some(item) = items
+                .iter()
+                .find(|i| i.domain.as_deref() == Some(domain.as_str()))
+            {
+                assert_eq!(item.actor, celeris::SCRIPT_STARTUP_ACTOR);
+                assert_eq!(item.code, code, "{item:?}");
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "no inbox item: {items:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 }
+
+/// `lane_rules` に答える手書きの bundle（業務 TS ではない）。
+const LANE_BUNDLE: &str = r#"import { hostVersion, selftestEcho } from "celeris:host";
+globalThis.__celerisDispatch = async (domain, input, ctx) => {
+  if (domain === "host_selftest") return { host_api: hostVersion(), reply: await selftestEcho(ctx, input) };
+  if (domain === "lane_rules") throw new Error("bad input");
+  throw new Error(`unknown domain: ${domain}`);
+};
+"#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn script_runtime_absent_no_thread() {
@@ -207,57 +294,198 @@ async fn script_runtime_absent_no_thread() {
     assert_eq!(exit, Exit::MaxTicks);
     assert!(seen.samples > 0);
     assert_eq!(seen.actors, 0, "no isolate thread without [script]");
-    assert!(env.rejected().is_empty());
 }
 
+/// `[script]` が在っても、mode の行が generation を指さなければ isolate を作らない（付記 S5-1）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn script_runtime_valid_bundle_loads() {
+async fn script_runtime_no_pointed_generation_no_thread() {
     let _serial = SERIAL.lock().await;
     let env = Env::new();
-    let sha256 = env.deploy_fixture();
-    let (exit, seen) = run_daemon(env.script_config(&sha256)).await;
+    env.deploy_fixture();
+    let (exit, seen) = run_daemon(env.script_config()).await;
     assert_eq!(exit, Exit::MaxTicks);
-    assert_eq!(seen.actors, 1, "the actor thread ran during the daemon");
-    assert_eq!(script_threads(), 0, "shutdown joined the actor thread");
-    assert!(env.rejected().is_empty());
+    assert_eq!(seen.actors, 0, "nothing to restore");
 }
 
+/// 付記 S5-2: 指された generation を起動時に新しい isolate で load し、mode を保つ。停止で thread を join する。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn script_runtime_bad_bundle_fail_closed() {
+async fn script_runtime_daemon_restore_keeps_loaded_modes() {
     let _serial = SERIAL.lock().await;
     let env = Env::new();
-    let sha256 = env.deploy_fixture();
+    let sha256 = env.deploy_code(LANE_BUNDLE);
+    let id = env.point(&sha256, ScriptDomain::LaneRules);
+    for _ in 0..2 {
+        let (exit, seen) = run_daemon(env.script_config()).await;
+        assert_eq!(exit, Exit::MaxTicks);
+        assert_eq!(
+            seen.actors, 1,
+            "the restored generation ran during the daemon"
+        );
+        assert_eq!(script_threads(), 0, "shutdown joined the actor thread");
+        let store = env.store();
+        let row = store.script_domain_mode("lane_rules").expect("mode");
+        assert_eq!(row.mode, ScriptMode::Compare);
+        assert_eq!(row.generation_id.as_deref(), Some(id.as_str()));
+        let g = store
+            .script_generation_get(&id)
+            .expect("read")
+            .expect("row");
+        assert_eq!(g.state, ScriptGenerationState::Active);
+    }
+}
+
+/// 付記 S5-2: 起動時に、mode の行から指されない `draining` は drain の終わり（in-flight 0）として、isolate の無い
+/// `loaded` は退役として `retired` になる。指された generation は残る。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn script_runtime_daemon_restore_retires_unpointed_draining() {
+    let _serial = SERIAL.lock().await;
+    let env = Env::new();
+    let a = env.deploy_code(LANE_BUNDLE);
+    let b = env.deploy_code(&format!("{LANE_BUNDLE}// b\n"));
+    let a_id = env.point(&a, ScriptDomain::LaneRules);
+    // B へ移すと A は `draining`（daemon の外の CAS なので in-flight は 0）。
+    let b_id = env.point(&b, ScriptDomain::LaneRules);
+    let store = env.store();
+    let state = |id: &str| {
+        store
+            .script_generation_get(id)
+            .expect("read")
+            .expect("row")
+            .state
+    };
+    assert_eq!(state(&a_id), ScriptGenerationState::Draining);
+
+    let (exit, seen) = run_daemon(env.script_config()).await;
+    assert_eq!(exit, Exit::MaxTicks);
+    assert_eq!(seen.actors, 1, "only the pointed generation is loaded");
+    assert_eq!(state(&a_id), ScriptGenerationState::Retired);
+    assert_eq!(state(&b_id), ScriptGenerationState::Active);
+    let retired = |id: &str| {
+        store
+            .script_generation_events_after(0, 1000)
+            .expect("events")
+            .into_iter()
+            .rev()
+            .find(|e| {
+                e.generation_id == id && e.event.to_state == Some(ScriptGenerationState::Retired)
+            })
+            .expect("a retired event")
+            .event
+    };
+    let event = retired(&a_id);
+    assert_eq!(event.actor, celeris::SCRIPT_STARTUP_ACTOR);
+    assert_eq!(event.cancelled_in_flight, Some(0));
+    assert!(event.reason.starts_with("drained"), "{event:?}");
+
+    // 指されない `loaded`（前の process で登録した isolate は消えている）も `retired` にする。登録し直せば戻る（S5-1 の 6）。
+    let c = env.deploy_code(&format!("{LANE_BUNDLE}// c\n"));
+    let c_id = env.point_loaded(&c);
+    assert_eq!(state(&c_id), ScriptGenerationState::Loaded);
+    let (exit, _) = run_daemon(env.script_config()).await;
+    assert_eq!(exit, Exit::MaxTicks);
+    assert_eq!(state(&c_id), ScriptGenerationState::Retired);
+    assert_eq!(state(&b_id), ScriptGenerationState::Active);
+    assert!(retired(&c_id).reason.starts_with("startup_no_isolate"));
+}
+
+/// 付記 S5-2 の起動時の失敗: file が無い。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn script_runtime_restore_missing_bundle_rolls_back() {
+    let _serial = SERIAL.lock().await;
+    let env = Env::new();
+    env.point(&"b".repeat(64), ScriptDomain::LaneRules);
+    env.assert_rolled_back(
+        ScriptDomain::LaneRules,
+        "startup_bundle_unusable",
+        "manifest.json",
+    )
+    .await;
+}
+
+/// 付記 S5-2 の起動時の失敗: hash が違う（配備先の本文が書き換わった）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn script_runtime_restore_tampered_bundle_rolls_back() {
+    let _serial = SERIAL.lock().await;
+    let env = Env::new();
+    let sha256 = env.deploy_code(LANE_BUNDLE);
+    env.point(&sha256, ScriptDomain::LaneRules);
     let bundle = deployed_dir(&env.state(), &sha256).join("bundle.mjs");
     let mut code = std::fs::read(&bundle).expect("bundle");
     code.extend_from_slice(b"\n// tampered\n");
     std::fs::write(&bundle, code).expect("tamper");
-    env.assert_fail_closed(&sha256, "does not match").await;
+    env.assert_rolled_back(
+        ScriptDomain::LaneRules,
+        "startup_bundle_unusable",
+        "does not match",
+    )
+    .await;
 }
 
+/// 付記 S5-2 の起動時の失敗: `host_api` が合わない。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn script_runtime_missing_bundle_fail_closed() {
+async fn script_runtime_restore_host_api_mismatch_rolls_back() {
     let _serial = SERIAL.lock().await;
     let env = Env::new();
-    env.assert_fail_closed(&"b".repeat(64), "manifest.json")
+    let sha256 = env.deploy_raw(
+        LANE_BUNDLE,
+        &["host_selftest", "lane_rules"],
+        &["selftest:echo_task"],
+        "^99",
+    );
+    env.point(&sha256, ScriptDomain::LaneRules);
+    env.assert_rolled_back(ScriptDomain::LaneRules, "startup_bundle_unusable", "^99")
         .await;
 }
 
+/// 付記 S5-2 の起動時の失敗: その領域の capability が足りない（`cos_digest` に `cos_digest:*` が無い）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn script_runtime_throwing_bundle_fail_closed() {
+async fn script_runtime_restore_missing_capability_rolls_back() {
+    let _serial = SERIAL.lock().await;
+    let env = Env::new();
+    let code = LANE_BUNDLE.replace(
+        r#"if (domain === "lane_rules") throw"#,
+        r#"if (domain === "lane_rules" || domain === "cos_digest") throw"#,
+    );
+    let sha256 = env.deploy_raw(
+        &code,
+        &["host_selftest", "cos_digest"],
+        &["selftest:echo_task"],
+        "^1",
+    );
+    env.point(&sha256, ScriptDomain::CosDigest);
+    env.assert_rolled_back(
+        ScriptDomain::CosDigest,
+        "startup_capability_missing",
+        "cos_digest:list_runs",
+    )
+    .await;
+}
+
+/// load で例外を投げる bundle（検証に落ちる）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn script_runtime_restore_throwing_bundle_rolls_back() {
     let _serial = SERIAL.lock().await;
     let env = Env::new();
     let sha256 = env.deploy_code("throw new Error(\"boom at load\");\n");
-    env.assert_fail_closed(&sha256, "boom at load").await;
+    env.point(&sha256, ScriptDomain::LaneRules);
+    env.assert_rolled_back(
+        ScriptDomain::LaneRules,
+        "startup_bundle_unusable",
+        "boom at load",
+    )
+    .await;
 }
 
 /// 解決しない top-level await で daemon の起動が止まらない。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn script_runtime_pending_top_level_await_fail_closed() {
+async fn script_runtime_restore_pending_top_level_await_rolls_back() {
     let _serial = SERIAL.lock().await;
     let env = Env::new();
     let sha256 = env.deploy_code("await new Promise(() => {});\n");
+    env.point(&sha256, ScriptDomain::LaneRules);
     let started = std::time::Instant::now();
-    env.assert_fail_closed(&sha256, &sha256).await;
+    env.assert_rolled_back(ScriptDomain::LaneRules, "startup_bundle_unusable", &sha256)
+        .await;
     assert!(started.elapsed() < Duration::from_secs(60));
 }
 
@@ -364,7 +592,8 @@ fn script_thread_census_real_child_inherits_then_renames() {
 async fn script_thread_census_daemon_sampler_detects_second_actor() {
     let _serial = SERIAL.lock().await;
     let env = Env::new();
-    let sha256 = env.deploy_fixture();
+    let sha256 = env.deploy_code(LANE_BUNDLE);
+    env.point(&sha256, ScriptDomain::LaneRules);
     let (named_tx, named_rx) = mpsc::channel();
     let (finish_tx, finish_rx) = mpsc::channel::<()>();
     let second = std::thread::Builder::new()
@@ -377,7 +606,7 @@ async fn script_thread_census_daemon_sampler_detects_second_actor() {
         .expect("spawn second");
     named_rx.recv().expect("named");
 
-    let (exit, seen) = run_daemon(env.script_config(&sha256)).await;
+    let (exit, seen) = run_daemon(env.script_config()).await;
 
     drop(finish_tx);
     second.join().expect("second");

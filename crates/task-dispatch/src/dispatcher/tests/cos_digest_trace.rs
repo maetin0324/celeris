@@ -255,21 +255,21 @@ fn set_mode_ts(f: &Fixture) {
             now,
         )
         .expect("generation");
-    for to in [ScriptMode::Compare, ScriptMode::Ts] {
-        f.store
-            .script_domain_set_mode(
-                &ScriptModeChange {
-                    domain: "cos_digest".into(),
-                    to_mode: to,
-                    to_generation: Some(generation.id.clone()),
-                    expected_version: cos_digest_version(f),
-                    actor: "human:test".into(),
-                    reason: "cos_digest pass trace".into(),
-                },
-                now,
-            )
-            .expect("mode");
-    }
+    f.store
+        .script_domain_set_mode(
+            &ScriptModeChange {
+                domain: "cos_digest".into(),
+                to_mode: ScriptMode::Compare,
+                to_generation: Some(generation.id.clone()),
+                expected_version: cos_digest_version(f),
+                actor: "human:test".into(),
+                reason: "cos_digest pass trace".into(),
+            },
+            now,
+        )
+        .expect("mode compare");
+    // 付記 S5-4: ts は canary を経る。
+    super::promote_cos_digest_to_ts(&f.store, &generation.id, "cos_digest pass trace", now);
 }
 
 // ---------------------------------------------------------------- 書き込みと照合

@@ -64,6 +64,7 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | POST | `/terminals/{id}/close` | `human_only` | ADR 2026-10-27-web-terminal D3。端末は web に login し step-up した人だけが開く（主体 human:web 以外は 403）。 |
 | PATCH | `/config/fields` | `human_only` | ADR 2026-10-22-dynamic-config D5。config.toml の欄の変更（書き戻しと稼働中の差し替え）は人が設定画面で行う。 |
 | POST | `/routing/stages` | `human_only` | ADR 2026-10-11-llm-source-model-routing-evaluation D3。enforce へ進めるのは人の承認だけ（戻すのは daemon）。 |
+| POST | `/script/guard/clear` | `human_only` | ADR 2026-11-02-ts-control-layer-boundary 付記 S5-4。script-guard の全体の停止を解くのは人の API token の主体だけ。 |
 | POST | `/milestones/{id}/pause` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/milestones/{id}/resume` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/projects/{id}/milestones` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
@@ -247,7 +248,10 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/reload` | A | `handlers.rs` | 共通 |
 | POST | `/replay` | R | `handlers.rs` | 共通 |
 | DELETE | `/repos/{id}` | A | `repos.rs` | 共通 |
-| PUT | `/script/domains/{domain}/mode` | A（`to_mode = ts` は `human_only` で拒否。付記 2026-11-02 S4） | `script_domains.rs` | 共通 |
+| PUT | `/script/domains/{domain}/mode` | A（`to_mode = canary`・`ts` は `human_only` で拒否。付記 2026-11-02 S4・2026-11-03 S5） | `script_domains.rs` | 共通 |
+| POST | `/script/generations` | A（付記 2026-11-03 S5） | `script_generations.rs` | 共通 |
+| POST | `/script/generations/{id}/retire` | A（付記 2026-11-03 S5） | `script_generations.rs` | 共通 |
+| POST | `/script/guard/clear` | X: `human_only` | `script_domains.rs` | 共通 |
 | PATCH | `/repos/{id}` | A | `repos.rs` | 共通 |
 | PATCH | `/config/fields` | X: `human_only` | `handlers.rs` | 共通 |
 | POST | `/terminals` | X: `human_only` | `handlers.rs` | 共通 |
@@ -499,3 +503,15 @@ ADR 2026-10-28-cos-integrate-task の `POST /tasks/{id}/integration-requests/{re
 - CoS が行えるのは今までどおり `rust`→`compare`、`compare`→`rust`、それに戻し（`ts`→`compare`・`ts`→`rust`）である。
   `canary` と `cos_digest` 以外の `ts` は route と同じ関数が 422 `script_mode_not_enabled` で拒む。
 - 同じ規則は store（`script_domain_set_mode`）にもあり、外部 operator（`operator:*`）・MCP・daemon（`system:*`）の `→ts` も拒む。
+
+## 付記: TS 制御層の canary・generation の登録と script-guard の解除（2026-11-03、task 01M6FPPJN7A8H427MXFVYFY7H4）
+
+- ADR [2026-11-02-ts-control-layer-boundary](2026-11-02-ts-control-layer-boundary.md) 付記 S5-1・S5-4 に従う。
+- `PUT /script/domains/{domain}/mode` は全領域で `canary`・`ts` を受けるようになった（`script_mode_not_enabled` は消した）。
+  CoS の `script_domain.mode_set` は、本文の `mode` が `canary` か `ts` なら effect の前に 403 `script_mode_requires_human`
+  （理由 `human_only`）で拒み、`cos_operations` に rejected として記録する。表と `script_domain_events` は変わらない。
+  CoS が行えるのは `rust`→`compare`、別の generation の `compare` への切り替えと、戻し（`→rust`、`canary`・`ts`→`compare`）である。
+- `POST /script/generations`（`script_generation.register`）と `POST /script/generations/{id}/retire`
+  （`script_generation.retire`）を admin の ALLOWED に足した。登録と退役は mode の行が指さない限り挙動を変えない。
+  daemon の登録簿が未接続なら route と同じ関数が 503 `script_runtime_unavailable` を返す。
+- `POST /script/guard/clear` は EXCLUDED（`human_only`）。script-guard の全体の停止を解くのは人の主体だけ。

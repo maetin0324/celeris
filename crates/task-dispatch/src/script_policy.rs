@@ -11,6 +11,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -133,6 +134,30 @@ pub trait PolicyScript: Send + Sync {
     /// `cos_digest` の digest pass を 1 回走らせる（付記 S4-12）。TS は `call.sink` へ op を送って読み、
     /// 出力 `CosDigestPassOutput`（`{ "runs": [{ run_id, commands }] }`）を返す。
     fn cos_digest_pass(&self, call: CosDigestPassCall, deadline: Duration) -> PolicyFuture<'_>;
+}
+
+/// generation ごとの判定の口を返す（付記 S5-2）。dispatcher は mode の行が指す generation を 1 回読み、
+/// その generation に固定した口で TS を呼ぶ。`Err` は呼べない理由（isolate が無い・drain 中など）で、
+/// dispatcher は TS を呼ばず `unavailable` を記録し、判定は Rust の参照実装のまま。
+pub trait PolicyScriptSource: Send + Sync {
+    fn pinned(&self, generation: &ScriptGeneration) -> Result<Arc<dyn PolicyScript>, String>;
+}
+
+/// bundle 1 つだけを持つ口（試験・単体の runtime）。generation の `bundle_sha256` が同じときだけ返す。
+pub struct SingleBundleSource(pub Arc<dyn PolicyScript>);
+
+impl PolicyScriptSource for SingleBundleSource {
+    fn pinned(&self, generation: &ScriptGeneration) -> Result<Arc<dyn PolicyScript>, String> {
+        let loaded = self.0.bundle().bundle_sha256;
+        if loaded == generation.bundle_sha256 {
+            Ok(Arc::clone(&self.0))
+        } else {
+            Err(format!(
+                "loaded bundle {loaded} differs from generation bundle {}",
+                generation.bundle_sha256
+            ))
+        }
+    }
 }
 
 /// mode の表と compare の記録の store（`SqliteStore` が実装する）。

@@ -380,6 +380,7 @@ pub(crate) fn delegated_request(
         | InboxKind::HumanWaitAging
         | InboxKind::ReleaseUnpromoted
         | InboxKind::TaskUnscheduled
+        | InboxKind::ScriptControl
         | InboxKind::CredentialWait => {
             return Err(ApiProblem::new(
                 StatusCode::CONFLICT,

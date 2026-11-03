@@ -59,7 +59,7 @@ impl ScriptDomain {
     }
 }
 
-/// 領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。S2 で受け付けるのは `rust` と `compare` だけ（S2-5）。
+/// 領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。全領域で全 mode を受ける（付記 S5-4）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ScriptMode {
@@ -85,27 +85,10 @@ impl ScriptMode {
             .find(|m| m.as_str() == name)
     }
 
-    /// S2-5・S4-14: API が `domain` の変更先として受け付ける mode か。`rust`・`compare` はどの領域でも受ける。
-    /// `ts` は `cos_digest` だけで受ける。`canary` はどの領域でも受けない。store は `canary`・`ts` を全領域で
-    /// 受ける（付記 S5-4）ので、この表を見るのは task-api だけ（api-canary unit が開ける）。
-    pub fn accepted_for(self, domain: ScriptDomain) -> bool {
-        match self {
-            ScriptMode::Rust | ScriptMode::Compare => true,
-            ScriptMode::Ts => domain == ScriptDomain::CosDigest,
-            ScriptMode::Canary => false,
-        }
-    }
-
     /// 動かすのに active generation が要る mode か（`compare`・`canary`・`ts`）。
     pub fn needs_generation(self) -> bool {
         !matches!(self, ScriptMode::Rust)
     }
-}
-
-/// S4 で許した同じ generation の `compare`→`ts` を store がまだ受ける領域か（`cos_digest` だけ）。
-/// S5-4 はこの遷移を消す。API の受け付けを変えない段の間だけ残し、呼び出し側の試験が `canary` を経るようになったら消す。
-pub fn ts_may_skip_canary(domain: ScriptDomain) -> bool {
-    domain == ScriptDomain::CosDigest
 }
 
 /// S5-5: 保存済みの checkpoint の版 `stored` を manifest の `checkpoint_versions` が全部含むか。
@@ -528,17 +511,12 @@ pub struct NewScriptGeneration {
     pub state: ScriptGenerationState,
 }
 
-/// mode の変更・読み出しの失敗。API は `UnknownDomain` を 404、`ModeNotEnabled` を 422
-/// （`script_mode_not_enabled`）、`VersionConflict` を 409、generation の不備を 422 に写す。
+/// mode の変更・読み出しの失敗。API は `UnknownDomain` を 404、`VersionConflict` を 409、
+/// generation の不備を 422 に写す。
 #[derive(Debug, thiserror::Error)]
 pub enum ScriptDomainError {
     #[error("unknown script domain `{0}`")]
     UnknownDomain(String),
-    #[error("script mode `{}` is not enabled for domain `{}` (rust and compare everywhere, ts only for cos_digest)", .mode.as_str(), .domain.as_str())]
-    ModeNotEnabled {
-        domain: ScriptDomain,
-        mode: ScriptMode,
-    },
     #[error("switching to mode `ts` needs a human actor (got `{0}`)")]
     TsRequiresHuman(String),
     #[error("switching to mode `canary` needs a human actor (got `{0}`)")]

@@ -90,6 +90,8 @@ pub(crate) async fn tick_loop(
         roles.role.clone(),
         config.selfdeploy.releases_dir.clone(),
     );
+    // 境界 ADR 2026-11-02 付記 S5-7: script の自動の戻し・無効化・停止の記録を受信箱 `script_control` に出す。
+    let _script_inbox = crate::daemon::script_guard::spawn(dispatcher.store(), roles.role.clone());
     // ADR 2026-10-11 D3: enforce の guardrail 判定（間隔は `INTERVAL`。判定は決定的で LLM を呼ばない）。
     let mut guardrail_ticker = crate::daemon::routing_guardrail::Ticker::default();
     let mut balance_guard_ticker = crate::daemon::routing_guardrail::Ticker::default();

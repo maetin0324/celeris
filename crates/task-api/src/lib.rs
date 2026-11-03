@@ -80,6 +80,7 @@ pub mod routing_stage;
 pub mod schema;
 /// ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: TS 制御層の領域ごとの mode の読み出しと切り替え。
 pub mod script_domains;
+pub mod script_generations;
 pub mod secrets;
 /// Phase 82（ADR-0056 D3 続き）: skills を GUI から見る・作る・mount する（`GET/PUT/DELETE /skills…`、
 /// `POST/DELETE /org/{id}/skills…`）。

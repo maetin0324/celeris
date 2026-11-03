@@ -36,3 +36,4 @@ license: このリポジトリと同じ（外部の license は無い）
   人に伝えるべきことがあるときだけ `chat.review_report` で統括 CoS チャットに 1 件報告し、無ければ review thread に 1 行書いて
   終える。統括 thread へ直接書かない。operations.md の surface 表の `chat.review_report` の行は api-op の葉が足した。
   metadata.version は変えない（他の操作の規則は同じ）。本番 KB への取り込みは人が行う。
+- 2026-11-03（ADR 2026-11-02-ts-control-layer-boundary 付記 S5-4・S5-12、ADR 2026-10-09-cos-operations-all-mutations 付記）: operations.md の操作表に `script_generation.register`・`script_generation.retire` の 2 行を足し、`script_domain.mode_set` の行を `canary`・`ts` は人だけ（CoS は 403 `human_only` で rejected）に直した。metadata.version は変えない（他の操作の規則は同じ）。本番 KB への取り込みは人が行う。

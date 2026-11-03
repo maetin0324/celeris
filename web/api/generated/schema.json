@@ -16829,7 +16829,8 @@
         "human_wait_aging",
         "release_unpromoted",
         "task_unscheduled",
-        "review_resync_halted"
+        "review_resync_halted",
+        "script_control"
       ],
       "type": "string"
     },
@@ -28336,6 +28337,13 @@
             "$ref": "#/$defs/ScriptDomainView"
           },
           "type": "array"
+        },
+        "guard_halted": {
+          "description": "script-guard の全体の停止の理由（S5-7）。止まっていなければ `null`。止まっている間は `rust` 以外へ切り替えられない。",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -28347,6 +28355,16 @@
       "additionalProperties": false,
       "description": "`PUT /script/domains/{domain}/mode` の本文。",
       "properties": {
+        "canary_bps": {
+          "default": null,
+          "description": "`canary` の比率（1〜9999 の万分率。`canary` では必須、他の mode では書かない。S5-3）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "expected_version": {
           "description": "読んだ時点の `version`。表の値と違えば 409。",
           "format": "uint64",
@@ -28355,7 +28373,7 @@
         },
         "generation": {
           "default": null,
-          "description": "`compare`・`ts` で使う generation の `bundle_sha256`（必須。`ts` では今の `compare` と同じ値）。\n`rust` では書かない。",
+          "description": "`compare`・`canary`・`ts` で使う generation の `bundle_sha256`（必須。`canary` では今の `compare`、`ts` では今の\n`canary` と同じ値）。`rust` では書かない。",
           "type": [
             "string",
             "null"
@@ -28363,7 +28381,7 @@
         },
         "mode": {
           "$ref": "#/$defs/ScriptMode",
-          "description": "`rust` | `compare` | `ts`（`ts` は `cos_digest` だけ・人の主体だけ。`canary` は 422）。"
+          "description": "`rust` | `compare` | `canary` | `ts`（`canary`・`ts` は人の主体だけ）。"
         },
         "reason": {
           "default": null,
@@ -28416,6 +28434,15 @@
             "null"
           ]
         },
+        "canary_bps": {
+          "description": "`canary` の比率（1〜9999 の万分率、S5-3）。`canary` 以外では `null`。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "domain": {
           "$ref": "#/$defs/ScriptDomain"
         },
@@ -28425,6 +28452,17 @@
             "string",
             "null"
           ]
+        },
+        "generation_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScriptGenerationState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "active generation の状態（S5-1。ふつうは `active`）。`rust` では `null`。"
         },
         "mode": {
           "$ref": "#/$defs/ScriptMode"
@@ -28451,8 +28489,163 @@
       ],
       "type": "object"
     },
+    "ScriptGenerationList": {
+      "description": "`GET /script/generations` の応答（古い順）。",
+      "properties": {
+        "generations": {
+          "items": {
+            "$ref": "#/$defs/ScriptGenerationView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "generations"
+      ],
+      "type": "object"
+    },
+    "ScriptGenerationRegisterBody": {
+      "additionalProperties": false,
+      "description": "`POST /script/generations` の本文。",
+      "properties": {
+        "bundle_sha256": {
+          "description": "`script-deploy` が置いた bundle の sha256（64 桁の小文字 hex）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle_sha256"
+      ],
+      "type": "object"
+    },
+    "ScriptGenerationRetireBody": {
+      "additionalProperties": false,
+      "description": "`POST /script/generations/{id}/retire` の本文。",
+      "properties": {
+        "reason": {
+          "default": null,
+          "description": "退役の理由（`script_generation_retired` の `reason`）。CoS の操作では省略すると操作の理由を使う。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ScriptGenerationState": {
+      "description": "表 `script_generations.state`（S5-1）。",
+      "oneOf": [
+        {
+          "const": "loaded",
+          "description": "検証に通り、どの領域の mode の行からも指されていない。",
+          "type": "string"
+        },
+        {
+          "const": "active",
+          "description": "1 つ以上の領域の `generation_id` がこれを指す。",
+          "type": "string"
+        },
+        {
+          "const": "draining",
+          "description": "どの領域からも指されなくなったが in-flight が残る。",
+          "type": "string"
+        },
+        {
+          "const": "retired",
+          "description": "isolate を捨てた。行と bundle の file は残す。",
+          "type": "string"
+        },
+        {
+          "const": "invalid",
+          "description": "検証に落ちた、または安全違反で無効にした。",
+          "type": "string"
+        }
+      ]
+    },
+    "ScriptGenerationView": {
+      "description": "generation 1 つ（一覧・登録・退役の応答）。",
+      "properties": {
+        "bundle_sha256": {
+          "type": "string"
+        },
+        "checkpoint_versions": {
+          "description": "manifest の `checkpoint_versions`（S5-5）。",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "domains": {
+          "description": "manifest の `domains`。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "host_api": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "schema_sha256": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ScriptGenerationState"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "bundle_sha256",
+        "host_api",
+        "schema_sha256",
+        "state",
+        "domains",
+        "checkpoint_versions",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "ScriptGuardClearBody": {
+      "additionalProperties": false,
+      "description": "`POST /script/guard/clear` の本文。",
+      "properties": {
+        "reason": {
+          "description": "解除の理由（`script_guard_cleared` の `reason`）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ScriptGuardClearResult": {
+      "description": "`POST /script/guard/clear` の応答。",
+      "properties": {
+        "cleared": {
+          "description": "停止を解いたか（止まっていなければ `false` で、表も記録も変えない）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cleared"
+      ],
+      "type": "object"
+    },
     "ScriptMode": {
-      "description": "領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。S2 で受け付けるのは `rust` と `compare` だけ（S2-5）。",
+      "description": "領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。全領域で全 mode を受ける（付記 S5-4）。",
       "enum": [
         "rust",
         "compare",
@@ -34445,6 +34638,25 @@
       "$ref": "#/$defs/ScriptDomainList",
       "description": "ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: `GET /script/domains` と `PUT /script/domains/{domain}/mode`。"
     },
+    "script_generation": {
+      "$ref": "#/$defs/ScriptGenerationView"
+    },
+    "script_generation_register_body": {
+      "$ref": "#/$defs/ScriptGenerationRegisterBody"
+    },
+    "script_generation_retire_body": {
+      "$ref": "#/$defs/ScriptGenerationRetireBody"
+    },
+    "script_generations": {
+      "$ref": "#/$defs/ScriptGenerationList",
+      "description": "付記 S5-1・S5-4: generation の一覧・登録・退役と、script-guard の停止の解除。"
+    },
+    "script_guard_clear_body": {
+      "$ref": "#/$defs/ScriptGuardClearBody"
+    },
+    "script_guard_clear_result": {
+      "$ref": "#/$defs/ScriptGuardClearResult"
+    },
     "secret_put": {
       "$ref": "#/$defs/SecretPutResult"
     },
@@ -34728,6 +34940,12 @@
     "script_domains",
     "script_domain_mode_body",
     "script_domain_mode_result",
+    "script_generations",
+    "script_generation",
+    "script_generation_register_body",
+    "script_generation_retire_body",
+    "script_guard_clear_body",
+    "script_guard_clear_result",
     "mcp_clients",
     "mcp_calls",
     "skill_list",

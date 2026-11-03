@@ -259,6 +259,8 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         })?),
         _ => None,
     };
+    // 付記 S5-1: API の登録の口を先に作る（isolate はまだ作らない。復元は下の `ScriptLayer::start`）。
+    let script_generations = ScriptLayer::prepare(&config);
     let (api, admin_rx) = match config.api.listen {
         Some(listen) => {
             // `standby` も起きてすぐ API を受ける（同じポートに `SO_REUSEPORT` で bind する）。
@@ -273,6 +275,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                 llm_proxy_state.clone(),
                 Arc::clone(&live_sessions),
                 mcp_token.clone(),
+                script_generations.as_ref().map(|g| g.control()),
             )
             .await?;
             (Some(api), admin_rx)
@@ -293,11 +296,9 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         None => None,
     };
     // 境界 ADR 2026-11-02: `?` で抜ける経路の後に置く。`[script]` が無ければ thread も isolate も作らない。
-    let script_layer =
-        ScriptLayer::start(&config, dispatcher.store().as_ref(), &identity.instance_id).await;
-    if let Some(script_layer) = &script_layer {
-        dispatcher.set_policy_script(Some(script_layer.policy_script()));
-    }
+    // 付記 S5-2: 起動時の復元（mode の行が指す generation を新しい isolate で load）と drain の見回り。
+    let script_layer = ScriptLayer::start(&config, script_generations, role.clone()).await;
+    dispatcher.set_policy_script_source(script_layer.source());
     let mut roles = RoleState {
         role,
         supervisor,
@@ -333,11 +334,9 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     if let Some(mcp) = roles.mcp.take() {
         mcp.stop().await;
     }
-    if let Some(script_layer) = script_layer {
-        // 走っている compare を先に終わらせる（actor を止めてから `terminated` と記録しない）。
-        dispatcher.wait_script_compares().await;
-        script_layer.stop().await;
-    }
+    // 走っている compare を先に終わらせる（actor を止めてから `terminated` と記録しない）。
+    dispatcher.wait_script_compares().await;
+    script_layer.stop().await;
     // ADR-0064 D3/D5: 背景チェックポイント・定期バックアップは draining でも動き続けてよい
     // （DB への書き込みではなく、既存の WAL をさばく／バックアップするだけ）ので、プロセスが本当に
     // 終わるここで初めて止める。

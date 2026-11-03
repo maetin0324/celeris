@@ -54,6 +54,9 @@ pub struct ApiState {
     /// ADR-0108 D5: 稼働中 session の registry（daemon が supervisor と共有する）。`None` なら
     /// restore は常に `isolation_required`。
     pub(crate) live_sessions: Option<Arc<dyn task_core::browser_isolation::LiveSessionRegistry>>,
+    /// ADR 2026-11-02-ts-control-layer-boundary 付記 S5-1: daemon の generation の登録簿。`None` なら
+    /// `POST /script/generations`・`…/retire` は 503 `script_runtime_unavailable`。
+    pub(crate) script_generations: Option<crate::script_generations::SharedScriptGenerationControl>,
     /// Chat attachment configuration and live event wakeups, shared with SSE/upload routes.
     pub(crate) chat: Arc<crate::chat::ChatState>,
     /// ADR 2026-10-07-browser-trusted-devices: 端末の期限・assertion の期限に使う時計（UNIX 秒）。
@@ -243,6 +246,7 @@ impl ApiState {
             browser_readiness: None,
             identity_sealer: None,
             live_sessions: None,
+            script_generations: None,
             chat: Arc::new(chat),
             live_grants: Arc::new(Mutex::new(HashMap::new())),
             clock: system_clock(),
@@ -300,6 +304,15 @@ impl ApiState {
         registry: Arc<dyn task_core::browser_isolation::LiveSessionRegistry>,
     ) -> Self {
         self.live_sessions = Some(registry);
+        self
+    }
+
+    /// 付記 S5-1: generation の登録簿を結線する（daemon が `[script]` のあるときに渡す）。
+    pub fn with_script_generations(
+        mut self,
+        control: crate::script_generations::SharedScriptGenerationControl,
+    ) -> Self {
+        self.script_generations = Some(control);
         self
     }
 

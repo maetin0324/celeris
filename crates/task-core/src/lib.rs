@@ -115,6 +115,7 @@ pub mod routing_shadow_history;
 pub mod script_compare;
 /// ADR 2026-11-02-ts-control-layer-boundary 付記 S5-7: 停止基準の計数と判定（純粋関数）。
 pub mod script_guard;
+pub mod script_inbox;
 pub mod store;
 pub mod transition;
 /// ADR-0079（Phase R1a）: 再帰的な task 分解の木（`Task.tree`・`[execution.tree]` の上限・深さ）。
@@ -218,6 +219,7 @@ pub use notify::{
     DEFAULT_WEBHOOK_SECRET_ID, MAX_NOTIFY_ATTEMPTS, Notification, NotificationId, NotificationKind,
     NotificationStore,
 };
+pub use script_inbox::{ScriptInboxItem, ScriptInboxStore};
 pub mod project_brief;
 pub use org::{
     Milestone, MilestoneDecision, MilestoneId, MilestoneStatus, OrgError, OrgKind, OrgNode,

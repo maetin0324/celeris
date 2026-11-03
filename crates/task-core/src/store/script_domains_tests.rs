@@ -103,9 +103,9 @@ fn change_by(
     }
 }
 
-/// S4-14: `ts` は `cos_digest` だけ・人の actor だけ・同じ generation の `compare` からだけ。戻しは誰でも。
+/// S5-4: `ts` は人の actor だけ・同じ generation の `canary` からだけ（S4 の `compare→ts` は消した）。
 #[test]
-fn script_domain_ts_for_cos_digest_needs_human_and_compare_same_generation() {
+fn script_domain_ts_needs_human_and_same_generation_canary() {
     let store = SqliteStore::open_in_memory().unwrap();
     let g = loaded_generation(&store, &"c".repeat(64), &["cos_digest", "route_priority"]);
     let g2 = loaded_generation(&store, &"d".repeat(64), &["cos_digest"]);
@@ -175,47 +175,15 @@ fn script_domain_ts_for_cos_digest_needs_human_and_compare_same_generation() {
             current: ScriptMode::Compare
         })
     ));
+    // S5-4: cos_digest も人の actor で compare から ts へ直行できない（canary を経る）。
+    assert!(matches!(
+        store.script_domain_set_mode(&change("cos_digest", ScriptMode::Ts, Some(&g.id), 1), now()),
+        Err(ScriptDomainError::RequiresPreviousStage {
+            to: ScriptMode::Ts,
+            current: ScriptMode::Compare
+        })
+    ));
     assert_eq!(event_count(&store), 2);
-    // 人の actor で compare → ts。
-    let out = store
-        .script_domain_set_mode(&change("cos_digest", ScriptMode::Ts, Some(&g.id), 1), now())
-        .unwrap();
-    let ScriptModeChangeOutcome::Changed { row, .. } = out else {
-        panic!("changed expected");
-    };
-    assert_eq!(
-        (row.mode, row.generation_id.as_deref(), row.version),
-        (ScriptMode::Ts, Some(g.id.as_str()), 2)
-    );
-    assert_eq!(row.updated_by, "human:web");
-    // 戻しは daemon でもできる（ts→compare、compare→rust）。
-    store
-        .script_domain_set_mode(
-            &change_by(
-                "cos_digest",
-                ScriptMode::Compare,
-                Some(&g.id),
-                2,
-                "cos:01THREAD",
-            ),
-            now(),
-        )
-        .unwrap();
-    store
-        .script_domain_set_mode(
-            &change_by(
-                "cos_digest",
-                ScriptMode::Rust,
-                None,
-                3,
-                "system:script-startup",
-            ),
-            now(),
-        )
-        .unwrap();
-    let row = store.script_domain_mode("cos_digest").unwrap();
-    assert_eq!((row.mode, row.version), (ScriptMode::Rust, 4));
-    assert_eq!(event_count(&store), 5);
 }
 
 #[test]

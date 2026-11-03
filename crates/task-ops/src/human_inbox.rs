@@ -55,11 +55,13 @@ pub enum InboxKind {
     TaskUnscheduled,
     // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: review の再同期が上限で止まっている task。
     ReviewResyncHalted,
+    // ADR 2026-11-02-ts-control-layer-boundary 付記 S5-7: script の自動の戻し・無効化・停止（受信箱では答えない）。
+    ScriptControl,
     // 人の決定 2026-10-08: KB の取り込み待ち（旧 `knowledge_review`）は受信箱に出さない。知識画面で扱う。
 }
 
 impl InboxKind {
-    pub const ALL: [InboxKind; 23] = [
+    pub const ALL: [InboxKind; 24] = [
         InboxKind::Decision,
         InboxKind::PlanGate,
         InboxKind::PhaseGate,
@@ -83,6 +85,7 @@ impl InboxKind {
         InboxKind::ReleaseUnpromoted,
         InboxKind::TaskUnscheduled,
         InboxKind::ReviewResyncHalted,
+        InboxKind::ScriptControl,
     ];
 
     /// ADR 2026-10-27-project-stagnation-inbox D1: 人の操作を待って止まっている種類（`human_wait_aging` の対象）。
@@ -140,6 +143,7 @@ impl InboxKind {
             InboxKind::ReleaseUnpromoted => "release_unpromoted",
             InboxKind::TaskUnscheduled => "task_unscheduled",
             InboxKind::ReviewResyncHalted => "review_resync_halted",
+            InboxKind::ScriptControl => "script_control",
         }
     }
 }
@@ -304,6 +308,9 @@ pub fn from_inbox(inbox: &Inbox, by_id: &HashMap<TaskId, Task>, now: OffsetDateT
     }
     for d in &inbox.disk_full {
         items.push(b.disk_full(d));
+    }
+    for s in &inbox.script_control {
+        items.push(b.script_control(s));
     }
     // 同じ秘密を待つ wait は 1 件に束ねる（集約キー = `credential:<secret_id>`）。
     let mut groups: BTreeMap<&str, Vec<&task_core::CredentialWait>> = BTreeMap::new();
@@ -1520,6 +1527,96 @@ impl Builder<'_> {
             task: None,
             project_id: None,
             created_at: view::to_rfc3339(d.since),
+            links: Vec::new(),
+        })
+    }
+
+    /// ADR 2026-11-02-ts-control-layer-boundary 付記 S5-2・S5-6・S5-7: script の自動の戻し・無効化・停止 1 件
+    /// （記録 1 件に 1 件。id は `script_control-<記録の表>-<event id>`）。受信箱では答えない。人がその領域の mode を
+    /// 変える・その generation を遷移させる・停止を解くと閉じる。
+    fn script_control(&self, s: &task_core::ScriptInboxItem) -> InboxItem {
+        let halted = s.event_type == task_core::script_inbox::SCRIPT_GUARD_HALTED;
+        let subject = match (&s.domain, &s.generation_id) {
+            (Some(d), Some(g)) => format!("領域 {d}（generation {g}）"),
+            (Some(d), None) => format!("領域 {d}"),
+            (None, Some(g)) if g == "*" => "全領域".to_string(),
+            (None, Some(g)) => format!("generation {g}"),
+            (None, None) => "script".to_string(),
+        };
+        let what = if halted {
+            "script を全体で止めた（全領域を rust で動かす）"
+        } else if s.domain.is_some() {
+            "script の領域を rust に戻した"
+        } else {
+            "script の generation を変えた"
+        };
+        let title = format!("{what}: {subject}（{}）", s.code);
+        let mut body = vec![
+            format!(
+                "記録: {} #{}（{}）",
+                s.source.as_str(),
+                s.event_id,
+                s.event_type
+            ),
+            format!("actor: {}", s.actor),
+        ];
+        if let Some(d) = &s.domain {
+            body.push(format!("領域: {d}"));
+        }
+        if let Some(g) = &s.generation_id {
+            body.push(format!("generation: {g}"));
+        }
+        if let Some(c) = &s.change {
+            body.push(format!("変更: {c}"));
+        }
+        body.push(format!("reason の code: {}", s.code));
+        body.push(format!("reason: {}", s.reason));
+        body.push(if halted {
+            "人が POST /api/v1/script/guard/clear で停止を解くと消える。".to_string()
+        } else {
+            "人がその領域の mode を変える（compare へ戻す・rust のまま確かめる）か、その generation を遷移させると消える。"
+                .to_string()
+        });
+        let options = if halted {
+            vec![opt(
+                "clear_guard",
+                "原因を確かめて停止を解く（人の token）",
+                false,
+                "POST /api/v1/script/guard/clear（解くと消える）",
+            )]
+        } else {
+            vec![opt(
+                "inspect",
+                "script の領域の状態を確かめて次の mode を決める",
+                false,
+                "PUT /api/v1/script/domains/{domain}/mode（人の変更で消える）",
+            )]
+        };
+        let recommended = options.first().map(|o| o.key.clone());
+        self.finish(Draft {
+            id: format!("script_control-{}", s.id),
+            kind: InboxKind::ScriptControl,
+            title,
+            detail: clip(&body.join("\n")),
+            options,
+            recommended,
+            due_at: None,
+            blocking: InboxBlocking {
+                tasks: Vec::new(),
+                units: Vec::new(),
+                root: None,
+                summary: if halted {
+                    "TS 制御層の全領域（rust で動き続ける）".to_string()
+                } else {
+                    format!("{subject}（rust で動き続ける）")
+                },
+            },
+            blocked_by: Vec::new(),
+            native: None,
+            task: None,
+            project_id: None,
+            created_at: view::to_rfc3339(s.created_at),
+            // 状態は `GET /api/v1/script/domains`。web は daemon の画面へ案内する（専用の画面は無い）。
             links: Vec::new(),
         })
     }

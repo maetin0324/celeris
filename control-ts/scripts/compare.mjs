@@ -5,9 +5,9 @@
 // Node 24 の型除去で src/domains/<domain>.ts を直接読む。`celeris:host` は src/testing/host-stub.ts へ解決する。
 //
 // cos_digest（付記 S4-16）は fixtures/cos_digest/ の行を 2 つの形で読む。
-// - `{ name, ops, output }`（pass_traces.jsonl など）: fake host が ops から答え、`cosDigestPass(ctx)` を replay する。
+// - `{ name, ops, [writes,] output }`（pass_traces.jsonl。`writes` は Rust の試験だけが読む）: fake host が ops から答え、`cosDigestPass(ctx)` を replay する。
 //   出力の byte 一致に加え、要求が記録と違う・記録に無い op を呼ぶ・記録の op を呼ばない、のどれも不一致にする。
-// - `{ name, input, commands }`（cases.jsonl・traces.jsonl）: `decide()` の出力を `commands` と比べ、さらに
+// - `{ name, input, commands }`（cases.jsonl）: `decide()` の出力を `commands` と比べ、さらに
 //   その run だけを持つ pass に組み直して同じく replay する。両方が一致した行だけを一致に数える。
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { registerHooks } from "node:module";

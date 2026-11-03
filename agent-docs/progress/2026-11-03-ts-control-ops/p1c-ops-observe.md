@@ -91,6 +91,10 @@ TS-only の高速経路（`scripts/dev/ts-verify.sh`、cargo 0 回）は変え�
    `cargo nextest run -p celerisctl -p task-api -E 'test(/script_cos_read_only|script_cos_wrapped|script_canary_generations|script_domain_guard_clear/)'`
    → exit 0（8 passed）。`bash scripts/dev/test-affected.sh` → exit 0（nextest 5115 passed・20 skipped、web vitest 697 passed、
    script bundle の SKIP 0 件）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+5. attempt 2 の検査（提出時の HEAD で実行）: 前回の不合格は `script guard --help` の一覧に 422 の文言が無かったことが原因で、上の 2 の先頭段落で直した。
+   `cargo nextest run -p celerisctl -E 'test(/script_cos_read_only/)' && cargo nextest run -p celerisctl -E 'test(/script_cos_wrapped_requests_match_the_operations_table/)' && cargo run -q -p celerisctl -- script guard --help | grep -q 'cos_operation_not_allowed'` → exit 0（3 passed、1 passed）。
+   `bash scripts/dev/test-affected.sh` → exit 0（nextest 5115 passed・20 skipped、web vitest 697 passed、script bundle の SKIP 0 件）。
+   `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。計測は変えていないので raw は取り直していない。
 
 ## commit（件名）
 - phase p1c: script 制御の管理 CLI（canary・generations・guard）、未配備の登録を 409 に、tick の待ちの snapshot と log、script-guard の増分の見回り、周回の計測
@@ -100,6 +104,7 @@ TS-only の高速経路（`scripts/dev/ts-verify.sh`、cargo 0 回）は変え�
 - cos-read-fix: CoS の run で script の読み取り CLI を通し、guard clear の help と受信箱の累計の根拠を直す
 - cos-read-fix: 進捗に検査の結果を書く
 - cos-read-fix: guard の help の一覧にも 403 と 422 を書く
+- cos-read-fix: attempt 2 の検査の結果を進捗に書く
 
 ## 未解決
 1. 本番 daemon での `script_tick_wait` の値と RSS の推移は未確認（本番は全領域 `rust`。人が compare 以上にした後に `GET /daemon` で読む）。

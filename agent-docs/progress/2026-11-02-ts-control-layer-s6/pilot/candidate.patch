@@ -1,0 +1,52 @@
+diff --git a/control-ts/src/domains/cos_digest.test.ts b/control-ts/src/domains/cos_digest.test.ts
+index 24575211..1846d4d8 100644
+--- a/control-ts/src/domains/cos_digest.test.ts
++++ b/control-ts/src/domains/cos_digest.test.ts
+@@ -7,6 +7,7 @@ import {
+   type CosDigestInput,
+   type CosTriageDecision,
+   type CosTriageItemReport,
++  capRunReason,
+   cosDigestPass,
+   decide,
+   parseInput,
+@@ -365,3 +366,11 @@ describe("cosDigestPass", () => {
+     expect(forward).toEqual(traces.map((t) => JSON.stringify(t.output)));
+   });
+ });
++
++describe("capRunReason（ts-pilot の方針改善）", () => {
++  it("200 文字までは変えず、超えたら 200 文字と「…」にする", () => {
++    expect(capRunReason("x".repeat(200))).toBe("x".repeat(200));
++    expect(capRunReason("あ".repeat(201))).toBe(`${"あ".repeat(200)}…`);
++    expect(capRunReason("😀".repeat(201))).toBe(`${"😀".repeat(200)}…`);
++  });
++});
+diff --git a/control-ts/src/domains/cos_digest.ts b/control-ts/src/domains/cos_digest.ts
+index 762f3f4f..a1431cf1 100644
+--- a/control-ts/src/domains/cos_digest.ts
++++ b/control-ts/src/domains/cos_digest.ts
+@@ -305,6 +305,14 @@ function optionsLine(item: CosTriageItemReport): string | null {
+   return d.options.map(label).join(" / ");
+ }
+ 
++/** ts-pilot の方針改善: 見出しに出す run の失敗の理由を 200 文字（code point）までにし、超えたら「…」で切る。
++ * 例外の stack など長い理由が digest の見出しを埋めないようにする。cards の理由は変えない。 */
++export const RUN_REASON_MAX_CHARS = 200;
++export function capRunReason(reason: string): string {
++  const chars = Array.from(reason);
++  return chars.length <= RUN_REASON_MAX_CHARS ? reason : `${chars.slice(0, RUN_REASON_MAX_CHARS).join("")}…`;
++}
++
+ /** Rust の `cos_digest_message`: digest の文面と cards。 */
+ export function digestMessage(
+   runId: string,
+@@ -317,7 +325,7 @@ export function digestMessage(
+     text += ")";
+   } else if (runState === "failed") {
+     text += "。run は失敗";
+-    if (reason !== null && rustTrim(reason) !== "") text += `: ${reason}`;
++    if (reason !== null && rustTrim(reason) !== "") text += `: ${capRunReason(reason)}`;
+     text += ")";
+   } else {
+     text += `。run は ${runState} で終わった)`;

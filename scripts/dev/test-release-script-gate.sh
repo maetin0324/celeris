@@ -86,13 +86,13 @@ case "$mode" in
 esac
 mkdir -p dist
 printf 'import { hostVersion } from "celeris:host";\nexport const v = hostVersion;\n' >dist/bundle.mjs
-python3 -I - "$mode" "$(git rev-parse HEAD)" <<'PY'
+python3 -I - "$mode" "$(git rev-parse HEAD)" "$(git rev-parse --show-toplevel)" <<'PY'
 import hashlib, json, sys
-mode, commit = sys.argv[1:3]
+mode, commit, top = sys.argv[1:4]
 sha = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
 cfg = json.load(open("bundle.config.json"))
 m = {"schema": "celeris.script-manifest/1", "bundle_sha256": sha("dist/bundle.mjs"), "host_api": cfg["host_api"],
-     "schema_sha256": sha("../docs/api/script-host/host-v1.schema.json"),
+     "schema_sha256": sha(f"{top}/docs/api/script-host/host-v1.schema.json"),
      "toolchain": {"typescript": "7.0.2", "esbuild": "0.28.2", "node": "24.0.0"}, "source_commit": commit,
      "domains": sorted(cfg["domains"]), "capabilities": sorted({c for cs in cfg["domains"].values() for c in cs}),
      "checkpoint_versions": []}

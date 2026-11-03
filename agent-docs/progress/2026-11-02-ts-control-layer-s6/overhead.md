@@ -10,7 +10,7 @@ updated: 2026-11-03
 unit overhead。[境界 ADR](../../adr/2026-11-02-ts-control-layer-boundary.md) の (f) の許容 overhead と付記 S5-8・S5-11 に従った。数値の全体は [overhead.json](overhead.json) にある。
 
 ## 結論
-今回測った (f) の許容 overhead 6 項目は、すべて閾値内だった。未測定は `task-dispatch`・`task-api` の test-build の増分（閾値 2 秒以下）の 1 項目で、判定していない。
+今回測った (f) の許容 overhead 7 項目は、すべて閾値内だった。未測定は `task-dispatch`・`task-api` の test-build の増分（閾値 2 秒以下）の 1 項目で、判定していない。
 
 | 項目（(f)） | 測定値 | 閾値 | 判定 |
 |---|---|---|---|
@@ -38,7 +38,7 @@ S1 と比べると、cold build は 134.6 → 141.1 秒、binary は 143.7 → 1
 
 - 区間の定義: queue = 送信から actor の取り出しまで（queue の深さは 0 で、thread の起床を含む）。境界（入）= Grant の用意と入力の V8 変換。JS 実行 = script の入口から future の完了まで（event loop と op の受け渡しを含む）。境界（出）= 出力の JSON 変換と stats。応答の起床 = oneshot の送信から呼び手の起床まで。
 - `cos_digest` の op の答えは記録（`pass_traces.jsonl`）を測定用の op server が返した。store は読んでいない。実運用の pass の遅延は store の読み出しの分だけ長くなる。
-- `cos_digest` の pass の p99 は 2.246 ms で、(f) の deadline 200 ms の 1.2% に当たる。`lane_rules` の p99 は 0.094 ms で、deadline 50 ms の 0.2% に当たる。
+- `cos_digest` の pass の p99 は 2.246 ms で、(f) の deadline 200 ms の 1.1% に当たる。`lane_rules` の p99 は 0.094 ms で、deadline 50 ms の 0.2% に当たる。
 
 ## RSS と isolate 数（非本番 daemon、MiB、3 回）
 baseline は `[script]` が無い daemon で、45.94・46.62・46.45 MiB だった。
@@ -52,7 +52,7 @@ baseline は `[script]` が無い daemon で、45.94・46.62・46.45 MiB だっ�
 | 旧 generation を退役した後 | 1 | 27.03 / 26.75 / 25.57 |
 
 - draining は切替の直後（0.003〜0.004 秒後）に読み、3 回とも API が `draining`・thread が 2 本だった。in-flight は 0 で、要求を抱えた drain の RSS は測っていない。
-- 退役で isolate は 1 個に減るが、RSS は 0.2〜0.5 MiB しか減らなかった。切替を繰り返したときに RSS が増え続けるかは未確認。
+- 退役で isolate は 1 個に減るが、RSS は 0.3〜0.5 MiB しか減らなかった。切替を繰り返したときに RSS が増え続けるかは未確認。
 - daemon の isolate は呼び出しを受けていない。参考の script-bench（warm up と 1000 回の呼び出しの後）は isolate 1 個 +24.2 MiB、2 個 +31.3 MiB だった。
 
 ## 型検査と bundle の秒（生データから。各 20 試行）
@@ -82,7 +82,11 @@ baseline は `[script]` が無い daemon で、45.94・46.62・46.45 MiB だっ�
 環境: home-dev、AMD Ryzen Threadripper PRO 3945WX（論理 24）、kernel 6.8.12-9-pve、rustc 1.98.1、node v24.14.1、`CARGO_INCREMENTAL=0`。
 
 ## 証拠（提出時の HEAD で実行）
-EVIDENCE
+- overhead.json の必須欄 8 個の有無を python で検査: 欠け 0。
+- `bash scripts/dev/test-affected.sh`: exit 0（試験対象の変更なし。進捗の file だけ）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`: ok。`sh scripts/dev/check-doc-links.sh`: ok。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` は `agent-docs/progress/2026-11-02-ts-control-layer-s6/` の overhead の 4 file だけを出す。
 
 ## 未解決事項
 1. `task-dispatch`・`task-api` の test-build の増分は未測定（(f) の閾値 2 秒以下）。この 2 crate は S1 の時点で `deno_core` を依存に持たない。

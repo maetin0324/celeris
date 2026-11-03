@@ -562,10 +562,6 @@ fn main() -> ExitCode {
                     command: ModelsCommand::List(_),
                     ..
                 }
-                | Command::Script {
-                    command: ScriptCommand::Domains(_),
-                    ..
-                }
                 | Command::Knowledge {
                     command: KnowledgeCommand::Search(_) | KnowledgeCommand::Get(_)
                 }
@@ -573,6 +569,9 @@ fn main() -> ExitCode {
                     command: CronCommand::List | CronCommand::Show(_) | CronCommand::History(_),
                     ..
                 }
+        ) || matches!(
+            &cli.command,
+            Command::Script { command, .. } if commands::script::cos_read_only(command)
         );
         if !read_only {
             eprintln!(

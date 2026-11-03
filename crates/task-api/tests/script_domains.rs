@@ -1017,3 +1017,29 @@ async fn script_domain_guard_clear_refused_for_cos() {
     assert_eq!(resp.json()["cleared"], true);
     assert_eq!(cleared_events(), 1);
 }
+
+/// P1-C: CoS の run credential は script の読み取り（`GET /script/domains`・`GET /script/generations`）を直接通せる。
+/// `celerisctl script domains`・`generations list`・`guard status` は CoS の run でこの 2 つを読む（`cos_read_only`）。
+/// 読み取りは表を変えない。
+#[tokio::test]
+async fn script_cos_read_only_gets_pass_with_run_credential() {
+    let env = admin_env();
+    let app = env.router();
+    let sha = seed_generation(&env, 'a', &["lane_rules"]);
+    let (_, _, bearer) = cos_bearer(&env, "script-read");
+    let headers = [("authorization", bearer.as_str())];
+    let domains = send(&app, get_with(LIST, &headers)).await;
+    assert_eq!(domains.status.as_u16(), 200, "{}", domains.text());
+    assert!(
+        domains.json()["guard_halted"].is_null(),
+        "{}",
+        domains.text()
+    );
+    let generations = send(&app, get_with("/api/v1/script/generations", &headers)).await;
+    assert_eq!(generations.status.as_u16(), 200, "{}", generations.text());
+    assert!(generations.text().contains(&sha), "{}", generations.text());
+    let ops: i64 = db(&env)
+        .query_row("SELECT COUNT(*) FROM cos_operations", [], |row| row.get(0))
+        .expect("ops");
+    assert_eq!(ops, 0);
+}

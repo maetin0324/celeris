@@ -1,8 +1,8 @@
 //! P1-C: 再起動・切替・drain・退役を繰り返したときの観測（RSS の推移・error/timeout 率・呼び出しの p95・tick の待ちの
-//! 集計・受信箱の二重の項目の有無・canary の選択の比率）。
+//! 集計・受信箱の項目の開き方・canary の選択の比率）。
 //!
-//! 既定では 3 周だけ回して不変条件（error 0・timeout 0・生きた generation は 2 以下・同じ event で受信箱の項目を 2 件
-//! 作らない・canary の比率が bps に近い）を確かめる。`CELERIS_P1C_MEASURE_OUT=<path>` を渡すと周ごとの raw を jsonl で
+//! 既定では 3 周だけ回して不変条件（error 0・timeout 0・生きた generation は 2 以下・受信箱の項目は起動時の戻し
+//! 1 回につき 1 件だけ開き、2 回目の取り込みは何も開かない・canary の比率が bps に近い）を確かめる。`CELERIS_P1C_MEASURE_OUT=<path>` を渡すと周ごとの raw を jsonl で
 //! 書き、`CELERIS_P1C_CYCLES=<n>` で周の数を変える。bundle は手書きの JS（業務 TS ではない）。CPU を焼く負荷は
 //! かけない（1 周に lane_rules の呼び出し 200 回。呼び出しの間で待たない単純な列）。drain の時計は `ManualClock`。
 
@@ -132,6 +132,9 @@ async fn script_ops_restart_drain_retire_cycles() {
     let state = dir.path().join("state");
     let db = Arc::new(SqliteStore::open(&dir.path().join("t.sqlite3")).expect("store"));
     let rss_start = rss_kib();
+    // 周をまたぐ受信箱の項目の累計と、起動時の戻しが起きた周の数（restore の後の mode が rust で前の周が bundle を消した周）。
+    let mut inbox_opened_cumulative = 0u64;
+    let mut restore_rollbacks = 0u64;
     for cycle in 0..cycles {
         let started = Instant::now();
         // 再起動: 新しい登録簿で復元する（前の周の isolate は shutdown で捨てた）。
@@ -142,6 +145,11 @@ async fn script_ops_restart_drain_retire_cycles() {
         );
         g.restore().await.expect("restore");
         let restored_mode = db.script_domain_mode("lane_rules").expect("mode").mode;
+        let rolled_back = cycle > 0 && (cycle - 1) % 3 == 2;
+        if rolled_back {
+            assert_eq!(restored_mode, ScriptMode::Rust, "cycle {cycle}");
+            restore_rollbacks += 1;
+        }
         let sha = deploy(&state, &format!("c{cycle}"));
         let control = g.control();
         let register_sha = sha.clone();
@@ -184,13 +192,15 @@ async fn script_ops_restart_drain_retire_cycles() {
             }
         }
         lat_us.sort_unstable();
-        // 受信箱: 2 回取り込んでも 2 回目は何も開かない。同じ id の項目は周をまたいでも 1 件。
+        // 受信箱: 起動時の戻しの周だけ 1 件開き、2 回目の取り込みは何も開かない。開いた項目は周の中で閉じるので
+        // `inbox_open_items` は 0 のことが多く、重複の根拠にはならない。根拠は周ごとの `inbox_opened` と、周をまたぐ累計が
+        // 戻しの周の数に一致すること。
         let first = ingest(db.as_ref()).expect("ingest");
         let second = ingest(db.as_ref()).expect("ingest again");
         assert_eq!(second.opened, 0, "the second ingest opened items");
+        assert_eq!(first.opened, usize::from(rolled_back), "cycle {cycle}");
+        inbox_opened_cumulative += first.opened as u64;
         let items = db.script_inbox_open().expect("items");
-        let ids: std::collections::BTreeSet<_> = items.iter().map(|i| &i.id).collect();
-        let duplicate_items = (items.len() - ids.len()) as u64;
         tick_us.sort_unstable();
         let row = json!({
             "schema": "celeris.p1c-ops-cycle/1",
@@ -215,7 +225,8 @@ async fn script_ops_restart_drain_retire_cycles() {
             "inbox_opened": first.opened,
             "inbox_reopened_on_second_ingest": second.opened,
             "inbox_open_items": items.len(),
-            "inbox_duplicate_items": duplicate_items,
+            "inbox_opened_cumulative": inbox_opened_cumulative,
+            "restore_rollbacks_cumulative": restore_rollbacks,
             "rss_kib": rss_kib(),
             "rss_start_kib": rss_start,
             "cycle_ms": started.elapsed().as_millis() as u64,
@@ -224,7 +235,7 @@ async fn script_ops_restart_drain_retire_cycles() {
             writeln!(f, "{row}").expect("write");
         }
         assert_eq!(errors, 0, "{row}");
-        assert_eq!(duplicate_items, 0, "{row}");
+        assert_eq!(inbox_opened_cumulative, restore_rollbacks, "{row}");
         drop(script);
         // 3 周に 1 回は再起動の前に bundle を消す（起動時の戻しと受信箱の項目 1 件を起こす）。
         if cycle % 3 == 2 {
@@ -232,6 +243,12 @@ async fn script_ops_restart_drain_retire_cycles() {
         }
         g.shutdown().await;
     }
+    // 起動時の戻しは 4 周目から 3 周ごと（20 周で 6 回）。累計はその数に一致する（重複して開かない）。
+    assert_eq!(
+        inbox_opened_cumulative,
+        (cycles.saturating_sub(1) / 3) as u64,
+        "inbox_opened_cumulative over {cycles} cycles"
+    );
     // route_priority の canary の選択の比率（決定的。bps 500 = 5%）。
     let generation = "01P1CMEASUREGEN";
     for bps in [100u32, 500, 5000] {

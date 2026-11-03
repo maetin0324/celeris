@@ -46,7 +46,7 @@ task 01M6HGFR1TR6PJ8822DHW7NNNT（段階移行 2、親 01M6HG7T6ZKTX239KGH0QY4HF
   違う harness・CoS には効かず、空きの無い source は次の候補へ進む。S5 未解決 5）。
 
 ## 計測（raw は同じ dir の `p1c-ops-cycles.jsonl`）
-コマンド: `CELERIS_P1C_CYCLES=20 CELERIS_P1C_MEASURE_OUT=$PWD/agent-docs/progress/2026-11-03-ts-control-ops/p1c-ops-cycles.jsonl cargo nextest run -p celeris -E 'test(script_ops_restart_drain_retire_cycles)'` → exit 0（1 passed）。
+コマンド: `CELERIS_P1C_CYCLES=20 CELERIS_P1C_MEASURE_OUT=$PWD/agent-docs/progress/2026-11-03-ts-control-ops/p1c-ops-cycles.jsonl cargo nextest run -p celeris -E 'test(/script_ops_restart_drain_retire_cycles/)'` → exit 0（1 passed）。raw は cos-read-fix の変更の後に取り直した。
 1 周 = 再起動（新しい登録簿で `restore`）→ 新しい bundle の配備と登録 → compare への切替（前の generation は draining）→ `reconcile`
 （in-flight 0 で retired）→ lane_rules を 200 回（期限 `SCRIPT_CALL_DEADLINE` 50 ms）→ 受信箱の取り込みを 2 回 → `shutdown`。
 3 周に 1 回は再起動の前に bundle を消し、起動時の戻しを起こす。bundle は手書きの JS、debug build の試験 process、CPU を焼く負荷は無い。
@@ -54,11 +54,11 @@ task 01M6HGFR1TR6PJ8822DHW7NNNT（段階移行 2、親 01M6HG7T6ZKTX239KGH0QY4HF
 | 項目 | 20 周の値 |
 |---|---|
 | error / timeout | 0 / 0（4000 回） |
-| 呼び出しの p95 | 150〜180 µs（最大 518 µs 前後） |
-| tick の待ち（5 回の和）の p95 | 714〜919 µs、予算 200 ms 超えは 0 |
+| 呼び出しの p50 / p95 | p50 134〜150 µs、p95 150〜193 µs、最大 561 µs |
+| tick の待ち（5 回の和） | p50 681〜753 µs、p95 736〜965 µs、最大 1242 µs、予算 200 ms 超えは 0 |
 | 生きた generation | 毎周 1（退役が追いつく） |
-| 受信箱 | 起動時の戻しの周（3・6・9・12・15・18）で 1 件ずつ開き、2 回目の取り込みは 0 件。重複 0 |
-| RSS（試験 process） | 開始 30.9 MB → 周 0 で 76.4 MB → 周 4 以後 82.5〜83.5 MB で横ばい |
+| 受信箱 | 起動時の戻しの周（3・6・9・12・15・18）だけ `inbox_opened`=1、他の周は 0。2 回目の取り込みで開いた項目（`inbox_reopened_on_second_ingest`）は 20 周とも 0 件。周をまたぐ累計 `inbox_opened_cumulative` の最終値は 6 で、戻しの周の数（`restore_rollbacks_cumulative`=6）と一致する。項目は周の中で閉じるので `inbox_open_items` は 20 周とも 0 |
+| RSS（試験 process） | 開始 30.6 MB → 周 0 で 74.1 MB → 周 3 以後 79.2〜80.7 MB（最大 80.7 MB） |
 | canary の比率（route_priority、2 万単位） | bps 100 → 1.01%、500 → 4.985%、5000 → 50.575% |
 
 これは試験 process の計測で、本番 daemon の tick の遅延ではない。本番の値は `GET /daemon` の `script_tick_wait` と 10 分ごとの log 行で読む。
@@ -71,19 +71,35 @@ TS-only の高速経路（`scripts/dev/ts-verify.sh`、cargo 0 回）は変え�
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `cargo run -q -p celerisctl -- script generations --help && cargo run -q -p celerisctl -- script guard --help` → exit 0。
 
+## cos-read-fix（final review の差し戻し 3 点の修正）
+1. CoS の run で読み取りの CLI が gate で落ちた欠陥: `crates/celerisctl/src/commands/script.rs` に `cos_read_only(&ScriptCommand)` を足し、
+   `Domains`・`Generations(List)`・`Guard(Status)` だけを読み取りとする。`crates/celerisctl/src/main.rs` の `read_only` は Script の行を
+   この関数に任せる。変更系（mode・register・retire・guard clear）は入らず、従来どおり `cos_mapped` で `/cos/operations` に包む（権限は広げない）。
+   試験: `script_cos_read_only_is_domains_generations_list_and_guard_status`・`script_cos_read_only_and_request_of_partition_every_subcommand`
+   （全 subcommand が読み取りか `request_of` のどちらか一方だけに入る）、task-api の `script_cos_read_only_gets_pass_with_run_credential`
+   （CoS の run credential で `GET /script/domains`・`GET /script/generations` が 200、`cos_operations` の行は 0）。
+   手で確かめた: `CELERIS_COS_RUN_CREDENTIAL=review-dummy celerisctl script --config /nonexistent/x.toml generations list`（`guard status` も）が
+   gate を通り `config /nonexistent/x.toml: failed to read config` まで進む（exit 1、`domains` と同じ）。
+2. `GuardCommand::Clear` の help と module doc: operator・MCP は 403、CoS の run は `/cos/operations` に包まれて 422
+   `cos_operation_not_allowed`（human_only）と書き分けた。試験 `script_cos_read_only_guard_clear_help_names_403_and_422`。
+3. `crates/celeris/src/daemon/script_ops_measure_tests.rs`: `inbox_duplicate_items` を消し、`inbox_opened_cumulative`・
+   `restore_rollbacks_cumulative` を足した。周ごとに「戻しの周だけ `inbox_opened`=1」を、終わりに「累計 = (周 − 1) / 3」（20 周で 6）を assert する。
+   raw を取り直し、上の表を新しい値にした。
+
 ## commit（件名）
 - phase p1c: script 制御の管理 CLI（canary・generations・guard）、未配備の登録を 409 に、tick の待ちの snapshot と log、script-guard の増分の見回り、周回の計測
 - phase p1c: CoS の包みの試験を commands/script.rs に移し、main.rs の inline 試験の大きさを戻す
 - phase p1c: route_priority の上書きの試験の型を直す
 - phase p1c: 進捗を書く
+- cos-read-fix: CoS の run で script の読み取り CLI を通し、guard clear の help と受信箱の累計の根拠を直す
 
 ## 未解決
 1. 本番 daemon での `script_tick_wait` の値と RSS の推移は未確認（本番は全領域 `rust`。人が compare 以上にした後に `GET /daemon` で読む）。
 2. 見回りの cursor は process の中だけにあり、再起動後の最初の見回りは `script_compare_log` を 1 回全件読む。
 3. 計測は debug build の試験 process で、dispatcher の実 tick の遅延（`slow tick`）は測っていない。dispatcher の中で 50 ms の判定を
    5 回待たせる試験は無い（S5 未解決 5 の後半）。
-4. 二重の受信箱の知らせ（CoS 経由 1 回・受信箱 1 回。S5 未解決 8）の扱いは人の確認待ちのまま。この task では受信箱の項目が同じ event で
-   2 件にならないことだけを確かめた。
+4. 二重の受信箱の知らせ（CoS 経由 1 回・受信箱 1 回。S5 未解決 8）の扱いは人の確認待ちのまま。この task で確かめたのは、
+   戻し 1 回につき項目が 1 件だけ開き（累計 6 = 戻し 6 回）、2 回目の取り込みでは開かないことだけ。
 5. `script guard clear` の CoS の拒否は registry の EXCLUDED に頼る（CLI は包むだけ）。
 
 ## 次の gate

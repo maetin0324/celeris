@@ -16,6 +16,9 @@ tasks: [01M6HGFR1TR6PJ8822DHW7NNNT]
    `/cos/operations` に包み、`guard clear` は registry の EXCLUDED（`human_only`）で 422 `cos_operation_not_allowed` になる。
    全体の `--reason`（CoS の監査の理由）と重ならないよう、退役と解除の理由は `--retire-reason`・`--clear-reason` にする
    （mode の `--mode-reason` と同じ形）。
+   CoS の run で包まずに直接送るのは読み取り（`script domains`・`generations list`・`guard status`。`GET /script/domains`・
+   `GET /script/generations`）だけで、判定は `commands/script.rs` の `cos_read_only` に置く。全 subcommand は読み取りか
+   `request_of`（包む変更系）のどちらか一方に入る（試験で固定）。
 2. 登録（`POST /script/generations`）で配備先 `<state_dir>/script-bundles/<sha256>/` の dir が無いときは、`invalid` を記録せず
    409 `script_bundle_not_deployed` を返す（`ScriptGenerationError::NotDeployed`）。付記 S5-1 の 6（`invalid` の hash は登録し直せない）の
    対象は「配備された bundle が検証に落ちた」場合だけに狭める。dir が在って manifest・hash・selftest 等に落ちたら今までどおり `invalid`。

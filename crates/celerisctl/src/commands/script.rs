@@ -11,8 +11,10 @@
 //! - `script guard clear --clear-reason …` — `POST /script/guard/clear`。
 //!
 //! 認可は API が決める（CLI は権限を足さない）。`→canary`（比率の変更を含む）・`→ts`・`guard clear` は人の API token の
-//! 主体だけが通り、外部 operator・MCP・CoS は 403 `script_mode_requires_human`。CoS の run では変更系を
-//! `/cos/operations` に包み、`guard clear` は registry の EXCLUDED（human_only）で rejected になる。
+//! 主体だけが通る。外部 operator・MCP の token は 403（mode は `script_mode_requires_human`）。CoS の run では変更系を
+//! `/cos/operations` に包むので、`→canary`・`→ts` は包んだ操作の中で 403 になり rejected の記録が残る。`guard clear` は
+//! registry の EXCLUDED（human_only）なので 422 `cos_operation_not_allowed` で rejected になる。CoS の run で包まずに
+//! 直接読むのは `cos_read_only` が返す読み取り（`domains`・`generations list`・`guard status`）だけ。
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -64,7 +66,10 @@ pub enum GenerationsCommand {
 pub enum GuardCommand {
     /// Print whether the script guard is halted and why.
     Status(DomainsArgs),
-    /// Clear the script-guard halt (human API token only; operator, MCP and CoS get 403).
+    /// Clear the script-guard halt (human API token only).
+    ///
+    /// Operator and MCP tokens get 403. In a CoS run the CLI wraps this in `/cos/operations`, which
+    /// refuses it with 422 `cos_operation_not_allowed` (human_only).
     Clear(GuardClearArgs),
 }
 
@@ -189,6 +194,18 @@ pub fn run(config_path: Option<PathBuf>, command: ScriptCommand) -> Result<ExitC
         _ => {}
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The read-only subcommands a CoS run may send directly with its run credential (`GET` only). Every
+/// other subcommand is mutating and has a `request_of` request, which a CoS run wraps in
+/// `/cos/operations`; this list never grants more than reading.
+pub fn cos_read_only(command: &ScriptCommand) -> bool {
+    matches!(
+        command,
+        ScriptCommand::Domains(_)
+            | ScriptCommand::Generations(GenerationsCommand::List(_))
+            | ScriptCommand::Guard(GuardCommand::Status(_))
+    )
 }
 
 /// The mutating request (method, path under `/api/v1`, body) of `script mode`, `generations
@@ -497,5 +514,83 @@ mod tests {
             ScriptCommand::Guard(GuardCommand::Clear(GuardClearArgs { reason: "x".into() }));
         let (m, p, _) = request_of(&clear).expect("clear");
         assert!(!row(m, &p), "guard clear must not be an ALLOWED row");
+    }
+
+    fn every_command() -> Vec<ScriptCommand> {
+        vec![
+            ScriptCommand::Domains(DomainsArgs { json: false }),
+            mode("lane_rules", ModeArg::Rust, None),
+            mode("route_priority", ModeArg::Canary, Some("ab12")),
+            ScriptCommand::Generations(GenerationsCommand::List(DomainsArgs { json: true })),
+            ScriptCommand::Generations(GenerationsCommand::Register(RegisterArgs {
+                bundle_sha256: "a".repeat(64),
+            })),
+            ScriptCommand::Generations(GenerationsCommand::Retire(RetireArgs {
+                id: "g1".into(),
+                reason: None,
+            })),
+            ScriptCommand::Guard(GuardCommand::Status(DomainsArgs { json: false })),
+            ScriptCommand::Guard(GuardCommand::Clear(GuardClearArgs { reason: "x".into() })),
+        ]
+    }
+
+    /// CoS の run で包まずに通るのは読み取り 3 つだけで、変更系（mode・register・retire・guard clear）は入らない。
+    #[test]
+    fn script_cos_read_only_is_domains_generations_list_and_guard_status() {
+        let read: Vec<String> = every_command()
+            .into_iter()
+            .filter(cos_read_only)
+            .map(|c| format!("{c:?}"))
+            .collect();
+        assert_eq!(read.len(), 3, "{read:?}");
+        assert!(read[0].starts_with("Domains"));
+        assert!(read[1].starts_with("Generations(List"));
+        assert!(read[2].starts_with("Guard(Status"));
+        for command in every_command() {
+            if matches!(
+                command,
+                ScriptCommand::Mode(_)
+                    | ScriptCommand::Generations(
+                        GenerationsCommand::Register(_) | GenerationsCommand::Retire(_)
+                    )
+                    | ScriptCommand::Guard(GuardCommand::Clear(_))
+            ) {
+                assert!(!cos_read_only(&command), "{command:?}");
+            }
+        }
+    }
+
+    /// 全 subcommand は「読み取り」か「`request_of` の要求（CoS の run では `/cos/operations` に包む）」のどちらか一方に入る。
+    /// 新しい subcommand をどちらにも入れ忘れると、CoS の run の gate で落ちる。両方に入ると権限を広げうる。
+    #[test]
+    fn script_cos_read_only_and_request_of_partition_every_subcommand() {
+        for command in every_command() {
+            assert_ne!(
+                cos_read_only(&command),
+                request_of(&command).is_some(),
+                "{command:?}"
+            );
+            if cos_read_only(&command) {
+                // 読み取りの CLI は GET だけを送る（`run` の match）。
+                assert!(request_of(&command).is_none());
+            }
+        }
+    }
+
+    /// clap の help（`Command::render_long_help`）が CoS の run の 422 と operator・MCP の 403 を書き分ける。
+    #[test]
+    fn script_cos_read_only_guard_clear_help_names_403_and_422() {
+        use clap::CommandFactory;
+        #[derive(clap::Parser)]
+        struct Wrap {
+            #[command(subcommand)]
+            command: GuardCommand,
+        }
+        let mut cmd = Wrap::command();
+        let clear = cmd.find_subcommand_mut("clear").expect("clear");
+        let help = clear.render_long_help().to_string();
+        assert!(help.contains("Operator and MCP tokens get 403"), "{help}");
+        assert!(help.contains("422 `cos_operation_not_allowed`"), "{help}");
+        assert!(!help.contains("CoS get 403"), "{help}");
     }
 }

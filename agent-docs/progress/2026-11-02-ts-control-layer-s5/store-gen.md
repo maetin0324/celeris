@@ -1,14 +1,14 @@
 ---
 title: store-gen — generation の状態・canary_bps・script_guard の計数を store に足す
 tasks: [01M6FPPJN7A8H427MXFVYFY7H4]
-status: blocked
+status: done
+completed: 2026-11-03
 updated: 2026-11-03
 ---
 # store-gen — generation の状態・canary_bps・script_guard の計数を store に足す
 
 ## 結論
-付記 S5-1・S5-3・S5-4・S5-5・S5-7 の store 側（migration 0105 と task-core の関数）を実装した。task-core の試験はすべて通る。
-ただし範囲 check の外に 2 行の直しが要り、範囲外の試験 3 件が付記 S5-4 の規則（`draining` は mode の行の行き先にできない）で落ちる。範囲を広げる再計画を plan_issue で求めた（「未解決」）。
+付記 S5-1・S5-3・S5-4・S5-5・S5-7 の store 側（migration 0105 と task-core の関数）を実装し、範囲を広げた再計画の後に範囲外の追従（task-dispatch の generation の判定・campaign の版 105・試験 3 件）を仕上げた。提出時の HEAD で test-affected・clippy・fmt が通る。
 
 ## 変更（commit `phase s5: store-gen: …`）
 - `crates/task-core/migrations/0105_script_generations_s5.sql`
@@ -23,7 +23,7 @@ updated: 2026-11-03
 - `crates/task-core/src/store/script_guard.rs`（新）: `script_guard_observe`（数え始めた mode と今の mode が違えば数え直す。`canary`・`ts` で条件に当たれば同じ transaction で actor `system:script-guard` で `rust` へ戻す。安全違反は mode にかかわらず `invalid`）、`script_compare_append_observed`・`script_compare_log_append_observed`（追記と計数を 1 transaction）、`script_guard_halt`・`script_guard_clear`（人だけ）・`script_guard_halted`・`script_guard_counters`。
 - `crates/task-api/src/script_domains.rs`: 新しい error の写し（最小の追従）。API の受け付けは変えていない（`canary` は `accepted_for` で今も 422）。
 - task-core の版数の固定（`SCHEMA_VERSION` 104 → 105）を直した。
-- 範囲外（再計画で範囲に入れるよう求めた）: `crates/task-dispatch/src/dispatcher/script_compare.rs` の generation の判定を `Loaded` から `Active` へ、`crates/campaign/src/ops_r1_trace.rs` の `SUPPORTED_SCHEMA_VERSIONS` に 105。
+- 再計画で範囲に入れた追従: `crates/task-dispatch/src/dispatcher/script_compare.rs` の generation の判定を `Loaded` から `Active` へ、`crates/campaign/src/ops_r1_trace.rs` の `SUPPORTED_SCHEMA_VERSIONS` に 105。
 
 ## 付記 S5 との対応と決めたこと
 - 付記 S5-12 の試験名はそのまま使った（`script_generation_state_transitions`・`script_generation_rejected_rows_migrate_to_invalid`・`script_generation_events_append_only`・`script_domain_canary_bps_check`・`script_domain_mode_cas_moves_generation_states`・`script_guard_observe_counts_per_generation`・`script_guard_evaluate_each_stop_condition`・`script_guard_state_survives_reopen`）。すべて `store::script_domains::tests::` の下にあり、`test(script_domain)` の filter に入る。足した試験: `script_generation_state_transition_table`・`script_domain_illegal_generation_transition_changes_nothing`・`script_domain_generation_limit_two_live`・`script_domain_cas_conflict_leaves_generation_state_and_records`・`script_domain_mode_rolls_back_when_generation_event_fails`・`script_domain_promote_through_canary_to_ts_and_back`・`script_domain_stage_and_human_rules_change_nothing`・`script_domain_checkpoint_versions_must_cover_stored`・`script_guard_observe_rolls_back_canary_with_guard_actor`・`script_guard_safety_violation_invalidates_generation`・`script_domain_refused_while_guard_halted`・`script_guard_append_observed_counts_after_dedup`。
@@ -31,16 +31,19 @@ updated: 2026-11-03
 - `NewScriptGeneration.state` は他 crate の試験が struct literal で書くので残した（`loaded` だけ受ける）。
 - S4 の `compare→ts`（`cos_digest` だけ）は API の受け付けを変えないため store に残した（`ts_may_skip_canary`）。
 
-## 証拠（基準は `$CELERIS_WU_BASE`）
-- `cargo nextest run -p task-core -p celeris-campaign` → 2118 passed、9 skipped。
-- `cargo nextest run -p task-api -p task-dispatch -p celeris -E 'test(/script_domain|cos_digest|script_compare|ops_r1_attr|ops_r1_trace/)'` → 121 run、118 passed、3 failed（下の未解決 2）。
-- 最初の `bash scripts/dev/test-affected.sh`（7 分）は exit 100。原因は版数の固定・schema の説明文・ops_r1 の版の表・下の 3 件で、範囲内の分は直した。直した後の test-affected は未実行（時間切れ）。
-- `cargo clippy --workspace -- -D warnings` → exit 0（deno_core の既存の警告 1 件だけ）。`cargo fmt --all -- --check` → exit 0。
+## 証拠（基準は `$CELERIS_WU_BASE`、提出時の HEAD で実行）
+- `cargo nextest run -p task-api -p task-dispatch -p celeris-campaign -E 'test(/script_domain|cos_digest|script_compare|ops_r1/)'` → 128 passed。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 7130 passed、21 skipped。test-ts-verify 18 passed、0 failed。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- 範囲 check の path（`sh "$CELERIS_WU_SCOPE_PATHS"`）は再計画で許した場所だけ。
+
+## 試験の追従（commit `phase s5: store-gen: draining の generation へ戻す試験 3 件を retired→再登録の形に直す`）
+- `crates/task-api/tests/script_domains.rs`: 助け関数 `rearm_generation`（`retired` にしてから `script_generation_record` で `loaded` に戻す）を足し、`script_domain_mode_ts_rollback_by_anyone` の `rust` の後の compare の前で呼ぶ。
+- `crates/task-dispatch/src/dispatcher/tests/cos_digest_script.rs`: `set_mode` が、同じ bundle の generation が `draining` なら `retired` にしてから登録し直す。`cos_digest_script_mode_back_to_rust_and_generation_change_mid_compare` と `cos_digest_script_ts.rs` の `cos_digest_script_ts_mode_and_generation_change_during_op_await`（`enter_ts` 経由）がこれで通る。ADR の規則（`draining` は行き先にできない）は store で弱めていない。
+- `crates/celeris/tests/` の Loaded を前提とする assert は test-affected で落ちなかったので直していない。
 
 ## 未解決
-1. 範囲 check に入っていない 2 file の 1 行ずつの直しが要る: `crates/task-dispatch/src/dispatcher/script_compare.rs`（`active` を有効な generation とみなす）、`crates/campaign/src/ops_r1_trace.rs`（版 105 を読む）。
-2. 範囲外の試験 3 件が、付記 S5-4 の「前提は `loaded`・`active`」により落ちる。どれも `rust` に戻した直後に同じ generation へ戻る（その generation は `draining`）: `task-api` の `script_domain_mode_ts_rollback_by_anyone`、`task-dispatch` の `cos_digest_script_mode_back_to_rust_and_generation_change_mid_compare`・`cos_digest_script_ts_mode_and_generation_change_during_op_await`。直し方は試験の側で `script_generation_transition(retired)` → `script_generation_record` で `loaded` に戻してから切り替える（ADR どおり）。
-3. 範囲を広げた後で test-affected・clippy・fmt を提出時の HEAD で走らせる。
+- なし（store-gen の範囲）。dispatcher から `script_compare_append_observed` 等への呼び替えは下の提案のとおり canary-dispatch に残る。
 
 ## 提案
 - 再計画で store-gen の範囲に `crates/task-dispatch/src/dispatcher/script_compare.rs`・`crates/task-dispatch/src/dispatcher/tests/cos_digest_script.rs`（と `ts` の子 module）・`crates/task-api/tests/script_domains.rs`・`crates/campaign/src/ops_r1_trace.rs` を足し、objective に「作り直さず、試験の追従と検証で仕上げる」と書く。

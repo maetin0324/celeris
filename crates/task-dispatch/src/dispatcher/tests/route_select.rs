@@ -1263,7 +1263,9 @@ fn route_priority_canary_override_reorders_only_its_harness() {
 
     // 上書きの先頭の source に空きが無ければ、次の候補（Rust の admission）へ進む。
     let mut full = state.clone();
-    full.accounts.available.remove("codex_oauth");
+    full.accounts
+        .available
+        .remove(&SourceId::from("codex_oauth"));
     let pick = route_select(&input("coding"), &r, &full).0.unwrap();
     assert_eq!(pick.candidate.source.as_ref(), "claude_oauth");
 }

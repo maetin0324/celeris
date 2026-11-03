@@ -36,6 +36,8 @@ updated: 2026-11-03
 | `config/skills/cos-operator/operations.md` | `cos_operator_skill_table_matches_allowed` が skill の操作表と ALLOWED の一致を見る。2 行を足し、mode_set の行を S5-4 に合わせた。`metadata.version`（policy_version）は上げていない |
 | `crates/task-core/src/script_compare/tests.rs` | 消した `accepted_for` の表の検査を除いた |
 
+3 file を基準（`$CELERIS_WU_BASE`）の内容に戻して確かめた（確かめた後で戻した）。ADR と skill が基準のままだと `cos_ops_registry_matches_adr_domain_assignment_and_exclusions` と `cos_operator_skill_table_matches_allowed` が落ち（`cargo nextest` exit 100）、`script_compare/tests.rs` が基準のままだと task-core の lib test が `accepted_for` の E0599 で compile できない。範囲 check の正規表現を広げるしかないので、計画の問題として申告した（`plan_issue`）。
+
 ## 試験（付記 S5-12 の名前との対応）
 フィルタ `test(/script_domain|script_mode|cos_op/)` に入るよう、generation の試験は `script_domain_generation_*` にした。
 | 付記 S5-12 | 実装 |

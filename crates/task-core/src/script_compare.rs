@@ -511,8 +511,8 @@ pub struct NewScriptGeneration {
     pub state: ScriptGenerationState,
 }
 
-/// mode の変更・読み出しの失敗。API は `UnknownDomain` を 404、`ModeNotEnabled` を 422
-/// （`script_mode_not_enabled`）、`VersionConflict` を 409、generation の不備を 422 に写す。
+/// mode の変更・読み出しの失敗。API は `UnknownDomain` を 404、`VersionConflict` を 409、
+/// generation の不備を 422 に写す。
 #[derive(Debug, thiserror::Error)]
 pub enum ScriptDomainError {
     #[error("unknown script domain `{0}`")]

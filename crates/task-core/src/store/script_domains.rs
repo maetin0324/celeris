@@ -20,7 +20,6 @@ use crate::script_compare::{
     ScriptDomain, ScriptDomainError, ScriptDomainModeRow, ScriptGeneration, ScriptGenerationEvent,
     ScriptGenerationEventKind, ScriptGenerationState, ScriptGenerationTransition, ScriptMode,
     ScriptModeChange, ScriptModeChangeOutcome, actor_may_enable_ts, checkpoint_versions_cover,
-    ts_may_skip_canary,
 };
 use crate::script_guard::readiness;
 
@@ -289,7 +288,7 @@ impl SqliteStore {
     /// - 全体の停止の間は `rust` 以外を `GuardHalted` で拒む。
     /// - `version` が `expected_version` と違う（他の更新が先に入った）→ `VersionConflict`。
     /// - `canary` の元は同じ generation の `compare`・`canary`、`ts` の元は同じ generation の `canary`
-    ///   （`cos_digest` だけ同じ generation の `compare` も。[`ts_may_skip_canary`]）。違えば `RequiresPreviousStage`。
+    ///   （S4 の `cos_digest` の `compare→ts` は S5-4 で消した）。違えば `RequiresPreviousStage`。
     /// - 指す generation は `loaded`・`active` で manifest の `domains` にその領域があり、別の generation へ移るときは
     ///   `checkpoint_versions` が保存済みの版を全部含む（S5-5）。
     /// - `compare→canary`・`canary→ts` は計数が (f) の条件を満たす（`CanaryNotReady`）。
@@ -354,11 +353,7 @@ impl SqliteStore {
             ScriptMode::Canary => {
                 same_generation && matches!(current.mode, ScriptMode::Compare | ScriptMode::Canary)
             }
-            ScriptMode::Ts => {
-                same_generation
-                    && (current.mode == ScriptMode::Canary
-                        || (current.mode == ScriptMode::Compare && ts_may_skip_canary(domain)))
-            }
+            ScriptMode::Ts => same_generation && current.mode == ScriptMode::Canary,
         };
         if !stage_ok {
             return Err(ScriptDomainError::RequiresPreviousStage {

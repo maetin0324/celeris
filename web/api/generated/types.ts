@@ -5651,9 +5651,11 @@ export type ScriptDomain = "lane_rules" | "route_priority" | "cos_digest";
 
 export type ScriptDomainList = {
   "domains": Array<ScriptDomainView>;
+  "guard_halted"?: string | null;
 };
 
 export type ScriptDomainModeBody = {
+  "canary_bps"?: number | null;
   "expected_version": number;
   "generation"?: string | null;
   "mode": ScriptMode;
@@ -5668,12 +5670,48 @@ export type ScriptDomainModeResult = {
 
 export type ScriptDomainView = {
   "bundle_sha256"?: string | null;
+  "canary_bps"?: number | null;
   "domain": ScriptDomain;
   "generation_id"?: string | null;
+  "generation_state"?: ScriptGenerationState | null;
   "mode": ScriptMode;
   "updated_at": string;
   "updated_by": string;
   "version": number;
+};
+
+export type ScriptGenerationList = {
+  "generations": Array<ScriptGenerationView>;
+};
+
+export type ScriptGenerationRegisterBody = {
+  "bundle_sha256": string;
+};
+
+export type ScriptGenerationRetireBody = {
+  "reason"?: string | null;
+};
+
+export type ScriptGenerationState = "loaded" | "active" | "draining" | "retired" | "invalid";
+
+export type ScriptGenerationView = {
+  "bundle_sha256": string;
+  "checkpoint_versions": Array<number>;
+  "created_at": string;
+  "domains": Array<string>;
+  "host_api": string;
+  "id": string;
+  "schema_sha256": string;
+  "state": ScriptGenerationState;
+  "updated_at": string;
+};
+
+export type ScriptGuardClearBody = {
+  "reason": string;
+};
+
+export type ScriptGuardClearResult = {
+  "cleared": boolean;
 };
 
 export type ScriptMode = "rust" | "compare" | "canary" | "ts";

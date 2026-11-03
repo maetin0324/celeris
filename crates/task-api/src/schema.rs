@@ -245,6 +245,13 @@ pub struct ApiV1Schema {
     pub script_domains: crate::script_domains::ScriptDomainList,
     pub script_domain_mode_body: crate::script_domains::ScriptDomainModeBody,
     pub script_domain_mode_result: crate::script_domains::ScriptDomainModeResult,
+    /// 付記 S5-1・S5-4: generation の一覧・登録・退役と、script-guard の停止の解除。
+    pub script_generations: crate::script_generations::ScriptGenerationList,
+    pub script_generation: crate::script_generations::ScriptGenerationView,
+    pub script_generation_register_body: crate::script_generations::ScriptGenerationRegisterBody,
+    pub script_generation_retire_body: crate::script_generations::ScriptGenerationRetireBody,
+    pub script_guard_clear_body: crate::script_domains::ScriptGuardClearBody,
+    pub script_guard_clear_result: crate::script_domains::ScriptGuardClearResult,
     /// Phase 78（ADR-0056 D4）: `GET /mcp/clients` と `GET /mcp/calls?client=`。
     pub mcp_clients: crate::mcp_admin::McpClientsView,
     pub mcp_calls: crate::mcp_admin::McpCallsView,

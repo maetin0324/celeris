@@ -567,7 +567,11 @@ token_file = "api.token"
 | 225 | PATCH | `/config/fields` | 動的な欄を検証してから config.toml に書き戻し（コメント・並びは保つ）、稼働中の daemon に入れる。`{changes:[{key, value}]}`、`value: null` は欄を消す。起動時のみ・種・secret の欄、不正値は 422（`config_restart_required` / `config_invalid`）で何も変えない。人だけ（CoS の operation には無い。**管理系**） | 200 `ConfigPatchResult` | celeris + `config_events` |
 | 226 | GET | `/config/events` | config の変更履歴（新しい順、最大 200 件。誰が・いつ・どの欄を・前後の値。secret の値は出ない） | `ConfigEventList` | store `config_events`（追記専用） |
 | 227 | GET | `/script/domains` | TS 制御層の領域ごとの mode・active generation（id と `bundle_sha256`）・`version`（ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5。§3.134.1） | `ScriptDomainList` | store `script_domain_modes` |
-| 228 | PUT | `/script/domains/{domain}/mode` | TS 制御層の領域の mode を `rust` / `compare` / `ts` に切り替える（`version` の CAS。`ts` は `cos_digest` だけ・人の主体だけ。`canary` と他領域の `ts` は 422 `script_mode_not_enabled`、版の不一致は 409 `script_domain_version_conflict`。§3.134.2） | `ScriptDomainModeResult` | store `script_domain_set_mode` |
+| 228 | PUT | `/script/domains/{domain}/mode` | TS 制御層の領域の mode を `rust` / `compare` / `canary` / `ts` に切り替える（`version` の CAS。`canary`・`ts` は人の主体だけで、同じ generation の前の段から。版の不一致は 409 `script_domain_version_conflict`。付記 S5-4。§3.134.2） | `ScriptDomainModeResult` | store `script_domain_set_mode`・`script_domain_set_canary` |
+| 229 | GET | `/script/generations` | TS 制御層の generation の一覧（古い順。状態・manifest の `domains`。付記 S5-1。§3.134.3） | `ScriptGenerationList` | store `script_generations` |
+| 230 | POST | `/script/generations` | 配備済みの bundle を daemon が新しい isolate で検証して `loaded` で登録する（未接続は 503 `script_runtime_unavailable`。§3.134.3） | `ScriptGenerationView` | celeris（`ScriptGenerationControl`）+ store `script_generation_record` |
+| 231 | POST | `/script/generations/{id}/retire` | generation を退役させる（`active` は 409 `script_generation_active`。§3.134.3） | `ScriptGenerationView` | celeris（`ScriptGenerationControl`）+ store `script_generation_transition` |
+| 232 | POST | `/script/guard/clear` | script-guard の全体の停止を解く（人の主体だけ。付記 S5-4。§3.134.4） | `ScriptGuardClearResult` | store `script_guard_clear` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3827,37 +3831,68 @@ browser wait が参照していれば 409 `site_policy_in_use`（`node_ids`・`w
 `scoring`・終端（`passed` / `failed` / `error` / `cancelled`）は 409 `eval_trial_not_cancellable`、無い id は 404 `eval_trial_not_found`。
 本文は取らない（空か `{}`）。
 
-### 3.134 TS 制御層の領域の mode（ADR 2026-11-02-ts-control-layer-boundary (d)・付記 S2-4・S2-5）
+### 3.134 TS 制御層の領域の mode と generation（ADR 2026-11-02-ts-control-layer-boundary (d)・付記 S2-4・S2-5・S5-1・S5-4）
 
-領域（`lane_rules`・`route_priority`・`cos_digest`）ごとの mode と active generation の正本は表 `script_domain_modes`（migration 0103、`cos_digest` の行は migration 0104。付記 S4-4）。
-mode は `rust` → `compare` → `canary` → `ts`。S2 の API が変更先として受けるのは `rust` と `compare` だけ。
+領域（`lane_rules`・`route_priority`・`cos_digest`）ごとの mode と active generation の正本は表 `script_domain_modes`（migration 0103、`cos_digest` の行は migration 0104、`canary_bps` は migration 0105）。
+mode は `rust` → `compare` → `canary` → `ts`。全領域で全 mode を受ける（付記 S5-4）。
 config の欄は無い（mode は DB の表が持つ）。CLI は `celerisctl script domains` と `celerisctl script mode <domain> rust|compare`。
 
 #### 3.134.1 `GET /script/domains` → 200 `ScriptDomainList`
 
-`{domains: [ScriptDomainView]}`（`domain` の順）。`ScriptDomainView` は `domain`・`mode`・`generation_id`・`bundle_sha256`
-（`rust` ではどちらも `null`）・`version`（CAS の版）・`updated_at`・`updated_by`。query は取らない（付けたら 400）。
+`{domains: [ScriptDomainView], guard_halted}`（`domain` の順）。`ScriptDomainView` は `domain`・`mode`・`generation_id`・
+`bundle_sha256`・`generation_state`（`rust` ではどれも `null`）・`canary_bps`（`canary` 以外は `null`）・`version`（CAS の版）・
+`updated_at`・`updated_by`。`guard_halted` は script-guard の全体の停止の理由（止まっていなければ `null`）。query は取らない（付けたら 400）。
 
 #### 3.134.2 `PUT /script/domains/{domain}/mode` → 200 `ScriptDomainModeResult`
 
-本文 `ScriptDomainModeBody` `{mode, expected_version, generation?, reason?}`（`deny_unknown_fields`）。`generation` は
-`compare`・`ts` で使う generation の `bundle_sha256`（`compare`・`ts` では必須、`rust` では書かない）。応答は
-`{changed, event_id, domain: ScriptDomainView}`。
+本文 `ScriptDomainModeBody` `{mode, expected_version, generation?, canary_bps?, reason?}`（`deny_unknown_fields`）。`generation` は
+`compare`・`canary`・`ts` で使う generation の `bundle_sha256`（必須。`rust` では書かない）。`canary_bps` は `canary` の比率
+（1〜9999 の万分率。`canary` では必須、他では書かない）。応答は `{changed, event_id, domain: ScriptDomainView}`。
 
 - 表の更新は `UPDATE … WHERE domain=? AND version=?` の CAS で、同じ transaction で追記専用の `script_domain_events` に
-  `script_domain_mode_changed`（`actor` は要求の主体、`reason` は本文の `reason`）を書く。
-- 同じ mode・同じ generation への変更は表も記録も変えずに 200（`changed: false`、`event_id: null`）。
+  `script_domain_mode_changed`（`actor` は要求の主体、`reason` は本文の `reason`）を書き、generation の状態を動かす（付記 S5-2）。
+- 同じ mode・同じ generation・同じ `canary_bps` への変更は表も記録も変えずに 200（`changed: false`、`event_id: null`）。
 - 404 `script_domain_not_found`: 未知の領域名。
-- 422 `script_mode_not_enabled`: `canary`（どの領域でも）と `cos_digest` 以外の `ts`（表を変えない。境界 ADR 付記 S4-14）。
-- 403 `script_mode_requires_human`: `ts` への切り替えを人の API token 以外の主体（外部 operator・MCP・CoS・`system:*`）が求めた。
-- 422 `script_mode_ts_requires_compare`: `ts` の元が同じ generation の `compare` でない（`rust` からの直行・generation の同時変更）。
-  戻し（`ts`→`compare`・`ts`→`rust`）は認証された誰でも行える。
+- 403 `script_mode_requires_human`: `canary`（`canary_bps` の変更を含む）・`ts` への切り替えを人の API token 以外の主体
+  （外部 operator・MCP・CoS・`system:*`）が求めた。
+- 422 `script_mode_requires_previous_stage`: `canary` の元が同じ generation の `compare`（または `canary`）でない、`ts` の元が同じ
+  generation の `canary` でない（`rust`・`compare` からの直行、generation の同時変更）。戻し（`→rust`、`canary`・`ts`→`compare`）は
+  認証された誰でも行える。
+- 422 `script_canary_not_ready`: `compare→canary`・`canary→ts` で script-guard の計数が (f) の「進む条件」を満たさない
+  （`extra.readiness` に計数）。
+- 409 `script_guard_halted`: script-guard の全体の停止の間に `rust` 以外を求めた（`extra.halted` に理由）。
 - 409 `script_domain_version_conflict`: `expected_version` が表の `version` と違う（`extra` に `expected_version` と `version`）。
-- 422 `script_generation_invalid`: `compare`・`ts` に `generation` が無い・`rust` に `generation` がある・その `bundle_sha256` の
-  generation が無い・`loaded` でない・manifest の `domains` にその領域が無い。
+- 422 `script_checkpoint_incompatible`: 別の generation へ移るとき、その manifest の `checkpoint_versions` が保存済みの版を含まない（付記 S5-5）。
+- 422 `script_generation_invalid`: `compare`・`canary`・`ts` に `generation` が無い・`rust` に `generation` がある・その
+  `bundle_sha256` の generation が無い・`loaded`・`active` でない・manifest の `domains` にその領域が無い・`canary_bps` が範囲外か
+  `canary` 以外に付いている。
 - 400 `bad_request`: JSON の誤り・未知欄・未知の mode 名・query を付けた。
+- どの拒否でも表・`script_domain_events`・`script_generation_events` は変わらない。
 - CoS は `/cos/operations` の `script_domain.mode_set`（admin の ALLOWED）で同じ関数を呼ぶ。直接の PUT は 422
-  `cos_audit_context_required`。CoS の `ts` は effect の前に 403 `script_mode_requires_human`（`human_only`）で rejected になる。本番で `compare` にするのは人の手順で、進行中の測定 daemon では切り替えない（境界 ADR (g)）。
+  `cos_audit_context_required`。CoS の `canary`・`ts` は effect の前に 403 `script_mode_requires_human`（`human_only`）で rejected に
+  なる。本番で mode を変えるのは人の手順で、進行中の測定 daemon では切り替えない（境界 ADR (g)）。
+
+#### 3.134.3 generation の一覧・登録・退役（付記 S5-1）
+
+- `GET /script/generations` → 200 `ScriptGenerationList` `{generations: [ScriptGenerationView]}`（古い順）。`ScriptGenerationView` は
+  `id`・`bundle_sha256`・`host_api`・`schema_sha256`・`state`（`loaded`・`active`・`draining`・`retired`・`invalid`）・`domains`・
+  `checkpoint_versions`・`created_at`・`updated_at`。
+- `POST /script/generations` 本文 `{bundle_sha256}`（64 桁の小文字 hex）→ 200 `ScriptGenerationView`。bundle の本文は受け取らない
+  （`script-deploy` が `<state_dir>/script-bundles/<bundle_sha256>/` に置く）。daemon（`ScriptGenerationControl`）が新しい isolate で
+  load・検証し、`loaded` で記録する。同じ hash が `loaded`・`active`・`draining` なら何も変えずに今の行を返し、`retired` なら
+  load し直して `loaded` に戻す。422 `script_generation_invalid`（hash の形・検証の失敗。失敗は `invalid` で記録される）、422
+  `script_generation_invalidated`（`invalid` の hash）、409 `script_generation_limit`（生きた generation が 2 つ）、503
+  `script_runtime_unavailable`（daemon に `[script]` が無い）。
+- `POST /script/generations/{id}/retire` 本文 `{reason?}`（空でもよい）→ 200 `ScriptGenerationView`。`loaded`・`draining` を
+  `retired` にする。404 `script_generation_not_found`、409 `script_generation_active`、409 `script_generation_transition`
+  （`retired`・`invalid` から）、503 `script_runtime_unavailable`。
+- 登録と退役は人・外部 operator・CoS operations（`script_generation.register`・`script_generation.retire`）が行える。
+
+#### 3.134.4 `POST /script/guard/clear` → 200 `ScriptGuardClearResult`
+
+本文 `{reason}`。script-guard の全体の停止（付記 S5-7 の `halted`）を解く。人の API token の主体だけ（他は 403
+`script_mode_requires_human` で、表も記録も変えない）。止まっていなければ `{cleared: false}` で何も変えない。CoS の operation には
+無い（EXCLUDED `human_only`）。
 
 ---
 

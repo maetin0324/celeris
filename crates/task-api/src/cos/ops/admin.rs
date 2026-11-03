@@ -90,19 +90,34 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/cron-jobs/{id}/pause", "cron_job.pause"),
     ("POST", "/api/v1/cron-jobs/{id}/resume", "cron_job.resume"),
     ("POST", "/api/v1/cron-jobs/{id}/run", "cron_job.run"),
-    // ADR 2026-11-02-ts-control-layer-boundary (d)・付記 S2-5・S4-14: rust→compare と戻し（ts→compare・→rust）は
-    // CoS に許可する。`to_mode = ts` は TS の command を apply させる変更なので人の主体だけが行える。CoS の操作では
-    // effect の前に 403 `script_mode_requires_human`（human_only）で拒み、rejected として記録する。
-    // `canary` と `cos_digest` 以外の `ts` は route と同じ関数が 422 で拒む。
+    // ADR 2026-11-02-ts-control-layer-boundary (d)・付記 S2-5・S5-4: rust→compare と戻し（canary・ts→compare、→rust）は
+    // CoS に許可する。`to_mode = canary`・`ts` は TS の command を apply させる変更なので人の主体だけが行える。CoS の
+    // 操作では effect の前に 403 `script_mode_requires_human`（human_only）で拒み、rejected として記録する。
     (
         "PUT",
         "/api/v1/script/domains/{domain}/mode",
         "script_domain.mode_set",
     ),
+    // 付記 S5-1: generation の登録と退役は挙動を変えない（mode の行が指さない限り使われない）ので CoS に許可する。
+    (
+        "POST",
+        "/api/v1/script/generations",
+        "script_generation.register",
+    ),
+    (
+        "POST",
+        "/api/v1/script/generations/{id}/retire",
+        "script_generation.retire",
+    ),
 ];
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
+    (
+        "POST",
+        "/api/v1/script/guard/clear",
+        "human_only: ADR 2026-11-02-ts-control-layer-boundary 付記 S5-4。script-guard の全体の停止を解くのは人の API token の主体だけ。",
+    ),
     (
         "POST",
         "/api/v1/terminals",
@@ -170,6 +185,7 @@ const UNMOUNT: &str = "/api/v1/org/{id}/skills/{skill}";
 const PROMOTE: &str = "/api/v1/releases/{sha12}/promote";
 const OVERRIDE: &str = "/api/v1/llm/models/{source}/{model_id}/override";
 const SCRIPT_MODE: &str = "/api/v1/script/domains/{domain}/mode";
+const SCRIPT_RETIRE: &str = "/api/v1/script/generations/{id}/retire";
 
 /// The CoS form of a route whose domain request has no body: `null` or `{}` only.
 fn require_empty_body(
@@ -612,7 +628,11 @@ pub(crate) fn dispatch(
             let domain = path_param(SCRIPT_MODE, path, "{domain}");
             let input: crate::script_domains::ScriptDomainModeBody =
                 serde_json::from_value(body).map_err(decode)?;
-            if input.mode == task_core::script_compare::ScriptMode::Ts {
+            if matches!(
+                input.mode,
+                task_core::script_compare::ScriptMode::Canary
+                    | task_core::script_compare::ScriptMode::Ts
+            ) {
                 return Err(audit.reject(
                     store,
                     "script_domain",
@@ -620,8 +640,11 @@ pub(crate) fn dispatch(
                     ApiProblem::new(
                         axum::http::StatusCode::FORBIDDEN,
                         crate::script_domains::SCRIPT_MODE_REQUIRES_HUMAN,
-                        "human_only: ADR 2026-11-02-ts-control-layer-boundary 付記 S4-14。mode `ts` への切り替えは \
-                         人の API token の主体だけが行う（CoS は compare・rust への切り替えと戻しだけ）",
+                        format!(
+                            "human_only: ADR 2026-11-02-ts-control-layer-boundary 付記 S5-4。mode `{}` への切り替えは \
+                             人の API token の主体だけが行う（CoS は compare・rust への切り替えと戻しだけ）",
+                            input.mode.as_str()
+                        ),
                     ),
                 ));
             }
@@ -635,6 +658,47 @@ pub(crate) fn dispatch(
                     crate::script_domains::set_mode_effect(
                         store,
                         &domain,
+                        input,
+                        &actor,
+                        &audit.ctx.reason,
+                    )
+                },
+            )
+        }
+        "script_generation.register" => {
+            let input: crate::script_generations::ScriptGenerationRegisterBody =
+                serde_json::from_value(body).map_err(decode)?;
+            let control = env.api.script_generations.clone();
+            crate::cos::operations::external_store(
+                store,
+                audit,
+                ("script_generation", &input.bundle_sha256),
+                matched.action,
+                || {
+                    crate::script_generations::register_effect(
+                        store,
+                        control.as_deref(),
+                        &input.bundle_sha256,
+                    )
+                },
+            )
+        }
+        "script_generation.retire" => {
+            let id = path_param(SCRIPT_RETIRE, path, "{id}");
+            let input: crate::script_generations::ScriptGenerationRetireBody =
+                serde_json::from_value(decode_null(body)).map_err(decode)?;
+            let control = env.api.script_generations.clone();
+            let actor = audit.by();
+            crate::cos::operations::external_store(
+                store,
+                audit,
+                ("script_generation", &id),
+                matched.action,
+                || {
+                    crate::script_generations::retire_effect(
+                        store,
+                        control.as_deref(),
+                        &id,
                         input,
                         &actor,
                         &audit.ctx.reason,

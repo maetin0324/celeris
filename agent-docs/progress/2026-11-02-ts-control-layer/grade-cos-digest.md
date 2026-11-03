@@ -1,8 +1,9 @@
 ---
 title: grade-cos-digest — script-host-runner の採点に cos_digest を足す
 tasks: [01M6DCMB75G5F0DSE58ZNZMBAK]
-status: blocked
+status: done
 updated: 2026-11-03
+completed: 2026-11-03
 ---
 # grade-cos-digest — script-host-runner の採点に cos_digest を足す
 
@@ -38,17 +39,25 @@ updated: 2026-11-03
 - `cargo nextest run -p celeris-script --test script_host_runner` → 13 passed
 - `sh scripts/dev/progress-index.sh --check` → exit 0
 
-再確認の run（提出時の HEAD）の結果: `test-affected.sh` は exit 0、946 tests passed、`test-ts-verify.sh` は 18 passed。S4 の bundle を runner に直に渡すと golden・safety・activate はすべて exit 0 で、`cos_digest` は 2086/2086 一致、mismatch 0、passes 2。
+提出の run（計画 v3、提出時の HEAD で実行）の結果:
+- `bash scripts/dev/test-ts-verify.sh` → exit 0、18 passed、0 failed（場合 K: 壊した `cos_digest` の bundle を runner は exit 1、mismatch 404 件 / 2086 行）
+- `bash scripts/dev/test-affected.sh` → exit 0、946 tests run: 946 passed、`test-ts-verify` 18 passed
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/tests/script-runner-cache-key.sh` → exit 0、35 passed、0 failed
+- `bash scripts/dev/tests/ts-verify-classify.sh` → exit 0、45 passed、0 failed
+- `bash scripts/dev/tests/test-affected-list.sh` → exit 0
+- `cargo nextest run -p celeris-script --test script_host_runner` → 13 passed
+- S4 の bundle（今の `control-ts/` を `build-bundle.mjs` で作った物）を runner に直に渡した: `run --suite golden` exit 0（`cos_digest` 2086/2086 一致、mismatch 0、denied 0、passes 2）、`run --suite safety` exit 0（壊した op の応答で `outcome: exception`）、`activate --state-dir` exit 0（`cos_digest` は `valid`）
+- 範囲 check（計画 v3 の許可一覧）→ 範囲外 0 件
 
-## 範囲 check の不合格（計画への申告）
-範囲 check が `scripts/dev/test-affected.sh`、`scripts/dev/tests/script-runner-cache-key.sh`、`scripts/dev/tests/ts-verify-classify.sh` を拒否する。この unit は `plan_issue` で返した。
-- `script-runner-cache-key.sh`: 目的の 4 で `GOLDEN_SPECS` に足す example を偽の cargo が知らない。変更前の版は `script-runner-cache.sh` の新しい版で exit 1 になる（途中で止まる）。
-- `ts-verify-classify.sh`: 偽の runner の `domains` が旧い `fixture` 欄を返す。変更前の版は 40 passed、5 failed。
+## 範囲 check の不合格（計画 v3 で解消）
+前の run では範囲 check が `scripts/dev/test-affected.sh`、`scripts/dev/tests/script-runner-cache-key.sh`、`scripts/dev/tests/ts-verify-classify.sh` を拒否し、この unit は `plan_issue` で返した。計画 v3 が 3 file を許可一覧に足したので、成果は作り直さずに同じ branch のまま提出した。3 file を変えた理由は次のとおり。
+- `script-runner-cache-key.sh`: `GOLDEN_SPECS` に足した `dump-cos-digest-fixtures` を偽の cargo が知らず、変更前の版は exit 1 になる。
+- `ts-verify-classify.sh`: 偽の runner の `domains` が旧い `fixture` 欄を返し、変更前の版は 40 passed・5 failed になる。
 - `test-affected.sh`: `pass_traces.jsonl` は key の入力になったので、変更時に `test-ts-verify.sh` を選ぶ 1 行を足した。場合 L がこの選択を固定する。
 
-再確認の run でも同じ check が同じ 3 file で exit 1 になった。原因は成果ではなく check の許可一覧である。基準の版の試験を今の実装に流すと、`script-runner-cache-key.sh` は exit 1、`ts-verify-classify.sh` は 40 passed・5 failed になる。`script-runner-cache-key.sh` の偽の cargo は `dump-cos-digest-fixtures` で exit 1 を返すので、目的の 4 を実装したまま試験を変えずに通す方法は無い。fixture が無い golden を飛ばす分岐を製品の script に足せば通せるが、試験に合わせて検査を弱めることになるので入れなかった。
-
-計画に求める修正: 範囲 check の `grep -vE` の許可に `scripts/dev/test-affected\.sh` と `scripts/dev/tests/(script-runner-cache-key|ts-verify-classify)\.sh` を足す。この一覧で今の木を流すと範囲外は 0 件だった。成果の作り直しは要らない。
+fixture の無い golden を飛ばす分岐を製品の script に足して試験を通す方法は、検査を弱めるので採らなかった。
 
 ## 作業中の事故
 patch の heredoc の終端を誤り、場合 K・L の破壊の 2 行が作業ツリーで実行された。`control-ts/src/domains/cos_digest.ts` と `control-ts/fixtures/cos_digest/pass_traces.jsonl` が変わったので、`git restore` で戻した。提出の差分に `control-ts/` は無い。

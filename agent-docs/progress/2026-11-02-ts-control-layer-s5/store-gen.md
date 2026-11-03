@@ -34,7 +34,8 @@ updated: 2026-11-03
 ## 証拠（基準は `$CELERIS_WU_BASE`）
 - `cargo nextest run -p task-core -p celeris-campaign` → 2118 passed、9 skipped。
 - `cargo nextest run -p task-api -p task-dispatch -p celeris -E 'test(/script_domain|cos_digest|script_compare|ops_r1_attr|ops_r1_trace/)'` → 121 run、118 passed、3 failed（下の未解決 2）。
-- 最初の `bash scripts/dev/test-affected.sh`（7 分）は exit 100。原因は版数の固定・schema の説明文・ops_r1 の版の表・下の 3 件で、範囲内の分は直した。直した後の test-affected と clippy は未実行（時間切れ）。
+- 最初の `bash scripts/dev/test-affected.sh`（7 分）は exit 100。原因は版数の固定・schema の説明文・ops_r1 の版の表・下の 3 件で、範囲内の分は直した。直した後の test-affected は未実行（時間切れ）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（deno_core の既存の警告 1 件だけ）。`cargo fmt --all -- --check` → exit 0。
 
 ## 未解決
 1. 範囲 check に入っていない 2 file の 1 行ずつの直しが要る: `crates/task-dispatch/src/dispatcher/script_compare.rs`（`active` を有効な generation とみなす）、`crates/campaign/src/ops_r1_trace.rs`（版 105 を読む）。

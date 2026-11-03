@@ -78,7 +78,7 @@ mode `ts` の async pass の試験は `crates/task-dispatch/src/dispatcher/tests
 起動時の復元（`restore_modes`）は real-host unit で `ts` の行も `rust` へ戻すように直した。直す前の code では `…_daemon_ts_restart_keeps_one_message` が落ちることを real-host unit が確かめた。
 
 ### 3. 変更の影響範囲の test が通る
-close-async unit の差分は文書だけ（この file・`docs/architecture-map.md`・境界 ADR）。提出時の HEAD で実行した結果は「検査（close-async）」に書く。
+close-async unit の差分は文書だけ（この file・`docs/architecture-map.md`・境界 ADR）。提出時の HEAD で実行した結果は下の「検査（close-async、提出時の HEAD）」に書く。
 
 各 unit の結果（それぞれの unit の提出時の HEAD）:
 - host-ops: `bash scripts/dev/test-affected.sh` exit 0（Cargo.lock の変更で workspace 全体。nextest 7,105 passed・21 skipped、web 697 passed、control-ts 81 passed）
@@ -95,8 +95,10 @@ close-async unit の差分は文書だけ（この file・`docs/architecture-map
 統合の段（integrate-a-design・a-core・a-wire・a-verify）は決定的な check を通った。a-verify の統合は初回に落ち（real-host の試験が消えた `traces.jsonl` を読んだ）、fixture-ref が直した。
 
 ### 検査（close-async、提出時の HEAD）
-- `bash scripts/dev/test-affected.sh` → 結果は下の「close-async の検査結果」に書く。
-- `cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`・`bash scripts/dev/check-doc-links.sh`・`bash scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check`・`python3 scripts/dev/check-architecture-map.py` → 同上。
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」。差分が文書だけなので crate の試験は走らない。文書の検査の self-test は通った）
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/check-doc-links.sh` → ok、`bash scripts/dev/check-adr-numbers.sh` → ok（356 files）、`sh scripts/dev/progress-index.sh --check` → ok、`python3 scripts/dev/check-architecture-map.py` → OK（849 件）
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path はこの file・`docs/architecture-map.md`・境界 ADR の 3 つ。
 
 ## unit と commit（件名）
 | unit | 内容 | commit の件名 |

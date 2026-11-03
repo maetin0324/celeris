@@ -360,6 +360,25 @@ impl SqliteStore {
         }
     }
 
+    /// migration 0105 の `script_domain_modes.canary_bps`。CHECK は NULL で通るので `IS NOT NULL` を明示する。
+    fn add_script_canary_bps(tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
+        let exists: bool = tx.query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('script_domain_modes') WHERE name = 'canary_bps'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            tx.execute_batch(
+                "ALTER TABLE script_domain_modes ADD COLUMN canary_bps INTEGER CHECK ( \
+                     CASE WHEN mode = 'canary' \
+                         THEN canary_bps IS NOT NULL AND canary_bps BETWEEN 1 AND 9999 \
+                         ELSE canary_bps IS NULL \
+                     END);",
+            )?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn apply_migration_version(
         conn: &mut Connection,
         version: u32,
@@ -376,6 +395,10 @@ impl SqliteStore {
         // Phase K-1: 既存の案件に `slug` を付ける（作り方は Rust にしか無い。migration 0029 のコメント参照）。
         if version == 29 {
             Self::backfill_project_slugs(&tx)?;
+        }
+        // 付記 S5-3: `canary_bps`（ADD COLUMN は当て直せないので列が無いときだけ足す）。
+        if version == 105 {
+            Self::add_script_canary_bps(&tx)?;
         }
         let ts = format_rfc3339(OffsetDateTime::now_utc())?;
         tx.execute(

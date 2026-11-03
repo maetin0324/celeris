@@ -59,7 +59,7 @@ impl ScriptDomain {
     }
 }
 
-/// 領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。遷移の規則は付記 S5-4（store が検査する）。
+/// 領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。S2 で受け付けるのは `rust` と `compare` だけ（S2-5）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ScriptMode {

@@ -13,13 +13,16 @@
 -- 制約を commit まで遅らせ、同じ名前の親へ行を入れ直して違反を解消する（新しい名前で作って RENAME すると解消しない）。
 PRAGMA defer_foreign_keys = ON;
 
+-- 試験は版の記録を巻き戻して migration を当て直すことがあるので、旧い語の行だけを移す（新しい語の行はそのまま）。
 CREATE TABLE script_generations_s5_copy AS
 SELECT id, bundle_sha256, host_api, schema_sha256, manifest_json,
     CASE
         WHEN state = 'rejected' THEN 'invalid'
+        WHEN state <> 'loaded' THEN state
         WHEN id IN (SELECT generation_id FROM script_domain_modes WHERE generation_id IS NOT NULL) THEN 'active'
         ELSE 'retired'
     END AS state,
+    state AS old_state,
     created_at, updated_at
 FROM script_generations;
 
@@ -41,15 +44,7 @@ INSERT INTO script_generations
 SELECT id, bundle_sha256, host_api, schema_sha256, manifest_json, state, created_at, updated_at
 FROM script_generations_s5_copy;
 
-DROP TABLE script_generations_s5_copy;
-
--- CHECK は NULL で通るので `canary_bps IS NOT NULL` を明示する。
-ALTER TABLE script_domain_modes ADD COLUMN canary_bps INTEGER CHECK (
-    CASE WHEN mode = 'canary'
-        THEN canary_bps IS NOT NULL AND canary_bps BETWEEN 1 AND 9999
-        ELSE canary_bps IS NULL
-    END
-);
+-- `script_domain_modes.canary_bps` は Rust（`apply_migration_version`）が列の有無を見て足す（ADD COLUMN は当て直せない）。
 
 CREATE TABLE IF NOT EXISTS script_generation_events (
     id INTEGER PRIMARY KEY,
@@ -85,7 +80,9 @@ SELECT updated_at, id, json_object(
     'reason', 'migration 0105',
     'cancelled_in_flight', CASE state WHEN 'retired' THEN 0 ELSE NULL END
 )
-FROM script_generations ORDER BY created_at, id;
+FROM script_generations_s5_copy WHERE old_state IN ('loaded', 'rejected') ORDER BY created_at, id;
+
+DROP TABLE script_generations_s5_copy;
 
 CREATE TABLE IF NOT EXISTS script_guard_state (
     domain TEXT NOT NULL,

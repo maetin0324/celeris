@@ -36,61 +36,174 @@ pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// `control-ts/`（source と既定の dist の置き場）。`CELERIS_SCRIPT_CONTROL_TS_DIR` が在ればその dir
+/// （`scripts/dev/tests/script-bundle-fresh.sh` が source の写しと偽の dist を置き、作業ツリーの dist に触れずに試す）。
+pub fn control_ts_dir() -> PathBuf {
+    std::env::var_os(CONTROL_TS_DIR_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_root().join("control-ts"))
+}
+
+/// [`control_ts_dir`] を差し替える変数（試験の台本だけが使う）。
+pub const CONTROL_TS_DIR_ENV: &str = "CELERIS_SCRIPT_CONTROL_TS_DIR";
+
+/// bundle を読む試験が使う dir。`CELERIS_SCRIPT_BUNDLE_DIR` が在ればそこ、無ければ `control-ts/dist`。
+/// [`dist_bundle`] で使えると判定した dir と、配備（`deploy_bundle`）に渡す dir を揃える。
 pub fn dist_dir() -> PathBuf {
-    repo_root().join("control-ts/dist")
+    bundle_dir_override().unwrap_or_else(|| control_ts_dir().join("dist"))
+}
+
+fn bundle_dir_override() -> Option<PathBuf> {
+    std::env::var_os(BUNDLE_DIR_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
 }
 
 /// bundle を作る設定（`domains` の key が bundle の manifest の `domains` になる）。
 pub fn bundle_config_path() -> PathBuf {
-    repo_root().join("control-ts/bundle.config.json")
+    control_ts_dir().join("bundle.config.json")
 }
+
+/// 試験に使う bundle の dir を外から渡す変数（付記 S5-9 (1)）。在れば `control-ts/dist` を読まず、使えないなら失敗にする。
+pub const BUNDLE_DIR_ENV: &str = "CELERIS_SCRIPT_BUNDLE_DIR";
+/// SKIP を 1 行ずつ足す file（付記 S5-9 (5)）。`scripts/dev/test-affected.sh` が数える。
+pub const SKIP_LOG_ENV: &str = "CELERIS_SCRIPT_SKIP_LOG";
+/// `build-bundle.mjs` が dist に書く source の内容 hash の file（付記 S5-9 (2)）。
+pub const INPUTS_FILE: &str = "inputs.sha256";
+/// 内容 hash に入れる `control-ts/` 直下の file（`src/` の下の全 file に加える）。
+const INPUT_FILES: [&str; 3] = ["bundle.config.json", "package.json", "pnpm-lock.yaml"];
 
 /// `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら、使えない bundle を SKIP でなく失敗にする。
 pub fn require_bundle() -> bool {
     std::env::var("CELERIS_SCRIPT_REQUIRE_BUNDLE").as_deref() == Ok("1")
 }
 
-/// `control-ts/dist` の bundle のうち、`domain` を含み、いまの `bundle.config.json` と同じ領域の集合を持つもの。
-/// 無い・読めない・古いなら SKIP（`None`）。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら失敗にする。
+/// 試験に使う bundle のうち、`domain` を含み、いまの `bundle.config.json` と同じ領域の集合を持つもの。
+///
+/// `CELERIS_SCRIPT_BUNDLE_DIR` が在ればその dir を読み、使えないなら失敗にする。無ければ `control-ts/dist` を読み、
+/// 無い・読めない・古い（[`check_dist`]）なら SKIP（`None`）。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら SKIP せず失敗にする。
 pub fn dist_bundle(test: &str, domain: &str) -> Option<VerifiedBundle> {
-    usable_bundle(
-        &dist_dir(),
-        &bundle_config_path(),
-        test,
-        domain,
-        require_bundle(),
-    )
+    match bundle_dir_override() {
+        Some(dir) => {
+            let checked = check_bundle(&dir, &bundle_config_path(), domain);
+            take_bundle(checked, &dir, test, true)
+        }
+        None => take_bundle(
+            check_dist(&control_ts_dir(), domain),
+            &control_ts_dir().join("dist"),
+            test,
+            require_bundle(),
+        ),
+    }
+}
+
+/// [`check_bundle`] の結果を試験に渡す。使えなければ、`require` なら panic し、そうでなければ SKIP を stderr と
+/// `CELERIS_SCRIPT_SKIP_LOG` の file（在れば。1 行 = 試験名・tab・理由）に残して `None` を返す。
+pub fn take_bundle(
+    checked: Result<VerifiedBundle, String>,
+    dir: &Path,
+    test: &str,
+    require: bool,
+) -> Option<VerifiedBundle> {
+    let log = std::env::var_os(SKIP_LOG_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    take_bundle_logged(checked, dir, test, require, log.as_deref())
+}
+
+/// [`take_bundle`] の本体。`log` は SKIP の行を足す file。
+pub fn take_bundle_logged(
+    checked: Result<VerifiedBundle, String>,
+    dir: &Path,
+    test: &str,
+    require: bool,
+    log: Option<&Path>,
+) -> Option<VerifiedBundle> {
+    let why = match checked {
+        Ok(bundle) => return Some(bundle),
+        Err(why) => why,
+    };
+    assert!(
+        !require,
+        "CELERIS_SCRIPT_REQUIRE_BUNDLE=1 or {BUNDLE_DIR_ENV} is set but {} is not usable: {why}",
+        dir.display()
+    );
+    eprintln!("SKIP {test}: {} is not usable: {why}", dir.display());
+    if let Some(log) = log {
+        use std::io::Write as _;
+        let line = format!("{test}\t{}: {}\n", dir.display(), why.replace('\n', " "));
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .and_then(|mut f| f.write_all(line.as_bytes()))
+            .unwrap_or_else(|e| panic!("append {}: {e}", log.display()));
+    }
+    None
+}
+
+/// `control_ts` の `dist` の bundle を使えるか判定する。[`check_bundle`] に加えて、dist の `inputs.sha256` が
+/// 作業ツリーの source の内容 hash（[`control_ts_inputs_sha256`]）と合うことを確かめる。
+///
+/// `control-ts/dist` は git 管理外で、task の根に古い物が残る。領域と capability が config と揃っていても、
+/// source を変える前の bundle を正として比べると、TS の実装でなく bundle の古さで落ちる（付記 S5-9）。
+pub fn check_dist(control_ts: &Path, domain: &str) -> Result<VerifiedBundle, String> {
+    let dist = control_ts.join("dist");
+    let bundle = check_bundle(&dist, &control_ts.join("bundle.config.json"), domain)?;
+    let recorded = std::fs::read_to_string(dist.join(INPUTS_FILE))
+        .map_err(|e| format!("stale bundle: no {INPUTS_FILE} ({e}); rebuild control-ts/dist"))?;
+    let actual = control_ts_inputs_sha256(control_ts)?;
+    if recorded.trim() != actual {
+        return Err(format!(
+            "stale bundle: {INPUTS_FILE} {} (source_commit {}) does not match the sources {actual}; \
+             rebuild control-ts/dist",
+            recorded.trim(),
+            bundle.manifest.source_commit
+        ));
+    }
+    Ok(bundle)
+}
+
+/// `control-ts/scripts/build-bundle.mjs` の `inputsSha256` と同じ値: `src/` の下の全 file と `bundle.config.json`・
+/// `package.json`・`pnpm-lock.yaml` を、1 行 = `<file の sha256>  <control_ts からの相対 path>\n` で path の昇順に並べた
+/// 本文の sha256。
+pub fn control_ts_inputs_sha256(control_ts: &Path) -> Result<String, String> {
+    fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) -> Result<(), String> {
+        let entries = std::fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("read {}: {e}", dir.display()))?;
+            let kind = entry
+                .file_type()
+                .map_err(|e| format!("stat {}: {e}", entry.path().display()))?;
+            let child = format!("{rel}/{}", entry.file_name().to_string_lossy());
+            if kind.is_dir() {
+                walk(&entry.path(), &child, out)?;
+            } else if kind.is_file() {
+                out.push(child);
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    walk(&control_ts.join("src"), "src", &mut files)?;
+    files.extend(INPUT_FILES.iter().map(|f| (*f).to_owned()));
+    files.sort();
+    let mut text = String::new();
+    for rel in &files {
+        let path = control_ts.join(rel);
+        let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        text.push_str(&format!("{}  {rel}\n", sha256_hex(&bytes)));
+    }
+    Ok(sha256_hex(text.as_bytes()))
 }
 
 /// `dir` の bundle を使えるか判定する。`config` は `bundle.config.json` の path。
 ///
-/// `control-ts/dist` は git 管理外なので、領域を足す前の source で作った古い bundle が作業ツリーに残りうる。
 /// 古い bundle（manifest の `domains` が config の `domains` の key 集合と違う、`domain` を含まない、または
-/// manifest の `capabilities` が config の各領域の capability の和集合と違う）を
-/// 正として比べると、TS の実装でなく bundle の古さで落ちる。だから使えない bundle と同じく SKIP にする。
-/// `require` が真なら SKIP せず panic する。
-pub fn usable_bundle(
-    dir: &Path,
-    config: &Path,
-    test: &str,
-    domain: &str,
-    require: bool,
-) -> Option<VerifiedBundle> {
-    let skip = |why: String| {
-        assert!(
-            !require,
-            "CELERIS_SCRIPT_REQUIRE_BUNDLE=1 but {} is not usable: {why}",
-            dir.display()
-        );
-        eprintln!("SKIP {test}: {} is not usable: {why}", dir.display());
-    };
-    let bundle = match load_bundle_dir(dir) {
-        Ok(bundle) => bundle,
-        Err(e) => {
-            skip(e.to_string());
-            return None;
-        }
-    };
+/// manifest の `capabilities` が config の各領域の capability の和集合と違う）と、読めない bundle は `Err`（理由）。
+pub fn check_bundle(dir: &Path, config: &Path, domain: &str) -> Result<VerifiedBundle, String> {
+    let bundle = load_bundle_dir(dir).map_err(|e| e.to_string())?;
     let text = std::fs::read_to_string(config)
         .unwrap_or_else(|e| panic!("read {}: {e}", config.display()));
     let value: serde_json::Value =
@@ -103,13 +216,12 @@ pub fn usable_bundle(
         .collect();
     let actual: BTreeSet<String> = bundle.manifest.domains.iter().cloned().collect();
     if !actual.contains(domain) || actual != expected {
-        skip(format!(
+        return Err(format!(
             "stale bundle: manifest domains {actual:?} (source_commit {}) do not match \
              {} domains {expected:?} or lack {domain:?}; rebuild control-ts/dist",
             bundle.manifest.source_commit,
             config.display()
         ));
-        return None;
     }
     // 付記 S4-13: capability を足した config の前に作った bundle も古い（op が `denied` になる）。
     let expected_caps: BTreeSet<String> = value["domains"]
@@ -127,15 +239,14 @@ pub fn usable_bundle(
         .map(|c| c.as_str().to_owned())
         .collect();
     if actual_caps != expected_caps {
-        skip(format!(
+        return Err(format!(
             "stale bundle: manifest capabilities {actual_caps:?} (source_commit {}) do not match \
              {} capabilities {expected_caps:?}; rebuild control-ts/dist",
             bundle.manifest.source_commit,
             config.display()
         ));
-        return None;
     }
-    Some(bundle)
+    Ok(bundle)
 }
 
 /// 同じ host（deno_core の actor）で bundle を起こし、判定の口にする。

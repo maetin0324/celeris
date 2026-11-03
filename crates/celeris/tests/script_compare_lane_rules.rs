@@ -1,6 +1,7 @@
 //! 付記 S2: 本物の deno_core host で `lane_rules` の compare を確かめる。userns を使わない。外部ネットワークに出ない。
 //!
-//! `control-ts/dist` の bundle を使う。無ければ SKIP を出して抜ける。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら失敗にする。
+//! `control-ts/dist` の bundle を使う。無い・古いなら SKIP を出して抜ける。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1` なら失敗にする。
+//! `CELERIS_SCRIPT_BUNDLE_DIR` が在ればその dir の bundle を使い、使えないなら失敗にする（付記 S5-9）。
 //! 例外を投げる bundle と常に違う答えを返す bundle は、この file の中の本文を同じ host で評価する（dist が無くても走る）。
 //!
 //! 待ちの方針（`timeout` のときだけ新しい task でやり直す）と共通の helper は `support/script_compare.rs`。

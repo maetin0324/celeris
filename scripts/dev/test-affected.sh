@@ -22,6 +22,12 @@
 # host-v1.schema.json）か検証の道具（scripts/dev/ts-verify*・script-runner-cache.sh・test-ts-verify.sh・この script）が
 # 変われば scripts/dev/test-ts-verify.sh も走らせる（runner を作り直して TS の段を通す）。
 # node_modules が無い・lockfile が変わったときは先に `pnpm install --offline --frozen-lockfile`。
+# 対象 crate に celeris か celeris-script が入るときは、cargo の前に control-ts の source から使い捨ての dir（$TMPDIR）へ
+# bundle を作り（build-bundle.mjs）、CELERIS_SCRIPT_BUNDLE_DIR と CELERIS_SCRIPT_REQUIRE_BUNDLE=1 を渡す。task の根の
+# control-ts/dist は読まず、書き換えもしない（境界 ADR 2026-11-02-ts-control-layer-boundary 付記 S5-9）。作れないときは
+# 理由を 1 行出して渡さない。ただし control-ts/・docs/api/script-host/・crates/script-runtime/・script の試験と support・
+# daemon の script 層の変更では作れないことを失敗にする。bundle を読む試験の SKIP は CELERIS_SCRIPT_SKIP_LOG の file で
+# 数えて `script bundle SKIP: N 件` を出し、bundle を作れていて N > 0 なら非 0 で終わる。
 # 何も対象が無ければ（docs だけ等）何もせず exit 0。
 set -euo pipefail
 
@@ -93,6 +99,8 @@ control_ts_reason=""
 extra_crates=""
 fixtures=0
 tsv_reason=""
+# bundle を読む試験に届く変更（bundle を作れないことを失敗にする）。
+bundle_need=""
 while IFS= read -r f; do
   case "$f" in
     Cargo.lock|Cargo.toml|.config/nextest.toml|rust-toolchain|rust-toolchain.toml|tests/support/*) all=1 ;;
@@ -105,6 +113,10 @@ while IFS= read -r f; do
                             extra_crates="celeris-script" ;;
   esac
   case "$f" in control-ts/fixtures/*) fixtures=1 ;; esac
+  case "$f" in
+    control-ts/*|docs/api/script-host/*|crates/script-runtime/*|crates/celeris/tests/script_*|crates/celeris/tests/support/*|crates/celeris/src/daemon/script_*|scripts/dev/test-affected.sh)
+      bundle_need="$f" ;;
+  esac
   case "$f" in
     scripts/dev/ts-verify*|scripts/dev/script-runner-cache.sh|scripts/dev/test-ts-verify.sh|scripts/dev/test-affected.sh)
       tsv_reason="検証の道具の変更"; extra_crates="celeris-script" ;;
@@ -240,6 +252,15 @@ js_step() { # package label cmd
   return "$rc"
 }
 
+# package（cwd）の pnpm。PATH に無ければ package.json の packageManager の版を corepack で使う。
+pnpm_cmd() {
+  if command -v pnpm >/dev/null 2>&1; then
+    echo pnpm
+  else
+    echo "corepack pnpm@$(python3 -I -c 'import json;print(json.load(open("package.json"))["packageManager"].split("@",1)[1])')"
+  fi
+}
+
 run_js_package() { # dir（web か control-ts）
   local pkg="$1" typecheck test pm
   typecheck="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1])).get("scripts",{}).get("typecheck",""))' "$pkg/package.json")"
@@ -253,11 +274,7 @@ run_js_package() { # dir（web か control-ts）
     # worktree（WU を含む）には node_modules が無い。依存は pnpm の store（host 共有）から offline で入れる。
     # store に無い版（依存を足した直後）だけ network を許して入れ直す。lockfile 固定は release gate と同じ。
     if [ ! -f node_modules/.modules.yaml ] || grep -qx "$pkg/\(pnpm-lock.yaml\|package.json\)" "$changed"; then
-      if command -v pnpm >/dev/null 2>&1; then
-        pm=pnpm
-      else
-        pm="corepack pnpm@$(python3 -I -c 'import json;print(json.load(open("package.json"))["packageManager"].split("@",1)[1])')"
-      fi
+      pm="$(pnpm_cmd)"
       js_step "$pkg" install "$pm install --offline --frozen-lockfile" ||
         js_step "$pkg" install "$pm install --prefer-offline --frozen-lockfile"
     fi
@@ -270,6 +287,35 @@ run_js_package() { # dir（web か control-ts）
     fi
     [ -z "$test" ] || js_step "$pkg" "unit 試験" "$test"
   )
+}
+
+# control-ts の source から out（使い捨ての dir）に bundle を作る（ts-verify.sh の bundle 段と同じ build-bundle.mjs）。
+# 作れなければ理由を stdout に 1 行出して非 0。node_modules が無ければ offline で入れる。
+build_script_bundle() { # out
+  local out="$1" log
+  log="$(mktemp "${TMPDIR:-/tmp}/test-affected-bundle.XXXXXX")"
+  if ! command -v node >/dev/null 2>&1; then
+    echo "node が無い"
+    rm -f "$log"
+    return 1
+  fi
+  if [ ! -f control-ts/node_modules/.modules.yaml ]; then
+    if ! (cd control-ts && $(pnpm_cmd) install --offline --frozen-lockfile) >"$log" 2>&1; then
+      echo "control-ts の pnpm install --offline が失敗した: $(tail -1 "$log")"
+      rm -f "$log"
+      return 1
+    fi
+  fi
+  if ! TEST_AFFECTED_BUILD="$root/control-ts/scripts/build-bundle.mjs" TEST_AFFECTED_OUT="$out" \
+    node --input-type=module -e '
+      const { buildBundle } = await import(process.env.TEST_AFFECTED_BUILD);
+      await buildBundle({ outDir: process.env.TEST_AFFECTED_OUT });
+    ' >"$log" 2>&1; then
+    echo "build-bundle.mjs が失敗した: $(tail -1 "$log")"
+    rm -f "$log"
+    return 1
+  fi
+  rm -f "$log"
 }
 
 ran=0
@@ -324,8 +370,38 @@ if [ -n "$crates" ]; then
   trap 'rm -f "$changed" "$changed.status"; chmod -R u+w "$tmproot" 2>/dev/null || true; rm -rf "$tmproot" 2>/dev/null || true' EXIT
   mkdir -p "$tmproot/tmp"
   export TMPDIR="$tmproot/tmp"
+  bundle_built=0
+  skip_log=""
+  if printf '%s\n' "$crates" | grep -qx 'celeris\|celeris-script'; then
+    skip_log="$tmproot/script-skip.log"
+    : >"$skip_log"
+    export CELERIS_SCRIPT_SKIP_LOG="$skip_log"
+    unset CELERIS_SCRIPT_BUNDLE_DIR
+    bundle_out="$tmproot/script-bundle"
+    if why="$(build_script_bundle "$bundle_out")"; then
+      bundle_built=1
+      export CELERIS_SCRIPT_BUNDLE_DIR="$bundle_out" CELERIS_SCRIPT_REQUIRE_BUNDLE=1
+      echo "test-affected: control-ts の source から bundle を作った（$bundle_out）。bundle を読む試験はこれを使い、SKIP を失敗にする" >&2
+    elif [ -n "$bundle_need" ]; then
+      echo "test-affected: bundle を作れない（$why）。bundle を読む試験に届く変更（$bundle_need）があるので失敗にする" >&2
+      exit 1
+    else
+      echo "test-affected: bundle を作れない（$why）。CELERIS_SCRIPT_BUNDLE_DIR を渡さない" >&2
+    fi
+  fi
   cargo nextest run "${args[@]}"
   cargo test --doc "${args[@]}"
+  if [ -n "$skip_log" ]; then
+    skips="$(grep -c . "$skip_log" || true)"
+    echo "test-affected: script bundle SKIP: ${skips} 件" >&2
+    if [ "$skips" -gt 0 ]; then
+      sed 's/^/test-affected:   SKIP /' "$skip_log" >&2
+      if [ "$bundle_built" -eq 1 ]; then
+        echo "test-affected: 作った bundle で SKIP した試験がある" >&2
+        exit 1
+      fi
+    fi
+  fi
   ran=1
 fi
 

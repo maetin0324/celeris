@@ -2,7 +2,7 @@
 // 型検査はしない（tsc --noEmit は別の段）。daemon が読むのは dist の 2 file だけ。
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -38,6 +38,28 @@ function sourceCommit() {
   return dirty ? `${commit}-dirty` : commit;
 }
 
+// dist を作った source の内容 hash（境界 ADR 付記 S5-9 (2)）。試験の support（crates/celeris/tests/support/script_compare.rs の
+// control_ts_inputs_sha256）が作業ツリーから同じ値を計算し、合わない dist を古いとみなす。
+// 対象は src/ の下の全 file と bundle.config.json・package.json・pnpm-lock.yaml。1 行 = "<file の sha256>  <control-ts からの相対 path>\n"、
+// path の昇順に並べた本文の sha256。
+export const INPUTS_FILE = "inputs.sha256";
+const INPUT_FILES = ["bundle.config.json", "package.json", "pnpm-lock.yaml"];
+
+function listFiles(dir, rel) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const childRel = `${rel}/${entry.name}`;
+    if (entry.isDirectory()) return listFiles(path.join(dir, entry.name), childRel);
+    return entry.isFile() ? [childRel] : [];
+  });
+}
+
+export function inputsSha256(root = pkg) {
+  const files = [...listFiles(path.join(root, "src"), "src"), ...INPUT_FILES];
+  files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const text = files.map((rel) => `${sha256(readFileSync(path.join(root, rel)))}  ${rel}\n`).join("");
+  return sha256(Buffer.from(text, "utf8"));
+}
+
 function declaredCapabilities(schema, config) {
   const known = new Set(schema.$defs.Capability.oneOf.map((entry) => entry.const));
   const declared = [...new Set(Object.values(config.domains).flat())].sort();
@@ -51,6 +73,7 @@ export async function buildBundle({ entry = "src/main.ts", outDir = "dist", conf
   // 失敗したときに古い bundle と manifest を残さない。
   rmSync(path.join(out, "bundle.mjs"), { force: true });
   rmSync(path.join(out, "manifest.json"), { force: true });
+  rmSync(path.join(out, INPUTS_FILE), { force: true });
 
   const schemaBytes = readFileSync(schemaPath);
   const bundleConfig = config ?? JSON.parse(readFileSync(path.join(pkg, "bundle.config.json"), "utf8"));
@@ -92,6 +115,7 @@ export async function buildBundle({ entry = "src/main.ts", outDir = "dist", conf
   mkdirSync(out, { recursive: true });
   writeFileSync(path.join(out, "bundle.mjs"), bundle);
   writeFileSync(path.join(out, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  writeFileSync(path.join(out, INPUTS_FILE), `${inputsSha256()}\n`);
   return manifest;
 }
 

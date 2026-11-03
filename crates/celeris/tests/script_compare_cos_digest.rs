@@ -6,7 +6,7 @@
 //!
 //! `control-ts/dist` の bundle を使う試験は、無い・古いなら SKIP を出して抜ける。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1`
 //! なら失敗にする。例外を投げる bundle・常に違う答えを返す bundle は、この file の中の本文を同じ host で評価する
-//! （dist が無くても走る）。
+//! （dist が無くても走る）。`CELERIS_SCRIPT_BUNDLE_DIR` が在ればその dir の bundle を使い、使えないなら失敗にする（付記 S5-9）。
 //!
 //! 待ちの方針: dispatcher の deadline は 50 ms の固定。`timeout` は環境の遅さなので、そのときだけ新しい一時 DB で
 //! 場面をやり直す（`support/script_compare.rs` と同じ方針。digest は run ごとに 1 回なので、同じ DB ではやり直せない）。

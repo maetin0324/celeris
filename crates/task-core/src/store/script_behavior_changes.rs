@@ -214,8 +214,8 @@ impl SqliteStore {
             actor,
             reason,
         )?;
-        let row = parse_row(&tx, &sha)?
-            .ok_or_else(|| BehaviorChangeError::NotFound(sha.clone()))?;
+        let row =
+            parse_row(&tx, &sha)?.ok_or_else(|| BehaviorChangeError::NotFound(sha.clone()))?;
         tx.commit()?;
         Ok(BehaviorChangeApproval {
             changed: true,
@@ -263,9 +263,7 @@ impl SqliteStore {
     pub fn script_behavior_changes(&self) -> Result<Vec<BehaviorChangeRow>, StoreError> {
         let conn = self.lock()?;
         let shas: Vec<String> = conn
-            .prepare(
-                "SELECT spec_sha256 FROM script_behavior_changes ORDER BY change_id, version",
-            )?
+            .prepare("SELECT spec_sha256 FROM script_behavior_changes ORDER BY change_id, version")?
             .query_map([], |r| r.get(0))?
             .collect::<Result<_, _>>()?;
         shas.iter()

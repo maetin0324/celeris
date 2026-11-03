@@ -118,9 +118,9 @@ fn valid_pointer(p: &str, wildcard: bool) -> bool {
 
 fn valid_part(part: &TextPart) -> Result<(), String> {
     match part {
-        TextPart::Lit(s) if s.len() > BEHAVIOR_CHANGE_LIT_MAX => {
-            Err(format!("lit is longer than {BEHAVIOR_CHANGE_LIT_MAX} bytes"))
-        }
+        TextPart::Lit(s) if s.len() > BEHAVIOR_CHANGE_LIT_MAX => Err(format!(
+            "lit is longer than {BEHAVIOR_CHANGE_LIT_MAX} bytes"
+        )),
         TextPart::Lit(_) => Ok(()),
         TextPart::Input(p) if !valid_pointer(p, false) => Err(format!("input pointer {p:?}")),
         TextPart::Input(_) => Ok(()),
@@ -450,7 +450,11 @@ pub enum BehaviorChangeError {
     #[error("behavior change `{id}` version {version} is bound to another spec")]
     VersionTaken { id: String, version: u32 },
     #[error("behavior change `{id}` version {version} is not newer than version {latest}")]
-    VersionNotNewer { id: String, version: u32, latest: u32 },
+    VersionNotNewer {
+        id: String,
+        version: u32,
+        latest: u32,
+    },
     #[error("behavior change `{sha}` is {}; raise the version instead", .state.as_str())]
     Retired {
         sha: String,

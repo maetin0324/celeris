@@ -1047,9 +1047,8 @@ async fn script_cos_read_only_gets_pass_with_run_credential() {
 const BEHAVIOR_CHANGES: &str = "/api/v1/script/behavior-changes";
 
 fn pilot_spec() -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
-        "../../control-ts/behavior-changes/cos_digest/cos-digest-cap-run-reason.v1.json",
-    );
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../control-ts/behavior-changes/cos_digest/cos-digest-cap-run-reason.v1.json");
     serde_json::from_str(&std::fs::read_to_string(path).expect("spec")).expect("json")
 }
 
@@ -1071,17 +1070,29 @@ async fn script_behavior_change_approve_is_human_only_and_revoke_fails_closed() 
     let body = json!({"spec": spec, "spec_sha256": sha, "reason": "S6 pilot"});
     let resp = send(
         &app,
-        post_json_with(BEHAVIOR_CHANGES, &body, &[("authorization", operator.as_str())]),
+        post_json_with(
+            BEHAVIOR_CHANGES,
+            &body,
+            &[("authorization", operator.as_str())],
+        ),
     )
     .await;
     assert_problem(&resp, 403, "script_behavior_change_requires_human");
     let wrong = json!({"spec": spec, "spec_sha256": "0".repeat(64), "reason": "x"});
-    let resp = send(&app, post_json_with(BEHAVIOR_CHANGES, &wrong, &admin_headers())).await;
+    let resp = send(
+        &app,
+        post_json_with(BEHAVIOR_CHANGES, &wrong, &admin_headers()),
+    )
+    .await;
     assert_problem(&resp, 422, "behavior_change_hash_mismatch");
     let mut lane = spec.clone();
     lane["domain"] = json!("lane_rules");
     let lane_body = json!({"spec": lane, "spec_sha256": spec_sha(&lane), "reason": "x"});
-    let resp = send(&app, post_json_with(BEHAVIOR_CHANGES, &lane_body, &admin_headers())).await;
+    let resp = send(
+        &app,
+        post_json_with(BEHAVIOR_CHANGES, &lane_body, &admin_headers()),
+    )
+    .await;
     assert_problem(&resp, 422, "behavior_change_domain_unsupported");
     let mut unknown = spec.clone();
     unknown["normalize"] = json!(true);
@@ -1098,24 +1109,40 @@ async fn script_behavior_change_approve_is_human_only_and_revoke_fails_closed() 
     let list = send(&app, get_admin(BEHAVIOR_CHANGES)).await.json();
     assert_eq!(list, json!({"changes": [], "events": []}));
 
-    let resp = send(&app, post_json_with(BEHAVIOR_CHANGES, &body, &admin_headers())).await;
+    let resp = send(
+        &app,
+        post_json_with(BEHAVIOR_CHANGES, &body, &admin_headers()),
+    )
+    .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let approved = resp.json();
     assert_eq!(approved["changed"], true);
     assert_eq!(approved["change"]["state"], "approved");
     assert_eq!(approved["change"]["spec_sha256"], sha.as_str());
-    let resp = send(&app, post_json_with(BEHAVIOR_CHANGES, &body, &admin_headers())).await;
+    let resp = send(
+        &app,
+        post_json_with(BEHAVIOR_CHANGES, &body, &admin_headers()),
+    )
+    .await;
     assert_eq!(resp.json()["changed"], false);
 
     let revoke = format!("{BEHAVIOR_CHANGES}/{sha}/revoke");
     let resp = send(
         &app,
-        post_json_with(&revoke, &json!({"reason": "bad"}), &[("authorization", operator.as_str())]),
+        post_json_with(
+            &revoke,
+            &json!({"reason": "bad"}),
+            &[("authorization", operator.as_str())],
+        ),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     assert_eq!(resp.json()["revoked"], true);
-    let resp = send(&app, post_json_with(BEHAVIOR_CHANGES, &body, &admin_headers())).await;
+    let resp = send(
+        &app,
+        post_json_with(BEHAVIOR_CHANGES, &body, &admin_headers()),
+    )
+    .await;
     assert_problem(&resp, 409, "behavior_change_retired");
     let resp = send(
         &app,

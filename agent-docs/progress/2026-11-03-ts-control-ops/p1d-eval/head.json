@@ -1,16 +1,16 @@
 {
  "schema": "celeris.ts-behavior-eval/1",
  "label": "head",
- "commit": "354581542b2981457ef33da512d019808982d47e",
+ "commit": "aa0e29133095d6678e4970cefdd79d8df8eb8128",
  "patch_sha256": null,
  "domain": "cos_digest",
- "at": "2026-11-03T21:48:04+00:00",
+ "at": "2026-11-03T21:49:15+00:00",
  "secs": {
-  "total": 1.661,
-  "worktree": 1.277,
-  "install": 0.22,
-  "build": 0.057,
-  "eval": 0.107
+  "total": 1.576,
+  "worktree": 1.212,
+  "install": 0.204,
+  "build": 0.051,
+  "eval": 0.109
  },
  "cargo_invocations": 0,
  "old_fixture_cases": 2066,
@@ -24,24 +24,24 @@
    "cases_sha256_ok": true,
    "cases": 19,
    "explained_ok": 0,
-   "equal_ok": 0,
-   "wrong": 19,
+   "equal_ok": 8,
+   "wrong": 11,
    "pilot_explained_ok": 0,
    "wrong_examples": [
-    {
-     "name": "pilot/failed-0/reason-150",
-     "expect": "equal",
-     "ts_heading_reason_chars": 150
-    },
-    {
-     "name": "pilot/failed-0/reason-200",
-     "expect": "equal",
-     "ts_heading_reason_chars": 200
-    },
     {
      "name": "pilot/failed-0/reason-201",
      "expect": "explained",
      "ts_heading_reason_chars": 201
+    },
+    {
+     "name": "pilot/failed-0/reason-500",
+     "expect": "explained",
+     "ts_heading_reason_chars": 500
+    },
+    {
+     "name": "pilot/failed-0/reason-4000",
+     "expect": "explained",
+     "ts_heading_reason_chars": 4000
     }
    ]
   }

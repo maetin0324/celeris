@@ -170,7 +170,11 @@ async fn revoke(
                 .map_err(problem)
         })
         .await?;
-    tracing::info!(op = "script_behavior_change_revoke", revoked, "script behavior change");
+    tracing::info!(
+        op = "script_behavior_change_revoke",
+        revoked,
+        "script behavior change"
+    );
     Ok(json_response(
         StatusCode::OK,
         &ScriptBehaviorChangeRevokeResult { revoked },
@@ -190,9 +194,10 @@ fn problem(err: BehaviorChangeError) -> ApiProblem {
             StatusCode::UNPROCESSABLE_ENTITY,
             BEHAVIOR_CHANGE_DOMAIN_UNSUPPORTED,
         ),
-        BehaviorChangeError::HashMismatch { .. } => {
-            (StatusCode::UNPROCESSABLE_ENTITY, BEHAVIOR_CHANGE_HASH_MISMATCH)
-        }
+        BehaviorChangeError::HashMismatch { .. } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            BEHAVIOR_CHANGE_HASH_MISMATCH,
+        ),
         BehaviorChangeError::VersionTaken { .. } => {
             (StatusCode::CONFLICT, BEHAVIOR_CHANGE_VERSION_TAKEN)
         }

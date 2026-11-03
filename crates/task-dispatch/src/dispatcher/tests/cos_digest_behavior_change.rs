@@ -65,9 +65,8 @@ impl PolicyScript for CappingTs {
 }
 
 fn pilot_spec() -> BehaviorChangeSpec {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
-        "../../control-ts/behavior-changes/cos_digest/cos-digest-cap-run-reason.v1.json",
-    );
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../control-ts/behavior-changes/cos_digest/cos-digest-cap-run-reason.v1.json");
     serde_json::from_str(&std::fs::read_to_string(path).expect("spec")).expect("spec json")
 }
 
@@ -87,7 +86,12 @@ async fn pass_with(
     f.d.set_script_domain_store(f.store.clone());
     let generation = set_mode(&f, ScriptMode::Compare, "be");
     if mode == ScriptMode::Ts {
-        super::promote_cos_digest_to_ts(&f.store, &generation, "behavior-change e2e", f.d.now_utc());
+        super::promote_cos_digest_to_ts(
+            &f.store,
+            &generation,
+            "behavior-change e2e",
+            f.d.now_utc(),
+        );
     }
     let spec = pilot_spec();
     if approve {
@@ -123,10 +127,7 @@ async fn pass_with(
 }
 
 fn cos_digest_mode(f: &Fixture) -> ScriptMode {
-    f.store
-        .script_domain_mode("cos_digest")
-        .expect("row")
-        .mode
+    f.store.script_domain_mode("cos_digest").expect("row").mode
 }
 
 #[tokio::test]
@@ -140,7 +141,11 @@ async fn cos_digest_behavior_change_explained_delta_is_applied_and_counted_as_re
     let r = &world.records[0];
     assert_eq!(
         (r.mode, r.applied_by, r.outcome),
-        (ScriptMode::Ts, CosDigestAppliedBy::Ts, CompareOutcome::Explained),
+        (
+            ScriptMode::Ts,
+            CosDigestAppliedBy::Ts,
+            CompareOutcome::Explained
+        ),
         "{r:?}"
     );
     let spec = pilot_spec();
@@ -166,7 +171,10 @@ async fn cos_digest_behavior_change_explained_delta_is_applied_and_counted_as_re
     assert_eq!(cos_digest_mode(&f), ScriptMode::Ts);
     let (_, counters) = f
         .store
-        .script_guard_counters(task_core::script_compare::ScriptDomain::CosDigest, &generation)
+        .script_guard_counters(
+            task_core::script_compare::ScriptDomain::CosDigest,
+            &generation,
+        )
         .expect("read")
         .expect("row");
     assert_eq!(counters.explained_in_window(), 1);
@@ -183,7 +191,11 @@ async fn cos_digest_behavior_change_unapproved_or_revoked_delta_rolls_back() {
         };
         let (f, world, _) = ts_pass_with(pilot, approve, revoke).await;
         let r = &world.records[0];
-        assert_eq!(r.outcome, CompareOutcome::Mismatch, "{approve} {revoke}: {r:?}");
+        assert_eq!(
+            r.outcome,
+            CompareOutcome::Mismatch,
+            "{approve} {revoke}: {r:?}"
+        );
         assert_eq!(r.explained_by, None);
         assert_eq!(cos_digest_mode(&f), ScriptMode::Rust, "{approve} {revoke}");
     }
@@ -195,7 +207,11 @@ async fn cos_digest_behavior_change_unexplained_delta_rolls_back() {
     for (max, ellipsis) in [(199, "…"), (200, ""), (200, "...")] {
         let (f, world, _) = ts_pass_with(CappingTs { max, ellipsis }, true, false).await;
         let r = &world.records[0];
-        assert_eq!(r.outcome, CompareOutcome::Mismatch, "{max} {ellipsis:?}: {r:?}");
+        assert_eq!(
+            r.outcome,
+            CompareOutcome::Mismatch,
+            "{max} {ellipsis:?}: {r:?}"
+        );
         assert_eq!(r.explained_by, None);
         assert_eq!(cos_digest_mode(&f), ScriptMode::Rust, "{max} {ellipsis:?}");
     }
@@ -223,7 +239,10 @@ async fn cos_digest_behavior_change_compare_counts_explained_toward_promotion() 
         (CosDigestAppliedBy::Rust, CompareOutcome::Explained),
         "{r:?}"
     );
-    assert!(world.messages.contains(&"E".repeat(LONG)), "compare applies Rust");
+    assert!(
+        world.messages.contains(&"E".repeat(LONG)),
+        "compare applies Rust"
+    );
     let c = streak(&f, &generation);
     assert_eq!((c.clean_streak, c.explained_in_window()), (1, 1));
     assert_eq!(cos_digest_mode(&f), ScriptMode::Compare);

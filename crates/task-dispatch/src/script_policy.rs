@@ -21,9 +21,9 @@ use task_core::chat::digest::{
     CosDigestCommand, CosDigestInput, CosDigestPassOutput, CosDigestPassRead,
     CosDigestPassViolation, validate_cos_digest_commands, validate_cos_digest_pass,
 };
-use task_core::script_behavior_change::{ApprovedBehaviorChange, ExplainedBy};
 use task_core::llm_route::{ExecutionClass, HarnessId, Registry, route_priority_decide};
 use task_core::model_policy::{LaneCeiling, RuleMatch, TaskFeatures};
+use task_core::script_behavior_change::{ApprovedBehaviorChange, ExplainedBy};
 use task_core::script_compare::{
     CompareCandidate, CompareError, CompareOutcome, CosDigestApplied, CosDigestAppliedBy,
     CosDigestCommandsSummary, CosDigestCompareRecord, CosDigestFallback, CosDigestOpLog,
@@ -862,7 +862,13 @@ fn explain_cos_digest_run(
     let input = serde_json::to_value(input?).ok()?;
     let rust = serde_json::to_value(rust).ok()?;
     let ts = serde_json::to_value(ts).ok()?;
-    task_core::script_behavior_change::explain(approved, ScriptDomain::CosDigest, &input, &rust, &ts)
+    task_core::script_behavior_change::explain(
+        approved,
+        ScriptDomain::CosDigest,
+        &input,
+        &rust,
+        &ts,
+    )
 }
 
 /// `cos_digest` の pass の op（付記 S4-12）。名前は capability と同じ。

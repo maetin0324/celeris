@@ -65,11 +65,13 @@ fn generate_cases(spec: &BehaviorChangeSpec) -> Vec<BehaviorChangeCase> {
         .into_iter()
         .map(|(name, input)| {
             let rust = rust_of(&input);
-            let (expected, expect) =
-                match spec.applies_to(&input).then(|| spec.expected_output(&input, &rust)) {
-                    Some(Some(e)) => (e, BehaviorChangeExpect::Explained),
-                    _ => (rust.clone(), BehaviorChangeExpect::Equal),
-                };
+            let (expected, expect) = match spec
+                .applies_to(&input)
+                .then(|| spec.expected_output(&input, &rust))
+            {
+                Some(Some(e)) => (e, BehaviorChangeExpect::Explained),
+                _ => (rust.clone(), BehaviorChangeExpect::Equal),
+            };
             BehaviorChangeCase {
                 name,
                 input,
@@ -87,7 +89,11 @@ fn sorted(v: &Value) -> Value {
         Value::Object(m) => {
             let mut keys: Vec<&String> = m.keys().collect();
             keys.sort();
-            Value::Object(keys.into_iter().map(|k| (k.clone(), sorted(&m[k]))).collect())
+            Value::Object(
+                keys.into_iter()
+                    .map(|k| (k.clone(), sorted(&m[k])))
+                    .collect(),
+            )
         }
         Value::Array(a) => Value::Array(a.iter().map(sorted).collect()),
         other => other.clone(),
@@ -105,7 +111,9 @@ fn cases_text(cases: &[BehaviorChangeCase]) -> String {
 }
 
 fn file_sha(bytes: &[u8]) -> String {
-    sha256_digest(bytes).trim_start_matches("sha256:").to_owned()
+    sha256_digest(bytes)
+        .trim_start_matches("sha256:")
+        .to_owned()
 }
 
 #[test]
@@ -166,7 +174,13 @@ fn behavior_change_cases_match_rust_reference_and_spec() {
     }
     // S6 pilot の「差分 9 件」（201・500・4000 文字 × 3 入力）。
     assert_eq!(pilot_explained, 9);
-    assert_eq!(cases.iter().filter(|c| c.name.starts_with("pilot/")).count(), 15);
+    assert_eq!(
+        cases
+            .iter()
+            .filter(|c| c.name.starts_with("pilot/"))
+            .count(),
+        15
+    );
     // 旧挙動の fixture（Rust golden）には仕様の当たる行が無い（旧挙動の評価は差分 0 件で判定できる）。
     let golden = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

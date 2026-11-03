@@ -156,4 +156,10 @@ pub struct CosDigestCompareRecord {
     pub safety_violations: Vec<String>,
     pub elapsed_us: u64,
     pub applied: CosDigestApplied,
+    /// 付記 S5-3: mode `canary`・`ts` でこの pass が TS の側に選ばれたか。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub canary_selected: bool,
+    /// 付記 S5-3: mode `canary` の比率（それ以外は `None`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_bps: Option<u32>,
 }

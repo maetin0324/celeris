@@ -9,6 +9,9 @@
 //! - `PolicyScriptSource` が無い・その generation の口を返せない（bundle が違う・isolate が無い・drain 中、付記 S5-2）・
 //!   tokio の runtime が無いときは TS を呼ばず `unavailable` を記録する。
 //! - generation の確認・`unavailable`・deadline・in-flight の上限・記録は両領域で同じ経路（[`Dispatcher::compare_domain`]）を通る。
+//! - 付記 S5: mode `canary`・`ts` の選択・TS を待つ側・fallback・tick の予算は [`script_canary`]。戻しの書き込みに
+//!   失敗した領域は process の中で `rust` と扱う（S5-6）。`canary`・`ts` の generation は manifest の
+//!   `checkpoint_versions` が保存済みの版を含むときだけ呼ぶ（S5-5）。
 //! - 付記 S4-14: 領域 `cos_digest` は digest pass（`cos_chat/digest.rs`）が [`Dispatcher::script_target`] で
 //!   `compare`・`ts` の宛先を得て、`compare` は同じ `spawn_compare` を通る。記録は `script_compare_log`（S4-15）。
 
@@ -16,16 +19,45 @@ use std::sync::Arc;
 
 use task_core::model_policy::{LaneCeiling, TaskFeatures};
 use task_core::script_compare::{
-    ScriptDomain, ScriptDomainModeRow, ScriptGenerationState, ScriptMode,
+    ScriptDomain, ScriptDomainModeRow, ScriptGenerationState, ScriptMode, checkpoint_versions_cover,
 };
 use tokio::task::JoinHandle;
 
 use super::route_select::{RouteInput, RouteTrace};
 use super::*;
 use crate::script_policy::{
-    CompareDraft, MAX_IN_FLIGHT_COMPARES, PolicyScript, PolicyScriptSource, SCRIPT_CALL_DEADLINE,
-    ScriptDomainStore, SingleBundleSource,
+    MAX_IN_FLIGHT_COMPARES, PolicyScript, PolicyScriptSource, ScriptDomainStore, SingleBundleSource,
 };
+
+/// 付記 S5: canary・ts の結線。
+#[path = "script_canary.rs"]
+pub(in crate::dispatcher) mod script_canary;
+#[cfg(test)]
+pub(in crate::dispatcher) use script_canary::SCRIPT_TICK_WAIT_BUDGET;
+pub(in crate::dispatcher) use script_canary::ScriptTickWait;
+
+/// 試験: mode と比率だけを持つ宛先（選択の試験用。store は空の DB）。
+#[cfg(test)]
+pub(in crate::dispatcher) fn script_canary_target_for_test(
+    mode: ScriptMode,
+    canary_bps: Option<u32>,
+) -> CompareTarget {
+    let store: Arc<dyn ScriptDomainStore> = match task_core::SqliteStore::open_in_memory() {
+        Ok(s) => Arc::new(s),
+        Err(e) => panic!("in-memory store: {e}"),
+    };
+    CompareTarget {
+        store,
+        mode,
+        row_generation: Some("G".into()),
+        version: 1,
+        canary_bps,
+        generation_id: "G".into(),
+        bundle_sha256: String::new(),
+        host_api: String::new(),
+        call: Err("test".into()),
+    }
+}
 
 /// dispatcher が持つ compare の状態。既定は何も注入しない（mode を読まず、TS を呼ばない）。
 #[derive(Default)]
@@ -37,6 +69,12 @@ pub(in crate::dispatcher) struct ScriptCompareState {
     /// mode を読んだ tick（`Dispatcher::ticks`）。
     read_at_tick: Option<u64>,
     in_flight: Vec<JoinHandle<()>>,
+    /// 付記 S5-8: この tick の TS の待ちと直近の集計。
+    tick_wait: ScriptTickWait,
+    /// 付記 S5-6: 戻しの書き込みに失敗した領域（process の中で `rust`）。
+    pending_rollbacks: Vec<script_canary::PendingRollback>,
+    /// この tick の `lane_rules` の TS の lane（task ごと）。
+    lane_canary: script_canary::LaneCanary,
 }
 
 impl Dispatcher {
@@ -82,6 +120,13 @@ impl Dispatcher {
         if self.script_compare.read_at_tick == Some(self.ticks) {
             return;
         }
+        if self
+            .script_compare
+            .read_at_tick
+            .is_none_or(|t| t != self.ticks)
+        {
+            self.script_compare.lane_canary.clear();
+        }
         self.script_compare.read_at_tick = Some(self.ticks);
         let Some(store) = &self.script_compare.store else {
             self.script_compare.modes.clear();
@@ -97,80 +142,33 @@ impl Dispatcher {
     }
 
     /// `decide_lane` の Rust の判定の後に呼ぶ。`features` は `infer_with_hints` の後の 9 軸、`rust_lane` は天井で
-    /// 丸めた後の lane。mode が `compare` でなければ何もしない。Rust の判定は変えない（戻り値も無い）。
+    /// 丸めた後の lane。mode `compare` と canary の Rust の側は記録だけ（`None`）。canary の TS の側と `ts` は
+    /// Rust の検証を通った TS の lane を返す（付記 S5-3・S5-6）。
     pub(super) fn compare_lane_rules(
         &mut self,
         task_id: TaskId,
         features: &TaskFeatures,
         rust_lane: Tier,
         ceiling: &LaneCeiling,
-    ) {
-        self.compare_domain(task_id, ScriptDomain::LaneRules, |_, g, sha, api| {
-            CompareDraft::lane_rules(g, sha, api, features, rust_lane, ceiling)
-        });
+    ) -> Option<Tier> {
+        self.canary_lane_rules(task_id, features, rust_lane, ceiling)
     }
 
-    /// 付記 S2-11: `dispatch_run` が task の run の `select_route_with` の直後に 1 回だけ呼ぶ。
+    /// 付記 S2-11・S5-3: `dispatch_run` が task の run の `select_route_with` の直後に 1 回だけ呼ぶ。
     /// 比べる harness は `trace.harness`（選んだ harness か、全部が断ったときは最後に試した harness）で、
-    /// 無ければ記録しない。CoS の判定（`input.cos`）は比べない。入力と Rust の出力は `route_select_one` の
-    /// 最初の `route_priority` と同じ引数で作る。候補列・選んだ route・event は変えない。
+    /// 無ければ記録しない。CoS の判定（`input.cos`）は比べない。canary の TS の側と `ts` で、検証を通った TS の
+    /// 候補列が Rust と違えば、その列を返す（呼び出し側が選び直す）。
     pub(in crate::dispatcher) fn compare_route_priority(
         &mut self,
         task_id: TaskId,
         run_id: &str,
         input: &RouteInput,
         trace: &RouteTrace,
-    ) {
-        if input.cos {
-            return;
-        }
-        let Some(harness) = trace.harness.clone() else {
-            return;
-        };
-        self.compare_domain(task_id, ScriptDomain::RoutePriority, |d, g, sha, api| {
-            CompareDraft::route_priority(
-                g,
-                sha,
-                api,
-                Some(run_id.to_owned()),
-                &d.llm_route_registry,
-                &harness,
-                input.lane.as_deref(),
-                false,
-                input.harness.execution_class.as_ref(),
-            )
-        });
-    }
-
-    /// 全領域の共通の経路: mode の確認 → generation の確認 → 下書き → `unavailable` か TS の呼び出し。
-    /// `draft` は mode が `compare` で generation の id があるときだけ呼ぶ（mode `rust` では DTO を作らない）。
-    fn compare_domain(
-        &mut self,
-        task_id: TaskId,
-        domain: ScriptDomain,
-        draft: impl FnOnce(&Self, String, String, String) -> CompareDraft,
-    ) {
-        let Some(target) = self.compare_target(domain) else {
-            return;
-        };
-        let draft = draft(
-            self,
-            target.generation_id,
-            target.bundle_sha256,
-            target.host_api,
-        );
-        let store = target.store;
-        let (script, runtime) = match target.call {
-            Err(reason) => {
-                append_compare(store.as_ref(), task_id, draft.unavailable(&reason));
-                return;
-            }
-            Ok(call) => call,
-        };
-        self.spawn_compare(domain, &runtime, async move {
-            let (result, elapsed) = draft.call(script.as_ref(), SCRIPT_CALL_DEADLINE).await;
-            append_compare(store.as_ref(), task_id, draft.finish(&result, elapsed));
-        });
+    ) -> Option<(
+        task_core::llm_route::HarnessId,
+        Vec<task_core::llm_route::CandidateKey>,
+    )> {
+        self.canary_route_priority(task_id, run_id, input, trace)
     }
 
     /// 付記 S4-15: `script_compare_log` の store（無ければ記録しない）。
@@ -178,12 +176,6 @@ impl Dispatcher {
         &self,
     ) -> Option<Arc<dyn ScriptDomainStore>> {
         self.script_compare.store.clone()
-    }
-
-    /// mode が `compare` で generation の id があれば比較の宛先を返す（無ければ `None` = 何もしない）。
-    /// `call` が `Err` なら TS を呼ばず、その理由で `unavailable` を記録する。
-    fn compare_target(&mut self, domain: ScriptDomain) -> Option<CompareTarget> {
-        self.script_target(domain, &[ScriptMode::Compare])
     }
 
     /// mode が `modes` のどれかで generation の id があれば宛先を返す（付記 S4-14: `cos_digest` は `ts` も）。
@@ -201,7 +193,21 @@ impl Dispatcher {
         if !modes.contains(&row.mode) {
             return None;
         }
-        let (mode, row_generation, version) = (row.mode, row.generation_id.clone(), row.version);
+        // 付記 S5-6: 戻しを書けなかった領域は `rust`。
+        if self
+            .script_compare
+            .pending_rollbacks
+            .iter()
+            .any(|p| p.domain == domain)
+        {
+            return None;
+        }
+        let (mode, row_generation, version, canary_bps) = (
+            row.mode,
+            row.generation_id.clone(),
+            row.version,
+            row.canary_bps,
+        );
         let store = self.script_compare.store.clone()?;
         let generation_id = row.generation_id.clone()?;
         let generation = match store.script_generation_get(&generation_id) {
@@ -224,6 +230,19 @@ impl Dispatcher {
                 "script generation `{generation_id}` does not declare {}",
                 domain.as_str()
             )),
+            // 付記 S5-5: TS の結果を使う mode は、保存済みの checkpoint の版を manifest が含む generation だけ。
+            (Some(g), _)
+                if matches!(mode, ScriptMode::Canary | ScriptMode::Ts)
+                    && !checkpoint_versions_cover(
+                        &g.checkpoint_versions(),
+                        &store.script_checkpoint_versions_stored(domain),
+                    ) =>
+            {
+                Err(format!(
+                    "checkpoint_incompatible: script generation `{generation_id}` does not cover the stored checkpoint versions of {}",
+                    domain.as_str()
+                ))
+            }
             (Some(_), None) => Err("no policy script runtime".to_owned()),
             (Some(g), Some(source)) => source.pinned(g),
         };
@@ -236,6 +255,7 @@ impl Dispatcher {
             mode,
             row_generation,
             version,
+            canary_bps,
             generation_id,
             bundle_sha256,
             host_api,
@@ -270,22 +290,10 @@ pub(in crate::dispatcher) struct CompareTarget {
     pub mode: ScriptMode,
     pub row_generation: Option<String>,
     pub version: u64,
+    /// mode `canary` の比率（S5-3）。
+    pub canary_bps: Option<u32>,
     pub generation_id: String,
     pub bundle_sha256: String,
     pub host_api: String,
     pub call: Result<(Arc<dyn PolicyScript>, tokio::runtime::Handle), String>,
-}
-
-/// 記録を追記する。失敗しても dispatch は続ける（warn の log だけ。S2-6）。
-fn append_compare(
-    store: &dyn ScriptDomainStore,
-    task_id: TaskId,
-    record: Result<task_core::script_compare::ScriptCompareRecord, serde_json::Error>,
-) {
-    let result = record
-        .map_err(StoreError::from)
-        .and_then(|r| store.script_compare_append(task_id, &r, time::OffsetDateTime::now_utc()));
-    if let Err(e) = result {
-        tracing::warn!(%task_id, error = %e, "script_compare_recorded append failed");
-    }
 }

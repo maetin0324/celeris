@@ -922,3 +922,6 @@ mod cos_digest_pass;
 
 #[path = "cos_digest_script_ts.rs"]
 mod ts;
+
+#[path = "cos_digest_script_canary.rs"]
+mod canary;

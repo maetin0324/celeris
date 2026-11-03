@@ -222,6 +222,42 @@ pub struct ScriptCompareRecord {
     /// S2-8 の code。
     pub safety_violations: Vec<String>,
     pub elapsed_us: u64,
+    /// 付記 S5-3・S5-6: 判定に使った側。`canary` の TS 側・`ts` で TS の結果を検証して使えば `ts`、
+    /// 使わなければ `rust`。mode `compare` は `None`（挙動は常に Rust）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_by: Option<CosDigestAppliedBy>,
+    /// 付記 S5-6: TS の側に選ばれたのに Rust の結果を使った理由（`ts_error`・`invalid_output`・`safety_violation`・
+    /// `unavailable`・`tick_budget` 等）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<CosDigestFallback>,
+    /// 付記 S5-3: mode `canary`・`ts` で、この単位が TS の側に選ばれたか。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub canary_selected: bool,
+    /// 付記 S5-3: mode `canary` の比率（それ以外は `None`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary_bps: Option<u32>,
+}
+
+/// 付記 S5-3: canary の決定的な選択。`sha256("celeris.canary/1" 0x00 domain 0x00 generation 0x00 unit_key)` の
+/// 先頭 8 byte を big-endian の u64 にし、`% 10000 < canary_bps` なら TS の側。乱数・時計を使わない。
+pub fn canary_selected(
+    domain: ScriptDomain,
+    generation_id: &str,
+    unit_key: &str,
+    canary_bps: u32,
+) -> bool {
+    let mut hasher = Sha256::new();
+    hasher.update(b"celeris.canary/1");
+    hasher.update([0u8]);
+    hasher.update(domain.as_str().as_bytes());
+    hasher.update([0u8]);
+    hasher.update(generation_id.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(unit_key.as_bytes());
+    let digest = hasher.finalize();
+    let mut head = [0u8; 8];
+    head.copy_from_slice(&digest[..8]);
+    u64::from_be_bytes(head) % 10_000 < u64::from(canary_bps)
 }
 
 /// 記録する入力の直列化の上限（S2-3）。超えたら `input` を捨て `input_digest` だけを残す。

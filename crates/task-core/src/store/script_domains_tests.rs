@@ -492,6 +492,10 @@ fn record(generation: &str, digest: &str, outcome: CompareOutcome) -> ScriptComp
         normalized: vec![],
         safety_violations: vec![],
         elapsed_us: 120,
+        applied_by: None,
+        fallback: None,
+        canary_selected: false,
+        canary_bps: None,
     }
 }
 
@@ -581,6 +585,8 @@ fn script_compare_log_appends_once_per_outcome_and_is_append_only() {
             message_id: "m1".into(),
             requeued: 0,
         },
+        canary_selected: false,
+        canary_bps: None,
     };
     assert!(store.script_compare_log_append(&record, now).unwrap());
     assert!(!store.script_compare_log_append(&record, now).unwrap());

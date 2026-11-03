@@ -260,6 +260,11 @@ impl SqliteStore {
         self.with_read_conn(|conn| read_generation_by_sha_tx(conn, bundle_sha256))
     }
 
+    /// S5-5: 領域に保存済みの checkpoint の版の集合（dispatcher が pass の前に manifest と照合する）。
+    pub fn script_checkpoint_versions_stored(&self, _domain: ScriptDomain) -> Vec<u32> {
+        stored_checkpoint_versions()
+    }
+
     /// mode を変える（S2-4 の CAS・S5-4）。`canary` は比率の要る [`Self::script_domain_set_canary`] で変える。
     pub fn script_domain_set_mode(
         &self,

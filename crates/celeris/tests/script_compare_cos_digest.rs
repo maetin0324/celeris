@@ -613,6 +613,10 @@ async fn script_compare_cos_digest_daemon_restart_without_bundle_restores_rust()
     );
     assert_eq!(log(&env.store).len(), 1);
 
+    // 戻した CAS で generation は `draining` になり、そのままでは指せない（付記 S5-4）。
+    // known-good の戻り道（`retired`→再登録）で `loaded` に戻してから compare にする（付記 S5-3）。
+    let generation = env.rearm_generation(&generation.id);
+
     // 配備先に無い bundle を指す daemon も同じ（読めない bundle では compare を続けない）。
     env.set_mode(ScriptMode::Compare, Some(generation.id));
     seed_run(&env.store, "run-c-rust", ChatRunState::Completed);

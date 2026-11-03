@@ -327,6 +327,10 @@ async fn script_compare_daemon_injects_records_and_restores_rust() {
     let row = env.store.script_domain_mode(DOMAIN).expect("mode");
     assert_eq!(row.updated_by, "system:script-startup");
 
+    // 戻した CAS で generation は `draining` になり、そのままでは指せない（付記 S5-4）。
+    // known-good の戻り道（`retired`→再登録）で `loaded` に戻してから compare にする（付記 S5-3）。
+    let generation = env.rearm_generation(&generation.id);
+
     // 配備先に無い bundle を指す daemon も同じ（読めない bundle では compare を続けない）。
     env.set_mode(ScriptMode::Compare, Some(generation.id));
     let task = env.insert_task();

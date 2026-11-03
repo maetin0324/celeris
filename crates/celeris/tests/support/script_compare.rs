@@ -18,7 +18,7 @@ use celeris_script::manifest::{VerifiedBundle, load_bundle_dir, sha256_hex};
 use celeris_script::{ScriptRuntimeHandle, ScriptSource};
 use task_core::script_compare::{
     CompareOutcome, NewScriptGeneration, ScriptCompareRecord, ScriptGeneration,
-    ScriptGenerationState, ScriptMode, ScriptModeChange,
+    ScriptGenerationState, ScriptGenerationTransition, ScriptMode, ScriptModeChange,
 };
 use task_core::{
     Budget, Check, Criterion, Event, RoutingRecord, SqliteStore, Status, Task, TaskId, TaskKind,
@@ -464,6 +464,51 @@ impl Env {
                 OffsetDateTime::now_utc(),
             )
             .expect("generation")
+    }
+
+    /// mode の行から外れて `draining` になった generation を、付記 S5-1・S5-3 の known-good の戻り道
+    /// （`retired` にしてから同じ hash を登録し直して `loaded` に戻す）で再び指せるようにする。
+    /// `draining` の generation へ直接戻すことは store が拒む（付記 S5-4）ので、その規則は弱めない。
+    /// 試験では daemon は止まっていて in-flight は 0 なので、drain の終わりとして `retired` にしてよい。
+    pub fn rearm_generation(&self, id: &str) -> ScriptGeneration {
+        let current = self
+            .store
+            .script_generation_get(id)
+            .expect("read")
+            .expect("generation");
+        assert_eq!(
+            current.state,
+            ScriptGenerationState::Draining,
+            "rearm expects a generation left draining by a rust restore"
+        );
+        self.store
+            .script_generation_transition(
+                &ScriptGenerationTransition {
+                    id: id.to_owned(),
+                    to: ScriptGenerationState::Retired,
+                    actor: "human:test".into(),
+                    reason: "drained (daemon stopped)".into(),
+                    cancelled_in_flight: None,
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .expect("retire");
+        let again = self
+            .store
+            .script_generation_record(
+                &NewScriptGeneration {
+                    bundle_sha256: current.bundle_sha256.clone(),
+                    host_api: current.host_api.clone(),
+                    schema_sha256: current.schema_sha256.clone(),
+                    manifest_json: current.manifest_json.clone(),
+                    state: ScriptGenerationState::Loaded,
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .expect("re-register");
+        assert_eq!(again.id, current.id, "re-registration keeps the row");
+        assert_eq!(again.state, ScriptGenerationState::Loaded);
+        again
     }
 
     pub fn set_mode(&self, mode: ScriptMode, generation: Option<String>) {

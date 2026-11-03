@@ -45,7 +45,10 @@ completed: 2026-11-03
 - **遅い host**: TS の待ち（1 tick 200 ms）の `timeout` が (f) の 10 分 3 件に当たったときだけ、新しい一時 DB で場面をやり直す（上限 5 回）。
 
 ## 証拠（提出時の HEAD で実行、基準は `$CELERIS_WU_BASE`）
-EVIDENCE_PLACEHOLDER
+- `CELERIS_SCRIPT_REQUIRE_BUNDLE=1 cargo nextest run -p celeris --test script_generation_e2e`: exit 0、1 件合格・0 skipped（約 5 秒）。同じコマンドを 40 回繰り返して全部合格、場面のやり直し 0 回。
+- `bash scripts/dev/test-affected.sh`: exit 0。対象 crate は `celeris`・`celerisctl`。910 件合格・0 skipped、script bundle の SKIP 0 件。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
 
 ## commit
 - phase s5: gen-e2e: script_generation_e2e（新旧併存→切替→途中 error→rollback→再起動）と試験の入口

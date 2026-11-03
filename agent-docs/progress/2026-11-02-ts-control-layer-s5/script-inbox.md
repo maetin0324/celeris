@@ -30,7 +30,7 @@ CoS の triage と `crates/celeris/src/notify.rs` は変更していない。tri
 ## 付記 S5-12 の試験名との対応
 付記 S5-12 の `script_guard_inbox_item_once_per_event` は、この unit では `script_inbox_item_once_per_event_survives_restart` の名前で作った（`crates/celeris/src/daemon/script_guard_tests.rs`）。他の試験は `script_inbox_human_actor_creates_no_item_and_closes_open_ones`、`script_inbox_generation_invalidated_and_halt_items`、`script_inbox_reason_code_takes_leading_code`、`script_inbox_item_shows_domain_generation_and_code`（task-ops）。
 
-## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+## 検査（1 回目の run の提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`。2 回目の run はコードを変えていないので script_inbox の試験 5 件だけ再実行し、5 passed）
 - `bash scripts/dev/test-affected.sh`: exit 0。nextest 7156 件 passed・21 件 skipped、web 697 件 passed（tsc -b を含む）、test-ts-verify 18 passed・0 failed、script bundle SKIP 0 件。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
@@ -40,7 +40,8 @@ CoS の triage と `crates/celeris/src/notify.rs` は変更していない。tri
 - 実際に event を書く経路（daemon-gen の draining→retired、canary-dispatch の `script_effect_unverified`、guard の `guard_*`）は後の unit で入る。この unit の試験は store へ直接記録を書いて確かめた。実 daemon を通した確認は gen-e2e に任せる。
 - 受信箱の案内先は daemon の画面で、script の領域を操作する専用の画面は無い。
 
-- 範囲 check が `crates/task-core/migrations/` と `crates/campaign/src/ops_r1_trace.rs` を許可しないので、この unit の範囲 check は不合格のままで、計画の問題として申告した。移行 0106 を足すと `SCHEMA_VERSION` が上がり、`SUPPORTED_SCHEMA_VERSIONS` の追従も要る。計画でこの 2 path を許可すれば、この branch の commit のまま通る見込み（範囲外はこの 2 path だけ）。表を足さない案（`feed_cursor` に cursor を置き、項目を記録の表から読むたびに導く）は、付記 S5-7 と違う形になるので採らなかった。
+- 範囲 check が不合格のまま。範囲外は `crates/task-core/migrations/0106_script_inbox.sql` と `crates/campaign/src/ops_r1_trace.rs` の 2 path だけ（提出時の HEAD で実行、exit 1）。移行 0106 を足すと `SCHEMA_VERSION` が上がり、`SUPPORTED_SCHEMA_VERSIONS` の追従も要る。計画で 2 path を許可すれば、この branch の commit のまま通る見込み。2 回目の run で `result.json` の `yield.plan_issue` として申告した。
+- 表を足さない案は採らなかった。`feed_cursor` に cursor を置けても、開いている項目と閉じた時刻の置き場が無い。`feed_notices` は通知の表で受信箱の正本ではない。記録の表からその都度導くと、受信箱の読み出しごとに記録を走査する。`crates/task-core/src/` に SQL を移して check だけを通す案は、check を避けるだけで、`SUPPORTED_SCHEMA_VERSIONS` の追従も残るので採らなかった。
 
 ## 本番への移行
 migration 0106 は release の適用で自動で走る。config の変更は要らない。

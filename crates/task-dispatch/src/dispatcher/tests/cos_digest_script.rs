@@ -621,8 +621,9 @@ async fn cos_digest_script_retry_after_failed_read() {
     assert_all_match(&with, 1);
 }
 
-/// message の後の requeue の書き込みが失敗する → requeue は再試行されない（run は digest 済みで走査に
-/// 載らない）が、item は running のまま残らず、同じ pass の退避（fallback）で人へ渡る。message は 1 件。
+/// requeue の書き込みが失敗する → その run は message も含めて何も残らない（ADR 2026-11-03-cos-digest-persist:
+/// message・requeue・記録は同じ transaction）。item は同じ pass の退避（fallback）で人へ渡り、書き込みが直った次の
+/// pass で message が 1 件だけ書かれる（requeue は item が running でないので 0 件）。記録は run ごとに 1 件。
 #[tokio::test(start_paused = true)]
 async fn cos_digest_script_retry_after_failed_requeue_write() {
     async fn scenario(ts: Ts) -> World {
@@ -632,24 +633,25 @@ async fn cos_digest_script_retry_after_failed_requeue_write() {
         f.fail_requeue_write(true);
         f.observe_run_end();
         let failed = settle(&mut f).await;
-        assert_eq!(f.digest_counts().len(), 1, "the message was written");
+        assert!(f.digest_counts().is_empty(), "the run was rolled back");
         assert!(failed.requeues.is_empty());
+        assert!(failed.records.is_empty(), "{:?}", failed.records);
         f.fail_requeue_write(false);
         assert!(
             failed.items.contains(r#""run-stop","fallback","run-stop""#),
             "{}",
             failed.items
         );
+        f.observe_run_end();
         let world = settle(&mut f).await;
+        assert_eq!(f.digest_counts().len(), 1, "written on the next pass");
         assert!(world.requeues.is_empty(), "{:?}", world.requeues);
         assert_eq!(world.items, failed.items, "not stuck in running");
-        assert_eq!(world.messages, failed.messages, "no second message");
         settle(&mut f).await;
         world
     }
     let (_, with) = same_with_and_without_ts(scenario).await;
-    // 記録は apply が全部成功した run だけに作る（hook の結線）。途中で落ちた run は比べない。
-    assert!(with.records.is_empty(), "{:?}", with.records);
+    assert_eq!(with.records.len(), 1, "{:?}", with.records);
 }
 
 // ---------------------------------------------------------------- (4) cancel
@@ -707,7 +709,19 @@ async fn cos_digest_script_dispatcher_dropped_mid_compare() {
         if let Some(script) = script {
             assert_eq!(script.calls(), 0, "the digested run is not compared again");
         }
-        assert!(world.records.is_empty(), "the aborted compare left nothing");
+        // ADR 2026-11-03-cos-digest-persist 3: the restarted dispatcher closes the shadow's outbox
+        // row with the `unavailable` record (one record, not counted by script-guard).
+        if let Ts::Compare(_) = ts {
+            assert_eq!(world.records.len(), 1, "{:?}", world.records);
+            assert_eq!(world.records[0].outcome, CompareOutcome::Unavailable);
+            assert_eq!(world.records[0].applied.requeued, 1);
+            assert!(
+                f.store
+                    .cos_digest_shadow_pending()
+                    .expect("outbox")
+                    .is_empty()
+            );
+        }
         assert_eq!(world.requeues.len(), 1);
         world
     }
@@ -746,7 +760,8 @@ async fn cos_digest_script_restart_same_db() {
     assert_all_match(&with, 2);
 }
 
-/// requeue の書き込みが失敗したまま落ちる → 再起動後も message は 1 件、requeue は 0 回、item は退避のまま。
+/// requeue の書き込みが失敗したまま落ちる → 何も残らず、再起動後の pass で message が 1 件、requeue は 0 回
+/// （item は退避のまま）。
 #[tokio::test(start_paused = true)]
 async fn cos_digest_script_restart_after_failed_requeue() {
     async fn scenario(ts: Ts) -> World {
@@ -756,6 +771,7 @@ async fn cos_digest_script_restart_after_failed_requeue() {
         f.fail_requeue_write(true);
         f.observe_run_end();
         settle(&mut f).await;
+        assert!(f.digest_counts().is_empty(), "the run was rolled back");
         f.fail_requeue_write(false);
         f.restart_digest(ts);
         let world = settle(&mut f).await;

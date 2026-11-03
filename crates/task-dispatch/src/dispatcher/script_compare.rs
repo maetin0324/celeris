@@ -75,6 +75,8 @@ pub(in crate::dispatcher) struct ScriptCompareState {
     pending_rollbacks: Vec<script_canary::PendingRollback>,
     /// この tick の `lane_rules` の TS の lane（task ごと）。
     lane_canary: script_canary::LaneCanary,
+    /// ADR 2026-11-03-cos-digest-persist: `cos_digest` の影の outbox を閉じる task と再処理の要否。
+    pub(in crate::dispatcher) digest_shadows: super::cos_chat::digest::CosDigestShadows,
 }
 
 impl Dispatcher {
@@ -95,6 +97,19 @@ impl Dispatcher {
     /// generation へ送り、切替の前に送った要求は元の generation で終わる。
     pub fn set_policy_script_source(&mut self, source: Option<Arc<dyn PolicyScriptSource>>) {
         self.script_compare.script = source;
+    }
+
+    /// この tick の残りで mode の行を読み直す（script-guard が記録と同じ transaction で戻したとき）。
+    pub(in crate::dispatcher) fn script_compare_invalidate_modes(&mut self) {
+        self.script_compare.read_at_tick = None;
+    }
+
+    /// ADR 2026-11-03-cos-digest-persist 3: この process の task が閉じない `cos_digest` の影の outbox の行を
+    /// `unavailable` の記録で閉じる（起動の後と、影が記録を書けずに終わった後だけ store を読む）。
+    pub(crate) fn cos_digest_shadow_reconcile(&self, store: &task_core::SqliteStore) {
+        if self.script_compare.store.is_some() {
+            self.script_compare.digest_shadows.reconcile(store);
+        }
     }
 
     /// 走っている compare がすべて終わるまで待つ（試験と停止の前の片付け用）。

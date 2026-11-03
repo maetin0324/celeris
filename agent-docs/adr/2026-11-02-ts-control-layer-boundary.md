@@ -959,3 +959,10 @@ Rust の参照実装（`lane_rules` は `model_policy::match_rule`、`route_prio
 ### S6-4 今の状態
 - 本番は 3 領域とも `rust` で、S6-3 の 1 を満たす領域は無い。Rust の参照実装はすべて残す。
 - 次に移す領域の選定は、本番で 1 領域が `ts` に上がり S6-3 の 1 の観測が始まってからにする。
+
+### 付記 P0-B（2026-11-03）: `cos_digest` の apply と記録の原子化
+S5-13 の S5-7 の行の (12) のうち「apply と記録は同じ transaction にない」「追記の失敗も warn だけ」は、
+[ADR 2026-11-03-cos-digest-persist](2026-11-03-cos-digest-persist.md) で改めた。digest pass の apply は 1 つの transaction で、
+run ごとに message・requeue・記録・script-guard の計数（mode `compare` と canary の Rust の側は影の outbox の行）を同じ SAVEPOINT に入れる。
+S4-14 の「apply の直前の mode の読み直し」は、TS の出力を apply する pass では transaction の中で行う。
+`append_pass_record`・`script_compare_log_append_observed` は消した。記録の自己矛盾による検出（(12) の前半）は変えない。

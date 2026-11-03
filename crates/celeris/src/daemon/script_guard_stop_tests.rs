@@ -618,13 +618,38 @@ fn canary_digest_record(
     r
 }
 
-/// dispatcher と同じく、記録の追記と計数を 1 つの transaction で行い、`ts_side` に `canary_selected` を渡す。
+/// dispatcher と同じく、記録の追記と計数を apply と 1 つの transaction で行い（ADR 2026-11-03-cos-digest-persist）、
+/// `ts_side` に `canary_selected` を渡す。command は無い（記録と計数だけを見る）。
 fn append(store: &SqliteStore, r: &CosDigestCompareRecord) -> ScriptGuardOutcome {
-    let (appended, out) = store
-        .script_compare_log_append_observed(r, r.canary_selected, t0())
-        .expect("append");
-    assert!(appended);
-    out.expect("counted")
+    use task_core::chat::digest_apply::{
+        CosDigestApplyPass, CosDigestApplyRun, CosDigestRecordPlan, CosDigestRunApply,
+    };
+    let pass = CosDigestApplyPass {
+        pass_id: r.pass_id.clone(),
+        verify: false,
+        expect_mode: None,
+        runs: vec![CosDigestApplyRun {
+            thread_id: r.thread_id.clone(),
+            run_id: r.run_id.clone(),
+            commands: Vec::new(),
+            record: Some(CosDigestRecordPlan::Append {
+                record: Box::new(r.clone()),
+                ts_side: r.canary_selected,
+            }),
+        }],
+    };
+    let applied = store.cos_digest_apply_pass(&pass, t0()).expect("append");
+    match applied.runs.into_iter().next() {
+        Some((
+            _,
+            CosDigestRunApply::Applied {
+                record_appended: true,
+                guard: Some(out),
+                ..
+            },
+        )) => out,
+        other => panic!("not appended and counted: {other:?}"),
+    }
 }
 
 #[test]

@@ -175,13 +175,6 @@ pub trait ScriptDomainStore: Send + Sync {
         ts_side: bool,
         now: OffsetDateTime,
     ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError>;
-    /// 付記 S4-5・S5-7: `cos_digest` の記録を `script_compare_log` に追記し、同じ transaction で計数する。
-    fn script_compare_log_append_observed(
-        &self,
-        record: &CosDigestCompareRecord,
-        ts_side: bool,
-        now: OffsetDateTime,
-    ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError>;
     /// 付記 S5-6: 領域を actor `system:script-guard` で `rust` に戻す（`reason` の先頭は code）。
     /// 版違い（他の更新が先に入った）は `VersionConflict` のまま返す。
     fn script_domain_rollback(
@@ -212,15 +205,6 @@ impl ScriptDomainStore for SqliteStore {
         now: OffsetDateTime,
     ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError> {
         SqliteStore::script_compare_append_observed(self, task_id, record, ts_side, now)
-    }
-
-    fn script_compare_log_append_observed(
-        &self,
-        record: &CosDigestCompareRecord,
-        ts_side: bool,
-        now: OffsetDateTime,
-    ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError> {
-        SqliteStore::script_compare_log_append_observed(self, record, ts_side, now)
     }
 
     fn script_domain_rollback(

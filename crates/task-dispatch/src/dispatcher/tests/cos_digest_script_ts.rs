@@ -620,8 +620,8 @@ async fn cos_digest_script_ts_retry_read_run_failure_during_op() {
     assert_eq!(again.messages, world.messages);
 }
 
-/// 親の (3) requeue の書き込み失敗を mode `ts` で: message は 1 件、requeue は再試行されず、item は退避の
-/// まま。途中で落ちた run は記録しない。
+/// 親の (3) requeue の書き込み失敗を mode `ts` で: その run は message・記録も含めて何も残らず、書き込みが
+/// 直った次の pass で message・記録が 1 件ずつ（requeue は item が退避済みなので 0 件）。
 #[tokio::test(start_paused = true)]
 async fn cos_digest_script_ts_retry_requeue_write_failure() {
     async fn scenario(ts: bool) -> World {
@@ -631,23 +631,25 @@ async fn cos_digest_script_ts_retry_requeue_write_failure() {
         f.fail_requeue_write(true);
         f.observe_run_end();
         let failed = settle(&mut f).await;
-        assert_eq!(f.digest_counts().len(), 1, "the message was written");
+        assert!(f.digest_counts().is_empty(), "the run was rolled back");
         assert!(failed.requeues.is_empty());
+        assert!(failed.records.is_empty(), "{:?}", failed.records);
         f.fail_requeue_write(false);
         assert!(
             failed.items.contains(r#""run-stop","fallback","run-stop""#),
             "{}",
             failed.items
         );
+        f.observe_run_end();
         let world = settle(&mut f).await;
         assert!(world.requeues.is_empty(), "{:?}", world.requeues);
         assert_eq!(world.items, failed.items);
-        assert_eq!(world.messages, failed.messages, "no second message");
+        assert_eq!(f.digest_counts().len(), 1);
         settle(&mut f).await;
         world
     }
     let ts = ts_same_as_rust(scenario).await;
-    assert!(ts.records.is_empty(), "{:?}", ts.records);
+    assert_ts_applied(&ts, 1);
 }
 
 // ---------------------------------------------------------------- (4) cancel
@@ -802,7 +804,7 @@ async fn cos_digest_script_ts_restart_mid_pass_applies_once() {
     assert_ts_applied(&ts, 2);
 }
 
-/// 親の (5) requeue の失敗の後の再起動を mode `ts` で。
+/// 親の (5) requeue の失敗の後の再起動を mode `ts` で: 失敗した run は何も残らず、再起動後に message・記録が 1 件ずつ。
 #[tokio::test(start_paused = true)]
 async fn cos_digest_script_ts_restart_after_failed_requeue() {
     async fn scenario(ts: bool) -> World {
@@ -812,6 +814,7 @@ async fn cos_digest_script_ts_restart_after_failed_requeue() {
         f.fail_requeue_write(true);
         f.observe_run_end();
         settle(&mut f).await;
+        assert!(f.digest_counts().is_empty(), "the run was rolled back");
         f.fail_requeue_write(false);
         restart_ts(&mut f, ts.then(go));
         let world = settle(&mut f).await;
@@ -825,7 +828,7 @@ async fn cos_digest_script_ts_restart_after_failed_requeue() {
         world
     }
     let ts = ts_same_as_rust(scenario).await;
-    assert!(ts.records.is_empty(), "{:?}", ts.records);
+    assert_ts_applied(&ts, 1);
 }
 
 // ---------------------------------------------------------------- (7) mode・generation の切替
@@ -1012,3 +1015,6 @@ async fn cos_digest_script_ts_policy_version_bump_session_fresh() {
     assert!(base.records.is_empty());
     assert_ts_applied(&ts, 2);
 }
+
+#[path = "cos_digest_persist.rs"]
+mod persist;

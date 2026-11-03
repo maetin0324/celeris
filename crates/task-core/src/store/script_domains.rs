@@ -553,7 +553,7 @@ impl SqliteStore {
     }
 
     pub(super) fn script_compare_log_append_tx(
-        tx: &rusqlite::Transaction<'_>,
+        tx: &Connection,
         record: &CosDigestCompareRecord,
         now: OffsetDateTime,
     ) -> Result<bool, StoreError> {

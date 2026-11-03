@@ -293,10 +293,7 @@ impl SqliteStore {
         now: OffsetDateTime,
     ) -> Result<usize, ChatError> {
         let conn = writer(self)?;
-        Ok(conn.execute(
-            "UPDATE cos_inbox_items SET state='pending',run_id=NULL,message_id='',updated_at=?2 WHERE run_id=?1 AND state='running'",
-            params![run_id,chat_ts(now)],
-        )?)
+        requeue_run_tx(&conn, run_id, now)
     }
 
     /// Record a terminal outcome for one item. The caller validates the source decision itself.
@@ -740,6 +737,19 @@ impl SqliteStore {
         )?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
+}
+
+/// `cos_triage_requeue_run` inside the caller's transaction (the digest pass writes it with the
+/// digest message and the compare record, ADR 2026-11-03-cos-digest-persist).
+pub(crate) fn requeue_run_tx(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    now: OffsetDateTime,
+) -> Result<usize, ChatError> {
+    Ok(conn.execute(
+        "UPDATE cos_inbox_items SET state='pending',run_id=NULL,message_id='',updated_at=?2 WHERE run_id=?1 AND state='running'",
+        params![run_id, chat_ts(now)],
+    )?)
 }
 
 /// 現在の未解決 snapshot に無い `pending`／`running`／`escalated` の item を resolved にする。

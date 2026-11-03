@@ -11,8 +11,9 @@
 //!
 //! 停止基準の監視（付記 S5-7、(f) の数値のまま）:
 //! - 呼び出しごとの計数と (f) の 4 行の判定・`canary`・`ts` の `rust` への戻し・安全違反の `invalid` は、dispatcher が
-//!   記録を追記する transaction の中で store（`script_compare_append_observed`・`script_compare_log_append_observed`
-//!   → `task_core::script_guard::evaluate`）が行う。計数は表 `script_guard_state` にあり、再起動の後も残る。
+//!   記録を追記する transaction の中で store（`script_compare_append_observed`、`cos_digest` は apply と同じ transaction の
+//!   `cos_digest_apply_pass`・影の outbox を閉じる `cos_digest_shadow_finish` → `task_core::script_guard::evaluate`）が行う
+//!   （ADR 2026-11-03-cos-digest-persist）。計数は表 `script_guard_state` にあり、再起動の後も残る。
 //! - この module の見回り（[`sweep`]）は、それに加えて 2 つを行う。
 //!   1. Rust の検証を通らずに副作用が実行された記録（[`unvalidated_effect`]）を `script_compare_log` に見つけたら、
 //!      全領域を `rust` に戻して全体を止める（`script_guard_halt`。解くのは人だけ）。

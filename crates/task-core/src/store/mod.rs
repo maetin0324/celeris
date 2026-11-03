@@ -116,6 +116,7 @@ mod task_integration_state;
 pub use model_catalog::ModelCatalogStore;
 mod account_limits;
 mod completion_outcomes;
+mod cos_digest_apply;
 mod credential_wait;
 mod eval_trials;
 mod migrated_harness;

@@ -538,10 +538,10 @@ mod digest_script_compare;
 mod fallback;
 #[path = "cos_chat_triage_inbox_thread.rs"]
 mod inbox_thread;
+#[path = "cos_digest_trace.rs"]
+mod pass_trace;
 #[path = "cos_chat_root_done.rs"]
 mod root_done;
-#[path = "cos_digest_trace.rs"]
-mod trace;
 
 /// ADR 2026-10-22-cos-fixed-threads D3: an inbox item of a task in a project (directly or through
 /// its root) goes to that project's CoS thread, other items to the general CoS; each thread runs

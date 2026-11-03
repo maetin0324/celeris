@@ -3,6 +3,9 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-11-03（ADR 2026-11-03-ts-intended-behavior-change D2・D4）— **追加。v1 のまま**。エンドポイント 233〜235
+  （`GET`・`POST /script/behavior-changes`、`POST /script/behavior-changes/{spec_sha256}/revoke`。§3.134.5）を足した。`CompareOutcome` に
+  `explained`、`cos_digest` の比較の記録に `explained_by` を足した。
 - 改訂: 2026-11-03（境界 ADR 2026-11-02-ts-control-layer-boundary 付記 S5-8・P1-C）— **追加。v1 のまま**。`POST /script/generations` は
   配備先の無い hash を 409 `script_bundle_not_deployed` で拒み、`invalid` を記録しない（§3.134.3）。`DaemonSnapshot` に
   `script_tick_wait`（`ScriptTickWaitLive`: 直近 1000 tick の TS の同期の待ちの `ticks`・`p50_us`・`p95_us`・`max_us`・`tick_budget`・
@@ -581,6 +584,9 @@ token_file = "api.token"
 | 230 | POST | `/script/generations` | 配備済みの bundle を daemon が新しい isolate で検証して `loaded` で登録する（未接続は 503 `script_runtime_unavailable`。§3.134.3） | `ScriptGenerationView` | celeris（`ScriptGenerationControl`）+ store `script_generation_record` |
 | 231 | POST | `/script/generations/{id}/retire` | generation を退役させる（`active` は 409 `script_generation_active`。§3.134.3） | `ScriptGenerationView` | celeris（`ScriptGenerationControl`）+ store `script_generation_transition` |
 | 232 | POST | `/script/guard/clear` | script-guard の全体の停止を解く（人の主体だけ。付記 S5-4。§3.134.4） | `ScriptGuardClearResult` | store `script_guard_clear` |
+| 233 | GET | `/script/behavior-changes` | TS の方針改善の仕様の全版と記録（ADR 2026-11-03-ts-intended-behavior-change D4。§3.134.5） | `ScriptBehaviorChangeList` | store `script_behavior_changes` |
+| 234 | POST | `/script/behavior-changes` | 方針改善の仕様を承認する（人の主体だけ。§3.134.5） | `ScriptBehaviorChangeApproveResult` | store `script_behavior_change_approve` |
+| 235 | POST | `/script/behavior-changes/{spec_sha256}/revoke` | 承認を取り消す（認証された誰でも。§3.134.5） | `ScriptBehaviorChangeRevokeResult` | store `script_behavior_change_revoke` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3905,6 +3911,19 @@ config の欄は無い（mode は DB の表が持つ）。CLI は `celerisctl sc
 本文 `{reason}`。script-guard の全体の停止（付記 S5-7 の `halted`）を解く。人の API token の主体だけ（他は 403
 `script_mode_requires_human` で、表も記録も変えない）。止まっていなければ `{cleared: false}` で何も変えない。CoS の operation には
 無い（EXCLUDED `human_only`）。
+
+#### 3.134.5 `/script/behavior-changes`（ADR 2026-11-03-ts-intended-behavior-change D4）
+
+- `GET /script/behavior-changes` → 200 `ScriptBehaviorChangeList`（`changes`: 全版の行〈`state` は `approved`・`revoked`・`superseded`〉、
+  `events`: 追記専用の記録）。
+- `POST /script/behavior-changes` 本文 `{spec, spec_sha256, reason}` → 200 `ScriptBehaviorChangeApproveResult`。人の API token の主体だけ
+  （他は 403 `script_behavior_change_requires_human` で表も記録も変えない）。422 `behavior_change_invalid`（形・`supersedes` の食い違い）・
+  `behavior_change_domain_unsupported`（今は `cos_digest` だけ）・`behavior_change_hash_mismatch`、409 `behavior_change_version_taken`・
+  `behavior_change_version_not_newer`・`behavior_change_retired`。同じ hash が承認済みなら `{changed: false}`。
+- `POST /script/behavior-changes/{spec_sha256}/revoke` 本文 `{reason}` → 200 `ScriptBehaviorChangeRevokeResult`（認証された誰でも。
+  未知の hash は 404 `behavior_change_not_found`）。
+- 承認済みの仕様は、`cos_digest` の比較で差分が期待差分と byte 一致したときだけ outcome `explained` にする。CoS の operation には無い
+  （EXCLUDED `human_only`・`script_api_only`）。
 
 ---
 

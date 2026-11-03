@@ -379,6 +379,7 @@ fn digest_record(
         // 付記 S5-3: mode `ts` は全単位が TS の側（`unit_selected`）で、`canary_bps` は `canary` のときだけ持つ。
         canary_selected: true,
         canary_bps: None,
+        explained_by: None,
     }
 }
 

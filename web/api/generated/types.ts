@@ -400,6 +400,44 @@ export type BasisRef = {
 
 export type BasisRefKind = "standing_rule" | "decision" | "approval" | "usage" | "ledger" | "commit" | "artifact" | "progress" | "adr" | "doc" | "message" | "review";
 
+export type BehaviorChangeEvent = {
+  "action": BehaviorChangeState;
+  "actor": string;
+  "change_id": string;
+  "id": number;
+  "reason": string;
+  "spec_sha256": string;
+  "ts": string;
+  "version": number;
+};
+
+export type BehaviorChangeRow = {
+  "approved_at": string;
+  "approved_by": string;
+  "domain": ScriptDomain;
+  "id": string;
+  "spec": BehaviorChangeSpec;
+  "spec_sha256": string;
+  "state": BehaviorChangeState;
+  "updated_at": string;
+  "updated_by": string;
+  "version": number;
+};
+
+export type BehaviorChangeSpec = {
+  "cases_sha256": string;
+  "domain": ScriptDomain;
+  "edits": Array<OutputEdit>;
+  "id": string;
+  "schema": string;
+  "summary": string;
+  "supersedes"?: string | null;
+  "version": number;
+  "when": Array<InputCondition>;
+};
+
+export type BehaviorChangeState = "approved" | "revoked" | "superseded";
+
 export type BehindTarget = {
   "behind_target_age_seconds"?: number | null;
   "behind_target_commits"?: number | null;
@@ -1245,7 +1283,9 @@ export type CompareError = {
   "message": string;
 };
 
-export type CompareOutcome = "match" | "mismatch" | "ts_error" | "invalid_output" | "unavailable";
+export type CompareOutcome = "match" | "mismatch" | "ts_error" | "invalid_output" | "unavailable" | "explained";
+
+export type ConditionOp = "equals" | "min_chars" | "max_chars";
 
 export type Confidence = "high" | "medium" | "low";
 
@@ -3443,6 +3483,12 @@ export type InboxOption = {
   "needs_note": boolean;
 };
 
+export type InputCondition = {
+  "op": ConditionOp;
+  "path": string;
+  "value": unknown;
+};
+
 export type InstanceRole = "active" | "standby" | "draining" | "verify";
 
 export type InstructBody = {
@@ -4271,6 +4317,12 @@ export type OrgPatchBody = {
 
 export type OrgSkillMountBody = {
   "skill": string;
+};
+
+export type OutputEdit = {
+  "find": Array<TextPart>;
+  "path": string;
+  "replace": Array<TextPart>;
 };
 
 export type OverrideBody = {
@@ -5659,6 +5711,31 @@ export type ScratchStatus = {
   "total_max_bytes": number;
 };
 
+export type ScriptBehaviorChangeApproveBody = {
+  "reason": string;
+  "spec": BehaviorChangeSpec;
+  "spec_sha256": string;
+};
+
+export type ScriptBehaviorChangeApproveResult = {
+  "change": BehaviorChangeRow;
+  "changed": boolean;
+  "superseded"?: string | null;
+};
+
+export type ScriptBehaviorChangeList = {
+  "changes": Array<BehaviorChangeRow>;
+  "events": Array<BehaviorChangeEvent>;
+};
+
+export type ScriptBehaviorChangeRevokeBody = {
+  "reason": string;
+};
+
+export type ScriptBehaviorChangeRevokeResult = {
+  "revoked": boolean;
+};
+
 export type ScriptDomain = "lane_rules" | "route_priority" | "cos_digest";
 
 export type ScriptDomainList = {
@@ -6335,6 +6412,18 @@ export type TaskWait = {
   "detail": string;
   "kind": "depends_on_integration";
   "task_id": TaskId;
+};
+
+export type TextPart = {
+  "lit": string;
+} | {
+  "input": string;
+} | {
+  "truncate_chars": {
+  "ellipsis": string;
+  "input": string;
+  "max": number;
+};
 };
 
 export type Tier = "frontier" | "standard" | "cheap";

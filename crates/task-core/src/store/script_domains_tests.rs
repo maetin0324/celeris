@@ -587,6 +587,7 @@ fn script_compare_log_appends_once_per_outcome_and_is_append_only() {
         },
         canary_selected: false,
         canary_bps: None,
+        explained_by: None,
     };
     assert!(store.script_compare_log_append(&record, now).unwrap());
     assert!(!store.script_compare_log_append(&record, now).unwrap());
@@ -1346,6 +1347,58 @@ fn script_guard_evaluate_each_stop_condition() {
     }
     assert_eq!(classify(CompareOutcome::InvalidOutput, None), Some(Failure));
     assert_eq!(classify(CompareOutcome::Unavailable, None), None);
+    assert_eq!(
+        classify(CompareOutcome::Explained, None),
+        Some(ScriptGuardCall::Explained)
+    );
+}
+
+/// ADR 2026-11-03-ts-intended-behavior-change D2: 説明済みの差分は戻す条件に入らず、昇格の前提の件数に入る。
+/// 説明のつかない不一致は今までどおり 1 件で戻し、前提を 0 にする。
+#[test]
+fn script_guard_explained_counts_toward_readiness_but_mismatch_still_stops() {
+    let t0 = now();
+    let obs = |call, ts_side| ScriptGuardObservation {
+        call,
+        safety_violation: false,
+        ts_side,
+    };
+    let mut c = ScriptGuardCounters::default();
+    for i in 0..200 {
+        let call = if i % 4 == 0 {
+            ScriptGuardCall::Explained
+        } else {
+            ScriptGuardCall::Ok
+        };
+        c.observe(obs(call, true), t0);
+    }
+    assert_eq!(c.explained_in_window(), 50);
+    assert_eq!(c.mismatches_in_window(), 0);
+    assert_eq!(script_guard::evaluate(&c, t0), None);
+    let ready = script_guard::readiness(ScriptDomain::CosDigest, ScriptMode::Canary, &c);
+    assert!(ready.ready, "{ready}");
+    assert_eq!(ready.clean_streak, 200);
+    // 安全違反は説明済みの行でも戻す（説明は安全違反を救わない）。
+    let mut unsafe_c = c.clone();
+    unsafe_c.observe(
+        ScriptGuardObservation {
+            call: ScriptGuardCall::Explained,
+            safety_violation: true,
+            ts_side: true,
+        },
+        t0,
+    );
+    assert_eq!(
+        script_guard::evaluate(&unsafe_c, t0),
+        Some(ScriptGuardStop::GuardSafetyViolation)
+    );
+    c.observe(obs(ScriptGuardCall::Mismatch, true), t0);
+    assert_eq!(
+        script_guard::evaluate(&c, t0),
+        Some(ScriptGuardStop::GuardMismatch)
+    );
+    assert_eq!(c.clean_streak, 0);
+    assert!(!script_guard::readiness(ScriptDomain::CosDigest, ScriptMode::Canary, &c).ready);
 }
 
 /// generation ごとに別の行で数える。compare は計数だけで mode を変えない。

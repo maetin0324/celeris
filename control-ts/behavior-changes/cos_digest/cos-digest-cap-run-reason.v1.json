@@ -1,0 +1,24 @@
+{
+  "schema": "celeris.script-behavior-change/1",
+  "id": "cos-digest-cap-run-reason",
+  "version": 1,
+  "domain": "cos_digest",
+  "summary": "digest の見出しに出す run の失敗の理由を 200 文字（code point）までにし、超えたら「…」で切る（S6 pilot の改善）。cards の理由は変えない。",
+  "supersedes": null,
+  "when": [
+    { "path": "/run_state", "op": "equals", "value": "failed" },
+    { "path": "/reason", "op": "min_chars", "value": 201 }
+  ],
+  "edits": [
+    {
+      "path": "/*/text",
+      "find": [{ "lit": "。run は失敗: " }, { "input": "/reason" }, { "lit": ")" }],
+      "replace": [
+        { "lit": "。run は失敗: " },
+        { "truncate_chars": { "input": "/reason", "max": 200, "ellipsis": "…" } },
+        { "lit": ")" }
+      ]
+    }
+  ],
+  "cases_sha256": "3fcaa5be9a39597b9fd4be1d371bf073230d5c810876814b1fe76a2abde44328"
+}

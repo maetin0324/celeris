@@ -162,4 +162,7 @@ pub struct CosDigestCompareRecord {
     /// 付記 S5-3: mode `canary` の比率（それ以外は `None`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canary_bps: Option<u32>,
+    /// outcome `explained` のとき、差分を説明した承認済みの改善仕様（ADR 2026-11-03-ts-intended-behavior-change D2）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explained_by: Option<crate::script_behavior_change::ExplainedBy>,
 }

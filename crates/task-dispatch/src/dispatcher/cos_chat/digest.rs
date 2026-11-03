@@ -351,6 +351,9 @@ struct PassScript {
     call: Result<(Arc<dyn PolicyScript>, tokio::runtime::Handle), String>,
     /// The mode row at the start of the pass (mode, generation, version).
     row: (ScriptMode, Option<String>, u64),
+    /// Approved behavior changes of `cos_digest` read at the start of the pass
+    /// (ADR 2026-11-03-ts-intended-behavior-change D4). Unreadable → none (no explanation).
+    behavior_changes: Arc<Vec<task_core::script_behavior_change::ApprovedBehaviorChange>>,
 }
 
 impl Dispatcher {
@@ -472,7 +475,9 @@ impl Dispatcher {
     ) {
         let classified = match (&script.call, &ts_result, &budget_fallback) {
             (_, _, Some(budget)) => CosDigestPassClassified::unavailable(rust, &budget.message),
-            (Ok(_), Some((result, _)), None) => classify_cos_digest_pass(pass_reads, rust, result),
+            (Ok(_), Some((result, _)), None) => {
+                classify_cos_digest_pass(pass_reads, rust, result, &script.behavior_changes)
+            }
             (Err(reason), _, None) => CosDigestPassClassified::unavailable(rust, reason),
             (Ok(_), None, None) => CosDigestPassClassified::unavailable(rust, "no script result"),
         };
@@ -558,6 +563,7 @@ impl Dispatcher {
         now: OffsetDateTime,
     ) {
         let draft = script.draft;
+        let behavior_changes = script.behavior_changes;
         let call = match script.call {
             // TS cannot be called: the `unavailable` records go with the apply.
             Err(reason) => {
@@ -631,7 +637,8 @@ impl Dispatcher {
                     crate::script_policy::COS_DIGEST_PASS_DEADLINE,
                 )
                 .await;
-                let classified = classify_cos_digest_pass(&pass_reads, &rust, &result);
+                let classified =
+                    classify_cos_digest_pass(&pass_reads, &rust, &result, &behavior_changes);
                 let inputs = RecordInputs {
                     draft: &draft,
                     reads: &reads,
@@ -700,7 +707,24 @@ impl Dispatcher {
             },
             call: target.call,
             row: (target.mode, target.row_generation, target.version),
+            behavior_changes: Arc::new(self.cos_digest_behavior_changes()),
         })
+    }
+
+    /// The approved behavior changes of `cos_digest` (D4). A read error explains nothing (fail-closed).
+    fn cos_digest_behavior_changes(
+        &self,
+    ) -> Vec<task_core::script_behavior_change::ApprovedBehaviorChange> {
+        match self.script_compare_log_store().map(|s| {
+            s.script_behavior_changes_approved(task_core::script_compare::ScriptDomain::CosDigest)
+        }) {
+            Some(Ok(approved)) => approved,
+            Some(Err(error)) => {
+                tracing::warn!(%error, "cos_digest behavior changes unreadable; none apply");
+                Vec::new()
+            }
+            None => Vec::new(),
+        }
     }
 
     /// S4-14: re-read the mode row right before the apply; any change → `mode_changed`.

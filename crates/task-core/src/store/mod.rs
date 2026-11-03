@@ -134,6 +134,7 @@ mod routing_evidence;
 mod routing_log;
 mod routing_overrides;
 mod script_domains;
+mod script_behavior_changes;
 mod script_guard;
 mod site_policies;
 pub use account_limits::AccountLimit;
@@ -142,6 +143,7 @@ pub use credential_wait::{
     CredentialWaitStore, EnterWaitOutcome,
 };
 pub use decision_log::CampaignResend;
+pub use script_behavior_changes::BehaviorChangeApproval;
 pub use idempotency::{IdempotencyClaim, IdempotencyLookup, RetryClaimed};
 pub use root_done::{RootDoneState, RootDoneSummary};
 pub(crate) use site_policies::site_policy_tx;

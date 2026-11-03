@@ -941,3 +941,6 @@ mod ts;
 
 #[path = "cos_digest_script_canary.rs"]
 mod canary;
+
+#[path = "cos_digest_behavior_change.rs"]
+mod cos_digest_behavior_change;

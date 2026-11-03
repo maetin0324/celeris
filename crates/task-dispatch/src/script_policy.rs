@@ -27,8 +27,10 @@ use task_core::script_compare::{
     CompareCandidate, CompareError, CompareOutcome, CosDigestApplied, CosDigestAppliedBy,
     CosDigestCommandsSummary, CosDigestCompareRecord, CosDigestFallback, CosDigestOpLog,
     LaneRulesInput, RoutePriorityInput, RoutePriorityOutput, ScriptCompareRecord, ScriptDomain,
-    ScriptDomainModeRow, ScriptGeneration, ScriptMode, recorded_input,
+    ScriptDomainError, ScriptDomainModeRow, ScriptGeneration, ScriptMode, ScriptModeChange,
+    recorded_input,
 };
+use task_core::script_guard::{SCRIPT_GUARD_ACTOR, ScriptGuardOutcome};
 use task_core::{SqliteStore, StoreError, TaskId, Tier};
 
 /// 1 呼び出しの deadline（境界 ADR (f)・S2-6）。超えたら待つのをやめ、`ts_error`（`timeout`）を記録する。
@@ -164,19 +166,33 @@ impl PolicyScriptSource for SingleBundleSource {
 pub trait ScriptDomainStore: Send + Sync {
     fn script_domain_modes(&self) -> Result<Vec<ScriptDomainModeRow>, StoreError>;
     fn script_generation_get(&self, id: &str) -> Result<Option<ScriptGeneration>, StoreError>;
-    /// 重複の抑え（S2-4）の後に追記したら `true`。
-    fn script_compare_append(
+    /// 重複の抑え（S2-4）の後に追記し、同じ transaction で script-guard の計数を更新する（付記 S5-7）。
+    /// `ts_side` は canary・ts で TS の側に選ばれた単位か。戻り値は追記したかと計数の結果。
+    fn script_compare_append_observed(
         &self,
         task_id: TaskId,
         record: &ScriptCompareRecord,
+        ts_side: bool,
         now: OffsetDateTime,
-    ) -> Result<bool, StoreError>;
-    /// 付記 S4-5: `cos_digest` の記録を `script_compare_log` に追記したら `true`（重複の抑えの後）。
-    fn script_compare_log_append(
+    ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError>;
+    /// 付記 S4-5・S5-7: `cos_digest` の記録を `script_compare_log` に追記し、同じ transaction で計数する。
+    fn script_compare_log_append_observed(
         &self,
         record: &CosDigestCompareRecord,
+        ts_side: bool,
         now: OffsetDateTime,
-    ) -> Result<bool, StoreError>;
+    ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError>;
+    /// 付記 S5-6: 領域を actor `system:script-guard` で `rust` に戻す（`reason` の先頭は code）。
+    /// 版違い（他の更新が先に入った）は `VersionConflict` のまま返す。
+    fn script_domain_rollback(
+        &self,
+        domain: ScriptDomain,
+        expected_version: u64,
+        reason: &str,
+        now: OffsetDateTime,
+    ) -> Result<(), ScriptDomainError>;
+    /// 付記 S5-5: 領域に保存済みの checkpoint の版の集合。
+    fn script_checkpoint_versions_stored(&self, domain: ScriptDomain) -> Vec<u32>;
 }
 
 impl ScriptDomainStore for SqliteStore {
@@ -188,21 +204,45 @@ impl ScriptDomainStore for SqliteStore {
         SqliteStore::script_generation_get(self, id)
     }
 
-    fn script_compare_append(
+    fn script_compare_append_observed(
         &self,
         task_id: TaskId,
         record: &ScriptCompareRecord,
+        ts_side: bool,
         now: OffsetDateTime,
-    ) -> Result<bool, StoreError> {
-        SqliteStore::script_compare_append(self, task_id, record, now)
+    ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError> {
+        SqliteStore::script_compare_append_observed(self, task_id, record, ts_side, now)
     }
 
-    fn script_compare_log_append(
+    fn script_compare_log_append_observed(
         &self,
         record: &CosDigestCompareRecord,
+        ts_side: bool,
         now: OffsetDateTime,
-    ) -> Result<bool, StoreError> {
-        SqliteStore::script_compare_log_append(self, record, now)
+    ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError> {
+        SqliteStore::script_compare_log_append_observed(self, record, ts_side, now)
+    }
+
+    fn script_domain_rollback(
+        &self,
+        domain: ScriptDomain,
+        expected_version: u64,
+        reason: &str,
+        now: OffsetDateTime,
+    ) -> Result<(), ScriptDomainError> {
+        let change = ScriptModeChange {
+            domain: domain.as_str().to_owned(),
+            to_mode: ScriptMode::Rust,
+            to_generation: None,
+            expected_version,
+            actor: SCRIPT_GUARD_ACTOR.to_owned(),
+            reason: reason.to_owned(),
+        };
+        SqliteStore::script_domain_set_mode(self, &change, now).map(|_| ())
+    }
+
+    fn script_checkpoint_versions_stored(&self, domain: ScriptDomain) -> Vec<u32> {
+        SqliteStore::script_checkpoint_versions_stored(self, domain)
     }
 }
 
@@ -420,6 +460,11 @@ pub struct CompareDraft {
     /// 判定した run（作る前の判定は `None`）。
     pub run_id: Option<String>,
     pub domain: DraftDomain,
+    /// 付記 S5-3・S5-6: canary・ts の記録の欄（compare では `None`・`false`）。
+    pub applied_by: Option<CosDigestAppliedBy>,
+    pub fallback: Option<CosDigestFallback>,
+    pub canary_selected: bool,
+    pub canary_bps: Option<u32>,
 }
 
 impl CompareDraft {
@@ -437,6 +482,10 @@ impl CompareDraft {
             bundle_sha256,
             host_api,
             run_id: None,
+            applied_by: None,
+            fallback: None,
+            canary_selected: false,
+            canary_bps: None,
             domain: DraftDomain::LaneRules {
                 input: LaneRulesInput::redacted(features),
                 rust: task_core::model_policy::match_rule(features).into(),
@@ -465,6 +514,10 @@ impl CompareDraft {
             bundle_sha256,
             host_api,
             run_id,
+            applied_by: None,
+            fallback: None,
+            canary_selected: false,
+            canary_bps: None,
             domain: DraftDomain::RoutePriority {
                 input: RoutePriorityInput::redacted(registry, harness, lane, cos, execution_class),
                 rust: RoutePriorityOutput::from_decision(route_priority_decide(
@@ -524,6 +577,10 @@ impl CompareDraft {
             normalized: Vec::new(),
             safety_violations: classified.safety_violations,
             elapsed_us: u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX),
+            applied_by: self.applied_by,
+            fallback: self.fallback.clone(),
+            canary_selected: self.canary_selected,
+            canary_bps: self.canary_bps,
         })
     }
 
@@ -870,6 +927,9 @@ pub struct CosDigestPassDraft {
     pub host_api: String,
     pub mode: ScriptMode,
     pub pass_id: String,
+    /// 付記 S5-3: この pass が TS の側に選ばれたか（`ts` は常に真、`compare` は偽）。
+    pub canary_selected: bool,
+    pub canary_bps: Option<u32>,
 }
 
 /// 記録 1 行に要る run の値。
@@ -917,6 +977,8 @@ impl CosDigestPassDraft {
             safety_violations: c.safety_violations,
             elapsed_us: u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX),
             applied: run.applied,
+            canary_selected: self.canary_selected,
+            canary_bps: self.canary_bps,
         })
     }
 }

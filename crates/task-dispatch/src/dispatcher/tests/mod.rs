@@ -3127,6 +3127,8 @@ mod routing_context;
 /// ADR-0074 付記 2026-10-05: 範囲 check（`WorkUnitCheck.scope`）は WU の作業時だけ流す
 /// （`src/dispatcher/tests/scope_checks.rs`）。
 mod scope_checks;
+/// 付記 S5-3・S5-6・S5-8: canary の選択・fallback・tick の予算・戻しの失敗（`src/dispatcher/tests/script_canary.rs`）。
+pub(super) mod script_canary;
 mod script_compare;
 /// ADR-0140 D1: WU の execute continuation の同一 session resume と checkpoint fallback
 /// （`src/dispatcher/tests/session_resume.rs`）。

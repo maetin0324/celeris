@@ -1519,6 +1519,13 @@ export type CooldownView = {
   "until": string;
 };
 
+export type CosDigestAppliedBy = "rust" | "ts";
+
+export type CosDigestFallback = {
+  "code": string;
+  "message": string;
+};
+
 export type CosInboxItem = {
   "created_at": string;
   "id": string;
@@ -2898,11 +2905,15 @@ export type Event = {
   "task_id": TaskId;
   "type": "stall_detected";
 } | {
+  "applied_by"?: CosDigestAppliedBy | null;
   "bundle_sha256": string;
   "call_site": string;
+  "canary_bps"?: number | null;
+  "canary_selected"?: boolean;
   "domain": ScriptDomain;
   "elapsed_us": number;
   "error"?: CompareError | null;
+  "fallback"?: CosDigestFallback | null;
   "generation": string;
   "host_api": string;
   "input"?: unknown;

@@ -55,6 +55,8 @@ pub struct RouteState {
     pub work_unit_id: Option<String>,
     /// guardrail が止めた実行クラス（`harness_balance_trips`。ADR 2026-10-22 D2）。止まったクラスは宣言順。
     pub balance_tripped: std::collections::BTreeSet<String>,
+    /// 付記 S5-3: `route_priority` の TS の候補列（[`RouteContext::priority_override`]）。
+    pub priority_override: Option<(HarnessId, Vec<CandidateKey>)>,
 }
 
 /// One routing request: the harness inputs plus the source/model inputs.
@@ -82,6 +84,8 @@ pub struct RouteContext {
     pub evidence_mode: task_core::route_select::EvidenceMode,
     /// `pinned` のときだけ Some（`routing_override.evidence_table_id`）。
     pub evidence_version: Option<String>,
+    /// 付記 S5-3: `route_priority` の canary の TS の側で、Rust の検証を通った TS の候補列（その harness だけに当てる）。
+    pub priority_override: Option<(HarnessId, Vec<CandidateKey>)>,
 }
 
 /// The admitted route.
@@ -335,14 +339,17 @@ fn route_select_one(
         Err(e) => return (Err(RouteFailure::Harness(e)), trace),
     };
     trace.harness = Some(harness.clone());
-    let mut priority = route_priority(
-        registry,
-        &harness,
-        input.lane.as_deref(),
-        input.cos,
-        input.harness.execution_class.as_ref(),
-    )
-    .to_vec();
+    let mut priority = match &state.priority_override {
+        Some((h, column)) if *h == harness && !input.cos => column.clone(),
+        _ => route_priority(
+            registry,
+            &harness,
+            input.lane.as_deref(),
+            input.cos,
+            input.harness.execution_class.as_ref(),
+        )
+        .to_vec(),
+    };
     // ADR 2026-10-22 D3: Jev / fixed 規則が frontier とした lane は、その lane の `route_defaults` を先頭に置き、
     // 根拠表の同等判定・クラスの候補列に勝たせる。後ろに従来の候補列が続く（admission の fallback と ε の対象）。
     let frontier_column: Vec<CandidateKey> =
@@ -938,6 +945,7 @@ impl Dispatcher {
         state.run_seed = context.run_id.clone();
         state.features = context.features.clone();
         state.work_unit_id = context.work_unit_id.clone();
+        state.priority_override = context.priority_override.clone();
         match self.store.harness_balance_trips() {
             Ok(trips) => state.balance_tripped = trips.into_keys().collect(),
             Err(error) => {

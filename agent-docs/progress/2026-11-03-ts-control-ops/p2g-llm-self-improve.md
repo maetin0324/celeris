@@ -46,15 +46,27 @@ updated: 2026-11-03
     edit→activate（ts-verify＋bundle＋配備＋登録）8.39 秒、rollback 1.02 秒、再起動の復元（canary）0.59 秒。
   - raw records: [oracle/trial.jsonl](p2g-llm-self-improve/oracle/trial.jsonl)、段の記録 [oracle/oracle-t1-ts-pilot.jsonl](p2g-llm-self-improve/oracle/oracle-t1-ts-pilot.jsonl)。
   - `bash scripts/dev/llm-improve/trial.sh --validate …/oracle/trial.jsonl` → exit 0。
-- 旧 Rust の経路の参照の候補（[oracle/oracle-t1-rust.patch](p2g-llm-self-improve/oracle/oracle-t1-rust.patch)）はまだ走らせていない（次の run）。
+- 旧 Rust の経路の参照の候補（[oracle/oracle-t1-rust.patch](p2g-llm-self-improve/oracle/oracle-t1-rust.patch)）:
+  `bash scripts/dev/llm-improve/trial.sh --task T1-cap-background --path rust --patch …/oracle-t1-rust.patch --out …` → exit 0、452.9 秒。
+  段の秒: check 34.6・clippy 34.8・test-build 81.9・test-run 59.1・build 56.1・release-build 151.2・score 28.3。edit→activate 相当（6 段の和）417.7 秒。
+  score: 旧 fixture 2066 件の差分 0、期待差分 16 件（explained 9・equal 7・食い違い 0）。使い捨ての作業ツリー（$TMPDIR）なので workspace の crate は path が変わって作り直しになる（S6 の warm 344.5 秒と同じ条件ではない）。
+- 負の対照（採点が落とすことの確認、LLM なし）:
+  - T1 で 299 文字で切る patch（[oracle/neg-t1-ts-299.patch](p2g-llm-self-improve/oracle/neg-t1-ts-299.patch)）→ exit 1、段 eval で落ちる（explained 0・食い違い 12・旧 fixture の差分 0）、5.8 秒。
+  - T2 に T1 の参照の patch を当てる → exit 1、段 eval で落ちる（explained 0・食い違い 8）、2.8 秒。
+- 4 行の記録は [oracle/trial.jsonl](p2g-llm-self-improve/oracle/trial.jsonl)。`trial.sh --validate` → exit 0（4 行）。
 
 ## 性能
 - TS の経路の edit→activate（参照の候補）8.39 秒、ts-verify 8.08 秒・cargo 0 回。S6 の warm p50 7.47〜7.52 秒と同じ桁で、目標（p50 30 秒・p95 60 秒）の内。
   1 試行だけの値で、p50・p95 ではない。ts-verify.sh 自体は変えていない。
+- 旧 Rust の経路（参照の候補、1 試行）は 417.7 秒（6 段の和）。TS の 8.39 秒の約 50 倍。検証の範囲は同じでない（TS は ts-verify 10 段と一時 daemon の段階昇格・rollback、
+  Rust は 2 crate の全試験と release build。Rust の activate・rollback は本番の操作なので測っていない）。
 
 ## 未解決
 1. 実 LLM の試行 4 件の結果（source・model・token・cost・walltime・成功率・再試行・人の介入）はまだ無い。次の run で集める。
-2. 旧 Rust の経路の参照の候補の実行はまだ（次の run）。
+2. flaky の疑い: 1 回目の `test-affected.sh`（7237 件）で `celeris::script_generation_e2e script_generation_e2e_switch_error_rollback_restart` が
+   `crates/celeris/tests/script_generation_e2e.rs:785`（A の `in_flight` が 1 でなく 2）で 1 回落ちた。この task は crates/celeris と script の経路の
+   本体を変えていない。単独の再実行（`cargo nextest run -p celeris --test script_generation_e2e`）は 3 回とも pass。原因は未確認（負荷で daemon の tick の
+   digest pass が同時に A に入る可能性。未確認）。
 3. 試験 daemon では実際の digest pass を起こせない（CoS を有効にした daemon が要る）。canary の間の `explained` の数え方は p1d の e2e が受け持ち、
    この試験の canary は guard の計数を一時 DB に synthetic に積んで通している（S6 pilot と同じ）。
 4. 課題の採点の file は repo の中にあり、子の worker は読める。読まないよう課題文で求め、読んだら proposal.md に書かせる（守られたかは transcript でしか確かめられない）。

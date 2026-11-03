@@ -1,0 +1,27 @@
+diff --git a/control-ts/src/domains/cos_digest.ts b/control-ts/src/domains/cos_digest.ts
+index 762f3f4f..2bf33a97 100644
+--- a/control-ts/src/domains/cos_digest.ts
++++ b/control-ts/src/domains/cos_digest.ts
+@@ -305,6 +305,13 @@ function optionsLine(item: CosTriageItemReport): string | null {
+   return d.options.map(label).join(" / ");
+ }
+ 
++/** 背景の最大の文字数（code point）。超えたら切って「…」を足す。 */
++export const BACKGROUND_MAX_CHARS = 299;
++export function capChars(s: string, max: number): string {
++  const chars = Array.from(s);
++  return chars.length <= max ? s : `${chars.slice(0, max).join("")}…`;
++}
++
+ /** Rust の `cos_digest_message`: digest の文面と cards。 */
+ export function digestMessage(
+   runId: string,
+@@ -335,7 +342,7 @@ export function digestMessage(
+     if (it.state === "escalated" || it.state === "fallback") {
+       const d = it.decision;
+       if (d !== null) {
+-        if (d.background !== null && d.background !== "") text += `- 背景: ${d.background}\n`;
++        if (d.background !== null && d.background !== "") text += `- 背景: ${capChars(d.background, BACKGROUND_MAX_CHARS)}\n`;
+         if (d.summary !== "") text += `- 人が決めること: ${d.summary}\n`;
+         const options = optionsLine(it);
+         if (options !== null) text += `- 選択肢: ${options}\n`;

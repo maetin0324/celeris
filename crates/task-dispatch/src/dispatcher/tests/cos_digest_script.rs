@@ -16,7 +16,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use task_core::chat::{ChatMessageRole, ChatRunState};
 use task_core::script_compare::{
     CompareOutcome, CosDigestCompareRecord, LaneRulesInput, NewScriptGeneration,
-    RoutePriorityInput, ScriptGenerationState, ScriptMode, ScriptModeChange,
+    RoutePriorityInput, ScriptGenerationState, ScriptGenerationTransition, ScriptMode,
+    ScriptModeChange,
 };
 
 fn sha(byte: &str) -> String {
@@ -339,6 +340,27 @@ fn attach(f: &mut Fixture, ts: Ts) -> Option<Arc<FakeDigest>> {
 /// generation `bundle` を記録し、mode を `to` にする。
 fn set_mode(f: &Fixture, to: ScriptMode, bundle: &str) -> String {
     let now = f.d.now_utc();
+    // 付記 S5-4: `rust` に戻した直後の generation は `draining` で、mode の行の行き先にできない。
+    // `retired` にしてから登録し直し、`loaded` に戻す。
+    if let Some(old) = f
+        .store
+        .script_generation_by_sha256(&sha(bundle))
+        .expect("read")
+        && old.state == ScriptGenerationState::Draining
+    {
+        f.store
+            .script_generation_transition(
+                &ScriptGenerationTransition {
+                    id: old.id,
+                    to: ScriptGenerationState::Retired,
+                    actor: "human:test".into(),
+                    reason: "drained".into(),
+                    cancelled_in_flight: None,
+                },
+                now,
+            )
+            .expect("retire");
+    }
     let generation = f
         .store
         .script_generation_record(

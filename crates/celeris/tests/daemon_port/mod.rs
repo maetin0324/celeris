@@ -111,3 +111,92 @@ pub fn check_sole_owner(port: u16, expected: u32, identity_pid: u32) -> Result<(
     }
     Ok(())
 }
+
+/// spawn した試験 daemon の API が答えるまで待つ（ADR-0125 の出来事待ち + 長い保険）。
+///
+/// - `daemon` が先に終われば、上限を待たずに run の結果（`Ok`・`Err` の文面か panic の文面）を入れたエラーを返す。
+/// - 要求ごとに `request_timeout` を付ける。受け付けても答えない接続 1 本で残り時間を使い切らない。
+/// - `overall` に達したら、経過秒と最後の接続エラーを入れたエラーを返す。
+///
+/// HTTP の応答が 1 つ返れば（status は問わない）ready とみなす。
+pub async fn wait_api_ready<R: std::fmt::Debug>(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+    daemon: &mut tokio::task::JoinHandle<R>,
+    request_timeout: std::time::Duration,
+    overall: std::time::Duration,
+) -> Result<(), String> {
+    use std::time::Instant;
+    let started = Instant::now();
+    let deadline = started + overall;
+    let mut attempts = 0u64;
+    let mut last_error = String::from("no request finished yet");
+    loop {
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "daemon API at {url} not ready after {:.1}s (limit {}s, {attempts} attempts); last error: {last_error}",
+                started.elapsed().as_secs_f64(),
+                overall.as_secs()
+            ));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let request = client
+            .get(url)
+            .bearer_auth(token)
+            .timeout(request_timeout)
+            .send();
+        attempts += 1;
+        tokio::select! {
+            outcome = &mut *daemon => {
+                return Err(format!(
+                    "daemon exited before its API at {url} was ready ({:.1}s, {attempts} attempts; last error: {last_error}): {}",
+                    started.elapsed().as_secs_f64(),
+                    describe_join(outcome)
+                ));
+            }
+            response = tokio::time::timeout(remaining, request) => match response {
+                Ok(Ok(_)) => return Ok(()),
+                Ok(Err(e)) => last_error = error_chain(&e),
+                Err(_) => last_error = format!("request still pending at the overall limit ({request_timeout:?} per request)"),
+            },
+        }
+        tokio::select! {
+            outcome = &mut *daemon => {
+                return Err(format!(
+                    "daemon exited before its API at {url} was ready ({:.1}s, {attempts} attempts; last error: {last_error}): {}",
+                    started.elapsed().as_secs_f64(),
+                    describe_join(outcome)
+                ));
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
+        }
+    }
+}
+
+fn describe_join<R: std::fmt::Debug>(outcome: Result<R, tokio::task::JoinError>) -> String {
+    match outcome {
+        Ok(result) => format!("run returned {result:?}"),
+        Err(e) if e.is_panic() => {
+            let payload = e.into_panic();
+            let msg = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "<non-string panic payload>".to_string());
+            format!("run panicked: {msg}")
+        }
+        Err(e) => format!("run task ended: {e}"),
+    }
+}
+
+fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = e.to_string();
+    let mut source = e.source();
+    while let Some(s) = source {
+        out.push_str(": ");
+        out.push_str(&s.to_string());
+        source = s.source();
+    }
+    out
+}

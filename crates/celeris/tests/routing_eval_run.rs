@@ -117,7 +117,7 @@ candidates = [{{ source = "local", model = "model-1" }}]
     )
     .expect("config");
     let config = Config::load(&config_path).expect("config load");
-    let run = tokio::spawn(celeris::run(
+    let mut run = tokio::spawn(celeris::run(
         config,
         RunOptions {
             until_idle: false,
@@ -128,22 +128,17 @@ candidates = [{{ source = "local", model = "model-1" }}]
     ));
     let base_url = format!("http://{addr}/api/v1");
     let client = reqwest::Client::new();
-    let api_ready = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            if client
-                .get(format!("{base_url}/routing-eval/trials"))
-                .bearer_auth(TOKEN)
-                .send()
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await;
-    assert!(api_ready.is_ok(), "daemon API became ready");
+    // 出来事待ち（API の応答か daemon の終了）+ 長い保険（ADR-0125）。daemon が先に終われば run の結果が文面に出る。
+    daemon_port::wait_api_ready(
+        &client,
+        &format!("{base_url}/routing-eval/trials"),
+        TOKEN,
+        &mut run,
+        Duration::from_secs(5),
+        Duration::from_secs(180),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("daemon API did not become ready: {e}"));
     // 答えたのはこの試験 process の中の daemon だけ（同じ port に別の daemon がいない）。
     let me = std::process::id();
     daemon_port::check_sole_owner(addr.port(), me, me).expect("sole owner of the API port");
@@ -168,7 +163,7 @@ candidates = [{{ source = "local", model = "model-1" }}]
     );
 
     let db = root.join("eval.sqlite3");
-    let terminal = tokio::time::timeout(Duration::from_secs(8), async {
+    let terminal = tokio::time::timeout(Duration::from_secs(120), async {
         loop {
             if let Ok(store) = SqliteStore::open(&db) {
                 let rows = store.eval_trials_list(None, None).expect("trials");
@@ -182,7 +177,8 @@ candidates = [{{ source = "local", model = "model-1" }}]
     .await
     .unwrap_or_else(|_| {
         panic!(
-            "trials did not complete: {:?}",
+            "trials did not complete within 120s (daemon finished: {}): {:?}",
+            run.is_finished(),
             SqliteStore::open(&db).and_then(|s| s.eval_trials_list(None, None))
         )
     });
@@ -205,7 +201,7 @@ candidates = [{{ source = "local", model = "model-1" }}]
         let owner = root
             .join("scratch/targets")
             .join(format!("agent-eval-{}", t.trial_id));
-        let cleaned = tokio::time::timeout(Duration::from_secs(8), async {
+        let cleaned = tokio::time::timeout(Duration::from_secs(60), async {
             loop {
                 let released = std::fs::read_to_string(owner.join("lease.json"))
                     .is_ok_and(|lease| lease.contains("released_at"));

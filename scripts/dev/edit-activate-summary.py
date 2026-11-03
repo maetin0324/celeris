@@ -4,8 +4,9 @@
 使い方:
   python3 -I scripts/dev/edit-activate-summary.py <jsonl>...
 
-- 引数の file をまたいで集計する。同じ記録（kind・scenario・mode・rep・step・at が同じ行）は 1 回だけ数える。
-  前半・後半の file とそれを連結した file を同時に渡しても二重に数えない。
+- 引数の file をまたいで集計する。同じ記録（kind・scenario・mode・rep・step・at と、estimate 行の release.at が
+  同じ行）は 1 回だけ数える。estimate 行は 1 回の測定で同じ step・rep 0・同じ at が release の数だけ並ぶので、
+  release.at も key に入れる。前半・後半の file とそれを連結した file を同時に渡しても二重に数えない。
 - 1 試行の秒: TS の経路は kind=trial の行の secs。Rust の経路は kind=step の行を (scenario, mode, rep) で束ね、
   段の secs を足した値（edit-activate-baseline.sh --check-targets と同じ）。
 - prime（温め）・skipped・affected の行は集計に入れない。estimate（release gate の gate.json の段の秒）は
@@ -58,14 +59,14 @@ def main(paths):
                 problems.append(f"{path}:{i}: not an object")
                 continue
             kind, scen, mode, rep = r.get("kind"), r.get("scenario"), r.get("mode"), r.get("rep")
-            key = (kind, scen, mode, rep, r.get("step"), r.get("at"))
+            rel = r.get("release") if isinstance(r.get("release"), dict) else {}
+            key = (kind, scen, mode, rep, r.get("step"), r.get("at"), rel.get("at"))
             if key in seen:
                 continue
             seen.add(key)
             if kind in SKIP_KINDS:
                 continue
             if kind == "estimate":
-                rel = r.get("release") if isinstance(r.get("release"), dict) else {}
                 if is_secs(r.get("secs")):
                     gate.setdefault(str(rel.get("at")), {})[r.get("step")] = r["secs"]
                 continue

@@ -52,7 +52,7 @@ updated: 2026-11-03
 ## 証拠（提出時の HEAD で実行）
 - `bash scripts/dev/edit-activate-baseline.sh --validate agent-docs/progress/2026-11-02-ts-control-layer-s6/policy-warm-b.jsonl` → exit 0（records 106、problems 0）
 - `bash scripts/dev/edit-activate-baseline.sh --validate agent-docs/progress/2026-11-02-ts-control-layer-s6/policy-warm.jsonl` → exit 0（records 212、problems 0）
-- `sh scripts/dev/progress-index.sh --check` → 下の commit 後に実行
+- `sh scripts/dev/progress-index.sh --check` → exit 0（ok）
 - 測定 leaf はコードを変えないので test-affected・clippy・fmt は走らせていない（付記 S5-11 の 5）
 
 ## 未解決

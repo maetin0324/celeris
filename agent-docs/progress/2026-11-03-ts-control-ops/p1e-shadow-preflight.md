@@ -29,7 +29,14 @@ task 01M6HGFR1TMY7PTGQ553FQGM7H（親 01M6HG7T6ZKTX239KGH0QY4HFQ の p1e-shadow-
 - 境界 ADR に付記 P1-E。crates/ の本体、config 欄、API、権限、(f) の数値は変えていない。
 
 ## 試験と検査（提出時の HEAD で実行）
-@@CHECKS@@
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 1008 passed・0 skipped（celeris・celeris-script・celerisctl）、script bundle の SKIP 0 件（bundle を読む試験は実 bundle で走った）、`tests/script-compare.sh` ok、`test-ts-verify` 18 passed。
+- `cargo nextest run -p celeris --test script_compare_report` → exit 0、7 passed。
+- `bash scripts/dev/tests/script-compare.sh` → exit 0（33 項目。preflight の判定 19 通り、report の破れ 6 通り、sample 3 通り）。
+- `bash scripts/dev/script-compare-rehearsal.sh --out agent-docs/progress/2026-11-03-ts-control-ops/p1e-rehearsal.jsonl` → exit 0（10 段）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`bash scripts/dev/check-doc-links.sh` → ok。`sh scripts/dev/progress-index.sh --check` → ok。
+- 本番の読み取り: preflight → exit 3（human 6・fail 0）、report → exit 3（表が無い）。前後で本番 config の sha256 は `3f2aff24…` のまま、schema は 102、`current` は `releases/3259e04ea63e` のまま。
+- 試験が落ちることの確かめ（変異）: 計数の照合を外すと `script_compare_report_refuses_counts_without_records` が落ちる。streak の判定を外すと `script_compare_report_pure_gate_counts_real_records` が落ちる。match の差分の検査を外すと `tests/script-compare.sh` が「差分を隠した match は exit 1: exit 0」で落ちる。どれも元に戻して通る。
+- TS-only の経路（`scripts/dev/ts-verify.sh`）は変えていない。edit→verify→activate の秒はこの task では測っていない（変える変更が無いため）。
 
 ## 計測（raw は同じ dir）
 - [p1e-preflight-prod.json](p1e-preflight-prod.json): 本番の読み取りの結果。exit 3。本番 daemon の RSS は 1,190,984 kB（compare の前の基準）、`events` の最大 id 781877、schema 102。

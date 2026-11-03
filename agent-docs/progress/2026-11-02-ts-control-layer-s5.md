@@ -14,6 +14,10 @@ task 01M6FPPJN7A8H427MXFVYFY7H4（S5→S6。親 task は 01M6DCMB75G5F0DSE58ZNZM
 
 ## 検査（adr-s5、提出時の HEAD）
 adr-s5 unit の結果は [adr-s5](2026-11-02-ts-control-layer-s5/adr-s5.md) と下に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」。文書の検査の self-test は通った）
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/check-doc-links.sh` → ok、`bash scripts/dev/check-adr-numbers.sh` → ok（357 files）、`sh scripts/dev/progress-index.sh --check` → ok、`python3 scripts/dev/check-architecture-map.py` → OK（862 件）
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は境界 ADR とこの file・`2026-11-02-ts-control-layer-s5/adr-s5.md` の 3 つ。`git diff --name-only "$CELERIS_WU_BASE" -- crates web control-ts scripts` → 出力なし
 
 ## 未解決
 1. S4 未解決 7（tick の遅れ）と 8（bundle の無い環境の SKIP）は付記 S5-8・S5-9 で方式を決めた。実装と試験は canary-dispatch・bundle-skip unit が行う（未実装）。

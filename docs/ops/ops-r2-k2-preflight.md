@@ -206,6 +206,7 @@ celeris-eval になり、人の uid の持ち物の判定（`owned_by_run_uid`�
 漏洩検査は `--private` に `EVAL_ROOT` の private を読むので、評価器の uid で走らせる（[入力隔離 §4.4](ops-r2-isolation.md#44-評価器の起動方法どちらかを選ぶ) の案 2 の shell。
 案 1 では採点 wrapper `grade` が判定 JSON について行う）。人の uid から private を開けないのが正しい状態で、人の uid で走らせると入力の誤りで止まる。
 採点の判定 JSON は wrapper が drop box の tgz を sha256 で照合・展開して採点し、漏洩検査を通してから outbox に置く。
+tgz の中では試行の tree を `src/` の下に置く。root に置くと implementation が誤って fail する（[入力隔離 §4.3](ops-r2-isolation.md#43-採点-wrapper-と採点-binary-を置くceleris-eval-持ち人は書けない)）。
 試行の出力そのものを `--scan` に渡す上の検査は wrapper に含めず、評価器の shell（`sudo -u celeris-eval /bin/bash`）で手で行う（残す）。
 `check-ops-r1-leak.py` の probe の欄（`errno` は整数）は `celeris.runtime-probe/1` のまま。
 

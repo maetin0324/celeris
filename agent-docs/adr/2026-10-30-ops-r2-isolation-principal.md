@@ -359,6 +359,7 @@ release 2a0647cba878 の実機確認で、wrapper 経由の採点が不合格の
   stderr に出す旧い経路は消した（`grade-out` も同じ形に揃え、別の扱いは残さない）。
 - H8 wrapper（`scripts/campaign/ops-r2-grade.py`）は exit 0/1 かつ stdout が判定 JSON のときだけ漏洩検査に進み、通れば outbox に置く
   （不合格も置く）。exit 2 やほかの exit、判定 JSON が無いときは exit 70 で outbox に何も置かない。grade-case の形式は変えない。
+- H9 採点に出す tgz では試行の tree を `src/` の下に置く（`gen-grade-case` の `--repo` の既定 `src` に合わせる）。root に置くと K2 では crate 自身の `src/` が repo と見なされ、implementation が `model_failure` で誤って fail する（2026-11-01 の第 1 回）。手順は `docs/ops/ops-r2-isolation.md` §4.3。
 
 ## 付記 2026-10-31「判定 JSON に隠しテストの path を出さない」（task 01M67YEFQQHB054QWVS3GG33GX）
 

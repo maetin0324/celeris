@@ -7954,7 +7954,7 @@
       ]
     },
     "ScriptMode": {
-      "description": "領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。S2 で受け付けるのは `rust` と `compare` だけ（S2-5）。",
+      "description": "領域の mode（(d)）。`rust` → `compare` → `canary` → `ts`。全領域で全 mode を受ける（付記 S5-4）。",
       "enum": [
         "rust",
         "compare",

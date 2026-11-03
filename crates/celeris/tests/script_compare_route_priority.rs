@@ -461,9 +461,7 @@ fn script_compare_stale_dist_source_changed_is_skipped() {
     let (dir, _dist, _config) = stale_dist_fixture(&ALL_DOMAINS);
     assert!(check_dist(dir.path(), DOMAIN).is_ok());
     std::fs::write(dir.path().join("src/domains/x.ts"), "export const x = 1;\n").expect("edit");
-    let why = check_dist(dir.path(), DOMAIN)
-        .err()
-        .expect("stale after a source edit");
+    let why = check_dist(dir.path(), DOMAIN).expect_err("stale after a source edit");
     assert!(
         why.contains("stale bundle") && why.contains(INPUTS_FILE),
         "{why}"
@@ -471,9 +469,7 @@ fn script_compare_stale_dist_source_changed_is_skipped() {
 
     let (dir, dist, _config) = stale_dist_fixture(&ALL_DOMAINS);
     std::fs::remove_file(dist.join(INPUTS_FILE)).expect("rm inputs");
-    let why = check_dist(dir.path(), DOMAIN)
-        .err()
-        .expect("stale without inputs");
+    let why = check_dist(dir.path(), DOMAIN).expect_err("stale without inputs");
     assert!(why.contains("no inputs.sha256"), "{why}");
 }
 

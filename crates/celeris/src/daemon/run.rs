@@ -45,6 +45,35 @@ pub(crate) fn serves_llm_proxy(mode: DaemonMode) -> bool {
 /// ADR-0040 D4: 起動時に `daemon_instances` を見て役割を決める（同じ `release` の `active` がいれば
 /// 何もせず `Exit::DuplicateRelease`＝ exit 3）。
 pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> {
+    run_inner(config, opts, DaemonTestHooks::default()).await
+}
+
+/// [`run_with_test_hooks`] で試験が差し替える daemon の部品。本番の入口 [`run`] は既定（どちらも無し）で動く。
+#[derive(Default)]
+pub struct DaemonTestHooks {
+    /// generation の登録簿（`[script]` が無ければ使わない）。clone で共有できるので、試験は daemon の isolate の
+    /// in-flight を見て、drain の時計を差し替えられる。dispatcher の pass は deadline の内に終わるので、切替をまたぐ
+    /// in-flight を出来事待ちで作るにはここから口を取る（`crates/celeris/tests/script_generation_e2e.rs`）。
+    pub generation_registry: Option<celeris_script::GenerationRegistry>,
+    /// 孤児の回収を切る。試験が store に直接書いた動いている CoS の run を、tick が「持ち主の居ない run」として
+    /// 閉じないようにする。
+    pub no_orphan_takeover: bool,
+}
+
+/// 試験の入口: [`run`] と同じ daemon を [`DaemonTestHooks`] 付きで動かす。
+pub async fn run_with_test_hooks(
+    config: Config,
+    opts: RunOptions,
+    hooks: DaemonTestHooks,
+) -> Result<Exit, DaemonError> {
+    run_inner(config, opts, hooks).await
+}
+
+async fn run_inner(
+    config: Config,
+    opts: RunOptions,
+    hooks: DaemonTestHooks,
+) -> Result<Exit, DaemonError> {
     // ADR 2026-10-22-dynamic-config: `POST /reload` と `PATCH /config/fields` は動的な欄（`config::fields::RULES`）を
     // この `Config` と dispatcher に入れる（tick ループに `&mut` で渡す）。起動時にしか決められない欄は再起動が要る。
     let mut config = config;
@@ -175,11 +204,13 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                     );
                     // Phase F5-fix6: `daemon_instances` の自分の行を持つので、居なくなったデーモンの
                     // run（孤児）を lease の失効を待たずに回収できる（定義は `task_dispatch::orphan`）。
-                    dispatcher.set_orphan_takeover(task_dispatch::orphan::OrphanTakeover {
-                        instance_id: identity.instance_id.clone(),
-                        freshness,
-                        pid_alive: Arc::new(instance::pid_alive),
-                    });
+                    if !hooks.no_orphan_takeover {
+                        dispatcher.set_orphan_takeover(task_dispatch::orphan::OrphanTakeover {
+                            instance_id: identity.instance_id.clone(),
+                            freshness,
+                            pid_alive: Arc::new(instance::pid_alive),
+                        });
+                    }
                     Some(supervisor)
                 }
             }
@@ -260,7 +291,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         _ => None,
     };
     // 付記 S5-1: API の登録の口を先に作る（isolate はまだ作らない。復元は下の `ScriptLayer::start`）。
-    let script_generations = ScriptLayer::prepare(&config);
+    let script_generations = ScriptLayer::prepare(&config, hooks.generation_registry);
     let (api, admin_rx) = match config.api.listen {
         Some(listen) => {
             // `standby` も起きてすぐ API を受ける（同じポートに `SO_REUSEPORT` で bind する）。

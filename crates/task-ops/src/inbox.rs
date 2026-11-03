@@ -41,6 +41,11 @@ pub struct Inbox {
     #[serde(skip)]
     #[schemars(skip)]
     pub credential_waits: Vec<task_core::CredentialWait>,
+    /// ADR 2026-11-02-ts-control-layer-boundary 付記 S5-7: script の自動の戻し・無効化・停止の開いている項目
+    /// （`script_inbox_items`）。受信箱の共通形（`human_inbox` の `script_control`）だけが使う。
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub script_control: Vec<task_core::ScriptInboxItem>,
     /// ADR 2026-10-27-project-stagnation-inbox D3: snapshot の停滞の判定（`DaemonSnapshot.stagnation` の写し）。
     /// 受信箱の共通形（`human_inbox`）だけが使う。
     #[serde(skip)]
@@ -1404,6 +1409,9 @@ pub fn inbox(
         })
         .collect();
 
+    // 付記 S5-7: 開いている行だけの小さな表（daemon の script-guard が event から作る）。
+    let script_control = store.script_inbox_open()?;
+
     let counts = InboxCounts {
         approvals: approvals.len() as u32,
         questions: questions.len() as u32,
@@ -1426,6 +1434,7 @@ pub fn inbox(
         counts,
         disk_full,
         credential_waits,
+        script_control,
         stagnation: snapshot.map(|s| s.stagnation.clone()).unwrap_or_default(),
         stagnation_policy: snapshot.and_then(|s| s.stagnation_policy),
     })

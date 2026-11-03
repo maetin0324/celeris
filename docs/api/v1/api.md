@@ -3,6 +3,11 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-11-03（境界 ADR 2026-11-02-ts-control-layer-boundary 付記 S5-7 の受信箱の節）— **追加。v1 のまま**。受信箱の kind に
+  `script_control` を足した。actor `system:script-startup`・`system:script-guard` の `script_domain_events`・`script_generation_events`
+  （generation の記録は `script_generation_invalidated`・`script_guard_halted` だけ）1 件に項目 1 件（id `script_control-<domain|generation>-<event id>`）。
+  本文に領域・generation・reason の code を出す。受信箱では答えない（answer は 409 `native_action_required`）。人がその領域の mode を変える・
+  その generation を遷移させる・停止を解く（`POST /script/guard/clear`）と消える。
 - 改訂: 2026-10-28（ADR 2026-10-28-cos-review-back-thread D1・D4'・D6）— **追加。v1 のまま**。エンドポイント 227〜228:
   `POST /cos/review-report`（CoS operation `chat.review_report` だけ。直接の呼び出しは 422）と `GET /cos/review-thread`
   （無ければ 404 `chat_not_found`、作らない）を足した（§3.129a）。`ChatThreadKind` に `review`（統括 CoS の裏 thread）を足し、

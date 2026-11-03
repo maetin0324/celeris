@@ -16829,7 +16829,8 @@
         "human_wait_aging",
         "release_unpromoted",
         "task_unscheduled",
-        "review_resync_halted"
+        "review_resync_halted",
+        "script_control"
       ],
       "type": "string"
     },

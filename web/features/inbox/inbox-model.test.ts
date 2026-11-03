@@ -62,6 +62,9 @@ describe("inbox model", () => {
     expect(nativeTarget(item({ kind: "integration_request", task })).href).toBe("/tasks/T%201");
     expect(needsNativeScreen(item({ kind: "cluster_login" }))).toBe(true);
     expect(needsNativeScreen(item({ kind: "credential_wait" }))).toBe(true);
+    // 付記 S5-7: script の自動の戻し・停止は受信箱で答えず、daemon の画面へ案内する。
+    expect(needsNativeScreen(item({ kind: "script_control" }))).toBe(true);
+    expect(nativeTarget(item({ kind: "script_control" })).href).toBe("/daemon");
     expect(isInboxKind("credential_wait")).toBe(true);
     expect(needsNativeScreen(item({ options: [] }))).toBe(true);
     expect(needsNativeScreen(item({}))).toBe(false);

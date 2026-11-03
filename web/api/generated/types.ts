@@ -3412,7 +3412,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled" | "review_resync_halted";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled" | "review_resync_halted" | "script_control";
 
 export type InboxLink = {
   "href": string;

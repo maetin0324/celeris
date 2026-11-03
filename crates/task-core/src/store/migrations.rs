@@ -206,6 +206,8 @@ pub(crate) const MIGRATION_0104: &str = include_str!("../../migrations/0104_scri
 /// 追記専用の `script_generation_events`、停止基準の計数 `script_guard_state`。
 pub(crate) const MIGRATION_0105: &str =
     include_str!("../../migrations/0105_script_generations_s5.sql");
+/// ADR 2026-11-02-ts-control-layer-boundary 付記 S5-7: 受信箱 `script_control` の項目と記録の表ごとの cursor。
+pub(crate) const MIGRATION_0106: &str = include_str!("../../migrations/0106_script_inbox.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration）。`migrate` は飛ばし、
@@ -215,7 +217,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 105;
+pub const SCHEMA_VERSION: u32 = 106;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -354,6 +356,7 @@ impl SqliteStore {
             103 => Ok(MIGRATION_0103),
             104 => Ok(MIGRATION_0104),
             105 => Ok(MIGRATION_0105),
+            106 => Ok(MIGRATION_0106),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

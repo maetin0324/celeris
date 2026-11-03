@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # edit→検査→test→反映（activate）の baseline を計る（task 01M6DCPKPJZZ9F9J4QJ47FH8KK、S0 (2)）。
 #
-#   bash scripts/dev/edit-activate-baseline.sh --scenario <policy|cos> --mode <warm|cold> --reps <N> --out <file.jsonl>
-#   bash scripts/dev/edit-activate-baseline.sh --dry-run --scenario <policy|cos>   build せず手順を出して exit 0
+#   bash scripts/dev/edit-activate-baseline.sh --scenario <policy|cos|policy-ts> --mode <warm|cold> --reps <N> --out <file.jsonl>
+#   bash scripts/dev/edit-activate-baseline.sh --dry-run --scenario <policy|cos|policy-ts>   build せず手順を出して exit 0
 #   bash scripts/dev/edit-activate-baseline.sh --validate <file.jsonl>             記録の欄を検査（欠けがあれば exit 1）
+#   bash scripts/dev/edit-activate-baseline.sh --check-targets <file.jsonl>        policy-ts の記録を目標と照合（外れたら exit 1）
 #
 # 1 試行 = 代表的な編集を 1 件当てる → 段（steps）を順に計る → 編集を戻す。編集は試行ごとに違う nonce を入れるので
 # sccache・cargo の fingerprint が前の試行の成果を使い回さない。編集は trap（EXIT/INT/TERM/HUP）で必ず戻し、戻した後に
@@ -34,6 +35,23 @@
 #       飛ばし、理由を kind=skipped の行に残す。sccache は host 設定のまま（cold でも cache hit はありうるので数を記録）。
 # CPU を焼く負荷はかけない。本番の daemon・DB・release 置き場には書かない（release 記録は読むだけ）。
 #
+# policy-ts（TS だけの変更の経路。ADR 2026-11-02-ts-fast-verify (7)）: control-ts/src/domains/lane_rules.ts の RULES に
+# 当たらない規則を 1 件足し、CELERIS_WU_BASE=HEAD の scripts/dev/ts-verify.sh --record を 1 回走らせて戻す。1 試行 = kind=trial の 1 行で、
+#   secs              編集を書いた時点から ts-verify（最後の段 activate）が終わるまでの壁時計。編集を戻す時間は入らない
+#   stages            ts-verify の段（classify・runner-cache・install・typecheck・bundle・unit・golden・safety・integration・activate）の秒と exit
+#   typecheck_secs・bundle_secs  型検査と bundle の秒（別の欄）
+#   cargo_invocations ts-verify の PATH の wrapper が数えた cargo の起動回数
+#   link_count        linker の wrapper が数えた link の回数
+# prime は kind=prime の行で、step=runner-ensure（script-runner-cache.sh ensure。秒は runner_build_secs にも書く）と、
+# warm だけ step=ts-verify（編集を当てて 1 回。編集なしでは ts-verify が分類 none で抜けて温まらないため）。集計に入れない。
+# warm: control-ts/node_modules と runner の cache が在る状態。 cold: 試行ごとに編集の前に node_modules を消し、
+#   ts-verify の段 install（pnpm install --offline --frozen-lockfile）から測る。runner の cache は当たる状態で測る。
+#   node_modules が無いと import グラフを計算できないので、cold の単体試験は常に全部になる。
+# 開始時に基準 HEAD の分類が none（作業ツリーに文書以外の変更が無い）でなければ exit 2。空でない --out も exit 2（試行を混ぜない）。
+# --check-targets: warm は p50 <= 30 秒かつ p95 <= 60 秒、cold は p95 <= 120 秒（最近傍順位。n=20 なら 10 番目と 19 番目）。
+#   全試行で exit 0・class ts-only・10 段すべて exit 0・cargo 起動 0・link_count 0・編集を戻せた、のときだけ exit 0。
+#   ファイルに在る mode をすべて判定する。policy-ts の試行が 1 件も無ければ exit 1。読めなければ exit 2。
+#
 # 環境変数: BASELINE_STEPS（既定: 上の 6 段を空白区切り）、BASELINE_JOBS（cargo -j。既定は cargo の既定）、
 #           RELEASES_DIR（既定 /local/celeris/state/releases）、BASELINE_COLD_MIN_GB（既定 60）。
 set -euo pipefail
@@ -43,9 +61,9 @@ ALL_STEPS="check build clippy test-build test-run release-build"
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
 
-usage() { sed -n "2,6p" "$0" >&2; exit 2; }
+usage() { sed -n "2,7p" "$0" >&2; exit 2; }
 
-scenario="" mode="" reps="" out="" dry=0 validate=""
+scenario="" mode="" reps="" out="" dry=0 validate="" check_targets=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --scenario) scenario="${2:-}"; shift 2 ;;
@@ -54,6 +72,7 @@ while [ $# -gt 0 ]; do
     --out) out="${2:-}"; shift 2 ;;
     --dry-run) dry=1; shift ;;
     --validate) validate="${2:-}"; shift 2 ;;
+    --check-targets) check_targets="${2:-}"; [ -n "$check_targets" ] || usage; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -73,6 +92,8 @@ need = {
     "skipped": ["reason"],
     "affected": ["cmd", "lines", "edit"],
     "estimate": ["source", "release", "step", "secs"],
+    "trial": ["cmd", "secs", "exit", "class", "stages", "typecheck_secs", "bundle_secs",
+              "cargo_invocations", "link_count", "edit", "reverted"],
 }
 bad, n, kinds = [], 0, {}
 for i, line in enumerate(open(path, encoding="utf-8"), 1):
@@ -93,7 +114,7 @@ for i, line in enumerate(open(path, encoding="utf-8"), 1):
     for key in keys:
         if key not in r:
             bad.append(f"line {i}: missing {key}")
-    if k in ("step", "prime", "skipped"):
+    if k in ("step", "prime", "skipped", "trial"):
         env = r.get("env") or {}
         for key in env_keys:
             if key not in env:
@@ -102,11 +123,20 @@ for i, line in enumerate(open(path, encoding="utf-8"), 1):
         for key in ("present", "reachable", "hits_delta", "misses_delta"):
             if key not in sc:
                 bad.append(f"line {i}: missing env.sccache.{key}")
-    if k == "step":
+    if k in ("step", "trial"):
         if not isinstance(r.get("secs"), (int, float)) or not isinstance(r.get("exit"), int):
             bad.append(f"line {i}: secs/exit types")
         if r.get("reverted") is not True:
             bad.append(f"line {i}: edit was not confirmed reverted")
+    if k == "trial":
+        stages = r.get("stages")
+        if not isinstance(stages, list) or not all(
+                isinstance(st, dict) and isinstance(st.get("name"), str)
+                and isinstance(st.get("secs"), (int, float)) and isinstance(st.get("exit"), int)
+                for st in stages):
+            bad.append(f"line {i}: stages must be a list of {{name, secs, exit}}")
+    if k == "prime" and r.get("step") == "runner-ensure" and "runner_build_secs" not in r:
+        bad.append(f"line {i}: missing runner_build_secs")
 if n == 0:
     bad.append("no records")
 for b in bad:
@@ -116,7 +146,97 @@ sys.exit(1 if bad else 0)
 PY
 fi
 
+# ---- --check-targets -----------------------------------------------------------
+if [ -n "$check_targets" ]; then
+  exec python3 -I - "$check_targets" "$SCHEMA" <<'PY'
+import json, math, sys
+path, schema = sys.argv[1], sys.argv[2]
+STAGES = ["classify", "runner-cache", "install", "typecheck", "bundle", "unit", "golden",
+          "safety", "integration", "activate"]
+# (順位の百分位, 上限の秒)
+TARGETS = {"warm": [(50, 30.0), (95, 60.0)], "cold": [(95, 120.0)]}
+def nearest_rank(values, p):  # 昇順で ceil(p*n/100) 番目。整数で計算して丸めの誤差を入れない
+    ordered = sorted(values)
+    return ordered[-(-p * len(ordered) // 100) - 1]
+def is_secs(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0
+def is_zero(v):
+    return isinstance(v, int) and not isinstance(v, bool) and v == 0
+try:
+    lines = open(path, encoding="utf-8").read().splitlines()
+except (OSError, UnicodeError) as e:
+    print(f"cannot read {path}: {e}", file=sys.stderr)
+    sys.exit(2)
+problems, secs, reps = [], {}, set()
+for i, line in enumerate(lines, 1):
+    if not line.strip():
+        continue
+    try:
+        r = json.loads(line)
+    except ValueError as e:
+        problems.append(f"line {i}: not JSON ({e})")
+        continue
+    if not isinstance(r, dict):
+        problems.append(f"line {i}: not an object")
+        continue
+    if r.get("schema") != schema:
+        problems.append(f"line {i}: schema != {schema}")
+    if r.get("kind") == "prime":
+        continue  # 温める行は集計に入れない
+    if r.get("kind") != "trial" or r.get("scenario") != "policy-ts":
+        problems.append(f"line {i}: not a policy-ts trial (kind={r.get('kind')!r}, scenario={r.get('scenario')!r})")
+        continue
+    mode, rep = r.get("mode"), r.get("rep")
+    tag = f"line {i} ({mode} rep {rep})"
+    if mode not in TARGETS:
+        problems.append(f"{tag}: unknown mode")
+        continue
+    if (mode, rep) in reps:
+        problems.append(f"{tag}: duplicate rep")
+    reps.add((mode, rep))
+    if not is_secs(r.get("secs")):
+        problems.append(f"{tag}: secs is not a number")
+    else:
+        secs.setdefault(mode, []).append(r["secs"])
+    if not is_zero(r.get("exit")):
+        problems.append(f"{tag}: exit {r.get('exit')!r}")
+    if r.get("class") != "ts-only":
+        problems.append(f"{tag}: class {r.get('class')!r} != ts-only")
+    if not is_zero(r.get("cargo_invocations")):
+        problems.append(f"{tag}: cargo_invocations {r.get('cargo_invocations')!r} != 0")
+    if not is_zero(r.get("link_count")):
+        problems.append(f"{tag}: link_count {r.get('link_count')!r} != 0")
+    if r.get("reverted") is not True:
+        problems.append(f"{tag}: edit was not confirmed reverted")
+    stages = r.get("stages")
+    stages = stages if isinstance(stages, list) else []
+    names = [st.get("name") if isinstance(st, dict) else None for st in stages]
+    if names != STAGES:
+        problems.append(f"{tag}: stages {names} != {STAGES}")
+    elif not all(is_zero(st.get("exit")) for st in stages):
+        problems.append(f"{tag}: a stage failed")
+report = {"file": path, "modes": {}}
+for mode, values in sorted(secs.items()):
+    entry = {"trials": len(values)}
+    for p, limit in TARGETS[mode]:
+        v = nearest_rank(values, p)
+        entry[f"p{p}"] = v
+        entry[f"p{p}_limit"] = limit
+        if v > limit:
+            problems.append(f"{mode}: p{p} {v} > {limit}")
+    report["modes"][mode] = entry
+if not secs:
+    problems.append("no policy-ts trials")
+report["problems"] = len(problems)
+for b in problems:
+    print(b, file=sys.stderr)
+print(json.dumps(report, ensure_ascii=False))
+sys.exit(1 if problems else 0)
+PY
+fi
+
 case "$scenario" in
+  policy-ts) crate=""; edit_file="control-ts/src/domains/lane_rules.ts" ;;
   policy) crate="task-core"; edit_file="crates/task-core/src/model_policy.rs" ;;
   cos) crate="task-api"; edit_file="crates/task-api/src/cos/basis/job_wait_extend.rs" ;;
   *) usage ;;
@@ -152,6 +272,14 @@ if scenario == "policy":
            f'        condition: "baseline probe {nonce} (never matches)",\n'
            '        when: |_| false,\n'
            '    },\n')
+elif scenario == "policy-ts":
+    anchor = '  {\n    id: "standard/default",\n'
+    add = ('  {\n'
+           f'    id: "frontier/edit-activate-baseline-{nonce}",\n'
+           '    lane: "frontier",\n'
+           f'    condition: "baseline probe {nonce} (never matches)",\n'
+           '    when: () => false,\n'
+           '  },\n')
 else:
     anchor = '    // D3: the limit on extensions of the same jobs.\n'
     # 数十行の制御: job の状態を集計して、順に判定して拒否する（CoS 定型判断の条件を足す変更の形）。実際には当たらない。
@@ -194,6 +322,20 @@ open(path, "w", encoding="utf-8").write(src.replace(anchor, add + anchor))
 PY
 }
 
+if [ "$dry" -eq 1 ] && [ "$scenario" = policy-ts ]; then
+  echo "scenario: $scenario（編集: $edit_file、cargo を起動しない TS の経路。ADR 2026-11-02-ts-fast-verify (7)）"
+  echo "0. 基準 HEAD の ts-verify.sh --list が class: none でなければ exit 2（文書以外の変更が在ると ts-only にならない）"
+  echo "1. prime（kind=prime、集計に入れない）: bash scripts/dev/script-runner-cache.sh ensure（秒を runner_build_secs に記録）"
+  echo "   warm は続けて編集を当てた ts-verify を 1 回走らせて温める"
+  echo "2. 試行ごと（cold は最初に control-ts/node_modules を消す。消す時間は測らない）:"
+  echo "   編集を当てる（RULES の standard/default の前に、当たらない規則 1 件。nonce は試行ごとに違う）"
+  echo "3. env CELERIS_WU_BASE=HEAD bash scripts/dev/ts-verify.sh --record <file> の段を計る:"
+  for s in classify runner-cache install typecheck bundle unit golden safety integration activate; do echo "   - $s"; done
+  echo "   cold の install は pnpm install --offline --frozen-lockfile。warm は node_modules が在るので何もしない"
+  echo "4. 編集を戻し cmp で一致を確認。1 試行 1 行（kind=trial）: secs・stages・typecheck_secs・bundle_secs・cargo_invocations・link_count・class・env"
+  echo "5. 判定: --validate <file>、--check-targets <file>（warm p50 <= 30 秒・p95 <= 60 秒、cold p95 <= 120 秒、全試行 cargo 0・link 0）"
+  exit 0
+fi
 if [ "$dry" -eq 1 ]; then
   echo "scenario: $scenario（編集: $edit_file、対象 crate: $crate）"
   echo "1. 元の $edit_file を \$TMPDIR に写し、trap で必ず戻す（戻した後に cmp で一致を確認）"
@@ -212,6 +354,21 @@ case "$mode" in warm|cold) ;; *) usage ;; esac
 [ -n "$out" ] || usage
 mkdir -p "$(dirname "$out")"
 out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
+if [ "$scenario" = policy-ts ]; then
+  if [ -s "$out" ]; then
+    echo "edit-activate-baseline: $out が空でない（前の試行と混ぜない。別の file を指定する）" >&2
+    exit 2
+  fi
+  class_list="$(CELERIS_WU_BASE=HEAD bash scripts/dev/ts-verify.sh --list || true)"
+  case "$class_list" in
+    "class: none"*) ;;
+    *)
+      echo "edit-activate-baseline: 作業ツリーに文書以外の変更が在る。commit してから測る" >&2
+      echo "$class_list" >&2
+      exit 2
+      ;;
+  esac
+fi
 
 work="$(mktemp -d "${TMPDIR:?TMPDIR is required}/edit-activate.XXXXXX")"
 backup="$work/original"
@@ -427,6 +584,97 @@ for f in files:
                           "step": s.get("step"), "secs": s.get("secs")}, ensure_ascii=False))
 PY
 }
+
+# ---- policy-ts（ts-verify.sh を計る。cargo の段を使わない）--------------------------------------------
+# $1 kind $2 rep $3 step（trial では空） $4 cmd $5 開始 $6 終了 $7 exit $8 ts-verify の記録 $9 nonce ${10} reverted
+ts_emit() {
+  local envj link
+  envj="$(env_json "${CARGO_TARGET_DIR:-}" null null null null)"
+  link="$(sort -n "$linklog" | awk 'BEGIN{t=0;n=0;u=0;end=0} {t+=$2-$1;n++; b=($1>end)?$1:end; if($2>b){u+=$2-b;end=$2}} END{printf "%.3f %d %.3f", t, n, u}')"
+  emit "$(python3 -I - "$SCHEMA" "$scenario" "$mode" "$(now)" "$envj" "$edit_file" "$link" "$work/during.json" "$@" <<'PY'
+import json, sys
+(schema, scen, mode, at, envj, efile, link, during, kind, rep, step, cmd, s, e, rc, record, nonce, reverted) = sys.argv[1:19]
+secs = round(float(e) - float(s), 3)
+lsecs, lcount, lunion = link.split()
+try:
+    v = json.load(open(record))
+except (OSError, ValueError):
+    v = {}  # ts-verify が記録を書く前に落ちた。cargo 起動回数は null のまま（--check-targets で落ちる）
+stages = v.get("stages", [])
+by_name = {st.get("name"): st.get("secs") for st in stages}
+rec = {"schema": schema, "kind": kind, "scenario": scen, "mode": mode, "rep": int(rep), "at": at,
+       "cmd": cmd, "secs": secs, "exit": int(rc)}
+rec["link_count"] = max(int(lcount), v.get("link_count", 0))
+if step:
+    rec.update({"step": step, "link_secs": float(lsecs), "link_union_secs": float(lunion),
+                "compile_secs": round(secs - float(lunion), 3)})
+    if step == "runner-ensure":
+        rec["runner_build_secs"] = secs
+if kind == "trial" or step == "ts-verify":
+    rec.update({"class": v.get("class"), "stages": stages,
+                "typecheck_secs": by_name.get("typecheck"), "bundle_secs": by_name.get("bundle"),
+                "cargo_invocations": v.get("cargo_invocations"),
+                "cargo_compile_invocations": v.get("cargo_compile_invocations"),
+                "cargo_calls": v.get("cargo_calls"), "units": v.get("units"),
+                "verify_total_secs": v.get("total_secs")})
+if nonce:
+    rec["edit"] = {"file": efile, "nonce": nonce}
+    rec["reverted"] = reverted == "true"
+env = json.loads(envj)
+try:
+    env["during"] = json.load(open(during))
+except (OSError, ValueError):
+    env["during"] = None
+rec["env"] = env
+print(json.dumps(rec, ensure_ascii=False))
+PY
+)"
+}
+
+# $1 kind $2 rep $3 step。編集を当てて ts-verify を 1 回走らせ、戻してから 1 行を書く。ts-verify の exit を $ts_rc に残す。
+ts_run() {
+  local kind="$1" rep="$2" step="$3" nonce s e sampler reverted=false record="$work/verify-record.json"
+  local cmd="env CELERIS_WU_BASE=HEAD bash scripts/dev/ts-verify.sh --record <file>"
+  nonce="$(od -An -N4 -tx4 /dev/urandom | tr -d ' \n')"
+  rm -f "$record" "$work/during.json"
+  : >"$linklog"
+  sample_load "${CARGO_TARGET_DIR:-}" "$work/during.json" </dev/null &
+  sampler=$!
+  s=$(date +%s.%N)
+  apply_edit "$nonce"
+  ts_rc=0
+  CELERIS_WU_BASE=HEAD bash scripts/dev/ts-verify.sh --record "$record" >"$work/verify.log" 2>&1 || ts_rc=$?
+  e=$(date +%s.%N)
+  kill "$sampler" 2>/dev/null || true
+  wait "$sampler" 2>/dev/null || true
+  if revert; then reverted=true; fi
+  [ "$ts_rc" -eq 0 ] || tail -n 30 "$work/verify.log" >&2
+  ts_emit "$kind" "$rep" "$step" "$cmd" "$s" "$e" "$ts_rc" "$record" "$nonce" "$reverted"
+  [ "$reverted" = true ] || { echo "edit-activate-baseline: edit not reverted" >&2; exit 3; }
+}
+
+if [ "$scenario" = policy-ts ]; then
+  echo "edit-activate-baseline: scenario=$scenario mode=$mode reps=$reps out=$out" >&2
+  : >"$linklog"
+  rm -f "$work/during.json"
+  s=$(date +%s.%N)
+  rc=0
+  bash scripts/dev/script-runner-cache.sh ensure >"$work/ensure.log" 2>&1 || rc=$?
+  e=$(date +%s.%N)
+  [ "$rc" -eq 0 ] || tail -n 30 "$work/ensure.log" >&2
+  ts_emit prime 0 runner-ensure "bash scripts/dev/script-runner-cache.sh ensure" "$s" "$e" "$rc" /dev/null "" ""
+  [ "$rc" -eq 0 ] || { echo "edit-activate-baseline: runner の ensure が失敗した" >&2; exit 1; }
+  if [ "$mode" = warm ]; then
+    ts_run prime 0 ts-verify
+    [ "$ts_rc" -eq 0 ] || { echo "edit-activate-baseline: 温める ts-verify が失敗した" >&2; exit 1; }
+  fi
+  for rep in $(seq 1 "$reps"); do
+    [ "$mode" != cold ] || rm -rf control-ts/node_modules
+    ts_run trial "$rep" ""
+  done
+  echo "edit-activate-baseline: wrote $out" >&2
+  exit 0
+fi
 
 echo "edit-activate-baseline: scenario=$scenario mode=$mode reps=$reps steps=[$steps] out=$out" >&2
 

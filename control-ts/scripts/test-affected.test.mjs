@@ -1,5 +1,8 @@
 // scripts/dev/test-affected.sh が control-ts の検査を選んで走らせることを小さな git fixture で確かめる
 // （web の選択は scripts/dev/tests/test-affected-list.sh が確かめる）。偽の pnpm を使い、cargo の試験は走らせない。
+// TS だけの変更（control-ts/src の業務 TS）は scripts/dev/ts-verify.sh に委ねる（ADR 2026-11-02-ts-fast-verify (5)(6)）。
+// fixture には偽の ts-verify.sh を置く。それ以外の control-ts/ の変更は従来どおり typecheck と test を走らせ、
+// 加えて ts-verify.sh --grade で候補の作業ツリーを採点する（ADR 付記 grade-gate）。偽が落ちれば test-affected.sh も落ちる。
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -31,6 +34,30 @@ write("docs/api/script-host/host-v1.schema.json", "{}\n");
 write("docs/api/v1/api-v1.schema.json", "{}\n");
 write(".gitignore", "node_modules\ntarget\n");
 write("scripts/dev/check-health.sh", "#!/usr/bin/env bash\nexit 0\n");
+// 偽の ts-verify.sh: 呼ばれた引数（--record の file 名を除く）を CALLS に残し、--record の file に記録を書く。
+// --grade では host-api の 10 段の記録。FAKE_TSV_RC で exit code を変える（記録の exit も同じ値）。
+write(
+  "scripts/dev/ts-verify.sh",
+  `#!/bin/sh
+out=""; args=""; cls=ts-only
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --record) out="$2"; args="$args --record"; shift ;;
+    --grade) cls=host-api; args="$args --grade" ;;
+    *) args="$args $1" ;;
+  esac
+  shift
+done
+echo "ts-verify$args" >>"$CALLS"
+rc="\${FAKE_TSV_RC:-0}"
+st=""
+for n in classify runner-cache install typecheck bundle unit golden safety integration activate; do
+  st="$st\${st:+,}{\\"name\\":\\"$n\\",\\"exit\\":0}"
+done
+[ -z "$out" ] || printf '{"class":"%s","exit":%s,"stages":[%s]}' "$cls" "$rc" "$st" >"$out"
+exit "$rc"
+`,
+);
 // 偽の pnpm は install で偽の tsc と vitest を置く。呼ばれた順を CALLS に残す。
 const calls = path.join(work, ".calls");
 const fake = write(
@@ -65,10 +92,23 @@ const reset = () => {
   rmSync(calls, { force: true });
 };
 
-test("--list selects control-ts on a change under control-ts/", () => {
+test("--list delegates a TS-only change to ts-verify", () => {
   reset();
   write("control-ts/src/x.ts", "");
-  assert.equal(run(["--list"]).stdout, "control-ts: typecheck+test (理由: control-ts/ の変更)\n");
+  assert.equal(
+    run(["--list"]).stdout,
+    "control-ts: ts-verify (理由: TS だけの変更（control-ts/src の業務 TS）。cargo は走らせない)\n",
+  );
+});
+
+test("--list selects control-ts typecheck+test and ts-verify-grade on a tooling change under control-ts/", () => {
+  reset();
+  write("control-ts/tsconfig.json", "{}\n");
+  assert.equal(
+    run(["--list"]).stdout,
+    "control-ts: typecheck+test (理由: control-ts/ の変更)\n" +
+      "control-ts: ts-verify-grade (理由: TS だけでない control-ts/ の変更。候補の作業ツリーを本物の runner で採点する)\n",
+  );
 });
 
 test("--list selects control-ts on a change of the host schema", () => {
@@ -76,6 +116,10 @@ test("--list selects control-ts on a change of the host schema", () => {
   write("docs/api/script-host/host-v1.schema.json", '{"x":1}\n');
   const lines = run(["--list"]).stdout.trim().split("\n");
   assert.ok(lines.includes("control-ts: typecheck+test (理由: docs/api/script-host/ の変更（生成型の元の schema）)"), `${lines}`);
+  assert.ok(
+    lines.includes("control-ts: ts-verify-grade (理由: TS だけでない docs/api/script-host/ の変更。候補の作業ツリーを本物の runner で採点する)"),
+    `${lines}`,
+  );
 });
 
 test("--list does not select control-ts on other changes", () => {
@@ -85,20 +129,41 @@ test("--list does not select control-ts on other changes", () => {
   assert.doesNotMatch(run(["--list"]).stdout, /control-ts/);
 });
 
-test("a run installs, typechecks and tests control-ts", () => {
+test("a TS-only run calls ts-verify and not pnpm", () => {
   reset();
   write("control-ts/src/x.ts", "");
   const result = run([]);
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(calls, "utf8"), "ts-verify --record\n");
+});
+
+test("a run installs, typechecks and tests control-ts, then grades it with ts-verify --grade", () => {
+  reset();
+  write("control-ts/src/testing/x.ts", "");
+  const result = run([]);
+  assert.equal(result.status, 0, result.stderr);
   assert.equal(
     readFileSync(calls, "utf8"),
-    "pnpm install --offline --frozen-lockfile\ntsc --noEmit\nvitest run\n",
+    "pnpm install --offline --frozen-lockfile\ntsc --noEmit\nvitest run\nts-verify --grade --record\n",
   );
+});
+
+test("a control-ts/scripts change calls ts-verify --grade and a failing grade fails test-affected", () => {
+  reset();
+  write("control-ts/scripts/compare.test.mjs", 'import { test } from "node:test";\ntest.skip("x", () => {});\n');
+  const passed = run([]);
+  assert.equal(passed.status, 0, passed.stderr);
+  assert.ok(readFileSync(calls, "utf8").split("\n").includes("ts-verify --grade --record"), readFileSync(calls, "utf8"));
+  rmSync(calls, { force: true });
+  const failed = run([], { FAKE_TSV_RC: "1" });
+  assert.notEqual(failed.status, 0);
+  assert.match(failed.stderr, /ts-verify\.sh --grade が失敗した/);
+  assert.ok(readFileSync(calls, "utf8").split("\n").includes("ts-verify --grade --record"), readFileSync(calls, "utf8"));
 });
 
 test("a failed typecheck fails test-affected before the unit tests", () => {
   reset();
-  write("control-ts/src/x.ts", "");
+  write("control-ts/src/testing/x.ts", "");
   const result = run([], { FAKE_TSC_RC: "2" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /control-ts typecheck が失敗した \(exit 2\)/);

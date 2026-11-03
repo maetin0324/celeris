@@ -28,7 +28,8 @@ updated: 2026-11-03
 ## 証拠（基準は `$CELERIS_WU_BASE`、提出時の HEAD で実行）
 - `cargo nextest run --no-fail-fast -p celeris -E 'binary(/^script_compare_/)'` → 25 passed、0 skipped（control-ts/dist は無く、試験が source から bundle を作った）。
 - `sh scripts/dev/tests/script-bundle-fresh.sh` → `script-bundle-fresh: all ok`（(a)〜(d)、(t1)〜(t5) すべて ok）。
-- test-affected・clippy・fmt の結果は下の「提出時の検査」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0。対象 crate は celeris・celerisctl、nextest 884 passed・0 skipped。control-ts の source から bundle を作り、script bundle の SKIP 0 件。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 ## 未解決
 - daemon の再起動で `draining` の generation が `draining` のまま残る（isolate は process と一緒に消える）。付記 S5-2 の起動時の復元と drain の終わりとして `retired` にするかは daemon-gen unit で決めて実装する。

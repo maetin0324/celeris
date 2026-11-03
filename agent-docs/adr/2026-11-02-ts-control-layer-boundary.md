@@ -922,3 +922,36 @@ pass-wire・ts-pass・traces-async の各 unit が、新しい経路を入れる
 | S5-8 | `ScriptTickWait`（1 回 50 ms、1 tick 合計 200 ms）、tick の始めの `begin_tick`、集計 `Dispatcher::script_tick_wait_summary`（直近 1000 tick の p50・p95・最大と `tick_budget` の件数） | (15) daemon が 10 分ごとに出す `script_tick_wait` の log 行は無い（集計の関数だけがある）。(16) 試験 `tick_budget_200ms_falls_back_after_budget` は待ち時間の値の差し替えで確かめる。dispatcher の中で 50 ms の判定を 5 回待たせる試験は無い（TS の待ちは別の current-thread runtime で走り、試験の `tokio::time::pause` が届かない） |
 | S5-9 | 試験の support（`crates/celeris/tests/support/script_compare.rs`）は `control-ts/dist` を読まず、`CELERIS_SCRIPT_BUNDLE_DIR` が無ければ control-ts の source の内容 hash を名前にした `$TMPDIR/celeris-script-bundle/<hash>` に bundle を作って読む。`test-affected.sh` は bundle を作って `CELERIS_SCRIPT_BUNDLE_DIR` と `CELERIS_SCRIPT_REQUIRE_BUNDLE=1` を渡し、SKIP の件数を出す | **S5-9 の (1)(2) を改める**: 試験は `control-ts/dist` を読まない。dist の `inputs.sha256` は使わない（`build-bundle.mjs` は変えていない）。(3)〜(5) はそのまま。release gate で REQUIRE を立てるかは決めていない |
 | S5-12 | 試験名の対応 | runtime-gen・store-gen・canary-dispatch・guard は付記の名前のまま。api-canary は `script_generation_register_503_when_unwired`・`…_invalid_422`・`script_generation_limit_409` を `script_domain_generation_*` の名前で、`script_guard_clear_human_only` を `script_domain_guard_clear_checks`（`script_domains.rs` の中の検査）で作った。script-inbox は `script_guard_inbox_item_once_per_event` を `script_inbox_item_once_per_event_survives_restart` で作った。daemon-gen は各名前に `script_` の接頭辞を付けた（`script_daemon_*`・`script_runtime_daemon_restore_*`）。gen-e2e は `script_generation_e2e_switch_error_rollback_restart`。bundle-skip は (1)(2) を改めたので `usable_bundle_*` の 3 件と node の `inputs.sha256` の試験は無く、`script_compare_fresh_bundle_follows_source`・`script_compare_unbuildable_bundle_is_skipped_and_logged` と shell 試験 `scripts/dev/tests/script-bundle-fresh.sh` に替えた |
+
+## 付記 2026-11-03: S6 の結果と二重実装を整理する終了条件（S6 s6-report、task 01M6FPPJN7A8H427MXFVYFY7H4）
+記録は [S6 の進捗](../progress/2026-11-02-ts-control-layer-s6.md)。(f) の数値は変えていない。
+
+### S6-1 生データの file 名（S5-10 との違い）
+測定 unit は S5-10 の表の名前でなく、次の名前で置いた。連結は測定 unit が済ませたので、s6-report は新しい file を作らない。中身の `scenario` は S5-10 のとおり。
+| S5-10 の名前 | 実際の file（`../progress/2026-11-02-ts-control-layer-s6/`） |
+|---|---|
+| `policy-ts.jsonl`・`cos-ts.jsonl` | `policy-ts-warm.jsonl`・`cos-ts-warm.jsonl` |
+| `cos-ts-cold.jsonl` | 同じ |
+| `policy-a.jsonl`・`policy-b.jsonl` → `policy.jsonl` | `policy-warm-a.jsonl`・`policy-warm-b.jsonl` → `policy-warm.jsonl` |
+| `cos-digest-a.jsonl`・`cos-digest-b.jsonl` → `cos.jsonl` | `cos-digest-warm-a.jsonl`・`cos-digest-warm-b.jsonl` → `cos-digest-warm.jsonl` |
+
+- 集計は `python3 -I scripts/dev/edit-activate-summary.py <jsonl>...`。file をまたいで同じ記録を 1 回だけ数え、20 試行未満の scenario・mode があれば exit 1 にする。
+- `cos-digest` warm は 1 試行約 345 秒で、prime と合わせて 1 leaf に 7 試行しか入らない。S5-10 の「10 ずつ」は守れず、14/20 で未達。残りは 6 試行の leaf を足して埋める（推定で埋めない）。
+
+### S6-2 打ち切り基準の判定
+TS の経路の warm p50 は `policy-ts` 7.519 秒・`cos-ts` 7.470 秒で、(f) の 78 秒を超えない。移行は打ち切らない。
+
+### S6-3 二重実装を整理する終了条件（領域ごと）
+Rust の参照実装（`lane_rules` は `model_policy::match_rule`、`route_priority` は `llm_route::route_priority_decide`、`cos_digest` は `chat::digest::cos_digest_decide`）を消してよいのは、その領域で次の全部が成り立ち、人が承認したときだけである。1 つでも欠けたら残す。
+1. **本番で ts の観測**: 本番でその領域が同じ generation 系列の `ts` のまま連続 30 日続き、その間に script-guard の自動の戻し・説明のつかない不一致・安全違反・検証の外の副作用がどれも 0 件。呼び出しは純粋判定で 1 万件以上、CoS の経路で 2,000 件以上（(f) の進む条件の 10 倍）。
+2. **golden の凍結**: 比較 fixture の期待値を、Rust の出力から生成する形から、repo に commit した凍結 file に移す。ts-verify・runner の golden が Rust の参照実装を呼ばずに採点でき、その状態で全件一致する。
+3. **fallback の置き換え**: Rust 参照へ戻す fallback（副作用の前の `ts_error`・`invalid_output`・`timeout` など。S5-6）の代わりの fail-closed の既定を、領域ごとにこの ADR に書き、試験で固定する（例: `lane_rules` は lane の天井の側、`cos_digest` は digest を出さず受信箱に知らせる）。既定は今の Rust の結果より安全条件を緩めない。
+4. **戻し先の確保**: known-good の TS bundle を 2 世代以上 `<state_dir>/script-bundles/` に残し、その hash を進捗に書く。Rust 参照の削除は 1 commit にまとめ、git revert で戻せるようにする。
+5. **方針改善の手順**: 二重実装をやめた後の方針改善は、凍結した golden の更新を人が review する手順で行う（S6 pilot の「分かったこと」。TS だけの変更は今の compare では不一致として戻される）。
+6. **S6 の数値の確定**: S6-1 の未達（`cos-digest` 14/20）が埋まっている。
+
+消さないもの: Rust の再検証と安全条件、script-guard、generation の登録・切替・drain、認可・永続状態・scheduler（(a)）。`rust` mode の意味は「Rust 参照で判定する」から「fail-closed の既定で判定する」に変わるので、mode 表と API の説明を同じ変更で直す（ADR 2026-10-11-breaking-changes-by-default）。
+
+### S6-4 今の状態
+- 本番は 3 領域とも `rust` で、S6-3 の 1 を満たす領域は無い。Rust の参照実装はすべて残す。
+- 次に移す領域の選定は、本番で 1 領域が `ts` に上がり S6-3 の 1 の観測が始まってからにする。

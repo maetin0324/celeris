@@ -100,6 +100,13 @@ close-async unit の差分は文書だけ（この file・`docs/architecture-map
 - `bash scripts/dev/check-doc-links.sh` → ok、`bash scripts/dev/check-adr-numbers.sh` → ok（356 files）、`sh scripts/dev/progress-index.sh --check` → ok、`python3 scripts/dev/check-architecture-map.py` → OK（849 件）
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path はこの file・`docs/architecture-map.md`・境界 ADR の 3 つ。
 
+### 検査（eval-ready-wait、提出時の HEAD）
+final review の test-affected で `celeris::routing_eval_run` が起動待ち 30 秒で落ちた（真因は未確認、[eval-ready-wait](2026-11-02-ts-control-layer-s4/eval-ready-wait.md)）。起動待ちを daemon の終了と要求ごとの timeout を見る出来事待ちにした後、提出時の HEAD で実行した結果（基準は `$CELERIS_WU_BASE`）:
+- `bash scripts/dev/test-affected.sh` → exit 0（対象 celeris・celerisctl、nextest 882 passed・0 skipped）
+- `cargo nextest run -p celeris --test daemon_ready_wait --test routing_eval_run` → 4 passed
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/check-doc-links.sh` → ok、`sh scripts/dev/progress-index.sh --check` → ok
+
 ## unit と commit（件名）
 | unit | 内容 | commit の件名 |
 |---|---|---|
@@ -121,6 +128,7 @@ close-async unit の差分は文書だけ（この file・`docs/architecture-map
 | [robust-ts](2026-11-02-ts-control-layer-s4/robust-ts.md) | mode ts の頑健性の試験 15 件 | `phase s4: robust-ts: mode ts の async pass の順序・再配送・retry・cancel・再起動・policy_version の試験` |
 | [fixture-ref](2026-11-02-ts-control-layer-s4/fixture-ref.md) | 本物の host の試験を `cases.jsonl` だけで回す | `phase s4: fixture-ref: 本物の host の試験を cases.jsonl だけで回し、消えた traces.jsonl を読まない` |
 | close-async | この file・地図・境界 ADR の S4-20 | `phase s4: close-async: S4 の進捗・architecture-map・境界 ADR を async 経路の実装と突き合わせる`、`phase s4: close-async: 進捗に提出時の検査結果を書く` |
+| [eval-ready-wait](2026-11-02-ts-control-layer-s4/eval-ready-wait.md) | routing_eval_run の起動待ちを出来事待ちにし、helper の試験 3 件 | `phase s4: eval-ready-wait: routing_eval_run の起動待ちを daemon の終了と要求ごとの timeout を見る出来事待ちにする`、`phase s4: eval-ready-wait: 進捗に提出時の検査結果を書く` |
 
 統合の commit（`integrate wu/…`）は celeris が作った。
 

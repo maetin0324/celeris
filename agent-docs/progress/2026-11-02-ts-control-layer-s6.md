@@ -1,6 +1,6 @@
 ---
 title: S6 — 旧 Rust 経路と TS 経路の edit→activate の実測・自己改善 pilot・移行範囲の確定
-tasks: [01M6FPPJN7A8H427MXFVYFY7H4]
+tasks: [01M6FPPJN7A8H427MXFVYFY7H4, 01M6H877VTDSEEX6HP6QPR47NK]
 status: done
 completed: 2026-11-03
 updated: 2026-11-03
@@ -203,12 +203,22 @@ release gate の記録には ok=true の gate が 4 件ある。合計は 501.43
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` は境界 ADR・この file・`scripts/dev/edit-activate-summary.py` と、統合先から取り込んだ m-cosd-c の 3 file（`cos-digest-warm-c.jsonl`・`cos.jsonl`・`m-cosd-c.md`）。
 - m-cosd-c の生データは統合先の branch を merge して取り込んだ（「Merge branch …」の commit）。生データの行は変えていない。
 
+## 取り込みと提出時の検査（task 01M6H877VTDSEEX6HP6QPR47NK）
+task 01M6H877VTDSEEX6HP6QPR47NK は前の試行（子 task 01M6FPPJN7A8H427MXFVYFY7H4）の成果を作り直さずに取り込み、受け入れ条件の command を提出時の HEAD で流した。
+- 取り込み: `git merge --ff-only celeris/01M6FPPJN7A8H427MXFVYFY7H4` → fast-forward で成功（衝突なし）。先頭は「integrate wu/report-fix (phase s6-fix)」と「phase s6: report-fix: 集計の gate 件数を直し、S6 報告と境界 ADR を生データ・実装に合わせる」。
+- 条件 0: `(cd control-ts && corepack pnpm@12.6.0 install --offline --frozen-lockfile && corepack pnpm@12.6.0 run bundle) && CELERIS_SCRIPT_REQUIRE_BUNDLE=1 cargo nextest run -p celeris --test script_generation_e2e` → exit 0、1 test run: 1 passed。
+- 条件 1: `bash scripts/dev/test-affected.sh` → exit 0、nextest 7232 tests run: 7232 passed、21 skipped（web vitest 697 passed、test-ts-verify 18 passed）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- 条件 2: 4 系列の `edit-activate-baseline.sh --validate` → 全 exit 0、problems 0（policy 212 records、cos 258、policy-ts 22、cos-ts 22）。
+- 条件 3: `check-doc-links.sh` → ok、`check-adr-numbers.sh` → ok（357 files）、`progress-index.sh --check` → ok。
+- 前の試行の受け入れ再実行で 1 回だけ落ちた `celeris-campaign::ablation_application trapped_llm_cli_launch_fails_the_fixture_check`（0.431 秒）は、この run の test-affected では落ちなかった（失敗 0 件）。再現しないので、試験の直しはしていない。
+
 ## 未解決
 1. 本番の決定一致率は未計測（人の手順は「決定一致率」の節）。
 2. 本番で標準稼働した領域は 0。上げるかどうかは人が決める。
 3. typecheck が 0.1 秒以下の理由は未確認。
 4. `task-dispatch`・`task-api` の test-build の増分（計らなかった理由は未確認）、S5 を含む release の gate の秒は未計測。
 5. `cos_digest` の apply と記録の間で process が落ちた場合の扱い（既知の制約 11）は決めていない。
+6. flaky の疑い: `celeris-campaign::ablation_application trapped_llm_cli_launch_fails_the_fixture_check` が前の試行の受け入れ再実行で 1 回だけ 0.431 秒で落ちた。単独の再実行（62 秒）とこの task の test-affected（7232 passed）では pass。原因は未確認で、変更の範囲（S5/S6）とは無関係。
 
 ## 提案
 なし。

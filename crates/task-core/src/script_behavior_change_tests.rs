@@ -81,10 +81,26 @@ fn generate_cases(spec: &BehaviorChangeSpec) -> Vec<BehaviorChangeCase> {
         .collect()
 }
 
+/// key を名前順にした値（file の byte 列を serde_json の `preserve_order` の有無に依らず同じにする）。
+fn sorted(v: &Value) -> Value {
+    match v {
+        Value::Object(m) => {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort();
+            Value::Object(keys.into_iter().map(|k| (k.clone(), sorted(&m[k]))).collect())
+        }
+        Value::Array(a) => Value::Array(a.iter().map(sorted).collect()),
+        other => other.clone(),
+    }
+}
+
 fn cases_text(cases: &[BehaviorChangeCase]) -> String {
     cases
         .iter()
-        .map(|c| serde_json::to_string(c).expect("case json") + "\n")
+        .map(|c| {
+            let v = sorted(&serde_json::to_value(c).expect("case json"));
+            serde_json::to_string(&v).expect("case text") + "\n"
+        })
         .collect()
 }
 
@@ -151,6 +167,17 @@ fn behavior_change_cases_match_rust_reference_and_spec() {
     // S6 pilot の「差分 9 件」（201・500・4000 文字 × 3 入力）。
     assert_eq!(pilot_explained, 9);
     assert_eq!(cases.iter().filter(|c| c.name.starts_with("pilot/")).count(), 15);
+    // 旧挙動の fixture（Rust golden）には仕様の当たる行が無い（旧挙動の評価は差分 0 件で判定できる）。
+    let golden = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../control-ts/fixtures/cos_digest/cases.jsonl"),
+    )
+    .expect("golden");
+    let hits = golden
+        .lines()
+        .filter(|l| spec.applies_to(&serde_json::from_str::<Value>(l).expect("row")["input"]))
+        .count();
+    assert_eq!(hits, 0);
 }
 
 /// 仕様と独立に、期待出力の見出しが 200 code point と「…」であることを手で確かめる。

@@ -6,6 +6,11 @@
 #                                                            ts-verify.json を書く（<dir> の既存の record.jsonl は上書き）
 #   bash scripts/dev/ts-pilot.sh --validate <record.jsonl>   記録を検査する（欠け・食い違いがあれば exit 1）
 #
+# P2-G（ADR 2026-11-03-llm-self-improve-trial）の環境変数（どちらも任意。無ければ S6 pilot の固定の改善のまま）:
+#   TS_PILOT_PATCH=<file>   固定の改善の代わりに候補の patch（control-ts/src/ の中だけ）を当てる。外の file を変える patch は失敗
+#   TS_PILOT_SPEC=<spec>    課題の改善仕様（同じ dir の <名>.cases.jsonl と組）。試験 daemon で人でない主体の承認が 403 で拒まれ、
+#                           人の token の承認が通ることを記録し、段 diff の probe を期待差分 fixture の入力にする
+#   TS_PILOT_CHANGE=<text>  段 edit の change の説明
 # 守ること:
 # - この作業ツリーの control-ts/src は変えない。改善は $TMPDIR の使い捨ての作業ツリー（git worktree --detach HEAD）に入れ、
 #   差分は <dir>/candidate.patch にだけ残す。
@@ -154,6 +159,13 @@ if g("canary"):
     need("human_approval_in_production" in c["detail"], "canary: 本番では人の承認に当たることの記録が無い")
     need(all(e["actor"] == c["actor"] for e in c["events"]), "canary: event の actor が人でない")
     need(any(e.get("to_mode") == "canary" for e in c["events"]), "canary: mode の変更の event が無い")
+if g("behavior_change_denied_non_human"):
+    d = g("behavior_change_denied_non_human")["detail"]
+    need(d.get("http_status") == 403 and d.get("error") == "script_behavior_change_requires_human" and d.get("table_rows") == 0,
+         "behavior_change_denied_non_human: 403・表は不変でない")
+if g("behavior_change_approve"):
+    c = g("behavior_change_approve")
+    need(c["actor"].startswith("human:") and c["detail"].get("state") == "approved", "behavior_change_approve: 人の承認でない")
 if g("guard_seed"):
     need(g("guard_seed")["detail"].get("synthetic") is True, "guard_seed: synthetic の印が無い")
 if g("diff"):
@@ -244,6 +256,16 @@ print(json.dumps({
 # 2. edit: 使い捨ての作業ツリーで cos_digest の方針を改善する
 t0="$(now)"
 git worktree add --detach "$tree" HEAD >/dev/null 2>&1
+if [ -n "${TS_PILOT_PATCH:-}" ]; then
+  git -C "$tree" apply --check "$TS_PILOT_PATCH" || { echo "ts-pilot: 候補の patch が HEAD に当たらない" >&2; exit 1; }
+  outside="$(git -C "$tree" apply --numstat "$TS_PILOT_PATCH" | awk '{print $3}' | grep -v '^control-ts/src/' || true)"
+  if [ -n "$outside" ]; then
+    echo "ts-pilot: 候補の patch が control-ts/src/ の外を変える: $outside" >&2
+    exit 1
+  fi
+  git -C "$tree" apply "$TS_PILOT_PATCH"
+  git -C "$tree" add -N . >/dev/null 2>&1
+else
 python3 -I - "$tree/control-ts/src/domains" <<'PY'
 import sys, pathlib
 d = pathlib.Path(sys.argv[1])
@@ -282,16 +304,19 @@ ts += (
 )
 t.write_text(ts, encoding="utf-8")
 PY
+fi
 git -C "$tree" diff >"$out/candidate.patch"
 files_json="$(git -C "$tree" diff --name-only | python3 -I -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
 rec edit "$t0" "$WORKER" '[]' "$(python3 -I -c '
 import hashlib, json, sys
 p = open(sys.argv[1], "rb").read()
 print(json.dumps({"domain": "cos_digest", "files": json.loads(sys.argv[2]),
-  "change": "digest の見出しの run の失敗の理由を 200 文字（code point）までにし、超えたら「…」で切る",
+  "change": sys.argv[3], "source": sys.argv[4],
   "patch": "candidate.patch", "patch_sha256": hashlib.sha256(p).hexdigest(),
   "patch_lines": p.count(b"\n"), "worktree": "$TMPDIR の git worktree --detach HEAD（この branch には commit しない）"},
-  ensure_ascii=False))' "$out/candidate.patch" "$files_json")"
+  ensure_ascii=False))' "$out/candidate.patch" "$files_json" \
+  "${TS_PILOT_CHANGE:-digest の見出しの run の失敗の理由を 200 文字（code point）までにし、超えたら「…」で切る}" \
+  "$( [ -n "${TS_PILOT_PATCH:-}" ] && echo patch || echo builtin )")"
 
 # 3. ts-verify（候補の作業ツリーで。基準は HEAD）
 t0="$(now)"
@@ -547,6 +572,38 @@ if st != 422 or ev:
 rec("canary_not_ready", t0, "human:pilot", ev, {"http_status": st, "error": body.get("code") if isinstance(body, dict) else body,
     "body": body})
 
+# P2-G: 課題の改善仕様の承認（ADR 2026-11-03-ts-intended-behavior-change D4）。人でない主体は 403、人の token だけが通る。
+spec_path = os.environ.get("TS_PILOT_SPEC", "")
+if spec_path:
+    spec = json.load(open(spec_path, encoding="utf-8"))
+    st, body = api("POST", "/script/behavior-changes", HUMAN, {"spec": spec, "spec_sha256": "0" * 64, "reason": "hash の確認"})
+    import re
+    m = re.search(r"computed ([0-9a-f]{64})", body.get("detail", "") if isinstance(body, dict) else "")
+    computed = m.group(1) if m else None
+    if st != 422 or not computed:
+        fail(f"behavior-change hash: {st} {body}")
+    t0 = now()
+    st, body = api("POST", "/script/behavior-changes", OPERATOR, {"spec": spec, "spec_sha256": computed, "reason": "P2-G"})
+    with conn() as c:
+        rows = c.execute("SELECT COUNT(*) FROM script_behavior_changes").fetchone()[0]
+    code = body.get("code") if isinstance(body, dict) else body
+    if st != 403 or rows != 0:
+        fail(f"behavior-change by operator: {st} {body} rows={rows}")
+    rec("behavior_change_denied_non_human", t0, "operator:pilot", [],
+        {"http_status": st, "error": code, "table_rows": rows, "spec_id": spec["id"], "spec_sha256": computed})
+    t0 = now()
+    st, body = api("POST", "/script/behavior-changes", HUMAN, {"spec": spec, "spec_sha256": computed,
+                                                              "reason": "P2-G: 試験 daemon の人の token"})
+    with conn() as c:
+        state = c.execute("SELECT state FROM script_behavior_changes WHERE spec_sha256 = ?", (computed,)).fetchone()
+        evs = c.execute("SELECT action, actor FROM script_behavior_change_events WHERE spec_sha256 = ?", (computed,)).fetchall()
+    if st != 200 or not state or state[0] != "approved":
+        fail(f"behavior-change approve: {st} {body} state={state}")
+    rec("behavior_change_approve", t0, "human:pilot",
+        [{"table": "script_behavior_change_events", "action": a, "actor": who} for a, who in evs],
+        {"http_status": st, "state": state[0], "spec_id": spec["id"], "spec_version": spec["version"], "spec_sha256": computed,
+         "human_approval_in_production": "本番ではこの承認も人が行う（人の token だけ。D4）。P2-G は試験 daemon の人の token で行い、本番では承認していない"})
+
 # 計数を積む（gen-e2e の observe_until_ready と同じ。一時 DB だけ）
 t0 = now()
 required = 200  # SCRIPT_GUARD_READY_COS（(f): CoS の経路は 200 件以上で説明のつかない不一致 0 件）
@@ -596,7 +653,7 @@ node "$work/diff/build.mjs" "$esb" "$work/diff/base.ts" "$work/diff/base.mjs"
 node "$work/diff/build.mjs" "$esb" "$work/diff/cand.ts" "$work/diff/cand.mjs"
 cat >"$work/diff/compare.mjs" <<'JS'
 import { readFileSync } from "node:fs";
-const [baseMod, candMod, cases, traces] = process.argv.slice(2);
+const [baseMod, candMod, cases, traces, specCases] = process.argv.slice(2);
 const base = await import(baseMod), cand = await import(candMod);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 let fixtureCases = 0, fixtureDiffs = 0;
@@ -613,16 +670,18 @@ for (const line of readFileSync(cases, "utf8").split("\n")) {
 }
 const traceLines = readFileSync(traces, "utf8").split("\n").filter((l) => l.trim()).length;
 // 改善の当たる入力: fixture の failed の入力の reason だけを長さ 150・200・201・500・4000 に替える。
-const lens = [150, 200, 201, 500, 4000];
+const lens = specCases ? null : [150, 200, 201, 500, 4000];
 const probes = [];
-for (const input of failed) for (const n of lens) probes.push({ ...input, reason: "E".repeat(n) });
+// P2-G: 課題の期待差分 fixture があれば、その入力を probe にする。
+if (specCases) for (const l of readFileSync(specCases, "utf8").split("\n")) { if (l.trim()) probes.push(JSON.parse(l).input); }
+else for (const input of failed) for (const n of lens) probes.push({ ...input, reason: "E".repeat(n) });
 let probeDiffs = 0;
 const examples = [];
 for (const p of probes) {
   const a = base.decide(p), b = cand.decide(p);
   if (!same(a, b)) {
     probeDiffs++;
-    if (examples.length < 2) {
+    if (examples.length < 2 && !specCases) {
       const head = (o) => JSON.stringify(o).match(/run は失敗: (E+)(…?)/);
       const ha = head(a), hb = head(b);
       examples.push({ reason_chars: p.reason.length, base_reason_in_heading: ha ? ha[1].length : null,
@@ -632,10 +691,13 @@ for (const p of probes) {
 }
 console.log(JSON.stringify({ fixture_cases: fixtureCases, fixture_diffs: fixtureDiffs, pass_trace_lines: traceLines,
   probe_cases: probes.length, probe_diffs: probeDiffs, probe_lengths: lens, examples,
-  expected: "fixture の差分 0（ts-verify の golden と同じ）。reason が 201 文字以上の probe だけが違う" }));
+  probe_source: specCases ? "課題の期待差分 fixture の入力" : "fixture の failed の入力の reason の長さを替えたもの",
+  expected: specCases ? "fixture の差分 0。期待差分 fixture の explained の入力だけが違う（一致は ts-behavior-eval が数える）"
+    : "fixture の差分 0（ts-verify の golden と同じ）。reason が 201 文字以上の probe だけが違う" }));
 JS
 diff_json="$(node "$work/diff/compare.mjs" "$work/diff/base.mjs" "$work/diff/cand.mjs" \
-  "$tree/control-ts/fixtures/cos_digest/cases.jsonl" "$tree/control-ts/fixtures/cos_digest/pass_traces.jsonl")"
+  "$tree/control-ts/fixtures/cos_digest/cases.jsonl" "$tree/control-ts/fixtures/cos_digest/pass_traces.jsonl" \
+  ${TS_PILOT_SPEC:+"${TS_PILOT_SPEC%.json}.cases.jsonl"})"
 rec diff "$t0" "$WORKER" '[]' "$(python3 -I -c '
 import json, sys
 d = json.loads(sys.argv[1])

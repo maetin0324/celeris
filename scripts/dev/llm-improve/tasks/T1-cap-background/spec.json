@@ -1,0 +1,23 @@
+{
+  "schema": "celeris.script-behavior-change/1",
+  "id": "p2g-t1-cap-background",
+  "version": 1,
+  "domain": "cos_digest",
+  "summary": "P2-G 課題 T1: 人に回した項目の背景（decision.background）が 300 文字（code point）を超えたら、digest の本文の「- 背景: 」の行を 300 文字と「…」にする。cards は変えない。",
+  "supersedes": null,
+  "when": [
+    { "path": "/items/0/decision/background", "op": "min_chars", "value": 301 }
+  ],
+  "edits": [
+    {
+      "path": "/*/text",
+      "find": [{ "lit": "- 背景: " }, { "input": "/items/0/decision/background" }, { "lit": "\n" }],
+      "replace": [
+        { "lit": "- 背景: " },
+        { "truncate_chars": { "input": "/items/0/decision/background", "max": 300, "ellipsis": "…" } },
+        { "lit": "\n" }
+      ]
+    }
+  ],
+  "cases_sha256": "7cbb220fdb4dfbb468454bf33f25bc38e8835007a6838f2bf2721fca3bce847b"
+}

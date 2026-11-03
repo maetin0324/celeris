@@ -1,0 +1,28 @@
+{
+  "schema": "celeris.script-behavior-change/1",
+  "id": "p2g-t2-cap-item-title",
+  "version": 1,
+  "domain": "cos_digest",
+  "summary": "P2-G 課題 T2: 項目の見出し（summary）が 80 文字（code point）を超えたら、digest の本文の「### 」の見出しと card の title の両方を 80 文字と「…」にする。",
+  "supersedes": null,
+  "when": [
+    { "path": "/items/0/summary", "op": "min_chars", "value": 81 }
+  ],
+  "edits": [
+    {
+      "path": "/*/text",
+      "find": [{ "lit": "### " }, { "input": "/items/0/summary" }, { "lit": "（" }],
+      "replace": [
+        { "lit": "### " },
+        { "truncate_chars": { "input": "/items/0/summary", "max": 80, "ellipsis": "…" } },
+        { "lit": "（" }
+      ]
+    },
+    {
+      "path": "/0/cards/0/title",
+      "find": [{ "input": "/items/0/summary" }],
+      "replace": [{ "truncate_chars": { "input": "/items/0/summary", "max": 80, "ellipsis": "…" } }]
+    }
+  ],
+  "cases_sha256": "00333db58abcc18332e207cb355e1b44319035221c6617dde7be5b1904a1226c"
+}

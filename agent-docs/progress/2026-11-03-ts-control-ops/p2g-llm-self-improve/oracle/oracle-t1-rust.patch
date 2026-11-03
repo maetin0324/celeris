@@ -1,0 +1,29 @@
+diff --git a/crates/task-core/src/chat/digest.rs b/crates/task-core/src/chat/digest.rs
+index 57331f63..1bc33cb9 100644
+--- a/crates/task-core/src/chat/digest.rs
++++ b/crates/task-core/src/chat/digest.rs
+@@ -222,7 +222,7 @@ pub fn cos_digest_message(
+         if matches!(item.state.as_str(), "escalated" | "fallback") {
+             if let Some(d) = &item.decision {
+                 if let Some(background) = d.background.as_deref().filter(|b| !b.is_empty()) {
+-                    text.push_str(&format!("- 背景: {background}\n"));
++                    text.push_str(&format!("- 背景: {}\n", cap_chars(background, 300)));
+                 }
+                 if !d.summary.is_empty() {
+                     text.push_str(&format!("- 人が決めること: {}\n", d.summary));
+@@ -264,6 +264,15 @@ pub fn cos_digest_message(
+ }
+ 
+ /// The Rust reference decision: always one `post_digest`; for a stopped or interrupted run a
++/// 文字列を `max` code point までにし、超えたら「…」を足す（P2-G の参照の候補）。
++fn cap_chars(s: &str, max: usize) -> String {
++    if s.chars().count() <= max {
++        s.to_owned()
++    } else {
++        format!("{}…", s.chars().take(max).collect::<String>())
++    }
++}
++
+ /// `requeue_run` after it (the message is written first, as before the split).
+ pub fn cos_digest_decide(input: &CosDigestInput) -> Vec<CosDigestCommand> {
+     let (text, cards) = cos_digest_message(

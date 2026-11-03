@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # 方針改善（behavior change）の独立した評価（ADR 2026-11-03-ts-intended-behavior-change D3）。cargo を起動しない。
-#   bash scripts/dev/ts-behavior-eval.sh --out <dir> [--patch <file>] [--label <name>]
+#   bash scripts/dev/ts-behavior-eval.sh --out <dir> [--patch <file>] [--label <name>] [--changes <dir>]
 #     HEAD の使い捨ての作業ツリー（$TMPDIR の git worktree --detach）に候補の patch を当て、control-ts の
 #     src/domains/cos_digest.ts を esbuild で 1 file にし、次の 2 つを数える:
 #     (1) 旧挙動の fixture（control-ts/fixtures/cos_digest/cases.jsonl、Rust golden）の全行で TS が Rust と同じか
 #     (2) 期待差分 fixture（control-ts/behavior-changes/cos_digest/*.cases.jsonl）の全行で TS の出力が `expected` と同じか
 #         （`expect: explained` は改善した出力、`expect: equal` は Rust と同じ出力）
 #     結果を <dir>/<label>.json に書き、1 行の raw record を <dir>/records.jsonl に足す。
+#     --changes: 期待差分 fixture の dir（`<名>.json` と `<名>.cases.jsonl` の組。既定は作業ツリーの
+#     control-ts/behavior-changes/cos_digest）。P2-G の課題（scripts/dev/llm-improve/tasks/<課題>）を渡す（ADR 2026-11-03-llm-self-improve-trial）。
 # 合否: (1) の差分 0 件かつ (2) の食い違い 0 件で ok。期待差分 fixture の file の sha256 が仕様の cases_sha256 と違えば失敗。
 # 比べ方: JSON.stringify の byte 列で比べる（値の正規化はしない。期待差分 fixture は key の名前順で書くので、TS の出力も key だけ並べ替える）。説明の判定（仕様の述語）は Rust（task-core）だけが持ち、
 # 期待差分 fixture の `expected` は Rust の試験が参照実装と仕様から作る。この script は TS の出力をそれと比べるだけ。
@@ -14,15 +16,17 @@
 # exit: 0 = ok、1 = 評価に落ちた・段の失敗、2 = 使い方の誤り。
 set -euo pipefail
 
-usage() { echo "usage: ts-behavior-eval.sh --out <dir> [--patch <file>] [--label <name>]" >&2; exit 2; }
+usage() { echo "usage: ts-behavior-eval.sh --out <dir> [--patch <file>] [--label <name>] [--changes <dir>]" >&2; exit 2; }
 out=""
 patch=""
 label=""
+changes=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --out) [ "$#" -ge 2 ] || usage; out="$2"; shift ;;
     --patch) [ "$#" -ge 2 ] || usage; patch="$2"; shift ;;
     --label) [ "$#" -ge 2 ] || usage; label="$2"; shift ;;
+    --changes) [ "$#" -ge 2 ] || usage; changes="$2"; shift ;;
     *) usage ;;
   esac
   shift
@@ -33,6 +37,10 @@ out="$(cd "$out" && pwd)"
 if [ -n "$patch" ]; then
   [ -f "$patch" ] || { echo "ts-behavior-eval: patch が無い: $patch" >&2; exit 2; }
   patch="$(cd "$(dirname "$patch")" && pwd)/$(basename "$patch")"
+fi
+if [ -n "$changes" ]; then
+  [ -d "$changes" ] || { echo "ts-behavior-eval: --changes の dir が無い: $changes" >&2; exit 2; }
+  changes="$(cd "$changes" && pwd)"
 fi
 [ -n "$label" ] || label="$( [ -n "$patch" ] && basename "$patch" .patch || echo head )"
 
@@ -120,7 +128,7 @@ const ok = oldDiffs === 0 && specs.length > 0 && specs.every((s) => s.cases_sha2
 console.log(JSON.stringify({ old_fixture_cases: oldCases, old_fixture_diffs: oldDiffs, old_fixture_diff_examples: oldExamples, specs, ok }));
 JS
 result="$(node "$work/eval.mjs" "$work/cand.mjs" "$tree/control-ts/fixtures/cos_digest" \
-  "$tree/control-ts/behavior-changes/cos_digest")"
+  "${changes:-$tree/control-ts/behavior-changes/cos_digest}")"
 t_end="$(now)"
 python3 -I - "$out" "$label" "$commit" "$patch_sha" "$result" "$t0" "$t_install" "$t_build" "$t_eval" "$t_end" <<'PY'
 import json, os, sys

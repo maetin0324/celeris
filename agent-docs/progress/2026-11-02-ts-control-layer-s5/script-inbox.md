@@ -40,5 +40,7 @@ CoS の triage と `crates/celeris/src/notify.rs` は変更していない。tri
 - 実際に event を書く経路（daemon-gen の draining→retired、canary-dispatch の `script_effect_unverified`、guard の `guard_*`）は後の unit で入る。この unit の試験は store へ直接記録を書いて確かめた。実 daemon を通した確認は gen-e2e に任せる。
 - 受信箱の案内先は daemon の画面で、script の領域を操作する専用の画面は無い。
 
+- 範囲 check が `crates/task-core/migrations/` と `crates/campaign/src/ops_r1_trace.rs` を許可しないので、この unit の範囲 check は不合格のままで、計画の問題として申告した。移行 0106 を足すと `SCHEMA_VERSION` が上がり、`SUPPORTED_SCHEMA_VERSIONS` の追従も要る。計画でこの 2 path を許可すれば、この branch の commit のまま通る見込み（範囲外はこの 2 path だけ）。表を足さない案（`feed_cursor` に cursor を置き、項目を記録の表から読むたびに導く）は、付記 S5-7 と違う形になるので採らなかった。
+
 ## 本番への移行
 migration 0106 は release の適用で自動で走る。config の変更は要らない。

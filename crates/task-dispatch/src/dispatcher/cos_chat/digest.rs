@@ -459,11 +459,11 @@ impl Dispatcher {
                         (_, None, _, Some(budget)) => {
                             (&rust, CosDigestAppliedBy::Rust, Some(budget))
                         }
-                        (_, None, Some(denied), None) => {
+                        (Some(_), None, Some(denied), None) => {
                             (&rust, CosDigestAppliedBy::Rust, Some(denied))
                         }
                         (Some(ts), None, None, None) => (ts, CosDigestAppliedBy::Ts, None),
-                        (None, None, None, None) => {
+                        (None, None, _, None) => {
                             (&rust, CosDigestAppliedBy::Rust, classified.fallback.clone())
                         }
                     };

@@ -85,4 +85,10 @@ workspace の検査（提出時の HEAD で実行。結果は下の「提出時�
 - S6-3 の 2（golden の凍結）に進むときは、期待差分 fixture を凍結 golden の更新の手順（人の review）にそのまま使う。
 
 ## 提出時の検査
-提出時の HEAD（基準は `git merge-base HEAD main`）で実行した結果は、この task の完了報告に書く（test-affected・clippy・fmt）。
+提出時の HEAD（基準は `git merge-base HEAD main`）で実行した。
+- `bash scripts/dev/test-affected.sh`: exit 0。nextest 7216 passed・21 skipped、web の tsc -b と unit 試験（697 passed・100 passed）、script bundle SKIP 0 件。
+  1 回目は `task-core store::tests::event_row_schema_matches_committed` の 1 件が落ちた（`docs/api/v1/event.schema.json` が `explained` を持たない）。
+  `UPDATE_SCHEMA=1` で再生成し、commit「p1d: event.schema.json を再生成する（CompareOutcome の explained）」の後に再実行して通った。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。

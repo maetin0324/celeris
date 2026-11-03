@@ -51,6 +51,8 @@ updated: 2026-11-03
 - 子 task の結果は未着。親の完了は子の結果で決まる。
 - 2026-11-03 20:12Z（親の attempt 3）時点: P0-A（01M6HGFR1T4M08TJM7KD39D443）・P0-B（01M6HGFR1TDAP02XY98ES1ZDA1）・P1-C（01M6HGFR1TR6PJ8822DHW7NNNT）は running（lease 期限 20:28Z）。P1-D・P1-E(1)・P1-E(2)・P2-F・P2-G は ready（依存待ち）。done は 0 件。
 - 親の review が子の完了前に 2 回走り、条件 0・1 で不合格になった。親が子の範囲を自分の branch で実装し直すことは重複の禁止（ADR 2026-10-18-no-duplicate-child-delegation）に反するので行わない。人に、子の完了まで親の review を止めるよう依頼した（親の result.json の question）。
+- 人の回答（2026-11-03）: 子の完了まで親の review を止め、子の完了後に親を再開してよい。親は子の範囲を実装し直さない。本番切替・release・canary/ts 昇格・guard 解除の承認は含まない。
+- 回答後の親 run（attempt 3 の再開）時点でも P0-A・P0-B・P1-C は running、ほか 5 件は ready で done は 0 件。親は再び question で止まり、子の完了後の再開を待つ。
 
 ## 提案
 なし。

@@ -24,13 +24,15 @@ dispatcher が 3 領域（`lane_rules`・`route_priority`・`cos_digest`）で m
 ## 試験（提出時の HEAD で実行）
 - `cargo nextest run -p task-dispatch -E 'test(/canary|cos_digest|script/)'`: 87 件すべて合格。
 - 新しい試験: `canary_selection_is_deterministic_per_unit`（3 領域）、`canary_ts_side_uses_validated_ts_result`、`canary_rust_side_still_compares`、`canary_fallback_before_effect_uses_rust`、`canary_denied_never_fails_open`、`tick_budget_200ms_falls_back_after_budget`、`rollback_write_failure_treated_as_rust`（`tests/script_canary.rs`）、`canary_digest_pass_selection_matches_record`、`canary_digest_no_double_message_or_effect`、`canary_effect_unverified_stops_and_rolls_back`（`tests/cos_digest_script_canary.rs`）。
-- `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`: 報告本文に結果を書く。
+- `cargo nextest run -p task-dispatch -E 'test(/canary|tick_budget|rollback_write_failure/)'`: 10 件すべて合格。
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 7179 件合格・21 件 skip、web 697 件合格、test-ts-verify 18 件合格）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 
 ## 未解決
 - `route_priority` の canary は単体の選択の試験だけで、選び直しの経路（`priority_override`）を通す dispatcher の試験は無い（未確認）。
 - `tick_budget_200ms_falls_back_after_budget` は `ScriptTickWait` を待ち時間の値の差し替えで確かめる。dispatcher の中で 50 ms の判定を 5 回待たせる試験は無い（TS の待ちは別の current-thread runtime で走るため、試験の `tokio::time::pause` が届かない）。
 - daemon が 10 分ごとに `script_tick_wait` の log 行を出す部分は書いていない（`crates/celeris/src/daemon/tick_loop.rs` は範囲外）。`script_tick_wait_summary` を呼べばよい。
-- 範囲外の 1 file を変えた: `crates/task-api/src/query/tests.rs`（`ScriptCompareRecord` の literal に新しい 4 欄を足しただけ）。範囲 check がこれで落ちる。
+- `crates/task-api/src/query/tests.rs` は `ScriptCompareRecord` の literal に新しい 4 欄を足しただけ。再計画で範囲 check の許可に入った。
 
 ## 提案
 - `script_tick_wait` の log 行は guard か s5-close で `tick_loop.rs` に足す。

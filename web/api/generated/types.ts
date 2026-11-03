@@ -1748,6 +1748,7 @@ export type DaemonSnapshot = {
   "reports"?: ReportsLive | null;
   "review_resync_halted"?: Array<SnapshotReviewResyncHalted>;
   "scratch"?: ScratchStatus | null;
+  "script_tick_wait"?: ScriptTickWaitLive | null;
   "stagnation"?: Array<StagnationFinding>;
   "stagnation_policy"?: StagnationPolicy | null;
   "stalled_tasks"?: Array<SnapshotStalledTask>;
@@ -5726,6 +5727,15 @@ export type ScriptGuardClearResult = {
 };
 
 export type ScriptMode = "rust" | "compare" | "canary" | "ts";
+
+export type ScriptTickWaitLive = {
+  "budget_us": number;
+  "max_us": number;
+  "p50_us": number;
+  "p95_us": number;
+  "tick_budget": number;
+  "ticks": number;
+};
 
 export type SecretList = {
   "dir"?: string | null;

@@ -4,6 +4,7 @@
 //! （`GenerationRegistry`）を持ち、次を行う。
 //! - 登録（`POST /script/generations` → [`ScriptGenerationControl`]）: `<state_dir>/script-bundles/<sha256>/` の bundle を
 //!   新しい isolate で検証してから `script_generations` に `loaded` で記録する。検証に落ちたら `invalid` を書く。
+//!   配備先の dir が無い hash は `invalid` にせず 409 `script_bundle_not_deployed`（配備の後に登録し直せる）。
 //!   store が登録を拒んだら isolate を捨てる（表と isolate を食い違わせない）。
 //! - 切替: mode の CAS（store の 1 transaction）が行の `generation_id` と generation の状態を変える。dispatcher は tick
 //!   ごとに行を読み、その generation に固定した口（[`PolicyScriptSource`]）で呼ぶ。切替の前に送った要求は元の
@@ -31,7 +32,7 @@ use std::time::Duration;
 
 use celeris_script::dto::HOST_API_VERSION;
 use celeris_script::generation::{MAX_LIVE_GENERATIONS, checkpoint_versions_cover};
-use celeris_script::manifest::{ScriptManifest, load_deployed};
+use celeris_script::manifest::{ScriptManifest, deployed_dir, load_deployed};
 use celeris_script::{GenerationError, GenerationRegistry, RetireReason, domain_capabilities};
 use task_api::script_generations::{
     ScriptGenerationControl, ScriptGenerationError, SharedScriptGenerationControl,
@@ -392,6 +393,14 @@ impl ScriptGenerations {
                     max: MAX_LIVE_GENERATIONS,
                 }
                 .into());
+            }
+            // 付記 S5-1 の 6 の例外（P1-C）: 配備先の dir が無いのは「まだ配備していない」で、bundle の不正ではない。
+            // `invalid` を書かずに 409 `script_bundle_not_deployed` を返し、`script-deploy` の後に同じ hash で登録し直せる。
+            Err(e) if e.is_invalid_bundle() && !deployed_dir(&self.state_dir, sha256).is_dir() => {
+                return Err(ScriptGenerationError::NotDeployed {
+                    bundle_sha256: sha256.to_owned(),
+                    reason: e.to_string(),
+                });
             }
             Err(e) if e.is_invalid_bundle() => {
                 let reason = e.to_string();

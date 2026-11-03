@@ -493,6 +493,7 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
         implicit_accounts: vec![],
         containers: None,
         scratch: None,
+        script_tick_wait: None,
         clusters: vec![ClusterLive {
             id: "pegasus".into(),
             host: "pegasus".into(),

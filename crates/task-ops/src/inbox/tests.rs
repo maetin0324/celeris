@@ -783,6 +783,7 @@ fn inbox_attention_unroutable_only_populated_with_snapshot() {
         implicit_accounts: vec![],
         containers: None,
         scratch: None,
+        script_tick_wait: None,
     };
     let with_snapshot = inbox(
         &store,
@@ -847,6 +848,7 @@ fn inbox_attention_stalled_from_snapshot_for_ready_tasks_only() {
         implicit_accounts: vec![],
         containers: None,
         scratch: None,
+        script_tick_wait: None,
     };
     let out = inbox(&store, Some(&snapshot), &ctx, now, &no_evidence).expect("inbox");
     let ids: Vec<TaskId> = out
@@ -939,6 +941,7 @@ fn inbox_attention_review_resync_halted_from_snapshot_for_reviewing_tasks_only()
         implicit_accounts: vec![],
         containers: None,
         scratch: None,
+        script_tick_wait: None,
     };
     let out = inbox(&store, Some(&snapshot), &ctx, now, &no_evidence).expect("inbox");
     let ids: Vec<TaskId> = out
@@ -1257,6 +1260,7 @@ fn inbox_attention_cluster_unavailable_hidden_once_reconnected_and_host_filled_f
         implicit_accounts: vec![],
         containers: None,
         scratch: None,
+        script_tick_wait: None,
     };
     let still_present = inbox(
         &store,
@@ -1540,6 +1544,7 @@ fn inbox_cleanup_r3_terminal_snapshot_unroutable_is_hidden() {
         implicit_accounts: vec![],
         containers: None,
         scratch: None,
+        script_tick_wait: None,
     };
     let result = inbox(
         &store,

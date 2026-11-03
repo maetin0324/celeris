@@ -135,6 +135,8 @@ impl Dispatcher {
             implicit_accounts,
             // ADR-0075 D6（Phase G1）: scratch pool の観測値（`scratch_gc` が tick ごとに組む）。
             scratch: self.scratch.view.clone(),
+            // 付記 S5-8（P1-C）: TS の同期の待ちの集計（`script_tick_wait` の log 行と同じ値）。
+            script_tick_wait: self.script_tick_wait_live(),
             // ADR-0043 D3（Phase 56）: コンテナ実行の設定と起動時の検出。
             containers: Some(task_ops::daemon::ContainersLive {
                 preference: self.config.containers.preference.as_str().to_string(),

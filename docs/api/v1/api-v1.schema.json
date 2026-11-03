@@ -8297,6 +8297,17 @@
           ],
           "description": "ADR-0075 D6（Phase G1）: scratch pool の観測値（`GET /api/v1/metrics/scratch` と `celerisctl scratch status --json`\nと同じ `celeris.scratch-status/1`）。古いスナップショットと scratch を持たない構成では `None`。"
         },
+        "script_tick_wait": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScriptTickWaitLive"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-02-ts-control-layer-boundary 付記 S5-8（P1-C）: 直近 1000 tick の TS 制御層の同期の待ちの集計\n（dispatcher の `script_tick_wait_summary`）。daemon の `script_tick_wait` の log 行と同じ値。古いスナップショットと\ntick をまだ数えていない daemon では `None`。"
+        },
         "stagnation": {
           "default": [],
           "description": "ADR 2026-10-27-project-stagnation-inbox D3: 案件単位の停滞（`project_stalled`・`release_unpromoted`・\n`task_unscheduled`）。dispatcher が `scan_interval_secs` ごとに作り直す（`key` 順）。受信箱の項目の元。",
@@ -28714,6 +28725,53 @@
         "ts"
       ],
       "type": "string"
+    },
+    "ScriptTickWaitLive": {
+      "description": "TS 制御層の tick の待ちの集計（付記 S5-8）。時間は µs、p50・p95 は最近傍順位。",
+      "properties": {
+        "budget_us": {
+          "description": "1 tick の TS の待ちの予算（µs）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_us": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "p50_us": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "p95_us": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tick_budget": {
+          "description": "窓の中で 1 tick の予算（`budget_us`）を使い切って TS を呼ばなかった件数。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ticks": {
+          "description": "集計に入った tick の数（最大 1000）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ticks",
+        "p50_us",
+        "p95_us",
+        "max_us",
+        "tick_budget",
+        "budget_us"
+      ],
+      "type": "object"
     },
     "SecretList": {
       "description": "`GET /secrets`。`[secrets]` が未設定なら 409 `secrets_unavailable`（`dir: None` の応答は返さない）。",

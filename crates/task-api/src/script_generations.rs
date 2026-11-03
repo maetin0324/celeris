@@ -4,7 +4,8 @@
 //! - `POST /script/generations`（本文 `{ "bundle_sha256": "<64 桁 hex>" }`）→ 200 `ScriptGenerationView`。
 //!   daemon が [`ScriptGenerationControl`] で bundle を新しい isolate に load して検証し、`loaded` で記録する。
 //!   同じ hash が `loaded`・`active`・`draining` なら何も変えずに今の行を返す。検証に落ちたら 422
-//!   `script_generation_invalid`、`invalid` の hash は 422 `script_generation_invalidated`、生きた generation が 2 つなら
+//!   `script_generation_invalid`、配備先の無い hash は 409 `script_bundle_not_deployed`（`invalid` にしない。配備の後に
+//!   登録し直せる）、`invalid` の hash は 422 `script_generation_invalidated`、生きた generation が 2 つなら
 //!   409 `script_generation_limit`。
 //! - `POST /script/generations/{id}/retire` → 200 `ScriptGenerationView`。`active` なら 409 `script_generation_active`。
 //! - 登録と退役は挙動を変えないので、人・外部 operator・CoS operations（`script_generation.register`・
@@ -34,6 +35,8 @@ use crate::{
 
 /// runtime（daemon の generation の登録簿）が未接続。503。
 pub const SCRIPT_RUNTIME_UNAVAILABLE: &str = "script_runtime_unavailable";
+/// 登録する bundle がまだ配備されていない（配備先の dir が無い）。409。表を変えず、配備の後に同じ hash で登録し直せる。
+pub const SCRIPT_BUNDLE_NOT_DEPLOYED: &str = "script_bundle_not_deployed";
 /// 指定の id の generation が無い。404。
 pub const SCRIPT_GENERATION_NOT_FOUND: &str = "script_generation_not_found";
 
@@ -63,6 +66,13 @@ pub enum ScriptGenerationError {
     /// 検証に落ちた（bundle が無い・hash が違う・host_api・capability・selftest など）。実装は `invalid` を記録済み。
     #[error("script bundle `{bundle_sha256}` failed validation: {reason}")]
     Invalid {
+        bundle_sha256: String,
+        reason: String,
+    },
+    /// 配備先（`<state_dir>/script-bundles/<sha256>/`）が無い（P1-C）。`invalid` を記録しない。409
+    /// `script_bundle_not_deployed`。`script-deploy` の後に同じ hash で登録し直せる。
+    #[error("script bundle `{bundle_sha256}` is not deployed yet: {reason}")]
+    NotDeployed {
         bundle_sha256: String,
         reason: String,
     },
@@ -257,6 +267,11 @@ fn generation_problem(err: ScriptGenerationError) -> ApiProblem {
             StatusCode::UNPROCESSABLE_ENTITY,
             SCRIPT_GENERATION_INVALID,
             err.to_string(),
+        ),
+        ScriptGenerationError::NotDeployed { .. } => ApiProblem::new(
+            StatusCode::CONFLICT,
+            SCRIPT_BUNDLE_NOT_DEPLOYED,
+            format!("{err}; deploy it with script-deploy and register the same hash again"),
         ),
         ScriptGenerationError::Domain(ScriptDomainError::GenerationNotFound(id)) => {
             ApiProblem::new(

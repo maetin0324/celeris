@@ -966,3 +966,9 @@ S5-13 の S5-7 の行の (12) のうち「apply と記録は同じ transaction �
 run ごとに message・requeue・記録・script-guard の計数（mode `compare` と canary の Rust の側は影の outbox の行）を同じ SAVEPOINT に入れる。
 S4-14 の「apply の直前の mode の読み直し」は、TS の出力を apply する pass では transaction の中で行う。
 `append_pass_record`・`script_compare_log_append_observed` は消した。記録の自己矛盾による検出（(12) の前半）は変えない。
+
+## 付記 P1-C（2026-11-03、task 01M6HGFR1TR6PJ8822DHW7NNNT）
+- S5-1 の 6 を狭めた: 配備先の dir が無い hash の登録は `invalid` にせず 409 `script_bundle_not_deployed`（配備の後に登録し直せる）。
+  配備された bundle が検証に落ちたときだけ `invalid`。S5-8 の tick の待ちは `DaemonSnapshot.script_tick_wait` と 10 分ごとの log 行で
+  読める。S5-7 の見回りは `script_compare_log` を id の cursor から差分で読む。CLI の追加を含め、詳細は
+  [2026-11-03-ts-control-ops-cli-observe](2026-11-03-ts-control-ops-cli-observe.md)。

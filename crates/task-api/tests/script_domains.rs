@@ -948,3 +948,72 @@ async fn script_domain_mode_through_cos_operations() {
     assert_eq!((row.mode.as_str(), row.version), ("canary", 2));
     assert_eq!(event_count(&env), 5);
 }
+
+/// P1-C: CoS の run credential では script-guard の停止を解けない。直接の POST は CoS の監査の文脈が無いので通らず、
+/// `/cos/operations` に包むと registry の EXCLUDED（human_only）で拒まれる（rejected の記録が残る）。どちらでも停止は
+/// 残り、`script_guard_cleared` は書かれない。人の token だけが解ける（権限を広げない）。
+#[tokio::test]
+async fn script_domain_guard_clear_refused_for_cos() {
+    let env = admin_env();
+    let app = env.router();
+    env.store
+        .script_guard_halt("guard_mismatch: test", time::OffsetDateTime::now_utc())
+        .expect("halt");
+    let cleared_events = || -> i64 {
+        db(&env)
+            .query_row(
+                "SELECT COUNT(*) FROM script_generation_events WHERE json LIKE '%script_guard_cleared%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count")
+    };
+    let (thread, _, bearer) = cos_bearer(&env, "script-guard-clear");
+    let headers = [("authorization", bearer.as_str())];
+    let direct = send(
+        &app,
+        post_json_with(GUARD_CLEAR, &json!({"reason": "cos"}), &headers),
+    )
+    .await;
+    assert_ne!(direct.status.as_u16(), 200, "{}", direct.text());
+    let wrapped = send(
+        &app,
+        post_json_with(
+            OPS,
+            &op_body(
+                "script-guard-clear",
+                "POST",
+                GUARD_CLEAR,
+                json!({"reason": "cos"}),
+            ),
+            &headers,
+        ),
+    )
+    .await;
+    assert_problem(&wrapped, 422, "cos_operation_not_allowed");
+    assert!(wrapped.text().contains("human_only"), "{}", wrapped.text());
+    let rejected: i64 = db(&env)
+        .query_row(
+            "SELECT COUNT(*) FROM cos_operations WHERE thread_id=?1 AND state='rejected'",
+            [&thread],
+            |row| row.get(0),
+        )
+        .expect("rejected");
+    // 直接の POST も包んだ操作も rejected として残る。
+    assert!(rejected >= 1, "{}", wrapped.text());
+    assert!(env.store.script_guard_halted().expect("halted").is_some());
+    assert_eq!(cleared_events(), 0);
+    // 人の token では解ける。
+    let resp = send(
+        &app,
+        post_json_with(
+            GUARD_CLEAR,
+            &json!({"reason": "人が確かめた"}),
+            &admin_headers(),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(resp.json()["cleared"], true);
+    assert_eq!(cleared_events(), 1);
+}

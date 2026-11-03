@@ -3,6 +3,10 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-11-03（境界 ADR 2026-11-02-ts-control-layer-boundary 付記 S5-8・P1-C）— **追加。v1 のまま**。`POST /script/generations` は
+  配備先の無い hash を 409 `script_bundle_not_deployed` で拒み、`invalid` を記録しない（§3.134.3）。`DaemonSnapshot` に
+  `script_tick_wait`（`ScriptTickWaitLive`: 直近 1000 tick の TS の同期の待ちの `ticks`・`p50_us`・`p95_us`・`max_us`・`tick_budget`・
+  `budget_us`。tick を数える前は省略）を足した（§3.20）。
 - 改訂: 2026-11-03（境界 ADR 2026-11-02-ts-control-layer-boundary 付記 S5-7 の受信箱の節）— **追加。v1 のまま**。受信箱の kind に
   `script_control` を足した。actor `system:script-startup`・`system:script-guard` の `script_domain_events`・`script_generation_events`
   （generation の記録は `script_generation_invalidated`・`script_guard_halted` だけ）1 件に項目 1 件（id `script_control-<domain|generation>-<event id>`）。
@@ -1048,6 +1052,8 @@ planner が行う（`POST /tasks` で root task を作る。§3.4）。既存の
 - `clusters[]`（ADR-0018）、`accounts_root` / `max_runs_per_account` / `accounts_roots` / `accounts[]`（ADR-0024 / ADR-0025）、
   `implicit_accounts[]`（`{source, models[], in_use}`。LLM source 単位の暗黙アカウント。ADR 2026-10-08-account-concurrency-limits）、
   `scratch`（scratch pool の観測値。無ければ省略。`GET /metrics/scratch` と同じ。ADR-0075 D6）も載る。
+  `script_tick_wait`（TS 制御層の同期の待ちの直近 1000 tick の集計。daemon の 10 分ごとの `script_tick_wait` の log 行と同じ値。
+  境界 ADR 付記 S5-8）も載る（tick を数える前は省略）。
 - `task_waits[]`（ADR 2026-10-11-task-wait-reasons D4）は、この tick に dispatcher のメモリだけで決まった見送りの理由（`{task_id, wait: TaskWait}`）。
 - cooldown は source・account 単位で公開する。プールを持たない source は `account_id` が source ID の暗黙 account となる。`until` は RFC 3339、`reason` は `throttled | auth_failed | exhausted`。
 - `last_tick_at` が `now` から `3 × tick_ms` 以上古ければ GUI は「ディスパッチャが遅延」と表示する（API は判定しない）。
@@ -3886,7 +3892,8 @@ config の欄は無い（mode は DB の表が持つ）。CLI は `celerisctl sc
   （`script-deploy` が `<state_dir>/script-bundles/<bundle_sha256>/` に置く）。daemon（`ScriptGenerationControl`）が新しい isolate で
   load・検証し、`loaded` で記録する。同じ hash が `loaded`・`active`・`draining` なら何も変えずに今の行を返し、`retired` なら
   load し直して `loaded` に戻す。422 `script_generation_invalid`（hash の形・検証の失敗。失敗は `invalid` で記録される）、422
-  `script_generation_invalidated`（`invalid` の hash）、409 `script_generation_limit`（生きた generation が 2 つ）、503
+  `script_generation_invalidated`（`invalid` の hash）、409 `script_generation_limit`（生きた generation が 2 つ）、409
+  `script_bundle_not_deployed`（配備先の dir が無い。表に行を書かず、`script-deploy` の後に同じ hash で登録し直せる）、503
   `script_runtime_unavailable`（daemon に `[script]` が無い）。
 - `POST /script/generations/{id}/retire` 本文 `{reason?}`（空でもよい）→ 200 `ScriptGenerationView`。`loaded`・`draining` を
   `retired` にする。404 `script_generation_not_found`、409 `script_generation_active`、409 `script_generation_transition`

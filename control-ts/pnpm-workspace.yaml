@@ -7,3 +7,8 @@ minimumReleaseAge: 10080
 strictDepBuilds: true
 allowBuilds:
   esbuild: false
+# `pnpm run` の前の依存の確認で install を走らせない（install なら node_modules/.bin の shim を書き直す）。
+# node_modules を symlink した写しで `pnpm run bundle` すると、元の木の shim が写しの path に書き換わった
+# （S4 の review、KB control-ts-bundle-node-bin-side-effect）。依存が古ければ書き換えずに失敗させる。
+# release の gate（scripts/selfdeploy/script-bundle-gate.sh）は bundle の前後で shim の hash を比べる。
+verifyDepsBeforeRun: error

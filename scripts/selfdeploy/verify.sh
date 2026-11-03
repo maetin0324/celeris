@@ -79,6 +79,10 @@ REL="$(sd_release_dir "$SHA12")"
 [ -r "$SD_DB" ] || sd_die "cannot read $SD_DB"
 [ "$(sd_json_get "$REL/gate.json" ok 2>/dev/null || echo false)" = true ] \
   || sd_die "gate.json of $SHA12 is not ok; refusing to verify"
+# TS 制御層の bundle の gate（ADR 2026-11-03-release-script-bundle-gate）: 4 段が skip されずに通り、release の
+# script-bundle/ の bundle の sha256 が manifest・gate.json と一致すること。この gate の無い release は検証しない。
+bash "$(dirname "${BASH_SOURCE[0]}")/script-bundle-gate.sh" verify-release "$REL" >&2 \
+  || sd_die "script bundle gate of $SHA12 is missing or does not match; refusing to verify"
 SD_VERIFY_WEB_PROBE_PORT="${SD_VERIFY_WEB_PROBE_PORT:-7728}"
 
 NEW_SCHEMA="$(sd_json_get "$REL/manifest.json" schema_version)" \

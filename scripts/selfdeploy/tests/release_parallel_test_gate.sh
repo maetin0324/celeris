@@ -12,6 +12,8 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
+# control-ts を持たない偽の木なので、TS 制御層の bundle の段は偽物にする（本物は scripts/dev/test-release-script-gate.sh）。
+export SD_SCRIPT_BUNDLE_GATE="$here/tests/fixtures/fake-script-bundle-gate.sh"
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
 mkdir -p "$root/bin" "$root/config" "$root/state/releases"

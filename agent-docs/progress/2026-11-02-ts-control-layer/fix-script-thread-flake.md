@@ -38,10 +38,16 @@ completed: 2026-11-03
 | 3. 検査 | `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` | 下の「検査」 |
 
 ## 検査（提出時の HEAD で実行）
-- 検査の結果は報告本文に書く（この file の commit の後に実行する）。
+- `bash scripts/dev/test-affected.sh` → exit 0（914 passed、0 skipped）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check` → いずれも exit 0
+- 範囲 check（`git diff --name-only $CELERIS_WU_BASE` が許可の正規表現の外に無い）→ 外は 0 件
+- 後の commit（この節の追記）は進捗 md だけの変更で、コードは上の検査のときと同じ。
 
 ## commit
 - `phase s5-s6: fix-script-thread-flake: shutdown 後の thread の数え方から終わりかけの thread を除き、ptrace の遅延フックで再現する`
+- `phase s5-s6: fix-script-thread-flake: 進捗に提出時の検査結果を書く`
 
 ## 未解決
 - `ExitHolder` は ptrace が使える環境を前提にする（Yama の ptrace_scope 0・1 で動く。この run の worker の sandbox（ptrace_scope 1）で動くことは確かめた。release gate の host では未確認）。ptrace_scope 2・3 の host では、2 件の再現試験が `exit-holder: seize failed` で落ちる。

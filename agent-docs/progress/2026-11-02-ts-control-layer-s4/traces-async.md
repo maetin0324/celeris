@@ -10,7 +10,7 @@ updated: 2026-11-03
 完了日: 2026-11-03（unit traces-async）。[境界 ADR](../../adr/2026-11-02-ts-control-layer-boundary.md) の付記 S4-16・S4-17（fixture と試験の分）・S4-19 の traces-async の行を実装した。
 
 ## 結論
-- 新しい試験 `crates/task-dispatch/src/dispatcher/tests/cos_digest_pass_trace.rs`（`cos_chat_triage` の子 module `pass_trace`）が、各場面を本物の dispatcher の経路で走らせる。triage run は FakeAdapter の harness で終わり、CoS の判断は記録済みの値を store に書く。LLM は呼ばない。
+- 試験 `crates/task-dispatch/src/dispatcher/tests/cos_digest_trace.rs`（`cos_chat_triage` の子 module `pass_trace`。旧い run ごとの trace の試験を同じ path で書き換えた）が、各場面を本物の dispatcher の経路で走らせる。triage run は FakeAdapter の harness で終わり、CoS の判断は記録済みの値を store に書く。LLM は呼ばない。
 - 同じ場面を mode `rust`（script 無し）と mode `ts` で 1 回ずつ走らせる。mode `ts` では、記録用の偽の TS（`TracePass`）が op の送り口越しに list と各 run の read を行う。dispatcher の pass の memo が返した要求と応答の組を、呼んだ順に記録する。
 - trace の 1 行は 1 pass で、形は `{ name, ops, writes, output }`。
   - `ops`: op の要求と応答の組（`{ op, request, reply }`。付記 S4-16 の形）。
@@ -20,7 +20,8 @@ updated: 2026-11-03
 - mode `ts` の書き込みは、場面ごと・pass ごとに mode `rust` の書き込み（正規化後）と一致する。
 - `CELERIS_UPDATE_FIXTURES=1` で `control-ts/fixtures/cos_digest/pass_traces.jsonl` を書き直す。この変数が無ければ、commit した file と生成結果の byte 一致を確かめる。時計は注入した試験の時計を使い、ULID は初出順の固定の id に置き換える。
 - trace の op は `serde_json::Value` でなく型（`TraceOp`）で直列化する。serde_json の `preserve_order` は workspace の build の組み合わせで有無が変わり、`Value` のままだと欄の順、つまり byte 列が変わるからである。`-p task-dispatch` 単独の build と、`-p task-dispatch -p celeris`（deno_core 経由で `preserve_order` が有効）の build の両方で、byte 一致を確かめた。
-- 旧い run ごとの trace（`control-ts/fixtures/cos_digest/traces.jsonl`・`crates/task-dispatch/src/dispatcher/tests/cos_digest_trace.rs`）は消した（S4-17）。`compare.mjs` の冒頭の注釈から `traces.jsonl` を除いた。
+- 旧い run ごとの trace（`control-ts/fixtures/cos_digest/traces.jsonl` と、`cos_digest_trace.rs` の旧い内容）は消した（S4-17）。
+- file 名は付記 S4-19 の表の `cos_digest_pass_trace.rs` でなく `cos_digest_trace.rs` のままにした。この unit の範囲 check は `docs/architecture-map.md` と `control-ts/scripts/compare.mjs` の変更を拒否する。一方、地図は `cos_digest_trace.rs` を指し、test-affected の文書の path 検査はその実在を要求するからである。
 
 ## 場面（20 pass）
 - 旧 traces の 16 場面をすべて引き継いだ: completed 7（escalated-packet・escalated-option-details・running-unhandled・answered-observed-running・fallback-while-live・resolved-source-closed・handled-unknown-state）、failed 3、stopped 2、interrupted 3（人の割り込み）、completed/two-threads（1 pass に 2 thread）。
@@ -47,14 +48,15 @@ updated: 2026-11-03
 
 ## 検査（提出時の HEAD で実行）
 - `bash scripts/dev/test-affected.sh` → exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch で、nextest は 3028 passed・9 skipped。control-ts の typecheck と unit 試験（vitest 100 passed、`node --test` も通過）も走った。
-  1 回目は文書の path 検査で落ちた: `docs/architecture-map.md` が消した `cos_digest_trace.rs` を指していた。その path を `cos_digest_pass_trace.rs` に直した（cos_digest の行の書き直し自体は close-async unit が行う）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo clippy -p task-dispatch --tests -- -D warnings` も警告 0。
 - `cargo fmt --all -- --check` → exit 0。
 
 ## 未解決事項
 1. `read_run` が失敗する pass は fixture に入れていない。表の改名は report と同じ表を使う他の処理にも効くので、場面を固定の bytes にすると壊れやすい。TS 側の「`exception` の run を飛ばす」は `cos_digest.test.ts` の手書きの trace が確かめている。
 2. trace の行に `writes` を足した。付記 S4-16 の形 `{ name, ops, output }` には無い欄である。`compare.mjs` は `output` が行の最後にあれば他の欄を読まないので、replay は変わらない。close-async unit が付記と突き合わせる。
-3. `crates/celeris/tests/script_compare_cos_digest.rs` はまだ `traces.jsonl` を読む。dist の bundle が無いと SKIP するので、この unit の test-affected では落ちない。この file は real-host unit が `script_cos_digest_pass.rs` に置き換える（S4-19）。統合の時点で古い dist が残っていると落ちうる。
+3. 付記 S4-19 の表の file 名（`cos_digest_pass_trace.rs`）と実装（`cos_digest_trace.rs`）が違う。試験名 `cos_digest_pass_trace_*` は表のとおり。close-async unit が表を直すか、地図と一緒に file を改名する。
+4. `control-ts/scripts/compare.mjs` の冒頭の注釈は、まだ `cases.jsonl・traces.jsonl` と書いていて、`writes` 欄に触れていない。範囲外なので直していない。close-async unit か後続が直す。動作には影響しない。
+5. `crates/celeris/tests/script_compare_cos_digest.rs` はまだ `traces.jsonl` を読む。dist の bundle が無いと SKIP するので、この unit の test-affected では落ちない。この file は real-host unit が `script_cos_digest_pass.rs` に置き換える（S4-19）。統合の時点で古い dist が残っていると落ちうる。
 
 ## 提案
 - なし。

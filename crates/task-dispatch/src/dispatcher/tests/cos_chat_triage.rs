@@ -538,7 +538,7 @@ mod digest_script_compare;
 mod fallback;
 #[path = "cos_chat_triage_inbox_thread.rs"]
 mod inbox_thread;
-#[path = "cos_digest_pass_trace.rs"]
+#[path = "cos_digest_trace.rs"]
 mod pass_trace;
 #[path = "cos_chat_root_done.rs"]
 mod root_done;

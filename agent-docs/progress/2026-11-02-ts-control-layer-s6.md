@@ -7,11 +7,11 @@ updated: 2026-11-03
 ---
 # S6 — edit→activate の実測・自己改善 pilot・移行範囲の確定
 
-更新日: 2026-11-03（unit s6-report）。task 01M6FPPJN7A8H427MXFVYFY7H4（S5→S6）の S6 の報告である。S5 の記録は [S5 の進捗](2026-11-02-ts-control-layer-s5.md)、設計は [境界 ADR](../adr/2026-11-02-ts-control-layer-boundary.md) の (f)(g)・付記 S5-10・S5-11 と付記 S6。各 unit の記録と生データは [2026-11-02-ts-control-layer-s6/](2026-11-02-ts-control-layer-s6/) にある。
+更新日: 2026-11-03（unit s6-report、訂正は [report-fix](2026-11-02-ts-control-layer-s6/report-fix.md)）。task 01M6FPPJN7A8H427MXFVYFY7H4（S5→S6）の S6 の報告である。S5 の記録は [S5 の進捗](2026-11-02-ts-control-layer-s5.md)、設計は [境界 ADR](../adr/2026-11-02-ts-control-layer-boundary.md) の (f)(g)・付記 S5-10・S5-11 と付記 S6。各 unit の記録と生データは [2026-11-02-ts-control-layer-s6/](2026-11-02-ts-control-layer-s6/) にある。
 
 ## 結論
 - TS の経路の edit→activate は、warm の p50 が 7.47〜7.52 秒、p95 が 7.60〜7.69 秒で、(f) の目標（p50 30 秒・p95 60 秒）と S6 の打ち切り基準（warm p50 78 秒）の内にある。cold の p95 は 7.795 秒（目標 120 秒）。
-- 旧 Rust 経路は、`policy` が 20 試行で p50 234.481 秒・p95 236.162 秒。`cos-digest` が 20 試行で p50 344.491 秒・p95 346.576 秒。TS の経路との比は `policy` で約 31 倍、`cos-digest` で約 46 倍である（検証の範囲は同じでない。下の表の注）。
+- 旧 Rust 経路は、`policy` が 20 試行で p50 234.481 秒・p95 236.162 秒。`cos-digest` が 20 試行で p50 344.491 秒・p95 346.576 秒。TS の経路との比は `policy` で約 31 倍、`cos-digest` で約 46 倍である（検証の範囲は同じでない。`policy` は `task-core` の 1 crate、`cos-digest` は `task-core`・`task-dispatch` の 2 crate を検証する。下の表の注）。
 - 決定の一致は、比較 fixture の 3 領域で全件一致（`lane_rules` 19,683/19,683、`route_priority` 2,026/2,026、`cos_digest` 2,088/2,088）。**本番の一致率は未計測**（本番は全領域 `rust` のまま）。
 - 自己改善 pilot は非本番の daemon で 1 件通した（[pilot](2026-11-02-ts-control-layer-s6/pilot.md)）。本番は使っていない。
 - **本番で標準稼働した領域は 0**。3 領域（`lane_rules`・`route_priority`・`cos_digest`）は本番で `rust` のままで、人が「本番への移行」の手順で上げるまで変わらない。
@@ -21,7 +21,7 @@ updated: 2026-11-03
 試行数は全 scenario で 20 に達した。次の項目は未達または未計測である。
 - **本番で標準稼働した領域は 0**（未達）。本番の mode は全領域 `rust` で、切り替えは人が判断する。
 - **本番の決定一致率は未計測**。fixture・試験・pilot の値だけがある。手順は「決定一致率」の節。
-- `task-dispatch`・`task-api` の test-build の増分（閾値 2 秒）は未計測。
+- `task-dispatch`・`task-api` の test-build の増分（閾値 2 秒）は未計測。計らなかった理由は未確認である（下の「cold build の増分」）。
 - S5 を含む release の gate はまだ無いので、TS 制御層の試験が release gate に足した秒は未計測。
 
 `cos-digest` warm は 1 試行約 345 秒で、prime の約 415 秒と合わせて 1 run（3600 秒）に 7 試行しか入らない。付記 S5-10 の「10 ずつ」は守れず、3 leaf（[m-cosd-a](2026-11-02-ts-control-layer-s6/m-cosd-a.md) 7 試行、[m-cosd-b](2026-11-02-ts-control-layer-s6/m-cosd-b.md) 7 試行、[m-cosd-c](2026-11-02-ts-control-layer-s6/m-cosd-c.md) 6 試行）に分けて取った。推定で埋めた試行は無い。
@@ -39,7 +39,9 @@ updated: 2026-11-03
 
 - どの試行も exit 0。`over_300s` は `cos-digest` の 20 試行すべて、busy（自分以外の cargo・rustc）は 0 件。TS の試行は全件 `cargo_invocations` 0・`link_count` 0。
 - file 名は S5-10 の表の名前に揃えた（`policy.jsonl`・`cos.jsonl`・`policy-ts.jsonl`・`cos-ts.jsonl`。2026-11-03 raw-names で git mv、中身は不変。対応は付記 S6 の S6-1 と [raw-names](2026-11-02-ts-control-layer-s6/raw-names.md)）。cos.jsonl の scenario は cos-digest で S0 の cos〈job_wait_extend〉とは別の経路である。前半・後半の部分 file（`-a`・`-b`・`-c`）は測定 unit の名前のまま残す。
-- 検証の範囲は同じでない: Rust の経路は `task-core` の全試験と release build を含み、TS の経路は領域の試験・比較 fixture・golden・統合試験・activate までである（付記 S5-10。測定のために Rust 側を狭めていない）。
+- 検証の範囲は同じでない: Rust の経路は対象 crate の全試験と release build を含み、TS の経路は領域の試験・比較 fixture・golden・統合試験・activate までである（付記 S5-10。測定のために Rust 側を狭めていない）。
+- Rust の 2 scenario でも対象 crate が違う: `policy` の `test-run` は `-p task-core`、`cos-digest` の `test-run` は `-p task-core -p task-dispatch` である（各 jsonl の `cmd`）。`check`・`clippy`・`test-build` も同じ違いがあり、`build`・`release-build` は両方とも `-p celeris` である。`cos-digest` の p50 は `policy` より 110.0 秒長い（344.491 と 234.481）。段ごとの p50 の差は `test-build` +45.1、`test-run` +37.1、`clippy` +14.4、`check` +12.6 秒で、この 4 段で +109.3 秒である。
+- したがって約 46 倍（344.491 ÷ 7.470）は 2 crate を検証する Rust の経路との比で、約 31 倍（234.481 ÷ 7.519）は 1 crate の経路との比である。`cos-digest` を `task-core` だけで測った値は無いので、1 crate にそろえた比は出せない。
 - S0 の baseline（policy 221.0 秒・cos 155.7 秒、3 試行）は S1〜S5 でコードが増える前の値で、比較の相手にしない（[m-policy-a](2026-11-02-ts-control-layer-s6/m-policy-a.md) の提案）。
 
 ## warm の短縮（言語移行の比較）
@@ -86,11 +88,24 @@ updated: 2026-11-03
 - `celeris` の cold release build: 131.3 秒（S0）→ 141.1 秒（+9.8 秒、閾値 +60 秒）。各 1 試行。
 - warm の `cargo build -p celeris` の link: 1.36 → 1.795 秒（+0.44 秒、閾値 5 秒）。
 - release binary: 79.6 → 146.6 MiB（+67.0 MiB、閾値 80 MiB、余裕 13.0 MiB）。
-- `task-dispatch`・`task-api` の test-build の増分（閾値 2 秒）は**未計測**。
+- `task-dispatch`・`task-api` の test-build の増分（閾値 2 秒）は**未計測**。計らなかった理由は未確認である。[overhead](2026-11-02-ts-control-layer-s6/overhead.md) は未測定とだけ書き、理由を書いていない。同じ記録の未解決 1 は「この 2 crate は S1 の時点で `deno_core` を依存に持たない」と添える。この事実は今も `cargo tree --offline -p <crate>` で確かめた（`deno_core` は 0 行）が、それが計らなかった理由かは記録から分からない。閾値の判定はしていない。
 - TS の経路の cold（`node_modules` を捨てる定義）の増分は install の 0.2 秒（cold p50 7.622 秒 − warm 7.470 秒 = 0.152 秒）。pnpm の store が空の初回 clone と runner の作り直しは測っていない（[m-ts-cold](2026-11-02-ts-control-layer-s6/m-ts-cold.md)）。
 
 ## full regression の総コスト
-- release gate の記録（`/local/celeris/state/releases/*/gate.json` を測定 script が読むだけで写した `kind=estimate` の行。release 2026-10-31T23:12:48Z、ok）: 10 段の合計 **648.145 秒**。内訳は `cargo-test` 575.619、`cargo-clippy` 41.670、`web-pnpm-test` 10.658、`cargo-fmt-check` 7.276、`source-size-report` 6.234、`web-pnpm-release` 3.630、`web-pnpm-typecheck` 1.359、`cargo-build` 1.135、`web-pnpm-install` 0.562、`web-config` 0.002 秒。
+release gate の記録には ok=true の gate が 4 件ある。合計は 501.430〜804.889 秒で、代表値は p50 の **648.145 秒**（`cargo-test` 575.619 秒）、最新は 501.430 秒である。
+
+| release の時刻（UTC） | 合計（秒） | `cargo-test` | `cargo-clippy` | `cargo-build` | 他の 7 段の計 |
+|---|---|---|---|---|---|
+| 2026-10-31T23:12:48Z | 648.145 | 575.619 | 41.670 | 1.135 | 29.721 |
+| 2026-11-01T09:02:49Z | 804.889 | 693.076 | 51.846 | 2.415 | 57.552 |
+| 2026-11-01T09:19:14Z | 740.921 | 576.226 | 41.386 | 92.573 | 30.736 |
+| 2026-11-02T09:25:19Z（最新） | 501.430 | 460.793 | 7.574 | 1.026 | 32.037 |
+
+- 出所: `/local/celeris/state/releases/*/gate.json` を測定 script が読むだけで写した `kind=estimate` の行（[policy.jsonl](2026-11-02-ts-control-layer-s6/policy.jsonl)・[cos.jsonl](2026-11-02-ts-control-layer-s6/cos.jsonl)）。script は新しい順に最大 5 件を読み、測定の時点で gate は 4 件だった。段ごとの秒は `edit-activate-summary.py` の `release_gate` に出る。
+- 代表値の選び方: 他の表の p50 と同じ最近傍順位で、4 件の昇順の 2 番目（648.145 秒）を代表値にする。理由は次の 2 つである。
+  - 4 件は別の commit の release で、段の秒も揃っていない（`cargo-clippy` 7.574〜51.846 秒、`cargo-build` 1.026〜92.573 秒）。1 件だけを選ぶと幅が隠れる。
+  - 最新の 501.430 秒は 4 件で最も短い。下がり続けているのか、この回だけ短いのかを 4 件では言えないので、代表値にしない。
+- この差の原因は確かめていない。予算を見積もるときは最大の 804.889 秒を使う。
 - TS の変更も出荷の前にはこの release gate を通る。(f) のとおり TS 化はこの費用を短縮の対象にしていない。S5 を含む release の gate はまだ無いので、TS 制御層の試験が gate に足した秒は未計測（次の release の `gate.json` で `cargo-test` を比べる）。
 
 ## 決定一致率
@@ -148,10 +163,11 @@ updated: 2026-11-03
 4. `script_tick_wait` の log 行が本体に無い（S5 未解決 4）。本番の canary で tick の遅れを読むには log 行を足す変更が要る。
 5. script-guard の見回りは `script_compare_log` を毎回全件読む（S5 未解決 6）。
 6. 方針改善を TS だけで出すと自動で rust に戻る（pilot の「分かったこと」）。
-7. release binary の閾値の余裕が 13.0 MiB。`task-dispatch`・`task-api` の test-build の増分は未計測。
+7. release binary の閾値の余裕が 13.0 MiB。`task-dispatch`・`task-api` の test-build の増分は未計測（計らなかった理由は未確認）。
 8. 退役を繰り返したときの RSS、要求を抱えた drain の RSS は未確認。
 9. 受信箱 `script_control` の項目が CoS の triage にも流れ、人への知らせが 2 回になる（S5 未解決 8。扱いは人の確認待ち）。
 10. Rust の `cos-digest` は 1 試行が 300 秒を超える（20 試行すべて）。同じ範囲の測定は 1 run に 7 試行までなので、測り直すときは leaf を分ける。
+11. `cos_digest` の apply と記録は同じ transaction にない。apply の後、記録の前に process が落ちると、TS の apply の記録が残らず計数もされない（付記 S5-13 の (12)）。
 
 ## 操作手順
 - 開発（TS の判定を変える）: `bash scripts/dev/ts-verify.sh`（10 段、cargo 0 回）。改善の流れの通し: `bash scripts/dev/ts-pilot.sh --out <dir>`、検査 `--validate <dir>/record.jsonl`。
@@ -177,7 +193,8 @@ updated: 2026-11-03
 - 本番の一致率の取り方は上の「決定一致率」。二重実装を消すのは付記 S6 の条件を満たし、人が承認した後だけ。
 
 ## 証拠（提出時の HEAD で実行）
-- `python3 -I scripts/dev/edit-activate-summary.py agent-docs/progress/2026-11-02-ts-control-layer-s6/*.jsonl` → exit 0、problems 0。5 系列とも 20 試行・全件 exit 0。
+- `python3 -I scripts/dev/edit-activate-summary.py agent-docs/progress/2026-11-02-ts-control-layer-s6/*.jsonl` → exit 0、problems 0。5 系列とも 20 試行・全件 exit 0、`release_gate` 4 件。
+- `bash scripts/dev/tests/edit-activate-summary.sh` → exit 0。重複除去の key から release を外すと exit 1（[report-fix](2026-11-02-ts-control-layer-s6/report-fix.md)）。
 - 同じ script の異常系: 1 file だけ（7 試行）と 19 試行の写しは exit 1、無い file は exit 2。a・b・c と連結 file を同時に渡しても 20 試行のまま exit 0。
 - `bash scripts/dev/edit-activate-baseline.sh --validate …/cos.jsonl` → records 258、problems 0。
 - `node control-ts/scripts/compare.mjs lane_rules|route_priority|cos_digest` → exit 0、19683/19683・2026/2026・2088/2088。
@@ -190,7 +207,8 @@ updated: 2026-11-03
 1. 本番の決定一致率は未計測（人の手順は「決定一致率」の節）。
 2. 本番で標準稼働した領域は 0。上げるかどうかは人が決める。
 3. typecheck が 0.1 秒以下の理由は未確認。
-4. `task-dispatch`・`task-api` の test-build の増分、S5 を含む release の gate の秒は未計測。
+4. `task-dispatch`・`task-api` の test-build の増分（計らなかった理由は未確認）、S5 を含む release の gate の秒は未計測。
+5. `cos_digest` の apply と記録の間で process が落ちた場合の扱い（既知の制約 11）は決めていない。
 
 ## 提案
-- 付記 S5-10 の file 名の表を、実際の名前（`*-warm.jsonl`）に合わせる（付記 S6 の S6-1 で対応を書いた）。
+なし。

@@ -1,4 +1,7 @@
 //! 付記 S4: 本物の deno_core host で `cos_digest`（CoS 受信箱の digest pass）の compare と replay を確かめる。
+//! mode ts（付記 S4-14・S4-15）では、TS の async pass が op を await し、その command を Rust が検証してから apply する
+//! こと、TS が使えない pass で Rust の command を apply すること、daemon の再起動で message が増えず bundle が無ければ
+//! rust に戻ることも確かめる（file の後半）。
 //! userns を使わない。外部ネットワークに出ない。LLM を呼ばない（triage run の結果は store に直接書く）。
 //!
 //! `control-ts/dist` の bundle を使う試験は、無い・古いなら SKIP を出して抜ける。`CELERIS_SCRIPT_REQUIRE_BUNDLE=1`
@@ -28,8 +31,8 @@ use task_core::chat::digest::{
 use task_core::chat::triage::CosTriageSource;
 use task_core::chat::{ChatMessageQuery, ChatMessageRole, ChatOpenThreadRequest, ChatRunState};
 use task_core::script_compare::{
-    CompareOutcome, CosDigestCommandsSummary, CosDigestCompareRecord, ScriptDomain,
-    ScriptGenerationState, ScriptMode, sha256_digest,
+    CompareOutcome, CosDigestAppliedBy, CosDigestCommandsSummary, CosDigestCompareRecord,
+    ScriptDomain, ScriptGenerationState, ScriptMode, sha256_digest,
 };
 use task_core::{DaemonMode, SqliteStore};
 use task_dispatch::script_policy::{
@@ -625,5 +628,475 @@ async fn script_compare_cos_digest_daemon_restart_without_bundle_restores_rust()
         messages.contains("cos-triage-digest:run-c-rust"),
         "{messages}"
     );
+    assert_eq!(log(&env.store).len(), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// mode ts（付記 S4-14・S4-15）: TS の async pass が op を await し、その command を Rust が検証してから apply する。
+// ---------------------------------------------------------------------------------------------
+
+/// op を呼んだ後、一覧に無い run を読む pass（dispatcher の memo が `denied` で答え、TS は throw する）。
+const DENIED_BUNDLE: &str = r#"import { cosDigestListRuns, cosDigestReadRun } from "celeris:host";
+globalThis.__celerisDispatch = async (_domain, _input, ctx) => {
+  await cosDigestListRuns(ctx, {});
+  await cosDigestReadRun(ctx, { thread: "thread-not-listed", run_id: "run-not-listed" });
+  return { runs: [] };
+};
+"#;
+/// 決して答えない pass（dispatcher の deadline 200 ms を超える）。CPU は使わない。
+const NEVER_BUNDLE: &str = "globalThis.__celerisDispatch = () => new Promise(() => {});\n";
+/// 本物の bundle の pass の文面の末尾に印を足す（規則 1〜9 には通る）。DB の message に印があれば TS の command を
+/// apply した証拠になる（TS と Rust の出力が同じ本物の bundle では、DB を見ても区別できないため）。
+const TS_MARK: &str = "\n(ts-applied)";
+const MARK_WRAPPER: &str = r#"
+const __celerisRealDispatch = globalThis.__celerisDispatch;
+globalThis.__celerisDispatch = async (domain, input, ctx) => {
+  const out = await __celerisRealDispatch(domain, input, ctx);
+  for (const run of out.runs) {
+    for (const command of run.commands) {
+      if (command.kind === "post_digest") command.text += "\n(ts-applied)";
+    }
+  }
+  return out;
+};
+"#;
+
+/// 本物の bundle の capability（`cos_digest:list_runs`・`cos_digest:read_run`）を持たせて `code` を同じ host で起こす。
+fn start_with_caps(
+    bundle: &celeris_script::manifest::VerifiedBundle,
+    code: &str,
+) -> (ScriptRuntimeHandle, Arc<dyn PolicyScript>, String) {
+    let sha256 = celeris_script::manifest::sha256_hex(code.as_bytes());
+    let mut source = bundle.source();
+    source.name = format!("celeris:bundle/{sha256}.mjs");
+    source.code = code.to_owned();
+    let (handle, policy) = start_policy(source, sha256.clone());
+    (handle, policy, sha256)
+}
+
+/// mode ts へは compare を経てだけ入れる（付記 S4-14。actor は人）。
+fn to_ts(env: &Env, generation: String) {
+    env.set_mode(ScriptMode::Compare, Some(generation.clone()));
+    env.set_mode(ScriptMode::Ts, Some(generation));
+    assert_eq!(env.mode(), ScriptMode::Ts);
+}
+
+fn is_ts_timeout(record: &CosDigestCompareRecord) -> bool {
+    record
+        .fallback
+        .as_ref()
+        .is_some_and(|f| f.code == "ts_error")
+        && record.error.as_ref().is_some_and(|e| e.kind == "timeout")
+}
+
+/// 一時 DB の dispatcher を mode ts にし、completed と stopped の run を 1 つずつ digest する。
+/// 2 回目の tick（再配送）と、作り直した dispatcher の tick（再起動）で message も記録も増えないことを確かめる。
+async fn ts_digest_pass(policy: &Arc<dyn PolicyScript>, sha256: &str) -> Pass {
+    let env = env();
+    let generation = env.generation(sha256);
+    to_ts(&env, generation.id);
+    assert_eq!(env.mode(), ScriptMode::Ts);
+    let mut d = env.dispatcher();
+    d.set_policy_script(Some(policy.clone()));
+    seed_run(&env.store, "run-a-done", ChatRunState::Completed);
+    seed_run(&env.store, "run-b-stop", ChatRunState::Stopped);
+    d.tick().expect("tick");
+    d.wait_script_compares().await;
+    let (messages, items) = world(&env);
+    let mut records = log(&env.store);
+    records.sort_by(|a, b| a.run_id.cmp(&b.run_id));
+    for again in [false, true] {
+        if again {
+            d = env.dispatcher();
+            d.set_policy_script(Some(policy.clone()));
+        }
+        d.tick().expect("tick");
+        d.wait_script_compares().await;
+        assert_eq!(
+            world(&env),
+            (messages.clone(), items.clone()),
+            "no re-apply"
+        );
+        assert_eq!(log(&env.store).len(), records.len(), "no new record");
+    }
+    Pass {
+        env,
+        messages,
+        items,
+        records,
+    }
+}
+
+/// mode ts の pass を、dispatcher の 200 ms の deadline に間に合うまでやり直す（`timeout` は環境の遅さ）。
+/// 記録は run ごとに 1 件で、mode は `ts`。
+async fn ts_pass_until_answered(policy: &Arc<dyn PolicyScript>, sha256: &str) -> Pass {
+    for _ in 0..TIMEOUT_RETRIES {
+        let pass = ts_digest_pass(policy, sha256).await;
+        assert_eq!(
+            pass.records.len(),
+            2,
+            "one record per run: {:?}",
+            pass.records
+        );
+        if pass.records.iter().any(is_ts_timeout) {
+            continue;
+        }
+        for record in &pass.records {
+            assert_eq!(record.mode, ScriptMode::Ts);
+            assert_eq!(record.call_site, CALL_SITE);
+            assert_eq!(record.bundle_sha256, sha256);
+            assert_eq!(record.input, None, "no body in the log");
+            assert!(!record.applied.message_id.is_empty());
+        }
+        assert_eq!(pass.records[0].pass_id, pass.records[1].pass_id, "one pass");
+        assert_eq!(pass.records[0].run_id, "run-a-done");
+        assert_eq!(pass.records[1].run_id, "run-b-stop");
+        assert_eq!(pass.records[1].applied.requeued, 1);
+        return pass;
+    }
+    panic!("every ts pass timed out ({TIMEOUT_RETRIES} attempts)");
+}
+
+fn op_outcomes(record: &CosDigestCompareRecord) -> Vec<(String, String)> {
+    record
+        .ops
+        .iter()
+        .map(|o| (o.op.clone(), o.outcome.clone()))
+        .collect()
+}
+
+/// mode ts・本物の bundle: TS の pass が `list_runs`・`read_run` を await し（store から読む、`ok`）、
+/// その command が検証の後に apply される。message・item の行は mode rust の基準と byte 一致し、
+/// 記録の `applied_by` は `ts`、`fallback` は無い。印を足した bundle では DB の message が TS の文面になる。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn script_compare_cos_digest_ts_mode_applies_ts_commands() {
+    let Some(bundle) = dist_bundle(
+        "script_compare_cos_digest_ts_mode_applies_ts_commands",
+        DOMAIN,
+    ) else {
+        return;
+    };
+    let base = baseline().await;
+    let sha256 = bundle.manifest.bundle_sha256.clone();
+    let (handle, policy) = start_policy(bundle.source(), sha256.clone());
+    let policy: Arc<dyn PolicyScript> = policy;
+    warm(policy.as_ref()).await;
+    let before = handle.stats().completed;
+
+    let pass = ts_pass_until_answered(&policy, &sha256).await;
+    assert_eq!(
+        pass.messages, base.messages,
+        "TS's messages are Rust's, byte for byte"
+    );
+    assert_eq!(
+        pass.items, base.items,
+        "TS's requeue is Rust's, byte for byte"
+    );
+    assert!(handle.stats().completed > before, "TS ran the pass");
+    for record in &pass.records {
+        assert_eq!(record.applied_by, CosDigestAppliedBy::Ts, "{record:?}");
+        assert_eq!(record.fallback, None, "{record:?}");
+        assert_eq!(record.outcome, CompareOutcome::Match, "{record:?}");
+        assert!(record.safety_violations.is_empty() && record.error.is_none());
+        assert_eq!(record.ts.as_ref(), Some(&record.rust));
+        // TS の op は store を読んだ（mode ts の memo は store を通す）。list は pass に 1 回、read は run に 1 回。
+        assert_eq!(
+            op_outcomes(record),
+            vec![
+                ("cos_digest:list_runs".to_owned(), "ok".to_owned()),
+                ("cos_digest:read_run".to_owned(), "ok".to_owned()),
+            ],
+            "{record:?}"
+        );
+    }
+    assert_eq!(pass.records[0].rust.command_kinds, vec!["post_digest"]);
+    assert_eq!(
+        pass.records[1].rust.command_kinds,
+        vec!["post_digest", "requeue_run"]
+    );
+    handle.shutdown();
+
+    // TS の文面に印を足した bundle: DB の message は TS の文面（Rust の文面ではない）。requeue は同じ。
+    let marked = format!("{}{MARK_WRAPPER}", bundle.code);
+    let (handle, policy, sha256) = start_with_caps(&bundle, &marked);
+    warm_pass(policy.as_ref()).await;
+    let pass = ts_pass_until_answered(&policy, &sha256).await;
+    assert_eq!(pass.items, base.items, "requeue is the same");
+    assert_ne!(pass.messages, base.messages);
+    assert_eq!(
+        pass.messages.matches("(ts-applied)").count(),
+        2,
+        "{}",
+        pass.messages
+    );
+    let texts: Vec<String> = digest_texts(&pass.env);
+    assert_eq!(texts.len(), 2);
+    assert!(texts.iter().all(|t| t.ends_with(TS_MARK)), "{texts:?}");
+    for record in &pass.records {
+        assert_eq!(record.applied_by, CosDigestAppliedBy::Ts, "{record:?}");
+        assert_eq!(record.fallback, None);
+        assert_eq!(record.outcome, CompareOutcome::Mismatch, "{record:?}");
+        assert!(record.safety_violations.is_empty(), "{record:?}");
+    }
+    handle.shutdown();
+}
+
+/// digest の message の本文（run の順）。
+fn digest_texts(env: &Env) -> Vec<String> {
+    let (messages, _) = world(env);
+    let messages: Vec<serde_json::Value> = serde_json::from_str(&messages).expect("json");
+    messages
+        .iter()
+        .map(|m| m["text"].as_str().expect("text").to_owned())
+        .collect()
+}
+
+/// 印の bundle は fixture の command と一致しないので、温めは pass を 1 回走らせるだけにする。
+async fn warm_pass(policy: &dyn PolicyScript) {
+    let (_, input, _) = fixture_rows("traces.jsonl")
+        .into_iter()
+        .next()
+        .expect("a trace");
+    let result = one_run_pass(policy, &input).await;
+    assert!(matches!(result, TsResult::Reply(_)), "{result:?}");
+}
+
+/// mode compare・本物の bundle: TS の op は Rust が apply の前に読んだ snapshot（凍結した memo）から答える。
+/// store の読み出しは Rust の 1 回だけで、TS の op はすべて `memo`。TS が走る前に表の名前を変えても TS は答え、
+/// 記録は `match`、`applied_by` は `rust`。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn script_compare_cos_digest_compare_answers_ops_from_rust_snapshot() {
+    let Some(bundle) = dist_bundle(
+        "script_compare_cos_digest_compare_answers_ops_from_rust_snapshot",
+        DOMAIN,
+    ) else {
+        return;
+    };
+    let base = baseline().await;
+    let sha256 = bundle.manifest.bundle_sha256.clone();
+    let (handle, policy) = start_policy(bundle.source(), sha256.clone());
+    let policy: Arc<dyn PolicyScript> = policy;
+    warm(policy.as_ref()).await;
+    for _ in 0..TIMEOUT_RETRIES {
+        let env = env();
+        let generation = env.generation(&sha256);
+        env.set_mode(ScriptMode::Compare, Some(generation.id));
+        let mut d = env.dispatcher();
+        d.set_policy_script(Some(policy.clone()));
+        seed_run(&env.store, "run-a-done", ChatRunState::Completed);
+        seed_run(&env.store, "run-b-stop", ChatRunState::Stopped);
+        d.tick().expect("tick");
+        // Rust の apply は済んだ。TS の pass が store を読めば、ここから先は失敗する。
+        let conn = rusqlite::Connection::open(&env.config.db.path).expect("db");
+        for (from, to) in [
+            ("cos_inbox_items", "cos_inbox_items_hidden"),
+            ("chat_runs", "chat_runs_hidden"),
+        ] {
+            conn.execute_batch(&format!("ALTER TABLE {from} RENAME TO {to}"))
+                .expect("rename");
+        }
+        d.wait_script_compares().await;
+        for (from, to) in [
+            ("cos_inbox_items_hidden", "cos_inbox_items"),
+            ("chat_runs_hidden", "chat_runs"),
+        ] {
+            conn.execute_batch(&format!("ALTER TABLE {from} RENAME TO {to}"))
+                .expect("rename back");
+        }
+        let mut records = log(&env.store);
+        records.sort_by(|a, b| a.run_id.cmp(&b.run_id));
+        assert_eq!(records.len(), 2, "{records:?}");
+        if records.iter().any(is_timeout) {
+            continue;
+        }
+        assert_eq!(world(&env), (base.messages.clone(), base.items.clone()));
+        for record in &records {
+            assert_eq!(record.mode, ScriptMode::Compare);
+            assert_eq!(record.applied_by, CosDigestAppliedBy::Rust);
+            assert_eq!(record.outcome, CompareOutcome::Match, "{record:?}");
+            assert_eq!(
+                op_outcomes(record),
+                vec![
+                    ("cos_digest:list_runs".to_owned(), "memo".to_owned()),
+                    ("cos_digest:read_run".to_owned(), "memo".to_owned()),
+                ],
+                "TS's ops are answered from Rust's snapshot: {record:?}"
+            );
+        }
+        handle.shutdown();
+        return;
+    }
+    panic!("every compare timed out ({TIMEOUT_RETRIES} attempts)");
+}
+
+/// mode ts で TS が使えない pass は、pass 全体で Rust の command を apply する。message・item は基準と byte 一致し、
+/// 記録の `applied_by` は `rust`、`fallback.code` は `code`。
+async fn ts_falls_back(
+    policy: Arc<dyn PolicyScript>,
+    sha256: &str,
+    code: &str,
+    base: &Pass,
+) -> Vec<CosDigestCompareRecord> {
+    let pass = ts_digest_pass(&policy, sha256).await;
+    assert_eq!(pass.messages, base.messages, "{code}: messages are Rust's");
+    assert_eq!(pass.items, base.items, "{code}: requeue is Rust's");
+    assert_eq!(pass.records.len(), 2, "{code}: {:?}", pass.records);
+    for record in &pass.records {
+        assert_eq!(record.mode, ScriptMode::Ts);
+        assert_eq!(
+            record.applied_by,
+            CosDigestAppliedBy::Rust,
+            "{code}: {record:?}"
+        );
+        let fallback = record.fallback.as_ref().expect("fallback");
+        assert_eq!(fallback.code, code, "{record:?}");
+    }
+    pass.records
+}
+
+/// mode ts で、常に違う答え（どの run も digest しない）・throw・op の denied・deadline 超えの bundle では
+/// Rust の command が apply される。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn script_compare_cos_digest_ts_mode_falls_back_to_rust() {
+    let Some(bundle) = dist_bundle(
+        "script_compare_cos_digest_ts_mode_falls_back_to_rust",
+        DOMAIN,
+    ) else {
+        return;
+    };
+    let base = baseline().await;
+
+    // 常に違う答え: 規則 8（run の欠け）。
+    let (handle, policy, sha256) = start_code(DIFFERENT_BUNDLE);
+    let records = ts_falls_back(policy, &sha256, "run_missing", &base).await;
+    for record in &records {
+        assert_eq!(record.outcome, CompareOutcome::InvalidOutput, "{record:?}");
+    }
+    handle.shutdown();
+
+    // throw。
+    let (handle, policy, sha256) = start_code(THROWING_BUNDLE);
+    let records = ts_falls_back(policy, &sha256, "ts_error", &base).await;
+    for record in &records {
+        let error = record.error.as_ref().expect("error");
+        if error.kind != "timeout" {
+            assert_eq!(error.kind, "exception", "{record:?}");
+            assert!(error.message.contains("boom in cos_digest"), "{error:?}");
+        }
+    }
+    handle.shutdown();
+
+    // op の denied: 一覧に無い run の read を dispatcher が拒み、TS は throw する。
+    let (handle, policy, sha256) = start_with_caps(&bundle, DENIED_BUNDLE);
+    let records =
+        loop_until_not_timeout(|| ts_falls_back(policy.clone(), &sha256, "ts_error", &base)).await;
+    for record in &records {
+        assert!(
+            record.safety_violations.iter().any(|v| v == "denied_scope"),
+            "{record:?}"
+        );
+        assert!(
+            record.ops.iter().any(|o| o.op == "cos_digest:list_runs"),
+            "{record:?}"
+        );
+    }
+    handle.shutdown();
+
+    // deadline 超え: 答えない pass。dispatcher は 200 ms で待ちを切って Rust を apply する。
+    let (handle, policy, sha256) = start_code(NEVER_BUNDLE);
+    let records = ts_falls_back(policy, &sha256, "ts_error", &base).await;
+    for record in &records {
+        assert!(is_ts_timeout(record), "{record:?}");
+        assert_eq!(record.ts, None);
+    }
+    handle.shutdown();
+}
+
+/// `timeout` は環境の遅さなので、`timeout` 以外の記録が出るまでやり直す。
+async fn loop_until_not_timeout<F, Fut>(mut f: F) -> Vec<CosDigestCompareRecord>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Vec<CosDigestCompareRecord>>,
+{
+    for _ in 0..TIMEOUT_RETRIES {
+        let records = f().await;
+        if !records.iter().any(is_ts_timeout) {
+            return records;
+        }
+    }
+    panic!("every ts pass timed out ({TIMEOUT_RETRIES} attempts)");
+}
+
+/// daemon の結線（mode ts）: 同じ bundle の daemon は ts を保ち、digest の message は冪等 key で 1 件のまま
+/// （再起動で増えない）。`[script]` の無い daemon は起動時に `system:script-startup` が rust へ戻し、
+/// Rust が digest して記録は増えない（付記 S4-14）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn script_compare_cos_digest_daemon_ts_restart_keeps_one_message() {
+    if dist_bundle(
+        "script_compare_cos_digest_daemon_ts_restart_keeps_one_message",
+        DOMAIN,
+    )
+    .is_none()
+    {
+        return;
+    }
+    let env = env();
+    let state = env.dir.path().join("state");
+    let sha256 = deploy_bundle(&dist_dir(), &state)
+        .expect("deploy")
+        .manifest
+        .bundle_sha256;
+    let with_script = load_config(
+        env.dir.path(),
+        &format!("{COS_OFF}[script]\nstate_dir = \"state\"\nactive_bundle_sha256 = \"{sha256}\"\n"),
+    );
+    assert_eq!(run_daemon(with_script.clone()).await, Exit::MaxTicks);
+    let generation = env
+        .store
+        .script_generation_by_sha256(&sha256)
+        .expect("read")
+        .expect("generation recorded at startup");
+    to_ts(&env, generation.id.clone());
+
+    seed_run(&env.store, "run-a-done", ChatRunState::Completed);
+    assert_eq!(run_daemon(with_script.clone()).await, Exit::MaxTicks);
+    assert_eq!(env.mode(), ScriptMode::Ts, "same bundle keeps ts");
+    let records = log(&env.store);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].run_id, "run-a-done");
+    assert_eq!(records[0].mode, ScriptMode::Ts);
+    assert_eq!(records[0].generation, generation.id);
+    // daemon の最初の呼び出しは遅い isolate で 200 ms を超えうる。そのときは Rust を apply する（それも正しい）。
+    assert!(
+        (records[0].applied_by == CosDigestAppliedBy::Ts && records[0].fallback.is_none())
+            || is_ts_timeout(&records[0]),
+        "{:?}",
+        records[0]
+    );
+    let (first, _) = world(&env);
+    assert_eq!(
+        first.matches("cos-triage-digest:run-a-done").count(),
+        1,
+        "{first}"
+    );
+
+    // mode ts のまま再起動: message は 1 件のまま、記録も増えない。
+    assert_eq!(run_daemon(with_script).await, Exit::MaxTicks);
+    assert_eq!(env.mode(), ScriptMode::Ts);
+    assert_eq!(world(&env).0, first, "the restart writes no second digest");
+    assert_eq!(log(&env.store).len(), 1);
+
+    // bundle の無い daemon: 起動時に rust へ戻り、Rust が新しい run を digest する。記録は増えない。
+    seed_run(&env.store, "run-b-stop", ChatRunState::Stopped);
+    assert_eq!(
+        run_daemon(load_config(env.dir.path(), COS_OFF)).await,
+        Exit::MaxTicks
+    );
+    assert_eq!(env.mode(), ScriptMode::Rust);
+    let row = env.store.script_domain_mode(DOMAIN).expect("mode");
+    assert_eq!(row.updated_by, "system:script-startup");
+    let (messages, _) = world(&env);
+    assert_eq!(messages.matches("cos-triage-digest:run-a-done").count(), 1);
+    assert_eq!(messages.matches("cos-triage-digest:run-b-stop").count(), 1);
     assert_eq!(log(&env.store).len(), 1);
 }

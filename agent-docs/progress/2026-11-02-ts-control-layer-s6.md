@@ -178,7 +178,9 @@ status を blocked にしたのは、旧 Rust 経路 `cos-digest` の試行が 1
 ## 証拠（提出時の HEAD で実行）
 - `python3 -I scripts/dev/edit-activate-summary.py agent-docs/progress/2026-11-02-ts-control-layer-s6/*.jsonl` → exit 1（`cos-digest warm: 14 trials < 20`）。他の 4 系列は 20 試行・全件 exit 0。
 - `node control-ts/scripts/compare.mjs lane_rules|route_priority|cos_digest` → 3 本とも全件一致。
-- 文書の検査・test-affected・clippy・fmt は WU の報告（result.json）に書く。
+- 文書の検査: `bash scripts/dev/check-doc-links.sh` → ok、`bash scripts/dev/check-adr-numbers.sh` → ok（357 files）、`sh scripts/dev/progress-index.sh --check` → ok、`python3 scripts/dev/check-architecture-map.py` → OK（880 件）。
+- `bash scripts/dev/test-affected.sh` → exit 0（試験対象の変更なし。docs と scripts/dev の python だけ）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` は境界 ADR・この file・`scripts/dev/edit-activate-summary.py` の 3 つ。
 
 ## 未解決
 1. `cos-digest` warm 14/20（未達）。

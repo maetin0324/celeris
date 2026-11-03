@@ -897,3 +897,6 @@ async fn cos_digest_script_policy_version_change_and_fresh_session() {
 
 #[path = "cos_digest_pass.rs"]
 mod cos_digest_pass;
+
+#[path = "cos_digest_script_ts.rs"]
+mod ts;

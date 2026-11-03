@@ -202,22 +202,9 @@ fn cos_digest_row_of(store: &SqliteStore) -> task_core::script_compare::ScriptDo
         .expect("cos_digest row")
 }
 
-/// `compare`（同じ generation）→ `ts`。人の actor で。
+/// `compare`（同じ generation）→ `canary` → `ts`。人の actor で（付記 S5-4）。
 fn set_ts_of(store: &SqliteStore, generation: &str) {
-    let row = cos_digest_row_of(store);
-    store
-        .script_domain_set_mode(
-            &ScriptModeChange {
-                domain: "cos_digest".into(),
-                to_mode: ScriptMode::Ts,
-                to_generation: Some(generation.to_owned()),
-                expected_version: row.version,
-                actor: "human:test".into(),
-                reason: "robust-ts".into(),
-            },
-            time::OffsetDateTime::now_utc(),
-        )
-        .expect("mode ts");
+    super::promote_cos_digest_to_ts(store, generation, "robust-ts", time::OffsetDateTime::now_utc());
 }
 
 /// `ts` → `rust`（戻しは誰でも行える。ここでは daemon の actor）。

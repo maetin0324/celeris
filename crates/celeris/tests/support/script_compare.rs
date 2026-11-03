@@ -511,7 +511,31 @@ impl Env {
         again
     }
 
+    /// mode を変える（人の actor で）。`ts` は付記 S5-4 のとおり同じ generation の `canary` を経る: `compare` からなら
+    /// 昇格の前提の計数を script-guard に積み、`canary`（5000 bps）にしてから `ts` にする。
     pub fn set_mode(&self, mode: ScriptMode, generation: Option<String>) {
+        let current = self.store.script_domain_mode(self.domain).expect("mode");
+        if mode == ScriptMode::Ts
+            && current.mode == ScriptMode::Compare
+            && let Some(id) = generation.as_deref()
+        {
+            self.observe_clean(id, false);
+            self.store
+                .script_domain_set_canary(
+                    &ScriptModeChange {
+                        domain: self.domain.into(),
+                        to_mode: ScriptMode::Canary,
+                        to_generation: generation.clone(),
+                        expected_version: current.version,
+                        actor: "human:test".into(),
+                        reason: "script_compare test".into(),
+                    },
+                    5000,
+                    OffsetDateTime::now_utc(),
+                )
+                .expect("set canary");
+            self.observe_clean(id, true);
+        }
         let version = self
             .store
             .script_domain_mode(self.domain)
@@ -530,6 +554,33 @@ impl Env {
                 OffsetDateTime::now_utc(),
             )
             .expect("set mode");
+    }
+
+    /// 昇格の前提（(f) の「進む条件」）の件数だけ、成功の呼び出しを数える。
+    fn observe_clean(&self, generation_id: &str, ts_side: bool) {
+        use task_core::script_guard::{
+            SCRIPT_GUARD_READY_COS, SCRIPT_GUARD_READY_PURE, ScriptGuardCall,
+            ScriptGuardObservation,
+        };
+        let domain = task_core::script_compare::ScriptDomain::parse(self.domain).expect("domain");
+        let required = match domain {
+            task_core::script_compare::ScriptDomain::CosDigest => SCRIPT_GUARD_READY_COS,
+            _ => SCRIPT_GUARD_READY_PURE,
+        };
+        for _ in 0..required {
+            self.store
+                .script_guard_observe(
+                    domain,
+                    generation_id,
+                    ScriptGuardObservation {
+                        call: ScriptGuardCall::Ok,
+                        safety_violation: false,
+                        ts_side,
+                    },
+                    OffsetDateTime::now_utc(),
+                )
+                .expect("observe");
+        }
     }
 
     pub fn mode(&self) -> ScriptMode {

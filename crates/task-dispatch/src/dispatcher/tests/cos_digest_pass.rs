@@ -87,29 +87,9 @@ impl PolicyScript for TsPass {
     }
 }
 
-/// mode を `ts` にする（同じ generation の `compare` から、人の actor で）。
+/// mode を `ts` にする（同じ generation の `compare` から `canary` を経て、人の actor で。付記 S5-4）。
 fn set_ts(f: &Fixture, generation: &str) {
-    let version = f
-        .store
-        .script_domain_modes()
-        .expect("modes")
-        .into_iter()
-        .find(|r| r.domain.as_str() == "cos_digest")
-        .expect("row")
-        .version;
-    f.store
-        .script_domain_set_mode(
-            &ScriptModeChange {
-                domain: "cos_digest".into(),
-                to_mode: ScriptMode::Ts,
-                to_generation: Some(generation.to_owned()),
-                expected_version: version,
-                actor: "human:test".into(),
-                reason: "pass-wire ts".into(),
-            },
-            f.d.now_utc(),
-        )
-        .expect("mode ts");
+    super::promote_cos_digest_to_ts(&f.store, generation, "pass-wire ts", f.d.now_utc());
 }
 
 /// 2 つの run（completed・interrupted）が digest を待つ場面。

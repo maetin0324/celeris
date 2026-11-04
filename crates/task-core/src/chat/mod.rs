@@ -11,6 +11,7 @@ mod credential_tests;
 pub mod digest;
 pub mod digest_apply;
 mod digest_fixture;
+mod human_post;
 pub mod intent;
 mod operations;
 #[cfg(test)]
@@ -41,6 +42,7 @@ mod window;
 mod window_tests;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
 pub use digest_fixture::{COS_DIGEST_GENERATED_CASES, cos_digest_fixture_jsonl};
+pub use human_post::chat_posted_project_tx;
 pub use operations::{AuditContext, CosOperation};
 pub use override_op::{OverrideAction, OverrideResult};
 pub use proposal::{COS_PROPOSAL_KEY_PREFIX, COS_PROPOSAL_TEXT_PREFIX, chat_proposal_forward_tx};
@@ -58,7 +60,6 @@ pub use session::{
     COS_CHAT_SESSION_KIND, COS_CHAT_SESSION_NODE, ChatRunSessionMode, ChatRunSessionRecord,
     ChatSession, ChatSessionKey, ChatSessionUsage,
 };
-pub use store::chat_posted_project_tx;
 pub use store::{
     CHAT_CLIENT_KEY_MAX_BYTES, CHAT_MESSAGE_ATTACHMENTS_MAX, CHAT_MESSAGE_PAGE_DEFAULT,
     CHAT_MESSAGE_PAGE_MAX, CHAT_MESSAGE_TEXT_MAX_BYTES, CHAT_QUEUE_MAX, CHAT_RELAY_TASKS_MAX,

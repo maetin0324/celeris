@@ -1,0 +1,1 @@
+{"at": "2026-11-04T02:40:43Z", "hwm_kb": 181820, "pid": 1659338, "rss_kb": 181820, "schema": "celeris.script-compare-sample/1", "script_tick_wait": {"budget_us": 200000, "max_us": 0, "p50_us": 0, "p95_us": 0, "tick_budget": 0, "ticks": 6}, "threads": 29}

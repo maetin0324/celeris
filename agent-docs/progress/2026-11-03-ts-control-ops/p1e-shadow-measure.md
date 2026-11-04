@@ -44,8 +44,11 @@ raw:
 - `scripts/dev/script-compare.py` の `cmd_report`（`read_snapshot`・`aggregate`・`finish_group`・`rollback_summary`・`summarize_samples`・`summarize_tick_log`）。DB は `query` が `sqlite3 -readonly -cmd "PRAGMA query_only=ON"` で読む。
 - コードは変えていない。この task の変更は進捗ファイルと raw の 2 file だけである。
 
-## 検査
-（下に追記）
+## 検査（提出時の HEAD で実行）
+- `bash scripts/dev/test-affected.sh` → exit 0（docs のみの変更で試験対象なし。source-size gate 0 failure、check-doc-links・check-adr-numbers・check-human-text ok）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `sh scripts/dev/progress-index.sh --check` → exit 0
 
 ## 未解決
 1. 純粋判定が 1/1000。一致率・outcome の分布・latency の分位・RSS の増減・tick への影響は、件数・標本が足りず判断できない。1000 件に届いたら（report が exit 0）、この task を再開して同じ 6. を流す。

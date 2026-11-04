@@ -21,6 +21,16 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "project.unarchive",
     ),
     ("PUT", "/api/v1/projects/{id}/status", "project.status_put"),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/controller",
+        "project.controller_put",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/controller/wake",
+        "project.controller_wake",
+    ),
     ("POST", "/api/v1/standing-rules", "standing_rule.create"),
     (
         "DELETE",
@@ -127,6 +137,18 @@ pub(crate) fn dispatch(
                 &audit.by(),
                 Some(audit),
             )?)
+        }
+        "project.controller_put" | "project.controller_wake" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = crate::handlers::parse_project_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "project", &raw_id, problem))?;
+            if matched.action == "project.controller_put" {
+                let input = serde_json::from_value(body).map_err(decode)?;
+                crate::handlers::project_controller::cos_controller_put(store, id, input, audit)
+            } else {
+                let input = serde_json::from_value(body).map_err(decode)?;
+                crate::handlers::project_controller::cos_controller_wake(store, id, input, audit)
+            }
         }
         "project.cancel" | "project.pause" | "project.resume" | "project.archive"
         | "project.unarchive" => {

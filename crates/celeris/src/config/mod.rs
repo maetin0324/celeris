@@ -39,6 +39,7 @@ mod llm_route;
 mod maintenance;
 mod model_catalog;
 mod org;
+mod project_controller;
 mod proxy;
 mod routing_eval;
 mod routing_mode;
@@ -67,6 +68,7 @@ pub use llm_route::*;
 pub use maintenance::*;
 pub use model_catalog::*;
 pub use org::*;
+pub use project_controller::*;
 pub use routing_eval::*;
 pub use routing_mode::*;
 pub use scratch::*;
@@ -253,6 +255,9 @@ pub struct Config {
     /// 境界 ADR 2026-11-02: `[script]`（TS 制御層の active bundle と上限）。無ければ TS 層を起こさない。
     #[serde(default)]
     pub script: Option<ScriptConfig>,
+    /// ADR 2026-11-04-project-controller A1: `[project_controller]`。無ければ controller は動かない。
+    #[serde(default)]
+    pub project_controller: Option<ProjectControllerConfig>,
     // ---- ADR-0047（Phase 61）: 知識ベース。ここから ----
     /// ADR-0047 D1: `[knowledge]`。正本の置き場と、実効 profile が何も言わないときの既定のマウント。
     #[serde(default)]
@@ -612,6 +617,9 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         if let Some(script) = &self.script {
             script.validate()?;
+        }
+        if let Some(pc) = &self.project_controller {
+            pc.validate()?;
         }
         let registry = self.llm_route_registry()?;
         for (id, harness) in &self.harness_declarations {

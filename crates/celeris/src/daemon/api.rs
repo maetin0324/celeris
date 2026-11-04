@@ -622,6 +622,11 @@ pub(crate) async fn start_api(
     let state = state.with_browser_readiness(Arc::new(move |store| doctor.inspect(store)));
     let state = state.with_live_sessions(live_sessions);
     let state = with_chat_wiring(state, config);
+    // ADR 2026-11-04-project-controller A1: mode を上げられる案件の許可リスト（既定は空）。
+    let state = match &config.project_controller {
+        Some(pc) => state.with_project_controller(pc.enabled, pc.allowed_project_ids.clone()),
+        None => state,
+    };
     // 付記 S5-1: `[script]` の無い daemon は結線しない（登録・退役は 503 `script_runtime_unavailable`）。
     let state = match script_generations {
         Some(control) => state.with_script_generations(control),

@@ -19,6 +19,7 @@ mod override_op;
 pub mod plan_rejudge;
 #[cfg(test)]
 mod plan_rejudge_tests;
+mod project_controller_input;
 mod proposal;
 pub mod relay_rejudge;
 #[cfg(test)]
@@ -43,6 +44,7 @@ pub use digest_fixture::{COS_DIGEST_GENERATED_CASES, cos_digest_fixture_jsonl};
 pub use operations::{AuditContext, CosOperation};
 pub use override_op::{OverrideAction, OverrideResult};
 pub use proposal::{COS_PROPOSAL_KEY_PREFIX, COS_PROPOSAL_TEXT_PREFIX, chat_proposal_forward_tx};
+pub use project_controller_input::ControllerCosInput;
 pub use review::{
     COS_REVIEW_INPUT_KEY_PREFIX, COS_REVIEW_REPORT_KEY_PREFIX, COS_REVIEW_REPORT_TEXT_MAX_CHARS,
     COS_REVIEW_THREAD_TITLE, ChatReviewReported, cos_review_report_tx, cos_review_thread_ensure_tx,

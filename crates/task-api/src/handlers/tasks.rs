@@ -408,7 +408,19 @@ pub(super) async fn create_task(
                 return Ok((idempotency::existing_task(store, &existing)?, true));
             }
             match create_task_op(store, &roles, &genres, body, claim.as_ref(), &by, None) {
-                Ok(applied) => Ok((applied.direct()?, false)),
+                Ok(applied) => {
+                    let task = applied.direct()?;
+                    // ADR 2026-11-04-project-controller D12: 人の起票は controller の判断より優先（I7）。
+                    if let Some(project) = task.project_id {
+                        store
+                            .project_controller_human_bump(
+                                &project.to_string(),
+                                OffsetDateTime::now_utc(),
+                            )
+                            .map_err(crate::problem::store_problem)?;
+                    }
+                    Ok((task, false))
+                }
                 Err(problem) => {
                     // 別の要求が先に commit した場合、rollback 後に結果を照合する。
                     if let Some(claim) = &claim

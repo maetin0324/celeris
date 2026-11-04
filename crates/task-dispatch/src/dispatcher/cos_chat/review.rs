@@ -50,6 +50,22 @@ pub(crate) struct CosReviewSink<'a> {
 }
 
 impl CronInputSink for CosReviewSink<'_> {
+    /// ADR 2026-11-04-project-controller A1: `project_reconcile` は案件の wake を 1 件積むだけ。
+    fn post_project_reconcile(
+        &mut self,
+        job: &CronJob,
+        scheduled_for: OffsetDateTime,
+        project_id: &str,
+    ) -> Result<task_ops::cron_jobs::CronInputPost, String> {
+        crate::dispatcher::cron_tick::project_wake::post_reconcile_wake(
+            self.launch,
+            job,
+            scheduled_for,
+            project_id,
+            self.now,
+        )
+    }
+
     fn post_cos_review(
         &mut self,
         job: &CronJob,

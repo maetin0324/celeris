@@ -1,0 +1,1 @@
+{"decides":1,"deliveries":10,"idempotency_keys":1,"llm_launches":0,"pending_effects":0,"roots":1,"schema":"celeris.long-horizon-record/1","test":"project_wake_redelivery_10x","unprocessed_wakes":0,"wakes":1}

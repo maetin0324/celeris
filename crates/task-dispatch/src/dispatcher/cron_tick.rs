@@ -5,6 +5,10 @@
 use super::Dispatcher;
 use super::cos_chat::review::CosReviewSink;
 
+/// ADR 2026-11-04-project-controller A1: 案件の durable wake の段（`dispatcher.rs` に行を足さない）。
+#[path = "project_wake.rs"]
+pub(crate) mod project_wake;
+
 impl Dispatcher {
     /// A draining instance or one short of disk creates nothing. Uses the injectable clock.
     pub(super) fn tick_cron_jobs(&mut self) {
@@ -46,5 +50,7 @@ impl Dispatcher {
         // ADR 2026-10-07-build-tmp-hygiene D1.4: `action` 付きの雛形の task は worker に渡さず、
         // ここで決定的な保守 executor が走らせる（LLM なし）。
         self.run_maintenance_tasks(&fired);
+        // ADR 2026-11-04-project-controller A1: cron の後に案件の wake を評価する（同じ gate の内側）。
+        self.tick_project_controller();
     }
 }

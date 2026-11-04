@@ -406,6 +406,10 @@ pub(super) async fn patch_project(
                 .project_get(project_id)
                 .map_err(store_problem)?
                 .ok_or_else(|| ApiProblem::project_not_found(&project_id.to_string()))?;
+            // ADR 2026-11-04-project-controller D12: 人の操作は controller の判断より優先（I7）。
+            store
+                .project_controller_human_bump(&project_id.to_string(), OffsetDateTime::now_utc())
+                .map_err(store_problem)?;
             Ok((project, text_fields, old_title))
         })
         .await?;

@@ -25,6 +25,7 @@ pub(crate) mod clusters;
 mod config_fields;
 mod idempotency;
 pub(crate) mod org;
+pub(crate) mod project_controller;
 pub(crate) mod projects;
 pub(crate) mod reload;
 mod secrets;
@@ -175,6 +176,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         )
         // ADR 2026-10-27-project-brief D3: 案件の状態の要約（全置換）。
         .route("/api/v1/projects/{id}/status", put(put_project_status))
+        // ADR 2026-11-04-project-controller A1: 案件の controller（durable wake）。
+        .merge(project_controller::routes())
         .route("/api/v1/projects/{id}/milestones", post(create_milestone))
         // ADR-0043 D1（Phase 52）: 案件のリポジトリ。実装は `crate::repos`。
         .merge(crate::repos::routes())

@@ -59,6 +59,8 @@ pub struct ApiState {
     pub(crate) script_generations: Option<crate::script_generations::SharedScriptGenerationControl>,
     /// Chat attachment configuration and live event wakeups, shared with SSE/upload routes.
     pub(crate) chat: Arc<crate::chat::ChatState>,
+    /// ADR 2026-11-04-project-controller A1: `[project_controller]` の API 側の設定（許可リスト）。
+    pub(crate) project_controller: Arc<crate::handlers::project_controller::ControllerApiConfig>,
     /// ADR 2026-10-07-browser-trusted-devices: 端末の期限・assertion の期限に使う時計（UNIX 秒）。
     /// 本番は壁時計。試験は `with_clock` で偽の時計に差し替える。
     pub(crate) clock: ApiClock,
@@ -247,6 +249,7 @@ impl ApiState {
             identity_sealer: None,
             live_sessions: None,
             script_generations: None,
+            project_controller: Arc::default(),
             chat: Arc::new(chat),
             live_grants: Arc::new(Mutex::new(HashMap::new())),
             clock: system_clock(),
@@ -278,6 +281,20 @@ impl ApiState {
         chat.attachment_data_dir = Some(data_dir);
         chat.attachment_limits = limits;
         self.chat = Arc::new(chat);
+        self
+    }
+
+    /// ADR 2026-11-04-project-controller A1: 案件の controller を有効にできる案件（`allowed_project_ids`）。
+    pub fn with_project_controller(
+        mut self,
+        enabled: bool,
+        allowed_project_ids: Vec<String>,
+    ) -> Self {
+        self.project_controller =
+            Arc::new(crate::handlers::project_controller::ControllerApiConfig {
+                enabled,
+                allowed_project_ids,
+            });
         self
     }
 

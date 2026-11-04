@@ -102,6 +102,9 @@ pub fn task_action(task: &Task) -> Option<&'static str> {
 /// `cos_review` は task を作らず、発火ごとに統括 CoS の thread へ入力を 1 件積む（積むのは dispatcher の
 /// [`CronInputSink`]。この module は LLM も chat も呼ばない）。
 pub const CRON_KIND_COS_REVIEW: &str = "cos_review";
+/// ADR 2026-11-04-project-controller A1: 案件の controller の定期の再評価。task も chat も作らず、発火ごとに
+/// 案件の wake（`cron:<job>:<予定時刻>`）を 1 件積む（`extra.project_id` が対象。積むのは dispatcher）。
+pub const CRON_KIND_PROJECT_RECONCILE: &str = "project_reconcile";
 
 /// job が発火で作るもの。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +113,8 @@ pub enum CronJobKind {
     Task,
     /// 統括 CoS の thread へ定期見直しの入力を積む（ADR 2026-10-27-cron-cos-review）。
     CosReview,
+    /// 案件の controller に再評価の wake を積む（ADR 2026-11-04-project-controller A1）。
+    ProjectReconcile,
 }
 
 /// 雛形の `extra["kind"]` を読む（無ければ [`CronJobKind::Task`]）。
@@ -117,10 +122,57 @@ pub fn template_kind(template: &CronTaskTemplate) -> Result<CronJobKind, String>
     match template.extra.get("kind") {
         None => Ok(CronJobKind::Task),
         Some(v) if v.as_str() == Some(CRON_KIND_COS_REVIEW) => Ok(CronJobKind::CosReview),
+        Some(v) if v.as_str() == Some(CRON_KIND_PROJECT_RECONCILE) => {
+            Ok(CronJobKind::ProjectReconcile)
+        }
         Some(v) => Err(format!(
-            "template extra.kind must be {CRON_KIND_COS_REVIEW:?} or absent, got {v}"
+            "template extra.kind must be {CRON_KIND_COS_REVIEW:?}, {CRON_KIND_PROJECT_RECONCILE:?} or absent, got {v}"
         )),
     }
+}
+
+/// `project_reconcile` の雛形の検証: `cos_review` と同じく task の欄は書けず、重ね掛けは `skip` だけ。
+/// `extra.project_id` は必須（文字列）。
+fn validate_project_reconcile(job: &CronJob) -> Result<(), OpsError> {
+    let t = &job.template;
+    let task_fields = [
+        ("acceptance", !t.acceptance.is_empty()),
+        ("assignee", t.assignee.is_some()),
+        ("harness", t.harness.is_some()),
+        ("lane", t.lane.is_some()),
+        ("project", t.project.is_some()),
+        ("repos", !t.repos.is_empty()),
+        ("priority", t.priority.is_some()),
+        ("extra.mode", t.extra.contains_key("mode")),
+        ("extra.action", t.extra.contains_key("action")),
+    ];
+    if let Some((field, _)) = task_fields.iter().find(|(_, set)| *set) {
+        return Err(OpsError::Validation(format!(
+            "template.{field} is a task field; a {CRON_KIND_PROJECT_RECONCILE} job does not create a task"
+        )));
+    }
+    if job.overlap != CronOverlap::Skip {
+        return Err(OpsError::Validation(format!(
+            "a {CRON_KIND_PROJECT_RECONCILE} job must use overlap \"skip\""
+        )));
+    }
+    if reconcile_project_id(job).is_none() {
+        return Err(OpsError::Validation(format!(
+            "a {CRON_KIND_PROJECT_RECONCILE} job needs template.extra.project_id (a string)"
+        )));
+    }
+    Ok(())
+}
+
+/// `project_reconcile` の対象の案件 id（`extra.project_id`）。
+pub fn reconcile_project_id(job: &CronJob) -> Option<String> {
+    job.template
+        .extra
+        .get("project_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
 }
 
 /// `cos_review` の雛形の検証: task の欄（acceptance・担当・分野・lane・案件・repo・優先度・mode・action）は
@@ -174,6 +226,18 @@ pub trait CronInputSink {
         scheduled_for: OffsetDateTime,
         previous: Option<OffsetDateTime>,
     ) -> Result<CronInputPost, String>;
+
+    /// `project_reconcile` の 1 回の発火: 案件の wake `cron:<job>:<予定時刻>` を積む（同じ予定時刻は 1 件）。
+    fn post_project_reconcile(
+        &mut self,
+        _job: &CronJob,
+        _scheduled_for: OffsetDateTime,
+        _project_id: &str,
+    ) -> Result<CronInputPost, String> {
+        Err(format!(
+            "{CRON_KIND_PROJECT_RECONCILE} wakes are posted only by the daemon tick"
+        ))
+    }
 }
 
 /// 入力を積めない呼び出し元（API の手動実行・試験の [`fire_due`]）。`cos_review` の発火は `error` になる。
@@ -408,6 +472,7 @@ pub fn validate_job(
     match kind {
         CronJobKind::Task => build_task(store, ctx, job, now, now).map(|_| ()),
         CronJobKind::CosReview => validate_cos_review(job),
+        CronJobKind::ProjectReconcile => validate_project_reconcile(job),
     }
 }
 
@@ -714,7 +779,7 @@ pub fn fire_job(
             CronJobKind::Task => decide_fire(store, ctx, job, due.latest, trigger, now)?,
             // 積んでから履歴と `next_fire_at` を書く。間で落ちても、再起動後の同じ予定時刻の発火は
             // sink の冪等キーで同じ入力に束なる（ADR 2026-10-27-cron-cos-review D3）。
-            CronJobKind::CosReview => (
+            CronJobKind::CosReview | CronJobKind::ProjectReconcile => (
                 decide_post(store, sink, job, due.latest, trigger, now)?,
                 None,
             ),
@@ -767,7 +832,13 @@ pub fn run_now_with(
 /// 手動実行できる job か。`cos_review` は入力を積む sink が daemon の tick にしか無いので、予定時刻でだけ
 /// 発火する（API は監査の記録を始める前にこれで拒否する）。
 pub fn check_manual_run(job: &CronJob) -> Result<(), OpsError> {
-    if template_kind(&job.template).map_err(OpsError::Validation)? == CronJobKind::CosReview {
+    let kind = template_kind(&job.template).map_err(OpsError::Validation)?;
+    if kind == CronJobKind::ProjectReconcile {
+        return Err(OpsError::Validation(format!(
+            "a {CRON_KIND_PROJECT_RECONCILE} job fires only on its schedule (the daemon tick posts the wake)"
+        )));
+    }
+    if kind == CronJobKind::CosReview {
         return Err(OpsError::Validation(format!(
             "a {CRON_KIND_COS_REVIEW} job fires only on its schedule (the daemon tick posts the input)"
         )));
@@ -870,7 +941,14 @@ fn decide_post(
     let previous = store
         .cron_job_run_last_created(job.id)?
         .map(|r| r.scheduled_for);
-    let (outcome, detail) = match sink.post_cos_review(job, scheduled_for, previous) {
+    let posted = match template_kind(&job.template).map_err(OpsError::Validation)? {
+        CronJobKind::ProjectReconcile => match reconcile_project_id(job) {
+            Some(project) => sink.post_project_reconcile(job, scheduled_for, &project),
+            None => Err("template.extra.project_id is missing".into()),
+        },
+        _ => sink.post_cos_review(job, scheduled_for, previous),
+    };
+    let (outcome, detail) = match posted {
         Ok(CronInputPost::Posted(detail)) => (CronRunOutcome::Created, detail),
         Ok(CronInputPost::Busy(detail)) => (CronRunOutcome::SkippedOverlap, detail),
         Err(detail) => (CronRunOutcome::Error, detail),

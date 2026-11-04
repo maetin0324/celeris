@@ -1,0 +1,2 @@
+{"chat_messages":0,"decides":0,"llm_launches":0,"roots":0,"schema":"celeris.long-horizon-record/1","test":"project_wake_idle_7days","unprocessed_wakes":0,"virtual_hours":168}
+{"chat_messages":0,"decides":168,"llm_launches":0,"roots":0,"schema":"celeris.long-horizon-record/1","test":"project_wake_cron_idle","unprocessed_wakes":0,"virtual_hours":168}

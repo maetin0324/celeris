@@ -689,6 +689,19 @@ pub fn build_daemon_dispatcher(
     identity: &crate::InstanceIdentity,
 ) -> Result<Dispatcher, DaemonError> {
     let mut dispatcher = build_dispatcher(config, masters)?;
+    // ADR 2026-11-04-project-controller A1: 判定は A1 の既定（効果なし）。A3 が TS と接続する。
+    if let Some(pc) = &config.project_controller
+        && pc.enabled
+        && !dispatcher.set_project_controller(
+            pc.settings(),
+            Box::new(task_dispatch::project_controller::NoopProjectDecider),
+            identity.instance_id.clone(),
+        )
+    {
+        tracing::warn!(
+            "[project_controller] needs the CoS chat pipeline; controller not installed"
+        );
+    }
     match &config.source_sha256 {
         Some(sha) => dispatcher.set_variant_observation(identity.instance_id.clone(), sha.clone()),
         None => tracing::warn!(

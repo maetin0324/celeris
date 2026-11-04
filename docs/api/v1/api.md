@@ -436,6 +436,10 @@ token_file = "api.token"
 | 76 | POST | `/projects/{id}/archive` | 終端の案件をアーカイブする（一覧から既定で隠れる。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 77 | POST | `/projects/{id}/unarchive` | アーカイブを解除する（**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 77a | PUT | `/projects/{id}/status` | 案件の状態の要約を全置換で書く（ADR 2026-10-27-project-brief。§3.48a。**管理系**。CoS は `project.status_put`） | 200 `ProjectBrief` | store `project_briefs` |
+| 77b | GET | `/projects/{id}/controller` | 案件の controller の状態・未処理の wake・最後の判断（ADR 2026-11-04-project-controller A1。§3.48b。行が無ければ mode `off`） | 200 `ProjectControllerView` | store `project_controller_state` |
+| 77c | PUT | `/projects/{id}/controller` | controller の mode を変える `{mode, expected_revision, reason}`（§3.48b。**管理系**。上げるのは人だけ、`shadow` 以上は許可リストの案件だけ（403 `project_controller_not_allowed`）、revision 違いは 409。CoS は `project.controller_put` で `off` だけ） | 200 `ProjectControllerView` | store `project_controller_state` |
+| 77d | POST | `/projects/{id}/controller/wake` | 外部待ちの解除の wake を積む `{external_ref, note, idempotency_key}`（§3.48b。**管理系**。同じ key は 1 件、mode `off` なら積まない。CoS は `project.controller_wake`） | 200 `{wake_key, added}` | store `project_wakes` |
+| 77e | GET | `/projects/{id}/controller/decisions` | controller の判断の記録（新しい順、`?before=<判断 id>&limit=`、既定 50・上限 200） | 200 `{items: [ProjectControllerDecision]}` | store `project_controller_decisions` |
 | 78 | POST | `/milestones/{id}/cancel` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: 途中目標を中止し、属する非終端タスクを連鎖で `cancelled` にする（**管理系**） | 410 `Problem`（旧 200 `MilestoneLifecycle`） | `task_ops::lifecycle` |
 | 79 | POST | `/milestones/{id}/pause` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: 途中目標を一時停止する（**管理系**） | 410 `Problem`（旧 200 `MilestoneLifecycle`） | `task_ops::lifecycle` |
 | 80 | POST | `/milestones/{id}/resume` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: 一時停止を解く（**管理系**） | 410 `Problem`（旧 200 `MilestoneLifecycle`） | `task_ops::lifecycle` |
@@ -1646,6 +1650,19 @@ ULID でない id・無い案件は 404 `project_not_found`。知らないクエ
 
 - `review`: その途中目標についての**秘書のレビューの返事**（`{message_id, text, at}`）。
 - `proposal`: その返事が提案した**次の途中目標**（`proposed` の最新。`review` がある行にだけ付く）。
+
+#### 3.48b `/projects/{id}/controller`（ADR 2026-11-04-project-controller A1）
+案件ごとの durable wake の状態。`project_controller_state`・`project_wakes`・`project_controller_decisions`（migration 0111）。
+wake は events（root の done・failed・review 不合格、子の待ちの解消、回答・承認、外部待ちの解除）・停滞の検出・
+cron の `project_reconcile`・人の操作から daemon が作り、`UNIQUE(project_id, wake_key)` で再配送を 1 件に束ねる。
+mode は `off`（既定）・`dry_run`・`shadow`・`enabled`。`off` の案件は wake を積まない。
+
+- `PUT` の本文 `{"mode": "shadow", "expected_revision": 0, "reason": "…"}`。mode を上げる（`off` → `shadow` など）のは
+  人の token だけ（他は 403 `project_controller_mode_requires_human`）。`shadow`・`enabled` は `[project_controller]
+  allowed_project_ids` の案件だけ（403 `project_controller_not_allowed`）。`expected_revision` が今の `revision` と
+  違えば 409 `project_controller_revision_conflict`。
+- `POST …/wake` の本文 `{"external_ref": "job-1", "note": "…", "idempotency_key": "k1"}`。wake key は
+  `external:<external_ref>:<idempotency_key>`（`:` は書けない）。応答 `{"wake_key": "…", "added": true}`。
 
 #### 3.48a `PUT /projects/{id}/status` → 200 `ProjectBrief`（**管理系**）
 
@@ -3617,6 +3634,8 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | projects | `POST /projects/{id}/archive` | `project.archive` |
 | projects | `POST /projects/{id}/unarchive` | `project.unarchive` |
 | projects | `PUT /projects/{id}/status` | `project.status_put`（その案件の案件 CoS スレッドだけ。他は 403 `project_brief_forbidden` で `rejected`） |
+| projects | `PUT /projects/{id}/controller` | `project.controller_put`（CoS は `mode: off` だけ。上げると 403 `project_controller_mode_requires_human`） |
+| projects | `POST /projects/{id}/controller/wake` | `project.controller_wake`（外部待ちの解除の wake。同じ key は 1 件） |
 | projects | `POST /standing-rules` | `standing_rule.create`（人の決定で CoS にも許可） |
 | projects | `DELETE /standing-rules/{id}` | `standing_rule.delete` |
 | projects | `POST /reports/read` | `report.read`（対応する通知も同じ transaction で既読） |

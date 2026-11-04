@@ -22,6 +22,7 @@ pub mod integration;
 /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する判定。
 pub mod orphan;
 pub mod policy;
+pub mod project_controller;
 /// ADR-0033 D3（Phase 25）: run の終端から決定的に作る報告。
 pub(crate) mod reports;
 pub mod review;

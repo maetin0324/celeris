@@ -203,6 +203,9 @@ pub(crate) struct CosChatLaunch {
         ),
     >,
     pub(crate) triage: super::triage::CosTriageState,
+    /// ADR 2026-11-04-project-controller A1: 案件の controller（`set_project_controller` で入る）。
+    pub(crate) project_controller:
+        Option<crate::dispatcher::cron_tick::project_wake::ProjectControllerRuntime>,
 }
 
 /// Which durable claim binds the new run to its input message.
@@ -225,6 +228,7 @@ impl Dispatcher {
             running: HashMap::new(),
             route_reservations: HashMap::new(),
             triage: super::triage::CosTriageState::default(),
+            project_controller: None,
         });
     }
 

@@ -67,6 +67,7 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | POST | `/script/guard/clear` | `human_only` | ADR 2026-11-02-ts-control-layer-boundary 付記 S5-4。script-guard の全体の停止を解くのは人の API token の主体だけ。 |
 | POST | `/script/behavior-changes` | `human_only` | ADR 2026-11-03-ts-intended-behavior-change D4。TS の方針改善の仕様の承認は人の API token の主体だけ。 |
 | POST | `/script/behavior-changes/{spec_sha256}/revoke` | `script_api_only` | ADR 2026-11-03-ts-intended-behavior-change D4。承認の取り消しは API で人・外部 operator が行う（CoS の操作には足さない）。 |
+| POST | `/script/domains/{domain}/exhaustive-runs` | `script_api_only` | ADR 2026-11-04-lane-rules-exhaustive-evidence D7。網羅は昇格の前提（件数）を 1000 から 100 に下げ、結果によって rust への戻しと generation の invalid を起こす。人と外部 operator が API で起こし、CoS の操作には足さない。 |
 | POST | `/milestones/{id}/pause` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/milestones/{id}/resume` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
 | POST | `/projects/{id}/milestones` | `removed_by_adr_0079` | ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。 |
@@ -256,6 +257,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/script/guard/clear` | X: `human_only` | `script_domains.rs` | 共通 |
 | POST | `/script/behavior-changes` | X: `human_only` | `script_behavior_changes.rs` | 共通 |
 | POST | `/script/behavior-changes/{spec_sha256}/revoke` | X: `script_api_only` | `script_behavior_changes.rs` | 共通 |
+| POST | `/script/domains/{domain}/exhaustive-runs` | X: `script_api_only` | `script_exhaustive.rs` | 共通 |
 | PATCH | `/repos/{id}` | A | `repos.rs` | 共通 |
 | PATCH | `/config/fields` | X: `human_only` | `handlers.rs` | 共通 |
 | POST | `/terminals` | X: `human_only` | `handlers.rs` | 共通 |

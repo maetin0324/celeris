@@ -1,5 +1,5 @@
 ---
-tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY]
+tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY, 01M6JW1EG41D198Y5CP65MQJM4]
 ---
 # Project Controller の運用手順（人と operator）
 
@@ -84,4 +84,19 @@ controller は event（root の終了・失敗・人の操作など）で起き�
   daemon は起動しない。
 - 測った値（`agent-docs/progress/2026-11-04-long-horizon/a6/resource.jsonl`）: 本物の TS の判定 1 回の p50 は約 1.5 ms、100 案件を 1 周する時間は約
   0.19 秒で、isolate は 1 個のまま増えない。複数日の実稼働の確認は A9 の pilot で行う。
+
+## 画面と非本番の pilot（A9）
+- 案件の詳細画面の「自動運営」に、長期方針（CoS の要約の目的と人の依頼文）、関連する root task、今後の作業（要約の
+  next_actions と次の再評価の時刻）、待機と人の要件（要約の waiting_on・受信箱の判断待ち・許可の提案）、過去の判断と根拠
+  （判断の規則・効果・参照）、Roadmap（A5）と許可（A7）が出る。mode は同じ画面の「観察だけにする」「有効にする」「止める（従来の
+  CoS に戻す）」で切り替える（理由が必須。上げるのは人の token だけ）。`dry_run` は API だけ。
+- `POST /projects` で作った直後の案件は `proposed` で、これを `active` へ移す API は無い。人が controller を `enabled` に上げると、同じ
+  transaction で案件を `active` にする（`proposed` のままだと判定と検証が起票を断り続ける）。
+- 作業場所が git でない案件（取り込み `delivery_skipped` の `not_git`）と、取り込む commit が無い root（`no_commits`）は取り込み済みと
+  同じに扱う。取り込みが閉じたとき（merge・該当なし・この 2 つの見送り）にも controller を起こす。
+- 実 LLM の pilot は `scripts/dev/long-horizon-pilot-llm.sh` を人が sandbox の外から実行する。人の承認の印
+  `LONG_HORIZON_PILOT_LLM_APPROVED=1` と、人が書いた LLM の設定（`--llm-config <toml>`。`[llm_sources]`・`[harnesses]`・
+  `[route_defaults]`・`[harness_selection]`・`[accounts]`）が要る。Celeris の worker の run の中では起動しない。一時 home・一時 DB・
+  loopback の daemon で動き、本番に触れない。raw は `agent-docs/progress/2026-11-04-long-horizon/a9/` の下の `llm` に書く。
+  24〜72 時間の実稼働は人の別途の承認が要る。手順と未実施の記録は `agent-docs/progress/2026-11-04-long-horizon/a9.md`。
 

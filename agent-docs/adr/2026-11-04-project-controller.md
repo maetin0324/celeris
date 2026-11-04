@@ -804,3 +804,29 @@ Outcome の状態・root との対応の履歴が無く、CoS は request を書
    判定の遅延・100 案件 1 周の loop cost）。100 案件で isolate も常駐の thread も増えない（試験が thread 数で確かめる）。
 7. **API は未実装**: `GET /projects/{id}/controller` の `budget`・`guards` と `GET /metrics/project-controller` は入れていない（a6.md の未達）。guard の
    判断は既存の `GET …/controller/decisions` の `validation`（`pc/guard/*`）と記録で読める。
+
+## 付記 A9（2026-11-04、task 01M6JW1EG41D198Y5CP65MQJM4）: 統合・画面・pilot の実装と契約の差分
+理由と証拠は `agent-docs/progress/2026-11-04-long-horizon/a9.md`。
+1. **API は足していない**。画面は A1（controller・decisions）・A5（roadmap）・A7（authority）の API と案件の詳細・受信箱を読む。
+   画面は `web/features/projects/project-controller-panel.tsx`（`ProjectControllerSection`）で、`project-detail-view.tsx` の
+   「自動運営」の節に A5・A7 の panel と一緒に載せた。`dry_run` のボタンは置いていない（API だけ）。
+2. **人が `enabled` に上げる操作は `proposed` の案件を `active` にする**（`PUT …/controller` の同じ tx、`activate_proposed_tx`）。
+   `POST /projects` の直後の案件は `proposed` で `active` へ移す API が無く、TS（`pc/project-not-active`）と Rust の検証
+   （`pc/invalid:launch_on_paused`）が起票を断り続けた。実 daemon の pilot で見つけた。
+3. **取り込むものが無い root は取り込み済みと同じ**: `delivery_skipped` の `not_git`・`no_commits`
+   （`DeliverySkipReason::nothing_to_integrate`）を snapshot の `integrated` に数える。wake の種類は増やさず、
+   `integration_merged`・`integration_not_applicable`・この 2 つの見送りの event でも `root_done` の wake を積む
+   （done の wake は取り込みの前に来るので、取り込みが閉じたときにもう一度評価する）。これが無いと git でない作業場所の
+   案件は最初の root の後で `pc/root-in-flight` のまま進まなかった。
+4. **実 LLM pilot の script**（long-horizon-bench D9 の `celeris-campaign long-horizon run --tier llm_pilot` を置き換え）:
+   `scripts/dev/long-horizon-pilot-llm.sh` が試行ごとに `scripts/dev/long-horizon-pilot/driver.py` を呼び、一時 home の実 daemon で
+   使い捨ての `pilot:` 案件を流し、DB を読み取り専用で開いて facts（dataset `long_horizon_llm_pilot`）を書いて
+   `long-horizon-grade --tier llm_pilot` で採点する。`--harness stub` は LLM 0 の経路の確認（raw は `a9/stub/`）、
+   `--harness config` は人の承認（`LONG_HORIZON_PILOT_LLM_APPROVED=1`）と人が書いた LLM の設定が要り、worker の run の中では起動しない。
+   一時 DB の領域 `project_controller` は配備した generation で `ts` に直接置く（compare→canary の計数は本番の手順に残す。記録に
+   `synthetic` と書く）。`ops-r2-sandbox.sh` の中では動かしていない（D9 の sandbox は未実装のまま）。
+5. **仮想時刻の pilot**: `crates/task-dispatch/src/dispatcher/tests/long_horizon_pilot.rs`（接頭辞 `long_horizon_pilot_`、7 件）が
+   本物の bundle を本物の V8 で評価し、5 分刻みで 72 時間を流す。API の門は `crates/task-api/tests/long_horizon_pilot.rs`（3 件）。
+   `scripts/dev/test-long-horizon-pilot.sh` が両方と stub の実 daemon の試行を検査する。
+6. **人が取り消した root は controller が作り直さない**。依頼文を元に戻して mode を置き直しても、取り消された Outcome の root は
+   `pc/root-ended` で人に 1 回聞いて止まる。続けるのは人の起票（または人の発言を引いた CoS の起票）。

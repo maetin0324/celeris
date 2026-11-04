@@ -18,7 +18,7 @@ A5・A6・A7 は節を足す。
   同じ問いは 2 回目を出さない。人が mode を置き直すまで判断しない。
 - 案件 CoS は `/cos/operations` で次を独断でできない（422）: 依頼文の変更（`project_request_human_only`）、
   draft でない task の objective・acceptance の変更（`task_goal_human_only`）、`enabled` の案件の root の起票
-  （`project_controller_owns_launch`）、本番 release の promote（`production_requires_human`）。人の発言を
+  （`project_controller_owns_launch`）、controller が `off` でない案件での本番 release の promote（`production_requires_human`）。人の発言を
   `instructed_by` に引いたときだけ通る。secret・人だけの操作は registry の EXCLUDED が断る。
 
 ## 人の手順

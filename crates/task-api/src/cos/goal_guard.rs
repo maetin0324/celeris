@@ -6,8 +6,9 @@
 //! - controller が `enabled` の案件に root（`parent` なし）を `task.create` で起こす → 422
 //!   `project_controller_owns_launch`（続きの root は controller が起票する）。
 //!
-//! - 案件 CoS（kind `project` の thread の run）が本番 release を promote する → 422 `production_requires_human`
-//!   （案件の自律運営の中で本番を変えない。統括 CoS の promote は従来の gate のまま）。
+//! - controller が `off` でない案件（`dry_run`・`shadow`・`enabled`）の案件 CoS（kind `project` の thread の run）が
+//!   本番 release を promote する → 422 `production_requires_human`（自律運営の中で本番を変えない）。状態行が無い・
+//!   `off` の案件と統括 CoS の promote は従来の gate のまま（I13）。
 //!
 //! 断った要求は呼び出し側が `audit.reject` で `rejected` の監査を残す。secret・外部公開・不可逆な操作は
 //! registry の EXCLUDED（既存の gate）が断るので、ここでは扱わない。
@@ -40,7 +41,14 @@ pub(crate) fn check(
     match m.action {
         "release.promote" => {
             let thread = store.chat_thread_get(thread_id).ok()??;
-            (thread.kind == task_core::chat::ChatThreadKind::Project).then(|| {
+            if thread.kind != task_core::chat::ChatThreadKind::Project {
+                return None;
+            }
+            // I13: controller の状態行が無い・`off` の案件は従来の gate のまま。
+            let state = store
+                .project_controller_state(thread.project_id.as_deref()?)
+                .ok()??;
+            (state.mode != ControllerMode::Off).then(|| {
                 unprocessable(
                     PRODUCTION_REQUIRES_HUMAN,
                     "a project CoS does not promote a production release on its own judgment; \

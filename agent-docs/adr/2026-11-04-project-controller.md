@@ -655,8 +655,9 @@ A1 の実装（migration `0112_project_controller.sql`、`SCHEMA_VERSION` 112。
 6. **拒否**: `crates/task-api/src/cos/goal_guard.rs` が `/cos/operations` の `instructed_by` の無い要求を断る:
    `project.update` の `request`（422 `project_request_human_only`）、draft でない task の `task.update` の `objective`・
    `acceptance`（422 `task_goal_human_only`）、mode `enabled` の案件への root の `task.create`（422 `project_controller_owns_launch`。
-   `controller_decision_id` は足していない。続きの root は controller が起票する）、案件 thread の run の `release.promote`
-   （422 `production_requires_human`。§A3 に無い行を足した。統括 CoS の promote は従来の gate のまま）。断った要求は `rejected` の監査。
+   `controller_decision_id` は足していない。続きの root は controller が起票する）、controller が `off` でない案件の案件 thread の
+   run の `release.promote`（422 `production_requires_human`。§A3 に無い行を足した。状態行が無い・`off` の案件と統括 CoS の
+   promote は従来の gate のまま〈I13。既存の試験 `cos_ops_admin_config_daemon_and_external_effects_run_once` の挙動〉）。断った要求は `rejected` の監査。
 7. **dry-run**: HTTP の `POST …/controller/dry-run` は足さず、`TsProjectDecider::dry_run`（何も書かない）を足した。
    API state に TS の口が無い（script layer は dispatcher 側）ため。HTTP の route は未達。
 8. **E2E** は 1 file でなく試験の対象の crate に置いた（接頭辞 `project_cos_`、計 20 件）: task-dispatch の

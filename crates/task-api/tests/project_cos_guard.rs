@@ -253,6 +253,17 @@ async fn project_cos_controller_owns_launch() {
 #[tokio::test]
 async fn project_cos_refuses_production() {
     let c = project_cos().await;
+    // 自律運営の中（controller が off でない案件）の案件 CoS。
+    c.env
+        .store
+        .project_controller_set_mode(
+            &c.project,
+            ControllerMode::Shadow,
+            None,
+            "human:web",
+            OffsetDateTime::now_utc(),
+        )
+        .expect("mode");
     let promote = c
         .op(
             "prod-1",

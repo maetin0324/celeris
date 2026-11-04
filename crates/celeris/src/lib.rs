@@ -46,6 +46,12 @@ pub use daemon::bootstrap::{
 };
 pub use daemon::clusters::{ClusterMasters, wire_cluster_liveness_hooks};
 pub use daemon::run::{DaemonTestHooks, run, run_with_test_hooks};
+pub use daemon::script_exhaustive::{
+    EXHAUSTIVE_CALL_GAP, EXHAUSTIVE_CONSECUTIVE_ERRORS, EXHAUSTIVE_PROGRESS_EVERY,
+    EXHAUSTIVE_TIMEOUT_BACKOFF, EXHAUSTIVE_WALL_LIMIT, ExhaustiveOutcome, ExhaustiveTuning,
+    TargetProbe as ExhaustiveTargetProbe, TargetState as ExhaustiveTargetState,
+    drive as exhaustive_drive,
+};
 pub use daemon::script_layer::{
     RECONCILE_INTERVAL as SCRIPT_RECONCILE_INTERVAL, STARTUP_ACTOR as SCRIPT_STARTUP_ACTOR,
     ScriptGenerations, restore_reason as script_restore_reason,

@@ -291,7 +291,8 @@ async fn run_inner(
         _ => None,
     };
     // 付記 S5-1: API の登録の口を先に作る（isolate はまだ作らない。復元は下の `ScriptLayer::start`）。
-    let script_generations = ScriptLayer::prepare(&config, hooks.generation_registry);
+    let script_generations =
+        ScriptLayer::prepare(&config, hooks.generation_registry, &identity.instance_id);
     let (api, admin_rx) = match config.api.listen {
         Some(listen) => {
             // `standby` も起きてすぐ API を受ける（同じポートに `SO_REUSEPORT` で bind する）。

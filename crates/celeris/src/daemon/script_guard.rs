@@ -389,16 +389,14 @@ pub(crate) fn sweep(
             .filter(|(counted, _)| *counted == row.mode)
             .map(|(_, counters)| counters)
             .unwrap_or_default();
+        // ADR 2026-11-04-lane-rules-exhaustive-evidence D6: 昇格の gate と同じ立場を読む。
+        let reference = task_core::store::current_reference_sha256()?;
+        let exhaustive = store.script_exhaustive_standing(row.domain, &generation_id, reference)?;
         out.readiness.push(DomainReadiness {
             domain: row.domain,
             generation_id,
             mode: row.mode,
-            readiness: readiness(
-                row.domain,
-                row.mode,
-                &counters,
-                task_core::script_exhaustive::ScriptExhaustiveStanding::Missing,
-            ),
+            readiness: readiness(row.domain, row.mode, &counters, exhaustive),
         });
     }
     let ready: BTreeSet<_> = out

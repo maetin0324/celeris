@@ -23,6 +23,11 @@
 //!
 //! standby の daemon は isolate を作らず、復元も登録も行わない（503）。active になった後の最初の
 //! [`RECONCILE_INTERVAL`] で復元する。
+//!
+//! 網羅（ADR 2026-11-04-lane-rules-exhaustive-evidence D2・D3）: [`ScriptGenerationControl::exhaustive_start`] が
+//! `running` の行を書き、`super::script_exhaustive` の runner を tick の外の tokio task で起こす。runner は `ops` の
+//! lock を持たない。復元は他の instance の `running` の行を `aborted`（`daemon_restarted`）にし、停止は runner を
+//! 止めて `aborted`（`daemon_stopped`）を書いてから isolate を捨てる。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -38,14 +43,18 @@ use task_api::script_generations::{
     ScriptGenerationControl, ScriptGenerationError, SharedScriptGenerationControl,
 };
 use task_core::script_compare::{
-    NewScriptGeneration, ScriptDomainError, ScriptDomainModeRow, ScriptGeneration,
+    NewScriptGeneration, ScriptDomain, ScriptDomainError, ScriptDomainModeRow, ScriptGeneration,
     ScriptGenerationState, ScriptGenerationTransition, ScriptMode, ScriptModeChange,
 };
-use task_core::store::SCRIPT_RUNTIME_ACTOR;
+use task_core::script_exhaustive::{
+    NewScriptExhaustiveRun, ScriptExhaustiveRun, ScriptExhaustiveState, ScriptExhaustiveStopCode,
+};
+use task_core::store::{SCRIPT_RUNTIME_ACTOR, current_reference_sha256};
 use task_core::{InstanceRole, SharedRole, SqliteStore, StoreOptions};
 use task_dispatch::script_policy::{PolicyScript, PolicyScriptSource};
 use time::OffsetDateTime;
 
+use super::script_exhaustive::{self, ExhaustiveTuning, TargetProbe, TargetState};
 use super::script_policy::ScriptPolicy;
 use crate::config::Config;
 
@@ -156,14 +165,33 @@ pub struct ScriptGenerations {
     ops: tokio::sync::Mutex<()>,
     /// generation（`bundle_sha256`）ごとの口。失敗の記録の `isolate_epoch` を保つため使い回す。
     policies: Mutex<BTreeMap<String, Arc<ScriptPolicy>>>,
+    /// この daemon の起動ごとの id（網羅の行の `daemon_instance_id`。`GET /health` の `instance_id`）。
+    instance_id: String,
+    /// 網羅の runner を止める合図（停止で立てる）。
+    exhaustive_stop: tokio::sync::watch::Sender<bool>,
+    /// 走っている網羅の runner。
+    exhaustive_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// 網羅の時間の設定（本番は ADR の値。試験だけが変える）。
+    exhaustive_tuning: Mutex<ExhaustiveTuning>,
 }
 
 impl ScriptGenerations {
     /// 呼び出し元の tokio runtime で作る。`registry` の時計は試験で差し替えられる。
+    /// instance id は新しい ULID（試験の入口）。daemon は [`Self::for_instance`] で起動の id を渡す。
     pub fn new(
         registry: GenerationRegistry,
         state_dir: PathBuf,
         db: Arc<SqliteStore>,
+    ) -> Arc<Self> {
+        Self::for_instance(registry, state_dir, db, ulid::Ulid::new().to_string())
+    }
+
+    /// `instance_id` は daemon の起動ごとの id（網羅の行の `daemon_instance_id`）。
+    pub fn for_instance(
+        registry: GenerationRegistry,
+        state_dir: PathBuf,
+        db: Arc<SqliteStore>,
+        instance_id: String,
     ) -> Arc<Self> {
         Arc::new(Self {
             registry,
@@ -173,7 +201,31 @@ impl ScriptGenerations {
             ready: AtomicBool::new(false),
             ops: tokio::sync::Mutex::new(()),
             policies: Mutex::new(BTreeMap::new()),
+            instance_id,
+            exhaustive_stop: tokio::sync::watch::channel(false).0,
+            exhaustive_tasks: Mutex::new(Vec::new()),
+            exhaustive_tuning: Mutex::new(ExhaustiveTuning::default()),
         })
+    }
+
+    /// この daemon の起動ごとの id。
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    /// 網羅の時間の設定を変える（試験だけ。次に始める実行から効く）。
+    pub fn set_exhaustive_tuning(&self, tuning: ExhaustiveTuning) {
+        *lock(&self.exhaustive_tuning) = tuning;
+    }
+
+    /// 走っている網羅の runner が終わるのを待つ（試験の出来事待ち）。
+    pub async fn wait_exhaustive(&self) {
+        let tasks = std::mem::take(&mut *lock(&self.exhaustive_tasks));
+        for t in tasks {
+            if let Err(e) = t.await {
+                tracing::error!(error = %e, "script exhaustive: runner task failed");
+            }
+        }
     }
 
     /// 登録簿（試験が in-flight と generation を見る）。
@@ -202,7 +254,18 @@ impl ScriptGenerations {
     pub async fn restore(&self) -> Result<(), String> {
         let _ops = self.ops.lock().await;
         let db = Arc::clone(&self.db);
+        let instance = self.instance_id.clone();
         let (rows, halted) = blocking(move || {
+            // D3: 他の instance の `running` の網羅は途中から再開しない（`aborted`、`daemon_restarted`）。
+            let aborted = db
+                .script_exhaustive_abort_stale(&instance, OffsetDateTime::now_utc())
+                .map_err(|e| e.to_string())?;
+            if aborted > 0 {
+                tracing::warn!(
+                    aborted,
+                    "script exhaustive: runs left running by another daemon marked aborted"
+                );
+            }
             let rows = db
                 .script_domain_active_generations()
                 .map_err(|e| e.to_string())?;
@@ -351,6 +414,9 @@ impl ScriptGenerations {
 
     /// 全 isolate を捨てる（daemon の停止）。表は変えない（次の起動の復元が合わせる）。
     pub async fn shutdown(&self) {
+        // 網羅の runner を先に止め、`aborted`（`daemon_stopped`）を書き終えてから isolate を捨てる。
+        let _ = self.exhaustive_stop.send(true);
+        self.wait_exhaustive().await;
         let _ops = self.ops.lock().await;
         self.ready.store(false, Ordering::SeqCst);
         self.registry.shutdown().await;
@@ -468,6 +534,94 @@ impl ScriptGenerations {
         self.forget(&current.bundle_sha256);
         Ok(row)
     }
+
+    /// 網羅の行を書き、runner を起こす（D2・D3・D7）。表の拒否は store の `script_exhaustive_begin` が決める。
+    fn exhaustive_start_inner(
+        &self,
+        domain: ScriptDomain,
+        bundle_sha256: &str,
+        actor: &str,
+        reason: &str,
+    ) -> Result<ScriptExhaustiveRun, ScriptGenerationError> {
+        let live = |info: Option<celeris_script::GenerationInfo>| info.is_some_and(|i| !i.draining);
+        if domain == ScriptDomain::LaneRules && !live(self.registry.get(bundle_sha256)) {
+            // 行の generation は在るが、この daemon に isolate が無い（復元に落ちた等）。表を変えない。
+            if self
+                .db
+                .script_generation_by_sha256(bundle_sha256)
+                .map_err(store_err)?
+                .is_some_and(|g| g.state.is_live())
+            {
+                return Err(ScriptGenerationError::Unavailable(format!(
+                    "generation `{bundle_sha256}` has no isolate in this daemon"
+                )));
+            }
+        }
+        let reference = current_reference_sha256().map_err(store_err)?;
+        let run = self.db.script_exhaustive_begin(
+            &NewScriptExhaustiveRun {
+                domain,
+                bundle_sha256: bundle_sha256.to_owned(),
+                daemon_instance_id: self.instance_id.clone(),
+                requested_by: actor.to_owned(),
+                reason: reason.to_owned(),
+                reference_sha256: reference.to_owned(),
+            },
+            OffsetDateTime::now_utc(),
+        )?;
+        let pinned = self
+            .db
+            .script_generation_get(&run.generation_id)
+            .map_err(store_err)?
+            .ok_or_else(|| ScriptDomainError::GenerationNotFound(run.generation_id.clone()))
+            .map_err(ScriptGenerationError::from)
+            .and_then(|g| self.pinned(&g).map_err(ScriptGenerationError::Unavailable));
+        let policy = match pinned {
+            Ok(p) => p,
+            Err(e) => {
+                // 行を残したまま走らせない: 書いた行を `aborted`（`generation_gone`）で閉じる。
+                let _ = self.db.script_exhaustive_finish(
+                    &run.id,
+                    ScriptExhaustiveState::Aborted,
+                    Some(ScriptExhaustiveStopCode::GenerationGone),
+                    &run.counts,
+                    None,
+                    OffsetDateTime::now_utc(),
+                );
+                return Err(e);
+            }
+        };
+        let probe: TargetProbe = {
+            let registry = self.registry.clone();
+            let sha = run.bundle_sha256.clone();
+            Arc::new(move || match registry.get(&sha) {
+                None => TargetState::Gone,
+                Some(i) if i.draining => TargetState::Gone,
+                Some(i) if i.in_flight > 0 => TargetState::LiveInFlight,
+                Some(_) => TargetState::Ready,
+            })
+        };
+        let tuning = lock(&self.exhaustive_tuning).clone();
+        let handle = self.runtime.spawn(script_exhaustive::run(
+            policy,
+            probe,
+            tuning,
+            self.exhaustive_stop.subscribe(),
+            Arc::clone(&self.db),
+            run.id.clone(),
+        ));
+        let mut tasks = lock(&self.exhaustive_tasks);
+        tasks.retain(|t| !t.is_finished());
+        tasks.push(handle);
+        tracing::info!(
+            run = %run.id,
+            generation = %run.generation_id,
+            mode = %run.mode_at_start,
+            actor,
+            "script exhaustive: run started"
+        );
+        Ok(run)
+    }
 }
 
 impl ScriptGenerationControl for ScriptGenerations {
@@ -486,6 +640,19 @@ impl ScriptGenerationControl for ScriptGenerations {
         self.ensure_ready()?;
         let _ops = self.ops.blocking_lock();
         self.retire_locked(generation_id, actor, reason)
+    }
+
+    fn exhaustive_start(
+        &self,
+        domain: ScriptDomain,
+        bundle_sha256: &str,
+        actor: &str,
+        reason: &str,
+    ) -> Result<ScriptExhaustiveRun, ScriptGenerationError> {
+        self.ensure_ready()?;
+        // 登録・退役・見回りと行の読み書きを食い違わせない（runner 自身は lock を持たない。D3）。
+        let _ops = self.ops.blocking_lock();
+        self.exhaustive_start_inner(domain, bundle_sha256, actor, reason)
     }
 }
 
@@ -645,13 +812,15 @@ impl ScriptLayer {
     pub(crate) fn prepare(
         config: &Config,
         registry: Option<GenerationRegistry>,
+        instance_id: &str,
     ) -> Option<Arc<ScriptGenerations>> {
         let script = config.script.as_ref()?;
         let db = open_db(config)?;
-        Some(ScriptGenerations::new(
+        Some(ScriptGenerations::for_instance(
             registry.unwrap_or_else(|| GenerationRegistry::new(script.limits())),
             script.state_dir.clone(),
             Arc::new(db),
+            instance_id.to_owned(),
         ))
     }
 

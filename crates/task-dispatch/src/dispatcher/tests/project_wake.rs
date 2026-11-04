@@ -15,6 +15,8 @@ mod cursor;
 mod effects;
 #[path = "long_horizon_bench.rs"]
 mod long_horizon_bench;
+#[path = "long_horizon_pilot.rs"]
+mod long_horizon_pilot;
 #[path = "project_cos.rs"]
 mod project_cos;
 #[path = "project_controller_replay.rs"]

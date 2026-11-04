@@ -1,0 +1,7 @@
+{"code":"project_controller_owns_launch","dataset":"long_horizon_pilot_virtual","op":"task.create(enabled)","schema":"celeris.long-horizon-record/1","status":422,"test":"long_horizon_pilot_api_off_restores_the_legacy_cos_launch"}
+{"code":"","dataset":"long_horizon_pilot_virtual","op":"project.controller_put(off)","schema":"celeris.long-horizon-record/1","status":200,"test":"long_horizon_pilot_api_off_restores_the_legacy_cos_launch"}
+{"code":"production_requires_human","dataset":"long_horizon_pilot_virtual","op":"release.promote","schema":"celeris.long-horizon-record/1","status":422,"test":"long_horizon_pilot_api_production_gate_is_kept"}
+{"code":"","dataset":"long_horizon_pilot_virtual","op":"task.create(off)","schema":"celeris.long-horizon-record/1","status":200,"test":"long_horizon_pilot_api_off_restores_the_legacy_cos_launch"}
+{"code":"validation","dataset":"long_horizon_pilot_virtual","op":"task.approve","schema":"celeris.long-horizon-record/1","status":422,"test":"long_horizon_pilot_api_human_check_stays_with_the_human"}
+{"code":"cos_operation_not_allowed","dataset":"long_horizon_pilot_virtual","op":"secret.put","schema":"celeris.long-horizon-record/1","status":422,"test":"long_horizon_pilot_api_production_gate_is_kept"}
+{"code":"project_controller_mode_requires_human","dataset":"long_horizon_pilot_virtual","op":"project.controller_put","schema":"celeris.long-horizon-record/1","status":403,"test":"long_horizon_pilot_api_production_gate_is_kept"}

@@ -1,0 +1,47 @@
+{
+ "schema": "celeris.long-horizon-pilot-trial/1",
+ "trial": "61b5cbd40385deb6",
+ "harness": "stub",
+ "arm": "old.passive",
+ "case": "C08",
+ "project": "01M6M9RN4ADSV2NYYVA1VDK4S0",
+ "wall_secs": 13,
+ "rules": [],
+ "root_statuses": [],
+ "ops": [
+  {
+   "step": "deploy_ts",
+   "at": 0.2,
+   "bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8",
+   "mode_seed": "synthetic: temp DB only"
+  },
+  {
+   "step": "project_created",
+   "at": 0.4,
+   "project": "01M6M9RN4ADSV2NYYVA1VDK4S0",
+   "arm": "old.passive"
+  },
+  {
+   "step": "operator_cannot_raise_mode",
+   "at": 0.4,
+   "status": 403,
+   "code": "project_controller_mode_requires_human"
+  },
+  {
+   "step": "human_message",
+   "at": 0.4,
+   "thread": "01M6M9RNFSYPSZ4F49BT2ZV6CX"
+  },
+  {
+   "step": "state",
+   "at": 0.4,
+   "phase": "active",
+   "roots": []
+  },
+  {
+   "step": "wake_after_end",
+   "at": 13.4,
+   "new_roots": 0
+  }
+ ]
+}

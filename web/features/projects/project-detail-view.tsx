@@ -11,6 +11,7 @@ import { StatusBadge, statusView } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { TaskArtifactsPanel } from "../artifacts/task-artifacts-view";
 import { ProjectCosLink } from "../chat/threads/project-cos-link";
+import { ProjectControllerSection } from "./project-controller-panel";
 import { ProjectStatusBadge } from "./project-list-screen";
 import { projectDetailQuery } from "./project-queries";
 import { dagLayers, flattenTree, milestoneGroups, pendingByTask } from "./project-structure";
@@ -337,6 +338,13 @@ export function ProjectDetailScreen({
               </Link>
             </nav>
             <Overview detail={detail.data} />
+            <ProjectSection
+              title="自動運営"
+              testId="project-controller-section"
+              description="案件の長期方針・途中目標・関連 root task・今後の作業・待機と人の要件・過去の判断と根拠。"
+            >
+              <ProjectControllerSection detail={detail.data} />
+            </ProjectSection>
             <ProjectSection
               title="途中目標と仕事"
               testId="project-tree"

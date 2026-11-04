@@ -885,6 +885,14 @@ fn wakes_for_event(
         | Event::Answered { .. }
         | Event::ApprovalDecided { .. }
         | Event::PlanGateDecided { .. } => Some(ProjectWakeKind::DecisionAnswered),
+        // A9: root の取り込みが閉じた（merge・該当なし・取り込むものが無い見送り）。done の wake の時点では
+        // 取り込み前なので、閉じたときにもう一度起こす（次の root を起票できる）。
+        Event::IntegrationMerged { .. } | Event::IntegrationNotApplicable { .. } => {
+            Some(ProjectWakeKind::RootDone)
+        }
+        Event::DeliverySkipped { reason, .. } if reason.nothing_to_integrate() => {
+            Some(ProjectWakeKind::RootDone)
+        }
         Event::ClusterJobWaitFinished { .. }
         | Event::BrowserWaitResolved { .. }
         | Event::BrowserPrerequisiteResumed { .. } => Some(ProjectWakeKind::ExternalReleased),

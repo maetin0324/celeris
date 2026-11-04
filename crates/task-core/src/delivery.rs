@@ -66,6 +66,12 @@ impl DeliverySkipReason {
         }
     }
 
+    /// 取り込むものが無い（作業場所が git でない・取り込む commit が無い）。root の成果はそのまま有効で、
+    /// project controller はこの root を取り込み済みと同じに扱う（ADR 2026-11-04-project-controller 付記 A9）。
+    pub fn nothing_to_integrate(self) -> bool {
+        matches!(self, Self::NotGit | Self::NoCommits)
+    }
+
     /// 人が読む 1 行（受信箱の文面）。
     pub fn label(self) -> &'static str {
         match self {

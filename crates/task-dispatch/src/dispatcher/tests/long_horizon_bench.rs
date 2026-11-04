@@ -194,7 +194,7 @@ fn request_text(outcomes: &[&OutcomeSpec], invalid: bool) -> String {
 
 // ---- 本物の bundle を本物の V8 で呼ぶ口 ----
 
-struct RealTs {
+pub(super) struct RealTs {
     handle: celeris_script::ScriptRuntimeHandle,
     sha256: String,
 }
@@ -262,7 +262,7 @@ fn unavailable<'a>() -> PolicyFuture<'a> {
 }
 
 /// 本物の bundle（`CELERIS_SCRIPT_BUNDLE_DIR`）。無ければ REQUIRE で失敗、それ以外は SKIP を記録して None。
-fn real_ts(test: &str) -> Option<Arc<RealTs>> {
+pub(super) fn real_ts(test: &str) -> Option<Arc<RealTs>> {
     let dir = std::env::var_os("CELERIS_SCRIPT_BUNDLE_DIR").filter(|v| !v.is_empty());
     let Some(dir) = dir else {
         assert!(
@@ -1523,7 +1523,7 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-fn seed_grant(store: &SqliteStore, project: &str, now: OffsetDateTime) {
+pub(super) fn seed_grant(store: &SqliteStore, project: &str, now: OffsetDateTime) {
     use task_core::authority as a;
     store
         .write_tx::<_, task_core::StoreError, _>(|tx| {

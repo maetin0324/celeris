@@ -94,6 +94,26 @@ fn enable_grant_tx(
     Ok(())
 }
 
+/// A9: `POST /projects` の直後の案件は `proposed` で、これを `active` へ移す API は無い。人が `enabled` に上げる操作を
+/// 人の返事として同じ tx で `active` にする（`proposed` のままだと TS と Rust の検証が起票を断り続ける）。
+fn activate_proposed_tx(
+    tx: &rusqlite::Transaction<'_>,
+    project_id: task_core::ProjectId,
+) -> Result<(), ApiProblem> {
+    let proposed: bool = tx
+        .query_row(
+            "SELECT status = 'proposed' FROM projects WHERE id = ?1",
+            [project_id.to_string()],
+            |r| r.get(0),
+        )
+        .map_err(|e| ApiProblem::internal(e.to_string()))?;
+    if proposed {
+        SqliteStore::project_set_status_tx(tx, project_id, task_core::ProjectStatus::Active)
+            .map_err(store_problem)?;
+    }
+    Ok(())
+}
+
 /// `POST …/controller/wake` の本文。
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -287,6 +307,7 @@ async fn put_controller(
                 mode_outcome(change)?;
                 if raises_to_enabled {
                     enable_grant_tx(tx, &project, revision, &body, &by, at)?;
+                    activate_proposed_tx(tx, project_id)?;
                 }
                 Ok(())
             })?;

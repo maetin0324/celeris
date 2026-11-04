@@ -132,6 +132,8 @@ fn root_row(
             Event::IntegrationMerged { .. } | Event::IntegrationNotApplicable { .. } => {
                 merged = true
             }
+            // A9: 取り込むものが無い delivery の見送り（git でない・commit なし）は取り込み済みと同じ。
+            Event::DeliverySkipped { reason, .. } if reason.nothing_to_integrate() => merged = true,
             Event::IntegrationReopened { .. } => merged = false,
             Event::Transitioned { to, reason, .. } => {
                 if *to == Status::Done && reason == "review_pass" {

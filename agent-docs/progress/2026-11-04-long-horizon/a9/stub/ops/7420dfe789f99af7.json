@@ -1,0 +1,142 @@
+{
+ "schema": "celeris.long-horizon-pilot-trial/1",
+ "trial": "7420dfe789f99af7",
+ "harness": "stub",
+ "arm": "new",
+ "case": "C08",
+ "project": "01M6M9Q71JDEDMMDETFWZXRZ2T",
+ "wall_secs": 46,
+ "rules": [
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/achieved"
+ ],
+ "root_statuses": [
+  "done",
+  "done",
+  "done",
+  "done"
+ ],
+ "ops": [
+  {
+   "step": "deploy_ts",
+   "at": 0.3,
+   "bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8",
+   "mode_seed": "synthetic: temp DB only"
+  },
+  {
+   "step": "project_created",
+   "at": 0.5,
+   "project": "01M6M9Q71JDEDMMDETFWZXRZ2T",
+   "arm": "new"
+  },
+  {
+   "step": "operator_cannot_raise_mode",
+   "at": 0.5,
+   "status": 403,
+   "code": "project_controller_mode_requires_human"
+  },
+  {
+   "step": "set_mode",
+   "at": 0.5,
+   "mode": "enabled",
+   "reason": "pilot を有効にする",
+   "revision": null
+  },
+  {
+   "step": "state",
+   "at": 0.5,
+   "phase": "active",
+   "roots": []
+  },
+  {
+   "step": "state",
+   "at": 30.6,
+   "phase": "active",
+   "roots": [
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 31.6,
+   "phase": "active",
+   "roots": [
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 33.6,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 35.6,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 38.6,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done",
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 40.6,
+   "phase": "achieved",
+   "roots": [
+    "done",
+    "done",
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "wake_after_end",
+   "at": 43.6,
+   "new_roots": 0
+  },
+  {
+   "step": "set_mode",
+   "at": 43.6,
+   "mode": "off",
+   "reason": "従来の CoS に戻す",
+   "revision": null
+  },
+  {
+   "step": "wake_after_off",
+   "at": 43.6,
+   "status": 200,
+   "added": false
+  },
+  {
+   "step": "after_off",
+   "at": 46.7,
+   "decisions_at_end": 9,
+   "decisions_after": 9,
+   "mode": "off",
+   "pending_wakes": 1
+  }
+ ]
+}

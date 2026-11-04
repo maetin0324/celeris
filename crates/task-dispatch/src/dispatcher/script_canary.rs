@@ -471,9 +471,49 @@ impl Dispatcher {
         candidates.map(|c| (harness, c))
     }
 
-    /// ADR 2026-11-04-ts-execution-gate-domain: `execution_gate` の compare・canary・ts。TS の側で Rust の検証を
-    /// 通った出力を返す。それ以外は `None`（Rust の判定のまま）。単位は task id。
-    pub(in crate::dispatcher) fn canary_execution_gate(
+    /// ADR 2026-11-04-ts-execution-gate-domain: Rust の gate の判定。対象外の規則と人の明示に当たらない task だけ、
+    /// 規則表の部分を領域 `execution_gate` と比べる。canary の TS の側と `ts` では Rust の検証を通った TS の出力を使う。
+    /// 閾値・`source`・`shadow`・`depth`・`policy_version` は Rust の値のまま。
+    pub(in crate::dispatcher) fn execution_gate_decide(
+        &mut self,
+        task: &Task,
+        features: &task_core::TaskFeatures,
+        human_execution: Option<task_core::ExecutionMode>,
+        cos_hint_compound: bool,
+        shadow: bool,
+        at: task_core::GateThreshold,
+    ) -> task_core::ExecutionGateDecision {
+        let inputs = task_core::ExecutionGateInputs::default();
+        let mut decision = task_core::decide_execution_gate_at(
+            task,
+            features,
+            human_execution,
+            cos_hint_compound,
+            inputs,
+            shadow,
+            at,
+        );
+        if human_execution.is_none() && task_core::out_of_scope_rule(task).is_none() {
+            let input = task_core::execution_gate::ExecutionGateInput::from_task(
+                task,
+                features,
+                cos_hint_compound,
+                inputs,
+                at.threshold,
+            );
+            if let Some(ts) = self.canary_execution_gate(task.id, input) {
+                decision.signals = ts.gate_signals();
+                decision.mode = ts.mode;
+                decision.score = ts.score;
+                decision.rule_id = ts.rule_id;
+            }
+        }
+        decision
+    }
+
+    /// `execution_gate` の compare・canary・ts。TS の側で Rust の検証を通った出力を返す。それ以外は `None`
+    /// （Rust の判定のまま）。単位は task id。
+    fn canary_execution_gate(
         &mut self,
         task_id: TaskId,
         input: task_core::execution_gate::ExecutionGateInput,

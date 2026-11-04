@@ -1,0 +1,192 @@
+{
+  "achieved_at": 90000,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "daemon",
+      "at": 300
+    },
+    {
+      "actor": "worker",
+      "at": 300
+    },
+    {
+      "actor": "reviewer",
+      "at": 3900
+    },
+    {
+      "actor": "cos",
+      "at": 4500
+    },
+    {
+      "actor": "daemon",
+      "at": 4800
+    },
+    {
+      "actor": "worker",
+      "at": 4800
+    },
+    {
+      "actor": "reviewer",
+      "at": 8400
+    },
+    {
+      "actor": "daemon",
+      "at": 8700
+    },
+    {
+      "actor": "human",
+      "at": 86400
+    },
+    {
+      "actor": "cos",
+      "at": 86400
+    },
+    {
+      "actor": "cos",
+      "at": 86400
+    },
+    {
+      "actor": "worker",
+      "at": 86400
+    },
+    {
+      "actor": "reviewer",
+      "at": 90000
+    }
+  ],
+  "bench_version": 1,
+  "case": "C10",
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 3900,
+      "kind": "repeat_failure"
+    },
+    {
+      "at": 8400,
+      "kind": "repeat_failure"
+    }
+  ],
+  "horizon_secs": 259200,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    },
+    {
+      "at": 86400,
+      "class": "required",
+      "kind": "answer"
+    }
+  ],
+  "invocations": [
+    {
+      "at": 300,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 4500,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 4800,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 8400,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 86400,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 86400,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 86400,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 90000,
+      "role": "reviewer",
+      "usage": null
+    }
+  ],
+  "questions": [
+    "attempts_exhausted:o1"
+  ],
+  "roots": [
+    {
+      "acceptance_sha256": "896f4cb144e7df780546e1d70555a53eaaf1cc6d92863cc8f5a44489611a4615",
+      "attempt": 1,
+      "created_at": 300,
+      "created_by": "daemon",
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "failed"
+      ]
+    },
+    {
+      "acceptance_sha256": "896f4cb144e7df780546e1d70555a53eaaf1cc6d92863cc8f5a44489611a4615",
+      "attempt": 2,
+      "created_at": 4800,
+      "created_by": "daemon",
+      "logical_id": "o1:2",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "failed"
+      ]
+    },
+    {
+      "acceptance_sha256": "896f4cb144e7df780546e1d70555a53eaaf1cc6d92863cc8f5a44489611a4615",
+      "attempt": 3,
+      "created_at": 86400,
+      "created_by": "cos",
+      "logical_id": "o1:3",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 90000
+}

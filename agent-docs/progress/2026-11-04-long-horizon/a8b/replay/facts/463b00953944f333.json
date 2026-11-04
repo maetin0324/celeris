@@ -1,0 +1,129 @@
+{
+  "achieved_at": 34500,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "human",
+      "at": 7200
+    },
+    {
+      "actor": "human",
+      "at": 28800
+    },
+    {
+      "actor": "cos",
+      "at": 28800
+    },
+    {
+      "actor": "cos",
+      "at": 28800
+    },
+    {
+      "actor": "worker",
+      "at": 29100
+    },
+    {
+      "actor": "human",
+      "at": 30900
+    },
+    {
+      "actor": "reviewer",
+      "at": 34500
+    },
+    {
+      "actor": "cos",
+      "at": 34500
+    }
+  ],
+  "bench_version": 1,
+  "case": "C05",
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 7200,
+      "kind": "outcomes_invalid"
+    },
+    {
+      "at": 29100,
+      "kind": "plan_invalid"
+    }
+  ],
+  "horizon_secs": 259200,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    },
+    {
+      "at": 7200,
+      "class": "required",
+      "kind": "request_change"
+    },
+    {
+      "at": 28800,
+      "class": "avoidable",
+      "kind": "nudge"
+    },
+    {
+      "at": 30900,
+      "class": "required",
+      "kind": "answer"
+    }
+  ],
+  "invocations": [
+    {
+      "at": 28800,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 29100,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 34500,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 34500,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [],
+  "roots": [
+    {
+      "acceptance_sha256": "72034d2f1570e0f2c507f1772ad2d3533a0c7f48ed645c7a257690ba90d901e5",
+      "attempt": 1,
+      "created_at": 28800,
+      "created_by": "cos",
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 34500
+}

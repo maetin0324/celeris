@@ -1,0 +1,29 @@
+{
+ "schema": "celeris.long-horizon-case/1",
+ "case": "C09",
+ "name": "consult_short_continue",
+ "request_outcomes": [
+  {
+   "id": "o1",
+   "title": "直近の不具合の修正（pinnacor-o1）",
+   "acceptance": [
+    "pinnacor-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  },
+  {
+   "id": "o2",
+   "title": "修正の続き（pinnacor-o2）",
+   "acceptance": [
+    "pinnacor-o2: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o1"
+   ]
+  }
+ ],
+ "budget": {
+  "tokens_per_trial": 1000000,
+  "wall_secs": 14400
+ }
+}

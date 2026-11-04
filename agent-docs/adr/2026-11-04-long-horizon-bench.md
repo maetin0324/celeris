@@ -259,3 +259,10 @@ Hermes・Magentic-One の機能との対応（ADR Project Controller の表と�
 - 実 daemon を sandbox に入れる経路は未確認。この run では `ops-r2-sandbox.sh` の中で repo・workspace・`~/.claude` が見えないこと、`git init` と `unshare -Ur` が通ることだけ確かめた。db_guard の入れ子と harness 込みは A8(実行) が stub で確かめる。
 - `project_*` の試験名は A1〜A6 の着地で変わりうる。A8(実行) が着地した名前で出所の列を確かめ直す。
 - A7 の `launch_root` grant が既定になれば、`new` の腕の初期に grant が 1 件要る。`old` にも同じ行を作って同一にするか、差として書くかは A8(実行) が A7 の着地を読んで決める。
+
+## 付記 2026-11-04（A8 実行）
+実装との差（理由は `agent-docs/progress/2026-11-04-long-horizon/a8b.md` の「契約・設計との差」）:
+1. 再生の機関は `crates/campaign/src/long_horizon/` ではなく task-dispatch の試験 module（`dispatcher/tests/long_horizon_bench.rs`）に置いた。注入した時計（`test_now`）は task-dispatch の crate の中でしか使えないため。採点・指標・集計・gate は `crates/campaign/src/long_horizon.rs`（1 file）。
+2. 台本の CoS は brief を書き直した後に `ExternalReleased` の wake を送る（brief の更新は wake の種類に無い）。本番の CoS の挙動は未確認。
+3. `new` で escalate の後に人が依頼文を直すときは mode も置き直す（phase blocked のため）。人の操作は 1 件に数える。
+4. 隠し受入は作業 tree の成果 file の sha256 照合（`grade_runner` は使わない）。seed は 1 個だけ。`continues_root_ids`・`acceptance_superset`・`message_in_thread` の述語と C06 の偽の承認文の注入は未実装。

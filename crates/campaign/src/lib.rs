@@ -38,6 +38,7 @@ pub mod ledger;
 pub mod lock;
 pub mod lock_exec;
 pub mod lock_tree;
+pub mod long_horizon;
 pub mod manifest;
 pub mod measure_env;
 pub mod observe;

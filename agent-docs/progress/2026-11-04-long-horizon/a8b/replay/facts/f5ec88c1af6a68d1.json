@@ -1,0 +1,228 @@
+{
+  "achieved_at": 9300,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "human",
+      "at": 600
+    },
+    {
+      "actor": "human",
+      "at": 1200
+    },
+    {
+      "actor": "human",
+      "at": 1800
+    },
+    {
+      "actor": "cos",
+      "at": 1800
+    },
+    {
+      "actor": "cos",
+      "at": 1800
+    },
+    {
+      "actor": "worker",
+      "at": 1800
+    },
+    {
+      "actor": "reviewer",
+      "at": 5400
+    },
+    {
+      "actor": "cos",
+      "at": 5400
+    },
+    {
+      "actor": "cos",
+      "at": 5400
+    },
+    {
+      "actor": "cos",
+      "at": 5400
+    },
+    {
+      "actor": "worker",
+      "at": 5700
+    },
+    {
+      "actor": "reviewer",
+      "at": 9300
+    },
+    {
+      "actor": "cos",
+      "at": 9300
+    },
+    {
+      "actor": "human",
+      "at": 14400
+    }
+  ],
+  "bench_version": 1,
+  "case": "C09",
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [],
+  "horizon_secs": 172800,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    },
+    {
+      "at": 600,
+      "class": "stimulus",
+      "kind": "message"
+    },
+    {
+      "at": 1200,
+      "class": "stimulus",
+      "kind": "message"
+    },
+    {
+      "at": 1800,
+      "class": "stimulus",
+      "kind": "message"
+    },
+    {
+      "at": 14400,
+      "class": "stimulus",
+      "kind": "message"
+    }
+  ],
+  "invocations": [
+    {
+      "at": 600,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 1200,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 1800,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 1800,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 1800,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 5400,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 5400,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 5400,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 5400,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 5700,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 9300,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 9300,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 14400,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [],
+  "roots": [
+    {
+      "acceptance_sha256": "24ef5e4b0eb85f95b1e7c5279ff7a3ec15f66369edfbe210be67f9a9807b022a",
+      "attempt": 1,
+      "created_at": 1800,
+      "created_by": "cos",
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "9ddfbd654d083ae557ec30562ed17f09075e903c00d58a76530a73f887968384",
+      "attempt": 1,
+      "created_at": 5400,
+      "created_by": "cos",
+      "logical_id": "o2:1",
+      "outcome": "o2",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [
+    {
+      "at": 600,
+      "index": 1,
+      "tasks_created_by_cos": 0
+    },
+    {
+      "at": 1200,
+      "index": 2,
+      "tasks_created_by_cos": 0
+    },
+    {
+      "at": 1800,
+      "index": 3,
+      "tasks_created_by_cos": 2
+    },
+    {
+      "at": 14400,
+      "index": 4,
+      "tasks_created_by_cos": 0
+    }
+  ],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 9300
+}

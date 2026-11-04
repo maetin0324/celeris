@@ -1,0 +1,29 @@
+{
+ "schema": "celeris.long-horizon-case/1",
+ "case": "C07",
+ "name": "daemon_restart",
+ "request_outcomes": [
+  {
+   "id": "o1",
+   "title": "外部 job の投入（vellumic-o1）",
+   "acceptance": [
+    "vellumic-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  },
+  {
+   "id": "o2",
+   "title": "結果の取り込み（vellumic-o2）",
+   "acceptance": [
+    "vellumic-o2: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o1"
+   ]
+  }
+ ],
+ "budget": {
+  "tokens_per_trial": 1000000,
+  "wall_secs": 14400
+ }
+}

@@ -1,0 +1,74 @@
+{
+ "case": "C08",
+ "name": "multi_root",
+ "bench_version": 1,
+ "outcomes": [
+  {
+   "id": "o1",
+   "title": "調査と実装（dorastiq-o1）",
+   "acceptance": [
+    "dorastiq-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  },
+  {
+   "id": "o2",
+   "title": "実験セル A（dorastiq-o2）",
+   "acceptance": [
+    "dorastiq-o2: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o1"
+   ]
+  },
+  {
+   "id": "o3",
+   "title": "実験セル B（dorastiq-o3）",
+   "acceptance": [
+    "dorastiq-o3: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o1"
+   ]
+  },
+  {
+   "id": "o4",
+   "title": "分析と報告（dorastiq-o4）",
+   "acceptance": [
+    "dorastiq-o4: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o2",
+    "o3"
+   ]
+  }
+ ],
+ "horizon_secs": 259200,
+ "attempts": {
+  "o1": [
+   "real"
+  ],
+  "o2": [
+   "real"
+  ],
+  "o3": [
+   "real"
+  ],
+  "o4": [
+   "real"
+  ]
+ },
+ "content": {
+  "o1": "minichunk C08 o1 verified: write+fsync+restart read-back ok\n",
+  "o2": "minichunk C08 o2 verified: write+fsync+restart read-back ok\n",
+  "o3": "minichunk C08 o3 verified: write+fsync+restart read-back ok\n",
+  "o4": "minichunk C08 o4 verified: write+fsync+restart read-back ok\n"
+ },
+ "events": [
+  {
+   "op": "unrelated_wakes_after_achieved",
+   "delay": 3600,
+   "n": 3
+  }
+ ]
+}

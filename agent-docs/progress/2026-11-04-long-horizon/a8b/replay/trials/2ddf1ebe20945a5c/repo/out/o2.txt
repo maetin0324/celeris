@@ -1,0 +1,1 @@
+minichunk C08 o2 verified: write+fsync+restart read-back ok

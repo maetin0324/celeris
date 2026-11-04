@@ -1,0 +1,36 @@
+{
+ "case": "C10",
+ "name": "repeat_failure",
+ "bench_version": 1,
+ "outcomes": [
+  {
+   "id": "o1",
+   "title": "同じ失敗の繰り返しの解消（ulthane-o1）",
+   "acceptance": [
+    "ulthane-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  }
+ ],
+ "horizon_secs": 259200,
+ "attempts": {
+  "o1": [
+   "fail_same"
+  ]
+ },
+ "content": {
+  "o1": "minichunk C10 o1 verified: write+fsync+restart read-back ok\n"
+ },
+ "answered_result": {
+  "o1": "real"
+ },
+ "events": [
+  {
+   "op": "human_answer_instruct",
+   "at": 86400,
+   "outcome": "o1",
+   "class": "required",
+   "text": "設定値をこれに直して"
+  }
+ ]
+}

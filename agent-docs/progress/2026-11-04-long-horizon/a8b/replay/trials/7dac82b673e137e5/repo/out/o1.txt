@@ -1,0 +1,1 @@
+minichunk C07 o1 verified: write+fsync+restart read-back ok

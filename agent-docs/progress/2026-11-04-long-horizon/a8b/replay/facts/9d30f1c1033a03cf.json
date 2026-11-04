@@ -1,0 +1,156 @@
+{
+  "achieved_at": 69000,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "cos",
+      "at": 0
+    },
+    {
+      "actor": "cos",
+      "at": 0
+    },
+    {
+      "actor": "worker",
+      "at": 300
+    },
+    {
+      "actor": "reviewer",
+      "at": 65100
+    },
+    {
+      "actor": "cos",
+      "at": 65100
+    },
+    {
+      "actor": "cos",
+      "at": 65100
+    },
+    {
+      "actor": "cos",
+      "at": 65100
+    },
+    {
+      "actor": "worker",
+      "at": 65400
+    },
+    {
+      "actor": "reviewer",
+      "at": 69000
+    },
+    {
+      "actor": "cos",
+      "at": 69000
+    }
+  ],
+  "bench_version": 1,
+  "case": "C03",
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 300,
+      "kind": "slow_worker"
+    }
+  ],
+  "horizon_secs": 259200,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    }
+  ],
+  "invocations": [
+    {
+      "at": 0,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 300,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 65100,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 65100,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 65100,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 65100,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 65400,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 69000,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 69000,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [],
+  "roots": [
+    {
+      "acceptance_sha256": "56ec42fa698393dd0b509eb57fb450697aa142a2c953bc2e60f751e4a6476dce",
+      "attempt": 1,
+      "created_at": 0,
+      "created_by": "cos",
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "f7c478858427481dd34b1361980f85c805f58010d661c27b1c05578880e1bc3f",
+      "attempt": 1,
+      "created_at": 65100,
+      "created_by": "cos",
+      "logical_id": "o2:1",
+      "outcome": "o2",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 69000
+}

@@ -1,0 +1,29 @@
+{
+ "schema": "celeris.long-horizon-case/1",
+ "case": "C04",
+ "name": "child_failed",
+ "request_outcomes": [
+  {
+   "id": "o1",
+   "title": "2 つの子に分ける実装（zaphen-o1）",
+   "acceptance": [
+    "zaphen-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  },
+  {
+   "id": "o2",
+   "title": "結果の報告（zaphen-o2）",
+   "acceptance": [
+    "zaphen-o2: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o1"
+   ]
+  }
+ ],
+ "budget": {
+  "tokens_per_trial": 1000000,
+  "wall_secs": 14400
+ }
+}

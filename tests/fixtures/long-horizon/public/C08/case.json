@@ -1,0 +1,50 @@
+{
+ "schema": "celeris.long-horizon-case/1",
+ "case": "C08",
+ "name": "multi_root",
+ "request_outcomes": [
+  {
+   "id": "o1",
+   "title": "調査と実装（dorastiq-o1）",
+   "acceptance": [
+    "dorastiq-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  },
+  {
+   "id": "o2",
+   "title": "実験セル A（dorastiq-o2）",
+   "acceptance": [
+    "dorastiq-o2: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o1"
+   ]
+  },
+  {
+   "id": "o3",
+   "title": "実験セル B（dorastiq-o3）",
+   "acceptance": [
+    "dorastiq-o3: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o1"
+   ]
+  },
+  {
+   "id": "o4",
+   "title": "分析と報告（dorastiq-o4）",
+   "acceptance": [
+    "dorastiq-o4: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o2",
+    "o3"
+   ]
+  }
+ ],
+ "budget": {
+  "tokens_per_trial": 1000000,
+  "wall_secs": 14400
+ }
+}

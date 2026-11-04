@@ -1,0 +1,79 @@
+{
+  "arms": {
+    "new": {
+      "autonomous_reach": 1.0,
+      "case_reach_rate": 1.0,
+      "double_effect": 0,
+      "fired_faults": 16,
+      "handoffs": 78,
+      "human_intervention": {
+        "avoidable": 0,
+        "required": 5,
+        "stimulus": 15
+      },
+      "missing": "tier=replay（実 LLM を使っていないので未計測）",
+      "quota": null,
+      "reach_rate": 1.0,
+      "reach_rate_excluding_c09": 1.0,
+      "recovered_faults": 16,
+      "recovery_rate": 1.0,
+      "tokens": null,
+      "trials": 10,
+      "verdict_pass": 10,
+      "wall_secs": null,
+      "wasteful_roots": 0
+    },
+    "old.passive": {
+      "autonomous_reach": 0.3,
+      "case_reach_rate": 1.0,
+      "double_effect": 0,
+      "fired_faults": 15,
+      "handoffs": 98,
+      "human_intervention": {
+        "avoidable": 10,
+        "required": 4,
+        "stimulus": 15
+      },
+      "missing": "tier=replay（実 LLM を使っていないので未計測）",
+      "quota": null,
+      "reach_rate": 1.0,
+      "reach_rate_excluding_c09": 1.0,
+      "recovered_faults": 6,
+      "recovery_rate": 0.4,
+      "tokens": null,
+      "trials": 10,
+      "verdict_pass": 3,
+      "wall_secs": null,
+      "wasteful_roots": 0
+    },
+    "old.proactive": {
+      "autonomous_reach": 0.9,
+      "case_reach_rate": 1.0,
+      "double_effect": 0,
+      "fired_faults": 16,
+      "handoffs": 84,
+      "human_intervention": {
+        "avoidable": 1,
+        "required": 4,
+        "stimulus": 15
+      },
+      "missing": "tier=replay（実 LLM を使っていないので未計測）",
+      "quota": null,
+      "reach_rate": 1.0,
+      "reach_rate_excluding_c09": 1.0,
+      "recovered_faults": 14,
+      "recovery_rate": 0.875,
+      "tokens": null,
+      "trials": 10,
+      "verdict_pass": 8,
+      "wall_secs": null,
+      "wasteful_roots": 1
+    }
+  },
+  "assumption_bound_cases": [
+    "C09"
+  ],
+  "dataset": "long_horizon_replay",
+  "schema": "celeris.long-horizon-summary/1",
+  "trials": 30
+}

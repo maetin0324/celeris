@@ -1,0 +1,39 @@
+{
+ "case": "C04",
+ "name": "child_failed",
+ "bench_version": 1,
+ "outcomes": [
+  {
+   "id": "o1",
+   "title": "2 つの子に分ける実装（zaphen-o1）",
+   "acceptance": [
+    "zaphen-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  },
+  {
+   "id": "o2",
+   "title": "結果の報告（zaphen-o2）",
+   "acceptance": [
+    "zaphen-o2: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o1"
+   ]
+  }
+ ],
+ "horizon_secs": 259200,
+ "attempts": {
+  "o1": [
+   "children_fail",
+   "real"
+  ],
+  "o2": [
+   "real"
+  ]
+ },
+ "content": {
+  "o1": "minichunk C04 o1 verified: write+fsync+restart read-back ok\n",
+  "o2": "minichunk C04 o2 verified: write+fsync+restart read-back ok\n"
+ }
+}

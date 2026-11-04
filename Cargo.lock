@@ -3207,6 +3207,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "celeris-campaign",
+ "celeris-script",
  "nix",
  "rusqlite",
  "serde",

@@ -1,0 +1,19 @@
+{
+ "schema": "celeris.long-horizon-case/1",
+ "case": "C02",
+ "name": "partial_result",
+ "request_outcomes": [
+  {
+   "id": "o1",
+   "title": "fsync 後の読み戻し（talmeric-o1）",
+   "acceptance": [
+    "talmeric-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  }
+ ],
+ "budget": {
+  "tokens_per_trial": 1000000,
+  "wall_secs": 14400
+ }
+}

@@ -1,0 +1,1 @@
+{"after_brief":"pc/review-failed/retry","after_second_failure":"pc/attempts-exhausted","first":"pc/review-failed","retry_key_suffix":"outcome:o1:2","schema":"celeris.long-horizon-record/1","test":"project_cos_ts_review_failed_retries_after_brief","waiting":"pc/review-failed/waiting"}

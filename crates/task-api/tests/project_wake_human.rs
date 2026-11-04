@@ -445,13 +445,20 @@ async fn project_wake_api_human_cos_is_not_counted() {
             post_json_with(OPS, &op_body("human-epoch", method, &path, body), &token),
         )
         .await;
-        assert_eq!(resp.status.as_u16(), 200, "{route:?}: {}", resp.text());
-        assert_eq!(
-            resp.json()["operation"]["state"],
-            "applied",
-            "{route:?}: {}",
-            resp.text()
-        );
+        if matches!(route, Route::ProjectCancel) {
+            // 案件の取り消しは不可逆（付記 A3 の 10）。controller が off でない案件の案件 CoS は
+            // instructed_by 無しでは 422 で断られる。断られても数えない。
+            assert_eq!(resp.status.as_u16(), 422, "{route:?}: {}", resp.text());
+            assert_eq!(resp.json()["code"], "irreversible_requires_human");
+        } else {
+            assert_eq!(resp.status.as_u16(), 200, "{route:?}: {}", resp.text());
+            assert_eq!(
+                resp.json()["operation"]["state"],
+                "applied",
+                "{route:?}: {}",
+                resp.text()
+            );
+        }
         assert_eq!(f.epoch(), 0, "{route:?} operations");
         assert!(f.wake_keys().is_empty(), "{route:?} operations");
     }

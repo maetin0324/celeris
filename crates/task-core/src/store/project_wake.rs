@@ -368,7 +368,9 @@ impl SqliteStore {
         let Some((mode, event_cursor)) = row else {
             return Ok(0);
         };
-        if !ControllerMode::parse(&mode).is_some_and(|m| m.accepts_wake(w.kind, &w.wake_key)) {
+        if !ControllerMode::parse(&mode)
+            .is_some_and(|m| m.accepts_wake(w.kind, &w.wake_key, w.source_event_id.is_some()))
+        {
             return Ok(0);
         }
         // 案件別 cursor（付記 A1 の 12）: 判断が既に畳んだ event 以下の再配送は wake にしない。

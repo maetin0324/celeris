@@ -378,3 +378,131 @@ async fn project_cos_ts_failure_classified() {
     );
     handle.shutdown();
 }
+
+/// review 不合格の後の輪（A3）: TS は案件 CoS に 1 回だけ頼み（replan）、CoS が brief を書き直すまでは待ち、
+/// 書き直したら同じ途中目標の次の試行の root（`outcome:o1:2`）を起票する。2 回目も落ちたら上限で人に escalate する。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_cos_ts_review_failed_retries_after_brief() {
+    let Some((handle, policy, _)) = real("project_cos_ts_review_failed_retries_after_brief") else {
+        return;
+    };
+    let db = db();
+    let pid = db.project.to_string();
+    let t0 = OffsetDateTime::now_utc().replace_nanosecond(0).expect("ns");
+    db.store
+        .project_controller_set_mode(&pid, ControllerMode::Enabled, None, "human:test", t0)
+        .expect("mode");
+    let at = |secs: i64| t0 + time::Duration::seconds(secs);
+    let input_at = |now: OffsetDateTime| {
+        let mut i = input(&db);
+        i.now = now.format(&Rfc3339).expect("now");
+        i
+    };
+    // 判断を tx1 で記録する（snapshot の decisions に載せる）。
+    let commit = |d: &mut TsProjectDecider,
+                  decision: &task_dispatch::project_controller::ProjectDecision,
+                  now: OffsetDateTime| {
+        let lease = db
+            .store
+            .project_controller_lease(&pid, "test", 60, now)
+            .expect("lease")
+            .expect("leased");
+        let new = task_core::store::NewProjectDecision {
+            id: ulid::Ulid::new().to_string(),
+            based_on_revision: lease.state.revision,
+            human_epoch: lease.state.human_epoch,
+            snapshot_sha256: "s".into(),
+            request_sha256: "r".into(),
+            generation_id: None,
+            proposal_json: d.take_record().expect("record"),
+            validation: decision.rule_id.clone(),
+            effect_json: serde_json::to_string(&decision.effect).expect("effect"),
+            has_effect: !matches!(decision.effect, ProjectEffect::None),
+            next_wake_at: None,
+            phase: decision.phase,
+        };
+        let ids: Vec<i64> = lease.wakes.iter().map(|w| w.id).collect();
+        db.store
+            .project_controller_commit(&pid, "test", &ids, &new, now)
+            .expect("commit");
+    };
+    let launch = |decision: task_dispatch::project_controller::ProjectDecision| -> TaskId {
+        let ProjectEffect::CreateRoot {
+            idempotency_key,
+            spec,
+            meta,
+        } = decision.effect
+        else {
+            panic!("expected a root launch, got {}", decision.rule_id);
+        };
+        let task = task_ops::add::build_task_with_roles(db.store.as_ref(), *spec, &[], &[], t0)
+            .expect("build");
+        let claim = task_core::store::IdempotencyClaim {
+            key: idempotency_key,
+            operation: "project_controller.create_root".into(),
+            request_hash: "x".into(),
+        };
+        db.store
+            .project_controller_create_root(&task, &claim, "daemon", meta.as_deref(), 0, t0)
+            .expect("create");
+        task.id
+    };
+    let mut d = decider(Arc::clone(&policy), &db);
+    let first = d.decide(&input_at(at(0))).expect("decide");
+    let _ = d.take_record();
+    let r1 = launch(first);
+    fail_review(&db, r1);
+    // 1. replan（CoS への入力）を記録する。
+    let replan = d.decide(&input_at(at(10))).expect("decide");
+    assert_eq!(replan.rule_id, "pc/review-failed");
+    commit(&mut d, &replan, at(10));
+    // 2. brief が古いうちは待つ（root は増えない）。
+    let waiting = d.decide(&input_at(at(20))).expect("decide");
+    let _ = d.take_record();
+    assert_eq!(waiting.rule_id, "pc/review-failed/waiting");
+    assert!(matches!(waiting.effect, ProjectEffect::None));
+    // 3. CoS が brief を書き直すと、次の試行の root を起票する。
+    db.store
+        .project_brief_put(&task_core::project_brief::ProjectBrief {
+            project_id: db.project,
+            objective: "土台".into(),
+            state: "R1 は計測の再現性で落ちた。次の root で直す".into(),
+            open_issues: Vec::new(),
+            next_actions: vec!["次の root で再現性を直す".into()],
+            waiting_on: Vec::new(),
+            evidence_refs: vec![format!("task:{r1}")],
+            updated_at: at(30),
+            updated_by: "cos:t".into(),
+        })
+        .expect("brief put");
+    let retry = d.decide(&input_at(at(40))).expect("decide");
+    let rec: Value = serde_json::from_str(&d.take_record().expect("record")).expect("json");
+    assert_eq!(retry.rule_id, "pc/review-failed/retry", "{rec}");
+    let ProjectEffect::CreateRoot {
+        idempotency_key, ..
+    } = &retry.effect
+    else {
+        panic!("expected a root launch");
+    };
+    assert!(
+        idempotency_key.ends_with("outcome:o1:2"),
+        "{idempotency_key}"
+    );
+    let r2 = launch(retry);
+    // 4. 2 回目も落ちたら、CoS に聞き直さず上限で人に escalate する。
+    fail_review(&db, r2);
+    let exhausted = d.decide(&input_at(at(50))).expect("decide");
+    let _ = d.take_record();
+    assert_eq!(exhausted.rule_id, "pc/attempts-exhausted");
+    assert!(matches!(
+        exhausted.effect,
+        ProjectEffect::OpenEscalation { .. }
+    ));
+    raw(
+        "review_retry.jsonl",
+        json!({"test": "project_cos_ts_review_failed_retries_after_brief", "first": "pc/review-failed",
+               "waiting": "pc/review-failed/waiting", "after_brief": "pc/review-failed/retry",
+               "retry_key_suffix": "outcome:o1:2", "after_second_failure": "pc/attempts-exhausted"}),
+    );
+    handle.shutdown();
+}

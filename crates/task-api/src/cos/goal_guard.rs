@@ -10,8 +10,12 @@
 //!   本番 release を promote する → 422 `production_requires_human`（自律運営の中で本番を変えない）。状態行が無い・
 //!   `off` の案件と統括 CoS の promote は従来の gate のまま（I13）。
 //!
-//! 断った要求は呼び出し側が `audit.reject` で `rejected` の監査を残す。secret・外部公開・不可逆な操作は
-//! registry の EXCLUDED（既存の gate）が断るので、ここでは扱わない。
+//! - 同じ範囲の案件 CoS が外部公開（`task.pr_merge`：forge 上の PR を merge する）を行う → 422
+//!   `external_publication_requires_human`、不可逆な削除・終端（`repo.delete`・`account.delete`・`org.delete`・
+//!   `skill.delete`・`project.cancel`）を行う → 422 `irreversible_requires_human`。
+//!
+//! 断った要求は呼び出し側が `audit.reject` で `rejected` の監査を残す。secret の書き込み（`PUT /secrets/…`）は
+//! registry の EXCLUDED が、routing の段の変更は human_only が断る（試験 `project_cos_refuses_production`）。
 
 use serde_json::Value;
 use task_core::TaskStore;
@@ -25,6 +29,46 @@ pub(crate) const PROJECT_REQUEST_HUMAN_ONLY: &str = "project_request_human_only"
 pub(crate) const TASK_GOAL_HUMAN_ONLY: &str = "task_goal_human_only";
 pub(crate) const PROJECT_CONTROLLER_OWNS_LAUNCH: &str = "project_controller_owns_launch";
 pub(crate) const PRODUCTION_REQUIRES_HUMAN: &str = "production_requires_human";
+pub(crate) const EXTERNAL_PUBLICATION_REQUIRES_HUMAN: &str = "external_publication_requires_human";
+pub(crate) const IRREVERSIBLE_REQUIRES_HUMAN: &str = "irreversible_requires_human";
+
+/// 案件 CoS が自律運営の中で独断で行えない操作と、断る code・文。
+fn autonomy_refusal(action: &str) -> Option<(&'static str, &'static str)> {
+    match action {
+        "release.promote" => Some((
+            PRODUCTION_REQUIRES_HUMAN,
+            "a project CoS does not promote a production release on its own judgment; \
+             relay the person's message (instructed_by)",
+        )),
+        "task.pr_merge" => Some((
+            EXTERNAL_PUBLICATION_REQUIRES_HUMAN,
+            "merging a pull request publishes the change outside Celeris; a project CoS does \
+             this only when relaying the person's message (instructed_by)",
+        )),
+        "repo.delete" | "account.delete" | "org.delete" | "skill.delete" | "project.cancel" => {
+            Some((
+                IRREVERSIBLE_REQUIRES_HUMAN,
+                "this operation cannot be undone; a project CoS does this only when relaying \
+                 the person's message (instructed_by)",
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// controller が `off` でない案件の案件 thread の run か（I13: 状態行が無い・`off` の案件と統括 CoS は従来の gate）。
+fn in_autonomous_project(store: &SqliteStore, thread_id: &str) -> bool {
+    let Ok(Some(thread)) = store.chat_thread_get(thread_id) else {
+        return false;
+    };
+    if thread.kind != task_core::chat::ChatThreadKind::Project {
+        return false;
+    }
+    let Some(project) = thread.project_id.as_deref() else {
+        return false;
+    };
+    matches!(store.project_controller_state(project), Ok(Some(state)) if state.mode != ControllerMode::Off)
+}
 
 fn present(body: &Value, field: &str) -> bool {
     body.get(field).is_some_and(|v| !v.is_null())
@@ -39,22 +83,9 @@ pub(crate) fn check(
 ) -> Option<ApiProblem> {
     let m = matched?;
     match m.action {
-        "release.promote" => {
-            let thread = store.chat_thread_get(thread_id).ok()??;
-            if thread.kind != task_core::chat::ChatThreadKind::Project {
-                return None;
-            }
-            // I13: controller の状態行が無い・`off` の案件は従来の gate のまま。
-            let state = store
-                .project_controller_state(thread.project_id.as_deref()?)
-                .ok()??;
-            (state.mode != ControllerMode::Off).then(|| {
-                unprocessable(
-                    PRODUCTION_REQUIRES_HUMAN,
-                    "a project CoS does not promote a production release on its own judgment; \
-                     relay the person's message (instructed_by)",
-                )
-            })
+        action if autonomy_refusal(action).is_some() => {
+            let (code, detail) = autonomy_refusal(action)?;
+            in_autonomous_project(store, thread_id).then(|| unprocessable(code, detail))
         }
         "project.update" if present(body, "request") => Some(unprocessable(
             PROJECT_REQUEST_HUMAN_ONLY,

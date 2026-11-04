@@ -168,6 +168,51 @@ async fn root_done_of_a_project_goes_to_the_project_cos_thread_without_new_threa
     f.join_all().await;
 }
 
+/// controller が `enabled` の案件の root の完了では、CoS への指示に「次の root は controller が起票する」を足す
+/// （付記 A3 の 9）。`off` の案件の root は従来の文のまま。
+#[tokio::test]
+async fn project_cos_root_done_tells_the_cos_the_controller_launches() {
+    let mut f = fixture(true);
+    f.tick();
+    let _thread = crate::test_support::project_cos_thread(&f.store, "案件A");
+    let project: String = f.count_text("SELECT project_id FROM chat_threads WHERE kind='project'");
+    let project_id: task_core::ProjectId = project.parse().expect("project id");
+    f.done_task_in(None, Some(project_id));
+    f.tick();
+    f.join_all().await;
+    f.store
+        .project_controller_set_mode(
+            &project,
+            task_core::project_wake::ControllerMode::Enabled,
+            None,
+            "human:test",
+            time::OffsetDateTime::now_utc(),
+        )
+        .expect("mode");
+    f.done_task_in(None, Some(project_id));
+    f.tick();
+    f.join_all().await;
+    let conn = rusqlite::Connection::open(&f.db_path).expect("db");
+    let mut stmt = conn
+        .prepare(
+            "SELECT m.text FROM chat_messages m JOIN root_done_summaries r ON r.input_message_id = m.id \
+             ORDER BY m.seq",
+        )
+        .expect("prepare");
+    let texts: Vec<String> = stmt
+        .query_map([], |r| r.get(0))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(!texts[0].contains("project controller"), "{}", texts[0]);
+    assert!(
+        texts[1].contains("CoS は root を起票しない"),
+        "{}",
+        texts[1]
+    );
+}
+
 #[tokio::test]
 async fn a_child_done_neither_starts_a_run_nor_notifies() {
     let mut f = fixture(true);

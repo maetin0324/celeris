@@ -46,6 +46,12 @@ const COS_INSTRUCTION: &str = "root task が完了しました。下は DB と�
 (4) 人が次にやること（本番への移行・未解決事項・提案・follow-up）を、人が数十秒で読める分量（日本語で 10 行以内）で\
 このスレッドに書いてください。事実に無いことは書かず、分からない点は「不明」と書く。task や組織は変更しないこと。";
 
+/// controller が `enabled` の案件の root のとき、CoS への指示に足す文（ADR 2026-11-04-project-controller 付記 A3 の 9）。
+/// 次の root は controller が起票するので、CoS は起票せず、続け方の判断は brief に書く。
+const CONTROLLER_ENABLED_NOTE: &str = "この案件は project controller が有効（enabled）です。次の root は controller が\
+起票するので、CoS は root を起票しないこと。続け方の判断（目標の見直し・直す点）は案件の要約（brief、\
+project.status_put）に書くこと。";
+
 fn message_key(task_id: TaskId, seq: u64) -> String {
     format!("root-done:{}", root_done::summary_key(task_id, seq))
 }
@@ -261,8 +267,13 @@ impl CosChatLaunch {
                         .cos_thread_for_task(&task_key, now)
                         .map_err(|e| e.to_string())?,
                 };
+                let note = if self.controller_enabled_for(row.task_id) {
+                    format!("\n\n{CONTROLLER_ENABLED_NOTE}")
+                } else {
+                    String::new()
+                };
                 let text = format!(
-                    "{COS_INSTRUCTION}\n\n{}",
+                    "{COS_INSTRUCTION}{note}\n\n{}",
                     root_done::facts_block(&facts, self.config.web_base_url.as_deref())
                 );
                 let posted = self
@@ -344,6 +355,20 @@ impl CosChatLaunch {
     }
 
     /// ADR 2026-10-22-cos-fixed-threads D3: 「[統括 CoS] 」「[CoS: <案件>] 」。引けなければ空。
+    /// root の案件の controller が `enabled` か（読めなければ `false`: 従来の文のまま）。
+    fn controller_enabled_for(&self, task_id: TaskId) -> bool {
+        let Ok(Some(task)) = self.store.get(task_id) else {
+            return false;
+        };
+        let Some(project) = task.project_id else {
+            return false;
+        };
+        matches!(
+            self.store.project_controller_state(&project.to_string()),
+            Ok(Some(state)) if state.mode == task_core::project_wake::ControllerMode::Enabled
+        )
+    }
+
     fn thread_label_prefix(&self, thread_id: &str) -> String {
         self.store
             .chat_thread_get(thread_id)

@@ -5,11 +5,11 @@
 #    - task-dispatch: A1 の tick に A3 の TsProjectDecider を入れ、fake の script で dry-run 以外の経路
 #      （shadow→enable、off への rollback、off と状態行なしの一致、explanation の監査、失敗の分類、runaway の停止、
 #      同じ問いを聞き直さない、worker の報告の命令を無視、TS が使えないときの fail closed、受け入れ条件を狭めた出力の拒否）。
-#    - task-api: CoS の拒否（依頼文・objective/acceptance・controller の起票・本番 promote・secret・人だけの操作）と
+#    - task-api: CoS の拒否（依頼文・objective/acceptance・controller の起票・本番 promote・外部公開・不可逆・secret・人だけの操作）と
 #      受信箱の代答が既存の 7 類型の basis を要すること。
 #    - celeris: 本物の bundle を本物の V8 で（dry-run の行数の差分 0、規則 1 行の変更で判定が変わる〈cargo 0〉、
-#      brief・題の命令で判定が変わらない、失敗の分類つきの replan）。CELERIS_SCRIPT_REQUIRE_BUNDLE=1 で SKIP を失敗にする。
-#    合計 14 件未満、失敗・SKIP が 1 件でもあれば失敗。
+#      brief・題の命令で判定が変わらない、失敗の分類つきの replan、review 不合格→brief の更新→次の試行→上限で escalate）。CELERIS_SCRIPT_REQUIRE_BUNDLE=1 で SKIP を失敗にする。
+#    合計 25 件未満、失敗・SKIP が 1 件でもあれば失敗。
 # 2. 試験が書いた raw（celeris.long-horizon-record/1）を読み、shadow の CoS run 数 0・injection の root 数 0・
 #    拒否の code・runaway の停止（escalate 1、blocked）を検査する。
 # 3. control-ts の領域の単体試験と fixture の不変条件（compare.mjs）。
@@ -64,10 +64,10 @@ run_suite() {
   [ "$passed" -ge "$min" ] || fail "only $passed project_cos_ tests passed in $name (need >= $min)"
   total=$((total + passed))
 }
-run_suite dispatch 11 -p task-dispatch --lib -E 'test(/(^|::)project_cos_/)'
-run_suite api 7 -p task-api --test project_cos_guard -E 'test(/^project_cos_/)'
-run_suite celeris 4 -p celeris --test project_cos_shadow -E 'test(/^project_cos_/)'
-[ "$total" -ge 22 ] || fail "only $total project_cos_ tests (need >= 22)"
+run_suite dispatch 12 -p task-dispatch --lib -E 'test(/(^|::)project_cos_/)'
+run_suite api 8 -p task-api --test project_cos_guard -E 'test(/^project_cos_/)'
+run_suite celeris 5 -p celeris --test project_cos_shadow -E 'test(/^project_cos_/)'
+[ "$total" -ge 25 ] || fail "only $total project_cos_ tests (need >= 25)"
 [ ! -s "$out/skip.log" ] || fail "bundle SKIP recorded: $(cat "$out/skip.log")"
 echo "project_cos_ tests passed: $total"
 
@@ -118,11 +118,15 @@ need(dr.get("row_delta") == 0 and dr.get("action") == "launch_root", f"dry-run (
 dm = one("project_cos_dry_run_on_request")
 need(dm.get("decisions") == 2 and dm.get("effect") == "suppressed" and dm.get("roots") == 0
      and dm.get("cos_runs") == 0 and dm.get("calls_without_request") == 0, f"dry-run mode: {dm}")
+rr = one("project_cos_ts_review_failed_retries_after_brief")
+need(rr.get("after_brief") == "pc/review-failed/retry" and rr.get("retry_key_suffix") == "outcome:o1:2"
+     and rr.get("after_second_failure") == "pc/attempts-exhausted", f"review retry loop: {rr}")
 tc = one("project_cos_ts_change_without_rust")
 need(tc.get("before_secs") == 3600 and tc.get("after_secs") == 60 and tc.get("cargo_invocations") == 0, f"ts change: {tc}")
 codes = {r.get("refusal_code") for name, rs in rows.items() for r in rs if r.get("refusal_code")}
 for code in ("project_request_human_only", "task_goal_human_only", "project_controller_owns_launch",
-             "production_requires_human", "cos_basis_missing"):
+             "production_requires_human", "cos_basis_missing", "external_publication_requires_human",
+             "irreversible_requires_human"):
     need(code in codes, f"refusal code not recorded: {code}")
 print(json.dumps({"tests": len(rows), "rows": sum(len(v) for v in rows.values()), "refusal_codes": sorted(codes),
                   "problems": problems}, ensure_ascii=False))

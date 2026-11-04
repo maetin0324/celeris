@@ -393,6 +393,27 @@ async fn project_cos_dry_run_on_request() {
     assert_eq!(c.decisions().len(), 1);
     assert_eq!(c.calls(), 1);
     assert_eq!(pending_wakes(&c.store, &c.p), 0);
+    // event から写した外部待ちの解除（cluster job・browser。source_event_id あり）も dry_run では積まない。
+    let ingested = c
+        .store
+        .project_wake_ingest(
+            &[NewProjectWake {
+                project_id: pid.clone(),
+                wake_key: format!("external:{}:999999", t.id),
+                kind: ProjectWakeKind::ExternalReleased,
+                source_event_id: Some(999_999),
+                source_ref: None,
+            }],
+            None,
+            0,
+            c.env.now(),
+        )
+        .unwrap();
+    assert_eq!(ingested, 0, "dry_run ignores event-sourced external wakes");
+    c.env.advance(1);
+    tick(&mut c.d);
+    assert_eq!(c.decisions().len(), 1);
+    assert_eq!(c.calls(), 1);
     // 人が頼む（外部待ちの解除の wake。API の POST …/controller/wake と同じ行）ともう 1 回判定する。
     c.store
         .project_wake_ingest(

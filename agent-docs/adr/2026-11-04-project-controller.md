@@ -663,12 +663,28 @@ A1 の実装（migration `0112_project_controller.sql`、`SCHEMA_VERSION` 112。
    dispatcher 側）ため、判定は dispatcher の tick が行う。
    - 頼み: 人が mode を `dry_run` に置くと同じ tx で wake `dry_run:<revision>`（kind `human_changed`）を 1 件積む。もう一度は
      `POST …/controller/wake`（kind `external_released`）。event・cron・停滞・人の発言の wake は積まない
-     （`ControllerMode::accepts_wake`）。mode を上げるのは人だけ（CoS の `project.controller_put` は 403）。
+     （`ControllerMode::accepts_wake`）。event から写した `external_released`（cluster job・browser の待ちの解除。
+     `source_event_id` あり）も `dry_run` では積まない（attempt 3 で直した。試験 `project_cos_dry_run_on_request`）。mode を上げるのは人だけ（CoS の `project.controller_put` は 403）。
    - 評価: `ControllerMode::evaluates`（`off` 以外）で lease・tx1 を通し、TS の口は `shadow` と同じく領域 `compare` 以上。
      判断の行は mode `dry_run`・効果 `suppressed`（tx1 と効果の門の既存の規則）。`next_wake_at` は置かず、phase も変えない。
      結果は `GET …/controller/decisions` の `proposal_json` で見る。表の行は判断・wake・`revision` だけ増える（「書かない」から変えた）。
    - `TsProjectDecider::dry_run`（試験だけが呼んだ関数）は消した。`project.controller_report` の route は無いので、
      422 `project_controller_owns_launch` の文は brief の更新（`project.status_put`）か人の発言の取り次ぎを案内する。
-8. **E2E** は 1 file でなく試験の対象の crate に置いた（接頭辞 `project_cos_`、計 22 件）: task-dispatch の
-   `dispatcher/tests/project_cos.rs`（11、fake の script で tick を通す）、task-api の `tests/project_cos_guard.rs`（7）、
-   celeris の `tests/project_cos_shadow.rs`（4、本物の bundle）。`scripts/dev/test-project-cos-shadow.sh` が 3 つを走らせ raw を検査する。
+8. **E2E** は 1 file でなく試験の対象の crate に置いた（接頭辞 `project_cos_`、計 25 件）: task-dispatch の
+   `dispatcher/tests/project_cos.rs` と `tests/cos_chat_root_done.rs`（12、fake の script で tick を通す）、task-api の
+   `tests/project_cos_guard.rs`（8）、celeris の `tests/project_cos_shadow.rs`（5、本物の bundle）。
+   `scripts/dev/test-project-cos-shadow.sh` が 3 つを走らせ raw を検査する。
+9. **review 不合格の後の輪**（attempt 3）: TS は review 不合格の root について、決定的 check が落ちた（`worker_bug`）なら
+   直ちに同じ途中目標の次の試行の root（`outcome:<id>:<n+1>`、規則 `pc/review-failed/retry`）を起票する。それ以外は
+   案件 CoS に `replan` を 1 回だけ頼み、brief の `updated_at` がその判断より新しくなるか、待ちの時間（`humanWaitSecs`）が
+   過ぎたら次の試行を起票する。直前の root が試行の上限（`max_root_attempts_per_outcome`）なら CoS に聞かず
+   `attempts_exhausted:<id>` で人に escalate する（無限に待たない・聞き直さない）。brief は本文を読まず時刻だけを使う（I11）。
+   `POST …/controller/report` は足さず、CoS の返事は brief の更新で表す（未達 1 のまま）。root_done の CoS への指示には、
+   controller が `enabled` の案件のとき「次の root は controller が起票する。CoS は起票せず、判断は brief に書く」を足した
+   （`cos_chat/root_done.rs`）。試験: vitest 4 件、`project_cos_ts_review_failed_retries_after_brief`（本物の bundle）、
+   `project_cos_root_done_tells_the_cos_the_controller_launches`。
+10. **外部公開・不可逆な操作の拒否**（attempt 3）: controller が `off` でない案件の案件 thread の run が `instructed_by` 無しで
+   行う `task.pr_merge` を 422 `external_publication_requires_human`、`repo.delete`・`account.delete`・`org.delete`・
+   `skill.delete`・`project.cancel` を 422 `irreversible_requires_human` で断る（`goal_guard::autonomy_refusal`）。
+   `off`・状態行なしの案件と統括 CoS は従来の gate（I13）。secret の書き込みは registry の EXCLUDED、routing の段は
+   human_only が断る。試験 `project_cos_refuses_production`・`project_cos_irreversible_gate_only_in_autonomy`。

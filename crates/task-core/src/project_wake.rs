@@ -102,9 +102,11 @@ impl ControllerMode {
 
     /// この mode の案件に wake を積むか。`shadow`・`enabled` は全部、`dry_run` は人・CoS の頼み
     /// （mode を `dry_run` に置いたときの `dry_run:<revision>` と `POST …/controller/wake` の外部待ちの解除）だけ。
-    pub fn accepts_wake(self, kind: ProjectWakeKind, wake_key: &str) -> bool {
+    /// event から写した `external_released`（cluster job・browser の待ちの解除。`from_event`）は `dry_run` では積まない。
+    pub fn accepts_wake(self, kind: ProjectWakeKind, wake_key: &str, from_event: bool) -> bool {
         self.wakes()
             || (self == ControllerMode::DryRun
+                && !from_event
                 && (kind == ProjectWakeKind::ExternalReleased
                     || wake_key.starts_with(DRY_RUN_WAKE_PREFIX)))
     }

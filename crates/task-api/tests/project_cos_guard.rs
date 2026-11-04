@@ -298,7 +298,85 @@ async fn project_cos_refuses_production() {
         .op("prod-3", "POST", "/api/v1/routing/stages", json!({}), false)
         .await;
     assert_eq!(stage.status.as_u16(), 422, "{}", stage.text());
-    assert!(c.rejected() >= 3);
+    // 外部公開（PR の merge）と不可逆な操作（repo・account・org・skill の削除、案件の取り消し）。
+    let task = c.task_in_project(Status::Done);
+    let cases = [
+        (
+            "POST",
+            format!("/api/v1/tasks/{}/changes/agent-platform/pr/merge", task.id),
+            "external_publication_requires_human",
+        ),
+        (
+            "DELETE",
+            "/api/v1/repos/r1".to_owned(),
+            "irreversible_requires_human",
+        ),
+        (
+            "DELETE",
+            "/api/v1/llm/sources/claude/accounts/a1".to_owned(),
+            "irreversible_requires_human",
+        ),
+        (
+            "DELETE",
+            "/api/v1/org/software-engineering".to_owned(),
+            "irreversible_requires_human",
+        ),
+        (
+            "DELETE",
+            "/api/v1/skills/yomiyasu".to_owned(),
+            "irreversible_requires_human",
+        ),
+        (
+            "POST",
+            format!("/api/v1/projects/{}/cancel", c.project),
+            "irreversible_requires_human",
+        ),
+    ];
+    for (i, (method, path, code)) in cases.iter().enumerate() {
+        let resp = c
+            .op(&format!("irr-{i}"), method, path, json!(null), false)
+            .await;
+        assert_problem(&resp, 422, code);
+        raw("project_cos_refuses_production", code, 422);
+    }
+    assert!(c.rejected() >= 3 + cases.len() as i64);
+    // 人の発言を引くとこの門は通る（先は各 op の検証に任せる。案件の取り消しは実際に効く）。
+    let relayed = c
+        .op(
+            "irr-relayed",
+            "POST",
+            &format!("/api/v1/projects/{}/cancel", c.project),
+            json!(null),
+            true,
+        )
+        .await;
+    assert_ne!(
+        relayed.json()["code"].as_str(),
+        Some("irreversible_requires_human"),
+        "{}",
+        relayed.text()
+    );
+}
+
+/// controller が `off` の案件では、外部公開・不可逆の門は当たらない（I13: 従来の gate のまま）。
+#[tokio::test]
+async fn project_cos_irreversible_gate_only_in_autonomy() {
+    let c = project_cos().await;
+    let resp = c
+        .op(
+            "off-1",
+            "DELETE",
+            "/api/v1/repos/r-missing",
+            json!(null),
+            false,
+        )
+        .await;
+    assert_ne!(
+        resp.json()["code"].as_str(),
+        Some("irreversible_requires_human"),
+        "{}",
+        resp.text()
+    );
 }
 
 /// 受信箱の待ちへの代答は、既存の 7 類型の basis が無ければ断られる（新しい代答の種類を足していない）。

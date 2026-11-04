@@ -107,14 +107,19 @@ export function controllerModeAction(
   };
 }
 
-/** 判断の行の規則の id（`proposal_json.rule_id`）。読めなければ null（行は壊さず出す）。 */
+/** 判断の行の規則の id（TS の proposal の `explanation.rule_id`。無ければ `rule_id`、それも無ければ検証の欄）。 */
 export function decisionRule(decision: ControllerDecision): string | null {
   try {
-    const parsed = JSON.parse(decision.proposal_json) as { rule_id?: unknown };
-    return typeof parsed.rule_id === "string" ? parsed.rule_id : null;
+    const parsed = JSON.parse(decision.proposal_json) as {
+      explanation?: { rule_id?: unknown };
+      rule_id?: unknown;
+    };
+    const rule = parsed.explanation?.rule_id ?? parsed.rule_id;
+    if (typeof rule === "string") return rule;
   } catch {
-    return null;
+    // 壊れた記録でも行は出す（下の検証の欄に戻る）。
   }
+  return decision.validation || null;
 }
 
 /** 案件の root task（新しい順ではなく一覧の順。木の詳細は「途中目標と仕事」が持つ）。 */

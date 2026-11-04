@@ -146,7 +146,8 @@ export function ProjectAuthorityPanel({
     <section className="space-y-3" data-testid="project-authority">
       <h3 className="text-label font-medium">許可</h3>
       <p className="text-label text-muted-foreground">
-        CoS と controller がこの案件で人に聞かずに行える範囲です。許可には期限と回数があり、人の発言などの根拠が付きます。
+        CoS と controller
+        がこの案件で人に聞かずに行える範囲です。許可には期限と回数があり、人の発言などの根拠が付きます。
       </p>
       {unknown.length > 0 && (
         <p role="alert" className="text-label" data-testid="authority-unknown">

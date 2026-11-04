@@ -43,7 +43,7 @@ const brief = {
 const decision: ControllerDecision = {
   id: "D1",
   mode: "enabled",
-  proposal_json: JSON.stringify({ rule_id: "pc/outcome/next" }),
+  proposal_json: JSON.stringify({ explanation: { rule_id: "pc/outcome/next" } }),
   validation: "ok",
   effect_json: "{}",
   effect_state: "applied",
@@ -71,7 +71,7 @@ function show(state: Partial<ControllerView["state"]> = {}, withBrief = true) {
       detail={detail}
       brief={withBrief ? brief : null}
       view={view(state)}
-      decisions={[decision, { ...decision, id: "D2", proposal_json: "壊れた JSON" }]}
+      decisions={[decision, { ...decision, id: "D2", proposal_json: "壊れた JSON", validation: "" }]}
       pendingHumanItems={2}
       openAuthorityProposals={1}
       actionPending={false}
@@ -136,9 +136,13 @@ describe("controller の部品", () => {
       body: { mode: "off", expected_revision: 7, reason: "止める" },
     });
   });
-  it("規則の id を読み、読めなければ null", () => {
+  it("規則の id を読み、読めなければ検証の欄、それも無ければ null", () => {
     expect(decisionRule(decision)).toBe("pc/outcome/next");
-    expect(decisionRule({ ...decision, proposal_json: "x" })).toBeNull();
+    expect(decisionRule({ ...decision, proposal_json: JSON.stringify({ rule_id: "pc/old" }) })).toBe("pc/old");
+    expect(decisionRule({ ...decision, proposal_json: "x", validation: "pc/script-unavailable" })).toBe(
+      "pc/script-unavailable",
+    );
+    expect(decisionRule({ ...decision, proposal_json: "x", validation: "" })).toBeNull();
   });
   it("rootTasks は子を外す", () => {
     expect(rootTasks(detail.tasks).map((t) => String(t.id))).toEqual(["R1", "R2"]);

@@ -5,9 +5,9 @@ import {
   AUTHORITY_GRANT_ACTION_ID,
   type AuthorityProposalView,
   type AuthorityView,
-  ProjectAuthorityPanel,
   dismissAction,
   grantFromProposalAction,
+  ProjectAuthorityPanel,
   revokeAction,
 } from "./project-authority-panel";
 
@@ -93,7 +93,13 @@ describe("許可の panel", () => {
 
   it("開いた提案・状態・根拠・状態不明の警告を出し、有効な許可だけ取り消せる", () => {
     const html = renderToStaticMarkup(
-      <ProjectAuthorityPanel view={view} pending={false} onAccept={() => {}} onDismiss={() => {}} onRevoke={() => {}} />,
+      <ProjectAuthorityPanel
+        view={view}
+        pending={false}
+        onAccept={() => {}}
+        onDismiss={() => {}}
+        onRevoke={() => {}}
+      />,
     );
     expect(html).toContain("本番の変更（3 回まで）");
     expect(html.match(/許可する/g)?.length).toBe(1);

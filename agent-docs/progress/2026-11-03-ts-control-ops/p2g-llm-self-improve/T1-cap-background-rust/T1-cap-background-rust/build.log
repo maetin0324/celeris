@@ -1,0 +1,41 @@
+   Compiling tokio v1.53.1
+   Compiling time v0.3.55
+   Compiling clap_builder v4.6.6
+   Compiling clap v4.6.6
+   Compiling task-core v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-core)
+   Compiling tokio-util v0.7.19
+   Compiling tower v0.5.3
+   Compiling tokio-rustls v0.26.5
+   Compiling deno_error v0.7.1
+   Compiling deno_unsync v0.4.4
+   Compiling deno_path_util v0.6.4
+   Compiling wasm_dep_analyzer v0.4.0
+   Compiling serde_v8 v0.322.0
+   Compiling h2 v0.4.19
+   Compiling tower-http v0.6.11
+   Compiling deno_core v0.413.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/script-runtime/vendor/deno_core)
+   Compiling hyper v1.11.1
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+   Compiling hyper-util v0.1.20
+   Compiling hyper-rustls v0.27.9
+   Compiling axum v0.8.9
+   Compiling reqwest v0.13.5
+   Compiling celeris-script v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/script-runtime)
+   Compiling jev-classifier v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/jev-classifier)
+warning: `deno_core` (lib) generated 1 warning
+   Compiling task-ops v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-ops)
+   Compiling celeris-credentiald v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/celeris-credentiald)
+   Compiling task-worker v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-worker)
+   Compiling celeris-mcp v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/celeris-mcp)
+   Compiling task-api v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-api)
+   Compiling task-dispatch v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-dispatch)
+   Compiling llm-proxy v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/llm-proxy)
+   Compiling celeris v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/celeris)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 26s

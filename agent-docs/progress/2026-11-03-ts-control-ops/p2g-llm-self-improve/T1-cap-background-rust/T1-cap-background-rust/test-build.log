@@ -1,0 +1,8 @@
+   Compiling task-core v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-core)
+   Compiling celeris-credentiald v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/celeris-credentiald)
+   Compiling task-ops v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-ops)
+   Compiling routing-eval v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/routing-eval)
+   Compiling task-worker v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-worker)
+   Compiling task-dispatch v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-dispatch)
+   Compiling celeris-campaign v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/campaign)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 45s

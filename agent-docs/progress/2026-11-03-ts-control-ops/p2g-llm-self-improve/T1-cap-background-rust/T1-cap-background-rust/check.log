@@ -1,0 +1,6 @@
+    Checking task-core v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-core)
+    Checking celeris-credentiald v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/celeris-credentiald)
+    Checking task-ops v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-ops)
+    Checking task-worker v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-worker)
+    Checking task-dispatch v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFHGCREMDBFR1S20PH5/runs/01M6HW7THAHARCBG7ACSHBHBDB/tmp/llm-improve-trial.efKOYm/tree/crates/task-dispatch)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 40.27s

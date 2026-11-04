@@ -14,6 +14,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::cos::operations::{Applied, OperationAudit};
 use time::OffsetDateTime;
 
+use crate::human_epoch::HumanEpoch;
 use crate::middleware::require_admin;
 use crate::principal::Caller;
 use crate::problem::{ApiProblem, ops_problem, store_problem};
@@ -296,6 +297,7 @@ pub(super) async fn project_detail(
 
 pub(super) async fn patch_project(
     State(state): State<ApiState>,
+    caller: Caller,
     Params(id): Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -363,54 +365,59 @@ pub(super) async fn patch_project(
         Some(None) => Some(None),
         None => None,
     };
+    let human = HumanEpoch::of(&caller);
     let project = state
         .blocking(move |store| {
-            if let Some(status) = patch.status
-                && !store
-                    .project_set_status(project_id, status)
-                    .map_err(store_problem)?
-            {
-                return Err(ApiProblem::project_not_found(&project_id.to_string()));
-            }
-            if let Some(spec) = &workspace
-                && !store
-                    .project_set_workspace(project_id, spec.as_ref())
-                    .map_err(store_problem)?
-            {
-                return Err(ApiProblem::project_not_found(&project_id.to_string()));
-            }
-            if let Some(slug) = patch.slug.as_deref()
-                && !store
-                    .project_set_slug(project_id, slug)
-                    .map_err(store_problem)?
-            {
-                return Err(ApiProblem::project_not_found(&project_id.to_string()));
-            }
-            if let Some(enabled) = patch.auto_integrate
-                && !store
-                    .project_set_auto_integrate(project_id, enabled)
-                    .map_err(store_problem)?
-            {
-                return Err(ApiProblem::project_not_found(&project_id.to_string()));
-            }
-            // ADR-0072「Phase F6 実装時の決定」: 変わった欄だけを書き、監査用に名前を返す。
-            let (text_fields, old_title) = set_project_text_op(
-                store,
-                project_id,
-                title.as_deref(),
-                request.as_deref(),
-                None,
-            )?
-            .direct()?;
+            let not_found = || ApiProblem::project_not_found(&project_id.to_string());
+            let before = store
+                .project_get(project_id)
+                .map_err(store_problem)?
+                .ok_or_else(not_found)?;
+            let (new_title, new_request, text_fields) =
+                project_text_changes(&before, title.as_deref(), request.as_deref());
+            // ADR 2026-11-04-project-controller D12: 全部の欄と `human_epoch` を 1 つの transaction で書く
+            // （人の操作は controller の判断より優先。I7）。
+            store.write_tx::<_, ApiProblem, _>(|tx| {
+                let written = |written: Result<bool, task_core::StoreError>| {
+                    written
+                        .map_err(store_problem)?
+                        .then_some(())
+                        .ok_or_else(not_found)
+                };
+                if let Some(status) = patch.status {
+                    written(SqliteStore::project_set_status_tx(tx, project_id, status))?;
+                }
+                if let Some(spec) = &workspace {
+                    written(SqliteStore::project_set_workspace_tx(
+                        tx,
+                        project_id,
+                        spec.as_ref(),
+                    ))?;
+                }
+                if let Some(slug) = patch.slug.as_deref() {
+                    written(SqliteStore::project_set_slug_tx(tx, project_id, slug))?;
+                }
+                if let Some(enabled) = patch.auto_integrate {
+                    written(SqliteStore::project_set_auto_integrate_tx(
+                        tx, project_id, enabled,
+                    ))?;
+                }
+                // ADR-0072「Phase F6 実装時の決定」: 変わった欄だけを書き、監査用に名前を返す。
+                if !text_fields.is_empty() {
+                    written(SqliteStore::project_set_text_tx(
+                        tx,
+                        project_id,
+                        new_title,
+                        new_request,
+                    ))?;
+                }
+                human.bump_tx(tx, Some(project_id)).map_err(store_problem)
+            })?;
             let project = store
                 .project_get(project_id)
                 .map_err(store_problem)?
-                .ok_or_else(|| ApiProblem::project_not_found(&project_id.to_string()))?;
-            // ADR 2026-11-04-project-controller D12: 人の操作は controller の判断より優先（I7）。
-            store
-                .project_controller_human_bump(&project_id.to_string(), OffsetDateTime::now_utc())
-                .map_err(store_problem)?;
-            Ok((project, text_fields, old_title))
+                .ok_or_else(not_found)?;
+            Ok((project, text_fields, before.title))
         })
         .await?;
     let (project, text_fields, old_title) = project;
@@ -484,36 +491,15 @@ pub(crate) fn set_project_text_op(
     project_id: ProjectId,
     title: Option<&str>,
     request: Option<&str>,
-    audit: Option<&OperationAudit>,
+    audit: &OperationAudit,
 ) -> Result<Applied<(Vec<&'static str>, String)>, ApiProblem> {
     let target_id = project_id.to_string();
-    let reject = |problem: ApiProblem| match audit {
-        Some(audit) => audit.reject(store, "project", &target_id, problem),
-        None => problem,
-    };
+    let reject = |problem: ApiProblem| audit.reject(store, "project", &target_id, problem);
     let before = store
         .project_get(project_id)
         .map_err(|e| reject(store_problem(e)))?
         .ok_or_else(|| reject(ApiProblem::project_not_found(&target_id)))?;
-    let new_title = title.filter(|t| *t != before.title);
-    let new_request = request.filter(|r| *r != before.request);
-    let mut text_fields: Vec<&'static str> = Vec::new();
-    if new_title.is_some() {
-        text_fields.push("title");
-    }
-    if new_request.is_some() {
-        text_fields.push("request");
-    }
-    let Some(audit) = audit else {
-        if !text_fields.is_empty()
-            && !store
-                .project_set_text(project_id, new_title, new_request)
-                .map_err(store_problem)?
-        {
-            return Err(ApiProblem::project_not_found(&target_id));
-        }
-        return Ok(Applied::Direct((text_fields, before.title)));
-    };
+    let (new_title, new_request, text_fields) = project_text_changes(&before, title, request);
     let operation = audit.apply(store, "project", &target_id, "project.update", |tx| {
         if !SqliteStore::project_set_text_tx(tx, project_id, new_title, new_request)? {
             return Err(task_core::chat::ChatError::NotFound {
@@ -528,6 +514,24 @@ pub(crate) fn set_project_text_op(
         }))
     })?;
     Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// 今の値と違う `title`・`request` と、変わった欄の名前。
+fn project_text_changes<'a>(
+    before: &task_core::Project,
+    title: Option<&'a str>,
+    request: Option<&'a str>,
+) -> (Option<&'a str>, Option<&'a str>, Vec<&'static str>) {
+    let new_title = title.filter(|t| *t != before.title);
+    let new_request = request.filter(|r| *r != before.request);
+    let mut fields = Vec::new();
+    if new_title.is_some() {
+        fields.push("title");
+    }
+    if new_request.is_some() {
+        fields.push("request");
+    }
+    (new_title, new_request, fields)
 }
 
 /// CoS 経路の入口: 本文を検証してから [`set_project_text_op`] に渡す。
@@ -556,7 +560,7 @@ pub(crate) fn cos_patch_project(
         project_id,
         title.as_deref(),
         request.as_deref(),
-        Some(audit),
+        audit,
     )
 }
 

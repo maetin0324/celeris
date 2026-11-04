@@ -239,6 +239,27 @@ pub fn reopen(
     finish_reopen(store, id, from, outcome)
 }
 
+/// [`reopen`] の遷移と `also` を同じ transaction で書く（ADR 2026-11-04-project-controller D12: 人の
+/// reopen と `human_epoch`）。`also` が失敗すれば遷移も残らない。
+pub fn reopen_with<F>(
+    store: &task_core::store::SqliteStore,
+    id: TaskId,
+    expected: Option<Status>,
+    also: F,
+) -> Result<TransitionResult, OpsError>
+where
+    F: FnOnce(&rusqlite::Connection) -> Result<(), task_core::StoreError>,
+{
+    let from = plan_reopen(store, id, expected)?;
+    let outcome = store.write_tx::<_, task_core::StoreError, _>(|tx| {
+        let outcome =
+            task_core::store::SqliteStore::apply_transition_tx(tx, id, Trigger::Reopen, vec![])?;
+        also(tx)?;
+        Ok(outcome)
+    })?;
+    finish_reopen(store, id, from, outcome)
+}
+
 /// [`reopen`] の検証（読むだけ）。遷移前の状態を返す。書き込みは `Trigger::Reopen` の遷移
 /// （CoS の監査経路では `SqliteStore::apply_transition_tx`）。
 pub fn plan_reopen(

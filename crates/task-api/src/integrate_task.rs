@@ -53,9 +53,13 @@ async fn integrate_task(
     let roles = state.inner.roles.clone();
     let genres = state.inner.genres.clone();
     let by = caller.actor();
+    let human = crate::human_epoch::HumanEpoch::of(&caller);
     let task = state
         .blocking(move |store| {
-            integrate_task_op(store, &roles, &genres, task_id, &request, input, &by, None)?.direct()
+            integrate_task_op(
+                store, &roles, &genres, task_id, &request, input, &by, human, None,
+            )?
+            .direct()
         })
         .await?;
     Ok(json_response(StatusCode::CREATED, &task))
@@ -75,6 +79,7 @@ pub(crate) fn integrate_task_op(
     request_id: &str,
     input: IntegrateTaskBody,
     by: &str,
+    human: crate::human_epoch::HumanEpoch,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<Task>, ApiProblem> {
     let reject = |problem: ApiProblem| match audit {
@@ -167,6 +172,7 @@ pub(crate) fn integrate_task_op(
         body,
         None,
         by,
+        human,
         audit,
         "integration.integrate_task",
         Some(&link),

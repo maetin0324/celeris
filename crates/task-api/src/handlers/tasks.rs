@@ -16,6 +16,7 @@ use time::OffsetDateTime;
 
 use crate::cos::operations::{Applied, OperationAudit};
 use crate::files;
+use crate::human_epoch::HumanEpoch;
 use crate::middleware::require_admin;
 use crate::principal::Caller;
 use crate::problem::{ApiProblem, ops_problem};
@@ -383,6 +384,7 @@ pub(super) async fn create_task(
     let roles = state.inner.roles.clone();
     let genres = state.inner.genres.clone();
     let by = caller.actor();
+    let human = HumanEpoch::of(&caller);
     let (task, resent) = state
         .blocking(move |store| {
             let keyed = match &claim {
@@ -407,20 +409,17 @@ pub(super) async fn create_task(
             if let Some(existing) = keyed {
                 return Ok((idempotency::existing_task(store, &existing)?, true));
             }
-            match create_task_op(store, &roles, &genres, body, claim.as_ref(), &by, None) {
-                Ok(applied) => {
-                    let task = applied.direct()?;
-                    // ADR 2026-11-04-project-controller D12: 人の起票は controller の判断より優先（I7）。
-                    if let Some(project) = task.project_id {
-                        store
-                            .project_controller_human_bump(
-                                &project.to_string(),
-                                OffsetDateTime::now_utc(),
-                            )
-                            .map_err(crate::problem::store_problem)?;
-                    }
-                    Ok((task, false))
-                }
+            match create_task_op(
+                store,
+                &roles,
+                &genres,
+                body,
+                claim.as_ref(),
+                &by,
+                human,
+                None,
+            ) {
+                Ok(applied) => Ok((applied.direct()?, false)),
                 Err(problem) => {
                     // 別の要求が先に commit した場合、rollback 後に結果を照合する。
                     if let Some(claim) = &claim
@@ -503,6 +502,7 @@ const REPOSITORY_WARNING: &str = "repository_required: the task uses a repositor
 
 /// `POST /tasks` の本体。handler（`audit = None`）と CoS の `/cos/operations`（ADR 2026-10-05 D3。
 /// `audit` の transaction で task・`cos_operations`・監査 event を一緒に書く）が共有する。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_task_op(
     store: &task_core::store::SqliteStore,
     roles: &[task_core::RoleSpec],
@@ -510,6 +510,7 @@ pub(crate) fn create_task_op(
     body: NewTaskBody,
     claim: Option<&task_core::store::IdempotencyClaim>,
     by: &str,
+    human: HumanEpoch,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<Task>, ApiProblem> {
     create_task_linked_op(
@@ -519,6 +520,7 @@ pub(crate) fn create_task_op(
         body,
         claim,
         by,
+        human,
         audit,
         "task.create",
         None,
@@ -539,6 +541,7 @@ pub(crate) fn create_task_linked_op(
     body: NewTaskBody,
     claim: Option<&task_core::store::IdempotencyClaim>,
     by: &str,
+    human: HumanEpoch,
     audit: Option<&OperationAudit>,
     action: &str,
     link: Option<CreationLink<'_>>,
@@ -680,7 +683,11 @@ pub(crate) fn create_task_linked_op(
         Ok(())
     };
     let Some(audit) = audit else {
-        let outcome = store.create_task_with(&built, by, pinned_events.clone(), write);
+        // ADR 2026-11-04-project-controller D12: 人の起票は controller の判断より優先（I7）。同じ transaction。
+        let outcome = store.create_task_with(&built, by, pinned_events.clone(), |tx| {
+            write(tx)?;
+            human.bump_tx(tx, built.project_id)
+        });
         if let Some(problem) = failure {
             return Err(problem);
         }

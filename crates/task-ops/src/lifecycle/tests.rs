@@ -4,6 +4,44 @@ use task_core::{
     Tier, WorkerHint, WorkspaceSpec,
 };
 
+fn act(
+    store: &SqliteStore,
+    id: ProjectId,
+    action: ProjectAction,
+    now: OffsetDateTime,
+) -> Result<ProjectLifecycle, OpsError> {
+    apply_project_action(store, id, action, now, |_| Ok(()))
+}
+
+fn cancel_project(store: &SqliteStore, id: ProjectId) -> Result<ProjectLifecycle, OpsError> {
+    act(store, id, ProjectAction::Cancel, OffsetDateTime::now_utc())
+}
+
+fn pause_project(store: &SqliteStore, id: ProjectId) -> Result<ProjectLifecycle, OpsError> {
+    act(store, id, ProjectAction::Pause, OffsetDateTime::now_utc())
+}
+
+fn resume_project(store: &SqliteStore, id: ProjectId) -> Result<ProjectLifecycle, OpsError> {
+    act(store, id, ProjectAction::Resume, OffsetDateTime::now_utc())
+}
+
+fn archive_project(
+    store: &SqliteStore,
+    id: ProjectId,
+    now: OffsetDateTime,
+) -> Result<ProjectLifecycle, OpsError> {
+    act(store, id, ProjectAction::Archive, now)
+}
+
+fn unarchive_project(store: &SqliteStore, id: ProjectId) -> Result<ProjectLifecycle, OpsError> {
+    act(
+        store,
+        id,
+        ProjectAction::Unarchive,
+        OffsetDateTime::now_utc(),
+    )
+}
+
 fn store() -> SqliteStore {
     SqliteStore::open_in_memory().unwrap_or_else(|e| panic!("open: {e}"))
 }

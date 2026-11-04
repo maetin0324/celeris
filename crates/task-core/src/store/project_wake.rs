@@ -413,19 +413,6 @@ impl SqliteStore {
         Ok(Some(epoch))
     }
 
-    /// [`Self::project_controller_human_bump_tx`] を自前の transaction で。
-    pub fn project_controller_human_bump(
-        &self,
-        project_id: &str,
-        now: OffsetDateTime,
-    ) -> Result<Option<i64>, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let epoch = Self::project_controller_human_bump_tx(&tx, project_id, now, 0)?;
-        tx.commit()?;
-        Ok(epoch)
-    }
-
     /// 未消費の wake（古い順）。
     pub fn project_wakes_pending(&self, project_id: &str) -> Result<Vec<ProjectWake>, StoreError> {
         self.with_read_conn(|c| Self::pc_wakes_pending_tx(c, project_id, usize::MAX))

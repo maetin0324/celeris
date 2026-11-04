@@ -379,6 +379,15 @@ impl SqliteStore {
         status: ProjectStatus,
     ) -> Result<bool, StoreError> {
         let conn = self.lock()?;
+        Self::project_set_status_tx(&conn, id, status)
+    }
+
+    /// `project_set_status` on a caller-owned transaction (D12 of ADR 2026-11-04-project-controller).
+    pub fn project_set_status_tx(
+        conn: &Connection,
+        id: ProjectId,
+        status: ProjectStatus,
+    ) -> Result<bool, StoreError> {
         let affected = conn.execute(
             "UPDATE projects SET status = ?1, updated_at = ?2 WHERE id = ?3",
             params![
@@ -460,6 +469,15 @@ impl SqliteStore {
         enabled: bool,
     ) -> Result<bool, StoreError> {
         let conn = self.lock()?;
+        Self::project_set_auto_integrate_tx(&conn, id, enabled)
+    }
+
+    /// `project_set_auto_integrate` on a caller-owned transaction.
+    pub fn project_set_auto_integrate_tx(
+        conn: &Connection,
+        id: ProjectId,
+        enabled: bool,
+    ) -> Result<bool, StoreError> {
         let affected = conn.execute(
             "UPDATE projects SET auto_integrate = ?1, updated_at = ?2 WHERE id = ?3",
             params![
@@ -478,14 +496,24 @@ impl SqliteStore {
     ) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let written = Self::project_set_slug_tx(&tx, id, slug)?;
+        tx.commit()?;
+        Ok(written)
+    }
+
+    /// `project_set_slug` on a caller-owned transaction.
+    pub fn project_set_slug_tx(
+        tx: &Connection,
+        id: ProjectId,
+        slug: &str,
+    ) -> Result<bool, StoreError> {
         let slug = slug.trim();
-        Self::check_project_slug(&tx, &id.to_string(), slug)?;
+        Self::check_project_slug(tx, &id.to_string(), slug)?;
         let now = format_rfc3339(OffsetDateTime::now_utc())?;
         let n = tx.execute(
             "UPDATE projects SET slug = ?1, updated_at = ?2 WHERE id = ?3",
             params![slug, now, id.to_string()],
         )?;
-        tx.commit()?;
         Ok(n > 0)
     }
 
@@ -524,9 +552,22 @@ impl SqliteStore {
         id: ProjectId,
         workspace: Option<&WorkspaceSpec>,
     ) -> Result<bool, StoreError> {
-        let column = Self::project_workspace_column(workspace)?;
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let written = Self::project_set_workspace_tx(&tx, id, workspace)?;
+        if written {
+            tx.commit()?;
+        }
+        Ok(written)
+    }
+
+    /// `project_set_workspace` on a caller-owned transaction.
+    pub fn project_set_workspace_tx(
+        tx: &Connection,
+        id: ProjectId,
+        workspace: Option<&WorkspaceSpec>,
+    ) -> Result<bool, StoreError> {
+        let column = Self::project_workspace_column(workspace)?;
         let affected = tx.execute(
             "UPDATE projects SET workspace = ?1, updated_at = ?2 WHERE id = ?3",
             params![
@@ -539,7 +580,7 @@ impl SqliteStore {
             return Ok(false);
         }
         // ADR-0043 D1: 従来の `PATCH /projects {workspace}` は **primary のリポジトリ**を書き換える。
-        let existing = Self::repo_list_tx(&tx, id)?;
+        let existing = Self::repo_list_tx(tx, id)?;
         let primary = existing.iter().find(|r| r.is_primary).cloned();
         match (workspace, primary) {
             // 差し替え: primary の場所（と kind）だけを直す。名前・run・default_branch は人の設定を残す。
@@ -558,7 +599,7 @@ impl SqliteStore {
                     .cloned()
                     .collect();
                 crate::repos::validate_upsert(&others, &repo)?;
-                Self::repo_write_tx(&tx, &repo)?;
+                Self::repo_write_tx(tx, &repo)?;
             }
             // 新規: primary がまだ無い案件に作業場所を付けた。
             (Some(location), None) => {
@@ -579,13 +620,13 @@ impl SqliteStore {
                     created_at: OffsetDateTime::now_utc(),
                 };
                 crate::repos::validate_upsert(&existing, &repo)?;
-                Self::repo_write_tx(&tx, &repo)?;
-                Self::repo_clear_other_primaries_tx(&tx, id, repo.id)?;
+                Self::repo_write_tx(tx, &repo)?;
+                Self::repo_clear_other_primaries_tx(tx, id, repo.id)?;
             }
             // 消す: `"workspace": null` は「案件を作業場所なしに戻す」なので primary の行を消す。
             // 未終端のタスクが使っていれば 409（`DELETE /repos/{id}` と同じ規律）。
             (None, Some(repo)) => {
-                let open = Self::repo_active_tasks_tx(&tx, repo.id)?;
+                let open = Self::repo_active_tasks_tx(tx, repo.id)?;
                 if !open.is_empty() {
                     return Err(StoreError::InUse {
                         kind: "project repo",
@@ -600,8 +641,7 @@ impl SqliteStore {
             }
             (None, None) => {}
         }
-        Self::sync_project_workspace_tx(&tx, id)?;
-        tx.commit()?;
+        Self::sync_project_workspace_tx(tx, id)?;
         Ok(true)
     }
 

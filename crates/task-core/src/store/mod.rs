@@ -1033,6 +1033,24 @@ impl SqliteStore {
         self.conn.lock().map_err(|_| StoreError::Poisoned)
     }
 
+    /// 書き込みの transaction を 1 つ開いて `write` を走らせ、`Ok` なら commit する。`Err` なら rollback。
+    /// 他の crate の操作が `*_tx` の書き込みを束ねるのに使う（ADR 2026-11-04-project-controller D12:
+    /// 人の操作の書き込みと `human_epoch` を同じ transaction で）。`write` の中で `self` を読まない
+    /// （書き込み接続の Mutex を持っている）。
+    pub fn write_tx<T, E, F>(&self, write: F) -> Result<T, E>
+    where
+        E: From<StoreError>,
+        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<T, E>,
+    {
+        let mut conn = self.lock().map_err(E::from)?;
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| E::from(StoreError::from(e)))?;
+        let value = write(&tx)?;
+        tx.commit().map_err(|e| E::from(StoreError::from(e)))?;
+        Ok(value)
+    }
+
     /// ADR-0133 付記: これまでに書き込み接続・読み取り接続を取った回数（試験用の観測値）。
     pub fn lock_counts(&self) -> LockCounts {
         LockCounts {

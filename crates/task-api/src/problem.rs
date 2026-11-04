@@ -599,6 +599,12 @@ pub(crate) fn ops_problem(
 }
 
 /// `StoreError` → HTTP。`InvalidTransition` は 409、`SQLITE_BUSY` は 503 `db_busy`、その他は 500。
+impl From<StoreError> for ApiProblem {
+    fn from(err: StoreError) -> Self {
+        store_problem(err)
+    }
+}
+
 pub(crate) fn store_problem(err: StoreError) -> ApiProblem {
     match &err {
         StoreError::InvalidTransition(t) => {

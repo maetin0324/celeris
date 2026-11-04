@@ -109,7 +109,7 @@ pub(super) fn record_tx(
     .map_err(internal)
 }
 
-/// `retry_task_claimed` が照合と保存の間に取られたキーを見つけたとき。
+/// `retry_task_claimed_tx` が照合と保存の間に取られたキーを見つけたとき。
 pub(super) fn taken(found: IdempotencyLookup) -> ApiProblem {
     match found {
         IdempotencyLookup::Same { task_id, .. } | IdempotencyLookup::Conflict { task_id } => {

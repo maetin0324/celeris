@@ -21,6 +21,7 @@ use time::OffsetDateTime;
 
 use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, no_query, parse_project_id, read_json};
+use crate::human_epoch::HumanEpoch;
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, ops_problem};
 use crate::query::parse_task_id;
@@ -71,21 +72,17 @@ pub(crate) fn project_action_op(
     store: &task_core::store::SqliteStore,
     project_id: task_core::ProjectId,
     action: ProjectAction,
+    human: HumanEpoch,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<lifecycle::ProjectLifecycle>, ApiProblem> {
     let trigger = project_trigger(action);
     let now = OffsetDateTime::now_utc();
     let Some(audit) = audit else {
-        let outcome = match action {
-            ProjectAction::Cancel => lifecycle::cancel_project(store, project_id),
-            ProjectAction::Pause => lifecycle::pause_project(store, project_id),
-            ProjectAction::Resume => lifecycle::resume_project(store, project_id),
-            ProjectAction::Archive => lifecycle::archive_project(store, project_id, now),
-            ProjectAction::Unarchive => lifecycle::unarchive_project(store, project_id),
-        };
-        return outcome
-            .map(Applied::Direct)
-            .map_err(|e| ops_problem(store, e, Some(trigger)));
+        return lifecycle::apply_project_action(store, project_id, action, now, |tx| {
+            human.bump_tx(tx, Some(project_id))
+        })
+        .map(Applied::Direct)
+        .map_err(|e| ops_problem(store, e, Some(trigger)));
     };
     let target_id = project_id.to_string();
     let change = lifecycle::plan_project_action(store, project_id, action, now).map_err(|e| {
@@ -109,6 +106,7 @@ pub(crate) fn project_action_op(
 
 async fn project_action(
     state: ApiState,
+    caller: crate::Caller,
     headers: HeaderMap,
     raw: Option<String>,
     body: Body,
@@ -120,8 +118,9 @@ async fn project_action(
     let project_id = parse_project_id(&id)?;
     let EmptyBody {} = read_json(body, true).await?;
     let trigger = project_trigger(action);
+    let human = HumanEpoch::of(&caller);
     let result = state
-        .blocking(move |store| project_action_op(store, project_id, action, None)?.direct())
+        .blocking(move |store| project_action_op(store, project_id, action, human, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = trigger, project_id = %project_id, status = %result.project.status.as_str(), "admin: project lifecycle");
     Ok(json_response(StatusCode::OK, &result))
@@ -208,12 +207,13 @@ macro_rules! project_handler {
     ($name:ident, $action:expr) => {
         async fn $name(
             State(state): State<ApiState>,
+            caller: crate::Caller,
             headers: HeaderMap,
             Params(id): Params<String>,
             RawQuery(raw): RawQuery,
             body: Body,
         ) -> ApiResult {
-            project_action(state, headers, raw, body, id, $action).await
+            project_action(state, caller, headers, raw, body, id, $action).await
         }
     };
 }

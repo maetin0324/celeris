@@ -76,34 +76,6 @@ fn project_tasks(store: &dyn TaskStore, id: ProjectId) -> Result<Vec<task_core::
     )
 }
 
-/// 非終端のタスクに `trigger` を当てて `cancelled` にする。既に終端のものは触らない。
-/// 1 件ごとに `apply_transition`（＝ストアの同一トランザクション）で、子・後続への伝播も
-/// 従来の `cancel` と同じように起きる。伝播で先に `cancelled` になったタスクは、この後の
-/// 反復で「終端なので触らない」になるだけで二重には数えない。
-fn cancel_tasks(
-    store: &dyn TaskStore,
-    tasks: Vec<task_core::Task>,
-    trigger: Trigger,
-) -> Result<Vec<TaskRef>, OpsError> {
-    let mut out = Vec::new();
-    for task in tasks {
-        // 直前の伝播で終端になっているかもしれないので、その都度いまの姿を見る。
-        let Some(current) = store.get(task.id)? else {
-            continue;
-        };
-        if current.status.is_terminal() {
-            continue;
-        }
-        store.apply_transition(current.id, trigger.clone(), None)?;
-        if let Some(after) = store.get(current.id)?
-            && after.status == Status::Cancelled
-        {
-            out.push(task_ref(&after));
-        }
-    }
-    Ok(out)
-}
-
 fn project_or_404(store: &dyn TaskStore, id: ProjectId) -> Result<Project, OpsError> {
     store.project_get(id)?.ok_or(OpsError::ProjectNotFound(id))
 }
@@ -124,92 +96,43 @@ fn milestone_is_cancellable(status: MilestoneStatus) -> bool {
 
 // ---- 案件 ----
 
-/// `POST /projects/{id}/cancel`。既に `cancelled` なら 409。
-pub fn cancel_project(store: &dyn TaskStore, id: ProjectId) -> Result<ProjectLifecycle, OpsError> {
-    let project = project_or_404(store, id)?;
-    if project.status == ProjectStatus::Cancelled {
-        return Err(project_conflict(&project, "cancelled"));
-    }
-    let cancelled_tasks =
-        cancel_tasks(store, project_tasks(store, id)?, Trigger::ProjectCancelled)?;
-    let mut cancelled_milestones = Vec::new();
-    for milestone in store.milestone_list(id)? {
-        if milestone_is_cancellable(milestone.status) {
-            store.milestone_set_lifecycle(milestone.id, MilestoneStatus::Cancelled, Some(None))?;
-            cancelled_milestones.push(milestone.id);
+/// `POST /projects/{id}/{cancel|pause|resume|archive|unarchive}` の本体。[`plan_project_action`] で検証し、
+/// 変更と `also` を同じ transaction で書く（ADR 2026-11-04-project-controller D12: 人の操作と `human_epoch`）。
+/// 既にその状態の archive・unarchive（[`ProjectChange::Unchanged`]）は何も書かず、`also` も呼ばない。
+pub fn apply_project_action<F>(
+    store: &task_core::store::SqliteStore,
+    id: ProjectId,
+    action: ProjectAction,
+    now: OffsetDateTime,
+    also: F,
+) -> Result<ProjectLifecycle, OpsError>
+where
+    F: FnOnce(&rusqlite::Connection) -> Result<(), task_core::StoreError>,
+{
+    let change = plan_project_action(store, id, action, now)?;
+    let cancelled = if change == ProjectChange::Unchanged {
+        Vec::new()
+    } else {
+        store.write_tx::<_, task_core::StoreError, _>(|tx| {
+            let cancelled = apply_project_change_tx(tx, id, &change)?;
+            also(tx)?;
+            Ok(cancelled)
+        })?
+    };
+    let mut cancelled_tasks = Vec::with_capacity(cancelled.len());
+    for task in cancelled {
+        if let Some(task) = store.get(task)? {
+            cancelled_tasks.push(task_ref(&task));
         }
     }
-    store.project_set_lifecycle(id, ProjectStatus::Cancelled, Some(None))?;
+    let cancelled_milestones = match change {
+        ProjectChange::Cancel { milestones, .. } => milestones,
+        _ => Vec::new(),
+    };
     Ok(ProjectLifecycle {
         project: project_or_404(store, id)?,
         cancelled_tasks,
         cancelled_milestones,
-    })
-}
-
-/// `POST /projects/{id}/pause`。終端（`done` / `cancelled`）と既に `paused` は 409。
-pub fn pause_project(store: &dyn TaskStore, id: ProjectId) -> Result<ProjectLifecycle, OpsError> {
-    let project = project_or_404(store, id)?;
-    if project.status == ProjectStatus::Paused || project.status.is_terminal() {
-        return Err(project_conflict(&project, "paused"));
-    }
-    store.project_set_lifecycle(id, ProjectStatus::Paused, Some(Some(project.status)))?;
-    Ok(ProjectLifecycle {
-        project: project_or_404(store, id)?,
-        cancelled_tasks: Vec::new(),
-        cancelled_milestones: Vec::new(),
-    })
-}
-
-/// `POST /projects/{id}/resume`。`paused` でなければ 409。戻り先は `paused_from`（無ければ `active`）。
-pub fn resume_project(store: &dyn TaskStore, id: ProjectId) -> Result<ProjectLifecycle, OpsError> {
-    let project = project_or_404(store, id)?;
-    if project.status != ProjectStatus::Paused {
-        return Err(project_conflict(&project, "resumed"));
-    }
-    let back = project.paused_from.unwrap_or(ProjectStatus::Active);
-    store.project_set_lifecycle(id, back, Some(None))?;
-    Ok(ProjectLifecycle {
-        project: project_or_404(store, id)?,
-        cancelled_tasks: Vec::new(),
-        cancelled_milestones: Vec::new(),
-    })
-}
-
-/// `POST /projects/{id}/archive`。**終端（`done` / `cancelled`）の案件だけ**（他は 409）。
-/// 既にアーカイブ済みなら何もせずそのまま返す（GUI の二度押しを 409 にしない）。
-pub fn archive_project(
-    store: &dyn TaskStore,
-    id: ProjectId,
-    now: OffsetDateTime,
-) -> Result<ProjectLifecycle, OpsError> {
-    let project = project_or_404(store, id)?;
-    if !project.status.is_terminal() {
-        return Err(project_conflict(&project, "archived"));
-    }
-    if project.archived_at.is_none() {
-        store.project_set_archived_at(id, Some(now))?;
-    }
-    Ok(ProjectLifecycle {
-        project: project_or_404(store, id)?,
-        cancelled_tasks: Vec::new(),
-        cancelled_milestones: Vec::new(),
-    })
-}
-
-/// `POST /projects/{id}/unarchive`。アーカイブされていなければそのまま返す。
-pub fn unarchive_project(
-    store: &dyn TaskStore,
-    id: ProjectId,
-) -> Result<ProjectLifecycle, OpsError> {
-    let project = project_or_404(store, id)?;
-    if project.archived_at.is_some() {
-        store.project_set_archived_at(id, None)?;
-    }
-    Ok(ProjectLifecycle {
-        project: project_or_404(store, id)?,
-        cancelled_tasks: Vec::new(),
-        cancelled_milestones: Vec::new(),
     })
 }
 

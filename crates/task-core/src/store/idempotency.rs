@@ -32,7 +32,7 @@ pub enum IdempotencyLookup {
     },
 }
 
-/// [`SqliteStore::retry_task_claimed`] の結果。
+/// [`SqliteStore::retry_task_claimed_tx`] の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetryClaimed {
     /// 複製を作った。依存を張り替えた task の id。
@@ -144,33 +144,31 @@ impl SqliteStore {
 
     /// `retry_task` に冪等キーを足したもの。照合・複製・キーの保存を 1 つの transaction で行う。
     /// 保存する応答は `{"task_id", "rewired"}`（API の `RetryResult` と同じ形）。
-    pub fn retry_task_claimed(
-        &self,
+    /// commit は呼び出し側。`Taken` のときは何も書いていない。
+    pub fn retry_task_claimed_tx(
+        tx: &Connection,
         original: TaskId,
         new_task: &Task,
         by: &str,
         claim: &IdempotencyClaim,
         now: &str,
     ) -> Result<RetryClaimed, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let found = Self::idempotency_lookup_tx(&tx, claim)?;
+        let found = Self::idempotency_lookup_tx(tx, claim)?;
         if found != IdempotencyLookup::New {
             return Ok(RetryClaimed::Taken(found));
         }
-        let rewired = Self::retry_task_tx(&tx, original, new_task, by)?;
+        let rewired = Self::retry_task_tx(tx, original, new_task, by)?;
         let result = serde_json::json!({
             "task_id": new_task.id.to_string(),
             "rewired": rewired.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
         });
         Self::idempotency_record_tx(
-            &tx,
+            tx,
             claim,
             &new_task.id.to_string(),
             Some(&result.to_string()),
             now,
         )?;
-        tx.commit()?;
         Ok(RetryClaimed::Created(rewired))
     }
 }
@@ -268,8 +266,15 @@ mod tests {
         };
         let first = sample_task(Status::Ready);
         assert_eq!(
-            s.retry_task_claimed(orig.id, &first, "human:test", &c, "now")
-                .unwrap(),
+            s.write_tx::<_, StoreError, _>(|tx| SqliteStore::retry_task_claimed_tx(
+                tx,
+                orig.id,
+                &first,
+                "human:test",
+                &c,
+                "now"
+            ))
+            .unwrap(),
             RetryClaimed::Created(vec![])
         );
         let second = sample_task(Status::Ready);
@@ -277,7 +282,9 @@ mod tests {
             task_id,
             result_json,
         }) = s
-            .retry_task_claimed(orig.id, &second, "human:test", &c, "now")
+            .write_tx::<_, StoreError, _>(|tx| {
+                SqliteStore::retry_task_claimed_tx(tx, orig.id, &second, "human:test", &c, "now")
+            })
             .unwrap()
         else {
             panic!("second claim must not create");

@@ -9,6 +9,7 @@ use task_core::TaskStore;
 use time::OffsetDateTime;
 
 use crate::cos::operations::{Applied, OperationAudit};
+use crate::human_epoch::HumanEpoch;
 use crate::middleware::require_admin;
 use crate::principal::Caller;
 use crate::problem::{ApiProblem, ops_problem};
@@ -258,6 +259,7 @@ pub(super) async fn answer(
 
 pub(super) async fn cancel(
     State(state): State<ApiState>,
+    caller: Caller,
     Params(id): Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -267,10 +269,13 @@ pub(super) async fn cancel(
     require_admin(&state, &headers)?;
     let id = parse_task_id(&id)?;
     let CancelBody { expected_status } = read_json(body, true).await?;
+    let human = HumanEpoch::of(&caller);
     let result = state
         .blocking(move |store| {
-            let result = task_ops::gate::cancel(store, id, expected_status)
-                .map_err(|e| ops_problem(store, e, Some("cancel")))?;
+            let result = task_ops::gate::cancel_with(store, id, expected_status, |tx, task| {
+                human.bump_tx(tx, task.project_id)
+            })
+            .map_err(|e| ops_problem(store, e, Some("cancel")))?;
             crate::browser_control::stop_task(store, &id.to_string())?;
             Ok(result)
         })
@@ -300,6 +305,7 @@ pub(super) async fn retry(
     let body: RetryBody = super::idempotency::decode(raw)?;
     let clusters = super::cluster_ids(&state);
     let by = caller.actor();
+    let human = HumanEpoch::of(&caller);
     let (result, resent) = state
         .blocking(move |store| {
             if let Some(claim) = &claim
@@ -310,7 +316,7 @@ pub(super) async fn retry(
                     .map_err(|e| ApiProblem::internal(format!("stored retry result: {e}")))?;
                 return Ok((result, true));
             }
-            match retry_op(store, &clusters, id, body, claim.as_ref(), &by, None) {
+            match retry_op(store, &clusters, id, body, claim.as_ref(), &by, human, None) {
                 Ok(applied) => Ok((applied.direct()?, false)),
                 Err(problem) => {
                     if problem.code() == "idempotency_key_conflict"
@@ -341,6 +347,7 @@ pub(super) async fn retry(
 /// `POST /tasks/{id}/retry` の本体。handler（`audit = None`、`source = human`）と CoS の
 /// `/cos/operations`（ADR 2026-10-09 D3/D5。複製・依存の付け替え・監査を同じ transaction、`execution` の
 /// 明示は commit 後）が共有する。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn retry_op(
     store: &task_core::store::SqliteStore,
     clusters: &[String],
@@ -353,6 +360,7 @@ pub(crate) fn retry_op(
     }: RetryBody,
     claim: Option<&task_core::store::IdempotencyClaim>,
     by: &str,
+    human: HumanEpoch,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::retry::RetryResult>, ApiProblem> {
     let target_id = id.to_string();
@@ -378,26 +386,43 @@ pub(crate) fn retry_op(
             .map_err(|e| reject(ops_problem(store, e, Some("retry"))))?;
     let Some(audit) = audit else {
         let new_id = new_task.id;
-        let rewired = match claim {
-            None => task_core::store::TaskStore::retry_task(store, id, &new_task, by)
-                .map_err(|e| ops_problem(store, e.into(), Some("retry")))?,
-            Some(claim) => {
-                match store
-                    .retry_task_claimed(id, &new_task, by, claim, &super::rfc3339(now))
-                    .map_err(|e| ops_problem(store, e.into(), Some("retry")))?
-                {
-                    task_core::store::RetryClaimed::Created(rewired) => rewired,
-                    task_core::store::RetryClaimed::Taken(found) => {
-                        return Err(super::idempotency::taken(found));
+        // 複製・冪等キー・routing_override・`human_epoch`（ADR 2026-11-04-project-controller D12）を同じ transaction で。
+        let claimed = store
+            .write_tx::<_, task_core::StoreError, _>(|tx| {
+                use task_core::store::{RetryClaimed, SqliteStore};
+                let claimed = match claim {
+                    None => {
+                        RetryClaimed::Created(SqliteStore::retry_task_tx(tx, id, &new_task, by)?)
                     }
+                    Some(claim) => SqliteStore::retry_task_claimed_tx(
+                        tx,
+                        id,
+                        &new_task,
+                        by,
+                        claim,
+                        &super::rfc3339(now),
+                    )?,
+                };
+                if matches!(claimed, RetryClaimed::Created(_)) {
+                    if let Some(ov) = &inherited {
+                        SqliteStore::set_task_routing_override_tx(
+                            tx,
+                            new_id,
+                            ov,
+                            &super::rfc3339(now),
+                        )?;
+                    }
+                    human.bump_tx(tx, new_task.project_id)?;
                 }
+                Ok(claimed)
+            })
+            .map_err(|e| ops_problem(store, e.into(), Some("retry")))?;
+        let rewired = match claimed {
+            task_core::store::RetryClaimed::Created(rewired) => rewired,
+            task_core::store::RetryClaimed::Taken(found) => {
+                return Err(super::idempotency::taken(found));
             }
         };
-        if let Some(ov) = &inherited {
-            store
-                .set_task_routing_override(new_id, ov, &super::rfc3339(now))
-                .map_err(|e| ops_problem(store, e.into(), Some("retry")))?;
-        }
         return task_ops::retry::finish_retry(store, new_id, rewired, execution, by, now)
             .map(Applied::Direct)
             .map_err(|e| ops_problem(store, e, Some("retry")));
@@ -682,6 +707,7 @@ pub(crate) fn create_comment_op(
 /// （attempts は 0）。`cancelled` は worktree を消してあるので 409（`retry` を使う）。
 pub(super) async fn reopen(
     State(state): State<ApiState>,
+    caller: Caller,
     Params(id): Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -691,8 +717,9 @@ pub(super) async fn reopen(
     require_admin(&state, &headers)?;
     let id = parse_task_id(&id)?;
     let body: ReopenBody = read_json(body, true).await?;
+    let human = HumanEpoch::of(&caller);
     let result = state
-        .blocking(move |store| reopen_op(store, id, body, None)?.direct())
+        .blocking(move |store| reopen_op(store, id, body, human, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
@@ -703,12 +730,19 @@ pub(crate) fn reopen_op(
     store: &task_core::store::SqliteStore,
     id: task_core::TaskId,
     ReopenBody { expected_status }: ReopenBody,
+    human: HumanEpoch,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::gate::TransitionResult>, ApiProblem> {
     let Some(audit) = audit else {
-        return task_ops::comment::reopen(store, id, expected_status)
-            .map(Applied::Direct)
-            .map_err(|e| ops_problem(store, e, Some("reopen")));
+        // `plan_reopen` が読んだ task の案件を、同じ transaction の `human_epoch` に使う。
+        let project = task_core::store::TaskStore::get(store, id)
+            .map_err(|e| ops_problem(store, e.into(), Some("reopen")))?
+            .and_then(|task| task.project_id);
+        return task_ops::comment::reopen_with(store, id, expected_status, |tx| {
+            human.bump_tx(tx, project)
+        })
+        .map(Applied::Direct)
+        .map_err(|e| ops_problem(store, e, Some("reopen")));
     };
     let target_id = id.to_string();
     let from = task_ops::comment::plan_reopen(store, id, expected_status).map_err(|e| {

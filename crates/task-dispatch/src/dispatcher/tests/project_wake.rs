@@ -24,6 +24,7 @@ use time::format_description::well_known::Rfc3339;
 
 type Calls = Arc<StdMutex<Vec<ProjectDecideInput>>>;
 type DecideFn = Box<dyn FnMut(&ProjectDecideInput) -> Result<ProjectDecision, String> + Send>;
+type HumanOp = Box<dyn FnOnce() + Send>;
 
 struct Fake {
     calls: Calls,
@@ -35,6 +36,15 @@ impl ProjectDecider for Fake {
         self.calls.lock().unwrap().push(input.clone());
         (self.f)(input)
     }
+}
+
+/// 人の操作の `human_epoch`（本番は API が書き込みと同じ transaction で呼ぶ。D12）。
+fn human_bump(store: &SqliteStore, project: &str, now: OffsetDateTime) -> Option<i64> {
+    store
+        .write_tx::<_, task_core::StoreError, _>(|tx| {
+            SqliteStore::project_controller_human_bump_tx(tx, project, now, 0)
+        })
+        .unwrap()
 }
 
 fn at(value: &str) -> OffsetDateTime {
@@ -253,8 +263,10 @@ fn record(file: &str, value: serde_json::Value) {
         .append(true)
         .open(path)
         .unwrap();
+    // 試験は別の process で並んで走る。`writeln!` は書式の断片ごとに write するので行が混ざりうる
+    // （JSON が壊れて script の検査が落ちた）。1 行を 1 回の O_APPEND の write で書く。
     use std::io::Write as _;
-    writeln!(f, "{v}").unwrap();
+    f.write_all(format!("{v}\n").as_bytes()).unwrap();
 }
 
 fn pending_wakes(store: &SqliteStore, p: &Project) -> usize {
@@ -483,12 +495,7 @@ async fn project_wake_kind_cron() {
 #[tokio::test]
 async fn project_wake_kind_human_changed() {
     let env = kind_case(|env, store, p, _| {
-        assert_eq!(
-            store
-                .project_controller_human_bump(&p.id.to_string(), env.now())
-                .unwrap(),
-            Some(1)
-        );
+        assert_eq!(human_bump(store, &p.id.to_string(), env.now()), Some(1));
     });
     assert_one_decide_of(&env, ProjectWakeKind::HumanChanged);
     assert_eq!(env.calls()[0].human_epoch, 1);
@@ -666,6 +673,106 @@ async fn project_wake_coalesce() {
     assert_eq!(pending_wakes(&store, &p), 0);
 }
 
+/// decide の後・tx1 の前に人の操作 `human` が入る。判断は捨てられ、root は作られない。
+fn human_race(
+    env: &Env,
+    store: &Arc<SqliteStore>,
+    p: &Project,
+    d: &mut Dispatcher,
+    human: HumanOp,
+) {
+    let mut human = Some(human);
+    d.set_project_controller_hook(Box::new(move |b| {
+        if b == Boundary::BeforeCommit
+            && let Some(human) = human.take()
+        {
+            human();
+        }
+    }));
+    env.advance(31);
+    tick(d);
+    let last = d.project_controller_last().unwrap();
+    assert_eq!(last.stale, vec!["rejected:stale_human_epoch".to_string()]);
+    assert_eq!(controller_roots(store, p), 0, "the person came first");
+    let pid = p.id.to_string();
+    assert!(
+        store
+            .project_controller_decisions(&pid, None, 10)
+            .unwrap()
+            .is_empty()
+    );
+    let state = store.project_controller_state(&pid).unwrap().unwrap();
+    assert_eq!(state.human_epoch, 1);
+    assert!(
+        store
+            .project_wakes_pending(&pid)
+            .unwrap()
+            .iter()
+            .any(|w| w.wake_key == "human:1"),
+        "the wake of the person is waiting for the next evaluation"
+    );
+}
+
+#[tokio::test]
+async fn project_wake_human_races_cancel() {
+    let env = Env::new();
+    let store = env.open();
+    let p = project(&store, Some(ControllerMode::Enabled));
+    let mut d = env.daemon(&store, "i1", create_root(&p));
+    prime(&mut d);
+    let done = root_task(&env, &store, &p, Status::Done);
+    transition(&store, &done, Status::Done, "review_pass");
+    let open_root = root_task(&env, &store, &p, Status::Ready);
+    tick(&mut d);
+    let human_store = env.open();
+    let id = open_root.id;
+    let project_id = p.id.to_string();
+    let clock = env.clock.clone();
+    let human = Box::new(move || {
+        let now = *clock.lock().unwrap();
+        task_ops::gate::cancel_with(&human_store, id, None, |tx, _| {
+            SqliteStore::project_controller_human_bump_tx(tx, &project_id, now, 0).map(|_| ())
+        })
+        .unwrap();
+    });
+    human_race(&env, &store, &p, &mut d, human);
+    assert_eq!(store.get(id).unwrap().unwrap().status, Status::Cancelled);
+}
+
+#[tokio::test]
+async fn project_wake_human_races_pause() {
+    let env = Env::new();
+    let store = env.open();
+    let p = project(&store, Some(ControllerMode::Enabled));
+    let mut d = env.daemon(&store, "i1", create_root(&p));
+    prime(&mut d);
+    let done = root_task(&env, &store, &p, Status::Done);
+    transition(&store, &done, Status::Done, "review_pass");
+    tick(&mut d);
+    let human_store = env.open();
+    let id = p.id;
+    let clock = env.clock.clone();
+    let human = Box::new(move || {
+        let now = *clock.lock().unwrap();
+        task_ops::lifecycle::apply_project_action(
+            &human_store,
+            id,
+            task_ops::lifecycle::ProjectAction::Pause,
+            now,
+            |tx| {
+                SqliteStore::project_controller_human_bump_tx(tx, &id.to_string(), now, 0)
+                    .map(|_| ())
+            },
+        )
+        .unwrap();
+    });
+    human_race(&env, &store, &p, &mut d, human);
+    assert_eq!(
+        store.project_get(p.id).unwrap().unwrap().status,
+        ProjectStatus::Paused
+    );
+}
+
 #[tokio::test]
 async fn project_wake_human_races_apply() {
     let env = Env::new();
@@ -685,9 +792,7 @@ async fn project_wake_human_races_apply() {
         if b == Boundary::BeforeCommit && !fired {
             fired = true;
             let now = *clock.lock().unwrap();
-            bump_store
-                .project_controller_human_bump(&hook_pid, now)
-                .unwrap();
+            human_bump(&bump_store, &hook_pid, now);
         }
     }));
     env.advance(31);
@@ -896,9 +1001,7 @@ async fn project_wake_backpressure() {
     let mut d = env.daemon(&store, "i1", none());
     prime(&mut d);
     for p in &projects {
-        store
-            .project_controller_human_bump(&p.id.to_string(), env.now())
-            .unwrap();
+        human_bump(&store, &p.id.to_string(), env.now());
     }
     let mut per_tick = Vec::new();
     for _ in 0..25 {
@@ -922,12 +1025,7 @@ async fn project_wake_off_is_inert() {
     for p in [&no_row, &off] {
         let t = root_task(&env, &store, p, Status::Done);
         transition(&store, &t, Status::Done, "review_pass");
-        assert_eq!(
-            store
-                .project_controller_human_bump(&p.id.to_string(), env.now())
-                .unwrap(),
-            None
-        );
+        assert_eq!(human_bump(&store, &p.id.to_string(), env.now()), None);
     }
     let events_before = store.latest_event_id().unwrap();
     for _ in 0..5 {

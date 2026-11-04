@@ -450,6 +450,40 @@ pub fn cancel(
     id: TaskId,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
+    let task = plan_cancel(store, id, expected)?;
+    let since_id = store.latest_event_id()?;
+    let outcome = store.apply_transition(id, Trigger::Cancel, None)?;
+    finish_cancel(store, id, task.status, since_id, outcome)
+}
+
+/// [`cancel`] の遷移と `also` を同じ transaction で書く（ADR 2026-11-04-project-controller D12: 人の
+/// cancel と `human_epoch`）。`also` が失敗すれば遷移も残らない。
+pub fn cancel_with<F>(
+    store: &task_core::store::SqliteStore,
+    id: TaskId,
+    expected: Option<Status>,
+    also: F,
+) -> Result<TransitionResult, OpsError>
+where
+    F: FnOnce(&rusqlite::Connection, &task_core::Task) -> Result<(), task_core::StoreError>,
+{
+    let task = plan_cancel(store, id, expected)?;
+    let since_id = store.latest_event_id()?;
+    let outcome = store.write_tx::<_, task_core::StoreError, _>(|tx| {
+        let outcome =
+            task_core::store::SqliteStore::apply_transition_tx(tx, id, Trigger::Cancel, vec![])?;
+        also(tx, &task)?;
+        Ok(outcome)
+    })?;
+    finish_cancel(store, id, task.status, since_id, outcome)
+}
+
+/// [`cancel`] の検証（読むだけ）。
+fn plan_cancel(
+    store: &dyn TaskStore,
+    id: TaskId,
+    expected: Option<Status>,
+) -> Result<task_core::Task, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     check_expected(task.status, expected)?;
 
@@ -460,10 +494,16 @@ pub fn cancel(
             action: "cancelled".to_string(),
         });
     }
+    Ok(task)
+}
 
-    let from = task.status;
-    let since_id = store.latest_event_id()?;
-    let outcome = store.apply_transition(id, Trigger::Cancel, None)?;
+fn finish_cancel(
+    store: &dyn TaskStore,
+    id: TaskId,
+    from: Status,
+    since_id: u64,
+    outcome: task_core::transition::Outcome,
+) -> Result<TransitionResult, OpsError> {
     let cascaded = collect_cascaded(store, id, since_id)?;
     Ok(TransitionResult {
         id,

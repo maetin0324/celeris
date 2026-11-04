@@ -13,10 +13,11 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use support::script_compare::{dist_bundle, start_code, start_policy};
 use task_core::project_wake::{ControllerMode, ProjectDecideInput};
+use task_core::script_compare::ScriptMode;
 use task_core::store::SqliteStore;
 use task_core::{Project, ProjectId, ProjectStatus, Status, Task, TaskId, TaskStore, Trigger};
 use task_dispatch::project_controller::{ProjectDecider, ProjectEffect};
-use task_dispatch::project_decider_ts::{DeciderLimits, TsProjectDecider};
+use task_dispatch::project_decider_ts::{DeciderLimits, ScriptAccess, TsProjectDecider};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -182,29 +183,50 @@ fn rows(db: &Db) -> Vec<i64> {
     .collect()
 }
 
-/// dry-run は判定を返すが、表の行数の差分は 0。
+/// mode `dry_run` の案件は領域 `compare` でも本物の bundle を呼ぶ（付記 A3 の 7）。判定は書かない
+/// （判断の行は dispatcher の tx1 が `suppressed` で書く。`task-dispatch` の `project_cos_dry_run_on_request`）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn project_cos_ts_dry_run_writes_nothing() {
-    let Some((handle, policy, _)) = real("project_cos_ts_dry_run_writes_nothing") else {
+async fn project_cos_ts_dry_run_compare_domain() {
+    let Some((handle, policy, _)) = real("project_cos_ts_dry_run_compare_domain") else {
         return;
     };
     let db = db();
-    let before = rows(&db);
-    let mut d = decider(policy, &db);
-    let rec = d
-        .dry_run(
-            &db.store,
-            &db.project.to_string(),
+    let pid = db.project.to_string();
+    db.store
+        .project_controller_set_mode(
+            &pid,
+            ControllerMode::DryRun,
+            None,
+            "human:test",
             OffsetDateTime::now_utc(),
         )
-        .expect("dry run");
+        .expect("mode");
+    let wakes = db.store.project_wakes_pending(&pid).expect("wakes");
+    assert_eq!(wakes.len(), 1, "setting dry_run requests one evaluation");
+    assert!(wakes[0].wake_key.starts_with("dry_run:"));
+    let before = rows(&db);
+    let mut d = TsProjectDecider::new(DeciderLimits::default());
+    d.attach(
+        &db.store,
+        Some(ScriptAccess {
+            mode: ScriptMode::Compare,
+            canary_bps: None,
+            generation_id: "g-a3".into(),
+            call: Ok(policy),
+        }),
+    );
+    let mut i = input(&db);
+    i.mode = ControllerMode::DryRun;
+    let decision = d.decide(&i).expect("decide");
+    assert_eq!(decision.rule_id, "pc/outcome-open");
+    assert!(matches!(decision.effect, ProjectEffect::CreateRoot { .. }));
+    let rec: Value = serde_json::from_str(&d.take_record().expect("record")).expect("json");
+    assert_eq!(rec["generation_id"], "g-a3");
     assert_eq!(rec["proposal"]["action"]["kind"], "launch_root", "{rec}");
-    assert_eq!(rec["effect"]["kind"], "create_root");
-    assert_eq!(rec["proposal"]["explanation"]["rule_id"], "pc/outcome-open");
-    assert_eq!(rows(&db), before, "dry-run wrote rows");
+    assert_eq!(rows(&db), before, "deciding wrote rows");
     raw(
         "dry_run.jsonl",
-        json!({"test": "project_cos_ts_dry_run_writes_nothing", "row_delta": 0, "action": "launch_root"}),
+        json!({"test": "project_cos_ts_dry_run_compare_domain", "row_delta": 0, "action": "launch_root"}),
     );
     handle.shutdown();
 }

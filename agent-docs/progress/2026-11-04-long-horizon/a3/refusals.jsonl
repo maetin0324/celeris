@@ -1,6 +1,7 @@
-{"refusal_code":"production_requires_human","schema":"celeris.long-horizon-record/1","status":422,"test":"project_cos_refuses_production"}
-{"refusal_code":"project_request_human_only","schema":"celeris.long-horizon-record/1","status":422,"test":"project_cos_refuses_request_edit"}
-{"refusal_code":"cos_operation_not_allowed","schema":"celeris.long-horizon-record/1","status":422,"test":"project_cos_refuses_production"}
-{"refusal_code":"cos_basis_missing","schema":"celeris.long-horizon-record/1","status":422,"test":"project_cos_triage_types_reused"}
-{"refusal_code":"project_controller_owns_launch","schema":"celeris.long-horizon-record/1","status":422,"test":"project_cos_controller_owns_launch"}
 {"refusal_code":"task_goal_human_only","schema":"celeris.long-horizon-record/1","status":422,"test":"project_cos_refuses_goal_edit"}
+{"refusal_code":"project_controller_owns_launch","schema":"celeris.long-horizon-record/1","status":422,"test":"project_cos_controller_owns_launch"}
+{"refusal_code":"cos_basis_missing","schema":"celeris.long-horizon-record/1","status":422,"test":"project_cos_triage_types_reused"}
+{"refusal_code":"production_requires_human","schema":"celeris.long-horizon-record/1","status":422,"test":"project_cos_refuses_production"}
+{"refusal_code":"cos_operation_not_allowed","schema":"celeris.long-horizon-record/1","status":422,"test":"project_cos_refuses_production"}
+{"refusal_code":"project_controller_mode_requires_human","schema":"celeris.long-horizon-record/1","status":403,"test":"project_cos_dry_run_mode_is_human_requested"}
+{"refusal_code":"project_request_human_only","schema":"celeris.long-horizon-record/1","status":422,"test":"project_cos_refuses_request_edit"}

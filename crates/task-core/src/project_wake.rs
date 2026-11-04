@@ -53,6 +53,9 @@ impl ProjectWakeKind {
     }
 }
 
+/// mode を `dry_run` に置いたときに積む wake の key の接頭辞（`dry_run:<revision>`）。
+pub const DRY_RUN_WAKE_PREFIX: &str = "dry_run:";
+
 /// 案件 mode（D11）。上げるのは人だけ、`off` へ戻すのは誰でも。
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
@@ -89,6 +92,21 @@ impl ControllerMode {
     /// wake を積み、tick で評価する mode（D11 の表: `shadow`・`enabled`）。
     pub fn wakes(self) -> bool {
         matches!(self, ControllerMode::Shadow | ControllerMode::Enabled)
+    }
+
+    /// tick で評価する mode（`dry_run`・`shadow`・`enabled`）。`dry_run` は頼まれた wake
+    /// （[`ControllerMode::accepts_wake`]）だけで起き、判断を記録して効果は `suppressed`（付記 A3 の 7）。
+    pub fn evaluates(self) -> bool {
+        self != ControllerMode::Off
+    }
+
+    /// この mode の案件に wake を積むか。`shadow`・`enabled` は全部、`dry_run` は人・CoS の頼み
+    /// （mode を `dry_run` に置いたときの `dry_run:<revision>` と `POST …/controller/wake` の外部待ちの解除）だけ。
+    pub fn accepts_wake(self, kind: ProjectWakeKind, wake_key: &str) -> bool {
+        self.wakes()
+            || (self == ControllerMode::DryRun
+                && (kind == ProjectWakeKind::ExternalReleased
+                    || wake_key.starts_with(DRY_RUN_WAKE_PREFIX)))
     }
 
     /// `off` より上か（上げる操作は人だけ）。

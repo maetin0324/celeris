@@ -356,6 +356,76 @@ async fn project_cos_shadow_then_enable() {
     );
 }
 
+/// mode `dry_run`（付記 A3 の 7）: mode を置いたときと外部待ちの解除の wake（`POST …/controller/wake`）の
+/// ときだけ TS を呼び、判断を記録して効果は `suppressed`。event・cron の wake は積まず、起票・CoS 入力・LLM 0、
+/// timer も phase も置かない。
+#[tokio::test]
+async fn project_cos_dry_run_on_request() {
+    let mut c = case(Some(ControllerMode::DryRun), launch);
+    let pid = c.p.id.to_string();
+    // mode を dry_run に置いたときの wake で 1 回判定した（prime の tick）。
+    let first = c.decisions();
+    assert_eq!(first.len(), 1, "dry_run evaluates once when set");
+    assert_eq!(first[0].mode, ControllerMode::DryRun);
+    assert_eq!(first[0].effect_state, EffectState::Suppressed);
+    let rec = record_of(&first[0]);
+    assert_eq!(rec["proposal"]["action"]["kind"], "launch_root", "{rec}");
+    assert_eq!(rec["proposal"]["explanation"]["rule_id"], "pc/outcome-open");
+    assert!(
+        rec["snapshot_sha256"]
+            .as_str()
+            .is_some_and(|h| h.len() == 64)
+    );
+    assert_eq!(c.calls(), 1);
+    let state = c.store.project_controller_state(&pid).unwrap().unwrap();
+    assert_eq!(
+        state.phase,
+        ControllerPhase::Active,
+        "dry_run keeps the phase"
+    );
+    assert!(state.next_wake_at.is_none(), "dry_run sets no timer");
+    // event と cron の wake は積まない: root の失敗も cron も判定を起こさない。
+    let t = root_task(&c.env, &c.store, &c.p, Status::Running);
+    transition(&c.store, &t, Status::Failed, "review_fail");
+    c.wake();
+    c.env.advance(7200);
+    tick(&mut c.d);
+    assert_eq!(c.decisions().len(), 1);
+    assert_eq!(c.calls(), 1);
+    assert_eq!(pending_wakes(&c.store, &c.p), 0);
+    // 人が頼む（外部待ちの解除の wake。API の POST …/controller/wake と同じ行）ともう 1 回判定する。
+    c.store
+        .project_wake_ingest(
+            &[NewProjectWake {
+                project_id: pid.clone(),
+                wake_key: "external:dry-run:k1".into(),
+                kind: ProjectWakeKind::ExternalReleased,
+                source_event_id: None,
+                source_ref: None,
+            }],
+            None,
+            0,
+            c.env.now(),
+        )
+        .unwrap();
+    c.env.advance(1);
+    tick(&mut c.d);
+    let ds = c.decisions();
+    assert_eq!(ds.len(), 2);
+    assert!(ds.iter().all(|d| d.effect_state == EffectState::Suppressed));
+    assert_eq!(c.calls(), 2);
+    let roots = c.roots();
+    let llm = c.env.llm_launches();
+    assert_eq!(roots, 0, "dry_run launches nothing");
+    assert_eq!(llm, 0);
+    assert!(c.system_inputs().is_empty());
+    raw(
+        "dry_run.jsonl",
+        json!({"test": "project_cos_dry_run_on_request", "decisions": ds.len(), "effect": "suppressed",
+               "roots": roots, "cos_runs": llm, "calls_without_request": 0}),
+    );
+}
+
 #[tokio::test]
 async fn project_cos_rollback_off() {
     let mut c = case(Some(ControllerMode::Enabled), launch);

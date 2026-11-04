@@ -79,8 +79,8 @@ pub(crate) fn check(
                 unprocessable(
                     PROJECT_CONTROLLER_OWNS_LAUNCH,
                     "the project controller is enabled for this project and launches its next \
-                     root; report with project.controller_report or relay the person's message \
-                     (instructed_by)",
+                     root; record the reasoning in the brief with project.status_put or relay the \
+                     person's message (instructed_by)",
                 )
             })
         }

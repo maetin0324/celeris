@@ -351,3 +351,80 @@ async fn project_cos_brief_updated_by_the_project_cos() {
     let p = c.env.store.project_get(pid).expect("get").expect("project");
     assert_eq!(p.request, "pilot:a3-guard");
 }
+
+/// mode `dry_run`（付記 A3 の 7）は人だけが置ける。置くと評価の頼み（wake `dry_run:<revision>`）が 1 件だけ積まれ、
+/// 人の発言（`human:<epoch>`）では積まれない。外部待ちの解除（`POST …/controller/wake`）でもう 1 回頼める。
+#[tokio::test]
+async fn project_cos_dry_run_mode_is_human_requested() {
+    let c = project_cos().await;
+    let path = format!("/api/v1/projects/{}/controller", c.project);
+    let by_cos = c
+        .op(
+            "a3-dry-run",
+            "PUT",
+            &path,
+            json!({"mode": "dry_run", "expected_revision": 0, "reason": "試す"}),
+            false,
+        )
+        .await;
+    assert_eq!(by_cos.status.as_u16(), 403, "{}", by_cos.text());
+    assert!(
+        c.env
+            .store
+            .project_wakes_pending(&c.project)
+            .unwrap()
+            .is_empty()
+    );
+    let human = [("authorization", format!("Bearer {WEB_TOKEN}"))];
+    let human: Vec<(&str, &str)> = human.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let put = send(
+        &c.app,
+        put_json_with(
+            &path,
+            &json!({"mode": "dry_run", "expected_revision": 0, "reason": "判定だけ見る"}),
+            &human,
+        ),
+    )
+    .await;
+    assert_eq!(put.status.as_u16(), 200, "{}", put.text());
+    let keys = |c: &Cos| -> Vec<String> {
+        c.env
+            .store
+            .project_wakes_pending(&c.project)
+            .unwrap()
+            .into_iter()
+            .map(|w| w.wake_key)
+            .collect()
+    };
+    assert_eq!(keys(&c), vec!["dry_run:1".to_owned()]);
+    // 人の発言は human_epoch を進めるが、dry_run では評価を頼まない。
+    let said = send(
+        &c.app,
+        post_json_with(
+            &format!("/api/v1/chat/threads/{}/messages", c.thread),
+            &json!({"client_message_id": "h-2", "text": "様子を見る", "attachment_ids": [],
+                    "reply_to_id": null, "mode": "queue", "resume_queue": false}),
+            &human,
+        ),
+    )
+    .await;
+    assert_eq!(said.status.as_u16(), 202, "{}", said.text());
+    assert_eq!(keys(&c), vec!["dry_run:1".to_owned()]);
+    let wake = send(
+        &c.app,
+        post_json_with(
+            &format!("{path}/wake"),
+            &json!({"external_ref": "dry-run", "note": "もう一度", "idempotency_key": "k1"}),
+            &human,
+        ),
+    )
+    .await;
+    assert_eq!(wake.status.as_u16(), 200, "{}", wake.text());
+    assert_eq!(wake.json()["added"], true);
+    assert_eq!(keys(&c).len(), 2);
+    raw(
+        "project_cos_dry_run_mode_is_human_requested",
+        "project_controller_mode_requires_human",
+        by_cos.status.as_u16(),
+    );
+}

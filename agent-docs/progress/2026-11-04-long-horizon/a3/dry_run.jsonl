@@ -1,1 +1,2 @@
-{"action":"launch_root","row_delta":0,"schema":"celeris.long-horizon-record/1","test":"project_cos_ts_dry_run_writes_nothing"}
+{"calls_without_request":0,"cos_runs":0,"decisions":2,"effect":"suppressed","roots":0,"schema":"celeris.long-horizon-record/1","test":"project_cos_dry_run_on_request"}
+{"action":"launch_root","row_delta":0,"schema":"celeris.long-horizon-record/1","test":"project_cos_ts_dry_run_compare_domain"}

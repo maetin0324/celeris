@@ -658,8 +658,17 @@ A1 の実装（migration `0112_project_controller.sql`、`SCHEMA_VERSION` 112。
    `controller_decision_id` は足していない。続きの root は controller が起票する）、controller が `off` でない案件の案件 thread の
    run の `release.promote`（422 `production_requires_human`。§A3 に無い行を足した。状態行が無い・`off` の案件と統括 CoS の
    promote は従来の gate のまま〈I13。既存の試験 `cos_ops_admin_config_daemon_and_external_effects_run_once` の挙動〉）。断った要求は `rejected` の監査。
-7. **dry-run**: HTTP の `POST …/controller/dry-run` は足さず、`TsProjectDecider::dry_run`（何も書かない）を足した。
-   API state に TS の口が無い（script layer は dispatcher 側）ため。HTTP の route は未達。
-8. **E2E** は 1 file でなく試験の対象の crate に置いた（接頭辞 `project_cos_`、計 20 件）: task-dispatch の
-   `dispatcher/tests/project_cos.rs`（10、fake の script で tick を通す）、task-api の `tests/project_cos_guard.rs`（6）、
+7. **dry-run**: HTTP の `POST …/controller/dry-run` は足さず、案件 mode `dry_run` を「頼まれたときだけ評価する」mode にした
+   （変えた行: D11 の表の `dry_run`、§A3 の API の dry-run と E2E の `dry_run`）。API state に TS の口が無い（script layer は
+   dispatcher 側）ため、判定は dispatcher の tick が行う。
+   - 頼み: 人が mode を `dry_run` に置くと同じ tx で wake `dry_run:<revision>`（kind `human_changed`）を 1 件積む。もう一度は
+     `POST …/controller/wake`（kind `external_released`）。event・cron・停滞・人の発言の wake は積まない
+     （`ControllerMode::accepts_wake`）。mode を上げるのは人だけ（CoS の `project.controller_put` は 403）。
+   - 評価: `ControllerMode::evaluates`（`off` 以外）で lease・tx1 を通し、TS の口は `shadow` と同じく領域 `compare` 以上。
+     判断の行は mode `dry_run`・効果 `suppressed`（tx1 と効果の門の既存の規則）。`next_wake_at` は置かず、phase も変えない。
+     結果は `GET …/controller/decisions` の `proposal_json` で見る。表の行は判断・wake・`revision` だけ増える（「書かない」から変えた）。
+   - `TsProjectDecider::dry_run`（試験だけが呼んだ関数）は消した。`project.controller_report` の route は無いので、
+     422 `project_controller_owns_launch` の文は brief の更新（`project.status_put`）か人の発言の取り次ぎを案内する。
+8. **E2E** は 1 file でなく試験の対象の crate に置いた（接頭辞 `project_cos_`、計 22 件）: task-dispatch の
+   `dispatcher/tests/project_cos.rs`（11、fake の script で tick を通す）、task-api の `tests/project_cos_guard.rs`（7）、
    celeris の `tests/project_cos_shadow.rs`（4、本物の bundle）。`scripts/dev/test-project-cos-shadow.sh` が 3 つを走らせ raw を検査する。

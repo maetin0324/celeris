@@ -16,9 +16,9 @@ use super::project_wake_effect::effect_gate_open_tx;
 use super::{IdempotencyClaim, IdempotencyLookup, SqliteStore, StoreError, format_rfc3339};
 use crate::model::Task;
 use crate::project_wake::{
-    ControllerMode, ControllerPhase, EffectState, NewProjectWake, ProjectControllerDecision,
-    ProjectControllerState, ProjectWake, ProjectWakeKind, StaleReason, backoff_secs,
-    human_wake_key,
+    ControllerMode, ControllerPhase, DRY_RUN_WAKE_PREFIX, EffectState, NewProjectWake,
+    ProjectControllerDecision, ProjectControllerState, ProjectWake, ProjectWakeKind, StaleReason,
+    backoff_secs, human_wake_key,
 };
 
 /// lease で一度に畳む wake の上限。残りは次の評価に回る。
@@ -220,12 +220,12 @@ impl SqliteStore {
         self.with_read_conn(|c| Self::pc_state_tx(c, project_id))
     }
 
-    /// `shadow`・`enabled` の案件の状態（tick の評価の候補）。
+    /// `dry_run`・`shadow`・`enabled` の案件の状態（tick の評価の候補）。
     pub fn project_controller_active(&self) -> Result<Vec<ProjectControllerState>, StoreError> {
         self.with_read_conn(|c| {
             let mut stmt = c.prepare(&format!(
                 "SELECT {STATE_COLS} FROM project_controller_state \
-                 WHERE mode IN ('shadow', 'enabled') ORDER BY project_id"
+                 WHERE mode IN ('dry_run', 'shadow', 'enabled') ORDER BY project_id"
             ))?;
             let rows = stmt.query_map([], state_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -285,6 +285,21 @@ impl SqliteStore {
         )?;
         let state = Self::pc_state_tx(tx, project_id)?
             .ok_or_else(|| StoreError::Invalid("controller state vanished".into()))?;
+        // `dry_run` に置いたら 1 回だけ評価を頼む（付記 A3 の 7）。coalesce を待たず次の tick で評価する。
+        if mode == ControllerMode::DryRun {
+            Self::pc_wake_insert_tx(
+                tx,
+                &NewProjectWake {
+                    project_id: project_id.into(),
+                    wake_key: format!("{DRY_RUN_WAKE_PREFIX}{}", state.revision),
+                    kind: ProjectWakeKind::HumanChanged,
+                    source_event_id: None,
+                    source_ref: None,
+                },
+                &at,
+                &at,
+            )?;
+        }
         Ok(ModeChange::Changed(Box::new(state)))
     }
 
@@ -353,7 +368,7 @@ impl SqliteStore {
         let Some((mode, event_cursor)) = row else {
             return Ok(0);
         };
-        if !ControllerMode::parse(&mode).is_some_and(ControllerMode::wakes) {
+        if !ControllerMode::parse(&mode).is_some_and(|m| m.accepts_wake(w.kind, &w.wake_key)) {
             return Ok(0);
         }
         // 案件別 cursor（付記 A1 の 12）: 判断が既に畳んだ event 以下の再配送は wake にしない。
@@ -515,7 +530,7 @@ impl SqliteStore {
         let Some(state) = Self::pc_state_tx(&tx, project_id)? else {
             return Ok(None);
         };
-        if !state.mode.wakes() || state.phase.halted() {
+        if !state.mode.evaluates() || state.phase.halted() {
             return Ok(None);
         }
         let held_by_other = state.lease_owner.as_deref().is_some_and(|o| o != owner)
@@ -614,7 +629,7 @@ impl SqliteStore {
             .ok_or_else(|| StoreError::Invalid("controller state missing".into()))?;
         let stale = if state.lease_owner.as_deref() != Some(owner) {
             Some(StaleReason::Lease)
-        } else if !state.mode.wakes() {
+        } else if !state.mode.evaluates() {
             Some(StaleReason::Mode)
         } else if state.human_epoch != d.human_epoch {
             Some(StaleReason::HumanEpoch)
@@ -676,10 +691,13 @@ impl SqliteStore {
                 .flatten();
             cursor = cursor.max(src.unwrap_or(0));
         }
+        // `dry_run` は頼まれたときだけ評価する: timer を置かず、phase も変えない（判断の記録だけ。付記 A3 の 7）。
+        let dry_run = state.mode == ControllerMode::DryRun;
         let next = match d.next_wake_at {
-            Some(t) => Some(format_rfc3339(t)?),
-            None => None,
+            Some(t) if !dry_run => Some(format_rfc3339(t)?),
+            _ => None,
         };
+        let phase = if dry_run { state.phase } else { d.phase };
         // 畳み切れなかった wake が残れば coalesce を待たずに次の tick で続ける。
         let remaining: i64 = tx.query_row(
             "SELECT COUNT(*) FROM project_wakes WHERE project_id = ?1 AND consumed_by IS NULL",
@@ -699,7 +717,7 @@ impl SqliteStore {
                 remaining,
                 at,
                 d.id,
-                d.phase.as_str()
+                phase.as_str()
             ],
         )?;
         tx.commit()?;

@@ -113,41 +113,8 @@ impl TsProjectDecider {
         d
     }
 
-    /// dry-run（ADR §A3）: 判断の行・wake・効果を何も書かずに 1 回判定し、判断の記録（入力・snapshot の
-    /// SHA-256・proposal・explanation・違反・分類）に効果の JSON を足して返す。案件 mode は `shadow` として口を選ぶ
-    /// （領域が `compare` 以上なら呼べる）。状態の行が無い案件は revision・human_epoch 0。
-    pub fn dry_run(
-        &mut self,
-        store: &Arc<SqliteStore>,
-        project_id: &str,
-        now: OffsetDateTime,
-    ) -> Result<Value, String> {
-        let state = store
-            .project_controller_state(project_id)
-            .map_err(|e| e.to_string())?;
-        let input = ProjectDecideInput {
-            project_id: project_id.to_owned(),
-            revision: state.as_ref().map_or(0, |s| s.revision),
-            human_epoch: state.as_ref().map_or(0, |s| s.human_epoch),
-            mode: ControllerMode::Shadow,
-            wakes: Vec::new(),
-            now: now.format(&Rfc3339).map_err(|e| e.to_string())?,
-        };
-        self.store = Some(Arc::clone(store));
-        let decision = self.decide(&input)?;
-        let mut rec: Value = self
-            .record
-            .take()
-            .and_then(|r| serde_json::from_str(&r).ok())
-            .unwrap_or_else(|| json!({}));
-        rec["dry_run"] = json!(true);
-        rec["rule_id"] = json!(decision.rule_id);
-        rec["effect"] = serde_json::to_value(&decision.effect).unwrap_or(Value::Null);
-        Ok(rec)
-    }
-
-    /// 案件 mode と領域 mode から呼ぶ口を選ぶ（D7）。`shadow` は領域 `compare` 以上、`enabled` は `ts`
-    /// か `canary` で選ばれた案件。足りなければ理由を返す。
+    /// 案件 mode と領域 mode から呼ぶ口を選ぶ（D7）。`dry_run`・`shadow` は領域 `compare` 以上（効果は
+    /// `suppressed` で LLM 0）、`enabled` は `ts` か `canary` で選ばれた案件。足りなければ理由を返す。
     fn script_for(
         &self,
         mode: ControllerMode,
@@ -160,9 +127,10 @@ impl TsProjectDecider {
             return Err("domain project_controller has no generation".into());
         };
         let ok = match (mode, access.mode) {
-            (ControllerMode::Shadow, ScriptMode::Compare | ScriptMode::Canary | ScriptMode::Ts) => {
-                true
-            }
+            (
+                ControllerMode::DryRun | ControllerMode::Shadow,
+                ScriptMode::Compare | ScriptMode::Canary | ScriptMode::Ts,
+            ) => true,
             (ControllerMode::Enabled, ScriptMode::Ts) => true,
             (ControllerMode::Enabled, ScriptMode::Canary) => access.canary_bps.is_some_and(|bps| {
                 task_core::script_compare::canary_selected(
@@ -574,7 +542,7 @@ fn truncate(text: &str, max: usize) -> String {
 }
 
 /// `replan` の CoS 入力（`role=system`、I10）。controller の値と id だけを書き、worker の報告・ログ・成果物の
-/// 文は入れない（I11）。返事の経路（`project.controller_report`・`project.status_put`）と、変えてはいけない物を書く。
+/// 文は入れない（I11）。返事の経路（`project.status_put`）と、変えてはいけない物を書く。
 fn cos_input_text(
     snapshot: &ProjectSnapshot,
     proposal: &ProjectProposal,

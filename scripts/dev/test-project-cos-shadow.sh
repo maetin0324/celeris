@@ -64,10 +64,10 @@ run_suite() {
   [ "$passed" -ge "$min" ] || fail "only $passed project_cos_ tests passed in $name (need >= $min)"
   total=$((total + passed))
 }
-run_suite dispatch 10 -p task-dispatch --lib -E 'test(/(^|::)project_cos_/)'
-run_suite api 6 -p task-api --test project_cos_guard -E 'test(/^project_cos_/)'
+run_suite dispatch 11 -p task-dispatch --lib -E 'test(/(^|::)project_cos_/)'
+run_suite api 7 -p task-api --test project_cos_guard -E 'test(/^project_cos_/)'
 run_suite celeris 4 -p celeris --test project_cos_shadow -E 'test(/^project_cos_/)'
-[ "$total" -ge 14 ] || fail "only $total project_cos_ tests (need >= 14)"
+[ "$total" -ge 22 ] || fail "only $total project_cos_ tests (need >= 22)"
 [ ! -s "$out/skip.log" ] || fail "bundle SKIP recorded: $(cat "$out/skip.log")"
 echo "project_cos_ tests passed: $total"
 
@@ -113,8 +113,11 @@ cl2 = one("project_cos_ts_failure_classified")
 need(cl2.get("classification") == "spec_gap", f"classified (TS): {cl2}")
 nar = one("project_cos_narrowed_acceptance_rejected")
 need(nar.get("roots") == 0, f"narrowed: {nar}")
-dr = one("project_cos_ts_dry_run_writes_nothing")
-need(dr.get("row_delta") == 0, f"dry-run wrote: {dr}")
+dr = one("project_cos_ts_dry_run_compare_domain")
+need(dr.get("row_delta") == 0 and dr.get("action") == "launch_root", f"dry-run (TS): {dr}")
+dm = one("project_cos_dry_run_on_request")
+need(dm.get("decisions") == 2 and dm.get("effect") == "suppressed" and dm.get("roots") == 0
+     and dm.get("cos_runs") == 0 and dm.get("calls_without_request") == 0, f"dry-run mode: {dm}")
 tc = one("project_cos_ts_change_without_rust")
 need(tc.get("before_secs") == 3600 and tc.get("after_secs") == 60 and tc.get("cargo_invocations") == 0, f"ts change: {tc}")
 codes = {r.get("refusal_code") for name, rs in rows.items() for r in rs if r.get("refusal_code")}

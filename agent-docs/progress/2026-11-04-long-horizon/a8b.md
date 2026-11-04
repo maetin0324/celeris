@@ -59,7 +59,7 @@ updated: 2026-11-04
 | `bash scripts/dev/test-long-horizon-bench.sh` | exit 0。replay 30 passed、grade 14 passed、bundle SKIP 0、作業 tree の検査・陽性対照・凍結の path・null の検査が通過 |
 | `cargo clippy --workspace -- -D warnings` | exit 0 |
 | `cargo fmt --all -- --check` | exit 0 |
-| `bash scripts/dev/test-affected.sh` | 下の「証拠」節 |
+| `bash scripts/dev/test-affected.sh` | exit 0。nextest: 7626 tests run: 7626 passed (7 slow), 21 skipped、script bundle SKIP 0 件 |
 
 ## fixture・raw records
 - fixture: `tests/fixtures/long-horizon/`（生成に使った script は run の成果物 `gen-fixtures.py`。fixture を変えたら `bench_version` を上げて MANIFEST を作り直す）。

@@ -9,7 +9,7 @@ updated: 2026-11-04
 task 01M6HGFR1TVY299MQPZY7HQQG9（親 01M6HG7T6ZKTX239KGH0QY4HFQ の p1e-shadow-measure）。手順は [p1e-shadow-preflight.md](p1e-shadow-preflight.md) の「本番への移行（人の手順）」。基準は `git merge-base HEAD main`。
 
 ## 結論
-- 人の承認と手順 0.〜5. の実施を、task のコメント・回答（2026-11-04T02:41Z、operator session が人の指示で実施）で確かめた。release 9bccc68d0fda、generation 01M6J6X3HE4Z3MXM11GHJ1B6M4、`lane_rules` を compare にしたのは 2026-11-04T02:41:21Z。
+- 人の承認と手順 0.〜5. の実施を、task のコメント・回答（2026-11-04T02:41Z、operator session が人の指示で実施）で確かめた。release は手順 1. で作って promote した current（script-bundle 入り）、generation 01M6J6X3HE4Z3MXM11GHJ1B6M4、`lane_rules` を compare にしたのは 2026-11-04T02:41:21Z。
 - 手順 6. の集計を 2026-11-04T02:43Z に読み取り専用で実行した。**純粋判定は 1 件で、1000 件に届いていない**（report exit 4 = 矛盾は無いが件数不足）。synthetic で補っていない。task の指示どおり、件数を書いてここで止まる。
 - 1 件の中身: match 1、mismatch・explained・ts_error・invalid_output・unavailable は 0、一致率 1.0、latency 431 µs（n=1）、安全違反 0、guard の停止 0、shadow outbox の残り 0。
 - 見込み: 48.45 件/日（P1-E(1) の推定）で 1000 件まで約 20.6 日、2026-11-25 前後。負荷が変われば変わる。
@@ -35,7 +35,7 @@ raw:
 - [p1e-measure-samples.jsonl](p1e-measure-samples.jsonl) — `~/p1e-samples.jsonl` の写し（標本 1 件、02:40:43Z）
 
 ## 実行したコマンドと exit（提出時の HEAD で実行）
-- `journalctl --user -u celeris@9bccc68d0fda --since "2026-11-04 02:41:21" --no-pager > $TMPDIR/p1e/daemon.log` → exit 0、5 行
+- `journalctl --user -u celeris@<current の release> --since "2026-11-04 02:41:21" --no-pager > $TMPDIR/p1e/daemon.log` → exit 0、5 行
 - `python3 -I scripts/dev/script-compare.py report --db /local/celeris/data/db/celeris.sqlite3 --samples ~/p1e-samples.jsonl --tick-log $TMPDIR/p1e/daemon.log --require-ready lane_rules --format json` → exit 4（1.5 秒）
 - 同じく `--format table` → exit 4、`not ready: clean_streak 1 < 1000`、PROBLEM 行なし
 - `bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` → 下の「検査」

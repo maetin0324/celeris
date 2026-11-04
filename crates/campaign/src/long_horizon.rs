@@ -15,6 +15,19 @@ pub const ORACLE_SCHEMA: &str = "celeris.long-horizon-oracle/1";
 pub const GRADE_SCHEMA: &str = "celeris.long-horizon-grade/1";
 pub const SUMMARY_SCHEMA: &str = "celeris.long-horizon-summary/1";
 pub const REPLAY_DATASET: &str = "long_horizon_replay";
+/// 実 LLM pilot の dataset（ADR D1。replay と混ぜない。raw の置き場は A9 の進捗 dir の `a9/llm/`）。
+pub const LLM_PILOT_DATASET: &str = "long_horizon_llm_pilot";
+/// 対照の腕（ADR D5。常に待つ decider・人の bot は催促しない）。
+pub const CONTROL_ARM: &str = "ctl.null";
+
+/// tier の名前（`replay`・`llm_pilot`）から dataset の値。
+pub fn dataset_of_tier(tier: &str) -> Result<&'static str, String> {
+    match tier {
+        "replay" => Ok(REPLAY_DATASET),
+        "llm_pilot" => Ok(LLM_PILOT_DATASET),
+        other => Err(format!("unknown tier {other} (replay | llm_pilot)")),
+    }
+}
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -272,6 +285,22 @@ pub fn metrics(
             .or_default() += 1;
     }
     let double_effect = by_logical.values().filter(|n| **n >= 2).count();
+    // 人の指示を引かない root（controller の起票・CoS の自発の起票）が done になって到達した必須の Outcome の数。
+    // 対照 `ctl.null` で 0 になることを gate が確かめる（到達が台本の足場でなく機構によること）。
+    let reached_without_instruction = required
+        .iter()
+        .filter(|id| outcome_reached(repo, hidden, id))
+        .filter(|id| {
+            roots_of(facts, id).iter().any(|r| {
+                r["instructed"] == false
+                    && arr(&r["statuses"]).last().and_then(Value::as_str) == Some("done")
+            })
+        })
+        .count();
+    let daemon_roots = arr(&facts["roots"])
+        .iter()
+        .filter(|r| r["created_by"] == "daemon")
+        .count();
     // 回復: 発火から最後までに必須の Outcome に到達し、発火の後に avoidable が増えない。
     let faults = arr(&facts["faults"]);
     let recovered = faults
@@ -299,6 +328,8 @@ pub fn metrics(
         "dataset": facts["dataset"],
         "required_outcomes": required.len(),
         "reached_outcomes": reached,
+        "reached_without_instruction": reached_without_instruction,
+        "daemon_roots": daemon_roots,
         "case_reached": case_reached,
         "autonomous_reach": case_reached && avoidable == 0,
         "human_intervention": {
@@ -342,17 +373,28 @@ pub fn aggregate(raw: &Path, fixtures: &Path) -> Result<(Vec<Value>, Value), Str
     let mut arms: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     let mut dataset: Option<String> = None;
     let files = sorted_files(&raw.join("facts"))?;
+    // 同一初期条件（D2）: 課題ごとに全試行の `init_digest` が 1 つに揃う。違う・欠けるならその課題の試行を
+    // すべて `invalid_init` にして分母から外す。
+    let mut digests: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
     for f in &files {
-        let ds = read_json(f)?["dataset"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned();
+        let v = read_json(f)?;
+        let ds = v["dataset"].as_str().unwrap_or_default().to_owned();
         match &dataset {
             None => dataset = Some(ds),
             Some(d) if *d != ds => return Err(format!("mixed datasets: {d} and {ds}")),
             _ => {}
         }
+        digests
+            .entry(v["case"].as_str().unwrap_or_default().to_owned())
+            .or_default()
+            .insert(v["init_digest"].as_str().unwrap_or("missing").to_owned());
     }
+    let invalid_cases: Vec<String> = digests
+        .iter()
+        .filter(|(_, d)| d.len() != 1 || d.contains("missing"))
+        .map(|(c, _)| c.clone())
+        .collect();
+    let mut invalid_init = 0usize;
     for f in files {
         let trial = f
             .file_stem()
@@ -376,8 +418,13 @@ pub fn aggregate(raw: &Path, fixtures: &Path) -> Result<(Vec<Value>, Value), Str
         // 腕の結合は採点の後（D6）。
         let map = read_json(&raw.join("arm-map").join(format!("{trial}.json")))?;
         let arm = map["arm"].as_str().unwrap_or_default().to_owned();
-        let row = json!({"trial": trial, "case": case, "arm": arm, "grade": g, "metrics": m});
-        arms.entry(arm).or_default().push(row.clone());
+        let mut row = json!({"trial": trial, "case": case, "arm": arm, "grade": g, "metrics": m});
+        if invalid_cases.contains(&case) {
+            row["invalid"] = json!("invalid_init");
+            invalid_init += 1;
+        } else {
+            arms.entry(arm).or_default().push(row.clone());
+        }
         rows.push(row);
     }
     let mut per_arm = serde_json::Map::new();
@@ -429,8 +476,12 @@ pub fn aggregate(raw: &Path, fixtures: &Path) -> Result<(Vec<Value>, Value), Str
                 "recovered_faults": rec,
                 "recovery_rate": if fired > 0 { Some(rec as f64 / fired as f64) } else { None },
                 "handoffs": sum("handoffs"),
-                "tokens": null, "quota": null, "wall_secs": null,
-                "missing": "tier=replay（実 LLM を使っていないので未計測）",
+                "reached_without_instruction": sum("reached_without_instruction"),
+                "daemon_roots": sum("daemon_roots"),
+                "tokens": usage_sum(rs, "tokens"),
+                "quota": usage_sum(rs, "quota"),
+                "wall_secs": usage_sum(rs, "wall_secs"),
+                "missing": usage_missing(rs, dataset.as_deref()),
             }),
         );
     }
@@ -438,10 +489,95 @@ pub fn aggregate(raw: &Path, fixtures: &Path) -> Result<(Vec<Value>, Value), Str
         "schema": SUMMARY_SCHEMA,
         "dataset": dataset,
         "trials": rows.len(),
+        "invalid": {"invalid_init": invalid_init, "cases": invalid_cases},
         "arms": per_arm,
         "assumption_bound_cases": ["C09"],
     });
     Ok((rows, summary))
+}
+
+/// 腕の usage の和。1 試行でも null（未計測）なら null（0 や推定値で埋めない。D7）。
+fn usage_sum(rs: &[Value], k: &str) -> Value {
+    let mut total = 0f64;
+    for r in rs {
+        match r["metrics"][k].as_f64() {
+            Some(x) => total += x,
+            None => return Value::Null,
+        }
+    }
+    json!(total)
+}
+
+fn usage_missing(rs: &[Value], dataset: Option<&str>) -> Value {
+    if dataset == Some(REPLAY_DATASET) {
+        return json!("tier=replay（実 LLM を使っていないので未計測）");
+    }
+    let n = rs
+        .iter()
+        .filter(|r| r["metrics"]["tokens"].is_null())
+        .count();
+    if n == 0 {
+        Value::Null
+    } else {
+        json!(format!("{n} trials have no usage"))
+    }
+}
+
+/// tier を指定した集計（`celeris-campaign long-horizon-grade --tier …` の本体）。facts の dataset が tier と違えば Err
+/// （replay と実 LLM pilot の raw を混ぜない。D1）。`llm_pilot` で usage が `tier=replay` の facts も Err。
+pub fn aggregate_tier(
+    raw: &Path,
+    fixtures: &Path,
+    tier: &str,
+) -> Result<(Vec<Value>, Value), String> {
+    let want = dataset_of_tier(tier)?;
+    for f in sorted_files(&raw.join("facts"))? {
+        let v = read_json(&f)?;
+        if v["dataset"] != want {
+            return Err(format!(
+                "{}: dataset {} is not {want} (tier {tier})",
+                f.display(),
+                v["dataset"]
+            ));
+        }
+        if tier == "llm_pilot" && v["usage"]["missing"] == "tier=replay" {
+            return Err(format!("{}: replay usage in llm_pilot", f.display()));
+        }
+    }
+    let (rows, mut summary) = aggregate(raw, fixtures)?;
+    summary["tier"] = json!(tier);
+    Ok((rows, summary))
+}
+
+/// `celeris-campaign long-horizon-grade --tier <replay|llm_pilot> --raw <dir> --fixtures <dir> --out <dir>`。
+/// `<out>/grades.jsonl` と `<out>/summary.json` を書く。replay なら D8 の gate も確かめる。
+pub fn cli(args: &[String]) -> Result<String, String> {
+    let get = |k: &str| -> Result<std::path::PathBuf, String> {
+        args.iter()
+            .position(|a| a == k)
+            .and_then(|i| args.get(i + 1))
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| format!("{k} is required"))
+    };
+    let tier = get("--tier")?.display().to_string();
+    let (raw, fixtures, out) = (get("--raw")?, get("--fixtures")?, get("--out")?);
+    let (rows, summary) = aggregate_tier(&raw, &fixtures, &tier)?;
+    std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let lines: Vec<String> = rows.iter().map(|r| r.to_string()).collect();
+    std::fs::write(out.join("grades.jsonl"), lines.join("\n") + "\n").map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(&summary).map_err(|e| e.to_string())?;
+    std::fs::write(out.join("summary.json"), text + "\n").map_err(|e| e.to_string())?;
+    if tier == "replay" {
+        let errs = gate(&rows, &summary, &fixtures);
+        if !errs.is_empty() {
+            return Err(format!("D8 gate: {errs:?}"));
+        }
+    }
+    Ok(format!(
+        "long-horizon-grade: tier {tier}, {} trials, written to {}",
+        rows.len(),
+        out.display()
+    ))
 }
 
 /// D8 の gate（replay だけ）。違反の一覧（空なら合格）。
@@ -455,7 +591,10 @@ pub fn gate(rows: &[Value], summary: &Value, fixtures: &Path) -> Vec<String> {
     if cases.len() < 8 || cases.len() > 12 {
         errs.push(format!("{} cases (8..=12 required)", cases.len()));
     }
-    for arm in ["old.passive", "old.proactive", "new"] {
+    if summary["invalid"]["invalid_init"] != 0 {
+        errs.push(format!("invalid_init: {}", summary["invalid"]));
+    }
+    for arm in ["old.passive", "old.proactive", "new", CONTROL_ARM] {
         let n = rows.iter().filter(|r| r["arm"] == arm).count();
         if n != cases.len() {
             errs.push(format!("arm {arm}: {n} trials for {} cases", cases.len()));
@@ -503,7 +642,17 @@ pub fn gate(rows: &[Value], summary: &Value, fixtures: &Path) -> Vec<String> {
             }
         }
     }
+    // 対照（D5）: 常に待つ decider では controller の root が 0、人の指示を引かない到達が 0。
+    // `new` には人の指示を引かない到達がある（到達が機構によることの裏づけ）。
     let a = &summary["arms"];
+    for k in ["reached_without_instruction", "daemon_roots"] {
+        if a[CONTROL_ARM][k] != 0 {
+            errs.push(format!("{CONTROL_ARM}: {k} = {}", a[CONTROL_ARM][k]));
+        }
+    }
+    if u(&a["new"]["reached_without_instruction"]) == 0 {
+        errs.push("new: no outcome was reached without a human instruction".into());
+    }
     for k in ["reach_rate", "autonomous_reach"] {
         let (n, o) = (a["new"][k].as_f64(), a["old.passive"][k].as_f64());
         if !matches!((n, o), (Some(n), Some(o)) if n >= o) {

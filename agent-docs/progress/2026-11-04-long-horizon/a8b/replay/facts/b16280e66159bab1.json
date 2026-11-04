@@ -68,6 +68,7 @@
       "kind": "answer"
     }
   ],
+  "init_digest": "f5053b3c5a4a65b70bc997ba254ee04b51324cb8a010db523854690ac7caf134",
   "invocations": [
     {
       "at": 7200,
@@ -102,6 +103,7 @@
       "attempt": 1,
       "created_at": 7200,
       "created_by": "cos",
+      "instructed": false,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [

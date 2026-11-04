@@ -59,6 +59,7 @@
       "kind": "request_change"
     }
   ],
+  "init_digest": "9a7023cea56978031749d500b15739d5791e05c530c82fe31b100b5997878072",
   "invocations": [
     {
       "at": 0,
@@ -88,6 +89,7 @@
       "attempt": 1,
       "created_at": 0,
       "created_by": "cos",
+      "instructed": true,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [

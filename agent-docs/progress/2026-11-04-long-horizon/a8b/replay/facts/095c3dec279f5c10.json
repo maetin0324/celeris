@@ -19,6 +19,10 @@
     },
     {
       "actor": "cos",
+      "at": 3900
+    },
+    {
+      "actor": "cos",
       "at": 4500
     },
     {
@@ -34,6 +38,10 @@
       "at": 8400
     },
     {
+      "actor": "cos",
+      "at": 8400
+    },
+    {
       "actor": "daemon",
       "at": 9000
     },
@@ -43,6 +51,10 @@
     },
     {
       "actor": "reviewer",
+      "at": 12600
+    },
+    {
+      "actor": "cos",
       "at": 12600
     }
   ],
@@ -66,6 +78,7 @@
       "kind": "project_request"
     }
   ],
+  "init_digest": "72b02f19915f8ea4eed7d1a2eb1ba62e13f43a2aab3fa3e3941a7ceed1784d29",
   "invocations": [
     {
       "at": 300,
@@ -75,6 +88,11 @@
     {
       "at": 3900,
       "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "cos",
       "usage": null
     },
     {
@@ -93,6 +111,11 @@
       "usage": null
     },
     {
+      "at": 8400,
+      "role": "cos",
+      "usage": null
+    },
+    {
       "at": 9000,
       "role": "worker",
       "usage": null
@@ -100,6 +123,11 @@
     {
       "at": 12600,
       "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 12600,
+      "role": "cos",
       "usage": null
     }
   ],
@@ -110,6 +138,7 @@
       "attempt": 1,
       "created_at": 300,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [
@@ -123,6 +152,7 @@
       "attempt": 2,
       "created_at": 4800,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o1:2",
       "outcome": "o1",
       "statuses": [
@@ -136,6 +166,7 @@
       "attempt": 1,
       "created_at": 9000,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o2:1",
       "outcome": "o2",
       "statuses": [

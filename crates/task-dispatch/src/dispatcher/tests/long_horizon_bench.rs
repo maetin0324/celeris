@@ -31,6 +31,8 @@ enum Arm {
     OldPassive,
     OldProactive,
     New,
+    /// 対照（ADR D5）: `new` と同じ設定で、decider は常に待つ（`ProjectDecision::none`）。人の bot は催促しない。
+    CtlNull,
 }
 
 impl Arm {
@@ -39,7 +41,32 @@ impl Arm {
             Arm::OldPassive => "old.passive",
             Arm::OldProactive => "old.proactive",
             Arm::New => "new",
+            Arm::CtlNull => "ctl.null",
         }
+    }
+
+    /// 案件 mode（config の許可リストの差。ADR D2）。
+    fn mode(self) -> ControllerMode {
+        match self {
+            Arm::OldPassive | Arm::OldProactive => ControllerMode::Off,
+            Arm::New | Arm::CtlNull => ControllerMode::Enabled,
+        }
+    }
+
+    /// 台本の CoS の種類（腕の名前ではなく台本の 2 通り。`new`・`ctl.null` は passive）。
+    fn proactive_script(self) -> bool {
+        self == Arm::OldProactive
+    }
+}
+
+/// 対照 `ctl.null` の decider: 何もしない判断だけを返す。
+struct NullDecider;
+
+impl crate::project_controller::ProjectDecider for NullDecider {
+    fn decide(&mut self, _input: &ProjectDecideInput) -> Result<ProjectDecision, String> {
+        let mut d = ProjectDecision::none("bench/ctl-null");
+        d.phase = ControllerPhase::Waiting;
+        Ok(d)
     }
 }
 
@@ -286,6 +313,8 @@ struct RootState {
     outcome: Option<String>,
     attempt: usize,
     created_by: &'static str,
+    /// 人の指示（発言・回答・催促）を引いた起票か。
+    instructed: bool,
     created_at: i64,
     started: bool,
     due: Option<i64>,
@@ -331,6 +360,7 @@ struct Trial<'a> {
     achieved_at: Option<i64>,
     mid_digest: Option<(usize, String)>,
     fired_ops: BTreeSet<usize>,
+    init_digest: String,
 }
 
 fn boundary_of(name: &str) -> Boundary {
@@ -408,19 +438,23 @@ impl<'a> Trial<'a> {
             achieved_at: None,
             mid_digest: None,
             fired_ops: BTreeSet::new(),
+            init_digest: String::new(),
         };
-        if arm == Arm::New {
-            let now = t.env.now();
+        let now = t.env.now();
+        // launch_root の許可は全腕に同じ行を作る（ADR 未解決の判断: 揃える。`off` の案件では使われない）。
+        seed_grant(&t.store, &t.p.id.to_string(), now);
+        // 同一初期条件の digest（D2）: mode を置く前に、ULID と時刻を伏せた行と作業 tree の hash を取る。
+        t.init_digest = t.init_digest();
+        if arm.mode() != ControllerMode::Off {
             t.store
                 .project_controller_set_mode(
                     &t.p.id.to_string(),
-                    ControllerMode::Enabled,
+                    arm.mode(),
                     None,
                     "human:bench",
                     now,
                 )
                 .unwrap();
-            seed_grant(&t.store, &t.p.id.to_string(), now);
         }
         t.start_daemon("i0");
         // 人の依頼（案件の作成）は全腕で stimulus 1 件。
@@ -458,19 +492,24 @@ impl<'a> Trial<'a> {
                 triage: Default::default(),
             },
         );
-        let decider = match &self.ts {
-            Some(ts) => {
+        let decider: Box<dyn crate::project_controller::ProjectDecider> = match (&self.ts, self.arm)
+        {
+            (_, Arm::CtlNull) => Box::new(NullDecider),
+            (Some(ts), _) => {
                 let script: Arc<dyn PolicyScript> = ts.clone();
-                TsProjectDecider::with_fixed_script(DeciderLimits::default(), script)
+                Box::new(TsProjectDecider::with_fixed_script(
+                    DeciderLimits::default(),
+                    script,
+                ))
             }
-            None => TsProjectDecider::new(DeciderLimits::default()),
+            (None, _) => Box::new(TsProjectDecider::new(DeciderLimits::default())),
         };
         let settings = ProjectControllerSettings {
             enabled: true,
             coalesce_secs: 0,
             ..ProjectControllerSettings::default()
         };
-        assert!(d.set_project_controller(settings, Box::new(decider), owner.into()));
+        assert!(d.set_project_controller(settings, decider, owner.into()));
         let pending = self.pending_boundary.clone();
         let fired = self.boundary_fired.clone();
         let store = self.store.clone();
@@ -606,8 +645,8 @@ impl<'a> Trial<'a> {
         }
     }
 
-    /// 台本の CoS（腕を受け取らない）が root を起票する。`new` の案件では人の指示を引かない起票は 422
-    /// `project_controller_owns_launch`（ADR Project Controller D8）。
+    /// 台本の CoS が root を起票する。controller が `enabled` の案件では人の指示を引かない起票は 422
+    /// `project_controller_owns_launch`（ADR Project Controller D8。daemon 側の規則なので DB の mode で決める）。
     fn cos_create(&mut self, outcome: &str, instructed: bool) -> bool {
         self.cos_create_as(outcome, instructed, false)
     }
@@ -616,7 +655,7 @@ impl<'a> Trial<'a> {
         let now = self.secs();
         self.invocation("cos", now);
         self.actor("cos", now);
-        if self.arm == Arm::New && !instructed {
+        if self.controller_enabled() && !instructed {
             self.cos_rejected += 1;
             return false;
         }
@@ -634,11 +673,15 @@ impl<'a> Trial<'a> {
             .collect();
         t.status = Status::Ready;
         self.store.create_task(&t, vec![]).unwrap();
-        self.track(t.id, "cos", answer);
+        self.track_as(t.id, "cos", answer, instructed);
         true
     }
 
     fn track(&mut self, id: TaskId, by: &'static str, answer: bool) {
+        self.track_as(id, by, answer, false);
+    }
+
+    fn track_as(&mut self, id: TaskId, by: &'static str, answer: bool, instructed: bool) {
         let t = self.store.get(id).unwrap().unwrap();
         let outcome = self.map_outcome(&t);
         let attempt = outcome.as_ref().map_or(0, |o| {
@@ -674,6 +717,7 @@ impl<'a> Trial<'a> {
                 outcome,
                 attempt,
                 created_by: by,
+                instructed,
                 created_at: now,
                 started: false,
                 due: None,
@@ -860,9 +904,7 @@ impl<'a> Trial<'a> {
                         self.set_status(id, Status::Failed, "review_fail");
                     }
                 }
-                if self.arm != Arm::New {
-                    self.old_cos_on_root_end(id);
-                }
+                self.cos_on_root_end(id);
             }
         }
     }
@@ -874,14 +916,69 @@ impl<'a> Trial<'a> {
         }));
     }
 
-    /// 旧 CoS: root の終了で起き（要約の run 1 回）、proactive なら次を起票する。
-    fn old_cos_on_root_end(&mut self, _id: TaskId) {
+    /// root の終了で CoS が 1 回起きる（全腕。done は root_done の要約、failed は受信箱の triage に当たる）。
+    /// proactive の台本は次を起票する。controller が `enabled` の案件では CoS の入力に「controller が起票する」
+    /// の文（付記 A3 の 9）が入るので、台本の CoS は起票しない。
+    fn cos_on_root_end(&mut self, _id: TaskId) {
         let now = self.secs();
         self.invocation("cos", now);
         self.actor("cos", now);
-        if self.arm == Arm::OldProactive {
-            self.proactive_next();
+        if self.arm.proactive_script() && !self.controller_enabled() {
+            self.proactive_next(false);
         }
+    }
+
+    /// 案件の controller が `enabled` か（DB の行で決める。腕の名前は見ない）。
+    fn controller_enabled(&self) -> bool {
+        self.store
+            .project_controller_state(&self.p.id.to_string())
+            .unwrap()
+            .is_some_and(|s| s.mode == ControllerMode::Enabled)
+    }
+
+    /// 同一初期条件の digest（ADR D2）。案件・request・`project_repos`・thread・brief・許可の行を、ULID・時刻・
+    /// 案件 id を伏せて並べ、作業 tree の hash と一緒に sha256 にする。controller の状態（mode）は許可リストの差なので
+    /// 入れない。
+    fn init_digest(&self) -> String {
+        let conn = rusqlite::Connection::open(self.env.db()).unwrap();
+        let pid = self.p.id.to_string();
+        let mut h = Sha256::new();
+        for table in [
+            "projects",
+            "project_repos",
+            "chat_threads",
+            "project_briefs",
+            "authority_grants",
+        ] {
+            let filter = if table == "projects" {
+                "id"
+            } else {
+                "project_id"
+            };
+            let mut stmt = conn
+                .prepare(&format!("SELECT * FROM {table} WHERE {filter} = ?1"))
+                .unwrap();
+            let cols: Vec<String> = stmt.column_names().iter().map(|c| c.to_string()).collect();
+            let mut rows: Vec<String> = stmt
+                .query_map([&pid], |r| {
+                    let mut line = Vec::new();
+                    for (i, c) in cols.iter().enumerate() {
+                        if c == "id" || c.ends_with("_at") || c.ends_with("_id") {
+                            continue;
+                        }
+                        let v: rusqlite::types::Value = r.get(i)?;
+                        line.push(format!("{c}={v:?}"));
+                    }
+                    Ok(line.join("|").replace(&pid, "<project>"))
+                })
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect();
+            rows.sort();
+            h.update(format!("{table}:{}\n", rows.join("\n")).as_bytes());
+        }
+        h.update(tree_digest(&self.repo).as_bytes());
+        hex(&h.finalize())
     }
 
     fn next_open(&self) -> Option<String> {
@@ -894,15 +991,18 @@ impl<'a> Trial<'a> {
             .map(|o| o.id.clone())
     }
 
-    fn proactive_next(&mut self) {
+    /// `invoke`: この呼び出しで CoS が新たに起きる（root の終了の起動の中からは false）。
+    fn proactive_next(&mut self, invoke: bool) {
         if self.in_flight() || !self.request_valid {
             return;
         }
         if let Some(o) = self.next_open() {
             let tries = self.attempts_by_outcome.get(&o).copied().unwrap_or(0);
             if tries < 2 {
-                let at = self.secs();
-                self.invocation("cos", at);
+                if invoke {
+                    let at = self.secs();
+                    self.invocation("cos", at);
+                }
                 self.cos_create(&o, false);
             }
         }
@@ -983,7 +1083,11 @@ impl<'a> Trial<'a> {
             return;
         }
         let since = *self.idle_since.get_or_insert(now);
-        if self.nudges >= self.sc.outcomes.len() || now - since < NUDGE_AFTER_SECS {
+        // 対照 `ctl.null` の人の bot は催促しない（到達が controller によることを確かめる対照）。
+        if self.arm == Arm::CtlNull
+            || self.nudges >= self.sc.outcomes.len()
+            || now - since < NUDGE_AFTER_SECS
+        {
             return;
         }
         let Some(o) = self.next_open() else {
@@ -1039,7 +1143,8 @@ impl<'a> Trial<'a> {
                 }
                 "human_request_at_boundary" => {
                     let ids = e.outcomes.clone().unwrap_or_default();
-                    if self.arm == Arm::New {
+                    // 境界は controller の tick の中にある。`off` の案件では tick が判断しないので、すぐ適用する。
+                    if self.controller_enabled() {
                         *self.pending_boundary.lock().unwrap() = Some((
                             boundary_of(e.boundary.as_deref().unwrap()),
                             format!("request:{}", ids.join(",")),
@@ -1084,7 +1189,7 @@ impl<'a> Trial<'a> {
                     self.fault("restart", now);
                 }
                 "restart_at_boundary" => {
-                    if self.arm == Arm::New {
+                    if self.controller_enabled() {
                         *self.pending_boundary.lock().unwrap() =
                             Some((boundary_of(e.boundary.as_deref().unwrap()), "crash".into()));
                     } else {
@@ -1140,7 +1245,7 @@ impl<'a> Trial<'a> {
                 SqliteStore::project_controller_human_bump_tx(tx, &project, at, 0)
             })
             .unwrap();
-        if self.arm == Arm::New && self.escalation_open_since.is_some() {
+        if self.controller_enabled() && self.escalation_open_since.is_some() {
             // escalate の後の controller は blocked。人は依頼を直した同じ操作で mode を置き直す（PUT …/controller）。
             self.store
                 .project_controller_set_mode(
@@ -1158,31 +1263,32 @@ impl<'a> Trial<'a> {
         self.escalation_open_since = None;
         self.human_op(class, "request_change", now);
         self.actor("human", now);
-        if self.arm == Arm::OldProactive {
-            self.proactive_next();
+        if self.arm.proactive_script() && !self.controller_enabled() {
+            self.proactive_next(true);
         }
     }
 
+    /// 人の依頼の開始。daemon には全腕で wake（`POST …/controller/wake` 相当。`off` の案件では評価されない）。
+    /// 台本の CoS は依頼を読んで最初の root を起票する。ただし controller が `enabled` の案件では CoS の入力に
+    /// 「controller が起票する」の文が入るので起票しない。
     fn kick(&mut self) {
-        if self.arm == Arm::New {
-            if self.sc.kick {
-                self.store
-                    .project_wake_ingest(
-                        &[NewProjectWake {
-                            project_id: self.p.id.to_string(),
-                            wake_key: "external:bench:start".into(),
-                            kind: ProjectWakeKind::ExternalReleased,
-                            source_event_id: None,
-                            source_ref: Some("bench:start".into()),
-                        }],
-                        None,
-                        0,
-                        self.env.now(),
-                    )
-                    .unwrap();
-            }
-        } else if self.sc.kick && self.request_valid {
-            // 旧 CoS は依頼を読んで最初の root を起票する。
+        if self.sc.kick {
+            self.store
+                .project_wake_ingest(
+                    &[NewProjectWake {
+                        project_id: self.p.id.to_string(),
+                        wake_key: "external:bench:start".into(),
+                        kind: ProjectWakeKind::ExternalReleased,
+                        source_event_id: None,
+                        source_ref: Some("bench:start".into()),
+                    }],
+                    None,
+                    0,
+                    self.env.now(),
+                )
+                .unwrap();
+        }
+        if self.sc.kick && self.request_valid && !self.controller_enabled() {
             if let Some(o) = self.next_open() {
                 self.cos_create(&o, true);
             }
@@ -1221,7 +1327,8 @@ impl<'a> Trial<'a> {
             return;
         };
         let now = self.secs();
-        if now % every == 0 && self.arm == Arm::New {
+        // cron の wake は全腕に入る（`off` の案件では controller が評価しない）。
+        if now % every == 0 {
             self.store
                 .project_wake_ingest(
                     &[NewProjectWake {
@@ -1301,7 +1408,8 @@ impl<'a> Trial<'a> {
                 let acc: Vec<&str> = t.acceptance.iter().map(|c| c.text.as_str()).collect();
                 json!({
                     "logical_id": r.logical, "outcome": r.outcome, "attempt": r.attempt,
-                    "created_by": r.created_by, "created_at": r.created_at,
+                    "created_by": r.created_by, "instructed": r.instructed,
+                    "created_at": r.created_at,
                     "statuses": r.statuses, "acceptance_sha256": sha(&acc.join("\n")),
                 })
             })
@@ -1345,6 +1453,7 @@ impl<'a> Trial<'a> {
             "dataset": "long_horizon_replay",
             "case": self.sc.case,
             "seed": 1,
+            "init_digest": self.init_digest,
             "horizon_secs": self.sc.horizon_secs,
             "roots": roots,
             "effects": self.effects,
@@ -1357,7 +1466,7 @@ impl<'a> Trial<'a> {
             "cos_launch_rejected": self.cos_rejected,
             "running_untracked": running_untracked,
             "achieved_at": self.achieved_at,
-            "events_append_only": mid_n > 0 && mid == prefix,
+            "events_append_only": self.mid_digest.is_some() && mid == prefix,
             "usage": {"tokens": null, "quota": null, "wall_secs": null, "missing": "tier=replay"},
             "virtual_secs_to_reach": self.achieved_at,
         });
@@ -1374,6 +1483,31 @@ fn is_terminal(s: Option<&String>) -> bool {
         s.map(String::as_str),
         Some("done") | Some("failed") | Some("cancelled")
     )
+}
+
+/// 作業 tree の木 hash（相対 path と内容の sha256 を並べたもの）。
+fn tree_digest(root: &Path) -> String {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        entries.sort();
+        for p in entries {
+            if p.is_dir() {
+                walk(root, &p, out);
+            } else {
+                let rel = p.strip_prefix(root).unwrap().display().to_string();
+                out.push(format!(
+                    "{rel}:{}",
+                    hex(&Sha256::digest(std::fs::read(&p).unwrap()))
+                ));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    sha(&out.join("\n"))
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -1453,7 +1587,7 @@ fn bench(case: &str, arm: Arm, test: &str) {
         "{test}: events are not append-only"
     );
     assert_eq!(facts["running_untracked"], 0, "{test}");
-    if arm == Arm::New {
+    if arm.mode() == ControllerMode::Enabled {
         assert_eq!(
             facts["cos_launch_rejected"], 0,
             "{test}: the scripted CoS was asked to launch"
@@ -1486,7 +1620,11 @@ fn bench(case: &str, arm: Arm, test: &str) {
 }
 
 macro_rules! bench_case {
-    ($case:literal, $p:ident, $a:ident, $n:ident) => {
+    ($case:literal, $p:ident, $a:ident, $n:ident, $z:ident) => {
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn $z() {
+            bench($case, Arm::CtlNull, stringify!($z));
+        }
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn $p() {
             bench($case, Arm::OldPassive, stringify!($p));
@@ -1506,59 +1644,69 @@ bench_case!(
     "C01",
     long_horizon_bench_c01_stale_event_old_passive,
     long_horizon_bench_c01_stale_event_old_proactive,
-    long_horizon_bench_c01_stale_event_new
+    long_horizon_bench_c01_stale_event_new,
+    long_horizon_bench_c01_stale_event_ctl_null
 );
 bench_case!(
     "C02",
     long_horizon_bench_c02_partial_result_old_passive,
     long_horizon_bench_c02_partial_result_old_proactive,
-    long_horizon_bench_c02_partial_result_new
+    long_horizon_bench_c02_partial_result_new,
+    long_horizon_bench_c02_partial_result_ctl_null
 );
 bench_case!(
     "C03",
     long_horizon_bench_c03_slow_worker_old_passive,
     long_horizon_bench_c03_slow_worker_old_proactive,
-    long_horizon_bench_c03_slow_worker_new
+    long_horizon_bench_c03_slow_worker_new,
+    long_horizon_bench_c03_slow_worker_ctl_null
 );
 bench_case!(
     "C04",
     long_horizon_bench_c04_child_failed_old_passive,
     long_horizon_bench_c04_child_failed_old_proactive,
-    long_horizon_bench_c04_child_failed_new
+    long_horizon_bench_c04_child_failed_new,
+    long_horizon_bench_c04_child_failed_ctl_null
 );
 bench_case!(
     "C05",
     long_horizon_bench_c05_plan_invalid_old_passive,
     long_horizon_bench_c05_plan_invalid_old_proactive,
-    long_horizon_bench_c05_plan_invalid_new
+    long_horizon_bench_c05_plan_invalid_new,
+    long_horizon_bench_c05_plan_invalid_ctl_null
 );
 bench_case!(
     "C06",
     long_horizon_bench_c06_auth_wait_old_passive,
     long_horizon_bench_c06_auth_wait_old_proactive,
-    long_horizon_bench_c06_auth_wait_new
+    long_horizon_bench_c06_auth_wait_new,
+    long_horizon_bench_c06_auth_wait_ctl_null
 );
 bench_case!(
     "C07",
     long_horizon_bench_c07_daemon_restart_old_passive,
     long_horizon_bench_c07_daemon_restart_old_proactive,
-    long_horizon_bench_c07_daemon_restart_new
+    long_horizon_bench_c07_daemon_restart_new,
+    long_horizon_bench_c07_daemon_restart_ctl_null
 );
 bench_case!(
     "C08",
     long_horizon_bench_c08_multi_root_old_passive,
     long_horizon_bench_c08_multi_root_old_proactive,
-    long_horizon_bench_c08_multi_root_new
+    long_horizon_bench_c08_multi_root_new,
+    long_horizon_bench_c08_multi_root_ctl_null
 );
 bench_case!(
     "C09",
     long_horizon_bench_c09_consult_short_continue_old_passive,
     long_horizon_bench_c09_consult_short_continue_old_proactive,
-    long_horizon_bench_c09_consult_short_continue_new
+    long_horizon_bench_c09_consult_short_continue_new,
+    long_horizon_bench_c09_consult_short_continue_ctl_null
 );
 bench_case!(
     "C10",
     long_horizon_bench_c10_repeat_failure_old_passive,
     long_horizon_bench_c10_repeat_failure_old_proactive,
-    long_horizon_bench_c10_repeat_failure_new
+    long_horizon_bench_c10_repeat_failure_new,
+    long_horizon_bench_c10_repeat_failure_ctl_null
 );

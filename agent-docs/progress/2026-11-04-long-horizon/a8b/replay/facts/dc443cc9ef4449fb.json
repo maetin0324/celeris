@@ -18,6 +18,10 @@
       "at": 3900
     },
     {
+      "actor": "cos",
+      "at": 3900
+    },
+    {
       "actor": "human",
       "at": 4200
     }
@@ -51,6 +55,7 @@
       "kind": "request_change"
     }
   ],
+  "init_digest": "9a7023cea56978031749d500b15739d5791e05c530c82fe31b100b5997878072",
   "invocations": [
     {
       "at": 300,
@@ -61,6 +66,11 @@
       "at": 3900,
       "role": "reviewer",
       "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "cos",
+      "usage": null
     }
   ],
   "questions": [],
@@ -70,6 +80,7 @@
       "attempt": 1,
       "created_at": 300,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [

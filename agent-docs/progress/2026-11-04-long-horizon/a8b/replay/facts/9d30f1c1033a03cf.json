@@ -66,6 +66,7 @@
       "kind": "project_request"
     }
   ],
+  "init_digest": "9f7aa602b16bb3660c11d592bb695597594b5d402d104fd40d954ae2688995e8",
   "invocations": [
     {
       "at": 0,
@@ -80,11 +81,6 @@
     {
       "at": 65100,
       "role": "reviewer",
-      "usage": null
-    },
-    {
-      "at": 65100,
-      "role": "cos",
       "usage": null
     },
     {
@@ -120,6 +116,7 @@
       "attempt": 1,
       "created_at": 0,
       "created_by": "cos",
+      "instructed": true,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [
@@ -133,6 +130,7 @@
       "attempt": 1,
       "created_at": 65100,
       "created_by": "cos",
+      "instructed": false,
       "logical_id": "o2:1",
       "outcome": "o2",
       "statuses": [

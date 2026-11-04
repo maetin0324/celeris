@@ -133,6 +133,7 @@
       "kind": "nudge"
     }
   ],
+  "init_digest": "be9c50dd4de13bbc01a03c5ee2df37283da9e23e938df6d3038865c9853f277e",
   "invocations": [
     {
       "at": 0,
@@ -222,6 +223,7 @@
       "attempt": 1,
       "created_at": 0,
       "created_by": "cos",
+      "instructed": true,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [
@@ -235,6 +237,7 @@
       "attempt": 1,
       "created_at": 25500,
       "created_by": "cos",
+      "instructed": true,
       "logical_id": "o2:1",
       "outcome": "o2",
       "statuses": [
@@ -248,6 +251,7 @@
       "attempt": 1,
       "created_at": 51000,
       "created_by": "cos",
+      "instructed": true,
       "logical_id": "o3:1",
       "outcome": "o3",
       "statuses": [
@@ -261,6 +265,7 @@
       "attempt": 1,
       "created_at": 76500,
       "created_by": "cos",
+      "instructed": true,
       "logical_id": "o4:1",
       "outcome": "o4",
       "statuses": [

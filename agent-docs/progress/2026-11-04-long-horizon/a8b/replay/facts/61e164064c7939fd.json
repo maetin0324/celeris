@@ -34,6 +34,10 @@
       "at": 5400
     },
     {
+      "actor": "cos",
+      "at": 5400
+    },
+    {
       "actor": "daemon",
       "at": 6000
     },
@@ -43,6 +47,10 @@
     },
     {
       "actor": "reviewer",
+      "at": 9600
+    },
+    {
+      "actor": "cos",
       "at": 9600
     },
     {
@@ -85,6 +93,7 @@
       "kind": "message"
     }
   ],
+  "init_digest": "33347cc3b27de0b9b2b0bc4db85c54e7c8bc90eb77a977b0bd3621740a2a5419",
   "invocations": [
     {
       "at": 600,
@@ -117,6 +126,11 @@
       "usage": null
     },
     {
+      "at": 5400,
+      "role": "cos",
+      "usage": null
+    },
+    {
       "at": 6000,
       "role": "worker",
       "usage": null
@@ -124,6 +138,11 @@
     {
       "at": 9600,
       "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 9600,
+      "role": "cos",
       "usage": null
     },
     {
@@ -139,6 +158,7 @@
       "attempt": 1,
       "created_at": 1800,
       "created_by": "cos",
+      "instructed": true,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [
@@ -152,6 +172,7 @@
       "attempt": 1,
       "created_at": 6000,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o2:1",
       "outcome": "o2",
       "statuses": [

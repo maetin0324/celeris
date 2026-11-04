@@ -22,6 +22,10 @@
       "at": 263100
     },
     {
+      "actor": "cos",
+      "at": 263100
+    },
+    {
       "actor": "daemon",
       "at": 263700
     },
@@ -78,6 +82,7 @@
       "kind": "approval"
     }
   ],
+  "init_digest": "3aea5005bc1616e6d3d5d3d2c99d6c28ebfd59b100f1fb20b5aefe32aeebe7c6",
   "invocations": [
     {
       "at": 300,
@@ -87,6 +92,11 @@
     {
       "at": 263100,
       "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 263100,
+      "role": "cos",
       "usage": null
     },
     {
@@ -104,6 +114,7 @@
       "attempt": 1,
       "created_at": 300,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [
@@ -117,6 +128,7 @@
       "attempt": 1,
       "created_at": 263700,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o2:1",
       "outcome": "o2",
       "statuses": [

@@ -18,6 +18,10 @@
       "at": 3900
     },
     {
+      "actor": "cos",
+      "at": 3900
+    },
+    {
       "actor": "daemon",
       "at": 4500
     },
@@ -27,6 +31,10 @@
     },
     {
       "actor": "reviewer",
+      "at": 8100
+    },
+    {
+      "actor": "cos",
       "at": 8100
     },
     {
@@ -42,6 +50,10 @@
       "at": 12300
     },
     {
+      "actor": "cos",
+      "at": 12300
+    },
+    {
       "actor": "daemon",
       "at": 12900
     },
@@ -51,6 +63,10 @@
     },
     {
       "actor": "reviewer",
+      "at": 16500
+    },
+    {
+      "actor": "cos",
       "at": 16500
     }
   ],
@@ -74,6 +90,7 @@
       "kind": "project_request"
     }
   ],
+  "init_digest": "be9c50dd4de13bbc01a03c5ee2df37283da9e23e938df6d3038865c9853f277e",
   "invocations": [
     {
       "at": 300,
@@ -83,6 +100,11 @@
     {
       "at": 3900,
       "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "cos",
       "usage": null
     },
     {
@@ -96,6 +118,11 @@
       "usage": null
     },
     {
+      "at": 8100,
+      "role": "cos",
+      "usage": null
+    },
+    {
       "at": 8700,
       "role": "worker",
       "usage": null
@@ -103,6 +130,11 @@
     {
       "at": 12300,
       "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 12300,
+      "role": "cos",
       "usage": null
     },
     {
@@ -114,6 +146,11 @@
       "at": 16500,
       "role": "reviewer",
       "usage": null
+    },
+    {
+      "at": 16500,
+      "role": "cos",
+      "usage": null
     }
   ],
   "questions": [],
@@ -123,6 +160,7 @@
       "attempt": 1,
       "created_at": 300,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [
@@ -136,6 +174,7 @@
       "attempt": 1,
       "created_at": 4500,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o2:1",
       "outcome": "o2",
       "statuses": [
@@ -149,6 +188,7 @@
       "attempt": 1,
       "created_at": 8700,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o3:1",
       "outcome": "o3",
       "statuses": [
@@ -162,6 +202,7 @@
       "attempt": 1,
       "created_at": 12900,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o4:1",
       "outcome": "o4",
       "statuses": [

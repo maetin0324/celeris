@@ -28,6 +28,10 @@
     {
       "actor": "reviewer",
       "at": 12600
+    },
+    {
+      "actor": "cos",
+      "at": 12600
     }
   ],
   "bench_version": 1,
@@ -64,6 +68,7 @@
       "kind": "answer"
     }
   ],
+  "init_digest": "f5053b3c5a4a65b70bc997ba254ee04b51324cb8a010db523854690ac7caf134",
   "invocations": [
     {
       "at": 7200,
@@ -73,6 +78,11 @@
     {
       "at": 12600,
       "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 12600,
+      "role": "cos",
       "usage": null
     }
   ],
@@ -85,6 +95,7 @@
       "attempt": 1,
       "created_at": 7200,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [

@@ -4,7 +4,7 @@
 //! commit 済みの `agent-docs/progress/2026-11-04-long-horizon/a8b/replay/`。`LONG_HORIZON_BENCH_SUMMARY_OUT` があれば
 //! `grades.jsonl`・`summary.json` を書く。LLM を呼ばない。子 process を起こさない。
 
-use celeris_campaign::long_horizon::{aggregate, gate, grade};
+use celeris_campaign::long_horizon::{aggregate, aggregate_tier, cli, gate, grade};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -236,4 +236,194 @@ fn long_horizon_bench_rejects_arm_field_and_mixed_dataset() {
     let err = aggregate(&tmp, &fixtures()).unwrap_err();
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(err.contains("mixed datasets"), "{err}");
+}
+
+/// 写しの raw（facts・arm-map・trials の repo）を作る。`pick` が真の試行だけ、`edit` で facts を書き換える。
+fn copy_raw(
+    tag: &str,
+    pick: impl Fn(&Value) -> bool,
+    mut edit: impl FnMut(&Value, &mut Value),
+) -> PathBuf {
+    let src = repo_root().join("agent-docs/progress/2026-11-04-long-horizon/a8b/replay");
+    let tmp = std::env::temp_dir().join(format!("lhb-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    for sub in ["facts", "arm-map", "trials"] {
+        std::fs::create_dir_all(tmp.join(sub)).unwrap();
+    }
+    let mut maps: Vec<PathBuf> = std::fs::read_dir(src.join("arm-map"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    maps.sort();
+    for mp in maps {
+        let m = read(&mp);
+        if !pick(&m) {
+            continue;
+        }
+        let t = m["trial"].as_str().unwrap();
+        let mut f = read(&src.join("facts").join(format!("{t}.json")));
+        edit(&m, &mut f);
+        std::fs::write(tmp.join("facts").join(format!("{t}.json")), f.to_string()).unwrap();
+        std::fs::copy(&mp, tmp.join("arm-map").join(format!("{t}.json"))).unwrap();
+        copy_tree(
+            &src.join("trials").join(t).join("repo"),
+            &tmp.join("trials").join(t).join("repo"),
+        );
+    }
+    tmp
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap() {
+        let e = e.unwrap();
+        if e.file_type().unwrap().is_dir() {
+            copy_tree(&e.path(), &to.join(e.file_name()));
+        } else {
+            std::fs::copy(e.path(), to.join(e.file_name())).unwrap();
+        }
+    }
+}
+
+/// D2 の同一初期条件: 1 試行の `init_digest` を変えると、その課題の全試行が `invalid_init` になり gate が落ちる。
+#[test]
+fn long_horizon_bench_init_digest_mismatch_is_invalid_init() {
+    let raw = copy_raw(
+        "init",
+        |_| true,
+        |m, f| {
+            if m["case"] == "C03" && m["arm"] == "old.passive" {
+                f["init_digest"] = json!("0000");
+            }
+        },
+    );
+    let (rows, summary) = aggregate(&raw, &fixtures()).unwrap();
+    assert_eq!(
+        summary["invalid"]["invalid_init"], 4,
+        "{}",
+        summary["invalid"]
+    );
+    assert_eq!(summary["invalid"]["cases"], json!(["C03"]));
+    assert!(
+        rows.iter()
+            .filter(|r| r["case"] == "C03")
+            .all(|r| r["invalid"] == "invalid_init")
+    );
+    assert_eq!(summary["arms"]["new"]["trials"], 9);
+    let errs = gate(&rows, &summary, &fixtures());
+    assert!(
+        errs.iter().any(|e| e.starts_with("invalid_init")),
+        "{errs:?}"
+    );
+    // 欠けた digest も invalid_init。
+    let raw2 = copy_raw(
+        "init2",
+        |m| m["case"] == "C01",
+        |m, f| {
+            if m["arm"] == "new" {
+                f.as_object_mut().unwrap().remove("init_digest");
+            }
+        },
+    );
+    let (_, s2) = aggregate(&raw2, &fixtures()).unwrap();
+    assert_eq!(s2["invalid"]["invalid_init"], 4);
+    let _ = std::fs::remove_dir_all(&raw);
+    let _ = std::fs::remove_dir_all(&raw2);
+}
+
+/// D5 の対照 `ctl.null`: commit 済みの raw で controller の root 0・指示なしの到達 0。値を変えると gate が落ちる。
+#[test]
+fn long_horizon_bench_ctl_null_control_reaches_nothing_by_itself() {
+    let (rows, summary) = aggregate(
+        &repo_root().join("agent-docs/progress/2026-11-04-long-horizon/a8b/replay"),
+        &fixtures(),
+    )
+    .unwrap();
+    let c = &summary["arms"]["ctl.null"];
+    assert_eq!(c["trials"], 10);
+    assert_eq!(c["daemon_roots"], 0);
+    assert_eq!(c["reached_without_instruction"], 0);
+    assert!(
+        summary["arms"]["new"]["reached_without_instruction"]
+            .as_i64()
+            .unwrap()
+            > 0
+    );
+    let mut bad = summary.clone();
+    bad["arms"]["ctl.null"]["reached_without_instruction"] = json!(1);
+    let errs = gate(&rows, &bad, &fixtures());
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("ctl.null: reached_without_instruction")),
+        "{errs:?}"
+    );
+}
+
+/// D1・D9: 実 LLM pilot の記録の経路。dataset `long_horizon_llm_pilot` の facts（ここでは stub: replay の facts の
+/// dataset と usage を書き換えたもの。LLM 0）を `--tier llm_pilot` で採点・集計でき、usage は和になる。
+/// replay と pilot は互いの tier で拒まれる。
+#[test]
+fn long_horizon_bench_llm_pilot_tier_is_recorded_separately() {
+    let pilot_cases = ["C04", "C06", "C08", "C09", "C10"];
+    let raw = copy_raw(
+        "pilot",
+        |m| {
+            pilot_cases.contains(&m["case"].as_str().unwrap())
+                && (m["arm"] == "new" || m["arm"] == "old.passive")
+        },
+        |_, f| {
+            f["dataset"] = json!("long_horizon_llm_pilot");
+            f["usage"] = json!({"tokens": 1000, "quota": 0.5, "wall_secs": 60, "missing": null});
+        },
+    );
+    let (rows, summary) = aggregate_tier(&raw, &fixtures(), "llm_pilot").unwrap();
+    assert_eq!(rows.len(), 10);
+    assert_eq!(summary["dataset"], "long_horizon_llm_pilot");
+    assert_eq!(summary["tier"], "llm_pilot");
+    assert_eq!(summary["arms"]["new"]["tokens"], json!(5000.0));
+    assert!(summary["arms"]["new"]["missing"].is_null());
+    let err = aggregate_tier(&raw, &fixtures(), "replay").unwrap_err();
+    assert!(err.contains("is not long_horizon_replay"), "{err}");
+    // replay の raw を llm_pilot として集計しない。
+    let replay = repo_root().join("agent-docs/progress/2026-11-04-long-horizon/a8b/replay");
+    assert!(aggregate_tier(&replay, &fixtures(), "llm_pilot").is_err());
+    // usage の欠けた pilot の試行があれば和は null（0 で埋めない）。
+    let raw2 = copy_raw(
+        "pilot2",
+        |m| m["case"] == "C04" && m["arm"] == "new",
+        |_, f| {
+            f["dataset"] = json!("long_horizon_llm_pilot");
+            f["usage"] = json!({"tokens": null, "quota": null, "wall_secs": null, "missing": "collector failed"});
+        },
+    );
+    let (_, s2) = aggregate_tier(&raw2, &fixtures(), "llm_pilot").unwrap();
+    assert!(s2["arms"]["new"]["tokens"].is_null());
+    assert_eq!(s2["arms"]["new"]["missing"], "1 trials have no usage");
+    // CLI の本体（`celeris-campaign long-horizon-grade`）が grades.jsonl・summary.json を書く。
+    let out = raw.join("graded");
+    let args: Vec<String> = [
+        "long-horizon-grade",
+        "--tier",
+        "llm_pilot",
+        "--raw",
+        raw.to_str().unwrap(),
+        "--fixtures",
+        fixtures().to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    cli(&args).unwrap();
+    assert_eq!(read(&out.join("summary.json"))["tier"], "llm_pilot");
+    assert_eq!(
+        std::fs::read_to_string(out.join("grades.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        10
+    );
+    let _ = std::fs::remove_dir_all(&raw);
+    let _ = std::fs::remove_dir_all(&raw2);
 }

@@ -108,6 +108,7 @@
       "kind": "answer"
     }
   ],
+  "init_digest": "a33af43b7626f5d27bee74ae10e3e59fe506ea37790f48cc350633e714f74638",
   "invocations": [
     {
       "at": 0,
@@ -182,6 +183,7 @@
       "attempt": 1,
       "created_at": 0,
       "created_by": "cos",
+      "instructed": true,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [
@@ -195,6 +197,7 @@
       "attempt": 2,
       "created_at": 25500,
       "created_by": "cos",
+      "instructed": true,
       "logical_id": "o1:2",
       "outcome": "o1",
       "statuses": [
@@ -208,6 +211,7 @@
       "attempt": 3,
       "created_at": 86400,
       "created_by": "cos",
+      "instructed": true,
       "logical_id": "o1:3",
       "outcome": "o1",
       "statuses": [

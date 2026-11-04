@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # ADR 2026-11-04-long-horizon-bench（A8 実行）の受け入れ検査。LLM を呼ばない（台本の CoS・worker・人、本物の TS は決定的）。
 #
-# 1. control-ts の bundle を作り、task-dispatch の `long_horizon_bench_` 試行（10 課題 × old.passive・old.proactive・new。
-#    仮想時刻・一時 DB。new は本物の bundle を本物の V8 で評価）を走らせ、30 件以上が通ることを確かめる。各試行は同じ seed を
-#    2 回流して facts の bytes 一致を試験の中で確かめている。
-# 2. 別 process（celeris-campaign の `long_horizon_bench_`）で採点・集計し、D8 の gate と陰性 fixture（述語ごと）を確かめる。
+# 1. control-ts の bundle を作り、task-dispatch の `long_horizon_bench_` 試行（10 課題 × old.passive・old.proactive・new・
+#    対照 ctl.null。仮想時刻・一時 DB。new は本物の bundle を本物の V8 で評価）を走らせ、40 件以上が通ることを確かめる。
+#    各試行は同じ seed を 2 回流して facts の bytes 一致を試験の中で確かめている。
+# 2. 別 process（celeris-campaign の `long_horizon_bench_`）で採点・集計し、D8 の gate（同一初期条件の digest・対照 ctl.null を
+#    含む）と陰性 fixture（述語ごと）、実 LLM pilot の tier の分離を確かめる。CLI `celeris-campaign long-horizon-grade --tier replay`
+#    でも同じ raw を採点し、試験の集計と bytes 一致を確かめる。
 # 3. 作業 tree の検査（D4）と陽性対照、facts に腕の欄が無いこと、replay の token・quota・walltime が null、凍結の path（D10）が
 #    bench の source に無いこと、本番の DB・daemon を指していないことを確かめる。
 # 前提（cargo-nextest・python3・node・control-ts の依存）が欠けたら SKIP せずに失敗する。
@@ -72,10 +74,17 @@ run_suite() { # name min args...
     [ "$passed" -ge "$min" ] || fail "$name: $passed tests passed, expected at least $min"
     echo "test-long-horizon-bench: $name: $passed passed"
 }
-run_suite replay 30 -p task-dispatch --lib -E 'test(/^dispatcher::tests::project_wake::long_horizon_bench::long_horizon_bench_/)'
+run_suite replay 40 -p task-dispatch --lib -E 'test(/^dispatcher::tests::project_wake::long_horizon_bench::long_horizon_bench_/)'
 [ ! -s "$out/skip.log" ] || fail "bundle SKIP recorded: $(cat "$out/skip.log")"
-run_suite grade 14 -p celeris-campaign --test long_horizon_bench -E 'test(/^long_horizon_bench_/)'
+run_suite grade 17 -p celeris-campaign --test long_horizon_bench -E 'test(/^long_horizon_bench_/)'
 [ -s "$out/summary/summary.json" ] || fail "summary.json was not written"
+cargo run -q -p celeris-campaign --bin celeris-campaign -- long-horizon-grade --tier replay --raw "$raw" --fixtures "$fixtures" \
+    --out "$out/cli" >"$out/cli.log" 2>&1 || fail "long-horizon-grade --tier replay failed (see $out/cli.log)"
+cmp -s "$out/cli/grades.jsonl" "$out/summary/grades.jsonl" || fail "CLI grades.jsonl differs from the test's"
+if cargo run -q -p celeris-campaign --bin celeris-campaign -- long-horizon-grade --tier llm_pilot --raw "$raw" \
+    --fixtures "$fixtures" --out "$out/cli-pilot" >"$out/cli-pilot.log" 2>&1; then
+    fail "long-horizon-grade --tier llm_pilot accepted replay raw"
+fi
 
 python3 -I - "$root" "$raw" "$out" <<'PY'
 import json, pathlib, sys, hashlib, shutil, subprocess
@@ -83,8 +92,16 @@ root, raw, out = map(pathlib.Path, sys.argv[1:4])
 fx = root / "tests/fixtures/long-horizon"
 errors = []
 facts = sorted((raw / "facts").glob("*.json"))
-if len(facts) < 30:
-    errors.append(f"{len(facts)} facts files (< 30)")
+if len(facts) < 40:
+    errors.append(f"{len(facts)} facts files (< 40)")
+# D2 の同一初期条件: 課題ごとに全腕の init_digest が 1 つ（採点器とは別にここでも数える）。
+init = {}
+for f in facts:
+    v = json.loads(f.read_text())
+    init.setdefault(v["case"], set()).add(v.get("init_digest"))
+for case, d in sorted(init.items()):
+    if len(d) != 1 or None in d:
+        errors.append(f"{case}: init_digest differs across arms {sorted(map(str, d))}")
 canary = json.loads((fx / "oracle/holdout.json").read_text())["canary"]
 hidden = set()
 titles = set()
@@ -148,7 +165,9 @@ for p in bench:
         if w in text:
             errors.append(f"{p}: references frozen path {w}")
 s = json.loads((out / "summary/summary.json").read_text())
-for arm in ("old.passive", "old.proactive", "new"):
+if s["invalid"]["invalid_init"] != 0:
+    errors.append(f"summary: invalid_init {s['invalid']}")
+for arm in ("old.passive", "old.proactive", "new", "ctl.null"):
     if s["arms"].get(arm, {}).get("trials") != 10:
         errors.append(f"summary: arm {arm} has {s['arms'].get(arm, {}).get('trials')} trials")
 if errors:
@@ -158,6 +177,7 @@ if errors:
 a = s["arms"]
 print("test-long-horizon-bench: summary " + "; ".join(
     f"{k}: reach {v['reach_rate']:.2f} autonomous {v['autonomous_reach']:.2f} avoidable {v['human_intervention']['avoidable']} "
-    f"wasteful {v['wasteful_roots']} double {v['double_effect']} recovery {v['recovery_rate']}" for k, v in sorted(a.items())))
+    f"wasteful {v['wasteful_roots']} double {v['double_effect']} recovery {v['recovery_rate']} "
+    f"unprompted {v['reached_without_instruction']}" for k, v in sorted(a.items())))
 PY
 echo "test-long-horizon-bench: OK (raw and summary in $out)"

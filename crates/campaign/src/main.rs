@@ -388,6 +388,9 @@ fn run(args: Vec<String>) -> Result<String, String> {
         let rep = celeris_campaign::jev_stages::run_json(&v)?;
         return serde_json::to_string_pretty(&rep).map_err(|e| e.to_string());
     }
+    if cmd == "long-horizon-grade" {
+        return celeris_campaign::long_horizon::cli(&args);
+    }
     if cmd == "dagbench" {
         return celeris_campaign::dagbench::run::cli(&args);
     }

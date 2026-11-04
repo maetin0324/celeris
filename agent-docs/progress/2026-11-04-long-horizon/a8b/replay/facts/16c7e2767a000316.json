@@ -61,6 +61,7 @@
       "kind": "approval"
     }
   ],
+  "init_digest": "3aea5005bc1616e6d3d5d3d2c99d6c28ebfd59b100f1fb20b5aefe32aeebe7c6",
   "invocations": [
     {
       "at": 0,
@@ -90,6 +91,7 @@
       "attempt": 1,
       "created_at": 0,
       "created_by": "cos",
+      "instructed": true,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [

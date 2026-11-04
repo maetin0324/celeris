@@ -19,6 +19,10 @@
     },
     {
       "actor": "cos",
+      "at": 7500
+    },
+    {
+      "actor": "cos",
       "at": 8100
     },
     {
@@ -31,6 +35,10 @@
     },
     {
       "actor": "reviewer",
+      "at": 12000
+    },
+    {
+      "actor": "cos",
       "at": 12000
     }
   ],
@@ -58,6 +66,7 @@
       "kind": "project_request"
     }
   ],
+  "init_digest": "11a9068f81df40e7d05ba20486074d839e4dab8950484926cfaeea8b3e8f8980",
   "invocations": [
     {
       "at": 300,
@@ -75,6 +84,11 @@
       "usage": null
     },
     {
+      "at": 7500,
+      "role": "cos",
+      "usage": null
+    },
+    {
       "at": 8100,
       "role": "cos",
       "usage": null
@@ -88,6 +102,11 @@
       "at": 12000,
       "role": "reviewer",
       "usage": null
+    },
+    {
+      "at": 12000,
+      "role": "cos",
+      "usage": null
     }
   ],
   "questions": [],
@@ -97,6 +116,7 @@
       "attempt": 1,
       "created_at": 300,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o1:1",
       "outcome": "o1",
       "statuses": [
@@ -110,6 +130,7 @@
       "attempt": 2,
       "created_at": 8400,
       "created_by": "daemon",
+      "instructed": false,
       "logical_id": "o1:2",
       "outcome": "o1",
       "statuses": [

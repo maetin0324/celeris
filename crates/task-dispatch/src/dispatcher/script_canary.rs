@@ -1,6 +1,6 @@
 //! ADR 2026-11-02-ts-control-layer-boundary 付記 S5-3・S5-6・S5-8: dispatcher の canary・ts。
 //!
-//! - 単位（`lane_rules`・`route_priority` は task id、`cos_digest` は pass id）が TS の側に選ばれたか（mode `ts` は
+//! - 単位（`lane_rules`・`route_priority`・`execution_gate` は task id、`cos_digest` は pass id）が TS の側に選ばれたか（mode `ts` は
 //!   全部、`canary` は [`task_core::script_compare::canary_selected`]）で分ける。Rust の側は compare と同じく TS を
 //!   影で走らせて記録する。
 //! - TS の側は TS を同期で待ち（1 回 `SCRIPT_CALL_DEADLINE`、1 tick の合計 [`SCRIPT_TICK_WAIT_BUDGET`]）、Rust の検証
@@ -469,6 +469,55 @@ impl Dispatcher {
             });
         append_observed(store.as_ref(), task_id, side.record, true);
         candidates.map(|c| (harness, c))
+    }
+
+    /// ADR 2026-11-04-ts-execution-gate-domain: `execution_gate` の compare・canary・ts。TS の側で Rust の検証を
+    /// 通った出力を返す。それ以外は `None`（Rust の判定のまま）。単位は task id。
+    pub(in crate::dispatcher) fn canary_execution_gate(
+        &mut self,
+        task_id: TaskId,
+        input: task_core::execution_gate::ExecutionGateInput,
+    ) -> Option<task_core::execution_gate::ExecutionGateOutput> {
+        let target = self.script_target(
+            ScriptDomain::ExecutionGate,
+            &[ScriptMode::Compare, ScriptMode::Canary, ScriptMode::Ts],
+        )?;
+        let selected = unit_selected(&target, ScriptDomain::ExecutionGate, &task_id.to_string());
+        let oversized = input.title.len().saturating_add(input.objective.len())
+            > crate::script_policy::EXECUTION_GATE_TEXT_MAX;
+        let mut draft = CompareDraft::execution_gate(
+            target.generation_id.clone(),
+            target.bundle_sha256.clone(),
+            target.host_api.clone(),
+            input,
+        );
+        if oversized {
+            // ADR D9: 大きすぎる本文は TS に渡さない。Rust の判定を使い、`unavailable` を残す。
+            let reason = "the task text is over the execution_gate input limit";
+            if target.mode != ScriptMode::Compare {
+                draft.applied_by = Some(CosDigestAppliedBy::Rust);
+                draft.canary_bps = target.canary_bps;
+                draft.canary_selected = selected;
+                draft.fallback = selected.then(|| CosDigestFallback::new("unavailable", reason));
+            }
+            append_observed(
+                target.store.as_ref(),
+                task_id,
+                draft.unavailable(reason),
+                selected,
+            );
+            return None;
+        }
+        if !selected {
+            self.shadow_compare(task_id, &target, draft);
+            return None;
+        }
+        draft.canary_bps = target.canary_bps;
+        let store = Arc::clone(&target.store);
+        let side = self.ts_side(draft, target.call.map(|(s, _)| s));
+        let output = side.validated.and_then(|v| serde_json::from_value(v).ok());
+        append_observed(store.as_ref(), task_id, side.record, true);
+        output
     }
 
     /// compare と canary の Rust の側: TS を影で走らせ、記録だけを残す（挙動は Rust のまま）。

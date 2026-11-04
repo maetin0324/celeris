@@ -48,6 +48,7 @@ pub const HOST_CHECKPOINT_VERSIONS: &[u32] = &[1];
 /// 登録で知っている領域（付記 S5-1 の 3「`domains` が既知の領域だけ」）。
 pub const KNOWN_DOMAINS: &[&str] = &[
     "cos_digest",
+    "execution_gate",
     "host_selftest",
     "lane_rules",
     "route_priority",

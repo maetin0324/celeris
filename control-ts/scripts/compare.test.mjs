@@ -76,6 +76,36 @@ test("route_priority: an extra input field is reported as a TS error", async () 
   assert.match(r.failures[0].error, /unknown field in input: extra/);
 });
 
+const gateLines = readFileSync(path.join(pkg, "fixtures/execution_gate/cases.jsonl"), "utf8").split("\n");
+gateLines.pop();
+
+test("execution_gate matches every line of the committed fixture", async () => {
+  const r = await compare("execution_gate");
+  assert.equal(r.total, gateLines.length);
+  assert.equal(r.matched, gateLines.length);
+  assert.deepEqual(r.failures, []);
+});
+
+test("execution_gate: a changed detail is reported as a mismatch", async () => {
+  const row = JSON.parse(gateLines.find((l) => JSON.parse(l).signals.length >= 1));
+  row.signals[0].detail += "!";
+  const file = path.join(work, "gate-bad.jsonl");
+  writeFileSync(file, `${JSON.stringify(row)}\n`);
+  const r = await compare("execution_gate", { fixture: file });
+  assert.equal(r.matched, 0);
+  assert.deepEqual(r.failures[0].fields, ["signals"]);
+});
+
+test("execution_gate: an extra input field is reported as a TS error", async () => {
+  const row = JSON.parse(gateLines[0]);
+  row.input.extra = 1;
+  const file = path.join(work, "gate-err.jsonl");
+  writeFileSync(file, `${JSON.stringify(row)}\n`);
+  const r = await compare("execution_gate", { fixture: file });
+  assert.equal(r.matched, 0);
+  assert.match(r.failures[0].error, /unknown field in input/);
+});
+
 const digestLines = readFileSync(path.join(pkg, "fixtures/cos_digest/cases.jsonl"), "utf8").split("\n");
 digestLines.pop();
 

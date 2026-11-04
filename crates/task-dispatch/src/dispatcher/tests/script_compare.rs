@@ -39,6 +39,8 @@ pub(super) struct FakeScript {
     pub(super) route_inputs: StdMutex<Vec<RoutePriorityInput>>,
     /// `cos_digest_pass` の呼び出しの `pass_id`（付記 S4-12）。
     pub(super) digest_passes: StdMutex<Vec<String>>,
+    /// `execution_gate` の呼び出しの入力。
+    pub(super) gate_inputs: StdMutex<Vec<task_core::execution_gate::ExecutionGateInput>>,
 }
 
 impl FakeScript {
@@ -53,6 +55,7 @@ impl FakeScript {
             calls: AtomicUsize::new(0),
             route_inputs: StdMutex::new(Vec::new()),
             digest_passes: StdMutex::new(Vec::new()),
+            gate_inputs: StdMutex::new(Vec::new()),
         })
     }
 
@@ -131,6 +134,32 @@ impl PolicyScript for FakeScript {
             match behavior {
                 Behavior::Echo => Ok(PolicyReply {
                     output: serde_json::to_value(echo_route_priority(&input)).unwrap(),
+                    isolate_epoch: 1,
+                }),
+                Behavior::Fixed(output) => Ok(PolicyReply {
+                    output,
+                    isolate_epoch: 1,
+                }),
+                Behavior::Fail(e) => Err(e),
+                Behavior::Hang => {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                    Err(PolicyScriptError::new("exception", "woke up"))
+                }
+            }
+        })
+    }
+
+    fn execution_gate(
+        &self,
+        input: task_core::execution_gate::ExecutionGateInput,
+        _deadline: Duration,
+    ) -> PolicyFuture<'_> {
+        self.gate_inputs.lock().unwrap().push(input.clone());
+        let behavior = self.behavior.clone();
+        Box::pin(async move {
+            match behavior {
+                Behavior::Echo => Ok(PolicyReply {
+                    output: serde_json::to_value(task_core::execution_gate::score(&input)).unwrap(),
                     isolate_epoch: 1,
                 }),
                 Behavior::Fixed(output) => Ok(PolicyReply {
@@ -512,3 +541,6 @@ async fn script_compare_lane_after_ceiling_is_rust() {
 /// 付記 S2-11: `route_priority` の compare の試験（`tests/mod.rs` を変えずに足すため子 module にした）。
 #[path = "script_compare_route.rs"]
 mod script_compare_route;
+
+#[path = "script_compare_gate.rs"]
+mod script_compare_gate;

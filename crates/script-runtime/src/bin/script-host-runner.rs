@@ -164,6 +164,20 @@ static DOMAINS: &[DomainSpec] = &[
         broken: route_priority_broken,
     },
     DomainSpec {
+        name: "execution_gate",
+        fixtures: &[FixtureSpec {
+            path: "execution_gate/cases.jsonl",
+            // task-core の dump-execution-gate-fixtures が今書く行数。
+            min_rows: 2_337,
+            rule: "row.input",
+            parse: execution_gate_row,
+        }],
+        fields: &EXECUTION_GATE_FIELDS,
+        check: execution_gate_check,
+        probe: execution_gate_probe,
+        broken: execution_gate_broken,
+    },
+    DomainSpec {
         name: "cos_digest",
         fixtures: &[
             FixtureSpec {
@@ -441,6 +455,167 @@ fn route_priority_broken() -> Vec<Broken> {
         (
             "candidate_wrong_type",
             edit(&|v| v["table"]["route_defaults"] = json!([{ "source": 1, "model": "sonnet" }])),
+        ),
+    ]
+    .into_iter()
+    .map(broken_input)
+    .collect()
+}
+
+// ---- execution_gate（ADR 2026-11-04-ts-execution-gate-domain） ----
+
+const EXECUTION_GATE_FIELDS: [&str; 4] = ["mode", "score", "rule_id", "signals"];
+/// `task_core::execution_gate::EXECUTION_GATE_TS_RULES` と同じ（この crate は task-core に依存しない）。`(rule_id, mode)`。
+const EXECUTION_GATE_RULES: [(&str, &str); 4] = [
+    ("compound/long-and-broad", "compound"),
+    ("atomic/small", "atomic"),
+    ("compound/score", "compound"),
+    ("atomic/score", "atomic"),
+];
+const EXECUTION_GATE_SIGNALS_MAX: usize = 16;
+const EXECUTION_GATE_SIGNAL_NAME_MAX: usize = 8;
+const EXECUTION_GATE_SIGNAL_DETAIL_MAX: usize = 128;
+
+fn execution_gate_row(row: &Value) -> Result<Parsed, String> {
+    let input = row.get("input").ok_or("cannot build the input")?;
+    row_expected(input.clone(), row, &EXECUTION_GATE_FIELDS)
+}
+
+/// daemon の `classify_execution_gate` と同じ検証（ADR D8）。
+fn execution_gate_check(out: &Map<String, Value>, scene: &Scene) -> Result<Checked, String> {
+    let mode = str_field(out, "mode")?;
+    if mode != "atomic" && mode != "compound" {
+        return Err(format!("mode must be atomic or compound (got {mode:?})"));
+    }
+    let score = out
+        .get("score")
+        .and_then(Value::as_i64)
+        .ok_or("score must be an integer")?;
+    let rule_id = str_field(out, "rule_id")?;
+    let signals = out
+        .get("signals")
+        .and_then(Value::as_array)
+        .ok_or("signals must be an array")?;
+    if signals.len() > EXECUTION_GATE_SIGNALS_MAX {
+        return Err(format!(
+            "at most {EXECUTION_GATE_SIGNALS_MAX} signals (got {})",
+            signals.len()
+        ));
+    }
+    let mut names = BTreeSet::new();
+    let mut sum = 0i64;
+    let mut rebuilt = Vec::with_capacity(signals.len());
+    for (i, signal) in signals.iter().enumerate() {
+        let m = signal
+            .as_object()
+            .filter(|m| m.len() == 3)
+            .ok_or_else(|| format!("signals[{i}] must have exactly name, weight and detail"))?;
+        let name = m.get("name").and_then(Value::as_str);
+        let weight = m.get("weight").and_then(Value::as_i64);
+        let detail = m.get("detail").and_then(Value::as_str);
+        let (Some(name), Some(weight), Some(detail)) = (name, weight, detail) else {
+            return Err(format!(
+                "signals[{i}] must have exactly name, weight and detail"
+            ));
+        };
+        if name.is_empty()
+            || name.len() > EXECUTION_GATE_SIGNAL_NAME_MAX
+            || detail.len() > EXECUTION_GATE_SIGNAL_DETAIL_MAX
+            || !names.insert(name.to_owned())
+        {
+            return Err(format!("signals[{i}]: bad or duplicate name, or too long"));
+        }
+        sum += weight;
+        rebuilt.push(json!({ "name": name, "weight": weight, "detail": detail }));
+    }
+    let mut violations = Vec::new();
+    match EXECUTION_GATE_RULES.iter().find(|(r, _)| *r == rule_id) {
+        None => violations.push("gate_rule_not_allowed"),
+        Some((_, rule_mode)) => {
+            let threshold = scene.input["threshold"]
+                .as_i64()
+                .ok_or("the input has no threshold")?;
+            let holds = match rule_id {
+                "compound/score" => score >= threshold,
+                "atomic/score" => score < threshold,
+                _ => true,
+            };
+            if *rule_mode != mode || score != sum || !holds {
+                violations.push("gate_threshold_violated");
+            }
+        }
+    }
+    let mut output = Map::new();
+    output.insert("mode".into(), json!(mode));
+    output.insert("score".into(), json!(score));
+    output.insert("rule_id".into(), json!(rule_id));
+    output.insert("signals".into(), Value::Array(rebuilt));
+    Ok(Checked { output, violations })
+}
+
+fn execution_gate_probe() -> Scene {
+    Scene::pure(execution_gate_probe_input())
+}
+
+fn execution_gate_probe_input() -> Value {
+    let features: Map<String, Value> = AXES
+        .iter()
+        .map(|a| ((*a).to_owned(), json!("low")))
+        .collect();
+    json!({
+        "features": features,
+        "title": "title",
+        "objective": "objective",
+        "acceptance_total": 1,
+        "artifact_exists": 0,
+        "has_human": false,
+        "has_command": true,
+        "multi_environment": false,
+        "recent_budget_exhausted_ratio": null,
+        "cos_hint_compound": false,
+        "max_turns": 60,
+        "tree_child": false,
+        "threshold": 5,
+    })
+}
+
+fn execution_gate_broken() -> Vec<Broken> {
+    let base = execution_gate_probe_input();
+    let edit = |f: &dyn Fn(&mut Value)| {
+        let mut v = base.clone();
+        f(&mut v);
+        v
+    };
+    vec![
+        (
+            "missing_field",
+            edit(&|v| {
+                v.as_object_mut().map(|m| m.remove("threshold"));
+            }),
+        ),
+        ("extra_field", edit(&|v| v["extra"] = json!(1))),
+        ("not_object", json!([])),
+        (
+            "unknown_level",
+            edit(&|v| v["features"]["judgment"] = json!("extreme")),
+        ),
+        (
+            "missing_axis",
+            edit(&|v| {
+                v["features"]
+                    .as_object_mut()
+                    .map(|m| m.remove("cross_cutting"));
+            }),
+        ),
+        ("wrong_type_title", edit(&|v| v["title"] = json!(1))),
+        ("wrong_type_turns", edit(&|v| v["max_turns"] = json!("60"))),
+        (
+            "fractional_threshold",
+            edit(&|v| v["threshold"] = json!(1.5)),
+        ),
+        (
+            "ratio_out_of_range",
+            edit(&|v| v["recent_budget_exhausted_ratio"] = json!(1.5)),
         ),
     ]
     .into_iter()

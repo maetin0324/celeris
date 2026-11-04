@@ -244,7 +244,9 @@ pub fn readiness(
     counters: &ScriptGuardCounters,
 ) -> ScriptGuardReadiness {
     let required = match domain {
-        ScriptDomain::LaneRules | ScriptDomain::RoutePriority => SCRIPT_GUARD_READY_PURE,
+        ScriptDomain::LaneRules | ScriptDomain::RoutePriority | ScriptDomain::ExecutionGate => {
+            SCRIPT_GUARD_READY_PURE
+        }
         ScriptDomain::CosDigest => SCRIPT_GUARD_READY_COS,
     };
     let clean_streak = match from {

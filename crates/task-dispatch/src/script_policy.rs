@@ -9,6 +9,7 @@
 //! - [`ScriptDomainStore`] は mode の表と記録の store の口。`TaskStore` に欄を足さずに `SqliteStore` を渡せるよう、
 //!   この crate に置く。
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use task_core::chat::digest::{
     CosDigestCommand, CosDigestInput, CosDigestPassOutput, CosDigestPassRead,
     CosDigestPassViolation, validate_cos_digest_commands, validate_cos_digest_pass,
 };
+use task_core::execution_gate::{EXECUTION_GATE_TS_RULES, ExecutionGateInput, ExecutionGateOutput};
 use task_core::llm_route::{ExecutionClass, HarnessId, Registry, route_priority_decide};
 use task_core::model_policy::{LaneCeiling, RuleMatch, TaskFeatures};
 use task_core::script_behavior_change::{ApprovedBehaviorChange, ExplainedBy};
@@ -42,6 +44,9 @@ pub const LANE_RULES_CALL_SITE: &str = "dispatch_run.decide_lane";
 
 /// `route_priority` の比較を付けた呼び出し箇所（S2-4 の `call_site`・付記 S2-11）。
 pub const ROUTE_PRIORITY_CALL_SITE: &str = "route_select.route_select_one";
+
+/// `execution_gate` の比較を付けた呼び出し箇所（ADR 2026-11-04-ts-execution-gate-domain D4）。
+pub const EXECUTION_GATE_CALL_SITE: &str = "work_units.execution_gate_if_needed";
 
 /// `cos_digest` の pass の記録の呼び出し箇所（付記 S4-15 の `call_site`）。
 pub const COS_DIGEST_CALL_SITE: &str = "cos_digest.pass";
@@ -133,6 +138,17 @@ pub trait PolicyScript: Send + Sync {
 
     /// `route_priority` を評価する。入力は 1 つの harness の候補列の `source`・`model` の id だけ（S2-3）。
     fn route_priority(&self, input: RoutePriorityInput, deadline: Duration) -> PolicyFuture<'_>;
+
+    /// `execution_gate` を評価する。入力は task の本文を含む（ADR 2026-11-04-ts-execution-gate-domain D5）。
+    /// 既定は失敗（領域を持たない実装は呼ばれても Rust の判定に戻る）。
+    fn execution_gate(&self, _input: ExecutionGateInput, _deadline: Duration) -> PolicyFuture<'_> {
+        Box::pin(async {
+            Err(PolicyScriptError::new(
+                "unavailable",
+                "this script does not implement execution_gate",
+            ))
+        })
+    }
 
     /// `cos_digest` の digest pass を 1 回走らせる（付記 S4-12）。TS は `call.sink` へ op を送って読み、
     /// 出力 `CosDigestPassOutput`（`{ "runs": [{ run_id, commands }] }`）を返す。
@@ -336,6 +352,89 @@ pub fn classify_route_priority(
     }
 }
 
+/// `execution_gate` の入力の本文（`title`・`objective`）の上限。超えたら TS を呼ばない（ADR D9）。
+pub const EXECUTION_GATE_TEXT_MAX: usize = 256 * 1024;
+const EXECUTION_GATE_SIGNALS_MAX: usize = 16;
+const EXECUTION_GATE_SIGNAL_NAME_MAX: usize = 8;
+const EXECUTION_GATE_SIGNAL_DETAIL_MAX: usize = 128;
+/// 例外文の代わりに残す文（ADR D6。TS の例外文は本文を写しうる）。
+const EXECUTION_GATE_MESSAGE_WITHHELD: &str = "message withheld: the input carries task text";
+
+/// TS の結果を Rust の `execution_gate` の出力と比べ、Rust の検証を当てる（ADR D6・D8）。例外文と不正な出力は
+/// 本文を写しうるので記録に残さない。正規化はしない。`mode`・`score`・`rule_id`・`signals` を同じ直列化の byte 列で比べる。
+pub fn classify_execution_gate(
+    rust: &ExecutionGateOutput,
+    input: &ExecutionGateInput,
+    result: &TsResult,
+) -> Classified {
+    let raw = match result {
+        TsResult::Reply(reply) => &reply.output,
+        TsResult::DeadlineExceeded(d) => return deadline_exceeded(*d),
+        TsResult::Error(e) => {
+            let bytes = e.message.len();
+            let mut classified = script_error(e);
+            if let Some(error) = &mut classified.error {
+                error.message = format!("{EXECUTION_GATE_MESSAGE_WITHHELD} ({bytes} bytes)");
+            }
+            return classified;
+        }
+    };
+    let invalid = |reason: &str, violation: Option<&str>| Classified {
+        ts: None,
+        outcome: CompareOutcome::InvalidOutput,
+        error: Some(CompareError::new(
+            "invalid_output",
+            &format!("execution_gate output: {reason}"),
+        )),
+        safety_violations: violation.map(str::to_owned).into_iter().collect(),
+    };
+    let Ok(ts) = serde_json::from_value::<ExecutionGateOutput>(raw.clone()) else {
+        return invalid("does not match the output DTO", None);
+    };
+    if ts.signals.len() > EXECUTION_GATE_SIGNALS_MAX {
+        return invalid("too many signals", None);
+    }
+    let mut names = BTreeSet::new();
+    let bad_signal = ts.signals.iter().any(|s| {
+        s.name.is_empty()
+            || s.name.len() > EXECUTION_GATE_SIGNAL_NAME_MAX
+            || s.detail.len() > EXECUTION_GATE_SIGNAL_DETAIL_MAX
+            || !names.insert(s.name.as_str())
+    });
+    if bad_signal {
+        return invalid("a signal is too long or duplicated", None);
+    }
+    if !EXECUTION_GATE_TS_RULES.contains(&ts.rule_id.as_str()) {
+        return invalid("rule_id is not allowed", Some("gate_rule_not_allowed"));
+    }
+    let sum = ts
+        .signals
+        .iter()
+        .fold(0i64, |acc, s| acc.saturating_add(i64::from(s.weight)));
+    let mode_ok = ts.rule_id.starts_with(ts.mode.as_str());
+    let threshold_ok = match ts.rule_id.as_str() {
+        "compound/score" => ts.score >= input.threshold,
+        "atomic/score" => ts.score < input.threshold,
+        _ => true,
+    };
+    if !mode_ok || !threshold_ok || i64::from(ts.score) != sum {
+        return invalid(
+            "mode, score and threshold contradict",
+            Some("gate_threshold_violated"),
+        );
+    }
+    Classified {
+        ts: serde_json::to_value(&ts).ok(),
+        outcome: if same_bytes(&ts, rust) {
+            CompareOutcome::Match
+        } else {
+            CompareOutcome::Mismatch
+        },
+        error: None,
+        safety_violations: Vec::new(),
+    }
+}
+
 /// 出力 DTO どうしを同じ serde_json の直列化の byte 列で比べる（S2-2）。
 fn same_bytes<T: Serialize>(a: &T, b: &T) -> bool {
     match (serde_json::to_vec(a), serde_json::to_vec(b)) {
@@ -447,6 +546,10 @@ pub enum DraftDomain {
         input: RoutePriorityInput,
         rust: RoutePriorityOutput,
     },
+    ExecutionGate {
+        input: Box<ExecutionGateInput>,
+        rust: ExecutionGateOutput,
+    },
 }
 
 /// 記録の共通部分（generation・bundle・run・領域の入力と Rust の出力）。TS の結果を受けて
@@ -530,10 +633,35 @@ impl CompareDraft {
         }
     }
 
+    /// `execution_gate` の下書きを作る。Rust の出力は `execution_gate::score` を同じ入力に当てたもの（純粋関数）。
+    pub fn execution_gate(
+        generation: String,
+        bundle_sha256: String,
+        host_api: String,
+        input: ExecutionGateInput,
+    ) -> Self {
+        let rust = task_core::execution_gate::score(&input);
+        Self {
+            generation,
+            bundle_sha256,
+            host_api,
+            run_id: None,
+            applied_by: None,
+            fallback: None,
+            canary_selected: false,
+            canary_bps: None,
+            domain: DraftDomain::ExecutionGate {
+                input: Box::new(input),
+                rust,
+            },
+        }
+    }
+
     pub fn script_domain(&self) -> ScriptDomain {
         match self.domain {
             DraftDomain::LaneRules { .. } => ScriptDomain::LaneRules,
             DraftDomain::RoutePriority { .. } => ScriptDomain::RoutePriority,
+            DraftDomain::ExecutionGate { .. } => ScriptDomain::ExecutionGate,
         }
     }
 
@@ -541,6 +669,7 @@ impl CompareDraft {
         match self.domain {
             DraftDomain::LaneRules { .. } => LANE_RULES_CALL_SITE,
             DraftDomain::RoutePriority { .. } => ROUTE_PRIORITY_CALL_SITE,
+            DraftDomain::ExecutionGate { .. } => EXECUTION_GATE_CALL_SITE,
         }
     }
 
@@ -556,6 +685,13 @@ impl CompareDraft {
             }
             DraftDomain::RoutePriority { input, rust } => {
                 (recorded_input(input)?, serde_json::to_value(rust)?)
+            }
+            DraftDomain::ExecutionGate { input, rust } => {
+                // ADR D6: 記録は本文を除いた値で、`input_digest` もこの値から作る。
+                (
+                    recorded_input(&input.recorded())?,
+                    serde_json::to_value(rust)?,
+                )
             }
         };
         Ok(ScriptCompareRecord {
@@ -604,6 +740,9 @@ impl CompareDraft {
             DraftDomain::RoutePriority { input, rust } => {
                 classify_route_priority(rust, input, result)
             }
+            DraftDomain::ExecutionGate { input, rust } => {
+                classify_execution_gate(rust, input, result)
+            }
         };
         self.record(epoch, classified, elapsed)
     }
@@ -634,6 +773,10 @@ impl CompareDraft {
             }
             DraftDomain::RoutePriority { input, .. } => {
                 call_route_priority(script, input.clone(), deadline).await
+            }
+            DraftDomain::ExecutionGate { input, .. } => {
+                let input = input.as_ref().clone();
+                with_deadline(script.execution_gate(input, deadline), deadline).await
             }
         }
     }

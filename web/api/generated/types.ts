@@ -5736,7 +5736,7 @@ export type ScriptBehaviorChangeRevokeResult = {
   "revoked": boolean;
 };
 
-export type ScriptDomain = "lane_rules" | "route_priority" | "cos_digest";
+export type ScriptDomain = "lane_rules" | "route_priority" | "cos_digest" | "execution_gate";
 
 export type ScriptDomainList = {
   "domains": Array<ScriptDomainView>;

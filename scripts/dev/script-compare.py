@@ -39,7 +39,7 @@ import urllib.error
 import urllib.request
 
 # (f) の閾値。正本は crates/task-core/src/script_guard.rs の SCRIPT_GUARD_*。
-REQUIRED = {"lane_rules": 1000, "route_priority": 1000, "cos_digest": 200}
+REQUIRED = {"lane_rules": 1000, "route_priority": 1000, "execution_gate": 1000, "cos_digest": 200}
 WINDOW = 1000
 OUTCOMES = ("match", "mismatch", "explained", "ts_error", "invalid_output", "unavailable")
 # compare に要る表（0103〜0107）。

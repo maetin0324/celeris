@@ -1765,7 +1765,11 @@ impl Dispatcher {
     /// ADR-0079 D4 (1)（Phase R2a）: 木の子 task（`tree.parent_unit` を持つ。深さ ≥ 2）は、閾値を深さで
     /// 上げ（`5 + gate_depth_step × (depth − 1)`）、`[execution] gate` が `shadow` / `off` でも判定し採用する
     /// （`shadow = false`、`depth` を記録）。root・木でない task は従来どおり（1 バイトも変えない。U-R5）。
-    pub(super) fn execution_gate_if_needed(&self, task: Task) -> Result<Task, DispatchError> {
+    ///
+    /// ADR 2026-11-04-ts-execution-gate-domain: 対象外の規則と人の明示に当たらない task だけ、規則表の部分を TS の
+    /// 領域 `execution_gate` と比べる。canary の TS の側と `ts` では Rust の検証を通った TS の出力を使う。
+    /// 閾値・`source`・`shadow`・`depth`・`policy_version` は Rust の値のまま。
+    pub(super) fn execution_gate_if_needed(&mut self, task: Task) -> Result<Task, DispatchError> {
         let tree_child = task_core::tree::is_tree_child(&task);
         if self.config.execution.gate == task_core::GateMode::Off && !tree_child {
             return Ok(task);
@@ -1801,7 +1805,7 @@ impl Dispatcher {
         };
         // S4/S6: E3 では決定的な既定値（`false`/`None`）で運用する（U10 と同じく、閾値・重みは
         // shadow の記録を見て後で調整する。ADR-0072「Phase E3 実装時の逸脱・明確化」参照）。
-        let decision = task_core::decide_execution_gate_at(
+        let mut decision = task_core::decide_execution_gate_at(
             &task,
             &features,
             human_execution,
@@ -1810,6 +1814,21 @@ impl Dispatcher {
             shadow,
             at,
         );
+        if human_execution.is_none() && task_core::out_of_scope_rule(&task).is_none() {
+            let input = task_core::execution_gate::ExecutionGateInput::from_task(
+                &task,
+                &features,
+                cos_hint_compound,
+                task_core::ExecutionGateInputs::default(),
+                at.threshold,
+            );
+            if let Some(ts) = self.canary_execution_gate(task.id, input) {
+                decision.signals = ts.gate_signals();
+                decision.mode = ts.mode;
+                decision.score = ts.score;
+                decision.rule_id = ts.rule_id;
+            }
+        }
         let mut fresh = task.clone();
         let mut new_routing = routing;
         new_routing.execution = Some(decision.clone());

@@ -2,7 +2,7 @@
 //! （`GenerationRegistry`、付記 S5-2）の 1 つの generation に固定した口を使い、試験は `ScriptRuntimeHandle` 1 つで呼ぶ。
 //!
 //! 入出力は DTO だけで、Rust の判定を変えない。結果の分類と記録は dispatcher が行う。
-//! `lane_rules`・`route_priority` は op を呼ばない純粋関数なので、要求の scope は空で送る（S2-7）。
+//! `lane_rules`・`route_priority`・`execution_gate` は op を呼ばない純粋関数なので、要求の scope は空で送る（S2-7）。
 //! `cos_digest` は pass 1 回を要求 1 件として host sink 付きで送り、op を dispatcher の op server へ写す（付記 S4-12）。
 
 use std::collections::BTreeSet;
@@ -16,6 +16,7 @@ use celeris_script::{
     GenerationRegistry, HostOpCall, HostSink, ScriptCall, ScriptError, ScriptReply,
     ScriptRuntimeHandle,
 };
+use task_core::execution_gate::ExecutionGateInput;
 use task_core::script_compare::{LaneRulesInput, RoutePriorityInput, ScriptDomain};
 use task_dispatch::script_policy::{
     CosDigestOp, CosDigestOpCall, CosDigestOpReply, CosDigestPassCall, PolicyFuture, PolicyReply,
@@ -104,6 +105,14 @@ impl PolicyScript for ScriptPolicy {
     fn route_priority(&self, input: RoutePriorityInput, deadline: Duration) -> PolicyFuture<'_> {
         self.call_domain(
             ScriptDomain::RoutePriority,
+            serde_json::to_value(&input),
+            deadline,
+        )
+    }
+
+    fn execution_gate(&self, input: ExecutionGateInput, deadline: Duration) -> PolicyFuture<'_> {
+        self.call_domain(
+            ScriptDomain::ExecutionGate,
             serde_json::to_value(&input),
             deadline,
         )

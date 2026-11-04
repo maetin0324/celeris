@@ -18,9 +18,14 @@ use task_core::script_compare::{
     NewScriptGeneration, ScriptDomain, ScriptDomainError, ScriptGenerationState,
     ScriptGenerationTransition, ScriptMode, ScriptModeChange,
 };
+use task_core::script_exhaustive::{
+    LANE_RULES_EXHAUSTIVE_CALLS, NewScriptExhaustiveRun, ScriptExhaustiveCounts,
+    ScriptExhaustiveState, ScriptExhaustiveStopCode,
+};
 use task_core::script_guard::{
     SCRIPT_GUARD_READY_COS, SCRIPT_GUARD_READY_PURE, ScriptGuardCall, ScriptGuardObservation,
 };
+use task_core::store::current_reference_sha256;
 
 const LIST: &str = "/api/v1/script/domains";
 const GUARD_CLEAR: &str = "/api/v1/script/guard/clear";
@@ -359,6 +364,157 @@ async fn script_domain_mode_canary_requires_guard_ready() {
         let recorded = serde_json::to_value(&recorded.event).expect("event json");
         assert_eq!(recorded["to_mode"], "canary", "{recorded}");
         assert_eq!(recorded["actor"], "human:test", "{recorded}");
+    }
+}
+
+/// 網羅の証拠を store に直接書く（`state` と件数を指定）。流す側は `crates/celeris/tests/script_exhaustive.rs`。
+fn seed_exhaustive(env: &TestEnv, sha: &str, state: ScriptExhaustiveState, mismatches: u64) {
+    let run = env
+        .store
+        .script_exhaustive_begin(
+            &NewScriptExhaustiveRun {
+                domain: ScriptDomain::LaneRules,
+                bundle_sha256: sha.to_owned(),
+                daemon_instance_id: "01TESTINSTANCE".into(),
+                requested_by: "human:test".into(),
+                reason: "test".into(),
+                reference_sha256: current_reference_sha256().expect("reference").to_owned(),
+            },
+            time::OffsetDateTime::now_utc(),
+        )
+        .expect("begin");
+    let counts = ScriptExhaustiveCounts {
+        calls: LANE_RULES_EXHAUSTIVE_CALLS,
+        matches: LANE_RULES_EXHAUSTIVE_CALLS - mismatches,
+        mismatches,
+        uncovered_inputs: mismatches,
+        ..ScriptExhaustiveCounts::default()
+    };
+    let stop =
+        (state == ScriptExhaustiveState::Failed).then_some(ScriptExhaustiveStopCode::Mismatch);
+    env.store
+        .script_exhaustive_finish(
+            &run.id,
+            state,
+            stop,
+            &counts,
+            None,
+            time::OffsetDateTime::now_utc(),
+        )
+        .expect("finish");
+}
+
+/// 計数を n 件だけ積む（`observe_clean` の件数指定版）。
+fn observe_n(env: &TestEnv, domain: ScriptDomain, sha: &str, n: u64, ts_side: bool) {
+    let generation = env
+        .store
+        .script_generation_by_sha256(sha)
+        .expect("read")
+        .expect("generation");
+    for _ in 0..n {
+        env.store
+            .script_guard_observe(
+                domain,
+                &generation.id,
+                ScriptGuardObservation {
+                    call: ScriptGuardCall::Ok,
+                    safety_violation: false,
+                    ts_side,
+                },
+                time::OffsetDateTime::now_utc(),
+            )
+            .expect("observe");
+    }
+}
+
+async fn promote_body(app: &axum::Router, domain: &str, sha: &str, v: u64) -> Resp {
+    put_mode(
+        app,
+        domain,
+        json!({"mode": "canary", "expected_version": v, "generation": sha, "canary_bps": 500}),
+    )
+    .await
+}
+
+/// ADR 2026-11-04-lane-rules-exhaustive-evidence D6: 網羅の証拠が合格なら `lane_rules` の `compare→canary` と
+/// `canary→ts` は連続 100 件で通る。`route_priority` は同じ generation・同じ 100 件でも 422 のまま（1000 件）。
+#[tokio::test]
+async fn canary_promote_with_exhaustive_100() {
+    let env = admin_env();
+    let app = env.router();
+    let sha = seed_generation(&env, 'b', &["lane_rules", "route_priority"]);
+    for domain in ["lane_rules", "route_priority"] {
+        let resp = put_mode(
+            &app,
+            domain,
+            json!({"mode": "compare", "expected_version": 0, "generation": sha}),
+        )
+        .await;
+        assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    }
+    seed_exhaustive(&env, &sha, ScriptExhaustiveState::Passed, 0);
+    // 99 件では足りない（required は 100）。
+    observe_n(&env, ScriptDomain::LaneRules, &sha, 99, false);
+    let resp = promote_body(&app, "lane_rules", &sha, 1).await;
+    let problem = assert_problem(&resp, 422, "script_canary_not_ready");
+    assert_eq!(problem["readiness"]["required"], 100, "{problem}");
+    assert_eq!(problem["readiness"]["exhaustive"], "passed", "{problem}");
+    observe_n(&env, ScriptDomain::LaneRules, &sha, 1, false);
+    let resp = promote_body(&app, "lane_rules", &sha, 1).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    // canary → ts も TS 側の 100 件で通る（99 件では 422）。
+    observe_n(&env, ScriptDomain::LaneRules, &sha, 99, true);
+    let ts = json!({"mode": "ts", "expected_version": 2, "generation": sha});
+    let resp = put_mode(&app, "lane_rules", ts.clone()).await;
+    assert_problem(&resp, 422, "script_canary_not_ready");
+    observe_n(&env, ScriptDomain::LaneRules, &sha, 1, true);
+    let resp = put_mode(&app, "lane_rules", ts).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    // route_priority は 100 件では通らない。
+    observe_n(&env, ScriptDomain::RoutePriority, &sha, 100, false);
+    let resp = promote_body(&app, "route_priority", &sha, 1).await;
+    let problem = assert_problem(&resp, 422, "script_canary_not_ready");
+    assert_eq!(problem["readiness"]["required"], 1000, "{problem}");
+    assert_eq!(
+        problem["readiness"]["exhaustive"], "not_applicable",
+        "{problem}"
+    );
+}
+
+/// 証拠が無い・不合格・`running`・`aborted` のままなら `lane_rules` も 1000 件（100 件では 422、1000 件で 200）。
+#[tokio::test]
+async fn canary_promote_without_exhaustive_422() {
+    for (label, evidence) in [
+        ("missing", None),
+        ("failed", Some((ScriptExhaustiveState::Failed, 1))),
+        ("aborted", Some((ScriptExhaustiveState::Aborted, 0))),
+    ] {
+        let env = admin_env();
+        let app = env.router();
+        let sha = seed_generation(&env, 'b', &["lane_rules"]);
+        let resp = put_mode(
+            &app,
+            "lane_rules",
+            json!({"mode": "compare", "expected_version": 0, "generation": sha}),
+        )
+        .await;
+        assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+        if let Some((state, mismatches)) = evidence {
+            seed_exhaustive(&env, &sha, state, mismatches);
+        }
+        observe_n(&env, ScriptDomain::LaneRules, &sha, 100, false);
+        let resp = promote_body(&app, "lane_rules", &sha, 1).await;
+        let problem = assert_problem(&resp, 422, "script_canary_not_ready");
+        assert_eq!(problem["readiness"]["required"], 1000, "{label} {problem}");
+        let want = if label == "aborted" { "missing" } else { label };
+        assert_eq!(
+            problem["readiness"]["exhaustive"], want,
+            "{label} {problem}"
+        );
+        observe_n(&env, ScriptDomain::LaneRules, &sha, 900, false);
+        let resp = promote_body(&app, "lane_rules", &sha, 1).await;
+        // 不合格の証拠でも 1000 件の条件で進める（新しい禁止は足さない）。
+        assert_eq!(resp.status.as_u16(), 200, "{label} {}", resp.text());
     }
 }
 

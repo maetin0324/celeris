@@ -3,6 +3,9 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-11-04（ADR 2026-11-04-lane-rules-exhaustive-evidence D6・D7）— **追加。v1 のまま**。エンドポイント 236・237
+  （`POST`・`GET /script/domains/{domain}/exhaustive-runs`。§3.134.6）を足した。昇格の 422 `script_canary_not_ready` の
+  `readiness` に欄 `exhaustive`（網羅の証拠の立場）を足し、`lane_rules` の `required` は証拠が `passed` のとき 100 になる。
 - 改訂: 2026-11-03（ADR 2026-11-03-ts-intended-behavior-change D2・D4）— **追加。v1 のまま**。エンドポイント 233〜235
   （`GET`・`POST /script/behavior-changes`、`POST /script/behavior-changes/{spec_sha256}/revoke`。§3.134.5）を足した。`CompareOutcome` に
   `explained`、`cos_digest` の比較の記録に `explained_by` を足した。
@@ -587,6 +590,8 @@ token_file = "api.token"
 | 233 | GET | `/script/behavior-changes` | TS の方針改善の仕様の全版と記録（ADR 2026-11-03-ts-intended-behavior-change D4。§3.134.5） | `ScriptBehaviorChangeList` | store `script_behavior_changes` |
 | 234 | POST | `/script/behavior-changes` | 方針改善の仕様を承認する（人の主体だけ。§3.134.5） | `ScriptBehaviorChangeApproveResult` | store `script_behavior_change_approve` |
 | 235 | POST | `/script/behavior-changes/{spec_sha256}/revoke` | 承認を取り消す（認証された誰でも。§3.134.5） | `ScriptBehaviorChangeRevokeResult` | store `script_behavior_change_revoke` |
+| 236 | POST | `/script/domains/{domain}/exhaustive-runs` | `lane_rules` の全入力を daemon の isolate で流す網羅を始める（人・外部 operator の主体だけ。ADR 2026-11-04 D7。§3.134.6） | `ScriptExhaustiveRun`（202） | `ScriptGenerationControl::exhaustive_start` |
+| 237 | GET | `/script/domains/{domain}/exhaustive-runs` | 網羅の証拠の立場と最新の行（認証された誰でも。§3.134.6） | `ScriptExhaustiveRunList` | store `script_exhaustive_runs`・`script_exhaustive_standing` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3924,6 +3929,25 @@ config の欄は無い（mode は DB の表が持つ）。CLI は `celerisctl sc
   未知の hash は 404 `behavior_change_not_found`）。
 - 承認済みの仕様は、`cos_digest` の比較で差分が期待差分と byte 一致したときだけ outcome `explained` にする。CoS の operation には無い
   （EXCLUDED `human_only`・`script_api_only`）。
+
+#### 3.134.6 `/script/domains/{domain}/exhaustive-runs`（ADR 2026-11-04-lane-rules-exhaustive-evidence D7）
+
+- `POST` 本文 `{generation, reason}`（`ScriptExhaustiveRunBody`。未知欄は 400。どちらも必須）→ 202 `ScriptExhaustiveRun`
+  （`state` は `running`。実行は daemon の中で続く）。`generation` は領域の mode の行（`compare`・`canary`）が指す generation の
+  `bundle_sha256`。対象はその generation の isolate そのもので、入力は Rust 側で列挙した 19,683 通りを正順・逆順の 2 回、
+  live と同じ 50 ms の deadline で流す。live の計数（`script_guard_state`・`script_compare_log`）は変えない。
+  - 主体は人（`human:*`）と外部 operator（`operator:*`）の token だけ。他は 403 `script_exhaustive_requires_operator`
+    （CoS の run credential の直接の POST も通らない）。
+  - 404 `script_domain_not_found`、422 `script_exhaustive_domain_unsupported`（`lane_rules` 以外）、422
+    `script_generation_invalid`（`reason` が空）、409 `script_exhaustive_mode_conflict`（mode が `compare`・`canary` でない、または
+    `generation` が今の行と違う）、409 `script_exhaustive_running`（`extra.running_run_id`）、409 `script_guard_halted`、503
+    `script_runtime_unavailable`（`[script]` が無い・standby）。どの拒否でも表を変えない。
+- `GET` → 200 `ScriptExhaustiveRunList`: `domain`、`generation`（今の行の `bundle_sha256`、`rust` では `null`）、`standing`
+  （`not_applicable`・`missing`・`passed`・`failed`。今の generation と今の binary の `reference_sha256` に対する立場）、
+  `reference_sha256`、`runs`（新しい順、最大 50 行）。認証された誰でも読める。
+- CoS の operation には無い（EXCLUDED `script_api_only`。包むと 422 `cos_operation_not_allowed`）。昇格（`→canary`・`→ts`）は今までどおり
+  人の token だけで、`lane_rules` は `standing` が `passed` のとき連続 100 件・窓の timeout と失敗 0 件で通る（§3.134.2 の 422 の
+  `readiness.exhaustive`・`readiness.required` が読み取り口）。
 
 ---
 

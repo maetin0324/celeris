@@ -28898,6 +28898,256 @@
       ],
       "type": "object"
     },
+    "ScriptExhaustiveCounts": {
+      "description": "網羅の件数と latency 統計（D4）。",
+      "properties": {
+        "calls": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failures": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "latency_max_us": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "latency_p50_us": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "latency_p95_us": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "matches": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mismatches": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "safety_violations": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeouts": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uncovered_inputs": {
+          "description": "2 回の中で一度も `match` しなかった入力の数。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "calls",
+        "matches",
+        "mismatches",
+        "timeouts",
+        "failures",
+        "safety_violations",
+        "uncovered_inputs",
+        "latency_p50_us",
+        "latency_p95_us",
+        "latency_max_us"
+      ],
+      "type": "object"
+    },
+    "ScriptExhaustiveRun": {
+      "description": "表 `script_exhaustive_runs` の 1 行（D4）。",
+      "properties": {
+        "bundle_sha256": {
+          "type": "string"
+        },
+        "counts": {
+          "$ref": "#/$defs/ScriptExhaustiveCounts"
+        },
+        "daemon_instance_id": {
+          "type": "string"
+        },
+        "domain": {
+          "$ref": "#/$defs/ScriptDomain"
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "first_problem_json": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generation_id": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "mode_at_start": {
+          "description": "始めたときの mode（`compare` か `canary`）。",
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reference_sha256": {
+          "type": "string"
+        },
+        "requested_by": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ScriptExhaustiveState"
+        },
+        "stop_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScriptExhaustiveStopCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "domain",
+        "generation_id",
+        "bundle_sha256",
+        "mode_at_start",
+        "daemon_instance_id",
+        "requested_by",
+        "reason",
+        "state",
+        "reference_sha256",
+        "started_at",
+        "counts"
+      ],
+      "type": "object"
+    },
+    "ScriptExhaustiveRunBody": {
+      "additionalProperties": false,
+      "description": "`POST /script/domains/{domain}/exhaustive-runs` の本文。",
+      "properties": {
+        "generation": {
+          "description": "流す generation の `bundle_sha256`（領域の mode の行が指す generation と同じ値）。",
+          "type": "string"
+        },
+        "reason": {
+          "description": "起こす理由（`script_exhaustive_runs.reason`）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "generation",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ScriptExhaustiveRunList": {
+      "description": "`GET /script/domains/{domain}/exhaustive-runs` の応答。",
+      "properties": {
+        "domain": {
+          "$ref": "#/$defs/ScriptDomain"
+        },
+        "generation": {
+          "description": "領域の今の generation（mode の行が指す）の `bundle_sha256`。`rust` では `null`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reference_sha256": {
+          "description": "今の binary の参照の hash（これと違う行は証拠に数えない）。",
+          "type": "string"
+        },
+        "runs": {
+          "description": "新しい順、最大 50 行（generation を問わない）。",
+          "items": {
+            "$ref": "#/$defs/ScriptExhaustiveRun"
+          },
+          "type": "array"
+        },
+        "standing": {
+          "$ref": "#/$defs/ScriptExhaustiveStanding",
+          "description": "今の generation と今の binary の参照に対する証拠の立場。`lane_rules` 以外は `not_applicable`、`rust` では `missing`。"
+        }
+      },
+      "required": [
+        "domain",
+        "standing",
+        "reference_sha256",
+        "runs"
+      ],
+      "type": "object"
+    },
+    "ScriptExhaustiveStanding": {
+      "description": "領域・generation ごとの証拠の立場（D4）。",
+      "oneOf": [
+        {
+          "enum": [
+            "passed",
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "not_applicable",
+          "description": "網羅の対象でない領域（`lane_rules` 以外）。",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "今の generation・参照に対する終わった証拠が無い。",
+          "type": "string"
+        }
+      ]
+    },
+    "ScriptExhaustiveState": {
+      "description": "網羅 1 回の状態（表 `script_exhaustive_runs.state`）。",
+      "enum": [
+        "running",
+        "passed",
+        "failed",
+        "aborted"
+      ],
+      "type": "string"
+    },
+    "ScriptExhaustiveStopCode": {
+      "description": "途中で止めた理由（D4 の `stop_code`）。",
+      "enum": [
+        "mismatch",
+        "safety_violation",
+        "consecutive_errors",
+        "rate_exceeded",
+        "generation_gone",
+        "wall_limit",
+        "daemon_stopped",
+        "daemon_restarted"
+      ],
+      "type": "string"
+    },
     "ScriptGenerationList": {
       "description": "`GET /script/generations` の応答（古い順）。",
       "properties": {
@@ -35172,6 +35422,16 @@
       "$ref": "#/$defs/ScriptDomainList",
       "description": "ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: `GET /script/domains` と `PUT /script/domains/{domain}/mode`。"
     },
+    "script_exhaustive_run": {
+      "$ref": "#/$defs/ScriptExhaustiveRun"
+    },
+    "script_exhaustive_run_body": {
+      "$ref": "#/$defs/ScriptExhaustiveRunBody",
+      "description": "ADR 2026-11-04-lane-rules-exhaustive-evidence D7: lane_rules 網羅の起動と証拠の一覧。"
+    },
+    "script_exhaustive_run_list": {
+      "$ref": "#/$defs/ScriptExhaustiveRunList"
+    },
     "script_generation": {
       "$ref": "#/$defs/ScriptGenerationView"
     },
@@ -35480,6 +35740,9 @@
     "script_generation_retire_body",
     "script_guard_clear_body",
     "script_guard_clear_result",
+    "script_exhaustive_run_body",
+    "script_exhaustive_run",
+    "script_exhaustive_run_list",
     "script_behavior_changes",
     "script_behavior_change_approve_body",
     "script_behavior_change_approve_result",

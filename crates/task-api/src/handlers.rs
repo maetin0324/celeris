@@ -210,6 +210,7 @@ pub(crate) fn router(state: ApiState) -> Router {
         // ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: TS 制御層の領域の mode（rust / compare）。
         .merge(crate::script_domains::routes())
         .merge(crate::script_behavior_changes::routes())
+        .merge(crate::script_exhaustive::routes())
         .merge(crate::script_generations::routes())
         // ADR-0080 D5: browser の人待ち（登録依頼・承認）。
         .merge(crate::browser::routes())

@@ -5769,6 +5769,56 @@ export type ScriptDomainView = {
   "version": number;
 };
 
+export type ScriptExhaustiveCounts = {
+  "calls": number;
+  "failures": number;
+  "latency_max_us": number;
+  "latency_p50_us": number;
+  "latency_p95_us": number;
+  "matches": number;
+  "mismatches": number;
+  "safety_violations": number;
+  "timeouts": number;
+  "uncovered_inputs": number;
+};
+
+export type ScriptExhaustiveRun = {
+  "bundle_sha256": string;
+  "counts": ScriptExhaustiveCounts;
+  "daemon_instance_id": string;
+  "domain": ScriptDomain;
+  "finished_at"?: string | null;
+  "first_problem_json"?: string | null;
+  "generation_id": string;
+  "id": string;
+  "mode_at_start": string;
+  "reason": string;
+  "reference_sha256": string;
+  "requested_by": string;
+  "started_at": string;
+  "state": ScriptExhaustiveState;
+  "stop_code"?: ScriptExhaustiveStopCode | null;
+};
+
+export type ScriptExhaustiveRunBody = {
+  "generation": string;
+  "reason": string;
+};
+
+export type ScriptExhaustiveRunList = {
+  "domain": ScriptDomain;
+  "generation"?: string | null;
+  "reference_sha256": string;
+  "runs": Array<ScriptExhaustiveRun>;
+  "standing": ScriptExhaustiveStanding;
+};
+
+export type ScriptExhaustiveStanding = "passed" | "failed" | "not_applicable" | "missing";
+
+export type ScriptExhaustiveState = "running" | "passed" | "failed" | "aborted";
+
+export type ScriptExhaustiveStopCode = "mismatch" | "safety_violation" | "consecutive_errors" | "rate_exceeded" | "generation_gone" | "wall_limit" | "daemon_stopped" | "daemon_restarted";
+
 export type ScriptGenerationList = {
   "generations": Array<ScriptGenerationView>;
 };

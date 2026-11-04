@@ -14,7 +14,9 @@
 //! 主体だけが通る。外部 operator・MCP の token は 403（mode は `script_mode_requires_human`）。CoS の run では変更系を
 //! `/cos/operations` に包むので、`→canary`・`→ts` は包んだ操作の中で 403 になり rejected の記録が残る。`guard clear` は
 //! registry の EXCLUDED（human_only）なので 422 `cos_operation_not_allowed` で rejected になる。CoS の run で包まずに
-//! 直接読むのは `cos_read_only` が返す読み取り（`domains`・`generations list`・`guard status`）だけ。
+//! 直接読むのは `cos_read_only` が返す読み取り（`domains`・`generations list`・`guard status`・`exhaustive status`）だけ。
+//! `exhaustive run` は人と外部 operator の token だけが通る（CoS の token は 403 `script_exhaustive_requires_operator`）。
+//! CoS の run では registry の EXCLUDED（`script_api_only`）なので 422 `cos_operation_not_allowed` で rejected になる。
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -46,6 +48,44 @@ pub enum ScriptCommand {
     /// Show or clear the script-guard halt.
     #[command(subcommand)]
     Guard(GuardCommand),
+    /// Run every `lane_rules` input through the daemon's isolate, or show the latest evidence.
+    #[command(subcommand)]
+    Exhaustive(ExhaustiveCommand),
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ExhaustiveCommand {
+    /// Start the exhaustive run (all 19,683 inputs, forward then reverse) against the generation in compare/canary.
+    ///
+    /// Human and operator API tokens only: other tokens get 403 `script_exhaustive_requires_operator`, and a CoS
+    /// run gets 422 `cos_operation_not_allowed`. The run continues in the daemon (202); read the result with
+    /// `script exhaustive status`. 409 `script_exhaustive_mode_conflict` (mode is not compare/canary or the
+    /// generation differs), 409 `script_exhaustive_running`, 409 `script_guard_halted`, 422
+    /// `script_exhaustive_domain_unsupported` (only lane_rules), 503 `script_runtime_unavailable`.
+    Run(ExhaustiveRunArgs),
+    /// Show the standing and the latest runs (newest first, up to 50).
+    Status(ExhaustiveStatusArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ExhaustiveRunArgs {
+    /// lane_rules (the only domain with an exhaustive run)
+    pub domain: String,
+    /// `bundle_sha256` of the generation the domain is running in compare or canary (required).
+    #[arg(long)]
+    pub generation: String,
+    /// Reason recorded in `script_exhaustive_runs.reason` (required).
+    #[arg(long = "run-reason")]
+    pub reason: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ExhaustiveStatusArgs {
+    /// lane_rules | route_priority | cos_digest
+    pub domain: String,
+    /// Print the API response as JSON.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -191,9 +231,23 @@ pub fn run(config_path: Option<PathBuf>, command: ScriptCommand) -> Result<ExitC
                 outln!("{}", render_guard(&result));
             }
         }
+        ScriptCommand::Exhaustive(ExhaustiveCommand::Status(args)) => {
+            let result = request(&api, "GET", &exhaustive_path(&args.domain), None)?;
+            if args.json {
+                print_json(&result)?;
+            } else {
+                for line in render_exhaustive(&result) {
+                    outln!("{line}");
+                }
+            }
+        }
         _ => {}
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn exhaustive_path(domain: &str) -> String {
+    format!("/script/domains/{domain}/exhaustive-runs")
 }
 
 /// The read-only subcommands a CoS run may send directly with its run credential (`GET` only). Every
@@ -205,6 +259,7 @@ pub fn cos_read_only(command: &ScriptCommand) -> bool {
         ScriptCommand::Domains(_)
             | ScriptCommand::Generations(GenerationsCommand::List(_))
             | ScriptCommand::Guard(GuardCommand::Status(_))
+            | ScriptCommand::Exhaustive(ExhaustiveCommand::Status(_))
     )
 }
 
@@ -215,7 +270,13 @@ pub fn request_of(command: &ScriptCommand) -> Option<(&'static str, String, Valu
     match command {
         ScriptCommand::Domains(_)
         | ScriptCommand::Generations(GenerationsCommand::List(_))
-        | ScriptCommand::Guard(GuardCommand::Status(_)) => None,
+        | ScriptCommand::Guard(GuardCommand::Status(_))
+        | ScriptCommand::Exhaustive(ExhaustiveCommand::Status(_)) => None,
+        ScriptCommand::Exhaustive(ExhaustiveCommand::Run(args)) => Some((
+            "POST",
+            exhaustive_path(&args.domain),
+            json!({"generation": args.generation, "reason": args.reason}),
+        )),
         ScriptCommand::Mode(args) => {
             let mut body = Map::new();
             body.insert("mode".into(), json!(args.mode.as_str()));
@@ -326,6 +387,54 @@ pub(crate) fn render_generations(view: &Value) -> Vec<String> {
             bundle,
             domains,
             s(&item["updated_at"]),
+        ));
+    }
+    lines
+}
+
+/// `GET /script/domains/{domain}/exhaustive-runs` の応答を人が読む表にする（立場・参照の hash・新しい順の行）。
+pub(crate) fn render_exhaustive(view: &Value) -> Vec<String> {
+    let s = |v: &Value| v.as_str().unwrap_or("-").to_string();
+    let short = |v: &Value| -> String {
+        v.as_str()
+            .map_or_else(|| "-".to_string(), |b| b.chars().take(12).collect())
+    };
+    let mut lines = vec![format!(
+        "domain: {}  generation: {}  standing: {}  reference: {}",
+        s(&view["domain"]),
+        short(&view["generation"]),
+        s(&view["standing"]),
+        short(&view["reference_sha256"]),
+    )];
+    lines.push(format!(
+        "{:<28} {:<8} {:<20} {:<12} {:>7} {:>7} {:>5} {:>5} {:>5} {:>6} {}",
+        "ID",
+        "STATE",
+        "STOP",
+        "BUNDLE",
+        "CALLS",
+        "MATCH",
+        "MISM",
+        "TMO",
+        "FAIL",
+        "UNCOV",
+        "STARTED_AT"
+    ));
+    for run in view["runs"].as_array().into_iter().flatten() {
+        let n = |k: &str| run["counts"][k].as_u64().unwrap_or(0);
+        lines.push(format!(
+            "{:<28} {:<8} {:<20} {:<12} {:>7} {:>7} {:>5} {:>5} {:>5} {:>6} {}",
+            s(&run["id"]),
+            s(&run["state"]),
+            s(&run["stop_code"]),
+            short(&run["bundle_sha256"]),
+            n("calls"),
+            n("matches"),
+            n("mismatches"),
+            n("timeouts"),
+            n("failures"),
+            n("uncovered_inputs"),
+            s(&run["started_at"]),
         ));
     }
     lines
@@ -531,10 +640,70 @@ mod tests {
             })),
             ScriptCommand::Guard(GuardCommand::Status(DomainsArgs { json: false })),
             ScriptCommand::Guard(GuardCommand::Clear(GuardClearArgs { reason: "x".into() })),
+            exhaustive_run(),
+            ScriptCommand::Exhaustive(ExhaustiveCommand::Status(ExhaustiveStatusArgs {
+                domain: "lane_rules".into(),
+                json: false,
+            })),
         ]
     }
 
-    /// CoS の run で包まずに通るのは読み取り 3 つだけで、変更系（mode・register・retire・guard clear）は入らない。
+    fn exhaustive_run() -> ScriptCommand {
+        ScriptCommand::Exhaustive(ExhaustiveCommand::Run(ExhaustiveRunArgs {
+            domain: "lane_rules".into(),
+            generation: "ab12".into(),
+            reason: "本番で網羅".into(),
+        }))
+    }
+
+    /// 網羅の run は POST で本文は generation と reason。status は GET だけで CoS の run でも直接読める。
+    /// CoS の run で run を包むと registry の EXCLUDED で 422 になる（`cos_operation_not_allowed`）ので、
+    /// operations.md の ALLOWED の行には無い。
+    #[test]
+    fn script_exhaustive_cos_read_only_and_wrapped() {
+        assert_eq!(
+            request_of(&exhaustive_run()),
+            Some((
+                "POST",
+                "/script/domains/lane_rules/exhaustive-runs".to_string(),
+                json!({"generation": "ab12", "reason": "本番で網羅"})
+            ))
+        );
+        assert!(!cos_read_only(&exhaustive_run()));
+        let status = ScriptCommand::Exhaustive(ExhaustiveCommand::Status(ExhaustiveStatusArgs {
+            domain: "lane_rules".into(),
+            json: true,
+        }));
+        assert!(cos_read_only(&status));
+        assert!(request_of(&status).is_none());
+        let text = include_str!("../../../../config/skills/cos-operator/operations.md");
+        let allowed = text.split("## 除外する操作").next().expect("table");
+        assert!(!allowed.contains("exhaustive-runs"), "must stay EXCLUDED");
+    }
+
+    #[test]
+    fn script_exhaustive_table_shows_standing_and_counts() {
+        let view = json!({
+            "domain": "lane_rules", "generation": "0123456789abcdef", "standing": "passed",
+            "reference_sha256": "fedcba9876543210",
+            "runs": [{"id": "01RUN", "state": "passed", "stop_code": null,
+                      "bundle_sha256": "0123456789abcdef", "started_at": "t",
+                      "counts": {"calls": 39366, "matches": 39366, "mismatches": 0,
+                                 "timeouts": 0, "failures": 0, "uncovered_inputs": 0}}]
+        });
+        let lines = render_exhaustive(&view);
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].contains("standing: passed"), "{}", lines[0]);
+        assert!(
+            lines[0].contains("generation: 0123456789ab "),
+            "{}",
+            lines[0]
+        );
+        assert!(lines[2].contains("39366"), "{}", lines[2]);
+        assert!(lines[2].starts_with("01RUN"));
+    }
+
+    /// CoS の run で包まずに通るのは読み取り 4 つだけで、変更系（mode・register・retire・guard clear）は入らない。
     #[test]
     fn script_cos_read_only_is_domains_generations_list_and_guard_status() {
         let read: Vec<String> = every_command()
@@ -542,10 +711,11 @@ mod tests {
             .filter(cos_read_only)
             .map(|c| format!("{c:?}"))
             .collect();
-        assert_eq!(read.len(), 3, "{read:?}");
+        assert_eq!(read.len(), 4, "{read:?}");
         assert!(read[0].starts_with("Domains"));
         assert!(read[1].starts_with("Generations(List"));
         assert!(read[2].starts_with("Guard(Status"));
+        assert!(read[3].starts_with("Exhaustive(Status"));
         for command in every_command() {
             if matches!(
                 command,
@@ -554,6 +724,7 @@ mod tests {
                         GenerationsCommand::Register(_) | GenerationsCommand::Retire(_)
                     )
                     | ScriptCommand::Guard(GuardCommand::Clear(_))
+                    | ScriptCommand::Exhaustive(ExhaustiveCommand::Run(_))
             ) {
                 assert!(!cos_read_only(&command), "{command:?}");
             }

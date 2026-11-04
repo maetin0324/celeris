@@ -125,6 +125,11 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     ),
     (
         "POST",
+        "/api/v1/script/domains/{domain}/exhaustive-runs",
+        "script_api_only: ADR 2026-11-04-lane-rules-exhaustive-evidence D7。網羅は昇格の前提（件数）を 1000 から 100 に下げ、結果によって rust への戻しと generation の invalid を起こす。人と外部 operator が API で起こし、CoS の操作には足さない。",
+    ),
+    (
+        "POST",
         "/api/v1/script/guard/clear",
         "human_only: ADR 2026-11-02-ts-control-layer-boundary 付記 S5-4。script-guard の全体の停止を解くのは人の API token の主体だけ。",
     ),

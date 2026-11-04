@@ -56,7 +56,11 @@ updated: 2026-11-04
 - 出所の列の試験 file 17 件 → すべて実在。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
-EVIDENCE_PLACEHOLDER
+- `test -s agent-docs/progress/2026-11-04-long-horizon/a8a.md && grep -q '未解決' agent-docs/progress/2026-11-04-long-horizon/a8a.md` → exit 0
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」。Rust の試験は 0 件で、doc 検査の self-test だけ走る）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0
 
 ## fixture・raw records
 この task では作っていない。A8(実行) の置き場: `tests/fixtures/long-horizon/{public,oracle}/`、raw は `agent-docs/progress/2026-11-04-long-horizon/a8b/replay/`。実 LLM は `a9/llm/`。

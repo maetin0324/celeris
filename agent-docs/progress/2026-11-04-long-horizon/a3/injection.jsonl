@@ -1,0 +1,2 @@
+{"roots":0,"schema":"celeris.long-horizon-record/1","snapshot_has_injection":false,"test":"project_cos_injection_report_ignored"}
+{"roots_created":0,"rule_id":"pc/root-in-flight","same_decision":true,"schema":"celeris.long-horizon-record/1","test":"project_cos_ts_injection_does_not_change_the_decision"}

@@ -497,3 +497,26 @@ project_controller_decisions(id PK, project_id, based_on_revision, human_epoch, 
 - **E2E** は 1 crate に置かず、試験の対象の crate に置いた（接頭辞 `general_cos_consult_`、計 13 件）: `task-api/tests/general_cos_consult.rs`（相談・読取・委譲・proposal・relay の偽装・session の分離）、`task-dispatch` の `cos_chat_root_done.rs`（元の thread への要約）、`task-worker` の `claude_code/cos_chat_tests.rs`（上限内・上限超え・LLM CLI）と `cos_chat/tests.rs`（prompt の hint と指針）と `tool_policy.rs`、`task-core` の `chat/intent.rs`。`scripts/dev/test-general-cos-consult-e2e.sh` の下限は 13 件にした（§script の表の 9 件より多い）。
 - 指針: `crates/task-worker/src/cos_chat.rs` の Core に「応じ方（相談・短い読取・委譲）」を足し、各入力の横に推定と規則 id、入力の節に読取の上限を出す。「1 run = 1 turn」「subagent・他の LLM CLI を起動しない」は保ち、委譲した task の完了は daemon が thread に戻すので待たずに turn を終える、と書き足した。`preamble.rs` の `create_task` の節は「1 つの作業の依頼は 1 つの root」に直し、相談と短い読取は root にしないと書いた。skill は `config/skills/cos-operator/consult.md`（version 6）。
 - Core の大きさの上限（試験 `cos_chat_core_is_byte_identical_across_runs_and_free_of_run_values`）を 8300 B から 9100 B に上げた。応じ方の規則（682 B）と subagent・turn の行の書き足しで 9047 B になったため。詳細は skill の consult.md に置き、Core は最小にした。
+
+## 付記 A1（2026-11-04、task 01M6JW1EFJ55VST9P08ZTHGKVN）: 実装で決めた契約の差分
+A1 の実装（migration `0111_project_controller.sql`、`SCHEMA_VERSION` 111）で契約を次のとおり具体化・変更した。理由は
+`agent-docs/progress/2026-11-04-long-horizon/a1.md` に書いた。
+1. **型の置き場所**: `ProjectWakeKind`・`ControllerMode`・`ControllerPhase`・`EffectState`・`ProjectControllerView`・
+   `ProjectDecideInput` は契約どおり `crates/task-core/src/project_wake.rs`。`ProjectEffect`・`ProjectDecision`・
+   `trait ProjectDecider`・`NoopProjectDecider`・`ProjectControllerSettings` は `crates/task-dispatch/src/project_controller.rs`
+   に置く（`CreateRoot` が持つ `NewTaskSpec` は task-ops の型で、task-core から参照できない）。A3 の
+   `dispatcher/project_decider_ts.rs` はこの trait を実装する。
+2. **`OpenEscalation` は A1 の効果に入れない**: 受信箱の新種類 `project_controller` は A3 が足し、そのときに
+   `ProjectEffect` に variant を足す。A1 の効果は `None`・`QueueCosInput`・`CreateRoot` の 3 つ。
+3. **実行時の状態の置き場所**: `dispatcher.rs` に欄を足せない（source-size の負債）ので、controller の実行時の状態は
+   `CosChatLaunch.project_controller` に置き、段は `dispatcher/cron_tick.rs` の `tick_cron_jobs` の最後から呼ぶ
+   （module は `cron_tick.rs` の `#[path = "project_wake.rs"]`）。CoS chat が無い構成では controller は入らない（起動時に warn）。
+4. **CAS で捨てた判断は行にしない**: `rejected:stale_*` は log と tick の集計（試験が読む）に残し、判断の行は作らない。
+   wake は消費せず、次の tick で評価し直す（I7）。
+5. **`next_wake_at`**: 期限が来た案件は wake の行なしで評価する（timer）。wake の種類は 9 種のまま。
+6. **mode の API**: `shadow` 以上へ上げるには daemon の `[project_controller] enabled = true` も要る（403
+   `project_controller_disabled`）。`PUT` の応答は `ProjectControllerView`。
+7. **`human_epoch` を増やす経路**: A1 は `PATCH /projects/{id}` と人の `POST /tasks`（案件つき）で、書き込みの後の別の
+   transaction で増やす。D12 の残りの経路（`project_action`、人の案件 thread への発言・`…/relays`・`…/forwards`、
+   task の cancel・retry・reopen、受信箱の回答）と同じ transaction 化は A3 に残す（進捗の未解決 1）。
+8. **wake API の coalesce**: `POST …/controller/wake` は 30 秒の固定値で `coalesce_until` を置く（API は daemon の設定を持たない）。

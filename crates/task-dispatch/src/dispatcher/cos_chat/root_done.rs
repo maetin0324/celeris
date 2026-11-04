@@ -241,10 +241,26 @@ impl CosChatLaunch {
                 let key = message_key(row.task_id, row.done_seq);
                 // ADR 2026-10-22-cos-fixed-threads D3: the project's CoS thread (or the general
                 // CoS); the input's client_message_id keeps it idempotent. No new thread.
-                let thread = self
+                // ADR 2026-11-04-project-controller §A4: a root the general CoS delegated from a
+                // conversation reports back into that general thread, so the person can go on
+                // from the same place.
+                let task_key = row.task_id.to_string();
+                let origin = self
                     .store
-                    .cos_thread_for_task(&row.task_id.to_string(), now)
+                    .cos_origin_thread_for_task(&task_key)
                     .map_err(|e| e.to_string())?;
+                let thread = match origin
+                    .map(|id| self.store.chat_thread_get(&id))
+                    .transpose()
+                    .map_err(|e| e.to_string())?
+                    .flatten()
+                {
+                    Some(thread) => thread,
+                    None => self
+                        .store
+                        .cos_thread_for_task(&task_key, now)
+                        .map_err(|e| e.to_string())?,
+                };
                 let text = format!(
                     "{COS_INSTRUCTION}\n\n{}",
                     root_done::facts_block(&facts, self.config.web_base_url.as_deref())

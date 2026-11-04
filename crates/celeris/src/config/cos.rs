@@ -34,6 +34,10 @@ pub struct CosConfig {
     pub stream_retention_days: u32,
     #[serde(default)]
     pub attachments: CosAttachmentsConfig,
+    /// ADR 2026-11-04-project-controller §A4: shell commands one CoS chat run may run for a short
+    /// read; the run stops at the next one (既定 20).
+    #[serde(default = "default_inline_read_max_commands")]
+    pub inline_read_max_commands: u32,
 }
 
 impl Default for CosConfig {
@@ -48,8 +52,13 @@ impl Default for CosConfig {
             triage: CosTriageConfig::default(),
             stream_retention_days: default_retention_days(),
             attachments: CosAttachmentsConfig::default(),
+            inline_read_max_commands: default_inline_read_max_commands(),
         }
     }
+}
+
+fn default_inline_read_max_commands() -> u32 {
+    task_worker::tool_policy::COS_INLINE_READ_MAX_COMMANDS_DEFAULT
 }
 
 fn default_worker_reserve() -> f64 {

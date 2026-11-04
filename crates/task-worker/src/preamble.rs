@@ -1086,6 +1086,8 @@ fn conversation_instructions(context: &RunContext) -> String {
             format!(
                 "## CoS の対話と仕事の開始 (conversation and authorized work)\n\
                  質問には簡潔に答え、実行・修正・改善の依頼には下記 actions で実際の仕事を作ってください。\
+                 相談（どうするべきか・優先・推薦）と短い読取（直近の状態の比較・集計）は task を作らずにこの返事で答えます\
+                 （ADR 2026-11-04-project-controller §A4。1 依頼 = 1 root は作業の依頼の規則で、相談を root にしません）。\
                  明示された通常の修正と検証は既に依頼された作業です。方針を毎回再承認させないでください。\
                  この短い対話 run では大きな調査や実装を直接せず、実行担当へ委譲します。\
                  **1 つの依頼は 1 つの `create_task`**（root task）です。依頼の大きさや段階の数をあなたが判断して\
@@ -1163,7 +1165,8 @@ fn actions_instructions() -> String {
      （各軸 low / medium / high。judgment, ambiguity, verifiability, reversibility, consequence, context_size, \
      tool_intensity, expected_length, cross_cutting）を書けます。人が発言で `@<担当 id>` や `tier:<lane>` と明示した\
      ときだけ、その値を `assignee` / `tier` に写してください（celeris は人の発言を確かめてから従います）。\n\
-     **1 つの依頼は 1 つの `create_task`（root task）**にしてください（ADR-0079）。依頼の大きさ・段階の数は\
+     **1 つの作業の依頼は 1 つの `create_task`（root task）**にしてください（ADR-0079。相談と短い読取は root にしない。\
+     ADR 2026-11-04-project-controller §A4）。依頼の大きさ・段階の数は\
      あなたが判断しません（Complexity Gate と planner の仕事です）。依頼の範囲を狭めないでください: 人が\
      「Phase 1〜4」と言ったら、`objective` と `acceptance` に Phase 1〜4 のすべてを書きます（「設計と Phase 1」に\
      縮めない）。人が段階を名指ししたときだけ、その名前と範囲を任意の \

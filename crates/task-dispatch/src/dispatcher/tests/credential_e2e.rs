@@ -558,6 +558,7 @@ async fn credential_wait_notifies_through_the_outbox_without_any_run_over_full_t
             harness: "fake".into(),
             max_turns: 2,
             max_wall_secs: 30,
+            inline_read_max_commands: 20,
             unavailable_reason: None,
             data_dir: e.dir.path().to_path_buf(),
             db_path: e.dir.path().join("db.sqlite"),

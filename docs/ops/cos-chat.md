@@ -21,6 +21,7 @@ route_candidates = [
 ]
 max_turns = 70
 max_wall_secs = 900
+inline_read_max_commands = 20 # 1 run の短い読取の shell コマンド数。超えると run を止める（ADR 2026-11-04-project-controller §A4）
 stream_retention_days = 30
 worker_reserve_five_hour = 0.90
 

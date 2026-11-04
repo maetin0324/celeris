@@ -11,6 +11,7 @@ mod credential_tests;
 pub mod digest;
 pub mod digest_apply;
 mod digest_fixture;
+pub mod intent;
 mod operations;
 #[cfg(test)]
 mod operations_tests;
@@ -18,6 +19,7 @@ mod override_op;
 pub mod plan_rejudge;
 #[cfg(test)]
 mod plan_rejudge_tests;
+mod proposal;
 pub mod relay_rejudge;
 #[cfg(test)]
 mod relay_rejudge_tests;
@@ -40,6 +42,7 @@ pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity}
 pub use digest_fixture::{COS_DIGEST_GENERATED_CASES, cos_digest_fixture_jsonl};
 pub use operations::{AuditContext, CosOperation};
 pub use override_op::{OverrideAction, OverrideResult};
+pub use proposal::{COS_PROPOSAL_KEY_PREFIX, COS_PROPOSAL_TEXT_PREFIX, chat_proposal_forward_tx};
 pub use review::{
     COS_REVIEW_INPUT_KEY_PREFIX, COS_REVIEW_REPORT_KEY_PREFIX, COS_REVIEW_REPORT_TEXT_MAX_CHARS,
     COS_REVIEW_THREAD_TITLE, ChatReviewReported, cos_review_report_tx, cos_review_thread_ensure_tx,
@@ -209,8 +212,41 @@ pub struct ChatMessage {
     /// thread produced it (a periodic review report names its review input).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<ChatProvenance>,
+    /// ADR 2026-11-04-project-controller §A4: present on a `role=system` input of a project thread
+    /// that the general CoS drafted (`chat.proposal_forward`). It is CoS's proposal, not the
+    /// person's instruction, and `instructed_by` can never cite it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cos_proposal: Option<Box<ChatCosProposal>>,
     pub created_at: String,
     pub updated_at: String,
+}
+/// §A4: the record of a general CoS proposal to a project CoS. Written by Rust from the verified
+/// run credential; the request body cannot set any of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChatCosProposal {
+    /// Always `cos:<general thread id>` (the drafting CoS, never a person).
+    pub proposed_by: String,
+    /// The general thread the proposal came from.
+    pub from_thread_id: String,
+    /// The general CoS run that sent it.
+    pub run_id: String,
+    /// The audited `/cos/operations` row.
+    pub operation_id: String,
+    /// Tasks of the target project the proposal is about (1..=`CHAT_RELAY_TASKS_MAX`).
+    pub task_ids: Vec<String>,
+    /// RFC 3339 expiry.
+    pub expires_at: String,
+}
+/// §A4 `POST /chat/threads/{t}/proposals` (CoS operation `chat.proposal_forward` only).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChatProposalRequest {
+    pub client_message_id: String,
+    /// CoS's own words (the proposal). Rust prefixes [`COS_PROPOSAL_TEXT_PREFIX`].
+    pub text: String,
+    pub task_ids: Vec<String>,
+    /// RFC 3339 expiry (required, after now).
+    pub expires_at: String,
 }
 wire_enum!(ChatProvenanceKind { CosReviewReport });
 /// D4': the origin of a message written into the general thread by the review thread's run.

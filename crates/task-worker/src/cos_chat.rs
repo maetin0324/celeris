@@ -141,9 +141,11 @@ pub fn core(chat: &CosChatContext) -> String {
         "# CoS chat Core\n\
          人との常設チャットの 1 turn。id・seq・入力・要約・添付・受信箱の件・skill 名は入力の側にあり、\
          下の `<thread id>` などは入力の「run 固有の操作パラメータ」の値で埋める。\
-         headless なので turn を終えると run は終わる。後で通知を待つ仕組みは使わない。\n\n",
+         headless なので turn を終えると run は終わる。後で通知を待つ仕組みは使わない\
+         （委譲した task の完了は daemon がこの thread に戻すので、待たずに turn を終える）。\n\n",
     );
     out.push_str(WORK_RULES);
+    out.push_str(CONSULT_RULES);
     out.push_str(&format!(
         "## 返事と操作\n\
          - 返事は普通の本文で書く（そのまま chat に流れる）。最初の 1〜3 行に結論（人が今何をすればよいか）。\n\
@@ -187,8 +189,20 @@ const WORK_RULES: &str = "## 作業の規則\n\
      人が実行する手順（コマンドと確認方法）として書く。登録 project のアプリの配備（例: PRA の docker compose）は別で、\
      人が依頼し、その project が定めた配備手順（KB の手順書。cos-operator skill の deploy.md）があるなら、手順に従って実行してよい。\
      手順が無い project は手順書を書いて人に渡す。config（`.env` など）の変更を含む配備と DB の破壊的 migration は、実行前に人へ一言確認する。\n\
-     - subagent・別の LLM の CLI（`claude`・`codex`・`opencode` など）や LLM の API を起動しない（検出・記録される）。分担は task の起票か人への質問で。\n\
+     - subagent・別の LLM の CLI（`claude`・`codex`・`opencode` など）や LLM の API を起動しない（検出した時点で run が止まる）。分担は task の起票か人への質問で。\n\
      - 写し・ビルド出力・大きな一時 file は `/tmp` に置かず、`$TMPDIR`（run 終了で消える）か作業場所の下に置く。\n\n";
+
+/// ADR 2026-11-04-project-controller §A4: how the CoS answers — a consultation in the reply, a
+/// short read inside this run, longer work by one task whose completion comes back to the thread.
+/// The intent hint next to each input is the daemon's guess (`task_core::chat::intent`).
+const CONSULT_RULES: &str = "## 応じ方（相談・短い読取・委譲）\n\
+     人は応じ方を選ばない。入力の横の「推定」は daemon の手がかりで、発言と文脈から違えば覆してよい（詳細は skill `cos-operator` の consult.md）。\n\
+     - 相談（どうするべき？・どれがいい？・優先は？）: task を作らず、事実と推薦をこの返事で答える。1 依頼 = 1 root は作業の依頼の規則で、相談には当てはめない。\n\
+     - 短い読取（直近 N 件を比較・集計・一覧）: task を作らず、この run の中で API の GET・`celerisctl` の読み取り・作業場所の file を読んで答える。\
+     shell のコマンドは 1 run に入力の「読取の上限」回まで。超えると run が止まる。読むだけで、変更・長いビルドや試験はしない。\n\
+     - 委譲（修正して・実装して・長い調査）: 短命の task を 1 件起票し（`instructed_by` に人の発言 id）、task id と「完了したらこの thread に要約が戻る」を返事に書く。\
+     受け入れには review か決定的な検査を置き、review と成果統合を迂回しない。人の依頼の範囲を狭めない。\n\
+     - 案件 CoS へ渡すのは、人の原文の取り次ぎ（`chat.relay_forward`）か、自分の提案（`chat.proposal_forward`。人の指示ではない）のどちらか。提案を人の発言として書かない。\n\n";
 
 /// ADR cos-chat-home D4: how attachments are read and handed over (pinned) to a task or a KB inbox
 /// candidate through the references API wrapped in OP, never by passing this run's path on.
@@ -228,6 +242,11 @@ fn inputs_section(chat: &CosChatContext) -> String {
         );
         return out;
     }
+    out.push_str(&format!(
+        "読取の上限: この run の shell コマンドは {} 回まで（`[cos] inline_read_max_commands`）。\n\n",
+        chat.inline_read_max_commands
+            .unwrap_or(crate::tool_policy::COS_INLINE_READ_MAX_COMMANDS_DEFAULT)
+    ));
     for input in &chat.inputs {
         let marker = if input.interrupt {
             "【割り込み】 "
@@ -237,6 +256,13 @@ fn inputs_section(chat: &CosChatContext) -> String {
         out.push_str(&format!(
             "### seq {} (message {}) {marker}\n{}\n",
             input.seq, input.id, input.text
+        ));
+        // ADR 2026-11-04-project-controller §A4: the daemon's intent hint (the person never picks).
+        let hint = task_core::chat::intent::classify(&input.text);
+        out.push_str(&format!(
+            "推定: {}（規則 `{}`）\n",
+            hint.intent.label(),
+            hint.rule_id
         ));
         if !input.attachment_ids.is_empty() {
             out.push_str(&format!("添付: {}\n", input.attachment_ids.join(", ")));

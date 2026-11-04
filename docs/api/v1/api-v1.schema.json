@@ -3508,6 +3508,47 @@
       ],
       "type": "object"
     },
+    "ChatCosProposal": {
+      "description": "§A4: the record of a general CoS proposal to a project CoS. Written by Rust from the verified\nrun credential; the request body cannot set any of it.",
+      "properties": {
+        "expires_at": {
+          "description": "RFC 3339 expiry.",
+          "type": "string"
+        },
+        "from_thread_id": {
+          "description": "The general thread the proposal came from.",
+          "type": "string"
+        },
+        "operation_id": {
+          "description": "The audited `/cos/operations` row.",
+          "type": "string"
+        },
+        "proposed_by": {
+          "description": "Always `cos:<general thread id>` (the drafting CoS, never a person).",
+          "type": "string"
+        },
+        "run_id": {
+          "description": "The general CoS run that sent it.",
+          "type": "string"
+        },
+        "task_ids": {
+          "description": "Tasks of the target project the proposal is about (1..=`CHAT_RELAY_TASKS_MAX`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "proposed_by",
+        "from_thread_id",
+        "run_id",
+        "operation_id",
+        "task_ids",
+        "expires_at"
+      ],
+      "type": "object"
+    },
     "ChatEscalationRef": {
       "description": "D2: the item a card of the general thread stands for.",
       "properties": {
@@ -3714,6 +3755,17 @@
             "string",
             "null"
           ]
+        },
+        "cos_proposal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatCosProposal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-04-project-controller §A4: present on a `role=system` input of a project thread\nthat the general CoS drafted (`chat.proposal_forward`). It is CoS's proposal, not the\nperson's instruction, and `instructed_by` can never cite it."
         },
         "created_at": {
           "type": "string"

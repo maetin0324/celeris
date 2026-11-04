@@ -1068,6 +1068,15 @@
           },
           "type": "array"
         },
+        "inline_read_max_commands": {
+          "description": "ADR 2026-11-04-project-controller §A4: `[cos] inline_read_max_commands`, the shell commands\none CoS chat run may run for a short read. Absent = the default (20).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "inputs": {
           "description": "The input messages this run must handle, in delivery order (an interrupt first).\nDelivery is recorded by `chat_runs.input_message_id` and the message state, not here.",
           "items": {

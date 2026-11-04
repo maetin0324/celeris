@@ -243,6 +243,56 @@ pub fn inspect_command(tool: &str, command: &str) -> Option<ToolPolicyViolation>
     None
 }
 
+/// ADR 2026-11-04-project-controller §A4（付記 A4）: CoS chat run の shell 実行の上限の既定（`[cos] inline_read_max_commands`）。
+pub const COS_INLINE_READ_MAX_COMMANDS_DEFAULT: u32 = 20;
+
+/// 止めた理由の接頭辞（run の失敗の文面と progress に出る）。
+pub const COS_INLINE_BUDGET_EXCEEDED: &str = "cos_inline_budget_exceeded";
+/// CoS run で LLM の CLI・API・subagent を起動しようとして止めた理由の接頭辞。
+pub const COS_LLM_LAUNCH_REFUSED: &str = "cos_llm_launch_refused";
+
+/// §A4: CoS chat run の中で許す「短い読取」の枠。shell の command を数え、上限を超えた 1 回目と、
+/// LLM の CLI・API・subagent の起動（D5 の検出）で止める理由を返す。純粋な計数で、I/O は無い。
+/// 通常の worker run には使わない（その run の検出は警告のまま。ADR 2026-10-07 D5）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CosInlineBudget {
+    pub max_commands: u32,
+    pub used: u32,
+    /// `[adapters.<id>] subagents = "allow_cos" | "allow"`（D7）が許すときは subagent 道具で止めない。
+    pub allow_subagents: bool,
+}
+
+impl CosInlineBudget {
+    pub fn new(max_commands: Option<u32>) -> Self {
+        Self {
+            max_commands: max_commands.unwrap_or(COS_INLINE_READ_MAX_COMMANDS_DEFAULT),
+            used: 0,
+            allow_subagents: false,
+        }
+    }
+
+    /// 道具の起動 1 回を数える。止めるなら理由を返す。
+    pub fn observe(&mut self, tool: &str, input: Option<&serde_json::Value>) -> Option<String> {
+        if let Some(violation) = inspect_tool_use(tool, input)
+            && !(self.allow_subagents && violation.kind == ToolPolicyKind::SubagentTool)
+        {
+            return Some(format!(
+                "{COS_LLM_LAUNCH_REFUSED}: {} (a CoS chat run delegates by a task, never by another LLM)",
+                violation.message()
+            ));
+        }
+        input.and_then(command_text)?;
+        self.used += 1;
+        (self.used > self.max_commands).then(|| {
+            format!(
+                "{COS_INLINE_BUDGET_EXCEEDED}: {} shell commands in one CoS chat run (max {}); \
+                 longer work goes to a task",
+                self.used, self.max_commands
+            )
+        })
+    }
+}
+
 /// 道具の入力から shell command を取り出す。
 fn command_text(input: &serde_json::Value) -> Option<String> {
     for key in ["command", "cmd", "script"] {
@@ -524,5 +574,35 @@ mod tests {
             assert!(SUBAGENT_TOOLS.contains(t));
         }
         assert!(CODEX_FEATURE_OVERRIDES.contains(&"features.multi_agent=false"));
+    }
+
+    #[test]
+    fn general_cos_consult_inline_budget_counts_shell_commands_and_refuses_llm_launches() {
+        let mut budget = CosInlineBudget::new(Some(2));
+        let cmd = |c: &str| serde_json::json!({"command": c});
+        assert_eq!(
+            budget.observe("Bash", Some(&cmd("celerisctl list --limit 3"))),
+            None
+        );
+        // Reading a file with the Read tool is not a shell command.
+        assert_eq!(
+            budget.observe("Read", Some(&serde_json::json!({"file_path": "a"}))),
+            None
+        );
+        assert_eq!(budget.observe("Bash", Some(&cmd("wc -l x"))), None);
+        let stop = budget
+            .observe("Bash", Some(&cmd("cat y")))
+            .expect("third command stops");
+        assert!(stop.starts_with(COS_INLINE_BUDGET_EXCEEDED), "{stop}");
+        let mut budget = CosInlineBudget::new(None);
+        assert_eq!(budget.max_commands, COS_INLINE_READ_MAX_COMMANDS_DEFAULT);
+        let stop = budget
+            .observe("Bash", Some(&cmd("claude -p 'compare these'")))
+            .expect("LLM CLI stops");
+        assert!(stop.starts_with(COS_LLM_LAUNCH_REFUSED), "{stop}");
+        let stop = budget
+            .observe("Agent", Some(&serde_json::json!({"prompt": "x"})))
+            .expect("subagent stops");
+        assert!(stop.starts_with(COS_LLM_LAUNCH_REFUSED), "{stop}");
     }
 }

@@ -21,6 +21,7 @@ pub(super) fn build_cos_chat_launch(
         harness: "claude-code".to_owned(),
         max_turns: config.cos.max_turns,
         max_wall_secs: config.cos.max_wall_secs,
+        inline_read_max_commands: config.cos.inline_read_max_commands,
         unavailable_reason: api_base_url
             .is_none()
             .then(|| "CoS unavailable: [api] listen is not configured".to_owned()),

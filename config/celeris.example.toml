@@ -763,6 +763,7 @@ harness = "claude-code"             # claude-code / codex / opencode
 # 空なら理由付き unavailable（CoS の実行器は claude_code 固定。候補は Claude の供給元を書く）。
 route_candidates = []
 max_turns = 70
+inline_read_max_commands = 20         # ADR 2026-11-04-project-controller §A4: 1 run の短い読取の shell コマンド数。超えると run を止める
 max_wall_secs = 900
 stream_retention_days = 30
 # Claude の観測済み 5 時間使用率がこの値以上なら通常 worker に新規割当しない。

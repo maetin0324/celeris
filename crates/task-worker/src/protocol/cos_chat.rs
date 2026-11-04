@@ -83,6 +83,10 @@ pub struct CosChatContext {
     /// general CoS thread, the thread's own project in a project CoS thread, empty otherwise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<CosChatProjectSummary>,
+    /// ADR 2026-11-04-project-controller §A4: `[cos] inline_read_max_commands`, the shell commands
+    /// one CoS chat run may run for a short read. Absent = the default (20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_read_max_commands: Option<u32>,
 }
 
 /// One relayed instruction of the thread (ADR 2026-10-27-relayed-instructions D1/D4). `text` is the

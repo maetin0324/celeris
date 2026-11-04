@@ -368,3 +368,163 @@ async fn cos_chat_core_claude_append_system_prompt_stdin_and_prompt_txt() {
     }
     assert_eq!(systems[0].as_bytes(), systems[1].as_bytes());
 }
+
+/// ADR 2026-11-04-project-controller §A4: the raw record of a budget scenario
+/// (`CELERIS_GCC_E2E_OUT`, read by `scripts/dev/test-general-cos-consult-e2e.sh`).
+fn gcc_record(name: &str, row: serde_json::Value) {
+    let Ok(dir) = std::env::var("CELERIS_GCC_E2E_OUT") else {
+        return;
+    };
+    let mut row = row;
+    row["schema"] = serde_json::json!("celeris.general-cos-consult/1");
+    row["test"] = serde_json::json!(name);
+    std::fs::write(
+        Path::new(&dir).join(format!("{name}.jsonl")),
+        format!("{row}\n"),
+    )
+    .unwrap();
+}
+
+/// A fake claude that runs `n` Bash tool calls (each its own assistant line), then replies.
+fn bash_calls_script(commands: &[&str]) -> String {
+    let mut script = String::from("cat >/dev/null\n");
+    for c in commands {
+        let line = serde_json::json!({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": c}}]}});
+        script.push_str(&format!("printf '%s\\n' '{line}'\n"));
+        script.push_str("printf '%s\\n' '{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"ok\"}]}}'\n");
+    }
+    script.push_str("printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"直近 3 件の比較です\"}'\n");
+    script
+}
+
+/// A short read inside the budget completes the run with the reply (no task is involved here).
+#[tokio::test]
+async fn general_cos_consult_short_read_within_the_budget_completes() {
+    let dir = tempfile::tempdir().unwrap();
+    let commands = [
+        "celerisctl list --limit 3",
+        "celerisctl show 01A",
+        "wc -l notes.md",
+    ];
+    let adapter = ClaudeCodeAdapter::new(stub_claude(dir.path(), &bash_calls_script(&commands)));
+    let mut req = chat_request(dir.path(), false);
+    req.context
+        .cos_chat
+        .as_mut()
+        .unwrap()
+        .inline_read_max_commands = Some(3);
+    let outcome = adapter
+        .run(req, "read", default_limits(), &RecordingSink::default())
+        .await
+        .unwrap();
+    match &outcome.terminal {
+        Terminal::Done { summary, .. } => assert_eq!(summary, "直近 3 件の比較です"),
+        other => panic!("unexpected terminal {other:?}"),
+    }
+    gcc_record(
+        "general_cos_consult_short_read_within_the_budget_completes",
+        serde_json::json!({"reads": commands.len(), "max": 3, "terminal": "done", "llm_launches": 0}),
+    );
+}
+
+/// The command after the limit stops the run (`cos_inline_budget_exceeded`); the reply that
+/// would have followed is never taken.
+#[tokio::test]
+async fn general_cos_consult_read_over_the_budget_stops_the_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let commands = ["cat a", "cat b", "cat c", "cat d"];
+    let adapter = ClaudeCodeAdapter::new(stub_claude(dir.path(), &bash_calls_script(&commands)));
+    let mut req = chat_request(dir.path(), false);
+    req.context
+        .cos_chat
+        .as_mut()
+        .unwrap()
+        .inline_read_max_commands = Some(2);
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(req, "over", default_limits(), &sink)
+        .await
+        .unwrap();
+    let message = match &outcome.terminal {
+        Terminal::Error {
+            message, retryable, ..
+        } => {
+            assert!(!retryable);
+            message.clone()
+        }
+        other => panic!("unexpected terminal {other:?}"),
+    };
+    assert!(
+        message.starts_with(crate::tool_policy::COS_INLINE_BUDGET_EXCEEDED),
+        "{message}"
+    );
+    assert!(message.contains("3 shell commands"), "{message}");
+    let progress = sink.progress.lock().unwrap().join("\n");
+    assert!(
+        progress.contains(crate::tool_policy::COS_INLINE_BUDGET_EXCEEDED),
+        "{progress}"
+    );
+    gcc_record(
+        "general_cos_consult_read_over_the_budget_stops_the_run",
+        serde_json::json!({"reads": 3, "max": 2, "terminal": "error", "stop": message, "llm_launches": 0}),
+    );
+}
+
+/// An LLM CLI launched from a CoS chat run is reported as before (`WorkerPolicyViolation`) and
+/// now also stops the run; a regular worker run still only warns (ADR 2026-10-07 D5).
+#[tokio::test]
+async fn general_cos_consult_llm_cli_launch_stops_the_cos_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = bash_calls_script(&["claude -p compare-the-last-three"]);
+    let adapter = ClaudeCodeAdapter::new(stub_claude(dir.path(), &script));
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(
+            chat_request(dir.path(), false),
+            "llm",
+            default_limits(),
+            &sink,
+        )
+        .await
+        .unwrap();
+    let message = match &outcome.terminal {
+        Terminal::Error { message, .. } => message.clone(),
+        other => panic!("unexpected terminal {other:?}"),
+    };
+    assert!(
+        message.starts_with(crate::tool_policy::COS_LLM_LAUNCH_REFUSED),
+        "{message}"
+    );
+    let violations = sink.violations.lock().unwrap().clone();
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0].kind, task_core::ToolPolicyKind::LlmCli);
+
+    // The same line in a regular (non-chat) run is a warning only: the run completes.
+    let dir = tempfile::tempdir().unwrap();
+    let script = format!(
+        "mkdir -p artifacts\nprintf '%s' '{{\"summary\":\"ok\",\"evidence\":[]}}' > artifacts/result.json\n{script}"
+    );
+    let adapter = ClaudeCodeAdapter::new(stub_claude(dir.path(), &script));
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "worker",
+            default_limits(),
+            &sink,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome.terminal, Terminal::Done { .. }),
+        "{:?}",
+        outcome.terminal
+    );
+    assert_eq!(sink.violations.lock().unwrap().len(), 1);
+    gcc_record(
+        "general_cos_consult_llm_cli_launch_stops_the_cos_run",
+        serde_json::json!({"cos_terminal": "error", "stop": message, "violations": 1,
+                           "worker_terminal": "done", "llm_launches": 0}),
+    );
+}

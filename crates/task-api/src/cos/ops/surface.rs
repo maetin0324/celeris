@@ -8,8 +8,8 @@ use crate::problem::ApiProblem;
 use serde_json::Value;
 use task_core::chat::{
     self, ChatError, ChatForwardRequest, ChatMessageResponse, ChatOpenThreadRequest,
-    ChatPatchThreadRequest, ChatPostMessageRequest, ChatReadThreadRequest, ChatResumeQueueRequest,
-    ChatStopRequest, ChatThreadResponse, CosOperation,
+    ChatPatchThreadRequest, ChatPostMessageRequest, ChatProposalRequest, ChatReadThreadRequest,
+    ChatResumeQueueRequest, ChatStopRequest, ChatThreadResponse, CosOperation,
 };
 use task_core::store::SqliteStore;
 
@@ -40,6 +40,11 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "POST",
         "/api/v1/chat/threads/{t}/forwards",
         "chat.relay_forward",
+    ),
+    (
+        "POST",
+        "/api/v1/chat/threads/{t}/proposals",
+        "chat.proposal_forward",
     ),
     (
         "POST",
@@ -416,6 +421,25 @@ pub(crate) fn dispatch(
                 |tx| {
                     chat::chat_relay_forward_tx(tx, &from, &thread, &req, &relayed_by, now)
                         .map(|posted| posted.response)
+                },
+            )
+        }
+        "chat.proposal_forward" => {
+            // ADR 2026-11-04-project-controller §A4: the general CoS's own proposal to the
+            // project thread `{t}`, recorded as CoS's words (`role=system`, `cos_proposal`).
+            let thread = thread_of(path);
+            let req: ChatProposalRequest = serde_json::from_value(body).map_err(decode)?;
+            let from = audit.ctx.thread_id.clone();
+            let run = audit.ctx.run_id.clone();
+            let operation = audit.ctx.operation_id.clone();
+            chat_apply(
+                store,
+                audit,
+                ("chat_thread", &thread),
+                matched.action,
+                |tx| {
+                    chat::chat_proposal_forward_tx(tx, &from, &thread, &req, &run, &operation, now)
+                        .map(|message| ChatMessageResponse { message })
                 },
             )
         }

@@ -354,7 +354,7 @@ pub(crate) fn message_raw(row: &Row<'_>) -> rusqlite::Result<MessageRaw> {
 
 /// metadata_json keys used here: `mode`, `interrupt`, `attachment_ids` (ordered), `cards`,
 /// `workspace_files`, `author`, `relay`, `mcp_receipt`, `escalation` (ADR 2026-10-28 D2),
-/// `provenance` (ADR 2026-10-28-cos-review-back-thread D4').
+/// `provenance` (ADR 2026-10-28-cos-review-back-thread D4'), `cos_proposal` (ADR 2026-11-04-project-controller §A4).
 /// Other keys (legacy provenance etc.) are preserved and ignored.
 pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatMessage, ChatError> {
     let meta: Value = serde_json::from_str(&r.metadata_json).unwrap_or(Value::Null);
@@ -398,6 +398,10 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         Some(v) if !v.is_null() => Some(serde_json::from_value(v.clone())?),
         _ => None,
     };
+    let cos_proposal: Option<Box<ChatCosProposal>> = match meta.get("cos_proposal") {
+        Some(v) if !v.is_null() => Some(Box::new(serde_json::from_value(v.clone())?)),
+        _ => None,
+    };
     Ok(ChatMessage {
         role: enum_from(&r.role)?,
         state: enum_from(&r.state)?,
@@ -415,6 +419,7 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         relay,
         escalation,
         provenance,
+        cos_proposal,
         created_at: r.created_at,
         updated_at: r.updated_at,
     })

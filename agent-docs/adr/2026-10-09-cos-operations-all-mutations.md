@@ -296,6 +296,7 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | POST | `/chat/threads/{t}/stop` | A | `chat/mod.rs` | 共通 |
 | POST | `/chat/threads/{t}/relays` | X: `human_instruction_relay` | `chat/mod.rs` | router のみ |
 | POST | `/chat/threads/{t}/forwards` | A | `chat/mod.rs` | router のみ |
+| POST | `/chat/threads/{t}/proposals` | A | `chat/mod.rs` | router のみ |
 | POST | `/console/instruct` | X: `console_instruction_chain` | `console.rs` | 共通 |
 | POST | `/cos/review-report` | A | `cos/review.rs` | 共通 |
 | POST | `/cos/inbox/{i}/resolve` | X: `recursive_cos` | `cos/inbox.rs` | 共通 |
@@ -521,3 +522,6 @@ ADR 2026-10-28-cos-integrate-task の `POST /tasks/{id}/integration-requests/{re
   （`script_generation.retire`）を admin の ALLOWED に足した。登録と退役は mode の行が指さない限り挙動を変えない。
   daemon の登録簿が未接続なら route と同じ関数が 503 `script_runtime_unavailable` を返す。
 - `POST /script/guard/clear` は EXCLUDED（`human_only`）。script-guard の全体の停止を解くのは人の主体だけ。
+
+## 付記 2026-11-04（A4、ADR 2026-11-04-project-controller §A4）
+- surface に `POST /chat/threads/{t}/proposals`（`chat.proposal_forward`）を ALLOWED で足した。統括 CoS が自分の提案を案件 thread へ `role=system` の入力として渡す経路で、人の発言の取り次ぎ（`chat.relay_forward`）とは別。直接の呼び出しは 403 `chat_proposal_cos_only`。

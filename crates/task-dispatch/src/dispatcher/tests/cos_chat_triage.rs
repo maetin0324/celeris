@@ -71,6 +71,7 @@ fn triage_dispatcher(
             harness: "fake".into(),
             max_turns: 2,
             max_wall_secs: 30,
+            inline_read_max_commands: 20,
             unavailable_reason: None,
             data_dir: root.to_path_buf(),
             db_path: db_path.to_path_buf(),

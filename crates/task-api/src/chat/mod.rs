@@ -69,6 +69,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         )
         .route("/api/v1/chat/threads/{t}/relays", post(post_relay))
         .route("/api/v1/chat/threads/{t}/forwards", post(post_forward))
+        .route("/api/v1/chat/threads/{t}/proposals", post(post_proposal))
         .route("/api/v1/chat/threads/{t}/read", post(mark_read))
         .route("/api/v1/chat/threads/{t}/stop", post(stop_run))
         .route("/api/v1/chat/threads/{t}/resume-queue", post(resume_queue))
@@ -341,6 +342,19 @@ async fn post_forward(Params(_t): Params<String>, RawQuery(raw): RawQuery) -> Ap
         "chat_forward_cos_only",
         "forwards are made only by the general CoS through /cos/operations (chat.relay_forward); \
          a person speaks in POST /chat/threads/{t}/messages, an operator relays in …/relays",
+    ))
+}
+
+/// ADR 2026-11-04-project-controller §A4: `POST /chat/threads/{t}/proposals` is the general CoS
+/// handing its own proposal to a project thread. It runs only as the CoS operation
+/// `chat.proposal_forward` (`/cos/operations`); a direct call is 403.
+async fn post_proposal(Params(_t): Params<String>, RawQuery(raw): RawQuery) -> ApiResult {
+    no_query(&raw)?;
+    Err(ApiProblem::new(
+        StatusCode::FORBIDDEN,
+        "chat_proposal_cos_only",
+        "proposals are made only by the general CoS through /cos/operations \
+         (chat.proposal_forward); a person speaks in POST /chat/threads/{t}/messages",
     ))
 }
 

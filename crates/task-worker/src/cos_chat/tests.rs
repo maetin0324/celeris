@@ -90,6 +90,7 @@ fn chat() -> CosChatContext {
         api_base_url: "http://127.0.0.1:7070/api/v1".into(),
         inbox_items: vec![],
         projects: vec![],
+        inline_read_max_commands: None,
         relayed_instructions: vec![],
     }
 }
@@ -886,4 +887,59 @@ fn cos_chat_prompt_relayed_section_lists_live_relays_with_ids_and_scope() {
         p.contains("同スレッドの有効な取り次ぎ**の message id だけ"),
         "{p}"
     );
+}
+
+/// ADR 2026-11-04-project-controller §A4: the person never picks a mode. Each input carries the
+/// daemon's intent hint (consult / read / delegate with the rule id), the run's read budget is
+/// stated, and the Core says how to answer each (no task for a consultation, a short read inside
+/// the run, one task for a fix with the completion coming back), separating the person's words
+/// (`chat.relay_forward`) from CoS's proposal (`chat.proposal_forward`).
+#[test]
+fn general_cos_consult_prompt_carries_the_intent_hint_and_the_guidance() {
+    let mut c = chat();
+    c.inline_read_max_commands = Some(7);
+    c.inputs = ["どうするべき？", "直近 3 件を比較して", "これを修正して"]
+        .iter()
+        .enumerate()
+        .map(|(i, text)| CosChatInput {
+            id: format!("m{i}"),
+            seq: i as i64 + 1,
+            text: (*text).into(),
+            interrupt: false,
+            attachment_ids: vec![],
+        })
+        .collect();
+    let inputs = super::inputs_section(&c);
+    for needle in [
+        "推定: 相談（task を作らずに答える）（規則 `intent/consult-question`）",
+        "推定: 読取（run の中で読んで答える）（規則 `intent/read-verb`）",
+        "推定: 委譲（task を起票し、完了をこの thread に返す）（規則 `intent/delegate-verb`）",
+        "読取の上限: この run の shell コマンドは 7 回まで",
+    ] {
+        assert!(inputs.contains(needle), "{needle} missing in\n{inputs}");
+    }
+    let core = super::core(&c);
+    for needle in [
+        "## 応じ方（相談・短い読取・委譲）",
+        "人は応じ方を選ばない",
+        "相談には当てはめない",
+        "review と成果統合を迂回しない",
+        "`chat.proposal_forward`。人の指示ではない",
+        "検出した時点で run が止まる",
+        "完了は daemon がこの thread に戻す",
+    ] {
+        assert!(core.contains(needle), "Core lacks {needle}");
+    }
+    // The skill file the Core points at documents the same three ways and the two routes.
+    let consult = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/skills/cos-operator/consult.md"),
+    )
+    .expect("consult.md");
+    for needle in [
+        "chat.relay_forward",
+        "chat.proposal_forward",
+        "inline_read_max_commands",
+    ] {
+        assert!(consult.contains(needle), "consult.md lacks {needle}");
+    }
 }

@@ -37,3 +37,4 @@ license: このリポジトリと同じ（外部の license は無い）
   終える。統括 thread へ直接書かない。operations.md の surface 表の `chat.review_report` の行は api-op の葉が足した。
   metadata.version は変えない（他の操作の規則は同じ）。本番 KB への取り込みは人が行う。
 - 2026-11-03（ADR 2026-11-02-ts-control-layer-boundary 付記 S5-4・S5-12、ADR 2026-10-09-cos-operations-all-mutations 付記）: operations.md の操作表に `script_generation.register`・`script_generation.retire` の 2 行を足し、`script_domain.mode_set` の行を `canary`・`ts` は人だけ（CoS は 403 `human_only` で rejected）に直した。metadata.version は変えない（他の操作の規則は同じ）。本番 KB への取り込みは人が行う。
+- 2026-11-04（version 6、ADR 2026-11-04-project-controller §A4・付記 A4）: consult.md（相談・短い読取・委譲と、案件 CoS への 2 つの経路）を足し、SKILL.md の表に 1 行足した。operations.md に `chat.proposal_forward` の行を足した。

@@ -165,6 +165,8 @@ pub struct CosChatLaunchConfig {
     pub harness: String,
     pub max_turns: u32,
     pub max_wall_secs: u64,
+    /// `[cos] inline_read_max_commands` (ADR 2026-11-04-project-controller §A4).
+    pub inline_read_max_commands: u32,
     pub unavailable_reason: Option<String>,
     pub data_dir: PathBuf,
     pub db_path: PathBuf,
@@ -582,6 +584,7 @@ impl CosChatLaunch {
         let chat = CosChatContext {
             thread_id: thread_id.to_string(),
             run_id: run_id.to_owned(),
+            inline_read_max_commands: Some(self.config.inline_read_max_commands),
             relayed_instructions,
             inputs: vec![CosChatInput {
                 id: input.id.clone(),

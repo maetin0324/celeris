@@ -65,6 +65,7 @@ fn fixture_on(
             harness: harness.into(),
             max_turns: 3,
             max_wall_secs: 30,
+            inline_read_max_commands: 20,
             unavailable_reason: None,
             data_dir: dir.path().to_path_buf(),
             db_path,

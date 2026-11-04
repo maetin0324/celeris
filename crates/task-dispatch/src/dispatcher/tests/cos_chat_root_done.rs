@@ -210,3 +210,123 @@ async fn without_cos_the_deterministic_fallback_is_notified_once() {
     assert!(bodies[0].contains(&format!("http://celeris.test/tasks/{}", root.id)));
     assert_eq!(f.count("SELECT COUNT(*) FROM chat_runs"), 0);
 }
+
+/// ADR 2026-11-04-project-controller §A4: a root the general CoS delegated from a conversation
+/// (an applied `task.create` operation of the general thread) reports into that general thread,
+/// not into its project's thread, with the task id in the facts, so the person goes on from the
+/// same place. The facts say 「合格」 only from a `ReviewVerdict`: without one they read
+/// 「記録なし」, so the summary cannot claim a pass the reviewer did not give.
+#[tokio::test]
+async fn general_cos_consult_done_summary_returns_to_the_origin_thread() {
+    let mut f = fixture(true);
+    f.tick();
+    let general = f
+        .store
+        .cos_general_thread_ensure(OffsetDateTime::now_utc())
+        .expect("general");
+    let project_thread = crate::test_support::project_cos_thread(&f.store, "案件A");
+    let project: String = f.count_text(&format!(
+        "SELECT project_id FROM chat_threads WHERE id='{project_thread}'"
+    ));
+    let project: task_core::ProjectId = project.parse().expect("project id");
+    // Two roots of the project: one delegated from the general thread, one not.
+    let delegated = f.done_task_in(None, Some(project));
+    let reviewed = f.done_task_in(None, Some(project));
+    for (task, key) in [(&delegated, "delegate-1"), (&reviewed, "delegate-2")] {
+        f.store
+            .cos_operation_apply(
+                &task_core::chat::AuditContext {
+                    actor: task_core::chat::ChatActor::Cos,
+                    thread_id: general.clone(),
+                    run_id: "run-general".into(),
+                    operation_id: ulid::Ulid::new().to_string(),
+                    reason: "人の依頼「これを修正して」".into(),
+                    policy_version: "5".into(),
+                },
+                key,
+                "hash",
+                "task",
+                &task.id.to_string(),
+                None,
+                "task.create",
+                &serde_json::json!({}),
+                |_, _| Ok(serde_json::json!({"id": task.id.to_string()})),
+            )
+            .expect("operation");
+    }
+    f.store
+        .append_event(
+            reviewed.id,
+            &task_core::Event::ReviewVerdict {
+                run_id: "review-1".into(),
+                criterion_idx: 0,
+                pass: true,
+                reason: "ok".into(),
+            },
+        )
+        .expect("verdict");
+    // A third root, created without the general CoS, still goes to the project thread.
+    let plain = f.done_task_in(None, Some(project));
+    // Re-read the done transitions written before the operations existed.
+    f.store
+        .feed_cursor_set(
+            crate::dispatcher::cos_chat::root_done::ROOT_DONE_CURSOR,
+            "0",
+        )
+        .expect("rewind");
+    // One CoS run at a time (max_cos_runs = 1): each queued summary input gets its turn.
+    for _ in 0..6 {
+        f.tick();
+        f.join_all().await;
+    }
+    let thread_of = |task: &Task| {
+        f.count_text(&format!(
+            "SELECT thread_id FROM root_done_summaries WHERE task_id='{}'",
+            task.id
+        ))
+    };
+    assert_eq!(thread_of(&delegated), general);
+    assert_eq!(thread_of(&reviewed), general);
+    assert_eq!(thread_of(&plain), project_thread);
+    let facts = |task: &Task| {
+        f.count_text(&format!(
+            "SELECT text FROM chat_messages WHERE thread_id='{general}' AND role='user' \
+             AND text LIKE '%{}%'",
+            task.id
+        ))
+    };
+    let delegated_facts = facts(&delegated);
+    assert!(
+        delegated_facts.contains("受け入れ判定: 記録なし"),
+        "{delegated_facts}"
+    );
+    assert!(!delegated_facts.contains("合格"), "{delegated_facts}");
+    let reviewed_facts = facts(&reviewed);
+    assert!(reviewed_facts.contains("0:合格"), "{reviewed_facts}");
+    // The summary run answered in the general thread (one reply per delegated root).
+    let replies = f.count(&format!(
+        "SELECT COUNT(*) FROM chat_messages WHERE thread_id='{general}' AND role='assistant'"
+    ));
+    assert_eq!(replies, 2);
+    if let Ok(dir) = std::env::var("CELERIS_GCC_E2E_OUT") {
+        let row = serde_json::json!({
+            "schema": "celeris.general-cos-consult/1",
+            "test": "general_cos_consult_done_summary_returns_to_the_origin_thread",
+            "llm_launches": 0,
+            "task_id": delegated.id.to_string(),
+            "origin_thread": general,
+            "summary_thread": thread_of(&delegated),
+            "summary_in_origin": thread_of(&delegated) == general,
+            "summary_mentions_task": delegated_facts.contains(&delegated.id.to_string()),
+            "summary_says_pass_without_verdict": delegated_facts.contains("合格"),
+            "plain_root_thread_is_project": thread_of(&plain) == project_thread,
+            "origin_replies": replies,
+        });
+        std::fs::write(
+            std::path::Path::new(&dir)
+                .join("general_cos_consult_done_summary_returns_to_the_origin_thread.jsonl"),
+            format!("{row}\n"),
+        )
+        .expect("raw record");
+    }
+}

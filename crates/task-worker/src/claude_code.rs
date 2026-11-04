@@ -726,6 +726,15 @@ async fn run_claude_code(
     // ADR 2026-10-05 cos-chat-home（live-check 不具合 1）: a CoS chat run replies in its body, not in
     // `result.json`; keep the streamed assistant text as the fallback reply.
     let mut cos_chat_streamed = String::new();
+    // ADR 2026-11-04-project-controller §A4: a CoS chat run may read a little, not run without bound.
+    let mut cos_budget =
+        req.context
+            .cos_chat
+            .as_ref()
+            .map(|chat| crate::tool_policy::CosInlineBudget {
+                allow_subagents: config.subagents.allows(req),
+                ..crate::tool_policy::CosInlineBudget::new(chat.inline_read_max_commands)
+            });
 
     loop {
         let wall_elapsed = start.elapsed();
@@ -792,6 +801,26 @@ async fn run_claude_code(
                         &mut exploration,
                         req.context.cos_chat.is_some(),
                     );
+                    if let Some(budget) = cos_budget.as_mut()
+                        && let Some(reason) = cos_budget_stop(budget, trimmed)
+                    {
+                        sink.progress_with(
+                            &reason,
+                            &progress::status()
+                                .with_summary(progress::truncate_chars(
+                                    &reason,
+                                    progress::SUMMARY_MAX_CHARS,
+                                ))
+                                .with_error(true),
+                        );
+                        timeout_terminal = Some(Terminal::Error {
+                            message: reason,
+                            retryable: false,
+                            usage: None,
+                        });
+                        force_kill = true;
+                        break;
+                    }
                 }
             }
         }
@@ -1090,6 +1119,23 @@ fn handle_line(
     exploration: &mut ExplorationTracker,
 ) {
     handle_line_for_run(line, sink, last_result, background, exploration, false);
+}
+
+/// ADR 2026-11-04-project-controller §A4: count the `tool_use` blocks of an `assistant` line
+/// against the CoS chat run's inline budget; the first over the limit (or an LLM launch) stops it.
+fn cos_budget_stop(budget: &mut crate::tool_policy::CosInlineBudget, line: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    if value.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+        return None;
+    }
+    let blocks = value.pointer("/message/content")?.as_array()?;
+    blocks
+        .iter()
+        .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+        .find_map(|b| {
+            let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+            budget.observe(name, b.get("input"))
+        })
 }
 
 /// Append the `text` blocks of an `assistant` stream-json line (CoS chat reply fallback).

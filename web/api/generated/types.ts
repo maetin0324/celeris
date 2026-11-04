@@ -724,6 +724,15 @@ export type ChatCheckpointSaved = {
   "thread_id": string;
 };
 
+export type ChatCosProposal = {
+  "expires_at": string;
+  "from_thread_id": string;
+  "operation_id": string;
+  "proposed_by": string;
+  "run_id": string;
+  "task_ids": Array<string>;
+};
+
 export type ChatEscalationRef = {
   "item_id": string;
   "open": boolean;
@@ -766,6 +775,7 @@ export type ChatMessage = {
   "author"?: string | null;
   "cards": Array<ChatCard>;
   "client_message_id"?: string | null;
+  "cos_proposal"?: ChatCosProposal | null;
   "created_at": string;
   "escalation"?: ChatEscalationRef | null;
   "id": string;

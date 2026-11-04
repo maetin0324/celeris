@@ -1,7 +1,8 @@
 ---
 title: TS 制御層の本番運用準備と意図的な TS 方針改善（段階移行 2）— 親 task の分割
 tasks: [01M6HG7T6ZKTX239KGH0QY4HFQ]
-status: blocked
+status: done
+completed: 2026-11-04
 updated: 2026-11-04
 ---
 # TS 制御層の本番運用準備と意図的な TS 方針改善（段階移行 2）
@@ -35,13 +36,15 @@ updated: 2026-11-04
 | p2g-llm-self-improve | 実 LLM の CoS/worker による TS 改善の非本番実験 | p1d-intended-change | 本番の承認は自律化しない。K2/K4 評価器・hidden 資料に触れない |
 
 ## 本番切替に要る人の判断
+分割時（2026-11-03）の記録。1. は人の判断で実施済み（`lane_rules`・`cos_digest` が compare）。現状と残りの判断は下の「本番の現状」「次に要る人の判断」。
+
 1. p1e-shadow-measure の前: lane_rules の generation 登録と mode `compare` への切替を本番で行うか（人が S5「本番への移行」4.・5. を実行する）。
 2. compare の実件数が揃った後: canary（bps）→ ts へ上げるか（領域ごとに別の承認）。
 3. p0a の gate を含む release を作り promote するか。
 4. p0b が原子化できず canary/ts を禁止した場合、その禁止を受け入れるか。
 
 ## 子 task の結果（2026-11-04、親の再開 run で集約）
-完了日（親の集約）: 2026-11-04。子 8 件のうち 6 件が done、2 件が人の判断待ちで止まっている。done の 6 件の branch は全部 main の祖先（`git merge-base --is-ancestor celeris/<子 id> main` が 0）。この branch は main を merge した。
+完了日（親の集約）: 2026-11-04。子 8 件はすべて done で、各子の記録の front matter は `status: done`。8 件の branch は全部 main の祖先（`git merge-base --is-ancestor celeris/<子 id> main` が 8 件とも 0）。この branch は main を merge した。
 
 | key（task id） | 状態 | 主な file・関数 | 試験（子の記録） | raw records | 記録 |
 |---|---|---|---|---|---|
@@ -50,14 +53,21 @@ updated: 2026-11-04
 | p1c-ops-observe（01M6HGFR1TR6PJ8822DHW7NNNT） | done | `celerisctl script`（generations list/register/retire・canary bps・guard clear）、409 `script_bundle_not_deployed`、GET /daemon の `script_tick_wait`、guard の増分走査、`cos_read_only` | test-affected 5115 passed、guard clear の help に 403/422 | `p1c-ops-cycles.jsonl` | [p1c-ops-observe.md](2026-11-03-ts-control-ops/p1c-ops-observe.md) |
 | p1d-intended-change（01M6HGFR1TD2G3H4JF6J67CTBM） | done | `control-ts/behavior-changes/`、`CompareOutcome::Explained`、migration 0108、`/api/v1/script/behavior-changes`（承認は human のみ）、ADR 2026-11-03-ts-intended-behavior-change、`scripts/dev/ts-behavior-eval.sh` | test-affected 7223 passed、canary e2e 4 件 | `p1d-eval/records.jsonl` | [p1d-intended-change.md](2026-11-03-ts-control-ops/p1d-intended-change.md) |
 | p1e-shadow-preflight（01M6HGFR1TMY7PTGQ553FQGM7H） | done | `scripts/dev/script-compare.py`（preflight/report/sample、読み取り専用） | `script_compare_report` 8 passed、`tests/script-compare.sh` 35 項目、test-affected 1009 passed | `p1e-preflight-prod.json`（本番 preflight は exit 3）・`p1e-rehearsal.jsonl` | [p1e-shadow-preflight.md](2026-11-03-ts-control-ops/p1e-shadow-preflight.md) |
-| p1e-shadow-measure（01M6HGFR1TVY299MQPZY7HQQG9） | blocked（question） | — | — | 本番の実測なし（synthetic で補っていない） | 子の question |
-| p2f-expand-port（01M6HGFR1TCHVSDDNH0GR9SNBK） | ready（未着手） | — | — | — | 依存 p1e-shadow-measure が未完 |
+| p1e-shadow-measure（01M6HGFR1TVY299MQPZY7HQQG9） | done | 本番 DB を読み取り専用（`sqlite3 -readonly`）で `script-compare.py report` により集計。`script-compare.py` の `summarize_tick_log`（journal の `fields.message` だけを見る）と `estimate_volume`（WU の run を除く）を修正 | report exit 4（件数不足）。`lane_rules` 1/1000 件・`cos_digest` 1/200 件、どちらも match、他の outcome・安全違反・guard の停止・rust への戻しは 0。synthetic で補っていない。`tests/script-compare.sh` exit 0、test-affected exit 0 | `p1e-measure-report.jsonl`・`p1e-measure-samples.jsonl` | [p1e-shadow-measure.md](2026-11-03-ts-control-ops/p1e-shadow-measure.md) |
+| p2f-expand-port（01M6HGFR1TCHVSDDNH0GR9SNBK） | done | 候補 5 件を順位づけし、1 位の Complexity Gate の得点（`execution_gate::decide_at` の規則表）を領域 `execution_gate` として同等移植（`crates/task-core/src/execution_gate/scorer.rs`、`control-ts/src/domains/execution_gate.ts`、migration 0109、ADR 2026-11-04-ts-execution-gate-domain）。本番の mode は `rust` のまま | fixture 2,337 件が Rust と TS で全件一致、本物の V8 の 4,674 呼び出しも全件一致。`script_compare_gate_` 20 passed・6 passed、test-affected 7273 passed | `p2f-rank.jsonl`・`p2f-gate-ts.jsonl`（gate-ts warm p50 8.267 秒・p95 8.618 秒、cargo 0 回）・`p2f-gate-host-latency.jsonl` | [p2f-expand-port.md](2026-11-03-ts-control-ops/p2f-expand-port.md) |
 | p2g-llm-self-improve（01M6HGFR1TVSBS63STM8NH3XCS） | done | `trial.sh`・`collect.py`、課題 T1/T2 × TS/旧 Rust の子 4 件 | 4 試行 成功 4/4、人の介入 0、再採点 4 件 exit 0 | `p2g-llm-self-improve/`（rescore/trial.jsonl・usage.jsonl） | [p2g-llm-self-improve.md](2026-11-03-ts-control-ops/p2g-llm-self-improve.md) |
 
-### 止まっている子と次に要る人の判断
-- p1e-shadow-measure: 本番の lane_rules を compare にする承認と、p1e-shadow-preflight.md「本番への移行（人の手順）」0.〜5.（preflight、S5 以後の release の verify と promote、`[script]` を足して再起動、bundle の配備と登録、標本取り、lane_rules を compare）の実施。本番 daemon は release 3259e04ea63e（`[script]` なし）のまま。純粋判定 1000 件まで約 21 日（約 48 件/日）の見込み。
-- p2f-expand-port: 本番 compare の観測（p1e-shadow-measure）が揃うまで着手しない（親の停止条件）。昇格実績は別の人の承認が要る。
-- canary→ts の昇格、guard 解除、release の作成・promote は、いずれも未実施で人の承認待ち。
+### 本番の現状（p1e-shadow-measure.md の 2026-11-04T03:06:11Z の集計）
+- 本番の `lane_rules`（02:41:21Z）と `cos_digest`（03:00:10Z）は mode `compare`・version 1 で、どちらも operator（人の判断）が rust から compare にした。`route_priority` は `rust`。`execution_gate` は本番に入っていない（migration 0109 を含む release は未作成）。
+- 記録は `lane_rules` 1/1000 件・`cos_digest` 1/200 件で、どちらも match。report は exit 4（件数不足）で、canary に進む根拠はまだ無い。synthetic で補っていない。
+- 件数の見込み: `lane_rules` は 9.33 件/日で 1000 件まで約 107 日（2027-02 中旬）。100 件なら約 10.7 日（要件の見直しは別 task 01M6J81DZ7C8SMY7HNZTW8GT0Z）。`cos_digest` は 55.31 件/日で 200 件まで約 3.6 日。
+- daemon の RSS は起動直後の 181,820 kB から 26 分で 588,668 kB に増えた。原因は未確認。
+
+### 次に要る人の判断（いずれも未実施）
+1. 本番で `execution_gate` を compare にするか（p2f-expand-port.md「本番への移行」。migration 0109 を含む release の作成・promote、bundle の登録、mode の変更）。
+2. `lane_rules`・`cos_digest` の canary→ts への昇格。件数が 1000・200 に達した後で、領域ごとに別の承認（人の token だけが通る）。
+3. release の作成・promote。
+4. guard の解除。
 
 ### TS-only の高速経路の回帰確認（統合後の HEAD で実測）
 `bash scripts/dev/edit-activate-baseline.sh --scenario <policy-ts|cos-ts> --mode warm --reps 20 --series parent-integrated --out <file>` を main 取り込み後の木（clean）で実行し、`--check-targets` で照合した。
@@ -76,7 +86,10 @@ updated: 2026-11-04
 - `--check-targets` → policy-ts・cos-ts とも exit 0（problems 0）。
 
 ## 未解決
-- p1e-shadow-measure と p2f-expand-port は人の承認待ちで未完。本番の一致率は未計測。
+- 本番の compare の件数は `lane_rules` 1/1000・`cos_digest` 1/200 で、一致率は判断できない（n=1）。`execution_gate` は本番の記録 0 件。
+- 本番 daemon の RSS の増加（182→589 MB、26 分）の原因は未確認。compare の前の基準が無い。
+- `execution_gate` の `tree::gate::unit_gate` は比較の対象外で、canary・ts でも Rust の規則表で判定する。TS だけで規則を変える前に、計画の検証と dispatch の判定のずれを設計で決める。
+- 本番で execution_gate を compare にすること、canary→ts の昇格、release の作成・promote、guard の解除は、いずれも未実施（上の「次に要る人の判断」）。
 - p0a: cargo-test 段の秒の増分は未計測（次の release の gate.json で確かめる）。
 - p0b: 本番に旧い crash 窓の行が残っているかは未確認。
 - p1c: 本番の script_tick_wait と RSS は未確認。

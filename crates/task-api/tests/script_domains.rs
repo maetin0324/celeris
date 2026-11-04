@@ -134,6 +134,7 @@ async fn script_domain_list_starts_rust_without_generation() {
             "cos_digest",
             "execution_gate",
             "lane_rules",
+            "project_controller",
             "route_priority"
         ]
     );

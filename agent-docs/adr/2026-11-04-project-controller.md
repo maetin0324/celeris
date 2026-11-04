@@ -478,3 +478,12 @@ project_controller_decisions(id PK, project_id, based_on_revision, human_epoch, 
 - A4 の指針は案件 mode で切れないので、C09 の実 LLM だけ A1 の直前の binary を補助の腕にする。主比較には入れない。
 - D11-5 の「認証が使えなければ人に頼む」を強めた。実 LLM の試行は worker の run の中で起こさず、`scripts/dev/long-horizon-pilot-llm.sh` を人が実行する。run の規則が LLM の起動を禁じていることと、測定専用 account に人の login が要ることが理由。人に頼まれた外部 operator が実行してもよい。
 - §A8 の配置に `oracle/MANIFEST.sha256` と、主体に見せない台本 `oracle/<case>/scenario.jsonl` を足した。`public/` と `oracle/` の分け方は変えていない。
+
+## 付記 A2（2026-11-04、01M6JW1EFMF6T3CVCEH9ATR14D）
+- `ProjectSnapshot` に `outcomes_invalid: bool` を足した（block の形の誤りを「block なし」と分けるため）。
+- `decisions[]` の行に `reason_code`・`outcome_id`・`request_sha256` を足した（同じ版での `replan`・`escalate`・`mark_milestone` の繰り返しを TS が避けるため）。`escalate` の行は `root_key` に `question_key` を入れる。
+- `RootSpec.acceptance[].check` は `{"type":"reviewer"}` か `{"type":"human"}` だけ（TS が command を作らない）。
+- 検証の code に `gap_unknown_outcome`・`unknown_root`・`unknown_outcome`・`achieved_with_open_outcomes`・`cos_inputs_exceeded`・`roots_exceeded_today`・`field_too_long` を足した（安全違反は `SAFETY_VIOLATIONS` の 4 つのまま）。
+- 冪等キーの行の `result_json` に `{root_key, outcome_ids, continues_root_ids}` を持たせ、snapshot はこれで controller の root を引く（task の行・label に controller の値を書かない）。
+- Host op `project_controller:read_root_evidence` は A2 では作らなかった。判定は snapshot だけで決まり、別案件の root は snapshot に入らない。成果物の中身を読む判定が要るときに A3 が足す。
+- runner は参照実装の無い領域を byte 比較でなく行の不変条件（`DomainSpec.invariants`）で採点する。

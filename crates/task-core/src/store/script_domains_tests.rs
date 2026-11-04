@@ -58,6 +58,7 @@ fn script_domain_initial_modes_are_rust() {
             ScriptDomain::CosDigest,
             ScriptDomain::ExecutionGate,
             ScriptDomain::LaneRules,
+            ScriptDomain::ProjectController,
             ScriptDomain::RoutePriority
         ]
     );
@@ -911,6 +912,7 @@ fn script_domain_mode_cas_moves_generation_states() {
             (ScriptDomain::CosDigest, None),
             (ScriptDomain::ExecutionGate, None),
             (ScriptDomain::LaneRules, Some(b.id.clone())),
+            (ScriptDomain::ProjectController, None),
             (ScriptDomain::RoutePriority, Some(b.id.clone())),
         ]
     );

@@ -179,6 +179,8 @@ baseline（[baseline.md](../progress/2026-11-02-ts-control-layer-s0/baseline.md)
 | 失敗率（`Exception`・`InvalidOutput`・`Busy`・`GenerationGone`） | 直近 1000 呼び出しで 0.1% 以下 | 直近 1000 呼び出しで 0.1% 超、または連続 3 件 |
 | 安全違反 | 0 件 | 1 件で戻し、その generation を無効にし、受信箱に出す |
 
+（2026-11-04 改め: この表の `lane_rules` の「進む条件」は、評価の開始後に人の判断で改めた。末尾の「付記 2026-11-04」を見る。元の行は上のまま残す。）
+
 - 安全違反は次のどれか: Rust の再検証が「安全条件を越える提案」を拒否した（lane の天井越え、人の明示の上書き、`out_of_scope_rule` の対象を通す、fail-closed の候補を採る、許可されない capability の要求、scope 外の読み出し）。
   または Rust の検証を通らずに副作用が実行された。後者は検出したら S5 全体を止める。
 - 呼び出しが 1000 件に届かない領域は、件数が届くまで `compare` に留める。
@@ -984,3 +986,12 @@ S4-14 の「apply の直前の mode の読み直し」は、TS の出力を appl
 ## 付記 P2-F（2026-11-04、task 01M6HGFR1TCHVSDDNH0GR9SNBK）
 - 4 つ目の領域 `execution_gate` を足した。S2-3（本文を TS に渡す例外と記録の除去）・S2-8（安全違反の code `gate_rule_not_allowed`・`gate_threshold_violated`）・S6-4（選定の前提）の改めと詳細は [ADR 2026-11-04-ts-execution-gate-domain](2026-11-04-ts-execution-gate-domain.md)。
 - S6-3 の終了条件はこの領域にも同じく当てる。Rust の参照実装は `execution_gate::score`。今は条件を満たさないので消さない。
+
+## 付記 2026-11-04: (f) の `lane_rules` の進む条件を評価の開始後に改める（task 01M6J81DZ7C8SMY7HNZTW8GT0Z）
+(f) は「評価の前に固定する」と書いた基準である。本番の評価は 2026-11-04T02:41:21Z に `compare` で始まっており、この付記は**評価の開始後の変更**である。元の行は消さず、ここで改める。
+- **決めた主体と日**: 人が 2026-11-04 に「本番でも網羅を流す＋100 件」と決めた。
+- **理由**: `lane_rules` の入力は 9 軸×3 段階の 19,683 通りで有限であり、全件を本番の isolate で確かめられる。本番の呼び出しは約 48 件/日で、1000 件まで約 21 日かかる。残る確認は本物の task からの入力の組み立てと、本番での timeout・失敗である。
+- **改める条件**: `lane_rules` の `compare→canary`・`canary→ts` は、全入力の網羅の証拠が合格なら、説明のつかない不一致の無い連続 100 件で、窓の中の timeout・失敗が 0 件、安全違反 0 件。証拠が無い・不合格なら (f) の 1000 件と 0.1% のまま。
+- **変えないもの**: 「即 `rust` へ戻す条件」の列、`route_priority`・`cos_digest` の条件、付記 S5-4 の権限、付記 S6-3 の終了条件（純粋判定 1 万件以上は 1000 件のときの値のまま固定）。付記 S5-7 の計数に網羅の呼び出しを混ぜない。
+- **網羅の不一致・安全違反**: live と同じく 1 件で不合格にし、付記 S5-7 と同じ戻しを行う。
+- 操作・証拠の置き場・tick を止めない方法・権限の詳細は [ADR 2026-11-04-lane-rules-exhaustive-evidence](2026-11-04-lane-rules-exhaustive-evidence.md)。

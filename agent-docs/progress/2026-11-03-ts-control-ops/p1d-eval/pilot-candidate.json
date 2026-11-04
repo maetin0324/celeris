@@ -1,0 +1,34 @@
+{
+ "schema": "celeris.ts-behavior-eval/1",
+ "label": "pilot-candidate",
+ "commit": "aa0e29133095d6678e4970cefdd79d8df8eb8128",
+ "patch_sha256": "1448b4cca99960c08bbd5b3710a713bb0c1fd54615a6640870444bc4063190ff",
+ "domain": "cos_digest",
+ "at": "2026-11-03T21:49:17+00:00",
+ "secs": {
+  "total": 1.479,
+  "worktree": 1.12,
+  "install": 0.195,
+  "build": 0.055,
+  "eval": 0.11
+ },
+ "cargo_invocations": 0,
+ "old_fixture_cases": 2066,
+ "old_fixture_diffs": 0,
+ "old_fixture_diff_examples": [],
+ "specs": [
+  {
+   "file": "cos-digest-cap-run-reason.v1.json",
+   "id": "cos-digest-cap-run-reason",
+   "version": 1,
+   "cases_sha256_ok": true,
+   "cases": 19,
+   "explained_ok": 11,
+   "equal_ok": 8,
+   "wrong": 0,
+   "pilot_explained_ok": 9,
+   "wrong_examples": []
+  }
+ ],
+ "ok": true
+}

@@ -116,6 +116,7 @@ mod task_integration_state;
 pub use model_catalog::ModelCatalogStore;
 mod account_limits;
 mod completion_outcomes;
+mod cos_digest_apply;
 mod credential_wait;
 mod eval_trials;
 mod migrated_harness;
@@ -132,6 +133,7 @@ mod route_records;
 mod routing_evidence;
 mod routing_log;
 mod routing_overrides;
+mod script_behavior_changes;
 mod script_domains;
 mod script_guard;
 mod site_policies;
@@ -143,6 +145,7 @@ pub use credential_wait::{
 pub use decision_log::CampaignResend;
 pub use idempotency::{IdempotencyClaim, IdempotencyLookup, RetryClaimed};
 pub use root_done::{RootDoneState, RootDoneSummary};
+pub use script_behavior_changes::BehaviorChangeApproval;
 pub(crate) use site_policies::site_policy_tx;
 pub use site_policies::{
     BrowserSitePolicy, BrowserSitePolicyDelete, BrowserSitePolicyRecord,

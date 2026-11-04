@@ -23,6 +23,7 @@ use task_core::chat::digest::{
 };
 use task_core::llm_route::{ExecutionClass, HarnessId, Registry, route_priority_decide};
 use task_core::model_policy::{LaneCeiling, RuleMatch, TaskFeatures};
+use task_core::script_behavior_change::{ApprovedBehaviorChange, ExplainedBy};
 use task_core::script_compare::{
     CompareCandidate, CompareError, CompareOutcome, CosDigestApplied, CosDigestAppliedBy,
     CosDigestCommandsSummary, CosDigestCompareRecord, CosDigestFallback, CosDigestOpLog,
@@ -175,13 +176,6 @@ pub trait ScriptDomainStore: Send + Sync {
         ts_side: bool,
         now: OffsetDateTime,
     ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError>;
-    /// 付記 S4-5・S5-7: `cos_digest` の記録を `script_compare_log` に追記し、同じ transaction で計数する。
-    fn script_compare_log_append_observed(
-        &self,
-        record: &CosDigestCompareRecord,
-        ts_side: bool,
-        now: OffsetDateTime,
-    ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError>;
     /// 付記 S5-6: 領域を actor `system:script-guard` で `rust` に戻す（`reason` の先頭は code）。
     /// 版違い（他の更新が先に入った）は `VersionConflict` のまま返す。
     fn script_domain_rollback(
@@ -193,6 +187,13 @@ pub trait ScriptDomainStore: Send + Sync {
     ) -> Result<(), ScriptDomainError>;
     /// 付記 S5-5: 領域に保存済みの checkpoint の版の集合。
     fn script_checkpoint_versions_stored(&self, domain: ScriptDomain) -> Vec<u32>;
+    /// 領域の承認済みの改善仕様（ADR 2026-11-03-ts-intended-behavior-change D4）。既定は無し（何も説明しない）。
+    fn script_behavior_changes_approved(
+        &self,
+        _domain: ScriptDomain,
+    ) -> Result<Vec<ApprovedBehaviorChange>, StoreError> {
+        Ok(Vec::new())
+    }
 }
 
 impl ScriptDomainStore for SqliteStore {
@@ -212,15 +213,6 @@ impl ScriptDomainStore for SqliteStore {
         now: OffsetDateTime,
     ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError> {
         SqliteStore::script_compare_append_observed(self, task_id, record, ts_side, now)
-    }
-
-    fn script_compare_log_append_observed(
-        &self,
-        record: &CosDigestCompareRecord,
-        ts_side: bool,
-        now: OffsetDateTime,
-    ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError> {
-        SqliteStore::script_compare_log_append_observed(self, record, ts_side, now)
     }
 
     fn script_domain_rollback(
@@ -243,6 +235,13 @@ impl ScriptDomainStore for SqliteStore {
 
     fn script_checkpoint_versions_stored(&self, domain: ScriptDomain) -> Vec<u32> {
         SqliteStore::script_checkpoint_versions_stored(self, domain)
+    }
+
+    fn script_behavior_changes_approved(
+        &self,
+        domain: ScriptDomain,
+    ) -> Result<Vec<ApprovedBehaviorChange>, StoreError> {
+        SqliteStore::script_behavior_changes_approved(self, domain)
     }
 }
 
@@ -648,6 +647,8 @@ pub struct CosDigestClassified {
     pub outcome: CompareOutcome,
     pub error: Option<CompareError>,
     pub safety_violations: Vec<String>,
+    /// outcome `explained` の仕様（ADR 2026-11-03-ts-intended-behavior-change D2）。
+    pub explained_by: Option<ExplainedBy>,
 }
 
 impl CosDigestClassified {
@@ -658,6 +659,7 @@ impl CosDigestClassified {
             outcome: c.outcome,
             error: c.error,
             safety_violations: c.safety_violations,
+            explained_by: None,
         }
     }
 
@@ -668,6 +670,7 @@ impl CosDigestClassified {
             outcome: CompareOutcome::InvalidOutput,
             error: Some(CompareError::new("invalid_output", message)),
             safety_violations: code.map(str::to_owned).into_iter().collect(),
+            explained_by: None,
         }
     }
 
@@ -679,6 +682,7 @@ impl CosDigestClassified {
             outcome: CompareOutcome::Unavailable,
             error: Some(CompareError::new("unavailable", reason)),
             safety_violations: Vec::new(),
+            explained_by: None,
         }
     }
 }
@@ -718,10 +722,13 @@ impl CosDigestPassClassified {
 
 /// pass の TS の結果を Rust の参照実装と比べ、規則 1〜9（付記 S4-14）で検証する。
 /// 正規化はしない。run ごとに command 列（順序込み）を同じ直列化の byte 列で比べる。
+/// 違った run は、承認済みの改善仕様 `approved` の期待差分（Rust の出力に編集を当てたもの）と byte 一致するときだけ
+/// `explained` にする（ADR 2026-11-03-ts-intended-behavior-change D1・D2）。検証に落ちた出力は説明しない。
 pub fn classify_cos_digest_pass(
     reads: &[CosDigestPassRead],
     rust: &CosDigestPassOutput,
     result: &TsResult,
+    approved: &[ApprovedBehaviorChange],
 ) -> CosDigestPassClassified {
     let every = |c: &dyn Fn() -> CosDigestClassified| -> Vec<(String, CosDigestClassified)> {
         rust.runs.iter().map(|r| (r.run_id.clone(), c())).collect()
@@ -804,6 +811,9 @@ pub fn classify_cos_digest_pass(
                 ),
                 (None, None, Some(t)) => {
                     let same = same_bytes(&t.commands.as_slice(), &r.commands.as_slice());
+                    let explained_by = (!same)
+                        .then(|| explain_cos_digest_run(approved, input, &r.commands, &t.commands))
+                        .flatten();
                     CosDigestClassified {
                         ts: summary,
                         ts_commands_head: if same {
@@ -811,13 +821,14 @@ pub fn classify_cos_digest_pass(
                         } else {
                             task_core::script_compare::cos_digest_text_head(&t.commands)
                         },
-                        outcome: if same {
-                            CompareOutcome::Match
-                        } else {
-                            CompareOutcome::Mismatch
+                        outcome: match (same, &explained_by) {
+                            (true, _) => CompareOutcome::Match,
+                            (false, Some(_)) => CompareOutcome::Explained,
+                            (false, None) => CompareOutcome::Mismatch,
                         },
                         error: None,
                         safety_violations: Vec::new(),
+                        explained_by,
                     }
                 }
             };
@@ -836,6 +847,28 @@ pub fn classify_cos_digest_pass(
             runs,
         },
     }
+}
+
+/// 違った run 1 つを承認済みの仕様で説明する（D1）。入力が読めていない run は説明しない。
+fn explain_cos_digest_run(
+    approved: &[ApprovedBehaviorChange],
+    input: Option<&CosDigestInput>,
+    rust: &[CosDigestCommand],
+    ts: &[CosDigestCommand],
+) -> Option<ExplainedBy> {
+    if approved.is_empty() {
+        return None;
+    }
+    let input = serde_json::to_value(input?).ok()?;
+    let rust = serde_json::to_value(rust).ok()?;
+    let ts = serde_json::to_value(ts).ok()?;
+    task_core::script_behavior_change::explain(
+        approved,
+        ScriptDomain::CosDigest,
+        &input,
+        &rust,
+        &ts,
+    )
 }
 
 /// `cos_digest` の pass の op（付記 S4-12）。名前は capability と同じ。
@@ -979,6 +1012,7 @@ impl CosDigestPassDraft {
             applied: run.applied,
             canary_selected: self.canary_selected,
             canary_bps: self.canary_bps,
+            explained_by: c.explained_by,
         })
     }
 }

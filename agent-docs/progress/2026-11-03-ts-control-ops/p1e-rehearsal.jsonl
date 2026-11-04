@@ -1,0 +1,10 @@
+{"detail": {"register_http": 503}, "exit": 0, "schema": "celeris.script-compare-rehearsal/1", "secs": 1.011, "step": "no_script_section"}
+{"detail": {"modes": "lane_rules=rust,route_priority=rust,cos_digest=rust"}, "exit": 0, "schema": "celeris.script-compare-rehearsal/1", "secs": 0.47, "step": "start_with_script_section"}
+{"detail": {"refused": "script_bundle_not_deployed"}, "exit": 1, "schema": "celeris.script-compare-rehearsal/1", "secs": 0.218, "step": "register_before_deploy"}
+{"detail": {"bundle_sha256": "c7c3cce5f82c820d19ecaaa97d08b3d5b573db748a4e3b143c136aaef44f9083", "state": "loaded"}, "exit": 0, "schema": "celeris.script-compare-rehearsal/1", "secs": 0.225, "step": "deploy_and_register"}
+{"detail": {"baseline_event_id": 0}, "exit": 0, "schema": "celeris.script-compare-rehearsal/1", "secs": 0.09, "step": "mode_compare"}
+{"detail": {"lane_rules_records": 3}, "exit": 0, "schema": "celeris.script-compare-rehearsal/1", "secs": 0.276, "step": "dispatch_records"}
+{"detail": {"clean_streak": 3, "latency": {"max_us": 3450, "n": 3, "p50_us": 1522, "p95_us": 3450}, "outcomes": {"invalid_output": 0, "match": 3, "mismatch": 0, "ts_error": 0, "unavailable": 0}, "ready": false, "required": 1000, "samples": {"first_at": "2026-11-03T22:51:30Z", "last_at": "2026-11-03T22:51:30Z", "pids": ["187084"], "rss_kb": {"first": 127200, "growth": 0, "last": 127200, "max": 127200}, "samples": 1, "tick_wait": {"budget_us": 200000, "max_us_max": 0, "p50_us_last": 0, "p95_us_last": 0, "p95_us_max": 0, "samples": 1, "tick_budget_max": 0}}}, "exit": 4, "schema": "celeris.script-compare-rehearsal/1", "secs": 0.211, "step": "report_not_ready"}
+{"detail": {"human_not_ready_http": 422, "operator_http": 403}, "exit": 0, "schema": "celeris.script-compare-rehearsal/1", "secs": 0.073, "step": "canary_refused"}
+{"detail": {"records_after": 3, "records_before": 3, "routing_decided_policy": 4}, "exit": 0, "schema": "celeris.script-compare-rehearsal/1", "secs": 0.808, "step": "rollback_to_rust"}
+{"detail": {"mode": "rust", "to_rust_by_human": 1}, "exit": 0, "schema": "celeris.script-compare-rehearsal/1", "secs": 0.686, "step": "restart_stays_rust"}

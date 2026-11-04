@@ -115,6 +115,16 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     (
         "POST",
+        "/api/v1/script/behavior-changes",
+        "human_only: ADR 2026-11-03-ts-intended-behavior-change D4。TS の方針改善の仕様の承認は人の API token の主体だけ。",
+    ),
+    (
+        "POST",
+        "/api/v1/script/behavior-changes/{spec_sha256}/revoke",
+        "script_api_only: ADR 2026-11-03-ts-intended-behavior-change D4。承認の取り消しは API で人・外部 operator が行う（CoS の操作には足さない）。",
+    ),
+    (
+        "POST",
         "/api/v1/script/guard/clear",
         "human_only: ADR 2026-11-02-ts-control-layer-boundary 付記 S5-4。script-guard の全体の停止を解くのは人の API token の主体だけ。",
     ),

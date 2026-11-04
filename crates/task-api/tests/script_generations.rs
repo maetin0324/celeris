@@ -28,7 +28,7 @@ fn sha(digit: char) -> String {
     std::iter::repeat_n(digit, 64).collect()
 }
 
-/// 偽の登録簿: hash `e…e` は検証に落ちる（`invalid` を記録して 422）。他は `lane_rules` の manifest で登録する。
+/// 偽の登録簿: hash `d…d` は未配備（409）、`e…e` は検証に落ちる（`invalid` を記録して 422）。他は `lane_rules` の manifest で登録する。
 struct FakeControl {
     store: SqliteStore,
 }
@@ -44,6 +44,13 @@ impl ScriptGenerationControl for FakeControl {
             state: ScriptGenerationState::Loaded,
         };
         let now = time::OffsetDateTime::now_utc();
+        // hash `d…d` は配備先が無い（P1-C）: 表に書かずに `NotDeployed`。
+        if bundle_sha256 == sha('d') {
+            return Err(ScriptGenerationError::NotDeployed {
+                bundle_sha256: bundle_sha256.to_owned(),
+                reason: "cannot access script-bundles/d…d/manifest.json".into(),
+            });
+        }
         if bundle_sha256 == sha('e') {
             self.store
                 .script_generation_record_invalid(&new, "selftest failed", now)?;
@@ -279,4 +286,20 @@ async fn script_domain_generation_through_cos_operations() {
         json.to_string().contains("cos:"),
         "the CoS actor is recorded: {json}"
     );
+}
+
+/// P1-C（S5 未解決 2）: 未配備の hash は 409 `script_bundle_not_deployed` で、表と記録を変えない。同じ hash の再試行も
+/// 409 のまま（`script_generation_invalidated` に固定されない）。
+#[tokio::test]
+async fn script_domain_generation_register_not_deployed_409_is_retryable() {
+    let env = wired_env();
+    let app = env.router();
+    for _ in 0..2 {
+        let resp = register(&app, &sha('d')).await;
+        assert_problem(&resp, 409, "script_bundle_not_deployed");
+        assert_eq!(generation_rows(&env), (0, 0));
+    }
+    // 他の hash の登録は通る（未配備の拒否が登録簿を塞がない）。
+    let resp = register(&app, &sha('a')).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
 }

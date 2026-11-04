@@ -36,7 +36,14 @@ mkdir -p "$root/bin" "$root/config" "$root/state/releases/aaaaaaaaaaaa/bin" \
 : >"$root/config/config.toml"
 rel="$root/state/releases/aaaaaaaaaaaa"
 printf '{"sha12":"aaaaaaaaaaaa","schema_version":5}\n' >"$rel/manifest.json"
-printf '{"ok":true,"web":{"ok":true}}\n' >"$rel/gate.json"
+# TS 制御層の bundle の gate（verify.sh が script-bundle-gate.sh verify-release で照合する）。
+mkdir -p "$rel/script-bundle"
+printf 'export const v = 1;\n' >"$rel/script-bundle/bundle.mjs"
+bsha="$(sha256sum "$rel/script-bundle/bundle.mjs" | cut -d' ' -f1)"
+printf '{"bundle_sha256":"%s"}\n' "$bsha" >"$rel/script-bundle/manifest.json"
+printf '{"ok":true,"web":{"ok":true},"script_bundle":{"bundle_sha256":"%s","dir":"script-bundle"},"steps":[%s]}\n' "$bsha" \
+  '{"step":"control-ts-install","exit":0,"skipped":false},{"step":"control-ts-bundle","exit":0,"skipped":false},{"step":"script-bundle-verify","exit":0,"skipped":false},{"step":"script-bundle-tests","exit":0,"skipped":false}' \
+  >"$rel/gate.json"
 
 cat >"$root/fake-celeris.py" <<'PY'
 import json, sys
@@ -66,6 +73,7 @@ chmod +x "$rel/bin/celeris"
 mkdir -p "$root/state/releases/bbbbbbbbbbbb/bin"
 cp "$rel/manifest.json" "$root/state/releases/bbbbbbbbbbbb/manifest.json"
 cp "$rel/gate.json" "$root/state/releases/bbbbbbbbbbbb/gate.json"
+cp -r "$rel/script-bundle" "$root/state/releases/bbbbbbbbbbbb/script-bundle"
 printf '#!/usr/bin/env bash\nexec python3 %q "$@"\n' "$root/fake-celeris.py" >"$root/state/releases/bbbbbbbbbbbb/bin/celeris"
 chmod +x "$root/state/releases/bbbbbbbbbbbb/bin/celeris"
 ln -s releases/bbbbbbbbbbbb "$root/state/current"

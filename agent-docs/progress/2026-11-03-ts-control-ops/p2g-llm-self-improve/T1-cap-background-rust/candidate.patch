@@ -1,0 +1,52 @@
+diff --git a/crates/task-core/src/chat/digest.rs b/crates/task-core/src/chat/digest.rs
+index 57331f63..649c8eb6 100644
+--- a/crates/task-core/src/chat/digest.rs
++++ b/crates/task-core/src/chat/digest.rs
+@@ -179,6 +179,17 @@ fn options_line(item: &CosTriageItemReport) -> Option<String> {
+     Some(labels.join(" / "))
+ }
+ 
++/// Longest background (in Unicode code points) the digest writes before clipping.
++const BACKGROUND_MAX_CHARS: usize = 300;
++
++/// The background as the digest shows it: the first 300 code points and `…` when longer.
++fn clip_background(background: &str) -> String {
++    match background.char_indices().nth(BACKGROUND_MAX_CHARS) {
++        Some((end, _)) => format!("{}…", &background[..end]),
++        None => background.to_owned(),
++    }
++}
++
+ /// The digest text and cards of one run. Pure.
+ pub fn cos_digest_message(
+     run_id: &str,
+@@ -222,7 +233,7 @@ pub fn cos_digest_message(
+         if matches!(item.state.as_str(), "escalated" | "fallback") {
+             if let Some(d) = &item.decision {
+                 if let Some(background) = d.background.as_deref().filter(|b| !b.is_empty()) {
+-                    text.push_str(&format!("- 背景: {background}\n"));
++                    text.push_str(&format!("- 背景: {}\n", clip_background(background)));
+                 }
+                 if !d.summary.is_empty() {
+                     text.push_str(&format!("- 人が決めること: {}\n", d.summary));
+@@ -673,3 +684,20 @@ mod pass_tests {
+         assert_eq!(code(&order), Some(("run_order", None)));
+     }
+ }
++
++#[cfg(test)]
++mod background_clip_tests {
++    use super::*;
++
++    #[test]
++    fn digest_background_is_clipped_at_300_code_points() {
++        let exact = "あ".repeat(300);
++        assert_eq!(clip_background(&exact), exact);
++        let long = format!("{}{}", "あ".repeat(300), "いう");
++        assert_eq!(clip_background(&long), format!("{}…", "あ".repeat(300)));
++        // Astral characters count as one code point each, not two UTF-16 units.
++        let astral = "😀".repeat(301);
++        assert_eq!(clip_background(&astral), format!("{}…", "😀".repeat(300)));
++        assert_eq!(clip_background("short"), "short");
++    }
++}

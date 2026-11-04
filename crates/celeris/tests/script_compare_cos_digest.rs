@@ -144,7 +144,7 @@ async fn assert_ts_matches(
             commands: rust.to_vec(),
         }],
     };
-    let classified = classify_cos_digest_pass(&reads, &rust_out, &result);
+    let classified = classify_cos_digest_pass(&reads, &rust_out, &result, &[]);
     let run = classified.run(&input.run_id).expect("run").clone();
     assert_eq!(run.outcome, CompareOutcome::Match, "{name}: {run:?}");
     assert!(run.safety_violations.is_empty(), "{name}");

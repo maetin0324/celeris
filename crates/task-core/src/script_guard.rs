@@ -31,6 +31,8 @@ pub const SCRIPT_GUARD_ACTOR: &str = "system:script-guard";
 pub enum ScriptGuardCall {
     Ok,
     Mismatch,
+    /// 承認した改善仕様が説明する差分（ADR 2026-11-03-ts-intended-behavior-change D2）。戻す条件に入らない。
+    Explained,
     Timeout,
     Failure,
 }
@@ -41,6 +43,7 @@ impl ScriptGuardCall {
         match outcome {
             CompareOutcome::Match => Some(Self::Ok),
             CompareOutcome::Mismatch => Some(Self::Mismatch),
+            CompareOutcome::Explained => Some(Self::Explained),
             CompareOutcome::TsError if matches!(error_kind, Some("timeout" | "terminated")) => {
                 Some(Self::Timeout)
             }
@@ -53,6 +56,7 @@ impl ScriptGuardCall {
         match self {
             Self::Ok => 'o',
             Self::Mismatch => 'm',
+            Self::Explained => 'e',
             Self::Timeout => 't',
             Self::Failure => 'f',
         }
@@ -72,7 +76,7 @@ pub struct ScriptGuardObservation {
 /// `script_guard_state` の計数（(domain, generation_id) ごとの 1 行。S5-7）。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ScriptGuardCounters {
-    /// 直近の結果（古い順の `o`・`m`・`t`・`f`。最大 [`SCRIPT_GUARD_WINDOW`] 文字）。
+    /// 直近の結果（古い順の `o`・`m`・`e`・`t`・`f`。最大 [`SCRIPT_GUARD_WINDOW`] 文字）。
     pub window: String,
     pub consecutive_failures: u64,
     /// 直近 10 分の timeout の時刻（unix 秒、古い順）。
@@ -131,6 +135,11 @@ impl ScriptGuardCounters {
 
     pub fn mismatches_in_window(&self) -> usize {
         self.count(ScriptGuardCall::Mismatch)
+    }
+
+    /// 窓の中の説明済みの差分の件数（D2。戻す条件には使わない）。
+    pub fn explained_in_window(&self) -> usize {
+        self.count(ScriptGuardCall::Explained)
     }
 
     /// 窓の中の件数が 0.1% を超えるか（窓の長さ `len` に対して）。

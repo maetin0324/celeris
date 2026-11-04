@@ -9,6 +9,7 @@ mod credential;
 #[cfg(test)]
 mod credential_tests;
 pub mod digest;
+pub mod digest_apply;
 mod digest_fixture;
 mod operations;
 #[cfg(test)]

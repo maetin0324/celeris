@@ -393,20 +393,6 @@ impl ScriptDomainStore for FlakyRollback {
             now,
         )
     }
-    fn script_compare_log_append_observed(
-        &self,
-        record: &task_core::script_compare::CosDigestCompareRecord,
-        ts_side: bool,
-        now: OffsetDateTime,
-    ) -> Result<(bool, Option<task_core::script_guard::ScriptGuardOutcome>), ScriptDomainError>
-    {
-        ScriptDomainStore::script_compare_log_append_observed(
-            self.inner.as_ref(),
-            record,
-            ts_side,
-            now,
-        )
-    }
     fn script_domain_rollback(
         &self,
         domain: ScriptDomain,

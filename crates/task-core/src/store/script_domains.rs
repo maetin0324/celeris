@@ -553,7 +553,7 @@ impl SqliteStore {
     }
 
     pub(super) fn script_compare_log_append_tx(
-        tx: &rusqlite::Transaction<'_>,
+        tx: &Connection,
         record: &CosDigestCompareRecord,
         now: OffsetDateTime,
     ) -> Result<bool, StoreError> {
@@ -603,12 +603,35 @@ impl SqliteStore {
         &self,
         run_id: Option<&str>,
     ) -> Result<Vec<ScriptCompareLogRow>, StoreError> {
+        self.script_compare_log_query(
+            "SELECT id, ts, domain, thread_id, run_id, json FROM script_compare_log \
+             WHERE ?1 IS NULL OR run_id = ?1 ORDER BY id",
+            params![run_id],
+        )
+    }
+
+    /// P1-C（S5 未解決 6）: `script_compare_log` の `id > after` の行を古い順に最大 `limit` 行読む（主キーの範囲で読む。
+    /// script-guard の見回りが読み終えた id から差分だけを読む）。
+    pub fn script_compare_log_after(
+        &self,
+        after: u64,
+        limit: u32,
+    ) -> Result<Vec<ScriptCompareLogRow>, StoreError> {
+        self.script_compare_log_query(
+            "SELECT id, ts, domain, thread_id, run_id, json FROM script_compare_log \
+             WHERE id > ?1 ORDER BY id LIMIT ?2",
+            params![to_i64(after)?, i64::from(limit)],
+        )
+    }
+
+    fn script_compare_log_query(
+        &self,
+        sql: &str,
+        args: impl rusqlite::Params,
+    ) -> Result<Vec<ScriptCompareLogRow>, StoreError> {
         self.with_read_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, ts, domain, thread_id, run_id, json FROM script_compare_log \
-                 WHERE ?1 IS NULL OR run_id = ?1 ORDER BY id",
-            )?;
-            let rows = stmt.query_map(params![run_id], |row| {
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt.query_map(args, |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,

@@ -252,6 +252,16 @@ pub struct ApiV1Schema {
     pub script_generation_retire_body: crate::script_generations::ScriptGenerationRetireBody,
     pub script_guard_clear_body: crate::script_domains::ScriptGuardClearBody,
     pub script_guard_clear_result: crate::script_domains::ScriptGuardClearResult,
+    /// ADR 2026-11-03-ts-intended-behavior-change D4: 方針改善の仕様の一覧・承認・取り消し。
+    pub script_behavior_changes: crate::script_behavior_changes::ScriptBehaviorChangeList,
+    pub script_behavior_change_approve_body:
+        crate::script_behavior_changes::ScriptBehaviorChangeApproveBody,
+    pub script_behavior_change_approve_result:
+        crate::script_behavior_changes::ScriptBehaviorChangeApproveResult,
+    pub script_behavior_change_revoke_body:
+        crate::script_behavior_changes::ScriptBehaviorChangeRevokeBody,
+    pub script_behavior_change_revoke_result:
+        crate::script_behavior_changes::ScriptBehaviorChangeRevokeResult,
     /// Phase 78（ADR-0056 D4）: `GET /mcp/clients` と `GET /mcp/calls?client=`。
     pub mcp_clients: crate::mcp_admin::McpClientsView,
     pub mcp_calls: crate::mcp_admin::McpCallsView,

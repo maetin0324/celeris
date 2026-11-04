@@ -2002,6 +2002,166 @@
         }
       ]
     },
+    "BehaviorChangeEvent": {
+      "description": "`script_behavior_change_events` の 1 行（追記専用）。",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/BehaviorChangeState"
+        },
+        "actor": {
+          "type": "string"
+        },
+        "change_id": {
+          "type": "string"
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "spec_sha256": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "ts",
+        "spec_sha256",
+        "change_id",
+        "version",
+        "action",
+        "actor",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "BehaviorChangeRow": {
+      "description": "`script_behavior_changes` の 1 行。",
+      "properties": {
+        "approved_at": {
+          "type": "string"
+        },
+        "approved_by": {
+          "type": "string"
+        },
+        "domain": {
+          "$ref": "#/$defs/ScriptDomain"
+        },
+        "id": {
+          "type": "string"
+        },
+        "spec": {
+          "$ref": "#/$defs/BehaviorChangeSpec"
+        },
+        "spec_sha256": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/BehaviorChangeState"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "updated_by": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "spec_sha256",
+        "id",
+        "version",
+        "domain",
+        "state",
+        "spec",
+        "approved_by",
+        "approved_at",
+        "updated_by",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "BehaviorChangeSpec": {
+      "additionalProperties": false,
+      "description": "改善仕様（D1）。",
+      "properties": {
+        "cases_sha256": {
+          "description": "期待差分 fixture の file の byte 列の sha256（64 桁 hex）。",
+          "type": "string"
+        },
+        "domain": {
+          "$ref": "#/$defs/ScriptDomain"
+        },
+        "edits": {
+          "items": {
+            "$ref": "#/$defs/OutputEdit"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "supersedes": {
+          "description": "前の版の `spec_sha256`（最初の版は `null`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "when": {
+          "items": {
+            "$ref": "#/$defs/InputCondition"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "version",
+        "domain",
+        "summary",
+        "when",
+        "edits",
+        "cases_sha256"
+      ],
+      "type": "object"
+    },
+    "BehaviorChangeState": {
+      "description": "承認の記録の状態（D4）。",
+      "enum": [
+        "approved",
+        "revoked",
+        "superseded"
+      ],
+      "type": "string"
+    },
     "BehindTarget": {
       "description": "Task value: the repo with the largest behind commits (ADR-0130 D4), plus all repos.",
       "properties": {
@@ -5939,14 +6099,42 @@
     },
     "CompareOutcome": {
       "description": "`script_compare_recorded.outcome`（S2-4）。",
-      "enum": [
-        "match",
-        "mismatch",
-        "ts_error",
-        "invalid_output",
-        "unavailable"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "match",
+            "mismatch",
+            "ts_error",
+            "invalid_output",
+            "unavailable"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "explained",
+          "description": "差分があるが、人が承認した改善仕様の期待差分と byte 一致する（ADR 2026-11-03-ts-intended-behavior-change D2）。",
+          "type": "string"
+        }
+      ]
+    },
+    "ConditionOp": {
+      "oneOf": [
+        {
+          "const": "equals",
+          "description": "JSON 値の一致。",
+          "type": "string"
+        },
+        {
+          "const": "min_chars",
+          "description": "文字列の code point 数が `value` 以上。",
+          "type": "string"
+        },
+        {
+          "const": "max_chars",
+          "description": "文字列の code point 数が `value` 以下。",
+          "type": "string"
+        }
+      ]
     },
     "Confidence": {
       "description": "ADR-0047 D1 / D4。",
@@ -8296,6 +8484,17 @@
             }
           ],
           "description": "ADR-0075 D6（Phase G1）: scratch pool の観測値（`GET /api/v1/metrics/scratch` と `celerisctl scratch status --json`\nと同じ `celeris.scratch-status/1`）。古いスナップショットと scratch を持たない構成では `None`。"
+        },
+        "script_tick_wait": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScriptTickWaitLive"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-02-ts-control-layer-boundary 付記 S5-8（P1-C）: 直近 1000 tick の TS 制御層の同期の待ちの集計\n（dispatcher の `script_tick_wait_summary`）。daemon の `script_tick_wait` の log 行と同じ値。古いスナップショットと\ntick をまだ数えていない daemon では `None`。"
         },
         "stagnation": {
           "default": [],
@@ -16953,6 +17152,26 @@
       ],
       "type": "object"
     },
+    "InputCondition": {
+      "additionalProperties": false,
+      "description": "入力条件 1 個。",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/ConditionOp"
+        },
+        "path": {
+          "description": "入力 DTO の JSON pointer（`*` は書かない）。",
+          "type": "string"
+        },
+        "value": true
+      },
+      "required": [
+        "path",
+        "op",
+        "value"
+      ],
+      "type": "object"
+    },
     "InstanceRole": {
       "description": "インスタンスの役割（ADR-0040 D4）。`daemon_instances.role` の綴りと 1 対 1。",
       "oneOf": [
@@ -21287,6 +21506,34 @@
       },
       "required": [
         "skill"
+      ],
+      "type": "object"
+    },
+    "OutputEdit": {
+      "additionalProperties": false,
+      "description": "期待差分の述語 1 個: 出力の `path` の文字列の中の `find` を `replace` にする。",
+      "properties": {
+        "find": {
+          "items": {
+            "$ref": "#/$defs/TextPart"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": "出力の JSON pointer（`*` は配列の全要素）。",
+          "type": "string"
+        },
+        "replace": {
+          "items": {
+            "$ref": "#/$defs/TextPart"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "path",
+        "find",
+        "replace"
       ],
       "type": "object"
     },
@@ -28373,6 +28620,102 @@
       ],
       "type": "object"
     },
+    "ScriptBehaviorChangeApproveBody": {
+      "additionalProperties": false,
+      "description": "`POST /script/behavior-changes` の本文。",
+      "properties": {
+        "reason": {
+          "description": "承認の理由（記録の `reason`）。",
+          "type": "string"
+        },
+        "spec": {
+          "$ref": "#/$defs/BehaviorChangeSpec",
+          "description": "`control-ts/behavior-changes/<domain>/<id>.v<version>.json` の中身。"
+        },
+        "spec_sha256": {
+          "description": "人が確かめた仕様の hash（64 桁 hex。`BehaviorChangeSpec::sha256`。違えば 422 の本文に計算した値が出る）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "spec",
+        "spec_sha256",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ScriptBehaviorChangeApproveResult": {
+      "description": "`POST /script/behavior-changes` の応答。",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/BehaviorChangeRow"
+        },
+        "changed": {
+          "description": "表を変えたか（同じ hash がすでに承認済みなら `false`）。",
+          "type": "boolean"
+        },
+        "superseded": {
+          "description": "同じ transaction で置き換えた前の版の hash。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "changed",
+        "change"
+      ],
+      "type": "object"
+    },
+    "ScriptBehaviorChangeList": {
+      "description": "`GET /script/behavior-changes` の応答。",
+      "properties": {
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/BehaviorChangeRow"
+          },
+          "type": "array"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/BehaviorChangeEvent"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "changes",
+        "events"
+      ],
+      "type": "object"
+    },
+    "ScriptBehaviorChangeRevokeBody": {
+      "additionalProperties": false,
+      "description": "`POST /script/behavior-changes/{spec_sha256}/revoke` の本文。",
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ScriptBehaviorChangeRevokeResult": {
+      "description": "`POST /script/behavior-changes/{spec_sha256}/revoke` の応答。",
+      "properties": {
+        "revoked": {
+          "description": "取り消したか（承認済みでなければ `false` で、表も記録も変えない）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "revoked"
+      ],
+      "type": "object"
+    },
     "ScriptDomain": {
       "description": "TS 制御層の領域（S2-1）。表 `script_domain_modes` の `domain`。",
       "oneOf": [
@@ -28714,6 +29057,53 @@
         "ts"
       ],
       "type": "string"
+    },
+    "ScriptTickWaitLive": {
+      "description": "TS 制御層の tick の待ちの集計（付記 S5-8）。時間は µs、p50・p95 は最近傍順位。",
+      "properties": {
+        "budget_us": {
+          "description": "1 tick の TS の待ちの予算（µs）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_us": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "p50_us": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "p95_us": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tick_budget": {
+          "description": "窓の中で 1 tick の予算（`budget_us`）を使い切って TS を呼ばなかった件数。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ticks": {
+          "description": "集計に入った tick の数（最大 1000）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ticks",
+        "p50_us",
+        "p95_us",
+        "max_us",
+        "tick_budget",
+        "budget_us"
+      ],
+      "type": "object"
     },
     "SecretList": {
       "description": "`GET /secrets`。`[secrets]` が未設定なら 409 `secrets_unavailable`（`dir: None` の応答は返さない）。",
@@ -31988,6 +32378,68 @@
         }
       ]
     },
+    "TextPart": {
+      "description": "`find`・`replace` の部品。",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "lit": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "lit"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "入力の文字列（JSON pointer）。",
+          "properties": {
+            "input": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "入力の文字列を `max` code point までにし、超えたら `ellipsis` を足す。",
+          "properties": {
+            "truncate_chars": {
+              "additionalProperties": false,
+              "properties": {
+                "ellipsis": {
+                  "type": "string"
+                },
+                "input": {
+                  "type": "string"
+                },
+                "max": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "input",
+                "max",
+                "ellipsis"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "truncate_chars"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Tier": {
       "description": "DESIGN §5.4 の `WorkerHint`。",
       "enum": [
@@ -34689,6 +35141,22 @@
     "saved_credential_list": {
       "$ref": "#/$defs/SavedCredentialList"
     },
+    "script_behavior_change_approve_body": {
+      "$ref": "#/$defs/ScriptBehaviorChangeApproveBody"
+    },
+    "script_behavior_change_approve_result": {
+      "$ref": "#/$defs/ScriptBehaviorChangeApproveResult"
+    },
+    "script_behavior_change_revoke_body": {
+      "$ref": "#/$defs/ScriptBehaviorChangeRevokeBody"
+    },
+    "script_behavior_change_revoke_result": {
+      "$ref": "#/$defs/ScriptBehaviorChangeRevokeResult"
+    },
+    "script_behavior_changes": {
+      "$ref": "#/$defs/ScriptBehaviorChangeList",
+      "description": "ADR 2026-11-03-ts-intended-behavior-change D4: 方針改善の仕様の一覧・承認・取り消し。"
+    },
     "script_domain_mode_body": {
       "$ref": "#/$defs/ScriptDomainModeBody"
     },
@@ -35007,6 +35475,11 @@
     "script_generation_retire_body",
     "script_guard_clear_body",
     "script_guard_clear_result",
+    "script_behavior_changes",
+    "script_behavior_change_approve_body",
+    "script_behavior_change_approve_result",
+    "script_behavior_change_revoke_body",
+    "script_behavior_change_revoke_result",
     "mcp_clients",
     "mcp_calls",
     "skill_list",

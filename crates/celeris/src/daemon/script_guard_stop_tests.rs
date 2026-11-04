@@ -379,6 +379,7 @@ fn digest_record(
         // 付記 S5-3: mode `ts` は全単位が TS の側（`unit_selected`）で、`canary_bps` は `canary` のときだけ持つ。
         canary_selected: true,
         canary_bps: None,
+        explained_by: None,
     }
 }
 
@@ -618,13 +619,38 @@ fn canary_digest_record(
     r
 }
 
-/// dispatcher と同じく、記録の追記と計数を 1 つの transaction で行い、`ts_side` に `canary_selected` を渡す。
+/// dispatcher と同じく、記録の追記と計数を apply と 1 つの transaction で行い（ADR 2026-11-03-cos-digest-persist）、
+/// `ts_side` に `canary_selected` を渡す。command は無い（記録と計数だけを見る）。
 fn append(store: &SqliteStore, r: &CosDigestCompareRecord) -> ScriptGuardOutcome {
-    let (appended, out) = store
-        .script_compare_log_append_observed(r, r.canary_selected, t0())
-        .expect("append");
-    assert!(appended);
-    out.expect("counted")
+    use task_core::chat::digest_apply::{
+        CosDigestApplyPass, CosDigestApplyRun, CosDigestRecordPlan, CosDigestRunApply,
+    };
+    let pass = CosDigestApplyPass {
+        pass_id: r.pass_id.clone(),
+        verify: false,
+        expect_mode: None,
+        runs: vec![CosDigestApplyRun {
+            thread_id: r.thread_id.clone(),
+            run_id: r.run_id.clone(),
+            commands: Vec::new(),
+            record: Some(CosDigestRecordPlan::Append {
+                record: Box::new(r.clone()),
+                ts_side: r.canary_selected,
+            }),
+        }],
+    };
+    let applied = store.cos_digest_apply_pass(&pass, t0()).expect("append");
+    match applied.runs.into_iter().next() {
+        Some((
+            _,
+            CosDigestRunApply::Applied {
+                record_appended: true,
+                guard: Some(out),
+                ..
+            },
+        )) => out,
+        other => panic!("not appended and counted: {other:?}"),
+    }
 }
 
 #[test]
@@ -687,4 +713,48 @@ fn script_guard_counts_canary_records_on_both_sides() {
         &canary_digest_record(&g, true, CompareOutcome::Mismatch, &[], "r0"),
     );
     assert_rolled_back(&store, d, &out, "guard_mismatch");
+}
+
+/// P1-C（S5 未解決 6）: 見回りは `script_compare_log` を前の見回りが読み終えた id から差分だけ読む。page（500 行）を
+/// またぐ行も読み切り、page の境の後ろにある検証の外の副作用でも止める。読み終えた行は次の見回りで読まない。
+#[test]
+fn script_guard_sweep_reads_compare_log_incrementally() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let g = generation(&store, 'b');
+    canary(&store, ScriptDomain::LaneRules, &g);
+    let mut state = GuardState::default();
+    let mut n = 0u64;
+    let mut append = |store: &SqliteStore, record: CosDigestCompareRecord, count: u64| {
+        for _ in 0..count {
+            n += 1;
+            let mut r = record.clone();
+            r.run_id = format!("run-{n}");
+            r.pass_id = format!("pass-{n}");
+            assert!(
+                store
+                    .script_compare_log_append(&r, at(n as i64))
+                    .expect("append")
+            );
+        }
+    };
+    let valid = digest_record(CosDigestAppliedBy::Ts, &[], "r");
+    append(&store, valid.clone(), 1_100);
+    let out = sweep(&store, &mut state, at(2_000)).expect("sweep");
+    assert_eq!(out.halted, None);
+    assert_eq!(state.log_rows_read, 1_100);
+    // 新しい行が無ければ読まない。
+    sweep(&store, &mut state, at(2_001)).expect("sweep");
+    assert_eq!(state.log_rows_read, 1_100);
+    // 次の page の境（500 行）より後ろの違反でも止める。読むのは足した 501 行だけ。
+    append(&store, valid, 500);
+    append(
+        &store,
+        digest_record(CosDigestAppliedBy::Ts, &["key_mismatch"], "r"),
+        1,
+    );
+    let out = sweep(&store, &mut state, at(3_000)).expect("sweep");
+    assert_eq!(state.log_rows_read, 1_601);
+    let reason = out.halted.expect("halted");
+    assert!(reason.contains("run run-1601"), "{reason}");
+    assert_eq!(mode(&store, ScriptDomain::LaneRules).0, ScriptMode::Rust);
 }

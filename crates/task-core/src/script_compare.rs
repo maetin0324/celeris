@@ -169,6 +169,8 @@ pub const SCRIPT_GENERATIONS_LIVE_MAX: usize = 2;
 pub enum CompareOutcome {
     Match,
     Mismatch,
+    /// 差分があるが、人が承認した改善仕様の期待差分と byte 一致する（ADR 2026-11-03-ts-intended-behavior-change D2）。
+    Explained,
     TsError,
     InvalidOutput,
     Unavailable,

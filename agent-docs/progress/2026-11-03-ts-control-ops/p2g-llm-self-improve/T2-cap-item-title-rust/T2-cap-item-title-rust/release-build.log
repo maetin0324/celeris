@@ -1,0 +1,22 @@
+   Compiling task-core v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFH56896K8PBRDXW934/runs/01M6HZ77WYXCAXZJPVDH9T9PF7/tmp/llm-improve-trial.Gc5Phi/tree/crates/task-core)
+   Compiling jev-classifier v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFH56896K8PBRDXW934/runs/01M6HZ77WYXCAXZJPVDH9T9PF7/tmp/llm-improve-trial.Gc5Phi/tree/crates/jev-classifier)
+   Compiling deno_core v0.413.0 (/local/celeris/data/workspaces/01M6HW7NFH56896K8PBRDXW934/runs/01M6HZ77WYXCAXZJPVDH9T9PF7/tmp/llm-improve-trial.Gc5Phi/tree/crates/script-runtime/vendor/deno_core)
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+   Compiling celeris-script v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFH56896K8PBRDXW934/runs/01M6HZ77WYXCAXZJPVDH9T9PF7/tmp/llm-improve-trial.Gc5Phi/tree/crates/script-runtime)
+warning: `deno_core` (lib) generated 1 warning
+   Compiling task-ops v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFH56896K8PBRDXW934/runs/01M6HZ77WYXCAXZJPVDH9T9PF7/tmp/llm-improve-trial.Gc5Phi/tree/crates/task-ops)
+   Compiling celeris-credentiald v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFH56896K8PBRDXW934/runs/01M6HZ77WYXCAXZJPVDH9T9PF7/tmp/llm-improve-trial.Gc5Phi/tree/crates/celeris-credentiald)
+   Compiling task-worker v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFH56896K8PBRDXW934/runs/01M6HZ77WYXCAXZJPVDH9T9PF7/tmp/llm-improve-trial.Gc5Phi/tree/crates/task-worker)
+   Compiling celeris-mcp v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFH56896K8PBRDXW934/runs/01M6HZ77WYXCAXZJPVDH9T9PF7/tmp/llm-improve-trial.Gc5Phi/tree/crates/celeris-mcp)
+   Compiling task-api v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFH56896K8PBRDXW934/runs/01M6HZ77WYXCAXZJPVDH9T9PF7/tmp/llm-improve-trial.Gc5Phi/tree/crates/task-api)
+   Compiling task-dispatch v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFH56896K8PBRDXW934/runs/01M6HZ77WYXCAXZJPVDH9T9PF7/tmp/llm-improve-trial.Gc5Phi/tree/crates/task-dispatch)
+   Compiling llm-proxy v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFH56896K8PBRDXW934/runs/01M6HZ77WYXCAXZJPVDH9T9PF7/tmp/llm-improve-trial.Gc5Phi/tree/crates/llm-proxy)
+   Compiling celeris v0.1.0 (/local/celeris/data/workspaces/01M6HW7NFH56896K8PBRDXW934/runs/01M6HZ77WYXCAXZJPVDH9T9PF7/tmp/llm-improve-trial.Gc5Phi/tree/crates/celeris)
+    Finished `release` profile [optimized] target(s) in 1m 56s

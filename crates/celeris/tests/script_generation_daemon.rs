@@ -562,3 +562,36 @@ async fn script_daemon_api_registers_and_switches_while_running() {
     assert_eq!(row.generation_id.as_deref(), gb["id"].as_str());
     assert_eq!(env.state_of(&b), ScriptGenerationState::Active);
 }
+
+/// P1-C（S5 未解決 2）: 配備先の dir が無い hash の登録は `NotDeployed` で、表に行を書かない（`invalid` に固定しない）。
+/// `script-deploy` の後に同じ hash で登録し直すと `loaded` になる。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn script_daemon_register_before_deploy_is_retryable() {
+    let env = Env::new();
+    let g = env
+        .generations(GenerationRegistry::new(RuntimeLimits::default()))
+        .await;
+    let code = FIXTURE.replace("__TAG__", "later");
+    let sha256 = sha256_hex(code.as_bytes());
+    for _ in 0..2 {
+        let err = register(&g, &sha256).await.expect_err("not deployed");
+        assert!(
+            matches!(err, ScriptGenerationError::NotDeployed { ref bundle_sha256, .. } if *bundle_sha256 == sha256),
+            "{err:?}"
+        );
+        assert!(
+            env.db
+                .script_generation_by_sha256(&sha256)
+                .expect("read")
+                .is_none(),
+            "no row for an undeployed bundle"
+        );
+        assert_eq!(g.registry().live_count(), 0);
+    }
+    assert_eq!(deploy_raw(&env.state(), &code, ALL), sha256);
+    let row = register(&g, &sha256)
+        .await
+        .expect("registered after deploy");
+    assert_eq!(row.state, ScriptGenerationState::Loaded);
+    assert_eq!(g.registry().live_count(), 1);
+}

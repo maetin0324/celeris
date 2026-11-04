@@ -120,6 +120,8 @@ pub(crate) async fn tick_loop(
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
     // ADR-0015 D2: tick の所要時間を測り、遅い tick を警告する（止まっているのがディスパッチャか API かの切り分け用）。
     let slow_tick = std::cmp::max(Duration::from_secs(1), tick * 2);
+    // 付記 S5-8（P1-C）: TS 制御層の同期の待ちの集計を `SCRIPT_TICK_WAIT_LOG_INTERVAL` ごとに 1 行出す。
+    let mut script_tick_wait_logged = std::time::Instant::now();
     loop {
         // ADR-0040 D4: 役割の判断は毎 tick の**いちばん最初**に行う（`active` が引き継ぎを求められたら
         // **同じ tick で** listener を閉じ、dispatch と裏方を止めるため）。DB が一時的に読めなくても
@@ -646,6 +648,10 @@ pub(crate) async fn tick_loop(
                 "slow tick"
             );
         }
+        if script_tick_wait_log_due(script_tick_wait_logged, std::time::Instant::now()) {
+            script_tick_wait_logged = std::time::Instant::now();
+            log_script_tick_wait(ticks, dispatcher.script_tick_wait_live());
+        }
         if report.reclaimed + report.dispatched + report.finished + report.reviewed > 0 {
             tracing::info!(ticks, ?report, "tick");
         } else {
@@ -719,5 +725,70 @@ pub(crate) async fn tick_loop(
                 dispatcher.set_cluster_connect_pending(&id, pending);
             }
         }
+    }
+}
+
+/// 付記 S5-8（P1-C）: `script_tick_wait` の log 行の間隔。
+pub(crate) const SCRIPT_TICK_WAIT_LOG_INTERVAL: Duration = Duration::from_secs(600);
+
+/// 前の `script_tick_wait` の行から [`SCRIPT_TICK_WAIT_LOG_INTERVAL`] が過ぎたか（時計は呼び出し側が渡す）。
+pub(crate) fn script_tick_wait_log_due(last: std::time::Instant, now: std::time::Instant) -> bool {
+    now.saturating_duration_since(last) >= SCRIPT_TICK_WAIT_LOG_INTERVAL
+}
+
+/// `script_tick_wait` の log 行（`GET /daemon` の snapshot の `script_tick_wait` と同じ値）。tick をまだ数えていなければ
+/// 出さない。予算切れが窓にあれば warn にする。
+pub(crate) fn log_script_tick_wait(ticks: u64, live: Option<task_ops::daemon::ScriptTickWaitLive>) {
+    let Some(w) = live else {
+        return;
+    };
+    if w.tick_budget > 0 {
+        tracing::warn!(
+            ticks,
+            window = w.ticks,
+            p50_us = w.p50_us,
+            p95_us = w.p95_us,
+            max_us = w.max_us,
+            tick_budget = w.tick_budget,
+            budget_us = w.budget_us,
+            "script_tick_wait"
+        );
+    } else {
+        tracing::info!(
+            ticks,
+            window = w.ticks,
+            p50_us = w.p50_us,
+            p95_us = w.p95_us,
+            max_us = w.max_us,
+            tick_budget = w.tick_budget,
+            budget_us = w.budget_us,
+            "script_tick_wait"
+        );
+    }
+}
+
+#[cfg(test)]
+mod script_tick_wait_log_tests {
+    use super::*;
+
+    #[test]
+    fn script_tick_wait_log_is_due_every_ten_minutes() {
+        let start = std::time::Instant::now();
+        assert!(!script_tick_wait_log_due(start, start));
+        assert!(!script_tick_wait_log_due(
+            start,
+            start + SCRIPT_TICK_WAIT_LOG_INTERVAL - Duration::from_millis(1)
+        ));
+        assert!(script_tick_wait_log_due(
+            start,
+            start + SCRIPT_TICK_WAIT_LOG_INTERVAL
+        ));
+        // 時計が戻っても（同じ Instant の比較）出さない。
+        assert!(!script_tick_wait_log_due(
+            start + Duration::from_secs(1),
+            start
+        ));
+        // tick を数えていない集計は何もしない（panic しない）。
+        log_script_tick_wait(0, None);
     }
 }

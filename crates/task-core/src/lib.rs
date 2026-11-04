@@ -112,6 +112,7 @@ pub mod routing_eval_trial;
 pub mod routing_evidence;
 pub mod routing_shadow_history;
 /// ADR 2026-11-02-ts-control-layer-boundary 付記 S2: TS 制御層の領域・mode・compare の記録と比較入力の機密除去。
+pub mod script_behavior_change;
 pub mod script_compare;
 /// ADR 2026-11-02-ts-control-layer-boundary 付記 S5-7: 停止基準の計数と判定（純粋関数）。
 pub mod script_guard;

@@ -948,3 +948,231 @@ async fn script_domain_mode_through_cos_operations() {
     assert_eq!((row.mode.as_str(), row.version), ("canary", 2));
     assert_eq!(event_count(&env), 5);
 }
+
+/// P1-C: CoS の run credential では script-guard の停止を解けない。直接の POST は CoS の監査の文脈が無いので通らず、
+/// `/cos/operations` に包むと registry の EXCLUDED（human_only）で拒まれる（rejected の記録が残る）。どちらでも停止は
+/// 残り、`script_guard_cleared` は書かれない。人の token だけが解ける（権限を広げない）。
+#[tokio::test]
+async fn script_domain_guard_clear_refused_for_cos() {
+    let env = admin_env();
+    let app = env.router();
+    env.store
+        .script_guard_halt("guard_mismatch: test", time::OffsetDateTime::now_utc())
+        .expect("halt");
+    let cleared_events = || -> i64 {
+        db(&env)
+            .query_row(
+                "SELECT COUNT(*) FROM script_generation_events WHERE json LIKE '%script_guard_cleared%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count")
+    };
+    let (thread, _, bearer) = cos_bearer(&env, "script-guard-clear");
+    let headers = [("authorization", bearer.as_str())];
+    let direct = send(
+        &app,
+        post_json_with(GUARD_CLEAR, &json!({"reason": "cos"}), &headers),
+    )
+    .await;
+    assert_ne!(direct.status.as_u16(), 200, "{}", direct.text());
+    let wrapped = send(
+        &app,
+        post_json_with(
+            OPS,
+            &op_body(
+                "script-guard-clear",
+                "POST",
+                GUARD_CLEAR,
+                json!({"reason": "cos"}),
+            ),
+            &headers,
+        ),
+    )
+    .await;
+    assert_problem(&wrapped, 422, "cos_operation_not_allowed");
+    assert!(wrapped.text().contains("human_only"), "{}", wrapped.text());
+    let rejected: i64 = db(&env)
+        .query_row(
+            "SELECT COUNT(*) FROM cos_operations WHERE thread_id=?1 AND state='rejected'",
+            [&thread],
+            |row| row.get(0),
+        )
+        .expect("rejected");
+    // 直接の POST も包んだ操作も rejected として残る。
+    assert!(rejected >= 1, "{}", wrapped.text());
+    assert!(env.store.script_guard_halted().expect("halted").is_some());
+    assert_eq!(cleared_events(), 0);
+    // 人の token では解ける。
+    let resp = send(
+        &app,
+        post_json_with(
+            GUARD_CLEAR,
+            &json!({"reason": "人が確かめた"}),
+            &admin_headers(),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(resp.json()["cleared"], true);
+    assert_eq!(cleared_events(), 1);
+}
+
+/// P1-C: CoS の run credential は script の読み取り（`GET /script/domains`・`GET /script/generations`）を直接通せる。
+/// `celerisctl script domains`・`generations list`・`guard status` は CoS の run でこの 2 つを読む（`cos_read_only`）。
+/// 読み取りは表を変えない。
+#[tokio::test]
+async fn script_cos_read_only_gets_pass_with_run_credential() {
+    let env = admin_env();
+    let app = env.router();
+    let sha = seed_generation(&env, 'a', &["lane_rules"]);
+    let (_, _, bearer) = cos_bearer(&env, "script-read");
+    let headers = [("authorization", bearer.as_str())];
+    let domains = send(&app, get_with(LIST, &headers)).await;
+    assert_eq!(domains.status.as_u16(), 200, "{}", domains.text());
+    assert!(
+        domains.json()["guard_halted"].is_null(),
+        "{}",
+        domains.text()
+    );
+    let generations = send(&app, get_with("/api/v1/script/generations", &headers)).await;
+    assert_eq!(generations.status.as_u16(), 200, "{}", generations.text());
+    assert!(generations.text().contains(&sha), "{}", generations.text());
+    let ops: i64 = db(&env)
+        .query_row("SELECT COUNT(*) FROM cos_operations", [], |row| row.get(0))
+        .expect("ops");
+    assert_eq!(ops, 0);
+}
+
+const BEHAVIOR_CHANGES: &str = "/api/v1/script/behavior-changes";
+
+fn pilot_spec() -> Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../control-ts/behavior-changes/cos_digest/cos-digest-cap-run-reason.v1.json");
+    serde_json::from_str(&std::fs::read_to_string(path).expect("spec")).expect("json")
+}
+
+fn spec_sha(spec: &Value) -> String {
+    serde_json::from_value::<task_core::script_behavior_change::BehaviorChangeSpec>(spec.clone())
+        .expect("spec")
+        .sha256()
+}
+
+/// ADR 2026-11-03-ts-intended-behavior-change D4: 承認は人の主体だけ。operator・誤った hash・未対応の領域は拒否で、
+/// 表も記録も変えない。取り消しは operator でも行え、取り消した版は承認し直せない。
+#[tokio::test]
+async fn script_behavior_change_approve_is_human_only_and_revoke_fails_closed() {
+    let env = env_with_operator();
+    let app = env.router();
+    let spec = pilot_spec();
+    let sha = spec_sha(&spec);
+    let operator = format!("Bearer {OPERATOR_TOKEN}");
+    let body = json!({"spec": spec, "spec_sha256": sha, "reason": "S6 pilot"});
+    let resp = send(
+        &app,
+        post_json_with(
+            BEHAVIOR_CHANGES,
+            &body,
+            &[("authorization", operator.as_str())],
+        ),
+    )
+    .await;
+    assert_problem(&resp, 403, "script_behavior_change_requires_human");
+    let wrong = json!({"spec": spec, "spec_sha256": "0".repeat(64), "reason": "x"});
+    let resp = send(
+        &app,
+        post_json_with(BEHAVIOR_CHANGES, &wrong, &admin_headers()),
+    )
+    .await;
+    assert_problem(&resp, 422, "behavior_change_hash_mismatch");
+    let mut lane = spec.clone();
+    lane["domain"] = json!("lane_rules");
+    let lane_body = json!({"spec": lane, "spec_sha256": spec_sha(&lane), "reason": "x"});
+    let resp = send(
+        &app,
+        post_json_with(BEHAVIOR_CHANGES, &lane_body, &admin_headers()),
+    )
+    .await;
+    assert_problem(&resp, 422, "behavior_change_domain_unsupported");
+    let mut unknown = spec.clone();
+    unknown["normalize"] = json!(true);
+    let resp = send(
+        &app,
+        post_json_with(
+            BEHAVIOR_CHANGES,
+            &json!({"spec": unknown, "spec_sha256": sha, "reason": "x"}),
+            &admin_headers(),
+        ),
+    )
+    .await;
+    assert_problem(&resp, 400, "bad_request");
+    let list = send(&app, get_admin(BEHAVIOR_CHANGES)).await.json();
+    assert_eq!(list, json!({"changes": [], "events": []}));
+
+    let resp = send(
+        &app,
+        post_json_with(BEHAVIOR_CHANGES, &body, &admin_headers()),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let approved = resp.json();
+    assert_eq!(approved["changed"], true);
+    assert_eq!(approved["change"]["state"], "approved");
+    assert_eq!(approved["change"]["spec_sha256"], sha.as_str());
+    let resp = send(
+        &app,
+        post_json_with(BEHAVIOR_CHANGES, &body, &admin_headers()),
+    )
+    .await;
+    assert_eq!(resp.json()["changed"], false);
+
+    let revoke = format!("{BEHAVIOR_CHANGES}/{sha}/revoke");
+    let resp = send(
+        &app,
+        post_json_with(
+            &revoke,
+            &json!({"reason": "bad"}),
+            &[("authorization", operator.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(resp.json()["revoked"], true);
+    let resp = send(
+        &app,
+        post_json_with(BEHAVIOR_CHANGES, &body, &admin_headers()),
+    )
+    .await;
+    assert_problem(&resp, 409, "behavior_change_retired");
+    let resp = send(
+        &app,
+        post_json_with(
+            &format!("{BEHAVIOR_CHANGES}/{}/revoke", "f".repeat(64)),
+            &json!({"reason": "x"}),
+            &admin_headers(),
+        ),
+    )
+    .await;
+    assert_problem(&resp, 404, "behavior_change_not_found");
+    let list = send(&app, get_admin(BEHAVIOR_CHANGES)).await.json();
+    assert_eq!(list["changes"][0]["state"], "revoked", "{list}");
+    let actions: Vec<_> = list["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .map(|e| (e["action"].clone(), e["actor"].clone()))
+        .collect();
+    assert_eq!(
+        actions,
+        vec![
+            (json!("approved"), json!("human:test")),
+            (json!("revoked"), json!("operator:claude-code"))
+        ]
+    );
+    assert!(
+        env.store
+            .script_behavior_changes_approved(ScriptDomain::CosDigest)
+            .expect("approved")
+            .is_empty()
+    );
+}

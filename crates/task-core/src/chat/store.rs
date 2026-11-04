@@ -1167,51 +1167,85 @@ impl SqliteStore {
         run_id: Option<&str>,
         now: OffsetDateTime,
     ) -> Result<ChatMessage, ChatError> {
-        if text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
-            return Err(ChatError::TooLarge("system message text".into()));
-        }
-        let at = chat_ts(now);
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        thread_require(&tx, thread_id)?;
-        if let Some(key) = key {
-            let existing = tx
-                .query_row(
-                    &format!("{MESSAGE_SELECT} WHERE thread_id=?1 AND client_message_id=?2"),
-                    params![thread_id, key],
-                    message_raw,
-                )
-                .optional()?;
-            if let Some(raw) = existing {
-                let message = message_from_raw(&tx, raw)?;
-                if message.role == role && message.text == text && message.cards == cards {
-                    return Ok(message);
-                }
-                return Err(ChatError::Conflict(format!(
-                    "system message key {key} reused"
-                )));
-            }
-        }
-        let meta = json!({ "cards": cards });
-        let id = insert_message(
+        let message = daemon_message_add_keyed_tx(
             &tx,
-            NewMessage {
+            DaemonMessage {
                 thread_id,
                 role,
+                key,
                 text,
-                state: ChatMessageState::Completed,
-                client_message_id: key,
-                reply_to_id: None,
+                cards,
                 run_id,
-                metadata: &meta,
             },
-            &at,
+            now,
         )?;
-        let message = message_require(&tx, thread_id, &id)?;
-        emit_message(&tx, &message, &at)?;
         tx.commit()?;
         Ok(message)
     }
+}
+
+/// A completed message written by the daemon (system or assistant).
+pub(crate) struct DaemonMessage<'a> {
+    pub thread_id: &'a str,
+    pub role: ChatMessageRole,
+    /// The idempotency key (`client_message_id`): a second write with the same key returns the
+    /// stored message when it has the same role, text and cards, and is `Conflict` otherwise.
+    pub key: Option<&'a str>,
+    pub text: &'a str,
+    pub cards: &'a [ChatCard],
+    pub run_id: Option<&'a str>,
+}
+
+/// The write of [`DaemonMessage`] inside the caller's transaction (the digest pass writes it with
+/// the requeue and the compare record, ADR 2026-11-03-cos-digest-persist).
+pub(crate) fn daemon_message_add_keyed_tx(
+    tx: &Connection,
+    m: DaemonMessage<'_>,
+    now: OffsetDateTime,
+) -> Result<ChatMessage, ChatError> {
+    if m.text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
+        return Err(ChatError::TooLarge("system message text".into()));
+    }
+    let at = chat_ts(now);
+    thread_require(tx, m.thread_id)?;
+    if let Some(key) = m.key {
+        let existing = tx
+            .query_row(
+                &format!("{MESSAGE_SELECT} WHERE thread_id=?1 AND client_message_id=?2"),
+                params![m.thread_id, key],
+                message_raw,
+            )
+            .optional()?;
+        if let Some(raw) = existing {
+            let message = message_from_raw(tx, raw)?;
+            if message.role == m.role && message.text == m.text && message.cards == m.cards {
+                return Ok(message);
+            }
+            return Err(ChatError::Conflict(format!(
+                "system message key {key} reused"
+            )));
+        }
+    }
+    let meta = json!({ "cards": m.cards });
+    let id = insert_message(
+        tx,
+        NewMessage {
+            thread_id: m.thread_id,
+            role: m.role,
+            text: m.text,
+            state: ChatMessageState::Completed,
+            client_message_id: m.key,
+            reply_to_id: None,
+            run_id: m.run_id,
+            metadata: &meta,
+        },
+        &at,
+    )?;
+    let message = message_require(tx, m.thread_id, &id)?;
+    emit_message(tx, &message, &at)?;
+    Ok(message)
 }
 
 /// `chat_message_post` の本体（呼び出し側の write transaction の中で走る）。ADR 2026-10-07-cos-live-fixes D4 の

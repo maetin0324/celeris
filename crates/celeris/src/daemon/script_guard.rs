@@ -11,8 +11,9 @@
 //!
 //! 停止基準の監視（付記 S5-7、(f) の数値のまま）:
 //! - 呼び出しごとの計数と (f) の 4 行の判定・`canary`・`ts` の `rust` への戻し・安全違反の `invalid` は、dispatcher が
-//!   記録を追記する transaction の中で store（`script_compare_append_observed`・`script_compare_log_append_observed`
-//!   → `task_core::script_guard::evaluate`）が行う。計数は表 `script_guard_state` にあり、再起動の後も残る。
+//!   記録を追記する transaction の中で store（`script_compare_append_observed`、`cos_digest` は apply と同じ transaction の
+//!   `cos_digest_apply_pass`・影の outbox を閉じる `cos_digest_shadow_finish` → `task_core::script_guard::evaluate`）が行う
+//!   （ADR 2026-11-03-cos-digest-persist）。計数は表 `script_guard_state` にあり、再起動の後も残る。
 //! - この module の見回り（[`sweep`]）は、それに加えて 2 つを行う。
 //!   1. Rust の検証を通らずに副作用が実行された記録（[`unvalidated_effect`]）を `script_compare_log` に見つけたら、
 //!      全領域を `rust` に戻して全体を止める（`script_guard_halt`。解くのは人だけ）。
@@ -300,6 +301,8 @@ pub(crate) struct GuardSweep {
 #[derive(Debug, Default)]
 pub(crate) struct GuardState {
     log_cursor: u64,
+    /// 見回りが `script_compare_log` から読んだ行の累計（増分の読みの試験が見る）。
+    log_rows_read: u64,
     announced_ready: BTreeSet<(ScriptDomain, String, &'static str)>,
 }
 
@@ -332,16 +335,24 @@ pub(crate) fn sweep(
 ) -> Result<GuardSweep, StoreError> {
     let mut out = GuardSweep::default();
 
-    // 1. 検証の外の副作用 → 全領域を `rust` に戻して止める。
-    let rows: Vec<_> = store
-        .script_compare_log(None)?
-        .into_iter()
-        .filter(|row| row.id > state.log_cursor)
-        .collect();
-    let offending: Vec<_> = rows
-        .iter()
-        .filter_map(|row| unvalidated_effect(&row.record).map(|code| (row, code)))
-        .collect();
+    // 1. 検証の外の副作用 → 全領域を `rust` に戻して止める。読むのは前の見回りが読み終えた id より後だけ
+    //    （`script_compare_log_after` の page。P1-C、S5 未解決 6）。違反の行は最初の 1 件があれば足りる。
+    let mut cursor = state.log_cursor;
+    let mut offending = Vec::new();
+    loop {
+        let page = store.script_compare_log_after(cursor, PAGE)?;
+        let full = page.len() == PAGE as usize;
+        state.log_rows_read += page.len() as u64;
+        for row in page {
+            cursor = cursor.max(row.id);
+            if let Some(code) = unvalidated_effect(&row.record) {
+                offending.push((row, code));
+            }
+        }
+        if !full {
+            break;
+        }
+    }
     if !offending.is_empty() && store.script_guard_halted()?.is_none() {
         let cleared = last_guard_clear(store)?;
         let first = offending
@@ -363,9 +374,7 @@ pub(crate) fn sweep(
             out.rolled_back = rolled_back;
         }
     }
-    if let Some(last) = rows.last() {
-        state.log_cursor = last.id;
-    }
+    state.log_cursor = cursor;
 
     // 2. 進む条件の判定（書かない）。
     for row in store.script_domain_modes()? {
@@ -472,3 +481,7 @@ mod tests;
 #[cfg(test)]
 #[path = "script_guard_stop_tests.rs"]
 mod stop_tests;
+
+#[cfg(test)]
+#[path = "script_ops_measure_tests.rs"]
+mod ops_measure_tests;

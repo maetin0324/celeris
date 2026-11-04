@@ -360,6 +360,7 @@ impl CosChatLaunch {
         // D1 of the inbox-thread ADR: the judgment of each finished triage run as an
         // assistant message (and the requeue of an interrupted run's items), before the
         // fallback looks at what is left.
+        dispatcher.cos_digest_shadow_reconcile(&self.store);
         if self.triage.digest_due {
             dispatcher.cos_digest_pass(self, now);
         }

@@ -85,6 +85,25 @@ pub struct DaemonSnapshot {
     /// と同じ `celeris.scratch-status/1`）。古いスナップショットと scratch を持たない構成では `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scratch: Option<ScratchStatus>,
+    /// ADR 2026-11-02-ts-control-layer-boundary 付記 S5-8（P1-C）: 直近 1000 tick の TS 制御層の同期の待ちの集計
+    /// （dispatcher の `script_tick_wait_summary`）。daemon の `script_tick_wait` の log 行と同じ値。古いスナップショットと
+    /// tick をまだ数えていない daemon では `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_tick_wait: Option<ScriptTickWaitLive>,
+}
+
+/// TS 制御層の tick の待ちの集計（付記 S5-8）。時間は µs、p50・p95 は最近傍順位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ScriptTickWaitLive {
+    /// 集計に入った tick の数（最大 1000）。
+    pub ticks: u64,
+    pub p50_us: u64,
+    pub p95_us: u64,
+    pub max_us: u64,
+    /// 窓の中で 1 tick の予算（`budget_us`）を使い切って TS を呼ばなかった件数。
+    pub tick_budget: u64,
+    /// 1 tick の TS の待ちの予算（µs）。
+    pub budget_us: u64,
 }
 
 impl DaemonSnapshot {
@@ -121,6 +140,7 @@ impl DaemonSnapshot {
             implicit_accounts: Vec::new(),
             containers: None,
             scratch: None,
+            script_tick_wait: None,
         }
     }
 }

@@ -959,3 +959,24 @@ Rust の参照実装（`lane_rules` は `model_policy::match_rule`、`route_prio
 ### S6-4 今の状態
 - 本番は 3 領域とも `rust` で、S6-3 の 1 を満たす領域は無い。Rust の参照実装はすべて残す。
 - 次に移す領域の選定は、本番で 1 領域が `ts` に上がり S6-3 の 1 の観測が始まってからにする。
+
+### 付記 P0-B（2026-11-03）: `cos_digest` の apply と記録の原子化
+S5-13 の S5-7 の行の (12) のうち「apply と記録は同じ transaction にない」「追記の失敗も warn だけ」は、
+[ADR 2026-11-03-cos-digest-persist](2026-11-03-cos-digest-persist.md) で改めた。digest pass の apply は 1 つの transaction で、
+run ごとに message・requeue・記録・script-guard の計数（mode `compare` と canary の Rust の側は影の outbox の行）を同じ SAVEPOINT に入れる。
+S4-14 の「apply の直前の mode の読み直し」は、TS の出力を apply する pass では transaction の中で行う。
+`append_pass_record`・`script_compare_log_append_observed` は消した。記録の自己矛盾による検出（(12) の前半）は変えない。
+
+## 付記 P1-C（2026-11-03、task 01M6HGFR1TR6PJ8822DHW7NNNT）
+- S5-1 の 6 を狭めた: 配備先の dir が無い hash の登録は `invalid` にせず 409 `script_bundle_not_deployed`（配備の後に登録し直せる）。
+  配備された bundle が検証に落ちたときだけ `invalid`。S5-8 の tick の待ちは `DaemonSnapshot.script_tick_wait` と 10 分ごとの log 行で
+  読める。S5-7 の見回りは `script_compare_log` を id の cursor から差分で読む。CLI の追加を含め、詳細は
+  [2026-11-03-ts-control-ops-cli-observe](2026-11-03-ts-control-ops-cli-observe.md)。
+
+## 付記 P1-E（2026-11-03、task 01M6HGFR1TMY7PTGQ553FQGM7H）
+本番の `compare` の件数は読み取り専用の道具で数える。mode・計数・(f) の数値・権限は変えない。
+- **道具**: `scripts/dev/script-compare.py`（`preflight`・`report`・`sample`）。DB は `sqlite3 -readonly` と `PRAGMA query_only=ON` で開き、1 つの read transaction で読む。測定環境の DB は開かない。
+- **件数の定義**: S2-8 のまま。`events` の `script_compare_recorded` と `script_compare_log` の行を (domain, generation) ごとに数え、`unavailable` は分母に入れない。ready は `script_guard::readiness` と同じ条件で、説明のつかない不一致の無い連続が純粋判定 1000・CoS 200 以上。
+- **照合**: `script_guard_state` の計数は記録と照合するだけに使う。合わないとき（記録の無い計数を含む）は problem で exit 1 にし ready にしない。canary・ts を通った generation は guard が mode の変わり目で数え直すので、記録より多いときだけ破れとする。これで計数だけを書いた synthetic の DB を本番の件数と取り違えない。
+- **差分を隠さない**: `normalized` が空でない記録、`match` なのに `rust` と `ts` が違う記録、未知の outcome は数えずに problem にする。意図した差分の outcome が増えたら、その変更でこの道具の `OUTCOMES` と定義を直す。
+- **手順の順序（S5「本番への移行」の改め）**: 今の本番 release（S5 より前）は `[script]` を未知の欄として拒む。`[script]` は S5 以後の release を promote した後に足し、daemon を再起動する。release を戻すときは先に `[script]` を消す。手順は [P1-E の進捗](../progress/2026-11-03-ts-control-ops/p1e-shadow-preflight.md) の「本番への移行」。

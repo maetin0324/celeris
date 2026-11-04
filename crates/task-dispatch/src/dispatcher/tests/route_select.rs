@@ -1223,3 +1223,49 @@ fn route_state_fills_source_remaining_and_headroom_from_the_account_book() {
     assert!((headroom - 0.4).abs() < 1e-6, "headroom {headroom}");
     assert!((remaining - 0.4).abs() < 1e-6, "remaining {remaining}");
 }
+
+/// 付記 S5-3（P1-C、S5 未解決 5）: `route_priority` の canary・ts の TS の候補列（`priority_override`）は、選んだ harness と
+/// 同じ harness の列だけを置き換える。違う harness の列・CoS の選択には効かない。admission（空きの無い source）は上書き後も
+/// fail-closed で次の候補へ進む。
+#[test]
+fn route_priority_canary_override_reorders_only_its_harness() {
+    let r = registry();
+    let base = route_select(&input("coding"), &r, &all_available(&r))
+        .0
+        .unwrap();
+    assert_eq!(base.candidate.source.as_ref(), "claude_oauth");
+
+    let mut state = all_available(&r);
+    state.priority_override = Some((
+        "claude_code".into(),
+        vec![key("codex_oauth", "gpt"), key("claude_oauth", "sonnet")],
+    ));
+    let pick = route_select(&input("coding"), &r, &state).0.unwrap();
+    assert_eq!(
+        (
+            pick.candidate.source.as_ref(),
+            pick.candidate.model.as_ref()
+        ),
+        ("codex_oauth", "gpt")
+    );
+    assert_eq!(pick.wire_model_id.as_ref(), "codex_oauth/gpt");
+
+    // 違う harness の列は効かない。
+    let mut other = all_available(&r);
+    other.priority_override = Some(("opencode".into(), vec![key("qwen", "qwen3")]));
+    assert_eq!(route_select(&input("coding"), &r, &other).0.unwrap(), base);
+
+    // CoS の選択には効かない。
+    let mut cos_input = input("coding");
+    cos_input.cos = true;
+    let cos_base = route_select(&cos_input, &r, &all_available(&r)).0;
+    assert_eq!(route_select(&cos_input, &r, &state).0, cos_base);
+
+    // 上書きの先頭の source に空きが無ければ、次の候補（Rust の admission）へ進む。
+    let mut full = state.clone();
+    full.accounts
+        .available
+        .remove(&SourceId::from("codex_oauth"));
+    let pick = route_select(&input("coding"), &r, &full).0.unwrap();
+    assert_eq!(pick.candidate.source.as_ref(), "claude_oauth");
+}

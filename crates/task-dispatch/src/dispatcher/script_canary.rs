@@ -192,6 +192,19 @@ impl Dispatcher {
         self.script_compare.tick_wait.summary()
     }
 
+    /// 付記 S5-8（P1-C）: snapshot に載せる集計。tick をまだ数えていなければ `None`。
+    pub fn script_tick_wait_live(&self) -> Option<task_ops::daemon::ScriptTickWaitLive> {
+        let s = self.script_tick_wait_summary();
+        (s.ticks > 0).then(|| task_ops::daemon::ScriptTickWaitLive {
+            ticks: s.ticks as u64,
+            p50_us: s.p50_us,
+            p95_us: s.p95_us,
+            max_us: s.max_us,
+            tick_budget: s.tick_budget,
+            budget_us: u64::try_from(SCRIPT_TICK_WAIT_BUDGET.as_micros()).unwrap_or(u64::MAX),
+        })
+    }
+
     /// この tick の TS の待ちの残り（S5-8。cos_digest の pass が使う）。
     pub(in crate::dispatcher) fn script_tick_wait_remaining(&self) -> Duration {
         self.script_compare.tick_wait.remaining()
@@ -341,7 +354,7 @@ impl Dispatcher {
         };
         let valid = matches!(
             record.outcome,
-            CompareOutcome::Match | CompareOutcome::Mismatch
+            CompareOutcome::Match | CompareOutcome::Mismatch | CompareOutcome::Explained
         ) && record.safety_violations.is_empty();
         let validated = record.ts.clone().filter(|_| valid);
         if validated.is_some() {

@@ -79,38 +79,6 @@ impl SqliteStore {
         Ok((appended, outcome))
     }
 
-    /// `script_compare_log` の追記と計数を 1 つの transaction で行う（`cos_digest`。S5-7）。
-    pub fn script_compare_log_append_observed(
-        &self,
-        record: &CosDigestCompareRecord,
-        ts_side: bool,
-        now: OffsetDateTime,
-    ) -> Result<(bool, Option<ScriptGuardOutcome>), ScriptDomainError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let appended = Self::script_compare_log_append_tx(&tx, record, now)?;
-        let call = ScriptGuardCall::classify(
-            record.outcome,
-            record.error.as_ref().map(|e| e.kind.as_str()),
-        );
-        let outcome = match call.filter(|_| appended) {
-            Some(call) => Some(observe_tx(
-                &tx,
-                record.domain,
-                &record.generation,
-                ScriptGuardObservation {
-                    call,
-                    safety_violation: !record.safety_violations.is_empty(),
-                    ts_side,
-                },
-                now,
-            )?),
-            None => None,
-        };
-        tx.commit()?;
-        Ok((appended, outcome))
-    }
-
     /// (domain, generation_id) の計数と、数え始めた mode。
     pub fn script_guard_counters(
         &self,
@@ -196,6 +164,35 @@ impl SqliteStore {
         )?;
         tx.commit()?;
         Ok(true)
+    }
+}
+
+/// `cos_digest` の記録 1 行を、追記した transaction の中で数える（S5-7。ADR 2026-11-03-cos-digest-persist）。
+/// 重複で追記しなかった記録と `unavailable` は数えない（S2-8）。
+pub(super) fn observe_cos_digest_record_tx(
+    tx: &Connection,
+    record: &CosDigestCompareRecord,
+    appended: bool,
+    ts_side: bool,
+    now: OffsetDateTime,
+) -> Result<Option<ScriptGuardOutcome>, ScriptDomainError> {
+    let call = ScriptGuardCall::classify(
+        record.outcome,
+        record.error.as_ref().map(|e| e.kind.as_str()),
+    );
+    match call.filter(|_| appended) {
+        Some(call) => Ok(Some(observe_tx(
+            tx,
+            record.domain,
+            &record.generation,
+            ScriptGuardObservation {
+                call,
+                safety_violation: !record.safety_violations.is_empty(),
+                ts_side,
+            },
+            now,
+        )?)),
+        None => Ok(None),
     }
 }
 

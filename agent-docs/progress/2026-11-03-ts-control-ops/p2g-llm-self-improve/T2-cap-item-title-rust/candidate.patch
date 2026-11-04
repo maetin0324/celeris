@@ -1,0 +1,80 @@
+diff --git a/crates/task-core/src/chat/digest.rs b/crates/task-core/src/chat/digest.rs
+index 57331f63..cfc96db3 100644
+--- a/crates/task-core/src/chat/digest.rs
++++ b/crates/task-core/src/chat/digest.rs
+@@ -201,7 +201,7 @@ pub fn cos_digest_message(
+     text.push('\n');
+     let mut cards = Vec::new();
+     for item in items {
+-        let title = item.title();
++        let title = item.digest_title();
+         text.push_str(&format!(
+             "\n### {}（{}）\n- 判断: {}\n",
+             title,
+diff --git a/crates/task-core/src/chat/triage.rs b/crates/task-core/src/chat/triage.rs
+index 758182ae..65846844 100644
+--- a/crates/task-core/src/chat/triage.rs
++++ b/crates/task-core/src/chat/triage.rs
+@@ -553,8 +553,23 @@ impl CosTriageItemReport {
+             self.summary.clone()
+         }
+     }
++
++    /// The title in the digest heading and card: summaries longer than
++    /// [`COS_DIGEST_TITLE_MAX_CHARS`] code points keep that many and end with `…`.
++    pub fn digest_title(&self) -> String {
++        let title = self.title();
++        if self.summary.trim().is_empty() || title.chars().count() <= COS_DIGEST_TITLE_MAX_CHARS {
++            return title;
++        }
++        let mut cut: String = title.chars().take(COS_DIGEST_TITLE_MAX_CHARS).collect();
++        cut.push('…');
++        cut
++    }
+ }
+ 
++/// Code points of an item summary kept in the digest heading and card title.
++pub const COS_DIGEST_TITLE_MAX_CHARS: usize = 80;
++
+ /// Parse the outbox body of either route. Escalation options are `{key,label}`; the fallback body
+ /// lists labels only (its `recommended` is a label too).
+ pub fn decision_from_outbox(body: &str) -> Option<CosTriageDecision> {
+diff --git a/crates/task-core/src/chat/triage_tests.rs b/crates/task-core/src/chat/triage_tests.rs
+index 1a433abf..06aa3f7b 100644
+--- a/crates/task-core/src/chat/triage_tests.rs
++++ b/crates/task-core/src/chat/triage_tests.rs
+@@ -550,3 +550,34 @@ fn cos_triage_closed_since_lists_answered_waits_apart_from_open_ones() {
+             .is_empty()
+     );
+ }
++
++#[test]
++fn digest_title_caps_long_summaries_at_80_code_points() {
++    use crate::chat::digest::cos_digest_message;
++    use crate::chat::triage::CosTriageItemReport;
++    let item = |summary: &str| CosTriageItemReport {
++        item_id: "item-1".into(),
++        thread_id: "thread-1".into(),
++        source_kind: "decision".into(),
++        source_key: "k1".into(),
++        source_revision: "1".into(),
++        state: "resolved".into(),
++        summary: summary.into(),
++        detail: String::new(),
++        reason: None,
++        operation_id: None,
++        run_id: Some("run-1".into()),
++        created_at: "2026-11-04T00:00:00Z".into(),
++        route: None,
++        decision: None,
++    };
++    let eighty = "あ".repeat(80);
++    assert_eq!(item(&eighty).digest_title(), eighty);
++    let long = format!("{eighty}い😀");
++    assert_eq!(item(&long).digest_title(), format!("{eighty}…"));
++    assert_eq!(item("   ").digest_title(), "decision:k1");
++    let (text, cards) = cos_digest_message("run-1", "completed", None, &[item(&long)]);
++    assert!(text.contains(&format!("\n### {eighty}…（")));
++    assert!(!text.contains(&long));
++    assert_eq!(cards[0].title, format!("{eighty}…"));
++}

@@ -189,8 +189,8 @@ enum Command {
         #[arg(long)]
         config: Option<PathBuf>,
     },
-    /// ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5: TS 制御層の領域の mode を daemon の API で
-    /// 読む・切り替える（`script domains|mode`）。DB は開かない。
+    /// ADR 2026-11-02-ts-control-layer-boundary 付記 S2-5・S5-1・S5-4: TS 制御層の領域の mode・generation・
+    /// script-guard を daemon の API で読む・切り替える（`script domains|mode|generations|guard`）。DB は開かない。
     Script {
         #[command(subcommand)]
         command: ScriptCommand,
@@ -562,10 +562,6 @@ fn main() -> ExitCode {
                     command: ModelsCommand::List(_),
                     ..
                 }
-                | Command::Script {
-                    command: ScriptCommand::Domains(_),
-                    ..
-                }
                 | Command::Knowledge {
                     command: KnowledgeCommand::Search(_) | KnowledgeCommand::Get(_)
                 }
@@ -573,6 +569,9 @@ fn main() -> ExitCode {
                     command: CronCommand::List | CronCommand::Show(_) | CronCommand::History(_),
                     ..
                 }
+        ) || matches!(
+            &cli.command,
+            Command::Script { command, .. } if commands::script::cos_read_only(command)
         );
         if !read_only {
             eprintln!(

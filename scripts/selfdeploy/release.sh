@@ -32,6 +32,7 @@ env:
                        cargo-test なら従来の `cargo test --workspace`（直列。非常用）
   SD_TEST_PARALLEL     既定 ビルドする sha の scripts/dev/test-parallel.sh（テスト用の差し替え口）
   CELERIS_TEST_JOBS    並列に走らせるテストの数（既定 min(8, max(2, nproc/3))。test-parallel.sh が読む）
+  SD_SCRIPT_BUNDLE_GATE  既定 ビルドする sha の scripts/selfdeploy/script-bundle-gate.sh（試験の偽の木だけが差し替える）
 EOF
   exit 2
 }
@@ -310,6 +311,7 @@ write_gate_json() {
       "$(sd_json_str "$SD_SCRATCH_OWNER")" "$WS_CLEAN_NEEDED"
     printf '  "cargo_test": %s,\n' "$(cargo_test_summary_json)"
     printf '  "bundle": %s,\n' "${BUNDLE_JSON:-null}"
+    printf '  "script_bundle": %s,\n' "${SCRIPT_BUNDLE_JSON:-null}"
     printf '  "web": %s,\n' "$(web_json)"
     printf '  "browser_ledger": %s,\n' "${BROWSER_LEDGER_JSON:-null}"
     printf '  "steps": %s\n' "$steps"
@@ -352,6 +354,22 @@ else
 fi
 # Phase 116 追記: Celeris の reviewer は `cargo fmt --check` を見るので、main が未整形だと配送が全部落ちる。
 run_step cargo-fmt-check "$BUILD" -- cargo fmt --all -- --check
+# ---- TS 制御層の bundle（ADR 2026-11-03-release-script-bundle-gate）--------------
+# control-ts を offline で入れ（pnpm --offline --frozen-lockfile）、`node scripts/build-bundle.mjs` で dist を作り
+# （前後で node_modules/.bin の shim が変わらないことを確かめる）、Host API の版・manifest の domains・ESM と
+# manifest の hash・source_commit = この sha を照合する。どれも SKIP にせず、落ちたら gate.json の failed_step に残す。
+# 作った bundle は全体の試験（cargo-test）と script の実 bundle 試験（script-bundle-tests）に
+# CELERIS_SCRIPT_REQUIRE_BUNDLE=1・CELERIS_SCRIPT_BUNDLE_DIR で渡す（bundle を読む試験の SKIP は失敗になる）。
+SCRIPT_GATE="${SD_SCRIPT_BUNDLE_GATE:-$BUILD/scripts/selfdeploy/script-bundle-gate.sh}"
+SCRIPT_BUNDLE_DIR="$BUILD/control-ts/dist"
+run_step control-ts-install "$BUILD" -- bash "$SCRIPT_GATE" install "$BUILD/control-ts"
+run_step control-ts-bundle "$BUILD" -- bash "$SCRIPT_GATE" bundle "$BUILD/control-ts"
+run_step script-bundle-verify "$BUILD" -- bash "$SCRIPT_GATE" verify "$BUILD" "$SCRIPT_BUNDLE_DIR" "$SHA_FULL"
+if [ "$GATE_OK" = true ]; then
+  SCRIPT_BUNDLE_SHA256="$(sd_json_get "$SCRIPT_BUNDLE_DIR/manifest.json" bundle_sha256)"
+  SCRIPT_BUNDLE_JSON="{\"bundle_sha256\": $(sd_json_str "$SCRIPT_BUNDLE_SHA256"), \"dir\": \"script-bundle\"}"
+fi
+export CELERIS_SCRIPT_REQUIRE_BUNDLE=1 CELERIS_SCRIPT_BUNDLE_DIR="$SCRIPT_BUNDLE_DIR"
 # Phase SD-2（ADR-0041 §8、人の判断 2026-09-28「バイナリ並列で動かす」）: テストバイナリを並列に回す
 # （`scripts/dev/test-parallel.sh` = `cargo nextest run --workspace` + `cargo test --doc --workspace`）。
 # 直列が要るテストは**ビルドする sha の** `.config/nextest.toml` の test-group で縛る。
@@ -367,6 +385,10 @@ run_cargo_test_step() {
   esac
 }
 run_cargo_test_step
+# script の実 bundle 試験（crates/celeris/tests/script_*・crates/script-runtime/tests/generation）と script-load-check。
+# cargo-test と別の段にして、SKIP が 0 件であることと、この段の秒を gate.json に残す。
+run_step script-bundle-tests "$BUILD" -- env CELERIS_SCRIPT_REQUIRE_BUNDLE=1 CELERIS_SCRIPT_BUNDLE_DIR="$SCRIPT_BUNDLE_DIR" \
+  bash "$SCRIPT_GATE" test "$BUILD" "$SCRIPT_BUNDLE_DIR"
 run_step cargo-clippy "$BUILD" -- cargo clippy --workspace -- -D warnings
 # ADR-0083: 手書き production の肥大化・巨大 inline test・gitignore された未追跡 mod を毎回可視化する。
 # 既定は warning のみ（exit 0）なので、この段が gate を落とすのは source-size-report.py 自体が
@@ -407,6 +429,12 @@ for b in celeris celerisctl celeris-credentiald; do
   [ -x "$SD_CARGO_TARGET/release/$b" ] || sd_die "built binary missing: $SD_CARGO_TARGET/release/$b"
   cp -p "$SD_CARGO_TARGET/release/$b" "$STAGE/bin/$b"
 done
+
+# TS 制御層の bundle（gate で検証した dist の 2 file）。verify.sh が hash を照合し直す。
+mkdir -p "$STAGE/script-bundle"
+cp -p "$SCRIPT_BUNDLE_DIR/bundle.mjs" "$SCRIPT_BUNDLE_DIR/manifest.json" "$STAGE/script-bundle/"
+[ "$(sd_json_get "$STAGE/script-bundle/manifest.json" bundle_sha256)" = "$SCRIPT_BUNDLE_SHA256" ] \
+  || sd_die "script bundle changed after the gate verified it"
 
 # ADR 2026-10-07-build-tmp-hygiene D1.4: 梱包が済んだので（`.lock-release` を持ったまま）共有 target を 1 回掃除する。
 # 掃除の失敗は release を止めない（警告だけ）。ビルド中の profile は `.cargo-lock` が取れず消されない。

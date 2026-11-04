@@ -980,3 +980,7 @@ S4-14 の「apply の直前の mode の読み直し」は、TS の出力を appl
 - **照合**: `script_guard_state` の計数は記録と照合するだけに使う。合わないとき（記録の無い計数を含む）は problem で exit 1 にし ready にしない。canary・ts を通った generation は guard が mode の変わり目で数え直すので、記録より多いときだけ破れとする。これで計数だけを書いた synthetic の DB を本番の件数と取り違えない。
 - **差分を隠さない**: `normalized` が空でない記録、`match` なのに `rust` と `ts` が違う記録、未知の outcome は数えずに problem にする。意図した差分の outcome が増えたら、その変更でこの道具の `OUTCOMES` と定義を直す。
 - **手順の順序（S5「本番への移行」の改め）**: 今の本番 release（S5 より前）は `[script]` を未知の欄として拒む。`[script]` は S5 以後の release を promote した後に足し、daemon を再起動する。release を戻すときは先に `[script]` を消す。手順は [P1-E の進捗](../progress/2026-11-03-ts-control-ops/p1e-shadow-preflight.md) の「本番への移行」。
+
+## 付記 P2-F（2026-11-04、task 01M6HGFR1TCHVSDDNH0GR9SNBK）
+- 4 つ目の領域 `execution_gate` を足した。S2-3（本文を TS に渡す例外と記録の除去）・S2-8（安全違反の code `gate_rule_not_allowed`・`gate_threshold_violated`）・S6-4（選定の前提）の改めと詳細は [ADR 2026-11-04-ts-execution-gate-domain](2026-11-04-ts-execution-gate-domain.md)。
+- S6-3 の終了条件はこの領域にも同じく当てる。Rust の参照実装は `execution_gate::score`。今は条件を満たさないので消さない。

@@ -34,7 +34,7 @@ raw は [p2f-rank.jsonl](p2f-rank.jsonl)（2026-09-01 以後の git log と `car
 - `crates/task-core/src/script_compare/execution_gate_fixture.rs`（新規）・`examples/dump-execution-gate-fixtures.rs`（新規）・`control-ts/fixtures/execution_gate/cases.jsonl`（2,337 行）。
 - `crates/task-core/src/script_compare.rs`: `ScriptDomain::ExecutionGate`。`script_guard.rs` の `readiness`: 純粋判定の 1000 件。`migrations/0109_script_execution_gate.sql`。
 - `control-ts/src/domains/execution_gate.ts`（新規）: `parseInput`・`decide`・`fixed2`・`executionGate`。`index.ts`・`bundle.config.json`（op の権限は空）・`scripts/compare.mjs`。
-- `crates/task-dispatch/src/script_policy.rs`: `PolicyScript::execution_gate`、`classify_execution_gate`（Rust の検証）、`CompareDraft::execution_gate`。`dispatcher/script_canary.rs` の `canary_execution_gate`、`dispatcher/work_units.rs` の `execution_gate_if_needed`。
+- `crates/task-dispatch/src/script_policy.rs`: `PolicyScript::execution_gate`、`classify_execution_gate`（Rust の検証）、`CompareDraft::execution_gate`。`dispatcher/script_canary.rs` の `execution_gate_decide`・`canary_execution_gate`（`dispatcher/work_units.rs` の `execution_gate_if_needed` が呼ぶ）。
 - `crates/celeris/src/daemon/script_policy.rs`、`crates/script-runtime/src/generation.rs` の `KNOWN_DOMAINS`、`crates/script-runtime/src/bin/script-host-runner.rs` の採点の表（`execution_gate_check`・`execution_gate_broken`）。
 - `scripts/dev/script-runner-cache.sh` の golden、`scripts/dev/edit-activate-baseline.sh` の scenario `gate-ts`、`scripts/dev/script-compare.py` の `REQUIRED`、`docs/api/v1/api.md`、schema の再生成。
 
@@ -45,7 +45,23 @@ Rust の `{ratio:.2}` は 2 桁のちょうど中間を偶数へ丸め（0.625�
 対象外の規則（`out_of_scope_rule`）、人の明示、閾値の計算（`GateThreshold`）、`source`・`shadow`・`depth`・`policy_version`、`direct_route::evaluate`、`update_task` と event の書き込み、store・scheduler・認可・承認・予算・worker の起動。安全検査は 1 つも緩めていない。Rust の参照実装は消していない。
 
 ## 試験（提出時の HEAD で実行）
-RESULTS
+名前で絞った試験（新しく足したもの）:
+- `cargo nextest run -p task-core -E 'test(/script_fixtures_execution_gate|execution_gate::/)'` → exit 0、14 passed（`execution_gate/tests.rs` の既存 12 件は分割の前後で変えずに通る。fixture の byte 一致と規則・signal・偶数丸めの網羅）
+- `cargo nextest run -p task-dispatch -E 'test(/script_compare_gate_/)'` → exit 0、20 passed。dispatcher の 15 件: rust で TS を呼ばない、compare は match を記録して判定は byte 一致で本文を記録しない、compare の不一致は Rust の判定のまま連続を 0 に戻す、ts は検証を通った出力を使い Rust の欄（閾値・source・shadow・depth・policy_version）は変えず不一致で script-guard が `rust` に戻す、例外・timeout・denied・不正な出力・Rust だけの rule_id・閾値の矛盾・runtime 無しは Rust の判定で fallback を残す、canary は task id で側が分かれる、人の明示と対象外は TS を呼ばない、256 KiB を超える本文は TS に渡さない、`rust` へ戻すと次の task から TS を呼ばない。分類の 5 件（`script_policy_tests.rs`）: 全欄の byte 比較、形・上限の拒否と値を写さないこと、安全違反の code、例外文を残さないこと、`input_digest` が本文を除いた値から作られること
+- `CELERIS_SCRIPT_REQUIRE_BUNDLE=1 cargo nextest run -p celeris -E 'test(/script_compare_gate_/)'` → exit 0、6 passed（本物の deno_core host。fixture 全件の正順・逆順、本物の bundle の daemon 経路で match、例外を投げる bundle、違う答えの bundle、Rust だけの rule_id を名乗る bundle、256 KiB の入力）
+- `cargo nextest run -p celeris-script` → exit 0、77 passed（runner の採点の表に `execution_gate` を足した試験と `activate` の probe 4 領域）
+- `bash scripts/dev/test-ts-verify.sh` → exit 0、20 passed（新しい場合 M: 閾値の比較を `>` に壊すと ts-only で段 unit が exit 1、runner に直に渡すと mismatch 193 件で exit 1）
+- control-ts: `pnpm run typecheck` exit 0、`vitest run` 112 passed、`node --test scripts/*.test.mjs` 113 passed（`compare.test.mjs` の execution_gate 3 件を含む）
+
+検査:
+- `bash scripts/dev/test-affected.sh` → exit 0。Rust 14 crate で 7273 tests run、7273 passed、21 skipped。web の vitest 697 passed、control-ts の typecheck・unit、`ts-verify.sh --grade`、`test-ts-verify.sh` 20 passed、`tests/script-compare.sh` ok、script bundle SKIP 0 件。1 回目は `work_units.rs` の大きさの基準（2182 行）を超えて落ちたので、結線を `script_canary.rs` の `execution_gate_decide` へ移した。2 回目は領域の初期一覧の試験 3 件が落ちたので期待値を直した。
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `sh scripts/dev/progress-index.sh --check` → exit 0
+
+計測:
+- `bash scripts/dev/edit-activate-baseline.sh --scenario gate-ts --mode warm --reps 20 --series p2f-execution-gate --out <file>` → exit 0（`policy-ts`・`cos-ts` は `--reps 5`）。`--validate`・`--check-targets` → problems 0
+- `CELERIS_P2F_LATENCY_OUT=<file> CELERIS_SCRIPT_REQUIRE_BUNDLE=1 cargo nextest run -p celeris -E 'test(/script_compare_gate_/)'` → 1 呼び出しの raw 4,674 件
 
 ## 性能（raw）
 | scenario（warm） | 試行 | p50 秒 | p95 秒 | cargo / link | raw |
@@ -86,3 +102,6 @@ RESULTS
 - p2f: Complexity Gate の得点を TS の領域 execution_gate に同等移植する（compare・canary・ts の結線、fixture、runner、試験）
 - p2f: ts-verify の試験に execution_gate の壊れた規則の場合を足し、bundle の領域の一覧を直す
 - p2f: 順位づけと計測の raw、進捗、地図、境界 ADR の付記を足す
+- p2f: gate の比較の結線を script_canary へ移す（work_units.rs の大きさの基準）
+- p2f: 領域の初期の一覧の試験に execution_gate を足す
+- p2f: 進捗に検査の結果を書く

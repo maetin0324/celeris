@@ -136,7 +136,7 @@ pub fn default_state(project_id: &str, now: &str) -> ProjectControllerState {
 /// [`SqliteStore::project_controller_set_mode`] の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModeChange {
-    Changed(ProjectControllerState),
+    Changed(Box<ProjectControllerState>),
     /// `expected_revision` が今の `revision` と違う（409）。
     Stale {
         current: i64,
@@ -282,7 +282,7 @@ impl SqliteStore {
         )?;
         let state = Self::pc_state_tx(tx, project_id)?
             .ok_or_else(|| StoreError::Invalid("controller state vanished".into()))?;
-        Ok(ModeChange::Changed(state))
+        Ok(ModeChange::Changed(Box::new(state)))
     }
 
     /// wake 1 件を呼び出し側の transaction で入れる（API の wake・CoS の operation）。入ったら `true`。

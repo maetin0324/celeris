@@ -786,6 +786,14 @@ impl World {
         assert_eq!(self.state_of(&b), ScriptGenerationState::Loaded);
         warm(&self.pinned(&b)).await;
 
+        // 前の段の pass（TS の待ちの予算 200 ms を超えて dispatcher が先に進んだもの、または記録を書いた後の後始末）が
+        // A の isolate に残っていると in_flight が 2 になる（負荷時に release gate で落ちた）。0 に戻るのを待ってから始める。
+        // この段では CoS の run を起こさないので、dispatcher が新しい pass を A に送ることはない。
+        wait_for("A has no pass in flight from earlier stages", || async {
+            (self.registry.get(&a).expect("A").in_flight == 0).then_some(())
+        })
+        .await;
+
         // A の pass を daemon の isolate で始める。op の答えを止めるので in-flight のまま。
         let pinned_a = self.pinned(&a);
         let (pass, op) = start_pass(Arc::clone(&pinned_a)).await;

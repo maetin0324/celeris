@@ -3,6 +3,7 @@ import { cosDigestPass } from "./cos_digest";
 import { executionGate } from "./execution_gate";
 import { hostSelftest } from "./host_selftest";
 import { laneRules } from "./lane_rules";
+import { projectController } from "./project_controller";
 import { routePriority } from "./route_priority";
 
 export type DomainHandler = (input: unknown, ctx: RequestContext) => Promise<unknown>;
@@ -14,5 +15,7 @@ export const domains: Record<string, DomainHandler> = {
   execution_gate: executionGate,
   host_selftest: hostSelftest,
   lane_rules: laneRules,
+  // 入力は Rust の ProjectSnapshot。DB も system も書かない（ADR 2026-11-04-project-controller D7）。
+  project_controller: async (input) => projectController(input),
   route_priority: routePriority,
 };

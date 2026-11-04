@@ -126,6 +126,9 @@ struct DomainSpec {
     probe: fn() -> Scene,
     /// TS が拒まなければならない壊した場面。
     broken: fn() -> Vec<Broken>,
+    /// 参照実装の無い領域（ADR 2026-11-04-project-controller D7）: 期待値と byte で比べず、行の不変条件
+    /// （`expected` は fixture の `invariants`）を当てる。`None` は従来どおりの byte 比較。
+    invariants: Option<fn(&Map<String, Value>, &Value) -> Result<(), String>>,
 }
 
 impl DomainSpec {
@@ -148,6 +151,7 @@ static DOMAINS: &[DomainSpec] = &[
         check: lane_rules_check,
         probe: lane_rules_probe,
         broken: lane_rules_broken,
+        invariants: None,
     },
     DomainSpec {
         name: "route_priority",
@@ -162,6 +166,7 @@ static DOMAINS: &[DomainSpec] = &[
         check: route_priority_check,
         probe: route_priority_probe,
         broken: route_priority_broken,
+        invariants: None,
     },
     DomainSpec {
         name: "execution_gate",
@@ -176,6 +181,22 @@ static DOMAINS: &[DomainSpec] = &[
         check: execution_gate_check,
         probe: execution_gate_probe,
         broken: execution_gate_broken,
+        invariants: None,
+    },
+    DomainSpec {
+        name: "project_controller",
+        fixtures: &[FixtureSpec {
+            path: "project_controller/invariants.jsonl",
+            // task-core の dump-project-controller-fixtures が今書く行数。
+            min_rows: 15,
+            rule: "row.input",
+            parse: project_controller_row,
+        }],
+        fields: &PROJECT_CONTROLLER_FIELDS,
+        check: project_controller_check,
+        probe: project_controller_probe,
+        broken: project_controller_broken,
+        invariants: Some(project_controller_invariants),
     },
     DomainSpec {
         name: "cos_digest",
@@ -199,6 +220,7 @@ static DOMAINS: &[DomainSpec] = &[
         check: cos_digest_check,
         probe: cos_digest_probe,
         broken: cos_digest_broken,
+        invariants: None,
     },
 ];
 
@@ -623,6 +645,186 @@ fn execution_gate_broken() -> Vec<Broken> {
     .collect()
 }
 
+// ---- project_controller（ADR 2026-11-04-project-controller。参照実装なし・不変条件で採点） ----
+
+const PROJECT_CONTROLLER_FIELDS: [&str; 4] = ["action", "gap", "explanation", "based_on"];
+/// `task_core::project_proposal::ProjectAction` の `kind`（この crate は task-core に依存しない）。
+const PROJECT_CONTROLLER_KINDS: [&str; 6] = [
+    "continue",
+    "replan",
+    "launch_root",
+    "wait",
+    "escalate",
+    "mark_milestone",
+];
+
+fn project_controller_row(row: &Value) -> Result<Parsed, String> {
+    let input = row.get("input").ok_or("cannot build the input")?;
+    let invariants = row.get("invariants").ok_or("missing invariants")?;
+    if !invariants.is_object() {
+        return Err("invariants must be an object".to_owned());
+    }
+    Ok(Parsed {
+        scene: Scene::pure(input.clone()),
+        expected: invariants.clone(),
+    })
+}
+
+/// 形と、Rust の `project_proposal::validate` の安全違反の一部（paused での起票・acceptance の縮小）を当てる。
+fn project_controller_check(out: &Map<String, Value>, scene: &Scene) -> Result<Checked, String> {
+    let input = &scene.input;
+    let action = out
+        .get("action")
+        .and_then(Value::as_object)
+        .ok_or("action must be an object")?;
+    let kind = str_field(action, "kind")?;
+    if !PROJECT_CONTROLLER_KINDS.contains(&kind) {
+        return Err(format!("unknown action kind {kind:?}"));
+    }
+    let based_on = out.get("based_on").ok_or("missing based_on")?;
+    let expected_based_on = json!({
+        "revision": input["controller"]["revision"],
+        "human_epoch": input["controller"]["human_epoch"],
+        "request_sha256": input["project"]["request_sha256"],
+    });
+    if based_on != &expected_based_on {
+        return Err("based_on does not match the snapshot".to_owned());
+    }
+    let explanation = out
+        .get("explanation")
+        .and_then(Value::as_object)
+        .ok_or("explanation must be an object")?;
+    str_field(explanation, "rule_id")?;
+    let signals = explanation
+        .get("signals")
+        .and_then(Value::as_array)
+        .ok_or("signals must be an array")?;
+    if signals.len() > 16 {
+        return Err("at most 16 signals".to_owned());
+    }
+    let outcomes: Vec<&Value> = input["outcomes"]
+        .as_array()
+        .map(|a| a.iter().collect())
+        .unwrap_or_default();
+    let gap = out
+        .get("gap")
+        .and_then(Value::as_object)
+        .ok_or("gap must be an object")?;
+    for list in ["reached", "open", "unknown"] {
+        let ids = gap
+            .get(list)
+            .and_then(Value::as_array)
+            .ok_or("gap lists must be arrays")?;
+        if ids
+            .iter()
+            .any(|id| !outcomes.iter().any(|o| &o["id"] == id))
+        {
+            return Err(format!("gap.{list} names an unknown outcome"));
+        }
+    }
+    let mut violations = Vec::new();
+    if kind == "launch_root" {
+        if input["project"]["status"] != "active" {
+            violations.push("launch_on_paused");
+        }
+        let root = &action["root"];
+        let texts: BTreeSet<&str> = root["acceptance"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|c| c["text"].as_str()).collect())
+            .unwrap_or_default();
+        for id in root["outcome_ids"].as_array().into_iter().flatten() {
+            match outcomes.iter().find(|o| &o["id"] == id) {
+                None => violations.push("root_key_not_owned"),
+                Some(o) => {
+                    let narrowed = o["acceptance"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|a| a.as_str().is_none_or(|a| !texts.contains(a)));
+                    if narrowed {
+                        violations.push("root_acceptance_narrowed");
+                    }
+                }
+            }
+        }
+    }
+    Ok(Checked {
+        output: out.clone(),
+        violations,
+    })
+}
+
+/// 行の不変条件: `allowed_kinds` の中の行動で、`must_not_launch_root` なら起票しない、`phase` があれば wait の phase。
+fn project_controller_invariants(out: &Map<String, Value>, inv: &Value) -> Result<(), String> {
+    let kind = out["action"]["kind"].as_str().unwrap_or_default();
+    let allowed = inv["allowed_kinds"]
+        .as_array()
+        .ok_or("invariants.allowed_kinds")?;
+    if !allowed.iter().any(|k| k.as_str() == Some(kind)) {
+        return Err(format!("action {kind:?} is not in {allowed:?}"));
+    }
+    if inv["must_not_launch_root"] == json!(true) && kind == "launch_root" {
+        return Err("launched a root where the invariant forbids it".to_owned());
+    }
+    if let Some(phase) = inv.get("wait_phase").and_then(Value::as_str)
+        && out["action"]["phase"].as_str() != Some(phase)
+    {
+        return Err(format!("wait phase must be {phase}"));
+    }
+    Ok(())
+}
+
+fn project_controller_probe_input() -> Value {
+    json!({
+        "now": "2026-11-04T00:00:00Z",
+        "truncated": false,
+        "project": {"id": "P", "title": "probe", "status": "active", "request": "r",
+                    "request_sha256": "0".repeat(64), "auto_integrate": false},
+        "brief": null,
+        "outcomes": [{"id": "o1", "title": "t", "acceptance": ["a"], "depends_on": [], "priority": 0,
+                      "source": "request_block"}],
+        "outcomes_invalid": false,
+        "roots": [], "waits": [], "stagnation": [], "wakes": [], "decisions": [],
+        "controller": {"mode": "enabled", "phase": "active", "revision": 0, "human_epoch": 0,
+                       "retry_count": 0, "progress_epoch": 0},
+        "limits": {"max_open_roots": 2, "max_root_attempts_per_outcome": 2, "max_no_progress_decisions": 5,
+                   "cos_inputs_remaining_today": 10, "roots_remaining_today": 5},
+        "roadmap": null,
+        "authority": null,
+    })
+}
+
+fn project_controller_probe() -> Scene {
+    Scene::pure(project_controller_probe_input())
+}
+
+fn project_controller_broken() -> Vec<Broken> {
+    let base = project_controller_probe_input();
+    let edit = |f: &dyn Fn(&mut Value)| {
+        let mut v = base.clone();
+        f(&mut v);
+        v
+    };
+    vec![
+        (
+            "missing_field",
+            edit(&|v| {
+                v.as_object_mut().map(|m| m.remove("limits"));
+            }),
+        ),
+        ("extra_field", edit(&|v| v["write_db"] = json!(true))),
+        ("not_object", json!([])),
+        (
+            "wrong_type_controller",
+            edit(&|v| v["controller"] = json!("x")),
+        ),
+        ("wrong_type_roots", edit(&|v| v["roots"] = json!({}))),
+    ]
+    .into_iter()
+    .map(broken_input)
+    .collect()
+}
+
 // ---- cos_digest（pass。op を await する。付記 S4-12・S4-16） ----
 
 const OP_LIST_RUNS: &str = "cos_digest:list_runs";
@@ -962,6 +1164,18 @@ fn judge(spec: &DomainSpec, scene: &Scene, expected: &Value, ran: &Ran) -> Judge
         Ok(c) => c,
         Err(j) => return j,
     };
+    if let Some(invariants) = spec.invariants {
+        let held = invariants(&checked.output, expected);
+        return Judged {
+            outcome: if held.is_ok() {
+                Outcome::Match
+            } else {
+                Outcome::Mismatch
+            },
+            violations: checked.violations,
+            error: held.err(),
+        };
+    }
     let same = spec.fields.iter().all(|f| {
         let a = serde_json::to_string(&checked.output[*f]).ok();
         let b = serde_json::to_string(&expected[*f]).ok();

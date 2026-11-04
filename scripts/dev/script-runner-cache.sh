@@ -33,7 +33,7 @@ HOST_DIRS="crates/script-runtime crates/task-core"
 FEATURES="profile=release bin=script-host-runner features=default locked=1"
 SCHEMA="docs/api/script-host/host-v1.schema.json"
 # golden の file と、それを stdout に書く task-core の example。
-GOLDEN_SPECS="lane_rules/all-features.jsonl:dump-lane-fixtures route_priority/cases.jsonl:dump-route-priority-fixtures cos_digest/cases.jsonl:dump-cos-digest-fixtures execution_gate/cases.jsonl:dump-execution-gate-fixtures"
+GOLDEN_SPECS="lane_rules/all-features.jsonl:dump-lane-fixtures route_priority/cases.jsonl:dump-route-priority-fixtures cos_digest/cases.jsonl:dump-cos-digest-fixtures execution_gate/cases.jsonl:dump-execution-gate-fixtures project_controller/invariants.jsonl:dump-project-controller-fixtures"
 # example で作らない golden。pass_traces.jsonl は task-dispatch の試験（cos_digest_trace.rs）が書き、その試験が byte 一致を確かめる。
 # task-dispatch を golden の元の crate にすると key の source が広がるので、fixture の内容を key に入れて golden/ へ写す
 # （ADR 2026-11-02-ts-fast-verify 付記 grade-cos-digest）。

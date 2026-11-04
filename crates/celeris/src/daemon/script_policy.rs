@@ -2,7 +2,7 @@
 //! （`GenerationRegistry`、付記 S5-2）の 1 つの generation に固定した口を使い、試験は `ScriptRuntimeHandle` 1 つで呼ぶ。
 //!
 //! 入出力は DTO だけで、Rust の判定を変えない。結果の分類と記録は dispatcher が行う。
-//! `lane_rules`・`route_priority`・`execution_gate` は op を呼ばない純粋関数なので、要求の scope は空で送る（S2-7）。
+//! `lane_rules`・`route_priority`・`execution_gate`・`project_controller` は op を呼ばない純粋関数なので、要求の scope は空で送る（S2-7）。
 //! `cos_digest` は pass 1 回を要求 1 件として host sink 付きで送り、op を dispatcher の op server へ写す（付記 S4-12）。
 
 use std::collections::BTreeSet;
@@ -113,6 +113,20 @@ impl PolicyScript for ScriptPolicy {
     fn execution_gate(&self, input: ExecutionGateInput, deadline: Duration) -> PolicyFuture<'_> {
         self.call_domain(
             ScriptDomain::ExecutionGate,
+            serde_json::to_value(&input),
+            deadline,
+        )
+    }
+
+    /// ADR 2026-11-04-project-controller D7: snapshot を入力に proposal を 1 つ返す。op を呼ばない純粋判定なので
+    /// 要求の scope は空で送る（`project_controller:read_root_evidence` の scope は A3 の接続が root の id で埋める）。
+    fn project_controller(
+        &self,
+        input: task_core::project_proposal::ProjectSnapshot,
+        deadline: Duration,
+    ) -> PolicyFuture<'_> {
+        self.call_domain(
+            ScriptDomain::ProjectController,
             serde_json::to_value(&input),
             deadline,
         )

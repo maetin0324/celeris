@@ -676,3 +676,26 @@ fn script_fixtures_execution_gate_cover_rules_signals_and_rounding() {
     assert!(body.contains("ratio 0.62 >= 0.3"), "0.625 rounds to even");
     assert!(body.contains("ratio 0.88 >= 0.3"), "0.875 rounds to even");
 }
+
+// --- project_controller（ADR 2026-11-04-project-controller D7）---------------------------------
+// 不変条件を変えたら
+// `cargo run -q -p task-core --example dump-project-controller-fixtures > control-ts/fixtures/project_controller/invariants.jsonl`
+// で作り直す。方針の期待値は control-ts/src/domains/project_controller.test.ts にあり、ここでは変わらない。
+
+#[test]
+fn script_fixtures_project_controller_match_committed_fixture() {
+    let generated = task_core::project_proposal::invariants_fixture_jsonl().expect("serialize");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../control-ts/fixtures/project_controller/invariants.jsonl");
+    let committed = std::fs::read_to_string(path).expect("read committed fixture");
+    assert!(
+        generated == committed,
+        "project_controller fixture differs; regenerate with the dump-project-controller-fixtures example"
+    );
+    for line in generated.lines() {
+        let row: serde_json::Value = serde_json::from_str(line).expect("row");
+        let snapshot: task_core::project_proposal::ProjectSnapshot =
+            serde_json::from_value(row["input"].clone()).expect("snapshot DTO");
+        assert!(!snapshot.truncated);
+    }
+}

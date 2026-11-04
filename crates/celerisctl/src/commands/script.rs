@@ -164,7 +164,7 @@ impl ModeArg {
 
 #[derive(Args, Debug, Clone)]
 pub struct ModeArgs {
-    /// lane_rules | route_priority | cos_digest | execution_gate
+    /// lane_rules | route_priority | cos_digest | execution_gate | project_controller
     pub domain: String,
     pub mode: ModeArg,
     /// The `version` read from `script domains` (a stale value is refused with 409).

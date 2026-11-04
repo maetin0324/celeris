@@ -432,5 +432,6 @@ mod tests {
         assert!(domain_capabilities("lane_rules").is_empty());
         assert!(domain_capabilities("route_priority").is_empty());
         assert!(domain_capabilities("execution_gate").is_empty());
+        assert!(domain_capabilities("project_controller").is_empty());
     }
 }

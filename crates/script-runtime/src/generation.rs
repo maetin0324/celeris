@@ -51,6 +51,7 @@ pub const KNOWN_DOMAINS: &[&str] = &[
     "execution_gate",
     "host_selftest",
     "lane_rules",
+    "project_controller",
     "route_priority",
 ];
 

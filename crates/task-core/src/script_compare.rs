@@ -40,14 +40,17 @@ pub enum ScriptDomain {
     CosDigest,
     /// ADR 2026-11-04-ts-execution-gate-domain: Complexity Gate の得点（migration 0109）。
     ExecutionGate,
+    /// ADR 2026-11-04-project-controller D7: 案件の次の行動の proposal（migration 0111）。参照実装は無い。
+    ProjectController,
 }
 
 impl ScriptDomain {
-    pub const ALL: [ScriptDomain; 4] = [
+    pub const ALL: [ScriptDomain; 5] = [
         ScriptDomain::LaneRules,
         ScriptDomain::RoutePriority,
         ScriptDomain::CosDigest,
         ScriptDomain::ExecutionGate,
+        ScriptDomain::ProjectController,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -56,6 +59,7 @@ impl ScriptDomain {
             ScriptDomain::RoutePriority => "route_priority",
             ScriptDomain::CosDigest => "cos_digest",
             ScriptDomain::ExecutionGate => "execution_gate",
+            ScriptDomain::ProjectController => "project_controller",
         }
     }
 
@@ -187,6 +191,9 @@ pub enum CompareOutcome {
     Mismatch,
     /// 差分があるが、人が承認した改善仕様の期待差分と byte 一致する（ADR 2026-11-03-ts-intended-behavior-change D2）。
     Explained,
+    /// 参照実装の無い領域（`project_controller`）の妥当な proposal。比べる相手が無いので不一致は存在しない。
+    /// script-guard は成功として数える（ADR 2026-11-04-project-controller D7）。
+    ProposalOnly,
     TsError,
     InvalidOutput,
     Unavailable,

@@ -354,7 +354,10 @@ impl Dispatcher {
         };
         let valid = matches!(
             record.outcome,
-            CompareOutcome::Match | CompareOutcome::Mismatch | CompareOutcome::Explained
+            CompareOutcome::Match
+                | CompareOutcome::Mismatch
+                | CompareOutcome::Explained
+                | CompareOutcome::ProposalOnly
         ) && record.safety_violations.is_empty();
         let validated = record.ts.clone().filter(|_| valid);
         if validated.is_some() {

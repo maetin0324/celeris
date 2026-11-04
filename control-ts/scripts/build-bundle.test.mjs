@@ -31,7 +31,7 @@ test("manifest records the hash of the bundle and of the schema", async () => {
   assert.equal(manifest.bundle_sha256, sha256(path.join(outDir, "bundle.mjs")));
   assert.equal(manifest.schema_sha256, sha256(path.resolve(pkg, "../docs/api/script-host/host-v1.schema.json")));
   assert.equal(manifest.host_api, "^1");
-  assert.deepEqual(manifest.domains, ["cos_digest", "execution_gate", "host_selftest", "lane_rules", "route_priority"]);
+  assert.deepEqual(manifest.domains, ["cos_digest", "execution_gate", "host_selftest", "lane_rules", "project_controller", "route_priority"]);
   assert.deepEqual(manifest.capabilities, ["cos_digest:list_runs", "cos_digest:read_run", "selftest:echo_task"]);
   assert.deepEqual(manifest.checkpoint_versions, []);
   assert.equal(manifest.toolchain.typescript, "7.0.2");

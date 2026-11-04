@@ -94,6 +94,30 @@ impl SqliteStore {
         })
     }
 
+    /// 接頭辞 `prefix` で始まるキーの行（`(key, task_id, result_json)`、キーの順）。Project Controller の
+    /// snapshot が `pc:<project>:` の root を引く（ADR 2026-11-04-project-controller I5）。
+    pub fn idempotency_keys_with_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, String, Option<String>)>, StoreError> {
+        let escaped = prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT idempotency_key, task_id, result_json FROM task_idempotency_keys \
+                 WHERE idempotency_key LIKE ?1 ESCAPE '\\' ORDER BY idempotency_key",
+            )?;
+            let rows = stmt
+                .query_map([format!("{escaped}%")], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+    }
+
     /// キーを `task_id` に結ぶ。既に行があれば PRIMARY KEY の衝突で失敗する（先に照合すること）。
     pub fn idempotency_record_tx(
         conn: &Connection,

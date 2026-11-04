@@ -44,7 +44,7 @@ impl ScriptGuardCall {
     /// S2-8 の分類。`unavailable` は `None`（tick の予算切れを含む。S5-8）。
     pub fn classify(outcome: CompareOutcome, error_kind: Option<&str>) -> Option<Self> {
         match outcome {
-            CompareOutcome::Match => Some(Self::Ok),
+            CompareOutcome::Match | CompareOutcome::ProposalOnly => Some(Self::Ok),
             CompareOutcome::Mismatch => Some(Self::Mismatch),
             CompareOutcome::Explained => Some(Self::Explained),
             CompareOutcome::TsError if matches!(error_kind, Some("timeout" | "terminated")) => {
@@ -257,9 +257,10 @@ pub fn readiness(
         domain == ScriptDomain::LaneRules && exhaustive == ScriptExhaustiveStanding::Passed;
     let required = match domain {
         ScriptDomain::LaneRules if evidence_passed => SCRIPT_GUARD_READY_PURE_EXHAUSTIVE,
-        ScriptDomain::LaneRules | ScriptDomain::RoutePriority | ScriptDomain::ExecutionGate => {
-            SCRIPT_GUARD_READY_PURE
-        }
+        ScriptDomain::LaneRules
+        | ScriptDomain::RoutePriority
+        | ScriptDomain::ExecutionGate
+        | ScriptDomain::ProjectController => SCRIPT_GUARD_READY_PURE,
         ScriptDomain::CosDigest => SCRIPT_GUARD_READY_COS,
     };
     let clean_streak = match from {

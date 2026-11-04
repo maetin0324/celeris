@@ -18,7 +18,7 @@ use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 /// `script_domain_modes` の行と表 `script_compare_log` を足しただけで同じ。107（migration 0107）は表
 /// `cos_digest_shadow_outbox` を足しただけで同じ（ADR 2026-11-03-cos-digest-persist）。108（migration 0108）は表
 /// `script_behavior_changes`・`script_behavior_change_events` を足しただけで同じ（ADR 2026-11-03-ts-intended-behavior-change）。109（migration 0109）は `script_domain_modes` に `execution_gate` の行を足し、110（migration 0110）は表 `script_exhaustive_runs` を足しただけで同じ（ADR 2026-11-04-lane-rules-exhaustive-evidence）。
-pub const SUPPORTED_SCHEMA_VERSIONS: &[i64] = &[102, 103, 104, 105, 106, 107, 108, 109, 110];
+pub const SUPPORTED_SCHEMA_VERSIONS: &[i64] = &[102, 103, 104, 105, 106, 107, 108, 109, 110, 111];
 pub const SCHEMA: &str = "ops-r1-trace/1";
 
 const USAGE: &str = "usage: celeris-campaign ops-r1-trace --db <DB の写し> --thread <案件 CoS thread id> \

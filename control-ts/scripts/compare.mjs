@@ -50,6 +50,12 @@ const DOMAINS = {
     input: (row) => row.input,
     fields: ["mode", "score", "rule_id", "signals"],
   },
+  // 参照実装の無い領域（ADR 2026-11-04-project-controller D7）: 行の不変条件を当てる。
+  project_controller: {
+    module: "src/domains/project_controller.ts",
+    fixture: "fixtures/project_controller/invariants.jsonl",
+    custom: compareProjectController,
+  },
   cos_digest: {
     module: "src/domains/cos_digest.ts",
     fixture: "fixtures/cos_digest",
@@ -133,6 +139,33 @@ export async function compare(domain, { fixture, module } = {}) {
     }
   }
   return report(ok, failures);
+}
+
+/** project_controller の不変条件（runner の project_controller_invariants と同じ）。 */
+async function compareProjectController(mod, rows, where) {
+  const ok = new Set();
+  const failures = [];
+  for (const r of rows) {
+    const inv = r.row.invariants;
+    let out;
+    try {
+      out = mod.projectController(r.row.input);
+    } catch (e) {
+      failures.push({ ...where(r), name: r.row.name, error: String(e?.message ?? e) });
+      continue;
+    }
+    const kind = out?.action?.kind;
+    const problems = [];
+    if (!inv.allowed_kinds.includes(kind)) problems.push(`action ${kind} not in ${inv.allowed_kinds.join(",")}`);
+    if (inv.must_not_launch_root && kind === "launch_root") problems.push("launched a root");
+    if (inv.wait_phase !== undefined && out.action.phase !== inv.wait_phase) problems.push(`phase must be ${inv.wait_phase}`);
+    const b = r.row.input;
+    const based = { revision: b.controller.revision, human_epoch: b.controller.human_epoch, request_sha256: b.project.request_sha256 };
+    if (JSON.stringify(out.based_on) !== JSON.stringify(based)) problems.push("based_on");
+    if (problems.length === 0) ok.add(r);
+    else failures.push({ ...where(r), name: r.row.name, problems, actual: out });
+  }
+  return { ok, failures };
 }
 
 /** 1 pass を fake host で replay する。出力の直列化（throw なら `<throw: …>`）と不一致の理由を返す。 */

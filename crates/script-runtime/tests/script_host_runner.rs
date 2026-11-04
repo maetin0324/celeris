@@ -34,11 +34,14 @@ const CASE_ROWS: usize = 2_066;
 const DIGEST_ROWS: usize = TRACE_ROWS + CASE_ROWS;
 const RUN_STATES: [&str; 2] = ["completed", "stopped"];
 const GATE_ROWS: usize = 2_337;
-const ALL_DOMAINS: [&str; 5] = [
+const PC_FIXTURE: &str =
+    include_str!("../../../control-ts/fixtures/project_controller/invariants.jsonl");
+const ALL_DOMAINS: [&str; 6] = [
     "cos_digest",
     "execution_gate",
     "host_selftest",
     "lane_rules",
+    "project_controller",
     "route_priority",
 ];
 
@@ -111,8 +114,22 @@ async function digest(ctx) {
   }
   return { runs };
 }
+const PC_KEYS = ["now","truncated","project","brief","outcomes","outcomes_invalid","roots","waits","stagnation","wakes","decisions","controller","limits","roadmap","authority"];
+function pc(input) {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) throw new Error("not object");
+  exact(input, PC_KEYS, "snapshot");
+  if (typeof input.controller !== "object" || input.controller === null) throw new Error("controller");
+  if (!Array.isArray(input.roots)) throw new Error("roots");
+  return {
+    action: { kind: "wait", waiting_on: [], next_wake_after_secs: 0, phase: "achieved" },
+    gap: { reached: [], open: [], unknown: [], progress_epoch: 0 },
+    explanation: { rule_id: "test/always-wait", signals: [] },
+    based_on: { revision: input.controller.revision, human_epoch: input.controller.human_epoch, request_sha256: input.project.request_sha256 },
+  };
+}
 globalThis.__celerisDispatch = async (domain, input, ctx) => {
   switch (domain) {
+    case "project_controller": return pc(input);
     case "cos_digest": return digest(ctx);
     case "execution_gate": return gate(input);
     case "host_selftest": return { host_api: hostVersion(), reply: await selftestEcho(ctx, input) };
@@ -303,6 +320,7 @@ fn write_fixtures(dir: &Path) {
         ("lane_rules/all-features.jsonl", lane),
         ("route_priority/cases.jsonl", route),
         ("execution_gate/cases.jsonl", gate),
+        ("project_controller/invariants.jsonl", PC_FIXTURE.to_owned()),
         ("cos_digest/pass_traces.jsonl", traces),
         ("cos_digest/cases.jsonl", cases),
     ] {
@@ -410,6 +428,7 @@ fn script_host_runner_match_passes_all_suites_and_activates() {
         ("lane_rules", LANE_ROWS),
         ("route_priority", ROUTE_ROWS),
         ("execution_gate", GATE_ROWS),
+        ("project_controller", PC_FIXTURE.lines().count()),
         ("cos_digest", DIGEST_ROWS),
     ] {
         let d = domain(&report, name);
@@ -449,7 +468,7 @@ fn script_host_runner_match_passes_all_suites_and_activates() {
     assert_eq!(out.status.code(), Some(0), "report: {report}");
     assert_eq!(report["selftest"]["ok"], true);
     let probed = report["probed"].as_array().expect("probed");
-    assert_eq!(probed.len(), 4);
+    assert_eq!(probed.len(), 5);
     assert!(
         probed.iter().any(|p| p["domain"] == "cos_digest"),
         "{report}"

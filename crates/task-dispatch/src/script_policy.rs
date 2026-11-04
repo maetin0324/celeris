@@ -150,6 +150,22 @@ pub trait PolicyScript: Send + Sync {
         })
     }
 
+    /// `project_controller` を評価する（ADR 2026-11-04-project-controller D7）。入力は `ProjectSnapshot`、出力は
+    /// `ProjectProposal` の生の JSON（検証は `task_core::project_proposal::parse_and_validate`）。参照実装は無い。
+    /// 既定は失敗（領域を持たない実装では controller は `wait(script_unavailable)` で止まり、起票も LLM も起こさない）。
+    fn project_controller(
+        &self,
+        _input: task_core::project_proposal::ProjectSnapshot,
+        _deadline: Duration,
+    ) -> PolicyFuture<'_> {
+        Box::pin(async {
+            Err(PolicyScriptError::new(
+                "unavailable",
+                "this script does not implement project_controller",
+            ))
+        })
+    }
+
     /// `cos_digest` の digest pass を 1 回走らせる（付記 S4-12）。TS は `call.sink` へ op を送って読み、
     /// 出力 `CosDigestPassOutput`（`{ "runs": [{ run_id, commands }] }`）を返す。
     fn cos_digest_pass(&self, call: CosDigestPassCall, deadline: Duration) -> PolicyFuture<'_>;

@@ -5,6 +5,7 @@
     "execution_gate": [],
     "host_selftest": ["selftest:echo_task"],
     "lane_rules": [],
+    "project_controller": [],
     "route_priority": []
   },
   "checkpoint_versions": []

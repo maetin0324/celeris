@@ -1283,7 +1283,7 @@ export type CompareError = {
   "message": string;
 };
 
-export type CompareOutcome = "match" | "mismatch" | "ts_error" | "invalid_output" | "unavailable" | "explained";
+export type CompareOutcome = "match" | "mismatch" | "ts_error" | "invalid_output" | "unavailable" | "explained" | "proposal_only";
 
 export type ConditionOp = "equals" | "min_chars" | "max_chars";
 
@@ -5736,7 +5736,7 @@ export type ScriptBehaviorChangeRevokeResult = {
   "revoked": boolean;
 };
 
-export type ScriptDomain = "lane_rules" | "route_priority" | "cos_digest" | "execution_gate";
+export type ScriptDomain = "lane_rules" | "route_priority" | "cos_digest" | "execution_gate" | "project_controller";
 
 export type ScriptDomainList = {
   "domains": Array<ScriptDomainView>;

@@ -13,6 +13,8 @@ use crate::dispatcher::cos_chat::launch::CosChatLaunchConfig;
 mod cursor;
 #[path = "project_wake_effects.rs"]
 mod effects;
+#[path = "project_cos.rs"]
+mod project_cos;
 use crate::project_controller::{
     Boundary, ProjectControllerSettings, ProjectDecider, ProjectDecision, ProjectEffect,
 };

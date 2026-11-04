@@ -652,7 +652,8 @@ impl Pass<'_> {
     }
 
     /// A3 の `escalate`: 人への判断の要求を notice 1 件で出す。source key に `question_key` を入れるので、
-    /// 同じ問いは 2 回目を作らない（既に聞いた問いを聞き直さない）。参照に notice の source key を返す。
+    /// 同じ問いは 2 回目を作らない（既に聞いた問いを聞き直さない）。同じ tx で phase を `blocked` にする。
+    /// 参照に notice の source key を返す。
     fn open_escalation(
         &self,
         project: &str,
@@ -666,7 +667,7 @@ impl Pass<'_> {
             "{summary}。controller の phase は blocked で、人が controller の mode を置き直すまで判断しません。問いの key: {question_key}"
         );
         self.store
-            .notice_record(&task_core::feed::NoticeEvent {
+            .project_controller_escalate(project, &task_core::feed::NoticeEvent {
                 source_key: source_key.clone(),
                 kind: task_core::feed::NoticeKind::BadNews,
                 group_key: format!("bad_news:project_controller:{project}"),
@@ -677,7 +678,7 @@ impl Pass<'_> {
                 target: None,
                 links: Vec::new(),
                 at: self.now,
-            })
+            }, self.now)
             .map_err(|e| e.to_string())?;
         Ok(source_key)
     }

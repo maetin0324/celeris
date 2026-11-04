@@ -265,3 +265,27 @@ impl SqliteStore {
         })
     }
 }
+
+impl SqliteStore {
+    /// A3 の `escalate`: 人への判断の要求の notice を記録し、同じ transaction で案件の phase を `blocked` にする
+    /// （人が mode を置き直すまで判断しない。notice の source key が既にあれば 1 件のまま）。phase が
+    /// `paused`・`cancelled` なら phase は変えない。notice の記録の結果（新規か重複か）を返す。
+    pub fn project_controller_escalate(
+        &self,
+        project_id: &str,
+        notice: &crate::feed::NoticeEvent,
+        now: OffsetDateTime,
+    ) -> Result<crate::feed::NoticeRecordOutcome, StoreError> {
+        let at = format_rfc3339(now)?;
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let outcome = crate::feed::record_in_tx(&tx, notice)?;
+        tx.execute(
+            "UPDATE project_controller_state SET phase = 'blocked', updated_at = ?2 \
+             WHERE project_id = ?1 AND phase NOT IN ('paused', 'cancelled')",
+            params![project_id, at],
+        )?;
+        tx.commit()?;
+        Ok(outcome)
+    }
+}

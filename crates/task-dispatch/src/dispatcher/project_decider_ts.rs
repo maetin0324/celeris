@@ -13,7 +13,7 @@
 //! - 判断の記録（`proposal_json`）には入力・snapshot の SHA-256・proposal・explanation（`rule_id`・`signals`）・
 //!   違反・失敗の分類・guard を残す（根拠つきの監査）。worker の報告・ログの文は snapshot に無く（I11）、
 //!   CoS 入力の本文にも転記しない（id と分類だけ）。
-//! - `escalate` は phase `blocked` にして、人が mode を置き直すまで判断しない（無限の再試行・質問の繰り返しなし）。
+//! - `escalate` は知らせと同じ tx で phase `blocked` にして、人が mode を置き直すまで判断しない（無限の再試行・質問の繰り返しなし）。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -507,7 +507,8 @@ pub fn to_decision(
                 category: category.clone(),
                 summary: summary.clone(),
             };
-            d.phase = ControllerPhase::Blocked;
+            // phase `blocked` は効果（notice）と同じ tx で入れる（tx1 で入れると効果の門が Hold にする）。
+            d.phase = ControllerPhase::Waiting;
         }
     }
     Ok(d)

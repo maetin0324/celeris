@@ -50,6 +50,42 @@ fn db() -> Db {
         updated_at: now,
     };
     store.project_create(&p).expect("project");
+    // A7: 人が案件を enabled にした操作の許可（API の PUT …/controller が同じ tx で作る行）。
+    {
+        use task_core::authority as a;
+        let now = OffsetDateTime::now_utc();
+        let project = p.id.to_string();
+        store
+            .write_tx::<_, task_core::StoreError, _>(|tx| {
+                task_core::SqliteStore::authority_grant_insert_tx(
+                    tx,
+                    &a::NewAuthorityGrant {
+                        id: "seed-launch-grant".into(),
+                        project_id: project.clone(),
+                        scope: a::GrantScope {
+                            kind: a::ScopeKind::Project,
+                            reference: project.clone(),
+                        },
+                        action_class: a::ActionClass::LaunchRoot,
+                        source: a::GrantSource {
+                            kind: a::SourceKind::HumanOperation,
+                            reference: format!("project.controller_put:{project}:1"),
+                        },
+                        granted_by: "human:test".into(),
+                        question_key: None,
+                        note: "試験の案件を enabled にした".into(),
+                        expires_at: (now + time::Duration::days(300))
+                            .format(&Rfc3339)
+                            .expect("expiry"),
+                        budget: 100,
+                    },
+                    now,
+                )?
+                .expect("grant");
+                Ok(())
+            })
+            .expect("seed grant");
+    }
     Db {
         _dir: dir,
         store,
@@ -358,6 +394,7 @@ async fn project_cos_ts_failure_classified() {
             "daemon",
             meta.as_deref(),
             0,
+            None,
             OffsetDateTime::now_utc(),
         )
         .expect("create");
@@ -443,7 +480,7 @@ async fn project_cos_ts_review_failed_retries_after_brief() {
             request_hash: "x".into(),
         };
         db.store
-            .project_controller_create_root(&task, &claim, "daemon", meta.as_deref(), 0, t0)
+            .project_controller_create_root(&task, &claim, "daemon", meta.as_deref(), 0, None, t0)
             .expect("create");
         task.id
     };

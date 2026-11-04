@@ -41,3 +41,6 @@ license: このリポジトリと同じ（外部の license は無い）
   危うい段）を、追加の規則に危うい段の 6 種（`billing`・`node_hours`・`production`・`external_publish`・`destructive`・`secrets_permissions`）を、
   §3 の (f) に `guarded_stages[].kind`（必須）と新しい拒否（403 `cos_human_required`・422 `cos_basis_plan_needs_human`）を足した。
   policy_version を 10 に上げた。config の `[cos.triage] policy_version` の既定も "10"。
+- 2026-11-04（ADR 2026-11-04-project-controller 付記 A7）: §2 の追加の規則に人の許可範囲（authority ledger）の行を足した
+  （聞く前に `authority.check` を読む、提案は `authority.grant_propose`、basis の refs の種類 `authority_grant` は `human_required` を
+  解除しない）。policy_version を 11 に上げた。config の `[cos.triage] policy_version` の既定も "11"。

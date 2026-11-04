@@ -490,16 +490,39 @@ impl Pass<'_> {
                 idempotency_key,
                 spec,
                 meta,
+                authority,
             } => match self.create_root(
                 &d.project_id,
                 &idempotency_key,
                 *spec,
                 meta.as_deref(),
                 d.human_epoch,
+                authority.as_ref(),
             ) {
                 Ok(RootCreate::Created(id) | RootCreate::Existing(id)) => Ok(Some(id)),
                 Ok(RootCreate::Refused) => {
                     self.admit(d);
+                    return;
+                }
+                Ok(RootCreate::AuthorityDenied(why)) => {
+                    // A7: 判断の後に許可が切れた。起票せず、次の評価で人に聞く（fail closed）。
+                    self.stats.halted += 1;
+                    self.finish(d, EffectState::Failed, Some(&format!("authority:{why}")));
+                    let wake = task_core::project_wake::NewProjectWake {
+                        project_id: d.project_id.clone(),
+                        wake_key: format!("authority-denied:{}", d.id),
+                        kind: task_core::project_wake::ProjectWakeKind::ExternalReleased,
+                        source_event_id: None,
+                        source_ref: Some(format!("authority:{why}")),
+                    };
+                    if let Err(error) = self.store.project_wake_ingest(
+                        std::slice::from_ref(&wake),
+                        None,
+                        0,
+                        self.now,
+                    ) {
+                        tracing::warn!(%error, decision = %d.id, "project controller: authority wake not saved");
+                    }
                     return;
                 }
                 Err(e) => Err(e),
@@ -705,6 +728,7 @@ impl Pass<'_> {
         mut spec: NewTaskSpec,
         meta: Option<&str>,
         decision_human_epoch: i64,
+        authority: Option<&task_core::authority::GrantScope>,
     ) -> Result<RootCreate, String> {
         let project_id = project
             .parse()
@@ -737,6 +761,7 @@ impl Pass<'_> {
                 task_core::DAEMON_ACTOR,
                 meta,
                 decision_human_epoch,
+                authority,
                 self.now,
             )
             .map_err(|e| e.to_string())

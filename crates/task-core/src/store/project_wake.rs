@@ -196,6 +196,8 @@ pub enum RootCreate {
     Existing(String),
     /// 効果の門が閉じていた（人の操作の後の古い判断、`off` など）。何も書いていない。
     Refused,
+    /// A7: 判断の後に許可が切れた（取り消し・期限・予算）。root は作らず、拒否の監査だけを書いた。
+    AuthorityDenied(String),
 }
 
 impl SqliteStore {
@@ -811,6 +813,7 @@ impl SqliteStore {
         created_by: &str,
         result_json: Option<&str>,
         decision_human_epoch: i64,
+        authority: Option<&crate::authority::GrantScope>,
         now: OffsetDateTime,
     ) -> Result<RootCreate, StoreError> {
         let at = format_rfc3339(now)?;
@@ -827,6 +830,33 @@ impl SqliteStore {
             .ok_or_else(|| StoreError::Invalid("controller root without a project".into()))?;
         if !effect_gate_open_tx(&tx, &project_id.to_string(), decision_human_epoch)? {
             return Ok(RootCreate::Refused);
+        }
+        if let Some(scope) = authority {
+            let row = crate::authority::NewAuthorityAudit {
+                project_id: project_id.to_string(),
+                action_class: crate::authority::ActionClass::LaunchRoot
+                    .as_str()
+                    .to_owned(),
+                scope: scope.clone(),
+                verdict: crate::authority::AuthorityVerdict::denied("pending"),
+                suggestion: serde_json::json!({
+                    "by": "project_controller",
+                    "action": "launch_root",
+                    "idempotency_key": claim.key,
+                }),
+                actual_actor: created_by.to_owned(),
+                human_decision_ref: None,
+                decision_id: None,
+                dedupe_key: format!("pc-use:{}", claim.key),
+                outcome_state: "applied",
+                observed_outcome: Some(serde_json::json!({"task_id": task.id.to_string()})),
+            };
+            let (verdict, _) = Self::authority_use_tx(&tx, &row, now)?;
+            if !verdict.allow {
+                let why = verdict.reason;
+                tx.commit()?;
+                return Ok(RootCreate::AuthorityDenied(why));
+            }
         }
         Self::create_task_tx(&tx, task, None, created_by, vec![])?;
         Self::idempotency_record_tx(&tx, claim, &task.id.to_string(), result_json, &at)?;

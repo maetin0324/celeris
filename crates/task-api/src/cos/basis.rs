@@ -81,6 +81,9 @@ pub enum BasisRefKind {
     Message,
     /// The reviewer run whose verdict failed the task (the id in `reviewer(<id>): …`).
     Review,
+    /// ADR 2026-11-04-project-controller A7: a live grant of the authority ledger. It is evidence
+    /// only: it does not lift `human_required` and does not stand in for the category's checks.
+    AuthorityGrant,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -161,6 +164,7 @@ pub(crate) const BASIS_PLAN_CHURN: &str = "cos_basis_plan_churn";
 pub(crate) const BASIS_PLAN_NEEDS_HUMAN: &str = "cos_basis_plan_needs_human";
 pub(crate) const BASIS_JOB_NOT_QUEUED: &str = "cos_basis_job_not_queued";
 pub(crate) const BASIS_EXTEND_LIMIT: &str = "cos_basis_extend_limit";
+pub(crate) const BASIS_AUTHORITY_GRANT: &str = "cos_basis_authority_grant_invalid";
 
 fn problem(code: &'static str, detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::UNPROCESSABLE_ENTITY, code, detail)
@@ -223,6 +227,31 @@ fn normalized(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// A7: a cited grant must exist and still be live (not revoked, not expired, budget left, source readable).
+fn live_grant(store: &SqliteStore, id: &str) -> Result<(), ApiProblem> {
+    let dead = |why: &str| {
+        problem(
+            BASIS_AUTHORITY_GRANT,
+            format!("grant {id} is not live: {why}"),
+        )
+    };
+    let grant = store
+        .authority_grant(id)
+        .map_err(store_problem)?
+        .ok_or_else(|| dead("not found"))?;
+    let verdict = store.authority_check(
+        &grant.project_id,
+        grant.action_class.as_str(),
+        &grant.scope,
+        time::OffsetDateTime::now_utc(),
+    );
+    if verdict.allow {
+        Ok(())
+    } else {
+        Err(dead(&verdict.reason))
+    }
+}
+
 /// D1/D2: check `basis` against the answer target. Every refusal is 422 with a `cos_basis_*` code.
 pub(crate) fn validate(
     store: &SqliteStore,
@@ -243,6 +272,9 @@ pub(crate) fn validate(
                 "basis.refs[] {:?} {} is listed twice",
                 r.kind, r.id
             )));
+        }
+        if r.kind == BasisRefKind::AuthorityGrant {
+            live_grant(store, r.id.trim())?;
         }
     }
     let category = basis.category;

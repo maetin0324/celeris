@@ -42,6 +42,56 @@ pub struct ControllerPut {
     /// 今の `revision`（行が無ければ 0）。違えば 409 `project_controller_revision_conflict`。
     pub expected_revision: i64,
     pub reason: String,
+    /// A7: `enabled` に上げるときの `launch_root` の許可の期限（RFC3339）。無ければ 30 日後。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_grant_expires_at: Option<String>,
+    /// A7: 同じ許可の回数。無ければ 10。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_grant_budget: Option<i64>,
+}
+
+/// A7: 人が `enabled` に上げる操作は、その理由を根拠に `launch_root` の許可を 1 件作る（同じ tx。前の同種の許可は取り消す）。
+fn enable_grant_tx(
+    tx: &rusqlite::Transaction<'_>,
+    project: &str,
+    revision: i64,
+    body: &ControllerPut,
+    by: &str,
+    at: OffsetDateTime,
+) -> Result<(), ApiProblem> {
+    use task_core::authority as a;
+    SqliteStore::authority_supersede_operation_grants_tx(tx, project, by, at)
+        .map_err(store_problem)?;
+    let expires_at = match &body.launch_grant_expires_at {
+        Some(v) => v.clone(),
+        None => (at + time::Duration::days(a::DEFAULT_LAUNCH_GRANT_DAYS))
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|e| ApiProblem::internal(e.to_string()))?,
+    };
+    let new = a::NewAuthorityGrant {
+        id: ulid::Ulid::new().to_string(),
+        project_id: project.to_owned(),
+        scope: a::GrantScope {
+            kind: a::ScopeKind::Project,
+            reference: project.to_owned(),
+        },
+        action_class: a::ActionClass::LaunchRoot,
+        source: a::GrantSource {
+            kind: a::SourceKind::HumanOperation,
+            reference: format!("project.controller_put:{project}:{revision}"),
+        },
+        granted_by: by.to_owned(),
+        question_key: None,
+        note: body.reason.clone(),
+        expires_at,
+        budget: body
+            .launch_grant_budget
+            .unwrap_or(a::DEFAULT_LAUNCH_GRANT_BUDGET),
+    };
+    SqliteStore::authority_grant_insert_tx(tx, &new, at)
+        .map_err(store_problem)?
+        .map_err(|r| ApiProblem::new(StatusCode::UNPROCESSABLE_ENTITY, r.code, r.detail))?;
+    Ok(())
 }
 
 /// `POST …/controller/wake` の本文。
@@ -217,16 +267,29 @@ async fn put_controller(
                 .map_err(store_problem)?
                 .map_or(ControllerMode::Off, |s| s.mode);
             check_mode_change(&cfg, &project, current, body.mode, human)?;
-            let change = store
-                .project_controller_set_mode(
+            let raises_to_enabled =
+                body.mode == ControllerMode::Enabled && current != ControllerMode::Enabled;
+            store.write_tx::<_, ApiProblem, _>(|tx| {
+                let at = now();
+                let change = SqliteStore::project_controller_set_mode_tx(
+                    tx,
                     &project,
                     body.mode,
                     Some(body.expected_revision),
                     &by,
-                    now(),
+                    at,
                 )
                 .map_err(store_problem)?;
-            mode_outcome(change)?;
+                let revision = match &change {
+                    ModeChange::Changed(state) => state.revision,
+                    ModeChange::Stale { current } => *current,
+                };
+                mode_outcome(change)?;
+                if raises_to_enabled {
+                    enable_grant_tx(tx, &project, revision, &body, &by, at)?;
+                }
+                Ok(())
+            })?;
             controller_view(store, &project)
         })
         .await?;

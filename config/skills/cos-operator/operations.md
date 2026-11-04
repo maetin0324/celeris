@@ -83,6 +83,9 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 案件の自動運営を止める | `PUT /api/v1/projects/<id>/controller` | project.controller_put | `{"mode":"off","expected_revision":<今の revision>,"reason":"…"}`。CoS は `off` だけ（上げると 403）。revision 違いは 409 |
 | 案件の外部待ちの解除を知らせる | `POST /api/v1/projects/<id>/controller/wake` | project.controller_wake | `{"external_ref":"…","note":"…","idempotency_key":"…"}`（`:` は書けない）。同じ key は 1 件 |
 | 案件の Roadmap の版を提案する | `POST /api/v1/projects/<id>/roadmap/proposals` | project.roadmap_propose | `{"base_version":<今の approved の版か null>,"change_reason":"…","outcomes":[{"id":"o1","title":"…","acceptance":["…"],"priority":1,"depends_on":[],"dropped":false}]}`。版は進まない（決めるのは人）。approved の id は消せず `dropped` で取り下げる。土台違いは 409 |
+| 許可の範囲を確かめる | `POST /api/v1/projects/<id>/authority/check` | authority.check | `{"action_class":"production","scope":{"kind":"project","ref":"<案件 id>"},"question_key":"…"}`。`allow`・`reason`・`source`（人の発言の id）・`source_excerpt`・`answered`（その問いへの人の答え）。人に許可を聞く前に必ず読み、答えがあれば聞き直さず根拠を示す |
+| 許可を提案する | `POST /api/v1/projects/<id>/authority/proposals` | authority.grant_propose | `{"question_key":"…","scope":{…},"action_class":"…","source":{"kind":"human_message","ref":"<人の発言の id>"},"expires_at":"…","budget":n,"note":"…"}`。根拠は人の発言だけ。同じ key は 1 回だけ通知、答えの後・既に許可がある時は 409。許可そのものは人だけが作る |
+| 許可を取り消す | `POST /api/v1/projects/<id>/authority/grants/<g>/revoke` | authority.grant_revoke | `{"reason":"…"}`（省略可） |
 | 永続の認可の追加 | `POST /api/v1/standing-rules` | standing_rule.create | `{"rule":"…","node_id":"…"}`（node_id 省略で全員向け）。人の決定で CoS にも許可 |
 | 永続の認可の削除 | `DELETE /api/v1/standing-rules/<id>` | standing_rule.delete | body なし。無ければ 404 |
 | 報告を既読化（旧入口） | `POST /api/v1/reports/read` | report.read | `{"ids":["…"]}`。対応する通知も既読。新しくは notification.read を使う |
@@ -170,6 +173,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | `secret_operations` | `/secrets/<id>`（PUT・DELETE）、`/llm/sources/<source_id>/accounts/<account_id>/login*`、`/clusters/<id>/connect*` | 秘密の値を扱う（取消・削除も含め全て除外） |
 | `browser_credential_attestation` | `/browser/identities*`、`/browser/trusted-devices*`、`/tasks/<id>/browser/waits/<w>/{credential,decision,registered,revoke}`、`/tasks/<id>/browser/live/<run>/<session>/{check,grant,read}` | credential・封緘 state・receipt・owner attestation／信頼端末を扱う |
 | `human_instruction_relay` | `POST /chat/threads/{t}/relays` | 人の指示の取り次ぎは外部主体専用。CoS は指示を作れない |
+| `human_only`（authority） | `POST /projects/<id>/authority/grants`、`…/authority/proposals/<p>/dismiss`、`…/authority/audit/<a>/outcome` | 許可を作る・提案を断る・状態不明の結果を閉じるのは人だけ（ADR 2026-11-04-project-controller A7） |
 | `console_instruction_chain` | `POST /console/instruct` | 別の指示経路へ入り監査の鎖が二重になる |
 | `recursive_cos` | `/cos/operations`・`/cos/operations/<o>/override`・`/cos/inbox/<i>/resolve`・`/cos/threads/<t>/checkpoint` | CoS 制御 API の再帰。受信箱の解決は envelope の外で直接呼ぶ |
 | `removed_by_adr_0079` | `POST /plans`、`/milestones/*`、`/projects/<id>/{milestones,plan,project-plan/<v>/decide}` | 撤去済みの 410 の互換入口 |

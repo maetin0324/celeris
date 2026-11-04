@@ -225,6 +225,7 @@ fn create_root(project: &Project) -> DecideFn {
                 idempotency_key: key.clone(),
                 spec: Box::new(spec_json("次の root")),
                 meta: None,
+                authority: None,
             },
             next_wake_after_secs: None,
             phase: ControllerPhase::Active,

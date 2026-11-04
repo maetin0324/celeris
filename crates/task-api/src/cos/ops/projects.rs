@@ -36,6 +36,21 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/projects/{id}/roadmap/proposals",
         "project.roadmap_propose",
     ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/authority/grants/{g}/revoke",
+        "authority.grant_revoke",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/authority/check",
+        "authority.check",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/authority/proposals",
+        "authority.grant_propose",
+    ),
     ("POST", "/api/v1/standing-rules", "standing_rule.create"),
     (
         "DELETE",
@@ -69,6 +84,21 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
         "POST",
         "/api/v1/projects/{id}/roadmap/outcomes/{oid}/status",
         "human_only: ADR 2026-11-04-project-controller 付記 A5。Outcome の状態は人と controller の mark_milestone の適用（Rust が evidence を確かめる）だけが記録する。CoS の自己申告では進めない。",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/authority/grants",
+        "human_only: ADR 2026-11-04-project-controller D8。許可を作るのは人だけ。CoS は人の発言を引いた提案（authority.grant_propose）まで。",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/authority/proposals/{p}/dismiss",
+        "human_only: ADR 2026-11-04-project-controller A7。提案を断るのは人だけ。",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/authority/audit/{a}/outcome",
+        "human_only: ADR 2026-11-04-project-controller A7。状態不明の結果を確かめて閉じるのは人だけ。",
     ),
     (
         "PATCH",
@@ -171,6 +201,27 @@ pub(crate) fn dispatch(
                 .map_err(|problem| audit.reject(store, "project", &raw_id, problem))?;
             let input = serde_json::from_value(body).map_err(decode)?;
             crate::handlers::roadmap::cos_roadmap_propose(store, id, input, audit)
+        }
+        "authority.grant_revoke" | "authority.check" | "authority.grant_propose" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = crate::handlers::parse_project_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "project", &raw_id, problem))?;
+            match matched.action {
+                "authority.grant_revoke" => {
+                    let grant = path.split('/').nth(7).unwrap_or_default();
+                    let _: crate::handlers::authority::GrantRevoke =
+                        decode_optional(body).map_err(decode)?;
+                    crate::handlers::authority::cos_revoke(store, id, grant, audit)
+                }
+                "authority.check" => {
+                    let input = serde_json::from_value(body).map_err(decode)?;
+                    crate::handlers::authority::cos_check(store, id, input, audit)
+                }
+                _ => {
+                    let input = serde_json::from_value(body).map_err(decode)?;
+                    crate::handlers::authority::cos_propose(store, id, input, audit)
+                }
+            }
         }
         "project.cancel" | "project.pause" | "project.resume" | "project.archive"
         | "project.unarchive" => {

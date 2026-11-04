@@ -21,6 +21,7 @@ use crate::state::ApiState;
 use crate::types::ValidationError;
 
 pub(crate) mod accounts;
+pub(crate) mod authority;
 pub(crate) mod clusters;
 mod config_fields;
 mod idempotency;
@@ -181,6 +182,7 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(project_controller::routes())
         // 付記 A5: 案件の Roadmap（版付きの途中目標。旧 milestones とは別の名詞）。
         .merge(roadmap::routes())
+        .merge(authority::routes())
         .route("/api/v1/projects/{id}/milestones", post(create_milestone))
         // ADR-0043 D1（Phase 52）: 案件のリポジトリ。実装は `crate::repos`。
         .merge(crate::repos::routes())

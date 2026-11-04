@@ -19,6 +19,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use task_core::authority::{
+    ActionClass, AuthorityVerdict, GrantScope, NewAuthorityAudit, ScopeKind,
+};
 use task_core::project_proposal::{
     self as pp, ProjectAction, ProjectProposal, ProjectSnapshot, ProposalViolation,
     SnapshotController, SnapshotDecision, SnapshotLimits, SnapshotWake, WaitPhase,
@@ -43,6 +46,8 @@ pub const PROJECT_CONTROLLER_DEADLINE: Duration = Duration::from_secs(2);
 const DECISION_HISTORY: usize = 64;
 /// CoS 入力の本文の上限（文字）。
 const COS_INPUT_MAX: usize = 4000;
+/// A7: 答えのある問いを聞き直さず待つときの次の評価までの秒。
+const ANSWERED_RECHECK_SECS: u64 = 3600;
 
 /// 失敗の分類（ADR §A3 の `Classification`）。TS の `classifyFailure` が案を出し、判断の記録に残る。
 pub const CLASSIFICATIONS: [&str; 7] = [
@@ -211,6 +216,9 @@ impl ProjectDecider for TsProjectDecider {
         };
         let (proposal, guard) = runaway_guard(&snapshot, proposal);
         rec["guard"] = json!(guard);
+        let (proposal, launch_scope, authority) =
+            authority_guard(&store, input.mode, &input.project_id, proposal, now);
+        rec["authority"] = authority;
         rec["classification"] = json!(classification_of(&proposal));
         rec["proposal"] = serde_json::to_value(&proposal).unwrap_or(Value::Null);
         // replan の対象の root の controller key（同じ root の replan を繰り返さないために TS が読む）。
@@ -225,7 +233,10 @@ impl ProjectDecider for TsProjectDecider {
                     .clone()
             }));
         }
-        let decision = to_decision(&snapshot, &proposal)?;
+        let mut decision = to_decision(&snapshot, &proposal)?;
+        if let ProjectEffect::CreateRoot { authority, .. } = &mut decision.effect {
+            *authority = launch_scope;
+        }
         self.record = Some(rec.to_string());
         Ok(decision)
     }
@@ -452,6 +463,155 @@ pub fn runaway_guard(
     (p, Some("no_progress".into()))
 }
 
+/// A7 の範囲: 途中目標が 1 つの root はその途中目標、それ以外は案件全体（案件の許可だけが含む）。
+fn launch_scope(project: &str, outcome_ids: &[String]) -> GrantScope {
+    match outcome_ids {
+        [only] => GrantScope {
+            kind: ScopeKind::Outcome,
+            reference: only.clone(),
+        },
+        _ => GrantScope {
+            kind: ScopeKind::Project,
+            reference: project.to_owned(),
+        },
+    }
+}
+
+/// A7 の Rust の門（I9）。TS が何を返しても、次の 2 つを Rust が判定する。
+/// - `launch_root`: `enabled` では有効な `launch_root` の許可を要する。無ければ人に聞く（`escalate`）。問いの key は許可の
+///   世代を含むので、同じ不足で 2 回聞かず、許可が切れた後は新しい問いになる。`dry_run`・`shadow` は判定を記録するだけ。
+/// - `escalate`: 同じ問いに人の答え（有効な許可・断られた提案）があれば聞き直さず、根拠を記録して待つ。
+///
+/// 戻り値は proposal・root の作成の tx で使う許可の範囲・判断の記録。
+fn authority_guard(
+    store: &SqliteStore,
+    mode: ControllerMode,
+    project: &str,
+    proposal: ProjectProposal,
+    now: OffsetDateTime,
+) -> (ProjectProposal, Option<GrantScope>, Value) {
+    let mut p = proposal;
+    match &p.action {
+        ProjectAction::LaunchRoot { root } => {
+            let scope = launch_scope(project, &root.outcome_ids);
+            let class = ActionClass::LaunchRoot;
+            let verdict = store.authority_check(project, class.as_str(), &scope, now);
+            let rec = json!({"action_class": class, "scope": scope, "verdict": verdict});
+            if mode != ControllerMode::Enabled {
+                return (p, None, rec);
+            }
+            if verdict.allow {
+                return (p, Some(scope), rec);
+            }
+            // 読めなければ世代 0 として聞く（許可側に倒さない）。
+            let generation = store
+                .authority_grant_generation(project, class)
+                .unwrap_or(0);
+            let question_key = format!("authority:launch_root:g{generation}");
+            let suggested = root.key.clone();
+            let row = NewAuthorityAudit {
+                project_id: project.to_owned(),
+                action_class: class.as_str().to_owned(),
+                scope,
+                verdict: verdict.clone(),
+                suggestion: json!({"by": "project_controller", "action": "launch_root", "root_key": suggested,
+                                   "rule_id": p.explanation.rule_id}),
+                actual_actor: task_core::DAEMON_ACTOR.to_owned(),
+                human_decision_ref: None,
+                decision_id: None,
+                dedupe_key: format!("pc-deny:{project}:{question_key}"),
+                outcome_state: "refused",
+                observed_outcome: Some(
+                    json!({"refused": verdict.reason, "question_key": question_key}),
+                ),
+            };
+            if let Err(error) = store.authority_audit_record(&row, now) {
+                tracing::warn!(%error, project, "authority audit not saved");
+            }
+            p.explanation.rule_id = task_core::store::AUTHORITY_REQUIRED_RULE.into();
+            p.explanation.signals.truncate(14);
+            p.explanation.signals.push(pp::ProposalSignal {
+                name: "authority".into(),
+                detail: verdict.reason.clone(),
+            });
+            p.action = ProjectAction::Escalate {
+                category: "standing_permission".into(),
+                question_key,
+                summary: format!(
+                    "案件の controller が次の root（{suggested}）を起票する許可がありません（{}）。案件の画面の「許可」で期限と回数を決めてください",
+                    verdict.reason
+                ),
+                options: Vec::new(),
+                evidence_refs: Vec::new(),
+            };
+            (p, None, rec)
+        }
+        ProjectAction::Escalate { question_key, .. } => {
+            let question_key = question_key.clone();
+            let answered = store
+                .authority_answered(project, &question_key, now)
+                .ok()
+                .flatten();
+            let dismissed = store
+                .authority_question_dismissed(project, &question_key)
+                .ok()
+                .flatten();
+            let (basis, class, scope, decision_ref, why) = if let Some(g) = &answered {
+                (
+                    json!({"answer": "granted", "grant_id": g.id, "source": g.source}),
+                    g.action_class,
+                    g.scope.clone(),
+                    format!("authority_grant:{}", g.id),
+                    "question_answered",
+                )
+            } else if let Some(d) = &dismissed {
+                (
+                    json!({"answer": "dismissed", "proposal_id": d.id, "resolved_by": d.resolved_by, "source": d.source}),
+                    d.action_class,
+                    d.scope.clone(),
+                    format!("authority_proposal:{}", d.id),
+                    "question_dismissed",
+                )
+            } else {
+                return (p, None, Value::Null);
+            };
+            let mut verdict = AuthorityVerdict::denied(why);
+            verdict.allow = answered.is_some();
+            let row = NewAuthorityAudit {
+                project_id: project.to_owned(),
+                action_class: class.as_str().to_owned(),
+                scope,
+                verdict,
+                suggestion: json!({"by": "project_controller", "action": "escalate", "question_key": question_key}),
+                actual_actor: task_core::DAEMON_ACTOR.to_owned(),
+                human_decision_ref: Some(decision_ref),
+                decision_id: None,
+                dedupe_key: format!("pc-answered:{project}:{question_key}"),
+                outcome_state: "applied",
+                observed_outcome: Some(
+                    json!({"question_suppressed": question_key, "basis": basis}),
+                ),
+            };
+            if let Err(error) = store.authority_audit_record(&row, now) {
+                tracing::warn!(%error, project, "authority audit not saved");
+            }
+            p.explanation.rule_id = "pc/authority-answered".into();
+            p.explanation.signals.truncate(14);
+            p.explanation.signals.push(pp::ProposalSignal {
+                name: "authority".into(),
+                detail: why.into(),
+            });
+            p.action = ProjectAction::Wait {
+                waiting_on: Vec::new(),
+                next_wake_after_secs: ANSWERED_RECHECK_SECS,
+                phase: WaitPhase::Waiting,
+            };
+            (p, None, json!({"answered": basis}))
+        }
+        _ => (p, None, Value::Null),
+    }
+}
+
 /// 検証済みの proposal を A1 の効果にする（D12 の表）。
 pub fn to_decision(
     snapshot: &ProjectSnapshot,
@@ -511,6 +671,7 @@ pub fn to_decision(
                 idempotency_key: pp::root_idempotency_key(&snapshot.project.id, &root.key),
                 spec: Box::new(spec),
                 meta: serde_json::to_string(&meta).ok(),
+                authority: None,
             };
         }
         ProjectAction::Escalate {

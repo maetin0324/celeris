@@ -26,6 +26,46 @@ use time::format_description::well_known::Rfc3339;
 use crate::OpsError;
 use crate::add::{CriterionSpec, NewTaskSpec};
 
+/// A7: snapshot の `authority`。判定は Rust が持つので、TS には結果と許可の種類・id だけを渡す
+/// （根拠の本文は入れない。I11）。TS はこれで問いを省けるが、起票の可否は Rust がもう一度判定する。
+pub fn authority_section(
+    store: &SqliteStore,
+    project: &str,
+    now: OffsetDateTime,
+) -> serde_json::Value {
+    use task_core::authority::{ActionClass, GrantScope, ScopeKind, grant_denial};
+    let launch_root = store.authority_check(
+        project,
+        ActionClass::LaunchRoot.as_str(),
+        &GrantScope {
+            kind: ScopeKind::Project,
+            reference: project.to_owned(),
+        },
+        now,
+    );
+    let grants: Vec<serde_json::Value> = store
+        .authority_grants(project)
+        .unwrap_or_default()
+        .iter()
+        .filter(|g| grant_denial(g, now).is_none())
+        .map(|g| {
+            serde_json::json!({
+                "id": g.id,
+                "action_class": g.action_class,
+                "scope": g.scope,
+                "source_kind": g.source.kind,
+                "question_key": g.question_key,
+                "expires_at": g.expires_at,
+                "budget_remaining": g.budget - g.consumed,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "launch_root": {"allow": launch_root.allow, "reason": launch_root.reason, "grant_id": launch_root.grant_id},
+        "grants": grants,
+    })
+}
+
 /// 呼び出し側（A1 の tick・試験）が渡す controller の値。
 #[derive(Debug, Clone)]
 pub struct SnapshotContext {
@@ -200,6 +240,7 @@ pub fn build(
     let brief = store
         .project_brief_get(project_id)?
         .and_then(|b| serde_json::to_value(b).ok());
+    let authority = authority_section(store, &pid, ctx.now);
     let (mut outcomes, mut outcomes_invalid) = match parse_outcomes(&project.request) {
         Ok(o) => (o, false),
         Err(_) => (Vec::new(), true),
@@ -264,7 +305,7 @@ pub fn build(
         controller: ctx.controller,
         limits: ctx.limits,
         roadmap,
-        authority: None,
+        authority: Some(authority),
     };
     while serde_json::to_vec(&snapshot).map_or(0, |v| v.len()) > pp::SNAPSHOT_MAX_BYTES {
         let Some(i) = snapshot.roots.iter().position(|r| r.status == "done") else {

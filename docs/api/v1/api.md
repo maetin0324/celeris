@@ -445,6 +445,13 @@ token_file = "api.token"
 | 77h | POST | `/projects/{id}/roadmap/proposals` | 版の提案 `{base_version, change_reason, outcomes[]}`（§3.48c。**管理系**。今の版は変えない。土台違いは 409 `roadmap_version_conflict`、approved の id を消すと 422 `roadmap_outcome_id_removed`。CoS は `project.roadmap_propose`） | 201 `RoadmapVersion` | store `project_roadmap_versions` |
 | 77i | POST | `/projects/{id}/roadmap/proposals/{version}/decide` | 人の決定 `{decision: approve\|reject, note}`（§3.48c。**人の token だけ**、他は 403 `roadmap_decide_requires_human`。approve で前の版は `superseded`。CoS は EXCLUDED `human_only`） | 200 `RoadmapVersion` | store `project_roadmap_versions` |
 | 77j | POST | `/projects/{id}/roadmap/outcomes/{oid}/status` | Outcome の状態の記録 `{status: open\|in_progress\|reached, evidence_refs, reason}`（§3.48c。**人の token だけ**（403 `roadmap_status_requires_human`）。`reached` は evidence の root を Rust が確かめる（422 `roadmap_evidence_*`）。`dropped` は版で付ける（422 `roadmap_drop_needs_version`）。CoS は EXCLUDED `human_only`） | 200 `Roadmap` | store `project_roadmap_outcome_events` |
+| 77k | GET | `/projects/{id}/authority` | 人の許可範囲（authority ledger。ADR 2026-11-04-project-controller A7。§3.48d）: 許可（`state` と根拠の抜粋つき）・提案・監査（suggestion・observed outcome・actual actor・human decision） | 200 `AuthorityView` | store `authority_grants`・`authority_proposals`・`authority_audit` |
+| 77l | POST | `/projects/{id}/authority/grants` | 許可を作る `{scope, action_class, source, expires_at, budget, note, question_key?, proposal_id?}`（§3.48d。**人の token だけ**。根拠は人の発言・人の決定・人の承認・永続の認可。それ以外・`human_required`・期限や範囲の不正は 422） | 201 `AuthorityGrantView` | store `authority_grants` |
+| 77m | POST | `/projects/{id}/authority/grants/{g}/revoke` | 許可を取り消す（**管理系**。誰でも。CoS は `authority.grant_revoke`） | 200 `AuthorityGrantView` | store `authority_grants` |
+| 77n | POST | `/projects/{id}/authority/check` | 読み取りの判定 `{action_class, scope, question_key?}` → `{allow, grant_id, reason, source, source_excerpt, answered}`（**管理系**。不明な分類・範囲・根拠・前の結果は 200 の拒否。CoS は `authority.check`） | 200 `AuthorityCheckResult` | store（読み取り） |
+| 77o | POST | `/projects/{id}/authority/proposals` | 人の発言を引いた許可の提案（**管理系**。CoS は `authority.grant_propose`。同じ `question_key` は 1 回だけ通知し、答えの後・既に許可がある時は 409） | 200 `ProposalResult` | store `authority_proposals`・notice |
+| 77p | POST | `/projects/{id}/authority/proposals/{p}/dismiss` | 提案を断る（**人の token だけ**。以後同じ問いは 409） | 200 `AuthorityProposal` | store `authority_proposals` |
+| 77q | POST | `/projects/{id}/authority/audit/{a}/outcome` | 結果が不明な使用を人が確かめて閉じる `{state: applied\|failed, note}`（**人の token だけ**。`failed` は予算を戻す） | 200 `{audit_id, state}` | store `authority_audit` |
 | 78 | POST | `/milestones/{id}/cancel` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: 途中目標を中止し、属する非終端タスクを連鎖で `cancelled` にする（**管理系**） | 410 `Problem`（旧 200 `MilestoneLifecycle`） | `task_ops::lifecycle` |
 | 79 | POST | `/milestones/{id}/pause` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: 途中目標を一時停止する（**管理系**） | 410 `Problem`（旧 200 `MilestoneLifecycle`） | `task_ops::lifecycle` |
 | 80 | POST | `/milestones/{id}/resume` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: 一時停止を解く（**管理系**） | 410 `Problem`（旧 200 `MilestoneLifecycle`） | `task_ops::lifecycle` |
@@ -3652,6 +3659,9 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | projects | `PUT /projects/{id}/controller` | `project.controller_put`（CoS は `mode: off` だけ。上げると 403 `project_controller_mode_requires_human`） |
 | projects | `POST /projects/{id}/controller/wake` | `project.controller_wake`（外部待ちの解除の wake。同じ key は 1 件） |
 | projects | `POST /projects/{id}/roadmap/proposals` | `project.roadmap_propose`（Roadmap の版の提案。版は進まない。決定と Outcome の状態は人だけ） |
+| projects | `POST /projects/{id}/authority/grants/{g}/revoke` | `authority.grant_revoke`（誰でも取り消せる） |
+| projects | `POST /projects/{id}/authority/check` | `authority.check`（読み取りの判定。結果は `result`） |
+| projects | `POST /projects/{id}/authority/proposals` | `authority.grant_propose`（人の発言を引いた提案。許可そのものは人だけが作る） |
 | projects | `POST /standing-rules` | `standing_rule.create`（人の決定で CoS にも許可） |
 | projects | `DELETE /standing-rules/{id}` | `standing_rule.delete` |
 | projects | `POST /reports/read` | `report.read`（対応する通知も同じ transaction で既読） |

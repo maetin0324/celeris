@@ -1,12 +1,12 @@
 ---
 name: cos-inbox-triage
-description: Celeris の受信箱の一次対応 policy（policy_version 10）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、定型の代答 7 種類とその根拠（basis）の形、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
+description: Celeris の受信箱の一次対応 policy（policy_version 11）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、定型の代答 7 種類とその根拠（basis）の形、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
 metadata:
   author: celeris
-  version: "10"
+  version: "11"
 ---
 
-# CoS inbox triage（policy_version "10"）
+# CoS inbox triage（policy_version "11"）
 
 受信箱に届く待ちは全て最初に CoS（あなた）に渡る。あなたは各 item について
 **answer / observe / escalate** のどれかを選び、`POST /api/v1/cos/inbox/{i}/resolve` で 1 件ずつ記録する。
@@ -47,6 +47,13 @@ metadata:
 - 表の上の行ほど強い。1 つでも escalate の行に当たれば escalate。
 - 括弧の名前は config の `[cos.triage] human_required` の分類（ADR 2026-10-28-cos-routine-delegated-answers D3）。
 - 対象に人が設定した `human_required` と API の既存認可は、この skill でも config でも解除できない。
+- 人の許可範囲（authority ledger、ADR 2026-11-04-project-controller A7）: controller が `off` でない案件では、本番の変更・
+  外部公開・不可逆な操作・API の認可・結果を確かめられない外部の効果は、人の発言の引用（`instructed_by`）か有効な許可が無ければ
+  API が 422 で断る（`production_requires_human` など）。許可は人だけが作る。人に許可を聞く前に `authority.check`（`question_key` つき）を
+  読み、`answered` か `allow: true` なら聞き直さず、その `source`（人の発言の id）と抜粋を返事に書く。足りなければ人の発言を引いて
+  `authority.grant_propose` で提案する（同じ `question_key` は 1 回だけ通知され、人の答えの後は 409 で断られる）。
+  basis の `refs` に `{"kind":"authority_grant","id":"<許可の id>"}` を足せるが、これは根拠の 1 つで、`human_required` を解除せず、
+  (a)〜(g) の条件の代わりにもならない（失効した許可は 422 `cos_basis_authority_grant_invalid`）。
 - 計画の承認（`plan_gate`）は、計画におかしなところが無ければ §3 の (f) `plan_conforms` で `approve` する
   （ADR 2026-10-30-cos-plan-conforms-approve、付記 2026-10-30-plan-conforms-human-guards）。危うい段は次の 6 種で、
   課金・有料試行（`billing`）、node-h（`node_hours`）、本番（daemon・systemd・release・本番 config）の変更（`production`）、

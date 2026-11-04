@@ -158,8 +158,47 @@ fn pc_project(store: &SqliteStore, mode: Option<ControllerMode>) -> Project {
         store
             .project_controller_set_mode(&p.id.to_string(), mode, None, "human:test", now)
             .unwrap();
+        if mode == ControllerMode::Enabled {
+            seed_launch_grant(store, &p.id.to_string(), now);
+        }
     }
     p
+}
+
+/// 人が `enabled` にした操作の許可（API の `PUT …/controller` が同じ tx で作る行。A7）。
+fn seed_launch_grant(store: &SqliteStore, project: &str, now: OffsetDateTime) {
+    use task_core::authority as a;
+    store
+        .write_tx::<_, task_core::StoreError, _>(|tx| {
+            SqliteStore::authority_supersede_operation_grants_tx(tx, project, "human:test", now)?;
+            SqliteStore::authority_grant_insert_tx(
+                tx,
+                &a::NewAuthorityGrant {
+                    id: ulid::Ulid::new().to_string(),
+                    project_id: project.to_owned(),
+                    scope: a::GrantScope {
+                        kind: a::ScopeKind::Project,
+                        reference: project.to_owned(),
+                    },
+                    action_class: a::ActionClass::LaunchRoot,
+                    source: a::GrantSource {
+                        kind: a::SourceKind::HumanOperation,
+                        reference: format!("project.controller_put:{project}:1"),
+                    },
+                    granted_by: "human:test".into(),
+                    question_key: None,
+                    note: "試験の案件を enabled にした".into(),
+                    expires_at: (now + time::Duration::days(300))
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap(),
+                    budget: 100,
+                },
+                now,
+            )?
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
 }
 
 fn ts_daemon(
@@ -266,6 +305,9 @@ impl Case {
                 self.env.now(),
             )
             .unwrap();
+        if mode == ControllerMode::Enabled {
+            seed_launch_grant(&self.store, &self.p.id.to_string(), self.env.now());
+        }
     }
 
     fn decisions(&self) -> Vec<task_core::project_wake::ProjectControllerDecision> {
@@ -688,3 +730,6 @@ async fn project_cos_narrowed_acceptance_rejected() {
         json!({"test": "project_cos_narrowed_acceptance_rejected", "code": "root_acceptance_narrowed", "roots": 0}),
     );
 }
+
+#[path = "authority_ledger.rs"]
+mod authority_ledger;

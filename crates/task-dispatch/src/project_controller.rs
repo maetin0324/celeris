@@ -53,6 +53,10 @@ pub enum ProjectEffect {
         /// 冪等キーの行の `result_json`（A2 の `LaunchRootMeta`。snapshot が controller の root を引く）。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         meta: Option<String>,
+        /// A7: root を作る tx で使う `launch_root` の許可の範囲。[`crate::project_decider_ts`] が必ず入れる。
+        /// 既定の無い A1 の判定（試験の fake）だけが `None`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authority: Option<task_core::authority::GrantScope>,
     },
     /// 人への判断の要求（A3）。notice（`bad_news`、source key
     /// `project_controller:escalate:<project>:<question_key>`）を 1 件。同じ key は 2 回目を作らない。

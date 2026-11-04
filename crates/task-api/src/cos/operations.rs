@@ -783,16 +783,28 @@ async fn create_operation(
             // ADR 2026-11-04-project-controller D5・D8: 人の目的・受け入れ条件と controller の起票は、
             // 人の発言の引用（instructed_by）が無ければ CoS が変えられない。
             if instructed_by.is_none()
-                && let Some(problem) = super::goal_guard::check(
-                    store,
-                    &audit.ctx.thread_id,
-                    matched.as_ref(),
-                    &req.request.body,
-                )
+                && let Some(problem) =
+                    super::goal_guard::check(store, matched.as_ref(), &req.request.body)
             {
                 return Err(audit.reject(store, "api", &path, problem));
             }
-            dispatch(store, &env, &audit, &method, &path, req.request.body)
+            // ADR 2026-11-04-project-controller A7: 本番・外部公開・不可逆・API の認可・外部の効果は、
+            // autonomy の中では人の発言の引用か authority ledger の有効な許可を要する。
+            let pass = match super::goal_guard::authority_gate(
+                store,
+                &audit,
+                matched.as_ref(),
+                &path,
+                instructed_by.as_deref(),
+            ) {
+                Ok(pass) => pass,
+                Err(problem) => return Err(audit.reject(store, "api", &path, problem)),
+            };
+            let result = dispatch(store, &env, &audit, &method, &path, req.request.body);
+            if let Some(pass) = &pass {
+                super::goal_guard::settle(store, &audit, pass, &result);
+            }
+            result
         })
         .await?;
     state.chat.events.notify_waiters();

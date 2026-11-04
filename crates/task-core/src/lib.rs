@@ -67,6 +67,7 @@ pub mod integration_request;
 /// ADR-0043 D5（Phase 54）: 変更の取り込みの記録（`task_integrations`）。
 pub mod integrations;
 pub use integrations::{TaskRepoIntegrationState, TaskRepoIntegrationStatus};
+pub mod authority;
 /// 根拠表 `routing_evidence` の行（評価 runner が書き、選択器が読む）。
 pub mod completion_outcome;
 /// ADR-0047（Phase 61）: 知識ベース（front matter・索引・検索・マウント。純粋関数だけ）。

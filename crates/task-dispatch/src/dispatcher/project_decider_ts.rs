@@ -264,7 +264,10 @@ impl ProjectDecider for TsProjectDecider {
 }
 
 /// 同期の tick から TS を呼ぶ（別の current-thread runtime で待つ）。
-fn call_ts(script: Arc<dyn PolicyScript>, snapshot: ProjectSnapshot) -> Result<Value, PolicyScriptError> {
+fn call_ts(
+    script: Arc<dyn PolicyScript>,
+    snapshot: ProjectSnapshot,
+) -> Result<Value, PolicyScriptError> {
     let call = async move {
         match tokio::time::timeout(
             PROJECT_CONTROLLER_DEADLINE,
@@ -274,7 +277,10 @@ fn call_ts(script: Arc<dyn PolicyScript>, snapshot: ProjectSnapshot) -> Result<V
         {
             Ok(Ok(reply)) => Ok(reply.output),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(PolicyScriptError::new("timeout", "project_controller deadline")),
+            Err(_) => Err(PolicyScriptError::new(
+                "timeout",
+                "project_controller deadline",
+            )),
         }
     };
     let run = move || match tokio::runtime::Builder::new_current_thread()
@@ -291,7 +297,10 @@ fn call_ts(script: Arc<dyn PolicyScript>, snapshot: ProjectSnapshot) -> Result<V
         .unwrap_or(false);
     let spawn_and_join = move || match std::thread::scope(|scope| scope.spawn(run).join()) {
         Ok(v) => v,
-        Err(_) => Err(PolicyScriptError::new("terminated", "project_controller call panicked")),
+        Err(_) => Err(PolicyScriptError::new(
+            "terminated",
+            "project_controller call panicked",
+        )),
     };
     if on_multi_thread {
         tokio::task::block_in_place(spawn_and_join)
@@ -338,7 +347,8 @@ pub fn build_snapshot(
     let mut snap_limits = limits.snapshot.clone();
     snap_limits.cos_inputs_remaining_today =
         limits.max_cos_inputs_per_day.saturating_sub(used("replan"));
-    snap_limits.roots_remaining_today = limits.max_roots_per_day.saturating_sub(used("launch_root"));
+    snap_limits.roots_remaining_today =
+        limits.max_roots_per_day.saturating_sub(used("launch_root"));
     let (phase, retry_count, progress_epoch) = match &state {
         Some(s) => (
             s.phase.as_str().to_owned(),
@@ -353,7 +363,10 @@ pub fn build_snapshot(
         .map(|w| SnapshotWake {
             kind: w.kind.as_str().to_owned(),
             reference: w.source_ref.clone().unwrap_or_else(|| w.wake_key.clone()),
-            event_id: w.source_event_id.and_then(|i| u64::try_from(i).ok()).unwrap_or(0),
+            event_id: w
+                .source_event_id
+                .and_then(|i| u64::try_from(i).ok())
+                .unwrap_or(0),
         })
         .collect();
     ps::build(
@@ -441,7 +454,10 @@ pub fn runaway_guard(
         .take_while(|d| d.progress_epoch == epoch)
         .filter(|d| {
             matches!(d.kind.as_str(), "replan" | "launch_root")
-                && matches!(d.effect_state.as_str(), "applied" | "suppressed" | "pending")
+                && matches!(
+                    d.effect_state.as_str(),
+                    "applied" | "suppressed" | "pending"
+                )
         })
         .count();
     let limit = snapshot.limits.max_no_progress_decisions as usize;
@@ -597,6 +613,10 @@ trait IfEmpty {
 
 impl IfEmpty for String {
     fn if_empty(self, alt: &str) -> String {
-        if self.is_empty() { alt.to_owned() } else { self }
+        if self.is_empty() {
+            alt.to_owned()
+        } else {
+            self
+        }
     }
 }

@@ -28,6 +28,7 @@ fn env() -> TestEnv {
 struct Cos {
     env: TestEnv,
     app: axum::Router,
+    thread: String,
     project: String,
     said: String,
     bearer: String,
@@ -50,7 +51,10 @@ async fn project_cos() -> Cos {
     )
     .await;
     assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
-    let said = resp.json()["message"]["id"].as_str().expect("id").to_owned();
+    let said = resp.json()["message"]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
     let run = "run-a3";
     env.store
         .chat_run_claim_next(&thread.id, run, &json!({}), OffsetDateTime::now_utc())
@@ -64,6 +68,7 @@ async fn project_cos() -> Cos {
     Cos {
         env,
         app,
+        thread: thread.id,
         project,
         said,
         bearer: format!("Bearer {bearer}"),
@@ -125,7 +130,13 @@ async fn project_cos_refuses_request_edit() {
     let path = format!("/api/v1/projects/{}", c.project);
     let before = c.rejected();
     let resp = c
-        .op("req-1", "PATCH", &path, json!({"request": "CoS が書き換えた依頼"}), false)
+        .op(
+            "req-1",
+            "PATCH",
+            &path,
+            json!({"request": "CoS が書き換えた依頼"}),
+            false,
+        )
         .await;
     assert_problem(&resp, 422, "project_request_human_only");
     assert_eq!(c.rejected(), before + 1, "a rejected audit row");
@@ -136,10 +147,20 @@ async fn project_cos_refuses_request_edit() {
         .expect("get")
         .expect("project");
     assert_eq!(p.request, "pilot:a3-guard");
-    raw("project_cos_refuses_request_edit", "project_request_human_only", 422);
+    raw(
+        "project_cos_refuses_request_edit",
+        "project_request_human_only",
+        422,
+    );
     // 人の発言を引けば通る（CoS は取り次ぐだけ）。
     let ok = c
-        .op("req-2", "PATCH", &path, json!({"request": "計測を 5 回"}), true)
+        .op(
+            "req-2",
+            "PATCH",
+            &path,
+            json!({"request": "計測を 5 回"}),
+            true,
+        )
         .await;
     assert_eq!(ok.status.as_u16(), 200, "{}", ok.text());
 }
@@ -156,7 +177,13 @@ async fn project_cos_refuses_goal_edit() {
     .enumerate()
     {
         let resp = c
-            .op(&format!("goal-{i}"), "PATCH", &format!("/api/v1/tasks/{}", t.id), body, false)
+            .op(
+                &format!("goal-{i}"),
+                "PATCH",
+                &format!("/api/v1/tasks/{}", t.id),
+                body,
+                false,
+            )
             .await;
         assert_problem(&resp, 422, "task_goal_human_only");
     }
@@ -167,7 +194,13 @@ async fn project_cos_refuses_goal_edit() {
     // draft は CoS が起票の途中で直せる。
     let draft = c.task_in_project(Status::Draft);
     let ok = c
-        .op("goal-draft", "PATCH", &format!("/api/v1/tasks/{}", draft.id), json!({"objective": "下書きの目的"}), false)
+        .op(
+            "goal-draft",
+            "PATCH",
+            &format!("/api/v1/tasks/{}", draft.id),
+            json!({"objective": "下書きの目的"}),
+            false,
+        )
         .await;
     assert_eq!(ok.status.as_u16(), 200, "{}", ok.text());
 }
@@ -177,17 +210,35 @@ async fn project_cos_controller_owns_launch() {
     let c = project_cos().await;
     c.env
         .store
-        .project_controller_set_mode(&c.project, ControllerMode::Enabled, None, "human:web", OffsetDateTime::now_utc())
+        .project_controller_set_mode(
+            &c.project,
+            ControllerMode::Enabled,
+            None,
+            "human:web",
+            OffsetDateTime::now_utc(),
+        )
         .expect("mode");
     let body = json!({"title": "CoS の独断の root", "objective": "続き", "project_id": c.project,
                       "acceptance": [{"type": "reviewer", "text": "続きが終わる"}]});
-    let resp = c.op("launch-1", "POST", "/api/v1/tasks", body.clone(), false).await;
+    let resp = c
+        .op("launch-1", "POST", "/api/v1/tasks", body.clone(), false)
+        .await;
     assert_problem(&resp, 422, "project_controller_owns_launch");
-    raw("project_cos_controller_owns_launch", "project_controller_owns_launch", 422);
+    raw(
+        "project_cos_controller_owns_launch",
+        "project_controller_owns_launch",
+        422,
+    );
     // off の案件ではこの拒否は出ない（従来の検査に任せる）。
     c.env
         .store
-        .project_controller_set_mode(&c.project, ControllerMode::Off, None, "human:web", OffsetDateTime::now_utc())
+        .project_controller_set_mode(
+            &c.project,
+            ControllerMode::Off,
+            None,
+            "human:web",
+            OffsetDateTime::now_utc(),
+        )
         .expect("mode");
     let resp = c.op("launch-2", "POST", "/api/v1/tasks", body, false).await;
     assert_ne!(
@@ -203,15 +254,34 @@ async fn project_cos_controller_owns_launch() {
 async fn project_cos_refuses_production() {
     let c = project_cos().await;
     let promote = c
-        .op("prod-1", "POST", "/api/v1/releases/aaaaaaaaaaaa/promote", json!(null), false)
+        .op(
+            "prod-1",
+            "POST",
+            "/api/v1/releases/aaaaaaaaaaaa/promote",
+            json!(null),
+            false,
+        )
         .await;
     assert_problem(&promote, 422, "production_requires_human");
-    raw("project_cos_refuses_production", "production_requires_human", 422);
+    raw(
+        "project_cos_refuses_production",
+        "production_requires_human",
+        422,
+    );
     let secret = c
-        .op("prod-2", "PUT", "/api/v1/secrets/s1", json!({"value": "x"}), false)
+        .op(
+            "prod-2",
+            "PUT",
+            "/api/v1/secrets/s1",
+            json!({"value": "x"}),
+            false,
+        )
         .await;
     assert_eq!(secret.status.as_u16(), 422, "{}", secret.text());
-    let code = secret.json()["code"].as_str().unwrap_or_default().to_owned();
+    let code = secret.json()["code"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
     raw("project_cos_refuses_production", &code, 422);
     let stage = c
         .op("prod-3", "POST", "/api/v1/routing/stages", json!({}), false)
@@ -234,8 +304,39 @@ async fn project_cos_triage_types_reused() {
         }],
     );
     let resp = c
-        .op("answer-1", "POST", &format!("/api/v1/tasks/{}/answer", t.id), json!({"answer": "A にする"}), false)
+        .op(
+            "answer-1",
+            "POST",
+            &format!("/api/v1/tasks/{}/answer", t.id),
+            json!({"answer": "A にする"}),
+            false,
+        )
         .await;
     assert_problem(&resp, 422, "cos_basis_missing");
     raw("project_cos_triage_types_reused", "cos_basis_missing", 422);
+}
+
+/// 案件 CoS は進捗に応じて brief を既存の `project.status_put` で更新でき、`updated_by = cos:<thread>` が残る。
+/// brief は派生の要約で、依頼文（正本）は変わらない。
+#[tokio::test]
+async fn project_cos_brief_updated_by_the_project_cos() {
+    let c = project_cos().await;
+    let path = format!("/api/v1/projects/{}/status", c.project);
+    let resp = c
+        .op("brief-1", "PUT", &path, json!({"objective": "計測の土台", "state": "root1 が review 不合格（spec_gap）",
+            "open_issues": ["受け入れ条件の解釈"], "next_actions": ["修正の root を controller が起票"],
+            "waiting_on": [], "evidence_refs": []}), false)
+        .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let pid: task_core::ProjectId = c.project.parse().expect("pid");
+    let brief = c
+        .env
+        .store
+        .project_brief_get(pid)
+        .expect("get")
+        .expect("brief");
+    assert_eq!(brief.updated_by, format!("cos:{}", c.thread));
+    assert_eq!(brief.state, "root1 が review 不合格（spec_gap）");
+    let p = c.env.store.project_get(pid).expect("get").expect("project");
+    assert_eq!(p.request, "pilot:a3-guard");
 }

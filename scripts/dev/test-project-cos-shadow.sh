@@ -65,7 +65,7 @@ run_suite() {
   total=$((total + passed))
 }
 run_suite dispatch 10 -p task-dispatch --lib -E 'test(/(^|::)project_cos_/)'
-run_suite api 5 -p task-api --test project_cos_guard -E 'test(/^project_cos_/)'
+run_suite api 6 -p task-api --test project_cos_guard -E 'test(/^project_cos_/)'
 run_suite celeris 4 -p celeris --test project_cos_shadow -E 'test(/^project_cos_/)'
 [ "$total" -ge 14 ] || fail "only $total project_cos_ tests (need >= 14)"
 [ ! -s "$out/skip.log" ] || fail "bundle SKIP recorded: $(cat "$out/skip.log")"

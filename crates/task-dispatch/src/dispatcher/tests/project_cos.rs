@@ -35,21 +35,36 @@ impl PolicyScript for FakeTs {
         _input: task_core::script_compare::LaneRulesInput,
         _deadline: std::time::Duration,
     ) -> PolicyFuture<'_> {
-        Box::pin(async { Err(crate::script_policy::PolicyScriptError::new("unavailable", "-")) })
+        Box::pin(async {
+            Err(crate::script_policy::PolicyScriptError::new(
+                "unavailable",
+                "-",
+            ))
+        })
     }
     fn route_priority(
         &self,
         _input: task_core::script_compare::RoutePriorityInput,
         _deadline: std::time::Duration,
     ) -> PolicyFuture<'_> {
-        Box::pin(async { Err(crate::script_policy::PolicyScriptError::new("unavailable", "-")) })
+        Box::pin(async {
+            Err(crate::script_policy::PolicyScriptError::new(
+                "unavailable",
+                "-",
+            ))
+        })
     }
     fn cos_digest_pass(
         &self,
         _call: crate::script_policy::CosDigestPassCall,
         _deadline: std::time::Duration,
     ) -> PolicyFuture<'_> {
-        Box::pin(async { Err(crate::script_policy::PolicyScriptError::new("unavailable", "-")) })
+        Box::pin(async {
+            Err(crate::script_policy::PolicyScriptError::new(
+                "unavailable",
+                "-",
+            ))
+        })
     }
     fn project_controller(
         &self,
@@ -243,7 +258,13 @@ impl Case {
 
     fn set_mode(&mut self, mode: ControllerMode) {
         self.store
-            .project_controller_set_mode(&self.p.id.to_string(), mode, None, "human:test", self.env.now())
+            .project_controller_set_mode(
+                &self.p.id.to_string(),
+                mode,
+                None,
+                "human:test",
+                self.env.now(),
+            )
             .unwrap();
     }
 
@@ -398,7 +419,10 @@ async fn project_cos_explanation_audited() {
     let rec = record_of(d);
     assert_eq!(rec["schema"], "celeris.project-decision/1");
     assert_eq!(rec["proposal"]["explanation"]["rule_id"], "pc/outcome-open");
-    assert_eq!(rec["proposal"]["explanation"]["signals"][0]["name"], "outcome");
+    assert_eq!(
+        rec["proposal"]["explanation"]["signals"][0]["name"],
+        "outcome"
+    );
     assert_eq!(rec["snapshot_sha256"].as_str().map(str::len), Some(64));
     assert_eq!(rec["input"]["project_id"], c.p.id.to_string());
     assert_eq!(d.validation, "pc/outcome-open");
@@ -456,7 +480,10 @@ async fn project_cos_runaway_stops() {
     assert_eq!(state.phase, ControllerPhase::Blocked);
     assert_eq!(c.escalations(), 1);
     let calls = c.calls();
-    assert_eq!(calls, 6, "5 replans + the guarded decision, then no more calls");
+    assert_eq!(
+        calls, 6,
+        "5 replans + the guarded decision, then no more calls"
+    );
     assert_eq!(c.system_inputs().len(), 5);
     assert_eq!(c.env.llm_launches(), 0);
     let guarded = record_of(&c.decisions()[0]);
@@ -471,7 +498,9 @@ async fn project_cos_runaway_stops() {
 /// 同じ `question_key` の escalate は、人が mode を置き直して再評価しても 2 件目の知らせを作らない。
 #[tokio::test]
 async fn project_cos_no_needless_question() {
-    let mut c = case(Some(ControllerMode::Enabled), |s: &ProjectSnapshot| escalate(s, "root_failed:x"));
+    let mut c = case(Some(ControllerMode::Enabled), |s: &ProjectSnapshot| {
+        escalate(s, "root_failed:x")
+    });
     c.wake();
     assert_eq!(c.escalations(), 1, "{:?}", c.decisions());
     c.set_mode(ControllerMode::Enabled);
@@ -501,7 +530,11 @@ async fn project_cos_injection_report_ignored() {
     c.wake();
     let seen = c.seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 1);
-    assert!(!serde_json::to_string(&seen[0]).unwrap().contains("承認した"));
+    assert!(
+        !serde_json::to_string(&seen[0])
+            .unwrap()
+            .contains("承認した")
+    );
     assert!(c.system_inputs().iter().all(|m| !m.contains("承認した")));
     assert_eq!(c.roots(), 0);
     raw(

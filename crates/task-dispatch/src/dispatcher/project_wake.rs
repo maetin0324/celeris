@@ -667,18 +667,22 @@ impl Pass<'_> {
             "{summary}。controller の phase は blocked で、人が controller の mode を置き直すまで判断しません。問いの key: {question_key}"
         );
         self.store
-            .project_controller_escalate(project, &task_core::feed::NoticeEvent {
-                source_key: source_key.clone(),
-                kind: task_core::feed::NoticeKind::BadNews,
-                group_key: format!("bad_news:project_controller:{project}"),
-                title,
-                summary: body,
-                project_id: Some(project.to_owned()),
-                task_id: None,
-                target: None,
-                links: Vec::new(),
-                at: self.now,
-            }, self.now)
+            .project_controller_escalate(
+                project,
+                &task_core::feed::NoticeEvent {
+                    source_key: source_key.clone(),
+                    kind: task_core::feed::NoticeKind::BadNews,
+                    group_key: format!("bad_news:project_controller:{project}"),
+                    title,
+                    summary: body,
+                    project_id: Some(project.to_owned()),
+                    task_id: None,
+                    target: None,
+                    links: Vec::new(),
+                    at: self.now,
+                },
+                self.now,
+            )
             .map_err(|e| e.to_string())?;
         Ok(source_key)
     }

@@ -62,8 +62,14 @@ fn root(db: &Db, title: &str) -> Task {
         "acceptance": [{"type": "reviewer", "text": "計測 script が同じ値を 3 回出す"}],
     }))
     .expect("spec");
-    let task = task_ops::add::build_task_with_roles(db.store.as_ref(), spec, &[], &[], OffsetDateTime::now_utc())
-        .expect("build");
+    let task = task_ops::add::build_task_with_roles(
+        db.store.as_ref(),
+        spec,
+        &[],
+        &[],
+        OffsetDateTime::now_utc(),
+    )
+    .expect("build");
     db.store.create_task(&task, vec![]).expect("create");
     task
 }
@@ -72,9 +78,13 @@ fn fire(db: &Db, id: TaskId, triggers: &[Trigger]) {
     for t in triggers {
         let cur = db.store.get(id).expect("get").expect("task");
         if cur.status == Status::Draft {
-            db.store.apply_transition(id, Trigger::Accept, None).expect("accept");
+            db.store
+                .apply_transition(id, Trigger::Accept, None)
+                .expect("accept");
         }
-        db.store.apply_transition(id, t.clone(), None).expect("transition");
+        db.store
+            .apply_transition(id, t.clone(), None)
+            .expect("transition");
     }
 }
 
@@ -86,11 +96,19 @@ fn fail_review(db: &Db, id: TaskId) {
             return;
         }
         if cur.status == Status::Draft {
-            db.store.apply_transition(id, Trigger::Accept, None).expect("accept");
+            db.store
+                .apply_transition(id, Trigger::Accept, None)
+                .expect("accept");
         }
-        db.store.apply_transition(id, Trigger::Dispatch, None).expect("dispatch");
-        db.store.apply_transition(id, Trigger::WorkerDone, None).expect("worker done");
-        db.store.apply_transition(id, Trigger::ReviewFail, None).expect("review fail");
+        db.store
+            .apply_transition(id, Trigger::Dispatch, None)
+            .expect("dispatch");
+        db.store
+            .apply_transition(id, Trigger::WorkerDone, None)
+            .expect("worker done");
+        db.store
+            .apply_transition(id, Trigger::ReviewFail, None)
+            .expect("review fail");
     }
     panic!("the root did not reach failed");
 }
@@ -116,7 +134,13 @@ fn decider(policy: Arc<celeris::ScriptPolicy>, db: &Db) -> TsProjectDecider {
     d
 }
 
-fn real(test: &str) -> Option<(celeris_script::ScriptRuntimeHandle, Arc<celeris::ScriptPolicy>, String)> {
+fn real(
+    test: &str,
+) -> Option<(
+    celeris_script::ScriptRuntimeHandle,
+    Arc<celeris::ScriptPolicy>,
+    String,
+)> {
     let bundle = dist_bundle(test, DOMAIN)?;
     let sha = bundle.manifest.bundle_sha256.clone();
     let code = bundle.source().code;
@@ -168,7 +192,11 @@ async fn project_cos_ts_dry_run_writes_nothing() {
     let before = rows(&db);
     let mut d = decider(policy, &db);
     let rec = d
-        .dry_run(&db.store, &db.project.to_string(), OffsetDateTime::now_utc())
+        .dry_run(
+            &db.store,
+            &db.project.to_string(),
+            OffsetDateTime::now_utc(),
+        )
         .expect("dry run");
     assert_eq!(rec["proposal"]["action"]["kind"], "launch_root", "{rec}");
     assert_eq!(rec["effect"]["kind"], "create_root");
@@ -195,7 +223,10 @@ async fn project_cos_ts_change_without_rust() {
     assert_eq!(before.rule_id, "pc/root-in-flight");
     assert_eq!(before.next_wake_after_secs, Some(3600));
     let changed = regex_lite_replace(&code, "watchSecs: 3600", "watchSecs: 60");
-    assert_ne!(changed, code, "the bundle keeps the POLICY constant readable");
+    assert_ne!(
+        changed, code,
+        "the bundle keeps the POLICY constant readable"
+    );
     let (handle2, policy2, _) = start_code(&changed);
     let mut d2 = decider(policy2, &db);
     let after = d2.decide(&input(&db)).expect("decide");
@@ -216,7 +247,8 @@ fn regex_lite_replace(code: &str, from: &str, to: &str) -> String {
 /// brief・root の題に命令の文を書いても、判定は文の無いときと同じで root も増えない（I11）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn project_cos_ts_injection_does_not_change_the_decision() {
-    let Some((handle, policy, _)) = real("project_cos_ts_injection_does_not_change_the_decision") else {
+    let Some((handle, policy, _)) = real("project_cos_ts_injection_does_not_change_the_decision")
+    else {
         return;
     };
     let mut decisions = Vec::new();
@@ -243,7 +275,10 @@ async fn project_cos_ts_injection_does_not_change_the_decision() {
         assert_eq!(db.store.list(None).expect("list").len(), tasks);
         let rec: Value = serde_json::from_str(&d.take_record().expect("record")).expect("json");
         assert!(!rec["proposal"].to_string().contains("promote"), "{rec}");
-        decisions.push((decision.rule_id.clone(), rec["proposal"]["action"]["kind"].clone()));
+        decisions.push((
+            decision.rule_id.clone(),
+            rec["proposal"]["action"]["kind"].clone(),
+        ));
     }
     assert_eq!(decisions[0], decisions[1]);
     raw(
@@ -273,18 +308,36 @@ async fn project_cos_ts_failure_classified() {
     // controller の root として起票した形（冪等キーの行に root key）にする。
     let mut d0 = decider(Arc::clone(&policy), &db);
     let first = d0.decide(&input(&db)).expect("decide");
-    let ProjectEffect::CreateRoot { idempotency_key, spec, meta } = first.effect else {
+    let ProjectEffect::CreateRoot {
+        idempotency_key,
+        spec,
+        meta,
+    } = first.effect
+    else {
         panic!("expected a root launch");
     };
-    let task = task_ops::add::build_task_with_roles(db.store.as_ref(), *spec, &[], &[], OffsetDateTime::now_utc())
-        .expect("build");
+    let task = task_ops::add::build_task_with_roles(
+        db.store.as_ref(),
+        *spec,
+        &[],
+        &[],
+        OffsetDateTime::now_utc(),
+    )
+    .expect("build");
     let claim = task_core::store::IdempotencyClaim {
         key: idempotency_key,
         operation: "project_controller.create_root".into(),
         request_hash: "x".into(),
     };
     db.store
-        .project_controller_create_root(&task, &claim, "daemon", meta.as_deref(), 0, OffsetDateTime::now_utc())
+        .project_controller_create_root(
+            &task,
+            &claim,
+            "daemon",
+            meta.as_deref(),
+            0,
+            OffsetDateTime::now_utc(),
+        )
         .expect("create");
     fail_review(&db, task.id);
     let mut d = decider(policy, &db);

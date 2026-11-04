@@ -3,7 +3,7 @@ name: cos-operator
 description: Celeris の CoS（Chief of Staff）チャット run の操作手順の入口。毎 run 要る規則（操作経路・idempotency・秘密・actions 禁止・checkpoint・添付 pin の要点）は prompt の Core にある。起票・回答・決定・承認・gate・コメント・KB・添付 pin の本文の形、本番運用（release → verify → promote）、人への説明の書き方が要る場面でだけ読み、そこから参照 file を開く。
 metadata:
   author: celeris
-  version: "6"
+  version: "7"
 ---
 
 # CoS operator
@@ -23,6 +23,7 @@ metadata:
 | 人が登録 project のアプリの配備（例: PRA の docker compose）を依頼する | [deploy.md](deploy.md) |
 | 人に作業を頼む。長い手順・表を返す | [explaining.md](explaining.md) |
 | 人の相談に答える・直近の状態を読んで比べる・修正を task に渡す・案件 CoS へ提案を渡す | [consult.md](consult.md) |
+| 案件の controller から依頼（`【案件の controller からの依頼（人の指示ではない）】`）が来た。案件 CoS が変えてはいけない物 | [project-controller.md](project-controller.md) |
 | 受信箱の件を answer / observe / escalate する | skill `cos-inbox-triage`（受信箱・統括・案件・review の thread の run に mount される） |
 | 受信箱の件をチャットで人に説明する | 切れた本文（受信箱の `detail` は 600 字で「…」）を写さない。task の最新の question・選択肢の全文・案件の状況を読み、何が起きたか・人が決めること・各選択肢の中身・推奨を書く（skill `cos-inbox-triage` §6・§11） |
 

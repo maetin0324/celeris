@@ -627,3 +627,38 @@ A1 の実装（migration `0112_project_controller.sql`、`SCHEMA_VERSION` 112。
    - 試験は `crates/task-dispatch/src/dispatcher/tests/project_wake_cursor.rs` の 6 件
      （`project_wake_decide_{exhausted_notice,retry_no_notice}`・`project_wake_cursor_{per_project,monotonic,blocks_redelivery,keeps_new_events}`）。
      `project_wake_cursor_blocks_redelivery` は照合を外すと落ちることを確かめた。replay script の task-dispatch の下限は 60。
+
+## 付記 A3（2026-11-04、task 01M6JW1EFPBCJX8J7D2ZACHS3D）: 接続の実装と契約の差分
+§A3 の契約のうち次を実装し、一部を変えた。理由と未達は [進捗 a3](../progress/2026-11-04-long-horizon/a3.md)。
+1. **接続**: `crates/task-dispatch/src/dispatcher/project_decider_ts.rs`（lib の `task_dispatch::project_decider_ts`）の
+   `TsProjectDecider` が A1 の `ProjectDecider` を実装する。tick ごとに dispatcher が `ProjectDecider::attach` で store と
+   領域 `project_controller` の宛先（`script_target` の mode・generation・口）を渡す。判断の記録 `proposal_json` は
+   `ProjectDecider::take_record` が返す `celeris.project-decision/1`（入力・snapshot の SHA-256・generation・proposal・
+   explanation・違反・分類・guard）で、A1 の既定の判定では従来どおり入力の JSON。daemon は `NoopProjectDecider` の代わりに
+   `TsProjectDecider` を入れる（`crates/celeris/src/daemon/bootstrap.rs`）。
+2. **mode の組**: 案件 `shadow` は領域 `compare`・`canary`・`ts`、案件 `enabled` は領域 `ts` か `canary` で選ばれた案件
+   （単位は案件 id）のときだけ TS を呼ぶ。足りなければ TS を呼ばず効果なし・phase `waiting` の判断（`pc/script-unavailable`）。
+   TS の例外・timeout（2 秒）は `Err` で A1 の backoff と `max_retries` の停止に任せる。検証落ちは効果なし（`pc/invalid:<code…>`）。
+3. **`OpenEscalation`**: 受信箱の新種類 `project_controller` は足さず、`ProjectEffect::OpenEscalation` を notice（`bad_news`、
+   source key `project_controller:escalate:<案件>:<question_key>`）で実装した（変えた行: §A3・付記 A1 の 2「受信箱の新種類」）。
+   理由: 受信箱の種類を足すと `InboxKind`・API schema・web の生成型・triage の分類まで要り、この子の範囲を超える。notice は
+   source key で冪等なので「同じ問いを 2 回聞かない」は満たす。notice の記録と phase `blocked` は同じ transaction
+   （`SqliteStore::project_controller_escalate`）。tx1 で `blocked` にすると効果の門が Hold にするので、判断の phase は
+   `waiting` にして効果の tx で `blocked` にする。受信箱への昇格は A9 か後続で決める（進捗の提案）。
+4. **起票の冪等キーの行**: `ProjectEffect::CreateRoot` に `meta`（A2 の `LaunchRootMeta` の JSON）を足し、
+   `SqliteStore::project_controller_create_root` が `result_json` に残す（snapshot が controller の root key を引くため。
+   A1 の store の file を A3 が変えた唯一の箇所）。
+5. **runaway の停止**: Rust の `runaway_guard` が、進捗（`gap.progress_epoch`）の増えない `replan`・`launch_root`
+   （`applied`・`suppressed`・`pending`）が `max_no_progress_decisions`（既定 5）続いたら proposal を `escalate`
+   （`no_progress:<epoch>`）に置き換える。TS も同じ規則（`pc/no-progress`）を持つ。CoS 入力の 1 日の上限は判断の履歴から
+   数え（`cos_inputs_remaining_today`・`roots_remaining_today`）、TS は残り 0 なら `replan` の代わりに待つ。
+6. **拒否**: `crates/task-api/src/cos/goal_guard.rs` が `/cos/operations` の `instructed_by` の無い要求を断る:
+   `project.update` の `request`（422 `project_request_human_only`）、draft でない task の `task.update` の `objective`・
+   `acceptance`（422 `task_goal_human_only`）、mode `enabled` の案件への root の `task.create`（422 `project_controller_owns_launch`。
+   `controller_decision_id` は足していない。続きの root は controller が起票する）、案件 thread の run の `release.promote`
+   （422 `production_requires_human`。§A3 に無い行を足した。統括 CoS の promote は従来の gate のまま）。断った要求は `rejected` の監査。
+7. **dry-run**: HTTP の `POST …/controller/dry-run` は足さず、`TsProjectDecider::dry_run`（何も書かない）を足した。
+   API state に TS の口が無い（script layer は dispatcher 側）ため。HTTP の route は未達。
+8. **E2E** は 1 file でなく試験の対象の crate に置いた（接頭辞 `project_cos_`、計 20 件）: task-dispatch の
+   `dispatcher/tests/project_cos.rs`（10、fake の script で tick を通す）、task-api の `tests/project_cos_guard.rs`（6）、
+   celeris の `tests/project_cos_shadow.rs`（4、本物の bundle）。`scripts/dev/test-project-cos-shadow.sh` が 3 つを走らせ raw を検査する。

@@ -683,8 +683,10 @@ fn cos_chat_core_is_byte_identical_across_runs_and_free_of_run_values() {
         a.core
     );
     // ADR 2026-10-27-yomiyasu-human-text D3: 7500 + the human-text rules (798 B) → 8300.
+    // ADR 2026-11-04-project-controller 付記 A4: + the consult/read/delegate rules (682 B) and the
+    // wording of the subagent and turn lines → 9100.
     assert!(
-        a.core.len() <= 8300,
+        a.core.len() <= 9100,
         "Core is {} bytes\n{}",
         a.core.len(),
         a.core
@@ -922,11 +924,11 @@ fn general_cos_consult_prompt_carries_the_intent_hint_and_the_guidance() {
     for needle in [
         "## 応じ方（相談・短い読取・委譲）",
         "人は応じ方を選ばない",
-        "相談には当てはめない",
+        "1 依頼 = 1 root は作業の依頼だけ",
         "review と成果統合を迂回しない",
         "`chat.proposal_forward`。人の指示ではない",
         "検出した時点で run が止まる",
-        "完了は daemon がこの thread に戻す",
+        "task の完了は daemon がこの thread に戻す",
     ] {
         assert!(core.contains(needle), "Core lacks {needle}");
     }

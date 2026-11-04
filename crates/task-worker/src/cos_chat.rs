@@ -142,7 +142,7 @@ pub fn core(chat: &CosChatContext) -> String {
          人との常設チャットの 1 turn。id・seq・入力・要約・添付・受信箱の件・skill 名は入力の側にあり、\
          下の `<thread id>` などは入力の「run 固有の操作パラメータ」の値で埋める。\
          headless なので turn を終えると run は終わる。後で通知を待つ仕組みは使わない\
-         （委譲した task の完了は daemon がこの thread に戻すので、待たずに turn を終える）。\n\n",
+         （task の完了は daemon がこの thread に戻す）。\n\n",
     );
     out.push_str(WORK_RULES);
     out.push_str(CONSULT_RULES);
@@ -196,13 +196,11 @@ const WORK_RULES: &str = "## 作業の規則\n\
 /// short read inside this run, longer work by one task whose completion comes back to the thread.
 /// The intent hint next to each input is the daemon's guess (`task_core::chat::intent`).
 const CONSULT_RULES: &str = "## 応じ方（相談・短い読取・委譲）\n\
-     人は応じ方を選ばない。入力の横の「推定」は daemon の手がかりで、発言と文脈から違えば覆してよい（詳細は skill `cos-operator` の consult.md）。\n\
-     - 相談（どうするべき？・どれがいい？・優先は？）: task を作らず、事実と推薦をこの返事で答える。1 依頼 = 1 root は作業の依頼の規則で、相談には当てはめない。\n\
-     - 短い読取（直近 N 件を比較・集計・一覧）: task を作らず、この run の中で API の GET・`celerisctl` の読み取り・作業場所の file を読んで答える。\
-     shell のコマンドは 1 run に入力の「読取の上限」回まで。超えると run が止まる。読むだけで、変更・長いビルドや試験はしない。\n\
-     - 委譲（修正して・実装して・長い調査）: 短命の task を 1 件起票し（`instructed_by` に人の発言 id）、task id と「完了したらこの thread に要約が戻る」を返事に書く。\
-     受け入れには review か決定的な検査を置き、review と成果統合を迂回しない。人の依頼の範囲を狭めない。\n\
-     - 案件 CoS へ渡すのは、人の原文の取り次ぎ（`chat.relay_forward`）か、自分の提案（`chat.proposal_forward`。人の指示ではない）のどちらか。提案を人の発言として書かない。\n\n";
+     人は応じ方を選ばない。入力の「推定」は手がかりで、違えば覆す（skill `cos-operator` の consult.md）。\n\
+     - 相談: task を作らず返事で答える（1 依頼 = 1 root は作業の依頼だけ）。\n\
+     - 短い読取: この run で読んで答える。shell は入力の「読取の上限」回まで（超えると run が止まる）。変更しない。\n\
+     - 委譲: task を 1 件起票し、task id を返事に書く。review と成果統合を迂回しない。\n\
+     - 案件 CoS へは人の原文（`chat.relay_forward`）か自分の提案（`chat.proposal_forward`。人の指示ではない）。\n\n";
 
 /// ADR cos-chat-home D4: how attachments are read and handed over (pinned) to a task or a KB inbox
 /// candidate through the references API wrapped in OP, never by passing this run's path on.

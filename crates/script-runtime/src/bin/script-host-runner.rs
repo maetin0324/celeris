@@ -128,8 +128,11 @@ struct DomainSpec {
     broken: fn() -> Vec<Broken>,
     /// 参照実装の無い領域（ADR 2026-11-04-project-controller D7）: 期待値と byte で比べず、行の不変条件
     /// （`expected` は fixture の `invariants`）を当てる。`None` は従来どおりの byte 比較。
-    invariants: Option<fn(&Map<String, Value>, &Value) -> Result<(), String>>,
+    invariants: Option<InvariantCheck>,
 }
+
+/// 出力と行の不変条件（fixture の `invariants`）を照合する関数。
+type InvariantCheck = fn(&Map<String, Value>, &Value) -> Result<(), String>;
 
 impl DomainSpec {
     fn min_rows(&self) -> usize {

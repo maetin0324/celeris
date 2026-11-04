@@ -320,7 +320,7 @@ pub async fn drive(
         }
         if let Some(sink) = progress
             && tuning.progress_every > 0
-            && tally.counts.calls % tuning.progress_every == 0
+            && tally.counts.calls.is_multiple_of(tuning.progress_every)
         {
             write_progress(sink, &tally).await;
         }

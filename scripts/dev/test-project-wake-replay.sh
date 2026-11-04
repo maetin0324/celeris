@@ -3,7 +3,7 @@
 #
 # 1. task-dispatch の `project_wake_` 試験（再配送・kind 9 種・crash B1〜B6 と QueueCosInput の B4・B5・待機・
 #    coalesce・CAS・lease・backoff・backpressure・mode・人の競合・pending の効果の門・効果の再試行と上限・
-#    QueueCosInput）を nextest で走らせ、41 件以上が通ることを確かめる（0 件・不足は失敗）。
+#    QueueCosInput・判断の human_epoch の照合）を nextest で走らせ、54 件以上が通ることを確かめる（0 件・不足は失敗）。
 # 2. task-api の `project_wake_api_` 試験（API・CoS op・人の操作の human_epoch、28 件以上）と task-core の
 #    `project_wake_store_` 試験（2 件以上）を走らせる。
 # 3. 試験が書いた raw（celeris.long-horizon-record/1 の JSONL）を検査する:
@@ -67,7 +67,7 @@ run_suite() {
     echo "test-project-wake-replay: $1 $2: $passed passed"
 }
 
-run_suite task-dispatch 'test(/^dispatcher::tests::project_wake::(effects::)?project_wake_/)' 41 dispatch
+run_suite task-dispatch 'test(/^dispatcher::tests::project_wake::(effects::)?project_wake_/)' 54 dispatch
 run_suite task-api 'test(/project_wake_api_/)' 28 api
 run_suite task-core 'test(/project_wake_store_/)' 2 store
 

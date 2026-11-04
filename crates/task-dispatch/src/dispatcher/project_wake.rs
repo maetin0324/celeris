@@ -396,25 +396,30 @@ impl Pass<'_> {
         Ok(())
     }
 
-    /// tx2: 効果を冪等に実行して `applied` へ進める。実行の前に門（mode・phase・案件の状態）を通す（I7・I13）。
-    /// CoS 入力の Busy と効果の `Err` は `pending` のまま backoff で延期し、`Err` が `max_retries` を超えたら
-    /// `failed`・phase `blocked` にして人に知らせる（notice）。
+    /// tx2: 効果を冪等に実行して `applied` へ進める。効果が既に効いていれば（crash の B5）`applied` と
+    /// 記録する。そうでなければ実行の前に門（mode・phase・案件の状態・判断の `human_epoch`）を通し（I7・I13）、
+    /// 書き込みの tx でも同じ門を読む（付記 A1 の 11）。CoS 入力の Busy と効果の `Err` は `pending` のまま
+    /// backoff で延期し、`Err` が `max_retries` を超えたら `failed`・phase `blocked` にして人に知らせる（notice）。
     fn apply(&mut self, d: &ProjectControllerDecision) {
-        match self.store.project_controller_effect_admit(&d.id, self.now) {
-            Ok(EffectAdmit::Run) => {}
-            Ok(EffectAdmit::Hold) => return,
-            Ok(EffectAdmit::Halted(reason)) => {
-                self.stats.halted += 1;
-                tracing::info!(decision = %d.id, project = %d.project_id, %reason,
-                    "project controller: pending effect halted");
-                return;
-            }
-            Err(error) => {
-                tracing::warn!(%error, decision = %d.id, "project controller: effect gate unreadable");
-                return;
+        let parsed = serde_json::from_str::<ProjectEffect>(&d.effect_json);
+        if let Ok(effect) = &parsed {
+            match self.effect_in_place(&d.project_id, effect) {
+                Ok(Some(effect_ref)) => {
+                    self.finish(d, EffectState::Applied, Some(&effect_ref));
+                    self.stats.applied += 1;
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, decision = %d.id, "project controller: effect state unreadable");
+                    return;
+                }
             }
         }
-        let effect: ProjectEffect = match serde_json::from_str(&d.effect_json) {
+        if !self.admit(d) {
+            return;
+        }
+        let effect = match parsed {
             Ok(e) => e,
             Err(error) => {
                 self.finish(
@@ -435,6 +440,7 @@ impl Pass<'_> {
                     &key,
                     &text,
                     self.rt.settings.max_cos_inputs_open_per_project,
+                    d.human_epoch,
                     self.now,
                 ) {
                     Ok(task_core::chat::ControllerCosInput::Queued(id)) => Ok(Some(id)),
@@ -443,13 +449,24 @@ impl Pass<'_> {
                         self.defer(d, EffectDeferKind::Busy, None);
                         return;
                     }
+                    Ok(task_core::chat::ControllerCosInput::Refused) => {
+                        self.admit(d);
+                        return;
+                    }
                     Err(e) => Err(e.to_string()),
                 }
             }
             ProjectEffect::CreateRoot {
                 idempotency_key,
                 spec,
-            } => self.create_root(&d.project_id, &idempotency_key, *spec),
+            } => match self.create_root(&d.project_id, &idempotency_key, *spec, d.human_epoch) {
+                Ok(RootCreate::Created(id) | RootCreate::Existing(id)) => Ok(Some(id)),
+                Ok(RootCreate::Refused) => {
+                    self.admit(d);
+                    return;
+                }
+                Err(e) => Err(e),
+            },
         };
         match done {
             Ok(effect_ref) => {
@@ -461,6 +478,57 @@ impl Pass<'_> {
             Err(error) => {
                 self.stats.effect_failed += 1;
                 self.defer(d, EffectDeferKind::Failed, Some(&error));
+            }
+        }
+    }
+
+    /// 効果の門。実行してよければ `true`。閉じていれば門が判断を `suppressed` か `pending` のままにする。
+    fn admit(&mut self, d: &ProjectControllerDecision) -> bool {
+        match self.store.project_controller_effect_admit(&d.id, self.now) {
+            Ok(EffectAdmit::Run) => true,
+            Ok(EffectAdmit::Hold) => false,
+            Ok(EffectAdmit::Halted(reason)) => {
+                self.stats.halted += 1;
+                tracing::info!(decision = %d.id, project = %d.project_id, %reason,
+                    "project controller: pending effect halted");
+                false
+            }
+            Err(error) => {
+                tracing::warn!(%error, decision = %d.id, "project controller: effect gate unreadable");
+                false
+            }
+        }
+    }
+
+    /// 効果が既に効いていれば、その参照（root の task id・CoS 入力の message id）。実在する root を
+    /// `halted` と記録しないために、門より先に読む。
+    fn effect_in_place(
+        &self,
+        project: &str,
+        effect: &ProjectEffect,
+    ) -> Result<Option<String>, String> {
+        match effect {
+            ProjectEffect::None => Ok(None),
+            ProjectEffect::QueueCosInput { key, text } => self
+                .store
+                .project_controller_cos_input_existing(project, key, text)
+                .map_err(|e| e.to_string()),
+            ProjectEffect::CreateRoot {
+                idempotency_key,
+                spec,
+            } => {
+                let claim = root_claim(idempotency_key, spec)?;
+                match self
+                    .store
+                    .idempotency_lookup(&claim)
+                    .map_err(|e| e.to_string())?
+                {
+                    task_core::store::IdempotencyLookup::Same { task_id, .. }
+                    | task_core::store::IdempotencyLookup::Conflict { task_id } => {
+                        Ok(Some(task_id))
+                    }
+                    task_core::store::IdempotencyLookup::New => Ok(None),
+                }
             }
         }
     }
@@ -561,15 +629,12 @@ impl Pass<'_> {
         project: &str,
         key: &str,
         mut spec: NewTaskSpec,
-    ) -> Result<Option<String>, String> {
+        decision_human_epoch: i64,
+    ) -> Result<RootCreate, String> {
         let project_id = project
             .parse()
             .map_err(|e| format!("project id {project}: {e}"))?;
-        let request_hash = sha256_hex(
-            serde_json::to_string(&spec)
-                .map_err(|e| e.to_string())?
-                .as_bytes(),
-        );
+        let claim = root_claim(key, &spec)?;
         spec.project_id = Some(project_id);
         spec.parent = None;
         if !spec
@@ -582,19 +647,6 @@ impl Pass<'_> {
         }
         spec.status.get_or_insert(Status::Ready);
         spec.provenance.origin = task_ops::add::SpecOrigin::Agent;
-        let claim = IdempotencyClaim {
-            key: key.into(),
-            operation: "project_controller.create_root".into(),
-            request_hash,
-        };
-        if let task_core::store::IdempotencyLookup::Same { task_id, .. }
-        | task_core::store::IdempotencyLookup::Conflict { task_id } = self
-            .store
-            .idempotency_lookup(&claim)
-            .map_err(|e| e.to_string())?
-        {
-            return Ok(Some(task_id));
-        }
         let task = task_ops::add::build_task_with_roles(
             self.store,
             spec,
@@ -603,17 +655,31 @@ impl Pass<'_> {
             self.now,
         )
         .map_err(|e| e.to_string())?;
-        match self
-            .store
-            .project_controller_create_root(&task, &claim, task_core::DAEMON_ACTOR, self.now)
-            .map_err(|e| e.to_string())?
-        {
-            RootCreate::Created(id) | RootCreate::Existing(id) => Ok(Some(id)),
-        }
+        self.store
+            .project_controller_create_root(
+                &task,
+                &claim,
+                task_core::DAEMON_ACTOR,
+                decision_human_epoch,
+                self.now,
+            )
+            .map_err(|e| e.to_string())
     }
 }
 
-/// 1 件の event が起こす wake（ADR D12 の表）。案件を持たない task の event は何も起こさない。
+fn root_claim(key: &str, spec: &NewTaskSpec) -> Result<IdempotencyClaim, String> {
+    let request_hash = sha256_hex(
+        serde_json::to_string(spec)
+            .map_err(|e| e.to_string())?
+            .as_bytes(),
+    );
+    Ok(IdempotencyClaim {
+        key: key.into(),
+        operation: "project_controller.create_root".into(),
+        request_hash,
+    })
+}
+
 fn wakes_for_event(
     store: &SqliteStore,
     event_id: u64,

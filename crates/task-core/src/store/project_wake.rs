@@ -12,6 +12,7 @@
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use time::OffsetDateTime;
 
+use super::project_wake_effect::effect_gate_open_tx;
 use super::{IdempotencyClaim, IdempotencyLookup, SqliteStore, StoreError, format_rfc3339};
 use crate::model::Task;
 use crate::project_wake::{
@@ -193,6 +194,8 @@ pub enum RootCreate {
     Created(String),
     /// 同じキーの root が既にある（I5。中身が違っても既存を返す）。
     Existing(String),
+    /// 効果の門が閉じていた（人の操作の後の古い判断、`off` など）。何も書いていない。
+    Refused,
 }
 
 impl SqliteStore {
@@ -769,11 +772,13 @@ impl SqliteStore {
 
     /// root を冪等に作る（I5）: 同じ transaction でキーを照合し、無ければ task と
     /// `task_idempotency_keys` の行を書く。キーが既にあれば（中身が違っても）既存の task を返す。
+    /// キーが無いときは同じ transaction で効果の門を読み、閉じていれば作らない（I7、付記 A1 の 11）。
     pub fn project_controller_create_root(
         &self,
         task: &Task,
         claim: &IdempotencyClaim,
         created_by: &str,
+        decision_human_epoch: i64,
         now: OffsetDateTime,
     ) -> Result<RootCreate, StoreError> {
         let at = format_rfc3339(now)?;
@@ -784,6 +789,12 @@ impl SqliteStore {
                 return Ok(RootCreate::Existing(task_id));
             }
             IdempotencyLookup::New => {}
+        }
+        let project_id = task
+            .project_id
+            .ok_or_else(|| StoreError::Invalid("controller root without a project".into()))?;
+        if !effect_gate_open_tx(&tx, &project_id.to_string(), decision_human_epoch)? {
+            return Ok(RootCreate::Refused);
         }
         Self::create_task_tx(&tx, task, None, created_by, vec![])?;
         Self::idempotency_record_tx(&tx, claim, &task.id.to_string(), None, &at)?;

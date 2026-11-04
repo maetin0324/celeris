@@ -126,7 +126,7 @@ pub(crate) mod migrations;
 mod org;
 mod project_briefs;
 mod project_wake;
-mod project_wake_effect;
+pub(crate) mod project_wake_effect;
 mod projects;
 mod query;
 mod repos;

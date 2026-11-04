@@ -587,5 +587,26 @@ A1 の実装（migration `0112_project_controller.sql`、`SCHEMA_VERSION` 112。
    待つのは失敗でない）。migration 0112 の判断の行に 3 列を足し、trigger は `pending` → `pending`（再試行の欄の前進だけ）・
    `applied`・`failed`・`suppressed` を許す。試験は `project_wake_pending_{off,paused,cancelled,shadow}`・
    `project_wake_effect_{retry,exhausted}`・`project_wake_cos_input_*`・`project_wake_crash_cos_b{4,5}`。
-   門と効果の実行は別の tx なので、門を通った直後の人の off は、その 1 回の効果を止めない（root の作成・CoS 入力はどちらも
-   冪等で 1 回だけ効く）。
+   門と効果の実行の間の窓は 11 で閉じた（書き込みの tx で門をもう一度読む）。
+11. **判断の `human_epoch` の照合**（WU stale-epoch-gate、2026-11-04。final review の差し戻し）。tx1 の CAS だけでは、tx1 の後に
+   `pending` で残った判断（crash の B4、効果の `Err` の backoff、CoS 入力の Busy）が人の操作の後に実行され、I7 に反していた。
+   次の 3 段で止める。
+   - **門**: `project_controller_effect_admit` は判断の行の `human_epoch` と `project_controller_state` の今の値を比べ、違えば
+     `suppressed`（`effect_ref` `halted:stale_human_epoch`）にする。見る順は mode → phase `paused`・`cancelled` → 案件の状態 →
+     `human_epoch` → phase `blocked` の Hold → `effect_next_at` の待ち。backoff 中・`blocked` 中の古い判断も待たせずに止める。
+     この順の変更で、phase `blocked` の間に案件が `paused`・`cancelled`・`done`・archive になった判断も Hold でなく `suppressed` になる。
+   - **書き込みの tx**: `project_controller_create_root` と `project_controller_queue_cos_input` は判断の `human_epoch` を受け取り、
+     挿入と同じ tx で同じ門（`effect_gate_open_tx`）を読む。閉じていれば何も書かず `Refused` を返し、dispatcher が門を
+     もう一度通して判断の行に理由を記録する。10 の窓（門を通った直後の人の off）もこれで閉じた。CoS 入力は thread の用意・
+     backpressure・挿入を 1 つの tx にした（`chat_system_queue_once_tx`）。
+   - **効果が既に効いていた判断**: task-core は `ProjectEffect` を読めないので、dispatcher の `apply` が門より先に
+     `effect_in_place` で調べる（root は `task_idempotency_keys`、CoS 入力は案件 thread の `client_message_id` と本文）。あれば
+     門の結果によらず `applied` と記録し、実在する root を `halted` と記録しない（crash の B5）。同じ key を選んだ別の判断も同じ扱いで、
+     新しい効果は実行しない。
+
+   再評価は人の操作が積む既存の wake `human:<epoch>` が起こす（別の仕組みを足していない）。試験は `project_wake_stale_epoch_` の 13 件。
+
+   **残る窓**: `off` の間の人の操作は数えない（I13）ので、`pending` の判断が残ったまま「`off` → 人の操作 → `off` 以外へ戻す」が
+   controller の tick を挟まずに起きると（daemon の停止中など）、`human_epoch` が変わらず古い判断の効果が実行される。tick が 1 回でも
+   挟まれば `off` の時点で `halted:mode_off` になるので、窓はこの場合に限る。mode の変更で `human_epoch` を増やす案は、人でない
+   principal の扱いを含めて別の判断なのでこの WU では変えない。

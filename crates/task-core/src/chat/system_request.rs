@@ -1,7 +1,7 @@
 //! ADR 2026-10-28-cos-inbox-chat-summary D4: daemon requests queued as CoS run inputs
 //! (`role=system`, state `queued`) on the general thread, and their retry after a failed run.
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::json;
 use time::OffsetDateTime;
 
@@ -12,6 +12,59 @@ use super::store::{
 };
 use super::*;
 use crate::store::SqliteStore;
+
+/// [`SqliteStore::chat_system_queue_once`] を呼び出し側の transaction で。同じ key の入力があれば
+/// それを返す（書き込まない）。
+pub(super) fn chat_system_queue_once_tx(
+    tx: &Connection,
+    thread_id: &str,
+    key: &str,
+    text: &str,
+    at: &str,
+) -> Result<ChatMessage, ChatError> {
+    if key.len() > CHAT_CLIENT_KEY_MAX_BYTES {
+        return Err(ChatError::TooLarge("system message key".into()));
+    }
+    if text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
+        return Err(ChatError::TooLarge("system message text".into()));
+    }
+    thread_require(tx, thread_id)?;
+    let existing = tx
+        .query_row(
+            &format!("{MESSAGE_SELECT} WHERE thread_id=?1 AND client_message_id=?2"),
+            params![thread_id, key],
+            message_raw,
+        )
+        .optional()?;
+    if let Some(raw) = existing {
+        let message = message_from_raw(tx, raw)?;
+        if message.role == ChatMessageRole::System && message.text == text {
+            return Ok(message);
+        }
+        return Err(ChatError::Conflict(format!(
+            "system message key {key} reused"
+        )));
+    }
+    let id = insert_message(
+        tx,
+        NewMessage {
+            thread_id,
+            role: ChatMessageRole::System,
+            text,
+            state: ChatMessageState::Queued,
+            client_message_id: Some(key),
+            reply_to_id: None,
+            run_id: None,
+            metadata: &json!({}),
+        },
+        at,
+    )?;
+    let message = message_require(tx, thread_id, &id)?;
+    touch_thread(tx, thread_id, at)?;
+    emit_message(tx, &message, at)?;
+    emit_queue(tx, thread_id, at)?;
+    Ok(message)
+}
 
 impl SqliteStore {
     /// Whether a person's message waits in the thread's queue (ADR 2026-10-28-cos-inbox-chat-summary
@@ -57,50 +110,10 @@ impl SqliteStore {
         text: &str,
         now: OffsetDateTime,
     ) -> Result<ChatMessage, ChatError> {
-        if key.len() > CHAT_CLIENT_KEY_MAX_BYTES {
-            return Err(ChatError::TooLarge("system message key".into()));
-        }
-        if text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
-            return Err(ChatError::TooLarge("system message text".into()));
-        }
         let at = chat_ts(now);
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        thread_require(&tx, thread_id)?;
-        let existing = tx
-            .query_row(
-                &format!("{MESSAGE_SELECT} WHERE thread_id=?1 AND client_message_id=?2"),
-                params![thread_id, key],
-                message_raw,
-            )
-            .optional()?;
-        if let Some(raw) = existing {
-            let message = message_from_raw(&tx, raw)?;
-            if message.role == ChatMessageRole::System && message.text == text {
-                return Ok(message);
-            }
-            return Err(ChatError::Conflict(format!(
-                "system message key {key} reused"
-            )));
-        }
-        let id = insert_message(
-            &tx,
-            NewMessage {
-                thread_id,
-                role: ChatMessageRole::System,
-                text,
-                state: ChatMessageState::Queued,
-                client_message_id: Some(key),
-                reply_to_id: None,
-                run_id: None,
-                metadata: &json!({}),
-            },
-            &at,
-        )?;
-        let message = message_require(&tx, thread_id, &id)?;
-        touch_thread(&tx, thread_id, &at)?;
-        emit_message(&tx, &message, &at)?;
-        emit_queue(&tx, thread_id, &at)?;
+        let message = chat_system_queue_once_tx(&tx, thread_id, key, text, &at)?;
         tx.commit()?;
         Ok(message)
     }

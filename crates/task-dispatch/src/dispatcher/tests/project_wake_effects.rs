@@ -455,3 +455,372 @@ async fn project_wake_effect_exhausted() {
     assert_eq!(controller_roots(&store, &p), 0);
     assert_eq!(env.llm_launches(), 0);
 }
+
+// ---- 判断の human_epoch の照合（I7、付記 A1 の 11） ----
+
+const STALE: &str = "halted:stale_human_epoch";
+
+/// 人の操作の前（epoch 0）だけ root を作る判定。人の操作の後は効果なし。古い判断の効果が実行されると
+/// root が増えるので、root の数で区別できる。
+fn root_until_human(p: &Project) -> DecideFn {
+    let mut create = create_root(p);
+    Box::new(move |input| {
+        if input.human_epoch == 0 {
+            create(input)
+        } else {
+            Ok(ProjectDecision::none("fake/after-human"))
+        }
+    })
+}
+
+/// 人の操作の前（epoch 0）だけ CoS 入力を積む判定。
+fn cos_until_human(p: &Project) -> DecideFn {
+    let mut queue = queue_cos_input(p);
+    Box::new(move |input| {
+        if input.human_epoch == 0 {
+            queue(input)
+        } else {
+            Ok(ProjectDecision::none("fake/after-human"))
+        }
+    })
+}
+
+/// `boundary` で crash し、再起動の前に `op` が走り（`store` は開き直した接続）、再起動後の tick を重ねる。
+fn crash_then(
+    env: &Env,
+    boundary: Boundary,
+    decide: fn(&Project) -> DecideFn,
+    op: impl FnOnce(&SqliteStore, &Project, OffsetDateTime),
+) -> (Arc<SqliteStore>, Project, Dispatcher) {
+    let store = env.open();
+    let p = project(&store, Some(ControllerMode::Enabled));
+    let mut d = env.daemon(&store, "i1", decide(&p));
+    prime(&mut d);
+    let root = root_task(env, &store, &p, Status::Done);
+    transition(&store, &root, Status::Done, "review_pass");
+    env.advance(31);
+    d.set_project_controller_hook(Box::new(move |b| {
+        if b == boundary {
+            panic!("crash at {b:?}");
+        }
+    }));
+    // 1 回目の tick は取り込みで coalesce に入る。境界に当たるまで tick を重ねる。
+    let crashed = (0..3).any(|_| {
+        let hit = catch_unwind(AssertUnwindSafe(|| tick(&mut d))).is_err();
+        env.advance(31);
+        hit
+    });
+    assert!(crashed, "the hook did not fire");
+    drop(d);
+    let store = env.open();
+    op(&store, &p, env.now());
+    let mut d = env.daemon(&store, "i2", decide(&p));
+    for _ in 0..4 {
+        env.advance(61);
+        tick(&mut d);
+    }
+    (store, p, d)
+}
+
+fn bump(store: &SqliteStore, p: &Project, now: OffsetDateTime) {
+    assert!(human_bump(store, &p.id.to_string(), now).is_some());
+}
+
+fn assert_nothing_left(store: &SqliteStore, p: &Project, env: &Env) {
+    assert_eq!(pending_wakes(store, p), 0, "no wake left");
+    assert_eq!(
+        store.project_controller_pending_effects().unwrap().len(),
+        0,
+        "no effect left"
+    );
+    assert_eq!(env.llm_launches(), 0);
+}
+
+#[tokio::test]
+async fn project_wake_stale_epoch_crash_after_commit() {
+    let env = Env::new();
+    let (store, p, _d) = crash_then(&env, Boundary::AfterCommit, root_until_human, bump);
+    assert_eq!(controller_roots(&store, &p), 0, "the old decision's root");
+    assert_eq!(idempotency_rows(&env, &p), 0);
+    let ds = decisions(&store, &p);
+    assert_eq!(ds.len(), 2);
+    assert_eq!(ds[0].human_epoch, 0);
+    assert_eq!(ds[0].effect_state, EffectState::Suppressed);
+    assert_eq!(ds[0].effect_ref.as_deref(), Some(STALE));
+    assert_eq!(ds[1].human_epoch, 1, "re-evaluated by the wake human:1");
+    assert_nothing_left(&store, &p, &env);
+}
+
+#[tokio::test]
+async fn project_wake_stale_epoch_crash_after_commit_cos() {
+    let env = Env::new();
+    let (store, p, _d) = crash_then(&env, Boundary::AfterCommit, cos_until_human, bump);
+    assert_eq!(cos_inputs(&env), 0, "the old decision's CoS input");
+    let ds = decisions(&store, &p);
+    assert_eq!(ds[0].effect_state, EffectState::Suppressed);
+    assert_eq!(ds[0].effect_ref.as_deref(), Some(STALE));
+    assert_nothing_left(&store, &p, &env);
+}
+
+#[tokio::test]
+async fn project_wake_stale_epoch_effect_backoff() {
+    let env = Env::new();
+    let store = env.open();
+    let p = project(&store, Some(ControllerMode::Enabled));
+    let mut d = env.daemon(&store, "i1", root_until_human(&p));
+    d.set_project_controller_effect_fail(Box::new(|_| true));
+    prime(&mut d);
+    wake_by_root_done(&env, &store, &p, &mut d);
+    let old = decisions(&store, &p)[0].clone();
+    assert_eq!(old.effect_state, EffectState::Pending, "in backoff");
+    bump(&store, &p, env.now());
+    // backoff（60 秒）の途中でも止まり、新しい判断と並ばない。
+    let mut d = env.daemon(&store, "i2", root_until_human(&p));
+    tick(&mut d);
+    let after = store.project_controller_decision(&old.id).unwrap().unwrap();
+    assert_eq!(after.effect_state, EffectState::Suppressed);
+    assert_eq!(after.effect_ref.as_deref(), Some(STALE));
+    for _ in 0..3 {
+        env.advance(3600);
+        tick(&mut d);
+    }
+    assert_eq!(controller_roots(&store, &p), 0);
+    assert_eq!(idempotency_rows(&env, &p), 0);
+    assert_eq!(exhaustion_notices(&env), 0);
+    assert_nothing_left(&store, &p, &env);
+}
+
+#[tokio::test]
+async fn project_wake_stale_epoch_cos_busy() {
+    let env = Env::new();
+    let store = env.open();
+    let p = project(&store, Some(ControllerMode::Enabled));
+    let project_id = p.id.to_string();
+    // epoch 0 → 入力 1、epoch 1 → 入力 2（Busy で待つ）、epoch 2 → 効果なし。
+    let decide: DecideFn = Box::new(move |input| match input.human_epoch {
+        n @ (0 | 1) => Ok(cos_decision(&format!("pc-input:{project_id}:{n}"))),
+        _ => Ok(ProjectDecision::none("fake/after-human")),
+    });
+    let mut d = env.daemon(&store, "i1", decide);
+    prime(&mut d);
+    wake_by_root_done(&env, &store, &p, &mut d);
+    assert_eq!(cos_inputs(&env), 1);
+    bump(&store, &p, env.now());
+    tick(&mut d);
+    let busy = decisions(&store, &p)[1].clone();
+    assert_eq!(busy.effect_state, EffectState::Pending, "Busy");
+    // 人がまた操作し、CoS が前の入力を処理した。Busy が解けても古い判断の入力は積まない。
+    bump(&store, &p, env.now());
+    cos_processed_all(&env);
+    for _ in 0..4 {
+        env.advance(3600);
+        tick(&mut d);
+    }
+    assert_eq!(cos_inputs(&env), 1, "the Busy decision queued nothing");
+    let after = store
+        .project_controller_decision(&busy.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.effect_state, EffectState::Suppressed);
+    assert_eq!(after.effect_ref.as_deref(), Some(STALE));
+    assert_nothing_left(&store, &p, &env);
+}
+
+#[tokio::test]
+async fn project_wake_stale_epoch_crash_after_effect_applied() {
+    let env = Env::new();
+    let (store, p, _d) = crash_then(&env, Boundary::AfterEffect, root_until_human, bump);
+    assert_eq!(controller_roots(&store, &p), 1, "the root that was created");
+    assert_eq!(idempotency_rows(&env, &p), 1);
+    let ds = decisions(&store, &p);
+    assert_eq!(ds[0].effect_state, EffectState::Applied, "not halted");
+    let root = store
+        .list(None)
+        .unwrap()
+        .into_iter()
+        .find(|t| {
+            t.labels
+                .iter()
+                .any(|l| l == crate::project_controller::CONTROLLER_LABEL)
+        })
+        .unwrap();
+    assert_eq!(
+        ds[0].effect_ref.as_deref(),
+        Some(root.id.to_string().as_str())
+    );
+    assert_eq!(ds[1].human_epoch, 1, "re-evaluated by the wake human:1");
+    assert_nothing_left(&store, &p, &env);
+}
+
+#[tokio::test]
+async fn project_wake_stale_epoch_crash_after_effect_applied_cos() {
+    let env = Env::new();
+    let (store, p, _d) = crash_then(&env, Boundary::AfterEffect, cos_until_human, bump);
+    assert_eq!(cos_inputs(&env), 1);
+    let ds = decisions(&store, &p);
+    assert_eq!(ds[0].effect_state, EffectState::Applied, "not halted");
+    assert!(ds[0].effect_ref.is_some(), "the message id");
+    assert_nothing_left(&store, &p, &env);
+}
+
+/// 効果が効いていれば、人が `off` にしていても実在する root を `halted` と記録しない。
+#[tokio::test]
+async fn project_wake_stale_epoch_crash_after_effect_off() {
+    let env = Env::new();
+    let (store, p, _d) = crash_then(
+        &env,
+        Boundary::AfterEffect,
+        root_until_human,
+        |s, p, now| {
+            s.project_controller_set_mode(
+                &p.id.to_string(),
+                ControllerMode::Off,
+                None,
+                "human:test",
+                now,
+            )
+            .unwrap();
+        },
+    );
+    assert_eq!(controller_roots(&store, &p), 1);
+    let ds = decisions(&store, &p);
+    assert_eq!(ds.len(), 1);
+    assert_eq!(ds[0].effect_state, EffectState::Applied);
+    assert_eq!(env.llm_launches(), 0);
+}
+
+#[tokio::test]
+async fn project_wake_stale_epoch_reevaluates_once() {
+    let env = Env::new();
+    // 人の操作の後も同じ root を選ぶ判定: 止めた後の再評価で 1 件だけ作る。
+    let (store, p, mut d) = crash_then(&env, Boundary::AfterCommit, create_root, bump);
+    for _ in 0..3 {
+        env.advance(3600);
+        tick(&mut d);
+    }
+    assert_eq!(controller_roots(&store, &p), 1);
+    assert_eq!(idempotency_rows(&env, &p), 1);
+    let ds = decisions(&store, &p);
+    assert_eq!(ds.len(), 2);
+    assert_eq!(ds[0].effect_state, EffectState::Suppressed);
+    assert_eq!(ds[0].effect_ref.as_deref(), Some(STALE));
+    assert_eq!(ds[1].effect_state, EffectState::Applied);
+    assert_eq!(env.calls().len(), 2, "one decide before, one after");
+    assert_nothing_left(&store, &p, &env);
+}
+
+/// 門を通った直後に `op` が走る（`fail_effect` は門の後、書き込みの前に呼ばれる）。
+fn after_admit(
+    env: &Env,
+    decide: fn(&Project) -> DecideFn,
+    op: impl Fn(&SqliteStore, &Project, OffsetDateTime) + Send + 'static,
+) -> (Arc<SqliteStore>, Project, Dispatcher) {
+    let store = env.open();
+    let p = project(&store, Some(ControllerMode::Enabled));
+    let mut d = env.daemon(&store, "i1", decide(&p));
+    let other = env.open();
+    let clock = env.clock.clone();
+    let target = p.clone();
+    let mut fired = false;
+    d.set_project_controller_effect_fail(Box::new(move |_| {
+        if !fired {
+            fired = true;
+            let now = *clock.lock().unwrap();
+            op(&other, &target, now);
+        }
+        false
+    }));
+    prime(&mut d);
+    wake_by_root_done(env, &store, &p, &mut d);
+    (store, p, d)
+}
+
+#[tokio::test]
+async fn project_wake_stale_epoch_after_admit_root() {
+    let env = Env::new();
+    let (store, p, _d) = after_admit(&env, root_until_human, bump);
+    assert_eq!(controller_roots(&store, &p), 0, "refused in the write tx");
+    assert_eq!(idempotency_rows(&env, &p), 0);
+    let ds = decisions(&store, &p);
+    assert_eq!(ds[0].effect_state, EffectState::Suppressed);
+    assert_eq!(ds[0].effect_ref.as_deref(), Some(STALE));
+    assert_eq!(env.llm_launches(), 0);
+}
+
+#[tokio::test]
+async fn project_wake_stale_epoch_after_admit_cos() {
+    let env = Env::new();
+    let (store, p, _d) = after_admit(&env, cos_until_human, bump);
+    assert_eq!(cos_inputs(&env), 0, "refused in the write tx");
+    let ds = decisions(&store, &p);
+    assert_eq!(ds[0].effect_state, EffectState::Suppressed);
+    assert_eq!(ds[0].effect_ref.as_deref(), Some(STALE));
+    assert_eq!(env.llm_launches(), 0);
+}
+
+/// `off` は `human_epoch` を増やさないが、書き込みの tx の門が止める（旧い付記 10 の窓が閉じた）。
+#[tokio::test]
+async fn project_wake_stale_epoch_after_admit_off() {
+    let env = Env::new();
+    let (store, p, _d) = after_admit(&env, create_root, |s, p, now| {
+        s.project_controller_set_mode(
+            &p.id.to_string(),
+            ControllerMode::Off,
+            None,
+            "human:test",
+            now,
+        )
+        .unwrap();
+    });
+    assert_eq!(controller_roots(&store, &p), 0);
+    let ds = decisions(&store, &p);
+    assert_eq!(ds[0].effect_state, EffectState::Suppressed);
+    assert_eq!(ds[0].effect_ref.as_deref(), Some("halted:mode_off"));
+}
+
+#[tokio::test]
+async fn project_wake_stale_epoch_unchanged_epoch_runs() {
+    let env = Env::new();
+    // crash と backoff を通っても、人の操作が無ければ判断の効果は実行される。
+    let (store, p, _d) = crash_then(&env, Boundary::AfterCommit, create_root, |_, _, _| {});
+    assert_eq!(controller_roots(&store, &p), 1);
+    let ds = decisions(&store, &p);
+    assert_eq!(ds.len(), 1, "no re-evaluation without a person");
+    assert_eq!(ds[0].effect_state, EffectState::Applied);
+    assert_nothing_left(&store, &p, &env);
+}
+
+/// phase `blocked` の Hold より照合が先: 同じ epoch なら待ち、人が操作したら止める。
+#[tokio::test]
+async fn project_wake_stale_epoch_blocked() {
+    let env = Env::new();
+    let store = env.open();
+    let p = project(&store, Some(ControllerMode::Enabled));
+    let mut d = env.daemon(&store, "i1", root_until_human(&p));
+    d.set_project_controller_effect_fail(Box::new(|_| true));
+    prime(&mut d);
+    wake_by_root_done(&env, &store, &p, &mut d);
+    let old = decisions(&store, &p)[0].clone();
+    rusqlite::Connection::open(env.db())
+        .unwrap()
+        .execute(
+            "UPDATE project_controller_state SET phase = 'blocked' WHERE project_id = ?1",
+            [p.id.to_string()],
+        )
+        .unwrap();
+    let mut d = env.daemon(&store, "i2", root_until_human(&p));
+    env.advance(3600);
+    tick(&mut d);
+    let held = store.project_controller_decision(&old.id).unwrap().unwrap();
+    assert_eq!(
+        held.effect_state,
+        EffectState::Pending,
+        "held while blocked"
+    );
+    bump(&store, &p, env.now());
+    tick(&mut d);
+    let after = store.project_controller_decision(&old.id).unwrap().unwrap();
+    assert_eq!(after.effect_state, EffectState::Suppressed);
+    assert_eq!(after.effect_ref.as_deref(), Some(STALE));
+    assert_eq!(controller_roots(&store, &p), 0);
+}

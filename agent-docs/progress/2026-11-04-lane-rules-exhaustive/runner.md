@@ -22,7 +22,10 @@ updated: 2026-11-04
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
 - `cargo nextest run -p celeris --lib script_exhaustive` → 10 件合格（偽の isolate と `tokio::time::pause`。正順・逆順と 5 ms の間隔、live の待ち、timeout の 1 秒の待ちと連続 3 件、率、不一致、安全違反、generation の消失、30 分、停止）
 - `CELERIS_SCRIPT_REQUIRE_BUNDLE=1 cargo nextest run -p celeris --test script_exhaustive` → 7 件合格。本物の bundle（control-ts の source から作った bundle。`control-ts` で `pnpm install --offline --frozen-lockfile` の後）の isolate で 39,366 呼び出しが全件 `match`、再起動の後も `passed`（約 57 秒）。
-- 検査 3 本は報告本文に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（対象 celeris・celerisctl、949 件合格、script bundle の SKIP 0 件）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `python3 scripts/dev/check-architecture-map.py` → OK（893 件のパス）
 
 ## 未解決事項
 - 本物の bundle の全件の試験は、負荷のかかった試験機で 50 ms を超えないよう deadline を 30 秒・間隔 0 にしている。50 ms の deadline と間隔は単体試験が時計の差し替えで確かめる。本番の所要時間・latency は未確認（証拠の行の `started_at`・`finished_at`・`latency_*` で分かる）。

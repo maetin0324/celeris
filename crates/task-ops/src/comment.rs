@@ -424,6 +424,16 @@ pub fn rereview(
     id: TaskId,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
+    rereview_via(store, &crate::op_writes::PlainWrites(store), id, expected)
+}
+
+/// [`rereview`] の書き込みを `writes` に任せる。
+pub fn rereview_via(
+    store: &dyn TaskStore,
+    writes: &dyn crate::op_writes::OpWrites,
+    id: TaskId,
+    expected: Option<Status>,
+) -> Result<TransitionResult, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     if let Some(exp) = expected
         && exp != task.status
@@ -442,7 +452,7 @@ pub fn rereview(
                     .into(),
             ));
         };
-        store.append_event(id, &resume)?;
+        writes.append_event(id, &resume)?;
         return Ok(TransitionResult {
             id,
             from: Status::Reviewing,
@@ -467,7 +477,7 @@ pub fn rereview(
             ));
         }
     }
-    let outcome = store.apply_transition(id, Trigger::Rereview, None)?;
+    let outcome = writes.transition(id, Trigger::Rereview, Vec::new())?;
     Ok(TransitionResult {
         id,
         from: task.status,

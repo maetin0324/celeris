@@ -64,7 +64,7 @@ run_suite() {
 }
 
 run_suite task-dispatch 'test(/^dispatcher::tests::project_wake::project_wake_/)' 27 dispatch
-run_suite task-api 'test(/project_wake_api_/)' 5 api
+run_suite task-api 'test(/project_wake_api_/)' 28 api
 run_suite task-core 'test(/project_wake_store_/)' 2 store
 
 python3 - "$out" <<'PY'

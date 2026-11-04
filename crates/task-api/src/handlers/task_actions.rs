@@ -60,9 +60,11 @@ pub(super) async fn approve(
         note,
         expected_status,
     } = read_json(body, true).await?;
+    let human = HumanEpoch::of(&caller);
     let result = state
         .blocking(move |store| {
-            task_ops::gate::approve_as(store, id, &caller.actor(), note, expected_status)
+            let writes = human.writes(store);
+            task_ops::gate::approve_via(store, &writes, id, &caller.actor(), note, expected_status)
                 .map_err(|e| ops_problem(store, e, Some("approve")))
         })
         .await?;
@@ -74,6 +76,7 @@ pub(super) async fn approve(
 /// 許す `task_ops::gate::accept` の薄いラッパー。
 pub(super) async fn accept(
     State(state): State<ApiState>,
+    caller: Caller,
     Params(id): Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -83,9 +86,10 @@ pub(super) async fn accept(
     require_admin(&state, &headers)?;
     let id = parse_task_id(&id)?;
     let ReopenBody { expected_status } = read_json(body, true).await?;
+    let human = HumanEpoch::of(&caller);
     let result = state
         .blocking(move |store| {
-            task_ops::gate::accept(store, id, expected_status)
+            task_ops::gate::accept_via(store, &human.writes(store), id, expected_status)
                 .map_err(|e| ops_problem(store, e, Some("accept")))
         })
         .await?;
@@ -107,9 +111,11 @@ pub(super) async fn reject(
         note,
         expected_status,
     } = read_json(body, true).await?;
+    let human = HumanEpoch::of(&caller);
     let result = state
         .blocking(move |store| {
-            task_ops::gate::reject_as(store, id, &caller.actor(), note, expected_status)
+            let writes = human.writes(store);
+            task_ops::gate::reject_via(store, &writes, id, &caller.actor(), note, expected_status)
                 .map_err(|e| ops_problem(store, e, Some("reject")))
         })
         .await?;
@@ -241,10 +247,13 @@ pub(super) async fn answer(
             message: "answer must not be blank".to_string(),
         }]));
     }
+    let human = HumanEpoch::of(&caller);
     let result = state
         .blocking(move |store| {
-            task_ops::gate::answer_with_intent(
+            let writes = human.writes(store);
+            task_ops::gate::answer_via(
                 store,
+                &writes,
                 id,
                 answer,
                 intent,
@@ -473,9 +482,10 @@ pub(super) async fn patch_task(
     let genres = state.inner.genres.clone();
     let clusters = super::cluster_ids(&state);
     let by = caller.actor();
+    let human = HumanEpoch::of(&caller);
     let result = state
         .blocking(move |store| {
-            patch_task_op(store, &genres, &clusters, id, body, &by, None)?.direct()
+            patch_task_op(store, &genres, &clusters, id, body, &by, human, None)?.direct()
         })
         .await?;
     Ok(json_response(StatusCode::OK, &result))
@@ -483,6 +493,7 @@ pub(super) async fn patch_task(
 
 /// `PATCH /tasks/{id}` の本体。handler（`audit = None`）と CoS の `/cos/operations`（ADR 2026-10-09 D3/D5。
 /// `Edited.by = cos`、task・書き込み範囲の hint・監査を同じ transaction）が共有する。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn patch_task_op(
     store: &task_core::store::SqliteStore,
     genres: &[task_core::GenreSpec],
@@ -493,6 +504,7 @@ pub(crate) fn patch_task_op(
         expected_write_paths,
     }: TaskPatchBody,
     by: &str,
+    human: HumanEpoch,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::edit::EditResult>, ApiProblem> {
     let target_id = id.to_string();
@@ -571,8 +583,17 @@ pub(crate) fn patch_task_op(
                 fields: plan.fields,
             },
             Some(plan) => {
+                // 編集と `human_epoch`（ADR 2026-11-04-project-controller D12）を同じ transaction で。
                 let updated = store
-                    .update_task(&plan.task, plan.event())
+                    .write_tx::<_, task_core::StoreError, _>(|tx| {
+                        let updated = task_core::store::SqliteStore::edit_task_tx(
+                            tx,
+                            &plan.task,
+                            &plan.event(),
+                        )?;
+                        human.bump_task_tx(tx, id)?;
+                        Ok(updated)
+                    })
                     .map_err(|e| ops_problem(store, task_ops::OpsError::Store(e), Some("edit")))?;
                 task_ops::edit::finish_edit(store, plan, updated)
                     .map_err(|e| ops_problem(store, e, Some("edit")))?
@@ -781,6 +802,7 @@ pub(crate) fn reopen_op(
 
 pub(super) async fn rereview(
     State(state): State<ApiState>,
+    caller: Caller,
     Params(id): Params<String>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
@@ -791,7 +813,9 @@ pub(super) async fn rereview(
     let id = parse_task_id(&id)?;
     let ReopenBody { expected_status } = read_json(body, true).await?;
     let result = state
-        .blocking(move |store| rereview_op(store, id, expected_status, None)?.direct())
+        .blocking(move |store| {
+            rereview_op(store, id, expected_status, HumanEpoch::of(&caller), None)?.direct()
+        })
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
@@ -800,10 +824,11 @@ pub(crate) fn rereview_op(
     store: &task_core::store::SqliteStore,
     id: task_core::TaskId,
     expected: Option<task_core::Status>,
+    human: HumanEpoch,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::gate::TransitionResult>, ApiProblem> {
     let Some(audit) = audit else {
-        return task_ops::comment::rereview(store, id, expected)
+        return task_ops::comment::rereview_via(store, &human.writes(store), id, expected)
             .map(Applied::Direct)
             .map_err(|error| ops_problem(store, error, Some("rereview")));
     };

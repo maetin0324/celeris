@@ -68,7 +68,7 @@ impl SqliteStore {
         Ok(true)
     }
 
-    fn task_integration_write_tx(
+    pub fn task_integration_write_tx(
         tx: &rusqlite::Transaction<'_>,
         value: &TaskRepoIntegrationState,
     ) -> Result<(), StoreError> {

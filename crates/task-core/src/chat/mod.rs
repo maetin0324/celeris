@@ -58,6 +58,7 @@ pub use session::{
     COS_CHAT_SESSION_KIND, COS_CHAT_SESSION_NODE, ChatRunSessionMode, ChatRunSessionRecord,
     ChatSession, ChatSessionKey, ChatSessionUsage,
 };
+pub use store::chat_posted_project_tx;
 pub use store::{
     CHAT_CLIENT_KEY_MAX_BYTES, CHAT_MESSAGE_ATTACHMENTS_MAX, CHAT_MESSAGE_PAGE_DEFAULT,
     CHAT_MESSAGE_PAGE_MAX, CHAT_MESSAGE_TEXT_MAX_BYTES, CHAT_QUEUE_MAX, CHAT_RELAY_TASKS_MAX,

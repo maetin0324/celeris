@@ -590,6 +590,36 @@ pub fn apply_plan(store: &dyn TaskStore, plan: &AnswerPlan) -> Result<(), OpsErr
     Ok(())
 }
 
+/// [`apply_plan`] の書き込みに `also` を同じ transaction で足す。回答できなかったとき `also` は走らない。
+pub fn apply_plan_also<F>(
+    store: &task_core::store::SqliteStore,
+    plan: &AnswerPlan,
+    also: F,
+) -> Result<(), OpsError>
+where
+    F: FnOnce(&rusqlite::Connection) -> Result<(), task_core::StoreError>,
+{
+    let applied = store.write_tx::<_, task_core::StoreError, _>(|tx| {
+        let applied = task_core::store::SqliteStore::decision_resolve_apply_tx(
+            tx,
+            plan.node_id,
+            &plan.decision_id,
+            plan.expect,
+            plan.rows(),
+            plan.events(),
+        )?;
+        if applied {
+            also(tx)?;
+        }
+        Ok(applied)
+    })?;
+    if !applied {
+        let current = get_row(store, &plan.decision_id)?;
+        return Err(not_open(&current, plan.verb));
+    }
+    Ok(())
+}
+
 pub fn plan_answer(
     store: &dyn TaskStore,
     id: &str,

@@ -734,3 +734,76 @@ fn stranded_promotion_remembers_decided_ancestry() {
             .contains_key(&(repo.clone(), other, head))
     );
 }
+
+/// ADR 2026-11-04-project-controller D12: 人の merge は状態の行を `writes` の transaction で書く（`human_epoch` を
+/// 同じ transaction に足せる）。行を書く回数は 1 回。
+#[test]
+fn stranded_merge_via_writes_the_state_row_through_the_given_writes() {
+    let tmp = tempfile::tempdir().expect("fixture");
+    let dir = tmp.path().to_path_buf();
+    git(&dir, &["init", "-b", "main"]);
+    git(&dir, &["config", "user.email", "test@example.invalid"]);
+    git(&dir, &["config", "user.name", "test"]);
+    fs::write(dir.join("base"), "base").expect("write");
+    git(&dir, &["add", "base"]);
+    git(&dir, &["commit", "-m", "base"]);
+    let head = git(&dir, &["rev-parse", "HEAD"]);
+    let store = SqliteStore::open_in_memory().expect("store");
+    let task_id = TaskId::new();
+    let repo_id = RepoId::new();
+    let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock");
+    store
+        .task_integration_upsert(&TaskRepoIntegrationState {
+            task_id,
+            repo_id,
+            branch: "main".into(),
+            head_sha: head.clone(),
+            state: TaskRepoIntegrationStatus::Unintegrated,
+            reason: None,
+            actor: "sweep".into(),
+            checked_at: now,
+            updated_at: now,
+        })
+        .expect("seed");
+    let calls = std::cell::Cell::new(0);
+    let writes = crate::op_writes::WritesAlso {
+        store: &store,
+        also: |_: &rusqlite::Connection, task: TaskId| {
+            assert_eq!(task, task_id);
+            calls.set(calls.get() + 1);
+            Ok(())
+        },
+    };
+    let request = MergeRequest {
+        task_id,
+        repo_id,
+        repo: &dir,
+        branch: "main",
+        head: &head,
+        default_branch: "main",
+        actor: "alice",
+        now,
+    };
+    assert_eq!(
+        merge_via(&store, &writes, &request).expect("merge"),
+        MergeOutcome::AlreadyIntegrated
+    );
+    assert_eq!(calls.get(), 1);
+    // `also` が落ちれば状態の行も書かれない。
+    hold(&store, task_id, repo_id, "待つ", "bob", now).expect("hold");
+    let failing = crate::op_writes::WritesAlso {
+        store: &store,
+        also: |_: &rusqlite::Connection, _: TaskId| {
+            Err(task_core::StoreError::Invalid("refused".into()))
+        },
+    };
+    reopen_via(&store, &failing, task_id, repo_id, "carol", now).expect_err("refused");
+    assert_eq!(
+        store
+            .task_integration_get(task_id, repo_id)
+            .expect("get")
+            .expect("state")
+            .state,
+        TaskRepoIntegrationStatus::Held
+    );
+}

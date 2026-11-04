@@ -983,6 +983,7 @@ fn broker_problem(failure: BrokerFailure) -> ApiProblem {
 
 pub(crate) async fn registered(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params((id, wait_id)): Params<(String, String)>,
     RawQuery(raw): RawQuery,
@@ -1020,13 +1021,14 @@ pub(crate) async fn registered(
                 ));
             }
             store
-                .browser_wait_register(
+                .browser_wait_register_also(
                     task_id,
                     &wait.wait_id,
                     body.expected_version,
                     &body.receipt,
                     &claims.actor_id,
                     now,
+                    |tx| crate::human_epoch::HumanEpoch::of(&caller).bump_task_tx(tx, task_id),
                 )
                 .map_err(wait_problem)
         })
@@ -1051,7 +1053,12 @@ struct DecideInput {
     attestation: HumanAttestation,
 }
 
-async fn decide_with(state: ApiState, headers: HeaderMap, input: DecideInput) -> ApiResult {
+async fn decide_with(
+    state: ApiState,
+    caller: crate::principal::Caller,
+    headers: HeaderMap,
+    input: DecideInput,
+) -> ApiResult {
     require_admin(&state, &headers)?;
     let task_id = parse_task_id(&input.id)?;
     let decision = input.decision;
@@ -1071,8 +1078,9 @@ async fn decide_with(state: ApiState, headers: HeaderMap, input: DecideInput) ->
                 decision.as_str(),
                 now,
             )?;
+            let human = crate::human_epoch::HumanEpoch::of(&caller);
             store
-                .browser_wait_decide(
+                .browser_wait_decide_also(
                     task_id,
                     &wait.wait_id,
                     &HumanDecision {
@@ -1085,6 +1093,7 @@ async fn decide_with(state: ApiState, headers: HeaderMap, input: DecideInput) ->
                         idempotency_key: input.idempotency_key,
                     },
                     now,
+                    |tx| human.bump_task_tx(tx, task_id),
                 )
                 .map_err(wait_problem)
         })
@@ -1109,6 +1118,7 @@ async fn decide_with(state: ApiState, headers: HeaderMap, input: DecideInput) ->
 
 pub(crate) async fn decision(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params((id, wait_id)): Params<(String, String)>,
     RawQuery(raw): RawQuery,
@@ -1121,6 +1131,7 @@ pub(crate) async fn decision(
     }
     decide_with(
         state,
+        caller,
         headers,
         DecideInput {
             id,
@@ -1136,6 +1147,7 @@ pub(crate) async fn decision(
 
 pub(crate) async fn revoke(
     State(state): State<ApiState>,
+    caller: crate::principal::Caller,
     headers: HeaderMap,
     Params((id, wait_id)): Params<(String, String)>,
     RawQuery(raw): RawQuery,
@@ -1145,6 +1157,7 @@ pub(crate) async fn revoke(
     let body: BrowserRevokeBody = read_browser_json(body).await?;
     decide_with(
         state,
+        caller,
         headers,
         DecideInput {
             id,

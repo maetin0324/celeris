@@ -516,7 +516,34 @@ A1 の実装（migration `0111_project_controller.sql`、`SCHEMA_VERSION` 111）
 5. **`next_wake_at`**: 期限が来た案件は wake の行なしで評価する（timer）。wake の種類は 9 種のまま。
 6. **mode の API**: `shadow` 以上へ上げるには daemon の `[project_controller] enabled = true` も要る（403
    `project_controller_disabled`）。`PUT` の応答は `ProjectControllerView`。
-7. **`human_epoch` を増やす経路**: A1 は `PATCH /projects/{id}` と人の `POST /tasks`（案件つき）で、書き込みの後の別の
-   transaction で増やす。D12 の残りの経路（`project_action`、人の案件 thread への発言・`…/relays`・`…/forwards`、
-   task の cancel・retry・reopen、受信箱の回答）と同じ transaction 化は A3 に残す（進捗の未解決 1）。
+7. **`human_epoch` を増やす経路**: D12 の経路は全部 A1 が書き込みと同じ transaction で増やす（A3 に残さない）。
+   WU epoch-tx-task が案件・task の操作を、WU epoch-tx-chat が発言・relays・forwards・受信箱の回答を受け持った。
+   数えるのは `Principal::Human` の要求と、人の発言を運ぶ relays・forwards だけ。経路の表は 9。
 8. **wake API の coalesce**: `POST …/controller/wake` は 30 秒の固定値で `coalesce_until` を置く（API は daemon の設定を持たない）。
+9. **`human_epoch` を数える経路と数えない経路**（WU epoch-tx-chat、2026-11-04）。数える経路はどれも、書き込みの transaction の
+   中で `SqliteStore::project_controller_human_bump_tx` を呼ぶ（`crates/task-api/src/human_epoch.rs` の `HumanEpoch`）。案件を持たない
+   thread・task、状態の行が無い案件、`off` の案件では何も書かない（I13）。同じ要求の再送（同じ `client_message_id`・
+   idempotency key・browser の `replayed`）と、検査で断られた要求・書き込みに失敗した要求は数えない。
+
+   | 経路 | 数えるか | 理由・書き込みの場所 |
+   |---|---|---|
+   | 案件 thread（kind `project`）への `POST /chat/threads/{t}/messages`（`Principal::Human`） | 数える | 人の発言。`chat_message_post_as_also` の tx |
+   | `POST /chat/threads/{t}/relays`（`Principal::Operator` だけが通る） | 数える | operator は人の指示をそのまま運ぶ。`chat_relay_post_also` の tx |
+   | `/cos/operations` の `chat.relay_forward`（統括 CoS → 案件 thread） | 数える | 写すのは人の発言そのもの（`author` が `human:` の発言だけ写せる）。operation の監査と同じ tx |
+   | 統括 thread・review thread への人の発言 | 数えない | 案件を持たない。案件へは forward で届いたときに数える |
+   | operator・MCP が `…/messages` に書く自分の発言 | 数えない | 人の発言でない |
+   | CoS の発言（`/cos/operations` の `chat.message_post`）・CoS の run の出力 | 数えない | controller と同じ側の判断。数えると CoS が自分の発言で controller を止める |
+   | `POST /inbox/items/{id}/answer`（`Principal::Human`） | 数える | 委ね先の route が自分の書き込みの tx で 1 回数える（受信箱の handler は数えない。二重に数えない）。下の 10 行 |
+   | 　質問 → `POST /tasks/{id}/answer` | 数える | `gate::answer_via` の遷移の tx |
+   | 　決定 → `POST /decisions/{id}/answer`（`withdraw`・`revise` も同じ） | 数える | `decision::apply_plan_also` の tx |
+   | 　認可 → `POST /approvals/{id}/decide` | 数える | 決定の行（`approval_decide_tx`）の tx。続く task の再開は後始末で数えない |
+   | 　受け入れ確認・draft → `POST /tasks/{id}/{approve,reject,accept,cancel}` | 数える | `gate::{approve,reject,accept,cancel}_via` の遷移の tx |
+   | 　失敗 → `retry`・`reopen`・`cancel`、再同期の停止 → `rereview` | 数える | `retry_op`・`reopen_with`・`rereview_via` の tx |
+   | 　計画・工程の確認 → `…/execution/{plan,phase}-gate` | 数える | `{plan,phase}_gate_via` の遷移の tx。取り下げの監査 event は遷移の前の別の tx（従来どおり） |
+   | 　担当が決まらない → `PATCH /tasks/{id}` | 数える | `edit_task_tx` の tx。`expected_write_paths` だけの変更は数えない |
+   | 　未取り込み → `…/integrations/{repo}/{merge,hold,discard,reopen}` | 数える | 状態の行（`task_integration_write_tx`）の tx |
+   | 　browser の待ち → `…/browser/waits/{w}/{decision,registered,revoke}` | 数える | `browser_wait_{decide,register}_also` の解決の tx |
+   | 　統合の依頼（記録だけの回答）・integrate task の起票 | 数える | `integration_request_answer_tx` の tx・`create_task_with` の tx |
+   | operator が `POST /inbox/items/{id}/answer` を呼ぶ | 数えない | `Principal::Operator`。人の指示を運ぶなら relays に書く |
+   | CoS の `inbox.answer`（`/cos/operations`。`instructed_by` つきでも） | 数えない | 監査経路（`audit = Some`）。人の発言は relays・forwards・案件 thread への発言の時点で数えている |
+   | `POST /cos/inbox/{id}/resolve` | 数えない | CoS の一次対応の記録で、人の回答でない |

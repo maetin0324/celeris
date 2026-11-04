@@ -419,8 +419,11 @@ pub(crate) fn dispatch(
                 ("chat_thread", &thread),
                 matched.action,
                 |tx| {
-                    chat::chat_relay_forward_tx(tx, &from, &thread, &req, &relayed_by, now)
-                        .map(|posted| posted.response)
+                    let posted =
+                        chat::chat_relay_forward_tx(tx, &from, &thread, &req, &relayed_by, now)?;
+                    // CoS の言葉でなく人の発言そのものを運ぶので数える（ADR 2026-11-04-project-controller D12）。
+                    crate::human_epoch::HumanEpoch::Counted.bump_posted_tx(tx, &thread, &posted)?;
+                    Ok(posted.response)
                 },
             )
         }

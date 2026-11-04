@@ -172,8 +172,23 @@ impl SqliteStore {
     ) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let answered =
+            Self::integration_request_answer_tx(&tx, task_id, request_id, answer, note, by)?;
+        tx.commit()?;
+        Ok(answered)
+    }
+
+    /// 未回答の統合依頼に回答を記録する（呼び出し側の transaction の中）。未回答でなければ何も書かず `false`。
+    pub fn integration_request_answer_tx(
+        tx: &Connection,
+        task_id: TaskId,
+        request_id: &str,
+        answer: &str,
+        note: Option<&str>,
+        by: &str,
+    ) -> Result<bool, StoreError> {
         let open =
-            fold_open_integration_requests(Self::integration_request_rows_tx(&tx, Some(task_id))?);
+            fold_open_integration_requests(Self::integration_request_rows_tx(tx, Some(task_id))?);
         let is_open = open.iter().any(|row| {
             matches!(&row.event, Event::IntegrationRequested { request, .. }
                 if request.id_for(task_id) == request_id)
@@ -182,7 +197,7 @@ impl SqliteStore {
             return Ok(false);
         }
         Self::append_event_tx(
-            &tx,
+            tx,
             task_id,
             &Event::IntegrationAnswered {
                 request_id: request_id.to_owned(),
@@ -191,7 +206,6 @@ impl SqliteStore {
                 by: Some(by.to_owned()),
             },
         )?;
-        tx.commit()?;
         Ok(true)
     }
 

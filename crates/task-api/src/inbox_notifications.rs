@@ -419,6 +419,7 @@ async fn answer(
         let answer = input.option.clone();
         let note = input.note.clone();
         let by = caller.actor();
+        let human = crate::human_epoch::HumanEpoch::of(&caller);
         let request_id = state
             .blocking(move |store| {
                 let row = store
@@ -460,10 +461,23 @@ async fn answer(
                     store, task_id, &origin,
                 )
                 .map_err(store_problem)?;
-                if !store
-                    .integration_request_answer(task_id, &request_id, &answer, note.as_deref(), &by)
-                    .map_err(store_problem)?
-                {
+                // 回答の記録と `human_epoch`（ADR 2026-11-04-project-controller D12）を同じ transaction で。続く
+                // cancel・再開はこの回答の後始末なので数えない。
+                let answered = store.write_tx::<_, task_core::StoreError, _>(|tx| {
+                    let answered = task_core::store::SqliteStore::integration_request_answer_tx(
+                        tx,
+                        task_id,
+                        &request_id,
+                        &answer,
+                        note.as_deref(),
+                        &by,
+                    )?;
+                    if answered {
+                        human.bump_task_tx(tx, task_id)?;
+                    }
+                    Ok(answered)
+                });
+                if !answered.map_err(store_problem)? {
                     return Err(gone(&item_id));
                 }
                 if let Some(unit) = phase_unit {

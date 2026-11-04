@@ -609,8 +609,9 @@ async fn post_phase_gate(
     let req: task_ops::phase_gate::PhaseGateRequest = read_json(body, false).await?;
     let action = req.action;
     let by = caller.actor();
+    let human = crate::human_epoch::HumanEpoch::of(&caller);
     let result = state
-        .blocking(move |store| phase_gate_op(store, task_id, req, &by, None)?.direct())
+        .blocking(move |store| phase_gate_op(store, task_id, req, &by, human, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "phase_gate", task_id = %task_id, action = action.as_str(), to = ?result.to, "admin: phase gate");
     Ok(json_response(StatusCode::OK, &result))
@@ -637,14 +638,18 @@ pub(crate) fn phase_gate_op(
     task_id: task_core::TaskId,
     req: task_ops::phase_gate::PhaseGateRequest,
     by: &str,
+    human: crate::human_epoch::HumanEpoch,
     audit: Option<&crate::cos::operations::OperationAudit>,
 ) -> Result<crate::cos::operations::Applied<task_ops::gate::TransitionResult>, ApiProblem> {
     use crate::cos::operations::Applied;
     use task_ops::phase_gate::PhaseGatePlan;
     let Some(audit) = audit else {
-        return task_ops::phase_gate::phase_gate(store, task_id, req.action, req.note, by)
-            .map(Applied::Direct)
-            .map_err(|e| phase_gate_problem(store, e));
+        let writes = human.writes(store);
+        return task_ops::phase_gate::phase_gate_via(
+            store, &writes, task_id, req.action, req.note, by,
+        )
+        .map(Applied::Direct)
+        .map_err(|e| phase_gate_problem(store, e));
     };
     let target_id = task_id.to_string();
     let plan = task_ops::phase_gate::plan_phase_gate(store, task_id, req.action, req.note, by)
@@ -703,10 +708,12 @@ async fn post_plan_gate(
     let task_id = parse_task_id(&id)?;
     let req: task_ops::plan_gate::PlanGateRequest = read_json(body, false).await?;
     let action = req.action;
+    let human = crate::human_epoch::HumanEpoch::of(&caller);
     let result = state
         .blocking(move |store| {
-            task_ops::plan_gate::plan_gate(store, task_id, req.action, req.note, &by).map_err(|e| {
-                match e {
+            let writes = human.writes(store);
+            task_ops::plan_gate::plan_gate_via(store, &writes, task_id, req.action, req.note, &by)
+                .map_err(|e| match e {
                     task_ops::OpsError::Validation(message) => {
                         ApiProblem::validation(vec![crate::types::ValidationError {
                             field: Some("note".to_string()),
@@ -714,8 +721,7 @@ async fn post_plan_gate(
                         }])
                     }
                     other => ops_problem(store, other, Some("plan_gate")),
-                }
-            })
+                })
         })
         .await?;
     tracing::info!(who = "admin", op = "plan_gate", task_id = %task_id, action = action.as_str(), to = ?result.to, "admin: plan gate");

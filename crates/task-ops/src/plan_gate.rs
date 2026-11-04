@@ -123,17 +123,36 @@ pub fn plan_gate(
     note: Option<String>,
     by: &str,
 ) -> Result<TransitionResult, OpsError> {
+    plan_gate_via(
+        store,
+        &crate::op_writes::PlainWrites(store),
+        id,
+        action,
+        note,
+        by,
+    )
+}
+
+/// [`plan_gate`] の遷移を `writes` に任せる（取り下げの監査 event は遷移の前に別の transaction で書く）。
+pub fn plan_gate_via(
+    store: &dyn TaskStore,
+    writes: &dyn crate::op_writes::OpWrites,
+    id: TaskId,
+    action: PlanGateAction,
+    note: Option<String>,
+    by: &str,
+) -> Result<TransitionResult, OpsError> {
     match plan_plan_gate(store, id, action, note, by)? {
         PlanGatePlan::Withdraw { audit } => {
             store.append_event(id, &audit)?;
-            crate::gate::cancel(store, id, Some(Status::Blocked))
+            crate::gate::cancel_via(store, writes, id, Some(Status::Blocked))
         }
         PlanGatePlan::Resume {
             trigger,
             extra,
             from,
         } => {
-            let outcome = store.apply_transition_with_events(id, trigger, extra)?;
+            let outcome = writes.transition(id, trigger, extra)?;
             Ok(TransitionResult {
                 id,
                 from,

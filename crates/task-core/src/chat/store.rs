@@ -885,6 +885,22 @@ impl SqliteStore {
         author: &str,
         now: OffsetDateTime,
     ) -> Result<ChatMessagePosted, ChatError> {
+        self.chat_message_post_as_also(thread_id, req, author, now, |_, _| Ok(()))
+    }
+
+    /// [`Self::chat_message_post_as`] に `also` を同じ transaction で足す（ADR 2026-11-04-project-controller
+    /// D12 `human_epoch`）。`also` が失敗すれば発言も残らない。
+    pub fn chat_message_post_as_also<F>(
+        &self,
+        thread_id: &str,
+        req: &ChatPostMessageRequest,
+        author: &str,
+        now: OffsetDateTime,
+        also: F,
+    ) -> Result<ChatMessagePosted, ChatError>
+    where
+        F: FnOnce(&Connection, &ChatMessagePosted) -> Result<(), ChatError>,
+    {
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
         let provenance = MessageProvenance {
@@ -892,6 +908,7 @@ impl SqliteStore {
             ..MessageProvenance::default()
         };
         let posted = message_post_with(&tx, thread_id, req, &provenance, now)?;
+        also(&tx, &posted)?;
         tx.commit()?;
         Ok(posted)
     }
@@ -908,6 +925,21 @@ impl SqliteStore {
         relayed_by: &str,
         now: OffsetDateTime,
     ) -> Result<ChatMessagePosted, ChatError> {
+        self.chat_relay_post_also(thread_id, req, relayed_by, now, |_, _| Ok(()))
+    }
+
+    /// [`Self::chat_relay_post`] に `also` を同じ transaction で足す（D12 `human_epoch`）。
+    pub fn chat_relay_post_also<F>(
+        &self,
+        thread_id: &str,
+        req: &ChatRelayRequest,
+        relayed_by: &str,
+        now: OffsetDateTime,
+        also: F,
+    ) -> Result<ChatMessagePosted, ChatError>
+    where
+        F: FnOnce(&Connection, &ChatMessagePosted) -> Result<(), ChatError>,
+    {
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
         let relay = relay_record(&tx, thread_id, req, relayed_by, now)?;
@@ -930,6 +962,7 @@ impl SqliteStore {
             },
             now,
         )?;
+        also(&tx, &posted)?;
         tx.commit()?;
         Ok(posted)
     }
@@ -1873,6 +1906,24 @@ pub fn chat_message_cancel_tx(
     emit_message(tx, &message, &at)?;
     emit_queue(tx, thread_id, &at)?;
     Ok(message)
+}
+
+/// ADR 2026-11-04-project-controller D12: the project whose `human_epoch` this post counts for. Only
+/// a new message (`created`) in the project's fixed thread counts; a repeated `client_message_id`
+/// and the general and review threads do not.
+pub fn chat_posted_project_tx(
+    tx: &Connection,
+    thread_id: &str,
+    posted: &ChatMessagePosted,
+) -> Result<Option<String>, ChatError> {
+    if !posted.created {
+        return Ok(None);
+    }
+    let thread = thread_require(tx, thread_id)?;
+    Ok(match thread.kind {
+        ChatThreadKind::Project => thread.project_id,
+        _ => None,
+    })
 }
 
 /// `POST /chat/threads/{t}/messages` sent by a CoS run through `/cos/operations` (ADR

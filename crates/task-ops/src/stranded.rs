@@ -7,6 +7,8 @@ use task_core::{
 };
 use time::OffsetDateTime;
 
+use crate::op_writes::{OpWrites, PlainWrites};
+
 pub mod reintegrate;
 
 /// Caller supplied repository/release context; this module never reads daemon configuration.
@@ -174,8 +176,31 @@ pub fn discard(
     actor: &str,
     now: OffsetDateTime,
 ) -> Result<(), StoreError> {
+    discard_via(
+        store,
+        &PlainWrites(store),
+        task_id,
+        repo_id,
+        reason,
+        actor,
+        now,
+    )
+}
+
+/// [`discard`] の書き込みを `writes` に任せる。
+#[allow(clippy::too_many_arguments)]
+pub fn discard_via(
+    store: &dyn TaskStore,
+    writes: &dyn OpWrites,
+    task_id: TaskId,
+    repo_id: RepoId,
+    reason: &str,
+    actor: &str,
+    now: OffsetDateTime,
+) -> Result<(), StoreError> {
     set_disposition(
         store,
+        writes,
         task_id,
         repo_id,
         TaskRepoIntegrationStatus::Discarded,
@@ -193,8 +218,31 @@ pub fn hold(
     actor: &str,
     now: OffsetDateTime,
 ) -> Result<(), StoreError> {
+    hold_via(
+        store,
+        &PlainWrites(store),
+        task_id,
+        repo_id,
+        reason,
+        actor,
+        now,
+    )
+}
+
+/// [`hold`] の書き込みを `writes` に任せる。
+#[allow(clippy::too_many_arguments)]
+pub fn hold_via(
+    store: &dyn TaskStore,
+    writes: &dyn OpWrites,
+    task_id: TaskId,
+    repo_id: RepoId,
+    reason: &str,
+    actor: &str,
+    now: OffsetDateTime,
+) -> Result<(), StoreError> {
     set_disposition(
         store,
+        writes,
         task_id,
         repo_id,
         TaskRepoIntegrationStatus::Held,
@@ -206,6 +254,18 @@ pub fn hold(
 
 pub fn reopen(
     store: &dyn TaskStore,
+    task_id: TaskId,
+    repo_id: RepoId,
+    actor: &str,
+    now: OffsetDateTime,
+) -> Result<(), StoreError> {
+    reopen_via(store, &PlainWrites(store), task_id, repo_id, actor, now)
+}
+
+/// [`reopen`] の書き込みを `writes` に任せる。
+pub fn reopen_via(
+    store: &dyn TaskStore,
+    writes: &dyn OpWrites,
     task_id: TaskId,
     repo_id: RepoId,
     actor: &str,
@@ -232,11 +292,13 @@ pub fn reopen(
     state.actor = actor.to_owned();
     state.checked_at = now;
     state.updated_at = now;
-    store.task_integration_upsert(&state)
+    writes.integration_upsert(&state)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn set_disposition(
     store: &dyn TaskStore,
+    writes: &dyn OpWrites,
     task_id: TaskId,
     repo_id: RepoId,
     disposition: TaskRepoIntegrationStatus,
@@ -263,7 +325,7 @@ fn set_disposition(
     state.actor = actor.to_owned();
     state.checked_at = now;
     state.updated_at = now;
-    store.task_integration_upsert(&state)
+    writes.integration_upsert(&state)
 }
 
 pub struct MergeRequest<'a> {
@@ -287,6 +349,15 @@ pub enum MergeOutcome {
 
 /// Merge the recorded task head into the configured default branch without rebasing.
 pub fn merge(store: &dyn TaskStore, input: &MergeRequest<'_>) -> Result<MergeOutcome, StoreError> {
+    merge_via(store, &PlainWrites(store), input)
+}
+
+/// [`merge`] の状態の行の書き込みを `writes` に任せる。
+pub fn merge_via(
+    store: &dyn TaskStore,
+    writes: &dyn OpWrites,
+    input: &MergeRequest<'_>,
+) -> Result<MergeOutcome, StoreError> {
     use task_core::integration_request::{FileIntent, IntegrationRequest, SideIntent};
     let MergeRequest {
         task_id,
@@ -329,7 +400,7 @@ pub fn merge(store: &dyn TaskStore, input: &MergeRequest<'_>) -> Result<MergeOut
         state.actor = (*actor).to_owned();
         state.checked_at = *now;
         state.updated_at = *now;
-        store.task_integration_upsert(&state)?;
+        writes.integration_upsert(&state)?;
         return Ok(MergeOutcome::AlreadyIntegrated);
     }
     let target = Command::new("git")
@@ -380,7 +451,7 @@ pub fn merge(store: &dyn TaskStore, input: &MergeRequest<'_>) -> Result<MergeOut
         failed.actor = (*actor).to_owned();
         failed.checked_at = *now;
         failed.updated_at = *now;
-        store.task_integration_upsert(&failed)?;
+        writes.integration_upsert(&failed)?;
         store.integration_request_record(*task_id, &request, "delivery")?;
         Ok(MergeOutcome::NotMerged { reason })
     };
@@ -470,7 +541,7 @@ pub fn merge(store: &dyn TaskStore, input: &MergeRequest<'_>) -> Result<MergeOut
     state.actor = (*actor).to_owned();
     state.checked_at = *now;
     state.updated_at = *now;
-    store.task_integration_upsert(&state)?;
+    writes.integration_upsert(&state)?;
     Ok(MergeOutcome::Integrated)
 }
 

@@ -126,14 +126,36 @@ pub fn phase_gate(
     note: Option<String>,
     by: &str,
 ) -> Result<TransitionResult, OpsError> {
+    phase_gate_via(
+        store,
+        &crate::op_writes::PlainWrites(store),
+        id,
+        action,
+        note,
+        by,
+    )
+}
+
+/// [`phase_gate`] の遷移を `writes` に任せる。
+pub fn phase_gate_via(
+    store: &dyn TaskStore,
+    writes: &dyn crate::op_writes::OpWrites,
+    id: TaskId,
+    action: PhaseGateAction,
+    note: Option<String>,
+    by: &str,
+) -> Result<TransitionResult, OpsError> {
     match plan_phase_gate(store, id, action, note, by)? {
-        PhaseGatePlan::Withdraw => crate::gate::cancel(store, id, Some(Status::Blocked)),
+        PhaseGatePlan::Withdraw => {
+            crate::gate::cancel_via(store, writes, id, Some(Status::Blocked))
+        }
         PhaseGatePlan::Resume {
             trigger,
             extra_event,
             from,
         } => {
-            let outcome = store.apply_transition(id, trigger, extra_event.map(|e| *e))?;
+            let outcome =
+                writes.transition(id, trigger, extra_event.map(|e| *e).into_iter().collect())?;
             Ok(TransitionResult {
                 id,
                 from,

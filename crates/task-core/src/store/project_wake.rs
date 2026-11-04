@@ -413,6 +413,14 @@ impl SqliteStore {
         Ok(Some(epoch))
     }
 
+    /// `human_epoch` を数える案件（呼び出し側の transaction の中で task の案件を読む）。
+    pub fn task_project_id_tx(
+        tx: &Connection,
+        task_id: crate::model::TaskId,
+    ) -> Result<Option<crate::ProjectId>, StoreError> {
+        Ok(Self::get_locked(tx, task_id)?.and_then(|task| task.project_id))
+    }
+
     /// 未消費の wake（古い順）。
     pub fn project_wakes_pending(&self, project_id: &str) -> Result<Vec<ProjectWake>, StoreError> {
         self.with_read_conn(|c| Self::pc_wakes_pending_tx(c, project_id, usize::MAX))

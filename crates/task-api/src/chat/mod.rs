@@ -281,10 +281,17 @@ async fn post_message(
     let req: ChatPostMessageRequest = chat_json(body).await?;
     // ADR 2026-10-27-relayed-instructions D1: the authenticated principal is the author.
     let author = caller.actor();
+    let human = crate::human_epoch::HumanEpoch::of(&caller);
     let result = state
         .blocking(move |store| {
             store
-                .chat_message_post_as(&t, &req, &author, OffsetDateTime::now_utc())
+                .chat_message_post_as_also(
+                    &t,
+                    &req,
+                    &author,
+                    OffsetDateTime::now_utc(),
+                    |tx, posted| human.bump_posted_tx(tx, &t, posted),
+                )
                 .map_err(chat_problem)
         })
         .await?;
@@ -323,8 +330,17 @@ async fn post_relay(
     let relayed_by = caller.actor();
     let result = state
         .blocking(move |store| {
+            // operator の発言でなく人の指示を運ぶので数える（ADR 2026-11-04-project-controller D12）。
             store
-                .chat_relay_post(&t, &req, &relayed_by, OffsetDateTime::now_utc())
+                .chat_relay_post_also(
+                    &t,
+                    &req,
+                    &relayed_by,
+                    OffsetDateTime::now_utc(),
+                    |tx, posted| {
+                        crate::human_epoch::HumanEpoch::Counted.bump_posted_tx(tx, &t, posted)
+                    },
+                )
                 .map_err(chat_problem)
         })
         .await?;

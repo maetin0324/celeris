@@ -864,3 +864,132 @@ async fn expired_wait_is_gone_and_unconfigured_api_refuses_human_actions() {
     .await;
     assert_problem(&resp, 409, "task_not_running");
 }
+
+/// ADR 2026-11-04-project-controller D12: 人の browser の決定・登録は解決と同じ transaction で `human_epoch` を増やす。
+/// 同じ要求の再送（`replayed`）と、増やせなかった要求は数えない。
+fn project_task(f: &Fixture) -> (TaskId, String) {
+    let now = OffsetDateTime::now_utc();
+    let project = task_core::Project {
+        auto_advance: false,
+        auto_integrate: false,
+        slug: None,
+        id: task_core::ProjectId::new(),
+        title: "p".into(),
+        request: "r".into(),
+        status: task_core::ProjectStatus::Active,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        created_at: now,
+        updated_at: now,
+    };
+    f.env.store.project_create(&project).expect("project");
+    f.env
+        .store
+        .project_controller_set_mode(
+            &project.id.to_string(),
+            task_core::project_wake::ControllerMode::Shadow,
+            None,
+            "human:test",
+            now,
+        )
+        .expect("mode");
+    let mut task = new_task(TaskKind::Execute, Status::Ready);
+    task.project_id = Some(project.id);
+    f.env.seed(&task);
+    assert!(
+        f.env
+            .store
+            .acquire_lease(task.id, "run-1", std::time::Duration::from_secs(60))
+            .expect("lease")
+    );
+    (task.id, project.id.to_string())
+}
+
+fn human_epoch(f: &Fixture, project: &str) -> (i64, Vec<String>) {
+    let state = f
+        .env
+        .store
+        .project_controller_state(project)
+        .expect("state")
+        .expect("row");
+    let wakes = f
+        .env
+        .store
+        .project_wakes_pending(project)
+        .expect("wakes")
+        .into_iter()
+        .map(|w| w.wake_key)
+        .collect();
+    (state.human_epoch, wakes)
+}
+
+#[tokio::test]
+async fn project_wake_api_human_inbox_browser_decision_bumps_once() {
+    let f = fixture();
+    let (task_id, project) = project_task(&f);
+    let wait = open(&f, task_id, &approval_request("rk-pw")).await;
+    let wait_id = wait["wait_id"].as_str().expect("wait_id").to_string();
+    let path = format!("/api/v1/tasks/{task_id}/browser/waits/{wait_id}/decision");
+    let approve = json!({
+        "decision": "approve_once", "expected_version": 1, "idempotency_key": "k1",
+        "attestation": attest(&f.key, &claims(task_id, &wait_id, "approve_once", "n-pw")),
+    });
+    // 書き込みに失敗した決定は残らず、数えない。
+    rusqlite::Connection::open(&f.env.db_path)
+        .expect("open")
+        .execute_batch(
+            "CREATE TRIGGER refuse_wake BEFORE INSERT ON project_wakes \
+             BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        )
+        .expect("trigger");
+    let resp = send(&f.app, post_admin(&path, &approve)).await;
+    assert!(!resp.status.is_success(), "{}", resp.text());
+    assert_eq!(f.env.status_of(task_id), Status::Blocked);
+    assert_eq!(human_epoch(&f, &project), (0, vec![]));
+    rusqlite::Connection::open(&f.env.db_path)
+        .expect("open")
+        .execute_batch("DROP TRIGGER refuse_wake")
+        .expect("drop");
+
+    let mut approve = approve;
+    approve["attestation"] = attest(&f.key, &claims(task_id, &wait_id, "approve_once", "n-pw2"));
+    let resp = send(&f.app, post_admin(&path, &approve)).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(human_epoch(&f, &project), (1, vec!["human:1".into()]));
+    let resp = send(&f.app, post_admin(&path, &approve)).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.json()["replayed"], true);
+    assert_eq!(human_epoch(&f, &project), (1, vec!["human:1".into()]));
+}
+
+#[tokio::test]
+async fn project_wake_api_human_inbox_browser_registered_bumps_once() {
+    let f = fixture();
+    let (task_id, project) = project_task(&f);
+    let wait = open(&f, task_id, &auth_request("rk-pw-auth")).await;
+    let wait_id = wait["wait_id"].as_str().expect("wait_id").to_string();
+    let path = format!("/api/v1/tasks/{task_id}/browser/waits/{wait_id}/registered");
+    let receipt = json!({
+        "credential_id": "cred-manual-1",
+        "provider": "manual",
+        "policy_id": "pol-example",
+        "credential_revision": 1,
+        "origin": "https://login.example.com",
+        "receipt_id": "rcpt-1",
+    });
+    let resp = send(
+        &f.app,
+        post_admin(
+            &path,
+            &json!({
+                "expected_version": 1,
+                "receipt": receipt,
+                "attestation": attest(&f.key, &claims(task_id, &wait_id, "register", "n-pw-r")),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(human_epoch(&f, &project), (1, vec!["human:1".into()]));
+}

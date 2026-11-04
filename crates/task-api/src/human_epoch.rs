@@ -1,11 +1,14 @@
 //! ADR 2026-11-04-project-controller D12・I7: 人の操作を controller の判断より優先させる `human_epoch`。
 //!
-//! 数えるのは `Principal::Human` の要求だけ。`Operator`・`Mcp`・`Cos`・daemon の呼び出しと、
-//! `/cos/operations` の監査経路（`*_op` の `audit = Some`）は数えない。増やすのは書き込みと同じ transaction
-//! の中（[`HumanEpoch::bump_tx`]）で、片方だけ残ることはない。
+//! 数えるのは `Principal::Human` の要求と、人の発言を運ぶ `…/relays`・`chat.relay_forward`（[`HumanEpoch::Counted`]
+//! を直接渡す）。それ以外の `Operator`・`Mcp`・`Cos`・daemon の呼び出しと、`/cos/operations` の監査経路
+//! （`*_op` の `audit = Some`）は数えない。増やすのは書き込みと同じ transaction の中（[`HumanEpoch::bump_tx`]）で、
+//! 片方だけ残ることはない。表は ADR の付記 A1 の 9。
 
+use task_core::chat::{ChatError, ChatMessagePosted};
 use task_core::store::SqliteStore;
-use task_core::{ProjectId, StoreError};
+use task_core::{ProjectId, StoreError, TaskId};
+use task_ops::op_writes::{OpWrites, WritesAlso};
 use time::OffsetDateTime;
 
 use crate::{Caller, Principal};
@@ -47,5 +50,45 @@ impl HumanEpoch {
             COALESCE_SECS,
         )?;
         Ok(())
+    }
+
+    /// `task` の案件で数える（呼び出し側の transaction の中で案件を読む）。
+    pub(crate) fn bump_task_tx(
+        self,
+        tx: &rusqlite::Connection,
+        task: TaskId,
+    ) -> Result<(), StoreError> {
+        if self == Self::NotCounted {
+            return Ok(());
+        }
+        self.bump_tx(tx, SqliteStore::task_project_id_tx(tx, task)?)
+    }
+
+    /// 発言を数える（案件の固定 thread の新しい発言だけ。同じ `client_message_id` の再送は数えない）。
+    pub(crate) fn bump_posted_tx(
+        self,
+        tx: &rusqlite::Connection,
+        thread: &str,
+        posted: &ChatMessagePosted,
+    ) -> Result<(), ChatError> {
+        if self == Self::NotCounted {
+            return Ok(());
+        }
+        let project = task_core::chat::chat_posted_project_tx(tx, thread, posted)?
+            .map(|id| {
+                id.parse::<ProjectId>()
+                    .map_err(|e| StoreError::Invalid(format!("thread project id {id}: {e}")))
+            })
+            .transpose()?;
+        self.bump_tx(tx, project)?;
+        Ok(())
+    }
+
+    /// `task_ops` の人の回答の書き込みを、数える transaction で書く口。
+    pub(crate) fn writes(self, store: &SqliteStore) -> impl OpWrites + '_ {
+        WritesAlso {
+            store,
+            also: move |tx: &rusqlite::Connection, task: TaskId| self.bump_task_tx(tx, task),
+        }
     }
 }

@@ -645,12 +645,185 @@ impl BrowserWaitStore for SqliteStore {
         actor_id: &str,
         now: OffsetDateTime,
     ) -> Result<BrowserWaitResolution, BrowserWaitError> {
+        self.browser_wait_register_also(
+            task_id,
+            wait_id,
+            expected_version,
+            credential,
+            actor_id,
+            now,
+            |_| Ok(()),
+        )
+    }
+
+    fn browser_wait_decide(
+        &self,
+        task_id: TaskId,
+        wait_id: &str,
+        decision: &HumanDecision,
+        now: OffsetDateTime,
+    ) -> Result<BrowserWaitResolution, BrowserWaitError> {
+        self.browser_wait_decide_also(task_id, wait_id, decision, now, |_| Ok(()))
+    }
+
+    fn browser_wait_consume(
+        &self,
+        task_id: TaskId,
+        wait_id: &str,
+        resume_key: &str,
+        run_id: &str,
+        session_id: &str,
+        now: OffsetDateTime,
+    ) -> Result<BrowserWait, BrowserWaitError> {
+        self.browser_tx(|tx| {
+            let wait = load_for_task(tx, task_id, wait_id)?;
+            if wait.resume_key != resume_key {
+                return Err(BrowserWaitError::Invalid {
+                    field: "resume_key",
+                });
+            }
+            match wait.state {
+                BrowserWaitState::Approved => {}
+                BrowserWaitState::Expired | BrowserWaitState::Revoked => {
+                    return Err(BrowserWaitError::Gone);
+                }
+                _ => return Err(BrowserWaitError::InvalidState { op: "consume" }),
+            }
+            // 同じ論理 run/session の continuation だけ（別の session で旧承認を使わない）。
+            if wait.run_id != run_id || wait.session_id != session_id {
+                if set_state_tx(
+                    tx,
+                    &wait,
+                    BrowserWaitState::Invalidated,
+                    "session_mismatch",
+                    now,
+                )? {
+                    let event = resolved_event(
+                        &wait,
+                        BrowserWaitState::Invalidated,
+                        "session_mismatch",
+                        None,
+                    );
+                    SqliteStore::append_event_tx(tx, task_id, &event)?;
+                }
+                return Err(BrowserWaitError::Gone);
+            }
+            if wait.deadline <= now {
+                expire_tx(tx, &wait, now)?;
+                return Err(BrowserWaitError::Gone);
+            }
+            let changed = tx.execute(
+                "UPDATE browser_approvals SET consumed_at = ?1 \
+                 WHERE approval_id = ?2 AND consumed_at IS NULL",
+                params![format_rfc3339(now)?, wait.approval_id],
+            )?;
+            if changed != 1 || !set_state_tx(tx, &wait, BrowserWaitState::Resumed, "consumed", now)?
+            {
+                return Err(BrowserWaitError::InvalidState { op: "consume" });
+            }
+            let event = resolved_event(&wait, BrowserWaitState::Resumed, "consumed", None);
+            SqliteStore::append_event_tx(tx, task_id, &event)?;
+            wait_by_id_tx(tx, wait_id)?.ok_or(BrowserWaitError::NotFound)
+        })
+    }
+
+    fn browser_waits_expire(&self, now: OffsetDateTime) -> Result<Vec<BrowserWait>, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let due = query_waits(
+            &tx,
+            "WHERE state IN ('pending', 'approved') AND deadline <= ?1 ORDER BY deadline, wait_id",
+            &[&format_rfc3339(now)?],
+        )?;
+        let mut expired = Vec::new();
+        for wait in due {
+            if expire_tx(&tx, &wait, now)?
+                && let Some(w) = wait_by_id_tx(&tx, &wait.wait_id)?
+            {
+                expired.push(w);
+            }
+        }
+        tx.commit()?;
+        Ok(expired)
+    }
+
+    fn browser_approvals_for_wait(
+        &self,
+        wait_id: &str,
+    ) -> Result<Vec<BrowserApprovalRecord>, StoreError> {
+        let conn = self.lock()?;
+        approval_rows(
+            &conn,
+            "WHERE wait_id = ?1 ORDER BY decided_at, approval_id",
+            &[&wait_id],
+        )
+    }
+
+    fn browser_credential_get(
+        &self,
+        credential_id: &str,
+    ) -> Result<Option<CredentialRecord>, StoreError> {
+        let conn = self.lock()?;
+        Ok(conn
+            .query_row(
+                "SELECT credential_id, provider, policy_id, credential_revision, origin, receipt_id \
+                 FROM browser_credentials WHERE credential_id = ?1",
+                params![credential_id],
+                |row| {
+                    Ok(CredentialRecord {
+                        credential_id: row.get(0)?,
+                        provider: row.get(1)?,
+                        policy_id: row.get(2)?,
+                        credential_revision: u64::try_from(row.get::<_, i64>(3)?).unwrap_or(0),
+                        origin: row.get(4)?,
+                        receipt_id: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+}
+
+/// 人の解決（ADR 2026-11-04-project-controller D12）。`also` は解決と同じ transaction で走り、同じ
+/// 要求の再送（`replayed`）では走らない。
+impl SqliteStore {
+    fn browser_resolve_tx<F>(
+        &self,
+        also: F,
+        resolve: impl FnOnce(&Connection) -> Result<BrowserWaitResolution, BrowserWaitError>,
+    ) -> Result<BrowserWaitResolution, BrowserWaitError>
+    where
+        F: FnOnce(&Connection) -> Result<(), StoreError>,
+    {
+        self.browser_tx(|tx| {
+            let resolution = resolve(tx)?;
+            if !resolution.replayed {
+                also(tx)?;
+            }
+            Ok(resolution)
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn browser_wait_register_also<F>(
+        &self,
+        task_id: TaskId,
+        wait_id: &str,
+        expected_version: u64,
+        credential: &CredentialRecord,
+        actor_id: &str,
+        now: OffsetDateTime,
+        also: F,
+    ) -> Result<BrowserWaitResolution, BrowserWaitError>
+    where
+        F: FnOnce(&Connection) -> Result<(), StoreError>,
+    {
         check_token(&credential.credential_id, "credential_id")?;
         check_token(&credential.provider, "provider")?;
         check_token(&credential.policy_id, "policy_id")?;
         check_token(&credential.receipt_id, "receipt_id")?;
         check_token(actor_id, "actor_id")?;
-        self.browser_tx(|tx| {
+        self.browser_resolve_tx(also, |tx| {
             let wait = load_for_task(tx, task_id, wait_id)?;
             if wait.reason != BrowserWaitReason::WaitingForAuth {
                 return Err(BrowserWaitError::InvalidState { op: "register" });
@@ -746,18 +919,22 @@ impl BrowserWaitStore for SqliteStore {
         })
     }
 
-    fn browser_wait_decide(
+    pub fn browser_wait_decide_also<F>(
         &self,
         task_id: TaskId,
         wait_id: &str,
         decision: &HumanDecision,
         now: OffsetDateTime,
-    ) -> Result<BrowserWaitResolution, BrowserWaitError> {
+        also: F,
+    ) -> Result<BrowserWaitResolution, BrowserWaitError>
+    where
+        F: FnOnce(&Connection) -> Result<(), StoreError>,
+    {
         check_token(&decision.actor_id, "actor_id")?;
         check_token(&decision.owner_session_hash, "owner_session_hash")?;
         check_token(&decision.nonce, "nonce")?;
         check_token(&decision.idempotency_key, "idempotency_key")?;
-        self.browser_tx(|tx| {
+        self.browser_resolve_tx(also, |tx| {
             let wait = load_for_task(tx, task_id, wait_id)?;
             if wait
                 .owner_id
@@ -885,122 +1062,5 @@ impl BrowserWaitStore for SqliteStore {
                 replayed: false,
             })
         })
-    }
-
-    fn browser_wait_consume(
-        &self,
-        task_id: TaskId,
-        wait_id: &str,
-        resume_key: &str,
-        run_id: &str,
-        session_id: &str,
-        now: OffsetDateTime,
-    ) -> Result<BrowserWait, BrowserWaitError> {
-        self.browser_tx(|tx| {
-            let wait = load_for_task(tx, task_id, wait_id)?;
-            if wait.resume_key != resume_key {
-                return Err(BrowserWaitError::Invalid {
-                    field: "resume_key",
-                });
-            }
-            match wait.state {
-                BrowserWaitState::Approved => {}
-                BrowserWaitState::Expired | BrowserWaitState::Revoked => {
-                    return Err(BrowserWaitError::Gone);
-                }
-                _ => return Err(BrowserWaitError::InvalidState { op: "consume" }),
-            }
-            // 同じ論理 run/session の continuation だけ（別の session で旧承認を使わない）。
-            if wait.run_id != run_id || wait.session_id != session_id {
-                if set_state_tx(
-                    tx,
-                    &wait,
-                    BrowserWaitState::Invalidated,
-                    "session_mismatch",
-                    now,
-                )? {
-                    let event = resolved_event(
-                        &wait,
-                        BrowserWaitState::Invalidated,
-                        "session_mismatch",
-                        None,
-                    );
-                    SqliteStore::append_event_tx(tx, task_id, &event)?;
-                }
-                return Err(BrowserWaitError::Gone);
-            }
-            if wait.deadline <= now {
-                expire_tx(tx, &wait, now)?;
-                return Err(BrowserWaitError::Gone);
-            }
-            let changed = tx.execute(
-                "UPDATE browser_approvals SET consumed_at = ?1 \
-                 WHERE approval_id = ?2 AND consumed_at IS NULL",
-                params![format_rfc3339(now)?, wait.approval_id],
-            )?;
-            if changed != 1 || !set_state_tx(tx, &wait, BrowserWaitState::Resumed, "consumed", now)?
-            {
-                return Err(BrowserWaitError::InvalidState { op: "consume" });
-            }
-            let event = resolved_event(&wait, BrowserWaitState::Resumed, "consumed", None);
-            SqliteStore::append_event_tx(tx, task_id, &event)?;
-            wait_by_id_tx(tx, wait_id)?.ok_or(BrowserWaitError::NotFound)
-        })
-    }
-
-    fn browser_waits_expire(&self, now: OffsetDateTime) -> Result<Vec<BrowserWait>, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let due = query_waits(
-            &tx,
-            "WHERE state IN ('pending', 'approved') AND deadline <= ?1 ORDER BY deadline, wait_id",
-            &[&format_rfc3339(now)?],
-        )?;
-        let mut expired = Vec::new();
-        for wait in due {
-            if expire_tx(&tx, &wait, now)?
-                && let Some(w) = wait_by_id_tx(&tx, &wait.wait_id)?
-            {
-                expired.push(w);
-            }
-        }
-        tx.commit()?;
-        Ok(expired)
-    }
-
-    fn browser_approvals_for_wait(
-        &self,
-        wait_id: &str,
-    ) -> Result<Vec<BrowserApprovalRecord>, StoreError> {
-        let conn = self.lock()?;
-        approval_rows(
-            &conn,
-            "WHERE wait_id = ?1 ORDER BY decided_at, approval_id",
-            &[&wait_id],
-        )
-    }
-
-    fn browser_credential_get(
-        &self,
-        credential_id: &str,
-    ) -> Result<Option<CredentialRecord>, StoreError> {
-        let conn = self.lock()?;
-        Ok(conn
-            .query_row(
-                "SELECT credential_id, provider, policy_id, credential_revision, origin, receipt_id \
-                 FROM browser_credentials WHERE credential_id = ?1",
-                params![credential_id],
-                |row| {
-                    Ok(CredentialRecord {
-                        credential_id: row.get(0)?,
-                        provider: row.get(1)?,
-                        policy_id: row.get(2)?,
-                        credential_revision: u64::try_from(row.get::<_, i64>(3)?).unwrap_or(0),
-                        origin: row.get(4)?,
-                        receipt_id: row.get(5)?,
-                    })
-                },
-            )
-            .optional()?)
     }
 }

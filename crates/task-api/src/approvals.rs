@@ -155,8 +155,9 @@ pub(crate) async fn decide(
     let payload: ApprovalDecideBody = read_json(body, false).await?;
     let decision = payload.decision;
     let by = caller.actor();
+    let human = crate::human_epoch::HumanEpoch::of(&caller);
     let outcome = state
-        .blocking(move |store| decide_op(store, approval_id, payload, &by, None)?.direct())
+        .blocking(move |store| decide_op(store, approval_id, payload, &by, human, None)?.direct())
         .await?;
     tracing::info!(
         who = "admin",
@@ -176,6 +177,7 @@ pub(crate) fn decide_op(
     approval_id: ApprovalId,
     payload: ApprovalDecideBody,
     by: &str,
+    human: crate::human_epoch::HumanEpoch,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<ApprovalDecideResult>, ApiProblem> {
     let target_id = approval_id.to_string();
@@ -199,7 +201,10 @@ pub(crate) fn decide_op(
     };
     let now = OffsetDateTime::now_utc();
     let Some(audit) = audit else {
-        let outcome = task_ops::approval::decide(
+        // 決定の行と `human_epoch`（ADR 2026-11-04-project-controller D12）を同じ transaction で。続く task の
+        // 再開（`gate::answer`）はこの決定の後始末なので数えない。
+        let task = approval.task_id;
+        let outcome = task_ops::approval::decide_via(
             store,
             approval,
             payload.decision,
@@ -207,6 +212,23 @@ pub(crate) fn decide_op(
             scope,
             by,
             now,
+            |plan| {
+                store.write_tx::<_, task_core::StoreError, _>(|tx| {
+                    let decided = SqliteStore::approval_decide_tx(
+                        tx,
+                        plan.approval.id,
+                        plan.decision,
+                        Some(plan.answer.clone()),
+                        now,
+                    )?;
+                    if decided.is_some()
+                        && let Some(task) = task
+                    {
+                        human.bump_task_tx(tx, task)?;
+                    }
+                    Ok(decided)
+                })
+            },
         )
         .map_err(|e| ops_problem(store, e, Some("decide")))?;
         return Ok(Applied::Direct(ApprovalDecideResult {

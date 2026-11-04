@@ -21,6 +21,7 @@ use time::OffsetDateTime;
 
 use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
+use crate::human_epoch::HumanEpoch;
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, ops_problem};
 use crate::query::{QueryParams, parse_task_id};
@@ -84,8 +85,9 @@ async fn answer(
     let payload: DecisionAnswerBody = read_json(body, false).await?;
     let decision_id = id.clone();
     let by = caller.actor();
+    let human = HumanEpoch::of(&caller);
     let outcome = state
-        .blocking(move |store| answer_op(store, &decision_id, payload, &by, None)?.direct())
+        .blocking(move |store| answer_op(store, &decision_id, payload, &by, human, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "decision_answer", decision_id = %id, effect = outcome.effect.as_str(), resumed = outcome.resumed.len(), cancelled = outcome.cancelled.len(), "admin: decision answered");
     Ok(json_response(StatusCode::OK, &outcome))
@@ -99,6 +101,7 @@ pub(crate) fn answer_op(
     decision_id: &str,
     payload: DecisionAnswerBody,
     by: &str,
+    human: HumanEpoch,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::decision::DecisionOutcome>, ApiProblem> {
     let now = OffsetDateTime::now_utc();
@@ -106,6 +109,7 @@ pub(crate) fn answer_op(
         store,
         decision_id,
         by,
+        human,
         audit,
         "decision.answer",
         "decision_answer",
@@ -129,6 +133,7 @@ pub(crate) fn withdraw_op(
     decision_id: &str,
     payload: DecisionWithdrawBody,
     by: &str,
+    human: HumanEpoch,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::decision::DecisionOutcome>, ApiProblem> {
     let now = OffsetDateTime::now_utc();
@@ -136,6 +141,7 @@ pub(crate) fn withdraw_op(
         store,
         decision_id,
         by,
+        human,
         audit,
         "decision.withdraw",
         "decision_withdraw",
@@ -158,6 +164,7 @@ pub(crate) fn revise_op(
     decision_id: &str,
     payload: DecisionAnswerBody,
     by: &str,
+    human: HumanEpoch,
     audit: Option<&OperationAudit>,
 ) -> Result<Applied<task_ops::decision::DecisionOutcome>, ApiProblem> {
     let now = OffsetDateTime::now_utc();
@@ -165,6 +172,7 @@ pub(crate) fn revise_op(
         store,
         decision_id,
         by,
+        human,
         audit,
         "decision.revise",
         "decision_revise",
@@ -189,6 +197,7 @@ fn resolve_op(
     store: &task_core::store::SqliteStore,
     decision_id: &str,
     by: &str,
+    human: HumanEpoch,
     audit: Option<&OperationAudit>,
     action: &str,
     op: &str,
@@ -197,7 +206,8 @@ fn resolve_op(
 ) -> Result<Applied<task_ops::decision::DecisionOutcome>, ApiProblem> {
     let Some(audit) = audit else {
         let plan = plan(by).map_err(|e| ops_problem(store, e, Some(op)))?;
-        task_ops::decision::apply_plan(store, &plan)
+        let node = plan.node_id;
+        task_ops::decision::apply_plan_also(store, &plan, |tx| human.bump_task_tx(tx, node))
             .map_err(|e| ops_problem(store, e, Some(op)))?;
         return task_ops::decision::finish_answer(store, plan, now)
             .map(Applied::Direct)
@@ -249,8 +259,11 @@ async fn withdraw(
     let payload: DecisionWithdrawBody = read_json(body, true).await?;
     let decision_id = id.clone();
     let by = caller.actor();
+    let human = HumanEpoch::of(&caller);
     let outcome = state
-        .blocking(move |store| withdraw_op(store, &decision_id, payload, &by, None)?.direct())
+        .blocking(move |store| {
+            withdraw_op(store, &decision_id, payload, &by, human, None)?.direct()
+        })
         .await?;
     tracing::info!(who = "admin", op = "decision_withdraw", decision_id = %id, cancelled = outcome.cancelled.len(), "admin: decision withdrawn");
     Ok(json_response(StatusCode::OK, &outcome))
@@ -269,8 +282,9 @@ async fn revise(
     let payload: DecisionAnswerBody = read_json(body, false).await?;
     let decision_id = id.clone();
     let by = caller.actor();
+    let human = HumanEpoch::of(&caller);
     let outcome = state
-        .blocking(move |store| revise_op(store, &decision_id, payload, &by, None)?.direct())
+        .blocking(move |store| revise_op(store, &decision_id, payload, &by, human, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "decision_revise", decision_id = %id, notified = outcome.notified_children.len(), "admin: decision revised");
     Ok(json_response(StatusCode::OK, &outcome))

@@ -95,16 +95,7 @@ async fn discard(
     body: Body,
 ) -> ApiResult {
     let input: ReasonBody = read_json(body, false).await?;
-    disposition(
-        state,
-        headers,
-        caller.actor(),
-        raw_id,
-        repo,
-        input.reason,
-        true,
-    )
-    .await
+    disposition(state, headers, caller, raw_id, repo, input.reason, true).await
 }
 async fn hold(
     State(state): State<ApiState>,
@@ -114,16 +105,7 @@ async fn hold(
     body: Body,
 ) -> ApiResult {
     let input: ReasonBody = read_json(body, false).await?;
-    disposition(
-        state,
-        headers,
-        caller.actor(),
-        raw_id,
-        repo,
-        input.reason,
-        false,
-    )
-    .await
+    disposition(state, headers, caller, raw_id, repo, input.reason, false).await
 }
 async fn reopen(
     State(state): State<ApiState>,
@@ -134,7 +116,7 @@ async fn reopen(
 ) -> ApiResult {
     no_query(&raw)?;
     require_human(&state, &headers)?;
-    mutate_simple(state, caller.actor(), raw_id, repo, Action::Reopen).await
+    mutate_simple(state, caller, raw_id, repo, Action::Reopen).await
 }
 async fn merge(
     State(state): State<ApiState>,
@@ -145,13 +127,13 @@ async fn merge(
 ) -> ApiResult {
     no_query(&raw)?;
     require_human(&state, &headers)?;
-    mutate_simple(state, caller.actor(), raw_id, repo, Action::Merge).await
+    mutate_simple(state, caller, raw_id, repo, Action::Merge).await
 }
 
 async fn disposition(
     state: ApiState,
     headers: HeaderMap,
-    by: String,
+    caller: crate::principal::Caller,
     raw_id: String,
     repo: String,
     reason: String,
@@ -164,13 +146,16 @@ async fn disposition(
     let id = parse_task_id(&raw_id)?;
     let repo_name = repo;
     let now = time::OffsetDateTime::now_utc();
+    let by = caller.actor();
+    let human = crate::human_epoch::HumanEpoch::of(&caller);
     let result = state
         .blocking(move |store| {
             let repo_id = resolve_repo(store, id, &repo_name)?;
+            let writes = human.writes(store);
             let result = if discard {
-                task_ops::stranded::discard(store, id, repo_id, &reason, &by, now)
+                task_ops::stranded::discard_via(store, &writes, id, repo_id, &reason, &by, now)
             } else {
-                task_ops::stranded::hold(store, id, repo_id, &reason, &by, now)
+                task_ops::stranded::hold_via(store, &writes, id, repo_id, &reason, &by, now)
             };
             result.map_err(invalid_problem)?;
             state_row(store, id, repo_id)
@@ -202,7 +187,7 @@ enum Action {
 }
 async fn mutate_simple(
     state: ApiState,
-    by: String,
+    caller: crate::principal::Caller,
     raw_id: String,
     repo: String,
     action: Action,
@@ -210,12 +195,15 @@ async fn mutate_simple(
     let id = parse_task_id(&raw_id)?;
     let now = time::OffsetDateTime::now_utc();
     let roots = state.inner.view.workspace_roots.clone();
+    let by = caller.actor();
+    let human = crate::human_epoch::HumanEpoch::of(&caller);
     let result = state
         .blocking(move |store| {
             let repo_id = resolve_repo(store, id, &repo)?;
+            let writes = human.writes(store);
             let (integrated, reason) = match action {
                 Action::Reopen => {
-                    task_ops::stranded::reopen(store, id, repo_id, &by, now)
+                    task_ops::stranded::reopen_via(store, &writes, id, repo_id, &by, now)
                         .map_err(invalid_problem)?;
                     (false, None)
                 }
@@ -251,8 +239,9 @@ async fn mutate_simple(
                             format!("{repo}: {error}"),
                         )
                     })?;
-                    let outcome = task_ops::stranded::merge(
+                    let outcome = task_ops::stranded::merge_via(
                         store,
+                        &writes,
                         &task_ops::stranded::MergeRequest {
                             task_id: id,
                             repo_id,

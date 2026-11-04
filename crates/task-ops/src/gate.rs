@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 
 use crate::derive::latest_question;
 use crate::error::OpsError;
+use crate::op_writes::{OpWrites, PlainWrites};
 use crate::view::{TaskRef, task_ref};
 
 /// `events_since` を読むときの「大きめの limit」（`docs/api/v1/api.md` §5.7）。伝播は同一トランザクション
@@ -93,6 +94,18 @@ pub fn approve_as(
     note: Option<String>,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
+    approve_via(store, &PlainWrites(store), id, by, note, expected)
+}
+
+/// [`approve_as`] の書き込みを `writes` に任せる（人の経路は `human_epoch` を同じ transaction で増やす）。
+pub fn approve_via(
+    store: &dyn TaskStore,
+    writes: &dyn OpWrites,
+    id: TaskId,
+    by: &str,
+    note: Option<String>,
+    expected: Option<Status>,
+) -> Result<TransitionResult, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     check_expected(task.status, expected)?;
 
@@ -117,7 +130,7 @@ pub fn approve_as(
 
     let from = task.status;
     let since_id = store.latest_event_id()?;
-    let outcome = store.apply_transition(id, trigger, extra_event)?;
+    let outcome = writes.transition(id, trigger, extra_event.into_iter().collect())?;
     let cascaded = collect_cascaded(store, id, since_id)?;
     Ok(TransitionResult {
         id,
@@ -138,6 +151,16 @@ pub fn accept(
     id: TaskId,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
+    accept_via(store, &PlainWrites(store), id, expected)
+}
+
+/// [`accept`] の書き込みを `writes` に任せる。
+pub fn accept_via(
+    store: &dyn TaskStore,
+    writes: &dyn OpWrites,
+    id: TaskId,
+    expected: Option<Status>,
+) -> Result<TransitionResult, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     check_expected(task.status, expected)?;
     if task.status != Status::Draft {
@@ -149,7 +172,7 @@ pub fn accept(
     }
     let from = task.status;
     let since_id = store.latest_event_id()?;
-    let outcome = store.apply_transition(id, Trigger::Accept, None)?;
+    let outcome = writes.transition(id, Trigger::Accept, Vec::new())?;
     let cascaded = collect_cascaded(store, id, since_id)?;
     Ok(TransitionResult {
         id,
@@ -181,20 +204,32 @@ pub fn reject_as(
     note: Option<String>,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
+    reject_via(store, &PlainWrites(store), id, by, note, expected)
+}
+
+/// [`reject_as`] の書き込みを `writes` に任せる。
+pub fn reject_via(
+    store: &dyn TaskStore,
+    writes: &dyn OpWrites,
+    id: TaskId,
+    by: &str,
+    note: Option<String>,
+    expected: Option<Status>,
+) -> Result<TransitionResult, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     check_expected(task.status, expected)?;
 
     if task.kind == TaskKind::Approval && task.status == Status::Ready {
         let from = task.status;
         let since_id = store.latest_event_id()?;
-        let outcome = store.apply_transition(
+        let outcome = writes.transition(
             id,
             Trigger::Reject,
-            Some(Event::ApprovalDecided {
+            vec![Event::ApprovalDecided {
                 by: by.to_string(),
                 approved: false,
                 note,
-            }),
+            }],
         )?;
         let cascaded = collect_cascaded(store, id, since_id)?;
         Ok(TransitionResult {
@@ -312,6 +347,19 @@ pub fn answer_with_intent(
     by: &str,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
+    answer_via(store, &PlainWrites(store), id, answer, intent, by, expected)
+}
+
+/// [`answer_with_intent`] の書き込みを `writes` に任せる。
+pub fn answer_via(
+    store: &dyn TaskStore,
+    writes: &dyn OpWrites,
+    id: TaskId,
+    answer: String,
+    intent: AnswerIntent,
+    by: &str,
+    expected: Option<Status>,
+) -> Result<TransitionResult, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     check_expected(task.status, expected)?;
 
@@ -355,7 +403,7 @@ pub fn answer_with_intent(
         by: Some(by.to_string()),
     }];
     extra.extend(intent_events);
-    let outcome = store.apply_transition_with_events(id, Trigger::Answer, extra)?;
+    let outcome = writes.transition(id, Trigger::Answer, extra)?;
     let cascaded = collect_cascaded(store, id, since_id)?;
     // GUI 監査 H2: `POST /tasks/{id}/answer` で答えたときも、そのタスクの未決の `approvals` を
     // `once` + 同じ答えで決定済みにする（決定的。無ければ何もしない）。`POST /approvals/{id}/decide`
@@ -475,6 +523,19 @@ where
         also(tx, &task)?;
         Ok(outcome)
     })?;
+    finish_cancel(store, id, task.status, since_id, outcome)
+}
+
+/// [`cancel`] の書き込みを `writes` に任せる（phase・plan gate の取り下げ）。
+pub fn cancel_via(
+    store: &dyn TaskStore,
+    writes: &dyn OpWrites,
+    id: TaskId,
+    expected: Option<Status>,
+) -> Result<TransitionResult, OpsError> {
+    let task = plan_cancel(store, id, expected)?;
+    let since_id = store.latest_event_id()?;
+    let outcome = writes.transition(id, Trigger::Cancel, Vec::new())?;
     finish_cancel(store, id, task.status, since_id, outcome)
 }
 

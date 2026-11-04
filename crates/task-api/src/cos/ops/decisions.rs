@@ -65,6 +65,7 @@ pub(crate) fn dispatch(
                 &decision_id,
                 input,
                 &audit.by(),
+                crate::human_epoch::HumanEpoch::NotCounted,
                 Some(audit),
             )?)
         }
@@ -76,6 +77,7 @@ pub(crate) fn dispatch(
                 &decision_id,
                 input,
                 &audit.by(),
+                crate::human_epoch::HumanEpoch::NotCounted,
                 Some(audit),
             )?)
         }
@@ -87,6 +89,7 @@ pub(crate) fn dispatch(
                 &decision_id,
                 input,
                 &audit.by(),
+                crate::human_epoch::HumanEpoch::NotCounted,
                 Some(audit),
             )?)
         }
@@ -166,6 +169,7 @@ pub(crate) fn dispatch(
                 id,
                 input,
                 &audit.by(),
+                crate::human_epoch::HumanEpoch::NotCounted,
                 Some(audit),
             )?)
         }

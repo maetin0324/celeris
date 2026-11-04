@@ -60,15 +60,33 @@ pub fn decide(
     by: &str,
     now: OffsetDateTime,
 ) -> Result<DecideOutcome, OpsError> {
-    let plan = plan_decide(store, approval, decision, answer, scope, by, now)?;
-    let decided = store
-        .approval_decide(
+    decide_via(store, approval, decision, answer, scope, by, now, |plan| {
+        store.approval_decide(
             plan.approval.id,
             plan.decision,
             Some(plan.answer.clone()),
             now,
-        )?
-        .unwrap_or_else(|| plan.approval.clone());
+        )
+    })
+}
+
+/// [`decide`] の決定の行の書き込みを `write` に任せる（人の経路は `human_epoch` を同じ transaction で増やす）。
+#[allow(clippy::too_many_arguments)]
+pub fn decide_via<F>(
+    store: &dyn TaskStore,
+    approval: Approval,
+    decision: Decision,
+    answer: String,
+    scope: Scope,
+    by: &str,
+    now: OffsetDateTime,
+    write: F,
+) -> Result<DecideOutcome, OpsError>
+where
+    F: FnOnce(&DecidePlan) -> Result<Option<Approval>, task_core::StoreError>,
+{
+    let plan = plan_decide(store, approval, decision, answer, scope, by, now)?;
+    let decided = write(&plan)?.unwrap_or_else(|| plan.approval.clone());
     let (transition, note) = resume_target(store, &plan)?;
     if let Some(rule) = &plan.standing_rule {
         store.standing_rule_append(rule)?;

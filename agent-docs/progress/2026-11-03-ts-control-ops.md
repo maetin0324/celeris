@@ -1,8 +1,8 @@
 ---
 title: TS 制御層の本番運用準備と意図的な TS 方針改善（段階移行 2）— 親 task の分割
 tasks: [01M6HG7T6ZKTX239KGH0QY4HFQ]
-status: running
-updated: 2026-11-03
+status: blocked
+updated: 2026-11-04
 ---
 # TS 制御層の本番運用準備と意図的な TS 方針改善（段階移行 2）
 
@@ -40,19 +40,50 @@ updated: 2026-11-03
 3. p0a の gate を含む release を作り promote するか。
 4. p0b が原子化できず canary/ts を禁止した場合、その禁止を受け入れるか。
 
-## 証拠（提出時の HEAD で実行）
-- 基準は `git merge-base HEAD main`。この run の差分は進捗ファイル 1 件だけ。
-- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」、文書検査は ok）。
+## 子 task の結果（2026-11-04、親の再開 run で集約）
+完了日（親の集約）: 2026-11-04。子 8 件のうち 6 件が done、2 件が人の判断待ちで止まっている。done の 6 件の branch は全部 main の祖先（`git merge-base --is-ancestor celeris/<子 id> main` が 0）。この branch は main を merge した。
+
+| key（task id） | 状態 | 主な file・関数 | 試験（子の記録） | raw records | 記録 |
+|---|---|---|---|---|---|
+| p0a-release-gate（01M6HGFR1T4M08TJM7KD39D443） | done | `scripts/selfdeploy/script-bundle-gate.sh`（release.sh の 4 段 control-ts-install・control-ts-bundle・script-bundle-verify・script-bundle-tests）、verify.sh の照合、`control-ts/pnpm-workspace.yaml` の `verifyDepsBeforeRun: error` | `scripts/dev/test-release-script-gate.sh`（11 通りの失敗＋通る場合）、test-affected exit 0 | `p0a-script-gate-cold.jsonl`・`p0a-script-gate-warm.jsonl`（足した秒 cold p50 29.350 秒・warm p50 26.156 秒） | [p0a-release-gate.md](2026-11-03-ts-control-ops/p0a-release-gate.md) |
+| p0b-cos-digest-persist（01M6HGFR1TDAP02XY98ES1ZDA1） | done | `SqliteStore::cos_digest_apply_pass`（1 transaction・run ごとの SAVEPOINT）、outbox（migration 0107）と `cos_digest_shadow_finish`、ADR 2026-11-03-cos-digest-persist | `cos_digest_persist_` 8 件（crash 8 段・実 process abort・重複配送・CAS 競合・guard の戻し）で message 重複 0・記録欠落 0、test-affected 7200 passed | `p0b-apply-bench.jsonl`・`p0b-cos-ts.jsonl` | [p0b-cos-digest-persist.md](2026-11-03-ts-control-ops/p0b-cos-digest-persist.md) |
+| p1c-ops-observe（01M6HGFR1TR6PJ8822DHW7NNNT） | done | `celerisctl script`（generations list/register/retire・canary bps・guard clear）、409 `script_bundle_not_deployed`、GET /daemon の `script_tick_wait`、guard の増分走査、`cos_read_only` | test-affected 5115 passed、guard clear の help に 403/422 | `p1c-ops-cycles.jsonl` | [p1c-ops-observe.md](2026-11-03-ts-control-ops/p1c-ops-observe.md) |
+| p1d-intended-change（01M6HGFR1TD2G3H4JF6J67CTBM） | done | `control-ts/behavior-changes/`、`CompareOutcome::Explained`、migration 0108、`/api/v1/script/behavior-changes`（承認は human のみ）、ADR 2026-11-03-ts-intended-behavior-change、`scripts/dev/ts-behavior-eval.sh` | test-affected 7223 passed、canary e2e 4 件 | `p1d-eval/records.jsonl` | [p1d-intended-change.md](2026-11-03-ts-control-ops/p1d-intended-change.md) |
+| p1e-shadow-preflight（01M6HGFR1TMY7PTGQ553FQGM7H） | done | `scripts/dev/script-compare.py`（preflight/report/sample、読み取り専用） | `script_compare_report` 8 passed、`tests/script-compare.sh` 35 項目、test-affected 1009 passed | `p1e-preflight-prod.json`（本番 preflight は exit 3）・`p1e-rehearsal.jsonl` | [p1e-shadow-preflight.md](2026-11-03-ts-control-ops/p1e-shadow-preflight.md) |
+| p1e-shadow-measure（01M6HGFR1TVY299MQPZY7HQQG9） | blocked（question） | — | — | 本番の実測なし（synthetic で補っていない） | 子の question |
+| p2f-expand-port（01M6HGFR1TCHVSDDNH0GR9SNBK） | ready（未着手） | — | — | — | 依存 p1e-shadow-measure が未完 |
+| p2g-llm-self-improve（01M6HGFR1TVSBS63STM8NH3XCS） | done | `trial.sh`・`collect.py`、課題 T1/T2 × TS/旧 Rust の子 4 件 | 4 試行 成功 4/4、人の介入 0、再採点 4 件 exit 0 | `p2g-llm-self-improve/`（rescore/trial.jsonl・usage.jsonl） | [p2g-llm-self-improve.md](2026-11-03-ts-control-ops/p2g-llm-self-improve.md) |
+
+### 止まっている子と次に要る人の判断
+- p1e-shadow-measure: 本番の lane_rules を compare にする承認と、p1e-shadow-preflight.md「本番への移行（人の手順）」0.〜5.（preflight、S5 以後の release の verify と promote、`[script]` を足して再起動、bundle の配備と登録、標本取り、lane_rules を compare）の実施。本番 daemon は release 3259e04ea63e（`[script]` なし）のまま。純粋判定 1000 件まで約 21 日（約 48 件/日）の見込み。
+- p2f-expand-port: 本番 compare の観測（p1e-shadow-measure）が揃うまで着手しない（親の停止条件）。昇格実績は別の人の承認が要る。
+- canary→ts の昇格、guard 解除、release の作成・promote は、いずれも未実施で人の承認待ち。
+
+### TS-only の高速経路の回帰確認（統合後の HEAD で実測）
+`bash scripts/dev/edit-activate-baseline.sh --scenario <policy-ts|cos-ts> --mode warm --reps 20 --series parent-integrated --out <file>` を main 取り込み後の木（clean）で実行し、`--check-targets` で照合した。
+
+| scenario | 試行 | p50（秒） | p95（秒） | cargo 0 回 | S6 基準 p50 | raw |
+|---|---|---|---|---|---|---|
+| policy-ts | 20 | 7.487 | 7.699 | 20/20 | 7.47〜7.52 | [parent-policy-ts.jsonl](2026-11-03-ts-control-ops/parent-policy-ts.jsonl) |
+| cos-ts | 20 | 7.569 | 7.678 | 20/20 | 7.47〜7.52 | [parent-cos-ts.jsonl](2026-11-03-ts-control-ops/parent-cos-ts.jsonl) |
+
+目標（p50≤30 秒・p95≤60 秒）の内で、S6 基準から +0.05 秒以内。重い検査は release gate（p0a の 4 段）に置き、`ts-verify.sh` の高速経路は変えていない。
+
+## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
+- `bash scripts/dev/test-affected.sh` → exit 0（main 取り込み後の差分は進捗と raw だけで「試験対象の変更なし」、文書検査 ok）。子の実装の試験は各子の記録の数値（上の表）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `sh scripts/dev/progress-index.sh --check` → exit 0。
-- 子 task の起票は run の成果物の delegate.json（8 件）で行う。受け付けられた件数は run の後に celeris が決める（未確認）。
+- `--check-targets` → policy-ts・cos-ts とも exit 0（problems 0）。
 
 ## 未解決
-- 子 task の結果は未着。親の完了は子の結果で決まる。
-- 2026-11-03 20:12Z（親の attempt 3）時点: P0-A（01M6HGFR1T4M08TJM7KD39D443）・P0-B（01M6HGFR1TDAP02XY98ES1ZDA1）・P1-C（01M6HGFR1TR6PJ8822DHW7NNNT）は running（lease 期限 20:28Z）。P1-D・P1-E(1)・P1-E(2)・P2-F・P2-G は ready（依存待ち）。done は 0 件。
-- 親の review が子の完了前に 2 回走り、条件 0・1 で不合格になった。親が子の範囲を自分の branch で実装し直すことは重複の禁止（ADR 2026-10-18-no-duplicate-child-delegation）に反するので行わない。人に、子の完了まで親の review を止めるよう依頼した（親の result.json の question）。
-- 人の回答（2026-11-03）: 子の完了まで親の review を止め、子の完了後に親を再開してよい。親は子の範囲を実装し直さない。本番切替・release・canary/ts 昇格・guard 解除の承認は含まない。
-- 回答後の親 run（attempt 3 の再開）時点でも P0-A・P0-B・P1-C は running、ほか 5 件は ready で done は 0 件。親は再び question で止まり、子の完了後の再開を待つ。
+- p1e-shadow-measure と p2f-expand-port は人の承認待ちで未完。本番の一致率は未計測。
+- p0a: cargo-test 段の秒の増分は未計測（次の release の gate.json で確かめる）。
+- p0b: 本番に旧い crash 窓の行が残っているかは未確認。
+- p1c: 本番の script_tick_wait と RSS は未確認。
+- 各子の記録の未解決節を参照。
+
+## 経緯（親の review の保留）
+- 子の完了前に親の review が 2 回走り条件 0・1 で不合格になった。人の回答で子の完了まで保留し、2026-11-04 に「終わったので続けてください」の回答で再開した。
 
 ## 提案
 なし。

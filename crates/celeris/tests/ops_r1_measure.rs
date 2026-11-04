@@ -239,8 +239,8 @@ fn start_daemon() -> Daemon {
     let text = fs::read_to_string(&triage).expect("triage skill");
     fs::write(
         &triage,
-        text.replace("version: \"10\"", "version: \"6\"")
-            .replace("policy_version \"10\"", "policy_version \"6\""),
+        text.replace("version: \"11\"", "version: \"6\"")
+            .replace("policy_version \"11\"", "policy_version \"6\""),
     )
     .expect("write triage skill");
     let out = Command::new("sh")

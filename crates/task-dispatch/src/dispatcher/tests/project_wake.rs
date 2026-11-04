@@ -15,6 +15,8 @@ mod cursor;
 mod effects;
 #[path = "project_cos.rs"]
 mod project_cos;
+#[path = "project_controller_replay.rs"]
+mod replay;
 use crate::project_controller::{
     Boundary, ProjectControllerSettings, ProjectDecider, ProjectDecision, ProjectEffect,
 };

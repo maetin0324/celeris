@@ -19,6 +19,8 @@ pub struct ProjectControllerSettings {
     pub retry_max_secs: u64,
     pub max_retries: u32,
     pub max_cos_inputs_open_per_project: u32,
+    /// A6: `[project_controller.budget]`（予算・停滞・同じ失敗・TTL の guard）。
+    pub budget: task_ops::project_budget::BudgetLimits,
 }
 
 impl Default for ProjectControllerSettings {
@@ -32,6 +34,7 @@ impl Default for ProjectControllerSettings {
             retry_max_secs: 3600,
             max_retries: 5,
             max_cos_inputs_open_per_project: 1,
+            budget: task_ops::project_budget::BudgetLimits::default(),
         }
     }
 }
@@ -157,4 +160,12 @@ pub struct ControllerTickStats {
     pub effect_failed: usize,
     /// 上限を超えて `failed` にした効果。
     pub exhausted: usize,
+    /// A6: guard が decider を呼ばずに書いた判断（`pc/guard/*`）。
+    pub guarded: usize,
+    /// A6: `Project.status` に合わせて phase を変えた案件。
+    pub phase_synced: usize,
+    /// A6: decider の 1 回の呼び出しの時間（マイクロ秒。TS の isolate の op を含む）。
+    pub decide_micros: Vec<u64>,
+    /// A6: この tick の段の全体の時間（マイクロ秒。loop cost）。
+    pub pass_micros: u64,
 }

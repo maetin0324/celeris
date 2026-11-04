@@ -91,9 +91,6 @@ fn gate(conn: &Connection, project_id: &str, decision_epoch: i64) -> Result<Gate
     if mode != ControllerMode::Enabled {
         return Ok(Gate::Halt(format!("mode_{}", mode.as_str())));
     }
-    if matches!(phase, ControllerPhase::Paused | ControllerPhase::Cancelled) {
-        return Ok(Gate::Halt(format!("phase_{}", phase.as_str())));
-    }
     let project: Option<(String, bool)> = conn
         .query_row(
             "SELECT status, archived_at IS NOT NULL FROM projects WHERE id = ?1",
@@ -101,11 +98,15 @@ fn gate(conn: &Connection, project_id: &str, decision_epoch: i64) -> Result<Gate
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
+    // 案件の状態を phase より先に見る（A6 の phase の同期は `Project.status` から作るので、理由は元の状態で書く）。
     Ok(match project {
         None => Gate::Halt("project_missing".into()),
         Some((_, true)) => Gate::Halt("project_archived".into()),
         Some((status, false)) if matches!(status.as_str(), "paused" | "cancelled" | "done") => {
             Gate::Halt(format!("project_{status}"))
+        }
+        Some(_) if matches!(phase, ControllerPhase::Paused | ControllerPhase::Cancelled) => {
+            Gate::Halt(format!("phase_{}", phase.as_str()))
         }
         Some(_) if current_epoch != decision_epoch => Gate::Halt(STALE_HUMAN_EPOCH.into()),
         Some(_) if phase == ControllerPhase::Blocked => Gate::Hold,

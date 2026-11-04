@@ -159,7 +159,9 @@ impl Dispatcher {
                 now,
                 stats: ControllerTickStats::default(),
             };
+            let started = std::time::Instant::now();
             pass.run(&findings);
+            pass.stats.pass_micros = started.elapsed().as_micros() as u64;
             rt.last = pass.stats;
         }
         if let Some(launch) = self.cos_chat_launch.as_mut() {
@@ -232,6 +234,11 @@ impl Pass<'_> {
             tracing::warn!(%error, "project controller: stagnation intake failed");
         }
         self.rt.at(Boundary::AfterIngest);
+        // A6: phase を `Project.status` に合わせる（paused・cancelled は評価 0、再開で 1 回）。
+        match self.store.project_controller_sync_phases(self.now) {
+            Ok(changed) => self.stats.phase_synced += changed.len(),
+            Err(error) => tracing::warn!(%error, "project controller: phase sync failed"),
+        }
         // B4・B5 の回復: tx1 で書いた効果が `pending` のまま残っていれば、同じ key で実行し直す。
         match self.store.project_controller_pending_effects() {
             Ok(pending) => {
@@ -346,8 +353,39 @@ impl Pass<'_> {
             wakes: lease.wakes.clone(),
             now: format_time(self.now),
         };
-        self.stats.decided += 1;
-        let decision = match self.rt.decider.decide(&input) {
+        // A6: guard（achieved・同じ失敗・品質・予算・TTL）が効けば decider（TS）を呼ばない。
+        let pre = match super::project_guard::pre_decide(
+            self.store,
+            &self.rt.settings.budget,
+            &lease.state,
+            &lease.wakes,
+            self.now,
+        ) {
+            Ok(pre) => pre,
+            Err(error) => {
+                // fail closed: 読めなければ判定しない。lease を放して次の tick で読み直す。
+                self.store
+                    .project_controller_release(project, &self.rt.owner)
+                    .map_err(|e| e.to_string())?;
+                return Err(format!("guard: {error}"));
+            }
+        };
+        let (guard_record, decided) = match pre {
+            super::project_guard::PreGuard::Guarded { decision, record } => {
+                self.stats.guarded += 1;
+                (Some(record), Ok(decision))
+            }
+            super::project_guard::PreGuard::Decide => {
+                self.stats.decided += 1;
+                let started = std::time::Instant::now();
+                let out = self.rt.decider.decide(&input);
+                self.stats
+                    .decide_micros
+                    .push(started.elapsed().as_micros() as u64);
+                (None, out)
+            }
+        };
+        let decision = match decided {
             Ok(d) => d,
             Err(error) => {
                 self.stats.decide_failed += 1;
@@ -377,7 +415,13 @@ impl Pass<'_> {
             snapshot_sha256: sha256_hex(input_json.as_bytes()),
             request_sha256,
             generation_id: None,
-            proposal_json: self.rt.decider.take_record().unwrap_or(input_json),
+            proposal_json: match guard_record {
+                Some(mut r) => {
+                    r["input"] = serde_json::to_value(&input).map_err(|e| e.to_string())?;
+                    r.to_string()
+                }
+                None => self.rt.decider.take_record().unwrap_or(input_json),
+            },
             validation: decision.rule_id.clone(),
             effect_json,
             has_effect: decision.effect.has_effect(),
@@ -568,7 +612,16 @@ impl Pass<'_> {
         effect: &ProjectEffect,
     ) -> Result<Option<String>, String> {
         match effect {
-            ProjectEffect::None | ProjectEffect::OpenEscalation { .. } => Ok(None),
+            ProjectEffect::None => Ok(None),
+            // A6: 問いの notice が記録済みなら効いている（B5 で落ちた後、`blocked` の門で止まらない）。
+            ProjectEffect::OpenEscalation { question_key, .. } => {
+                let key = format!("project_controller:escalate:{project}:{question_key}");
+                Ok(self
+                    .store
+                    .project_controller_notice_recorded(&key)
+                    .map_err(|e| e.to_string())?
+                    .then_some(key))
+            }
             ProjectEffect::QueueCosInput { key, text } => self
                 .store
                 .project_controller_cos_input_existing(project, key, text)

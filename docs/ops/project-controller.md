@@ -1,5 +1,5 @@
 ---
-tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5]
+tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY]
 ---
 # Project Controller の運用手順（人と operator）
 
@@ -63,3 +63,25 @@ controller が `off` でない案件では、CoS と controller が人に聞か�
 | 許可が足りずに止まった（notice「起票する許可がありません」） | 人 | 許可を作る。作ると controller は `active` に戻り次の評価で起票する | 判断の記録が `pc/authority-required` の後に起票 |
 
 許可は人の token だけが作れる（operator・MCP・CoS は 403 か 422）。`human_required` は許可にできない。
+
+## 長時間の運用（予算・guard・phase。A6）
+controller は event（root の終了・失敗・人の操作など）で起き、cron の `project_reconcile` は event を取りこぼしたときの照合として使う。
+判定（TS）の前に Rust の guard が掛かり、当たると判定を呼ばずに人へ 1 回だけ知らせて止まる（受信箱の通知 `bad_news`、phase `blocked`）。
+
+| guard | 止まる条件（設定 `[project_controller.budget]`、既定） | 人の通知の key |
+|---|---|---|
+| 同じ失敗 | root が同じ理由で `max_same_failure_repeats`（3）回失敗した（最後の人の操作の後で数える） | `same_failure:<署名>` |
+| TS の案の検証落ち | 判定の案が `max_invalid_decisions`（3）回続けて検証に落ちた | `invalid_proposals:<判断 id>` |
+| 1 日の予算（UTC） | CoS 入力 `max_cos_inputs_per_day`（10）、起票 `max_roots_per_day`（5）、token `max_tokens_per_day`（20000000） | `budget:<種類>:<日>` |
+| TTL | phase `waiting` で外からの応答（cron 以外の wake）が `ttl_secs`（259200 秒＝3 日）来ない | `ttl:<最後の入力の時刻>` |
+| 停滞 | 進捗なしの効果つきの判断が `max_no_progress_decisions`（5）回続いた | `no_progress:<epoch>` |
+
+- 案件を一時停止・中止すると controller も評価を止める（phase `paused`・`cancelled`。止まっている間の wake は捨てる）。再開すると 1 回だけ評価する。
+- 全途中目標が達成済み（phase `achieved`）の案件は、root の終了や cron では評価しない。人が案件を変えたときだけ評価する。
+- 止まった案件を続けるには、人が通知の理由を確かめてから案件の画面で controller の mode を置き直す（`PUT /api/v1/projects/{id}/controller`。
+  予算は日付が変わっても自動では戻らない）。
+- 値を変えるときは本番 config の `[project_controller.budget]` を人が書き換え、daemon を再起動する（この依頼では実行しない）。0 は設定の誤りで、
+  daemon は起動しない。
+- 測った値（`agent-docs/progress/2026-11-04-long-horizon/a6/resource.jsonl`）: 本物の TS の判定 1 回の p50 は約 1.5 ms、100 案件を 1 周する時間は約
+  0.19 秒で、isolate は 1 個のまま増えない。複数日の実稼働の確認は A9 の pilot で行う。
+

@@ -775,3 +775,32 @@ Outcome の状態・root との対応の履歴が無く、CoS は request を書
     で、block に戻らない。tx の中からも呼ぶので `store/roadmap.rs` の `approved_tx` を `conn` で使う。新しい版で取り下げた Outcome の許可は、判定が
     `unknown_scope` で断るほか、`authority_answered`（問いの答え）からも外れる。snapshot の `authority.grants` には載ったままだが、TS は読まず、起票の可否は Rust の門が決める。範囲の不明は案件全体の許可より先に
     判定するので、案件全体の許可があっても取り下げた id には効かない。試験は接頭辞 `authority_ledger_roadmap_`（api 3・dispatch 2）。migration は足していない。
+
+## 付記 A6（2026-11-04、task 01M6JW1EFYFTSPMT080KHKW9EY）: 長時間の運用の実装と契約の差分
+§A6 の契約を次のように実装し、一部を変えた。理由・未解決は [進捗 a6](../progress/2026-11-04-long-horizon/a6.md)。
+1. **file**: guard は `crates/task-dispatch/src/dispatcher/project_guard.rs`（`pre_decide`。`cron_tick.rs` に module を 1 行足し、
+   `project_wake.rs` は guard の呼び出しと計時だけ）、予算は `crates/task-ops/src/project_budget.rs`（`BudgetLimits`・`usage`・`exceeded`・
+   `failure_signature`・`ttl_expired`）、store の口は `crates/task-core/src/store/project_guard.rs`（`project_controller_sync_phases`・
+   `project_controller_last_input_at`・`project_run_usage_since`・`project_controller_notice_recorded`）、設定は
+   `crates/celeris/src/config/project_controller.rs` の `[project_controller.budget]`（`ProjectBudgetConfig`。0 は設定の誤り）。migration は足していない。
+2. **guard は decider（TS の isolate）の前**: lease の後・判定の前に Rust が `pre_decide` を掛け、当たれば decider を呼ばずに判断を同じ tx1（CAS）で
+   書く（`validation = pc/guard/<名>`、記録の schema `celeris.project-guard/1`）。順は (1) `achieved` は `human_changed` の wake だけで判定し、他の
+   wake は効果なしで畳む、(2) 同じ失敗（root の失敗の理由の署名が最後の人の変更の後に `max_same_failure_repeats` 回）、(3) TS の案の検証落ちの連続
+   （`max_invalid_decisions`。LLM・TS の品質の guard）、(4) 今日（UTC）の CoS 入力・起票・token の予算、(5) TTL（phase `waiting` で cron 以外の wake が
+   `ttl_secs` 来ない）。(2)〜(5) は `OpenEscalation`（問いの key `same_failure:<署名>`・`invalid_proposals:<判断 id>`・`budget:<種類>:<日>`・`ttl:<最後の入力>`）
+   で人に 1 回聞いて `blocked` にする（I12）。予算は次の日に自動で戻さない: 人が mode を置き直すまで止まる（無限の再試行をしない）。
+   停滞（進捗なしの判断の連続）は A3 の `runaway_guard` のままで、`max_no_progress_decisions` を設定から `DeciderLimits` に渡す。
+3. **phase の遷移**: tick の段の取り込みの後に `project_controller_sync_phases` が `Project.status` から phase を決める（paused → `paused`、
+   cancelled・done・archived → `cancelled`、戻ったら `active` と `next_wake_at = now` で 1 回だけ評価）。`paused`・`cancelled` の間の wake は毎 tick
+   `hold:<phase>` で消費する（評価 0）。`achieved` は TS（`WaitPhase::Achieved`）が置き、guard (1) が静けさを保つ。`waiting`・`blocked` は既存の
+   とおり。効果の門は理由を元の案件の状態で書くため、案件の状態を phase より先に見るよう順を入れ替えた（理由の文字列は A1 の試験のまま）。
+4. **crash の B5 の穴を塞いだ**: `OpenEscalation` の効果を書いた直後（`applied` の前）に落ちると、`blocked` の門（Hold）で `pending` のまま残っていた。
+   `effect_in_place` が問いの notice（`feed_sources` の source key）の有無を見て `applied` にする。
+5. **E2E の置き場所を変えた**: 故障の注入と仮想時刻の replay は `crates/task-dispatch/src/dispatcher/tests/project_controller_replay.rs`
+   （`dispatcher::tests::project_wake::replay::project_controller_replay_*` の 13 件）。理由: 注入する時計（`test_now`）と tick の段・crash の境界の
+   hook は crate の中だけで使える。本物の V8 での資源の測定だけを `crates/celeris/tests/project_controller_replay.rs`（1 件）に置いた。
+6. **資源の raw**: `agent-docs/progress/2026-11-04-long-horizon/a6/resource.jsonl`。dispatcher の段（fake decider、idle と 100 案件、1 tick の loop cost・
+   判定の遅延）と TS の判定（本物の bundle を 1 個の isolate で、idle と 100 案件 × 3 周、RSS・thread・Rust の snapshot の組み立て〈native〉の遅延・
+   判定の遅延・100 案件 1 周の loop cost）。100 案件で isolate も常駐の thread も増えない（試験が thread 数で確かめる）。
+7. **API は未実装**: `GET /projects/{id}/controller` の `budget`・`guards` と `GET /metrics/project-controller` は入れていない（a6.md の未達）。guard の
+   判断は既存の `GET …/controller/decisions` の `validation`（`pc/guard/*`）と記録で読める。

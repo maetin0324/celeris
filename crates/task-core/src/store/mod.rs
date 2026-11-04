@@ -126,6 +126,8 @@ mod migration_harness_tests;
 pub(crate) mod migrations;
 mod org;
 mod project_briefs;
+mod project_guard;
+pub use project_guard::PhaseSync;
 mod project_wake;
 pub(crate) mod project_wake_effect;
 mod projects;

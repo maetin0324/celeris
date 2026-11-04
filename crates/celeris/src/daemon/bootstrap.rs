@@ -696,7 +696,7 @@ pub fn build_daemon_dispatcher(
         && !dispatcher.set_project_controller(
             pc.settings(),
             Box::new(task_dispatch::project_decider_ts::TsProjectDecider::new(
-                task_dispatch::project_decider_ts::DeciderLimits::default(),
+                pc.budget.decider_limits(),
             )),
             identity.instance_id.clone(),
         )

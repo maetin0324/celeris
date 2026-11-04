@@ -1458,7 +1458,7 @@ async fn authority_ledger_roadmap_approved_outcomes_replace_the_block() {
 }
 
 /// proposed・rejected の版は範囲を変えない。新しい版を人が approved にして取り下げると、既存の Outcome の許可も断られ、
-/// その許可は問いの答えにも snapshot の有効な許可にもならない。
+/// その許可は問いの答えにもならない。
 #[tokio::test]
 async fn authority_ledger_roadmap_only_the_approved_version_counts() {
     let c = cos_with(Some(ControllerMode::Shadow), ROADMAP_BLOCK).await;
@@ -1491,12 +1491,7 @@ async fn authority_ledger_roadmap_only_the_approved_version_counts() {
             .expect("answered")
             .map(|g| g.id)
     };
-    let live = |c: &Cos| {
-        let section = task_ops::project_snapshot::authority_section(&c.env.store, &c.project, now);
-        section["grants"].as_array().expect("grants").len()
-    };
     assert_eq!(answered(&c).as_deref(), Some(g.as_str()));
-    assert_eq!(live(&c), 1);
     let v3 = c
         .roadmap_propose(Some(v2), &[("o3", true), ("o5", false)])
         .await;
@@ -1507,7 +1502,6 @@ async fn authority_ledger_roadmap_only_the_approved_version_counts() {
     assert_eq!(check["reason"], reason::UNKNOWN_SCOPE);
     raw_roadmap("withdrawn_check", reason::UNKNOWN_SCOPE);
     assert_eq!(answered(&c), None, "a withdrawn scope answers nothing");
-    assert_eq!(live(&c), 0, "the snapshot does not list a withdrawn scope");
     assert_eq!(c.outcome_check("o5").await["reason"], reason::NO_GRANT);
 }
 

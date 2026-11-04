@@ -692,15 +692,6 @@ impl SqliteStore {
         })
     }
 
-    /// 範囲が今も案件にあるか（取り下げた Outcome は `false`）。
-    pub fn authority_scope_exists(
-        &self,
-        project: &str,
-        scope: &GrantScope,
-    ) -> Result<bool, StoreError> {
-        self.with_read_conn(|c| scope_exists(c, project, scope))
-    }
-
     /// 分類の許可がこれまでに何件作られたか（期限切れの後の問いを別の key にする）。
     pub fn authority_grant_generation(
         &self,

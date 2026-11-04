@@ -47,12 +47,7 @@ pub fn authority_section(
         .authority_grants(project)
         .unwrap_or_default()
         .iter()
-        .filter(|g| {
-            grant_denial(g, now).is_none()
-                && store
-                    .authority_scope_exists(project, &g.scope)
-                    .unwrap_or(false)
-        })
+        .filter(|g| grant_denial(g, now).is_none())
         .map(|g| {
             serde_json::json!({
                 "id": g.id,

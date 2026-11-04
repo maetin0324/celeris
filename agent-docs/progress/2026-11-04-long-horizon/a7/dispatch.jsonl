@@ -1,7 +1,7 @@
 {"effect_ref":"authority:grant_revoked","roots":0,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_revoked_after_decision_creates_no_root"}
-{"asked_after_revoke":1,"asked_while_answered":0,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_answered_question_is_not_asked_again"}
-{"escalations":1,"reason":"no_grant","roots_after_grant":1,"roots_denied":0,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_roadmap_other_outcome"}
-{"audit":{"actual_actor":"daemon","human_decision":"authority_grant:01M6KWKQ2TY02VZV75KJ9BM7JT","observed_outcome":true,"suggestion":true},"consumed":1,"escalations":1,"refusal":"no_grant","roots":1,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_launch_requires_grant_then_runs"}
 {"consumed":1,"escalations":0,"grant":"project","roots":1,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_roadmap_launch"}
+{"asked_after_revoke":1,"asked_while_answered":0,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_answered_question_is_not_asked_again"}
+{"audit":{"actual_actor":"daemon","human_decision":"authority_grant:01M6KX4T0FV499BX9Z3TDQ2B9R","observed_outcome":true,"suggestion":true},"consumed":1,"escalations":1,"refusal":"no_grant","roots":1,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_launch_requires_grant_then_runs"}
+{"escalations":1,"reason":"no_grant","roots_after_grant":1,"roots_denied":0,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_roadmap_other_outcome"}
 {"escalations":2,"roots":1,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_budget_and_expiry_stop_launch"}
 {"consumed":1,"escalations":0,"grant":"outcome","roots":1,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_roadmap_launch"}

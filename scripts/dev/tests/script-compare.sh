@@ -122,6 +122,19 @@ has '"growth": 50'
 has '"p95_us_max": 5'
 has '"slow_ticks": 1'
 has '"tick_budget_warnings": 1'
+# journal の JSON の行は message だけを見る。worker の報告の本文に語が入っていても数えない（本番 2026-11-04 の誤計上）。
+cat >"$work/tick-json.log" <<'S'
+11月 04 02:45:53 home celeris[1]: {"timestamp":"t","level":"INFO","fields":{"message":"worker finished","outcome":"question: slow tick 0、script_tick_wait 0"}}
+11月 04 02:46:00 home celeris[1]: {"timestamp":"t","level":"WARN","fields":{"message":"slow tick","elapsed_ms":2500}}
+11月 04 02:46:00 home celeris[1]: {"timestamp":"t","level":"WARN","fields":{"message":"slow tick phases","total_ms":2500}}
+11月 04 02:50:18 home celeris[1]: {"timestamp":"t","level":"INFO","fields":{"message":"script_tick_wait","ticks":244}}
+11月 04 02:51:18 home celeris[1]: {"timestamp":"t","level":"WARN","fields":{"message":"script_tick_wait over budget","tick_budget":2}}
+11月 04 02:52:00 home celeris[1]: {"timestamp":"broken slow tick
+S
+expect 0 "JSON の log の集計" run report --db "$db" --tick-log "$work/tick-json.log"
+has '"slow_ticks": 2'
+has '"script_tick_wait_lines": 2'
+has '"tick_budget_warnings": 1'
 
 # --- sample: 偽の /proc と API の stub ---
 mkdir -p "$work/proc/4242"
@@ -195,6 +208,8 @@ has '"lane_rules_records_after_dedup": 0'
 # 見込みは記録の重複の抑え（同じ task の直前と同じ入力は 1 件）を当てて数える。
 routing() { sqlite3 "$prod/celeris.sqlite3" "INSERT INTO events VALUES ($1,'$2',$1,'2026-10-2$1T00:00:00Z',json_object('type','routing_decided','record',json_object('decision',json_object('source','$3','features',json('{\"f\":$4}')))));"; }
 routing 1 t1 default 1; routing 2 t1 default 1; routing 3 t1 default 2; routing 4 t2 hint 1; routing 5 t3 human 1
+# WU の run は decide_lane を通らず、compare の記録が作られない。見込みに数えない。
+sqlite3 "$prod/celeris.sqlite3" "INSERT INTO events VALUES (6,'t1',6,'2026-10-26T00:00:00Z',json_object('type','routing_decided','record',json_object('work_unit_id','wu1','decision',json_object('source','default','features',json('{\"f\":3}')))));"
 expect 0 "見込みの数え方" pre --estimate-since 2026-10-20T00:00:00Z
 has '"lane_rules_policy_runs": 4'
 has '"lane_rules_distinct_tasks": 2'

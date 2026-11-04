@@ -371,13 +371,30 @@ def summarize_tick_log(paths):
             raise ReadError(f"cannot read {path}: {e}") from e
         for line in lines:
             out["lines"] += 1
-            if "slow tick" in line and "slow tick phases" not in line:
+            message, level = tick_log_message(line)
+            if message.startswith("slow tick") and not message.startswith("slow tick phases"):
                 out["slow_ticks"] += 1
-            if "script_tick_wait" in line:
+            if message.startswith("script_tick_wait"):
                 out["script_tick_wait_lines"] += 1
-                if "WARN" in line:
+                if level == "WARN":
                     out["tick_budget_warnings"] += 1
     return out
+
+
+def tick_log_message(line):
+    """log の 1 行の (message, level)。daemon の JSON の行は `fields.message` だけを見る。
+    worker の報告など別の event の本文に語が入っていても、数えない。JSON でない行は行の全体から探す（数え漏らさない側）。"""
+    start = line.find('{"timestamp"')
+    if start >= 0:
+        try:
+            event = json.loads(line[start:])
+            return str(event["fields"]["message"]), event.get("level")
+        except (ValueError, KeyError, TypeError):
+            pass
+    for needle in ("slow tick phases", "slow tick", "script_tick_wait"):
+        if needle in line:
+            return needle, "WARN" if "WARN" in line else None
+    return "", None
 
 
 def cmd_report(a):
@@ -716,7 +733,7 @@ def days_between(first, last):
 
 def estimate_volume(db, since):
     """本番の実績から件数の見込みを出す（見込みであり、件数に足さない）。lane_rules の記録は `decide_lane` の 1 回ごとに
-    作られるが、同じ task の直前の記録と入力が同じなら追記されない（S2-4）。`routing_decided` の features で同じ抑えを当てて数える。"""
+    作られるが、同じ task の直前の記録と入力が同じなら追記されない（S2-4）。WU の run は `decide_lane` を通らず記録されない。`routing_decided` の features で同じ抑えを当てて数える。"""
     if not since:
         return None
     if not re.fullmatch(r"[0-9TZ:.+-]+", since):
@@ -725,7 +742,8 @@ def estimate_volume(db, since):
         db,
         f"""SELECT json_object('task',task_id,'ts',ts,'f',json_extract(json,'$.record.decision.features')) FROM events
         WHERE json_extract(json,'$.type')='routing_decided' AND ts>='{since}'
-        AND json_extract(json,'$.record.decision.source') IN ('hint','default') ORDER BY id""",
+        AND json_extract(json,'$.record.decision.source') IN ('hint','default')
+        AND json_extract(json,'$.record.work_unit_id') IS NULL ORDER BY id""",
     )
     last, records, tasks = {}, 0, set()
     for r in rows:

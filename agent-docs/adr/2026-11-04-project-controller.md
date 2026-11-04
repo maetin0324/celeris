@@ -610,3 +610,20 @@ A1 の実装（migration `0112_project_controller.sql`、`SCHEMA_VERSION` 112。
    controller の tick を挟まずに起きると（daemon の停止中など）、`human_epoch` が変わらず古い判断の効果が実行される。tick が 1 回でも
    挟まれば `off` の時点で `halted:mode_off` になるので、窓はこの場合に限る。mode の変更で `human_epoch` を増やす案は、人でない
    principal の扱いを含めて別の判断なのでこの WU では変えない。
+12. **decide の失敗の notice と案件別 cursor の読み手**（WU decide-notice-cursor、2026-11-04。final review の指摘 (a)(b)）。
+   - **decide の失敗の notice**: `project_controller_decide_failed` は、失敗が `max_retries` を超えて phase を `blocked` にするとき、
+     呼び出し側（`dispatcher/project_wake.rs` の `decide_exhausted_notice`）が作った BadNews の notice を、`blocked` にする
+     UPDATE と同じ書き込みの tx で記録する（`feed::record_in_tx`）。notice と `blocked` は一緒に残るか一緒に残らないので、間の
+     crash で「止まったのに知らせが無い」状態は起きない。source_key は `project_controller:decide_failed:<project>:<revision>`。
+     `blocked` の後は decide しないので同じ止まり方では 1 件のまま、人が mode を置き直す（`revision + 1`）と次に止まったときに
+     別の notice になる。group_key は効果の失敗と同じ `bad_news:project_controller:<project>`。上限内の失敗は notice を書かない。
+   - **案件別 cursor**: `project_controller_state.event_cursor`（tx1 が消費した wake の `source_event_id` の最大値。減らない）を、
+     wake を入れる共通の関数 `pc_wake_insert_tx` が読み、`source_event_id` が cursor 以下の wake を入れない。全体の cursor
+     （`feed_cursor` の `project_wake`）を戻した再配送で、wake の行が残っていなくても次の判断が起きない。前提は、取り込み
+     （`project_wake_ingest`）が event を id の昇順に 1 tx で入れ、全体の cursor を同じ tx で進めることと、wake の消費が
+     `ORDER BY id` の先頭からであること。このため cursor 以下の event の wake は、既に入れたか、入れなかった（その時 `off`）
+     ものに限る。畳み切れずに残った wake は表に入ったままで、cursor の照合は挿入の時だけなので落ちない。`source_event_id` の
+     無い wake（人・cron・停滞・API）は対象外。
+   - 試験は `crates/task-dispatch/src/dispatcher/tests/project_wake_cursor.rs` の 6 件
+     （`project_wake_decide_{exhausted_notice,retry_no_notice}`・`project_wake_cursor_{per_project,monotonic,blocks_redelivery,keeps_new_events}`）。
+     `project_wake_cursor_blocks_redelivery` は照合を外すと落ちることを確かめた。replay script の task-dispatch の下限は 60。

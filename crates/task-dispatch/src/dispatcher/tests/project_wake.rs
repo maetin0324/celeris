@@ -9,6 +9,8 @@
 use super::*;
 use crate::dispatcher::cos_chat::launch::CosChatLaunchConfig;
 
+#[path = "project_wake_cursor.rs"]
+mod cursor;
 #[path = "project_wake_effects.rs"]
 mod effects;
 use crate::project_controller::{

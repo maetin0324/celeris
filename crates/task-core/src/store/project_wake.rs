@@ -343,18 +343,23 @@ impl SqliteStore {
         at: &str,
         until: &str,
     ) -> Result<usize, StoreError> {
-        let mode: Option<String> = tx
+        let row: Option<(String, i64)> = tx
             .query_row(
-                "SELECT mode FROM project_controller_state WHERE project_id = ?1",
+                "SELECT mode, event_cursor FROM project_controller_state WHERE project_id = ?1",
                 [&w.project_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        if !mode
-            .as_deref()
-            .and_then(ControllerMode::parse)
-            .is_some_and(ControllerMode::wakes)
-        {
+        let Some((mode, event_cursor)) = row else {
+            return Ok(0);
+        };
+        if !ControllerMode::parse(&mode).is_some_and(ControllerMode::wakes) {
+            return Ok(0);
+        }
+        // 案件別 cursor（付記 A1 の 12）: 判断が既に畳んだ event 以下の再配送は wake にしない。
+        // 取り込みは event id の昇順・1 tx なので、cursor 以下の event の wake は既に入れたか、
+        // 入れなかった（その時 off だった）もの。source_event_id の無い wake（人・cron・停滞）は対象外。
+        if w.source_event_id.is_some_and(|id| id <= event_cursor) {
             return Ok(0);
         }
         let n = tx.execute(
@@ -532,12 +537,15 @@ impl SqliteStore {
 
     /// decide が失敗した: `retry_count + 1`。`max_retries` を超えたら `blocked`（以後 decide しない）、
     /// それまでは `retry_base_secs × 2^(n-1)` の backoff。wake は消費しない。lease を放す。
+    /// `blocked` にするときは `exhausted_notice(&state, n)` の notice を同じ transaction で記録する
+    /// （付記 A1 の 12。notice と blocked は一緒に残るか一緒に残らない。source_key が同じなら 1 件）。
     pub fn project_controller_decide_failed(
         &self,
         project_id: &str,
         owner: &str,
         (base, max, max_retries): (u64, u64, u32),
         now: OffsetDateTime,
+        exhausted_notice: &dyn Fn(&ProjectControllerState, u32) -> crate::feed::NoticeEvent,
     ) -> Result<DecideFailure, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -557,6 +565,9 @@ impl SqliteStore {
             Some(secs) => Some(format_rfc3339(now + time::Duration::seconds(secs as i64))?),
             None => None,
         };
+        if blocked {
+            crate::feed::record_in_tx(&tx, &exhausted_notice(&state, n))?;
+        }
         tx.execute(
             "UPDATE project_controller_state SET retry_count = ?2, backoff_until = ?3, \
              phase = CASE WHEN ?4 THEN 'blocked' ELSE phase END, \

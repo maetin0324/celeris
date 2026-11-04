@@ -784,7 +784,12 @@ async fn create_operation(
             // 人の発言の引用（instructed_by）が無ければ CoS が変えられない。
             if instructed_by.is_none()
                 && let Some(problem) =
-                    super::goal_guard::check(store, matched.as_ref(), &req.request.body)
+                    super::goal_guard::check(
+                        store,
+                        &audit.ctx.thread_id,
+                        matched.as_ref(),
+                        &req.request.body,
+                    )
             {
                 return Err(audit.reject(store, "api", &path, problem));
             }

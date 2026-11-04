@@ -6,8 +6,11 @@
 //! - controller が `enabled` の案件に root（`parent` なし）を `task.create` で起こす → 422
 //!   `project_controller_owns_launch`（続きの root は controller が起票する）。
 //!
-//! 断った要求は呼び出し側が `audit.reject` で `rejected` の監査を残す。本番 promote・secret・外部公開・
-//! 不可逆な操作は registry の EXCLUDED（既存の gate）が断るので、ここでは扱わない。
+//! - 案件 CoS（kind `project` の thread の run）が本番 release を promote する → 422 `production_requires_human`
+//!   （案件の自律運営の中で本番を変えない。統括 CoS の promote は従来の gate のまま）。
+//!
+//! 断った要求は呼び出し側が `audit.reject` で `rejected` の監査を残す。secret・外部公開・不可逆な操作は
+//! registry の EXCLUDED（既存の gate）が断るので、ここでは扱わない。
 
 use serde_json::Value;
 use task_core::TaskStore;
@@ -20,15 +23,31 @@ use crate::problem::ApiProblem;
 pub(crate) const PROJECT_REQUEST_HUMAN_ONLY: &str = "project_request_human_only";
 pub(crate) const TASK_GOAL_HUMAN_ONLY: &str = "task_goal_human_only";
 pub(crate) const PROJECT_CONTROLLER_OWNS_LAUNCH: &str = "project_controller_owns_launch";
+pub(crate) const PRODUCTION_REQUIRES_HUMAN: &str = "production_requires_human";
 
 fn present(body: &Value, field: &str) -> bool {
     body.get(field).is_some_and(|v| !v.is_null())
 }
 
 /// 断る理由があれば problem を返す。
-pub(crate) fn check(store: &SqliteStore, matched: Option<&Matched>, body: &Value) -> Option<ApiProblem> {
+pub(crate) fn check(
+    store: &SqliteStore,
+    thread_id: &str,
+    matched: Option<&Matched>,
+    body: &Value,
+) -> Option<ApiProblem> {
     let m = matched?;
     match m.action {
+        "release.promote" => {
+            let thread = store.chat_thread_get(thread_id).ok()??;
+            (thread.kind == task_core::chat::ChatThreadKind::Project).then(|| {
+                unprocessable(
+                    PRODUCTION_REQUIRES_HUMAN,
+                    "a project CoS does not promote a production release on its own judgment; \
+                     relay the person's message (instructed_by)",
+                )
+            })
+        }
         "project.update" if present(body, "request") => Some(unprocessable(
             PROJECT_REQUEST_HUMAN_ONLY,
             "the project request is the person's own text; CoS may change it only when relaying \

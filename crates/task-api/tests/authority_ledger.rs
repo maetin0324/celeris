@@ -1359,3 +1359,184 @@ async fn authority_ledger_outcome_and_task_scope() {
         reason::UNKNOWN_SCOPE
     );
 }
+
+const ROADMAP_BLOCK: &str = "依頼\n```celeris-outcomes\n[{\"id\":\"o1\",\"title\":\"a\",\"acceptance\":[\"x\"]},{\"id\":\"o2\",\"title\":\"b\",\"acceptance\":[\"y\"]}]\n```\n";
+
+/// `(id, dropped)` の並びの Roadmap の提案本文。
+fn roadmap_body(base: Option<i64>, outcomes: &[(&str, bool)]) -> Value {
+    let outcomes: Vec<Value> = outcomes
+        .iter()
+        .map(|(id, dropped)| {
+            json!({"id": id, "title": format!("{id} の状態"), "acceptance": [format!("{id} を確かめる")],
+                   "priority": 1, "depends_on": [], "dropped": dropped})
+        })
+        .collect();
+    json!({"base_version": base, "change_reason": "人の方針の確認を求める", "outcomes": outcomes})
+}
+
+impl Cos {
+    async fn roadmap_propose(&self, base: Option<i64>, outcomes: &[(&str, bool)]) -> i64 {
+        let r = post_human(
+            &self.app,
+            &format!("/api/v1/projects/{}/roadmap/proposals", self.project),
+            &roadmap_body(base, outcomes),
+        )
+        .await;
+        assert_eq!(r.status.as_u16(), 201, "{}", r.text());
+        r.json()["version"].as_i64().expect("version")
+    }
+
+    async fn roadmap_decide(&self, version: i64, decision: &str) {
+        let r = post_human(
+            &self.app,
+            &format!(
+                "/api/v1/projects/{}/roadmap/proposals/{version}/decide",
+                self.project
+            ),
+            &json!({"decision": decision, "note": "確認した"}),
+        )
+        .await;
+        assert_eq!(r.status.as_u16(), 200, "{}", r.text());
+    }
+
+    async fn outcome_grant(&self, id: &str) -> Resp {
+        let mut body = self.grant_body("launch_root", 3);
+        body["scope"] = json!({"kind": "outcome", "ref": id});
+        post_human(&self.app, &self.path("/grants"), &body).await
+    }
+
+    async fn outcome_check(&self, id: &str) -> Value {
+        let r = post_human(
+            &self.app,
+            &self.path("/check"),
+            &json!({"action_class": "launch_root", "scope": {"kind": "outcome", "ref": id}}),
+        )
+        .await;
+        assert_eq!(r.status.as_u16(), 200, "{}", r.text());
+        r.json()
+    }
+}
+
+fn raw_roadmap(case: &str, code: &str) {
+    raw_row(json!({"test": "roadmap_scope", "case": case, "code": code}));
+}
+
+/// approved の版があれば、その版の取り下げていない Outcome だけが範囲になる。request の block にだけある id と
+/// 取り下げた id は、案件全体の許可があっても範囲が不明で断る。
+#[tokio::test]
+async fn authority_ledger_roadmap_approved_outcomes_replace_the_block() {
+    let c = cos_with(Some(ControllerMode::Shadow), ROADMAP_BLOCK).await;
+    let v1 = c
+        .roadmap_propose(None, &[("o1", false), ("o3", false), ("o4", true)])
+        .await;
+    c.roadmap_decide(v1, "approve").await;
+    // Roadmap にだけある o3 の許可を人が作れ、判定が許可を返す。
+    let r = c.outcome_grant("o3").await;
+    assert_eq!(r.status.as_u16(), 201, "{}", r.text());
+    let g = r.json()["id"].as_str().expect("id").to_owned();
+    let check = c.outcome_check("o3").await;
+    assert_eq!(check["allow"], true, "{check}");
+    assert_eq!(check["grant_id"], g.as_str());
+    raw_roadmap("roadmap_only", check["reason"].as_str().unwrap_or_default());
+    // 別の Outcome には広がらない。
+    assert_eq!(c.outcome_check("o1").await["reason"], reason::NO_GRANT);
+    // 案件全体の許可があっても、block にだけある o2 と取り下げた o4 は断る。
+    c.grant("launch_root", 3).await;
+    assert_eq!(c.outcome_check("o1").await["allow"], true);
+    for (case, id) in [("block_only", "o2"), ("dropped", "o4")] {
+        let check = c.outcome_check(id).await;
+        assert_eq!(check["allow"], false, "{id}");
+        assert_eq!(check["reason"], reason::UNKNOWN_SCOPE, "{id}");
+        raw_roadmap(
+            &format!("{case}_check"),
+            check["reason"].as_str().unwrap_or_default(),
+        );
+        let r = c.outcome_grant(id).await;
+        assert_problem(&r, 422, "authority_scope_unknown");
+        raw_roadmap(&format!("{case}_grant"), "authority_scope_unknown");
+    }
+}
+
+/// proposed・rejected の版は範囲を変えない。新しい版を人が approved にして取り下げると、既存の Outcome の許可も断られ、
+/// その許可は問いの答えにも snapshot の有効な許可にもならない。
+#[tokio::test]
+async fn authority_ledger_roadmap_only_the_approved_version_counts() {
+    let c = cos_with(Some(ControllerMode::Shadow), ROADMAP_BLOCK).await;
+    // proposed の間は block のまま。
+    let v1 = c.roadmap_propose(None, &[("o3", false)]).await;
+    assert_eq!(c.outcome_check("o3").await["reason"], reason::UNKNOWN_SCOPE);
+    raw_roadmap("proposed_check", reason::UNKNOWN_SCOPE);
+    assert_problem(&c.outcome_grant("o3").await, 422, "authority_scope_unknown");
+    assert_eq!(c.outcome_check("o1").await["reason"], reason::NO_GRANT);
+    // rejected も同じ。
+    c.roadmap_decide(v1, "reject").await;
+    assert_eq!(c.outcome_check("o3").await["reason"], reason::UNKNOWN_SCOPE);
+    raw_roadmap("rejected_check", reason::UNKNOWN_SCOPE);
+    // approved の後に作った許可は、取り下げの提案の間は有効で、approved になると断られる。
+    let v2 = c
+        .roadmap_propose(None, &[("o3", false), ("o5", false)])
+        .await;
+    c.roadmap_decide(v2, "approve").await;
+    let mut body = c.grant_body("launch_root", 3);
+    body["scope"] = json!({"kind": "outcome", "ref": "o3"});
+    body["question_key"] = json!("authority:roadmap:o3");
+    let r = post_human(&c.app, &c.path("/grants"), &body).await;
+    assert_eq!(r.status.as_u16(), 201, "{}", r.text());
+    let g = r.json()["id"].as_str().expect("id").to_owned();
+    let now = OffsetDateTime::now_utc();
+    let answered = |c: &Cos| {
+        c.env
+            .store
+            .authority_answered(&c.project, "authority:roadmap:o3", now)
+            .expect("answered")
+            .map(|g| g.id)
+    };
+    let live = |c: &Cos| {
+        let section = task_ops::project_snapshot::authority_section(&c.env.store, &c.project, now);
+        section["grants"].as_array().expect("grants").len()
+    };
+    assert_eq!(answered(&c).as_deref(), Some(g.as_str()));
+    assert_eq!(live(&c), 1);
+    let v3 = c
+        .roadmap_propose(Some(v2), &[("o3", true), ("o5", false)])
+        .await;
+    assert_eq!(c.outcome_check("o3").await["allow"], true);
+    c.roadmap_decide(v3, "approve").await;
+    let check = c.outcome_check("o3").await;
+    assert_eq!(check["allow"], false);
+    assert_eq!(check["reason"], reason::UNKNOWN_SCOPE);
+    raw_roadmap("withdrawn_check", reason::UNKNOWN_SCOPE);
+    assert_eq!(answered(&c), None, "a withdrawn scope answers nothing");
+    assert_eq!(live(&c), 0, "the snapshot does not list a withdrawn scope");
+    assert_eq!(c.outcome_check("o5").await["reason"], reason::NO_GRANT);
+}
+
+/// approved の版が読めなければ許可にしない（判定は `ledger_unreadable`、作成は失敗。request の block に戻らない）。
+#[tokio::test]
+async fn authority_ledger_roadmap_unreadable_version_fails_closed() {
+    let c = cos_with(Some(ControllerMode::Shadow), ROADMAP_BLOCK).await;
+    let r = c.outcome_grant("o1").await;
+    assert_eq!(r.status.as_u16(), 201, "{}", r.text());
+    assert_eq!(c.outcome_check("o1").await["allow"], true);
+    {
+        let conn = rusqlite::Connection::open(&c.env.db_path).expect("db");
+        conn.execute(
+            "INSERT INTO project_roadmap_versions (project_id, version, status, request_sha256, \
+             change_reason, outcomes_json, proposed_by, proposed_at) \
+             VALUES (?1, 1, 'approved', 'x', '壊れた行', 'not json', 'human:web', '2026-11-04T00:00:00Z')",
+            [&c.project],
+        )
+        .expect("row");
+    }
+    let check = c.outcome_check("o1").await;
+    assert_eq!(check["allow"], false);
+    assert_eq!(check["reason"], reason::LEDGER_UNREADABLE);
+    raw_roadmap("unreadable_check", reason::LEDGER_UNREADABLE);
+    let before = c.env.store.authority_grants(&c.project).expect("grants");
+    let r = c.outcome_grant("o2").await;
+    assert_eq!(r.status.as_u16(), 500, "{}", r.text());
+    assert_eq!(
+        c.env.store.authority_grants(&c.project).expect("grants"),
+        before
+    );
+}

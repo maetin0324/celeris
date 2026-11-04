@@ -60,7 +60,7 @@ impl ActionClass {
 #[serde(rename_all = "snake_case")]
 pub enum ScopeKind {
     Project,
-    /// Roadmap の途中目標（`Project.request` の Outcome block。A5 の Roadmap もこの id を使う）。
+    /// 途中目標。approved の Roadmap があればその版の取り下げていない Outcome、無ければ `Project.request` の Outcome block。
     Outcome,
     /// 作業単位（task）。
     Task,

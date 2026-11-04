@@ -331,3 +331,117 @@ async fn authority_ledger_revoked_after_decision_creates_no_root() {
         json!({"test": "authority_ledger_revoked_after_decision_creates_no_root", "roots": 0, "effect_ref": d.effect_ref}),
     );
 }
+
+const ROADMAP_ACCEPTANCE: &str = "o3 の計測が同じ値を 3 回出す";
+
+/// Roadmap の Outcome `id` を 1 つ持つ起票（request の block には無い id）。
+fn launch_outcome(s: &ProjectSnapshot, id: &str) -> Value {
+    proposal(
+        s,
+        json!({"kind": "launch_root", "root": {
+            "key": format!("outcome:{id}:1"), "title": "続き", "objective": format!("途中目標 {id} を達成する"),
+            "acceptance": [{"text": ROADMAP_ACCEPTANCE, "check": {"type": "reviewer"}}],
+            "stages_hint": [], "continues_root_ids": [], "outcome_ids": [id]}}),
+        "pc/outcome-open",
+        &[("outcome", id)],
+    )
+}
+
+/// 人の決定で Roadmap の版を approved にする（A5 の API と同じ store の関数）。
+fn approve_roadmap(c: &Case, ids: &[&str]) {
+    let project = c.p.id.to_string();
+    let now = c.env.now();
+    let input = task_core::roadmap::RoadmapProposalInput {
+        base_version: None,
+        change_reason: "人の方針".into(),
+        outcomes: ids
+            .iter()
+            .map(|id| task_core::roadmap::RoadmapOutcomeSpec {
+                id: (*id).to_owned(),
+                title: format!("{id} の状態"),
+                acceptance: vec![ROADMAP_ACCEPTANCE.to_owned()],
+                priority: 1,
+                depends_on: Vec::new(),
+                dropped: false,
+            })
+            .collect(),
+    };
+    c.store
+        .write_tx::<_, task_core::StoreError, _>(|tx| {
+            let invalid = |e: task_core::store::RoadmapWriteError| {
+                task_core::StoreError::Invalid(e.to_string())
+            };
+            let v = SqliteStore::roadmap_propose_tx(tx, &project, &input, "sha", "human:test", now)
+                .map_err(invalid)?;
+            SqliteStore::roadmap_decide_tx(tx, &project, v.version, true, None, "human:test", now)
+                .map_err(invalid)?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn outcome_scope(id: &str) -> GrantScope {
+    GrantScope {
+        kind: ScopeKind::Outcome,
+        reference: id.to_owned(),
+    }
+}
+
+/// approved の Roadmap にだけある Outcome の起票は、案件全体の許可でも、その Outcome の許可でも root を作り、人に聞かない。
+/// root を作る tx の判定も同じ範囲を読む（許可を 1 回消費する）。
+#[tokio::test]
+async fn authority_ledger_roadmap_launch_runs_on_project_or_outcome_grant() {
+    for kind in ["project", "outcome"] {
+        let mut c = enabled_without_grant(|s: &ProjectSnapshot| launch_outcome(s, "o3"));
+        approve_roadmap(&c, &["o3"]);
+        let scope = match kind {
+            "project" => project_scope(&c),
+            _ => outcome_scope("o3"),
+        };
+        let g = human_grant(&c, scope, 2, 30, None);
+        c.wake();
+        assert_eq!(c.roots(), 1, "{kind}: {:?}", c.decisions());
+        assert_eq!(c.escalations(), 0, "{kind}");
+        let grant = c.store.authority_grant(&g).unwrap().unwrap();
+        assert_eq!(grant.consumed, 1, "{kind}");
+        let record = record_of(&c.decisions()[0]);
+        assert_eq!(record["authority"]["scope"]["kind"], "outcome", "{kind}");
+        assert_eq!(record["authority"]["scope"]["ref"], "o3", "{kind}");
+        assert_eq!(record["authority"]["verdict"]["allow"], true, "{kind}");
+        raw_row(json!({
+            "test": "authority_ledger_roadmap_launch", "grant": kind, "roots": c.roots(),
+            "escalations": c.escalations(), "consumed": grant.consumed,
+        }));
+    }
+}
+
+/// 別の Outcome の許可では範囲が広がらず、人に 1 回聞いて止まる。その Outcome の許可を人が与えると続く。
+#[tokio::test]
+async fn authority_ledger_roadmap_other_outcome_grant_asks_a_person() {
+    let mut c = enabled_without_grant(|s: &ProjectSnapshot| launch_outcome(s, "o3"));
+    approve_roadmap(&c, &["o3", "o4"]);
+    let other = human_grant(&c, outcome_scope("o4"), 2, 30, None);
+    c.wake();
+    c.wake();
+    assert_eq!(c.roots(), 0, "another outcome's grant does not cover o3");
+    assert_eq!(c.escalations(), 1, "the same gap is asked once");
+    let denied = record_of(&c.decisions()[0]);
+    assert_eq!(c.decisions()[0].validation, "pc/authority-required");
+    assert_eq!(
+        denied["authority"]["verdict"]["reason"],
+        a::reason::NO_GRANT
+    );
+    assert_eq!(
+        c.store.authority_grant(&other).unwrap().unwrap().consumed,
+        0
+    );
+    let roots_denied = c.roots();
+    let asked = c.escalations();
+    human_grant(&c, outcome_scope("o3"), 2, 30, None);
+    c.wake();
+    assert_eq!(c.roots(), 1);
+    raw_row(json!({
+        "test": "authority_ledger_roadmap_other_outcome", "roots_denied": roots_denied,
+        "escalations": asked, "reason": denied["authority"]["verdict"]["reason"], "roots_after_grant": c.roots(),
+    }));
+}

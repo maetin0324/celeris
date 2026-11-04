@@ -5,10 +5,11 @@
 #    - task-core: 規則（期限・予算・取り消し・読めない期限・範囲の包含）。
 #    - task-api: `/cos/operations` と `…/authority/*` の E2E（6 分類の拒否・状態不明の拒否・期限切れ・予算切れ・取り消し・
 #      根拠つきの許可と元リンク・同じ問いを聞き直さない・監査の 4 欄・偽の人の指示の拒否・human_required の解除不可・
-#      人だけが許可を作る・off の案件は従来どおり・enabled にした人の操作が期限と回数つきの許可を作る）。
+#      人だけが許可を作る・off の案件は従来どおり・enabled にした人の操作が期限と回数つきの許可を作る・
+#      途中目標の範囲は approved の Roadmap の版を読む）。
 #    - task-dispatch: controller の tick（許可なしの起票は人に 1 回聞いて止まる・許可で続く・予算と期限・答えのある問いを
-#      聞き直さない・判断の後の取り消しを効果の tx が拒否する・shadow は記録だけ）。
-#    合計 26 件未満、失敗が 1 件でもあれば失敗。
+#      聞き直さない・判断の後の取り消しを効果の tx が拒否する・shadow は記録だけ・approved の Roadmap の Outcome の起票）。
+#    合計 28 件未満、失敗が 1 件でもあれば失敗。
 # 2. 試験が書いた raw（celeris.long-horizon-record/1）を読み、分類ごとの拒否の code・監査の 4 欄・偽の指示の拒否を検査する。
 # LLM を呼ばない（fake の CoS run の credential と fake の script、注入した時計）。本番の DB・daemon に触れない
 # （一時 DB と $TMPDIR だけ）。前提（cargo-nextest・python3）が欠けたら exit 1（SKIP にしない）。CPU を焼く負荷はかけない。
@@ -57,9 +58,9 @@ run_suite() {
   total=$((total + passed))
 }
 run_suite core 2 -p task-core --lib -E 'test(/(^|::)authority_ledger_/)'
-run_suite api 18 -p task-api --test authority_ledger -E 'test(/^authority_ledger_/)'
-run_suite dispatch 6 -p task-dispatch --lib -E 'test(/(^|::)authority_ledger_/)'
-[ "$total" -ge 26 ] || fail "only $total authority_ledger_ tests (need >= 26)"
+run_suite api 19 -p task-api --test authority_ledger -E 'test(/^authority_ledger_/)'
+run_suite dispatch 7 -p task-dispatch --lib -E 'test(/(^|::)authority_ledger_/)'
+[ "$total" -ge 28 ] || fail "only $total authority_ledger_ tests (need >= 28)"
 echo "authority_ledger_ tests passed: $total"
 
 echo "== 2. raw records"
@@ -122,6 +123,21 @@ again = by("authority_ledger_answered_question_is_not_asked_again")
 need(again and again[-1]["asked_while_answered"] == 0, f"answered question: {again}")
 rev = by("authority_ledger_revoked_after_decision_creates_no_root")
 need(rev and rev[-1]["roots"] == 0 and rev[-1]["effect_ref"] == "authority:grant_revoked", f"revoked after decision: {rev}")
+# 途中目標の範囲は approved の Roadmap の版を読む（block・取り下げ・proposed・rejected は範囲にならない）。
+scope = {r["case"]: r["code"] for r in by("roadmap_scope")}
+need(scope.get("roadmap_only") == "allowed", f"roadmap only outcome: {scope}")
+for case in ("block_only_check", "dropped_check", "proposed_check", "rejected_check", "withdrawn_check"):
+    need(scope.get(case) == "unknown_scope", f"roadmap {case}: {scope.get(case)}")
+for case in ("block_only_grant", "dropped_grant"):
+    need(scope.get(case) == "authority_scope_unknown", f"roadmap {case}: {scope.get(case)}")
+need(scope.get("unreadable_check") == "ledger_unreadable", f"roadmap unreadable: {scope.get('unreadable_check')}")
+rl = {r["grant"]: r for r in by("authority_ledger_roadmap_launch")}
+for kind in ("project", "outcome"):
+    r = rl.get(kind)
+    need(r and r["roots"] == 1 and r["escalations"] == 0 and r["consumed"] == 1, f"roadmap launch with a {kind} grant: {r}")
+oth = by("authority_ledger_roadmap_other_outcome")
+need(oth and oth[-1]["roots_denied"] == 0 and oth[-1]["escalations"] == 1 and oth[-1]["reason"] == "no_grant"
+     and oth[-1]["roots_after_grant"] == 1, f"roadmap other outcome: {oth}")
 print(json.dumps({"rows": len(rows), "fake_cases": sorted(fake), "problems": problems}, ensure_ascii=False))
 sys.exit(1 if problems else 0)
 PY

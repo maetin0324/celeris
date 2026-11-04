@@ -98,7 +98,10 @@ fn event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<OutcomeEvent, S
     })())
 }
 
-fn approved_tx(conn: &Connection, project: &str) -> Result<Option<RoadmapVersion>, StoreError> {
+pub(super) fn approved_tx(
+    conn: &Connection,
+    project: &str,
+) -> Result<Option<RoadmapVersion>, StoreError> {
     conn.query_row(
         &format!(
             "SELECT {VERSION_COLUMNS} FROM project_roadmap_versions \

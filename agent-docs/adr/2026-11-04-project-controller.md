@@ -767,5 +767,11 @@ Outcome の状態・root との対応の履歴が無く、CoS は request を書
     expires_at, budget_remaining}]}`。根拠の本文は入れない（I11）。TS はまだ読まない（判定は Rust の門が持つ）。
 11. **cos-inbox-triage の policy_version を 11 に上げた**（basis の refs の種類 `authority_grant` を足した。生きている許可だけが通り、
     `human_required` は解除しない）。
-12. **E2E**（接頭辞 `authority_ledger_`、計 26 件）: task-core 2、task-api `tests/authority_ledger.rs` 18、task-dispatch
-    `dispatcher/tests/authority_ledger.rs` 6。`scripts/dev/test-authority-ledger-e2e.sh` が 3 つを走らせ raw を検査する。
+12. **E2E**（接頭辞 `authority_ledger_`、計 31 件）: task-core 2、task-api `tests/authority_ledger.rs` 21、task-dispatch
+    `dispatcher/tests/authority_ledger.rs` 8。`scripts/dev/test-authority-ledger-e2e.sh` が 3 つを走らせ raw を検査する。
+13. **途中目標の範囲と A5 の Roadmap の結線**: `scope_exists`（`store/authority.rs`）の `ScopeKind::Outcome` は `project_snapshot` と同じ規則で読む。
+    approved の版があれば `task_core::roadmap::snapshot_outcomes` の id（取り下げを除く）だけを有効とし、request の block は読まない。approved の版が
+    無ければ block を読む。proposed・rejected・superseded の版は範囲を変えない。読めない版は `Err` のまま返し、判定は `ledger_unreadable`、作成は 500
+    で、block に戻らない。tx の中からも呼ぶので `store/roadmap.rs` の `approved_tx` を `conn` で使う。新しい版で取り下げた Outcome の許可は、判定が
+    `unknown_scope` で断るほか、`authority_answered`（問いの答え）と snapshot の `authority.grants` からも外れる。範囲の不明は案件全体の許可より先に
+    判定するので、案件全体の許可があっても取り下げた id には効かない。試験は接頭辞 `authority_ledger_roadmap_`（api 3・dispatch 2）。migration は足していない。

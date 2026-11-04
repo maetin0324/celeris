@@ -94,7 +94,9 @@ fn grant_of(conn: &Connection, id: &str) -> Result<Option<AuthorityGrant>, Store
     Ok(st.query_row([id], grant_row).optional()?)
 }
 
-/// 範囲が実在し案件に属するか。案件は同じ id、task はその案件の task、途中目標は依頼文の Outcome block の id。
+/// 範囲が実在し案件に属するか。案件は同じ id、task はその案件の task。途中目標は `project_snapshot` と同じ規則で、
+/// approved の Roadmap の版があればその版の取り下げていない Outcome の id だけ（request の block は読まない）、
+/// 無ければ依頼文の Outcome block の id。書き込みの tx の中からも呼ばれるので `conn` だけを使う。読めなければ `Err`。
 fn scope_exists(conn: &Connection, project: &str, scope: &GrantScope) -> Result<bool, StoreError> {
     Ok(match scope.kind {
         ScopeKind::Project => {
@@ -118,18 +120,23 @@ fn scope_exists(conn: &Connection, project: &str, scope: &GrantScope) -> Result<
                 .optional()?;
             owner.flatten().as_deref() == Some(project)
         }
-        ScopeKind::Outcome => {
-            let request: Option<Option<String>> = conn
-                .query_row(
-                    "SELECT request FROM projects WHERE id = ?1",
-                    [project],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            let request = request.flatten().unwrap_or_default();
-            crate::project_proposal::parse_outcomes(&request)
-                .is_ok_and(|outcomes| outcomes.iter().any(|o| o.id == scope.reference))
-        }
+        ScopeKind::Outcome => match super::roadmap::approved_tx(conn, project)? {
+            Some(version) => crate::roadmap::snapshot_outcomes(&version)
+                .iter()
+                .any(|o| o.id == scope.reference),
+            None => {
+                let request: Option<Option<String>> = conn
+                    .query_row(
+                        "SELECT request FROM projects WHERE id = ?1",
+                        [project],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let request = request.flatten().unwrap_or_default();
+                crate::project_proposal::parse_outcomes(&request)
+                    .is_ok_and(|outcomes| outcomes.iter().any(|o| o.id == scope.reference))
+            }
+        },
     })
 }
 
@@ -675,6 +682,7 @@ impl SqliteStore {
             for g in grants_of(c, project)? {
                 if g.question_key.as_deref() == Some(question_key)
                     && grant_denial(&g, now).is_none()
+                    && scope_exists(c, project, &g.scope)?
                     && source_problem(c, project, &g.source, &g.granted_by)?.is_none()
                 {
                     return Ok(Some(g));
@@ -682,6 +690,15 @@ impl SqliteStore {
             }
             Ok(None)
         })
+    }
+
+    /// 範囲が今も案件にあるか（取り下げた Outcome は `false`）。
+    pub fn authority_scope_exists(
+        &self,
+        project: &str,
+        scope: &GrantScope,
+    ) -> Result<bool, StoreError> {
+        self.with_read_conn(|c| scope_exists(c, project, scope))
     }
 
     /// 分類の許可がこれまでに何件作られたか（期限切れの後の問いを別の key にする）。

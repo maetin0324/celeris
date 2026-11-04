@@ -1,0 +1,76 @@
+diff --git a/control-ts/src/domains/cos_digest.test.ts b/control-ts/src/domains/cos_digest.test.ts
+index 24575211..9aa4730e 100644
+--- a/control-ts/src/domains/cos_digest.test.ts
++++ b/control-ts/src/domains/cos_digest.test.ts
+@@ -154,6 +154,44 @@ describe("cos_digest reason and title", () => {
+   });
+ });
+ 
++describe("cos_digest title cap", () => {
++  const titleOf = (summary: string) => {
++    const p = post(input({ items: [item({ summary })] }));
++    const title = p.cards[0]?.title;
++    expect(p.text).toContain(`\n### ${title}（決定）\n`);
++    return title;
++  };
++
++  it("80 code points stay as they are", () => {
++    const s = "あ".repeat(80);
++    expect(titleOf(s)).toBe(s);
++  });
++
++  it("81 code points become the first 80 plus one ellipsis in the heading and the card", () => {
++    expect(titleOf("あ".repeat(81))).toBe(`${"あ".repeat(80)}…`);
++  });
++
++  it("counts code points, not UTF-16 units, and does not split a surrogate pair", () => {
++    const s = "😀".repeat(80);
++    expect(s.length).toBe(160);
++    expect(titleOf(s)).toBe(s);
++    expect(titleOf(`${s}x`)).toBe(`${s}…`);
++    expect(titleOf(`${"a".repeat(79)}😀😀`)).toBe(`${"a".repeat(79)}😀…`);
++  });
++
++  it("a long blank summary keeps source_kind:source_key", () => {
++    expect(titleOf(" ".repeat(100))).toBe("decision:decision:01TASK");
++  });
++
++  it("the other lines and fields do not change", () => {
++    const summary = "長".repeat(100);
++    const decision = packet({ summary });
++    const p = post(input({ items: [item({ summary, state: "escalated", decision })] }));
++    expect(p.text).toContain(`- 人が決めること: ${summary}\n`);
++    expect(p.cards[0]?.id).toBe("decision:01TASK");
++  });
++});
++
+ describe("cos_digest decision packet", () => {
+   it("escalated with options: recommended mark, href and card reason from the packet", () => {
+     const d = packet({ background: "背景", on_answer: "再開する", recommendation_reason: "戻しやすい" });
+diff --git a/control-ts/src/domains/cos_digest.ts b/control-ts/src/domains/cos_digest.ts
+index 762f3f4f..d3032bf0 100644
+--- a/control-ts/src/domains/cos_digest.ts
++++ b/control-ts/src/domains/cos_digest.ts
+@@ -267,9 +267,20 @@ export function cardKind(sourceKind: string): ChatCardKind {
+   }
+ }
+ 
+-/** Rust の `CosTriageItemReport::title`。 */
++/** 項目の見出しの上限（Unicode の code point で数える。UTF-16 の長さではない）。 */
++const TITLE_MAX_CODE_POINTS = 80;
++
++/** 上限を超えた見出しを、先頭の上限分の code point + `…` にする。 */
++function capTitle(summary: string): string {
++  const codePoints = Array.from(summary);
++  return codePoints.length > TITLE_MAX_CODE_POINTS
++    ? `${codePoints.slice(0, TITLE_MAX_CODE_POINTS).join("")}…`
++    : summary;
++}
++
++/** digest の `### ` の見出しと card の `title` の両方に使う見出し。空白だけなら `<source_kind>:<source_key>`。 */
+ function title(item: CosTriageItemReport): string {
+-  return rustTrim(item.summary) === "" ? `${item.source_kind}:${item.source_key}` : item.summary;
++  return rustTrim(item.summary) === "" ? `${item.source_kind}:${item.source_key}` : capTitle(item.summary);
+ }
+ 
+ /** Rust の `judgment`。 */

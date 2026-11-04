@@ -470,3 +470,11 @@ project_controller_decisions(id PK, project_id, based_on_revision, human_epoch, 
 - A5 の必要性は PoC の raw で決まる（不要なら人に question）。
 - `tree::gate::unit_gate` と TS の gate のずれ（ADR execution_gate の未解決）は controller と無関係で、ここでは扱わない。
 - 契約を変える子は、この ADR の末尾に付記（日付・子の key・変えた行・理由）を足し、進捗に理由を書く。
+
+## 付記 2026-11-04（a8a）
+§A8 の設計の本文は [ADR 2026-11-04-long-horizon-bench](2026-11-04-long-horizon-bench.md) に置き、`a8a.md` はその要約と進捗にした（CLAUDE.md の「設計判断は ADR」に従うため）。変えた行と理由:
+- §A8 の候補 10 件はそのまま採用した。
+- §A8 の「`off` が旧 CoS」は再生では維持し、腕を `old.passive`・`old.proactive`・`new` の 3 つにした。旧 CoS の台本で結果が決まるので、幅を見るため。`test-long-horizon-bench.sh` の「課題数×2 以上」は満たす。
+- A4 の指針は案件 mode で切れないので、C09 の実 LLM だけ A1 の直前の binary を補助の腕にする。主比較には入れない。
+- D11-5 の「認証が使えなければ人に頼む」を強めた。実 LLM の試行は worker の run の中で起こさず、`scripts/dev/long-horizon-pilot-llm.sh` を人が実行する。run の規則が LLM の起動を禁じていることと、測定専用 account に人の login が要ることが理由。人に頼まれた外部 operator が実行してもよい。
+- §A8 の配置に `oracle/MANIFEST.sha256` と、主体に見せない台本 `oracle/<case>/scenario.jsonl` を足した。`public/` と `oracle/` の分け方は変えていない。

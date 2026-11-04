@@ -56,6 +56,7 @@ fn script_domain_initial_modes_are_rust() {
         rows.iter().map(|r| r.domain).collect::<Vec<_>>(),
         vec![
             ScriptDomain::CosDigest,
+            ScriptDomain::ExecutionGate,
             ScriptDomain::LaneRules,
             ScriptDomain::RoutePriority
         ]
@@ -908,6 +909,7 @@ fn script_domain_mode_cas_moves_generation_states() {
             .collect::<Vec<_>>(),
         vec![
             (ScriptDomain::CosDigest, None),
+            (ScriptDomain::ExecutionGate, None),
             (ScriptDomain::LaneRules, Some(b.id.clone())),
             (ScriptDomain::RoutePriority, Some(b.id.clone())),
         ]

@@ -5,7 +5,7 @@
   python3 -I scripts/dev/script-compare.py preflight --config <toml> --state-dir <dir> --measure-root <dir>...
       [--measure-bin <dir>]... [--proc-root <dir>] [--repo <git の木>] [--estimate-since <rfc3339>]
   python3 -I scripts/dev/script-compare.py report --db <sqlite> [--samples <jsonl>]... [--tick-log <file>]... [--upto-event-id N] [--upto-log-id N]
-      [--require-ready <domain,...>] [--format json|table]
+      [--require-ready <domain,...>] [--format json|table] [--lane-reference-sha256 <sha256>]
   python3 -I scripts/dev/script-compare.py sample --pid <pid> (--daemon-json <file> | --api <origin> --token-file <file>)
       [--count N] [--interval-secs S] [--proc-root <dir>]
 
@@ -21,12 +21,19 @@ report の exit: 0 = 読めて矛盾なし（--require-ready があれば全部 
 preflight の exit: 0 = 全部 pass。1 = fail あり（分離の破れなど。人の手順に進まない）。2 = 引数・読み取りの誤り。
 3 = fail は無いが human の項目（release・config など人の手順）が残っている。
 
+lane_rules の網羅の証拠（表 script_exhaustive_runs、ADR 2026-11-04-lane-rules-exhaustive-evidence）を別の節で出す。証拠が
+合格（今の参照の hash と同じ行で、39,366 呼び出し・不一致 0・安全違反 0・未網羅 0・timeout と失敗が 0.1% 以下）なら lane_rules の
+required は 100 で、窓の timeout・失敗は 0 件でなければ ready にしない。無い・不合格・参照が確かめられないときは 1000 件のまま。
+網羅の件数は live の件数（match など）に足さない。参照の hash は --lane-reference-sha256、省略時は repo の
+control-ts/fixtures/lane_rules/all-features.jsonl の sha256 を使う。どちらも無ければ exhaustive_reference_unverified で ready にしない。
+
 report は 1 つの read transaction で読むので、動いている DB でも記録と計数が食い違わない。同じ DB・同じ引数の report は
 同じ byte 列を出す（時計を読まない）。`bounds` の id を --upto-* に渡すと動いている DB でも記録の集計は再現する。その場合は
 mode・guard の計数・受信箱が今の値で記録と時点が違うので、guard との照合をせず ready にしない。
 """
 import argparse
 import calendar
+import hashlib
 import json
 import os
 import re
@@ -41,6 +48,10 @@ import urllib.request
 # (f) の閾値。正本は crates/task-core/src/script_guard.rs の SCRIPT_GUARD_*。
 REQUIRED = {"lane_rules": 1000, "route_priority": 1000, "execution_gate": 1000, "cos_digest": 200}
 WINDOW = 1000
+# lane_rules の網羅の証拠が合格のときの件数と合否の定数。正本は crates/task-core/src/script_exhaustive.rs・script_guard.rs。
+REQUIRED_EXHAUSTIVE = 100
+EXHAUSTIVE_CALLS = 19683 * 2
+LANE_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "control-ts", "fixtures", "lane_rules", "all-features.jsonl")
 OUTCOMES = ("match", "mismatch", "explained", "ts_error", "invalid_output", "unavailable")
 # compare に要る表（0103〜0107）。
 TABLES = (
@@ -125,7 +136,7 @@ RECORD_FIELDS = """'id',id,'ts',ts,'domain',json_extract(json,'$.domain'),'gener
     'fallback',json_extract(json,'$.fallback.code'),'explained_by',json_extract(json,'$.explained_by.id'),'rust',json_extract(json,'$.rust'),'ts_out',json_extract(json,'$.ts')"""
 
 
-def read_snapshot(db, upto_event, upto_log):
+def read_snapshot(db, upto_event, upto_log, with_exhaustive=False):
     """全部を 1 つの read transaction で読み、表ごとの行を返す。"""
     event_bound = "(SELECT coalesce(max(id),0) FROM events)" if upto_event is None else str(int(upto_event))
     log_bound = "(SELECT coalesce(max(id),0) FROM script_compare_log)" if upto_log is None else str(int(upto_log))
@@ -153,6 +164,16 @@ def read_snapshot(db, upto_event, upto_log):
         FROM script_inbox_items""",
         "SELECT json_object('t','outbox','pending',count(*)) FROM cos_digest_shadow_outbox",
     ]
+    if with_exhaustive:
+        selects.append(
+            """SELECT json_object('t','exhaustive','id',id,'domain',domain,'generation',generation_id,'bundle_sha256',bundle_sha256,
+        'mode_at_start',mode_at_start,'daemon_instance_id',daemon_instance_id,'requested_by',requested_by,'reason',reason,
+        'state',state,'stop_code',stop_code,'reference_sha256',reference_sha256,'started_at',started_at,'finished_at',finished_at,
+        'calls',calls,'matches',matches,'mismatches',mismatches,'timeouts',timeouts,'failures',failures,
+        'safety_violations',safety_violations,'uncovered_inputs',uncovered_inputs,'latency_p50_us',latency_p50_us,
+        'latency_p95_us',latency_p95_us,'latency_max_us',latency_max_us,'first_problem',first_problem_json)
+        FROM script_exhaustive_runs ORDER BY started_at, id"""
+        )
     rows = {}
     for row in query_json(db, "BEGIN; " + "; ".join(selects) + "; COMMIT;"):
         rows.setdefault(row.pop("t"), []).append(row)
@@ -227,11 +248,54 @@ def aggregate(records, problems):
     return groups
 
 
-def finish_group(g, guard, mode, promoted, bounded, problems):
+def exhaustive_verdict(r):
+    """ScriptExhaustiveCounts::verdict と同じ。"""
+    return (
+        r["calls"] == EXHAUSTIVE_CALLS
+        and r["mismatches"] == 0
+        and r["safety_violations"] == 0
+        and r["uncovered_inputs"] == 0
+        and r["timeouts"] * 1000 <= r["calls"]
+        and r["failures"] * 1000 <= r["calls"]
+    )
+
+
+def exhaustive_standing(domain, generation, runs, reference):
+    """exhaustive_standing（task_core）と同じ規則。reference が None（確かめられない）なら unverified。"""
+    if domain != "lane_rules":
+        return "not_applicable"
+    if reference is None:
+        return "unverified"
+    rel = [r for r in runs if r["domain"] == domain and r["generation"] == generation and r["reference_sha256"] == reference]
+    if any(r["mismatches"] > 0 or r["safety_violations"] > 0 for r in rel):
+        return "failed"
+    done = [r for r in rel if r["state"] in ("passed", "failed")]
+    if not done:
+        return "missing"
+    latest = max(done, key=lambda r: (r["started_at"], r["id"]))
+    return "passed" if latest["state"] == "passed" and exhaustive_verdict(latest) else "failed"
+
+
+def lane_reference(arg):
+    """今の binary の参照 hash。引数か repo の fixture file から。得られなければ None。"""
+    if arg:
+        return arg
+    try:
+        with open(LANE_FIXTURE, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def finish_group(g, guard, mode, promoted, bounded, problems, standing="not_applicable", runs=()):
     required = REQUIRED.get(g["domain"])
     if required is None:
         problems.append(f"unknown domain {g['domain']!r}")
         required = 0
+    passed = standing == "passed"
+    if passed:
+        required = REQUIRED_EXHAUSTIVE
+    g["exhaustive"] = {"standing": standing, "runs": len(runs)}
     window = g.pop("_window")[-WINDOW:]
     lat = g.pop("_lat")
     out = g["outcomes"]
@@ -278,10 +342,19 @@ def finish_group(g, guard, mode, promoted, bounded, problems):
         blockers.append(f"mode is {mode['mode']}: this gate is compare→canary (see guard_state.ts_side_clean_streak)")
     if streak < required:
         blockers.append(f"clean_streak {streak} < {required}")
-    if rate_exceeded(t_win, len(window)):
-        blockers.append(f"timeouts {t_win} in window {len(window)}")
-    if rate_exceeded(f_win, len(window)):
-        blockers.append(f"failures {f_win} in window {len(window)}")
+    if passed:
+        # 網羅が合格のときは窓の timeout・失敗が 0 件（100 件の窓で 0.1% は 0 件と同じ）。
+        if t_win:
+            blockers.append(f"timeouts {t_win} in window {len(window)} (exhaustive evidence requires 0)")
+        if f_win:
+            blockers.append(f"failures {f_win} in window {len(window)} (exhaustive evidence requires 0)")
+    else:
+        if rate_exceeded(t_win, len(window)):
+            blockers.append(f"timeouts {t_win} in window {len(window)}")
+        if rate_exceeded(f_win, len(window)):
+            blockers.append(f"failures {f_win} in window {len(window)}")
+    if standing == "unverified":
+        blockers.append("exhaustive_reference_unverified: pass --lane-reference-sha256 (the sha256 of this binary's lane_fixture_jsonl)")
     if g["safety_violations"]:
         blockers.append(f"safety_violations {g['safety_violations']}")
     if g["normalized"] or g["other_outcomes"] or g["hidden_differences"]:
@@ -403,7 +476,10 @@ def cmd_report(a):
     if missing:
         print(json.dumps({"schema": "celeris.script-compare-report/1", "tables_missing": missing}, ensure_ascii=False))
         return 3
-    rows = read_snapshot(a.db, a.upto_event_id, a.upto_log_id)
+    with_exh = "script_exhaustive_runs" in set(query(a.db, "SELECT name FROM sqlite_master WHERE type='table'"))
+    rows = read_snapshot(a.db, a.upto_event_id, a.upto_log_id, with_exh)
+    reference = lane_reference(a.lane_reference_sha256)
+    exh_runs = rows.get("exhaustive", [])
     bounded = a.upto_event_id is not None or a.upto_log_id is not None
     modes = rows.get("mode", [])
     mode_of = {m["domain"]: m for m in modes}
@@ -412,7 +488,11 @@ def cmd_report(a):
     groups = aggregate(rows.get("record", []), problems)
     domains = []
     for key in sorted(groups):
-        domains.append(finish_group(groups[key], guard.get(key), mode_of.get(key[0]), promoted, bounded, problems))
+        standing = exhaustive_standing(key[0], key[1], exh_runs, reference)
+        mine = [r for r in exh_runs if r["domain"] == key[0] and r["generation"] == key[1]]
+        domains.append(
+            finish_group(groups[key], guard.get(key), mode_of.get(key[0]), promoted, bounded, problems, standing, mine)
+        )
     if not bounded:
         # 記録の無い generation に計数だけがあれば、それも合わない（件数を計数だけで補った DB を見逃さない）。
         for (domain, generation), row in sorted(guard.items()):
@@ -427,6 +507,12 @@ def cmd_report(a):
         "rollback": rollback,
         "guard_halted": [{"reason": r["halt_reason"], "updated_at": r["updated_at"]} for r in halted],
         "shadow_outbox_pending": rows["outbox"][0]["pending"],
+        "exhaustive": {
+            "table_present": with_exh,
+            "reference_sha256": reference,
+            "required_calls": EXHAUSTIVE_CALLS,
+            "runs": exh_runs,
+        },
         "samples": summarize_samples(a.samples, problems),
         "tick_log": summarize_tick_log(a.tick_log),
         "problems": problems,
@@ -458,6 +544,20 @@ def print_table(r):
         )
         for b in d["ready_blockers"]:
             print(f"  not ready: {b}")
+    ex = r["exhaustive"]
+    print(f"exhaustive table_present={ex['table_present']} reference_sha256={ex['reference_sha256']} required_calls={ex['required_calls']}")
+    for d in r["domains"]:
+        print(f"exhaustive standing {d['domain']} {d['generation']} = {d['exhaustive']['standing']} (required {d['required']})")
+    if ex["runs"]:
+        print("exhaustive_run id generation state stop_code calls matches mismatches timeouts failures safety uncovered "
+              "p50_us p95_us max_us started_at finished_at daemon_instance requested_by reference_ok")
+    for e in ex["runs"]:
+        print(
+            "exhaustive_run", e["id"], e["generation"], e["state"], e["stop_code"], e["calls"], e["matches"], e["mismatches"],
+            e["timeouts"], e["failures"], e["safety_violations"], e["uncovered_inputs"], e["latency_p50_us"], e["latency_p95_us"],
+            e["latency_max_us"], e["started_at"], e["finished_at"], e["daemon_instance_id"], e["requested_by"],
+            e["reference_sha256"] == ex["reference_sha256"],
+        )
     rb = r["rollback"]
     print(f"rollback to_rust_by_actor={rb['to_rust_by_actor']} automatic={len(rb['automatic_rollbacks'])} "
           f"generation_events={len(rb['generation_events'])} inbox_open={rb['inbox_open']}/{rb['inbox_items']}")
@@ -844,6 +944,7 @@ def main(argv):
     r.add_argument("--upto-event-id", type=int)
     r.add_argument("--upto-log-id", type=int)
     r.add_argument("--require-ready")
+    r.add_argument("--lane-reference-sha256")
     r.add_argument("--format", choices=("json", "table"), default="json")
     s = sub.add_parser("sample")
     s.add_argument("--pid", type=int, required=True)

@@ -61,6 +61,61 @@ expect 0 "表の形式" run report --db "$db" --format table
 has 'lane_rules g1 1 0 0 0 0 0 1.0'
 has 'not ready: clean_streak 1 < 1000'
 
+# --- 網羅の証拠（ADR 2026-11-04-lane-rules-exhaustive-evidence）: 合格で 100 件、無し・不合格・参照の違いは 1000 件 ---
+REF=aaaa
+exh_row() { # exh_row <db> <id> <state> <reference> [calls] [mismatches] [timeouts]
+  sqlite3 "$1" "INSERT INTO script_exhaustive_runs (id, domain, generation_id, bundle_sha256, mode_at_start, daemon_instance_id, requested_by, reason, state, reference_sha256, started_at, finished_at, calls, matches, mismatches, timeouts, latency_p50_us, latency_p95_us, latency_max_us) VALUES ('$2','lane_rules','g1','s','compare','inst1','human:r','t','$3','$4','2026-11-04T00:00:0${2}Z','2026-11-04T00:01:00Z',${5:-39366},$(( ${5:-39366} - ${6:-0} - ${7:-0} )),${6:-0},${7:-0},11,22,33);"
+}
+exh_db() { # exh_db <path> <records>: g1 の compare に match を N 件
+  cp "$db" "$1"
+  cat "$root"/crates/task-core/migrations/0109_script_exhaustive_runs.sql | sqlite3 "$1"
+  local i; { echo "BEGIN;"; for i in $(seq 2 "$2"); do echo "INSERT INTO events SELECT $i,'t',$i,'2026-11-03T00:00:00Z',json FROM events WHERE id=1;"; done; echo "COMMIT;"; } | sqlite3 "$1"
+  guard_row "$1" "$2" "$2"
+}
+# 網羅の表が無い DB でも読め、証拠は missing（1000 件のまま）。
+expect 0 "網羅の表が無くても exit 0" run report --db "$db" --lane-reference-sha256 $REF
+has '"table_present": false'
+has '"standing": "missing"'
+e="$work/exh.sqlite3"
+exh_db "$e" 100
+expect 4 "証拠が無ければ 100 件でも ready でない" run report --db "$e" --lane-reference-sha256 $REF --require-ready lane_rules
+expect 0 "表の形式（証拠無し）" run report --db "$e" --lane-reference-sha256 $REF --format table
+has 'not ready: clean_streak 100 < 1000'
+has 'exhaustive standing lane_rules g1 = missing (required 1000)'
+exh_row "$e" 1 passed $REF
+expect 0 "合格の証拠 + 100 件は ready" run report --db "$e" --lane-reference-sha256 $REF --require-ready lane_rules
+expect 0 "表: 証拠の件数・latency・generation・daemon" run report --db "$e" --lane-reference-sha256 $REF --format table
+has 'exhaustive standing lane_rules g1 = passed (required 100)'
+has 'exhaustive_run 1 g1 passed None 39366 39366 0 0 0 0 0 11 22 33 2026-11-04T00:00:01Z 2026-11-04T00:01:00Z inst1 human:r True'
+has '100/100 True'
+# 99 件は足りない。
+exh_db "$work/exh99.sqlite3" 99
+exh_row "$work/exh99.sqlite3" 1 passed $REF
+expect 4 "合格でも 99 件は ready でない" run report --db "$work/exh99.sqlite3" --lane-reference-sha256 $REF --require-ready lane_rules
+# 参照が今の binary と違う行は数えない。参照が得られなければ blocker。
+expect 4 "参照の違う証拠は数えない" run report --db "$e" --lane-reference-sha256 bbbb --require-ready lane_rules
+expect 4 "網羅は --lane-reference-sha256 が無ければ repo の fixture の hash と照合する" run report --db "$e" --require-ready lane_rules
+# 不合格・途中の証拠は 1000 件のまま。
+exh_db "$work/exhf.sqlite3" 100
+exh_row "$work/exhf.sqlite3" 1 failed $REF 39366 1
+expect 4 "不一致のある証拠は ready でない" run report --db "$work/exhf.sqlite3" --lane-reference-sha256 $REF --require-ready lane_rules
+exh_db "$work/exht.sqlite3" 100
+exh_row "$work/exht.sqlite3" 1 passed $REF 39366 0 40
+expect 4 "timeout 40 件（0.1% 超）は不合格" run report --db "$work/exht.sqlite3" --lane-reference-sha256 $REF --require-ready lane_rules
+exh_db "$work/exha.sqlite3" 100
+exh_row "$work/exha.sqlite3" 1 aborted $REF 100
+expect 4 "aborted は数えない" run report --db "$work/exha.sqlite3" --lane-reference-sha256 $REF --require-ready lane_rules
+# 合格でも窓に timeout が 1 件あれば ready でない（100 件の窓の条件は 0 件）。
+exh_db "$work/exhw.sqlite3" 100
+exh_row "$work/exhw.sqlite3" 1 passed $REF
+sqlite3 "$work/exhw.sqlite3" "UPDATE events SET json=json_set(json,'$.outcome','ts_error','$.error.kind','timeout') WHERE id=50;"
+expect 4 "合格の証拠でも窓の timeout は 0 件が要る" run report --db "$work/exhw.sqlite3" --lane-reference-sha256 $REF --format table --require-ready lane_rules
+# 網羅の行は live の件数に足されない。
+run report --db "$e" --lane-reference-sha256 $REF >"$work/out"
+python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); g=d["domains"][0]; assert g["outcomes"]["match"]==100 and g["calls"]==100, g["outcomes"]' "$work/out" || fail "網羅が live の件数に入った"
+# report の前後で DB の byte が変わらない（網羅の表があっても）。
+before="$(sha256sum "$e")"; run report --db "$e" >/dev/null; [ "$before" = "$(sha256sum "$e")" ] || fail "report が網羅の DB を変えた"
+
 # report の前後で DB の byte が変わらない。
 before="$(sha256sum "$db")"
 run report --db "$db" >/dev/null

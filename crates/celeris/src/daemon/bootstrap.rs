@@ -689,12 +689,15 @@ pub fn build_daemon_dispatcher(
     identity: &crate::InstanceIdentity,
 ) -> Result<Dispatcher, DaemonError> {
     let mut dispatcher = build_dispatcher(config, masters)?;
-    // ADR 2026-11-04-project-controller A1: 判定は A1 の既定（効果なし）。A3 が TS と接続する。
+    // ADR 2026-11-04-project-controller A3: 判定は TS（領域 `project_controller`）。領域が `rust` なら
+    // TS を呼ばず効果なしの判断（`pc/script-unavailable`）になり、起票も LLM も起こさない。
     if let Some(pc) = &config.project_controller
         && pc.enabled
         && !dispatcher.set_project_controller(
             pc.settings(),
-            Box::new(task_dispatch::project_controller::NoopProjectDecider),
+            Box::new(task_dispatch::project_decider_ts::TsProjectDecider::new(
+                task_dispatch::project_decider_ts::DeciderLimits::default(),
+            )),
             identity.instance_id.clone(),
         )
     {

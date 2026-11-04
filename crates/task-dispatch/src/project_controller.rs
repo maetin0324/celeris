@@ -50,6 +50,16 @@ pub enum ProjectEffect {
     CreateRoot {
         idempotency_key: String,
         spec: Box<NewTaskSpec>,
+        /// 冪等キーの行の `result_json`（A2 の `LaunchRootMeta`。snapshot が controller の root を引く）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        meta: Option<String>,
+    },
+    /// 人への判断の要求（A3）。notice（`bad_news`、source key
+    /// `project_controller:escalate:<project>:<question_key>`）を 1 件。同じ key は 2 回目を作らない。
+    OpenEscalation {
+        question_key: String,
+        category: String,
+        summary: String,
     },
 }
 
@@ -84,6 +94,19 @@ impl ProjectDecision {
 /// 判定の口（A1）。A3 が TS の `PolicyScript::project_controller` と接続する。`Err` は再試行（backoff）。
 pub trait ProjectDecider: Send {
     fn decide(&mut self, input: &ProjectDecideInput) -> Result<ProjectDecision, String>;
+
+    /// tick の始めに store とその tick の領域 `project_controller` の宛先を渡す（A3）。既定は何もしない。
+    fn attach(
+        &mut self,
+        _store: &std::sync::Arc<task_core::store::SqliteStore>,
+        _access: Option<crate::project_decider_ts::ScriptAccess>,
+    ) {
+    }
+
+    /// 直前の `decide` の判断の記録（`proposal_json` に残す JSON）。既定は無し（入力をそのまま残す）。
+    fn take_record(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// A1 の既定: 常に効果なし（起票も CoS 入力もしない）。

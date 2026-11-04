@@ -780,6 +780,14 @@ async fn create_operation(
                     payload.insert("basis".into(), value);
                 }
             }
+            // ADR 2026-11-04-project-controller D5・D8: 人の目的・受け入れ条件と controller の起票は、
+            // 人の発言の引用（instructed_by）が無ければ CoS が変えられない。
+            if instructed_by.is_none()
+                && let Some(problem) =
+                    super::goal_guard::check(store, matched.as_ref(), &req.request.body)
+            {
+                return Err(audit.reject(store, "api", &path, problem));
+            }
             dispatch(store, &env, &audit, &method, &path, req.request.body)
         })
         .await?;

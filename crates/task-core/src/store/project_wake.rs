@@ -789,6 +789,7 @@ impl SqliteStore {
         task: &Task,
         claim: &IdempotencyClaim,
         created_by: &str,
+        result_json: Option<&str>,
         decision_human_epoch: i64,
         now: OffsetDateTime,
     ) -> Result<RootCreate, StoreError> {
@@ -808,7 +809,7 @@ impl SqliteStore {
             return Ok(RootCreate::Refused);
         }
         Self::create_task_tx(&tx, task, None, created_by, vec![])?;
-        Self::idempotency_record_tx(&tx, claim, &task.id.to_string(), None, &at)?;
+        Self::idempotency_record_tx(&tx, claim, &task.id.to_string(), result_json, &at)?;
         tx.commit()?;
         Ok(RootCreate::Created(task.id.to_string()))
     }

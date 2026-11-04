@@ -121,6 +121,27 @@ impl Dispatcher {
         let findings = self.stagnation.findings.clone();
         let roles = self.config.roles.clone();
         let genres = self.config.genres.clone();
+        // A3: その tick の領域 `project_controller` の宛先（mode の表は tick ごとに 1 回読む）。
+        let access = if self
+            .cos_chat_launch
+            .as_ref()
+            .and_then(|l| l.project_controller.as_ref())
+            .is_some_and(|rt| rt.settings.enabled)
+        {
+            use task_core::script_compare::{ScriptDomain, ScriptMode};
+            self.script_target(
+                ScriptDomain::ProjectController,
+                &[ScriptMode::Compare, ScriptMode::Canary, ScriptMode::Ts],
+            )
+            .map(|t| crate::project_decider_ts::ScriptAccess {
+                mode: t.mode,
+                canary_bps: t.canary_bps,
+                generation_id: t.generation_id,
+                call: t.call.map(|(script, _)| script),
+            })
+        } else {
+            None
+        };
         let Some(launch) = self.cos_chat_launch.as_mut() else {
             return;
         };
@@ -129,6 +150,7 @@ impl Dispatcher {
         };
         if rt.settings.enabled {
             let store = launch.store.clone();
+            rt.decider.attach(&store, access);
             let mut pass = Pass {
                 store: &store,
                 rt: &mut rt,
@@ -355,7 +377,7 @@ impl Pass<'_> {
             snapshot_sha256: sha256_hex(input_json.as_bytes()),
             request_sha256,
             generation_id: None,
-            proposal_json: input_json,
+            proposal_json: self.rt.decider.take_record().unwrap_or(input_json),
             validation: decision.rule_id.clone(),
             effect_json,
             has_effect: decision.effect.has_effect(),
@@ -457,10 +479,24 @@ impl Pass<'_> {
                     Err(e) => Err(e.to_string()),
                 }
             }
+            ProjectEffect::OpenEscalation {
+                question_key,
+                category,
+                summary,
+            } => self
+                .open_escalation(&d.project_id, &question_key, &category, &summary)
+                .map(Some),
             ProjectEffect::CreateRoot {
                 idempotency_key,
                 spec,
-            } => match self.create_root(&d.project_id, &idempotency_key, *spec, d.human_epoch) {
+                meta,
+            } => match self.create_root(
+                &d.project_id,
+                &idempotency_key,
+                *spec,
+                meta.as_deref(),
+                d.human_epoch,
+            ) {
                 Ok(RootCreate::Created(id) | RootCreate::Existing(id)) => Ok(Some(id)),
                 Ok(RootCreate::Refused) => {
                     self.admit(d);
@@ -509,7 +545,7 @@ impl Pass<'_> {
         effect: &ProjectEffect,
     ) -> Result<Option<String>, String> {
         match effect {
-            ProjectEffect::None => Ok(None),
+            ProjectEffect::None | ProjectEffect::OpenEscalation { .. } => Ok(None),
             ProjectEffect::QueueCosInput { key, text } => self
                 .store
                 .project_controller_cos_input_existing(project, key, text)
@@ -517,6 +553,7 @@ impl Pass<'_> {
             ProjectEffect::CreateRoot {
                 idempotency_key,
                 spec,
+                ..
             } => {
                 let claim = root_claim(idempotency_key, spec)?;
                 match self
@@ -614,6 +651,37 @@ impl Pass<'_> {
             .map(|_| ())
     }
 
+    /// A3 の `escalate`: 人への判断の要求を notice 1 件で出す。source key に `question_key` を入れるので、
+    /// 同じ問いは 2 回目を作らない（既に聞いた問いを聞き直さない）。参照に notice の source key を返す。
+    fn open_escalation(
+        &self,
+        project: &str,
+        question_key: &str,
+        category: &str,
+        summary: &str,
+    ) -> Result<String, String> {
+        let source_key = format!("project_controller:escalate:{project}:{question_key}");
+        let title = format!("案件 {project} の controller が人の判断を待っています（{category}）");
+        let body = format!(
+            "{summary}。controller の phase は blocked で、人が controller の mode を置き直すまで判断しません。問いの key: {question_key}"
+        );
+        self.store
+            .notice_record(&task_core::feed::NoticeEvent {
+                source_key: source_key.clone(),
+                kind: task_core::feed::NoticeKind::BadNews,
+                group_key: format!("bad_news:project_controller:{project}"),
+                title,
+                summary: body,
+                project_id: Some(project.to_owned()),
+                task_id: None,
+                target: None,
+                links: Vec::new(),
+                at: self.now,
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(source_key)
+    }
+
     fn finish(&mut self, d: &ProjectControllerDecision, state: EffectState, r: Option<&str>) {
         if let Err(error) = self
             .store
@@ -630,6 +698,7 @@ impl Pass<'_> {
         project: &str,
         key: &str,
         mut spec: NewTaskSpec,
+        meta: Option<&str>,
         decision_human_epoch: i64,
     ) -> Result<RootCreate, String> {
         let project_id = project
@@ -661,6 +730,7 @@ impl Pass<'_> {
                 &task,
                 &claim,
                 task_core::DAEMON_ACTOR,
+                meta,
                 decision_human_epoch,
                 self.now,
             )

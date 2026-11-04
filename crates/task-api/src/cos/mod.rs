@@ -6,6 +6,7 @@
 //! [`CosCaller`] request extension; actor, thread and run claims in headers or JSON are never read.
 
 pub mod basis;
+pub(crate) mod goal_guard;
 pub mod inbox;
 pub mod operations;
 pub(crate) mod ops;

@@ -23,6 +23,9 @@ pub mod integration;
 pub mod orphan;
 pub mod policy;
 pub mod project_controller;
+/// ADR 2026-11-04-project-controller A3: A1 の判定の口と A2 の TS の接続。
+#[path = "dispatcher/project_decider_ts.rs"]
+pub mod project_decider_ts;
 /// ADR-0033 D3（Phase 25）: run の終端から決定的に作る報告。
 pub(crate) mod reports;
 pub mod review;

@@ -116,6 +116,30 @@ export const POLICY = {
 
 const TERMINAL = new Set(["done", "failed", "cancelled"]);
 
+/** 失敗の分類（ADR §A3 の Classification）。判断の explanation の signal `classification` で Rust に渡る。 */
+export type Classification = "worker_bug" | "spec_gap" | "infra" | "flaky" | "external" | "human_needed" | "unknown";
+
+/**
+ * root の失敗を分類する（A3）。snapshot の種類と数だけを見る（worker の報告・ログの文は読まない。I11）。
+ * - 人の判断の待ちが開いている → human_needed
+ * - review 不合格で決定的 check が落ちている → worker_bug、check は通ったが reviewer が落とした → spec_gap
+ * - 基盤の失敗: 2 回目以降は flaky、初回は infra
+ * - cancel → external（人か外部が止めた）
+ */
+export function classifyFailure(root: SnapshotRoot): Classification {
+  if (root.open_waits.length > 0) return "human_needed";
+  switch (root.failure_class) {
+    case "review_failed":
+      return root.acceptance.some((c) => c.kind === "command" && c.result === "fail") ? "worker_bug" : "spec_gap";
+    case "infra":
+      return root.attempts >= 2 ? "flaky" : "infra";
+    case "cancelled":
+      return "external";
+    default:
+      return "unknown";
+  }
+}
+
 function fail(what: string): never {
   // 例外文に依頼文・題名を入れない。
   throw new Error(`project_controller input: ${what}`);
@@ -206,6 +230,27 @@ export function decide(s: ProjectSnapshot): ProjectProposal {
   if (s.project.status !== "active") {
     return wait([{ kind: "human", note: `project is ${s.project.status}` }], POLICY.humanWaitSecs, "pc/project-not-active");
   }
+  // 1b. 進捗の増えない効果つきの判断（replan・launch_root）が上限まで続いた: 人に 1 回だけ聞き、後は待つ
+  //     （LLM の runaway・loop の停止。Rust も同じ上限で escalate に置き換える）。
+  let streak = 0;
+  for (const d of s.decisions) {
+    if (d.progress_epoch !== gap.progress_epoch) break;
+    if ((d.kind === "replan" || d.kind === "launch_root") && d.effect_state !== "failed" && d.effect_state !== "none") streak++;
+  }
+  if (s.limits.max_no_progress_decisions > 0 && streak >= s.limits.max_no_progress_decisions) {
+    return escalateOnce(
+      `no_progress:${gap.progress_epoch}`,
+      "explicit_human",
+      `案件の controller が進捗なしの判断を ${streak} 回続けた。続け方を人が決める必要がある`,
+      "pc/no-progress",
+      [],
+    );
+  }
+  // CoS 入力（replan）の今日の残りが無ければ、replan の代わりに待つ。
+  const replan = (reason_code: string, question: string, context_refs: string[], rule: string, signals: [string, string][] = []) =>
+    s.limits.cos_inputs_remaining_today <= 0
+      ? wait([{ kind: "external", note: "今日の CoS 入力の上限" }], POLICY.humanWaitSecs, `${rule}/daily-limit`, signals)
+      : out({ kind: "replan", reason_code, question, context_refs }, rule, signals);
   // 2. Outcome block の形が誤り: 人に 1 回だけ知らせ、後は待つ。
   if (s.outcomes_invalid) {
     return escalateOnce(
@@ -221,13 +266,10 @@ export function decide(s: ProjectSnapshot): ProjectProposal {
     if (decided((d) => d.kind === "replan" && d.reason_code === "no_outcomes" && d.request_sha256 === sha)) {
       return wait([{ kind: "human", note: "途中目標の提案を待っている" }], POLICY.humanWaitSecs, "pc/no-outcomes/waiting");
     }
-    return out(
-      {
-        kind: "replan",
-        reason_code: "no_outcomes",
-        question: "依頼文に途中目標（celeris-outcomes block）が無い。依頼を途中目標に分ける案を人に提案してほしい",
-        context_refs: [`project:${s.project.id}`],
-      },
+    return replan(
+      "no_outcomes",
+      "依頼文に途中目標（celeris-outcomes block）が無い。依頼を途中目標に分ける案を人に提案してほしい",
+      [`project:${s.project.id}`],
       "pc/no-outcomes",
     );
   }
@@ -292,19 +334,23 @@ export function decide(s: ProjectSnapshot): ProjectProposal {
   if (last !== undefined && TERMINAL.has(last.r.status)) {
     const r = last.r;
     const key = r.controller_key!;
+    const cls = classifyFailure(r);
     if (r.failure_class === "review_failed") {
       if (decided((d) => d.kind === "replan" && d.root_key === key)) {
-        return wait([{ kind: "human", target: r.id, note: "review 不合格の後の計画を待っている" }], POLICY.humanWaitSecs, "pc/review-failed/waiting");
+        return wait([{ kind: "human", target: r.id, note: "review 不合格の後の計画を待っている" }], POLICY.humanWaitSecs, "pc/review-failed/waiting", [
+          ["root", r.id],
+          ["classification", cls],
+        ]);
       }
-      return out(
-        {
-          kind: "replan",
-          reason_code: "review_failed",
-          question: `途中目標 ${next.id} の root が review で不合格になった。続け方（修正の root・目標の見直し）を決めてほしい`,
-          context_refs: [`task:${r.id}`],
-        },
+      return replan(
+        "review_failed",
+        `途中目標 ${next.id} の root が review で不合格になった（分類 ${cls}）。続け方（修正の root・目標の見直し）を決めてほしい`,
+        [`task:${r.id}`],
         "pc/review-failed",
-        [["root", r.id]],
+        [
+          ["root", r.id],
+          ["classification", cls],
+        ],
       );
     }
     if (r.failure_class === "infra") {
@@ -312,7 +358,10 @@ export function decide(s: ProjectSnapshot): ProjectProposal {
         [{ kind: "external", target: r.id, note: "基盤の失敗。再試行は dispatcher の retry に任せる" }],
         POLICY.infraBackoffSecs,
         "pc/infra-wait",
-        [["root", r.id]],
+        [
+          ["root", r.id],
+          ["classification", cls],
+        ],
       );
     }
     if (r.status !== "done") {

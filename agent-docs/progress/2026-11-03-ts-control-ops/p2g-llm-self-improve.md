@@ -129,7 +129,13 @@ TS は Rust 側の試験（task-core・task-dispatch）を走らせない。代�
 - 最終の検査は子の取り込みの後の run でやり直す。
 
 ## 提出時の検査（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
-CHECKS_PLACEHOLDER
+- `bash scripts/dev/llm-improve/trial.sh --task <T> --path ts|rust --patch …/<T>-<path>/candidate.patch --out …/rescore --label <T>-<path>` を 4 件: 全部 exit 0（上の表）。
+- `bash scripts/dev/llm-improve/trial.sh --validate …/rescore/trial.jsonl`: exit 0（4 行）。
+- `python3 -I scripts/dev/llm-improve/collect.py --db "$CELERIS_RUN_DB" --parent 01M6HGFR1TVSBS63STM8NH3XCS --out …/usage.jsonl`: exit 0（4 行）。
+- `bash scripts/dev/test-affected.sh`: exit 0（この run の変更は collect.py と記録だけで、試験対象の crate の変更なし。文書の自己試験 ok）。
+  crates と control-ts の本体はこの task で変えていない（試行の候補 patch は commit していない）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`・`bash scripts/dev/check-doc-links.sh`・`python3 -I scripts/dev/check-architecture-map.py`: すべて exit 0。
 
 ## 未解決
 1. flaky: `task-dispatch` の `dispatcher::tests::work_units::an_interrupted_integration_is_redone_idempotently_after_restart`（work_units.rs:2993、Blocked≠Done）が旧 Rust の T1 の trial で負荷時に 2 回落ちた。単独・全体の再実行では pass。決定化はこの task の範囲外。

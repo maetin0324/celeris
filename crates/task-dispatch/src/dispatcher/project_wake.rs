@@ -10,13 +10,17 @@
 //!   未処理 `max_cos_inputs_open_per_project` 件まで。
 //! - 判定（[`ProjectDecider`]）は A2・A3 が TS の proposal と接続する。A1 の既定は常に効果なし。
 //! - mode `off`・状態の行が無い案件は wake を積まず、何も書かない（I13）。
+//! - `pending` の効果は実行の直前に門（mode・phase・案件の状態）を通し、止まった案件では `suppressed` にする。
+//!   効果の `Err` と CoS 入力の Busy は `pending` のまま backoff で延期し、`Err` が `max_retries` を超えたら
+//!   notice を書いて `failed`・phase `blocked` にする（ADR 付記 A1 の 10）。
 
 use sha2::{Digest, Sha256};
 use task_core::project_wake::{
     EffectState, NewProjectWake, ProjectControllerDecision, ProjectDecideInput, ProjectWakeKind,
 };
 use task_core::store::{
-    CommitOutcome, IdempotencyClaim, NewProjectDecision, RootCreate, SqliteStore,
+    CommitOutcome, EffectAdmit, EffectDeferKind, EffectDeferral, IdempotencyClaim,
+    NewProjectDecision, RootCreate, SqliteStore,
 };
 use task_core::{Event, NoticeStore, Status, TaskId, TaskStore};
 use task_ops::add::NewTaskSpec;
@@ -34,6 +38,8 @@ const EVENT_BATCH: usize = 512;
 const EVENT_PAGES_PER_TICK: usize = 8;
 
 pub(crate) type BoundaryHook = Box<dyn FnMut(Boundary) + Send>;
+/// 試験: 効果の実行の前に `true` を返すと、その効果を実行せず失敗として扱う（一時的な失敗の注入）。
+pub(crate) type EffectFailHook = Box<dyn FnMut(&ProjectControllerDecision) -> bool + Send>;
 
 /// controller の実行時の状態（`CosChatLaunch` が持つ。`dispatcher.rs` に欄を足さない）。
 pub(crate) struct ProjectControllerRuntime {
@@ -42,6 +48,7 @@ pub(crate) struct ProjectControllerRuntime {
     /// lease の持ち主（daemon の instance id）。
     pub owner: String,
     pub hook: Option<BoundaryHook>,
+    pub fail_effect: Option<EffectFailHook>,
     pub last: ControllerTickStats,
 }
 
@@ -69,6 +76,7 @@ impl Dispatcher {
             decider,
             owner,
             hook: None,
+            fail_effect: None,
             last: ControllerTickStats::default(),
         });
         true
@@ -83,6 +91,18 @@ impl Dispatcher {
             .and_then(|l| l.project_controller.as_mut())
         {
             rt.hook = Some(hook);
+        }
+    }
+
+    /// 試験: 効果の失敗の注入。
+    #[cfg(test)]
+    pub(crate) fn set_project_controller_effect_fail(&mut self, hook: EffectFailHook) {
+        if let Some(rt) = self
+            .cos_chat_launch
+            .as_mut()
+            .and_then(|l| l.project_controller.as_mut())
+        {
+            rt.fail_effect = Some(hook);
         }
     }
 
@@ -376,8 +396,24 @@ impl Pass<'_> {
         Ok(())
     }
 
-    /// tx2: 効果を冪等に実行して `applied` へ進める。CoS 入力が backpressure で積めなければ `pending` のまま。
+    /// tx2: 効果を冪等に実行して `applied` へ進める。実行の前に門（mode・phase・案件の状態）を通す（I7・I13）。
+    /// CoS 入力の Busy と効果の `Err` は `pending` のまま backoff で延期し、`Err` が `max_retries` を超えたら
+    /// `failed`・phase `blocked` にして人に知らせる（notice）。
     fn apply(&mut self, d: &ProjectControllerDecision) {
+        match self.store.project_controller_effect_admit(&d.id, self.now) {
+            Ok(EffectAdmit::Run) => {}
+            Ok(EffectAdmit::Hold) => return,
+            Ok(EffectAdmit::Halted(reason)) => {
+                self.stats.halted += 1;
+                tracing::info!(decision = %d.id, project = %d.project_id, %reason,
+                    "project controller: pending effect halted");
+                return;
+            }
+            Err(error) => {
+                tracing::warn!(%error, decision = %d.id, "project controller: effect gate unreadable");
+                return;
+            }
+        }
         let effect: ProjectEffect = match serde_json::from_str(&d.effect_json) {
             Ok(e) => e,
             Err(error) => {
@@ -389,7 +425,9 @@ impl Pass<'_> {
                 return;
             }
         };
+        let injected = self.rt.fail_effect.as_mut().is_some_and(|fail| fail(d));
         let done = match effect {
+            _ if injected => Err("injected effect failure".to_string()),
             ProjectEffect::None => Ok(None),
             ProjectEffect::QueueCosInput { key, text } => {
                 match self.store.project_controller_queue_cos_input(
@@ -402,6 +440,7 @@ impl Pass<'_> {
                     Ok(task_core::chat::ControllerCosInput::Queued(id)) => Ok(Some(id)),
                     Ok(task_core::chat::ControllerCosInput::Busy) => {
                         self.stats.busy += 1;
+                        self.defer(d, EffectDeferKind::Busy, None);
                         return;
                     }
                     Err(e) => Err(e.to_string()),
@@ -419,8 +458,91 @@ impl Pass<'_> {
                 self.stats.applied += 1;
                 self.rt.at(Boundary::AfterApplied);
             }
-            Err(error) => self.finish(d, EffectState::Failed, Some(&error)),
+            Err(error) => {
+                self.stats.effect_failed += 1;
+                self.defer(d, EffectDeferKind::Failed, Some(&error));
+            }
         }
+    }
+
+    /// 効果を延期する。上限を超える `Err` では、先に notice を記録してから `failed`・`blocked` にする
+    /// （notice は判断の id で冪等。間で落ちても次の tick が同じ notice を 1 件だけ書いて進める）。
+    fn defer(&mut self, d: &ProjectControllerDecision, kind: EffectDeferKind, error: Option<&str>) {
+        let s = &self.rt.settings;
+        let policy = (s.retry_base_secs, s.retry_max_secs, s.max_retries);
+        if kind == EffectDeferKind::Failed {
+            let failures = match self.store.project_controller_effect_retry_state(&d.id) {
+                Ok(Some(r)) => r.failures,
+                Ok(None) => return,
+                Err(error) => {
+                    tracing::warn!(%error, decision = %d.id, "project controller: effect retry state unreadable");
+                    return;
+                }
+            };
+            if failures + 1 > policy.2
+                && let Err(e) = self.notify_exhausted(d, failures + 1, error.unwrap_or("-"))
+            {
+                // notice が書けなければ failed にしない（次の tick でやり直す）。
+                tracing::warn!(error = %e, decision = %d.id, "project controller: exhaustion notice not saved");
+                return;
+            }
+        }
+        match self
+            .store
+            .project_controller_effect_defer(&d.id, kind, error, policy, self.now)
+        {
+            Ok(EffectDeferral::Retry {
+                attempts,
+                failures,
+                retry_at,
+            }) => {
+                if kind == EffectDeferKind::Failed {
+                    tracing::warn!(decision = %d.id, project = %d.project_id, attempts, failures,
+                        retry_at = %format_time(retry_at), error = error.unwrap_or("-"),
+                        "project controller: effect failed; retrying with backoff");
+                }
+            }
+            Ok(EffectDeferral::Exhausted { failures }) => {
+                self.stats.exhausted += 1;
+                tracing::warn!(decision = %d.id, project = %d.project_id, failures,
+                    error = error.unwrap_or("-"),
+                    "project controller: effect failed past max_retries; project blocked");
+            }
+            Ok(EffectDeferral::NotPending) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, decision = %d.id, "project controller: effect deferral not saved");
+            }
+        }
+    }
+
+    fn notify_exhausted(
+        &self,
+        d: &ProjectControllerDecision,
+        failures: u32,
+        error: &str,
+    ) -> Result<(), task_core::StoreError> {
+        let title = format!(
+            "案件 {} の controller の効果が {failures} 回失敗し、controller を止めました",
+            d.project_id
+        );
+        let summary = format!(
+            "{title}。判断 {} の効果は failed、controller の phase は blocked です。最後の失敗: {error}。原因を直してから controller の mode を置き直すと再開します。",
+            d.id
+        );
+        self.store
+            .notice_record(&task_core::feed::NoticeEvent {
+                source_key: format!("project_controller:effect_failed:{}", d.id),
+                kind: task_core::feed::NoticeKind::BadNews,
+                group_key: format!("bad_news:project_controller:{}", d.project_id),
+                title,
+                summary,
+                project_id: Some(d.project_id.clone()),
+                task_id: None,
+                target: None,
+                links: Vec::new(),
+                at: self.now,
+            })
+            .map(|_| ())
     }
 
     fn finish(&mut self, d: &ProjectControllerDecision, state: EffectState, r: Option<&str>) {

@@ -126,6 +126,7 @@ pub(crate) mod migrations;
 mod org;
 mod project_briefs;
 mod project_wake;
+mod project_wake_effect;
 mod projects;
 mod query;
 mod repos;
@@ -159,6 +160,7 @@ pub use project_wake::{
     CommitOutcome, DecideFailure, ModeChange, NewProjectDecision, ProjectLease, RootCreate,
     WAKES_PER_EVALUATION, default_state as project_controller_default_state,
 };
+pub use project_wake_effect::{EffectAdmit, EffectDeferKind, EffectDeferral, EffectRetryState};
 pub use script_domains::{
     SCRIPT_RUNTIME_ACTOR, ScriptCompareLogRow, ScriptDomainEventRow, ScriptGenerationEventRow,
 };

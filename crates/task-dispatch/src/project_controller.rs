@@ -124,4 +124,10 @@ pub struct ControllerTickStats {
     pub stale: Vec<String>,
     pub applied: usize,
     pub busy: usize,
+    /// 門で止めた効果（`suppressed`）。
+    pub halted: usize,
+    /// 失敗して延期した効果。
+    pub effect_failed: usize,
+    /// 上限を超えて `failed` にした効果。
+    pub exhausted: usize,
 }

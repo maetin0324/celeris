@@ -52,6 +52,11 @@ CREATE TABLE IF NOT EXISTS project_controller_decisions (
     effect_json TEXT NOT NULL,
     effect_state TEXT NOT NULL CHECK (effect_state IN ('none', 'pending', 'applied', 'suppressed', 'failed')),
     effect_ref TEXT,
+    -- 効果の再試行（D12・付記 A1）: `effect_attempts` は延期の回数（Busy を含む。backoff の指数）、
+    -- `effect_failures` は Err の回数（`max_retries` を超えたら failed）、`effect_next_at` は次の試行時刻。
+    effect_attempts INTEGER NOT NULL DEFAULT 0,
+    effect_failures INTEGER NOT NULL DEFAULT 0,
+    effect_next_at TEXT,
     progress_epoch INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     applied_at TEXT
@@ -61,7 +66,9 @@ CREATE INDEX IF NOT EXISTS project_controller_decisions_project
 CREATE INDEX IF NOT EXISTS project_controller_decisions_pending
     ON project_controller_decisions (effect_state) WHERE effect_state = 'pending';
 
--- 判断の記録は effect_state・effect_ref・applied_at の前進だけを UPDATE できる。DELETE はできない。
+-- 判断の記録は効果の欄（effect_state・effect_ref・applied_at・再試行の欄）の前進だけを UPDATE できる。
+-- pending は pending（再試行の記録。回数は減らない）・applied・failed・suppressed（mode・phase で止めた）へ進む。
+-- DELETE はできない。
 CREATE TRIGGER IF NOT EXISTS project_controller_decisions_no_delete
 BEFORE DELETE ON project_controller_decisions
 BEGIN
@@ -84,7 +91,9 @@ WHEN NEW.id IS NOT OLD.id
   OR NEW.progress_epoch IS NOT OLD.progress_epoch
   OR NEW.created_at IS NOT OLD.created_at
   OR OLD.effect_state <> 'pending'
-  OR NEW.effect_state NOT IN ('applied', 'failed')
+  OR NEW.effect_state NOT IN ('pending', 'applied', 'failed', 'suppressed')
+  OR NEW.effect_attempts < OLD.effect_attempts
+  OR NEW.effect_failures < OLD.effect_failures
 BEGIN
-    SELECT RAISE(ABORT, 'project_controller_decisions: only pending -> applied|failed may change');
+    SELECT RAISE(ABORT, 'project_controller_decisions: only pending -> pending|applied|failed|suppressed may change');
 END;

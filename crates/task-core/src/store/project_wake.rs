@@ -877,6 +877,19 @@ mod tests {
             )
             .is_err()
         );
+        // 再試行の欄は pending のまま前進だけ（回数は減らない）。
+        conn.execute(
+            "UPDATE project_controller_decisions SET effect_attempts = 2, effect_failures = 1",
+            [],
+        )
+        .unwrap();
+        assert!(
+            conn.execute(
+                "UPDATE project_controller_decisions SET effect_failures = 0",
+                []
+            )
+            .is_err()
+        );
         drop(conn);
         assert!(
             s.project_controller_effect_done("d1", EffectState::Applied, Some("t"), now)

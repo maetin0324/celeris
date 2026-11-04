@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # ADR 2026-11-04-project-controller A1: 案件の durable wake の受け入れ試験。
 #
-# 1. task-dispatch の `project_wake_` 試験（再配送・kind 9 種・crash B1〜B6・待機・coalesce・CAS・lease・
-#    backoff・backpressure・mode）を nextest で走らせ、27 件以上が通ることを確かめる（0 件・不足は失敗）。
-# 2. task-api の `project_wake_api_` 試験（API・CoS op・人の操作の human_epoch）と task-core の
-#    `project_wake_store_` 試験を走らせる（それぞれ 1 件以上）。
+# 1. task-dispatch の `project_wake_` 試験（再配送・kind 9 種・crash B1〜B6 と QueueCosInput の B4・B5・待機・
+#    coalesce・CAS・lease・backoff・backpressure・mode・人の競合・pending の効果の門・効果の再試行と上限・
+#    QueueCosInput）を nextest で走らせ、41 件以上が通ることを確かめる（0 件・不足は失敗）。
+# 2. task-api の `project_wake_api_` 試験（API・CoS op・人の操作の human_epoch、28 件以上）と task-core の
+#    `project_wake_store_` 試験（2 件以上）を走らせる。
 # 3. 試験が書いた raw（celeris.long-horizon-record/1 の JSONL）を検査する:
 #    - redelivery: 10 回の再配送で root 1・wake 1・冪等キー 1・未処理 0・LLM 起動 0
-#    - crash: B1〜B6 の 6 境界それぞれで root 1・未処理の wake 0・pending の効果 0・CoS 入力 ≤ 1・LLM 起動 0
+#    - crash: B1〜B6 の 6 境界それぞれで root 1・未処理の wake 0・pending の効果 0・CoS 入力 0・LLM 起動 0。
+#      QueueCosInput の B4・B5 で CoS 入力 1・root 0・未処理の wake 0・pending の効果 0・LLM 起動 0
 #    - idle: 仮想 7 日（wake なし）で decide 0・LLM 起動 0・chat message 0、cron 168 回で decide 168・LLM 起動 0
 #
 # LLM を呼ばない（fake decider・fake harness・注入した時計）。本番の DB・daemon に触れない（試験は一時 DB だけを
@@ -38,10 +40,12 @@ if [ -z "$out" ]; then
     out="$(mktemp -d "${TMPDIR:-/tmp}/project-wake-replay.XXXXXX")"
 fi
 mkdir -p "$out"
-case "$(cd "$out" && pwd)" in
+# 試験は crate の dir で走るので、相対の --out を絶対 path にしてから渡す。
+out="$(cd "$out" && pwd)"
+case "$out" in
     /local/celeris/data/db*|"${CELERIS_STATE_DIR:-/nonexistent-state-dir}"*) fail "--out must not be under the production state" ;;
 esac
-rm -f "$out"/redelivery.jsonl "$out"/crash.jsonl "$out"/idle.jsonl
+rm -f "$out"/redelivery.jsonl "$out"/crash.jsonl "$out"/idle.jsonl "$out"/*.log
 export PROJECT_WAKE_RAW_DIR="$out"
 
 run_suite() {
@@ -63,8 +67,8 @@ run_suite() {
     echo "test-project-wake-replay: $1 $2: $passed passed"
 }
 
-run_suite task-dispatch 'test(/^dispatcher::tests::project_wake::project_wake_/)' 27 dispatch
-run_suite task-api 'test(/project_wake_api_/)' 5 api
+run_suite task-dispatch 'test(/^dispatcher::tests::project_wake::(effects::)?project_wake_/)' 41 dispatch
+run_suite task-api 'test(/project_wake_api_/)' 28 api
 run_suite task-core 'test(/project_wake_store_/)' 2 store
 
 python3 - "$out" <<'PY'
@@ -98,14 +102,20 @@ for r in red:
 
 crash = load("crash.jsonl")
 names = sorted(r.get("test") for r in crash)
-want = [f"project_wake_crash_b{i}" for i in range(1, 7)]
+root_rows = [f"project_wake_crash_b{i}" for i in range(1, 7)]
+cos_rows = ["project_wake_crash_cos_b4", "project_wake_crash_cos_b5"]
+want = sorted(root_rows + cos_rows)
 if names != want:
     errors.append(f"crash: records {names}, expected {want}")
 for r in crash:
-    for k, v in [("roots", 1), ("unprocessed_wakes", 0), ("pending_effects", 0),
-                 ("idempotency_keys", 1), ("llm_launches", 0)]:
+    cos = r.get("test") in cos_rows
+    # CreateRoot の境界は root 1・CoS 入力 0、QueueCosInput の境界は CoS 入力 1・root 0。
+    for k, v in [("roots", 0 if cos else 1), ("cos_inputs", 1 if cos else 0),
+                 ("idempotency_keys", 0 if cos else 1), ("unprocessed_wakes", 0),
+                 ("pending_effects", 0), ("llm_launches", 0)]:
         expect(r, k, v)
-    expect(r, "cos_inputs", 1, "<=")
+if not any(r.get("test") in cos_rows and r.get("cos_inputs") == 1 for r in crash):
+    errors.append("crash: no QueueCosInput row with cos_inputs == 1")
 
 idle = {r.get("test"): r for r in load("idle.jsonl")}
 for name, decides in [("project_wake_idle_7days", 0), ("project_wake_cron_idle", 168)]:

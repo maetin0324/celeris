@@ -547,3 +547,18 @@ A1 の実装（migration `0111_project_controller.sql`、`SCHEMA_VERSION` 111）
    | operator が `POST /inbox/items/{id}/answer` を呼ぶ | 数えない | `Principal::Operator`。人の指示を運ぶなら relays に書く |
    | CoS の `inbox.answer`（`/cos/operations`。`instructed_by` つきでも） | 数えない | 監査経路（`audit = Some`）。人の発言は relays・forwards・案件 thread への発言の時点で数えている |
    | `POST /cos/inbox/{id}/resolve` | 数えない | CoS の一次対応の記録で、人の回答でない |
+
+10. **`pending` の効果の門と再試行**（WU effect-safety、2026-11-04）。効果は実行の直前に
+   `SqliteStore::project_controller_effect_admit`（`crates/task-core/src/store/project_wake_effect.rs`）を通す。1 つの tx で
+   controller の mode・phase と `projects` の状態を読み、mode が `enabled` でない（`off`・`dry_run`・`shadow`。状態の行が無い
+   案件は `off`）、phase `paused`・`cancelled`、案件の `paused`・`cancelled`・`done`・archive なら効果を実行せず `suppressed`
+   にし、`effect_ref` に `halted:<理由>`（例 `halted:mode_off`・`halted:project_paused`）を残す。phase `blocked` は `pending`
+   のまま待つ。効果の `Err` と CoS 入力の Busy は `pending` のまま延期し、判断の行の `effect_attempts`（延期の回数。Busy を含む）で
+   `retry_base_secs × 2^(n-1)`（上限 `retry_max_secs`）の後の `effect_next_at` まで試さない。`Err` の回数 `effect_failures` が
+   `max_retries` を超えたら、先に notice（`bad_news`、source key `project_controller:effect_failed:<判断 id>`）を記録してから
+   判断を `failed`、案件の phase を `blocked` にし、`tracing::warn` を出す。Busy は `max_retries` に数えない（CoS が処理するまで
+   待つのは失敗でない）。migration 0111 の判断の行に 3 列を足し、trigger は `pending` → `pending`（再試行の欄の前進だけ）・
+   `applied`・`failed`・`suppressed` を許す。試験は `project_wake_pending_{off,paused,cancelled,shadow}`・
+   `project_wake_effect_{retry,exhausted}`・`project_wake_cos_input_*`・`project_wake_crash_cos_b{4,5}`。
+   門と効果の実行は別の tx なので、門を通った直後の人の off は、その 1 回の効果を止めない（root の作成・CoS 入力はどちらも
+   冪等で 1 回だけ効く）。

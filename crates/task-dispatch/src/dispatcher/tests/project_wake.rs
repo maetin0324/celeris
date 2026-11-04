@@ -8,6 +8,9 @@
 
 use super::*;
 use crate::dispatcher::cos_chat::launch::CosChatLaunchConfig;
+
+#[path = "project_wake_effects.rs"]
+mod effects;
 use crate::project_controller::{
     Boundary, ProjectControllerSettings, ProjectDecider, ProjectDecision, ProjectEffect,
 };
@@ -504,12 +507,17 @@ async fn project_wake_kind_human_changed() {
 // ---- crash の境界 ----
 
 fn crash_case(boundary: Boundary, name: &str) {
+    crash_case_with(boundary, name, create_root);
+}
+
+/// crash の境界の試験。`decide` が作る効果（root か CoS 入力）が再起動後に 1 回だけ効くことを確かめる。
+fn crash_case_with(boundary: Boundary, name: &str, decide: fn(&Project) -> DecideFn) {
     let env = Env::new();
     let p;
     {
         let store = env.open();
         p = project(&store, Some(ControllerMode::Enabled));
-        let mut d = env.daemon(&store, "i1", create_root(&p));
+        let mut d = env.daemon(&store, "i1", decide(&p));
         prime(&mut d);
         let root = root_task(&env, &store, &p, Status::Done);
         transition(&store, &root, Status::Done, "review_pass");
@@ -533,7 +541,7 @@ fn crash_case(boundary: Boundary, name: &str) {
     }
     // 再起動: store を開き直した別の instance。切れた lease も引き継ぐ。
     let store = env.open();
-    let mut d = env.daemon(&store, "i2", create_root(&p));
+    let mut d = env.daemon(&store, "i2", decide(&p));
     for _ in 0..4 {
         env.advance(61);
         tick(&mut d);
@@ -543,11 +551,20 @@ fn crash_case(boundary: Boundary, name: &str) {
     let pending = store.project_controller_pending_effects().unwrap().len();
     let cos_inputs =
         env.count("SELECT COUNT(*) FROM chat_messages WHERE client_message_id LIKE 'pc-input:%'");
-    assert_eq!(roots, 1, "{name}");
+    let cos = name.contains("_cos_");
+    assert_eq!(roots, usize::from(!cos), "{name}");
     assert_eq!(unprocessed, 0, "{name}");
     assert_eq!(pending, 0, "{name}");
-    assert!(cos_inputs <= 1);
-    assert_eq!(idempotency_rows(&env, &p), 1, "{name}");
+    assert_eq!(cos_inputs, i64::from(cos), "{name}");
+    assert_eq!(idempotency_rows(&env, &p), i64::from(!cos), "{name}");
+    let applied = store
+        .project_controller_decisions(&p.id.to_string(), None, 10)
+        .unwrap()
+        .iter()
+        .filter(|d| d.effect_state == EffectState::Applied)
+        .count();
+    assert_eq!(applied, 1, "{name}");
+    assert_eq!(env.llm_launches(), 0, "{name}");
     record(
         "crash.jsonl",
         serde_json::json!({
@@ -587,6 +604,24 @@ async fn project_wake_crash_b5() {
 #[tokio::test]
 async fn project_wake_crash_b6() {
     crash_case(Boundary::AfterApplied, "project_wake_crash_b6");
+}
+
+#[tokio::test]
+async fn project_wake_crash_cos_b4() {
+    crash_case_with(
+        Boundary::AfterCommit,
+        "project_wake_crash_cos_b4",
+        effects::queue_cos_input,
+    );
+}
+
+#[tokio::test]
+async fn project_wake_crash_cos_b5() {
+    crash_case_with(
+        Boundary::AfterEffect,
+        "project_wake_crash_cos_b5",
+        effects::queue_cos_input,
+    );
 }
 
 // ---- 待機中 ----

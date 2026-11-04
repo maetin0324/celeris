@@ -68,7 +68,7 @@ exh_row() { # exh_row <db> <id> <state> <reference> [calls] [mismatches] [timeou
 }
 exh_db() { # exh_db <path> <records>: g1 の compare に match を N 件
   cp "$db" "$1"
-  cat "$root"/crates/task-core/migrations/0109_script_exhaustive_runs.sql | sqlite3 "$1"
+  cat "$root"/crates/task-core/migrations/0110_script_exhaustive_runs.sql | sqlite3 "$1"
   local i; { echo "BEGIN;"; for i in $(seq 2 "$2"); do echo "INSERT INTO events SELECT $i,'t',$i,'2026-11-03T00:00:00Z',json FROM events WHERE id=1;"; done; echo "COMMIT;"; } | sqlite3 "$1"
   guard_row "$1" "$2" "$2"
 }

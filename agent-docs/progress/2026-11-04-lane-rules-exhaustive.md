@@ -22,7 +22,7 @@ WorkUnit ごとの記録は `2026-11-04-lane-rules-exhaustive/` の下（adr・e
     窓の timeout・失敗が 0 件でなければ ready にしない。無い・不合格・参照が違うときは 1000 件のまま。`route_priority`・`cos_digest` は変えない。
   - 参照の hash は `--lane-reference-sha256`。省略時は repo の `control-ts/fixtures/lane_rules/all-features.jsonl` の sha256。どちらも得られなければ
     `exhaustive_reference_unverified` の blocker で ready にしない。
-  - 網羅の件数は live の件数（match など）に足さない。表が無い DB（0109 より前）でも読め、証拠は missing になる。
+  - 網羅の件数は live の件数（match など）に足さない。表が無い DB（0110 より前）でも読め、証拠は missing になる。
   - 試験は `scripts/dev/tests/script-compare.sh` に足した（合格＋100 件で ready、99 件・証拠無し・不合格・aborted・timeout 40 件・参照違い・窓の timeout 1 件は
     ready でない、表の表示、live の件数に入らない、DB の byte が変わらない）。
 - 残り: 工程 `integrate-docs` の統合。
@@ -37,8 +37,8 @@ WorkUnit ごとの記録は `2026-11-04-lane-rules-exhaustive/` の下（adr・e
 
 ### 0. 前提
 - 本番は `lane_rules`・`cos_digest` が compare（2026-11-04T02:41:21Z から。release 9bccc68d0fda、bundle `c7c3cce5f82c820d19ecaaa97d08b3d5b573db748a4e3b143c136aaef44f9083`、
-  generation 01M6J6X3HE4Z3MXM11GHJ1B6M4）。この task の変更（migration 0109・runner・API・readiness）は新しい release に入れて promote するまで本番に無い。
-- 本番の config の書き換えは要らない（新しい欄は無い）。migration 0109 は daemon の起動時に自動で適用される（追記のみ。既存の表・events は変えない）。
+  generation 01M6J6X3HE4Z3MXM11GHJ1B6M4）。この task の変更（migration 0110・runner・API・readiness）は新しい release に入れて promote するまで本番に無い。
+- 本番の config の書き換えは要らない（新しい欄は無い）。migration 0110 は daemon の起動時に自動で適用される（追記のみ。既存の表・events は変えない）。
 
 ### 1. release → verify → promote（operator）
 1. main に入った commit から `bash scripts/selfdeploy/release.sh <git-ref>`（release gate。全試験と bundle gate を含む）。
@@ -83,7 +83,7 @@ celerisctl script exhaustive run lane_rules \
 - `state=aborted`（`generation_gone`・`wall_limit`・`daemon_stopped`・`daemon_restarted`）は証拠に数えない。daemon が再起動された場合は流し直す。
 - 手動で戻すとき: `celerisctl script mode lane_rules compare --expected-version <n> --generation <sha256>`（rust への戻しは `--generation` 不要で、誰でも可）。
   戻しは events・証拠の行を消さない（追記のみ）。
-- release ごと戻すとき: `bash scripts/selfdeploy/rollback.sh`（`--restore-db` は使わない。0109 の表は旧 binary が読まないだけで害は無い）。旧 binary の readiness は 1000 件に戻る。
+- release ごと戻すとき: `bash scripts/selfdeploy/rollback.sh`（`--restore-db` は使わない。0110 の表は旧 binary が読まないだけで害は無い）。旧 binary の readiness は 1000 件に戻る。
 
 ### 5. 100 件の要件のまとめ
 - 網羅が `passed`、かつ live の連続が 100 件（compare は `clean_streak`、canary は `ts_side_clean_streak`）、窓の timeout・失敗が 0 件、安全違反 0 件で、`compare→canary` と `canary→ts` の gate が通る。
@@ -97,4 +97,4 @@ celerisctl script exhaustive run lane_rules \
 
 ## 未解決
 - 本番の網羅の所要時間と latency は未確認（上の手順 2・3 で operator が記録する）。
-- `script-compare.py preflight` の最小 schema は 107 のまま（0109 を要求していない）。release が 0109 を含むことは手順 1 の gate が確かめる。
+- `script-compare.py preflight` の最小 schema は 107 のまま（0110 を要求していない）。release が 0110 を含むことは手順 1 の gate が確かめる。

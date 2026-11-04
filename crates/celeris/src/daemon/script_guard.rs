@@ -393,7 +393,12 @@ pub(crate) fn sweep(
             domain: row.domain,
             generation_id,
             mode: row.mode,
-            readiness: readiness(row.domain, row.mode, &counters),
+            readiness: readiness(
+                row.domain,
+                row.mode,
+                &counters,
+                task_core::script_exhaustive::ScriptExhaustiveStanding::Missing,
+            ),
         });
     }
     let ready: BTreeSet<_> = out

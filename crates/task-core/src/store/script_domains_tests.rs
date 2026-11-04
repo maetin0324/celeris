@@ -1377,7 +1377,12 @@ fn script_guard_explained_counts_toward_readiness_but_mismatch_still_stops() {
     assert_eq!(c.explained_in_window(), 50);
     assert_eq!(c.mismatches_in_window(), 0);
     assert_eq!(script_guard::evaluate(&c, t0), None);
-    let ready = script_guard::readiness(ScriptDomain::CosDigest, ScriptMode::Canary, &c);
+    let ready = script_guard::readiness(
+        ScriptDomain::CosDigest,
+        ScriptMode::Canary,
+        &c,
+        crate::script_exhaustive::ScriptExhaustiveStanding::NotApplicable,
+    );
     assert!(ready.ready, "{ready}");
     assert_eq!(ready.clean_streak, 200);
     // 安全違反は説明済みの行でも戻す（説明は安全違反を救わない）。
@@ -1400,7 +1405,15 @@ fn script_guard_explained_counts_toward_readiness_but_mismatch_still_stops() {
         Some(ScriptGuardStop::GuardMismatch)
     );
     assert_eq!(c.clean_streak, 0);
-    assert!(!script_guard::readiness(ScriptDomain::CosDigest, ScriptMode::Canary, &c).ready);
+    assert!(
+        !script_guard::readiness(
+            ScriptDomain::CosDigest,
+            ScriptMode::Canary,
+            &c,
+            crate::script_exhaustive::ScriptExhaustiveStanding::NotApplicable
+        )
+        .ready
+    );
 }
 
 /// generation ごとに別の行で数える。compare は計数だけで mode を変えない。

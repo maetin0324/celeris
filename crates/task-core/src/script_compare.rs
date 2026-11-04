@@ -110,6 +110,16 @@ pub fn actor_may_enable_ts(actor: &str) -> bool {
         .is_some_and(|name| !name.trim().is_empty())
 }
 
+/// ADR 2026-11-04-lane-rules-exhaustive-evidence D7: 網羅を起こしてよい actor か。`human:*`・`operator:*` だけが真。
+/// CoS（`cos:*`）・MCP（`mcp:*`）・daemon（`system:*`）は偽。
+pub fn actor_may_run_exhaustive(actor: &str) -> bool {
+    ["human:", "operator:"].iter().any(|prefix| {
+        actor
+            .strip_prefix(prefix)
+            .is_some_and(|name| !name.trim().is_empty())
+    })
+}
+
 /// 表 `script_generations.state`（S5-1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

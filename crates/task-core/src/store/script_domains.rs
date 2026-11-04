@@ -396,7 +396,13 @@ impl SqliteStore {
             if promotes {
                 let counters =
                     super::script_guard::counters_for_mode_tx(&tx, domain, id, current.mode)?;
-                let detail = readiness(domain, current.mode, &counters);
+                let detail = readiness(
+                    domain,
+                    current.mode,
+                    &counters,
+                    // store 工程が本当の立場（script_exhaustive_standing）に替える。
+                    crate::script_exhaustive::ScriptExhaustiveStanding::Missing,
+                );
                 if !detail.ready {
                     return Err(ScriptDomainError::CanaryNotReady {
                         domain: domain.as_str().to_owned(),

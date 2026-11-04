@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::script_compare::{CompareOutcome, ScriptDomain, ScriptMode};
+use crate::script_exhaustive::ScriptExhaustiveStanding;
 
 /// 窓の長さ（(f) の「直近 1000 呼び出し」）。
 pub const SCRIPT_GUARD_WINDOW: usize = 1000;
@@ -20,6 +21,8 @@ pub const SCRIPT_GUARD_TIMEOUT_BURST: usize = 3;
 pub const SCRIPT_GUARD_FAILURE_STREAK: u64 = 3;
 /// 純粋判定の昇格に要る連続の呼び出し数（(f)）。
 pub const SCRIPT_GUARD_READY_PURE: u64 = 1000;
+/// `lane_rules` で網羅の証拠が合格のときの純粋判定の件数（ADR 2026-11-04-lane-rules-exhaustive-evidence D6）。
+pub const SCRIPT_GUARD_READY_PURE_EXHAUSTIVE: u64 = 100;
 /// CoS の経路の昇格に要る件数（(f)）。
 pub const SCRIPT_GUARD_READY_COS: u64 = 200;
 
@@ -219,31 +222,41 @@ pub struct ScriptGuardReadiness {
     pub timeouts_in_window: usize,
     pub failures_in_window: usize,
     pub safety_violations: u64,
+    /// 判定に使った網羅の証拠の立場（D6）。
+    pub exhaustive: ScriptExhaustiveStanding,
 }
 
 impl fmt::Display for ScriptGuardReadiness {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "clean_streak {}/{}, window {}, timeouts {}, failures {}, safety_violations {}",
+            "clean_streak {}/{}, window {}, timeouts {}, failures {}, safety_violations {}, exhaustive {}",
             self.clean_streak,
             self.required,
             self.window_len,
             self.timeouts_in_window,
             self.failures_in_window,
-            self.safety_violations
+            self.safety_violations,
+            self.exhaustive.as_str()
         )
     }
 }
 
 /// (f) の「`compare`→`canary` へ進む条件」。`from` が `canary` なら TS 側の単位で数える（S5-4 の `canary→ts`）。
 /// 窓が 1000 件に届かない間の率は、届いた分の長さで割る（CoS の経路は 200 件で判定するため）。
+///
+/// D6: `lane_rules` で網羅の証拠が `Passed` なら、要る件数は 100 で、窓の timeout・失敗は 0 件。
+/// それ以外（証拠なし・不合格・他の領域）は従来どおり。
 pub fn readiness(
     domain: ScriptDomain,
     from: ScriptMode,
     counters: &ScriptGuardCounters,
+    exhaustive: ScriptExhaustiveStanding,
 ) -> ScriptGuardReadiness {
+    let evidence_passed =
+        domain == ScriptDomain::LaneRules && exhaustive == ScriptExhaustiveStanding::Passed;
     let required = match domain {
+        ScriptDomain::LaneRules if evidence_passed => SCRIPT_GUARD_READY_PURE_EXHAUSTIVE,
         ScriptDomain::LaneRules | ScriptDomain::RoutePriority | ScriptDomain::ExecutionGate => {
             SCRIPT_GUARD_READY_PURE
         }
@@ -255,17 +268,21 @@ pub fn readiness(
     };
     let window_len = counters.window.len();
     let (timeouts, failures) = (counters.timeouts_in_window(), counters.failures_in_window());
+    let rates_ok = if evidence_passed {
+        timeouts == 0 && failures == 0
+    } else {
+        !ScriptGuardCounters::rate_exceeded(timeouts, window_len)
+            && !ScriptGuardCounters::rate_exceeded(failures, window_len)
+    };
     ScriptGuardReadiness {
-        ready: clean_streak >= required
-            && counters.safety_violations == 0
-            && !ScriptGuardCounters::rate_exceeded(timeouts, window_len)
-            && !ScriptGuardCounters::rate_exceeded(failures, window_len),
+        ready: clean_streak >= required && counters.safety_violations == 0 && rates_ok,
         clean_streak,
         required,
         window_len,
         timeouts_in_window: timeouts,
         failures_in_window: failures,
         safety_violations: counters.safety_violations,
+        exhaustive,
     }
 }
 
@@ -279,4 +296,149 @@ pub struct ScriptGuardOutcome {
     pub rolled_back: Vec<ScriptDomain>,
     /// この観測で generation を `invalid` にしたか（安全違反）。
     pub invalidated: bool,
+}
+
+#[cfg(test)]
+mod exhaustive_readiness_tests {
+    use super::*;
+    use ScriptExhaustiveStanding as S;
+
+    fn counters(n: u64, window: &str) -> ScriptGuardCounters {
+        ScriptGuardCounters {
+            window: window.to_owned(),
+            clean_streak: n,
+            ts_side_clean_streak: n,
+            calls: n,
+            ..Default::default()
+        }
+    }
+
+    fn ready(domain: ScriptDomain, from: ScriptMode, c: &ScriptGuardCounters, s: S) -> bool {
+        readiness(domain, from, c, s).ready
+    }
+
+    #[test]
+    fn readiness_lane_rules_exhaustive_required_100() {
+        for from in [ScriptMode::Compare, ScriptMode::Canary] {
+            let r = readiness(
+                ScriptDomain::LaneRules,
+                from,
+                &counters(100, &"o".repeat(100)),
+                S::Passed,
+            );
+            assert!(r.ready, "{from:?}");
+            assert_eq!(r.required, 100);
+            assert_eq!(r.exhaustive, S::Passed);
+            // 境界 99 件。
+            let r = readiness(
+                ScriptDomain::LaneRules,
+                from,
+                &counters(99, &"o".repeat(99)),
+                S::Passed,
+            );
+            assert!(!r.ready);
+            assert_eq!(r.required, 100);
+        }
+    }
+
+    #[test]
+    fn readiness_without_evidence_stays_1000() {
+        let c = counters(100, &"o".repeat(100));
+        assert!(!ready(
+            ScriptDomain::LaneRules,
+            ScriptMode::Compare,
+            &c,
+            S::Missing
+        ));
+        let r = readiness(
+            ScriptDomain::LaneRules,
+            ScriptMode::Compare,
+            &counters(999, &"o".repeat(999)),
+            S::Missing,
+        );
+        assert!(!r.ready);
+        assert_eq!(r.required, 1000);
+        let c = counters(1000, &"o".repeat(1000));
+        assert!(ready(
+            ScriptDomain::LaneRules,
+            ScriptMode::Compare,
+            &c,
+            S::Missing
+        ));
+        // 窓が 1000 件で timeout 1 件は 0.1% で通る（従来）。
+        let w = format!("t{}", "o".repeat(999));
+        assert!(ready(
+            ScriptDomain::LaneRules,
+            ScriptMode::Compare,
+            &counters(1000, &w),
+            S::Missing
+        ));
+    }
+
+    #[test]
+    fn readiness_failed_evidence_stays_1000() {
+        let c = counters(100, &"o".repeat(100));
+        assert!(!ready(
+            ScriptDomain::LaneRules,
+            ScriptMode::Canary,
+            &c,
+            S::Failed
+        ));
+        assert_eq!(
+            readiness(ScriptDomain::LaneRules, ScriptMode::Canary, &c, S::Failed).required,
+            1000
+        );
+    }
+
+    #[test]
+    fn readiness_other_domains_unchanged() {
+        let c = counters(100, &"o".repeat(100));
+        // 証拠が Passed でも route_priority は 1000、cos_digest は 200 のまま。
+        for s in [S::Passed, S::Missing, S::NotApplicable] {
+            let r = readiness(ScriptDomain::RoutePriority, ScriptMode::Compare, &c, s);
+            assert!(!r.ready);
+            assert_eq!(r.required, 1000);
+            let r = readiness(ScriptDomain::CosDigest, ScriptMode::Compare, &c, s);
+            assert!(!r.ready);
+            assert_eq!(r.required, 200);
+        }
+    }
+
+    #[test]
+    fn readiness_exhaustive_zero_timeouts_and_failures() {
+        // 100 件の窓に timeout 1 件（1%）、失敗 1 件でも、証拠付きは 0 件でなければ ready にしない。
+        for bad in ['t', 'f'] {
+            let w = format!("{bad}{}", "o".repeat(99));
+            assert!(!ready(
+                ScriptDomain::LaneRules,
+                ScriptMode::Compare,
+                &counters(100, &w),
+                S::Passed
+            ));
+        }
+        // 安全違反。
+        let mut c = counters(100, &"o".repeat(100));
+        c.safety_violations = 1;
+        assert!(!ready(
+            ScriptDomain::LaneRules,
+            ScriptMode::Compare,
+            &c,
+            S::Passed
+        ));
+        // canary は TS 側の連続で数える。
+        let mut c = counters(500, &"o".repeat(500));
+        c.ts_side_clean_streak = 99;
+        assert!(!ready(
+            ScriptDomain::LaneRules,
+            ScriptMode::Canary,
+            &c,
+            S::Passed
+        ));
+        assert!(ready(
+            ScriptDomain::LaneRules,
+            ScriptMode::Compare,
+            &c,
+            S::Passed
+        ));
+    }
 }

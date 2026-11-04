@@ -404,7 +404,12 @@ async fn cos_digest_behavior_change_canary_ts_side_explained_becomes_promotion_c
     assert_eq!(c.explained_in_window(), 1);
     assert_eq!(c.mismatches_in_window(), 0);
     assert_eq!(c.ts_side_clean_streak, SCRIPT_GUARD_READY_COS);
-    let ready = readiness(ScriptDomain::CosDigest, ScriptMode::Canary, &c);
+    let ready = readiness(
+        ScriptDomain::CosDigest,
+        ScriptMode::Canary,
+        &c,
+        task_core::script_exhaustive::ScriptExhaustiveStanding::NotApplicable,
+    );
     assert!(ready.ready, "{ready:?}");
     assert_eq!(ready.clean_streak, SCRIPT_GUARD_READY_COS);
     f.store
@@ -420,7 +425,15 @@ async fn cos_digest_behavior_change_canary_short_of_the_count_is_not_a_candidate
     assert_eq!(world.records[0].outcome, CompareOutcome::Explained);
     let c = counters_of(&f, &generation);
     assert_eq!(c.ts_side_clean_streak, SCRIPT_GUARD_READY_COS - 1);
-    assert!(!readiness(ScriptDomain::CosDigest, ScriptMode::Canary, &c).ready);
+    assert!(
+        !readiness(
+            ScriptDomain::CosDigest,
+            ScriptMode::Canary,
+            &c,
+            task_core::script_exhaustive::ScriptExhaustiveStanding::NotApplicable
+        )
+        .ready
+    );
     assert!(
         f.store
             .script_domain_set_mode(&mode_change(&f, ScriptMode::Ts, &generation), f.d.now_utc())
@@ -452,7 +465,13 @@ async fn cos_digest_behavior_change_canary_rust_side_explained_keeps_ts_side_str
     // `clean_streak` は canary に入るときに 0 から数え直す。積んだ 3 件と、この pass の 1 件。
     assert_eq!(c.clean_streak, 3 + 1);
     assert_eq!(
-        readiness(ScriptDomain::CosDigest, ScriptMode::Canary, &c).clean_streak,
+        readiness(
+            ScriptDomain::CosDigest,
+            ScriptMode::Canary,
+            &c,
+            task_core::script_exhaustive::ScriptExhaustiveStanding::NotApplicable
+        )
+        .clean_streak,
         3
     );
 }
@@ -490,7 +509,13 @@ async fn cos_digest_behavior_change_canary_unexplained_delta_rolls_back_on_both_
             assert_eq!(c.mismatches_in_window(), 1, "{label}");
             assert_eq!((c.clean_streak, c.ts_side_clean_streak), (0, 0), "{label}");
             assert!(
-                !readiness(ScriptDomain::CosDigest, ScriptMode::Canary, &c).ready,
+                !readiness(
+                    ScriptDomain::CosDigest,
+                    ScriptMode::Canary,
+                    &c,
+                    task_core::script_exhaustive::ScriptExhaustiveStanding::NotApplicable
+                )
+                .ready,
                 "{label}"
             );
         }

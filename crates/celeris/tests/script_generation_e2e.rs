@@ -444,7 +444,14 @@ impl World {
                 .expect("counters")
                 .map(|(_, counters)| counters)
                 .unwrap_or_default();
-            if readiness(ScriptDomain::CosDigest, from, &counters).ready {
+            if readiness(
+                ScriptDomain::CosDigest,
+                from,
+                &counters,
+                task_core::script_exhaustive::ScriptExhaustiveStanding::NotApplicable,
+            )
+            .ready
+            {
                 return;
             }
             self.env

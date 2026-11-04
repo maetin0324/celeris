@@ -180,7 +180,12 @@ fn script_compare_report_pure_gate_counts_real_records() {
         .script_guard_counters(ScriptDomain::LaneRules, &generation)
         .expect("counters")
         .expect("row");
-    let api = readiness(ScriptDomain::LaneRules, ScriptMode::Compare, &counters);
+    let api = readiness(
+        ScriptDomain::LaneRules,
+        ScriptMode::Compare,
+        &counters,
+        task_core::script_exhaustive::ScriptExhaustiveStanding::Missing,
+    );
     assert!(api.ready);
     assert_eq!(d["clean_streak"], api.clean_streak);
 

@@ -8,8 +8,15 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Check, Task, TaskKind, WorkspaceMode};
-use crate::model_policy::{Level, TaskFeatures};
+use crate::model::{Task, TaskKind, WorkspaceMode};
+use crate::model_policy::TaskFeatures;
+
+#[path = "execution_gate/scorer.rs"]
+mod scorer;
+pub use scorer::{
+    EXECUTION_GATE_TS_RULES, ExecutionGateInput, ExecutionGateOutput, ExecutionGateRecordedInput,
+    ExecutionGateSignalOutput, score,
+};
 
 /// D13: gate の policy 版（監査記録に残す）。
 pub const EXECUTION_GATE_POLICY_VERSION: &str = "exec-gate/1";
@@ -188,49 +195,6 @@ pub fn out_of_scope_rule(task: &Task) -> Option<&'static str> {
     None
 }
 
-/// 題名・目的に出てくる工程語の種類（S1）。
-const PROCESS_WORD_GROUPS: &[&[&str]] = &[
-    &["調査", "investigate", "survey"],
-    &["設計", "design"],
-    &["実装", "implement"],
-    &["テスト", "test"],
-    &["review", "レビュー"],
-    &["release", "リリース", "deploy", "配送"],
-];
-
-fn count_process_stages(text: &str) -> usize {
-    let lower = text.to_lowercase();
-    PROCESS_WORD_GROUPS
-        .iter()
-        .filter(|group| group.iter().any(|w| lower.contains(&w.to_lowercase())))
-        .count()
-}
-
-struct Scorer {
-    score: i32,
-    signals: Vec<GateSignal>,
-}
-
-impl Scorer {
-    fn new() -> Self {
-        Scorer {
-            score: 0,
-            signals: Vec::new(),
-        }
-    }
-
-    fn add(&mut self, name: &str, weight: i32, detail: String) {
-        if weight != 0 {
-            self.score += weight;
-            self.signals.push(GateSignal {
-                name: name.to_string(),
-                weight,
-                detail,
-            });
-        }
-    }
-}
-
 /// D13: Complexity Gate。`out_of_scope_rule` に当たれば常に atomic。次に人の明示
 /// （`human_execution`）があればそれに従う（規則表を評価しない）。それ以外は規則表のスコアで決める。
 /// `shadow` はそのまま `ExecutionGateDecision.shadow` に写す（判定のロジックそのものは変えない。
@@ -294,133 +258,21 @@ pub fn decide_at(
         };
     }
 
-    let mut s = Scorer::new();
-    match features.context_size {
-        Level::High => s.add("F1", 2, "context_size=high".to_string()),
-        Level::Medium => s.add("F1", 1, "context_size=medium".to_string()),
-        Level::Low => {}
-    }
-    if features.expected_length == Level::High {
-        s.add("F2", 2, "expected_length=high".to_string());
-    }
-    if features.tool_intensity == Level::High {
-        s.add("F3", 1, "tool_intensity=high".to_string());
-    }
-    match features.cross_cutting {
-        Level::High => s.add("F4", 2, "cross_cutting=high".to_string()),
-        Level::Medium => s.add("F4", 1, "cross_cutting=medium".to_string()),
-        Level::Low => {}
-    }
-    if features.judgment == Level::High && features.tool_intensity >= Level::Medium {
-        s.add(
-            "F5",
-            1,
-            "judgment=high and tool_intensity>=medium".to_string(),
-        );
-    }
-    let text = format!("{}\n{}", task.title, task.objective);
-    let stages = count_process_stages(&text);
-    match stages {
-        n if n >= 3 => s.add("S1", 2, format!("{n} process stages mentioned")),
-        2 => s.add("S1", 1, "2 process stages mentioned".to_string()),
-        _ => {}
-    }
-    let artifact_exists = task
-        .acceptance
-        .iter()
-        .filter(|c| matches!(c.check, Check::ArtifactExists { .. }))
-        .count();
-    if task.acceptance.len() >= 6 || artifact_exists >= 3 {
-        s.add(
-            "S2",
-            1,
-            format!(
-                "acceptance={}, artifact_exists={artifact_exists}",
-                task.acceptance.len()
-            ),
-        );
-    }
-    let has_human = task.acceptance.iter().any(|c| c.check == Check::Human);
-    let has_command = task
-        .acceptance
-        .iter()
-        .any(|c| matches!(c.check, Check::Command { .. }));
-    if has_human && has_command {
-        s.add(
-            "S3",
-            1,
-            "has both Check::Human and Check::Command".to_string(),
-        );
-    }
-    if inputs.multi_environment {
-        s.add("S4", 1, "multiple execution environments".to_string());
-    }
-    let objective_len = task.objective.chars().count();
-    if objective_len > 2000 {
-        s.add("S5", 1, format!("objective length {objective_len} > 2000"));
-    }
-    if let Some(ratio) = inputs.recent_budget_exhausted_ratio
-        && ratio >= 0.3
-    {
-        s.add(
-            "S6",
-            2,
-            format!("recent budget_exhausted ratio {ratio:.2} >= 0.3"),
-        );
-    }
-    if cos_hint_compound {
-        s.add("H", 2, "CoS hinted execution=compound".to_string());
-    }
-
+    let input = ExecutionGateInput::from_task(task, features, cos_hint_compound, inputs, threshold);
+    let scored = score(&input);
+    let signals = scored.gate_signals();
     let source = if cos_hint_compound {
         GateSource::Hint
     } else {
         GateSource::Policy
     };
-
-    // 強制規則（D13）: `expected_length=high` かつ `cross_cutting=high` なら compound。
-    if features.expected_length == Level::High && features.cross_cutting == Level::High {
-        return ExecutionGateDecision {
-            mode: ExecutionMode::Compound,
-            source,
-            score: s.score,
-            threshold,
-            rule_id: "compound/long-and-broad".to_string(),
-            signals: s.signals,
-            policy_version: EXECUTION_GATE_POLICY_VERSION.to_string(),
-            shadow,
-            depth,
-        };
-    }
-    // 強制規則: `max_turns <= 10` かつ目的が 400 文字未満なら atomic。
-    // ADR-0079「R5b-fix3」: 木の子 task（`tree.parent_unit` を持つ）には当てない。親の計画の kind task の
-    // unit は作られた時点で「小さくない」（目的は unit の 1 行と木の中の位置なので短い）。
-    if task.budget.max_turns <= 10 && objective_len < 400 && !crate::tree::is_tree_child(task) {
-        return ExecutionGateDecision {
-            mode: ExecutionMode::Atomic,
-            source,
-            score: s.score,
-            threshold,
-            rule_id: "atomic/small".to_string(),
-            signals: s.signals,
-            policy_version: EXECUTION_GATE_POLICY_VERSION.to_string(),
-            shadow,
-            depth,
-        };
-    }
-
-    let (mode, rule_id) = if s.score >= threshold {
-        (ExecutionMode::Compound, "compound/score")
-    } else {
-        (ExecutionMode::Atomic, "atomic/score")
-    };
     ExecutionGateDecision {
-        mode,
+        mode: scored.mode,
         source,
-        score: s.score,
+        score: scored.score,
         threshold,
-        rule_id: rule_id.to_string(),
-        signals: s.signals,
+        rule_id: scored.rule_id,
+        signals,
         policy_version: EXECUTION_GATE_POLICY_VERSION.to_string(),
         shadow,
         depth,

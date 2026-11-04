@@ -627,3 +627,52 @@ fn script_fixtures_cos_digest_dtos_deny_unknown_fields() {
     let cmd = serde_json::json!({"kind": "requeue_run", "run_id": "run-1"});
     assert!(serde_json::from_value::<CosDigestCommand>(cmd).is_ok());
 }
+
+// --- execution_gate（ADR 2026-11-04-ts-execution-gate-domain）---------------------------------
+// 規則を変えたら
+// `cargo run -q -p task-core --example dump-execution-gate-fixtures > control-ts/fixtures/execution_gate/cases.jsonl`
+// で作り直し、execution_gate の変更として扱う。
+
+#[test]
+fn script_fixtures_execution_gate_match_committed_fixture() {
+    let generated =
+        task_core::script_compare::execution_gate_fixture_jsonl().expect("serialize fixture");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../control-ts/fixtures/execution_gate/cases.jsonl");
+    let committed = std::fs::read_to_string(path).expect("read committed fixture");
+    assert!(
+        generated == committed,
+        "execution_gate fixture differs from score output; regenerate with the dump-execution-gate-fixtures example"
+    );
+}
+
+/// 全部の rule・signal が fixture に現れ、`m/8` の丸めの境界（偶数丸め）が入っている。
+#[test]
+fn script_fixtures_execution_gate_cover_rules_signals_and_rounding() {
+    let body =
+        task_core::script_compare::execution_gate_fixture_jsonl().expect("serialize fixture");
+    let mut rules = std::collections::BTreeSet::new();
+    let mut signals = std::collections::BTreeSet::new();
+    for line in body.lines() {
+        let row: serde_json::Value = serde_json::from_str(line).expect("row");
+        rules.insert(row["rule_id"].as_str().expect("rule_id").to_owned());
+        for s in row["signals"].as_array().expect("signals") {
+            signals.insert(s["name"].as_str().expect("name").to_owned());
+        }
+    }
+    assert_eq!(
+        rules,
+        task_core::execution_gate::EXECUTION_GATE_TS_RULES
+            .iter()
+            .map(|r| (*r).to_owned())
+            .collect()
+    );
+    for name in [
+        "F1", "F2", "F3", "F4", "F5", "S1", "S2", "S3", "S4", "S5", "S6", "H",
+    ] {
+        assert!(signals.contains(name), "signal {name} missing");
+    }
+    assert!(body.contains("ratio 0.38 >= 0.3"), "0.375 rounds to even");
+    assert!(body.contains("ratio 0.62 >= 0.3"), "0.625 rounds to even");
+    assert!(body.contains("ratio 0.88 >= 0.3"), "0.875 rounds to even");
+}

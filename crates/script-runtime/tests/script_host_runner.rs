@@ -33,8 +33,10 @@ const TRACE_ROWS: usize = 20;
 const CASE_ROWS: usize = 2_066;
 const DIGEST_ROWS: usize = TRACE_ROWS + CASE_ROWS;
 const RUN_STATES: [&str; 2] = ["completed", "stopped"];
-const ALL_DOMAINS: [&str; 4] = [
+const GATE_ROWS: usize = 2_337;
+const ALL_DOMAINS: [&str; 5] = [
     "cos_digest",
+    "execution_gate",
     "host_selftest",
     "lane_rules",
     "route_priority",
@@ -75,6 +77,18 @@ function route(input) {
   for (const c of arr(t.class_defaults, "class_defaults")) { exact(c, ["execution_class", "candidates"], "class"); arr(c.candidates, "candidates").forEach(cand); }
   return { basis: "harness", candidates: t.route_defaults };
 }
+function gate(input) {
+  exact(input, ["features", "title", "objective", "acceptance_total", "artifact_exists", "has_human", "has_command", "multi_environment", "recent_budget_exhausted_ratio", "cos_hint_compound", "max_turns", "tree_child", "threshold"], "input");
+  const f = exact(input.features, AXES, "features");
+  for (const a of AXES) if (!LEVELS.includes(f[a])) throw new Error("unknown level " + f[a]);
+  str(input.title, "title");
+  str(input.objective, "objective");
+  if (!Number.isInteger(input.max_turns)) throw new Error("max_turns must be an integer");
+  if (!Number.isInteger(input.threshold)) throw new Error("threshold must be an integer");
+  const ratio = input.recent_budget_exhausted_ratio;
+  if (ratio !== null && !(ratio >= 0 && ratio <= 1)) throw new Error("bad ratio");
+  return { mode: "atomic", score: 0, rule_id: "atomic/score", signals: [] };
+}
 function commands(r) {
   const post = { kind: "post_digest", thread: r.thread, idempotency_key: "cos-triage-digest:" + r.run_id, text: "state " + r.run_state, cards: [], run_id: r.run_id };
   return r.run_state === "stopped" ? [post, { kind: "requeue_run", run_id: r.run_id }] : [post];
@@ -100,6 +114,7 @@ async function digest(ctx) {
 globalThis.__celerisDispatch = async (domain, input, ctx) => {
   switch (domain) {
     case "cos_digest": return digest(ctx);
+    case "execution_gate": return gate(input);
     case "host_selftest": return { host_api: hostVersion(), reply: await selftestEcho(ctx, input) };
     case "lane_rules": return lane(input);
     case "route_priority": return route(input);
@@ -240,6 +255,38 @@ fn write_fixtures(dir: &Path) {
         traces.push_str(&row.to_string());
         traces.push('\n');
     }
+    // `execution_gate`: 試験の bundle はいつも同じ答えを返す。
+    let features: serde_json::Map<String, Value> = AXES
+        .iter()
+        .map(|a| ((*a).to_owned(), json!("low")))
+        .collect();
+    let mut gate = String::new();
+    for n in 0..GATE_ROWS {
+        let row = json!({
+            "case": format!("gate/{n}"),
+            "input": {
+                "features": features,
+                "title": "t",
+                "objective": format!("o{n}"),
+                "acceptance_total": 1,
+                "artifact_exists": 0,
+                "has_human": false,
+                "has_command": true,
+                "multi_environment": false,
+                "recent_budget_exhausted_ratio": null,
+                "cos_hint_compound": false,
+                "max_turns": 60,
+                "tree_child": false,
+                "threshold": 5,
+            },
+            "mode": "atomic",
+            "score": 0,
+            "rule_id": "atomic/score",
+            "signals": [],
+        });
+        gate.push_str(&row.to_string());
+        gate.push('\n');
+    }
     // `decide` の case（runner が run 1 つの pass に組み直す）。
     let mut cases = String::new();
     for n in 0..CASE_ROWS {
@@ -255,6 +302,7 @@ fn write_fixtures(dir: &Path) {
     for (rel, text) in [
         ("lane_rules/all-features.jsonl", lane),
         ("route_priority/cases.jsonl", route),
+        ("execution_gate/cases.jsonl", gate),
         ("cos_digest/pass_traces.jsonl", traces),
         ("cos_digest/cases.jsonl", cases),
     ] {
@@ -361,6 +409,7 @@ fn script_host_runner_match_passes_all_suites_and_activates() {
     for (name, rows) in [
         ("lane_rules", LANE_ROWS),
         ("route_priority", ROUTE_ROWS),
+        ("execution_gate", GATE_ROWS),
         ("cos_digest", DIGEST_ROWS),
     ] {
         let d = domain(&report, name);
@@ -372,6 +421,11 @@ fn script_host_runner_match_passes_all_suites_and_activates() {
     let safety = report["safety"].as_array().expect("safety");
     assert!(safety.iter().any(|s| s["id"] == "manifest/domains"));
     assert!(safety.iter().any(|s| s["id"] == "lane_rules/missing_axis"));
+    assert!(
+        safety
+            .iter()
+            .any(|s| s["id"] == "execution_gate/ratio_out_of_range")
+    );
     assert!(
         safety
             .iter()
@@ -395,7 +449,7 @@ fn script_host_runner_match_passes_all_suites_and_activates() {
     assert_eq!(out.status.code(), Some(0), "report: {report}");
     assert_eq!(report["selftest"]["ok"], true);
     let probed = report["probed"].as_array().expect("probed");
-    assert_eq!(probed.len(), 3);
+    assert_eq!(probed.len(), 4);
     assert!(
         probed.iter().any(|p| p["domain"] == "cos_digest"),
         "{report}"

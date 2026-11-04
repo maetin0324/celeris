@@ -28730,6 +28730,11 @@
           "const": "cos_digest",
           "description": "付記 S4: CoS の受信箱 digest pass（migration 0104）。記録は `script_compare_log`。",
           "type": "string"
+        },
+        {
+          "const": "execution_gate",
+          "description": "ADR 2026-11-04-ts-execution-gate-domain: Complexity Gate の得点（migration 0109）。",
+          "type": "string"
         }
       ]
     },

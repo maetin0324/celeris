@@ -1765,7 +1765,7 @@ impl Dispatcher {
     /// ADR-0079 D4 (1)（Phase R2a）: 木の子 task（`tree.parent_unit` を持つ。深さ ≥ 2）は、閾値を深さで
     /// 上げ（`5 + gate_depth_step × (depth − 1)`）、`[execution] gate` が `shadow` / `off` でも判定し採用する
     /// （`shadow = false`、`depth` を記録）。root・木でない task は従来どおり（1 バイトも変えない。U-R5）。
-    pub(super) fn execution_gate_if_needed(&self, task: Task) -> Result<Task, DispatchError> {
+    pub(super) fn execution_gate_if_needed(&mut self, task: Task) -> Result<Task, DispatchError> {
         let tree_child = task_core::tree::is_tree_child(&task);
         if self.config.execution.gate == task_core::GateMode::Off && !tree_child {
             return Ok(task);
@@ -1801,12 +1801,11 @@ impl Dispatcher {
         };
         // S4/S6: E3 では決定的な既定値（`false`/`None`）で運用する（U10 と同じく、閾値・重みは
         // shadow の記録を見て後で調整する。ADR-0072「Phase E3 実装時の逸脱・明確化」参照）。
-        let decision = task_core::decide_execution_gate_at(
+        let decision = self.execution_gate_decide(
             &task,
             &features,
             human_execution,
             cos_hint_compound,
-            task_core::ExecutionGateInputs::default(),
             shadow,
             at,
         );

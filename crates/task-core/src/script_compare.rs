@@ -17,6 +17,7 @@ pub use crate::llm_route::RoutePriorityBasis;
 use crate::llm_route::{CandidateKey, ExecutionClass, HarnessId, Registry};
 
 mod cos_digest_record;
+mod execution_gate_fixture;
 mod route_priority_fixture;
 use crate::model_policy::TaskFeatures;
 use crate::store::StoreError;
@@ -24,6 +25,7 @@ pub use cos_digest_record::{
     CosDigestApplied, CosDigestAppliedBy, CosDigestCommandsSummary, CosDigestCompareRecord,
     CosDigestFallback, CosDigestOpLog, cos_digest_command_kind, cos_digest_text_head,
 };
+pub use execution_gate_fixture::execution_gate_fixture_jsonl;
 pub use route_priority_fixture::route_priority_fixture_jsonl;
 
 /// TS 制御層の領域（S2-1）。表 `script_domain_modes` の `domain`。
@@ -36,13 +38,16 @@ pub enum ScriptDomain {
     RoutePriority,
     /// 付記 S4: CoS の受信箱 digest pass（migration 0104）。記録は `script_compare_log`。
     CosDigest,
+    /// ADR 2026-11-04-ts-execution-gate-domain: Complexity Gate の得点（migration 0109）。
+    ExecutionGate,
 }
 
 impl ScriptDomain {
-    pub const ALL: [ScriptDomain; 3] = [
+    pub const ALL: [ScriptDomain; 4] = [
         ScriptDomain::LaneRules,
         ScriptDomain::RoutePriority,
         ScriptDomain::CosDigest,
+        ScriptDomain::ExecutionGate,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -50,6 +55,7 @@ impl ScriptDomain {
             ScriptDomain::LaneRules => "lane_rules",
             ScriptDomain::RoutePriority => "route_priority",
             ScriptDomain::CosDigest => "cos_digest",
+            ScriptDomain::ExecutionGate => "execution_gate",
         }
     }
 

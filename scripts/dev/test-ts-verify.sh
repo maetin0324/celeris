@@ -18,6 +18,7 @@
 #   J 規則を壊し compare.test.mjs の該当試験を test.skip にする（host-api）→ test-affected.sh --list が ts-verify-grade を選び、
 #     ts-verify.sh --grade は段 golden（Rust の runner の採点）で exit 1（引数なしは「従来の経路へ」で exit 0）。
 #     無害な host-api の変更（compare.mjs の注記）では ts-verify.sh --grade が 10 段を通して exit 0（ADR 付記 grade-gate）
+#   M execution_gate の閾値の比較を壊す → ts-only で exit 1。同じ bundle を runner に直に渡すと mismatch で exit 1
 #   K cos_digest の規則（stopped・interrupted の requeue）を壊す → ts-only で exit 1。同じ bundle を runner に直に渡すと
 #     cos_digest の mismatch で exit 1。read_run の答えの検査を外した bundle は --suite safety で exit 1（ADR 付記 grade-cos-digest）
 #   L pass_traces.jsonl を書き換える → host-api、cache key が変わる（古い golden で採点しない）、test-affected.sh --list が
@@ -284,6 +285,28 @@ if [ "$rc" -eq 0 ] && [ "$(rec_get "$work/j2.json" 'r["class"]')" = host-api ] &
 else
   ng "J 無害な host-api の変更: --grade exit $rc、記録 $(tr -d '\n' <"$work/j2.json" 2>/dev/null | cut -c1-600)"
   tail -30 "$work/j2.log" >&2
+fi
+
+# ---- M execution_gate の閾値の比較を壊す（ADR 2026-11-04-ts-execution-gate-domain） ----
+reset
+sed -i 's/} else if (score >= input.threshold) {/} else if (score > input.threshold) {/' control-ts/src/domains/execution_gate.ts
+rc=0
+nocargo bash "$tsv" --record "$work/m.json" >"$work/m.log" 2>&1 || rc=$?
+m_failed="$(rec_get "$work/m.json" '",".join(s["name"] for s in r["stages"] if s["exit"] != 0)' 2>/dev/null || true)"
+if ! git diff --quiet && [ "$rc" -eq 1 ] && [ "$(rec_get "$work/m.json" 'r["class"]')" = ts-only ] && [ -n "$m_failed" ]; then
+  ok "M 壊した execution_gate の規則: exit 1（段 $m_failed で失敗）"
+else
+  ng "M 壊した execution_gate の規則: exit $rc（期待 1）、失敗の段 [$m_failed]"
+  tail -30 "$work/m.log" >&2
+fi
+build_bundle "$work/m-dist"
+rc=0
+"$runner" run --bundle-dir "$work/m-dist" --fixtures "$golden" --suite golden --domain execution_gate >"$work/m-run.json" 2>"$work/m-run.err" || rc=$?
+m_mism="$(rec_get "$work/m-run.json" 'r["domains"][0]["mismatch"]' 2>/dev/null || echo "?")"
+if [ "$rc" -eq 1 ] && [ "$m_mism" != "?" ] && [ "$m_mism" -gt 0 ]; then
+  ok "M runner に直に渡した壊れた bundle: exit 1、execution_gate の mismatch $m_mism 件"
+else
+  ng "M runner: exit $rc（期待 1）、mismatch $m_mism"
 fi
 
 # ---- K cos_digest の規則を壊す ----

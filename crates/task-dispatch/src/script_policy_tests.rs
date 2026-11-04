@@ -228,7 +228,7 @@ fn route_draft(lane: Option<&str>) -> CompareDraft {
 fn route_parts(draft: &CompareDraft) -> (RoutePriorityOutput, RoutePriorityInput) {
     match &draft.domain {
         DraftDomain::RoutePriority { input, rust } => (rust.clone(), input.clone()),
-        DraftDomain::LaneRules { .. } => panic!("not route_priority"),
+        _ => panic!("not route_priority"),
     }
 }
 
@@ -334,4 +334,145 @@ fn script_compare_route_priority_draft_records_run_and_table_of_one_harness() {
     let un = draft.unavailable("no policy script runtime").unwrap();
     assert_eq!(un.outcome, CompareOutcome::Unavailable);
     assert_eq!(un.call_site, ROUTE_PRIORITY_CALL_SITE);
+}
+
+// --- execution_gate（ADR 2026-11-04-ts-execution-gate-domain D6・D8）---------------------------
+
+fn gate_input() -> task_core::execution_gate::ExecutionGateInput {
+    use task_core::model_policy::TaskFeatures;
+    let l = Level::Low;
+    task_core::execution_gate::ExecutionGateInput {
+        features: TaskFeatures {
+            judgment: l,
+            ambiguity: l,
+            verifiability: l,
+            reversibility: l,
+            consequence: l,
+            context_size: l,
+            tool_intensity: l,
+            expected_length: l,
+            cross_cutting: l,
+        },
+        title: "GATE-SECRET-TITLE".into(),
+        objective: "GATE-SECRET-OBJECTIVE".into(),
+        acceptance_total: 1,
+        artifact_exists: 0,
+        has_human: false,
+        has_command: true,
+        multi_environment: false,
+        recent_budget_exhausted_ratio: None,
+        cos_hint_compound: false,
+        max_turns: 60,
+        tree_child: false,
+        threshold: 5,
+    }
+}
+
+fn classify_gate(raw: serde_json::Value) -> Classified {
+    let input = gate_input();
+    let rust = task_core::execution_gate::score(&input);
+    classify_execution_gate(
+        &rust,
+        &input,
+        &TsResult::Reply(PolicyReply {
+            output: raw,
+            isolate_epoch: 1,
+        }),
+    )
+}
+
+#[test]
+fn script_compare_gate_classify_match_and_mismatch_compare_every_field() {
+    let input = gate_input();
+    let rust = task_core::execution_gate::score(&input);
+    let same = serde_json::to_value(&rust).unwrap();
+    assert_eq!(classify_gate(same).outcome, CompareOutcome::Match);
+    // 値の正規化をしない: detail の 1 byte の差も不一致。
+    let detail = serde_json::json!({
+        "mode": "atomic", "score": 1, "rule_id": "atomic/score",
+        "signals": [{ "name": "X", "weight": 1, "detail": "d" }],
+    });
+    let c = classify_gate(detail);
+    assert_eq!(c.outcome, CompareOutcome::Mismatch);
+    assert!(c.ts.is_some() && c.safety_violations.is_empty());
+}
+
+#[test]
+fn script_compare_gate_classify_rejects_shapes_without_copying_them() {
+    let signals = |n: usize| -> Vec<serde_json::Value> {
+        (0..n)
+            .map(|i| serde_json::json!({ "name": format!("S{i}"), "weight": 1, "detail": "d" }))
+            .collect()
+    };
+    for raw in [
+        serde_json::json!({ "mode": "GATE-SECRET-OBJECTIVE" }),
+        serde_json::json!({ "mode": "atomic", "score": 0, "rule_id": "atomic/score", "signals": [], "extra": 1 }),
+        serde_json::json!({ "mode": "atomic", "score": 17, "rule_id": "atomic/small", "signals": signals(17) }),
+        serde_json::json!({ "mode": "atomic", "score": 1, "rule_id": "atomic/small",
+            "signals": [{ "name": "012345678", "weight": 1, "detail": "d" }] }),
+        serde_json::json!({ "mode": "atomic", "score": 1, "rule_id": "atomic/small",
+            "signals": [{ "name": "X", "weight": 1, "detail": "d".repeat(129) }] }),
+        serde_json::json!({ "mode": "atomic", "score": 2, "rule_id": "atomic/small",
+            "signals": [{ "name": "X", "weight": 1, "detail": "d" }, { "name": "X", "weight": 1, "detail": "d" }] }),
+    ] {
+        let c = classify_gate(raw.clone());
+        assert_eq!(c.outcome, CompareOutcome::InvalidOutput, "{raw}");
+        assert_eq!(c.ts, None, "{raw}");
+        assert!(c.safety_violations.is_empty(), "{raw}");
+        let message = c.error.expect("error").message;
+        assert!(!message.contains("GATE-SECRET"), "{message}");
+    }
+}
+
+#[test]
+fn script_compare_gate_classify_reports_safety_violations() {
+    for rule_id in ["human/explicit", "atomic/out-of-scope", "invented/rule"] {
+        let c = classify_gate(
+            serde_json::json!({ "mode": "atomic", "score": 0, "rule_id": rule_id, "signals": [] }),
+        );
+        assert_eq!(c.outcome, CompareOutcome::InvalidOutput);
+        assert_eq!(c.safety_violations, ["gate_rule_not_allowed"]);
+    }
+    for raw in [
+        // 閾値 5 に足りない compound。
+        serde_json::json!({ "mode": "compound", "score": 0, "rule_id": "compound/score", "signals": [] }),
+        // mode と rule_id の食い違い。
+        serde_json::json!({ "mode": "compound", "score": 0, "rule_id": "atomic/small", "signals": [] }),
+        // score と weight の和の食い違い。
+        serde_json::json!({ "mode": "atomic", "score": 3, "rule_id": "atomic/score", "signals": [] }),
+    ] {
+        let c = classify_gate(raw);
+        assert_eq!(c.outcome, CompareOutcome::InvalidOutput);
+        assert_eq!(c.safety_violations, ["gate_threshold_violated"]);
+    }
+}
+
+#[test]
+fn script_compare_gate_classify_withholds_the_exception_message() {
+    let input = gate_input();
+    let rust = task_core::execution_gate::score(&input);
+    let c = classify_execution_gate(
+        &rust,
+        &input,
+        &TsResult::Error(PolicyScriptError::new(
+            "exception",
+            "boom GATE-SECRET-OBJECTIVE",
+        )),
+    );
+    assert_eq!(c.outcome, CompareOutcome::TsError);
+    let error = c.error.expect("error");
+    assert_eq!(error.kind, "exception");
+    assert!(!error.message.contains("GATE-SECRET"), "{}", error.message);
+}
+
+#[test]
+fn script_compare_gate_record_digest_comes_from_the_redacted_input() {
+    let input = gate_input();
+    let draft = CompareDraft::execution_gate("g".into(), "b".into(), "1".into(), input.clone());
+    let record = draft.unavailable("x").unwrap();
+    let recorded = task_core::script_compare::recorded_input(&input.recorded()).unwrap();
+    assert_eq!(record.input_digest, recorded.input_digest);
+    let json = serde_json::to_string(&record).unwrap();
+    assert!(!json.contains("GATE-SECRET"), "{json}");
+    assert_eq!(record.domain, ScriptDomain::ExecutionGate);
 }

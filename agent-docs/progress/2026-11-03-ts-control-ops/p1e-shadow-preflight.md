@@ -12,7 +12,7 @@ task 01M6HGFR1TMY7PTGQ553FQGM7H（親 01M6HG7T6ZKTX239KGH0QY4HFQ の p1e-shadow-
 ## 結論
 - 本番はまだ compare に上げられない。人の手順が 3 段先に要る: S5 以後の release の promote（今の release `3259e04ea63e` は schema 102 で script の表が無い）、`[script]` の追加と再起動、bundle の配備と登録。preflight は exit 3（fail 0 件、human 6 件。raw は [p1e-preflight-prod.json](p1e-preflight-prod.json)）。
 - 測定環境との分離は確かめた。測定の config 7 件はすべて DB・API の listen が本番と別で `[script]` が無い。動いている測定 daemon（K2 p7）は本番と別の binary・DB・port である。止まった測定の config 4 件だけが `selfdeploy.releases_dir` で本番の releases を指す（下の未解決 1）。
-- 件数の見込み: 2026-10-20 以後の本番の実績に記録の重複の抑えを当てると、`lane_rules` は 48.45 件/日で **1000 件まで約 20.6 日**、`cos_digest` は 54.4 件/日で 200 件まで約 3.7 日である。synthetic で補わない。
+- 件数の見込み: 2026-10-20 以後の本番の実績に記録の重複の抑えを当てると、`lane_rules` は 48.45 件/日で **1000 件まで約 20.6 日**、`cos_digest` は 54.4 件/日で 200 件まで約 3.7 日である。synthetic で補わない。 **訂正（2026-11-04）: `lane_rules` の 48.45 件/日は WU の run を数えた誤りで、正しくは 9.33 件/日、1000 件まで約 107 日である（[p1e-shadow-measure.md](p1e-shadow-measure.md)）。**
 - S5 の手順の誤りを 1 つ見つけて改めた: `[script]` を足す段が無かった。今の本番 binary は `[script]` を未知の欄として拒むので、promote の後に足す（付記 P1-E）。
 - worker は本番の DB・config を読んだだけで、何も書いていない。release・promote・mode・guard・K2/K4/IEEE Access の環境は変えていない。
 
@@ -105,7 +105,7 @@ worker は実行していない。どの段も人が決めて実行する。mode
 1. 止まった測定の config 4 件（`main`・`main-2`・`ops-r2-k2-p1`・`ops-r2-k2-p2`）は `selfdeploy.releases_dir` が本番の `/local/celeris/state/releases` を指す。動いていないので今の測定には影響しないが、起動し直すと本番の releases を読む。preflight は human と出す。測定の config は worker が変えない。
 2. `measure/main-3`・`main-4` などには深さ 3 までに `daemon.toml` が無く、config の検査の対象外である。動いている daemon は process から見るので検査に入る（今は K2 p7 だけ）。K4 の環境は今 daemon が動いておらず、config の置き場は未確認。
 3. release の `script-bundle/` からの `script-deploy` は未確認（release を作っていないので、通しでは `build-bundle.mjs` の出力を使った）。`script-deploy` は release に入っていないので、人の手順に cargo の build が要る。
-4. `lane_rules` の 1000 件は今の負荷で約 20.6 日の見込み。負荷が変われば変わる。`p1e-shadow-measure` はその間待つ。
+4. `lane_rules` の 1000 件は今の負荷で約 107 日の見込み（2026-11-04 に訂正。当初の 20.6 日は WU の run を数えた誤り）。負荷が変われば変わる。
 5. 本番での latency・RSS・tick は未計測（compare の後に 6. で取る）。debug build の値は S6・P1-C と同じく本番の値でない。
 6. （attempt 2 で解消）P1-D の `explained` outcome と `explained_by` が main に入り、attempt 1 の試験が compile できなかった（test-affected exit 101）。集計に `explained` を足し、`explained_by.id` の無い `explained` は exit 1 にした。`lane_rules` の記録は今 `explained` を出さない（`cos_digest` だけ）。
 7. 集計は `events` を全走査する。本番で 4 秒だった（2026-11-03、78 万行）。読むだけで書き込みを止めない。

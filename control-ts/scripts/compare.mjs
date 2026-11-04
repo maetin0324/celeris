@@ -43,6 +43,13 @@ const DOMAINS = {
     input: (row) => row.input,
     fields: ["basis", "candidates"],
   },
+  execution_gate: {
+    module: "src/domains/execution_gate.ts",
+    entry: "executionGate",
+    fixture: "fixtures/execution_gate/cases.jsonl",
+    input: (row) => row.input,
+    fields: ["mode", "score", "rule_id", "signals"],
+  },
   cos_digest: {
     module: "src/domains/cos_digest.ts",
     fixture: "fixtures/cos_digest",

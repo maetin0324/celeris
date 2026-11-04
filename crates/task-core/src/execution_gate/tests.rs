@@ -1,8 +1,10 @@
 use super::*;
+use crate::model::Check;
 use crate::model::{
     ArtifactRef, Budget, Criterion, Status, TaskCategory, TaskId, TaskMode, TaskRouting, Tier,
     WorkerHint, WorkspaceSpec,
 };
+use crate::model_policy::Level;
 
 fn base_task() -> Task {
     let now = time::OffsetDateTime::UNIX_EPOCH;

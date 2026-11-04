@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # edit→検査→test→反映（activate）の baseline を計る（task 01M6DCPKPJZZ9F9J4QJ47FH8KK、S0 (2)）。
 #
-#   bash scripts/dev/edit-activate-baseline.sh --scenario <policy|cos|policy-ts|cos-ts|cos-digest> --mode <warm|cold> --reps <N> --out <file.jsonl> [--rep-start <N>] [--series <name>]
-#   bash scripts/dev/edit-activate-baseline.sh --dry-run --scenario <policy|cos|policy-ts|cos-ts|cos-digest>   build せず手順を出して exit 0
+#   bash scripts/dev/edit-activate-baseline.sh --scenario <policy|cos|policy-ts|cos-ts|gate-ts|cos-digest> --mode <warm|cold> --reps <N> --out <file.jsonl> [--rep-start <N>] [--series <name>]
+#   bash scripts/dev/edit-activate-baseline.sh --dry-run --scenario <policy|cos|policy-ts|cos-ts|gate-ts|cos-digest>   build せず手順を出して exit 0
 #   bash scripts/dev/edit-activate-baseline.sh --validate <file.jsonl>             記録の欄を検査（欠けがあれば exit 1）
 #   bash scripts/dev/edit-activate-baseline.sh --check-targets <file.jsonl>        policy-ts・cos-ts を目標と照合、cos-digest は集計（外れたら exit 1）
 #
@@ -19,6 +19,8 @@
 #           一致を、task-dispatch の cos_digest_* 試験が digest の pass と Rust/TS の比較を見る。cos-ts の検証責任に揃える）
 #   cos-ts（S6 の TS の経路）: control-ts/src/domains/cos_digest.ts の decide に同じ論理の分岐を足し、policy-ts と同じく
 #           ts-verify.sh を 1 回走らせる（段 activate が新 isolate への load と各領域の probe）
+#   gate-ts（P2-F の領域の TS の経路）: control-ts/src/domains/execution_gate.ts の工程語の表の直後に印の comment を足す
+#           （挙動は変わらない。golden に合うまま）。ts-verify.sh を 1 回走らせる
 #
 # S6 の欄（付記 S5-10・S5-11。全 scenario の新しい行に付く。古い記録に無くても --validate は通す）:
 #   env.identity  commit・clean（開始時の git status --porcelain が空）・tree（対象 dir の tree hash）・rustc・node・pnpm・
@@ -111,7 +113,7 @@ need = {
     "trial": ["cmd", "secs", "exit", "class", "stages", "typecheck_secs", "bundle_secs",
               "cargo_invocations", "link_count", "edit", "reverted"],
 }
-S6_SCENARIOS = ("cos-ts", "cos-digest")
+S6_SCENARIOS = ("cos-ts", "gate-ts", "cos-digest")
 ID_KEYS = ["commit", "clean", "tree", "rustc", "node", "pnpm", "host", "target_kind", "series"]
 TS_ID_KEYS = ["bundle_sha256", "host_api", "runner_sha256"]
 bad, n, kinds = [], 0, {}
@@ -211,7 +213,7 @@ import json, math, sys
 path, schema, rust_steps = sys.argv[1], sys.argv[2], sys.argv[3].split()
 STAGES = ["classify", "runner-cache", "install", "typecheck", "bundle", "unit", "golden",
           "safety", "integration", "activate"]
-TS_SCENARIOS = ("policy-ts", "cos-ts")
+TS_SCENARIOS = ("policy-ts", "cos-ts", "gate-ts")
 RUST_SCENARIOS = ("cos-digest",)
 # (順位の百分位, 上限の秒)。Rust の経路は上限なし（集計だけ）
 TARGETS = {"warm": [(50, 30.0), (95, 60.0)], "cold": [(95, 120.0)]}
@@ -345,6 +347,7 @@ fi
 case "$scenario" in
   policy-ts) crate=""; is_ts=1; tree_dirs="control-ts"; edit_file="control-ts/src/domains/lane_rules.ts" ;;
   cos-ts) crate=""; is_ts=1; tree_dirs="control-ts"; edit_file="control-ts/src/domains/cos_digest.ts" ;;
+  gate-ts) crate=""; is_ts=1; tree_dirs="control-ts"; edit_file="control-ts/src/domains/execution_gate.ts" ;;
   policy) crate="task-core"; is_ts=0; tree_dirs="crates/task-core"; edit_file="crates/task-core/src/model_policy.rs" ;;
   cos) crate="task-api"; is_ts=0; tree_dirs="crates/task-api"; edit_file="crates/task-api/src/cos/basis/job_wait_extend.rs" ;;
   cos-digest) crate="task-core task-dispatch"; is_ts=0; tree_dirs="crates/task-core crates/task-dispatch"
@@ -400,6 +403,10 @@ elif scenario == "cos-ts":
            f'  if (input.reason !== null && input.reason.includes("edit-activate-baseline-{nonce}")) {{\n'
            '    return { commands: [] };\n'
            '  }\n')
+elif scenario == "gate-ts":
+    # 工程語の表の直後に印を足す（P2-F の領域。S1 の表を編集する変更と同じ段を通す。挙動は変えない）
+    anchor = '];\n\nconst INPUT_FIELDS'
+    add = f'  // edit-activate-baseline probe {nonce}\n'
 elif scenario == "cos-digest":
     anchor = '    let (text, cards) = cos_digest_message(\n'
     add = (f'    // edit-activate-baseline probe {nonce}: a branch that is never taken\n'

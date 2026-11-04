@@ -329,8 +329,7 @@ pub fn build_view(
             let mine = events.iter().filter(|e| e.outcome_id == spec.id);
             let last = mine
                 .clone()
-                .filter(|e| e.kind == "status")
-                .last()
+                .rfind(|e| e.kind == "status")
                 .and_then(|e| e.status.map(|s| (s, e.evidence.clone())));
             let (status, evidence) = if spec.dropped {
                 (OutcomeStatus::Dropped, Vec::new())

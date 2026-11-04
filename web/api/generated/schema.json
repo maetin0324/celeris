@@ -1999,6 +1999,11 @@
           "const": "review",
           "description": "The reviewer run whose verdict failed the task (the id in `reviewer(<id>): …`).",
           "type": "string"
+        },
+        {
+          "const": "authority_grant",
+          "description": "ADR 2026-11-04-project-controller A7: a live grant of the authority ledger. It is evidence\nonly: it does not lift `human_required` and does not stand in for the category's checks.",
+          "type": "string"
         }
       ]
     },

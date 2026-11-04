@@ -1,5 +1,5 @@
 ---
-tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE]
+tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5]
 ---
 # Project Controller の運用手順（人と operator）
 
@@ -47,3 +47,19 @@ A5・A6・A7 は節を足す。
 | Outcome を取り下げる | 人の承認 | `dropped: true` を付けた版を提案して承認する（id は消せない） | `GET …/roadmap` の `status` が `dropped` |
 | Outcome の到達を記録する | 人 | `POST /api/v1/projects/{id}/roadmap/outcomes/{oid}/status` `{"status":"reached","evidence_refs":["task:<root id>"]}`。root が done・合格・取り込み済みでなければ 422 | `GET …/roadmap` の `status`・`evidence`・`root_task_ids` |
 | 本番の DB を新しい release で開く | 人 | promote で migration 0113 が表を 2 つ足す（既存の行は変えない）。release を戻すときは SCHEMA_VERSION 113 の DB を 112 の binary が開けない（`SchemaTooNew`）ので、Roadmap を使う前の DB の写しから戻す | `celerisctl` の schema version が 113 |
+
+## 許可の範囲（authority ledger。A7）
+controller が `off` でない案件では、CoS と controller が人に聞かずに行える範囲を、人が作る許可（期限・回数・元の根拠つき）で決める
+（[ADR 付記 A7](../../agent-docs/adr/2026-11-04-project-controller.md)）。許可が無い・切れた・根拠が読めない・前の操作の結果が分からない
+ときは、どれも行わない。
+
+| 場面 | 誰が | 何を | 確認 |
+|---|---|---|---|
+| controller を有効にする | 人 | `PUT …/controller` `{"mode":"enabled",…}`。同じ操作で続きの root の起票の許可が 1 件できる（既定 30 日・10 回。`launch_grant_expires_at`・`launch_grant_budget` で変えられる） | `GET /api/v1/projects/{id}/authority` の `grants` に `launch_root`・`state: live` |
+| CoS の提案を許可する | 人 | 案件の画面の「許可」（API は `POST …/authority/grants` に提案の `proposal_id`・期限・回数）。根拠は CoS が引いた人の発言 | 提案が `accepted`、許可が `live` |
+| 提案を断る | 人 | `POST …/authority/proposals/{p}/dismiss` | 以後 CoS が同じ問いを出すと 409 |
+| 許可を取り消す | 誰でも | `POST …/authority/grants/{g}/revoke` | 許可の `state` が `grant_revoked` |
+| 結果が分からない操作を確かめる | 人 | 外部の結果を見てから `POST …/authority/audit/{a}/outcome` `{"state":"applied"\|"failed","note":"…"}` | 監査の行の `outcome_state`。`failed` は回数が戻る。確かめるまで同じ種類の操作は止まる |
+| 許可が足りずに止まった（notice「起票する許可がありません」） | 人 | 許可を作る。作ると controller は `active` に戻り次の評価で起票する | 判断の記録が `pc/authority-required` の後に起票 |
+
+許可は人の token だけが作れる（operator・MCP・CoS は 403 か 422）。`human_required` は許可にできない。

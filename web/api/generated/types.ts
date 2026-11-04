@@ -398,7 +398,7 @@ export type BasisRef = {
   "kind": BasisRefKind;
 };
 
-export type BasisRefKind = "standing_rule" | "decision" | "approval" | "usage" | "ledger" | "commit" | "artifact" | "progress" | "adr" | "doc" | "message" | "review";
+export type BasisRefKind = "standing_rule" | "decision" | "approval" | "usage" | "ledger" | "commit" | "artifact" | "progress" | "adr" | "doc" | "message" | "review" | "authority_grant";
 
 export type BehaviorChangeEvent = {
   "action": BehaviorChangeState;

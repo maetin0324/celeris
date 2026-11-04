@@ -806,6 +806,7 @@ impl SqliteStore {
     /// root を冪等に作る（I5）: 同じ transaction でキーを照合し、無ければ task と
     /// `task_idempotency_keys` の行を書く。キーが既にあれば（中身が違っても）既存の task を返す。
     /// キーが無いときは同じ transaction で効果の門を読み、閉じていれば作らない（I7、付記 A1 の 11）。
+    #[allow(clippy::too_many_arguments)]
     pub fn project_controller_create_root(
         &self,
         task: &Task,

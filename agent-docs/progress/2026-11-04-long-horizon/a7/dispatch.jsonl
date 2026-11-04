@@ -1,0 +1,4 @@
+{"audit":{"actual_actor":"daemon","human_decision":"authority_grant:01M6KSSKZJY4XP4YATM108FRXN","observed_outcome":true,"suggestion":true},"consumed":1,"escalations":1,"refusal":"no_grant","roots":1,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_launch_requires_grant_then_runs"}
+{"escalations":2,"roots":1,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_budget_and_expiry_stop_launch"}
+{"effect_ref":"authority:grant_revoked","roots":0,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_revoked_after_decision_creates_no_root"}
+{"asked_after_revoke":1,"asked_while_answered":0,"schema":"celeris.long-horizon-record/1","test":"authority_ledger_answered_question_is_not_asked_again"}

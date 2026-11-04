@@ -370,6 +370,7 @@ async fn project_cos_ts_failure_classified() {
         idempotency_key,
         spec,
         meta,
+        ..
     } = first.effect
     else {
         panic!("expected a root launch");
@@ -468,6 +469,7 @@ async fn project_cos_ts_review_failed_retries_after_brief() {
             idempotency_key,
             spec,
             meta,
+            ..
         } = decision.effect
         else {
             panic!("expected a root launch, got {}", decision.rule_id);

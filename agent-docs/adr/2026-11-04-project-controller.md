@@ -720,3 +720,52 @@ Outcome の状態・root との対応の履歴が無く、CoS は request を書
 8. **未達**: controller の `mark_milestone` を Outcome の状態の記録に結ぶ効果（`ProjectEffect` の追加）は入れていない。
    `task_ops::roadmap::record_status_tx` を A6 以降が効果の tx から呼ぶ。TS（`project_controller.ts`）は Roadmap の `status`
    を読まず、到達は従来どおり root から計算する。
+
+## 付記 A7（2026-11-04、task 01M6JW1EFW86JH3VKZ274J9GT5）: authority ledger の実装と契約の差分
+§A7 の契約を次のように実装し、一部を変えた。理由・未解決は [進捗 a7](../progress/2026-11-04-long-horizon/a7.md)。
+1. **file**: 規則は `crates/task-core/src/authority.rs`、表と判定は `crates/task-core/src/store/authority.rs`（migration 0114、
+   SCHEMA_VERSION 114）、API は `crates/task-api/src/handlers/authority.rs`、`/cos/operations` の門は `crates/task-api/src/cos/goal_guard.rs`
+   の `authority_gate`・`settle`、registry の行は `cos/ops/projects.rs`、controller の門は `dispatcher/project_decider_ts.rs` の
+   `authority_guard`、root の作成の tx の消費は `SqliteStore::project_controller_create_root`、snapshot は
+   `task_ops::project_snapshot::authority_section`、画面は `web/features/projects/project-authority-panel.tsx`（結線は A9）。
+2. **監査の置き場所を変えた**: `project_controller_decisions` に `observed_outcome_json`・`human_decision_ref` を足さず、追記専用の表
+   `authority_audit`（suggestion・observed outcome・actual actor・human decision・判定の理由）に置いた。理由: 判断の行の trigger は
+   `pending` 以外の更新を全部断るので、効果の後に結果の欄を書けない。また CoS の `/cos/operations` の操作も同じ監査に載せる。行は
+   消せず、結果が `unknown` の行だけを 1 回閉じられる。controller の判断とは `dedupe_key`（`pc-use:<冪等キー>`・`pc-deny:<案件>:<問い>`・
+   `pc-answered:<案件>:<問い>`）で結ぶ。
+3. **API を足した**: `POST …/authority/proposals`（CoS は `authority.grant_propose`。根拠は人の発言だけ。同じ `question_key` は 1 回だけ
+   notice、答えの後と既に含む許可がある時は 409）、`POST …/proposals/{p}/dismiss`（人だけ）、`POST …/audit/{a}/outcome`（人だけ。結果
+   不明の使用を閉じる。`failed` は予算を戻す）、`GET …/authority` は許可・提案・監査を返す。`authority.check` も CoS の操作に登録した
+   （読み取りだが監査に残す）。許可の作成・提案の却下・結果の確定は registry の EXCLUDED（`human_only`）。
+4. **根拠の種類 `human_operation` を足した**: 人が mode を `enabled` に上げる `PUT …/controller` は同じ tx で `launch_root` の許可を作り、
+   根拠は `project.controller_put:<案件>:<revision>`、説明は理由の文、期限は既定 30 日・回数は既定 10（本文の任意欄
+   `launch_grant_expires_at`・`launch_grant_budget`）。前の同種の許可は取り消す（上げ直しで回数を積み増さない）。`POST …/grants` は
+   この種類を 422 `authority_source_reserved` で断る。
+5. **根拠の確かめ**（作成時と判定のたび）: 人の発言は `role=user`・author が `human:`・取り次ぎでない・同じ案件か統括の thread。決定は
+   `answer.by` が `human:` で同じ案件。承認は同じ案件で `once`・`standing` に決まり、CoS が `instructed_by` 無しで決めた記録が無い。
+   永続の認可は行があり、CoS が独断で書いた記録が無い。読めない・合わない根拠は 422（作成）か拒否（判定）。
+6. **fail closed の「状態不明」**: 分類・範囲が不明、範囲が案件に無い、期限が読めない、根拠が読めない、ledger が読めない、同じ案件・同じ分類の
+   前の使用の結果が `unknown`（結果を記録する前に落ちた・外部の効果の結果が不明）のどれでも拒否する。`human_required` は表の CHECK でも
+   API でも許可にできず、判定は常に拒否する。
+7. **`/cos/operations` の分類**（autonomy の中＝controller が `off` でない案件の案件 thread の run だけ。I13）: `production`
+   （`release.promote`・`daemon.reload`・`daemon.replay`・`script_domain.mode_set`・`script_generation.*`・`local.settings_put`・
+   `cluster.settings_put`）、`external_publish`（`task.pr_merge`）、`destructive`（A3 の 5 種と `docs.page_delete`・`cron_job.delete`・
+   `standing_rule.delete`）、`api_authorization`（`account.create`・`account.limit_set`・`browser.auth_section`・`browser.site_policy_*`・
+   `browser.task_policy_put`）、`opaque_external_effect`（`notify.test`・`browser.request_open`・`browser.control`・`browser.agent_begin`）。
+   `instructed_by` があれば予算を使わず通し、監査の human decision に `human_message:<id>`。無ければ有効な許可を 1 回消費して通す。
+   どちらも無ければ A3 の code（`production_requires_human` など。新たに `api_authorization_requires_human`・`opaque_effect_requires_human`）で 422。
+   範囲は task の route なら task、それ以外は案件。
+8. **controller の `launch_root`**: 範囲は途中目標が 1 つならその途中目標、それ以外は案件。`enabled` で許可が無ければ proposal を
+   `escalate`（category `standing_permission`、`question_key` は `authority:launch_root:g<許可の世代>`、規則 `pc/authority-required`）に
+   置き換える。人が許可を作ると同じ tx で `human_epoch` を進め、`pc/authority-required` で止まった `blocked` だけを `active` に戻す。
+   root を作る tx で判定をやり直して 1 回消費し、拒否なら root を作らず効果を `failed`（`authority:<理由>`）にして wake を積む。
+   `dry_run`・`shadow` は判定を記録するだけ。
+9. **同じ問いを聞き直さない**: TS の `escalate` の `question_key` に有効な許可（`question_key` が同じ）か人が断った提案があれば、
+   人に聞かず `wait`（規則 `pc/authority-answered`、1 時間後に見直す）にし、根拠（許可の id と元の根拠、または断った提案）を判断の記録と
+   監査に残す。
+10. **snapshot の `authority`**: `{launch_root: {allow, reason, grant_id}, grants: [{id, action_class, scope, source_kind, question_key,
+    expires_at, budget_remaining}]}`。根拠の本文は入れない（I11）。TS はまだ読まない（判定は Rust の門が持つ）。
+11. **cos-inbox-triage の policy_version を 11 に上げた**（basis の refs の種類 `authority_grant` を足した。生きている許可だけが通り、
+    `human_required` は解除しない）。
+12. **E2E**（接頭辞 `authority_ledger_`、計 26 件）: task-core 2、task-api `tests/authority_ledger.rs` 18、task-dispatch
+    `dispatcher/tests/authority_ledger.rs` 6。`scripts/dev/test-authority-ledger-e2e.sh` が 3 つを走らせ raw を検査する。

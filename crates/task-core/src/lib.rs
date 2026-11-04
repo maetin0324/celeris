@@ -226,6 +226,7 @@ pub use notify::{
 pub use script_inbox::{ScriptInboxItem, ScriptInboxStore};
 pub mod project_brief;
 pub mod project_proposal;
+pub mod roadmap;
 pub use org::{
     Milestone, MilestoneDecision, MilestoneId, MilestoneStatus, OrgError, OrgKind, OrgNode,
     Project, ProjectId, ProjectStatus, assignee_defaults, department_of, is_root_task,

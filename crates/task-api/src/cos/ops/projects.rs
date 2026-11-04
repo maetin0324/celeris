@@ -31,6 +31,11 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/projects/{id}/controller/wake",
         "project.controller_wake",
     ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/roadmap/proposals",
+        "project.roadmap_propose",
+    ),
     ("POST", "/api/v1/standing-rules", "standing_rule.create"),
     (
         "DELETE",
@@ -55,6 +60,16 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
+    (
+        "POST",
+        "/api/v1/projects/{id}/roadmap/proposals/{version}/decide",
+        "human_only: ADR 2026-11-04-project-controller D8・付記 A5。Roadmap の版を進める（承認・却下）のは人の API token の主体だけ。CoS は提案まで。",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/roadmap/outcomes/{oid}/status",
+        "human_only: ADR 2026-11-04-project-controller 付記 A5。Outcome の状態は人と controller の mark_milestone の適用（Rust が evidence を確かめる）だけが記録する。CoS の自己申告では進めない。",
+    ),
     (
         "PATCH",
         "/api/v1/milestones/{id}",
@@ -149,6 +164,13 @@ pub(crate) fn dispatch(
                 let input = serde_json::from_value(body).map_err(decode)?;
                 crate::handlers::project_controller::cos_controller_wake(store, id, input, audit)
             }
+        }
+        "project.roadmap_propose" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = crate::handlers::parse_project_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "project", &raw_id, problem))?;
+            let input = serde_json::from_value(body).map_err(decode)?;
+            crate::handlers::roadmap::cos_roadmap_propose(store, id, input, audit)
         }
         "project.cancel" | "project.pause" | "project.resume" | "project.archive"
         | "project.unarchive" => {

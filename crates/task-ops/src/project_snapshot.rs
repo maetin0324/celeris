@@ -200,7 +200,7 @@ pub fn build(
     let brief = store
         .project_brief_get(project_id)?
         .and_then(|b| serde_json::to_value(b).ok());
-    let (outcomes, outcomes_invalid) = match parse_outcomes(&project.request) {
+    let (mut outcomes, mut outcomes_invalid) = match parse_outcomes(&project.request) {
         Ok(o) => (o, false),
         Err(_) => (Vec::new(), true),
     };
@@ -229,6 +229,16 @@ pub fn build(
             &mut waits,
         )?);
     }
+    // 付記 A5: approved の Roadmap があれば request の block より優先する（block は読まない）。
+    let roadmap = match store.roadmap_approved(&pid)? {
+        Some(version) => {
+            outcomes = task_core::roadmap::snapshot_outcomes(&version);
+            outcomes_invalid = false;
+            let view = crate::roadmap::view_of(store, &version, &tasks, &metas)?;
+            serde_json::to_value(view).ok()
+        }
+        None => None,
+    };
     let mut snapshot = ProjectSnapshot {
         now: ctx.now.format(&Rfc3339).unwrap_or_default(),
         truncated: false,
@@ -253,7 +263,7 @@ pub fn build(
         decisions: ctx.decisions,
         controller: ctx.controller,
         limits: ctx.limits,
-        roadmap: None,
+        roadmap,
         authority: None,
     };
     while serde_json::to_vec(&snapshot).map_or(0, |v| v.len()) > pp::SNAPSHOT_MAX_BYTES {

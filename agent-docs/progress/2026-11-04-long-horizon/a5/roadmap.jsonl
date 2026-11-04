@@ -1,0 +1,12 @@
+{"actor":"cos","decide_status":422,"schema":"celeris.long-horizon-record/1","test":"project_roadmap_cos_and_operator_cannot_decide","version":1}
+{"actor":"cos-direct","decide_status":422,"schema":"celeris.long-horizon-record/1","test":"project_roadmap_cos_and_operator_cannot_decide","version":1}
+{"actor":"operator","decide_status":403,"schema":"celeris.long-horizon-record/1","test":"project_roadmap_cos_and_operator_cannot_decide","version":1}
+{"actor":"human:test","from":"proposed","schema":"celeris.long-horizon-record/1","test":"project_roadmap_reject_keeps_the_current_version","to":"rejected","version":2}
+{"decided_by":"human:test","proposed_by":"human:test","schema":"celeris.long-horizon-record/1","test":"project_roadmap_human_approval_advances_and_supersedes","to":"superseded","version":1}
+{"decided_by":"human:test","proposed_by":"human:test","schema":"celeris.long-horizon-record/1","test":"project_roadmap_human_approval_advances_and_supersedes","to":"approved","version":2}
+{"actor":"human:test","from":null,"schema":"celeris.long-horizon-record/1","test":"project_roadmap_proposal_does_not_advance_the_version","to":"proposed","version":1}
+{"actor":"human:test","kind":"root_linked","outcome":"o1","root":"01M6KQK9XB0SG2A1X7SR87JCEV","schema":"celeris.long-horizon-record/1","status":null,"test":"project_roadmap_root_links_and_reached_need_rust_evidence"}
+{"actor":"human:test","kind":"status","outcome":"o1","root":null,"schema":"celeris.long-horizon-record/1","status":"in_progress","test":"project_roadmap_root_links_and_reached_need_rust_evidence"}
+{"actor":"human:test","kind":"root_linked","outcome":"o1","root":"01M6KQK9XC466S8PR7RKXNQ7XG","schema":"celeris.long-horizon-record/1","status":null,"test":"project_roadmap_root_links_and_reached_need_rust_evidence"}
+{"actor":"human:test","kind":"status","outcome":"o1","root":null,"schema":"celeris.long-horizon-record/1","status":"reached","test":"project_roadmap_root_links_and_reached_need_rust_evidence"}
+{"block_outcomes":2,"roadmap_outcomes":2,"schema":"celeris.long-horizon-record/1","source":"roadmap","test":"project_roadmap_takes_precedence_over_the_request_block"}

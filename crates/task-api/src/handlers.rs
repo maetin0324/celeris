@@ -28,6 +28,7 @@ pub(crate) mod org;
 pub(crate) mod project_controller;
 pub(crate) mod projects;
 pub(crate) mod reload;
+pub(crate) mod roadmap;
 mod secrets;
 pub(crate) mod system;
 pub(crate) mod task_actions;
@@ -178,6 +179,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         .route("/api/v1/projects/{id}/status", put(put_project_status))
         // ADR 2026-11-04-project-controller A1: 案件の controller（durable wake）。
         .merge(project_controller::routes())
+        // 付記 A5: 案件の Roadmap（版付きの途中目標。旧 milestones とは別の名詞）。
+        .merge(roadmap::routes())
         .route("/api/v1/projects/{id}/milestones", post(create_milestone))
         // ADR-0043 D1（Phase 52）: 案件のリポジトリ。実装は `crate::repos`。
         .merge(crate::repos::routes())

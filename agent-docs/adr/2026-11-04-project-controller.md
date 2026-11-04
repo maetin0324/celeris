@@ -688,3 +688,35 @@ A1 の実装（migration `0112_project_controller.sql`、`SCHEMA_VERSION` 112。
    `skill.delete`・`project.cancel` を 422 `irreversible_requires_human` で断る（`goal_guard::autonomy_refusal`）。
    `off`・状態行なしの案件と統括 CoS は従来の gate（I13）。secret の書き込みは registry の EXCLUDED、routing の段は
    human_only が断る。試験 `project_cos_refuses_production`・`project_cos_irreversible_gate_only_in_autonomy`。
+
+## 付記 A5（2026-11-04、task 01M6JW1EFT0NX6HP89S55ECNXE）: Roadmap の実装と契約の差分
+前提の確認: A2・A3 の PoC の raw（`agent-docs/progress/2026-11-04-long-horizon/a2/e2e/`・`a3/`）で request の block の不足を
+確かめてから実装した（数は `agent-docs/progress/2026-11-04-long-horizon/a5.md` の「必要性」）。block には版・人の確認の記録・
+Outcome の状態・root との対応の履歴が無く、CoS は request を書けない（`project_request_human_only`）ので途中目標の変更を
+人に確かめてもらう経路も無かった。
+
+1. **表**（migration 0113、SCHEMA_VERSION 113）: `project_roadmap_versions`（PK `(project_id, version)`、approved は案件ごとに
+   高々 1、trigger で DELETE と中身の UPDATE を拒み、status は `proposed→approved|rejected`・`approved→superseded` だけ）と
+   `project_roadmap_outcome_events`（`status`・`root_linked` の追記専用の記録）。既存の案件には行を作らない。
+2. **版を進めるのは人の決定だけ**: 提案（人・CoS の `project.roadmap_propose`）は `proposed` の行を足すだけ。決定
+   `POST …/proposals/{version}/decide` は `Principal::Human` だけ（他の token は 403 `roadmap_decide_requires_human`）。CoS は
+   registry の EXCLUDED `human_only`（`/cos/operations` は 422 `cos_operation_not_allowed`、run の credential での直接の呼び出しは
+   既存の middleware が 422 `cos_audit_context_required`）。契約の「CoS の decide は 403」はこの 2 つの 422 に読み替えた（既存の
+   registry の規約に揃えた）。approve は人の `human_epoch` を同じ transaction で増やす（I7）。
+3. **土台の照合**: 提案は `base_version`（今の approved の版、無ければ null）を持ち、違えば 409 `roadmap_version_conflict`。
+   決定のときも土台を照らし、並んだ 2 つの提案の後の方は承認できない（却下はできる）。
+4. **stable id**: approved の版の Outcome の id は次の版から消せない（422 `roadmap_outcome_id_removed`）。取り下げは
+   `dropped: true`。取り下げた Outcome に他の Outcome が依存してはいけない。形の検査は `parse_outcomes` と同じ規則。
+   中身が同じ提案は 422 `roadmap_no_change`。
+5. **Outcome の状態**: `open`・`in_progress`・`reached` は記録で、版を進めない。`dropped` は版でだけ付く
+   （記録では 422 `roadmap_drop_needs_version`）。`reached` は evidence の `task:<root>` を Rust が
+   `project_snapshot::build` の root の行と `root_satisfies` で確かめる（422 `roadmap_evidence_required`・`_unknown`・
+   `_unverified`）。記録の route は人の token だけ（403 `roadmap_status_requires_human`）、CoS は EXCLUDED `human_only`。
+6. **root との対応**: `Outcome.root_task_ids` は controller の起票の記録（`pc:` の冪等キーの `outcome_ids`）と
+   `root_linked` の記録の和（古い順）。`Task.milestone_id`・ExecutionPlan の stage・WorkUnit の phase は読まない
+   （`scripts/dev/test-project-roadmap.sh` がコメントを除いた grep で確かめる）。
+7. **snapshot**: approved の版があれば `outcomes` はその版の（取り下げを除く）Outcome（`source: roadmap`）で、request の block は
+   読まない。`roadmap` に `Roadmap` の JSON を入れる。無ければ今までどおり block（A2）。brief の書き込みは Roadmap を変えない。
+8. **未達**: controller の `mark_milestone` を Outcome の状態の記録に結ぶ効果（`ProjectEffect` の追加）は入れていない。
+   `task_ops::roadmap::record_status_tx` を A6 以降が効果の tx から呼ぶ。TS（`project_controller.ts`）は Roadmap の `status`
+   を読まず、到達は従来どおり root から計算する。

@@ -440,6 +440,11 @@ token_file = "api.token"
 | 77c | PUT | `/projects/{id}/controller` | controller の mode を変える `{mode, expected_revision, reason}`（§3.48b。**管理系**。上げるのは人だけ、`shadow` 以上は許可リストの案件だけ（403 `project_controller_not_allowed`）、revision 違いは 409。CoS は `project.controller_put` で `off` だけ） | 200 `ProjectControllerView` | store `project_controller_state` |
 | 77d | POST | `/projects/{id}/controller/wake` | 外部待ちの解除の wake を積む `{external_ref, note, idempotency_key}`（§3.48b。**管理系**。同じ key は 1 件、mode `off` なら積まない。CoS は `project.controller_wake`） | 200 `{wake_key, added}` | store `project_wakes` |
 | 77e | GET | `/projects/{id}/controller/decisions` | controller の判断の記録（新しい順、`?before=<判断 id>&limit=`、既定 50・上限 200） | 200 `{items: [ProjectControllerDecision]}` | store `project_controller_decisions` |
+| 77f | GET | `/projects/{id}/roadmap` | 案件の Roadmap（ADR 2026-11-04-project-controller 付記 A5。§3.48c。今の approved の版、`?version=<n>` で過去の版。無ければ 404 `roadmap_not_found`） | 200 `Roadmap` | store `project_roadmap_versions` |
+| 77g | GET | `/projects/{id}/roadmap/history` | 版の行と Outcome の記録の全部（§3.48c） | 200 `RoadmapHistory` | store `project_roadmap_versions`・`project_roadmap_outcome_events` |
+| 77h | POST | `/projects/{id}/roadmap/proposals` | 版の提案 `{base_version, change_reason, outcomes[]}`（§3.48c。**管理系**。今の版は変えない。土台違いは 409 `roadmap_version_conflict`、approved の id を消すと 422 `roadmap_outcome_id_removed`。CoS は `project.roadmap_propose`） | 201 `RoadmapVersion` | store `project_roadmap_versions` |
+| 77i | POST | `/projects/{id}/roadmap/proposals/{version}/decide` | 人の決定 `{decision: approve\|reject, note}`（§3.48c。**人の token だけ**、他は 403 `roadmap_decide_requires_human`。approve で前の版は `superseded`。CoS は EXCLUDED `human_only`） | 200 `RoadmapVersion` | store `project_roadmap_versions` |
+| 77j | POST | `/projects/{id}/roadmap/outcomes/{oid}/status` | Outcome の状態の記録 `{status: open\|in_progress\|reached, evidence_refs, reason}`（§3.48c。**人の token だけ**（403 `roadmap_status_requires_human`）。`reached` は evidence の root を Rust が確かめる（422 `roadmap_evidence_*`）。`dropped` は版で付ける（422 `roadmap_drop_needs_version`）。CoS は EXCLUDED `human_only`） | 200 `Roadmap` | store `project_roadmap_outcome_events` |
 | 78 | POST | `/milestones/{id}/cancel` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: 途中目標を中止し、属する非終端タスクを連鎖で `cancelled` にする（**管理系**） | 410 `Problem`（旧 200 `MilestoneLifecycle`） | `task_ops::lifecycle` |
 | 79 | POST | `/milestones/{id}/pause` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: 途中目標を一時停止する（**管理系**） | 410 `Problem`（旧 200 `MilestoneLifecycle`） | `task_ops::lifecycle` |
 | 80 | POST | `/milestones/{id}/resume` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: 一時停止を解く（**管理系**） | 410 `Problem`（旧 200 `MilestoneLifecycle`） | `task_ops::lifecycle` |
@@ -1663,6 +1668,16 @@ mode は `off`（既定）・`dry_run`・`shadow`・`enabled`。`off` の案件�
   違えば 409 `project_controller_revision_conflict`。
 - `POST …/wake` の本文 `{"external_ref": "job-1", "note": "…", "idempotency_key": "k1"}`。wake key は
   `external:<external_ref>:<idempotency_key>`（`:` は書けない）。応答 `{"wake_key": "…", "added": true}`。
+
+#### 3.48c `/projects/{id}/roadmap`（ADR 2026-11-04-project-controller 付記 A5）
+案件の Roadmap は人が認可した途中目標の版。旧 milestones（ADR-0079 で凍結、410 のまま）とは別の名詞で、
+`milestones` 表・`Task.milestone_id`・ExecutionPlan の stage は読まない。brief（§3.48a、動的な要約の全置換）の
+書き込みは版を変えない。
+- `RoadmapVersion`: `{project_id, version, status: proposed|approved|rejected|superseded, base_version, request_sha256, change_reason, outcomes: [{id, title, acceptance[], priority, depends_on[], dropped}], proposed_by, proposed_at, decided_by, decided_at, decision_note, superseded_at}`。行は追記専用（status の前進だけ）。
+- `Roadmap`: `{project_id, version, status, request_sha256, change_reason, proposed_by, decided_by, decided_at, outcomes: [{id, title, acceptance[], evidence[], priority, depends_on[], status: open|in_progress|reached|dropped, root_task_ids[]}]}`。`root_task_ids` は controller の起票（`outcome_ids`）と状態の記録から。
+- `RoadmapHistory`: `{versions: [RoadmapVersion], outcome_events: [{id, outcome_id, kind: status|root_linked, status, root_task_id, roadmap_version, evidence[], reason, actor, created_at}]}`。
+- Outcome の `id` は版をまたいで不変。approved の版の id は次の版で消せず、`dropped: true` で取り下げる。
+- approved の版があれば controller の snapshot は request の ```` ```celeris-outcomes ```` block の代わりにその版の（取り下げを除く）Outcome を `source: roadmap` で読み、`roadmap` に `Roadmap` を入れる。
 
 #### 3.48a `PUT /projects/{id}/status` → 200 `ProjectBrief`（**管理系**）
 
@@ -3636,6 +3651,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | projects | `PUT /projects/{id}/status` | `project.status_put`（その案件の案件 CoS スレッドだけ。他は 403 `project_brief_forbidden` で `rejected`） |
 | projects | `PUT /projects/{id}/controller` | `project.controller_put`（CoS は `mode: off` だけ。上げると 403 `project_controller_mode_requires_human`） |
 | projects | `POST /projects/{id}/controller/wake` | `project.controller_wake`（外部待ちの解除の wake。同じ key は 1 件） |
+| projects | `POST /projects/{id}/roadmap/proposals` | `project.roadmap_propose`（Roadmap の版の提案。版は進まない。決定と Outcome の状態は人だけ） |
 | projects | `POST /standing-rules` | `standing_rule.create`（人の決定で CoS にも許可） |
 | projects | `DELETE /standing-rules/{id}` | `standing_rule.delete` |
 | projects | `POST /reports/read` | `report.read`（対応する通知も同じ transaction で既読） |

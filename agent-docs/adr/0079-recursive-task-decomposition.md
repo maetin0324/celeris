@@ -2045,3 +2045,10 @@ web の木の replan 24 回のうち 9 回が計画・check・条件の質に起
 
 dispatcher / store に LLM 呼び出しは加えない。試験は fake adapter と一時 store で行い、外部ネットワークや
 CPU 焼き負荷を使わずに、即時の stream 通知・終端・未完了 future で境界と中断を再現する。
+
+## 付記（2026-11-04、D14 の「途中目標」の語と案件ページ、ADR 2026-11-04-project-controller 付記 A5）
+- D14 の「『途中目標』は新しい画面では使わず『段階』」は、旧 milestones（R5a で撤去、410 のまま）と task の木の段階を指す。
+  案件の Roadmap（`/projects/{id}/roadmap`、人が承認した「達成したい状態」の版）は別の名詞で、画面では「Roadmap」と
+  「達成したい状態」の語を使う。task の木の段階・ExecutionPlan の stage を長期の目標として流用しない。
+- 案件ページの「以前の途中目標（読み取り専用）」は凍結の履歴のまま。Roadmap の panel
+  （`web/features/projects/project-roadmap-panel.tsx`）は別の欄で、案件ページへの結線は A9 が行う。

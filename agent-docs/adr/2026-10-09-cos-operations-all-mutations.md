@@ -64,6 +64,8 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | POST | `/terminals/{id}/close` | `human_only` | ADR 2026-10-27-web-terminal D3。端末は web に login し step-up した人だけが開く（主体 human:web 以外は 403）。 |
 | PATCH | `/config/fields` | `human_only` | ADR 2026-10-22-dynamic-config D5。config.toml の欄の変更（書き戻しと稼働中の差し替え）は人が設定画面で行う。 |
 | POST | `/routing/stages` | `human_only` | ADR 2026-10-11-llm-source-model-routing-evaluation D3。enforce へ進めるのは人の承認だけ（戻すのは daemon）。 |
+| POST | `/projects/{id}/roadmap/proposals/{version}/decide` | `human_only` | ADR 2026-11-04-project-controller D8・付記 A5。Roadmap の版を進める（承認・却下）のは人の API token の主体だけ。CoS は提案まで。 |
+| POST | `/projects/{id}/roadmap/outcomes/{oid}/status` | `human_only` | ADR 2026-11-04-project-controller 付記 A5。Outcome の状態は人と controller の mark_milestone の適用（Rust が evidence を確かめる）だけが記録する。CoS の自己申告では進めない。 |
 | POST | `/script/guard/clear` | `human_only` | ADR 2026-11-02-ts-control-layer-boundary 付記 S5-4。script-guard の全体の停止を解くのは人の API token の主体だけ。 |
 | POST | `/script/behavior-changes` | `human_only` | ADR 2026-11-03-ts-intended-behavior-change D4。TS の方針改善の仕様の承認は人の API token の主体だけ。 |
 | POST | `/script/behavior-changes/{spec_sha256}/revoke` | `script_api_only` | ADR 2026-11-03-ts-intended-behavior-change D4。承認の取り消しは API で人・外部 operator が行う（CoS の操作には足さない）。 |
@@ -209,6 +211,9 @@ R の操作では領域 write は不要だが operation・event・card は同一
 | PUT | `/projects/{id}/status` | A | `handlers.rs` | 共通 |
 | PUT | `/projects/{id}/controller` | A | `handlers/project_controller.rs` | 共通 |
 | POST | `/projects/{id}/controller/wake` | A | `handlers/project_controller.rs` | 共通 |
+| POST | `/projects/{id}/roadmap/proposals` | A | `handlers/roadmap.rs` | 共通 |
+| POST | `/projects/{id}/roadmap/proposals/{version}/decide` | X: `human_only` | `handlers/roadmap.rs` | 共通 |
+| POST | `/projects/{id}/roadmap/outcomes/{oid}/status` | X: `human_only` | `handlers/roadmap.rs` | 共通 |
 | POST | `/projects/{id}/unarchive` | A | `lifecycle.rs` | 共通 |
 | POST | `/reports/notified` | A | `reports.rs` | 共通 |
 | POST | `/reports/read` | A | `reports.rs` | 共通 |

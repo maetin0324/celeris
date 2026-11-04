@@ -82,6 +82,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 案件の状態の要約を書く | `PUT /api/v1/projects/<id>/status` | project.status_put | 案件 CoS が自分の案件だけ。全置換 `{"objective":"…","state":"…","open_issues":[…],"next_actions":[…],"waiting_on":[{"kind":"human","target":"…","note":"…"}],"evidence_refs":[…]}`。kind は human・task・external で `task` の target はこの案件の task id。他の thread からは 403 |
 | 案件の自動運営を止める | `PUT /api/v1/projects/<id>/controller` | project.controller_put | `{"mode":"off","expected_revision":<今の revision>,"reason":"…"}`。CoS は `off` だけ（上げると 403）。revision 違いは 409 |
 | 案件の外部待ちの解除を知らせる | `POST /api/v1/projects/<id>/controller/wake` | project.controller_wake | `{"external_ref":"…","note":"…","idempotency_key":"…"}`（`:` は書けない）。同じ key は 1 件 |
+| 案件の Roadmap の版を提案する | `POST /api/v1/projects/<id>/roadmap/proposals` | project.roadmap_propose | `{"base_version":<今の approved の版か null>,"change_reason":"…","outcomes":[{"id":"o1","title":"…","acceptance":["…"],"priority":1,"depends_on":[],"dropped":false}]}`。版は進まない（決めるのは人）。approved の id は消せず `dropped` で取り下げる。土台違いは 409 |
 | 永続の認可の追加 | `POST /api/v1/standing-rules` | standing_rule.create | `{"rule":"…","node_id":"…"}`（node_id 省略で全員向け）。人の決定で CoS にも許可 |
 | 永続の認可の削除 | `DELETE /api/v1/standing-rules/<id>` | standing_rule.delete | body なし。無ければ 404 |
 | 報告を既読化（旧入口） | `POST /api/v1/reports/read` | report.read | `{"ids":["…"]}`。対応する通知も既読。新しくは notification.read を使う |

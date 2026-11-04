@@ -225,6 +225,8 @@ pub(crate) const MIGRATION_0111: &str =
 /// ADR 2026-11-04-project-controller D12・A1: 案件の controller の状態・wake・判断の記録。
 pub(crate) const MIGRATION_0112: &str =
     include_str!("../../migrations/0112_project_controller.sql");
+/// ADR 2026-11-04-project-controller 付記 A5: 案件の Roadmap（版・Outcome の状態・root との対応の履歴）。
+pub(crate) const MIGRATION_0113: &str = include_str!("../../migrations/0113_project_roadmap.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration）。`migrate` は飛ばし、
@@ -234,7 +236,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 112;
+pub const SCHEMA_VERSION: u32 = 113;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -380,6 +382,7 @@ impl SqliteStore {
             110 => Ok(MIGRATION_0110),
             111 => Ok(MIGRATION_0111),
             112 => Ok(MIGRATION_0112),
+            113 => Ok(MIGRATION_0113),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

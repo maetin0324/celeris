@@ -130,6 +130,7 @@ pub(crate) mod project_wake_effect;
 mod projects;
 mod query;
 mod repos;
+mod roadmap;
 mod root_done;
 mod route_records;
 mod routing_evidence;
@@ -161,6 +162,7 @@ pub use project_wake::{
     WAKES_PER_EVALUATION, default_state as project_controller_default_state,
 };
 pub use project_wake_effect::{EffectAdmit, EffectDeferKind, EffectDeferral, EffectRetryState};
+pub use roadmap::{NewOutcomeEvent, RoadmapWriteError};
 pub use script_domains::{
     SCRIPT_RUNTIME_ACTOR, ScriptCompareLogRow, ScriptDomainEventRow, ScriptGenerationEventRow,
 };

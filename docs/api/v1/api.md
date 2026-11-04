@@ -1652,7 +1652,7 @@ ULID でない id・無い案件は 404 `project_not_found`。知らないクエ
 - `proposal`: その返事が提案した**次の途中目標**（`proposed` の最新。`review` がある行にだけ付く）。
 
 #### 3.48b `/projects/{id}/controller`（ADR 2026-11-04-project-controller A1）
-案件ごとの durable wake の状態。`project_controller_state`・`project_wakes`・`project_controller_decisions`（migration 0111）。
+案件ごとの durable wake の状態。`project_controller_state`・`project_wakes`・`project_controller_decisions`（migration 0112）。
 wake は events（root の done・failed・review 不合格、子の待ちの解消、回答・承認、外部待ちの解除）・停滞の検出・
 cron の `project_reconcile`・人の操作から daemon が作り、`UNIQUE(project_id, wake_key)` で再配送を 1 件に束ねる。
 mode は `off`（既定）・`dry_run`・`shadow`・`enabled`。`off` の案件は wake を積まない。

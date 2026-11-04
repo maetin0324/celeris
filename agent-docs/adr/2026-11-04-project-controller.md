@@ -499,7 +499,7 @@ project_controller_decisions(id PK, project_id, based_on_revision, human_epoch, 
 - Core の大きさの上限（試験 `cos_chat_core_is_byte_identical_across_runs_and_free_of_run_values`）を 8300 B から 9100 B に上げた。応じ方の規則（682 B）と subagent・turn の行の書き足しで 9047 B になったため。詳細は skill の consult.md に置き、Core は最小にした。
 
 ## 付記 A1（2026-11-04、task 01M6JW1EFJ55VST9P08ZTHGKVN）: 実装で決めた契約の差分
-A1 の実装（migration `0111_project_controller.sql`、`SCHEMA_VERSION` 111）で契約を次のとおり具体化・変更した。理由は
+A1 の実装（migration `0112_project_controller.sql`、`SCHEMA_VERSION` 112。main の A2 が 0111 を先に使ったので review 前の同期で 0112 に振り直した）で契約を次のとおり具体化・変更した。理由は
 `agent-docs/progress/2026-11-04-long-horizon/a1.md` に書いた。
 1. **型の置き場所**: `ProjectWakeKind`・`ControllerMode`・`ControllerPhase`・`EffectState`・`ProjectControllerView`・
    `ProjectDecideInput` は契約どおり `crates/task-core/src/project_wake.rs`。`ProjectEffect`・`ProjectDecision`・
@@ -584,7 +584,7 @@ A1 の実装（migration `0111_project_controller.sql`、`SCHEMA_VERSION` 111）
    `retry_base_secs × 2^(n-1)`（上限 `retry_max_secs`）の後の `effect_next_at` まで試さない。`Err` の回数 `effect_failures` が
    `max_retries` を超えたら、先に notice（`bad_news`、source key `project_controller:effect_failed:<判断 id>`）を記録してから
    判断を `failed`、案件の phase を `blocked` にし、`tracing::warn` を出す。Busy は `max_retries` に数えない（CoS が処理するまで
-   待つのは失敗でない）。migration 0111 の判断の行に 3 列を足し、trigger は `pending` → `pending`（再試行の欄の前進だけ）・
+   待つのは失敗でない）。migration 0112 の判断の行に 3 列を足し、trigger は `pending` → `pending`（再試行の欄の前進だけ）・
    `applied`・`failed`・`suppressed` を許す。試験は `project_wake_pending_{off,paused,cancelled,shadow}`・
    `project_wake_effect_{retry,exhausted}`・`project_wake_cos_input_*`・`project_wake_crash_cos_b{4,5}`。
    門と効果の実行は別の tx なので、門を通った直後の人の off は、その 1 回の効果を止めない（root の作成・CoS 入力はどちらも

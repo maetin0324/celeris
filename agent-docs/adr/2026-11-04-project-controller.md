@@ -516,9 +516,36 @@ A1 の実装（migration `0111_project_controller.sql`、`SCHEMA_VERSION` 111）
 5. **`next_wake_at`**: 期限が来た案件は wake の行なしで評価する（timer）。wake の種類は 9 種のまま。
 6. **mode の API**: `shadow` 以上へ上げるには daemon の `[project_controller] enabled = true` も要る（403
    `project_controller_disabled`）。`PUT` の応答は `ProjectControllerView`。
-7. **`human_epoch` を増やす経路**: D12 の経路は全部 A1 が書き込みと同じ transaction で増やす（A3 に残さない）。
-   WU epoch-tx-task が案件・task の操作を、WU epoch-tx-chat が発言・relays・forwards・受信箱の回答を受け持った。
-   数えるのは `Principal::Human` の要求と、人の発言を運ぶ relays・forwards だけ。経路の表は 9。
+7. **`human_epoch` を増やす経路**（2026-11-04 改訂、task 01M6JW1EFJ55VST9P08ZTHGKVN。旧版の「2 経路・別 transaction・残りは A3」を
+   置き換える）。D12 の経路は全部 A1 が実装した（A3 に残さない）。どの経路も書き込みの transaction の中で
+   `HumanEpoch::bump_tx`（`crates/task-api/src/human_epoch.rs`）→ `SqliteStore::project_controller_human_bump_tx` を呼び、
+   書き込みと epoch の片方だけが残ることはない。旧い別 transaction の `project_controller_human_bump` は消した。
+   数える principal は `HumanEpoch::of` が決める: `Principal::Human` は数え、`Operator`・`Mcp`・`Cos`・`Unauthenticated` は数えない。
+   例外として、人の発言を運ぶ `…/relays`（operator だけが通る）と `chat.relay_forward`（`author` が `human:` の発言だけ写せる）は
+   `HumanEpoch::Counted` を直接渡す。`/cos/operations` の監査経路（`*_op` の `audit = Some`）は `HumanEpoch::NotCounted`。
+   案件を持たない task・thread、状態の行が無い案件、`off` の案件では何も書かない（I13）。
+
+   | 経路（API） | 数える principal | 同じ transaction の書き込み口 | 試験 |
+   |---|---|---|---|
+   | `PATCH /projects/{id}` | Human | `SqliteStore::write_tx` の 1 tx（全欄。`project_set_{status,slug,workspace,auto_integrate}_tx`） | `project_wake_api_human_patch_bumps_human_epoch`・`…_each_route_bumps_once` |
+   | `POST /projects/{id}/{pause,resume,cancel,archive,unarchive}` | Human | `lifecycle::project_action_op` → `task_ops::lifecycle::apply_project_action` | `…_each_route_bumps_once`、task-dispatch `project_wake_human_races_pause` |
+   | 案件つきの `POST /tasks`・integrate task の起票 | Human | `create_task_with` の tx | `…_each_route_bumps_once`（`POST /tasks`）、`…_inbox_each_answer_bumps_once`（integrate task） |
+   | `POST /tasks/{id}/cancel` | Human | `task_ops::gate::cancel_with` | `…_each_route_bumps_once`、task-dispatch `project_wake_human_races_cancel` |
+   | `POST /tasks/{id}/retry` | Human | `retry_op`（`retry_task_claimed_tx` と routing_override を 1 tx） | `…_each_route_bumps_once` |
+   | `POST /tasks/{id}/reopen`・`rereview` | Human | `reopen_op` → `task_ops::comment::reopen_with`、`rereview_via` | `…_each_route_bumps_once`（reopen）、`…_inbox_each_answer_bumps_once`（rereview） |
+   | `POST /tasks/{id}/{approve,reject,accept,answer}` | Human | `task_ops::gate::{approve,reject,accept,answer}_via` | `project_wake_api_human_inbox_each_answer_bumps_once` |
+   | 案件 thread（kind `project`）への `POST /chat/threads/{t}/messages` | Human | `chat_message_post_as_also`（`crates/task-core/src/chat/human_post.rs`） | `project_wake_api_human_chat_message_bumps_once_and_a_resend_does_not` |
+   | `POST /chat/threads/{t}/relays` | Operator（人の指示を運ぶ） | `chat_relay_post_also` | `…_chat_relay_bumps_once_and_a_resend_does_not` |
+   | `/cos/operations` の `chat.relay_forward` | Cos（人の発言の写し） | operation の監査と同じ tx | `…_chat_forward_bumps_once_and_a_replay_does_not` |
+   | `POST /inbox/items/{id}/answer` と委ね先の route（決定・認可・計画/工程の gate・`PATCH /tasks`・未取り込み・browser の待ち・統合の依頼） | Human | 委ね先の route の tx（受信箱の handler は数えない）。行ごとの書き込み口は 9 の表 | `…_inbox_each_answer_bumps_once`（17 経路）、`…_inbox_browser_{decision,registered}_bumps_once` |
+
+   数えない（試験で固定）: operator・MCP・CoS が直接呼ぶ同じ route（`…_operator_is_not_counted`・`…_mcp_is_not_counted`・`…_cos_is_not_counted`・
+   `…_chat_cos_and_operator_messages_are_not_counted`・`…_inbox_operator_or_projectless_is_not_counted`・`…_inbox_cos_answer_and_resolve_are_not_counted`）、
+   検査で断られた要求・変化の無い要求・再送（`…_refused_or_unchanged_requests_do_not_bump`・`…_chat_refused_writes_do_not_bump`・
+   `…_inbox_refused_answers_do_not_bump`）、`off` と案件なし（`…_off_or_projectless_is_inert`・`…_chat_off_project_is_inert`）。
+   同じ transaction であることは、tempdir の DB に `RAISE(ABORT)` の trigger を足して片方を落とす試験で固定した
+   （`…_write_failure_keeps_the_epoch`・`…_bump_failure_rolls_the_write_back`・`…_chat_bump_failure_rolls_the_message_back`・
+   `…_inbox_bump_failure_rolls_the_answer_back`・`…_inbox_plan_withdraw_failure_keeps_the_epoch`）。数える・数えない経路の詳細は 9。
 8. **wake API の coalesce**: `POST …/controller/wake` は 30 秒の固定値で `coalesce_until` を置く（API は daemon の設定を持たない）。
 9. **`human_epoch` を数える経路と数えない経路**（WU epoch-tx-chat、2026-11-04）。数える経路はどれも、書き込みの transaction の
    中で `SqliteStore::project_controller_human_bump_tx` を呼ぶ（`crates/task-api/src/human_epoch.rs` の `HumanEpoch`）。案件を持たない

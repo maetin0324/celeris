@@ -1,8 +1,8 @@
-{"boundary":"AfterIngest","cos_inputs":0,"idempotency_keys":1,"llm_launches":0,"pending_effects":0,"roots":1,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_b2","unprocessed_wakes":0}
-{"boundary":"AfterEffect","cos_inputs":1,"idempotency_keys":0,"llm_launches":0,"pending_effects":0,"roots":0,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_cos_b5","unprocessed_wakes":0}
-{"boundary":"BeforeIngest","cos_inputs":0,"idempotency_keys":1,"llm_launches":0,"pending_effects":0,"roots":1,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_b1","unprocessed_wakes":0}
 {"boundary":"AfterCommit","cos_inputs":0,"idempotency_keys":1,"llm_launches":0,"pending_effects":0,"roots":1,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_b4","unprocessed_wakes":0}
-{"boundary":"AfterEffect","cos_inputs":0,"idempotency_keys":1,"llm_launches":0,"pending_effects":0,"roots":1,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_b5","unprocessed_wakes":0}
+{"boundary":"BeforeIngest","cos_inputs":0,"idempotency_keys":1,"llm_launches":0,"pending_effects":0,"roots":1,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_b1","unprocessed_wakes":0}
+{"boundary":"AfterEffect","cos_inputs":1,"idempotency_keys":0,"llm_launches":0,"pending_effects":0,"roots":0,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_cos_b5","unprocessed_wakes":0}
 {"boundary":"AfterApplied","cos_inputs":0,"idempotency_keys":1,"llm_launches":0,"pending_effects":0,"roots":1,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_b6","unprocessed_wakes":0}
-{"boundary":"AfterLease","cos_inputs":0,"idempotency_keys":1,"llm_launches":0,"pending_effects":0,"roots":1,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_b3","unprocessed_wakes":0}
 {"boundary":"AfterCommit","cos_inputs":1,"idempotency_keys":0,"llm_launches":0,"pending_effects":0,"roots":0,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_cos_b4","unprocessed_wakes":0}
+{"boundary":"AfterEffect","cos_inputs":0,"idempotency_keys":1,"llm_launches":0,"pending_effects":0,"roots":1,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_b5","unprocessed_wakes":0}
+{"boundary":"AfterIngest","cos_inputs":0,"idempotency_keys":1,"llm_launches":0,"pending_effects":0,"roots":1,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_b2","unprocessed_wakes":0}
+{"boundary":"AfterLease","cos_inputs":0,"idempotency_keys":1,"llm_launches":0,"pending_effects":0,"roots":1,"schema":"celeris.long-horizon-record/1","test":"project_wake_crash_b3","unprocessed_wakes":0}

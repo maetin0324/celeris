@@ -76,8 +76,8 @@ updated: 2026-11-04
 | `bash scripts/dev/test-long-horizon-bench.sh` | exit 0。replay 40 passed、grade 17 passed、bundle SKIP 0、CLI の grades の bytes 一致、`invalid_init` 0、作業 tree の検査・陽性対照・凍結の path・null の検査が通過 |
 | `cargo clippy --workspace -- -D warnings` | exit 0 |
 | `cargo fmt --all -- --check` | exit 0 |
-| `bash scripts/dev/test-affected.sh` | TEST_AFFECTED_RESULT |
-| `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` | DOC_RESULT |
+| `bash scripts/dev/test-affected.sh` | exit 0。nextest: 7639 tests run: 7639 passed (5 slow), 21 skipped、script bundle SKIP 0 件 |
+| `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` | exit 0（check-doc-links ok、check-adr-numbers ok (366 files)、progress-index --check ok） |
 
 ## fixture・raw records
 - fixture: `tests/fixtures/long-horizon/`。生成に使った script は run の成果物 `gen-fixtures.py`。fixture を変えたら `bench_version` を上げて MANIFEST を作り直す。

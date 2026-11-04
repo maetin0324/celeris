@@ -624,6 +624,15 @@ pub enum ScriptDomainError {
     GenerationNotLoaded(String),
     #[error("script generation `{generation}` does not declare domain `{domain}`")]
     DomainNotDeclared { domain: String, generation: String },
+    /// 網羅の対象でない領域（`lane_rules` 以外）。422 `script_exhaustive_domain_unsupported`。
+    #[error("exhaustive runs are only supported for `lane_rules` (got `{0}`)")]
+    ExhaustiveDomainUnsupported(String),
+    /// mode が `compare`・`canary` でない、または指定の generation が今の行と違う。409 `script_exhaustive_mode_conflict`。
+    #[error("exhaustive run conflicts with the domain mode: {0}")]
+    ExhaustiveModeConflict(String),
+    /// 同じ領域で別の網羅が走っている（run id）。409 `script_exhaustive_running`。
+    #[error("an exhaustive run is already running: {0}")]
+    ExhaustiveRunning(String),
     #[error(transparent)]
     Store(#[from] StoreError),
 }

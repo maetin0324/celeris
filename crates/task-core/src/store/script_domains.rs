@@ -400,8 +400,12 @@ impl SqliteStore {
                     domain,
                     current.mode,
                     &counters,
-                    // store 工程が本当の立場（script_exhaustive_standing）に替える。
-                    crate::script_exhaustive::ScriptExhaustiveStanding::Missing,
+                    super::script_exhaustive::standing_tx(
+                        &tx,
+                        domain,
+                        id,
+                        super::script_exhaustive::current_reference_sha256()?,
+                    )?,
                 );
                 if !detail.ready {
                     return Err(ScriptDomainError::CanaryNotReady {

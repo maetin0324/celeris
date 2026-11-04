@@ -135,6 +135,7 @@ mod routing_log;
 mod routing_overrides;
 mod script_behavior_changes;
 mod script_domains;
+mod script_exhaustive;
 mod script_guard;
 mod site_policies;
 pub use account_limits::AccountLimit;
@@ -156,6 +157,7 @@ mod terminal_sessions;
 pub use script_domains::{
     SCRIPT_RUNTIME_ACTOR, ScriptCompareLogRow, ScriptDomainEventRow, ScriptGenerationEventRow,
 };
+pub use script_exhaustive::{ScriptExhaustiveFinish, current_reference_sha256};
 pub use terminal_sessions::TerminalSessionEvent;
 mod task_store_impl;
 mod tasks;

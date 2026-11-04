@@ -55,6 +55,20 @@ pub trait ScriptGenerationControl: Send + Sync {
         actor: &str,
         reason: &str,
     ) -> Result<ScriptGeneration, ScriptGenerationError>;
+    /// `lane_rules` の全入力を流す網羅を始める（ADR 2026-11-04-lane-rules-exhaustive-evidence D7）。
+    /// 返すのは `running` の行で、実行は裏で続く。既定の実装は `Unavailable`（runtime が無い）。
+    /// 実際の runner は daemon の `ScriptGenerations` が上書きする。
+    fn exhaustive_start(
+        &self,
+        _domain: task_core::script_compare::ScriptDomain,
+        _bundle_sha256: &str,
+        _actor: &str,
+        _reason: &str,
+    ) -> Result<task_core::script_exhaustive::ScriptExhaustiveRun, ScriptGenerationError> {
+        Err(ScriptGenerationError::Unavailable(
+            "exhaustive runs need the script runtime".into(),
+        ))
+    }
 }
 
 /// [`ScriptGenerationControl`] の共有の型（`ApiState` が持つ）。

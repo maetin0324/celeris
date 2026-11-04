@@ -363,6 +363,20 @@ pub(crate) fn domain_problem(err: ScriptDomainError) -> ApiProblem {
             SCRIPT_GENERATION_INVALID,
             detail,
         ),
+        ScriptDomainError::ExhaustiveDomainUnsupported(_) => ApiProblem::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "script_exhaustive_domain_unsupported",
+            detail,
+        ),
+        ScriptDomainError::ExhaustiveModeConflict(_) => ApiProblem::new(
+            StatusCode::CONFLICT,
+            "script_exhaustive_mode_conflict",
+            detail,
+        ),
+        ScriptDomainError::ExhaustiveRunning(run_id) => {
+            ApiProblem::new(StatusCode::CONFLICT, "script_exhaustive_running", detail)
+                .with_extra("running_run_id", run_id)
+        }
         ScriptDomainError::Store(e) => store_problem(e),
     }
 }

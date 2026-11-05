@@ -80,7 +80,7 @@ v2 の集計（`p0c/grade-v2/summary.json`）。v1（`2026-11-04-long-horizon/a8
 - CLI 採点 `cargo run -q -p celeris-campaign --bin celeris-campaign -- long-horizon-grade --tier replay --raw agent-docs/progress/2026-11-05-phase3/p0c/replay-v2 --fixtures tests/fixtures/long-horizon --out "$TMPDIR/cli6"` → exit 0（40 trials）。`grades.jsonl` は `p0c/grade-v2/grades.jsonl` と bytes 一致。CLI の `summary.json` は `"tier": "replay"` の 1 行だけ多い（CLI が tier を書くため。`grade-v2` は試験の出力）。他の行は一致。
 - 腕ごとの値（今の grade）: new は oracle 10/10・controller_achieved 8/10・avoidable 0・oracle_pass_without_achieved 2。old.passive は 3/10・0/10・avoidable 10。old.proactive は 8/10・0/10・avoidable 1・無駄起票 1。ctl.null は 2/10・0/10・avoidable 0・到達率 0.18。achieved_oracle_mismatch は全腕 0。
 - 文書検査: `python3 scripts/dev/check-architecture-map.py` → exit 0（917 path）。`bash scripts/dev/check-doc-links.sh` → exit 0。`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0。`bash scripts/dev/check-adr-numbers.sh` → exit 0（376 file）。`sh scripts/dev/progress-index.sh --check` → exit 0。
-- Phase 完了の検査（この節の commit の後に実行）: 下の「closeout の Phase 完了の検査」に書く。
+- Phase 完了の検査（commit「p0c: closeout で bench script・CLI 採点・文書検査を再実行した結果を書く」の後に実行）: `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` → exit 0（3412 passed、9 skipped、bundle SKIP 0 件）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 ## 未解決
 - `new` の C06・C10 は oracle が pass で controller が achieved でない（`oracle_pass_without_achieved` 2 件）。原因は未確認（C06 は o2 の公開が却下される課題、C10 は同じ失敗を繰り返す課題で、どちらも controller が achieved 以外の phase で終わったと推定）。I12 の欠陥（achieved なのに fail）ではないが、controller が到達を認めない側の食い違いとして P0-B・P1-G に渡す。
@@ -89,6 +89,7 @@ v2 の集計（`p0c/grade-v2/summary.json`）。v1（`2026-11-04-long-horizon/a8
 - 実 LLM pilot の v2 raw（P0-F）は未実施。
 
 ## 次の gate
+- closeout の時点で P0-C の残りは無い。task の最終 review と配送（main への取り込み）が次の gate。
 - P0-F: 人の許可の後、`LONG_HORIZON_PILOT_LLM_APPROVED=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness config …` を ops-r2 の sandbox の中で流し、`achieved_oracle_mismatch` と `leak_detected` を報告する。
 - P0-E: root の command check に `python3 minichunk.py check <case> <id>` を使える（公開の自己検査。採点には使わない）。
 

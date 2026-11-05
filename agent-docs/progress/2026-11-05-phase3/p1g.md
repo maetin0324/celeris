@@ -83,6 +83,11 @@ controller が `blocked` で止まった案件を、止まった原因が解け�
 - release gate と同じ段: `CELERIS_SCRIPT_REQUIRE_BUNDLE=1 CELERIS_SCRIPT_BUNDLE_DIR=$TMPDIR/bundle bash scripts/selfdeploy/script-bundle-gate.sh test $PWD $TMPDIR/bundle` → exit 0、`86 tests run: 86 passed, 0 skipped`、`test ok (SKIP 0)`。
 - 本番の release 準備の再実行は配送側が行う（この run ではしていない）。
 
+## 配送の局所修復（repair-1、merge_base、2026-11-05）
+- 失敗: `[merge-base] 検査済みの merge candidate と取り込み対象が一致しません`。main が P0-B の commit（`p0b: attempt 3 の検査の結果を書く` まで）で進んでいた。
+- 対応: task branch を最新の `refs/heads/main` に rebase した（衝突なし）。main に無い差分は `delivery-repair: wait for dispatched runs in the script compare test helper` の 1 commit（2 file）だけ。コードの変更はしていない。
+- 提出時の HEAD で実行: `bash scripts/dev/test-affected.sh` → exit 0、`7683 tests run: 7683 passed, 21 skipped`、script bundle SKIP 0 件。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → exit 0。
+
 ## 未解決
 - 実 LLM の確認と 24〜72 時間の実稼働は未実施（人の gate。A9 の手順）。
 - `pc/no-progress` の止まりは問いの回答でだけ解ける。進捗の増加での自動の再開は入れていない。

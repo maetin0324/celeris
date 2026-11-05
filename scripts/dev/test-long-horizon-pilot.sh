@@ -13,6 +13,8 @@
 #
 # 本番の DB・daemon に触れない（一時 DB と $TMPDIR だけ）。前提（cargo-nextest・python3・node・control-ts の依存）が
 # 欠けたら SKIP せずに失敗する。使い方: bash scripts/dev/test-long-horizon-pilot.sh [--out <dir>]
+# `sh scripts/dev/test-long-horizon-pilot.sh`（dash）で呼ばれても bash で走らせる（BASH_SOURCE・local・pipefail を使う）。
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
 out=""

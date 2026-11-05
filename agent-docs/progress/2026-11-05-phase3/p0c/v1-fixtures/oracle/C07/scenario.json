@@ -1,0 +1,58 @@
+{
+ "case": "C07",
+ "name": "daemon_restart",
+ "bench_version": 1,
+ "outcomes": [
+  {
+   "id": "o1",
+   "title": "外部 job の投入（vellumic-o1）",
+   "acceptance": [
+    "vellumic-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [],
+   "effect": "external_job"
+  },
+  {
+   "id": "o2",
+   "title": "結果の取り込み（vellumic-o2）",
+   "acceptance": [
+    "vellumic-o2: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o1"
+   ]
+  }
+ ],
+ "horizon_secs": 259200,
+ "attempts": {
+  "o1": [
+   "real"
+  ],
+  "o2": [
+   "real"
+  ]
+ },
+ "content": {
+  "o1": "minichunk C07 o1 verified: write+fsync+restart read-back ok\n",
+  "o2": "minichunk C07 o2 verified: write+fsync+restart read-back ok\n"
+ },
+ "work_secs": {
+  "o1": 7200
+ },
+ "events": [
+  {
+   "op": "restart_at_boundary",
+   "at": 600,
+   "boundary": "AfterIngest"
+  },
+  {
+   "op": "restart",
+   "at": 1200
+  },
+  {
+   "op": "restart_at_boundary",
+   "at": 9000,
+   "boundary": "AfterCommit"
+  }
+ ]
+}

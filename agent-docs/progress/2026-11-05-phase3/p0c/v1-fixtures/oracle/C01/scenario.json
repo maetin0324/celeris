@@ -1,0 +1,53 @@
+{
+ "case": "C01",
+ "name": "stale_event",
+ "bench_version": 1,
+ "outcomes": [
+  {
+   "id": "o1",
+   "title": "書き込み経路（qorvex-o1）",
+   "acceptance": [
+    "qorvex-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  },
+  {
+   "id": "o2",
+   "title": "読み戻し経路（qorvex-o2）",
+   "acceptance": [
+    "qorvex-o2: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  }
+ ],
+ "horizon_secs": 172800,
+ "attempts": {
+  "o1": [
+   "real"
+  ],
+  "o2": [
+   "real"
+  ]
+ },
+ "content": {
+  "o1": "minichunk C01 o1 verified: write+fsync+restart read-back ok\n",
+  "o2": "minichunk C01 o2 verified: write+fsync+restart read-back ok\n"
+ },
+ "events": [
+  {
+   "op": "redeliver_done",
+   "at": 3600,
+   "outcome": "o1",
+   "times": 10
+  },
+  {
+   "op": "human_request_at_boundary",
+   "at": 3600,
+   "boundary": "AfterCommit",
+   "outcomes": [
+    "o1"
+   ],
+   "class": "stimulus"
+  }
+ ]
+}

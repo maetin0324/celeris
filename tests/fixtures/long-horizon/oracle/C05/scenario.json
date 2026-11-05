@@ -1,13 +1,13 @@
 {
  "case": "C05",
  "name": "plan_invalid",
- "bench_version": 1,
+ "bench_version": 2,
  "outcomes": [
   {
    "id": "o1",
    "title": "計画を直して実装（murrowit-o1）",
    "acceptance": [
-    "murrowit-o1: hidden acceptance passes on the integrated tree"
+    "murrowit-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C05 o1` を実行すると作れる"
    ],
    "depends_on": []
   }
@@ -19,7 +19,7 @@
   ]
  },
  "content": {
-  "o1": "minichunk C05 o1 verified: write+fsync+restart read-back ok\n"
+  "o1": "調査と実装の報告。\n- case: C05\n- outcome: o1\n- status: verified\n- evidence: 21b4b7fabea8943faa3d8eb5fc1c3901972cea6bb047f491a55ea5db7a0c5c25\n"
  },
  "invalid_request": true,
  "events": [

@@ -1,9 +1,9 @@
 {
- "canary": "LHB-CANARY-7f3a91c2e5d84b06",
- "trial_salt": "lhb-salt-2026-11-04-v1",
+ "canary": "LHB-CANARY-b2e94d17a06c35f8",
+ "trial_salt": "lhb-salt-2026-11-05-v2",
  "holdout_seeds": [
   4,
   5
  ],
- "note": "holdout seed は未使用（seed 1 だけ流す）。bench_version を上げたら作り直す"
+ "note": "bench_version 2 で作り直した。holdout seed は未使用（seed 1 だけ流す）。bench_version を上げたら作り直す"
 }

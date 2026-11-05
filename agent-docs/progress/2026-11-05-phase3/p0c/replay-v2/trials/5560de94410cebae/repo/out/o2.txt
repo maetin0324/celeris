@@ -1,0 +1,8 @@
+# 検証の記録
+
+evidence: B666AE30FDF43E18C0E482185D28A6253569A303086092EAC3B0AB8907EAC428
+status: Verified
+outcome: o2
+case: C03
+
+読み戻しは一致した。

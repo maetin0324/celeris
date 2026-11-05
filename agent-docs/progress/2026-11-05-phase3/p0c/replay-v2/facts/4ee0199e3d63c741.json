@@ -1,0 +1,120 @@
+{
+  "achieved_at": 12600,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "daemon",
+      "at": 300
+    },
+    {
+      "actor": "human",
+      "at": 7200
+    },
+    {
+      "actor": "daemon",
+      "at": 7200
+    },
+    {
+      "actor": "worker",
+      "at": 7200
+    },
+    {
+      "actor": "human",
+      "at": 9000
+    },
+    {
+      "actor": "reviewer",
+      "at": 12600
+    },
+    {
+      "actor": "cos",
+      "at": 12600
+    }
+  ],
+  "bench_version": 2,
+  "case": "C05",
+  "controller_achieved": true,
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 7200,
+      "kind": "outcomes_invalid"
+    },
+    {
+      "at": 7200,
+      "kind": "plan_invalid"
+    }
+  ],
+  "horizon_secs": 259200,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    },
+    {
+      "at": 7200,
+      "class": "required",
+      "kind": "request_change"
+    },
+    {
+      "at": 9000,
+      "class": "required",
+      "kind": "answer"
+    }
+  ],
+  "init_digest": "cf56c1205ca8a0dc7eeff23ed7274b7f52c164ae72ced1d0d76549017bfe1457",
+  "invocations": [
+    {
+      "at": 7200,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 12600,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 12600,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [
+    "outcomes_invalid:addd5b421916"
+  ],
+  "roots": [
+    {
+      "acceptance_sha256": "f42256bc3d7e3627cd7f27106a897e8ed9e8405f6d42ab9176585e9379386979",
+      "attempt": 1,
+      "created_at": 7200,
+      "created_by": "daemon",
+      "instructed": false,
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 12600
+}

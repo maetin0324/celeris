@@ -2,9 +2,8 @@
 """A9 の stub harness（LLM を呼ばない）。fake adapter の RunRequest を stdin で受ける。
 
 - Review の run: artifacts/review.json に全基準の合格を書く。
-- 実行の run: acceptance の文から Outcome を見つけ、作業 tree の out/<id>.txt を作り、git commit する。acceptance が公開の手順
-  （`python3 minichunk.py verify <case> <id>`）を書いていれば、作業 tree の直下でその手順を実行する（実 LLM と同じ
-  公開の指示に従う）。手順の無い Outcome だけ台本の答え（--answers）を書く。
+- 実行の run: acceptance の文から Outcome を見つけ、作業 tree の直下で公開の手順（`python3 minichunk.py verify <case> <id>`）を
+  実行し、git commit する（実 LLM と同じ公開の指示だけに従う。台本の答えも検査 script も読まない）。
 - CoS の chat run と planner はそのまま done を返す。起動ごとに 1 行を artifacts/stub-run.jsonl に書く。
 """
 import json
@@ -32,7 +31,6 @@ def commit_outcomes(cwd, outcomes):
 
 def main():
     req = json.load(sys.stdin)
-    answers = json.loads(pathlib.Path(arg("--answers")).read_text())
     effect_kinds = json.loads(arg("--effect-kinds")) if "--effect-kinds" in sys.argv else {}
     req_case = arg("--case") if "--case" in sys.argv else ""
     task = req["task"]
@@ -51,14 +49,9 @@ def main():
         text = json.dumps(task.get("acceptance") or [], ensure_ascii=False)
         steps = {o: c for c, o in re.findall(r"`python3 minichunk\.py verify (C\d+) (o\d+)`", text)}
         for outcome in sorted(set(re.findall(r"[a-z]+-(o\d+):", text))):
-            if outcome in steps:
-                subprocess.run([sys.executable, "minichunk.py", "verify", steps[outcome], outcome], cwd=cwd, check=True)
-            elif outcome in answers:
-                out = cwd / "out"
-                out.mkdir(parents=True, exist_ok=True)
-                (out / f"{outcome}.txt").write_text(answers[outcome])
-            else:
+            if outcome not in steps:
                 continue
+            subprocess.run([sys.executable, "minichunk.py", "verify", steps[outcome], outcome], cwd=cwd, check=True)
             wrote.append(outcome)
             kind_of_effect = effect_kinds.get(outcome)
             if kind_of_effect:

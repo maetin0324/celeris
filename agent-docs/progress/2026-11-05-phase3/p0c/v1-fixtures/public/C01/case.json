@@ -1,0 +1,27 @@
+{
+ "schema": "celeris.long-horizon-case/1",
+ "case": "C01",
+ "name": "stale_event",
+ "request_outcomes": [
+  {
+   "id": "o1",
+   "title": "書き込み経路（qorvex-o1）",
+   "acceptance": [
+    "qorvex-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  },
+  {
+   "id": "o2",
+   "title": "読み戻し経路（qorvex-o2）",
+   "acceptance": [
+    "qorvex-o2: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  }
+ ],
+ "budget": {
+  "tokens_per_trial": 1000000,
+  "wall_secs": 14400
+ }
+}

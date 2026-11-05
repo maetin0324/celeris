@@ -4,8 +4,9 @@
 # 1. control-ts の bundle を作り、task-dispatch の `long_horizon_bench_` 試行（10 課題 × old.passive・old.proactive・new・
 #    対照 ctl.null。仮想時刻・一時 DB。new は本物の bundle を本物の V8 で評価）を走らせ、40 件以上が通ることを確かめる。
 #    各試行は同じ seed を 2 回流して facts の bytes 一致を試験の中で確かめている。
-# 2. 別 process（celeris-campaign の `long_horizon_bench_`）で採点・集計し、D8 の gate（同一初期条件の digest・対照 ctl.null を
-#    含む）と陰性 fixture（述語ごと）、実 LLM pilot の tier の分離を確かめる。CLI `celeris-campaign long-horizon-grade --tier replay`
+# 2. 別 process（celeris-campaign の `long_horizon_bench_`・`long_horizon_public_contract_`）で採点・集計し、保護領域の検査 script で
+#    bench_version 2 の到達を決める。D8 の gate（同一初期条件の digest・対照 ctl.null を含む）、陰性 fixture（述語ごと）、複数の正解表現、
+#    独立した judge との一致、leakage の否定、v1 の raw の拒否と hash、実 LLM pilot の tier の分離を確かめる。CLI `celeris-campaign long-horizon-grade --tier replay`
 #    でも同じ raw を採点し、試験の集計と bytes 一致を確かめる。
 # 3. 作業 tree の検査（D4）と陽性対照、facts に腕の欄が無いこと、replay の token・quota・walltime が null、凍結の path（D10）が
 #    bench の source に無いこと、本番の DB・daemon を指していないことを確かめる。
@@ -76,7 +77,11 @@ run_suite() { # name min args...
 }
 run_suite replay 40 -p task-dispatch --lib -E 'test(/^dispatcher::tests::project_wake::long_horizon_bench::long_horizon_bench_/)'
 [ ! -s "$out/skip.log" ] || fail "bundle SKIP recorded: $(cat "$out/skip.log")"
-run_suite grade 17 -p celeris-campaign --test long_horizon_bench -E 'test(/^long_horizon_bench_/)'
+# commit 済みの v2 の raw は今の再生と同じ bytes（固定の raw で採点の試験が走るので、古くなっていないことをここで確かめる）。
+diff -r "$raw" "$root/agent-docs/progress/2026-11-05-phase3/p0c/replay-v2" >"$out/raw-diff.log" 2>&1 \
+    || fail "the committed v2 raw differs from this replay (see $out/raw-diff.log)"
+run_suite grade 24 -p celeris-campaign --test long_horizon_bench -E 'test(/^long_horizon_bench_/)'
+run_suite contract 9 -p celeris-campaign --test long_horizon_public_contract -E 'test(/^long_horizon_public_contract_/)'
 [ -s "$out/summary/summary.json" ] || fail "summary.json was not written"
 cargo run -q -p celeris-campaign --bin celeris-campaign -- long-horizon-grade --tier replay --raw "$raw" --fixtures "$fixtures" \
     --out "$out/cli" >"$out/cli.log" 2>&1 || fail "long-horizon-grade --tier replay failed (see $out/cli.log)"
@@ -102,17 +107,25 @@ for f in facts:
 for case, d in sorted(init.items()):
     if len(d) != 1 or None in d:
         errors.append(f"{case}: init_digest differs across arms {sorted(map(str, d))}")
-canary = json.loads((fx / "oracle/holdout.json").read_text())["canary"]
-hidden = set()
+holdout = json.loads((fx / "oracle/holdout.json").read_text())
+canary = holdout["canary"]
+script = (fx / "grader/check_outcome.py").read_bytes()
+marker = script.split(b'GRADER_MARKER = "')[1].split(b'"')[0].decode()
+hidden = {holdout["trial_salt"], marker, hashlib.sha256(script).hexdigest()}
 titles = set()
 for case in sorted(p.name for p in (fx / "oracle").iterdir() if p.is_dir()):
-    hidden |= set(json.loads((fx / "oracle" / case / "hidden/expected.json").read_text()).values())
+    if (fx / "oracle" / case / "hidden").exists():
+        errors.append(f"{case}: oracle/{case}/hidden remains (the v1 hash oracle)")
     for o in json.loads((fx / "oracle" / case / "scenario.json").read_text())["outcomes"]:
         titles.add(o["title"].split("（")[-1].rstrip("）").split("-")[0])
+    if json.loads((fx / "oracle" / case / "oracle.json").read_text())["bench_version"] != 2:
+        errors.append(f"{case}: bench_version is not 2")
 for f in facts:
     v = json.loads(f.read_text())
     if "arm" in v:
         errors.append(f"{f.name}: facts carry the arm")
+    if v.get("bench_version") != 2:
+        errors.append(f"{f.name}: bench_version {v.get('bench_version')}")
     if v.get("dataset") != "long_horizon_replay":
         errors.append(f"{f.name}: dataset {v.get('dataset')}")
     u = v.get("usage", {})
@@ -129,14 +142,14 @@ def leaks(path, needles):
                     hits.append(f"{p}: {n[:16]}")
     return hits
 
-# D4: 試行の作業 tree と public に canary・隠し受入の hash・oracle の file が無い。
+# D4: 試行の作業 tree と public に canary・salt・検査 script の印と hash・oracle の file が無い。
 needles = [canary] + sorted(hidden)
 for d in [raw / "trials", fx / "public"]:
     for h in leaks(d, needles):
         errors.append(f"leak: {h}")
 for t in (raw / "trials").iterdir():
     names = {p.name for p in t.rglob("*")}
-    for bad in ("oracle.json", "scenario.json", "expected.json", "holdout.json", ".git"):
+    for bad in ("oracle.json", "scenario.json", "check_outcome.py", "holdout.json", ".git"):
         if bad in names:
             errors.append(f"trial {t.name} contains {bad}")
 # 陽性対照: canary を public の写しに入れると検査が当たる（空振りでない）。
@@ -146,6 +159,9 @@ shutil.copytree(fx / "public/C01", ctl)
 (ctl / "repo-seed/notes.txt").write_text("copied " + canary + "\n")
 if not leaks(ctl, needles):
     errors.append("positive control: the canary planted in a public copy was not detected")
+(ctl / "repo-seed/notes.txt").write_bytes(script)
+if not leaks(ctl, needles):
+    errors.append("positive control: the grader script planted in a public copy was not detected")
 shutil.rmtree(ctl)
 # 方針が課題を名指ししない: 課題の固有語が control-ts/src と crates/task-*/src に無い。
 src = subprocess.run(["git", "ls-files", "control-ts/src", "crates/task-*/src"], cwd=root, capture_output=True, text=True, check=True).stdout.split()

@@ -1,0 +1,290 @@
+{
+  "achieved_at": 80400,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "cos",
+      "at": 0
+    },
+    {
+      "actor": "cos",
+      "at": 0
+    },
+    {
+      "actor": "worker",
+      "at": 300
+    },
+    {
+      "actor": "reviewer",
+      "at": 3900
+    },
+    {
+      "actor": "cos",
+      "at": 3900
+    },
+    {
+      "actor": "human",
+      "at": 25500
+    },
+    {
+      "actor": "cos",
+      "at": 25500
+    },
+    {
+      "actor": "cos",
+      "at": 25500
+    },
+    {
+      "actor": "worker",
+      "at": 25800
+    },
+    {
+      "actor": "reviewer",
+      "at": 29400
+    },
+    {
+      "actor": "cos",
+      "at": 29400
+    },
+    {
+      "actor": "human",
+      "at": 51000
+    },
+    {
+      "actor": "cos",
+      "at": 51000
+    },
+    {
+      "actor": "cos",
+      "at": 51000
+    },
+    {
+      "actor": "worker",
+      "at": 51300
+    },
+    {
+      "actor": "reviewer",
+      "at": 54900
+    },
+    {
+      "actor": "cos",
+      "at": 54900
+    },
+    {
+      "actor": "human",
+      "at": 76500
+    },
+    {
+      "actor": "cos",
+      "at": 76500
+    },
+    {
+      "actor": "cos",
+      "at": 76500
+    },
+    {
+      "actor": "worker",
+      "at": 76800
+    },
+    {
+      "actor": "reviewer",
+      "at": 80400
+    },
+    {
+      "actor": "cos",
+      "at": 80400
+    }
+  ],
+  "bench_version": 2,
+  "case": "C08",
+  "controller_achieved": false,
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 84000,
+      "kind": "unrelated_wakes"
+    }
+  ],
+  "horizon_secs": 259200,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    },
+    {
+      "at": 25500,
+      "class": "avoidable",
+      "kind": "nudge"
+    },
+    {
+      "at": 51000,
+      "class": "avoidable",
+      "kind": "nudge"
+    },
+    {
+      "at": 76500,
+      "class": "avoidable",
+      "kind": "nudge"
+    }
+  ],
+  "init_digest": "7e3166aa461e72c0c81af8537150635396e8f4b6153040d19fb88cdea0205802",
+  "invocations": [
+    {
+      "at": 0,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 300,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 25500,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 25800,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 29400,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 29400,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 51000,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 51300,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 54900,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 54900,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 76500,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 76800,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 80400,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 80400,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [],
+  "roots": [
+    {
+      "acceptance_sha256": "1d49f2660ffce4ee4373482166c29f18eae71a5d267427e9403329caf6c24bc1",
+      "attempt": 1,
+      "created_at": 0,
+      "created_by": "cos",
+      "instructed": true,
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "e8175d6c721a268675bda08454ddc50ae2973d03554f0cfe3e65eceb7b464c3b",
+      "attempt": 1,
+      "created_at": 25500,
+      "created_by": "cos",
+      "instructed": true,
+      "logical_id": "o2:1",
+      "outcome": "o2",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "672c17fc3fa627c13b18c50c733924cdbde16b405c9dbd82a3533f02448ea4c2",
+      "attempt": 1,
+      "created_at": 51000,
+      "created_by": "cos",
+      "instructed": true,
+      "logical_id": "o3:1",
+      "outcome": "o3",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "09509919a84065ff1c6f08e487f04842fb170714afd69d52048d1b11f44b8f89",
+      "attempt": 1,
+      "created_at": 76500,
+      "created_by": "cos",
+      "instructed": true,
+      "logical_id": "o4:1",
+      "outcome": "o4",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 80400
+}

@@ -1,0 +1,218 @@
+{
+  "achieved_at": 9600,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "human",
+      "at": 600
+    },
+    {
+      "actor": "human",
+      "at": 1200
+    },
+    {
+      "actor": "human",
+      "at": 1800
+    },
+    {
+      "actor": "cos",
+      "at": 1800
+    },
+    {
+      "actor": "cos",
+      "at": 1800
+    },
+    {
+      "actor": "worker",
+      "at": 1800
+    },
+    {
+      "actor": "reviewer",
+      "at": 5400
+    },
+    {
+      "actor": "cos",
+      "at": 5400
+    },
+    {
+      "actor": "daemon",
+      "at": 6000
+    },
+    {
+      "actor": "worker",
+      "at": 6000
+    },
+    {
+      "actor": "reviewer",
+      "at": 9600
+    },
+    {
+      "actor": "cos",
+      "at": 9600
+    },
+    {
+      "actor": "human",
+      "at": 14400
+    }
+  ],
+  "bench_version": 2,
+  "case": "C09",
+  "controller_achieved": true,
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [],
+  "horizon_secs": 172800,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    },
+    {
+      "at": 600,
+      "class": "stimulus",
+      "kind": "message"
+    },
+    {
+      "at": 1200,
+      "class": "stimulus",
+      "kind": "message"
+    },
+    {
+      "at": 1800,
+      "class": "stimulus",
+      "kind": "message"
+    },
+    {
+      "at": 14400,
+      "class": "stimulus",
+      "kind": "message"
+    }
+  ],
+  "init_digest": "bfac113494ce5b5eaae0d49536add959e81e6b5252a8d23001d07a61b9aee1ff",
+  "invocations": [
+    {
+      "at": 600,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 1200,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 1800,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 1800,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 1800,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 5400,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 5400,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 6000,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 9600,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 9600,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 14400,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [],
+  "roots": [
+    {
+      "acceptance_sha256": "ccf809b4ea5764a3f65825bc066def6257514b34c33c93e8123efcf15e5942f4",
+      "attempt": 1,
+      "created_at": 1800,
+      "created_by": "cos",
+      "instructed": true,
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "e6d60db9e2466a7a05795eea2422c688aeb79ba385c39670a7bdd162fd16ae7e",
+      "attempt": 1,
+      "created_at": 6000,
+      "created_by": "daemon",
+      "instructed": false,
+      "logical_id": "o2:1",
+      "outcome": "o2",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [
+    {
+      "at": 600,
+      "index": 1,
+      "tasks_created_by_cos": 0
+    },
+    {
+      "at": 1200,
+      "index": 2,
+      "tasks_created_by_cos": 0
+    },
+    {
+      "at": 1800,
+      "index": 3,
+      "tasks_created_by_cos": 1
+    },
+    {
+      "at": 14400,
+      "index": 4,
+      "tasks_created_by_cos": 0
+    }
+  ],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 9600
+}

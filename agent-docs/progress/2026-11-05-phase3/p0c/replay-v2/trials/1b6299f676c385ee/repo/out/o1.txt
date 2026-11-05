@@ -1,0 +1,4 @@
+  case:   `C10`
+  outcome:   `o1`
+  status:   `verified`
+  evidence:   `7bb0ade58d84ba115952581e527927726f19d4a0ffed2cf923f262a1d3477d3b`

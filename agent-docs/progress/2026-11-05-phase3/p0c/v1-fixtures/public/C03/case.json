@@ -1,0 +1,29 @@
+{
+ "schema": "celeris.long-horizon-case/1",
+ "case": "C03",
+ "name": "slow_worker",
+ "request_outcomes": [
+  {
+   "id": "o1",
+   "title": "長い外部 job（brindol-o1）",
+   "acceptance": [
+    "brindol-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  },
+  {
+   "id": "o2",
+   "title": "job の結果の集計（brindol-o2）",
+   "acceptance": [
+    "brindol-o2: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o1"
+   ]
+  }
+ ],
+ "budget": {
+  "tokens_per_trial": 1000000,
+  "wall_secs": 14400
+ }
+}

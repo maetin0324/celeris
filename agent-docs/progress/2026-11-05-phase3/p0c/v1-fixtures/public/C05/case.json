@@ -1,0 +1,19 @@
+{
+ "schema": "celeris.long-horizon-case/1",
+ "case": "C05",
+ "name": "plan_invalid",
+ "request_outcomes": [
+  {
+   "id": "o1",
+   "title": "計画を直して実装（murrowit-o1）",
+   "acceptance": [
+    "murrowit-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  }
+ ],
+ "budget": {
+  "tokens_per_trial": 1000000,
+  "wall_secs": 14400
+ }
+}

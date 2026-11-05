@@ -7,7 +7,7 @@
    "id": "o1",
    "title": "2 つの子に分ける実装（zaphen-o1）",
    "acceptance": [
-    "zaphen-o1: hidden acceptance passes on the integrated tree"
+    "zaphen-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C04 o1` を実行すると作れる"
    ],
    "depends_on": []
   },
@@ -15,7 +15,7 @@
    "id": "o2",
    "title": "結果の報告（zaphen-o2）",
    "acceptance": [
-    "zaphen-o2: hidden acceptance passes on the integrated tree"
+    "zaphen-o2: 取り込まれた tree の out/o2.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C04 o2` を実行すると作れる"
    ],
    "depends_on": [
     "o1"
@@ -25,5 +25,6 @@
  "budget": {
   "tokens_per_trial": 1000000,
   "wall_secs": 14400
- }
+ },
+ "bench_version": 2
 }

@@ -1,0 +1,36 @@
+{
+ "case": "C05",
+ "name": "plan_invalid",
+ "bench_version": 1,
+ "outcomes": [
+  {
+   "id": "o1",
+   "title": "計画を直して実装（murrowit-o1）",
+   "acceptance": [
+    "murrowit-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  }
+ ],
+ "horizon_secs": 259200,
+ "attempts": {
+  "o1": [
+   "question_then_real"
+  ]
+ },
+ "content": {
+  "o1": "minichunk C05 o1 verified: write+fsync+restart read-back ok\n"
+ },
+ "invalid_request": true,
+ "events": [
+  {
+   "op": "human_request",
+   "at": 7200,
+   "outcomes": [
+    "o1"
+   ],
+   "class": "required",
+   "fault": "outcomes_invalid"
+  }
+ ]
+}

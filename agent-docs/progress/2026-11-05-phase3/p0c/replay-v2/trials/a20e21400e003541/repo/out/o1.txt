@@ -1,0 +1,7 @@
+{
+  "evidence": "98c46ae0bbb140afd54605885a7f7d0d5856f2af3adf4ee8ec75beed60d8ac36",
+  "status": "verified",
+  "note": "別 process で読み戻した",
+  "outcome": "o1",
+  "case": "C08"
+}

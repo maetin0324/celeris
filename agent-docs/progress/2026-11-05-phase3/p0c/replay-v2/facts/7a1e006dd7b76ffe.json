@@ -1,0 +1,105 @@
+{
+  "achieved_at": 4200,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "daemon",
+      "at": 300
+    },
+    {
+      "actor": "worker",
+      "at": 300
+    },
+    {
+      "actor": "reviewer",
+      "at": 3900
+    },
+    {
+      "actor": "cos",
+      "at": 3900
+    },
+    {
+      "actor": "human",
+      "at": 4200
+    }
+  ],
+  "bench_version": 2,
+  "case": "C01",
+  "controller_achieved": true,
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 4200,
+      "kind": "redelivery"
+    },
+    {
+      "at": 4200,
+      "kind": "human_change_before_apply"
+    }
+  ],
+  "horizon_secs": 172800,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    },
+    {
+      "at": 4200,
+      "class": "stimulus",
+      "kind": "request_change"
+    }
+  ],
+  "init_digest": "32801770c98bed4176700fab10fd51fcd1ad0ff211e83a4444b428e32a2a4925",
+  "invocations": [
+    {
+      "at": 300,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [],
+  "roots": [
+    {
+      "acceptance_sha256": "f303427c4c61f862a9c9eed266db3bebea1eab89e968a2e1b7adf28e07a5b748",
+      "attempt": 1,
+      "created_at": 300,
+      "created_by": "daemon",
+      "instructed": false,
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 4200
+}

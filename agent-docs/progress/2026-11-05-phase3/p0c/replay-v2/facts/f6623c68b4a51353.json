@@ -1,0 +1,155 @@
+{
+  "achieved_at": 12000,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "daemon",
+      "at": 300
+    },
+    {
+      "actor": "worker",
+      "at": 300
+    },
+    {
+      "actor": "reviewer",
+      "at": 7500
+    },
+    {
+      "actor": "cos",
+      "at": 7500
+    },
+    {
+      "actor": "cos",
+      "at": 8100
+    },
+    {
+      "actor": "daemon",
+      "at": 8400
+    },
+    {
+      "actor": "worker",
+      "at": 8400
+    },
+    {
+      "actor": "reviewer",
+      "at": 12000
+    },
+    {
+      "actor": "cos",
+      "at": 12000
+    }
+  ],
+  "bench_version": 2,
+  "case": "C02",
+  "controller_achieved": true,
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 3900,
+      "kind": "partial_yield"
+    },
+    {
+      "at": 7500,
+      "kind": "false_completion"
+    }
+  ],
+  "horizon_secs": 172800,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    }
+  ],
+  "init_digest": "d263a1f9cc713c23b115abdb46f8ce633114b99c3c81ed08b05a23d423b7fb2b",
+  "invocations": [
+    {
+      "at": 300,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 7500,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 7500,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 8100,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 8400,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 12000,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 12000,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [],
+  "roots": [
+    {
+      "acceptance_sha256": "cd9801386391720bcc1e50b8cbc07a92297d146390ad5a5e6d39d1bfeb9abebf",
+      "attempt": 1,
+      "created_at": 300,
+      "created_by": "daemon",
+      "instructed": false,
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "failed"
+      ]
+    },
+    {
+      "acceptance_sha256": "cd9801386391720bcc1e50b8cbc07a92297d146390ad5a5e6d39d1bfeb9abebf",
+      "attempt": 2,
+      "created_at": 8400,
+      "created_by": "daemon",
+      "instructed": false,
+      "logical_id": "o1:2",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 12000
+}

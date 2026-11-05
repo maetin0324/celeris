@@ -1,0 +1,5 @@
+調査と実装の報告。
+- case: C05
+- outcome: o1
+- status: verified
+- evidence: 21b4b7fabea8943faa3d8eb5fc1c3901972cea6bb047f491a55ea5db7a0c5c25

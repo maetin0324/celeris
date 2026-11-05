@@ -2,8 +2,8 @@
  "schema": "celeris.long-horizon-oracle/1",
  "case": "C02",
  "name": "partial_result",
- "bench_version": 1,
- "canary": "LHB-CANARY-7f3a91c2e5d84b06",
+ "bench_version": 2,
+ "canary": "LHB-CANARY-b2e94d17a06c35f8",
  "required_outcomes": [
   "o1"
  ],

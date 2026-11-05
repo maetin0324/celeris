@@ -1,0 +1,227 @@
+{
+  "achieved_at": 16500,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "daemon",
+      "at": 300
+    },
+    {
+      "actor": "worker",
+      "at": 300
+    },
+    {
+      "actor": "reviewer",
+      "at": 3900
+    },
+    {
+      "actor": "cos",
+      "at": 3900
+    },
+    {
+      "actor": "daemon",
+      "at": 4500
+    },
+    {
+      "actor": "worker",
+      "at": 4500
+    },
+    {
+      "actor": "reviewer",
+      "at": 8100
+    },
+    {
+      "actor": "cos",
+      "at": 8100
+    },
+    {
+      "actor": "daemon",
+      "at": 8700
+    },
+    {
+      "actor": "worker",
+      "at": 8700
+    },
+    {
+      "actor": "reviewer",
+      "at": 12300
+    },
+    {
+      "actor": "cos",
+      "at": 12300
+    },
+    {
+      "actor": "daemon",
+      "at": 12900
+    },
+    {
+      "actor": "worker",
+      "at": 12900
+    },
+    {
+      "actor": "reviewer",
+      "at": 16500
+    },
+    {
+      "actor": "cos",
+      "at": 16500
+    }
+  ],
+  "bench_version": 2,
+  "case": "C08",
+  "controller_achieved": true,
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 20100,
+      "kind": "unrelated_wakes"
+    }
+  ],
+  "horizon_secs": 259200,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    }
+  ],
+  "init_digest": "7e3166aa461e72c0c81af8537150635396e8f4b6153040d19fb88cdea0205802",
+  "invocations": [
+    {
+      "at": 300,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 4500,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 8100,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 8100,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 8700,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 12300,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 12300,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 12900,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 16500,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 16500,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [],
+  "roots": [
+    {
+      "acceptance_sha256": "1d49f2660ffce4ee4373482166c29f18eae71a5d267427e9403329caf6c24bc1",
+      "attempt": 1,
+      "created_at": 300,
+      "created_by": "daemon",
+      "instructed": false,
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "e8175d6c721a268675bda08454ddc50ae2973d03554f0cfe3e65eceb7b464c3b",
+      "attempt": 1,
+      "created_at": 4500,
+      "created_by": "daemon",
+      "instructed": false,
+      "logical_id": "o2:1",
+      "outcome": "o2",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "672c17fc3fa627c13b18c50c733924cdbde16b405c9dbd82a3533f02448ea4c2",
+      "attempt": 1,
+      "created_at": 8700,
+      "created_by": "daemon",
+      "instructed": false,
+      "logical_id": "o3:1",
+      "outcome": "o3",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "09509919a84065ff1c6f08e487f04842fb170714afd69d52048d1b11f44b8f89",
+      "attempt": 1,
+      "created_at": 12900,
+      "created_by": "daemon",
+      "instructed": false,
+      "logical_id": "o4:1",
+      "outcome": "o4",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 16500
+}

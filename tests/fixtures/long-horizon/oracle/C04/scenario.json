@@ -1,13 +1,13 @@
 {
  "case": "C04",
  "name": "child_failed",
- "bench_version": 1,
+ "bench_version": 2,
  "outcomes": [
   {
    "id": "o1",
    "title": "2 つの子に分ける実装（zaphen-o1）",
    "acceptance": [
-    "zaphen-o1: hidden acceptance passes on the integrated tree"
+    "zaphen-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C04 o1` を実行すると作れる"
    ],
    "depends_on": []
   },
@@ -15,7 +15,7 @@
    "id": "o2",
    "title": "結果の報告（zaphen-o2）",
    "acceptance": [
-    "zaphen-o2: hidden acceptance passes on the integrated tree"
+    "zaphen-o2: 取り込まれた tree の out/o2.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C04 o2` を実行すると作れる"
    ],
    "depends_on": [
     "o1"
@@ -33,7 +33,7 @@
   ]
  },
  "content": {
-  "o1": "minichunk C04 o1 verified: write+fsync+restart read-back ok\n",
-  "o2": "minichunk C04 o2 verified: write+fsync+restart read-back ok\n"
+  "o1": "case = C04\noutcome = o1\nstatus = verified\nevidence = 7f676eceaf1f938c8cf3141e27c57ab0bf0e5cac2d26b87e686bc959eb420d3c\n",
+  "o2": "case = C04\noutcome = o2\nstatus = verified\nevidence = 43a1128b2848dcd497e6393655b426ac6bfe61432124f5022cfa6aa85a6c1f19\n"
  }
 }

@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import signal
 import socket
@@ -85,15 +86,8 @@ class Trial:
         (self.home / "operator.token").write_text(OPERATOR_TOKEN + "\n")
         harness = ""
         if a.harness == "stub":
-            answers = self.home / "stub-answers.json"
-            # 公開の acceptance が成果の作り方（`python3 minichunk.py verify …`）を書く Outcome は、stub も
-            # その指示に従って作る（stub_harness.py）。台本の content は、公開の指示の無い Outcome にだけ渡す。
-            oracle = json.loads((self.fixtures / "oracle" / a.case / "scenario.json").read_text())
-            public_cmd = {o["id"] for o in self.outcomes
-                          if any("python3 minichunk.py verify" in x for x in o["acceptance"])}
-            answers.write_text(json.dumps({k: v for k, v in oracle["content"].items() if k not in public_cmd}))
             cmd = ["python3", "-I", str(pathlib.Path(__file__).with_name("stub_harness.py")),
-                   "--answers", str(answers), "--case", a.case]
+                   "--case", a.case]
             if self.effect_kinds:
                 cmd += ["--effects-dir", str(self.effect_dir), "--effect-kinds", json.dumps(self.effect_kinds)]
                 if a.stub_early_publish:
@@ -483,7 +477,8 @@ max_tokens_per_day = {a.max_tokens_per_day}
         rules = []
         for d in decisions:
             try:
-                rule = json.loads(d["proposal_json"]).get("explanation", {}).get("rule_id")
+                rec = json.loads(d["proposal_json"])
+                rule = (rec.get("explanation") or (rec.get("proposal") or {}).get("explanation") or {}).get("rule_id")
             except ValueError:
                 rule = None
             rules.append(rule or d["validation"])
@@ -491,12 +486,16 @@ max_tokens_per_day = {a.max_tokens_per_day}
                 achieved_at = secs(d["created_at"])
         running = conn.execute("SELECT COUNT(*) FROM tasks WHERE project_id = ? AND status = 'running'",
                                (self.pid,)).fetchone()[0]
+        # controller の主張は案件の phase だけから読む（I12。oracle の合否と試行ごとに並べる）。
+        phase = conn.execute("SELECT phase FROM project_controller_state WHERE project_id = ?", (self.pid,)).fetchone()
+        controller_achieved = phase is not None and phase[0] == "achieved"
         conn.close()
         trial = hashlib.sha256(f"{a.salt}|{a.case}|{a.arm}|{a.seed}".encode()).hexdigest()[:16]
         wall = int(time.time() - self.t0)
         usage = {"tokens": tokens if tokens_known else None, "quota": None, "wall_secs": wall,
                  "missing": "tier=stub" if a.harness == "stub" else None}
         effects = self.read_effects()
+        leak_hits = self.leak_scan()
         facts = {
             "schema": "celeris.long-horizon-facts/1", "bench_version": json.loads(
                 (self.fixtures / "oracle" / a.case / "oracle.json").read_text())["bench_version"],
@@ -508,7 +507,9 @@ max_tokens_per_day = {a.max_tokens_per_day}
             "invocations": invocations,
             "actors": [{"actor": "human", "at": 0}] + [{"actor": i["role"], "at": i["at"]} for i in invocations],
             "statements": [], "questions": questions, "cos_launch_rejected": 0, "running_untracked": running,
-            "achieved_at": achieved_at, "events_append_only": True, "usage": usage,
+            "leak_hits": leak_hits,
+            "achieved_at": achieved_at, "controller_achieved": controller_achieved,
+            "events_append_only": True, "usage": usage,
             "virtual_secs_to_reach": achieved_at,
         }
         for sub in ("facts", "arm-map", "trials"):
@@ -524,6 +525,27 @@ max_tokens_per_day = {a.max_tokens_per_day}
         (self.out / "ops").mkdir(exist_ok=True)
         (self.out / "ops" / f"{trial}.json").write_text(json.dumps(rec, ensure_ascii=False, indent=1) + "\n")
         print(f"pilot: trial {trial} wrote {self.out}", flush=True)
+
+    def leak_scan(self):
+        """試行の state（作業 tree・run の記録・transcript）に、検査 script の印と holdout の値が現れないかを見る（D4 の事後の検出）。
+
+        採点器（celeris-campaign）が facts の leak_hits を見て、当たった試行を leak_detected で分母から外す。"""
+        holdout = json.loads((self.fixtures / "oracle" / "holdout.json").read_text())
+        script = (self.fixtures / "grader" / "check_outcome.py").read_bytes()
+        marker = re.search(rb'GRADER_MARKER = "([^"]+)"', script).group(1)
+        needles = [holdout["canary"].encode(), holdout["trial_salt"].encode(), marker,
+                   hashlib.sha256(script).hexdigest().encode()]
+        hits = []
+        for p in sorted(self.home.rglob("*")):
+            if p.is_symlink() or not p.is_file() or ".git" in p.parts:
+                continue
+            try:
+                data = p.read_bytes()
+            except OSError as e:
+                die(f"leak scan cannot read {p}: {e}")
+            if any(n in data for n in needles):
+                hits.append(str(p.relative_to(self.home)))
+        return hits
 
     def root_rows_full(self, conn):
         return conn.execute("SELECT id, status, json FROM tasks WHERE project_id = ? AND "

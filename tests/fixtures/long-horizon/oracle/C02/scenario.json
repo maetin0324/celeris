@@ -1,13 +1,13 @@
 {
  "case": "C02",
  "name": "partial_result",
- "bench_version": 1,
+ "bench_version": 2,
  "outcomes": [
   {
    "id": "o1",
    "title": "fsync 後の読み戻し（talmeric-o1）",
    "acceptance": [
-    "talmeric-o1: hidden acceptance passes on the integrated tree"
+    "talmeric-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C02 o1` を実行すると作れる"
    ],
    "depends_on": []
   }
@@ -20,6 +20,6 @@
   ]
  },
  "content": {
-  "o1": "minichunk C02 o1 verified: write+fsync+restart read-back ok\n"
+  "o1": "{\"case\": \"C02\", \"outcome\": \"o1\", \"status\": \"verified\", \"evidence\": \"7a0f3aca2e167010ce1910f5f476da99e51146055e16285b0c8d07674f3e7d9b\"}\n"
  }
 }

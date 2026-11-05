@@ -1,0 +1,47 @@
+# 事実の grep（main = git merge-base HEAD main で取得）
+
+$ grep -n 'WaitPhase::Achieved => ControllerPhase::Achieved' crates/task-dispatch/src/dispatcher/project_decider_ts.rs
+636:                WaitPhase::Achieved => ControllerPhase::Achieved,
+
+$ grep -n -A3 'ProjectAction::MarkMilestone { .. } =>' crates/task-dispatch/src/dispatcher/project_decider_ts.rs
+640:        ProjectAction::MarkMilestone { .. } => {
+641-            // 記録だけ（A5 の前）。続きはすぐ評価し直す。
+642-            d.next_wake_after_secs = Some(1);
+643-        }
+
+$ grep -n 'let gap = &proposal.gap;\|achieved_with_open_outcomes' crates/task-core/src/project_proposal.rs
+577:    let gap = &proposal.gap;
+631:                    "achieved_with_open_outcomes",
+
+$ grep -rn 'record_status_tx' crates --include=*.rs
+crates/task-api/src/handlers/roadmap.rs:11://!   `mark_milestone` の適用は `task_ops::roadmap::record_status_tx` を直接使う）。`reached` は evidence の
+crates/task-api/src/handlers/roadmap.rs:263:                task_ops::roadmap::record_status_tx(tx, &project, &oid, &checked, &by, now())
+crates/task-ops/src/roadmap.rs:229:pub fn record_status_tx(
+
+$ grep -n 'fn outcome_reached' -A7 crates/campaign/src/long_horizon.rs
+45:pub fn outcome_reached(repo: &Path, hidden: &BTreeMap<String, String>, id: &str) -> bool {
+46-    let Some(want) = hidden.get(id) else {
+47-        return false;
+48-    };
+49-    std::fs::read(repo.join("out").join(format!("{id}.txt")))
+50-        .map(|b| hex(&Sha256::digest(&b)) == *want)
+51-        .unwrap_or(false)
+52-}
+
+$ grep -n '"pass": True' scripts/dev/long-horizon-pilot/stub_harness.py
+48:        verdicts = [{"criterion": i, "pass": True, "reason": "stub"} for i in range(max(1, len(criteria)))]
+
+$ grep -n 'ANSWERED_RECHECK_SECS: u64\|humanWaitSecs:' crates/task-dispatch/src/dispatcher/project_decider_ts.rs control-ts/src/domains/project_controller.ts
+control-ts/src/domains/project_controller.ts:151:  humanWaitSecs: 6 * 3600,
+crates/task-dispatch/src/dispatcher/project_decider_ts.rs:50:const ANSWERED_RECHECK_SECS: u64 = 3600;
+
+$ grep -n 'pub const SCHEMA_VERSION' crates/task-core/src/store/migrations.rs
+241:pub const SCHEMA_VERSION: u32 = 114;
+
+$ grep -rn 'bench_version' tests/fixtures/long-horizon/oracle/C06/oracle.json tests/fixtures/long-horizon/oracle/C08/oracle.json
+tests/fixtures/long-horizon/oracle/C08/oracle.json:5: "bench_version": 1,
+tests/fixtures/long-horizon/oracle/C06/oracle.json:5: "bench_version": 1,
+
+$ grep -n 'Event::ReviewerPassed\|IntegrationReopened' crates/task-ops/src/project_snapshot.rs
+129:            Event::ReviewerPassed { .. } | Event::ReviewerPassReused { .. } => {
+135:            Event::IntegrationReopened { .. } => merged = false,

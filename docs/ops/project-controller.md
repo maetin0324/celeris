@@ -1,5 +1,5 @@
 ---
-tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY, 01M6JW1EG41D198Y5CP65MQJM4]
+tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY, 01M6JW1EG41D198Y5CP65MQJM4, 01M6N7XY9E70AH4476VQTSFVJY]
 ---
 # Project Controller の運用手順（人と operator）
 
@@ -92,8 +92,10 @@ controller は event（root の終了・失敗・人の操作など）で起き�
   CoS に戻す）」で切り替える（理由が必須。上げるのは人の token だけ）。`dry_run` は API だけ。
 - `POST /projects` で作った直後の案件は `proposed` で、これを `active` へ移す API は無い。人が controller を `enabled` に上げると、同じ
   transaction で案件を `active` にする（`proposed` のままだと判定と検証が起票を断り続ける）。
-- 作業場所が git でない案件（取り込み `delivery_skipped` の `not_git`）と、取り込む commit が無い root（`no_commits`）は取り込み済みと
-  同じに扱う。取り込みが閉じたとき（merge・該当なし・この 2 つの見送り）にも controller を起こす。
+- repo を持つ案件の root は、取り込み（`IntegrationMerged`）が記録されたときだけ取り込み済みに数える。`delivery_skipped` の
+  `not_git`・`no_commits` と `IntegrationNotApplicable` は取り込み済みに数えない（`not_git` は受信箱に理由付きで出る）。controller を
+  起こすのも `IntegrationMerged` のときだけ。repo を持たない案件の root は done で取り込み済みに数える
+  （[A9 pilot の不具合の付記](../../agent-docs/adr/2026-11-05-a9-llm-pilot-findings.md) D1）。
 - 実 LLM の pilot は `scripts/dev/long-horizon-pilot-llm.sh` を人が sandbox の外から実行する。人の承認の印
   `LONG_HORIZON_PILOT_LLM_APPROVED=1` と、人が書いた LLM の設定（`--llm-config <toml>`。`[llm_sources]`・`[harnesses]`・
   `[route_defaults]`・`[harness_selection]`・`[accounts]`）が要る。Celeris の worker の run の中では起動しない。一時 home・一時 DB・

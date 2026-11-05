@@ -1,0 +1,14 @@
+# cargo nextest run -p task-ops -p task-dispatch -p celeris-campaign -E 'test(/root_row_/) | test(/review_check_wins/) | test(/long_horizon_public_contract|public_contract/) | test(/^roadmap::/)' --no-fail-fast
+    Starting 10 tests across 118 binaries (2934 tests skipped)
+     Summary [   0.322s] 10 tests run: 10 passed, 2934 skipped
+exit=0
+
+# cargo nextest run -p celeris --test project_controller_e2e -E 'test(/core_s5/)'
+    Starting 2 tests across 1 binary (11 tests skipped)
+     Summary [   0.382s] 2 tests run: 2 passed, 11 skipped
+exit=0
+
+# cargo nextest run -p task-api --test lifecycle -E 'test(/milestone_lifecycle_endpoints_are_gone|milestones_are_gone/)'
+    Starting 2 tests across 1 binary (5 tests skipped)
+     Summary [   0.273s] 2 tests run: 2 passed, 5 skipped
+exit=0

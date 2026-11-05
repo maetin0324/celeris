@@ -7,7 +7,7 @@ updated: 2026-11-05
 ---
 # P0-E reviewer・pilot 受け入れの検証強化
 
-完了日: 2026-11-05。親は 01M6N7WD1WXXW0A5FV7RVZ67B7。基準は `git merge-base HEAD main`（main は起票時から進んでいない。最後の commit は `p0a: 差し戻しに対応する…`）。設計は ADR `agent-docs/adr/2026-11-05-phase3-p0e.md`。担うのは不変条件 I7〜I9、ケース K3・K21・K22。
+完了日: 2026-11-05。親は 01M6N7WD1WXXW0A5FV7RVZ67B7。基準は `git merge-base HEAD main`。作業中に main が 2 commit 進んだ（`phase 1: 統括 CoS の比較集計器と読取の正確さの replay を追加する`、`phase 1: release target の一時的な削除失敗を再試行する`）ので merge で取り込んだ（重なる file は無かった）。設計は ADR `agent-docs/adr/2026-11-05-phase3-p0e.md`。担うのは不変条件 I7〜I9、ケース K3・K21・K22。
 
 ## 結論
 - 依頼文の Outcome block に任意の `checks`（`{cmd, expect_exit}`）を足した。Rust が `launch_root` の効果を作るとき、対象 Outcome の `checks` を root の acceptance に `Check::Command` として足す。TS は command を作らず、snapshot の JSON にも出さない（TS の bundle・schema は不変）。
@@ -26,7 +26,9 @@ updated: 2026-11-05
 
 その他の試験: `outcome_block_checks_are_parsed_and_hidden_from_the_snapshot_json`・`outcome_block_rejects_bad_checks`（task-core）、`launch_root_spec_adds_the_checks_of_the_named_outcomes_only`（task-ops）、`pilot_review_check_outcome_without_checks_stays_reviewer_only`（check の無い Outcome は reviewer だけのまま）。
 
-## 証拠（提出時の HEAD で実行）
+## 証拠
+test-affected・clippy・fmt・`test -f`・`progress-index --check` は、main を取り込んだ後の HEAD でもう一度実行し、同じ結果だった（nextest 7625 passed、web 709 passed、SKIP 0 件）。`test-long-horizon-pilot.sh`・`test-stub-reviewer.sh`・`test-git-seed.sh`・15 件の nextest は取り込みの前の HEAD で実行した（取り込んだ 2 commit はこれらの file と crate の試験の入力に触れない）。
+
 | コマンド | exit | 要点 |
 |---|---|---|
 | `bash scripts/dev/test-affected.sh` | 0 | nextest 7625 run・7625 passed・21 skipped。web の tsc -b と unit（vitest 104 files・709 passed）。script bundle SKIP 0 件 |
@@ -53,6 +55,8 @@ TS（`control-ts/`）は変えていない。TS policy だけの変更の verify
 
 ## 変更（commit の件名）
 - `p0e: pilot の root に公開契約の command check を結線し、検査と reviewer の根拠を event・facts・ops に残す`
+- `Merge branch 'main' into celeris/01M6N7XY9R6FREMRKFFVS4ENMG`
+- `p0e: 進捗に main の取り込みと再実行の結果を書く`
 
 ## 本番への移行
 config 欄・migration は無い。event の種類が 1 つ増える（追記だけ）。依頼文の block の `checks` は任意で、既存の案件の挙動は変わらない。

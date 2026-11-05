@@ -34,6 +34,7 @@ ADR は `agent-docs/adr/2026-11-05-phase4-p4b-evidence-revocation.md`。P4-A の
 - `p4b: 進捗の試行の参照を arm-map の path にする`
 - `p4b: 起票時の Outcome の条件の digest を root に残し、人の改版で acceptance・checks が変わった root を根拠にしない`（attempt 3。差し戻しの修正）
 - `p4b: 人の改版の失効の ADR と進捗を直す`（attempt 3）
+- `p4b: rebase 後の検査の結果を進捗に書く`（attempt 3）
 
 主な file: `crates/task-core/migrations/0115_project_wake_evidence_changed.sql`、`crates/task-core/src/project_wake.rs`（`EvidenceChanged`）、
 `crates/task-core/src/roadmap.rs`（`checks`・`snapshot_outcomes`・`validate_proposal`）、`crates/task-core/src/project_proposal.rs`（`OutcomeCheck` の

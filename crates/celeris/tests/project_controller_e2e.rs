@@ -277,6 +277,23 @@ impl Harness {
             )
             .expect("merged");
         }
+        // 第 3 フェーズ I4: repo の無い root は成果物があって初めて取り込み済み。
+        if integrate && self.with_repo.is_none() {
+            s.append_event(
+                id,
+                &Event::ArtifactProduced {
+                    run_id: "run".into(),
+                    artifact: task_core::ArtifactRef {
+                        name: "report.md".into(),
+                        path: "artifacts/report.md".into(),
+                        sha256: "0".repeat(64),
+                        kind: "file".into(),
+                        declared: true,
+                    },
+                },
+            )
+            .expect("artifact");
+        }
     }
 }
 

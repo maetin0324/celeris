@@ -177,6 +177,21 @@ impl Fx {
             .expect("dispatch");
         s.apply_transition(id, Trigger::WorkerDone, None)
             .expect("done");
+        // 第 3 フェーズ I4: repo の無い root は成果物（`ArtifactProduced`）があって初めて取り込み済み。
+        s.append_event(
+            id,
+            &task_core::Event::ArtifactProduced {
+                run_id: "run".into(),
+                artifact: task_core::ArtifactRef {
+                    name: "report.md".into(),
+                    path: "artifacts/report.md".into(),
+                    sha256: "0".repeat(64),
+                    kind: "file".into(),
+                    declared: true,
+                },
+            },
+        )
+        .expect("artifact");
         s.apply_transition(id, Trigger::ReviewPass, None)
             .expect("pass");
     }

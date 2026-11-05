@@ -35,7 +35,7 @@ worker が記録に偽の行を足すと、driver は facts を作らず試行�
   `LONG_HORIZON_PILOT_STUB_EARLY_PUBLISH` を消した。
 - `scripts/dev/long-horizon-pilot/test_pilot_effect.py`（新規、15 件）、`scripts/dev/test-long-horizon-pilot.sh` の段 2b。
 - `docs/ops/project-controller.md` に C06 の公開と承認の 1 項目。ADR `2026-11-05-phase3-p0d.md`。
-- commit: 「p0d: pilot の公開 effect を worker の外の broker と daemon の承認 API に移す」（と、検査の結果を書く commit）。
+- commit: 「p0d: pilot の公開 effect を worker の外の broker と daemon の承認 API に移す」「p0d: 進捗に検査の結果を書く」。
 
 ## 受け入れ条件と証拠（提出時の HEAD で実行）
 | 条件 | K | コマンド | 結果 |
@@ -64,8 +64,17 @@ audit の列（stub・config-stub で同じ）: `C06:o1:publish refused_unapprov
 - 全体の検査の 1 回目は task-dispatch の試験の build で `could not find native static library rusty_v8` で落ちた（古い seed の build
   script の出力）。`$CARGO_TARGET_DIR/debug/build/v8-*` を消して再実行した。コードの問題ではない。
 
-## 検査
-（下の節に提出時の HEAD の結果を書く）
+## 検査（提出時の HEAD で実行）
+- `bash scripts/dev/test-long-horizon-pilot.sh --out <dir>`: exit 0。dispatch 7 passed、api 3 passed、virtual raw ok（7 scenarios、
+  7 gate rows）、stub daemon raw ok（C08）、pilot_effect unit `Ran 15 tests`、`C06 effect broker raw ok (stub and config-stub)`、
+  改ざんの陰性は exit 1。出力は `p0d/test-long-horizon-pilot.log`。
+- `bash scripts/dev/test-affected.sh`: exit 0、「試験対象の変更なし（docs のみ等）」（変更は scripts/dev の Python・shell と文書だけ。
+  Rust・web の変更は無い）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・
+  `sh scripts/dev/progress-index.sh --check`・`bash scripts/dev/check-adr-numbers.sh`: すべて exit 0。
+- `test -f agent-docs/progress/2026-11-05-phase3/p0d.md`: exit 0。
+- TS policy・Rust は変えていないので、verify の cargo 0・p50/p95 の条件は対象外。
 
 ## 未解決事項
 - 実 LLM（`--harness config` の実 source）が依頼文の手順どおり exit 3 で question を出すかは未確認。実 LLM pilot は人の gate

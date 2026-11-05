@@ -1,0 +1,10 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "llm",
+  "seq": 7,
+  "case": "read-three",
+  "arm": "old",
+  "repeat": 1,
+  "error": "seed task 01M6PZ5W8AN9FSKMBQMKKWTDNR ended done, want {'failed'}",
+  "ops": []
+}

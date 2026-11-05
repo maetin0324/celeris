@@ -22,6 +22,65 @@ def cli(*args, env=None):
                           env={**os.environ, **(env or {})}, check=False)
 
 
+class SeedConfigTest(unittest.TestCase):
+    """tier=llm の config は seed の段（cos=False）と本番の段（cos=True）で分かれる。daemon・LLM は起こさない。"""
+
+    def trial(self, tier):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        llm = pathlib.Path(tmp.name) / "llm.toml"
+        llm.write_text('[harnesses.real_marker]\nkind = "claude_code"\n')
+        args = type("A", (), dict(tier=tier, llm_config=str(llm), cos_route='[{ source = "real_src", model = "m" }]',
+                                  state_root=tmp.name))()
+        t = compare.Trial.__new__(compare.Trial)
+        t.a, t.trial, t.port, t.token_file = args, {"seq": 1}, 1234, pathlib.Path(tmp.name) / "tok"
+        t.limits = {"per_trial_wall_secs": 60}
+        t.home = pathlib.Path(tmp.name) / "home"
+        t.home.mkdir()
+        return t
+
+    def test_llm_seed_stage_is_stub_only(self):
+        t = self.trial("llm")
+        t.write_config(cos=False)
+        cfg = (t.home / "config.toml").read_text()
+        self.assertNotIn("real_marker", cfg)
+        self.assertNotIn("real_src", cfg)
+        self.assertIn("scripted_cos.py", cfg)
+        self.assertIn("enabled = false", cfg)
+
+    def test_llm_main_stage_uses_llm_config(self):
+        t = self.trial("llm")
+        t.write_config(cos=True)
+        cfg = (t.home / "config.toml").read_text()
+        self.assertIn("real_marker", cfg)
+        self.assertIn("real_src", cfg)
+        self.assertNotIn("scripted_cos.py", cfg)
+        self.assertIn("enabled = true", cfg)
+
+    def test_stub_both_stages_use_stub(self):
+        for cos in (False, True):
+            t = self.trial("stub")
+            t.write_config(cos=cos)
+            cfg = (t.home / "config.toml").read_text()
+            self.assertIn("scripted_cos.py", cfg)
+            self.assertNotIn("real_marker", cfg)
+
+    def test_seed_check_rejects_non_fake_adapter(self):
+        import sqlite3
+        for adapter, bad in (("fake", False), ("claude-code", True)):
+            t = self.trial("stub")
+            c = sqlite3.connect(t.home / "celeris.sqlite3")
+            c.execute("CREATE TABLE runs(run_id TEXT, adapter TEXT)")
+            c.execute("INSERT INTO runs VALUES('r', ?)", (adapter,))
+            c.commit()
+            c.close()
+            if bad:
+                with self.assertRaises(RuntimeError):
+                    t.check_seed_stub_only()
+            else:
+                t.check_seed_stub_only()
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

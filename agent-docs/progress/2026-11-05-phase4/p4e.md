@@ -67,6 +67,7 @@ skill・prompt の source（`cos_chat.rs`・`preamble.rs`・`cos_chat/launch.rs`
 1. 旧腕を build: `git worktree add --detach <dir> <manifest の old rev>` の後、その dir で `CARGO_TARGET_DIR=<別の dir> cargo build -p celeris --bin celeris`。新腕は現行の tree で同じ build。
 2. `compare.py pin --out m.json --old-bin … --new-bin …`、`compare.py plan --out p.json`。
 3. 承認 file（`approved_by: human:<名前>`、`approved_at`、`account`、`model`、`harness`、`limits` の 4 値）と、人が書く `--llm-config`（`[llm_sources]`・`[harnesses]`・`[route_defaults]`・`[harness_selection]`・`[accounts]`）を用意する。
+3a. seed の段（初期状態を作る daemon）は tier に依らず常に stub（`scripted_cos.py`）の harness で起こす。`--llm-config` と `--cos-route` は CoS を有効にする本番の段だけが使う。seed の段で fake 以外の adapter の run ができた試行は失敗にし、残りを始めない（[p4e-seed](p4e-seed.md)）。
 4. `compare.py preflight --tier llm …` が exit 0 なのを確かめ、`compare.py run --tier llm --manifest m.json --plan p.json --approval a.json --llm-config c.toml --cos-route '<route>' --out <dir>`。
 5. `grade-sheet` を採点者に渡し、`grade-auto` は読取・委譲・拒否の一次の検査に使う（採点者が確認する）。`observations --conditions <model・harness・account の JSON>` と `general_cos_eval.py` で集計する。
 

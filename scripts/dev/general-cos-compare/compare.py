@@ -276,7 +276,9 @@ class Trial:
             shutil.copytree(self.home / "skill-src" / p, kb / "skills" / pathlib.Path(p).name, dirs_exist_ok=True)
 
     def write_config(self, cos=True):
-        if self.a.tier == "stub":
+        """cos=False は seed の段。tier に依らず stub（scripted_cos.py）の harness だけを持ち、--llm-config を読まない。
+        cos=True（本番の段）だけが tier=llm のとき --llm-config と --cos-route を使う。"""
+        if self.a.tier == "stub" or not cos:
             cmd = ["python3", "-I", str(HERE / "scripted_cos.py")]
             harness = f"""
 [adapters.fake]
@@ -422,6 +424,16 @@ disk_watch = []
             raise RuntimeError(f"seed state {got} != {want}")
         self.op("seed_tasks", ids=ids, statuses=got)
 
+    def check_seed_stub_only(self):
+        """seed の段で fake 以外の adapter の run があれば試行を失敗にする（実 LLM を seed に使わない）。"""
+        conn = sqlite3.connect(f"file:{self.home / 'celeris.sqlite3'}?mode=ro", uri=True)
+        try:
+            bad = [r[0] for r in conn.execute("SELECT DISTINCT adapter FROM runs WHERE adapter IS NOT NULL AND adapter != 'fake'")]
+        finally:
+            conn.close()
+        if bad:
+            raise RuntimeError(f"seed stage started a non-fake adapter: {bad}")
+
     def task_status(self, tid):
         t = self.api("GET", f"/api/v1/tasks/{tid}")
         return t["status"] if "status" in t else t["task"]["status"]
@@ -446,6 +458,7 @@ disk_watch = []
         self.start()
         try:
             self.seed()
+            self.check_seed_stub_only()
         finally:
             self.stop()
         self.write_config(cos=True)

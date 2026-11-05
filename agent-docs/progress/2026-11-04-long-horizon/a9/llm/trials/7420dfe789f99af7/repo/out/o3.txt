@@ -1,0 +1,6 @@
+dorastiq-o3: 実験セル B
+結論: o1 の実装（write_chunk がファイル fsync の後に親ディレクトリを fsync する）は、セル B の条件でも書き込みと読み戻しが一致した。
+手順: (1) python3 minichunk.py <dir>/b.chunk cell-B-payload で書き込み、(2) 別プロセスで python3 minichunk.py <dir>/b.chunk（引数 1 つ）により読み戻し。
+結果: 書き込み・読み戻しとも exit 0。読み戻した値は cell-B-payload で一致。
+syscall 確認: strace（別ファイル c.chunk、payload cell-B2）で fsync が 2 回呼ばれることを確認した。fd 番号は両方 3 で、ファイル close 後に再利用されたもの。ディレクトリ fd であることは open 行を直接には確認していない。
+未確認: 実機の電源断・再起動を伴う検証。

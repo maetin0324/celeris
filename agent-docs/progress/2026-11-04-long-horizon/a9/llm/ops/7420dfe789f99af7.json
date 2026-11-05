@@ -1,0 +1,234 @@
+{
+ "schema": "celeris.long-horizon-pilot-trial/1",
+ "trial": "7420dfe789f99af7",
+ "harness": "config",
+ "arm": "new",
+ "case": "C08",
+ "project": "01M6MGNKEZCSJAGZ7TMM0MZWP3",
+ "wall_secs": 282,
+ "rules": [
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/achieved"
+ ],
+ "root_statuses": [
+  "done",
+  "done",
+  "done",
+  "done"
+ ],
+ "ops": [
+  {
+   "step": "deploy_ts",
+   "at": 0.2,
+   "bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8",
+   "mode_seed": "synthetic: temp DB only"
+  },
+  {
+   "step": "project_created",
+   "at": 0.6,
+   "project": "01M6MGNKEZCSJAGZ7TMM0MZWP3",
+   "arm": "new"
+  },
+  {
+   "step": "operator_cannot_raise_mode",
+   "at": 0.6,
+   "status": 403,
+   "code": "project_controller_mode_requires_human"
+  },
+  {
+   "step": "set_mode",
+   "at": 0.6,
+   "mode": "enabled",
+   "reason": "pilot を有効にする",
+   "revision": null
+  },
+  {
+   "step": "state",
+   "at": 0.6,
+   "phase": "active",
+   "roots": []
+  },
+  {
+   "step": "state",
+   "at": 30.7,
+   "phase": "active",
+   "roots": [
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 43.8,
+   "phase": "active",
+   "roots": [
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 119.2,
+   "phase": "active",
+   "roots": [
+    "ready"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 129.2,
+   "phase": "active",
+   "roots": [
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 144.3,
+   "phase": "active",
+   "roots": [
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 164.4,
+   "phase": "active",
+   "roots": [
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 166.4,
+   "phase": "active",
+   "roots": [
+    "done",
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 185.5,
+   "phase": "active",
+   "roots": [
+    "done",
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 204.6,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 207.6,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done",
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 221.7,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done",
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 236.8,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 238.8,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done",
+    "done",
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 255.9,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done",
+    "done",
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 274.0,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done",
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 276.0,
+   "phase": "achieved",
+   "roots": [
+    "done",
+    "done",
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "wake_after_end",
+   "at": 279.0,
+   "new_roots": 0
+  },
+  {
+   "step": "set_mode",
+   "at": 279.0,
+   "mode": "off",
+   "reason": "従来の CoS に戻す",
+   "revision": null
+  },
+  {
+   "step": "wake_after_off",
+   "at": 279.0,
+   "status": 200,
+   "added": false
+  },
+  {
+   "step": "after_off",
+   "at": 282.0,
+   "decisions_at_end": 9,
+   "decisions_after": 9,
+   "mode": "off",
+   "pending_wakes": 1
+  }
+ ]
+}

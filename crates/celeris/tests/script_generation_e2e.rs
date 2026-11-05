@@ -786,9 +786,10 @@ impl World {
         assert_eq!(self.state_of(&b), ScriptGenerationState::Loaded);
         warm(&self.pinned(&b)).await;
 
-        // 前の段の pass（TS の待ちの予算 200 ms を超えて dispatcher が先に進んだもの、または記録を書いた後の後始末）が
-        // A の isolate に残っていると in_flight が 2 になる（負荷時に release gate で落ちた）。0 に戻るのを待ってから始める。
-        // この段では CoS の run を起こさないので、dispatcher が新しい pass を A に送ることはない。
+        // 前の段の pass の後始末は、0 に戻るのを待てば済む。だが dispatcher は、runs を適用した pass の後に
+        // 「空の走査」の pass をもう 1 回、次の tick で A へ送る（`cos_digest_pass` は `digest_due` を空の走査まで保つ。
+        // `ts` の canary 選択では空の走査でも TS を呼ぶ）。その pass が待ちと start_pass の間に入ると in_flight が 2 になる。
+        // この pass は dispatcher の tick の中で自分で終わるので、止めずに終わるのを待つ。
         wait_for("A has no pass in flight from earlier stages", || async {
             (self.registry.get(&a).expect("A").in_flight == 0).then_some(())
         })
@@ -797,7 +798,11 @@ impl World {
         // A の pass を daemon の isolate で始める。op の答えを止めるので in-flight のまま。
         let pinned_a = self.pinned(&a);
         let (pass, op) = start_pass(Arc::clone(&pinned_a)).await;
-        assert_eq!(self.registry.get(&a).expect("A").in_flight, 1);
+        // dispatcher の空の走査の pass が重なっていても、それが終われば残るのはこの 1 件だけ。
+        wait_for("only the held pass remains in A", || async {
+            (self.registry.get(&a).expect("A").in_flight == 1).then_some(())
+        })
+        .await;
         assert_eq!(self.registry.get(&b).expect("B").in_flight, 0);
 
         // `ts` の A → `compare` の B（`ts` の元は同じ generation の `canary` だけなので段を踏み直す。付記 S5-4）。
@@ -820,8 +825,11 @@ impl World {
             .expect("record");
         assert_eq!(record.generation, id_b, "{record:?}");
         assert_eq!(record.mode, ScriptMode::Compare, "{record:?}");
-        let held = self.registry.get(&a).expect("A still holds the pass");
-        assert_eq!(held.in_flight, 1, "{held:?}");
+        let held = wait_for("A holds only the held pass", || async {
+            let held = self.registry.get(&a).expect("A still holds the pass");
+            (held.in_flight == 1).then_some(held)
+        })
+        .await;
         assert_eq!(self.state_of(&a), ScriptGenerationState::Draining);
         // 新しい要求は drain 中の A に入らない。
         let refused = probe_pass(&pinned_a).await.expect_err("draining");

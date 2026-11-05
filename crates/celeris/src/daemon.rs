@@ -34,6 +34,7 @@ pub(crate) mod completion_evidence_tick;
 pub(crate) mod config_admin;
 mod cos_launch;
 pub(crate) mod jev_key;
+pub(crate) mod process_memory;
 pub(crate) mod routing_guardrail;
 pub(crate) mod run;
 pub(crate) mod script_exhaustive;

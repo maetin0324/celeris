@@ -569,6 +569,25 @@ impl GenerationRegistry {
             .map(|s| s.generation.manifest.clone())
     }
 
+    /// 生きた generation（drain 中を含む）ごとの V8 heap の統計（id の順。P4-F の `process_memory` の log 行）。
+    /// 読めなかった generation（actor が止まった直後など）は入れない。lock は統計を待つ前に離す。
+    pub async fn heap_stats(&self) -> Vec<(String, crate::HeapStats)> {
+        let handles: Vec<(String, ScriptRuntimeHandle)> = {
+            let st = lock(&self.inner.state);
+            st.slots
+                .values()
+                .map(|s| (s.generation.id.clone(), s.generation.handle.clone()))
+                .collect()
+        };
+        let mut out = Vec::with_capacity(handles.len());
+        for (id, handle) in handles {
+            if let Some(stats) = handle.heap_stats().await {
+                out.push((id, stats));
+            }
+        }
+        out
+    }
+
     /// 生きた generation（drain 中を含む）の数。
     pub fn live_count(&self) -> usize {
         lock(&self.inner.state).slots.len()

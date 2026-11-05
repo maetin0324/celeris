@@ -369,6 +369,7 @@ dependencies = [
  "celeris-script",
  "clap",
  "jev-classifier",
+ "libc",
  "llm-proxy",
  "reqwest",
  "routing-eval",

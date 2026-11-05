@@ -293,6 +293,9 @@ async fn run_inner(
     // 付記 S5-1: API の登録の口を先に作る（isolate はまだ作らない。復元は下の `ScriptLayer::start`）。
     let script_generations =
         ScriptLayer::prepare(&config, hooks.generation_registry, &identity.instance_id);
+    // P4-F: process の memory の内訳（RSS・SQLite・malloc・V8 heap）を 1 分ごとに log へ出す（DB には書かない）。
+    let process_memory =
+        super::process_memory::spawn(script_generations.as_ref().map(|g| g.registry().clone()));
     let (api, admin_rx) = match config.api.listen {
         Some(listen) => {
             // `standby` も起きてすぐ API を受ける（同じポートに `SO_REUSEPORT` で bind する）。
@@ -368,6 +371,7 @@ async fn run_inner(
     }
     // 走っている compare を先に終わらせる（actor を止めてから `terminated` と記録しない）。
     dispatcher.wait_script_compares().await;
+    process_memory.abort();
     script_layer.stop().await;
     // ADR-0064 D3/D5: 背景チェックポイント・定期バックアップは draining でも動き続けてよい
     // （DB への書き込みではなく、既存の WAL をさばく／バックアップするだけ）ので、プロセスが本当に

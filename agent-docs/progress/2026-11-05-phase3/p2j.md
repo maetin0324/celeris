@@ -78,6 +78,19 @@ completed: 2026-11-05
 
 生記録: test-affected の出力は run の成果物の dir（`logs/test-affected.log`）に置いた。test-affected・clippy は 2 つ目の commit の時点で回した。その後の 3 つ目の commit は文書（地図・進捗）だけで、文書の検査 4 本と progress-index は 3 つ目の commit の後に回した。
 
+## delivery-repair（release 準備の中断）
+- 症状: 配送の `prepare.log` は `step cargo-test`（16:04:23Z 開始）の途中で `Terminated` 3 行で終わり、result は `{"ok":false}`。
+- 原因: `journalctl --user` で、16:15:34Z に release `4bc443db7cbd` の daemon が起動し、旧 daemon（release `b8dceaa7c48f`）が
+  16:15:35Z に draining・16:15:36Z に「drained; exiting 0」（in_flight 0）で終了した。旧 daemon の unit の cgroup ごと準備の子が殺された。
+  旧 release `b8dceaa7`（件名 `phase 1: release target の一時的な削除失敗を再試行する`）は `delivery::prepares_in_flight` を持たない
+  （`git grep prepares_in_flight b8dceaa7c48f -- crates` が 0 件）。drain が準備を待つ修正（ADR 2026-11-05-drain-waits-for-release-prepare）は
+  新しい release `4bc443db7cbd` と main（このブランチの HEAD）に入っている。
+- 判断: この task の変更（controller の GET・画面・手順書）とは無関係で、原因は既に main で直っている。コードは変えない。
+  次の準備は修正済みの daemon（4bc443db 以降）が動かすので、drain で殺されない。
+- 確認: `cargo nextest run -p celeris prepare_child_counts_as_in_flight_until_it_exits` exit 0（1 passed）。
+  main の取り込み: `git merge-base HEAD refs/heads/main` は HEAD と同じ（取り込む差分なし）。
+- 本番の操作（準備の再実行・promote・systemctl）はしていない。準備の再実行は配送側が行う。
+
 ## 失敗した場合・未確認
 - 最初の biome check が 2 件の整形で落ちた（`project-controller-panel.tsx` の JSX の改行）。`biome check --write` で直し、vitest を再実行した。
 - web の e2e（`web/e2e/parity/project-controller.spec.ts`）は release gate だけで回るので、この run では実行していない。fixture に `summary` を足した。

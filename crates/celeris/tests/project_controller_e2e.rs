@@ -548,6 +548,43 @@ async fn project_controller_core_s5_not_integrated_continues() {
     handle.shutdown();
 }
 
+/// s5b（A9 D1）: repo を持つ案件で root が done・合格でも、delivery が `NoCommits` で見送られただけ（成果が案件の tree に
+/// 無い）なら取り込み済みに数えず、achieved にならない。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_controller_core_s5b_no_commits_root_is_not_achieved() {
+    let test = "project_controller_core_s5b_no_commits_root_is_not_achieved";
+    let Some((handle, policy)) = real_policy(test) else {
+        return;
+    };
+    let mut h = Harness::new(test, REQUEST);
+    h.with_repo = Some(RepoId::new());
+    let root1 = launched(&h.step(policy.as_ref()).await.2);
+    h.complete(root1, true, false);
+    for reason in [
+        task_core::DeliverySkipReason::NoCommits,
+        task_core::DeliverySkipReason::NotGit,
+    ] {
+        h.store
+            .append_event(
+                root1,
+                &Event::DeliverySkipped {
+                    reason,
+                    detail: String::new(),
+                    head: None,
+                },
+            )
+            .expect("skipped");
+        let (snap, raw, applied) = h.step(policy.as_ref()).await;
+        let row = snap.roots.iter().find(|r| r.id == root1.to_string());
+        assert!(row.is_some_and(|r| !r.integrated), "{snap:?}");
+        assert_eq!(kind(&raw), "continue", "{raw}");
+        assert_eq!(raw["gap"]["reached"], json!([]), "{raw}");
+        assert!(!matches!(applied, Applied::Launched { .. }));
+    }
+    assert_eq!(h.roots().len(), 1);
+    handle.shutdown();
+}
+
 /// s6: root1 が review 不合格 → `replan(review_failed)`（案件 CoS への入力 1 件）、起票 0、root1 は failed のまま。
 /// 同じ失敗で 2 回目は `wait`（CoS 入力を積み増さない）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

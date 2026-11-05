@@ -1363,7 +1363,8 @@ fn delivery_skip_no_commits_is_not_attention() {
         .count()
     };
     assert_eq!(attention_for(task_core::DeliverySkipReason::NoCommits), 0);
-    // 他の理由は従来どおり注意事項になる（対照）。
+    // 他の理由は従来どおり注意事項になる（対照）。repo を持つ案件の NotGit も理由付きで出る（A9 D1）。
+    assert_eq!(attention_for(task_core::DeliverySkipReason::NotGit), 1);
     assert_eq!(
         attention_for(task_core::DeliverySkipReason::DepartmentUnresolved),
         1

@@ -19,7 +19,6 @@ raw は [p4e/llm-pair1](p4e/llm-pair1/)（run-summary.json、raw/07-read-three-o
 
 ## 変更（commit の件名）
 - `p4e: seed の段は tier に依らず stub の harness にし、fake 以外の adapter の run があれば失敗にする`
-- `p4e: seed の段の実 LLM 起動の失敗の raw と進捗を足す`
 
 内容:
 - `write_config`: `tier == "stub" or not cos` のとき stub の config。`--llm-config` を seed の段に入れる分岐は無い。

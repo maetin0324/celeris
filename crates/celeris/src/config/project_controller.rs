@@ -36,6 +36,137 @@ pub struct ProjectControllerConfig {
     /// A6: `[project_controller.budget]`。
     #[serde(default)]
     pub budget: ProjectBudgetConfig,
+    /// P4-D: `[project_controller.retention]`（節が無い・`enabled = false` なら GC しない）。
+    #[serde(default)]
+    pub retention: ProjectRetentionConfig,
+}
+
+/// ```toml
+/// [project_controller.retention]
+/// enabled = true
+/// archive_dir = "/local/celeris/state/retention-archive"
+/// interval_secs = 3600
+/// wake_keep_secs = 604800
+/// decision_keep_secs = 2592000
+/// decision_keep_latest = 256
+/// compare_keep_secs = 2592000
+/// batch_rows = 2000
+/// max_rows_per_pass = 5000
+/// ```
+/// P4-D（ADR 2026-11-05-phase4-p4d-retention）。`enabled = true` なら `archive_dir` は必須（消す行を先に書く）。
+/// 0 は設定の誤り。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRetentionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub archive_dir: Option<std::path::PathBuf>,
+    #[serde(default = "r_interval")]
+    pub interval_secs: u64,
+    #[serde(default = "r_wake")]
+    pub wake_keep_secs: u64,
+    #[serde(default = "r_decision")]
+    pub decision_keep_secs: u64,
+    #[serde(default = "r_latest")]
+    pub decision_keep_latest: usize,
+    #[serde(default = "r_compare")]
+    pub compare_keep_secs: u64,
+    #[serde(default = "r_batch")]
+    pub batch_rows: usize,
+    #[serde(default = "r_max")]
+    pub max_rows_per_pass: usize,
+}
+
+fn r() -> task_core::project_retention::RetentionPolicy {
+    task_core::project_retention::RetentionPolicy::default()
+}
+fn r_interval() -> u64 {
+    3600
+}
+fn r_wake() -> u64 {
+    r().wake_keep_secs
+}
+fn r_decision() -> u64 {
+    r().decision_keep_secs
+}
+fn r_latest() -> usize {
+    r().decision_keep_latest
+}
+fn r_compare() -> u64 {
+    r().compare_keep_secs
+}
+fn r_batch() -> usize {
+    r().batch_rows
+}
+fn r_max() -> usize {
+    r().max_rows_per_pass
+}
+
+impl Default for ProjectRetentionConfig {
+    fn default() -> Self {
+        let p = r();
+        Self {
+            enabled: false,
+            archive_dir: None,
+            interval_secs: r_interval(),
+            wake_keep_secs: p.wake_keep_secs,
+            decision_keep_secs: p.decision_keep_secs,
+            decision_keep_latest: p.decision_keep_latest,
+            compare_keep_secs: p.compare_keep_secs,
+            batch_rows: p.batch_rows,
+            max_rows_per_pass: p.max_rows_per_pass,
+        }
+    }
+}
+
+impl ProjectRetentionConfig {
+    fn policy(&self) -> task_core::project_retention::RetentionPolicy {
+        task_core::project_retention::RetentionPolicy {
+            wake_keep_secs: self.wake_keep_secs,
+            decision_keep_secs: self.decision_keep_secs,
+            decision_keep_latest: self.decision_keep_latest,
+            compare_keep_secs: self.compare_keep_secs,
+            batch_rows: self.batch_rows,
+            max_rows_per_pass: self.max_rows_per_pass,
+        }
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        self.policy()
+            .validate()
+            .map_err(|e| ConfigError::Invalid(format!("[project_controller.retention] {e}")))?;
+        if self.interval_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "[project_controller.retention] interval_secs must be greater than 0".into(),
+            ));
+        }
+        if self.enabled
+            && self
+                .archive_dir
+                .as_ref()
+                .is_none_or(|d| d.as_os_str().is_empty() || !d.is_absolute())
+        {
+            return Err(ConfigError::Invalid(
+                "[project_controller.retention] archive_dir (absolute path) is required when enabled = true"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn settings(&self) -> Option<task_dispatch::project_controller::ProjectRetentionSettings> {
+        if !self.enabled {
+            return None;
+        }
+        Some(
+            task_dispatch::project_controller::ProjectRetentionSettings {
+                policy: self.policy(),
+                archive_dir: self.archive_dir.clone()?,
+                interval_secs: self.interval_secs,
+            },
+        )
+    }
 }
 
 /// ```toml
@@ -208,6 +339,7 @@ impl ProjectControllerConfig {
                 "[project_controller] retry_max_secs must be >= retry_base_secs".into(),
             ));
         }
+        self.retention.validate()?;
         if self.allowed_project_ids.iter().any(|p| p.trim().is_empty()) {
             return Err(ConfigError::Invalid(
                 "[project_controller] allowed_project_ids must not contain blank ids".into(),
@@ -228,6 +360,7 @@ impl ProjectControllerConfig {
             max_retries: self.max_retries,
             max_cos_inputs_open_per_project: self.max_cos_inputs_open_per_project,
             budget: self.budget.limits(),
+            retention: self.retention.settings(),
         }
     }
 }
@@ -252,5 +385,31 @@ mod tests {
         let zero: ProjectControllerConfig = toml::from_str("[budget]\nttl_secs = 0").unwrap();
         assert!(zero.validate().is_err());
         assert!(toml::from_str::<ProjectControllerConfig>("[budget]\nunknown = 1").is_err());
+    }
+
+    #[test]
+    fn project_controller_retention_config_requires_archive_dir_and_positive_values() {
+        let off: ProjectControllerConfig = toml::from_str("").unwrap();
+        assert!(off.settings().retention.is_none());
+        let no_dir: ProjectControllerConfig =
+            toml::from_str("[retention]\nenabled = true").unwrap();
+        assert!(no_dir.validate().is_err());
+        let rel: ProjectControllerConfig =
+            toml::from_str("[retention]\nenabled = true\narchive_dir = \"rel\"").unwrap();
+        assert!(rel.validate().is_err());
+        let zero: ProjectControllerConfig =
+            toml::from_str("[retention]\nenabled = true\narchive_dir = \"/a\"\nbatch_rows = 0")
+                .unwrap();
+        assert!(zero.validate().is_err());
+        let ok: ProjectControllerConfig = toml::from_str(
+            "[retention]\nenabled = true\narchive_dir = \"/a\"\ndecision_keep_latest = 10",
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
+        let s = ok.settings().retention.unwrap();
+        assert_eq!(s.policy.decision_keep_latest, 10);
+        assert_eq!(s.interval_secs, 3600);
+        assert_eq!(s.archive_dir, std::path::PathBuf::from("/a"));
+        assert!(toml::from_str::<ProjectControllerConfig>("[retention]\nunknown = 1").is_err());
     }
 }

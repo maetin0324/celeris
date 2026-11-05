@@ -97,6 +97,7 @@ pub mod plan;
 pub mod profile;
 /// ADR-0074 D3.3（Phase F4a）: 案件レベルの計画（マイルストーン Task の DAG）の schema と検証。
 pub mod project_plan;
+pub mod project_retention;
 pub mod project_wake;
 pub mod provider_source;
 pub mod quota;

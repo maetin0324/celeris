@@ -10,6 +10,9 @@ use super::cos_chat::review::CosReviewSink;
 pub(crate) mod project_guard;
 #[path = "project_resume.rs"]
 pub(crate) mod project_resume;
+/// P4-D: wake・判断・compare の記録の GC の段。
+#[path = "project_retention.rs"]
+pub(crate) mod project_retention;
 /// ADR 2026-11-04-project-controller A1: 案件の durable wake の段（`dispatcher.rs` に行を足さない）。
 #[path = "project_wake.rs"]
 pub(crate) mod project_wake;
@@ -57,5 +60,6 @@ impl Dispatcher {
         self.run_maintenance_tasks(&fired);
         // ADR 2026-11-04-project-controller A1: cron の後に案件の wake を評価する（同じ gate の内側）。
         self.tick_project_controller();
+        self.tick_project_retention();
     }
 }

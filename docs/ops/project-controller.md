@@ -1,5 +1,5 @@
 ---
-tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY, 01M6JW1EG41D198Y5CP65MQJM4, 01M6N7XY9E70AH4476VQTSFVJY, 01M6N7XYA31CMJV6RR1KXSQMKH]
+tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY, 01M6JW1EG41D198Y5CP65MQJM4, 01M6N7XY9E70AH4476VQTSFVJY, 01M6N7XYA31CMJV6RR1KXSQMKH, 01M6PAMC3S9QN740JWEQTXV60J]
 ---
 # Project Controller の運用手順（人と operator）
 
@@ -141,10 +141,44 @@ controller は event（root の終了・失敗・人の操作など）で起き�
 | 次の wake | `next_wake`（`at`・`backoff_until`・`pending_kinds`） | 次の再評価（`controller-next-wake`） | `at` が無ければ event が来るまで評価しない |
 | guard・予算 | `budget_limits` と `budget_today` | 今日の使用量 / 上限（`controller-budget-today`）、guard の上限（`controller-guard-limits`） | 上限は daemon の起動時の `[project_controller.budget]`。値を変えたら再起動まで古い値が出る |
 | 追跡 | `trace`（`decision_id`・`rule_id`・`effect_state`・`based_on_revision`・`snapshot_sha256`） | 最後の判断（`controller-trace`） | 詳細は `GET …/controller/decisions` の同じ id の `proposal_json` |
+| 記録の行数（P4-D） | `retention`（`wakes_total`・`wakes_pending`・`decisions_total`・`decisions_effect_none`・`decisions_pending`） | 記録の行数（`controller-retention`） | GC が有効なら `wakes_total`・`decisions_total` は保持の窓の分で頭打ちになる。`wakes_pending`・`decisions_pending` は GC で減らない |
 
 試験: `crates/task-api/tests/project_controller.rs` の `project_wake_api_summary_shows_outcomes_wait_authority_and_next_wake`、
 `crates/task-dispatch/src/dispatcher/tests/project_achievement.rs` の `project_controller_summary_*` 2 件、
 `web/features/projects/project-controller-panel.test.tsx` の `P2-J:` 2 件。
+
+## 記録の保持と GC（P4-D）
+`project_wakes`・`project_controller_decisions`・`script_compare_log` は毎時の cron の照合で増える
+（[ADR](../../agent-docs/adr/2026-11-05-phase4-p4d-retention.md)、migration 0117、実装は `crates/task-core/src/store/project_retention.rs`）。
+`[project_controller.retention]` を `enabled = true` にすると、dispatcher が `interval_secs`（既定 3600 秒）ごとに 1 回、
+条件を満たす行を archive（JSONL）に書いてから消す。既定は無効で、人が config を書くまで本番の動きは変わらない。events は消さない。
+
+消す行と残す行（DB の trigger が判断と compare の記録について同じ条件で二重に守る。許可の行の無い `DELETE` は拒まれる）:
+
+| 表 | 消す行 | 必ず残す行 |
+|---|---|---|
+| `project_wakes` | 消費済みの `cron` の wake で `wake_keep_secs`（既定 7 日）より古いもの | 未消費の wake、`cron` 以外の wake（同じ失敗の数え・人の変更・TTL が読む） |
+| `project_controller_decisions` | 効果 `none` で `decision_keep_secs`（既定 30 日）より古く、案件ごとの新しい `decision_keep_latest`（既定 256）件の外にあるもの | pending・applied・suppressed・failed の判断、案件の最後の判断（`last_decision_id`）、案件の最初の判断、`pc/resume/%`・`pc/authority-required` の判断 |
+| `script_compare_log` | TS が適用していない行（`applied_by` ≠ `ts`）で `compare_keep_secs`（既定 30 日）より古いもの | TS が適用した行（見回りの違反の根拠） |
+
+config の例（`archive_dir` は絶対 path で必須。無い・相対なら起動時の設定エラー）:
+
+```toml
+[project_controller.retention]
+enabled = true
+archive_dir = "/local/celeris/state/retention-archive"
+```
+
+回収の条件と確かめ方:
+- 1 回の GC は表ごとに最大 `max_rows_per_pass`（既定 5,000）行、1 transaction に `batch_rows`（既定 2,000）行。初回に古い行が多いと、
+  数時間かけて少しずつ消える（100 万行の計測で 1 回の中央値 0.5〜1.1 秒・最大 1.2〜5.6 秒、合計 42〜97 秒。release build）。
+- 記録は `project_retention_runs`（追記専用。`archived`・`deleted`・`cutoff`・`archive_path`・`archive_sha256`）。archive の file は
+  `sha256sum` で `archive_sha256` と照合できる。`deleted` が `archived` より少ないのは、並行の GC が先に同じ行を消したとき。
+- 消した行の page は空き page になり、DB の file は縮まない（次の書き込みが使う）。file を縮めるのは人が daemon を止めて
+  `celerisctl db backup` の後に `VACUUM` する操作で、この GC はしない（100 万行の計測で 200 MB → `VACUUM` 後 77 MB、約 1 秒）。
+- archive の file は GC が消さない。置き場の容量は人が見る（100 万行の計測で約 270 MB の JSONL）。
+- 止める: `enabled = false` にして再起動する。消した行は archive から読める（戻す道具は無い。判定は残した行だけで同じになることを
+  `project_retention_soak_gc_bounds_rows_without_changing_decisions` が確かめる）。
 
 ## 導入の checklist（P2-J）
 本番への導入は人が行う。worker・operator は下の手順を実行しない（promote・`systemctl`・本番 config・本番 DB・人だけの API の承認）。
@@ -200,3 +234,4 @@ controller は event（root の終了・失敗・人の操作など）で起き�
   `scripts/dev/long-horizon-pilot-llm.sh` を回す。
 - [ ] 24〜72 時間の非本番の実稼働と、本番 RSS の controller `off` との比較（P1-I の段 3・4）: 未実施。人の承認待ち。
 - [ ] 上の 1〜5 の本番の操作: どれも未実施（人が行う）。
+- [ ] `[project_controller.retention]` の本番での有効化（P4-D）: 未実施（人が config を書き、`archive_dir` の容量を決める）。

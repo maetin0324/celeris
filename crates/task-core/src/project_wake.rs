@@ -317,6 +317,8 @@ pub struct ProjectControllerSummary {
     pub budget_limits: ControllerBudgetLimits,
     /// 最後の判断の追跡。判断がまだ無ければ `None`。
     pub trace: Option<ControllerTrace>,
+    /// 第 4 フェーズ P4-D: この案件の wake・判断の行数（GC の効き目を画面で見る）。
+    pub retention: crate::project_retention::ProjectRetentionCounts,
 }
 
 /// Outcome 1 件の到達の状態（I1 の `unverified_outcomes` と同じ判定）。

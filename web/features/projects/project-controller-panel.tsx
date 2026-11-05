@@ -118,6 +118,14 @@ export type ControllerSummary = {
     generation_id?: string | null;
     decided_at: string;
   } | null;
+  /** 第 4 フェーズ P4-D: この案件の wake・判断の行数（GC の効き目）。 */
+  retention?: {
+    wakes_total: number;
+    wakes_pending: number;
+    decisions_total: number;
+    decisions_effect_none: number;
+    decisions_pending: number;
+  } | null;
 };
 
 export const CONTROLLER_MODE_ACTION_ID = "project_controller_mode";
@@ -370,6 +378,14 @@ export function ProjectControllerPanel({
           {view.summary.budget_limits.max_no_progress_decisions} 回連続、外からの応答なし{" "}
           {view.summary.budget_limits.ttl_secs} 秒
         </p>
+        {view.summary.retention ? (
+          <p className="text-label text-muted-foreground" data-testid="controller-retention">
+            記録の行数: wake {view.summary.retention.wakes_total} 件（未処理 {view.summary.retention.wakes_pending}{" "}
+            件）、判断 {view.summary.retention.decisions_total} 件（効果なし{" "}
+            {view.summary.retention.decisions_effect_none} 件、効果の実行待ち {view.summary.retention.decisions_pending}{" "}
+            件）
+          </p>
+        ) : null}
       </Part>
 
       <Part title="待機と人の要件" testId="controller-waiting">

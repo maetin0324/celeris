@@ -1,0 +1,769 @@
+{
+  "after": {
+    "compare_log_total": 12079,
+    "db_bytes": 199806976,
+    "decisions_256_micros": 686,
+    "decisions_scan_micros": 897,
+    "decisions_scan_rows": 340,
+    "decisions_total": 235960,
+    "due_micros": 13930,
+    "due_projects": 0,
+    "evaluation_reads_micros": 2315,
+    "freelist_bytes": 107859968,
+    "last_input_at_micros": 191,
+    "stats_micros": 146399,
+    "wakes_all_micros": 504,
+    "wakes_all_rows": 288,
+    "wakes_pending_micros": 37,
+    "wakes_total": 199872
+  },
+  "archive_bytes": 268640903,
+  "archive_lines": 767977,
+  "before": {
+    "compare_log_total": 49968,
+    "db_bytes": 199806976,
+    "decisions_256_micros": 584,
+    "decisions_scan_micros": 2224,
+    "decisions_scan_rows": 840,
+    "decisions_total": 582960,
+    "due_micros": 9880,
+    "due_projects": 0,
+    "evaluation_reads_micros": 4342,
+    "freelist_bytes": 0,
+    "last_input_at_micros": 458,
+    "stats_micros": 343332,
+    "wakes_all_micros": 1025,
+    "wakes_all_rows": 840,
+    "wakes_pending_micros": 51,
+    "wakes_total": 582960
+  },
+  "db_bytes_after_vacuum": 76587008,
+  "deleted_total": 767977,
+  "effect_rows_after": 83280,
+  "effect_rows_before": 83280,
+  "fill_micros": 13757893,
+  "gc_micros": 41570005,
+  "gc_passes": [
+    {
+      "deleted": 15000,
+      "micros": 559232,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 5000
+      }
+    },
+    {
+      "deleted": 15000,
+      "micros": 784179,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 5000
+      }
+    },
+    {
+      "deleted": 15000,
+      "micros": 515755,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 5000
+      }
+    },
+    {
+      "deleted": 15000,
+      "micros": 568104,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 5000
+      }
+    },
+    {
+      "deleted": 15000,
+      "micros": 567322,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 5000
+      }
+    },
+    {
+      "deleted": 15000,
+      "micros": 511348,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 5000
+      }
+    },
+    {
+      "deleted": 15000,
+      "micros": 582722,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 5000
+      }
+    },
+    {
+      "deleted": 12889,
+      "micros": 486767,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 2889
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 480897,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 423400,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 483645,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 422226,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 547476,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 404762,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 420998,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 493479,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 426776,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 478292,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 422438,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 510840,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 453791,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 518439,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 434544,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 434056,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 513747,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 449789,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 507678,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 439340,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 526847,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 452083,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 448865,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 520442,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 487167,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 548238,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 491896,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 582850,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 479053,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 622014,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 1224313,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 511984,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 591918,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 527970,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 561028,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 535128,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 587790,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 535102,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 547951,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 576243,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 529895,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 568601,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 518264,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 584563,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 561820,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 674437,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 795781,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 588814,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 641500,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 587481,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 649116,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 661637,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 707092,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 605388,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 611934,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 745535,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 578456,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 679328,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 589020,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 675248,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 730637,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 7000,
+      "micros": 424640,
+      "tables": {
+        "project_controller_decisions": 2000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 5000,
+      "micros": 415168,
+      "tables": {
+        "project_controller_decisions": 0,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 5000,
+      "micros": 347472,
+      "tables": {
+        "project_controller_decisions": 0,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 5000,
+      "micros": 338539,
+      "tables": {
+        "project_controller_decisions": 0,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 5000,
+      "micros": 347109,
+      "tables": {
+        "project_controller_decisions": 0,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 5000,
+      "micros": 363107,
+      "tables": {
+        "project_controller_decisions": 0,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 5000,
+      "micros": 348325,
+      "tables": {
+        "project_controller_decisions": 0,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 3088,
+      "micros": 309711,
+      "tables": {
+        "project_controller_decisions": 0,
+        "project_wakes": 3088,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 0,
+      "micros": 189738,
+      "tables": {
+        "project_controller_decisions": 0,
+        "project_wakes": 0,
+        "script_compare_log": 0
+      }
+    }
+  ],
+  "last_decisions_kept": 694,
+  "policy": {
+    "batch_rows": 2000,
+    "compare_keep_secs": 604800,
+    "decision_keep_latest": 256,
+    "decision_keep_secs": 604800,
+    "max_rows_per_pass": 5000,
+    "wake_keep_secs": 604800
+  },
+  "projects": 694,
+  "rows": {
+    "compare_log": 49968,
+    "decisions": 582960,
+    "wakes": 582960
+  },
+  "rows_requested": 1000000,
+  "schema": "celeris.project-retention-scale/1",
+  "vacuum_micros": 1480282,
+  "virtual_hours": 720
+}

@@ -1,0 +1,148 @@
+{
+  "after": {
+    "compare_log_total": 1202,
+    "db_bytes": 21291008,
+    "decisions_256_micros": 621,
+    "decisions_scan_micros": 811,
+    "decisions_scan_rows": 340,
+    "decisions_total": 23460,
+    "due_micros": 904,
+    "due_projects": 0,
+    "evaluation_reads_micros": 2079,
+    "freelist_bytes": 10752000,
+    "last_input_at_micros": 189,
+    "stats_micros": 12684,
+    "wakes_all_micros": 437,
+    "wakes_all_rows": 288,
+    "wakes_pending_micros": 21,
+    "wakes_total": 19872
+  },
+  "archive_bytes": 26663329,
+  "archive_lines": 76354,
+  "before": {
+    "compare_log_total": 4968,
+    "db_bytes": 21291008,
+    "decisions_256_micros": 676,
+    "decisions_scan_micros": 2074,
+    "decisions_scan_rows": 840,
+    "decisions_total": 57960,
+    "due_micros": 2887,
+    "due_projects": 0,
+    "evaluation_reads_micros": 4511,
+    "freelist_bytes": 0,
+    "last_input_at_micros": 407,
+    "stats_micros": 30443,
+    "wakes_all_micros": 1327,
+    "wakes_all_rows": 840,
+    "wakes_pending_micros": 27,
+    "wakes_total": 57960
+  },
+  "db_bytes_after_vacuum": 9043968,
+  "deleted_total": 76354,
+  "effect_rows_after": 8280,
+  "effect_rows_before": 8280,
+  "fill_micros": 1143000,
+  "gc_micros": 2522330,
+  "gc_passes": [
+    {
+      "deleted": 13766,
+      "micros": 385034,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 3766
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 314897,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 373277,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 312180,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 366290,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 10000,
+      "micros": 324795,
+      "tables": {
+        "project_controller_decisions": 5000,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 9500,
+      "micros": 356589,
+      "tables": {
+        "project_controller_decisions": 4500,
+        "project_wakes": 5000,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 3088,
+      "micros": 72114,
+      "tables": {
+        "project_controller_decisions": 0,
+        "project_wakes": 3088,
+        "script_compare_log": 0
+      }
+    },
+    {
+      "deleted": 0,
+      "micros": 17085,
+      "tables": {
+        "project_controller_decisions": 0,
+        "project_wakes": 0,
+        "script_compare_log": 0
+      }
+    }
+  ],
+  "last_decisions_kept": 69,
+  "policy": {
+    "batch_rows": 2000,
+    "compare_keep_secs": 604800,
+    "decision_keep_latest": 256,
+    "decision_keep_secs": 604800,
+    "max_rows_per_pass": 5000,
+    "wake_keep_secs": 604800
+  },
+  "projects": 69,
+  "rows": {
+    "compare_log": 4968,
+    "decisions": 57960,
+    "wakes": 57960
+  },
+  "rows_requested": 100000,
+  "schema": "celeris.project-retention-scale/1",
+  "vacuum_micros": 167315,
+  "virtual_hours": 720
+}

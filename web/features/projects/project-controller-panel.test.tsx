@@ -106,6 +106,13 @@ const summary = (over: Partial<ControllerSummary> = {}): ControllerSummary => ({
     max_tokens_per_day: 20000000,
     ttl_secs: 259200,
   },
+  retention: {
+    wakes_total: 12,
+    wakes_pending: 1,
+    decisions_total: 30,
+    decisions_effect_none: 25,
+    decisions_pending: 0,
+  },
   trace: {
     decision_id: "D1",
     rule_id: "pc/guard/budget",
@@ -196,6 +203,9 @@ describe("ProjectControllerPanel", () => {
     expect(next).toContain("起票 2 件 / 5");
     expect(next).toContain("同じ失敗 3 回");
     expect(next).toContain("259200 秒");
+    // P4-D: 記録の行数。
+    expect(next).toContain("wake 12 件（未処理 1 件）");
+    expect(next).toContain("効果なし 25 件");
     const decisions = part(html, "controller-decisions");
     expect(decisions).toContain("最後の判断: pc/guard/budget");
     expect(decisions).toContain("版 6");

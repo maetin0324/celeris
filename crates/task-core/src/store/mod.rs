@@ -128,6 +128,9 @@ mod org;
 mod project_briefs;
 mod project_guard;
 pub use project_guard::{PhaseSync, ProjectResume};
+mod project_retention;
+#[cfg(test)]
+mod project_retention_tests;
 mod project_wake;
 pub(crate) mod project_wake_effect;
 mod projects;

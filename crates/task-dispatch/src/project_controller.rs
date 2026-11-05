@@ -21,6 +21,18 @@ pub struct ProjectControllerSettings {
     pub max_cos_inputs_open_per_project: u32,
     /// A6: `[project_controller.budget]`（予算・停滞・同じ失敗・TTL の guard）。
     pub budget: task_ops::project_budget::BudgetLimits,
+    /// P4-D: `[project_controller.retention]`（wake・判断・compare の記録の GC）。`None` なら GC しない。
+    pub retention: Option<ProjectRetentionSettings>,
+}
+
+/// P4-D（ADR 2026-11-05-phase4-p4d-retention）: GC の規則・archive の置き場・間隔。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRetentionSettings {
+    pub policy: task_core::project_retention::RetentionPolicy,
+    /// 消す行を書く JSONL の dir（必須。監査のため archive の無い GC はしない）。
+    pub archive_dir: std::path::PathBuf,
+    /// GC の間隔（既定 3600 秒。process の中で数え、再起動の後は最初の tick で 1 回走る）。
+    pub interval_secs: u64,
 }
 
 impl Default for ProjectControllerSettings {
@@ -35,6 +47,7 @@ impl Default for ProjectControllerSettings {
             max_retries: 5,
             max_cos_inputs_open_per_project: 1,
             budget: task_ops::project_budget::BudgetLimits::default(),
+            retention: None,
         }
     }
 }

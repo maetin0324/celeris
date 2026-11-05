@@ -51,6 +51,9 @@ pub(crate) struct ProjectControllerRuntime {
     pub hook: Option<BoundaryHook>,
     pub fail_effect: Option<EffectFailHook>,
     pub last: ControllerTickStats,
+    /// P4-D: 次に GC してよい時刻と直前の GC の結果（`project_retention.rs`）。
+    pub retention_next: Option<OffsetDateTime>,
+    pub retention_last: Option<task_core::project_retention::RetentionReport>,
 }
 
 impl ProjectControllerRuntime {
@@ -79,6 +82,8 @@ impl Dispatcher {
             hook: None,
             fail_effect: None,
             last: ControllerTickStats::default(),
+            retention_next: None,
+            retention_last: None,
         });
         true
     }

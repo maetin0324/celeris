@@ -314,5 +314,6 @@ pub fn summary(
             generation_id: d.generation_id.clone(),
             decided_at: d.created_at.clone(),
         }),
+        retention: store.retention_project_counts(&snapshot.project.id)?,
     })
 }

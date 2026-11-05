@@ -19,6 +19,8 @@ mod long_horizon_bench;
 mod long_horizon_pilot;
 #[path = "project_cos.rs"]
 mod project_cos;
+#[path = "project_retention_soak.rs"]
+mod project_retention_soak;
 #[path = "project_controller_replay.rs"]
 mod replay;
 #[path = "project_controller_soak.rs"]

@@ -91,5 +91,16 @@ v2 の集計（`p0c/grade-v2/summary.json`）。v1（`2026-11-04-long-horizon/a8
 
 - repair-1（merge_base、2026-11-05）: 検査済みの merge candidate と main が食い違ったため、task branch を最新の main（件名「p0b: attempt 3 の検査の結果を書く」）へ rebase した。衝突なし（task の 5 file と main の差分の file は重ならない）。提出時の HEAD で `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace -- -D warnings` exit 0、`env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` exit 0（978 passed、0 skipped、bundle SKIP 0 件）。
 
+## P0-B の後の replay の修正（2026-11-05、fix-replay）
+- 症状（review の差し戻し）: P0-B を含む main の上で `bash scripts/dev/test-long-horizon-bench.sh --out "$TMPDIR/bench2"` は exit 1（「the committed v2 raw differs from this replay」）。new 腕の 9 facts（C01〜C08・C09 の new）が変わった。controller_achieved は 8/10 から 0/10、人の nudge（avoidable）が C03・C04・C07・C08 などで増え、C06 は `fired 1 faults, expected 2` だった。
+- 原因（再現で確認）: P0-B の I4 は、repo の無い root を `ArtifactProduced` か合格の artifact_exists/knowledge_page が無いと取り込み済みにしない。bench の台本の worker は `out/<id>.txt` を書いて `review_pass` の done にするだけで、成果物の event を残していなかった。controller は root を到達と数えず次の Outcome を起票しなかったので、台本の人の nudge が起票を代わりに起こした。C06 は o2 の承認待ちに届かなかった。
+- 直し方: 製品コード・gate・oracle は変えていない。replay の台本の `review_pass` の経路だけで `ArtifactProduced`（`out/<id>.txt`、sha256 は書いた内容）を残す。`review_fail` の経路には付けない（commit「p0c: replay の台本の worker が成果物の ArtifactProduced を残す（P0-B の I4 に合わせる）」、ADR 付記「P0-B（I4）の後の replay の fixture」）。
+- 結果: 修正後の replay の raw は commit 済みの `p0c/replay-v2` と `diff -r` で一致した。`grade-v2` の `grades.jsonl`・`summary.json` も `cmp` で一致したので、raw・grade・MANIFEST は書き換えていない。new 腕は oracle 合格 10/10、controller_achieved 8/10（C06・C10 は未達。変更前と同じで、原因は未確認）、avoidable 0、fired 16・recovered 16。
+- 検査（提出時の HEAD、main 「p1g: main への rebase（merge_base の局所修復）の検査の結果を書く」へ rebase した後に実行）:
+  - `bash scripts/dev/test-long-horizon-bench.sh --out "$TMPDIR/bench4"` → exit 0（replay 40 passed、grade 24 passed、contract 9 passed）。`long_horizon_bench` の 24 件はこの grade 段で走った。
+  - `git diff $(git merge-base HEAD refs/heads/main) -- agent-docs/progress/2026-11-04-long-horizon/` → 差分 0 byte。
+  - `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` → exit 0（3412 passed、9 skipped、bundle SKIP 0 件）。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+
 ## 提案
 - `scripts/dev/long-horizon-pilot-llm.sh --harness config` は、ops-r2 の sandbox で起動していなければ断る検査を足す（P0-D・P0-F の範囲）。

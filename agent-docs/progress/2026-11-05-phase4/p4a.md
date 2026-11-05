@@ -54,9 +54,11 @@ command（`CARGO_TARGET_DIR` は Celeris が渡した値。一時 DB、fake harn
 - `p4a: tick の段の計測を tick_steps.rs に移し、旧い粗い lap を段の列に置き換える`（source-size gate の `dispatcher.rs` 2,000 行の上限に合わせ、main より 10 行減らした。`slow tick phases` の警告は `total_ms` と `steps_us` を出す）
 - `p4a: 進捗とベースラインの raw を書く`
 - `p4a: 進捗の文書の検査の結果を書く`
+- `p4a: test-affected の host 依存の失敗を進捗に書く`
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - `bash scripts/dev/test-affected.sh` → exit 0。対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、3,422 passed・10 skipped（`tick_scale_baseline` の既定 0,20 件を含む）。
+- 文書の commit の後の 2 回目は exit 100（3,420 passed・2 failed）: `celeris::script_compare_cos_digest` の `script_compare_cos_digest_ts_mode_falls_back_to_rust`・`..._ts_mode_applies_ts_commands` が、受信箱の行に `release_unpromoted-selfdeploy` が 1 件多くて落ちた。試験が実 host の `~/.local/celeris/releases`（未昇格の release が 1 時間を超えていた）を読むため。release の dir が変わった後は単独で 9 passed、3 回目の `test-affected` も exit 0（3,422 passed）。この変更とは無関係で、試験の host 依存は直していない（未解決 5）。
 - 1 回目の `test-affected` は exit 1 だった: source-size gate `crates/task-dispatch/src/dispatcher.rs production_size value=2492 threshold=2000 allowed=2412`。2 番目の commit で直した。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `sh scripts/dev/progress-index.sh --check`（ok）・`sh scripts/dev/check-doc-links.sh`（ok）・`sh scripts/dev/check-adr-numbers.sh`（ok、380 files）・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`（ok）・`git diff --check refs/heads/main` → すべて exit 0。
@@ -78,6 +80,7 @@ command（`CARGO_TARGET_DIR` は Celeris が渡した値。一時 DB、fake harn
 2. CoS 有効（本番）の config での遅延の内訳は未計測。
 3. G3 の C06・C10 の判定（妥当な停止か不具合か）は P4-B が replay を再現して決める。上の推定は facts だけからのもの。
 4. 第 3 フェーズ親の要約 `2026-11-05-phase3.md` が main に無い。
+5. `crates/celeris/tests/script_compare_cos_digest.rs` が実 host の releases dir の状態で落ちる（停滞の検出の `releases_dir` を一時 dir にしていない）。別 task で直す（提案）。
 
 ## 次の gate
 - P4-B と P4-C は並列に着手できる（ADR D4 の file の持ち主、migration の予約 B=0115・C=0116・D=0117）。P4-D は P4-C の後。

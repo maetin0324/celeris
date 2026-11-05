@@ -1,0 +1,5 @@
+diff -r $TMPDIR/lhb/raw/facts/e043933427af2507.json agent-docs/progress/2026-11-05-phase3/p0c/replay-v2/facts/e043933427af2507.json
+75c75
+<   "controller_achieved": true,
+---
+>   "controller_achieved": false,

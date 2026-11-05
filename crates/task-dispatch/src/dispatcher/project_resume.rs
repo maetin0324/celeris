@@ -6,7 +6,7 @@
 //!
 //! | 原因 | 解消 |
 //! |---|---|
-//! | 人への問い（TS の `escalate`。`human_required` の分類） | 人の回答: 問いの key の許可・提案の却下。`objective_change` は依頼文の変更も |
+//! | 人への問い（TS の `escalate`。`human_required` の分類） | 人の回答: 問いの key の許可・提案の却下。`objective_change` は依頼文の変更も。`attempts_exhausted:<o>` は Outcome を I3 で満たす root が現れたときも（P4-B） |
 //! | 同じ失敗（`guard_same-failure`） | 人の操作（`human_changed`）か、失敗した root 自身の完了 |
 //! | TTL（`guard_ttl`） | 外からの入力の wake |
 //! | 日次予算（`guard_budget`） | 期限（次の UTC 00:00）を過ぎ、その日の使用量が危険でなく、自動再開の回数が残り、起票の予算は有効な許可がある |
@@ -245,6 +245,50 @@ fn decide_budget(
     })
 }
 
+/// TS の `escalate`（試行の上限）の問いの key の接頭辞（`attempts_exhausted:<outcome id>`）。
+const ATTEMPTS_EXHAUSTED_PREFIX: &str = "attempts_exhausted:";
+
+/// 案件の root のうち、`outcome` を I3 で満たすもの（`task:<id>`）。snapshot は今の store から作る（TS は呼ばない）。
+fn outcome_evidence(
+    store: &SqliteStore,
+    project: &str,
+    outcome: &str,
+    now: OffsetDateTime,
+) -> Result<Vec<String>, StoreError> {
+    use task_core::project_proposal::{SnapshotController, SnapshotLimits, root_satisfies};
+    let project_id: task_core::ProjectId = project
+        .parse()
+        .map_err(|e| StoreError::Invalid(format!("project id {project}: {e}")))?;
+    let snapshot = task_ops::project_snapshot::build(
+        store,
+        project_id,
+        task_ops::project_snapshot::SnapshotContext {
+            controller: SnapshotController {
+                mode: "off".into(),
+                phase: "blocked".into(),
+                revision: 0,
+                human_epoch: 0,
+                retry_count: 0,
+                progress_epoch: 0,
+            },
+            decisions: Vec::new(),
+            wakes: Vec::new(),
+            limits: SnapshotLimits::default(),
+            now,
+        },
+    )
+    .map_err(|e| StoreError::Invalid(e.to_string()))?;
+    let Some(o) = snapshot.outcomes.iter().find(|o| o.id == outcome) else {
+        return Ok(Vec::new());
+    };
+    Ok(snapshot
+        .roots
+        .iter()
+        .filter(|r| root_satisfies(r, o))
+        .map(|r| format!("task:{}", r.id))
+        .collect())
+}
+
 fn decide(
     store: &SqliteStore,
     limits: &BudgetLimits,
@@ -307,6 +351,18 @@ fn decide(
                     json!({"reason": "question_dismissed", "question_key": key,
                     "proposal_id": p.id, "resolved_by": p.resolved_by}),
                 ));
+            }
+            // 第 4 フェーズ P4-B（G3・C10）: 試行の上限で止まった Outcome に、止まった後で Rust の検証（I3）を通る root
+            // が現れた（人が CoS に指示して作った root など）。問いの原因（その Outcome の根拠が無い）が解けたので再開し、
+            // 次の評価が到達の記録と達成を決める（起票は通常の許可・予算の門を通る）。
+            if let Some(outcome) = key.strip_prefix(ATTEMPTS_EXHAUSTED_PREFIX) {
+                let roots = outcome_evidence(store, project, outcome, now)?;
+                if !roots.is_empty() {
+                    return Ok(resume(
+                        json!({"reason": "outcome_evidence", "question_key": key,
+                        "outcome": outcome, "roots": roots}),
+                    ));
+                }
             }
             // 依頼文を変えられるのは人だけ（CoS は `project_request_human_only`）。
             if category == "objective_change"

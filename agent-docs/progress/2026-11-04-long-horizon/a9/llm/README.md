@@ -29,3 +29,5 @@ stub harness の raw はここに書かない（`../stub/`）。計画と未解�
 - `grade/` — `grades.jsonl`（試行ごとの predicate と metrics）と `summary.json`（腕ごとの集計）
 - `ops/` — 試行ごとの操作記録 `<trial>.json`（controller の rules・state 遷移）と pilot のログ `C06-new.log`、`C08-new.log`
 - `trials/<trial>/repo/` — 試行が終わった時点の課題 repo（`README.md`、`minichunk.py`、`out/`）。C06 は `out/o1.txt`〜`o2.txt`、C08 は `out/o1.txt`〜`o4.txt`
+
+trials の `repo/__pycache__/*.pyc`（1 file、2KB）は python の build 副産物で、`.gitignore` の `__pycache__/` に当たるため写していない。元は `/local/celeris/data/scratch/a9-pilot/raw-20261105/` にある。

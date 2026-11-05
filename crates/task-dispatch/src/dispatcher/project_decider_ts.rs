@@ -676,7 +676,8 @@ pub fn to_decision(
                 .id
                 .parse()
                 .map_err(|e| format!("project id: {e}"))?;
-            let spec = ps::launch_root_spec(project_id, root).map_err(|e| e.to_string())?;
+            let spec = ps::launch_root_spec(project_id, root, &snapshot.outcomes)
+                .map_err(|e| e.to_string())?;
             let meta = LaunchRootMeta {
                 root_key: root.key.clone(),
                 outcome_ids: root.outcome_ids.clone(),

@@ -133,6 +133,7 @@ else
     extra=(--harness stub)
     # 陰性の試験用: stub が効果の記録に偽の行を足そうとする（driver は observation_failed で落ちる）。
     [ "${LONG_HORIZON_PILOT_STUB_TAMPER:-}" != 1 ] || extra+=(--stub-tamper)
+    [ "${LONG_HORIZON_PILOT_STUB_NO_OUTPUT:-}" != 1 ] || extra+=(--stub-no-output)
 fi
 [ "${LONG_HORIZON_PILOT_STUB_FORGE:-}" != 1 ] || extra+=(--forge)
 for case in ${cases//,/ }; do

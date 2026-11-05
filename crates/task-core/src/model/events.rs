@@ -416,6 +416,17 @@ pub enum Event {
         pass: bool,
         reason: String,
     },
+    /// ADR 2026-11-05-phase3-p0e: review が実行した `Check::Command` の結果（`ReviewVerdict` と同じ transaction）。
+    /// 出典は acceptance の `criterion_idx` と `cmd`。`exit` は timeout・実行の失敗・必須検査の合格の再利用で `None`。
+    ReviewCommandChecked {
+        run_id: String,
+        criterion_idx: usize,
+        cmd: String,
+        expect_exit: i32,
+        exit: Option<i32>,
+        timed_out: bool,
+        pass: bool,
+    },
     ApprovalRequested,
     ApprovalDecided {
         by: String,

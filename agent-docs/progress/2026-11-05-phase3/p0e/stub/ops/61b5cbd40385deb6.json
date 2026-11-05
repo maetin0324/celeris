@@ -1,0 +1,94 @@
+{
+ "schema": "celeris.long-horizon-pilot-trial/1",
+ "trial": "61b5cbd40385deb6",
+ "harness": "stub",
+ "arm": "old.passive",
+ "case": "C08",
+ "project": "01M6NBFYTD6EX82TMSGC8ANTDF",
+ "wall_secs": 15,
+ "rules": [],
+ "root_statuses": [],
+ "reviews": [],
+ "ops": [
+  {
+   "step": "deploy_ts",
+   "at": 1.5,
+   "bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8",
+   "mode_seed": "synthetic: temp DB only"
+  },
+  {
+   "step": "project_created",
+   "at": 2.5,
+   "project": "01M6NBFYTD6EX82TMSGC8ANTDF",
+   "arm": "old.passive"
+  },
+  {
+   "step": "public_checks",
+   "at": 2.5,
+   "outcomes": [
+    {
+     "outcome": "o1",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C08/case.json#o1.acceptance"
+    },
+    {
+     "outcome": "o2",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C08/case.json#o2.acceptance"
+    },
+    {
+     "outcome": "o3",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o3) && git show HEAD:out/o3.txt | cmp - \"$d/out/o3.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C08/case.json#o3.acceptance"
+    },
+    {
+     "outcome": "o4",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o4) && git show HEAD:out/o4.txt | cmp - \"$d/out/o4.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C08/case.json#o4.acceptance"
+    }
+   ]
+  },
+  {
+   "step": "operator_cannot_raise_mode",
+   "at": 2.5,
+   "status": 403,
+   "code": null
+  },
+  {
+   "step": "human_message",
+   "at": 2.6,
+   "thread": "01M6NBG19WV1D4HS243JYTATHG"
+  },
+  {
+   "step": "state",
+   "at": 2.6,
+   "phase": "active",
+   "roots": []
+  },
+  {
+   "step": "wake_after_end",
+   "at": 15.7,
+   "new_roots": 0
+  }
+ ]
+}

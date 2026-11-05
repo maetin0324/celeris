@@ -300,7 +300,7 @@ fn launch(
     if found != IdempotencyLookup::New {
         return existing(found).map(|id| (id, false));
     }
-    let spec = ps::launch_root_spec(project, root).map_err(|e| e.to_string())?;
+    let spec = ps::launch_root_spec(project, root, &[]).map_err(|e| e.to_string())?;
     let mut task =
         task_ops::add::build_task_with_roles(&store, spec, &[], &[], OffsetDateTime::now_utc())
             .map_err(|e| e.to_string())?;

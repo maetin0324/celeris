@@ -14,9 +14,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use task_core::project_proposal::{
-    self as pp, CONTROLLER_LABEL, LAUNCH_ROOT_OPERATION, ProjectSnapshot, RootCheck, RootSpec,
-    SnapshotController, SnapshotCriterion, SnapshotDecision, SnapshotLimits, SnapshotProject,
-    SnapshotRoot, SnapshotWait, SnapshotWake, parse_outcomes,
+    self as pp, CONTROLLER_LABEL, LAUNCH_ROOT_OPERATION, Outcome, ProjectSnapshot, RootCheck,
+    RootSpec, SnapshotController, SnapshotCriterion, SnapshotDecision, SnapshotLimits,
+    SnapshotProject, SnapshotRoot, SnapshotWait, SnapshotWake, parse_outcomes,
 };
 use task_core::store::{IdempotencyClaim, SqliteStore};
 use task_core::{Check, Event, ProjectId, Status, Task, TaskId, TaskStore};
@@ -319,8 +319,14 @@ pub fn build(
 
 /// `launch_root` の root を `POST /tasks` と同じ DTO にする。acceptance は Outcome の文のまま（I8）、label は
 /// `project-controller`。親・依存・担当は持たない（root）。
-pub fn launch_root_spec(project_id: ProjectId, root: &RootSpec) -> Result<NewTaskSpec, OpsError> {
-    let acceptance: Vec<CriterionSpec> = root
+/// 対象 Outcome の `checks` を `Check::Command` として足す（ADR 2026-11-05-phase3-p0e）。command は依頼文の block が
+/// 正本で、TS の proposal からは作らない・落とせない。`outcomes` は判断に使った snapshot の Outcome。
+pub fn launch_root_spec(
+    project_id: ProjectId,
+    root: &RootSpec,
+    outcomes: &[Outcome],
+) -> Result<NewTaskSpec, OpsError> {
+    let mut acceptance: Vec<CriterionSpec> = root
         .acceptance
         .iter()
         .map(|c| match c.check {
@@ -332,6 +338,19 @@ pub fn launch_root_spec(project_id: ProjectId, root: &RootSpec) -> Result<NewTas
             },
         })
         .collect();
+    let mut seen = BTreeSet::new();
+    for check in outcomes
+        .iter()
+        .filter(|o| root.outcome_ids.contains(&o.id))
+        .flat_map(|o| o.checks.iter())
+    {
+        if seen.insert((check.cmd.as_str(), check.expect_exit)) {
+            acceptance.push(CriterionSpec::Command {
+                cmd: check.cmd.clone(),
+                expect_exit: check.expect_exit,
+            });
+        }
+    }
     let body = serde_json::json!({
         "title": root.title,
         "objective": root.objective,
@@ -373,6 +392,69 @@ pub fn evidence_scope(snapshot: &ProjectSnapshot) -> BTreeSet<String> {
 /// `TaskId` の文字列を読む（snapshot の id から）。
 pub fn parse_task_id(id: &str) -> Option<TaskId> {
     id.parse().ok()
+}
+
+#[cfg(test)]
+mod launch_root_spec_tests {
+    use super::*;
+    use task_core::project_proposal::{OutcomeCheck, RootCriterion};
+
+    fn root(outcome_ids: &[&str]) -> RootSpec {
+        RootSpec {
+            key: "outcome:o1:1".into(),
+            title: "t".into(),
+            objective: "o".into(),
+            acceptance: vec![RootCriterion {
+                text: "A".into(),
+                check: RootCheck::Reviewer,
+            }],
+            stages_hint: vec![],
+            continues_root_ids: vec![],
+            outcome_ids: outcome_ids.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+
+    fn outcome(id: &str, cmds: &[&str]) -> Outcome {
+        Outcome {
+            id: id.into(),
+            title: "t".into(),
+            acceptance: vec!["A".into()],
+            depends_on: vec![],
+            priority: 0,
+            source: "request_block".into(),
+            checks: cmds
+                .iter()
+                .map(|c| OutcomeCheck {
+                    cmd: (*c).into(),
+                    expect_exit: 0,
+                })
+                .collect(),
+        }
+    }
+
+    fn commands(spec: NewTaskSpec) -> Vec<String> {
+        serde_json::to_value(&spec).expect("json")["acceptance"]
+            .as_array()
+            .expect("acceptance")
+            .iter()
+            .filter_map(|c| c["cmd"].as_str().map(str::to_owned))
+            .collect()
+    }
+
+    /// 対象 Outcome の検査だけを足し、同じ command は 1 回にする。TS の proposal には command が無い。
+    #[test]
+    fn launch_root_spec_adds_the_checks_of_the_named_outcomes_only() {
+        let outcomes = [
+            outcome("o1", &["check-1", "check-shared"]),
+            outcome("o2", &["check-2"]),
+            outcome("o3", &["check-shared"]),
+        ];
+        let id = ProjectId::new();
+        let spec = launch_root_spec(id, &root(&["o1", "o3"]), &outcomes).expect("spec");
+        assert_eq!(commands(spec), vec!["check-1", "check-shared"]);
+        let spec = launch_root_spec(id, &root(&["o9"]), &outcomes).expect("spec");
+        assert!(commands(spec).is_empty());
+    }
 }
 
 #[cfg(test)]

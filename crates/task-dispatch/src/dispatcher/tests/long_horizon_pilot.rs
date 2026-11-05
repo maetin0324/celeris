@@ -648,3 +648,6 @@ async fn long_horizon_pilot_restart_and_clock_jump_keep_one_root() {
     assert_eq!(p.phase(), ControllerPhase::Achieved);
     p.finish(test, json!({"restarts": 1, "clock_jump_hours": 24}));
 }
+
+#[path = "long_horizon_pilot_review.rs"]
+mod review_check;

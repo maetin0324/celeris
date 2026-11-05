@@ -9,6 +9,7 @@
 # 2. 実 daemon（一時 DB・loopback）と stub harness（LLM 0）で `long-horizon-pilot-llm.sh --harness stub` を C08 の
 #    `new`・`old.passive` で流し、facts の採点（--tier llm_pilot）・操作の記録（operator は mode を上げられない、
 #    達成の後の wake で起票しない、off の後は判断が増えない、old は controller の判断 0 で CoS が起きる）を検査する。
+#    成果を書かない stub では command check が落ち、達成にならない（ADR 2026-11-05-phase3-p0e）。
 # 3. 実 LLM の script が承認なしで起動を断ること、controller の module が task の遷移を import しないこと。
 #
 # 本番の DB・daemon に触れない（一時 DB と $TMPDIR だけ）。前提（cargo-nextest・python3・node・control-ts の依存）が
@@ -43,7 +44,8 @@ out="$(cd "$out" && pwd)"
 case "$out" in
     /local/celeris/data/db*|/local/celeris/state*) fail "--out must not be under the production state" ;;
 esac
-rm -rf "${out:?}/virtual" "${out:?}/stub" "${out:?}/stub-c06" "${out:?}/config-c06" "${out:?}/stub-c06-tamper" "${out:?}/bundle" "${out:?}"/*.log
+rm -rf "${out:?}/virtual" "${out:?}/stub" "${out:?}/stub-c06" "${out:?}/config-c06" "${out:?}/stub-c06-tamper" "${out:?}/stub-no-output" \
+    "${out:?}/bundle" "${out:?}"/*.log
 mkdir -p "$out/virtual"
 
 if [ ! -d control-ts/node_modules ]; then
@@ -72,6 +74,11 @@ run_suite() { # name min nextest-args...
 run_suite dispatch 7 -p task-dispatch --lib -E 'test(/^dispatcher::tests::project_wake::long_horizon_pilot::long_horizon_pilot_/)'
 [ ! -s "$out/skip.log" ] || fail "bundle SKIP recorded: $(cat "$out/skip.log")"
 run_suite api 3 -p task-api --test long_horizon_pilot -E 'test(/^long_horizon_pilot_api_/)'
+# ADR 2026-11-05-phase3-p0e（K3）: 検査の不合格が reviewer の合格に勝ち、本物の TS の controller も達成にしない。
+run_suite review_check 2 -p task-dispatch --lib \
+    -E 'test(/^dispatcher::tests::project_wake::long_horizon_pilot::review_check::pilot_review_check_/)'
+[ ! -s "$out/skip.log" ] || fail "bundle SKIP recorded: $(cat "$out/skip.log")"
+sh scripts/dev/long-horizon-pilot/test-stub-reviewer.sh || fail "stub reviewer test failed"
 
 python3 -I - "$out/virtual" <<'PY'
 import json, pathlib, sys
@@ -163,12 +170,23 @@ if "new" in arms:
     need([r["created_by"] for r in facts["roots"]] == ["daemon"] * 4, f"new roots {facts['roots']}")
     need(all(r["statuses"][-1] == "done" for r in facts["roots"]), "new roots are not all done")
     need("pc/achieved" in ops["rules"], f"new rules {ops['rules']}")
+    need(isinstance(facts["achieved_at"], int), f"new achieved_at {facts['achieved_at']}")
     need(steps.get("operator_cannot_raise_mode", {}).get("status") == 403, "operator raised the mode")
     need(steps.get("wake_after_end", {}).get("new_roots") == 0, "a root after achieved")
     a = steps.get("after_off", {})
     need(a.get("mode") == "off" and a.get("decisions_after") == a.get("decisions_at_end"), f"after off {a}")
     need(facts["running_untracked"] == 0, "running roots left")
     need(facts["usage"]["missing"] == "tier=stub", f"usage {facts['usage']}")
+    # K22: reviewer の理由と検査の出典・exit が facts と ops に残る。
+    for r in facts["roots"]:
+        checks = r["review"]["command_checks"]
+        need(len(checks) >= 1 and all(c["exit"] == 0 and c["pass"] and c["cmd"] for c in checks), f"checks {r}")
+        need(all(str(c["source"]).startswith("public/C08/") and isinstance(c["criterion"], int) for c in checks), f"source {r}")
+        verdicts = [v for v in r["review"]["verdicts"] if v["kind"] == "reviewer"]
+        need(verdicts and all(v["pass"] and "stub reviewer:" in v["reason"] for v in verdicts), f"reviewer {r}")
+    need([x["command_checks"] for x in ops["reviews"]] == [r["review"]["command_checks"] for r in facts["roots"]],
+         "ops and facts disagree on the checks")
+    need(steps.get("public_checks", {}).get("outcomes"), "ops has no public_checks step")
 if "old.passive" in arms:
     t = arms["old.passive"]
     facts = json.loads((d / "facts" / f"{t}.json").read_text())
@@ -242,6 +260,38 @@ if errors:
     print("\n".join(errors), file=sys.stderr)
     sys.exit(1)
 print("test-long-horizon-pilot: C06 effect broker raw ok (stub and config-stub; forged approvals refused)")
+PY
+
+# 2c. 成果を書かない worker（K3・K22）。command check が落ち、root は done にならず、controller は達成にしない。
+#     落ちた検査の出典と exit が facts と ops に残る。
+LONG_HORIZON_PILOT_STUB_NO_OUTPUT=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness stub \
+    --out "$out/stub-no-output" --cases C08 --arms new >"$out/stub-no-output.log" 2>&1 \
+    || { tail -40 "$out/stub-no-output.log" >&2; fail "no-output stub pilot failed"; }
+python3 -I - "$out/stub-no-output" <<'PY'
+import json, pathlib, sys
+d = pathlib.Path(sys.argv[1])
+(f,) = (d / "facts").glob("*.json")
+facts = json.loads(f.read_text())
+ops = json.loads((d / "ops" / f.name).read_text())
+grade = json.loads((d / "grade" / "grades.jsonl").read_text().splitlines()[0])["grade"]
+errors = []
+def need(ok, msg):
+    if not ok:
+        errors.append(msg)
+need(facts["achieved_at"] is None and "pc/achieved" not in ops["rules"], f"achieved: {ops['rules']}")
+need(facts["roots"], "no root was launched")
+need(not any("done" in r["statuses"] for r in facts["roots"]), f"a root is done: {facts['roots']}")
+checks = [c for r in facts["roots"] for c in r["review"]["command_checks"]]
+need(checks and all(not c["pass"] and c["exit"] not in (None, 0) for c in checks), f"checks {checks}")
+need(all(str(c["source"]).startswith("public/C08/") for c in checks), f"source {checks}")
+need(any(not v["pass"] and v["kind"] == "command" and "exit=" in v["reason"]
+         for r in facts["roots"] for v in r["review"]["verdicts"]), "no failed command verdict in facts")
+need(any(c for x in ops["reviews"] for c in x["command_checks"]), "ops has no check")
+need(grade["verdict"] != "pass", f"grade {grade['verdict']}")
+if errors:
+    print("\n".join(errors), file=sys.stderr)
+    sys.exit(1)
+print("test-long-horizon-pilot: no-output stub raw ok")
 PY
 
 # 3. 実 LLM の門と I14 の import の検査。

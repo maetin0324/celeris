@@ -1,0 +1,401 @@
+{
+ "schema": "celeris.long-horizon-pilot-trial/1",
+ "trial": "7420dfe789f99af7",
+ "harness": "stub",
+ "arm": "new",
+ "case": "C08",
+ "project": "01M6NBKN3JJV71BQB594KBHBGZ",
+ "wall_secs": 104,
+ "rules": [
+  "pc/outcome-open",
+  "pc/review-failed/retry",
+  "pc/attempts-exhausted"
+ ],
+ "root_statuses": [
+  "failed",
+  "failed"
+ ],
+ "reviews": [
+  {
+   "root": "01M6NBMKES229H0GHRCS5GZ41Q",
+   "outcome": "o1",
+   "verdicts": [
+    {
+     "run_id": "01M6NBMKF958G7Z7EW662F932R",
+     "criterion": 0,
+     "text": "dorastiq-o1: 作業 tree の直下で `python3 minichunk.py verify C08 o1` を実行して out/o1.txt を作り、取り込まれた tree の out/o1.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）",
+     "kind": "reviewer",
+     "pass": false,
+     "reason": "not evaluated: a deterministic check failed"
+    },
+    {
+     "run_id": "01M6NBMKF958G7Z7EW662F932R",
+     "criterion": 1,
+     "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+     "kind": "command",
+     "pass": false,
+     "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(1) expected=0 stdout_tail=\"\" stderr_tail=\"fatal: path 'out/o1.txt' does not exist in 'HEAD'\\ncmp: EOF on - which is empty\\n\""
+    },
+    {
+     "run_id": "01M6NBMXVW1ZA8070NA7T31F7S",
+     "criterion": 0,
+     "text": "dorastiq-o1: 作業 tree の直下で `python3 minichunk.py verify C08 o1` を実行して out/o1.txt を作り、取り込まれた tree の out/o1.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）",
+     "kind": "reviewer",
+     "pass": false,
+     "reason": "not evaluated: a deterministic check failed"
+    },
+    {
+     "run_id": "01M6NBMXVW1ZA8070NA7T31F7S",
+     "criterion": 1,
+     "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+     "kind": "command",
+     "pass": false,
+     "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(1) expected=0 stdout_tail=\"\" stderr_tail=\"fatal: path 'out/o1.txt' does not exist in 'HEAD'\\ncmp: EOF on - which is empty\\n\""
+    },
+    {
+     "run_id": "01M6NBNJ9ED9QBV9EY4K2HSW8E",
+     "criterion": 0,
+     "text": "dorastiq-o1: 作業 tree の直下で `python3 minichunk.py verify C08 o1` を実行して out/o1.txt を作り、取り込まれた tree の out/o1.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）",
+     "kind": "reviewer",
+     "pass": false,
+     "reason": "not evaluated: a deterministic check failed"
+    },
+    {
+     "run_id": "01M6NBNJ9ED9QBV9EY4K2HSW8E",
+     "criterion": 1,
+     "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+     "kind": "command",
+     "pass": false,
+     "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(1) expected=0 stdout_tail=\"\" stderr_tail=\"fatal: path 'out/o1.txt' does not exist in 'HEAD'\\ncmp: EOF on - which is empty\\n\""
+    }
+   ],
+   "command_checks": [
+    {
+     "run_id": "01M6NBMKF958G7Z7EW662F932R",
+     "criterion": 1,
+     "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+     "expect_exit": 0,
+     "exit": 1,
+     "timed_out": false,
+     "pass": false,
+     "source": "public/C08/case.json#o1.acceptance"
+    },
+    {
+     "run_id": "01M6NBMXVW1ZA8070NA7T31F7S",
+     "criterion": 1,
+     "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+     "expect_exit": 0,
+     "exit": 1,
+     "timed_out": false,
+     "pass": false,
+     "source": "public/C08/case.json#o1.acceptance"
+    },
+    {
+     "run_id": "01M6NBNJ9ED9QBV9EY4K2HSW8E",
+     "criterion": 1,
+     "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+     "expect_exit": 0,
+     "exit": 1,
+     "timed_out": false,
+     "pass": false,
+     "source": "public/C08/case.json#o1.acceptance"
+    }
+   ],
+   "discrepancies": []
+  },
+  {
+   "root": "01M6NBNM69R7FG766MH9BSWTNC",
+   "outcome": "o1",
+   "verdicts": [
+    {
+     "run_id": "01M6NBNM7AT2W7TZ6K5TJWDPGX",
+     "criterion": 0,
+     "text": "dorastiq-o1: 作業 tree の直下で `python3 minichunk.py verify C08 o1` を実行して out/o1.txt を作り、取り込まれた tree の out/o1.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）",
+     "kind": "reviewer",
+     "pass": false,
+     "reason": "not evaluated: a deterministic check failed"
+    },
+    {
+     "run_id": "01M6NBNM7AT2W7TZ6K5TJWDPGX",
+     "criterion": 1,
+     "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+     "kind": "command",
+     "pass": false,
+     "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(1) expected=0 stdout_tail=\"\" stderr_tail=\"fatal: path 'out/o1.txt' does not exist in 'HEAD'\\ncmp: EOF on - which is empty\\n\""
+    },
+    {
+     "run_id": "01M6NBNYZ3H7SW49X2QACQV7VV",
+     "criterion": 0,
+     "text": "dorastiq-o1: 作業 tree の直下で `python3 minichunk.py verify C08 o1` を実行して out/o1.txt を作り、取り込まれた tree の out/o1.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）",
+     "kind": "reviewer",
+     "pass": false,
+     "reason": "not evaluated: a deterministic check failed"
+    },
+    {
+     "run_id": "01M6NBNYZ3H7SW49X2QACQV7VV",
+     "criterion": 1,
+     "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+     "kind": "command",
+     "pass": false,
+     "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(1) expected=0 stdout_tail=\"\" stderr_tail=\"fatal: path 'out/o1.txt' does not exist in 'HEAD'\\ncmp: EOF on - which is empty\\n\""
+    },
+    {
+     "run_id": "01M6NBPK9KGY2ZB0C0JJA6HW26",
+     "criterion": 0,
+     "text": "dorastiq-o1: 作業 tree の直下で `python3 minichunk.py verify C08 o1` を実行して out/o1.txt を作り、取り込まれた tree の out/o1.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）",
+     "kind": "reviewer",
+     "pass": false,
+     "reason": "not evaluated: a deterministic check failed"
+    },
+    {
+     "run_id": "01M6NBPK9KGY2ZB0C0JJA6HW26",
+     "criterion": 1,
+     "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+     "kind": "command",
+     "pass": false,
+     "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(1) expected=0 stdout_tail=\"\" stderr_tail=\"fatal: path 'out/o1.txt' does not exist in 'HEAD'\\ncmp: EOF on - which is empty\\n\""
+    }
+   ],
+   "command_checks": [
+    {
+     "run_id": "01M6NBNM7AT2W7TZ6K5TJWDPGX",
+     "criterion": 1,
+     "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+     "expect_exit": 0,
+     "exit": 1,
+     "timed_out": false,
+     "pass": false,
+     "source": "public/C08/case.json#o1.acceptance"
+    },
+    {
+     "run_id": "01M6NBNYZ3H7SW49X2QACQV7VV",
+     "criterion": 1,
+     "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+     "expect_exit": 0,
+     "exit": 1,
+     "timed_out": false,
+     "pass": false,
+     "source": "public/C08/case.json#o1.acceptance"
+    },
+    {
+     "run_id": "01M6NBPK9KGY2ZB0C0JJA6HW26",
+     "criterion": 1,
+     "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+     "expect_exit": 0,
+     "exit": 1,
+     "timed_out": false,
+     "pass": false,
+     "source": "public/C08/case.json#o1.acceptance"
+    }
+   ],
+   "discrepancies": []
+  }
+ ],
+ "ops": [
+  {
+   "step": "deploy_ts",
+   "at": 0.6,
+   "bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8",
+   "mode_seed": "synthetic: temp DB only"
+  },
+  {
+   "step": "project_created",
+   "at": 1.0,
+   "project": "01M6NBKN3JJV71BQB594KBHBGZ",
+   "arm": "new"
+  },
+  {
+   "step": "public_checks",
+   "at": 1.0,
+   "outcomes": [
+    {
+     "outcome": "o1",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C08/case.json#o1.acceptance"
+    },
+    {
+     "outcome": "o2",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C08/case.json#o2.acceptance"
+    },
+    {
+     "outcome": "o3",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o3) && git show HEAD:out/o3.txt | cmp - \"$d/out/o3.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C08/case.json#o3.acceptance"
+    },
+    {
+     "outcome": "o4",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o4) && git show HEAD:out/o4.txt | cmp - \"$d/out/o4.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C08/case.json#o4.acceptance"
+    }
+   ]
+  },
+  {
+   "step": "operator_cannot_raise_mode",
+   "at": 1.0,
+   "status": 403,
+   "code": null
+  },
+  {
+   "step": "set_mode",
+   "at": 1.0,
+   "mode": "enabled",
+   "reason": "pilot を有効にする",
+   "revision": null
+  },
+  {
+   "step": "state",
+   "at": 1.0,
+   "phase": "active",
+   "roots": []
+  },
+  {
+   "step": "state",
+   "at": 31.4,
+   "phase": "active",
+   "roots": [
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 32.4,
+   "phase": "active",
+   "roots": [
+    "ready"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 42.5,
+   "phase": "active",
+   "roots": [
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 43.5,
+   "phase": "active",
+   "roots": [
+    "ready"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 62.8,
+   "phase": "active",
+   "roots": [
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 63.8,
+   "phase": "active",
+   "roots": [
+    "failed"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 64.8,
+   "phase": "active",
+   "roots": [
+    "failed",
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 65.8,
+   "phase": "active",
+   "roots": [
+    "failed",
+    "ready"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 75.9,
+   "phase": "active",
+   "roots": [
+    "failed",
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 76.9,
+   "phase": "active",
+   "roots": [
+    "failed",
+    "ready"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 97.1,
+   "phase": "active",
+   "roots": [
+    "failed",
+    "failed"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 98.1,
+   "phase": "blocked",
+   "roots": [
+    "failed",
+    "failed"
+   ]
+  },
+  {
+   "step": "wake_after_end",
+   "at": 101.1,
+   "new_roots": 0
+  },
+  {
+   "step": "set_mode",
+   "at": 101.1,
+   "mode": "off",
+   "reason": "従来の CoS に戻す",
+   "revision": null
+  },
+  {
+   "step": "wake_after_off",
+   "at": 101.1,
+   "status": 200,
+   "added": false
+  },
+  {
+   "step": "after_off",
+   "at": 104.2,
+   "decisions_at_end": 3,
+   "decisions_after": 3,
+   "mode": "off",
+   "pending_wakes": 1
+  }
+ ]
+}

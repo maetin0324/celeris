@@ -29,6 +29,7 @@ export const EVENT_KINDS = [
   "artifact_produced",
   "worker_finished",
   "review_verdict",
+  "review_command_checked",
   "approval_requested",
   "approval_decided",
   "approvals_withdrawn",

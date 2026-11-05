@@ -1,0 +1,409 @@
+{
+ "schema": "celeris.long-horizon-facts/1",
+ "bench_version": 1,
+ "dataset": "long_horizon_llm_pilot",
+ "case": "C08",
+ "seed": 1,
+ "init_digest": "5aa8d67d0e74e00f6dc44a610b1884214e1bb5df68fdcb9cb00fc54b7a6e74bf",
+ "horizon_secs": 300,
+ "roots": [
+  {
+   "logical_id": "o1:1",
+   "outcome": "o1",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 32,
+   "statuses": [
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "98784c650a85fb548a9c0478117a3e5dc5c1aa642be066ed50c015c7ce5dcd05",
+   "review": {
+    "verdicts": [
+     {
+      "run_id": "01M6NBF4B5QSMZJ9SFNZPM9QKW",
+      "criterion": 0,
+      "text": "dorastiq-o1: 作業 tree の直下で `python3 minichunk.py verify C08 o1` を実行して out/o1.txt を作り、取り込まれた tree の out/o1.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）",
+      "kind": "reviewer",
+      "pass": true,
+      "reason": "reviewer(01M6NBF58VY1NN2JW90Y7ZJKH5): stub reviewer: 1 command check(s) passed and HEAD:out/o1.txt has 60 bytes"
+     },
+     {
+      "run_id": "01M6NBF4B5QSMZJ9SFNZPM9QKW",
+      "criterion": 1,
+      "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+      "kind": "command",
+      "pass": true,
+      "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+     },
+     {
+      "run_id": "01M6NBF4B5QSMZJ9SFNZPM9QKW",
+      "criterion": 2,
+      "text": null,
+      "kind": "implicit",
+      "pass": true,
+      "reason": "reviewer(01M6NBF58VY1NN2JW90Y7ZJKH5): stub reviewer: 1 commit(s) in 9810a9ded01d09cd7572babb540d5c3a702b29a5..f400bdf3823f73f34262dc83d87f36364c89affe"
+     }
+    ],
+    "command_checks": [
+     {
+      "run_id": "01M6NBF4B5QSMZJ9SFNZPM9QKW",
+      "criterion": 1,
+      "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+      "expect_exit": 0,
+      "exit": 0,
+      "timed_out": false,
+      "pass": true,
+      "source": "public/C08/case.json#o1.acceptance"
+     }
+    ],
+    "discrepancies": []
+   }
+  },
+  {
+   "logical_id": "o2:1",
+   "outcome": "o2",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 36,
+   "statuses": [
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "5319e0b2641216f0fe3083ed0a81d9d849c51a930148d7e376849b6456dc7907",
+   "review": {
+    "verdicts": [
+     {
+      "run_id": "01M6NBF8VHDJCVFFWJK2EEFPPP",
+      "criterion": 0,
+      "text": "dorastiq-o2: 作業 tree の直下で `python3 minichunk.py verify C08 o2` を実行して out/o2.txt を作り、取り込まれた tree の out/o2.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）",
+      "kind": "reviewer",
+      "pass": true,
+      "reason": "reviewer(01M6NBF9P2ZCSCF1TGPZBRF02M): stub reviewer: 1 command check(s) passed and HEAD:out/o2.txt has 60 bytes"
+     },
+     {
+      "run_id": "01M6NBF8VHDJCVFFWJK2EEFPPP",
+      "criterion": 1,
+      "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"` exits 0",
+      "kind": "command",
+      "pass": true,
+      "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o2) && git show HEAD:out/o2.txt | cmp - \\\"$d/out/o2.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+     },
+     {
+      "run_id": "01M6NBF8VHDJCVFFWJK2EEFPPP",
+      "criterion": 2,
+      "text": null,
+      "kind": "implicit",
+      "pass": true,
+      "reason": "reviewer(01M6NBF9P2ZCSCF1TGPZBRF02M): stub reviewer: 1 commit(s) in f400bdf3823f73f34262dc83d87f36364c89affe..35e07ec0b6f6da355eafa13392f36986aac500a5"
+     }
+    ],
+    "command_checks": [
+     {
+      "run_id": "01M6NBF8VHDJCVFFWJK2EEFPPP",
+      "criterion": 1,
+      "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"",
+      "expect_exit": 0,
+      "exit": 0,
+      "timed_out": false,
+      "pass": true,
+      "source": "public/C08/case.json#o2.acceptance"
+     }
+    ],
+    "discrepancies": []
+   }
+  },
+  {
+   "logical_id": "o3:1",
+   "outcome": "o3",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 40,
+   "statuses": [
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "f864ffb4e67389a9899c5e7e2404049224c287bd5e009f256894c27498c50b6d",
+   "review": {
+    "verdicts": [
+     {
+      "run_id": "01M6NBFCXSAFDRNMC4HA2MP0RW",
+      "criterion": 0,
+      "text": "dorastiq-o3: 作業 tree の直下で `python3 minichunk.py verify C08 o3` を実行して out/o3.txt を作り、取り込まれた tree の out/o3.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）",
+      "kind": "reviewer",
+      "pass": true,
+      "reason": "reviewer(01M6NBFDTH61793DT5JQ1FTYK2): stub reviewer: 1 command check(s) passed and HEAD:out/o3.txt has 60 bytes"
+     },
+     {
+      "run_id": "01M6NBFCXSAFDRNMC4HA2MP0RW",
+      "criterion": 1,
+      "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o3) && git show HEAD:out/o3.txt | cmp - \"$d/out/o3.txt\"` exits 0",
+      "kind": "command",
+      "pass": true,
+      "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o3) && git show HEAD:out/o3.txt | cmp - \\\"$d/out/o3.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+     },
+     {
+      "run_id": "01M6NBFCXSAFDRNMC4HA2MP0RW",
+      "criterion": 2,
+      "text": null,
+      "kind": "implicit",
+      "pass": true,
+      "reason": "reviewer(01M6NBFDTH61793DT5JQ1FTYK2): stub reviewer: 1 commit(s) in 35e07ec0b6f6da355eafa13392f36986aac500a5..d30fe34665dfeb8e3803dd12f50255c76502697a"
+     }
+    ],
+    "command_checks": [
+     {
+      "run_id": "01M6NBFCXSAFDRNMC4HA2MP0RW",
+      "criterion": 1,
+      "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o3) && git show HEAD:out/o3.txt | cmp - \"$d/out/o3.txt\"",
+      "expect_exit": 0,
+      "exit": 0,
+      "timed_out": false,
+      "pass": true,
+      "source": "public/C08/case.json#o3.acceptance"
+     }
+    ],
+    "discrepancies": []
+   }
+  },
+  {
+   "logical_id": "o4:1",
+   "outcome": "o4",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 45,
+   "statuses": [
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "f6b1c52236fa3c1f45279d4c7b47b25d6009a6922b6bb87e904286e0881df30c",
+   "review": {
+    "verdicts": [
+     {
+      "run_id": "01M6NBFH4WWXG2T4XZXD6YMMZ1",
+      "criterion": 0,
+      "text": "dorastiq-o4: 作業 tree の直下で `python3 minichunk.py verify C08 o4` を実行して out/o4.txt を作り、取り込まれた tree の out/o4.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）",
+      "kind": "reviewer",
+      "pass": true,
+      "reason": "reviewer(01M6NBFHZJRR8GTEQ6HVZSQTN7): stub reviewer: 1 command check(s) passed and HEAD:out/o4.txt has 60 bytes"
+     },
+     {
+      "run_id": "01M6NBFH4WWXG2T4XZXD6YMMZ1",
+      "criterion": 1,
+      "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o4) && git show HEAD:out/o4.txt | cmp - \"$d/out/o4.txt\"` exits 0",
+      "kind": "command",
+      "pass": true,
+      "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o4) && git show HEAD:out/o4.txt | cmp - \\\"$d/out/o4.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+     },
+     {
+      "run_id": "01M6NBFH4WWXG2T4XZXD6YMMZ1",
+      "criterion": 2,
+      "text": null,
+      "kind": "implicit",
+      "pass": true,
+      "reason": "reviewer(01M6NBFHZJRR8GTEQ6HVZSQTN7): stub reviewer: 1 commit(s) in d30fe34665dfeb8e3803dd12f50255c76502697a..f12bc351a4cd2a891c418dcd6e6aeac77195dd82"
+     }
+    ],
+    "command_checks": [
+     {
+      "run_id": "01M6NBFH4WWXG2T4XZXD6YMMZ1",
+      "criterion": 1,
+      "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o4) && git show HEAD:out/o4.txt | cmp - \"$d/out/o4.txt\"",
+      "expect_exit": 0,
+      "exit": 0,
+      "timed_out": false,
+      "pass": true,
+      "source": "public/C08/case.json#o4.acceptance"
+     }
+    ],
+    "discrepancies": []
+   }
+  }
+ ],
+ "effects": [],
+ "human_ops": [
+  {
+   "at": 0,
+   "class": "stimulus",
+   "kind": "project_request"
+  }
+ ],
+ "faults": [],
+ "invocations": [
+  {
+   "at": 32,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 33,
+   "role": "reviewer",
+   "usage": null
+  },
+  {
+   "at": 34,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 35,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 36,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 37,
+   "role": "reviewer",
+   "usage": null
+  },
+  {
+   "at": 38,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 39,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 40,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 42,
+   "role": "reviewer",
+   "usage": null
+  },
+  {
+   "at": 43,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 43,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 45,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 46,
+   "role": "reviewer",
+   "usage": null
+  },
+  {
+   "at": 47,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 48,
+   "role": "cos",
+   "usage": null
+  }
+ ],
+ "actors": [
+  {
+   "actor": "human",
+   "at": 0
+  },
+  {
+   "actor": "worker",
+   "at": 32
+  },
+  {
+   "actor": "reviewer",
+   "at": 33
+  },
+  {
+   "actor": "cos",
+   "at": 34
+  },
+  {
+   "actor": "cos",
+   "at": 35
+  },
+  {
+   "actor": "worker",
+   "at": 36
+  },
+  {
+   "actor": "reviewer",
+   "at": 37
+  },
+  {
+   "actor": "cos",
+   "at": 38
+  },
+  {
+   "actor": "cos",
+   "at": 39
+  },
+  {
+   "actor": "worker",
+   "at": 40
+  },
+  {
+   "actor": "reviewer",
+   "at": 42
+  },
+  {
+   "actor": "cos",
+   "at": 43
+  },
+  {
+   "actor": "cos",
+   "at": 43
+  },
+  {
+   "actor": "worker",
+   "at": 45
+  },
+  {
+   "actor": "reviewer",
+   "at": 46
+  },
+  {
+   "actor": "cos",
+   "at": 47
+  },
+  {
+   "actor": "cos",
+   "at": 48
+  }
+ ],
+ "statements": [],
+ "questions": [],
+ "cos_launch_rejected": 0,
+ "running_untracked": 0,
+ "achieved_at": 49,
+ "events_append_only": true,
+ "usage": {
+  "tokens": null,
+  "quota": null,
+  "wall_secs": 57,
+  "missing": "tier=stub"
+ },
+ "virtual_secs_to_reach": 49
+}

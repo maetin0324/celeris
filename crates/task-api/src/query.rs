@@ -282,6 +282,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::ArtifactProduced { .. } => "artifact_produced",
         Event::WorkerFinished { .. } => "worker_finished",
         Event::ReviewVerdict { .. } => "review_verdict",
+        Event::ReviewCommandChecked { .. } => "review_command_checked",
         Event::ReviewTargetSynced { .. } => "review_target_synced",
         Event::RequiredChecksEvaluated { .. } => "required_checks_evaluated",
         Event::ReviewTargetAdvanced { .. } => "review_target_advanced",

@@ -125,6 +125,19 @@ pub struct ReviewOutcome {
     /// 必須検査（`repo_checks`）の結果（cmd ごと。acceptance の同一 cmd・再利用した合格を含む）。
     /// ディスパッチャが `Event::RequiredChecksEvaluated` に候補 SHA・基底 SHA を束ねて残す。
     pub required_checks: Vec<RequiredRepoResult>,
+    /// acceptance の `Check::Command` の実行結果。ディスパッチャが `Event::ReviewCommandChecked` に残す。
+    pub command_checks: Vec<CommandCheckRecord>,
+}
+
+/// `Check::Command` 1 件の結果（ADR 2026-11-05-phase3-p0e）。出典は `criterion_idx` と `cmd`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandCheckRecord {
+    pub criterion_idx: usize,
+    pub cmd: String,
+    pub expect_exit: i32,
+    pub exit: Option<i32>,
+    pub timed_out: bool,
+    pub pass: bool,
 }
 
 /// ADR-0118 D4 付記: 検査後に review snapshot が変わったリポジトリ（`ReviewTargetAdvanced` に残す）。
@@ -631,25 +644,28 @@ pub async fn review_task(
     let subject = &subject;
     let mut verdicts = Vec::with_capacity(task.acceptance.len() + 1);
     let mut reviewer_criteria: Vec<usize> = Vec::new();
+    let mut command_checks: Vec<CommandCheckRecord> = Vec::new();
     let (required_checks, acceptance_passes) =
         required::evaluate(repo_checks, workspace, command_timeout).await;
     for (idx, criterion) in task.acceptance.iter().enumerate() {
         let (pass, reason) = match &criterion.check {
             Check::Command { cmd, expect_exit } => {
-                if *expect_exit == 0
+                let result = if *expect_exit == 0
                     && let Some(result) = acceptance_passes.get(cmd)
                 {
                     result.clone()
                 } else {
-                    exec_check_with_repair_retries(
-                        workspace,
-                        cmd,
-                        *expect_exit,
-                        command_timeout,
-                        "",
-                    )
-                    .await
-                }
+                    exec_check_outcome(workspace, cmd, *expect_exit, command_timeout, "").await
+                };
+                command_checks.push(CommandCheckRecord {
+                    criterion_idx: idx,
+                    cmd: cmd.clone(),
+                    expect_exit: *expect_exit,
+                    exit: result.exit,
+                    timed_out: result.timed_out,
+                    pass: result.pass,
+                });
+                (result.pass, result.reason)
             }
             Check::ArtifactExists { name } => {
                 let rel = produced
@@ -852,6 +868,7 @@ pub async fn review_task(
         reviewer_run,
         target_stale: None,
         required_checks,
+        command_checks,
     }
 }
 

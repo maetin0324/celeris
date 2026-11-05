@@ -169,6 +169,14 @@ async fn done_then_command_review_passes_and_events_are_recorded() {
             Event::WorkerProgress { .. } => "progress".into(),
             Event::WorkerFinished { outcome, .. } => format!("finished:{outcome}"),
             Event::ReviewVerdict { pass, .. } => format!("verdict:{pass}"),
+            // ADR 2026-11-05-phase3-p0e: command の出典と exit。
+            Event::ReviewCommandChecked {
+                criterion_idx,
+                cmd,
+                exit,
+                pass,
+                ..
+            } => format!("command_checked:{criterion_idx}:{cmd}:{exit:?}:{pass}"),
             Event::DeliverySkipped { reason, .. } => format!("delivery_skipped:{}", reason.code()),
             // ADR-0074 D4（Phase F3 quota）: `finish_worker_result` が毎 run 出す
             // `QuotaEstimated`（このテストの provider `p1` はアカウントプールを使わないので
@@ -198,6 +206,7 @@ async fn done_then_command_review_passes_and_events_are_recorded() {
             "delivery_skipped:no_project",
             "Reviewing->Done:review_pass",
             "verdict:true",
+            "command_checked:0:test -f touched:Some(0):true",
         ]
     );
 }

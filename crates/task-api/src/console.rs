@@ -822,6 +822,7 @@ fn run_of(event: &Event) -> Option<&str> {
         | Event::ArtifactProduced { run_id, .. }
         | Event::WorkerFinished { run_id, .. }
         | Event::ReviewVerdict { run_id, .. }
+        | Event::ReviewCommandChecked { run_id, .. }
         | Event::ReviewTargetSynced {
             review_run: run_id, ..
         }

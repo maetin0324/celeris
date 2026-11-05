@@ -28,7 +28,7 @@ pub(super) async fn evaluate(
     repo_checks: Vec<RequiredRepoChecks>,
     workspace: &dyn Workspace,
     command_timeout: Duration,
-) -> (Vec<RequiredRepoResult>, HashMap<String, (bool, String)>) {
+) -> (Vec<RequiredRepoResult>, HashMap<String, CheckOutcome>) {
     // Execute each repository's immutable definition in its own workspace. Only the
     // acceptance workspace shares command results with acceptance conditions.
     let mut required_checks = Vec::new();
@@ -52,14 +52,19 @@ pub(super) async fn evaluate(
             }
             Ok(commands) => {
                 let check_workspace = checks.workspace.as_deref().unwrap_or(workspace);
-                let mut completed = HashMap::<String, (bool, String)>::new();
+                let mut completed = HashMap::<String, CheckOutcome>::new();
                 for cmd in commands {
-                    let (pass, reason) = if let Some(result) = completed.get(&cmd) {
+                    let outcome = if let Some(result) = completed.get(&cmd) {
                         result.clone()
                     } else if checks.reusable.contains(&cmd) {
-                        (true, "reused".into())
+                        CheckOutcome {
+                            pass: true,
+                            reason: "reused".into(),
+                            exit: None,
+                            timed_out: false,
+                        }
                     } else {
-                        exec_check_with_repair_retries(
+                        exec_check_outcome(
                             check_workspace,
                             &cmd,
                             0,
@@ -68,14 +73,14 @@ pub(super) async fn evaluate(
                         )
                         .await
                     };
-                    completed.insert(cmd.clone(), (pass, reason.clone()));
+                    completed.insert(cmd.clone(), outcome.clone());
                     if checks.workspace.is_none() {
-                        acceptance_passes.insert(cmd.clone(), (pass, reason.clone()));
+                        acceptance_passes.insert(cmd.clone(), outcome.clone());
                     }
                     results.push(task_core::PhaseCheckResult {
                         cmd,
-                        pass,
-                        summary: tail(&reason, REASON_TAIL).to_string(),
+                        pass: outcome.pass,
+                        summary: tail(&outcome.reason, REASON_TAIL).to_string(),
                     });
                 }
             }

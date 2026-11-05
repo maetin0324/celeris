@@ -1,0 +1,49 @@
+{
+ "schema": "celeris.long-horizon-facts/1",
+ "bench_version": 1,
+ "dataset": "long_horizon_llm_pilot",
+ "case": "C08",
+ "seed": 1,
+ "init_digest": "5aa8d67d0e74e00f6dc44a610b1884214e1bb5df68fdcb9cb00fc54b7a6e74bf",
+ "horizon_secs": 300,
+ "roots": [],
+ "effects": [],
+ "human_ops": [
+  {
+   "at": 0,
+   "class": "stimulus",
+   "kind": "project_request"
+  }
+ ],
+ "faults": [],
+ "invocations": [
+  {
+   "at": 2,
+   "role": "cos",
+   "usage": null
+  }
+ ],
+ "actors": [
+  {
+   "actor": "human",
+   "at": 0
+  },
+  {
+   "actor": "cos",
+   "at": 2
+  }
+ ],
+ "statements": [],
+ "questions": [],
+ "cos_launch_rejected": 0,
+ "running_untracked": 0,
+ "achieved_at": null,
+ "events_append_only": true,
+ "usage": {
+  "tokens": null,
+  "quota": null,
+  "wall_secs": 15,
+  "missing": "tier=stub"
+ },
+ "virtual_secs_to_reach": null
+}

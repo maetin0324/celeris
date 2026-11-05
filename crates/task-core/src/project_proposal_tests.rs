@@ -150,3 +150,48 @@ fn project_proposal_round_trips_json_and_denies_unknown_fields() {
         "pc:P:outcome:o1:1"
     );
 }
+
+/// ADR 2026-11-05-phase3-p0e: Outcome の `checks` は block から読み、TS に渡す JSON には出さない。
+#[test]
+fn outcome_block_checks_are_parsed_and_hidden_from_the_snapshot_json() {
+    let req = "x\n```celeris-outcomes\n[{\"id\":\"o1\",\"title\":\"t\",\"acceptance\":[\"A\"],\
+\"checks\":[{\"cmd\":\"test -s out/o1.txt\"},{\"cmd\":\"exit 3\",\"expect_exit\":3}]}]\n```\n";
+    let o = parse_outcomes(req).unwrap();
+    assert_eq!(
+        o[0].checks,
+        vec![
+            OutcomeCheck {
+                cmd: "test -s out/o1.txt".into(),
+                expect_exit: 0,
+            },
+            OutcomeCheck {
+                cmd: "exit 3".into(),
+                expect_exit: 3,
+            },
+        ]
+    );
+    let json = serde_json::to_value(&o[0]).unwrap();
+    assert!(json.get("checks").is_none(), "{json}");
+    assert!(parse_outcomes(REQUEST).unwrap()[0].checks.is_empty());
+}
+
+#[test]
+fn outcome_block_rejects_bad_checks() {
+    let block = |checks: &str| {
+        format!(
+            "```celeris-outcomes\n[{{\"id\":\"o1\",\"title\":\"t\",\"acceptance\":[\"A\"],\"checks\":{checks}}}]\n```\n"
+        )
+    };
+    assert!(parse_outcomes(&block(r#"[{"cmd":"  "}]"#)).is_err());
+    assert!(parse_outcomes(&block(r#"[{"cmd":"true","source":"x"}]"#)).is_err());
+    let long = format!(
+        r#"[{{"cmd":"{}"}}]"#,
+        "x".repeat(OUTCOME_CHECK_CMD_MAX_BYTES + 1)
+    );
+    assert!(parse_outcomes(&block(&long)).is_err());
+    let many = format!(
+        "[{}]",
+        vec![r#"{"cmd":"true"}"#; OUTCOME_CHECKS_MAX + 1].join(",")
+    );
+    assert!(parse_outcomes(&block(&many)).is_err());
+}

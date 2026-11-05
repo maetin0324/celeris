@@ -436,6 +436,20 @@ impl Dispatcher {
                 pass: v.pass,
                 reason: v.reason.clone(),
             }))
+            .chain(
+                outcome
+                    .command_checks
+                    .iter()
+                    .map(|c| Event::ReviewCommandChecked {
+                        run_id: run_id.clone(),
+                        criterion_idx: c.criterion_idx,
+                        cmd: c.cmd.clone(),
+                        expect_exit: c.expect_exit,
+                        exit: c.exit,
+                        timed_out: c.timed_out,
+                        pass: c.pass,
+                    }),
+            )
             .chain(throttled_events)
             .chain(discrepancy_event)
             .collect();

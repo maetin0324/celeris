@@ -1642,3 +1642,124 @@ async fn unreadable_second_repository_definition_fails_review_without_evidence()
     assert!(!outcome.all_pass());
     assert!(outcome.required_checks[0].binding.is_none());
 }
+
+/// ADR 2026-11-05-phase3-p0e: `Check::Command` の exit・timeout・合否が構造化して返る。落ちたら reviewer は起きない。
+#[tokio::test]
+async fn command_checks_are_recorded_with_exit_codes() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("present.txt"), "x").unwrap();
+    let ws = LocalWorkspace::new(dir.path());
+    let task = task_with(
+        vec![
+            Check::Command {
+                cmd: "test -f present.txt".into(),
+                expect_exit: 0,
+            },
+            Check::Command {
+                cmd: "exit 7".into(),
+                expect_exit: 0,
+            },
+            Check::Reviewer,
+        ],
+        dir.path(),
+    );
+    let out = review_task(
+        &task,
+        &ws,
+        dir.path(),
+        &dir.path().join("artifacts"),
+        &[],
+        Duration::from_secs(120),
+        ReviewExtras::default(),
+    )
+    .await;
+    let record = |idx: usize, cmd: &str, exit: i32, pass: bool| CommandCheckRecord {
+        criterion_idx: idx,
+        cmd: cmd.into(),
+        expect_exit: 0,
+        exit: Some(exit),
+        timed_out: false,
+        pass,
+    };
+    assert_eq!(
+        out.command_checks,
+        vec![
+            record(0, "test -f present.txt", 0, true),
+            record(1, "exit 7", 7, false),
+        ]
+    );
+    assert!(!out.verdicts[2].pass, "{:?}", out.verdicts[2]);
+    assert!(out.reviewer_run.is_none());
+}
+
+/// timeout は `exit` が無く `timed_out` が真（`ScriptedWorkspace` は使わず、再試行の後の結果を見る）。
+#[tokio::test]
+async fn command_check_timeout_is_recorded_without_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = LocalWorkspace::new(dir.path());
+    let task = task_with(
+        vec![Check::Command {
+            cmd: "sleep 30".into(),
+            expect_exit: 0,
+        }],
+        dir.path(),
+    );
+    let out = review_task(
+        &task,
+        &ws,
+        dir.path(),
+        &dir.path().join("artifacts"),
+        &[],
+        Duration::from_millis(100),
+        ReviewExtras::default(),
+    )
+    .await;
+    assert_eq!(out.command_checks.len(), 1);
+    assert_eq!(out.command_checks[0].exit, None);
+    assert!(out.command_checks[0].timed_out);
+    assert!(!out.command_checks[0].pass);
+}
+
+/// 必須検査の結果を acceptance の同じ command に使うときも記録が残る。再実行した必須検査は exit を写し、
+/// 合格を再利用した必須検査は実行していないので `exit` が無い。
+#[tokio::test]
+async fn acceptance_command_shared_with_a_repo_check_keeps_the_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = LocalWorkspace::new(dir.path());
+    let task = task_with(
+        vec![
+            Check::Command {
+                cmd: "exit 4".into(),
+                expect_exit: 0,
+            },
+            Check::Command {
+                cmd: "already-passed".into(),
+                expect_exit: 0,
+            },
+        ],
+        dir.path(),
+    );
+    let out = review_task(
+        &task,
+        &ws,
+        dir.path(),
+        &dir.path().join("artifacts"),
+        &[],
+        Duration::from_secs(120),
+        ReviewExtras {
+            repo_checks: vec![RequiredRepoChecks {
+                binding: None,
+                commands: Ok(vec!["exit 4".into(), "already-passed".into()]),
+                reusable: ["already-passed".to_string()].into_iter().collect(),
+                workspace: None,
+            }],
+            ..ReviewExtras::default()
+        },
+    )
+    .await;
+    assert_eq!(out.command_checks.len(), 2, "{:?}", out.command_checks);
+    assert_eq!(out.command_checks[0].exit, Some(4));
+    assert!(!out.command_checks[0].pass);
+    assert_eq!(out.command_checks[1].exit, None);
+    assert!(out.command_checks[1].pass);
+}

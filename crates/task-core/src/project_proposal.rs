@@ -87,7 +87,25 @@ pub struct Outcome {
     /// `request_block`（A5 以後は `roadmap`）。
     #[serde(default = "default_outcome_source")]
     pub source: String,
+    /// 依頼文の block が書く決定的な検査（ADR 2026-11-05-phase3-p0e）。Rust が root の acceptance に足す。
+    /// TS は command を作らず見もしないので、snapshot の JSON と schema には出さない。
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub checks: Vec<OutcomeCheck>,
 }
+
+/// Outcome を決定的に確かめる command（作業 tree の直下で実行する）。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutcomeCheck {
+    pub cmd: String,
+    #[serde(default)]
+    pub expect_exit: i32,
+}
+
+/// 1 つの Outcome に書ける検査の数と、command の長さの上限。
+pub const OUTCOME_CHECKS_MAX: usize = 8;
+pub const OUTCOME_CHECK_CMD_MAX_BYTES: usize = 4096;
 
 fn default_outcome_source() -> String {
     "request_block".to_owned()
@@ -104,6 +122,8 @@ struct OutcomeBlockItem {
     depends_on: Vec<String>,
     #[serde(default)]
     priority: i32,
+    #[serde(default)]
+    checks: Vec<OutcomeCheck>,
 }
 
 fn valid_outcome_id(id: &str) -> bool {
@@ -149,6 +169,19 @@ pub fn parse_outcomes(request: &str) -> Result<Vec<Outcome>, String> {
         }
         if item.title.trim().is_empty() || item.title.chars().count() > ROOT_TITLE_MAX {
             return Err(format!("outcome {:?} has a bad title", item.id));
+        }
+        if item.checks.len() > OUTCOME_CHECKS_MAX {
+            return Err(format!(
+                "outcome {:?} has more than {OUTCOME_CHECKS_MAX} checks",
+                item.id
+            ));
+        }
+        if item
+            .checks
+            .iter()
+            .any(|c| c.cmd.trim().is_empty() || c.cmd.len() > OUTCOME_CHECK_CMD_MAX_BYTES)
+        {
+            return Err(format!("outcome {:?} has a bad check command", item.id));
         }
     }
     let deps: BTreeMap<&str, &[String]> = items
@@ -199,6 +232,7 @@ pub fn parse_outcomes(request: &str) -> Result<Vec<Outcome>, String> {
             depends_on: i.depends_on,
             priority: i.priority,
             source: default_outcome_source(),
+            checks: i.checks,
         })
         .collect())
 }

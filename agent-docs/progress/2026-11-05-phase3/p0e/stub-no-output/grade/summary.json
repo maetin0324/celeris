@@ -1,0 +1,40 @@
+{
+  "arms": {
+    "new": {
+      "autonomous_reach": 0.0,
+      "case_reach_rate": 0.0,
+      "daemon_roots": 2,
+      "double_effect": 0,
+      "fired_faults": 0,
+      "handoffs": 14,
+      "human_intervention": {
+        "avoidable": 0,
+        "required": 0,
+        "stimulus": 1
+      },
+      "missing": "1 trials have no usage",
+      "quota": null,
+      "reach_rate": 0.0,
+      "reach_rate_excluding_c09": 0.0,
+      "reached_without_instruction": 0,
+      "recovered_faults": 0,
+      "recovery_rate": null,
+      "tokens": null,
+      "trials": 1,
+      "verdict_pass": 0,
+      "wall_secs": 104.0,
+      "wasteful_roots": 1
+    }
+  },
+  "assumption_bound_cases": [
+    "C09"
+  ],
+  "dataset": "long_horizon_llm_pilot",
+  "invalid": {
+    "cases": [],
+    "invalid_init": 0
+  },
+  "schema": "celeris.long-horizon-summary/1",
+  "tier": "llm_pilot",
+  "trials": 1
+}

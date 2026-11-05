@@ -311,6 +311,8 @@ pub fn snapshot_outcomes(version: &RoadmapVersion) -> Vec<Outcome> {
             depends_on: o.depends_on.clone(),
             priority: o.priority,
             source: ROADMAP_SOURCE.to_owned(),
+            // Roadmap の Outcome は検査を持たない（check の無い経路。ADR 2026-11-05-phase3-p0e）。
+            checks: Vec::new(),
         })
         .collect()
 }

@@ -13,6 +13,7 @@ fn outcome(verdicts: Vec<Verdict>) -> ReviewOutcome {
         reviewer_run: None,
         target_stale: None,
         required_checks: vec![],
+        command_checks: vec![],
     }
 }
 
@@ -114,4 +115,50 @@ async fn reviewer_only_task_is_unchanged() {
             .iter()
             .any(|m| m.starts_with("review discrepancy:"))
     );
+}
+
+/// ADR 2026-11-05-phase3-p0e（K22）: `Check::Command` の出典（index・command）と exit が、verdict と一緒に event に残る。
+#[tokio::test]
+async fn command_check_record_is_written_with_the_verdicts() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = reviewing_task(
+        dir.path(),
+        vec![
+            Check::Command {
+                cmd: "test -f out/x.txt".into(),
+                expect_exit: 0,
+            },
+            Check::Reviewer,
+        ],
+    );
+    store.insert(&task).unwrap();
+    let mut d = instant_done_dispatcher(store.clone());
+    let mut review = outcome(vec![
+        verdict(0, false, "exit 1"),
+        verdict(1, true, "reviewer(r1): ok"),
+    ]);
+    review.command_checks = vec![crate::review::CommandCheckRecord {
+        criterion_idx: 0,
+        cmd: "test -f out/x.txt".into(),
+        expect_exit: 0,
+        exit: Some(1),
+        timed_out: false,
+        pass: false,
+    }];
+    d.on_review_finished(task.id, "run1".into(), review)
+        .unwrap();
+    let events = store.events_for(task.id).unwrap();
+    let found = events.iter().any(|(_, e)| {
+        *e == Event::ReviewCommandChecked {
+            run_id: "run1".into(),
+            criterion_idx: 0,
+            cmd: "test -f out/x.txt".into(),
+            expect_exit: 0,
+            exit: Some(1),
+            timed_out: false,
+            pass: false,
+        }
+    });
+    assert!(found, "{events:?}");
 }

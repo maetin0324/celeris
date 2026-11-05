@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A9 の stub harness（LLM を呼ばない）。fake adapter の RunRequest を stdin で受ける。
 
-- Review の run: artifacts/review.json に全基準の合格を書く。
+- Review の run: artifacts/review.json に判定を書く。確かめられない基準は pass にしない（review_verdicts）。
 - 実行の run: acceptance の文から Outcome を見つけ、作業 tree の直下で公開の手順（`python3 minichunk.py verify <case> <id>`）を
   実行し、git commit する（実 LLM と同じ公開の指示だけに従う。台本の答えも検査 script も読まない）。
 - 公開（effect）: 既定の stub 配線は driver が渡す `--effect-kinds`（台本）と `--effect-command`（公開の command）を
@@ -121,6 +121,59 @@ def forge(command):
     return out
 
 
+# 取り込みの判定の基準（task_ops::delivery が足す Reviewer の条件）の文面。
+DELIVERY_CRITERION = re.compile(r"リポジトリ (\S+) の .*? \(([0-9a-f]+)\) に、コミット ([0-9a-f]+) \(ブランチ")
+
+
+def git_ok(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True)
+
+
+def review_one(text, cwd, checks):
+    """Reviewer の基準 1 つの判定（ADR 2026-11-05-phase3-p0e）。stub は内容を読めないので、次の事実だけで決める。
+    それ以外の基準は pass にしない（無条件の合格を置かない）。
+
+    - 取り込みの判定: head が base の子孫で、base..head に commit がある。
+    - Outcome を名指す基準: 同じ review に command check があって全部合格し、候補の HEAD の out/<id>.txt が空でない。
+    """
+    failed = [c.get("cmd") for c in checks if not c.get("pass")]
+    if failed:
+        return False, f"stub reviewer: command check failed: {failed}"
+    delivery = DELIVERY_CRITERION.search(text)
+    if delivery:
+        repo, base, head = delivery.groups()
+        if git_ok(repo, "merge-base", "--is-ancestor", base, head).returncode != 0:
+            return False, f"stub reviewer: {head} does not descend from {base}"
+        count = git_ok(repo, "rev-list", "--count", f"{base}..{head}").stdout.decode().strip()
+        if count in ("", "0"):
+            return False, f"stub reviewer: no commit in {base}..{head}"
+        return True, f"stub reviewer: {count} commit(s) in {base}..{head}"
+    named = re.search(r"\b[a-z]+-(o\d+):", text)
+    if named is None:
+        return False, "stub reviewer cannot verify this criterion: it names no outcome"
+    if not checks:
+        return False, "stub reviewer cannot verify this criterion: no command check in this review"
+    path = f"out/{named.group(1)}.txt"
+    # Reviewer の run の作業場所は task の dir で、候補の worktree はその下の repos/<name>。
+    for repo in [cwd, *sorted(pathlib.Path(cwd).glob("repos/*"))]:
+        shown = git_ok(repo, "show", f"HEAD:{path}")
+        if shown.returncode == 0 and shown.stdout:
+            return True, f"stub reviewer: {len(checks)} command check(s) passed and HEAD:{path} has {len(shown.stdout)} bytes"
+    return False, f"stub reviewer: HEAD:{path} is missing or empty"
+
+
+def review_verdicts(req, cwd):
+    review = (req.get("context") or {}).get("review") or {}
+    acceptance = req["task"].get("acceptance") or []
+    checks = [c for c in review.get("checks") or [] if c.get("kind") == "command"]
+    verdicts = []
+    for idx in review.get("criteria") or []:
+        text = acceptance[idx]["text"] if idx < len(acceptance) else ""
+        ok, reason = review_one(text, cwd, checks)
+        verdicts.append({"criterion": idx, "pass": ok, "reason": reason})
+    return verdicts
+
+
 def main():
     req = json.load(sys.stdin)
     from_objective = "--from-objective" in sys.argv
@@ -138,10 +191,8 @@ def main():
     tampered = None
     forged = None
     if kind == "review":
-        criteria = task.get("acceptance") or []
-        verdicts = [{"criterion": i, "pass": True, "reason": "stub"} for i in range(max(1, len(criteria)))]
-        (artifacts / "review.json").write_text(json.dumps({"verdicts": verdicts}))
-    else:
+        (artifacts / "review.json").write_text(json.dumps({"verdicts": review_verdicts(req, cwd)}))
+    elif "--no-output" not in sys.argv:
         text = json.dumps(task.get("acceptance") or [], ensure_ascii=False)
         steps = {o: c for c, o in re.findall(r"`python3 minichunk\.py verify (C\d+) (o\d+)`", text)}
         if from_objective:

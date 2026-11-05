@@ -2516,6 +2516,15 @@ export type Event = {
   "run_id": string;
   "type": "review_verdict";
 } | {
+  "cmd": string;
+  "criterion_idx": number;
+  "exit"?: number | null;
+  "expect_exit": number;
+  "pass": boolean;
+  "run_id": string;
+  "timed_out": boolean;
+  "type": "review_command_checked";
+} | {
   "type": "approval_requested";
 } | {
   "approved": boolean;

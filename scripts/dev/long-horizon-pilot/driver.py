@@ -31,6 +31,49 @@ ACTIVE = {"draft", "ready", "running", "blocked", "reviewing"}
 
 
 SEED_BRANCH = "main"
+VERIFY_STEP = re.compile(r"`python3 minichunk\.py verify (C\d+) (o\d+)`")
+
+
+def public_checks(case, outcome):
+    """Outcome の公開契約から root の command check を決める（ADR 2026-11-05-phase3-p0e。hidden は読まない）。
+
+    case.json の `checks` > acceptance が書く公開の手順の再現 > 依頼文が書く「成果は out/<id>.txt」の順。
+    返り値は ([{cmd, expect_exit}], 出典)。作業 tree は変えず、commit された HEAD だけを見る。
+    """
+    oid = outcome["id"]
+    if outcome.get("checks"):
+        return ([{"cmd": c["cmd"], "expect_exit": c.get("expect_exit", 0)} for c in outcome["checks"]],
+                f"public/{case}/case.json#{oid}.checks")
+    for text in outcome["acceptance"]:
+        step = VERIFY_STEP.search(text)
+        if step and step.group(2) == oid:
+            cmd = ('d=$(mktemp -d) && trap \'rm -rf "$d"\' EXIT && git archive HEAD minichunk.py | tar -x -C "$d" && '
+                   f'(cd "$d" && python3 minichunk.py verify {step.group(1)} {oid}) && '
+                   f'git show HEAD:out/{oid}.txt | cmp - "$d/out/{oid}.txt"')
+            return [{"cmd": cmd, "expect_exit": 0}], f"public/{case}/case.json#{oid}.acceptance"
+    cmd = f'git cat-file -e HEAD:out/{oid}.txt && test -n "$(git show HEAD:out/{oid}.txt)"'
+    return [{"cmd": cmd, "expect_exit": 0}], "request: 成果は作業 tree の out/<outcome id>.txt に書く"
+
+
+def review_record(conn, task_id, acceptance, sources):
+    """root の review の根拠を events から読む（reviewer の理由・検査の出典と exit・食い違い）。"""
+    verdicts, checks, discrepancies = [], [], []
+    for e in conn.execute("SELECT json FROM events WHERE task_id = ? ORDER BY id", (task_id,)):
+        ev = json.loads(e["json"])
+        kind = ev.get("type")
+        if kind == "review_verdict":
+            idx = ev["criterion_idx"]
+            crit = acceptance[idx] if idx < len(acceptance) else {}
+            verdicts.append({"run_id": ev["run_id"], "criterion": idx, "text": crit.get("text"),
+                             "kind": crit.get("check", {}).get("type", "implicit"),
+                             "pass": ev["pass"], "reason": ev["reason"]})
+        elif kind == "review_command_checked":
+            checks.append({"run_id": ev["run_id"], "criterion": ev["criterion_idx"], "cmd": ev["cmd"],
+                           "expect_exit": ev["expect_exit"], "exit": ev["exit"], "timed_out": ev["timed_out"],
+                           "pass": ev["pass"], "source": sources.get(ev["cmd"])})
+        elif kind == "worker_progress" and str(ev.get("msg", "")).startswith("review discrepancy:"):
+            discrepancies.append(ev["msg"])
+    return {"verdicts": verdicts, "command_checks": checks, "discrepancies": discrepancies}
 
 
 def make_git_seed(seed, dest):
@@ -80,7 +123,14 @@ class Trial:
         case = json.loads((self.fixtures / "public" / a.case / "case.json").read_text())
         self.case = case
         self.outcomes = case["request_outcomes"]
-        rows = [{k: o[k] for k in ("id", "title", "acceptance", "depends_on")} for o in self.outcomes]
+        rows = []
+        self.check_sources = {}
+        self.outcome_checks = []
+        for o in self.outcomes:
+            checks, source = public_checks(a.case, o)
+            rows.append({**{k: o[k] for k in ("id", "title", "acceptance", "depends_on")}, "checks": checks})
+            self.check_sources.update({c["cmd"]: source for c in checks})
+            self.outcome_checks.append({"outcome": o["id"], "checks": checks, "source": source})
         scenario = json.loads((self.fixtures / "oracle" / a.case / "scenario.json").read_text())
         # 公開相当の effect を要する課題だけ broker を繋ぐ（C06）。承認の方針は operator 側の台本で、worker には渡さない。
         self.effect_kinds = {o["id"]: o["effect"] for o in scenario["outcomes"] if o.get("effect") == "publish"}
@@ -122,6 +172,8 @@ class Trial:
                     cmd += ["--tamper-dir", str(self.effect_dir)]
                 if a.forge:
                     cmd += ["--forge"]
+            if a.stub_no_output:
+                cmd.append("--no-output")
             harness = f"""
 [adapters.fake]
 command = {json.dumps(cmd)}
@@ -368,6 +420,7 @@ max_tokens_per_day = {a.max_tokens_per_day}
         self.write_config([self.pid])
         self.start()
         self.op("project_created", project=self.pid, arm=a.arm)
+        self.op("public_checks", outcomes=self.outcome_checks)
         # 人でない主体は mode を上げられない（D8）。
         code, body = self.api_status("PUT", f"/api/v1/projects/{self.pid}/controller",
                                      {"mode": "enabled", "expected_revision": 0, "reason": "operator が上げる"},
@@ -523,6 +576,7 @@ max_tokens_per_day = {a.max_tokens_per_day}
 
         roots = []
         by_id = {}
+        reviews = []
         for r in self.root_rows_full(conn):
             t = json.loads(r["json"])
             texts = [c["text"] for c in t.get("acceptance", [])]
@@ -541,7 +595,9 @@ max_tokens_per_day = {a.max_tokens_per_day}
             row = {"logical_id": f"{outcome}:{attempt}", "outcome": outcome, "attempt": attempt,
                    "created_by": "daemon" if daemon else "cos", "instructed": not daemon,
                    "created_at": secs(t.get("created_at")), "statuses": statuses,
-                   "acceptance_sha256": hashlib.sha256("\n".join(texts).encode()).hexdigest()}
+                   "acceptance_sha256": hashlib.sha256("\n".join(texts).encode()).hexdigest(),
+                   "review": review_record(conn, r["id"], t.get("acceptance", []), self.check_sources)}
+            reviews.append({"root": r["id"], "outcome": outcome, **row["review"]})
             roots.append(row)
             by_id[r["id"]] = row
         invocations = []
@@ -571,6 +627,7 @@ max_tokens_per_day = {a.max_tokens_per_day}
         rules = []
         for d in decisions:
             try:
+                # 判断の記録（celeris.project-controller-decision）は proposal の下に explanation を持つ。
                 rec = json.loads(d["proposal_json"])
                 rule = (rec.get("explanation") or (rec.get("proposal") or {}).get("explanation") or {}).get("rule_id")
             except ValueError:
@@ -631,7 +688,7 @@ max_tokens_per_day = {a.max_tokens_per_day}
         shutil.copytree(self.repo, repo_out, ignore=shutil.ignore_patterns(".git", "artifacts", "runs", ".taskd"))
         rec = {"schema": "celeris.long-horizon-pilot-trial/1", "trial": trial, "harness": a.harness, "arm": a.arm,
                "case": a.case, "project": self.pid, "wall_secs": wall, "rules": rules,
-               "root_statuses": [r["statuses"][-1] for r in roots], "ops": self.ops,
+               "root_statuses": [r["statuses"][-1] for r in roots], "reviews": reviews, "ops": self.ops,
                "approvals": approval_rows, "effect_audit": audit}
         (self.out / "ops").mkdir(exist_ok=True)
         (self.out / "ops" / f"{trial}.json").write_text(json.dumps(rec, ensure_ascii=False, indent=1) + "\n")
@@ -689,6 +746,8 @@ def main():
     p.add_argument("--forge", action="store_true",
                    help="陰性の試験: worker（stub）が token を探して承認を偽造しようとする（--harness stub では stub に "
                         "--forge を渡す。config では harness の command が渡す）。通れば試行は失敗")
+    p.add_argument("--stub-no-output", action="store_true",
+                   help="陰性の試験: stub の worker が成果を書かず commit もしない")
     p.add_argument("--old-quiet-secs", type=int, default=10)
     a = p.parse_args()
     trial = Trial(a)

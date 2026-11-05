@@ -85,6 +85,7 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   artifact_produced: { sets: ["T", "R", "artifacts", "files", "P"], extra: () => [artifactListKey] },
   worker_finished: { sets: ["T", "R", "E", "L", "P", "N", "changes", "files", "artifacts", "metrics"] },
   review_verdict: { sets: ["T", "R", "E", "L"] },
+  review_command_checked: { sets: ["T", "E"] },
   approval_requested: { sets: ["T", "L", "N", "E", "P"] },
   approval_decided: { sets: ["T", "L", "N", "E", "P"] },
   approvals_withdrawn: { sets: ["T", "L", "N", "E", "P"] },

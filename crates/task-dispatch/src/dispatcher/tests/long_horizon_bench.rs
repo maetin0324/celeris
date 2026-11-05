@@ -886,6 +886,23 @@ impl<'a> Trial<'a> {
                             &self.sc.content[&outcome],
                         )
                         .unwrap();
+                        // 第 3 フェーズ I4: repo の無い root は成果物（`ArtifactProduced`）があって初めて取り込み済み。
+                        // 台本の worker が `out/<id>.txt` を書いたので、本物の worker の run と同じく成果物の event を残す。
+                        self.store
+                            .append_event(
+                                id,
+                                &Event::ArtifactProduced {
+                                    run_id: "bench".into(),
+                                    artifact: task_core::ArtifactRef {
+                                        name: format!("{outcome}.txt"),
+                                        path: format!("out/{outcome}.txt"),
+                                        sha256: sha(&self.sc.content[&outcome]),
+                                        kind: "file".into(),
+                                        declared: true,
+                                    },
+                                },
+                            )
+                            .unwrap();
                         self.set_status(id, Status::Done, "review_pass");
                     }
                     _ => {

@@ -117,3 +117,8 @@ command（release build の test binary を直接起こす。`$BIN` は `cargo t
 ## 提案
 - `project_controller_due` は案件ごとに `MIN(id)` を引くので案件の数に比例する（694 案件で約 8 ms）。案件が千を超えるなら 1 回の集計 query にする。
 - archive を日ごとに 1 file にまとめ、古い file を圧縮する運用の道具。
+
+## 配送の局所修復 repair-3（merge_base）
+- 原因: main が「phase4 cos-usage」の 2 commit だけ進み、task branch が main の子孫でなくなった。
+- 対処: main へ rebase（衝突なし）。コード変更なし。
+- 検査（提出時の HEAD で実行）: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace -- -D warnings` exit 0、`bash scripts/dev/test-affected.sh` exit 0（3440 passed、10 skipped）、`git merge-base --is-ancestor main HEAD` exit 0。

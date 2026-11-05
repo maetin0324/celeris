@@ -813,11 +813,10 @@ Outcome の状態・root との対応の履歴が無く、CoS は request を書
 2. **人が `enabled` に上げる操作は `proposed` の案件を `active` にする**（`PUT …/controller` の同じ tx、`activate_proposed_tx`）。
    `POST /projects` の直後の案件は `proposed` で `active` へ移す API が無く、TS（`pc/project-not-active`）と Rust の検証
    （`pc/invalid:launch_on_paused`）が起票を断り続けた。実 daemon の pilot で見つけた。
-3. **取り込むものが無い root は取り込み済みと同じ**: `delivery_skipped` の `not_git`・`no_commits`
-   （`DeliverySkipReason::nothing_to_integrate`）を snapshot の `integrated` に数える。wake の種類は増やさず、
-   `integration_merged`・`integration_not_applicable`・この 2 つの見送りの event でも `root_done` の wake を積む
-   （done の wake は取り込みの前に来るので、取り込みが閉じたときにもう一度評価する）。これが無いと git でない作業場所の
-   案件は最初の root の後で `pc/root-in-flight` のまま進まなかった。
+3. **root の取り込み済みは、repo を持つ案件では `IntegrationMerged` だけ**（D1 で改訂。2026-11-05-a9-llm-pilot-findings）:
+   `delivery_skipped` の `not_git`・`no_commits` や `integration_not_applicable` は snapshot の `integrated` に数えない
+   （成果が案件の tree に載ったことを示さない）。`not_git` は受信箱に理由付きで出る。wake は `integration_merged` の event でも
+   `root_done` を積む（done の wake は取り込みの前に来るので、取り込みが閉じたときにもう一度評価する）。
 4. **実 LLM pilot の script**（long-horizon-bench D9 の `celeris-campaign long-horizon run --tier llm_pilot` を置き換え）:
    `scripts/dev/long-horizon-pilot-llm.sh` が試行ごとに `scripts/dev/long-horizon-pilot/driver.py` を呼び、一時 home の実 daemon で
    使い捨ての `pilot:` 案件を流し、DB を読み取り専用で開いて facts（dataset `long_horizon_llm_pilot`）を書いて

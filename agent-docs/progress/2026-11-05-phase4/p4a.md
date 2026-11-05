@@ -56,6 +56,7 @@ command（`CARGO_TARGET_DIR` は Celeris が渡した値。一時 DB、fake harn
 - `p4a: 進捗の文書の検査の結果を書く`
 - `p4a: test-affected の host 依存の失敗を進捗に書く`
 - `p4a delivery-repair: 打ち切られた generation への要求が Terminated で返る窓を GenerationGone に直す`
+- `p4a attempt 2: exit holder の試験で thread が zombie になるのを待ってから holder を止める`
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - `bash scripts/dev/test-affected.sh` → exit 0。対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、3,422 passed・10 skipped（`tick_scale_baseline` の既定 0,20 件を含む）。
@@ -70,6 +71,12 @@ command（`CARGO_TARGET_DIR` は Celeris が渡した値。一時 DB、fake harn
 - 修正: `call_until_cancelled` に切り出し、`Terminated` のときは合図を読み直して `GenerationGone` にする（`take_out` は actor を止める前に合図を立てる）。合図の無い `Terminated`（actor の自滅）と `Ok`・`Timeout` は変えない。
 - 決定的な再現: lib 試験 `generation::tests::cancel_between_signal_check_and_call_poll_is_generation_gone`（`call` の中で合図を立てて `Terminated` を返す。実時間・負荷に頼らない）。読み直しを外すと gate と同じ `left: Err(Terminated) right: Err(GenerationGone)` で exit 100、戻すと 5 passed。対照 2 件（`terminated_without_cancel_stays_terminated`・`other_outcomes_pass_through_when_cancelled_during_call`）も足した。
 - 検査（提出時の HEAD で実行）: `cargo nextest run -p celeris-script --test generation` 11 passed。gate の段を手元で再現 `CELERIS_SCRIPT_REQUIRE_BUNDLE=1 CELERIS_SCRIPT_BUNDLE_DIR=<$TMPDIR の bundle> bash scripts/selfdeploy/script-bundle-gate.sh test <repo> <bundle>` → 86 passed。`bash scripts/dev/test-affected.sh` → exit 0（3,502 passed・10 skipped）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。release・promote・本番の操作はしていない。
+
+## attempt 2（決定的検査の差し戻し、2026-11-05）
+- 原因: 前回の提出の後、決定的検査の `test-affected` で `celeris::script_runtime script_thread_count_skips_joined_but_listed_thread` が `stopping the holder releases the zombie`（`crates/celeris/tests/script_runtime.rs`）で落ちた。試験の側の競合だった。`JoinHandle::join` は kernel が CLONE_CHILD_CLEARTID の futex を起こした時点で返るので、thread はまだ `exit_notify` の手前にいることがある。その間に `ExitHolder`（tracer の子 process）を止めると、kernel は trace を外すだけで、thread は後から自分で消える。止めた直後の `/proc/self/task/<tid>` の読みにはまだ残っていた。
+- 修正: holder の子は thread の終わり（waitid の CLD_EXITED〜CLD_DUMPED）を見たら `exit-holder: exited` を出す。`ExitHolder::wait_exited` がその行を待つ。試験は join の後に `wait_exited` を呼んでから数え、holder を止める。zombie になった後で tracer が終われば、tracer の `exit_ptrace` が zombie を外してから tracer の wait が返る。製品コードは変えていない。
+- 検査（提出時の HEAD で実行）: `cargo nextest run -p celeris --test script_runtime` を 3 回 → 22 passed ×3。`cargo nextest run -p celeris --test script_runtime --stress-count 30 script_thread_count_skips` → 30/30 passed。`env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` → exit 0（3,502 passed・10 skipped、ts-verify 20 passed、progress_index ok）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- 前の窓を決定的に作る再現は書いていない（futex の起床と `exit_notify` の間で thread を止める手段が試験に無い）。原因は kernel の exit の順序からの説明で、修正後の順序では窓が無い。
 
 ## 失敗ケース
 - 10,000 件の計測は nextest の 600 秒の打ち切り（exit 100）。`TICK_SCALE_TICKS=1 TICK_SCALE_DISPATCHES=2`。P4-C は test binary を `--exact tick_scale_baseline` で直接起こすか、件数ごとに分けて測る。

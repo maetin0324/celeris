@@ -165,10 +165,11 @@ async fn run_daemon_with(config: Config, hold: bool) -> (Exit, Observed, Vec<Exi
 /// この試験 binary を子 process（[`exit_holder_entry`]）として起こし、子が対象の thread に `PTRACE_SEIZE` する。
 /// trace されている thread は終わっても、tracer が wait するまで zombie として `/proc/self/task` に残る。
 /// `JoinHandle::join` は普段どおり返るので、負荷の下で kernel が thread を外す前に読んだ瞬間（join と
-/// `exit_notify` の間）を、時間に頼らず作れる。Drop で子を止めると kernel が trace を外し、zombie も消える。
+/// `exit_notify` の間）を、時間に頼らず作れる。zombie になった後（[`ExitHolder::wait_exited`]）に Drop で子を止めると、kernel が trace を外し、zombie も消える。
 struct ExitHolder {
     tid: u32,
     child: std::process::Child,
+    lines: std::io::Lines<std::io::BufReader<std::process::ChildStdout>>,
 }
 
 /// 子 process の役目を指定する環境変数（値は trace する tid）。
@@ -176,6 +177,8 @@ const HOLD_TID_ENV: &str = "CELERIS_TEST_EXIT_HOLD_TID";
 /// 子が stdout に出す目印。
 const HOLD_SEIZED: &str = "exit-holder: seized";
 const HOLD_FAILED: &str = "exit-holder: seize failed";
+/// 子が対象の thread の終わり（zombie になったこと）を見たときの目印。
+const HOLD_EXITED: &str = "exit-holder: exited";
 
 mod ptrace {
     use std::ffi::{c_int, c_long, c_ulong, c_void};
@@ -247,7 +250,27 @@ impl ExitHolder {
             }
             assert!(!line.contains(HOLD_FAILED), "{line}");
         }
-        Self { tid, child }
+        Self { tid, child, lines }
+    }
+
+    /// 対象の thread が zombie になり、子がそれを見るまで待つ。
+    ///
+    /// `JoinHandle::join` は kernel が CLONE_CHILD_CLEARTID の futex を起こした時点で返り、thread はまだ
+    /// `exit_notify` の手前にいることがある。その間に子を止めると、kernel は trace を外すだけで、thread は自分で
+    /// 後から消える（止めた直後の読みにはまだ残る）。zombie になった後で子を止めれば、子の `exit_ptrace` が
+    /// zombie を外してから子の wait が返る。
+    fn wait_exited(&mut self) {
+        let tid = self.tid;
+        loop {
+            let line = self
+                .lines
+                .next()
+                .unwrap_or_else(|| panic!("the exit holder for {tid} ended before the exit"))
+                .expect("holder line");
+            if line.contains(HOLD_EXITED) {
+                return;
+            }
+        }
     }
 }
 
@@ -298,6 +321,7 @@ fn exit_holder_entry() {
             break;
         }
         if (ptrace::CLD_EXITED..=ptrace::CLD_DUMPED).contains(&info[ptrace::SI_CODE]) {
+            println!("{HOLD_EXITED}");
             break;
         }
         let mut status: std::ffi::c_int = 0;
@@ -598,9 +622,11 @@ fn script_thread_count_skips_joined_but_listed_thread() {
         .expect("spawn");
     let tid = tid_rx.recv().expect("tid");
     assert_eq!(script_threads(), 1, "the live thread is counted");
-    let holder = ExitHolder::attach(tid);
+    let mut holder = ExitHolder::attach(tid);
     go_tx.send(()).expect("finish signal");
     thread.join().expect("thread");
+    // join は exit_notify の前に返りうる。zombie になったのを子が見てから数え、止める。
+    holder.wait_exited();
     assert_eq!(
         listed_script_threads(),
         1,

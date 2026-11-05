@@ -183,8 +183,19 @@ async fn general_cos_consult_read_completes_inside_the_run() {
     let env = env();
     let app = env.router();
     let thread = general(&env);
-    for status in [Status::Done, Status::Failed, Status::Ready, Status::Done] {
-        env.seed(&new_task(TaskKind::Execute, status));
+    let base = OffsetDateTime::now_utc() - Duration::hours(1);
+    let mut expected_ids = Vec::new();
+    for (i, status) in [Status::Done, Status::Failed, Status::Ready, Status::Done]
+        .into_iter()
+        .enumerate()
+    {
+        let mut task = new_task(TaskKind::Execute, status);
+        task.created_at = base + Duration::seconds(i as i64);
+        task.updated_at = task.created_at;
+        if i > 0 {
+            expected_ids.push(task.id.to_string());
+        }
+        env.seed(&task);
     }
     let tasks_before = count(&env, "SELECT COUNT(*) FROM tasks");
     let text = "直近 3 件の task を比較して";
@@ -194,20 +205,39 @@ async fn general_cos_consult_read_completes_inside_the_run() {
     // The fake CoS reads with its own run credential inside the run (GET only).
     let resp = send(
         &app,
-        get_with("/api/v1/tasks?limit=3", &[("authorization", &bearer)]),
+        get_with(
+            "/api/v1/tasks?limit=3&order=created_desc",
+            &[("authorization", &bearer)],
+        ),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let body = resp.json();
-    let items = body
-        .get("items")
-        .or(Some(&body))
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    assert!(items >= 1, "{body}");
+    let items = body["items"].as_array().expect("items");
+    assert_eq!(items.len(), 3, "{body}");
+    let mut ids: Vec<_> = items
+        .iter()
+        .map(|v| v["id"].as_str().expect("id").to_owned())
+        .collect();
+    ids.sort();
+    expected_ids.sort();
+    assert_eq!(ids, expected_ids);
+    let mut statuses = std::collections::BTreeMap::new();
+    for item in items {
+        *statuses
+            .entry(item["status"].as_str().expect("status"))
+            .or_insert(0) += 1;
+    }
+    assert_eq!(
+        statuses,
+        std::collections::BTreeMap::from([("done", 1), ("failed", 1), ("ready", 1)])
+    );
+    let reply = format!(
+        "直近 3 件: done {}・failed {}・ready {}。",
+        statuses["done"], statuses["failed"], statuses["ready"]
+    );
     let reads = 1;
-    finish(&env, &run, "直近 3 件: done 2・failed 1。失敗は 1 件で…");
+    finish(&env, &run, &reply);
     let tasks = count(&env, "SELECT COUNT(*) FROM tasks") - tasks_before;
     assert_eq!(tasks, 0);
     assert_eq!(count(&env, "SELECT COUNT(*) FROM cos_operations"), 0);
@@ -215,7 +245,7 @@ async fn general_cos_consult_read_completes_inside_the_run() {
     record(
         "general_cos_consult_read_completes_inside_the_run",
         json!({"utterance": text, "intent": hint.intent.as_str(), "rule_id": hint.rule_id,
-               "tasks_created": tasks, "reads": reads, "items_read": items, "replies": 1}),
+               "tasks_created": tasks, "reads": reads, "items_read": items.len(), "items": items, "reply": reply, "replies": 1}),
     );
 }
 

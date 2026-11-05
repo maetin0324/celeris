@@ -480,13 +480,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kinds_round_trip_and_are_nine() {
+    fn kinds_round_trip_and_are_ten() {
         for k in ProjectWakeKind::ALL {
             assert_eq!(ProjectWakeKind::parse(k.as_str()), Some(k));
             let json = serde_json::to_string(&k).unwrap();
             assert_eq!(json, format!("\"{}\"", k.as_str()));
         }
-        assert_eq!(ProjectWakeKind::ALL.len(), 9);
+        assert_eq!(ProjectWakeKind::ALL.len(), 10);
     }
 
     #[test]

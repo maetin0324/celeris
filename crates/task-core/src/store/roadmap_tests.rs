@@ -232,7 +232,7 @@ fn project_roadmap_migration_0113_starts_from_a_0112_db_and_keeps_rows() {
         conn.execute_batch(
             "DROP TABLE authority_proposals; DROP TABLE authority_audit; DROP TABLE authority_grants; \
              DROP TABLE project_roadmap_outcome_events; DROP TABLE project_roadmap_versions; \
-             DELETE FROM schema_migrations WHERE version IN (113, 114);",
+             DELETE FROM schema_migrations WHERE version IN (113, 114, 115);",
         )
         .unwrap();
         let max: i64 = conn

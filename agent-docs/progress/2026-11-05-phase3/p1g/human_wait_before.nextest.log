@@ -1,0 +1,63 @@
+   Compiling task-core v0.1.0 ($TMPDIR/k38-base/crates/task-core)
+   Compiling deno_core v0.413.0 ($TMPDIR/k38-base/crates/script-runtime/vendor/deno_core)
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+   Compiling celeris-script v0.1.0 ($TMPDIR/k38-base/crates/script-runtime)
+warning: `deno_core` (lib) generated 1 warning
+   Compiling celeris-credentiald v0.1.0 ($TMPDIR/k38-base/crates/celeris-credentiald)
+   Compiling task-ops v0.1.0 ($TMPDIR/k38-base/crates/task-ops)
+   Compiling routing-eval v0.1.0 ($TMPDIR/k38-base/crates/routing-eval)
+   Compiling task-worker v0.1.0 ($TMPDIR/k38-base/crates/task-worker)
+   Compiling task-dispatch v0.1.0 ($TMPDIR/k38-base/crates/task-dispatch)
+   Compiling celeris-campaign v0.1.0 ($TMPDIR/k38-base/crates/campaign)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 16s
+────────────
+ Nextest run ID 7cc3e71e-dd7e-4567-9cad-93717bb007af with nextest profile: default
+    Starting 1 test across 2 binaries (1348 tests skipped)
+        FAIL [   9.848s] (1/1) task-dispatch dispatcher::tests::project_wake::project_cos::human_wait_measure::project_recovery_k38_human_wait_evaluations_in_24_hours
+  stdout ───
+
+    running 1 test
+    test dispatcher::tests::project_wake::project_cos::human_wait_measure::project_recovery_k38_human_wait_evaluations_in_24_hours ... FAILED
+
+    failures:
+
+    failures:
+        dispatcher::tests::project_wake::project_cos::human_wait_measure::project_recovery_k38_human_wait_evaluations_in_24_hours
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1341 filtered out; finished in 9.79s
+
+  stderr ───
+
+    thread 'dispatcher::tests::project_wake::project_cos::human_wait_measure::project_recovery_k38_human_wait_evaluations_in_24_hours' (3657012) panicked at crates/task-dispatch/src/dispatcher/tests/project_human_wait_measure.rs:125:5:
+    real TS human wait evaluated 24 times in 24 h
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   9.879s] 1 test run: 0 passed, 1 failed, 1348 skipped
+        FAIL [   9.848s] (1/1) task-dispatch dispatcher::tests::project_wake::project_cos::human_wait_measure::project_recovery_k38_human_wait_evaluations_in_24_hours
+  stdout ───
+
+    running 1 test
+    test dispatcher::tests::project_wake::project_cos::human_wait_measure::project_recovery_k38_human_wait_evaluations_in_24_hours ... FAILED
+
+    failures:
+
+    failures:
+        dispatcher::tests::project_wake::project_cos::human_wait_measure::project_recovery_k38_human_wait_evaluations_in_24_hours
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1341 filtered out; finished in 9.79s
+
+  stderr ───
+
+    thread 'dispatcher::tests::project_wake::project_cos::human_wait_measure::project_recovery_k38_human_wait_evaluations_in_24_hours' (3657012) panicked at crates/task-dispatch/src/dispatcher/tests/project_human_wait_measure.rs:125:5:
+    real TS human wait evaluated 24 times in 24 h
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+error: test run failed

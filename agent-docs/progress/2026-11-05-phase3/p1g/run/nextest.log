@@ -1,4 +1,4 @@
-   Compiling task-api v0.1.0 (/local/celeris/data/workspaces/01M6N7XY9W412TA8G2WV0726Z0/repos/agent-platform/crates/task-api)
+   Compiling task-core v0.1.0 (<workspace>/repos/agent-platform/crates/task-core)
 warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
    --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
     |
@@ -8,6 +8,13 @@ warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGE
     = note: `#[warn(deprecated)]` on by default
 
 warning: `deno_core` (lib) generated 1 warning
+   Compiling task-ops v0.1.0 (<workspace>/repos/agent-platform/crates/task-ops)
+   Compiling celeris-credentiald v0.1.0 (<workspace>/repos/agent-platform/crates/celeris-credentiald)
+   Compiling routing-eval v0.1.0 (<workspace>/repos/agent-platform/crates/routing-eval)
+   Compiling task-worker v0.1.0 (<workspace>/repos/agent-platform/crates/task-worker)
+   Compiling task-api v0.1.0 (<workspace>/repos/agent-platform/crates/task-api)
+   Compiling task-dispatch v0.1.0 (<workspace>/repos/agent-platform/crates/task-dispatch)
+   Compiling celeris-campaign v0.1.0 (<workspace>/repos/agent-platform/crates/campaign)
 warning: function `external_wait` is never used
   --> crates/task-dispatch/src/dispatcher/tests/project_recovery.rs:49:4
    |
@@ -23,9 +30,9 @@ warning: function `replan_each` is never used
    |    ^^^^^^^^^^^
 
 warning: `task-dispatch` (lib test) generated 2 warnings
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.16s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 39s
 ────────────
- Nextest run ID d61a8c9d-a0cd-4a20-8f68-31b8af4c0b26 with nextest profile: default
+ Nextest run ID 4417af8e-e6dd-453a-aabc-be0b20829b5a with nextest profile: default
     Starting 27 tests across 121 binaries (4083 tests skipped)
 ────────────
-     Summary [   3.640s] 27 tests run: 27 passed, 4083 skipped
+     Summary [   2.975s] 27 tests run: 27 passed, 4083 skipped

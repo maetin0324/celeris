@@ -53,12 +53,13 @@ command（`CARGO_TARGET_DIR` は Celeris が渡した値。一時 DB、fake harn
 - `p4a: tick の段ごとの時間と blocked の数のベースライン試験、残課題の契約の ADR を足す`
 - `p4a: tick の段の計測を tick_steps.rs に移し、旧い粗い lap を段の列に置き換える`（source-size gate の `dispatcher.rs` 2,000 行の上限に合わせ、main より 10 行減らした。`slow tick phases` の警告は `total_ms` と `steps_us` を出す）
 - `p4a: 進捗とベースラインの raw を書く`
+- `p4a: 進捗の文書の検査の結果を書く`
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - `bash scripts/dev/test-affected.sh` → exit 0。対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、3,422 passed・10 skipped（`tick_scale_baseline` の既定 0,20 件を含む）。
 - 1 回目の `test-affected` は exit 1 だった: source-size gate `crates/task-dispatch/src/dispatcher.rs production_size value=2492 threshold=2000 allowed=2412`。2 番目の commit で直した。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- `sh scripts/dev/progress-index.sh --check`・`sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh` → 下の「文書の検査」。
+- `sh scripts/dev/progress-index.sh --check`（ok）・`sh scripts/dev/check-doc-links.sh`（ok）・`sh scripts/dev/check-adr-numbers.sh`（ok、380 files）・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`（ok）・`git diff --check refs/heads/main` → すべて exit 0。
 - `test -f agent-docs/progress/2026-11-05-phase4/p4a.md` → exit 0。
 
 ## 失敗ケース

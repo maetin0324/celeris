@@ -1,0 +1,4 @@
+case: C08
+outcome: o3
+status: verified
+evidence: 1a5b1944f218d00f43e23655ccced544b9ddc44e4c3f4297af7f54619a5cab26

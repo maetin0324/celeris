@@ -1,0 +1,354 @@
+{
+ "schema": "celeris.long-horizon-facts/1",
+ "bench_version": 2,
+ "dataset": "long_horizon_llm_pilot",
+ "case": "C06",
+ "seed": 1,
+ "init_digest": "54c8a83dda5a862ebd24c5745d8b2910c249ec188be80d3e412988d9fbb8af5d",
+ "horizon_secs": 14400,
+ "roots": [
+  {
+   "logical_id": "o1:1",
+   "outcome": "o1",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 31,
+   "statuses": [
+    "ready",
+    "running",
+    "blocked",
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "c89d45abd1197e1758e8eb00470b44eb1df70c85876e3e01de2887280d270b83",
+   "review": {
+    "verdicts": [
+     {
+      "run_id": "01M6P7XS0FPRKYY13E185ZJTRK",
+      "criterion": 0,
+      "text": "kestrane-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C06 o1` を実行すると作れる",
+      "kind": "reviewer",
+      "pass": true,
+      "reason": "reviewer(01M6P7Y0FSBG7DTNA2H0RCWNTN): ebfd34eb の out/o1.txt は case: C06 / outcome: o1 / status: verified / evidence の 4 欄を持ち、README の契約形式に合う。evidence の値は celeris の決定的 check（verify の出力と cmp）で一致済み。"
+     },
+     {
+      "run_id": "01M6P7XS0FPRKYY13E185ZJTRK",
+      "criterion": 1,
+      "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+      "kind": "command",
+      "pass": true,
+      "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+     },
+     {
+      "run_id": "01M6P7XS0FPRKYY13E185ZJTRK",
+      "criterion": 2,
+      "text": null,
+      "kind": "implicit",
+      "pass": true,
+      "reason": "reviewer(01M6P7Y0FSBG7DTNA2H0RCWNTN): main..ebfd34eb の commit は 1 件（out/o1.txt の追加、4 行のみ）。依頼範囲内で、秘密の混入・設定や移行への影響はない。trial-repo の git status に未コミット変更はない。公開は人の承認済み。"
+     }
+    ],
+    "command_checks": [
+     {
+      "run_id": "01M6P7XS0FPRKYY13E185ZJTRK",
+      "criterion": 1,
+      "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+      "expect_exit": 0,
+      "exit": 0,
+      "timed_out": false,
+      "pass": true,
+      "source": "public/C06/case.json#o1.acceptance"
+     }
+    ],
+    "discrepancies": []
+   }
+  },
+  {
+   "logical_id": "o2:1",
+   "outcome": "o2",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 76,
+   "statuses": [
+    "ready",
+    "running",
+    "blocked",
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "cc4b4d9d3e71a02f28dd0d3a881c2f6b905e5171a68d45a500cbce692a2ad0d6",
+   "review": {
+    "verdicts": [
+     {
+      "run_id": "01M6P7Z890TZTA454M7GRT0NY7",
+      "criterion": 0,
+      "text": "kestrane-o2: 取り込まれた tree の out/o2.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C06 o2` を実行すると作れる",
+      "kind": "reviewer",
+      "pass": true,
+      "reason": "reviewer(01M6P7ZGVF3Q20E2RXG8DBW9J2): out/o2.txt は case: C06 / outcome: o2 / status: verified / evidence: 3a2392...30b の 4 欄を持つ。evidence は `printf 'minichunk C06 o2 chunk' | sha256sum` の結果と一致した。"
+     },
+     {
+      "run_id": "01M6P7Z890TZTA454M7GRT0NY7",
+      "criterion": 1,
+      "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"` exits 0",
+      "kind": "command",
+      "pass": true,
+      "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \\\"$d/out/o2.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+     },
+     {
+      "run_id": "01M6P7Z890TZTA454M7GRT0NY7",
+      "criterion": 2,
+      "text": null,
+      "kind": "implicit",
+      "pass": true,
+      "reason": "reviewer(01M6P7ZGVF3Q20E2RXG8DBW9J2): merge-base からの差分は out/o2.txt の 4 行追加 1 件（commit 'out/o2.txt: C06 o2 の成果を追加'）のみで、依頼範囲内。実装 worktree に未コミット変更なし。秘密の混入なし。公開は人が却下したため未実行で、成果物の commit とは無関係。"
+     }
+    ],
+    "command_checks": [
+     {
+      "run_id": "01M6P7Z890TZTA454M7GRT0NY7",
+      "criterion": 1,
+      "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"",
+      "expect_exit": 0,
+      "exit": 0,
+      "timed_out": false,
+      "pass": true,
+      "source": "public/C06/case.json#o2.acceptance"
+     }
+    ],
+    "discrepancies": []
+   }
+  }
+ ],
+ "effects": [
+  {
+   "logical_id": "C06:o1:publish",
+   "root": "o1",
+   "at": 48
+  }
+ ],
+ "human_ops": [
+  {
+   "at": 0,
+   "class": "stimulus",
+   "kind": "project_request"
+  },
+  {
+   "at": 45,
+   "class": "required",
+   "kind": "approval",
+   "approval_id": "01M6P7XRE42ZE7HQZ60AW4TQAG",
+   "decision": "once"
+  },
+  {
+   "at": 93,
+   "class": "required",
+   "kind": "approval",
+   "approval_id": "01M6P7Z80YDS88QQC1WTJHBVK1",
+   "decision": "denied"
+  }
+ ],
+ "faults": [
+  {
+   "at": 45,
+   "kind": "approval_wait",
+   "approval_id": "01M6P7XRE42ZE7HQZ60AW4TQAG"
+  },
+  {
+   "at": 93,
+   "kind": "approval_wait",
+   "approval_id": "01M6P7Z80YDS88QQC1WTJHBVK1"
+  }
+ ],
+ "invocations": [
+  {
+   "at": 31,
+   "role": "worker",
+   "usage": {
+    "input_tokens": 8,
+    "output_tokens": 842,
+    "cache_read_tokens": 73567,
+    "cache_creation_tokens": 25200,
+    "cost_usd": 0.0861494,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 25202
+   }
+  },
+  {
+   "at": 45,
+   "role": "worker",
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 748,
+    "cache_read_tokens": 56525,
+    "cache_creation_tokens": 15238,
+    "cost_usd": 0.056892,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 24909
+   }
+  },
+  {
+   "at": 45,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 53,
+   "role": "reviewer",
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 1074,
+    "cache_read_tokens": 52354,
+    "cache_creation_tokens": 16582,
+    "cost_usd": 0.0626778,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 24525
+   }
+  },
+  {
+   "at": 64,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 64,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 76,
+   "role": "worker",
+   "usage": {
+    "input_tokens": 8,
+    "output_tokens": 959,
+    "cache_read_tokens": 80834,
+    "cache_creation_tokens": 15263,
+    "cost_usd": 0.06393030000000001,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 24934
+   }
+  },
+  {
+   "at": 93,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 94,
+   "role": "worker",
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 823,
+    "cache_read_tokens": 56519,
+    "cache_creation_tokens": 15314,
+    "cost_usd": 0.0578308,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 24985
+   }
+  },
+  {
+   "at": 102,
+   "role": "reviewer",
+   "usage": {
+    "input_tokens": 8,
+    "output_tokens": 1346,
+    "cache_read_tokens": 74783,
+    "cache_creation_tokens": 17160,
+    "cost_usd": 0.07133260000000001,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 24633
+   }
+  },
+  {
+   "at": 124,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 125,
+   "role": "cos",
+   "usage": null
+  }
+ ],
+ "actors": [
+  {
+   "actor": "human",
+   "at": 0
+  },
+  {
+   "actor": "worker",
+   "at": 31
+  },
+  {
+   "actor": "worker",
+   "at": 45
+  },
+  {
+   "actor": "cos",
+   "at": 45
+  },
+  {
+   "actor": "reviewer",
+   "at": 53
+  },
+  {
+   "actor": "cos",
+   "at": 64
+  },
+  {
+   "actor": "cos",
+   "at": 64
+  },
+  {
+   "actor": "worker",
+   "at": 76
+  },
+  {
+   "actor": "cos",
+   "at": 93
+  },
+  {
+   "actor": "worker",
+   "at": 94
+  },
+  {
+   "actor": "reviewer",
+   "at": 102
+  },
+  {
+   "actor": "cos",
+   "at": 124
+  },
+  {
+   "actor": "cos",
+   "at": 125
+  }
+ ],
+ "statements": [],
+ "questions": [],
+ "cos_launch_rejected": 0,
+ "running_untracked": 0,
+ "leak_hits": [],
+ "achieved_at": 126,
+ "controller_achieved": true,
+ "events_append_only": true,
+ "usage": {
+  "tokens": 5834,
+  "quota": null,
+  "wall_secs": 133,
+  "missing": null
+ },
+ "virtual_secs_to_reach": 126
+}

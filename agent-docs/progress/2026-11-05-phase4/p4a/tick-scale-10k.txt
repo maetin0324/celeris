@@ -1,0 +1,3 @@
+TICK_SCALE_RAW=<p4a>/tick-scale-10k.jsonl TICK_SCALE_BLOCKED=10000 TICK_SCALE_TICKS=1 TICK_SCALE_DISPATCHES=2 cargo nextest run -p celeris --test tick_scale_baseline
+TIMEOUT [ 600.030s] (1/1) celeris::tick_scale_baseline tick_scale_baseline   (nextest profile.default: slow-timeout terminate-after 10 min)
+exit 100 (nextest). 標本の行は出なかった（複写・最初の tick・空 tick 1 回・dispatch 2 回の合計が 600 秒を超えた）。

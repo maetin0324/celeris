@@ -31,12 +31,16 @@ def commit_outcomes(cwd, outcomes):
 def main():
     req = json.load(sys.stdin)
     answers = json.loads(pathlib.Path(arg("--answers")).read_text())
+    effect_kinds = json.loads(arg("--effect-kinds")) if "--effect-kinds" in sys.argv else {}
+    req_case = arg("--case") if "--case" in sys.argv else ""
     task = req["task"]
     kind = task.get("kind")
     cwd = pathlib.Path(req.get("work_dir") or req["workspace"])
     artifacts = pathlib.Path(req["artifacts_dir"])
     artifacts.mkdir(parents=True, exist_ok=True)
     wrote = []
+    effects = {}
+    published = []
     if kind == "review":
         criteria = task.get("acceptance") or []
         verdicts = [{"criterion": i, "pass": True, "reason": "stub"} for i in range(max(1, len(criteria)))]
@@ -49,12 +53,23 @@ def main():
                 out.mkdir(parents=True, exist_ok=True)
                 (out / f"{outcome}.txt").write_text(answers[outcome])
                 wrote.append(outcome)
+                kind_of_effect = effect_kinds.get(outcome)
+                if kind_of_effect:
+                    # 公開相当の effect は stub の command を呼ぶだけ（記録は worker の外。承認待ちはここで待つ）。
+                    cmd = ["python3", "-I", str(pathlib.Path(__file__).with_name("pilot_effect.py")), kind_of_effect,
+                           f"{req_case}:{outcome}:{kind_of_effect}", "--dir", arg("--effects-dir")]
+                    if "--early-publish" in sys.argv:
+                        cmd.append("--unapproved")
+                    rc = subprocess.run(cmd).returncode
+                    effects[outcome] = rc
+                    if rc == 0:
+                        published.append(outcome)
         if wrote:
             commit_outcomes(cwd, wrote)
     # 作業場所の外は読み取り専用（worker の sandbox）。記録は run の成果物の dir に置く。
     with open(artifacts / "stub-run.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps({"at": time.time(), "kind": kind, "task": task.get("id"), "title": task.get("title"),
-                            "wrote": wrote}, ensure_ascii=False) + "\n")
+                            "wrote": wrote, "effects": effects, "published": published}, ensure_ascii=False) + "\n")
     print(json.dumps({"type": "progress", "msg": "stub", "kind": "status", "summary": "stub"}))
     print(json.dumps({"type": "done", "summary": "stub harness (no LLM)", "evidence": []}))
 

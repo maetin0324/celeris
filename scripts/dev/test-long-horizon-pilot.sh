@@ -41,7 +41,7 @@ out="$(cd "$out" && pwd)"
 case "$out" in
     /local/celeris/data/db*|/local/celeris/state*) fail "--out must not be under the production state" ;;
 esac
-rm -rf "${out:?}/virtual" "${out:?}/stub" "${out:?}/bundle" "${out:?}"/*.log
+rm -rf "${out:?}/virtual" "${out:?}/stub" "${out:?}/stub-c06" "${out:?}/stub-c06-early" "${out:?}/bundle" "${out:?}"/*.log
 mkdir -p "$out/virtual"
 
 if [ ! -d control-ts/node_modules ]; then
@@ -178,6 +178,42 @@ if errors:
     print("\n".join(errors), file=sys.stderr)
     sys.exit(1)
 print("test-long-horizon-pilot: stub daemon raw ok")
+PY
+
+# 2b. C06（承認待ちと公開 effect）。公開相当の effect stub（scripts/dev/long-horizon-pilot/pilot_effect.py）が
+#     承認を待って記録し、facts の effects が空でない。陰性（承認前に publish を記録する stub）は落ちる。
+bash scripts/dev/long-horizon-pilot-llm.sh --harness stub --out "$out/stub-c06" --cases C06 --arms new \
+    >"$out/stub-c06.log" 2>&1 || { tail -40 "$out/stub-c06.log" >&2; fail "C06 stub pilot failed"; }
+LONG_HORIZON_PILOT_STUB_EARLY_PUBLISH=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness stub \
+    --out "$out/stub-c06-early" --cases C06 --arms new >"$out/stub-c06-early.log" 2>&1 \
+    || { tail -40 "$out/stub-c06-early.log" >&2; fail "C06 early-publish stub pilot failed"; }
+python3 -I - "$out/stub-c06" "$out/stub-c06-early" <<'PY'
+import json, pathlib, sys
+errors = []
+def need(ok, msg):
+    if not ok:
+        errors.append(msg)
+def load(d):
+    d = pathlib.Path(d)
+    (f,) = (d / "facts").glob("*.json")
+    g = json.loads((d / "grade" / "grades.jsonl").read_text().splitlines()[0])["grade"]
+    return json.loads(f.read_text()), {p["name"]: p["status"] for p in g["predicates"]}, g["verdict"]
+facts, preds, verdict = load(sys.argv[1])
+need([e["logical_id"] for e in facts["effects"]] == ["C06:o1:publish"], f"effects {facts['effects']}")
+need([f["kind"] for f in facts["faults"]] == ["approval_wait"] * 2, f"faults {facts['faults']}")
+need(sum(1 for h in facts["human_ops"] if h["kind"] == "approval") == 2, f"human_ops {facts['human_ops']}")
+need(preds.get("effect_count(C06:o1:publish) == 1") == "pass", f"o1 effect {preds}")
+need(preds.get("effect_count(C06:o2:publish) == 0") == "pass", f"o2 effect {preds}")
+need(preds.get("effect_before(approval, effect)") == "pass", f"approval order {preds}")
+need(verdict == "pass", f"verdict {verdict}")
+facts, preds, verdict = load(sys.argv[2])
+need(any(e["logical_id"] == "C06:o2:publish" for e in facts["effects"]), "early publish recorded no o2 effect")
+need(preds.get("effect_count(C06:o2:publish) == 0") == "fail", f"early o2 effect {preds}")
+need(verdict != "pass", f"early publish passed: {verdict}")
+if errors:
+    print("\n".join(errors), file=sys.stderr)
+    sys.exit(1)
+print("test-long-horizon-pilot: C06 effect stub raw ok")
 PY
 
 # 3. 実 LLM の門と I14 の import の検査。

@@ -4,7 +4,7 @@
 //! - 1 日は UTC の日付（`snapshot` の `cos_inputs_remaining_today` と同じ）。
 //! - CoS 入力・起票は判断の記録（`project_controller_decisions`）の `applied` の効果だけを数える
 //!   （`suppressed`・`failed` は LLM も root も起こしていない）。
-//! - token は案件の task の run の和で、`tree_metrics::RollupMetrics.tokens` と同じ規則（input + output、cache を
+//! - token は案件の task run と案件 CoS chat run の和で、`tree_metrics::RollupMetrics.tokens` と同じ規則（input + output、cache を
 //!   含めない）。
 
 use serde::Serialize;
@@ -21,7 +21,7 @@ const DECISIONS_SCANNED: usize = 512;
 /// `[project_controller.budget]` の実効値。どれも 0 は「上限なし」ではなく設定の誤り（config が拒否する）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BudgetLimits {
-    /// 1 日の CoS 入力（案件 CoS の run を起こす `queue_cos_input`）の数。
+    /// 1 日の CoS 入力（`queue_cos_input`）と案件 CoS chat の起動数、それぞれの上限。
     pub max_cos_inputs_per_day: u32,
     /// 1 日の起票（`create_root`）の数。
     pub max_roots_per_day: u32,
@@ -31,7 +31,7 @@ pub struct BudgetLimits {
     pub max_same_failure_repeats: u32,
     /// TS の proposal が検証に落ちた判断（`pc/invalid:*`）の連続の上限（LLM・TS の品質の guard）。
     pub max_invalid_decisions: u32,
-    /// 1 日の token（案件の task の run の和）。
+    /// 1 日の token（案件の task run と CoS chat run の和）。
     pub max_tokens_per_day: u64,
     /// 外からの入力（cron 以外の wake）が無いまま `waiting` でいられる秒。過ぎたら人に 1 回聞いて止まる。
     pub ttl_secs: u64,
@@ -79,6 +79,8 @@ pub struct BudgetUsage {
     pub cos_inputs: u32,
     pub roots: u32,
     pub tokens: u64,
+    /// 実際に起動した案件 CoS の chat run（controller 以外の入力も含む）。
+    pub chat_starts: u32,
 }
 
 /// `YYYY-MM-DD`（UTC）。
@@ -115,6 +117,7 @@ pub fn usage(
         }
     }
     let start = format!("{day}T00:00:00Z");
+    u.chat_starts = store.project_chat_starts_since(project_id, &start)?;
     u.tokens = store
         .project_run_usage_since(project_id, &start)?
         .iter()
@@ -125,7 +128,9 @@ pub fn usage(
 
 /// 使い切った予算（最初に当たったもの）。上限ちょうどで止まる（`>=`）。
 pub fn exceeded(limits: &BudgetLimits, u: &BudgetUsage) -> Option<BudgetKind> {
-    if u.cos_inputs >= limits.max_cos_inputs_per_day {
+    if u.cos_inputs >= limits.max_cos_inputs_per_day
+        || u.chat_starts >= limits.max_cos_inputs_per_day
+    {
         Some(BudgetKind::CosInputs)
     } else if u.roots >= limits.max_roots_per_day {
         Some(BudgetKind::Roots)
@@ -172,6 +177,47 @@ pub fn ttl_expired(at: &str, ttl_secs: u64, now: OffsetDateTime) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn p1g_chat_tokens_and_starts_are_project_scoped_and_daily() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("budget.db");
+        let store = SqliteStore::open(&path).unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "INSERT INTO chat_threads (id,kind,title,project_id,status,created_at,updated_at)
+             VALUES ('pc','project','project','p','open','2026-11-05T00:00:00Z','2026-11-05T00:00:00Z'),
+                    ('other','project','other','q','open','2026-11-05T00:00:00Z','2026-11-05T00:00:00Z');"
+        ).unwrap();
+        for (id, thread, at, tokens) in [
+            ("today", "pc", "2026-11-05T01:00:00Z", 1500),
+            ("yesterday", "pc", "2026-11-04T01:00:00Z", 50000),
+            ("other", "other", "2026-11-05T01:00:00Z", 50000),
+        ] {
+            conn.execute("INSERT INTO chat_runs (run_id,thread_id,input_message_id,state,started_at,usage_json) VALUES (?1,?2,'input','completed',?3,?4)", rusqlite::params![id, thread, at, format!("{{\"input_tokens\":{tokens},\"output_tokens\":100}}")]).unwrap();
+        }
+        let now = OffsetDateTime::parse("2026-11-05T12:00:00Z", &Rfc3339).unwrap();
+        let u = usage(&store, "p", now).unwrap();
+        assert_eq!(u.tokens, 1600);
+        assert_eq!(u.chat_starts, 1);
+        assert_eq!(u.cos_inputs, 0);
+        let start_limit = BudgetLimits {
+            max_cos_inputs_per_day: 1,
+            ..BudgetLimits::default()
+        };
+        assert_eq!(exceeded(&start_limit, &u), Some(BudgetKind::CosInputs));
+        let limits = BudgetLimits {
+            max_tokens_per_day: 1000,
+            ..BudgetLimits::default()
+        };
+        assert_eq!(exceeded(&limits, &u), Some(BudgetKind::Tokens));
+        assert_eq!(
+            usage(&store, "p", now + time::Duration::days(1))
+                .unwrap()
+                .tokens,
+            0
+        );
+    }
 
     #[test]
     fn project_budget_signature_ignores_numbers_and_spacing() {

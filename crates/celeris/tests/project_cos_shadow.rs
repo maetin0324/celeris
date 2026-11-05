@@ -481,9 +481,29 @@ async fn project_cos_ts_review_failed_retries_after_brief() {
             operation: "project_controller.create_root".into(),
             request_hash: "x".into(),
         };
-        db.store
-            .project_controller_create_root(&task, &claim, "daemon", meta.as_deref(), 0, None, t0)
+        // この fixture は判定直後に効果を適用する。brief の変更で進んだ入力 epoch も渡す。
+        let epoch = db
+            .store
+            .project_controller_state(&pid)
+            .expect("state")
+            .expect("controller")
+            .human_epoch;
+        let created = db
+            .store
+            .project_controller_create_root(
+                &task,
+                &claim,
+                "daemon",
+                meta.as_deref(),
+                epoch,
+                None,
+                t0,
+            )
             .expect("create");
+        assert!(
+            matches!(created, task_core::store::RootCreate::Created(_)),
+            "{created:?}"
+        );
         task.id
     };
     let mut d = decider(Arc::clone(&policy), &db);

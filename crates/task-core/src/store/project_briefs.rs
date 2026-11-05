@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::org::ProjectId;
 use crate::project_brief::{ProjectActivity, ProjectBrief};
@@ -69,8 +69,11 @@ impl SqliteStore {
 
     /// 要約を全置換で書く。案件が無ければ `false`（何も書かない）。
     pub fn project_brief_put(&self, brief: &ProjectBrief) -> Result<bool, StoreError> {
-        let conn = self.lock()?;
-        Self::project_brief_put_tx(&conn, brief)
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let saved = Self::project_brief_put_tx(&tx, brief)?;
+        tx.commit()?;
+        Ok(saved)
     }
 
     /// [`Self::project_brief_put`] on a caller-owned transaction (CoS op `project.status_put`).
@@ -88,7 +91,7 @@ impl SqliteStore {
         if exists.is_none() {
             return Ok(false);
         }
-        conn.execute(
+        let changed = conn.execute(
             &format!(
                 "INSERT INTO project_briefs ({BRIEF_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
                  ON CONFLICT(project_id) DO UPDATE SET objective = excluded.objective, \
@@ -96,7 +99,13 @@ impl SqliteStore {
                  next_actions_json = excluded.next_actions_json, \
                  waiting_on_json = excluded.waiting_on_json, \
                  evidence_refs_json = excluded.evidence_refs_json, \
-                 updated_at = excluded.updated_at, updated_by = excluded.updated_by"
+                 updated_at = excluded.updated_at, updated_by = excluded.updated_by \
+                 WHERE project_briefs.objective != excluded.objective \
+                 OR project_briefs.state != excluded.state \
+                 OR project_briefs.open_issues_json != excluded.open_issues_json \
+                 OR project_briefs.next_actions_json != excluded.next_actions_json \
+                 OR project_briefs.waiting_on_json != excluded.waiting_on_json \
+                 OR project_briefs.evidence_refs_json != excluded.evidence_refs_json"
             ),
             params![
                 brief.project_id.to_string(),
@@ -110,6 +119,13 @@ impl SqliteStore {
                 brief.updated_by,
             ],
         )?;
+        if changed > 0 {
+            Self::project_controller_brief_changed_tx(
+                conn,
+                &brief.project_id.to_string(),
+                brief.updated_at,
+            )?;
+        }
         Ok(true)
     }
 
@@ -195,6 +211,93 @@ mod tests {
             "cos:t",
             OffsetDateTime::now_utc().replace_nanosecond(0).unwrap(),
         )
+    }
+
+    #[test]
+    fn p1g_brief_wake_is_atomic_idempotent_and_invalidates_old_effects() {
+        use crate::project_wake::{ControllerMode, ControllerPhase};
+        let store = SqliteStore::open_in_memory().unwrap();
+        let p = project(&store);
+        let b = brief(p.id, "initial");
+        let id = p.id.to_string();
+        store
+            .project_controller_set_mode(
+                &id,
+                ControllerMode::Enabled,
+                None,
+                "human:t",
+                b.updated_at,
+            )
+            .unwrap();
+        let before = store.project_controller_state(&id).unwrap().unwrap();
+        {
+            let mut conn = store.lock().unwrap();
+            let tx = conn.transaction().unwrap();
+            SqliteStore::project_brief_put_tx(&tx, &b).unwrap();
+            assert_eq!(
+                SqliteStore::project_controller_state_tx(&tx, &id)
+                    .unwrap()
+                    .unwrap()
+                    .human_epoch,
+                before.human_epoch + 1
+            );
+            tx.rollback().unwrap();
+        }
+        assert!(store.project_brief_get(p.id).unwrap().is_none());
+        assert_eq!(
+            store
+                .project_controller_state(&id)
+                .unwrap()
+                .unwrap()
+                .human_epoch,
+            before.human_epoch
+        );
+        assert!(store.project_wakes_all(&id).unwrap().is_empty());
+        store.project_brief_put(&b).unwrap();
+        let after = store.project_controller_state(&id).unwrap().unwrap();
+        assert_eq!(after.human_epoch, before.human_epoch + 1);
+        let mut retry = b.clone();
+        retry.updated_at += time::Duration::days(3);
+        store.project_brief_put(&retry).unwrap();
+        assert_eq!(store.project_wakes_all(&id).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .project_controller_state(&id)
+                .unwrap()
+                .unwrap()
+                .human_epoch,
+            after.human_epoch
+        );
+        let conn = store.lock().unwrap();
+        assert!(
+            !super::super::project_wake_effect::effect_gate_open_tx(&conn, &id, before.human_epoch)
+                .unwrap()
+        );
+        assert!(
+            super::super::project_wake_effect::effect_gate_open_tx(&conn, &id, after.human_epoch)
+                .unwrap()
+        );
+        drop(conn);
+        for phase in [
+            ControllerPhase::Blocked,
+            ControllerPhase::Paused,
+            ControllerPhase::Cancelled,
+        ] {
+            store
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE project_controller_state SET phase = ?2 WHERE project_id = ?1",
+                    params![id, phase.as_str()],
+                )
+                .unwrap();
+            retry.state = phase.as_str().into();
+            store.project_brief_put(&retry).unwrap();
+            assert_eq!(
+                store.project_controller_state(&id).unwrap().unwrap().phase,
+                phase
+            );
+        }
     }
 
     #[test]

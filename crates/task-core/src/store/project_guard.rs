@@ -136,7 +136,7 @@ impl SqliteStore {
         })
     }
 
-    /// A6 の token の予算: 案件の task の run（`started_at >= since`）の `usage_json`。和は
+    /// 案件の task run と CoS chat run（`started_at >= since`）の `usage_json`。和は
     /// `task_ops::project_budget` が `tree_metrics` と同じ規則（input + output、cache を含めない）で取る。
     pub fn project_run_usage_since(
         &self,
@@ -146,6 +146,9 @@ impl SqliteStore {
         self.with_read_conn(|c| {
             let mut st = c.prepare(
                 "SELECT r.usage_json FROM runs r JOIN tasks t ON t.id = r.task_id \
+                 WHERE t.project_id = ?1 AND r.started_at >= ?2 AND r.usage_json IS NOT NULL \
+                 UNION ALL SELECT r.usage_json FROM chat_runs r \
+                 JOIN chat_threads t ON t.id = r.thread_id \
                  WHERE t.project_id = ?1 AND r.started_at >= ?2 AND r.usage_json IS NOT NULL",
             )?;
             let raw: Vec<String> = st
@@ -155,6 +158,22 @@ impl SqliteStore {
                 .iter()
                 .filter_map(|s| serde_json::from_str(s).ok())
                 .collect())
+        })
+    }
+
+    /// 案件 CoS の起動数。queued の行は起動していないため数えない。
+    pub fn project_chat_starts_since(
+        &self,
+        project_id: &str,
+        since: &str,
+    ) -> Result<u32, StoreError> {
+        self.with_read_conn(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM chat_runs r JOIN chat_threads t ON t.id = r.thread_id
+                 WHERE t.project_id = ?1 AND r.started_at >= ?2",
+                params![project_id, since],
+                |r| r.get(0),
+            )?)
         })
     }
 

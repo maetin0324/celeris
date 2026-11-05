@@ -80,6 +80,8 @@ controller は event（root の終了・失敗・人の操作など）で起き�
 - 全途中目標が達成済み（phase `achieved`）の案件は、root の終了や cron では評価しない。人が案件を変えたときだけ評価する。
 - 止まった案件を続けるには、人が通知の理由を確かめてから案件の画面で controller の mode を置き直す（`PUT /api/v1/projects/{id}/controller`。
   予算は日付が変わっても自動では戻らない）。
+- 日次 token は案件の task run と案件 CoS の chat run の input + output を合計する（cache は加えない）。案件 CoS の起動数は `BudgetUsage.chat_starts` で数える。controller の CoS 入力数と chat 起動数のいずれかが `max_cos_inputs_per_day` に達したら止まる。
+- brief の内容変更は保存と同じ transaction で wake を書き、変更前の判断を入力 epoch で無効にする。同じ内容の再送では wake を増やさない。brief の更新だけで blocked・paused・cancelled は解除しない。
 - 値を変えるときは本番 config の `[project_controller.budget]` を人が書き換え、daemon を再起動する（この依頼では実行しない）。0 は設定の誤りで、
   daemon は起動しない。
 - 測った値（`agent-docs/progress/2026-11-04-long-horizon/a6/resource.jsonl`）: 本物の TS の判定 1 回の p50 は約 1.5 ms、100 案件を 1 周する時間は約

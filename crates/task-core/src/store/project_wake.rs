@@ -404,6 +404,39 @@ impl SqliteStore {
         Ok(n)
     }
 
+    /// brief の内容変更は人の回答ではない。入力 epoch と wake を保存側の tx で更新し、
+    /// 古い snapshot と未実行の効果を拒否する。停止 phase は解除しない。
+    pub(crate) fn project_controller_brief_changed_tx(
+        tx: &Connection,
+        project_id: &str,
+        now: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        let Some(state) = Self::pc_state_tx(tx, project_id)? else {
+            return Ok(());
+        };
+        if !state.mode.wakes() {
+            return Ok(());
+        }
+        let epoch = state.human_epoch + 1;
+        tx.execute(
+            "UPDATE project_controller_state SET human_epoch = ?2 WHERE project_id = ?1",
+            params![project_id, epoch],
+        )?;
+        Self::project_wake_insert_tx(
+            tx,
+            &NewProjectWake {
+                project_id: project_id.into(),
+                wake_key: format!("brief:{epoch}"),
+                kind: ProjectWakeKind::ExternalReleased,
+                source_event_id: None,
+                source_ref: Some(format!("project_brief:{project_id}:{epoch}")),
+            },
+            0,
+            now,
+        )?;
+        Ok(())
+    }
+
     /// 人の操作（D12 `human_epoch`）。呼び出し側の transaction の中で `human_epoch + 1` と wake
     /// `human:<epoch>` を書く。状態の行が無い・`off` の案件では何もしない（`None`。I13）。
     pub fn project_controller_human_bump_tx(

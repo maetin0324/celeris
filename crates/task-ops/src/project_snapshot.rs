@@ -129,11 +129,9 @@ fn root_row(
             Event::ReviewerPassed { .. } | Event::ReviewerPassReused { .. } => {
                 reviewer_passed = true
             }
-            Event::IntegrationMerged { .. } | Event::IntegrationNotApplicable { .. } => {
-                merged = true
-            }
-            // A9: 取り込むものが無い delivery の見送り（git でない・commit なし）は取り込み済みと同じ。
-            Event::DeliverySkipped { reason, .. } if reason.nothing_to_integrate() => merged = true,
+            // A9 D1: repo を持つ案件で取り込み済みと数えるのは IntegrationMerged だけ。見送り（NotGit・NoCommits）や
+            // IntegrationNotApplicable は、成果が案件の tree に載ったことを示さない。
+            Event::IntegrationMerged { .. } => merged = true,
             Event::IntegrationReopened { .. } => merged = false,
             Event::Transitioned { to, reason, .. } => {
                 if *to == Status::Done && reason == "review_pass" {
@@ -375,4 +373,89 @@ pub fn evidence_scope(snapshot: &ProjectSnapshot) -> BTreeSet<String> {
 /// `TaskId` の文字列を読む（snapshot の id から）。
 pub fn parse_task_id(id: &str) -> Option<TaskId> {
     id.parse().ok()
+}
+
+#[cfg(test)]
+mod root_row_tests {
+    use super::*;
+    use crate::add::create_task;
+    use task_core::DeliverySkipReason;
+    use task_core::RepoId;
+    use task_core::repos::RepoRef;
+
+    /// done の root 1 件と、その events を積んだ store で `integrated` を返す。
+    fn integrated(with_repo: bool, events: &[Event]) -> bool {
+        let store = SqliteStore::open_in_memory().expect("store");
+        let spec: NewTaskSpec = serde_json::from_value(serde_json::json!({
+            "title": "t", "objective": "o",
+            "acceptance": [{"type": "command", "cmd": "true", "expect_exit": 0}]
+        }))
+        .expect("spec");
+        let mut task = create_task(&store, spec, OffsetDateTime::now_utc()).expect("task");
+        for e in events {
+            store.append_event(task.id, e).expect("event");
+        }
+        task.status = Status::Done;
+        if with_repo {
+            task.repos = vec![RepoRef {
+                repo_id: RepoId::new(),
+                name: "r".into(),
+            }];
+        }
+        root_row(
+            &store,
+            &task,
+            None,
+            OffsetDateTime::now_utc(),
+            &mut Vec::new(),
+        )
+        .expect("row")
+        .integrated
+    }
+
+    fn skipped(reason: DeliverySkipReason) -> Event {
+        Event::DeliverySkipped {
+            reason,
+            detail: String::new(),
+            head: None,
+        }
+    }
+
+    #[test]
+    fn root_row_repo_no_commits_is_not_integrated() {
+        assert!(!integrated(true, &[skipped(DeliverySkipReason::NoCommits)]));
+    }
+
+    #[test]
+    fn root_row_repo_not_git_is_not_integrated() {
+        assert!(!integrated(true, &[skipped(DeliverySkipReason::NotGit)]));
+    }
+
+    #[test]
+    fn root_row_repo_integration_merged_is_integrated() {
+        let merged = Event::IntegrationMerged {
+            repo_id: RepoId::new(),
+            branch: "b".into(),
+            head_sha: "0".repeat(40),
+            actor: "test".into(),
+        };
+        assert!(integrated(true, &[merged]));
+    }
+
+    #[test]
+    fn root_row_repo_not_applicable_is_not_integrated() {
+        let na = Event::IntegrationNotApplicable {
+            repo_id: RepoId::new(),
+            branch: "b".into(),
+            head_sha: "0".repeat(40),
+            reason: "remote".into(),
+            actor: "test".into(),
+        };
+        assert!(!integrated(true, &[na]));
+    }
+
+    #[test]
+    fn root_row_without_repo_done_is_integrated() {
+        assert!(integrated(false, &[]));
+    }
 }

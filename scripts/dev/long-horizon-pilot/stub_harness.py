@@ -2,18 +2,30 @@
 """A9 の stub harness（LLM を呼ばない）。fake adapter の RunRequest を stdin で受ける。
 
 - Review の run: artifacts/review.json に全基準の合格を書く。
-- 実行の run: acceptance の文から Outcome を見つけ、作業 tree の out/<id>.txt に台本の答えを書く。
+- 実行の run: acceptance の文から Outcome を見つけ、作業 tree の out/<id>.txt に台本の答えを書き、git commit する。
 - CoS の chat run と planner はそのまま done を返す。起動ごとに 1 行を artifacts/stub-run.jsonl に書く。
 """
 import json
+import os
 import pathlib
 import re
+import subprocess
 import sys
 import time
 
 
 def arg(name):
     return sys.argv[sys.argv.index(name) + 1]
+
+
+def commit_outcomes(cwd, outcomes):
+    """out/<id>.txt を作業 tree の branch に commit する（案件の tree に載せる）。"""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "stub", "GIT_AUTHOR_EMAIL": "stub@localhost",
+           "GIT_COMMITTER_NAME": "stub", "GIT_COMMITTER_EMAIL": "stub@localhost"}
+    paths = [f"out/{o}.txt" for o in outcomes]
+    subprocess.run(["git", "-C", str(cwd), "add", "--", *paths], check=True, env=env, capture_output=True)
+    subprocess.run(["git", "-C", str(cwd), "commit", "-q", "-m", "stub: " + " ".join(outcomes), "--", *paths],
+                   check=True, env=env, capture_output=True)
 
 
 def main():
@@ -37,6 +49,8 @@ def main():
                 out.mkdir(parents=True, exist_ok=True)
                 (out / f"{outcome}.txt").write_text(answers[outcome])
                 wrote.append(outcome)
+        if wrote:
+            commit_outcomes(cwd, wrote)
     # 作業場所の外は読み取り専用（worker の sandbox）。記録は run の成果物の dir に置く。
     with open(artifacts / "stub-run.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps({"at": time.time(), "kind": kind, "task": task.get("id"), "title": task.get("title"),

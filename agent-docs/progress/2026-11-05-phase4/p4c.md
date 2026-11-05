@@ -47,9 +47,13 @@ fake harness（`sh`）・一時 DB・LLM なし。debug build。host は共用�
 
 ## 変更（commit の件名）
 - `p4c: CoS の一次対応の受信箱を触れた task の分だけ作り、blocked の event の読み直しを減らす`
+- `p4c: 検査の結果を進捗に書く`
 
-## 証拠（提出時の HEAD で実行）
-- 下の「検査」節に書く。
+## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 6,219 passed・22 skipped（19 slow）、web の unit 711 passed（104 files）、progress-index の検査 all checks passed。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `cargo nextest run -p task-ops human_inbox_touching` → 1 passed。
+- `test -f agent-docs/progress/2026-11-05-phase4/p4c.md` → exit 0。
 
 ## 失敗ケース
 - 10,000 件の before は未実施（1 条件 30 分超の見込み。P4-A で nextest の 600 秒に収まらなかった）。

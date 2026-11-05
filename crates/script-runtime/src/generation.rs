@@ -415,12 +415,11 @@ impl GenerationRegistry {
         async move {
             let guard = acquired?;
             let generation = Arc::clone(&guard.0);
-            let mut cancelled = generation.cancel.subscribe();
-            let result = tokio::select! {
-                biased;
-                _ = cancelled.wait_for(|c| *c) => Err(ScriptError::GenerationGone),
-                r = generation.handle.call_with_host_sink(call, host_sink) => r,
-            };
+            let result = call_until_cancelled(
+                generation.cancel.subscribe(),
+                generation.handle.call_with_host_sink(call, host_sink),
+            )
+            .await;
             drop(guard);
             result.map(|reply| PinnedReply {
                 generation_id: generation.id.clone(),
@@ -597,6 +596,26 @@ impl GenerationRegistry {
     }
 }
 
+/// `call` を待ち、generation が打ち切られたら `GenerationGone` を返す。
+///
+/// 打ち切りの合図の確認と `call` の poll の間に打ち切りと actor の停止が終わると、`call` は `Terminated` を
+/// 返す（queue が閉じている・返事の口が落ちた）。[`take_out`] は actor を止める前に合図を立てるので、ここで
+/// 合図を読み直せば打ち切りと actor の自滅を区別できる。actor が自分で止まった場合は `Terminated` のまま。
+async fn call_until_cancelled<T>(
+    mut cancelled: watch::Receiver<bool>,
+    call: impl Future<Output = Result<T, ScriptError>>,
+) -> Result<T, ScriptError> {
+    let result = tokio::select! {
+        biased;
+        _ = cancelled.wait_for(|c| *c) => Err(ScriptError::GenerationGone),
+        r = call => r,
+    };
+    match result {
+        Err(ScriptError::Terminated) if *cancelled.borrow() => Err(ScriptError::GenerationGone),
+        other => other,
+    }
+}
+
 /// 登録簿から外す generation の in-flight を打ち切り、記録を作る。
 fn take_out(generation: &Generation, reason: RetireReason, in_flight: usize) -> RetiredGeneration {
     if in_flight > 0 {
@@ -697,6 +716,53 @@ mod tests {
         ] {
             assert!(KNOWN_DOMAINS.contains(&cap.domain()));
         }
+    }
+
+    /// 合図の確認が済んだ後、`call` の poll の前に打ち切りが終わる窓を再現する。`call` の中で合図を立てて
+    /// `Terminated` を返すと、実時間に頼らず同じ順序になる。
+    #[tokio::test]
+    async fn cancel_between_signal_check_and_call_poll_is_generation_gone() {
+        let (cancel, cancelled) = watch::channel(false);
+        let call = async move {
+            cancel.send_replace(true);
+            Err::<(), _>(ScriptError::Terminated)
+        };
+        assert_eq!(
+            call_until_cancelled(cancelled, call).await,
+            Err(ScriptError::GenerationGone)
+        );
+    }
+
+    /// 打ち切られていないのに actor が止まった場合は `Terminated` のまま（`GenerationGone` と混ぜない）。
+    #[tokio::test]
+    async fn terminated_without_cancel_stays_terminated() {
+        let (_cancel, cancelled) = watch::channel(false);
+        let call = async { Err::<(), _>(ScriptError::Terminated) };
+        assert_eq!(
+            call_until_cancelled(cancelled, call).await,
+            Err(ScriptError::Terminated)
+        );
+    }
+
+    /// 打ち切りと同時に届いた結果は、`Terminated` 以外ならそのまま返す。
+    #[tokio::test]
+    async fn other_outcomes_pass_through_when_cancelled_during_call() {
+        let (cancel, cancelled) = watch::channel(false);
+        let call = async move {
+            cancel.send_replace(true);
+            Ok::<_, ScriptError>(1)
+        };
+        assert_eq!(call_until_cancelled(cancelled, call).await, Ok(1));
+
+        let (cancel, cancelled) = watch::channel(false);
+        let call = async move {
+            cancel.send_replace(true);
+            Err::<(), _>(ScriptError::Timeout)
+        };
+        assert_eq!(
+            call_until_cancelled(cancelled, call).await,
+            Err(ScriptError::Timeout)
+        );
     }
 
     #[test]

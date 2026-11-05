@@ -55,6 +55,7 @@ command（`CARGO_TARGET_DIR` は Celeris が渡した値。一時 DB、fake harn
 - `p4a: 進捗とベースラインの raw を書く`
 - `p4a: 進捗の文書の検査の結果を書く`
 - `p4a: test-affected の host 依存の失敗を進捗に書く`
+- `p4a delivery-repair: 打ち切られた generation への要求が Terminated で返る窓を GenerationGone に直す`
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - `bash scripts/dev/test-affected.sh` → exit 0。対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、3,422 passed・10 skipped（`tick_scale_baseline` の既定 0,20 件を含む）。
@@ -63,6 +64,12 @@ command（`CARGO_TARGET_DIR` は Celeris が渡した値。一時 DB、fake harn
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `sh scripts/dev/progress-index.sh --check`（ok）・`sh scripts/dev/check-doc-links.sh`（ok）・`sh scripts/dev/check-adr-numbers.sh`（ok、380 files）・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`（ok）・`git diff --check refs/heads/main` → すべて exit 0。
 - `test -f agent-docs/progress/2026-11-05-phase4/p4a.md` → exit 0。
+
+## 配送の差し戻し（delivery-repair、2026-11-05）
+- 原因: release 準備の `script-bundle-tests` 段で `celeris-script::generation generation_in_flight_64_then_busy` が `left: Err(Terminated) right: Err(GenerationGone)` で落ちた（`cargo-test` 段は 906 秒で exit 0）。P4-A の差分とは関係のない、`GenerationRegistry::call`（`crates/script-runtime/src/generation.rs`）の競合だった。`select!` が打ち切りの合図を false と読んだ後、`call` を poll する前に `invalidate` が合図を立てて actor を止めると、`call` は `Terminated` を返し、契約（打ち切られた要求は `GenerationGone`）に反する。
+- 修正: `call_until_cancelled` に切り出し、`Terminated` のときは合図を読み直して `GenerationGone` にする（`take_out` は actor を止める前に合図を立てる）。合図の無い `Terminated`（actor の自滅）と `Ok`・`Timeout` は変えない。
+- 決定的な再現: lib 試験 `generation::tests::cancel_between_signal_check_and_call_poll_is_generation_gone`（`call` の中で合図を立てて `Terminated` を返す。実時間・負荷に頼らない）。読み直しを外すと gate と同じ `left: Err(Terminated) right: Err(GenerationGone)` で exit 100、戻すと 5 passed。対照 2 件（`terminated_without_cancel_stays_terminated`・`other_outcomes_pass_through_when_cancelled_during_call`）も足した。
+- 検査（提出時の HEAD で実行）: `cargo nextest run -p celeris-script --test generation` 11 passed。gate の段を手元で再現 `CELERIS_SCRIPT_REQUIRE_BUNDLE=1 CELERIS_SCRIPT_BUNDLE_DIR=<$TMPDIR の bundle> bash scripts/selfdeploy/script-bundle-gate.sh test <repo> <bundle>` → 86 passed。`bash scripts/dev/test-affected.sh` → exit 0（3,502 passed・10 skipped）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。release・promote・本番の操作はしていない。
 
 ## 失敗ケース
 - 10,000 件の計測は nextest の 600 秒の打ち切り（exit 100）。`TICK_SCALE_TICKS=1 TICK_SCALE_DISPATCHES=2`。P4-C は test binary を `--exact tick_scale_baseline` で直接起こすか、件数ごとに分けて測る。

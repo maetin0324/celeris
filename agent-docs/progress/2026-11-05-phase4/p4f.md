@@ -119,6 +119,16 @@ completed: 2026-11-05
 5. 集計の最初の版は 1,529 秒に近い標本として restart の後の標本（別 process）を選び、傾きが負になった。窓を最初の process に限った。VmRSS の file の page の揺れは残るので、RssAnon の傾きを足し、合否は RssAnon で見る。
 6. dispatch の遅延の照会が task の `created` を seq 1 として探していた（実際は seq 0）。
 
+## delivery-repair（release 準備の中断、2026-11-05）
+- 差し戻しの理由: 配送の release 準備（prepare.log）が `cargo build --release -p celeris -p celerisctl -p celeris-credentiald` の途中で `Terminated` で終わった。その前の段（cargo-fmt-check・script-bundle の 3 段・cargo-test 962 秒・script-bundle-tests 155 秒・cargo-clippy・source-size-report）は全部 exit 0 だった。
+- 原因: 本番の daemon が 22:44:12Z に SIGTERM で止まった。`promote-20261105-224409.log` によると、operator が release 1b7d4ce3f917 を「方式: stop-start」（schema_version 114→115 の移行あり）で昇格し、旧 daemon（4bc443db7cbd）を止めた。release 準備は旧 daemon の子なので一緒に止まった。旧 daemon の log には SIGTERM の前に drain の行が無い。stop-start の昇格による中断で、この task の差分による失敗ではない。
+- 対応: コードは変えない。この節を足し、提出時の HEAD で検査をやり直して再提出する。
+- delivery-repair の検査（提出時の HEAD で実行。基準は git merge-base HEAD main。差分は この進捗の file だけ）:
+  - `bash scripts/dev/test-affected.sh`: exit 0（「試験対象の変更なし（docs のみ等）」。文書の検査の self-test は OK）
+  - `cargo clippy --workspace -- -D warnings`: exit 0
+  - `cargo fmt --all -- --check`: exit 0
+  - `sh scripts/dev/progress-index.sh --check`: exit 0
+
 ## 未実施（人の承認が要る）
 1. 段 3: 非本番の 24 時間（延長で 72 時間）の 4 条件。
 2. 段 4: 本番 daemon の `process_memory` の行と `/proc/<pid>/status` の読み取り（読むだけ。この task の binary が本番に入った後）、本番の `[script]` を外した off の再起動との 26 分の比較（本番の再起動が要る）。

@@ -75,18 +75,27 @@ subprocess.run(["python3", "-I", str(here / "stub_harness.py"), "--answers", str
                input=json.dumps(req), text=True, check=True, capture_output=True)
 need(json.loads((art / "review.json").read_text())["verdicts"] == [], "a review without criteria passed")
 
-# driver の公開 check（I8）: 全課題の全 Outcome に 1 つ以上付き、hidden の値を含まない。
+# driver の公開 check（I8）: 全課題の全 Outcome に 1 つ以上付き、非公開の材料を含まない。
+# 非公開の材料は oracle/<case>/oracle.json と oracle/holdout.json の canary、非公開の場所の名前（P0-C の bench v2）。
+LOCATIONS = ("oracle/", "grader", "check_outcome")
+def leaked(cmds, secrets):
+    return sorted({s for c in cmds for s in (*secrets, *LOCATIONS) if s in c})
+holdout_canary = json.loads((fixtures / "oracle/holdout.json").read_text())["canary"]
+need(leaked(["true"], [holdout_canary]) == [], "the leak check hit a clean command")
+need(leaked([f"echo {holdout_canary}"], [holdout_canary]) == [holdout_canary], "the leak check missed a canary")
+need(leaked(["cat ../oracle/C01/oracle.json"], []) == ["oracle/"], "the leak check missed a private location")
 spec = importlib.util.spec_from_file_location("driver", here / "driver.py")
 driver = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(driver)
 for f in sorted((fixtures / "public").glob("C*/case.json")):
     case = json.loads(f.read_text())
-    hidden = json.loads((fixtures / "oracle" / case["case"] / "hidden/expected.json").read_text())
+    secrets = [holdout_canary, json.loads((fixtures / "oracle" / case["case"] / "oracle.json").read_text())["canary"]]
     for o in case["request_outcomes"]:
         checks, source = driver.public_checks(case["case"], o)
         need(len(checks) >= 1 and all(c["cmd"].strip() for c in checks), f"{case['case']} {o['id']}: no check")
         need(any(x in source for x in ("public/", "request:")), f"{case['case']} {o['id']}: source {source}")
-        need(not any(h in c["cmd"] for h in hidden.values() for c in checks), f"{case['case']} {o['id']}: hidden value")
+        hits = leaked([c["cmd"] for c in checks], secrets)
+        need(not hits, f"{case['case']} {o['id']}: private material in a public check: {hits}")
 # 公開の手順の check: 手順の出力と同じ commit だけ通り、別の内容・未 commit は落ちる。作業 tree を変えない。
 c08 = next(o for o in json.loads((fixtures / "public/C08/case.json").read_text())["request_outcomes"] if o["id"] == "o1")
 (cmd,), _ = driver.public_checks("C08", c08)

@@ -7,7 +7,7 @@ updated: 2026-11-05
 ---
 # P0-E reviewer・pilot 受け入れの検証強化
 
-完了日: 2026-11-05。親は 01M6N7WD1WXXW0A5FV7RVZ67B7。基準は `git merge-base HEAD main`。作業中に main が 2 commit 進んだ（`phase 1: 統括 CoS の比較集計器と読取の正確さの replay を追加する`、`phase 1: release target の一時的な削除失敗を再試行する`）ので merge で取り込んだ（重なる file は無かった）。設計は ADR `agent-docs/adr/2026-11-05-phase3-p0e.md`。担うのは不変条件 I7〜I9、ケース K3・K21・K22。
+完了日: 2026-11-05。親は 01M6N7WD1WXXW0A5FV7RVZ67B7。基準は `git merge-base HEAD main`。P0-C（bench v2）を含む main へ rebase 済み。設計は ADR `agent-docs/adr/2026-11-05-phase3-p0e.md`。担うのは不変条件 I7〜I9、ケース K3・K21・K22。
 
 ## 結論
 - 依頼文の Outcome block に任意の `checks`（`{cmd, expect_exit}`）を足した。Rust が `launch_root` の効果を作るとき、対象 Outcome の `checks` を root の acceptance に `Check::Command` として足す。TS は command を作らず、snapshot の JSON にも出さない（TS の bundle・schema は不変）。
@@ -53,25 +53,31 @@ TS（`control-ts/`）は変えていない。TS policy だけの変更の verify
 3. test-affected で 2 件落ちた: event の schema（`event.schema.json`）の再生成漏れと、event の並びを固定する既存試験 `done_then_command_review_passes_and_events_are_recorded`。schema を再生成し、試験の期待値に `review_command_checked` を足した。web の `event-kinds.ts`・`invalidation-map.ts` にも新しい種類を足した。
 4. driver の facts の `achieved_at` が常に null だった（A9 からの不具合。判断の rule を `proposal_json` の `explanation` から読んでいたが、実際は `proposal.explanation` の下にある。main の `a9/stub` の raw も null）。読み先を直し、段 2 に「new 腕は `achieved_at` を持つ」を足した。
 
+## 差し戻しの原因と修正
+final review で `test-stub-reviewer.sh` と、これを呼ぶ `test-long-horizon-pilot.sh` が exit 1 だった。main の P0-C（bench v2）が `oracle/*/hidden/expected.json` を消し、rebase の後も試験がこの file を読んで FileNotFoundError になったため。前の p0e.md は 2 本の結果を取り込み前の実行のまま exit 0 と書いていた。
+
+修正: 公開 check の混入検査の対象を現行の材料に替えた。全課題の全 Outcome の cmd に、`oracle/<case>/oracle.json` と `oracle/holdout.json` の canary、および `oracle/`・`grader`・`check_outcome` が含まれないことを確かめる。検査の関数 `leaked` が canary と場所の名前を含む cmd を検出し、`true` では検出しないことも同じ script で確かめる。driver.py・stub_harness.py・Rust・fixture は変えていない。ADR の決定 4 と「保証できないこと」の表も現行の oracle に合わせた。
+
 ## 変更（commit の件名）
 - `p0e: pilot の root に公開契約の command check を結線し、検査と reviewer の根拠を event・facts・ops に残す`
-- `Merge branch 'main' into celeris/01M6N7XY9R6FREMRKFFVS4ENMG`
 - `p0e: 進捗に main の取り込みと再実行の結果を書く`
+- `p0e: stub reviewer の試験を bench v2 の oracle に合わせ、ADR と進捗を直す`
 
 ## 本番への移行
 config 欄・migration は無い。event の種類が 1 つ増える（追記だけ）。依頼文の block の `checks` は任意で、既存の案件の挙動は変わらない。
 
 ## 未解決
 1. Roadmap の Outcome は `checks` を持たない。approved の Roadmap がある案件の root は check の無い経路になる。
-2. 公開の check は、worker が repo の `minichunk.py` を書き換えたことを検出しない（HEAD の `minichunk.py` で再現するため）。oracle が別に確かめる。
+2. 公開の check は、worker が repo の `minichunk.py` を書き換えたことを検出しない（HEAD の `minichunk.py` で再現するため）。採点の `grader/check_outcome.py` が別に確かめる。
 3. `old.passive` の腕は CoS が root を起票するので、check が付くかは CoS 次第で、保証しない（ADR の表）。
-4. `case.json` の `checks` の欄は P0-C が置く想定で、今は無い。driver は公開の手順か「`out/<id>.txt`」の契約から導いている。C01〜C05・C07・C09・C10 は `out/<id>.txt` が commit されて空でないことしか確かめない。
+4. `case.json` の `checks` の欄は bench v2 にも無い。全 19 Outcome の check は acceptance の `minichunk.py verify` の手順から導いている（出典は `public/<case>/case.json#<id>.acceptance`）。`driver.py` の docstring の「hidden は読まない」は旧い語のまま残した（この修正では driver.py を変えない指定）。
 5. 実 LLM の reviewer が、check の結果を見て同じ判断をするかは未確認（P0-F の実測）。
-6. 他の stub reviewer（`crates/campaign/tests/launcher.rs` の全基準 pass、`crates/celeris/tests/trial_context_canary_e2e.rs`）は long-horizon pilot の外の試験用の台本で、変えていない。
+6. commit 済みの raw（`p0e/stub/`・`p0e/stub-no-output/`）は P0-C の取り込み前に取ったもので、facts の `bench_version` は 1。今の fixture の pilot は `test-long-horizon-pilot.sh` が `$TMPDIR` に作り直して検査する（下の証拠）。raw は作り直していない。
+7. 他の stub reviewer（`crates/campaign/tests/launcher.rs` の全基準 pass、`crates/celeris/tests/trial_context_canary_e2e.rs`）は long-horizon pilot の外の試験用の台本で、変えていない。
 
 ## 提案
 - Roadmap の Outcome に `checks` を持たせ、承認の時点で版に固定する（P0-B か P2-J）。
-- P0-C は公開契約の検査を `case.json` の Outcome の `checks` に置けば、driver がそのまま root に付ける（出典は `public/<case>/case.json#<id>.checks`）。
+- `case.json` の Outcome に `checks` を置けば、driver がそのまま root に付ける（出典は `public/<case>/case.json#<id>.checks`）。P0-C の公開の自己検査 `python3 minichunk.py check <case> <id>` を使うなら、ここに置く。
 - `docs/ops/project-controller.md` に block の `checks` と「check の無い経路で保証できないこと」を 1 節足す（P2-J がまとめる）。
 
 ## 次の gate

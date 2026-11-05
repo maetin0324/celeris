@@ -12,9 +12,11 @@ stub harness の raw はここに書かない（`../stub/`）。計画と未解�
 
 | case | 試行 | controller | 採点 | token | wall（秒） | LLM 起動（worker / reviewer / cos） | fail した predicate |
 |---|---|---|---|---|---|---|---|
-| C06 | 49a77b52eb2fcefa | achieved | fail | 3864 | 98 | 8（2 / 2 / 4） | `outcome_reached(o1)`、`effect_count(C06:o1:publish) == 1`（effects は 0 件） |
-| C08 | 7420dfe789f99af7 | achieved | fail | 14557 | 282 | 18（5 / 5 / 8） | `outcome_reached(o1)`〜`outcome_reached(o4)` の 4 件 |
+| C06 | C06 試行 1 | achieved | fail | 3864 | 98 | 8（2 / 2 / 4） | `outcome_reached(o1)`、`effect_count(C06:o1:publish) == 1`（effects は 0 件） |
+| C08 | C08 試行 1 | achieved | fail | 14557 | 282 | 18（5 / 5 / 8） | `outcome_reached(o1)`〜`outcome_reached(o4)` の 4 件 |
 | 計 | | | | 18421 | 380 | 26 | |
+
+試行 id は書かない。id が要る箇所は `trials/` の下の file 名（`trials/<trial>/`、`arm-map/<trial>.json` など）で指す。
 
 数値の出典は grade/summary.json（tokens 18421、wall_secs 380）、grade/grades.jsonl の `llm_invocations`、ops/ の各試行 json（試行ごとの wall_secs、rules、root_statuses）。tokens は 2 試行の合計が summary と一致する（3864 + 14557）。LLM 起動数は grades.jsonl の合計を足したもので、summary.json には無い。
 

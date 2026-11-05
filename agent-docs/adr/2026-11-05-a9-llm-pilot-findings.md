@@ -149,3 +149,17 @@
 - D3: 「worker から書けない記録 file」の具体的な方式は、実装 task が試して決める。
 - D4: 実 LLM の reviewer が同じ入力で合格にするか、raw に判断理由が無く未確認。
 - 仮説 2 の「o2〜o4 が tree に届かない」の元の観察は、この raw では再現しなかった（investigate.md）。D1 は「届かない」でなく「tree を見ずに到達になる」ことへの修正である。
+
+## 付記（2026-11-05、stub pilot の 422 を直す中で見つかった 2 点）
+
+### 事実
+1. `POST /api/v1/projects` に workspace を渡すと、その場所の repo が主 repo として自動で登録される（名前は作業場所の basename）。pilot の作業場所は `trial-repo` なので、driver が同じ名前で `POST /projects/{id}/repos` を呼ぶと 422（`repo name "trial-repo" is already used in this project`）になる。C06 は同じ driver で先に落ちなかったのではなく、まだ流していなかった。
+2. 空の DB には組織が無く、root の delivery は `delivery_skipped(department_unresolved)` で見送られる。成果が main に載らず、`outcome_reached` は常に fail になる。
+3. delivery が main へ取り込んだ（`State::Ready`）後、task-repo の取り込み状態（`task_integrations`、`IntegrationMerged` event）を書くのは 300 秒周期の stranded sweep だけである。project controller は `IntegrationMerged` が出るまで root を取り込み済みと数えない（D1）ので、delivery の完了から最大 300 秒、次の outcome の root を作らない。
+
+### 決定
+- D5: driver は自動登録された repo を `PATCH /repos/{id}` で既定 branch に合わせる（POST しない）。pilot の config に `selfdeploy.delivery_default_departments`（案件 → 部署）を書き、部署を 1 つ API で作る。
+- D6: delivery の merge 成功（`Preparing`/`Ready` への遷移）と同じ箇所で、task-repo の取り込み状態を `Integrated` に書く（actor は daemon）。sweep の遅れを待たない。sweep は既に `Integrated` の行を再判定で変えない。
+
+### 旧い仕組みの扱い
+sweep の周期を pilot のために短くする・driver が手で sweep を起こす案は採らない。取り込みの事実は merge をした場所が書く。

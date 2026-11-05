@@ -123,6 +123,9 @@ rules = [{{ harness = "claude_code", required_capabilities = [] }}]
         else:
             harness = pathlib.Path(a.llm_config).read_text()
             route = a.cos_route
+        pid = getattr(self, "pid", None)
+        delivery = (f'[selfdeploy]\ndelivery_default_departments = {{ {json.dumps(pid)} = "pilot-delivery" }}\n'
+                    if pid else "")
         knowledge = self.home / "knowledge"
         knowledge.mkdir(exist_ok=True)
         (self.home / "ws").mkdir(exist_ok=True)
@@ -161,6 +164,7 @@ dir = {json.dumps(str(self.home / "scratch"))}
 [script]
 state_dir = "state"
 
+{delivery}
 [project_controller]
 enabled = true
 allowed_project_ids = {json.dumps(allowed)}
@@ -204,8 +208,12 @@ max_tokens_per_day = {a.max_tokens_per_day}
         req = urllib.request.Request(self.base + path, method=method,
                                      data=None if body is None else json.dumps(body).encode(),
                                      headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = r.read()
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = r.read()
+        except urllib.error.HTTPError as e:
+            print(f"pilot: HTTP {e.code} {method} {path}: {e.read().decode(errors='replace')[:600]}", file=sys.stderr, flush=True)
+            raise
         return json.loads(data) if data else None
 
     def api_status(self, method, path, body=None, token=HUMAN_TOKEN):
@@ -273,9 +281,19 @@ max_tokens_per_day = {a.max_tokens_per_day}
             "workspace": {"kind": "local", "path": str(self.repo)}})
         self.pid = project["id"] if "id" in project else project["project"]["id"]
         # 作業 tree は git。案件の repo に登録し、root の done を IntegrationMerged で取り込み済みにする。
-        self.api("POST", f"/api/v1/projects/{self.pid}/repos", {
-            "name": "trial-repo", "kind": "git", "location": {"kind": "local", "path": str(self.repo)},
-            "default_branch": SEED_BRANCH, "is_primary": True})
+        # 案件の作成が workspace から主 repo を自動登録する（名前は作業場所の basename = trial-repo）。
+        # 同名の POST は 422（repo name is already used）になるので、登録済みの repo の既定 branch を直す。
+        repos = self.api("GET", f"/api/v1/projects/{self.pid}/repos")["items"]
+        mine = [r for r in repos if r["location"].get("path") == str(self.repo)]
+        if len(mine) != 1:
+            die(f"expected one auto-registered repo for {self.repo}: {repos}")
+        self.api("PATCH", f"/api/v1/repos/{mine[0]['id']}", {"default_branch": SEED_BRANCH, "kind": "git"})
+        # root の done を案件の既定 branch へ取り込む delivery は、取り込みを判定する部署が決まらないと
+        # delivery_skipped（department_unresolved）で見送られ、成果が tree に載らない。空の DB には組織が
+        # 無いので、部署を 1 つ作り、この案件の既定部署として config（delivery_default_departments）に書く。
+        self.api("POST", "/api/v1/org", {"id": "secretary", "name": "Secretary", "kind": "secretary"})
+        self.api("POST", "/api/v1/org", {"id": "pilot-delivery", "name": "Pilot delivery", "kind": "department",
+                                         "parent_id": "secretary"})
         self.api("PATCH", f"/api/v1/projects/{self.pid}", {"auto_integrate": True})
         self.init_digest = hashlib.sha256((self.request + self.tree_digest()).encode()).hexdigest()
         self.deploy_ts()

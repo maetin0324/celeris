@@ -348,6 +348,9 @@ impl Dispatcher {
             outcome.verdicts.sort_by_key(|v| v.criterion_idx);
         }
         let all_pass = outcome.all_pass();
+        // ADR 2026-11-05-a9-llm-pilot-findings D4: 決定的な検査が落ちているのに reviewer が合格を返した
+        // 食い違いは、検査の結果を優先して done にせず（上の `all_pass` は全 verdict の AND）、event に残す。
+        let discrepancy = review_discrepancy(&task, &outcome.verdicts);
         // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D2: reviewer を省いた review は worker の
         // run id を review run として delivery に登録している（`delivery::begin` と同じ既定）。
         if let Some(old) = self.store.delivery_get(task_id)?
@@ -420,6 +423,10 @@ impl Dispatcher {
             worker_finished_usage(&reviewer_finished),
             review_metrics,
         );
+        let discrepancy_event = discrepancy.map(|message| {
+            tracing::warn!(%task_id, %run_id, %message, "reviewer passed while a deterministic check failed");
+            Event::worker_progress(run_id.clone(), message)
+        });
         let mut events: Vec<Event> = reviewer_finished
             .into_iter()
             .chain(reviewer_quota)
@@ -430,6 +437,7 @@ impl Dispatcher {
                 reason: v.reason.clone(),
             }))
             .chain(throttled_events)
+            .chain(discrepancy_event)
             .collect();
         // ADR-0016 D2 / M5: 全 pass でも委譲した子が終端でなければ、判定だけ記録して reviewing のまま待つ。
         if all_pass {
@@ -974,4 +982,36 @@ impl Dispatcher {
             Err(e) => Err(e.into()),
         }
     }
+}
+
+/// reviewer の条件が合格なのに、決定的な検査（reviewer 以外の判定）が落ちているときの記録文。
+/// 食い違いが無ければ `None`。reviewer の reason（`reviewer(<run>): …`）と落ちた検査の reason を含める。
+fn review_discrepancy(task: &Task, verdicts: &[Verdict]) -> Option<String> {
+    let is_reviewer = |idx: usize| {
+        task.acceptance
+            .get(idx)
+            .is_some_and(|c| matches!(c.check, Check::Reviewer))
+    };
+    let passed: Vec<&Verdict> = verdicts
+        .iter()
+        .filter(|v| is_reviewer(v.criterion_idx) && v.pass)
+        .collect();
+    let failed: Vec<&Verdict> = verdicts
+        .iter()
+        .filter(|v| !is_reviewer(v.criterion_idx) && !v.pass)
+        .collect();
+    if passed.is_empty() || failed.is_empty() {
+        return None;
+    }
+    let join = |vs: &[&Verdict]| {
+        vs.iter()
+            .map(|v| format!("[{}] {}", v.criterion_idx, v.reason))
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    Some(format!(
+        "review discrepancy: reviewer passed but a deterministic check failed; the check wins and the task is not done. reviewer: {} | failed checks: {}",
+        join(&passed),
+        join(&failed)
+    ))
 }

@@ -3029,6 +3029,8 @@ mod orphan_takeover;
 /// 持ち主の居ない `running` の `runs` 行（lease を持たない reviewer run 等）の取り残しと照合
 /// （`src/dispatcher/tests/ownerless_runs.rs`）。
 mod ownerless_runs;
+/// ADR 2026-11-05-a9-llm-pilot-findings D4: 決定的な検査の fail は reviewer の合格に勝つ。
+mod review_check_wins;
 
 mod eval_trial_dispatch;
 

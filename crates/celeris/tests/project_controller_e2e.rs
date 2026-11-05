@@ -173,8 +173,14 @@ impl Harness {
         let applied = match &proposal.action {
             ProjectAction::LaunchRoot { root } => {
                 decision.root_key = Some(root.key.clone());
-                let (id, created) =
-                    launch(&self.path, self.project, root, self.with_repo).expect("launch");
+                let (id, created) = launch(
+                    &self.path,
+                    self.project,
+                    root,
+                    &snapshot.outcomes,
+                    self.with_repo,
+                )
+                .expect("launch");
                 Applied::Launched { root: id, created }
             }
             ProjectAction::Replan {
@@ -302,10 +308,12 @@ fn launch(
     path: &Path,
     project: ProjectId,
     root: &pp::RootSpec,
+    outcomes: &[pp::Outcome],
     repo: Option<RepoId>,
 ) -> Result<(TaskId, bool), String> {
     let store = SqliteStore::open(path).map_err(|e| e.to_string())?;
-    let (claim, meta) = ps::launch_root_claim(project, root).map_err(|e| e.to_string())?;
+    let (claim, meta) =
+        ps::launch_root_claim(project, root, outcomes).map_err(|e| e.to_string())?;
     let existing = |found: IdempotencyLookup| match found {
         IdempotencyLookup::Same { task_id, .. } => task_id.parse().map_err(|_| "id".to_owned()),
         IdempotencyLookup::Conflict { task_id } => Err(format!("conflict with {task_id}")),
@@ -507,8 +515,9 @@ async fn project_controller_core_s4_concurrent_events_create_one_root() {
         };
         let path = h.path.clone();
         let project = h.project;
+        let outcomes = snapshot.outcomes.clone();
         joins.push(std::thread::spawn(move || {
-            launch(&path, project, &root, None)
+            launch(&path, project, &root, &outcomes, None)
         }));
     }
     let results: Vec<(TaskId, bool)> = joins

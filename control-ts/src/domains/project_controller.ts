@@ -28,6 +28,8 @@ export interface SnapshotRoot {
   title: string;
   controller_key: string | null;
   outcome_ids: string[];
+  /** 起票の後に Outcome の条件（acceptance・checks）が変わったもの。この root はその Outcome を満たさない（P4-B）。 */
+  stale_outcome_ids: string[];
   acceptance: { text: string; kind: string; result: string }[];
   reviewer_passed: boolean;
   integrated: boolean;
@@ -247,10 +249,14 @@ function truncate(text: string, max: number): string {
   return cs.length <= max ? text : cs.slice(0, max - 1).join("") + "…";
 }
 
-/** root が Outcome を満たしたか（D6）: done・合格・取り込み済みで、Outcome を名指すか acceptance を文字どおり含む。 */
+/**
+ * root が Outcome を満たしたか（D6）: done・合格・取り込み済みで、Outcome を名指すか acceptance を文字どおり含む。
+ * 起票の後に Outcome の条件が変わった root（stale_outcome_ids）は満たさない（P4-B。Rust の root_satisfies と同じ）。
+ */
 function satisfies(root: SnapshotRoot, o: Outcome): boolean {
   if (root.status !== "done" || !root.reviewer_passed || !root.integrated)
     return false;
+  if (root.stale_outcome_ids.includes(o.id)) return false;
   if (root.outcome_ids.includes(o.id)) return true;
   const texts = new Set(root.acceptance.map((c) => c.text));
   return o.acceptance.every((a) => texts.has(a));

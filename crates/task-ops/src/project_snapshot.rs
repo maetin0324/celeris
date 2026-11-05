@@ -83,6 +83,39 @@ pub struct LaunchRootMeta {
     pub root_key: String,
     pub outcome_ids: Vec<String>,
     pub continues_root_ids: Vec<String>,
+    /// 起票時の Outcome の条件の digest（`outcome_id` → [`pp::outcome_spec_digest`]。第 4 フェーズ P4-B）。
+    /// 今の版の値と違う・記録が無い Outcome は、この root の `stale_outcome_ids` になる。
+    #[serde(default)]
+    pub outcome_specs: BTreeMap<String, String>,
+}
+
+impl LaunchRootMeta {
+    /// controller の root の記録。`outcomes` は起票を決めた snapshot の Outcome（条件の digest をここで取る）。
+    pub fn for_root(root: &RootSpec, outcomes: &[Outcome]) -> Self {
+        Self {
+            root_key: root.key.clone(),
+            outcome_ids: root.outcome_ids.clone(),
+            continues_root_ids: root.continues_root_ids.clone(),
+            outcome_specs: outcomes
+                .iter()
+                .filter(|o| root.outcome_ids.contains(&o.id))
+                .map(|o| (o.id.clone(), pp::outcome_spec_digest(o)))
+                .collect(),
+        }
+    }
+
+    /// `outcome_ids` のうち、今の Outcome（`outcomes`）の条件が起票時と違うもの。今の版に無い Outcome は数えない。
+    pub fn stale_outcome_ids(&self, outcomes: &[Outcome]) -> Vec<String> {
+        self.outcome_ids
+            .iter()
+            .filter(|id| {
+                outcomes.iter().any(|o| {
+                    &o.id == *id && self.outcome_specs.get(*id) != Some(&pp::outcome_spec_digest(o))
+                })
+            })
+            .cloned()
+            .collect()
+    }
 }
 
 fn status_str(s: Status) -> String {
@@ -251,6 +284,8 @@ fn root_row(
         title: task.title.clone(),
         controller_key: meta.map(|m| m.root_key.clone()),
         outcome_ids: meta.map(|m| m.outcome_ids.clone()).unwrap_or_default(),
+        // Outcome の版が決まった後に `build` が埋める。
+        stale_outcome_ids: Vec::new(),
         acceptance,
         reviewer_passed,
         integrated: task.status == Status::Done
@@ -326,6 +361,12 @@ pub fn build(
         }
         None => None,
     };
+    // P4-B: 起票の後に Outcome の条件（acceptance・checks）が変わった root は、その Outcome の根拠にしない。
+    for r in &mut roots {
+        if let Some(meta) = metas.get(&r.id) {
+            r.stale_outcome_ids = meta.stale_outcome_ids(&outcomes);
+        }
+    }
     let mut snapshot = ProjectSnapshot {
         now: ctx.now.format(&Rfc3339).unwrap_or_default(),
         truncated: false,
@@ -412,13 +453,10 @@ pub fn launch_root_spec(
 pub fn launch_root_claim(
     project_id: ProjectId,
     root: &RootSpec,
+    outcomes: &[Outcome],
 ) -> Result<(IdempotencyClaim, String), OpsError> {
     let body = serde_json::to_string(root).map_err(|e| OpsError::Validation(e.to_string()))?;
-    let meta = LaunchRootMeta {
-        root_key: root.key.clone(),
-        outcome_ids: root.outcome_ids.clone(),
-        continues_root_ids: root.continues_root_ids.clone(),
-    };
+    let meta = LaunchRootMeta::for_root(root, outcomes);
     let meta = serde_json::to_string(&meta).map_err(|e| OpsError::Validation(e.to_string()))?;
     Ok((
         IdempotencyClaim {

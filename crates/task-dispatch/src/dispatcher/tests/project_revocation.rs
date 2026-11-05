@@ -96,6 +96,30 @@ impl Case {
         self.store.get(id).unwrap().unwrap()
     }
 
+    /// 今の snapshot（root の行と Outcome だけを見る。controller の値は使わない）。
+    fn snapshot(&self) -> ProjectSnapshot {
+        use task_core::project_proposal::{SnapshotController, SnapshotLimits};
+        task_ops::project_snapshot::build(
+            &self.store,
+            self.p.id,
+            task_ops::project_snapshot::SnapshotContext {
+                controller: SnapshotController {
+                    mode: "enabled".into(),
+                    phase: "active".into(),
+                    revision: 0,
+                    human_epoch: 0,
+                    retry_count: 0,
+                    progress_epoch: 0,
+                },
+                decisions: Vec::new(),
+                wakes: Vec::new(),
+                limits: SnapshotLimits::default(),
+                now: self.env.now(),
+            },
+        )
+        .unwrap()
+    }
+
     /// controller が起票した root（古い順）。
     fn controller_roots(&self) -> Vec<Task> {
         let mut v: Vec<Task> = self
@@ -521,4 +545,131 @@ fn project_revocation_roadmap_checks_validation_and_human_gate() {
             .unwrap()
             .contains("checks")
     );
+}
+
+/// controller が起票した root で達成まで進めた案件（Roadmap の o1 は acceptance `acc("o1")`・checks `test -f out/o1.txt`）。
+fn controller_achieved_case() -> (Case, Task) {
+    let mut c = case(Some(ControllerMode::Enabled), planner_ts);
+    c.set_request(&["o1"]);
+    c.approve_specs(vec![spec("o1", &acc("o1"), &["test -f out/o1.txt"])]);
+    c.settle_events();
+    c.settle();
+    let roots = c.controller_roots();
+    assert_eq!(roots.len(), 1);
+    let r1 = c.task(roots[0].id);
+    run_root(&c, &r1, true);
+    c.settle_events();
+    c.settle();
+    assert_eq!(c.phase(), ControllerPhase::Achieved);
+    (c, r1)
+}
+
+/// 人の改版の後: 旧い root は o1 を名指していても根拠にならず（`stale_outcome_ids`）、達成は戻る。controller は
+/// 新しい条件の root（2 本目）を起票し、その root の合格で再達成する。旧い達成の判断と `reached` の記録は残る。
+fn assert_human_change_reopens_and_reachieves(
+    mut c: Case,
+    r1: &Task,
+    new: RoadmapOutcomeSpec,
+    expect_cmd: &str,
+) {
+    c.approve_specs(vec![new.clone()]);
+    c.settle_events();
+    c.settle();
+    assert_ne!(
+        c.phase(),
+        ControllerPhase::Achieved,
+        "{:?}",
+        c.validations()
+    );
+    // 人の改版の wake で TS が評価され、o1 を未達と見て直す root を起票する（達成の後の判断）。
+    let after = c.validations();
+    let achieved_at = after.iter().rposition(|v| v == "pc/achieved").unwrap();
+    assert!(
+        after[achieved_at..].iter().any(|v| v == "pc/outcome-open"),
+        "{after:?}"
+    );
+    assert!(c.count_rule("pc/achieved") >= 1, "the old decision stays");
+    assert_eq!(c.roadmap_reached("o1"), 1);
+    // 旧い root は done・合格のままだが、snapshot では o1 に対して stale。
+    let snap = c.snapshot();
+    let old = snap
+        .roots
+        .iter()
+        .find(|r| r.id == r1.id.to_string())
+        .unwrap();
+    assert_eq!(old.status, "done");
+    assert_eq!(old.stale_outcome_ids, vec!["o1".to_owned()]);
+    let o1 = snap.outcomes.iter().find(|o| o.id == "o1").unwrap();
+    assert!(!task_core::project_proposal::root_satisfies(old, o1));
+    // TS が嘘をついて達成と申告しても、Rust の数え直し（到達の記録はあっても根拠の root が無い）は o1 を未達とする。
+    let recorded: std::collections::BTreeSet<String> = ["o1".to_owned()].into();
+    assert_eq!(
+        task_core::project_proposal::unverified_outcomes(&snap, &recorded),
+        vec!["o1".to_owned()]
+    );
+    // 新しい条件の root が起票される。
+    let roots = c.controller_roots();
+    assert_eq!(roots.len(), 2, "{:?}", c.validations());
+    let r2 = c.task(roots[1].id);
+    assert!(r2.acceptance.iter().any(|a| a.text == new.acceptance[0]));
+    assert!(
+        r2.acceptance
+            .iter()
+            .any(|a| matches!(&a.check, Check::Command { cmd, .. } if cmd == expect_cmd))
+    );
+    run_root(&c, &r2, true);
+    c.settle_events();
+    c.settle();
+    assert_eq!(c.phase(), ControllerPhase::Achieved);
+    let snap = c.snapshot();
+    let fresh = snap
+        .roots
+        .iter()
+        .find(|r| r.id == r2.id.to_string())
+        .unwrap();
+    assert!(fresh.stale_outcome_ids.is_empty());
+}
+
+/// 第 4 フェーズ P4-B（差し戻しの修正）: controller が起票した root（`outcome_ids` に o1）で達成の後、人が o1 の
+/// **acceptance** を変えた版を承認すると達成は戻る（起票時の条件の digest が今の版と違う）。
+#[test]
+fn project_revocation_controller_root_acceptance_change_reopens() {
+    let (c, r1) = controller_achieved_case();
+    let new = spec("o1", "o1 の新しい条件が通る", &["test -f out/o1.txt"]);
+    assert_human_change_reopens_and_reachieves(c, &r1, new, "test -f out/o1.txt");
+}
+
+/// 同じく、人が o1 の **checks だけ**を変えた版を承認すると達成は戻り、新しい command の root で再達成する。
+#[test]
+fn project_revocation_controller_root_checks_change_reopens() {
+    let (c, r1) = controller_achieved_case();
+    let new = spec("o1", &acc("o1"), &["test -f out/o1-v2.txt"]);
+    assert_human_change_reopens_and_reachieves(c, &r1, new, "test -f out/o1-v2.txt");
+}
+
+/// 条件の変わらない改版（title・priority だけ）では、controller の root は根拠のままで達成は戻らない。
+#[test]
+fn project_revocation_controller_root_title_change_stays_achieved() {
+    let (mut c, r1) = controller_achieved_case();
+    let mut same = spec("o1", &acc("o1"), &["test -f out/o1.txt"]);
+    same.title = "o1 の題を変えた".into();
+    same.priority = 3;
+    c.approve_specs(vec![same]);
+    c.settle_events();
+    c.settle();
+    assert_eq!(
+        c.phase(),
+        ControllerPhase::Achieved,
+        "{:?}",
+        c.validations()
+    );
+    assert_eq!(c.count_rule(REVOKED), 0);
+    let snap = c.snapshot();
+    let old = snap
+        .roots
+        .iter()
+        .find(|r| r.id == r1.id.to_string())
+        .unwrap();
+    assert!(old.stale_outcome_ids.is_empty());
+    assert_eq!(c.controller_roots().len(), 1);
 }

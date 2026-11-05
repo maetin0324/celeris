@@ -918,11 +918,7 @@ pub fn to_decision(
                 .map_err(|e| format!("project id: {e}"))?;
             let spec = ps::launch_root_spec(project_id, root, &snapshot.outcomes)
                 .map_err(|e| e.to_string())?;
-            let meta = LaunchRootMeta {
-                root_key: root.key.clone(),
-                outcome_ids: root.outcome_ids.clone(),
-                continues_root_ids: root.continues_root_ids.clone(),
-            };
+            let meta = LaunchRootMeta::for_root(root, &snapshot.outcomes);
             d.effect = ProjectEffect::CreateRoot {
                 idempotency_key: pp::root_idempotency_key(&snapshot.project.id, &root.key),
                 spec: Box::new(spec),

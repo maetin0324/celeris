@@ -67,6 +67,7 @@ fn root(id: &str, key: &str, status: &str, passed: bool, integrated: bool) -> Sn
         title: id.into(),
         controller_key: Some(key.into()),
         outcome_ids: outcome.into_iter().collect(),
+        stale_outcome_ids: Vec::new(),
         acceptance: Vec::new(),
         reviewer_passed: passed,
         integrated,

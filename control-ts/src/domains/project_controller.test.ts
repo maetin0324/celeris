@@ -80,6 +80,7 @@ function root(
     title: id,
     controller_key: key,
     outcome_ids: [o],
+    stale_outcome_ids: [],
     acceptance: [],
     reviewer_passed: true,
     integrated: true,
@@ -165,6 +166,27 @@ describe("project_controller", () => {
       next_wake_after_secs: 0,
       phase: "achieved",
     });
+  });
+
+  it("does not count a root whose outcome conditions changed after it was launched", () => {
+    const s = snapshot();
+    // R1 は o1 を名指し、acceptance も今の o1 の文を含むが、起票の後に o1 の条件が変わった（P4-B）。
+    s.roots = [
+      root("R1", "outcome:o1:1", {
+        stale_outcome_ids: ["o1"],
+        acceptance: s.outcomes[0]!.acceptance.map((text) => ({
+          text,
+          kind: "reviewer",
+          result: "pass",
+        })),
+      }),
+    ];
+    s.decisions = [decision("mark_milestone", { outcome_id: "o1" })];
+    const p = decide(s);
+    expect(p.gap.reached).toEqual([]);
+    expect(p.action.kind).toBe("launch_root");
+    if (p.action.kind !== "launch_root") return;
+    expect(p.action.root.key).toBe("outcome:o1:2");
   });
 
   it("does not count a done but unintegrated root and watches it", () => {

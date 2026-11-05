@@ -301,6 +301,9 @@ pub struct SnapshotRoot {
     /// controller が起票した root の `RootSpec.key`（`outcome:<id>:<n>`）。人や CoS の root は `None`。
     pub controller_key: Option<String>,
     pub outcome_ids: Vec<String>,
+    /// `outcome_ids` のうち、起票の後に Outcome の acceptance か `checks` が変わったもの（起票時の
+    /// [`outcome_spec_digest`] が今の版と違うか、記録が無い）。この root はその Outcome の根拠にならない（P4-B）。
+    pub stale_outcome_ids: Vec<String>,
     pub acceptance: Vec<SnapshotCriterion>,
     pub reviewer_passed: bool,
     pub integrated: bool,
@@ -874,10 +877,28 @@ fn validate_launch(snapshot: &ProjectSnapshot, root: &RootSpec, v: &mut Vec<Prop
     }
 }
 
+/// Outcome の達成の条件（acceptance と `checks`）の SHA-256。controller は起票時の値を root の冪等キーの行に残し、
+/// snapshot は今の版の値と比べて `stale_outcome_ids` を作る（第 4 フェーズ P4-B）。title・priority・depends_on は
+/// 条件ではないので入れない。
+pub fn outcome_spec_digest(outcome: &Outcome) -> String {
+    let checks: Vec<(&str, i32)> = outcome
+        .checks
+        .iter()
+        .map(|c| (c.cmd.as_str(), c.expect_exit))
+        .collect();
+    // 配列だけで組む（object の key の順は serde_json の feature で変わり得るので使わない）。
+    let body = serde_json::to_string(&(&outcome.acceptance, &checks)).unwrap_or_default();
+    sha256_hex(&body)
+}
+
 /// root が Outcome の成果を持つか（D6）: done・合格・取り込み済みで、Outcome を名指すか、その acceptance を
-/// 文字どおり全部含む。worker・CoS の自己申告は見ない。TS の `satisfies` と同じ規則。
+/// 文字どおり全部含む。起票の後に Outcome の条件が変わった root（`stale_outcome_ids`）はその Outcome を満たさない
+/// （P4-B）。worker・CoS の自己申告は見ない。TS の `satisfies` と同じ規則。
 pub fn root_satisfies(root: &SnapshotRoot, outcome: &Outcome) -> bool {
     if root.status != "done" || !root.reviewer_passed || !root.integrated {
+        return false;
+    }
+    if root.stale_outcome_ids.iter().any(|o| o == &outcome.id) {
         return false;
     }
     if root.outcome_ids.iter().any(|o| o == &outcome.id) {

@@ -585,19 +585,32 @@ def summarize_run(samples, ops):
     rs = [s for s in samples if s.get("proc", {}).get("rss_kb")]
     if not rs:
         return None
+    # 計測の窓は最初の process の標本だけ（restart の後の標本は別の process の値なので傾きに混ぜない）。
+    after = [s for s in rs if s.get("pid") != rs[0].get("pid")]
+    rs = [s for s in rs if s.get("pid") == rs[0].get("pid")]
     pts = [(s["t"] - rs[0]["t"], s["proc"]["rss_kb"]) for s in rs]
     end_t = pts[-1][0]
     at = {o: nearest(pts, o) for o in (0, 600, 1529) if end_t >= o - 60}
 
     def series(get):
+        # 開始の値は値が 0 でない最初の標本（V8 は generation の復元の後、log の行は起動の直後に出る）。
         vals = [(s["t"], get(s)) for s in rs]
         vals = [(t, v) for t, v in vals if v is not None]
+        nz = [x for x in vals if x[1]]
+        vals = vals[vals.index(nz[0]):] if nz else vals
         return (vals[0][1], vals[-1][1], max(v for _, v in vals)) if vals else (None, None, None)
 
     def pmv(k):
         return lambda s: (s.get("process_memory") or {}).get(k)
 
     first, last = rs[0], rs[-1]
+    anon_pts = [(s["t"] - rs[0]["t"], s["proc"].get("rss_anon_kb") or 0) for s in rs]
+
+    def anon_at(a, b):
+        # RssAnon の傾き（VmRSS と同じ経過秒・同じ式）。debug の binary の file の page は host の memory の
+        # 具合で増減するので、本番（release）と比べるときは RssAnon を見る。
+        return nearest(anon_pts, a), nearest(anon_pts, b)
+
     out = {
         "label": first["label"], "condition": first["condition"], "samples": len(rs), "wall_secs": end_t,
         "stop": next((o.get("reason") for o in ops if o.get("step") == "stop"), None),
@@ -619,6 +632,9 @@ def summarize_run(samples, ops):
         "rss_slope_whole_mb_per_hour": slope(pts[0], pts[-1]),
         "rss_slope_prod_whole_mb_per_hour": slope(at[0], at[1529]) if 1529 in at else None,
         "rss_slope_prod_steady_mb_per_hour": slope(at[600], at[1529]) if 1529 in at else None,
+        "rss_anon_slope_prod_whole_mb_per_hour": slope(*anon_at(0, 1529)) if 1529 in at else None,
+        "rss_anon_slope_prod_steady_mb_per_hour": slope(*anon_at(600, 1529)) if 1529 in at else None,
+        "rss_anon_slope_after_600_mb_per_hour": slope(nearest(anon_pts, 600), anon_pts[-1]) if end_t > 900 else None,
         "rss_slope_after_600_mb_per_hour": slope(nearest(pts, 600), pts[-1]) if end_t > 900 else None,
         "db_start": first.get("db"), "db_end": last.get("db"),
         "slow_ticks": last.get("slow_ticks"),
@@ -632,11 +648,13 @@ def summarize_run(samples, ops):
                                                       "task_leases_after")}
         out["restart"]["before"] = next(({"runs_running": o.get("runs_running"), "task_leases": o.get("task_leases")}
                                          for o in ops if o.get("step") == "sigkill"), None)
-    # 残差: RssAnon の増分のうち malloc（arena＋mmap）と V8 の total heap の増分で説明できない分（kB）。
+    out["samples_after_restart"] = len(after)
+    # 残差: RssAnon の増分のうち、malloc の使用中（in_use）と空き（free。arena に残る断片）と V8 の total heap の増分で
+    # 説明できない分（kB）。arena の bytes は madvise で返した page も含み RSS を超え得るので、内訳には使わない。
     d = lambda k: (out[k][1] - out[k][0]) if out[k][0] is not None and out[k][1] is not None else None
     anon = d("rss_anon_kb")
-    parts = [d("malloc_arena"), d("malloc_mmap"), d("v8_total_heap")]
-    if anon is not None and all(p is not None for p in parts[:2]):
+    parts = [d("malloc_in_use"), d("malloc_free"), d("malloc_mmap"), d("v8_total_heap")]
+    if anon is not None and all(p is not None for p in parts[:3]):
         explained = sum(p for p in parts if p is not None) // 1024
         out["anon_delta_kb"] = anon
         out["anon_explained_kb"] = explained
@@ -650,9 +668,10 @@ def thresholds(runs):
     rows = []
     for r in runs:
         checks = {}
-        s = r.get("rss_slope_after_600_mb_per_hour")
-        if off and s is not None and off.get("rss_slope_after_600_mb_per_hour") is not None:
-            checks["steady_slope_vs_off_le_10mb_h"] = s - off["rss_slope_after_600_mb_per_hour"] <= 10
+        # VmRSS でなく RssAnon で比べる（debug の binary の file の page は host の memory の具合で増減する。P4-F の実測）。
+        s = r.get("rss_anon_slope_after_600_mb_per_hour")
+        if off and s is not None and off.get("rss_anon_slope_after_600_mb_per_hour") is not None:
+            checks["anon_steady_slope_vs_off_le_10mb_h"] = s - off["rss_anon_slope_after_600_mb_per_hour"] <= 10
         v = r["v8_used_heap"]
         if v[0]:
             checks["v8_used_heap_end_lt_2x_start"] = v[1] < 2 * v[0]
@@ -679,10 +698,10 @@ def load_dir(d):
 
 
 def markdown(doc):
-    lines = ["| label/cond | 秒 | 停止 | RSS 開始→終了 kB | 傾き 全体 MB/時 | 傾き 600 秒後 MB/時 | RssAnon Δ kB | "
-             "malloc arena Δ kB | malloc free 終了 kB | SQLite 終了 kB | V8 used 最大 kB | threads | arena 推定 | "
+    lines = ["| label/cond | 窓の秒 | 停止 | RSS 開始→終了 kB | 傾き 0→1529 秒 MB/時 | 傾き 600→1529 秒 MB/時 | RssAnon 傾き 0→1529・600→1529 MB/時 | RssAnon Δ kB | "
+             "malloc in_use Δ kB | malloc free Δ kB | SQLite 終了 kB | V8 used 最大 kB | threads | arena 推定 | "
              "残差 kB | dispatch p50/p95 ms |",
-             "|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---:|---|"]
+             "|---|---:|---|---|---:|---:|---|---:|---:|---:|---:|---:|---|---|---:|---|"]
     k = lambda v: None if v is None else v // 1024
     for r in doc["runs"]:
         def dd(key):
@@ -690,8 +709,9 @@ def markdown(doc):
             return None if a is None or b is None else b - a
         lines.append(
             f"| {r['label']}/{r['condition']} | {r['wall_secs']:.0f} | {r['stop']} | {r['rss_kb'][0]}→{r['rss_kb'][1]} | "
-            f"{r['rss_slope_whole_mb_per_hour']} | {r['rss_slope_after_600_mb_per_hour']} | {dd('rss_anon_kb')} | "
-            f"{k(dd('malloc_arena'))} | {k(r['malloc_free'][1])} | {k(r['sqlite_memory_used'][1])} | "
+            f"{r['rss_slope_prod_whole_mb_per_hour']} | {r['rss_slope_prod_steady_mb_per_hour']} | "
+            f"{r['rss_anon_slope_prod_whole_mb_per_hour']}・{r['rss_anon_slope_prod_steady_mb_per_hour']} | {dd('rss_anon_kb')} | "
+            f"{k(dd('malloc_in_use'))} | {k(dd('malloc_free'))} | {k(r['sqlite_memory_used'][1])} | "
             f"{k(r['v8_used_heap'][2])} | {r['threads'][0]}→{r['threads'][1]} | {r['arena_estimate'][0]}→"
             f"{r['arena_estimate'][1]} | {r.get('anon_residual_kb')} | {r['dispatch_latency_ms']['p50']}/"
             f"{r['dispatch_latency_ms']['p95']} |")
@@ -730,7 +750,9 @@ def cmd_plan(a):
         "load": "task 10 秒に 1 件・chat 5 分に 1 通・controller の wake 1 時間に 1 回・tick 100 ms",
         "restart": "--kill-at で 1 回（SIGKILL→起動→running の run とリースが 0 に戻るまで）",
         "auto_stop": "壁時計・RSS 4096 MB・disk の空き 5 GB・DB 4096 MB・daemon の終了・API の 3 回連続の失敗",
-        "disk_estimate_mb": round(hours * 3600 / 10 * 0.02 * 4, 0),
+        # P4-F の 26 分の実測: 1 daemon の DB（WAL を含む）が 74〜108 MB。比例の推定（WAL の checkpoint で小さくなり得る）。
+        "disk_estimate_mb": round(hours * 3600 / 1560 * 108 * 4),
+        "recommended_args": ["--max-db-mb", str(max(4096, round(hours * 3600 / 1560 * 108 * 2)))],
         "approval_template": {"approved_by": "human:<name>", "scope": "non-production",
                               "max_secs": int(hours * 3600), "conditions": CONDITIONS,
                               "expires_at": "<ISO 8601>", "host": "<host>", "note": "P4-F 段 3"},

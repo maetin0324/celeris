@@ -1,0 +1,6 @@
+daemon-soak[main/off]: gate {"ok": true, "reason": "short", "approval": null}
+daemon-soak[main/off]: setup {"project": "01M6PSK61Q5PA6G61954GC6Y2D", "script_modes": {}, "controller": "off", "port": 48357, "pid": 3038118, "celeris": "/local/celeris/data/scratch/targets/task-01M6PAMC40X023V30F4T9QH2GW/target
+daemon-soak[main/off]: start {"secs": 1620, "limits": {"max_rss_mb": 4096, "min_free_mb": 5120, "max_db_mb": 4096, "max_api_failures": 3}, "task_interval": 10.0, "chat_interval": 300.0}
+daemon-soak[main/off]: sigkill {"runs_running": 1, "task_leases": 1}
+daemon-soak[main/off]: restart {"start_secs": 0.21, "reclaimed_secs": 4.23, "runs_running_after": 0, "task_leases_after": 0, "pid": 4047879}
+daemon-soak[main/off]: stop {"reason": "wall", "tasks": 163, "chats": 5, "wakes": 2}

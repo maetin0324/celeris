@@ -1,0 +1,6 @@
+{"schema": "celeris.daemon-soak/1", "step": "gate", "at": -0.0, "condition": "shadow", "label": "after", "ok": true, "reason": "short", "approval": null}
+{"schema": "celeris.daemon-soak/1", "step": "setup", "at": 1.5, "condition": "shadow", "label": "after", "project": "01M6PVAVT4N611ZR2NE7FXQF7Y", "script_modes": {"lane_rules": "compare", "cos_digest": "compare"}, "controller": "shadow", "port": 59883, "pid": 4060806, "celeris": "/local/celeris/data/scratch/targets/task-01M6PAMC40X023V30F4T9QH2GW/target/debug/celeris"}
+{"schema": "celeris.daemon-soak/1", "step": "start", "at": 0.0, "condition": "shadow", "label": "after", "secs": 420, "limits": {"max_rss_mb": 4096, "min_free_mb": 5120, "max_db_mb": 4096, "max_api_failures": 3}, "task_interval": 10.0, "chat_interval": 120.0}
+{"schema": "celeris.daemon-soak/1", "step": "sigkill", "at": 400.2, "condition": "shadow", "label": "after", "runs_running": 1, "task_leases": 1}
+{"schema": "celeris.daemon-soak/1", "step": "restart", "at": 404.7, "condition": "shadow", "label": "after", "start_secs": 0.41, "reclaimed_secs": 4.43, "runs_running_after": 0, "task_leases_after": 0, "pid": 54173}
+{"schema": "celeris.daemon-soak/1", "step": "stop", "at": 420.0, "condition": "shadow", "label": "after", "reason": "wall", "tasks": 43, "chats": 3, "wakes": 1}

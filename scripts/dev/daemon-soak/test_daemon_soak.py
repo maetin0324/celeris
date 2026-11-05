@@ -147,7 +147,7 @@ class Summary(unittest.TestCase):
                                [{"step": "stop", "reason": "rss_limit:x"}])
         t = {x["condition"]: x for x in ds.thresholds([off, bad])}
         self.assertTrue(t["off"]["pass"])
-        self.assertFalse(t["shadow"]["checks"]["steady_slope_vs_off_le_10mb_h"])
+        self.assertFalse(t["shadow"]["checks"]["anon_steady_slope_vs_off_le_10mb_h"])
         self.assertFalse(t["shadow"]["checks"]["not_auto_stopped"])
 
     def test_summary_rejects_other_schema(self):

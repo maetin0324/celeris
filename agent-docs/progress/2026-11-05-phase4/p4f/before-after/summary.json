@@ -1,0 +1,762 @@
+{
+ "schema": "celeris.daemon-soak-summary/1",
+ "prod_samples": [
+  [
+   0,
+   181820
+  ],
+  [
+   600,
+   391292
+  ],
+  [
+   1200,
+   505532
+  ],
+  [
+   1529,
+   588668
+  ]
+ ],
+ "runs": [
+  {
+   "label": "before",
+   "condition": "off",
+   "samples": 15,
+   "wall_secs": 390.0,
+   "stop": "wall",
+   "rss_kb": [
+    79104,
+    114676,
+    114676
+   ],
+   "rss_anon_kb": [
+    11136,
+    23860,
+    23860
+   ],
+   "rss_file_kb": [
+    67968,
+    90816,
+    90816
+   ],
+   "threads": [
+    27,
+    28,
+    28
+   ],
+   "arena_estimate": [
+    26,
+    30,
+    30
+   ],
+   "fds": [
+    31,
+    41,
+    42
+   ],
+   "sqlite_memory_used": [
+    null,
+    null,
+    null
+   ],
+   "sqlite_pagecache_bytes": [
+    null,
+    null,
+    null
+   ],
+   "malloc_arena": [
+    null,
+    null,
+    null
+   ],
+   "malloc_mmap": [
+    null,
+    null,
+    null
+   ],
+   "malloc_in_use": [
+    null,
+    null,
+    null
+   ],
+   "malloc_free": [
+    null,
+    null,
+    null
+   ],
+   "v8_used_heap": [
+    null,
+    null,
+    null
+   ],
+   "v8_total_heap": [
+    null,
+    null,
+    null
+   ],
+   "v8_generations": [
+    null,
+    null,
+    null
+   ],
+   "rss_slope_whole_mb_per_hour": 320.7,
+   "rss_slope_prod_whole_mb_per_hour": null,
+   "rss_slope_prod_steady_mb_per_hour": null,
+   "rss_anon_slope_prod_whole_mb_per_hour": null,
+   "rss_anon_slope_prod_steady_mb_per_hour": null,
+   "rss_anon_slope_after_600_mb_per_hour": null,
+   "rss_slope_after_600_mb_per_hour": null,
+   "db_start": {
+    "tasks": 0,
+    "runs": 0,
+    "events": 0,
+    "project_wakes": 0,
+    "project_controller_decisions": 0,
+    "script_compare_log": 0,
+    "chat_runs": 0,
+    "chat_messages": 0,
+    "cos_inbox_items": 0,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {},
+    "task_leases": 0,
+    "runs_running": 0,
+    "wu_leases": 0,
+    "wakes_unconsumed": 0,
+    "events_max_rowid": 0,
+    "event_lag": {
+     "cos_triage:events": 0,
+     "project_wake": 0,
+     "root_done_summary": 0
+    },
+    "dispatch_latency_ms": []
+   },
+   "db_end": {
+    "tasks": 40,
+    "runs": 39,
+    "events": 772,
+    "project_wakes": 0,
+    "project_controller_decisions": 0,
+    "script_compare_log": 0,
+    "chat_runs": 206,
+    "chat_messages": 756,
+    "cos_inbox_items": 69,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {
+     "done": 39,
+     "ready": 1
+    },
+    "task_leases": 0,
+    "runs_running": 0,
+    "wu_leases": 0,
+    "wakes_unconsumed": 0,
+    "events_max_rowid": 772,
+    "event_lag": {
+     "cos_triage:events": 1,
+     "project_wake": 1,
+     "root_done_summary": 1,
+     "events": 1
+    },
+    "dispatch_latency_ms": [
+     96,
+     152,
+     94
+    ]
+   },
+   "slow_ticks": 0,
+   "script_tick_wait_end": {
+    "ticks": 1000,
+    "p50_us": 0,
+    "p95_us": 0,
+    "max_us": 0,
+    "tick_budget": 0,
+    "budget_us": 200000
+   },
+   "dispatch_latency_ms": {
+    "n": 39,
+    "p50": 69,
+    "p95": 188,
+    "max": 655
+   },
+   "restart": {
+    "start_secs": 0.4,
+    "reclaimed_secs": 4.42,
+    "runs_running_after": 0,
+    "task_leases_after": 0,
+    "before": {
+     "runs_running": 1,
+     "task_leases": 1
+    }
+   },
+   "samples_after_restart": 2
+  },
+  {
+   "label": "before",
+   "condition": "shadow",
+   "samples": 15,
+   "wall_secs": 390.0,
+   "stop": "wall",
+   "rss_kb": [
+    122304,
+    139464,
+    139464
+   ],
+   "rss_anon_kb": [
+    22464,
+    28872,
+    28872
+   ],
+   "rss_file_kb": [
+    99840,
+    110592,
+    110592
+   ],
+   "threads": [
+    33,
+    35,
+    35
+   ],
+   "arena_estimate": [
+    33,
+    37,
+    37
+   ],
+   "fds": [
+    48,
+    50,
+    50
+   ],
+   "sqlite_memory_used": [
+    null,
+    null,
+    null
+   ],
+   "sqlite_pagecache_bytes": [
+    null,
+    null,
+    null
+   ],
+   "malloc_arena": [
+    null,
+    null,
+    null
+   ],
+   "malloc_mmap": [
+    null,
+    null,
+    null
+   ],
+   "malloc_in_use": [
+    null,
+    null,
+    null
+   ],
+   "malloc_free": [
+    null,
+    null,
+    null
+   ],
+   "v8_used_heap": [
+    null,
+    null,
+    null
+   ],
+   "v8_total_heap": [
+    null,
+    null,
+    null
+   ],
+   "v8_generations": [
+    null,
+    null,
+    null
+   ],
+   "rss_slope_whole_mb_per_hour": 154.7,
+   "rss_slope_prod_whole_mb_per_hour": null,
+   "rss_slope_prod_steady_mb_per_hour": null,
+   "rss_anon_slope_prod_whole_mb_per_hour": null,
+   "rss_anon_slope_prod_steady_mb_per_hour": null,
+   "rss_anon_slope_after_600_mb_per_hour": null,
+   "rss_slope_after_600_mb_per_hour": null,
+   "db_start": {
+    "tasks": 0,
+    "runs": 0,
+    "events": 0,
+    "project_wakes": 0,
+    "project_controller_decisions": 0,
+    "script_compare_log": 0,
+    "chat_runs": 0,
+    "chat_messages": 0,
+    "cos_inbox_items": 0,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {},
+    "task_leases": 0,
+    "runs_running": 0,
+    "wu_leases": 0,
+    "wakes_unconsumed": 0,
+    "events_max_rowid": 0,
+    "event_lag": {
+     "cos_triage:events": 0,
+     "project_wake": 0,
+     "root_done_summary": 0
+    },
+    "dispatch_latency_ms": []
+   },
+   "db_end": {
+    "tasks": 40,
+    "runs": 39,
+    "events": 814,
+    "project_wakes": 83,
+    "project_controller_decisions": 11,
+    "script_compare_log": 41,
+    "chat_runs": 206,
+    "chat_messages": 756,
+    "cos_inbox_items": 69,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {
+     "done": 39,
+     "ready": 1
+    },
+    "task_leases": 0,
+    "runs_running": 0,
+    "wu_leases": 0,
+    "wakes_unconsumed": 4,
+    "events_max_rowid": 814,
+    "event_lag": {
+     "cos_triage:events": 4,
+     "project_wake": 3,
+     "root_done_summary": 4,
+     "events": 4
+    },
+    "dispatch_latency_ms": [
+     90,
+     102,
+     38
+    ]
+   },
+   "slow_ticks": 0,
+   "script_tick_wait_end": {
+    "ticks": 1000,
+    "p50_us": 0,
+    "p95_us": 0,
+    "max_us": 0,
+    "tick_budget": 0,
+    "budget_us": 200000
+   },
+   "dispatch_latency_ms": {
+    "n": 39,
+    "p50": 82,
+    "p95": 149,
+    "max": 233
+   },
+   "restart": {
+    "start_secs": 0.41,
+    "reclaimed_secs": 4.43,
+    "runs_running_after": 0,
+    "task_leases_after": 0,
+    "before": {
+     "runs_running": 1,
+     "task_leases": 1
+    }
+   },
+   "samples_after_restart": 2
+  },
+  {
+   "label": "after",
+   "condition": "off",
+   "samples": 15,
+   "wall_secs": 390.0,
+   "stop": "wall",
+   "rss_kb": [
+    91392,
+    113392,
+    113392
+   ],
+   "rss_anon_kb": [
+    14208,
+    24112,
+    24112
+   ],
+   "rss_file_kb": [
+    77184,
+    89280,
+    89280
+   ],
+   "threads": [
+    27,
+    28,
+    28
+   ],
+   "arena_estimate": [
+    27,
+    30,
+    30
+   ],
+   "fds": [
+    39,
+    40,
+    41
+   ],
+   "sqlite_memory_used": [
+    0,
+    0,
+    0
+   ],
+   "sqlite_pagecache_bytes": [
+    221440,
+    2606752,
+    3388624
+   ],
+   "malloc_arena": [
+    5509120,
+    19476480,
+    19476480
+   ],
+   "malloc_mmap": [
+    0,
+    0,
+    0
+   ],
+   "malloc_in_use": [
+    1718224,
+    9809152,
+    10505488
+   ],
+   "malloc_free": [
+    3790896,
+    9667328,
+    9667328
+   ],
+   "v8_used_heap": [
+    0,
+    0,
+    0
+   ],
+   "v8_total_heap": [
+    0,
+    0,
+    0
+   ],
+   "v8_generations": [
+    0,
+    0,
+    0
+   ],
+   "rss_slope_whole_mb_per_hour": 198.3,
+   "rss_slope_prod_whole_mb_per_hour": null,
+   "rss_slope_prod_steady_mb_per_hour": null,
+   "rss_anon_slope_prod_whole_mb_per_hour": null,
+   "rss_anon_slope_prod_steady_mb_per_hour": null,
+   "rss_anon_slope_after_600_mb_per_hour": null,
+   "rss_slope_after_600_mb_per_hour": null,
+   "db_start": {
+    "tasks": 0,
+    "runs": 0,
+    "events": 0,
+    "project_wakes": 0,
+    "project_controller_decisions": 0,
+    "script_compare_log": 0,
+    "chat_runs": 0,
+    "chat_messages": 0,
+    "cos_inbox_items": 0,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {},
+    "task_leases": 0,
+    "runs_running": 0,
+    "wu_leases": 0,
+    "wakes_unconsumed": 0,
+    "events_max_rowid": 0,
+    "event_lag": {
+     "cos_triage:events": 0,
+     "project_wake": 0,
+     "root_done_summary": 0
+    },
+    "dispatch_latency_ms": []
+   },
+   "db_end": {
+    "tasks": 40,
+    "runs": 39,
+    "events": 772,
+    "project_wakes": 0,
+    "project_controller_decisions": 0,
+    "script_compare_log": 0,
+    "chat_runs": 206,
+    "chat_messages": 756,
+    "cos_inbox_items": 69,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {
+     "done": 39,
+     "ready": 1
+    },
+    "task_leases": 0,
+    "runs_running": 0,
+    "wu_leases": 0,
+    "wakes_unconsumed": 0,
+    "events_max_rowid": 772,
+    "event_lag": {
+     "cos_triage:events": 1,
+     "project_wake": 1,
+     "root_done_summary": 1,
+     "events": 1
+    },
+    "dispatch_latency_ms": [
+     28,
+     119,
+     153
+    ]
+   },
+   "slow_ticks": 0,
+   "script_tick_wait_end": {
+    "ticks": 1000,
+    "p50_us": 0,
+    "p95_us": 0,
+    "max_us": 0,
+    "tick_budget": 0,
+    "budget_us": 200000
+   },
+   "dispatch_latency_ms": {
+    "n": 39,
+    "p50": 54,
+    "p95": 148,
+    "max": 178
+   },
+   "restart": {
+    "start_secs": 0.41,
+    "reclaimed_secs": 4.43,
+    "runs_running_after": 0,
+    "task_leases_after": 0,
+    "before": {
+     "runs_running": 1,
+     "task_leases": 1
+    }
+   },
+   "samples_after_restart": 2,
+   "anon_delta_kb": 9904,
+   "anon_explained_kb": 13640,
+   "anon_residual_kb": -3736
+  },
+  {
+   "label": "after",
+   "condition": "shadow",
+   "samples": 15,
+   "wall_secs": 390.0,
+   "stop": "wall",
+   "rss_kb": [
+    118464,
+    137408,
+    137408
+   ],
+   "rss_anon_kb": [
+    19584,
+    28736,
+    28736
+   ],
+   "rss_file_kb": [
+    98880,
+    108672,
+    108672
+   ],
+   "threads": [
+    33,
+    34,
+    34
+   ],
+   "arena_estimate": [
+    33,
+    36,
+    36
+   ],
+   "fds": [
+    47,
+    49,
+    51
+   ],
+   "sqlite_memory_used": [
+    0,
+    0,
+    0
+   ],
+   "sqlite_pagecache_bytes": [
+    529176,
+    4767584,
+    4767584
+   ],
+   "malloc_arena": [
+    6434816,
+    23711744,
+    23711744
+   ],
+   "malloc_mmap": [
+    0,
+    0,
+    0
+   ],
+   "malloc_in_use": [
+    3184448,
+    14655296,
+    14655296
+   ],
+   "malloc_free": [
+    3250368,
+    9056448,
+    9056448
+   ],
+   "v8_used_heap": [
+    1721384,
+    1742648,
+    2083048
+   ],
+   "v8_total_heap": [
+    3932160,
+    2621440,
+    3932160
+   ],
+   "v8_generations": [
+    1,
+    1,
+    1
+   ],
+   "rss_slope_whole_mb_per_hour": 170.8,
+   "rss_slope_prod_whole_mb_per_hour": null,
+   "rss_slope_prod_steady_mb_per_hour": null,
+   "rss_anon_slope_prod_whole_mb_per_hour": null,
+   "rss_anon_slope_prod_steady_mb_per_hour": null,
+   "rss_anon_slope_after_600_mb_per_hour": null,
+   "rss_slope_after_600_mb_per_hour": null,
+   "db_start": {
+    "tasks": 0,
+    "runs": 0,
+    "events": 0,
+    "project_wakes": 0,
+    "project_controller_decisions": 0,
+    "script_compare_log": 0,
+    "chat_runs": 0,
+    "chat_messages": 0,
+    "cos_inbox_items": 0,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {},
+    "task_leases": 0,
+    "runs_running": 0,
+    "wu_leases": 0,
+    "wakes_unconsumed": 0,
+    "events_max_rowid": 0,
+    "event_lag": {
+     "cos_triage:events": 0,
+     "project_wake": 0,
+     "root_done_summary": 0
+    },
+    "dispatch_latency_ms": []
+   },
+   "db_end": {
+    "tasks": 40,
+    "runs": 39,
+    "events": 811,
+    "project_wakes": 83,
+    "project_controller_decisions": 11,
+    "script_compare_log": 41,
+    "chat_runs": 206,
+    "chat_messages": 756,
+    "cos_inbox_items": 69,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {
+     "done": 39,
+     "ready": 1
+    },
+    "task_leases": 0,
+    "runs_running": 0,
+    "wu_leases": 0,
+    "wakes_unconsumed": 4,
+    "events_max_rowid": 811,
+    "event_lag": {
+     "cos_triage:events": 1,
+     "project_wake": 1,
+     "root_done_summary": 1,
+     "events": 1
+    },
+    "dispatch_latency_ms": [
+     91,
+     93,
+     114
+    ]
+   },
+   "slow_ticks": 2,
+   "script_tick_wait_end": {
+    "ticks": 1000,
+    "p50_us": 0,
+    "p95_us": 0,
+    "max_us": 0,
+    "tick_budget": 0,
+    "budget_us": 200000
+   },
+   "dispatch_latency_ms": {
+    "n": 39,
+    "p50": 89,
+    "p95": 174,
+    "max": 548
+   },
+   "restart": {
+    "start_secs": 0.41,
+    "reclaimed_secs": 4.43,
+    "runs_running_after": 0,
+    "task_leases_after": 0,
+    "before": {
+     "runs_running": 1,
+     "task_leases": 1
+    }
+   },
+   "samples_after_restart": 2,
+   "anon_delta_kb": 9152,
+   "anon_explained_kb": 15592,
+   "anon_residual_kb": -6440
+  }
+ ],
+ "thresholds": [
+  {
+   "label": "before",
+   "condition": "off",
+   "checks": {
+    "runs_and_leases_after_restart_0": true,
+    "not_auto_stopped": true
+   },
+   "pass": true
+  },
+  {
+   "label": "before",
+   "condition": "shadow",
+   "checks": {
+    "runs_and_leases_after_restart_0": true,
+    "not_auto_stopped": true
+   },
+   "pass": true
+  },
+  {
+   "label": "after",
+   "condition": "off",
+   "checks": {
+    "v8_generations_le_2": true,
+    "runs_and_leases_after_restart_0": true,
+    "not_auto_stopped": true
+   },
+   "pass": true
+  },
+  {
+   "label": "after",
+   "condition": "shadow",
+   "checks": {
+    "v8_used_heap_end_lt_2x_start": true,
+    "v8_generations_le_2": true,
+    "runs_and_leases_after_restart_0": true,
+    "not_auto_stopped": true
+   },
+   "pass": true
+  }
+ ]
+}

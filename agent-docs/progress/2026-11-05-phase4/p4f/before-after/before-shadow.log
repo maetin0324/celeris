@@ -1,0 +1,6 @@
+daemon-soak[before/shadow]: gate {"ok": true, "reason": "short", "approval": null}
+daemon-soak[before/shadow]: setup {"project": "01M6PVATDNM6S5A55V4N8QKA7B", "script_modes": {"lane_rules": "compare", "cos_digest": "compare"}, "controller": "shadow", "port": 53745, "pid": 4060702, "celeris": "/local/celeris/data/scr
+daemon-soak[before/shadow]: start {"secs": 420, "limits": {"max_rss_mb": 4096, "min_free_mb": 5120, "max_db_mb": 4096, "max_api_failures": 3}, "task_interval": 10.0, "chat_interval": 120.0}
+daemon-soak[before/shadow]: sigkill {"runs_running": 1, "task_leases": 1}
+daemon-soak[before/shadow]: restart {"start_secs": 0.41, "reclaimed_secs": 4.43, "runs_running_after": 0, "task_leases_after": 0, "pid": 53134}
+daemon-soak[before/shadow]: stop {"reason": "wall", "tasks": 43, "chats": 3, "wakes": 1}

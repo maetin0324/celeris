@@ -819,13 +819,33 @@ impl World {
         .await;
 
         // 切替の後の要求は B へ行く。A の drain 中も digest は止まらない。
-        let record = self
+        // ただし dispatcher の tick が上の待ち（in_flight == 1）の後・切替の前に `ts` の A で pass を始めていると、
+        // その call は held pass の後ろで 200 ms 待って打ち切られ、Rust が切替の後に入れた run も拾う。その記録は
+        // A・`mode_changed`・Rust の apply になる（仕様。task-dispatch の
+        // `cos_digest_pass_ts_switch_mid_pass_records_late_run_under_old_generation` が決定的に再現する）。
+        // tick は 1 回に pass を 1 つしか走らせず、次の tick は mode を読み直すので、切替をまたぐ pass は高々 1 つ。
+        // その記録が出たら、もう 1 件の run で切替の後に始まった pass の記録を取る。
+        let id_a = self.generation_id(&a);
+        let mut record = self
             .digest_run("run-b-compare", true)
             .await
             .expect("record");
+        if record.generation == id_a {
+            assert_eq!(record.mode, ScriptMode::Ts, "{record:?}");
+            assert_eq!(record.applied_by, CosDigestAppliedBy::Rust, "{record:?}");
+            assert_eq!(
+                record.fallback.as_ref().map(|f| f.code.as_str()),
+                Some("mode_changed"),
+                "{record:?}"
+            );
+            record = self
+                .digest_run("run-b-compare-after", true)
+                .await
+                .expect("record");
+        }
         assert_eq!(record.generation, id_b, "{record:?}");
         assert_eq!(record.mode, ScriptMode::Compare, "{record:?}");
-        let held = wait_for("A holds only the held pass", || async {
+        wait_for("A holds only the held pass", || async {
             let held = self.registry.get(&a).expect("A still holds the pass");
             (held.in_flight == 1).then_some(held)
         })

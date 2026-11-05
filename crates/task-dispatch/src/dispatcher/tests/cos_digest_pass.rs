@@ -22,6 +22,8 @@ struct TsPass {
     answer: Box<AnswerFn>,
     /// TS の返事の前に走る（mode の切り替えなど）。
     before: Box<dyn Fn() + Send + Sync>,
+    /// `Some` なら op を 1 つも送らずにこれを走らせ、返事をしない（別の pass の後ろで待たされた call）。
+    stall_at_start: Option<Box<dyn Fn() + Send + Sync>>,
     /// list に無い run を読む。
     read_unlisted: bool,
     unlisted_replies: StdMutex<Vec<CosDigestOpReply>>,
@@ -32,6 +34,7 @@ fn ts_pass(answer: impl Fn(CosDigestPassOutput) -> PassAnswer + Send + Sync + 's
     TsPass {
         answer: Box::new(answer),
         before: Box::new(|| {}),
+        stall_at_start: None,
         read_unlisted: false,
         unlisted_replies: StdMutex::new(Vec::new()),
         calls: AtomicUsize::new(0),
@@ -61,6 +64,11 @@ impl PolicyScript for TsPass {
     fn cos_digest_pass(&self, call: CosDigestPassCall, _deadline: Duration) -> PolicyFuture<'_> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
+            if let Some(stall) = &self.stall_at_start {
+                stall();
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+                return Err(PolicyScriptError::new("exception", "woke up"));
+            }
             let output = reference_pass(&call.sink).await?;
             if self.read_unlisted {
                 let reply = op(
@@ -384,6 +392,126 @@ async fn cos_digest_pass_ts_mode_changed_before_apply_uses_rust() {
             (CosDigestAppliedBy::Rust, Some("mode_changed"))
         );
     }
+}
+
+/// script_generation_e2e の stage_switch_to_b の競合（2026-11-05 P4-D fix-digest-switch-race）を決定的に再現する。
+/// `ts` の A で始まった pass の call が返事をしない間に、人が `compare` の B へ切り替え、その後で triage run が
+/// 終わる。call は 200 ms で打ち切られ、Rust はその時点の store を走査するので、切替の後に終わった run も
+/// この pass が拾う。記録は pass の始めの generation（A）・`mode_changed`・Rust の apply になる（仕様どおり。
+/// ADR 2026-11-03-cos-digest-persist 2）。B の記録は次の tick の pass から出る。
+#[tokio::test]
+async fn cos_digest_pass_ts_switch_mid_pass_records_late_run_under_old_generation() {
+    let store: Arc<StdMutex<Option<(Arc<SqliteStore>, String)>>> = Arc::new(StdMutex::new(None));
+    let generation_a: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
+    let mut script = ts_pass(echo);
+    let hook = store.clone();
+    script.stall_at_start = Some(Box::new(move || {
+        let (store, b) = hook.lock().expect("lock").clone().expect("store");
+        let now = time::OffsetDateTime::now_utc();
+        let row = store
+            .script_domain_modes()
+            .expect("modes")
+            .into_iter()
+            .find(|r| r.domain.as_str() == "cos_digest")
+            .expect("row");
+        store
+            .script_domain_set_mode(
+                &ScriptModeChange {
+                    domain: "cos_digest".into(),
+                    to_mode: ScriptMode::Compare,
+                    to_generation: Some(b),
+                    expected_version: row.version,
+                    actor: "human:test".into(),
+                    reason: "switch to B mid-pass".into(),
+                },
+                now,
+            )
+            .expect("switch to B");
+        // 切替の後に終わる triage run。
+        store
+            .cos_triage_ingest_batch(
+                "digest-switch-race",
+                "run-late",
+                &[task_core::chat::triage::CosTriageSource {
+                    source_kind: "notice".into(),
+                    source_key: "run-late".into(),
+                    source_revision: "1".into(),
+                    source_event_id: None,
+                    operation_id: None,
+                    summary: "知らせ run-late".into(),
+                    detail: String::new(),
+                    policy_version: "1".into(),
+                    task_id: None,
+                }],
+                now,
+            )
+            .expect("ingest");
+        let general = store
+            .cos_thread_open(
+                &task_core::chat::ChatOpenThreadRequest { project_id: None },
+                now,
+            )
+            .expect("general")
+            .thread
+            .id;
+        store
+            .cos_triage_claim(&general, "run-late", now)
+            .expect("claim")
+            .expect("run");
+        store
+            .chat_run_finish("run-late", ChatRunState::Completed, None, None, now)
+            .expect("finish");
+    }));
+    let seen = generation_a.clone();
+    let (f, world) = run_pass(Some(ScriptMode::Ts), Some(Arc::new(script)), |f, a| {
+        let b = f
+            .store
+            .script_generation_record(
+                &NewScriptGeneration {
+                    bundle_sha256: sha("ef"),
+                    host_api: "1.0.0".into(),
+                    schema_sha256: "0".repeat(64),
+                    manifest_json: r#"{"domains":["cos_digest"]}"#.into(),
+                    state: ScriptGenerationState::Loaded,
+                },
+                f.d.now_utc(),
+            )
+            .expect("generation B");
+        *store.lock().expect("lock") = Some((f.store.clone(), b.id));
+        *seen.lock().expect("lock") = Some(a.to_owned());
+    })
+    .await;
+    let a = generation_a.lock().expect("lock").clone().expect("A");
+    let late = world
+        .records
+        .iter()
+        .find(|r| r.run_id == "run-late")
+        .unwrap_or_else(|| panic!("the pass picked up the late run: {:?}", world.records));
+    assert_eq!(late.generation, a, "{late:?}");
+    assert_eq!(late.mode, ScriptMode::Ts, "{late:?}");
+    assert_eq!(late.applied_by, CosDigestAppliedBy::Rust, "{late:?}");
+    assert_eq!(
+        late.fallback.as_ref().map(|f| f.code.as_str()),
+        Some("mode_changed"),
+        "{late:?}"
+    );
+    assert_eq!(late.outcome, CompareOutcome::TsError, "{late:?}");
+    assert_eq!(world.records.len(), 3, "{:?}", world.records);
+    for (by, fallback) in fallback_codes(&world) {
+        assert_eq!(
+            (by, fallback.as_deref()),
+            (CosDigestAppliedBy::Rust, Some("mode_changed"))
+        );
+    }
+    // late run の digest は 1 件だけ（Rust の apply）。
+    let key = format!("{DIGEST_KEY}run-late");
+    assert_eq!(
+        world.messages.matches(&key).count(),
+        1,
+        "{}",
+        world.messages
+    );
+    drop(f);
 }
 
 #[tokio::test]

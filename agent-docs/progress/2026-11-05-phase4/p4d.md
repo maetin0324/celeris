@@ -63,9 +63,32 @@ command（release build の test binary を直接起こす。`$BIN` は `cargo t
 - 候補の SELECT の「最後の判断か」の照合が `project_controller_state` を全行読み、案件の数の 2 乗で遅かった。0117 に部分索引を足した。
 - worktree の target の v8 の build script の出力が古い seed の path を指し、`cargo nextest` が `rusty_v8` を見つけられなかった。`cargo clean -p v8`（この task の target だけ）で直った。製品 code の問題ではない。
 
+## 修正: script_generation_e2e の切替をまたぐ digest pass（fix-digest-switch-race）
+`crates/celeris/tests/script_generation_e2e.rs` の `stage_switch_to_b` が、`digest_run("run-b-compare")` の記録が A の generation（`mode_changed` の fallback、TS は `timeout`、elapsed 201,533 µs）になって `assert_eq!(record.generation, id_b)` で落ちた（前回の決定的検査）。
+
+原因（確認済みと未確認を分けて書く）:
+- 確認済み（記録の中身と `crates/task-dispatch/src/dispatcher/cos_chat/digest.rs` の読み）: 落ちた記録は、dispatcher の tick が切替（`human_mode(compare, B)`）の前に mode の行（`ts`・A）を読んで始めた pass のもの。`ts` の pass は TS の call を最大 200 ms（`COS_DIGEST_PASS_DEADLINE`）待ち、打ち切られると `reads.list` がその時点の store を走査する。試験は切替の後 200 ms の内に `run-b-compare` を入れたので、この pass がその run を拾い、`cos_digest_mode_changed` が切替を見つけて Rust の command を `mode_changed` で apply した。記録の generation は pass の始めの A。
+- 確認済み（再現試験）: 同じ順序（`ts` の A で pass の call が返事をしない間に B へ切替 → run が終わる → 200 ms で打ち切り）を task-dispatch の試験 `cos_digest_pass_ts_switch_mid_pass_records_late_run_under_old_generation` で決定的に作り、切替の後に終わった run の記録が A・`mode_changed`・Rust の apply・`TsError` になり、digest message が 1 件だけのことを確かめた。偽の `PolicyScript` の hook（`stall_at_start`）が切替と run の終わりを call の中で行う。CPU 負荷は使わない。
+- 未確認: pass が試験の待ち（A の in_flight == 1）の前後のどちらで始まったか、と TS の call が 200 ms 返らなかった理由（A の isolate が held pass の op 待ちの後ろで call を進めなかったと推定）。どちらでも、mode の行を切替の前に読んだ pass が切替をまたいだことは変わらない。
+- 製品の挙動は仕様どおりと判断した: 切替をまたいだ pass は Rust で apply し `mode_changed` を記録する（ADR 2026-11-03-cos-digest-persist 2）。run の digest は欠けず二重にもならない。製品 code は変えていない。
+- P4-D の GC の段（`dispatcher/project_retention.rs` の `tick_project_retention`）は、`[project_controller.retention]` が無いと最初の `Option` の判定で返る。この e2e の config にはその節が無いので GC は走らず、tick の時間を変えない（code の読みで確認。時間の計測はしていない）。競合は P4-D の前から起こり得た。
+
+変更:
+- `crates/celeris/tests/script_generation_e2e.rs`: `stage_switch_to_b` で、最初の記録が A なら A・`ts`・Rust の apply・`mode_changed` であることを確かめ、別の run（`run-b-compare-after`）でもう 1 回 digest を起こして B・`compare` の記録を確かめる。tick は 1 回に digest pass を 1 つだけ走らせ、次の tick は mode の行を読み直すので、切替をまたぐ pass は高々 1 つ。2 件目は必ず切替の後に始まった pass の記録になる。使われていない変数 `held` の束縛も外した。
+- `crates/task-dispatch/src/dispatcher/tests/cos_digest_pass.rs`: 再現試験と、偽の script の `stall_at_start` を足した。
+- P4-D の GC の実装と migration 0117 は変えていない。
+
+コマンドと exit（提出時の HEAD で実行）:
+- `cargo nextest run -p task-dispatch -E 'test(cos_digest_pass_)'`: exit 0、13 passed（再現試験を含む）。
+- `cargo nextest run -p celeris --test script_generation_e2e`: exit 0、1 passed。続けて 3 回回して 3 回とも passed（9.8〜18.6 秒）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/test-affected.sh`: exit 0、nextest 3,436 passed（10 skipped）、progress の hash 検査 0、script bundle の SKIP 0 件。
+
 ## commit（件名）
 - `p4d: wake・判断・compare の記録の保持と GC（migration 0117、archive と許可の行、[project_controller.retention]、summary.retention）`
 - `p4d: 進捗と計測の raw`
+- `p4d: script_generation_e2e の切替をまたぐ digest pass の競合を直す`
 
 ## 検査（提出時の HEAD で実行）
 - `bash scripts/dev/test-affected.sh`: exit 0。nextest 7,707 passed（22 skipped）、web vitest 711 passed、tsc -b 0、test-ts-verify 20 passed、文書検査・progress の hash 検査 0。

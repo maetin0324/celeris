@@ -544,7 +544,7 @@ async fn soak(cond: Cond) {
     let cycles = env_usize("LONG_RUN_SOAK_CYCLES", 3);
     let per_cycle = env_usize("LONG_RUN_SOAK_TASKS", 2);
     let seed_events = env_usize("LONG_RUN_SOAK_SEED_EVENTS", 1_000);
-    // 壁時計で回すとき（実時間の計測）。半分で restart する。無ければ `cycles` 回。
+    // 壁時計で回すとき（実時間の計測）。窓の中では restart しない。無ければ `cycles` 回。
     let wall_secs = std::env::var("LONG_RUN_SOAK_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok());

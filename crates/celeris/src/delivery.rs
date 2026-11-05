@@ -697,6 +697,19 @@ fn advance(
                 ));
                 integration.merged_at = Some(now);
                 store.integration_put(&integration)?;
+                // 2026-11-05 付記 D6: 取り込みの事実は merge をした場所が書く（sweep の 300 秒周期を待たない）。
+                // project controller は IntegrationMerged が出るまで root を取り込み済みと数えない。
+                store.task_integration_upsert(&task_core::TaskRepoIntegrationState {
+                    task_id: d.task_id,
+                    repo_id: d.repo_id,
+                    branch: d.branch.clone(),
+                    head_sha: d.head.clone(),
+                    state: task_core::TaskRepoIntegrationStatus::Integrated,
+                    reason: None,
+                    actor: task_core::DAEMON_ACTOR.to_owned(),
+                    checked_at: now,
+                    updated_at: now,
+                })?;
                 if d.state == State::Preparing {
                     start_prepare(store, config, &d)?;
                 }

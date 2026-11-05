@@ -127,6 +127,22 @@ async fn pilot_review_check_failed_check_blocks_root_and_achievement() {
     assert_eq!(p.acceptance_checks(&retry), p.acceptance_checks(&first));
     std::fs::create_dir_all(dir.path().join("out")).unwrap();
     std::fs::write(dir.path().join("out/o1.txt"), "made\n").unwrap();
+    // 第 3 フェーズ I4: repo の無い root は成果物（`ArtifactProduced`）があって初めて取り込み済み。
+    p.store
+        .append_event(
+            retry.id,
+            &Event::ArtifactProduced {
+                run_id: "run-ok".into(),
+                artifact: task_core::ArtifactRef {
+                    name: "o1.txt".into(),
+                    path: "out/o1.txt".into(),
+                    sha256: "0".repeat(64),
+                    kind: "file".into(),
+                    declared: true,
+                },
+            },
+        )
+        .unwrap();
     p.review_root(&retry, dir.path(), "run-ok").await;
     assert_eq!(p.store.get(retry.id).unwrap().unwrap().status, Status::Done);
     p.run_until(p.secs() + HOUR);

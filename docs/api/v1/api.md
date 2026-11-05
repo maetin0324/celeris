@@ -436,7 +436,7 @@ token_file = "api.token"
 | 76 | POST | `/projects/{id}/archive` | 終端の案件をアーカイブする（一覧から既定で隠れる。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 77 | POST | `/projects/{id}/unarchive` | アーカイブを解除する（**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 77a | PUT | `/projects/{id}/status` | 案件の状態の要約を全置換で書く（ADR 2026-10-27-project-brief。§3.48a。**管理系**。CoS は `project.status_put`） | 200 `ProjectBrief` | store `project_briefs` |
-| 77b | GET | `/projects/{id}/controller` | 案件の controller の状態・未処理の wake・最後の判断（ADR 2026-11-04-project-controller A1。§3.48b。行が無ければ mode `off`） | 200 `ProjectControllerView` | store `project_controller_state` |
+| 77b | GET | `/projects/{id}/controller` | 案件の controller の状態・未処理の wake・最後の判断・今日の使用量・`summary`（未達・達成・待機の理由・承認の範囲・次の wake・guard の上限・最後の判断の追跡。ADR 2026-11-04-project-controller A1・第 3 フェーズ P2-J。§3.48b。行が無ければ mode `off`） | 200 `ProjectControllerView` | store `project_controller_state` |
 | 77c | PUT | `/projects/{id}/controller` | controller の mode を変える `{mode, expected_revision, reason}`（§3.48b。**管理系**。上げるのは人だけ、`shadow` 以上は許可リストの案件だけ（403 `project_controller_not_allowed`）、revision 違いは 409。CoS は `project.controller_put` で `off` だけ） | 200 `ProjectControllerView` | store `project_controller_state` |
 | 77d | POST | `/projects/{id}/controller/wake` | 外部待ちの解除の wake を積む `{external_ref, note, idempotency_key}`（§3.48b。**管理系**。同じ key は 1 件、mode `off` なら積まない。CoS は `project.controller_wake`） | 200 `{wake_key, added}` | store `project_wakes` |
 | 77e | GET | `/projects/{id}/controller/decisions` | controller の判断の記録（新しい順、`?before=<判断 id>&limit=`、既定 50・上限 200） | 200 `{items: [ProjectControllerDecision]}` | store `project_controller_decisions` |
@@ -1673,6 +1673,18 @@ mode は `off`（既定）・`dry_run`・`shadow`・`enabled`。`off` の案件�
   人の token だけ（他は 403 `project_controller_mode_requires_human`）。`shadow`・`enabled` は `[project_controller]
   allowed_project_ids` の案件だけ（403 `project_controller_not_allowed`）。`expected_revision` が今の `revision` と
   違えば 409 `project_controller_revision_conflict`。
+- `GET` の `ProjectControllerView` は `{state, pending_wakes, last_decision, budget_today, summary}`。`summary`（第 3 フェーズ P2-J、
+  [ADR](../../../agent-docs/adr/2026-11-05-phase3-p2j.md)）は画面の写しで、判定の根拠ではない:
+  - `outcomes[]`: `{id, title, source, recorded, evidence_root_ids[], reached}`。`reached` は到達の記録（Roadmap の `reached` か
+    適用済みの `mark_milestone`。`shadow`・`dry_run` では `suppressed` も数える）と条件を満たす root（done・合格・取り込み済み）の
+    両方があるときだけ真（判定の I1 と同じ規則）。`outcomes_invalid` は依頼文の block の誤り。
+  - `waiting`: phase が `waiting`・`blocked`・`paused`・`cancelled` のときだけ `{phase, kind, rule_id, details[], decision_id, decided_at}`。
+    `kind` は `guard`・`authority`・`achievement_unverified`・`script_unavailable`・`invalid_proposal`・`escalation`・`wait`・`paused`・
+    `cancelled`・`other`（最後の判断の規則と効果から）。
+  - `authority`: `{launch_root_allowed, launch_root_reason, grants[{id, action_class, scope_kind, scope_ref, expires_at, budget_remaining}]}`
+    （生きている許可だけ）。
+  - `next_wake`: `{at, backoff_until, pending_kinds[]}`。`budget_limits`: `[project_controller.budget]` の起動時の値。
+  - `trace`: 最後の判断の `{decision_id, rule_id, mode, effect_state, effect_ref, based_on_revision, snapshot_sha256, generation_id, decided_at}`。
 - `POST …/wake` の本文 `{"external_ref": "job-1", "note": "…", "idempotency_key": "k1"}`。wake key は
   `external:<external_ref>:<idempotency_key>`（`:` は書けない）。応答 `{"wake_key": "…", "added": true}`。
 

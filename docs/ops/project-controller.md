@@ -1,11 +1,11 @@
 ---
-tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY, 01M6JW1EG41D198Y5CP65MQJM4, 01M6N7XY9E70AH4476VQTSFVJY]
+tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY, 01M6JW1EG41D198Y5CP65MQJM4, 01M6N7XY9E70AH4476VQTSFVJY, 01M6N7XYA31CMJV6RR1KXSQMKH]
 ---
 # Project Controller の運用手順（人と operator）
 
 案件を長期に自律運営する Project Controller（[ADR 2026-11-04-project-controller](../../agent-docs/adr/2026-11-04-project-controller.md)）を、
 人が本番で有効にする・止める・戻すための手順。既定は全案件で無効で、この手順を人が実行するまで本番の動きは変わらない。
-A5・A6・A7 は節を足す。
+本番への導入の順と確認項目は末尾の「導入の checklist（P2-J）」にまとめる。
 
 ## 仕組みの要点
 - 判定は TS（`control-ts/src/domains/project_controller.ts`）。状態・検証・上限・効果は Rust
@@ -15,7 +15,11 @@ A5・A6・A7 は節を足す。
   判断の記録が `pc/script-unavailable` になり、起票も LLM も起こさない。
 - 進捗の増えない `replan`・`launch_root` が 5 回続くと、Rust が `escalate` に置き換えて phase を `blocked` にする。
   `escalate` は notice（`bad_news`、source key `project_controller:escalate:<案件>:<question_key>`）を 1 件出し、
-  同じ問いは 2 回目を出さない。人が問いに答えるか mode を置き直すまで判断しない。
+  同じ問いは 2 回目を出さない。止まった理由が解ける（問いの回答など）と自動で 1 回だけ再評価する（下の「長時間の運用」、P1-G）。
+  解けない理由のときは人が mode を置き直すまで判断しない。
+- 達成（phase `achieved`）は TS の申告（`gap`）では決まらない。Rust が Outcome ごとに、条件を満たす root（done・review 合格・
+  取り込み済み）と到達の記録（Roadmap の `reached` か適用済みの `mark_milestone`）の両方を数え直し、欠けていれば
+  `pc/achieved-unverified:<id>` の `wait` に置き換える（[ADR 2026-11-05-phase3-achievement-invariants](../../agent-docs/adr/2026-11-05-phase3-achievement-invariants.md)）。
 - 案件 CoS は `/cos/operations` で次を独断でできない（422）: 依頼文の変更（`project_request_human_only`）、
   draft でない task の objective・acceptance の変更（`task_goal_human_only`）、`enabled` の案件の root の起票
   （`project_controller_owns_launch`）、controller が `off` でない案件での本番 release の promote（`production_requires_human`）。人の発言を
@@ -25,7 +29,7 @@ A5・A6・A7 は節を足す。
 | 場面 | 誰が | 何を | 確認 |
 |---|---|---|---|
 | 機能を本番に入れる | 人 | release を promote し、config に `[project_controller] enabled = true` と `allowed_project_ids = ["<案件 id>"]` を書いて daemon を再起動する | `GET /api/v1/daemon` が controller を示す。journal に `[project_controller] needs the CoS chat pipeline` が無い |
-| 判定の領域を上げる | 人 | `celerisctl script mode project_controller compare`（観察）→ `ts`（有効）。人の token で | `celerisctl script domains` の `project_controller` の mode |
+| 判定の領域を上げる | 人 | 同じ世代（`bundle_sha256`）で `rust` → `compare` → `canary` → `ts` の順。`celerisctl script generations register <sha256>` の後、`celerisctl script mode project_controller compare --expected-version <v> --generation <sha256> --mode-reason "…"`、`canary` は `--canary-bps <1..9999>` を足す。`canary`・`ts` は人の token だけ（他は 403 `script_mode_requires_human`）。`<v>` は `celerisctl script domains` の `version` | `celerisctl script domains` の `project_controller` の mode・世代・canary の比 |
 | 効果なしで判定を見る（dry-run） | 人 | `PUT /api/v1/projects/{id}/controller` `{"mode":"dry_run","expected_revision":<rev>,"reason":"…"}`（daemon の `[project_controller] enabled = true` と領域 `compare` 以上が要る。`allowed_project_ids` は不要）。置いた直後の tick で 1 回判定する。もう一度見るときは `POST /api/v1/projects/{id}/controller/wake` `{"external_ref":"dry-run","idempotency_key":"<毎回違う値>"}` | `GET /api/v1/projects/{id}/controller/decisions` の判断（mode `dry_run`、効果 `suppressed`）の `proposal_json` に proposal・explanation・violations・分類。event（cluster job・browser の待ちの解除を含む）・cron では判定せず、起票・CoS run・timer は 0 |
 | 案件を観察だけにする | 人 | `PUT /api/v1/projects/{id}/controller` `{"mode":"shadow","expected_revision":<rev>,"reason":"…"}` | `GET /api/v1/projects/{id}/controller/decisions` の判断が `suppressed`、CoS run 0 |
 | 案件を有効にする | 人 | 同じ API で `mode: enabled` | root が label `project-controller` で起票される |
@@ -46,7 +50,7 @@ A5・A6・A7 は節を足す。
 | 提案を承認・却下する | **人だけ** | `POST /api/v1/projects/{id}/roadmap/proposals/{version}/decide` `{"decision":"approve","note":"…"}`（`reject` も同じ）。人の token で | `GET …/roadmap` の `version` が進み、`GET …/roadmap/history` で前の版が `superseded` |
 | Outcome を取り下げる | 人の承認 | `dropped: true` を付けた版を提案して承認する（id は消せない） | `GET …/roadmap` の `status` が `dropped` |
 | Outcome の到達を記録する | 人 | `POST /api/v1/projects/{id}/roadmap/outcomes/{oid}/status` `{"status":"reached","evidence_refs":["task:<root id>"]}`。root が done・合格・取り込み済みでなければ 422 | `GET …/roadmap` の `status`・`evidence`・`root_task_ids` |
-| 本番の DB を新しい release で開く | 人 | promote で migration 0113 が表を 2 つ足す（既存の行は変えない）。release を戻すときは SCHEMA_VERSION 113 の DB を 112 の binary が開けない（`SchemaTooNew`）ので、Roadmap を使う前の DB の写しから戻す | `celerisctl` の schema version が 113 |
+| 本番の DB を新しい release で開く | 人 | promote で migration 0113 が表を 2 つ足す（既存の行は変えない）。戻し方は末尾の「schema migration の戻し方」 | schema version（下の節の確認） |
 
 ## 許可の範囲（authority ledger。A7）
 controller が `off` でない案件では、CoS と controller が人に聞かずに行える範囲を、人が作る許可（期限・回数・元の根拠つき）で決める
@@ -93,17 +97,23 @@ controller は event（root の終了・失敗・人の操作など）で起き�
   0.19 秒で、isolate は 1 個のまま増えない。複数日の実稼働の確認は A9 の pilot で行う。
 
 ## 画面と非本番の pilot（A9）
-- 案件の詳細画面の「自動運営」に、長期方針（CoS の要約の目的と人の依頼文）、関連する root task、今後の作業（要約の
-  next_actions と次の再評価の時刻）、待機と人の要件（要約の waiting_on・受信箱の判断待ち・許可の提案）、過去の判断と根拠
-  （判断の規則・効果・参照）、Roadmap（A5）と許可（A7）が出る。mode は同じ画面の「観察だけにする」「有効にする」「止める（従来の
+- 案件の詳細画面の「自動運営」に、長期方針（CoS の要約の目的と人の依頼文）、途中目標の到達（P2-J）、関連する root task、
+  今後の作業（要約の next_actions、次の再評価の時刻、今日の使用量と上限、guard の上限）、待機と人の要件（待機の理由・
+  承認の範囲・要約の waiting_on・受信箱の判断待ち・許可の提案）、過去の判断と根拠（最後の判断の追跡、判断の規則・効果・参照）、
+  Roadmap（A5）と許可（A7）が出る。何を読むかは下の「GET の要約と画面（P2-J）」。mode は同じ画面の「観察だけにする」「有効にする」「止める（従来の
   CoS に戻す）」で切り替える（理由が必須。上げるのは人の token だけ）。`dry_run` は API だけ。
 - `POST /projects` で作った直後の案件は `proposed` で、これを `active` へ移す API は無い。人が controller を `enabled` に上げると、同じ
   transaction で案件を `active` にする（`proposed` のままだと判定と検証が起票を断り続ける）。
-- repo を持つ案件の root は、取り込み（`IntegrationMerged`）が記録されたときだけ取り込み済みに数える。`delivery_skipped` の
-  `not_git`・`no_commits` と `IntegrationNotApplicable` は取り込み済みに数えない（`not_git` は受信箱に理由付きで出る）。取り込みの
-  event で controller を起こすのは `IntegrationMerged` だけ（root の done でも別に起こす。repo の無い案件の root も同じ）。repo を
-  持たない案件の root は done で取り込み済みに数える
-  （[A9 pilot の不具合の付記](../../agent-docs/adr/2026-11-05-a9-llm-pilot-findings.md) D1）。
+- repo を持つ案件の root は、最後の取り込み（`IntegrationMerged`）の後に `IntegrationReopened` が無いときだけ取り込み済みに数える。
+  `delivery_skipped` の `not_git`・`no_commits` と `IntegrationNotApplicable` は取り込み済みに数えない（`not_git` は受信箱に理由付きで
+  出る）。取り込みの event で controller を起こすのは `IntegrationMerged` だけ（root の done でも別に起こす。repo の無い案件の root も
+  同じ）。repo を持たない案件の root は、done だけでは取り込み済みに数えない。成果物（`result.json`・`checkpoint.json`・
+  `delegate.json`・`followups.json` を除く `ArtifactProduced`、または合格した `artifact_exists`・`knowledge_page` の条件）が要る
+  （[A9 pilot の不具合の付記](../../agent-docs/adr/2026-11-05-a9-llm-pilot-findings.md) D1、
+  [達成の不変条件](../../agent-docs/adr/2026-11-05-phase3-achievement-invariants.md) I4）。
+- root の review 合格は、最後の終端遷移が `review_pass` の done で、最後の review の判定に不合格が無く、`Check::Command` の条件が
+  全部合格のときだけ数える（I3。reopen で前の合格を捨てる）。Outcome の block が `checks` を書くと、Rust が root の acceptance に
+  command の条件として足す（[P0-E の ADR](../../agent-docs/adr/2026-11-05-phase3-p0e.md)）。
 - 実 LLM の pilot は `scripts/dev/long-horizon-pilot-llm.sh` を人が sandbox の外から実行する。人の承認の印
   `LONG_HORIZON_PILOT_LLM_APPROVED=1` と、人が書いた LLM の設定（`--llm-config <toml>`。`[llm_sources]`・`[harnesses]`・
   `[route_defaults]`・`[harness_selection]`・`[accounts]`）が要る。Celeris の worker の run の中では起動しない。一時 home・一時 DB・
@@ -117,3 +127,76 @@ controller は event（root の終了・失敗・人の操作など）で起き�
   で落ちる。外部への公開はしない
   （[P0-D の ADR](../../agent-docs/adr/2026-11-05-phase3-p0d.md)）。
 
+
+
+## GET の要約と画面（P2-J）
+`GET /api/v1/projects/{id}/controller` の `summary` と、案件の画面の同じ欄で次を読む（[ADR](../../agent-docs/adr/2026-11-05-phase3-p2j.md)。
+組み立ては `crates/task-ops/src/project_controller_view.rs`）。要約は画面の写しで、判定はこれを読まない（判定は毎回 snapshot から）。
+
+| 知りたいこと | `summary` の欄 | 画面（`data-testid`） | 読み方 |
+|---|---|---|---|
+| 未達・達成 | `outcomes[]`（`reached`・`recorded`・`evidence_root_ids`）、`outcomes_invalid` | 途中目標の到達（`controller-outcomes`） | `reached` は根拠の root と到達の記録の両方があるときだけ真。判定の I1 と同じ規則。`shadow`・`dry_run` では `suppressed` の `mark_milestone` も記録に数える（enabled なら何が起きるかの写し） |
+| 待機の理由 | `waiting`（`kind`・`rule_id`・`details`） | 待機の理由（`controller-wait-reason`） | phase が `waiting`・`blocked`・`paused`・`cancelled` のときだけ出る。`kind` は `guard`・`authority`・`achievement_unverified`・`script_unavailable`・`invalid_proposal`・`escalation`・`wait`・`paused`・`cancelled`・`other` |
+| 承認の範囲 | `authority`（`launch_root_allowed`・`launch_root_reason`・`grants[]`） | 承認の範囲（`controller-authority-scope`） | 生きている許可だけ（期限内・回数が残る・取り消されていない）。回数は `budget_remaining` |
+| 次の wake | `next_wake`（`at`・`backoff_until`・`pending_kinds`） | 次の再評価（`controller-next-wake`） | `at` が無ければ event が来るまで評価しない |
+| guard・予算 | `budget_limits` と `budget_today` | 今日の使用量 / 上限（`controller-budget-today`）、guard の上限（`controller-guard-limits`） | 上限は daemon の起動時の `[project_controller.budget]`。値を変えたら再起動まで古い値が出る |
+| 追跡 | `trace`（`decision_id`・`rule_id`・`effect_state`・`based_on_revision`・`snapshot_sha256`） | 最後の判断（`controller-trace`） | 詳細は `GET …/controller/decisions` の同じ id の `proposal_json` |
+
+試験: `crates/task-api/tests/project_controller.rs` の `project_wake_api_summary_shows_outcomes_wait_authority_and_next_wake`、
+`crates/task-dispatch/src/dispatcher/tests/project_achievement.rs` の `project_controller_summary_*` 2 件、
+`web/features/projects/project-controller-panel.test.tsx` の `P2-J:` 2 件。
+
+## 導入の checklist（P2-J）
+本番への導入は人が行う。worker・operator は下の手順を実行しない（promote・`systemctl`・本番 config・本番 DB・人だけの API の承認）。
+各段で前の段の確認がそろってから次へ進む。戻すときは「rollback」の表を上から使う。
+
+### 1. release gate（main で全体）
+- [ ] 導入する commit が `main` にあることを確かめる（`git merge-base --is-ancestor <sha> refs/heads/main` が 0）。
+- [ ] `scripts/selfdeploy/release.sh <sha>` を人が回し、gate の全段が通る（`cargo-fmt-check`・`control-ts-install`・`control-ts-bundle`・
+  `script-bundle-verify`・`cargo-test`（全体の試験。日頃の `test-affected.sh` では回さない）・`script-bundle-tests`・`cargo-clippy`・
+  `cargo-build`・`web-pnpm-typecheck`・`web-pnpm-test`・`web-pnpm-release`）。確認は `<release>/gate.json` の `failed_step` が無いこと。
+- [ ] `scripts/selfdeploy/verify.sh <sha12>` が通る（staging の煙試験と件数一致）。
+- [ ] release の `notes.md` と `celerisctl release preview <sha12>` で、migration の有無と変わる config 欄を読む。
+
+### 2. schema migration の戻し方
+- controller が足した migration は 0111（script の領域）・0112（controller の表）・0113（Roadmap）・0114（authority ledger）で、
+  どれも表を足すだけで既存の行を変えない。P2-J は migration を足さない（SCHEMA_VERSION は 114 のまま）。
+- 古い binary は新しい schema の DB を開けない（`StoreError::SchemaTooNew`。何も書かずに起動を止める）。down migration は無い。
+- [ ] promote の前に、`promote.sh` が `sqlite3 .backup` で昇格前の写しを `$CELERIS_BACKUPS_DIR` に作ったことをログの
+  `backup ok:` で確かめる。
+- 戻すとき（人）: `scripts/selfdeploy/rollback.sh --restore-db` で昇格前の写しに戻す（写しの後に書かれた行は失われる。
+  controller の判断・wake・Roadmap・許可の行も含む）。写しに戻さずに古い release だけ戻すことはできない（`SchemaTooNew`）。
+  データを残したいときは、DB を戻さず新しい release のまま controller を `off` にする（下の rollback 1〜2）。
+- 消した config 欄は読み込みエラーになる（`deny_unknown_fields`）。古い release に戻すときは、古い release に無い欄
+  （`[project_controller]` とその下）を先に消す。
+
+### 3. CoS の KB skill の版
+- [ ] repo の `config/skills/cos-operator`（`metadata.version` 7、`project-controller.md` を含む）と `config/skills/cos-inbox-triage`
+  （policy_version 11）を、本番の KB に人が取り込む: `celerisctl skills import config/skills --name cos-operator --name cos-inbox-triage --root <kb_root>`。
+- [ ] 本番 config の `[cos.triage] policy_version` が skill の版（11）と同じ。違うと CoS の resolve が 422 `cos_policy_version_mismatch`。
+- [ ] 確認: `test -s <kb_root>/skills/cos-operator/project-controller.md`。web の案件スレッドで一往復し、`CoS skills unavailable` が出ない。
+- P2-J は skill を変えない（版は上のまま）。
+
+### 4. 本番の限定 rollout（shadow → canary → enabled）
+| 段 | 誰が | 何を | 進む条件 |
+|---|---|---|---|
+| 0. 入れる | 人 | release を promote し、本番 config に `[project_controller] enabled = true`・`allowed_project_ids = ["<案件 1 件>"]` を書いて daemon を再起動 | `GET /api/v1/daemon` が controller を示す。journal に `[project_controller] needs the CoS chat pipeline` が無い。全案件の `GET …/controller` が mode `off` |
+| 1. 試しの評価 | 人 | 領域を `compare` にし（同じ世代）、対象案件を `dry_run` | `…/controller/decisions` の効果が全部 `suppressed`、起票・CoS run 0。`summary.outcomes` が人の見立てと合う |
+| 2. 観察（shadow） | 人 | 対象案件を `shadow` にし、24 時間以上置く | 判断が `suppressed` のまま、CoS run 0。`summary.waiting` の規則に `pc/invalid`・`pc/script-unavailable` が続かない。daemon の RSS と dispatch の遅れが導入前と同じ程度（P1-I の観測と同じ式で比べる） |
+| 3. canary | 人 | 領域を `canary --canary-bps <小さい値>`。`enabled` にした案件のうち選ばれたものだけが TS で動く | 起票された root が label `project-controller`、`summary.authority.grants` の残り回数が起票の数だけ減る。guard の通知が想定外に出ない |
+| 4. enabled | 人 | 領域を `ts`、対象案件を `enabled`（画面の「有効にする」）。対象を広げるのは `allowed_project_ids` を人が足して再起動 | 同じ確認を案件ごとに 72 時間。`summary.outcomes` の達成が reviewer の合格・取り込みと食い違わない |
+
+### 5. rollback（上から順に、効くところで止める）
+| 順 | 誰が | 何を | 確認 |
+|---|---|---|---|
+| 1 | 誰でも（人・operator・CoS） | 対象案件を `PUT …/controller` `{"mode":"off",…}`（画面の「止める」） | 以後 wake が増えない。作成済みの root は残る（中止は別の操作） |
+| 2 | 誰でも | 領域を戻す: `celerisctl script mode project_controller compare`（または `rust`）。guard が止めているときは `rust` だけ通る | `celerisctl script domains` の mode |
+| 3 | 人 | 本番 config の `[project_controller]` を消して再起動 | `GET /api/v1/daemon` に controller が無い |
+| 4 | 人 | release を戻す: 先に 3 を済ませ、`rollback.sh`。schema が進んでいれば `--restore-db`（上の 2） | `celerisctl` の schema version と稼働版 |
+
+### 6. まだ済んでいないこと（2026-11-05 時点）
+- [ ] P0-F（実 LLM の縮小 pilot の再試験）: 未実施。人の許可待ち（account・model・token の上限・時間の上限）。記録は
+  `agent-docs/progress/2026-11-05-phase3/` の P0-F の進捗（main への取り込み待ち）。許可が出たら外部 operator が sandbox の外で
+  `scripts/dev/long-horizon-pilot-llm.sh` を回す。
+- [ ] 24〜72 時間の非本番の実稼働と、本番 RSS の controller `off` との比較（P1-I の段 3・4）: 未実施。人の承認待ち。
+- [ ] 上の 1〜5 の本番の操作: どれも未実施（人が行う）。

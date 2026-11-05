@@ -87,7 +87,8 @@ codingの場合はclaude codeやopencode, 今あるgenreはこれのイメージ
 （人だけが変える）と人が承認した Roadmap に置き、中期の完了できる仕事は root task として起票する。root は done か failed で
 終わり、続きは controller が次の root として起票する（root を running のまま持たない）。判定は TS、状態・検証・予算・安全は Rust。
 既定は無効で、人が案件ごとに有効にする。案件の詳細画面の「自動運営」に、長期方針・途中目標・関連 root・今後の作業・
-待機と人の要件・過去の判断と根拠が出る。human check と本番の操作は controller が有効でも人のまま。
+待機と人の要件・過去の判断と根拠に加え、途中目標ごとの達成・未達、待機の理由（規則）、承認の範囲、次の再評価、guard の
+上限が出る（`GET …/controller` の `summary`）。human check と本番の操作は controller が有効でも人のまま。
 
 ### 3.4 口出し
 

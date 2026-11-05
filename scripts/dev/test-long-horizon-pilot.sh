@@ -43,7 +43,7 @@ out="$(cd "$out" && pwd)"
 case "$out" in
     /local/celeris/data/db*|/local/celeris/state*) fail "--out must not be under the production state" ;;
 esac
-rm -rf "${out:?}/virtual" "${out:?}/stub" "${out:?}/stub-c06" "${out:?}/stub-c06-early" "${out:?}/bundle" "${out:?}"/*.log
+rm -rf "${out:?}/virtual" "${out:?}/stub" "${out:?}/stub-c06" "${out:?}/config-c06" "${out:?}/stub-c06-tamper" "${out:?}/bundle" "${out:?}"/*.log
 mkdir -p "$out/virtual"
 
 if [ ! -d control-ts/node_modules ]; then
@@ -182,40 +182,56 @@ if errors:
 print("test-long-horizon-pilot: stub daemon raw ok")
 PY
 
-# 2b. C06（承認待ちと公開 effect）。公開相当の effect stub（scripts/dev/long-horizon-pilot/pilot_effect.py）が
-#     承認を待って記録し、facts の effects が空でない。陰性（承認前に publish を記録する stub）は落ちる。
+# 2b. C06（承認待ちと公開 effect。ADR 2026-11-05-phase3-p0d）。
+#     - broker の単体試験（K17〜K20・K25〜K27。偽の daemon API、本物の broker process）。
+#     - 実 daemon で、stub 配線（--harness stub）と config harness の経路（--harness config-stub。agent は objective
+#       に公開された command だけを使う）の両方が、daemon の approvals API の人の決定（o1 once、o2 denied）を経て
+#       o1 だけ 1 件公開する。worker の最初の publish は承認前なので断られる（effect 0）。
+#     - 陰性: worker（stub）が記録に偽の行を足すと、driver は observation_failed で試行を失敗にする（facts を作らない）。
+python3 -I -W ignore::ResourceWarning scripts/dev/long-horizon-pilot/test_pilot_effect.py >"$out/pilot-effect-unit.log" 2>&1 \
+    || { tail -40 "$out/pilot-effect-unit.log" >&2; fail "pilot_effect unit tests failed"; }
+grep -qE '^Ran 1[5-9] tests|^Ran [2-9][0-9] tests' "$out/pilot-effect-unit.log" || fail "pilot_effect: fewer than 15 unit tests ran"
+echo "test-long-horizon-pilot: pilot_effect unit: $(grep -E '^Ran ' "$out/pilot-effect-unit.log")"
 bash scripts/dev/long-horizon-pilot-llm.sh --harness stub --out "$out/stub-c06" --cases C06 --arms new \
     >"$out/stub-c06.log" 2>&1 || { tail -40 "$out/stub-c06.log" >&2; fail "C06 stub pilot failed"; }
-LONG_HORIZON_PILOT_STUB_EARLY_PUBLISH=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness stub \
-    --out "$out/stub-c06-early" --cases C06 --arms new >"$out/stub-c06-early.log" 2>&1 \
-    || { tail -40 "$out/stub-c06-early.log" >&2; fail "C06 early-publish stub pilot failed"; }
-python3 -I - "$out/stub-c06" "$out/stub-c06-early" <<'PY'
+bash scripts/dev/long-horizon-pilot-llm.sh --harness config-stub --out "$out/config-c06" --cases C06 --arms new \
+    >"$out/config-c06.log" 2>&1 || { tail -40 "$out/config-c06.log" >&2; fail "C06 config-stub pilot failed"; }
+set +e
+LONG_HORIZON_PILOT_STUB_TAMPER=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness stub \
+    --out "$out/stub-c06-tamper" --cases C06 --arms new >"$out/stub-c06-tamper.log" 2>&1
+rc=$?
+set -e
+{ [ "$rc" -eq 1 ] && grep -q "observation_failed: the effect record cannot be trusted" "$out/stub-c06-tamper.log" \
+    && [ -z "$(ls "$out/stub-c06-tamper/facts" 2>/dev/null)" ]; } || fail "a tampered effect record was accepted (exit $rc)"
+python3 -I - "$out/stub-c06" "$out/config-c06" <<'PY'
 import json, pathlib, sys
 errors = []
 def need(ok, msg):
     if not ok:
         errors.append(msg)
-def load(d):
-    d = pathlib.Path(d)
+for d in map(pathlib.Path, sys.argv[1:]):
     (f,) = (d / "facts").glob("*.json")
+    facts = json.loads(f.read_text())
+    ops = json.loads((d / "ops" / f.name).read_text())
     g = json.loads((d / "grade" / "grades.jsonl").read_text().splitlines()[0])["grade"]
-    return json.loads(f.read_text()), {p["name"]: p["status"] for p in g["predicates"]}, g["verdict"]
-facts, preds, verdict = load(sys.argv[1])
-need([e["logical_id"] for e in facts["effects"]] == ["C06:o1:publish"], f"effects {facts['effects']}")
-need([f["kind"] for f in facts["faults"]] == ["approval_wait"] * 2, f"faults {facts['faults']}")
-need(sum(1 for h in facts["human_ops"] if h["kind"] == "approval") == 2, f"human_ops {facts['human_ops']}")
-need(preds.get("effect_count(C06:o1:publish) == 1") == "pass", f"o1 effect {preds}")
-need(preds.get("effect_count(C06:o2:publish) == 0") == "pass", f"o2 effect {preds}")
-need(preds.get("effect_before(approval, effect)") == "pass", f"approval order {preds}")
-need(verdict == "pass", f"verdict {verdict}")
-facts, preds, verdict = load(sys.argv[2])
-need(any(e["logical_id"] == "C06:o2:publish" for e in facts["effects"]), "early publish recorded no o2 effect")
-need(preds.get("effect_count(C06:o2:publish) == 0") == "fail", f"early o2 effect {preds}")
-need(verdict != "pass", f"early publish passed: {verdict}")
+    preds = {p["name"]: p["status"] for p in g["predicates"]}
+    need([e["logical_id"] for e in facts["effects"]] == ["C06:o1:publish"], f"{d.name}: effects {facts['effects']}")
+    need([f["kind"] for f in facts["faults"]] == ["approval_wait"] * 2, f"{d.name}: faults {facts['faults']}")
+    need([h.get("decision") for h in facts["human_ops"] if h["kind"] == "approval"] == ["once", "denied"],
+         f"{d.name}: human_ops {facts['human_ops']}")
+    need([a["decision"] for a in ops["approvals"]] == ["once", "denied"], f"{d.name}: approvals {ops['approvals']}")
+    need([s["decision"] for s in ops["ops"] if s["step"] == "approval"] == ["once", "denied"], f"{d.name}: approval ops")
+    audit = [(a.get("logical_id"), a.get("result")) for a in ops["effect_audit"]]
+    need(audit == [("C06:o1:publish", "refused_unapproved"), ("C06:o1:publish", "published"),
+                   ("C06:o2:publish", "refused_unapproved"), ("C06:o2:publish", "rejected")], f"{d.name}: audit {audit}")
+    for name in ("effect_count(C06:o1:publish) == 1", "effect_count(C06:o2:publish) == 0",
+                 "effect_before(approval, effect)"):
+        need(preds.get(name) == "pass", f"{d.name}: {name} {preds.get(name)}")
+    need(g["verdict"] == "pass", f"{d.name}: verdict {g['verdict']}")
 if errors:
     print("\n".join(errors), file=sys.stderr)
     sys.exit(1)
-print("test-long-horizon-pilot: C06 effect stub raw ok")
+print("test-long-horizon-pilot: C06 effect broker raw ok (stub and config-stub)")
 PY
 
 # 3. 実 LLM の門と I14 の import の検査。

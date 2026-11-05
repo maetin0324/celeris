@@ -1,0 +1,11 @@
+────────────
+     Summary [   4.897s] 7 tests run: 7 passed, 1334 skipped
+test-long-horizon-pilot: dispatch: 7 passed
+────────────
+     Summary [   0.358s] 3 tests run: 3 passed, 0 skipped
+test-long-horizon-pilot: api: 3 passed
+test-long-horizon-pilot: virtual raw ok (7 scenarios, 7 gate rows)
+test-long-horizon-pilot: stub daemon raw ok
+test-long-horizon-pilot: pilot_effect unit: Ran 15 tests in 43.456s
+test-long-horizon-pilot: C06 effect broker raw ok (stub and config-stub)
+test-long-horizon-pilot: ok (out: /local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6N9F6SCT8KNKJ25SXHTXA6Y/tmp/p0d/full)

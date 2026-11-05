@@ -102,4 +102,9 @@ controller は event（root の終了・失敗・人の操作など）で起き�
   `[route_defaults]`・`[harness_selection]`・`[accounts]`）が要る。Celeris の worker の run の中では起動しない。一時 home・一時 DB・
   loopback の daemon で動き、本番に触れない。raw は `agent-docs/progress/2026-11-04-long-horizon/a9/` の下の `llm` に書く。
   24〜72 時間の実稼働は人の別途の承認が要る。手順と未実施の記録は `agent-docs/progress/2026-11-04-long-horizon/a9.md`。
+- pilot の C06（公開と承認）では、driver が worker の外で公開の broker（`scripts/dev/long-horizon-pilot/pilot_effect.py`）を
+  起こし、worker には公開の command（`<試行の home>/bin/pilot-effect publish <logical_id>`）だけを案件の依頼文で渡す。承認は
+  daemon の承認（`GET /approvals`・`POST /approvals/{id}/decide`）で、人の token の決定だけを数える。公開の記録は HMAC の鎖で、
+  worker が書き換えると試行は observation_failed で落ちる。外部への公開はしない
+  （[P0-D の ADR](../../agent-docs/adr/2026-11-05-phase3-p0d.md)）。
 

@@ -1,0 +1,216 @@
+{
+ "schema": "celeris.long-horizon-facts/1",
+ "bench_version": 1,
+ "dataset": "long_horizon_llm_pilot",
+ "case": "C06",
+ "seed": 1,
+ "init_digest": "9428574fc286ad1b61a05278e36145632545bbb81f465d21667f972d8b3f6b60",
+ "horizon_secs": 300,
+ "roots": [
+  {
+   "logical_id": "o1:1",
+   "outcome": "o1",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 31,
+   "statuses": [
+    "ready",
+    "running",
+    "blocked",
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "ed969fead4c396e42ba26a5d7aaca9843893502d8ce924d0890adfcf5db2a7e5"
+  },
+  {
+   "logical_id": "o2:1",
+   "outcome": "o2",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 64,
+   "statuses": [
+    "ready",
+    "running",
+    "blocked",
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "f214da89304c452bff6453b2850810bdfa5dea1549c81d3e79dfc3e0654660f2"
+  }
+ ],
+ "effects": [
+  {
+   "logical_id": "C06:o1:publish",
+   "root": "o1",
+   "at": 34
+  }
+ ],
+ "human_ops": [
+  {
+   "at": 0,
+   "class": "stimulus",
+   "kind": "project_request"
+  },
+  {
+   "at": 33,
+   "class": "required",
+   "kind": "approval",
+   "approval_id": "01M6NC5FBPHEG2KK44YMBVQSFZ",
+   "decision": "once"
+  },
+  {
+   "at": 67,
+   "class": "required",
+   "kind": "approval",
+   "approval_id": "01M6NC6GP838TTZ2ANWJYBWS54",
+   "decision": "denied"
+  }
+ ],
+ "faults": [
+  {
+   "at": 32,
+   "kind": "approval_wait",
+   "approval_id": "01M6NC5FBPHEG2KK44YMBVQSFZ"
+  },
+  {
+   "at": 66,
+   "kind": "approval_wait",
+   "approval_id": "01M6NC6GP838TTZ2ANWJYBWS54"
+  }
+ ],
+ "invocations": [
+  {
+   "at": 31,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 32,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 33,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 36,
+   "role": "reviewer",
+   "usage": null
+  },
+  {
+   "at": 39,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 39,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 65,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 67,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 68,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 70,
+   "role": "reviewer",
+   "usage": null
+  },
+  {
+   "at": 72,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 72,
+   "role": "cos",
+   "usage": null
+  }
+ ],
+ "actors": [
+  {
+   "actor": "human",
+   "at": 0
+  },
+  {
+   "actor": "worker",
+   "at": 31
+  },
+  {
+   "actor": "cos",
+   "at": 32
+  },
+  {
+   "actor": "worker",
+   "at": 33
+  },
+  {
+   "actor": "reviewer",
+   "at": 36
+  },
+  {
+   "actor": "cos",
+   "at": 39
+  },
+  {
+   "actor": "cos",
+   "at": 39
+  },
+  {
+   "actor": "worker",
+   "at": 65
+  },
+  {
+   "actor": "cos",
+   "at": 67
+  },
+  {
+   "actor": "worker",
+   "at": 68
+  },
+  {
+   "actor": "reviewer",
+   "at": 70
+  },
+  {
+   "actor": "cos",
+   "at": 72
+  },
+  {
+   "actor": "cos",
+   "at": 72
+  }
+ ],
+ "statements": [],
+ "questions": [],
+ "cos_launch_rejected": 0,
+ "running_untracked": 0,
+ "achieved_at": null,
+ "events_append_only": true,
+ "usage": {
+  "tokens": null,
+  "quota": null,
+  "wall_secs": 106,
+  "missing": null
+ },
+ "virtual_secs_to_reach": null
+}

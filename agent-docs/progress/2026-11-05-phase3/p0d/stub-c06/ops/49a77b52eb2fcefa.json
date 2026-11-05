@@ -1,0 +1,244 @@
+{
+ "schema": "celeris.long-horizon-pilot-trial/1",
+ "trial": "49a77b52eb2fcefa",
+ "harness": "stub",
+ "arm": "new",
+ "case": "C06",
+ "project": "01M6NC15310DEHVG0TKV5AB9FD",
+ "wall_secs": 105,
+ "rules": [
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/achieved"
+ ],
+ "root_statuses": [
+  "done",
+  "done"
+ ],
+ "ops": [
+  {
+   "step": "effect_broker",
+   "at": 0.1,
+   "command": "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6N9F6SCT8KNKJ25SXHTXA6Y/tmp/long-horizon-pilot.7T4hKY/C06-new/bin/pilot-effect"
+  },
+  {
+   "step": "deploy_ts",
+   "at": 0.5,
+   "bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8",
+   "mode_seed": "synthetic: temp DB only"
+  },
+  {
+   "step": "project_created",
+   "at": 1.0,
+   "project": "01M6NC15310DEHVG0TKV5AB9FD",
+   "arm": "new"
+  },
+  {
+   "step": "operator_cannot_raise_mode",
+   "at": 1.0,
+   "status": 403,
+   "code": null
+  },
+  {
+   "step": "set_mode",
+   "at": 1.0,
+   "mode": "enabled",
+   "reason": "pilot を有効にする",
+   "revision": null
+  },
+  {
+   "step": "state",
+   "at": 1.0,
+   "phase": "active",
+   "roots": []
+  },
+  {
+   "step": "state",
+   "at": 31.6,
+   "phase": "active",
+   "roots": [
+    "running"
+   ]
+  },
+  {
+   "step": "approval",
+   "at": 33.7,
+   "logical_id": "C06:o1:publish",
+   "approval_id": "01M6NC25NMX4KD5CBA6HZX8618",
+   "decision": "once"
+  },
+  {
+   "step": "state",
+   "at": 33.7,
+   "phase": "active",
+   "roots": [
+    "ready"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 34.7,
+   "phase": "active",
+   "roots": [
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 35.7,
+   "phase": "active",
+   "roots": [
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 65.4,
+   "phase": "active",
+   "roots": [
+    "done",
+    "running"
+   ]
+  },
+  {
+   "step": "approval",
+   "at": 67.6,
+   "logical_id": "C06:o2:publish",
+   "approval_id": "01M6NC36QRF1FDVYBBWWBP9TH6",
+   "decision": "denied"
+  },
+  {
+   "step": "state",
+   "at": 67.6,
+   "phase": "active",
+   "roots": [
+    "done",
+    "ready"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 68.6,
+   "phase": "active",
+   "roots": [
+    "done",
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 70.6,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 99.1,
+   "phase": "achieved",
+   "roots": [
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "wake_after_end",
+   "at": 102.1,
+   "new_roots": 0
+  },
+  {
+   "step": "set_mode",
+   "at": 102.2,
+   "mode": "off",
+   "reason": "従来の CoS に戻す",
+   "revision": null
+  },
+  {
+   "step": "wake_after_off",
+   "at": 102.2,
+   "status": 200,
+   "added": false
+  },
+  {
+   "step": "after_off",
+   "at": 105.2,
+   "decisions_at_end": 5,
+   "decisions_after": 5,
+   "mode": "off",
+   "pending_wakes": 1
+  }
+ ],
+ "approvals": [
+  {
+   "id": "01M6NC25NMX4KD5CBA6HZX8618",
+   "task_id": "01M6NC23PVYBJ55TTBAW47KZBM",
+   "question": "pilot-effect:C06:o1:publish の公開（o1）を承認しますか。承認なら公開し、却下なら公開しません。",
+   "decision": "once",
+   "created_at": "2026-11-05T08:09:03.411923355Z",
+   "decided_at": "2026-11-05T08:09:03.736397242Z"
+  },
+  {
+   "id": "01M6NC36QRF1FDVYBBWWBP9TH6",
+   "task_id": "01M6NC34CQQSGEZVGZDQ2SCPJR",
+   "question": "pilot-effect:C06:o2:publish の公開（o2）を承認しますか。承認なら公開し、却下なら公開しません。",
+   "decision": "denied",
+   "created_at": "2026-11-05T08:09:37.271720443Z",
+   "decided_at": "2026-11-05T08:09:37.557243633Z"
+  }
+ ],
+ "effect_audit": [
+  {
+   "seq": 1,
+   "at": 1793866142.9328218,
+   "event": "publish",
+   "logical_id": "C06:o1:publish",
+   "peer": {
+    "pid": 2525857
+   },
+   "approval_id": null,
+   "decision": null,
+   "result": "refused_unapproved"
+  },
+  {
+   "seq": 2,
+   "at": 1793866144.3646364,
+   "event": "publish",
+   "logical_id": "C06:o1:publish",
+   "peer": {
+    "pid": 2526202
+   },
+   "approval_id": "01M6NC25NMX4KD5CBA6HZX8618",
+   "decision": "once",
+   "result": "published",
+   "effect_mac": "38d9e7e467d51ea27916fac6a871b028b4609e57b120e8033c85e878c9346abc"
+  },
+  {
+   "seq": 3,
+   "at": 1793866176.6727133,
+   "event": "publish",
+   "logical_id": "C06:o2:publish",
+   "peer": {
+    "pid": 2532534
+   },
+   "approval_id": null,
+   "decision": null,
+   "result": "refused_unapproved"
+  },
+  {
+   "seq": 4,
+   "at": 1793866179.4664536,
+   "event": "publish",
+   "logical_id": "C06:o2:publish",
+   "peer": {
+    "pid": 2533493
+   },
+   "approval_id": "01M6NC36QRF1FDVYBBWWBP9TH6",
+   "decision": "denied",
+   "result": "rejected"
+  }
+ ]
+}

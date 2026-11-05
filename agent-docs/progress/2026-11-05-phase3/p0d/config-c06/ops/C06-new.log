@@ -1,0 +1,26 @@
+pilot: effect_broker {"command": "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6N9F6SCT8KNKJ25SXHTXA6Y/tmp/long-horizon-pilot.xdJanO/C06-new/bin/pilot-effect"}
+pilot: deploy_ts {"bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8", "mode_seed": "synthetic: temp DB only"}
+pilot: project_created {"project": "01M6NC4FAE9G31NDZHZDZCKN2D", "arm": "new"}
+pilot: HTTP 403 PUT /api/v1/projects/01M6NC4FAE9G31NDZHZDZCKN2D/controller: {"type":"urn:celeris:problem:project_controller_mode_requires_human","title":"project controller mode requires human","status":403,"detail":"only a person may raise the project controller mode; others may only turn it off","code":"project_controller_mode_requires_human","instance":"urn:celeris:request:01M6NC4GN8RM70FBSAZSBMWKNH"}
+pilot: operator_cannot_raise_mode {"status": 403, "code": null}
+pilot: set_mode {"mode": "enabled", "reason": "pilot を有効にする", "revision": null}
+pilot: state {"phase": "active", "roots": []}
+pilot: state {"phase": "active", "roots": ["running"]}
+pilot: approval {"logical_id": "C06:o1:publish", "approval_id": "01M6NC5FBPHEG2KK44YMBVQSFZ", "decision": "once"}
+pilot: state {"phase": "active", "roots": ["ready"]}
+pilot: state {"phase": "active", "roots": ["running"]}
+pilot: state {"phase": "active", "roots": ["reviewing"]}
+pilot: state {"phase": "active", "roots": ["done"]}
+pilot: state {"phase": "active", "roots": ["done", "ready"]}
+pilot: state {"phase": "active", "roots": ["done", "running"]}
+pilot: approval {"logical_id": "C06:o2:publish", "approval_id": "01M6NC6GP838TTZ2ANWJYBWS54", "decision": "denied"}
+pilot: state {"phase": "active", "roots": ["done", "ready"]}
+pilot: state {"phase": "active", "roots": ["done", "running"]}
+pilot: state {"phase": "active", "roots": ["done", "reviewing"]}
+pilot: state {"phase": "active", "roots": ["done", "done"]}
+pilot: state {"phase": "achieved", "roots": ["done", "done"]}
+pilot: wake_after_end {"new_roots": 0}
+pilot: set_mode {"mode": "off", "reason": "従来の CoS に戻す", "revision": null}
+pilot: wake_after_off {"status": 200, "added": false}
+pilot: after_off {"decisions_at_end": 5, "decisions_after": 5, "mode": "off", "pending_wakes": 1}
+pilot: trial 49a77b52eb2fcefa wrote /local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6N9F6SCT8KNKJ25SXHTXA6Y/tmp/p0d/full/config-c06

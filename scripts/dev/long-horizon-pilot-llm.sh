@@ -2,6 +2,7 @@
 # ADR 2026-11-04-project-controller A9・long-horizon-bench D9: 非本番の長時間 pilot を実 daemon で流す（1 本の script）。
 #
 #   bash scripts/dev/long-horizon-pilot-llm.sh --harness stub   --out <dir> [--cases C08] [--arms new,old.passive]
+#   bash scripts/dev/long-horizon-pilot-llm.sh --harness config-stub --out <dir> [--cases C06] [--arms new]
 #   LONG_HORIZON_PILOT_LLM_APPROVED=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness config \
 #       --llm-config <toml> --cos-route '<toml の配列>' [--out <dir>] [--cases C04,C06,C08,C09,C10] [--max-wall-secs 14400]
 #
@@ -12,6 +13,12 @@
 #
 # - `--harness stub` は LLM を呼ばない（scripts/dev/long-horizon-pilot/stub_harness.py）。経路の確認用で、raw を
 #   agent-docs/progress/2026-11-04-long-horizon/a9/llm/ に書かない（実 LLM の raw と混ぜない）。
+# - `--harness config-stub` は `--harness config` と同じ driver の経路（人の書く `--llm-config` をそのまま足す）に、
+#   LLM を呼ばない agent（stub_harness.py --from-objective）の TOML を渡す。agent は実 LLM と同じ入口（task の
+#   objective・acceptance）だけを読み、公開の command も objective から見つける（ADR 2026-11-05-phase3-p0d）。
+# - C06 の公開は driver が worker の外で起こす broker（long-horizon-pilot/pilot_effect.py）が記録し、承認は daemon の
+#   approvals API で人の token が決める。`LONG_HORIZON_PILOT_STUB_TAMPER=1`（stub だけ。陰性の試験）は stub に記録への
+#   書き込みを試させ、driver が observation_failed で落ちることを確かめる。
 # - `--harness config` は実 LLM。人が書いた `--llm-config`（[llm_sources]・[harnesses]・[route_defaults]・
 #   [harness_selection]・[accounts] 等）をそのまま config に足す。人の承認（LONG_HORIZON_PILOT_LLM_APPROVED=1）が
 #   要り、Celeris の worker の run の中（CELERIS_RUN_ID がある）では起こさない（ADR 2026-10-07 worker-no-subagents）。
@@ -39,7 +46,7 @@ done
 fail() { echo "long-horizon-pilot-llm: FAIL: $*" >&2; exit 1; }
 llm_dir="$root/agent-docs/progress/2026-11-04-long-horizon/a9/llm"
 case "$harness" in
-    stub)
+    stub|config-stub)
         [ -n "$out" ] || usage
         max_wall="${max_wall:-300}"
         ;;
@@ -63,7 +70,7 @@ command -v node >/dev/null || fail "node is missing"
 : "${CARGO_TARGET_DIR:?CARGO_TARGET_DIR is required}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
-if [ "$harness" = stub ]; then
+if [ "$harness" != config ]; then
     case "$out" in "$llm_dir"*) fail "stub raw must not be written to $llm_dir" ;; esac
 fi
 unset CELERIS_RUN_DB CELERIS_DB CELERIS_FOLLOWUPS_FILE CELERIS_TASK_ID CELERIS_CONFIG CELERIS_HOME \
@@ -73,7 +80,7 @@ unset CELERIS_RUN_DB CELERIS_DB CELERIS_FOLLOWUPS_FILE CELERIS_TASK_ID CELERIS_C
     -p celeris-campaign --bin celeris-campaign) || fail "build failed"
 bin="$CARGO_TARGET_DIR/debug"
 work="$(mktemp -d "${state_root:-${TMPDIR:-/tmp}}/long-horizon-pilot.XXXXXX")"
-cleanup() { rm -rf "${work:?}"; }
+cleanup() { chmod -R u+w "${work:?}" 2>/dev/null || true; rm -rf "${work:?}"; }
 trap cleanup EXIT
 if [ ! -d "$root/control-ts/node_modules" ]; then
     (cd "$root/control-ts" && pnpm install --offline --frozen-lockfile >/dev/null) || fail "control-ts dependencies are missing"
@@ -85,10 +92,35 @@ fi
 rm -rf "${out:?}/facts" "${out:?}/arm-map" "${out:?}/trials" "${out:?}/ops" "${out:?}/grade"
 if [ "$harness" = config ]; then
     extra=(--harness config --llm-config "$llm_config" --cos-route "$cos_route" --cos-max-turns 40 --cos-max-wall 1800)
+elif [ "$harness" = config-stub ]; then
+    # 実 LLM の代わりの agent を config harness の TOML として書く（LLM は呼ばない）。
+    agent="$root/scripts/dev/long-horizon-pilot/stub_harness.py"
+    cat >"$work/config-stub.toml" <<TOML
+[adapters.fake]
+command = ["python3", "-I", "$agent", "--from-objective"]
+
+[llm_sources.local]
+kind = "fake"
+accounts = ["a1"]
+models = ["model-1"]
+
+[harnesses.claude_code]
+kind = "fake"
+api_formats = ["fake"]
+source_kinds = ["fake"]
+
+[route_defaults.claude_code]
+candidates = [{ source = "local", model = "model-1" }]
+
+[harness_selection]
+execution_class_defaults = {}
+rules = [{ harness = "claude_code", required_capabilities = [] }]
+TOML
+    extra=(--harness config --llm-config "$work/config-stub.toml" --cos-route '[{ source = "local", model = "model-1" }]')
 else
     extra=(--harness stub)
-    # 陰性の試験用: stub が承認を待たずに publish を記録する（effect_before(approval, effect) が落ちる）。
-    [ "${LONG_HORIZON_PILOT_STUB_EARLY_PUBLISH:-}" != 1 ] || extra+=(--stub-early-publish)
+    # 陰性の試験用: stub が効果の記録に偽の行を足そうとする（driver は observation_failed で落ちる）。
+    [ "${LONG_HORIZON_PILOT_STUB_TAMPER:-}" != 1 ] || extra+=(--stub-tamper)
 fi
 for case in ${cases//,/ }; do
     for arm in ${arms//,/ }; do

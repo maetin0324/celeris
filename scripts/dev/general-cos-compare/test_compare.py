@@ -125,6 +125,17 @@ class Preflight(Base):
             r = self.preflight("--tier", "llm", "--llm-config", str(self.cfg), "--approval", ap, env=env)
             self.assertEqual(r.returncode, 2, r.stdout)
 
+    def test_approved_by_must_be_a_human_principal(self):
+        env = {"CELERIS_RUN_ID": ""}
+        for who in ("claude", "reviewer", "rmaeda", "human:", "human: rmaeda", "operator:claude-code", "Human:x"):
+            r = self.preflight("--tier", "llm", "--llm-config", str(self.cfg), "--approval",
+                               self.approval(approved_by=who), env=env)
+            self.assertEqual(r.returncode, 2, who)
+            self.assertIn("approved_by human:<name>", r.stdout, who)
+        r = self.preflight("--tier", "llm", "--llm-config", str(self.cfg), "--approval",
+                           self.approval(approved_by="human:rmaeda"), env=env)
+        self.assertNotIn("approved_by human:<name>", r.stdout)
+
     def test_approved_trials_below_the_plan_is_refused(self):
         ap = self.approval(limits={"max_trials": 8, "max_tokens": 1, "max_wall_secs": 1, "max_usd": 1})
         r = self.preflight("--tier", "llm", "--llm-config", str(self.cfg), "--approval", ap, env={"CELERIS_RUN_ID": ""})
@@ -157,6 +168,64 @@ def raw(case, kind, replies, ops=(), created=(), seed=(), other=()):
     transcript += [{"seq": i + 2, "role": "assistant", "text": t} for i, t in enumerate(replies)]
     return {"case": case, "kind": kind, "transcript": transcript, "cos_operations": list(ops),
             "tasks_created": list(created), "seed_task_ids": list(seed), "other_threads": list(other)}
+
+
+class Limits(Base):
+    """runner は token・壁時計・USD のどれかが上限に達したら、残りの試行を始めない。"""
+
+    def test_stop_reason(self):
+        lim = {"max_tokens": 100, "max_wall_secs": 60, "max_usd": 2.0}
+        ok = {"tokens": 99, "wall": 59.0, "usd": 1.99, "usd_unknown_trials": 0}
+        self.assertIsNone(compare.stop_reason("llm", ok, lim))
+        self.assertEqual(compare.stop_reason("llm", {**ok, "tokens": 100}, lim), "max_tokens")
+        self.assertEqual(compare.stop_reason("llm", {**ok, "wall": 60.0}, lim), "max_wall_secs")
+        self.assertEqual(compare.stop_reason("llm", {**ok, "usd": 2.0}, lim), "max_usd")
+        self.assertEqual(compare.stop_reason("llm", {**ok, "usd_unknown_trials": 1}, lim), "usd_unknown")
+        # stub は費用が無い（null）ので、費用の不明では止めない
+        self.assertIsNone(compare.stop_reason("stub", {**ok, "usd_unknown_trials": 1}, lim))
+
+    def run_with(self, costs, max_usd):
+        """daemon を起こさず、試行を偽物に差し替えて run の打ち切りを確かめる。"""
+        self.pin()
+        r = cli("plan", "--out", str(self.dir / "p.json"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        limits = {**json.loads((compare.FIX / "limits.json").read_text()), "max_usd": max_usd}
+        (self.dir / "limits.json").write_text(json.dumps(limits))
+        it = iter(costs)
+        home = self.dir
+
+        class FakeTrial:
+            def __init__(self, a, manifest, trial, case, lim):
+                self.trial, self.home, self.secret_dir, self.ops = trial, home / f"h{trial['seq']}", home / "s", []
+
+            def run(self):
+                return {"seq": self.trial["seq"], "tier": "llm", "usage": {k: 1 for k in compare.USAGE_KEYS},
+                        "trial_secs": 1, "cost_usd": next(it), "ended_by": "quiet"}
+
+            def stop(self):
+                pass
+
+        saved = compare.Trial, compare.preflight_checks
+        compare.Trial, compare.preflight_checks = FakeTrial, lambda a: ([], {})
+        try:
+            args = type("A", (), dict(tier="llm", manifest=str(self.dir / "m.json"), plan=str(self.dir / "p.json"),
+                                      limits=str(self.dir / "limits.json"), approval=None, only=None,
+                                      out=str(self.dir / "out"), keep_state=False))()
+            compare.run(args)
+        finally:
+            compare.Trial, compare.preflight_checks = saved
+        return json.loads((self.dir / "out" / "run-summary.json").read_text())
+
+    def test_run_stops_when_usd_reaches_the_limit(self):
+        s = self.run_with([0.6, 0.6, 0.6, 0.6] + [0.0] * 40, max_usd=1.5)
+        self.assertEqual(len(s["trials"]), 3)
+        self.assertEqual(s["stopped"]["reason"], "max_usd")
+        self.assertAlmostEqual(s["spent"]["usd"], 1.8)
+
+    def test_run_stops_when_cost_is_unknown(self):
+        s = self.run_with([0.1, None] + [0.0] * 40, max_usd=20)
+        self.assertEqual(len(s["trials"]), 2)
+        self.assertEqual(s["stopped"]["reason"], "usd_unknown")
 
 
 class AutoGrade(unittest.TestCase):

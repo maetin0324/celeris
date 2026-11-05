@@ -56,7 +56,7 @@ skill・prompt の source（`cos_chat.rs`・`preamble.rs`・`cos_chat/launch.rs`
 `--tier llm` は次の 3 つで exit 2 を返した: Celeris の worker の run の中（`CELERIS_RUN_ID` がある）、人の承認 file が無い、`--llm-config` が無い。試験 `test_compare.py` は、cos を名乗る承認・上限の欠け・計画より少ない承認試行数・pin 後の binary の変更・対でない計画・本番の dir への出力も exit 2 になること、承認があり worker の外なら exit 0 になることを確かめる。
 
 ## 人に示す上限の候補（未承認）
-`tests/fixtures/general-cos-eval/limits.json`: 32 試行（8 課題 × 2 腕 × 2 回）、100 万 token（input+output+cache read+cache creation の合計）、2 時間（7,200 秒）、20 USD 相当、1 試行 600 秒。どれかに達したら残りの試行を始めない。単価を確認していないので 20 USD は見積もりではなく停止の上限。
+`tests/fixtures/general-cos-eval/limits.json`: 32 試行（8 課題 × 2 腕 × 2 回）、100 万 token（input+output+cache read+cache creation の合計）、2 時間（7,200 秒）、20 USD 相当、1 試行 600 秒。どれかに達したら残りの試行を始めない（attempt 3 で USD も打ち切りに入れた。下の「attempt 3」節）。USD は task_core の静的単価表による推定で、請求額は確認していない。
 
 人が決めること:
 1. 実施の可否と account・model・harness（例: claude_max_personal・sonnet・claude_code）。
@@ -75,13 +75,14 @@ skill・prompt の source（`cos_chat.rs`・`preamble.rs`・`cos_chat/launch.rs`
 - `p4e: 進捗と stub 段の raw を書く`
 - `p4e: 進捗の表から hash に見える内容 hash を除く`
 - `p4e: 進捗に文書の検査の結果を書く`
+- `p4e: USD の上限で試行を止め、承認者を human: の主体に限る`
 
 主な file: `scripts/dev/general-cos-compare/compare.py`（pin・plan・preflight・run・grade-sheet・grade-auto・observations）、`scripted_cos.py`（stub の CoS と worker）、`test_compare.py`、`scripts/dev/general_cos_eval.py`（v2 に置き換え、v1 の行は拒否）、`tests/fixtures/general-cos-eval/{cases,arms,limits}.json`。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - `bash scripts/dev/test-affected.sh` → exit 0。「試験対象の変更なし（docs のみ等）」。Rust の変更は無い。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- `python3 scripts/dev/test_general_cos_eval.py` → exit 0、13 tests OK。`python3 scripts/dev/general-cos-compare/test_compare.py` → exit 0、17 tests OK。
+- `python3 scripts/dev/test_general_cos_eval.py` → exit 0、13 tests OK。`python3 scripts/dev/general-cos-compare/test_compare.py` → exit 0、21 tests OK（attempt 3 で 4 件を足した）。
 - `cargo nextest run --workspace -E 'test(milestone_lifecycle_endpoints_are_gone)'` → 1 passed（旧 milestones API の 410 は維持）。
 - `sh scripts/dev/progress-index.sh --check`・`sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`git diff --check refs/heads/main`・`test -f agent-docs/progress/2026-11-05-phase4/p4e.md` → すべて exit 0。progress-index は最初、表の内容 hash の先頭 12 桁を commit hash とみなして exit 1 だった。manifest の欄の参照に置き換えて直した。
 
@@ -89,6 +90,16 @@ skill・prompt の source（`cos_chat.rs`・`preamble.rs`・`cos_chat/launch.rs`
 - 試行の daemon が host の `~/.local/celeris/releases` を読み、未昇格の release が受信箱に入って CoS run が増えた。`[selfdeploy] releases_dir` と `[maintenance] disk_watch = []` を試行の dir に向けて直した。
 - seed の task の完了・失敗の知らせで CoS が起動し、課題の前の返事を課題の返事と数えた。seed を CoS 無効の daemon で作り、静かになった後の seq を基準にして直した（実 LLM で seed の分を消費しないためでもある）。
 - 委譲の試行で、終わりの判定の直後に完了の知らせの一次対応が起きる回と起きない回があった（新腕 r1 だけ CoS run 4、r2 は 2）。終わりの後に 5 秒続けて静かになるまで待ってから集めるように直し、両腕・両回で 4 に揃った。
+
+## attempt 3（review の差し戻し 2 件の修正）
+1. USD の上限が効かなかった。`compare.py` の `run` は token と壁時計しか見ず、原票の `cost_usd` は常に null だった。直した内容:
+   - 原票の `cost_usd` は、CoS chat run と worker・reviewer の run の `usage.cost_usd` の合計にした。`usage.cost_usd` は task_core の静的単価表の推定で、請求額ではない（請求額は確認していない）。`cost_usd` の無い run が 1 件でもあれば null にし、`cost_unknown_runs` に件数を書く。stub は null のまま。
+   - `stop_reason` が token・壁時計・USD の順に上限を見る。実 LLM で費用が null の試行が 1 件でもあれば `usd_unknown` で残りの試行を始めない（fail closed）。打ち切りの理由は `run-summary.json` の `stopped.reason`、累計は `spent.usd`・`spent.usd_unknown_trials` に出る。
+   - `observations` の `cost_usd` は原票の値を写す（以前は null 固定）。
+   - 注意: 承認者が単価表に無い model を選ぶと、最初の試行の後に `usd_unknown` で止まる。実 LLM の前の 1 対（提案 1）で `cost_usd` が埋まることを確かめる。
+2. 承認者の検査が緩かった。`approved_by` は正規表現 `human:[^\s:]+` に一致するときだけ通す。`claude`・`reviewer`・`rmaeda`・`human:`・`human: rmaeda`・`operator:claude-code`・`Human:x` は exit 2。
+- 試験（`test_compare.py` に 4 件）: `test_approved_by_must_be_a_human_principal`、`Limits.test_stop_reason`、`Limits.test_run_stops_when_usd_reaches_the_limit`（0.6 USD の試行 3 件で上限 1.5 に達し、4 件目を始めない）、`Limits.test_run_stops_when_cost_is_unknown`（2 件目の費用が null で止まる）。run の試験は試行を偽物に差し替え、daemon と LLM を起こさない。
+- ADR D5 と `limits.json` の note を同じ内容に直した。stub 段の raw（`p4e/stub/`）は修正前のコードの出力で、`run-summary.json` に `spent.usd` は無い。stub の費用は元から null で、採点と集計の数値は変わらない。
 
 ## 境界の確認
 - 実 LLM・有料 API・本番の DB/config/daemon・systemctl・promote・本番 shadow・24〜72 時間の稼働はしていない。試行は `$TMPDIR` の一時 home・一時 DB・loopback の daemon と fake harness だけ。CPU を焼く負荷はかけていない。

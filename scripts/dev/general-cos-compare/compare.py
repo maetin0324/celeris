@@ -25,6 +25,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import pathlib
 import secrets
 import shutil
@@ -220,7 +221,7 @@ def preflight_checks(args):
                     problems.append(f"approval.limits.{key} must be a positive number")
                 elif al[key] < limits[key] and key == "max_trials" and len(the_plan["trials"]) > al[key]:
                     problems.append(f"plan exceeds approved max_trials {al[key]}")
-            if str(ap.get("approved_by", "")).startswith(("cos", "operator", "agent")):
+            if not re.fullmatch(r"human:[^\s:]+", str(ap.get("approved_by", ""))):
                 problems.append("approval must be by a human (approved_by human:<name>)")
         if not args.llm_config or not pathlib.Path(args.llm_config).is_file():
             problems.append("--llm-config <toml> is required for --tier llm")
@@ -548,6 +549,8 @@ disk_watch = []
         usage = {k: 0 for k in USAGE_KEYS}
         usage_null = 0
         threads = {}
+        cost = 0.0
+        cost_unknown = 0  # cost_usd を持たない run（usage が無い・単価表に無い model）。1 件でもあれば費用は不明
         for r in cos_runs:
             threads[r.get("thread_id")] = threads.get(r.get("thread_id"), 0) + 1
             u = json.loads(r["usage_json"]) if r.get("usage_json") else None
@@ -556,6 +559,10 @@ disk_watch = []
                     usage[k] += int(u.get(k) or 0)
             elif self.a.tier == "llm":
                 usage_null += 1
+            if isinstance((u or {}).get("cost_usd"), (int, float)):
+                cost += float(u["cost_usd"])
+            else:
+                cost_unknown += 1
         tasks_after = [dict(r) for r in conn.execute("SELECT id, status, created_at FROM tasks ORDER BY created_at")]
         created = [t for t in tasks_after if t["id"] not in self.pre_tasks]
         worker_runs = [dict(r) for r in conn.execute(
@@ -563,6 +570,12 @@ disk_watch = []
         trial_runs = [r for r in worker_runs if r["run_id"] not in self.pre_runs]
         worker_usage = {k: sum(int((json.loads(r["usage_json"]) if r["usage_json"] else {}).get(k) or 0)
                                for r in trial_runs) for k in USAGE_KEYS}
+        for r in trial_runs:
+            u = json.loads(r["usage_json"]) if r["usage_json"] else {}
+            if isinstance(u.get("cost_usd"), (int, float)):
+                cost += float(u["cost_usd"])
+            else:
+                cost_unknown += 1
         ops_rows = [dict(r) for r in conn.execute(
             "SELECT thread_id, action, target_kind, target_id, state, created_at FROM cos_operations "
             "ORDER BY created_at")]
@@ -586,12 +599,30 @@ disk_watch = []
             # stub の CoS は usage を返さない。0 と書かず欠測（null）にする。実 LLM で null の run が 1 件でもあれば null。
             "usage": None if usage_null or self.a.tier != "llm" else usage, "usage_null_runs": usage_null,
             "usage_missing_reason": "tier=stub" if self.a.tier != "llm" else (f"cos_usage_null:{usage_null}" if usage_null else None),
+            # USD は CoS と worker・reviewer の全 run の usage.cost_usd（task_core の静的単価表の推定）の合計。
+            # 1 run でも cost_usd が無ければ null（runner は費用の上限を守れないので残りの試行を始めない）。
+            "cost_usd": None if self.a.tier != "llm" or cost_unknown else round(cost, 6),
+            "cost_unknown_runs": cost_unknown if self.a.tier == "llm" else None,
             "cos_operations": ops_rows, "stub_log": tool_lines,
             "handoff_messages": handoffs, "human_interventions": 1,  # 人の発言は課題の 1 回だけ（追加の介入は無い）
             "first_reply_secs": None if first_reply is None else round(first_reply - sent, 3),
             "wall_seconds": round(end - sent, 3), "ended_by": ended_by, "trial_secs": round(time.time() - t0, 3),
             "ops": self.ops,
         }
+
+
+def stop_reason(tier, spent, limits):
+    """残りの試行を始めない理由（無ければ None）。token・壁時計・USD のどれかが上限に達したら止める。
+    実 LLM で費用が分からない試行が 1 件でもあれば、USD の上限を守れないので止める（fail closed）。"""
+    if spent["tokens"] >= limits["max_tokens"]:
+        return "max_tokens"
+    if spent["wall"] >= limits["max_wall_secs"]:
+        return "max_wall_secs"
+    if spent["usd"] >= limits["max_usd"]:
+        return "max_usd"
+    if tier == "llm" and spent["usd_unknown_trials"]:
+        return "usd_unknown"
+    return None
 
 
 def run(args):
@@ -609,14 +640,15 @@ def run(args):
     out = pathlib.Path(args.out).resolve()
     (out / "raw").mkdir(parents=True, exist_ok=True)
     only = {int(s) for s in args.only.split(",")} if args.only else None
-    spent = {"tokens": 0, "wall": 0.0}
+    spent = {"tokens": 0, "wall": 0.0, "usd": 0.0, "usd_unknown_trials": 0}
     stopped = None
     done = []
     for trial in the_plan["trials"]:
         if only and trial["seq"] not in only:
             continue
-        if spent["tokens"] >= limits["max_tokens"] or spent["wall"] >= limits["max_wall_secs"]:
-            stopped = {"at_seq": trial["seq"], "spent": spent}
+        reason = stop_reason(args.tier, spent, limits)
+        if reason:
+            stopped = {"at_seq": trial["seq"], "reason": reason, "spent": dict(spent)}
             break
         name = f"{trial['seq']:02d}-{trial['case']}-{trial['arm']}-r{trial['repeat']}"
         t = Trial(args, manifest, trial, cases[trial["case"]], limits)
@@ -635,6 +667,10 @@ def run(args):
         u = raw.get("usage") or {}
         spent["tokens"] += sum(u.get(k, 0) for k in USAGE_KEYS)
         spent["wall"] += raw.get("trial_secs") or 0
+        if isinstance(raw.get("cost_usd"), (int, float)):
+            spent["usd"] += raw["cost_usd"]
+        elif args.tier == "llm":
+            spent["usd_unknown_trials"] += 1
         done.append({"name": name, "error": raw.get("error"), "ended_by": raw.get("ended_by")})
         print(json.dumps(done[-1], ensure_ascii=False), flush=True)
         if not args.keep_state:
@@ -766,7 +802,7 @@ def observations(args):
             "tokens": None if u is None else u["input_tokens"] + u["output_tokens"],
             "cache_read_tokens": None if u is None else u["cache_read_tokens"],
             "cache_creation_tokens": None if u is None else u["cache_creation_tokens"],
-            "cost_usd": None, "handoffs": raw["handoff_messages"], "human_interventions": raw["human_interventions"],
+            "cost_usd": raw.get("cost_usd"), "handoffs": raw["handoff_messages"], "human_interventions": raw["human_interventions"],
         }
         rows.append(row)
     with open(args.out, "w", encoding="utf-8") as f:

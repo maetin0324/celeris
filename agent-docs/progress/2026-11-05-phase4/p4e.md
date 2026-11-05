@@ -16,10 +16,10 @@ completed: 2026-11-05
 - 相談 12 試行は人の採点が要るので観測に入れていない（欠測）。stub の返事は台本なので、相談の深さを stub で測る意味は無い。
 
 ## 腕の固定（manifest は `p4e/manifest.json`）
-| 腕 | rev の規則 | 件名 | skill `cos-operator` の hash（先頭 12） | consult.md |
+| 腕 | rev の規則 | 件名 | skill `cos-operator` の内容 hash | consult.md |
 |---|---|---|---|---|
-| old | 件名「a4: 統括 CoS の相談・短い読取・委譲」の最古の commit の親 | 「a2: runner の不変条件の関数型に別名を付ける（clippy）、進捗の件数を直す」 | d45913d29dc2 | 無し |
-| new | 測定時の HEAD（今回は `git merge-base HEAD main` と同じ） | 「p4a: test-affected の host 依存の失敗を進捗に書く」 | aab69d2ef5a3 | 有り |
+| old | 件名「a4: 統括 CoS の相談・短い読取・委譲」の最古の commit の親 | 「a2: runner の不変条件の関数型に別名を付ける（clippy）、進捗の件数を直す」 | manifest の `arms.old.skills` | 無し |
+| new | 測定時の HEAD（今回は `git merge-base HEAD main` と同じ） | 「p4a: test-affected の host 依存の失敗を進捗に書く」 | manifest の `arms.new.skills`（旧と異なる） | 有り |
 
 skill・prompt の source（`cos_chat.rs`・`preamble.rs`・`cos_chat/launch.rs`）・binary の hash はどれも旧新で異なる（`differs` 全て true）。旧腕の binary は一時 worktree で `cargo build -p celeris --bin celeris` した（83 秒、Celeris が渡した `CARGO_TARGET_DIR` の下の `p4e-old`）。
 

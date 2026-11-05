@@ -24,6 +24,7 @@ completed: 2026-11-05
 ## 変更（commit 件名）
 - `p4f: daemon の process_memory の log 行と、実 daemon 全体の soak driver・fake harness・試験を足す`
 - `p4f: 26 分・4 条件の実 daemon soak と before/after の raw、集計の窓と RssAnon の傾き、ADR と進捗を足す`
+- `p4f: 提出時の HEAD の検査の結果を進捗に書く`
 
 | 場所 | 内容 |
 |---|---|
@@ -107,7 +108,8 @@ completed: 2026-11-05
 - 上の 26 分の command → exit 0、4 条件とも stop `wall`。7 分の before/after → exit 0。
 - `bash scripts/dev/test-affected.sh` → exit 0（7,757 tests run: 7,757 passed、22 skipped、script bundle SKIP 0 件、test-ts-verify 20 passed。`process_memory_*` 3 件と `project_controller_soak_72h_*` 3 件を含む）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- `test -f agent-docs/progress/2026-11-05-phase4/p4f.md` → exit 0。`sh scripts/dev/progress-index.sh --check` → 結果は報告に書く。
+- `test -f agent-docs/progress/2026-11-05-phase4/p4f.md` → exit 0。`sh scripts/dev/progress-index.sh --check` → exit 0。`check-doc-layout.sh scripts/dev/docs-layout.tsv`・`check-doc-links.sh`・`check-adr-numbers.sh` → exit 0。
+- test-affected・clippy・fmt・unittest は 2 つ目の commit の後の HEAD で再実行し、同じ結果だった（test-affected 7,757 passed、22 skipped）。
 
 ## 失敗ケース（この run の中で起きて直したもの）
 1. 最初の smoke で chat の POST が 422（`mode`・`resume_queue` の欄が要る）。失敗のたびに予定を進めなかったため 120 秒で 1,423 回送った。予定を先に進めてから送るように直し、欄を足した。

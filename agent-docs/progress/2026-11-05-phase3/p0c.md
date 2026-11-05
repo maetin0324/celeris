@@ -39,7 +39,7 @@ updated: 2026-11-05
 - 不十分な解（K14）: `..._rejects_insufficient_outputs_in_all_cases` が全 10 課題・全 Outcome で、空の木と 13 種（空 file・v1 の固定行・自己申告の文・`incomplete`・別課題の case・別 Outcome・status failed・別課題の evidence・evidence 欠け・status の矛盾・JSON の非文字列・UTF-8 でない・64 KiB 超）を落とす。symlink と dir は `..._rejects_symlinks_and_dirs`。v1 の実 LLM の木（a9/llm）は v2 の契約も満たさない（`..._v1_llm_trees_do_not_meet_the_contract`）。
 - 再採点（K42）: `long_horizon_bench_v2_rescoring_compares_arms_on_same_init_and_oracle` が 40 試行で、課題ごとに 4 腕の `init_digest` が 1 つ、同じ oracle、`new` が全課題 pass、対照 `ctl.null` が `outcome_reached` で落ちること、空の木なら全課題の `new` が落ちることを確かめる。
 
-v2 の集計（`p0c/grade-v2/summary.json`）。v1（`2026-11-04-long-horizon/a8b.md` の表）と同じ値:
+v2 の集計（`p0c/grade-v2/summary.json`）。v1（`2026-11-04-long-horizon/a8b.md` の表）と同じ値。closeout（P0-B・fix-replay の後の HEAD）で今の replay の grade-v2 と bytes が一致することを確かめた（下の「closeout」節）:
 
 | 腕 | oracle 合格 | 到達率 | autonomous_reach | avoidable | 無駄起票 | double effect | controller achieved | 不一致 |
 |---|---|---|---|---|---|---|---|---|
@@ -72,6 +72,15 @@ v2 の集計（`p0c/grade-v2/summary.json`）。v1（`2026-11-04-long-horizon/a8
 - 判断の表の `proposal_json` の規則は `proposal.explanation.rule_id` にあり、driver は最上位の `explanation` だけを読んでいた。両方を読むようにした（実 daemon での確認は P0-F）。
 - worktree の target で V8 の link が落ちた（`rusty_v8` が無い）。`$CARGO_TARGET_DIR/debug/build/v8-*` を消して作り直した。
 - `long-horizon-pilot-llm.sh` の文に未作成の dir の path を書いたら check-doc-links が落ちた。文を直した。
+
+## closeout（2026-11-05、提出時の HEAD で実行）
+基準は `git merge-base HEAD main`（main の件名「p1g: main への rebase（merge_base の局所修復）の検査の結果を書く」）。コードと raw は変えていない。
+- `bash scripts/dev/test-long-horizon-bench.sh --out "$TMPDIR/bench5"` → exit 0。replay 40 passed、grade 24 passed（`long_horizon_bench` の D8 gate を含む）、contract 9 passed。今の再生の raw と commit 済み `p0c/replay-v2` の `diff -r` は差分 0。
+- 今の再生の grade（`$TMPDIR/bench5/summary/{grades.jsonl,summary.json}`）と commit 済み `p0c/grade-v2/` の `cmp` → 2 file とも一致（exit 0）。上の表はこの grade の値。
+- CLI 採点 `cargo run -q -p celeris-campaign --bin celeris-campaign -- long-horizon-grade --tier replay --raw agent-docs/progress/2026-11-05-phase3/p0c/replay-v2 --fixtures tests/fixtures/long-horizon --out "$TMPDIR/cli6"` → exit 0（40 trials）。`grades.jsonl` は `p0c/grade-v2/grades.jsonl` と bytes 一致。CLI の `summary.json` は `"tier": "replay"` の 1 行だけ多い（CLI が tier を書くため。`grade-v2` は試験の出力）。他の行は一致。
+- 腕ごとの値（今の grade）: new は oracle 10/10・controller_achieved 8/10・avoidable 0・oracle_pass_without_achieved 2。old.passive は 3/10・0/10・avoidable 10。old.proactive は 8/10・0/10・avoidable 1・無駄起票 1。ctl.null は 2/10・0/10・avoidable 0・到達率 0.18。achieved_oracle_mismatch は全腕 0。
+- 文書検査: `python3 scripts/dev/check-architecture-map.py` → exit 0（917 path）。`bash scripts/dev/check-doc-links.sh` → exit 0。`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0。`bash scripts/dev/check-adr-numbers.sh` → exit 0（376 file）。`sh scripts/dev/progress-index.sh --check` → exit 0。
+- Phase 完了の検査（この節の commit の後に実行）: 下の「closeout の Phase 完了の検査」に書く。
 
 ## 未解決
 - `new` の C06・C10 は oracle が pass で controller が achieved でない（`oracle_pass_without_achieved` 2 件）。原因は未確認（C06 は o2 の公開が却下される課題、C10 は同じ失敗を繰り返す課題で、どちらも controller が achieved 以外の phase で終わったと推定）。I12 の欠陥（achieved なのに fail）ではないが、controller が到達を認めない側の食い違いとして P0-B・P1-G に渡す。

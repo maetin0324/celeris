@@ -1354,6 +1354,7 @@ fn delivery_skip_no_commits_is_not_attention() {
             None,
             &view_ctx(),
             OffsetDateTime::now_utc(),
+            None,
         )
         .expect("attention")
         .into_iter()
@@ -1889,6 +1890,7 @@ fn delivery_skip_attention_names_waiting_dependents() {
         None,
         &view_ctx(),
         OffsetDateTime::now_utc(),
+        None,
     )
     .expect("attention")
     .into_iter()
@@ -1899,4 +1901,168 @@ fn delivery_skip_attention_names_waiting_dependents() {
     .expect("delivery skipped item");
     assert!(summary.contains(&waiting.id.to_string()), "{summary}");
     assert!(!summary.contains(&finished.id.to_string()), "{summary}");
+}
+
+fn ask(store: &SqliteStore, task: &Task, question: &str) {
+    store
+        .append_event(
+            task.id,
+            &Event::WorkerFinished {
+                run_id: format!("run-{}", task.id),
+                outcome: format!("question: {question}"),
+                usage: None,
+                role: None,
+                metrics: None,
+                end: None,
+            },
+        )
+        .expect("question");
+}
+
+/// P4-C: `human_inbox_touching(F)` は全件の受信箱から「`task_ids` が F と交わる項目」を同じ並びで抜いたものと同じ。
+/// root と木の子（子の項目は root に触れる）・独立の質問・失敗・途中確認・browser の前提・下書き・クラスタ（task に
+/// 触れない）を混ぜ、触れた task の組み合わせごとに比べる。
+#[test]
+fn human_inbox_touching_equals_full_inbox_filtered_by_touched_tasks() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let now = OffsetDateTime::now_utc();
+    let root = sample_task(TaskKind::Execute, Status::Blocked);
+    store.insert(&root).expect("root");
+    ask(&store, &root, "root?");
+    let child = tree_child(&root, Status::Blocked, "u1", now);
+    store.insert(&child).expect("child");
+    ask(&store, &child, "child?");
+    let failed_child = tree_child(&root, Status::Failed, "u2", now);
+    store.insert(&failed_child).expect("failed child");
+    store
+        .append_event(
+            failed_child.id,
+            &Event::WorkerFinished {
+                run_id: "run-f".into(),
+                outcome: "error(retryable=false): boom".into(),
+                usage: None,
+                role: None,
+                metrics: None,
+                end: None,
+            },
+        )
+        .expect("failed");
+    let lone = sample_task(TaskKind::Execute, Status::Blocked);
+    store.insert(&lone).expect("lone");
+    ask(&store, &lone, "lone?");
+    let phase = sample_task(TaskKind::Execute, Status::Ready);
+    store.insert(&phase).expect("phase");
+    store
+        .apply_transition(phase.id, task_core::Trigger::Dispatch, None)
+        .expect("dispatch");
+    store
+        .apply_transition_with_events(
+            phase.id,
+            task_core::Trigger::PhaseGate {
+                phase: "design".into(),
+            },
+            vec![Event::PhaseReported {
+                phase: "design".into(),
+                report: Box::new(task_core::PhaseReport {
+                    phase: "design".into(),
+                    phase_title: "設計".into(),
+                    ..Default::default()
+                }),
+            }],
+        )
+        .expect("phase gate");
+    let browser = sample_task(TaskKind::Execute, Status::Ready);
+    store.insert(&browser).expect("browser");
+    let code = task_core::browser_prerequisite::BrowserPrerequisiteCode::BrowserPolicyMissing;
+    store
+        .apply_transition_with_events(
+            browser.id,
+            task_core::Trigger::BrowserPrereqBlock,
+            vec![Event::BrowserPrerequisiteBlocked {
+                code,
+                message: code.message().to_string(),
+            }],
+        )
+        .expect("browser block");
+    let draft = sample_task(TaskKind::Execute, Status::Draft);
+    store.insert(&draft).expect("draft");
+    let remote = remote_task(Status::Blocked, "pegasus");
+    store.insert(&remote).expect("remote");
+    store
+        .append_event(
+            remote.id,
+            &Event::ClusterUnavailable {
+                cluster: "pegasus".into(),
+                host: "pegasus".into(),
+                reason: "down".into(),
+            },
+        )
+        .expect("cluster");
+    ask(&store, &remote, "remote?");
+
+    let ctx = view_ctx();
+    let full =
+        crate::human_inbox::human_inbox(&store, None, &ctx, now, &no_evidence).expect("full inbox");
+    let kinds: HashSet<&str> = full.items.iter().map(|i| i.kind.as_str()).collect();
+    for kind in [
+        "question",
+        "failed",
+        "phase_gate",
+        "browser_wait",
+        "draft_accept",
+        "cluster_login",
+    ] {
+        assert!(kinds.contains(kind), "fixture has {kind}: {kinds:?}");
+    }
+    let all: Vec<TaskId> = [
+        &root,
+        &child,
+        &failed_child,
+        &lone,
+        &phase,
+        &browser,
+        &draft,
+        &remote,
+    ]
+    .iter()
+    .map(|t| t.id)
+    .collect();
+    let mut sets: Vec<Vec<TaskId>> = all.iter().map(|id| vec![*id]).collect();
+    sets.push(Vec::new());
+    sets.push(all.clone());
+    sets.push(vec![child.id, lone.id]);
+    sets.push(vec![TaskId::new()]);
+    for set in sets {
+        let touching: BTreeSet<TaskId> = set.into_iter().collect();
+        let scoped = crate::human_inbox::human_inbox_touching(
+            &store,
+            None,
+            &ctx,
+            now,
+            &no_evidence,
+            &touching,
+        )
+        .expect("scoped inbox");
+        let expected: Vec<_> = full
+            .items
+            .iter()
+            .filter(|i| i.task_ids().any(|id| touching.contains(&id)))
+            .cloned()
+            .collect();
+        assert_eq!(scoped.items, expected, "touching {touching:?}");
+        assert_eq!(scoped.counts.total as usize, expected.len());
+    }
+    // root に触れれば木の子の質問も入る（子の項目の blocking.root が root）。
+    let only_root: BTreeSet<TaskId> = [root.id].into_iter().collect();
+    let scoped =
+        crate::human_inbox::human_inbox_touching(&store, None, &ctx, now, &no_evidence, &only_root)
+            .expect("scoped");
+    assert!(
+        scoped
+            .items
+            .iter()
+            .any(|i| i.task.as_ref().map(|t| t.id) == Some(child.id)),
+        "{:?}",
+        scoped.items.iter().map(|i| &i.id).collect::<Vec<_>>()
+    );
 }

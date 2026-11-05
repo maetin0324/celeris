@@ -9,7 +9,7 @@
 //! 規則別の除外件数（`Inbox::suppressed`）をそのまま使い、規則を持たない。
 //! 受信箱は DB に行を持たない派生の一覧なので、答える操作が状態を書き換えた後の一覧には項目が構造的に現れない。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -268,9 +268,49 @@ pub fn human_inbox(
     now: OffsetDateTime,
     evidence: &dyn Fn(&Task, &str) -> Vec<EvidenceView>,
 ) -> Result<HumanInbox, OpsError> {
-    let inbox = crate::inbox::inbox(store, snapshot, ctx, now, evidence)?;
-    let by_id: HashMap<TaskId, Task> = store.list(None)?.into_iter().map(|t| (t.id, t)).collect();
+    let (inbox, by_id) = crate::inbox::inbox_parts(store, snapshot, ctx, now, evidence, None)?;
     Ok(from_inbox(&inbox, &by_id, now))
+}
+
+/// P4-C: `touching` の task に触れる項目（[`InboxItem::task_ids`] が `touching` と交わる項目）だけの受信箱。
+/// 項目・並びは [`human_inbox`] の全件から同じ条件で抜いたものと同じ（試験 `human_inbox_touching_*`）。
+/// task ごとの走査は触れた task とそれを root に持つ task だけを読むので、blocked の task の数に比例しない。
+/// `counts` は抜いた項目の数。`suppressed` は範囲内の走査の分だけ（全件の値ではない）。
+pub fn human_inbox_touching(
+    store: &dyn TaskStore,
+    snapshot: Option<&DaemonSnapshot>,
+    ctx: &ViewContext,
+    now: OffsetDateTime,
+    evidence: &dyn Fn(&Task, &str) -> Vec<EvidenceView>,
+    touching: &BTreeSet<TaskId>,
+) -> Result<HumanInbox, OpsError> {
+    let (inbox, by_id) =
+        crate::inbox::inbox_parts(store, snapshot, ctx, now, evidence, Some(touching))?;
+    let mut human = from_inbox(&inbox, &by_id, now);
+    human
+        .items
+        .retain(|item| item.task_ids().any(|id| touching.contains(&id)));
+    let mut by_kind: BTreeMap<String, u32> = BTreeMap::new();
+    for it in &human.items {
+        *by_kind.entry(it.kind.as_str().to_string()).or_default() += 1;
+    }
+    human.counts = HumanInboxCounts {
+        total: human.items.len() as u32,
+        by_kind,
+    };
+    Ok(human)
+}
+
+impl InboxItem {
+    /// 項目が触れる task（`task`・`blocking.root`・`blocking.tasks` の順。重複を除かない）。CoS の一次対応が
+    /// event に触れた task の項目を選ぶときと、[`human_inbox_touching`] の範囲の判定が使う。
+    pub fn task_ids(&self) -> impl Iterator<Item = TaskId> + '_ {
+        self.task
+            .iter()
+            .chain(self.blocking.root.iter())
+            .chain(self.blocking.tasks.iter())
+            .map(|t| t.id)
+    }
 }
 
 /// 既存の `Inbox` を D2 の共通形へ写す（純関数。`by_id` は案件 id と root の参照を引くためだけに使う）。

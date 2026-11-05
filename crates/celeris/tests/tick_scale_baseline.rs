@@ -13,10 +13,11 @@
 //! - LLM を呼ばない（fake harness の `sh`）。外部ネットワークに出ない。本番の DB・daemon に触れない（一時 DB）。
 //! - CPU を焼く負荷をかけない。負荷は DB の行の数だけで決める。既定（`0,20`）は test-affected 向けの小さい値。
 //!   ベースラインは `TICK_SCALE_BLOCKED=0,600,2000 TICK_SCALE_TICKS=5 TICK_SCALE_DISPATCHES=5` などで走らせる。
+//! - `TICK_SCALE_COND=shadow` なら `lane_rules` を compare にして本物の V8 で TS も呼ぶ（P4-C。既定は `off`）。
 //! - `TICK_SCALE_NATURAL=1` なら複写せず本物の dispatch で N 件を blocked にする（複写の妥当性の対照）。
 //! - `TICK_SCALE_RAW` があれば、その file に 1 行 1 標本の JSON（`celeris.tick-scale-baseline/1`）を追記する。
 //! - 判定には使わない計測の試験である。assert は「複写した task が全部 blocked」「dispatch が終わり run・リースが
-//!   残らない」「blocked の task は dispatch されない（数が変わらない）」だけ。
+//!   残らない」「blocked の task は dispatch されない（数が変わらない）」「挿入した task は 1 回だけ run になる」だけ。
 
 mod support;
 
@@ -190,6 +191,27 @@ fn clone_blocked(db: &rusqlite::Connection, template: &str, n: usize) -> Vec<Val
     skipped
 }
 
+/// restart の後の取り込みを待つ tick の上限（保険。1 tick で event を 8 page × 512 行読む）。
+const SETTLE_TICKS_MAX: u64 = 400;
+
+/// CoS の一次対応の event の cursor が最新の event に追いつき、受信箱の行に未処理（pending・running）が無い。
+fn settled(db: &rusqlite::Connection) -> bool {
+    let head = count(db, "SELECT coalesce(max(id), 0) FROM events");
+    let cursor: Option<String> = db
+        .query_row(
+            "SELECT value FROM feed_cursor WHERE name = 'cos_triage:events'",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    let caught_up = cursor.and_then(|c| c.parse::<i64>().ok()) == Some(head);
+    caught_up
+        && count(
+            db,
+            "SELECT count(*) FROM cos_inbox_items WHERE state IN ('pending', 'running')",
+        ) == 0
+}
+
 fn summarize(steps: &std::collections::BTreeMap<&'static str, Vec<u64>>) -> Value {
     steps
         .iter()
@@ -203,10 +225,69 @@ fn summarize(steps: &std::collections::BTreeMap<&'static str, Vec<u64>>) -> Valu
         .into()
 }
 
-async fn measure(blocked: usize, ticks: usize, dispatches: usize) {
-    let env = Env::new("lane_rules");
-    let db = rusqlite::Connection::open(&env.config.db.path).expect("db");
+/// `TICK_SCALE_COND`: `off`（既定。`[script]` なし、mode rust）か `shadow`（`lane_rules` を compare。本物の V8 で
+/// TS も呼んで比較行を書く。P1-I の `long_run_soak_shadow` と同じ）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cond {
+    Off,
+    Shadow,
+}
+
+impl Cond {
+    fn from_env() -> Self {
+        match std::env::var("TICK_SCALE_COND").as_deref() {
+            Err(_) | Ok("") | Ok("off") => Cond::Off,
+            Ok("shadow") => Cond::Shadow,
+            Ok(other) => panic!("TICK_SCALE_COND: {other}"),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Cond::Off => "off",
+            Cond::Shadow => "shadow",
+        }
+    }
+}
+
+type Policy = std::sync::Arc<dyn task_dispatch::script_policy::PolicyScript>;
+
+/// shadow の口（isolate は試験の間生かす）。bundle が作れなければ SKIP（`None`）。
+fn shadow_policy(env: &Env) -> Option<(celeris_script::ScriptRuntimeHandle, Policy)> {
+    let bundle = support::script_compare::dist_bundle("tick_scale_baseline", "lane_rules")?;
+    let (handle, policy) = support::script_compare::start_policy(
+        bundle.source(),
+        bundle.manifest.bundle_sha256.clone(),
+    );
+    let generation = env.deployed_generation(&bundle);
+    env.set_mode(
+        task_core::script_compare::ScriptMode::Compare,
+        Some(generation.id.clone()),
+    );
+    Some((handle, policy as Policy))
+}
+
+fn dispatcher_for(env: &Env, policy: Option<&Policy>) -> task_dispatch::Dispatcher {
     let mut d = env.dispatcher();
+    if let Some(p) = policy {
+        d.set_policy_script(Some(p.clone()));
+    }
+    d
+}
+
+async fn measure(blocked: usize, ticks: usize, dispatches: usize) {
+    let cond = Cond::from_env();
+    let env = Env::new("lane_rules");
+    let script = match cond {
+        Cond::Off => None,
+        Cond::Shadow => match shadow_policy(&env) {
+            Some(s) => Some(s),
+            None => return,
+        },
+    };
+    let policy = script.as_ref().map(|(_, p)| p.clone());
+    let db = rusqlite::Connection::open(&env.config.db.path).expect("db");
+    let mut d = dispatcher_for(&env, policy.as_ref());
     let mut skipped = Vec::new();
     // `TICK_SCALE_NATURAL=1`: 複写せず、本物の dispatch で N 件を blocked にする（複写の妥当性の対照。遅い）。
     let natural = std::env::var("TICK_SCALE_NATURAL").as_deref() == Ok("1");
@@ -229,16 +310,31 @@ async fn measure(blocked: usize, ticks: usize, dispatches: usize) {
     assert_eq!(blocked_rows, blocked as i64, "every clone is blocked");
     // restart と同じ形: 新しい dispatcher で測る（最初の tick は起動の照合を含むので別に記録する）。
     drop(d);
-    let mut d = env.dispatcher();
+    let mut d = dispatcher_for(&env, policy.as_ref());
     let mut totals = Vec::new();
     let mut steps: std::collections::BTreeMap<&'static str, Vec<u64>> = Default::default();
     let mut first_tick_us = 0;
+    let mut settle_ticks = 0u64;
+    let mut settle_us = 0u64;
     for i in 0..=ticks {
         let t = Instant::now();
         let report = d.tick().expect("tick");
         let us = t.elapsed().as_micros() as u64;
         if i == 0 {
             first_tick_us = us;
+            // 複写の event は CoS の一次対応の取り込みの cursor より後ろにあるので、restart の後の数 tick は
+            // その取り込み（受信箱の項目・退避）に使われる。本物の dispatch で作った状態（取り込み済み）に揃えるため、
+            // 取り込みと退避が終わるまで tick し、その回数と時間を `settle_*` に残す（P4-C）。
+            let t = Instant::now();
+            while !settled(&db) {
+                assert!(
+                    settle_ticks < SETTLE_TICKS_MAX,
+                    "triage intake did not settle"
+                );
+                d.tick().expect("settle tick");
+                settle_ticks += 1;
+            }
+            settle_us = t.elapsed().as_micros() as u64;
             continue;
         }
         totals.push(us);
@@ -254,6 +350,7 @@ async fn measure(blocked: usize, ticks: usize, dispatches: usize) {
     let mut lag = Vec::new();
     let mut dispatch_steps: std::collections::BTreeMap<&'static str, Vec<u64>> = Default::default();
     let mut dispatch_ticks = Vec::new();
+    let mut inserted = Vec::new();
     for _ in 0..dispatches {
         let t = Instant::now();
         let task = env.insert_task();
@@ -279,7 +376,23 @@ async fn measure(blocked: usize, ticks: usize, dispatches: usize) {
             dispatch_steps.entry(name).or_default().push(v);
         }
         assert!(env.store.get(task.id).expect("get").is_some());
+        inserted.push(task.id.to_string());
     }
+    // 規則の不変（P4-A ADR D2）: 挿入した task はどれも 1 回だけ run になり（取りこぼし 0・二重実行 0）、
+    // blocked の task は dispatch されない（blocked の数は挿入した task の分だけ増える。fake harness は question を返す）。
+    for id in &inserted {
+        let runs: i64 = db
+            .query_row("SELECT count(*) FROM runs WHERE task_id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .expect("runs");
+        assert_eq!(runs, 1, "task {id} ran exactly once");
+    }
+    assert_eq!(
+        count(&db, "SELECT count(*) FROM tasks WHERE status = 'blocked'"),
+        (blocked + dispatches) as i64,
+        "blocked tasks stay blocked and every inserted task blocked on its question"
+    );
     assert_eq!(
         count(&db, "SELECT count(*) FROM runs WHERE status = 'running'"),
         0,
@@ -296,6 +409,7 @@ async fn measure(blocked: usize, ticks: usize, dispatches: usize) {
     let steps_json = summarize(&steps);
     raw(&json!({
         "schema": SCHEMA,
+        "cond": cond.as_str(),
         "blocked": blocked,
         "seeding": if natural { "dispatch" } else { "sql_clone" },
         "tasks": listed,
@@ -303,18 +417,23 @@ async fn measure(blocked: usize, ticks: usize, dispatches: usize) {
         "runs_rows": count(&db, "SELECT count(*) FROM runs"),
         "not_cloned": skipped,
         "first_tick_us": first_tick_us,
+        "settle_ticks": settle_ticks,
+        "settle_us": settle_us,
         "idle_tick_us_p50": pct(&totals, 50),
         "idle_tick_us_max": totals.iter().copied().max().unwrap_or(0),
         "idle_ticks": totals.len(),
         "store_list_us": list_us,
         "dispatch_lag_ms_p50": pct(&lag, 50),
         "dispatch_lag_ms_p95": pct(&lag, 95),
+        "dispatch_lag_ms_p99": pct(&lag, 99),
         "dispatch_lag_ms_max": lag.iter().copied().max().unwrap_or(0),
         "dispatches": lag.len(),
         "dispatch_ticks": dispatch_ticks,
         "step_us": steps_json,
         "dispatch_step_us": summarize(&dispatch_steps),
     }));
+    drop(d);
+    drop(script);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

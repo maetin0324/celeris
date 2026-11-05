@@ -1,11 +1,12 @@
 //! 受信箱（`docs/api/v1/api.md` §3.2 / §5.1 / §6.2）。原則 5「人間は承認待ちキューだけを見ればよい」の画面の元データ。
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use schemars::JsonSchema;
 use serde::Serialize;
 use task_core::{
-    ArtifactRef, Check, Event, Status, Task, TaskId, TaskKind, TaskStore, WorkerHint, WorkspaceSpec,
+    ArtifactRef, Check, Event, EventRow, Status, Task, TaskId, TaskKind, TaskStore, WorkerHint,
+    WorkspaceSpec,
 };
 use time::OffsetDateTime;
 
@@ -570,6 +571,7 @@ fn build_approvals(
 fn build_questions(
     store: &dyn TaskStore,
     all_tasks: &[Task],
+    focus: Option<&HashSet<TaskId>>,
 ) -> Result<Vec<QuestionItem>, OpsError> {
     // A phase integration request has its own inbox item. Its blocked integration WU must not
     // also appear as a generic question, even though the task uses the blocked status.
@@ -613,6 +615,7 @@ fn build_questions(
     let mut items = Vec::new();
     for t in all_tasks.iter().filter(|t| {
         t.status == Status::Blocked
+            && in_focus(focus, t)
             && !browser_waiting.contains(&t.id)
             && !cluster_waiting.contains(&t.id)
     }) {
@@ -923,6 +926,152 @@ fn sort_key_for_draft_group(
     }
 }
 
+/// 受信箱の組み立ての範囲（P4-C）。`None` は全件。`Some(focus)` なら task ごとの走査（blocked・failed）は
+/// `focus` の task だけを読む。`focus` は [`focus_of`] が作る（触れた task と、それを root に持つ task）。
+fn in_focus(focus: Option<&HashSet<TaskId>>, t: &Task) -> bool {
+    focus.is_none_or(|f| f.contains(&t.id))
+}
+
+/// `touching` の task に触れる受信箱の項目（`InboxItem::task_ids` が `touching` と交わる項目）を作るのに要る task の集合。
+/// task ごとの走査で作る項目が触れる task は、その task 自身と root（`tree::root_id_of`）だけなので、
+/// 「自身か root が `touching` にある task」を読めば足りる。
+pub(crate) fn focus_of(all_tasks: &[Task], touching: &BTreeSet<TaskId>) -> HashSet<TaskId> {
+    all_tasks
+        .iter()
+        .filter(|t| touching.contains(&t.id) || touching.contains(&task_core::tree::root_id_of(t)))
+        .map(|t| t.id)
+        .collect()
+}
+
+/// ADR-0074 D2.4（Phase F3 途中確認）: 工程の後で止まった Task。期限は設けない（人の判断を待つ）。
+fn phase_checkpoint_item(
+    store: &dyn TaskStore,
+    t: &Task,
+    rows: &[EventRow],
+    events: &[(u64, Event)],
+) -> Result<Option<AttentionItem>, OpsError> {
+    let Some(info) = crate::phase_gate::latest_phase_checkpoint(t, events) else {
+        return Ok(None);
+    };
+    let at = rows
+        .iter()
+        .find(|r| r.seq == info.transition_seq)
+        .map(|r| r.ts.clone())
+        .unwrap_or_else(|| view::to_rfc3339(t.updated_at));
+    let phases_total = store
+        .execution_plan_active(t.id)?
+        .map(|p| p.spec.phases.len() as u32)
+        .unwrap_or(0);
+    let mut task_ref = view::task_ref(t);
+    task_ref.actions = view::actions_with_events(t, events);
+    Ok(Some(AttentionItem::PhaseCheckpoint {
+        task: task_ref,
+        phase: info.report.phase.clone(),
+        phase_title: info.report.phase_title.clone(),
+        phases_done: info.report.phases_done.len() as u32 + 1,
+        phases_total,
+        report_idx: info.report_idx,
+        next_phase: info.report.next_phase.clone(),
+        at,
+    }))
+}
+
+/// ADR 2026-10-08-browser-prod-enablement D2・D4: browser の前提が足りずに止まった task。項目の文は最後の
+/// `BrowserPrerequisiteBlocked` の message（人に分かる理由と次の手）。期限は設けない（前提が揃うまで続く）。
+fn browser_prerequisite_item(
+    t: &Task,
+    rows: &[EventRow],
+    events: &[(u64, Event)],
+) -> Option<AttentionItem> {
+    if crate::phase_gate::last_transition_reason(events)
+        != Some(task_core::browser_prerequisite::REASON_BLOCKED)
+    {
+        return None;
+    }
+    let (ts, code, message) = rows.iter().rev().find_map(|r| match &r.event {
+        Event::BrowserPrerequisiteBlocked { code, message } => {
+            Some((r.ts.clone(), *code, message.clone()))
+        }
+        _ => None,
+    })?;
+    let mut task_ref = view::task_ref(t);
+    task_ref.actions = view::actions_with_events(t, events);
+    Some(AttentionItem::BrowserPrerequisite {
+        task: task_ref,
+        code,
+        message,
+        at: ts,
+    })
+}
+
+/// ADR-0079 D8（Phase R3b）: root の計画の承認待ち。期限は設けない（人の判断を待つ）。
+fn plan_approval_item(
+    store: &dyn TaskStore,
+    t: &Task,
+    rows: &[EventRow],
+    events: &[(u64, Event)],
+) -> Result<Option<AttentionItem>, OpsError> {
+    let Some(info) = crate::plan_gate::latest_plan_approval(t, events) else {
+        return Ok(None);
+    };
+    let at = rows
+        .iter()
+        .find(|r| r.seq == info.transition_seq)
+        .map(|r| r.ts.clone())
+        .unwrap_or_else(|| view::to_rfc3339(t.updated_at));
+    let plan = store
+        .execution_plan_list(t.id)?
+        .into_iter()
+        .find(|p| p.id == info.plan_id);
+    let stages = plan
+        .as_ref()
+        .map(|p| {
+            p.spec
+                .stages
+                .iter()
+                .map(|s| PlanApprovalStage {
+                    key: s.key.clone(),
+                    title: s.title.clone(),
+                    review_human: s.review == task_core::StageReview::Human,
+                    units: p
+                        .spec
+                        .units
+                        .iter()
+                        .filter(|u| u.stage == s.key)
+                        .map(|u| {
+                            let kind = if u.kind == task_core::WorkUnitKind::Task {
+                                "子 task"
+                            } else {
+                                "leaf"
+                            };
+                            format!("{}: {}（{kind}）", u.key, u.title)
+                        })
+                        .collect(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let root_id = task_core::tree::root_id_of(t);
+    let decision_ids = store
+        .decisions_list(Some(root_id))?
+        .into_iter()
+        .filter(|d| d.task_id == t.id && d.status == task_core::DecisionStatus::Open)
+        .map(|d| d.id)
+        .collect();
+    let mut task_ref = view::task_ref(t);
+    task_ref.actions = view::actions_with_events(t, events);
+    Ok(Some(AttentionItem::PlanApproval {
+        task: task_ref,
+        plan_id: info.plan_id.clone(),
+        plan_version: plan.as_ref().map(|p| p.version).unwrap_or(0),
+        summary: crate::plan_gate::describe_reasons(&info.reasons),
+        reasons: info.reasons,
+        stages,
+        decision_ids,
+        at,
+    }))
+}
+
 /// (a) 24h 以内に `failed`、(b) `ready` で連続 requeue が上限近く、(c) スナップショットの `unroutable`。
 fn build_attention(
     store: &dyn TaskStore,
@@ -931,11 +1080,15 @@ fn build_attention(
     snapshot: Option<&DaemonSnapshot>,
     ctx: &ViewContext,
     now: OffsetDateTime,
+    focus: Option<&HashSet<TaskId>>,
 ) -> Result<Vec<AttentionItem>, OpsError> {
     let mut items = Vec::new();
     let cutoff = now - time::Duration::hours(24);
 
-    for t in all_tasks.iter().filter(|t| t.status == Status::Failed) {
+    for t in all_tasks
+        .iter()
+        .filter(|t| t.status == Status::Failed && in_focus(focus, t))
+    {
         if t.updated_at < cutoff {
             continue;
         }
@@ -984,128 +1137,30 @@ fn build_attention(
         });
     }
 
-    // ADR-0074 D2.4（Phase F3 途中確認）: 工程の後で止まった Task。期限は設けない（人の判断を待つ）。
-    for t in all_tasks.iter().filter(|t| t.status == Status::Blocked) {
+    // blocked の task の 3 種（途中確認・browser の前提・計画の承認）は、task ごとに event を 1 回だけ読んで判定する
+    // （P4-C: 以前は種類ごとに読み直し、blocked の数の 3 倍読んでいた）。並びは以前と同じ（種類ごとの列を順に足す）。
+    let mut phase_items = Vec::new();
+    let mut prerequisite_items = Vec::new();
+    let mut plan_items = Vec::new();
+    for t in all_tasks
+        .iter()
+        .filter(|t| t.status == Status::Blocked && in_focus(focus, t))
+    {
         let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
         let events = view::seq_pairs(&rows);
-        let Some(info) = crate::phase_gate::latest_phase_checkpoint(t, &events) else {
-            continue;
-        };
-        let at = rows
-            .iter()
-            .find(|r| r.seq == info.transition_seq)
-            .map(|r| r.ts.clone())
-            .unwrap_or_else(|| view::to_rfc3339(t.updated_at));
-        let phases_total = store
-            .execution_plan_active(t.id)?
-            .map(|p| p.spec.phases.len() as u32)
-            .unwrap_or(0);
-        let mut task_ref = view::task_ref(t);
-        task_ref.actions = view::actions_with_events(t, &events);
-        items.push(AttentionItem::PhaseCheckpoint {
-            task: task_ref,
-            phase: info.report.phase.clone(),
-            phase_title: info.report.phase_title.clone(),
-            phases_done: info.report.phases_done.len() as u32 + 1,
-            phases_total,
-            report_idx: info.report_idx,
-            next_phase: info.report.next_phase.clone(),
-            at,
-        });
-    }
-
-    // ADR 2026-10-08-browser-prod-enablement D2・D4: browser の前提が足りずに止まった task。項目の文は最後の
-    // `BrowserPrerequisiteBlocked` の message（人に分かる理由と次の手）。期限は設けない（前提が揃うまで続く）。
-    for t in all_tasks.iter().filter(|t| t.status == Status::Blocked) {
-        let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
-        let events = view::seq_pairs(&rows);
-        if crate::phase_gate::last_transition_reason(&events)
-            != Some(task_core::browser_prerequisite::REASON_BLOCKED)
-        {
-            continue;
+        if let Some(item) = phase_checkpoint_item(store, t, &rows, &events)? {
+            phase_items.push(item);
         }
-        let Some((ts, code, message)) = rows.iter().rev().find_map(|r| match &r.event {
-            Event::BrowserPrerequisiteBlocked { code, message } => {
-                Some((r.ts.clone(), *code, message.clone()))
-            }
-            _ => None,
-        }) else {
-            continue;
-        };
-        let mut task_ref = view::task_ref(t);
-        task_ref.actions = view::actions_with_events(t, &events);
-        items.push(AttentionItem::BrowserPrerequisite {
-            task: task_ref,
-            code,
-            message,
-            at: ts,
-        });
+        if let Some(item) = browser_prerequisite_item(t, &rows, &events) {
+            prerequisite_items.push(item);
+        }
+        if let Some(item) = plan_approval_item(store, t, &rows, &events)? {
+            plan_items.push(item);
+        }
     }
-
-    // ADR-0079 D8（Phase R3b）: root の計画の承認待ち。期限は設けない（人の判断を待つ）。
-    for t in all_tasks.iter().filter(|t| t.status == Status::Blocked) {
-        let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
-        let events = view::seq_pairs(&rows);
-        let Some(info) = crate::plan_gate::latest_plan_approval(t, &events) else {
-            continue;
-        };
-        let at = rows
-            .iter()
-            .find(|r| r.seq == info.transition_seq)
-            .map(|r| r.ts.clone())
-            .unwrap_or_else(|| view::to_rfc3339(t.updated_at));
-        let plan = store
-            .execution_plan_list(t.id)?
-            .into_iter()
-            .find(|p| p.id == info.plan_id);
-        let stages = plan
-            .as_ref()
-            .map(|p| {
-                p.spec
-                    .stages
-                    .iter()
-                    .map(|s| PlanApprovalStage {
-                        key: s.key.clone(),
-                        title: s.title.clone(),
-                        review_human: s.review == task_core::StageReview::Human,
-                        units: p
-                            .spec
-                            .units
-                            .iter()
-                            .filter(|u| u.stage == s.key)
-                            .map(|u| {
-                                let kind = if u.kind == task_core::WorkUnitKind::Task {
-                                    "子 task"
-                                } else {
-                                    "leaf"
-                                };
-                                format!("{}: {}（{kind}）", u.key, u.title)
-                            })
-                            .collect(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let root_id = task_core::tree::root_id_of(t);
-        let decision_ids = store
-            .decisions_list(Some(root_id))?
-            .into_iter()
-            .filter(|d| d.task_id == t.id && d.status == task_core::DecisionStatus::Open)
-            .map(|d| d.id)
-            .collect();
-        let mut task_ref = view::task_ref(t);
-        task_ref.actions = view::actions_with_events(t, &events);
-        items.push(AttentionItem::PlanApproval {
-            task: task_ref,
-            plan_id: info.plan_id.clone(),
-            plan_version: plan.as_ref().map(|p| p.version).unwrap_or(0),
-            summary: crate::plan_gate::describe_reasons(&info.reasons),
-            reasons: info.reasons,
-            stages,
-            decision_ids,
-            at,
-        });
-    }
+    items.extend(phase_items);
+    items.extend(prerequisite_items);
+    items.extend(plan_items);
 
     // ADR-0121 D3: 完了した root で取り込みを見送ったもの。期限は設けない（成果が main に入っていない）。
     let latest_skipped = store.latest_delivery_skipped_rows()?;
@@ -1215,7 +1270,9 @@ fn build_attention(
         });
     }
 
-    if ctx.max_requeues > 0 {
+    // 範囲つき（`focus`）の組み立てでは次の 2 つを読まない: `requeue_limit_near` は受信箱（`human_inbox`）に出ず、
+    // クラスタの項目は task に触れない（`InboxItem::task_ids` が空）。
+    if ctx.max_requeues > 0 && focus.is_none() {
         for t in all_tasks.iter().filter(|t| t.status == Status::Ready) {
             let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
             let events = view::seq_pairs(&rows);
@@ -1282,7 +1339,7 @@ fn build_attention(
     // タスクはもうクラスタを待っていないので、イベント列を読まない。監査 4-2: 走査を待っているタスクの数に抑える）。
     let mut cluster_agg: HashMap<String, (OffsetDateTime, String, String, HashSet<TaskId>)> =
         HashMap::new();
-    for t in all_tasks.iter() {
+    for t in all_tasks.iter().filter(|_| focus.is_none()) {
         if t.status.is_terminal() || !matches!(t.workspace, WorkspaceSpec::Remote { .. }) {
             continue;
         }
@@ -1358,14 +1415,29 @@ pub fn inbox(
     now: OffsetDateTime,
     evidence: &dyn Fn(&Task, &str) -> Vec<EvidenceView>,
 ) -> Result<Inbox, OpsError> {
+    inbox_parts(store, snapshot, ctx, now, evidence, None).map(|(inbox, _)| inbox)
+}
+
+/// [`inbox`] の本体。task の一覧（`by_id`）も返す（`human_inbox` が読み直さない）。`touching` があれば、
+/// task ごとの走査をその task に触れる項目の分だけにする（[`focus_of`]。範囲外の項目は欠けたり違ったりする）。
+pub(crate) fn inbox_parts(
+    store: &dyn TaskStore,
+    snapshot: Option<&DaemonSnapshot>,
+    ctx: &ViewContext,
+    now: OffsetDateTime,
+    evidence: &dyn Fn(&Task, &str) -> Vec<EvidenceView>,
+    touching: Option<&BTreeSet<TaskId>>,
+) -> Result<(Inbox, HashMap<TaskId, Task>), OpsError> {
     let all_tasks = store.list(None)?;
     let by_id: HashMap<TaskId, Task> = all_tasks.iter().map(|t| (t.id, t.clone())).collect();
+    let focus = touching.map(|t| focus_of(&all_tasks, t));
+    let focus = focus.as_ref();
 
     let approvals = build_approvals(store, &all_tasks, &by_id, evidence)?;
-    let questions = build_questions(store, &all_tasks)?;
+    let questions = build_questions(store, &all_tasks, focus)?;
     let drafts = build_drafts(store, &all_tasks, &by_id, ctx, now)?;
     let mut suppressed = BTreeMap::new();
-    let attention = build_attention(store, &all_tasks, &by_id, snapshot, ctx, now)?
+    let attention = build_attention(store, &all_tasks, &by_id, snapshot, ctx, now, focus)?
         .into_iter()
         .filter(|item| {
             let rule = attention_task(item)
@@ -1423,21 +1495,24 @@ pub fn inbox(
         by_status,
     };
 
-    Ok(Inbox {
-        approvals,
-        questions,
-        drafts,
-        attention,
-        suppressed,
-        browser_waits,
-        decisions,
-        counts,
-        disk_full,
-        credential_waits,
-        script_control,
-        stagnation: snapshot.map(|s| s.stagnation.clone()).unwrap_or_default(),
-        stagnation_policy: snapshot.and_then(|s| s.stagnation_policy),
-    })
+    Ok((
+        Inbox {
+            approvals,
+            questions,
+            drafts,
+            attention,
+            suppressed,
+            browser_waits,
+            decisions,
+            counts,
+            disk_full,
+            credential_waits,
+            script_control,
+            stagnation: snapshot.map(|s| s.stagnation.clone()).unwrap_or_default(),
+            stagnation_policy: snapshot.and_then(|s| s.stagnation_policy),
+        },
+        by_id,
+    ))
 }
 
 #[cfg(test)]

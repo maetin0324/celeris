@@ -31,13 +31,13 @@
 //! The outbox is a `notifications` row, not a notice, so a failed delivery
 //! never becomes a new CoS wait.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use rusqlite::Connection;
 use serde_json::json;
 use task_core::chat::{ChatActor, ChatCard};
-use task_core::{NoticeId, NoticeStore};
+use task_core::{NoticeId, NoticeStore, TaskId};
 use task_ops::human_inbox::{InboxItem, InboxKind};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -453,7 +453,58 @@ pub(crate) fn summary_request_text(
     text
 }
 
+/// The derived inbox of one fallback pass, built lazily (P4-C). `touching` holds the items that
+/// touch `tasks` (`human_inbox_touching`: the same items as the full inbox); an item found there
+/// is the full inbox's item. A key not found there is looked up in the full inbox (built once).
+struct FallbackInbox {
+    tasks: BTreeSet<TaskId>,
+    touching: Option<HashMap<String, InboxItem>>,
+    full: Option<HashMap<String, InboxItem>>,
+}
+
+fn by_item_id(items: Vec<InboxItem>) -> HashMap<String, InboxItem> {
+    items
+        .into_iter()
+        .map(|item| (item.id.clone(), item))
+        .collect()
+}
+
 impl CosChatLaunch {
+    /// The current inbox item of a candidate (`None`: the wait closed).
+    fn fallback_inbox_item<'a>(
+        &self,
+        dispatcher: &Dispatcher,
+        inbox: &'a mut FallbackInbox,
+        c: &FallbackCandidate,
+        now: OffsetDateTime,
+    ) -> Result<Option<&'a InboxItem>, String> {
+        let matches = |item: &&InboxItem| item.kind.as_str() == c.source_kind;
+        if !inbox.tasks.is_empty() && inbox.touching.is_none() {
+            let built = self.human_inbox_touching(dispatcher, now, &inbox.tasks)?;
+            inbox.touching = Some(by_item_id(built.items));
+        }
+        let found = inbox
+            .touching
+            .as_ref()
+            .and_then(|items| items.get(&c.source_key))
+            .filter(matches)
+            .is_some();
+        if found {
+            return Ok(inbox
+                .touching
+                .as_ref()
+                .and_then(|items| items.get(&c.source_key)));
+        }
+        if inbox.full.is_none() {
+            inbox.full = Some(by_item_id(self.human_inbox_items(dispatcher, now)?));
+        }
+        Ok(inbox
+            .full
+            .as_ref()
+            .and_then(|items| items.get(&c.source_key))
+            .filter(matches))
+    }
+
     /// One fallback pass. Errors are logged per item and retried next tick;
     /// they never create a new wait.
     pub(crate) fn triage_fallback(&mut self, dispatcher: &Dispatcher, now: OffsetDateTime) {
@@ -485,8 +536,20 @@ impl CosChatLaunch {
         if due.is_empty() {
             return;
         }
-        // The derived inbox is built at most once per pass, and only when needed.
-        let mut inbox: Option<HashMap<String, InboxItem>> = None;
+        // The derived inbox is built at most once per pass, and only when needed. P4-C: first only
+        // for the tasks named by the due items' keys (`FallbackInbox`); the full inbox only on a miss.
+        let tasks: BTreeSet<TaskId> = due
+            .iter()
+            .filter(|(c, _)| c.route.is_none() && c.source_kind != COS_TRIAGE_NOTICE_KIND)
+            .filter_map(|(c, _)| {
+                task_ops::human_inbox::item_task_id(self.store.as_ref(), &c.source_key)
+            })
+            .collect();
+        let mut inbox = FallbackInbox {
+            tasks,
+            touching: None,
+            full: None,
+        };
         let mut handed = Vec::new();
         for (c, reason) in due {
             match self.fallback_one(dispatcher, &mut inbox, &c, &reason, now) {
@@ -506,7 +569,7 @@ impl CosChatLaunch {
     fn fallback_one(
         &mut self,
         dispatcher: &Dispatcher,
-        inbox: &mut Option<HashMap<String, InboxItem>>,
+        inbox: &mut FallbackInbox,
         c: &FallbackCandidate,
         reason: &str,
         now: OffsetDateTime,
@@ -515,19 +578,7 @@ impl CosChatLaunch {
             let source = if c.source_kind == COS_TRIAGE_NOTICE_KIND {
                 Some(self.notice_source(c))
             } else {
-                if inbox.is_none() {
-                    let built = self.human_inbox_items(dispatcher, now)?;
-                    *inbox = Some(
-                        built
-                            .into_iter()
-                            .map(|item| (item.id.clone(), item))
-                            .collect(),
-                    );
-                }
-                inbox
-                    .as_ref()
-                    .and_then(|items| items.get(&c.source_key))
-                    .filter(|item| item.kind.as_str() == c.source_kind)
+                self.fallback_inbox_item(dispatcher, inbox, c, now)?
                     .map(FallbackSource::from_inbox)
             };
             let Some(source) = source else {

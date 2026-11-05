@@ -24,7 +24,7 @@
 //!   `CosOperation` audit event) and CoS's own replies carry an operation id
 //!   and are dropped by the store.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use task_core::chat::ChatRun;
 use task_core::chat::triage::{COS_TRIAGE_BATCH_MAX, CosTriageSource};
@@ -250,11 +250,7 @@ fn direct_body(item: &InboxItem) -> String {
 }
 
 pub(super) fn item_tasks(item: &InboxItem) -> impl Iterator<Item = TaskId> + '_ {
-    item.task
-        .iter()
-        .chain(item.blocking.root.iter())
-        .chain(item.blocking.tasks.iter())
-        .map(|t| t.id)
+    item.task_ids()
 }
 
 /// Offer the items whose task was touched; a task attributed to a CoS
@@ -325,6 +321,17 @@ pub(crate) fn notice_source(notice: &Notice, policy_version: &str) -> Option<Cos
     })
 }
 
+/// The view context of the derived inbox built by the dispatcher.
+fn inbox_view_context(dispatcher: &Dispatcher) -> task_ops::view::ViewContext {
+    task_ops::view::ViewContext {
+        workspace_roots: dispatcher.config.workspace_roots.clone(),
+        retry_backoff_base: dispatcher.config.retry_backoff_base,
+        retry_backoff_max: dispatcher.config.retry_backoff_max,
+        max_requeues: dispatcher.config.max_requeues,
+        clusters: HashMap::new(),
+    }
+}
+
 /// The card kind of a triage source kind (shared with the digest in `task_core::chat::digest`).
 pub(super) use task_core::chat::digest::cos_card_kind as card_kind;
 
@@ -377,18 +384,32 @@ impl CosChatLaunch {
         self.human_inbox(dispatcher, now).map(|inbox| inbox.items)
     }
 
+    /// P4-C: the items of the derived inbox that touch `tasks` (the same items as the full inbox).
+    pub(super) fn human_inbox_touching(
+        &self,
+        dispatcher: &Dispatcher,
+        now: OffsetDateTime,
+        tasks: &BTreeSet<TaskId>,
+    ) -> Result<HumanInbox, String> {
+        let ctx = inbox_view_context(dispatcher);
+        let snapshot = dispatcher.stagnation_snapshot();
+        task_ops::human_inbox::human_inbox_touching(
+            self.store.as_ref(),
+            snapshot.as_ref(),
+            &ctx,
+            now,
+            &|_, _| Vec::new(),
+            tasks,
+        )
+        .map_err(|e| e.to_string())
+    }
+
     fn human_inbox(
         &self,
         dispatcher: &Dispatcher,
         now: OffsetDateTime,
     ) -> Result<HumanInbox, String> {
-        let ctx = task_ops::view::ViewContext {
-            workspace_roots: dispatcher.config.workspace_roots.clone(),
-            retry_backoff_base: dispatcher.config.retry_backoff_base,
-            retry_backoff_max: dispatcher.config.retry_backoff_max,
-            max_requeues: dispatcher.config.max_requeues,
-            clusters: HashMap::new(),
-        };
+        let ctx = inbox_view_context(dispatcher);
         let store: &dyn TaskStore = self.store.as_ref();
         // ADR 2026-10-29-stagnation-triage-notify-wiring D1: the stagnation kinds come from the
         // dispatcher's last stagnation check (`None` while it is unknown).
@@ -548,7 +569,6 @@ impl CosChatLaunch {
         let mut cursor: u64 = raw
             .parse()
             .map_err(|_| format!("invalid event cursor {raw}"))?;
-        let mut inbox: Option<HumanInbox> = None;
         for _ in 0..EVENT_PAGES_PER_TICK {
             let rows = self
                 .store
@@ -558,38 +578,23 @@ impl CosChatLaunch {
                 break;
             };
             let touched = touched_tasks(&rows);
-            if !touched.tasks.is_empty() {
-                if inbox.is_none() {
-                    inbox = Some(self.human_inbox(dispatcher, now)?);
+            // P4-C: only the items that touch a task of this page are compared, so the inbox is
+            // built for those tasks only (`human_inbox_touching`, the same items as the full inbox).
+            let sources = if touched.tasks.is_empty() {
+                Vec::new()
+            } else {
+                let ids: BTreeSet<TaskId> = touched.tasks.keys().copied().collect();
+                let inbox = self.human_inbox_touching(dispatcher, now, &ids)?;
+                for item in inbox.items.iter().filter(|i| is_direct(i)) {
+                    self.direct_escalate(item, &policy, now)?;
                 }
-                if let Some(inbox) = &inbox {
-                    for item in inbox.items.iter().filter(|i| is_direct(i)) {
-                        if item_tasks(item).any(|id| touched.tasks.contains_key(&id)) {
-                            self.direct_escalate(item, &policy, now)?;
-                        }
-                    }
-                }
-            }
-            if !touched.tasks.is_empty()
-                && let Some(inbox) = &inbox
-            {
-                let by_kind = sources_by_kind(inbox, &policy, dispatcher.stagnation_known());
+                let by_kind = sources_by_kind(&inbox, &policy, dispatcher.stagnation_known());
                 let current: Vec<_> = by_kind.into_iter().collect();
                 let ids: Vec<String> = touched.tasks.keys().map(|id| id.to_string()).collect();
                 self.store
                     .cos_triage_resolve_stale_touched(&current, &ids, now)
                     .map_err(|e| e.to_string())?;
-            }
-            let sources = if touched.tasks.is_empty() {
-                Vec::new()
-            } else {
-                if inbox.is_none() {
-                    inbox = Some(self.human_inbox(dispatcher, now)?);
-                }
-                inbox
-                    .as_ref()
-                    .map(|inbox| sources_for_touched(inbox, &touched, &policy))
-                    .unwrap_or_default()
+                sources_for_touched(&inbox, &touched, &policy)
             };
             let inserted = self
                 .store

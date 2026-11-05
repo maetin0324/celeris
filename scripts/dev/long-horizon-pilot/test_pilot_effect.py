@@ -344,5 +344,61 @@ class BrokerCase(unittest.TestCase):
         self.daemon = FakeDaemon()  # tearDown の close 用
 
 
+class ForeignDecisionCase(unittest.TestCase):
+    """driver の照合（`foreign_decisions`）: 承認は driver が人として決めたものだけ（K17。レビューの指摘: worker が
+    人の token を読んで `POST /approvals/{id}/decide` を呼ぶと broker は `human:` の決定として数えてしまう）。"""
+
+    Q1 = "pilot-effect:C06:o1:publish を公開してよいですか"
+    Q2 = "pilot-effect:C06:o2:publish を公開してよいですか"
+
+    def rows(self, d1="once", d2="denied"):
+        return [{"id": "11", "task_id": "T1", "question": self.Q1, "decision": d1},
+                {"id": "12", "task_id": "T2", "question": self.Q2, "decision": d2},
+                {"id": "13", "task_id": "T3", "question": "別の質問", "decision": "once"}]
+
+    def answers(self, extra=()):
+        return [{"task_id": "T1", "question": self.Q1, "by": "human:pilot"},
+                {"task_id": "T2", "question": self.Q2, "by": "human:pilot"},
+                {"task_id": "T3", "question": "別の質問", "by": "human:pilot"}, *extra]
+
+    def test_decisions_made_by_the_driver_match(self):
+        self.assertEqual(pilot_effect.foreign_decisions(self.rows(), self.answers(), {"11": "once", "12": "denied"}), [])
+
+    def test_a_decision_the_worker_made_with_a_found_token_is_foreign(self):
+        # driver は o2 をまだ決めていないのに、daemon には human:pilot の once がある（worker が token で決めた）。
+        found = pilot_effect.foreign_decisions(self.rows(d2="once"), self.answers(), {"11": "once"})
+        self.assertEqual(len(found), 2, found)
+        self.assertIn("approval 12 was decided (once) by someone other than the driver", found[0])
+        self.assertIn("task T2 has a human answer", found[1])
+
+    def test_a_changed_decision_is_foreign(self):
+        found = pilot_effect.foreign_decisions(self.rows(d2="once"), self.answers(), {"11": "once", "12": "denied"})
+        self.assertEqual(found, ["approval 12 is once in the daemon but the driver decided denied"])
+
+    def test_a_human_answer_the_driver_did_not_give_is_foreign(self):
+        extra = [{"task_id": "T9", "question": self.Q2, "by": "human:pilot"},
+                 {"task_id": "T8", "question": self.Q2, "by": "operator:pilot"}]  # 人でない主体は broker が数えない
+        found = pilot_effect.foreign_decisions(self.rows(), self.answers(extra), {"11": "once", "12": "denied"})
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("task T9 has a human answer", found[0])
+
+    def test_a_decision_missing_from_the_daemon_is_reported(self):
+        found = pilot_effect.foreign_decisions(self.rows(d2=None), self.answers()[:1], {"11": "once", "12": "denied"})
+        self.assertEqual(found, ["the driver decided approval 12 (denied) but the daemon has no such decision"])
+
+    def test_the_broker_alone_would_count_a_forged_human_decision(self):
+        # 照合が要る理由: broker は daemon の決定の主体（human:）しか見ないので、偽造の once も承認になる。
+        daemon = FakeDaemon()
+        try:
+            daemon.decide(daemon.ask(LID), "once")
+            api = pilot_effect.DaemonApprovals(daemon.base, "t0ken", PROJECT)
+            self.assertEqual(api.decision(LID)[0], "approved")
+            approvals = [{**a, "id": str(a["id"])} for a in daemon.approvals]
+            answered = [{"task_id": t, **e} for t, evs in daemon.answers.items() for e in evs]
+            self.assertTrue(pilot_effect.foreign_decisions(approvals, answered, {}))
+        finally:
+            daemon.close()
+
+
 if __name__ == "__main__":
     unittest.main()

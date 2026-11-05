@@ -13,7 +13,8 @@ worker（実 LLM・stub）が使うのは client だけで、記録には触れ�
 
 - 承認は本物の daemon API で読む: `GET /api/v1/approvals?project=<id>` の question に `pilot-effect:<logical_id>` を
   含む行のうち、最後に決まったもの。`once`・`standing` は承認、`denied` は却下。決定は、その task の
-  `Answered` event の主体が `human:` で始まるときだけ数える（CoS・operator の決定は数えない）。
+  `Answered` event の主体が `human:` で始まるときだけ数える（CoS・operator の決定は数えない）。人の token は
+  driver の memory にだけあり、driver は daemon の決定が自分の決めたものと一致するかを `foreign_decisions` で照らす。
 - publish の結果（exit）: 0 = 公開した（同じ logical_id の 2 回目以降も 0 で、記録は増えない）、3 = 承認が無い
   （未決・取り下げを含む。effect 0）、4 = 却下（effect 0）、5 = broker に届かない・daemon が読めない、2 = 使い方の誤り。
 - 記録は `effects.jsonl`（効果）と `audit.jsonl`（すべての要求と判定）。各行は前の行の MAC を含む HMAC-SHA256 の鎖で、
@@ -251,6 +252,41 @@ class DaemonApprovals:
             if a.get("task_id") and self.human_answered(a["task_id"], a["question"]):
                 return ("rejected" if a["decision"] == "denied" else "approved"), a
         return "none", (mine[-1] if mine else None)
+
+
+DECIDED = ("once", "standing", "denied")
+
+
+def foreign_decisions(approvals, answered, decided):
+    """driver が人として決めた承認（`decided`: approval id → decision）と daemon の記録の食い違いを返す（空なら一致）。
+
+    `approvals` は daemon の approvals の行（id・task_id・question・decision）、`answered` は案件の task の `Answered`
+    event（task_id・question・by）。`pilot-effect:` を含む question だけを見る。driver の知らない決定（worker が
+    人の token を手に入れて `POST /approvals/{id}/decide` を呼んだ等）、決定の値の違い、driver が決めたのに daemon に
+    無い決定、driver の決めた承認に対応しない人の `Answered` は、どれも食い違い。broker は `human:` の決定を数えるので、
+    食い違いのある試行の効果は人の承認によるものと言えない（driver は facts を作らず observation_failed にする）。"""
+    problems = []
+    mine = {str(k): v for k, v in decided.items()}
+    pilot = [a for a in approvals if MARKER in (a.get("question") or "")]
+    seen = set()
+    for a in pilot:
+        aid = str(a["id"])
+        if a.get("decision") in DECIDED:
+            seen.add(aid)
+            if aid not in mine:
+                problems.append(f"approval {aid} was decided ({a['decision']}) by someone other than the driver")
+            elif mine[aid] != a["decision"]:
+                problems.append(f"approval {aid} is {a['decision']} in the daemon but the driver decided {mine[aid]}")
+    for aid, d in mine.items():
+        if aid not in seen:
+            problems.append(f"the driver decided approval {aid} ({d}) but the daemon has no such decision")
+    ours = {(str(a.get("task_id")), a.get("question")) for a in pilot if str(a["id"]) in mine}
+    for ev in answered:
+        q = ev.get("question") or ""
+        if MARKER in q and str(ev.get("by") or "").startswith("human:") \
+                and (str(ev.get("task_id")), q) not in ours:
+            problems.append(f"task {ev.get('task_id')} has a human answer to {q[:80]!r} that the driver did not give")
+    return problems
 
 
 # ---- broker ----

@@ -188,13 +188,17 @@ PY
 #       に公開された command だけを使う）の両方が、daemon の approvals API の人の決定（o1 once、o2 denied）を経て
 #       o1 だけ 1 件公開する。worker の最初の publish は承認前なので断られる（effect 0）。
 #     - 陰性: worker（stub）が記録に偽の行を足すと、driver は observation_failed で試行を失敗にする（facts を作らない）。
+#     - 陰性（承認の偽造）: 両方の経路で worker に token を探させ（LONG_HORIZON_PILOT_STUB_FORGE=1。home の config.toml の
+#       token_file・home の human.token / operator.token・旧い repo の定数）、daemon の承認 API に当てさせる。どれも通らない
+#       （forge_refused）。driver の決めていない決定が daemon にあれば facts を作らない照合は単体試験（ForeignDecisionCase）。
 python3 -I -W ignore::ResourceWarning scripts/dev/long-horizon-pilot/test_pilot_effect.py >"$out/pilot-effect-unit.log" 2>&1 \
     || { tail -40 "$out/pilot-effect-unit.log" >&2; fail "pilot_effect unit tests failed"; }
-grep -qE '^Ran 1[5-9] tests|^Ran [2-9][0-9] tests' "$out/pilot-effect-unit.log" || fail "pilot_effect: fewer than 15 unit tests ran"
+grep -qE '^Ran (2[1-9]|[3-9][0-9]) tests' "$out/pilot-effect-unit.log" || fail "pilot_effect: fewer than 21 unit tests ran"
 echo "test-long-horizon-pilot: pilot_effect unit: $(grep -E '^Ran ' "$out/pilot-effect-unit.log")"
-bash scripts/dev/long-horizon-pilot-llm.sh --harness stub --out "$out/stub-c06" --cases C06 --arms new \
+LONG_HORIZON_PILOT_STUB_FORGE=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness stub --out "$out/stub-c06" --cases C06 --arms new \
     >"$out/stub-c06.log" 2>&1 || { tail -40 "$out/stub-c06.log" >&2; fail "C06 stub pilot failed"; }
-bash scripts/dev/long-horizon-pilot-llm.sh --harness config-stub --out "$out/config-c06" --cases C06 --arms new \
+LONG_HORIZON_PILOT_STUB_FORGE=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness config-stub --out "$out/config-c06" \
+    --cases C06 --arms new \
     >"$out/config-c06.log" 2>&1 || { tail -40 "$out/config-c06.log" >&2; fail "C06 config-stub pilot failed"; }
 set +e
 LONG_HORIZON_PILOT_STUB_TAMPER=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness stub \
@@ -228,10 +232,16 @@ for d in map(pathlib.Path, sys.argv[1:]):
                  "effect_before(approval, effect)"):
         need(preds.get(name) == "pass", f"{d.name}: {name} {preds.get(name)}")
     need(g["verdict"] == "pass", f"{d.name}: verdict {g['verdict']}")
+    forge = [s for s in ops["ops"] if s["step"] == "forge_refused"]
+    need(len(forge) == 1 and forge[0]["attempts"] >= 1, f"{d.name}: forge_refused {forge}")
+    for s in forge:
+        need(all(st == 401 for st in s["api_statuses"]), f"{d.name}: forge api statuses {s['api_statuses']}")
+        need(all(v.startswith("unreadable") for k, v in s["files"].items() if k != "config.toml"),
+             f"{d.name}: the worker read a token file {s['files']}")
 if errors:
     print("\n".join(errors), file=sys.stderr)
     sys.exit(1)
-print("test-long-horizon-pilot: C06 effect broker raw ok (stub and config-stub)")
+print("test-long-horizon-pilot: C06 effect broker raw ok (stub and config-stub; forged approvals refused)")
 PY
 
 # 3. 実 LLM の門と I14 の import の検査。

@@ -18,7 +18,9 @@
 #   objective・acceptance）だけを読み、公開の command も objective から見つける（ADR 2026-11-05-phase3-p0d）。
 # - C06 の公開は driver が worker の外で起こす broker（long-horizon-pilot/pilot_effect.py）が記録し、承認は daemon の
 #   approvals API で人の token が決める。`LONG_HORIZON_PILOT_STUB_TAMPER=1`（stub だけ。陰性の試験）は stub に記録への
-#   書き込みを試させ、driver が observation_failed で落ちることを確かめる。
+#   書き込みを試させ、driver が observation_failed で落ちることを確かめる。`LONG_HORIZON_PILOT_STUB_FORGE=1`（stub・
+#   config-stub。陰性の試験）は worker に token を探させて承認の偽造を試させ、どの token も API に通らないことを
+#   driver が確かめる。API の token は試行ごとの乱数で、home の外の私的な dir に daemon・broker の起動の間だけ置く。
 # - `--harness config` は実 LLM。人が書いた `--llm-config`（[llm_sources]・[harnesses]・[route_defaults]・
 #   [harness_selection]・[accounts] 等）をそのまま config に足す。人の承認（LONG_HORIZON_PILOT_LLM_APPROVED=1）が
 #   要り、Celeris の worker の run の中（CELERIS_RUN_ID がある）では起こさない（ADR 2026-10-07 worker-no-subagents）。
@@ -90,6 +92,12 @@ fi
     || fail "control-ts bundle failed"
 
 rm -rf "${out:?}/facts" "${out:?}/arm-map" "${out:?}/trials" "${out:?}/ops" "${out:?}/grade"
+forge_arg=""
+if [ "${LONG_HORIZON_PILOT_STUB_FORGE:-}" = 1 ]; then
+    # 陰性の試験用（stub・config-stub だけ）: worker が token を探して承認を偽造しようとする（通れば試行は失敗）。
+    [ "$harness" != config ] || fail "LONG_HORIZON_PILOT_STUB_FORGE is only for --harness stub|config-stub"
+    forge_arg=', "--forge"'
+fi
 if [ "$harness" = config ]; then
     extra=(--harness config --llm-config "$llm_config" --cos-route "$cos_route" --cos-max-turns 40 --cos-max-wall 1800)
 elif [ "$harness" = config-stub ]; then
@@ -97,7 +105,7 @@ elif [ "$harness" = config-stub ]; then
     agent="$root/scripts/dev/long-horizon-pilot/stub_harness.py"
     cat >"$work/config-stub.toml" <<TOML
 [adapters.fake]
-command = ["python3", "-I", "$agent", "--from-objective"]
+command = ["python3", "-I", "$agent", "--from-objective"$forge_arg]
 
 [llm_sources.local]
 kind = "fake"
@@ -122,6 +130,7 @@ else
     # 陰性の試験用: stub が効果の記録に偽の行を足そうとする（driver は observation_failed で落ちる）。
     [ "${LONG_HORIZON_PILOT_STUB_TAMPER:-}" != 1 ] || extra+=(--stub-tamper)
 fi
+[ "${LONG_HORIZON_PILOT_STUB_FORGE:-}" != 1 ] || extra+=(--forge)
 for case in ${cases//,/ }; do
     for arm in ${arms//,/ }; do
         echo "long-horizon-pilot-llm: case $case arm $arm" >&2

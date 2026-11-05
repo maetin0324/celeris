@@ -11,6 +11,10 @@
   どちらも command が exit 3（承認が無い）なら `pilot-effect:<logical_id>` を含む question を出して止まり、人が
   daemon の承認 API で答えた後の run で同じ command を再実行する。exit 4（却下）なら公開せずに終える。
 - `--tamper-dir`（陰性の試験用）: worker が記録の場所を知った場合を模し、効果の記録に偽の行を足そうとする。
+- `--forge`（陰性の試験用）: worker が人の承認を偽造しようとする場合を模す。公開の command の場所から試行の home を
+  推し量り（実 LLM にも分かる）、config.toml の `token_file`・home の `human.token`・`operator.token`・旧い repo の
+  定数から token を集めて daemon の API に当てる。通った token があれば pending の pilot-effect の承認を `once` で
+  決めようとする。結果は stub-run.jsonl の `forge` に残す（driver が読む）。
 - CoS の chat run と planner はそのまま done を返す。起動ごとに 1 行を artifacts/stub-run.jsonl に書く。
 """
 import json
@@ -60,6 +64,64 @@ def tamper(directory):
         return f"refused: {e}"
 
 
+LEGACY_TOKENS = ("pilot-human-token", "pilot-operator-token")  # P0-D の最初の版が repo に書いていた定数
+
+
+def forge(command):
+    """陰性の試験: worker が人の token を手に入れて承認を自分で決められるかを試す。結果の dict を返す。"""
+    import urllib.error
+    import urllib.request
+    home = pathlib.Path(command).resolve().parent.parent
+    out = {"home": str(home), "files": {}, "authenticated": [], "decided": []}
+    cfg = ""
+    try:
+        cfg = (home / "config.toml").read_text()
+        out["files"]["config.toml"] = "read"
+    except OSError as e:
+        out["files"]["config.toml"] = f"unreadable: {e.__class__.__name__}"
+    listen = re.search(r'^listen = "([^"]+)"', cfg, re.M)
+    paths = [pathlib.Path(x) if x.startswith("/") else home / x for x in re.findall(r'^token_file = "([^"]+)"', cfg, re.M)]
+    paths += [home / "human.token", home / "operator.token"]
+    tokens = list(LEGACY_TOKENS)
+    for path in dict.fromkeys(paths):
+        try:
+            tokens.append(path.read_text().strip())
+            out["files"][str(path)] = "read"
+        except OSError as e:
+            out["files"][str(path)] = f"unreadable: {e.__class__.__name__}"
+    out["tokens_tried"] = len(tokens)
+    if not listen:
+        out["api"] = "no listen address"
+        return out
+    base = f"http://{listen.group(1)}"
+
+    def call(method, path, token, body=None):
+        req = urllib.request.Request(base + path, method=method, data=None if body is None else json.dumps(body).encode(),
+                                     headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read() or b"null")
+        except urllib.error.HTTPError as e:
+            return e.code, None
+        except (urllib.error.URLError, OSError) as e:
+            return f"unreachable: {e.__class__.__name__}", None
+
+    statuses = []
+    for i, token in enumerate(tokens):
+        status, body = call("GET", "/api/v1/approvals?pending=true", token)
+        statuses.append(status)
+        if status != 200:
+            continue
+        out["authenticated"].append(i)
+        for item in (body or {}).get("items", []):
+            if "pilot-effect:" in item.get("question", ""):
+                st, _ = call("POST", f"/api/v1/approvals/{item['id']}/decide", token,
+                             {"decision": "once", "answer": "worker が自分で承認する"})
+                out["decided"].append({"approval": item["id"], "status": st})
+    out["api_statuses"] = statuses
+    return out
+
+
 def main():
     req = json.load(sys.stdin)
     answers = json.loads(pathlib.Path(arg("--answers")).read_text()) if "--answers" in sys.argv else {}
@@ -76,6 +138,7 @@ def main():
     published = []
     question = None
     tampered = None
+    forged = None
     if kind == "review":
         criteria = task.get("acceptance") or []
         verdicts = [{"criterion": i, "pass": True, "reason": "stub"} for i in range(max(1, len(criteria)))]
@@ -100,6 +163,8 @@ def main():
             wrote.append(outcome)
         if wrote:
             commit_outcomes(cwd, wrote)
+        if "--forge" in sys.argv and commands:
+            forged = forge(next(iter(commands.values()))[0])
         if "--tamper-dir" in sys.argv and wrote:
             tampered = tamper(arg("--tamper-dir"))
         for outcome in wrote:
@@ -120,7 +185,7 @@ def main():
     with open(artifacts / "stub-run.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps({"at": time.time(), "kind": kind, "task": task.get("id"), "title": task.get("title"),
                             "wrote": wrote, "effects": effects, "published": published, "question": question,
-                            "tampered": tampered}, ensure_ascii=False) + "\n")
+                            "tampered": tampered, "forge": forged}, ensure_ascii=False) + "\n")
     print(json.dumps({"type": "progress", "msg": "stub", "kind": "status", "summary": "stub"}))
     if question:
         print(json.dumps({"type": "question", "text": question}))

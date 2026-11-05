@@ -50,6 +50,20 @@ const COS_INPUT_MAX: usize = 4000;
 /// （TS の `POLICY.humanWaitSecs` と同じ 1 日）。
 const ANSWERED_RECHECK_SECS: u64 = 24 * 3600;
 
+/// 第 3 フェーズ I1: TS が `wait(achieved)` を返したが Rust の数え直しで未達の Outcome があるときの規則。
+/// 判断の行の `validation` は `pc/achieved-unverified:<未達の id,…>`。
+pub const ACHIEVED_UNVERIFIED_RULE: &str = "pc/achieved-unverified";
+/// 既に到達を記録した Outcome への `mark_milestone`（効果なし）。
+pub const MILESTONE_RECORDED_RULE: &str = "pc/milestone-already-recorded";
+/// 達成を拒否した後に評価し直すまでの秒（記録の効果が pending なら次の tick で効く）。
+const ACHIEVED_RECHECK_SECS: u64 = 60;
+/// controller が Roadmap に書く状態の記録の `actor`。
+pub const CONTROLLER_ACTOR: &str = "project_controller";
+/// 到達の記録の `reason`（判断の id で冪等。daemon の再起動の後に効果が既に効いたかを読む）。
+pub fn outcome_record_reason(decision_id: &str) -> String {
+    format!("pc-decision:{decision_id}")
+}
+
 /// 失敗の分類（ADR §A3 の `Classification`）。TS の `classifyFailure` が案を出し、判断の記録に残る。
 pub const CLASSIFICATIONS: [&str; 7] = [
     "worker_bug",
@@ -234,13 +248,248 @@ impl ProjectDecider for TsProjectDecider {
                     .clone()
             }));
         }
+        // 第 3 フェーズ I1・I2（付記 P0-B）: TS の提案と別に、Rust が到達の記録と根拠を数え直す。
+        let recorded = recorded_outcomes(&store, input.mode, &snapshot)?;
+        let (proposal, verify) = verify_achievement(&snapshot, &recorded, proposal);
+        rec["achievement"] = verify;
         let mut decision = to_decision(&snapshot, &proposal)?;
+        if let ProjectAction::MarkMilestone { outcome_id, .. } = &proposal.action
+            && recorded.contains(outcome_id)
+        {
+            // 同じ Outcome の到達は 1 回だけ記録する（重複の event・TS の繰り返しで二重に書かない。I11）。
+            decision.effect = ProjectEffect::None;
+            decision.rule_id = MILESTONE_RECORDED_RULE.into();
+        }
         if let ProjectEffect::CreateRoot { authority, .. } = &mut decision.effect {
             *authority = launch_scope;
         }
         self.record = Some(rec.to_string());
         Ok(decision)
     }
+}
+
+/// 第 3 フェーズ I1・I2: 到達を記録済みの Outcome の id。
+/// - approved の Roadmap がある案件: Roadmap の最後の状態が `reached`（人の API か controller の効果が書いたもの）。
+/// - Roadmap の無い案件: 今の依頼文の版（`request_sha256`）での `mark_milestone` の判断で、効果が `applied`。
+/// - `shadow`・`dry_run` は効果を書かない（`suppressed`）ので、その mode では `suppressed` の `mark_milestone` も
+///   記録に数える（enabled なら何が起きるかの写し。enabled の判定には効かない）。
+pub fn recorded_outcomes(
+    store: &SqliteStore,
+    mode: ControllerMode,
+    snapshot: &ProjectSnapshot,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let mut out = std::collections::BTreeSet::new();
+    if let Some(view) = &snapshot.roadmap {
+        let view: task_core::roadmap::Roadmap =
+            serde_json::from_value(view.clone()).map_err(|e| format!("roadmap view: {e}"))?;
+        for o in view.outcomes {
+            if o.status == task_core::roadmap::OutcomeStatus::Reached {
+                out.insert(o.id);
+            }
+        }
+    }
+    let rows = store
+        .project_controller_decisions(&snapshot.project.id, None, RECORDED_SCAN)
+        .map_err(|e| e.to_string())?;
+    for row in &rows {
+        let counted = match row.effect_state.as_str() {
+            "applied" => snapshot.roadmap.is_none(),
+            "suppressed" => mode != ControllerMode::Enabled,
+            _ => false,
+        };
+        if !counted || row.request_sha256 != snapshot.project.request_sha256 {
+            continue;
+        }
+        if let Ok(ProjectEffect::RecordOutcome { outcome_id, .. }) =
+            serde_json::from_str::<ProjectEffect>(&row.effect_json)
+        {
+            out.insert(outcome_id);
+        }
+    }
+    Ok(out)
+}
+
+/// 到達の記録を探す判断の件数の上限（`mark_milestone` は Outcome ごとに 1 回なので十分に大きい）。
+const RECORDED_SCAN: usize = 100_000;
+
+/// 第 3 フェーズ I1: `wait(achieved)` を Rust が数え直す。未達があれば phase `waiting` の `wait` に置き換え、
+/// 規則 `pc/achieved-unverified:<id,…>` と未達の id を記録に残す。戻り値の 2 つ目は判断の記録の `achievement`。
+pub fn verify_achievement(
+    snapshot: &ProjectSnapshot,
+    recorded: &std::collections::BTreeSet<String>,
+    proposal: ProjectProposal,
+) -> (ProjectProposal, Value) {
+    if !matches!(
+        proposal.action,
+        ProjectAction::Wait {
+            phase: WaitPhase::Achieved,
+            ..
+        }
+    ) {
+        return (proposal, Value::Null);
+    }
+    let unverified = pp::unverified_outcomes(snapshot, recorded);
+    let record = json!({
+        "recorded": recorded,
+        "unverified": unverified,
+        "ts_gap": proposal.gap,
+    });
+    if unverified.is_empty() {
+        return (proposal, record);
+    }
+    let mut p = proposal;
+    p.explanation.rule_id = format!("{ACHIEVED_UNVERIFIED_RULE}:{}", unverified.join(","));
+    p.explanation.signals.truncate(14);
+    p.explanation.signals.push(pp::ProposalSignal {
+        name: "achieved_unverified".into(),
+        detail: unverified.join(","),
+    });
+    p.action = ProjectAction::Wait {
+        waiting_on: Vec::new(),
+        next_wake_after_secs: ACHIEVED_RECHECK_SECS,
+        phase: WaitPhase::Waiting,
+    };
+    (p, record)
+}
+
+/// `RecordOutcome` の効果の結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutcomeRecord {
+    /// 記録した（または既に `reached`）。参照を `effect_ref` に残す。
+    Recorded(String),
+    /// 根拠の検査に落ちた。状態は書かない（fail closed）。`effect_ref` は `refused:<code>`。
+    Refused(String),
+    /// 効果の門が閉じていた（人の操作が先）。呼び出し側は門に判断の記録を任せる。
+    GateClosed,
+}
+
+/// 第 3 フェーズ I2・I3・I11: `mark_milestone` の効果。根拠の root を今の store から確かめ直す（人の
+/// `POST …/roadmap/outcomes/{oid}/status` と同じ `check_status`）。approved の Roadmap があれば、書き込みの tx で
+/// 効果の門を読み、Outcome の最後の状態が既に `reached` なら書かず、そうでなければ `record_status_tx` で書く
+/// （`reason` は判断の id で、再起動の後に [`outcome_in_place`] が読む）。
+pub fn record_outcome(
+    store: &SqliteStore,
+    d: &ProjectControllerDecision,
+    outcome_id: &str,
+    evidence_refs: &[String],
+    now: OffsetDateTime,
+) -> Result<OutcomeRecord, String> {
+    let project_id: task_core::ProjectId = d
+        .project_id
+        .parse()
+        .map_err(|e| format!("project id {}: {e}", d.project_id))?;
+    let approved = store
+        .roadmap_approved(&d.project_id)
+        .map_err(|e| e.to_string())?;
+    if approved.is_none() {
+        return record_without_roadmap(store, d, project_id, outcome_id, evidence_refs, now);
+    }
+    let input = task_ops::roadmap::OutcomeStatusInput {
+        status: task_core::roadmap::OutcomeStatus::Reached,
+        evidence_refs: evidence_refs.to_vec(),
+        reason: outcome_record_reason(&d.id),
+    };
+    let checked = match task_ops::roadmap::check_status(store, project_id, outcome_id, &input, now)
+    {
+        Ok(c) => c,
+        Err(task_core::store::RoadmapWriteError::Invalid(inv)) => {
+            return Ok(OutcomeRecord::Refused(format!("refused:{}", inv.code)));
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    match store.write_tx::<_, task_core::store::RoadmapWriteError, _>(|tx| {
+        if !SqliteStore::roadmap_effect_gate_open_tx(tx, &d.project_id, d.human_epoch)? {
+            return Ok(OutcomeRecord::GateClosed);
+        }
+        if let Some((task_core::roadmap::OutcomeStatus::Reached, reason)) =
+            SqliteStore::roadmap_last_status_tx(tx, &d.project_id, outcome_id)?
+        {
+            return Ok(OutcomeRecord::Recorded(format!("roadmap:already:{reason}")));
+        }
+        // 検査に落ちれば Err で tx ごと戻す（root の対応だけが残ることもない）。
+        let id = task_ops::roadmap::record_status_tx(
+            tx,
+            &d.project_id,
+            outcome_id,
+            &checked,
+            CONTROLLER_ACTOR,
+            now,
+        )?;
+        Ok(OutcomeRecord::Recorded(format!("roadmap_event:{id}")))
+    }) {
+        Ok(r) => Ok(r),
+        Err(task_core::store::RoadmapWriteError::Invalid(inv)) => {
+            Ok(OutcomeRecord::Refused(format!("refused:{}", inv.code)))
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Roadmap の無い案件: 依頼文の block の Outcome と根拠の root を今の store から確かめ直す。判断の行が正本なので
+/// 書く表は無い（`effect_ref` に根拠の root を残す）。
+fn record_without_roadmap(
+    store: &SqliteStore,
+    d: &ProjectControllerDecision,
+    project_id: task_core::ProjectId,
+    outcome_id: &str,
+    evidence_refs: &[String],
+    now: OffsetDateTime,
+) -> Result<OutcomeRecord, String> {
+    let snapshot = ps::build(
+        store,
+        project_id,
+        SnapshotContext {
+            controller: SnapshotController {
+                mode: "off".into(),
+                phase: "active".into(),
+                revision: 0,
+                human_epoch: 0,
+                retry_count: 0,
+                progress_epoch: 0,
+            },
+            decisions: Vec::new(),
+            wakes: Vec::new(),
+            limits: SnapshotLimits::default(),
+            now,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    if snapshot.project.request_sha256 != d.request_sha256 {
+        return Ok(OutcomeRecord::Refused("refused:request_changed".into()));
+    }
+    let Some(outcome) = snapshot.outcomes.iter().find(|o| o.id == outcome_id) else {
+        return Ok(OutcomeRecord::Refused("refused:outcome_unknown".into()));
+    };
+    if evidence_refs.is_empty() {
+        return Ok(OutcomeRecord::Refused("refused:evidence_required".into()));
+    }
+    for r in evidence_refs {
+        let ok = r.strip_prefix("task:").is_some_and(|id| {
+            snapshot
+                .roots
+                .iter()
+                .any(|root| root.id == id && pp::root_satisfies(root, outcome))
+        });
+        if !ok {
+            return Ok(OutcomeRecord::Refused("refused:evidence_unverified".into()));
+        }
+    }
+    Ok(OutcomeRecord::Recorded(evidence_refs.join(",")))
+}
+
+/// 再起動の後: この判断の到達の記録が Roadmap に既にあれば、その参照（Roadmap の無い案件は書く表が無いので `None`）。
+pub fn outcome_in_place(
+    store: &SqliteStore,
+    project: &str,
+    decision_id: &str,
+) -> Result<Option<String>, String> {
+    let reason = outcome_record_reason(decision_id);
+    Ok(store
+        .roadmap_outcome_events(project)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|e| e.kind == "status" && e.reason == reason)
+        .map(|e| format!("roadmap_event:{}", e.id)))
 }
 
 /// 同期の tick から TS を呼ぶ（別の current-thread runtime で待つ）。
@@ -652,8 +901,15 @@ pub fn to_decision(
             };
             d.next_wake_after_secs = (*next_wake_after_secs > 0).then_some(*next_wake_after_secs);
         }
-        ProjectAction::MarkMilestone { .. } => {
-            // 記録だけ（A5 の前）。続きはすぐ評価し直す。
+        ProjectAction::MarkMilestone {
+            outcome_id,
+            evidence_refs,
+        } => {
+            // 第 3 フェーズ I2: 効果の時に根拠を確かめ直して記録する。続きはすぐ評価し直す。
+            d.effect = ProjectEffect::RecordOutcome {
+                outcome_id: outcome_id.clone(),
+                evidence_refs: evidence_refs.clone(),
+            };
             d.next_wake_after_secs = Some(1);
         }
         ProjectAction::Replan {

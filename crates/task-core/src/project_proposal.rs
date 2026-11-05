@@ -438,7 +438,7 @@ pub enum ProjectAction {
         options: Vec<String>,
         evidence_refs: Vec<String>,
     },
-    /// Outcome の到達を記録する（A5 までは判断の記録だけ）。
+    /// Outcome の到達を記録する。Rust が根拠を確かめ直し、Roadmap があれば `reached` を書く（第 3 フェーズ I2）。
     MarkMilestone {
         outcome_id: String,
         evidence_refs: Vec<String>,
@@ -658,13 +658,13 @@ pub fn validate(
                     "wait is too long",
                 ));
             }
-            if *phase == WaitPhase::Achieved
-                && (!gap.open.is_empty() || !gap.unknown.is_empty() || snapshot.outcomes.is_empty())
-            {
+            // 第 3 フェーズ I1: TS の申告した `gap` は見ない。Outcome ごとの根拠と記録の数え直しは
+            // [`unverified_outcomes`] が持ち、呼び出し側（decider）が phase を `waiting` に戻す。
+            if *phase == WaitPhase::Achieved && snapshot.outcomes.is_empty() {
                 v.push(ProposalViolation::new(
                     "achieved_with_open_outcomes",
                     false,
-                    "wait(achieved) while outcomes are open",
+                    "wait(achieved) without outcomes",
                 ));
             }
         }
@@ -887,6 +887,25 @@ pub fn root_satisfies(root: &SnapshotRoot, outcome: &Outcome) -> bool {
         .acceptance
         .iter()
         .all(|a| texts.contains(a.as_str()))
+}
+
+/// 第 3 フェーズ I1（ADR 2026-11-05-phase3-achievement-invariants）: phase `achieved` を書いてよいかを、TS の
+/// `gap` を使わずに snapshot から数え直す。達成の対象（approved の Roadmap があればその生きている Outcome、
+/// 無ければ依頼文の block。どちらも `snapshot.outcomes`）のうち、(1) I3 を満たす根拠の root が snapshot に無いか、
+/// (2) 到達の記録（`recorded`: Roadmap の `reached`、または適用済みの `mark_milestone`）が無いものの id を返す。
+/// 空なら達成。Outcome が 0 件・block が壊れているときは `"*"` を返す（達成にしない）。
+pub fn unverified_outcomes(snapshot: &ProjectSnapshot, recorded: &BTreeSet<String>) -> Vec<String> {
+    if snapshot.outcomes.is_empty() || snapshot.outcomes_invalid {
+        return vec!["*".to_owned()];
+    }
+    snapshot
+        .outcomes
+        .iter()
+        .filter(|o| {
+            !recorded.contains(&o.id) || !snapshot.roots.iter().any(|r| root_satisfies(r, o))
+        })
+        .map(|o| o.id.clone())
+        .collect()
 }
 
 /// task の状態が終端か（`done`・`failed`・`cancelled`）。

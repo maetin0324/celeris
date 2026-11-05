@@ -200,6 +200,24 @@ impl Pilot {
         )
         .unwrap();
         drop(conn);
+        if to == Status::Done {
+            // 第 3 フェーズ I4: repo の無い root は成果物（`ArtifactProduced`）があって初めて取り込み済み。
+            self.store
+                .append_event(
+                    id,
+                    &Event::ArtifactProduced {
+                        run_id: "pilot-run".into(),
+                        artifact: task_core::ArtifactRef {
+                            name: "report.md".into(),
+                            path: "artifacts/report.md".into(),
+                            sha256: "0".repeat(64),
+                            kind: "file".into(),
+                            declared: true,
+                        },
+                    },
+                )
+                .unwrap();
+        }
         self.store
             .append_event(
                 id,

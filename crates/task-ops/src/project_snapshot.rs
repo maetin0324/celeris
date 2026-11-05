@@ -102,7 +102,22 @@ fn check_kind(c: &Check) -> &'static str {
     }
 }
 
+/// worker の run が毎回書く機械向けの file。I4 の「成果物」に数えない。
+const MACHINE_ARTIFACTS: [&str; 4] = [
+    "result.json",
+    "checkpoint.json",
+    "delegate.json",
+    "followups.json",
+];
+
 /// root の progress ledger の 1 行を events から作る。
+///
+/// 第 3 フェーズ I3（ADR 2026-11-05-phase3-achievement-invariants、付記 P0-B）:
+/// - `reviewer_passed` は「最後の終端遷移が `review_pass` による done」で、かつ最後の review の判定に不合格が無く、
+///   `Check::Command` の条件が全部合格のときだけ真。reopen（終端から非終端への遷移）で前の合格と判定を捨てる。
+/// - `integrated` は、repo を持つ root では最後の `IntegrationMerged` の後に `IntegrationReopened` が無いこと、
+///   repo の無い root（調査の案件）では成果物（機械向けの file 以外の `ArtifactProduced`、または合格した
+///   `artifact_exists`・`knowledge_page` の条件）があること（I4）。
 fn root_row(
     store: &SqliteStore,
     task: &Task,
@@ -111,9 +126,11 @@ fn root_row(
     waits: &mut Vec<SnapshotWait>,
 ) -> Result<SnapshotRoot, OpsError> {
     let events = store.events_for(task.id)?;
+    // 今の試行の review の判定（criterion ごとに最新）。非終端への遷移（reopen・retry）で捨てる。
     let mut verdicts: BTreeMap<usize, bool> = BTreeMap::new();
-    let mut reviewer_passed = false;
+    let mut passed_by_review = false;
     let mut merged = false;
+    let mut produced = false;
     let mut last_fail_reason: Option<String> = None;
     let mut attempts = 0u32;
     let mut open_questions: Vec<(String, &'static str)> = Vec::new();
@@ -126,16 +143,23 @@ fn root_row(
             } => {
                 verdicts.insert(*criterion_idx, *pass);
             }
-            Event::ReviewerPassed { .. } | Event::ReviewerPassReused { .. } => {
-                reviewer_passed = true
-            }
             // A9 D1: repo を持つ案件で取り込み済みと数えるのは IntegrationMerged だけ。見送り（NotGit・NoCommits）や
             // IntegrationNotApplicable は、成果が案件の tree に載ったことを示さない。
             Event::IntegrationMerged { .. } => merged = true,
             Event::IntegrationReopened { .. } => merged = false,
+            Event::ArtifactProduced { artifact, .. } => {
+                let name = artifact.name.rsplit('/').next().unwrap_or_default();
+                if !MACHINE_ARTIFACTS.contains(&name) {
+                    produced = true;
+                }
+            }
             Event::Transitioned { to, reason, .. } => {
-                if *to == Status::Done && reason == "review_pass" {
-                    reviewer_passed = true;
+                if to.is_terminal() {
+                    // I3(b): 最後の終端遷移だけを見る（reopen の前の合格を持ち越さない）。
+                    passed_by_review = *to == Status::Done && reason == "review_pass";
+                } else if *to != Status::Reviewing {
+                    passed_by_review = false;
+                    verdicts.clear();
                 }
                 if *to == Status::Failed {
                     last_fail_reason = Some(reason.clone());
@@ -154,6 +178,23 @@ fn root_row(
             _ => {}
         }
     }
+    // I3(c)・I7: 最後の review に不合格が無く、決定的な検査（command）は全部が合格の判定を持つ。
+    let checks_passed = !verdicts.values().any(|p| !p)
+        && task
+            .acceptance
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| matches!(c.check, Check::Command { .. }))
+            .all(|(i, _)| verdicts.get(&i) == Some(&true));
+    let reviewer_passed = task.status == Status::Done && passed_by_review && checks_passed;
+    // I4: repo の無い root の成果物。合格した artifact_exists・knowledge_page の条件も成果物の参照に数える。
+    let deliverable = produced
+        || task.acceptance.iter().enumerate().any(|(i, c)| {
+            matches!(
+                c.check,
+                Check::ArtifactExists { .. } | Check::KnowledgePage { .. }
+            ) && verdicts.get(&i) == Some(&true)
+        });
     let status = status_str(task.status);
     let failure_class = match task.status {
         Status::Failed => Some(
@@ -212,7 +253,12 @@ fn root_row(
         outcome_ids: meta.map(|m| m.outcome_ids.clone()).unwrap_or_default(),
         acceptance,
         reviewer_passed,
-        integrated: task.status == Status::Done && (task.repos.is_empty() || merged),
+        integrated: task.status == Status::Done
+            && if task.repos.is_empty() {
+                deliverable
+            } else {
+                merged
+            },
         failure_class,
         attempts,
         open_waits: open_questions
@@ -536,8 +582,150 @@ mod root_row_tests {
         assert!(!integrated(true, &[na]));
     }
 
+    fn artifact(name: &str) -> Event {
+        Event::ArtifactProduced {
+            run_id: "r".into(),
+            artifact: task_core::ArtifactRef {
+                name: name.into(),
+                path: format!("artifacts/{name}"),
+                sha256: "0".repeat(64),
+                kind: "file".into(),
+                declared: true,
+            },
+        }
+    }
+
+    /// K41（I4）: repo の無い調査の root は成果物があれば取り込み済み。
     #[test]
-    fn root_row_without_repo_done_is_integrated() {
-        assert!(integrated(false, &[]));
+    fn root_row_without_repo_with_deliverable_is_integrated() {
+        assert!(integrated(false, &[artifact("report.md")]));
+    }
+
+    /// K41（I4）: repo の無い root に成果物が無い（機械向けの result.json だけ）なら取り込み済みにしない。
+    #[test]
+    fn root_row_without_repo_without_deliverable_is_not_integrated() {
+        assert!(!integrated(false, &[]));
+        assert!(!integrated(
+            false,
+            &[artifact("result.json"), artifact("checkpoint.json")]
+        ));
+    }
+
+    fn transitioned(from: Status, to: Status, reason: &str) -> Event {
+        Event::Transitioned {
+            from,
+            to,
+            reason: reason.into(),
+        }
+    }
+
+    fn verdict(idx: usize, pass: bool) -> Event {
+        Event::ReviewVerdict {
+            run_id: "rev".into(),
+            criterion_idx: idx,
+            pass,
+            reason: String::new(),
+        }
+    }
+
+    /// done の root の行（acceptance は command 1 件と reviewer 1 件）。
+    fn done_row(events: &[Event]) -> SnapshotRoot {
+        let store = SqliteStore::open_in_memory().expect("store");
+        let spec: NewTaskSpec = serde_json::from_value(serde_json::json!({
+            "title": "t", "objective": "o",
+            "acceptance": [{"type": "command", "cmd": "true", "expect_exit": 0},
+                           {"type": "reviewer", "text": "成果が要件を満たす"}]
+        }))
+        .expect("spec");
+        let mut task = create_task(&store, spec, OffsetDateTime::now_utc()).expect("task");
+        for e in events {
+            store.append_event(task.id, e).expect("event");
+        }
+        task.status = Status::Done;
+        root_row(
+            &store,
+            &task,
+            None,
+            OffsetDateTime::now_utc(),
+            &mut Vec::new(),
+        )
+        .expect("row")
+    }
+
+    /// I3(b)(c): review で全部合格して done になった root は合格。
+    #[test]
+    fn root_row_review_pass_with_checks_is_passed() {
+        let row = done_row(&[
+            transitioned(Status::Running, Status::Reviewing, "worker_done"),
+            verdict(0, true),
+            verdict(1, true),
+            transitioned(Status::Reviewing, Status::Done, "review_pass"),
+        ]);
+        assert!(row.reviewer_passed);
+    }
+
+    /// K3（I3(c)・I7）: reviewer は合格でも command の検査が落ちていれば合格にしない。
+    #[test]
+    fn root_row_command_check_fail_is_not_passed() {
+        let row = done_row(&[
+            transitioned(Status::Running, Status::Reviewing, "worker_done"),
+            verdict(0, false),
+            verdict(1, true),
+            transitioned(Status::Reviewing, Status::Done, "review_pass"),
+        ]);
+        assert!(!row.reviewer_passed);
+        // command の判定が無い（検査が走っていない）ときも合格にしない（fail closed）。
+        let row = done_row(&[
+            transitioned(Status::Running, Status::Reviewing, "worker_done"),
+            verdict(1, true),
+            transitioned(Status::Reviewing, Status::Done, "review_pass"),
+        ]);
+        assert!(!row.reviewer_passed);
+    }
+
+    /// K9（I3(b)）: done の root を reopen し、2 回目の review が落ちたら前の合格を持ち越さない。
+    #[test]
+    fn root_row_reopen_drops_previous_pass() {
+        let first = [
+            transitioned(Status::Running, Status::Reviewing, "worker_done"),
+            verdict(0, true),
+            verdict(1, true),
+            Event::ReviewerPassed {
+                review_run: "rev".into(),
+                repo_id: task_core::RepoId::new(),
+                target_sha: "0".repeat(40),
+                reviewed_sha: "0".repeat(40),
+                criteria: vec![0, 1],
+            },
+            transitioned(Status::Reviewing, Status::Done, "review_pass"),
+            transitioned(Status::Done, Status::Ready, "reopen"),
+            transitioned(Status::Running, Status::Reviewing, "worker_done"),
+            verdict(0, true),
+            verdict(1, false),
+            transitioned(Status::Reviewing, Status::Failed, "review_fail"),
+        ];
+        assert!(!done_row(&first).reviewer_passed);
+        // reopen の後に終端へ来ていない（review 待ち）なら、前の合格は使わない。
+        assert!(!done_row(&first[..6]).reviewer_passed);
+        // reopen の後に review で合格し直せば合格。
+        let mut again = first[..6].to_vec();
+        again.extend([
+            transitioned(Status::Running, Status::Reviewing, "worker_done"),
+            verdict(0, true),
+            verdict(1, true),
+            transitioned(Status::Reviewing, Status::Done, "review_pass"),
+        ]);
+        assert!(done_row(&again).reviewer_passed);
+    }
+
+    /// I3(b): review を通らない done（理由が `review_pass` でない）は合格にしない。
+    #[test]
+    fn root_row_done_without_review_pass_is_not_passed() {
+        let row = done_row(&[
+            verdict(0, true),
+            verdict(1, true),
+            transitioned(Status::Ready, Status::Done, "approve"),
+        ]);
+        assert!(!row.reviewer_passed);
     }
 }

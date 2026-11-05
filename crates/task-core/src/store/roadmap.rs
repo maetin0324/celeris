@@ -183,6 +183,35 @@ impl SqliteStore {
         })
     }
 
+    /// 第 3 フェーズ I2・I11（付記 P0-B）: controller の `mark_milestone` の効果を書く transaction の中で、Outcome の
+    /// 最後の状態の記録（状態と `reason`）を読む。記録が無ければ `None`。
+    pub fn roadmap_last_status_tx(
+        conn: &Connection,
+        project: &str,
+        outcome_id: &str,
+    ) -> Result<Option<(OutcomeStatus, String)>, StoreError> {
+        let row: Option<(Option<String>, String)> = conn
+            .query_row(
+                "SELECT status, reason FROM project_roadmap_outcome_events WHERE project_id = ?1 \
+                 AND outcome_id = ?2 AND kind = 'status' ORDER BY id DESC LIMIT 1",
+                params![project, outcome_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        Ok(row
+            .and_then(|(status, reason)| Some((OutcomeStatus::parse(status.as_deref()?)?, reason))))
+    }
+
+    /// 同じ transaction で効果の門（mode・phase・案件の状態・判断の `human_epoch`）が開いているか（A1 の付記 11 と
+    /// 同じ門）。閉じていれば controller は Outcome の状態を書かない。
+    pub fn roadmap_effect_gate_open_tx(
+        conn: &Connection,
+        project: &str,
+        decision_epoch: i64,
+    ) -> Result<bool, StoreError> {
+        super::project_wake_effect::effect_gate_open_tx(conn, project, decision_epoch)
+    }
+
     /// 提案を積む（今の approved の版は変えない）。`base_version` が今の approved と違えば `Stale`。
     /// 版の番号は案件の最大の次。
     pub fn roadmap_propose_tx(

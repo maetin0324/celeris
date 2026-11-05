@@ -68,6 +68,13 @@ pub enum ProjectEffect {
         category: String,
         summary: String,
     },
+    /// 第 3 フェーズ I2（付記 P0-B）: `mark_milestone` の到達の記録。効果の時に Rust が根拠を確かめ直し
+    /// （`project_decider_ts::record_outcome`）、approved の Roadmap があれば同じ tx で門を読み `reached` を書く。
+    /// Roadmap の無い案件は、適用済みの判断の行（`effect_ref` = 根拠の root）が到達の正本。
+    RecordOutcome {
+        outcome_id: String,
+        evidence_refs: Vec<String>,
+    },
 }
 
 impl ProjectEffect {

@@ -482,7 +482,7 @@ impl Pass<'_> {
     fn apply(&mut self, d: &ProjectControllerDecision) {
         let parsed = serde_json::from_str::<ProjectEffect>(&d.effect_json);
         if let Ok(effect) = &parsed {
-            match self.effect_in_place(&d.project_id, effect) {
+            match self.effect_in_place(&d.project_id, &d.id, effect) {
                 Ok(Some(effect_ref)) => {
                     // guard の問いが既に出ている（同じ日に人が置き直した後も予算を超えている等）: 問いは増やさず、止まり直す。
                     self.reblock_guard(d, effect);
@@ -589,6 +589,28 @@ impl Pass<'_> {
                 }
                 Err(e) => Err(e),
             },
+            // 第 3 フェーズ I2（付記 P0-B）: 根拠を確かめ直して到達を記録する。検査に落ちれば書かずに failed。
+            ProjectEffect::RecordOutcome {
+                outcome_id,
+                evidence_refs,
+            } => match crate::project_decider_ts::record_outcome(
+                self.store,
+                d,
+                &outcome_id,
+                &evidence_refs,
+                self.now,
+            ) {
+                Ok(crate::project_decider_ts::OutcomeRecord::Recorded(r)) => Ok(Some(r)),
+                Ok(crate::project_decider_ts::OutcomeRecord::Refused(why)) => {
+                    self.finish(d, EffectState::Failed, Some(&why));
+                    return;
+                }
+                Ok(crate::project_decider_ts::OutcomeRecord::GateClosed) => {
+                    self.admit(d);
+                    return;
+                }
+                Err(e) => Err(e),
+            },
         };
         match done {
             Ok(effect_ref) => {
@@ -657,10 +679,14 @@ impl Pass<'_> {
     fn effect_in_place(
         &self,
         project: &str,
+        decision_id: &str,
         effect: &ProjectEffect,
     ) -> Result<Option<String>, String> {
         match effect {
             ProjectEffect::None => Ok(None),
+            ProjectEffect::RecordOutcome { .. } => {
+                crate::project_decider_ts::outcome_in_place(self.store, project, decision_id)
+            }
             // A6: 問いの notice が記録済みなら効いている（B5 で落ちた後、`blocked` の門で止まらない）。
             ProjectEffect::OpenEscalation { question_key, .. } => {
                 let key = format!("project_controller:escalate:{project}:{question_key}");

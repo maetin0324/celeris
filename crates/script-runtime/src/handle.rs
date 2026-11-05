@@ -145,6 +145,27 @@ pub struct RuntimeStats {
     pub failures: u64,
 }
 
+/// isolate の V8 heap の統計（[`ScriptRuntimeHandle::heap_stats`]）。長時間の計測（P1-I）で RSS と分けて読む。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeapStats {
+    /// 生きている object の bytes（`used_heap_size`）。
+    pub used_heap_size: u64,
+    /// V8 が heap に確保した bytes（`total_heap_size`）。
+    pub total_heap_size: u64,
+    /// heap のうち物理 memory に載っている bytes。
+    pub total_physical_size: u64,
+    /// heap の上限（`RuntimeLimits::heap_limit_bytes` に近い値）。
+    pub heap_size_limit: u64,
+    /// ArrayBuffer 等の heap の外の bytes。
+    pub external_memory: u64,
+    /// V8 が malloc で持つ bytes。
+    pub malloced_memory: u64,
+    /// native context の数（1 generation に 1 個のはず）。
+    pub number_of_native_contexts: u64,
+    /// 読んだ generation の番号（[`RuntimeStats::generation`]）。
+    pub generation: u64,
+}
+
 /// ScriptRuntime actor の handle。`Clone + Send + Sync`。
 #[derive(Clone)]
 pub struct ScriptRuntimeHandle {
@@ -308,6 +329,16 @@ impl ScriptRuntimeHandle {
             .send(ActorControl::Restart { done: done_tx })
             .map_err(|_| ScriptError::Terminated)?;
         done_rx.await.map_err(|_| ScriptError::Terminated)?
+    }
+
+    /// 今の generation の isolate の V8 heap の統計を actor の thread で読む。actor が止まっていれば None。
+    pub async fn heap_stats(&self) -> Option<HeapStats> {
+        let (done_tx, done_rx) = oneshot::channel();
+        self.inner
+            .ctl
+            .send(ActorControl::HeapStats { done: done_tx })
+            .ok()?;
+        done_rx.await.ok().flatten()
     }
 
     /// 監視用の数値の今の値（actor 側の数と handle 側の数を合わせる）。

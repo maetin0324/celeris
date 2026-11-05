@@ -38,7 +38,8 @@ use ulid::Ulid;
 use crate::dto::{HostError, HostErrorCode};
 use crate::error::ScriptError;
 use crate::handle::{
-    DISPATCH_FUNCTION, HostSink, MAX_IN_FLIGHT, RuntimeLimits, RuntimeStats, ScriptSource,
+    DISPATCH_FUNCTION, HeapStats, HostSink, MAX_IN_FLIGHT, RuntimeLimits, RuntimeStats,
+    ScriptSource,
 };
 use crate::loader::BundleLoader;
 use crate::ops::{self, Grant, GrantGuard, GrantSpec, Grants};
@@ -65,6 +66,10 @@ pub(crate) enum Control {
     /// generation を作り直す。新しい generation の番号を返す。
     Restart {
         done: oneshot::Sender<Result<u64, ScriptError>>,
+    },
+    /// 今の generation の V8 heap の統計を読む（長時間の計測。P1-I）。generation が無ければ None。
+    HeapStats {
+        done: oneshot::Sender<Option<HeapStats>>,
     },
 }
 
@@ -302,12 +307,19 @@ impl Actor {
             let mut progressed = false;
 
             // restart の要求。
-            while let Poll::Ready(Some(Control::Restart { done })) = self.ctl.poll_recv(cx) {
-                let result = self.recycle(Recycle::Restart);
-                let failed = result.is_err();
-                let _ = done.send(result);
-                if failed {
-                    return Poll::Ready(());
+            while let Poll::Ready(Some(control)) = self.ctl.poll_recv(cx) {
+                match control {
+                    Control::Restart { done } => {
+                        let result = self.recycle(Recycle::Restart);
+                        let failed = result.is_err();
+                        let _ = done.send(result);
+                        if failed {
+                            return Poll::Ready(());
+                        }
+                    }
+                    Control::HeapStats { done } => {
+                        let _ = done.send(self.heap_stats());
+                    }
                 }
                 progressed = true;
             }
@@ -598,11 +610,34 @@ impl Actor {
             self.stats.completed += 1;
         }
         self.ctl.close();
-        while let Ok(Control::Restart { done }) = self.ctl.try_recv() {
-            let _ = done.send(Err(ScriptError::Terminated));
+        while let Ok(control) = self.ctl.try_recv() {
+            match control {
+                Control::Restart { done } => {
+                    let _ = done.send(Err(ScriptError::Terminated));
+                }
+                Control::HeapStats { done } => {
+                    let _ = done.send(None);
+                }
+            }
         }
         self.publish();
         drop(self.generation.take());
+    }
+
+    /// 今の generation の isolate の heap の統計（V8 の `GetHeapStatistics`。actor の thread で読む）。
+    fn heap_stats(&mut self) -> Option<HeapStats> {
+        let generation = self.generation.as_mut()?;
+        let s = generation.runtime.v8_isolate().get_heap_statistics();
+        Some(HeapStats {
+            used_heap_size: s.used_heap_size() as u64,
+            total_heap_size: s.total_heap_size() as u64,
+            total_physical_size: s.total_physical_size() as u64,
+            heap_size_limit: s.heap_size_limit() as u64,
+            external_memory: s.external_memory() as u64,
+            malloced_memory: s.malloced_memory() as u64,
+            number_of_native_contexts: s.number_of_native_contexts() as u64,
+            generation: self.stats.generation,
+        })
     }
 
     fn publish(&mut self) {

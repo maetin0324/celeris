@@ -21,6 +21,8 @@ mod long_horizon_pilot;
 mod project_cos;
 #[path = "project_controller_replay.rs"]
 mod replay;
+#[path = "project_controller_soak.rs"]
+mod soak;
 use crate::project_controller::{
     Boundary, ProjectControllerSettings, ProjectDecider, ProjectDecision, ProjectEffect,
 };

@@ -24,6 +24,7 @@ pub use generation::{
 };
 pub use handle::{
     DEFAULT_HEAP_LIMIT_BYTES, DEFAULT_INPUT_LIMIT_BYTES, DISPATCH_FUNCTION, HOST_SINK_CAPACITY,
-    HostOpCall, HostSink, MAX_IN_FLIGHT, MAX_OPS_PER_REQUEST, QUEUE_CAPACITY, RuntimeLimits,
-    RuntimeStats, ScriptCall, ScriptReply, ScriptRuntimeHandle, ScriptSource, host_sink,
+    HeapStats, HostOpCall, HostSink, MAX_IN_FLIGHT, MAX_OPS_PER_REQUEST, QUEUE_CAPACITY,
+    RuntimeLimits, RuntimeStats, ScriptCall, ScriptReply, ScriptRuntimeHandle, ScriptSource,
+    host_sink,
 };

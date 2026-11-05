@@ -326,6 +326,9 @@ pub enum StaleReason {
     HumanEpoch,
     Lease,
     Mode,
+    /// 第 3 フェーズ P0-B: phase `achieved` の判断の後、commit までに案件の root の event が増えた
+    /// （reopen・`IntegrationReopened` など。判断の根拠が古い）。
+    Evidence,
 }
 
 impl StaleReason {
@@ -335,6 +338,7 @@ impl StaleReason {
             StaleReason::HumanEpoch => "rejected:stale_human_epoch",
             StaleReason::Lease => "rejected:stale_lease",
             StaleReason::Mode => "rejected:stale_mode",
+            StaleReason::Evidence => "rejected:stale_evidence",
         }
     }
 }

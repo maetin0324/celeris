@@ -458,6 +458,7 @@ async fn project_cos_ts_review_failed_retries_after_brief() {
             has_effect: !matches!(decision.effect, ProjectEffect::None),
             next_wake_at: None,
             phase: decision.phase,
+            evidence_mark: None,
         };
         let ids: Vec<i64> = lease.wakes.iter().map(|w| w.id).collect();
         db.store

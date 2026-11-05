@@ -365,6 +365,17 @@ impl Pass<'_> {
             wakes: lease.wakes.clone(),
             now: format_time(self.now),
         };
+        // 第 3 フェーズ P0-B（I1）: 判断の前に root の event の位置を読む。phase `achieved` の commit の tx で
+        // 読み直し、decide の間に root が reopen された（event が増えた）なら達成を書かない（`Stale(Evidence)`）。
+        let evidence_mark = match self.store.project_root_event_mark(project) {
+            Ok(mark) => mark,
+            Err(error) => {
+                self.store
+                    .project_controller_release(project, &self.rt.owner)
+                    .map_err(|e| e.to_string())?;
+                return Err(format!("evidence mark: {error}"));
+            }
+        };
         // A6: guard（achieved・同じ失敗・品質・予算・TTL）が効けば decider（TS）を呼ばない。
         let pre = match super::project_guard::pre_decide(
             self.store,
@@ -441,6 +452,7 @@ impl Pass<'_> {
                 .next_wake_after_secs
                 .map(|secs| self.now + time::Duration::seconds(secs as i64)),
             phase: decision.phase,
+            evidence_mark: Some(evidence_mark),
         };
         let wake_ids: Vec<i64> = lease.wakes.iter().map(|w| w.id).collect();
         match self

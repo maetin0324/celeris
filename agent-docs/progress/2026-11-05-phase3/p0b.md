@@ -15,6 +15,7 @@ updated: 2026-11-05
 - 根拠の root の条件を絞った: 最後の終端遷移が `review_pass` の done、最後の review に不合格が無く command の検査が全部合格、repo 付きは `IntegrationMerged`、repo 無しは成果物（I3・I4）。
 - TS（control-ts）は変えていない。TS の `satisfies` は snapshot の `reviewer_passed`・`integrated` を読むので、Rust が絞った欄に自動で従う。TS だけの変更が無いので、verify の cargo 0・p50/p95 の条件はこの task では対象外。
 - migration は足していない（0115 の予約は未使用。P1-G は 0115 を使ってよい）。
+- attempt 2（reviewer の差し戻しへの対応）: decide と commit の間に根拠の root が reopen・`IntegrationReopened` されると achieved が書かれる窓を閉じた。評価の前に root ごとの最後の event の seq を読み、phase `achieved` の commit の tx で読み直して違えば `Stale(Evidence)`（`rejected:stale_evidence`）にする（ADR 付記の決定 7、reviewer の修正案 (a)）。
 
 ## 照合した資料（修正済みを再実装しない）
 `agent-docs/progress/2026-11-04-long-horizon.md`・`a1.md`〜`a9.md`、`2026-11-05-a9-llm-pilot.md`、`2026-11-05-a9-fix-arrival.md`、ADR `2026-11-05-a9-llm-pilot-findings.md`、`docs/ops/project-controller.md`、P0-A の `p0a.md`。A9 D1 の「repo 付きは `IntegrationMerged` だけ」は保った（`root_row_repo_*` 4 件が通る。K12）。旧 milestones API の 410 も保った（`milestone_lifecycle_endpoints_are_gone` 等 2 件が通る）。
@@ -30,6 +31,12 @@ updated: 2026-11-05
   - `crates/task-dispatch/src/dispatcher/tests/project_achievement.rs`（新規、`project_cos` の子 module）: 試験 12 件。
 - `p0b: 既存の試験の fixture を I4 に合わせ、ADR の付記を足す`
   - repo の無い root を done にする fixture に `ArtifactProduced` を足した（`long_horizon_pilot.rs`、`crates/celeris/tests/project_controller_e2e.rs`、`crates/task-api/tests/project_roadmap.rs`）。
+- `p0b: decide と commit の間の root の reopen で achieved を書かない（I1 の CAS）`（attempt 2）
+  - `crates/task-core/src/store/project_wake.rs`: `project_root_event_mark`・`RootEventMark`、`NewProjectDecision.evidence_mark`、commit の tx の照合。
+  - `crates/task-core/src/project_wake.rs`: `StaleReason::Evidence`（`rejected:stale_evidence`）。
+  - `crates/task-dispatch/src/dispatcher/project_wake.rs`: lease の後・guard の前に位置を読み、commit に渡す。
+  - `crates/task-dispatch/src/dispatcher/tests/project_achievement.rs`: 競合の試験 2 件（`BeforeCommit` の hook で root を reopen／`IntegrationReopened`）。
+  - `crates/celeris/tests/project_cos_shadow.rs`: `NewProjectDecision` の欄を足した（`evidence_mark: None`）。
 - `p0b: 進捗を書く`（この file と raw）
 - `p0b: 同期の後の検査の結果を書く`
 
@@ -45,6 +52,7 @@ updated: 2026-11-05
 | 1 版の差し替え | K7 | `project_achievement_roadmap_version_swap_reopens`（achieved の後に Outcome を足す版を承認 → `pc/achieved-unverified:o2`、o1 の記録は 1 件のまま） |
 | 1 重複 event | K8 | `project_achievement_duplicate_events_record_once`（`IntegrationMerged`・`ReviewerPassed` を 3 回、TS が同じ mark を繰り返しても記録 1 件） |
 | 1 reopen | K9 | `project_achievement_reopened_root_is_not_evidence`、`root_row_reopen_drops_previous_pass`、`root_row_done_without_review_pass_is_not_passed` |
+| 1 decide と commit の間の reopen | K9（競合） | `project_achievement_reopen_between_decide_and_commit_is_stale`（`wait(achieved)` の判断の後・tx1 の前に root を done → ready。`rejected:stale_evidence`、`pc/achieved` の判断 0 件、次の評価で `pc/achieved-unverified:o1`）、`project_achievement_integration_reopened_between_decide_and_commit_is_stale`（同じ窓で `IntegrationReopened`。取り込み直した後に達成し、記録は 1 件のまま） |
 | 1 並行 approval/CAS | K10 | `project_achievement_concurrent_approval_cas`（同じ版を土台の承認 2 件は 1 件だけ通り、もう 1 件は `Stale`。承認の後の古い判断の効果は門で `GateClosed`、記録は増えない） |
 | 1 再起動 | K11 | `project_achievement_restart_records_once`（同じ判断を当て直しても記録 1 件、`outcome_in_place` が記録を見つける、daemon を作り直して評価を続けても 1 件） |
 | 2 repo 付きは `IntegrationMerged` だけ | K12 | 既存 `root_row_repo_no_commits_is_not_integrated`・`root_row_repo_not_git_is_not_integrated`・`root_row_repo_integration_merged_is_integrated`・`root_row_repo_not_applicable_is_not_integrated` |
@@ -65,18 +73,21 @@ updated: 2026-11-05
 ## 失敗ケース（途中で落ちたもの）
 - 初回の `cargo nextest run` は v8 の link で落ちた（`could not find native static library rusty_v8`）。target の `debug/build/v8-*` を消して作り直した。
 - I4 を入れた直後、repo の無い root を `ArtifactProduced` なしで done にする既存の試験 7 件が落ちた（`root_row_without_repo_done_is_integrated`、`long_horizon_pilot_*` 4 件、`project_roadmap_root_links_and_reached_need_rust_evidence`、`project_controller_core_s2_s3_root1_to_root2_to_achieved`）。前者は I4 の陽性・陰性の試験に置き換え、残りは fixture に成果物を足した（試験の期待値は変えていない）。
-- 新しい陰性の試験が修正前のコードで赤になることは、この run では実行して確かめていない。修正前の `validate` は `gap.open` が空なら achieved を通し、`MarkMilestone` は効果を持たなかったので、K1b・K6 は修正前に落ちるはず（未確認）。
+- attempt 2 の競合の試験 2 件は、`evidence_mark` を `None` にした（照合を外した）コードで実行すると 2 件とも `rejected:stale_evidence` の assert で落ちた（exit 100、0 passed・2 failed）。照合を戻すと合格した。
+- attempt 1 の陰性の試験が修正前のコードで赤になることは、実行して確かめていない。修正前の `validate` は `gap.open` が空なら achieved を通し、`MarkMilestone` は効果を持たなかったので、K1b・K6 は修正前に落ちるはず（未確認）。
 
 ## 未解決
-- decide と commit の間に root が reopen されると、phase `achieved` が書かれうる。commit（`project_controller_commit`、P1-G の持ち物）の CAS は revision・human_epoch だけを見る。achieved の後は人の変更の wake でしか評価しないので自動では戻らない。P1-G との統合で、commit の tx に到達の数え直しを足すか、root の reopen を achieved の案件の wake にするかを決める。
+- （attempt 2 で解消）decide と commit の間の root の reopen で achieved が書かれる窓は、commit の tx の照合で閉じた。
+- achieved を commit した**後**に根拠の root が reopen されても、A6 の guard（achieved の案件は人の変更の wake でだけ評価）のため自動では `waiting` に戻らない。既存の挙動で、この task では変えていない（提案 1）。
+- 照合の対象は `parent_id` の無い task の上位集合なので、案件の会話の task などに event が増えても achieved の commit は `Stale` になり、次の tick で評価し直す（fail closed。達成が 1 tick 遅れるだけ）。
 - 実 LLM での確認はしていない（P0-F の再試験で、controller の achieved と oracle の一致を測る）。
-- `docs/ops/project-controller.md` への反映（`pc/achieved-unverified`・`RecordOutcome`・I4 の成果物の規則）は P2-J に渡す。
+- `docs/ops/project-controller.md` への反映（`pc/achieved-unverified`・`RecordOutcome`・I4 の成果物の規則・`rejected:stale_evidence`）は P2-J に渡す。
 - shadow・dry_run では `suppressed` の mark を到達の記録に数える。enabled に上げた直後は記録が無いので、mark をやり直してから achieved になる（期待どおりと判断したが、運用の文書には未記載）。
 
 ## 次の gate
-- P1-G との統合: `project_wake.rs` の `RecordOutcome` の arm 2 つを残す。migration 0115 は P0-B が使っていない。
+- この task の review（attempt 2 の差分: 上の commit 1 件）。
 - P0-F（実 LLM の再試験）は P0-B〜P0-E の完了後、人の明示の許可で。
-- P2-J: GET・UI に `pc/achieved-unverified` と未達の Outcome の id を出す（K43）。
+- P2-J: GET・UI に `pc/achieved-unverified` と未達の Outcome の id を出す（K43）。運用の文書に `rejected:stale_evidence` を足す。
 
 ## 提案
-- root の reopen（`Transitioned` で done から非終端）を、phase `achieved` の案件の wake にする（上の未解決 1 を P1-G の wake 側で閉じる）。
+- 達成の後の取り消し: root の reopen（`Transitioned` で done から非終端）と `IntegrationReopened` を、phase `achieved` の案件の wake にする（A6 の guard の例外）。人の判断を要する仕様の変更なので、この task ではしない。

@@ -604,3 +604,131 @@ fn project_achievement_restart_records_once() {
     assert_eq!(c.roadmap_reached("o1"), 1);
     assert_eq!(c.phase(), ControllerPhase::Achieved);
 }
+
+/// decide と commit の間に起きる、根拠の root への割り込み。
+#[derive(Clone, Copy)]
+enum Interrupt {
+    /// done の root を ready に戻す（`Transitioned` done → ready）。
+    Reopen,
+    /// 取り込みを取り消す（`IntegrationReopened`。状態は done のまま）。
+    IntegrationReopened,
+}
+
+/// 到達の記録（mark の効果）が applied になった後の最初の `BeforeCommit`（= `wait(achieved)` の判断の後・tx1 の前）で、
+/// 根拠の root に `what` を 1 回だけ起こす。8 回評価させ、tick ごとの `stale` を集めて返す。
+fn race_achieved(c: &mut Case, r: &Task, what: Interrupt) -> Vec<String> {
+    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let store = Arc::clone(&c.store);
+        let db = c.env.db();
+        let pid = c.pid();
+        let tid = r.id;
+        let fired = Arc::clone(&fired);
+        c.d.set_project_controller_hook(Box::new(move |b| {
+            use std::sync::atomic::Ordering::SeqCst;
+            if b != Boundary::BeforeCommit || fired.load(SeqCst) {
+                return;
+            }
+            let recorded = store
+                .project_controller_decisions(&pid, None, 100)
+                .unwrap()
+                .iter()
+                .any(|d| {
+                    d.effect_state == EffectState::Applied
+                        && d.effect_json.contains("record_outcome")
+                });
+            if !recorded {
+                return;
+            }
+            fired.store(true, SeqCst);
+            match what {
+                Interrupt::Reopen => {
+                    rusqlite::Connection::open(&db)
+                        .unwrap()
+                        .execute(
+                            "UPDATE tasks SET status = 'ready', \
+                             json = json_set(json, '$.status', 'ready') WHERE id = ?1",
+                            [tid.to_string()],
+                        )
+                        .unwrap();
+                    store
+                        .append_event(
+                            tid,
+                            &Event::Transitioned {
+                                from: Status::Done,
+                                to: Status::Ready,
+                                reason: "reopen".into(),
+                            },
+                        )
+                        .unwrap();
+                }
+                Interrupt::IntegrationReopened => {
+                    store
+                        .append_event(
+                            tid,
+                            &Event::IntegrationReopened {
+                                repo_id: task_core::RepoId::new(),
+                                branch: "b".into(),
+                                head_sha: "0".repeat(40),
+                                reason: Some("reverted".into()),
+                                actor: "human:test".into(),
+                            },
+                        )
+                        .unwrap();
+                }
+            }
+        }));
+    }
+    let mut stale = Vec::new();
+    for _ in 0..8 {
+        c.wake();
+        stale.extend(c.d.project_controller_last().unwrap().stale);
+    }
+    assert!(
+        fired.load(std::sync::atomic::Ordering::SeqCst),
+        "the race was injected"
+    );
+    stale
+}
+
+/// achieved を書いた判断（TS の `pc/achieved` がそのまま commit された判断）の数。
+fn achieved_decisions(c: &Case) -> usize {
+    c.decisions()
+        .iter()
+        .filter(|d| d.validation == "pc/achieved")
+        .count()
+}
+
+/// K9（競合）: `wait(achieved)` の判断の後・commit の前に根拠の root が reopen されたら、commit の tx が root の
+/// event の位置を照合して `Stale(Evidence)` にし、達成を書かない。次の評価は reopen を見て waiting にする。
+#[test]
+fn project_achievement_reopen_between_decide_and_commit_is_stale() {
+    let mut c = lying_case(&["o1"]);
+    let r = c.root(c.p.id, "o1", false);
+    c.review_done(&r, true);
+    c.deliver(&r);
+    let stale = race_achieved(&mut c, &r, Interrupt::Reopen);
+    assert!(stale.contains(&"rejected:stale_evidence".to_string()));
+    assert_eq!(achieved_decisions(&c), 0);
+    assert_unverified(&c, "o1");
+    assert_eq!(c.records_applied(), 1);
+}
+
+/// K9（競合・取り込み）: 同じ窓で `IntegrationReopened` が来ても達成を書かない。取り込み直したら達成し、
+/// 到達の記録は 1 件のまま。
+#[test]
+fn project_achievement_integration_reopened_between_decide_and_commit_is_stale() {
+    let mut c = lying_case(&["o1"]);
+    let r = c.root(c.p.id, "o1", true);
+    c.review_done(&r, true);
+    c.merged(&r);
+    let stale = race_achieved(&mut c, &r, Interrupt::IntegrationReopened);
+    assert!(stale.contains(&"rejected:stale_evidence".to_string()));
+    assert_eq!(achieved_decisions(&c), 0);
+    assert_unverified(&c, "o1");
+    c.merged(&r);
+    c.settle();
+    assert_eq!(c.phase(), ControllerPhase::Achieved);
+    assert_eq!(achieved_decisions(&c), 1);
+    assert_eq!(c.records_applied(), 1);
+}

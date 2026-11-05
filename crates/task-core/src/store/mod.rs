@@ -163,7 +163,7 @@ mod task_store;
 mod terminal_sessions;
 pub use project_wake::{
     CommitOutcome, DecideFailure, ModeChange, NewProjectDecision, ProjectLease, RootCreate,
-    WAKES_PER_EVALUATION, default_state as project_controller_default_state,
+    RootEventMark, WAKES_PER_EVALUATION, default_state as project_controller_default_state,
 };
 pub use project_wake_effect::{EffectAdmit, EffectDeferKind, EffectDeferral, EffectRetryState};
 pub use roadmap::{NewOutcomeEvent, RoadmapWriteError};

@@ -167,7 +167,14 @@ pub struct NewProjectDecision {
     pub has_effect: bool,
     pub next_wake_at: Option<OffsetDateTime>,
     pub phase: ControllerPhase,
+    /// 第 3 フェーズ P0-B（I1）: 判断の前に読んだ案件の root ごとの最後の event の seq
+    /// （[`SqliteStore::project_root_event_mark`]）。phase `achieved` を書くときだけ commit の tx で
+    /// 照合し、違えば `Stale(Evidence)`（decide の間の reopen で根拠の無い達成を書かない）。`None` は照合しない。
+    pub evidence_mark: Option<RootEventMark>,
 }
+
+/// 案件の root（`parent_id` の無い task）ごとの最後の event の seq（task id 順）。
+pub type RootEventMark = Vec<(String, i64)>;
 
 /// tx1 の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -672,6 +679,14 @@ impl SqliteStore {
             Some(StaleReason::HumanEpoch)
         } else if state.revision != d.based_on_revision {
             Some(StaleReason::Revision)
+        } else if state.mode != ControllerMode::DryRun
+            && d.phase == ControllerPhase::Achieved
+            && match &d.evidence_mark {
+                Some(mark) => Self::root_event_mark_tx(&tx, project_id)? != *mark,
+                None => false,
+            }
+        {
+            Some(StaleReason::Evidence)
         } else {
             None
         };
@@ -762,6 +777,21 @@ impl SqliteStore {
             decision_id: d.id.clone(),
             effect_state,
         })
+    }
+
+    /// 案件の root（`parent_id` の無い task。会話などの task も含む上位集合）ごとの最後の event の seq。
+    /// 判断の前に読み、phase `achieved` の commit の tx で同じものを読み直して照合する（I1）。
+    pub fn project_root_event_mark(&self, project_id: &str) -> Result<RootEventMark, StoreError> {
+        self.with_read_conn(|c| Self::root_event_mark_tx(c, project_id))
+    }
+
+    fn root_event_mark_tx(c: &Connection, project_id: &str) -> Result<RootEventMark, StoreError> {
+        let mut stmt = c.prepare(
+            "SELECT t.id, COALESCE((SELECT MAX(e.seq) FROM events e WHERE e.task_id = t.id), 0) \
+             FROM tasks t WHERE t.project_id = ?1 AND t.parent_id IS NULL ORDER BY t.id",
+        )?;
+        let rows = stmt.query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     /// 効果が `pending` のまま残っている判断（古い順。crash の B4・B5 の回復）。
@@ -962,6 +992,7 @@ mod tests {
             has_effect: true,
             next_wake_at: None,
             phase: ControllerPhase::Active,
+            evidence_mark: None,
         };
         let ids: Vec<i64> = lease.wakes.iter().map(|w| w.id).collect();
         assert!(matches!(

@@ -249,7 +249,8 @@ impl ProjectDecider for TsProjectDecider {
             }));
         }
         // 第 3 フェーズ I1・I2（付記 P0-B）: TS の提案と別に、Rust が到達の記録と根拠を数え直す。
-        let recorded = recorded_outcomes(&store, input.mode, &snapshot)?;
+        let recorded =
+            task_ops::project_controller_view::recorded_outcomes(&store, input.mode, &snapshot)?;
         let (proposal, verify) = verify_achievement(&snapshot, &recorded, proposal);
         rec["achievement"] = verify;
         let mut decision = to_decision(&snapshot, &proposal)?;
@@ -267,50 +268,6 @@ impl ProjectDecider for TsProjectDecider {
         Ok(decision)
     }
 }
-
-/// 第 3 フェーズ I1・I2: 到達を記録済みの Outcome の id。
-/// - approved の Roadmap がある案件: Roadmap の最後の状態が `reached`（人の API か controller の効果が書いたもの）。
-/// - Roadmap の無い案件: 今の依頼文の版（`request_sha256`）での `mark_milestone` の判断で、効果が `applied`。
-/// - `shadow`・`dry_run` は効果を書かない（`suppressed`）ので、その mode では `suppressed` の `mark_milestone` も
-///   記録に数える（enabled なら何が起きるかの写し。enabled の判定には効かない）。
-pub fn recorded_outcomes(
-    store: &SqliteStore,
-    mode: ControllerMode,
-    snapshot: &ProjectSnapshot,
-) -> Result<std::collections::BTreeSet<String>, String> {
-    let mut out = std::collections::BTreeSet::new();
-    if let Some(view) = &snapshot.roadmap {
-        let view: task_core::roadmap::Roadmap =
-            serde_json::from_value(view.clone()).map_err(|e| format!("roadmap view: {e}"))?;
-        for o in view.outcomes {
-            if o.status == task_core::roadmap::OutcomeStatus::Reached {
-                out.insert(o.id);
-            }
-        }
-    }
-    let rows = store
-        .project_controller_decisions(&snapshot.project.id, None, RECORDED_SCAN)
-        .map_err(|e| e.to_string())?;
-    for row in &rows {
-        let counted = match row.effect_state.as_str() {
-            "applied" => snapshot.roadmap.is_none(),
-            "suppressed" => mode != ControllerMode::Enabled,
-            _ => false,
-        };
-        if !counted || row.request_sha256 != snapshot.project.request_sha256 {
-            continue;
-        }
-        if let Ok(ProjectEffect::RecordOutcome { outcome_id, .. }) =
-            serde_json::from_str::<ProjectEffect>(&row.effect_json)
-        {
-            out.insert(outcome_id);
-        }
-    }
-    Ok(out)
-}
-
-/// 到達の記録を探す判断の件数の上限（`mark_milestone` は Outcome ごとに 1 回なので十分に大きい）。
-const RECORDED_SCAN: usize = 100_000;
 
 /// 第 3 フェーズ I1: `wait(achieved)` を Rust が数え直す。未達があれば phase `waiting` の `wait` に置き換え、
 /// 規則 `pc/achieved-unverified:<id,…>` と未達の id を記録に残す。戻り値の 2 つ目は判断の記録の `achievement`。

@@ -283,3 +283,148 @@ async fn project_wake_api_human_patch_bumps_human_epoch() {
         )]
     );
 }
+
+/// 第 3 フェーズ P2-J: `GET …/controller` の `summary` が未達・達成・待機の理由・許可の範囲・次の wake・guard の上限・
+/// 最後の判断の追跡を出す（接頭辞 `project_wake_api_summary_`）。
+#[tokio::test]
+async fn project_wake_api_summary_shows_outcomes_wait_authority_and_next_wake() {
+    let (env, _app, _thread, project) = setup(true);
+    let limits = task_ops::project_budget::BudgetLimits {
+        max_roots_per_day: 7,
+        max_tokens_per_day: 1234,
+        ..Default::default()
+    };
+    let app = task_api::router(
+        env.state
+            .clone()
+            .with_project_controller(true, vec![project.to_string()])
+            .with_project_controller_budget(limits.clone()),
+    );
+    let request = "要約の試験。\n```celeris-outcomes\n[{\"id\":\"o1\",\"title\":\"一つ目\",\"acceptance\":[\"o1 が通る\"]},{\"id\":\"o2\",\"title\":\"二つ目\",\"acceptance\":[\"o2 が通る\"]}]\n```\n";
+    env.store
+        .write_tx::<_, task_core::StoreError, _>(|tx| {
+            task_core::store::SqliteStore::project_set_text_tx(tx, project, None, Some(request))
+        })
+        .unwrap();
+    let path = format!("/api/v1/projects/{project}/controller");
+    let get = |app: axum::Router| {
+        let path = path.clone();
+        async move {
+            let r = send(&app, get_admin(&path)).await;
+            assert_eq!(r.status.as_u16(), 200, "{}", r.text());
+            r.json()["summary"].clone()
+        }
+    };
+    // off: 未達 2 件、待機なし、許可なし、上限は daemon の値、判断なし。
+    let s = get(app.clone()).await;
+    let ids: Vec<&str> = s["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["o1", "o2"]);
+    assert!(
+        s["outcomes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|o| o["reached"] == false && o["recorded"] == false)
+    );
+    assert_eq!(s["outcomes_invalid"], false);
+    assert_eq!(s["waiting"], Value::Null);
+    assert_eq!(s["trace"], Value::Null);
+    assert_eq!(s["authority"]["launch_root_allowed"], false);
+    assert_eq!(s["authority"]["grants"], json!([]));
+    assert_eq!(s["budget_limits"]["max_roots_per_day"], 7);
+    assert_eq!(s["budget_limits"]["max_tokens_per_day"], 1234);
+    assert_eq!(s["budget_limits"]["ttl_secs"], limits.ttl_secs);
+
+    // 人が enabled にすると起票の許可が 1 件でき、範囲（案件・回数・期限）が出る。
+    let ok = send(
+        &app,
+        put_json_with(&path, &put_body("enabled", 0), &admin_headers()),
+    )
+    .await;
+    assert_eq!(ok.status.as_u16(), 200, "{}", ok.text());
+    assert_eq!(
+        ok.json()["summary"]["authority"]["launch_root_allowed"],
+        true
+    );
+    let wake = send(
+        &app,
+        post_admin(
+            &format!("{path}/wake"),
+            &json!({"external_ref": "job-1", "idempotency_key": "k1"}),
+        ),
+    )
+    .await;
+    assert_eq!(wake.json()["added"], true, "{}", wake.text());
+    let s = get(app.clone()).await;
+    let grants = s["authority"]["grants"].as_array().unwrap();
+    assert_eq!(grants.len(), 1, "{s}");
+    assert_eq!(grants[0]["action_class"], "launch_root");
+    assert_eq!(grants[0]["scope_kind"], "project");
+    assert_eq!(grants[0]["scope_ref"], project.to_string());
+    assert_eq!(grants[0]["budget_remaining"], 10);
+    assert!(grants[0]["expires_at"].as_str().is_some());
+    assert_eq!(
+        s["next_wake"]["pending_kinds"],
+        json!(["external_released"])
+    );
+
+    // guard（日次予算）の判断を書くと、待機の理由と追跡にその規則・問いが出る。
+    let pid = project.to_string();
+    let now = OffsetDateTime::now_utc();
+    let lease = env
+        .store
+        .project_controller_lease(&pid, "test", 60, now)
+        .unwrap()
+        .expect("lease");
+    let ids: Vec<i64> = lease.wakes.iter().map(|w| w.id).collect();
+    let decision = task_core::store::NewProjectDecision {
+        id: "pcd-summary-1".into(),
+        based_on_revision: lease.state.revision,
+        human_epoch: lease.state.human_epoch,
+        snapshot_sha256: "0".repeat(64),
+        request_sha256: "1".repeat(64),
+        generation_id: None,
+        proposal_json: json!({"schema": "celeris.project-guard/1", "guard": "budget", "detail": {"kind": "tokens"}}).to_string(),
+        validation: "pc/guard/budget".into(),
+        effect_json: json!({"kind": "open_escalation", "question_key": "budget:tokens:2026-11-05", "category": "guard_budget", "summary": "今日の token の上限に達しました"}).to_string(),
+        has_effect: true,
+        next_wake_at: Some(now + Duration::hours(3)),
+        phase: task_core::project_wake::ControllerPhase::Waiting,
+        evidence_mark: None,
+    };
+    env.store
+        .project_controller_commit(&pid, "test", &ids, &decision, now)
+        .unwrap();
+    let s = get(app.clone()).await;
+    let w = &s["waiting"];
+    assert_eq!(w["phase"], "waiting", "{s}");
+    assert_eq!(w["kind"], "guard");
+    assert_eq!(w["rule_id"], "pc/guard/budget");
+    assert_eq!(w["decision_id"], "pcd-summary-1");
+    let details: Vec<&str> = w["details"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d.as_str().unwrap())
+        .collect();
+    assert!(
+        details.iter().any(|d| d.starts_with("guard budget")),
+        "{details:?}"
+    );
+    assert!(
+        details
+            .iter()
+            .any(|d| d.contains("budget:tokens:2026-11-05") && d.contains("token の上限")),
+        "{details:?}"
+    );
+    assert_eq!(s["trace"]["decision_id"], "pcd-summary-1");
+    assert_eq!(s["trace"]["rule_id"], "pc/guard/budget");
+    assert_eq!(s["trace"]["effect_state"], "pending");
+    assert!(s["next_wake"]["at"].as_str().is_some(), "{s}");
+    assert_eq!(s["next_wake"]["pending_kinds"], json!([]));
+}

@@ -1,6 +1,7 @@
 //! ADR 2026-11-04-project-controller A1: 案件の controller の API（`/projects/{id}/controller`）。
 //!
-//! - `GET …/controller` → `ProjectControllerView`（行が無ければ mode `off` の既定）。
+//! - `GET …/controller` → `ProjectControllerView`（行が無ければ mode `off` の既定）。`summary` に未達・達成・
+//!   待機の理由・許可の範囲・次の wake・guard の上限・最後の判断の追跡（第 3 フェーズ P2-J）。
 //! - `PUT …/controller` `{mode, expected_revision, reason}`: mode を上げるのは人の token だけ（operator・MCP・
 //!   CoS は `off` へ下げるだけ）。`shadow` 以上は `[project_controller] allowed_project_ids` の案件だけ（403）。
 //!   `expected_revision` が違えば 409。CoS は `/cos/operations` の `project.controller_put`。
@@ -25,6 +26,7 @@ use super::*;
 use crate::cos::operations::OperationAudit;
 use crate::middleware::require_admin;
 use crate::principal::{Caller, Principal};
+use crate::problem::ops_problem;
 use crate::query::QueryParams;
 
 /// `[project_controller]` のうち API が使う欄。
@@ -32,6 +34,8 @@ use crate::query::QueryParams;
 pub struct ControllerApiConfig {
     pub enabled: bool,
     pub allowed_project_ids: Vec<String>,
+    /// `[project_controller.budget]` の実効値（起動時。`GET …/controller` の `summary.budget_limits`）。
+    pub budget: task_ops::project_budget::BudgetLimits,
 }
 
 /// `PUT …/controller` の本文。
@@ -164,8 +168,11 @@ fn require_project(store: &SqliteStore, id: task_core::ProjectId) -> Result<(), 
 /// 行が無ければ既定（mode `off`）の view。
 pub(crate) fn controller_view(
     store: &SqliteStore,
-    project: &str,
+    project_id: task_core::ProjectId,
+    limits: &task_ops::project_budget::BudgetLimits,
 ) -> Result<ProjectControllerView, ApiProblem> {
+    let project = project_id.to_string();
+    let project = project.as_str();
     let at = now()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default();
@@ -183,6 +190,16 @@ pub(crate) fn controller_view(
         None => None,
     };
     let used = task_ops::project_budget::usage(store, project, now()).map_err(store_problem)?;
+    let summary = task_ops::project_controller_view::summary(
+        store,
+        project_id,
+        &state,
+        last_decision.as_ref(),
+        &pending_wakes,
+        limits,
+        now(),
+    )
+    .map_err(|e| ops_problem(store, e, None))?;
     Ok(ProjectControllerView {
         state,
         pending_wakes,
@@ -194,6 +211,7 @@ pub(crate) fn controller_view(
             tokens: used.tokens,
             chat_starts: used.chat_starts,
         },
+        summary,
     })
 }
 
@@ -204,10 +222,11 @@ async fn get_controller(
 ) -> ApiResult {
     no_query(&raw)?;
     let project_id = parse_project_id(&id)?;
+    let limits = state.project_controller.budget.clone();
     let view = state
         .blocking(move |store| {
             require_project(store, project_id)?;
-            controller_view(store, &project_id.to_string())
+            controller_view(store, project_id, &limits)
         })
         .await?;
     Ok(json_response(StatusCode::OK, &view))
@@ -319,7 +338,7 @@ async fn put_controller(
                 }
                 Ok(())
             })?;
-            controller_view(store, &project)
+            controller_view(store, project_id, &cfg.budget)
         })
         .await?;
     Ok(json_response(StatusCode::OK, &view))

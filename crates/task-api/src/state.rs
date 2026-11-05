@@ -294,7 +294,19 @@ impl ApiState {
             Arc::new(crate::handlers::project_controller::ControllerApiConfig {
                 enabled,
                 allowed_project_ids,
+                budget: self.project_controller.budget.clone(),
             });
+        self
+    }
+
+    /// 第 3 フェーズ P2-J: `[project_controller.budget]` の実効値（`GET …/controller` の `summary.budget_limits`）。
+    pub fn with_project_controller_budget(
+        mut self,
+        budget: task_ops::project_budget::BudgetLimits,
+    ) -> Self {
+        let mut pc = (*self.project_controller).clone();
+        pc.budget = budget;
+        self.project_controller = Arc::new(pc);
         self
     }
 

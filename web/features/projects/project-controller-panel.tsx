@@ -25,6 +25,8 @@ import { ProjectRoadmapPanel, type Roadmap, type RoadmapHistory, roadmapDecideAc
 // 待機と人の要件・過去の判断と根拠・mode の切り替えを 1 か所に出す。
 // 読むのは GET …/controller・…/controller/decisions（A1）、…/roadmap（A5）、…/authority（A7）、案件の詳細と受信箱。
 // mode の判定（誰が上げられるか、許可リスト）は API が行い、画面は応答をそのまま出す。
+// 第 3 フェーズ P2-J: 未達・達成・待機の理由・承認の範囲・次の wake・guard の上限・最後の判断は GET …/controller の
+// `summary` をそのまま出す（判定と同じ規則で Rust が数える。画面は数え直さない）。
 
 export type ControllerMode = "off" | "dry_run" | "shadow" | "enabled";
 export type ControllerPhase = "active" | "waiting" | "blocked" | "paused" | "achieved" | "cancelled";
@@ -61,6 +63,61 @@ export type ControllerView = {
     tokens: number;
     chat_starts: number;
   };
+  /** 第 3 フェーズ P2-J: 未達・達成・待機の理由・許可の範囲・次の wake・guard の上限・最後の判断の追跡。 */
+  summary: ControllerSummary;
+};
+
+export type ControllerSummary = {
+  outcomes: {
+    id: string;
+    title: string;
+    source: string;
+    recorded: boolean;
+    evidence_root_ids: string[];
+    reached: boolean;
+  }[];
+  outcomes_invalid: boolean;
+  waiting?: {
+    phase: ControllerPhase;
+    kind: string;
+    rule_id?: string | null;
+    details: string[];
+    decision_id?: string | null;
+    decided_at?: string | null;
+  } | null;
+  authority: {
+    launch_root_allowed: boolean;
+    launch_root_reason: string;
+    grants: {
+      id: string;
+      action_class: string;
+      scope_kind: string;
+      scope_ref: string;
+      expires_at: string;
+      budget_remaining: number;
+    }[];
+  };
+  next_wake: { at?: string | null; backoff_until?: string | null; pending_kinds: string[] };
+  budget_limits: {
+    max_cos_inputs_per_day: number;
+    max_roots_per_day: number;
+    max_no_progress_decisions: number;
+    max_same_failure_repeats: number;
+    max_invalid_decisions: number;
+    max_tokens_per_day: number;
+    ttl_secs: number;
+  };
+  trace?: {
+    decision_id: string;
+    rule_id: string;
+    mode: ControllerMode;
+    effect_state: string;
+    effect_ref?: string | null;
+    based_on_revision: number;
+    snapshot_sha256: string;
+    generation_id?: string | null;
+    decided_at: string;
+  } | null;
 };
 
 export const CONTROLLER_MODE_ACTION_ID = "project_controller_mode";
@@ -99,6 +156,22 @@ const EFFECT_LABEL: Record<string, string> = {
 };
 
 const WAITING_LABEL: Record<string, string> = { human: "人", task: "task", external: "外部" };
+
+/** `summary.waiting.kind` の表示。 */
+export const WAIT_KIND_LABEL: Record<string, string> = {
+  guard: "guard が止めた（予算・同じ失敗・検証落ち・TTL・停滞）",
+  authority: "起票の許可が無い",
+  achievement_unverified: "到達の根拠がそろっていない途中目標がある",
+  script_unavailable: "判定の script を使えない",
+  invalid_proposal: "判定の案が検証に落ちた",
+  escalation: "人への問いの回答待ち",
+  wait: "TS の判定が待つと決めた",
+  paused: "案件が一時停止中",
+  cancelled: "案件が中止",
+  other: "理由の記録なし",
+};
+
+const GRANT_LABEL: Record<string, string> = { launch_root: "続きの root の起票" };
 
 /** mode を置く PUT。`expected_revision` が今の版と違えば API が 409 を返す（画面は再読込する）。 */
 export function controllerModeAction(
@@ -203,6 +276,42 @@ export function ProjectControllerPanel({
         </p>
       </Part>
 
+      <Part title="途中目標の到達" testId="controller-outcomes">
+        {view.summary.outcomes_invalid ? (
+          <p role="alert" className="text-label font-medium" data-testid="controller-outcomes-invalid">
+            依頼文の途中目標の block の形が誤っています。直すまで達成になりません。
+          </p>
+        ) : null}
+        {view.summary.outcomes.length === 0 ? (
+          <Empty text="途中目標はまだありません。" />
+        ) : (
+          <ul className="min-w-0 space-y-1">
+            {view.summary.outcomes.map((outcome) => (
+              <li
+                key={outcome.id}
+                className="flex flex-wrap items-center gap-2 break-words"
+                data-outcome={outcome.id}
+                data-reached={outcome.reached ? "true" : "false"}
+              >
+                <Badge tone={outcome.reached ? "success" : "warning"}>{outcome.reached ? "達成" : "未達"}</Badge>
+                <span>
+                  {outcome.id}: {outcome.title}
+                </span>
+                <span className="text-label text-muted-foreground">
+                  {outcome.evidence_root_ids.length > 0
+                    ? `根拠の root: ${outcome.evidence_root_ids.join("、")}`
+                    : "根拠の root なし"}
+                  {outcome.recorded ? " / 到達の記録あり" : " / 到達の記録なし"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="text-label text-muted-foreground">
+          達成は、条件を満たす root（完了・合格・取り込み済み）と到達の記録の両方がそろったときだけです。
+        </p>
+      </Part>
+
       <Part title="関連する root task" testId="controller-roots">
         {roots.length === 0 ? (
           <Empty text="root task はまだありません。" />
@@ -240,15 +349,27 @@ export function ProjectControllerPanel({
           <Empty text="CoS の要約に次の作業はまだありません。" />
         )}
         <p className="text-label text-muted-foreground" data-testid="controller-next-wake">
-          次の再評価: {state.next_wake_at ?? "予定なし"} / 未処理のきっかけ: {view.pending_wakes.length} 件
+          次の再評価: {view.summary.next_wake.at ?? "予定なし（きっかけの event を待つ）"} / 未処理のきっかけ:{" "}
+          {view.pending_wakes.length} 件
+          {view.summary.next_wake.pending_kinds.length > 0
+            ? `（${view.summary.next_wake.pending_kinds.join("、")}）`
+            : ""}
+          {view.summary.next_wake.backoff_until ? ` / 再試行の待ち: ${view.summary.next_wake.backoff_until} まで` : ""}
         </p>
         {view.budget_today ? (
           <p className="text-label text-muted-foreground" data-testid="controller-budget-today">
-            今日（{view.budget_today.day} UTC）の使用量: token {view.budget_today.tokens} / CoS の起動{" "}
-            {view.budget_today.chat_starts} 回 / CoS への依頼 {view.budget_today.cos_inputs} 件 / 起票{" "}
-            {view.budget_today.roots} 件
+            今日（{view.budget_today.day} UTC）の使用量 / 上限: token {view.budget_today.tokens} /{" "}
+            {view.summary.budget_limits.max_tokens_per_day}、CoS の起動 {view.budget_today.chat_starts} 回と CoS
+            への依頼 {view.budget_today.cos_inputs} 件 / 各 {view.summary.budget_limits.max_cos_inputs_per_day}、起票{" "}
+            {view.budget_today.roots} 件 / {view.summary.budget_limits.max_roots_per_day}
           </p>
         ) : null}
+        <p className="text-label text-muted-foreground" data-testid="controller-guard-limits">
+          guard の上限: 同じ失敗 {view.summary.budget_limits.max_same_failure_repeats} 回、判定の案の検証落ち{" "}
+          {view.summary.budget_limits.max_invalid_decisions} 回連続、進捗なしの判断{" "}
+          {view.summary.budget_limits.max_no_progress_decisions} 回連続、外からの応答なし{" "}
+          {view.summary.budget_limits.ttl_secs} 秒
+        </p>
       </Part>
 
       <Part title="待機と人の要件" testId="controller-waiting">
@@ -258,6 +379,43 @@ export function ProjectControllerPanel({
             mode を置き直してください。
           </p>
         ) : null}
+        {view.summary.waiting ? (
+          <div className="space-y-1" data-testid="controller-wait-reason" data-wait-kind={view.summary.waiting.kind}>
+            <p className="text-label font-medium break-words">
+              待機の理由: {WAIT_KIND_LABEL[view.summary.waiting.kind] ?? view.summary.waiting.kind}
+              {view.summary.waiting.rule_id ? `（規則 ${view.summary.waiting.rule_id}）` : ""}
+            </p>
+            {view.summary.waiting.details.length > 0 ? (
+              <ul className="list-disc space-y-1 ps-5 text-label">
+                {view.summary.waiting.details.map((line) => (
+                  <li key={line} className="break-words">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="space-y-1" data-testid="controller-authority-scope">
+          <p className="text-label">
+            承認の範囲: 続きの root の起票は
+            {view.summary.authority.launch_root_allowed
+              ? "許可あり"
+              : `許可なし（${view.summary.authority.launch_root_reason}）`}
+          </p>
+          {view.summary.authority.grants.length > 0 ? (
+            <ul className="list-disc space-y-1 ps-5 text-label">
+              {view.summary.authority.grants.map((grant) => (
+                <li key={grant.id} className="break-words" data-grant={grant.id}>
+                  {GRANT_LABEL[grant.action_class] ?? grant.action_class}（{grant.scope_kind} {grant.scope_ref}）: 残り{" "}
+                  {grant.budget_remaining} 回、{grant.expires_at} まで
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <Empty text="生きている許可はありません。" />
+          )}
+        </div>
         {brief && brief.waiting_on.length > 0 ? (
           <ul className="list-disc space-y-1 ps-5">
             {brief.waiting_on.map((wait) => (
@@ -282,6 +440,14 @@ export function ProjectControllerPanel({
       </Part>
 
       <Part title="過去の判断と根拠" testId="controller-decisions">
+        {view.summary.trace ? (
+          <p className="text-label text-muted-foreground break-words" data-testid="controller-trace">
+            最後の判断: {view.summary.trace.rule_id}（
+            {EFFECT_LABEL[view.summary.trace.effect_state] ?? view.summary.trace.effect_state}、版{" "}
+            {view.summary.trace.based_on_revision}、{view.summary.trace.decided_at}、snapshot{" "}
+            {view.summary.trace.snapshot_sha256.slice(0, 12)}）
+          </p>
+        ) : null}
         {decisions.length === 0 ? (
           <Empty text="判断の記録はまだありません。" />
         ) : (

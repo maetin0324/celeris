@@ -79,6 +79,27 @@ const controller = {
   },
   pending_wakes: [],
   last_decision: null,
+  budget_today: { day: "2026-11-04", cos_inputs: 0, roots: 1, tokens: 900, chat_starts: 0 },
+  summary: {
+    outcomes: [
+      { id: "o1", title: "表 1", source: "request_block", recorded: true, evidence_root_ids: ["R1"], reached: true },
+      { id: "o2", title: "表 2", source: "request_block", recorded: false, evidence_root_ids: [], reached: false },
+    ],
+    outcomes_invalid: false,
+    waiting: null,
+    authority: { launch_root_allowed: false, launch_root_reason: "no_grant", grants: [] },
+    next_wake: { at: "2026-11-04T15:00:00Z", backoff_until: null, pending_kinds: [] },
+    budget_limits: {
+      max_cos_inputs_per_day: 10,
+      max_roots_per_day: 5,
+      max_no_progress_decisions: 5,
+      max_same_failure_repeats: 3,
+      max_invalid_decisions: 3,
+      max_tokens_per_day: 20000000,
+      ttl_secs: 259200,
+    },
+    trace: null,
+  },
 };
 const fixtures = {
   "/api/v1/projects/P1": detail,
@@ -119,6 +140,9 @@ test("parity: /projects/:id 自動運営の画面と mode の切り替え", asyn
     await expect(page.getByTestId("controller-mode")).toHaveAttribute("data-mode", "enabled");
     await expect(page.getByTestId("controller-policy")).toContainText("計測を再現できるようにして、表を出し続ける");
     await expect(page.getByTestId("controller-roots")).toContainText("実験セル A");
+    await expect(page.getByTestId("controller-outcomes")).toContainText("達成");
+    await expect(page.getByTestId("controller-outcomes")).toContainText("未達");
+    await expect(page.getByTestId("controller-authority-scope")).toContainText("許可なし（no_grant）");
     await expect(page.getByTestId("controller-next")).toContainText("表 2 を出す");
     await expect(page.getByTestId("controller-next-wake")).toContainText("2026-11-04T15:00:00Z");
     await expect(page.getByTestId("controller-waiting")).toContainText("測定用 account の login");

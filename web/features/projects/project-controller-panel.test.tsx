@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProjectBrief, ProjectDetail } from "../../api/generated/types";
 import {
   type ControllerDecision,
+  type ControllerSummary,
   type ControllerView,
   controllerModeAction,
   decisionRule,
@@ -64,14 +65,71 @@ const view = (over: Partial<ControllerView["state"]> = {}): ControllerView => ({
   pending_wakes: [],
   last_decision: decision,
   budget_today: { day: "2026-11-02", cos_inputs: 1, roots: 2, tokens: 1500, chat_starts: 3 },
+  summary: summary(),
 });
 
-function show(state: Partial<ControllerView["state"]> = {}, withBrief = true) {
+const summary = (over: Partial<ControllerSummary> = {}): ControllerSummary => ({
+  outcomes: [
+    { id: "o1", title: "表 1", source: "request_block", recorded: true, evidence_root_ids: ["R1"], reached: true },
+    { id: "o2", title: "表 2", source: "request_block", recorded: false, evidence_root_ids: [], reached: false },
+  ],
+  outcomes_invalid: false,
+  waiting: {
+    phase: "waiting",
+    kind: "guard",
+    rule_id: "pc/guard/budget",
+    details: ['guard budget: {"kind":"tokens"}', "escalate budget:tokens:2026-11-02: 今日の token の上限"],
+    decision_id: "D1",
+    decided_at: "2026-11-02T00:00:00Z",
+  },
+  authority: {
+    launch_root_allowed: true,
+    launch_root_reason: "allowed",
+    grants: [
+      {
+        id: "G1",
+        action_class: "launch_root",
+        scope_kind: "project",
+        scope_ref: "01P",
+        expires_at: "2026-12-01T00:00:00Z",
+        budget_remaining: 8,
+      },
+    ],
+  },
+  next_wake: { at: "2026-11-03T00:00:00Z", backoff_until: null, pending_kinds: ["external_released"] },
+  budget_limits: {
+    max_cos_inputs_per_day: 10,
+    max_roots_per_day: 5,
+    max_no_progress_decisions: 5,
+    max_same_failure_repeats: 3,
+    max_invalid_decisions: 3,
+    max_tokens_per_day: 20000000,
+    ttl_secs: 259200,
+  },
+  trace: {
+    decision_id: "D1",
+    rule_id: "pc/guard/budget",
+    mode: "enabled",
+    effect_state: "pending",
+    effect_ref: null,
+    based_on_revision: 6,
+    snapshot_sha256: "abcdef0123456789",
+    generation_id: null,
+    decided_at: "2026-11-02T00:00:00Z",
+  },
+  ...over,
+});
+
+function show(
+  state: Partial<ControllerView["state"]> = {},
+  withBrief = true,
+  summaryOver: Partial<ControllerSummary> = {},
+) {
   return renderToStaticMarkup(
     <ProjectControllerPanel
       detail={detail}
       brief={withBrief ? brief : null}
-      view={view(state)}
+      view={{ ...view(state), summary: summary(summaryOver) }}
       decisions={[decision, { ...decision, id: "D2", proposal_json: "壊れた JSON", validation: "" }]}
       pendingHumanItems={2}
       openAuthorityProposals={1}
@@ -114,6 +172,53 @@ describe("ProjectControllerPanel", () => {
     expect(decisions).toContain("task:R2");
     expect(decisions).toContain("規則の記録なし");
     expect(decisions).toContain("task:R1");
+  });
+
+  it("P2-J: 未達・達成・待機の理由・承認の範囲・次の wake・上限・最後の判断を出す", () => {
+    const html = show();
+    const outcomes = part(html, "controller-outcomes");
+    expect(outcomes).toContain('data-outcome="o1" data-reached="true"');
+    expect(outcomes).toContain('data-outcome="o2" data-reached="false"');
+    expect(outcomes).toContain("達成");
+    expect(outcomes).toContain("未達");
+    expect(outcomes).toContain("根拠の root: R1");
+    expect(outcomes).toContain("根拠の root なし");
+    const waiting = part(html, "controller-waiting");
+    expect(waiting).toContain('data-wait-kind="guard"');
+    expect(waiting).toContain("規則 pc/guard/budget");
+    expect(waiting).toContain("今日の token の上限");
+    expect(waiting).toContain("承認の範囲: 続きの root の起票は許可あり");
+    expect(waiting).toContain("続きの root の起票（project 01P）: 残り 8 回、2026-12-01T00:00:00Z まで");
+    const next = part(html, "controller-next");
+    expect(next).toContain("2026-11-03T00:00:00Z");
+    expect(next).toContain("external_released");
+    expect(next).toContain("token 1500 / 20000000");
+    expect(next).toContain("起票 2 件 / 5");
+    expect(next).toContain("同じ失敗 3 回");
+    expect(next).toContain("259200 秒");
+    const decisions = part(html, "controller-decisions");
+    expect(decisions).toContain("最後の判断: pc/guard/budget");
+    expect(decisions).toContain("版 6");
+    expect(decisions).toContain("snapshot abcdef012345");
+  });
+
+  it("P2-J: 待機なし・許可なし・timer なし・block の誤りを出し分ける", () => {
+    const html = show({ phase: "active", next_wake_at: null }, true, {
+      waiting: null,
+      outcomes: [],
+      outcomes_invalid: true,
+      authority: { launch_root_allowed: false, launch_root_reason: "no_grant", grants: [] },
+      next_wake: { at: null, backoff_until: "2026-11-02T01:00:00Z", pending_kinds: [] },
+      trace: null,
+    });
+    expect(html).not.toContain('data-testid="controller-wait-reason"');
+    expect(html).toContain('data-testid="controller-outcomes-invalid"');
+    expect(part(html, "controller-outcomes")).toContain("途中目標はまだありません");
+    expect(part(html, "controller-waiting")).toContain("許可なし（no_grant）");
+    expect(part(html, "controller-waiting")).toContain("生きている許可はありません");
+    expect(part(html, "controller-next")).toContain("予定なし（きっかけの event を待つ）");
+    expect(part(html, "controller-next")).toContain("再試行の待ち: 2026-11-02T01:00:00Z まで");
+    expect(html).not.toContain('data-testid="controller-trace"');
   });
 
   it("blocked は人への案内を出す", () => {

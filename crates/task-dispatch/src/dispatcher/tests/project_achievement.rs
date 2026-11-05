@@ -732,3 +732,92 @@ fn project_achievement_integration_reopened_between_decide_and_commit_is_stale()
     assert_eq!(achieved_decisions(&c), 1);
     assert_eq!(c.records_applied(), 1);
 }
+
+/// 第 3 フェーズ P2-J: `GET …/controller` の `summary`（`task_ops::project_controller_view::summary`）を読む。
+fn summary_of(c: &Case) -> task_core::project_wake::ProjectControllerSummary {
+    let state = c.store.project_controller_state(&c.pid()).unwrap().unwrap();
+    let last = state
+        .last_decision_id
+        .as_deref()
+        .and_then(|id| c.store.project_controller_decision(id).unwrap());
+    let pending = c.store.project_wakes_pending(&c.pid()).unwrap();
+    task_ops::project_controller_view::summary(
+        &c.store,
+        c.p.id,
+        &state,
+        last.as_ref(),
+        &pending,
+        &task_ops::project_budget::BudgetLimits::default(),
+        c.env.now(),
+    )
+    .unwrap()
+}
+
+/// P2-J: 一部の Outcome だけ根拠と記録がそろった案件では、summary が達成（o1・o2）と未達（o3）を分け、
+/// 待機の理由に判定と同じ規則（`pc/achieved-unverified:o3`）と未達の id を出す。trace は最後の判断の写し。
+#[test]
+fn project_controller_summary_shows_reached_unreached_and_wait_reason() {
+    let mut c = lying_case(&["o1", "o2", "o3"]);
+    let mut roots = Vec::new();
+    for o in ["o1", "o2"] {
+        let r = c.root(c.p.id, o, false);
+        c.review_done(&r, true);
+        c.deliver(&r);
+        roots.push(r.id.to_string());
+    }
+    c.settle();
+    assert_unverified(&c, "o3");
+    let s = summary_of(&c);
+    let by_id = |id: &str| s.outcomes.iter().find(|o| o.id == id).unwrap().clone();
+    for (i, id) in ["o1", "o2"].into_iter().enumerate() {
+        let o = by_id(id);
+        assert!(o.reached && o.recorded, "{o:?}");
+        assert_eq!(o.evidence_root_ids, vec![roots[i].clone()]);
+        assert_eq!(o.source, "request_block");
+    }
+    let o3 = by_id("o3");
+    assert!(!o3.reached && !o3.recorded && o3.evidence_root_ids.is_empty());
+    assert!(!s.outcomes_invalid);
+    let w = s.waiting.expect("waiting reason");
+    assert_eq!(w.phase, ControllerPhase::Waiting);
+    assert_eq!(w.kind, "achievement_unverified");
+    assert_eq!(w.rule_id.as_deref(), Some("pc/achieved-unverified:o3"));
+    assert!(
+        w.details.iter().any(|d| d.contains("\"o3\"")),
+        "{:?}",
+        w.details
+    );
+    let last = c.last();
+    let t = s.trace.expect("trace");
+    assert_eq!(t.decision_id, last.id);
+    assert_eq!(t.rule_id, last.validation);
+    assert_eq!(w.decision_id.as_deref(), Some(last.id.as_str()));
+    // 次の再評価は判断が置いた timer（state の next_wake_at）と同じ。
+    let state = c.store.project_controller_state(&c.pid()).unwrap().unwrap();
+    assert_eq!(s.next_wake.at, state.next_wake_at);
+    assert!(s.next_wake.at.is_some());
+    assert_eq!(
+        s.budget_limits,
+        task_core::project_wake::ControllerBudgetLimits::from(
+            &task_ops::project_budget::BudgetLimits::default()
+        )
+    );
+}
+
+/// P2-J: 全 Outcome が達成した案件（phase `achieved`）では、全件 `reached` で待機の理由は無い。
+#[test]
+fn project_controller_summary_all_reached_has_no_wait_reason() {
+    let mut c = lying_case(&["o1", "o2"]);
+    for o in ["o1", "o2"] {
+        let r = c.root(c.p.id, o, false);
+        c.review_done(&r, true);
+        c.deliver(&r);
+    }
+    c.settle();
+    assert_eq!(c.phase(), ControllerPhase::Achieved);
+    let s = summary_of(&c);
+    assert_eq!(s.outcomes.len(), 2);
+    assert!(s.outcomes.iter().all(|o| o.reached));
+    assert!(s.waiting.is_none());
+    assert!(s.trace.is_some());
+}

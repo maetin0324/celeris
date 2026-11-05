@@ -292,6 +292,115 @@ pub struct ProjectControllerView {
     pub last_decision: Option<ProjectControllerDecision>,
     /// 今日（UTC）の日次予算の使用量。案件 CoS の chat run の token と起動数を含む（P1-G）。
     pub budget_today: ProjectBudgetToday,
+    /// 第 3 フェーズ P2-J: 未達・達成・待機の理由・許可の範囲・次の wake・guard の上限・最後の判断の追跡。
+    /// 画面が読む写しで、判定の根拠ではない（判定は Rust の guard と TS が毎回 snapshot から作る）。
+    pub summary: ProjectControllerSummary,
+}
+
+/// `GET …/controller` の `summary`（第 3 フェーズ P2-J。組み立ては `task_ops::project_controller_view`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ProjectControllerSummary {
+    /// 達成の対象の Outcome（approved の Roadmap があればその生きている Outcome、無ければ依頼文の block）。
+    pub outcomes: Vec<ControllerOutcomeStatus>,
+    /// 依頼文の Outcome block の形が誤っている（`outcomes` は空。達成にならない）。
+    pub outcomes_invalid: bool,
+    /// phase が `waiting`・`blocked`・`paused`・`cancelled` のときの理由（最後の判断の規則から）。他は `None`。
+    pub waiting: Option<ControllerWaitReason>,
+    /// 人に聞かずに行える範囲（authority ledger の生きている許可。A7）。
+    pub authority: ControllerAuthority,
+    pub next_wake: ControllerNextWake,
+    /// guard の上限（daemon の起動時の `[project_controller.budget]`）。今日の使用量は `budget_today`。
+    pub budget_limits: ControllerBudgetLimits,
+    /// 最後の判断の追跡。判断がまだ無ければ `None`。
+    pub trace: Option<ControllerTrace>,
+}
+
+/// Outcome 1 件の到達の状態（I1 の `unverified_outcomes` と同じ判定）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ControllerOutcomeStatus {
+    pub id: String,
+    pub title: String,
+    /// `request_block` か `roadmap`。
+    pub source: String,
+    /// 到達の記録（Roadmap の `reached` か適用済みの `mark_milestone`）がある。
+    pub recorded: bool,
+    /// 条件を満たす root（done・合格・取り込み済み）の id。
+    pub evidence_root_ids: Vec<String>,
+    /// 記録と根拠の root が両方そろった（達成）。
+    pub reached: bool,
+}
+
+/// 待機・停止の理由。`kind` は規則の id から決める
+/// （`guard`・`authority`・`achievement_unverified`・`script_unavailable`・`invalid_proposal`・`escalation`・
+/// `wait`・`paused`・`cancelled`・`other`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ControllerWaitReason {
+    pub phase: ControllerPhase,
+    pub kind: String,
+    /// 最後の判断の規則（`pc/guard/budget` など）。判断が無ければ `None`。
+    pub rule_id: Option<String>,
+    /// 何を待っているか（TS の `wait` の待ち相手、guard の名、問いの要約など。1 件 1 行）。
+    pub details: Vec<String>,
+    pub decision_id: Option<String>,
+    pub decided_at: Option<String>,
+}
+
+/// 許可の範囲。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ControllerAuthority {
+    /// 続きの root を今起票できるか（`launch_root` の許可の判定）。
+    pub launch_root_allowed: bool,
+    /// 判定の理由の code（`allowed`・`no_grant` など）。
+    pub launch_root_reason: String,
+    pub grants: Vec<ControllerGrant>,
+}
+
+/// 生きている許可 1 件。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ControllerGrant {
+    pub id: String,
+    pub action_class: String,
+    pub scope_kind: String,
+    pub scope_ref: String,
+    pub expires_at: String,
+    pub budget_remaining: i64,
+}
+
+/// 次の wake。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ControllerNextWake {
+    /// 次の timer（RFC 3339）。`None` は event が来るまで評価しない。
+    pub at: Option<String>,
+    /// 失敗の後の再試行を待つ期限。
+    pub backoff_until: Option<String>,
+    /// 未処理の wake の種類（重複を除き、`ProjectWakeKind` の順）。
+    pub pending_kinds: Vec<ProjectWakeKind>,
+}
+
+/// guard の上限（`[project_controller.budget]` の実効値）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ControllerBudgetLimits {
+    pub max_cos_inputs_per_day: u32,
+    pub max_roots_per_day: u32,
+    pub max_no_progress_decisions: u32,
+    pub max_same_failure_repeats: u32,
+    pub max_invalid_decisions: u32,
+    pub max_tokens_per_day: u64,
+    pub ttl_secs: u64,
+}
+
+/// 最後の判断の追跡（判断の行の写し。詳細は `GET …/controller/decisions`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ControllerTrace {
+    pub decision_id: String,
+    pub rule_id: String,
+    pub mode: ControllerMode,
+    pub effect_state: EffectState,
+    pub effect_ref: Option<String>,
+    pub based_on_revision: i64,
+    pub snapshot_sha256: String,
+    pub generation_id: Option<String>,
+    pub decided_at: String,
 }
 
 /// 今日（UTC）の日次予算の使用量（数え方は `task_ops::project_budget`）。

@@ -19,10 +19,12 @@ pub enum ProjectWakeKind {
     Stagnation,
     Cron,
     HumanChanged,
+    /// 第 4 フェーズ P4-B: 案件の root の根拠が失効した（done からの reopen・取り込みの reopen）。
+    EvidenceChanged,
 }
 
 impl ProjectWakeKind {
-    pub const ALL: [ProjectWakeKind; 9] = [
+    pub const ALL: [ProjectWakeKind; 10] = [
         ProjectWakeKind::RootDone,
         ProjectWakeKind::RootFailed,
         ProjectWakeKind::ReviewFailed,
@@ -32,6 +34,7 @@ impl ProjectWakeKind {
         ProjectWakeKind::Stagnation,
         ProjectWakeKind::Cron,
         ProjectWakeKind::HumanChanged,
+        ProjectWakeKind::EvidenceChanged,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -45,6 +48,7 @@ impl ProjectWakeKind {
             ProjectWakeKind::Stagnation => "stagnation",
             ProjectWakeKind::Cron => "cron",
             ProjectWakeKind::HumanChanged => "human_changed",
+            ProjectWakeKind::EvidenceChanged => "evidence_changed",
         }
     }
 

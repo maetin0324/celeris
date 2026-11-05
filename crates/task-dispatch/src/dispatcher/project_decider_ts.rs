@@ -309,6 +309,33 @@ pub fn verify_achievement(
     (p, record)
 }
 
+/// 第 4 フェーズ P4-B（G1）: phase `achieved` の案件の達成を、判定（TS）を呼ばずに Rust が今の store から数え
+/// 直す。[`verify_achievement`] と同じ `unverified_outcomes(snapshot, recorded)` を使う。戻り値は未達の Outcome の
+/// id（空なら達成のまま）と到達の記録。
+pub fn recheck_achievement(
+    store: &SqliteStore,
+    input: &ProjectDecideInput,
+    now: OffsetDateTime,
+) -> Result<AchievementRecheck, String> {
+    let snapshot = build_snapshot(store, input, &DeciderLimits::default(), now)?;
+    let recorded =
+        task_ops::project_controller_view::recorded_outcomes(store, input.mode, &snapshot)?;
+    Ok(AchievementRecheck {
+        unverified: pp::unverified_outcomes(&snapshot, &recorded),
+        recorded: recorded.into_iter().collect(),
+        truncated: snapshot.truncated,
+    })
+}
+
+/// [`recheck_achievement`] の結果。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct AchievementRecheck {
+    pub unverified: Vec<String>,
+    pub recorded: Vec<String>,
+    /// snapshot が上限で切られた（root が欠けうる）。
+    pub truncated: bool,
+}
+
 /// `RecordOutcome` の効果の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutcomeRecord {

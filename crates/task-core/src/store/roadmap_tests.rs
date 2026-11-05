@@ -36,6 +36,7 @@ fn spec(id: &str) -> RoadmapOutcomeSpec {
         priority: 1,
         depends_on: vec![],
         dropped: false,
+        checks: Vec::new(),
     }
 }
 
@@ -243,7 +244,7 @@ fn project_roadmap_migration_0113_starts_from_a_0112_db_and_keeps_rows() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 114);
+    assert_eq!(crate::SCHEMA_VERSION, 115);
     let p = store.project_get(kept.id).unwrap().unwrap();
     assert_eq!(p.request, "依頼");
     assert_eq!(

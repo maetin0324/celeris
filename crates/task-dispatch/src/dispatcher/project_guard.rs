@@ -5,7 +5,9 @@
 //!
 //! 順（最初に当たったものだけ）:
 //! 1. `achieved` の静けさ: phase `achieved` の案件は人の変更（`human_changed`）の wake でだけ判定する。
-//!    それ以外の wake は効果なしの判断で畳む（起票 0・CoS 入力 0）。
+//!    根拠の失効の wake（[`evidence_wake`]）では、先に Rust が達成を数え直し（第 4 フェーズ P4-B、`recheck`）、根拠が失効していれば
+//!    `achievement-revoked` で phase を `waiting` に戻して直ちに再評価する（効果なし。旧い達成の判断の行は残る）。
+//!    根拠が残っていれば効果なしの判断で畳む（起票 0・CoS 入力 0）。
 //! 2. 同じ失敗の繰り返し: root の失敗の wake の理由の署名が、最後の人の変更の後に
 //!    `max_same_failure_repeats` 回に達したら止めて人に聞く。
 //! 3. TS の品質: 直前の判断が `max_invalid_decisions` 回続けて検証に落ちた（`pc/invalid:*`）ら止める。
@@ -26,6 +28,10 @@ use task_ops::project_budget::{self as budget, BudgetLimits};
 use time::OffsetDateTime;
 
 use crate::project_controller::{ProjectDecision, ProjectEffect};
+use crate::project_decider_ts::AchievementRecheck;
+
+/// 第 4 フェーズ P4-B: 達成の根拠が失効したときの guard の名前（規則 `pc/guard/achievement-revoked:<id,…>`）。
+pub(crate) const REVOKED_GUARD: &str = "achievement-revoked";
 
 /// guard の判断の記録（`proposal_json`）の schema。
 pub(crate) const GUARD_RECORD_SCHEMA: &str = "celeris.project-guard/1";
@@ -93,12 +99,24 @@ fn failure_of(store: &SqliteStore, w: &ProjectWake) -> Option<(String, String)> 
     }
 }
 
+/// 第 4 フェーズ P4-B: achieved の案件で達成を数え直すきっかけの wake（根拠の root の reopen・取り込みの reopen・
+/// 失敗・review の不合格）。cron・新しい root の done などでは数え直さない（P0-B より前の achieved を動かさない）。
+pub(crate) fn evidence_wake(w: &ProjectWake) -> bool {
+    matches!(
+        w.kind,
+        ProjectWakeKind::EvidenceChanged
+            | ProjectWakeKind::ReviewFailed
+            | ProjectWakeKind::RootFailed
+    )
+}
+
 /// 判定の前の guard（上の順）。読めない値は guard を外さず `Err`（呼び出し側は decide しない＝fail closed）。
 pub(crate) fn pre_decide(
     store: &SqliteStore,
     limits: &BudgetLimits,
     state: &ProjectControllerState,
     wakes: &[ProjectWake],
+    recheck: Option<&AchievementRecheck>,
     now: OffsetDateTime,
 ) -> Result<PreGuard, String> {
     let project = state.project_id.as_str();
@@ -107,6 +125,29 @@ pub(crate) fn pre_decide(
         .any(|w| w.kind == ProjectWakeKind::HumanChanged);
     // 1. achieved
     if state.phase == ControllerPhase::Achieved && !human {
+        // P4-B（G1）: 根拠の失効の wake（`evidence_wake`）があれば呼び出し側が数え直しを渡す。
+        if let Some(recheck) = recheck
+            && !recheck.unverified.is_empty()
+        {
+            let mut pre = guarded(
+                REVOKED_GUARD,
+                ControllerPhase::Waiting,
+                ProjectEffect::None,
+                json!({
+                    "unverified": recheck.unverified,
+                    "recorded": recheck.recorded,
+                    "truncated": recheck.truncated,
+                    "wakes": wakes.iter().map(|w| w.wake_key.as_str()).collect::<Vec<_>>(),
+                }),
+            );
+            if let PreGuard::Guarded { decision, .. } = &mut pre {
+                decision.rule_id =
+                    format!("pc/guard/{REVOKED_GUARD}:{}", recheck.unverified.join(","));
+                // 次の tick で判定（TS）に回す（再計画・修正の root）。
+                decision.next_wake_after_secs = Some(0);
+            }
+            return Ok(pre);
+        }
         return Ok(guarded(
             "achieved-quiet",
             ControllerPhase::Achieved,

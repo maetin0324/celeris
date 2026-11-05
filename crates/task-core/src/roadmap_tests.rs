@@ -8,6 +8,7 @@ fn spec(id: &str, deps: &[&str]) -> RoadmapOutcomeSpec {
         priority: 1,
         depends_on: deps.iter().map(|d| (*d).to_owned()).collect(),
         dropped: false,
+        checks: Vec::new(),
     }
 }
 

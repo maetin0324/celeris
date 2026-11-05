@@ -94,8 +94,9 @@ pub struct Outcome {
     pub checks: Vec<OutcomeCheck>,
 }
 
-/// Outcome を決定的に確かめる command（作業 tree の直下で実行する）。
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// Outcome を決定的に確かめる command（作業 tree の直下で実行する）。Roadmap の Outcome も同じ形で持つ
+/// （第 4 フェーズ P4-B。版の本文に入るので Serialize・JsonSchema も持つ）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OutcomeCheck {
     pub cmd: String,

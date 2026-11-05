@@ -16,7 +16,8 @@
 
 use sha2::{Digest, Sha256};
 use task_core::project_wake::{
-    EffectState, NewProjectWake, ProjectControllerDecision, ProjectDecideInput, ProjectWakeKind,
+    ControllerPhase, EffectState, NewProjectWake, ProjectControllerDecision, ProjectDecideInput,
+    ProjectWakeKind,
 };
 use task_core::store::{
     CommitOutcome, EffectAdmit, EffectDeferKind, EffectDeferral, IdempotencyClaim,
@@ -376,12 +377,34 @@ impl Pass<'_> {
                 return Err(format!("evidence mark: {error}"));
             }
         };
+        // 第 4 フェーズ P4-B（G1）: achieved の案件は人の変更の wake 以外では TS を呼ばない。根拠の失効の wake が
+        // あれば Rust が達成を数え直し、根拠が失効していれば guard が phase を waiting に戻す。
+        let recheck = if lease.state.phase == ControllerPhase::Achieved
+            && !lease
+                .wakes
+                .iter()
+                .any(|w| w.kind == ProjectWakeKind::HumanChanged)
+            && lease.wakes.iter().any(super::project_guard::evidence_wake)
+        {
+            match crate::project_decider_ts::recheck_achievement(self.store, &input, self.now) {
+                Ok(r) => Some(r),
+                Err(error) => {
+                    self.store
+                        .project_controller_release(project, &self.rt.owner)
+                        .map_err(|e| e.to_string())?;
+                    return Err(format!("achievement recheck: {error}"));
+                }
+            }
+        } else {
+            None
+        };
         // A6: guard（achieved・同じ失敗・品質・予算・TTL）が効けば decider（TS）を呼ばない。
         let pre = match super::project_guard::pre_decide(
             self.store,
             &self.rt.settings.budget,
             &lease.state,
             &lease.wakes,
+            recheck.as_ref(),
             self.now,
         ) {
             Ok(pre) => pre,
@@ -961,6 +984,14 @@ fn wakes_for_event(
     event: &Event,
 ) -> Result<Vec<NewProjectWake>, String> {
     let kind = match event {
+        // 第 4 フェーズ P4-B（G1）: 根拠の失効。done の root が非終端へ戻った（reopen・retry）か、取り込みが
+        // reopen された。achieved の案件でも Rust が達成を数え直す（`project_guard` の 1 段目）。
+        Event::Transitioned {
+            from: Status::Done,
+            to,
+            ..
+        } if !to.is_terminal() => Some(ProjectWakeKind::EvidenceChanged),
+        Event::IntegrationReopened { .. } => Some(ProjectWakeKind::EvidenceChanged),
         Event::Transitioned { to, reason, .. } => match to {
             Status::Done => Some(ProjectWakeKind::RootDone),
             Status::Failed if reason == "review_fail" => Some(ProjectWakeKind::ReviewFailed),
@@ -1006,7 +1037,11 @@ fn wakes_for_event(
                 push(ProjectWakeKind::RootDone, task.id);
             }
         }
-        Some(k @ (ProjectWakeKind::RootFailed | ProjectWakeKind::ReviewFailed)) => {
+        Some(
+            k @ (ProjectWakeKind::RootFailed
+            | ProjectWakeKind::ReviewFailed
+            | ProjectWakeKind::EvidenceChanged),
+        ) => {
             if task_core::is_root_task(&task) {
                 push(k, task.id);
             }

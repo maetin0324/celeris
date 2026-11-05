@@ -363,6 +363,7 @@ fn approve_roadmap(c: &Case, ids: &[&str]) {
                 priority: 1,
                 depends_on: Vec::new(),
                 dropped: false,
+                checks: Vec::new(),
             })
             .collect(),
     };

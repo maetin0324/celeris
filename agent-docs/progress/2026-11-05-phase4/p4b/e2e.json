@@ -1,0 +1,85 @@
+{
+  "decisions": [
+    "pc/outcome-open",
+    "pc/root-in-flight",
+    "pc/root-in-flight",
+    "pc/root-in-flight",
+    "pc/root-in-flight",
+    "pc/root-in-flight",
+    "pc/root-in-flight",
+    "pc/root-in-flight",
+    "pc/root-in-flight",
+    "pc/milestone-reached",
+    "pc/achieved",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achievement-revoked:o1",
+    "pc/outcome-open",
+    "pc/achieved",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet",
+    "pc/guard/achieved-quiet"
+  ],
+  "schema": "celeris.p4b-revocation-e2e/1",
+  "steps": [
+    {
+      "controller_roots": [
+        "ready"
+      ],
+      "last_rule": "pc/root-in-flight",
+      "phase": "active",
+      "roadmap_reached_records": 0,
+      "step": "launched"
+    },
+    {
+      "controller_roots": [
+        "done"
+      ],
+      "last_rule": "pc/guard/achieved-quiet",
+      "phase": "achieved",
+      "roadmap_reached_records": 1,
+      "step": "achieved"
+    },
+    {
+      "controller_roots": [
+        "failed",
+        "ready"
+      ],
+      "last_rule": "pc/outcome-open",
+      "phase": "active",
+      "roadmap_reached_records": 1,
+      "step": "revoked"
+    },
+    {
+      "controller_roots": [
+        "failed",
+        "ready"
+      ],
+      "last_rule": "pc/outcome-open",
+      "phase": "active",
+      "roadmap_reached_records": 1,
+      "step": "fix_launched"
+    },
+    {
+      "controller_roots": [
+        "failed",
+        "done"
+      ],
+      "last_rule": "pc/guard/achieved-quiet",
+      "phase": "achieved",
+      "roadmap_reached_records": 1,
+      "step": "reachieved"
+    }
+  ]
+}

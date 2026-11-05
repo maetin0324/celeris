@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::project_proposal::{OUTCOMES_FENCE, Outcome, parse_outcomes};
+use crate::project_proposal::{OUTCOMES_FENCE, Outcome, OutcomeCheck, parse_outcomes};
 
 /// 1 版の Outcome の上限（件）。
 pub const ROADMAP_OUTCOMES_MAX: usize = 64;
@@ -106,6 +106,10 @@ pub struct RoadmapOutcomeSpec {
     /// この版で取り下げる（id は残す）。
     #[serde(default)]
     pub dropped: bool,
+    /// 決定的な検査（第 4 フェーズ P4-B）。`Project.request` の Outcome block の `checks` と同じ契約で、controller の
+    /// root の `Check::Command` になる（P0-E）。版の一部なので、変えるには提案と人の承認が要る。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<OutcomeCheck>,
 }
 
 /// `POST …/roadmap/proposals` の本文。
@@ -255,7 +259,7 @@ pub fn validate_proposal(
         .map(|o| {
             serde_json::json!({
                 "id": o.id, "title": o.title, "acceptance": o.acceptance,
-                "depends_on": o.depends_on, "priority": o.priority,
+                "depends_on": o.depends_on, "priority": o.priority, "checks": o.checks,
             })
         })
         .collect();
@@ -311,8 +315,8 @@ pub fn snapshot_outcomes(version: &RoadmapVersion) -> Vec<Outcome> {
             depends_on: o.depends_on.clone(),
             priority: o.priority,
             source: ROADMAP_SOURCE.to_owned(),
-            // Roadmap の Outcome は検査を持たない（check の無い経路。ADR 2026-11-05-phase3-p0e）。
-            checks: Vec::new(),
+            // 第 4 フェーズ P4-B: 依頼文の block と同じく root の acceptance に `Check::Command` として足す。
+            checks: o.checks.clone(),
         })
         .collect()
 }

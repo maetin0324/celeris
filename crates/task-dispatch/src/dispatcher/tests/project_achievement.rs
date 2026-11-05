@@ -12,6 +12,10 @@ use task_core::repos::RepoRef;
 use task_core::roadmap::{OutcomeStatus, RoadmapOutcomeSpec, RoadmapProposalInput};
 use task_dispatch_achievement::*;
 
+/// 第 4 フェーズ P4-B: 達成の後の根拠の失効（この module の嘘をつく TS と Case の helper を使う）。
+#[path = "project_revocation.rs"]
+mod project_revocation;
+
 /// 試験の中だけで使う名前（`crate::project_decider_ts` の公開物）。
 mod task_dispatch_achievement {
     pub(super) use crate::project_decider_ts::{
@@ -251,6 +255,7 @@ impl Case {
                     priority: 0,
                     depends_on: Vec::new(),
                     dropped: false,
+                    checks: Vec::new(),
                 })
                 .collect(),
         };
@@ -526,6 +531,7 @@ fn project_achievement_concurrent_approval_cas() {
                 priority: 0,
                 depends_on: Vec::new(),
                 dropped: false,
+                checks: Vec::new(),
             }],
         };
         c.store

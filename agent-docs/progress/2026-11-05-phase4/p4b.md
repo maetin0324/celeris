@@ -74,7 +74,7 @@ raw は `agent-docs/progress/2026-11-05-phase3/p0c/replay-v2/facts/`（trial は
   committed の baseline（`p0c/replay-v2/facts/` の C10 new の試行。`arm-map/` で case C10・arm new を引く）を after に置き換えた。
 
 ## 検査（提出時の HEAD で実行）
-attempt 3（差し戻しの修正の後、提出時の HEAD）:
+attempt 3（差し戻しの修正の後、`refs/heads/main`（P4-C・第 3 フェーズ親の要約を含む）へ rebase した提出時の HEAD）:
 
 | command | exit | 要点 |
 |---|---|---|
@@ -82,7 +82,7 @@ attempt 3（差し戻しの修正の後、提出時の HEAD）:
 | `cd control-ts && npx vitest run src/domains/project_controller.test.ts`・`npx tsc --noEmit` | 0 | 20 passed、型エラー 0 |
 | `bash scripts/dev/test-long-horizon-bench.sh --out "$TMPDIR/lhb"` | 0 | replay 40・grade 24・contract 9 passed、committed の v2 raw と差 0（digest の変更で replay は変わらない） |
 | `PROJECT_REVOCATION_RAW=<dir> cargo nextest run … -E 'test(project_revocation_e2e)'` | 0 | `p4b/e2e.json` と bytes が同じ |
-| `bash scripts/dev/test-affected.sh` | 0 | 7709 tests run: 7709 passed（22 skipped）、web vitest 711・control-ts vitest 132 passed、script bundle SKIP 0 件 |
+| `bash scripts/dev/test-affected.sh` | 0 | 7710 tests run: 7710 passed（22 skipped）、web vitest 711・control-ts vitest 132 passed、script bundle SKIP 0 件 |
 | `cargo clippy --workspace -- -D warnings` | 0 | 警告 0 |
 | `cargo fmt --all -- --check` | 0 | 差分 0 |
 

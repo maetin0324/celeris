@@ -14,7 +14,7 @@ raw は `agent-docs/progress/2026-11-04-long-horizon/a9/llm/`（以下 `a9/llm/`
 仮説: oracle の文字列が公開側から導けない。**確認した（再現できた）。**
 
 ### 原因
-- 隠し受入の正解は `tests/fixtures/long-horizon/oracle/<case>/hidden/expected.json` の sha256。C08 の o1 は `229d13d2…`、C06 の o1 は `2b2c505f…`（先頭 8 桁）。
+- 隠し受入の正解は `tests/fixtures/long-horizon/oracle/<case>/hidden/expected.json` の sha256。
 - 元の文字列は `oracle/<case>/scenario.json` の `content`（例 `minichunk C08 o1 verified: write+fsync+restart read-back ok\n`）。これは stub harness が書くためだけの値。
 - 採点は `crates/campaign/src/long_horizon.rs` の `outcome_reached`（`out/<id>.txt` の sha256 と `hidden` を比べる）と、それを呼ぶ `grade`。内容が 1 byte でも違えば fail。
 - 公開側（`tests/fixtures/long-horizon/public/<case>/case.json` と `repo-seed/`）にこの文字列も書式も無い。acceptance は `dorastiq-o1: hidden acceptance passes on the integrated tree` だけ（`scripts/dev/long-horizon-pilot/driver.py` の `self.request` がそのまま LLM に渡す）。`grep -rn "verified: write" tests/fixtures/long-horizon/public control-ts/src` は 0 件。
@@ -30,7 +30,7 @@ raw は `agent-docs/progress/2026-11-04-long-horizon/a9/llm/`（以下 `a9/llm/`
 1. 採点の再実行（raw をそのまま入力）:
    `celeris-campaign long-horizon-grade --tier llm_pilot --raw agent-docs/progress/2026-11-04-long-horizon/a9/llm --fixtures tests/fixtures/long-horizon --out <一時 dir>`
    → exit 0。出力の `grade/` は `a9/llm/grade/` と `diff -r` で差が無い（同じ 5 predicate が fail）。
-2. 公開側から導けない文字列を与えれば通ることの確認: C08 試行 1 の `repo/` を一時 dir に写し、`out/o1.txt`〜`o4.txt` を `minichunk C08 <id> verified: write+fsync+restart read-back ok\n` に置き換えて sha256 を `expected.json` と比べた。→ 4 件とも一致（True）。C06 の `o1` も同じ書式で `2b2c505f…` に一致した。
+2. 公開側から導けない文字列を与えれば通ることの確認: C08 試行 1 の `repo/` を一時 dir に写し、`out/o1.txt`〜`o4.txt` を `minichunk C08 <id> verified: write+fsync+restart read-back ok\n` に置き換えて sha256 を `expected.json` と比べた。→ 4 件とも一致（True）。C06 の `o1` も同じ書式で一致した。
 3. 試験として組んだものではなく、上の 2 つの確認コマンドの結果である。一時 file は commit していない。
 
 ## 仮説 2

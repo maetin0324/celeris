@@ -89,5 +89,7 @@ v2 の集計（`p0c/grade-v2/summary.json`）。v1（`2026-11-04-long-horizon/a8
 - 修正: commit「delivery: drain 中の daemon は自分が起動した release 準備の終了を待つ」。ADR `agent-docs/adr/2026-11-05-drain-waits-for-release-prepare.md`。試験 `prepare_child_counts_as_in_flight_until_it_exits`。
 - 本番への移行: なし（config・DB の変更は無い）。この修正が入る release までは、promote が準備の途中に重なると同じ失敗が起きうる。配送の再準備は celeris が行う。
 
+- repair-1（merge_base、2026-11-05）: 検査済みの merge candidate と main が食い違ったため、task branch を最新の main（件名「p0b: attempt 3 の検査の結果を書く」）へ rebase した。衝突なし（task の 5 file と main の差分の file は重ならない）。提出時の HEAD で `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace -- -D warnings` exit 0、`env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` exit 0（978 passed、0 skipped、bundle SKIP 0 件）。
+
 ## 提案
 - `scripts/dev/long-horizon-pilot-llm.sh --harness config` は、ops-r2 の sandbox で起動していなければ断る検査を足す（P0-D・P0-F の範囲）。

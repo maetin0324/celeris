@@ -93,8 +93,9 @@ controller は event（root の終了・失敗・人の操作など）で起き�
 - `POST /projects` で作った直後の案件は `proposed` で、これを `active` へ移す API は無い。人が controller を `enabled` に上げると、同じ
   transaction で案件を `active` にする（`proposed` のままだと判定と検証が起票を断り続ける）。
 - repo を持つ案件の root は、取り込み（`IntegrationMerged`）が記録されたときだけ取り込み済みに数える。`delivery_skipped` の
-  `not_git`・`no_commits` と `IntegrationNotApplicable` は取り込み済みに数えない（`not_git` は受信箱に理由付きで出る）。controller を
-  起こすのも `IntegrationMerged` のときだけ。repo を持たない案件の root は done で取り込み済みに数える
+  `not_git`・`no_commits` と `IntegrationNotApplicable` は取り込み済みに数えない（`not_git` は受信箱に理由付きで出る）。取り込みの
+  event で controller を起こすのは `IntegrationMerged` だけ（root の done でも別に起こす。repo の無い案件の root も同じ）。repo を
+  持たない案件の root は done で取り込み済みに数える
   （[A9 pilot の不具合の付記](../../agent-docs/adr/2026-11-05-a9-llm-pilot-findings.md) D1）。
 - 実 LLM の pilot は `scripts/dev/long-horizon-pilot-llm.sh` を人が sandbox の外から実行する。人の承認の印
   `LONG_HORIZON_PILOT_LLM_APPROVED=1` と、人が書いた LLM の設定（`--llm-config <toml>`。`[llm_sources]`・`[harnesses]`・

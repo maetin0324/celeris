@@ -5,7 +5,7 @@
 - 前提として保つもの: 旧 milestones API は 410。Project は長期目的、Task は終わらせるもの。Rust が状態・検証・安全・認可を持ち、TS は提案だけを出す。A9 の修正（`root_row` の `IntegrationMerged` 限定、決定的な検査の優先、pilot の git 化、effect stub、公開手順）は再実装しない。
 
 ## 結論
-2026-11-05 の実 LLM pilot（C06・C08 の各 1 試行）で controller が achieved、独立 oracle が 0/2 になった直接の原因は A9 付記 D1〜D4 で扱った。残る構造上の原因は 1 つで、**「達成」を主張する 6 つの層（controller の phase・Roadmap の Outcome・成果の根拠・oracle・Reviewer・check）が、互いを確かめずに別々の根拠で真になる**ことである。この ADR は、上位の層が真になる条件を下位の層の検証済みの事実に限る不変条件 I1〜I12 と、それを固定する試験のケース K1〜K24 を定める。
+2026-11-05 の実 LLM pilot（C06・C08 の各 1 試行）で controller が achieved、独立 oracle が 0/2 になった直接の原因は A9 付記 D1〜D4 で扱った。残る構造上の原因は 1 つで、**「達成」を主張する 6 つの層（controller の phase・Roadmap の Outcome・成果の根拠・oracle・Reviewer・check）が、互いを確かめずに別々の根拠で真になる**ことである。この ADR は、上位の層が真になる条件を下位の層の検証済みの事実に限る不変条件 I1〜I14 と、それを固定する試験のケース K1〜K43 を定める。
 
 ## 根拠の連鎖（main の現状）
 上から順に、各層が何を根拠に真になるか。
@@ -33,9 +33,11 @@ L1 は L3 だけを見て、L3 は L5・L6 の結果（done）を見る。L6 が
 - **I7（決定的な検査が優先）**: `Check::Command` が 1 つでも落ちれば、reviewer の verdict に関わらず done にも `reached` にもしない。食い違いは event に残す（既存。後退させない）。（P0-E が保つ）
 - **I8（検証できない基準を通さない）**: stub reviewer は、自分で確かめられない基準を pass にしない。pilot の root は公開契約に基づく command check を 1 つ以上持つ。check の無い経路が保証しない範囲を文書に書く。（P0-E）
 - **I9（判断の根拠を残す）**: reviewer の verdict の理由、command check の出典（acceptance の index と command）と exit code を event に残し、pilot の facts と ops に写す。（P0-E）
-- **I10（効果の記録は worker の外）**: 外部効果の記録は worker が書き換えられない場所に置き、facts はその記録から読む。記録が読めなければ効果 0 件とせず `observation_failed` にする。承認は daemon の承認 API を通し、承認前の効果は 0 件。（P0-D）
-- **I11（二重の状態変更 0）**: Roadmap の版の差し替え、同じ event の重複、root の reopen、並行の承認・CAS、daemon の再起動のどれでも、Outcome の状態と phase の書き込みは 1 回以下。（P0-B・P1-G）
+- **I10（効果の記録は worker の外）**: 外部効果の記録は worker が書き換えられない場所に置き、facts はその記録から読む。記録が読めなければ効果 0 件とせず `observation_failed` にする。承認は daemon の承認 API を通し、承認前の効果は 0 件、rejected の効果も 0 件。同じ logical_id の効果は、crash の後の再実行・重複の呼び出し・並行の呼び出しのどれでも 1 件以下。（P0-D）
+- **I11（二重の状態変更 0）**: Roadmap の版の差し替え、同じ event の重複、root の reopen、並行の承認・CAS、daemon の再起動のどれでも、Outcome の状態と phase の書き込みは 1 回以下。wake の側でも、同じ event からの wake は 1 件（`project_wakes` の `UNIQUE (project_id, wake_key)`）で、1 件の wake から効果は 1 回以下。人の編集（brief・authority・Roadmap）と wake は同じ transaction で書く。（P0-B・P1-G）
 - **I12（一致率を測る）**: pilot の報告は試行ごとに「controller の achieved」と「oracle の合否」を並べ、不一致を不具合として数える（LLM の失敗に数えない）。（P0-C・P0-F）
+- **I13（人の停止は自動で解けない）**: 再評価で動いてよいのは、人の回答・許可の根拠があるか、止まった原因が解消した場合だけ。人の明示の pause・cancel、未解決の `human_required`、危険な予算超過は、時間の経過や wake では解けない。却下された問いは、同じ分類の効果を作らず、同じ問いを再び聞かない。（P1-G）
+- **I14（予算と計測は chat run も数える）**: 案件の予算の token と計測は、案件 CoS の chat run の token と起動を含む。main の `project_run_usage_since` は `runs` だけを読み、`chat_runs` を読まない（A6 の未解決 5）。日次予算の超過は翌日に再評価できるものとできないものに分類し、永続の許可なしに root を増やさない。（P1-G）
 
 ## 試験のケース（K）
 実装 task は、まず下の陰性ケースを赤で確かめてから直す。試験名は実装 task が決め、各進捗の「受入とテストの対応」に書く。
@@ -67,6 +69,25 @@ L1 は L3 だけを見て、L3 は L5・L6 の結果（done）を見る。L6 が
 | K22 | reviewer の理由・check の exit code | event・facts・ops に残る | I9 | P0-E |
 | K23 | 同じ facts で controller が achieved、oracle が fail | 報告の不一致件数が 1 | I12 | P0-C |
 | K24 | 旧 milestones API を呼ぶ | 410 のまま（既存 `milestone_lifecycle_endpoints_are_gone`） | 前提 | 全員 |
+| K25 | daemon の承認 API で reject してから publish | 効果 0、facts に reject の記録が残る | I10 | P0-D |
+| K26 | 効果の記録の前後で publish の process を落とし、同じ logical_id で再実行 | 効果は最後に 1 件（記録の前に落ちた場合は再実行で 1 件、記録の後に落ちた場合も 1 件のまま）。承認前の crash は 0 件 | I10・I11 | P0-D |
+| K27 | 同じ logical_id の publish を並行で 2 つ走らせる（時間差は試験の hook で決定的に作る） | 効果は 1 件。main の `pilot_effect.py` は記録を読んでから追記し、lock が無いので、この試験は修正前に赤になるはず（赤は未確認） | I10・I11 | P0-D |
+| K28 | 実 LLM と同じ config harness の経路で worker が publish の command を使う（LLM は呼ばず、harness は stub） | 公開された command が worker に届き、効果の記録まで通る。既存の stub 配線も通る | I10 | P0-D |
+| K29 | wake の event を取り込む途中と効果の途中で daemon を止めて再起動（既存 `project_wake_crash_*`・`project_controller_replay_crash_each_stage` に brief の wake を足す） | wake は 1 件、効果は 1 回以下 | I11 | P1-G |
+| K30 | 同じ event を 2 回取り込む | `wake_key` が同じで wake は 1 件、評価は 1 回 | I11 | P1-G |
+| K31 | 時計を 3 日飛ばす（既存 `project_controller_replay_suspend_clock_jump_3days`） | 溜まった wake で効果が重ならない、問いも重ならない | I11 | P1-G |
+| K32 | 同じ失敗を上限より多く起こす（既存 `project_controller_replay_worker_fails_same_way_5x`） | `max_same_failure_repeats` で止まり、問いは 1 件、root は増えない。人が解消した後にまた同じ失敗なら、もう一度止まる | I11・I13 | P1-G |
+| K33 | brief と authority を同じ tick で人が編集する（main では brief・authority・Roadmap の編集は wake を書かない） | wake は編集ごとに編集と同じ transaction で 1 件。評価は最新の revision を読み、古い revision の効果は CAS で 1 つも通らない | I11 | P1-G |
+| K34 | clear: 人が問いに許可で答える（`authority_answered`）か、止まった原因が解消する | 再評価が 1 回走り、許可の範囲でだけ動く。根拠が判断の行に残る | I11・I13 | P1-G |
+| K35 | deny: 人が問いを却下する（`authority_question_dismissed`）か、許可を取り消す（既存 `authority_ledger_revoked_after_decision_creates_no_root`） | 再評価しても同じ分類の効果は 0。同じ問いを再び聞かない（既存 `authority_ledger_answered_question_is_not_asked_again`・`authority_ledger_same_question_not_asked_twice`） | I13 | P1-G |
+| K36 | 7 日以上の仮想時刻を流す（既存 `project_controller_replay_external_never_replies` は 240 時間） | 上の K29〜K35 の不変条件が保たれ、wake・問い・効果の件数が上限内 | I11・I13 | P1-G |
+| K37 | 人の pause・cancel、未解決の `human_required`、危険な予算超過で時間を流す（既存 `project_controller_replay_paused_project`・`..._cancelled_project`・`..._budget_day_cap`・`..._token_cap`、`authority_ledger_human_required_cannot_be_lifted`） | 自動で解けない。効果 0 | I13 | P1-G |
+| K38 | 人の回答待ちだけの案件を仮想時刻で 24 時間流す | 評価の回数が修正前より減る。修正前の回数は同じ台本で実測して並べる（main は `ANSWERED_RECHECK_SECS`=3600） | I13 | P1-G |
+| K39 | 案件 CoS の chat run の token で日次の上限を超える | `tokens` に chat run が入って guard が止まり、起動の回数が計測に出る。同じ通知・問いは 1 件 | I14 | P1-G |
+| K40 | 日次予算の超過の翌日に時計を進める | 再評価できる分類だけ再評価する。永続の許可が無ければ root は増えない | I14 | P1-G |
+| K41 | repo の無い調査案件で、root が成果物を持つ／持たない | 持てば `reached`、持たなければ reached にならない。hidden の oracle を要求しない | I4 | P0-B |
+| K42 | v2 で全 10 課題の replay を再採点し、同じ初期状態と oracle で old と new を比べる | 陰性を含めて期待どおり。合否は LLM の回答を読まない | I5・I6 | P0-C |
+| K43 | GET と UI で未達・達成・待機理由・承認範囲・次の wake を見る | `pc/achieved-unverified` と未達の Outcome の id が見える | I1 | P2-J |
 
 ## 理由
 - L1 から L6 のどれか 1 層の誤りが、そのまま「達成」として外に出る構造が、A9 の 0/2 を作った。各層を個別に直しても（A9 の D1〜D4）、上位の層が下位を確かめなければ次の抜け道で同じことが起きる。上位を下位の検証済みの事実で縛るのが最小の手当てである。
@@ -81,6 +102,9 @@ L1 は L3 だけを見て、L3 は L5・L6 の結果（done）を見る。L6 が
 - `project_decider_ts.rs` の `MarkMilestone` の「記録だけ（A5 の前）」の分岐は P0-B が消す（効果を持たせる）。`Wait{phase:Achieved}` を検査なしで写す分岐も消す。
 - `docs/ops/project-controller.md` の「`not_git`・`no_commits` は取り込み済みと同じに扱う」の 2 行は A9 D1 で古くなっていたので、この ADR と同じ変更で消した。運用手順の全面の見直しは P2-J。
 - 互換 flag・新旧の判定の併存は置かない（[破壊的変更を是とする方針](2026-10-11-breaking-changes-by-default.md)）。
+
+## 語の読み方
+P1-G の受入の「clear と deny」は、記録に定義が無い。この ADR は、人の回答の 2 種類として読む。clear は許可または原因の解消（K34）、deny は却下または許可の取り消し（K35）。P1-G が別の意味だと判断したら、`2026-11-05-phase3-p1g.md` に書いて直す。
 
 ## 未確認
 - I3(b) の reopen の前の合格の持ち越し: `root_row` は `ReviewerPassed` で立てた `reviewer_passed` を戻さない。status が done でなければ `satisfies` は偽なので実害は status が `review_pass` 以外の理由で done になる経路に限るが、その経路が今あるかは確かめていない（K9 で P0-B が確かめる）。

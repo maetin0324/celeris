@@ -1,0 +1,23 @@
+# cargo nextest run -p task-dispatch -p task-api --no-fail-fast -E 'test(/project_controller_replay_(crash_each_stage|suspend_clock_jump_3days|external_never_replies|worker_fails_same_way_5x|human_escalation_repeat|budget_day_cap|token_cap|paused_project|cancelled_project)/) | test(/project_wake_crash_/) | test(/authority_ledger_(answered_question_is_not_asked_again|revoked_after_decision_creates_no_root|human_required_cannot_be_lifted|same_question_not_asked_twice)/)'
+# exit 0 / Summary [  10.812s] 21 tests run: 21 passed, 2197 skipped
+task-api::authority_ledger authority_ledger_human_required_cannot_be_lifted
+task-api::authority_ledger authority_ledger_same_question_not_asked_twice
+task-dispatch dispatcher::tests::project_wake::project_cos::authority_ledger::authority_ledger_answered_question_is_not_asked_again
+task-dispatch dispatcher::tests::project_wake::project_cos::authority_ledger::authority_ledger_revoked_after_decision_creates_no_root
+task-dispatch dispatcher::tests::project_wake::project_wake_crash_b1
+task-dispatch dispatcher::tests::project_wake::project_wake_crash_b2
+task-dispatch dispatcher::tests::project_wake::project_wake_crash_b3
+task-dispatch dispatcher::tests::project_wake::project_wake_crash_b4
+task-dispatch dispatcher::tests::project_wake::project_wake_crash_b5
+task-dispatch dispatcher::tests::project_wake::project_wake_crash_b6
+task-dispatch dispatcher::tests::project_wake::project_wake_crash_cos_b4
+task-dispatch dispatcher::tests::project_wake::project_wake_crash_cos_b5
+task-dispatch dispatcher::tests::project_wake::replay::project_controller_replay_budget_day_cap
+task-dispatch dispatcher::tests::project_wake::replay::project_controller_replay_cancelled_project
+task-dispatch dispatcher::tests::project_wake::replay::project_controller_replay_crash_each_stage
+task-dispatch dispatcher::tests::project_wake::replay::project_controller_replay_external_never_replies
+task-dispatch dispatcher::tests::project_wake::replay::project_controller_replay_human_escalation_repeat
+task-dispatch dispatcher::tests::project_wake::replay::project_controller_replay_paused_project
+task-dispatch dispatcher::tests::project_wake::replay::project_controller_replay_suspend_clock_jump_3days
+task-dispatch dispatcher::tests::project_wake::replay::project_controller_replay_token_cap
+task-dispatch dispatcher::tests::project_wake::replay::project_controller_replay_worker_fails_same_way_5x

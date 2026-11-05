@@ -1,0 +1,179 @@
+{
+ "schema": "celeris.long-horizon-facts/1",
+ "bench_version": 1,
+ "dataset": "long_horizon_llm_pilot",
+ "case": "C06",
+ "seed": 1,
+ "init_digest": "fbc357ccd2db05fe2ac37486bf174586dc757ea91965c7f7d721c89d51d0c052",
+ "horizon_secs": 14400,
+ "roots": [
+  {
+   "logical_id": "o1:1",
+   "outcome": "o1",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 32,
+   "statuses": [
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "d3162b9bfbfd4b8d900c30fa1c372d8a2edd0fc21e2a54f56efb7ed8acba3e62"
+  },
+  {
+   "logical_id": "o2:1",
+   "outcome": "o2",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 66,
+   "statuses": [
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "fdfab4cefb656648f0c6df42156e6acc643f018c32f2aa6a308015b16ce5e06f"
+  }
+ ],
+ "effects": [],
+ "human_ops": [
+  {
+   "at": 0,
+   "class": "stimulus",
+   "kind": "project_request"
+  }
+ ],
+ "faults": [],
+ "invocations": [
+  {
+   "at": 32,
+   "role": "worker",
+   "usage": {
+    "input_tokens": 8,
+    "output_tokens": 787,
+    "cache_read_tokens": 70780,
+    "cache_creation_tokens": 24320,
+    "cost_usd": 0.082842,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 24322
+   }
+  },
+  {
+   "at": 43,
+   "role": "reviewer",
+   "usage": {
+    "input_tokens": 10,
+    "output_tokens": 1188,
+    "cache_read_tokens": 94721,
+    "cache_creation_tokens": 16843,
+    "cost_usd": 0.07295170000000001,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 24316
+   }
+  },
+  {
+   "at": 64,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 65,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 66,
+   "role": "worker",
+   "usage": {
+    "input_tokens": 8,
+    "output_tokens": 777,
+    "cache_read_tokens": 78584,
+    "cache_creation_tokens": 14731,
+    "cost_usd": 0.0603303,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 24402
+   }
+  },
+  {
+   "at": 77,
+   "role": "reviewer",
+   "usage": {
+    "input_tokens": 10,
+    "output_tokens": 1076,
+    "cache_read_tokens": 92215,
+    "cache_creation_tokens": 15586,
+    "cost_usd": 0.068188,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 23059
+   }
+  },
+  {
+   "at": 89,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 89,
+   "role": "cos",
+   "usage": null
+  }
+ ],
+ "actors": [
+  {
+   "actor": "human",
+   "at": 0
+  },
+  {
+   "actor": "worker",
+   "at": 32
+  },
+  {
+   "actor": "reviewer",
+   "at": 43
+  },
+  {
+   "actor": "cos",
+   "at": 64
+  },
+  {
+   "actor": "cos",
+   "at": 65
+  },
+  {
+   "actor": "worker",
+   "at": 66
+  },
+  {
+   "actor": "reviewer",
+   "at": 77
+  },
+  {
+   "actor": "cos",
+   "at": 89
+  },
+  {
+   "actor": "cos",
+   "at": 89
+  }
+ ],
+ "statements": [],
+ "questions": [],
+ "cos_launch_rejected": 0,
+ "running_untracked": 0,
+ "achieved_at": null,
+ "events_append_only": true,
+ "usage": {
+  "tokens": 3864,
+  "quota": null,
+  "wall_secs": 98,
+  "missing": null
+ },
+ "virtual_secs_to_reach": null
+}

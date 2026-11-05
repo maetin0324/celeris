@@ -1,0 +1,26 @@
+pilot: deploy_ts {"bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8", "mode_seed": "synthetic: temp DB only"}
+pilot: project_created {"project": "01M6MGNKEZCSJAGZ7TMM0MZWP3", "arm": "new"}
+pilot: operator_cannot_raise_mode {"status": 403, "code": "project_controller_mode_requires_human"}
+pilot: set_mode {"mode": "enabled", "reason": "pilot を有効にする", "revision": null}
+pilot: state {"phase": "active", "roots": []}
+pilot: state {"phase": "active", "roots": ["running"]}
+pilot: state {"phase": "active", "roots": ["reviewing"]}
+pilot: state {"phase": "active", "roots": ["ready"]}
+pilot: state {"phase": "active", "roots": ["running"]}
+pilot: state {"phase": "active", "roots": ["reviewing"]}
+pilot: state {"phase": "active", "roots": ["done"]}
+pilot: state {"phase": "active", "roots": ["done", "running"]}
+pilot: state {"phase": "active", "roots": ["done", "reviewing"]}
+pilot: state {"phase": "active", "roots": ["done", "done"]}
+pilot: state {"phase": "active", "roots": ["done", "done", "running"]}
+pilot: state {"phase": "active", "roots": ["done", "done", "reviewing"]}
+pilot: state {"phase": "active", "roots": ["done", "done", "done"]}
+pilot: state {"phase": "active", "roots": ["done", "done", "done", "running"]}
+pilot: state {"phase": "active", "roots": ["done", "done", "done", "reviewing"]}
+pilot: state {"phase": "active", "roots": ["done", "done", "done", "done"]}
+pilot: state {"phase": "achieved", "roots": ["done", "done", "done", "done"]}
+pilot: wake_after_end {"new_roots": 0}
+pilot: set_mode {"mode": "off", "reason": "従来の CoS に戻す", "revision": null}
+pilot: wake_after_off {"status": 200, "added": false}
+pilot: after_off {"decisions_at_end": 9, "decisions_after": 9, "mode": "off", "pending_wakes": 1}
+pilot: trial 7420dfe789f99af7 wrote /local/celeris/data/scratch/a9-pilot/agent-platform/agent-docs/progress/2026-11-04-long-horizon/a9/llm

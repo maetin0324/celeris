@@ -1,0 +1,17 @@
+pilot: deploy_ts {"bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8", "mode_seed": "synthetic: temp DB only"}
+pilot: project_created {"project": "01M6MGJK36JK2KM3JQF715PVZT", "arm": "new"}
+pilot: operator_cannot_raise_mode {"status": 403, "code": "project_controller_mode_requires_human"}
+pilot: set_mode {"mode": "enabled", "reason": "pilot を有効にする", "revision": null}
+pilot: state {"phase": "active", "roots": []}
+pilot: state {"phase": "active", "roots": ["running"]}
+pilot: state {"phase": "active", "roots": ["reviewing"]}
+pilot: state {"phase": "active", "roots": ["done"]}
+pilot: state {"phase": "active", "roots": ["done", "running"]}
+pilot: state {"phase": "active", "roots": ["done", "reviewing"]}
+pilot: state {"phase": "active", "roots": ["done", "done"]}
+pilot: state {"phase": "achieved", "roots": ["done", "done"]}
+pilot: wake_after_end {"new_roots": 0}
+pilot: set_mode {"mode": "off", "reason": "従来の CoS に戻す", "revision": null}
+pilot: wake_after_off {"status": 200, "added": false}
+pilot: after_off {"decisions_at_end": 5, "decisions_after": 5, "mode": "off", "pending_wakes": 1}
+pilot: trial 49a77b52eb2fcefa wrote /local/celeris/data/scratch/a9-pilot/agent-platform/agent-docs/progress/2026-11-04-long-horizon/a9/llm

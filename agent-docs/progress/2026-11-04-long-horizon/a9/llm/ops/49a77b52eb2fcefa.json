@@ -1,0 +1,139 @@
+{
+ "schema": "celeris.long-horizon-pilot-trial/1",
+ "trial": "49a77b52eb2fcefa",
+ "harness": "config",
+ "arm": "new",
+ "case": "C06",
+ "project": "01M6MGJK36JK2KM3JQF715PVZT",
+ "wall_secs": 98,
+ "rules": [
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/achieved"
+ ],
+ "root_statuses": [
+  "done",
+  "done"
+ ],
+ "ops": [
+  {
+   "step": "deploy_ts",
+   "at": 1.2,
+   "bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8",
+   "mode_seed": "synthetic: temp DB only"
+  },
+  {
+   "step": "project_created",
+   "at": 2.2,
+   "project": "01M6MGJK36JK2KM3JQF715PVZT",
+   "arm": "new"
+  },
+  {
+   "step": "operator_cannot_raise_mode",
+   "at": 2.2,
+   "status": 403,
+   "code": "project_controller_mode_requires_human"
+  },
+  {
+   "step": "set_mode",
+   "at": 2.2,
+   "mode": "enabled",
+   "reason": "pilot を有効にする",
+   "revision": null
+  },
+  {
+   "step": "state",
+   "at": 2.3,
+   "phase": "active",
+   "roots": []
+  },
+  {
+   "step": "state",
+   "at": 32.6,
+   "phase": "active",
+   "roots": [
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 44.7,
+   "phase": "active",
+   "roots": [
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 65.8,
+   "phase": "active",
+   "roots": [
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 67.8,
+   "phase": "active",
+   "roots": [
+    "done",
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 77.8,
+   "phase": "active",
+   "roots": [
+    "done",
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 89.9,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 91.9,
+   "phase": "achieved",
+   "roots": [
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "wake_after_end",
+   "at": 94.9,
+   "new_roots": 0
+  },
+  {
+   "step": "set_mode",
+   "at": 94.9,
+   "mode": "off",
+   "reason": "従来の CoS に戻す",
+   "revision": null
+  },
+  {
+   "step": "wake_after_off",
+   "at": 94.9,
+   "status": 200,
+   "added": false
+  },
+  {
+   "step": "after_off",
+   "at": 97.9,
+   "decisions_at_end": 5,
+   "decisions_after": 5,
+   "mode": "off",
+   "pending_wakes": 1
+  }
+ ]
+}

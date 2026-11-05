@@ -31,6 +31,7 @@ updated: 2026-11-05
 - `p0b: 既存の試験の fixture を I4 に合わせ、ADR の付記を足す`
   - repo の無い root を done にする fixture に `ArtifactProduced` を足した（`long_horizon_pilot.rs`、`crates/celeris/tests/project_controller_e2e.rs`、`crates/task-api/tests/project_roadmap.rs`）。
 - `p0b: 進捗を書く`（この file と raw）
+- `p0b: 同期の後の検査の結果を書く`
 
 ## 受入とテストの対応
 | 受入 | ケース | 試験（新規は太字なし・全部 `project_achievement_` か `root_row_`） |
@@ -57,7 +58,8 @@ updated: 2026-11-05
 - `bash scripts/dev/test-affected.sh` → exit 0、7633 passed・21 skipped、script bundle の SKIP 0 件（`p0b/test-affected-tail.txt`）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- `sh scripts/dev/progress-index.sh --check` → 下の「最後の同期の後の再実行」を参照
+- 最後の同期（main への rebase）の後に上の test-affected・clippy・fmt を再実行した（上の値はその結果）
+- `sh scripts/dev/progress-index.sh --check` → ok
 - `test -f agent-docs/progress/2026-11-05-phase3/p0b.md` → exit 0
 
 ## 失敗ケース（途中で落ちたもの）

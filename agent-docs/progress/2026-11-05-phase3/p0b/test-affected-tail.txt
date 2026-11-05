@@ -1,0 +1,14 @@
+# bash scripts/dev/test-affected.sh（提出時の HEAD、最後の同期＝main への rebase の後）
+check-human-text: 11 files, 244 literals, 0 findings (5 allowed)
+check-human-text --self-test: ok
+test-affected: web typecheck+unit を走らせる（理由: web の型の元になる crate の変更: task-api task-core task-ops）
+test-affected: web typecheck (tsc -b、上限 300 秒)
+test-affected: web unit 試験 (vitest run && node --test server/*.test.mjs、上限 300 秒)
+test-affected: bash scripts/dev/test-ts-verify.sh を走らせる（理由: runner の cache key の入力の変更）
+test-affected: crates: celeris celeris-campaign celeris-credentiald celeris-mcp celeris-script celerisctl e2e llm-proxy routing-eval task-api task-core task-dispatch task-ops task-worker 
+test-affected: control-ts の source から bundle を作った（<tmp>/script-bundle）。bundle を読む試験はこれを使い、SKIP を失敗にする
+     Summary [ 435.569s] 7633 tests run: 7633 passed (20 slow), 21 skipped
+test-affected: script bundle SKIP: 0 件
+exit 0
+# cargo clippy --workspace -- -D warnings → exit 0
+# cargo fmt --all -- --check → exit 0

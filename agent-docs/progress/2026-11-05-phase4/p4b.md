@@ -58,7 +58,7 @@ raw は `agent-docs/progress/2026-11-05-phase3/p0c/replay-v2/facts/`（trial は
   （`human_answer_instruct`）、CoS の root o1:3 が 90,000 秒に合格した。P1-G の再開は問いの key の許可・却下・依頼文の変更しか見ないので、
   controller は `blocked` のまま o1 を記録しなかった。**不具合**として `project_resume` に「o を I3 で満たす root が現れたら再開」を足した。
 - before/after: `p4b/replay-v2-c10/c10-new.before.json`・`c10-new.after.json`・`raw-diff.log`。差は `controller_achieved` の 1 行だけ。
-  committed の baseline（`p0c/replay-v2/facts/e043933427af2507.json`）を after に置き換えた。
+  committed の baseline（`p0c/replay-v2/facts/` の C10 new の試行。`arm-map/` で case C10・arm new を引く）を after に置き換えた。
 
 ## 検査（提出時の HEAD で実行）
 | command | exit | 要点 |

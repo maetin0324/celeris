@@ -59,14 +59,14 @@ updated: 2026-11-05
 | 3 `test -f …/p0b.md` | — | 下の証拠 |
 | (objective) repo の無い調査案件の証拠規則 | K41 | `root_row_without_repo_with_deliverable_is_integrated`・`root_row_without_repo_without_deliverable_is_not_integrated` |
 
-試験名の一覧（`cargo nextest list … --message-format oneline`）は `p0b/tests-list.txt`（57 件）。
+試験名の一覧（`cargo nextest list … --message-format oneline`）は `p0b/tests-list.txt`（59 件）。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
-- 選んだ試験: `cargo nextest run -p task-ops -p task-dispatch -p task-api -p celeris --no-fail-fast -E 'test(/project_achievement_|root_row_|project_roadmap_|project_controller_core_|long_horizon_pilot_|milestone_lifecycle_endpoints_are_gone|milestones_are_gone/)'` → exit 0、57 passed（`p0b/selected-tests.txt`）
-- `bash scripts/dev/test-affected.sh` → exit 0、7633 passed・21 skipped、script bundle の SKIP 0 件（`p0b/test-affected-tail.txt`）
+- 選んだ試験: `cargo nextest run -p task-ops -p task-dispatch -p task-api -p celeris --no-fail-fast -E 'test(/project_achievement_|root_row_|project_roadmap_|project_controller_core_|long_horizon_pilot_|milestone_lifecycle_endpoints_are_gone|milestones_are_gone/)'` → exit 0、59 passed（`p0b/selected-tests.txt`）
+- `bash scripts/dev/test-affected.sh` → exit 0、7674 passed・21 skipped、script bundle の SKIP 0 件（`p0b/test-affected-tail.txt`）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- 最後の同期（main への rebase）の後に上の test-affected・clippy・fmt を再実行した（上の値はその結果）
+- 上の値は attempt 2 の commit を含む提出時の HEAD で実行した結果（main は基準のまま進んでいない。同期は無し）
 - `sh scripts/dev/progress-index.sh --check` → ok
 - `test -f agent-docs/progress/2026-11-05-phase3/p0b.md` → exit 0
 

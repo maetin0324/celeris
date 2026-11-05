@@ -39,8 +39,10 @@ task-dispatch dispatcher::tests::project_wake::project_cos::project_achievement:
 task-dispatch dispatcher::tests::project_wake::project_cos::project_achievement::project_achievement_concurrent_approval_cas
 task-dispatch dispatcher::tests::project_wake::project_cos::project_achievement::project_achievement_duplicate_events_record_once
 task-dispatch dispatcher::tests::project_wake::project_cos::project_achievement::project_achievement_forged_gap_without_root_is_refused
+task-dispatch dispatcher::tests::project_wake::project_cos::project_achievement::project_achievement_integration_reopened_between_decide_and_commit_is_stale
 task-dispatch dispatcher::tests::project_wake::project_cos::project_achievement::project_achievement_other_project_root_is_refused
 task-dispatch dispatcher::tests::project_wake::project_cos::project_achievement::project_achievement_partial_outcomes_wait
+task-dispatch dispatcher::tests::project_wake::project_cos::project_achievement::project_achievement_reopen_between_decide_and_commit_is_stale
 task-dispatch dispatcher::tests::project_wake::project_cos::project_achievement::project_achievement_reopened_root_is_not_evidence
 task-dispatch dispatcher::tests::project_wake::project_cos::project_achievement::project_achievement_restart_records_once
 task-dispatch dispatcher::tests::project_wake::project_cos::project_achievement::project_achievement_roadmap_version_swap_reopens

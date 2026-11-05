@@ -33,7 +33,10 @@
 | TS だけの変更の edit→verify で cargo 0 回 | release gate の script-bundle-gate（`scripts/selfdeploy/script-bundle-gate.sh`） | 未計測（第 3 フェーズの共通受入 (b) の残り。H で測る） |
 
 ### D3 性能のベースラインの計測の口
-- `TickReport` に `step_us: Vec<(&'static str, u64)>`（tick の段ごとの µs、実行順）を足した。判断には使わない。
+- `TickReport` に `step_us: Vec<(&'static str, u64)>`（tick の段ごとの µs、実行順）を足した。判断には使わない。計測は
+  `crates/task-dispatch/src/dispatcher/tick_steps.rs` の `TickSteps` が持つ。旧い粗い lap（`drain_ms`・`reclaim_ms`・`dispatch_ms` など 9 欄）は
+  消し、ADR-0015 D2 の遅い tick の警告（`slow tick phases`）は `total_ms` と `steps_us`（同じ段の列）を出す。過去の進捗にある旧欄名の
+  ログは当時の記録として残す。
 - 試験 `crates/celeris/tests/tick_scale_baseline.rs`（`tick_scale_baseline`）。本物の dispatch で blocked にした task の行を
   SQL で N 件に複写し（本文の task id も置き換える）、空 tick・`store.list(None)`・dispatch の遅延（`Env::dispatch` と同じ手順）と
   段ごとの時間を `celeris.tick-scale-baseline/1` の JSON で出す。`TICK_SCALE_NATURAL=1` は本物の dispatch で N 件を作る対照。

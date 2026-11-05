@@ -99,6 +99,7 @@ mod clock;
 mod cluster_job_wait;
 mod credential_gate;
 mod lane_assist;
+mod tick_steps;
 pub use cluster_job_wait::{
     ClusterJobNotice, ClusterJobNoticeOutcome, ClusterJobPollRequest, ClusterJobPoller,
     ssh_cluster_job_poller,
@@ -226,8 +227,6 @@ struct WorkerDecisions {
     /// 記録する決定の数（束ねた後）。
     count: usize,
 }
-
-const SLOW_TICK: Duration = Duration::from_secs(1);
 
 /// tick の中の 1 段階がこれを超えたら `warn`（ADR-0015 D2。遅いのが DB かファイルかを切り分ける）。
 const SLOW_STEP: Duration = Duration::from_millis(500);
@@ -712,18 +711,8 @@ pub struct TickReport {
     /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4:
     /// この tick で起こした評価 run（`eval_trials`）の本数。本番の `dispatched` には数えない。
     pub eval_started: usize,
-    /// 第 4 フェーズ P4-A: tick の各段の所要時間（µs、実行した順）。blocked の task の数に比例して伸びる段を
-    /// 特定するための計測の口（`crates/celeris/tests/tick_scale_baseline.rs`）。判断には使わない。
+    /// tick の段ごとの所要時間（µs、実行順。`tick_steps.rs`）。判断には使わない。
     pub step_us: Vec<(&'static str, u64)>,
-}
-
-/// `TickReport::step_us` に 1 段の所要時間を積み、計測の起点を進める。
-fn step(at: &mut Instant, out: &mut Vec<(&'static str, u64)>, name: &'static str) {
-    out.push((
-        name,
-        u64::try_from(at.elapsed().as_micros()).unwrap_or(u64::MAX),
-    ));
-    *at = Instant::now();
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -2312,93 +2301,45 @@ impl Dispatcher {
             self.tick_disk_watch();
         }
         let mut report = TickReport::default();
-        let mut step_at = Instant::now();
-        // ADR-0015 D2: 遅い tick の内訳を出せるよう、段階ごとに所要時間を測る。
-        let started = Instant::now();
-        let mut at = Instant::now();
-        let lap = |at: &mut Instant| {
-            let d = at.elapsed().as_millis() as u64;
-            *at = Instant::now();
-            d
-        };
+        // ADR-0015 D2・P4-A D3: 遅い tick の内訳を出せるよう、段ごとに所要時間を測る（`tick_steps.rs`）。
+        let mut steps = tick_steps::TickSteps::start();
         let (finished, reviewed) = self.drain_completions()?;
         // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining なら手元の WU の検査を止めて手を離す。
         self.hand_off_checks_in_hand()?;
-        step(&mut step_at, &mut report.step_us, "drain_completions");
-        let drain_ms = lap(&mut at);
+        steps.mark("drain_completions");
         report.finished = finished;
         report.reviewed = reviewed;
         self.settle_awaiting_children()?;
-        step(
-            &mut step_at,
-            &mut report.step_us,
-            "settle_awaiting_children",
-        );
         // ADR-0079 §7 R1b: 木の照合（子の状態の写しと、ready の kind task の unit からの子 task の生成）。
         self.reconcile_tree_units()?;
-        step(&mut step_at, &mut report.step_us, "reconcile_tree_units");
         // ADR-0079 D10（Phase R3b）: 木の生存確認（理由なく止まっている節点に `StallDetected` と障害通知を 1 回）。
         // ADR 2026-10-27-project-stagnation-inbox D3: 続けて案件単位の停滞（生存確認の `stalled` を除く）。
+        steps.mark("settle_and_tree_units");
         self.check_liveness_and_stagnation();
-        step(
-            &mut step_at,
-            &mut report.step_us,
-            "check_liveness_and_stagnation",
-        );
+        steps.mark("check_liveness_and_stagnation");
         // Phase F7 の承認の照合と ADR-0080 D4 の browser の wait の期限切れ（`housekeeping.rs`）。
         self.expire_stale_approvals_and_browser_waits();
-        step(
-            &mut step_at,
-            &mut report.step_us,
-            "expire_stale_approvals_and_browser_waits",
-        );
         self.tick_credential_waits();
-        step(&mut step_at, &mut report.step_us, "tick_credential_waits");
+        steps.mark("approvals_and_credential_waits");
         report.reclaimed = self.reclaim_expired_leases()?;
-        step(&mut step_at, &mut report.step_us, "reclaim_expired_leases");
+        steps.mark("reclaim_expired_leases");
         // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D2: draining の旧 instance が手を離した WU の検査を拾う
         // （照合より前。照合が「持ち主の居ない run」として requeue しないように）。
         self.take_over_handed_off_checks()?;
-        step(
-            &mut step_at,
-            &mut report.step_us,
-            "take_over_handed_off_checks",
-        );
         // ADR-0074 D1.7（Phase F2b）: v2 の Task の照合（WU の lease 切れ・何も走っていない Running）。
         self.reconcile_parallel_tasks()?;
-        step(
-            &mut step_at,
-            &mut report.step_us,
-            "reconcile_parallel_tasks",
-        );
-        let reclaim_ms = lap(&mut at);
+        steps.mark("reconcile_parallel_tasks");
         self.abort_stale_runs()?;
-        step(&mut step_at, &mut report.step_us, "abort_stale_runs");
         // ADR-0079 付記「R6-1」D4: 終端の task の未完了 run と統合依頼を閉じる（起動時と定期）。
         self.reconcile_terminal_records();
-        step(
-            &mut step_at,
-            &mut report.step_us,
-            "reconcile_terminal_records",
-        );
         // 手元のレビューの取りこぼし（判定の完了が届かないまま終わった・期限を越えた）を閉じる（毎 tick。
         // draining 中も: 残ったままだと `in_flight` が 0 にならず drain が終わらない）。
         self.reap_lost_reviews();
-        step(&mut step_at, &mut report.step_us, "reap_lost_reviews");
         // lease を持たず、どのインスタンスも抱えていない `running` の `runs` 行を閉じる（起動時と定期）。
         self.reconcile_ownerless_runs();
-        step(
-            &mut step_at,
-            &mut report.step_us,
-            "reconcile_ownerless_runs",
-        );
+        steps.mark("abort_and_reconcile_runs");
         // ADR-0043 D2: **中止**されたタスクの worktree とブランチを消す（終端〈done / failed〉では消さない）。
         self.cleanup_cancelled_worktrees()?;
-        step(
-            &mut step_at,
-            &mut report.step_us,
-            "cleanup_cancelled_worktrees",
-        );
         // ADR-0075 D2（Phase G1）: scratch pool の semantic GC（`scratch_gc` phase。rename まで、削除と測定は別スレッド）。
         // scratch が無効なら ADR-0074 F5-fix: 終端になった WU の target（WU ごとの `CARGO_TARGET_DIR`）を消す。
         if self.scratch_active() {
@@ -2417,26 +2358,19 @@ impl Dispatcher {
             });
         }
         self.scratch.ran_this_tick = false;
-        step(
-            &mut step_at,
-            &mut report.step_us,
-            "scratch_and_build_caches",
-        );
-        let abort_ms = lap(&mut at);
+        steps.mark("scratch_and_build_caches");
         // ADR-0066 D2（Phase 110b）: 終端になってから `prune_after_secs` 経った作業場所から、ビルド
         // 生成物だけを刈る（1 tick に最大 1 か所。探すところまでは軽いので同期、削除は別スレッド）。
         self.prune_one_workspace();
         // ADR 2026-10-10-local-disk-growth-paths D2: 終端の木の repo 直下 target（cron に依らず定期。rename まで）。
         self.sweep_repo_targets();
-        step(&mut step_at, &mut report.step_us, "prune_and_sweep");
-        let prune_ms = lap(&mut at);
+        steps.mark("prune_and_sweep");
         // ADR-0040 D4: draining のインスタンスは新しい仕事を始めない（拾い上げも dispatch もしない）。
         // 手元の run とレビューの完了・リース更新・後処理は上の `drain_completions` 以下でそのまま動く。
         if self.accepting_new_work && self.disk_ready {
             self.recover_reviews()?;
         }
-        let recover_ms = lap(&mut at);
-        step(&mut step_at, &mut report.step_us, "recover_reviews");
+        steps.mark("recover_reviews");
         // Phase 66b: `ssh` を呼ぶ・ネストしたランタイムを `block_on` しうるので、async ワーカーから逃がす
         // （`run_cluster_hooks_off_async` の説明を参照）。
         run_cluster_hooks_off_async(|| self.refresh_cluster_liveness());
@@ -2446,66 +2380,42 @@ impl Dispatcher {
         if let Err(e) = self.poll_cluster_job_waits() {
             tracing::warn!(error = %e, "cluster job wait poll failed (ADR-0090)");
         }
-        let cluster_ms = lap(&mut at);
-        step(&mut step_at, &mut report.step_us, "cluster");
+        steps.mark("cluster");
         run_cluster_hooks_off_async(|| self.refresh_cluster_tunnels());
-        let tunnel_ms = lap(&mut at);
-        step(&mut step_at, &mut report.step_us, "cluster_tunnels");
+        steps.mark("cluster_tunnels");
         // ADR-0131 D4: dispatch の前に予定時刻を評価する（`cron_tick.rs`）。
         self.tick_cron_jobs();
-        step(&mut step_at, &mut report.step_us, "tick_cron_jobs");
         // ADR 2026-10-08-browser-prod-enablement D2: 前提が揃った browser task を dispatch の前に戻す。
         if let Err(e) = self.resume_browser_prereq_blocked() {
             tracing::warn!(error = %e, "browser prerequisite re-evaluation failed");
         }
-        step(
-            &mut step_at,
-            &mut report.step_us,
-            "resume_browser_prereq_blocked",
-        );
+        steps.mark("cron_and_browser_prereq");
         report.dispatched = if self.accepting_new_work && self.disk_ready {
             self.dispatch_ready()?
         } else {
             0
         };
-        step(&mut step_at, &mut report.step_us, "dispatch_ready");
+        steps.mark("dispatch_ready");
         // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D3:
         // 評価 run は本番を先に配った後の予約枠（`[routing_eval] reserved_runs`）の中だけで起こす。
         if self.accepting_new_work && self.disk_ready {
             report.eval_started = self.tick_eval_trials();
         }
-        step(&mut step_at, &mut report.step_us, "tick_eval_trials");
+        steps.mark("tick_eval_trials");
         self.tick_cos_chat_launch();
-        step(&mut step_at, &mut report.step_us, "tick_cos_chat_launch");
-        let dispatch_ms = lap(&mut at);
+        steps.mark("tick_cos_chat_launch");
         report.in_flight = self.in_flight();
         report.idle = self.is_idle()?;
-        step(&mut step_at, &mut report.step_us, "in_flight_and_is_idle");
+        steps.mark("in_flight_and_is_idle");
         // Use the same injected clock as the rest of dispatch; the feed never performs I/O outside the store.
         if self.accepting_new_work
             && let Ok(at) = OffsetDateTime::from_unix_timestamp(now)
         {
             self.sync_notice_feed(at);
         }
-        step(&mut step_at, &mut report.step_us, "sync_notice_feed");
-        let idle_ms = lap(&mut at);
+        steps.mark("sync_notice_feed");
         self.publish_snapshot();
-        step(&mut step_at, &mut report.step_us, "publish_snapshot");
-        if started.elapsed() >= SLOW_TICK {
-            tracing::warn!(
-                total_ms = started.elapsed().as_millis() as u64,
-                drain_ms,
-                reclaim_ms,
-                abort_ms,
-                prune_ms,
-                recover_ms,
-                cluster_ms,
-                tunnel_ms,
-                dispatch_ms,
-                idle_ms,
-                "slow tick phases"
-            );
-        }
+        report.step_us = steps.finish();
         Ok(report)
     }
 

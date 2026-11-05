@@ -53,6 +53,14 @@ export type ControllerView = {
   };
   pending_wakes: { id: number; wake_key: string; kind: string; source_ref?: string | null }[];
   last_decision?: ControllerDecision | null;
+  /** 今日（UTC）の日次予算の使用量。token と起動数は案件 CoS の chat run を含む。 */
+  budget_today?: {
+    day: string;
+    cos_inputs: number;
+    roots: number;
+    tokens: number;
+    chat_starts: number;
+  };
 };
 
 export const CONTROLLER_MODE_ACTION_ID = "project_controller_mode";
@@ -234,12 +242,20 @@ export function ProjectControllerPanel({
         <p className="text-label text-muted-foreground" data-testid="controller-next-wake">
           次の再評価: {state.next_wake_at ?? "予定なし"} / 未処理のきっかけ: {view.pending_wakes.length} 件
         </p>
+        {view.budget_today ? (
+          <p className="text-label text-muted-foreground" data-testid="controller-budget-today">
+            今日（{view.budget_today.day} UTC）の使用量: token {view.budget_today.tokens} / CoS の起動{" "}
+            {view.budget_today.chat_starts} 回 / CoS への依頼 {view.budget_today.cos_inputs} 件 / 起票{" "}
+            {view.budget_today.roots} 件
+          </p>
+        ) : null}
       </Part>
 
       <Part title="待機と人の要件" testId="controller-waiting">
         {blocked ? (
           <p role="alert" className="text-label font-medium" data-testid="controller-blocked">
-            自動運営は止まっています。受信箱の判断に答えるか、原因を直してから mode を置き直してください。
+            自動運営は止まっています。理由は受信箱の通知にあります。問いへの回答、外からの応答、翌日の予算の回復のどれかで止まった理由が解けると、自動で再評価します。それ以外は原因を直してから
+            mode を置き直してください。
           </p>
         ) : null}
         {brief && brief.waiting_on.length > 0 ? (

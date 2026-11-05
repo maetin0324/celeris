@@ -57,6 +57,11 @@ impl ProjectWakeKind {
 pub const DRY_RUN_WAKE_PREFIX: &str = "dry_run:";
 
 /// 案件 mode（D11）。上げるのは人だけ、`off` へ戻すのは誰でも。
+/// brief の内容変更の wake の接頭辞（`brief:<epoch>`）。
+pub const BRIEF_WAKE_PREFIX: &str = "brief:";
+/// 判断の後に許可が切れたときの再評価の wake の接頭辞。
+pub const AUTHORITY_DENIED_WAKE_PREFIX: &str = "authority-denied:";
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -120,6 +125,14 @@ impl ControllerMode {
             ControllerMode::Enabled => 3,
         }
     }
+}
+
+/// 外からの入力として数える wake か（TTL と `ttl` の止まりの解除）。cron・停滞の検出は daemon の照合で、
+/// `brief:` は CoS 自身の要約の更新、`authority-denied:` は daemon が自分に積む再評価なので数えない。
+pub fn is_external_input(kind: ProjectWakeKind, wake_key: &str) -> bool {
+    !matches!(kind, ProjectWakeKind::Cron | ProjectWakeKind::Stagnation)
+        && !wake_key.starts_with(BRIEF_WAKE_PREFIX)
+        && !wake_key.starts_with(AUTHORITY_DENIED_WAKE_PREFIX)
 }
 
 /// controller の phase（D12。Task の running とは独立）。A1 は列と `active`・`waiting`・`blocked` の
@@ -277,6 +290,21 @@ pub struct ProjectControllerView {
     pub state: ProjectControllerState,
     pub pending_wakes: Vec<ProjectWake>,
     pub last_decision: Option<ProjectControllerDecision>,
+    /// 今日（UTC）の日次予算の使用量。案件 CoS の chat run の token と起動数を含む（P1-G）。
+    pub budget_today: ProjectBudgetToday,
+}
+
+/// 今日（UTC）の日次予算の使用量（数え方は `task_ops::project_budget`）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ProjectBudgetToday {
+    /// `YYYY-MM-DD`（UTC）。
+    pub day: String,
+    pub cos_inputs: u32,
+    pub roots: u32,
+    /// task run と案件 CoS の chat run の input + output（cache を含めない）。
+    pub tokens: u64,
+    /// 起動した案件 CoS の chat run の数。
+    pub chat_starts: u32,
 }
 
 /// 判定に渡す入力（A1 の DTO。Proposal の型には依存しない）。

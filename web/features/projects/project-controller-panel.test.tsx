@@ -63,6 +63,7 @@ const view = (over: Partial<ControllerView["state"]> = {}): ControllerView => ({
   },
   pending_wakes: [],
   last_decision: decision,
+  budget_today: { day: "2026-11-02", cos_inputs: 1, roots: 2, tokens: 1500, chat_starts: 3 },
 });
 
 function show(state: Partial<ControllerView["state"]> = {}, withBrief = true) {
@@ -101,6 +102,8 @@ describe("ProjectControllerPanel", () => {
     const next = part(html, "controller-next");
     expect(next).toContain("表 2 を作る");
     expect(next).toContain("2026-11-03T00:00:00Z");
+    expect(next).toContain("CoS の起動 3 回");
+    expect(next).toContain("token 1500");
     const waiting = part(html, "controller-waiting");
     expect(waiting).toContain("account の login");
     expect(waiting).toContain("判断待ち 2 件");

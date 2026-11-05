@@ -46,8 +46,9 @@ pub const PROJECT_CONTROLLER_DEADLINE: Duration = Duration::from_secs(2);
 const DECISION_HISTORY: usize = 64;
 /// CoS 入力の本文の上限（文字）。
 const COS_INPUT_MAX: usize = 4000;
-/// A7: 答えのある問いを聞き直さず待つときの次の評価までの秒。
-const ANSWERED_RECHECK_SECS: u64 = 3600;
+/// A7・P1-G: 答えのある問いを聞き直さず待つときの次の評価までの秒。人の操作は wake で来るので、timer は照合だけ
+/// （TS の `POLICY.humanWaitSecs` と同じ 1 日）。
+const ANSWERED_RECHECK_SECS: u64 = 24 * 3600;
 
 /// 失敗の分類（ADR §A3 の `Classification`）。TS の `classifyFailure` が案を出し、判断の記録に残る。
 pub const CLASSIFICATIONS: [&str; 7] = [
@@ -509,6 +510,20 @@ fn authority_guard(
                 .unwrap_or(0);
             let question_key = format!("authority:launch_root:g{generation}");
             let suggested = root.key.clone();
+            // P1-G（deny）: 人が断った問いは聞き直さず、起票もしない。下の問いの分岐が根拠を記録して待つ。
+            if matches!(
+                store.authority_question_dismissed(project, &question_key),
+                Ok(Some(_))
+            ) {
+                p.action = ProjectAction::Escalate {
+                    category: "standing_permission".into(),
+                    question_key,
+                    summary: "人が断った起票の許可の問い".into(),
+                    options: Vec::new(),
+                    evidence_refs: Vec::new(),
+                };
+                return authority_guard(store, mode, project, p, now);
+            }
             let row = NewAuthorityAudit {
                 project_id: project.to_owned(),
                 action_class: class.as_str().to_owned(),

@@ -18,6 +18,20 @@ pub struct PhaseSync {
     pub held_wakes: usize,
 }
 
+/// [`SqliteStore::project_controller_resume`] の入力。読んだときの状態と、判断の行に残す根拠。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectResume {
+    pub project_id: String,
+    pub revision: i64,
+    pub human_epoch: i64,
+    pub blocked_decision_id: String,
+    pub decision_id: String,
+    pub request_sha256: String,
+    pub rule_id: String,
+    pub record_json: String,
+    pub effect_json: String,
+}
+
 /// `Project.status`（と `archived_at`）から決まる phase。`None` は「controller の判断に任せる」。
 fn phase_of_project(status: &str, archived: bool) -> Option<ControllerPhase> {
     if archived {
@@ -107,8 +121,9 @@ impl SqliteStore {
         Ok(out)
     }
 
-    /// A6 の TTL: 案件に最後に「外からの入力」（cron 以外の wake。消費済みを含む）が来た時刻。無ければ最初の
-    /// 判断の時刻。どちらも無ければ `None`。
+    /// A6 の TTL: 案件に最後に「外からの入力」（[`crate::project_wake::is_external_input`] の wake。消費済みを
+    /// 含む）が来た時刻。CoS 自身の brief の更新と daemon の内部の wake は数えない（人を待つ TTL を延ばさない）。
+    /// 無ければ最初の判断の時刻。どちらも無ければ `None`。
     pub fn project_controller_last_input_at(
         &self,
         project_id: &str,
@@ -117,7 +132,8 @@ impl SqliteStore {
             let wake: Option<String> = c
                 .query_row(
                     "SELECT MAX(created_at) FROM project_wakes \
-                     WHERE project_id = ?1 AND kind != 'cron'",
+                     WHERE project_id = ?1 AND kind NOT IN ('cron', 'stagnation') \
+                       AND wake_key NOT LIKE 'brief:%' AND wake_key NOT LIKE 'authority-denied:%'",
                     [project_id],
                     |r| r.get(0),
                 )
@@ -136,23 +152,26 @@ impl SqliteStore {
         })
     }
 
-    /// 案件の task run と CoS chat run（`started_at >= since`）の `usage_json`。和は
+    /// 案件の task run と CoS chat run（`since <= started_at < until`）の `usage_json`。和は
     /// `task_ops::project_budget` が `tree_metrics` と同じ規則（input + output、cache を含めない）で取る。
-    pub fn project_run_usage_since(
+    pub fn project_run_usage_between(
         &self,
         project_id: &str,
         since: &str,
+        until: &str,
     ) -> Result<Vec<crate::model::Usage>, StoreError> {
         self.with_read_conn(|c| {
             let mut st = c.prepare(
                 "SELECT r.usage_json FROM runs r JOIN tasks t ON t.id = r.task_id \
-                 WHERE t.project_id = ?1 AND r.started_at >= ?2 AND r.usage_json IS NOT NULL \
+                 WHERE t.project_id = ?1 AND r.started_at >= ?2 AND r.started_at < ?3 \
+                   AND r.usage_json IS NOT NULL \
                  UNION ALL SELECT r.usage_json FROM chat_runs r \
                  JOIN chat_threads t ON t.id = r.thread_id \
-                 WHERE t.project_id = ?1 AND r.started_at >= ?2 AND r.usage_json IS NOT NULL",
+                 WHERE t.project_id = ?1 AND r.started_at >= ?2 AND r.started_at < ?3 \
+                   AND r.usage_json IS NOT NULL",
             )?;
             let raw: Vec<String> = st
-                .query_map(params![project_id, since], |r| r.get(0))?
+                .query_map(params![project_id, since, until], |r| r.get(0))?
                 .collect::<Result<_, _>>()?;
             Ok(raw
                 .iter()
@@ -161,20 +180,101 @@ impl SqliteStore {
         })
     }
 
-    /// 案件 CoS の起動数。queued の行は起動していないため数えない。
-    pub fn project_chat_starts_since(
+    /// 案件 CoS の起動数（`since <= started_at < until`）。queued の行は起動していないため数えない。
+    pub fn project_chat_starts_between(
         &self,
         project_id: &str,
         since: &str,
+        until: &str,
     ) -> Result<u32, StoreError> {
         self.with_read_conn(|c| {
             Ok(c.query_row(
                 "SELECT COUNT(*) FROM chat_runs r JOIN chat_threads t ON t.id = r.thread_id
-                 WHERE t.project_id = ?1 AND r.started_at >= ?2",
-                params![project_id, since],
+                 WHERE t.project_id = ?1 AND r.started_at >= ?2 AND r.started_at < ?3",
+                params![project_id, since, until],
                 |r| r.get(0),
             )?)
         })
+    }
+
+    /// P1-G: `blocked` の案件を根拠つきで再開する（1 つの transaction）。止めた判断の行と `revision`・`human_epoch`
+    /// が読んだ時と同じで、案件が動いていて lease が無いときだけ書く（CAS）。判断の行（効果なし）に根拠を残し、
+    /// `revision + 1`・phase `active`・`next_wake_at = now`。積もった wake は消費せず、次の評価が 1 回で畳む。
+    /// 書いたら `true`。人の操作か他の instance が先なら何も書かず `false`。
+    pub fn project_controller_resume(
+        &self,
+        resume: &ProjectResume,
+        now: OffsetDateTime,
+    ) -> Result<bool, StoreError> {
+        let at = format_rfc3339(now)?;
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let open: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM project_controller_state s \
+               JOIN projects p ON p.id = s.project_id \
+              WHERE s.project_id = ?1 AND s.phase = 'blocked' AND s.mode IN ('shadow', 'enabled') \
+                AND s.revision = ?2 AND s.human_epoch = ?3 AND s.last_decision_id = ?4 \
+                AND s.lease_owner IS NULL \
+                AND p.status IN ('active', 'proposed') AND p.archived_at IS NULL)",
+            params![
+                resume.project_id,
+                resume.revision,
+                resume.human_epoch,
+                resume.blocked_decision_id
+            ],
+            |r| r.get(0),
+        )?;
+        if !open {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO project_controller_decisions (id, project_id, based_on_revision, human_epoch, \
+               snapshot_sha256, request_sha256, generation_id, mode, proposal_json, validation, \
+               effect_json, effect_state, effect_ref, progress_epoch, created_at, applied_at) \
+             SELECT ?1, project_id, revision, human_epoch, '', ?3, NULL, mode, ?4, ?5, ?6, 'none', NULL, \
+               progress_epoch, ?7, NULL FROM project_controller_state WHERE project_id = ?2",
+            params![
+                resume.decision_id,
+                resume.project_id,
+                resume.request_sha256,
+                resume.record_json,
+                resume.rule_id,
+                resume.effect_json,
+                at
+            ],
+        )?;
+        tx.execute(
+            "UPDATE project_controller_state SET phase = 'active', revision = revision + 1, \
+               next_wake_at = ?2, coalesce_until = NULL, retry_count = 0, backoff_until = NULL, \
+               last_decision_id = ?3, updated_at = ?2, updated_by = 'daemon' WHERE project_id = ?1",
+            params![resume.project_id, at, resume.decision_id],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// P1-G: 翌日に再評価しないと決めた予算の止まり。notice 1 件と、期限（`next_wake_at`）の取り消しを同じ
+    /// transaction で書く。以後は人が mode を置き直すまで `blocked` のまま。止めた判断が同じときだけ書く。
+    pub fn project_controller_budget_hold(
+        &self,
+        project_id: &str,
+        blocked_decision_id: &str,
+        notice: &crate::feed::NoticeEvent,
+        now: OffsetDateTime,
+    ) -> Result<bool, StoreError> {
+        let at = format_rfc3339(now)?;
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute(
+            "UPDATE project_controller_state SET next_wake_at = NULL, updated_at = ?3, updated_by = 'daemon' \
+             WHERE project_id = ?1 AND phase = 'blocked' AND last_decision_id = ?2",
+            params![project_id, blocked_decision_id, at],
+        )?;
+        if changed > 0 {
+            crate::feed::record_in_tx(&tx, notice)?;
+        }
+        tx.commit()?;
+        Ok(changed > 0)
     }
 
     /// A6（crash の B5）: 問いの notice（`source_key`）が既に記録されているか。`escalate` は notice と

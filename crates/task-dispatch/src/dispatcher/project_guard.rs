@@ -9,7 +9,8 @@
 //! 2. 同じ失敗の繰り返し: root の失敗の wake の理由の署名が、最後の人の変更の後に
 //!    `max_same_failure_repeats` 回に達したら止めて人に聞く。
 //! 3. TS の品質: 直前の判断が `max_invalid_decisions` 回続けて検証に落ちた（`pc/invalid:*`）ら止める。
-//! 4. 予算: 今日の CoS 入力・起票・token が上限に達したら止める（`task_ops::project_budget`）。
+//! 4. 予算: 今日の CoS 入力・起票・token が上限に達したら止める（`task_ops::project_budget`）。`Daily` の超過は
+//!    次の UTC の 00:00 を期限にし（`next_wake_at`）、期限の後の再開は `project_resume` が判定する。
 //! 5. TTL: phase `waiting` で外からの入力（cron 以外の wake）が `ttl_secs` 来ないまま timer か cron で
 //!    起きたら止める（外部の応答の欠落）。
 //!
@@ -117,7 +118,7 @@ pub(crate) fn pre_decide(
     let since = if human {
         None
     } else {
-        last_human_change(store, project)?
+        same_failure_since(store, project)?
     };
     for w in wakes.iter().filter(|_| !human) {
         let Some((kind, reason)) = failure_of(store, w) else {
@@ -125,6 +126,7 @@ pub(crate) fn pre_decide(
         };
         let sig = budget::failure_signature(&kind, &reason);
         let mut count = 0u32;
+        let mut failed_roots = Vec::new();
         for past in store
             .project_wakes_all(project)
             .map_err(|e| e.to_string())?
@@ -139,16 +141,20 @@ pub(crate) fn pre_decide(
                 .is_some_and(|(k, r)| budget::failure_signature(&k, &r) == sig)
             {
                 count += 1;
+                failed_roots.extend(past.source_ref.clone());
             }
         }
         if limits.max_same_failure_repeats > 0 && count >= limits.max_same_failure_repeats {
+            // 解消（人の操作・再開）の時刻を key に入れる: 解消の後にまた止まれば、新しい問いとして 1 回知らせる。
+            let marker = since.as_deref().unwrap_or("0");
             return Ok(halt(
                 "same-failure",
-                format!("same_failure:{sig}"),
+                format!("same_failure:{sig}:{marker}"),
                 format!(
                     "案件の root が同じ理由で {count} 回失敗したので、controller は次の root を作らずに止まりました"
                 ),
-                json!({ "signature": sig, "count": count, "limit": limits.max_same_failure_repeats }),
+                json!({ "signature": sig, "count": count, "limit": limits.max_same_failure_repeats,
+                        "failed_roots": failed_roots }),
             ));
         }
     }
@@ -176,18 +182,35 @@ pub(crate) fn pre_decide(
     // 4. 予算
     let usage = budget::usage(store, project, now).map_err(|e| e.to_string())?;
     if let Some(kind) = budget::exceeded(limits, &usage) {
-        return Ok(halt(
+        let severity = budget::severity(limits, &usage);
+        let expiry =
+            (severity == budget::BudgetSeverity::Daily).then(|| budget::secs_until_next_day(now));
+        let summary = if expiry.is_some() {
+            format!(
+                "controller の 1 日の予算（{}）を使い切ったので止まりました。次の UTC 00:00 に使用量を確かめ、危険な超過でなければ自動で再評価します",
+                kind.as_str()
+            )
+        } else {
+            format!(
+                "controller の 1 日の予算（{}）を大きく超えたので止まりました。日付が変わっても自動では再開しません",
+                kind.as_str()
+            )
+        };
+        let mut pre = halt(
             "budget",
             format!("budget:{}:{}", kind.as_str(), usage.day),
-            format!(
-                "controller の 1 日の予算（{}）を使い切ったので止まりました",
-                kind.as_str()
-            ),
-            json!({ "kind": kind, "usage": usage, "limits": limits }),
-        ));
+            summary,
+            json!({ "kind": kind, "severity": severity, "usage": usage, "limits": limits }),
+        );
+        if let PreGuard::Guarded { decision, .. } = &mut pre {
+            decision.next_wake_after_secs = expiry;
+        }
+        return Ok(pre);
     }
     // 5. TTL
-    let external = wakes.iter().any(|w| w.kind != ProjectWakeKind::Cron);
+    let external = wakes
+        .iter()
+        .any(|w| task_core::project_wake::is_external_input(w.kind, &w.wake_key));
     if state.phase == ControllerPhase::Waiting
         && !external
         && let Some(last) = store
@@ -208,13 +231,20 @@ pub(crate) fn pre_decide(
     Ok(PreGuard::Decide)
 }
 
-/// 最後の人の変更（`human_changed` の wake）の時刻。
-fn last_human_change(store: &SqliteStore, project: &str) -> Result<Option<String>, String> {
-    Ok(store
+/// 同じ失敗を数え始める時刻: 最後の人の変更（`human_changed` の wake）か、同じ失敗の止まりからの再開の遅い方。
+fn same_failure_since(store: &SqliteStore, project: &str) -> Result<Option<String>, String> {
+    let human = store
         .project_wakes_all(project)
         .map_err(|e| e.to_string())?
         .into_iter()
         .filter(|w| w.kind == ProjectWakeKind::HumanChanged)
         .map(|w| w.created_at)
-        .max())
+        .max();
+    let resumed = store
+        .project_controller_decisions(project, None, 256)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|d| d.validation == super::project_resume::SAME_FAILURE_RESUME_RULE)
+        .map(|d| d.created_at);
+    Ok(human.max(resumed))
 }

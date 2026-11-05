@@ -303,19 +303,23 @@ async fn post_revoke(
     let project_id = parse_project_id(&id)?;
     let _: GrantRevoke = read_json(body, true).await?;
     let by = caller.actor();
+    let epoch = crate::human_epoch::HumanEpoch::of(&caller);
     let view = state
         .blocking(move |store| {
             require_project(store, project_id)?;
             let at = now();
             let revoked = store.write_tx::<_, ApiProblem, _>(|tx| {
-                SqliteStore::authority_grant_revoke_tx(
+                let revoked = SqliteStore::authority_grant_revoke_tx(
                     tx,
                     &project_id.to_string(),
                     &grant,
                     &by,
                     at,
                 )?
-                .ok_or_else(|| grant_missing(&grant))
+                .ok_or_else(|| grant_missing(&grant))?;
+                // P1-G（K33）: 人の取り消しは編集と同じ transaction で wake を書き、古い判断を CAS で止める。
+                epoch.bump_tx(tx, Some(project_id))?;
+                Ok(revoked)
             })?;
             grant_view(store, revoked, at)
         })
@@ -584,6 +588,8 @@ async fn post_dismiss(
                         format!("proposal {proposal} is not open"),
                     ));
                 }
+                // P1-G（deny）: 人の回答なので、同じ transaction で入力の版と wake を進める。
+                SqliteStore::project_controller_human_bump_tx(tx, &project, now(), 0)?;
                 SqliteStore::authority_proposal_by_id_tx(tx, &project, &proposal)?
                     .ok_or_else(|| ApiProblem::internal("proposal vanished"))
             })

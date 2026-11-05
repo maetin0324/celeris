@@ -15,7 +15,7 @@ A5・A6・A7 は節を足す。
   判断の記録が `pc/script-unavailable` になり、起票も LLM も起こさない。
 - 進捗の増えない `replan`・`launch_root` が 5 回続くと、Rust が `escalate` に置き換えて phase を `blocked` にする。
   `escalate` は notice（`bad_news`、source key `project_controller:escalate:<案件>:<question_key>`）を 1 件出し、
-  同じ問いは 2 回目を出さない。人が mode を置き直すまで判断しない。
+  同じ問いは 2 回目を出さない。人が問いに答えるか mode を置き直すまで判断しない。
 - 案件 CoS は `/cos/operations` で次を独断でできない（422）: 依頼文の変更（`project_request_human_only`）、
   draft でない task の objective・acceptance の変更（`task_goal_human_only`）、`enabled` の案件の root の起票
   （`project_controller_owns_launch`）、controller が `off` でない案件での本番 release の promote（`production_requires_human`）。人の発言を
@@ -30,7 +30,7 @@ A5・A6・A7 は節を足す。
 | 案件を観察だけにする | 人 | `PUT /api/v1/projects/{id}/controller` `{"mode":"shadow","expected_revision":<rev>,"reason":"…"}` | `GET /api/v1/projects/{id}/controller/decisions` の判断が `suppressed`、CoS run 0 |
 | 案件を有効にする | 人 | 同じ API で `mode: enabled` | root が label `project-controller` で起票される |
 | 止める・戻す | 誰でも（人・operator・CoS） | 同じ API で `mode: off`。作成済みの root は残る（cancel は別の操作） | 以後 wake が増えない |
-| `blocked` から再開する | 人 | notice の問いに答えてから、同じ API で mode を置き直す（`revision` が進む） | phase が `active` に戻る |
+| `blocked` から再開する | 人 | notice の問いに答える（許可・却下）。問いの答えで解けない理由（下の「長時間の運用」）は、原因を確かめてから同じ API で mode を置き直す（`revision` が進む） | phase が `active` に戻る。自動の再開は判断の記録の `pc/resume/*` |
 | 機能を外す | 人 | config の `[project_controller]` を消して再起動。release を戻すときは先に欄を消す（`Config` は `deny_unknown_fields`） | `GET /api/v1/daemon` |
 
 本番の DB・config・systemd の変更は人が行う。worker の run・試験は本番の DB・daemon に触れない
@@ -78,9 +78,14 @@ controller は event（root の終了・失敗・人の操作など）で起き�
 
 - 案件を一時停止・中止すると controller も評価を止める（phase `paused`・`cancelled`。止まっている間の wake は捨てる）。再開すると 1 回だけ評価する。
 - 全途中目標が達成済み（phase `achieved`）の案件は、root の終了や cron では評価しない。人が案件を変えたときだけ評価する。
-- 止まった案件を続けるには、人が通知の理由を確かめてから案件の画面で controller の mode を置き直す（`PUT /api/v1/projects/{id}/controller`。
-  予算は日付が変わっても自動では戻らない）。
-- 日次 token は案件の task run と案件 CoS の chat run の input + output を合計する（cache は加えない）。案件 CoS の起動数は `BudgetUsage.chat_starts` で数える。controller の CoS 入力数と chat 起動数のいずれかが `max_cos_inputs_per_day` に達したら止まる。
+- 止まった理由が解けると controller は自動で 1 回だけ再評価する（P1-G）。根拠は判断の記録の `pc/resume/<原因>` の行に残る。
+  - 人への問い: 問いの key で許可するか、提案を断る（`…/dismiss`）。依頼文の誤りの問いは依頼文を直しても解ける。
+  - 同じ失敗: 人が案件を操作するか、失敗した root 自身が完了する。解けた後にまた同じ失敗が上限まで続くと、新しい通知を 1 回出して止まる。
+  - TTL: 外からの応答（cron・CoS の要約の更新は数えない）。
+  - 1 日の予算: 次の UTC 00:00 を期限にし（`next_wake_at`）、その日の使用量が危険な超過でなく、直近 7 日の自動の再開が 3 回未満で、起票の予算なら有効な起票の許可があるときだけ再評価する。危険な超過（token が上限の 2 倍以上など）・回数切れ・許可なしでは、通知（`budget_hold`）を 1 回出して止まったままにする。
+  - TS の案の検証落ち・判定や効果の失敗・案件の一時停止・中止は自動で解けない。人が原因を確かめてから案件の画面で controller の mode を置き直す（`PUT /api/v1/projects/{id}/controller`）。
+- 人の回答を待つだけの案件は、cron の照合で毎時は評価しない。人の回答は wake で届き、取りこぼしの照合は 1 日に 1 回（`next_wake_at`）。
+- 日次 token は案件の task run と案件 CoS の chat run の input + output を合計する（cache は加えない）。案件 CoS の起動数は `BudgetUsage.chat_starts` で数える。controller の CoS 入力数と chat 起動数のいずれかが `max_cos_inputs_per_day` に達したら止まる。今日の使用量は `GET /api/v1/projects/{id}/controller` の `budget_today` と案件の画面の「今後の作業」に出る。
 - brief の内容変更は保存と同じ transaction で wake を書き、変更前の判断を入力 epoch で無効にする。同じ内容の再送では wake を増やさない。brief の更新だけで blocked・paused・cancelled は解除しない。
 - 値を変えるときは本番 config の `[project_controller.budget]` を人が書き換え、daemon を再起動する（この依頼では実行しない）。0 は設定の誤りで、
   daemon は起動しない。

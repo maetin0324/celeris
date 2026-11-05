@@ -733,3 +733,7 @@ async fn project_cos_narrowed_acceptance_rejected() {
 
 #[path = "authority_ledger.rs"]
 mod authority_ledger;
+#[path = "project_human_wait_measure.rs"]
+mod human_wait_measure;
+#[path = "project_recovery.rs"]
+mod recovery;

@@ -8,6 +8,8 @@ use super::cos_chat::review::CosReviewSink;
 /// A6: 判定の前の guard（`project_wake.rs` の行を増やさない）。
 #[path = "project_guard.rs"]
 pub(crate) mod project_guard;
+#[path = "project_resume.rs"]
+pub(crate) mod project_resume;
 /// ADR 2026-11-04-project-controller A1: 案件の durable wake の段（`dispatcher.rs` に行を足さない）。
 #[path = "project_wake.rs"]
 pub(crate) mod project_wake;

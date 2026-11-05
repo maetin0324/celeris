@@ -1,0 +1,31 @@
+   Compiling task-api v0.1.0 (/local/celeris/data/workspaces/01M6N7XY9W412TA8G2WV0726Z0/repos/agent-platform/crates/task-api)
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+warning: function `external_wait` is never used
+  --> crates/task-dispatch/src/dispatcher/tests/project_recovery.rs:49:4
+   |
+49 | fn external_wait(s: &ProjectSnapshot) -> Value {
+   |    ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `replan_each` is never used
+  --> crates/task-dispatch/src/dispatcher/tests/project_recovery.rs:54:4
+   |
+54 | fn replan_each(s: &ProjectSnapshot) -> Value {
+   |    ^^^^^^^^^^^
+
+warning: `task-dispatch` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.16s
+────────────
+ Nextest run ID d61a8c9d-a0cd-4a20-8f68-31b8af4c0b26 with nextest profile: default
+    Starting 27 tests across 121 binaries (4083 tests skipped)
+────────────
+     Summary [   3.640s] 27 tests run: 27 passed, 4083 skipped

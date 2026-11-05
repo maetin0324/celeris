@@ -147,8 +147,10 @@ export interface ProjectProposal {
 export const POLICY = {
   /** 走っている root を見に来る間隔。 */
   watchSecs: 3600,
-  /** 人・CoS の返事を待つ間隔。 */
-  humanWaitSecs: 6 * 3600,
+  /** 人・CoS の返事を待つ間隔。人の回答は wake で届くので、timer は取りこぼしの照合だけ（1 日に 1 回）。 */
+  humanWaitSecs: 24 * 3600,
+  /** 今日の CoS 入力の上限で replan を待つときに見直す間隔。 */
+  dailyLimitRecheckSecs: 6 * 3600,
   /** 基盤の失敗の後に見直すまでの秒。 */
   infraBackoffSecs: 1800,
   /** Rust の上限（ROOT_TITLE_MAX・ROOT_OBJECTIVE_MAX）。 */
@@ -410,7 +412,7 @@ export function decide(s: ProjectSnapshot): ProjectProposal {
     s.limits.cos_inputs_remaining_today <= 0
       ? wait(
           [{ kind: "external", note: "今日の CoS 入力の上限" }],
-          POLICY.humanWaitSecs,
+          POLICY.dailyLimitRecheckSecs,
           `${rule}/daily-limit`,
           signals,
         )

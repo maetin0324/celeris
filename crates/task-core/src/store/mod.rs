@@ -127,7 +127,7 @@ pub(crate) mod migrations;
 mod org;
 mod project_briefs;
 mod project_guard;
-pub use project_guard::PhaseSync;
+pub use project_guard::{PhaseSync, ProjectResume};
 mod project_wake;
 pub(crate) mod project_wake_effect;
 mod projects;

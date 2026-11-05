@@ -94,9 +94,18 @@ pub fn usage(
     project_id: &str,
     now: OffsetDateTime,
 ) -> Result<BudgetUsage, StoreError> {
-    let day = day_of(now);
+    usage_on_day(store, project_id, &day_of(now), now)
+}
+
+/// `day`（`YYYY-MM-DD`、UTC）の使った量を数える。過ぎた日も同じ規則で数え直せる（止めた後に流れ込んだ分を含む）。
+pub fn usage_on_day(
+    store: &SqliteStore,
+    project_id: &str,
+    day: &str,
+    now: OffsetDateTime,
+) -> Result<BudgetUsage, StoreError> {
     let mut u = BudgetUsage {
-        day: day.clone(),
+        day: day.to_owned(),
         ..BudgetUsage::default()
     };
     for d in store.project_controller_decisions(project_id, None, DECISIONS_SCANNED)? {
@@ -104,7 +113,7 @@ pub fn usage(
             continue;
         }
         let at = d.applied_at.as_deref().unwrap_or(&d.created_at);
-        if !at.starts_with(&day) {
+        if !at.starts_with(day) {
             continue;
         }
         let kind = serde_json::from_str::<serde_json::Value>(&d.effect_json)
@@ -117,13 +126,67 @@ pub fn usage(
         }
     }
     let start = format!("{day}T00:00:00Z");
-    u.chat_starts = store.project_chat_starts_since(project_id, &start)?;
+    let end = next_day_start(day, now);
+    u.chat_starts = store.project_chat_starts_between(project_id, &start, &end)?;
     u.tokens = store
-        .project_run_usage_since(project_id, &start)?
+        .project_run_usage_between(project_id, &start, &end)?
         .iter()
         .map(|x| x.input_tokens.unwrap_or(0) + x.output_tokens.unwrap_or(0))
         .sum();
     Ok(u)
+}
+
+/// `day` の次の日の 00:00:00Z。`day` が読めなければ `now` の次の日（読めない値で範囲を広げない）。
+fn next_day_start(day: &str, now: OffsetDateTime) -> String {
+    let date = OffsetDateTime::parse(&format!("{day}T00:00:00Z"), &Rfc3339)
+        .map(OffsetDateTime::date)
+        .unwrap_or_else(|_| now.to_offset(time::UtcOffset::UTC).date());
+    format!("{}T00:00:00Z", date.next_day().unwrap_or(date))
+}
+
+/// 次の UTC の 00:00 までの秒（最小 1）。日次予算の止まりの期限。
+pub fn secs_until_next_day(now: OffsetDateTime) -> u64 {
+    let utc = now.to_offset(time::UtcOffset::UTC);
+    let next = utc
+        .date()
+        .next_day()
+        .unwrap_or(utc.date())
+        .midnight()
+        .assume_utc();
+    u64::try_from((next - utc).whole_seconds())
+        .unwrap_or(0)
+        .max(1)
+}
+
+/// 日次予算の超過の分類。`Daily` は翌日に再評価してよく、`Dangerous` は人が見るまで止まったままにする。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetSeverity {
+    Daily,
+    Dangerous,
+}
+
+/// 危険とみなす token の超過の倍率（上限の 2 倍以上を 1 日で使った）。
+pub const DANGEROUS_TOKEN_FACTOR: u64 = 2;
+/// 人の操作が無いまま、翌日の自動の再評価を行える回数（直近 7 日）。
+pub const MAX_AUTO_DAILY_RESUMES: usize = 3;
+
+/// 超過の分類。controller は上限で止めるので、回数の上限を超えた値・token の上限の 2 倍以上は「上限が効かなかった」
+/// 出来事で、日付が変わっただけでは戻さない。CoS chat の起動は人の発言でも増えるので 2 倍で見る。
+pub fn severity(limits: &BudgetLimits, u: &BudgetUsage) -> BudgetSeverity {
+    let chat_cap = u64::from(limits.max_cos_inputs_per_day) * DANGEROUS_TOKEN_FACTOR;
+    if u.tokens
+        >= limits
+            .max_tokens_per_day
+            .saturating_mul(DANGEROUS_TOKEN_FACTOR)
+        || u.cos_inputs > limits.max_cos_inputs_per_day
+        || u.roots > limits.max_roots_per_day
+        || u64::from(u.chat_starts) >= chat_cap
+    {
+        BudgetSeverity::Dangerous
+    } else {
+        BudgetSeverity::Daily
+    }
 }
 
 /// 使い切った予算（最初に当たったもの）。上限ちょうどで止まる（`>=`）。

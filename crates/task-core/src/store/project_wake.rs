@@ -426,7 +426,7 @@ impl SqliteStore {
             tx,
             &NewProjectWake {
                 project_id: project_id.into(),
-                wake_key: format!("brief:{epoch}"),
+                wake_key: format!("{}{epoch}", crate::project_wake::BRIEF_WAKE_PREFIX),
                 kind: ProjectWakeKind::ExternalReleased,
                 source_event_id: None,
                 source_ref: Some(format!("project_brief:{project_id}:{epoch}")),

@@ -1,0 +1,16 @@
+{
+  "schema": "celeris.long-horizon-record/1",
+  "raw_rows": 31,
+  "k38_evaluations_in_24h": {
+    "open_question_real_ts": {
+      "before": 24,
+      "after": 1,
+      "virtual_hours": 24
+    },
+    "answered_question_fake_ts": {
+      "before": 24,
+      "after": 1,
+      "virtual_hours": 24
+    }
+  }
+}

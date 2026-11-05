@@ -192,6 +192,14 @@ pub(crate) fn post_reconcile_wake(
             "project controller is disabled".into(),
         ));
     }
+    // P1-G: 人を待つだけの案件・止まっている案件は cron で起こさない（期限は `next_wake_at` と再開の段が持つ）。
+    if let Some(why) = super::project_resume::reconcile_not_needed(&launch.store, project_id, now)
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(task_ops::cron_jobs::CronInputPost::Posted(format!(
+            "wake not added ({why})"
+        )));
+    }
     let key = format!("cron:{}:{}", job.id, scheduled_for.unix_timestamp());
     let n = launch
         .store
@@ -239,6 +247,10 @@ impl Pass<'_> {
             Ok(changed) => self.stats.phase_synced += changed.len(),
             Err(error) => tracing::warn!(%error, "project controller: phase sync failed"),
         }
+        // P1-G: `blocked` の原因が解消した案件を根拠つきで再開する（再評価は下の due が 1 回行う）。
+        self.stats.resumed +=
+            super::project_resume::resume_blocked(self.store, &self.rt.settings.budget, self.now);
+        self.rt.at(Boundary::AfterResume);
         // B4・B5 の回復: tx1 で書いた効果が `pending` のまま残っていれば、同じ key で実行し直す。
         match self.store.project_controller_pending_effects() {
             Ok(pending) => {
@@ -472,6 +484,8 @@ impl Pass<'_> {
         if let Ok(effect) = &parsed {
             match self.effect_in_place(&d.project_id, effect) {
                 Ok(Some(effect_ref)) => {
+                    // guard の問いが既に出ている（同じ日に人が置き直した後も予算を超えている等）: 問いは増やさず、止まり直す。
+                    self.reblock_guard(d, effect);
                     self.finish(d, EffectState::Applied, Some(&effect_ref));
                     self.stats.applied += 1;
                     return;
@@ -554,7 +568,11 @@ impl Pass<'_> {
                     self.finish(d, EffectState::Failed, Some(&format!("authority:{why}")));
                     let wake = task_core::project_wake::NewProjectWake {
                         project_id: d.project_id.clone(),
-                        wake_key: format!("authority-denied:{}", d.id),
+                        wake_key: format!(
+                            "{}{}",
+                            task_core::project_wake::AUTHORITY_DENIED_WAKE_PREFIX,
+                            d.id
+                        ),
                         kind: task_core::project_wake::ProjectWakeKind::ExternalReleased,
                         source_event_id: None,
                         source_ref: Some(format!("authority:{why}")),
@@ -601,6 +619,36 @@ impl Pass<'_> {
                 tracing::warn!(%error, decision = %d.id, "project controller: effect gate unreadable");
                 false
             }
+        }
+    }
+
+    /// guard の `OpenEscalation` の notice が既にあるとき、phase を `blocked` に揃える（notice は 1 件のまま）。
+    /// 判断の後に mode の置き直し・再開（`revision` の前進）があれば、人の操作を上書きしないよう何もしない。
+    fn reblock_guard(&self, d: &ProjectControllerDecision, effect: &ProjectEffect) {
+        let ProjectEffect::OpenEscalation {
+            question_key,
+            category,
+            summary,
+        } = effect
+        else {
+            return;
+        };
+        if !category.starts_with("guard_") {
+            return;
+        }
+        let current = match self.store.project_controller_state(&d.project_id) {
+            Ok(Some(state)) => state.revision,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(%error, decision = %d.id, "project controller: state unreadable");
+                return;
+            }
+        };
+        if current != d.based_on_revision + 1 {
+            return;
+        }
+        if let Err(error) = self.open_escalation(&d.project_id, question_key, category, summary) {
+            tracing::warn!(%error, decision = %d.id, "project controller: guard not re-blocked");
         }
     }
 
@@ -740,7 +788,8 @@ impl Pass<'_> {
         let source_key = format!("project_controller:escalate:{project}:{question_key}");
         let title = format!("案件 {project} の controller が人の判断を待っています（{category}）");
         let body = format!(
-            "{summary}。controller の phase は blocked で、人が controller の mode を置き直すまで判断しません。問いの key: {question_key}"
+            "{summary}。controller の phase は blocked です。{}問いの key: {question_key}",
+            super::project_resume::resume_note(category)
         );
         self.store
             .project_controller_escalate(
@@ -944,7 +993,7 @@ fn wakes_for_event(
     Ok(out)
 }
 
-fn project_request_sha256(store: &SqliteStore, project: &str) -> String {
+pub(super) fn project_request_sha256(store: &SqliteStore, project: &str) -> String {
     let request = project
         .parse()
         .ok()

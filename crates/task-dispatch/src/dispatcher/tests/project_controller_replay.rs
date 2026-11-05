@@ -468,8 +468,8 @@ async fn project_controller_replay_budget_day_cap() {
     assert_eq!(guard_decisions(&store, &p, "pc/guard/budget"), 1);
     assert_eq!(escalations(&env, &p), 1);
     assert_eq!(phase(&store, &p), ControllerPhase::Blocked);
-    // 次の日も止まったまま（人が mode を置き直すまで。I12）。
-    env.advance(24 * 3600);
+    // 当日は外の入力があっても止まったまま。翌日の再評価は `project_recovery_k40_*` が見る。
+    env.advance(3600);
     external_wake(&store, &p, 100, env.now());
     spin(&env, &mut d, 2);
     assert_eq!(cos_inputs(&env), 2);

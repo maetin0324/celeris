@@ -182,10 +182,18 @@ pub(crate) fn controller_view(
             .map_err(store_problem)?,
         None => None,
     };
+    let used = task_ops::project_budget::usage(store, project, now()).map_err(store_problem)?;
     Ok(ProjectControllerView {
         state,
         pending_wakes,
         last_decision,
+        budget_today: task_core::project_wake::ProjectBudgetToday {
+            day: used.day,
+            cos_inputs: used.cos_inputs,
+            roots: used.roots,
+            tokens: used.tokens,
+            chat_starts: used.chat_starts,
+        },
     })
 }
 

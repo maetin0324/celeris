@@ -1534,3 +1534,128 @@ async fn authority_ledger_roadmap_unreadable_version_fails_closed() {
         before
     );
 }
+
+/// P1-G（K33・K35）: 人の却下と取り消しは書き込みと同じ transaction で入力の版と wake を進める。CoS の要約の更新は
+/// `brief:` の wake で、人の変更ではない。`GET …/controller` は今日の使用量を返す。
+#[tokio::test]
+async fn project_recovery_human_answers_write_wake_with_the_edit() {
+    let c = cos().await;
+    let state = || {
+        c.env
+            .store
+            .project_controller_state(&c.project)
+            .unwrap()
+            .unwrap()
+    };
+    let wakes = || {
+        c.env
+            .store
+            .project_wakes_all(&c.project)
+            .unwrap()
+            .into_iter()
+            .map(|w| (w.wake_key, w.kind))
+            .collect::<Vec<_>>()
+    };
+    // 却下。
+    let proposal = c
+        .op(
+            "rec-1",
+            "POST",
+            &c.path("/proposals"),
+            json!({"question_key": "ask-once", "scope": c.project_scope(), "action_class": "destructive",
+                   "source": {"kind": "human_message", "ref": c.said}, "expires_at": later(7), "budget": 1, "note": "削除"}),
+        )
+        .await;
+    assert_eq!(proposal.status.as_u16(), 200, "{}", proposal.text());
+    let pid = proposal.json()["operation"]["result"]["proposal"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let before = state().human_epoch;
+    let dismissed = post_human(
+        &c.app,
+        &c.path(&format!("/proposals/{pid}/dismiss")),
+        &json!({}),
+    )
+    .await;
+    assert_eq!(dismissed.status.as_u16(), 200, "{}", dismissed.text());
+    assert_eq!(state().human_epoch, before + 1);
+    assert!(
+        wakes()
+            .iter()
+            .any(|(k, kind)| k == &format!("human:{}", before + 1)
+                && *kind == task_core::project_wake::ProjectWakeKind::HumanChanged)
+    );
+    // 人の取り消し。
+    let grant = c.grant("production", 2).await;
+    let before = state().human_epoch;
+    let revoked = post_human(
+        &c.app,
+        &c.path(&format!("/grants/{grant}/revoke")),
+        &json!({"reason": "やめる"}),
+    )
+    .await;
+    assert_eq!(revoked.status.as_u16(), 200, "{}", revoked.text());
+    assert_eq!(state().human_epoch, before + 1);
+    // CoS の取り消しは人の変更に数えない。
+    let grant = c.grant("production", 2).await;
+    let before = state().human_epoch;
+    let by_cos = c
+        .op(
+            "rec-2",
+            "POST",
+            &c.path(&format!("/grants/{grant}/revoke")),
+            json!({"reason": "もう要らない"}),
+        )
+        .await;
+    assert_eq!(by_cos.status.as_u16(), 200, "{}", by_cos.text());
+    assert_eq!(state().human_epoch, before);
+    // CoS の要約の更新は `brief:` の wake で、人の変更でも TTL の入力でもない。
+    let before_input = c
+        .env
+        .store
+        .project_controller_last_input_at(&c.project)
+        .unwrap();
+    let status = c
+        .op(
+            "rec-3",
+            "PUT",
+            &format!("/api/v1/projects/{}/status", c.project),
+            json!({"objective": "目的", "state": "要約", "open_issues": [], "next_actions": [],
+                   "waiting_on": [], "evidence_refs": []}),
+        )
+        .await;
+    assert_eq!(status.status.as_u16(), 200, "{}", status.text());
+    let brief = wakes();
+    let (_, kind) = brief
+        .iter()
+        .rfind(|(k, _)| k.starts_with("brief:"))
+        .expect("brief wake");
+    assert_eq!(
+        *kind,
+        task_core::project_wake::ProjectWakeKind::ExternalReleased
+    );
+    assert_eq!(
+        c.env
+            .store
+            .project_controller_last_input_at(&c.project)
+            .unwrap(),
+        before_input
+    );
+    // 今日の使用量。
+    let view = send(
+        &c.app,
+        get_with(
+            &format!("/api/v1/projects/{}/controller", c.project),
+            &[("authorization", &format!("Bearer {WEB_TOKEN}"))],
+        ),
+    )
+    .await;
+    assert_eq!(view.status.as_u16(), 200, "{}", view.text());
+    let body = view.json();
+    assert_eq!(
+        body["budget_today"]["chat_starts"], 1,
+        "the project CoS run counts: {body}"
+    );
+    assert!(body["budget_today"]["day"].is_string());
+}

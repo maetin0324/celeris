@@ -131,6 +131,8 @@ impl ProjectDecider for NoopProjectDecider {
 pub enum Boundary {
     /// B1 ingest 前。
     BeforeIngest,
+    /// `blocked` の再開（P1-G）の tx の後・評価の前。
+    AfterResume,
     /// B2 ingest 後・評価前。
     AfterIngest,
     /// B3 lease 後・判断前。
@@ -164,6 +166,8 @@ pub struct ControllerTickStats {
     pub guarded: usize,
     /// A6: `Project.status` に合わせて phase を変えた案件。
     pub phase_synced: usize,
+    /// P1-G: 根拠つきで `blocked` から再開した案件。
+    pub resumed: usize,
     /// A6: decider の 1 回の呼び出しの時間（マイクロ秒。TS の isolate の op を含む）。
     pub decide_micros: Vec<u64>,
     /// A6: この tick の段の全体の時間（マイクロ秒。loop cost）。

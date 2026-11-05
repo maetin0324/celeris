@@ -1,0 +1,111 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "stub",
+  "seq": 5,
+  "case": "consult-no-question",
+  "kind": "consult",
+  "arm": "old",
+  "repeat": 1,
+  "rev": "286a7ab199b27fe2524c07d5eb501abd5be567fa",
+  "binary_sha256": "97d4849fc69fde7bc605d1d3341279a846ad6b4fcc79c2499bc058af657706be",
+  "skills_sha256": {
+    "config/skills/cos-operator": "d45913d29dc2510d7698eb40a628754d097d1020e2fb77a928b54089f20bfefa",
+    "config/skills/cos-inbox-triage": "73b317ffcad542bd3ec41c502e0ac9a50faa86ff5d77254c69e92b14204a66f2"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "bb7e55371490c29f7c6a5351486e65bbd81d28c83dcc0d0f0b2e10b5c4721f20",
+    "crates/task-worker/src/preamble.rs": "9d90308a438a4aacbd4e992d1d3131db4468aa1501d8742934324a0a0dc8be27",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "05213c1de1873dbb19c5b56e786813d86b5bbb716bf4e043e1e404d672ea4641"
+  },
+  "llm_config_sha256": null,
+  "input": "予算は今月まで、追加購入は不可。まず既存ノードの利用率を見る案でよい？",
+  "seed_task_ids": [],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6PFQV2GYCXBRFXQWRH030S8",
+      "seq": 1,
+      "role": "user",
+      "text": "予算は今月まで、追加購入は不可。まず既存ノードの利用率を見る案でよい？",
+      "state": "completed",
+      "created_at": "2026-11-05T18:32:33.616Z",
+      "run_id": "01M6PFQV3J36W2VSQAJ6TKWT6T",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6PFQV3JYCJ0R77TS6PYY1SW",
+      "seq": 2,
+      "role": "assistant",
+      "text": "その案でよいと考えます。予算が今月までで追加購入できないので、既存ノードの利用率を先に見るのが唯一の手です。案: 直近 2 週間の node ごとの利用率を出し、30% 未満の node と待ちの長いキューを突き合わせ、割り当ての移し替えを先に試す。予算の条件は聞き直しません。",
+      "state": "completed",
+      "created_at": "2026-11-05T18:32:33.650Z",
+      "run_id": "01M6PFQV3J36W2VSQAJ6TKWT6T",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6PFQV3VB1VF9ZFZEDQNBAP2",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1",
+      "state": "completed",
+      "created_at": "2026-11-05T18:32:33.650Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6PFQS3PJ3C75G5Y04WQ4Q3G": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": null,
+  "usage": null,
+  "usage_null_runs": 0,
+  "usage_missing_reason": "tier=stub",
+  "cos_operations": [],
+  "stub_log": [
+    {
+      "at": 1793903553.7003257,
+      "kind": "cos_chat",
+      "task": "01M6PFQV3SAFYFBG8WH38EVJWP",
+      "title": "CoS chat 01M6PFQS3PJ3C75G5Y04WQ4Q3G",
+      "case": "consult-no-question",
+      "calls": [],
+      "summary": "その案でよいと考えます。予算が今月までで追加購入できないので、既存ノードの利用率を先に見るのが唯一の手です。案: 直近 2 週間の node ごとの利用率を出し、30% 未満の node と待ちの長いキューを突き合わせ、割り当ての移し替えを先に試す。予算の条件は聞き直しません。"
+    }
+  ],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.508,
+  "wall_seconds": 0.51,
+  "ended_by": "reply",
+  "trial_secs": 7.465,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793903551.392,
+      "ids": [],
+      "statuses": []
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793903551.607,
+      "thread": "01M6PFQS3PJ3C75G5Y04WQ4Q3G",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793903553.615,
+      "pre_chat_runs": 0,
+      "pre_runs": 0,
+      "pre_tasks": 0
+    },
+    {
+      "step": "human_message",
+      "at": 1793903553.618,
+      "thread": "01M6PFQS3PJ3C75G5Y04WQ4Q3G"
+    }
+  ]
+}

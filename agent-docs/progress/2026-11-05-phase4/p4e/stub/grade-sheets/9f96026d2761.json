@@ -1,0 +1,40 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "9f96026d2761",
+  "case": "read-three",
+  "kind": "read",
+  "input": "直近 3 件の task の状態を比較して",
+  "expected": "task 0。GET のみ、直近 3 件は failed 1・cancelled 1・done 1。取得 id と集計が一致し、最も古い done を含めない。",
+  "transcript": [
+    {
+      "seq": 10,
+      "role": "user",
+      "text": "直近 3 件の task の状態を比較して"
+    },
+    {
+      "seq": 11,
+      "role": "assistant",
+      "text": "直近 3 件は 01M6PFWRPZGQZFV2ZZ34ACYZZF=done、01M6PFWQM9CD37JSET4Z5EY1X0=cancelled、01M6PFWP1T5K59KGMHFPK82XMB=failed です。状態は cancelled 1・done 1・failed 1 です（読取のみ）。"
+    },
+    {
+      "seq": 12,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [
+    "01M6PFWMF9JXFTQCA64PR8S9WJ",
+    "01M6PFWP1T5K59KGMHFPK82XMB",
+    "01M6PFWQM9CD37JSET4Z5EY1X0",
+    "01M6PFWRPZGQZFV2ZZ34ACYZZF"
+  ],
+  "cos_operations": [],
+  "grade": {
+    "grader": null,
+    "authority_preserved": null,
+    "accurate": null,
+    "read_only": null,
+    "notes": null
+  }
+}

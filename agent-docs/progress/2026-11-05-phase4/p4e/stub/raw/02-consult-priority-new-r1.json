@@ -1,0 +1,111 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "stub",
+  "seq": 2,
+  "case": "consult-priority",
+  "kind": "consult",
+  "arm": "new",
+  "repeat": 1,
+  "rev": "a05dd115a237e47b8370b68796717dd4a3a89442",
+  "binary_sha256": "64ce583a199264657d177227c5be418d3cb40bf736e7cb76a9fe7ac4d79d7873",
+  "skills_sha256": {
+    "config/skills/cos-operator": "aab69d2ef5a30af7c56075c3ee9bbfab7b5700fd3b392bac7203699ae3fb290d",
+    "config/skills/cos-inbox-triage": "e17d148121b43ad81534565ef9bcf841139d207395f05f7519ec92df4459e969"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "df24c1df4ec3751c3facf8039a6f4f54f24c32044ec3ba97df22d876b01fef34",
+    "crates/task-worker/src/preamble.rs": "22a118396990bb443c6b2de07d8fdbaf6bf1a1e5683b681fd71ceb3b29465b73",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "20c61936c8533eaee79bc54bd49150b58505fcd588426b7a56dd0d789d67c4ac"
+  },
+  "llm_config_sha256": null,
+  "input": "締切が明日の障害報告と、締切が来月の機能追加、先にどちらを進めるべき？",
+  "seed_task_ids": [],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6PFQ44H35W157DXRQ6EQVZY",
+      "seq": 1,
+      "role": "user",
+      "text": "締切が明日の障害報告と、締切が来月の機能追加、先にどちらを進めるべき？",
+      "state": "completed",
+      "created_at": "2026-11-05T18:32:10.128Z",
+      "run_id": "01M6PFQ45YG38M8E8430BQDYBA",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6PFQ45ZD1NN8EMATY6BAHPH",
+      "seq": 2,
+      "role": "assistant",
+      "text": "期限と影響で比べると、明日締切の障害報告を先に進めるべきです。障害報告は遅れると利用者と関係者への影響が残り、機能追加は来月まで余裕があります。案: 今日は障害報告の事実（発生時刻・影響範囲・暫定対処）を固め、明日の提出後に機能追加の見積もりに戻る。障害の影響範囲がまだ分からない場合だけ、その範囲を教えてください。",
+      "state": "completed",
+      "created_at": "2026-11-05T18:32:10.174Z",
+      "run_id": "01M6PFQ45YG38M8E8430BQDYBA",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6PFQ46C1A8TMXNRFZ3C2728",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1",
+      "state": "completed",
+      "created_at": "2026-11-05T18:32:10.174Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6PFQ25K1EWRK8A71Q81BQMN": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": null,
+  "usage": null,
+  "usage_null_runs": 0,
+  "usage_missing_reason": "tier=stub",
+  "cos_operations": [],
+  "stub_log": [
+    {
+      "at": 1793903530.2527323,
+      "kind": "cos_chat",
+      "task": "01M6PFQ46AR9FD49S7DVKSC6ME",
+      "title": "CoS chat 01M6PFQ25K1EWRK8A71Q81BQMN",
+      "case": "consult-priority",
+      "calls": [],
+      "summary": "期限と影響で比べると、明日締切の障害報告を先に進めるべきです。障害報告は遅れると利用者と関係者への影響が残り、機能追加は来月まで余裕があります。案: 今日は障害報告の事実（発生時刻・影響範囲・暫定対処）を固め、明日の提出後に機能追加の見積もりに戻る。障害の影響範囲がまだ分からない場合だけ、その範囲を教えてください。"
+    }
+  ],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.513,
+  "wall_seconds": 0.516,
+  "ended_by": "reply",
+  "trial_secs": 7.663,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793903527.901,
+      "ids": [],
+      "statuses": []
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793903528.117,
+      "thread": "01M6PFQ25K1EWRK8A71Q81BQMN",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793903530.126,
+      "pre_chat_runs": 0,
+      "pre_runs": 0,
+      "pre_tasks": 0
+    },
+    {
+      "step": "human_message",
+      "at": 1793903530.131,
+      "thread": "01M6PFQ25K1EWRK8A71Q81BQMN"
+    }
+  ]
+}

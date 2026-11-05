@@ -1,0 +1,264 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "stub",
+  "seq": 11,
+  "case": "delegate-summary",
+  "kind": "delegate",
+  "arm": "old",
+  "repeat": 1,
+  "rev": "286a7ab199b27fe2524c07d5eb501abd5be567fa",
+  "binary_sha256": "97d4849fc69fde7bc605d1d3341279a846ad6b4fcc79c2499bc058af657706be",
+  "skills_sha256": {
+    "config/skills/cos-operator": "d45913d29dc2510d7698eb40a628754d097d1020e2fb77a928b54089f20bfefa",
+    "config/skills/cos-inbox-triage": "73b317ffcad542bd3ec41c502e0ac9a50faa86ff5d77254c69e92b14204a66f2"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "bb7e55371490c29f7c6a5351486e65bbd81d28c83dcc0d0f0b2e10b5c4721f20",
+    "crates/task-worker/src/preamble.rs": "9d90308a438a4aacbd4e992d1d3131db4468aa1501d8742934324a0a0dc8be27",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "05213c1de1873dbb19c5b56e786813d86b5bbb716bf4e043e1e404d672ea4641"
+  },
+  "llm_config_sha256": null,
+  "input": "この案件の受信箱の件名が切れる不具合を修正し、検証して",
+  "seed_task_ids": [],
+  "project": "01M6PFSJBPJW9FQNX21S21XRQB",
+  "transcript": [
+    {
+      "id": "01M6PFSMK3G2X9B4SQM7ZKGGMZ",
+      "seq": 1,
+      "role": "user",
+      "text": "この案件の受信箱の件名が切れる不具合を修正し、検証して",
+      "state": "completed",
+      "created_at": "2026-11-05T18:33:32.515Z",
+      "run_id": "01M6PFSMM3MKC29NSK3GCP8VB0",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6PFSMM349AHXH22B9Q75FQH",
+      "seq": 2,
+      "role": "assistant",
+      "text": "task 01M6PFSMPD0KF3M6Z2Q2VXH6RW を起票しました。完了したらこの thread に結果を要約します。",
+      "state": "completed",
+      "created_at": "2026-11-05T18:33:32.547Z",
+      "run_id": "01M6PFSMM3MKC29NSK3GCP8VB0",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6PFSMMCH5JZA0FYBT2EBVT7",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1",
+      "state": "completed",
+      "created_at": "2026-11-05T18:33:32.547Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    },
+    {
+      "id": "01M6PFSNDCA33XX6QK9QR82DN8",
+      "seq": 4,
+      "role": "assistant",
+      "text": "CoS: p4e: 受信箱の画面の件: 受信箱の件名が切れる不具合を直す が完了しました — 受信箱の件名が切れる不具合を直す が完了しました\n元のスレッド: CoS: p4e: 受信箱の画面",
+      "state": "completed",
+      "created_at": "2026-11-05T18:33:33.350Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[{\"actor\":\"cos\",\"href\":\"/notifications\",\"id\":\"01M6PFSN61N5G6MQ1QE466C474\",\"kind\":\"notice\",\"operation_id\":null,\"reason\":null,\"state\":\"running\",\"title\":\"受信箱の件名が切れる不具合を直す が完了しました\"}],\"escalation\":{\"item_id\":\"01M6PFSN9AMKQN2M9DRRA0YWWZ\",\"open\":true,\"project_id\":\"01M6PFSJBPJW9FQNX21S21XRQB\",\"source_key\":\"01M6PFSN61N5G6MQ1QE466C474\",\"source_kind\":\"notice\",\"source_thread_id\":\"01M6PFSN273NTFX3V6PZQ61ZV1\",\"state\":\"running\"},\"posted_by\":\"cos_escalation_card\"}"
+    },
+    {
+      "id": "01M6PFSNDF2N07WMH6K7TTZ7VQ",
+      "seq": 5,
+      "role": "system",
+      "text": "CoS 不在で人へ直接回した件の要約: items=[\"01M6PFSN9AMKQN2M9DRRA0YWWZ\"]\n（daemon からの依頼。人の発言ではない。instructed_by の根拠にならない）\nCoS 不在のため人へ直接通知した件:\n- 「受信箱の件名が切れる不具合を直す が完了しました」（知らせ、source notice:01M6PFSN61N5G6MQ1QE466C474、元のスレッド 01M6PFSN273NTFX3V6PZQ61ZV1）: GET /api/v1/inbox/items・GET /api/v1/notifications（元の待ちの本文）\nこのスレッドに件ごとに、(1) 何が起きたか (2) 人が決めること (3) 各選択肢の中身 (4) CoS の推奨と理由 (5) 答えると何が起きるか を、人が数十秒で読める分量で書く。(1) にはどの依頼・task から来たか・なぜ今かを含め、task 内部の語には短い言い換えを添える（skill cos-inbox-triage §11）。案件の状況と GET /api/v1/inbox/items で元の待ちが開いているかも確かめる。答えの operation は実行しない。元の待ちが既に閉じていたら、閉じたことだけを 1 行で書く。",
+      "state": "completed",
+      "created_at": "2026-11-05T18:33:33.350Z",
+      "run_id": "01M6PFSNDHS5Y7REXMVWZNA0BS",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6PFSNDJ8FJAR0D6K7S8K689",
+      "seq": 6,
+      "role": "assistant",
+      "text": "台本に無い入力です（stub）。",
+      "state": "completed",
+      "created_at": "2026-11-05T18:33:33.361Z",
+      "run_id": "01M6PFSNDHS5Y7REXMVWZNA0BS",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6PFSNDVTKS9K7VX4ECC72TC",
+      "seq": 7,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1",
+      "state": "completed",
+      "created_at": "2026-11-05T18:33:33.361Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [
+    {
+      "thread_id": "01M6PFSN273NTFX3V6PZQ61ZV1",
+      "seq": 1,
+      "role": "user",
+      "text": "root task が完了しました。下は DB と進捗ファイルから決定的に集めた事実です。この事実だけを根拠に、(1) 何を目的にした仕事か (2) 何をやったか (3) 何が出たか（統合 commit・成果物・受け入れ判定）(4) 人が次にやること（本番への移行・未解決事項・提案・follow-up）を、人が数十秒で読める分量（日本語で 10 行以内）でこのスレッドに書いてください。事実に無いことは書かず、分からない点は「不明」と書く。task や組織は変更しないこと。\n\nroot task『受信箱の件名が切れる不具合を直す』が完了しました（01M6PFSMPD0KF3M6Z2Q2VXH6RW）。\n\n目的: 受信箱の件名が途中で切れる不具合を直し、検証する。\n\n統合 commit: 取り込みなし（project_not_enabled: project 01M6PFSJBPJW9FQNX21S21XRQB は自動取り込み（auto_integrate）が無効です）\n成果物: なし\n受け入れ判定: 0:合格\n本番への移行: 不明（進捗ファイルなし）\n\n（参考・worker の申告）stub harness (no LLM)\n"
+    },
+    {
+      "thread_id": "01M6PFSN273NTFX3V6PZQ61ZV1",
+      "seq": 2,
+      "role": "assistant",
+      "text": "起票した task 01M6PFSMPD0KF3M6Z2Q2VXH6RW が完了しました。結果は task の記録と review の判定のとおりです。"
+    },
+    {
+      "thread_id": "01M6PFSN273NTFX3V6PZQ61ZV1",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1"
+    },
+    {
+      "thread_id": "01M6PFSN273NTFX3V6PZQ61ZV1",
+      "seq": 4,
+      "role": "system",
+      "text": "CoS 受信箱の一次対応: item_ids=[\"01M6PFSN9AMKQN2M9DRRA0YWWZ\"]"
+    },
+    {
+      "thread_id": "01M6PFSN273NTFX3V6PZQ61ZV1",
+      "seq": 5,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1"
+    },
+    {
+      "thread_id": "01M6PFSN273NTFX3V6PZQ61ZV1",
+      "seq": 6,
+      "role": "assistant",
+      "text": "受信箱の一次対応の結果（1 件)\n\n### 受信箱の件名が切れる不具合を直す が完了しました（知らせ）\n- 判断: 未処理（人へ直接通知する）\n- 理由: 理由の記録なし\n\n(run 01M6PFSN9HCSCEAVMH36MZ1HQS)\n"
+    },
+    {
+      "thread_id": "01M6PFSN273NTFX3V6PZQ61ZV1",
+      "seq": 7,
+      "role": "system",
+      "text": "CoS 不在のため直接通知: 「受信箱の件名が切れる不具合を直す が完了しました」（知らせ）は人へ委ねた（CoS run は終了したがこの項目は未処理）。CoS はこの件を再送・代答しない。\n決めること: 受信箱の件名が切れる不具合を直す が完了しました\n選択肢: （自由文。web で回答）\n回答: /notifications\nCoS が戻り次第、統括 CoS のスレッドにこの件の要約（何が起きたか・決めること・各選択肢・推奨）を書く。"
+    }
+  ],
+  "tasks_created": [
+    {
+      "id": "01M6PFSMPD0KF3M6Z2Q2VXH6RW",
+      "status": "done"
+    }
+  ],
+  "cos_runs": 4,
+  "cos_runs_by_thread": {
+    "01M6PFSJM7BEK8R1GGCYT2NK6D": 2,
+    "01M6PFSN273NTFX3V6PZQ61ZV1": 2
+  },
+  "worker_runs": 1,
+  "worker_usage": null,
+  "usage": null,
+  "usage_null_runs": 0,
+  "usage_missing_reason": "tier=stub",
+  "cos_operations": [
+    {
+      "thread_id": "01M6PFSJM7BEK8R1GGCYT2NK6D",
+      "action": "task.create",
+      "target_kind": "task",
+      "target_id": "01M6PFSMPD0KF3M6Z2Q2VXH6RW",
+      "state": "applied",
+      "created_at": "2026-11-05T18:33:32.621Z"
+    }
+  ],
+  "stub_log": [
+    {
+      "at": 1793903612.6032689,
+      "kind": "cos_chat",
+      "task": "01M6PFSMMBEHVM3JP4EV50J2SZ",
+      "title": "CoS chat 01M6PFSJM7BEK8R1GGCYT2NK6D",
+      "case": "delegate-summary",
+      "calls": [
+        {
+          "method": "GET",
+          "path": "/projects",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/cos/operations",
+          "status": 200,
+          "body": null
+        }
+      ],
+      "response_keys": [
+        "operation"
+      ],
+      "task_id": "01M6PFSMPD0KF3M6Z2Q2VXH6RW",
+      "summary": "task 01M6PFSMPD0KF3M6Z2Q2VXH6RW を起票しました。完了したらこの thread に結果を要約します。"
+    },
+    {
+      "at": 1793903613.4171798,
+      "kind": "cos_chat",
+      "task": "01M6PFSNDT3WW25NAJVWQGNPEN",
+      "title": "CoS chat 01M6PFSJM7BEK8R1GGCYT2NK6D",
+      "case": null,
+      "summary": "台本に無い入力です（stub）。"
+    },
+    {
+      "at": 1793903613.0600297,
+      "kind": "cos_chat",
+      "task": "01M6PFSN2GAKV0NHS2WNDDJR37",
+      "title": "CoS chat 01M6PFSN273NTFX3V6PZQ61ZV1",
+      "case": null,
+      "summary_of": [
+        "01M6PFSMPD0KF3M6Z2Q2VXH6RW"
+      ],
+      "summary": "起票した task 01M6PFSMPD0KF3M6Z2Q2VXH6RW が完了しました。結果は task の記録と review の判定のとおりです。"
+    },
+    {
+      "at": 1793903613.2890093,
+      "kind": "cos_chat",
+      "task": "01M6PFSN9T4HF40J4FVW3CFR3A",
+      "title": "CoS chat 01M6PFSN273NTFX3V6PZQ61ZV1",
+      "case": null,
+      "summary": "台本に無い入力です（stub）。"
+    },
+    {
+      "at": 1793903612.7379708,
+      "kind": "execute",
+      "task": "01M6PFSMPD0KF3M6Z2Q2VXH6RW",
+      "title": "受信箱の件名が切れる不具合を直す",
+      "summary": "stub harness (no LLM)"
+    }
+  ],
+  "handoff_messages": 1,
+  "human_interventions": 1,
+  "first_reply_secs": 0.51,
+  "wall_seconds": 1.019,
+  "ended_by": "summary",
+  "trial_secs": 8.322,
+  "ops": [
+    {
+      "step": "seed_project",
+      "at": 1793903610.232,
+      "project": "01M6PFSJBPJW9FQNX21S21XRQB"
+    },
+    {
+      "step": "seed_tasks",
+      "at": 1793903610.232,
+      "ids": [],
+      "statuses": []
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793903610.505,
+      "thread": "01M6PFSJM7BEK8R1GGCYT2NK6D",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793903612.514,
+      "pre_chat_runs": 0,
+      "pre_runs": 0,
+      "pre_tasks": 0
+    },
+    {
+      "step": "human_message",
+      "at": 1793903612.517,
+      "thread": "01M6PFSJM7BEK8R1GGCYT2NK6D"
+    }
+  ]
+}

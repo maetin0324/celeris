@@ -1,0 +1,137 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "stub",
+  "seq": 23,
+  "case": "read-three",
+  "kind": "read",
+  "arm": "new",
+  "repeat": 2,
+  "rev": "a05dd115a237e47b8370b68796717dd4a3a89442",
+  "binary_sha256": "64ce583a199264657d177227c5be418d3cb40bf736e7cb76a9fe7ac4d79d7873",
+  "skills_sha256": {
+    "config/skills/cos-operator": "aab69d2ef5a30af7c56075c3ee9bbfab7b5700fd3b392bac7203699ae3fb290d",
+    "config/skills/cos-inbox-triage": "e17d148121b43ad81534565ef9bcf841139d207395f05f7519ec92df4459e969"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "df24c1df4ec3751c3facf8039a6f4f54f24c32044ec3ba97df22d876b01fef34",
+    "crates/task-worker/src/preamble.rs": "22a118396990bb443c6b2de07d8fdbaf6bf1a1e5683b681fd71ceb3b29465b73",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "20c61936c8533eaee79bc54bd49150b58505fcd588426b7a56dd0d789d67c4ac"
+  },
+  "llm_config_sha256": null,
+  "input": "直近 3 件の task の状態を比較して",
+  "seed_task_ids": [
+    "01M6PFWMF9JXFTQCA64PR8S9WJ",
+    "01M6PFWP1T5K59KGMHFPK82XMB",
+    "01M6PFWQM9CD37JSET4Z5EY1X0",
+    "01M6PFWRPZGQZFV2ZZ34ACYZZF"
+  ],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6PFWWZ7EB3NWD5T5XY5Q977",
+      "seq": 10,
+      "role": "user",
+      "text": "直近 3 件の task の状態を比較して",
+      "state": "completed",
+      "created_at": "2026-11-05T18:35:19.398Z",
+      "run_id": "01M6PFWX18KM6Q8JNN1TC7Y6HV",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6PFWX19C0WSVTTCPYFV87HZ",
+      "seq": 11,
+      "role": "assistant",
+      "text": "直近 3 件は 01M6PFWRPZGQZFV2ZZ34ACYZZF=done、01M6PFWQM9CD37JSET4Z5EY1X0=cancelled、01M6PFWP1T5K59KGMHFPK82XMB=failed です。状態は cancelled 1・done 1・failed 1 です（読取のみ）。",
+      "state": "completed",
+      "created_at": "2026-11-05T18:35:19.464Z",
+      "run_id": "01M6PFWX18KM6Q8JNN1TC7Y6HV",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6PFWX1Z6QD34F7KP7XM2VW4",
+      "seq": 12,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1",
+      "state": "completed",
+      "created_at": "2026-11-05T18:35:19.464Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6PFWMYKDSPT4T26RFXYKFSX": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": null,
+  "usage": null,
+  "usage_null_runs": 0,
+  "usage_missing_reason": "tier=stub",
+  "cos_operations": [],
+  "stub_log": [
+    {
+      "at": 1793903719.555273,
+      "kind": "cos_chat",
+      "task": "01M6PFWX1XYR72KPX1VZG33PKT",
+      "title": "CoS chat 01M6PFWMYKDSPT4T26RFXYKFSX",
+      "case": "read-three",
+      "calls": [
+        {
+          "method": "GET",
+          "path": "/tasks",
+          "status": 200
+        }
+      ],
+      "read_ids": [
+        "01M6PFWRPZGQZFV2ZZ34ACYZZF",
+        "01M6PFWQM9CD37JSET4Z5EY1X0",
+        "01M6PFWP1T5K59KGMHFPK82XMB"
+      ],
+      "summary": "直近 3 件は 01M6PFWRPZGQZFV2ZZ34ACYZZF=done、01M6PFWQM9CD37JSET4Z5EY1X0=cancelled、01M6PFWP1T5K59KGMHFPK82XMB=failed です。状態は cancelled 1・done 1・failed 1 です（読取のみ）。"
+    }
+  ],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.52,
+  "wall_seconds": 0.528,
+  "ended_by": "reply",
+  "trial_secs": 15.722,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793903716.759,
+      "ids": [
+        "01M6PFWMF9JXFTQCA64PR8S9WJ",
+        "01M6PFWP1T5K59KGMHFPK82XMB",
+        "01M6PFWQM9CD37JSET4Z5EY1X0",
+        "01M6PFWRPZGQZFV2ZZ34ACYZZF"
+      ],
+      "statuses": [
+        "done",
+        "failed",
+        "cancelled",
+        "done"
+      ]
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793903717.377,
+      "thread": "01M6PFWMYKDSPT4T26RFXYKFSX",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793903719.397,
+      "pre_chat_runs": 2,
+      "pre_runs": 3,
+      "pre_tasks": 4
+    },
+    {
+      "step": "human_message",
+      "at": 1793903719.406,
+      "thread": "01M6PFWMYKDSPT4T26RFXYKFSX"
+    }
+  ]
+}

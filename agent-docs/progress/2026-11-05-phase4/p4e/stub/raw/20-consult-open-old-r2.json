@@ -1,0 +1,111 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "stub",
+  "seq": 20,
+  "case": "consult-open",
+  "kind": "consult",
+  "arm": "old",
+  "repeat": 2,
+  "rev": "286a7ab199b27fe2524c07d5eb501abd5be567fa",
+  "binary_sha256": "97d4849fc69fde7bc605d1d3341279a846ad6b4fcc79c2499bc058af657706be",
+  "skills_sha256": {
+    "config/skills/cos-operator": "d45913d29dc2510d7698eb40a628754d097d1020e2fb77a928b54089f20bfefa",
+    "config/skills/cos-inbox-triage": "73b317ffcad542bd3ec41c502e0ac9a50faa86ff5d77254c69e92b14204a66f2"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "bb7e55371490c29f7c6a5351486e65bbd81d28c83dcc0d0f0b2e10b5c4721f20",
+    "crates/task-worker/src/preamble.rs": "9d90308a438a4aacbd4e992d1d3131db4468aa1501d8742934324a0a0dc8be27",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "05213c1de1873dbb19c5b56e786813d86b5bbb716bf4e043e1e404d672ea4641"
+  },
+  "llm_config_sha256": null,
+  "input": "クラスタのジョブ待ちが長い。何から調べればいい？",
+  "seed_task_ids": [],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6PFVZACT5BH3VZ8BN9BWAS4",
+      "seq": 1,
+      "role": "user",
+      "text": "クラスタのジョブ待ちが長い。何から調べればいい？",
+      "state": "completed",
+      "created_at": "2026-11-05T18:34:49.036Z",
+      "run_id": "01M6PFVZB6RCJD0HS82HP891A5",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6PFVZB79GN5D6HPZ4QN5PC3",
+      "seq": 2,
+      "role": "assistant",
+      "text": "ジョブ待ちの原因は、(1) 資源要求が大きく空きが出ない、(2) キューの混雑、(3) 優先度や fair share の低下、に分けて調べます。確認順の案: まず squeue の待ち理由（Resources / Priority 等）を見て、次に要求した node 数・時間を空きと比べ、最後に sprio で優先度を見ます。キュー名と待ち理由の表示を教えてもらえれば、どれに当たるか絞ります。",
+      "state": "completed",
+      "created_at": "2026-11-05T18:34:49.062Z",
+      "run_id": "01M6PFVZB6RCJD0HS82HP891A5",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6PFVZBFY6YC3AYBYQ9J0S2X",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1",
+      "state": "completed",
+      "created_at": "2026-11-05T18:34:49.062Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6PFVXBG0KN1W50SSRCZNA5C": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": null,
+  "usage": null,
+  "usage_null_runs": 0,
+  "usage_missing_reason": "tier=stub",
+  "cos_operations": [],
+  "stub_log": [
+    {
+      "at": 1793903689.118826,
+      "kind": "cos_chat",
+      "task": "01M6PFVZBEY83QA9Y88JJM4NVZ",
+      "title": "CoS chat 01M6PFVXBG0KN1W50SSRCZNA5C",
+      "case": "consult-open",
+      "calls": [],
+      "summary": "ジョブ待ちの原因は、(1) 資源要求が大きく空きが出ない、(2) キューの混雑、(3) 優先度や fair share の低下、に分けて調べます。確認順の案: まず squeue の待ち理由（Resources / Priority 等）を見て、次に要求した node 数・時間を空きと比べ、最後に sprio で優先度を見ます。キュー名と待ち理由の表示を教えてもらえれば、どれに当たるか絞ります。"
+    }
+  ],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.508,
+  "wall_seconds": 0.51,
+  "ended_by": "reply",
+  "trial_secs": 7.754,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793903686.799,
+      "ids": [],
+      "statuses": []
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793903687.027,
+      "thread": "01M6PFVXBG0KN1W50SSRCZNA5C",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793903689.035,
+      "pre_chat_runs": 0,
+      "pre_runs": 0,
+      "pre_tasks": 0
+    },
+    {
+      "step": "human_message",
+      "at": 1793903689.038,
+      "thread": "01M6PFVXBG0KN1W50SSRCZNA5C"
+    }
+  ]
+}

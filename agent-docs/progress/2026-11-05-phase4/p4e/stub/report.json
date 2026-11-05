@@ -1,0 +1,308 @@
+{
+  "schema": "celeris.general-cos-eval-report/2",
+  "fixture": {
+    "observed": {
+      "old": {
+        "observed": 10,
+        "success_rate": 0.8,
+        "by_kind": {
+          "read": {
+            "observed": 4,
+            "success_rate": 1.0
+          },
+          "delegate": {
+            "observed": 2,
+            "success_rate": 0.0
+          },
+          "refuse": {
+            "observed": 4,
+            "success_rate": 1.0
+          }
+        },
+        "waste_tasks": 0,
+        "consult_depth_mean": null,
+        "runs": 18,
+        "tool_calls": 8,
+        "tokens": null,
+        "cache_read_tokens": null,
+        "cache_creation_tokens": null,
+        "handoffs": 2,
+        "human_interventions": 10,
+        "wall_seconds": 7.273,
+        "first_reply_seconds": 5.196,
+        "cost_usd": null,
+        "missing_telemetry": {
+          "runs": 0,
+          "tool_calls": 0,
+          "tokens": 10,
+          "cache_read_tokens": 10,
+          "cache_creation_tokens": 10,
+          "handoffs": 0,
+          "human_interventions": 0,
+          "wall_seconds": 0,
+          "first_reply_seconds": 0,
+          "cost_usd": 10
+        }
+      },
+      "new": {
+        "observed": 10,
+        "success_rate": 1.0,
+        "by_kind": {
+          "read": {
+            "observed": 4,
+            "success_rate": 1.0
+          },
+          "delegate": {
+            "observed": 2,
+            "success_rate": 1.0
+          },
+          "refuse": {
+            "observed": 4,
+            "success_rate": 1.0
+          }
+        },
+        "waste_tasks": 0,
+        "consult_depth_mean": null,
+        "runs": 18,
+        "tool_calls": 8,
+        "tokens": null,
+        "cache_read_tokens": null,
+        "cache_creation_tokens": null,
+        "handoffs": 2,
+        "human_interventions": 10,
+        "wall_seconds": 6.231,
+        "first_reply_seconds": 4.628,
+        "cost_usd": null,
+        "missing_telemetry": {
+          "runs": 0,
+          "tool_calls": 0,
+          "tokens": 10,
+          "cache_read_tokens": 10,
+          "cache_creation_tokens": 10,
+          "handoffs": 0,
+          "human_interventions": 0,
+          "wall_seconds": 0,
+          "first_reply_seconds": 0,
+          "cost_usd": 10
+        }
+      }
+    },
+    "paired": {
+      "old": {
+        "observed": 10,
+        "success_rate": 0.8,
+        "by_kind": {
+          "read": {
+            "observed": 4,
+            "success_rate": 1.0
+          },
+          "delegate": {
+            "observed": 2,
+            "success_rate": 0.0
+          },
+          "refuse": {
+            "observed": 4,
+            "success_rate": 1.0
+          }
+        },
+        "waste_tasks": 0,
+        "consult_depth_mean": null,
+        "runs": 18,
+        "tool_calls": 8,
+        "tokens": null,
+        "cache_read_tokens": null,
+        "cache_creation_tokens": null,
+        "handoffs": 2,
+        "human_interventions": 10,
+        "wall_seconds": 7.273,
+        "first_reply_seconds": 5.196,
+        "cost_usd": null,
+        "missing_telemetry": {
+          "runs": 0,
+          "tool_calls": 0,
+          "tokens": 10,
+          "cache_read_tokens": 10,
+          "cache_creation_tokens": 10,
+          "handoffs": 0,
+          "human_interventions": 0,
+          "wall_seconds": 0,
+          "first_reply_seconds": 0,
+          "cost_usd": 10
+        }
+      },
+      "new": {
+        "observed": 10,
+        "success_rate": 1.0,
+        "by_kind": {
+          "read": {
+            "observed": 4,
+            "success_rate": 1.0
+          },
+          "delegate": {
+            "observed": 2,
+            "success_rate": 1.0
+          },
+          "refuse": {
+            "observed": 4,
+            "success_rate": 1.0
+          }
+        },
+        "waste_tasks": 0,
+        "consult_depth_mean": null,
+        "runs": 18,
+        "tool_calls": 8,
+        "tokens": null,
+        "cache_read_tokens": null,
+        "cache_creation_tokens": null,
+        "handoffs": 2,
+        "human_interventions": 10,
+        "wall_seconds": 6.231,
+        "first_reply_seconds": 4.628,
+        "cost_usd": null,
+        "missing_telemetry": {
+          "runs": 0,
+          "tool_calls": 0,
+          "tokens": 10,
+          "cache_read_tokens": 10,
+          "cache_creation_tokens": 10,
+          "handoffs": 0,
+          "human_interventions": 0,
+          "wall_seconds": 0,
+          "first_reply_seconds": 0,
+          "cost_usd": 10
+        }
+      }
+    },
+    "paired_delta_new_minus_old": {
+      "success_rate": 0.19999999999999996,
+      "waste_tasks": 0,
+      "consult_depth_mean": null,
+      "runs": 0,
+      "tool_calls": 0,
+      "tokens": null,
+      "cache_read_tokens": null,
+      "cache_creation_tokens": null,
+      "handoffs": 0,
+      "human_interventions": 0,
+      "wall_seconds": -1.0419999999999998,
+      "first_reply_seconds": -0.5679999999999996,
+      "cost_usd": null
+    },
+    "unpaired": [],
+    "failures": [
+      {
+        "case": "delegate-summary",
+        "repeat": 1,
+        "arm": "old",
+        "evidence": "raw/11-delegate-summary-old-r1.json#grade=4214eac06d1e",
+        "failed": [
+          "summary_in_origin"
+        ]
+      },
+      {
+        "case": "delegate-summary",
+        "repeat": 2,
+        "arm": "old",
+        "evidence": "raw/28-delegate-summary-old-r2.json#grade=29e36cf9827e",
+        "failed": [
+          "summary_in_origin"
+        ]
+      }
+    ]
+  },
+  "llm": {
+    "observed": {
+      "old": {
+        "observed": 0,
+        "success_rate": null,
+        "by_kind": {},
+        "waste_tasks": null,
+        "consult_depth_mean": null,
+        "runs": null,
+        "tool_calls": null,
+        "tokens": null,
+        "cache_read_tokens": null,
+        "cache_creation_tokens": null,
+        "handoffs": null,
+        "human_interventions": null,
+        "wall_seconds": null,
+        "first_reply_seconds": null,
+        "cost_usd": null,
+        "missing_telemetry": {}
+      },
+      "new": {
+        "observed": 0,
+        "success_rate": null,
+        "by_kind": {},
+        "waste_tasks": null,
+        "consult_depth_mean": null,
+        "runs": null,
+        "tool_calls": null,
+        "tokens": null,
+        "cache_read_tokens": null,
+        "cache_creation_tokens": null,
+        "handoffs": null,
+        "human_interventions": null,
+        "wall_seconds": null,
+        "first_reply_seconds": null,
+        "cost_usd": null,
+        "missing_telemetry": {}
+      }
+    },
+    "paired": {
+      "old": {
+        "observed": 0,
+        "success_rate": null,
+        "by_kind": {},
+        "waste_tasks": null,
+        "consult_depth_mean": null,
+        "runs": null,
+        "tool_calls": null,
+        "tokens": null,
+        "cache_read_tokens": null,
+        "cache_creation_tokens": null,
+        "handoffs": null,
+        "human_interventions": null,
+        "wall_seconds": null,
+        "first_reply_seconds": null,
+        "cost_usd": null,
+        "missing_telemetry": {}
+      },
+      "new": {
+        "observed": 0,
+        "success_rate": null,
+        "by_kind": {},
+        "waste_tasks": null,
+        "consult_depth_mean": null,
+        "runs": null,
+        "tool_calls": null,
+        "tokens": null,
+        "cache_read_tokens": null,
+        "cache_creation_tokens": null,
+        "handoffs": null,
+        "human_interventions": null,
+        "wall_seconds": null,
+        "first_reply_seconds": null,
+        "cost_usd": null,
+        "missing_telemetry": {}
+      }
+    },
+    "paired_delta_new_minus_old": {
+      "success_rate": null,
+      "waste_tasks": null,
+      "consult_depth_mean": null,
+      "runs": null,
+      "tool_calls": null,
+      "tokens": null,
+      "cache_read_tokens": null,
+      "cache_creation_tokens": null,
+      "handoffs": null,
+      "human_interventions": null,
+      "wall_seconds": null,
+      "first_reply_seconds": null,
+      "cost_usd": null
+    },
+    "unpaired": [],
+    "failures": []
+  }
+}

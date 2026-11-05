@@ -1,0 +1,84 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "13fe1bf14dce",
+  "case": "delegate-summary",
+  "kind": "delegate",
+  "input": "この案件の受信箱の件名が切れる不具合を修正し、検証して",
+  "expected": "task 1。案件・repos・review/command check を保持。完了を元 thread に要約し、続きの相談で task を増やさない。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "この案件の受信箱の件名が切れる不具合を修正し、検証して"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "task 01M6PFSX20Y2W0FN4DKE6VTV5V を起票しました。完了したらこの thread に結果を要約します。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1"
+    },
+    {
+      "seq": 4,
+      "role": "user",
+      "text": "root task が完了しました。下は DB と進捗ファイルから決定的に集めた事実です。この事実だけを根拠に、(1) 何を目的にした仕事か (2) 何をやったか (3) 何が出たか（統合 commit・成果物・受け入れ判定）(4) 人が次にやること（本番への移行・未解決事項・提案・follow-up）を、人が数十秒で読める分量（日本語で 10 行以内）でこのスレッドに書いてください。事実に無いことは書かず、分からない点は「不明」と書く。task や組織は変更しないこと。\n\nroot task『受信箱の件名が切れる不具合を直す』が完了しました（01M6PFSX20Y2W0FN4DKE6VTV5V）。\n\n目的: 受信箱の件名が途中で切れる不具合を直し、検証する。\n\n統合 commit: 取り込みなし（project_not_enabled: project 01M6PFSTR4D7FDEAKF02VBNFSQ は自動取り込み（auto_integrate）が無効です）\n成果物: なし\n受け入れ判定: 0:合格\n本番への移行: 不明（進捗ファイルなし）\n\n（参考・worker の申告）stub harness (no LLM)\n"
+    },
+    {
+      "seq": 5,
+      "role": "assistant",
+      "text": "起票した task 01M6PFSX20Y2W0FN4DKE6VTV5V が完了しました。結果は task の記録と review の判定のとおりです。"
+    },
+    {
+      "seq": 6,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1"
+    },
+    {
+      "seq": 7,
+      "role": "assistant",
+      "text": "CoS: p4e: 受信箱の画面の件: 受信箱の件名が切れる不具合を直す が完了しました — 受信箱の件名が切れる不具合を直す が完了しました\n元のスレッド: CoS: p4e: 受信箱の画面"
+    },
+    {
+      "seq": 8,
+      "role": "system",
+      "text": "CoS 不在で人へ直接回した件の要約: items=[\"01M6PFSXZB7F1ZBDRFXMR70MDY\"]\n（daemon からの依頼。人の発言ではない。instructed_by の根拠にならない）\nCoS 不在のため人へ直接通知した件:\n- 「受信箱の件名が切れる不具合を直す が完了しました」（知らせ、source notice:01M6PFSXW2T0SQSJAD3PVP08CC、元のスレッド 01M6PFSXZA01XDYQ5S9WGFS0WQ）: GET /api/v1/inbox/items・GET /api/v1/notifications（元の待ちの本文）\nこのスレッドに件ごとに、(1) 何が起きたか (2) 人が決めること (3) 各選択肢の中身 (4) CoS の推奨と理由 (5) 答えると何が起きるか を、人が数十秒で読める分量で書く。(1) にはどの依頼・task から来たか・なぜ今かを含め、task 内部の語には短い言い換えを添える（skill cos-inbox-triage §11）。案件の状況と GET /api/v1/inbox/items で元の待ちが開いているかも確かめる。答えの operation は実行しない。元の待ちが既に閉じていたら、閉じたことだけを 1 行で書く。"
+    },
+    {
+      "seq": 9,
+      "role": "assistant",
+      "text": "台本に無い入力です（stub）。"
+    },
+    {
+      "seq": 10,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1"
+    }
+  ],
+  "tasks_created": [
+    {
+      "id": "01M6PFSX20Y2W0FN4DKE6VTV5V",
+      "status": "done"
+    }
+  ],
+  "seed_task_ids": [],
+  "cos_operations": [
+    {
+      "thread_id": "01M6PFSTZ7F5YF51CYC6WHH2Q5",
+      "action": "task.create",
+      "target_kind": "task",
+      "target_id": "01M6PFSX20Y2W0FN4DKE6VTV5V",
+      "state": "applied",
+      "created_at": "2026-11-05T18:33:41.184Z"
+    }
+  ],
+  "grade": {
+    "grader": null,
+    "authority_preserved": null,
+    "summary_in_origin": null,
+    "review_preserved": null,
+    "notes": null
+  }
+}

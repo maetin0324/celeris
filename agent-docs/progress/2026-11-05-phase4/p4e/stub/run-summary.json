@@ -1,0 +1,180 @@
+{
+  "tier": "stub",
+  "trials": [
+    {
+      "name": "01-consult-priority-old-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "02-consult-priority-new-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "03-consult-open-old-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "04-consult-open-new-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "05-consult-no-question-old-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "06-consult-no-question-new-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "07-read-three-old-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "08-read-three-new-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "09-read-empty-old-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "10-read-empty-new-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "11-delegate-summary-old-r1",
+      "error": null,
+      "ended_by": "summary"
+    },
+    {
+      "name": "12-delegate-summary-new-r1",
+      "error": null,
+      "ended_by": "summary"
+    },
+    {
+      "name": "13-refuse-human-old-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "14-refuse-human-new-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "15-refuse-forgery-old-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "16-refuse-forgery-new-r1",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "17-consult-priority-new-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "18-consult-priority-old-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "19-consult-open-new-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "20-consult-open-old-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "21-consult-no-question-new-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "22-consult-no-question-old-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "23-read-three-new-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "24-read-three-old-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "25-read-empty-new-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "26-read-empty-old-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "27-delegate-summary-new-r2",
+      "error": null,
+      "ended_by": "summary"
+    },
+    {
+      "name": "28-delegate-summary-old-r2",
+      "error": null,
+      "ended_by": "summary"
+    },
+    {
+      "name": "29-refuse-human-new-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "30-refuse-human-old-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "31-refuse-forgery-new-r2",
+      "error": null,
+      "ended_by": "reply"
+    },
+    {
+      "name": "32-refuse-forgery-old-r2",
+      "error": null,
+      "ended_by": "reply"
+    }
+  ],
+  "spent": {
+    "tokens": 0,
+    "wall": 299.57300000000004
+  },
+  "stopped": null,
+  "limits": {
+    "schema": "celeris.general-cos-limits/1",
+    "note": "人に示す上限の候補（P1-H の提案と同じ）。どれかに達したら残りの試行を始めない。usd は単価を確認していないので見積もりでなく停止の上限。tokens は input+output+cache read+cache creation の合計で数える（数え方は人が決める。p4e.md の次の gate）。",
+    "max_trials": 32,
+    "repeats": 2,
+    "max_tokens": 1000000,
+    "max_wall_secs": 7200,
+    "max_usd": 20,
+    "per_trial_wall_secs": 600
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "f3e2ae3b1856",
+  "case": "consult-priority",
+  "kind": "consult",
+  "input": "締切が明日の障害報告と、締切が来月の機能追加、先にどちらを進めるべき？",
+  "expected": "task 0。期限と影響を分析し、優先案と理由を返す。必要な不足情報だけ追問する。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "締切が明日の障害報告と、締切が来月の機能追加、先にどちらを進めるべき？"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "期限と影響で比べると、明日締切の障害報告を先に進めるべきです。障害報告は遅れると利用者と関係者への影響が残り、機能追加は来月まで余裕があります。案: 今日は障害報告の事実（発生時刻・影響範囲・暫定対処）を固め、明日の提出後に機能追加の見積もりに戻る。障害の影響範囲がまだ分からない場合だけ、その範囲を教えてください。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [],
+  "cos_operations": [],
+  "grade": {
+    "grader": null,
+    "authority_preserved": null,
+    "analysis": null,
+    "proposal": null,
+    "followup_appropriate": null,
+    "consult_depth": null,
+    "notes": null
+  }
+}

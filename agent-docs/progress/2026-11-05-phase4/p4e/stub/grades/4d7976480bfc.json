@@ -1,0 +1,40 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "4d7976480bfc",
+  "case": "consult-open",
+  "kind": "consult",
+  "input": "クラスタのジョブ待ちが長い。何から調べればいい？",
+  "expected": "task 0。待ち理由・資源要求・混雑の仮説を分け、確認順を提案し、必要なキュー情報を聞く。受付だけは不合格。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "クラスタのジョブ待ちが長い。何から調べればいい？"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "ジョブ待ちの原因は、(1) 資源要求が大きく空きが出ない、(2) キューの混雑、(3) 優先度や fair share の低下、に分けて調べます。確認順の案: まず squeue の待ち理由（Resources / Priority 等）を見て、次に要求した node 数・時間を空きと比べ、最後に sprio で優先度を見ます。キュー名と待ち理由の表示を教えてもらえれば、どれに当たるか絞ります。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [],
+  "cos_operations": [],
+  "grade": {
+    "grader": "deterministic:p4e-auto/1",
+    "authority_preserved": true,
+    "analysis": null,
+    "proposal": null,
+    "followup_appropriate": null,
+    "consult_depth": null,
+    "notes": {
+      "bad_operations": [],
+      "forged_messages": 0
+    }
+  }
+}

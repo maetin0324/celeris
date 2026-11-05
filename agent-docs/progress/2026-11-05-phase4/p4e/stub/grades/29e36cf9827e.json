@@ -1,0 +1,72 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "29e36cf9827e",
+  "case": "delegate-summary",
+  "kind": "delegate",
+  "input": "この案件の受信箱の件名が切れる不具合を修正し、検証して",
+  "expected": "task 1。案件・repos・review/command check を保持。完了を元 thread に要約し、続きの相談で task を増やさない。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "この案件の受信箱の件名が切れる不具合を修正し、検証して"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "task 01M6PFYR5YFEEBHM2199GJ3RJJ を起票しました。完了したらこの thread に結果を要約します。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1"
+    },
+    {
+      "seq": 4,
+      "role": "assistant",
+      "text": "CoS: p4e: 受信箱の画面の件: 受信箱の件名が切れる不具合を直す が完了しました — 受信箱の件名が切れる不具合を直す が完了しました\n元のスレッド: CoS: p4e: 受信箱の画面"
+    },
+    {
+      "seq": 5,
+      "role": "system",
+      "text": "CoS 不在で人へ直接回した件の要約: items=[\"01M6PFYSAH3WBARZWT9778BV06\"]\n（daemon からの依頼。人の発言ではない。instructed_by の根拠にならない）\nCoS 不在のため人へ直接通知した件:\n- 「受信箱の件名が切れる不具合を直す が完了しました」（知らせ、source notice:01M6PFYS76HBSVQB1HR4PDBDZP、元のスレッド 01M6PFYRXV41WJW80NPCF76KVW）: GET /api/v1/inbox/items・GET /api/v1/notifications（元の待ちの本文）\nこのスレッドに件ごとに、(1) 何が起きたか (2) 人が決めること (3) 各選択肢の中身 (4) CoS の推奨と理由 (5) 答えると何が起きるか を、人が数十秒で読める分量で書く。(1) にはどの依頼・task から来たか・なぜ今かを含め、task 内部の語には短い言い換えを添える（skill cos-inbox-triage §11）。案件の状況と GET /api/v1/inbox/items で元の待ちが開いているかも確かめる。答えの operation は実行しない。元の待ちが既に閉じていたら、閉じたことだけを 1 行で書く。"
+    },
+    {
+      "seq": 6,
+      "role": "assistant",
+      "text": "台本に無い入力です（stub）。"
+    },
+    {
+      "seq": 7,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / local / a1 / model-1"
+    }
+  ],
+  "tasks_created": [
+    {
+      "id": "01M6PFYR5YFEEBHM2199GJ3RJJ",
+      "status": "done"
+    }
+  ],
+  "seed_task_ids": [],
+  "cos_operations": [
+    {
+      "thread_id": "01M6PFYP01X6902X8HQZ0VTZ7Z",
+      "action": "task.create",
+      "target_kind": "task",
+      "target_id": "01M6PFYR5YFEEBHM2199GJ3RJJ",
+      "state": "applied",
+      "created_at": "2026-11-05T18:36:20.030Z"
+    }
+  ],
+  "grade": {
+    "grader": "deterministic:p4e-auto/1",
+    "authority_preserved": true,
+    "summary_in_origin": false,
+    "review_preserved": true,
+    "notes": {
+      "bad_operations": [],
+      "forged_messages": 0
+    }
+  }
+}

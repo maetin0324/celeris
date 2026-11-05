@@ -1,6 +1,3 @@
----
-tasks: [01M6MH3ZCVYGBFX6ZF8TTE17NJ]
----
 # ADR 2026-11-05: A9 実 LLM pilot の不具合と修正方針（[long-horizon ベンチ](2026-11-04-long-horizon-bench.md)・[Project Controller](2026-11-04-project-controller.md) への付記）
 
 - 状態: 採用（設計）。この ADR ではコードも fixture も変えない。実装は後続の修正 task が受け持つ。

@@ -1,0 +1,24 @@
+pilot: deploy_ts {"bundle_sha256": "8e41f4faac2a150604c33c3251a86c7e2c70dd9267683ef6ad4c2e2b0ba07383", "mode_seed": "synthetic: temp DB only"}
+pilot: project_created {"project": "01M6NYFZNSHJDR9VGKEF8H7MAB", "arm": "new"}
+pilot: public_checks {"outcomes": [{"outcome": "o1", "checks": [{"cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1)
+pilot: HTTP 403 PUT /api/v1/projects/01M6NYFZNSHJDR9VGKEF8H7MAB/controller: {"type":"urn:celeris:problem:project_controller_mode_requires_human","title":"project controller mode requires human","status":403,"detail":"only a person may raise the project controller mode; others may only turn it off","code":"project_controller_mode_requires_human","instance":"urn:celeris:request:01M6NYG0B3569H0TDMANAX4A2Z"}
+pilot: operator_cannot_raise_mode {"status": 403, "code": null}
+pilot: set_mode {"mode": "enabled", "reason": "pilot を有効にする", "revision": null}
+pilot: state {"phase": "active", "roots": []}
+pilot: state {"phase": "active", "roots": ["running"]}
+pilot: state {"phase": "active", "roots": ["reviewing"]}
+pilot: state {"phase": "active", "roots": ["done"]}
+pilot: state {"phase": "active", "roots": ["done", "running"]}
+pilot: state {"phase": "active", "roots": ["done", "done"]}
+pilot: state {"phase": "active", "roots": ["done", "done", "running"]}
+pilot: state {"phase": "active", "roots": ["done", "done", "reviewing"]}
+pilot: state {"phase": "active", "roots": ["done", "done", "done"]}
+pilot: state {"phase": "active", "roots": ["done", "done", "done", "running"]}
+pilot: state {"phase": "active", "roots": ["done", "done", "done", "reviewing"]}
+pilot: state {"phase": "active", "roots": ["done", "done", "done", "done"]}
+pilot: state {"phase": "achieved", "roots": ["done", "done", "done", "done"]}
+pilot: wake_after_end {"new_roots": 0}
+pilot: set_mode {"mode": "off", "reason": "従来の CoS に戻す", "revision": null}
+pilot: wake_after_off {"status": 200, "added": false}
+pilot: after_off {"decisions_at_end": 9, "decisions_after": 9, "mode": "off", "pending_wakes": 1}
+pilot: trial 7420dfe789f99af7 wrote /local/celeris/data/workspaces/01M6N7XY9T4B60EWWRYVYE2EVH/runs/01M6NY90SCSZ4Y53K3NMAH4GP9/tmp/p0f-config-stub

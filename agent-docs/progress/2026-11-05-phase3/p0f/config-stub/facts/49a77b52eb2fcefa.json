@@ -1,0 +1,300 @@
+{
+ "schema": "celeris.long-horizon-facts/1",
+ "bench_version": 2,
+ "dataset": "long_horizon_llm_pilot",
+ "case": "C06",
+ "seed": 1,
+ "init_digest": "19f7037e9fd829679dfb586ea2e4e5e68038620eaf6b17f63501fd6458f74b6d",
+ "horizon_secs": 300,
+ "roots": [
+  {
+   "logical_id": "o1:1",
+   "outcome": "o1",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 31,
+   "statuses": [
+    "ready",
+    "running",
+    "blocked",
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "c89d45abd1197e1758e8eb00470b44eb1df70c85876e3e01de2887280d270b83",
+   "review": {
+    "verdicts": [
+     {
+      "run_id": "01M6NYDTRFA2P7RVG73YYGXNCQ",
+      "criterion": 0,
+      "text": "kestrane-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C06 o1` を実行すると作れる",
+      "kind": "reviewer",
+      "pass": true,
+      "reason": "reviewer(01M6NYDV0E4P1ZF0B4J7QKNSFK): stub reviewer: 1 command check(s) passed and HEAD:out/o1.txt has 114 bytes"
+     },
+     {
+      "run_id": "01M6NYDTRFA2P7RVG73YYGXNCQ",
+      "criterion": 1,
+      "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+      "kind": "command",
+      "pass": true,
+      "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+     },
+     {
+      "run_id": "01M6NYDTRFA2P7RVG73YYGXNCQ",
+      "criterion": 2,
+      "text": null,
+      "kind": "implicit",
+      "pass": true,
+      "reason": "reviewer(01M6NYDV0E4P1ZF0B4J7QKNSFK): stub reviewer: 1 commit(s) in 23a7d0f9f97099aa73e4e2a5265230f2466e1f4e..6e46edb3f328a10e9e36cb2873b054f854ea11ea"
+     }
+    ],
+    "command_checks": [
+     {
+      "run_id": "01M6NYDTRFA2P7RVG73YYGXNCQ",
+      "criterion": 1,
+      "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+      "expect_exit": 0,
+      "exit": 0,
+      "timed_out": false,
+      "pass": true,
+      "source": "public/C06/case.json#o1.acceptance"
+     }
+    ],
+    "discrepancies": []
+   }
+  },
+  {
+   "logical_id": "o2:1",
+   "outcome": "o2",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 64,
+   "statuses": [
+    "ready",
+    "running",
+    "blocked",
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "cc4b4d9d3e71a02f28dd0d3a881c2f6b905e5171a68d45a500cbce692a2ad0d6",
+   "review": {
+    "verdicts": [
+     {
+      "run_id": "01M6NYETE8YH262FKZSC020R23",
+      "criterion": 0,
+      "text": "kestrane-o2: 取り込まれた tree の out/o2.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C06 o2` を実行すると作れる",
+      "kind": "reviewer",
+      "pass": true,
+      "reason": "reviewer(01M6NYETQ48SDAAMKXDZ0DEVYZ): stub reviewer: 1 command check(s) passed and HEAD:out/o2.txt has 114 bytes"
+     },
+     {
+      "run_id": "01M6NYETE8YH262FKZSC020R23",
+      "criterion": 1,
+      "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"` exits 0",
+      "kind": "command",
+      "pass": true,
+      "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \\\"$d/out/o2.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+     },
+     {
+      "run_id": "01M6NYETE8YH262FKZSC020R23",
+      "criterion": 2,
+      "text": null,
+      "kind": "implicit",
+      "pass": true,
+      "reason": "reviewer(01M6NYETQ48SDAAMKXDZ0DEVYZ): stub reviewer: 1 commit(s) in 6e46edb3f328a10e9e36cb2873b054f854ea11ea..872666d27b171458c629ab15f98fbf824adca45e"
+     }
+    ],
+    "command_checks": [
+     {
+      "run_id": "01M6NYETE8YH262FKZSC020R23",
+      "criterion": 1,
+      "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"",
+      "expect_exit": 0,
+      "exit": 0,
+      "timed_out": false,
+      "pass": true,
+      "source": "public/C06/case.json#o2.acceptance"
+     }
+    ],
+    "discrepancies": []
+   }
+  }
+ ],
+ "effects": [
+  {
+   "logical_id": "C06:o1:publish",
+   "root": "o1",
+   "at": 33
+  }
+ ],
+ "human_ops": [
+  {
+   "at": 0,
+   "class": "stimulus",
+   "kind": "project_request"
+  },
+  {
+   "at": 33,
+   "class": "required",
+   "kind": "approval",
+   "approval_id": "01M6NYDT2620QTE75YJ7QJRHR4",
+   "decision": "once"
+  },
+  {
+   "at": 65,
+   "class": "required",
+   "kind": "approval",
+   "approval_id": "01M6NYESE9YX00R3B7GE3ZB8SH",
+   "decision": "denied"
+  }
+ ],
+ "faults": [
+  {
+   "at": 32,
+   "kind": "approval_wait",
+   "approval_id": "01M6NYDT2620QTE75YJ7QJRHR4"
+  },
+  {
+   "at": 64,
+   "kind": "approval_wait",
+   "approval_id": "01M6NYESE9YX00R3B7GE3ZB8SH"
+  }
+ ],
+ "invocations": [
+  {
+   "at": 31,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 32,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 33,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 33,
+   "role": "reviewer",
+   "usage": null
+  },
+  {
+   "at": 34,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 34,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 64,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 64,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 65,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 66,
+   "role": "reviewer",
+   "usage": null
+  },
+  {
+   "at": 66,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 66,
+   "role": "cos",
+   "usage": null
+  }
+ ],
+ "actors": [
+  {
+   "actor": "human",
+   "at": 0
+  },
+  {
+   "actor": "worker",
+   "at": 31
+  },
+  {
+   "actor": "cos",
+   "at": 32
+  },
+  {
+   "actor": "worker",
+   "at": 33
+  },
+  {
+   "actor": "reviewer",
+   "at": 33
+  },
+  {
+   "actor": "cos",
+   "at": 34
+  },
+  {
+   "actor": "cos",
+   "at": 34
+  },
+  {
+   "actor": "worker",
+   "at": 64
+  },
+  {
+   "actor": "cos",
+   "at": 64
+  },
+  {
+   "actor": "worker",
+   "at": 65
+  },
+  {
+   "actor": "reviewer",
+   "at": 66
+  },
+  {
+   "actor": "cos",
+   "at": 66
+  },
+  {
+   "actor": "cos",
+   "at": 66
+  }
+ ],
+ "statements": [],
+ "questions": [],
+ "cos_launch_rejected": 0,
+ "running_untracked": 0,
+ "leak_hits": [],
+ "achieved_at": 96,
+ "controller_achieved": true,
+ "events_append_only": true,
+ "usage": {
+  "tokens": null,
+  "quota": null,
+  "wall_secs": 103,
+  "missing": null
+ },
+ "virtual_secs_to_reach": 96
+}

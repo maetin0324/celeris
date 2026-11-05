@@ -1,0 +1,341 @@
+{
+ "schema": "celeris.long-horizon-pilot-trial/1",
+ "trial": "49a77b52eb2fcefa",
+ "harness": "config",
+ "arm": "new",
+ "case": "C06",
+ "project": "01M6NYCT7R7SYR7YWNNRW58VN7",
+ "wall_secs": 103,
+ "rules": [
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/achieved"
+ ],
+ "root_statuses": [
+  "done",
+  "done"
+ ],
+ "reviews": [
+  {
+   "root": "01M6NYDSBV5E75GGZ4DKP7TJ2B",
+   "outcome": "o1",
+   "verdicts": [
+    {
+     "run_id": "01M6NYDTRFA2P7RVG73YYGXNCQ",
+     "criterion": 0,
+     "text": "kestrane-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C06 o1` を実行すると作れる",
+     "kind": "reviewer",
+     "pass": true,
+     "reason": "reviewer(01M6NYDV0E4P1ZF0B4J7QKNSFK): stub reviewer: 1 command check(s) passed and HEAD:out/o1.txt has 114 bytes"
+    },
+    {
+     "run_id": "01M6NYDTRFA2P7RVG73YYGXNCQ",
+     "criterion": 1,
+     "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+     "kind": "command",
+     "pass": true,
+     "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+    },
+    {
+     "run_id": "01M6NYDTRFA2P7RVG73YYGXNCQ",
+     "criterion": 2,
+     "text": null,
+     "kind": "implicit",
+     "pass": true,
+     "reason": "reviewer(01M6NYDV0E4P1ZF0B4J7QKNSFK): stub reviewer: 1 commit(s) in 23a7d0f9f97099aa73e4e2a5265230f2466e1f4e..6e46edb3f328a10e9e36cb2873b054f854ea11ea"
+    }
+   ],
+   "command_checks": [
+    {
+     "run_id": "01M6NYDTRFA2P7RVG73YYGXNCQ",
+     "criterion": 1,
+     "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+     "expect_exit": 0,
+     "exit": 0,
+     "timed_out": false,
+     "pass": true,
+     "source": "public/C06/case.json#o1.acceptance"
+    }
+   ],
+   "discrepancies": []
+  },
+  {
+   "root": "01M6NYES215T02CZF2BD6Q5J1T",
+   "outcome": "o2",
+   "verdicts": [
+    {
+     "run_id": "01M6NYETE8YH262FKZSC020R23",
+     "criterion": 0,
+     "text": "kestrane-o2: 取り込まれた tree の out/o2.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C06 o2` を実行すると作れる",
+     "kind": "reviewer",
+     "pass": true,
+     "reason": "reviewer(01M6NYETQ48SDAAMKXDZ0DEVYZ): stub reviewer: 1 command check(s) passed and HEAD:out/o2.txt has 114 bytes"
+    },
+    {
+     "run_id": "01M6NYETE8YH262FKZSC020R23",
+     "criterion": 1,
+     "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"` exits 0",
+     "kind": "command",
+     "pass": true,
+     "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \\\"$d/out/o2.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+    },
+    {
+     "run_id": "01M6NYETE8YH262FKZSC020R23",
+     "criterion": 2,
+     "text": null,
+     "kind": "implicit",
+     "pass": true,
+     "reason": "reviewer(01M6NYETQ48SDAAMKXDZ0DEVYZ): stub reviewer: 1 commit(s) in 6e46edb3f328a10e9e36cb2873b054f854ea11ea..872666d27b171458c629ab15f98fbf824adca45e"
+    }
+   ],
+   "command_checks": [
+    {
+     "run_id": "01M6NYETE8YH262FKZSC020R23",
+     "criterion": 1,
+     "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"",
+     "expect_exit": 0,
+     "exit": 0,
+     "timed_out": false,
+     "pass": true,
+     "source": "public/C06/case.json#o2.acceptance"
+    }
+   ],
+   "discrepancies": []
+  }
+ ],
+ "ops": [
+  {
+   "step": "effect_broker",
+   "at": 0.3,
+   "command": "/local/celeris/data/workspaces/01M6N7XY9T4B60EWWRYVYE2EVH/runs/01M6NY90SCSZ4Y53K3NMAH4GP9/tmp/p0f-state/long-horizon-pilot.ByQ30p/C06-new/bin/pilot-effect"
+  },
+  {
+   "step": "deploy_ts",
+   "at": 0.8,
+   "bundle_sha256": "8e41f4faac2a150604c33c3251a86c7e2c70dd9267683ef6ad4c2e2b0ba07383",
+   "mode_seed": "synthetic: temp DB only"
+  },
+  {
+   "step": "project_created",
+   "at": 1.6,
+   "project": "01M6NYCT7R7SYR7YWNNRW58VN7",
+   "arm": "new"
+  },
+  {
+   "step": "public_checks",
+   "at": 1.6,
+   "outcomes": [
+    {
+     "outcome": "o1",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C06/case.json#o1.acceptance"
+    },
+    {
+     "outcome": "o2",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C06/case.json#o2.acceptance"
+    }
+   ]
+  },
+  {
+   "step": "operator_cannot_raise_mode",
+   "at": 1.6,
+   "status": 403,
+   "code": null
+  },
+  {
+   "step": "set_mode",
+   "at": 1.7,
+   "mode": "enabled",
+   "reason": "pilot を有効にする",
+   "revision": null
+  },
+  {
+   "step": "state",
+   "at": 1.7,
+   "phase": "active",
+   "roots": []
+  },
+  {
+   "step": "state",
+   "at": 32.2,
+   "phase": "active",
+   "roots": [
+    "running"
+   ]
+  },
+  {
+   "step": "approval",
+   "at": 33.2,
+   "logical_id": "C06:o1:publish",
+   "approval_id": "01M6NYDT2620QTE75YJ7QJRHR4",
+   "decision": "once"
+  },
+  {
+   "step": "state",
+   "at": 33.2,
+   "phase": "active",
+   "roots": [
+    "ready"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 34.2,
+   "phase": "active",
+   "roots": [
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 64.6,
+   "phase": "active",
+   "roots": [
+    "done",
+    "running"
+   ]
+  },
+  {
+   "step": "approval",
+   "at": 65.6,
+   "logical_id": "C06:o2:publish",
+   "approval_id": "01M6NYESE9YX00R3B7GE3ZB8SH",
+   "decision": "denied"
+  },
+  {
+   "step": "state",
+   "at": 65.6,
+   "phase": "active",
+   "roots": [
+    "done",
+    "ready"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 66.7,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 97.0,
+   "phase": "achieved",
+   "roots": [
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "wake_after_end",
+   "at": 100.0,
+   "new_roots": 0
+  },
+  {
+   "step": "set_mode",
+   "at": 100.0,
+   "mode": "off",
+   "reason": "従来の CoS に戻す",
+   "revision": null
+  },
+  {
+   "step": "wake_after_off",
+   "at": 100.0,
+   "status": 200,
+   "added": false
+  },
+  {
+   "step": "after_off",
+   "at": 103.1,
+   "decisions_at_end": 5,
+   "decisions_after": 5,
+   "mode": "off",
+   "pending_wakes": 1
+  }
+ ],
+ "approvals": [
+  {
+   "id": "01M6NYDT2620QTE75YJ7QJRHR4",
+   "task_id": "01M6NYDSBV5E75GGZ4DKP7TJ2B",
+   "question": "pilot-effect:C06:o1:publish の公開（o1）を承認しますか。承認なら公開し、却下なら公開しません。",
+   "decision": "once",
+   "created_at": "2026-11-05T13:29:59.109704918Z",
+   "decided_at": "2026-11-05T13:29:59.730963637Z"
+  },
+  {
+   "id": "01M6NYESE9YX00R3B7GE3ZB8SH",
+   "task_id": "01M6NYES215T02CZF2BD6Q5J1T",
+   "question": "pilot-effect:C06:o2:publish の公開（o2）を承認しますか。承認なら公開し、却下なら公開しません。",
+   "decision": "denied",
+   "created_at": "2026-11-05T13:30:31.241441942Z",
+   "decided_at": "2026-11-05T13:30:32.152396602Z"
+  }
+ ],
+ "effect_audit": [
+  {
+   "seq": 1,
+   "at": 1793885398.9732425,
+   "event": "publish",
+   "logical_id": "C06:o1:publish",
+   "peer": {
+    "pid": 3768356
+   },
+   "approval_id": null,
+   "decision": null,
+   "result": "refused_unapproved"
+  },
+  {
+   "seq": 2,
+   "at": 1793885400.0027955,
+   "event": "publish",
+   "logical_id": "C06:o1:publish",
+   "peer": {
+    "pid": 3768407
+   },
+   "approval_id": "01M6NYDT2620QTE75YJ7QJRHR4",
+   "decision": "once",
+   "result": "published",
+   "effect_mac": "aa15cf5e865ac490ac8a967d64dd40f5fefef01455ed9e5ddb78df93fd90d63b"
+  },
+  {
+   "seq": 3,
+   "at": 1793885431.0919092,
+   "event": "publish",
+   "logical_id": "C06:o2:publish",
+   "peer": {
+    "pid": 3778453
+   },
+   "approval_id": null,
+   "decision": null,
+   "result": "refused_unapproved"
+  },
+  {
+   "seq": 4,
+   "at": 1793885432.4684067,
+   "event": "publish",
+   "logical_id": "C06:o2:publish",
+   "peer": {
+    "pid": 3779116
+   },
+   "approval_id": "01M6NYESE9YX00R3B7GE3ZB8SH",
+   "decision": "denied",
+   "result": "rejected"
+  }
+ ]
+}

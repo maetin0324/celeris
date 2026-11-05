@@ -1,0 +1,2 @@
+long-horizon-pilot-llm: the real LLM pilot needs a person's approval (LONG_HORIZON_PILOT_LLM_APPROVED=1)
+exit=2

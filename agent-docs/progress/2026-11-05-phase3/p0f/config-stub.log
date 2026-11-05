@@ -1,0 +1,4 @@
+long-horizon-pilot-llm: case C06 arm new
+long-horizon-pilot-llm: case C08 arm new
+long-horizon-grade: tier llm_pilot, 2 trials, written to /local/celeris/data/workspaces/01M6N7XY9T4B60EWWRYVYE2EVH/runs/01M6NY90SCSZ4Y53K3NMAH4GP9/tmp/p0f-config-stub/grade
+long-horizon-pilot-llm: wrote /local/celeris/data/workspaces/01M6N7XY9T4B60EWWRYVYE2EVH/runs/01M6NY90SCSZ4Y53K3NMAH4GP9/tmp/p0f-config-stub (harness config-stub)

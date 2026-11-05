@@ -1,0 +1,2 @@
+long-horizon-pilot-llm: refusing to start LLM runs inside a Celeris worker run (CELERIS_RUN_ID is set)
+exit=2

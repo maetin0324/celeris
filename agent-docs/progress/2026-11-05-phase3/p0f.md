@@ -135,3 +135,9 @@ verdict の fail は 0 件。合否以外の不備を次のとおり分類した
 - 許可の上限「1,000,000 token / 試行」の数え方（input+output か cache 込みか）を人が決める。
 - old.passive の 2 試行は許可されていないので未実施。
 - 24〜72h の実稼働と本番導入は範囲外（別の人の許可）。
+
+### 検査（attempt 2、提出時の HEAD、基準 `git merge-base HEAD main`。main への rebase の後に実行）
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」、文書検査の self-test ok）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。`test -f agent-docs/progress/2026-11-05-phase3/p0f.md` → exit 0。
+- 最新 main でも `driver.py` の 2 か所（611 行の key 名、618 行の `"usage": None`）は直っていないことを確かめた。

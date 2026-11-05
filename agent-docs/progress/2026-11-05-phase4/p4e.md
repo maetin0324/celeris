@@ -73,6 +73,8 @@ skill・prompt の source（`cos_chat.rs`・`preamble.rs`・`cos_chat/launch.rs`
 ## 変更（commit の件名）
 - `p4e: 統括 CoS の旧新 paired 比較の腕の固定・runner・preflight・採点と集計 v2 を足す`
 - `p4e: 進捗と stub 段の raw を書く`
+- `p4e: 進捗の表から hash に見える内容 hash を除く`
+- `p4e: 進捗に文書の検査の結果を書く`
 
 主な file: `scripts/dev/general-cos-compare/compare.py`（pin・plan・preflight・run・grade-sheet・grade-auto・observations）、`scripted_cos.py`（stub の CoS と worker）、`test_compare.py`、`scripts/dev/general_cos_eval.py`（v2 に置き換え、v1 の行は拒否）、`tests/fixtures/general-cos-eval/{cases,arms,limits}.json`。
 
@@ -81,7 +83,7 @@ skill・prompt の source（`cos_chat.rs`・`preamble.rs`・`cos_chat/launch.rs`
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `python3 scripts/dev/test_general_cos_eval.py` → exit 0、13 tests OK。`python3 scripts/dev/general-cos-compare/test_compare.py` → exit 0、17 tests OK。
 - `cargo nextest run --workspace -E 'test(milestone_lifecycle_endpoints_are_gone)'` → 1 passed（旧 milestones API の 410 は維持）。
-- 文書の検査と `test -f agent-docs/progress/2026-11-05-phase4/p4e.md` は commit の後に実行した（最後の節）。
+- `sh scripts/dev/progress-index.sh --check`・`sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`git diff --check refs/heads/main`・`test -f agent-docs/progress/2026-11-05-phase4/p4e.md` → すべて exit 0。progress-index は最初、表の内容 hash の先頭 12 桁を commit hash とみなして exit 1 だった。manifest の欄の参照に置き換えて直した。
 
 ## 失敗ケース（この run で出て直したもの）
 - 試行の daemon が host の `~/.local/celeris/releases` を読み、未昇格の release が受信箱に入って CoS run が増えた。`[selfdeploy] releases_dir` と `[maintenance] disk_watch = []` を試行の dir に向けて直した。

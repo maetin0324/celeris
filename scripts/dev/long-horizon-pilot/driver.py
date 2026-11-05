@@ -26,6 +26,19 @@ OPERATOR_TOKEN = "pilot-operator-token"
 ACTIVE = {"draft", "ready", "running", "blocked", "reviewing"}
 
 
+SEED_BRANCH = "main"
+
+
+def make_git_seed(seed, dest):
+    """seed を dest にコピーし、git init と初回 commit を作る（dest は案件の repo の primary）。"""
+    shutil.copytree(seed, dest, dirs_exist_ok=True)
+    env = {**os.environ, "GIT_AUTHOR_NAME": "pilot", "GIT_AUTHOR_EMAIL": "pilot@localhost",
+           "GIT_COMMITTER_NAME": "pilot", "GIT_COMMITTER_EMAIL": "pilot@localhost"}
+    for cmd in (["init", "-q", "-b", SEED_BRANCH], ["add", "-A"],
+                ["commit", "-q", "--allow-empty", "-m", "pilot: repo-seed"]):
+        subprocess.run(["git", "-C", str(dest), *cmd], check=True, env=env, capture_output=True)
+
+
 def die(msg):
     print(f"long-horizon-pilot driver: FAIL: {msg}", file=sys.stderr)
     sys.exit(1)
@@ -197,8 +210,9 @@ max_tokens_per_day = {a.max_tokens_per_day}
 
     # ---- setup ----
     def seed_repo(self):
+        """repo-seed/ を git 作業場所にする（git init と初回 commit）。成果は stub／worker が commit して target branch に載る。"""
         seed = self.fixtures / "public" / self.a.case / "repo-seed"
-        shutil.copytree(seed, self.repo, dirs_exist_ok=True)
+        make_git_seed(seed, self.repo)
 
     def deploy_ts(self):
         """本物の bundle を配備し、一時 DB の領域 project_controller を ts にする。
@@ -239,7 +253,10 @@ max_tokens_per_day = {a.max_tokens_per_day}
             "title": f"pilot:{a.case}-{a.seed}", "request": self.request,
             "workspace": {"kind": "local", "path": str(self.repo)}})
         self.pid = project["id"] if "id" in project else project["project"]["id"]
-        # root の done を取り込み済みにする（作業 tree は git でない dir なので取り込みは「該当なし」で閉じる）。
+        # 作業 tree は git。案件の repo に登録し、root の done を IntegrationMerged で取り込み済みにする。
+        self.api("POST", f"/api/v1/projects/{self.pid}/repos", {
+            "name": "trial-repo", "kind": "git", "location": {"kind": "local", "path": str(self.repo)},
+            "default_branch": SEED_BRANCH, "is_primary": True})
         self.api("PATCH", f"/api/v1/projects/{self.pid}", {"auto_integrate": True})
         self.init_digest = hashlib.sha256((self.request + self.tree_digest()).encode()).hexdigest()
         self.deploy_ts()

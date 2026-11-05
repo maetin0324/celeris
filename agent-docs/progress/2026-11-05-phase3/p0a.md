@@ -110,13 +110,18 @@ P1-H・P1-I・P2-J の受入はこの ADR の不変条件と直接の対応が�
 
 ## 変更（commit の件名）
 - `p0a: 達成判定の 6 層の齟齬と不変条件 I1〜I12 を ADR と進捗に固定する`
+- `p0a: 進捗に検査の結果を書く`
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - 既存の修正の試験の再実行（生記録 `p0a/existing-tests-summary.txt`、対象の一覧 `p0a/existing-tests-list.txt`）:
   - `cargo nextest run -p task-ops -p task-dispatch -p celeris-campaign -E 'test(/root_row_/) | test(/review_check_wins/) | test(/long_horizon_public_contract|public_contract/) | test(/^roadmap::/)' --no-fail-fast` → exit 0、10 passed
   - `cargo nextest run -p celeris --test project_controller_e2e -E 'test(/core_s5/)'` → exit 0、2 passed（control-ts を `pnpm install --offline --frozen-lockfile` した後）
   - `cargo nextest run -p task-api --test lifecycle -E 'test(/milestone_lifecycle_endpoints_are_gone|milestones_are_gone/)'` → exit 0、2 passed
-- 検査 3 本と `test -f` の結果は報告本文（result.json の evidence）に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（差分が文書だけなので「試験対象の変更なし」。文書検査 check-human-text 0 findings・progress-index・commit-hashes・doc-links は ok）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `sh scripts/dev/progress-index.sh --check` → ok
+- `test -f agent-docs/progress/2026-11-05-phase3/p0a.md` → exit 0
 
 ## 失敗ケース
 - この task で落ちた検査は無い。発見した欠陥（gap の申告を信じる `validate`、効果の無い `mark_milestone`）は既存の試験では検出されない（陰性の試験が無い）。試験は P0-B が K1b・K6 で足す。

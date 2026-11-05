@@ -459,7 +459,8 @@ async fn long_horizon_pilot_same_failure_stops_the_loop() {
     p.finish(test, json!({"failed_roots": failed}));
 }
 
-/// token の 1 日の上限で止まり、日が変わっても人が mode を置き直すまで止まったまま。置き直せば次へ進む。
+/// token の 1 日の上限を大きく超える（上限の 2 倍以上。P1-G の危険な超過）と止まり、日が変わっても人が mode を
+/// 置き直すまで止まったまま。置き直せば次へ進む。上限の 2 倍未満の超過の翌日の再評価は `project_recovery_k40_*`。
 #[tokio::test]
 async fn long_horizon_pilot_cost_cap_stops_until_human_resets() {
     let test = "long_horizon_pilot_cost_cap_stops_until_human_resets";
@@ -470,7 +471,7 @@ async fn long_horizon_pilot_cost_cap_stops_until_human_resets() {
     p.run_until(p.secs() + STEP_SECS);
     let roots = p.roots();
     assert_eq!(roots.len(), 1);
-    p.seed_tokens(&roots[0], "r-over", 1_500);
+    p.seed_tokens(&roots[0], "r-over", 2_500);
     p.set_status(roots[0].id, Status::Done, "review_pass");
     p.run_until(p.secs() + 2 * STEP_SECS);
     assert_eq!(p.phase(), ControllerPhase::Blocked);
@@ -480,7 +481,7 @@ async fn long_horizon_pilot_cost_cap_stops_until_human_resets() {
     assert_eq!(
         p.roots().len(),
         1,
-        "a new day does not restart it by itself"
+        "a new day does not restart a dangerous overrun by itself"
     );
     assert_eq!(p.escalations(), 1);
     let stopped = p.rules();
@@ -495,7 +496,7 @@ async fn long_horizon_pilot_cost_cap_stops_until_human_resets() {
     p.run_until(p.secs() + 2 * STEP_SECS);
     p.finish(
         test,
-        json!({"cap_tokens": 1000, "used_tokens": 1500, "rules_at_stop": stopped}),
+        json!({"cap_tokens": 1000, "used_tokens": 2500, "rules_at_stop": stopped}),
     );
 }
 

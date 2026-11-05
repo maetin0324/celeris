@@ -761,3 +761,64 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"
     assert!(input.contains("`cos-operator`"), "{input}");
     assert!(input.contains("cos-inbox-triage"), "{input}");
 }
+
+/// Fake harness that finishes every chat run with a fixed usage (no LLM).
+struct UsageAdapter;
+
+#[async_trait]
+impl WorkerAdapter for UsageAdapter {
+    fn id(&self) -> &str {
+        "fake"
+    }
+
+    async fn run(
+        &self,
+        _req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: "ok".into(),
+                evidence: vec![],
+                usage: Some(task_core::Usage {
+                    input_tokens: Some(100),
+                    output_tokens: Some(20),
+                    ..Default::default()
+                }),
+            },
+            exit_code: Some(0),
+        })
+    }
+
+    fn with_env(&self, _extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
+        Some(Arc::new(UsageAdapter))
+    }
+}
+
+/// 2026-11-05-phase4-cos-usage-empty-route: a project CoS chat run records `usage_json` through the
+/// same finish path as the general CoS, and `project_guard` sums it into the project's budget.
+#[tokio::test]
+async fn project_cos_chat_run_records_usage_and_counts_in_project_budget() {
+    let (_data, store, mut d, _general) = fixture("fake", Arc::new(UsageAdapter));
+    let thread = crate::test_support::project_cos_thread(&store, "usage-project");
+    let project_id = store
+        .chat_thread_get(&thread)
+        .expect("thread")
+        .expect("exists")
+        .project_id
+        .expect("project thread");
+    post(&store, &d, &thread, "one", vec![]);
+    let finished = run(&mut d, &store, &thread).await;
+    let usage = finished
+        .usage
+        .expect("usage_json is recorded for a project CoS run");
+    assert_eq!(usage.input_tokens, Some(100));
+    assert_eq!(usage.output_tokens, Some(20));
+    let summed = store
+        .project_run_usage_between(&project_id, "0000-01-01T00:00:00Z", "9999-01-01T00:00:00Z")
+        .expect("project usage");
+    assert_eq!(summed.len(), 1, "{summed:?}");
+    assert_eq!(summed[0].input_tokens, Some(100));
+}

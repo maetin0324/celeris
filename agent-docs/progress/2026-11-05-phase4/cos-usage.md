@@ -5,7 +5,7 @@ completed: 2026-11-05
 ---
 # 案件 CoS の chat run の usage が null（cos_usage_null 14 件）
 
-結論: daemon の不具合ではなく、pilot が `[cos].route_candidates = []` で起動していた可能性が高い（推定。下の未解決を参照）。daemon は変えず、driver に空 route を拒む guard を足した。ADR は `agent-docs/adr/2026-11-05-phase4-cos-usage-empty-route.md`（実装より先に書いた）。
+結論: daemon の不具合ではない（fake harness の試験で案件 CoS の usage_json 記録と予算の和への算入を確認）。pilot が `[cos].route_candidates = []` で起動していたことが原因と見る（再実行の一時 DB が残っておらず、14 件の chat_runs の state・reason は未確認）。daemon は変えず、driver に空 route を拒む guard を足した。ADR は `agent-docs/adr/2026-11-05-phase4-cos-usage-empty-route.md`（実装より先に書いた）。
 
 ## 原因の根拠
 - usage の記録経路は案件 CoS と統括 CoS で共通: `crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs` の `run_attempts` → `record_attempt`（`sink.record_usage(outcome_usage(..))`）→ `sink.rs` の `ChatRunSink::finish` が `chat_run_finish_with_telemetry(.., state.usage.as_ref(), ..)` を呼ぶ。
@@ -28,8 +28,9 @@ completed: 2026-11-05
 - 実行 log: /local/celeris/data/scratch/p0f-pilot/llm2-run.log（再実行の一時 DB は残っていない）。
 
 ## 試験
-- fake harness で usage を出す案件 CoS run の再現試験は、この run の turn 予算内で書けていない（未実施）。原因が config 側のため daemon のコードは変えていない。project_guard の和は `project_run_usage_between` が chat_runs.usage_json を含むことをコードで確認しただけ。
+- 再現試験を足した: `crates/task-dispatch/src/dispatcher/cos_chat/harness_tests.rs` の `project_cos_chat_run_records_usage_and_counts_in_project_budget`。usage（input 100・output 20）を返す fake adapter で案件 CoS thread の chat run を回し、`ChatRun.usage`（chat_runs.usage_json）が null でないこと、`store.project_run_usage_between`（project_guard の予算の和の入力）が 1 件・input 100 を返すことを確かめる。実 LLM は使わない。
+- command: `RUSTY_V8_ARCHIVE=/local/celeris/data/scratch/rusty-v8/v150.4.0/librusty_v8_simdutf_release_x86_64-unknown-linux-gnu.a.gz cargo nextest run -p task-dispatch project_cos_chat_run_records_usage` → 1 passed（v8 の build が空の out dir で落ちたため `cargo clean -p v8` してから再実行した）。
+- これで「案件 CoS の finish 経路は usage を記録し、予算の和に入る」は daemon の試験で確定した。pilot で null になったのは、harness が起動せず usage が出なかった run（空 route で起動できない run を含む）と整合する。daemon のコードは変えていない。
 
 ## 未解決
 - 14 件の run の state・reason が未確認。operator が再実行時に chat_runs の state と reason を記録すれば D2 を確定できる。
-- 上の再現試験（fake harness → usage_json 非 null → project_guard の和）は後続で足す余地がある。

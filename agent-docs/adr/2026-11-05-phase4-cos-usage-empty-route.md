@@ -13,3 +13,6 @@ P0-F の再実行（C06・C08 の new 腕）で、案件 CoS thread の chat_run
 
 ## 未確認
 再実行の一時 DB（state2）は残っておらず、14 件の run の state・reason は直接見ていない。operator が実際に渡した引数も log に無い。D2 は code と config からの推定。
+
+## 付記: 試験による確認
+案件 CoS thread の chat run が usage を記録し、`project_run_usage_between` の和に入ることを `harness_tests.rs` の `project_cos_chat_run_records_usage_and_counts_in_project_budget`（fake adapter、実 LLM なし）で固定した。daemon 側の修正は不要と確定した。

@@ -55,6 +55,13 @@ class Trial:
         self.case = case
         self.outcomes = case["request_outcomes"]
         rows = [{k: o[k] for k in ("id", "title", "acceptance", "depends_on")} for o in self.outcomes]
+        scenario = json.loads((self.fixtures / "oracle" / a.case / "scenario.json").read_text())
+        # 公開相当の effect を要する課題だけ stub を繋ぐ（C06）。承認の方針は operator 側の台本で、worker には渡さない。
+        self.effect_kinds = {o["id"]: o["effect"] for o in scenario["outcomes"] if o.get("effect") == "publish"}
+        self.approvals = {o["id"]: o.get("approval", "approve") for o in scenario["outcomes"] if o["id"] in self.effect_kinds}
+        self.effect_dir = self.home / "effect-stub"
+        self.approval_ops = []
+        self.approval_faults = []
         self.request = (f"pilot ベンチの案件。\n```celeris-outcomes\n{json.dumps(rows, ensure_ascii=False)}\n```\n"
                         "成果は作業 tree の out/<outcome id>.txt に書く。\n")
 
@@ -69,7 +76,11 @@ class Trial:
             oracle = json.loads((self.fixtures / "oracle" / a.case / "scenario.json").read_text())
             answers.write_text(json.dumps(oracle["content"]))
             cmd = ["python3", "-I", str(pathlib.Path(__file__).with_name("stub_harness.py")),
-                   "--answers", str(answers)]
+                   "--answers", str(answers), "--case", a.case]
+            if self.effect_kinds:
+                cmd += ["--effects-dir", str(self.effect_dir), "--effect-kinds", json.dumps(self.effect_kinds)]
+                if a.stub_early_publish:
+                    cmd.append("--early-publish")
             harness = f"""
 [adapters.fake]
 command = {json.dumps(cmd)}
@@ -232,6 +243,10 @@ max_tokens_per_day = {a.max_tokens_per_day}
     def run(self):
         a = self.a
         self.seed_repo()
+        if self.effect_kinds:
+            for sub in ("pending", "decisions"):
+                (self.effect_dir / sub).mkdir(parents=True, exist_ok=True)
+            (self.effect_dir / "effects.jsonl").write_text("")
         self.write_config([])
         self.start()
         self.t0 = time.time()
@@ -293,6 +308,7 @@ max_tokens_per_day = {a.max_tokens_per_day}
         last = None
         quiet_since = time.time()
         while time.time() < deadline:
+            self.serve_approvals()
             view = self.controller()
             phase = view["state"]["phase"]
             roots = self.root_rows()
@@ -310,6 +326,36 @@ max_tokens_per_day = {a.max_tokens_per_day}
                 return
             time.sleep(1)
         self.op("wall_limit", secs=self.a.max_wall_secs)
+
+    def serve_approvals(self):
+        """承認待ちの effect を operator の台本（approve / reject）で解く。承認待ちと承認を facts に残す。"""
+        if not self.effect_kinds:
+            return
+        for pending in sorted((self.effect_dir / "pending").glob("*.json")):
+            decision = self.effect_dir / "decisions" / pending.name
+            if decision.exists():
+                continue
+            logical = json.loads(pending.read_text())["logical_id"]
+            outcome = logical.split(":")[1]
+            now = time.time()
+            self.approval_faults.append(max(0, int(json.loads(pending.read_text())["at"] - self.t0)))
+            self.approval_ops.append(max(0, int(now - self.t0)))
+            decision.write_text(json.dumps({"decision": self.approvals[outcome], "at": now}))
+            self.op("approval", logical_id=logical, decision=self.approvals[outcome])
+
+    def read_effects(self):
+        """effect stub の記録（worker の外）を読む。読めなければ観測失敗で、0 件にはしない。"""
+        if not self.effect_kinds:
+            return []
+        record = self.effect_dir / "effects.jsonl"
+        if not record.exists():
+            die("observation_failed: the effect stub record is missing")
+        rows = []
+        for line in record.read_text().splitlines():
+            e = json.loads(line)
+            rows.append({"logical_id": e["logical_id"], "root": e["logical_id"].split(":")[1],
+                         "at": max(0, int(e["at"] - self.t0))})
+        return rows
 
     def after_end(self):
         pid = self.pid
@@ -411,12 +457,15 @@ max_tokens_per_day = {a.max_tokens_per_day}
         wall = int(time.time() - self.t0)
         usage = {"tokens": tokens if tokens_known else None, "quota": None, "wall_secs": wall,
                  "missing": "tier=stub" if a.harness == "stub" else None}
+        effects = self.read_effects()
         facts = {
             "schema": "celeris.long-horizon-facts/1", "bench_version": json.loads(
                 (self.fixtures / "oracle" / a.case / "oracle.json").read_text())["bench_version"],
             "dataset": "long_horizon_llm_pilot", "case": a.case, "seed": a.seed, "init_digest": self.init_digest,
-            "horizon_secs": a.max_wall_secs, "roots": roots, "effects": [],
-            "human_ops": [{"at": 0, "class": "stimulus", "kind": "project_request"}], "faults": [],
+            "horizon_secs": a.max_wall_secs, "roots": roots, "effects": effects,
+            "human_ops": [{"at": 0, "class": "stimulus", "kind": "project_request"}] + [
+                {"at": at, "class": "required", "kind": "approval"} for at in self.approval_ops],
+            "faults": [{"at": at, "kind": "approval_wait"} for at in self.approval_faults],
             "invocations": invocations,
             "actors": [{"actor": "human", "at": 0}] + [{"actor": i["role"], "at": i["at"]} for i in invocations],
             "statements": [], "questions": questions, "cos_launch_rejected": 0, "running_untracked": running,
@@ -463,6 +512,8 @@ def main():
     p.add_argument("--max-roots-per-day", type=int, default=10)
     p.add_argument("--max-tokens-per-day", type=int, default=1_000_000)
     p.add_argument("--max-wall-secs", type=int, default=300)
+    p.add_argument("--stub-early-publish", action="store_true",
+                   help="陰性の試験: stub が承認を待たずに publish を記録する")
     p.add_argument("--old-quiet-secs", type=int, default=10)
     a = p.parse_args()
     trial = Trial(a)

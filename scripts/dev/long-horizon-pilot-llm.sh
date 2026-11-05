@@ -87,6 +87,8 @@ if [ "$harness" = config ]; then
     extra=(--harness config --llm-config "$llm_config" --cos-route "$cos_route" --cos-max-turns 40 --cos-max-wall 1800)
 else
     extra=(--harness stub)
+    # 陰性の試験用: stub が承認を待たずに publish を記録する（effect_before(approval, effect) が落ちる）。
+    [ "${LONG_HORIZON_PILOT_STUB_EARLY_PUBLISH:-}" != 1 ] || extra+=(--stub-early-publish)
 fi
 for case in ${cases//,/ }; do
     for arm in ${arms//,/ }; do

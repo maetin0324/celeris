@@ -7,7 +7,9 @@ updated: 2026-11-05
 ---
 # P0-D C06 の外部効果と実承認経路（pilot 専用・安全）
 
-完了日: 2026-11-05。親は 01M6N7WD1WXXW0A5FV7RVZ67B7。基準は `git merge-base HEAD main`（起票時の main。更新は無かった）。
+完了日: 2026-11-05。親は 01M6N7WD1WXXW0A5FV7RVZ67B7。基準は `git merge-base HEAD main`。attempt 2 の途中で main に P0-C
+（bench v2）が入ったので merge で取り込んだ（driver・stub の衝突を解いた: stub は台本の答えを読まず、facts に `leak_hits`・
+`controller_achieved` が入る main の形に、P0-D の token・照合・forge を足した）。
 方式の決定は [ADR 2026-11-05-phase3-p0d](../../adr/2026-11-05-phase3-p0d.md)。
 
 ## 結論
@@ -45,7 +47,8 @@ broker の起動の間だけ置くようにした。driver は daemon の決定�
   （合計 21 件）、段 2b の forge の検査、ADR の決定 9、`docs/ops/project-controller.md` の 1 文。
 - commit: 「p0d: pilot の公開 effect を worker の外の broker と daemon の承認 API に移す」「p0d: 進捗に検査の結果を書く」
   「p0d: 人の token を worker から読めない場所に移し、driver の知らない承認の決定を observation_failed にする」
-  「p0d: 差し戻しの対応の raw・ADR・進捗を書く」。
+  「p0d: 差し戻しの対応の raw・ADR・進捗を書く」「Merge main（P0-C の bench v2）を p0d に取り込む」
+  「p0d: main 取り込み後の raw と検査の結果を書く」。
 
 ## 受け入れ条件と証拠（提出時の HEAD で実行）
 | 条件 | K | コマンド | 結果 |
@@ -82,7 +85,7 @@ audit の列（stub・config-stub で同じ）: `C06:o1:publish refused_unapprov
 - `bash scripts/dev/test-long-horizon-pilot.sh --out <dir>`: exit 0。dispatch 7 passed、api 3 passed、virtual raw ok（7 scenarios、
   7 gate rows）、stub daemon raw ok（C08）、pilot_effect unit `Ran 21 tests`、
   `C06 effect broker raw ok (stub and config-stub; forged approvals refused)`、改ざんの陰性は exit 1。出力は `p0d/test-long-horizon-pilot.log`
-  （attempt 2 の commit の後に実行）。
+  （main の merge の後に実行。14 分 16 秒）。
 - `bash scripts/dev/test-affected.sh`: exit 0、「試験対象の変更なし（docs のみ等）」（変更は scripts/dev の Python・shell と文書だけ。
   Rust・web の変更は無い）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。

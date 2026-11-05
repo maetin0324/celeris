@@ -1,18 +1,22 @@
 {
+  "achieved_oracle_mismatch": 0,
   "arms": {
     "new": {
+      "achieved_oracle_mismatch": 0,
       "autonomous_reach": 1.0,
       "case_reach_rate": 1.0,
+      "controller_achieved": 1,
       "daemon_roots": 2,
       "double_effect": 0,
       "fired_faults": 2,
-      "handoffs": 8,
+      "handoffs": 10,
       "human_intervention": {
         "avoidable": 0,
         "required": 2,
         "stimulus": 1
       },
       "missing": "1 trials have no usage",
+      "oracle_pass_without_achieved": 0,
       "quota": null,
       "reach_rate": 1.0,
       "reach_rate_excluding_c09": 1.0,
@@ -22,7 +26,7 @@
       "tokens": null,
       "trials": 1,
       "verdict_pass": 1,
-      "wall_secs": 106.0,
+      "wall_secs": 103.0,
       "wasteful_roots": 0
     }
   },
@@ -32,7 +36,8 @@
   "dataset": "long_horizon_llm_pilot",
   "invalid": {
     "cases": [],
-    "invalid_init": 0
+    "invalid_init": 0,
+    "leak_detected": 0
   },
   "schema": "celeris.long-horizon-summary/1",
   "tier": "llm_pilot",

@@ -1,10 +1,10 @@
 {
  "schema": "celeris.long-horizon-facts/1",
- "bench_version": 1,
+ "bench_version": 2,
  "dataset": "long_horizon_llm_pilot",
  "case": "C06",
  "seed": 1,
- "init_digest": "8bf2cd1963691855fd6a46921757d3547c1ea8a9eef410281a50a0a124f29d6f",
+ "init_digest": "58b579b442cc06daeaa8ba2d60637d9e617484b732604f06b8ec8ae76f05f512",
  "horizon_secs": 300,
  "roots": [
   {
@@ -23,7 +23,7 @@
     "reviewing",
     "done"
    ],
-   "acceptance_sha256": "ed969fead4c396e42ba26a5d7aaca9843893502d8ce924d0890adfcf5db2a7e5"
+   "acceptance_sha256": "94127494acefbb36c5edca93502e96b60484f2b612b67cc64434308e97fdfeae"
   },
   {
    "logical_id": "o2:1",
@@ -31,7 +31,7 @@
    "attempt": 1,
    "created_by": "daemon",
    "instructed": false,
-   "created_at": 70,
+   "created_at": 63,
    "statuses": [
     "ready",
     "running",
@@ -41,14 +41,14 @@
     "reviewing",
     "done"
    ],
-   "acceptance_sha256": "f214da89304c452bff6453b2850810bdfa5dea1549c81d3e79dfc3e0654660f2"
+   "acceptance_sha256": "1d65793aaba841a0e89dea45bf78c528243e130d444aead6e8aa638523cfd9fd"
   }
  ],
  "effects": [
   {
    "logical_id": "C06:o1:publish",
    "root": "o1",
-   "at": 39
+   "at": 32
   }
  ],
  "human_ops": [
@@ -58,90 +58,90 @@
    "kind": "project_request"
   },
   {
-   "at": 38,
+   "at": 32,
    "class": "required",
    "kind": "approval",
-   "approval_id": "01M6NF0ZJRYMF0NNA760A0QV6M",
+   "approval_id": "01M6NG9AES5TJVP5EV0REPBZVN",
    "decision": "once"
   },
   {
-   "at": 73,
+   "at": 64,
    "class": "required",
    "kind": "approval",
-   "approval_id": "01M6NF21TN125T9JVA0Y5JS05A",
+   "approval_id": "01M6NGA9R0TBYC3WBZEJ665MBQ",
    "decision": "denied"
   }
  ],
  "faults": [
   {
-   "at": 38,
+   "at": 31,
    "kind": "approval_wait",
-   "approval_id": "01M6NF0ZJRYMF0NNA760A0QV6M"
+   "approval_id": "01M6NG9AES5TJVP5EV0REPBZVN"
   },
   {
-   "at": 73,
+   "at": 63,
    "kind": "approval_wait",
-   "approval_id": "01M6NF21TN125T9JVA0Y5JS05A"
+   "approval_id": "01M6NGA9R0TBYC3WBZEJ665MBQ"
   }
  ],
  "invocations": [
+  {
+   "at": 31,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 31,
+   "role": "cos",
+   "usage": null
+  },
   {
    "at": 32,
    "role": "worker",
    "usage": null
   },
   {
-   "at": 38,
-   "role": "cos",
-   "usage": null
-  },
-  {
-   "at": 39,
-   "role": "worker",
-   "usage": null
-  },
-  {
-   "at": 40,
+   "at": 32,
    "role": "reviewer",
    "usage": null
   },
   {
-   "at": 41,
+   "at": 33,
    "role": "cos",
    "usage": null
   },
   {
-   "at": 42,
+   "at": 33,
    "role": "cos",
    "usage": null
   },
   {
-   "at": 70,
+   "at": 63,
    "role": "worker",
    "usage": null
   },
   {
-   "at": 73,
+   "at": 63,
    "role": "cos",
    "usage": null
   },
   {
-   "at": 74,
+   "at": 64,
    "role": "worker",
    "usage": null
   },
   {
-   "at": 76,
+   "at": 64,
    "role": "reviewer",
    "usage": null
   },
   {
-   "at": 77,
+   "at": 65,
    "role": "cos",
    "usage": null
   },
   {
-   "at": 77,
+   "at": 65,
    "role": "cos",
    "usage": null
   }
@@ -153,64 +153,66 @@
   },
   {
    "actor": "worker",
+   "at": 31
+  },
+  {
+   "actor": "cos",
+   "at": 31
+  },
+  {
+   "actor": "worker",
+   "at": 32
+  },
+  {
+   "actor": "reviewer",
    "at": 32
   },
   {
    "actor": "cos",
-   "at": 38
+   "at": 33
+  },
+  {
+   "actor": "cos",
+   "at": 33
   },
   {
    "actor": "worker",
-   "at": 39
+   "at": 63
+  },
+  {
+   "actor": "cos",
+   "at": 63
+  },
+  {
+   "actor": "worker",
+   "at": 64
   },
   {
    "actor": "reviewer",
-   "at": 40
+   "at": 64
   },
   {
    "actor": "cos",
-   "at": 41
+   "at": 65
   },
   {
    "actor": "cos",
-   "at": 42
-  },
-  {
-   "actor": "worker",
-   "at": 70
-  },
-  {
-   "actor": "cos",
-   "at": 73
-  },
-  {
-   "actor": "worker",
-   "at": 74
-  },
-  {
-   "actor": "reviewer",
-   "at": 76
-  },
-  {
-   "actor": "cos",
-   "at": 77
-  },
-  {
-   "actor": "cos",
-   "at": 77
+   "at": 65
   }
  ],
  "statements": [],
  "questions": [],
  "cos_launch_rejected": 0,
  "running_untracked": 0,
- "achieved_at": null,
+ "leak_hits": [],
+ "achieved_at": 95,
+ "controller_achieved": true,
  "events_append_only": true,
  "usage": {
   "tokens": null,
   "quota": null,
-  "wall_secs": 117,
+  "wall_secs": 105,
   "missing": "tier=stub"
  },
- "virtual_secs_to_reach": null
+ "virtual_secs_to_reach": 95
 }

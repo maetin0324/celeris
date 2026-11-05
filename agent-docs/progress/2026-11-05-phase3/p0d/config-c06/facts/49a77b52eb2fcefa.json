@@ -1,10 +1,10 @@
 {
  "schema": "celeris.long-horizon-facts/1",
- "bench_version": 1,
+ "bench_version": 2,
  "dataset": "long_horizon_llm_pilot",
  "case": "C06",
  "seed": 1,
- "init_digest": "cc6789d73df206aefba6e1213d380f39d5c23c589149e34231fd04d1a1244698",
+ "init_digest": "8b7584f3fc1c945bff5623c0860ab03a397b3016a9c85f9d46d8aaeff95f46af",
  "horizon_secs": 300,
  "roots": [
   {
@@ -13,7 +13,7 @@
    "attempt": 1,
    "created_by": "daemon",
    "instructed": false,
-   "created_at": 32,
+   "created_at": 30,
    "statuses": [
     "ready",
     "running",
@@ -23,7 +23,7 @@
     "reviewing",
     "done"
    ],
-   "acceptance_sha256": "ed969fead4c396e42ba26a5d7aaca9843893502d8ce924d0890adfcf5db2a7e5"
+   "acceptance_sha256": "94127494acefbb36c5edca93502e96b60484f2b612b67cc64434308e97fdfeae"
   },
   {
    "logical_id": "o2:1",
@@ -31,7 +31,7 @@
    "attempt": 1,
    "created_by": "daemon",
    "instructed": false,
-   "created_at": 64,
+   "created_at": 63,
    "statuses": [
     "ready",
     "running",
@@ -41,14 +41,14 @@
     "reviewing",
     "done"
    ],
-   "acceptance_sha256": "f214da89304c452bff6453b2850810bdfa5dea1549c81d3e79dfc3e0654660f2"
+   "acceptance_sha256": "1d65793aaba841a0e89dea45bf78c528243e130d444aead6e8aa638523cfd9fd"
   }
  ],
  "effects": [
   {
    "logical_id": "C06:o1:publish",
    "root": "o1",
-   "at": 33
+   "at": 32
   }
  ],
  "human_ops": [
@@ -58,70 +58,65 @@
    "kind": "project_request"
   },
   {
-   "at": 33,
+   "at": 32,
    "class": "required",
    "kind": "approval",
-   "approval_id": "01M6NF4KXS4XBV40PMR5D5SWRW",
+   "approval_id": "01M6NGCM5JWPPTP2PXB061BNR1",
    "decision": "once"
   },
   {
    "at": 65,
    "class": "required",
    "kind": "approval",
-   "approval_id": "01M6NF5KEZ125MX7Q6BVS8E9WD",
+   "approval_id": "01M6NGDNJB8Z0G203QMCYKVMVX",
    "decision": "denied"
   }
  ],
  "faults": [
   {
-   "at": 33,
+   "at": 31,
    "kind": "approval_wait",
-   "approval_id": "01M6NF4KXS4XBV40PMR5D5SWRW"
+   "approval_id": "01M6NGCM5JWPPTP2PXB061BNR1"
   },
   {
    "at": 65,
    "kind": "approval_wait",
-   "approval_id": "01M6NF5KEZ125MX7Q6BVS8E9WD"
+   "approval_id": "01M6NGDNJB8Z0G203QMCYKVMVX"
   }
  ],
  "invocations": [
+  {
+   "at": 30,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 31,
+   "role": "cos",
+   "usage": null
+  },
   {
    "at": 32,
    "role": "worker",
    "usage": null
   },
   {
-   "at": 33,
-   "role": "worker",
-   "usage": null
-  },
-  {
-   "at": 33,
-   "role": "cos",
-   "usage": null
-  },
-  {
-   "at": 34,
+   "at": 32,
    "role": "reviewer",
    "usage": null
   },
   {
-   "at": 34,
+   "at": 32,
    "role": "cos",
    "usage": null
   },
   {
-   "at": 34,
+   "at": 33,
    "role": "cos",
    "usage": null
   },
   {
-   "at": 64,
-   "role": "worker",
-   "usage": null
-  },
-  {
-   "at": 65,
+   "at": 63,
    "role": "worker",
    "usage": null
   },
@@ -131,17 +126,22 @@
    "usage": null
   },
   {
-   "at": 67,
+   "at": 66,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 68,
    "role": "reviewer",
    "usage": null
   },
   {
-   "at": 68,
+   "at": 70,
    "role": "cos",
    "usage": null
   },
   {
-   "at": 68,
+   "at": 71,
    "role": "cos",
    "usage": null
   }
@@ -153,64 +153,66 @@
   },
   {
    "actor": "worker",
+   "at": 30
+  },
+  {
+   "actor": "cos",
+   "at": 31
+  },
+  {
+   "actor": "worker",
    "at": 32
   },
   {
-   "actor": "worker",
-   "at": 33
-  },
-  {
-   "actor": "cos",
-   "at": 33
-  },
-  {
    "actor": "reviewer",
-   "at": 34
+   "at": 32
   },
   {
    "actor": "cos",
-   "at": 34
+   "at": 32
   },
   {
    "actor": "cos",
-   "at": 34
+   "at": 33
   },
   {
    "actor": "worker",
-   "at": 64
-  },
-  {
-   "actor": "worker",
-   "at": 65
+   "at": 63
   },
   {
    "actor": "cos",
    "at": 65
   },
   {
+   "actor": "worker",
+   "at": 66
+  },
+  {
    "actor": "reviewer",
-   "at": 67
-  },
-  {
-   "actor": "cos",
    "at": 68
   },
   {
    "actor": "cos",
-   "at": 68
+   "at": 70
+  },
+  {
+   "actor": "cos",
+   "at": 71
   }
  ],
  "statements": [],
  "questions": [],
  "cos_launch_rejected": 0,
  "running_untracked": 0,
- "achieved_at": null,
+ "leak_hits": [],
+ "achieved_at": 97,
+ "controller_achieved": true,
  "events_append_only": true,
  "usage": {
   "tokens": null,
   "quota": null,
-  "wall_secs": 106,
+  "wall_secs": 103,
   "missing": null
  },
- "virtual_secs_to_reach": null
+ "virtual_secs_to_reach": 97
 }

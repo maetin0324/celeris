@@ -27,18 +27,20 @@ updated: 2026-11-05
 その他の試験: `outcome_block_checks_are_parsed_and_hidden_from_the_snapshot_json`・`outcome_block_rejects_bad_checks`（task-core）、`launch_root_spec_adds_the_checks_of_the_named_outcomes_only`（task-ops）、`pilot_review_check_outcome_without_checks_stays_reviewer_only`（check の無い Outcome は reviewer だけのまま）。
 
 ## 証拠
-test-affected・clippy・fmt・`test -f`・`progress-index --check` は、main を取り込んだ後の HEAD でもう一度実行し、同じ結果だった（nextest 7625 passed、web 709 passed、SKIP 0 件）。`test-long-horizon-pilot.sh`・`test-stub-reviewer.sh`・`test-git-seed.sh`・15 件の nextest は取り込みの前の HEAD で実行した（取り込んだ 2 commit はこれらの file と crate の試験の入力に触れない）。
+すべて提出時の HEAD（P0-C を含む main へ rebase した後、差し戻しの修正を commit した後）で実行した。
 
 | コマンド | exit | 要点 |
 |---|---|---|
-| `bash scripts/dev/test-affected.sh` | 0 | nextest 7625 run・7625 passed・21 skipped。web の tsc -b と unit（vitest 104 files・709 passed）。script bundle SKIP 0 件 |
+| `bash scripts/dev/test-affected.sh`（`CELERIS_WU_BASE` を外し、基準は `git merge-base HEAD main`） | 0 | nextest 7638 run・7638 passed・21 skipped。web の tsc -b と unit（vitest 104 files・709 passed）。script bundle SKIP 0 件 |
+| `bash scripts/dev/test-affected.sh`（WU の基準 `$CELERIS_WU_BASE`） | 0 | 試験対象の変更なし（この修正は script と文書だけ） |
 | `cargo clippy --workspace -- -D warnings` | 0 | 警告は vendor の deno_core の既存 1 件だけ |
 | `cargo fmt --all -- --check` | 0 | 差分なし |
-| `bash scripts/dev/test-long-horizon-pilot.sh --out $TMPDIR/lh` | 0 | dispatch 7・api 3・review_check 2 passed、stub reviewer OK、virtual raw ok、stub daemon raw ok、C06 effect ok、no-output ok |
-| `sh scripts/dev/long-horizon-pilot/test-stub-reviewer.sh` | 0 | `test-stub-reviewer: OK` |
-| `sh scripts/dev/long-horizon-pilot/test-git-seed.sh` | 0 | `test-git-seed: OK` |
-| `CELERIS_SCRIPT_REQUIRE_BUNDLE=1 cargo nextest run -p task-core -p task-ops -p task-dispatch --lib -E 'test(/pilot_review_check\|command_check\|outcome_block\|launch_root_spec\|acceptance_command_shared\|review_check_wins/)'` | 0 | 15 passed |
+| `bash scripts/dev/test-long-horizon-pilot.sh --out "${TMPDIR:-/tmp}/lh-p0e"` | 0 | dispatch 7・api 3・review_check 2 passed、stub reviewer OK、virtual raw ok（7 scenarios）、stub daemon raw ok、C06 effect ok、no-output ok |
+| `sh scripts/dev/long-horizon-pilot/test-stub-reviewer.sh` | 0 | `test-stub-reviewer: OK`（全 19 Outcome の混入検査と、検査の関数の陰性・陽性を含む） |
+| `CELERIS_SCRIPT_BUNDLE_DIR=<bundle> CELERIS_SCRIPT_REQUIRE_BUNDLE=1 cargo nextest run -p task-core -p task-ops -p task-dispatch --lib -E 'test(/pilot_review_check\|command_check\|outcome_block\|launch_root_spec\|acceptance_command_shared\|review_check_wins/)'` | 0 | 15 passed |
+| `sh scripts/dev/progress-index.sh --check` | 0 | `progress-index --check: ok` |
 | `test -f agent-docs/progress/2026-11-05-phase3/p0e.md` | 0 | — |
+| `sh scripts/dev/long-horizon-pilot/test-git-seed.sh` | 1 | `FAIL: out/o1.txt is not on main`。main（P0-C の後）でも同じく落ちる（P0-E の変更が原因ではない）。未解決 8 |
 
 TS（`control-ts/`）は変えていない。TS policy だけの変更の verify の条件（cargo 0、p50≤30 秒・p95≤60 秒）は、この task の変更が Rust を含むので当てはまらない。
 
@@ -62,6 +64,7 @@ final review で `test-stub-reviewer.sh` と、これを呼ぶ `test-long-horizo
 - `p0e: pilot の root に公開契約の command check を結線し、検査と reviewer の根拠を event・facts・ops に残す`
 - `p0e: 進捗に main の取り込みと再実行の結果を書く`
 - `p0e: stub reviewer の試験を bench v2 の oracle に合わせ、ADR と進捗を直す`
+- `p0e: 進捗の証拠表を提出時の HEAD の実測に直す`
 
 ## 本番への移行
 config 欄・migration は無い。event の種類が 1 つ増える（追記だけ）。依頼文の block の `checks` は任意で、既存の案件の挙動は変わらない。
@@ -72,10 +75,12 @@ config 欄・migration は無い。event の種類が 1 つ増える（追記だ
 3. `old.passive` の腕は CoS が root を起票するので、check が付くかは CoS 次第で、保証しない（ADR の表）。
 4. `case.json` の `checks` の欄は bench v2 にも無い。全 19 Outcome の check は acceptance の `minichunk.py verify` の手順から導いている（出典は `public/<case>/case.json#<id>.acceptance`）。`driver.py` の docstring の「hidden は読まない」は旧い語のまま残した（この修正では driver.py を変えない指定）。
 5. 実 LLM の reviewer が、check の結果を見て同じ判断をするかは未確認（P0-F の実測）。
-6. commit 済みの raw（`p0e/stub/`・`p0e/stub-no-output/`）は P0-C の取り込み前に取ったもので、facts の `bench_version` は 1。今の fixture の pilot は `test-long-horizon-pilot.sh` が `$TMPDIR` に作り直して検査する（下の証拠）。raw は作り直していない。
+6. commit 済みの raw（`p0e/stub/`・`p0e/stub-no-output/`）は P0-C の取り込み前に取ったもので、facts の `bench_version` は 1。今の fixture の pilot は `test-long-horizon-pilot.sh` が `$TMPDIR` に作り直して検査する（上の証拠）。raw は作り直していない。
 7. 他の stub reviewer（`crates/campaign/tests/launcher.rs` の全基準 pass、`crates/celeris/tests/trial_context_canary_e2e.rs`）は long-horizon pilot の外の試験用の台本で、変えていない。
+8. `scripts/dev/long-horizon-pilot/test-git-seed.sh` は main でも exit 1。P0-C で stub は acceptance の `minichunk.py verify` の手順だけで成果を書くようになったが、この試験は `minichunk.py` の無い seed と手順の無い基準（`c-o1: x`）を渡すので、stub は何も書かない。`test-long-horizon-pilot.sh` からは呼ばれない。この修正の範囲（test-stub-reviewer.sh と文書）の外なので直していない。
 
 ## 提案
+- `test-git-seed.sh` の seed に `minichunk.py` を入れ、基準に verify の手順を書いて bench v2 に合わせる（P0-C の後続か P2-J）。
 - Roadmap の Outcome に `checks` を持たせ、承認の時点で版に固定する（P0-B か P2-J）。
 - `case.json` の Outcome に `checks` を置けば、driver がそのまま root に付ける（出典は `public/<case>/case.json#<id>.checks`）。P0-C の公開の自己検査 `python3 minichunk.py check <case> <id>` を使うなら、ここに置く。
 - `docs/ops/project-controller.md` に block の `checks` と「check の無い経路で保証できないこと」を 1 節足す（P2-J がまとめる）。

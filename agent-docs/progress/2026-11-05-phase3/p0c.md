@@ -83,5 +83,11 @@ v2 の集計（`p0c/grade-v2/summary.json`）。v1（`2026-11-04-long-horizon/a8
 - P0-F: 人の許可の後、`LONG_HORIZON_PILOT_LLM_APPROVED=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness config …` を ops-r2 の sandbox の中で流し、`achieved_oracle_mismatch` と `leak_detected` を報告する。
 - P0-E: root の command check に `python3 minichunk.py check <case> <id>` を使える（公開の自己検査。採点には使わない）。
 
+## 配送の修復（2026-11-05、delivery-repair）
+- 症状: 配送の release 準備（`/local/celeris/state/releases/.deliveries/01M6N7XY9KX62X9TX696TEHXNF/672b77ac…/prepare.log`）は fmt・試験・script bundle・clippy・source-size まで exit 0 で、`cargo build --release` の途中に `Terminated` で終わった。
+- 原因: 準備は旧 daemon `38127f8a64fe` の子だった。09:17 の promote で旧 daemon が draining になり、09:33:09 に手元の run が 0 になって終了した（journal の「drained; exiting 0」）。unit の停止で準備も同じ秒に止まった。P0-C のコードの不備ではない。
+- 修正: commit「delivery: drain 中の daemon は自分が起動した release 準備の終了を待つ」。ADR `agent-docs/adr/2026-11-05-drain-waits-for-release-prepare.md`。試験 `prepare_child_counts_as_in_flight_until_it_exits`。
+- 本番への移行: なし（config・DB の変更は無い）。この修正が入る release までは、promote が準備の途中に重なると同じ失敗が起きうる。配送の再準備は celeris が行う。
+
 ## 提案
 - `scripts/dev/long-horizon-pilot-llm.sh --harness config` は、ops-r2 の sandbox で起動していなければ断る検査を足す（P0-D・P0-F の範囲）。

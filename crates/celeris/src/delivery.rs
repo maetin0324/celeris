@@ -25,6 +25,25 @@ const MERGE_BASE_FAILURE: &str = "[merge-base] ";
 /// 配送が途中で kill され、`index.lock` と書きかけの作業ツリーが残った）。
 const MERGE_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// ADR 2026-11-05-drain-waits-for-release-prepare: この process が起動し、まだ終わっていない
+/// release 準備（`prepare.sh`）の数。drain 中の daemon はこれが 0 になるまで終了しない
+/// （終了すると systemd が unit の cgroup ごと止め、準備の子が SIGTERM で死ぬ）。
+static PREPARES_IN_FLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// この process が起動して、まだ終わっていない release 準備の数（drain の判定に足す）。
+pub fn prepares_in_flight() -> usize {
+    PREPARES_IN_FLIGHT.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// 起動した準備の子を数え、終わるまで別 thread で待つ（終わったら数から外す）。
+fn track_prepare(mut child: std::process::Child) {
+    PREPARES_IN_FLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        PREPARES_IN_FLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    });
+}
+
 /// 配送で局所修復できる失敗だけを分類する。gate の他の step は従来の Reopen に残す。
 fn classify_delivery_failure(
     state: State,
@@ -999,11 +1018,9 @@ fn start_prepare(store: &dyn TaskStore, config: &Config, old: &Delivery) -> Resu
     };
     let mut next = old.clone();
     match spawn() {
-        Ok(mut child) => {
+        Ok(child) => {
             next.prepare_pid = Some(child.id());
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
+            track_prepare(child);
         }
         Err(e) => {
             next.state = State::Blocked;

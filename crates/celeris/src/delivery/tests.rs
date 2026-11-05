@@ -1832,3 +1832,31 @@ fn required_definition_absence_is_allowed_but_git_and_parse_failures_are_rejecte
         .unwrap_err();
     assert!(error.contains("invalid required checks"), "{error}");
 }
+
+/// ADR 2026-11-05-drain-waits-for-release-prepare: 起動した準備の子は終わるまで数に入り、
+/// 終わったら外れる（drain 中の daemon はこの数が 0 になるまで終了しない）。
+#[test]
+fn prepare_child_counts_as_in_flight_until_it_exits() {
+    use std::io::Write;
+    let before = prepares_in_flight();
+    let mut child = Command::new("sh")
+        .args(["-c", "read line"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    track_prepare(child);
+    assert_eq!(prepares_in_flight(), before + 1, "生きている準備は数に入る");
+    writeln!(stdin, "done").unwrap();
+    drop(stdin);
+    // 子の終了という出来事を待つ（長い保険つき。ADR-0125）。
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while prepares_in_flight() != before {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "終わった準備が数から外れない"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}

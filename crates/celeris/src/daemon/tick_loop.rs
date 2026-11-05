@@ -637,7 +637,9 @@ pub(crate) async fn tick_loop(
             }
             InstanceRole::Standby => TickReport::default(),
         };
-        in_flight = report.in_flight;
+        // ADR 2026-11-05-drain-waits-for-release-prepare: 自分が起動した release 準備も手元の仕事に数える
+        // （drain 中に終了すると unit の停止で準備が殺される）。
+        in_flight = report.in_flight + delivery::prepares_in_flight();
         let tick_elapsed = tick_started.elapsed();
         ticks += 1;
         if tick_elapsed >= slow_tick {

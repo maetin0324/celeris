@@ -11,7 +11,7 @@
 # ops（操作の記録）を書き、`celeris-campaign long-horizon-grade --tier llm_pilot` で採点・集計する。
 #
 # - `--harness stub` は LLM を呼ばない（scripts/dev/long-horizon-pilot/stub_harness.py）。経路の確認用で、raw を
-#   agent-docs/progress/2026-11-05-phase3/llm-v2/ に書かない（実 LLM の raw と混ぜない）。v1 の raw（2026-11-04-long-horizon/）の下には
+#   v2 の実 LLM raw の dir（$llm_dir）に書かない（実 LLM の raw と混ぜない）。v1 の raw（2026-11-04-long-horizon/）の下には
 #   どちらの harness でも書かない。
 # - `--harness config` は実 LLM。人が書いた `--llm-config`（[llm_sources]・[harnesses]・[route_defaults]・
 #   [harness_selection]・[accounts] 等）をそのまま config に足す。人の承認（LONG_HORIZON_PILOT_LLM_APPROVED=1）が

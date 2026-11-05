@@ -1,0 +1,4 @@
+test-affected: crates: celeris celeris-campaign celerisctl llm-proxy task-dispatch 
+test-affected: control-ts の source から bundle を作った（/tmp/celeris-test-affected.azwUgt/script-bundle）。bundle を読む試験はこれを使い、SKIP を失敗にする
+     Summary [ 256.605s] 3368 tests run: 3368 passed (10 slow), 9 skipped
+test-affected: script bundle SKIP: 0 件

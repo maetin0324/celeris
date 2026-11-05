@@ -29,6 +29,51 @@ import pilot_effect  # noqa: E402  （同じ dir。python3 -I では script の 
 
 ACTIVE = {"draft", "ready", "running", "blocked", "reviewing"}
 
+USAGE_KEYS = ("input_tokens", "output_tokens")
+CACHE_KEYS = ("cache_read_tokens", "cache_creation_tokens")
+
+
+def collect_usage(conn, pid, harness, secs):
+    """案件の runs と案件 CoS thread の chat_runs から invocations と消費を集める（ADR 2026-11-05-phase3-p0f-usage-counting）。
+
+    tokens は daemon の予算（task_ops::project_budget）と同じ input+output、cache は別欄。実 LLM の harness で
+    usage が null の起動が 1 件でもあれば missing に理由と件数を書き、tokens・cache_tokens を null にする。
+    """
+    real = harness != "stub"
+    invocations = []
+    tokens = cache_tokens = 0
+    nulls = {"run": 0, "cos": 0}
+
+    def add(role, started_at, raw, kind):
+        nonlocal tokens, cache_tokens
+        usage = json.loads(raw) if raw else None
+        if usage:
+            tokens += sum(int(usage.get(k) or 0) for k in USAGE_KEYS)
+            cache_tokens += sum(int(usage.get(k) or 0) for k in CACHE_KEYS)
+        elif real:
+            nulls[kind] += 1
+        invocations.append({"at": secs(started_at), "role": role, "usage": usage})
+
+    for r in conn.execute("SELECT r.role, r.started_at, r.usage_json FROM runs r JOIN tasks t ON t.id = r.task_id "
+                          "WHERE t.project_id = ? ORDER BY r.started_at", (pid,)):
+        add(r["role"] or "worker", r["started_at"], r["usage_json"], "run")
+    threads = [x["id"] for x in conn.execute("SELECT id FROM chat_threads WHERE project_id = ?", (pid,))]
+    for th in threads:
+        for r in conn.execute("SELECT started_at, usage_json FROM chat_runs WHERE thread_id = ? "
+                              "AND started_at IS NOT NULL ORDER BY started_at", (th,)):
+            add("cos", r["started_at"], r["usage_json"], "cos")
+    invocations.sort(key=lambda i: i["at"])
+    reasons = []
+    if not real:
+        reasons.append("tier=stub")
+    if nulls["run"]:
+        reasons.append(f"run_usage_null:{nulls['run']}")
+    if nulls["cos"]:
+        reasons.append(f"cos_usage_null:{nulls['cos']}")
+    if reasons:
+        return invocations, None, None, ",".join(reasons)
+    return invocations, tokens, cache_tokens, None
+
 
 SEED_BRANCH = "main"
 VERIFY_STEP = re.compile(r"`python3 minichunk\.py verify (C\d+) (o\d+)`")
@@ -600,23 +645,7 @@ max_tokens_per_day = {a.max_tokens_per_day}
             reviews.append({"root": r["id"], "outcome": outcome, **row["review"]})
             roots.append(row)
             by_id[r["id"]] = row
-        invocations = []
-        tokens = 0
-        tokens_known = a.harness != "stub"
-        for r in conn.execute("SELECT r.role, r.started_at, r.usage_json FROM runs r JOIN tasks t ON t.id = r.task_id "
-                              "WHERE t.project_id = ? ORDER BY r.started_at", (self.pid,)):
-            usage = json.loads(r["usage_json"]) if r["usage_json"] else None
-            if usage:
-                tokens += sum(int(usage.get(k) or 0) for k in
-                              ("input_tokens", "output_tokens", "cache_creation_input_tokens"))
-            elif a.harness != "stub":
-                tokens_known = False
-            invocations.append({"at": secs(r["started_at"]), "role": r["role"] or "worker", "usage": usage})
-        threads = [x["id"] for x in conn.execute("SELECT id FROM chat_threads WHERE project_id = ?", (self.pid,))]
-        for th in threads:
-            for r in conn.execute("SELECT started_at AS created_at FROM chat_runs WHERE thread_id = ? ORDER BY started_at", (th,)):
-                invocations.append({"at": secs(r["created_at"]), "role": "cos", "usage": None})
-        invocations.sort(key=lambda i: i["at"])
+        invocations, tokens, cache_tokens, missing = collect_usage(conn, self.pid, a.harness, secs)
         questions = [x["source_key"].split(f":{self.pid}:", 1)[-1] for x in conn.execute(
             "SELECT source_key FROM feed_sources WHERE source_key LIKE ?",
             (f"project_controller:escalate:{self.pid}:%",))]
@@ -651,8 +680,7 @@ max_tokens_per_day = {a.max_tokens_per_day}
         conn.close()
         trial = hashlib.sha256(f"{a.salt}|{a.case}|{a.arm}|{a.seed}".encode()).hexdigest()[:16]
         wall = int(time.time() - self.t0)
-        usage = {"tokens": tokens if tokens_known else None, "quota": None, "wall_secs": wall,
-                 "missing": "tier=stub" if a.harness == "stub" else None}
+        usage = {"tokens": tokens, "cache_tokens": cache_tokens, "quota": None, "wall_secs": wall, "missing": missing}
         effects, audit = self.read_effects()
         # 承認は driver が人として決めたものだけ。daemon に driver の知らない決定があれば（worker が人の token を
         # 手に入れて決めた等）、その試行の効果は人の承認によると言えないので facts を作らない。

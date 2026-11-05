@@ -213,6 +213,9 @@ python3 -I -W ignore::ResourceWarning scripts/dev/long-horizon-pilot/test_pilot_
     || { tail -40 "$out/pilot-effect-unit.log" >&2; fail "pilot_effect unit tests failed"; }
 grep -qE '^Ran (2[1-9]|[3-9][0-9]) tests' "$out/pilot-effect-unit.log" || fail "pilot_effect: fewer than 21 unit tests ran"
 echo "test-long-horizon-pilot: pilot_effect unit: $(grep -E '^Ran ' "$out/pilot-effect-unit.log")"
+python3 -I -W ignore::ResourceWarning scripts/dev/long-horizon-pilot/test_driver_usage.py >"$out/driver-usage-unit.log" 2>&1 \
+    || { tail -40 "$out/driver-usage-unit.log" >&2; fail "driver usage unit tests failed"; }
+grep -qE '^Ran ([5-9]|[1-9][0-9]) tests' "$out/driver-usage-unit.log" || fail "driver usage: fewer than 5 unit tests ran"
 LONG_HORIZON_PILOT_STUB_FORGE=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness stub --out "$out/stub-c06" --cases C06 --arms new \
     >"$out/stub-c06.log" 2>&1 || { tail -40 "$out/stub-c06.log" >&2; fail "C06 stub pilot failed"; }
 LONG_HORIZON_PILOT_STUB_FORGE=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness config-stub --out "$out/config-c06" \

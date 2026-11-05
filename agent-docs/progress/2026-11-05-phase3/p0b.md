@@ -16,6 +16,7 @@ updated: 2026-11-05
 - TS（control-ts）は変えていない。TS の `satisfies` は snapshot の `reviewer_passed`・`integrated` を読むので、Rust が絞った欄に自動で従う。TS だけの変更が無いので、verify の cargo 0・p50/p95 の条件はこの task では対象外。
 - migration は足していない（0115 の予約は未使用。P1-G は 0115 を使ってよい）。
 - attempt 2（reviewer の差し戻しへの対応）: decide と commit の間に根拠の root が reopen・`IntegrationReopened` されると achieved が書かれる窓を閉じた。評価の前に root ごとの最後の event の seq を読み、phase `achieved` の commit の tx で読み直して違えば `Stale(Evidence)`（`rejected:stale_evidence`）にする（ADR 付記の決定 7、reviewer の修正案 (a)）。
+- attempt 3（決定的な検査の失敗への対応）: release の検査で P0-E の試験 `pilot_review_check_failed_check_blocks_root_and_achievement` が落ちた（`long_horizon_pilot_review.rs:133`、phase が `Active` のままで `Achieved` にならない）。原因は I4 で、この試験は repo の無い retry root を `on_review_finished` で done にするが、成果物（`ArtifactProduced`）を持たないので取り込み済みにならない。attempt 1 で直した fixture（`set_status` の helper）を通らない経路だった。コードは変えず、試験で成果を置く所に `ArtifactProduced` を足した（期待値は変えていない）。
 
 ## 照合した資料（修正済みを再実装しない）
 `agent-docs/progress/2026-11-04-long-horizon.md`・`a1.md`〜`a9.md`、`2026-11-05-a9-llm-pilot.md`、`2026-11-05-a9-fix-arrival.md`、ADR `2026-11-05-a9-llm-pilot-findings.md`、`docs/ops/project-controller.md`、P0-A の `p0a.md`。A9 D1 の「repo 付きは `IntegrationMerged` だけ」は保った（`root_row_repo_*` 4 件が通る。K12）。旧 milestones API の 410 も保った（`milestone_lifecycle_endpoints_are_gone` 等 2 件が通る）。
@@ -39,6 +40,8 @@ updated: 2026-11-05
   - `crates/celeris/tests/project_cos_shadow.rs`: `NewProjectDecision` の欄を足した（`evidence_mark: None`）。
 - `p0b: 進捗を書く`（この file と raw）
 - `p0b: 同期の後の検査の結果を書く`
+- `p0b: P0-E の review の試験の fixture を I4（repo の無い root は成果物で取り込み済み）に合わせる`（attempt 3）
+  - `crates/task-dispatch/src/dispatcher/tests/long_horizon_pilot_review.rs`: retry root の review の前に `ArtifactProduced` を 1 件足した。
 
 ## 受入とテストの対応
 | 受入 | ケース | 試験（新規は太字なし・全部 `project_achievement_` か `root_row_`） |
@@ -63,10 +66,11 @@ updated: 2026-11-05
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - 選んだ試験: `cargo nextest run -p task-ops -p task-dispatch -p task-api -p celeris --no-fail-fast -E 'test(/project_achievement_|root_row_|project_roadmap_|project_controller_core_|long_horizon_pilot_|milestone_lifecycle_endpoints_are_gone|milestones_are_gone/)'` → exit 0、59 passed（`p0b/selected-tests.txt`）
-- `bash scripts/dev/test-affected.sh` → exit 0、7674 passed・21 skipped、script bundle の SKIP 0 件（`p0b/test-affected-tail.txt`）
+- attempt 3: `CELERIS_SCRIPT_REQUIRE_BUNDLE=1 CELERIS_SCRIPT_BUNDLE_DIR=<bundle> cargo nextest run -p task-dispatch -E 'test(/pilot_|project_achievement_/)'` → exit 0、23 passed（落ちていた `pilot_review_check_failed_check_blocks_root_and_achievement` を含む）
+- `bash scripts/dev/test-affected.sh` → exit 0、7683 passed・21 skipped、script bundle の SKIP 0 件（attempt 3 の HEAD。attempt 2 では 7674 passed と記録したが、この試験が落ちなかった理由は未確認）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- 上の値は attempt 2 の commit を含む提出時の HEAD で実行した結果（main は基準のまま進んでいない。同期は無し）
+- 上の値は attempt 3 の commit を含む提出時の HEAD で実行した結果（main は基準のまま進んでいない。同期は無し）
 - `sh scripts/dev/progress-index.sh --check` → ok
 - `test -f agent-docs/progress/2026-11-05-phase3/p0b.md` → exit 0
 
@@ -85,7 +89,7 @@ updated: 2026-11-05
 - shadow・dry_run では `suppressed` の mark を到達の記録に数える。enabled に上げた直後は記録が無いので、mark をやり直してから achieved になる（期待どおりと判断したが、運用の文書には未記載）。
 
 ## 次の gate
-- この task の review（attempt 2 の差分: 上の commit 1 件）。
+- この task の review（attempt 3 の差分: 試験の fixture の commit 1 件）。
 - P0-F（実 LLM の再試験）は P0-B〜P0-E の完了後、人の明示の許可で。
 - P2-J: GET・UI に `pc/achieved-unverified` と未達の Outcome の id を出す（K43）。運用の文書に `rejected:stale_evidence` を足す。
 

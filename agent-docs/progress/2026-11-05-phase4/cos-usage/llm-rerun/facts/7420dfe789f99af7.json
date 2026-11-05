@@ -1,0 +1,484 @@
+{
+ "schema": "celeris.long-horizon-facts/1",
+ "bench_version": 2,
+ "dataset": "long_horizon_llm_pilot",
+ "case": "C08",
+ "seed": 1,
+ "init_digest": "33c6e2647daab5075fa4d43771504a35a21ea0f0533de539cd824bbf3f652d39",
+ "horizon_secs": 14400,
+ "roots": [
+  {
+   "logical_id": "o1:1",
+   "outcome": "o1",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 30,
+   "statuses": [
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "919ea828e2a191824b21947509e59ab9ad92983d1a8c3faadb5165de25967cb1",
+   "review": {
+    "verdicts": [
+     {
+      "run_id": "01M6PYFFWCHJDVZ7C6MKYM6887",
+      "criterion": 0,
+      "text": "dorastiq-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C08 o1` を実行すると作れる",
+      "kind": "reviewer",
+      "pass": true,
+      "reason": "reviewer(01M6PYFVX8F9MYTTM0TR6M11EC): out/o1.txt は case: C08 / outcome: o1 / status: verified / evidence: 98c46ae0…8ac36 の 4 欄を持つ。evidence は printf 'minichunk C08 o1 chunk' | sha256sum の値と一致した。"
+     },
+     {
+      "run_id": "01M6PYFFWCHJDVZ7C6MKYM6887",
+      "criterion": 1,
+      "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+      "kind": "command",
+      "pass": true,
+      "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+     },
+     {
+      "run_id": "01M6PYFFWCHJDVZ7C6MKYM6887",
+      "criterion": 2,
+      "text": null,
+      "kind": "implicit",
+      "pass": true,
+      "reason": "reviewer(01M6PYFVX8F9MYTTM0TR6M11EC): main(d4fd854) から dfd394c までは commit 1 件（C08 o1: add out/o1.txt）で、差分は out/o1.txt の 4 行追加のみ。依頼範囲内で、秘密の混入・設定や移行への影響はない。trial-repo に未コミット変更はない。"
+     }
+    ],
+    "command_checks": [
+     {
+      "run_id": "01M6PYFFWCHJDVZ7C6MKYM6887",
+      "criterion": 1,
+      "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+      "expect_exit": 0,
+      "exit": 0,
+      "timed_out": false,
+      "pass": true,
+      "source": "public/C08/case.json#o1.acceptance"
+     }
+    ],
+    "discrepancies": []
+   }
+  },
+  {
+   "logical_id": "o2:1",
+   "outcome": "o2",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 66,
+   "statuses": [
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "432da60f8817aec57b1d07195ba2d59fafa87484b5d989e027e3b8d309bfa595",
+   "review": {
+    "verdicts": [
+     {
+      "run_id": "01M6PYGJ6F82F63Z32SR0W825Q",
+      "criterion": 0,
+      "text": "dorastiq-o2: 取り込まれた tree の out/o2.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C08 o2` を実行すると作れる",
+      "kind": "reviewer",
+      "pass": true,
+      "reason": "reviewer(01M6PYGW638ANJ1S60T81V9T4D): out/o2.txt は case: C08 / outcome: o2 / status: verified / evidence: 535a3b74…88ac の 4 欄を持つ。evidence は printf 'minichunk C08 o2 chunk' | sha256sum の値と一致した。"
+     },
+     {
+      "run_id": "01M6PYGJ6F82F63Z32SR0W825Q",
+      "criterion": 1,
+      "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"` exits 0",
+      "kind": "command",
+      "pass": true,
+      "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o2) && git show HEAD:out/o2.txt | cmp - \\\"$d/out/o2.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+     },
+     {
+      "run_id": "01M6PYGJ6F82F63Z32SR0W825Q",
+      "criterion": 2,
+      "text": null,
+      "kind": "implicit",
+      "pass": true,
+      "reason": "reviewer(01M6PYGW638ANJ1S60T81V9T4D): git log dfd394c..88acb9c は 1 commit（C08 o2: add out/o2.txt）、差分は out/o2.txt の 4 行追加のみ。範囲外の変更、秘密の混入、設定・移行への影響なし。実装 worktree の未コミット変更も確認できなかった。"
+     }
+    ],
+    "command_checks": [
+     {
+      "run_id": "01M6PYGJ6F82F63Z32SR0W825Q",
+      "criterion": 1,
+      "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"",
+      "expect_exit": 0,
+      "exit": 0,
+      "timed_out": false,
+      "pass": true,
+      "source": "public/C08/case.json#o2.acceptance"
+     }
+    ],
+    "discrepancies": []
+   }
+  },
+  {
+   "logical_id": "o3:1",
+   "outcome": "o3",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 97,
+   "statuses": [
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "c906daec4914e333b8d10773e2eda83bfe45bfec29730ae407ce6f5eb88a0328",
+   "review": {
+    "verdicts": [
+     {
+      "run_id": "01M6PYHHBC6A2JB83MXVPCWX2R",
+      "criterion": 0,
+      "text": "dorastiq-o3: 取り込まれた tree の out/o3.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C08 o3` を実行すると作れる",
+      "kind": "reviewer",
+      "pass": true,
+      "reason": "reviewer(01M6PYHYA5HK4290CSF0X1X6KX): out/o3.txt は case: C08、outcome: o3、status: verified、evidence: 1a5b1944…5ab26 の 4 欄を持つ。evidence は `printf 'minichunk C08 o3 chunk' | sha256sum` の結果と一致した。"
+     },
+     {
+      "run_id": "01M6PYHHBC6A2JB83MXVPCWX2R",
+      "criterion": 1,
+      "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o3) && git show HEAD:out/o3.txt | cmp - \"$d/out/o3.txt\"` exits 0",
+      "kind": "command",
+      "pass": true,
+      "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o3) && git show HEAD:out/o3.txt | cmp - \\\"$d/out/o3.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+     },
+     {
+      "run_id": "01M6PYHHBC6A2JB83MXVPCWX2R",
+      "criterion": 2,
+      "text": null,
+      "kind": "implicit",
+      "pass": true,
+      "reason": "reviewer(01M6PYHYA5HK4290CSF0X1X6KX): main(88acb9c) は 47da5a2 の祖先で fast-forward で取り込める。対象差分は out/o3.txt の追加 4 行のみ(commit 1 件 'C08 o3: add out/o3.txt')。実装 worktree の `git status --short` は出力なしで、未コミット変更はない。秘密の混入と設定の互換性の問題は見つからなかった。"
+     }
+    ],
+    "command_checks": [
+     {
+      "run_id": "01M6PYHHBC6A2JB83MXVPCWX2R",
+      "criterion": 1,
+      "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o3) && git show HEAD:out/o3.txt | cmp - \"$d/out/o3.txt\"",
+      "expect_exit": 0,
+      "exit": 0,
+      "timed_out": false,
+      "pass": true,
+      "source": "public/C08/case.json#o3.acceptance"
+     }
+    ],
+    "discrepancies": []
+   }
+  },
+  {
+   "logical_id": "o4:1",
+   "outcome": "o4",
+   "attempt": 1,
+   "created_by": "daemon",
+   "instructed": false,
+   "created_at": 129,
+   "statuses": [
+    "ready",
+    "running",
+    "reviewing",
+    "done"
+   ],
+   "acceptance_sha256": "ae24dcc36f8a366589e8677c8ba33b3997b62fbdc13ba415c9377666e90ee17d",
+   "review": {
+    "verdicts": [
+     {
+      "run_id": "01M6PYJG2RYZQ5W2PH0FZAZNH9",
+      "criterion": 0,
+      "text": "dorastiq-o4: 取り込まれた tree の out/o4.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C08 o4` を実行すると作れる",
+      "kind": "reviewer",
+      "pass": true,
+      "reason": "reviewer(01M6PYJV66V3T6JJ51BFPK26NE): out/o4.txt は case: C08、outcome: o4、status: verified、evidence: 2010af64…89b2 の 4 欄を持つ。evidence は printf 'minichunk C08 o4 chunk' | sha256sum の値と一致した。"
+     },
+     {
+      "run_id": "01M6PYJG2RYZQ5W2PH0FZAZNH9",
+      "criterion": 1,
+      "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o4) && git show HEAD:out/o4.txt | cmp - \"$d/out/o4.txt\"` exits 0",
+      "kind": "command",
+      "pass": true,
+      "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o4) && git show HEAD:out/o4.txt | cmp - \\\"$d/out/o4.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+     },
+     {
+      "run_id": "01M6PYJG2RYZQ5W2PH0FZAZNH9",
+      "criterion": 2,
+      "text": null,
+      "kind": "implicit",
+      "pass": true,
+      "reason": "reviewer(01M6PYJV66V3T6JJ51BFPK26NE): 47da5a2 から 67ec419 までの commit は 1 件（C08 o4: add out/o4.txt）で、差分は out/o4.txt の 4 行追加だけ。git merge-tree で衝突なく取り込める。秘密の混入なし。trial-repo に未コミット変更はない。"
+     }
+    ],
+    "command_checks": [
+     {
+      "run_id": "01M6PYJG2RYZQ5W2PH0FZAZNH9",
+      "criterion": 1,
+      "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o4) && git show HEAD:out/o4.txt | cmp - \"$d/out/o4.txt\"",
+      "expect_exit": 0,
+      "exit": 0,
+      "timed_out": false,
+      "pass": true,
+      "source": "public/C08/case.json#o4.acceptance"
+     }
+    ],
+    "discrepancies": []
+   }
+  }
+ ],
+ "effects": [],
+ "human_ops": [
+  {
+   "at": 0,
+   "class": "stimulus",
+   "kind": "project_request"
+  }
+ ],
+ "faults": [],
+ "invocations": [
+  {
+   "at": 30,
+   "role": "worker",
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 946,
+    "cache_read_tokens": 54392,
+    "cache_creation_tokens": 17679,
+    "cost_usd": 0.0645479,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 25152
+   }
+  },
+  {
+   "at": 43,
+   "role": "reviewer",
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 1214,
+    "cache_read_tokens": 50923,
+    "cache_creation_tokens": 16372,
+    "cost_usd": 0.0632666,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 23845
+   }
+  },
+  {
+   "at": 64,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 64,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 66,
+   "role": "worker",
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 724,
+    "cache_read_tokens": 57268,
+    "cache_creation_tokens": 15942,
+    "cost_usd": 0.058560600000000004,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 25615
+   }
+  },
+  {
+   "at": 76,
+   "role": "reviewer",
+   "usage": {
+    "input_tokens": 8,
+    "output_tokens": 1214,
+    "cache_read_tokens": 73939,
+    "cache_creation_tokens": 16782,
+    "cost_usd": 0.0688988,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 24255
+   }
+  },
+  {
+   "at": 96,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 96,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 97,
+   "role": "worker",
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 877,
+    "cache_read_tokens": 56766,
+    "cache_creation_tokens": 15498,
+    "cost_usd": 0.0588802,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 25171
+   }
+  },
+  {
+   "at": 111,
+   "role": "reviewer",
+   "usage": {
+    "input_tokens": 8,
+    "output_tokens": 1496,
+    "cache_read_tokens": 75249,
+    "cache_creation_tokens": 17233,
+    "cost_usd": 0.07310829999999999,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 24706
+   }
+  },
+  {
+   "at": 127,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 127,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 129,
+   "role": "worker",
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 664,
+    "cache_read_tokens": 57011,
+    "cache_creation_tokens": 15551,
+    "cost_usd": 0.0569317,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 25224
+   }
+  },
+  {
+   "at": 141,
+   "role": "reviewer",
+   "usage": {
+    "input_tokens": 8,
+    "output_tokens": 1075,
+    "cache_read_tokens": 76558,
+    "cache_creation_tokens": 16522,
+    "cost_usd": 0.06738259999999999,
+    "duplicate_reads": 0,
+    "session_resumed": false,
+    "context_tokens": 23995
+   }
+  },
+  {
+   "at": 156,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 156,
+   "role": "cos",
+   "usage": null
+  }
+ ],
+ "actors": [
+  {
+   "actor": "human",
+   "at": 0
+  },
+  {
+   "actor": "worker",
+   "at": 30
+  },
+  {
+   "actor": "reviewer",
+   "at": 43
+  },
+  {
+   "actor": "cos",
+   "at": 64
+  },
+  {
+   "actor": "cos",
+   "at": 64
+  },
+  {
+   "actor": "worker",
+   "at": 66
+  },
+  {
+   "actor": "reviewer",
+   "at": 76
+  },
+  {
+   "actor": "cos",
+   "at": 96
+  },
+  {
+   "actor": "cos",
+   "at": 96
+  },
+  {
+   "actor": "worker",
+   "at": 97
+  },
+  {
+   "actor": "reviewer",
+   "at": 111
+  },
+  {
+   "actor": "cos",
+   "at": 127
+  },
+  {
+   "actor": "cos",
+   "at": 127
+  },
+  {
+   "actor": "worker",
+   "at": 129
+  },
+  {
+   "actor": "reviewer",
+   "at": 141
+  },
+  {
+   "actor": "cos",
+   "at": 156
+  },
+  {
+   "actor": "cos",
+   "at": 156
+  }
+ ],
+ "statements": [],
+ "questions": [],
+ "cos_launch_rejected": 0,
+ "running_untracked": 0,
+ "leak_hits": [],
+ "achieved_at": 158,
+ "controller_achieved": true,
+ "events_append_only": true,
+ "usage": {
+  "tokens": null,
+  "cache_tokens": null,
+  "quota": null,
+  "wall_secs": 165,
+  "missing": "cos_usage_null:8"
+ },
+ "virtual_secs_to_reach": 158
+}

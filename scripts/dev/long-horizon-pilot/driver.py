@@ -244,6 +244,9 @@ rules = [{{ harness = "claude_code", required_capabilities = [] }}]
         else:
             harness = pathlib.Path(a.llm_config).read_text()
             route = a.cos_route
+            if route.strip() in ("", "[]"):
+                # 空の [cos].route_candidates では案件 CoS の run が起動前に失敗し usage が残らない（ADR 2026-11-05-phase4-cos-usage-empty-route）
+                raise SystemExit("--cos-route が空: 実 LLM pilot は [cos].route_candidates を必ず渡す")
         pid = getattr(self, "pid", None)
         delivery = (f'[selfdeploy]\ndelivery_default_departments = {{ {json.dumps(pid)} = "pilot-delivery" }}\n'
                     if pid else "")

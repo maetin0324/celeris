@@ -2,7 +2,7 @@
 //!
 //! 一時 DB・注入した時計（`Env.clock`）・fake decider だけで動く（LLM なし、外部ネットワークなし、本番の DB・daemon に
 //! 触れない、CPU を焼かない）。20 案件に毎時の照合の cron を置き、6 時間ごとに root の完了、2 時間ごとに 5 案件へ外部の
-//! 解放の wake を積む。36 時間目に daemon を作り直す（restart）。controller の mode を `off`・`shadow`・`enabled` で
+//! 解放の wake を積む。36 時間目に tick の間で daemon を作り直す（restart。判断の途中の lease は持たない）。controller の mode を `off`・`shadow`・`enabled` で
 //! 揃えて、仮想の 1 時間ごとに wake の行・未消費の wake・判断の行・評価の数・blocked・CoS 入力・LLM の起動
 //! （`chat_runs`＋`runs`）・tick の段の遅延・wake から判断までの遅れ（仮想秒）・RSS を記録する。
 //! `PROJECT_CONTROLLER_SOAK_RAW_DIR` があれば `soak-virtual.jsonl`（`celeris.long-run-soak/1`）を書く。
@@ -108,7 +108,8 @@ fn soak(mode: ControllerMode, name: &str) {
     let steps_per_hour = 3600 / STEP_SECS;
     for hour in 1..=HOURS {
         if hour == RESTART_HOUR + 1 {
-            // daemon の再起動: 別の owner で作り直す（lease の回収と wake の取りこぼしを見る）。
+            // daemon の再起動: tick の間で別の owner で作り直す（wake の取りこぼしを見る。判断の途中の lease の回収は
+            // A6 の crash の境界の試験が受け持ち、ここでは測らない）。
             drop(d);
             d = env.daemon_with(&store, "i2", none(), s.clone());
         }

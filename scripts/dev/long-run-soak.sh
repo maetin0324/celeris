@@ -4,6 +4,7 @@
 # 1. control-ts の bundle を $TMPDIR に作る（CELERIS_SCRIPT_BUNDLE_DIR があればそれを使う）。
 # 2. `crates/celeris/tests/long_run_soak.rs` の試験 binary を作り、4 条件を別々の process で同時に走らせる
 #    （RSS を条件ごとに分けるため。nextest の 10 分の打ち切りを避けて binary を直接呼ぶ）。
+#    計測の窓の中では restart しない。窓の後に run を走らせたまま持ち主の process を SIGKILL し、リース回収を測る。
 # 3. `scripts/dev/long_run_soak_summary.py` で soak.jsonl を集計し、summary.json と summary.md を書く。
 #
 # LLM を呼ばない（fake harness の sh）。外部ネットワークに出ない。本番の DB・daemon に触れない（一時 DB）。
@@ -30,6 +31,7 @@ fail() { echo "long-run-soak: FAIL: $*" >&2; exit 1; }
 unset CELERIS_RUN_DB CELERIS_DB CELERIS_CONFIG CELERIS_HOME CELERIS_API_TOKEN CELERIS_API_URL || true
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 mkdir -p "$out"
+out="$(cd "$out" && pwd)"
 rm -f "${out:?}/soak.jsonl"
 
 bundle="${CELERIS_SCRIPT_BUNDLE_DIR:-}"

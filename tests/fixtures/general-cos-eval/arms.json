@@ -1,0 +1,10 @@
+{
+  "schema": "celeris.general-cos-arms/1",
+  "note": "旧腕は A4（統括 CoS の相談・短い読取・委譲）を入れる前の main。commit は件名で引き、hash は pin の manifest に実行時に書く。",
+  "arms": {
+    "old": {"rule": "parent_of_subject", "subject_prefix": "a4: 統括 CoS の相談・短い読取・委譲", "must_lack": ["config/skills/cos-operator/consult.md", "crates/task-core/src/chat/intent.rs"]},
+    "new": {"rule": "head", "must_have": ["config/skills/cos-operator/consult.md", "crates/task-core/src/chat/intent.rs"]}
+  },
+  "skills": ["config/skills/cos-operator", "config/skills/cos-inbox-triage"],
+  "prompt_sources": ["crates/task-worker/src/cos_chat.rs", "crates/task-worker/src/preamble.rs", "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs"]
+}

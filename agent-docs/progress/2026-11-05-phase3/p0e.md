@@ -27,11 +27,11 @@ updated: 2026-11-05
 その他の試験: `outcome_block_checks_are_parsed_and_hidden_from_the_snapshot_json`・`outcome_block_rejects_bad_checks`（task-core）、`launch_root_spec_adds_the_checks_of_the_named_outcomes_only`（task-ops）、`pilot_review_check_outcome_without_checks_stays_reviewer_only`（check の無い Outcome は reviewer だけのまま）。
 
 ## 証拠
-すべて提出時の HEAD（P0-C を含む main へ rebase した後、差し戻しの修正を commit した後）で実行した。
+P0-C を含む main へ rebase し、差し戻しの修正を commit した後に実行した。test-affected（基準は main）は 3 回流した。1 回目（`p0e: stub reviewer の試験を bench v2 の oracle に合わせ、ADR と進捗を直す` の時点）は全件合格。2 回目と 3 回目（`p0e: 進捗の証拠表を提出時の HEAD の実測に直す` の時点。1 回目との差は p0e.md だけ）は、P0-E が触れていない crate の試験が 1 件ずつ落ちた。2 回目は `celeris::script_runtime script_thread_count_skips_joined_but_listed_thread`（「stopping the holder releases the zombie」）、3 回目は `celeris-script::generation generation_in_flight_64_then_busy`（`Err(Terminated)`）。どちらも単独で 3 回流して 3 回とも合格した。`git diff --stat $(git merge-base HEAD main) HEAD -- crates/script-runtime crates/celeris/tests/script_runtime.rs` は空で、P0-E はこの 2 本の試験の入力を変えていない。時間に依存する既存の flake と推定する（原因は未確認）。その他の行は最後の commit の時点で実行した。
 
 | コマンド | exit | 要点 |
 |---|---|---|
-| `bash scripts/dev/test-affected.sh`（`CELERIS_WU_BASE` を外し、基準は `git merge-base HEAD main`） | 0 | nextest 7638 run・7638 passed・21 skipped。web の tsc -b と unit（vitest 104 files・709 passed）。script bundle SKIP 0 件 |
+| `bash scripts/dev/test-affected.sh`（`CELERIS_WU_BASE` を外し、基準は `git merge-base HEAD main`） | 0（1 回目）／100（2・3 回目） | 1 回目: nextest 7638 run・7638 passed・21 skipped。2・3 回目: 7637 passed・1 failed（上の flake。毎回別の試験）。3 回とも web の tsc -b と unit（vitest 104 files・709 passed）は合格、script bundle SKIP 0 件 |
 | `bash scripts/dev/test-affected.sh`（WU の基準 `$CELERIS_WU_BASE`） | 0 | 試験対象の変更なし（この修正は script と文書だけ） |
 | `cargo clippy --workspace -- -D warnings` | 0 | 警告は vendor の deno_core の既存 1 件だけ |
 | `cargo fmt --all -- --check` | 0 | 差分なし |
@@ -65,6 +65,7 @@ final review で `test-stub-reviewer.sh` と、これを呼ぶ `test-long-horizo
 - `p0e: 進捗に main の取り込みと再実行の結果を書く`
 - `p0e: stub reviewer の試験を bench v2 の oracle に合わせ、ADR と進捗を直す`
 - `p0e: 進捗の証拠表を提出時の HEAD の実測に直す`
+- `p0e: 進捗に test-affected の 3 回の結果と flake を書く`
 
 ## 本番への移行
 config 欄・migration は無い。event の種類が 1 つ増える（追記だけ）。依頼文の block の `checks` は任意で、既存の案件の挙動は変わらない。
@@ -78,6 +79,7 @@ config 欄・migration は無い。event の種類が 1 つ増える（追記だ
 6. commit 済みの raw（`p0e/stub/`・`p0e/stub-no-output/`）は P0-C の取り込み前に取ったもので、facts の `bench_version` は 1。今の fixture の pilot は `test-long-horizon-pilot.sh` が `$TMPDIR` に作り直して検査する（上の証拠）。raw は作り直していない。
 7. 他の stub reviewer（`crates/campaign/tests/launcher.rs` の全基準 pass、`crates/celeris/tests/trial_context_canary_e2e.rs`）は long-horizon pilot の外の試験用の台本で、変えていない。
 8. `scripts/dev/long-horizon-pilot/test-git-seed.sh` は main でも exit 1。P0-C で stub は acceptance の `minichunk.py verify` の手順だけで成果を書くようになったが、この試験は `minichunk.py` の無い seed と手順の無い基準（`c-o1: x`）を渡すので、stub は何も書かない。`test-long-horizon-pilot.sh` からは呼ばれない。この修正の範囲（test-stub-reviewer.sh と文書）の外なので直していない。
+9. test-affected で P0-E の外の試験 2 本（`script_thread_count_skips_joined_but_listed_thread`・`generation_in_flight_64_then_busy`）が 1 回ずつ落ちた。単独では合格。原因は未確認。
 
 ## 提案
 - `test-git-seed.sh` の seed に `minichunk.py` を入れ、基準に verify の手順を書いて bench v2 に合わせる（P0-C の後続か P2-J）。

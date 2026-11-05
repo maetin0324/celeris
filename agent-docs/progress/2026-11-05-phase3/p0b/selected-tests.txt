@@ -1,0 +1,4 @@
+# cargo nextest run -p task-ops -p task-dispatch -p task-api -p celeris --no-fail-fast -E '<filter in tests-list.txt>' (提出時の HEAD、CELERIS_SCRIPT_BUNDLE_DIR は control-ts の source から作った bundle)
+    Starting 57 tests across 173 binaries (3577 tests skipped)
+     Summary [   2.785s] 57 tests run: 57 passed, 3577 skipped
+exit 0

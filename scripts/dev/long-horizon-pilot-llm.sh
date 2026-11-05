@@ -12,7 +12,8 @@
 # ops（操作の記録）を書き、`celeris-campaign long-horizon-grade --tier llm_pilot` で採点・集計する。
 #
 # - `--harness stub` は LLM を呼ばない（scripts/dev/long-horizon-pilot/stub_harness.py）。経路の確認用で、raw を
-#   agent-docs/progress/2026-11-04-long-horizon/a9/llm/ に書かない（実 LLM の raw と混ぜない）。
+#   v2 の実 LLM raw の dir（$llm_dir）に書かない（実 LLM の raw と混ぜない）。v1 の raw（2026-11-04-long-horizon/）の下には
+#   どちらの harness でも書かない。
 # - `--harness config-stub` は `--harness config` と同じ driver の経路（人の書く `--llm-config` をそのまま足す）に、
 #   LLM を呼ばない agent（stub_harness.py --from-objective）の TOML を渡す。agent は実 LLM と同じ入口（task の
 #   objective・acceptance）だけを読み、公開の command も objective から見つける（ADR 2026-11-05-phase3-p0d）。
@@ -46,7 +47,9 @@ while [ $# -gt 0 ]; do
     esac
 done
 fail() { echo "long-horizon-pilot-llm: FAIL: $*" >&2; exit 1; }
-llm_dir="$root/agent-docs/progress/2026-11-04-long-horizon/a9/llm"
+# v1 の raw（a9/）は改変しない（ADR phase3 I6）。v2 の実 LLM raw の既定の置き場は別の dir。
+llm_dir="$root/agent-docs/progress/2026-11-05-phase3/llm-v2"
+v1_dir="$root/agent-docs/progress/2026-11-04-long-horizon"
 case "$harness" in
     stub|config-stub)
         [ -n "$out" ] || usage
@@ -72,6 +75,7 @@ command -v node >/dev/null || fail "node is missing"
 : "${CARGO_TARGET_DIR:?CARGO_TARGET_DIR is required}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
+case "$out" in "$v1_dir"*) fail "raw must not be written under the v1 raw ($v1_dir)" ;; esac
 if [ "$harness" != config ]; then
     case "$out" in "$llm_dir"*) fail "stub raw must not be written to $llm_dir" ;; esac
 fi

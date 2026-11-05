@@ -1,13 +1,13 @@
 {
  "case": "C10",
  "name": "repeat_failure",
- "bench_version": 1,
+ "bench_version": 2,
  "outcomes": [
   {
    "id": "o1",
    "title": "同じ失敗の繰り返しの解消（ulthane-o1）",
    "acceptance": [
-    "ulthane-o1: hidden acceptance passes on the integrated tree"
+    "ulthane-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C10 o1` を実行すると作れる"
    ],
    "depends_on": []
   }
@@ -19,7 +19,7 @@
   ]
  },
  "content": {
-  "o1": "minichunk C10 o1 verified: write+fsync+restart read-back ok\n"
+  "o1": "  case:   `C10`\n  outcome:   `o1`\n  status:   `verified`\n  evidence:   `7bb0ade58d84ba115952581e527927726f19d4a0ffed2cf923f262a1d3477d3b`\n"
  },
  "answered_result": {
   "o1": "real"

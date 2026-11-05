@@ -1,0 +1,236 @@
+{
+  "achieved_at": 90000,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "cos",
+      "at": 0
+    },
+    {
+      "actor": "cos",
+      "at": 0
+    },
+    {
+      "actor": "worker",
+      "at": 300
+    },
+    {
+      "actor": "reviewer",
+      "at": 3900
+    },
+    {
+      "actor": "cos",
+      "at": 3900
+    },
+    {
+      "actor": "human",
+      "at": 25500
+    },
+    {
+      "actor": "cos",
+      "at": 25500
+    },
+    {
+      "actor": "cos",
+      "at": 25500
+    },
+    {
+      "actor": "worker",
+      "at": 25800
+    },
+    {
+      "actor": "reviewer",
+      "at": 29400
+    },
+    {
+      "actor": "cos",
+      "at": 29400
+    },
+    {
+      "actor": "human",
+      "at": 86400
+    },
+    {
+      "actor": "cos",
+      "at": 86400
+    },
+    {
+      "actor": "cos",
+      "at": 86400
+    },
+    {
+      "actor": "worker",
+      "at": 86400
+    },
+    {
+      "actor": "reviewer",
+      "at": 90000
+    },
+    {
+      "actor": "cos",
+      "at": 90000
+    }
+  ],
+  "bench_version": 2,
+  "case": "C10",
+  "controller_achieved": false,
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 3900,
+      "kind": "repeat_failure"
+    },
+    {
+      "at": 29400,
+      "kind": "repeat_failure"
+    }
+  ],
+  "horizon_secs": 259200,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    },
+    {
+      "at": 25500,
+      "class": "avoidable",
+      "kind": "nudge"
+    },
+    {
+      "at": 86400,
+      "class": "required",
+      "kind": "answer"
+    }
+  ],
+  "init_digest": "cdff3374ac517f00b0ad74d9c39a650aaab9fd67c4a2aa8751704e3f4f814be0",
+  "invocations": [
+    {
+      "at": 0,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 300,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 25500,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 25800,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 29400,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 29400,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 86400,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 86400,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 86400,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 90000,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 90000,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [],
+  "roots": [
+    {
+      "acceptance_sha256": "b80dab24cd34b633dbb49fbe748955379e89ccabececa84ed7b9174c26cbaa45",
+      "attempt": 1,
+      "created_at": 0,
+      "created_by": "cos",
+      "instructed": true,
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "failed"
+      ]
+    },
+    {
+      "acceptance_sha256": "b80dab24cd34b633dbb49fbe748955379e89ccabececa84ed7b9174c26cbaa45",
+      "attempt": 2,
+      "created_at": 25500,
+      "created_by": "cos",
+      "instructed": true,
+      "logical_id": "o1:2",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "failed"
+      ]
+    },
+    {
+      "acceptance_sha256": "b80dab24cd34b633dbb49fbe748955379e89ccabececa84ed7b9174c26cbaa45",
+      "attempt": 3,
+      "created_at": 86400,
+      "created_by": "cos",
+      "instructed": true,
+      "logical_id": "o1:3",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 90000
+}

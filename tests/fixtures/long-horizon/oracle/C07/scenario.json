@@ -1,13 +1,13 @@
 {
  "case": "C07",
  "name": "daemon_restart",
- "bench_version": 1,
+ "bench_version": 2,
  "outcomes": [
   {
    "id": "o1",
    "title": "外部 job の投入（vellumic-o1）",
    "acceptance": [
-    "vellumic-o1: hidden acceptance passes on the integrated tree"
+    "vellumic-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C07 o1` を実行すると作れる"
    ],
    "depends_on": [],
    "effect": "external_job"
@@ -16,7 +16,7 @@
    "id": "o2",
    "title": "結果の取り込み（vellumic-o2）",
    "acceptance": [
-    "vellumic-o2: hidden acceptance passes on the integrated tree"
+    "vellumic-o2: 取り込まれた tree の out/o2.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C07 o2` を実行すると作れる"
    ],
    "depends_on": [
     "o1"
@@ -33,8 +33,8 @@
   ]
  },
  "content": {
-  "o1": "minichunk C07 o1 verified: write+fsync+restart read-back ok\n",
-  "o2": "minichunk C07 o2 verified: write+fsync+restart read-back ok\n"
+  "o1": "CASE: C07\r\nOUTCOME: o1\r\nSTATUS: VERIFIED\r\nEVIDENCE: 277fd7bd9de8e760b571587f6fefce57ff14da2d954517cfe1285a90c04130b7\r\n",
+  "o2": "CASE: C07\r\nOUTCOME: o2\r\nSTATUS: VERIFIED\r\nEVIDENCE: a24361016a546f0dfa29550ce8c15e17212c1620f2a4d3ce6cfb0699852ea8ed\r\n"
  },
  "work_secs": {
   "o1": 7200

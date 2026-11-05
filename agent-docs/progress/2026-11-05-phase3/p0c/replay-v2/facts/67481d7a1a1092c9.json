@@ -1,0 +1,164 @@
+{
+  "achieved_at": 90600,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "cos",
+      "at": 0
+    },
+    {
+      "actor": "cos",
+      "at": 0
+    },
+    {
+      "actor": "worker",
+      "at": 300
+    },
+    {
+      "actor": "reviewer",
+      "at": 65100
+    },
+    {
+      "actor": "cos",
+      "at": 65100
+    },
+    {
+      "actor": "human",
+      "at": 86700
+    },
+    {
+      "actor": "cos",
+      "at": 86700
+    },
+    {
+      "actor": "cos",
+      "at": 86700
+    },
+    {
+      "actor": "worker",
+      "at": 87000
+    },
+    {
+      "actor": "reviewer",
+      "at": 90600
+    },
+    {
+      "actor": "cos",
+      "at": 90600
+    }
+  ],
+  "bench_version": 2,
+  "case": "C03",
+  "controller_achieved": false,
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 300,
+      "kind": "slow_worker"
+    }
+  ],
+  "horizon_secs": 259200,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    },
+    {
+      "at": 86700,
+      "class": "avoidable",
+      "kind": "nudge"
+    }
+  ],
+  "init_digest": "58be75832ed4a681a51dd335dd0c51957f2cc3c42dfafd7fb0c446106f9d083b",
+  "invocations": [
+    {
+      "at": 0,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 300,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 65100,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 65100,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 86700,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 87000,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 90600,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 90600,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [],
+  "roots": [
+    {
+      "acceptance_sha256": "1e6b785fe08c8f5cf27f34dc4f86f68b4c79b110271b99cfdd33be8effda411d",
+      "attempt": 1,
+      "created_at": 0,
+      "created_by": "cos",
+      "instructed": true,
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "f764352006761dfb8899a6e6c1ee397dbe92073257c0b451cec9dc84fa26fa29",
+      "attempt": 1,
+      "created_at": 86700,
+      "created_by": "cos",
+      "instructed": true,
+      "logical_id": "o2:1",
+      "outcome": "o2",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 90600
+}

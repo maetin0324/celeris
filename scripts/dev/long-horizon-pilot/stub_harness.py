@@ -2,9 +2,8 @@
 """A9 の stub harness（LLM を呼ばない）。fake adapter の RunRequest を stdin で受ける。
 
 - Review の run: artifacts/review.json に全基準の合格を書く。
-- 実行の run: acceptance の文から Outcome を見つけ、作業 tree の out/<id>.txt を作り、git commit する。acceptance が公開の手順
-  （`python3 minichunk.py verify <case> <id>`）を書いていれば、作業 tree の直下でその手順を実行する（実 LLM と同じ
-  公開の指示に従う）。手順の無い Outcome だけ台本の答え（--answers）を書く。
+- 実行の run: acceptance の文から Outcome を見つけ、作業 tree の直下で公開の手順（`python3 minichunk.py verify <case> <id>`）を
+  実行し、git commit する（実 LLM と同じ公開の指示だけに従う。台本の答えも検査 script も読まない）。
 - 公開（effect）: 既定の stub 配線は driver が渡す `--effect-kinds`（台本）と `--effect-command`（公開の command）を
   使う。`--from-objective` は実 LLM と同じ入口だけを使う（config harness の確認用）: task の objective に driver が
   書いた公開の手順（`- o1: `<command> publish <logical_id>``）を読み、台本も記録の場所も受け取らない。
@@ -124,7 +123,6 @@ def forge(command):
 
 def main():
     req = json.load(sys.stdin)
-    answers = json.loads(pathlib.Path(arg("--answers")).read_text()) if "--answers" in sys.argv else {}
     from_objective = "--from-objective" in sys.argv
     effect_kinds = json.loads(arg("--effect-kinds")) if "--effect-kinds" in sys.argv else {}
     req_case = arg("--case") if "--case" in sys.argv else ""
@@ -152,14 +150,9 @@ def main():
             command = arg("--effect-command") if "--effect-command" in sys.argv else None
             commands = {o: (command, f"{req_case}:{o}:{k}") for o, k in effect_kinds.items() if command}
         for outcome in sorted(set(re.findall(r"[a-z]+-(o\d+):", text))):
-            if outcome in steps:
-                subprocess.run([sys.executable, "minichunk.py", "verify", steps[outcome], outcome], cwd=cwd, check=True)
-            elif outcome in answers:
-                out = cwd / "out"
-                out.mkdir(parents=True, exist_ok=True)
-                (out / f"{outcome}.txt").write_text(answers[outcome])
-            else:
+            if outcome not in steps:
                 continue
+            subprocess.run([sys.executable, "minichunk.py", "verify", steps[outcome], outcome], cwd=cwd, check=True)
             wrote.append(outcome)
         if wrote:
             commit_outcomes(cwd, wrote)

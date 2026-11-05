@@ -1,0 +1,42 @@
+{
+ "case": "C03",
+ "name": "slow_worker",
+ "bench_version": 1,
+ "outcomes": [
+  {
+   "id": "o1",
+   "title": "長い外部 job（brindol-o1）",
+   "acceptance": [
+    "brindol-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  },
+  {
+   "id": "o2",
+   "title": "job の結果の集計（brindol-o2）",
+   "acceptance": [
+    "brindol-o2: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": [
+    "o1"
+   ]
+  }
+ ],
+ "horizon_secs": 259200,
+ "attempts": {
+  "o1": [
+   "real"
+  ],
+  "o2": [
+   "real"
+  ]
+ },
+ "content": {
+  "o1": "minichunk C03 o1 verified: write+fsync+restart read-back ok\n",
+  "o2": "minichunk C03 o2 verified: write+fsync+restart read-back ok\n"
+ },
+ "cron_every_secs": 3600,
+ "work_secs": {
+  "o1": 64800
+ }
+}

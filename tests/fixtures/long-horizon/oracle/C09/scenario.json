@@ -1,13 +1,13 @@
 {
  "case": "C09",
  "name": "consult_short_continue",
- "bench_version": 1,
+ "bench_version": 2,
  "outcomes": [
   {
    "id": "o1",
    "title": "直近の不具合の修正（pinnacor-o1）",
    "acceptance": [
-    "pinnacor-o1: hidden acceptance passes on the integrated tree"
+    "pinnacor-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C09 o1` を実行すると作れる"
    ],
    "depends_on": []
   },
@@ -15,7 +15,7 @@
    "id": "o2",
    "title": "修正の続き（pinnacor-o2）",
    "acceptance": [
-    "pinnacor-o2: hidden acceptance passes on the integrated tree"
+    "pinnacor-o2: 取り込まれた tree の out/o2.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C09 o2` を実行すると作れる"
    ],
    "depends_on": [
     "o1"
@@ -32,8 +32,8 @@
   ]
  },
  "content": {
-  "o1": "minichunk C09 o1 verified: write+fsync+restart read-back ok\n",
-  "o2": "minichunk C09 o2 verified: write+fsync+restart read-back ok\n"
+  "o1": "case：C09\noutcome：o1\nstatus：verified\nevidence：582cb09612aeaae5310120361122e3b0ff0d653f52770193551f7baf5a99056b\n",
+  "o2": "case：C09\noutcome：o2\nstatus：verified\nevidence：8430068e94dbcf1af9acad4ffa018f82fdab88f356c7e20963edbd9bbc532339\n"
  },
  "kick": false,
  "events": [

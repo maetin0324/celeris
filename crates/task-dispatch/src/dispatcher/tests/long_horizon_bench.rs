@@ -602,6 +602,7 @@ impl<'a> Trial<'a> {
     }
 
     fn reached(&self, id: &str) -> bool {
+        // 台本の CoS が次の手を決めるための内部の判定で、採点ではない（採点は celeris-campaign の検査 script）。
         let want = self.sc.content.get(id).cloned().unwrap_or_default();
         std::fs::read_to_string(self.repo.join("out").join(format!("{id}.txt")))
             .is_ok_and(|got| got == want)
@@ -1447,6 +1448,12 @@ impl<'a> Trial<'a> {
                 key
             })
             .collect();
+        // `achieved_at` は台本の木が揃った時刻で、腕によらない。controller の主張は案件の phase だけから読む（I12）。
+        let controller_achieved = self
+            .store
+            .project_controller_state(&self.p.id.to_string())
+            .unwrap()
+            .is_some_and(|c| c.phase == ControllerPhase::Achieved);
         let mut v = json!({
             "schema": "celeris.long-horizon-facts/1",
             "bench_version": self.sc.bench_version,
@@ -1466,6 +1473,7 @@ impl<'a> Trial<'a> {
             "cos_launch_rejected": self.cos_rejected,
             "running_untracked": running_untracked,
             "achieved_at": self.achieved_at,
+            "controller_achieved": controller_achieved,
             "events_append_only": self.mid_digest.is_some() && mid == prefix,
             "usage": {"tokens": null, "quota": null, "wall_secs": null, "missing": "tier=replay"},
             "virtual_secs_to_reach": self.achieved_at,

@@ -1,0 +1,263 @@
+{
+  "achieved_at": 15600,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "cos",
+      "at": 0
+    },
+    {
+      "actor": "cos",
+      "at": 0
+    },
+    {
+      "actor": "worker",
+      "at": 300
+    },
+    {
+      "actor": "reviewer",
+      "at": 3900
+    },
+    {
+      "actor": "cos",
+      "at": 3900
+    },
+    {
+      "actor": "cos",
+      "at": 3900
+    },
+    {
+      "actor": "cos",
+      "at": 3900
+    },
+    {
+      "actor": "worker",
+      "at": 4200
+    },
+    {
+      "actor": "reviewer",
+      "at": 7800
+    },
+    {
+      "actor": "cos",
+      "at": 7800
+    },
+    {
+      "actor": "cos",
+      "at": 7800
+    },
+    {
+      "actor": "cos",
+      "at": 7800
+    },
+    {
+      "actor": "worker",
+      "at": 8100
+    },
+    {
+      "actor": "reviewer",
+      "at": 11700
+    },
+    {
+      "actor": "cos",
+      "at": 11700
+    },
+    {
+      "actor": "cos",
+      "at": 11700
+    },
+    {
+      "actor": "cos",
+      "at": 11700
+    },
+    {
+      "actor": "worker",
+      "at": 12000
+    },
+    {
+      "actor": "reviewer",
+      "at": 15600
+    },
+    {
+      "actor": "cos",
+      "at": 15600
+    }
+  ],
+  "bench_version": 2,
+  "case": "C08",
+  "controller_achieved": false,
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 19200,
+      "kind": "unrelated_wakes"
+    }
+  ],
+  "horizon_secs": 259200,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    }
+  ],
+  "init_digest": "7e3166aa461e72c0c81af8537150635396e8f4b6153040d19fb88cdea0205802",
+  "invocations": [
+    {
+      "at": 0,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 300,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 3900,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 4200,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 7800,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 7800,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 7800,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 8100,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 11700,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 11700,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 11700,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 12000,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 15600,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 15600,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [],
+  "roots": [
+    {
+      "acceptance_sha256": "1d49f2660ffce4ee4373482166c29f18eae71a5d267427e9403329caf6c24bc1",
+      "attempt": 1,
+      "created_at": 0,
+      "created_by": "cos",
+      "instructed": true,
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "e8175d6c721a268675bda08454ddc50ae2973d03554f0cfe3e65eceb7b464c3b",
+      "attempt": 1,
+      "created_at": 3900,
+      "created_by": "cos",
+      "instructed": false,
+      "logical_id": "o2:1",
+      "outcome": "o2",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "672c17fc3fa627c13b18c50c733924cdbde16b405c9dbd82a3533f02448ea4c2",
+      "attempt": 1,
+      "created_at": 7800,
+      "created_by": "cos",
+      "instructed": false,
+      "logical_id": "o3:1",
+      "outcome": "o3",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "09509919a84065ff1c6f08e487f04842fb170714afd69d52048d1b11f44b8f89",
+      "attempt": 1,
+      "created_at": 11700,
+      "created_by": "cos",
+      "instructed": false,
+      "logical_id": "o4:1",
+      "outcome": "o4",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 15600
+}

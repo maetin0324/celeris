@@ -1,13 +1,13 @@
 {
  "case": "C03",
  "name": "slow_worker",
- "bench_version": 1,
+ "bench_version": 2,
  "outcomes": [
   {
    "id": "o1",
    "title": "長い外部 job（brindol-o1）",
    "acceptance": [
-    "brindol-o1: hidden acceptance passes on the integrated tree"
+    "brindol-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C03 o1` を実行すると作れる"
    ],
    "depends_on": []
   },
@@ -15,7 +15,7 @@
    "id": "o2",
    "title": "job の結果の集計（brindol-o2）",
    "acceptance": [
-    "brindol-o2: hidden acceptance passes on the integrated tree"
+    "brindol-o2: 取り込まれた tree の out/o2.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C03 o2` を実行すると作れる"
    ],
    "depends_on": [
     "o1"
@@ -32,8 +32,8 @@
   ]
  },
  "content": {
-  "o1": "minichunk C03 o1 verified: write+fsync+restart read-back ok\n",
-  "o2": "minichunk C03 o2 verified: write+fsync+restart read-back ok\n"
+  "o1": "# 検証の記録\n\nevidence: E08F6B9DD8F26B8107D1B43997ACE75886A14F1F5B7A01956BB5BC0836E4DA66\nstatus: Verified\noutcome: o1\ncase: C03\n\n読み戻しは一致した。\n",
+  "o2": "# 検証の記録\n\nevidence: B666AE30FDF43E18C0E482185D28A6253569A303086092EAC3B0AB8907EAC428\nstatus: Verified\noutcome: o2\ncase: C03\n\n読み戻しは一致した。\n"
  },
  "cron_every_secs": 3600,
  "work_secs": {

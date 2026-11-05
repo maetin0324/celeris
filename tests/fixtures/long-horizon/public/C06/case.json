@@ -7,7 +7,7 @@
    "id": "o1",
    "title": "公開の準備と公開（kestrane-o1）",
    "acceptance": [
-    "kestrane-o1: 作業 tree の直下で `python3 minichunk.py verify C06 o1` を実行して out/o1.txt を作り、取り込まれた tree の out/o1.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）"
+    "kestrane-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C06 o1` を実行すると作れる"
    ],
    "depends_on": []
   },
@@ -15,7 +15,7 @@
    "id": "o2",
    "title": "別の公開（kestrane-o2）",
    "acceptance": [
-    "kestrane-o2: 作業 tree の直下で `python3 minichunk.py verify C06 o2` を実行して out/o2.txt を作り、取り込まれた tree の out/o2.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）"
+    "kestrane-o2: 取り込まれた tree の out/o2.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C06 o2` を実行すると作れる"
    ],
    "depends_on": []
   }
@@ -23,5 +23,6 @@
  "budget": {
   "tokens_per_trial": 1000000,
   "wall_secs": 14400
- }
+ },
+ "bench_version": 2
 }

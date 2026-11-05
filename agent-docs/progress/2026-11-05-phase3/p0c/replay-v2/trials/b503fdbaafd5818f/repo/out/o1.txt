@@ -1,0 +1,4 @@
+case = C04
+outcome = o1
+status = verified
+evidence = 7f676eceaf1f938c8cf3141e27c57ab0bf0e5cac2d26b87e686bc959eb420d3c

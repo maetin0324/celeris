@@ -1,0 +1,25 @@
+{
+ "case": "C02",
+ "name": "partial_result",
+ "bench_version": 1,
+ "outcomes": [
+  {
+   "id": "o1",
+   "title": "fsync 後の読み戻し（talmeric-o1）",
+   "acceptance": [
+    "talmeric-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  }
+ ],
+ "horizon_secs": 172800,
+ "attempts": {
+  "o1": [
+   "yield_then_fail",
+   "real"
+  ]
+ },
+ "content": {
+  "o1": "minichunk C02 o1 verified: write+fsync+restart read-back ok\n"
+ }
+}

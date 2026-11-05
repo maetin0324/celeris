@@ -1,0 +1,8 @@
+# 検証の記録
+
+evidence: E08F6B9DD8F26B8107D1B43997ACE75886A14F1F5B7A01956BB5BC0836E4DA66
+status: Verified
+outcome: o1
+case: C03
+
+読み戻しは一致した。

@@ -1,0 +1,19 @@
+{
+ "schema": "celeris.long-horizon-case/1",
+ "case": "C10",
+ "name": "repeat_failure",
+ "request_outcomes": [
+  {
+   "id": "o1",
+   "title": "同じ失敗の繰り返しの解消（ulthane-o1）",
+   "acceptance": [
+    "ulthane-o1: hidden acceptance passes on the integrated tree"
+   ],
+   "depends_on": []
+  }
+ ],
+ "budget": {
+  "tokens_per_trial": 1000000,
+  "wall_secs": 14400
+ }
+}

@@ -1,0 +1,54 @@
+{
+  "achieved_at": null,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "human",
+      "at": 7200
+    }
+  ],
+  "bench_version": 2,
+  "case": "C05",
+  "controller_achieved": false,
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 7200,
+      "kind": "outcomes_invalid"
+    }
+  ],
+  "horizon_secs": 259200,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    },
+    {
+      "at": 7200,
+      "class": "required",
+      "kind": "request_change"
+    }
+  ],
+  "init_digest": "cf56c1205ca8a0dc7eeff23ed7274b7f52c164ae72ced1d0d76549017bfe1457",
+  "invocations": [],
+  "questions": [],
+  "roots": [],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": null
+}

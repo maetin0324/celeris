@@ -1,0 +1,169 @@
+{
+  "achieved_at": 11400,
+  "actors": [
+    {
+      "actor": "human",
+      "at": 0
+    },
+    {
+      "actor": "cos",
+      "at": 0
+    },
+    {
+      "actor": "cos",
+      "at": 0
+    },
+    {
+      "actor": "worker",
+      "at": 300
+    },
+    {
+      "actor": "reviewer",
+      "at": 7500
+    },
+    {
+      "actor": "cos",
+      "at": 7500
+    },
+    {
+      "actor": "cos",
+      "at": 7500
+    },
+    {
+      "actor": "cos",
+      "at": 7500
+    },
+    {
+      "actor": "worker",
+      "at": 7800
+    },
+    {
+      "actor": "reviewer",
+      "at": 11400
+    },
+    {
+      "actor": "cos",
+      "at": 11400
+    }
+  ],
+  "bench_version": 2,
+  "case": "C07",
+  "controller_achieved": false,
+  "cos_launch_rejected": 0,
+  "dataset": "long_horizon_replay",
+  "effects": [
+    {
+      "at": 300,
+      "logical_id": "C07:o1:external_job",
+      "root": "o1:1"
+    }
+  ],
+  "events_append_only": true,
+  "faults": [
+    {
+      "at": 600,
+      "kind": "restart"
+    },
+    {
+      "at": 1200,
+      "kind": "restart"
+    },
+    {
+      "at": 9000,
+      "kind": "restart"
+    }
+  ],
+  "horizon_secs": 259200,
+  "human_ops": [
+    {
+      "at": 0,
+      "class": "stimulus",
+      "kind": "project_request"
+    }
+  ],
+  "init_digest": "d7a8ed6a8a4cae13319f61255b6c9775a24868a4cb071649b56ee9a4f20dc83f",
+  "invocations": [
+    {
+      "at": 0,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 300,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 7500,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 7500,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 7500,
+      "role": "cos",
+      "usage": null
+    },
+    {
+      "at": 7800,
+      "role": "worker",
+      "usage": null
+    },
+    {
+      "at": 11400,
+      "role": "reviewer",
+      "usage": null
+    },
+    {
+      "at": 11400,
+      "role": "cos",
+      "usage": null
+    }
+  ],
+  "questions": [],
+  "roots": [
+    {
+      "acceptance_sha256": "8f70f0263b7c4a8cffb586d1936861f75e9524b6931d2cead7bcc9a0d8c7c9f7",
+      "attempt": 1,
+      "created_at": 0,
+      "created_by": "cos",
+      "instructed": true,
+      "logical_id": "o1:1",
+      "outcome": "o1",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    },
+    {
+      "acceptance_sha256": "494cad76960db8e4ba790705412e55de4da49077e4be10b0e269892742662665",
+      "attempt": 1,
+      "created_at": 7500,
+      "created_by": "cos",
+      "instructed": false,
+      "logical_id": "o2:1",
+      "outcome": "o2",
+      "statuses": [
+        "ready",
+        "running",
+        "done"
+      ]
+    }
+  ],
+  "running_untracked": 0,
+  "schema": "celeris.long-horizon-facts/1",
+  "seed": 1,
+  "statements": [],
+  "usage": {
+    "missing": "tier=replay",
+    "quota": null,
+    "tokens": null,
+    "wall_secs": null
+  },
+  "virtual_secs_to_reach": 11400
+}

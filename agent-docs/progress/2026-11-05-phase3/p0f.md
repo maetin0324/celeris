@@ -83,7 +83,7 @@ summary の arms.new: trials 2、verdict_pass 2、achieved_oracle_mismatch 0、o
 ### 手順 3: 実測（raw から読んだ値）
 `grade/summary.json`: trials 2、verdict_pass 2、controller_achieved 2、achieved_oracle_mismatch 0、oracle_pass_without_achieved 0、double_effect 0、leak_detected 0、invalid_init 0、fired_faults 2・recovered 2、wasteful_roots 0、tokens 13,953、wall_secs 273、quota null、missing null。
 
-| 欄 | C06 new（trial 49a77b52eb2fcefa） | C08 new（trial 7420dfe789f99af7） |
+| 欄 | C06 new | C08 new |
 |---|---|---|
 | verdict | pass（predicate 15 件すべて pass） | pass（predicate 18 件すべて pass） |
 | controller achieved / oracle | true / pass（食い違いなし） | true / pass（食い違いなし） |
@@ -105,6 +105,7 @@ summary の arms.new: trials 2、verdict_pass 2、achieved_oracle_mismatch 0、o
 | 人の介入 | stimulus 1（依頼）・required 2（承認 `once` 1 件、却下 `denied` 1 件）・avoidable 0 | stimulus 1・required 0・avoidable 0 |
 | 安全 | double_effect 0、leak_hits 0、running_untracked 0、questions 0、unmapped_roots 0、mode off 後の判断の増加 0 | 同左、roots_after_achieved 0、cos_invocations_after_achieved 0 |
 
+- trial の id と case の対応は `llm-v2/arm-map/` にある。
 - 合計: wall 273 秒（operator の command 全体は 362 秒。build を含む）、input+output 13,953 token、cache read 921,479・creation 238,370、cost_usd 換算 0.92（Claude Max の定額枠で、従量の請求は無い）。許可の上限（計 200 万 token・8 時間）の中。ただし CoS の消費は数えられていない。
 - 人の介入の答え手: 2 件の承認は driver が台本どおり人の token で答えた（承認の作成から決定まで 0.41 秒・0.17 秒）。人がその場で操作したのではない。daemon の承認の決定と driver の記録の照合（`foreign_decisions`）は食い違い 0（食い違えば driver は facts を作らず止まる）。
 - P0-D の未確認だった 2 点は、この 2 試行では確認できた。実 LLM の worker は承認なしの公開で exit 3 を受け、`pilot-effect:<logical_id>` を含む承認の question を出した。CoS は承認の question に自分で答えなかった。

@@ -1,23 +1,26 @@
-pilot: effect_broker {"command": "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6N9F6SCT8KNKJ25SXHTXA6Y/tmp/long-horizon-pilot.7T4hKY/C06-new/bin/pilot-effect"}
+pilot: effect_broker {"command": "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6NDPRYD7XVDRV28454S3D8M/tmp/long-horizon-pilot.rJfNB6/C06-new/bin/pilot-effect"}
 pilot: deploy_ts {"bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8", "mode_seed": "synthetic: temp DB only"}
-pilot: project_created {"project": "01M6NC15310DEHVG0TKV5AB9FD", "arm": "new"}
-pilot: HTTP 403 PUT /api/v1/projects/01M6NC15310DEHVG0TKV5AB9FD/controller: {"type":"urn:celeris:problem:project_controller_mode_requires_human","title":"project controller mode requires human","status":403,"detail":"only a person may raise the project controller mode; others may only turn it off","code":"project_controller_mode_requires_human","instance":"urn:celeris:request:01M6NC160ZEZ3X0MHQWN5EGFCM"}
+pilot: project_created {"project": "01M6NEZT0VYS51WP1MTKJDNJTE", "arm": "new"}
+pilot: HTTP 403 PUT /api/v1/projects/01M6NEZT0VYS51WP1MTKJDNJTE/controller: {"type":"urn:celeris:problem:project_controller_mode_requires_human","title":"project controller mode requires human","status":403,"detail":"only a person may raise the project controller mode; others may only turn it off","code":"project_controller_mode_requires_human","instance":"urn:celeris:request:01M6NEZVKY1H86PVB564RR7WQK"}
 pilot: operator_cannot_raise_mode {"status": 403, "code": null}
 pilot: set_mode {"mode": "enabled", "reason": "pilot を有効にする", "revision": null}
 pilot: state {"phase": "active", "roots": []}
 pilot: state {"phase": "active", "roots": ["running"]}
-pilot: approval {"logical_id": "C06:o1:publish", "approval_id": "01M6NC25NMX4KD5CBA6HZX8618", "decision": "once"}
+pilot: approval {"logical_id": "C06:o1:publish", "approval_id": "01M6NF0ZJRYMF0NNA760A0QV6M", "decision": "once"}
 pilot: state {"phase": "active", "roots": ["ready"]}
+pilot: state {"phase": "active", "roots": ["running"]}
 pilot: state {"phase": "active", "roots": ["reviewing"]}
 pilot: state {"phase": "active", "roots": ["done"]}
 pilot: state {"phase": "active", "roots": ["done", "running"]}
-pilot: approval {"logical_id": "C06:o2:publish", "approval_id": "01M6NC36QRF1FDVYBBWWBP9TH6", "decision": "denied"}
+pilot: approval {"logical_id": "C06:o2:publish", "approval_id": "01M6NF21TN125T9JVA0Y5JS05A", "decision": "denied"}
 pilot: state {"phase": "active", "roots": ["done", "ready"]}
 pilot: state {"phase": "active", "roots": ["done", "running"]}
+pilot: state {"phase": "active", "roots": ["done", "reviewing"]}
 pilot: state {"phase": "active", "roots": ["done", "done"]}
 pilot: state {"phase": "achieved", "roots": ["done", "done"]}
 pilot: wake_after_end {"new_roots": 0}
 pilot: set_mode {"mode": "off", "reason": "従来の CoS に戻す", "revision": null}
 pilot: wake_after_off {"status": 200, "added": false}
 pilot: after_off {"decisions_at_end": 5, "decisions_after": 5, "mode": "off", "pending_wakes": 1}
-pilot: trial 49a77b52eb2fcefa wrote /local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6N9F6SCT8KNKJ25SXHTXA6Y/tmp/p0d/full/stub-c06
+pilot: forge_refused {"attempts": 4, "files": {"config.toml": "read", "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6NDPRYD7XVDRV28454S3D8M/tmp/pilot-tokens-wl60q3xs/human.token": "unreadable: FileNot
+pilot: trial 49a77b52eb2fcefa wrote /local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6NDPRYD7XVDRV28454S3D8M/tmp/p0d2/full/stub-c06

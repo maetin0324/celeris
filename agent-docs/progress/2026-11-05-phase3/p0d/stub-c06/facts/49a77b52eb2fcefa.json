@@ -4,7 +4,7 @@
  "dataset": "long_horizon_llm_pilot",
  "case": "C06",
  "seed": 1,
- "init_digest": "9dd84430824fdd67dca1d7cb1a44393c43f750c962dec39bf66e461937f8c49c",
+ "init_digest": "8bf2cd1963691855fd6a46921757d3547c1ea8a9eef410281a50a0a124f29d6f",
  "horizon_secs": 300,
  "roots": [
   {
@@ -31,7 +31,7 @@
    "attempt": 1,
    "created_by": "daemon",
    "instructed": false,
-   "created_at": 64,
+   "created_at": 70,
    "statuses": [
     "ready",
     "running",
@@ -48,7 +48,7 @@
   {
    "logical_id": "C06:o1:publish",
    "root": "o1",
-   "at": 34
+   "at": 39
   }
  ],
  "human_ops": [
@@ -58,90 +58,90 @@
    "kind": "project_request"
   },
   {
-   "at": 33,
+   "at": 38,
    "class": "required",
    "kind": "approval",
-   "approval_id": "01M6NC25NMX4KD5CBA6HZX8618",
+   "approval_id": "01M6NF0ZJRYMF0NNA760A0QV6M",
    "decision": "once"
   },
   {
-   "at": 67,
+   "at": 73,
    "class": "required",
    "kind": "approval",
-   "approval_id": "01M6NC36QRF1FDVYBBWWBP9TH6",
+   "approval_id": "01M6NF21TN125T9JVA0Y5JS05A",
    "decision": "denied"
   }
  ],
  "faults": [
   {
-   "at": 33,
+   "at": 38,
    "kind": "approval_wait",
-   "approval_id": "01M6NC25NMX4KD5CBA6HZX8618"
+   "approval_id": "01M6NF0ZJRYMF0NNA760A0QV6M"
   },
   {
-   "at": 67,
+   "at": 73,
    "kind": "approval_wait",
-   "approval_id": "01M6NC36QRF1FDVYBBWWBP9TH6"
+   "approval_id": "01M6NF21TN125T9JVA0Y5JS05A"
   }
  ],
  "invocations": [
   {
-   "at": 31,
+   "at": 32,
    "role": "worker",
    "usage": null
   },
   {
-   "at": 33,
-   "role": "worker",
-   "usage": null
-  },
-  {
-   "at": 33,
+   "at": 38,
    "role": "cos",
    "usage": null
   },
   {
-   "at": 35,
+   "at": 39,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 40,
    "role": "reviewer",
    "usage": null
   },
   {
-   "at": 36,
+   "at": 41,
    "role": "cos",
    "usage": null
   },
   {
-   "at": 36,
+   "at": 42,
    "role": "cos",
-   "usage": null
-  },
-  {
-   "at": 65,
-   "role": "worker",
-   "usage": null
-  },
-  {
-   "at": 67,
-   "role": "cos",
-   "usage": null
-  },
-  {
-   "at": 68,
-   "role": "worker",
    "usage": null
   },
   {
    "at": 70,
-   "role": "reviewer",
+   "role": "worker",
    "usage": null
   },
   {
-   "at": 71,
+   "at": 73,
    "role": "cos",
    "usage": null
   },
   {
-   "at": 71,
+   "at": 74,
+   "role": "worker",
+   "usage": null
+  },
+  {
+   "at": 76,
+   "role": "reviewer",
+   "usage": null
+  },
+  {
+   "at": 77,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 77,
    "role": "cos",
    "usage": null
   }
@@ -153,51 +153,51 @@
   },
   {
    "actor": "worker",
-   "at": 31
-  },
-  {
-   "actor": "worker",
-   "at": 33
+   "at": 32
   },
   {
    "actor": "cos",
-   "at": 33
+   "at": 38
+  },
+  {
+   "actor": "worker",
+   "at": 39
   },
   {
    "actor": "reviewer",
-   "at": 35
+   "at": 40
   },
   {
    "actor": "cos",
-   "at": 36
+   "at": 41
   },
   {
    "actor": "cos",
-   "at": 36
+   "at": 42
   },
   {
    "actor": "worker",
-   "at": 65
-  },
-  {
-   "actor": "cos",
-   "at": 67
-  },
-  {
-   "actor": "worker",
-   "at": 68
-  },
-  {
-   "actor": "reviewer",
    "at": 70
   },
   {
    "actor": "cos",
-   "at": 71
+   "at": 73
+  },
+  {
+   "actor": "worker",
+   "at": 74
+  },
+  {
+   "actor": "reviewer",
+   "at": 76
   },
   {
    "actor": "cos",
-   "at": 71
+   "at": 77
+  },
+  {
+   "actor": "cos",
+   "at": 77
   }
  ],
  "statements": [],
@@ -209,7 +209,7 @@
  "usage": {
   "tokens": null,
   "quota": null,
-  "wall_secs": 105,
+  "wall_secs": 117,
   "missing": "tier=stub"
  },
  "virtual_secs_to_reach": null

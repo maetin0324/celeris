@@ -4,7 +4,7 @@
  "dataset": "long_horizon_llm_pilot",
  "case": "C06",
  "seed": 1,
- "init_digest": "9428574fc286ad1b61a05278e36145632545bbb81f465d21667f972d8b3f6b60",
+ "init_digest": "cc6789d73df206aefba6e1213d380f39d5c23c589149e34231fd04d1a1244698",
  "horizon_secs": 300,
  "roots": [
   {
@@ -13,7 +13,7 @@
    "attempt": 1,
    "created_by": "daemon",
    "instructed": false,
-   "created_at": 31,
+   "created_at": 32,
    "statuses": [
     "ready",
     "running",
@@ -48,7 +48,7 @@
   {
    "logical_id": "C06:o1:publish",
    "root": "o1",
-   "at": 34
+   "at": 33
   }
  ],
  "human_ops": [
@@ -61,38 +61,33 @@
    "at": 33,
    "class": "required",
    "kind": "approval",
-   "approval_id": "01M6NC5FBPHEG2KK44YMBVQSFZ",
+   "approval_id": "01M6NF4KXS4XBV40PMR5D5SWRW",
    "decision": "once"
   },
   {
-   "at": 67,
+   "at": 65,
    "class": "required",
    "kind": "approval",
-   "approval_id": "01M6NC6GP838TTZ2ANWJYBWS54",
+   "approval_id": "01M6NF5KEZ125MX7Q6BVS8E9WD",
    "decision": "denied"
   }
  ],
  "faults": [
   {
-   "at": 32,
+   "at": 33,
    "kind": "approval_wait",
-   "approval_id": "01M6NC5FBPHEG2KK44YMBVQSFZ"
+   "approval_id": "01M6NF4KXS4XBV40PMR5D5SWRW"
   },
   {
-   "at": 66,
+   "at": 65,
    "kind": "approval_wait",
-   "approval_id": "01M6NC6GP838TTZ2ANWJYBWS54"
+   "approval_id": "01M6NF5KEZ125MX7Q6BVS8E9WD"
   }
  ],
  "invocations": [
   {
-   "at": 31,
-   "role": "worker",
-   "usage": null
-  },
-  {
    "at": 32,
-   "role": "cos",
+   "role": "worker",
    "usage": null
   },
   {
@@ -101,18 +96,28 @@
    "usage": null
   },
   {
-   "at": 36,
+   "at": 33,
+   "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 34,
    "role": "reviewer",
    "usage": null
   },
   {
-   "at": 39,
+   "at": 34,
    "role": "cos",
    "usage": null
   },
   {
-   "at": 39,
+   "at": 34,
    "role": "cos",
+   "usage": null
+  },
+  {
+   "at": 64,
+   "role": "worker",
    "usage": null
   },
   {
@@ -121,27 +126,22 @@
    "usage": null
   },
   {
+   "at": 65,
+   "role": "cos",
+   "usage": null
+  },
+  {
    "at": 67,
+   "role": "reviewer",
+   "usage": null
+  },
+  {
+   "at": 68,
    "role": "cos",
    "usage": null
   },
   {
    "at": 68,
-   "role": "worker",
-   "usage": null
-  },
-  {
-   "at": 70,
-   "role": "reviewer",
-   "usage": null
-  },
-  {
-   "at": 72,
-   "role": "cos",
-   "usage": null
-  },
-  {
-   "at": 72,
    "role": "cos",
    "usage": null
   }
@@ -153,10 +153,6 @@
   },
   {
    "actor": "worker",
-   "at": 31
-  },
-  {
-   "actor": "cos",
    "at": 32
   },
   {
@@ -164,16 +160,24 @@
    "at": 33
   },
   {
+   "actor": "cos",
+   "at": 33
+  },
+  {
    "actor": "reviewer",
-   "at": 36
+   "at": 34
   },
   {
    "actor": "cos",
-   "at": 39
+   "at": 34
   },
   {
    "actor": "cos",
-   "at": 39
+   "at": 34
+  },
+  {
+   "actor": "worker",
+   "at": 64
   },
   {
    "actor": "worker",
@@ -181,23 +185,19 @@
   },
   {
    "actor": "cos",
-   "at": 67
-  },
-  {
-   "actor": "worker",
-   "at": 68
+   "at": 65
   },
   {
    "actor": "reviewer",
-   "at": 70
+   "at": 67
   },
   {
    "actor": "cos",
-   "at": 72
+   "at": 68
   },
   {
    "actor": "cos",
-   "at": 72
+   "at": 68
   }
  ],
  "statements": [],

@@ -105,6 +105,8 @@ controller は event（root の終了・失敗・人の操作など）で起き�
 - pilot の C06（公開と承認）では、driver が worker の外で公開の broker（`scripts/dev/long-horizon-pilot/pilot_effect.py`）を
   起こし、worker には公開の command（`<試行の home>/bin/pilot-effect publish <logical_id>`）だけを案件の依頼文で渡す。承認は
   daemon の承認（`GET /approvals`・`POST /approvals/{id}/decide`）で、人の token の決定だけを数える。公開の記録は HMAC の鎖で、
-  worker が書き換えると試行は observation_failed で落ちる。外部への公開はしない
+  worker が書き換えると試行は observation_failed で落ちる。API の token は試行ごとの乱数で、試行の home の外に daemon と broker の
+  起動の間だけ置く（worker は人の token を読めない）。daemon に driver の決めていない承認の決定があれば、試行は observation_failed
+  で落ちる。外部への公開はしない
   （[P0-D の ADR](../../agent-docs/adr/2026-11-05-phase3-p0d.md)）。
 

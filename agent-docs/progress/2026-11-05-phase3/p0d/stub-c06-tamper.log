@@ -7,10 +7,10 @@ warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGE
     = note: `#[warn(deprecated)]` on by default
 
 long-horizon-pilot-llm: case C06 arm new
-pilot: effect_broker {"command": "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6N9F6SCT8KNKJ25SXHTXA6Y/tmp/long-horizon-pilot.N2FVSf/C06-new/bin/pilot-effect"}
+pilot: effect_broker {"command": "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6NDPRYD7XVDRV28454S3D8M/tmp/long-horizon-pilot.2804vX/C06-new/bin/pilot-effect"}
 pilot: deploy_ts {"bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8", "mode_seed": "synthetic: temp DB only"}
-pilot: project_created {"project": "01M6NC7YPMNQW9Y4Q6CYG6MSRT", "arm": "new"}
-pilot: HTTP 403 PUT /api/v1/projects/01M6NC7YPMNQW9Y4Q6CYG6MSRT/controller: {"type":"urn:celeris:problem:project_controller_mode_requires_human","title":"project controller mode requires human","status":403,"detail":"only a person may raise the project controller mode; others may only turn it off","code":"project_controller_mode_requires_human","instance":"urn:celeris:request:01M6NC80XY2FX38EM9YXCWKXTH"}
+pilot: project_created {"project": "01M6NF72T2H8T3V04XADKC3CWC", "arm": "new"}
+pilot: HTTP 403 PUT /api/v1/projects/01M6NF72T2H8T3V04XADKC3CWC/controller: {"type":"urn:celeris:problem:project_controller_mode_requires_human","title":"project controller mode requires human","status":403,"detail":"only a person may raise the project controller mode; others may only turn it off","code":"project_controller_mode_requires_human","instance":"urn:celeris:request:01M6NF75ACMV49VHHNH94ZDXJ9"}
 pilot: operator_cannot_raise_mode {"status": 403, "code": null}
 pilot: set_mode {"mode": "enabled", "reason": "pilot を有効にする", "revision": null}
 pilot: state {"phase": "active", "roots": []}
@@ -18,7 +18,6 @@ pilot: state {"phase": "active", "roots": ["running"]}
 pilot: state {"phase": "active", "roots": ["ready"]}
 pilot: state {"phase": "active", "roots": ["running"]}
 pilot: state {"phase": "active", "roots": ["ready"]}
-pilot: state {"phase": "active", "roots": ["running"]}
 pilot: state {"phase": "active", "roots": ["failed"]}
 pilot: state {"phase": "waiting", "roots": ["failed"]}
 pilot: wall_limit {"secs": 300}
@@ -26,5 +25,5 @@ pilot: wake_after_end {"new_roots": 0}
 pilot: set_mode {"mode": "off", "reason": "従来の CoS に戻す", "revision": null}
 pilot: wake_after_off {"status": 200, "added": false}
 pilot: after_off {"decisions_at_end": 2, "decisions_after": 2, "mode": "off", "pending_wakes": 1}
-long-horizon-pilot driver: FAIL: observation_failed: the effect record cannot be trusted: /local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6N9F6SCT8KNKJ25SXHTXA6Y/tmp/long-horizon-pilot.N2FVSf/C06-new/effect-record/effects.jsonl:1: MAC does not match
+long-horizon-pilot driver: FAIL: observation_failed: the effect record cannot be trusted: /local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6NDPRYD7XVDRV28454S3D8M/tmp/long-horizon-pilot.2804vX/C06-new/effect-record/effects.jsonl:1: MAC does not match
 long-horizon-pilot-llm: FAIL: trial C06 new failed

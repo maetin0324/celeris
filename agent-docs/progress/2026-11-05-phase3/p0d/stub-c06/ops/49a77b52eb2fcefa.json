@@ -4,8 +4,8 @@
  "harness": "stub",
  "arm": "new",
  "case": "C06",
- "project": "01M6NC15310DEHVG0TKV5AB9FD",
- "wall_secs": 105,
+ "project": "01M6NEZT0VYS51WP1MTKJDNJTE",
+ "wall_secs": 117,
  "rules": [
   "pc/outcome-open",
   "pc/milestone-reached",
@@ -20,43 +20,43 @@
  "ops": [
   {
    "step": "effect_broker",
-   "at": 0.1,
-   "command": "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6N9F6SCT8KNKJ25SXHTXA6Y/tmp/long-horizon-pilot.7T4hKY/C06-new/bin/pilot-effect"
+   "at": 0.2,
+   "command": "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6NDPRYD7XVDRV28454S3D8M/tmp/long-horizon-pilot.rJfNB6/C06-new/bin/pilot-effect"
   },
   {
    "step": "deploy_ts",
-   "at": 0.5,
+   "at": 0.8,
    "bundle_sha256": "18f53150a481e6d365cfeee55acebc13c56ed925e36e42d7dec2f00ddeae58d8",
    "mode_seed": "synthetic: temp DB only"
   },
   {
    "step": "project_created",
-   "at": 1.0,
-   "project": "01M6NC15310DEHVG0TKV5AB9FD",
+   "at": 1.6,
+   "project": "01M6NEZT0VYS51WP1MTKJDNJTE",
    "arm": "new"
   },
   {
    "step": "operator_cannot_raise_mode",
-   "at": 1.0,
+   "at": 1.6,
    "status": 403,
    "code": null
   },
   {
    "step": "set_mode",
-   "at": 1.0,
+   "at": 1.7,
    "mode": "enabled",
    "reason": "pilot を有効にする",
    "revision": null
   },
   {
    "step": "state",
-   "at": 1.0,
+   "at": 1.8,
    "phase": "active",
    "roots": []
   },
   {
    "step": "state",
-   "at": 31.6,
+   "at": 32.4,
    "phase": "active",
    "roots": [
     "running"
@@ -64,14 +64,14 @@
   },
   {
    "step": "approval",
-   "at": 33.7,
+   "at": 39.1,
    "logical_id": "C06:o1:publish",
-   "approval_id": "01M6NC25NMX4KD5CBA6HZX8618",
+   "approval_id": "01M6NF0ZJRYMF0NNA760A0QV6M",
    "decision": "once"
   },
   {
    "step": "state",
-   "at": 33.7,
+   "at": 39.1,
    "phase": "active",
    "roots": [
     "ready"
@@ -79,7 +79,15 @@
   },
   {
    "step": "state",
-   "at": 34.7,
+   "at": 40.1,
+   "phase": "active",
+   "roots": [
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 41.1,
    "phase": "active",
    "roots": [
     "reviewing"
@@ -87,7 +95,7 @@
   },
   {
    "step": "state",
-   "at": 35.7,
+   "at": 42.1,
    "phase": "active",
    "roots": [
     "done"
@@ -95,7 +103,7 @@
   },
   {
    "step": "state",
-   "at": 65.4,
+   "at": 70.9,
    "phase": "active",
    "roots": [
     "done",
@@ -104,14 +112,14 @@
   },
   {
    "step": "approval",
-   "at": 67.6,
+   "at": 74.0,
    "logical_id": "C06:o2:publish",
-   "approval_id": "01M6NC36QRF1FDVYBBWWBP9TH6",
+   "approval_id": "01M6NF21TN125T9JVA0Y5JS05A",
    "decision": "denied"
   },
   {
    "step": "state",
-   "at": 67.6,
+   "at": 74.0,
    "phase": "active",
    "roots": [
     "done",
@@ -120,7 +128,7 @@
   },
   {
    "step": "state",
-   "at": 68.6,
+   "at": 75.0,
    "phase": "active",
    "roots": [
     "done",
@@ -129,7 +137,16 @@
   },
   {
    "step": "state",
-   "at": 70.6,
+   "at": 76.0,
+   "phase": "active",
+   "roots": [
+    "done",
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 77.1,
    "phase": "active",
    "roots": [
     "done",
@@ -138,7 +155,7 @@
   },
   {
    "step": "state",
-   "at": 99.1,
+   "at": 107.8,
    "phase": "achieved",
    "roots": [
     "done",
@@ -147,57 +164,73 @@
   },
   {
    "step": "wake_after_end",
-   "at": 102.1,
+   "at": 110.9,
    "new_roots": 0
   },
   {
    "step": "set_mode",
-   "at": 102.2,
+   "at": 114.1,
    "mode": "off",
    "reason": "従来の CoS に戻す",
    "revision": null
   },
   {
    "step": "wake_after_off",
-   "at": 102.2,
+   "at": 114.1,
    "status": 200,
    "added": false
   },
   {
    "step": "after_off",
-   "at": 105.2,
+   "at": 117.1,
    "decisions_at_end": 5,
    "decisions_after": 5,
    "mode": "off",
    "pending_wakes": 1
+  },
+  {
+   "step": "forge_refused",
+   "at": 117.7,
+   "attempts": 4,
+   "files": {
+    "config.toml": "read",
+    "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6NDPRYD7XVDRV28454S3D8M/tmp/pilot-tokens-wl60q3xs/human.token": "unreadable: FileNotFoundError",
+    "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6NDPRYD7XVDRV28454S3D8M/tmp/pilot-tokens-wl60q3xs/operator.token": "unreadable: FileNotFoundError",
+    "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6NDPRYD7XVDRV28454S3D8M/tmp/long-horizon-pilot.rJfNB6/C06-new/human.token": "unreadable: FileNotFoundError",
+    "/local/celeris/data/workspaces/01M6N7XY9N8J21RRGC8AP6EZ4A/runs/01M6NDPRYD7XVDRV28454S3D8M/tmp/long-horizon-pilot.rJfNB6/C06-new/operator.token": "unreadable: FileNotFoundError"
+   },
+   "api_statuses": [
+    401,
+    401
+   ]
   }
  ],
  "approvals": [
   {
-   "id": "01M6NC25NMX4KD5CBA6HZX8618",
-   "task_id": "01M6NC23PVYBJ55TTBAW47KZBM",
+   "id": "01M6NF0ZJRYMF0NNA760A0QV6M",
+   "task_id": "01M6NF0S5ZFFT785A005RT54MC",
    "question": "pilot-effect:C06:o1:publish の公開（o1）を承認しますか。承認なら公開し、却下なら公開しません。",
    "decision": "once",
-   "created_at": "2026-11-05T08:09:03.411923355Z",
-   "decided_at": "2026-11-05T08:09:03.736397242Z"
+   "created_at": "2026-11-05T09:00:50.135977895Z",
+   "decided_at": "2026-11-05T09:00:50.526710964Z"
   },
   {
-   "id": "01M6NC36QRF1FDVYBBWWBP9TH6",
-   "task_id": "01M6NC34CQQSGEZVGZDQ2SCPJR",
+   "id": "01M6NF21TN125T9JVA0Y5JS05A",
+   "task_id": "01M6NF1YJ43AHB0EN2T8MKCCE3",
    "question": "pilot-effect:C06:o2:publish の公開（o2）を承認しますか。承認なら公開し、却下なら公開しません。",
    "decision": "denied",
-   "created_at": "2026-11-05T08:09:37.271720443Z",
-   "decided_at": "2026-11-05T08:09:37.557243633Z"
+   "created_at": "2026-11-05T09:01:25.204872054Z",
+   "decided_at": "2026-11-05T09:01:25.613707434Z"
   }
  ],
  "effect_audit": [
   {
    "seq": 1,
-   "at": 1793866142.9328218,
+   "at": 1793869248.520849,
    "event": "publish",
    "logical_id": "C06:o1:publish",
    "peer": {
-    "pid": 2525857
+    "pid": 1578357
    },
    "approval_id": null,
    "decision": null,
@@ -205,24 +238,24 @@
   },
   {
    "seq": 2,
-   "at": 1793866144.3646364,
+   "at": 1793869251.5007331,
    "event": "publish",
    "logical_id": "C06:o1:publish",
    "peer": {
-    "pid": 2526202
+    "pid": 1579019
    },
-   "approval_id": "01M6NC25NMX4KD5CBA6HZX8618",
+   "approval_id": "01M6NF0ZJRYMF0NNA760A0QV6M",
    "decision": "once",
    "result": "published",
-   "effect_mac": "38d9e7e467d51ea27916fac6a871b028b4609e57b120e8033c85e878c9346abc"
+   "effect_mac": "71b80089f8ed3091575c3cf528893b7d15098067783a33621421178a4a1696ec"
   },
   {
    "seq": 3,
-   "at": 1793866176.6727133,
+   "at": 1793869284.93865,
    "event": "publish",
    "logical_id": "C06:o2:publish",
    "peer": {
-    "pid": 2532534
+    "pid": 1589796
    },
    "approval_id": null,
    "decision": null,
@@ -230,13 +263,13 @@
   },
   {
    "seq": 4,
-   "at": 1793866179.4664536,
+   "at": 1793869286.9532032,
    "event": "publish",
    "logical_id": "C06:o2:publish",
    "peer": {
-    "pid": 2533493
+    "pid": 1591884
    },
-   "approval_id": "01M6NC36QRF1FDVYBBWWBP9TH6",
+   "approval_id": "01M6NF21TN125T9JVA0Y5JS05A",
    "decision": "denied",
    "result": "rejected"
   }

@@ -19,6 +19,7 @@ controller が `blocked` で止まった案件を、止まった原因が解け�
 - `phase 1: make project brief wakes atomic and account for CoS chat usage`
 - `phase 2: resume blocked project controllers on resolved causes and cut human-wait re-evaluation`
 - `phase 2: pin the pilot cost cap test to a dangerous overrun`
+- `delivery-repair: wait for dispatched runs in the script compare test helper`（配送の release 準備の失敗の修正。下の「配送の修正」）
 
 中身（決定は [ADR 2026-11-05-phase3-p1g](../../adr/2026-11-05-phase3-p1g.md) の 1〜10）:
 - `crates/task-dispatch/src/dispatcher/project_resume.rs`（新規）: 最後の判断の行から止まった原因を分類し、解消の根拠があれば 1 つの transaction の CAS で再開する。判断の行（`pc/resume/<原因>`、`celeris.project-resume/1`、`basis`）に根拠を残す。
@@ -73,6 +74,14 @@ controller が `blocked` で止まった案件を、止まった原因が解け�
 - 基準の tree を同じ `CARGO_TARGET_DIR` で build した後、cargo が基準の rlib を新しいものとして使い、`test-long-horizon-bench.sh` が基準の path の fixture を探して失敗した（exit 1）。変更した source を touch して作り直し、再実行で合格。修正前の測定を同じ target で行うときは、戻った後に変更 file を touch する。
 - 最初の test-affected（phase 2 の最初の commit）で `long_horizon_pilot_cost_cap_stops_until_human_resets` が 1 件失敗（旧い「翌日も戻らない」を固定していた）。超過を上限の 2 倍以上（危険な超過）に変え、元の意図（人の置き直しまで止まる）を保った。
 - 新しい試験の作成中の失敗: crash の後に同じ dispatcher を使い続けた（panic で controller の実行時の状態が戻らない。再起動として作り直した）、task の状態を `json` 列なしで書き換えた、K36 の上限の数え方。いずれも試験側の誤りで直した。
+
+## 配送の修正（delivery-repair、2026-11-05）
+- 失敗: release 準備の `script-bundle-tests` の段で `celeris::script_compare_route_priority` の `script_compare_route_priority_dispatch_match_rollback_and_replay` が 1 件失敗した（`86 tests run: 85 passed, 1 failed`、`kinds = ["harness_selected"]`）。同じ準備の `cargo-test` の段では合格していた。
+- 原因: 試験の helper `Env::dispatch`（`crates/celeris/tests/support/script_compare.rs`）は compare だけを待ち、run（fake harness の `sh`）の終わりを待たなかった。負荷で前の run が残ると、次の task の route が account の同時実行の上限（`max_runs_per_account` の既定 2）で `AccountConcurrency` として断られ、`llm_route_selected` が出ない。P1-G の変更とは関係ない時間依存の不具合。
+- 再現: helper の fake harness の先頭に `sleep 3` を足すと、同じ試験が決定的に失敗した（`route refused: … rejections: [{reason: AccountConcurrency}]`）。
+- 修正: `Env::dispatch` が compare の後に `wait_runs_finished` で dispatcher の `in_flight()` が 0 になるまで tick で完了を取り込む（出来事待ち、上限 120 秒は保険）。`sleep 3` の harness でも合格（`1 test run: 1 passed`）。`sleep` は戻した。
+- release gate と同じ段: `CELERIS_SCRIPT_REQUIRE_BUNDLE=1 CELERIS_SCRIPT_BUNDLE_DIR=$TMPDIR/bundle bash scripts/selfdeploy/script-bundle-gate.sh test $PWD $TMPDIR/bundle` → exit 0、`86 tests run: 86 passed, 0 skipped`、`test ok (SKIP 0)`。
+- 本番の release 準備の再実行は配送側が行う（この run ではしていない）。
 
 ## 未解決
 - 実 LLM の確認と 24〜72 時間の実稼働は未実施（人の gate。A9 の手順）。

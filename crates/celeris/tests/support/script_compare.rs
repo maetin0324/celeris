@@ -31,6 +31,8 @@ use time::OffsetDateTime;
 pub const LONG_DEADLINE: Duration = Duration::from_secs(30);
 /// `timeout` のときにやり直す上限。
 pub const TIMEOUT_RETRIES: usize = 20;
+/// dispatch した run の終わりを待つ上限（保険。普段は数十 ms で終わる）。
+pub const RUN_FINISH_DEADLINE: Duration = Duration::from_secs(120);
 
 pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -649,13 +651,33 @@ impl Env {
             .expect("routing_decided")
     }
 
-    /// 1 件の task を 1 tick で dispatch し、走った compare を待つ。
+    /// 1 件の task を 1 tick で dispatch し、走った compare と run の終わりを待つ。
+    ///
+    /// run の終わりまで待つのは、次の dispatch が account の同時実行の上限（既定 2）に当たらないため。
+    /// 前の run（fake harness の `sh`）が負荷で終わっていないと、次の task の route が `AccountConcurrency`
+    /// で断られ、`llm_route_selected` が出ない（release gate の script-bundle-tests で 1 回落ちた）。
     pub async fn dispatch(&self, d: &mut Dispatcher) -> (Task, Vec<ScriptCompareRecord>) {
         let task = self.insert_task();
         d.tick().expect("tick");
         d.wait_script_compares().await;
+        Self::wait_runs_finished(d).await;
         let records = self.records(&task);
         (task, records)
+    }
+
+    /// dispatcher の手元の run が全部終わる（`in_flight` が 0）まで tick で完了を取り込む。出来事待ちで、
+    /// 上限の `RUN_FINISH_DEADLINE` は保険（ADR-0125）。
+    pub async fn wait_runs_finished(d: &mut Dispatcher) {
+        let deadline = std::time::Instant::now() + RUN_FINISH_DEADLINE;
+        while d.in_flight() > 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "runs still in flight after {RUN_FINISH_DEADLINE:?}: {}",
+                d.in_flight()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            d.tick().expect("tick");
+        }
     }
 
     /// `timeout` 以外の結果が出るまで dispatch する（file 先頭の待ちの方針）。

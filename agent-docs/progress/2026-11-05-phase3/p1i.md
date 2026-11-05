@@ -149,9 +149,9 @@ completed: 2026-11-05
 - `CELERIS_SCRIPT_REQUIRE_BUNDLE=1 CELERIS_SCRIPT_BUNDLE_DIR=<bundle> cargo nextest run -p celeris --test long_run_soak` → 4 passed、1 skipped（`long_run_soak_lease_holder` は `#[ignore]`。親が別 process で起こす）、2.9 秒。
 - `bash scripts/dev/long-run-soak.sh --out agent-docs/progress/2026-11-05-phase3/p1i/soak-short --secs 0 --seed-events 2000` → exit 0（raw `p1i/soak-short/`）。
 - `bash scripts/dev/long-run-soak.sh --out agent-docs/progress/2026-11-05-phase3/p1i/soak26 --secs 1560 --tasks 5 --pace-ms 250 --seed-events 200000` → exit 0（raw `p1i/soak26/`、壁時計 27 分）。
-- TEST_AFFECTED_RESULT
-- `cargo clippy --workspace -- -D warnings` → CLIPPY_RESULT。`cargo fmt --all -- --check` → FMT_RESULT。
-- `sh scripts/dev/progress-index.sh --check` → INDEX_RESULT。`test -f agent-docs/progress/2026-11-05-phase3/p1i.md` → exit 0。
+- `bash scripts/dev/test-affected.sh` → exit 0（3,496 tests run: 3,496 passed、10 skipped、script bundle SKIP 0 件、test-ts-verify 20 passed、`project_controller_soak_72h_*` 3 本を含む）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。`test -f agent-docs/progress/2026-11-05-phase3/p1i.md` → exit 0。
 
 ## 失敗ケース（この run の中で起きて直したもの）
 1. 仮想 72 時間の試験の最初の版は `every wake is consumed` で落ちた（shadow・enabled）。毎時の cron の wake は正時の tick で積まれ、次の tick で消費される。最後の正時の後に 2 tick 進めてから数えるように直した（製品のコードの不具合ではない）。

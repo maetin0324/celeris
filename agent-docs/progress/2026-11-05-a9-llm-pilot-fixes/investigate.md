@@ -22,7 +22,7 @@ raw は `agent-docs/progress/2026-11-04-long-horizon/a9/llm/`（以下 `a9/llm/`
 
 ### raw の該当箇所
 - `a9/llm/grade/grades.jsonl`: C06 試行 1 の `outcome_reached(o1)` は fail、C08 試行 1 の `outcome_reached(o1)`〜`(o4)` は 4 件とも fail。
-- C06 試行 1 の `trials/<trial>/repo/out/o1.txt` は 11 byte の `kestrane-o1`（acceptance の接頭語だけ）、`o2.txt` も同様。sha256 先頭 12 桁は `e696aa25e3e2` / `8496bd7cc93f` で期待値と別。
+- C06 試行 1 の `trials/<trial>/repo/out/o1.txt` は 11 byte の `kestrane-o1`（acceptance の接頭語だけ）、`o2.txt` も同様。sha256 は期待値と別。
 - C08 試行 1 の `out/o1.txt`〜`o4.txt` は 755〜1662 byte の日本語の調査報告（先頭は `dorastiq-o1: 調査と実装` など）。内容として妥当でも hash は一致しない。
 - 4 本とも out/ に file は在る。fail の理由は「到達していない」でなく「内容が oracle の固定文字列と違う」。
 

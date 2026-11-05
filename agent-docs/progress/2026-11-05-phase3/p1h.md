@@ -47,7 +47,7 @@ updated: 2026-11-05
 
 旧 CoS を現行 binary の controller off で代用しない（A4 の hint/prompt は案件 mode で切れない）。外部 operator は A4 導入前と現行の binary・skill/prompt の版を別々に固定し、上記条件と課題 snapshot を同一にする。会話は試行ごとに新しい thread、修正だけは完了後の相談まで同じ thread を使う。順序は repeat ごとに旧新を交代する。
 
-## 検査（提出時の HEAD で実行）
+## 初回提出の検査（修復前の記録）
 基準は `git merge-base HEAD main`。TS policy だけの変更ではないため cargo 0・p50/p95 の条件は対象外。
 
 | 条件 | コマンド | 出力の要点 |
@@ -80,3 +80,28 @@ updated: 2026-11-05
 
 ## commit（件名）
 `phase 1: 統括 CoS の比較集計器と読取の正確さの replay を追加する`
+
+
+## delivery repair（2026-11-05）
+- 配送の prepare.log は、容量上限を超えた release-build target の削除時に `Directory not empty` で停止していた。P1-H の評価・Rust の試験失敗ではない。削除中の書き込み元は未確認。
+- ADR `2026-11-05-release-target-delete-retry.md` に従い、`sd_release_prune_enforce_limit` の削除を最大3回まで再試行する。成功後だけ seed と開始時刻を置く。恒常的な失敗は一時ディレクトリを片付けて非ゼロで停止する。
+- 本番の target・元の checkout・サービスには変更していない。release/prepare・デプロイは実行していない。実 LLM 比較は引き続き未実施。
+- ローカル main は初回提出を含む状態。追加の同期は行っていない。修復の基準は `git merge-base HEAD main`。
+
+### 修復の検査（提出時の HEAD で実行）
+| 条件 | コマンド | 出力の要点 |
+|---|---|---|
+| 一時的な削除失敗から回復・恒常的な失敗で停止 | `bash scripts/selfdeploy/tests/release_target_delete_retry.sh` | exit 0。1回目だけ失敗なら2回目に回復、恒常的な失敗は3回で停止。seed・marker の誤配置なし、一時ディレクトリの残留なし |
+| 既存の容量算定・刈り込み | `bash scripts/selfdeploy/tests/release_prune_stale_test_binaries.sh` | exit 0、ok |
+| 比較器 | `python3 scripts/dev/test_general_cos_eval.py` | exit 0、10 tests OK |
+| 必須ファイル | `test -f agent-docs/progress/2026-11-05-phase3/p1h.md` | exit 0 |
+
+| 影響範囲の試験・health | `bash scripts/dev/test-affected.sh` | exit 0。health 成功、試験対象の変更なし（今回の修復は shell と文書のみ）。初回の Rust 試験件数を今回の実行件数に含めない |
+| lint | `cargo clippy --workspace -- -D warnings` | exit 0。vendor deno_core の既存 deprecated 警告のみ |
+| 整形 | `cargo fmt --all -- --check` | exit 0、差分なし |
+| 文書・差分・shell 構文 | `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check`・`git diff --check`・`bash -n scripts/selfdeploy/lib.sh scripts/selfdeploy/tests/release_target_delete_retry.sh` | 全て exit 0 |
+
+ログは run の成果物 `repair-test-affected.log`・`repair-clippy.log`・`repair-delete-retry.log`・`repair-prune.log`。全 workspace 試験・web e2e・実 browser/userns は実行していない。
+
+修復 commit の件名: `phase 1: release target の一時的な削除失敗を再試行する`。
+次の gate は配送側での release prepare 再実行。今回の試験は一時ディレクトリと rm の差し替えによる再現であり、本番の削除が成功することは未確認。

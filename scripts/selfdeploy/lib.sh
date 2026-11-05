@@ -904,7 +904,7 @@ PY
 }
 
 sd_release_prune_enforce_limit() {
-  local target="$1" limit size seed tmp
+  local target="$1" limit size seed tmp attempt
   sd_prune_path_guard "$target" || return 1
   limit="${SD_RELEASE_TARGET_MAX_BYTES:-68719476736}"
   case "$limit" in *[!0-9]*|'') sd_die "SD_RELEASE_TARGET_MAX_BYTES must be an integer" ;; esac
@@ -916,7 +916,14 @@ sd_release_prune_enforce_limit() {
   rm -rf "$tmp"
   mkdir -p "$tmp"
   if [ -n "$seed" ] && [ -d "$seed" ]; then cp -a "$seed/." "$tmp/"; fi
-  rm -rf "$target"
+  for attempt in 1 2 3; do
+    if rm -rf "$target"; then break; fi
+    sd_log "release prune: target removal failed (attempt ${attempt}/3)"
+    if [ "$attempt" -eq 3 ]; then
+      rm -rf "$tmp"
+      return 1
+    fi
+  done
   mv "$tmp" "$target"
   sd_release_prune_record_start "$target"
 }

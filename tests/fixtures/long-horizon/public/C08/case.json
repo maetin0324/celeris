@@ -7,7 +7,7 @@
    "id": "o1",
    "title": "調査と実装（dorastiq-o1）",
    "acceptance": [
-    "dorastiq-o1: hidden acceptance passes on the integrated tree"
+    "dorastiq-o1: 作業 tree の直下で `python3 minichunk.py verify C08 o1` を実行して out/o1.txt を作り、取り込まれた tree の out/o1.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）"
    ],
    "depends_on": []
   },
@@ -15,7 +15,7 @@
    "id": "o2",
    "title": "実験セル A（dorastiq-o2）",
    "acceptance": [
-    "dorastiq-o2: hidden acceptance passes on the integrated tree"
+    "dorastiq-o2: 作業 tree の直下で `python3 minichunk.py verify C08 o2` を実行して out/o2.txt を作り、取り込まれた tree の out/o2.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）"
    ],
    "depends_on": [
     "o1"
@@ -25,7 +25,7 @@
    "id": "o3",
    "title": "実験セル B（dorastiq-o3）",
    "acceptance": [
-    "dorastiq-o3: hidden acceptance passes on the integrated tree"
+    "dorastiq-o3: 作業 tree の直下で `python3 minichunk.py verify C08 o3` を実行して out/o3.txt を作り、取り込まれた tree の out/o3.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）"
    ],
    "depends_on": [
     "o1"
@@ -35,7 +35,7 @@
    "id": "o4",
    "title": "分析と報告（dorastiq-o4）",
    "acceptance": [
-    "dorastiq-o4: hidden acceptance passes on the integrated tree"
+    "dorastiq-o4: 作業 tree の直下で `python3 minichunk.py verify C08 o4` を実行して out/o4.txt を作り、取り込まれた tree の out/o4.txt がこのコマンドの書く内容と同じ（隠した受け入れが確かめる）"
    ],
    "depends_on": [
     "o2",

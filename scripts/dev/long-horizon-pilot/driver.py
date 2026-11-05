@@ -86,8 +86,12 @@ class Trial:
         harness = ""
         if a.harness == "stub":
             answers = self.home / "stub-answers.json"
+            # 公開の acceptance が成果の作り方（`python3 minichunk.py verify …`）を書く Outcome は、stub も
+            # その指示に従って作る（stub_harness.py）。台本の content は、公開の指示の無い Outcome にだけ渡す。
             oracle = json.loads((self.fixtures / "oracle" / a.case / "scenario.json").read_text())
-            answers.write_text(json.dumps(oracle["content"]))
+            public_cmd = {o["id"] for o in self.outcomes
+                          if any("python3 minichunk.py verify" in x for x in o["acceptance"])}
+            answers.write_text(json.dumps({k: v for k, v in oracle["content"].items() if k not in public_cmd}))
             cmd = ["python3", "-I", str(pathlib.Path(__file__).with_name("stub_harness.py")),
                    "--answers", str(answers), "--case", a.case]
             if self.effect_kinds:

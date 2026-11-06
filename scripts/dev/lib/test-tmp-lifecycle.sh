@@ -203,7 +203,7 @@ ttl__reap_dir() {
     TTL_N_UNKNOWN=$((TTL_N_UNKNOWN + 1))
     return 0
   fi
-  exec {lfd}<"$d/lock" 2>/dev/null || { TTL_N_UNKNOWN=$((TTL_N_UNKNOWN + 1)); return 0; }
+  { exec {lfd}<"$d/lock"; } 2>/dev/null || { TTL_N_UNKNOWN=$((TTL_N_UNKNOWN + 1)); return 0; }
   if ! flock -n "$lfd"; then
     exec {lfd}<&-
     TTL_N_ALIVE=$((TTL_N_ALIVE + 1))
@@ -266,7 +266,7 @@ ttl_sweep() {
   TTL_N_SWEPT=0 TTL_N_ALIVE=0 TTL_N_FOREIGN=0 TTL_N_UNKNOWN=0 TTL_SWEEP_SKIPPED=0
   { [ -n "$root" ] && [ -d "$root" ] && [ ! -L "$root" ]; } || return 0
   uid="$(ttl__uid)"
-  exec {slfd}>>"$root/.sweep.lock" 2>/dev/null || return 0
+  { exec {slfd}>>"$root/.sweep.lock"; } 2>/dev/null || return 0
   if ! flock -n "$slfd"; then
     exec {slfd}>&-
     TTL_SWEEP_SKIPPED=1
@@ -360,7 +360,7 @@ ttl_run() {
 ttl__wait_session_gone() {
   local sid=$1 limit=$2 deadline tfd rc
   deadline=$((SECONDS + limit))
-  exec {tfd}<>"$TTL_DIR/tick" 2>/dev/null || tfd=""
+  { exec {tfd}<>"$TTL_DIR/tick"; } 2>/dev/null || tfd=""
   while :; do
     rc=0
     ttl__sid_alive "$sid" || rc=$?
@@ -405,12 +405,12 @@ ttl_finish() {
     if [ "$rc2" = 1 ]; then
       [ -z "$TTL_LOCK_FD" ] || exec {TTL_LOCK_FD}>&-
       TTL_LOCK_FD=""
-      if exec {lfd}<"$TTL_DIR/lock" 2>/dev/null && flock -n "$lfd"; then
+      if { exec {lfd}<"$TTL_DIR/lock"; } 2>/dev/null && flock -n "$lfd"; then
         ttl__trash_rm "$TTL_ROOT" "$TTL_DIR" || ttl__log "could not remove $TTL_DIR"
       else
         ttl__log "kept $TTL_DIR (still referenced)"
       fi
-      exec {lfd}<&- 2>/dev/null || true
+      { exec {lfd}<&-; } 2>/dev/null || true
     else
       ttl__log "kept $TTL_DIR (child still running or unknown)"
     fi

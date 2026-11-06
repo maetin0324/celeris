@@ -1,0 +1,3 @@
+daemon-soak[main/enabled]: gate {"ok": true, "reason": "approved by human:rmaeda", "approval": {"approved_by": "human:rmaeda", "approved_at": "2026-11-05T22:56:19Z", "scope": "non-production", "max_secs": 86400, "conditions": ["off"
+daemon-soak[main/enabled]: setup {"project": "01M6PZ0DT3GJCEKH3TAA32EZJW", "script_modes": {"lane_rules": "ts", "cos_digest": "compare"}, "controller": "shadow", "port": 58405, "pid": 2606593, "celeris": "/local/celeris/data/scratch/
+daemon-soak[main/enabled]: start {"secs": 86400, "limits": {"max_rss_mb": 4096, "min_free_mb": 5120, "max_db_mb": 11963, "max_api_failures": 3}, "task_interval": 10.0, "chat_interval": 300.0}

@@ -1,0 +1,50 @@
+{
+  "scope": "N7 closeout; production actions and full release gate not run",
+  "checks": [
+    {
+      "command": "bash scripts/dev/test-affected.sh",
+      "exit": 0,
+      "result": "docs-only; health/self-tests passed"
+    },
+    {
+      "command": "cargo clippy --workspace -- -D warnings",
+      "exit": 0,
+      "result": "passed"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit": 0,
+      "result": "no difference"
+    },
+    {
+      "command": "bash scripts/dev/test-long-horizon-bench.sh --out <artifacts>/n7-bench-final",
+      "exit": 0,
+      "result": "40+24+9 passed; raw diff zero; CLI grades identical"
+    },
+    {
+      "command": "bash scripts/dev/test-ts-verify.sh",
+      "exit": 0,
+      "result": "20 passed; valid TS path cargo=0 link=0"
+    },
+    {
+      "command": "bash scripts/dev/test-release-script-gate.sh",
+      "exit": 0,
+      "result": "self-test only; no production release"
+    },
+    {
+      "command": "python3 -I scripts/dev/general_cos_eval.py <n3 observations>",
+      "exit": 0,
+      "result": "old 6/10 new 8/10; consult 12 ungraded"
+    },
+    {
+      "command": "python3 n7/accounting.py",
+      "exit": 0,
+      "result": "32 unique trials; saved and 1h TTL estimates"
+    },
+    {
+      "command": "pilot_gate.py judge --raw <operator G7> --approval <approved file>",
+      "exit": 0,
+      "result": "unknown; G7 fail; cos_usage_null=3; command exit is not experiment pass"
+    }
+  ]
+}

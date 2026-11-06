@@ -1,0 +1,27 @@
+health: candidate=3cad6b9bd491a8c0f61e881f0f9a62fca61ef00e (working tree included)
+source-size gate: baseline=13d64acd17806d73a1797bffbf831efc9cb5ab6a comparison=3cad6b9bd491a8c0f61e881f0f9a62fca61ef00e head=3cad6b9bd491a8c0f61e881f0f9a62fca61ef00e
+source-size gate: 0 failure(s), 3 debt warning(s), 1 reasoned exception(s)
+OK: 931 件のパスを確認した（docs/architecture-map.md）
+check-doc-links: ok
+check-adr-numbers: ok (394 files)
+check-human-text: 11 files, 244 literals, 0 findings (5 allowed)
+check-human-text --self-test: ok
+progress-index --check: ok
+OK (1) subjects, main-side hashes, ULIDs and digits pass
+OK (2) pre-rebase hash fails
+OK (3) task-branch hash (ancestor of HEAD only) fails
+OK (4) unresolvable hex fails
+OK (5) files this branch did not change are not checked
+progress_index_commit_hashes: all checks passed
+......................................
+----------------------------------------------------------------------
+Ran 38 tests in 13.510s
+
+OK
+.
+----------------------------------------------------------------------
+Ran 1 test in 1.569s
+
+OK
+check-doc-links self-test: ok
+test-affected: 試験対象の変更なし（docs のみ等）

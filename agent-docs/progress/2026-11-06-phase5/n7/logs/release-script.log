@@ -1,0 +1,16 @@
+ok: (FAKE_BUNDLE=missing) gate fails at script-bundle-verify
+ok: (FAKE_BUNDLE=fail) gate fails at control-ts-bundle
+ok: (FAKE_BUNDLE=badhash) gate fails at script-bundle-verify
+ok: (FAKE_BUNDLE=stale) gate fails at script-bundle-verify
+ok: (FAKE_BUNDLE=dirty) gate fails at script-bundle-verify
+ok: (FAKE_BUNDLE=schema) gate fails at script-bundle-verify
+ok: (FAKE_BUNDLE=hostapi) gate fails at script-bundle-verify
+ok: (FAKE_BUNDLE=domains) gate fails at script-bundle-verify
+ok: (FAKE_BUNDLE=shim) gate fails at control-ts-bundle
+ok: (FAKE_INSTALL_FAIL=1) gate fails at control-ts-install
+ok: (FAKE_SKIP=1) gate fails at script-bundle-tests
+ok: valid bundle: release built, script-bundle/ included, REQUIRE=1 and BUNDLE_DIR passed to the tests
+ok: verify-release rejects tampered bundles and releases without the script gate
+ok: real node/pnpm: install, bundle, verify pass; shims unchanged; missing bundle fails
+ok: pnpm run bundle in a symlinked copy leaves the original shims unchanged
+test-release-script-gate: ok

@@ -1,0 +1,11 @@
+{
+ "schema": "celeris.long-horizon-pilot-gate/1",
+ "g7": "fail",
+ "verdict": "unknown",
+ "cos_runs": 5,
+ "cos_usage_null": 3,
+ "missing": [
+  "cos_usage_null:3"
+ ],
+ "approval_id": "n1-g7-20261106-1"
+}

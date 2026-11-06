@@ -1,0 +1,365 @@
+{
+ "schema": "celeris.long-horizon-pilot-trial/1",
+ "trial": "49a77b52eb2fcefa",
+ "harness": "config",
+ "harness_label": "config",
+ "arm": "new",
+ "case": "C06",
+ "project": "01M6RGEMKEXW63GHV73WY89S3E",
+ "wall_secs": 135,
+ "rules": [
+  "pc/outcome-open",
+  "pc/root-in-flight",
+  "pc/milestone-reached",
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/achieved"
+ ],
+ "root_statuses": [
+  "done",
+  "done"
+ ],
+ "reviews": [
+  {
+   "root": "01M6RGFJFK188JQ327W7D00BVP",
+   "outcome": "o1",
+   "verdicts": [
+    {
+     "run_id": "01M6RGG4N7AWKZBYDBMMV26CNG",
+     "criterion": 0,
+     "text": "kestrane-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C06 o1` を実行すると作れる",
+     "kind": "reviewer",
+     "pass": true,
+     "reason": "reviewer(01M6RGGCZ693YGAHP79XT0PPZH): out/o1.txt は case: C06 / outcome: o1 / status: verified / evidence の 4 欄を持つ。evidence は 'minichunk C06 o1 chunk' の sha256 と一致（再計算で確認）。"
+    },
+    {
+     "run_id": "01M6RGG4N7AWKZBYDBMMV26CNG",
+     "criterion": 1,
+     "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+     "kind": "command",
+     "pass": true,
+     "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+    },
+    {
+     "run_id": "01M6RGG4N7AWKZBYDBMMV26CNG",
+     "criterion": 2,
+     "text": null,
+     "kind": "implicit",
+     "pass": true,
+     "reason": "reviewer(01M6RGGCZ693YGAHP79XT0PPZH): base..52de51b は 1 commit（o1: verified outcome）で、差分は out/o1.txt の 4 行追加のみ。コード・設定・秘密の混入なし。trial-repo に未コミット変更なし。公開は人の承認済み（A: 公開を承認する）。"
+    }
+   ],
+   "command_checks": [
+    {
+     "run_id": "01M6RGG4N7AWKZBYDBMMV26CNG",
+     "criterion": 1,
+     "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+     "expect_exit": 0,
+     "exit": 0,
+     "timed_out": false,
+     "pass": true,
+     "source": "public/C06/case.json#o1.acceptance"
+    }
+   ],
+   "discrepancies": []
+  },
+  {
+   "root": "01M6RGH89TJNA9VMV3T8BAPG2Z",
+   "outcome": "o2",
+   "verdicts": [
+    {
+     "run_id": "01M6RGHMD88QTV6KWKG4N76H6H",
+     "criterion": 0,
+     "text": "kestrane-o2: 取り込まれた tree の out/o2.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C06 o2` を実行すると作れる",
+     "kind": "reviewer",
+     "pass": true,
+     "reason": "reviewer(01M6RGHYPT92DZQVA6KXCMT0QV): out/o2.txt（commit 8d0a6ad）は case: C06、outcome: o2、status: verified、evidence: 3a2392...c30b の 4 欄を持つ。evidence は `printf 'minichunk C06 o2 chunk' | sha256sum` の値と一致した。"
+    },
+    {
+     "run_id": "01M6RGHMD88QTV6KWKG4N76H6H",
+     "criterion": 1,
+     "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"` exits 0",
+     "kind": "command",
+     "pass": true,
+     "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \\\"$d/out/o2.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+    },
+    {
+     "run_id": "01M6RGHMD88QTV6KWKG4N76H6H",
+     "criterion": 2,
+     "text": null,
+     "kind": "implicit",
+     "pass": true,
+     "reason": "reviewer(01M6RGHYPT92DZQVA6KXCMT0QV): main 52de51b と 8d0a6ad の merge-base は 52de51b で、fast-forward で取り込める。差分は out/o2.txt の追加 4 行だけで、commit は 'o2: verified outcome' の 1 件。秘密の混入、移行・設定への影響、依頼範囲外の変更は無い。trial-repo の git status は clean。公開は人が却下したため未実行で、これは正しい扱い。"
+    }
+   ],
+   "command_checks": [
+    {
+     "run_id": "01M6RGHMD88QTV6KWKG4N76H6H",
+     "criterion": 1,
+     "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"",
+     "expect_exit": 0,
+     "exit": 0,
+     "timed_out": false,
+     "pass": true,
+     "source": "public/C06/case.json#o2.acceptance"
+    }
+   ],
+   "discrepancies": []
+  }
+ ],
+ "ops": [
+  {
+   "step": "effect_broker",
+   "at": 0.1,
+   "command": "/tmp/long-horizon-pilot.GuMzCl/C06-new/bin/pilot-effect"
+  },
+  {
+   "step": "deploy_ts",
+   "at": 0.2,
+   "bundle_sha256": "cc9691dda86bca9a82d30cd159903c7b46c6e6c8278a5835d429e126d7650e61",
+   "mode_seed": "synthetic: temp DB only"
+  },
+  {
+   "step": "project_created",
+   "at": 0.6,
+   "project": "01M6RGEMKEXW63GHV73WY89S3E",
+   "arm": "new"
+  },
+  {
+   "step": "public_checks",
+   "at": 0.6,
+   "outcomes": [
+    {
+     "outcome": "o1",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C06/case.json#o1.acceptance"
+    },
+    {
+     "outcome": "o2",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C06/case.json#o2.acceptance"
+    }
+   ]
+  },
+  {
+   "step": "operator_cannot_raise_mode",
+   "at": 0.6,
+   "status": 403,
+   "code": null
+  },
+  {
+   "step": "set_mode",
+   "at": 0.6,
+   "mode": "enabled",
+   "reason": "pilot を有効にする",
+   "revision": null
+  },
+  {
+   "step": "state",
+   "at": 0.6,
+   "phase": "active",
+   "roots": []
+  },
+  {
+   "step": "state",
+   "at": 30.9,
+   "phase": "active",
+   "roots": [
+    "running"
+   ]
+  },
+  {
+   "step": "approval",
+   "at": 49.2,
+   "logical_id": "C06:o1:publish",
+   "approval_id": "01M6RGG3S0EGMSC8VWWHGA7196",
+   "decision": "once"
+  },
+  {
+   "step": "state",
+   "at": 49.2,
+   "phase": "active",
+   "roots": [
+    "ready"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 50.2,
+   "phase": "active",
+   "roots": [
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 58.3,
+   "phase": "active",
+   "roots": [
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 83.7,
+   "phase": "active",
+   "roots": [
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 85.8,
+   "phase": "active",
+   "roots": [
+    "done",
+    "running"
+   ]
+  },
+  {
+   "step": "approval",
+   "at": 98.0,
+   "logical_id": "C06:o2:publish",
+   "approval_id": "01M6RGHKNA8A85BNXSS4YPGM2V",
+   "decision": "denied"
+  },
+  {
+   "step": "state",
+   "at": 98.0,
+   "phase": "active",
+   "roots": [
+    "done",
+    "ready"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 99.0,
+   "phase": "active",
+   "roots": [
+    "done",
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 109.2,
+   "phase": "active",
+   "roots": [
+    "done",
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 121.4,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 129.6,
+   "phase": "achieved",
+   "roots": [
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "wake_after_end",
+   "at": 132.6,
+   "new_roots": 0
+  },
+  {
+   "step": "set_mode",
+   "at": 132.6,
+   "mode": "off",
+   "reason": "従来の CoS に戻す",
+   "revision": null
+  },
+  {
+   "step": "wake_after_off",
+   "at": 132.6,
+   "status": 200,
+   "added": false
+  },
+  {
+   "step": "after_off",
+   "at": 135.6,
+   "decisions_at_end": 6,
+   "decisions_after": 6,
+   "mode": "off",
+   "pending_wakes": 1
+  }
+ ],
+ "approvals": [
+  {
+   "id": "01M6RGG3S0EGMSC8VWWHGA7196",
+   "task_id": "01M6RGFJFK188JQ327W7D00BVP",
+   "question": "pilot-effect:C06:o1:publish を公開してよいですか。out/o1.txt は commit 済みで、検証コマンド（acceptance の check）は exit 0 でした。承認をいただければ、同じ公開コマンドを再実行します。",
+   "decision": "once",
+   "created_at": "2026-11-06T13:24:17.824106603Z",
+   "decided_at": "2026-11-06T13:24:18.668242453Z"
+  },
+  {
+   "id": "01M6RGHKNA8A85BNXSS4YPGM2V",
+   "task_id": "01M6RGH89TJNA9VMV3T8BAPG2Z",
+   "question": "pilot-effect:C06:o2:publish を公開してよいですか。out/o2.txt は commit 済みで、受け入れ check（verify と cmp）は exit 0 でした。承認をいただければ、同じ公開 command を再実行します。",
+   "decision": "denied",
+   "created_at": "2026-11-06T13:25:06.858076756Z",
+   "decided_at": "2026-11-06T13:25:07.507971578Z"
+  }
+ ],
+ "effect_audit": [
+  {
+   "seq": 1,
+   "at": 1793971448.130758,
+   "event": "publish",
+   "logical_id": "C06:o1:publish",
+   "peer": {
+    "pid": 433138
+   },
+   "approval_id": null,
+   "decision": null,
+   "result": "refused_unapproved"
+  },
+  {
+   "seq": 2,
+   "at": 1793971461.5178735,
+   "event": "publish",
+   "logical_id": "C06:o1:publish",
+   "peer": {
+    "pid": 433951
+   },
+   "approval_id": "01M6RGG3S0EGMSC8VWWHGA7196",
+   "decision": "once",
+   "result": "published",
+   "effect_mac": "a1a27206519927ce2a79fdb5c6b3e79da1f9152771a288c90e9fb8d6f1f2cbce"
+  },
+  {
+   "seq": 3,
+   "at": 1793971500.668654,
+   "event": "publish",
+   "logical_id": "C06:o2:publish",
+   "peer": {
+    "pid": 443463
+   },
+   "approval_id": null,
+   "decision": null,
+   "result": "refused_unapproved"
+  }
+ ]
+}

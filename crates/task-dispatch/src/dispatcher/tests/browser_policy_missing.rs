@@ -8,6 +8,7 @@ use super::browser_ledger_gate::{
     CountingBrowserAdapter, RELEASE, prerequisite_events, tick_n, tick_until, write_ledger,
 };
 use super::*;
+use std::time::Duration;
 use task_core::browser_prerequisite::BrowserPrerequisiteCode;
 use task_worker::browser_ledger::LedgerWatch;
 
@@ -214,13 +215,21 @@ async fn browser_policy_missing_worker_rejection_is_not_infra_requeue() {
     });
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.set_browser_ledger_watch(valid_ledger(ledger_dir.path()));
+    // 試験専用の遅延: worker の拒否を 300ms 遅らせ、高負荷で終了が遅れる状況を負荷なしで再現する。
+    // 旧形（tick_n(5) ≒ 50ms だけ待つ）ならこの遅延で必ず落ちる（下の事前確認がその証拠）。
+    d.test_worker_start_delay = Some(Duration::from_millis(300));
+    tick_n(&mut d, 5).await;
+    assert_eq!(
+        transition_reasons(&store, task.id),
+        ["dispatch"],
+        "遅延中は worker の拒否がまだ届かない"
+    );
     // worker の拒否が届くまで（blocked になるまで）待つ。tick の回数には依らない。
     tick_until(&mut d, || {
         store.get(task.id).unwrap().unwrap().status == Status::Blocked
     })
     .await;
-    // 拒否の後に infra_requeue 等が続かないことを見るため、さらに数 tick 回す。
-    tick_n(&mut d, 5).await;
+    // Blocked を見た時点で検査する（以降の tick は gate が解けて再 dispatch するので、tick を足さない）。
     let reasons = transition_reasons(&store, task.id);
     assert_eq!(reasons, ["dispatch", "browser_prerequisite"]);
     let t = store.get(task.id).unwrap().unwrap();

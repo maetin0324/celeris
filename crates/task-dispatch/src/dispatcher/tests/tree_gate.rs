@@ -719,7 +719,12 @@ async fn tree_limit_breach_stops_only_that_subtree() {
         store.events_for(stopped.id)
     );
     assert!(store.runs_for_task(stopped.id).unwrap().is_empty());
-    let counters = task_ops::tree::tree_counters(store.as_ref(), root_id).unwrap();
+    let counters = task_ops::tree::tree_counters(
+        store.as_ref(),
+        root_id,
+        &task_core::pricing::BudgetRates::default(),
+    )
+    .unwrap();
     assert_eq!(counters.runs, 2, "{counters:?}");
     assert_eq!(counters.nodes, 3);
     assert_eq!(dec.key, "limit:max_tree_runs");
@@ -1184,4 +1189,114 @@ async fn auto_leaf_repeated_session_rollovers_and_new_context_exhaustion_are_cou
         );
         assert_replay_is_clean(&store);
     }
+}
+
+/// 木の run 1 本（model と 4 種の token を指定。保存済みの `cost_usd` は入れない）。
+fn seed_tree_run(store: &Arc<dyn TaskStore>, task: &Task, id: &str, model: &str, tokens: [u64; 4]) {
+    store
+        .run_index_start(task_core::RunRow {
+            run_id: id.to_string(),
+            task_id: task.id.to_string(),
+            work_unit_id: None,
+            role: task_core::RunIndexRole::Worker,
+            seq: 1,
+            status: task_core::RunIndexStatus::Completed,
+            adapter: Some("fake".into()),
+            model: Some(model.to_string()),
+            account: None,
+            session_id: None,
+            checkpoint: None,
+            usage: Some(task_core::Usage {
+                input_tokens: Some(tokens[0]),
+                output_tokens: Some(tokens[1]),
+                cache_read_tokens: Some(tokens[2]),
+                cache_creation_tokens: Some(tokens[3]),
+                ..Default::default()
+            }),
+            metrics: None,
+            started_at: "2026-11-06T08:00:00Z".to_string(),
+            finished_at: Some("2026-11-06T08:10:00Z".to_string()),
+        })
+        .unwrap();
+}
+
+fn usd_hold_fixture(
+    max_usd_micros: u64,
+) -> (tempfile::TempDir, Arc<dyn TaskStore>, Dispatcher, Task) {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut root = gate_root(dir.path());
+    // 木の節点（`tree` を持つ task）にして、上限の判定の対象にする。
+    root.tree = Some(task_core::TreeInfo::root(root.id));
+    store.create_task(&root, vec![]).unwrap();
+    let adapter = Arc::new(TreeAdapter::new(vec![], Duration::ZERO));
+    let mut d = tree_dispatcher(&store, adapter);
+    d.config.execution.limits.tree.max_tree_usd_micros = Some(max_usd_micros);
+    (dir, store, d, root)
+}
+
+/// ADR 2026-11-06-budget-usd-caps D1・D2-4（受け入れ 5）: 木の上限は換算費用で判定する。cache read は
+/// cache read の単価（claude-sonnet-5 は input の 1/10）で数えるので、cache が 200 万 token の run を足しても
+/// 上限（3 USD）に届かず run は起こせる。cache read をさらに 300 万 token 足すと 3.0 USD に達し、`max_tree_usd`
+/// の決定の要求が木に 1 件だけ出る。
+#[tokio::test]
+async fn tree_usd_limit_prices_cache_tokens_by_their_rates() {
+    let (_dir, store, d, root) = usd_hold_fixture(3_000_000);
+    let gate = WuDispatchGate::Atomic;
+    // 1M input = 2.0 USD、cache read 2M = 0.4 USD（input と同じ重さなら 4 USD で上限を超える）。
+    seed_tree_run(
+        &store,
+        &root,
+        "w1",
+        "claude-sonnet-5",
+        [1_000_000, 0, 2_000_000, 0],
+    );
+    assert!(!d.tree_run_limit_hold(&root, &gate).unwrap());
+    assert!(store.decisions_list(Some(root.id)).unwrap().is_empty());
+    // cache read 3M = 0.6 USD。合計 3.0 USD で上限に達する。
+    seed_tree_run(&store, &root, "w2", "claude-sonnet-5", [0, 0, 3_000_000, 0]);
+    assert!(d.tree_run_limit_hold(&root, &gate).unwrap());
+    assert!(d.tree_run_limit_hold(&root, &gate).unwrap());
+    let decisions = store.decisions_list(Some(root.id)).unwrap();
+    assert_eq!(decisions.len(), 1, "{decisions:?}");
+    assert_eq!(decisions[0].key, "limit:max_tree_usd");
+    assert!(
+        !decisions[0].request.question.contains("費用不明"),
+        "{}",
+        decisions[0].request.question
+    );
+}
+
+/// D2: 単価の無い model（local）の run は費用不明 1 件で、上限が決まっていれば止まる（0 USD にしない）。決定の
+/// 本文に費用不明の run の数を書く。`[budget_rates]` を渡すと数えられて止まらない。
+#[tokio::test]
+async fn tree_usd_limit_stops_on_unknown_cost_runs_unless_a_rate_is_configured() {
+    let (_dir, store, mut d, root) = usd_hold_fixture(10_000_000);
+    let gate = WuDispatchGate::Atomic;
+    seed_tree_run(&store, &root, "q1", "local-qwen-3", [1_000, 1_000, 0, 0]);
+    assert!(d.tree_run_limit_hold(&root, &gate).unwrap());
+    let decisions = store.decisions_list(Some(root.id)).unwrap();
+    assert_eq!(decisions.len(), 1, "{decisions:?}");
+    assert_eq!(decisions[0].key, "limit:max_tree_usd");
+    assert!(
+        decisions[0]
+            .request
+            .question
+            .contains("費用不明の run が 1 件"),
+        "{}",
+        decisions[0].request.question
+    );
+    d.set_budget_rates(
+        task_core::pricing::BudgetRates::new([(
+            "local-qwen".to_string(),
+            task_core::pricing::BudgetRate {
+                input_per_million: 0.1,
+                output_per_million: 0.2,
+                cache_read_per_million: 0.0,
+                cache_write_per_million: 0.0,
+            },
+        )])
+        .unwrap(),
+    );
+    assert!(!d.tree_run_limit_hold(&root, &gate).unwrap());
 }

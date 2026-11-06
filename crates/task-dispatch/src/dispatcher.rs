@@ -1173,6 +1173,9 @@ type EvalVersionProbe = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 pub struct Dispatcher {
     store: Arc<dyn TaskStore>,
     cos_chat_launch: Option<cos_chat::launch::CosChatLaunch>,
+    /// ADR 2026-11-06-budget-usd-caps D2: `[budget_rates]`（単価表に無い model の換算単価）。案件の日次上限と木の
+    /// 上限の判定が使う。既定は空（単価が引けない model は費用不明で止まる）。config からは `set_budget_rates` で渡す。
+    budget_rates: task_core::pricing::BudgetRates,
     config: DispatchConfig,
     /// 実効の全体並列度（ADR 2026-10-14-local-machine-settings D3・D4: store の `local_settings.max_concurrency`
     /// があれば store、無ければ `config.config_max_concurrency`）。tick の頭と admin の
@@ -1568,6 +1571,7 @@ impl Dispatcher {
         Self {
             store,
             cos_chat_launch: None,
+            budget_rates: task_core::pricing::BudgetRates::default(),
             config,
             max_concurrency,
             target_sweep: None,

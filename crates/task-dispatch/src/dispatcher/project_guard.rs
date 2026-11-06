@@ -11,7 +11,7 @@
 //! 2. 同じ失敗の繰り返し: root の失敗の wake の理由の署名が、最後の人の変更の後に
 //!    `max_same_failure_repeats` 回に達したら止めて人に聞く。
 //! 3. TS の品質: 直前の判断が `max_invalid_decisions` 回続けて検証に落ちた（`pc/invalid:*`）ら止める。
-//! 4. 予算: 今日の CoS 入力・起票・token が上限に達したら止める（`task_ops::project_budget`）。`Daily` の超過は
+//! 4. 予算: 今日の CoS 入力・起票・費用（USD 換算）が上限に達したら止める（`task_ops::project_budget`）。`Daily` の超過は
 //!    次の UTC の 00:00 を期限にし（`next_wake_at`）、期限の後の再開は `project_resume` が判定する。
 //! 5. TTL: phase `waiting` で外からの入力（cron 以外の wake）が `ttl_secs` 来ないまま timer か cron で
 //!    起きたら止める（外部の応答の欠落）。
@@ -114,6 +114,7 @@ pub(crate) fn evidence_wake(w: &ProjectWake) -> bool {
 pub(crate) fn pre_decide(
     store: &SqliteStore,
     limits: &BudgetLimits,
+    rates: &task_core::pricing::BudgetRates,
     state: &ProjectControllerState,
     wakes: &[ProjectWake],
     recheck: Option<&AchievementRecheck>,
@@ -221,7 +222,7 @@ pub(crate) fn pre_decide(
         }
     }
     // 4. 予算
-    let usage = budget::usage(store, project, now).map_err(|e| e.to_string())?;
+    let usage = budget::usage(store, project, now, rates).map_err(|e| e.to_string())?;
     if let Some(kind) = budget::exceeded(limits, &usage) {
         let severity = budget::severity(limits, &usage);
         let expiry =

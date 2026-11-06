@@ -819,7 +819,8 @@ impl Dispatcher {
         // ADR-0079 D7（Phase R3a）: 回答（`raise-once`）で足した余裕も残りに含める。
         let tree = self.effective_tree_limits(root_id)?;
         let counters =
-            task_ops::tree::tree_counters(self.store.as_ref(), root_id).map_err(ops_to_store)?;
+            task_ops::tree::tree_counters(self.store.as_ref(), root_id, &self.budget_rates)
+                .map_err(ops_to_store)?;
         let open_decisions = self
             .store
             .decisions_list(Some(root_id))?
@@ -857,9 +858,9 @@ impl Dispatcher {
             replans_left: u64::from(tree.max_tree_replans.saturating_sub(counters.replans)),
             node_replans_left: u64::from(self.effective_max_replans(task.id)?)
                 .saturating_sub(node_replans),
-            tokens_left: tree
-                .max_tree_tokens
-                .map(|max| max.saturating_sub(counters.tokens)),
+            usd_left: tree
+                .max_tree_usd_micros
+                .map(|max| max.saturating_sub(counters.usd_micros) as f64 / 1e6),
             open_decisions_left: tree
                 .max_open_decisions_per_tree
                 .saturating_sub(open_decisions) as u64,

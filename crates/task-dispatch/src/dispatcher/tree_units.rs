@@ -784,7 +784,7 @@ impl Dispatcher {
     }
 
     /// ADR-0079 D3（Phase R2a）: この dispatch が起こす run（worker / planner / repair。統合と「何もしない」は
-    /// 数えない）が木の上限（`max_tree_runs` / `max_tree_tokens` / replan なら `max_tree_replans`）を超えるなら
+    /// 数えない）が木の上限（`max_tree_runs` / `max_tree_usd` / replan なら `max_tree_replans`）を超えるなら
     /// `true`（呼び出し側は run を起こさない。Task は今の状態のまま待つ）。超えたときは `kind: limit` の決定の
     /// 要求を**木に 1 件だけ**出す（同じ key の未回答の決定が木にあれば出さない。tick ごとに増やさない）。
     /// 木が無効・木の節点でなければ常に `false`（従来と 1 バイトも変わらない）。
@@ -811,7 +811,8 @@ impl Dispatcher {
         }
         let root_id = task_core::tree::root_id_of(task);
         let counters =
-            task_ops::tree::tree_counters(self.store.as_ref(), root_id).map_err(ops_to_store)?;
+            task_ops::tree::tree_counters(self.store.as_ref(), root_id, &self.budget_rates)
+                .map_err(ops_to_store)?;
         // ADR-0079 D7（Phase R3a）: `raise-once` / `replan` の回答で足した余裕を当てる。
         let tree = self.effective_tree_limits(root_id)?;
         let Some(breach) = task_core::tree::run_limit_breach(&tree, &counters, next) else {
@@ -824,18 +825,22 @@ impl Dispatcher {
         {
             let path =
                 task_ops::tree::decision_path(self.store.as_ref(), task).map_err(ops_to_store)?;
-            let request = task_core::tree::limit_decision(
-                breach.limit,
-                None,
-                breach.count,
-                breach.max,
-                vec![task_core::decision::NEEDED_BEFORE_SELF.to_string()],
-                path,
-                task_core::DecisionRaisedBy {
-                    task_id: task.id,
-                    run_id: None,
-                    origin: task_core::DecisionOrigin::Daemon,
-                },
+            // ADR 2026-11-06-budget-usd-caps D2-4: 費用不明の run が理由なら、本文にその数と解除の方法を書く。
+            let request = task_core::tree::with_unknown_cost_note(
+                task_core::tree::limit_decision(
+                    breach.limit,
+                    None,
+                    breach.count,
+                    breach.max,
+                    vec![task_core::decision::NEEDED_BEFORE_SELF.to_string()],
+                    path,
+                    task_core::DecisionRaisedBy {
+                        task_id: task.id,
+                        run_id: None,
+                        origin: task_core::DecisionOrigin::Daemon,
+                    },
+                ),
+                breach.unknown_runs,
             );
             tracing::warn!(task_id = %task.id, %root_id, limit = breach.limit.as_str(), count = breach.count, max = breach.max, decision = %request.id, "a tree limit is exceeded; this node starts no new run until a human decides (ADR-0079 D3)");
             self.store.append_event(

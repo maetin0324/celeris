@@ -85,17 +85,17 @@ fn external_wake(store: &SqliteStore, p: &Project, n: usize, now: OffsetDateTime
         .unwrap();
 }
 
-/// 案件の task に token を使った run を 1 行（`tree_metrics` の数え方: input + output）。
-fn seed_run(env: &Env, t: &Task, run: &str, tokens: u64, started_at: &str) {
+/// 案件の task に `usd_micros`（micro-USD。claude-sonnet-5 の input 単価 2 USD/100 万 token で換算した input token）を使った run を 1 行。
+fn seed_run(env: &Env, t: &Task, run: &str, usd_micros: u64, started_at: &str) {
     rusqlite::Connection::open(env.db())
         .unwrap()
         .execute(
-            "INSERT INTO runs (run_id, task_id, role, seq, status, usage_json, started_at) \
-             VALUES (?1, ?2, 'worker', 1, 'completed', ?3, ?4)",
+            "INSERT INTO runs (run_id, task_id, role, seq, status, model, usage_json, started_at, finished_at) \
+             VALUES (?1, ?2, 'worker', 1, 'completed', 'claude-sonnet-5', ?3, ?4, ?4)",
             rusqlite::params![
                 run,
                 t.id.to_string(),
-                format!("{{\"input_tokens\":{tokens},\"output_tokens\":0}}"),
+                format!("{{\"input_tokens\":{},\"output_tokens\":0}}", usd_micros / 2),
                 started_at
             ],
         )
@@ -178,7 +178,7 @@ async fn project_controller_replay_crash_each_stage() {
     ];
     for boundary in stages {
         let env = Env::new();
-        let budget = || settings(|b| b.max_tokens_per_day = 1_000);
+        let budget = || settings(|b| b.max_usd_per_day_micros = 1_000);
         let p;
         {
             let store = env.open();
@@ -484,7 +484,7 @@ async fn project_controller_replay_budget_day_cap() {
 }
 
 #[tokio::test]
-async fn project_controller_replay_token_cap() {
+async fn project_controller_replay_usd_cap() {
     let env = Env::new();
     let store = env.open();
     let p = project(&store, Some(ControllerMode::Enabled));
@@ -492,11 +492,11 @@ async fn project_controller_replay_token_cap() {
         &store,
         "i1",
         none(),
-        settings(|b| b.max_tokens_per_day = 1_000),
+        settings(|b| b.max_usd_per_day_micros = 1_000),
     );
     prime(&mut d);
     let t = root_task(&env, &store, &p, Status::Done);
-    // 前の日の token は今日の予算に数えない。
+    // 前の日の費用は今日の予算に数えない。
     seed_run(&env, &t, "r-yesterday", 50_000, "2026-10-31T12:00:00Z");
     external_wake(&store, &p, 0, env.now());
     spin(&env, &mut d, 2);
@@ -504,20 +504,22 @@ async fn project_controller_replay_token_cap() {
     seed_run(&env, &t, "r-today", 1_500, "2026-11-01T00:00:10Z");
     external_wake(&store, &p, 1, env.now());
     spin(&env, &mut d, 2);
-    assert_eq!(
-        env.calls().len(),
-        1,
-        "the token cap stops before the decider"
-    );
+    assert_eq!(env.calls().len(), 1, "the USD cap stops before the decider");
     assert_eq!(guard_decisions(&store, &p, "pc/guard/budget"), 1);
     assert_eq!(escalations(&env, &p), 1);
     assert_eq!(phase(&store, &p), ControllerPhase::Blocked);
-    let usage = task_ops::project_budget::usage(&store, &p.id.to_string(), env.now()).unwrap();
-    assert_eq!(usage.tokens, 1_500);
+    let usage = task_ops::project_budget::usage(
+        &store,
+        &p.id.to_string(),
+        env.now(),
+        &task_core::pricing::BudgetRates::default(),
+    )
+    .unwrap();
+    assert_eq!(usage.usd_micros, 1_500);
     raw(
         "replay.jsonl",
         serde_json::json!({
-            "test": "project_controller_replay_token_cap", "cap": 1000, "tokens_today": usage.tokens,
+            "test": "project_controller_replay_usd_cap", "cap_usd_micros": 1000, "usd_micros_today": usage.usd_micros,
             "decides": env.calls().len(), "escalations": escalations(&env, &p),
             "cos_inputs": cos_inputs(&env), "expected_cos_inputs": 0, "chat_runs": chat_runs(&env),
         }),

@@ -37,3 +37,11 @@ updated: 2026-11-06
 
 - `crates/task-core/src/project_wake.rs` の `ProjectBudgetToday` に `usd`・`usd_unknown_runs`・`price_table_version` を足し、`Eq` derive を外した（`usd` が f64 のため）。この型は task-api の `budget_today` 応答の型で、task-core にしか置き場がない。tokens は表示用に残した。
 - この変更は WU の範囲 check（task-worker・task-api・docs・web・agent-docs のみ許可）に当たる。範囲 check の許可 path に `crates/task-core/src/project_wake.rs` を足す必要がある（plan_issue として申告）。
+
+## 証拠（提出時の HEAD で実行）
+
+- 範囲 check: `crates/task-core/src/project_wake.rs` を許可 path に加えた条件で範囲外 path なし。
+- `cargo fmt --all -- --check`: exit 0。
+- `cargo clippy -p task-worker -p task-api -- -D warnings`: exit 0。
+- `cargo nextest run -p task-api -p task-worker`: 2097 件 pass、11 件 skip。
+- `cargo clippy --workspace -- -D warnings` は task-dispatch（後続 unit dispatch の担当。`tree_counters` の `&BudgetRates` 引数など 6 件）で落ちる。この unit の範囲外。

@@ -1,7 +1,16 @@
 use super::*;
 
 fn reviewing_task(repo: &std::path::Path, store: &Arc<dyn TaskStore>) -> Task {
-    let (project, repos) = project_with_repos(store, &[("code", repo, RepoKind::Git)]);
+    reviewing_task_integrating(repo, store, false)
+}
+
+fn reviewing_task_integrating(
+    repo: &std::path::Path,
+    store: &Arc<dyn TaskStore>,
+    auto_integrate: bool,
+) -> Task {
+    let (project, repos) =
+        project_with_repos_integrating(store, &[("code", repo, RepoKind::Git)], auto_integrate);
     let mut task = git_task(
         repo,
         None,
@@ -1007,6 +1016,31 @@ async fn reviewer_runs_after_target_advanced(
     target_file: &str,
     blob_cmd: &str,
 ) -> (u32, Vec<Event>, Status) {
+    let (count, events, status, ..) = reviewer_runs_after_target_advanced_with_store(
+        task_file,
+        task_content,
+        target_file,
+        blob_cmd,
+        false,
+    )
+    .await;
+    (count, events, status)
+}
+
+async fn reviewer_runs_after_target_advanced_with_store(
+    task_file: &str,
+    task_content: &str,
+    target_file: &str,
+    blob_cmd: &str,
+    integrate: bool,
+) -> (
+    u32,
+    Vec<Event>,
+    Status,
+    Arc<dyn TaskStore>,
+    task_core::TaskId,
+    tempfile::TempDir,
+) {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     commit_file(repo.path(), "shared.txt", &numbered_lines("line1"));
@@ -1014,7 +1048,7 @@ async fn reviewer_runs_after_target_advanced(
     let flag = tempfile::tempdir().unwrap();
     let flag = flag.path().join("advanced");
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let mut task = reviewing_task(repo.path(), &store);
+    let mut task = reviewing_task_integrating(repo.path(), &store, integrate);
     set_check(&mut task, bump_main_writing(&flag, target_file, blob_cmd));
     task.acceptance.push(task_core::Criterion {
         text: "reviewer".into(),
@@ -1029,6 +1063,65 @@ async fn reviewer_runs_after_target_advanced(
     let wt = d.local_worktree_for(&task).unwrap();
     wt.ensure_blocking().unwrap();
     commit_file(&wt.dir, task_file, task_content);
+    if integrate {
+        // 配送（delivery）が走る root task の目印と部署の既定。
+        let task_dir = d
+            .config
+            .workspace_roots
+            .task_dir(&*store, &task.id)
+            .unwrap();
+        std::fs::create_dir_all(&task_dir).unwrap();
+        let (source, dir) = (repo.path(), &wt.dir);
+        std::fs::write(
+            task_dir.join("worktree.json"),
+            serde_json::json!({"repo":source,"dir":dir,"branch":wt.branch,"base":"","base_kind":"main",
+                "repos":[{"name":"code","kind":"git","source":source,"dir":dir,"branch":wt.branch}]})
+            .to_string(),
+        )
+        .unwrap();
+        let now = OffsetDateTime::now_utc();
+        for (id, parent, kind) in [
+            ("cos", None, task_core::OrgKind::Secretary),
+            ("engineering", Some("cos"), task_core::OrgKind::Department),
+        ] {
+            store
+                .org_upsert(&task_core::OrgNode {
+                    id: id.into(),
+                    parent_id: parent.map(str::to_string),
+                    name: id.into(),
+                    kind,
+                    genre: None,
+                    brief: String::new(),
+                    profile: Default::default(),
+                    position: 0,
+                    created_at: now,
+                    updated_at: now,
+                })
+                .unwrap();
+        }
+        // 本番では 2 回目以降の review は last_run_id（worker run の id）で始まる。空の id だと
+        // 空文字との照合が偶然合ってしまう。
+        store
+            .append_event(
+                task.id,
+                &Event::WorkerStarted {
+                    run_id: "01WORKERRUN".into(),
+                    adapter: "fake".into(),
+                    model: "m".into(),
+                    provider: None,
+                    account: None,
+                    role: None,
+                    task_role: None,
+                },
+            )
+            .unwrap();
+        d.config.delivery.default_departments = [(
+            task.project_id.unwrap().to_string(),
+            "engineering".to_string(),
+        )]
+        .into_iter()
+        .collect();
+    }
     assert!(
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
@@ -1036,7 +1129,97 @@ async fn reviewer_runs_after_target_advanced(
     assert!(run_until_idle(&mut d, 200).await.idle);
     let status = store.get(task.id).unwrap().unwrap().status;
     let count = *reviews.lock().unwrap();
-    (count, events_of(&store, &task), status)
+    let events = events_of(&store, &task);
+    (count, events, status, store, task.id, repo)
+}
+
+/// reviewer の合格を再利用した回でも、配送の行に検査済み SHA が書かれる
+/// （ADR 2026-11-06-reuse-pass-delivery-review-run）。修正前は review_run が worker run id で
+/// 照合が空文字と比べて常に偽になり、target_sha・reviewed_sha・merge_candidate_sha が NULL のまま残った。
+#[tokio::test]
+async fn reuse_pass_records_candidate() {
+    let (reviews, events, status, store, task_id, _repo) =
+        reviewer_runs_after_target_advanced_with_store(
+            "task.txt",
+            "task\n",
+            "other.txt",
+            "printf other",
+            true,
+        )
+        .await;
+    assert_eq!(reviews, 1, "the second pass must be a reuse");
+    assert_eq!(status, Status::Done);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::ReviewerPassReused { .. }))
+    );
+    let row = store.delivery_get(task_id).unwrap().unwrap_or_else(|| {
+        panic!(
+            "delivery row; {:?}",
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::DeliverySkipped { .. }))
+                .collect::<Vec<_>>()
+        )
+    });
+    let synced = synced_snapshots(&events);
+    let (target, _before, reviewed, _) = synced.last().unwrap().clone();
+    assert_eq!(row.target_sha.as_deref(), Some(target.as_str()), "{row:?}");
+    assert_eq!(
+        row.reviewed_sha.as_deref(),
+        Some(reviewed.as_str()),
+        "{row:?}"
+    );
+    assert_eq!(
+        row.merge_candidate_sha.as_deref(),
+        Some(reviewed.as_str()),
+        "{row:?}"
+    );
+}
+
+/// 再利用の合格の後の配送の行が、MergeQueued の `check_candidate`（crates/celeris/src/delivery.rs）の
+/// Fresh 条件を満たす: target_sha が既定ブランチの現在地、candidate == reviewed == branch の HEAD == 行の head。
+/// 修正前は 3 つの SHA が NULL で「検査済みの merge candidate が記録されていません」の Stale になり、
+/// request_rereview が再 review へ戻していた。
+#[tokio::test]
+async fn reuse_pass_delivery_reaches_merge() {
+    let (_, events, status, store, task_id, repo) = reviewer_runs_after_target_advanced_with_store(
+        "task.txt",
+        "task\n",
+        "other.txt",
+        "printf other",
+        true,
+    )
+    .await;
+    assert_eq!(status, Status::Done);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::ReviewerPassReused { .. }))
+    );
+    let row = store.delivery_get(task_id).unwrap().expect("delivery row");
+    assert_eq!(row.state, task_core::DeliveryState::MergeQueued, "{row:?}");
+    let (Some(target), Some(reviewed), Some(candidate)) = (
+        row.target_sha.clone(),
+        row.reviewed_sha.clone(),
+        row.merge_candidate_sha.clone(),
+    ) else {
+        panic!("candidate not recorded: {row:?}");
+    };
+    let repo = repo.path().to_path_buf();
+    assert_eq!(
+        target,
+        git_out(
+            &repo,
+            &["rev-parse", &format!("refs/heads/{}", row.default_branch)]
+        )
+    );
+    assert_eq!(
+        candidate,
+        git_out(&repo, &["rev-parse", &format!("refs/heads/{}", row.branch)])
+    );
+    assert_eq!((candidate, row.head.clone()), (reviewed.clone(), reviewed));
 }
 
 /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D1・D2: reviewer が合格した後に main が task の差分と

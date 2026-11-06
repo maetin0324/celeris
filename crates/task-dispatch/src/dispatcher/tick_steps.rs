@@ -71,14 +71,14 @@ impl TickSteps {
     pub(super) fn mark(&mut self, name: &'static str) {
         let us = u64::try_from(self.at.elapsed().as_micros()).unwrap_or(u64::MAX);
         self.out.push((name, us));
-        if let Some(prev) = self.malloc_at {
-            if let Some(cur) = malloc_now() {
-                let d = (cur.0 - prev.0, cur.1 - prev.1, cur.2 - prev.2);
-                if d.0 != 0 {
-                    self.malloc_steps.push((name, d.0, d.1, d.2));
-                }
-                self.malloc_at = Some(cur);
+        if let Some(prev) = self.malloc_at
+            && let Some(cur) = malloc_now()
+        {
+            let d = (cur.0 - prev.0, cur.1 - prev.1, cur.2 - prev.2);
+            if d.0 != 0 {
+                self.malloc_steps.push((name, d.0, d.1, d.2));
             }
+            self.malloc_at = Some(cur);
         }
         self.at = Instant::now();
     }

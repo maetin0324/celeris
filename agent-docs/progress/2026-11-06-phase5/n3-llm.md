@@ -130,7 +130,7 @@ analysis / proposal / followup_appropriate は true の試行数（最大 2）�
 | human_interventions | 10 | 10 | 0（全試行 1。人の発言 1 回） |
 | tasks_created | 0 | 2 | +2（delegate 新のみ） |
 
-注意: 費用は task_core の静的単価表による推定で、請求額ではない。quota（5 時間枠の消費率など）は記録する欄が無く、未記録。`tool_calls` は raw に欄が無く null。試行数が各 2 なので、差は傾向であって統計的な結論ではない。相談 12 試行が入らないので、全体の成功率の比較はまだ出せない。
+注意: 費用は task_core の静的単価表による推定で、請求額ではない。quota（5 時間枠の消費率など）は記録する欄が無く、未記録。`tool_calls` は raw に欄が無く null。試行数が各 2 なので、差は傾向であって統計的な結論ではない。この表は決定的採点の 20 試行だけの集計で、相談 12 試行を含めた 32 試行の比較は上の節にある。
 
 ## delegate-summary の新腕が 600 秒の上限で終わった理由
 事実（`n3/llm-rest30/raw/12-delegate-summary-new-r1.json`・`.daemon.log`、`27-…-r2` の raw）:

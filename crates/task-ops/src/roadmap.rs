@@ -114,6 +114,7 @@ pub struct OutcomeStatusInput {
 /// 確かめた状態の記録の入力（[`check_status`] の結果）。
 #[derive(Debug, Clone)]
 pub struct CheckedStatus {
+    evidence_token: (i64, task_core::store::RootEventMark),
     pub status: OutcomeStatus,
     pub roots: Vec<String>,
     pub evidence: Vec<String>,
@@ -137,6 +138,7 @@ pub fn check_status(
         return Err(invalid("roadmap_invalid", "reason is too long"));
     }
     let pid = project_id.to_string();
+    let evidence_token = store.roadmap_evidence_token(&pid)?;
     let approved = store.roadmap_approved(&pid)?.ok_or_else(|| {
         invalid(
             "roadmap_not_approved",
@@ -213,6 +215,7 @@ pub fn check_status(
             "dropping an outcome is a roadmap change; propose a version with dropped: true",
         )),
         status => Ok(CheckedStatus {
+            evidence_token,
             status,
             evidence: if status == OutcomeStatus::Reached {
                 roots.iter().map(|r| format!("task:{r}")).collect()
@@ -234,6 +237,24 @@ pub fn record_status_tx(
     actor: &str,
     now: OffsetDateTime,
 ) -> Result<i64, RoadmapWriteError> {
+    if SqliteStore::roadmap_evidence_token_tx(conn, project)? != checked.evidence_token {
+        return Err(RoadmapWriteError::Stale {
+            current: Some(SqliteStore::roadmap_evidence_token_tx(conn, project)?.0),
+        });
+    }
+    // controller の同じ版・到達・根拠は重複させない。人の状態操作と reason は従来どおり追記する。
+    let existing: Option<i64> = if checked.status == OutcomeStatus::Reached
+        && actor == "project_controller"
+    {
+        rusqlite::OptionalExtension::optional(conn.query_row(
+        "SELECT id FROM project_roadmap_outcome_events WHERE project_id = ?1 AND outcome_id = ?2 AND kind = 'status' AND id = (SELECT MAX(id) FROM project_roadmap_outcome_events WHERE project_id = ?1 AND outcome_id = ?2 AND kind = 'status') AND roadmap_version = ?3 AND status = ?4 AND evidence_json = ?5",
+        rusqlite::params![project, outcome_id, checked.evidence_token.0, checked.status.as_str(), serde_json::to_string(&checked.evidence).map_err(task_core::store::StoreError::from)?], |r| r.get(0)))?
+    } else {
+        None
+    };
+    if let Some(id) = existing {
+        return Ok(id);
+    }
     for root in &checked.roots {
         SqliteStore::roadmap_outcome_event_tx(
             conn,

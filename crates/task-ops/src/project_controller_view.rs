@@ -32,7 +32,7 @@ use crate::project_snapshot::{self as ps, SnapshotContext};
 const RECORDED_SCAN: usize = 100_000;
 
 /// 第 3 フェーズ I1・I2: 到達を記録済みの Outcome の id。
-/// - approved の Roadmap がある案件: Roadmap の最後の状態が `reached`（人の API か controller の効果が書いたもの）。
+/// - approved の Roadmap がある案件: 最後の状態が `reached` で、その evidence 自体が今の条件を満たす root を指す。
 /// - Roadmap の無い案件: 今の依頼文の版（`request_sha256`）での `mark_milestone` の判断で、効果が `applied`。
 /// - `shadow`・`dry_run` は効果を書かない（`suppressed`）ので、その mode では `suppressed` の `mark_milestone` も
 ///   記録に数える（enabled なら何が起きるかの写し。enabled の判定には効かない）。
@@ -46,7 +46,19 @@ pub fn recorded_outcomes(
         let view: task_core::roadmap::Roadmap =
             serde_json::from_value(view.clone()).map_err(|e| format!("roadmap view: {e}"))?;
         for o in view.outcomes {
-            if o.status == task_core::roadmap::OutcomeStatus::Reached {
+            if o.status == task_core::roadmap::OutcomeStatus::Reached
+                && snapshot
+                    .outcomes
+                    .iter()
+                    .find(|spec| spec.id == o.id)
+                    .is_some_and(|spec| {
+                        o.evidence.iter().any(|e| {
+                            snapshot.roots.iter().any(|r| {
+                                e == &format!("task:{}", r.id) && pp::root_satisfies(r, spec)
+                            })
+                        })
+                    })
+            {
                 out.insert(o.id);
             }
         }

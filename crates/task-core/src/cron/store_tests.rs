@@ -300,7 +300,10 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
         // 版数 37 の DB に戻す。
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE task_integrations; \
+            "DROP TRIGGER IF EXISTS task_roadmap_specs_capture; DROP TABLE IF EXISTS task_roadmap_specs; \
+             DROP TRIGGER IF EXISTS script_compare_log_keep_max; DROP TRIGGER IF EXISTS project_wakes_keep_max; \
+             DROP TRIGGER IF EXISTS project_controller_decisions_keep_max; \
+             DROP TABLE task_integrations; \
              ALTER TABLE task_change_integrations RENAME TO task_integrations; \
              DROP TABLE account_limits; \
              DROP INDEX idx_eval_trials_status; DROP INDEX idx_eval_trials_batch; DROP TABLE eval_trials; \
@@ -375,7 +378,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 117);
+    assert_eq!(SCHEMA_VERSION, 118);
     assert_eq!(
         store
             .cluster_settings_get("pegasus")

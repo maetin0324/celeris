@@ -361,10 +361,42 @@ pub fn build(
         }
         None => None,
     };
-    // P4-B: 起票の後に Outcome の条件（acceptance・checks）が変わった root は、その Outcome の根拠にしない。
-    for r in &mut roots {
+    // N5: 同じ版の条件と実際の command の両方を持つ root だけを根拠にする。
+    let captured = store.task_roadmap_specs(&pid)?;
+    let versions = if roadmap.is_some() {
+        store.task_roadmap_versions(&pid)?
+    } else {
+        BTreeMap::new()
+    };
+    for (r, task) in roots.iter_mut().zip(&tasks) {
         if let Some(meta) = metas.get(&r.id) {
             r.stale_outcome_ids = meta.stale_outcome_ids(&outcomes);
+        } else if roadmap.is_some() {
+            let original = captured.get(&r.id).and_then(|v| versions.get(v));
+            r.stale_outcome_ids = outcomes
+                .iter()
+                // acceptance が一致しない Outcome は元から満たせない。無関係な ID で snapshot を膨らませない。
+                .filter(|o| {
+                    o.acceptance
+                        .iter()
+                        .all(|text| task.acceptance.iter().any(|a| &a.text == text))
+                })
+                .filter(|o| {
+                    let same = original
+                        .and_then(|specs| specs.iter().find(|s| s.id == o.id))
+                        .is_some_and(|s| s.acceptance == o.acceptance && s.checks == o.checks);
+                    let commands = o.checks.iter().all(|c| {
+                        task.acceptance.iter().any(|a| match &a.check {
+                            Check::Command { cmd, expect_exit } => {
+                                cmd == &c.cmd && expect_exit == &c.expect_exit
+                            }
+                            _ => false,
+                        })
+                    });
+                    !same || !commands
+                })
+                .map(|o| o.id.clone())
+                .collect();
         }
     }
     let mut snapshot = ProjectSnapshot {

@@ -703,6 +703,8 @@ async fn project_controller_replay_event_primary_cron_fallback() {
         .unwrap();
     store
         .write_tx::<_, task_core::StoreError, _>(|tx| {
+            // 0118: 最大 ID は別案件の消費済み wake として残し、B の event の欠落だけを再現する。
+            tx.execute("INSERT INTO project_wakes (project_id, wake_key, kind, created_at, consumed_by) VALUES ('retention-sentinel', 'keep-max', 'cron', '2026-11-01T00:00:00Z', 'fixture')", [])?;
             tx.execute(
                 "DELETE FROM project_wakes WHERE project_id = ?1",
                 [b.id.to_string()],

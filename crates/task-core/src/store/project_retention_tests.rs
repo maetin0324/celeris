@@ -607,3 +607,6 @@ fn project_retention_keeps_max_id_rows_so_compare_ids_are_not_reused() {
         3
     );
 }
+
+#[path = "project_retention_integrity_tests.rs"]
+mod integrity;

@@ -395,12 +395,16 @@ if [ -n "$crates" ]; then
   args=()
   while IFS= read -r c; do args+=(-p "$c"); done <<<"$crates"
   echo "test-affected: crates: $(echo "$crates" | tr '\n' ' ')" >&2
-  # test-parallel.sh と同じく、試験の一時 dir を /tmp 直下の短い path に閉じ込める。Unix socket の sun_path は短く、
-  # 深い TMPDIR の下では credentiald・browser の IPC 試験が socket を bind できず起動待ちで時間切れになる。
-  tmproot="$(mktemp -d "/tmp/celeris-test-affected.XXXXXX")"
-  trap 'rm -f "$changed" "$changed.status"; chmod -R u+w "$tmproot" 2>/dev/null || true; rm -rf "$tmproot" 2>/dev/null || true' EXIT
-  mkdir -p "$tmproot/tmp"
-  export TMPDIR="$tmproot/tmp"
+  # 試験の一時 dir は共通 helper（lib/test-tmp-lifecycle.sh、ADR 2026-11-06-test-runner-tmp-lifecycle）が短い path の
+  # root（scratch か /tmp）に作る。Unix socket の sun_path は短く、深い TMPDIR の下では credentiald・browser の IPC 試験が
+  # socket を bind できない。cargo は setsid の別 session で起こし、TERM・INT・HUP は転送して子の終了後に消す（128+N で終わる）。
+  # SIGKILL で残った dir は次の起動時に回収される。`changed` file は $TMPDIR の外の元の場所に置いたままで、ここで消す。
+  # shellcheck source=lib/test-tmp-lifecycle.sh
+  . "$root/scripts/dev/lib/test-tmp-lifecycle.sh"
+  ttl_install_traps
+  trap 'tr_rc=$?; set +e; rm -f "$changed" "$changed.status"; (exit "$tr_rc"); ttl_finish' EXIT
+  ttl_init test-affected || { echo "test-affected: cannot create the test temporary directory" >&2; exit 2; }
+  tmproot="$TTL_DIR"
   bundle_built=0
   skip_log=""
   if printf '%s\n' "$crates" | grep -qx 'celeris\|celeris-script'; then
@@ -420,8 +424,8 @@ if [ -n "$crates" ]; then
       echo "test-affected: bundle を作れない（$why）。CELERIS_SCRIPT_BUNDLE_DIR を渡さない" >&2
     fi
   fi
-  cargo nextest run "${args[@]}"
-  cargo test --doc "${args[@]}"
+  ttl_run cargo nextest run "${args[@]}"
+  ttl_run cargo test --doc "${args[@]}"
   if [ -n "$skip_log" ]; then
     skips="$(grep -c . "$skip_log" || true)"
     echo "test-affected: script bundle SKIP: ${skips} 件" >&2

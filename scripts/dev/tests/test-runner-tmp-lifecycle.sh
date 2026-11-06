@@ -425,6 +425,217 @@ rc=$?
 expect_eq "socket: 107-byte path binds under TMPDIR; 108 bytes fails" "$rc/${out%% *}" "0/bound"
 expect_eq "socket: dir removed on exit" "$(ls -A "$base/r-sock" | grep -v '^.sweep.lock$' | wc -l)" 0
 
+# ==== 15. 実 runner（test-affected.sh・test-parallel.sh）への適用 ====================================================
+# 小さな git fixture に runner の写しと helper を置き、PATH の先頭の偽 cargo で動かす。実 cargo・全体試験は走らせない。
+# 偽 cargo は cargo nextest list/run・cargo metadata・cargo test --doc に最小の応答を返し、nextest run の中で TMPDIR に
+# dir と実 Unix socket を作り、FIFO で ready を通知して release まで止まれる（待ちは出来事待ち）。
+fx="$base/fx"
+fakebin="$base/fakebin"
+mkdir -p "$fx/scripts/dev/lib" "$fx/crates/foo/src" "$fx/tools/nextest" "$fakebin"
+cp "$here/scripts/dev/test-affected.sh" "$here/scripts/dev/test-parallel.sh" "$fx/scripts/dev/"
+cp "$LIB" "$fx/scripts/dev/lib/"
+cp "$here/tools/nextest/VERSION" "$fx/tools/nextest/VERSION"
+printf '#!/bin/sh\nexit 0\n' >"$fx/scripts/dev/check-health.sh"
+printf '[package]\nname = "foo"\n' >"$fx/crates/foo/Cargo.toml"
+echo '// v1' >"$fx/crates/foo/src/lib.rs"
+git -C "$fx" init -q -b main
+git -C "$fx" -c user.name=t -c user.email=t@example.invalid add -A
+git -C "$fx" -c user.name=t -c user.email=t@example.invalid commit -q -m fixture
+echo '// v2' >"$fx/crates/foo/src/lib.rs" # test-affected.sh が foo を対象に選ぶ変更
+PIN="$(tr -d ' \n' <"$fx/tools/nextest/VERSION")"
+cat >"$fakebin/cargo" <<'FAKE'
+#!/bin/sh
+case "$1 $2" in
+  "nextest --version") echo "cargo-nextest $FAKE_PIN"; exit 0 ;;
+  "nextest list") [ -z "${FAKE_LIST_RC:-}" ] || exit "$FAKE_LIST_RC"; echo '{"rust-binaries":{}}'; exit 0 ;;
+  "metadata "*)
+    targets='[]'
+    [ -z "${FAKE_META_BIN:-}" ] || targets='[{"name":"foo-cli","kind":["bin"]},{"name":"foo-it","kind":["test"]}]'
+    printf '{"workspace_root":"%s","target_directory":"%s/target","workspace_members":["foo"],"packages":[{"id":"foo","name":"foo","manifest_path":"%s/crates/foo/Cargo.toml","dependencies":[],"targets":%s}]}\n' \
+      "$FAKE_FX" "$FAKE_STATE" "$FAKE_FX" "$targets"
+    exit 0 ;;
+  "nextest run")
+    echo "$TMPDIR" >"$FAKE_STATE/tmpdir"
+    echo x >"$TMPDIR/fake-test-file"
+    [ -z "${FAKE_LEFT:-}" ] || mkdir "$TMPDIR/left-dir"
+    if [ -n "${FAKE_SOCK:-}" ]; then
+      python3 -I -c '
+import socket, sys
+d = sys.argv[1]
+name = "s" * (107 - len(d) - 1)
+s = socket.socket(socket.AF_UNIX)
+s.bind(d + "/" + name)
+open(sys.argv[2], "w").write("bound %d\n" % len(d + "/" + name))
+' "$TMPDIR" "$FAKE_STATE/sock" || exit 9
+    fi
+    if [ -n "${FAKE_HOLD:-}" ]; then
+      echo "$$ $TMPDIR" >"$FAKE_READY"     # ready 通知（controller が読むまで書き込みは FIFO に残る）
+      read -r _ <"$FAKE_RELEASE"            # release まで止まる
+      if echo y >"$TMPDIR/after-release" 2>/dev/null; then echo ok; else echo fail; fi >"$FAKE_STATE/child_tmp"
+    fi
+    echo "Starting 1 test across 1 binary"
+    if [ "${FAKE_RUN_RC:-0}" = 0 ]; then
+      echo "Summary [   0.001s] 1 test run: 1 passed, 0 skipped"
+    else
+      echo "        FAIL [   0.001s] foo tests::broken"
+      echo "Summary [   0.001s] 1 test run: 0 passed, 1 failed, 0 skipped"
+    fi
+    exit "${FAKE_RUN_RC:-0}" ;;
+  "test --doc") echo "test result: ok. 0 passed; 0 failed; 0 ignored"; exit 0 ;;
+esac
+echo "fake cargo: unexpected args: $*" >&2
+exit 97
+FAKE
+chmod +x "$fakebin/cargo"
+
+# rr_launch <case> <runner> [VAR=value...]: runner を専用 session（pgid = sid = RPID）で起こす。OUT ROOT RPID を設定。
+# python が SIGINT 等を既定に戻す（bash の非同期 command は INT を無視で継承するため）。
+rr_launch() {
+  local name=$1 runner=$2
+  shift 2
+  OUT="$base/o-$name"
+  ROOT="$base/r-$name"
+  mkdir -p "$OUT"
+  (
+    cd "$fx" || exit 99
+    exec env PATH="$fakebin:$PATH" CELERIS_WU_BASE=main CELERIS_TEST_TMP_ROOT="$ROOT" TMPDIR="$OUT" \
+      FAKE_PIN="$PIN" FAKE_FX="$fx" FAKE_STATE="$OUT" FAKE_READY="$OUT/ready" FAKE_RELEASE="$OUT/release" "$@" \
+      python3 -I -c 'import os,signal,sys
+os.setsid()
+for s in (signal.SIGINT, signal.SIGQUIT, signal.SIGTERM, signal.SIGHUP, signal.SIGPIPE):
+    signal.signal(s, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])' bash "scripts/dev/$runner.sh"
+  ) >"$OUT/out" 2>&1 </dev/null &
+  RPID=$!
+  echo "$RPID" >>"$PIDS"
+}
+# rr_hold <case> <runner> [VAR=value...]: FAKE_HOLD で起こし、偽 cargo の ready を待つ。RDIR（runner の dir）CPID を設定。
+rr_hold() {
+  local name=$1 line
+  mkdir -p "$base/o-$name"
+  mkfifo "$base/o-$name/ready" "$base/o-$name/release"
+  exec {RFD}<>"$base/o-$name/ready"
+  exec {XFD}<>"$base/o-$name/release"
+  rr_launch "$@" FAKE_HOLD=1
+  RDIR="" CPID=""
+  if read -r -t 60 -u "$RFD" line; then
+    CPID=${line%% *}
+    RDIR="$(dirname "${line#* }")"
+    echo "$CPID" >>"$PIDS"
+  else
+    bad "$name: fake cargo never became ready"
+  fi
+}
+rr_close() { exec {RFD}<&- {XFD}<&-; }
+rr_wait() { wait "$RPID"; RC=$?; }
+rr_release() { echo go >&"$XFD"; }
+# rr_run <case> <runner> [VAR=value...]: 止めずに最後まで走らせ、RC を設定
+rr_run() { rr_launch "$@"; rr_wait; }
+# rr_entries <root>: root の実行 dir（.sweep.lock を除く）の数
+rr_entries() { ls -A "$1" 2>/dev/null | grep -vc '^\.sweep\.lock$'; }
+
+for runner in test-affected test-parallel; do
+  t=${runner#test-}
+  t=${t:0:2}   # af / pa
+  # (a) 通常終了: exit 0 で dir が消える
+  rr_run "$t-ok" "$runner"
+  expect_eq "$runner normal: exit 0" "$RC" 0
+  expect_eq "$runner normal: run dir removed" "$(rr_entries "$ROOT")" 0
+  expect "$runner normal: TMPDIR was under the short root" grep -q "^$ROOT/" "$OUT/tmpdir"
+  # (b) 非 0 終了: nextest の exit code が runner の exit code になり、dir は消える
+  rr_run "$t-fail" "$runner" FAKE_RUN_RC=100
+  expect_eq "$runner nonzero: exit 100" "$RC" 100
+  expect_eq "$runner nonzero: run dir removed" "$(rr_entries "$ROOT")" 0
+  # (c) 捕捉できる signal: 子へ転送し、子の終了を待ってから dir を消し、128+N で終わる
+  for sg in INT:2 TERM:15 HUP:1; do
+    sn=${sg%%:*}; sv=${sg##*:}
+    rr_hold "$t-$sn" "$runner"
+    d_before="$RDIR"
+    expect "$runner $sn: run dir exists before the signal" test -d "$d_before"
+    kill -s "$sn" "$RPID"
+    rr_wait
+    expect_eq "$runner $sn: exit 128+N" "$RC" $((128 + sv))
+    wait_gone "$CPID"; expect "$runner $sn: fake cargo got the forwarded signal and ended" test "$?" = 0
+    expect_not "$runner $sn: run dir removed" test -e "$d_before"
+    expect_eq "$runner $sn: nothing left in root" "$(rr_entries "$ROOT")" 0
+    rr_close
+  done
+  # (d) 稼働中の別 runner の dir を保持する: A が子を走らせている間に B が起動・終了しても A の dir は消えない
+  rr_hold "$t-live" "$runner"
+  A_DIR="$RDIR"; A_RPID=$RPID; A_ROOT="$ROOT"; A_CPID=$CPID; A_OUT="$OUT"
+  # B は A と同じ root で通常終了まで走る（B の起動時と終了時の回収が A を見る）
+  OUT="$base/o-$t-liveB"; mkdir -p "$OUT"
+  (cd "$fx" && exec env PATH="$fakebin:$PATH" CELERIS_WU_BASE=main CELERIS_TEST_TMP_ROOT="$A_ROOT" TMPDIR="$OUT" FAKE_PIN="$PIN" FAKE_FX="$fx" FAKE_STATE="$OUT" bash "scripts/dev/$runner.sh") >"$OUT/out" 2>&1 </dev/null
+  expect_eq "$runner live: second runner exit 0" "$?" 0
+  expect "$runner live: running runner's dir kept" test -d "$A_DIR/t"
+  RPID=$A_RPID; OUT="$A_OUT"
+  rr_release; rr_wait
+  expect_eq "$runner live: first runner exit 0 after release" "$RC" 0
+  expect_eq "$runner live: child saw its TMPDIR until the end" "$(cat "$A_OUT/child_tmp" 2>/dev/null)" ok
+  expect_not "$runner live: dir removed at the end" test -e "$A_DIR"
+  rr_close
+  # (e) 親だけ KILL: dir は残る（SIGKILL 直後の削除は約束しない）。孤児の子が使う間は次の runner も消さず、
+  #     子が終わった後の次回起動で回収される
+  rr_hold "$t-kp" "$runner"
+  K_DIR="$RDIR"; K_ROOT="$ROOT"; K_CPID=$CPID; K_OUT="$OUT"; K_RPID=$RPID
+  kill -KILL "$RPID"; rr_wait
+  expect_eq "$runner KILL parent: exit 137" "$RC" 137
+  expect "$runner KILL parent: run dir left behind" test -d "$K_DIR/t"
+  expect "$runner KILL parent: orphan child still alive" pid_alive "$K_CPID"
+  OUT="$base/o-$t-kpB"; mkdir -p "$OUT"
+  (cd "$fx" && exec env PATH="$fakebin:$PATH" CELERIS_WU_BASE=main CELERIS_TEST_TMP_ROOT="$K_ROOT" TMPDIR="$OUT" FAKE_PIN="$PIN" FAKE_FX="$fx" FAKE_STATE="$OUT" bash "scripts/dev/$runner.sh") >"$OUT/out" 2>&1 </dev/null
+  expect "$runner KILL parent: dir used by the orphan child is kept by the next runner" test -d "$K_DIR/t"
+  OUT="$K_OUT"; rr_release
+  wait_gone "$K_CPID"
+  expect_eq "$runner KILL parent: orphan child used its TMPDIR to the end" "$(cat "$K_OUT/child_tmp" 2>/dev/null)" ok
+  rr_close
+  OUT="$base/o-$t-kpC"; mkdir -p "$OUT"
+  (cd "$fx" && exec env PATH="$fakebin:$PATH" CELERIS_WU_BASE=main CELERIS_TEST_TMP_ROOT="$K_ROOT" TMPDIR="$OUT" FAKE_PIN="$PIN" FAKE_FX="$fx" FAKE_STATE="$OUT" bash "scripts/dev/$runner.sh") >"$OUT/out" 2>&1 </dev/null
+  expect_not "$runner KILL parent: collected by the next start after the child ended" test -e "$K_DIR"
+  # (f) group KILL（runner の group と子の session の両方）: dir は残り、次回起動で回収される
+  rr_hold "$t-kg" "$runner"
+  G_DIR="$RDIR"; G_ROOT="$ROOT"; G_CPID=$CPID
+  kill -KILL -- "-$RPID" "-$CPID" 2>/dev/null
+  rr_wait
+  expect_eq "$runner KILL group: exit 137" "$RC" 137
+  wait_gone "$G_CPID"
+  expect "$runner KILL group: run dir left behind" test -d "$G_DIR"
+  OUT="$base/o-$t-kgB"; mkdir -p "$OUT"
+  (cd "$fx" && exec env PATH="$fakebin:$PATH" CELERIS_WU_BASE=main CELERIS_TEST_TMP_ROOT="$G_ROOT" TMPDIR="$OUT" FAKE_PIN="$PIN" FAKE_FX="$fx" FAKE_STATE="$OUT" bash "scripts/dev/$runner.sh") >"$OUT/out" 2>&1 </dev/null
+  expect_not "$runner KILL group: collected by the next start" test -e "$G_DIR"
+  rr_close
+  # (g) runner 内の短い path で実 Unix socket（sun_path 107 byte）が bind できる
+  rr_run "$t-sock" "$runner" FAKE_SOCK=1
+  expect_eq "$runner socket: exit 0" "$RC" 0
+  expect_eq "$runner socket: bound at 107 bytes" "$(cat "$OUT/sock" 2>/dev/null)" "bound 107"
+  expect "$runner socket: TMPDIR within the 47-byte budget" test "$(wc -c <"$OUT/tmpdir")" -le 48
+done
+
+# (h) test-parallel の失敗時の exit code・summary・leftovers 診断（偽 cargo だけ。全体試験は走らせない）
+rr_run pa-prep test-parallel FAKE_LIST_RC=1
+expect_eq "test-parallel prepare failure: exit 1" "$RC" 1
+expect "test-parallel prepare failure: nextest run not started" grep -q 'cargo nextest run was not started' "$OUT/out"
+expect "test-parallel prepare failure: summary prepare_exit 1" grep -q '"prepare_exit": 1' "$OUT/out"
+expect_eq "test-parallel prepare failure: run dir removed" "$(rr_entries "$ROOT")" 0
+rr_run pa-meta test-parallel FAKE_META_BIN=1
+expect_eq "test-parallel missing CLI binary: exit 4" "$RC" 4
+expect "test-parallel missing CLI binary: diagnostic" grep -q 'CLI binary missing or not executable: foo-cli' "$OUT/out"
+expect "test-parallel missing CLI binary: summary prepare_exit 4" grep -q '"prepare_exit": 4' "$OUT/out"
+rr_run pa-nfail test-parallel FAKE_RUN_RC=100
+expect_eq "test-parallel nextest failure: exit 100" "$RC" 100
+expect "test-parallel nextest failure: failed test name before the last line" grep -q '^test-parallel: failed: foo tests::broken$' "$OUT/out"
+expect_eq "test-parallel nextest failure: last line" "$(tail -n 1 "$OUT/out")" "test-parallel: cargo nextest run failed (exit 100)"
+expect "test-parallel nextest failure: summary nextest_exit 100" grep -q '"nextest_exit": 100' "$OUT/out"
+rr_run pa-left test-parallel FAKE_LEFT=1
+expect_eq "test-parallel leftovers: exit 0" "$RC" 0
+expect "test-parallel leftovers: warning kept" grep -q 'test-parallel: warning: tests left 2 entries in TMPDIR (removed on exit)' "$OUT/out"
+expect "test-parallel leftovers: summary tmp_leftovers 2" grep -q '"tmp_leftovers": 2' "$OUT/out"
+expect_eq "test-parallel leftovers: dir removed after the warning" "$(rr_entries "$ROOT")" 0
+expect_eq "test-parallel leftovers: last line ok" "$(tail -n 1 "$OUT/out")" "test-parallel: ok"
+# 旧 mktemp -d /tmp/celeris-test-* と旧 trap は両 runner に無い
+expect_not "old mktemp /tmp/celeris-test-* removed from test-affected.sh" grep -q 'celeris-test-affected\.' "$here/scripts/dev/test-affected.sh"
+expect_not "old mktemp /tmp/celeris-test-* removed from test-parallel.sh" grep -q 'celeris-test-parallel\.\|cleanup_logdir' "$here/scripts/dev/test-parallel.sh"
+
 # ---- 後始末の確認は EXIT の cleanup が行う（process・dir が残れば exit 1） -----------------------------------------
 if [ "$fails" -ne 0 ]; then
   echo "runner-tmp-lifecycle: $fails of $checks checks FAILED" >&2

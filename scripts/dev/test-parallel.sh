@@ -71,21 +71,29 @@ EOF
 }
 [ "$userns_ok" = false ] && userns_note
 
-# Use a short path: Unix-domain sockets have a small fixed sun_path limit, and
-# many integration fixtures put socket names below tempfile::tempdir(). A
-# caller-provided TMPDIR can already be deep, so nesting another test directory
-# there makes otherwise valid credential/browser IPC sockets unbindable.
-logdir="$(mktemp -d "/tmp/celeris-test-parallel.XXXXXX")"
-# 読み取り専用にした試験の残骸でも消せるよう権限を戻してから消す。後片付けの失敗は警告だけで exit code を変えない。
-cleanup_logdir() {
-  chmod -R u+w "$logdir" 2>/dev/null || true
-  rm -rf "$logdir" 2>/dev/null || echo "test-parallel: warning: could not remove $logdir" >&2
-  return 0
+# 一時 dir は共通 helper（lib/test-tmp-lifecycle.sh、ADR 2026-11-06-test-runner-tmp-lifecycle）が短い path の root
+# （scratch か /tmp）に作る。Unix socket の sun_path は短く固定で、深い TMPDIR の下では credential・browser の IPC 試験が
+# socket を bind できないためである。cargo は setsid の別 session で起こし、TERM・INT・HUP は転送して子の終了後に消す
+# （128+N で終わる）。SIGKILL で残った dir は次の起動時に回収される。log は $logdir に、試験の一時 dir は $TMPDIR（$logdir/t）に置く。
+# shellcheck source=lib/test-tmp-lifecycle.sh
+. "$here/scripts/dev/lib/test-tmp-lifecycle.sh"
+ttl_install_traps
+ttl_init test-parallel || { echo "test-parallel: cannot create the test temporary directory" >&2; exit 2; }
+logdir="$TTL_DIR"
+
+# run_tee <log> <cmd...>: cmd を別 session で起こし、出力を stdout に流しつつ log にも書く（旧 `cmd 2>&1 | tee log`）。
+# 戻り値は cmd の exit code。tee は終わりまで待ち、出力を取りこぼさない。
+run_tee() {
+  local log=$1 tfd tpid rc=0
+  shift
+  # tee は lock の fd を継がない（継ぐと、signal の後始末で「まだ参照されている」と見て dir を消せない）
+  exec {tfd}> >(eval "exec ${TTL_LOCK_FD}>&-"; exec tee "$log")
+  tpid=$!
+  ttl_run "$@" >&"$tfd" 2>&1 || rc=$?
+  exec {tfd}>&-
+  wait "$tpid" 2>/dev/null || true
+  return "$rc"
 }
-trap cleanup_logdir EXIT
-# 試験の一時 dir は $logdir/tmp に閉じ込め、上の trap で残った物ごと消す（ADR 2026-10-07-build-tmp-hygiene D3）
-mkdir -p "$logdir/tmp"
-export TMPDIR="$logdir/tmp"
 
 # 準備（build）: nextest run と同じ workspace の試験 binary と、試験が起動する実 bin（celerisctl など）を先に build する
 # （`cargo nextest list` は試験 binary とその package の bin を build する）。試験が起動する実 bin は cargo の規則どおり
@@ -98,10 +106,10 @@ export TMPDIR="$logdir/tmp"
 # （list --message-format json）の試験 binary の dep-info からその数を診断行に出す（exit は変えない）。
 echo "test-parallel: prepare: cargo nextest list --workspace --list-type binaries-only" >&2
 prc=0
-cargo nextest list --workspace --list-type binaries-only --message-format json --color never \
+ttl_run cargo nextest list --workspace --list-type binaries-only --message-format json --color never \
   >"$logdir/prepare.json" || prc=$?
 if [ "$prc" -eq 0 ]; then
-  cargo metadata --no-deps --format-version 1 >"$logdir/metadata.json" || prc=$?
+  ttl_run cargo metadata --no-deps --format-version 1 >"$logdir/metadata.json" || prc=$?
 fi
 if [ "$prc" -eq 0 ]; then
   python3 - "$logdir/metadata.json" "$logdir/prepare.json" <<'PY' || prc=$?
@@ -156,8 +164,8 @@ t0="$(date +%s.%N)"
 nrc=0
 if [ "$prc" -eq 0 ]; then
   echo "test-parallel: cargo nextest run --workspace (nextest $have_ver, $jobs jobs of $ncpu cpus)" >&2
-  cargo nextest run --workspace --no-fail-fast --color never --hide-progress-bar \
-    --test-threads "$jobs" "$@" 2>&1 | tee "$logdir/nextest.log" || nrc=$?
+  run_tee "$logdir/nextest.log" cargo nextest run --workspace --no-fail-fast --color never --hide-progress-bar \
+    --test-threads "$jobs" "$@" || nrc=$?
 else
   : >"$logdir/nextest.log"
 fi
@@ -169,11 +177,11 @@ if [ "${CELERIS_TEST_SKIP_DOC:-0}" = 1 ]; then
   drc=skipped
 else
   echo "test-parallel: cargo test --doc --workspace" >&2
-  cargo test --doc --workspace --color never 2>&1 | tee "$logdir/doc.log" || drc=$?
+  run_tee "$logdir/doc.log" cargo test --doc --workspace --color never || drc=$?
 fi
 t2="$(date +%s.%N)"
 
-tmp_leftovers="$(find "$logdir/tmp" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')"
+tmp_leftovers="$(find "$TMPDIR" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$tmp_leftovers" -ne 0 ]; then
   echo "test-parallel: warning: tests left $tmp_leftovers entries in TMPDIR (removed on exit)" >&2
 fi

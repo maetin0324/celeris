@@ -1,0 +1,46 @@
+{
+  "source": "/local/celeris/data/db/celeris.sqlite3 (mode=ro, PRAGMA query_only=ON, single transaction: SELECT id,status,updated_at FROM tasks)",
+  "checked_at": "2026-11-06T15:18:15Z",
+  "tasks": [
+    {
+      "id": "01M6QW0GSCHZZGYRNQMNRKRDZA",
+      "status": "done",
+      "updated_at": "2026-11-06T07:58:33.861377708Z"
+    },
+    {
+      "id": "01M6QW0GSG1AVARWC334AZCES1",
+      "status": "done",
+      "updated_at": "2026-11-06T13:40:03.769188271Z"
+    },
+    {
+      "id": "01M6QW0GSJR1X7797YF4Y1HWR8",
+      "status": "done",
+      "updated_at": "2026-11-06T11:03:08.585313147Z"
+    },
+    {
+      "id": "01M6QW0GSM7ZHFNP3PWZJJ4SNF",
+      "status": "done",
+      "updated_at": "2026-11-06T08:29:00.846168876Z"
+    },
+    {
+      "id": "01M6QW0GSR42EYSKBME8VJ5TDF",
+      "status": "done",
+      "updated_at": "2026-11-06T12:10:50.755012464Z"
+    },
+    {
+      "id": "01M6QW0GSWRGP85RE263TWTM01",
+      "status": "done",
+      "updated_at": "2026-11-06T11:41:13.425832841Z"
+    },
+    {
+      "id": "01M6QW0GT1GBT4M4QKDDG79Z7X",
+      "status": "done",
+      "updated_at": "2026-11-06T14:40:02.186616155Z"
+    },
+    {
+      "id": "01M6QW0GT56KDVBHCXX78GBFHF",
+      "status": "done",
+      "updated_at": "2026-11-06T15:17:31.176723065Z"
+    }
+  ]
+}

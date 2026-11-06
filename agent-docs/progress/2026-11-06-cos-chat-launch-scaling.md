@@ -28,7 +28,6 @@ root task ごとに summary thread が増えるので、tick の費用が thread
 - RSS 増加 task 01M6QZ031RC9YK3E6T12ESCR80 とは重複して直していない。この変更は DB 読み取りの走査量を減らすだけで、arena の設定には触れていない。
 
 ## 本番への移行
-migration 0119 は index 2 本の追加のみ（データ変更なし）。config の変更は無い。
 
 ## 本番 DB の写しでの段別計測（operator 依頼 10:20Z）— 結論: 修正は本番の遅さを再現も解消もしていない
 手順: `crates/celeris/tests/tick_prod_copy_steps.rs`（`TICK_PROD_DB` に backup `20261106-093409-pre-c9bf4bf7dc76.sqlite3` を渡す手動の計測、既定では走らない）。
@@ -74,3 +73,12 @@ tick 0（修正前 / 修正後）: tick_cos_chat_launch 1,875,090 / 3,498,944、
 ## 未解決: 本番の tick_cos_chat_launch が一時的に 20 秒になった原因
 operator の journal 集計（celeris@c9bf4bf7dc76、10 分ごとの中央値）: 09:30〜09:40Z は 0.13〜0.16 秒、09:50〜10:10Z は 18〜23 秒（最大 46.6 秒）、10:20Z 以降は 0.11〜0.22 秒に戻り、12:30〜13:10Z は 0.14 秒（最大 0.37 秒）。旧 daemon（9ed88afa）の停止は 10:53:48Z で、遅さが戻ったのはそれより前なので、2 daemon の同居だけが原因とは言えない。
 原因は未特定。c9bf4bf7 には cos.* の段別計測が入っていないので、どの段かも分からない。この task の release が入った後の slow tick の cos.* 値で、再発時に段を特定する。
+
+## 検査結果（commit「n2: 修正前後の交互測定の結果と本番の未解決事項を進捗に書く」の時点の HEAD、main 取り込み後）
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 7761 件 passed・23 skipped、web unit 711 件 passed、test-ts-verify 20 passed）
+- `cargo clippy --workspace -- -D warnings`: exit 0
+- `cargo fmt --all -- --check`: exit 0
+- migration の試験: `cargo nextest run -p task-core` 1260 件 passed、`project_evidence_integrity` 6 件 passed（migration 0119・schema 119 への付け替え後）
+
+## 本番への移行
+migration 0119 は index 2 本の追加のみ（データ変更なし）。config の変更は無い。main の 0118（N5、evidence_integrity）の後に適用される。

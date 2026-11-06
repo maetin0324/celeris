@@ -97,7 +97,7 @@ fn fill(path: &std::path::Path, projects: usize) -> (i64, i64, i64) {
                 } else {
                     last = id;
                 }
-                if (h as usize + p) % 10 == 0 {
+                if (h as usize + p).is_multiple_of(10) {
                     let by = if h % 100 == 0 { "ts" } else { "rust" };
                     c.execute(params![
                         at,

@@ -191,7 +191,7 @@ fn outcome_block_rejects_bad_checks() {
     assert!(parse_outcomes(&block(&long)).is_err());
     let many = format!(
         "[{}]",
-        vec![r#"{"cmd":"true"}"#; OUTCOME_CHECKS_MAX + 1].join(",")
+        [r#"{"cmd":"true"}"#; OUTCOME_CHECKS_MAX + 1].join(",")
     );
     assert!(parse_outcomes(&block(&many)).is_err());
 }

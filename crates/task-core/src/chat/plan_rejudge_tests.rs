@@ -75,7 +75,7 @@ fn answered_decision_hands_the_escalated_plan_approval_to_cos_once() {
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].item_id, item);
     let rejudge = s
-        .cos_triage_plan_rejudge_claim(&thread, "run-rejudge", &[item.clone()], at(6))
+        .cos_triage_plan_rejudge_claim(&thread, "run-rejudge", std::slice::from_ref(&item), at(6))
         .expect("claim")
         .expect("handed to CoS");
     assert_eq!(rejudge.item_ids, vec![item.clone()]);

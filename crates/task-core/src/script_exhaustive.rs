@@ -293,7 +293,10 @@ mod tests {
         assert_eq!(standing(&[]), ScriptExhaustiveStanding::Missing);
         // 合格。
         let p = run("01", "g1", Passed, good());
-        assert_eq!(standing(&[p.clone()]), ScriptExhaustiveStanding::Passed);
+        assert_eq!(
+            standing(std::slice::from_ref(&p)),
+            ScriptExhaustiveStanding::Passed
+        );
         // running・aborted は数えない。
         let r = run("02", "g1", Running, ScriptExhaustiveCounts::default());
         let a = run("03", "g1", Aborted, ScriptExhaustiveCounts::default());

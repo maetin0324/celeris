@@ -29,5 +29,9 @@
     "RUSTFLAGS": null
   },
   "host": "home-dev",
-  "excluded": "preliminary and first before-off overlapped in separate PID namespaces; submitted before-off is repeated sequentially"
+  "excluded": "preliminary and first before-off overlapped in separate PID namespaces; submitted before-off is repeated sequentially",
+  "after_shadow_attempt1": "interrupted at the 20% budget boundary; partial data excluded; rerun all four sizes",
+  "unfinished": [
+    "after-shadow"
+  ]
 }

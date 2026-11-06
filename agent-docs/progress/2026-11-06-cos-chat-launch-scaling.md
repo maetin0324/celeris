@@ -134,3 +134,8 @@ migration 0119 は index 2 本の追加のみ（データ変更なし）。confi
 - dispatch の周期を決める tick 全体は中央値 8.2 秒 → 3.6 秒だった。差の大半は recover_reviews など修正対象外の段の揺れで、修正による短縮は tick あたり約 0.16 秒である。
 - 本番の 18〜23 秒（09:50〜10:10Z）は写しでは再現しない。ただしこの SQL は cache が冷えた状態で 1 回 0.93 秒かかり（sqlite3 CLI）、escalated 項目と inbox thread の message が増えるほど伸びる。soak の傾き（escalated 項目と message が単調に増える）と矛盾しない説明だが、soak・本番での確認は未実施である。
 - 生データ: run の artifacts の `m-{1,2}-{after,d3c}.jsonl`（repo には入れない）。
+
+## 配送の prepare 失敗の修正（delivery-repair、18:33Z）
+- 原因: prepare の verify 段が `/local/celeris/state/current/scripts/snapshot_db.py: No such file` で落ちた。release.sh が同梱するのは `scripts/selfdeploy/*.sh` だけで、main の phase 5 commit「pin verify database snapshot during concurrent writes」が足した `snapshot_db.py` が同梱されず、同梱の verify.sh が隣に探して見つからなかった。この task の差分とは無関係な main 側の欠陥。release の build・試験・clippy・web は全部 exit 0 だった。
+- 修正: main が同じ欠陥を lib.sh の `sd_bundle_selfdeploy_scripts`（`*.sh` と `*.py` を写し、`snapshot_db.py` が無ければ止める）と試験 `scripts/selfdeploy/tests/bundle_includes_verify_helpers.sh` で先に直した。review 前の main 同期（integration_repair）で release.sh の衝突は main 側を採り、この branch の同じ目的の変更と重複する試験 `release_bundles_helper_scripts.sh` は外した。
+- 注意: 今 promote 済みの release（f4e293e2a0a5）の `scripts/` には `snapshot_db.py` が無い。prepare はその release の verify.sh を起こすため、この修正が入った release が昇格するまで同じ失敗が続く。人の手順: 本番の `current/scripts/` に `scripts/selfdeploy/snapshot_db.py` を置く（本番 host の変更なので worker は行わない）。

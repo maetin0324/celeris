@@ -134,3 +134,8 @@ command（release build の test binary を直接起こす。`$BIN` は `cargo t
 - コマンドと exit（提出時の HEAD で実行）:
   - `cargo nextest run -p task-core project_retention_`: exit 0、7 passed。
   - `cargo nextest run -p celeris script_guard_sweep_`: exit 0、2 passed。
+  - `cargo fmt --all -- --check`: exit 0。
+  - `cargo clippy --workspace -- -D warnings`: exit 0。
+  - `bash scripts/dev/test-affected.sh`: exit 0。nextest 7,725 passed（22 skipped）、test-ts-verify 20 passed、script bundle の SKIP 0 件。`crates/celeris/tests/script_generation_e2e.rs` の digest 切替の試験も passed（落ちなかったので原因の追記は無い）。
+- 未解決: trigger は最大 id の守りを持たない（上の「未解決」）。
+- commit（件名）: `p4d: retention GC は 3 表とも最大 id の行を残す（compare の id の使い直しで script guard が違反を見落とすのを防ぐ）`、`p4d: fix-compare-id-reuse の検査結果`。

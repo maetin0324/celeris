@@ -247,9 +247,16 @@ impl Dispatcher {
     }
 
     /// One non-blocking tick: each eligible thread may start at most one run.
-    pub(crate) fn tick_cos_chat_launch(&mut self) {
+    pub(crate) fn tick_cos_chat_launch(&mut self) -> Vec<(&'static str, u64)> {
         let Some(mut launch) = self.cos_chat_launch.take() else {
-            return;
+            return Vec::new();
+        };
+        let mut parts: Vec<(&'static str, u64)> = Vec::new();
+        let mut at = std::time::Instant::now();
+        let mut lap = |name: &'static str| {
+            let us = u64::try_from(at.elapsed().as_micros()).unwrap_or(u64::MAX);
+            parts.push((name, us));
+            at = std::time::Instant::now();
         };
         launch.running.retain(|_, handle| !handle.is_finished());
         let running = &launch.running;
@@ -263,33 +270,41 @@ impl Dispatcher {
             .route_reservations
             .retain(|thread, _| launch.running.contains_key(thread));
         launch.retry_routes(self);
+        lap("cos.retry_routes");
         // Reconcile stop and ownerless runs before a new claim, so an old
         // process cannot overlap a new one in the same thread.
         launch.control_hook(self);
+        lap("cos.control_hook");
         // Intake is DB-only and runs even when CoS is disabled, so the
         // unavailable fallback can still see every new wait.
         // The digest pass (ADR 2026-11-02-ts-control-layer-boundary S4-12/S4-14) runs inside the
         // intake, before the fallback.
         launch.triage_ingest(self);
+        lap("cos.triage_ingest");
         // ADR 2026-10-15-root-done-cos-summary: root task done → a summary thread and one CoS run.
         launch.root_done_tick(self);
+        lap("cos.root_done_tick");
         if self.accepting_new_work && self.disk_ready && launch.config.enabled {
             if let Err(error) = launch.claim_queued(self) {
                 tracing::warn!(%error, "CoS chat launch tick failed");
             }
+            lap("cos.claim_queued");
             // ADR 2026-10-27-relayed-instructions 付記 A2: after the queued messages (a relay's own
             // run goes first) and before new triage items.
             if let Err(error) = launch.relay_rejudge(self) {
                 tracing::warn!(%error, "CoS relay re-judging failed");
             }
+            lap("cos.relay_rejudge");
             // ADR 2026-10-30-cos-review-open-waits D4: a plan approval escalated for an open
             // decision goes back to CoS once the person answered it.
             if let Err(error) = launch.plan_rejudge(self) {
                 tracing::warn!(%error, "CoS plan re-judging failed");
             }
+            lap("cos.plan_rejudge");
             if let Err(error) = launch.triage_launch(self) {
                 tracing::warn!(%error, "CoS triage launch failed");
             }
+            lap("cos.triage_launch");
         }
         {
             let retries = launch.retries.lock().unwrap_or_else(|e| e.into_inner());
@@ -299,6 +314,7 @@ impl Dispatcher {
             });
         }
         self.cos_chat_launch = Some(launch);
+        parts
     }
 }
 

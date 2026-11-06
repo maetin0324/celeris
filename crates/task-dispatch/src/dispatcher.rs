@@ -2402,8 +2402,9 @@ impl Dispatcher {
             report.eval_started = self.tick_eval_trials();
         }
         steps.mark("tick_eval_trials");
-        self.tick_cos_chat_launch();
+        let cos_parts = self.tick_cos_chat_launch();
         steps.mark("tick_cos_chat_launch");
+        steps.sub(cos_parts);
         report.in_flight = self.in_flight();
         report.idle = self.is_idle()?;
         steps.mark("in_flight_and_is_idle");

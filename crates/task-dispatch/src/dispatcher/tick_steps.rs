@@ -30,6 +30,11 @@ impl TickSteps {
         self.at = Instant::now();
     }
 
+    /// 段の内側の小段を、現在の `mark` とは別に `name.sub` の名前で積む（時間は足さない。内訳の観測用）。
+    pub(super) fn sub(&mut self, parts: Vec<(&'static str, u64)>) {
+        self.out.extend(parts);
+    }
+
     /// 段の列を返し、tick が遅ければ内訳を警告に出す。
     pub(super) fn finish(self) -> Vec<(&'static str, u64)> {
         let total = self.started.elapsed();

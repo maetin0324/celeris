@@ -106,7 +106,11 @@ skill・prompt の source（`cos_chat.rs`・`preamble.rs`・`cos_chat/launch.rs`
 - 実 LLM・有料 API・本番の DB/config/daemon・systemctl・promote・本番 shadow・24〜72 時間の稼働はしていない。試行は `$TMPDIR` の一時 home・一時 DB・loopback の daemon と fake harness だけ。CPU を焼く負荷はかけていない。
 - 旧 milestones API の 410、human_required、許可の保護、TS と Rust の分担、K2/K4/IEEE Access の凍結評価には触れていない。TS の policy・bundle と Rust のコードは変えていない（TS-only の edit→verify の cargo 0 回にも影響しない）。
 
-## 未実施（人の承認が要る）
+## 実 LLM 32 試行の結果の要約（2026-11-06、詳細は [n3-llm.md](../2026-11-06-phase5/n3-llm.md)）
+- 実 LLM の 32 試行は完了し、相談 12 試行は人（rmaeda）が採点した。32 試行の成功率は旧 0.4375（7/16）、新 0.50（8/16）。相談は旧 1/6、新 0/6、consult_depth 平均は旧 1.17、新 0.83。
+- 各ケース 2 回ずつで差は 1〜2 試行分。採点者の注記は「試行の CoS には適切な KB・文脈が無いので、かなり辛めの採点」。傾向であって統計的な結論ではない。
+
+## 未実施（人の承認が要る）（実 LLM 32 試行は上の節のとおり実施済み。以下は当時の記述）
 - 実 LLM の 32 試行（上の上限の候補で）。相談の深さ・読取の正確さ・不要な root の抑制・安全な拒否・元 thread への要約の**モデルとしての**旧新差、CoS の token・cache・usage の旧新差は未検証。
 
 ## 未解決

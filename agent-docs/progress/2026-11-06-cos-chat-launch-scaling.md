@@ -47,7 +47,7 @@ tick 0（修正前 / 修正後）: tick_cos_chat_launch 1,875,090 / 3,498,944、
 
 読み取り:
 - 本番規模の DB（chat_messages 10,433・chat_runs 2,931・cos_inbox_items 2,692）でも、修正前の tick_cos_chat_launch は 0.06〜0.08 秒しかかからず、本番の p50 約 20 秒は再現しなかった。claim_queued・control_hook は修正前でも 5〜8 ミリ秒で、全 thread 走査は本番の写しでは遅い段ではない。
-- したがって migration 0118 の修正は、この DB の写しでは本番の遅さに効いたと言えない。修正後の値が修正前より大きいのは、2 回の測定の間で host の負荷が違ったため（修正後の測定では本 task と別の cargo が走っていた。同一 host・同一負荷の対照は未取得）で、修正による悪化とは判断していない。ただし「悪化していない」とも示せていない。
+- したがって migration 0118 の修正は、この DB の写しでは本番の遅さに効いたと言えない。修正後の値が修正前より大きい理由は未確認（2 回の測定は別の run で、host の負荷・DB 写しのキャッシュ状態の対照を取っていない。修正が tick を遅くする経路は読み取りでは見当たらない）この測定だけでは「悪化していない」とも示せていない。
 - 本番だけが遅い原因は未特定。単独 process の写しで再現しない差は、(1) 稼働中の API・web・SSE・notice 同期が同時に SQLite の書き込み lock を持つ競合、(2) 実 daemon が持つ実行中の chat run（`launch.running`）や live_runs、(3) 07:34Z 時点の DB の状態、のいずれかにある可能性がある。いずれも未検証の仮説である。
 - 全体の tick（5〜7 秒）で大きいのは recover_reviews（2.6〜3.4 秒）・prune_and_sweep（1.4〜1.9 秒）・dispatch_ready（0.9〜1.6 秒）で、tick_cos_chat_launch ではない。
 

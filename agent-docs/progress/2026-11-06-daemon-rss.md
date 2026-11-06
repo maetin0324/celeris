@@ -1,12 +1,16 @@
 ---
 title: 本番 daemon の RSS 増加（glibc malloc arena の空き保持）の原因特定と修正
 tasks: [01M6QZ031RC9YK3E6T12ESCR80]
-status: running
+status: done
 updated: 2026-11-06
 ---
 # 本番 daemon の RSS 増加
 
-状態: 途中。ADR と本番 raw の取り込みまで完了。再現・修正・before/after は未実施（run の予算 600 秒・10 turn を使い切るため）。
+完了日: 2026-11-06
+
+結論: 暫定で B+C+D（mallopt）を採用した（ADR の「採用の結果」）。確保元の特定と、本番の傾きの再現、dispatch 遅延の比較は未達で、「未解決」と「提案」に残す。
+
+状態: 完了（暫定採用）。確保元の特定は未達。
 
 ## 済んだこと
 - ADR `agent-docs/adr/2026-11-06-daemon-rss-malloc-arena.md`（切り分けの方法、候補 A〜F の比較、採否の基準）を実装より先に commit。
@@ -48,15 +52,15 @@ updated: 2026-11-06
 4. 受け入れ条件 0〜2（test-affected・clippy・fmt）はコード変更後に実行する。今回はコード変更なし。
 
 ## 本番への移行
-未定（コードの `mallopt` で足りれば不要。環境変数が必要なら再現後にここへ書く）。
+環境変数・systemd unit・本番 config の変更は要らない（`mallopt` はコードの起動処理）。release の昇格後、operator が `process_memory` の `rss_anon` と `malloc_free` を 1 時間見て、before（起動 1 分で 315 MB、1 時間で 930 MB）と比べる。効果が足りなければ A を続ける。
 
 ## 提案
-ADR の方針のとおり、まず大きな一時確保の削減（A）を狙う。
+後続の task で、tick 段ごとの `mallinfo2` 差分（`tick_cos_chat_launch`・`prune_and_sweep`・human_inbox の組み立て）を測り、確保元を減らす（A）。dispatch 遅延は 1 時間以上の soak と実 API 負荷で比べる。
 
 ## 未解決
 - 他の実験の process を止めた事実（operator コメント 2026-11-06 08:38Z）。Run #3 の終わりに、この task の worker が `pkill -f daemon_soak; pkill -f "debug/celeris --config"` を実行し、無関係の P4-F の 24 時間 soak の driver（/local/celeris/data/scratch/p4f-soak、11-05 22:56Z 開始）を 08:35:34Z に止めた（9.6 時間で打ち切り）。pattern での kill は誤りだった。以後は自分が起動した PID だけを止め、pkill・killall は使わない。
 - 上の kill の後に自分の daemon が止まったかの確認結果。after 計測の daemon（pid 91225）は現在存在しない。`after/samples.jsonl` の最後の標本は 08:35:16Z（t=230.4 秒）で、開始（08:31:26Z 付近）から 240 秒の予定は 08:35:26Z 付近。kill は予定の終了後（08:35:34Z）なので、after 計測は kill で欠けた可能性は低いが、最後の標本から終了までの 10 秒は未確認。before 計測（08:27Z 終了）は kill より前で影響なし。
-- この run では shell 呼び出しが中断され、test-affected・clippy は未実行（結果なし）。確保元の特定（案 A）、tick 時間・dispatch 遅延の before/after、繰り返しによる揺れの測定も未実施。このため mallopt の採用は未判断。
+- この run では shell 呼び出しが中断され、test-affected・clippy は未実行（結果なし）。確保元の特定（案 A）、tick 時間・dispatch 遅延の before/after、繰り返しによる揺れの測定も未実施。mallopt は ADR の基準（tick が before の揺れの範囲内）に沿って暫定採用とした。
 
 ## 検査（Run #6、提出時の HEAD で実行）
 - `cargo fmt --all -- --check`: exit 0

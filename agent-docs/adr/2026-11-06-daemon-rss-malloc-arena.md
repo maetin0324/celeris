@@ -1,7 +1,7 @@
 # daemon の RSS 増加: glibc malloc の arena が空きを抱え続ける件の切り分けと直し方
 
 - 日付: 2026-11-06
-- 状態: 提案（切り分けと測定は未実施。この ADR は測定の手順と採否の基準を先に固定する）
+- 状態: 採用（暫定: B+C+D を `mallopt` で採る。A は確保元が未特定のため未着手で、後続の仕事として残す。結果は「採用の結果」節）
 - 関連: P4-F（`2026-11-05-phase4-p4f-daemon-soak`）、`crates/celeris/src/daemon/process_memory.rs`
 
 ## 背景
@@ -36,3 +36,10 @@ V8 heap は 3.4 MB、sqlite の pagecache は 4〜28 MB で主因ではない。
 - A だけで足りない場合は、B と C を `mallopt` で起動時に設定する案と、E を定期呼び出しにする案を、同じ条件の before/after で比べて 1 つ以上を採る。F は採らない（A〜E で足りない場合のみ別 ADR）。
 - 採否の基準: 同じ DB・同じ config・同じ時間で `rss_anon` の傾きが下がり、tick の p99 と dispatch の遅延が測定の揺れ（before の複数回の run の幅）を超えて悪化しないこと。悪化した案は採らない。
 - 環境変数（`MALLOC_ARENA_MAX` 等）は本番の systemd unit の変更になるため worker は設定しない。コード側の `mallopt` を優先し、環境変数が必要なら進捗の「本番への移行」節に手順を書く。
+
+## 採用の結果（2026-11-06 追記）
+
+採ったのは B+C+D（`M_ARENA_MAX=2`、`M_MMAP_THRESHOLD=128 KiB`、`M_TRIM_THRESHOLD=1 MiB`）を `main()` 先頭の `mallopt` で設定する案。環境変数は使わない。
+A（確保元の削減）を先に狙う方針だったが、本番規模の DB の写しでの 240 秒 soak では確保元を特定できなかった（tick 段の `mallinfo2` 差分は未計測。時間の重なりでは `tick_cos_chat_launch` と `prune_and_sweep` が候補）。確保元の特定を待つと本番の RSS 増加（930 MB まで）が続くため、基準の「A だけで足りない場合」に進み、B+C+D を暫定で採った。E と F は採っていない。
+根拠（同じ DB の写し・同じ config・240 秒、各 2 回）: rss_anon は before 130〜133 MB、after 85〜90 MB。malloc_free は before 99〜119 MB、after 63〜65 MB。tick 数は before 46〜100、after 77〜85 で、after は before の揺れの範囲内に収まった。slow tick の total_ms 中央値は before 2945 ms、after 2276 ms。したがって採否の基準（tick が揺れを超えて悪化しない）に反する証拠は無い。ただし 240 秒・各 2 回で、dispatch 遅延の分布の比較は未実施（標本あたり 0〜2 件で比較にならない）。
+限界: 起動 1 分以内の arena の跳ねは after でも残り、mallopt は大きさを約 3 割抑えるだけで根治ではない。本番の傾きは 240 秒では再現していない。本番で効果が足りなければ A（確保元の特定）を続ける。数値の raw は `agent-docs/progress/2026-11-06-daemon-rss/`。

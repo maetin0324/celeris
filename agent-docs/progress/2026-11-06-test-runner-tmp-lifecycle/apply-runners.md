@@ -28,7 +28,9 @@ updated: 2026-11-06
 - test-affected・clippy・fmt は下の「提出時の検査」を参照。
 
 ## 未解決・後続
-- `scripts/dev/tests/test-runner-tmp-repro.sh` は現行 runner の写しを helper なしで fixture に置くので、この変更で期待表（旧挙動）と合わなくなる。旧 script の最小 fixture の固定と期待表の更新は pin-wire-record の担当（この unit では触っていない）。
+- 前回の run の check（`bash scripts/dev/tests/test-runner-tmp-repro.sh`）は exit 124 で落ちた。原因は、repro 試験が変更後の runner の写しを fixture に置き、旧挙動（/tmp/celeris-test-* 直下の dir）を前提に ready を待って時間切れになったこと。
+  helper 導入前の runner を `scripts/dev/testdata/runner-tmp-repro/*.pinned` に固定し、repro はその写しを使うよう直した（期待表は変えていない）。`bash scripts/dev/tests/test-runner-tmp-repro.sh` → exit 0（18 case が期待表と一致、約 1.5 秒）。
+- 配線（軽量検査への組み込み）と repro の期待表の追記は pin-wire-record の担当。
 - 軽量検査への配線は pin-wire-record。
 
 ## 提出時の検査（提出時の HEAD で実行）
@@ -37,4 +39,4 @@ updated: 2026-11-06
   同じ test を単独で `cargo nextest run -p celeris-campaign --test launcher a_swapped` で走らせると exit 0（1 passed）。全体の並列実行中の負荷による失敗と見ているが、原因の特定はしていない（未確認）。
   runner の変更（scripts/dev のみ）との関係は、単独実行が通ることから薄いと見ている。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- 範囲: `scripts/dev/lib/`・`scripts/dev/test-affected.sh`・`scripts/dev/test-parallel.sh`・`scripts/dev/tests/test-runner-tmp-lifecycle.sh`・この進捗ファイルだけ。
+- 範囲: `scripts/dev/testdata/runner-tmp-repro/`・`scripts/dev/tests/test-runner-tmp-repro.sh`・`scripts/dev/lib/`・`scripts/dev/test-affected.sh`・`scripts/dev/test-parallel.sh`・`scripts/dev/tests/test-runner-tmp-lifecycle.sh`・この進捗ファイルだけ。

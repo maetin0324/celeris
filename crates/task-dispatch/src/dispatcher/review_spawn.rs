@@ -18,8 +18,11 @@ fn pre_review_stale_state(events: &[Event]) -> (u32, Option<&Event>, Option<&Eve
                 count += 1;
                 last = Some(event);
             }
-            Event::Transitioned { .. }
-                if !matches!(events.get(i + 1), Some(Event::ReviewTargetAdvanced { .. })) =>
+            // 配送からの再 review は review_pass → done → rereview の循環になる。review_pass は
+            // 「合格を記録した」だけで stale の連鎖を終えないので数え直さない（ADR 2026-11-06-reuse-pass-delivery-review-run）。
+            Event::Transitioned { reason, .. }
+                if reason != "review_pass"
+                    && !matches!(events.get(i + 1), Some(Event::ReviewTargetAdvanced { .. })) =>
             {
                 count = 0;
                 last = None;

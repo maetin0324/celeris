@@ -2403,8 +2403,7 @@ impl Dispatcher {
         }
         steps.mark("tick_eval_trials");
         let cos_parts = self.tick_cos_chat_launch();
-        steps.mark("tick_cos_chat_launch");
-        steps.sub(cos_parts);
+        steps.mark_with("tick_cos_chat_launch", cos_parts);
         report.in_flight = self.in_flight();
         report.idle = self.is_idle()?;
         steps.mark("in_flight_and_is_idle");

@@ -1820,3 +1820,46 @@ fn cos_review_report_writes_one_message_per_review_input() {
     let max = "あ".repeat(COS_REVIEW_REPORT_TEXT_MAX_CHARS);
     assert!(report(&second.id, &max, 14).expect("max length").created);
 }
+
+/// ADR 2026-11-06-cos-chat-launch-scaling: queued 入力・実行中 run の thread の列挙は、
+/// 全体の thread・message 数に依らず部分 index だけを引く（行数を増やしても読む行が増えない）。
+#[test]
+fn thread_ids_with_queued_or_open_run_uses_partial_indexes_and_ignores_idle_rows() {
+    let s = store();
+    for i in 0..300 {
+        let t = create(&s, &format!("idle-{i}"), "idle", i);
+        post(&s, &t.id, "m", "hello", i);
+        s.with_read_conn(|conn| {
+            conn.execute(
+                "UPDATE chat_messages SET state='completed' WHERE thread_id=?1",
+                params![t.id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let busy = create(&s, "busy", "busy", 1000);
+    post(&s, &busy.id, "q", "queued", 1000);
+    let ids = s.chat_thread_ids_with_queued_or_open_run().unwrap();
+    assert!(ids.contains(&busy.id));
+    assert!(
+        ids.len() <= 301,
+        "idle thread count must not leak: {}",
+        ids.len()
+    );
+    let plan: Vec<String> = s
+        .with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "EXPLAIN QUERY PLAN SELECT thread_id FROM chat_messages WHERE state='queued' AND role IN ('user','system') \
+                 UNION SELECT thread_id FROM chat_runs WHERE state IN ('running','stopping')",
+            )?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(3))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .unwrap();
+    let joined = plan.join("\n");
+    assert!(joined.contains("idx_chat_messages_queued"), "{joined}");
+    assert!(joined.contains("idx_chat_runs_open"), "{joined}");
+}

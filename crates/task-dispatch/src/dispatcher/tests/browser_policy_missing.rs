@@ -5,7 +5,7 @@
 
 use super::browser_allowed_domains::browser_org;
 use super::browser_ledger_gate::{
-    CountingBrowserAdapter, RELEASE, prerequisite_events, tick_n, write_ledger,
+    CountingBrowserAdapter, RELEASE, prerequisite_events, tick_n, tick_until, write_ledger,
 };
 use super::*;
 use task_core::browser_prerequisite::BrowserPrerequisiteCode;
@@ -214,6 +214,12 @@ async fn browser_policy_missing_worker_rejection_is_not_infra_requeue() {
     });
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
     d.set_browser_ledger_watch(valid_ledger(ledger_dir.path()));
+    // worker の拒否が届くまで（blocked になるまで）待つ。tick の回数には依らない。
+    tick_until(&mut d, || {
+        store.get(task.id).unwrap().unwrap().status == Status::Blocked
+    })
+    .await;
+    // 拒否の後に infra_requeue 等が続かないことを見るため、さらに数 tick 回す。
     tick_n(&mut d, 5).await;
     let reasons = transition_reasons(&store, task.id);
     assert_eq!(reasons, ["dispatch", "browser_prerequisite"]);

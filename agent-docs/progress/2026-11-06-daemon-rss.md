@@ -31,6 +31,16 @@ updated: 2026-11-06
 - 各 1 回の run で、測定の揺れ（繰り返し）は未測定。tick の時間・dispatch の遅延は未測定のため、遅延が悪化していないとはまだ言えない。**この変更は採用の判断前**。
 - 検査（test-affected・clippy）は未実行。`cargo fmt --all` のみ実行。
 
+## tick の数の暫定比較（Run #7、既存 raw の集計、各 1 回）
+`before/samples.jsonl` と `after/samples.jsonl` の `daemon.ticks` と `slow_ticks` を読んだ。
+| 指標 | before（243.8 秒） | after（230.4 秒） |
+|---|---|---|
+| tick 数（最終標本） | 100（0.41 回/秒） | 85（0.37 回/秒） |
+| slow_ticks（最終標本） | 132 | 96 |
+- after の tick 数は before より 1 割ほど少ないが、各 1 回の run で揺れは未測定。この差を mallopt の影響とも揺れとも言えない。
+- 標本の `dispatch_latency_ms` は、t=0 の 1823 件が起動前の履歴で、以後は標本ごとに 0〜2 件。run 中の件数が少なく、分布の比較にはならない。dispatch の遅延の before/after 比較は未実施。
+- 採用の判断には、同じ条件での繰り返し（各 3 回以上）が要る。
+
 ## 未実施（次の run）
 1. （部分的に済み。上記）より長い run、API 負荷（一覧・inbox）を足した run で傾きを再現する。
 2. tick 別・API 別に `malloc_free` の増分を見て確保元を特定する。

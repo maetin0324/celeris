@@ -63,3 +63,9 @@ ADR の方針のとおり、まず大きな一時確保の削減（A）を狙う
 - `cargo clippy --workspace -- -D warnings`: exit 0（1m41s）
 - `bash scripts/dev/test-affected.sh`: exit 0（5m51s）
 - 確保元の特定、tick 時間・dispatch 遅延の before/after、揺れの測定は引き続き未実施。mallopt の採用は未判断。
+
+## 計測の進め方の提案（Run #8）
+- 1 回の soak は 240 秒で、準備と後始末を足すと 1 run の壁時計 600 秒の半分を超える。before と after を各 3 回（計 6 回）は 1 run に入らないため、1 run で 1 回だけ測り、結果を `before/`・`after/` の `samples-N.jsonl` に追記する方式にする。
+- before の binary は `tune_malloc()` を外してビルドする必要がある（現在の HEAD は after）。before 用と after 用の binary を別々にビルドし、`daemon_soak.py run --celeris <binary>` で切り替える。
+- 起動は自分の PID だけを記録して止める。`pkill`・`killall` は使わない。
+- この run は計測を行っていない。コード変更もない。

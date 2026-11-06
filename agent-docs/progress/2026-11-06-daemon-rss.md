@@ -129,3 +129,8 @@ raw は `before/samples-2.jsonl`・`before/ops-2.jsonl`。
 ## 検査（Run #15）
 - `cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check`: ok。
 - `bash scripts/dev/test-affected.sh` は、この run では 8 分 40 秒の壁時計で打ち切られ、結果なし（target が掃除されて再ビルドが走ったため）。コードは Run #6 で exit 0 を確認した時点から変わっていない（以後の commit は文書と raw のみ）。最終提出の前に、最後の同期の後で再実行が要る。
+
+## 検査（Run #17、提出時の HEAD で実行）
+- `cargo clippy --workspace -- -D warnings`: exit 0（1m14s）。
+- `cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/test-affected.sh`: exit 0（6m44s、末尾 `test-affected: script bundle SKIP: 0 件`）。

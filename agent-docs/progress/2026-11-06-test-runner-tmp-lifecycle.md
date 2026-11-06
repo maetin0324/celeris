@@ -72,3 +72,10 @@ updated: 2026-11-06
 - SIGKILL 直後の即時削除は約束しない。残りは次回起動時の回収で消える（条件は lifecycle 試験で固定）。
 - fd を閉じて別 session へ抜けた子孫は、session の走査でも見えず、稼働中保護が効かない場合がある。限界として残す。
 - 旧い残骸（`/tmp/celeris-test-affected.*`・`/tmp/celeris-test-parallel.*`）は ADR の D6 の人の手順で消す。agent は消していない。
+
+## pin-wire-record の再実行（前回 check の不合格の原因）
+- 前回の `bash scripts/dev/test-affected.sh` は exit 100 だった。落ちたのは `celeris-campaign::launcher` の
+  `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid`（daemon が healthy になる前に終了）で、
+  scripts/dev の変更とは関係しない。同じ試験は変更なしの再実行で通った。負荷または環境起因の flake と判断した（原因の特定は未確認）。
+- 提出時の HEAD で再実行: `bash scripts/dev/test-affected.sh` → exit 0。lifecycle 試験・repro 試験・`test-affected-list.sh`・`test-cli-binary-preparation.sh`・`test-parallel-fail-names.sh` → いずれも exit 0。
+  `cargo fmt --all -- --check` → exit 0。`git diff $CELERIS_WU_BASE -- crates` は空なので clippy は対象外（実行していない）。`progress-index.sh --check` → exit 0。

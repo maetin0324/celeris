@@ -117,13 +117,25 @@ pub(crate) struct CosTriageState {
     pub(crate) live_runs: HashSet<String>,
     /// Root-done steps that already logged a failure in this process (log once, retry every tick).
     pub(crate) root_done_warned: HashSet<String>,
-    /// (item, relay) pairs found outside the relay's task scope in this process, so the relay
-    /// re-judging pass does not rebuild the inbox for them every tick (ADR
-    /// 2026-10-27-relayed-instructions 付記 A2). Not task state: after a restart they are checked once.
-    pub(super) rejudge_out_of_scope: HashSet<(String, String)>,
+    /// (item, relay) pairs found outside the relay's task scope, or whose wait already closed, in
+    /// this process, so the relay re-judging pass does not rebuild the inbox for them every tick
+    /// (ADR 2026-10-27-relayed-instructions 付記 A2, ADR 2026-11-06-cos-chat-launch-scaling D3).
+    /// Not task state: after a restart they are checked once.
+    pub(super) rejudge_settled: HashSet<(String, String)>,
+    /// Derived inbox builds of the relay re-judging pass in this process (the regression test of
+    /// ADR 2026-11-06-cos-chat-launch-scaling D3 counts them).
+    pub(crate) relay_inbox_builds: RelayInboxBuilds,
     /// The stagnation check result (`Dispatcher::stagnation_generation`) whose four kinds were
     /// last reconciled (ADR 2026-10-29-stagnation-triage-notify-wiring D3).
     pub(super) stagnation_generation: Option<u64>,
+}
+
+/// Inbox builds of the relay re-judging pass: `scoped` covers the candidates' tasks only, `full`
+/// every task (only for keys that name no task).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RelayInboxBuilds {
+    pub scoped: u64,
+    pub full: u64,
 }
 
 impl Dispatcher {

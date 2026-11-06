@@ -25,7 +25,7 @@
 # - `--harness config` は実 LLM。人が書いた `--llm-config`（[llm_sources]・[harnesses]・[route_defaults]・
 #   [harness_selection]・[accounts] 等）をそのまま config に足す。人の承認（LONG_HORIZON_PILOT_LLM_APPROVED=1）が
 #   要り、Celeris の worker の run の中（CELERIS_RUN_ID がある）では起こさない（ADR 2026-10-07 worker-no-subagents）。
-#   既定の上限は 1 試行 1,000,000 token / 4 時間（D9）。24〜72h の実稼働はこの script の範囲外（人の別途の承認）。
+#   既定の上限は 1 日 20 USD 相当（--max-usd-per-day）/ 4 時間（D9）。24〜72h の実稼働はこの script の範囲外（人の別途の承認）。
 # - 本番の DB・daemon・config・release に触れない（--state-root が本番の dir なら driver が断る）。
 # exit: 0 = 全試行が終わり採点できた、1 = 失敗、2 = 使い方の誤り・承認が無い。
 set -euo pipefail
@@ -103,7 +103,7 @@ if [ "${LONG_HORIZON_PILOT_STUB_FORGE:-}" = 1 ]; then
     forge_arg=', "--forge"'
 fi
 if [ "$harness" = config ]; then
-    extra=(--harness config --llm-config "$llm_config" --cos-route "$cos_route" --cos-max-turns 40 --cos-max-wall 1800)
+    set -- --harness config --llm-config "$llm_config" --cos-route "$cos_route" --cos-max-turns 40 --cos-max-wall 1800
 elif [ "$harness" = config-stub ]; then
     # 実 LLM の代わりの agent を config harness の TOML として書く（LLM は呼ばない）。
     agent="$root/scripts/dev/long-horizon-pilot/stub_harness.py"
@@ -128,20 +128,20 @@ candidates = [{ source = "local", model = "model-1" }]
 execution_class_defaults = {}
 rules = [{ harness = "claude_code", required_capabilities = [] }]
 TOML
-    extra=(--harness config --llm-config "$work/config-stub.toml" --cos-route '[{ source = "local", model = "model-1" }]')
+    set -- --harness config --llm-config "$work/config-stub.toml" --cos-route '[{ source = "local", model = "model-1" }]'
 else
-    extra=(--harness stub)
+    set -- --harness stub
     # 陰性の試験用: stub が効果の記録に偽の行を足そうとする（driver は observation_failed で落ちる）。
-    [ "${LONG_HORIZON_PILOT_STUB_TAMPER:-}" != 1 ] || extra+=(--stub-tamper)
-    [ "${LONG_HORIZON_PILOT_STUB_NO_OUTPUT:-}" != 1 ] || extra+=(--stub-no-output)
+    [ "${LONG_HORIZON_PILOT_STUB_TAMPER:-}" != 1 ] || set -- "$@" --stub-tamper
+    [ "${LONG_HORIZON_PILOT_STUB_NO_OUTPUT:-}" != 1 ] || set -- "$@" --stub-no-output
 fi
-[ "${LONG_HORIZON_PILOT_STUB_FORGE:-}" != 1 ] || extra+=(--forge)
-for case in ${cases//,/ }; do
-    for arm in ${arms//,/ }; do
+[ "${LONG_HORIZON_PILOT_STUB_FORGE:-}" != 1 ] || set -- "$@" --forge
+for case in $(printf %s "$cases" | tr , " "); do
+    for arm in $(printf %s "$arms" | tr , " "); do
         echo "long-horizon-pilot-llm: case $case arm $arm" >&2
         python3 -I "$root/scripts/dev/long-horizon-pilot/driver.py" --state "$work/$case-$arm" --out "$out" \
             --fixtures "$root/tests/fixtures/long-horizon" --bundle "$work/bundle" --celeris "$bin/celeris" \
-            --script-deploy "$bin/script-deploy" --case "$case" --arm "$arm" --max-wall-secs "$max_wall" "${extra[@]}" \
+            --script-deploy "$bin/script-deploy" --case "$case" --arm "$arm" --max-wall-secs "$max_wall" "$@" \
             >"$work/$case-$arm.log" 2>&1 || { tail -40 "$work/$case-$arm.log" >&2; fail "trial $case $arm failed"; }
         cp "$work/$case-$arm.log" "$out/ops/$case-$arm.log"
     done

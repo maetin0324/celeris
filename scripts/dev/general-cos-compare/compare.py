@@ -216,7 +216,10 @@ def preflight_checks(args):
                 if not ap.get(key):
                     problems.append(f"approval: {key} is missing")
             al = ap.get("limits") or {}
-            for key in ("max_trials", "max_tokens", "max_wall_secs", "max_usd"):
+            known = {"max_trials", "repeats", "max_wall_secs", "max_usd", "per_trial_wall_secs"}
+            for key in sorted(set(al) - known):
+                problems.append(f"approval.limits.{key} is not accepted (limits are max_trials, max_wall_secs, max_usd)")
+            for key in ("max_trials", "max_wall_secs", "max_usd"):
                 if type(al.get(key)) not in (int, float) or al[key] <= 0:
                     problems.append(f"approval.limits.{key} must be a positive number")
                 elif al[key] < limits[key] and key == "max_trials" and len(the_plan["trials"]) > al[key]:
@@ -625,10 +628,8 @@ disk_watch = []
 
 
 def stop_reason(tier, spent, limits):
-    """残りの試行を始めない理由（無ければ None）。token・壁時計・USD のどれかが上限に達したら止める。
+    """残りの試行を始めない理由（無ければ None）。壁時計・USD のどれかが上限に達したら止める。
     実 LLM で費用が分からない試行が 1 件でもあれば、USD の上限を守れないので止める（fail closed）。"""
-    if spent["tokens"] >= limits["max_tokens"]:
-        return "max_tokens"
     if spent["wall"] >= limits["max_wall_secs"]:
         return "max_wall_secs"
     if spent["usd"] >= limits["max_usd"]:

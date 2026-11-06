@@ -172,6 +172,189 @@ pub fn estimate_cost_usd(model: &str, usage: &Usage) -> Option<f64> {
     Some(cost)
 }
 
+/// ADR 2026-11-06（予算の USD 換算）D2: 人が config `[budget_rates."<model の接頭辞>"]` に書く換算単価
+/// （100 万 token あたりの USD。4 欄すべて必須）。単価表に引けない model の予算判定にだけ使い、
+/// `usage.cost_usd`・campaign の計上・`PRICE_TABLE_VERSION` には入らない。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BudgetRate {
+    pub input_per_million: f64,
+    pub output_per_million: f64,
+    pub cache_read_per_million: f64,
+    pub cache_write_per_million: f64,
+}
+
+/// 換算単価の集合（接頭辞の長い順に引く）。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BudgetRates {
+    rows: Vec<(String, BudgetRate)>,
+}
+
+impl BudgetRates {
+    /// 検査して作る。単価が有限で 0 以上でない、接頭辞が空、単価表で 4 種すべての単価がある行に
+    /// 一致する接頭辞は `Err`（表を上書きさせない）。
+    pub fn new(rows: impl IntoIterator<Item = (String, BudgetRate)>) -> Result<Self, String> {
+        let mut out: Vec<(String, BudgetRate)> = Vec::new();
+        for (prefix, rate) in rows {
+            let prefix = prefix.to_ascii_lowercase();
+            if prefix.is_empty() {
+                return Err("budget_rates の model 接頭辞が空です".to_string());
+            }
+            for (name, v) in [
+                ("input_per_million", rate.input_per_million),
+                ("output_per_million", rate.output_per_million),
+                ("cache_read_per_million", rate.cache_read_per_million),
+                ("cache_write_per_million", rate.cache_write_per_million),
+            ] {
+                if !v.is_finite() || v < 0.0 {
+                    return Err(format!(
+                        "budget_rates.\"{prefix}\".{name} は有限で 0 以上の数にしてください"
+                    ));
+                }
+            }
+            if let Some(price) = price_for(&prefix)
+                && price.fully_priced()
+            {
+                return Err(format!(
+                    "budget_rates.\"{prefix}\" は単価表（PRICE_TABLE）に 4 種すべての単価がある model です。\
+                     表は上書きできません"
+                ));
+            }
+            out.retain(|(p, _)| *p != prefix);
+            out.push((prefix, rate));
+        }
+        out.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+        Ok(BudgetRates { rows: out })
+    }
+
+    fn lookup(&self, model: &str) -> Option<BudgetRate> {
+        self.rows
+            .iter()
+            .find(|(prefix, _)| model.starts_with(prefix.as_str()))
+            .map(|(_, r)| *r)
+    }
+}
+
+impl Price {
+    fn fully_priced(&self) -> bool {
+        self.input_per_million.is_some()
+            && self.output_per_million.is_some()
+            && self.cache_read_per_million.is_some()
+            && self.cache_write_per_million.is_some()
+    }
+}
+
+/// 1 run の予算判定用の費用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunBudgetCost {
+    /// micro-USD（1e-6 USD。小さく数えないよう切り上げ）。
+    Known(u64),
+    /// 単価が引けない・usage が無い（上限に達したものとして止める。0 として数えない）。
+    Unknown,
+}
+
+/// 予算判定の費用の和。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BudgetCost {
+    pub usd_micros: u64,
+    /// 費用不明の run の数（1 件以上なら fail-closed で止める）。
+    pub unknown_runs: u32,
+}
+
+impl BudgetCost {
+    pub fn add(&mut self, cost: RunBudgetCost) {
+        match cost {
+            RunBudgetCost::Known(m) => self.usd_micros = self.usd_micros.saturating_add(m),
+            RunBudgetCost::Unknown => self.unknown_runs = self.unknown_runs.saturating_add(1),
+        }
+    }
+
+    pub fn usd(&self) -> f64 {
+        self.usd_micros as f64 / 1_000_000.0
+    }
+}
+
+/// USD を micro-USD に切り上げる（浮動小数の誤差 1e-7 は無視）。
+pub fn usd_to_micros_ceil(usd: f64) -> u64 {
+    if !usd.is_finite() || usd <= 0.0 {
+        return 0;
+    }
+    ((usd * 1_000_000.0) - 1e-7).ceil().max(0.0) as u64
+}
+
+/// route の `<source>/<model>` 接頭辞を除いた model 名（最後の `/` より後）。
+fn bare_model(model: &str) -> &str {
+    model.rsplit('/').next().unwrap_or(model)
+}
+
+/// 1 run の予算判定用の費用。`usage` が無い、token が 1 件も無い、model が無い、単価が引けない
+/// （単価表に無い・使った token 種の単価が `None`・`budget_rates` にも無い）run は `Unknown`。
+/// 保存済みの `usage.cost_usd` は使わず、model と usage から今の単価表で再計算する。cache read は
+/// cache read の単価、cache creation は cache write の単価で数える。
+pub fn run_budget_cost(
+    model: Option<&str>,
+    usage: Option<&Usage>,
+    rates: &BudgetRates,
+) -> RunBudgetCost {
+    let (Some(model), Some(usage)) = (model, usage) else {
+        return RunBudgetCost::Unknown;
+    };
+    if usage.input_tokens.is_none()
+        && usage.output_tokens.is_none()
+        && usage.cache_read_tokens.is_none()
+        && usage.cache_creation_tokens.is_none()
+    {
+        return RunBudgetCost::Unknown;
+    }
+    let model = bare_model(model).to_ascii_lowercase();
+    let kinds = [
+        usage.input_tokens.unwrap_or(0),
+        usage.output_tokens.unwrap_or(0),
+        usage.cache_read_tokens.unwrap_or(0),
+        usage.cache_creation_tokens.unwrap_or(0),
+    ];
+    let from_table = price_for(&model).and_then(|p| {
+        let r = [
+            p.input_per_million,
+            p.output_per_million,
+            p.cache_read_per_million,
+            p.cache_write_per_million,
+        ];
+        let mut sum = 0.0;
+        for (tokens, rate) in kinds.iter().zip(r) {
+            if *tokens == 0 {
+                continue;
+            }
+            sum += *tokens as f64 * rate?;
+        }
+        Some(sum)
+    });
+    let usd_micro_f = from_table.or_else(|| {
+        rates.lookup(&model).map(|r| {
+            kinds[0] as f64 * r.input_per_million
+                + kinds[1] as f64 * r.output_per_million
+                + kinds[2] as f64 * r.cache_read_per_million
+                + kinds[3] as f64 * r.cache_write_per_million
+        })
+    });
+    match usd_micro_f {
+        // tokens × (USD / 100 万 token) = micro-USD。
+        Some(m) => RunBudgetCost::Known(usd_to_micros_ceil(m / 1_000_000.0)),
+        None => RunBudgetCost::Unknown,
+    }
+}
+
+/// run 群（`(model, usage)`）の費用の和。単価なし・usage なしは `unknown_runs` に数える。
+pub fn budget_cost<'a>(
+    runs: impl IntoIterator<Item = (Option<&'a str>, Option<&'a Usage>)>,
+    rates: &BudgetRates,
+) -> BudgetCost {
+    let mut total = BudgetCost::default();
+    for (model, usage) in runs {
+        total.add(run_budget_cost(model, usage, rates));
+    }
+    total
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +458,183 @@ mod tests {
         };
         let cost = estimate_cost_usd("claude-haiku-4", &usage).expect("known model");
         assert!((cost - 4.0).abs() < 1e-9, "{cost}");
+    }
+
+    fn usage(i: u64, o: u64, cr: u64, cw: u64) -> Usage {
+        Usage {
+            input_tokens: Some(i),
+            output_tokens: Some(o),
+            cache_read_tokens: Some(cr),
+            cache_creation_tokens: Some(cw),
+            ..Usage::default()
+        }
+    }
+
+    fn local_rate() -> BudgetRate {
+        BudgetRate {
+            input_per_million: 1.0,
+            output_per_million: 2.0,
+            cache_read_per_million: 0.5,
+            cache_write_per_million: 0.0,
+        }
+    }
+
+    /// 現行の model（2026-11）が単価表を前方一致で引ける。単価を変えたら PRICE_TABLE_VERSION も変える。
+    #[test]
+    fn current_claude_models_resolve_by_prefix() {
+        assert_eq!(PRICE_TABLE_VERSION, "2026-09-approx-1");
+        let u = usage(1_000_000, 1_000_000, 1_000_000, 1_000_000);
+        // (model, input + output + cache read + cache write の USD)
+        let expect = [
+            ("claude-sonnet-5-5", 2.0 + 10.0 + 0.2 + 2.5),
+            ("claude-sonnet-5-5-20261001", 2.0 + 10.0 + 0.2 + 2.5),
+            ("claude-opus-5-5", 4.0 + 20.0 + 0.20 + 5.0),
+            ("claude-haiku-5-5", 0.8 + 4.0 + 0.08 + 1.0),
+            ("claude-fable-5-1", 10.0 + 50.0 + 0.25 + 12.5),
+        ];
+        for (model, usd) in expect {
+            let c = estimate_cost_usd(model, &u).unwrap_or_else(|| panic!("{model} が引けない"));
+            assert!((c - usd).abs() < 1e-9, "{model}: {c} != {usd}");
+        }
+    }
+
+    #[test]
+    fn budget_cost_counts_cache_at_cache_prices() {
+        let rates = BudgetRates::default();
+        // 同じ総 token 数 1,000,000 でも、cache read 主体は input 主体よりずっと安い。
+        let heavy_cache = run_budget_cost(
+            Some("claude-sonnet-5-5"),
+            Some(&usage(0, 0, 1_000_000, 0)),
+            &rates,
+        );
+        let plain = run_budget_cost(
+            Some("claude-sonnet-5-5"),
+            Some(&usage(1_000_000, 0, 0, 0)),
+            &rates,
+        );
+        assert_eq!(heavy_cache, RunBudgetCost::Known(200_000));
+        assert_eq!(plain, RunBudgetCost::Known(2_000_000));
+        let write = run_budget_cost(
+            Some("claude-sonnet-5-5"),
+            Some(&usage(0, 0, 0, 1_000_000)),
+            &rates,
+        );
+        assert_eq!(write, RunBudgetCost::Known(2_500_000));
+    }
+
+    #[test]
+    fn budget_cost_ignores_stored_cost_and_strips_route_source() {
+        let mut u = usage(1_000_000, 0, 0, 0);
+        u.cost_usd = Some(99.0);
+        assert_eq!(
+            run_budget_cost(
+                Some("anthropic/claude-sonnet-5-5"),
+                Some(&u),
+                &BudgetRates::default()
+            ),
+            RunBudgetCost::Known(2_000_000)
+        );
+    }
+
+    #[test]
+    fn budget_cost_rounds_up_to_micro_usd() {
+        // 1 token × 2.0 USD/100 万 token = 2 micro-USD。0.5 micro-USD は 1 に切り上げる。
+        let c = run_budget_cost(
+            Some("claude-haiku-5-5"),
+            Some(&usage(0, 0, 1, 0)),
+            &BudgetRates::default(),
+        );
+        assert_eq!(c, RunBudgetCost::Known(1));
+    }
+
+    #[test]
+    fn unpriced_model_and_null_usage_are_unknown_not_zero() {
+        let rates = BudgetRates::default();
+        let u = usage(1000, 1000, 0, 0);
+        assert_eq!(
+            run_budget_cost(Some("qwen3-local"), Some(&u), &rates),
+            RunBudgetCost::Unknown
+        );
+        assert_eq!(
+            run_budget_cost(Some("gpt-6-sol"), Some(&u), &rates),
+            RunBudgetCost::Unknown
+        );
+        // gpt-5 は cache write の単価が無い: cache write を使った run だけ不明。
+        assert_eq!(
+            run_budget_cost(Some("gpt-5"), Some(&usage(10, 0, 0, 5)), &rates),
+            RunBudgetCost::Unknown
+        );
+        assert!(matches!(
+            run_budget_cost(Some("gpt-5"), Some(&usage(10, 0, 5, 0)), &rates),
+            RunBudgetCost::Known(_)
+        ));
+        assert_eq!(
+            run_budget_cost(Some("claude-sonnet-5-5"), None, &rates),
+            RunBudgetCost::Unknown
+        );
+        assert_eq!(
+            run_budget_cost(Some("claude-sonnet-5-5"), Some(&Usage::default()), &rates),
+            RunBudgetCost::Unknown
+        );
+        assert_eq!(
+            run_budget_cost(None, Some(&u), &rates),
+            RunBudgetCost::Unknown
+        );
+        let total = budget_cost(
+            [
+                (Some("claude-sonnet-5-5"), Some(&usage(1_000_000, 0, 0, 0))),
+                (Some("qwen3-local"), Some(&u)),
+                (Some("claude-sonnet-5-5"), None),
+            ],
+            &rates,
+        );
+        assert_eq!(
+            total,
+            BudgetCost {
+                usd_micros: 2_000_000,
+                unknown_runs: 2
+            }
+        );
+    }
+
+    #[test]
+    fn budget_rates_price_local_models_and_longest_prefix_wins() {
+        let rates = BudgetRates::new([
+            ("qwen".to_string(), local_rate()),
+            (
+                "qwen3-free".to_string(),
+                BudgetRate {
+                    input_per_million: 0.0,
+                    output_per_million: 0.0,
+                    cache_read_per_million: 0.0,
+                    cache_write_per_million: 0.0,
+                },
+            ),
+        ])
+        .expect("valid");
+        let u = usage(1_000_000, 1_000_000, 2_000_000, 0);
+        // 1 + 2 + 0.5×2 = 4 USD
+        assert_eq!(
+            run_budget_cost(Some("opencode-qwen/qwen3.8-flash"), Some(&u), &rates),
+            RunBudgetCost::Known(4_000_000)
+        );
+        // 明示した 0 は 0（人の宣言）。
+        assert_eq!(
+            run_budget_cost(Some("qwen3-free-x"), Some(&u), &rates),
+            RunBudgetCost::Known(0)
+        );
+    }
+
+    #[test]
+    fn budget_rates_reject_table_override_and_bad_values() {
+        assert!(BudgetRates::new([("claude-sonnet-5-5".to_string(), local_rate())]).is_err());
+        // gpt-5 は cache write 単価が無いので、人が足せる。
+        assert!(BudgetRates::new([("gpt-5".to_string(), local_rate())]).is_ok());
+        for bad in [f64::NAN, -1.0, f64::INFINITY] {
+            let mut r = local_rate();
+            r.output_per_million = bad;
+            assert!(BudgetRates::new([("qwen".to_string(), r)]).is_err());
+        }
+        assert!(BudgetRates::new([(String::new(), local_rate())]).is_err());
     }
 }

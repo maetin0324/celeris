@@ -13,7 +13,8 @@ updated: 2026-11-06
 
 ## 変更
 - WorkUnit adr: ADR `2026-11-06-budget-usd-caps.md` とこの進捗ファイルの骨子を追加した。コードは変えていない。
-- 残りの WorkUnit（core・scripts・ops・wire-rest・closeout）は未着手。
+- WorkUnit core: `task_core::pricing` に `BudgetRates`・`run_budget_cost`・`budget_cost`（micro-USD の切り上げ和、単価なし・usage なしは `Unknown`）を追加。`tree::TreeLimits.max_tree_tokens` を `max_tree_usd_micros` に置き換え、`TreeLimitKind::TreeUsd`・`TreeCounters.usd_micros/unknown_cost_runs`・`with_unknown_cost_note` を追加。`tree_counters` は `&BudgetRates` を引数に取る。現行 model の前方一致試験を追加（`PRICE_TABLE`・`PRICE_TABLE_VERSION` は変えていない）。下流 crate は後続 WorkUnit が追従する。
+- 残りの WorkUnit（scripts・ops・wire-rest・closeout）は未着手。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - WorkUnit adr は文書だけの変更。cargo の検査は closeout で提出時の HEAD に対して実行して、ここに書く。
@@ -31,8 +32,8 @@ updated: 2026-11-06
 6. 運用中の pilot の手順（`long-horizon-pilot-llm.sh`）は `--max-tokens-per-day` を `--max-usd-per-day` に変える。
 
 ## 未解決
-- route の `<source>/` 接頭辞付きの model 名が `runs.model` に入るか（ADR D1-6、core WU が確かめる）。
-- harness を起動する前に終わった run を usage の欠測から区別する規則（ADR D2-3、core WU が決めて試験する）。
+- route の `<source>/` 接頭辞付きの model 名が `runs.model` に入るかは未確認。core は引く前に最後の `/` より後を使う規則で吸収し、試験した（ADR D1-6）。
+- harness 起動前に終わった run の規則（ADR D2-3）: 終わった run のうち usage・model・adapter・account・session・metrics が全部無いものは数えない。走っている run も数えない。ops WU は案件の日次でも同じ規則に合わせること（`chat_runs` は `started_at` がある行だけ）。
 
 ## 提案
 - なし。

@@ -23,8 +23,8 @@ pub enum TreeLimitKind {
     TreeRuns,
     /// 木全体で採用した replan の版（`max_tree_replans`）。
     TreeReplans,
-    /// 木全体の input + output トークン（`max_tree_tokens`）。
-    TreeTokens,
+    /// 木全体の費用（USD 換算。`max_tree_usd`。費用不明の run があるときもこの種類で止める）。
+    TreeUsd,
     /// ADR-0079 D9（Phase R2b）: 節点の replan の版（`[execution] max_replans`。節点ごとの上限）。子の失敗を
     /// 吸収する replan が節点の上限に達したら、黙って止まらずに決定の要求にする。
     NodeReplans,
@@ -40,7 +40,7 @@ impl TreeLimitKind {
             TreeLimitKind::TreeLeaves => "max_tree_leaves",
             TreeLimitKind::TreeRuns => "max_tree_runs",
             TreeLimitKind::TreeReplans => "max_tree_replans",
-            TreeLimitKind::TreeTokens => "max_tree_tokens",
+            TreeLimitKind::TreeUsd => "max_tree_usd",
             TreeLimitKind::NodeReplans => "max_replans",
         }
     }
@@ -60,7 +60,7 @@ impl TreeLimitKind {
             TreeLimitKind::TreeLeaves
                 | TreeLimitKind::TreeRuns
                 | TreeLimitKind::TreeReplans
-                | TreeLimitKind::TreeTokens
+                | TreeLimitKind::TreeUsd
         )
     }
 
@@ -76,7 +76,7 @@ impl TreeLimitKind {
             TreeLimitKind::TreeLeaves,
             TreeLimitKind::TreeRuns,
             TreeLimitKind::TreeReplans,
-            TreeLimitKind::TreeTokens,
+            TreeLimitKind::TreeUsd,
             TreeLimitKind::NodeReplans,
         ]
         .into_iter()
@@ -91,7 +91,7 @@ impl TreeLimitKind {
             self,
             TreeLimitKind::TreeRuns
                 | TreeLimitKind::TreeReplans
-                | TreeLimitKind::TreeTokens
+                | TreeLimitKind::TreeUsd
                 | TreeLimitKind::NodeReplans
         )
     }
@@ -127,9 +127,9 @@ pub fn limits_with_allowances(
         u64::from(limits.max_tree_replans),
     ))
     .unwrap_or(u32::MAX);
-    out.max_tree_tokens = limits
-        .max_tree_tokens
-        .map(|max| grant(TreeLimitKind::TreeTokens, max));
+    out.max_tree_usd_micros = limits
+        .max_tree_usd_micros
+        .map(|max| grant(TreeLimitKind::TreeUsd, max));
     out
 }
 
@@ -343,8 +343,12 @@ pub struct TreeCounters {
     pub reviewer_runs: u32,
     /// 木全体で採用した replan の版（節点ごとの `計画の版の数 − 1` の和）。
     pub replans: u32,
-    /// input + output トークン（`max_tree_tokens` に照らす値。reviewer を含む）。
+    /// input + output トークン（表示用。判定には使わない。reviewer を含む）。
     pub tokens: u64,
+    /// 予算判定の費用（micro-USD。`pricing::run_budget_cost` の和。reviewer を含む。走っている run は数えない）。
+    pub usd_micros: u64,
+    /// 費用不明の run（単価が引けない・usage が無い）の数。1 件以上で `max_tree_usd` に達したものとして止める。
+    pub unknown_cost_runs: u32,
     pub cost_usd: f64,
     pub cost_usd_complete: bool,
     /// 深さの昇順。
@@ -363,7 +367,15 @@ pub struct TreeNodeFacts {
 }
 
 /// D3 / U-R7（Phase R2a）: 木の数（純粋関数）。
-pub fn tree_counters(root_id: Option<TaskId>, nodes: &[TreeNodeFacts]) -> TreeCounters {
+///
+/// 費用（`usd_micros`・`unknown_cost_runs`）は終わった run だけを model と usage から再計算して数える。
+/// 走っている run、harness を起動する前に終わった run（model・adapter・account・session・metrics・usage の
+/// どれも無い）は数えない。区別できない run は費用不明に倒す。
+pub fn tree_counters(
+    root_id: Option<TaskId>,
+    nodes: &[TreeNodeFacts],
+    rates: &crate::pricing::BudgetRates,
+) -> TreeCounters {
     use crate::execution_plan::{
         RunIndexRole, WorkUnitBlockedReason, WorkUnitKind, WorkUnitStatus,
     };
@@ -406,6 +418,13 @@ pub fn tree_counters(root_id: Option<TaskId>, nodes: &[TreeNodeFacts]) -> TreeCo
                 d.runs += 1;
                 out.runs += 1;
             }
+            if run_is_budget_countable(run) {
+                out.cost_add(crate::pricing::run_budget_cost(
+                    run.model.as_deref(),
+                    run.usage.as_ref(),
+                    rates,
+                ));
+            }
             let Some(usage) = run.usage.as_ref() else {
                 continue;
             };
@@ -432,6 +451,33 @@ pub fn tree_counters(root_id: Option<TaskId>, nodes: &[TreeNodeFacts]) -> TreeCo
     out
 }
 
+impl TreeCounters {
+    fn cost_add(&mut self, cost: crate::pricing::RunBudgetCost) {
+        match cost {
+            crate::pricing::RunBudgetCost::Known(m) => {
+                self.usd_micros = self.usd_micros.saturating_add(m)
+            }
+            crate::pricing::RunBudgetCost::Unknown => {
+                self.unknown_cost_runs = self.unknown_cost_runs.saturating_add(1)
+            }
+        }
+    }
+}
+
+/// 予算判定で数える run か。走っている run（`finished_at` 無し・`running`）は数えない。終わった run のうち、
+/// harness を起動していないと分かる run（usage・model・adapter・account・session・metrics が全部無い）も数えない。
+fn run_is_budget_countable(run: &crate::execution_plan::RunRow) -> bool {
+    if run.finished_at.is_none() || run.status == crate::execution_plan::RunIndexStatus::Running {
+        return false;
+    }
+    run.usage.is_some()
+        || run.model.is_some()
+        || run.adapter.is_some()
+        || run.account.is_some()
+        || run.session_id.is_some()
+        || run.metrics.is_some()
+}
+
 /// D3（Phase R2a）: 次に起こそうとしている run の種類（`max_tree_replans` は replan の planner run だけ）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NextRun {
@@ -439,16 +485,18 @@ pub enum NextRun {
     Planner { replan: bool },
 }
 
-/// D3: run の上限の超過（どれか 1 つ。runs → tokens → replans の順で先に当たったもの）。
+/// D3: run の上限の超過（どれか 1 つ。runs → usd → replans の順で先に当たったもの）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunLimitBreach {
     pub limit: TreeLimitKind,
     pub count: u64,
     pub max: u64,
+    /// `TreeUsd` のとき、費用不明の run の数（0 でなければ不明が理由で止めた）。
+    pub unknown_runs: u32,
 }
 
 /// D3（Phase R2a）: 木の数に照らし、次の run を起こすと上限を超えるか（純粋関数）。超えるなら
-/// その上限。`runs >= max_tree_runs`（もう 1 本起こすと超える）、`tokens >= max_tree_tokens`（設定した
+/// その上限。`runs >= max_tree_runs`（もう 1 本起こすと超える）、`usd >= max_tree_usd` または費用不明の run が 1 件以上（設定した
 /// ときだけ）、replan の planner run で `replans >= max_tree_replans`。
 pub fn run_limit_breach(
     limits: &TreeLimits,
@@ -460,15 +508,17 @@ pub fn run_limit_breach(
             limit: TreeLimitKind::TreeRuns,
             count: u64::from(counters.runs),
             max: u64::from(limits.max_tree_runs),
+            unknown_runs: 0,
         });
     }
-    if let Some(max) = limits.max_tree_tokens
-        && counters.tokens >= max
+    if let Some(max) = limits.max_tree_usd_micros
+        && (counters.usd_micros >= max || counters.unknown_cost_runs > 0)
     {
         return Some(RunLimitBreach {
-            limit: TreeLimitKind::TreeTokens,
-            count: counters.tokens,
+            limit: TreeLimitKind::TreeUsd,
+            count: counters.usd_micros,
             max,
+            unknown_runs: counters.unknown_cost_runs,
         });
     }
     if next == (NextRun::Planner { replan: true }) && counters.replans >= limits.max_tree_replans {
@@ -476,6 +526,7 @@ pub fn run_limit_breach(
             limit: TreeLimitKind::TreeReplans,
             count: u64::from(counters.replans),
             max: u64::from(limits.max_tree_replans),
+            unknown_runs: 0,
         });
     }
     None
@@ -503,7 +554,14 @@ pub fn limit_decision(
         key: limit.decision_key(scope),
         kind: DecisionKind::Limit,
         // ADR 2026-10-22-stalled-auto-replan D8: 上限ちょうど（使い切り）を「超過」と書かない。
-        question: if count == max {
+        question: if limit == TreeLimitKind::TreeUsd {
+            let (c, m) = (micros_text(count), micros_text(max));
+            if count >= max {
+                format!("木の上限 {what} に達しました（{c} / 上限 {m}）。止めた仕事をどうしますか")
+            } else {
+                format!("木の上限 {what} で止めました（{c} / 上限 {m}）。止めた仕事をどうしますか")
+            }
+        } else if count == max {
             format!("木の上限 {what} を使い切りました（{count}/{max}）。止めた仕事をどうしますか")
         } else {
             format!("木の上限 {what} を超えます（{count} > 上限 {max}）。止めた仕事をどうしますか")
@@ -527,7 +585,11 @@ pub fn limit_decision(
         ],
         recommended: "replan".to_string(),
         cost_of_reversal: CostOfReversal::Medium,
-        cost_note: Some(format!("[execution.tree] {} = {max}", limit.as_str())),
+        cost_note: Some(if limit == TreeLimitKind::TreeUsd {
+            format!("[execution.tree] {} = {}", limit.as_str(), micros_text(max))
+        } else {
+            format!("[execution.tree] {} = {max}", limit.as_str())
+        }),
         needed_before,
         path,
         raised_by,
@@ -535,6 +597,26 @@ pub fn limit_decision(
         answer: None,
         withdrawn_reason: None,
     }
+}
+
+/// micro-USD を「1.234567 USD」の形の文にする。
+fn micros_text(micros: u64) -> String {
+    format!("{:.6} USD", micros as f64 / 1_000_000.0)
+}
+
+/// ADR 2026-11-06 D2: `max_tree_usd` で、費用不明の run が理由で止めた決定の本文に、不明の run の数と
+/// 解除の方法を足す（`unknown_runs == 0` なら何もしない）。
+pub fn with_unknown_cost_note(
+    mut request: crate::decision::DecisionRequest,
+    unknown_runs: u32,
+) -> crate::decision::DecisionRequest {
+    if unknown_runs > 0 {
+        request.question.push_str(&format!(
+            "。費用不明の run が {unknown_runs} 件あります（単価の無い model か usage の無い run。\
+             0 USD としては数えません）。解除は `[budget_rates]` の追記か `max_tree_usd` を外すことです"
+        ));
+    }
+    request
 }
 
 /// ADR-0079 付記「R7-3」D4: gate が compound と判定した根拠の文（決定文に使う）。score が閾値以上

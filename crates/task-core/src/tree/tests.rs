@@ -1,4 +1,5 @@
 use super::*;
+use crate::pricing::{BudgetRate, BudgetRates};
 
 /// U-R1: task の層数で数える（root 1 / 子 2 / 孫 3）。既定 3 では root と子が子 task を持て、
 /// 孫は持てない。`max_depth = 1` なら root も持てない。
@@ -38,7 +39,7 @@ fn tree_limits_defaults_follow_d3_and_u_r4() {
     assert_eq!(l.max_tree_leaves, 120);
     assert_eq!(l.max_tree_runs, 400);
     assert_eq!(l.max_tree_replans, 30);
-    assert_eq!(l.max_tree_tokens, None);
+    assert_eq!(l.max_tree_usd_micros, None);
     assert_eq!(l.max_open_decisions_per_tree, 12);
     assert_eq!(l.max_open_decisions_per_plan, 8);
     assert_eq!(l.gate_depth_step, 2);
@@ -765,7 +766,7 @@ fn tree_counters_across_a_three_level_tree() {
             plan_versions: 0,
         },
     ];
-    let c = tree_counters(Some(root), &nodes);
+    let c = tree_counters(Some(root), &nodes, &BudgetRates::default());
     assert_eq!(c.root_id, Some(root));
     assert_eq!(c.nodes, 3);
     assert_eq!(c.leaves, 2, "a and l1");
@@ -812,7 +813,8 @@ fn tree_counters_across_a_three_level_tree() {
         Some(RunLimitBreach {
             limit: TreeLimitKind::TreeRuns,
             count: 5,
-            max: 5
+            max: 5,
+            unknown_runs: 0
         })
     );
     let limits = TreeLimits {
@@ -834,16 +836,177 @@ fn tree_counters_across_a_three_level_tree() {
         run_limit_breach(&limits, &c, NextRun::Planner { replan: true }).map(|b| b.limit),
         Some(TreeLimitKind::TreeReplans)
     );
-    // トークンは設定したときだけ。
+    // USD は設定したときだけ。この木の run は終わっていない（finished_at 無し）ので費用 0・不明 0。
     let limits = TreeLimits {
-        max_tree_tokens: Some(c.tokens),
+        max_tree_usd_micros: Some(1),
         ..enabled()
     };
-    assert_eq!(
-        run_limit_breach(&limits, &c, NextRun::Worker).map(|b| b.limit),
-        Some(TreeLimitKind::TreeTokens)
-    );
+    assert_eq!(run_limit_breach(&limits, &c, NextRun::Worker), None);
     assert_eq!(run_limit_breach(&enabled(), &c, NextRun::Worker), None);
+}
+
+fn finished_run(
+    task: TaskId,
+    role: RunIndexRole,
+    model: Option<&str>,
+    usage: Option<Usage>,
+) -> RunRow {
+    let mut r = run(task, role, (0, 0), None);
+    r.finished_at = Some("2026-11-06T00:00:00Z".into());
+    r.model = model.map(str::to_string);
+    r.usage = usage;
+    r
+}
+
+fn usage_of(i: u64, o: u64, cr: u64, cw: u64) -> Usage {
+    Usage {
+        input_tokens: Some(i),
+        output_tokens: Some(o),
+        cache_read_tokens: Some(cr),
+        cache_creation_tokens: Some(cw),
+        ..Usage::default()
+    }
+}
+
+fn one_node(runs: Vec<RunRow>, task: TaskId) -> Vec<TreeNodeFacts> {
+    vec![TreeNodeFacts {
+        task_id: task,
+        depth: 1,
+        runs,
+        work_units: vec![],
+        plan_versions: 1,
+    }]
+}
+
+/// ADR 2026-11-06: 木の上限は USD 換算。cache read・write は単価で数え、単価の無い model と usage の無い
+/// 終わった run は費用不明として止める（0 として数えない）。走っている run・起動前の run は数えない。
+#[test]
+fn tree_usd_limit_counts_cache_at_prices_and_stops_on_unknown_cost() {
+    let t = TaskId::new();
+    let rates = BudgetRates::default();
+    let limits = TreeLimits {
+        max_tree_usd_micros: Some(1_000_000), // 1 USD
+        ..enabled()
+    };
+    // cache read 4M token (claude-sonnet-5-5: 0.2 USD/M) = 0.8 USD < 1 USD。input 4M token なら 8 USD。
+    let cheap = tree_counters(
+        Some(t),
+        &one_node(
+            vec![finished_run(
+                t,
+                RunIndexRole::Worker,
+                Some("claude-sonnet-5-5"),
+                Some(usage_of(0, 0, 4_000_000, 0)),
+            )],
+            t,
+        ),
+        &rates,
+    );
+    assert_eq!((cheap.usd_micros, cheap.unknown_cost_runs), (800_000, 0));
+    assert_eq!(run_limit_breach(&limits, &cheap, NextRun::Worker), None);
+    let heavy = tree_counters(
+        Some(t),
+        &one_node(
+            vec![finished_run(
+                t,
+                RunIndexRole::Worker,
+                Some("claude-sonnet-5-5"),
+                Some(usage_of(4_000_000, 0, 0, 0)),
+            )],
+            t,
+        ),
+        &rates,
+    );
+    assert_eq!(heavy.usd_micros, 8_000_000);
+    assert_eq!(
+        run_limit_breach(&limits, &heavy, NextRun::Worker),
+        Some(RunLimitBreach {
+            limit: TreeLimitKind::TreeUsd,
+            count: 8_000_000,
+            max: 1_000_000,
+            unknown_runs: 0
+        })
+    );
+    // 単価の無い model・usage の無い終わった run は不明。上限の内でも止まる。reviewer も数える。
+    let unknown = tree_counters(
+        Some(t),
+        &one_node(
+            vec![
+                finished_run(
+                    t,
+                    RunIndexRole::Worker,
+                    Some("qwen3-local"),
+                    Some(usage_of(10, 10, 0, 0)),
+                ),
+                finished_run(t, RunIndexRole::Reviewer, Some("claude-sonnet-5-5"), None),
+            ],
+            t,
+        ),
+        &rates,
+    );
+    assert_eq!((unknown.usd_micros, unknown.unknown_cost_runs), (0, 2));
+    let b = run_limit_breach(&limits, &unknown, NextRun::Worker).expect("fail-closed");
+    assert_eq!((b.limit, b.unknown_runs), (TreeLimitKind::TreeUsd, 2));
+    // 上限を設定していなければ不明でも止めない。
+    assert_eq!(
+        run_limit_breach(&enabled(), &unknown, NextRun::Worker),
+        None
+    );
+    // [budget_rates] を書けば local model も数えられる。
+    let rates = BudgetRates::new([(
+        "qwen3".to_string(),
+        BudgetRate {
+            input_per_million: 1.0,
+            output_per_million: 1.0,
+            cache_read_per_million: 0.0,
+            cache_write_per_million: 0.0,
+        },
+    )])
+    .unwrap();
+    let priced = tree_counters(
+        Some(t),
+        &one_node(
+            vec![finished_run(
+                t,
+                RunIndexRole::Worker,
+                Some("qwen3-local"),
+                Some(usage_of(10, 10, 0, 0)),
+            )],
+            t,
+        ),
+        &rates,
+    );
+    assert_eq!((priced.usd_micros, priced.unknown_cost_runs), (20, 0));
+    // 走っている run・起動前に終わった run（何も記録が無い）は数えない。
+    let mut running = finished_run(t, RunIndexRole::Worker, None, None);
+    running.finished_at = None;
+    let mut never_started = finished_run(t, RunIndexRole::Worker, None, None);
+    never_started.status = RunIndexStatus::Failed;
+    let skipped = tree_counters(Some(t), &one_node(vec![running, never_started], t), &rates);
+    assert_eq!((skipped.usd_micros, skipped.unknown_cost_runs), (0, 0));
+    // 決定の本文: USD で書き、不明の件数と解除の方法を足す。
+    let req = with_unknown_cost_note(
+        limit_decision(
+            TreeLimitKind::TreeUsd,
+            None,
+            0,
+            1_000_000,
+            vec![],
+            vec![],
+            crate::decision::DecisionRaisedBy {
+                task_id: t,
+                run_id: None,
+                origin: crate::decision::DecisionOrigin::Daemon,
+            },
+        ),
+        2,
+    );
+    assert_eq!(req.key, "limit:max_tree_usd");
+    assert!(
+        req.question.contains("1.000000 USD") && req.question.contains("2 件"),
+        "{}",
+        req.question
+    );
 }
 
 /// D7: daemon の決定の要求の形（選択肢・推奨・key・needed_before）。
@@ -936,16 +1099,16 @@ fn limit_keys_allowances_and_plan_invalid_options() {
     assert_eq!(limit_allowance_step(TreeLimitKind::NodeReplans, 3), 1);
     let mut allowances = std::collections::BTreeMap::new();
     allowances.insert(TreeLimitKind::TreeRuns, 2);
-    allowances.insert(TreeLimitKind::TreeTokens, 1);
+    allowances.insert(TreeLimitKind::TreeUsd, 1);
     let base = TreeLimits {
-        max_tree_tokens: Some(1000),
+        max_tree_usd_micros: Some(1000),
         // R6-2: 既定は 400。この表は 120 のときの値で書いてある。
         max_tree_runs: 120,
         ..TreeLimits::default()
     };
     let raised = limits_with_allowances(&base, &allowances);
     assert_eq!(raised.max_tree_runs, 240);
-    assert_eq!(raised.max_tree_tokens, Some(1500));
+    assert_eq!(raised.max_tree_usd_micros, Some(1500));
     assert_eq!(raised.max_tree_replans, base.max_tree_replans);
 
     let raised_by = crate::decision::DecisionRaisedBy {

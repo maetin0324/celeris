@@ -139,8 +139,10 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
 - 成功時は `bin/` と `web/app/`、web tarball、manifest.json、gate.json を梱包する。
   `web/app` では `pnpm install --prod --offline --frozen-lockfile` を実行し、node_modules の実在と
   server/app.js の import 解決を確認する。梱包が失敗しても release は公開せず、失敗の gate とログを残す。
-- `scripts/` は **その sha の `scripts/selfdeploy/*.sh` をそのまま写したもの**（実行ビットごと。ADR-0040 D6、
-  Phase 48）。`POST /releases/{sha12}/promote` はこの `<release>/scripts/promote.sh` を起こすので、
+- `scripts/` は **その sha の `scripts/selfdeploy/` 直下の `*.sh` と `*.py`（verify.sh の helper `snapshot_db.py`）を
+  そのまま写したもの**（実行ビットごと。`tests/` などの下位 directory は写さない。ADR-0040 D6、Phase 48。
+  `lib.sh` の `sd_bundle_selfdeploy_scripts` が写し、`promote.sh`・`lib.sh`・`verify.sh`・`snapshot_db.py` が無ければ
+  release は落ちる。試験 `scripts/selfdeploy/tests/bundle_includes_verify_helpers.sh`）。`POST /releases/{sha12}/promote` はこの `<release>/scripts/promote.sh` を起こすので、
   **作業チェックアウトが別のブランチにいても、無くても昇格できる**。`lib.sh` は
   `dirname "${BASH_SOURCE[0]}"` で自分の隣を読むだけで、場所はすべて `CELERIS_STATE_DIR` 基準なので
   リリースの中から source しても動く（`SD_REPO` を要るのは `release.sh` の worktree 操作だけ）。

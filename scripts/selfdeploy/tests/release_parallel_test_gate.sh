@@ -103,7 +103,7 @@ chmod +x "$root/bin/"*
 
 repo="$root/repo"
 mkdir -p "$repo/crates/task-core/src/store" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"
-cp "$here"/*.sh "$repo/scripts/selfdeploy/"
+cp "$here"/*.sh "$here"/*.py "$repo/scripts/selfdeploy/"
 chmod +x "$repo/scripts/selfdeploy/"*.sh
 # runner はビルドする sha の中のものを使う（release.sh の隣ではない）。
 mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"

@@ -1,7 +1,7 @@
 ---
 title: tick_cos_chat_launch の行数比例の調査と修正
 tasks: [01M6QZ6KYWW18GYMZYM17SYSW9]
-status: running
+status: done
 updated: 2026-11-06
 ---
 # tick_cos_chat_launch の行数比例の調査と修正
@@ -108,8 +108,8 @@ operator の journal 集計（celeris@c9bf4bf7dc76、10 分ごとの中央値）
 ## 本番への移行
 migration 0119 は index 2 本の追加のみ（データ変更なし）。config の変更は無い。main の 0118（N5、evidence_integrity）の後に適用される。
 
-## 検査結果（提出時の HEAD で実行。最後の同期の後）
-- `bash scripts/dev/test-affected.sh`: exit 0（nextest 7763 件 passed・23 skipped）。1 回目は target_sync 3 件と work_unit_dependency_base 1 件が高負荷で落ちたが、単独実行で 31 件 passed、全体の再実行で全件 passed（時間依存の揺れ。この変更の範囲外）
+## 検査結果（提出時の HEAD で実行。最後の同期（main 取り込み）の後、commit「n2: 主因（取り次ぎの候補 SQL）の特定と before/after を進捗に書く」の時点）
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 7765 件 passed・23 skipped、web unit 711 件 passed）
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo fmt --all -- --check`: exit 0
 

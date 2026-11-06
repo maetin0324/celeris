@@ -1673,7 +1673,7 @@ mode は `off`（既定）・`dry_run`・`shadow`・`enabled`。`off` の案件�
   人の token だけ（他は 403 `project_controller_mode_requires_human`）。`shadow`・`enabled` は `[project_controller]
   allowed_project_ids` の案件だけ（403 `project_controller_not_allowed`）。`expected_revision` が今の `revision` と
   違えば 409 `project_controller_revision_conflict`。
-- `GET` の `ProjectControllerView` は `{state, pending_wakes, last_decision, budget_today, summary}`。`budget_today` は `{day, cos_inputs, roots, tokens, usd, usd_unknown_runs, price_table_version, chat_starts}`（`usd` は案件の task run と案件 CoS chat run の換算費用の和＝`max_usd_per_day` の判定に使う量、`usd_unknown_runs` は費用不明の run の数、`price_table_version` は換算に使った単価表の版、`tokens` は表示用の input + output）。`summary.budget_limits` は `max_usd_per_day`（USD 相当。旧 `max_tokens_per_day` は無い）を返す。`summary`（第 3 フェーズ P2-J、
+- `GET` の `ProjectControllerView` は `{state, pending_wakes, last_decision, budget_today, summary}`。`budget_today` は `{day, cos_inputs, roots, tokens, usd, usd_unknown_runs, price_table_version, chat_starts}`（`usd` は案件の task run と案件 CoS chat run の換算費用の和＝`max_usd_per_day` の判定に使う量、`usd_unknown_runs` は費用不明の run の数、`price_table_version` は換算に使った単価表の版、`tokens` は表示用の input + output）。`summary.budget_limits` は `max_usd_per_day`（USD 相当。token 数の上限欄は無い）を返す。`summary`（第 3 フェーズ P2-J、
   [ADR](../../../agent-docs/adr/2026-11-05-phase3-p2j.md)）は画面の写しで、判定の根拠ではない:
   - `outcomes[]`: `{id, title, source, recorded, evidence_root_ids[], reached}`。`reached` は到達の記録（Roadmap の `reached` か
     適用済みの `mark_milestone`。`shadow`・`dry_run` では `suppressed` も数える）と条件を満たす root（done・合格・取り込み済み）の

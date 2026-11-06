@@ -1,5 +1,5 @@
 ---
-tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY, 01M6JW1EG41D198Y5CP65MQJM4, 01M6N7XY9E70AH4476VQTSFVJY, 01M6N7XYA31CMJV6RR1KXSQMKH, 01M6PAMC3S9QN740JWEQTXV60J]
+tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY, 01M6JW1EG41D198Y5CP65MQJM4, 01M6N7XY9E70AH4476VQTSFVJY, 01M6N7XYA31CMJV6RR1KXSQMKH, 01M6PAMC3S9QN740JWEQTXV60J, 01M6PAMC44JQ6DB90E9HQ076DW]
 ---
 # Project Controller の運用手順（人と operator）
 
@@ -198,7 +198,7 @@ archive_dir = "/local/celeris/state/retention-archive"
 
 ### 2. schema migration の戻し方
 - controller が足した migration は 0111（script の領域）・0112（controller の表）・0113（Roadmap）・0114（authority ledger）で、
-  どれも表を足すだけで既存の行を変えない。P2-J は migration を足さない（SCHEMA_VERSION は 114 のまま）。
+  どれも表を足すだけで既存の行を変えない。P2-J は migration を足さない。その後 P4-B が 0115（wake `evidence_changed`）、P4-D が 0117（記録の保持）を足し、SCHEMA_VERSION は 117（0116 は予約のまま未使用）。
 - 古い binary は新しい schema の DB を開けない（`StoreError::SchemaTooNew`。何も書かずに起動を止める）。down migration は無い。
 - [ ] promote の前に、`promote.sh` が `sqlite3 .backup` で昇格前の写しを `$CELERIS_BACKUPS_DIR` に作ったことをログの
   `backup ok:` で確かめる。
@@ -232,6 +232,48 @@ archive_dir = "/local/celeris/state/retention-archive"
 | 3 | 人 | 本番 config の `[project_controller]` を消して再起動 | `GET /api/v1/daemon` に controller が無い |
 | 4 | 人 | release を戻す: 先に 3 を済ませ、`rollback.sh`。schema が進んでいれば `--restore-db`（上の 2） | `celerisctl` の schema version と稼働版 |
 
+### 4a. 1 案件の限定導入の道具（P4-G）
+上の段 0〜4 の「進む条件」を `scripts/dev/pc-rollout/pc_rollout.py` で判定し、記録する
+（[ADR](../../agent-docs/adr/2026-11-06-phase4-p4g-shadow-rollout.md)）。`preflight`・`snapshot`・`monitor` は GET と file の
+読み取りだけで、何も変えない。`apply`・`undo` は API で mode を変える（本番では人が実行する）。
+
+承認は 2 種類の file に分ける。観察（`dry_run`・`shadow`）の承認では canary・enabled に上げられない。
+
+| 種類 | `kind` | `stages` | ほかに要る欄 |
+|---|---|---|---|
+| 観察の開始 | `observe` | `["dry_run","shadow"]` の一部 | 共通の欄だけ |
+| 効果の開始 | `effects` | `["canary"]` か `["enabled"]` | `shadow_report_sha256`（本番の 24 時間以上・違反 0 の shadow の監視の報告の sha256）、canary は `canary_bps` |
+
+共通の欄: `approved_by`（`human:<名前>`）・`scope`（`production`）・`project_id`・`api`（`--api` と同じ文字列）・
+`generation`（認めた bundle の sha256、64 桁）・`expires_at`（ISO 8601）。
+
+```json
+{"approved_by": "human:<名前>", "kind": "observe", "stages": ["dry_run", "shadow"], "scope": "production",
+ "project_id": "<案件 id>", "api": "http://127.0.0.1:7721", "generation": "<bundle_sha256>",
+ "expires_at": "2026-11-08T00:00:00Z"}
+```
+
+人の手順（本番。`T=<人の token の file>`、`P=<案件 id>`、`A=http://127.0.0.1:7721`、`O=<記録の dir>`）:
+
+| 段 | 何を | go の条件 |
+|---|---|---|
+| 0 | config に `[project_controller] enabled = true`・`allowed_project_ids = ["$P"]` を書いて再起動。**再起動の後に** `celerisctl script generations register <sha256>`（再起動は、どの領域も指していない `loaded` の generation を retire する） | `python3 -I scripts/dev/pc-rollout/pc_rollout.py preflight --api $A --token-file $T --project $P --stage dry_run --config ~/.config/celeris/config.toml --approval observe.json --pilot-facts <pilot の facts.json> --out $O/preflight-dry_run.json` が `verdict: go` |
+| 1 | `pc_rollout.py apply --stage dry_run --approval observe.json --reason "…"`（領域を `compare`、案件を `dry_run`）。`POST …/controller/wake` を 1 回 | 判断が 1 件以上、効果は `suppressed` か `none` |
+| 2 | `preflight --stage shadow …` が go なら `apply --stage shadow …`。`monitor --stage shadow --secs 86400 --interval 60 --samples $O/shadow.jsonl --approval observe.json --undo-on-violation --out $O/shadow-report.json` | 報告の `violations` が空・`observed_secs` ≥ 86400 |
+| 3 | 効果の承認（`effects`、`shadow_report_sha256 = sha256sum $O/shadow-report.json`）を人が書く。`preflight --stage canary --shadow-report $O/shadow-report.json …` が go なら `apply --stage canary …` | 段 3 の表の条件 |
+| 戻す | `pc_rollout.py undo --api $A --token-file $T --project $P --reason "…" --domain-to compare`（`off` への変更は誰でも行える）。`--domain-to rust` で領域も戻す | 出力の `ok: true`、以後 判断が増えない |
+
+監視の違反（`diff`）: 効果を伴う判断（`pending`・`applied`・`failed`）の増加、controller の root（label `project-controller`）の
+増加、controller の CoS 入力の増加、案件 mode・領域 mode・generation・他の案件の mode・daemon の config の sha256 の変化、
+待機の規則の `pc/invalid`・`pc/script-unavailable`、API の失敗。daemon の再起動は違反でなく `daemon_restarted` に記録する。
+標本には RSS（`/proc/<pid>/status` の VmRSS・RssAnon。daemon と同じ host で実行したときだけ）と `GET …/controller` の時間が入る。
+
+go/no-go の条件（G1〜G7）の定義は ADR の D2。G7 は実 LLM の縮小 pilot の再実行の facts（`--pilot-facts`）で案件 CoS の
+run が数えられ `cos_usage_null` が 0 であること（01M6PYNMP4 の修正の確認）で、facts が無ければ `pending`（no-go）になる。
+
+非本番の予行: `bash scripts/dev/pc-rollout.sh --out <絶対 path>`（一時 home・fake harness・127.0.0.1、約 2 分）。raw は
+`agent-docs/progress/2026-11-05-phase4/p4g/e2e/`。予行の監視の報告は `scope: non-production` で、段 3 の G5 では fail になる。
+
 ### 6. まだ済んでいないこと（2026-11-05 時点）
 - [ ] P0-F（実 LLM の縮小 pilot の再試験）: 未実施。人の許可待ち（account・model・token の上限・時間の上限）。記録は
   `agent-docs/progress/2026-11-05-phase3/` の P0-F の進捗（main への取り込み待ち）。許可が出たら外部 operator が sandbox の外で
@@ -239,3 +281,5 @@ archive_dir = "/local/celeris/state/retention-archive"
 - [ ] 24〜72 時間の非本番の実稼働と、本番 RSS の controller `off` との比較（P1-I の段 3・4）: 未実施。人の承認待ち。
 - [ ] 上の 1〜5 の本番の操作: どれも未実施（人が行う）。
 - [ ] `[project_controller.retention]` の本番での有効化（P4-D）: 未実施（人が config を書き、`archive_dir` の容量を決める）。
+- [ ] 本番 1 案件の shadow（P4-G）: 未実施。2026-11-06 の判定は `no-go (pending)`（人の observe の承認が無い、G7 の pilot の
+  再実行が未実施、本番の G2〜G5 は人の preflight で未確認）。

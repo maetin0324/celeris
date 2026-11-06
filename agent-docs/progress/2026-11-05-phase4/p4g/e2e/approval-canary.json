@@ -1,0 +1,14 @@
+{
+  "approved_by": "human:p4g-e2e-fixture",
+  "kind": "effects",
+  "stages": [
+    "canary"
+  ],
+  "scope": "non-production",
+  "project_id": "01M6Q6QCMQK1K1B2RM9KPKR1K2",
+  "api": "http://127.0.0.1:57161",
+  "expires_at": "2026-11-06T03:15:59+00:00",
+  "generation": "72cb3a3ec1188beb39b0028241c264607752f1cab6d6f7f42c95afc0d3864953",
+  "shadow_report_sha256": "d779360dba658bb24673e85c9d86d0e2fb2a0c749edfbaed8e1f3daaeab707a4",
+  "canary_bps": 100
+}

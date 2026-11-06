@@ -1,0 +1,31 @@
+{"schema": "celeris.pc-rollout/1", "step": "projects", "t": 0.62, "target": "01M6Q6QCMQK1K1B2RM9KPKR1K2", "other": "01M6Q6QCMTRW8D3MXXSGGTZ44A", "activate": 200}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 0.62, "what": "target project is active", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "generation", "t": 1.08, "status": 200, "sha": "72cb3a3ec1188beb39b0028241c264607752f1cab6d6f7f42c95afc0d3864953"}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 1.08, "what": "generation registered", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "preflight", "t": 4.43, "stage": "dry_run", "name": "dry_run-no-approval", "verdict": "no-go", "failed": ["G1r", "G6", "G7"]}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 4.43, "what": "preflight without approval is no-go", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "preflight", "t": 6.65, "stage": "dry_run", "name": "dry_run", "verdict": "go", "failed": []}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 6.65, "what": "dry_run preflight with observe approval is go", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 6.68, "what": "apply dry_run (None)", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 9.23, "what": "dry_run decisions all suppressed ({'suppressed': 1})", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 9.23, "what": "dry_run: no roots and no CoS inputs", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "operator_raise", "t": 9.23, "status": 403, "code": "project_controller_mode_requires_human"}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 9.23, "what": "operator cannot raise to shadow (403)", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "preflight", "t": 12.77, "stage": "shadow", "name": "shadow", "verdict": "go", "failed": []}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 12.77, "what": "shadow preflight is go", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 12.82, "what": "apply shadow (None)", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "restart", "t": 33.1, "how": "SIGKILL", "secs": 0.22}
+{"schema": "celeris.pc-rollout/1", "step": "shadow_wakes", "t": 103.52, "results": {"1": 200, "10": 200}}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 103.52, "what": "shadow monitor has no violations ([])", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 103.52, "what": "monitor saw the restart", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 103.52, "what": "shadow made decisions after the restart (2)", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "shadow_decisions", "t": 103.53, "rules": [["shadow", "suppressed", "pc/outcome-open"], ["shadow", "suppressed", "pc/outcome-open"], ["dry_run", "suppressed", "pc/outcome-open"]], "effects": {"suppressed": 3}}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 103.55, "what": "mode stays shadow across SIGKILL", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "drift_other_project", "t": 103.57, "status": 200}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 103.59, "what": "drift is refused by allowed_project_ids or detected (200, ['other_projects_changed'])", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 103.59, "what": "canary with the observe approval is refused (stage canary needs an approval of kind effects (got observe))", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "preflight", "t": 106.93, "stage": "canary", "name": "canary", "verdict": "no-go", "failed": ["G3", "G5"]}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 106.93, "what": "canary preflight is no-go on a short shadow report", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 106.97, "what": "undo by operator turns the project off", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 111.0, "what": "after undo no new decisions", "ok": true}
+{"schema": "celeris.pc-rollout/1", "step": "expect", "t": 111.03, "what": "domain back to rust", "ok": true}

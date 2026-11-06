@@ -1,0 +1,264 @@
+{
+  "schema": "celeris.pc-rollout/1",
+  "kind": "undo",
+  "project": "01M6Q6QCMQK1K1B2RM9KPKR1K2",
+  "reason": "P4-G e2e: undo by operator",
+  "steps": [
+    {
+      "project_mode": "off",
+      "status": 200,
+      "body": {
+        "state": {
+          "project_id": "01M6Q6QCMQK1K1B2RM9KPKR1K2",
+          "mode": "off",
+          "phase": "active",
+          "revision": 6,
+          "event_cursor": 0,
+          "next_wake_at": null,
+          "coalesce_until": null,
+          "lease_owner": null,
+          "lease_expires_at": null,
+          "retry_count": 0,
+          "backoff_until": null,
+          "last_decision_id": "01M6Q6TC1DMX1XGX6E3HT1ZKHS",
+          "human_epoch": 0,
+          "progress_epoch": 0,
+          "updated_at": "2026-11-06T01:16:02.42055105Z",
+          "updated_by": "operator:claude-code"
+        },
+        "pending_wakes": [],
+        "last_decision": {
+          "id": "01M6Q6TC1DMX1XGX6E3HT1ZKHS",
+          "project_id": "01M6Q6QCMQK1K1B2RM9KPKR1K2",
+          "based_on_revision": 4,
+          "human_epoch": 0,
+          "snapshot_sha256": "635e6f42c4311ad17f68ef6e721c5b367c96eb3b10da0cbfbd9db4b74a8304fb",
+          "request_sha256": "45118ac2227f2a4bf28c9cda9c6c701bd10a096988fd7cc760bb2c5029ac4746",
+          "generation_id": null,
+          "mode": "shadow",
+          "proposal_json": "{\"achievement\":null,\"authority\":{\"action_class\":\"launch_root\",\"scope\":{\"kind\":\"outcome\",\"ref\":\"o1\"},\"verdict\":{\"allow\":false,\"reason\":\"no_grant\"}},\"classification\":null,\"generation_id\":\"01M6Q6QD380M4DAR5HE91B4G3S\",\"guard\":null,\"input\":{\"human_epoch\":0,\"mode\":\"shadow\",\"now\":\"2026-11-06T01:15:53.76313344Z\",\"project_id\":\"01M6Q6QCMQK1K1B2RM9KPKR1K2\",\"revision\":4,\"wakes\":[{\"consumed_by\":null,\"created_at\":\"2026-11-06T01:15:23.727447394Z\",\"id\":4,\"kind\":\"external_released\",\"project_id\":\"01M6Q6QCMQK1K1B2RM9KPKR1K2\",\"source_event_id\":null,\"source_ref\":\"p4g-e2e\",\"wake_key\":\"external:p4g-e2e:p4g-e2e-shadow-10\"}]},\"proposal\":{\"action\":{\"kind\":\"launch_root\",\"root\":{\"acceptance\":[{\"check\":{\"type\":\"reviewer\"},\"text\":\"root が done\"}],\"continues_root_ids\":[],\"key\":\"outcome:o1:1\",\"objective\":\"案件「p4g:target」の途中目標 o1「予行の途中目標」を達成する。\\n\\n案件の依頼（人の原文）:\\n\\nP4-G の限定導入の予行の案件（非本番・fake harness）。\\n\\n```celeris-outcomes\\n[{\\\"id\\\":\\\"o1\\\",\\\"title\\\":\\\"予行の途中目標\\\",\\\"acceptance\\\":[\\\"root が done\\\"]}]\\n```\\n\",\"outcome_ids\":[\"o1\"],\"stages_hint\":[],\"title\":\"p4g:target: 予行の途中目標\"}},\"based_on\":{\"human_epoch\":0,\"request_sha256\":\"45118ac2227f2a4bf28c9cda9c6c701bd10a096988fd7cc760bb2c5029ac4746\",\"revision\":4},\"explanation\":{\"rule_id\":\"pc/outcome-open\",\"signals\":[{\"detail\":\"o1\",\"name\":\"outcome\"},{\"detail\":\"1\",\"name\":\"attempt\"}]},\"gap\":{\"open\":[\"o1\"],\"progress_epoch\":0,\"reached\":[],\"unknown\":[]}},\"schema\":\"celeris.project-decision/1\",\"snapshot_sha256\":\"ff15411cf7e37cd8804cdfdcd00cb693b992ec812933669983e6726abf1813dc\",\"violations\":[]}",
+          "validation": "pc/outcome-open",
+          "effect_json": "{\"kind\":\"create_root\",\"idempotency_key\":\"pc:01M6Q6QCMQK1K1B2RM9KPKR1K2:outcome:o1:1\",\"spec\":{\"requirements\":{},\"title\":\"p4g:target: 予行の途中目標\",\"objective\":\"案件「p4g:target」の途中目標 o1「予行の途中目標」を達成する。\\n\\n案件の依頼（人の原文）:\\n\\nP4-G の限定導入の予行の案件（非本番・fake harness）。\\n\\n```celeris-outcomes\\n[{\\\"id\\\":\\\"o1\\\",\\\"title\\\":\\\"予行の途中目標\\\",\\\"acceptance\\\":[\\\"root が done\\\"]}]\\n```\\n\",\"acceptance\":[{\"type\":\"reviewer\",\"text\":\"root が done\"}],\"kind\":\"execute\",\"tier\":null,\"priority\":null,\"parent\":null,\"depends_on\":[],\"max_turns\":null,\"max_wall_secs\":null,\"max_tokens\":null,\"max_retries\":2,\"role\":null,\"genre\":null,\"aggregate\":false,\"project_id\":\"01M6Q6QCMQK1K1B2RM9KPKR1K2\",\"milestone_id\":null,\"assignee\":null,\"workspace\":null,\"cluster\":null,\"workspace_mode\":null,\"harness\":null,\"repos\":[],\"labels\":[\"project-controller\"],\"skills\":[],\"mode\":null,\"category\":null,\"status\":null,\"features\":null,\"execution\":null,\"pause_after\":null,\"stages_hint\":[]},\"meta\":\"{\\\"root_key\\\":\\\"outcome:o1:1\\\",\\\"outcome_ids\\\":[\\\"o1\\\"],\\\"continues_root_ids\\\":[],\\\"outcome_specs\\\":{\\\"o1\\\":\\\"3515e2b991a45bcb8743b3d883657907daee3e290a1c525860a0d364dfe8bf2a\\\"}}\"}",
+          "effect_state": "suppressed",
+          "effect_ref": null,
+          "progress_epoch": 0,
+          "created_at": "2026-11-06T01:15:53.76313344Z",
+          "applied_at": null
+        },
+        "budget_today": {
+          "day": "2026-11-06",
+          "cos_inputs": 0,
+          "roots": 0,
+          "tokens": 0,
+          "chat_starts": 0
+        },
+        "summary": {
+          "outcomes": [
+            {
+              "id": "o1",
+              "title": "予行の途中目標",
+              "source": "request_block",
+              "recorded": false,
+              "evidence_root_ids": [],
+              "reached": false
+            }
+          ],
+          "outcomes_invalid": false,
+          "waiting": null,
+          "authority": {
+            "launch_root_allowed": false,
+            "launch_root_reason": "no_grant",
+            "grants": []
+          },
+          "next_wake": {
+            "at": null,
+            "backoff_until": null,
+            "pending_kinds": []
+          },
+          "budget_limits": {
+            "max_cos_inputs_per_day": 10,
+            "max_roots_per_day": 5,
+            "max_no_progress_decisions": 5,
+            "max_same_failure_repeats": 3,
+            "max_invalid_decisions": 3,
+            "max_tokens_per_day": 20000000,
+            "ttl_secs": 259200
+          },
+          "trace": {
+            "decision_id": "01M6Q6TC1DMX1XGX6E3HT1ZKHS",
+            "rule_id": "pc/outcome-open",
+            "mode": "shadow",
+            "effect_state": "suppressed",
+            "effect_ref": null,
+            "based_on_revision": 4,
+            "snapshot_sha256": "635e6f42c4311ad17f68ef6e721c5b367c96eb3b10da0cbfbd9db4b74a8304fb",
+            "generation_id": null,
+            "decided_at": "2026-11-06T01:15:53.76313344Z"
+          },
+          "retention": {
+            "wakes_total": 4,
+            "wakes_pending": 0,
+            "decisions_total": 3,
+            "decisions_effect_none": 0,
+            "decisions_pending": 0
+          }
+        }
+      }
+    }
+  ],
+  "before": {
+    "schema": "celeris.pc-rollout/1",
+    "kind": "snapshot",
+    "at": "2026-11-06T01:16:02+00:00",
+    "project": "01M6Q6QCMQK1K1B2RM9KPKR1K2",
+    "get_controller_ms": 3.4,
+    "project_mode": "shadow",
+    "phase": "active",
+    "revision": 5,
+    "mode_changed_at": "2026-11-06T01:15:53.76313344Z",
+    "lease_expires_at": null,
+    "backoff_until": null,
+    "coalesce_until": null,
+    "next_wake_at": null,
+    "budget_today": {
+      "day": "2026-11-06",
+      "cos_inputs": 0,
+      "roots": 0,
+      "tokens": 0,
+      "chat_starts": 0
+    },
+    "cos_inputs_total": 0,
+    "wait_rule": null,
+    "budget_limits": {
+      "max_cos_inputs_per_day": 10,
+      "max_roots_per_day": 5,
+      "max_no_progress_decisions": 5,
+      "max_same_failure_repeats": 3,
+      "max_invalid_decisions": 3,
+      "max_tokens_per_day": 20000000,
+      "ttl_secs": 259200
+    },
+    "pending_wakes": 0,
+    "decisions_total": 3,
+    "effects": {
+      "suppressed": 3
+    },
+    "decisions_after_mode": {
+      "suppressed": 2
+    },
+    "decision_modes": [
+      "dry_run",
+      "shadow"
+    ],
+    "decision_rules": [
+      [
+        "shadow",
+        "suppressed",
+        "pc/outcome-open"
+      ],
+      [
+        "shadow",
+        "suppressed",
+        "pc/outcome-open"
+      ],
+      [
+        "dry_run",
+        "suppressed",
+        "pc/outcome-open"
+      ]
+    ],
+    "get_tasks_ms": 1.4,
+    "controller_roots": 0,
+    "domain_mode": "compare",
+    "domain_generation": "72cb3a3ec1188beb39b0028241c264607752f1cab6d6f7f42c95afc0d3864953",
+    "domain_version": 1,
+    "guard_halted": null,
+    "other_modes": {
+      "01M6Q6QCMTRW8D3MXXSGGTZ44A": "dry_run"
+    },
+    "daemon_config_sha256": "04a8437a0068e0d0abf2f6d160b5f924cae928ea4d9a723d0fc85e313f37b504",
+    "daemon_release": "p4g-e2e",
+    "daemon_instance": "01M6Q6RC5W9MGBR519TSR631KY",
+    "daemon_pid": 3748089,
+    "rss_kb": 126264,
+    "rss_anon_kb": 21624,
+    "threads": 33
+  },
+  "after": {
+    "schema": "celeris.pc-rollout/1",
+    "kind": "snapshot",
+    "at": "2026-11-06T01:16:02+00:00",
+    "project": "01M6Q6QCMQK1K1B2RM9KPKR1K2",
+    "get_controller_ms": 2.7,
+    "project_mode": "off",
+    "phase": "active",
+    "revision": 6,
+    "mode_changed_at": "2026-11-06T01:16:02.42055105Z",
+    "lease_expires_at": null,
+    "backoff_until": null,
+    "coalesce_until": null,
+    "next_wake_at": null,
+    "budget_today": {
+      "day": "2026-11-06",
+      "cos_inputs": 0,
+      "roots": 0,
+      "tokens": 0,
+      "chat_starts": 0
+    },
+    "cos_inputs_total": 0,
+    "wait_rule": null,
+    "budget_limits": {
+      "max_cos_inputs_per_day": 10,
+      "max_roots_per_day": 5,
+      "max_no_progress_decisions": 5,
+      "max_same_failure_repeats": 3,
+      "max_invalid_decisions": 3,
+      "max_tokens_per_day": 20000000,
+      "ttl_secs": 259200
+    },
+    "pending_wakes": 0,
+    "decisions_total": 3,
+    "effects": {
+      "suppressed": 3
+    },
+    "decisions_after_mode": {},
+    "decision_modes": [
+      "dry_run",
+      "shadow"
+    ],
+    "decision_rules": [
+      [
+        "shadow",
+        "suppressed",
+        "pc/outcome-open"
+      ],
+      [
+        "shadow",
+        "suppressed",
+        "pc/outcome-open"
+      ],
+      [
+        "dry_run",
+        "suppressed",
+        "pc/outcome-open"
+      ]
+    ],
+    "get_tasks_ms": 1.4,
+    "controller_roots": 0,
+    "domain_mode": "compare",
+    "domain_generation": "72cb3a3ec1188beb39b0028241c264607752f1cab6d6f7f42c95afc0d3864953",
+    "domain_version": 1,
+    "guard_halted": null,
+    "other_modes": {
+      "01M6Q6QCMTRW8D3MXXSGGTZ44A": "dry_run"
+    },
+    "daemon_config_sha256": "04a8437a0068e0d0abf2f6d160b5f924cae928ea4d9a723d0fc85e313f37b504",
+    "daemon_release": "p4g-e2e",
+    "daemon_instance": "01M6Q6RC5W9MGBR519TSR631KY",
+    "daemon_pid": 3748089,
+    "rss_kb": 126264,
+    "rss_anon_kb": 21624,
+    "threads": 33
+  },
+  "ok": true
+}

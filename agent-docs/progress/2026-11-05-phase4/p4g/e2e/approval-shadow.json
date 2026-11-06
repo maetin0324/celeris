@@ -1,0 +1,13 @@
+{
+  "approved_by": "human:p4g-e2e-fixture",
+  "kind": "observe",
+  "stages": [
+    "dry_run",
+    "shadow"
+  ],
+  "scope": "non-production",
+  "project_id": "01M6Q6QCMQK1K1B2RM9KPKR1K2",
+  "api": "http://127.0.0.1:57161",
+  "expires_at": "2026-11-06T03:14:19+00:00",
+  "generation": "72cb3a3ec1188beb39b0028241c264607752f1cab6d6f7f42c95afc0d3864953"
+}

@@ -1,0 +1,154 @@
+{
+  "schema": "celeris.pc-rollout/1",
+  "kind": "preflight",
+  "stage": "canary",
+  "scope": "non-production",
+  "project": "01M6Q6QCMQK1K1B2RM9KPKR1K2",
+  "verdict": "no-go",
+  "criteria": [
+    {
+      "id": "G1",
+      "what": "必要な修正が main にある（cos-usage・P4-B・P4-C・P4-D）",
+      "state": "pass",
+      "detail": "全件 main にある"
+    },
+    {
+      "id": "G1r",
+      "what": "稼働中の release が必要な修正を含む",
+      "state": "waived",
+      "detail": "非本番の予行（一時 daemon の release 名は sha でない）"
+    },
+    {
+      "id": "G2",
+      "what": "[project_controller] enabled=true・allowed_project_ids が対象の 1 案件だけ",
+      "state": "pass",
+      "detail": "enabled=True allowed=['01M6Q6QCMQK1K1B2RM9KPKR1K2']"
+    },
+    {
+      "id": "G2s",
+      "what": "読んだ config が daemon の起動時の config と同じ（sha256）",
+      "state": "pass",
+      "detail": "file=04a8437a0068e0d0abf2f6d160b5f924cae928ea4d9a723d0fc85e313f37b504 daemon=04a8437a0068e0d0abf2f6d160b5f924cae928ea4d9a723d0fc85e313f37b504"
+    },
+    {
+      "id": "G2b",
+      "what": "[project_controller.budget] の上限が summary に出ている",
+      "state": "pass",
+      "detail": "budget_limits={'max_cos_inputs_per_day': 10, 'max_roots_per_day': 5, 'max_no_progress_decisions': 5, 'max_same_failure_repeats': 3, 'max_invalid_decisions': 3, 'max_tokens_per_day': 20000000, 'ttl_secs': 259200}"
+    },
+    {
+      "id": "G3",
+      "what": "対象以外の案件の controller が全部 off",
+      "state": "fail",
+      "detail": "off でない: {'01M6Q6QCMTRW8D3MXXSGGTZ44A': 'dry_run'}"
+    },
+    {
+      "id": "G4",
+      "what": "script guard が止めていない",
+      "state": "pass",
+      "detail": "guard_halted=null"
+    },
+    {
+      "id": "G4m",
+      "what": "領域 project_controller が canary にできる状態",
+      "state": "pass",
+      "detail": "mode=compare generation_state=active"
+    },
+    {
+      "id": "G5",
+      "what": "shadow の監視の報告が 24 時間以上・違反 0",
+      "state": "fail",
+      "detail": "observed 91 s < 86400 s"
+    },
+    {
+      "id": "G6",
+      "what": "canary の人の承認（kind=effects）",
+      "state": "pass",
+      "detail": "approved by human:p4g-e2e-fixture (non-production)"
+    },
+    {
+      "id": "G7",
+      "what": "実 LLM pilot の再実行で cos_usage_null 0",
+      "state": "waived",
+      "detail": "非本番の予行では要らない"
+    }
+  ],
+  "snapshot": {
+    "schema": "celeris.pc-rollout/1",
+    "kind": "snapshot",
+    "at": "2026-11-06T01:15:59+00:00",
+    "project": "01M6Q6QCMQK1K1B2RM9KPKR1K2",
+    "get_controller_ms": 3.7,
+    "project_mode": "shadow",
+    "phase": "active",
+    "revision": 5,
+    "mode_changed_at": "2026-11-06T01:15:53.76313344Z",
+    "lease_expires_at": null,
+    "backoff_until": null,
+    "coalesce_until": null,
+    "next_wake_at": null,
+    "budget_today": {
+      "day": "2026-11-06",
+      "cos_inputs": 0,
+      "roots": 0,
+      "tokens": 0,
+      "chat_starts": 0
+    },
+    "cos_inputs_total": 0,
+    "wait_rule": null,
+    "budget_limits": {
+      "max_cos_inputs_per_day": 10,
+      "max_roots_per_day": 5,
+      "max_no_progress_decisions": 5,
+      "max_same_failure_repeats": 3,
+      "max_invalid_decisions": 3,
+      "max_tokens_per_day": 20000000,
+      "ttl_secs": 259200
+    },
+    "pending_wakes": 0,
+    "decisions_total": 3,
+    "effects": {
+      "suppressed": 3
+    },
+    "decisions_after_mode": {
+      "suppressed": 2
+    },
+    "decision_modes": [
+      "dry_run",
+      "shadow"
+    ],
+    "decision_rules": [
+      [
+        "shadow",
+        "suppressed",
+        "pc/outcome-open"
+      ],
+      [
+        "shadow",
+        "suppressed",
+        "pc/outcome-open"
+      ],
+      [
+        "dry_run",
+        "suppressed",
+        "pc/outcome-open"
+      ]
+    ],
+    "get_tasks_ms": 1.8,
+    "controller_roots": 0,
+    "domain_mode": "compare",
+    "domain_generation": "72cb3a3ec1188beb39b0028241c264607752f1cab6d6f7f42c95afc0d3864953",
+    "domain_version": 1,
+    "guard_halted": null,
+    "other_modes": {
+      "01M6Q6QCMTRW8D3MXXSGGTZ44A": "dry_run"
+    },
+    "daemon_config_sha256": "04a8437a0068e0d0abf2f6d160b5f924cae928ea4d9a723d0fc85e313f37b504",
+    "daemon_release": "p4g-e2e",
+    "daemon_instance": "01M6Q6RC5W9MGBR519TSR631KY",
+    "daemon_pid": 3748089,
+    "rss_kb": 126072,
+    "rss_anon_kb": 21624,
+    "threads": 33
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "schema": "celeris.pc-rollout/1",
+  "kind": "snapshot",
+  "at": "2026-11-06T01:14:24+00:00",
+  "project": "01M6Q6QCMQK1K1B2RM9KPKR1K2",
+  "get_controller_ms": 3.7,
+  "project_mode": "dry_run",
+  "phase": "active",
+  "revision": 2,
+  "mode_changed_at": "2026-11-06T01:14:22.26166774Z",
+  "lease_expires_at": null,
+  "backoff_until": null,
+  "coalesce_until": "2026-11-06T01:14:52.679594259Z",
+  "next_wake_at": null,
+  "budget_today": {
+    "day": "2026-11-06",
+    "cos_inputs": 0,
+    "roots": 0,
+    "tokens": 0,
+    "chat_starts": 0
+  },
+  "cos_inputs_total": 0,
+  "wait_rule": null,
+  "budget_limits": {
+    "max_cos_inputs_per_day": 10,
+    "max_roots_per_day": 5,
+    "max_no_progress_decisions": 5,
+    "max_same_failure_repeats": 3,
+    "max_invalid_decisions": 3,
+    "max_tokens_per_day": 20000000,
+    "ttl_secs": 259200
+  },
+  "pending_wakes": 1,
+  "decisions_total": 1,
+  "effects": {
+    "suppressed": 1
+  },
+  "decisions_after_mode": {
+    "suppressed": 1
+  },
+  "decision_modes": [
+    "dry_run"
+  ],
+  "decision_rules": [
+    [
+      "dry_run",
+      "suppressed",
+      "pc/outcome-open"
+    ]
+  ],
+  "get_tasks_ms": 1.8,
+  "controller_roots": 0,
+  "domain_mode": "compare",
+  "domain_generation": "72cb3a3ec1188beb39b0028241c264607752f1cab6d6f7f42c95afc0d3864953",
+  "domain_version": 1,
+  "guard_halted": null,
+  "other_modes": {
+    "01M6Q6QCMTRW8D3MXXSGGTZ44A": "off"
+  },
+  "daemon_config_sha256": "04a8437a0068e0d0abf2f6d160b5f924cae928ea4d9a723d0fc85e313f37b504",
+  "daemon_release": "p4g-e2e",
+  "daemon_instance": "01M6Q6QCRTVE32DJA5XT1F3E6P",
+  "daemon_pid": 3747042,
+  "rss_kb": 126336,
+  "rss_anon_kb": 20544,
+  "threads": 33
+}

@@ -1,0 +1,19 @@
+{
+  "schema": "celeris.pc-rollout/1",
+  "kind": "e2e",
+  "ok": true,
+  "failed": [],
+  "project": "01M6Q6QCMQK1K1B2RM9KPKR1K2",
+  "monitor": {
+    "observed_secs": 91,
+    "samples": 19,
+    "violations": [],
+    "decisions_delta": 2,
+    "get_controller_ms_p50": 4.7,
+    "get_controller_ms_max": 19.1,
+    "rss_anon_kb_first": 20544,
+    "rss_anon_kb_last": 21624,
+    "restart_secs": 0.22
+  },
+  "note": "非本番の一時 daemon（fake harness）での操作の予行。本番の go/no-go の根拠にはしない。"
+}

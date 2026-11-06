@@ -94,3 +94,7 @@ raw は `after/samples-2.jsonl`・`after/ops-2.jsonl`。
 - after 2 回の tick 数の差（85 と 77）は約 10 % で、before（100）との差と同程度の大きさ。揺れが大きく、mallopt による tick の遅れとは言えないが、遅れていないとも言えない。before の繰り返しが無いため、揺れの下限は未確認。
 - dispatch 遅延の比較は未実施。
 - 跳ねの確保元は未特定。before の 2 回目以降も未測定。
+
+## before binary の準備（Run #12）
+- `tune_malloc()` の呼び出しだけをコメントアウトして `cargo build -p celeris`（3m56s）し、`/local/celeris/data/scratch/daemon-rss/bin/celeris-before` に退避した。ソースは `git checkout` で戻した（作業ツリーは元のまま）。
+- ビルドで run の壁時計の大半を使い、before の soak は未実施。次の run は `--celeris $D/bin/celeris-before` で、after と同じ引数（`--label before2`、新しい state `stN`）で 1 回測る。

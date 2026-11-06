@@ -3,8 +3,8 @@
 #
 #   bash scripts/dev/long-horizon-pilot-llm.sh --harness stub   --out <dir> [--cases C08] [--arms new,old.passive]
 #   bash scripts/dev/long-horizon-pilot-llm.sh --harness config-stub --out <dir> [--cases C06] [--arms new]
-#   LONG_HORIZON_PILOT_LLM_APPROVED=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness config \
-#       --llm-config <toml> --cos-route '<toml の配列>' [--out <dir>] [--cases C04,C06,C08,C09,C10] [--max-wall-secs 14400]
+#   bash scripts/dev/long-horizon-pilot-llm.sh --harness config --approval <人の承認の json> \
+#       --llm-config <toml> --cos-route '<toml の配列>' [--out <dir>] [--cases C04,C06,C08,C09,C10] [--max-wall-secs N]
 #
 # 試行ごとに一時 home（$TMPDIR か --state-root の下）に daemon（一時 DB・loopback の port）を起こし、使い捨ての
 # `pilot:<case>-<seed>` 案件を作って、`new`（controller enabled）か `old.passive`（mode off、人の発言 1 回で従来の
@@ -23,16 +23,23 @@
 #   config-stub。陰性の試験）は worker に token を探させて承認の偽造を試させ、どの token も API に通らないことを
 #   driver が確かめる。API の token は試行ごとの乱数で、home の外の私的な dir に daemon・broker の起動の間だけ置く。
 # - `--harness config` は実 LLM。人が書いた `--llm-config`（[llm_sources]・[harnesses]・[route_defaults]・
-#   [harness_selection]・[accounts] 等）をそのまま config に足す。人の承認（LONG_HORIZON_PILOT_LLM_APPROVED=1）が
-#   要り、Celeris の worker の run の中（CELERIS_RUN_ID がある）では起こさない（ADR 2026-10-07 worker-no-subagents）。
-#   既定の上限は 1 日 20 USD 相当（--max-usd-per-day）/ 4 時間（D9）。24〜72h の実稼働はこの script の範囲外（人の別途の承認）。
+#   [harness_selection]・[accounts] 等）をそのまま config に足す。人の承認の記録（--approval。approval_id・
+#   approved_by human:<名前>・expires_at・scope の cases/arms/environment・limits の max_usd/max_wall_secs）が要り、
+#   pilot_gate.py check-approval が期限切れ・範囲外・不備を断る（ADR 2026-11-06-phase5-n1-pilot-measurement-contract）。
+#   Celeris の worker の run の中（CELERIS_RUN_ID がある）では起こさない（ADR 2026-10-07 worker-no-subagents）。
+#   daemon の予算（max_usd_per_day）は承認の max_usd、--max-wall-secs の既定は承認の max_wall_secs。
+#   24〜72h の実稼働はこの script の範囲外（人の別途の承認）。
+# - 採点の後に pilot_gate.py judge が測定の契約（usage・cache・USD の欠測、CoS の run、追記専用、拒否・漏洩・二重作用、
+#   上限）を判定し、`<out>/grade/pilot-gate.json` と pc_rollout.py 用の `<out>/grade/pilot-facts.json` を書く。
+#   欠測は合格にしない（verdict unknown）。stub・config-stub の G7 は pending。
 # - 本番の DB・daemon・config・release に触れない（--state-root が本番の dir なら driver が断る）。
-# exit: 0 = 全試行が終わり採点できた、1 = 失敗、2 = 使い方の誤り・承認が無い。
+# exit: 0 = 全試行が終わり採点できた（--harness config は gate も pass）、1 = 失敗、2 = 使い方の誤り・承認が無い、
+#       3 = --harness config で gate が pass でない（欠測・上限超え・拒否など。pilot-gate.json を読む）。
 set -euo pipefail
 
 usage() { sed -n '3,6p' "$0" >&2; exit 2; }
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-harness="" out="" cases="C08" arms="new,old.passive" llm_config="" cos_route="[]" state_root="" max_wall=""
+harness="" out="" cases="C08" arms="new,old.passive" llm_config="" cos_route="[]" state_root="" max_wall="" approval=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --harness) harness="$2"; shift 2 ;;
@@ -43,6 +50,7 @@ while [ $# -gt 0 ]; do
         --cos-route) cos_route="$2"; shift 2 ;;
         --state-root) state_root="$2"; shift 2 ;;
         --max-wall-secs) max_wall="$2"; shift 2 ;;
+        --approval) approval="$2"; shift 2 ;;
         *) usage ;;
     esac
 done
@@ -56,17 +64,24 @@ case "$harness" in
         max_wall="${max_wall:-300}"
         ;;
     config)
-        if [ "${LONG_HORIZON_PILOT_LLM_APPROVED:-}" != 1 ]; then
-            echo "long-horizon-pilot-llm: the real LLM pilot needs a person's approval (LONG_HORIZON_PILOT_LLM_APPROVED=1)" >&2
-            exit 2
-        fi
         if [ -n "${CELERIS_RUN_ID:-}" ]; then
             echo "long-horizon-pilot-llm: refusing to start LLM runs inside a Celeris worker run (CELERIS_RUN_ID is set)" >&2
             exit 2
         fi
+        if [ ! -f "$approval" ]; then
+            echo "long-horizon-pilot-llm: the real LLM pilot needs a person's approval record (--approval <json>)" >&2
+            exit 2
+        fi
+        approval="$(cd "$(dirname "$approval")" && pwd)/$(basename "$approval")"
+        check="$(python3 -I "$root/scripts/dev/long-horizon-pilot/pilot_gate.py" check-approval --approval "$approval" \
+            --cases "$cases" --arms "$arms" ${max_wall:+--max-wall-secs "$max_wall"})" || {
+            echo "long-horizon-pilot-llm: the approval does not allow this pilot: $check" >&2; exit 2; }
         [ -f "$llm_config" ] || { echo "long-horizon-pilot-llm: --llm-config <toml> is required" >&2; exit 2; }
+        [ "$cos_route" != "[]" ] || { echo "long-horizon-pilot-llm: --cos-route must not be empty for --harness config" >&2; exit 2; }
         out="${out:-$llm_dir}"
-        max_wall="${max_wall:-14400}"
+        max_wall="${max_wall:-$(printf %s "$check" | python3 -I -c 'import json,sys; print(int(json.load(sys.stdin)["max_wall_secs"]))')}"
+        max_usd="$(printf %s "$check" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["max_usd"])')"
+        echo "long-horizon-pilot-llm: approval $(printf %s "$check" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["approval_id"])') max_usd=$max_usd max_wall_secs=$max_wall" >&2
         ;;
     *) usage ;;
 esac
@@ -103,7 +118,8 @@ if [ "${LONG_HORIZON_PILOT_STUB_FORGE:-}" = 1 ]; then
     forge_arg=', "--forge"'
 fi
 if [ "$harness" = config ]; then
-    set -- --harness config --llm-config "$llm_config" --cos-route "$cos_route" --cos-max-turns 40 --cos-max-wall 1800
+    set -- --harness config --harness-label config --llm-config "$llm_config" --cos-route "$cos_route" \
+        --cos-max-turns 40 --cos-max-wall 1800 --max-usd-per-day "$max_usd"
 elif [ "$harness" = config-stub ]; then
     # 実 LLM の代わりの agent を config harness の TOML として書く（LLM は呼ばない）。
     agent="$root/scripts/dev/long-horizon-pilot/stub_harness.py"
@@ -124,11 +140,19 @@ source_kinds = ["fake"]
 [route_defaults.claude_code]
 candidates = [{ source = "local", model = "model-1" }]
 
+# stub の usage を daemon の USD 予算が数えられるように（費用不明の run は予算を止める）。
+[budget_rates."model-1"]
+input_per_million = 1.0
+output_per_million = 5.0
+cache_read_per_million = 0.1
+cache_write_per_million = 2.0
+
 [harness_selection]
 execution_class_defaults = {}
 rules = [{ harness = "claude_code", required_capabilities = [] }]
 TOML
-    set -- --harness config --llm-config "$work/config-stub.toml" --cos-route '[{ source = "local", model = "model-1" }]'
+    set -- --harness config --harness-label config-stub --llm-config "$work/config-stub.toml" \
+        --cos-route '[{ source = "local", model = "model-1" }]'
 else
     set -- --harness stub
     # 陰性の試験用: stub が効果の記録に偽の行を足そうとする（driver は observation_failed で落ちる）。
@@ -148,4 +172,14 @@ for case in $(printf %s "$cases" | tr , " "); do
 done
 "$bin/celeris-campaign" long-horizon-grade --tier llm_pilot --raw "$out" --fixtures "$root/tests/fixtures/long-horizon" \
     --out "$out/grade" || fail "long-horizon-grade --tier llm_pilot failed"
+set +e
+python3 -I "$root/scripts/dev/long-horizon-pilot/pilot_gate.py" judge --raw "$out" ${approval:+--approval "$approval"} \
+    --out "$out/grade/pilot-gate.json" --pilot-facts "$out/grade/pilot-facts.json" >&2
+gate_rc=$?
+set -e
+case "$gate_rc" in 0|1|3) ;; *) fail "pilot_gate.py judge failed (exit $gate_rc)" ;; esac
+if [ "$harness" = config ] && [ "$gate_rc" -ne 0 ]; then
+    echo "long-horizon-pilot-llm: wrote $out (harness $harness), but the measurement gate is not pass: $out/grade/pilot-gate.json" >&2
+    exit 3
+fi
 echo "long-horizon-pilot-llm: wrote $out (harness $harness)"

@@ -20,13 +20,17 @@ def appr(kind="observe", stages=("dry_run", "shadow"), **kw):
     return d
 
 
+LIMITS = {"max_usd_per_day": 20.0, "max_roots_per_day": 5, "max_cos_inputs_per_day": 10, "ttl_secs": 259200}
+GATE, GATE_SCHEMA = "schema", "celeris.long-horizon-pilot-gate/1"
+
+
 def facts(**kw):
     f = {"project": "P1", "git": {"missing_subjects": [], "release_contains_required": True},
-         "config": {"read": True, "enabled": True, "allowed_project_ids": ["P1"], "sha256": "x", "budget_present": True},
-         "daemon_config_sha256": "x", "other_modes": {"P2": "off"}, "domain": {"mode": "compare"},
+         "config": {"read": True, "enabled": True, "allowed_project_ids": ["P1"], "sha256": "x"},
+         "daemon_config_sha256": "x", "budget_limits": LIMITS, "other_modes": {"P2": "off"}, "domain": {"mode": "compare"},
          "guard_halted": None, "controller": {"mode": "dry_run"},
          "decisions": {"total": 2, "dry_run": 2, "not_suppressed": 0}, "bad_wait_rule": None, "controller_roots": 0,
-         "approval_check": (True, "ok"), "pilot_facts": {"cos_runs": 3, "missing": []}}
+         "approval_check": (True, "ok"), "pilot_facts": {GATE: GATE_SCHEMA, "g7": "pass", "cos_runs": 3, "cos_usage_null": 0, "missing": []}}
     f.update(kw)
     return f
 
@@ -80,8 +84,23 @@ class Criteria(unittest.TestCase):
         self.assertEqual(p.verdict(rows), "no-go (pending)")
 
     def test_cos_usage_null_fails(self):
-        rows = p.criteria("shadow", facts(pilot_facts={"cos_runs": 14, "missing": ["cos_usage_null:14"]}), "production")
+        pf = {GATE: GATE_SCHEMA, "g7": "fail", "cos_runs": 14, "cos_usage_null": 14, "missing": ["cos_usage_null:14"]}
+        rows = p.criteria("shadow", facts(pilot_facts=pf), "production")
         self.assertEqual(states(rows)["G7"], "fail")
+
+    def test_pilot_facts_not_from_the_gate_fail(self):
+        # 修正前の形（cos_runs と missing だけ）は G7 を通さない。driver の facts をそのまま渡しても同じ。
+        rows = p.criteria("shadow", facts(pilot_facts={"cos_runs": 3, "missing": []}), "production")
+        self.assertEqual(states(rows)["G7"], "fail")
+
+    def test_stub_pilot_keeps_g7_pending(self):
+        pf = {GATE: GATE_SCHEMA, "g7": "pending", "cos_runs": 3, "cos_usage_null": None, "missing": ["not_real_llm"]}
+        rows = p.criteria("shadow", facts(pilot_facts=pf), "production")
+        self.assertEqual(states(rows)["G7"], "pending")
+
+    def test_g7_pass_with_null_count_fails(self):
+        pf = {GATE: GATE_SCHEMA, "g7": "pass", "cos_runs": 3, "cos_usage_null": None, "missing": []}
+        self.assertEqual(states(p.criteria("shadow", facts(pilot_facts=pf), "production"))["G7"], "fail")
 
     def test_missing_fix_on_main_fails(self):
         rows = p.criteria("shadow", facts(git={"missing_subjects": ["x"], "release_contains_required": None}),
@@ -115,6 +134,18 @@ class Criteria(unittest.TestCase):
         self.assertEqual(states(p.criteria("canary", dict(f, shadow_report=nonprod), "production"))["G5"], "fail")
         dirty = dict(rep, violations=["x"])
         self.assertEqual(states(p.criteria("canary", dict(f, shadow_report=dirty), "production"))["G5"], "fail")
+
+    def test_budget_needs_positive_usd_roots_and_cos_input_caps(self):
+        # USD 予算（01M6QDK2PM）の後の契約: token の上限だけの summary や、USD の上限が無い・0 の summary は通さない。
+        self.assertEqual(states(p.criteria("shadow", facts(), "production"))["G2b"], "pass")
+        for bad in (None, {}, {"max_tokens_per_day": 1000000, "max_roots_per_day": 5, "max_cos_inputs_per_day": 10},
+                    dict(LIMITS, max_usd_per_day=0), dict(LIMITS, max_usd_per_day=True),
+                    dict(LIMITS, max_roots_per_day=None)):
+            rows = p.criteria("shadow", facts(budget_limits=bad), "production")
+            self.assertEqual(states(rows)["G2b"], "fail", bad)
+
+    def test_required_subjects_include_n5_retention_guard(self):
+        self.assertTrue(any(s.startswith("phase 5: enforce roadmap evidence freshness") for s in p.REQUIRED_SUBJECTS))
 
     def test_guard_halted_fails(self):
         self.assertEqual(states(p.criteria("shadow", facts(guard_halted="x"), "production"))["G4"], "fail")

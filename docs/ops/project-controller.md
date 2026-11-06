@@ -115,11 +115,15 @@ controller は event（root の終了・失敗・人の操作など）で起き�
   全部合格のときだけ数える（I3。reopen で前の合格を捨てる）。Outcome の block が `checks` を書くと、Rust が root の acceptance に
   command の条件として足す（[P0-E の ADR](../../agent-docs/adr/2026-11-05-phase3-p0e.md)）。
 - Roadmap の acceptance・checks を改版すると、旧条件の root は到達の根拠から外れる。人・CoS の root も起票時の承認版と実際の command を照合する。人・CoS の旧 root で起票時の版の記録が無いものは根拠にならず、新しい root の実行が必要になる。題名だけの改版では根拠は失効しない。再達成のときは新しい root を evidence に持つ reached を追記し、古い reached は履歴に残す（[N5 ADR](../../agent-docs/adr/2026-11-06-n5-evidence-integrity.md)）。
-- 実 LLM の pilot は `scripts/dev/long-horizon-pilot-llm.sh` を人が sandbox の外から実行する。人の承認の印
-  `LONG_HORIZON_PILOT_LLM_APPROVED=1` と、人が書いた LLM の設定（`--llm-config <toml>`。`[llm_sources]`・`[harnesses]`・
-  `[route_defaults]`・`[harness_selection]`・`[accounts]`）が要る。Celeris の worker の run の中では起動しない。一時 home・一時 DB・
-  loopback の daemon で動き、本番に触れない。raw は `agent-docs/progress/2026-11-04-long-horizon/a9/` の下の `llm` に書く。
-  24〜72 時間の実稼働は人の別途の承認が要る。手順と未実施の記録は `agent-docs/progress/2026-11-04-long-horizon/a9.md`。
+- 実 LLM の pilot は `scripts/dev/long-horizon-pilot-llm.sh --harness config` を operator が sandbox の外から実行する。人の承認の
+  記録（`--approval <json>`。`approval_id`・`approved_by`（`human:<名前>`）・`approved_at`・`expires_at`・`account`・`model`・`harness`・
+  `scope`（`cases`・`arms`・`environment: non-production`）・`limits`（`max_usd`・`max_wall_secs`））、人が書いた LLM の設定
+  （`--llm-config <toml>`。`[llm_sources]`・`[harnesses]`・`[route_defaults]`・`[harness_selection]`・`[accounts]`）、空でない
+  `--cos-route` が要る。期限切れ・範囲外の承認では起動しない。Celeris の worker の run の中では起動しない。一時 home・一時 DB・
+  loopback の daemon で動き、本番に触れない。daemon の USD 予算は承認の `max_usd`。採点の後に `pilot_gate.py judge` が測定の契約を
+  判定し、`<out>/grade/pilot-gate.json` と G7 の入力 `<out>/grade/pilot-facts.json` を書く。欠測（usage null・cache 欄の欠落・
+  USD 未算出）は合格にしない（[N1 の ADR](../../agent-docs/adr/2026-11-06-phase5-n1-pilot-measurement-contract.md)）。
+  24〜72 時間の実稼働は人の別途の承認が要る。手順は `agent-docs/progress/2026-11-06-phase5/runbook.md` の N1。
 - pilot の C06（公開と承認）では、driver が worker の外で公開の broker（`scripts/dev/long-horizon-pilot/pilot_effect.py`）を
   起こし、worker には公開の command（`<試行の home>/bin/pilot-effect publish <logical_id>`）だけを案件の依頼文で渡す。承認は
   daemon の承認（`GET /approvals`・`POST /approvals/{id}/decide`）で、人の token の決定だけを数える。公開の記録は HMAC の鎖で、
@@ -258,7 +262,7 @@ archive_dir = "/local/celeris/state/retention-archive"
 
 | 段 | 何を | go の条件 |
 |---|---|---|
-| 0 | config に `[project_controller] enabled = true`・`allowed_project_ids = ["$P"]` を書いて再起動。**再起動の後に** `celerisctl script generations register <sha256>`（再起動は、どの領域も指していない `loaded` の generation を retire する） | `python3 -I scripts/dev/pc-rollout/pc_rollout.py preflight --api $A --token-file $T --project $P --stage dry_run --config ~/.config/celeris/config.toml --approval observe.json --pilot-facts <pilot の facts.json> --out $O/preflight-dry_run.json` が `verdict: go` |
+| 0 | config に `[project_controller] enabled = true`・`allowed_project_ids = ["$P"]` を書いて再起動。**再起動の後に** `celerisctl script generations register <sha256>`（再起動は、どの領域も指していない `loaded` の generation を retire する） | `python3 -I scripts/dev/pc-rollout/pc_rollout.py preflight --api $A --token-file $T --project $P --stage dry_run --config ~/.config/celeris/config.toml --approval observe.json --pilot-facts <pilot の out>/grade/pilot-facts.json --out $O/preflight-dry_run.json` が `verdict: go` |
 | 1 | `pc_rollout.py apply --stage dry_run --approval observe.json --reason "…"`（領域を `compare`、案件を `dry_run`）。`POST …/controller/wake` を 1 回 | 判断が 1 件以上、効果は `suppressed` か `none` |
 | 2 | `preflight --stage shadow …` が go なら `apply --stage shadow …`。`monitor --stage shadow --secs 86400 --interval 60 --samples $O/shadow.jsonl --approval observe.json --undo-on-violation --out $O/shadow-report.json` | 報告の `violations` が空・`observed_secs` ≥ 86400 |
 | 3 | 効果の承認（`effects`、`shadow_report_sha256 = sha256sum $O/shadow-report.json`）を人が書く。`preflight --stage canary --shadow-report $O/shadow-report.json …` が go なら `apply --stage canary …` | 段 3 の表の条件 |
@@ -269,7 +273,8 @@ archive_dir = "/local/celeris/state/retention-archive"
 待機の規則の `pc/invalid`・`pc/script-unavailable`、API の失敗。daemon の再起動は違反でなく `daemon_restarted` に記録する。
 標本には RSS（`/proc/<pid>/status` の VmRSS・RssAnon。daemon と同じ host で実行したときだけ）と `GET …/controller` の時間が入る。
 
-go/no-go の条件（G1〜G7）の定義は ADR の D2。G7 は実 LLM の縮小 pilot の再実行の facts（`--pilot-facts`）で案件 CoS の
+go/no-go の条件（G1〜G7）の定義は ADR の D2。G1 の必須の修正は cos-usage・P4-B・P4-C・P4-D・N5（schema 118）の 5 件。G2b は summary の
+`budget_limits` に `max_usd_per_day`・`max_roots_per_day`・`max_cos_inputs_per_day` が正の数で出ていること（USD 予算の後の契約）。G7 は実 LLM の縮小 pilot の再実行の facts（`--pilot-facts`）で案件 CoS の
 run が数えられ `cos_usage_null` が 0 であること（01M6PYNMP4 の修正の確認）で、facts が無ければ `pending`（no-go）になる。
 
 非本番の予行: `bash scripts/dev/pc-rollout.sh --out <絶対 path>`（一時 home・fake harness・127.0.0.1、約 2 分）。raw は
@@ -283,5 +288,6 @@ run が数えられ `cos_usage_null` が 0 であること（01M6PYNMP4 の修�
 - [ ] 24〜72 時間の非本番の実稼働と、本番 RSS の controller `off` との比較（P1-I の段 3・4）: 未実施。人の承認待ち。
 - [ ] 上の 1〜5 の本番の操作: どれも未実施（人が行う）。
 - [ ] `[project_controller.retention]` の本番での有効化（P4-D）: 未実施（人が config を書き、`archive_dir` の容量を決める）。
-- [ ] 本番 1 案件の shadow（P4-G）: 未実施。2026-11-06 の判定は `no-go (pending)`（人の observe の承認が無い、G7 の pilot の
-  再実行が未実施、本番の G2〜G5 は人の preflight で未確認）。
+- [ ] 本番 1 案件の shadow（P4-G）: 未実施。2026-11-06 13:50Z の判定（N6）は `no-go`。G7 が fail（実 LLM の縮小 pilot で案件 CoS の
+  chat run 5 本のうち 3 本が usage null）、本番の config に `[project_controller]` が無い（G2 fail）、人の observe の承認が無い。
+  判定表・人の承認の一覧・予行の結果は `agent-docs/progress/2026-11-06-phase5/n6.md`。

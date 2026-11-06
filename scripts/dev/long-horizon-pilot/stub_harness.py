@@ -15,6 +15,9 @@
   定数から token を集めて daemon の API に当てる。通った token があれば pending の pilot-effect の承認を `once` で
   決めようとする。結果は stub-run.jsonl の `forge` に残す（driver が読む）。
 - CoS の chat run と planner はそのまま done を返す。起動ごとに 1 行を artifacts/stub-run.jsonl に書く。
+- 終わりの行（done・question）には固定の usage（STUB_USAGE。token・cache 欄・cost_usd）を付ける。daemon の USD 予算は
+  費用の分からない run があると止まる（fail closed）ので、driver は model-1 の `[budget_rates]` を config に書く
+  （ADR 2026-11-06-phase5-n1-pilot-measurement-contract D4）。LLM は呼ばない。
 """
 import json
 import os
@@ -23,6 +26,11 @@ import re
 import subprocess
 import sys
 import time
+
+
+# 実 LLM の claude-code の usage と同じ欄。cost_usd は harness の申告の写し（予算は daemon が単価表から数える）。
+STUB_USAGE = {"input_tokens": 10, "output_tokens": 5, "cache_read_tokens": 100, "cache_creation_tokens": 20,
+              "cost_usd": 0.0001}
 
 
 def arg(name):
@@ -232,9 +240,9 @@ def main():
                             "tampered": tampered, "forge": forged}, ensure_ascii=False) + "\n")
     print(json.dumps({"type": "progress", "msg": "stub", "kind": "status", "summary": "stub"}))
     if question:
-        print(json.dumps({"type": "question", "text": question}))
+        print(json.dumps({"type": "question", "text": question, "usage": STUB_USAGE}))
         return
-    print(json.dumps({"type": "done", "summary": "stub harness (no LLM)", "evidence": []}))
+    print(json.dumps({"type": "done", "summary": "stub harness (no LLM)", "evidence": [], "usage": STUB_USAGE}))
 
 
 if __name__ == "__main__":

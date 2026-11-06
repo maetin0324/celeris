@@ -31,27 +31,42 @@ ACTIVE = {"draft", "ready", "running", "blocked", "reviewing"}
 
 USAGE_KEYS = ("input_tokens", "output_tokens")
 CACHE_KEYS = ("cache_read_tokens", "cache_creation_tokens")
+# goal_guard の project_controller_owns_launch の detail（拒否の記録の reason に入る）。
+LAUNCH_REJECTED = "launches its next root"
 
 
 def collect_usage(conn, pid, harness, secs):
-    """案件の runs と案件 CoS thread の chat_runs から invocations と消費を集める（ADR 2026-11-05-phase3-p0f-usage-counting）。
+    """案件の runs と案件 CoS thread の chat_runs から invocations と消費を集める（ADR 2026-11-05-phase3-p0f-usage-counting、
+    ADR 2026-11-06-phase5-n1-pilot-measurement-contract D1）。
 
-    tokens は daemon の予算（task_ops::project_budget）と同じ input+output、cache は別欄。実 LLM の harness で
-    usage が null の起動が 1 件でもあれば missing に理由と件数を書き、tokens・cache_tokens を null にする。
+    戻り値は (invocations, tokens, cache_tokens, usd, missing)。tokens は daemon の予算（task_ops::project_budget）と同じ
+    input+output、cache は別欄、usd は保存値 `cost_usd` の和。実 LLM の harness で次のどれかが 1 件でもあれば missing に
+    理由と件数を書き、tokens・cache_tokens・usd を null にする（欠測を 0 として足さない。fail closed）:
+    usage が null（run_usage_null・cos_usage_null）、cache 欄（cache_read_tokens・cache_creation_tokens）が無い
+    （cache_missing）、`cost_usd` が数でない（usd_missing）。
     """
     real = harness != "stub"
     invocations = []
     tokens = cache_tokens = 0
-    nulls = {"run": 0, "cos": 0}
+    usd = 0.0
+    gaps = {"run_usage_null": 0, "cos_usage_null": 0, "cache_missing": 0, "usd_missing": 0}
 
     def add(role, started_at, raw, kind):
-        nonlocal tokens, cache_tokens
+        nonlocal tokens, cache_tokens, usd
         usage = json.loads(raw) if raw else None
         if usage:
             tokens += sum(int(usage.get(k) or 0) for k in USAGE_KEYS)
-            cache_tokens += sum(int(usage.get(k) or 0) for k in CACHE_KEYS)
+            if all(isinstance(usage.get(k), int) for k in CACHE_KEYS):
+                cache_tokens += sum(usage[k] for k in CACHE_KEYS)
+            elif real:
+                gaps["cache_missing"] += 1
+            cost = usage.get("cost_usd")
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
+                usd += cost
+            elif real:
+                gaps["usd_missing"] += 1
         elif real:
-            nulls[kind] += 1
+            gaps[f"{kind}_usage_null"] += 1
         invocations.append({"at": secs(started_at), "role": role, "usage": usage})
 
     for r in conn.execute("SELECT r.role, r.started_at, r.usage_json FROM runs r JOIN tasks t ON t.id = r.task_id "
@@ -63,16 +78,57 @@ def collect_usage(conn, pid, harness, secs):
                               "AND started_at IS NOT NULL ORDER BY started_at", (th,)):
             add("cos", r["started_at"], r["usage_json"], "cos")
     invocations.sort(key=lambda i: i["at"])
-    reasons = []
-    if not real:
-        reasons.append("tier=stub")
-    if nulls["run"]:
-        reasons.append(f"run_usage_null:{nulls['run']}")
-    if nulls["cos"]:
-        reasons.append(f"cos_usage_null:{nulls['cos']}")
+    reasons = [] if real else ["tier=stub"]
+    reasons += [f"{k}:{n}" for k, n in gaps.items() if n]
     if reasons:
-        return invocations, None, None, ",".join(reasons)
-    return invocations, tokens, cache_tokens, None
+        return invocations, None, None, None, ",".join(reasons)
+    return invocations, tokens, cache_tokens, round(usd, 6), None
+
+
+# 案件 CoS の chat run が要る skill（dispatcher の cos_chat_skills）。一時 KB に無いと run は起動前に
+# 「CoS skills unavailable」で失敗し、usage が残らない（N1 で見つけた cos_usage_null の原因。ADR
+# 2026-11-06-phase5-n1-pilot-measurement-contract D3）。
+COS_SKILLS = ("cos-operator", "cos-inbox-triage")
+SKILLS_SRC = pathlib.Path(__file__).resolve().parents[3] / "config" / "skills"
+
+
+def install_cos_skills(knowledge, src=SKILLS_SRC):
+    """repo の config/skills の CoS の skill を一時 KB の skills/ に写す。"""
+    for name in COS_SKILLS:
+        if not (src / name / "SKILL.md").is_file():
+            die(f"CoS skill {name} is missing under {src}")
+        shutil.copytree(src / name, knowledge / "skills" / name, dirs_exist_ok=True)
+
+
+def cos_run_failures(conn, pid):
+    """案件 CoS の chat run の失敗の理由（先頭 80 字）ごとの件数。usage が null の run の原因を facts に残す。"""
+    out = {}
+    for (reason,) in conn.execute("SELECT c.reason FROM chat_runs c JOIN chat_threads t ON t.id = c.thread_id "
+                                  "WHERE t.project_id = ? AND c.state = 'failed'", (pid,)):
+        key = (reason or "")[:80]
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
+def cos_rejections(conn, pid):
+    """案件 CoS thread の `/cos/operations` で拒否された操作の数と、そのうち controller が起票を持つための拒否の数。"""
+    rows = conn.execute("SELECT o.reason FROM cos_operations o JOIN chat_threads t ON t.id = o.thread_id "
+                        "WHERE t.project_id = ? AND o.state = 'rejected'", (pid,)).fetchall()
+    launch = sum(1 for r in rows if LAUNCH_REJECTED in (r[0] or ""))
+    return len(rows), launch
+
+
+def events_digest(conn, after_id=0):
+    """events の id → json の SHA-256（after_id より後ろ）。追記専用の検査に使う。"""
+    return {r[0]: hashlib.sha256(r[1].encode()).hexdigest()
+            for r in conn.execute("SELECT id, json FROM events WHERE id > ? ORDER BY id", (after_id,))}
+
+
+def append_only_violations(seen, now):
+    """試行中に見た events の行（seen）が、終わりの読み（now）で消えたか書き換わった件数。"""
+    gone = sum(1 for i in seen if i not in now)
+    changed = sum(1 for i, h in seen.items() if i in now and now[i] != h)
+    return gone, changed
 
 
 SEED_BRANCH = "main"
@@ -148,6 +204,7 @@ class Trial:
         self.out = pathlib.Path(a.out).resolve()
         self.proc = None
         self.t0 = None
+        self.seen_events = {}
         # API の token（人・operator）は試行ごとの乱数で、driver の memory にだけ持つ。daemon と broker が起動時に
         # 読む file は試行の home（worker が読み書きできる）の外の私的な dir（0700）に置き、読み終えたら消す
         # （ADR 2026-11-05-phase3-p0d D7）。worker が人の token を読めば daemon の承認 API を人として呼べてしまうので、
@@ -228,6 +285,13 @@ kind = "fake"
 accounts = ["a1"]
 models = ["model-1"]
 
+# stub の usage を daemon の USD 予算が数えられるように（費用不明の run は予算を止める）。
+[budget_rates."model-1"]
+input_per_million = 1.0
+output_per_million = 5.0
+cache_read_per_million = 0.1
+cache_write_per_million = 2.0
+
 [harnesses.claude_code]
 kind = "fake"
 api_formats = ["fake"]
@@ -252,6 +316,7 @@ rules = [{{ harness = "claude_code", required_capabilities = [] }}]
                     if pid else "")
         knowledge = self.home / "knowledge"
         knowledge.mkdir(exist_ok=True)
+        install_cos_skills(knowledge)
         (self.home / "ws").mkdir(exist_ok=True)
         (self.home / "config.toml").write_text(f"""
 db = "celeris.sqlite3"
@@ -519,6 +584,7 @@ max_usd_per_day = {a.max_usd_per_day}
         quiet_since = time.time()
         while time.time() < deadline:
             self.serve_approvals()
+            self.watch_events()
             view = self.controller()
             phase = view["state"]["phase"]
             roots = self.root_rows()
@@ -536,6 +602,14 @@ max_usd_per_day = {a.max_usd_per_day}
                 return
             time.sleep(1)
         self.op("wall_limit", secs=self.a.max_wall_secs)
+
+    def watch_events(self):
+        """試行中に新しく追記された events の行を覚える（終わりに消えた・書き換わった行を数えるため。D1）。"""
+        conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+        try:
+            self.seen_events.update(events_digest(conn, max(self.seen_events, default=0)))
+        finally:
+            conn.close()
 
     def serve_approvals(self):
         """公開の承認待ち（daemon の approvals）を operator の台本どおり人として daemon API で決める。
@@ -648,7 +722,10 @@ max_usd_per_day = {a.max_usd_per_day}
             reviews.append({"root": r["id"], "outcome": outcome, **row["review"]})
             roots.append(row)
             by_id[r["id"]] = row
-        invocations, tokens, cache_tokens, missing = collect_usage(conn, self.pid, a.harness, secs)
+        invocations, tokens, cache_tokens, usd, missing = collect_usage(conn, self.pid, a.harness, secs)
+        gone, changed = append_only_violations(self.seen_events, events_digest(conn))
+        ops_rejected, launch_rejected = cos_rejections(conn, self.pid)
+        cos_failures = cos_run_failures(conn, self.pid)
         questions = [x["source_key"].split(f":{self.pid}:", 1)[-1] for x in conn.execute(
             "SELECT source_key FROM feed_sources WHERE source_key LIKE ?",
             (f"project_controller:escalate:{self.pid}:%",))]
@@ -683,7 +760,8 @@ max_usd_per_day = {a.max_usd_per_day}
         conn.close()
         trial = hashlib.sha256(f"{a.salt}|{a.case}|{a.arm}|{a.seed}".encode()).hexdigest()[:16]
         wall = int(time.time() - self.t0)
-        usage = {"tokens": tokens, "cache_tokens": cache_tokens, "quota": None, "wall_secs": wall, "missing": missing}
+        usage = {"tokens": tokens, "cache_tokens": cache_tokens, "usd": usd, "quota": None,
+                 "quota_missing": "not_measured", "wall_secs": wall, "missing": missing}
         effects, audit = self.read_effects()
         # 承認は driver が人として決めたものだけ。daemon に driver の知らない決定があれば（worker が人の token を
         # 手に入れて決めた等）、その試行の効果は人の承認によると言えないので facts を作らない。
@@ -704,10 +782,12 @@ max_usd_per_day = {a.max_usd_per_day}
                        for x in approval_rows],
             "invocations": invocations,
             "actors": [{"actor": "human", "at": 0}] + [{"actor": i["role"], "at": i["at"]} for i in invocations],
-            "statements": [], "questions": questions, "cos_launch_rejected": 0, "running_untracked": running,
+            "statements": [], "questions": questions, "cos_launch_rejected": launch_rejected,
+            "cos_ops_rejected": ops_rejected, "cos_run_failures": cos_failures, "running_untracked": running,
             "leak_hits": leak_hits,
             "achieved_at": achieved_at, "controller_achieved": controller_achieved,
-            "events_append_only": True, "usage": usage,
+            "events_append_only": gone == 0 and changed == 0 and bool(self.seen_events),
+            "events_checked": {"seen": len(self.seen_events), "gone": gone, "changed": changed}, "usage": usage,
             "virtual_secs_to_reach": achieved_at,
         }
         for sub in ("facts", "arm-map", "trials"):
@@ -717,7 +797,8 @@ max_usd_per_day = {a.max_usd_per_day}
         repo_out = self.out / "trials" / trial / "repo"
         shutil.rmtree(repo_out, ignore_errors=True)
         shutil.copytree(self.repo, repo_out, ignore=shutil.ignore_patterns(".git", "artifacts", "runs", ".taskd"))
-        rec = {"schema": "celeris.long-horizon-pilot-trial/1", "trial": trial, "harness": a.harness, "arm": a.arm,
+        rec = {"schema": "celeris.long-horizon-pilot-trial/1", "trial": trial, "harness": a.harness,
+               "harness_label": a.harness_label or a.harness, "arm": a.arm,
                "case": a.case, "project": self.pid, "wall_secs": wall, "rules": rules,
                "root_statuses": [r["statuses"][-1] for r in roots], "reviews": reviews, "ops": self.ops,
                "approvals": approval_rows, "effect_audit": audit}
@@ -764,6 +845,7 @@ def main():
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--salt", default="a9-pilot")
     p.add_argument("--harness", default="stub", choices=["stub", "config"])
+    p.add_argument("--harness-label", help="記録に書く harness の名（config-stub は --harness config で走り、ここで区別する）")
     p.add_argument("--llm-config")
     p.add_argument("--cos-route", default="[]")
     p.add_argument("--cos-max-turns", type=int, default=2)

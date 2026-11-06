@@ -30,9 +30,9 @@ acceptance）は変えない。この file は、その条件を数値の合否�
 1. stub で経路を確かめる（LLM なし。worker が実行してよい）:
    `bash scripts/dev/long-horizon-pilot-llm.sh --harness config-stub --out <絶対 path> --cases C06,C08 --arms new`
 2. 欠測の再現試験を足す（`usage_json` null・cache 欄欠落・USD 未算出のそれぞれで、試行が不合格か不明になる）。
-3. 実 LLM は operator が worker の外で、人の承認の後に:
-   `LONG_HORIZON_PILOT_LLM_APPROVED=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness config --llm-config <toml> --cos-route '<配列>' --cases C06,C08 --out <新しい dir>`。
-   `--cos-route` は空にしない（空は driver が断る。01M6PYNMP4）。
+3. 実 LLM は operator が worker の外で、人の承認の記録の後に（N1 で門を `--approval` に置き換えた。手順の詳細は [n1.md](n1.md)）:
+   `bash scripts/dev/long-horizon-pilot-llm.sh --harness config --approval <承認の json> --llm-config <toml> --cos-route '<配列>' --cases C06,C08 --arms new --out <新しい dir>`。
+   `--cos-route` は空にしない（空は script が断る）。exit 0 は gate も pass、exit 3 は `<out>/grade/pilot-gate.json` を読む。
 
 | 合否の項目 | 合格の数値 |
 |---|---|
@@ -103,7 +103,7 @@ restart の最初の tick 18.8 秒（`agent-docs/progress/2026-11-05-phase4/p4c.
 |---|---|
 | G1〜G7 の表 | 7 行すべてに go・no-go・pending と証拠の path。G7 は N1 の実 LLM の facts が無ければ pending |
 | 予行 | dry_run・shadow・undo が exit 0、監視の違反 0 |
-| release | 本番の release が 9ed88afa4506 以降（schema 117・USD 予算を含む）であることを GET /api/v1/config の identity で確かめる |
+| release | 本番の release が 9ed88afa4506 以降（schema 117・USD 予算を含む）であることを GET /api/v1/config の identity で確かめる（人の token が要る。worker は `/local/celeris/state/current` の link と `promoted.json` を読み、`git merge-base --is-ancestor` で照合し、API の確認は人に残す） |
 | 人の承認 | observe（dry_run・shadow）と effects（canary・enabled、本番の shadow 86,400 秒以上・違反 0 の報告の sha256）を操作ごとに列挙 |
 
 ## N7 closeout の検証（01M6QW0GT56KDVBHCXX78GBFHF）

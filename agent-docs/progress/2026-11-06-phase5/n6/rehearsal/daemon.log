@@ -1,0 +1,77 @@
+2026-11-06T13:29:30.430575Z  INFO celeris::daemon::run: promotion gate: skipped (release `p4g-e2e` is not under releases_dir (unmanaged)) release=p4g-e2e
+2026-11-06T13:29:30.440964Z  INFO celeris::daemon::browser_ledger_path: browser conformance ledger path path=/local/celeris/data/scratch/targets/task-01M6QW0GT1GBT4M4QKDDG79Z7X/target/browser/conformance.json release=Some("p4g-e2e")
+2026-11-06T13:29:32.947585Z  INFO task_dispatch::dispatcher: scratch pool enabled (ADR-0075) dir=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/scratch
+2026-11-06T13:29:33.373052Z  INFO task_dispatch::dispatcher: container runtime detected runtime="docker" preference=auto image_default=celeris-worker:latest
+2026-11-06T13:29:33.410591Z  WARN celeris::daemon::bootstrap: the daemon does not use the production DB/token; worker db guard not installed (ADR-0126) db=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/celeris.sqlite3
+2026-11-06T13:29:33.480097Z  INFO celeris::daemon::bootstrap: worker runs see the db directory read-only (ADR-0095) db=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/celeris.sqlite3 dir=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home
+2026-11-06T13:29:33.480673Z  INFO celeris::instance: instance registered (ADR-0040 D4) instance_id=01M6RGSN1YV2EY9A4DZCG82YH5 release=p4g-e2e pid=493382 role=active
+2026-11-06T13:29:33.584498Z  INFO celeris::daemon::process_memory: process_memory rss_kb=67584 rss_anon_kb=9600 rss_file_kb=57984 threads=26 sqlite_memory_used=0 sqlite_memory_highwater=0 sqlite_pagecache_bytes=2297680 sqlite_malloc_count=0 malloc_arena=8740864 malloc_mmap=0 malloc_in_use=5492112 malloc_free=3248752 v8_generations=0 v8_used_heap=0 v8_total_heap=0 v8_external=0 v8_malloced=0
+2026-11-06T13:29:33.667171Z  INFO celeris::daemon::api: api listening addr=127.0.0.1:52153 auth_required=true
+2026-11-06T13:29:33.667386Z  INFO task_api: celeris API listening addr=127.0.0.1:52153
+2026-11-06T13:29:33.771830Z  INFO celeris::daemon::tick_loop: celeris started db=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/celeris.sqlite3 workspace_root=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/ws max_concurrency=2 tick_ms=200 role=active
+2026-11-06T13:29:33.780908Z  INFO celeris::daemon::tick_loop: jev: classification stage disabled
+2026-11-06T13:29:33.791121Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 95 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:29:33.932637Z  INFO celeris::daemon::tick_loop: SIGTERM; exiting
+2026-11-06T13:29:33.933445Z  INFO celeris::daemon::run: shutdown: the runs in hand were stopped and recorded (Phase F5-fix6) recorded=0
+2026-11-06T13:29:33.940050Z  INFO celeris::daemon::api: api stopped
+2026-11-06T13:29:33.941457Z  INFO celeris::db_maintenance: db maintenance task stopped task="chat_gc"
+2026-11-06T13:29:33.941587Z  INFO celeris::db_maintenance: db maintenance task stopped task="checkpoint"
+2026-11-06T13:29:33.949962Z  INFO celeris::instance: instance row removed instance_id=01M6RGSN1YV2EY9A4DZCG82YH5
+2026-11-06T13:29:33.950961Z  INFO celeris: celeris stopped exit=Signal
+2026-11-06T13:29:34.320435Z  INFO celeris::daemon::run: promotion gate: skipped (release `p4g-e2e` is not under releases_dir (unmanaged)) release=p4g-e2e
+2026-11-06T13:29:34.321905Z  INFO celeris::daemon::browser_ledger_path: browser conformance ledger path path=/local/celeris/data/scratch/targets/task-01M6QW0GT1GBT4M4QKDDG79Z7X/target/browser/conformance.json release=Some("p4g-e2e")
+2026-11-06T13:29:34.330014Z  INFO task_dispatch::dispatcher: scratch pool enabled (ADR-0075) dir=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/scratch
+2026-11-06T13:29:34.643862Z  INFO task_dispatch::dispatcher: container runtime detected runtime="docker" preference=auto image_default=celeris-worker:latest
+2026-11-06T13:29:34.716343Z  WARN celeris::daemon::bootstrap: the daemon does not use the production DB/token; worker db guard not installed (ADR-0126) db=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/celeris.sqlite3
+2026-11-06T13:29:34.821598Z  INFO celeris::daemon::bootstrap: worker runs see the db directory read-only (ADR-0095) db=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/celeris.sqlite3 dir=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home
+2026-11-06T13:29:35.293831Z  INFO celeris::instance: instance registered (ADR-0040 D4) instance_id=01M6RGSRVGBXGEW3XF2XWQS4RK release=p4g-e2e pid=494205 role=active
+2026-11-06T13:29:35.307709Z  INFO celeris::daemon::process_memory: process_memory rss_kb=65856 rss_anon_kb=7488 rss_file_kb=58368 threads=26 sqlite_memory_used=0 sqlite_memory_highwater=0 sqlite_pagecache_bytes=491192 sqlite_malloc_count=0 malloc_arena=6356992 malloc_mmap=0 malloc_in_use=3159968 malloc_free=3197024 v8_generations=0 v8_used_heap=0 v8_total_heap=0 v8_external=0 v8_malloced=0
+2026-11-06T13:29:35.320105Z  INFO celeris::daemon::api: api listening addr=127.0.0.1:52153 auth_required=true
+2026-11-06T13:29:35.320281Z  INFO task_api: celeris API listening addr=127.0.0.1:52153
+2026-11-06T13:29:35.441380Z  INFO celeris::daemon::tick_loop: celeris started db=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/celeris.sqlite3 workspace_root=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/ws max_concurrency=2 tick_ms=200 role=active
+2026-11-06T13:29:35.465619Z  INFO celeris::daemon::tick_loop: jev: classification stage disabled
+2026-11-06T13:29:35.467335Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 94 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:29:36.427136Z  INFO task_api::script_generations: script generation op="script_generation_register" id=01M6RGSTTX2M5XTERHWJ4G90WA state=loaded
+2026-11-06T13:29:38.609564Z  INFO task_api::script_domains: script domain mode op="script_domain_mode_set" domain=project_controller mode=compare changed=true
+2026-11-06T13:29:43.742826Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 93 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:29:49.747758Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 92 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:29:55.557659Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 91 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:30:00.094499Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 90 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:30:02.043395Z  INFO celeris::daemon::run: promotion gate: skipped (release `p4g-e2e` is not under releases_dir (unmanaged)) release=p4g-e2e
+2026-11-06T13:30:02.048374Z  INFO celeris::daemon::browser_ledger_path: browser conformance ledger path path=/local/celeris/data/scratch/targets/task-01M6QW0GT1GBT4M4QKDDG79Z7X/target/browser/conformance.json release=Some("p4g-e2e")
+2026-11-06T13:30:02.108854Z  INFO task_dispatch::dispatcher: scratch pool enabled (ADR-0075) dir=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/scratch
+2026-11-06T13:30:02.425552Z  INFO task_dispatch::dispatcher: container runtime detected runtime="docker" preference=auto image_default=celeris-worker:latest
+2026-11-06T13:30:02.468550Z  WARN celeris::daemon::bootstrap: the daemon does not use the production DB/token; worker db guard not installed (ADR-0126) db=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/celeris.sqlite3
+2026-11-06T13:30:02.489220Z  INFO celeris::daemon::bootstrap: worker runs see the db directory read-only (ADR-0095) db=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/celeris.sqlite3 dir=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home
+2026-11-06T13:30:02.489869Z  INFO celeris::instance: instance registered (ADR-0040 D4) instance_id=01M6RGTKXV8RYTQW3ZV80PTF3Q release=p4g-e2e pid=501612 role=active
+2026-11-06T13:30:02.500433Z  INFO celeris::daemon::process_memory: process_memory rss_kb=64320 rss_anon_kb=7104 rss_file_kb=57216 threads=26 sqlite_memory_used=0 sqlite_memory_highwater=0 sqlite_pagecache_bytes=478088 sqlite_malloc_count=0 malloc_arena=6021120 malloc_mmap=0 malloc_in_use=2788032 malloc_free=3233088 v8_generations=0 v8_used_heap=0 v8_total_heap=0 v8_external=0 v8_malloced=0
+2026-11-06T13:30:02.521372Z  INFO celeris::daemon::api: api listening addr=127.0.0.1:52153 auth_required=true
+2026-11-06T13:30:02.521633Z  INFO task_api: celeris API listening addr=127.0.0.1:52153
+2026-11-06T13:30:02.698076Z  INFO celeris::daemon::tick_loop: celeris started db=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/celeris.sqlite3 workspace_root=/local/celeris/data/workspaces/01M6QW0GT1GBT4M4QKDDG79Z7X/runs/01M6RGCAXE34BTD9EM31BWGTDC/tmp/pc-rollout.QcMxrV/home/ws max_concurrency=2 tick_ms=200 role=active
+2026-11-06T13:30:02.709238Z  INFO celeris::daemon::tick_loop: jev: classification stage disabled
+2026-11-06T13:30:02.742659Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 90 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:30:06.429812Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 89 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:30:12.668884Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 88 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:30:20.707528Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 87 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:30:31.208017Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 86 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:30:56.869186Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 87 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:30:57.593771Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 88 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:30:58.290295Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 89 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:30:58.948907Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 90 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:30:59.943639Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 91 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:31:00.517983Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 92 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:31:01.270020Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 93 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:31:02.085979Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 94 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:31:02.500710Z  INFO celeris::daemon::process_memory: process_memory rss_kb=125936 rss_anon_kb=21872 rss_file_kb=104064 threads=34 sqlite_memory_used=0 sqlite_memory_highwater=0 sqlite_pagecache_bytes=1465648 sqlite_malloc_count=0 malloc_arena=18272256 malloc_mmap=0 malloc_in_use=10678112 malloc_free=7594144 v8_generations=1 v8_used_heap=1595432 v8_total_heap=3670016 v8_external=106191 v8_malloced=131184
+2026-11-06T13:31:02.626474Z  INFO celeris::instance: removed drained or dead daemon_instances rows removed=["01M6RGSRVGBXGEW3XF2XWQS4RK"]
+2026-11-06T13:31:02.649714Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 95 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:31:03.451066Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 96 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:31:04.147192Z  WARN task_dispatch::dispatcher::housekeeping: scratch: 実効上限 97 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+2026-11-06T13:31:17.747844Z  INFO task_api::script_domains: script domain mode op="script_domain_mode_set" domain=project_controller mode=rust changed=true
+2026-11-06T13:31:17.760600Z  INFO celeris::daemon::tick_loop: SIGTERM; exiting
+2026-11-06T13:31:17.760993Z  INFO celeris::daemon::run: shutdown: the runs in hand were stopped and recorded (Phase F5-fix6) recorded=0
+2026-11-06T13:31:17.762193Z  INFO celeris::daemon::api: api stopped
+2026-11-06T13:31:17.763969Z  INFO celeris::db_maintenance: db maintenance task stopped task="chat_gc"
+2026-11-06T13:31:17.764044Z  INFO celeris::db_maintenance: db maintenance task stopped task="checkpoint"
+2026-11-06T13:31:17.764265Z  INFO celeris::instance: instance row removed instance_id=01M6RGTKXV8RYTQW3ZV80PTF3Q
+2026-11-06T13:31:17.764950Z  INFO celeris: celeris stopped exit=Signal

@@ -215,12 +215,22 @@ grep -qE '^Ran (2[1-9]|[3-9][0-9]) tests' "$out/pilot-effect-unit.log" || fail "
 echo "test-long-horizon-pilot: pilot_effect unit: $(grep -E '^Ran ' "$out/pilot-effect-unit.log")"
 python3 -I -W ignore::ResourceWarning scripts/dev/long-horizon-pilot/test_driver_usage.py >"$out/driver-usage-unit.log" 2>&1 \
     || { tail -40 "$out/driver-usage-unit.log" >&2; fail "driver usage unit tests failed"; }
-grep -qE '^Ran ([5-9]|[1-9][0-9]) tests' "$out/driver-usage-unit.log" || fail "driver usage: fewer than 5 unit tests ran"
+grep -qE '^Ran ([1-9][0-9]) tests' "$out/driver-usage-unit.log" || fail "driver usage: fewer than 10 unit tests ran"
+# 測定の契約（ADR 2026-11-06-phase5-n1-pilot-measurement-contract）: 欠測 3 種が修正前は合格になり得て、今は不明になる。
+python3 -I scripts/dev/long-horizon-pilot/test_pilot_gate.py >"$out/pilot-gate-unit.log" 2>&1 \
+    || { tail -40 "$out/pilot-gate-unit.log" >&2; fail "pilot_gate unit tests failed"; }
+grep -qE '^Ran (2[6-9]|[3-9][0-9]) tests' "$out/pilot-gate-unit.log" || fail "pilot_gate: fewer than 26 unit tests ran"
 LONG_HORIZON_PILOT_STUB_FORGE=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness stub --out "$out/stub-c06" --cases C06 --arms new \
     >"$out/stub-c06.log" 2>&1 || { tail -40 "$out/stub-c06.log" >&2; fail "C06 stub pilot failed"; }
 LONG_HORIZON_PILOT_STUB_FORGE=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness config-stub --out "$out/config-c06" \
     --cases C06 --arms new \
     >"$out/config-c06.log" 2>&1 || { tail -40 "$out/config-c06.log" >&2; fail "C06 config-stub pilot failed"; }
+# config-stub は実 LLM でないので G7 は pending、cos_usage_null は書かない（0 と主張しない）。
+python3 -I - "$out/config-c06/grade/pilot-facts.json" <<'PY' || fail "config-stub pilot-facts claims G7"
+import json, sys
+pf = json.load(open(sys.argv[1]))
+assert pf["g7"] == "pending" and pf["cos_usage_null"] is None and "not_real_llm" in pf["missing"], pf
+PY
 set +e
 LONG_HORIZON_PILOT_STUB_TAMPER=1 bash scripts/dev/long-horizon-pilot-llm.sh --harness stub \
     --out "$out/stub-c06-tamper" --cases C06 --arms new >"$out/stub-c06-tamper.log" 2>&1
@@ -298,12 +308,21 @@ print("test-long-horizon-pilot: no-output stub raw ok")
 PY
 
 # 3. 実 LLM の門と I14 の import の検査。
+#    承認の記録が無い・期限切れなら exit 2（CELERIS_RUN_ID の門より後ろの承認の門を見るため、env から外す）。
 set +e
-LONG_HORIZON_PILOT_LLM_APPROVED='' bash scripts/dev/long-horizon-pilot-llm.sh --harness config --llm-config /dev/null \
-    --out "$out/refused" >"$out/refused.log" 2>&1
+env -u CELERIS_RUN_ID bash scripts/dev/long-horizon-pilot-llm.sh --harness config --llm-config /dev/null \
+    --cos-route '[{ source = "x", model = "y" }]' --cases C08 --arms new --out "$out/refused" >"$out/refused.log" 2>&1
 rc=$?
+printf '%s' '{"approval_id":"x","approved_by":"human:x","approved_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z","account":"a","model":"m","harness":"h","scope":{"cases":["C08"],"arms":["new"],"environment":"non-production"},"limits":{"max_usd":1,"max_wall_secs":60}}' \
+    >"$out/expired-approval.json"
+env -u CELERIS_RUN_ID bash scripts/dev/long-horizon-pilot-llm.sh --harness config --llm-config /dev/null \
+    --approval "$out/expired-approval.json" --cos-route '[{ source = "x", model = "y" }]' --cases C08 --arms new \
+    --out "$out/refused-expired" >"$out/refused-expired.log" 2>&1
+rc2=$?
 set -e
-{ [ "$rc" -eq 2 ] && grep -q "approval" "$out/refused.log"; } || fail "the real LLM pilot started without approval (exit $rc)"
+{ [ "$rc" -eq 2 ] && grep -q "approval record" "$out/refused.log"; } || fail "the real LLM pilot started without approval (exit $rc)"
+{ [ "$rc2" -eq 2 ] && grep -q "approval expired" "$out/refused-expired.log"; } \
+    || fail "the real LLM pilot started with an expired approval (exit $rc2)"
 if grep -nE 'use .*\b(Trigger|transition)\b' crates/task-dispatch/src/dispatcher/project_wake.rs \
     crates/task-dispatch/src/dispatcher/project_decider_ts.rs crates/task-dispatch/src/project_controller.rs; then
     fail "the controller imports the task state machine"

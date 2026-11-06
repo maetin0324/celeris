@@ -11,7 +11,7 @@
 //! <releases_dir>/<sha12>/verify.json     {ok, live_ok, at, checks: [...]}   ← 無ければ未検証
 //! <releases_dir>/<sha12>/changes.json    {base, commits: [...], files: [...], sensitive: [...]}（ADR-0041 D4）
 //! <releases_dir>/<sha12>/promoted.json   {promoted_at, mode, from}（ADR-0041 D3。昇格に成功したときだけ）
-//! <releases_dir>/<sha12>/scripts/*.{sh,py} release.sh が同梱した selfdeploy 一式
+//! <releases_dir>/<sha12>/scripts/*.sh    release.sh が同梱した selfdeploy 一式
 //! <releases_dir>/<sha12>/promote.lock    昇格中の pid（この模組が書く）
 //! <releases_dir>/<sha12>/promote.log     promote.sh の出力
 //! <releases_dir>/../current -> releases/<sha12>

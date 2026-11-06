@@ -15,6 +15,8 @@
 # 期待表（EXPECT）と 1 件でも違えば exit 1。最後に偽 cargo・runner の process group と、この試験が作った一時 dir
 # （偽 cargo が記録した path のうち prefix と所有者が合う物だけ）・fixture を必ず回収する。
 set -euo pipefail
+# fixture の runner が配線済みの検査（test-affected.sh の scripts/dev 変更時の検査）を再び呼ばないための guard。
+export CELERIS_RUNNER_TMP_TEST=1
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/runner-tmp-repro.XXXXXX")"

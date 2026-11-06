@@ -112,3 +112,16 @@ raw は `before/samples-2.jsonl`・`before/ops-2.jsonl`。
 - tick 数は before の中で 100 と 46 と大きく揺れた。after の 77〜85 は before の揺れの範囲内で、mallopt が tick を遅くしたとは言えない。ただし 240 秒・各 2 回で、tick 時間と dispatch 遅延そのものの比較ではなく、遅延が悪化していないという確証ではない（未確認）。
 - before でも after でも、arena は 49〜69 秒の間で 6 MB 前後から 74〜121 MB に跳ねる。跳ねの確保元は未特定。mallopt は arena の大きさを抑えるが、跳ね自体は消していない。
 - 本番の増加（930 MB まで）は 240 秒の soak では再現していない。再現できたのは「起動 1 分以内に、使用中 16 MB に対し空き 100 MB 超の arena ができる」形だけ。
+
+## tick の時間と確保元の候補（Run #14、daemon.log の `slow tick phases` 行の集計）
+対象は scratch の state の `daemon.log`（repo には入れていない）。before 2 回目（`celeris-before`、240 秒）と after 2 回目（`celeris-after`、240 秒）。
+| 指標 | before 2 回目 | after 2 回目 |
+|---|---|---|
+| slow tick の数 | 42 | 56 |
+| slow tick の total_ms 中央値 | 2945 | 2276 |
+| slow tick の total_ms 最大 | 13969 | 8850 |
+| 段別の合計 1 位 | tick_cos_chat_launch 83.9 s | prune_and_sweep 81.8 s |
+| 段別の合計 2 位 | prune_and_sweep 71.1 s | tick_cos_chat_launch 62.0 s |
+- どちらも 1 tick が数秒かかる（本番規模 DB の写しでは slow tick が常態）。中央値と最大は after のほうが小さいが、各 1 回で揺れ（tick 数が 46〜100）の範囲内。mallopt が tick を遅くした証拠は無い。
+- arena が 6 MB から 127 MB に跳ねたのは、before 2 回目の起動後 60 秒の `process_memory` 行（09:12:20Z）の時点で、直前の区間（09:12:05Z の tick 4、2.5 秒の slow tick、続いて 7 秒の slow tick）と重なる。この区間では tick 段のうち `tick_cos_chat_launch`、`prune_and_sweep` が時間の大半を占める。確保元の候補はこの 2 段と、毎 tick 27 件の `knowledge curation: could not finish the run`（daily-summary.md 欠落、soak 環境の欠陥で本番では起きない可能性）。
+- 上は時間の重なりによる推定で、確保そのものは未計測。次に tick 段ごとの `mallinfo2` 差分を取る必要がある（未実施）。

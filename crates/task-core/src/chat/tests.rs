@@ -25,7 +25,7 @@ fn run() -> Value {
       "state":"running","reason":null,"harness":"claude-code","llm_source":"claude_oauth",
       "provider":"claude-pool","account_id":"account","model":"resolved-model",
       "tier":"frontier","session_mode":"resumed","started_at":"2026-10-05T00:00:00Z",
-      "finished_at":null})
+      "finished_at":null,"cost_state":"unknown"})
 }
 fn card() -> Value {
     json!({"kind":"task","id":"task-id","title":"修正","state":"running",

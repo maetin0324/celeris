@@ -55,8 +55,8 @@ pub use review::{
 };
 pub use run_store::{
     CHAT_EVENT_PAGE_DEFAULT, CHAT_EVENT_PAGE_MAX, CHAT_EVENT_RETENTION_DAYS,
-    CHAT_TOOL_DETAIL_MAX_BYTES, ChatEventQuery, ChatStopOutcome, chat_run_state_is_terminal,
-    chat_run_stop_tx,
+    CHAT_TOOL_DETAIL_MAX_BYTES, ChatEventQuery, ChatRecoveryCause, ChatStopOutcome,
+    chat_run_state_is_terminal, chat_run_stop_tx,
 };
 pub use session::{
     COS_CHAT_SESSION_KIND, COS_CHAT_SESSION_NODE, ChatRunSessionMode, ChatRunSessionRecord,
@@ -113,6 +113,26 @@ wire_enum!(ChatRunState {
     Interrupted
 });
 wire_enum!(ChatAttachmentState { Ready, Deleted });
+// ADR 2026-11-06-cos-run-launch-accounting-and-drain D1: the closed set of reasons a run ended
+// before its harness process was started. Anything else is "boundary unknown" (fail closed).
+wire_enum!(ChatPrelaunchReason {
+    RouteUnavailable,
+    SkillsUnavailable,
+    WallExpiredBeforeLaunch,
+    SlotWaitExpired,
+    DaemonRestartBeforeLaunch,
+    StoppedBeforeLaunch
+});
+// Budget view of one chat run (ADR 2026-11-06-chat-run-launch-boundary-store S3). The default is
+// `Unknown`, so events written before this field existed read as unknown (fail closed).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatCostState {
+    Known,
+    #[default]
+    Unknown,
+    NotLaunched,
+}
 wire_enum!(ChatCardKind {
     Task,
     Decision,
@@ -361,6 +381,17 @@ pub struct ChatRun {
     pub time_to_first_output_ms: Option<u64>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+    /// First time the harness process was about to be started; written once, never rewritten.
+    /// `None` for runs that did not launch and for rows older than migration 0120.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launched_at: Option<String>,
+    /// Why a run that never launched was closed. `None` for launched runs, legacy rows and rows
+    /// whose stored reason is not in the closed set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prelaunch_reason: Option<ChatPrelaunchReason>,
+    /// `known` / `unknown` / `not_launched` (the same decision the budget sum uses).
+    #[serde(default)]
+    pub cost_state: ChatCostState,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ChatAttachment {

@@ -733,6 +733,8 @@ export type ChatCosProposal = {
   "task_ids": Array<string>;
 };
 
+export type ChatCostState = "known" | "unknown" | "not_launched";
+
 export type ChatEscalationRef = {
   "item_id": string;
   "open": boolean;
@@ -836,6 +838,8 @@ export type ChatPostMessageResponse = {
   "run_id"?: string | null;
 };
 
+export type ChatPrelaunchReason = "route_unavailable" | "skills_unavailable" | "wall_expired_before_launch" | "slot_wait_expired" | "daemon_restart_before_launch" | "stopped_before_launch";
+
 export type ChatProvenance = {
   "kind": ChatProvenanceKind;
   "review_message_id": string;
@@ -901,15 +905,18 @@ export type ChatResumeQueueRequest = {
 
 export type ChatRun = {
   "account_id"?: string | null;
+  "cost_state"?: ChatCostState;
   "finished_at"?: string | null;
   "first_output_at"?: string | null;
   "harness"?: string | null;
   "id": string;
   "input_message_id": string;
   "latency_ms"?: number | null;
+  "launched_at"?: string | null;
   "llm_source"?: string | null;
   "model"?: string | null;
   "output_message_id"?: string | null;
+  "prelaunch_reason"?: ChatPrelaunchReason | null;
   "provider"?: string | null;
   "reason"?: string | null;
   "session_mode"?: ChatSessionMode | null;

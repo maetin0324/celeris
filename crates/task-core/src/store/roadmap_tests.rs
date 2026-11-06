@@ -235,7 +235,12 @@ fn project_roadmap_migration_0113_starts_from_a_0112_db_and_keeps_rows() {
              DROP TRIGGER project_controller_decisions_keep_max; \
              DROP TABLE authority_proposals; DROP TABLE authority_audit; DROP TABLE authority_grants; \
              DROP TABLE project_roadmap_outcome_events; DROP TABLE project_roadmap_versions; \
-             DELETE FROM schema_migrations WHERE version IN (113, 114, 115, 117, 118, 119);",
+             ALTER TABLE chat_runs DROP COLUMN launched_at; \
+             ALTER TABLE chat_runs DROP COLUMN prelaunch_reason; \
+             ALTER TABLE chat_runs DROP COLUMN launch_tracked; \
+             ALTER TABLE chat_runs DROP COLUMN attempts_recorded; \
+             ALTER TABLE chat_runs DROP COLUMN attempts_usage_missing; \
+             DELETE FROM schema_migrations WHERE version IN (113, 114, 115, 117, 118, 119, 120);",
         )
         .unwrap();
         let max: i64 = conn
@@ -247,7 +252,7 @@ fn project_roadmap_migration_0113_starts_from_a_0112_db_and_keeps_rows() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 119);
+    assert_eq!(crate::SCHEMA_VERSION, 120);
     let p = store.project_get(kept.id).unwrap().unwrap();
     assert_eq!(p.request, "依頼");
     assert_eq!(

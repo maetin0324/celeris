@@ -42,7 +42,8 @@ pub struct ChatStopOutcome {
 }
 
 const RUN_SELECT: &str = "SELECT run_id,thread_id,input_message_id,output_message_id,state,reason,\
- resolved_config_json,started_at,finished_at,usage_json,skill_reads,first_output_at FROM chat_runs";
+ resolved_config_json,started_at,finished_at,usage_json,skill_reads,first_output_at,\
+ launched_at,prelaunch_reason,launch_tracked,attempts_usage_missing FROM chat_runs";
 
 fn run_row(row: &Row<'_>) -> rusqlite::Result<(ChatRunRaw, String)> {
     Ok((
@@ -58,6 +59,10 @@ fn run_row(row: &Row<'_>) -> rusqlite::Result<(ChatRunRaw, String)> {
             usage_json: row.get(9)?,
             skill_reads: row.get(10)?,
             first_output_at: row.get(11)?,
+            launched_at: row.get(12)?,
+            prelaunch_reason: row.get(13)?,
+            launch_tracked: row.get::<_, i64>(14)? == 1,
+            attempts_usage_missing: row.get(15)?,
         },
         row.get(6)?,
     ))
@@ -75,6 +80,43 @@ struct ChatRunRaw {
     usage_json: Option<String>,
     skill_reads: Option<u64>,
     first_output_at: Option<String>,
+    launched_at: Option<String>,
+    prelaunch_reason: Option<String>,
+    launch_tracked: bool,
+    attempts_usage_missing: u64,
+}
+
+impl ChatPrelaunchReason {
+    /// Fail-closed parse of the closed reason set: anything else is `ChatError::Invalid`.
+    pub fn parse(s: &str) -> Result<Self, ChatError> {
+        match enum_from::<Self>(s) {
+            Ok(reason) => Ok(reason),
+            Err(_) => Err(ChatError::Invalid(format!(
+                "unknown prelaunch reason {s:?}"
+            ))),
+        }
+    }
+}
+
+/// ADR 2026-11-06-chat-run-launch-boundary-store S3. The single decision shared by the run view
+/// and the budget sum: `not_launched` needs a tracked row, no `launched_at` and a listed reason;
+/// `known` needs a readable usage and no attempt with missing usage; everything else is `unknown`.
+fn cost_state_of(r: &ChatRunRaw, usage_readable: bool) -> ChatCostState {
+    if r.finished_at.is_none() {
+        return ChatCostState::Unknown;
+    }
+    let listed = r
+        .prelaunch_reason
+        .as_deref()
+        .is_some_and(|s| ChatPrelaunchReason::parse(s).is_ok());
+    if r.launch_tracked && r.launched_at.is_none() && listed {
+        return ChatCostState::NotLaunched;
+    }
+    if usage_readable && r.attempts_usage_missing == 0 {
+        ChatCostState::Known
+    } else {
+        ChatCostState::Unknown
+    }
 }
 
 fn run_from_raw((r, config): (ChatRunRaw, String)) -> Result<ChatRun, ChatError> {
@@ -84,6 +126,18 @@ fn run_from_raw((r, config): (ChatRunRaw, String)) -> Result<ChatRun, ChatError>
         Some(m) => Some(enum_from(m)?),
         None => None,
     };
+    let usage: Option<Box<crate::Usage>> = r
+        .usage_json
+        .as_deref()
+        .map(serde_json::from_str::<crate::Usage>)
+        .transpose()
+        .map_err(|e| ChatError::Invalid(format!("invalid chat usage: {e}")))?
+        .map(Box::new);
+    let cost_state = cost_state_of(&r, usage.is_some());
+    let prelaunch_reason = r
+        .prelaunch_reason
+        .as_deref()
+        .and_then(|s| ChatPrelaunchReason::parse(s).ok());
     Ok(ChatRun {
         state: enum_from(&r.state)?,
         id: r.run_id,
@@ -98,19 +152,16 @@ fn run_from_raw((r, config): (ChatRunRaw, String)) -> Result<ChatRun, ChatError>
         model: s("model"),
         tier: s("tier"),
         session_mode,
-        usage: r
-            .usage_json
-            .as_deref()
-            .map(serde_json::from_str::<crate::Usage>)
-            .transpose()
-            .map_err(|e| ChatError::Invalid(format!("invalid chat usage: {e}")))?
-            .map(Box::new),
+        usage,
         skill_reads: r.skill_reads,
         latency_ms: elapsed_ms(r.started_at.as_deref(), r.finished_at.as_deref()),
         time_to_first_output_ms: elapsed_ms(r.started_at.as_deref(), r.first_output_at.as_deref()),
         first_output_at: r.first_output_at,
         started_at: r.started_at,
         finished_at: r.finished_at,
+        launched_at: r.launched_at,
+        prelaunch_reason,
+        cost_state,
     })
 }
 
@@ -367,7 +418,7 @@ impl SqliteStore {
         )?;
         tx.execute(
             "INSERT INTO chat_runs(run_id,thread_id,input_message_id,output_message_id,state,\
-             resolved_config_json,started_at) VALUES(?1,?2,?3,?4,'running',?5,?6)",
+             resolved_config_json,started_at,launch_tracked) VALUES(?1,?2,?3,?4,'running',?5,?6,1)",
             params![
                 run_id,
                 thread_id,
@@ -390,6 +441,203 @@ impl SqliteStore {
         emit_queue(&tx, thread_id, &at)?;
         tx.commit()?;
         Ok(Some(run))
+    }
+
+    /// Launch boundary, step 1 of the caller's order (ADR 2026-11-06-cos-run-launch-accounting-and-drain D1):
+    /// route and account are chosen, skills are placed and the run credential is issued; then call this
+    /// **immediately before** spawning the harness process, and spawn only when it returns `Ok`.
+    /// If it returns `Err`, do not spawn: close the run with [`Self::chat_run_finish_prelaunch`] or leave it
+    /// to recovery. A spawn failure afterwards keeps `launched_at` (it may have started).
+    ///
+    /// Writes `launched_at = now` only the first time (failover to a later route does not rewrite it).
+    /// A repeat on a launched run returns the stored run unchanged and appends nothing. Appends one `run`
+    /// event (payload: the updated [`ChatRun`] with `launched_at`) in the same transaction on the first call.
+    /// Errors: `Conflict` for a terminal or `stopping` run (a stop already won; do not spawn) and for a legacy
+    /// row (`launch_tracked = 0`, whose boundary cannot be recorded); `NotFound` for an unknown run.
+    pub fn chat_run_mark_launched(
+        &self,
+        run_id: &str,
+        now: OffsetDateTime,
+    ) -> Result<ChatRun, ChatError> {
+        let at = chat_ts(now);
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let (tracked, launched): (i64, Option<String>) = tx
+            .query_row(
+                "SELECT launch_tracked, launched_at FROM chat_runs WHERE run_id=?1",
+                [run_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| ChatError::not_found("run", run_id))?;
+        let run = run_by_id(&tx, run_id)?;
+        if launched.is_some() {
+            return Ok(run);
+        }
+        if chat_run_state_is_terminal(run.state) {
+            return Err(ChatError::Conflict(format!(
+                "run {run_id} is already finished; do not launch"
+            )));
+        }
+        if run.state != ChatRunState::Running {
+            return Err(ChatError::Conflict(format!(
+                "run {run_id} is not running; do not launch"
+            )));
+        }
+        if tracked != 1 {
+            return Err(ChatError::Conflict(format!(
+                "run {run_id} predates launch tracking; do not launch"
+            )));
+        }
+        tx.execute(
+            "UPDATE chat_runs SET launched_at=?2 WHERE run_id=?1 AND launched_at IS NULL",
+            params![run_id, at],
+        )?;
+        let run = run_by_id(&tx, run_id)?;
+        emit_run(&tx, &run, &at)?;
+        tx.commit()?;
+        Ok(run)
+    }
+
+    /// Closes a run that never launched, with a closed [`ChatPrelaunchReason`]. `state` must be `failed`,
+    /// `stopped` or `interrupted` (a run that never started cannot complete); `reason_text` is the human
+    /// sentence kept in `reason`. One transaction: reason, terminal state, messages and the terminal `run`
+    /// event. Rejected with `Conflict` (nothing written) when the run has `launched_at`, when it predates
+    /// launch tracking, or when it is already terminal with a different state or reason. A repeat with the
+    /// same state and reason returns the stored run and appends nothing.
+    pub fn chat_run_finish_prelaunch(
+        &self,
+        run_id: &str,
+        state: ChatRunState,
+        prelaunch: ChatPrelaunchReason,
+        reason_text: Option<&str>,
+        now: OffsetDateTime,
+    ) -> Result<ChatRun, ChatError> {
+        if !matches!(
+            state,
+            ChatRunState::Failed | ChatRunState::Stopped | ChatRunState::Interrupted
+        ) {
+            return Err(ChatError::Invalid(
+                "a run that never launched ends failed, stopped or interrupted".into(),
+            ));
+        }
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let run = finish_prelaunch_conn(&tx, run_id, state, prelaunch, reason_text, &chat_ts(now))?;
+        tx.commit()?;
+        Ok(run)
+    }
+
+    /// Recovery of a run nobody finished: [`ChatRecoveryCause::DaemonRestart`] (startup recovery,
+    /// state `interrupted`) or [`ChatRecoveryCause::HumanStop`] (stop of a run whose process never
+    /// started, state `stopped`). A tracked row with no `launched_at` closes with
+    /// `daemon_restart_before_launch` / `stopped_before_launch`. A launched row, and any legacy row
+    /// (`launch_tracked = 0`, boundary unknown), closes with the plain state and no prelaunch reason, so
+    /// the budget keeps counting its usage as unknown. An already terminal run is returned unchanged.
+    pub fn chat_run_recover(
+        &self,
+        run_id: &str,
+        cause: ChatRecoveryCause,
+        reason_text: &str,
+        now: OffsetDateTime,
+    ) -> Result<ChatRun, ChatError> {
+        let (state, prelaunch) = match cause {
+            ChatRecoveryCause::DaemonRestart => (
+                ChatRunState::Interrupted,
+                ChatPrelaunchReason::DaemonRestartBeforeLaunch,
+            ),
+            ChatRecoveryCause::HumanStop => (
+                ChatRunState::Stopped,
+                ChatPrelaunchReason::StoppedBeforeLaunch,
+            ),
+        };
+        let at = chat_ts(now);
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let (tracked, launched): (i64, Option<String>) = tx
+            .query_row(
+                "SELECT launch_tracked, launched_at FROM chat_runs WHERE run_id=?1",
+                [run_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| ChatError::not_found("run", run_id))?;
+        let current = run_by_id(&tx, run_id)?;
+        if chat_run_state_is_terminal(current.state) {
+            return Ok(current);
+        }
+        let run = if tracked == 1 && launched.is_none() {
+            finish_prelaunch_conn(&tx, run_id, state, prelaunch, Some(reason_text), &at)?
+        } else {
+            finish_conn(&tx, run_id, state, None, Some(reason_text), &at)?
+        };
+        tx.commit()?;
+        Ok(run)
+    }
+
+    /// Records the usage of one **launched** attempt of the run (call once per attempt, from the
+    /// caller's `record_attempt`). `Some(usage)` is added to the stored usage; `None` means the attempt
+    /// reported no usage and permanently marks the run's cost as unknown (`attempts_usage_missing`
+    /// grows; the known usage of other attempts is kept). Neither the final telemetry nor a re-open
+    /// clears the mark. Rejected with `Conflict` for a run without `launched_at` (nothing launched, so
+    /// no attempt) and for a terminal run.
+    pub fn chat_run_record_attempt_usage(
+        &self,
+        run_id: &str,
+        usage: Option<&crate::Usage>,
+    ) -> Result<(), ChatError> {
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let run = live_run(&tx, run_id)?;
+        let (launched, stored): (Option<String>, Option<String>) = tx.query_row(
+            "SELECT launched_at, usage_json FROM chat_runs WHERE run_id=?1",
+            [run_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if launched.is_none() {
+            return Err(ChatError::Conflict(format!(
+                "run {} has not launched; no attempt to record",
+                run.id
+            )));
+        }
+        match usage {
+            Some(usage) => {
+                let merged = match stored
+                    .as_deref()
+                    .map(serde_json::from_str::<crate::Usage>)
+                    .transpose()
+                {
+                    Ok(Some(old)) => add_usage(&old, usage),
+                    Ok(None) => *usage,
+                    // The stored usage is unreadable: keep the bytes, count the attempt as missing.
+                    Err(_) => {
+                        tx.execute(
+                            "UPDATE chat_runs SET attempts_recorded=attempts_recorded+1,\
+                             attempts_usage_missing=attempts_usage_missing+1 WHERE run_id=?1",
+                            [run_id],
+                        )?;
+                        tx.commit()?;
+                        return Ok(());
+                    }
+                };
+                let json = serde_json::to_string(&merged)
+                    .map_err(|e| ChatError::Invalid(e.to_string()))?;
+                tx.execute(
+                    "UPDATE chat_runs SET usage_json=?2,attempts_recorded=attempts_recorded+1 \
+                     WHERE run_id=?1",
+                    params![run_id, json],
+                )?;
+            }
+            None => {
+                tx.execute(
+                    "UPDATE chat_runs SET attempts_recorded=attempts_recorded+1,\
+                     attempts_usage_missing=attempts_usage_missing+1 WHERE run_id=?1",
+                    [run_id],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// D2 `GET /chat/threads/{t}/runs/{r}`.
@@ -458,8 +706,20 @@ impl SqliteStore {
                 .map(serde_json::to_string)
                 .transpose()
                 .map_err(|e| ChatError::Invalid(e.to_string()))?;
-            tx.execute("UPDATE chat_runs SET usage_json=?2,skill_reads=?3,first_output_at=?4 WHERE run_id=?1",
-                params![run_id, usage_json, skill_reads, first_output_at.map(chat_ts)])?;
+            // ADR 2026-11-06-chat-run-launch-boundary-store S2: once attempts were recorded the
+            // per-attempt records are authoritative; the final telemetry must neither replace the
+            // known usage nor clear the missing-usage count.
+            tx.execute(
+                "UPDATE chat_runs SET \
+                 usage_json=CASE WHEN attempts_recorded>0 THEN usage_json ELSE ?2 END, \
+                 skill_reads=?3,first_output_at=?4 WHERE run_id=?1",
+                params![
+                    run_id,
+                    usage_json,
+                    skill_reads,
+                    first_output_at.map(chat_ts)
+                ],
+            )?;
         }
         let run = finish_conn(&tx, run_id, state, final_text, reason, &chat_ts(now))?;
         tx.commit()?;
@@ -860,6 +1120,86 @@ impl SqliteStore {
         tx.commit()?;
         Ok(removed)
     }
+}
+
+/// Which recovery path closes an unfinished run (see [`SqliteStore::chat_run_recover`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatRecoveryCause {
+    DaemonRestart,
+    HumanStop,
+}
+
+/// Sum of two attempts' usage. A field missing on either side stays `None` (never counted as 0);
+/// the context occupancy is the last observation.
+fn add_usage(a: &crate::Usage, b: &crate::Usage) -> crate::Usage {
+    fn add<T: Copy>(a: Option<T>, b: Option<T>, sum: impl FnOnce(T, T) -> T) -> Option<T> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(sum(a, b)),
+            _ => None,
+        }
+    }
+    crate::Usage {
+        input_tokens: add(a.input_tokens, b.input_tokens, u64::saturating_add),
+        output_tokens: add(a.output_tokens, b.output_tokens, u64::saturating_add),
+        cache_read_tokens: add(
+            a.cache_read_tokens,
+            b.cache_read_tokens,
+            u64::saturating_add,
+        ),
+        cache_creation_tokens: add(
+            a.cache_creation_tokens,
+            b.cache_creation_tokens,
+            u64::saturating_add,
+        ),
+        cost_usd: add(a.cost_usd, b.cost_usd, |x, y| x + y),
+        duplicate_reads: add(a.duplicate_reads, b.duplicate_reads, u32::saturating_add),
+        session_resumed: b.session_resumed,
+        context_tokens: b.context_tokens.or(a.context_tokens),
+    }
+}
+
+/// [`SqliteStore::chat_run_finish_prelaunch`] inside the caller's write transaction.
+fn finish_prelaunch_conn(
+    tx: &Connection,
+    run_id: &str,
+    state: ChatRunState,
+    prelaunch: ChatPrelaunchReason,
+    reason_text: Option<&str>,
+    at: &str,
+) -> Result<ChatRun, ChatError> {
+    let (tracked, launched, stored): (i64, Option<String>, Option<String>) = tx
+        .query_row(
+            "SELECT launch_tracked, launched_at, prelaunch_reason FROM chat_runs WHERE run_id=?1",
+            [run_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?
+        .ok_or_else(|| ChatError::not_found("run", run_id))?;
+    let run = run_by_id(tx, run_id)?;
+    let wanted = enum_str(&prelaunch)?;
+    if chat_run_state_is_terminal(run.state) {
+        if run.state == state && stored.as_deref() == Some(wanted.as_str()) {
+            return Ok(run);
+        }
+        return Err(ChatError::Conflict(format!(
+            "run {run_id} already finished"
+        )));
+    }
+    if launched.is_some() {
+        return Err(ChatError::Conflict(format!(
+            "run {run_id} has launched; it cannot end with a prelaunch reason"
+        )));
+    }
+    if tracked != 1 {
+        return Err(ChatError::Conflict(format!(
+            "run {run_id} predates launch tracking; its boundary is unknown"
+        )));
+    }
+    tx.execute(
+        "UPDATE chat_runs SET prelaunch_reason=?2 WHERE run_id=?1 AND launched_at IS NULL",
+        params![run_id, wanted],
+    )?;
+    finish_conn(tx, run_id, state, None, reason_text, at)
 }
 
 /// `chat_run_finish` の本体（呼び出し側の write transaction の中で走る）。

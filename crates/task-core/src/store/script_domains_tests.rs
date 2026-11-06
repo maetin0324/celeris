@@ -1745,6 +1745,11 @@ fn script_generation_rejected_rows_migrate_to_invalid() {
              DROP TABLE script_guard_state; DROP TABLE script_generation_events; \
              DROP TABLE script_compare_log; DROP TABLE script_domain_events; \
              DROP TABLE script_domain_modes; DROP TABLE script_generations; \
+             ALTER TABLE chat_runs DROP COLUMN launched_at; \
+             ALTER TABLE chat_runs DROP COLUMN prelaunch_reason; \
+             ALTER TABLE chat_runs DROP COLUMN launch_tracked; \
+             ALTER TABLE chat_runs DROP COLUMN attempts_recorded; \
+             ALTER TABLE chat_runs DROP COLUMN attempts_usage_missing; \
              DELETE FROM schema_migrations WHERE version >= 103;",
         )
         .unwrap();

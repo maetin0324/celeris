@@ -245,7 +245,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69, 116];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 119;
+pub const SCHEMA_VERSION: u32 = 120;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -397,6 +397,9 @@ impl SqliteStore {
             117 => Ok(MIGRATION_0117),
             118 => Ok(include_str!("../../migrations/0118_evidence_integrity.sql")),
             119 => Ok(MIGRATION_0119),
+            120 => Ok(include_str!(
+                "../../migrations/0120_chat_run_launch_boundary.sql"
+            )),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

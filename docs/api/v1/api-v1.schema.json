@@ -3554,6 +3554,14 @@
       ],
       "type": "object"
     },
+    "ChatCostState": {
+      "enum": [
+        "known",
+        "unknown",
+        "not_launched"
+      ],
+      "type": "string"
+    },
     "ChatEscalationRef": {
       "description": "D2: the item a card of the general thread stands for.",
       "properties": {
@@ -4045,6 +4053,17 @@
       ],
       "type": "object"
     },
+    "ChatPrelaunchReason": {
+      "enum": [
+        "route_unavailable",
+        "skills_unavailable",
+        "wall_expired_before_launch",
+        "slot_wait_expired",
+        "daemon_restart_before_launch",
+        "stopped_before_launch"
+      ],
+      "type": "string"
+    },
     "ChatProvenance": {
       "description": "D4': the origin of a message written into the general thread by the review thread's run.",
       "properties": {
@@ -4303,6 +4322,11 @@
             "null"
           ]
         },
+        "cost_state": {
+          "$ref": "#/$defs/ChatCostState",
+          "default": "unknown",
+          "description": "`known` / `unknown` / `not_launched` (the same decision the budget sum uses)."
+        },
         "finished_at": {
           "type": [
             "string",
@@ -4337,6 +4361,13 @@
             "null"
           ]
         },
+        "launched_at": {
+          "description": "First time the harness process was about to be started; written once, never rewritten.\n`None` for runs that did not launch and for rows older than migration 0120.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "llm_source": {
           "type": [
             "string",
@@ -4354,6 +4385,17 @@
             "string",
             "null"
           ]
+        },
+        "prelaunch_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatPrelaunchReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why a run that never launched was closed. `None` for launched runs, legacy rows and rows\nwhose stored reason is not in the closed set."
         },
         "provider": {
           "type": [

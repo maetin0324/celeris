@@ -186,3 +186,7 @@ inbox・tasks・threads・events・projects を順に送った（応答が遅く
 - 次の task: `GET /inbox`・`GET /projects` の確保を減らす（task 全件・events 全走査の削減、結果の短い cache・差分化）。before/after は `--get-interval 1 --get-paths /api/v1/inbox,/api/v1/projects` で 150 秒測る（arena 200 MB が下がるか）。
 - `tick_cos_chat_launch` の最初の tick の +20〜32 MB（CoS 一次対応の human_inbox の組み立て）も続けて削る。
 - 本番の傾きの再現には、複数の接続から同時に GET を送る条件（直列でない）が要る。CPU を焼かない範囲で、同時 2〜4 接続・1 秒に 1 本ずつを次に試す。
+
+## 検査（Run #22、提出時の HEAD で実行）
+- `bash scripts/dev/test-affected.sh`: exit 0（7792 件 pass、725 秒）。同じ HEAD の先行 2 回は、host の load average が 35〜60 の中で失敗した（1 回目は task-dispatch の build_cache 系 2 件、2 回目は e2e delegation_scenarios 5 件が 60 秒の待ちで時間切れ＋build_cache 1 件）。build_cache 系 2 件は単独実行で pass。変更は tick_steps と soak driver だけで、この失敗と無関係と見ている（負荷依存と推定、原因は未確認）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。

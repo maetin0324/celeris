@@ -49,7 +49,7 @@ updated: 2026-11-06
 1. （部分的に済み。上記）より長い run、API 負荷（一覧・inbox）を足した run で傾きを再現する。
 2. tick 別・API 別に `malloc_free` の増分を見て確保元を特定する。
 3. 修正後、同じ条件で before/after を測り、`rss_anon` の傾き・`malloc_free`・tick の時間・dispatch の遅延を本節に書く。
-4. 受け入れ条件 0〜2（test-affected・clippy・fmt）はコード変更後に実行する。今回はコード変更なし。
+4. 受け入れ条件 0〜2（test-affected・clippy・fmt）は mallopt のコード変更後に実行し、exit 0 を確認した（下の「検査」）。
 
 ## 本番への移行
 環境変数・systemd unit・本番 config の変更は要らない（`mallopt` はコードの起動処理）。release の昇格後、operator が `process_memory` の `rss_anon` と `malloc_free` を 1 時間見て、before（起動 1 分で 315 MB、1 時間で 930 MB）と比べる。効果が足りなければ A を続ける。
@@ -66,7 +66,7 @@ updated: 2026-11-06
 - `cargo fmt --all -- --check`: exit 0
 - `cargo clippy --workspace -- -D warnings`: exit 0（1m41s）
 - `bash scripts/dev/test-affected.sh`: exit 0（5m51s）
-- 確保元の特定、tick 時間・dispatch 遅延の before/after、揺れの測定は引き続き未実施。mallopt の採用は未判断。
+- 確保元（どの tick 段か）の特定は未達。tick 段ごとの mallinfo2 差分は計測していない。dispatch 遅延・rss_anon の傾きは既存 raw から「before/after の数値（raw から再計算）」節で出した。
 
 ## 計測の進め方の提案（Run #8）
 - 1 回の soak は 240 秒で、準備と後始末を足すと 1 run の壁時計 600 秒の半分を超える。before と after を各 3 回（計 6 回）は 1 run に入らないため、1 run で 1 回だけ測り、結果を `before/`・`after/` の `samples-N.jsonl` に追記する方式にする。
@@ -138,3 +138,18 @@ raw は `before/samples-2.jsonl`・`before/ops-2.jsonl`。
 - `cargo clippy --workspace -- -D warnings`: exit 0（1m14s）。
 - `cargo fmt --all -- --check`: exit 0。
 - `bash scripts/dev/test-affected.sh`: exit 0（6m44s、末尾 `test-affected: script bundle SKIP: 0 件`）。
+
+## before/after の数値（raw から再計算）
+`python3 -I agent-docs/progress/2026-11-06-daemon-rss/summarize.py`（出力は同ディレクトリの `summary.txt`）。各 soak は本番規模の DB の写し（task 2,203・events 813,462）で約 4 分、同じ台本・同じ config。傾きは t≥1 分の rss_anon の最小二乗。dispatch 遅延は、写した DB の履歴（約 1,830 件）を除き、soak 中に新たに出た値だけ。
+
+| 標本 | rss_anon 傾き | rss_anon 終点 | malloc_free 終点 | tick/分 | 新しい dispatch 遅延（ms、中央値） |
+|---|---|---|---|---|---|
+| before | 2.36 MB/分 | 133 MB | 119 MB | 24.6 | 10 件、中央値 11,327（うち 5 件は約 3,600,000 = 写しの中で 1 時間待っていた ready task） |
+| before-2 | 2.14 MB/分 | 130 MB | 100 MB | 11.1 | 7 件、中央値 3,728 |
+| after | 0.95 MB/分 | 90 MB | 65 MB | 22.1 | 7 件、中央値 872 |
+| after-2 | 0.87 MB/分 | 86 MB | 63 MB | 18.9 | 6 件、中央値 1,585 |
+
+- rss_anon の傾きは after が before の約 0.4 倍。malloc_free の終点は 100〜119 MB → 63〜65 MB。
+- tick/分は before 自身が 11.1〜24.6 と揺れ、after（18.9〜22.1）はその範囲の中にある。悪化と言える差ではない。
+- 新しい dispatch 遅延は after の方が小さい（中央値 872〜1,585 ms 対 3,728 ms 以上）。件数は 1 標本 6〜10 件と少なく、差を改善とは言わない。測定の揺れを超える悪化は見えない。
+- 限界: 標本が各 2 回・約 4 分と短い。本番の 930 MB に至る傾きは再現していない。確保元の tick 段は未特定（「未解決」）。

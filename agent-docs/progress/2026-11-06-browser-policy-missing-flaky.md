@@ -29,3 +29,10 @@ CPU 負荷は使っていない。
 
 ## 検証
 提出時の HEAD で `cargo nextest run -p task-dispatch browser_policy_missing browser_ledger_gate` 9 件通過（遅延 300ms 入り）。test-affected・clippy・fmt は exit 0。
+
+### 修正前に落ち修正後に通ることの確認（提出時の HEAD、attempt 3）
+- 修正前の形: 遅延フック 300ms を残したまま、待ちを旧形（`tick_n(&mut d, 5)` の直後に検査）へ一時的に戻して
+  `cargo nextest run -p task-dispatch browser_policy_missing_worker_rejection` → exit 100、
+  `browser_policy_missing.rs:223` で `left: ["dispatch"] right: ["dispatch", "browser_prerequisite"]`（release gate と同じ失敗）。一時変更は戻した。
+- 修正後の形: 同じコマンドを 5 回 → 5 回とも 1 passed。`browser_policy_missing browser_ledger_gate` は 9 passed。
+- `bash scripts/dev/test-affected.sh` exit 0（3461 passed、11 skipped）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。

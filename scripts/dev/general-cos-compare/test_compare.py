@@ -148,7 +148,7 @@ class Preflight(Base):
     def approval(self, **changes):
         ap = {"approved_by": "human:rmaeda", "approved_at": "2026-11-05T00:00:00Z", "account": "claude_max_personal",
               "model": "sonnet", "harness": "claude_code",
-              "limits": {"max_trials": 32, "max_tokens": 1000000, "max_wall_secs": 7200, "max_usd": 20}}
+              "limits": {"max_trials": 32, "max_wall_secs": 7200, "max_usd": 20}}
         ap.update(changes)
         path = self.dir / "approval.json"
         path.write_text(json.dumps(ap))
@@ -195,8 +195,14 @@ class Preflight(Base):
                            self.approval(approved_by="human:rmaeda"), env=env)
         self.assertNotIn("approved_by human:<name>", r.stdout)
 
+    def test_approval_with_max_tokens_is_refused(self):
+        ap = self.approval(limits={"max_trials": 32, "max_tokens": 1000000, "max_wall_secs": 7200, "max_usd": 20})
+        r = self.preflight("--tier", "llm", "--llm-config", str(self.cfg), "--approval", ap, env={"CELERIS_RUN_ID": ""})
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("max_tokens is no longer accepted", r.stdout)
+
     def test_approved_trials_below_the_plan_is_refused(self):
-        ap = self.approval(limits={"max_trials": 8, "max_tokens": 1, "max_wall_secs": 1, "max_usd": 1})
+        ap = self.approval(limits={"max_trials": 8, "max_wall_secs": 1, "max_usd": 1})
         r = self.preflight("--tier", "llm", "--llm-config", str(self.cfg), "--approval", ap, env={"CELERIS_RUN_ID": ""})
         self.assertEqual(r.returncode, 2)
         self.assertIn("approved max_trials", r.stdout)
@@ -230,13 +236,12 @@ def raw(case, kind, replies, ops=(), created=(), seed=(), other=()):
 
 
 class Limits(Base):
-    """runner は token・壁時計・USD のどれかが上限に達したら、残りの試行を始めない。"""
+    """runner は壁時計・USD のどれかが上限に達したら、残りの試行を始めない。"""
 
     def test_stop_reason(self):
-        lim = {"max_tokens": 100, "max_wall_secs": 60, "max_usd": 2.0}
+        lim = {"max_wall_secs": 60, "max_usd": 2.0}
         ok = {"tokens": 99, "wall": 59.0, "usd": 1.99, "usd_unknown_trials": 0}
         self.assertIsNone(compare.stop_reason("llm", ok, lim))
-        self.assertEqual(compare.stop_reason("llm", {**ok, "tokens": 100}, lim), "max_tokens")
         self.assertEqual(compare.stop_reason("llm", {**ok, "wall": 60.0}, lim), "max_wall_secs")
         self.assertEqual(compare.stop_reason("llm", {**ok, "usd": 2.0}, lim), "max_usd")
         self.assertEqual(compare.stop_reason("llm", {**ok, "usd_unknown_trials": 1}, lim), "usd_unknown")

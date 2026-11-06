@@ -296,7 +296,7 @@ coalesce_secs = {a.coalesce_secs}
 
 [project_controller.budget]
 max_roots_per_day = {a.max_roots_per_day}
-max_tokens_per_day = {a.max_tokens_per_day}
+max_usd_per_day = {a.max_usd_per_day}
 {harness}
 """)
 
@@ -770,7 +770,7 @@ def main():
     p.add_argument("--cos-max-wall", type=int, default=30)
     p.add_argument("--coalesce-secs", type=int, default=1)
     p.add_argument("--max-roots-per-day", type=int, default=10)
-    p.add_argument("--max-tokens-per-day", type=int, default=1_000_000)
+    p.add_argument("--max-usd-per-day", type=float, default=20.0)
     p.add_argument("--max-wall-secs", type=int, default=300)
     p.add_argument("--stub-tamper", action="store_true",
                    help="陰性の試験: stub が効果の記録に偽の行を足そうとする（driver は observation_failed で落ちる）")

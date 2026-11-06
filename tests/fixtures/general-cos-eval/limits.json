@@ -3,7 +3,6 @@
   "note": "人に示す上限の候補（P1-H の提案と同じ）。どれかに達したら残りの試行を始めない。usd は CoS と worker・reviewer の全 run の usage.cost_usd（task_core の静的単価表の推定。実際の請求額は確認していない）の累計で比べ、cost_usd の無い run を含む試行が 1 件でもあれば残りの試行を始めない（usd_unknown）。tokens は input+output+cache read+cache creation の合計で数える（数え方は人が決める。p4e.md の次の gate）。",
   "max_trials": 32,
   "repeats": 2,
-  "max_tokens": 1000000,
   "max_wall_secs": 7200,
   "max_usd": 20,
   "per_trial_wall_secs": 600

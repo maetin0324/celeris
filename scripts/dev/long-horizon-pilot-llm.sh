@@ -25,7 +25,7 @@
 # - `--harness config` は実 LLM。人が書いた `--llm-config`（[llm_sources]・[harnesses]・[route_defaults]・
 #   [harness_selection]・[accounts] 等）をそのまま config に足す。人の承認（LONG_HORIZON_PILOT_LLM_APPROVED=1）が
 #   要り、Celeris の worker の run の中（CELERIS_RUN_ID がある）では起こさない（ADR 2026-10-07 worker-no-subagents）。
-#   既定の上限は 1 試行 1,000,000 token / 4 時間（D9）。24〜72h の実稼働はこの script の範囲外（人の別途の承認）。
+#   既定の上限は 1 日 20 USD 相当（--max-usd-per-day）/ 4 時間（D9）。24〜72h の実稼働はこの script の範囲外（人の別途の承認）。
 # - 本番の DB・daemon・config・release に触れない（--state-root が本番の dir なら driver が断る）。
 # exit: 0 = 全試行が終わり採点できた、1 = 失敗、2 = 使い方の誤り・承認が無い。
 set -euo pipefail

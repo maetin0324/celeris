@@ -190,3 +190,7 @@ inbox・tasks・threads・events・projects を順に送った（応答が遅く
 ## 検査（Run #22、提出時の HEAD で実行）
 - `bash scripts/dev/test-affected.sh`: exit 0（7792 件 pass、725 秒）。同じ HEAD の先行 2 回は、host の load average が 35〜60 の中で失敗した（1 回目は task-dispatch の build_cache 系 2 件、2 回目は e2e delegation_scenarios 5 件が 60 秒の待ちで時間切れ＋build_cache 1 件）。build_cache 系 2 件は単独実行で pass。変更は tick_steps と soak driver だけで、この失敗と無関係と見ている（負荷依存と推定、原因は未確認）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+
+## 検査（Run #23、提出時の HEAD で実行）
+- `bash scripts/dev/test-affected.sh`: exit 0。前回 review で落ちた `test-ts-verify` の H 項目（`docs/api/script-host/host-v1.schema.json`）は、`bash scripts/dev/test-ts-verify.sh` 単独で 20 passed・0 failed。前回の失敗は host の高負荷（load average 35〜70）下の一時的なものと推定（原因は未確認）。この task の変更は docs/api・control-ts に触れていない。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。

@@ -13,6 +13,8 @@ pub mod digest_apply;
 mod digest_fixture;
 mod human_post;
 pub mod intent;
+#[cfg(test)]
+mod launch_boundary_regression_tests;
 mod operations;
 #[cfg(test)]
 mod operations_tests;

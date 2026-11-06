@@ -80,3 +80,17 @@ ADR の方針のとおり、まず大きな一時確保の削減（A）を狙う
 - soak の起動は state ごと作り直す必要がある。手順: `D=/local/celeris/data/scratch/daemon-rss`、`mkdir $D/stN && cp --reflink=auto $D/prod-copy.sqlite3 $D/stN/celeris.sqlite3`、`python3 -I scripts/dev/daemon-soak/daemon_soak.py run --cond off --label <名> --out $D/out-<名> --state $D/stN --celeris $D/bin/celeris-after --script-deploy scripts/selfdeploy/script-bundle-gate.sh --bundle /bin/true --secs 240 --sample-secs 15 --task-interval 30`（`--script-deploy`・`--bundle` は cond off では使われない想定、未確認）。
 - 今回の soak は、binary が無く起動に失敗した。`$D/out-after2/` は失敗の跡で、計測値は無い。
 - before 用の binary は未作成。
+
+## after の 2 回目（Run #11、同条件 240 秒、`celeris-after`、新しい DB の写し）
+raw は `after/samples-2.jsonl`・`after/ops-2.jsonl`。
+| 指標 | after 1 回目 | after 2 回目 | before（1 回） |
+|---|---|---|---|
+| rss_anon（最終） | 90 MB | 85 MB | 133 MB |
+| malloc_arena（最終） | 82 MB | 74 MB | 130 MB |
+| malloc_free（最終） | 65 MB | 63 MB | 119 MB |
+| tick 数（約 240 秒） | 85 | 77 | 100 |
+| slow_ticks（最終標本） | 96 | 110 | 132 |
+- after は 2 回とも rss_anon が 85〜90 MB で、before（133 MB）より小さい。arena が 4 MB から 74 MB に跳ねるのは 49〜64 秒の間で、2 回目でも残った。
+- after 2 回の tick 数の差（85 と 77）は約 10 % で、before（100）との差と同程度の大きさ。揺れが大きく、mallopt による tick の遅れとは言えないが、遅れていないとも言えない。before の繰り返しが無いため、揺れの下限は未確認。
+- dispatch 遅延の比較は未実施。
+- 跳ねの確保元は未特定。before の 2 回目以降も未測定。

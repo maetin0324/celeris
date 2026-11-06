@@ -69,3 +69,8 @@ ADR の方針のとおり、まず大きな一時確保の削減（A）を狙う
 - before の binary は `tune_malloc()` を外してビルドする必要がある（現在の HEAD は after）。before 用と after 用の binary を別々にビルドし、`daemon_soak.py run --celeris <binary>` で切り替える。
 - 起動は自分の PID だけを記録して止める。`pkill`・`killall` は使わない。
 - この run は計測を行っていない。コード変更もない。
+
+## 準備の状況（Run #9）
+- `cargo build -p celeris`（after binary、`tune_malloc()` 入り）を CARGO_TARGET_DIR にビルド済み（4m05s）。このビルドで 1 run の壁時計の大半を使い、soak は実行していない。
+- scratch の `/local/celeris/data/scratch/daemon-rss/` に `prod-copy.sqlite3`（1.4 GB）、`st1`・`st2`（state）、`out-before`・`out-after` がある。次の run はビルド済み binary を使えば soak 1 回（240 秒）を実行できる。
+- before 用 binary は未作成（`tune_malloc()` を外してビルドが必要。別の target dir ではなく、ビルド後に binary を scratch へコピーしてから戻す）。

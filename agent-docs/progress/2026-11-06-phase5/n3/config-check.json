@@ -1,0 +1,31 @@
+{
+  "schema": "celeris.general-cos-config-check/1",
+  "tier": "llm",
+  "arms": {
+    "old": {
+      "binary_sha256": "e2b1e780200842c77426735f4387045c5ec57a08f59ea1f00eeff076c24a7ef4",
+      "claude_dir_replaced": 1,
+      "sandbox": {
+        "home_under_state_root": true,
+        "releases_dir_in_home": true,
+        "disk_watch_empty": true,
+        "production_paths_in_config": []
+      },
+      "loaded": true,
+      "ok": true
+    },
+    "new": {
+      "binary_sha256": "67342b1bdaabcdd1ed9656fe013be0e68dfbbc8707d7ed5a05adf924aae30ddc",
+      "claude_dir_replaced": 1,
+      "sandbox": {
+        "home_under_state_root": true,
+        "releases_dir_in_home": true,
+        "disk_watch_empty": true,
+        "production_paths_in_config": []
+      },
+      "loaded": true,
+      "ok": true
+    }
+  },
+  "ok": true
+}

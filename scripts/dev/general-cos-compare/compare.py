@@ -6,6 +6,8 @@
   compare.py preflight  --tier stub|llm --manifest <m> --plan <p> [--limits <l>] [--approval <a>] [--llm-config <t>] --out <dir>
   compare.py run        --tier stub|llm --manifest <m> --plan <p> --out <dir> [--state-root <dir>] [--only <seq,...>]
                         [--llm-config <toml> --cos-route '<toml の配列>']
+  compare.py config-check --tier stub|llm --manifest <m> --plan <p> --out <dir> [--llm-config <toml>]
+                        （旧腕・新腕の daemon が本番の段の config を読めるか。--mode verify で起こし、LLM は起こさない）
   compare.py grade-sheet  --raw <dir>     （採点者に渡す原票。採点欄は null のまま）
   compare.py observations --raw <dir> --grades <dir> --out <observations.jsonl>
 
@@ -15,7 +17,7 @@ usage・壁時計・handoff・人の介入を原票（raw）に書く。成功�
 general_cos_eval.py が集計する）。
 
 - `--tier stub` は scripted_cos.py（LLM 0）を CoS と worker の harness にする。経路の確認用で、モデルの品質を測らない。
-- `--tier llm` は実 LLM。preflight が人の承認の file（上限・account・model）を要求し、Celeris の worker の run の中
+- `--tier llm` は実 LLM。preflight が人の承認の file（id・期限・範囲 scope.seqs・上限・account・model）を要求し、Celeris の worker の run の中
   （CELERIS_RUN_ID がある）では起こさない（ADR 2026-10-07 worker-no-subagents）。上限に達したら残りを始めない。
 - 本番の DB・daemon・config・release に触れない（state-root が本番の dir なら断る）。
 exit: 0 = 成功、1 = 失敗、2 = 使い方の誤り・承認が無い・preflight の拒否。
@@ -212,9 +214,12 @@ def preflight_checks(args):
             problems.append("a person's approval file (--approval) is required for --tier llm")
         else:
             ap = load_json(args.approval)
-            for key in ("approved_by", "approved_at", "account", "model", "harness", "limits"):
+            for key in ("id", "approved_by", "approved_at", "expires_at", "account", "model", "harness", "limits",
+                        "scope"):
                 if not ap.get(key):
                     problems.append(f"approval: {key} is missing")
+            problems += approval_window_problems(ap)
+            problems += approval_scope_problems(ap, selected_trials(the_plan, getattr(args, "only", None)))
             al = ap.get("limits") or {}
             known = {"max_trials", "repeats", "max_wall_secs", "max_usd", "per_trial_wall_secs"}
             for key in sorted(set(al) - known):
@@ -222,13 +227,67 @@ def preflight_checks(args):
             for key in ("max_trials", "max_wall_secs", "max_usd"):
                 if type(al.get(key)) not in (int, float) or al[key] <= 0:
                     problems.append(f"approval.limits.{key} must be a positive number")
-                elif al[key] < limits[key] and key == "max_trials" and len(the_plan["trials"]) > al[key]:
-                    problems.append(f"plan exceeds approved max_trials {al[key]}")
+                elif key == "max_trials" and len(selected_trials(the_plan, getattr(args, "only", None))) > al[key]:
+                    problems.append(f"selected trials exceed approved max_trials {al[key]}")
             if not re.fullmatch(r"human:[^\s:]+", str(ap.get("approved_by", ""))):
                 problems.append("approval must be by a human (approved_by human:<name>)")
         if not args.llm_config or not pathlib.Path(args.llm_config).is_file():
             problems.append("--llm-config <toml> is required for --tier llm")
     return problems, limits
+
+
+def selected_trials(the_plan, only):
+    """--only（seq の list）で選んだ試行。無ければ計画の全部。"""
+    seqs = {int(x) for x in only.split(",")} if only else None
+    return [t for t in the_plan["trials"] if seqs is None or t["seq"] in seqs]
+
+
+def parse_utc(text):
+    """ISO 8601 の UTC 時刻（末尾 Z か +00:00）を epoch 秒にする。読めなければ None。"""
+    import datetime
+    try:
+        dt = datetime.datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt.timestamp() if dt.tzinfo is not None else None
+
+
+def approval_window_problems(ap, now=None):
+    """承認の期限: approved_at と expires_at は UTC の時刻で、approved_at < now < expires_at。期限の無い承認は通さない。"""
+    now = time.time() if now is None else now
+    at, until = parse_utc(ap.get("approved_at")), parse_utc(ap.get("expires_at"))
+    problems = []
+    if ap.get("approved_at") and at is None:
+        problems.append("approval.approved_at is not an ISO 8601 UTC time")
+    if ap.get("expires_at") and until is None:
+        problems.append("approval.expires_at is not an ISO 8601 UTC time")
+    if at is not None and until is not None:
+        if until <= at:
+            problems.append("approval.expires_at must be after approved_at")
+        if now >= until:
+            problems.append(f"approval expired at {ap['expires_at']}")
+        if now < at:
+            problems.append("approval.approved_at is in the future")
+    return problems
+
+
+def approval_scope_problems(ap, trials):
+    """承認の範囲: scope.seqs（承認した試行の seq）に、今回選んだ試行が全部入り、旧新の対になっている。
+    1 対だけの承認で残りの試行を流さない（N3）。"""
+    scope = ap.get("scope") or {}
+    seqs = scope.get("seqs") if isinstance(scope, dict) else None
+    if not isinstance(seqs, list) or not seqs or any(type(x) is not int for x in seqs):
+        return ["approval.scope.seqs must be a non-empty list of trial seq numbers"]
+    outside = sorted(t["seq"] for t in trials if t["seq"] not in set(seqs))
+    problems = []
+    if outside:
+        problems.append(f"trials {outside} are outside the approved scope.seqs {sorted(seqs)} (use --only)")
+    pairs = {}
+    for t in trials:
+        pairs.setdefault((t["case"], t["repeat"]), set()).add(t["arm"])
+    if any(v != {"old", "new"} for v in pairs.values()):
+        problems.append("selected trials are not old/new pairs")
+    return problems
 
 
 def preflight(args):
@@ -347,7 +406,7 @@ disk_watch = []
 {harness}
 """)
 
-    def start(self):
+    def start(self, extra=()):
         fd = os.open(self.token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(self.human_token + "\n")
@@ -357,7 +416,7 @@ disk_watch = []
                    ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID")}
             self.proc = subprocess.Popen(
                 [self.arm["binary"]["path"], "--config", str(self.home / "config.toml"), "--log-format", "text",
-                 "--release", f"p4e-{self.trial['arm']}"],
+                 "--release", f"p4e-{self.trial['arm']}", *extra],
                 stdout=log, stderr=log, stdin=subprocess.DEVNULL, env=env, cwd=self.home)
             for _ in range(600):
                 if self.proc.poll() is not None:
@@ -627,6 +686,58 @@ disk_watch = []
         }
 
 
+CLAUDE_DIR = re.compile(r'^(\s*claude_dir\s*=\s*).*$', re.M)
+
+
+def config_check(args):
+    """旧腕・新腕の daemon が本番の段の config（tier=llm なら --llm-config を足したもの）を読めるかを、LLM を起こさずに
+    確かめる。daemon は --mode verify（dispatch しない・worker を起こさない・tick の裏方を動かさない）で起こし、API が
+    答えたら止める。config の claude_dir は空の一時 dir に差し替え、本番の account の dir を読ませない。"""
+    manifest = load_json(args.manifest)
+    limits = load_json(args.limits or FIX / "limits.json")
+    out = pathlib.Path(args.out).resolve()
+    for bad in PROTECTED:
+        if str(out).startswith(bad):
+            die(f"--out must not be under production: {bad}", 2)
+    out.mkdir(parents=True, exist_ok=True)
+    report = {"schema": "celeris.general-cos-config-check/1", "tier": args.tier, "arms": {}}
+    for arm in ("old", "new"):
+        t = Trial(args, manifest, {"seq": 0, "arm": arm, "case": "config-check", "repeat": 0}, {}, limits)
+        fake_accounts = t.home / "claude-accounts"
+        fake_accounts.mkdir()
+        t.write_config(cos=True)
+        cfg = t.home / "config.toml"
+        text, n = CLAUDE_DIR.subn(lambda m: m.group(1) + json.dumps(str(fake_accounts)), cfg.read_text())
+        cfg.write_text(text)
+        r = {"binary_sha256": manifest["arms"][arm]["binary"]["sha256"], "claude_dir_replaced": n,
+             "sandbox": {"home_under_state_root": str(t.home).startswith(str(pathlib.Path(args.state_root or
+                                                                                           tempfile.gettempdir()).resolve())),
+                         "releases_dir_in_home": f'releases_dir = {json.dumps(str(t.home / "releases"))}' in text,
+                         "disk_watch_empty": "disk_watch = []" in text,
+                         "production_paths_in_config": [b for b in PROTECTED if b in text]}}
+        try:
+            t.start(extra=("--mode", "verify"))
+            r["loaded"] = True
+        except RuntimeError as e:
+            r["loaded"] = False
+            r["error"] = str(e)[-2000:]
+        finally:
+            t.stop()
+            shutil.rmtree(t.secret_dir, ignore_errors=True)
+        log = t.home / "daemon.log"
+        if log.exists():
+            shutil.copy(log, out / f"config-check-{arm}.daemon.log")
+        shutil.rmtree(t.home, ignore_errors=True)
+        r["ok"] = r["loaded"] and not r["sandbox"]["production_paths_in_config"] and all(
+            v for k, v in r["sandbox"].items() if k != "production_paths_in_config")
+        report["arms"][arm] = r
+    report["ok"] = all(r["ok"] for r in report["arms"].values())
+    write_json(out / "config-check.json", report)
+    print(json.dumps(report, ensure_ascii=False))
+    if not report["ok"]:
+        sys.exit(1)
+
+
 def stop_reason(tier, spent, limits):
     """残りの試行を始めない理由（無ければ None）。壁時計・USD のどれかが上限に達したら止める。
     実 LLM で費用が分からない試行が 1 件でもあれば、USD の上限を守れないので止める（fail closed）。"""
@@ -837,7 +948,7 @@ def main():
     s.add_argument("--out", required=True)
     s.add_argument("--repeats", type=int, default=2)
     s.add_argument("--cases")
-    for name in ("preflight", "run"):
+    for name in ("preflight", "run", "config-check"):
         s = sub.add_parser(name)
         s.add_argument("--tier", choices=("stub", "llm"), required=True)
         s.add_argument("--manifest", required=True)
@@ -848,8 +959,8 @@ def main():
         s.add_argument("--llm-config")
         s.add_argument("--cos-route", default="[]")
         s.add_argument("--state-root")
+        s.add_argument("--only")
         if name == "run":
-            s.add_argument("--only")
             s.add_argument("--keep-state", action="store_true")
     s = sub.add_parser("grade-sheet")
     s.add_argument("--raw", required=True)
@@ -864,7 +975,7 @@ def main():
     s.add_argument("--conditions", help="llm 段の model・harness・account（公開できる識別名）の JSON")
     a = p.parse_args()
     try:
-        {"pin": pin, "plan": plan, "preflight": preflight, "run": run, "grade-sheet": grade_sheet, "grade-auto": grade_auto,
+        {"pin": pin, "plan": plan, "preflight": preflight, "run": run, "config-check": config_check, "grade-sheet": grade_sheet, "grade-auto": grade_auto,
          "observations": observations}[a.cmd](a)
     except (RuntimeError, OSError, KeyError, ValueError) as e:
         die(str(e))

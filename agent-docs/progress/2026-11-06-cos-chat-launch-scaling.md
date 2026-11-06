@@ -7,20 +7,35 @@ updated: 2026-11-06
 # tick_cos_chat_launch の行数比例の調査と修正
 
 ## 結論
-`claim_queued` と `control_hook` が毎 tick、`chat_thread_list`（`THREAD_SELECT`）で全 thread を走査していた。
-`THREAD_SELECT` は thread ごとに 5 個の相関 subquery（実行中 run・queued 件数・未読件数＝`chat_messages` の `seq>read_through_seq`・`cos_inbox_items` 件数）を持つ。
-root task ごとに summary thread が増えるので、tick の費用が thread 数と message 数に比例する。これが第一の原因と判断した。
-設計は ADR `agent-docs/adr/2026-11-06-cos-chat-launch-scaling.md`（実装より先に commit 済み）。
+tick_cos_chat_launch の行数比例は 2 つあった。主因は relay_rejudge の候補 SQL で、副因は claim_queued・control_hook の全 thread 走査である。両方を直した。
+- 主因（付記 D3-c）: `cos_triage_relay_candidates` は escalated 項目ごとに、その thread で判断より後の message 全部に `json_type(metadata_json,'$.relay')` を評価していた。費用は「escalated 項目数 × thread の message 数」に比例する。本番 backup の写しでは escalated 78 件 × 後続 message で 115,402 行を読み、候補 0 件でも relay_rejudge が 72〜213 ms かかって、tick_cos_chat_launch の 8 割強を占めた。部分 index `idx_chat_messages_relay` を足し、0.7〜1.7 ms になった。
+- 副因（D3）: `claim_queued`・`control_hook` が毎 tick `chat_thread_list` で全 thread を走査していた。部分 index の列挙に替えた。
+- 付記 D3-b: relay_rejudge は候補があるとき全 task の派生受信箱を作っていた。候補の task に触れる受信箱だけを作るように変え、待ちが閉じた候補は決着済みとして記録する。
+設計は ADR `agent-docs/adr/2026-11-06-cos-chat-launch-scaling.md`。付記 D3-b・D3-c も、それぞれ実装より先に commit した。
 
 ## 変更（commit は件名）
 - n2: tick_cos_chat_launch の行数比例の調査 ADR と段別計測（`cos.*` の段別 `step_us`）
 - n2: queued 入力と実行中 run の thread だけを引く（全 thread 走査の削除・migration 0119）
   - `chat_thread_ids_with_queued_or_open_run()` を追加。部分 index `idx_chat_messages_queued`・`idx_chat_runs_open` だけを引く。
   - `claim_queued`・`control_hook` はその id だけを `chat_thread_get` で読む。旧い全 thread 走査は両方から削除した。
+- n2: relay_rejudge は候補の task に触れる受信箱だけを作り、待ちが閉じた候補を決着済みにする（付記 D3-b。全件受信箱の経路は task を引けない key のときだけ残る）
+- n2: 取り次ぎの候補 SQL を部分 index idx_chat_messages_relay で引く（migration 0119、付記 D3-c）
+  - SQL は `RELAY_CANDIDATE_SQL` 定数 1 か所にまとめ、index の WHERE と同じ語で書く。index 無しの旧い経路は残っていない。
 - 回帰試験 `thread_ids_with_queued_or_open_run_uses_partial_indexes_and_ignores_idle_rows`（task-core）。
   idle thread 300 件＋queued 1 件で、結果が queued の thread を含み、`EXPLAIN QUERY PLAN` が 2 つの部分 index を使うことを固定する。時計・負荷は使わない。
 
-## 行数と費用の対応（決定的な計測。受け入れ条件 3・4）
+## 行数と費用の対応: 取り次ぎの候補 SQL（主因、付記 D3-c。受け入れ条件 3・4）
+試験 `relay_candidate_cost_is_flat_in_thread_messages_with_the_relay_index`（task-core、`chat::store_tests`）は、escalated 項目 20 件の thread に取り次ぎではない message を 100 → 400 → 1600 件足し、同じ SQL の VM 命令数を index ありと index なし（同じ行で index を DROP して SAVEPOINT で戻す＝修正前の経路）で数える。`EXPLAIN QUERY PLAN` が `idx_chat_messages_relay` を使うことも固定する。時計・負荷は使わない。
+
+| thread の message 数 | 修正前（index なし）の VM 命令数 | 修正後（index あり）の VM 命令数 |
+|---|---|---|
+| 100 | 20,536 | 532 |
+| 400 | 80,536 | 532 |
+| 1,600 | 320,536 | 532 |
+
+修正前は message 1 件 × 項目 20 件あたり約 10 命令で、項目数 × message 数に比例する。修正後は一定である。本番 backup の写しに対する sqlite3 CLI（読み取り専用の別の写し）でも、同じ SQL は 0.93 秒（115,402 行）から 1 ms 未満になった。
+
+## 行数と費用の対応: 全 thread 走査（副因、D3。受け入れ条件 3・4）
 試験 `queued_thread_enumeration_cost_is_flat_while_full_scan_grows_with_rows`（task-core、`chat::store_tests`）が、idle thread（1 thread あたり message 3 件）を 100 → 400 → 1600 に増やし、SQLite の VM 命令数（`sqlite3_stmt_status(VM_STEP)`、時計に依らない）を数える。負荷・sleep・時計は使わない。
 
 | idle thread 数 | 旧い全 thread 走査（THREAD_SELECT）の VM 命令数 | 新しい列挙（部分 index）の VM 命令数 |
@@ -33,10 +48,9 @@ root task ごとに summary thread が増えるので、tick の費用が thread
 本番規模（chat_threads 227）に当てはめると旧い走査は約 2 万命令で、数ミリ秒の量にとどまる。本番の 18〜23 秒をこの走査だけでは説明できない（下の未解決）。
 
 ## 未測定・未解決
-- dispatch 遅延は、この task の範囲の短い計測（1 時間以内）では取れていない。9 時間 soak の ready 滞留（約 1,350 件）との対応は未確認。本番の傾きが伸びないことの確認は release 後の slow tick の `cos.*` 値が要る（worker は release・promote をしない）。
-- `triage_ingest` の digest_pass・triage_fallback の全件走査、`root_done_advance_all` も行数比例の疑いが残る。本番規模の写しでは triage_ingest は 4〜9 ms（tick 0 のみ 1.4〜2.8 秒）で、遅い段ではなかった。release 後の `cos.*` で確定してから直す。
-- 本番の傾きが伸びないことの確認は release 後の soak 数値が要る。
-- RSS 増加 task 01M6QZ031RC9YK3E6T12ESCR80 とは重複して直していない。この変更は DB 読み取りの走査量を減らすだけで、arena の設定には触れていない。
+- soak での dispatch 遅延（ready の待ち時間）の before/after は測っていない。1 時間を超える soak は起こさない約束で、この run の予算（3600 秒）では 1 時間の soak も検査と両立しない。代わりに下の表で、dispatch の周期を決める tick 全体の所要時間（total）と dispatch_ready 段を写しで比べた。soak の傾きが消えたことは release 後の soak か本番の slow tick の `cos.*` で確かめる必要がある（worker は release・promote をしない）。
+- triage_ingest は本番規模の写しで tick 1 以降 6〜24 ms（tick 0 のみ 1.8〜5.1 秒）で、遅い段ではなかった。root_done_tick も 1 ms 未満だった。行数比例かは決定的な試験では調べていない。
+- RSS 増加 task 01M6QZ031RC9YK3E6T12ESCR80 とは重複して直していない。この変更は SQL の読む行数を減らすだけで、arena の設定には触れていない。ただし修正前の候補 SQL は毎 tick 約 11 万行の metadata_json を読んで JSON を評価していたので、一時の確保が減る効果はありうる（未確認）。
 
 ## 本番への移行
 
@@ -98,3 +112,25 @@ migration 0119 は index 2 本の追加のみ（データ変更なし）。confi
 - `bash scripts/dev/test-affected.sh`: exit 0（nextest 7763 件 passed・23 skipped）。1 回目は target_sync 3 件と work_unit_dependency_base 1 件が高負荷で落ちたが、単独実行で 31 件 passed、全体の再実行で全件 passed（時間依存の揺れ。この変更の範囲外）
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo fmt --all -- --check`: exit 0
+
+## 主因（付記 D3-c）の before/after: 本番 backup の写し、交互に 2 組
+手順は上と同じ（`tick_prod_copy_steps`、backup `20261106-093409-pre-c9bf4bf7dc76.sqlite3` を毎回新しく一時 dir へ複製、fake harness だけの config）。修正前は commit「n2: relay_rejudge は候補の task に触れる受信箱だけを作り、待ちが閉じた候補を決着済みにする」の時点（D3・D3-b は入り、D3-c は無い）、修正後は commit「n2: 取り次ぎの候補 SQL を部分 index idx_chat_messages_relay で引く（migration 0119）」の時点。修正前 → 修正後 → 修正前 → 修正後 の順に走らせた。tick 1〜4 の 8 tick（各版）の最小・中央値・最大。単位は ms。写しは測定後に消した。
+
+| 段 | 修正前 最小 / 中央 / 最大 | 修正後 最小 / 中央 / 最大 |
+|---|---|---|
+| tick_cos_chat_launch | 91.4 / 174.6 / 257.8 | 11.3 / 13.0 / 16.0 |
+| cos.relay_rejudge | 72.2 / 148.3 / 212.7 | 0.7 / 0.7 / 1.7 |
+| cos.claim_queued | 1.0 / 1.1 / 7.3 | 0.9 / 1.0 / 3.5 |
+| cos.control_hook | 3.7 / 9.2 / 17.4 | 2.4 / 2.5 / 4.0 |
+| cos.triage_ingest | 9.7 / 15.7 / 24.1 | 6.5 / 6.8 / 10.5 |
+| dispatch_ready | 753.8 / 1,152.2 / 5,072.3 | 664.0 / 737.8 / 959.9 |
+| recover_reviews | 2,708.9 / 4,528.2 / 7,492.1 | 1,813.0 / 2,157.5 / 6,751.1 |
+| prune_and_sweep | 648.1 / 992.8 / 1,817.3 | 451.5 / 635.6 / 793.8 |
+| tick 全体（total） | 4,827 / 8,241 / 10,390 | 3,046 / 3,648 / 8,572 |
+
+読み取り:
+- tick_cos_chat_launch の中央値は 174.6 ms から 13.0 ms に下がった（約 1/13）。下がった分のほぼ全部が relay_rejudge（148.3 ms → 0.7 ms）である。
+- 他の段は修正後に悪化していない。dispatch_ready・recover_reviews・prune_and_sweep は修正後のほうが小さいが、これらの段は修正に触れていないので、差は host の揺れと見る。
+- dispatch の周期を決める tick 全体は中央値 8.2 秒 → 3.6 秒だった。差の大半は recover_reviews など修正対象外の段の揺れで、修正による短縮は tick あたり約 0.16 秒である。
+- 本番の 18〜23 秒（09:50〜10:10Z）は写しでは再現しない。ただしこの SQL は cache が冷えた状態で 1 回 0.93 秒かかり（sqlite3 CLI）、escalated 項目と inbox thread の message が増えるほど伸びる。soak の傾き（escalated 項目と message が単調に増える）と矛盾しない説明だが、soak・本番での確認は未実施である。
+- 生データ: run の artifacts の `m-{1,2}-{after,d3c}.jsonl`（repo には入れない）。

@@ -2844,6 +2844,10 @@ async fn run_gate_until_second_checks(
 fn scratch_on(d: &mut Dispatcher, dir: &Path) -> task_worker::scratch::ScratchSettings {
     let s = task_worker::scratch::ScratchSettings::with_dir(dir);
     d.config.shared_build_cache = true;
+    // GC は実 filesystem の空きを読む。既定の 5120 MB のままだと host の空き（tmpfs の /tmp など）が
+    // 10 GiB を割ったとき LowDisk の GC が seed・完了 target を消し、試験が host の具合で落ちる。
+    // 空きの判定を試す試験は、この後で自分の値（u64::MAX など）を置く。
+    d.config.min_free_disk_mb = 0;
     d.config.scratch = s.clone();
     s
 }

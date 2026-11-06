@@ -1,11 +1,12 @@
 use super::*;
 
+/// `[dispatch] min_free_disk_mb = 0`: gc・lease の判定を host の空き（tmpfs の /tmp など）から切り離す。
 fn config(tmp: &Path) -> PathBuf {
     let path = tmp.join("config.toml");
     std::fs::write(
             &path,
             format!(
-                "db = \"{}\"\n[workspace]\nbuild_cache_dir = \"{}\"\n[scratch]\ndir = \"{}\"\n[selfdeploy]\nreleases_dir = \"{}\"\n",
+                "db = \"{}\"\n[dispatch]\nmin_free_disk_mb = 0\n[workspace]\nbuild_cache_dir = \"{}\"\n[scratch]\ndir = \"{}\"\n[selfdeploy]\nreleases_dir = \"{}\"\n",
                 tmp.join("celeris.sqlite3").display(),
                 tmp.join("build-cache").display(),
                 tmp.join("scratch").display(),
@@ -162,6 +163,12 @@ fn lease_touch_release_round_trip() {
             .set_times(std::fs::FileTimes::new().set_modified(old))
             .unwrap();
     }
+    // 次の release の checkout は今（`.git` の mtime）。試験の冒頭に書いた `.git` のままだと、負荷で試験が
+    // 120 秒を超えたとき「最終書き込み < checkout」が崩れて adopt せず、seed の写しになる。
+    std::fs::File::open(tree.join(".git"))
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(SystemTime::now()))
+        .unwrap();
     run(
         None,
         ScratchCommand::Lease(lease_args("release-ba9876543210", None)),

@@ -1770,10 +1770,18 @@ fn project_with_repos(
     store: &Arc<dyn TaskStore>,
     repos: &[(&str, &std::path::Path, task_core::RepoKind)],
 ) -> (task_core::ProjectId, Vec<task_core::ProjectRepo>) {
+    project_with_repos_integrating(store, repos, false)
+}
+
+fn project_with_repos_integrating(
+    store: &Arc<dyn TaskStore>,
+    repos: &[(&str, &std::path::Path, task_core::RepoKind)],
+    auto_integrate: bool,
+) -> (task_core::ProjectId, Vec<task_core::ProjectRepo>) {
     let now = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
-        auto_integrate: false,
+        auto_integrate,
         slug: None,
         archived_at: None,
         paused_from: None,

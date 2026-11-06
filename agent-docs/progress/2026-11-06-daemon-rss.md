@@ -125,3 +125,7 @@ raw は `before/samples-2.jsonl`・`before/ops-2.jsonl`。
 - どちらも 1 tick が数秒かかる（本番規模 DB の写しでは slow tick が常態）。中央値と最大は after のほうが小さいが、各 1 回で揺れ（tick 数が 46〜100）の範囲内。mallopt が tick を遅くした証拠は無い。
 - arena が 6 MB から 127 MB に跳ねたのは、before 2 回目の起動後 60 秒の `process_memory` 行（09:12:20Z）の時点で、直前の区間（09:12:05Z の tick 4、2.5 秒の slow tick、続いて 7 秒の slow tick）と重なる。この区間では tick 段のうち `tick_cos_chat_launch`、`prune_and_sweep` が時間の大半を占める。確保元の候補はこの 2 段と、毎 tick 27 件の `knowledge curation: could not finish the run`（daily-summary.md 欠落、soak 環境の欠陥で本番では起きない可能性）。
 - 上は時間の重なりによる推定で、確保そのものは未計測。次に tick 段ごとの `mallinfo2` 差分を取る必要がある（未実施）。
+
+## 検査（Run #15）
+- `cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check`: ok。
+- `bash scripts/dev/test-affected.sh` は、この run では 8 分 40 秒の壁時計で打ち切られ、結果なし（target が掃除されて再ビルドが走ったため）。コードは Run #6 で exit 0 を確認した時点から変わっていない（以後の commit は文書と raw のみ）。最終提出の前に、最後の同期の後で再実行が要る。

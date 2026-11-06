@@ -22,7 +22,40 @@ pub struct PhaseSync {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectRunUsage {
     pub model: Option<String>,
+    /// 予算に使う usage。`None` は費用不明（usage が無い・読めない、または chat run の attempt に usage 欠測がある）。
     pub usage: Option<crate::model::Usage>,
+    /// 読めた usage（attempt 欠測で `usage` が `None` でも、既知の分は消さずに残す。予算には使わない）。
+    pub known_usage: Option<crate::model::Usage>,
+}
+
+/// 起動前に終わった chat run の判定（reason 無しの NULL で `NOT` が NULL にならないよう COALESCE する。`cost_state = not_launched`、`chat::run_store::cost_state_of` と同じ条件）を
+/// 表す SQL の述語。`r` は `chat_runs`。和 [`SqliteStore::project_run_usage_between`] の除外と
+/// 件数 [`SqliteStore::project_not_launched_runs_between`] がこの 1 つを共有する。
+fn not_launched_sql() -> String {
+    use crate::chat::ChatPrelaunchReason as R;
+    // match が網羅なので、列挙を足すとここがコンパイルエラーになる（SQL の列挙の更新漏れを防ぐ）。
+    let name = |r: R| match r {
+        R::RouteUnavailable => "route_unavailable",
+        R::SkillsUnavailable => "skills_unavailable",
+        R::WallExpiredBeforeLaunch => "wall_expired_before_launch",
+        R::SlotWaitExpired => "slot_wait_expired",
+        R::DaemonRestartBeforeLaunch => "daemon_restart_before_launch",
+        R::StoppedBeforeLaunch => "stopped_before_launch",
+    };
+    let list = [
+        R::RouteUnavailable,
+        R::SkillsUnavailable,
+        R::WallExpiredBeforeLaunch,
+        R::SlotWaitExpired,
+        R::DaemonRestartBeforeLaunch,
+        R::StoppedBeforeLaunch,
+    ]
+    .map(|r| format!("'{}'", name(r)))
+    .join(",");
+    format!(
+        "(r.finished_at IS NOT NULL AND r.launch_tracked = 1 AND r.launched_at IS NULL \
+         AND COALESCE(r.prelaunch_reason, '') IN ({list}))"
+    )
 }
 
 /// [`SqliteStore::project_controller_resume`] の入力。読んだときの状態と、判断の行に残す根拠。
@@ -161,8 +194,10 @@ impl SqliteStore {
 
     /// 案件の task run と CoS chat run（`since <= started_at < until`）のうち、予算に数える終わった run の
     /// model と usage（ADR 2026-11-06-budget-usd-caps D2-3）。走っている run（`finished_at` 無し・`running`）と、
-    /// harness を起動する前に終わった task run（usage・model・adapter・account・session・metrics が全部無い）は
-    /// 返さない。usage が無い・読めない行は `usage: None` で返す（費用不明として数える）。model は task run が
+    /// harness を起動する前に終わった task run（usage・model・adapter・account・session・metrics が全部無い）と、
+    /// 起動前に終わった chat run（`finished_at` あり・`launched_at` NULL・境界を記録する世代・列挙内の
+    /// `prelaunch_reason` の全部。ADR 2026-11-06-cos-run-launch-accounting-and-drain D1-2）は返さない。
+    /// 旧記録・未知の reason・reason 無し・起動後の usage 欠測・attempt の欠測は返し、`usage: None`（費用不明）にする。usage が無い・読めない行は `usage: None` で返す（費用不明として数える）。model は task run が
     /// `runs.model`、CoS chat run が `resolved_config_json` の `model`。
     pub fn project_run_usage_between(
         &self,
@@ -170,32 +205,61 @@ impl SqliteStore {
         since: &str,
         until: &str,
     ) -> Result<Vec<ProjectRunUsage>, StoreError> {
+        let not_launched = not_launched_sql();
         self.with_read_conn(|c| {
-            let mut st = c.prepare(
-                "SELECT r.model, r.usage_json FROM runs r JOIN tasks t ON t.id = r.task_id \
+            let sql = format!(
+                "SELECT r.model, r.usage_json, 0 FROM runs r JOIN tasks t ON t.id = r.task_id \
                  WHERE t.project_id = ?1 AND r.started_at >= ?2 AND r.started_at < ?3 \
                    AND r.finished_at IS NOT NULL AND r.status <> 'running' \
                    AND (r.usage_json IS NOT NULL OR r.model IS NOT NULL OR r.adapter IS NOT NULL \
                         OR r.account IS NOT NULL OR r.session_id IS NOT NULL OR r.metrics_json IS NOT NULL) \
                  UNION ALL SELECT \
                    json_extract(CASE WHEN json_valid(r.resolved_config_json) THEN r.resolved_config_json END, '$.model'), \
-                   r.usage_json FROM chat_runs r \
+                   r.usage_json, r.attempts_usage_missing FROM chat_runs r \
                  JOIN chat_threads t ON t.id = r.thread_id \
                  WHERE t.project_id = ?1 AND r.started_at >= ?2 AND r.started_at < ?3 \
-                   AND r.finished_at IS NOT NULL",
-            )?;
-            let raw: Vec<(Option<String>, Option<String>)> = st
+                   AND r.finished_at IS NOT NULL AND NOT {not_launched}"
+            );
+            let mut st = c.prepare(&sql)?;
+            let raw: Vec<(Option<String>, Option<String>, i64)> = st
                 .query_map(params![project_id, since, until], |r| {
-                    Ok((r.get(0)?, r.get(1)?))
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
                 })?
                 .collect::<Result<_, _>>()?;
             Ok(raw
                 .into_iter()
-                .map(|(model, usage)| ProjectRunUsage {
-                    model: model.filter(|m| !m.is_empty()),
-                    usage: usage.and_then(|s| serde_json::from_str(&s).ok()),
+                .map(|(model, usage, missing)| {
+                    let known_usage: Option<crate::model::Usage> =
+                        usage.and_then(|s| serde_json::from_str(&s).ok());
+                    ProjectRunUsage {
+                        model: model.filter(|m| !m.is_empty()),
+                        usage: if missing > 0 { None } else { known_usage.clone() },
+                        known_usage,
+                    }
                 })
                 .collect())
+        })
+    }
+
+    /// [`Self::project_run_usage_between`] が費用の和から除いた「起動前に終わった chat run」の数（同じ案件・同じ
+    /// `since <= started_at < until`・同じ判定）。task run は数えない。
+    pub fn project_not_launched_runs_between(
+        &self,
+        project_id: &str,
+        since: &str,
+        until: &str,
+    ) -> Result<u32, StoreError> {
+        let not_launched = not_launched_sql();
+        self.with_read_conn(|c| {
+            Ok(c.query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM chat_runs r JOIN chat_threads t ON t.id = r.thread_id \
+                     WHERE t.project_id = ?1 AND r.started_at >= ?2 AND r.started_at < ?3 \
+                       AND {not_launched}"
+                ),
+                params![project_id, since, until],
+                |r| r.get(0),
+            )?)
         })
     }
 

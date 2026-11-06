@@ -127,6 +127,8 @@ pub(crate) mod migrations;
 mod org;
 mod project_briefs;
 mod project_guard;
+#[cfg(test)]
+mod project_guard_usage_tests;
 pub use project_guard::{PhaseSync, ProjectResume, ProjectRunUsage};
 mod project_retention;
 #[cfg(test)]

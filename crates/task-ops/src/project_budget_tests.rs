@@ -396,7 +396,8 @@ fn prelaunch_only_has_no_unknown_guard_but_any_missing_after_launch_keeps_it() {
     assert_eq!(exceeded(&limit_usd(100), &u), None);
     assert_eq!(severity(&limit_usd(100), &u), BudgetSeverity::Daily);
     // 混在: 境界の不明な行を 1 件足すたびに guard が出る（除外数は変わらない）。
-    let missing: [(&str, Option<&str>, Option<&str>, i64, bool); 5] = [
+    type Case<'a> = (&'a str, Option<&'a str>, Option<&'a str>, i64, bool);
+    let missing: [Case; 5] = [
         ("after-launch-null", Some(at), None, 0, false),
         ("after-launch-broken", Some(at), None, 0, true),
         ("unknown-reason", None, Some("made_up"), 0, false),

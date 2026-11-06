@@ -1080,7 +1080,9 @@ async fn trace_scenarios(mode: Mode) -> Vec<(String, Vec<PassCapture>)> {
     assert_eq!(s.f.count("SELECT COUNT(*) FROM chat_runs"), 2);
     out.record(&mut s, "completed/two-threads").await;
 
-    // The chat run cannot be read (its usage is not a usage object): the digest has no reason (`null`).
+    // The chat run cannot be read (its resolved config holds an unknown session_mode, which
+    // still fails the read; an unreadable usage no longer does, it reads as cost_state=unknown):
+    // the digest has no reason (`null`).
     let mut s = scene(mode, true, DONE);
     trace_start_run(&mut s.f, &["deploy"]);
     trace_stop(&s.f);
@@ -1088,7 +1090,9 @@ async fn trace_scenarios(mode: Mode) -> Vec<(String, Vec<PassCapture>)> {
     let (_, run) = trace_latest_run(&s.f);
     sql(
         &s.f,
-        &format!("UPDATE chat_runs SET usage_json='\"not usage\"' WHERE run_id='{run}'"),
+        &format!(
+            "UPDATE chat_runs SET resolved_config_json='{{\"session_mode\":\"bogus\"}}' WHERE run_id='{run}'"
+        ),
     );
     out.record(&mut s, "stopped/run-unreadable-reason-null")
         .await;

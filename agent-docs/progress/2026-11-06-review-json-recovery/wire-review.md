@@ -32,10 +32,11 @@ commit（件名。基準は `$CELERIS_WU_BASE`）:
 - adr: wire review.json recovery and absolute paths in the reviewer prompt（`agent-docs/adr/2026-11-06-misplaced-report-recovery-generalized.md` に D5 と検証を追記。実装より先）
 - wire misplaced review.json recovery into the reviewer and state absolute report paths in its prompt
 - progress: review-json-recovery wire-review（clippy の needless_borrow の直しと、この進捗ファイル）
+- test: wait for the resync halt event instead of a tick budget in target_sync（2 回目の run。下の「計画の check の不合格」）
 
 変えたファイル: `crates/task-dispatch/src/review.rs`、`crates/task-dispatch/src/review/tests.rs`、`crates/task-worker/src/protocol.rs`、
 `crates/task-worker/src/claude_code/prompt.rs`、`crates/task-worker/src/claude_code.rs`、`crates/task-worker/src/codex.rs`、
-`crates/task-worker/src/claude_code/tests.rs`、`crates/task-worker/src/codex/tests.rs`。
+`crates/task-worker/src/claude_code/tests.rs`、`crates/task-worker/src/codex/tests.rs`、`crates/task-dispatch/src/dispatcher/tests/target_sync.rs`（試験の待ち方だけ）。
 
 ## 試験
 - `review::tests::a_review_json_misplaced_in_the_repo_is_recovered_and_judged` — reviewer が `repos/agent-platform/artifacts/review.json`
@@ -52,10 +53,20 @@ commit（件名。基準は `$CELERIS_WU_BASE`）:
 - `bash scripts/dev/test-affected.sh` — exit 0、5564 tests run: 5564 passed, 22 skipped
 - `cargo clippy --workspace -- -D warnings` — exit 0
 - `cargo fmt --all -- --check` — exit 0
-- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は上の 8 ファイル・ADR・この進捗ファイルだけ
+- `cargo test -p task-dispatch review`（計画の check）— exit 0、127 passed（2 回）
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は上の 9 ファイル・ADR・この進捗ファイルだけ
 
 途中で `cargo nextest run -p task-worker` 全体を回したとき、browser の launcher_login / post_login 試験 5 件が並列負荷で落ちた。
 同じ試験だけを再実行すると 12 件とも通った。今回の変更は browser のコードに触れていない。
+
+## 計画の check の不合格（1 回目の run の後）と直し
+1 回目の run の後、celeris の check `cargo test -p task-dispatch review` が exit 101 で落ちた。落ちたのは今回の変更と関係しない
+`dispatcher::tests::target_sync::pre_review_sync_halted_without_reviewer_resumes_by_rereview_and_lands`（903 行の
+`ReviewResyncHalted` 件数が 0）。単独で実行すると通る。原因は `run_until_idle(&mut d, 100)` の tick 回数上限
+（約 100 × 20ms）で、負荷のある環境では resync の上限停止まで進む前に tick を使い切る（時間依存）。
+ADR-0125 (b) に沿い、同じ形の 2 か所（`…_without_reviewer_…` と、その前の `ReviewResyncHalted` 件数を見る試験）を
+`run_until_state`（halted event が出るまで、壁時計 60 秒の保険）で待ってから `run_until_idle` するように直した。
+同じ check を 2 回実行し、2 回とも 127 passed・0 failed（exit 0）。
 
 ## 本番への移行
 本番の config 変更は要らない。新しい config 欄は無く、既存の欄も変えていない。release を promote すれば効く。

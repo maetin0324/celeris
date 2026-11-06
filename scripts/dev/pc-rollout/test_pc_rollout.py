@@ -20,13 +20,14 @@ def appr(kind="observe", stages=("dry_run", "shadow"), **kw):
     return d
 
 
+LIMITS = {"max_usd_per_day": 20.0, "max_roots_per_day": 5, "max_cos_inputs_per_day": 10, "ttl_secs": 259200}
 GATE, GATE_SCHEMA = "schema", "celeris.long-horizon-pilot-gate/1"
 
 
 def facts(**kw):
     f = {"project": "P1", "git": {"missing_subjects": [], "release_contains_required": True},
-         "config": {"read": True, "enabled": True, "allowed_project_ids": ["P1"], "sha256": "x", "budget_present": True},
-         "daemon_config_sha256": "x", "other_modes": {"P2": "off"}, "domain": {"mode": "compare"},
+         "config": {"read": True, "enabled": True, "allowed_project_ids": ["P1"], "sha256": "x"},
+         "daemon_config_sha256": "x", "budget_limits": LIMITS, "other_modes": {"P2": "off"}, "domain": {"mode": "compare"},
          "guard_halted": None, "controller": {"mode": "dry_run"},
          "decisions": {"total": 2, "dry_run": 2, "not_suppressed": 0}, "bad_wait_rule": None, "controller_roots": 0,
          "approval_check": (True, "ok"), "pilot_facts": {GATE: GATE_SCHEMA, "g7": "pass", "cos_runs": 3, "cos_usage_null": 0, "missing": []}}
@@ -133,6 +134,18 @@ class Criteria(unittest.TestCase):
         self.assertEqual(states(p.criteria("canary", dict(f, shadow_report=nonprod), "production"))["G5"], "fail")
         dirty = dict(rep, violations=["x"])
         self.assertEqual(states(p.criteria("canary", dict(f, shadow_report=dirty), "production"))["G5"], "fail")
+
+    def test_budget_needs_positive_usd_roots_and_cos_input_caps(self):
+        # USD 予算（01M6QDK2PM）の後の契約: token の上限だけの summary や、USD の上限が無い・0 の summary は通さない。
+        self.assertEqual(states(p.criteria("shadow", facts(), "production"))["G2b"], "pass")
+        for bad in (None, {}, {"max_tokens_per_day": 1000000, "max_roots_per_day": 5, "max_cos_inputs_per_day": 10},
+                    dict(LIMITS, max_usd_per_day=0), dict(LIMITS, max_usd_per_day=True),
+                    dict(LIMITS, max_roots_per_day=None)):
+            rows = p.criteria("shadow", facts(budget_limits=bad), "production")
+            self.assertEqual(states(rows)["G2b"], "fail", bad)
+
+    def test_required_subjects_include_n5_retention_guard(self):
+        self.assertTrue(any(s.startswith("phase 5: enforce roadmap evidence freshness") for s in p.REQUIRED_SUBJECTS))
 
     def test_guard_halted_fails(self):
         self.assertEqual(states(p.criteria("shadow", facts(guard_halted="x"), "production"))["G4"], "fail")

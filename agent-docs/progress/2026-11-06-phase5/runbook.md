@@ -103,7 +103,7 @@ restart の最初の tick 18.8 秒（`agent-docs/progress/2026-11-05-phase4/p4c.
 |---|---|
 | G1〜G7 の表 | 7 行すべてに go・no-go・pending と証拠の path。G7 は N1 の実 LLM の facts が無ければ pending |
 | 予行 | dry_run・shadow・undo が exit 0、監視の違反 0 |
-| release | 本番の release が 9ed88afa4506 以降（schema 117・USD 予算を含む）であることを GET /api/v1/config の identity で確かめる |
+| release | 本番の release が 9ed88afa4506 以降（schema 117・USD 予算を含む）であることを GET /api/v1/config の identity で確かめる（人の token が要る。worker は `/local/celeris/state/current` の link と `promoted.json` を読み、`git merge-base --is-ancestor` で照合し、API の確認は人に残す） |
 | 人の承認 | observe（dry_run・shadow）と effects（canary・enabled、本番の shadow 86,400 秒以上・違反 0 の報告の sha256）を操作ごとに列挙 |
 
 ## N7 closeout の検証（01M6QW0GT56KDVBHCXX78GBFHF）

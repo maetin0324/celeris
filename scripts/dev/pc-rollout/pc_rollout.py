@@ -52,7 +52,11 @@ REQUIRED_SUBJECTS = [
     "p4b: 達成の後の根拠の失効で Rust が数え直して waiting に戻す",
     "p4c: CoS の一次対応の受信箱を触れた task の分だけ作り",
     "p4d: retention GC は 3 表とも最大 id の行を残す",
+    # N5: Roadmap の checks だけの改版で古い root を根拠にしない・GC の最大 id を trigger でも守る（schema 118）。
+    "phase 5: enforce roadmap evidence freshness and retention ID guards",
 ]
+# 予算の上限で必ず summary に要る欄（USD 予算 01M6QDK2PM の後。token の上限は消えた）。
+REQUIRED_BUDGET_LIMITS = ("max_usd_per_day", "max_roots_per_day", "max_cos_inputs_per_day")
 PRODUCTION_PREFIXES = ("/local/celeris/state", "/local/celeris/data/db",
                        str(pathlib.Path.home() / ".local/celeris"), str(pathlib.Path.home() / ".config/celeris"))
 # 効果を伴った（伴おうとした）判断の効果の状態。`none`（wait など効果の無い判断）と `suppressed` は観察の段で正しい。
@@ -175,11 +179,11 @@ def criteria(stage, facts, scope):
     git = facts.get("git") or {}
     missing = git.get("missing_subjects")
     if missing is None:
-        add("G1", "必要な修正が main にある（cos-usage・P4-B・P4-C・P4-D）", "pending", "git を読めない")
+        add("G1", "必要な修正が main にある（cos-usage・P4-B・P4-C・P4-D・N5）", "pending", "git を読めない")
     elif missing:
-        add("G1", "必要な修正が main にある（cos-usage・P4-B・P4-C・P4-D）", "fail", f"main に無い: {missing}")
+        add("G1", "必要な修正が main にある（cos-usage・P4-B・P4-C・P4-D・N5）", "fail", f"main に無い: {missing}")
     else:
-        add("G1", "必要な修正が main にある（cos-usage・P4-B・P4-C・P4-D）", "pass", "全件 main にある")
+        add("G1", "必要な修正が main にある（cos-usage・P4-B・P4-C・P4-D・N5）", "pass", "全件 main にある")
     rel = git.get("release_contains_required")
     if scope == "non-production":
         add("G1r", "稼働中の release が必要な修正を含む", "waived", "非本番の予行（一時 daemon の release 名は sha でない）")
@@ -199,9 +203,9 @@ def criteria(stage, facts, scope):
         same = cfg.get("sha256") == facts.get("daemon_config_sha256")
         add("G2s", "読んだ config が daemon の起動時の config と同じ（sha256）", "pass" if same else "fail",
             f"file={cfg.get('sha256')} daemon={facts.get('daemon_config_sha256')}")
-        b = cfg.get("budget_present")
-        add("G2b", "[project_controller.budget] の上限が summary に出ている", "pass" if b else "fail",
-            f"budget_limits={facts.get('budget_limits')}")
+        b, why = budget_limits_ok(facts.get("budget_limits"))
+        add("G2b", "[project_controller.budget] の上限（USD・起票・CoS 入力）が summary に出ている",
+            "pass" if b else "fail", why)
     # G3 他の案件は全部 off。
     others = facts.get("other_modes") or {}
     on = {p: m for p, m in others.items() if m != "off"}
@@ -263,6 +267,17 @@ def criteria(stage, facts, scope):
             f"g7={pf.get('g7')} cos_runs={pf.get('cos_runs')} cos_usage_null={pf.get('cos_usage_null')} "
             f"missing={pf.get('missing')}")
     return rows
+
+
+def budget_limits_ok(limits):
+    """summary の budget_limits に USD・起票・CoS 入力の 1 日の上限が正の数で出ているか（USD 予算の契約）。"""
+    if not isinstance(limits, dict) or not limits:
+        return False, f"budget_limits={limits}"
+    bad = [k for k in REQUIRED_BUDGET_LIMITS
+           if isinstance(limits.get(k), bool) or not isinstance(limits.get(k), (int, float)) or limits.get(k) <= 0]
+    if bad:
+        return False, f"正の数でない・無い: {bad} budget_limits={limits}"
+    return True, f"max_usd_per_day={limits['max_usd_per_day']} max_roots_per_day={limits['max_roots_per_day']}"
 
 
 def verdict(rows):
@@ -388,7 +403,7 @@ def config_facts(path):
         return {"read": False, "error": f"{type(e).__name__}: {e}"}
     pc = doc.get("project_controller") or {}
     return {"read": True, "sha256": hashlib.sha256(raw).hexdigest(), "enabled": pc.get("enabled"),
-            "allowed_project_ids": pc.get("allowed_project_ids"), "budget_present": True}
+            "allowed_project_ids": pc.get("allowed_project_ids")}
 
 
 def proc_status(pid):
@@ -492,8 +507,6 @@ def collect(a, api, stage, scope):
     facts["git"] = git_facts(a.repo, snap.get("daemon_release"))
     if a.config:
         facts["config"] = config_facts(a.config)
-        if facts["config"].get("read"):
-            facts["config"]["budget_present"] = bool(snap.get("budget_limits"))
     approval = json.loads(pathlib.Path(a.approval).read_text()) if a.approval else None
     report = json.loads(pathlib.Path(a.shadow_report).read_text()) if a.shadow_report else None
     facts["shadow_report"] = report

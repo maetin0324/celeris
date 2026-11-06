@@ -1,0 +1,14 @@
+long-horizon-pilot-llm: approval n1-g7-20261106-1 max_usd=4 max_wall_secs=450
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+long-horizon-pilot-llm: case C06 arm new
+long-horizon-pilot-llm: case C08 arm new
+long-horizon-grade: tier llm_pilot, 2 trials, written to /local/celeris/data/scratch/n1-g7/raw/grade
+pilot-gate: verdict=unknown g7=fail cos_usage_null=3 approval=approved
+long-horizon-pilot-llm: wrote /local/celeris/data/scratch/n1-g7/raw (harness config), but the measurement gate is not pass: /local/celeris/data/scratch/n1-g7/raw/grade/pilot-gate.json

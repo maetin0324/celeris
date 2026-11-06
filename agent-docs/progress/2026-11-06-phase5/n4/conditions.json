@@ -30,8 +30,37 @@
   },
   "host": "home-dev",
   "excluded": "preliminary and first before-off overlapped in separate PID namespaces; submitted before-off is repeated sequentially",
-  "after_shadow_attempt1": "interrupted at the 20% budget boundary; partial data excluded; rerun all four sizes",
-  "unfinished": [
-    "after-shadow"
-  ]
+  "after_shadow_attempt1": "interrupted at the 20% budget boundary; partial data excluded",
+  "unfinished": [],
+  "paired": {
+    "dir": "paired/round1..round4",
+    "design": "each round starts before-off, before-shadow, after-off, after-shadow at the same time (four processes) so host load applies to every arm alike",
+    "rounds": {
+      "round1": [
+        0,
+        600,
+        2000,
+        10000
+      ],
+      "round2": [
+        0,
+        600,
+        2000,
+        10000
+      ],
+      "round3": [
+        0,
+        600,
+        2000,
+        10000
+      ],
+      "round4": [
+        10000
+      ]
+    },
+    "binaries": "paired/binaries.sha256 (before = merge-base product files with the submitted tick_scale_baseline.rs; after = submitted HEAD)",
+    "loadavg": "paired/roundN/loadavg.log (1-min load 13-104 on 24 cores)",
+    "summary": "summarize_paired.py -> paired/summary.json",
+    "adopted": "paired rounds are the submitted comparison; the sequential 12 cells (before-*.jsonl, after-off.jsonl) are kept as the first attempt"
+  }
 }

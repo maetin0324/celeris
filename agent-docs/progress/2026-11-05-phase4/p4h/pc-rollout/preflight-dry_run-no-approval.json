@@ -1,0 +1,131 @@
+{
+  "schema": "celeris.pc-rollout/1",
+  "kind": "preflight",
+  "stage": "dry_run",
+  "scope": "production",
+  "project": "01M6Q8PSEHPW5BZEWDFVV5X9Q0",
+  "verdict": "no-go",
+  "criteria": [
+    {
+      "id": "G1",
+      "what": "必要な修正が main にある（cos-usage・P4-B・P4-C・P4-D）",
+      "state": "pass",
+      "detail": "全件 main にある"
+    },
+    {
+      "id": "G1r",
+      "what": "稼働中の release が必要な修正を含む",
+      "state": "pending",
+      "detail": "release='p4g-e2e'（sha を含まない）"
+    },
+    {
+      "id": "G2",
+      "what": "[project_controller] enabled=true・allowed_project_ids が対象の 1 案件だけ",
+      "state": "pass",
+      "detail": "enabled=True allowed=['01M6Q8PSEHPW5BZEWDFVV5X9Q0']"
+    },
+    {
+      "id": "G2s",
+      "what": "読んだ config が daemon の起動時の config と同じ（sha256）",
+      "state": "pass",
+      "detail": "file=c7958297ade2a2138bd0501b32df2c6dd03e243352ac556d08b2da63c9f422e4 daemon=c7958297ade2a2138bd0501b32df2c6dd03e243352ac556d08b2da63c9f422e4"
+    },
+    {
+      "id": "G2b",
+      "what": "[project_controller.budget] の上限が summary に出ている",
+      "state": "pass",
+      "detail": "budget_limits={'max_cos_inputs_per_day': 10, 'max_roots_per_day': 5, 'max_no_progress_decisions': 5, 'max_same_failure_repeats': 3, 'max_invalid_decisions': 3, 'max_tokens_per_day': 20000000, 'ttl_secs': 259200}"
+    },
+    {
+      "id": "G3",
+      "what": "対象以外の案件の controller が全部 off",
+      "state": "pass",
+      "detail": "1 件とも off"
+    },
+    {
+      "id": "G4",
+      "what": "script guard が止めていない",
+      "state": "pass",
+      "detail": "guard_halted=null"
+    },
+    {
+      "id": "G4m",
+      "what": "領域 project_controller が compare にできる状態",
+      "state": "pass",
+      "detail": "mode=rust generation_state=None"
+    },
+    {
+      "id": "G5",
+      "what": "案件の controller が off か dry_run",
+      "state": "pass",
+      "detail": "mode=off"
+    },
+    {
+      "id": "G6",
+      "what": "dry_run の人の承認（kind=observe）",
+      "state": "fail",
+      "detail": "no approval file for stage dry_run"
+    },
+    {
+      "id": "G7",
+      "what": "実 LLM pilot の再実行で cos_usage_null 0",
+      "state": "pending",
+      "detail": "pilot の facts（--pilot-facts）が無い。operator の再実行（--cos-route 付き）待ち"
+    }
+  ],
+  "snapshot": {
+    "schema": "celeris.pc-rollout/1",
+    "kind": "snapshot",
+    "at": "2026-11-06T01:48:54+00:00",
+    "project": "01M6Q8PSEHPW5BZEWDFVV5X9Q0",
+    "get_controller_ms": 3.1,
+    "project_mode": "off",
+    "phase": "active",
+    "revision": 0,
+    "mode_changed_at": "2026-11-06T01:48:54.042023313Z",
+    "lease_expires_at": null,
+    "backoff_until": null,
+    "coalesce_until": null,
+    "next_wake_at": null,
+    "budget_today": {
+      "day": "2026-11-06",
+      "cos_inputs": 0,
+      "roots": 0,
+      "tokens": 0,
+      "chat_starts": 0
+    },
+    "cos_inputs_total": 0,
+    "wait_rule": null,
+    "budget_limits": {
+      "max_cos_inputs_per_day": 10,
+      "max_roots_per_day": 5,
+      "max_no_progress_decisions": 5,
+      "max_same_failure_repeats": 3,
+      "max_invalid_decisions": 3,
+      "max_tokens_per_day": 20000000,
+      "ttl_secs": 259200
+    },
+    "pending_wakes": 0,
+    "decisions_total": 0,
+    "effects": {},
+    "decisions_after_mode": {},
+    "decision_modes": [],
+    "decision_rules": [],
+    "get_tasks_ms": 1.7,
+    "controller_roots": 0,
+    "domain_mode": "rust",
+    "domain_generation": null,
+    "domain_version": 0,
+    "guard_halted": null,
+    "other_modes": {
+      "01M6Q8PSEMF32JWGEYVPKTM41X": "off"
+    },
+    "daemon_config_sha256": "c7958297ade2a2138bd0501b32df2c6dd03e243352ac556d08b2da63c9f422e4",
+    "daemon_release": "p4g-e2e",
+    "daemon_instance": "01M6Q8PSJQQ0DJ4JZTWDEAPN69",
+    "daemon_pid": 420747,
+    "rss_kb": 122496,
+    "rss_anon_kb": 19776,
+    "threads": 33
+  }
+}

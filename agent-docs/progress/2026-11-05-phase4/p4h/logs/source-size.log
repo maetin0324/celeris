@@ -1,0 +1,30 @@
+source-size-report (ADR-0083)
+root: /local/celeris/data/workspaces/01M6PAMC47G5XRZZVJXYPG626G/repos/agent-platform
+thresholds: production > 2000 lines, inline test mod > 300 lines
+
+totals:
+  docs                  2155 files      186637 lines
+  fixture                176 files       35103 lines
+  generated                4 files       43315 lines
+  lockfile                 4 files       10080 lines
+  migrations             111 files        3189 lines
+  rust_external_test     777 files      426237 lines
+  rust_inline_test       463 files       21017 lines
+  rust_production        868 files      372887 lines
+  schema                  11 files       54346 lines
+  tooling                205 files       45681 lines
+  ts_production          284 files       40007 lines
+  ts_test                229 files       34419 lines
+  vendored               130 files       77446 lines
+
+[excepted] production_size: crates/task-api/src/types.rs
+    2531 handwritten production lines (threshold 2000)
+    reason: flat API wire-type definitions; also the schemars source for docs/api/v1/*.schema.json (audit.md §9)
+[warning] production_size: crates/task-dispatch/src/dispatcher.rs
+    2402 handwritten production lines (threshold 2000)
+[warning] production_size: crates/task-dispatch/src/dispatcher/work_units.rs
+    2181 handwritten production lines (threshold 2000)
+[warning] production_size: crates/task-dispatch/src/dispatcher/worker_finish.rs
+    2110 handwritten production lines (threshold 2000)
+
+3 active warning(s), 1 excepted

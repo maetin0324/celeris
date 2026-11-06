@@ -1,0 +1,40 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+pc-rollout e2e: projects {"target": "01M6Q8PSEHPW5BZEWDFVV5X9Q0", "other": "01M6Q8PSEMF32JWGEYVPKTM41X", "activate": 200}
+pc-rollout e2e: expect {"what": "target project is active", "ok": true}
+pc-rollout e2e: generation {"status": 200, "sha": "72cb3a3ec1188beb39b0028241c264607752f1cab6d6f7f42c95afc0d3864953"}
+pc-rollout e2e: expect {"what": "generation registered", "ok": true}
+pc-rollout e2e: preflight {"stage": "dry_run", "name": "dry_run-no-approval", "verdict": "no-go", "failed": ["G1r", "G6", "G7"]}
+pc-rollout e2e: expect {"what": "preflight without approval is no-go", "ok": true}
+pc-rollout e2e: preflight {"stage": "dry_run", "name": "dry_run", "verdict": "go", "failed": []}
+pc-rollout e2e: expect {"what": "dry_run preflight with observe approval is go", "ok": true}
+pc-rollout e2e: expect {"what": "apply dry_run (None)", "ok": true}
+pc-rollout e2e: expect {"what": "dry_run decisions all suppressed ({'suppressed': 1})", "ok": true}
+pc-rollout e2e: expect {"what": "dry_run: no roots and no CoS inputs", "ok": true}
+pc-rollout e2e: operator_raise {"status": 403, "code": "project_controller_mode_requires_human"}
+pc-rollout e2e: expect {"what": "operator cannot raise to shadow (403)", "ok": true}
+pc-rollout e2e: preflight {"stage": "shadow", "name": "shadow", "verdict": "go", "failed": []}
+pc-rollout e2e: expect {"what": "shadow preflight is go", "ok": true}
+pc-rollout e2e: expect {"what": "apply shadow (None)", "ok": true}
+pc-rollout e2e: restart {"how": "SIGKILL", "secs": 0.22}
+pc-rollout e2e: shadow_wakes {"results": {"1": 200, "10": 200}}
+pc-rollout e2e: expect {"what": "shadow monitor has no violations ([])", "ok": true}
+pc-rollout e2e: expect {"what": "monitor saw the restart", "ok": true}
+pc-rollout e2e: expect {"what": "shadow made decisions after the restart (2)", "ok": true}
+pc-rollout e2e: shadow_decisions {"rules": [["shadow", "suppressed", "pc/outcome-open"], ["shadow", "suppressed", "pc/outcome-open"], ["dry_run", "suppressed", "pc/outcome-open"]], "effects": {"suppressed": 3}}
+pc-rollout e2e: expect {"what": "mode stays shadow across SIGKILL", "ok": true}
+pc-rollout e2e: drift_other_project {"status": 200}
+pc-rollout e2e: expect {"what": "drift is refused by allowed_project_ids or detected (200, ['other_projects_changed'])", "ok": true}
+pc-rollout e2e: expect {"what": "canary with the observe approval is refused (stage canary needs an approval of kind effects (got observe))", "ok": true}
+pc-rollout e2e: preflight {"stage": "canary", "name": "canary", "verdict": "no-go", "failed": ["G3", "G5"]}
+pc-rollout e2e: expect {"what": "canary preflight is no-go on a short shadow report", "ok": true}
+pc-rollout e2e: expect {"what": "undo by operator turns the project off", "ok": true}
+pc-rollout e2e: expect {"what": "after undo no new decisions", "ok": true}
+pc-rollout e2e: expect {"what": "domain back to rust", "ok": true}
+{"schema": "celeris.pc-rollout/1", "kind": "e2e", "ok": true, "failed": [], "project": "01M6Q8PSEHPW5BZEWDFVV5X9Q0", "monitor": {"observed_secs": 91, "samples": 19, "violations": [], "decisions_delta": 2, "get_controller_ms_p50": 3.8, "get_controller_ms_max": 8.7, "rss_anon_kb_first": 19968, "rss_anon_kb_last": 20544, "restart_secs": 0.22}, "note": "非本番の一時 daemon（fake harness）での操作の予行。本番の go/no-go の根拠にはしない。"}

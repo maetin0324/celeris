@@ -722,6 +722,22 @@ impl SqliteStore {
         read_tx(self, |conn| thread_get_conn(conn, id))
     }
 
+    /// ADR 2026-11-06-cos-chat-launch-scaling: threads that have a queued input or an open run.
+    /// Reads the partial indexes only, so the cost follows the queued/open rows, not the
+    /// total number of threads or messages. Callers re-read each thread with `chat_thread_get`.
+    pub fn chat_thread_ids_with_queued_or_open_run(&self) -> Result<Vec<String>, ChatError> {
+        read_tx(self, |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT thread_id FROM chat_messages WHERE state='queued' AND role IN ('user','system') \
+                 UNION SELECT thread_id FROM chat_runs WHERE state IN ('running','stopping')",
+            )?;
+            let ids = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ids)
+        })
+    }
+
     /// D2 `GET /chat/threads/{t}`: thread, active run and the last event id in one read tx.
     pub fn chat_thread_detail(&self, id: &str) -> Result<ChatThreadDetailResponse, ChatError> {
         read_tx(self, |conn| {

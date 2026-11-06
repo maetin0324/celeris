@@ -718,12 +718,98 @@ async fn cos_chat_triage_relay_after_escalation_rejudges_covered_items_after_the
             )
             .expect("escalate")
     );
+    let builds = |f: &Fixture| {
+        f.d.cos_chat_launch
+            .as_ref()
+            .expect("launch")
+            .triage
+            .relay_inbox_builds
+    };
+    let settled = builds(&f);
+    // ADR 2026-11-06-cos-chat-launch-scaling D3-b: the pass builds the inbox of the candidates'
+    // tasks only, never the inbox of every task.
+    assert_eq!(settled.full, 0, "{settled:?}");
+    assert!(settled.scoped >= 1, "{settled:?}");
     for _ in 0..3 {
         f.tick();
         assert!(!f.join_inbox().await);
     }
     assert_eq!(f.inbox_runs(), 3);
     assert_eq!(f.triage_messages().len(), 2);
+    assert_eq!(
+        builds(&f),
+        settled,
+        "settled pairs build no inbox on later ticks"
+    );
+}
+
+/// ADR 2026-11-06-cos-chat-launch-scaling D3-b: an escalated item whose wait already closed, with a
+/// newer relay, costs at most one scoped inbox build; later ticks do not build the derived inbox for
+/// it again, and the inbox of every task is never built.
+#[tokio::test]
+async fn cos_chat_triage_relay_for_a_closed_wait_builds_the_inbox_once() {
+    let mut f = fixture(true);
+    f.tick();
+    let asked = f.question("closed", vec![]);
+    f.tick();
+    assert_eq!(f.inbox_runs(), 1);
+    let thread = f.inbox_thread().expect("thread");
+    let item = question_item(&f, asked);
+    assert!(
+        f.store
+            .cos_triage_resolve(&item, "escalated", None, Some("人に回す"), f.d.now_utc())
+            .expect("escalate")
+    );
+    assert!(f.join_inbox().await);
+    // The item now names a question that is not waiting (a task with no question raised).
+    let quiet = new_task(f.dir.path(), Check::Human, 0);
+    f.store.create_task(&quiet, vec![]).expect("task");
+    let conn = rusqlite::Connection::open(&f.db_path).expect("db");
+    conn.execute(
+        "UPDATE cos_inbox_items SET source_key=?1 WHERE id=?2",
+        rusqlite::params![format!("question-{}", quiet.id), item],
+    )
+    .expect("closed wait");
+    let said_at =
+        f.d.now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("rfc3339");
+    f.store
+        .chat_relay_post(
+            &thread,
+            &task_core::chat::ChatRelayRequest {
+                client_message_id: "relay-closed".into(),
+                text: "もう答えた".into(),
+                said_at,
+                task_ids: vec![],
+                expires_at: None,
+            },
+            "operator:claude-code",
+            f.d.now_utc(),
+        )
+        .expect("relay");
+    f.tick();
+    assert!(f.join_inbox().await, "the relay's own queued run");
+    let builds = |f: &Fixture| {
+        f.d.cos_chat_launch
+            .as_ref()
+            .expect("launch")
+            .triage
+            .relay_inbox_builds
+    };
+    f.tick();
+    let first = builds(&f);
+    for _ in 0..5 {
+        f.tick();
+        f.join_inbox().await;
+    }
+    let after = builds(&f);
+    assert_eq!(after.full, 0, "{after:?}");
+    assert!(
+        after.scoped <= 1,
+        "the closed wait is settled after one build: {after:?}"
+    );
+    assert_eq!(after, first, "no build on later ticks");
 }
 
 /// ADR 2026-10-30-cos-review-open-waits D4: a plan approval escalated while its task had an open

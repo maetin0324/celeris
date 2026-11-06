@@ -2,8 +2,9 @@
 //! relayed instruction that covers it arrives after its triage run started. The store picks the
 //! pairs (state = `cos_inbox_items.message_id` and `chat_messages.seq`); this pass maps each item
 //! to its tasks through the derived inbox and checks the relay's `task_ids`. No LLM, no judgment.
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use task_core::TaskId;
 use task_core::chat::relay_rejudge::RelayRejudge;
 use task_core::chat::{ChatMessage, ChatRelay};
 
@@ -27,7 +28,7 @@ impl CosChatLaunch {
             .store
             .cos_triage_relay_candidates(now)
             .map_err(|e| e.to_string())?;
-        let seen = &self.triage.rejudge_out_of_scope;
+        let seen = &self.triage.rejudge_settled;
         let fresh: Vec<_> = candidates
             .into_iter()
             .filter(|c| !self.running.contains_key(&c.thread_id))
@@ -40,12 +41,36 @@ impl CosChatLaunch {
         if fresh.is_empty() {
             return Ok(());
         }
-        let inbox = self.human_inbox_items(dispatcher, now)?;
+        // ADR 2026-11-06-cos-chat-launch-scaling D3: the derived inbox is built for the
+        // candidates' tasks only (the same items as the full inbox), so this pass does not scan
+        // every task of the store. A candidate whose key names no task falls back to the full
+        // inbox once.
+        let keyed: Vec<(_, Option<TaskId>)> = fresh
+            .into_iter()
+            .map(|c| {
+                let task = task_ops::human_inbox::item_task_id(self.store.as_ref(), &c.source_key);
+                (c, task)
+            })
+            .collect();
+        let inbox = if keyed.iter().all(|(_, task)| task.is_some()) {
+            let tasks: BTreeSet<TaskId> = keyed.iter().filter_map(|(_, task)| *task).collect();
+            self.triage.relay_inbox_builds.scoped += 1;
+            self.human_inbox_touching(dispatcher, now, &tasks)?.items
+        } else {
+            self.triage.relay_inbox_builds.full += 1;
+            self.human_inbox_items(dispatcher, now)?
+        };
         let by_id: HashMap<&str, _> = inbox.iter().map(|i| (i.id.as_str(), i)).collect();
         let mut per_thread: BTreeMap<String, Vec<RelayRejudge>> = BTreeMap::new();
-        for c in fresh {
-            // The wait closed (the person answered): the stale sweep resolves the item.
+        for (c, _) in keyed {
+            // The wait closed (the person answered): the stale sweep resolves the item. The pairs
+            // are settled so the next tick does not build the inbox for them again.
             let Some(item) = by_id.get(c.source_key.as_str()) else {
+                for m in &c.relays {
+                    self.triage
+                        .rejudge_settled
+                        .insert((c.item_id.clone(), m.id.clone()));
+                }
                 continue;
             };
             let tasks: HashSet<String> = item_tasks(item).map(|t| t.to_string()).collect();
@@ -55,7 +80,7 @@ impl CosChatLaunch {
                 .partition(|m| m.relay.as_ref().is_some_and(|r| covers(r, &tasks)));
             for m in outside {
                 self.triage
-                    .rejudge_out_of_scope
+                    .rejudge_settled
                     .insert((c.item_id.clone(), m.id.clone()));
             }
             if !inside.is_empty() {

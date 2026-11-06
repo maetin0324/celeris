@@ -582,13 +582,8 @@ write_changes_json "$STAGE/changes.json"
 # 作業チェックアウトが無くても（別のブランチにいても）昇格できる。実行ビットは `cp -p` で保つ。
 # `lib.sh` は `dirname "${BASH_SOURCE[0]}"` から自分の隣を読むだけなので、ここから source しても動く
 # （場所は全部 `CELERIS_CONFIG_DIR` / `CELERIS_STATE_DIR` 基準。`SD_REPO` を使うのは `release.sh` だけ）。
-mkdir -p "$STAGE/scripts"
-for sh in "$BUILD"/scripts/selfdeploy/*.sh; do
-  [ -f "$sh" ] || continue
-  cp -p "$sh" "$STAGE/scripts/$(basename "$sh")"
-done
-[ -x "$STAGE/scripts/promote.sh" ] || sd_die "bundled scripts/promote.sh is missing or not executable"
-[ -f "$STAGE/scripts/lib.sh" ] || sd_die "bundled scripts/lib.sh is missing"
+# verify.sh の helper（snapshot_db.py）も写す。必須の file が無ければ sd_die（sd_bundle_selfdeploy_scripts、lib.sh）。
+sd_bundle_selfdeploy_scripts "$BUILD/scripts/selfdeploy" "$STAGE/scripts"
 
 BUNDLE_JSON="{\"secs\": $(sd_secs_since "$BUNDLE_T0"), \"web_bundle_secs\": $WEB_BUNDLE_SECS, \"release_total_secs\": $(sd_secs_since "$RELEASE_T0")}"
 write_gate_json "$STAGE/gate.json"

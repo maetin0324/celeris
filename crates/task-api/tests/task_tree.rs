@@ -813,8 +813,9 @@ async fn task_tree_limits_report_usd_with_cache_priced_and_unknown_runs() {
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Done);
     env.seed(&task);
-    // claude-sonnet-5: input 2.0 / output 10.0 / cache read 0.2 / cache write 2.5（USD / 100 万 token）。
-    // 500k×2.0 + 100k×10.0 + 5M×0.2 + 400k×2.5 per 1M = 1.0 + 1.0 + 1.0 + 1.0 = 4.0 USD。
+    // claude-sonnet-5: input 2.0 / output 10.0 / cache read 0.2（USD / 100 万 token）。cache creation は予算では
+    // 1 時間 TTL の書き込み単価 4.0（input の 2 倍。ADR 2026-11-06-phase5-n0-usd-accounting-contract D3）。
+    // 500k×2.0 + 100k×10.0 + 5M×0.2 + 400k×4.0 per 1M = 1.0 + 1.0 + 1.0 + 1.6 = 4.6 USD。
     run_with_usage(
         &env,
         &task,
@@ -827,7 +828,7 @@ async fn task_tree_limits_report_usd_with_cache_priced_and_unknown_runs() {
     let resp = send(&app, get(&format!("/api/v1/tasks/{}/task-tree", task.id))).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let limits = resp.json()["limits"].clone();
-    close(&limits["usd"], 4.0);
+    close(&limits["usd"], 4.6);
     close(&limits["max_usd"], 5.0);
     assert_eq!(limits["usd_unknown_runs"], 1);
     assert_eq!(limits["tokens"], 600_000 + 2_000);

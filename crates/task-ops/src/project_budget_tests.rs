@@ -135,7 +135,8 @@ fn usage_fn(store: &SqliteStore, rates: &BudgetRates) -> BudgetUsage {
 fn cache_read_and_write_are_counted_at_their_own_prices() {
     let (_d, store, conn) = fixture();
     // 同じ input + output（5,500 token）でも、cache read 47 万 token の run は cache read の単価（0.2 USD/100 万）で
-    // 数えるので 0.094 USD 増えるだけ。cache write 47 万 token なら 2.5 USD/100 万で 1.175 USD 増える。
+    // 数えるので 0.094 USD 増えるだけ。cache write 47 万 token なら 1 時間 TTL の書き込み単価（input の 2 倍 = 4.0 USD/100 万。
+    // ADR 2026-11-06-phase5-n0-usd-accounting-contract D3）で 1.88 USD 増える。
     let few = r#"{"input_tokens":5000,"output_tokens":500}"#; // 0.01 + 0.005 = 0.015 USD
     let many_read = r#"{"input_tokens":5000,"output_tokens":500,"cache_read_tokens":470000}"#;
     let many_write = r#"{"input_tokens":5000,"output_tokens":500,"cache_creation_tokens":470000}"#;
@@ -154,7 +155,7 @@ fn cache_read_and_write_are_counted_at_their_own_prices() {
     };
     assert_eq!(cost_of(few), 15_000);
     assert_eq!(cost_of(many_read), 15_000 + 94_000);
-    assert_eq!(cost_of(many_write), 15_000 + 1_175_000);
+    assert_eq!(cost_of(many_write), 15_000 + 1_880_000);
     // 同じ上限でも判定が単価どおりに変わる（0.1 USD 上限: few は通り、many_read は止まる）。
     task_run(
         &conn,

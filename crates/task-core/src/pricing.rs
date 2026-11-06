@@ -241,6 +241,17 @@ impl Price {
             && self.cache_read_per_million.is_some()
             && self.cache_write_per_million.is_some()
     }
+
+    /// ADR 2026-11-06-phase5-n0-usd-accounting-contract D3: 予算判定の cache creation の単価。表の
+    /// `cache_write_per_million` は 5 分 TTL の値だが、Claude Code は 1 時間 TTL（input の 2 倍）で書き、`Usage` は
+    /// TTL を分けないので、大きい方に倒す（小さく数えない）。write の単価が無い行は `None`（費用不明）のまま。
+    fn budget_cache_write_per_million(&self) -> Option<f64> {
+        let write = self.cache_write_per_million?;
+        Some(match self.input_per_million {
+            Some(input) => write.max(2.0 * input),
+            None => write,
+        })
+    }
 }
 
 /// 1 run の予算判定用の費用。
@@ -289,7 +300,9 @@ fn bare_model(model: &str) -> &str {
 /// 1 run の予算判定用の費用。`usage` が無い、token が 1 件も無い、model が無い、単価が引けない
 /// （単価表に無い・使った token 種の単価が `None`・`budget_rates` にも無い）run は `Unknown`。
 /// 保存済みの `usage.cost_usd` は使わず、model と usage から今の単価表で再計算する。cache read は
-/// cache read の単価、cache creation は cache write の単価で数える。
+/// cache read の単価、cache creation は単価表の行なら 1 時間 TTL の書き込み単価（input の 2 倍）と
+/// cache write の単価の大きい方、`budget_rates` の行なら人が書いた cache write の単価で数える
+/// （ADR 2026-11-06-phase5-n0-usd-accounting-contract D3）。
 pub fn run_budget_cost(
     model: Option<&str>,
     usage: Option<&Usage>,
@@ -317,7 +330,7 @@ pub fn run_budget_cost(
             p.input_per_million,
             p.output_per_million,
             p.cache_read_per_million,
-            p.cache_write_per_million,
+            p.budget_cache_write_per_million(),
         ];
         let mut sum = 0.0;
         for (tokens, rate) in kinds.iter().zip(r) {
@@ -519,7 +532,48 @@ mod tests {
             Some(&usage(0, 0, 0, 1_000_000)),
             &rates,
         );
-        assert_eq!(write, RunBudgetCost::Known(2_500_000));
+        // cache creation は 1 時間 TTL の書き込み単価（input 2.0 の 2 倍 = 4.0）で数える（N0 ADR D3）。
+        assert_eq!(write, RunBudgetCost::Known(4_000_000));
+    }
+
+    /// N0 ADR D3: Claude Code は cache を 1 時間 TTL（input の 2 倍）で書くが、表の cache write は 5 分 TTL（1.25 倍）。
+    /// 予算判定は大きい方で数え、5 分 TTL の単価（小さい方）では数えない。表示・campaign 用の `estimate_cost_usd` は変えない。
+    #[test]
+    fn budget_cost_counts_cache_creation_at_one_hour_write_price() {
+        let rates = BudgetRates::default();
+        let u = usage(0, 0, 0, 1_000_000);
+        for (model, budget_micros, estimate_usd) in [
+            ("claude-opus-5-5", 8_000_000, 5.0),
+            ("claude-fable-5-1", 20_000_000, 12.5),
+            ("claude-sonnet-5-5", 4_000_000, 2.5),
+            ("claude-haiku-4-5", 2_000_000, 1.25),
+        ] {
+            assert_eq!(
+                run_budget_cost(Some(model), Some(&u), &rates),
+                RunBudgetCost::Known(budget_micros),
+                "{model}"
+            );
+            let est = estimate_cost_usd(model, &u).unwrap_or_else(|| panic!("{model}"));
+            assert!((est - estimate_usd).abs() < 1e-9, "{model}: {est}");
+        }
+        // cache write の単価が無い行（gpt-5）は従来どおり費用不明（2 倍の input で埋めない）。
+        assert_eq!(
+            run_budget_cost(Some("gpt-5"), Some(&u), &rates),
+            RunBudgetCost::Unknown
+        );
+        // budget_rates の行は人が書いた cache write の単価のまま（input 1.0 の 2 倍にしない）。
+        let local = BudgetRates::new([(
+            "qwen".to_string(),
+            BudgetRate {
+                cache_write_per_million: 0.5,
+                ..local_rate()
+            },
+        )])
+        .expect("valid");
+        assert_eq!(
+            run_budget_cost(Some("qwen3"), Some(&u), &local),
+            RunBudgetCost::Known(500_000)
+        );
     }
 
     #[test]

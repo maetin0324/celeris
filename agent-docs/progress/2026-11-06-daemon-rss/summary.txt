@@ -1,0 +1,4 @@
+after/samples-2.jsonl: dur=4.1min slope(t>=1min)=0.87MB/min rss_anon_end=86MB malloc_free_end=63MB ticks/min=18.9 slow_ticks=110 new_dispatch_n=6 new_dispatch_ms=[363, 370, 2799, 2899, 3398, 5736]
+after/samples.jsonl: dur=3.8min slope(t>=1min)=0.95MB/min rss_anon_end=90MB malloc_free_end=65MB ticks/min=22.1 slow_ticks=96 new_dispatch_n=7 new_dispatch_ms=[677, 821, 831, 872, 1250, 2684, 5769]
+before/samples-2.jsonl: dur=4.2min slope(t>=1min)=2.14MB/min rss_anon_end=130MB malloc_free_end=100MB ticks/min=11.1 slow_ticks=82 new_dispatch_n=7 new_dispatch_ms=[1469, 1579, 2264, 3728, 3757, 4759, 9351]
+before/samples.jsonl: dur=4.1min slope(t>=1min)=2.36MB/min rss_anon_end=133MB malloc_free_end=119MB ticks/min=24.6 slow_ticks=132 new_dispatch_n=10 new_dispatch_ms=[1254, 1637, 2931, 3513, 19135, 3599372, 3599563, 3610780, 3610884, 3622289]

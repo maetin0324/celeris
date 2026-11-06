@@ -113,6 +113,24 @@ pub(super) async fn tick_n(d: &mut Dispatcher, n: usize) {
     }
 }
 
+/// 出来事待ち: `pred` が真になるまで tick を駆動する。worker は実 scheduler で進むので、tick の回数は
+/// 失敗条件にせず、壁時計の保険（60 秒）だけで止める（高負荷で worker の終了が遅れても通る）。
+pub(super) async fn tick_until(d: &mut Dispatcher, mut pred: impl FnMut() -> bool) {
+    let started = std::time::Instant::now();
+    loop {
+        d.tick().unwrap();
+        d.infra_backoff.clear();
+        if pred() {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "condition not reached within 60s"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 /// 未配置: dispatch の前に `blocked(browser_prerequisite)` で止まり、adapter は呼ばれず、tick を重ねても
 /// infra_requeue も event の再追記も起きない。
 #[tokio::test]

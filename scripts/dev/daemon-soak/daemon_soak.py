@@ -44,6 +44,9 @@ PRODUCTION_PREFIXES = ("/local/celeris/state", "/local/celeris/data/db",
                        str(pathlib.Path.home() / ".local/celeris"), str(pathlib.Path.home() / ".config/celeris"))
 # 本番の観測（2026-11-04、P1-E の shadow。long_run_soak_summary.py と同じ値）: (最初の標本からの秒, VmRSS kB)。
 PROD_SAMPLES = [[0, 181820], [600, 391292], [1200, 505532], [1529, 588668]]
+# web UI 相当の読み取り（--get-interval）。応答の本文は捨てる。
+READ_GETS = ["/api/v1/inbox", "/api/v1/tasks", "/api/v1/chat/threads", "/api/v1/events?limit=200",
+             "/api/v1/projects", "/api/v1/projects/{pid}/tasks"]
 ARENA_HEAP = 64 << 20  # glibc の 64-bit の非 main arena の heap（HEAP_MAX_SIZE、64 MiB 境界に揃う）
 PM_KEYS = ("rss_kb", "rss_anon_kb", "rss_file_kb", "threads", "sqlite_memory_used", "sqlite_memory_highwater",
            "sqlite_pagecache_bytes", "sqlite_malloc_count", "malloc_arena", "malloc_mmap", "malloc_in_use",
@@ -339,6 +342,8 @@ rules = [{{ harness = "claude_code", required_capabilities = [] }}]
                and k not in ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID")}
         env.setdefault("RUST_LOG", "info")
         env["NO_COLOR"] = "1"
+        if self.a.malloc_trace:
+            env["CELERIS_TICK_MALLOC_TRACE"] = "1"
         logf = open(self.log, "ab")
         self.proc = subprocess.Popen([self.a.celeris, "--config", str(self.home / "config.toml"), "--log-format",
                                       "text", "--release", "soak"], stdout=logf, stderr=logf,
@@ -537,6 +542,8 @@ rules = [{{ harness = "claude_code", required_capabilities = [] }}]
         next_sample = next_task = time.time()
         next_chat = time.time() + a.chat_interval
         next_wake = time.time() + a.wake_interval
+        next_get = time.time() + a.get_interval if a.get_interval > 0 else float("inf")
+        n_get = 0
         n_task = n_chat = n_wake = 0
         failures = 0
         killed = a.kill_at <= 0
@@ -571,6 +578,19 @@ rules = [{{ harness = "claude_code", required_capabilities = [] }}]
                                 body=e.read().decode(errors="replace")[:300])
                     except (urllib.error.URLError, OSError, ValueError) as e:
                         self.op("load_error", kind=kind, error=str(e)[:200])
+                if now >= next_get:
+                    gets = a.get_paths.split(",") if a.get_paths else READ_GETS
+                    path = gets[n_get % len(gets)].replace("{pid}", self.pid)
+                    n_get += 1
+                    next_get += a.get_interval
+                    t_get = time.time()
+                    try:
+                        self.api("GET", path)
+                        self.op("get", path=path, ms=round((time.time() - t_get) * 1000))
+                    except urllib.error.HTTPError as e:
+                        self.op("get", path=path, status=e.code, ms=round((time.time() - t_get) * 1000))
+                    except (urllib.error.URLError, OSError, ValueError) as e:
+                        self.op("get", path=path, error=str(e)[:100])
                 if not killed and now - self.t0 >= a.kill_at:
                     killed = True
                     self.kill_and_restart()
@@ -813,6 +833,10 @@ def main(argv=None):
     r.add_argument("--task-interval", type=float, default=10.0)
     r.add_argument("--chat-interval", type=float, default=300.0)
     r.add_argument("--wake-interval", type=float, default=3600.0)
+    r.add_argument("--malloc-trace", action="store_true", help="daemon に tick 段別の mallinfo2 差分を log へ出させる")
+    r.add_argument("--get-paths", help="--get-interval で送る GET を、この path のコンマ区切り（{pid} は案件 id）に絞る")
+    r.add_argument("--get-interval", type=float, default=0.0,
+                   help="0 以外なら、web UI 相当の読み取り GET（inbox・tasks・threads・events）をこの秒数ごとに 1 本、順に送る")
     r.add_argument("--tick-ms", type=int, default=100)
     r.add_argument("--kill-at", type=int, default=0)
     r.add_argument("--harness-sleep", type=float, default=3.0)

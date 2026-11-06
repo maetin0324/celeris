@@ -18,8 +18,11 @@ fn pre_review_stale_state(events: &[Event]) -> (u32, Option<&Event>, Option<&Eve
                 count += 1;
                 last = Some(event);
             }
-            Event::Transitioned { .. }
-                if !matches!(events.get(i + 1), Some(Event::ReviewTargetAdvanced { .. })) =>
+            // 配送からの再 review は review_pass → done → rereview の循環になる。review_pass は
+            // 「合格を記録した」だけで stale の連鎖を終えないので数え直さない（ADR 2026-11-06-reuse-pass-delivery-review-run）。
+            Event::Transitioned { reason, .. }
+                if reason != "review_pass"
+                    && !matches!(events.get(i + 1), Some(Event::ReviewTargetAdvanced { .. })) =>
             {
                 count = 0;
                 last = None;
@@ -734,21 +737,24 @@ impl Dispatcher {
         // Delivery is part of every successful root-task review, independently of
         // whether the task requested an LLM reviewer. The worker run is a stable
         // fallback review identifier when no reviewer run exists.
+        // ADR 2026-11-06-reuse-pass-delivery-review-run: begin に渡す値と、直後に行を照合する値は同じ
+        // `review_id` を使う（reviewer の合格を再利用した回は reviewer_run が無く worker run id になる）。
+        let review_id = reviewer_run
+            .as_ref()
+            .map_or(run_id.clone(), |run| run.run_id.clone());
         task_ops::delivery::begin(
             self.store.as_ref(),
             &mut task,
             &self.config.workspace_roots,
             &self.config.delivery,
             &run_id,
-            reviewer_run
-                .as_ref()
-                .map_or(&run_id, |run| run.run_id.as_str()),
+            &review_id,
         )
         .map_err(DispatchError::from)?;
         for snapshot in &synced {
             if let Some(old) = self.store.delivery_get(task_id)?
                 && old.repo_id == snapshot.repo_id
-                && old.review_run == reviewer_run.as_ref().map_or("", |r| r.run_id.as_str())
+                && old.review_run == review_id
             {
                 if old.base != snapshot.target_sha || old.head != snapshot.reviewed_sha {
                     self.defer_stale_review(
@@ -781,7 +787,7 @@ impl Dispatcher {
             self.store.append_event(
                 task_id,
                 &Event::ReviewTargetSynced {
-                    review_run: reviewer_run.as_ref().map_or(&run_id, |r| &r.run_id).clone(),
+                    review_run: review_id.clone(),
                     repo_id: snapshot.repo_id,
                     target_ref: snapshot.target_ref.clone(),
                     target_sha: snapshot.target_sha.clone(),

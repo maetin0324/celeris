@@ -8,9 +8,9 @@ updated: 2026-11-06
 
 完了日: 2026-11-06
 
-結論: 暫定で B+C+D（mallopt）を採用した（ADR の「採用の結果」）。確保元の特定と、本番の傾きの再現、dispatch 遅延の比較は未達で、「未解決」と「提案」に残す。
+結論: B+C+D（mallopt）を採用した（ADR の「採用の結果」）。主な確保元は、tick では `tick_cos_chat_launch`（起動後の最初の数 tick で合計 +34.2 MB）、API では `GET /inbox` と `GET /projects`（1 秒に 1 回で arena が基準 100 MB の約 2 倍）と特定した（「確保元の特定（Run #18）」）。確保そのものを減らす直し（A）は task-ops と task-api にまたがるため「提案」に回した。本番の 930 MB に至る傾きは写しでは再現せず、写しの最大は 206 MB（条件は Run #18 の 3）。
 
-状態: 完了（暫定採用）。確保元の特定は未達。
+状態: 完了。
 
 ## 済んだこと
 - ADR `agent-docs/adr/2026-11-06-daemon-rss-malloc-arena.md`（切り分けの方法、候補 A〜F の比較、採否の基準）を実装より先に commit。
@@ -194,3 +194,11 @@ inbox・tasks・threads・events・projects を順に送った（応答が遅く
 ## 検査（Run #23、提出時の HEAD で実行）
 - `bash scripts/dev/test-affected.sh`: exit 0。前回 review で落ちた `test-ts-verify` の H 項目（`docs/api/script-host/host-v1.schema.json`）は、`bash scripts/dev/test-ts-verify.sh` 単独で 20 passed・0 failed。前回の失敗は host の高負荷（load average 35〜70）下の一時的なものと推定（原因は未確認）。この task の変更は docs/api・control-ts に触れていない。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+
+## 検査（Run #24、提出時の HEAD で実行）
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 7805 件 passed・22 skipped、`test-ts-verify: 20 passed, 0 failed`、末尾 `test-affected: script bundle SKIP: 0 件`）。
+- 前回の review で `test-affected` が exit 100 になった失敗は、CoS digest の比較試験（`crates/celeris/tests/script_compare_cos_digest.rs` の 2 回目の tick で world が変わる assert）だった。同じ試験を単独で再実行すると `task-dispatch` の `script_compare_cos_digest*` 10 件、`celeris --test script_compare_cos_digest` 9 件とも pass した。この branch はこの試験の経路を変えていない（`tune_malloc` は celeris binary の `main` だけ、`tick_steps` の計測は `CELERIS_TICK_MALLOC_TRACE=1` のときだけ働く）。負荷時の時間依存の失敗と推定するが、原因は未確認（「未解決」に追記）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check`: ok。
+
+## 未解決（追記）
+- `script_compare_cos_digest`（celeris の結合試験）が評価器の環境で 1 回落ち、単独では再現しなかった。原因は未確認。この task の範囲外として、再現したら別 task で扱うことを提案する。

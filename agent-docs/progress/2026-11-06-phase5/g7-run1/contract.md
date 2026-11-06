@@ -80,5 +80,15 @@ completed: 2026-11-06
 - C06 の at 134 の CoS run の行の state（running のままだったか、SIGTERM で interrupted になったか）は分からない。
 - stage の題の「13:21Z」は raw では確かめていない。C06 の公開承認の `created_at`（13:24:17.8Z）と ops の at 48 から、C06 の開始は 13:23:29Z ごろと逆算できる。
 
+## 変更
+- `phase 5: G7 1 回目の raw を取り込み、CoS run の起動境界・枠待ち・終了待機を ADR で決める` — raw 18 file と manifest、この contract、ADR 2026-11-06-cos-run-launch-accounting-and-drain、ADR 2026-11-05-phase4-cos-usage-empty-route の訂正の付記。コードは変えていない。
+
+## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
+- `test -s agent-docs/adr/2026-11-06-cos-run-launch-accounting-and-drain.md && sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」、check-doc-links の self-test 1 件 OK）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+
 ## 提案
 - ADR 2026-11-06-cos-run-launch-accounting-and-drain の実装（起動の印、枠待ち、driver の終了待機、judge の欄）は別の task で行う。2 回目の承認（`approval-run2.json`、max_usd 2.7）はこの修正が main に入った後の実行を前提にしている。

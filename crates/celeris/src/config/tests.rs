@@ -3149,7 +3149,7 @@ fn execution_tree_defaults_and_validation() {
 
     let cfg: Config = toml::from_str(&format!(
         "{base}[execution.tree]\nenabled = true\nmax_depth = 2\nmax_units_per_stage = 4\n\
-             max_tree_tokens = 5000000\napproval_near_limit_ratio = 0.75\n"
+             max_tree_usd = 5.5\napproval_near_limit_ratio = 0.75\n"
     ))
     .unwrap();
     cfg.validate().unwrap();
@@ -3158,7 +3158,7 @@ fn execution_tree_defaults_and_validation() {
     assert!(tree.enabled);
     assert_eq!(tree.max_depth, 2);
     assert_eq!(tree.max_units_per_stage, 4);
-    assert_eq!(tree.max_tree_tokens, Some(5_000_000));
+    assert_eq!(tree.max_tree_usd_micros, Some(5_500_000));
     assert_eq!(tree.approval_near_limit_permille, 750);
     assert_eq!(
         (
@@ -3198,7 +3198,9 @@ fn execution_tree_defaults_and_validation() {
         "max_depth = 4",
         "max_units_per_stage = 0",
         "max_tree_runs = 0",
-        "max_tree_tokens = 0",
+        "max_tree_usd = 0",
+        "max_tree_usd = -1.0",
+        "max_tree_usd = nan",
         "gate_depth_step = 11",
         "max_tree_leaves = 0",
         "max_tree_replans = 0",
@@ -3215,6 +3217,45 @@ fn execution_tree_defaults_and_validation() {
     }
     // 綴り間違いは設定エラー（`deny_unknown_fields`）。
     assert!(toml::from_str::<Config>(&format!("{base}[execution.tree]\nmax_detph = 3\n")).is_err());
+}
+
+/// ADR 2026-11-06-budget-usd-caps D4: 消した旧欄は読み込みエラーで、メッセージに旧欄名が出る。
+#[test]
+fn legacy_token_caps_are_rejected_with_the_field_name() {
+    let base = "db = \"t.sqlite3\"\n";
+    let err = toml::from_str::<Config>(&format!(
+        "{base}[execution.tree]\nmax_tree_tokens = 5000000\n" // LEGACY_REJECT
+    )) // LEGACY_REJECT
+    .expect_err("removed field")
+    .to_string();
+    assert!(err.contains("max_tree_tokens"), "{err}"); // LEGACY_REJECT
+    let err = toml::from_str::<Config>(&format!(
+        "{base}[project_controller.budget]\nmax_tokens_per_day = 1\n" // LEGACY_REJECT
+    ))
+    .expect_err("removed field")
+    .to_string();
+    assert!(err.contains("max_tokens_per_day"), "{err}"); // LEGACY_REJECT
+}
+
+/// `[budget_rates]` は top-level の表で、`Config::validate` が検査し、4 欄必須・単価表の上書きは拒否する。
+#[test]
+fn budget_rates_table_is_validated_by_config() {
+    let base = "db = \"t.sqlite3\"\n";
+    let four = "input_per_million = 0.1\noutput_per_million = 0.2\n\
+                cache_read_per_million = 0.01\ncache_write_per_million = 0.1\n";
+    let ok: Config = toml::from_str(&format!("{base}[budget_rates.\"qwen3\"]\n{four}")).unwrap();
+    ok.validate().unwrap();
+    assert_eq!(ok.budget_rates.len(), 1);
+    assert!(
+        toml::from_str::<Config>(&format!(
+            "{base}[budget_rates.\"qwen3\"]\ninput_per_million = 0.1\n"
+        ))
+        .is_err()
+    );
+    let over: Config =
+        toml::from_str(&format!("{base}[budget_rates.\"claude-sonnet\"]\n{four}")).unwrap();
+    let err = over.validate().unwrap_err().to_string();
+    assert!(err.contains("budget_rates"), "{err}");
 }
 
 /// 例の設定ファイルにコメントアウトされた `[accounts]` / `account_pool` の節も構文として妥当なことを確認する

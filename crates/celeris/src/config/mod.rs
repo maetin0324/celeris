@@ -258,6 +258,10 @@ pub struct Config {
     /// ADR 2026-11-04-project-controller A1: `[project_controller]`。無ければ controller は動かない。
     #[serde(default)]
     pub project_controller: Option<ProjectControllerConfig>,
+    /// ADR 2026-11-06-budget-usd-caps D2: `[budget_rates."<model の接頭辞>"]`。単価表に無い model（local の
+    /// llama.cpp・opencode など）の換算単価。予算の判定にだけ使う。無い model は費用不明で止まる。
+    #[serde(default)]
+    pub budget_rates: std::collections::BTreeMap<String, BudgetRateConfig>,
     // ---- ADR-0047（Phase 61）: 知識ベース。ここから ----
     /// ADR-0047 D1: `[knowledge]`。正本の置き場と、実効 profile が何も言わないときの既定のマウント。
     #[serde(default)]
@@ -621,6 +625,7 @@ impl Config {
         if let Some(pc) = &self.project_controller {
             pc.validate()?;
         }
+        budget_rates_from(&self.budget_rates)?;
         let registry = self.llm_route_registry()?;
         for (id, harness) in &self.harness_declarations {
             if let Some(namespace) = &harness.model_namespace {

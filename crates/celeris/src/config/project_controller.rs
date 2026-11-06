@@ -12,7 +12,7 @@ use super::ConfigError;
 /// enabled = true
 /// allowed_project_ids = ["01…"]
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectControllerConfig {
     #[serde(default)]
@@ -169,6 +169,35 @@ impl ProjectRetentionConfig {
     }
 }
 
+/// ADR 2026-11-06-budget-usd-caps D2: `[budget_rates."<model の接頭辞>"]`。単価表に無い model の換算単価
+/// （100 万 token あたりの USD。4 欄すべて必須）。
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetRateConfig {
+    pub input_per_million: f64,
+    pub output_per_million: f64,
+    pub cache_read_per_million: f64,
+    pub cache_write_per_million: f64,
+}
+
+/// `[budget_rates]` を検査して換算単価の集合にする。単価表で 4 種すべての単価がある接頭辞は `Err`。
+pub fn budget_rates_from(
+    rows: &std::collections::BTreeMap<String, BudgetRateConfig>,
+) -> Result<task_core::pricing::BudgetRates, ConfigError> {
+    task_core::pricing::BudgetRates::new(rows.iter().map(|(prefix, r)| {
+        (
+            prefix.clone(),
+            task_core::pricing::BudgetRate {
+                input_per_million: r.input_per_million,
+                output_per_million: r.output_per_million,
+                cache_read_per_million: r.cache_read_per_million,
+                cache_write_per_million: r.cache_write_per_million,
+            },
+        )
+    }))
+    .map_err(|e| ConfigError::Invalid(format!("[budget_rates] {e}")))
+}
+
 /// ```toml
 /// [project_controller.budget]
 /// max_cos_inputs_per_day = 10
@@ -176,11 +205,11 @@ impl ProjectRetentionConfig {
 /// max_no_progress_decisions = 5
 /// max_same_failure_repeats = 3
 /// max_invalid_decisions = 3
-/// max_tokens_per_day = 20000000
+/// max_usd_per_day = 100.0
 /// ttl_secs = 259200
 /// ```
 /// 0 は設定の誤り（上限なしにはしない。I12）。
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectBudgetConfig {
     #[serde(default = "b_cos")]
@@ -193,8 +222,9 @@ pub struct ProjectBudgetConfig {
     pub max_same_failure_repeats: u32,
     #[serde(default = "b_invalid")]
     pub max_invalid_decisions: u32,
-    #[serde(default = "b_tokens")]
-    pub max_tokens_per_day: u64,
+    /// 1 日（UTC）の換算費用の上限（USD 相当。有限で > 0。ADR 2026-11-06-budget-usd-caps D4）。
+    #[serde(default = "b_usd")]
+    pub max_usd_per_day: f64,
     #[serde(default = "b_ttl")]
     pub ttl_secs: u64,
 }
@@ -217,8 +247,15 @@ fn b_same() -> u32 {
 fn b_invalid() -> u32 {
     b().max_invalid_decisions
 }
-fn b_tokens() -> u64 {
-    b().max_tokens_per_day
+fn b_usd() -> f64 {
+    b().max_usd_per_day_micros as f64 / MICROS_PER_USD
+}
+
+const MICROS_PER_USD: f64 = 1_000_000.0;
+
+/// USD の小数を micro-USD に直す（四捨五入。上限の値に使う）。
+pub(super) fn usd_to_micros(usd: f64) -> u64 {
+    (usd * MICROS_PER_USD).round() as u64
 }
 fn b_ttl() -> u64 {
     b().ttl_secs
@@ -233,7 +270,7 @@ impl Default for ProjectBudgetConfig {
             max_no_progress_decisions: l.max_no_progress_decisions,
             max_same_failure_repeats: l.max_same_failure_repeats,
             max_invalid_decisions: l.max_invalid_decisions,
-            max_tokens_per_day: l.max_tokens_per_day,
+            max_usd_per_day: l.max_usd_per_day_micros as f64 / MICROS_PER_USD,
             ttl_secs: l.ttl_secs,
         }
     }
@@ -247,7 +284,7 @@ impl ProjectBudgetConfig {
             max_no_progress_decisions: self.max_no_progress_decisions,
             max_same_failure_repeats: self.max_same_failure_repeats,
             max_invalid_decisions: self.max_invalid_decisions,
-            max_tokens_per_day: self.max_tokens_per_day,
+            max_usd_per_day_micros: usd_to_micros(self.max_usd_per_day),
             ttl_secs: self.ttl_secs,
         }
     }
@@ -321,12 +358,17 @@ impl ProjectControllerConfig {
                 u64::from(b.max_same_failure_repeats),
             ),
             ("max_invalid_decisions", u64::from(b.max_invalid_decisions)),
-            ("max_tokens_per_day", b.max_tokens_per_day),
             ("ttl_secs", b.ttl_secs),
         ];
         if let Some((name, _)) = budget.iter().find(|(_, v)| *v == 0) {
             return Err(ConfigError::Invalid(format!(
                 "[project_controller.budget] {name} must be greater than 0"
+            )));
+        }
+        if !(b.max_usd_per_day.is_finite() && b.max_usd_per_day > 0.0) {
+            return Err(ConfigError::Invalid(format!(
+                "[project_controller.budget] max_usd_per_day must be a finite number greater than 0 (got {})",
+                b.max_usd_per_day
             )));
         }
         if let Some((name, _)) = positive.iter().find(|(_, v)| *v == 0) {
@@ -411,5 +453,69 @@ mod tests {
         assert_eq!(s.interval_secs, 3600);
         assert_eq!(s.archive_dir, std::path::PathBuf::from("/a"));
         assert!(toml::from_str::<ProjectControllerConfig>("[retention]\nunknown = 1").is_err());
+    }
+
+    /// ADR 2026-11-06-budget-usd-caps D4: 消した旧欄は読み込みエラー（メッセージに旧欄名が出る）。
+    #[test]
+    fn legacy_token_cap_is_rejected_on_load() {
+        // LEGACY_REJECT
+        let err =
+            toml::from_str::<ProjectControllerConfig>("[budget]\nmax_tokens_per_day = 20000000") // LEGACY_REJECT
+                .expect_err("removed field")
+                .to_string();
+        assert!(err.contains("max_tokens_per_day"), "{err}"); // LEGACY_REJECT
+    }
+
+    #[test]
+    fn max_usd_per_day_default_is_100_and_must_be_finite_positive() {
+        let c: ProjectControllerConfig = toml::from_str("").unwrap();
+        assert_eq!(c.budget.max_usd_per_day, 100.0);
+        assert_eq!(c.settings().budget.max_usd_per_day_micros, 100_000_000);
+        let ok: ProjectControllerConfig =
+            toml::from_str("[budget]\nmax_usd_per_day = 12.34").unwrap();
+        assert!(ok.validate().is_ok());
+        assert_eq!(ok.settings().budget.max_usd_per_day_micros, 12_340_000);
+        for bad in ["0", "-1.0", "nan", "inf"] {
+            let c: ProjectControllerConfig =
+                toml::from_str(&format!("[budget]\nmax_usd_per_day = {bad}")).unwrap();
+            let err = c.validate().unwrap_err().to_string();
+            assert!(err.contains("max_usd_per_day"), "{bad}: {err}");
+        }
+    }
+
+    fn rates(toml_src: &str) -> Result<task_core::pricing::BudgetRates, ConfigError> {
+        let m: std::collections::BTreeMap<String, BudgetRateConfig> =
+            toml::from_str(toml_src).unwrap();
+        budget_rates_from(&m)
+    }
+
+    #[test]
+    fn budget_rates_need_all_four_fields_and_reject_priced_table_rows() {
+        let four = "input_per_million = 0.1\noutput_per_million = 0.2\n\
+                    cache_read_per_million = 0.01\ncache_write_per_million = 0.1\n";
+        // 単価表に無い local model は書ける。
+        assert!(rates(&format!("[\"qwen3\"]\n{four}")).is_ok());
+        // 4 欄のうち 1 つでも欠ければ読み込みエラー。
+        assert!(
+            toml::from_str::<std::collections::BTreeMap<String, BudgetRateConfig>>(
+                "[\"qwen3\"]\ninput_per_million = 0.1\noutput_per_million = 0.2\n\
+                 cache_read_per_million = 0.01\n"
+            )
+            .is_err()
+        );
+        // 未知の欄は読み込みエラー。
+        assert!(
+            toml::from_str::<std::collections::BTreeMap<String, BudgetRateConfig>>(&format!(
+                "[\"qwen3\"]\n{four}extra = 1\n"
+            ))
+            .is_err()
+        );
+        // 負・NaN は読み込みエラー。
+        assert!(rates("[\"qwen3\"]\ninput_per_million = -1.0\noutput_per_million = 0.2\ncache_read_per_million = 0.01\ncache_write_per_million = 0.1\n").is_err());
+        // 単価表で 4 種すべての単価がある行に一致する接頭辞は読み込みエラー。
+        let err = rates(&format!("[\"claude-sonnet\"]\n{four}"))
+            .expect_err("table row must not be overridden")
+            .to_string();
+        assert!(err.contains("budget_rates"), "{err}");
     }
 }

@@ -76,7 +76,7 @@ controller は event（root の終了・失敗・人の操作など）で起き�
 |---|---|---|
 | 同じ失敗 | root が同じ理由で `max_same_failure_repeats`（3）回失敗した（最後の人の操作の後で数える） | `same_failure:<署名>` |
 | TS の案の検証落ち | 判定の案が `max_invalid_decisions`（3）回続けて検証に落ちた | `invalid_proposals:<判断 id>` |
-| 1 日の予算（UTC） | CoS 入力 `max_cos_inputs_per_day`（10）、起票 `max_roots_per_day`（5）、token `max_tokens_per_day`（20000000） | `budget:<種類>:<日>` |
+| 1 日の予算（UTC） | CoS 入力 `max_cos_inputs_per_day`（10）、起票 `max_roots_per_day`（5）、換算費用 `max_usd_per_day`（100.0。USD 相当） | `budget:<種類>:<日>` |
 | TTL | phase `waiting` で外からの応答（cron 以外の wake）が `ttl_secs`（259200 秒＝3 日）来ない | `ttl:<最後の入力の時刻>` |
 | 停滞 | 進捗なしの効果つきの判断が `max_no_progress_decisions`（5）回続いた | `no_progress:<epoch>` |
 
@@ -86,10 +86,10 @@ controller は event（root の終了・失敗・人の操作など）で起き�
   - 人への問い: 問いの key で許可するか、提案を断る（`…/dismiss`）。依頼文の誤りの問いは依頼文を直しても解ける。
   - 同じ失敗: 人が案件を操作するか、失敗した root 自身が完了する。解けた後にまた同じ失敗が上限まで続くと、新しい通知を 1 回出して止まる。
   - TTL: 外からの応答（cron・CoS の要約の更新は数えない）。
-  - 1 日の予算: 次の UTC 00:00 を期限にし（`next_wake_at`）、その日の使用量が危険な超過でなく、直近 7 日の自動の再開が 3 回未満で、起票の予算なら有効な起票の許可があるときだけ再評価する。危険な超過（token が上限の 2 倍以上など）・回数切れ・許可なしでは、通知（`budget_hold`）を 1 回出して止まったままにする。
+  - 1 日の予算: 次の UTC 00:00 を期限にし（`next_wake_at`）、その日の使用量が危険な超過でなく、直近 7 日の自動の再開が 3 回未満で、起票の予算なら有効な起票の許可があるときだけ再評価する。危険な超過（換算費用が上限の 2 倍以上、または費用不明の run があるなど）・回数切れ・許可なしでは、通知（`budget_hold`）を 1 回出して止まったままにする。
   - TS の案の検証落ち・判定や効果の失敗・案件の一時停止・中止は自動で解けない。人が原因を確かめてから案件の画面で controller の mode を置き直す（`PUT /api/v1/projects/{id}/controller`）。
 - 人の回答を待つだけの案件は、cron の照合で毎時は評価しない。人の回答は wake で届き、取りこぼしの照合は 1 日に 1 回（`next_wake_at`）。
-- 日次 token は案件の task run と案件 CoS の chat run の input + output を合計する（cache は加えない）。案件 CoS の起動数は `BudgetUsage.chat_starts` で数える。controller の CoS 入力数と chat 起動数のいずれかが `max_cos_inputs_per_day` に達したら止まる。今日の使用量は `GET /api/v1/projects/{id}/controller` の `budget_today` と案件の画面の「今後の作業」に出る。
+- 日次の費用は案件の task run と案件 CoS の chat run の使用量を、静的単価表（`task_core::pricing`）で USD 相当に換算して合計する（cache read・cache write はそれぞれの単価で数える）。単価表に無い model（local の llama.cpp・opencode の Qwen など）と使用量の記録が無い終わった run は「費用不明」で、1 件でもあれば上限に達したものとして止める（0 USD としては数えない）。local model を数えるには config に `[budget_rates."<model の接頭辞>"]` を書く（`input_per_million`・`output_per_million`・`cache_read_per_million`・`cache_write_per_million` の 4 欄すべて必須。単価表で 4 種とも単価がある model の接頭辞は読み込みエラー）。木の上限は `[execution.tree] max_tree_usd`（任意）。判断は ADR `2026-11-06-budget-usd-caps`。案件 CoS の起動数は `BudgetUsage.chat_starts` で数える。controller の CoS 入力数と chat 起動数のいずれかが `max_cos_inputs_per_day` に達したら止まる。今日の使用量は `GET /api/v1/projects/{id}/controller` の `budget_today` と案件の画面の「今後の作業」に出る。
 - brief の内容変更は保存と同じ transaction で wake を書き、変更前の判断を入力 epoch で無効にする。同じ内容の再送では wake を増やさない。brief の更新だけで blocked・paused・cancelled は解除しない。
 - 値を変えるときは本番 config の `[project_controller.budget]` を人が書き換え、daemon を再起動する（この依頼では実行しない）。0 は設定の誤りで、
   daemon は起動しない。

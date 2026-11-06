@@ -513,3 +513,97 @@ fn project_retention_passes_at_the_same_time_never_overwrite_archives() {
         "no archive was overwritten"
     );
 }
+
+/// 付記（id の使い直し）: 3 表とも、表の最大 id の行は保持の期間より古くても消さない。`script_compare_log` の id は
+/// AUTOINCREMENT の無い `INTEGER PRIMARY KEY`（0104）なので、最大 id の行を消すと次の INSERT が同じ id を使い直し、
+/// `id > cursor` だけを読む script guard の見回りが新しい行を見落とす。
+#[test]
+fn project_retention_keeps_max_id_rows_so_compare_ids_are_not_reused() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    // compare: 全行が古く、TS 適用でない。
+    for i in 0..10 {
+        compare(&store, i, "rust");
+    }
+    // wake: 全行が古い消費済みの cron。
+    for i in 0..10 {
+        wake(
+            &store,
+            "p1",
+            &format!("cron:a:{i}"),
+            "cron",
+            i * 60,
+            Some("d0"),
+        );
+    }
+    // 判断: 全行が古い効果 none。最大 id（"z-max"）は created_at が新しい順の窓の外にある（窓では守られない）。
+    decision(&store, "p1", "z-max", 5, "none", "pc/ok");
+    for i in 0..10 {
+        decision(&store, "p1", &format!("d{i:04}"), 100 + i, "none", "pc/ok");
+    }
+    let max = |sql: &str| count(&store, sql);
+    let cmp_max = max("SELECT MAX(id) FROM script_compare_log");
+    let wake_max = max("SELECT MAX(id) FROM project_wakes");
+    let stats = store.retention_stats().unwrap();
+    assert_eq!(stats.compare_log_gc_eligible, 9, "{stats:?}");
+    assert_eq!(stats.wakes_consumed_cron, 9, "{stats:?}");
+    assert_eq!(stats.compare_log_ts_applied, 0);
+
+    let dir = tempfile::tempdir().unwrap();
+    let policy = RetentionPolicy {
+        decision_keep_latest: 1,
+        ..policy()
+    };
+    let r = store
+        .retention_gc(&policy, now(), dir.path(), "system:test")
+        .unwrap();
+    let by = |t: &str| r.tables.iter().find(|x| x.table == t).unwrap().deleted;
+    assert_eq!(by("script_compare_log"), 9);
+    assert_eq!(by("project_wakes"), 9);
+    // 判断 11 件のうち、最初（z-max の created_at=5 が最初でもある）・新しい 1 件（d0009）を残す。
+    // z-max は最初の判断でもあるので、最大 id の守りだけを見るため別の案件でも確かめる（下）。
+    assert_eq!(by("project_controller_decisions"), 9);
+    assert_eq!(
+        max(
+            "SELECT COUNT(*) FROM script_compare_log WHERE id = (SELECT MAX(id) FROM script_compare_log)"
+        ),
+        1
+    );
+    assert_eq!(max("SELECT MAX(id) FROM script_compare_log"), cmp_max);
+    assert_eq!(max("SELECT MAX(id) FROM project_wakes"), wake_max);
+    assert_eq!(
+        max("SELECT COUNT(*) FROM project_controller_decisions WHERE id = 'z-max'"),
+        1
+    );
+    let stats = store.retention_stats().unwrap();
+    assert_eq!(stats.compare_log_gc_eligible, 0);
+    assert_eq!(stats.wakes_consumed_cron, 0);
+
+    // 次の compare の id は GC の前の最大 id より大きい（使い直さない）。
+    compare(&store, 41 * DAY, "rust");
+    assert_eq!(max("SELECT MAX(id) FROM script_compare_log"), cmp_max + 1);
+
+    // 判断の最大 id の守りだけを見る: 案件 p2 の最初でも新しい窓でもない行が表の最大 id。
+    let store = SqliteStore::open_in_memory().unwrap();
+    for i in 0..10 {
+        decision(&store, "p2", &format!("d{i:04}"), i, "none", "pc/ok");
+    }
+    decision(&store, "p2", "z-max", 5, "none", "pc/ok");
+    let r = store
+        .retention_gc(&policy, now(), dir.path(), "system:test")
+        .unwrap();
+    let deleted = r
+        .tables
+        .iter()
+        .find(|x| x.table == "project_controller_decisions")
+        .unwrap()
+        .deleted;
+    // 11 件 − 最初（d0000）− 新しい 1 件（d0009）− 最大 id（z-max）。
+    assert_eq!(deleted, 8);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM project_controller_decisions WHERE id IN ('d0000', 'd0009', 'z-max')"
+        ),
+        3
+    );
+}

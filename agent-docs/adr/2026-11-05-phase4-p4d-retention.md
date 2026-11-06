@@ -28,7 +28,18 @@
   `max_rows_per_pass` 行まで消す。`VACUUM` はしない（file を縮めるのは人の操作）。
 - D7 可視化: `GET /api/v1/projects/{id}/controller` の `summary.retention`（案件の行数）と画面の `controller-retention`。
   表全体の数は `SqliteStore::retention_stats`（試験・計測が使う）。
-- D8 migration は 0117。0115（P4-B）・0116（未使用）は `RESERVED_VERSIONS` に入れ、取り込みで本物が入ったら外す。
+- D8 migration は 0117。0116（P4-C が予約し未使用）は `RESERVED_VERSIONS` に入れる。0115（P4-B）は main に取り込まれ、予約から外した。
+- D9 （付記 2026-11-06、id の使い直し）GC は 3 表とも表の最大 id の行を消さない（候補の SELECT と DELETE の付け直しの条件に
+  `id < (SELECT MAX(id) FROM <表>)`）。`script_compare_log` の id は AUTOINCREMENT の無い `INTEGER PRIMARY KEY`（0104）で、
+  最大 id の行を消すと次の INSERT が同じ id を使い直す。script guard の見回り（`crates/celeris/src/daemon/script_guard.rs` の
+  `sweep`）は process の中の `log_cursor` より大きい id だけを `script_compare_log_after` で読むので、使い直した id の新しい行
+  （検証の外の副作用の違反を含む）を見落とし、全体の停止が起きない。起きる条件は、GC が有効で、最新の compare の記録が
+  `compare_keep_secs` より古く TS 適用でないとき（digest が長く compare を書かなかった後の再開など）。最大 id の行を残せば、
+  次の id は必ず GC の前の最大 id より大きい。wake（AUTOINCREMENT）と判断（TEXT の id）は使い直しが起きないが、同じ条件に
+  そろえる。`retention_stats` の消せる行の数（`wakes_consumed_cron`・`compare_log_gc_eligible`）も同じ条件で数える。
+  trigger にはこの条件を足さない（migration を増やさない。GC の DELETE 文の条件が守る）。
+  試験: `project_retention_keeps_max_id_rows_so_compare_ids_are_not_reused`（task-core）、
+  `script_guard_sweep_sees_violation_appended_after_retention_gc`（celeris。条件を外すと見回りが止めずに落ちることを確かめた）。
 
 ## 結果
 - 30 日分・100 万行（694 案件）の計測で、wake 582,960 → 199,872 行、判断 582,960 → 235,960 行、効果のある判断と最後の判断は全部残った。

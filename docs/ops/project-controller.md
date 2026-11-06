@@ -161,6 +161,10 @@ controller は event（root の終了・失敗・人の操作など）で起き�
 | `project_controller_decisions` | 効果 `none` で `decision_keep_secs`（既定 30 日）より古く、案件ごとの新しい `decision_keep_latest`（既定 256）件の外にあるもの | pending・applied・suppressed・failed の判断、案件の最後の判断（`last_decision_id`）、案件の最初の判断、`pc/resume/%`・`pc/authority-required` の判断 |
 | `script_compare_log` | TS が適用していない行（`applied_by` ≠ `ts`）で `compare_keep_secs`（既定 30 日）より古いもの | TS が適用した行（見回りの違反の根拠） |
 
+どの表も、表の最大 id の行は保持の期間より古くても消さない。`script_compare_log` の id は AUTOINCREMENT の無い
+`INTEGER PRIMARY KEY` なので、最大 id の行を消すと次の行が同じ id を使い直し、script guard の見回り（読み終えた id より後だけを
+読む）が新しい違反の行を見落とす。最大 id の行を残すと、次の id は GC の前の最大 id より必ず大きい（ADR D9）。
+
 config の例（`archive_dir` は絶対 path で必須。無い・相対なら起動時の設定エラー）:
 
 ```toml

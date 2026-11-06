@@ -24,10 +24,20 @@ use crate::project_retention::{
 const DECISION_GUARD: &str = "effect_state = 'none' AND validation NOT LIKE 'pc/resume/%' \
      AND validation <> 'pc/authority-required' \
      AND NOT EXISTS (SELECT 1 FROM project_controller_state s \
-                     WHERE s.last_decision_id = project_controller_decisions.id)";
+                     WHERE s.last_decision_id = project_controller_decisions.id) \
+     AND project_controller_decisions.id < (SELECT MAX(m.id) FROM project_controller_decisions m)";
 /// wake の DELETE の条件（0115 が表を作り直すので trigger は置かない。ここが唯一の守り）。
-const WAKE_GUARD: &str = "consumed_by IS NOT NULL AND kind = 'cron'";
-const COMPARE_GUARD: &str = "COALESCE(json_extract(json, '$.applied_by'), '') <> 'ts'";
+///
+/// 3 表とも「表の最大 id の行ではない」を条件に含め、最大 id の行を常に残す。`script_compare_log` の id は
+/// AUTOINCREMENT の無い `INTEGER PRIMARY KEY`（0104）なので、最大 id の行を消すと次の INSERT が同じ id を
+/// 使い直し、`id > cursor` だけを読む script guard の見回り（`script_compare_log_after`）が新しい行を
+/// 見落とす。wake（AUTOINCREMENT）と判断（TEXT の id）は使い直しが起きないが、同じ形にそろえる。
+const WAKE_GUARD: &str = "consumed_by IS NOT NULL AND kind = 'cron' \
+     AND project_wakes.id < (SELECT MAX(m.id) FROM project_wakes m)";
+/// TS が適用した compare の記録（見回りの違反の根拠）。GC は消さない。
+const COMPARE_TS_APPLIED: &str = "COALESCE(json_extract(json, '$.applied_by'), '') = 'ts'";
+const COMPARE_GUARD: &str = "COALESCE(json_extract(json, '$.applied_by'), '') <> 'ts' \
+     AND script_compare_log.id < (SELECT MAX(m.id) FROM script_compare_log m)";
 
 #[cfg(test)]
 thread_local! {
@@ -376,7 +386,10 @@ impl SqliteStore {
                 decisions_total: n("SELECT COUNT(*) FROM project_controller_decisions")?,
                 compare_log_total: n("SELECT COUNT(*) FROM script_compare_log")?,
                 compare_log_ts_applied: n(&format!(
-                    "SELECT COUNT(*) FROM script_compare_log WHERE NOT ({COMPARE_GUARD})"
+                    "SELECT COUNT(*) FROM script_compare_log WHERE {COMPARE_TS_APPLIED}"
+                ))?,
+                compare_log_gc_eligible: n(&format!(
+                    "SELECT COUNT(*) FROM script_compare_log WHERE {COMPARE_GUARD}"
                 ))?,
                 page_size: n("PRAGMA page_size")?,
                 page_count: n("PRAGMA page_count")?,

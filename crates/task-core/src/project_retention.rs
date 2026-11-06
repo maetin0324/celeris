@@ -107,6 +107,7 @@ pub struct RetentionRun {
 pub struct RetentionStats {
     pub wakes_total: u64,
     pub wakes_pending: u64,
+    /// GC の条件に当たる wake（消費済みの cron。表の最大 id の行は除く。保持の期間は見ない）。
     pub wakes_consumed_cron: u64,
     pub decisions_total: u64,
     /// `effect_state` ごとの判断の数。
@@ -114,6 +115,8 @@ pub struct RetentionStats {
     pub compare_log_total: u64,
     /// TS が適用した compare の記録（GC は消さない）。
     pub compare_log_ts_applied: u64,
+    /// GC の条件に当たる compare の記録（TS 適用でなく、表の最大 id の行でもない。保持の期間は見ない）。
+    pub compare_log_gc_eligible: u64,
     pub page_size: u64,
     pub page_count: u64,
     /// 消した行の空き page（file は縮まず、次の書き込みが使う）。

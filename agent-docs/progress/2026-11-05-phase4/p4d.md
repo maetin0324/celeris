@@ -17,7 +17,7 @@ ADR は `agent-docs/adr/2026-11-05-phase4-p4d-retention.md`、運用は `docs/op
 - 既定は無効（`[project_controller.retention] enabled = false`）。本番の config・release・systemd は触っていない。
 
 ## 実装
-- migration 0117（`crates/task-core/migrations/0117_project_retention.sql`）: `project_retention_permit`、追記専用の `project_retention_runs`、`project_controller_state(last_decision_id)` の部分索引、判断と compare の記録の削除の trigger の置き換え。0115（P4-B、main 未取り込み）・0116（未使用）は `RESERVED_VERSIONS` に入れた。SCHEMA_VERSION 117。
+- migration 0117（`crates/task-core/migrations/0117_project_retention.sql`）: `project_retention_permit`、追記専用の `project_retention_runs`、`project_controller_state(last_decision_id)` の部分索引、判断と compare の記録の削除の trigger の置き換え。0116（P4-C の予約、未使用）は `RESERVED_VERSIONS` に入れた。0115（P4-B）は main に取り込まれ、予約は 116 だけ。SCHEMA_VERSION 117。
 - store: `crates/task-core/src/store/project_retention.rs`（`retention_gc`・`retention_stats`・`retention_project_counts`）、型は `crates/task-core/src/project_retention.rs`。
 - dispatcher: `crates/task-dispatch/src/dispatcher/project_retention.rs`（`tick_project_retention`。`tick_project_controller` の後、`interval_secs` ごと）。`dispatcher.rs` の行は増やしていない。
 - config: `crates/celeris/src/config/project_controller.rs` の `[project_controller.retention]`（`enabled` なら絶対 path の `archive_dir` が必須、0 は設定の誤り）。
@@ -107,7 +107,8 @@ command（release build の test binary を直接起こす。`$BIN` は `cargo t
 ## 未解決
 - 本番の有効化と archive の置き場の容量（100 万行で約 270 MB）の決定は人。古い archive を消す仕組みは無い。
 - `VACUUM` は人の操作（daemon を止める）。GC は file を縮めない。
-- P4-B の 0115 を取り込むときは `RESERVED_VERSIONS` から 115 を外す。0115 は `project_wakes` を作り直すが、wake の表には trigger を置いていないので守りは変わらない。
+- （解消）0115（P4-B）は main に取り込み済みで、`RESERVED_VERSIONS` は 116 だけ（integration-repair-1 で外した）。0115 は `project_wakes` を作り直すが、wake の表には trigger を置いていないので守りは変わらない。
+- trigger は最大 id の守りを持たない（GC の DELETE 文の条件だけが守る）。手で打つ DELETE は許可の行が無いので trigger が拒む。
 - `retention_stats` は表全体の `COUNT(*)` で 100 万行で約 0.1〜0.25 秒。API には出していない（案件ごとの数だけ summary に出す）。
 
 ## 次の gate
@@ -122,3 +123,14 @@ command（release build の test binary を直接起こす。`$BIN` は `cargo t
 - 原因: main が「phase4 cos-usage」の 2 commit だけ進み、task branch が main の子孫でなくなった。
 - 対処: main へ rebase（衝突なし）。コード変更なし。
 - 検査（提出時の HEAD で実行）: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace -- -D warnings` exit 0、`bash scripts/dev/test-affected.sh` exit 0（3440 passed、10 skipped）、`git merge-base --is-ancestor main HEAD` exit 0。
+
+## 修正: GC が最大 id の行を消して compare の id が使い直される（fix-compare-id-reuse）
+- 欠陥（reviewer の指摘、確認済み）: `script_compare_log` の id は AUTOINCREMENT の無い `INTEGER PRIMARY KEY`（0104）。GC が最大 id の行を消すと次の INSERT が同じ id を使い直し、script guard の `sweep`（`log_cursor` より大きい id だけを `script_compare_log_after` で読む）が新しい違反の行を見落として全体の停止が起きなかった。条件は GC が有効で、最新の compare の記録が `compare_keep_secs` より古く TS 適用でないとき。
+- 直し: `crates/task-core/src/store/project_retention.rs` の 3 表の条件（`WAKE_GUARD`・`DECISION_GUARD`・`COMPARE_GUARD`）に「表の最大 id の行ではない」（`id < (SELECT MAX(id) FROM <表>)`）を足した。候補の SELECT と DELETE の付け直しの両方が同じ定数を使う。`retention_stats` の `wakes_consumed_cron` は同じ条件で数え、`compare_log_gc_eligible`（消せる compare の行）を足した。`compare_log_ts_applied` は TS 適用の条件だけで数える（前は「GC の条件の否定」で数えていた）。
+- 試験:
+  - `project_retention_keeps_max_id_rows_so_compare_ids_are_not_reused`（task-core）: 全行が保持の期間より古く TS 適用でない状態で GC し、3 表とも最大 id の行が残ること、次の compare の id が GC の前の最大 id ＋1 になること、判断では最初・新しい窓のどちらでもない最大 id の行が残ることを確かめる。
+  - `script_guard_sweep_sees_violation_appended_after_retention_gc`（celeris、`script_guard_stop_tests.rs`）: cursor を GC の前の最大 id に置いた見回りが、GC の後に入った違反の行を拾って全体を止めることを確かめる。`COMPARE_GUARD` の最大 id の条件を一時的に外すと、この試験は `halted after gc` で落ちた（exit 100、見回りが止めない）。条件を戻して passed。
+- 文書: ADR に D9（付記 2026-11-06）、`docs/ops/project-controller.md` の「記録の保持と GC（P4-D）」に同じ扱いを書いた。ADR D8 と本進捗の 0115・RESERVED の古い記述を現状（予約は 116 だけ）に直した。
+- コマンドと exit（提出時の HEAD で実行）:
+  - `cargo nextest run -p task-core project_retention_`: exit 0、7 passed。
+  - `cargo nextest run -p celeris script_guard_sweep_`: exit 0、2 passed。

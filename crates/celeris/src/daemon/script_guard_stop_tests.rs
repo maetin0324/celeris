@@ -758,3 +758,50 @@ fn script_guard_sweep_reads_compare_log_incrementally() {
     assert!(reason.contains("run run-1601"), "{reason}");
     assert_eq!(mode(&store, ScriptDomain::LaneRules).0, ScriptMode::Rust);
 }
+
+/// P4-D 付記（id の使い直し）: 保持の GC が古い compare の記録を消した後でも、見回りは GC の後に入った検証の外の
+/// 副作用を拾って止める。cursor は GC の前の最大 id にある。GC が最大 id の行を消すと、次の INSERT が同じ id を
+/// 使い直して `id > cursor` の読みから漏れる（AUTOINCREMENT の無い `INTEGER PRIMARY KEY`、0104）。
+#[test]
+fn script_guard_sweep_sees_violation_appended_after_retention_gc() {
+    use task_core::project_retention::RetentionPolicy;
+    let store = SqliteStore::open_in_memory().expect("store");
+    let g = generation(&store, 'd');
+    canary(&store, ScriptDomain::LaneRules, &g);
+    let mut state = GuardState::default();
+    for i in 0..5 {
+        let r = digest_record(CosDigestAppliedBy::Rust, &[], &format!("old-{i}"));
+        assert!(store.script_compare_log_append(&r, at(i)).expect("append"));
+    }
+    let out = sweep(&store, &mut state, at(10)).expect("sweep");
+    assert_eq!(out.halted, None);
+    let before_max = state.log_cursor;
+    assert!(before_max > 0);
+
+    // 全行が compare_keep_secs（30 日）より古く TS 適用でない状態で GC。
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gc_at = at(31 * 86_400);
+    let report = store
+        .retention_gc(&RetentionPolicy::default(), gc_at, dir.path(), GUARD)
+        .expect("gc");
+    let deleted = report
+        .tables
+        .iter()
+        .find(|t| t.table == "script_compare_log")
+        .expect("table")
+        .deleted;
+
+    // GC の後の検証の外の副作用。id は GC の前の最大 id より大きく、見回りが拾って止める。
+    let bad = digest_record(CosDigestAppliedBy::Ts, &["key_mismatch"], "after-gc");
+    assert!(
+        store
+            .script_compare_log_append(&bad, gc_at + Duration::seconds(1))
+            .expect("append")
+    );
+    let out = sweep(&store, &mut state, gc_at + Duration::seconds(2)).expect("sweep");
+    let reason = out.halted.expect("halted after gc");
+    assert!(reason.contains("run after-gc"), "{reason}");
+    assert!(state.log_cursor > before_max);
+    assert_eq!(mode(&store, ScriptDomain::LaneRules).0, ScriptMode::Rust);
+    assert_eq!(deleted, 4, "the max id row is kept");
+}

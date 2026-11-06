@@ -1,7 +1,7 @@
 ---
 title: tick_cos_chat_launch の行数比例の調査と修正
 tasks: [01M6QZ6KYWW18GYMZYM17SYSW9]
-status: review
+status: running
 updated: 2026-11-06
 ---
 # tick_cos_chat_launch の行数比例の調査と修正

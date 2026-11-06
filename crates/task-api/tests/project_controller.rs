@@ -442,3 +442,67 @@ async fn project_wake_api_summary_shows_outcomes_wait_authority_and_next_wake() 
     assert!(s["next_wake"]["at"].as_str().is_some(), "{s}");
     assert_eq!(s["next_wake"]["pending_kinds"], json!([]));
 }
+
+/// ADR 2026-11-06-cos-run-launch-accounting-and-drain D5-2: `budget_today.not_launched_runs` は起動前に終わった
+/// chat run の数。費用不明にも USD にも入らず、起動後・旧行は不明のまま（接頭辞 `project_wake_api_budget_`）。
+#[tokio::test]
+async fn project_wake_api_budget_today_counts_not_launched_runs() {
+    let (env, app, thread, project) = setup(true);
+    let path = format!("/api/v1/projects/{project}/controller");
+    let before = send(&app, get_admin(&path)).await.json()["budget_today"].clone();
+    assert_eq!(before["not_launched_runs"], 0, "{before}");
+    let now = OffsetDateTime::now_utc();
+    let post = |key: &str| {
+        env.store
+            .chat_message_post(
+                &thread.id,
+                &ChatPostMessageRequest {
+                    client_message_id: key.into(),
+                    text: key.into(),
+                    attachment_ids: vec![],
+                    reply_to_id: None,
+                    mode: ChatSendMode::Queue,
+                    resume_queue: false,
+                },
+                now,
+            )
+            .expect("message");
+        env.store
+            .chat_run_claim_next(&thread.id, key, &json!({}), now)
+            .expect("claim")
+            .expect("run");
+    };
+    for i in 0..2 {
+        let id = format!("pre-{i}");
+        post(&id);
+        env.store
+            .chat_run_finish_prelaunch(
+                &id,
+                task_core::chat::ChatRunState::Failed,
+                task_core::chat::ChatPrelaunchReason::RouteUnavailable,
+                None,
+                now,
+            )
+            .expect("prelaunch");
+    }
+    let today = send(&app, get_admin(&path)).await.json()["budget_today"].clone();
+    assert_eq!(today["not_launched_runs"], 2, "{today}");
+    assert_eq!(today["usd_unknown_runs"], 0, "{today}");
+    // 起動後に usage 無しで終わった run は費用不明に数え、除外数は増えない。
+    post("launched");
+    env.store
+        .chat_run_mark_launched("launched", now)
+        .expect("launched");
+    env.store
+        .chat_run_finish(
+            "launched",
+            task_core::chat::ChatRunState::Failed,
+            None,
+            None,
+            now,
+        )
+        .expect("finish");
+    let today = send(&app, get_admin(&path)).await.json()["budget_today"].clone();
+    assert_eq!(today["not_launched_runs"], 2, "{today}");
+    assert_eq!(today["usd_unknown_runs"], 1, "{today}");
+}

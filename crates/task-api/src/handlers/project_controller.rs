@@ -213,6 +213,7 @@ pub(crate) fn controller_view(
             tokens: used.tokens,
             usd: used.usd_micros as f64 / 1_000_000.0,
             usd_unknown_runs: used.usd_unknown_runs,
+            not_launched_runs: used.not_launched_runs,
             price_table_version: task_core::pricing::PRICE_TABLE_VERSION.to_owned(),
             chat_starts: used.chat_starts,
         },

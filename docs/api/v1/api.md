@@ -1673,7 +1673,7 @@ mode は `off`（既定）・`dry_run`・`shadow`・`enabled`。`off` の案件�
   人の token だけ（他は 403 `project_controller_mode_requires_human`）。`shadow`・`enabled` は `[project_controller]
   allowed_project_ids` の案件だけ（403 `project_controller_not_allowed`）。`expected_revision` が今の `revision` と
   違えば 409 `project_controller_revision_conflict`。
-- `GET` の `ProjectControllerView` は `{state, pending_wakes, last_decision, budget_today, summary}`。`budget_today` は `{day, cos_inputs, roots, tokens, usd, usd_unknown_runs, price_table_version, chat_starts}`（`usd` は案件の task run と案件 CoS chat run の換算費用の和＝`max_usd_per_day` の判定に使う量、`usd_unknown_runs` は費用不明の run の数、`price_table_version` は換算に使った単価表の版、`tokens` は表示用の input + output）。`summary.budget_limits` は `max_usd_per_day`（USD 相当。token 数の上限欄は無い）を返す。`summary`（第 3 フェーズ P2-J、
+- `GET` の `ProjectControllerView` は `{state, pending_wakes, last_decision, budget_today, summary}`。`budget_today` は `{day, cos_inputs, roots, tokens, usd, usd_unknown_runs, not_launched_runs, price_table_version, chat_starts}`（`usd` は案件の task run と案件 CoS chat run の換算費用の和＝`max_usd_per_day` の判定に使う量、`usd_unknown_runs` は費用不明の run の数、`not_launched_runs` は起動前に確かに終わった案件 CoS chat run の数〈`finished_at` あり・`launched_at` なし・`prelaunch_reason` が閉じた列挙内の run だけ。費用不明にも `usd` にも入れない。UTC 日付は `usd_unknown_runs` と同じ〉、`price_table_version` は換算に使った単価表の版、`tokens` は表示用の input + output）。`summary.budget_limits` は `max_usd_per_day`（USD 相当。token 数の上限欄は無い）を返す。`summary`（第 3 フェーズ P2-J、
   [ADR](../../../agent-docs/adr/2026-11-05-phase3-p2j.md)）は画面の写しで、判定の根拠ではない:
   - `outcomes[]`: `{id, title, source, recorded, evidence_root_ids[], reached}`。`reached` は到達の記録（Roadmap の `reached` か
     適用済みの `mark_milestone`。`shadow`・`dry_run` では `suppressed` も数える）と条件を満たす root（done・合格・取り込み済み）の
@@ -3604,6 +3604,22 @@ REST の旧 Console エンドポイントは既定 legacy スレッドを使う�
 | GET `/chat/attachments/{a}/preview` | なし | 200 安全に再エンコードした raster。非対応は 404（`preview_url` は null） |
 | DELETE `/chat/attachments/{a}` | なし | 204。未参照の upload だけ。参照ありは 409、削除済みへの再送は 204 |
 | POST `/chat/attachments/{a}/references` | `{"owner_kind":"task\|knowledge_inbox","owner_id","idempotency_key"}` | 200 `ChatReferenceResponse`。owner が無ければ 404（task は `task_not_found`、KB 候補は `candidate_not_found`。CoS の `attachment.reference` も同じ） |
+
+#### chat run の起動境界と費用の状態（ADR 2026-11-06-cos-run-launch-accounting-and-drain D1・D4・D5）
+
+`ChatRun`（`GET /chat/threads/{t}/runs`・`/runs/{r}`・run event の `data.run`・`GET /chat/threads/{t}` の `active_run`）は同じ表現で次の欄を持つ。
+
+| 欄 | 型 | 意味 |
+|---|---|---|
+| `launched_at` | RFC 3339 文字列。値が無いときは欄ごと省略（null と同じ意味） | harness の process を spawn する直前の時刻。最初の 1 回だけ書き、route の failover で書き換えない。起動前に終わった run と、migration 0119 より前の旧行には無い。 |
+| `prelaunch_reason` | 閉じた列挙。無いときは省略 | 起動せずに閉じた理由。`route_unavailable`・`skills_unavailable`・`wall_expired_before_launch`・`slot_wait_expired`・`daemon_restart_before_launch`・`stopped_before_launch`。起動後の run、旧行、列挙外の保存値には付かない。 |
+| `cost_state` | `known` / `unknown` / `not_launched` | 予算の和と同じ判定。下の規則。 |
+
+- `not_launched`: 終わっていて、境界を記録した行（旧行ではない）で、`launched_at` が無く、`prelaunch_reason` が列挙内。予算の和から除き、`budget_today.not_launched_runs` に数える。
+- `known`: 終わっていて、`usage` が読め、attempt に usage の欠測が 1 件も無い。
+- `unknown`: それ以外すべて。走行中、起動後で usage が無い・壊れた行、旧行（境界の記録が無い。推測で起動前にしない＝fail closed）、`launched_at` が無く理由も無い・列挙外の行、attempt の一部だけ usage が欠けた行。案件の予算は `usd_unknown_runs` に数えて止める。
+- attempt の usage: failover の attempt ごとに store が記録する。既知の usage は `usage` に加算して残し、欠測は 1 件でもあれば `cost_state=unknown`（既知の分は消さない）。
+- 通知と責務: store は初回の `launched_at` と各終端で、同じ transaction で `run` event（`data.run` に更新後の run）を 1 件ずつ追記する。再送では追記しない。`launched_at` を書けない（`Conflict`・`Err`）ときは spawn してはならない。この API 文書の範囲では worker の起動側の接続（spawn 直前の記録、attempt usage の記録、起動前終端、再起動時の回収）は未接続で、後続の task が行う。
 
 ### 3.129 CoS run credential と監査付き操作（ADR 2026-10-05-cos-chat-home D2/D3）
 

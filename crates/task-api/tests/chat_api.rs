@@ -827,3 +827,195 @@ async fn cos_chat_usage_api_detail_list_pagination_and_missing_usage() {
         "bad_request",
     );
 }
+
+/// ADR 2026-11-06-cos-run-launch-accounting-and-drain D5: 起動境界と費用の状態が run view に出る
+/// （一覧・詳細・run event・thread の active run が同じ表現）。接頭辞 `chat_api_launch_boundary_`。
+#[tokio::test]
+async fn chat_api_launch_boundary_view_in_list_detail_events_and_active_run() {
+    let env = admin_env();
+    let app = env.router();
+    let t = create(&env, &app, "launch-boundary").await;
+    let t = t["id"].as_str().expect("thread").to_owned();
+    let start = OffsetDateTime::from_unix_timestamp(1_791_158_400).expect("clock");
+    let usage = |input: u64, cost: Option<f64>| task_core::Usage {
+        input_tokens: Some(input),
+        output_tokens: Some(1),
+        cost_usd: cost,
+        ..Default::default()
+    };
+    for id in [
+        "prelaunch",
+        "launched-no-usage",
+        "known",
+        "legacy-row",
+        "partial",
+        "active",
+    ] {
+        let r = send(
+            &app,
+            post_admin(&format!("{BASE}/{t}/messages"), &message_body(id, id)),
+        )
+        .await;
+        assert_eq!(r.status.as_u16(), 202, "{}", r.text());
+    }
+    let step = std::cell::Cell::new(0i64);
+    let claim = |id: &str| {
+        let n = step.get();
+        step.set(n + 10);
+        let at = start + time::Duration::seconds(n);
+        env.store
+            .chat_run_claim_next(&t, id, &json!({"harness":"fake","model":"lab"}), at)
+            .expect("claim")
+            .expect("claimed");
+        at
+    };
+    // 1. 起動前に終わった run。
+    let at = claim("prelaunch");
+    env.store
+        .chat_run_finish_prelaunch(
+            "prelaunch",
+            ChatRunState::Failed,
+            task_core::chat::ChatPrelaunchReason::RouteUnavailable,
+            Some("route を選べない"),
+            at + time::Duration::seconds(1),
+        )
+        .expect("prelaunch");
+    // 2. 起動後に usage が無い run。
+    let at = claim("launched-no-usage");
+    env.store
+        .chat_run_mark_launched("launched-no-usage", at + time::Duration::seconds(1))
+        .expect("launched");
+    env.store
+        .chat_run_finish(
+            "launched-no-usage",
+            ChatRunState::Failed,
+            None,
+            Some("killed"),
+            at + time::Duration::seconds(2),
+        )
+        .expect("finish");
+    // 3. 既知の費用。
+    let at = claim("known");
+    env.store
+        .chat_run_mark_launched("known", at + time::Duration::seconds(1))
+        .expect("launched");
+    env.store
+        .chat_run_record_attempt_usage("known", Some(&usage(5, Some(0.01))))
+        .expect("attempt");
+    env.store
+        .chat_run_finish(
+            "known",
+            ChatRunState::Completed,
+            Some("ok"),
+            None,
+            at + time::Duration::seconds(2),
+        )
+        .expect("finish");
+    // 4. 旧行（境界の印が無い）。
+    let at = claim("legacy-row");
+    env.store
+        .write_tx::<_, task_core::StoreError, _>(|tx| {
+            tx.execute(
+                "UPDATE chat_runs SET launch_tracked=0 WHERE run_id='legacy-row'",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("legacy row");
+    env.store
+        .chat_run_finish(
+            "legacy-row",
+            ChatRunState::Failed,
+            None,
+            Some("old"),
+            at + time::Duration::seconds(1),
+        )
+        .expect("finish");
+    // 5. attempt の一部だけ usage が無い run。
+    let at = claim("partial");
+    env.store
+        .chat_run_mark_launched("partial", at + time::Duration::seconds(1))
+        .expect("launched");
+    env.store
+        .chat_run_record_attempt_usage("partial", Some(&usage(5, Some(0.02))))
+        .expect("attempt 1");
+    env.store
+        .chat_run_record_attempt_usage("partial", None)
+        .expect("attempt 2");
+    env.store
+        .chat_run_finish(
+            "partial",
+            ChatRunState::Completed,
+            Some("ok"),
+            None,
+            at + time::Duration::seconds(2),
+        )
+        .expect("finish");
+
+    let expect = |run: &Value, launched: bool, reason: Option<&str>, cost: &str| {
+        let id = run["id"].as_str().unwrap_or("?");
+        if launched {
+            let at = run["launched_at"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{id}: launched_at"));
+            OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339)
+                .unwrap_or_else(|e| panic!("{id}: not RFC3339 {at}: {e}"));
+        } else {
+            assert!(
+                run.get("launched_at").is_none_or(Value::is_null),
+                "{id}: launched_at must be absent/null, got {run}"
+            );
+        }
+        match reason {
+            Some(r) => assert_eq!(run["prelaunch_reason"], r, "{id}"),
+            None => assert!(
+                run.get("prelaunch_reason").is_none_or(Value::is_null),
+                "{id}: prelaunch_reason must be absent/null, got {run}"
+            ),
+        }
+        assert_eq!(run["cost_state"], cost, "{id}");
+    };
+    let cases: [(&str, bool, Option<&str>, &str); 5] = [
+        (
+            "prelaunch",
+            false,
+            Some("route_unavailable"),
+            "not_launched",
+        ),
+        ("launched-no-usage", true, None, "unknown"),
+        ("known", true, None, "known"),
+        ("legacy-row", false, None, "unknown"),
+        ("partial", true, None, "unknown"),
+    ];
+    let list = send(&app, get_admin(&format!("{BASE}/{t}/runs?limit=50")))
+        .await
+        .json();
+    let items = list["items"].as_array().expect("items");
+    assert_eq!(items.len(), 5);
+    for (id, launched, reason, cost) in cases {
+        let from_list = items.iter().find(|r| r["id"] == id).expect("in list");
+        expect(from_list, launched, reason, cost);
+        let detail = send(&app, get_admin(&format!("{BASE}/{t}/runs/{id}")))
+            .await
+            .json();
+        assert_eq!(&detail["run"], from_list, "{id}: list and detail agree");
+        let events = send(&app, get_admin(&format!("{BASE}/{t}/runs/{id}/events")))
+            .await
+            .json();
+        let last_run_event = events["items"]
+            .as_array()
+            .expect("events")
+            .iter()
+            .rev()
+            .find(|e| e["type"] == "run")
+            .expect("run event");
+        expect(&last_run_event["data"]["run"], launched, reason, cost);
+    }
+    // 走行中の run（起動済み）は thread の active run に同じ表現で出る。
+    let at = claim("active");
+    env.store
+        .chat_run_mark_launched("active", at + time::Duration::seconds(1))
+        .expect("launched");
+    let thread = send(&app, get_admin(&format!("{BASE}/{t}"))).await.json();
+    expect(&thread["active_run"], true, None, "unknown");
+}

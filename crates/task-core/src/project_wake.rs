@@ -423,6 +423,8 @@ pub struct ProjectBudgetToday {
     pub usd: f64,
     /// 費用不明の run（単価が引けない model・usage の無い run）の数。1 以上なら止める。
     pub usd_unknown_runs: u32,
+    /// 起動前に確かに終わった案件 CoS の chat run の数（費用不明にも USD の和にも入れない。ADR 2026-11-06-cos-run-launch-accounting-and-drain D1・D5）。
+    pub not_launched_runs: u32,
     /// 換算に使った単価表の版（`task_core::pricing::PRICE_TABLE_VERSION`）。
     pub price_table_version: String,
     /// 起動した案件 CoS の chat run の数。

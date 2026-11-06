@@ -1,0 +1,26 @@
+pilot: effect_broker {"command": "/tmp/long-horizon-pilot.GuMzCl/C06-new/bin/pilot-effect"}
+pilot: deploy_ts {"bundle_sha256": "cc9691dda86bca9a82d30cd159903c7b46c6e6c8278a5835d429e126d7650e61", "mode_seed": "synthetic: temp DB only"}
+pilot: project_created {"project": "01M6RGEMKEXW63GHV73WY89S3E", "arm": "new"}
+pilot: public_checks {"outcomes": [{"outcome": "o1", "checks": [{"cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C06 o1)
+pilot: HTTP 403 PUT /api/v1/projects/01M6RGEMKEXW63GHV73WY89S3E/controller: {"type":"urn:celeris:problem:project_controller_mode_requires_human","title":"project controller mode requires human","status":403,"detail":"only a person may raise the project controller mode; others may only turn it off","code":"project_controller_mode_requires_human","instance":"urn:celeris:request:01M6RGEN51BWQD59F9KRGR4FTR"}
+pilot: operator_cannot_raise_mode {"status": 403, "code": null}
+pilot: set_mode {"mode": "enabled", "reason": "pilot を有効にする", "revision": null}
+pilot: state {"phase": "active", "roots": []}
+pilot: state {"phase": "active", "roots": ["running"]}
+pilot: approval {"logical_id": "C06:o1:publish", "approval_id": "01M6RGG3S0EGMSC8VWWHGA7196", "decision": "once"}
+pilot: state {"phase": "active", "roots": ["ready"]}
+pilot: state {"phase": "active", "roots": ["running"]}
+pilot: state {"phase": "active", "roots": ["reviewing"]}
+pilot: state {"phase": "active", "roots": ["done"]}
+pilot: state {"phase": "active", "roots": ["done", "running"]}
+pilot: approval {"logical_id": "C06:o2:publish", "approval_id": "01M6RGHKNA8A85BNXSS4YPGM2V", "decision": "denied"}
+pilot: state {"phase": "active", "roots": ["done", "ready"]}
+pilot: state {"phase": "active", "roots": ["done", "running"]}
+pilot: state {"phase": "active", "roots": ["done", "reviewing"]}
+pilot: state {"phase": "active", "roots": ["done", "done"]}
+pilot: state {"phase": "achieved", "roots": ["done", "done"]}
+pilot: wake_after_end {"new_roots": 0}
+pilot: set_mode {"mode": "off", "reason": "従来の CoS に戻す", "revision": null}
+pilot: wake_after_off {"status": 200, "added": false}
+pilot: after_off {"decisions_at_end": 6, "decisions_after": 6, "mode": "off", "pending_wakes": 1}
+pilot: trial 49a77b52eb2fcefa wrote /local/celeris/data/scratch/n1-g7/raw

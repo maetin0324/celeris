@@ -60,8 +60,10 @@ fn run(env: &Env, retention: Option<&std::path::Path>, name: &str) -> (Outcome, 
             p
         })
         .collect();
-    let mut s = ProjectControllerSettings::default();
-    s.max_evaluations_per_tick = 10;
+    let mut s = ProjectControllerSettings {
+        max_evaluations_per_tick: 10,
+        ..Default::default()
+    };
     s.retention = retention.map(|dir| crate::project_controller::ProjectRetentionSettings {
         policy: task_core::project_retention::RetentionPolicy {
             wake_keep_secs: 6 * 3600,

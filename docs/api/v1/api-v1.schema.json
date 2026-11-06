@@ -33356,11 +33356,10 @@
           "minimum": 0,
           "type": "integer"
         },
-        "max_tokens": {
-          "format": "uint64",
-          "minimum": 0,
+        "max_usd": {
+          "format": "double",
           "type": [
-            "integer",
+            "number",
             "null"
           ]
         },
@@ -33380,7 +33379,19 @@
           "type": "integer"
         },
         "tokens": {
+          "description": "表示用の token（input + output。上限の判定には使わない）。",
           "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "usd": {
+          "description": "換算費用（USD 相当。`task_core::pricing::budget_cost`。上限 `max_usd` の判定に使う量）。",
+          "format": "double",
+          "type": "number"
+        },
+        "usd_unknown_runs": {
+          "description": "費用不明の run（単価が引けない model・usage の無い run）の数。1 以上なら上限に達したとして止める。",
+          "format": "uint32",
           "minimum": 0,
           "type": "integer"
         }
@@ -33393,6 +33404,8 @@
         "replans",
         "max_replans",
         "tokens",
+        "usd",
+        "usd_unknown_runs",
         "open_decisions",
         "max_open_decisions"
       ],

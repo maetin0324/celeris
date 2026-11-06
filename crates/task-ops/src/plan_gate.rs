@@ -330,7 +330,9 @@ pub fn approval_facts(
         .iter()
         .filter(|u| u.creates_child() && !done_keys.contains(u.key.as_str()))
         .count();
-    let counters = crate::tree::tree_counters(store, root_id)?;
+    // 葉と run の数だけを読む（費用は使わない）ので換算単価は要らない。
+    let counters =
+        crate::tree::tree_counters(store, root_id, &task_core::pricing::BudgetRates::default())?;
     let is_leaf = |u: &&task_core::WorkUnitRow| {
         !matches!(
             u.kind,

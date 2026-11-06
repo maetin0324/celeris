@@ -82,10 +82,11 @@ async fn get_task_tree(
     let from_root = query.bool("root")?.unwrap_or(false);
     let task_id = parse_task_id(&id)?;
     let limits = state.inner.tree_limits;
+    let rates = state.inner.budget_rates.clone();
     let memory = state.memory_waits();
     let view = state
         .blocking(move |store| {
-            task_ops::tree_view::task_tree(store, task_id, from_root, &limits, &memory)
+            task_ops::tree_view::task_tree(store, task_id, from_root, &limits, &rates, &memory)
                 .map_err(|e| ops_problem(store, e, Some("task_tree")))
         })
         .await?;

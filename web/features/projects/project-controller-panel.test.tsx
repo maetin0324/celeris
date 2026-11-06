@@ -64,7 +64,16 @@ const view = (over: Partial<ControllerView["state"]> = {}): ControllerView => ({
   },
   pending_wakes: [],
   last_decision: decision,
-  budget_today: { day: "2026-11-02", cos_inputs: 1, roots: 2, tokens: 1500, chat_starts: 3 },
+  budget_today: {
+    day: "2026-11-02",
+    cos_inputs: 1,
+    roots: 2,
+    tokens: 1500,
+    usd: 12.5,
+    usd_unknown_runs: 0,
+    price_table_version: "2026-09-approx-1",
+    chat_starts: 3,
+  },
   summary: summary(),
 });
 
@@ -78,7 +87,7 @@ const summary = (over: Partial<ControllerSummary> = {}): ControllerSummary => ({
     phase: "waiting",
     kind: "guard",
     rule_id: "pc/guard/budget",
-    details: ['guard budget: {"kind":"tokens"}', "escalate budget:tokens:2026-11-02: 今日の token の上限"],
+    details: ['guard budget: {"kind":"usd"}', "escalate budget:usd:2026-11-02: 今日の費用の上限"],
     decision_id: "D1",
     decided_at: "2026-11-02T00:00:00Z",
   },
@@ -103,7 +112,7 @@ const summary = (over: Partial<ControllerSummary> = {}): ControllerSummary => ({
     max_no_progress_decisions: 5,
     max_same_failure_repeats: 3,
     max_invalid_decisions: 3,
-    max_tokens_per_day: 20000000,
+    max_usd_per_day: 100,
     ttl_secs: 259200,
   },
   retention: {
@@ -168,7 +177,7 @@ describe("ProjectControllerPanel", () => {
     expect(next).toContain("表 2 を作る");
     expect(next).toContain("2026-11-03T00:00:00Z");
     expect(next).toContain("CoS の起動 3 回");
-    expect(next).toContain("token 1500");
+    expect(next).toContain("換算費用 12.50");
     const waiting = part(html, "controller-waiting");
     expect(waiting).toContain("account の login");
     expect(waiting).toContain("判断待ち 2 件");
@@ -193,13 +202,14 @@ describe("ProjectControllerPanel", () => {
     const waiting = part(html, "controller-waiting");
     expect(waiting).toContain('data-wait-kind="guard"');
     expect(waiting).toContain("規則 pc/guard/budget");
-    expect(waiting).toContain("今日の token の上限");
+    expect(waiting).toContain("今日の費用の上限");
     expect(waiting).toContain("承認の範囲: 続きの root の起票は許可あり");
     expect(waiting).toContain("続きの root の起票（project 01P）: 残り 8 回、2026-12-01T00:00:00Z まで");
     const next = part(html, "controller-next");
     expect(next).toContain("2026-11-03T00:00:00Z");
     expect(next).toContain("external_released");
-    expect(next).toContain("token 1500 / 20000000");
+    expect(next).toContain("換算費用 12.50 / 100 USD 相当");
+    expect(next).toContain("token 1500 は表示のみ");
     expect(next).toContain("起票 2 件 / 5");
     expect(next).toContain("同じ失敗 3 回");
     expect(next).toContain("259200 秒");

@@ -97,8 +97,10 @@ fn soak(mode: ControllerMode, name: &str) {
             p
         })
         .collect();
-    let mut s = ProjectControllerSettings::default();
-    s.max_evaluations_per_tick = 10;
+    let s = ProjectControllerSettings {
+        max_evaluations_per_tick: 10,
+        ..Default::default()
+    };
     let mut d = env.daemon_with(&store, "i1", none(), s.clone());
     d.tick().unwrap();
     let rss_start = rss_kb();

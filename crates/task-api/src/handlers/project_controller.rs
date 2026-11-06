@@ -170,6 +170,7 @@ pub(crate) fn controller_view(
     store: &SqliteStore,
     project_id: task_core::ProjectId,
     limits: &task_ops::project_budget::BudgetLimits,
+    rates: &task_core::pricing::BudgetRates,
 ) -> Result<ProjectControllerView, ApiProblem> {
     let project = project_id.to_string();
     let project = project.as_str();
@@ -189,7 +190,8 @@ pub(crate) fn controller_view(
             .map_err(store_problem)?,
         None => None,
     };
-    let used = task_ops::project_budget::usage(store, project, now()).map_err(store_problem)?;
+    let used =
+        task_ops::project_budget::usage(store, project, now(), rates).map_err(store_problem)?;
     let summary = task_ops::project_controller_view::summary(
         store,
         project_id,
@@ -209,6 +211,9 @@ pub(crate) fn controller_view(
             cos_inputs: used.cos_inputs,
             roots: used.roots,
             tokens: used.tokens,
+            usd: used.usd_micros as f64 / 1_000_000.0,
+            usd_unknown_runs: used.usd_unknown_runs,
+            price_table_version: task_core::pricing::PRICE_TABLE_VERSION.to_owned(),
             chat_starts: used.chat_starts,
         },
         summary,
@@ -223,10 +228,11 @@ async fn get_controller(
     no_query(&raw)?;
     let project_id = parse_project_id(&id)?;
     let limits = state.project_controller.budget.clone();
+    let rates = state.inner.budget_rates.clone();
     let view = state
         .blocking(move |store| {
             require_project(store, project_id)?;
-            controller_view(store, project_id, &limits)
+            controller_view(store, project_id, &limits, &rates)
         })
         .await?;
     Ok(json_response(StatusCode::OK, &view))
@@ -300,6 +306,7 @@ async fn put_controller(
     let body: ControllerPut = read_json(body, false).await?;
     validate_put(&body)?;
     let cfg = state.project_controller.clone();
+    let rates = state.inner.budget_rates.clone();
     let human = matches!(
         caller.0,
         Principal::Human { .. } | Principal::Unauthenticated
@@ -338,7 +345,7 @@ async fn put_controller(
                 }
                 Ok(())
             })?;
-            controller_view(store, project_id, &cfg.budget)
+            controller_view(store, project_id, &cfg.budget, &rates)
         })
         .await?;
     Ok(json_response(StatusCode::OK, &view))

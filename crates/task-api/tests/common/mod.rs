@@ -93,6 +93,8 @@ pub struct EnvOptions {
     pub model_discovery: Option<task_api::SharedModelDiscoveryHook>,
     /// ADR-0079 R4a: `[execution.tree]`（既定は無効）。
     pub tree_limits: task_core::TreeLimits,
+    /// ADR 2026-11-06-budget-usd-caps D2: `[budget_rates]`（既定は空）。
+    pub budget_rates: task_core::pricing::BudgetRates,
     /// ADR 2026-10-14-local-machine-settings: `None` なら `$HOME` = `<tempdir>/home`、保護 path は
     /// tempdir の DB から組む（実 `$HOME` には触らない）。
     pub local_machine: Option<task_api::LocalMachineSettings>,
@@ -133,6 +135,7 @@ impl Default for EnvOptions {
             harnesses: None,
             model_discovery: None,
             tree_limits: task_core::TreeLimits::default(),
+            budget_rates: task_core::pricing::BudgetRates::default(),
             local_machine: None,
         }
     }
@@ -383,6 +386,7 @@ pub fn settings(
         model_discovery: options.model_discovery,
         browser: Default::default(),
         tree_limits: options.tree_limits,
+        budget_rates: options.budget_rates,
         local_machine: options.local_machine.unwrap_or_else(|| {
             let home = db_path
                 .parent()

@@ -15,6 +15,7 @@
 //! 人の pause・cancel は phase が `paused`・`cancelled` になるのでここを通らない。
 
 use serde_json::{Value, json};
+use task_core::pricing::BudgetRates;
 use task_core::project_wake::{
     ControllerMode, ControllerPhase, EffectState, ProjectControllerDecision,
     ProjectControllerState, ProjectWake, ProjectWakeKind, is_external_input,
@@ -200,6 +201,7 @@ fn has_live_launch_grant(
 fn decide_budget(
     store: &SqliteStore,
     limits: &BudgetLimits,
+    rates: &BudgetRates,
     state: &ProjectControllerState,
     (kind, day): (&str, &str),
     now: OffsetDateTime,
@@ -209,13 +211,17 @@ fn decide_budget(
     }
     let project = state.project_id.as_str();
     // 止めた日の使用量を数え直す（止めた後に走り切った run の分を含む）。
-    let used = budget::usage_on_day(store, project, day, now)?;
+    let used = budget::usage_on_day(store, project, day, now, rates)?;
     if budget::severity(limits, &used) == BudgetSeverity::Dangerous {
         return Ok(Verdict::Hold {
             reason: "dangerous_overrun",
             detail: format!(
-                "{day} の使用量（token {}、CoS 入力 {}、起票 {}、CoS 起動 {}）が危険な超過でした",
-                used.tokens, used.cos_inputs, used.roots, used.chat_starts
+                "{day} の使用量（USD {:.2}、費用不明の run {}、CoS 入力 {}、起票 {}、CoS 起動 {}）が危険な超過でした",
+                used.usd_micros as f64 / 1e6,
+                used.usd_unknown_runs,
+                used.cos_inputs,
+                used.roots,
+                used.chat_starts
             ),
         });
     }
@@ -292,6 +298,7 @@ fn outcome_evidence(
 fn decide(
     store: &SqliteStore,
     limits: &BudgetLimits,
+    rates: &BudgetRates,
     state: &ProjectControllerState,
     last: Option<&ProjectControllerDecision>,
     wakes: &[ProjectWake],
@@ -334,7 +341,9 @@ fn decide(
                 }
             })
         }
-        BlockCause::Budget { kind, day } => decide_budget(store, limits, state, (&kind, &day), now),
+        BlockCause::Budget { kind, day } => {
+            decide_budget(store, limits, rates, state, (&kind, &day), now)
+        }
         BlockCause::Question { key, category } => {
             let resume = |basis: Value| Verdict::Resume {
                 rule: QUESTION_RESUME_RULE,
@@ -385,6 +394,7 @@ fn decide(
 pub(crate) fn resume_blocked(
     store: &SqliteStore,
     limits: &BudgetLimits,
+    rates: &BudgetRates,
     now: OffsetDateTime,
 ) -> usize {
     let states = match store.project_controller_active() {
@@ -399,7 +409,7 @@ pub(crate) fn resume_blocked(
         .into_iter()
         .filter(|s| s.phase == ControllerPhase::Blocked && s.mode.wakes())
     {
-        match resume_one(store, limits, &state, now) {
+        match resume_one(store, limits, rates, &state, now) {
             Ok(true) => resumed += 1,
             Ok(false) => {}
             Err(error) => {
@@ -413,6 +423,7 @@ pub(crate) fn resume_blocked(
 fn resume_one(
     store: &SqliteStore,
     limits: &BudgetLimits,
+    rates: &BudgetRates,
     state: &ProjectControllerState,
     now: OffsetDateTime,
 ) -> Result<bool, StoreError> {
@@ -422,7 +433,7 @@ fn resume_one(
     };
     let last = store.project_controller_decision(last_id)?;
     let wakes = store.project_wakes_pending(project)?;
-    match decide(store, limits, state, last.as_ref(), &wakes, now)? {
+    match decide(store, limits, rates, state, last.as_ref(), &wakes, now)? {
         Verdict::Stay => Ok(false),
         Verdict::Hold { reason, detail } => {
             let notice = hold_notice(project, last_id, reason, &detail, now);

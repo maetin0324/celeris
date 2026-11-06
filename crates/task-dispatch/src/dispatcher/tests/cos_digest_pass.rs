@@ -401,7 +401,8 @@ async fn cos_digest_pass_ts_mode_changed_before_apply_uses_rust() {
 /// ADR 2026-11-03-cos-digest-persist 2）。B の記録は次の tick の pass から出る。
 #[tokio::test]
 async fn cos_digest_pass_ts_switch_mid_pass_records_late_run_under_old_generation() {
-    let store: Arc<StdMutex<Option<(Arc<SqliteStore>, String)>>> = Arc::new(StdMutex::new(None));
+    type StoreSlot = Option<(Arc<SqliteStore>, String)>;
+    let store: Arc<StdMutex<StoreSlot>> = Arc::new(StdMutex::new(None));
     let generation_a: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
     let mut script = ts_pass(echo);
     let hook = store.clone();

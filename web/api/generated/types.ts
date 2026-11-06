@@ -6601,11 +6601,13 @@ export type TreeLimitsUsage = {
   "max_open_decisions": number;
   "max_replans": number;
   "max_runs": number;
-  "max_tokens"?: number | null;
+  "max_usd"?: number | null;
   "open_decisions": number;
   "replans": number;
   "runs": number;
   "tokens": number;
+  "usd": number;
+  "usd_unknown_runs": number;
 };
 
 export type TreeNodePhase = "planning" | "executing" | "repairing" | "verifying" | "awaiting_human" | "awaiting_plan_approval";

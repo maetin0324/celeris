@@ -820,5 +820,8 @@ async fn project_cos_chat_run_records_usage_and_counts_in_project_budget() {
         .project_run_usage_between(&project_id, "0000-01-01T00:00:00Z", "9999-01-01T00:00:00Z")
         .expect("project usage");
     assert_eq!(summed.len(), 1, "{summed:?}");
-    assert_eq!(summed[0].input_tokens, Some(100));
+    assert_eq!(
+        summed[0].usage.as_ref().and_then(|u| u.input_tokens),
+        Some(100)
+    );
 }

@@ -306,6 +306,8 @@ pub fn api_settings(
     ApiSettings {
         // ADR-0080 D5: human attestation の鍵と broker の結線は e2e の WU（既定は 503）。
         browser: Default::default(),
+        // `Config::validate` を通った設定では失敗しない。通っていない設定は空（費用不明で止まる側）にする。
+        budget_rates: crate::config::budget_rates_from(&config.budget_rates).unwrap_or_default(),
         listen,
         tokens,
         mcp_token: None,

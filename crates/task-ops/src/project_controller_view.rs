@@ -87,7 +87,7 @@ impl From<&BudgetLimits> for ControllerBudgetLimits {
             max_no_progress_decisions: l.max_no_progress_decisions,
             max_same_failure_repeats: l.max_same_failure_repeats,
             max_invalid_decisions: l.max_invalid_decisions,
-            max_tokens_per_day: l.max_tokens_per_day,
+            max_usd_per_day: l.max_usd_per_day_micros as f64 / 1_000_000.0,
             ttl_secs: l.ttl_secs,
         }
     }

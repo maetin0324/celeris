@@ -3420,7 +3420,7 @@ fn planner_prompt_carries_depth_and_leaf_criteria() {
         runs_left: 111,
         replans_left: 9,
         node_replans_left: 3,
-        tokens_left: Some(500_000),
+        usd_left: Some(12.5),
         open_decisions_left: 11,
         ancestors: Vec::new(),
         stages_hint: vec![
@@ -3469,7 +3469,7 @@ fn planner_prompt_carries_depth_and_leaf_criteria() {
         "`needs_decisions`",
         "At most 7 decisions per plan",
         "at most 4 stages, 5 units per stage, 3 child-task units, 7 decisions",
-        "leaves left: 37, runs left: 111, replans left: 9 (this task: 3), tokens left: 500000, open decisions left: 11",
+        "leaves left: 37, runs left: 111, replans left: 9 (this task: 3), budget left: 12.50 USD-equivalent, open decisions left: 11",
         "At most 2 child tasks of this task run at the same time",
         "Stages the human named (stages_hint, ADR-0079 D12)",
         "- \"Phase 1\": MVP of the browser capability",

@@ -65,6 +65,11 @@ impl ProjectControllerRuntime {
 }
 
 impl Dispatcher {
+    /// `[budget_rates]` の換算単価を入れる（案件の日次上限・木の上限の判定が使う。ADR 2026-11-06-budget-usd-caps D2）。
+    pub fn set_budget_rates(&mut self, rates: task_core::pricing::BudgetRates) {
+        self.budget_rates = rates;
+    }
+
     /// controller を入れる（CoS chat の後に呼ぶ。CoS chat が無い構成では入らず `false`）。
     pub fn set_project_controller(
         &mut self,
@@ -127,6 +132,7 @@ impl Dispatcher {
         let findings = self.stagnation.findings.clone();
         let roles = self.config.roles.clone();
         let genres = self.config.genres.clone();
+        let rates = self.budget_rates.clone();
         // A3: その tick の領域 `project_controller` の宛先（mode の表は tick ごとに 1 回読む）。
         let access = if self
             .cos_chat_launch
@@ -162,6 +168,7 @@ impl Dispatcher {
                 rt: &mut rt,
                 roles: &roles,
                 genres: &genres,
+                rates: &rates,
                 now,
                 stats: ControllerTickStats::default(),
             };
@@ -234,6 +241,7 @@ struct Pass<'a> {
     rt: &'a mut ProjectControllerRuntime,
     roles: &'a [task_core::RoleSpec],
     genres: &'a [task_core::GenreSpec],
+    rates: &'a task_core::pricing::BudgetRates,
     now: OffsetDateTime,
     stats: ControllerTickStats,
 }
@@ -254,8 +262,12 @@ impl Pass<'_> {
             Err(error) => tracing::warn!(%error, "project controller: phase sync failed"),
         }
         // P1-G: `blocked` の原因が解消した案件を根拠つきで再開する（再評価は下の due が 1 回行う）。
-        self.stats.resumed +=
-            super::project_resume::resume_blocked(self.store, &self.rt.settings.budget, self.now);
+        self.stats.resumed += super::project_resume::resume_blocked(
+            self.store,
+            &self.rt.settings.budget,
+            self.rates,
+            self.now,
+        );
         self.rt.at(Boundary::AfterResume);
         // B4・B5 の回復: tx1 で書いた効果が `pending` のまま残っていれば、同じ key で実行し直す。
         match self.store.project_controller_pending_effects() {
@@ -407,6 +419,7 @@ impl Pass<'_> {
         let pre = match super::project_guard::pre_decide(
             self.store,
             &self.rt.settings.budget,
+            self.rates,
             &lease.state,
             &lease.wakes,
             recheck.as_ref(),

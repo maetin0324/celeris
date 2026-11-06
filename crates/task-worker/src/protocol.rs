@@ -414,7 +414,7 @@ impl OrgNodeContext {
 }
 
 /// `run.context`。未知フィールドは無視する（前方互換）。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RunContext {
     /// A supervisor-provisioned CLI; absent on ordinary, planner and reviewer runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -677,7 +677,7 @@ pub struct DirectRouteContext {
 
 /// `context.execution_planner`（ADR-0072 D13/D14。Phase E3）: 計画を作らせる run に渡す、
 /// gate の判定根拠と D18 の上限。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ExecutionPlannerContext {
     /// D13 の gate が当てた規則（`compound/score` 等）。
     pub gate_rule_id: String,
@@ -766,7 +766,7 @@ pub struct ExecutionPlannerContext {
 /// `context.execution_planner.tree`（ADR-0079 D4 (2) / D12。Phase R2b）: /3 の planner に渡す木の中の位置・
 /// 上限の残り・人の段階の名指し。値は dispatcher が `[execution.tree]` と木の数え上げ（`tree_counters`）から
 /// 決定的に埋める（検証と同じ `TreeLimits`。F5-fix3 と同じく 1 か所から）。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TreePlannerContext {
     /// この task の深さ（task の層数。root = 1）。
     pub depth: u32,
@@ -786,9 +786,9 @@ pub struct TreePlannerContext {
     pub replans_left: u64,
     /// この節点の replan の残り（`[execution] max_replans` − この task の replan の数）。
     pub node_replans_left: u64,
-    /// `max_tree_tokens` を設定したときだけ。
+    /// 木の費用の残り（USD 相当。`max_tree_usd` − 木の換算費用。0 で止まる）。`max_tree_usd` を設定したときだけ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tokens_left: Option<u64>,
+    pub usd_left: Option<f64>,
     /// 木の未回答の決定の残り（`max_open_decisions_per_tree` − 未回答の数）。
     pub open_decisions_left: u64,
     /// root からこの task の親まで（root が先頭）。

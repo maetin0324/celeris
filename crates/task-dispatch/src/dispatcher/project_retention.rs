@@ -42,15 +42,4 @@ impl Dispatcher {
             }
         }
     }
-
-    /// 試験・診断: 直前の GC の結果。
-    #[cfg(test)]
-    pub(crate) fn project_retention_last(
-        &self,
-    ) -> Option<task_core::project_retention::RetentionReport> {
-        self.cos_chat_launch
-            .as_ref()
-            .and_then(|l| l.project_controller.as_ref())
-            .and_then(|rt| rt.retention_last.clone())
-    }
 }

@@ -129,10 +129,12 @@ pub fn ancestors_with_self(store: &dyn TaskStore, parent: &Task) -> Result<Vec<T
 
 /// ADR-0079 D3（Phase R2a）: 木（`root_id` とその子孫）の上限に照らす数を store の読み取りだけで
 /// 集める（`task_core::tree::tree_counters`。run・トークン・定価は `runs` の索引、leaf は `work_units`、
-/// replan は `execution_plans` の版の数）。
+/// replan は `execution_plans` の版の数）。`rates` は単価表に無い model の換算単価（`[budget_rates]`。ADR
+/// 2026-11-06-budget-usd-caps D2）。
 pub fn tree_counters(
     store: &dyn TaskStore,
     root_id: TaskId,
+    rates: &task_core::pricing::BudgetRates,
 ) -> Result<task_core::TreeCounters, OpsError> {
     let mut nodes = Vec::new();
     for task in store.tree_tasks(root_id)? {
@@ -145,7 +147,7 @@ pub fn tree_counters(
                 .unwrap_or(u32::MAX),
         });
     }
-    Ok(task_core::tree::tree_counters(Some(root_id), &nodes))
+    Ok(task_core::tree::tree_counters(Some(root_id), &nodes, rates))
 }
 
 /// ADR-0079 D7（Phase R2a）: 決定の要求の `path`（root から `node` まで）。各段は task の id と題名、

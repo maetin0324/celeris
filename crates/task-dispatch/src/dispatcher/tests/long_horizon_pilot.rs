@@ -268,7 +268,7 @@ impl Pilot {
             .unwrap();
     }
 
-    fn seed_tokens(&self, t: &Task, run: &str, tokens: u64) {
+    fn seed_usd(&self, t: &Task, run: &str, usd_micros: u64) {
         let started = self
             .env
             .now()
@@ -277,12 +277,12 @@ impl Pilot {
         rusqlite::Connection::open(self.env.db())
             .unwrap()
             .execute(
-                "INSERT INTO runs (run_id, task_id, role, seq, status, usage_json, started_at) \
-                 VALUES (?1, ?2, 'worker', 1, 'completed', ?3, ?4)",
+                "INSERT INTO runs (run_id, task_id, role, seq, status, model, usage_json, started_at, finished_at) \
+                 VALUES (?1, ?2, 'worker', 1, 'completed', 'claude-sonnet-5', ?3, ?4, ?4)",
                 rusqlite::params![
                     run,
                     t.id.to_string(),
-                    format!("{{\"input_tokens\":{tokens},\"output_tokens\":0}}"),
+                    format!("{{\"input_tokens\":{},\"output_tokens\":0}}", usd_micros / 2),
                     started
                 ],
             )
@@ -483,13 +483,13 @@ async fn long_horizon_pilot_same_failure_stops_the_loop() {
 async fn long_horizon_pilot_cost_cap_stops_until_human_resets() {
     let test = "long_horizon_pilot_cost_cap_stops_until_human_resets";
     let req = request_of(&[("o1", &[]), ("o2", &["o1"])]);
-    let Some(mut p) = Pilot::new(test, &req, |b| b.max_tokens_per_day = 1_000) else {
+    let Some(mut p) = Pilot::new(test, &req, |b| b.max_usd_per_day_micros = 1_000) else {
         return;
     };
     p.run_until(p.secs() + STEP_SECS);
     let roots = p.roots();
     assert_eq!(roots.len(), 1);
-    p.seed_tokens(&roots[0], "r-over", 2_500);
+    p.seed_usd(&roots[0], "r-over", 2_500);
     p.set_status(roots[0].id, Status::Done, "review_pass");
     p.run_until(p.secs() + 2 * STEP_SECS);
     assert_eq!(p.phase(), ControllerPhase::Blocked);
@@ -514,7 +514,7 @@ async fn long_horizon_pilot_cost_cap_stops_until_human_resets() {
     p.run_until(p.secs() + 2 * STEP_SECS);
     p.finish(
         test,
-        json!({"cap_tokens": 1000, "used_tokens": 2500, "rules_at_stop": stopped}),
+        json!({"cap_usd_micros": 1000, "used_usd_micros": 2500, "rules_at_stop": stopped}),
     );
 }
 

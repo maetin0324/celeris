@@ -252,9 +252,14 @@ pub struct TreeLimitsUsage {
     pub max_runs: u32,
     pub replans: u32,
     pub max_replans: u32,
+    /// 表示用の token（input + output。上限の判定には使わない）。
     pub tokens: u64,
+    /// 換算費用（USD 相当。`task_core::pricing::budget_cost`。上限 `max_usd` の判定に使う量）。
+    pub usd: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u64>,
+    pub max_usd: Option<f64>,
+    /// 費用不明の run（単価が引けない model・usage の無い run）の数。1 以上なら上限に達したとして止める。
+    pub usd_unknown_runs: u32,
     pub open_decisions: u32,
     pub max_open_decisions: u32,
 }
@@ -337,6 +342,7 @@ pub fn task_tree(
     task_id: TaskId,
     from_root: bool,
     limits: &TreeLimits,
+    rates: &task_core::pricing::BudgetRates,
     memory: &crate::wait::MemoryWaits,
 ) -> Result<TaskTreeView, OpsError> {
     let Some(task) = store.get(task_id)? else {
@@ -445,7 +451,7 @@ pub fn task_tree(
         .map(|n| n.subtree.clone())
         .unwrap_or_default();
     let usage = if subtree_root == root_id {
-        let counters = crate::tree::tree_counters(store, root_id)?;
+        let counters = crate::tree::tree_counters(store, root_id, rates)?;
         let allowances = crate::decision::limit_allowances(store, root_id, None)?;
         let effective = task_core::tree::limits_with_allowances(limits, &allowances);
         Some(TreeLimitsUsage {
@@ -456,7 +462,11 @@ pub fn task_tree(
             replans: counters.replans,
             max_replans: effective.max_tree_replans,
             tokens: counters.tokens,
-            max_tokens: effective.max_tree_tokens,
+            usd: counters.usd_micros as f64 / 1_000_000.0,
+            max_usd: effective
+                .max_tree_usd_micros
+                .map(|m| m as f64 / 1_000_000.0),
+            usd_unknown_runs: counters.unknown_cost_runs,
             open_decisions: open_counts.values().sum(),
             max_open_decisions: u32::try_from(effective.max_open_decisions_per_tree)
                 .unwrap_or(u32::MAX),

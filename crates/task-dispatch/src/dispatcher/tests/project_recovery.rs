@@ -46,15 +46,6 @@ fn human_wait(s: &ProjectSnapshot) -> Value {
     wait_action(s, "human")
 }
 
-fn external_wait(s: &ProjectSnapshot) -> Value {
-    wait_action(s, "external")
-}
-
-/// 呼ぶたびに別の CoS 入力（replan）。回数の上限の試験。
-fn replan_each(s: &ProjectSnapshot) -> Value {
-    replan(s, "next", &[format!("project:{}", s.project.id)], "unknown")
-}
-
 fn brief_put(c: &Case, state: &str) {
     brief_put_on(&c.store, c.p.id, state, c.env.now());
 }
@@ -228,17 +219,17 @@ fn without_grant(f: impl Fn(&ProjectSnapshot) -> Value + Send + Sync + 'static) 
     c
 }
 
-fn seed_tokens(c: &Case, t: &Task, run: &str, tokens: u64) {
+fn seed_usd(c: &Case, t: &Task, run: &str, usd_micros: u64) {
     let at = c.env.now().format(&Rfc3339).unwrap();
     rusqlite::Connection::open(c.env.db())
         .unwrap()
         .execute(
-            "INSERT INTO runs (run_id, task_id, role, seq, status, usage_json, started_at) \
-             VALUES (?1, ?2, 'worker', 1, 'completed', ?3, ?4)",
+            "INSERT INTO runs (run_id, task_id, role, seq, status, model, usage_json, started_at, finished_at) \
+             VALUES (?1, ?2, 'worker', 1, 'completed', 'claude-sonnet-5', ?3, ?4, ?4)",
             rusqlite::params![
                 run,
                 t.id.to_string(),
-                format!("{{\"input_tokens\":{tokens},\"output_tokens\":0}}"),
+                format!("{{\"input_tokens\":{},\"output_tokens\":0}}", usd_micros / 2),
                 at
             ],
         )
@@ -753,10 +744,10 @@ async fn project_recovery_k37_dangerous_budget_overrun_stays_blocked() {
     let mut c = case_with(
         Some(ControllerMode::Enabled),
         launch,
-        settings(|b| b.max_tokens_per_day = 1_000),
+        settings(|b| b.max_usd_per_day_micros = 1_000),
     );
     let t = root_task(&c.env, &c.store, &c.p, Status::Done);
-    seed_tokens(&c, &t, "r1", 2_500);
+    seed_usd(&c, &t, "r1", 2_500);
     c.wake();
     assert_eq!(phase(&c), ControllerPhase::Blocked);
     assert_eq!(
@@ -777,13 +768,13 @@ async fn project_recovery_k37_dangerous_budget_overrun_stays_blocked() {
     let mut c = case_with(
         Some(ControllerMode::Enabled),
         launch,
-        settings(|b| b.max_tokens_per_day = 1_000),
+        settings(|b| b.max_usd_per_day_micros = 1_000),
     );
     let t = root_task(&c.env, &c.store, &c.p, Status::Done);
-    seed_tokens(&c, &t, "r1", 1_200);
+    seed_usd(&c, &t, "r1", 1_200);
     c.wake();
     assert!(state(&c).next_wake_at.is_some());
-    seed_tokens(&c, &t, "r2", 1_200);
+    seed_usd(&c, &t, "r2", 1_200);
     next_day(&mut c);
     spin(&mut c, 3);
     hours(&mut c, 48);
@@ -803,11 +794,11 @@ async fn project_recovery_k37_dangerous_budget_overrun_stays_blocked() {
 // ---- K39: CoS chat の token と起動 ----
 
 #[tokio::test]
-async fn project_recovery_k39_chat_tokens_stop_the_guard_and_are_measured() {
+async fn project_recovery_k39_chat_usd_stops_the_guard_and_are_measured() {
     let mut c = case_with(
         Some(ControllerMode::Enabled),
         launch,
-        settings(|b| b.max_tokens_per_day = 1_000),
+        settings(|b| b.max_usd_per_day_micros = 1_000),
     );
     let conn = rusqlite::Connection::open(c.env.db()).unwrap();
     let at = c.env.now().format(&Rfc3339).unwrap();
@@ -818,8 +809,8 @@ async fn project_recovery_k39_chat_tokens_stop_the_guard_and_are_measured() {
     )
     .unwrap();
     conn.execute(
-        "INSERT INTO chat_runs (run_id,thread_id,input_message_id,state,started_at,usage_json) \
-         VALUES ('chat-1','pc','input','completed',?1,'{\"input_tokens\":1100,\"output_tokens\":100}')",
+        "INSERT INTO chat_runs (run_id,thread_id,input_message_id,state,started_at,finished_at,resolved_config_json,usage_json) \
+         VALUES ('chat-1','pc','input','completed',?1,?1,'{\"model\":\"claude-sonnet-5\"}','{\"input_tokens\":600,\"output_tokens\":0}')",
         [at],
     )
     .unwrap();
@@ -832,30 +823,100 @@ async fn project_recovery_k39_chat_tokens_stop_the_guard_and_are_measured() {
     assert_eq!(rule_count(&c, "pc/guard/budget"), 1);
     assert_eq!(c.escalations(), 1);
     assert_eq!(c.roots(), 0);
-    let usage =
-        task_ops::project_budget::usage(&c.store, &c.p.id.to_string(), c.env.now()).unwrap();
-    assert_eq!(usage.tokens, 1_200);
+    let usage = task_ops::project_budget::usage(
+        &c.store,
+        &c.p.id.to_string(),
+        c.env.now(),
+        &task_core::pricing::BudgetRates::default(),
+    )
+    .unwrap();
+    assert_eq!(usage.usd_micros, 1_200);
     assert_eq!(usage.chat_starts, 1);
     let rec: Value =
         serde_json::from_str(&resumes(&c, "pc/guard/budget")[0].proposal_json).unwrap();
     assert_eq!(rec["detail"]["usage"]["chat_starts"], 1);
     raw(
-        json!({"test": "project_recovery_k39", "tokens": usage.tokens, "chat_starts": usage.chat_starts,
+        json!({"test": "project_recovery_k39", "usd_micros": usage.usd_micros, "chat_starts": usage.chat_starts,
                "questions": 1, "evaluations": 0}),
     );
+}
+
+/// ADR 2026-11-06-budget-usd-caps D2（受け入れ 5）: 単価の無い model の run と usage の無い終わった run は
+/// 費用不明として数え、上限（既定 100 USD）に遠くても止める（0 USD として数えない）。止まりは危険な超過と
+/// 同じ（翌日の自動再評価は無い）。cache の多い run は単価どおりに数えるので上限内なら止めない。
+#[tokio::test]
+async fn project_recovery_usd_unknown_cost_runs_stop_the_guard_and_priced_cache_does_not() {
+    // cache read 500 万 token の run（claude-sonnet-5 で 1 USD）は上限内。止まらない。
+    let mut c = case_with(Some(ControllerMode::Enabled), launch, settings(|_| {}));
+    let t = root_task(&c.env, &c.store, &c.p, Status::Done);
+    let at = c.env.now().format(&Rfc3339).unwrap();
+    let insert = |c: &Case, run: &str, model: Option<&str>, usage: Option<&str>| {
+        rusqlite::Connection::open(c.env.db())
+            .unwrap()
+            .execute(
+                "INSERT INTO runs (run_id, task_id, role, seq, status, model, usage_json, started_at, finished_at) \
+                 VALUES (?1, ?2, 'worker', 1, 'completed', ?3, ?4, ?5, ?5)",
+                rusqlite::params![run, t.id.to_string(), model, usage, at],
+            )
+            .unwrap();
+    };
+    insert(
+        &c,
+        "cache",
+        Some("claude-sonnet-5"),
+        Some("{\"input_tokens\":10,\"cache_read_tokens\":5000000}"),
+    );
+    c.wake();
+    assert_ne!(phase(&c), ControllerPhase::Blocked);
+    assert_eq!(rule_count(&c, "pc/guard/budget"), 0);
+    // 単価の無い model の run が 1 件あれば止まる。
+    insert(
+        &c,
+        "local",
+        Some("local-qwen-3"),
+        Some("{\"input_tokens\":1000,\"output_tokens\":1000}"),
+    );
+    external(&c, "unknown-model");
+    spin(&mut c, 3);
+    assert_eq!(phase(&c), ControllerPhase::Blocked);
+    assert_eq!(rule_count(&c, "pc/guard/budget"), 1);
+    assert_eq!(
+        state(&c).next_wake_at,
+        None,
+        "no expiry for an unknown cost"
+    );
+    // usage の無い終わった run も費用不明（別の案件で確かめる）。
+    let c2 = case_with(Some(ControllerMode::Enabled), launch, settings(|_| {}));
+    let t2 = root_task(&c2.env, &c2.store, &c2.p, Status::Done);
+    rusqlite::Connection::open(c2.env.db())
+        .unwrap()
+        .execute(
+            "INSERT INTO runs (run_id, task_id, role, seq, status, model, started_at, finished_at) \
+             VALUES ('nousage', ?1, 'worker', 1, 'completed', 'claude-sonnet-5', ?2, ?2)",
+            rusqlite::params![t2.id.to_string(), at],
+        )
+        .unwrap();
+    let usage = task_ops::project_budget::usage(
+        &c2.store,
+        &c2.p.id.to_string(),
+        c2.env.now(),
+        &task_core::pricing::BudgetRates::default(),
+    )
+    .unwrap();
+    assert_eq!((usage.usd_micros, usage.usd_unknown_runs), (0, 1));
 }
 
 // ---- K40: 翌日の再評価 ----
 
 #[tokio::test]
-async fn project_recovery_k40_token_budget_expires_at_next_utc_day_once() {
+async fn project_recovery_k40_usd_budget_expires_at_next_utc_day_once() {
     let mut c = case_with(
         Some(ControllerMode::Enabled),
         human_wait,
-        settings(|b| b.max_tokens_per_day = 1_000),
+        settings(|b| b.max_usd_per_day_micros = 1_000),
     );
     let t = root_task(&c.env, &c.store, &c.p, Status::Done);
-    seed_tokens(&c, &t, "r1", 1_200);
+    seed_usd(&c, &t, "r1", 1_200);
     c.wake();
     assert_eq!(phase(&c), ControllerPhase::Blocked);
     assert_eq!(c.calls(), 0);
@@ -879,7 +940,7 @@ async fn project_recovery_k40_token_budget_expires_at_next_utc_day_once() {
     assert_eq!(c.escalations(), 1);
     assert_eq!(pending_wakes(&c.store, &c.p), 0);
     raw(
-        json!({"test": "project_recovery_k40_tokens", "expiry": "2026-11-02T00:00:00Z",
+        json!({"test": "project_recovery_k40_usd", "expiry": "2026-11-02T00:00:00Z",
                "evaluations_same_day": 0, "evaluations_next_day": 1, "questions": 1}),
     );
 }
@@ -945,13 +1006,13 @@ async fn project_recovery_k40_auto_resume_is_limited_without_a_person() {
     let mut c = case_with(
         Some(ControllerMode::Enabled),
         human_wait,
-        settings(|b| b.max_tokens_per_day = 1_000),
+        settings(|b| b.max_usd_per_day_micros = 1_000),
     );
     let t = root_task(&c.env, &c.store, &c.p, Status::Done);
     let mut seq = 0;
     for _ in 0..6 {
         seq += 1;
-        seed_tokens(&c, &t, &format!("r{seq}"), 1_200);
+        seed_usd(&c, &t, &format!("r{seq}"), 1_200);
         external(&c, &format!("e{seq}"));
         spin(&mut c, 3);
         next_day(&mut c);
@@ -975,10 +1036,10 @@ async fn project_recovery_k40_same_day_reset_blocks_again_without_a_new_question
     let mut c = case_with(
         Some(ControllerMode::Enabled),
         launch,
-        settings(|b| b.max_tokens_per_day = 1_000),
+        settings(|b| b.max_usd_per_day_micros = 1_000),
     );
     let t = root_task(&c.env, &c.store, &c.p, Status::Done);
-    seed_tokens(&c, &t, "r1", 1_200);
+    seed_usd(&c, &t, "r1", 1_200);
     c.wake();
     assert_eq!(phase(&c), ControllerPhase::Blocked);
     c.set_mode(ControllerMode::Enabled);
@@ -1041,7 +1102,7 @@ async fn project_recovery_k36_eight_day_composite_keeps_the_limits() {
             _ => human_wait(s),
         },
         settings(|b| {
-            b.max_tokens_per_day = 10_000;
+            b.max_usd_per_day_micros = 10_000;
             b.max_same_failure_repeats = 3;
         }),
     );
@@ -1056,7 +1117,7 @@ async fn project_recovery_k36_eight_day_composite_keeps_the_limits() {
             5 => brief_put(&c, "day1"),
             6 => external(&c, "day1"),
             // 2 日目: 同じ失敗が 3 回で止まる。人が解消する。
-            30 | 31 | 32 => {
+            30..=32 => {
                 fail_root(&c, "check failed: exit 3");
             }
             40 => human(&c),
@@ -1071,7 +1132,7 @@ async fn project_recovery_k36_eight_day_composite_keeps_the_limits() {
             100 => {
                 counter.store(2, std::sync::atomic::Ordering::SeqCst);
                 let t = root_task(&c.env, &c.store, &c.p, Status::Done);
-                seed_tokens(&c, &t, "r-day5", 12_000);
+                seed_usd(&c, &t, "r-day5", 12_000);
                 external(&c, "budget");
             }
             // 6 日目: 同じ tick に brief と authority の編集。

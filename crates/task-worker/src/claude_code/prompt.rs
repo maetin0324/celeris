@@ -1354,13 +1354,13 @@ fn tree_plan_shape_section(
         l.tree.max_child_tasks_per_plan,
         l.tree.max_open_decisions_per_plan
     ));
-    let tokens = tree
-        .tokens_left
-        .map(|t| format!(", tokens left: {t}"))
+    let usd = tree
+        .usd_left
+        .map(|t| format!(", budget left: {t:.2} USD-equivalent"))
         .unwrap_or_default();
     out.push_str(&format!(
         "- Whole tree (all tasks under the root): leaves left: {}, runs left: {}, replans left: {} (this \
-         task: {}){tokens}, open decisions left: {}. Work beyond these limits is stopped and a human is \
+         task: {}){usd}, open decisions left: {}. Work beyond these limits is stopped and a human is \
          asked, so plan within them: prefer fewer, well-bounded units.\n",
         tree.leaves_left,
         tree.runs_left,

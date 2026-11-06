@@ -79,7 +79,16 @@ const controller = {
   },
   pending_wakes: [],
   last_decision: null,
-  budget_today: { day: "2026-11-04", cos_inputs: 0, roots: 1, tokens: 900, chat_starts: 0 },
+  budget_today: {
+    day: "2026-11-04",
+    cos_inputs: 0,
+    roots: 1,
+    tokens: 900,
+    usd: 1.5,
+    usd_unknown_runs: 0,
+    price_table_version: "2026-09-approx-1",
+    chat_starts: 0,
+  },
   summary: {
     outcomes: [
       { id: "o1", title: "表 1", source: "request_block", recorded: true, evidence_root_ids: ["R1"], reached: true },
@@ -95,7 +104,7 @@ const controller = {
       max_no_progress_decisions: 5,
       max_same_failure_repeats: 3,
       max_invalid_decisions: 3,
-      max_tokens_per_day: 20000000,
+      max_usd_per_day: 100,
       ttl_secs: 259200,
     },
     trace: null,

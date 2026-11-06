@@ -90,9 +90,9 @@ pub struct ExecutionTreeTomlConfig {
     pub max_tree_runs: u32,
     #[serde(default = "default_tree_max_tree_replans")]
     pub max_tree_replans: u32,
-    /// 木全体の input + output トークンの上限（設定したときだけ）。
+    /// 木全体の費用の上限（USD 相当。設定したときだけ。有限で > 0。ADR 2026-11-06-budget-usd-caps D4）。
     #[serde(default)]
-    pub max_tree_tokens: Option<u64>,
+    pub max_tree_usd: Option<f64>,
     /// 未回答の決定の上限（木あたり）。
     #[serde(default = "default_tree_max_open_decisions")]
     pub max_open_decisions: usize,
@@ -126,7 +126,7 @@ impl Default for ExecutionTreeTomlConfig {
             max_tree_leaves: default_tree_max_tree_leaves(),
             max_tree_runs: default_tree_max_tree_runs(),
             max_tree_replans: default_tree_max_tree_replans(),
-            max_tree_tokens: None,
+            max_tree_usd: None,
             max_open_decisions: default_tree_max_open_decisions(),
             max_open_decisions_per_plan: default_tree_max_open_decisions_per_plan(),
             gate_depth_step: default_tree_gate_depth_step(),
@@ -152,7 +152,9 @@ impl ExecutionTreeTomlConfig {
             max_tree_leaves: self.max_tree_leaves,
             max_tree_runs: self.max_tree_runs,
             max_tree_replans: self.max_tree_replans,
-            max_tree_tokens: self.max_tree_tokens,
+            max_tree_usd_micros: self
+                .max_tree_usd
+                .map(super::project_controller::usd_to_micros),
             max_open_decisions_per_tree: self.max_open_decisions,
             max_open_decisions_per_plan: self.max_open_decisions_per_plan,
             gate_depth_step: self.gate_depth_step,
@@ -200,8 +202,12 @@ impl ExecutionTreeTomlConfig {
                 self.gate_depth_step
             ));
         }
-        if self.max_tree_tokens == Some(0) {
-            return Err("max_tree_tokens must be >= 1 when set".to_string());
+        if let Some(v) = self.max_tree_usd
+            && !(v.is_finite() && v > 0.0)
+        {
+            return Err(format!(
+                "max_tree_usd must be a finite number > 0 when set (got {v})"
+            ));
         }
         if self.max_open_decisions_per_plan > self.max_open_decisions {
             return Err(format!(

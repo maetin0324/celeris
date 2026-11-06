@@ -599,7 +599,12 @@ async fn grandchild_integrates_into_child_which_integrates_into_root() {
     );
     // ADR-0079 D3 / U-R7（Phase R2a）: 3 段の木の数（store の `runs` 索引・`work_units`・計画の版から）が
     // 節点ごとの手計算と一致する。
-    let counters = task_ops::tree::tree_counters(store.as_ref(), root_id).unwrap();
+    let counters = task_ops::tree::tree_counters(
+        store.as_ref(),
+        root_id,
+        &task_core::pricing::BudgetRates::default(),
+    )
+    .unwrap();
     assert_eq!(counters.nodes, 3);
     let mut expected_runs = 0u32;
     let mut expected_reviewers = 0u32;

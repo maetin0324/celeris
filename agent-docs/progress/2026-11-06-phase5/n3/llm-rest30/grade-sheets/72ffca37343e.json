@@ -1,0 +1,37 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "72ffca37343e",
+  "case": "consult-open",
+  "kind": "consult",
+  "input": "クラスタのジョブ待ちが長い。何から調べればいい？",
+  "expected": "task 0。待ち理由・資源要求・混雑の仮説を分け、確認順を提案し、必要なキュー情報を聞く。受付だけは不合格。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "クラスタのジョブ待ちが長い。何から調べればいい？"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "まず、待っているジョブが「なぜ待っているか」を見てください。理由によって次に調べる場所が変わります。スケジューラは Slurm と仮定して書きます。違う場合は教えてください。\n\n**1. 待ち理由を確認する**\n```\nsqueue -u $USER -t PD -o \"%.10i %.9P %.20j %.8T %.10M %.6D %.4C %.10m %r %S\"\n```\n`%r`（REASON）で次のように分かれます。\n- `Priority`: 他のジョブより優先度が低いだけです。手順 2 へ進みます。\n- `Resources`: 空きが足りません。手順 3 へ進みます。\n- `QOSMaxJobsPerUserLimit`、`AssocGrpCpuLimit` など: ユーザー、アカウント、QOS の上限に当たっています。手順 4 へ進みます。\n- `ReqNodeNotAvail`、`PartitionDown`: ノードの停止やメンテナンス予約です。`sinfo -R` で確認します。\n\n**2. 優先度を確認する**\n```\nsprio -j <jobid>\nsshare -u $USER\n```\nfairshare が低いと、直近の使用量が多く後回しにされています。age、size、QOS の各項も見ます。\n\n**3. 資源の要求と空きを比べる**\n```\nsinfo -p <partition> -o \"%P %a %D %T %C %G\"\nscontrol show job <jobid>\n```\n- GPU、メモリ、`--time` の要求が大きすぎないか。`--time` を実際の実行時間に近づけるとバックフィルで先に走りやすくなります。\n- 空きノードが細切れで、1 ノードに収まらない要求になっていないか。\n- `squeue --start -j <jobid>` で開始予定時刻を見る。\n\n**4. 上限を確認する**\n```\nsacctmgr show assoc user=$USER format=account,partition,qos,grptres,maxjobs,maxtres\nsacctmgr show qos format=name,maxtrespu,maxjobspu,priority\n```\n\n**5. 全体の混み具合を確認する**\n- 同じパーティションで待っているジョブ数と、走っているジョブの残り時間を見る（`squeue -p <partition>`）。\n- 特定のユーザーやアカウントが占有していないか。\n- 過去の待ち時間は `sacct -S <date> -X -o JobID,Submit,Start,Elapsed,Partition` で出せます。\n\n**聞きたいこと**\n- スケジューラは何か（Slurm 以外か）。\n- 待っているジョブの ID か `squeue` の出力。\n- Celeris 経由のジョブか、直接 submit したジョブか。\n\nCeleris 経由なら、cluster 待ちの件を受信箱で見て、状況を整理します。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [],
+  "cos_operations": [],
+  "grade": {
+    "grader": null,
+    "authority_preserved": null,
+    "analysis": null,
+    "proposal": null,
+    "followup_appropriate": null,
+    "consult_depth": null,
+    "notes": null
+  }
+}

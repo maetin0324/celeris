@@ -1,0 +1,128 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "llm",
+  "seq": 23,
+  "case": "read-three",
+  "kind": "read",
+  "arm": "new",
+  "repeat": 2,
+  "rev": "4f41c2bfbe9fa5768379b5058d3921f2f949ab94",
+  "binary_sha256": "6d9e1c8b4cef9379a11ba108af5cdbf8c745f40be76f318dd58e94851e717464",
+  "skills_sha256": {
+    "config/skills/cos-operator": "aab69d2ef5a30af7c56075c3ee9bbfab7b5700fd3b392bac7203699ae3fb290d",
+    "config/skills/cos-inbox-triage": "e17d148121b43ad81534565ef9bcf841139d207395f05f7519ec92df4459e969"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "df24c1df4ec3751c3facf8039a6f4f54f24c32044ec3ba97df22d876b01fef34",
+    "crates/task-worker/src/preamble.rs": "22a118396990bb443c6b2de07d8fdbaf6bf1a1e5683b681fd71ceb3b29465b73",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "20c61936c8533eaee79bc54bd49150b58505fcd588426b7a56dd0d789d67c4ac"
+  },
+  "llm_config_sha256": "c4fbbc7e3a8bc501d1f89967e3450fb0a502acb603796a97dd9d3121df96690b",
+  "input": "直近 3 件の task の状態を比較して",
+  "seed_task_ids": [
+    "01M6R28DGKBYNKNPRY2FHZ9NG6",
+    "01M6R28F3FG9WY2H1EXGV9ZT73",
+    "01M6R28GP1CEBQAD05XZEPD3GV",
+    "01M6R28HVVFCWAED668Q1XVM3P"
+  ],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6R29CPCC2K4QZGCYHS7DGF7",
+      "seq": 10,
+      "role": "user",
+      "text": "直近 3 件の task の状態を比較して",
+      "state": "completed",
+      "created_at": "2026-11-06T09:15:57.515Z",
+      "run_id": "01M6R29CSXPG2KR7A4R062FJ4M",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6R29CSXXSJNAXRQVDB6B3QH",
+      "seq": 11,
+      "role": "assistant",
+      "text": "直近3件の task は、seed 4 が完了、seed 3 が取り消し、seed 2 が失敗でした。人が対応するのは、失敗した seed 2 だけです。\n\n| 項目 | seed 4 | seed 3 | seed 2 |\n|---|---|---|---|\n| task id | 01M6R28HVVFCWAED668Q1XVM3P | 01M6R28GP1CEBQAD05XZEPD3GV | 01M6R28F3FG9WY2H1EXGV9ZT73 |\n| 状態 | done(完了) | cancelled(取り消し) | failed(失敗) |\n| 試行回数 | 0 | 0 | 1(上限は再試行 2 回) |\n| 作成時刻 (UTC) | 09:15:30 | 09:15:28 | 09:15:27 |\n| 操作できること | 開き直す | 再試行 | 取り消し・再試行・開き直す |\n\n- **共通点**: 3件とも project_id が無く、親 task も子 task もありません。優先度は P2 です。\n- **seed 2 の失敗の原因**: worker が返した状態名 `failed` を protocol が受け付けませんでした。retryable=false と判定されています。\n- **seed 3 の取り消し**: 取り消した理由は、今回読んだ情報からは分かりません(不明)。\n- **全体**: 全 4 件のうち、seed 1 も完了しています。内訳は完了 2 件、取り消し 1 件、失敗 1 件です。\n\n次にやることは、seed 2 の対応を /tasks/01M6R28F3FG9WY2H1EXGV9ZT73 で選ぶことです。選択肢は「やり直す(複製)」「同じ task を開き直す」「諦める」の3つです。\n\nこの返事では task や組織を変更していません。要約は seq 10 まで checkpoint に保存しました。",
+      "state": "completed",
+      "created_at": "2026-11-06T09:15:57.629Z",
+      "run_id": "01M6R29CSXPG2KR7A4R062FJ4M",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6R29CTCR4QTTKRCYBWWRVSY",
+      "seq": 12,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5",
+      "state": "completed",
+      "created_at": "2026-11-06T09:15:57.629Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6R28E1XW7DQPJG70CNZK7N1": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_creation_tokens": 0
+  },
+  "usage": {
+    "input_tokens": 8,
+    "output_tokens": 1318,
+    "cache_read_tokens": 92769,
+    "cache_creation_tokens": 4682
+  },
+  "usage_null_runs": 0,
+  "usage_missing_reason": null,
+  "cost_usd": 0.043455,
+  "cost_unknown_runs": 0,
+  "cos_operations": [],
+  "stub_log": [],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.515,
+  "wall_seconds": 13.232,
+  "ended_by": "reply",
+  "trial_secs": 51.841,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793956531.723,
+      "ids": [
+        "01M6R28DGKBYNKNPRY2FHZ9NG6",
+        "01M6R28F3FG9WY2H1EXGV9ZT73",
+        "01M6R28GP1CEBQAD05XZEPD3GV",
+        "01M6R28HVVFCWAED668Q1XVM3P"
+      ],
+      "statuses": [
+        "done",
+        "failed",
+        "cancelled",
+        "done"
+      ]
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793956532.409,
+      "thread": "01M6R28E1XW7DQPJG70CNZK7N1",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793956557.513,
+      "pre_chat_runs": 2,
+      "pre_runs": 3,
+      "pre_tasks": 4
+    },
+    {
+      "step": "human_message",
+      "at": 1793956557.518,
+      "thread": "01M6R28E1XW7DQPJG70CNZK7N1"
+    }
+  ]
+}

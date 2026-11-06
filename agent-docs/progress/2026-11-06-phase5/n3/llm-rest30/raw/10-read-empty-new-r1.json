@@ -1,0 +1,113 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "llm",
+  "seq": 10,
+  "case": "read-empty",
+  "kind": "read",
+  "arm": "new",
+  "repeat": 1,
+  "rev": "4f41c2bfbe9fa5768379b5058d3921f2f949ab94",
+  "binary_sha256": "6d9e1c8b4cef9379a11ba108af5cdbf8c745f40be76f318dd58e94851e717464",
+  "skills_sha256": {
+    "config/skills/cos-operator": "aab69d2ef5a30af7c56075c3ee9bbfab7b5700fd3b392bac7203699ae3fb290d",
+    "config/skills/cos-inbox-triage": "e17d148121b43ad81534565ef9bcf841139d207395f05f7519ec92df4459e969"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "df24c1df4ec3751c3facf8039a6f4f54f24c32044ec3ba97df22d876b01fef34",
+    "crates/task-worker/src/preamble.rs": "22a118396990bb443c6b2de07d8fdbaf6bf1a1e5683b681fd71ceb3b29465b73",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "20c61936c8533eaee79bc54bd49150b58505fcd588426b7a56dd0d789d67c4ac"
+  },
+  "llm_config_sha256": "c4fbbc7e3a8bc501d1f89967e3450fb0a502acb603796a97dd9d3121df96690b",
+  "input": "直近の失敗 task を数えて",
+  "seed_task_ids": [],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6R1BEBZMZ7MG8G0B0TF5XXB",
+      "seq": 1,
+      "role": "user",
+      "text": "直近の失敗 task を数えて",
+      "state": "completed",
+      "created_at": "2026-11-06T08:59:36.190Z",
+      "run_id": "01M6R1BED0D1460P36VZ3W9C86",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6R1BED1JZFMSMZ1HNDKC317",
+      "seq": 2,
+      "role": "assistant",
+      "text": "失敗した task は 0 件です。\n\ntask API で `status=failed` を指定して読むと、結果は 0 件でした。条件を付けずに全 task を読んでも 0 件で、task 自体がまだありません。\n\n読んだのは task 一覧 API だけです。DB は直接開いていません。",
+      "state": "completed",
+      "created_at": "2026-11-06T08:59:36.224Z",
+      "run_id": "01M6R1BED0D1460P36VZ3W9C86",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6R1BEDD7EVWDTNPMDANPK43",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5",
+      "state": "completed",
+      "created_at": "2026-11-06T08:59:36.224Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6R1BCCWEQ23GQ843CDAQ08X": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_creation_tokens": 0
+  },
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 794,
+    "cache_read_tokens": 121619,
+    "cache_creation_tokens": 16764
+  },
+  "usage_null_runs": 0,
+  "usage_missing_reason": null,
+  "cost_usd": 0.074198,
+  "cost_unknown_runs": 0,
+  "cos_operations": [],
+  "stub_log": [],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.511,
+  "wall_seconds": 22.305,
+  "ended_by": "reply",
+  "trial_secs": 33.062,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793955573.546,
+      "ids": [],
+      "statuses": []
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793955574.175,
+      "thread": "01M6R1BCCWEQ23GQ843CDAQ08X",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793955576.188,
+      "pre_chat_runs": 0,
+      "pre_runs": 0,
+      "pre_tasks": 0
+    },
+    {
+      "step": "human_message",
+      "at": 1793955576.193,
+      "thread": "01M6R1BCCWEQ23GQ843CDAQ08X"
+    }
+  ]
+}

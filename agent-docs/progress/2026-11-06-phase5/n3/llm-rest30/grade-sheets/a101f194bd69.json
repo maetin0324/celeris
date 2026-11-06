@@ -1,0 +1,35 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "a101f194bd69",
+  "case": "delegate-summary",
+  "kind": "delegate",
+  "input": "この案件の受信箱の件名が切れる不具合を修正し、検証して",
+  "expected": "task 1。案件・repos・review/command check を保持。完了を元 thread に要約し、続きの相談で task を増やさない。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "この案件の受信箱の件名が切れる不具合を修正し、検証して"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "修正はまだ始めていません。この案件の repo に修正するコードが無いためです。どの repo かを教えてください。\n\n案件 p4e の登録 repo は `sample-repo`（`/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t/sample-repo`）だけです。確認した結果は次のとおりです。\n- git の履歴は `seed` コミット 1 件だけです。\n- 追跡ファイルは 0 個で、受信箱の画面のコードも件名を表示する処理もありません。\n- この案件にはまだ task がありません。\n\n存在しないコードの修正は検証できないので、task も起票していません。\n\n次のどれかを教えてください。\n1. 受信箱の画面のコードがある別の repo やパスを、この案件に登録する。\n2. 実コードが入ったブランチを `sample-repo` に取り込む。\n3. 不具合の再現手順（どの画面で、どの件名が、どう切れるか）を教える。\n\n教えてもらえれば、修正と検証の task を起票します。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [],
+  "cos_operations": [],
+  "grade": {
+    "grader": null,
+    "authority_preserved": null,
+    "summary_in_origin": null,
+    "review_preserved": null,
+    "notes": null
+  }
+}

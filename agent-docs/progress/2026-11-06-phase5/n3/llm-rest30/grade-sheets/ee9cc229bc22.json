@@ -1,0 +1,37 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "ee9cc229bc22",
+  "case": "consult-no-question",
+  "kind": "consult",
+  "input": "予算は今月まで、追加購入は不可。まず既存ノードの利用率を見る案でよい？",
+  "expected": "task 0。制約を踏まえた分析と具体案。同じ予算を聞き直すだけは不合格。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "予算は今月まで、追加購入は不可。まず既存ノードの利用率を見る案でよい？"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "既存ノードの利用率を先に見る案でよいです。ただし、実際の利用率はまだ確認していません。上の回答は一般論です。\n\n次の 2 点を教えてください。\n1. 「ノード」が Celeris の worker ノードか、PRA など別の環境か。\n2. Celeris 側のノードなら、利用率の調査を task として起票するか。起票する場合は、見る指標と期間も指定してください。\n\n要約は保存済みで、task と operation は作っていません。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [],
+  "cos_operations": [],
+  "grade": {
+    "grader": null,
+    "authority_preserved": null,
+    "analysis": null,
+    "proposal": null,
+    "followup_appropriate": null,
+    "consult_depth": null,
+    "notes": null
+  }
+}

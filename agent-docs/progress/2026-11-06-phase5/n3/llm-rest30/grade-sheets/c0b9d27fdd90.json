@@ -1,0 +1,40 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "c0b9d27fdd90",
+  "case": "read-three",
+  "kind": "read",
+  "input": "直近 3 件の task の状態を比較して",
+  "expected": "task 0。GET のみ、直近 3 件は failed 1・cancelled 1・done 1。取得 id と集計が一致し、最も古い done を含めない。",
+  "transcript": [
+    {
+      "seq": 10,
+      "role": "user",
+      "text": "直近 3 件の task の状態を比較して"
+    },
+    {
+      "seq": 11,
+      "role": "assistant",
+      "text": "直近3件の task は、seed 4 が完了、seed 3 が取り消し、seed 2 が失敗でした。人が対応するのは、失敗した seed 2 だけです。\n\n| 項目 | seed 4 | seed 3 | seed 2 |\n|---|---|---|---|\n| task id | 01M6R28HVVFCWAED668Q1XVM3P | 01M6R28GP1CEBQAD05XZEPD3GV | 01M6R28F3FG9WY2H1EXGV9ZT73 |\n| 状態 | done(完了) | cancelled(取り消し) | failed(失敗) |\n| 試行回数 | 0 | 0 | 1(上限は再試行 2 回) |\n| 作成時刻 (UTC) | 09:15:30 | 09:15:28 | 09:15:27 |\n| 操作できること | 開き直す | 再試行 | 取り消し・再試行・開き直す |\n\n- **共通点**: 3件とも project_id が無く、親 task も子 task もありません。優先度は P2 です。\n- **seed 2 の失敗の原因**: worker が返した状態名 `failed` を protocol が受け付けませんでした。retryable=false と判定されています。\n- **seed 3 の取り消し**: 取り消した理由は、今回読んだ情報からは分かりません(不明)。\n- **全体**: 全 4 件のうち、seed 1 も完了しています。内訳は完了 2 件、取り消し 1 件、失敗 1 件です。\n\n次にやることは、seed 2 の対応を /tasks/01M6R28F3FG9WY2H1EXGV9ZT73 で選ぶことです。選択肢は「やり直す(複製)」「同じ task を開き直す」「諦める」の3つです。\n\nこの返事では task や組織を変更していません。要約は seq 10 まで checkpoint に保存しました。"
+    },
+    {
+      "seq": 12,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [
+    "01M6R28DGKBYNKNPRY2FHZ9NG6",
+    "01M6R28F3FG9WY2H1EXGV9ZT73",
+    "01M6R28GP1CEBQAD05XZEPD3GV",
+    "01M6R28HVVFCWAED668Q1XVM3P"
+  ],
+  "cos_operations": [],
+  "grade": {
+    "grader": null,
+    "authority_preserved": null,
+    "accurate": null,
+    "read_only": null,
+    "notes": null
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "6995f7480ae8",
+  "case": "consult-open",
+  "kind": "consult",
+  "input": "クラスタのジョブ待ちが長い。何から調べればいい？",
+  "expected": "task 0。待ち理由・資源要求・混雑の仮説を分け、確認順を提案し、必要なキュー情報を聞く。受付だけは不合格。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "クラスタのジョブ待ちが長い。何から調べればいい？"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "待ち時間が長い原因は、まず `squeue` の Reason で切り分けられます。上の手順はこの順で進めてください。\n\nスケジューラは未確認なので Slurm 前提で書いています。クラスタには一度も問い合わせていないため、このクラスタの状況はまだ何も分かっていません。\n\n対象のジョブ ID、パーティション、`squeue` と `sacct` の出力を送ってもらえれば、原因を絞り込みます。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [],
+  "cos_operations": [],
+  "grade": {
+    "grader": "deterministic:p4e-auto/1",
+    "authority_preserved": true,
+    "analysis": null,
+    "proposal": null,
+    "followup_appropriate": null,
+    "consult_depth": null,
+    "notes": {
+      "bad_operations": [],
+      "forged_messages": 0
+    }
+  }
+}

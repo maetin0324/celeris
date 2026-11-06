@@ -1,0 +1,113 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "llm",
+  "seq": 20,
+  "case": "consult-open",
+  "kind": "consult",
+  "arm": "old",
+  "repeat": 2,
+  "rev": "286a7ab199b27fe2524c07d5eb501abd5be567fa",
+  "binary_sha256": "e2b1e780200842c77426735f4387045c5ec57a08f59ea1f00eeff076c24a7ef4",
+  "skills_sha256": {
+    "config/skills/cos-operator": "d45913d29dc2510d7698eb40a628754d097d1020e2fb77a928b54089f20bfefa",
+    "config/skills/cos-inbox-triage": "73b317ffcad542bd3ec41c502e0ac9a50faa86ff5d77254c69e92b14204a66f2"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "bb7e55371490c29f7c6a5351486e65bbd81d28c83dcc0d0f0b2e10b5c4721f20",
+    "crates/task-worker/src/preamble.rs": "9d90308a438a4aacbd4e992d1d3131db4468aa1501d8742934324a0a0dc8be27",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "05213c1de1873dbb19c5b56e786813d86b5bbb716bf4e043e1e404d672ea4641"
+  },
+  "llm_config_sha256": "c4fbbc7e3a8bc501d1f89967e3450fb0a502acb603796a97dd9d3121df96690b",
+  "input": "クラスタのジョブ待ちが長い。何から調べればいい？",
+  "seed_task_ids": [],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6R267XKQTZ65R34PY9JJC63",
+      "seq": 1,
+      "role": "user",
+      "text": "クラスタのジョブ待ちが長い。何から調べればいい？",
+      "state": "completed",
+      "created_at": "2026-11-06T09:14:14.323Z",
+      "run_id": "01M6R2680Y2A5FYCNZ0YR0D7TB",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6R2680ZBAD2E9A76JDZM546",
+      "seq": 2,
+      "role": "assistant",
+      "text": "まず、待っているジョブが「なぜ待っているか」を見てください。理由によって次に調べる場所が変わります。スケジューラは Slurm と仮定して書きます。違う場合は教えてください。\n\n**1. 待ち理由を確認する**\n```\nsqueue -u $USER -t PD -o \"%.10i %.9P %.20j %.8T %.10M %.6D %.4C %.10m %r %S\"\n```\n`%r`（REASON）で次のように分かれます。\n- `Priority`: 他のジョブより優先度が低いだけです。手順 2 へ進みます。\n- `Resources`: 空きが足りません。手順 3 へ進みます。\n- `QOSMaxJobsPerUserLimit`、`AssocGrpCpuLimit` など: ユーザー、アカウント、QOS の上限に当たっています。手順 4 へ進みます。\n- `ReqNodeNotAvail`、`PartitionDown`: ノードの停止やメンテナンス予約です。`sinfo -R` で確認します。\n\n**2. 優先度を確認する**\n```\nsprio -j <jobid>\nsshare -u $USER\n```\nfairshare が低いと、直近の使用量が多く後回しにされています。age、size、QOS の各項も見ます。\n\n**3. 資源の要求と空きを比べる**\n```\nsinfo -p <partition> -o \"%P %a %D %T %C %G\"\nscontrol show job <jobid>\n```\n- GPU、メモリ、`--time` の要求が大きすぎないか。`--time` を実際の実行時間に近づけるとバックフィルで先に走りやすくなります。\n- 空きノードが細切れで、1 ノードに収まらない要求になっていないか。\n- `squeue --start -j <jobid>` で開始予定時刻を見る。\n\n**4. 上限を確認する**\n```\nsacctmgr show assoc user=$USER format=account,partition,qos,grptres,maxjobs,maxtres\nsacctmgr show qos format=name,maxtrespu,maxjobspu,priority\n```\n\n**5. 全体の混み具合を確認する**\n- 同じパーティションで待っているジョブ数と、走っているジョブの残り時間を見る（`squeue -p <partition>`）。\n- 特定のユーザーやアカウントが占有していないか。\n- 過去の待ち時間は `sacct -S <date> -X -o JobID,Submit,Start,Elapsed,Partition` で出せます。\n\n**聞きたいこと**\n- スケジューラは何か（Slurm 以外か）。\n- 待っているジョブの ID か `squeue` の出力。\n- Celeris 経由のジョブか、直接 submit したジョブか。\n\nCeleris 経由なら、cluster 待ちの件を受信箱で見て、状況を整理します。",
+      "state": "completed",
+      "created_at": "2026-11-06T09:14:14.430Z",
+      "run_id": "01M6R2680Y2A5FYCNZ0YR0D7TB",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6R2684H46QH8DSQ722NT1X6",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5",
+      "state": "completed",
+      "created_at": "2026-11-06T09:14:14.430Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6R265YFPBYJR0Y013PDFQ90": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_creation_tokens": 0
+  },
+  "usage": {
+    "input_tokens": 4,
+    "output_tokens": 1444,
+    "cache_read_tokens": 29951,
+    "cache_creation_tokens": 15549
+  },
+  "usage_null_runs": 0,
+  "usage_missing_reason": null,
+  "cost_usd": 0.059311,
+  "cost_unknown_runs": 0,
+  "cos_operations": [],
+  "stub_log": [],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.523,
+  "wall_seconds": 15.745,
+  "ended_by": "reply",
+  "trial_secs": 30.131,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793956451.114,
+      "ids": [],
+      "statuses": []
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793956452.306,
+      "thread": "01M6R265YFPBYJR0Y013PDFQ90",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793956454.321,
+      "pre_chat_runs": 0,
+      "pre_runs": 0,
+      "pre_tasks": 0
+    },
+    {
+      "step": "human_message",
+      "at": 1793956454.338,
+      "thread": "01M6R265YFPBYJR0Y013PDFQ90"
+    }
+  ]
+}

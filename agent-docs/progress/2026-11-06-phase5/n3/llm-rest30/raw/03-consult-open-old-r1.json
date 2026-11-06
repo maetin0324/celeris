@@ -1,0 +1,113 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "llm",
+  "seq": 3,
+  "case": "consult-open",
+  "kind": "consult",
+  "arm": "old",
+  "repeat": 1,
+  "rev": "286a7ab199b27fe2524c07d5eb501abd5be567fa",
+  "binary_sha256": "e2b1e780200842c77426735f4387045c5ec57a08f59ea1f00eeff076c24a7ef4",
+  "skills_sha256": {
+    "config/skills/cos-operator": "d45913d29dc2510d7698eb40a628754d097d1020e2fb77a928b54089f20bfefa",
+    "config/skills/cos-inbox-triage": "73b317ffcad542bd3ec41c502e0ac9a50faa86ff5d77254c69e92b14204a66f2"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "bb7e55371490c29f7c6a5351486e65bbd81d28c83dcc0d0f0b2e10b5c4721f20",
+    "crates/task-worker/src/preamble.rs": "9d90308a438a4aacbd4e992d1d3131db4468aa1501d8742934324a0a0dc8be27",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "05213c1de1873dbb19c5b56e786813d86b5bbb716bf4e043e1e404d672ea4641"
+  },
+  "llm_config_sha256": "c4fbbc7e3a8bc501d1f89967e3450fb0a502acb603796a97dd9d3121df96690b",
+  "input": "クラスタのジョブ待ちが長い。何から調べればいい？",
+  "seed_task_ids": [],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6R16QCVTVVSFSXCVD4MG8CJ",
+      "seq": 1,
+      "role": "user",
+      "text": "クラスタのジョブ待ちが長い。何から調べればいい？",
+      "state": "completed",
+      "created_at": "2026-11-06T08:57:01.595Z",
+      "run_id": "01M6R16QF55GW341SE7D3YSTRF",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6R16QF6V45S2WYRNBJFCZAJ",
+      "seq": 2,
+      "role": "assistant",
+      "text": "まず、待っているジョブの待ち理由（pending の reason）を確認してください。スケジューラは未確認なので、コマンドは Slurm の例です。\n\n- **待ち理由**: `squeue -u $USER -t PD -o \"%i %P %r %S\"` で reason を見ます。\n  - `Priority`: 優先度が低い状態です。`sprio -j <jobid>` で内訳を見ます。\n  - `Resources`: 要求した資源が空くのを待っています。\n  - `QOSMax…` や `AssocGrpLimit`: 自分やグループの上限に当たっています。\n  - `ReqNodeNotAvail` や `Dependency`: ノード停止か、依存ジョブの未完了です。\n- **要求の大きさ**: ノード数、GPU 数、メモリ、`--time` を確認します。時間制限を実際の実行時間に近づけると、バックフィルで先に動きやすくなります。\n- **クラスタの状態**: `sinfo -o \"%P %a %D %t\"` で、パーティションごとのノード状態を見ます。drain や down が多いなら障害が原因の可能性があります。他のパーティションに空きがないかも見ます。\n- **開始見込み**: `squeue --start -j <jobid>` で開始予定時刻を確認します。\n- **自分の fairshare**: `sshare -u $USER` で、直近の使用量が多くて優先度が下がっていないかを見ます。\n\nreason の値と、要求資源（ノード数、GPU 数、時間）を教えてください。原因をもう一段絞れます。Celeris が管理するクラスタ固有の仕組みの話であれば、その旨も教えてください。",
+      "state": "completed",
+      "created_at": "2026-11-06T08:57:01.669Z",
+      "run_id": "01M6R16QF55GW341SE7D3YSTRF",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6R16QFKX68QBY985A5V2362",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5",
+      "state": "completed",
+      "created_at": "2026-11-06T08:57:01.669Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6R16NDXXSCPAVYWBN2D62V0": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_creation_tokens": 0
+  },
+  "usage": {
+    "input_tokens": 4,
+    "output_tokens": 1717,
+    "cache_read_tokens": 26978,
+    "cache_creation_tokens": 15243
+  },
+  "usage_null_runs": 0,
+  "usage_missing_reason": null,
+  "cost_usd": 0.060681,
+  "cost_unknown_runs": 0,
+  "cos_operations": [],
+  "stub_log": [],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.511,
+  "wall_seconds": 20.863,
+  "ended_by": "reply",
+  "trial_secs": 31.783,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793955417.739,
+      "ids": [],
+      "statuses": []
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793955419.583,
+      "thread": "01M6R16NDXXSCPAVYWBN2D62V0",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793955421.593,
+      "pre_chat_runs": 0,
+      "pre_runs": 0,
+      "pre_tasks": 0
+    },
+    {
+      "step": "human_message",
+      "at": 1793955421.597,
+      "thread": "01M6R16NDXXSCPAVYWBN2D62V0"
+    }
+  ]
+}

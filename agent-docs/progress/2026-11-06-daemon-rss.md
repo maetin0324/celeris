@@ -74,3 +74,9 @@ ADR の方針のとおり、まず大きな一時確保の削減（A）を狙う
 - `cargo build -p celeris`（after binary、`tune_malloc()` 入り）を CARGO_TARGET_DIR にビルド済み（4m05s）。このビルドで 1 run の壁時計の大半を使い、soak は実行していない。
 - scratch の `/local/celeris/data/scratch/daemon-rss/` に `prod-copy.sqlite3`（1.4 GB）、`st1`・`st2`（state）、`out-before`・`out-after` がある。次の run はビルド済み binary を使えば soak 1 回（240 秒）を実行できる。
 - before 用 binary は未作成（`tune_malloc()` を外してビルドが必要。別の target dir ではなく、ビルド後に binary を scratch へコピーしてから戻す）。
+
+## 準備の状況（Run #10）
+- 前の run でビルドした binary は、run の間に scratch の target が掃除されて消えていた。再ビルド（2m59s）し、binary を target の外 `/local/celeris/data/scratch/daemon-rss/bin/celeris-after` に残した。次の run は再ビルド不要で `--celeris` にこの path を渡せる。
+- soak の起動は state ごと作り直す必要がある。手順: `D=/local/celeris/data/scratch/daemon-rss`、`mkdir $D/stN && cp --reflink=auto $D/prod-copy.sqlite3 $D/stN/celeris.sqlite3`、`python3 -I scripts/dev/daemon-soak/daemon_soak.py run --cond off --label <名> --out $D/out-<名> --state $D/stN --celeris $D/bin/celeris-after --script-deploy scripts/selfdeploy/script-bundle-gate.sh --bundle /bin/true --secs 240 --sample-secs 15 --task-interval 30`（`--script-deploy`・`--bundle` は cond off では使われない想定、未確認）。
+- 今回の soak は、binary が無く起動に失敗した。`$D/out-after2/` は失敗の跡で、計測値は無い。
+- before 用の binary は未作成。

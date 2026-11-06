@@ -32,3 +32,13 @@ completed: 2026-11-06
 - 既存の view（`chat_run_list` / `run_from_raw`）は、`usage_json` が JSON として正しいが `Usage` として読めない行で一覧全体を `Invalid` エラーにする。cost_state は `unknown` として返す方が D5 に合う。run_store の挙動なので api-contract WU で扱うことを提案する。
 - `task_ops::project_budget` はまだ `project_not_launched_runs_between` を呼ばない（`budget_today.not_launched_runs`、fail closed の反映は budget WU・api-contract WU）。
 - 基準は `git merge-base HEAD main`（WU では `$CELERIS_WU_BASE`）。
+
+## 統合検査を絞った理由と結果（repair-query）
+- 絞った理由: `bash scripts/dev/test-affected.sh` の対象は 14 crate と web で、統合検査の 1200 秒に収まらず integrate-query が失敗した。Rust の機能は変えていない。
+- 絞った検査を提出時の HEAD で実行した（`git merge-base HEAD main` 以後、最後の同期の後）。
+  - `cargo nextest run -p task-core`: exit 0、1277 tests run: 1277 passed, 0 skipped。
+  - `cargo clippy -p task-core --all-targets -- -D warnings`: exit 0。
+  - `cargo fmt --all -- --check`: exit 0（差分なし）。
+  - `cargo check --workspace --all-targets`: exit 0（`celeris` の `script_exhaustive` 試験に警告 1 件。今回の変更外）。
+- 全 crate の試験（逆依存 crate、web を含む）は release gate（`scripts/selfdeploy/release.sh`）で行う。この WU では走らせていない。
+- commit: `repair: usage-query の統合検査を絞った検査で通し進捗に証拠を残す`

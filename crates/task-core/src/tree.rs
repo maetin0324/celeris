@@ -213,7 +213,7 @@ pub struct TreeLimits {
     /// 木全体で採用した replan の版（既定 30〈R6-2 で 10 から〉。R2a で使う）。
     pub max_tree_replans: u32,
     /// 木全体の費用の上限（micro-USD = 1e-6 USD。`task_core::pricing` の換算。設定したときだけ。
-    /// ADR 2026-11-06: 旧 `max_tree_tokens` の置き換え）。
+    /// ADR 2026-11-06: token 数の上限を料金換算の上限に置き換えた）。
     pub max_tree_usd_micros: Option<u64>,
     /// 木あたりの未回答の決定（既定 12。R3a で使う）。
     pub max_open_decisions_per_tree: usize,

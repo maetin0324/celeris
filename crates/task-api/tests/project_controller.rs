@@ -326,7 +326,7 @@ async fn project_wake_api_summary_shows_outcomes_wait_authority_and_next_wake() 
     assert_eq!(today["tokens"], 0);
     assert!(
         send(&app, get_admin(&path)).await.json()["summary"]["budget_limits"]
-            .get("max_tokens_per_day")
+            .get("max_tokens_per_day") // LEGACY_REJECT
             .is_none()
     );
     // off: 未達 2 件、待機なし、許可なし、上限は daemon の値、判断なし。

@@ -240,6 +240,7 @@ impl Dispatcher {
             scan_interval_secs,
             // 取り込み側が照合済みの generation と食い違うよう、作り直しても番号は戻さない。
             generation: self.stagnation.generation,
+            budget_rates: std::mem::take(&mut self.stagnation.budget_rates),
             ..Default::default()
         };
     }
@@ -810,9 +811,12 @@ impl Dispatcher {
             return Ok(false);
         }
         let root_id = task_core::tree::root_id_of(task);
-        let counters =
-            task_ops::tree::tree_counters(self.store.as_ref(), root_id, &self.budget_rates)
-                .map_err(ops_to_store)?;
+        let counters = task_ops::tree::tree_counters(
+            self.store.as_ref(),
+            root_id,
+            &self.stagnation.budget_rates,
+        )
+        .map_err(ops_to_store)?;
         // ADR-0079 D7（Phase R3a）: `raise-once` / `replan` の回答で足した余裕を当てる。
         let tree = self.effective_tree_limits(root_id)?;
         let Some(breach) = task_core::tree::run_limit_breach(&tree, &counters, next) else {
@@ -1364,6 +1368,9 @@ pub(crate) struct StagnationWatch {
     pub(crate) available: bool,
     /// 判定が成功するたびに 1 進む（同 D3）。
     pub(crate) generation: u64,
+    /// ADR 2026-11-06-budget-usd-caps D2: `[budget_rates]`（単価表に無い model の換算単価）。案件の日次上限と木の
+    /// 上限の判定が使う（`dispatcher.rs` に欄を足さない行数のため、木の状態のここに置く）。`set_budget_rates` で入る。
+    pub(crate) budget_rates: task_core::pricing::BudgetRates,
 }
 
 impl Default for StagnationWatch {
@@ -1375,6 +1382,7 @@ impl Default for StagnationWatch {
             checked_at: None,
             available: false,
             generation: 0,
+            budget_rates: task_core::pricing::BudgetRates::default(),
         }
     }
 }

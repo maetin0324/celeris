@@ -67,7 +67,7 @@ impl ProjectControllerRuntime {
 impl Dispatcher {
     /// `[budget_rates]` の換算単価を入れる（案件の日次上限・木の上限の判定が使う。ADR 2026-11-06-budget-usd-caps D2）。
     pub fn set_budget_rates(&mut self, rates: task_core::pricing::BudgetRates) {
-        self.budget_rates = rates;
+        self.stagnation.budget_rates = rates;
     }
 
     /// controller を入れる（CoS chat の後に呼ぶ。CoS chat が無い構成では入らず `false`）。
@@ -132,7 +132,7 @@ impl Dispatcher {
         let findings = self.stagnation.findings.clone();
         let roles = self.config.roles.clone();
         let genres = self.config.genres.clone();
-        let rates = self.budget_rates.clone();
+        let rates = self.stagnation.budget_rates.clone();
         // A3: その tick の領域 `project_controller` の宛先（mode の表は tick ごとに 1 回読む）。
         let access = if self
             .cos_chat_launch

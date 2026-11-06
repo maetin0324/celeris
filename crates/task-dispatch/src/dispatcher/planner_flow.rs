@@ -818,9 +818,12 @@ impl Dispatcher {
         let root_id = task_core::tree::root_id_of(task);
         // ADR-0079 D7（Phase R3a）: 回答（`raise-once`）で足した余裕も残りに含める。
         let tree = self.effective_tree_limits(root_id)?;
-        let counters =
-            task_ops::tree::tree_counters(self.store.as_ref(), root_id, &self.budget_rates)
-                .map_err(ops_to_store)?;
+        let counters = task_ops::tree::tree_counters(
+            self.store.as_ref(),
+            root_id,
+            &self.stagnation.budget_rates,
+        )
+        .map_err(ops_to_store)?;
         let open_decisions = self
             .store
             .decisions_list(Some(root_id))?

@@ -30,18 +30,25 @@ root task ごとに summary thread が増えるので、tick の費用が thread
 ## 本番への移行
 migration 0118 は index 2 本の追加のみ（データ変更なし）。config の変更は無い。
 
-## 本番 DB の写しでの段別計測（operator 依頼 10:20Z）
+## 本番 DB の写しでの段別計測（operator 依頼 10:20Z）— 結論: 修正は本番の遅さを再現も解消もしていない
 手順: `crates/celeris/tests/tick_prod_copy_steps.rs`（`TICK_PROD_DB` に backup `20261106-093409-pre-c9bf4bf7dc76.sqlite3` を渡す手動の計測、既定では走らない）。
 一時 dir へ複製した DB を、fake harness だけ・cluster/browser/通知/remote/LLM なしの config で開き、5 tick の `step_us` を出す。本番 DB と state dir には書かない。
+修正前は commit「n2: tick_cos_chat_launch の行数比例の調査 ADR と段別計測」（段別計測だけ入り、全 thread 走査が残る）、修正後は本 branch の HEAD。単位は µs。tick 0 は起動直後の照合と triage の取り込みを含むので別に書く。
 
-修正後（本 branch の HEAD）。単位は µs。tick 0 は起動直後の照合と triage の取り込みを含む。
+| 段 | 修正前 tick 1〜4 の範囲 | 修正後 tick 1〜4 の範囲 |
+|---|---|---|
+| tick_cos_chat_launch | 58,837〜76,355 | 150,799〜353,630 |
+| cos.claim_queued | 5,115〜6,562 | 2,381〜15,126 |
+| cos.control_hook | 6,932〜8,270 | 4,861〜20,336 |
+| cos.triage_ingest | 4,537〜5,267 | 9,210〜30,056 |
+| cos.relay_rejudge | 41,858〜55,777 | 129,807〜287,493 |
 
-| tick | tick_cos_chat_launch | triage_ingest | claim_queued | relay_rejudge | control_hook |
-|---|---|---|---|---|---|
-| 0 | 3,498,944 | 2,823,578 | 286,344 | 135,977 | 1,224 |
-| 1 | 173,395 | 14,175 | 6,054 | 144,100 | 8,456 |
-| 2 | 289,240 | 16,789 | 12,583 | 250,217 | 9,034 |
-| 3 | 353,630 | 30,056 | 15,126 | 287,493 | 20,336 |
-| 4 | 150,799 | 9,210 | 2,381 | 129,807 | 4,861 |
+tick 0（修正前 / 修正後）: tick_cos_chat_launch 1,875,090 / 3,498,944、triage_ingest 1,434,820 / 2,823,578。
 
-観測: 本番で p50 20.6 秒だった tick_cos_chat_launch は、同じ規模の DB で定常 0.15〜0.35 秒になった。残る段は relay_rejudge（0.13〜0.29 秒）で、全体 tick（5〜7 秒）の主因は `recover_reviews`（2.6〜3.4 秒）・`prune_and_sweep`（1.4〜1.9 秒）・`dispatch_ready`（0.9〜1.6 秒）に移った。これらはこの task の範囲外。
+読み取り:
+- 本番規模の DB（chat_messages 10,433・chat_runs 2,931・cos_inbox_items 2,692）でも、修正前の tick_cos_chat_launch は 0.06〜0.08 秒しかかからず、本番の p50 約 20 秒は再現しなかった。claim_queued・control_hook は修正前でも 5〜8 ミリ秒で、全 thread 走査は本番の写しでは遅い段ではない。
+- したがって migration 0118 の修正は、この DB の写しでは本番の遅さに効いたと言えない。修正後の値が修正前より大きいのは、2 回の測定の間で host の負荷が違ったため（修正後の測定では本 task と別の cargo が走っていた。同一 host・同一負荷の対照は未取得）で、修正による悪化とは判断していない。ただし「悪化していない」とも示せていない。
+- 本番だけが遅い原因は未特定。単独 process の写しで再現しない差は、(1) 稼働中の API・web・SSE・notice 同期が同時に SQLite の書き込み lock を持つ競合、(2) 実 daemon が持つ実行中の chat run（`launch.running`）や live_runs、(3) 07:34Z 時点の DB の状態、のいずれかにある可能性がある。いずれも未検証の仮説である。
+- 全体の tick（5〜7 秒）で大きいのは recover_reviews（2.6〜3.4 秒）・prune_and_sweep（1.4〜1.9 秒）・dispatch_ready（0.9〜1.6 秒）で、tick_cos_chat_launch ではない。
+
+次の手（提案）: 本番の slow tick log で tick_cos_chat_launch の段別（`cos.*`）が出ているのは c9bf4bf7 以降なので、人が本番の直近の slow tick の `cos.*` の値を共有すれば、どの段が 20 秒かを直接特定できる。写しで再現するには、書き込み lock を持つ別 thread（API 相当）を同時に動かす計測が要る。

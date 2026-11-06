@@ -38,6 +38,17 @@ pub struct RelayRejudge {
     pub relay_message_ids: Vec<String>,
 }
 
+/// A2 R1 の候補（escalated 項目 × その判断より新しい取り次ぎ）。取り次ぎの条件は部分 index
+/// `idx_chat_messages_relay`（migration 0119）の WHERE と同じ語で書く。語を変えると index が使われず、
+/// 項目ごとに thread の message 全部の `json_type` を評価する（ADR 2026-11-06-cos-chat-launch-scaling D3-c）。
+pub(crate) const RELAY_CANDIDATE_SQL: &str = "SELECT i.id,i.thread_id,i.source_kind,i.source_key,j.seq FROM cos_inbox_items i \
+     JOIN chat_messages j ON j.id=i.message_id AND j.thread_id=i.thread_id \
+     WHERE i.state='escalated' AND i.message_id!='' AND j.role='system' \
+     AND EXISTS(SELECT 1 FROM chat_messages r WHERE r.thread_id=i.thread_id \
+       AND r.role='user' AND r.state!='cancelled' \
+       AND json_type(r.metadata_json,'$.relay')='object' AND r.seq>j.seq) \
+     ORDER BY i.created_at,i.id";
+
 impl SqliteStore {
     /// A2 R1: `escalated` items judged by a triage run (not direct escalations) whose thread has an
     /// uncancelled, unexpired relay newer than that run's input message.
@@ -47,15 +58,7 @@ impl SqliteStore {
     ) -> Result<Vec<RelayRejudgeCandidate>, ChatError> {
         let conn = writer(self)?;
         let rows: Vec<(String, String, String, String, i64)> = {
-            let mut stmt = conn.prepare(
-                "SELECT i.id,i.thread_id,i.source_kind,i.source_key,j.seq FROM cos_inbox_items i \
-                 JOIN chat_messages j ON j.id=i.message_id AND j.thread_id=i.thread_id \
-                 WHERE i.state='escalated' AND i.message_id!='' AND j.role='system' \
-                 AND EXISTS(SELECT 1 FROM chat_messages r WHERE r.thread_id=i.thread_id \
-                   AND r.role='user' AND r.state!='cancelled' \
-                   AND json_type(r.metadata_json,'$.relay')='object' AND r.seq>j.seq) \
-                 ORDER BY i.created_at,i.id",
-            )?;
+            let mut stmt = conn.prepare(RELAY_CANDIDATE_SQL)?;
             stmt.query_map([], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })?

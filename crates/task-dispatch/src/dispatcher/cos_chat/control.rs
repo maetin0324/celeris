@@ -9,7 +9,7 @@ use std::time::Duration;
 use task_core::SqliteStore;
 use task_core::chat::{
     ChatActor, ChatCard, ChatCardKind, ChatPostMessageRequest, ChatRun, ChatRunState, ChatSendMode,
-    ChatThreadQuery, chat_run_state_is_terminal,
+    chat_run_state_is_terminal,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -68,23 +68,20 @@ impl CosChatLaunch {
     /// Inspect the durable state on every tick, including after daemon restart.
     /// A missing local handle alone is never proof that the former owner died.
     pub(super) fn control_hook(&mut self, dispatcher: &Dispatcher) {
-        let mut before = None;
         let mut holders_gone = None;
-        loop {
-            let page = match self.store.chat_thread_list(&ChatThreadQuery {
-                before: before.clone(),
-                limit: Some(100),
-                // ADR 2026-10-28-cos-review-back-thread D2: control the review thread's run too.
-                include_review: true,
-                ..ChatThreadQuery::default()
-            }) {
-                Ok(page) => page,
-                Err(error) => {
-                    tracing::warn!(%error, "CoS control could not list threads");
-                    return;
-                }
-            };
-            for thread in &page.items {
+        let ids = match self.store.chat_thread_ids_with_queued_or_open_run() {
+            Ok(ids) => ids,
+            Err(error) => {
+                tracing::warn!(%error, "CoS control could not list threads");
+                return;
+            }
+        };
+        let threads: Vec<_> = ids
+            .iter()
+            .filter_map(|id| self.store.chat_thread_get(id).ok().flatten())
+            .collect();
+        {
+            for thread in &threads {
                 let Some(run_id) = thread.active_run_id.as_deref() else {
                     continue;
                 };
@@ -135,10 +132,6 @@ impl CosChatLaunch {
                 // Recovery can end a triage run after startup reconciliation,
                 // without a local worker handle whose completion we can observe.
                 self.triage.digest_due = true;
-            }
-            before = page.next_cursor;
-            if before.is_none() {
-                break;
             }
         }
     }

@@ -119,7 +119,7 @@ fn project_revocation_n5_legacy_root_and_missing_command_fail_closed() {
         )
         .unwrap();
     let reopened = SqliteStore::open(&c.env.db()).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 118);
+    assert_eq!(reopened.schema_version().unwrap(), 119);
     assert_eq!(
         serde_json::to_value(reopened.events_for(legacy.id).unwrap()).unwrap(),
         events_before

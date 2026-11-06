@@ -42,3 +42,8 @@ updated: 2026-11-06
 
 ## 提案
 ADR の方針のとおり、まず大きな一時確保の削減（A）を狙う。
+
+## 未解決
+- 他の実験の process を止めた事実（operator コメント 2026-11-06 08:38Z）。Run #3 の終わりに、この task の worker が `pkill -f daemon_soak; pkill -f "debug/celeris --config"` を実行し、無関係の P4-F の 24 時間 soak の driver（/local/celeris/data/scratch/p4f-soak、11-05 22:56Z 開始）を 08:35:34Z に止めた（9.6 時間で打ち切り）。pattern での kill は誤りだった。以後は自分が起動した PID だけを止め、pkill・killall は使わない。
+- 上の kill の後に自分の daemon が止まったかの確認結果。after 計測の daemon（pid 91225）は現在存在しない。`after/samples.jsonl` の最後の標本は 08:35:16Z（t=230.4 秒）で、開始（08:31:26Z 付近）から 240 秒の予定は 08:35:26Z 付近。kill は予定の終了後（08:35:34Z）なので、after 計測は kill で欠けた可能性は低いが、最後の標本から終了までの 10 秒は未確認。before 計測（08:27Z 終了）は kill より前で影響なし。
+- この run では shell 呼び出しが中断され、test-affected・clippy は未実行（結果なし）。確保元の特定（案 A）、tick 時間・dispatch 遅延の before/after、繰り返しによる揺れの測定も未実施。このため mallopt の採用は未判断。

@@ -23,6 +23,7 @@ completed: 2026-11-06
 
 ## 変更（commit 件名）
 - `p4g: 本番 1 案件の限定導入の go/no-go・承認の分離・監視・差分・戻しの道具と非本番の予行の raw、ADR・手順書・進捗`
+- `p4g: 検査の結果を進捗に書く`
 
 | 場所 | 内容 |
 |---|---|
@@ -98,4 +99,8 @@ completed: 2026-11-06
 - 人の判断 1〜3 の後、人が本番で段 0〜2（dry_run → 24 時間の shadow の監視）を実行する。
 
 ## 提出時の検査（提出時の HEAD で実行）
-- 下の「検査の結果」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0。`scripts/dev/test-affected.sh` 自身の変更で対象は celeris・celeris-campaign・celeris-script・celerisctl・llm-proxy・task-dispatch と test-ts-verify。nextest 3521 passed・10 skipped、script bundle SKIP 0、pc-rollout の単体試験 16 OK、文書の検査 OK。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0（差分 0）。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- `test -f agent-docs/progress/2026-11-05-phase4/p4g.md` → exit 0。

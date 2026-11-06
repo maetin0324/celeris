@@ -4408,12 +4408,11 @@
           },
           "type": "array"
         },
-        "tokens_left": {
-          "description": "`max_tree_tokens` を設定したときだけ。",
-          "format": "uint64",
-          "minimum": 0,
+        "usd_left": {
+          "description": "木の費用の残り（USD 相当。`max_tree_usd` − 木の換算費用。0 で止まる）。`max_tree_usd` を設定したときだけ。",
+          "format": "double",
           "type": [
-            "integer",
+            "number",
             "null"
           ]
         }

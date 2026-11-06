@@ -60,7 +60,13 @@ export type ControllerView = {
     day: string;
     cos_inputs: number;
     roots: number;
+    /** 表示用の token（input + output）。上限の判定には使わない。 */
     tokens: number;
+    /** 換算費用（USD 相当。単価表の換算。`max_usd_per_day` の判定に使う量）。 */
+    usd: number;
+    /** 費用不明の run（単価が引けない model・usage の無い run）の数。1 以上なら止まる。 */
+    usd_unknown_runs: number;
+    price_table_version: string;
     chat_starts: number;
   };
   /** 第 3 フェーズ P2-J: 未達・達成・待機の理由・許可の範囲・次の wake・guard の上限・最後の判断の追跡。 */
@@ -104,7 +110,7 @@ export type ControllerSummary = {
     max_no_progress_decisions: number;
     max_same_failure_repeats: number;
     max_invalid_decisions: number;
-    max_tokens_per_day: number;
+    max_usd_per_day: number;
     ttl_secs: number;
   };
   trace?: {
@@ -366,8 +372,13 @@ export function ProjectControllerPanel({
         </p>
         {view.budget_today ? (
           <p className="text-label text-muted-foreground" data-testid="controller-budget-today">
-            今日（{view.budget_today.day} UTC）の使用量 / 上限: token {view.budget_today.tokens} /{" "}
-            {view.summary.budget_limits.max_tokens_per_day}、CoS の起動 {view.budget_today.chat_starts} 回と CoS
+            今日（{view.budget_today.day} UTC）の使用量 / 上限: 換算費用 {view.budget_today.usd.toFixed(2)} /{" "}
+            {view.summary.budget_limits.max_usd_per_day} USD 相当（単価表 {view.budget_today.price_table_version}
+            、token {view.budget_today.tokens} は表示のみ）
+            {view.budget_today.usd_unknown_runs > 0
+              ? `、費用不明の run ${view.budget_today.usd_unknown_runs} 件（上限に達したものとして止まる）`
+              : ""}
+            、CoS の起動 {view.budget_today.chat_starts} 回と CoS
             への依頼 {view.budget_today.cos_inputs} 件 / 各 {view.summary.budget_limits.max_cos_inputs_per_day}、起票{" "}
             {view.budget_today.roots} 件 / {view.summary.budget_limits.max_roots_per_day}
           </p>

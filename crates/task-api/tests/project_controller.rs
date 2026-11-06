@@ -291,7 +291,7 @@ async fn project_wake_api_summary_shows_outcomes_wait_authority_and_next_wake() 
     let (env, _app, _thread, project) = setup(true);
     let limits = task_ops::project_budget::BudgetLimits {
         max_roots_per_day: 7,
-        max_tokens_per_day: 1234,
+        max_usd_per_day_micros: 12_340_000,
         ..Default::default()
     };
     let app = task_api::router(
@@ -315,6 +315,20 @@ async fn project_wake_api_summary_shows_outcomes_wait_authority_and_next_wake() 
             r.json()["summary"].clone()
         }
     };
+    // ADR 2026-11-06-budget-usd-caps D4: 今日の使用に換算費用・費用不明の数・単価表の版が出る（旧欄は無い）。
+    let today = send(&app, get_admin(&path)).await.json()["budget_today"].clone();
+    assert_eq!(today["usd"], 0.0);
+    assert_eq!(today["usd_unknown_runs"], 0);
+    assert_eq!(
+        today["price_table_version"],
+        task_core::pricing::PRICE_TABLE_VERSION
+    );
+    assert_eq!(today["tokens"], 0);
+    assert!(
+        send(&app, get_admin(&path)).await.json()["summary"]["budget_limits"]
+            .get("max_tokens_per_day")
+            .is_none()
+    );
     // off: 未達 2 件、待機なし、許可なし、上限は daemon の値、判断なし。
     let s = get(app.clone()).await;
     let ids: Vec<&str> = s["outcomes"]
@@ -337,7 +351,7 @@ async fn project_wake_api_summary_shows_outcomes_wait_authority_and_next_wake() 
     assert_eq!(s["authority"]["launch_root_allowed"], false);
     assert_eq!(s["authority"]["grants"], json!([]));
     assert_eq!(s["budget_limits"]["max_roots_per_day"], 7);
-    assert_eq!(s["budget_limits"]["max_tokens_per_day"], 1234);
+    assert_eq!(s["budget_limits"]["max_usd_per_day"], 12.34);
     assert_eq!(s["budget_limits"]["ttl_secs"], limits.ttl_secs);
 
     // 人が enabled にすると起票の許可が 1 件でき、範囲（案件・回数・期限）が出る。

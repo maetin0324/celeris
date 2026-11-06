@@ -765,3 +765,111 @@ async fn execution_metrics_group_by_depth_counts_reviewer_runs_per_depth() {
     assert_eq!(resp.status.as_u16(), 400);
     assert!(resp.text().contains("depth"), "{}", resp.text());
 }
+
+/// run 1 本（model・4 種の token を指定。保存済みの `cost_usd` は入れない）。
+fn run_with_usage(env: &TestEnv, task: &Task, id: &str, model: &str, tokens: [u64; 4]) {
+    env.store
+        .run_index_start(RunRow {
+            run_id: id.to_string(),
+            task_id: task.id.to_string(),
+            work_unit_id: None,
+            role: RunIndexRole::Worker,
+            seq: 1,
+            status: RunIndexStatus::Completed,
+            adapter: Some("fake".into()),
+            model: Some(model.to_string()),
+            account: None,
+            session_id: None,
+            checkpoint: None,
+            usage: Some(Usage {
+                input_tokens: Some(tokens[0]),
+                output_tokens: Some(tokens[1]),
+                cache_read_tokens: Some(tokens[2]),
+                cache_creation_tokens: Some(tokens[3]),
+                cost_usd: None,
+                duplicate_reads: None,
+                session_resumed: None,
+                context_tokens: None,
+            }),
+            metrics: None,
+            started_at: "2026-09-29T08:00:00Z".to_string(),
+            finished_at: Some("2026-09-29T08:10:00Z".to_string()),
+        })
+        .expect("run");
+}
+
+/// ADR 2026-11-06-budget-usd-caps D1・D2: `limits` は換算費用（cache read・cache write を単価で数える）・
+/// 上限 `max_usd`・費用不明の run の数を返し、旧 `max_tokens` は出さない。`tokens` は表示用（input + output）。
+#[tokio::test]
+async fn task_tree_limits_report_usd_with_cache_priced_and_unknown_runs() {
+    let env = TestEnv::with(EnvOptions {
+        tree_limits: task_core::TreeLimits {
+            enabled: true,
+            max_tree_usd_micros: Some(5_000_000),
+            ..task_core::TreeLimits::default()
+        },
+        ..Default::default()
+    });
+    let app = env.router();
+    let task = new_task(TaskKind::Execute, Status::Done);
+    env.seed(&task);
+    // claude-sonnet-5: input 2.0 / output 10.0 / cache read 0.2 / cache write 2.5（USD / 100 万 token）。
+    // 500k×2.0 + 100k×10.0 + 5M×0.2 + 400k×2.5 per 1M = 1.0 + 1.0 + 1.0 + 1.0 = 4.0 USD。
+    run_with_usage(
+        &env,
+        &task,
+        "w1",
+        "claude-sonnet-5",
+        [500_000, 100_000, 5_000_000, 400_000],
+    );
+    // 単価の無い model は費用不明 1 件（0 USD として数えない）。
+    run_with_usage(&env, &task, "w2", "local-qwen", [1_000, 1_000, 0, 0]);
+    let resp = send(&app, get(&format!("/api/v1/tasks/{}/task-tree", task.id))).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let limits = resp.json()["limits"].clone();
+    close(&limits["usd"], 4.0);
+    close(&limits["max_usd"], 5.0);
+    assert_eq!(limits["usd_unknown_runs"], 1);
+    assert_eq!(limits["tokens"], 600_000 + 2_000);
+    assert!(limits.get("max_tokens").is_none(), "{limits}");
+}
+
+/// D2-2: `[budget_rates]` に換算単価を書いた model は数えられる（費用不明にならない）。cache の多い run は
+/// cache read の単価（ここでは 0.5）で数えるので、input と同じ重さにはならない。
+#[tokio::test]
+async fn task_tree_limits_count_a_model_with_a_configured_budget_rate() {
+    let rates = task_core::pricing::BudgetRates::new([(
+        "local-qwen".to_string(),
+        task_core::pricing::BudgetRate {
+            input_per_million: 1.0,
+            output_per_million: 2.0,
+            cache_read_per_million: 0.5,
+            cache_write_per_million: 1.0,
+        },
+    )])
+    .expect("rates");
+    let env = TestEnv::with(EnvOptions {
+        tree_limits: task_core::TreeLimits {
+            enabled: true,
+            ..task_core::TreeLimits::default()
+        },
+        budget_rates: rates,
+        ..Default::default()
+    });
+    let app = env.router();
+    let task = new_task(TaskKind::Execute, Status::Done);
+    env.seed(&task);
+    // 1M×1.0 + 1M×2.0 + 4M×0.5 + 0 = 5.0 USD。
+    run_with_usage(
+        &env,
+        &task,
+        "w1",
+        "opencode/local-qwen-3",
+        [1_000_000, 1_000_000, 4_000_000, 0],
+    );
+    let resp = send(&app, get(&format!("/api/v1/tasks/{}/task-tree", task.id))).await;
+    let limits = resp.json()["limits"].clone();
+    close(&limits["usd"], 5.0);
+    assert_eq!(limits["usd_unknown_runs"], 0);
+    assert!(limits.get("max_usd").is_none(), "{limits}");
+}

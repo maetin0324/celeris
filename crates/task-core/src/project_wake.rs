@@ -411,7 +411,7 @@ pub struct ControllerTrace {
 }
 
 /// 今日（UTC）の日次予算の使用量（数え方は `task_ops::project_budget`）。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProjectBudgetToday {
     /// `YYYY-MM-DD`（UTC）。
     pub day: String,
@@ -419,6 +419,12 @@ pub struct ProjectBudgetToday {
     pub roots: u32,
     /// task run と案件 CoS の chat run の input + output（cache を含めない）。
     pub tokens: u64,
+    /// task run と案件 CoS の chat run の換算費用の和（USD 相当。`max_usd_per_day` の判定に使う量）。
+    pub usd: f64,
+    /// 費用不明の run（単価が引けない model・usage の無い run）の数。1 以上なら止める。
+    pub usd_unknown_runs: u32,
+    /// 換算に使った単価表の版（`task_core::pricing::PRICE_TABLE_VERSION`）。
+    pub price_table_version: String,
     /// 起動した案件 CoS の chat run の数。
     pub chat_starts: u32,
 }

@@ -292,6 +292,9 @@ pub struct ApiSettings {
     /// ADR-0079 D3 / D11（Phase R4a）: `[execution.tree]` の上限（`GET /tasks/{id}/task-tree` の
     /// `tree_enabled` と上限の使用率に使う。挙動は変えない）。
     pub tree_limits: task_core::TreeLimits,
+    /// ADR 2026-11-06-budget-usd-caps D2: `[budget_rates]`（単価表に無い model の換算単価。案件の日次上限・木の
+    /// 上限・`GET …/controller`・`task-tree` の換算費用に使う）。
+    pub budget_rates: task_core::pricing::BudgetRates,
     /// ADR 2026-10-14-local-machine-settings D4/D5: ローカルマシンの行と `PUT /clusters/local/settings` の検証に
     /// 使う host の値（celeris が設定から渡す）。
     pub local_machine: LocalMachineSettings,

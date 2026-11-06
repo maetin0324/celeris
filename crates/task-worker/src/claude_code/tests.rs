@@ -4562,3 +4562,63 @@ async fn required_rules_reach_claude_code_from_a_fresh_worktree() {
         assert_eq!(worktree_changes(&wt), "", "{fixture:?}");
     }
 }
+
+/// ADR 2026-11-06-misplaced-report-recovery-generalized D5（01M6QZ031R）: reviewer run は `work_dir`
+/// を持たず対象タスクの作業場所で動く。repo へ cd した後の相対 `artifacts/review.json` が repo の中を
+/// 指す事故を防ぐため、prompt の冒頭に cwd と成果物ディレクトリ・review.json・result.json の絶対パスの
+/// 注意が出て、Result 節の review.json / result.json も絶対パスで書かれる。
+#[tokio::test]
+async fn reviewer_prompt_states_absolute_review_and_result_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let artifacts = dir.path().join("artifacts");
+    let config = stub_claude(
+        dir.path(),
+        &format!(
+            r#"mkdir -p '{0}'
+printf '%s' '{{"summary":"reviewed","evidence":[]}}' > '{0}/result.json'
+echo '{{"type":"result","subtype":"success","is_error":false}}'
+"#,
+            artifacts.display()
+        ),
+    );
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.task.kind = TaskKind::Review;
+    let outcome = ClaudeCodeAdapter::new(config)
+        .run(
+            req,
+            "run-rv-note",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome.terminal, Terminal::Done { .. }),
+        "{:?}",
+        outcome.terminal
+    );
+    let prompt = std::fs::read_to_string(dir.path().join("runs/run-rv-note/prompt.txt")).unwrap();
+    let a = artifacts.display();
+    assert!(
+        prompt.starts_with(&format!(
+            "cwd は `{}`（レビュー対象タスクの作業場所）。成果物ディレクトリは `{a}`。",
+            dir.path().display()
+        )),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("リポジトリ（`repos/` の下）へ cd した後の相対 `artifacts/` はリポジトリの中を指すので使わない"),
+        "{prompt}"
+    );
+    assert!(prompt.contains(&format!("review.json は必ず `{a}/review.json` に")));
+    assert!(prompt.contains(&format!("result.json は必ず `{a}/result.json` に書く")));
+    assert!(prompt.contains("親ディレクトリを推測した相対パスも使わない"));
+    assert!(
+        prompt.contains(&format!("Write your verdicts to `{a}/review.json`")),
+        "{prompt}"
+    );
+    assert!(
+        !prompt.contains("Write your verdicts to `artifacts/review.json`"),
+        "{prompt}"
+    );
+}

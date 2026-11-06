@@ -4,12 +4,15 @@
 //! - 1 日は UTC の日付（`snapshot` の `cos_inputs_remaining_today` と同じ）。
 //! - CoS 入力・起票は判断の記録（`project_controller_decisions`）の `applied` の効果だけを数える
 //!   （`suppressed`・`failed` は LLM も root も起こしていない）。
-//! - token は案件の task run と案件 CoS chat run の和で、`tree_metrics::RollupMetrics.tokens` と同じ規則（input + output、cache を
-//!   含めない）。
+//! - 上限は案件の task run と案件 CoS chat run の費用の和（ADR 2026-11-06-budget-usd-caps D1。run ごとに model と usage から
+//!   `task_core::pricing::budget_cost` で micro-USD に換算し、cache read・cache write はそれぞれの単価で数える）。単価が引けない
+//!   model と usage の無い終わった run は費用不明で、1 件でもあれば `BudgetKind::UsdUnknown` で止める（D2、fail-closed）。
+//!   `tokens` は表示用（input + output）で判定に使わない。
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use task_core::StoreError;
+use task_core::pricing::{BudgetRates, budget_cost};
 use task_core::project_wake::EffectState;
 use task_core::store::SqliteStore;
 use time::OffsetDateTime;
@@ -31,8 +34,8 @@ pub struct BudgetLimits {
     pub max_same_failure_repeats: u32,
     /// TS の proposal が検証に落ちた判断（`pc/invalid:*`）の連続の上限（LLM・TS の品質の guard）。
     pub max_invalid_decisions: u32,
-    /// 1 日の token（案件の task run と CoS chat run の和）。
-    pub max_tokens_per_day: u64,
+    /// 1 日の費用の上限（micro-USD。案件の task run と CoS chat run の換算費用の和）。
+    pub max_usd_per_day_micros: u64,
     /// 外からの入力（cron 以外の wake）が無いまま `waiting` でいられる秒。過ぎたら人に 1 回聞いて止まる。
     pub ttl_secs: u64,
 }
@@ -46,7 +49,7 @@ impl Default for BudgetLimits {
             max_no_progress_decisions: snapshot.max_no_progress_decisions,
             max_same_failure_repeats: 3,
             max_invalid_decisions: 3,
-            max_tokens_per_day: 20_000_000,
+            max_usd_per_day_micros: 100_000_000,
             ttl_secs: 3 * 24 * 3600,
         }
     }
@@ -58,7 +61,10 @@ impl Default for BudgetLimits {
 pub enum BudgetKind {
     CosInputs,
     Roots,
-    Tokens,
+    /// 換算費用の和が上限に達した。
+    Usd,
+    /// 費用不明の run（単価が引けない model・usage の無い run）がある。
+    UsdUnknown,
 }
 
 impl BudgetKind {
@@ -66,7 +72,8 @@ impl BudgetKind {
         match self {
             BudgetKind::CosInputs => "cos_inputs",
             BudgetKind::Roots => "roots",
-            BudgetKind::Tokens => "tokens",
+            BudgetKind::Usd => "usd",
+            BudgetKind::UsdUnknown => "usd_unknown",
         }
     }
 }
@@ -78,7 +85,12 @@ pub struct BudgetUsage {
     pub day: String,
     pub cos_inputs: u32,
     pub roots: u32,
+    /// 表示用の token（input + output。cache を含めない）。判定には使わない。
     pub tokens: u64,
+    /// 換算費用の和（micro-USD）。
+    pub usd_micros: u64,
+    /// 費用不明の run の数（1 以上なら `UsdUnknown` で止める）。
+    pub usd_unknown_runs: u32,
     /// 実際に起動した案件 CoS の chat run（controller 以外の入力も含む）。
     pub chat_starts: u32,
 }
@@ -93,8 +105,9 @@ pub fn usage(
     store: &SqliteStore,
     project_id: &str,
     now: OffsetDateTime,
+    rates: &BudgetRates,
 ) -> Result<BudgetUsage, StoreError> {
-    usage_on_day(store, project_id, &day_of(now), now)
+    usage_on_day(store, project_id, &day_of(now), now, rates)
 }
 
 /// `day`（`YYYY-MM-DD`、UTC）の使った量を数える。過ぎた日も同じ規則で数え直せる（止めた後に流れ込んだ分を含む）。
@@ -103,6 +116,7 @@ pub fn usage_on_day(
     project_id: &str,
     day: &str,
     now: OffsetDateTime,
+    rates: &BudgetRates,
 ) -> Result<BudgetUsage, StoreError> {
     let mut u = BudgetUsage {
         day: day.to_owned(),
@@ -128,11 +142,18 @@ pub fn usage_on_day(
     let start = format!("{day}T00:00:00Z");
     let end = next_day_start(day, now);
     u.chat_starts = store.project_chat_starts_between(project_id, &start, &end)?;
-    u.tokens = store
-        .project_run_usage_between(project_id, &start, &end)?
+    let runs = store.project_run_usage_between(project_id, &start, &end)?;
+    u.tokens = runs
         .iter()
+        .filter_map(|x| x.usage.as_ref())
         .map(|x| x.input_tokens.unwrap_or(0) + x.output_tokens.unwrap_or(0))
         .sum();
+    let cost = budget_cost(
+        runs.iter().map(|x| (x.model.as_deref(), x.usage.as_ref())),
+        rates,
+    );
+    u.usd_micros = cost.usd_micros;
+    u.usd_unknown_runs = cost.unknown_runs;
     Ok(u)
 }
 
@@ -166,19 +187,20 @@ pub enum BudgetSeverity {
     Dangerous,
 }
 
-/// 危険とみなす token の超過の倍率（上限の 2 倍以上を 1 日で使った）。
-pub const DANGEROUS_TOKEN_FACTOR: u64 = 2;
+/// 危険とみなす費用の超過の倍率（上限の 2 倍以上を 1 日で使った）。
+pub const DANGEROUS_USD_FACTOR: u64 = 2;
 /// 人の操作が無いまま、翌日の自動の再評価を行える回数（直近 7 日）。
 pub const MAX_AUTO_DAILY_RESUMES: usize = 3;
 
-/// 超過の分類。controller は上限で止めるので、回数の上限を超えた値・token の上限の 2 倍以上は「上限が効かなかった」
+/// 超過の分類。controller は上限で止めるので、回数の上限を超えた値・費用の上限の 2 倍以上・費用不明の run は「上限が効かなかった」
 /// 出来事で、日付が変わっただけでは戻さない。CoS chat の起動は人の発言でも増えるので 2 倍で見る。
 pub fn severity(limits: &BudgetLimits, u: &BudgetUsage) -> BudgetSeverity {
-    let chat_cap = u64::from(limits.max_cos_inputs_per_day) * DANGEROUS_TOKEN_FACTOR;
-    if u.tokens
-        >= limits
-            .max_tokens_per_day
-            .saturating_mul(DANGEROUS_TOKEN_FACTOR)
+    let chat_cap = u64::from(limits.max_cos_inputs_per_day) * DANGEROUS_USD_FACTOR;
+    if u.usd_unknown_runs > 0
+        || u.usd_micros
+            >= limits
+                .max_usd_per_day_micros
+                .saturating_mul(DANGEROUS_USD_FACTOR)
         || u.cos_inputs > limits.max_cos_inputs_per_day
         || u.roots > limits.max_roots_per_day
         || u64::from(u.chat_starts) >= chat_cap
@@ -197,8 +219,10 @@ pub fn exceeded(limits: &BudgetLimits, u: &BudgetUsage) -> Option<BudgetKind> {
         Some(BudgetKind::CosInputs)
     } else if u.roots >= limits.max_roots_per_day {
         Some(BudgetKind::Roots)
-    } else if u.tokens >= limits.max_tokens_per_day {
-        Some(BudgetKind::Tokens)
+    } else if u.usd_micros >= limits.max_usd_per_day_micros {
+        Some(BudgetKind::Usd)
+    } else if u.usd_unknown_runs > 0 {
+        Some(BudgetKind::UsdUnknown)
     } else {
         None
     }
@@ -241,8 +265,10 @@ pub fn ttl_expired(at: &str, ttl_secs: u64, now: OffsetDateTime) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn p1g_chat_tokens_and_starts_are_project_scoped_and_daily() {
+    const NOW: &str = "2026-11-05T12:00:00Z";
+
+    /// 試験用の DB（案件 `p` の CoS thread `pc`、他案件 `q` の thread、案件 `p` の task `t1`）。
+    fn fixture() -> (tempfile::TempDir, SqliteStore, rusqlite::Connection) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("budget.db");
         let store = SqliteStore::open(&path).unwrap();
@@ -250,36 +276,295 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO chat_threads (id,kind,title,project_id,status,created_at,updated_at)
              VALUES ('pc','project','project','p','open','2026-11-05T00:00:00Z','2026-11-05T00:00:00Z'),
-                    ('other','project','other','q','open','2026-11-05T00:00:00Z','2026-11-05T00:00:00Z');"
-        ).unwrap();
-        for (id, thread, at, tokens) in [
-            ("today", "pc", "2026-11-05T01:00:00Z", 1500),
-            ("yesterday", "pc", "2026-11-04T01:00:00Z", 50000),
-            ("other", "other", "2026-11-05T01:00:00Z", 50000),
-        ] {
-            conn.execute("INSERT INTO chat_runs (run_id,thread_id,input_message_id,state,started_at,usage_json) VALUES (?1,?2,'input','completed',?3,?4)", rusqlite::params![id, thread, at, format!("{{\"input_tokens\":{tokens},\"output_tokens\":100}}")]).unwrap();
+                    ('other','project','other','q','open','2026-11-05T00:00:00Z','2026-11-05T00:00:00Z');
+             INSERT INTO tasks (id,status,kind,priority,created_at,json,project_id)
+             VALUES ('t1','running','coding',0,'2026-11-05T00:00:00Z','{}','p');",
+        )
+        .unwrap();
+        (dir, store, conn)
+    }
+
+    fn chat_run(
+        conn: &rusqlite::Connection,
+        id: &str,
+        thread: &str,
+        at: &str,
+        model: Option<&str>,
+        usage: Option<&str>,
+    ) {
+        let cfg = model.map_or("{}".to_owned(), |m| format!("{{\"model\":\"{m}\"}}"));
+        conn.execute(
+            "INSERT INTO chat_runs (run_id,thread_id,input_message_id,state,started_at,finished_at,usage_json,resolved_config_json)
+             VALUES (?1,?2,'input','completed',?3,?3,?4,?5)",
+            rusqlite::params![id, thread, at, usage, cfg],
+        )
+        .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn task_run(
+        conn: &rusqlite::Connection,
+        id: &str,
+        status: &str,
+        finished: bool,
+        model: Option<&str>,
+        usage: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO runs (run_id,task_id,role,seq,status,model,usage_json,started_at,finished_at)
+             VALUES (?1,'t1','worker',1,?2,?3,?4,'2026-11-05T01:00:00Z',?5)",
+            rusqlite::params![
+                id,
+                status,
+                model,
+                usage,
+                finished.then_some("2026-11-05T02:00:00Z")
+            ],
+        )
+        .unwrap();
+    }
+
+    fn at_now() -> OffsetDateTime {
+        OffsetDateTime::parse(NOW, &Rfc3339).unwrap()
+    }
+
+    fn limit_usd(usd: u64) -> BudgetLimits {
+        BudgetLimits {
+            max_usd_per_day_micros: usd * 1_000_000,
+            ..BudgetLimits::default()
         }
-        let now = OffsetDateTime::parse("2026-11-05T12:00:00Z", &Rfc3339).unwrap();
-        let u = usage(&store, "p", now).unwrap();
-        assert_eq!(u.tokens, 1600);
+    }
+
+    #[test]
+    fn chat_runs_are_project_scoped_daily_and_priced() {
+        let (_d, store, conn) = fixture();
+        // claude-sonnet-5: input 2.0 / output 10.0 USD per 100 万 token。1,000,000 in + 100,000 out = 3.0 USD。
+        let usage = r#"{"input_tokens":1000000,"output_tokens":100000}"#;
+        chat_run(
+            &conn,
+            "today",
+            "pc",
+            "2026-11-05T01:00:00Z",
+            Some("claude-sonnet-5"),
+            Some(usage),
+        );
+        chat_run(
+            &conn,
+            "yesterday",
+            "pc",
+            "2026-11-04T01:00:00Z",
+            Some("claude-sonnet-5"),
+            Some(usage),
+        );
+        chat_run(
+            &conn,
+            "other",
+            "other",
+            "2026-11-05T01:00:00Z",
+            Some("claude-sonnet-5"),
+            Some(usage),
+        );
+        let rates = BudgetRates::default();
+        let u = usage_fn(&store, &rates);
+        assert_eq!(u.usd_micros, 3_000_000);
+        assert_eq!(u.usd_unknown_runs, 0);
+        assert_eq!(u.tokens, 1_100_000, "tokens は表示用");
         assert_eq!(u.chat_starts, 1);
-        assert_eq!(u.cos_inputs, 0);
         let start_limit = BudgetLimits {
             max_cos_inputs_per_day: 1,
             ..BudgetLimits::default()
         };
         assert_eq!(exceeded(&start_limit, &u), Some(BudgetKind::CosInputs));
-        let limits = BudgetLimits {
-            max_tokens_per_day: 1000,
-            ..BudgetLimits::default()
-        };
-        assert_eq!(exceeded(&limits, &u), Some(BudgetKind::Tokens));
         assert_eq!(
-            usage(&store, "p", now + time::Duration::days(1))
-                .unwrap()
-                .tokens,
-            0
+            exceeded(&limit_usd(3), &u),
+            Some(BudgetKind::Usd),
+            "上限ちょうどで止まる"
         );
+        assert_eq!(exceeded(&limit_usd(4), &u), None);
+        let next = usage_on_day(
+            &store,
+            "p",
+            "2026-11-06",
+            at_now() + time::Duration::days(1),
+            &rates,
+        )
+        .unwrap();
+        assert_eq!(next.usd_micros, 0);
+    }
+
+    fn usage_fn(store: &SqliteStore, rates: &BudgetRates) -> BudgetUsage {
+        usage(store, "p", at_now(), rates).unwrap()
+    }
+
+    #[test]
+    fn cache_read_and_write_are_counted_at_their_own_prices() {
+        let (_d, store, conn) = fixture();
+        // 同じ input + output（5,500 token）でも、cache read 47 万 token の run は cache read の単価（0.2 USD/100 万）で
+        // 数えるので 0.094 USD 増えるだけ。cache write 47 万 token なら 2.5 USD/100 万で 1.175 USD 増える。
+        let few = r#"{"input_tokens":5000,"output_tokens":500}"#; // 0.01 + 0.005 = 0.015 USD
+        let many_read = r#"{"input_tokens":5000,"output_tokens":500,"cache_read_tokens":470000}"#;
+        let many_write =
+            r#"{"input_tokens":5000,"output_tokens":500,"cache_creation_tokens":470000}"#;
+        let rates = BudgetRates::default();
+        let cost_of = |usage: &str| {
+            let (_d, store, conn) = fixture();
+            task_run(
+                &conn,
+                "r",
+                "completed",
+                true,
+                Some("claude-sonnet-5"),
+                Some(usage),
+            );
+            usage_fn(&store, &rates).usd_micros
+        };
+        assert_eq!(cost_of(few), 15_000);
+        assert_eq!(cost_of(many_read), 15_000 + 94_000);
+        assert_eq!(cost_of(many_write), 15_000 + 1_175_000);
+        // 同じ上限でも判定が単価どおりに変わる（0.1 USD 上限: few は通り、many_read は止まる）。
+        task_run(
+            &conn,
+            "r",
+            "completed",
+            true,
+            Some("claude-sonnet-5"),
+            Some(few),
+        );
+        assert_eq!(
+            exceeded(
+                &BudgetLimits {
+                    max_usd_per_day_micros: 100_000,
+                    ..BudgetLimits::default()
+                },
+                &usage_fn(&store, &rates)
+            ),
+            None
+        );
+        let (_d2, store2, conn2) = fixture();
+        task_run(
+            &conn2,
+            "r",
+            "completed",
+            true,
+            Some("claude-sonnet-5"),
+            Some(many_read),
+        );
+        assert_eq!(
+            exceeded(
+                &BudgetLimits {
+                    max_usd_per_day_micros: 100_000,
+                    ..BudgetLimits::default()
+                },
+                &usage_fn(&store2, &rates)
+            ),
+            Some(BudgetKind::Usd)
+        );
+    }
+
+    #[test]
+    fn unpriced_model_and_missing_usage_stop_as_unknown_cost() {
+        let rates = BudgetRates::default();
+        let ok = r#"{"input_tokens":1000,"output_tokens":100}"#;
+        // 単価表に無い model（local の Qwen）は 0 USD ではなく費用不明。
+        let (_d, store, conn) = fixture();
+        task_run(
+            &conn,
+            "r",
+            "completed",
+            true,
+            Some("qwen3.8-flash-next"),
+            Some(ok),
+        );
+        let u = usage_fn(&store, &rates);
+        assert_eq!((u.usd_micros, u.usd_unknown_runs), (0, 1));
+        assert_eq!(exceeded(&limit_usd(100), &u), Some(BudgetKind::UsdUnknown));
+        assert_eq!(severity(&limit_usd(100), &u), BudgetSeverity::Dangerous);
+        // usage が無い終わった run（model あり）も費用不明。
+        let (_d, store, conn) = fixture();
+        task_run(&conn, "r", "failed", true, Some("claude-sonnet-5"), None);
+        assert_eq!(usage_fn(&store, &rates).usd_unknown_runs, 1);
+        // CoS chat run の usage null も費用不明。
+        let (_d, store, conn) = fixture();
+        chat_run(
+            &conn,
+            "c",
+            "pc",
+            "2026-11-05T01:00:00Z",
+            Some("claude-sonnet-5"),
+            None,
+        );
+        assert_eq!(usage_fn(&store, &rates).usd_unknown_runs, 1);
+        // 明示の換算単価（budget_rates）があれば数えられる。単価 0 の宣言は 0 USD として数える。
+        let (_d, store, conn) = fixture();
+        task_run(
+            &conn,
+            "r",
+            "completed",
+            true,
+            Some("qwen3.8-flash-next"),
+            Some(ok),
+        );
+        let rate = |v: f64| {
+            BudgetRates::new([(
+                "qwen3.8".to_owned(),
+                task_core::pricing::BudgetRate {
+                    input_per_million: v,
+                    output_per_million: v * 2.0,
+                    cache_read_per_million: 0.0,
+                    cache_write_per_million: 0.0,
+                },
+            )])
+            .unwrap()
+        };
+        let u = usage_fn(&store, &rate(1.0));
+        assert_eq!((u.usd_micros, u.usd_unknown_runs), (1_200, 0)); // 1000*1 + 100*2 = 1200 micro-USD
+        assert_eq!(exceeded(&limit_usd(100), &u), None);
+        let u = usage_fn(&store, &rate(0.0));
+        assert_eq!((u.usd_micros, u.usd_unknown_runs), (0, 0));
+    }
+
+    #[test]
+    fn running_and_never_started_runs_are_not_counted() {
+        let (_d, store, conn) = fixture();
+        let ok = r#"{"input_tokens":1000000,"output_tokens":0}"#;
+        // 走っている run、harness 起動前に終わった run（記録が全部無い）は数えない。
+        task_run(
+            &conn,
+            "running",
+            "running",
+            false,
+            Some("claude-sonnet-5"),
+            None,
+        );
+        task_run(&conn, "never", "failed", true, None, None);
+        task_run(
+            &conn,
+            "done",
+            "completed",
+            true,
+            Some("claude-sonnet-5"),
+            Some(ok),
+        );
+        let u = usage_fn(&store, &BudgetRates::default());
+        assert_eq!((u.usd_micros, u.usd_unknown_runs), (2_000_000, 0));
+    }
+
+    #[test]
+    fn route_prefixed_model_is_priced_and_severity_uses_double_limit() {
+        let (_d, store, conn) = fixture();
+        let ok = r#"{"input_tokens":1000000,"output_tokens":0}"#;
+        task_run(
+            &conn,
+            "r",
+            "completed",
+            true,
+            Some("claude/claude-sonnet-5"),
+            Some(ok),
+        );
+        let u = usage_fn(&store, &BudgetRates::default());
+        assert_eq!(u.usd_micros, 2_000_000);
+        assert_eq!(severity(&limit_usd(1), &u), BudgetSeverity::Dangerous);
+        assert_eq!(severity(&limit_usd(2), &u), BudgetSeverity::Daily);
     }
 
     #[test]
@@ -304,7 +589,7 @@ mod tests {
         u.cos_inputs = 2;
         assert_eq!(exceeded(&l, &u), Some(BudgetKind::CosInputs));
         u.cos_inputs = 0;
-        u.tokens = l.max_tokens_per_day;
-        assert_eq!(exceeded(&l, &u), Some(BudgetKind::Tokens));
+        u.usd_micros = l.max_usd_per_day_micros;
+        assert_eq!(exceeded(&l, &u), Some(BudgetKind::Usd));
     }
 }

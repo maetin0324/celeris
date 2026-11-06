@@ -125,7 +125,12 @@ pub fn unit_gate_plan(
     } else {
         validated
     };
-    let tree_leaves = crate::tree::tree_counters(store, task_core::tree::root_id_of(task))
+    let tree_leaves = // 葉の数だけを読む（費用は使わない）ので換算単価は要らない。
+    crate::tree::tree_counters(
+        store,
+        task_core::tree::root_id_of(task),
+        &task_core::pricing::BudgetRates::default(),
+    )
         .map(|c| c.leaves)
         .unwrap_or(0);
     let existing_keys: BTreeSet<String> = store

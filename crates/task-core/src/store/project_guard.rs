@@ -18,6 +18,13 @@ pub struct PhaseSync {
     pub held_wakes: usize,
 }
 
+/// [`SqliteStore::project_run_usage_between`] の 1 行（予算に数える終わった run）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectRunUsage {
+    pub model: Option<String>,
+    pub usage: Option<crate::model::Usage>,
+}
+
 /// [`SqliteStore::project_controller_resume`] の入力。読んだときの状態と、判断の行に残す根拠。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectResume {
@@ -152,30 +159,42 @@ impl SqliteStore {
         })
     }
 
-    /// 案件の task run と CoS chat run（`since <= started_at < until`）の `usage_json`。和は
-    /// `task_ops::project_budget` が `tree_metrics` と同じ規則（input + output、cache を含めない）で取る。
+    /// 案件の task run と CoS chat run（`since <= started_at < until`）のうち、予算に数える終わった run の
+    /// model と usage（ADR 2026-11-06-budget-usd-caps D2-3）。走っている run（`finished_at` 無し・`running`）と、
+    /// harness を起動する前に終わった task run（usage・model・adapter・account・session・metrics が全部無い）は
+    /// 返さない。usage が無い・読めない行は `usage: None` で返す（費用不明として数える）。model は task run が
+    /// `runs.model`、CoS chat run が `resolved_config_json` の `model`。
     pub fn project_run_usage_between(
         &self,
         project_id: &str,
         since: &str,
         until: &str,
-    ) -> Result<Vec<crate::model::Usage>, StoreError> {
+    ) -> Result<Vec<ProjectRunUsage>, StoreError> {
         self.with_read_conn(|c| {
             let mut st = c.prepare(
-                "SELECT r.usage_json FROM runs r JOIN tasks t ON t.id = r.task_id \
+                "SELECT r.model, r.usage_json FROM runs r JOIN tasks t ON t.id = r.task_id \
                  WHERE t.project_id = ?1 AND r.started_at >= ?2 AND r.started_at < ?3 \
-                   AND r.usage_json IS NOT NULL \
-                 UNION ALL SELECT r.usage_json FROM chat_runs r \
+                   AND r.finished_at IS NOT NULL AND r.status <> 'running' \
+                   AND (r.usage_json IS NOT NULL OR r.model IS NOT NULL OR r.adapter IS NOT NULL \
+                        OR r.account IS NOT NULL OR r.session_id IS NOT NULL OR r.metrics_json IS NOT NULL) \
+                 UNION ALL SELECT \
+                   json_extract(CASE WHEN json_valid(r.resolved_config_json) THEN r.resolved_config_json END, '$.model'), \
+                   r.usage_json FROM chat_runs r \
                  JOIN chat_threads t ON t.id = r.thread_id \
                  WHERE t.project_id = ?1 AND r.started_at >= ?2 AND r.started_at < ?3 \
-                   AND r.usage_json IS NOT NULL",
+                   AND r.finished_at IS NOT NULL",
             )?;
-            let raw: Vec<String> = st
-                .query_map(params![project_id, since, until], |r| r.get(0))?
+            let raw: Vec<(Option<String>, Option<String>)> = st
+                .query_map(params![project_id, since, until], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?
                 .collect::<Result<_, _>>()?;
             Ok(raw
-                .iter()
-                .filter_map(|s| serde_json::from_str(s).ok())
+                .into_iter()
+                .map(|(model, usage)| ProjectRunUsage {
+                    model: model.filter(|m| !m.is_empty()),
+                    usage: usage.and_then(|s| serde_json::from_str(&s).ok()),
+                })
                 .collect())
         })
     }

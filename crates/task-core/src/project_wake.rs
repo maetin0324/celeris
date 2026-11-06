@@ -289,7 +289,7 @@ pub struct ProjectControllerDecision {
 }
 
 /// `GET /projects/{id}/controller` の応答（A1 の DTO）。行が無い案件は mode `off` の既定値。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProjectControllerView {
     pub state: ProjectControllerState,
     pub pending_wakes: Vec<ProjectWake>,
@@ -302,7 +302,7 @@ pub struct ProjectControllerView {
 }
 
 /// `GET …/controller` の `summary`（第 3 フェーズ P2-J。組み立ては `task_ops::project_controller_view`）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProjectControllerSummary {
     /// 達成の対象の Outcome（approved の Roadmap があればその生きている Outcome、無ければ依頼文の block）。
     pub outcomes: Vec<ControllerOutcomeStatus>,
@@ -384,14 +384,15 @@ pub struct ControllerNextWake {
 }
 
 /// guard の上限（`[project_controller.budget]` の実効値）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ControllerBudgetLimits {
     pub max_cos_inputs_per_day: u32,
     pub max_roots_per_day: u32,
     pub max_no_progress_decisions: u32,
     pub max_same_failure_repeats: u32,
     pub max_invalid_decisions: u32,
-    pub max_tokens_per_day: u64,
+    /// 1 日の費用の上限（USD 相当。単価表の換算）。
+    pub max_usd_per_day: f64,
     pub ttl_secs: u64,
 }
 

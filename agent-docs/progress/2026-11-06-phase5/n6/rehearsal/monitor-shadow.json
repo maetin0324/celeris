@@ -1,0 +1,18 @@
+{
+  "schema": "celeris.pc-rollout/1",
+  "kind": "monitor",
+  "stage": "shadow",
+  "scope": "non-production",
+  "project": "01M6RGSRCSM9Q8E49VBXNRS37Z",
+  "allow_non_production": true,
+  "observed_secs": 92,
+  "samples": 19,
+  "violations": [],
+  "decisions_delta": 2,
+  "get_controller_ms_p50": 5.0,
+  "get_controller_ms_max": 46.6,
+  "rss_anon_kb_first": 20544,
+  "rss_anon_kb_last": 21872,
+  "daemon_restarts": 1,
+  "restart_secs": 0.65
+}

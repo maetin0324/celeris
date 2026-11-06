@@ -1,0 +1,22 @@
+test-ts-verify: runner /local/celeris/data/scratch/targets/task-01M6QW0GT56KDVBHCXX78GBFHF/target/script-runner-cache/7af2f98b38998d80be5f5a1e187dcfa0157a80a353d0d202bb98d7b1daa27e5c/script-host-runner
+ok   A 無害な TS の編集: exit 0、cargo 0 回、link 0 回、10 段 exit 0（19.298 秒）
+ok   B 壊した規則: exit 1（段 unit で失敗）、cargo 0 回
+ok   B runner に直に渡した壊れた bundle: exit 1、mismatch 1458 件
+ok   C compare.mjs の書き換え: host-api（ts-only にならない）
+ok   D fixture の書き換え: host-api、cache の golden と cmp で違う
+ok   E package.json の scripts: host-api
+ok   F bundle.config.json の領域の削除: host-api、bundle は通らない（runner exit 3）
+ok   G @ts-nocheck の追加: classify で exit 1
+ok   G .only( の追加: classify で exit 1
+ok   H control-ts/src/host.d.ts: host-api、ts-verify は従来の経路へ、test-affected は celeris-script の cargo 側を選ぶ
+ok   H docs/api/script-host/host-v1.schema.json: host-api、ts-verify は従来の経路へ、test-affected は celeris-script の cargo 側を選ぶ
+ok   I test-affected.sh --list: TS だけの変更を ts-verify に委ね、cargo 0 回
+ok   J 規則の破壊と test.skip: host-api、test-affected は ts-verify-grade を選び、--grade は段 golden（runner）で exit 1（段 unit は通った）
+ok   J 無害な host-api の変更: --grade は 10 段 exit 0（cargo 0 回）
+ok   M 壊した execution_gate の規則: exit 1（段 unit で失敗）
+ok   M runner に直に渡した壊れた bundle: exit 1、execution_gate の mismatch 193 件
+ok   K 壊した cos_digest の規則: exit 1（段 unit で失敗）
+ok   K runner に直に渡した壊れた bundle: exit 1、cos_digest の mismatch 404 件 / 2088 行
+ok   K 壊した op の応答を受ける bundle: --suite safety で exit 1
+ok   L pass_traces.jsonl の書き換え: host-api、key が変わる、test-affected は task-dispatch と ts-verify-grade を選ぶ
+test-ts-verify: 20 passed, 0 failed

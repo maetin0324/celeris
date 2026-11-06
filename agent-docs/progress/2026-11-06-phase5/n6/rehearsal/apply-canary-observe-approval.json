@@ -1,0 +1,9 @@
+{
+  "schema": "celeris.pc-rollout/1",
+  "kind": "apply",
+  "stage": "canary",
+  "project": "01M6RGSRCSM9Q8E49VBXNRS37Z",
+  "approval": "stage canary needs an approval of kind effects (got observe)",
+  "steps": [],
+  "refused": "stage canary needs an approval of kind effects (got observe)"
+}

@@ -1,0 +1,246 @@
+{
+  "schema": "celeris.pc-rollout/1",
+  "kind": "apply",
+  "stage": "dry_run",
+  "project": "01M6RGSRCSM9Q8E49VBXNRS37Z",
+  "approval": "approved by human:p4g-e2e-fixture (non-production)",
+  "steps": [
+    {
+      "domain_mode": "compare",
+      "status": 200,
+      "body": {
+        "changed": true,
+        "event_id": 1,
+        "domain": {
+          "domain": "project_controller",
+          "mode": "compare",
+          "generation_id": "01M6RGSTTX2M5XTERHWJ4G90WA",
+          "bundle_sha256": "cc9691dda86bca9a82d30cd159903c7b46c6e6c8278a5835d429e126d7650e61",
+          "generation_state": "active",
+          "canary_bps": null,
+          "version": 1,
+          "updated_at": "2026-11-06T13:29:38.58303257Z",
+          "updated_by": "human:p4g-e2e"
+        }
+      }
+    },
+    {
+      "project_mode": "dry_run",
+      "status": 200,
+      "body": {
+        "state": {
+          "project_id": "01M6RGSRCSM9Q8E49VBXNRS37Z",
+          "mode": "dry_run",
+          "phase": "active",
+          "revision": 1,
+          "event_cursor": 0,
+          "next_wake_at": null,
+          "coalesce_until": "2026-11-06T13:29:38.626784597Z",
+          "lease_owner": null,
+          "lease_expires_at": null,
+          "retry_count": 0,
+          "backoff_until": null,
+          "last_decision_id": null,
+          "human_epoch": 0,
+          "progress_epoch": 0,
+          "updated_at": "2026-11-06T13:29:38.626784597Z",
+          "updated_by": "human:p4g-e2e"
+        },
+        "pending_wakes": [
+          {
+            "id": 1,
+            "project_id": "01M6RGSRCSM9Q8E49VBXNRS37Z",
+            "wake_key": "dry_run:1",
+            "kind": "human_changed",
+            "source_event_id": null,
+            "source_ref": null,
+            "created_at": "2026-11-06T13:29:38.626784597Z",
+            "consumed_by": null
+          }
+        ],
+        "last_decision": null,
+        "budget_today": {
+          "day": "2026-11-06",
+          "cos_inputs": 0,
+          "roots": 0,
+          "tokens": 0,
+          "usd": 0.0,
+          "usd_unknown_runs": 0,
+          "price_table_version": "2026-09-approx-1",
+          "chat_starts": 0
+        },
+        "summary": {
+          "outcomes": [
+            {
+              "id": "o1",
+              "title": "予行の途中目標",
+              "source": "request_block",
+              "recorded": false,
+              "evidence_root_ids": [],
+              "reached": false
+            }
+          ],
+          "outcomes_invalid": false,
+          "waiting": null,
+          "authority": {
+            "launch_root_allowed": false,
+            "launch_root_reason": "no_grant",
+            "grants": []
+          },
+          "next_wake": {
+            "at": null,
+            "backoff_until": null,
+            "pending_kinds": [
+              "human_changed"
+            ]
+          },
+          "budget_limits": {
+            "max_cos_inputs_per_day": 10,
+            "max_roots_per_day": 5,
+            "max_no_progress_decisions": 5,
+            "max_same_failure_repeats": 3,
+            "max_invalid_decisions": 3,
+            "max_usd_per_day": 100.0,
+            "ttl_secs": 259200
+          },
+          "trace": null,
+          "retention": {
+            "wakes_total": 1,
+            "wakes_pending": 1,
+            "decisions_total": 0,
+            "decisions_effect_none": 0,
+            "decisions_pending": 0
+          }
+        }
+      }
+    }
+  ],
+  "before": {
+    "schema": "celeris.pc-rollout/1",
+    "kind": "snapshot",
+    "at": "2026-11-06T13:29:38+00:00",
+    "project": "01M6RGSRCSM9Q8E49VBXNRS37Z",
+    "get_controller_ms": 8.2,
+    "project_mode": "off",
+    "phase": "active",
+    "revision": 0,
+    "mode_changed_at": "2026-11-06T13:29:38.530839779Z",
+    "lease_expires_at": null,
+    "backoff_until": null,
+    "coalesce_until": null,
+    "next_wake_at": null,
+    "budget_today": {
+      "day": "2026-11-06",
+      "cos_inputs": 0,
+      "roots": 0,
+      "tokens": 0,
+      "usd": 0.0,
+      "usd_unknown_runs": 0,
+      "price_table_version": "2026-09-approx-1",
+      "chat_starts": 0
+    },
+    "cos_inputs_total": 0,
+    "wait_rule": null,
+    "budget_limits": {
+      "max_cos_inputs_per_day": 10,
+      "max_roots_per_day": 5,
+      "max_no_progress_decisions": 5,
+      "max_same_failure_repeats": 3,
+      "max_invalid_decisions": 3,
+      "max_usd_per_day": 100.0,
+      "ttl_secs": 259200
+    },
+    "pending_wakes": 0,
+    "decisions_total": 0,
+    "effects": {},
+    "decisions_after_mode": {},
+    "decision_modes": [],
+    "decision_rules": [],
+    "get_tasks_ms": 3.1,
+    "controller_roots": 0,
+    "domain_mode": "rust",
+    "domain_generation": null,
+    "domain_version": 0,
+    "guard_halted": null,
+    "other_modes": {
+      "01M6RGSRDZPZ6K48GRQPYWF0CS": "off"
+    },
+    "daemon_config_sha256": "cda9a21594e8790354c93ba91cf3f2e91cb39d6eea6ec035db49e577636ff363",
+    "daemon_release": "p4g-e2e",
+    "daemon_instance": "01M6RGSRVGBXGEW3XF2XWQS4RK",
+    "daemon_pid": 494205,
+    "rss_kb": 123072,
+    "rss_anon_kb": 19584,
+    "threads": 34
+  },
+  "after": {
+    "schema": "celeris.pc-rollout/1",
+    "kind": "snapshot",
+    "at": "2026-11-06T13:29:38+00:00",
+    "project": "01M6RGSRCSM9Q8E49VBXNRS37Z",
+    "get_controller_ms": 15.0,
+    "project_mode": "dry_run",
+    "phase": "active",
+    "revision": 1,
+    "mode_changed_at": "2026-11-06T13:29:38.626784597Z",
+    "lease_expires_at": "2026-11-06T13:30:38.64193794Z",
+    "backoff_until": null,
+    "coalesce_until": "2026-11-06T13:29:38.626784597Z",
+    "next_wake_at": null,
+    "budget_today": {
+      "day": "2026-11-06",
+      "cos_inputs": 0,
+      "roots": 0,
+      "tokens": 0,
+      "usd": 0.0,
+      "usd_unknown_runs": 0,
+      "price_table_version": "2026-09-approx-1",
+      "chat_starts": 0
+    },
+    "cos_inputs_total": 0,
+    "wait_rule": null,
+    "budget_limits": {
+      "max_cos_inputs_per_day": 10,
+      "max_roots_per_day": 5,
+      "max_no_progress_decisions": 5,
+      "max_same_failure_repeats": 3,
+      "max_invalid_decisions": 3,
+      "max_usd_per_day": 100.0,
+      "ttl_secs": 259200
+    },
+    "pending_wakes": 1,
+    "decisions_total": 1,
+    "effects": {
+      "suppressed": 1
+    },
+    "decisions_after_mode": {
+      "suppressed": 1
+    },
+    "decision_modes": [
+      "dry_run"
+    ],
+    "decision_rules": [
+      [
+        "dry_run",
+        "suppressed",
+        "pc/outcome-open"
+      ]
+    ],
+    "get_tasks_ms": 9.7,
+    "controller_roots": 0,
+    "domain_mode": "compare",
+    "domain_generation": "cc9691dda86bca9a82d30cd159903c7b46c6e6c8278a5835d429e126d7650e61",
+    "domain_version": 1,
+    "guard_halted": null,
+    "other_modes": {
+      "01M6RGSRDZPZ6K48GRQPYWF0CS": "off"
+    },
+    "daemon_config_sha256": "cda9a21594e8790354c93ba91cf3f2e91cb39d6eea6ec035db49e577636ff363",
+    "daemon_release": "p4g-e2e",
+    "daemon_instance": "01M6RGSRVGBXGEW3XF2XWQS4RK",
+    "daemon_pid": 494205,
+    "rss_kb": 126144,
+    "rss_anon_kb": 19968,
+    "threads": 34
+  }
+}

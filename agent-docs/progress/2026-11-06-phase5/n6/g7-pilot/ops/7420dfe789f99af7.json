@@ -1,0 +1,275 @@
+{
+ "schema": "celeris.long-horizon-pilot-trial/1",
+ "trial": "7420dfe789f99af7",
+ "harness": "config",
+ "harness_label": "config",
+ "arm": "new",
+ "case": "C08",
+ "project": "01M6RGJSRY65NPS6R5DWN6EQV2",
+ "wall_secs": 99,
+ "rules": [
+  "pc/outcome-open",
+  "pc/milestone-reached",
+  "pc/outcome-open",
+  "pc/guard/budget"
+ ],
+ "root_statuses": [
+  "done",
+  "done"
+ ],
+ "reviews": [
+  {
+   "root": "01M6RGKQP477ZFT3S9JDWC62HQ",
+   "outcome": "o1",
+   "verdicts": [
+    {
+     "run_id": "01M6RGKQPD1BCAMA6NGN9ARQSN",
+     "criterion": 0,
+     "text": "dorastiq-o1: 取り込まれた tree の out/o1.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C08 o1` を実行すると作れる",
+     "kind": "reviewer",
+     "pass": true,
+     "reason": "reviewer(01M6RGM0SXWNMEZSJPQW3KPTF1): out/o1.txt は case: C08 / outcome: o1 / status: verified / evidence: 98c46ae0… の 4 欄を持つ。evidence は printf 'minichunk C08 o1 chunk' | sha256sum の値と一致し、python3 minichunk.py check C08 o1 は exit 0。"
+    },
+    {
+     "run_id": "01M6RGKQPD1BCAMA6NGN9ARQSN",
+     "criterion": 1,
+     "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"` exits 0",
+     "kind": "command",
+     "pass": true,
+     "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \\\"$d/out/o1.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+    },
+    {
+     "run_id": "01M6RGKQPD1BCAMA6NGN9ARQSN",
+     "criterion": 2,
+     "text": null,
+     "kind": "implicit",
+     "pass": true,
+     "reason": "reviewer(01M6RGM0SXWNMEZSJPQW3KPTF1): ac61f3d..dd8d0a7 は 1 commit（o1: out/o1.txt を追加）で、差分は out/o1.txt の 4 行追加のみ。依頼範囲内で、秘密・設定・移行の変更はない。worktree に未コミット変更なし。git merge-tree で main への取り込みは衝突なし（exit 0）。"
+    }
+   ],
+   "command_checks": [
+    {
+     "run_id": "01M6RGKQPD1BCAMA6NGN9ARQSN",
+     "criterion": 1,
+     "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+     "expect_exit": 0,
+     "exit": 0,
+     "timed_out": false,
+     "pass": true,
+     "source": "public/C08/case.json#o1.acceptance"
+    }
+   ],
+   "discrepancies": []
+  },
+  {
+   "root": "01M6RGMRTFA5RRXW75JQDQ24EF",
+   "outcome": "o2",
+   "verdicts": [
+    {
+     "run_id": "01M6RGMRTQHE1MDE0ZB3M67N88",
+     "criterion": 0,
+     "text": "dorastiq-o2: 取り込まれた tree の out/o2.txt が README.md の「成果の契約」の 4 欄（case・outcome・status・evidence）を満たす。作業 tree の直下で `python3 minichunk.py verify C08 o2` を実行すると作れる",
+     "kind": "reviewer",
+     "pass": true,
+     "reason": "reviewer(01M6RGN2HWAHG6Y92ZYYK134N7): out/o2.txt は case: C08、outcome: o2、status: verified、evidence: 535a3b74…（printf 'minichunk C08 o2 chunk' | sha256sum と一致）の 4 欄を満たす。python3 minichunk.py check C08 o2 は exit 0。"
+    },
+    {
+     "run_id": "01M6RGMRTQHE1MDE0ZB3M67N88",
+     "criterion": 1,
+     "text": "`d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"` exits 0",
+     "kind": "command",
+     "pass": true,
+     "reason": "cmd=\"d=$(mktemp -d) && trap 'rm -rf \\\"$d\\\"' EXIT && git archive HEAD minichunk.py | tar -x -C \\\"$d\\\" && (cd \\\"$d\\\" && python3 minichunk.py verify C08 o2) && git show HEAD:out/o2.txt | cmp - \\\"$d/out/o2.txt\\\"\" exit=Some(0) expected=0 stdout_tail=\"\" stderr_tail=\"\""
+    },
+    {
+     "run_id": "01M6RGMRTQHE1MDE0ZB3M67N88",
+     "criterion": 2,
+     "text": null,
+     "kind": "implicit",
+     "pass": true,
+     "reason": "reviewer(01M6RGN2HWAHG6Y92ZYYK134N7): git diff dd8d0a7...76d8aac は out/o2.txt の 4 行追加のみで、依頼範囲内。commit は 'o2: out/o2.txt を追加' の 1 件。作業 worktree に未コミット変更なし。秘密の混入なし（内容は sha256 のみ）。移行・設定への影響なし。"
+    }
+   ],
+   "command_checks": [
+    {
+     "run_id": "01M6RGMRTQHE1MDE0ZB3M67N88",
+     "criterion": 1,
+     "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"",
+     "expect_exit": 0,
+     "exit": 0,
+     "timed_out": false,
+     "pass": true,
+     "source": "public/C08/case.json#o2.acceptance"
+    }
+   ],
+   "discrepancies": []
+  }
+ ],
+ "ops": [
+  {
+   "step": "deploy_ts",
+   "at": 0.1,
+   "bundle_sha256": "cc9691dda86bca9a82d30cd159903c7b46c6e6c8278a5835d429e126d7650e61",
+   "mode_seed": "synthetic: temp DB only"
+  },
+  {
+   "step": "project_created",
+   "at": 0.5,
+   "project": "01M6RGJSRY65NPS6R5DWN6EQV2",
+   "arm": "new"
+  },
+  {
+   "step": "public_checks",
+   "at": 0.5,
+   "outcomes": [
+    {
+     "outcome": "o1",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o1) && git show HEAD:out/o1.txt | cmp - \"$d/out/o1.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C08/case.json#o1.acceptance"
+    },
+    {
+     "outcome": "o2",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o2) && git show HEAD:out/o2.txt | cmp - \"$d/out/o2.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C08/case.json#o2.acceptance"
+    },
+    {
+     "outcome": "o3",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o3) && git show HEAD:out/o3.txt | cmp - \"$d/out/o3.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C08/case.json#o3.acceptance"
+    },
+    {
+     "outcome": "o4",
+     "checks": [
+      {
+       "cmd": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && git archive HEAD minichunk.py | tar -x -C \"$d\" && (cd \"$d\" && python3 minichunk.py verify C08 o4) && git show HEAD:out/o4.txt | cmp - \"$d/out/o4.txt\"",
+       "expect_exit": 0
+      }
+     ],
+     "source": "public/C08/case.json#o4.acceptance"
+    }
+   ]
+  },
+  {
+   "step": "operator_cannot_raise_mode",
+   "at": 0.5,
+   "status": 403,
+   "code": null
+  },
+  {
+   "step": "set_mode",
+   "at": 0.5,
+   "mode": "enabled",
+   "reason": "pilot を有効にする",
+   "revision": null
+  },
+  {
+   "step": "state",
+   "at": 0.5,
+   "phase": "active",
+   "roots": []
+  },
+  {
+   "step": "state",
+   "at": 30.8,
+   "phase": "active",
+   "roots": [
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 40.9,
+   "phase": "active",
+   "roots": [
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 63.2,
+   "phase": "active",
+   "roots": [
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 65.2,
+   "phase": "active",
+   "roots": [
+    "done",
+    "running"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 75.3,
+   "phase": "active",
+   "roots": [
+    "done",
+    "reviewing"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 92.5,
+   "phase": "active",
+   "roots": [
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "state",
+   "at": 93.5,
+   "phase": "blocked",
+   "roots": [
+    "done",
+    "done"
+   ]
+  },
+  {
+   "step": "wake_after_end",
+   "at": 96.6,
+   "new_roots": 0
+  },
+  {
+   "step": "set_mode",
+   "at": 96.6,
+   "mode": "off",
+   "reason": "従来の CoS に戻す",
+   "revision": null
+  },
+  {
+   "step": "wake_after_off",
+   "at": 96.6,
+   "status": 200,
+   "added": false
+  },
+  {
+   "step": "after_off",
+   "at": 99.6,
+   "decisions_at_end": 4,
+   "decisions_after": 4,
+   "mode": "off",
+   "pending_wakes": 1
+  }
+ ],
+ "approvals": [],
+ "effect_audit": []
+}

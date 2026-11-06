@@ -1,0 +1,4 @@
+case: C06
+outcome: o2
+status: verified
+evidence: 3a239257f4d8f5607ad70415e6192578469993889e5e3819f74377c488b9c30b

@@ -1,0 +1,12 @@
+
+[excepted] production_size: crates/task-api/src/types.rs
+    2531 handwritten production lines (threshold 2000)
+    reason: flat API wire-type definitions; also the schemars source for docs/api/v1/*.schema.json (audit.md §9)
+[warning] production_size: crates/task-dispatch/src/dispatcher.rs
+    2402 handwritten production lines (threshold 2000)
+[warning] production_size: crates/task-dispatch/src/dispatcher/work_units.rs
+    2181 handwritten production lines (threshold 2000)
+[warning] production_size: crates/task-dispatch/src/dispatcher/worker_finish.rs
+    2110 handwritten production lines (threshold 2000)
+
+3 active warning(s), 1 excepted

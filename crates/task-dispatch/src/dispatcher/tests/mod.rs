@@ -129,7 +129,9 @@ fn dispatcher_with_test_clock(
             max_requeues: 5,
             max_reviewer_retries: 3,
             max_infra_retries: 5,
-            min_free_disk_mb: 5120,
+            // 空き容量を検証しない試験を host の残量から切り離す。
+            // disk gate の試験は u64::MAX 等で閾値を明示する。
+            min_free_disk_mb: 0,
             roles: Vec::new(),
             genres: Vec::new(),
             delegation: DelegationLimits::default(),
@@ -1251,7 +1253,9 @@ fn pool_dispatcher_with_requeues(
             max_requeues,
             max_reviewer_retries: 3,
             max_infra_retries: 5,
-            min_free_disk_mb: 5120,
+            // 空き容量を検証しない試験を host の残量から切り離す。
+            // disk gate の試験は u64::MAX 等で閾値を明示する。
+            min_free_disk_mb: 0,
             roles: Vec::new(),
             genres: Vec::new(),
             delegation: DelegationLimits::default(),

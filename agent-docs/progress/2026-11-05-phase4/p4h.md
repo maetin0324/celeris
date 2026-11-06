@@ -105,5 +105,12 @@ logs の末尾は `p4h/logs/`。secret の grep（`sk-ant`・`Bearer`・`accessT
 ## 提案
 - P0-C の `grade-v2` は facts を変える task が同じ commit で作り直すようにし、bench script が summary も committed と比べるとよい（今は raw だけを比べるので、P4-B の後に grade-v2 が古いまま残った）。
 
-## 提出時の検査
-（下に追記）
+## 提出時の検査（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+- `bash scripts/dev/test-affected.sh` → exit 0。「試験対象の変更なし（docs のみ等）」（文書の検査は通過）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。`sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0。
+- `test -f agent-docs/progress/2026-11-05-phase4/p4h.md` → exit 0。
+
+## 変更（commit 件名）
+- `p4h: B〜G の統合の確認・最新 main の再採点・比較表と未実施の整理、raw と進捗`
+- `p4h: 提出時の検査の結果を進捗に書く`

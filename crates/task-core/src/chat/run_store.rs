@@ -126,12 +126,12 @@ fn run_from_raw((r, config): (ChatRunRaw, String)) -> Result<ChatRun, ChatError>
         Some(m) => Some(enum_from(m)?),
         None => None,
     };
+    // ADR 2026-11-06-cos-run-launch-accounting-and-drain D5: an unreadable usage is "unknown",
+    // never an error for the whole list. The stored column is not touched.
     let usage: Option<Box<crate::Usage>> = r
         .usage_json
         .as_deref()
-        .map(serde_json::from_str::<crate::Usage>)
-        .transpose()
-        .map_err(|e| ChatError::Invalid(format!("invalid chat usage: {e}")))?
+        .and_then(|j| serde_json::from_str::<crate::Usage>(j).ok())
         .map(Box::new);
     let cost_state = cost_state_of(&r, usage.is_some());
     let prelaunch_reason = r

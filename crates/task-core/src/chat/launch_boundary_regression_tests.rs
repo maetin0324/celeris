@@ -601,3 +601,42 @@ fn migration_0120_keeps_rows_usage_credentials_and_events_without_guessing_a_bou
 fn count(conn: &rusqlite::Connection, sql: &str) -> i64 {
     conn.query_row(sql, [], |r| r.get(0)).expect("count")
 }
+
+/// ADR 2026-11-06-cos-run-launch-accounting-and-drain D5: `usage_json` が JSON として正しいが
+/// `Usage` として読めない行は、一覧全体を失敗させず `usage=None`・`cost_state=unknown` で返す。
+#[test]
+fn run_list_survives_unreadable_usage_json_row() {
+    let s = store();
+    let t = thread(&s, "bad-usage");
+    claim(&s, &t, "good", 1);
+    claim_finish_plain(&s, "good", 2);
+    claim(&s, &t, "bad", 3);
+    claim_finish_plain(&s, "bad", 4);
+    {
+        let conn = super::store::writer(&s).expect("conn");
+        conn.execute(
+            "UPDATE chat_runs SET usage_json='{\"input_tokens\":\"many\"}' WHERE run_id='bad'",
+            [],
+        )
+        .expect("corrupt usage");
+    }
+    let list = s
+        .chat_run_list(&t, None, None)
+        .expect("one unreadable usage row must not fail the list");
+    assert_eq!(list.items.len(), 2);
+    let bad = list.items.iter().find(|r| r.id == "bad").expect("bad row");
+    assert!(bad.usage.is_none());
+    assert_eq!(bad.cost_state, ChatCostState::Unknown);
+    let got = s.chat_run_get(&t, "bad").expect("get");
+    assert_eq!(got.cost_state, ChatCostState::Unknown);
+    // The stored column is left as it was.
+    let conn = super::store::writer(&s).expect("conn");
+    let raw: String = conn
+        .query_row(
+            "SELECT usage_json FROM chat_runs WHERE run_id='bad'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("raw");
+    assert_eq!(raw, "{\"input_tokens\":\"many\"}");
+}

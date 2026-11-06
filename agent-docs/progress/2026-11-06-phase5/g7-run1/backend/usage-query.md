@@ -42,3 +42,17 @@ completed: 2026-11-06
   - `cargo check --workspace --all-targets`: exit 0（`celeris` の `script_exhaustive` 試験に警告 1 件。今回の変更外）。
 - 全 crate の試験（逆依存 crate、web を含む）は release gate（`scripts/selfdeploy/release.sh`）で行う。この WU では走らせていない。
 - commit: `repair: usage-query の統合検査を絞った検査で通し進捗に証拠を残す`
+
+## chat run 一覧の usage 破損行（repair-query-2）
+usage-query の「未解決・提案」の指摘（`usage_json` が JSON として正しいが `Usage` として読めない行で一覧全体が `Invalid` になる）を直した。ADR 2026-11-06-cos-run-launch-accounting-and-drain D5 に合わせ、その行は `usage=None`・`cost_state=unknown` で返し、他の行は読める。usage の列は削除・書き換えしない。新しい設計判断はなく ADR は足していない。
+
+- 変更: `crates/task-core/src/chat/run_store.rs` の `run_from_raw`（読めない usage を `None` にする）、試験 `launch_boundary_regression_tests.rs` の `run_list_survives_unreadable_usage_json_row`。
+- 修正前の失敗: `cargo test -p task-core --lib run_list_survives_unreadable`、exit 101。assertion: `one unreadable usage row must not fail the list: Invalid("invalid chat usage: invalid type: string \"many\", expected u64 at line 1 column 22")`。
+- 修正後: 同試験が通る。試験は一覧が 2 件返ること、壊れた行の `usage=None`・`cost_state=unknown`（`chat_run_get` も同じ）、`usage_json` の列が元の文字列のままであることを確かめる。
+- 絞った検査（提出時の HEAD で実行）:
+  - `cargo nextest run -p task-core`: exit 0、1278 tests run: 1278 passed, 0 skipped。
+  - `cargo clippy -p task-core --all-targets -- -D warnings`: exit 0。
+  - `cargo fmt --all -- --check`: exit 0。
+  - `cargo check --workspace --all-targets`: exit 0（`celeris` の `script_exhaustive` 試験の警告 1 件は今回の変更外）。
+- `test-affected.sh` と全 suite は走らせていない（release gate で行う）。
+- commit: `repair: chat run 一覧が壊れた usage_json で全体失敗しないようにする`

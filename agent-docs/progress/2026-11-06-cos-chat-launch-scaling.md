@@ -93,3 +93,8 @@ operator の journal 集計（celeris@c9bf4bf7dc76、10 分ごとの中央値）
 
 ## 本番への移行
 migration 0119 は index 2 本の追加のみ（データ変更なし）。config の変更は無い。main の 0118（N5、evidence_integrity）の後に適用される。
+
+## 検査結果（提出時の HEAD で実行。最後の同期の後）
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 7763 件 passed・23 skipped）。1 回目は target_sync 3 件と work_unit_dependency_base 1 件が高負荷で落ちたが、単独実行で 31 件 passed、全体の再実行で全件 passed（時間依存の揺れ。この変更の範囲外）
+- `cargo clippy --workspace -- -D warnings`: exit 0
+- `cargo fmt --all -- --check`: exit 0

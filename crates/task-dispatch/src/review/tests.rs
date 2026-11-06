@@ -762,7 +762,7 @@ fn test_llm_route() -> task_worker::protocol::SelectedLlmRoute {
     }
 }
 
-fn reviewer_run(adapter: Arc<StubReviewer>) -> ReviewerRun {
+fn reviewer_run(adapter: Arc<dyn WorkerAdapter>) -> ReviewerRun {
     ReviewerRun {
         cargo_target_dir: None,
         node: None,
@@ -1762,4 +1762,164 @@ async fn acceptance_command_shared_with_a_repo_check_keeps_the_record() {
     assert!(!out.command_checks[0].pass);
     assert_eq!(out.command_checks[1].exit, None);
     assert!(out.command_checks[1].pass);
+}
+
+/// ADR 2026-11-06-misplaced-report-recovery-generalized D3: reviewer が期待 path ではなく cwd からの相対
+/// path（repo の中の `artifacts/review.json` 等）に判定を書く adapter。`strays` は workspace 相対。
+struct StrayReviewer {
+    strays: Vec<&'static str>,
+    review_json: &'static str,
+}
+
+#[async_trait]
+impl WorkerAdapter for StrayReviewer {
+    fn id(&self) -> &str {
+        "stray-reviewer"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        for rel in &self.strays {
+            let path = req.workspace.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, self.review_json).unwrap();
+        }
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: "reviewed".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            exit_code: Some(0),
+        })
+    }
+}
+
+async fn review_with_strays(dir: &Path, strays: Vec<&'static str>) -> Vec<Verdict> {
+    let ws = LocalWorkspace::new(dir);
+    let task = task_with(vec![Check::Reviewer, Check::Reviewer], dir);
+    let adapter = Arc::new(StrayReviewer {
+        strays,
+        review_json: r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"c0 ok"},{"criterion":1,"pass":false,"reason":"c1 missing"}]}"#,
+    });
+    review_task(
+        &task,
+        &ws,
+        dir,
+        &dir.join("artifacts"),
+        &[],
+        Duration::from_secs(5),
+        ReviewExtras {
+            reviewer: Some(reviewer_run(adapter)),
+            ..Default::default()
+        },
+    )
+    .await
+    .verdicts
+}
+
+/// 01M6QZ031R: reviewer が `cat > artifacts/review.json` を repo の worktree で実行し、判定が
+/// `repos/<name>/artifacts/review.json` に落ちた。run 中に書かれた 1 件は期待 path へ回収され、
+/// 中身の判定（pass と fail の両方）がそのまま criteria に採られる。誤配置元は残る。
+#[tokio::test]
+async fn a_review_json_misplaced_in_the_repo_is_recovered_and_judged() {
+    let dir = tempfile::tempdir().unwrap();
+    let verdicts = review_with_strays(
+        dir.path(),
+        vec!["repos/agent-platform/artifacts/review.json"],
+    )
+    .await;
+    assert_eq!(
+        verdicts.iter().map(|v| v.pass).collect::<Vec<_>>(),
+        vec![true, false],
+        "{verdicts:?}"
+    );
+    assert!(
+        verdicts[0].reason.contains("c0 ok"),
+        "{}",
+        verdicts[0].reason
+    );
+    assert!(
+        verdicts[1].reason.contains("c1 missing"),
+        "{}",
+        verdicts[1].reason
+    );
+    assert!(
+        dir.path()
+            .join("artifacts")
+            .join(REVIEW_FILE_NAME)
+            .is_file()
+    );
+    assert!(
+        dir.path()
+            .join("repos/agent-platform/artifacts/review.json")
+            .is_file()
+    );
+}
+
+/// 複数件の誤配置は推測しない: 全 criteria が `review.json misplaced` で不合格、期待 path は空のまま。
+#[tokio::test]
+async fn several_misplaced_review_jsons_fail_every_criterion() {
+    let dir = tempfile::tempdir().unwrap();
+    let verdicts = review_with_strays(
+        dir.path(),
+        vec![
+            "repos/agent-platform/artifacts/review.json",
+            "repos/other/artifacts/review.json",
+        ],
+    )
+    .await;
+    assert_eq!(verdicts.len(), 2);
+    for v in &verdicts {
+        assert!(!v.pass);
+        assert!(v.reason.contains("review.json misplaced:"), "{}", v.reason);
+        assert!(
+            v.reason.contains("reports were not adopted"),
+            "{}",
+            v.reason
+        );
+    }
+    assert!(!dir.path().join("artifacts").join(REVIEW_FILE_NAME).exists());
+}
+
+/// 0 件と、run 開始より古い 1 件（前の run の残り）は従来どおり `not found or unreadable` で不合格。
+#[tokio::test]
+async fn zero_or_a_stale_misplaced_review_json_keeps_the_not_found_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let verdicts = review_with_strays(dir.path(), vec![]).await;
+    assert!(
+        verdicts
+            .iter()
+            .all(|v| !v.pass && v.reason.contains("review.json not found or unreadable")),
+        "{verdicts:?}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let stale = dir
+        .path()
+        .join("repos/agent-platform/artifacts/review.json");
+    std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::fs::write(
+        &stale,
+        r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"old"},{"criterion":1,"pass":true,"reason":"old"}]}"#,
+    )
+    .unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&stale)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
+        .unwrap();
+    let verdicts = review_with_strays(dir.path(), vec![]).await;
+    assert!(
+        verdicts
+            .iter()
+            .all(|v| !v.pass && v.reason.contains("review.json not found or unreadable")),
+        "{verdicts:?}"
+    );
+    assert!(!dir.path().join("artifacts").join(REVIEW_FILE_NAME).exists());
 }

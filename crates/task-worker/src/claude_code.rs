@@ -514,7 +514,7 @@ async fn run_claude_code(
     // ADR 2026-10-08-cos-chat-prompt-cache D6: a CoS chat run puts its fixed Core in the system
     // prompt (after HEADLESS_RUN_NOTE, one argument) and only the run specific part on stdin.
     let cos_parts = build_cos_chat_parts(&req.task, &req.context, run_id, &artifacts_rel);
-    let work_note = work_dir_note(req.work_dir.as_deref(), &req.workspace, &req.artifacts_dir);
+    let work_note = work_dir_note(req);
     let prompt = match &cos_parts {
         Some(parts) => format!("{work_note}{}", parts.variable),
         None => format!(

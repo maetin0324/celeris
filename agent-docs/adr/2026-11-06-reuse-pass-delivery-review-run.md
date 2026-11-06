@@ -21,12 +21,14 @@ reviewer の合格を再利用した回は `reviewer_run` が None なので、�
 既存の試験が見逃した理由: 試験の 2 回目の review は worker run id が空文字で呼ばれ、空文字同士が偶然一致した。
 本番は `last_run_id`（worker run の id）で呼ばれる。
 
-## 上限が効かなかった理由（仮説。直すのは別の WorkUnit resync-cap）
-`pre_review_stale_state` は、直後が `ReviewTargetAdvanced` でない `Transitioned` で stale の数を 0 に戻す。
-この循環では `review_pass`（reviewing → done）が毎周入り、直後は `ReviewTargetAdvanced` ではないので数が戻る。
-`request_rereview` は `rereview` 遷移の直後に `ReviewTargetAdvanced` を置くが、`review_pass` が間に入る。
-そのため `MAX_TARGET_RESYNCS = 2` を超えず、`ReviewResyncHalted` が出なかった（attempt が 336 まで増えた記録と合う）。
-本番での確認は未実施。
+## 上限が効かなかった理由（試験で確認済み）
+review 入口の上限判定 `pre_review_stale_state`（`review_spawn.rs`）は、直後が `ReviewTargetAdvanced` でない `Transitioned` で
+stale の数を 0 に戻していた。配送からの再 review の循環は
+review_pass（reviewing → done）→ rereview → `ReviewTargetAdvanced` → reviewing → review_pass … で、
+`request_rereview` は rereview の直後に `ReviewTargetAdvanced` を置くが、次の周の review_pass が数を 0 に戻す。
+そのため数は 1 を超えず、`MAX_TARGET_RESYNCS = 2` に届かず `ReviewResyncHalted` が出なかった。
+一方 `request_rereview` の attempt は `target_restale_count`（review_pass では戻さない）で数えるので、336 まで増えた。
+`request_rereview` 自身は上限を見ない（D5 の設計どおり、上限は review 入口が持つ）。
 
 ## 決定
 - `spawn_review` で `review_id`（reviewer run があればその id、無ければ worker run id）を 1 回だけ決め、
@@ -37,5 +39,11 @@ reviewer の合格を再利用した回は `reviewer_run` が None なので、�
   どちらも worker run id を非空にして本番と同じ呼び出しにしてある。
 - 修正前のコードでは 2 件とも失敗することを確認した（行は review_run == worker_run、SHA は NULL）。
 
+- 上限の修正（WorkUnit resync-cap）: `pre_review_stale_state` は reason が `review_pass` の `Transitioned` では数を戻さない。
+  review_pass は合格の記録で、stale の連鎖を終えない。人の rereview・reopen・dispatch・review_fail などは従来どおり戻す。
+  回帰試験（`target_sync.rs`）: `delivery_rereview_loop_halts_visibly_at_the_cap`
+  （循環が MAX_TARGET_RESYNCS + 1 回で `ReviewResyncHalted` 1 件・通知・snapshot が出て review を起動しない。修正前は落ちる）、
+  `delivery_rereview_below_the_cap_still_reviews`（上限までは従来どおり review が起動する）。
+
 ## 制約
-上限の効かせ方（`ReviewResyncHalted`）と本番の N1 の後始末は、この ADR の範囲外。別の WorkUnit が扱う。
+本番の N1 の後始末は、この ADR の範囲外（進捗ファイルの「本番への移行」で扱う）。

@@ -812,6 +812,99 @@ async fn pre_review_sync_target_advanced_limit_halts_visibly_and_rereview_resume
     );
 }
 
+/// 配送からの再 review（review_pass → done → rereview → ReviewTargetAdvanced の循環）も上限で止まる。
+/// 修正前は review_pass の `Transitioned` が stale の数を 0 に戻し、N1 のように attempt が 336 まで増えても
+/// `ReviewResyncHalted` が出なかった。上限（MAX_TARGET_RESYNCS）までは従来どおり review が起動する。
+async fn delivery_rereview_cycles(cycles: u32) -> (bool, Vec<Event>, Arc<dyn TaskStore>, Task) {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = reviewing_task(repo.path(), &store);
+    store.insert(&task).unwrap();
+    let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
+    let wt = d.local_worktree_for(&task).unwrap();
+    wt.ensure_blocking().unwrap();
+    commit_file(&wt.dir, "task.txt", "task\n");
+    let transition = |from, to, reason: &str| Event::Transitioned {
+        from,
+        to,
+        reason: reason.into(),
+    };
+    let repo_id = task_core::RepoId::new();
+    for attempt in 1..=cycles {
+        if attempt > 1 {
+            store
+                .append_event(
+                    task.id,
+                    &transition(Status::Reviewing, Status::Done, "review_pass"),
+                )
+                .unwrap();
+            store
+                .append_event(
+                    task.id,
+                    &transition(Status::Done, Status::Reviewing, "rereview"),
+                )
+                .unwrap();
+        }
+        store
+            .append_event(
+                task.id,
+                &Event::ReviewTargetAdvanced {
+                    review_run: "01WORKERRUN".into(),
+                    repo_id,
+                    reviewed_sha: String::new(),
+                    target_sha: "t".repeat(40),
+                    attempt,
+                },
+            )
+            .unwrap();
+    }
+    let started = d
+        .spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+        .unwrap();
+    if !started {
+        assert!(d.review_resync_halted.contains_key(&task.id));
+    }
+    let events = events_of(&store, &task);
+    (started, events, store, task)
+}
+
+#[tokio::test]
+async fn delivery_rereview_loop_halts_visibly_at_the_cap() {
+    let (started, events, store, task) =
+        delivery_rereview_cycles(task_ops::delivery::MAX_TARGET_RESYNCS + 1).await;
+    assert!(!started, "review must stay halted");
+    let halted = events
+        .iter()
+        .filter(|e| matches!(e, Event::ReviewResyncHalted { .. }))
+        .count();
+    assert_eq!(halted, 1, "{events:?}");
+    let notices = store
+        .notice_list(&task_core::feed::NoticeQuery {
+            kinds: vec![task_core::feed::NoticeKind::BadNews],
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(notices.items.len(), 1, "{notices:?}");
+    assert_eq!(
+        notices.items[0].task_id.as_deref(),
+        Some(task.id.to_string().as_str())
+    );
+}
+
+#[tokio::test]
+async fn delivery_rereview_below_the_cap_still_reviews() {
+    let (started, events, _, _) =
+        delivery_rereview_cycles(task_ops::delivery::MAX_TARGET_RESYNCS).await;
+    assert!(started, "{events:?}");
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::ReviewResyncHalted { .. }))
+    );
+}
+
 /// 同 ADR D4: 止めている間に target が静かになれば（先頭 commit が `review_resync_quiet` 以上古い）、
 /// `ReviewResyncResumed{target_quiet}` を残して自動で再開する。時計は dispatcher の `test_now` で進める。
 #[tokio::test]

@@ -32,3 +32,8 @@ updated: 2026-11-06
 
 ## 本番への移行
 この unit では無し（config 欄の変更は WorkUnit config）。
+
+## task-core の公開 API 変更（最小）
+
+- `crates/task-core/src/project_wake.rs` の `ProjectBudgetToday` に `usd`・`usd_unknown_runs`・`price_table_version` を足し、`Eq` derive を外した（`usd` が f64 のため）。この型は task-api の `budget_today` 応答の型で、task-core にしか置き場がない。tokens は表示用に残した。
+- この変更は WU の範囲 check（task-worker・task-api・docs・web・agent-docs のみ許可）に当たる。範囲 check の許可 path に `crates/task-core/src/project_wake.rs` を足す必要がある（plan_issue として申告）。

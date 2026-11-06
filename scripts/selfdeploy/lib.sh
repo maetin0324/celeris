@@ -110,6 +110,27 @@ sd_die() {
   exit 1
 }
 
+# ---- selfdeploy の道具一式をリリースに同梱する ------------------------------------
+# ADR-0040 D6: release.sh は <src_dir>（scripts/selfdeploy）直下の実行用の file を <dest_dir>（<release>/scripts）へ
+# 平らに写す。対象は *.sh と *.py（verify.sh が `$(dirname "${BASH_SOURCE[0]}")/snapshot_db.py` で起こす helper）。
+# tests/・hooks/ などの下位 directory は写さない。実行ビットは `cp -p` で保つ。
+# 2026-11-06: *.sh だけを写していたため snapshot_db.py が release に入らず、current/scripts/verify.sh が
+# 「can't open file .../scripts/snapshot_db.py」で落ちた。写した後に必須の file を確かめ、無ければ sd_die する。
+# 試験: scripts/selfdeploy/tests/bundle_includes_verify_helpers.sh
+sd_bundle_selfdeploy_scripts() {
+  local src="$1" dest="$2" f
+  [ -d "$src" ] || sd_die "bundle: source $src is not a directory"
+  mkdir -p "$dest"
+  for f in "$src"/*.sh "$src"/*.py; do
+    [ -f "$f" ] || continue
+    cp -p "$f" "$dest/$(basename "$f")"
+  done
+  [ -x "$dest/promote.sh" ] || sd_die "bundled scripts/promote.sh is missing or not executable"
+  [ -f "$dest/lib.sh" ] || sd_die "bundled scripts/lib.sh is missing"
+  [ -f "$dest/verify.sh" ] || sd_die "bundled scripts/verify.sh is missing"
+  [ -f "$dest/snapshot_db.py" ] || sd_die "bundled scripts/snapshot_db.py is missing (verify.sh needs it)"
+}
+
 # ---- credentiald の切り替え --------------------------------------------------
 # 本番の drop-in（celeris@.service.d/50-credentiald.conf の Wants=）は、新しい daemon と一緒に同じ release の
 # celeris-credentiald@<新> を起こす。旧 broker は旧 daemon が draining の間も socket を持ち続けるので、新は

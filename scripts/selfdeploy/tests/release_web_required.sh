@@ -86,7 +86,7 @@ mkdir -p "$repo/crates/task-core/src" "$repo/crates/celeris" "$repo/crates/x/src
 printf 'pub const SCHEMA_VERSION: u32 = 7;\n' >"$repo/crates/task-core/src/store.rs"
 printf '[package]\nname = "celeris"\nversion = "0.1.0"\n' >"$repo/crates/celeris/Cargo.toml"
 printf '// v0\n' >"$repo/crates/x/src/lib.rs"
-cp "$here"/*.sh "$repo/scripts/selfdeploy/"
+cp "$here"/*.sh "$here"/*.py "$repo/scripts/selfdeploy/"
 chmod +x "$repo/scripts/selfdeploy/"*.sh
 mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"

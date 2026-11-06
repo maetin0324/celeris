@@ -16,3 +16,8 @@ P0-F の再実行（C06・C08 の new 腕）で、案件 CoS thread の chat_run
 
 ## 付記: 試験による確認
 案件 CoS thread の chat run が usage を記録し、`project_run_usage_between` の和に入ることを `harness_tests.rs` の `project_cos_chat_run_records_usage_and_counts_in_project_budget`（fake adapter、実 LLM なし）で固定した。daemon 側の修正は不要と確定した。
+
+## 付記（2026-11-06）: 「daemon 側の修正は不要」の訂正
+G7 の 1 回目（approval `n1-g7-20261106-1`）で、route 候補と skill があっても案件 CoS の chat run 5 本のうち 3 本の usage が null だった。
+起動前の route 失敗の行が費用不明に数えられて案件を止める経路と、試行の終わりで CoS run の usage が切れる経路が daemon と driver にある。
+上の D1 と付記の「daemon 側の修正は不要と確定した」は誤りで、[ADR 2026-11-06-cos-run-launch-accounting-and-drain](2026-11-06-cos-run-launch-accounting-and-drain.md) D0 で訂正した。D2・D3（route 候補が空の原因と driver の検査）は維持する。

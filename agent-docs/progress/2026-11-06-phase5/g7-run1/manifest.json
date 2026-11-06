@@ -1,0 +1,175 @@
+{
+ "schema": "celeris.g7-raw-manifest/1",
+ "run": "G7 1 回目（approval n1-g7-20261106-1、2026-11-06 13:21Z ごろ）",
+ "source_root": "/local/celeris/data/scratch/n1-g7",
+ "copied_by": "task 01M6RGZRNZQMF4PG39HRQ81NRV（原本は読み取りだけ。cp -p で 1 file ずつ、再帰コピーなし）",
+ "secret_scan": {
+  "commands": [
+   "grep -rnoiE '(sk-ant-…|sk-…|bearer …|token…{16,}|api[_-]?key|password|secret|authorization|oauth|refresh_token|access_token|credential|ghp_…|BEGIN … PRIVATE)' .",
+   "grep -rnoE '[A-Za-z0-9+/_=-]{40,}' .（長い英数字列。全件が sha256 の digest）",
+   "語ごとの件数: token・key・secret・passw・cookie・auth・bearer・sk-・ghp_・PRIVATE"
+  ],
+  "result": "秘密の値は 0 件。token の 71 件はすべて usage の欄名（input_tokens など）、key の 2 件は採点の述語名 question_key_opened。40 字以上の英数字列は sha256 の digest（init_digest・acceptance_sha256・bundle_sha256・成果の evidence）と URL の path",
+  "redactions": []
+ },
+ "files": [
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/run.log",
+   "dest": "run.log",
+   "bytes": 884,
+   "sha256": "3ab5b907264300df6df22e9db5d608ad0c59a385f46ef4dd68cebb6492200748",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/approval.json",
+   "dest": "approval.json",
+   "bytes": 945,
+   "sha256": "00a61f615ea60e23ff1455886ec5c34d1462b108a6f440dde7d42d2c27cbbee3",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/facts/49a77b52eb2fcefa.json",
+   "dest": "facts/49a77b52eb2fcefa.json",
+   "bytes": 9398,
+   "sha256": "fb0ba4063157c8aca909382c84898a11a2546f9c0acb5335e69a22086f0e7fb0",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/facts/7420dfe789f99af7.json",
+   "dest": "facts/7420dfe789f99af7.json",
+   "bytes": 8297,
+   "sha256": "b73b6169cd11004f9edb2d55895ff5dc3744c5666dbd66c82b9dcd91b523e1fa",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/ops/49a77b52eb2fcefa.json",
+   "dest": "ops/49a77b52eb2fcefa.json",
+   "bytes": 10379,
+   "sha256": "817cc55498da49c9fae9bfc66495845c2332bed12fd0be7eb6098330710230ee",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/ops/7420dfe789f99af7.json",
+   "dest": "ops/7420dfe789f99af7.json",
+   "bytes": 8491,
+   "sha256": "94119e5facb8bc3b71c50c792e69a997723efc22865a5ede22b1efe61c700bc5",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/ops/C06-new.log",
+   "dest": "ops/C06-new.log",
+   "bytes": 2374,
+   "sha256": "aa4556a0dfc993393fb222cce6f68defa02d63355e54a5b2b299e5acac4b3ec0",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/ops/C08-new.log",
+   "dest": "ops/C08-new.log",
+   "bytes": 1819,
+   "sha256": "a3a20713a0261038c665b3fdbb6cae35d1740ac188122b120d1b654046805118",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/grade/grades.jsonl",
+   "dest": "grade/grades.jsonl",
+   "bytes": 3911,
+   "sha256": "5f48a0fda5afd038e34f5ac7682fe10eb57d7b40554f76cf3a71dc2b81acc0f2",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/grade/summary.json",
+   "dest": "grade/summary.json",
+   "bytes": 1043,
+   "sha256": "bd6754c57a94937a1d4ca6400e654fc7fdc92b7adde481cb7cd8a4c6aa7eac7f",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/grade/pilot-gate.json",
+   "dest": "grade/pilot-gate.json",
+   "bytes": 4320,
+   "sha256": "e7e3daaf56d6507a3021a9f16a5a0a0a79530a49560fb45de4b61e36e801d831",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/grade/pilot-facts.json",
+   "dest": "grade/pilot-facts.json",
+   "bytes": 202,
+   "sha256": "51bb4693f6366ab6d3e4838a0cf5baf7ba52a4aeed5bf8baef8b7d0da8e82dea",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/arm-map/49a77b52eb2fcefa.json",
+   "dest": "arm-map/49a77b52eb2fcefa.json",
+   "bytes": 41,
+   "sha256": "35c6528747b6ce6a70a941e45c6581de3e00f523a68b3b8f614425518711ad16",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/arm-map/7420dfe789f99af7.json",
+   "dest": "arm-map/7420dfe789f99af7.json",
+   "bytes": 41,
+   "sha256": "54188116d5ebf7cd6559162ee8f7a72dc3e7eb19c006eb00ed2421ec99813d7e",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/trials/49a77b52eb2fcefa/repo/out/o1.txt",
+   "dest": "trials/49a77b52eb2fcefa/repo/out/o1.txt",
+   "bytes": 114,
+   "sha256": "cae250b21c9c0df54728bc3e87f78d82432ab55ab7a563e6e0e323dbfc0332da",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/trials/49a77b52eb2fcefa/repo/out/o2.txt",
+   "dest": "trials/49a77b52eb2fcefa/repo/out/o2.txt",
+   "bytes": 114,
+   "sha256": "6162f6613f0f6899461b6a3633ffaa787e886f8a3d8957d608986bec3e6fcac7",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/trials/7420dfe789f99af7/repo/out/o1.txt",
+   "dest": "trials/7420dfe789f99af7/repo/out/o1.txt",
+   "bytes": 114,
+   "sha256": "afb32e0489b0fdc93e9524926bb78bcc1622e1cb109c48eb46b83dff07c7fc0b",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/trials/7420dfe789f99af7/repo/out/o2.txt",
+   "dest": "trials/7420dfe789f99af7/repo/out/o2.txt",
+   "bytes": 114,
+   "sha256": "15945d4e3227faf855547299c70cff007b9fadb0b2b846f6f1a7d4e2e4cce068",
+   "redacted": false
+  }
+ ],
+ "not_copied": [
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/trials/49a77b52eb2fcefa/repo/README.md",
+   "bytes": 1487,
+   "sha256": "043f49c5d10966797fc82d2e8b312367818fbf6bbd34fb6d4328bcf3777b51e2",
+   "why": "case の入力（bench の fixture から再生成できる）"
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/trials/49a77b52eb2fcefa/repo/minichunk.py",
+   "bytes": 3913,
+   "sha256": "9ed9dccac2aa9d2d2ffcda0788c80aa4555042e1e3ac07383d325b2cf87288bd",
+   "why": "case の入力（bench の fixture から再生成できる）"
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/trials/7420dfe789f99af7/repo/README.md",
+   "bytes": 1487,
+   "sha256": "ec1a6702afaec28f271cc3aaab755f596fbc83540d4010ae2204c6fca0cf3c34",
+   "why": "case の入力（bench の fixture から再生成できる）"
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw/trials/7420dfe789f99af7/repo/minichunk.py",
+   "bytes": 3913,
+   "sha256": "9ed9dccac2aa9d2d2ffcda0788c80aa4555042e1e3ac07383d325b2cf87288bd",
+   "why": "case の入力（bench の fixture から再生成できる）"
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/approval-run2.json",
+   "bytes": 889,
+   "sha256": "03a82ffb287739c22ec13f528aaa456b2bf09fbd435cef94af7cbee778b20f2b",
+   "why": "2 回目の承認 file（この記録の範囲外。1 回目の raw ではない）"
+  }
+ ]
+}

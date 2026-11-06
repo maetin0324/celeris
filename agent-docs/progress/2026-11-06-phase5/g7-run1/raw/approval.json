@@ -1,0 +1,5 @@
+{"approval_id": "n1-g7-20261106-1", "approved_by": "human:rmaeda", "approved_at": "2026-11-06T02:45:00Z",
+ "expires_at": "2026-11-07T12:00:00Z", "account": "claude_max_personal", "model": "claude-sonnet-5-5", "harness": "claude_code",
+ "scope": {"cases": ["C06", "C08"], "arms": ["new"], "environment": "non-production"},
+ "limits": {"max_usd": 4, "max_wall_secs": 450},
+ "note": "人（rmaeda）が 2026-11-06 02:45Z ごろ operator の質問に「流す」と答えた G7（C06・C08 の new 腕を --cos-route 付きで再実行、止める条件は 15 分と案件の 1 日 100 万 token）。道具が USD の上限しか受けないため、2026-11-06T08:55:22Z に人が operator の換算案「2 試行の合計 4 USD 相当・1 試行 450 秒」を選んだ（P0-F の token の内訳で 10 万 token ≈ 0.18 USD、1 案件 100 万 token ≈ 2 USD）。file は operator（claude-code-ops-session）が人の回答から書いた。"}

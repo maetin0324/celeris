@@ -11,8 +11,7 @@ use std::time::Duration;
 use serde_json::json;
 use task_core::SqliteStore;
 use task_core::chat::{
-    ChatMessage, ChatMessageQuery, ChatRunSessionMode, ChatRunState, ChatSessionKey,
-    ChatThreadKind, ChatThreadQuery,
+    ChatMessage, ChatMessageQuery, ChatRunSessionMode, ChatRunState, ChatSessionKey, ChatThreadKind,
 };
 use task_worker::adapter::{RunLimits, WorkerAdapter};
 use task_worker::protocol::{
@@ -328,42 +327,33 @@ impl CosChatLaunch {
             .map_err(|e| e.to_string())?
             .into_iter()
             .collect();
-        let mut before = None;
-        loop {
-            let page = self
-                .store
-                .chat_thread_list(&ChatThreadQuery {
-                    before: before.clone(),
-                    limit: Some(100),
-                    // ADR 2026-10-28-cos-review-back-thread D2: the review thread's queue runs too.
-                    include_review: true,
-                    ..ChatThreadQuery::default()
-                })
-                .map_err(|e| e.to_string())?;
-            for thread in &page.items {
-                if thread.queued_count == 0 || thread.active_run_id.is_some() {
-                    continue;
-                }
-                if self.running.contains_key(&thread.id) {
-                    continue;
-                }
-                if triage_pending.contains(&thread.id)
-                    && !self
-                        .store
-                        .chat_thread_has_queued_user(&thread.id)
-                        .map_err(|e| e.to_string())?
-                {
-                    continue;
-                }
-                if !self.has_capacity(dispatcher) {
-                    return Ok(());
-                }
-                self.start_thread(dispatcher, &thread.id, ClaimSource::Queue)?;
+        // ADR 2026-11-06-cos-chat-launch-scaling: only threads with queued input or an open run.
+        let ids = self
+            .store
+            .chat_thread_ids_with_queued_or_open_run()
+            .map_err(|e| e.to_string())?;
+        for id in ids {
+            let Some(thread) = self.store.chat_thread_get(&id).map_err(|e| e.to_string())? else {
+                continue;
+            };
+            if thread.queued_count == 0 || thread.active_run_id.is_some() {
+                continue;
             }
-            before = page.next_cursor;
-            if before.is_none() {
-                break;
+            if self.running.contains_key(&thread.id) {
+                continue;
             }
+            if triage_pending.contains(&thread.id)
+                && !self
+                    .store
+                    .chat_thread_has_queued_user(&thread.id)
+                    .map_err(|e| e.to_string())?
+            {
+                continue;
+            }
+            if !self.has_capacity(dispatcher) {
+                return Ok(());
+            }
+            self.start_thread(dispatcher, &thread.id, ClaimSource::Queue)?;
         }
         Ok(())
     }

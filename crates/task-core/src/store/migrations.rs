@@ -235,6 +235,7 @@ pub(crate) const MIGRATION_0115: &str =
 /// 第 4 フェーズ P4-D（ADR 2026-11-05-phase4-p4d-retention）: wake・判断・compare の記録の保持と GC
 /// （許可の行・GC の追記専用の記録・削除を拒む trigger の置き換え）。
 pub(crate) const MIGRATION_0117: &str = include_str!("../../migrations/0117_project_retention.sql");
+pub(crate) const MIGRATION_0118: &str = include_str!("../../migrations/0118_chat_queued_index.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration）。`migrate` は飛ばし、
@@ -244,7 +245,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69, 116];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 117;
+pub const SCHEMA_VERSION: u32 = 118;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -394,6 +395,7 @@ impl SqliteStore {
             114 => Ok(MIGRATION_0114),
             115 => Ok(MIGRATION_0115),
             117 => Ok(MIGRATION_0117),
+            118 => Ok(MIGRATION_0118),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

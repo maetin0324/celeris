@@ -26,3 +26,7 @@ updated: 2026-11-06
 
 ## 後続 unit への引き継ぎ
 - celeris の daemon は `Dispatcher::set_budget_rates` と `ApiSettings.budget_rates` に同じ `[budget_rates]` を渡す。
+
+## 再実行（check 不合格の修正）
+- `cargo clippy -p task-dispatch --all-targets -- -D warnings` が落ちていた。原因は task-dispatch の試験側の lint（未使用の `project_retention_last`・`external_wait`・`replan_each`、collapsible if、手動 strip_prefix、範囲 pattern、`Default` 後の field 代入、複雑な型）。すべて直し、提出時の HEAD で clippy・`cargo fmt --all -- --check` が exit 0、`cargo nextest run -p task-dispatch` が 1413 件通過。
+- 範囲 check は `scripts/dev/test-project-controller-replay.sh` の変更が範囲外で落ちていた。この WU では変更を戻した。**closeout で要対応**: 同 script の `project_controller_replay_token_cap` を `project_controller_replay_usd_cap` に直す（試験名は USD 化済みで、script が旧名を期待している）。

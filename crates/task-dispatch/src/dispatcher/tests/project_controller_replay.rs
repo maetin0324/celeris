@@ -808,8 +808,10 @@ async fn project_controller_replay_resource_loop() {
     let projects: Vec<Project> = (0..100)
         .map(|_| project(&store, Some(ControllerMode::Enabled)))
         .collect();
-    let mut s = ProjectControllerSettings::default();
-    s.max_evaluations_per_tick = 10;
+    let s = ProjectControllerSettings {
+        max_evaluations_per_tick: 10,
+        ..Default::default()
+    };
     let mut d = env.daemon_with(&store, "i1", none(), s);
     prime(&mut d);
     let mut idle = Vec::new();

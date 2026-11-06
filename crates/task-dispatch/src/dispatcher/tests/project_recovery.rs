@@ -46,15 +46,6 @@ fn human_wait(s: &ProjectSnapshot) -> Value {
     wait_action(s, "human")
 }
 
-fn external_wait(s: &ProjectSnapshot) -> Value {
-    wait_action(s, "external")
-}
-
-/// 呼ぶたびに別の CoS 入力（replan）。回数の上限の試験。
-fn replan_each(s: &ProjectSnapshot) -> Value {
-    replan(s, "next", &[format!("project:{}", s.project.id)], "unknown")
-}
-
 fn brief_put(c: &Case, state: &str) {
     brief_put_on(&c.store, c.p.id, state, c.env.now());
 }
@@ -1126,7 +1117,7 @@ async fn project_recovery_k36_eight_day_composite_keeps_the_limits() {
             5 => brief_put(&c, "day1"),
             6 => external(&c, "day1"),
             // 2 日目: 同じ失敗が 3 回で止まる。人が解消する。
-            30 | 31 | 32 => {
+            30..=32 => {
                 fail_root(&c, "check failed: exit 3");
             }
             40 => human(&c),

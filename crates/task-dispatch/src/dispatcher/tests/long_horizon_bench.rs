@@ -1306,10 +1306,12 @@ impl<'a> Trial<'a> {
                 )
                 .unwrap();
         }
-        if self.sc.kick && self.request_valid && !self.controller_enabled() {
-            if let Some(o) = self.next_open() {
-                self.cos_create(&o, true);
-            }
+        if self.sc.kick
+            && self.request_valid
+            && !self.controller_enabled()
+            && let Some(o) = self.next_open()
+        {
+            self.cos_create(&o, true);
         }
     }
 
@@ -1322,11 +1324,8 @@ impl<'a> Trial<'a> {
         let fired: Vec<(String, String)> = self.boundary_fired.lock().unwrap().drain(..).collect();
         let now = self.secs();
         for (_, action) in fired {
-            if action.starts_with("request:") {
-                let ids: Vec<String> = action["request:".len()..]
-                    .split(',')
-                    .map(str::to_owned)
-                    .collect();
+            if let Some(rest) = action.strip_prefix("request:") {
+                let ids: Vec<String> = rest.split(',').map(str::to_owned).collect();
                 self.current_outcomes = ids;
                 self.human_op("stimulus", "request_change", now);
                 self.actor("human", now);

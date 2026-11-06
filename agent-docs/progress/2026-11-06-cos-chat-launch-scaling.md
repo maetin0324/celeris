@@ -29,3 +29,19 @@ root task ごとに summary thread が増えるので、tick の費用が thread
 
 ## 本番への移行
 migration 0118 は index 2 本の追加のみ（データ変更なし）。config の変更は無い。
+
+## 本番 DB の写しでの段別計測（operator 依頼 10:20Z）
+手順: `crates/celeris/tests/tick_prod_copy_steps.rs`（`TICK_PROD_DB` に backup `20261106-093409-pre-c9bf4bf7dc76.sqlite3` を渡す手動の計測、既定では走らない）。
+一時 dir へ複製した DB を、fake harness だけ・cluster/browser/通知/remote/LLM なしの config で開き、5 tick の `step_us` を出す。本番 DB と state dir には書かない。
+
+修正後（本 branch の HEAD）。単位は µs。tick 0 は起動直後の照合と triage の取り込みを含む。
+
+| tick | tick_cos_chat_launch | triage_ingest | claim_queued | relay_rejudge | control_hook |
+|---|---|---|---|---|---|
+| 0 | 3,498,944 | 2,823,578 | 286,344 | 135,977 | 1,224 |
+| 1 | 173,395 | 14,175 | 6,054 | 144,100 | 8,456 |
+| 2 | 289,240 | 16,789 | 12,583 | 250,217 | 9,034 |
+| 3 | 353,630 | 30,056 | 15,126 | 287,493 | 20,336 |
+| 4 | 150,799 | 9,210 | 2,381 | 129,807 | 4,861 |
+
+観測: 本番で p50 20.6 秒だった tick_cos_chat_launch は、同じ規模の DB で定常 0.15〜0.35 秒になった。残る段は relay_rejudge（0.13〜0.29 秒）で、全体 tick（5〜7 秒）の主因は `recover_reviews`（2.6〜3.4 秒）・`prune_and_sweep`（1.4〜1.9 秒）・`dispatch_ready`（0.9〜1.6 秒）に移った。これらはこの task の範囲外。

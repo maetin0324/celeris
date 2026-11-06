@@ -91,6 +91,9 @@ pub struct BudgetUsage {
     pub usd_micros: u64,
     /// 費用不明の run の数（1 以上なら `UsdUnknown` で止める）。
     pub usd_unknown_runs: u32,
+    /// 起動前に確かに終わった chat run の数（費用不明にも USD の和にも入れない。ADR 2026-11-06-cos-run-launch-accounting-and-drain D1-2）。
+    /// 判定は `SqliteStore::project_run_usage_between` と同じ述語で、判定に使わず表示と監査に使う。
+    pub not_launched_runs: u32,
     /// 実際に起動した案件 CoS の chat run（controller 以外の入力も含む）。
     pub chat_starts: u32,
 }
@@ -143,16 +146,25 @@ pub fn usage_on_day(
     let end = next_day_start(day, now);
     u.chat_starts = store.project_chat_starts_between(project_id, &start, &end)?;
     let runs = store.project_run_usage_between(project_id, &start, &end)?;
+    u.not_launched_runs = store.project_not_launched_runs_between(project_id, &start, &end)?;
+    // 表示用の token は、費用不明の run（attempt 欠測）でも読めた分を失わない。
     u.tokens = runs
         .iter()
-        .filter_map(|x| x.usage.as_ref())
+        .filter_map(|x| x.known_usage.as_ref())
         .map(|x| x.input_tokens.unwrap_or(0) + x.output_tokens.unwrap_or(0))
         .sum();
     let cost = budget_cost(
         runs.iter().map(|x| (x.model.as_deref(), x.usage.as_ref())),
         rates,
     );
-    u.usd_micros = cost.usd_micros;
+    // attempt 欠測で `usage` が `None` の run も、読めた分は下限として USD に足す（不明の件数は `cost` が数える）。
+    let partial = budget_cost(
+        runs.iter()
+            .filter(|x| x.usage.is_none() && x.known_usage.is_some())
+            .map(|x| (x.model.as_deref(), x.known_usage.as_ref())),
+        rates,
+    );
+    u.usd_micros = cost.usd_micros.saturating_add(partial.usd_micros);
     u.usd_unknown_runs = cost.unknown_runs;
     Ok(u)
 }

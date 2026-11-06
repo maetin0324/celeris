@@ -327,3 +327,192 @@ fn project_budget_exceeded_at_the_limit() {
     u.usd_micros = l.max_usd_per_day_micros;
     assert_eq!(exceeded(&l, &u), Some(BudgetKind::Usd));
 }
+
+/// 起動境界つきの chat run（`launch_tracked=1`）。`launched` が `None` で `reason` が列挙なら「起動前に終わった run」。
+#[allow(clippy::too_many_arguments)]
+fn tracked_chat_run(
+    conn: &rusqlite::Connection,
+    id: &str,
+    thread: &str,
+    at: &str,
+    launched: Option<&str>,
+    reason: Option<&str>,
+    attempts_missing: i64,
+    usage: Option<&str>,
+) {
+    conn.execute(
+        "INSERT INTO chat_runs (run_id,thread_id,input_message_id,state,started_at,finished_at,usage_json,
+                                resolved_config_json,launched_at,prelaunch_reason,launch_tracked,attempts_usage_missing)
+         VALUES (?1,?2,'input','completed',?3,?3,?4,'{\"model\":\"claude-sonnet-5\"}',?5,?6,1,?7)",
+        rusqlite::params![id, thread, at, usage, launched, reason, attempts_missing],
+    )
+    .unwrap();
+}
+
+const SONNET_3_USD: &str = r#"{"input_tokens":1000000,"output_tokens":100000}"#;
+
+#[test]
+fn attempt_with_missing_usage_is_unknown_but_keeps_known_tokens_and_usd() {
+    let rates = BudgetRates::default();
+    let (_d, store, conn) = fixture();
+    let at = "2026-11-05T01:00:00Z";
+    // 起動後。attempt の一部に usage 欠測がある run（読めた分は 3 USD・1.1M token）。
+    tracked_chat_run(&conn, "a", "pc", at, Some(at), None, 1, Some(SONNET_3_USD));
+    // 既知の run（3 USD）。
+    tracked_chat_run(&conn, "k", "pc", at, Some(at), None, 0, Some(SONNET_3_USD));
+    let u = usage_fn(&store, &rates);
+    assert_eq!(u.usd_unknown_runs, 1, "attempt 欠測の run は費用不明");
+    assert_eq!(
+        u.usd_micros, 6_000_000,
+        "既知の USD を失わない（下限として足す）"
+    );
+    assert_eq!(u.tokens, 2_200_000, "既知の token を失わない");
+    assert_eq!(exceeded(&limit_usd(100), &u), Some(BudgetKind::UsdUnknown));
+    assert_eq!(severity(&limit_usd(100), &u), BudgetSeverity::Dangerous);
+}
+
+#[test]
+fn prelaunch_only_has_no_unknown_guard_but_any_missing_after_launch_keeps_it() {
+    let rates = BudgetRates::default();
+    let at = "2026-11-05T01:00:00Z";
+    let reasons = [
+        "route_unavailable",
+        "skills_unavailable",
+        "wall_expired_before_launch",
+        "slot_wait_expired",
+        "daemon_restart_before_launch",
+        "stopped_before_launch",
+    ];
+    // 起動前に終わった run だけ: 費用不明の guard は出ない。既知の run の USD・token は失われない。
+    let (_d, store, conn) = fixture();
+    for (i, r) in reasons.iter().enumerate() {
+        tracked_chat_run(&conn, &format!("n{i}"), "pc", at, None, Some(r), 0, None);
+    }
+    tracked_chat_run(&conn, "k", "pc", at, Some(at), None, 0, Some(SONNET_3_USD));
+    let u = usage_fn(&store, &rates);
+    assert_eq!(u.not_launched_runs, 6);
+    assert_eq!(u.usd_unknown_runs, 0);
+    assert_eq!((u.usd_micros, u.tokens), (3_000_000, 1_100_000));
+    assert_eq!(exceeded(&limit_usd(100), &u), None);
+    assert_eq!(severity(&limit_usd(100), &u), BudgetSeverity::Daily);
+    // 混在: 境界の不明な行を 1 件足すたびに guard が出る（除外数は変わらない）。
+    let missing: [(&str, Option<&str>, Option<&str>, i64, bool); 5] = [
+        ("after-launch-null", Some(at), None, 0, false),
+        ("after-launch-broken", Some(at), None, 0, true),
+        ("unknown-reason", None, Some("made_up"), 0, false),
+        ("no-reason", None, None, 0, false),
+        ("attempt-partial", Some(at), None, 1, false),
+    ];
+    for (id, launched, reason, miss, broken) in missing {
+        let (_d, store, conn) = fixture();
+        tracked_chat_run(
+            &conn,
+            "n",
+            "pc",
+            at,
+            None,
+            Some("route_unavailable"),
+            0,
+            None,
+        );
+        let usage = if id == "attempt-partial" {
+            Some(SONNET_3_USD)
+        } else if broken {
+            Some(r#"{"input_tokens":"many"}"#)
+        } else {
+            None
+        };
+        tracked_chat_run(&conn, id, "pc", at, launched, reason, miss, usage);
+        let u = usage_fn(&store, &rates);
+        assert_eq!((u.not_launched_runs, u.usd_unknown_runs), (1, 1), "{id}");
+        assert_eq!(
+            exceeded(&limit_usd(100), &u),
+            Some(BudgetKind::UsdUnknown),
+            "{id}"
+        );
+        assert_eq!(
+            severity(&limit_usd(100), &u),
+            BudgetSeverity::Dangerous,
+            "{id}"
+        );
+    }
+    // 旧行（launch_tracked=0）は起動前と見なさず費用不明。
+    let (_d, store, conn) = fixture();
+    chat_run(&conn, "old", "pc", at, Some("claude-sonnet-5"), None);
+    let u = usage_fn(&store, &rates);
+    assert_eq!((u.not_launched_runs, u.usd_unknown_runs), (0, 1));
+}
+
+#[test]
+fn not_launched_count_is_per_project_and_per_utc_day() {
+    let rates = BudgetRates::default();
+    let (_d, store, conn) = fixture();
+    let r = Some("route_unavailable");
+    tracked_chat_run(
+        &conn,
+        "today",
+        "pc",
+        "2026-11-05T00:00:00Z",
+        None,
+        r,
+        0,
+        None,
+    );
+    tracked_chat_run(
+        &conn,
+        "late",
+        "pc",
+        "2026-11-05T23:59:59Z",
+        None,
+        r,
+        0,
+        None,
+    );
+    tracked_chat_run(
+        &conn,
+        "yesterday",
+        "pc",
+        "2026-11-04T23:59:59Z",
+        None,
+        r,
+        0,
+        None,
+    );
+    tracked_chat_run(
+        &conn,
+        "tomorrow",
+        "pc",
+        "2026-11-06T00:00:00Z",
+        None,
+        r,
+        0,
+        None,
+    );
+    tracked_chat_run(
+        &conn,
+        "other",
+        "other",
+        "2026-11-05T01:00:00Z",
+        None,
+        r,
+        0,
+        None,
+    );
+    assert_eq!(usage_fn(&store, &rates).not_launched_runs, 2);
+    let on = |day: &str| usage_on_day(&store, "p", day, at_now(), &rates).unwrap();
+    assert_eq!(on("2026-11-04").not_launched_runs, 1);
+    assert_eq!(on("2026-11-06").not_launched_runs, 1);
+    assert_eq!(on("2026-11-05").usd_unknown_runs, 0);
+}
+
+#[test]
+fn task_run_exclusion_is_unchanged_by_launch_boundary() {
+    let rates = BudgetRates::default();
+    let (_d, store, conn) = fixture();
+    // harness 起動前に終わった task run（全部無し）は従来どおり数えない。
+    task_run(&conn, "never", "failed", true, None, None);
+    // model あり usage 無しは従来どおり費用不明。
+    task_run(&conn, "lost", "failed", true, Some("claude-sonnet-5"), None);
+    let u = usage_fn(&store, &rates);
+    assert_eq!((u.usd_unknown_runs, u.not_launched_runs), (1, 0));
+}

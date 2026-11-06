@@ -98,3 +98,17 @@ raw は `after/samples-2.jsonl`・`after/ops-2.jsonl`。
 ## before binary の準備（Run #12）
 - `tune_malloc()` の呼び出しだけをコメントアウトして `cargo build -p celeris`（3m56s）し、`/local/celeris/data/scratch/daemon-rss/bin/celeris-before` に退避した。ソースは `git checkout` で戻した（作業ツリーは元のまま）。
 - ビルドで run の壁時計の大半を使い、before の soak は未実施。次の run は `--celeris $D/bin/celeris-before` で、after と同じ引数（`--label before2`、新しい state `stN`）で 1 回測る。
+
+## before の 2 回目（Run #13、同条件 240 秒、`celeris-before`、新しい DB の写し）
+raw は `before/samples-2.jsonl`・`before/ops-2.jsonl`。
+| 指標（約 240 秒の最終標本） | before 1 回目 | before 2 回目 | after 1 回目 | after 2 回目 |
+|---|---|---|---|---|
+| rss_anon | 133 MB | 130 MB | 90 MB | 85 MB |
+| malloc_arena | 130 MB | 128 MB | 82 MB | 74 MB |
+| malloc_free | 119 MB | 99 MB | 65 MB | 63 MB |
+| tick 数 | 100 | 46 | 85 | 77 |
+| slow_ticks | 132 | 82 | 96 | 110 |
+- rss_anon は before 130〜133 MB、after 85〜90 MB で、2 回ずつ同じ向きに分かれた。mallopt で約 3 割小さくなる。
+- tick 数は before の中で 100 と 46 と大きく揺れた。after の 77〜85 は before の揺れの範囲内で、mallopt が tick を遅くしたとは言えない。ただし 240 秒・各 2 回で、tick 時間と dispatch 遅延そのものの比較ではなく、遅延が悪化していないという確証ではない（未確認）。
+- before でも after でも、arena は 49〜69 秒の間で 6 MB 前後から 74〜121 MB に跳ねる。跳ねの確保元は未特定。mallopt は arena の大きさを抑えるが、跳ね自体は消していない。
+- 本番の増加（930 MB まで）は 240 秒の soak では再現していない。再現できたのは「起動 1 分以内に、使用中 16 MB に対し空き 100 MB 超の arena ができる」形だけ。

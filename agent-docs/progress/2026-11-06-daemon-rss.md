@@ -19,6 +19,18 @@ updated: 2026-11-06
 - 解釈: 本番規模の DB で、起動 1 分以内に「使用中 24 MB に対し空き 92 MB」の arena が現れた。本番と同じ形（使用中が小さく空きが大きい）だが、規模は小さい（本番は 324 MB に跳ね、930 MB まで増加）。240 秒では本番の傾きは再現していない。差は実負荷（本番は threads が 44 まで増える。この run は 25〜29）と推測するが未確認。
 - 確保元（どの tick・API・処理か）は未特定。
 
+## after（Run #3、案 B+C+D を `main()` 先頭の `mallopt` で設定、同条件 240 秒）
+変更: `crates/celeris/src/main.rs` の `tune_malloc()`（`M_ARENA_MAX=2`、`M_MMAP_THRESHOLD=128 KiB`、`M_TRIM_THRESHOLD=1 MiB`）。環境変数は不要。raw は `after/samples.jsonl`。
+| 指標（240 秒、1 回ずつ） | before | after |
+|---|---|---|
+| rss_anon（最終） | 133 MB | 90 MB |
+| malloc_arena | 130 MB | 82 MB |
+| malloc_free | 119 MB | 65 MB |
+| 起動後 33 秒の rss_anon | 120 MB | 86 MB |
+- 60 秒付近の「arena が 80〜117 MB に跳ねて使用中は 8〜24 MB」という形は after でも残った。mallopt だけでは根治せず、約 3 割〜4 割小さくなる程度。確保元の削減（案 A）が必要。
+- 各 1 回の run で、測定の揺れ（繰り返し）は未測定。tick の時間・dispatch の遅延は未測定のため、遅延が悪化していないとはまだ言えない。**この変更は採用の判断前**。
+- 検査（test-affected・clippy）は未実行。`cargo fmt --all` のみ実行。
+
 ## 未実施（次の run）
 1. （部分的に済み。上記）より長い run、API 負荷（一覧・inbox）を足した run で傾きを再現する。
 2. tick 別・API 別に `malloc_free` の増分を見て確保元を特定する。

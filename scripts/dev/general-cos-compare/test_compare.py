@@ -196,10 +196,10 @@ class Preflight(Base):
         self.assertNotIn("approved_by human:<name>", r.stdout)
 
     def test_approval_with_max_tokens_is_refused(self):
-        ap = self.approval(limits={"max_trials": 32, "max_tokens": 1000000, "max_wall_secs": 7200, "max_usd": 20})
+        ap = self.approval(limits=dict(max_trials=32, max_tokens=1000000, max_wall_secs=7200, max_usd=20))
         r = self.preflight("--tier", "llm", "--llm-config", str(self.cfg), "--approval", ap, env={"CELERIS_RUN_ID": ""})
         self.assertEqual(r.returncode, 2)
-        self.assertIn("max_tokens is no longer accepted", r.stdout)
+        self.assertIn("limits.max_tokens is not accepted", r.stdout)
 
     def test_approved_trials_below_the_plan_is_refused(self):
         ap = self.approval(limits={"max_trials": 8, "max_wall_secs": 1, "max_usd": 1})

@@ -216,8 +216,9 @@ def preflight_checks(args):
                 if not ap.get(key):
                     problems.append(f"approval: {key} is missing")
             al = ap.get("limits") or {}
-            if "max_tokens" in al:
-                problems.append("approval.limits.max_tokens is no longer accepted (limits are max_usd)")
+            known = {"max_trials", "repeats", "max_wall_secs", "max_usd", "per_trial_wall_secs"}
+            for key in sorted(set(al) - known):
+                problems.append(f"approval.limits.{key} is not accepted (limits are max_trials, max_wall_secs, max_usd)")
             for key in ("max_trials", "max_wall_secs", "max_usd"):
                 if type(al.get(key)) not in (int, float) or al[key] <= 0:
                     problems.append(f"approval.limits.{key} must be a positive number")

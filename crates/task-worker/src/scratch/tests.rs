@@ -1806,3 +1806,30 @@ fn seed_git_checkout_follows_the_main_commit() {
     git_detached_checkout(&repo, &checkout, &c2).unwrap();
     assert!(checkout.join("Cargo.toml").is_file());
 }
+
+/// N1 fix-build-cache-adopt: 空きが `min_free` の 2 倍未満（LowDisk）なら、seed（使用中の repo の最新の P3）も
+/// 圧力の回収に選ばれる。圧力が無ければ release の P3 でも seed は残る（adopt の候補になる）。dispatcher の試験
+/// `run_start_adopts_a_finished_target_that_predates_the_checkout` は host の空きが 5〜10 GiB のときこの経路で落ちた。
+#[test]
+fn low_disk_reclaims_the_warm_seed_that_would_be_adopted() {
+    let entries = vec![
+        entry("release-0123456789ab", Class::Completed, T0, Some(1), "r"),
+        entry("agent-live", Class::Pinned, T0, Some(1), "r"),
+    ];
+    let gib = 1024 * 1024 * 1024;
+    let mut p = params(u64::MAX);
+    p.active_repo_keys.insert("r".into());
+    p.min_free_bytes = 5 * gib;
+    p.fs_free_bytes = Some(20 * gib);
+    let plan = plan_gc(&entries, &p);
+    assert_eq!(plan.pressure, Pressure::None);
+    assert!(ids(&plan).is_empty(), "the seed stays: {:?}", ids(&plan));
+    p.fs_free_bytes = Some(8 * gib);
+    let plan = plan_gc(&entries, &p);
+    assert_eq!(plan.pressure, Pressure::LowDisk);
+    assert_eq!(ids(&plan), vec!["release-0123456789ab"]);
+    assert!(plan.selected[0].seed);
+    // 空きを見ない設定（min_free = 0）なら、同じ空きでも seed は残る。
+    p.min_free_bytes = 0;
+    assert!(ids(&plan_gc(&entries, &p)).is_empty());
+}

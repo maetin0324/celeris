@@ -2849,6 +2849,10 @@ fn scratch_on(d: &mut Dispatcher, dir: &Path) -> task_worker::scratch::ScratchSe
     // 空きの判定を試す試験は、この後で自分の値（u64::MAX など）を置く。
     d.config.min_free_disk_mb = 0;
     d.config.scratch = s.clone();
+    // scratch の GC は tempdir の filesystem の実の空き（statvfs）を `min_free_disk_mb` と比べる。既定の 5120 MB の
+    // ままだと host の空きが 5〜10 GiB の間で LowDisk になり、seed（同じ repo が使用中の P3）まで回収されて adopt の
+    // 試験が host の空きで変わる（N1 fix-build-cache-adopt）。空きを見る試験はこの後で明示的に上書きする。
+    d.config.min_free_disk_mb = 0;
     s
 }
 

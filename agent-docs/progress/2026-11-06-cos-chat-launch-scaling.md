@@ -1,7 +1,7 @@
 ---
 title: tick_cos_chat_launch の行数比例の調査と修正
 tasks: [01M6QZ6KYWW18GYMZYM17SYSW9]
-status: running
+status: review
 updated: 2026-11-06
 ---
 # tick_cos_chat_launch の行数比例の調査と修正
@@ -20,11 +20,22 @@ root task ごとに summary thread が増えるので、tick の費用が thread
 - 回帰試験 `thread_ids_with_queued_or_open_run_uses_partial_indexes_and_ignores_idle_rows`（task-core）。
   idle thread 300 件＋queued 1 件で、結果が queued の thread を含み、`EXPLAIN QUERY PLAN` が 2 つの部分 index を使うことを固定する。時計・負荷は使わない。
 
-## 未測定・未解決（正直に書く）
-- 受け入れ条件 3・5 の「行数と所要時間の対応」「before/after の段の所要時間・dispatch 遅延」は、予算（10 turn・600 秒）内で測れていない。数値は未取得。
-  次の手: `TICK_SCALE_*` 形の試験に chat thread の複写（N=100/1000/5000）を足し、修正前後の commit で `cos.claim_queued` の `step_us` を比べる。
-- `triage_ingest` の digest_pass・triage_fallback の全件走査、`root_done_advance_all` も行数比例の疑いが残る。段別測定で確定してから直す。
-- 本番の傾きが伸びないことの確認は release 後の soak 数値が要る（worker は release・promote をしない）。
+## 行数と費用の対応（決定的な計測。受け入れ条件 3・4）
+試験 `queued_thread_enumeration_cost_is_flat_while_full_scan_grows_with_rows`（task-core、`chat::store_tests`）が、idle thread（1 thread あたり message 3 件）を 100 → 400 → 1600 に増やし、SQLite の VM 命令数（`sqlite3_stmt_status(VM_STEP)`、時計に依らない）を数える。負荷・sleep・時計は使わない。
+
+| idle thread 数 | 旧い全 thread 走査（THREAD_SELECT）の VM 命令数 | 新しい列挙（部分 index）の VM 命令数 |
+|---|---|---|
+| 100 | 9,208 | 25 |
+| 400 | 36,508 | 25 |
+| 1,600 | 145,708 | 25 |
+
+旧い走査は 1 thread あたり約 91 命令で、thread 数に比例する。新しい列挙は 25 命令で一定。試験は「旧い走査が 8 倍以上に増える」「新しい列挙は +20 命令以内」「新しい列挙は旧い走査の 1/20 未満」を固定する。
+本番規模（chat_threads 227）に当てはめると旧い走査は約 2 万命令で、数ミリ秒の量にとどまる。本番の 18〜23 秒をこの走査だけでは説明できない（下の未解決）。
+
+## 未測定・未解決
+- dispatch 遅延は、この task の範囲の短い計測（1 時間以内）では取れていない。9 時間 soak の ready 滞留（約 1,350 件）との対応は未確認。本番の傾きが伸びないことの確認は release 後の slow tick の `cos.*` 値が要る（worker は release・promote をしない）。
+- `triage_ingest` の digest_pass・triage_fallback の全件走査、`root_done_advance_all` も行数比例の疑いが残る。本番規模の写しでは triage_ingest は 4〜9 ms（tick 0 のみ 1.4〜2.8 秒）で、遅い段ではなかった。release 後の `cos.*` で確定してから直す。
+- 本番の傾きが伸びないことの確認は release 後の soak 数値が要る。
 - RSS 増加 task 01M6QZ031RC9YK3E6T12ESCR80 とは重複して直していない。この変更は DB 読み取りの走査量を減らすだけで、arena の設定には触れていない。
 
 ## 本番への移行

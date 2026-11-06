@@ -1863,3 +1863,58 @@ fn thread_ids_with_queued_or_open_run_uses_partial_indexes_and_ignores_idle_rows
     assert!(joined.contains("idx_chat_messages_queued"), "{joined}");
     assert!(joined.contains("idx_chat_runs_open"), "{joined}");
 }
+
+/// SQLite の VM 命令数（`sqlite3_stmt_status(VM_STEP)`）。時計に依らず、読む行数に比例する決定的な尺度。
+fn vm_steps(conn: &rusqlite::Connection, sql: &str) -> i64 {
+    let mut stmt = conn.prepare(sql).expect("prepare");
+    let mut rows = stmt.query([]).expect("query");
+    while rows.next().expect("step").is_some() {}
+    drop(rows);
+    i64::from(stmt.get_status(rusqlite::StatementStatus::VmStep))
+}
+
+/// ADR 2026-11-06-cos-chat-launch-scaling: 行数（idle thread N・1 thread あたり message 3 件）を
+/// 100 → 400 → 1600 に増やし、旧い全 thread 走査（THREAD_SELECT）の VM 命令数は行数に比例して増え、
+/// 新しい列挙（部分 index）は一定のままであることを固定する。時計も負荷も使わない。
+#[test]
+fn queued_thread_enumeration_cost_is_flat_while_full_scan_grows_with_rows() {
+    let s = store();
+    let busy = create(&s, "busy", "busy", 100_000);
+    post(&s, &busy.id, "q", "queued", 100_000);
+    let new_sql = "SELECT thread_id FROM chat_messages WHERE state='queued' AND role IN ('user','system') \
+                   UNION SELECT thread_id FROM chat_runs WHERE state IN ('running','stopping')";
+    let mut made = 0;
+    let mut samples: Vec<(i64, i64, i64)> = Vec::new();
+    for target in [100, 400, 1600] {
+        while made < target {
+            let t = create(&s, &format!("idle-{made}"), "idle", made);
+            for k in 0..3 {
+                post(&s, &t.id, &format!("m{made}-{k}"), "hello", made);
+            }
+            made += 1;
+        }
+        s.with_read_conn(|conn| {
+            conn.execute(
+                "UPDATE chat_messages SET state='completed' WHERE state='queued' AND thread_id<>?1",
+                params![busy.id],
+            )?;
+            let old = vm_steps(conn, super::store::THREAD_SELECT);
+            let new = vm_steps(conn, new_sql);
+            samples.push((i64::from(target), old, new));
+            Ok(())
+        })
+        .unwrap();
+    }
+    eprintln!("(threads, old_vm_steps, new_vm_steps) = {samples:?}");
+    let (_, old_small, new_small) = samples[0];
+    let (_, old_big, new_big) = samples[2];
+    assert!(
+        old_big >= old_small * 8,
+        "full scan must grow with rows: {samples:?}"
+    );
+    assert!(
+        new_big <= new_small + 20,
+        "queued enumeration must stay flat: {samples:?}"
+    );
+    assert!(new_big * 20 < old_big, "{samples:?}");
+}

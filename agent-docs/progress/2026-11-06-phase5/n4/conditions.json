@@ -1,0 +1,33 @@
+{
+  "profile": "release",
+  "command": "cargo test --release -p celeris --test tick_scale_baseline --no-run",
+  "fixture": "SQL clones of one real blocked dispatch, then settle",
+  "blocked": [
+    0,
+    600,
+    2000,
+    10000
+  ],
+  "ticks": 5,
+  "dispatches": 5,
+  "conditions": [
+    "off",
+    "shadow"
+  ],
+  "required_bundle": true,
+  "run_order": [
+    "before-shadow",
+    "before-off (repeat after preliminary exited)",
+    "after-off",
+    "after-shadow"
+  ],
+  "coincident_build": false,
+  "baseline": "git merge-base HEAD main",
+  "environment": {
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "line-tables-only",
+    "RUSTFLAGS": null
+  },
+  "host": "home-dev",
+  "excluded": "preliminary and first before-off overlapped in separate PID namespaces; submitted before-off is repeated sequentially"
+}

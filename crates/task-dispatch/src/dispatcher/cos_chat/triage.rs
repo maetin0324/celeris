@@ -47,6 +47,20 @@ const EVENT_BATCH: usize = 512;
 const EVENT_PAGES_PER_TICK: usize = 8;
 const NOTICE_PAGE: usize = 100;
 
+/// Keep concurrent writes beyond the Task snapshot's head for the next pass.
+pub(crate) fn event_page_through_head(
+    store: &dyn TaskStore,
+    cursor: u64,
+    head: u64,
+) -> Result<Vec<EventRow>, String> {
+    Ok(store
+        .events_since(cursor, EVENT_BATCH)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .take_while(|row| row.id <= head)
+        .collect())
+}
+
 /// `[cos.triage]` as resolved by the daemon (ADR 2026-10-05 §config).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CosTriageSettings {
@@ -322,7 +336,7 @@ pub(crate) fn notice_source(notice: &Notice, policy_version: &str) -> Option<Cos
 }
 
 /// The view context of the derived inbox built by the dispatcher.
-fn inbox_view_context(dispatcher: &Dispatcher) -> task_ops::view::ViewContext {
+pub(crate) fn inbox_view_context(dispatcher: &Dispatcher) -> task_ops::view::ViewContext {
     task_ops::view::ViewContext {
         workspace_roots: dispatcher.config.workspace_roots.clone(),
         retry_backoff_base: dispatcher.config.retry_backoff_base,
@@ -569,11 +583,16 @@ impl CosChatLaunch {
         let mut cursor: u64 = raw
             .parse()
             .map_err(|_| format!("invalid event cursor {raw}"))?;
+        // Pin the event head before reading Tasks. Concurrent writes after this head remain for
+        // the next pass, so a new root cannot be consumed against an older Task snapshot.
+        let head = self.store.latest_event_id().map_err(|e| e.to_string())?;
+        if head <= cursor {
+            return Ok(());
+        }
+        let store = self.store.clone();
+        let mut task_snapshot = None;
         for _ in 0..EVENT_PAGES_PER_TICK {
-            let rows = self
-                .store
-                .events_since(cursor, EVENT_BATCH)
-                .map_err(|e| e.to_string())?;
+            let rows = event_page_through_head(store.as_ref(), cursor, head)?;
             let Some(last) = rows.last().map(|r| r.id) else {
                 break;
             };
@@ -584,7 +603,19 @@ impl CosChatLaunch {
                 Vec::new()
             } else {
                 let ids: BTreeSet<TaskId> = touched.tasks.keys().copied().collect();
-                let inbox = self.human_inbox_touching(dispatcher, now, &ids)?;
+                if task_snapshot.is_none() {
+                    task_snapshot = Some(
+                        task_ops::inbox::InboxTaskSnapshot::read(store.as_ref())
+                            .map_err(|e| e.to_string())?,
+                    );
+                }
+                let ctx = inbox_view_context(dispatcher);
+                let snapshot = dispatcher.stagnation_snapshot();
+                let inbox = task_snapshot
+                    .as_ref()
+                    .ok_or("missing task snapshot")?
+                    .human_inbox_touching(snapshot.as_ref(), &ctx, now, &|_, _| Vec::new(), &ids)
+                    .map_err(|e| e.to_string())?;
                 for item in inbox.items.iter().filter(|i| is_direct(i)) {
                     self.direct_escalate(item, &policy, now)?;
                 }

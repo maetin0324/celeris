@@ -268,8 +268,7 @@ pub fn human_inbox(
     now: OffsetDateTime,
     evidence: &dyn Fn(&Task, &str) -> Vec<EvidenceView>,
 ) -> Result<HumanInbox, OpsError> {
-    let (inbox, by_id) = crate::inbox::inbox_parts(store, snapshot, ctx, now, evidence, None)?;
-    Ok(from_inbox(&inbox, &by_id, now))
+    crate::inbox::InboxTaskSnapshot::read(store)?.human_inbox(snapshot, ctx, now, evidence)
 }
 
 /// P4-C: `touching` の task に触れる項目（[`InboxItem::task_ids`] が `touching` と交わる項目）だけの受信箱。
@@ -284,21 +283,8 @@ pub fn human_inbox_touching(
     evidence: &dyn Fn(&Task, &str) -> Vec<EvidenceView>,
     touching: &BTreeSet<TaskId>,
 ) -> Result<HumanInbox, OpsError> {
-    let (inbox, by_id) =
-        crate::inbox::inbox_parts(store, snapshot, ctx, now, evidence, Some(touching))?;
-    let mut human = from_inbox(&inbox, &by_id, now);
-    human
-        .items
-        .retain(|item| item.task_ids().any(|id| touching.contains(&id)));
-    let mut by_kind: BTreeMap<String, u32> = BTreeMap::new();
-    for it in &human.items {
-        *by_kind.entry(it.kind.as_str().to_string()).or_default() += 1;
-    }
-    human.counts = HumanInboxCounts {
-        total: human.items.len() as u32,
-        by_kind,
-    };
-    Ok(human)
+    crate::inbox::InboxTaskSnapshot::read(store)?
+        .human_inbox_touching(snapshot, ctx, now, evidence, touching)
 }
 
 impl InboxItem {
@@ -1833,6 +1819,10 @@ impl Builder<'_> {
         view::to_rfc3339(self.now)
     }
 }
+
+mod read;
+pub use read::question_for_task;
+pub(crate) use read::retain_touching;
 
 mod item_task;
 pub use item_task::item_task_id;

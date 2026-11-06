@@ -454,12 +454,13 @@ pub(crate) fn summary_request_text(
 }
 
 /// The derived inbox of one fallback pass, built lazily (P4-C). `touching` holds the items that
-/// touch `tasks` (`human_inbox_touching`: the same items as the full inbox); an item found there
-/// is the full inbox's item. A key not found there is looked up in the full inbox (built once).
+/// Questions are read by primary key. Other items first use `human_inbox_touching`;
+/// a missing key is checked in the full inbox (built once).
 struct FallbackInbox {
     tasks: BTreeSet<TaskId>,
     touching: Option<HashMap<String, InboxItem>>,
     full: Option<HashMap<String, InboxItem>>,
+    question: Option<InboxItem>,
 }
 
 fn by_item_id(items: Vec<InboxItem>) -> HashMap<String, InboxItem> {
@@ -478,6 +479,18 @@ impl CosChatLaunch {
         c: &FallbackCandidate,
         now: OffsetDateTime,
     ) -> Result<Option<&'a InboxItem>, String> {
+        if c.source_kind == InboxKind::Question.as_str() {
+            inbox.question =
+                match task_ops::human_inbox::item_task_id(self.store.as_ref(), &c.source_key) {
+                    Some(id) => {
+                        task_ops::human_inbox::question_for_task(self.store.as_ref(), id, now)
+                            .map_err(|e| e.to_string())?
+                    }
+                    None => None,
+                }
+                .filter(|item| item.id == c.source_key);
+            return Ok(inbox.question.as_ref());
+        }
         let matches = |item: &&InboxItem| item.kind.as_str() == c.source_kind;
         if !inbox.tasks.is_empty() && inbox.touching.is_none() {
             let built = self.human_inbox_touching(dispatcher, now, &inbox.tasks)?;
@@ -536,11 +549,15 @@ impl CosChatLaunch {
         if due.is_empty() {
             return;
         }
-        // The derived inbox is built at most once per pass, and only when needed. P4-C: first only
-        // for the tasks named by the due items' keys (`FallbackInbox`); the full inbox only on a miss.
+        // Questions use primary-key reads. Other kinds share one scoped inbox and, on a miss,
+        // one full inbox for this pass.
         let tasks: BTreeSet<TaskId> = due
             .iter()
-            .filter(|(c, _)| c.route.is_none() && c.source_kind != COS_TRIAGE_NOTICE_KIND)
+            .filter(|(c, _)| {
+                c.route.is_none()
+                    && c.source_kind != COS_TRIAGE_NOTICE_KIND
+                    && c.source_kind != InboxKind::Question.as_str()
+            })
             .filter_map(|(c, _)| {
                 task_ops::human_inbox::item_task_id(self.store.as_ref(), &c.source_key)
             })
@@ -549,6 +566,7 @@ impl CosChatLaunch {
             tasks,
             touching: None,
             full: None,
+            question: None,
         };
         let mut handed = Vec::new();
         for (c, reason) in due {

@@ -787,3 +787,61 @@ async fn cos_chat_triage_answered_decision_rejudges_the_escalated_plan_approval_
         "the same answer hands the item over once"
     );
 }
+
+/// N4: a root committed after the shared Task read must stay beyond this pass's cursor.
+#[tokio::test]
+async fn cos_chat_triage_snapshot_defers_concurrent_root_without_loss_or_duplicate() {
+    use crate::dispatcher::cos_chat::triage::{
+        event_page_through_head, sources_for_touched, touched_tasks,
+    };
+    let mut f = fixture(false);
+    f.tick();
+    let cursor: u64 = f
+        .store
+        .cos_triage_cursor("events")
+        .expect("cursor")
+        .expect("initialized")
+        .parse()
+        .expect("number");
+    let a = f.question("before snapshot", Vec::new());
+    let head = f.store.latest_event_id().expect("head");
+    let snapshot = task_ops::inbox::InboxTaskSnapshot::read(f.store.as_ref()).expect("snapshot");
+    // Deterministically place the second writer after the read, without timing or CPU load.
+    let b = f.question("after snapshot", Vec::new());
+    let rows = event_page_through_head(f.store.as_ref(), cursor, head).expect("page");
+    assert!(rows.iter().any(|r| r.task_id == a));
+    assert!(rows.iter().all(|r| r.task_id != b));
+    let touched = touched_tasks(&rows);
+    let ids = touched.tasks.keys().copied().collect();
+    let ctx = crate::dispatcher::cos_chat::triage::inbox_view_context(&f.d);
+    let inbox = snapshot
+        .human_inbox_touching(None, &ctx, f.d.now_utc(), &|_, _| Vec::new(), &ids)
+        .expect("inbox");
+    let policy =
+        &f.d.cos_chat_launch
+            .as_ref()
+            .expect("launch")
+            .config
+            .triage
+            .policy_version;
+    f.store
+        .cos_triage_ingest_batch(
+            "events",
+            &head.to_string(),
+            &sources_for_touched(&inbox, &touched, policy),
+            f.d.now_utc(),
+        )
+        .expect("ingest");
+    drop(snapshot);
+    f.tick();
+    f.tick();
+    for id in [a, b] {
+        assert_eq!(
+            f.count(&format!(
+                "SELECT count(*) FROM cos_inbox_items WHERE source_key='question-{id}'"
+            )),
+            1,
+            "each root appears exactly once"
+        );
+    }
+}

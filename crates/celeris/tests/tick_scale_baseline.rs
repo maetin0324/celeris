@@ -192,7 +192,7 @@ fn clone_blocked(db: &rusqlite::Connection, template: &str, n: usize) -> Vec<Val
 }
 
 /// restart の後の取り込みを待つ tick の上限（保険。1 tick で event を 8 page × 512 行読む）。
-const SETTLE_TICKS_MAX: u64 = 400;
+const SETTLE_TICKS_MAX: u64 = 1_000;
 
 /// CoS の一次対応の event の cursor が最新の event に追いつき、受信箱の行に未処理（pending・running）が無い。
 fn settled(db: &rusqlite::Connection) -> bool {
@@ -314,6 +314,7 @@ async fn measure(blocked: usize, ticks: usize, dispatches: usize) {
     let mut totals = Vec::new();
     let mut steps: std::collections::BTreeMap<&'static str, Vec<u64>> = Default::default();
     let mut first_tick_us = 0;
+    let mut first_tick_steps = Vec::new();
     let mut settle_ticks = 0u64;
     let mut settle_us = 0u64;
     for i in 0..=ticks {
@@ -322,6 +323,7 @@ async fn measure(blocked: usize, ticks: usize, dispatches: usize) {
         let us = t.elapsed().as_micros() as u64;
         if i == 0 {
             first_tick_us = us;
+            first_tick_steps = report.step_us;
             // 複写の event は CoS の一次対応の取り込みの cursor より後ろにあるので、restart の後の数 tick は
             // その取り込み（受信箱の項目・退避）に使われる。本物の dispatch で作った状態（取り込み済み）に揃えるため、
             // 取り込みと退避が終わるまで tick し、その回数と時間を `settle_*` に残す（P4-C）。
@@ -406,6 +408,14 @@ async fn measure(blocked: usize, ticks: usize, dispatches: usize) {
         0,
         "no lease is left"
     );
+    let integrity: String = db
+        .query_row("PRAGMA quick_check", [], |r| r.get(0))
+        .expect("quick_check");
+    assert_eq!(integrity, "ok", "temporary DB is intact");
+    assert_eq!(
+        count(&db, "SELECT count(*) FROM pragma_foreign_key_check"),
+        0
+    );
     let steps_json = summarize(&steps);
     raw(&json!({
         "schema": SCHEMA,
@@ -417,6 +427,11 @@ async fn measure(blocked: usize, ticks: usize, dispatches: usize) {
         "runs_rows": count(&db, "SELECT count(*) FROM runs"),
         "not_cloned": skipped,
         "first_tick_us": first_tick_us,
+        "first_tick_steps": first_tick_steps,
+        "dispatch_lag_ms": lag,
+        "integrity": integrity,
+        "missing_or_double_runs": 0,
+        "remaining_leases": 0,
         "settle_ticks": settle_ticks,
         "settle_us": settle_us,
         "idle_tick_us_p50": pct(&totals, 50),

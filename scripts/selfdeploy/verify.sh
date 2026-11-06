@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # scripts/selfdeploy/verify.sh [--dry-run] <sha12> — ADR-0040 D3 の「検証（staging）」段。
 #
-#   本番 DB の `sqlite3 .backup` スナップショットに対して、新リリースの celeris を **verify モード**で
+#   本番 DB の読み取り transaction によるスナップショットに対して、新リリースの celeris を **verify モード**で
 #   127.0.0.1:7711 に起こし、
 #     1. 起動と health.schema_version == 新バイナリの SCHEMA_VERSION
-#     2. **件数一致（ADR-0041 D2）**: 同じスナップショットの**マイグレーション前**（`.backup` 直後に
+#     2. **件数一致（ADR-0041 D2）**: 同じスナップショットの**マイグレーション前**（snapshot 直後に
 #        `sqlite3` で数えた生の行数）と**マイグレーション後**（staging API）を比べる。対象は
 #        tasks / projects / milestones / org_nodes / approvals / reports / messages の件数と
 #        tasks の {id,status} のダイジェスト。**本番 API は読まない**（本番は検証の間も動いているので、
@@ -27,7 +27,7 @@
 #   `SD_VERIFY_LOCK_WAIT`、既定 1800 秒）。取れなければ exit 75（EX_TEMPFAIL）。
 #   staging のディレクトリもポート（7711 / 7712）も固定なので、2 本同時には走れない。
 #
-# 本番には触れない: DB は `.backup` と `mode=ro` で読むだけ、**本番 API は一切叩かない**、
+# 本番には触れない: DB は読み取り transaction と `mode=ro` で読むだけ、**本番 API は一切叩かない**、
 # 本番のプロセスには一切シグナルを送らない。127.0.0.1:7710 / 127.0.0.1:7720 には bind しない。
 set -euo pipefail
 
@@ -124,7 +124,7 @@ trap sd_cleanup EXIT INT TERM
 
 # ---- スナップショットを数える python3（ADR-0041 D2 の検査 2 の基準側）-------
 #
-# `.backup` の直後（＝**マイグレーション前**）に、コピーした SQLite を `mode=ro` で開いて生の行数を
+# snapshot の直後（＝**マイグレーション前**）に、コピーした SQLite を `mode=ro` で開いて生の行数を
 # 数える。出す形は下の `collect`（staging API 側）と**同じキー**で、`tasks_digest` は
 # **同じ式**（`sorted("<id>:<status>")` を "\n" で連ね、sha256 の先頭 16 桁）で計算する。
 # DB の `tasks.status` は API の JSON と同じ snake_case の文字列なので、両側が一致する。
@@ -189,9 +189,9 @@ mkdir -p "$SD_STAGING/workspaces" "$SD_STAGING/logs"
 SNAP="$SD_STAGING/staging.sqlite3"
 ST_TOKEN="$SD_STAGING/api.token"
 
-sd_log "snapshot: sqlite3 file://$SD_DB?mode=ro \".backup $SNAP\""
-sqlite3 "file:$SD_DB?mode=ro" ".backup '$SNAP'" \
-  || sd_die "sqlite3 .backup failed (production DB is only read here)"
+sd_log "snapshot: read transaction $SD_DB -> $SNAP"
+python3 "$(dirname "${BASH_SOURCE[0]}")/snapshot_db.py" "$SD_DB" "$SNAP" \
+  || sd_die "SQLite snapshot failed (production DB is only read here)"
 SNAP_SCHEMA="$(sqlite3 "file:$SNAP?mode=ro" 'SELECT COALESCE(MAX(version), 0) FROM schema_migrations;')"
 SNAP_TASKS="$(sqlite3 "file:$SNAP?mode=ro" 'SELECT COUNT(*) FROM tasks;')"
 sd_log "snapshot ok: schema_version=$SNAP_SCHEMA tasks=$SNAP_TASKS ($(du -h "$SNAP" | cut -f1))"
@@ -530,7 +530,7 @@ fi
 
 # ---- 2. 件数一致（同じスナップショットのマイグレーション前後。ADR-0041 D2）--
 
-# 基準は `$SNAP_JSON`（`.backup` 直後、マイグレーション前の生の行数）。比べる相手は
+# 基準は `$SNAP_JSON`（snapshot 直後、マイグレーション前の生の行数）。比べる相手は
 # staging API（同じファイルを新バイナリがマイグレーションした後）。**本番は出てこない**ので、
 # 本番が動いていてもこの検査は揺れない。
 

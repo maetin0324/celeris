@@ -3209,6 +3209,7 @@ dependencies = [
  "async-trait",
  "celeris-campaign",
  "celeris-script",
+ "libc",
  "nix",
  "rusqlite",
  "serde",

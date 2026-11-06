@@ -1,0 +1,171 @@
+{"schema": "celeris.daemon-soak/1", "step": "gate", "at": -0.0, "condition": "off", "label": "trace-get", "ok": true, "reason": "short", "approval": null}
+{"schema": "celeris.daemon-soak/1", "step": "setup", "at": 1.7, "condition": "off", "label": "trace-get", "project": "01M6RGQWXYFBEMD33WNCEYTMV6", "script_modes": {}, "controller": "off", "port": 60311, "pid": 477782, "celeris": "/local/celeris/data/scratch/daemon-rss/bin/celeris-trace"}
+{"schema": "celeris.daemon-soak/1", "step": "start", "at": 0.0, "condition": "off", "label": "trace-get", "secs": 240, "limits": {"max_rss_mb": 4096, "min_free_mb": 5120, "max_db_mb": 4096, "max_api_failures": 3}, "task_interval": 30.0, "chat_interval": 300.0}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 7.2, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 974}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 8.7, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 494}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 9.8, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 10}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 10.8, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 11}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 12.6, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 810}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 13.6, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 15.2, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 634}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 16.6, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 423}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 17.6, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 15}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 18.7, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 21}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 20.4, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 735}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 20.5, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 22.4, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 872}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 23.9, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 505}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 24.9, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 9}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 25.9, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 10}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 28.0, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 1045}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 29.0, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 3}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 30.6, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 613}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 32.0, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 380}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 33.0, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 7}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 34.0, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 21}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 36.6, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 1629}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 36.7, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 41.3, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 3411}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 43.5, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 1196}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 44.6, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 22}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 45.6, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 23}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 48.7, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 2093}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 49.7, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 3}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 52.6, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 2319}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 54.7, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 712}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 55.7, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 24}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 56.7, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 12}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 59.5, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 1768}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 60.5, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 62.9, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 1383}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 65.0, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 1122}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 65.3, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 15}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 66.5, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 21}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 69.7, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 2187}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 70.7, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 6}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 74.0, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 2288}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 75.6, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 641}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 76.6, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 36}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 77.7, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 20}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 81.5, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 2846}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 81.6, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 3}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 84.0, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 1328}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 86.0, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 1002}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 87.0, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 15}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 88.1, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 11}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 91.7, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 2592}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 92.7, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 3}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 95.3, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 1633}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 96.1, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 747}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 97.3, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 19}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 98.4, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 24}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 101.7, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 2357}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 102.7, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 104.8, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 1038}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 106.9, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 1111}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 107.9, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 15}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 108.9, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 26}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 112.4, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 2429}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 112.4, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 6}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 114.3, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 815}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 115.8, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 507}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 116.9, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 8}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 117.9, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 10}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 119.8, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 906}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 120.8, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 122.6, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 830}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 124.0, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 427}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 125.0, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 10}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 126.2, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 10}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 127.9, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 682}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 128.9, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 130.5, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 621}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 132.0, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 490}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 133.0, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 10}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 134.1, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 10}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 136.2, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 1094}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 137.2, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 138.9, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 759}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 140.3, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 392}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 140.4, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 11}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 141.4, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 9}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 143.1, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 705}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 144.1, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 145.7, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 599}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 147.2, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 432}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 148.2, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 8}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 149.2, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 11}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 151.1, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 816}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 152.1, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 153.9, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 722}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 155.2, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 370}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 155.3, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 6}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 156.4, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 10}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 158.1, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 767}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 159.1, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 160.8, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 668}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 162.2, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 376}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 163.2, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 7}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 164.2, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 9}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 165.9, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 678}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 166.9, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 168.6, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 697}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 170.2, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 633}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 170.3, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 23}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 171.4, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 21}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 174.3, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 1889}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 175.3, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 7}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 177.6, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 1262}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 179.2, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 613}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 180.2, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 14}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 181.2, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 21}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 183.9, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 1674}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 184.9, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 3}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 186.8, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 1543}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 188.5, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 547}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 189.5, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 9}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 190.5, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 16}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 192.5, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 982}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 193.5, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 3}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 195.7, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 1226}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 197.2, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 504}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 198.2, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 9}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 199.2, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 8}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 200.9, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 672}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 202.0, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 203.7, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 788}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 205.2, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 401}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 206.2, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 8}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 207.2, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 9}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 208.8, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 621}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 209.8, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 211.5, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 658}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 212.9, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 429}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 213.9, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 8}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 214.9, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 7}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 215.9, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 663}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 217.0, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 218.7, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 688}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 220.0, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 333}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 221.0, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 8}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 222.0, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 7}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 223.6, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 616}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 224.6, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 226.3, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 649}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 227.6, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 321}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 228.6, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 7}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 229.6, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 7}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 230.9, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 622}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 231.9, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 233.6, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 651}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 234.9, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 326}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 235.9, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 7}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 236.9, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 7}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 238.5, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 606}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 239.5, "condition": "off", "label": "trace-get", "path": "/api/v1/projects/01M6RGQWXYFBEMD33WNCEYTMV6/tasks", "status": 404, "ms": 2}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 241.2, "condition": "off", "label": "trace-get", "path": "/api/v1/inbox", "ms": 672}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 242.5, "condition": "off", "label": "trace-get", "path": "/api/v1/tasks", "ms": 371}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 243.6, "condition": "off", "label": "trace-get", "path": "/api/v1/chat/threads", "ms": 7}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 244.6, "condition": "off", "label": "trace-get", "path": "/api/v1/events?limit=200", "ms": 8}
+{"schema": "celeris.daemon-soak/1", "step": "get", "at": 245.9, "condition": "off", "label": "trace-get", "path": "/api/v1/projects", "ms": 660}
+{"schema": "celeris.daemon-soak/1", "step": "stop", "at": 246.0, "condition": "off", "label": "trace-get", "reason": "wall", "tasks": 9, "chats": 0, "wakes": 0}

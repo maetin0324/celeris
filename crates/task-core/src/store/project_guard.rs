@@ -233,7 +233,7 @@ impl SqliteStore {
                         usage.and_then(|s| serde_json::from_str(&s).ok());
                     ProjectRunUsage {
                         model: model.filter(|m| !m.is_empty()),
-                        usage: if missing > 0 { None } else { known_usage.clone() },
+                        usage: if missing > 0 { None } else { known_usage },
                         known_usage,
                     }
                 })

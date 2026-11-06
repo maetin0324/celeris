@@ -14,7 +14,8 @@ P1-I（`crates/celeris/tests/long_run_soak.rs`）は `build_dispatcher` の disp
 - `--secs` が [SHORT_LIMIT_SECS]（1 時間）を超える run は、人の承認の file（`--approval`）が要る。Celeris の worker の
   run の中（`CELERIS_RUN_ID` がある）では、承認があっても 1 時間を超える run を起こさない。
 - 自動停止: 壁時計・RSS の上限・disk の空き・DB の大きさ・daemon の終了・API の連続の失敗。止めた理由は `ops.jsonl` の
-  最後の行（`step = "stop"`）と summary に残る。
+  最後の行（`step = "stop"`）と summary に残る。driver が SIGTERM を受けたとき（`pkill` など）も止まる理由
+  `terminated` を書き、daemon を止め、daemon の log を `--out` に写してから終わる。
 - CPU を焼かない: 負荷は task の投入（既定 10 秒に 1 件）と chat（既定 5 分に 1 通）で決め、tick は 100 ms。
 """
 import argparse
@@ -79,6 +80,14 @@ def gate(secs, approval, cond, env, now=None):
     if expires <= now:
         return False, "the approval has expired"
     return True, f"approved by {by}"
+
+
+class Terminated(Exception):
+    """driver が SIGTERM を受けた。"""
+
+
+def raise_terminated(signum, frame):
+    raise Terminated()
 
 
 def production_path(path):
@@ -532,6 +541,9 @@ rules = [{{ harness = "claude_code", required_capabilities = [] }}]
         failures = 0
         killed = a.kill_at <= 0
         reason = None
+        # SIGTERM の既定の動作は process を即座に終わらせ、stop の記録と daemon の log の回収が残らない
+        # （N2: 2026-11-06 の 24 時間 soak は別 task の pkill で 9.6 時間で切れ、log を失った）。
+        signal.signal(signal.SIGTERM, raise_terminated)
         try:
             while True:
                 now = time.time()
@@ -572,6 +584,9 @@ rules = [{{ harness = "claude_code", required_capabilities = [] }}]
                 time.sleep(min(1.0, max(0.05, min(next_task, next_sample, next_chat) - time.time())))
         except KeyboardInterrupt:
             reason = "interrupted"
+        except Terminated:
+            reason = "terminated"
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         self.sample("end")
         self.op("stop", reason=reason, tasks=n_task, chats=n_chat, wakes=n_wake)
         self.stop()

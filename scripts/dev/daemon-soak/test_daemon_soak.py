@@ -4,10 +4,13 @@ python3 -I -m unittest discover -s scripts/dev/daemon-soak -p 'test_*.py'
 """
 import datetime
 import json
+import os
 import pathlib
+import signal
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -62,6 +65,17 @@ class AutoStop(unittest.TestCase):
         self.assertTrue(self.reason({"db_bytes": 2 << 20}).startswith("db_size"))
         self.assertTrue(self.reason({}, failures=3).startswith("api_down"))
         self.assertEqual(self.reason({}, elapsed=60), "wall")
+
+
+class Terminate(unittest.TestCase):
+    def test_sigterm_becomes_a_recorded_stop(self):
+        old = signal.signal(signal.SIGTERM, ds.raise_terminated)
+        try:
+            with self.assertRaises(ds.Terminated):
+                os.kill(os.getpid(), signal.SIGTERM)
+                time.sleep(5)
+        finally:
+            signal.signal(signal.SIGTERM, old)
 
 
 class Readers(unittest.TestCase):

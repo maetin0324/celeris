@@ -235,13 +235,14 @@ async fn project_wake_cursor_blocks_redelivery() {
     assert_eq!(env.calls().len(), 1, "{:?}", env.calls());
     assert_eq!(state(&store, &p).event_cursor, ev);
     // wake の行が消えていても（INSERT OR IGNORE の重複検出に頼れない）、cursor 以下の再配送は wake にしない。
-    rusqlite::Connection::open(env.db())
-        .unwrap()
-        .execute(
-            "DELETE FROM project_wakes WHERE project_id = ?1",
-            [p.id.to_string()],
-        )
-        .unwrap();
+    let conn = rusqlite::Connection::open(env.db()).unwrap();
+    // 0118: 表の最大 ID は残す。別案件の消費済み wake を末尾に置き、対象案件の行だけを消す。
+    conn.execute("INSERT INTO project_wakes (project_id, wake_key, kind, created_at, consumed_by) VALUES ('retention-sentinel', 'keep-max', 'cron', '2026-11-01T00:00:00Z', 'fixture')", []).unwrap();
+    conn.execute(
+        "DELETE FROM project_wakes WHERE project_id = ?1",
+        [p.id.to_string()],
+    )
+    .unwrap();
     for _ in 0..10 {
         redeliver_from(&store, before);
         settle(&env, &mut d);

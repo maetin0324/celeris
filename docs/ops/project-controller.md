@@ -1,5 +1,5 @@
 ---
-tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY, 01M6JW1EG41D198Y5CP65MQJM4, 01M6N7XY9E70AH4476VQTSFVJY, 01M6N7XYA31CMJV6RR1KXSQMKH, 01M6PAMC3S9QN740JWEQTXV60J, 01M6PAMC44JQ6DB90E9HQ076DW]
+tasks: [01M6JW1EFPBCJX8J7D2ZACHS3D, 01M6JW1EFT0NX6HP89S55ECNXE, 01M6JW1EFW86JH3VKZ274J9GT5, 01M6JW1EFYFTSPMT080KHKW9EY, 01M6JW1EG41D198Y5CP65MQJM4, 01M6N7XY9E70AH4476VQTSFVJY, 01M6N7XYA31CMJV6RR1KXSQMKH, 01M6PAMC3S9QN740JWEQTXV60J, 01M6PAMC44JQ6DB90E9HQ076DW, 01M6QW0GSWRGP85RE263TWTM01]
 ---
 # Project Controller の運用手順（人と operator）
 
@@ -114,6 +114,7 @@ controller は event（root の終了・失敗・人の操作など）で起き�
 - root の review 合格は、最後の終端遷移が `review_pass` の done で、最後の review の判定に不合格が無く、`Check::Command` の条件が
   全部合格のときだけ数える（I3。reopen で前の合格を捨てる）。Outcome の block が `checks` を書くと、Rust が root の acceptance に
   command の条件として足す（[P0-E の ADR](../../agent-docs/adr/2026-11-05-phase3-p0e.md)）。
+- Roadmap の acceptance・checks を改版すると、旧条件の root は到達の根拠から外れる。人・CoS の root も起票時の承認版と実際の command を照合する。人・CoS の旧 root で起票時の版の記録が無いものは根拠にならず、新しい root の実行が必要になる。題名だけの改版では根拠は失効しない。再達成のときは新しい root を evidence に持つ reached を追記し、古い reached は履歴に残す（[N5 ADR](../../agent-docs/adr/2026-11-06-n5-evidence-integrity.md)）。
 - 実 LLM の pilot は `scripts/dev/long-horizon-pilot-llm.sh` を人が sandbox の外から実行する。人の承認の印
   `LONG_HORIZON_PILOT_LLM_APPROVED=1` と、人が書いた LLM の設定（`--llm-config <toml>`。`[llm_sources]`・`[harnesses]`・
   `[route_defaults]`・`[harness_selection]`・`[accounts]`）が要る。Celeris の worker の run の中では起動しない。一時 home・一時 DB・
@@ -163,7 +164,7 @@ controller は event（root の終了・失敗・人の操作など）で起き�
 
 どの表も、表の最大 id の行は保持の期間より古くても消さない。`script_compare_log` の id は AUTOINCREMENT の無い
 `INTEGER PRIMARY KEY` なので、最大 id の行を消すと次の行が同じ id を使い直し、script guard の見回り（読み終えた id より後だけを
-読む）が新しい違反の行を見落とす。最大 id の行を残すと、次の id は GC の前の最大 id より必ず大きい（ADR D9）。
+読む）が新しい違反の行を見落とす。migration 0118 の trigger は permit があっても最大 id の DELETE を拒む。最大 id の行を残すと、次の id は GC の前の最大 id より必ず大きい（ADR D9）。
 
 config の例（`archive_dir` は絶対 path で必須。無い・相対なら起動時の設定エラー）:
 
@@ -198,7 +199,7 @@ archive_dir = "/local/celeris/state/retention-archive"
 
 ### 2. schema migration の戻し方
 - controller が足した migration は 0111（script の領域）・0112（controller の表）・0113（Roadmap）・0114（authority ledger）で、
-  どれも表を足すだけで既存の行を変えない。P2-J は migration を足さない。その後 P4-B が 0115（wake `evidence_changed`）、P4-D が 0117（記録の保持）を足し、SCHEMA_VERSION は 117（0116 は予約のまま未使用）。
+  どれも表を足すだけで既存の行を変えない。P2-J は migration を足さない。その後 P4-B が 0115（wake `evidence_changed`）、P4-D が 0117（記録の保持）を足し、N5 は 0118（起票時の承認版と最大 ID を保護する trigger）を足し、SCHEMA_VERSION は 118（0116 は予約のまま未使用）。
 - 古い binary は新しい schema の DB を開けない（`StoreError::SchemaTooNew`。何も書かずに起動を止める）。down migration は無い。
 - [ ] promote の前に、`promote.sh` が `sqlite3 .backup` で昇格前の写しを `$CELERIS_BACKUPS_DIR` に作ったことをログの
   `backup ok:` で確かめる。

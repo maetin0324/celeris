@@ -367,6 +367,13 @@ if grep -q -E '^scripts/dev/pc-rollout/' "$changed"; then
   ran=1
 fi
 
+# 実 daemon の soak の道具（P4-F・N2）の門・集計・推移の単体試験。daemon も cargo も使わない。
+if grep -q -E '^scripts/dev/daemon-soak/' "$changed"; then
+  echo "test-affected: python3 -I -m unittest discover -s scripts/dev/daemon-soak を走らせる（理由: soak の道具の変更）" >&2
+  python3 -I -m unittest discover -s scripts/dev/daemon-soak -p 'test_*.py'
+  ran=1
+fi
+
 if [ -n "$tsv_reason" ]; then
   # runner を作り直し（cargo を使う）、$TMPDIR の写しで ts-only の経路と意図的な破壊の検出を確かめる。
   echo "test-affected: bash scripts/dev/test-ts-verify.sh を走らせる（理由: $tsv_reason）" >&2

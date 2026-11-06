@@ -362,16 +362,25 @@ fn planner_ts(s: &ProjectSnapshot) -> Value {
             &[],
         );
     };
-    let marked = s.decisions.iter().any(|d| {
-        d.kind == "mark_milestone"
-            && d.effect_state != "failed"
-            && d.outcome_id.as_deref() == Some(o.id.as_str())
-    });
     if let Some(r) = s
         .roots
         .iter()
         .find(|r| task_core::project_proposal::root_satisfies(r, o))
     {
+        let marked = s
+            .roadmap
+            .as_ref()
+            .and_then(|v| v.get("outcomes"))
+            .and_then(Value::as_array)
+            .is_some_and(|rows| {
+                rows.iter().any(|v| {
+                    v["id"] == o.id
+                        && v["status"] == "reached"
+                        && v["evidence"]
+                            .as_array()
+                            .is_some_and(|es| es.contains(&json!(format!("task:{}", r.id))))
+                })
+            });
         if !marked {
             return proposal(
                 s,
@@ -487,8 +496,8 @@ fn project_revocation_e2e_reach_invalidate_fix_reachieve() {
     assert_eq!(c.phase(), ControllerPhase::Achieved);
     assert_eq!(
         c.roadmap_reached("o1"),
-        1,
-        "the old record stays; not doubled"
+        2,
+        "the old record stays and fresh evidence is appended"
     );
     assert_eq!(c.count_rule(&format!("{REVOKED}:o1")), 1);
     steps.push(snap(&c, "reachieved"));
@@ -628,6 +637,11 @@ fn assert_human_change_reopens_and_reachieves(
         .find(|r| r.id == r2.id.to_string())
         .unwrap();
     assert!(fresh.stale_outcome_ids.is_empty());
+    let view = task_ops::roadmap::view(&c.store, c.p.id, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(view.outcomes[0].evidence, vec![format!("task:{}", r2.id)]);
+    assert_eq!(c.roadmap_reached("o1"), 2);
 }
 
 /// 第 4 フェーズ P4-B（差し戻しの修正）: controller が起票した root（`outcome_ids` に o1）で達成の後、人が o1 の
@@ -673,3 +687,6 @@ fn project_revocation_controller_root_title_change_stays_achieved() {
     assert!(old.stale_outcome_ids.is_empty());
     assert_eq!(c.controller_roots().len(), 1);
 }
+
+#[path = "project_evidence_integrity.rs"]
+mod project_evidence_integrity;

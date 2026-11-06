@@ -1,0 +1,113 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "llm",
+  "seq": 2,
+  "case": "consult-priority",
+  "kind": "consult",
+  "arm": "new",
+  "repeat": 1,
+  "rev": "4f41c2bfbe9fa5768379b5058d3921f2f949ab94",
+  "binary_sha256": "6d9e1c8b4cef9379a11ba108af5cdbf8c745f40be76f318dd58e94851e717464",
+  "skills_sha256": {
+    "config/skills/cos-operator": "aab69d2ef5a30af7c56075c3ee9bbfab7b5700fd3b392bac7203699ae3fb290d",
+    "config/skills/cos-inbox-triage": "e17d148121b43ad81534565ef9bcf841139d207395f05f7519ec92df4459e969"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "df24c1df4ec3751c3facf8039a6f4f54f24c32044ec3ba97df22d876b01fef34",
+    "crates/task-worker/src/preamble.rs": "22a118396990bb443c6b2de07d8fdbaf6bf1a1e5683b681fd71ceb3b29465b73",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "20c61936c8533eaee79bc54bd49150b58505fcd588426b7a56dd0d789d67c4ac"
+  },
+  "llm_config_sha256": "c4fbbc7e3a8bc501d1f89967e3450fb0a502acb603796a97dd9d3121df96690b",
+  "input": "締切が明日の障害報告と、締切が来月の機能追加、先にどちらを進めるべき？",
+  "seed_task_ids": [],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6R15XX8JM3Y671QCHA6G34P",
+      "seq": 1,
+      "role": "user",
+      "text": "締切が明日の障害報告と、締切が来月の機能追加、先にどちらを進めるべき？",
+      "state": "completed",
+      "created_at": "2026-11-06T08:56:35.495Z",
+      "run_id": "01M6R15XY1P8ZJ3A9AS4CPEV77",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6R15XY1M0JMPZWJCG6WDZC4",
+      "seq": 2,
+      "role": "assistant",
+      "text": "障害報告を先に進めてください。機能追加は止めずに、障害報告に必要な時間だけ先に確保する形が適切です。\n\n**理由**\n- 障害報告の締切は明日で、遅れると取り返しがつきにくいです。機能追加の締切は来月なので、数日ずれても間に合う余裕があります。\n- 障害報告は、顧客や関係者との信頼に直接関わることが多いです。\n\n**進め方**\n1. 今日は障害報告の完成を最優先にします。最低限書く内容は、影響範囲、原因（未確定なら暫定）、復旧状況、再発防止策の方針です。\n2. 原因調査が終わらない場合は、完璧を待たずに出します。「現時点で分かっていること」と「次回報告の予定日」を書いて、明日提出してください。\n3. 報告を出した後で、機能追加の計画を見直します。再発防止策に実装作業が生じるなら、機能追加の日程に影響するため、そのときに調整してください。\n\n**機能追加を先にする例外**\n- 依頼元に確認して、障害報告の締切を延ばせると分かっている場合\n- 機能追加に他チームの作業が依存していて、1日の遅れが連鎖する場合\n\n今回の情報では、この2つに当てはまるかどうか分かりません。当てはまる場合は教えてください。\n\ntask は起票していません。",
+      "state": "completed",
+      "created_at": "2026-11-06T08:56:35.521Z",
+      "run_id": "01M6R15XY1P8ZJ3A9AS4CPEV77",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6R15Y17PJZW7JJ064PBJZJD",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5",
+      "state": "completed",
+      "created_at": "2026-11-06T08:56:35.521Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6R15VY1VSW9MRN0JZ2TBKB8": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_creation_tokens": 0
+  },
+  "usage": {
+    "input_tokens": 4,
+    "output_tokens": 1313,
+    "cache_read_tokens": 29267,
+    "cache_creation_tokens": 15222
+  },
+  "usage_null_runs": 0,
+  "usage_missing_reason": null,
+  "cost_usd": 0.057046,
+  "cost_unknown_runs": 0,
+  "cos_operations": [],
+  "stub_log": [],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.515,
+  "wall_seconds": 15.42,
+  "ended_by": "reply",
+  "trial_secs": 27.503,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793955391.763,
+      "ids": [],
+      "statuses": []
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793955393.479,
+      "thread": "01M6R15VY1VSW9MRN0JZ2TBKB8",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793955395.494,
+      "pre_chat_runs": 0,
+      "pre_runs": 0,
+      "pre_tasks": 0
+    },
+    {
+      "step": "human_message",
+      "at": 1793955395.498,
+      "thread": "01M6R15VY1VSW9MRN0JZ2TBKB8"
+    }
+  ]
+}

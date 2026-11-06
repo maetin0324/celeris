@@ -1,0 +1,40 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "a5b25d0d27af",
+  "case": "consult-priority",
+  "kind": "consult",
+  "input": "締切が明日の障害報告と、締切が来月の機能追加、先にどちらを進めるべき？",
+  "expected": "task 0。期限と影響を分析し、優先案と理由を返す。必要な不足情報だけ追問する。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "締切が明日の障害報告と、締切が来月の機能追加、先にどちらを進めるべき？"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "障害報告を先に進めてください。締切が明日で、遅れた場合の影響が大きいためです。機能追加は締切まで約 1 か月あるので、障害報告が終わってから着手しても間に合います。\n\n- **障害報告:** 書き始める前に、原因、影響範囲、対応状況が揃っているかを確認してください。足りなければ今日のうちに関係者へ確認を出します。\n- **機能追加:** 今日のうちに、要件の確認や分割といった下調べだけ済ませておくと、後で楽になります。\n- **例外:** 機能追加に他チームや外部の待ち時間があるなら、その依頼だけ先に出してください。\n\n次の 2 点は私には分かりません。該当すると、優先順位が変わる場合があります。\n- 機能追加が、この障害の再発防止と同じ作業かどうか。\n- 障害報告が、すでに対外的な約束になっているかどうか。\n\nCeleris の task や案件の状態は確認していません。上の判断は、いただいた 2 つの締切だけに基づいています。\n\n要約は保存済みで、operation の発行や添付はありません。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [],
+  "cos_operations": [],
+  "grade": {
+    "grader": "deterministic:p4e-auto/1",
+    "authority_preserved": true,
+    "analysis": null,
+    "proposal": null,
+    "followup_appropriate": null,
+    "consult_depth": null,
+    "notes": {
+      "bad_operations": [],
+      "forged_messages": 0
+    }
+  }
+}

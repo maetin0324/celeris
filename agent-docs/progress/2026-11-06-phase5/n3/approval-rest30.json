@@ -1,0 +1,12 @@
+{
+ "id": "p4e-rest30-20261106-1",
+ "approved_by": "human:rmaeda",
+ "approved_at": "2026-11-06T08:55:22Z",
+ "expires_at": "2026-11-07T00:00:00Z",
+ "account": "claude_max_personal",
+ "model": "claude-sonnet-5-5",
+ "harness": "claude_code",
+ "scope": {"seqs": [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]},
+ "limits": {"max_trials": 30, "max_wall_secs": 7087, "max_usd": 19.9},
+ "note": "P4-E の残り 30 試行（seq 1〜6・9〜32）。11-05 の人の承認（「先に 1 対だけ」、1 対で旧腕の config の読み込みと usage の記録を確かめてから残りを同じ上限で）に基づく。1 対 p4e-pair-20261106-1 は 2026-11-06 08:45Z に合格（error 0、usd_unknown 0、spent.usd 0.091739、wall 112.9 秒、cache 込み 192,976 token）。2026-11-06T08:55:22Z に人が operator の質問に「料金換算で流す」と答え、100 万 token（cache 込み）の上限は外し、20 USD から 1 対の分を引いた 19.9 USD 相当と 7,200 秒から引いた 7,087 秒を上限とした。file は operator（claude-code-ops-session）が人の回答から書いた。"
+}

@@ -1,0 +1,66 @@
+{
+  "profile": "release",
+  "command": "cargo test --release -p celeris --test tick_scale_baseline --no-run",
+  "fixture": "SQL clones of one real blocked dispatch, then settle",
+  "blocked": [
+    0,
+    600,
+    2000,
+    10000
+  ],
+  "ticks": 5,
+  "dispatches": 5,
+  "conditions": [
+    "off",
+    "shadow"
+  ],
+  "required_bundle": true,
+  "run_order": [
+    "before-shadow",
+    "before-off (repeat after preliminary exited)",
+    "after-off",
+    "after-shadow"
+  ],
+  "coincident_build": false,
+  "baseline": "git merge-base HEAD main",
+  "environment": {
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "line-tables-only",
+    "RUSTFLAGS": null
+  },
+  "host": "home-dev",
+  "excluded": "preliminary and first before-off overlapped in separate PID namespaces; submitted before-off is repeated sequentially",
+  "after_shadow_attempt1": "interrupted at the 20% budget boundary; partial data excluded",
+  "unfinished": [],
+  "paired": {
+    "dir": "paired/round1..round4",
+    "design": "each round starts before-off, before-shadow, after-off, after-shadow at the same time (four processes) so host load applies to every arm alike",
+    "rounds": {
+      "round1": [
+        0,
+        600,
+        2000,
+        10000
+      ],
+      "round2": [
+        0,
+        600,
+        2000,
+        10000
+      ],
+      "round3": [
+        0,
+        600,
+        2000,
+        10000
+      ],
+      "round4": [
+        10000
+      ]
+    },
+    "binaries": "paired/binaries.sha256 (before = merge-base product files with the submitted tick_scale_baseline.rs; after = submitted HEAD)",
+    "loadavg": "paired/roundN/loadavg.log (1-min load 13-104 on 24 cores)",
+    "summary": "summarize_paired.py -> paired/summary.json",
+    "adopted": "paired rounds are the submitted comparison; the sequential 12 cells (before-*.jsonl, after-off.jsonl) are kept as the first attempt"
+  }
+}

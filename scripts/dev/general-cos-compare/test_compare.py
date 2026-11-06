@@ -146,8 +146,9 @@ class Preflight(Base):
         self.cfg.write_text("# human-written llm config\n")
 
     def approval(self, **changes):
-        ap = {"approved_by": "human:rmaeda", "approved_at": "2026-11-05T00:00:00Z", "account": "claude_max_personal",
-              "model": "sonnet", "harness": "claude_code",
+        ap = {"id": "p4e-test-1", "approved_by": "human:rmaeda", "approved_at": "2026-11-05T00:00:00Z",
+              "expires_at": "2099-01-01T00:00:00Z", "account": "claude_max_personal",
+              "model": "sonnet", "harness": "claude_code", "scope": {"seqs": list(range(1, 33))},
               "limits": {"max_trials": 32, "max_wall_secs": 7200, "max_usd": 20}}
         ap.update(changes)
         path = self.dir / "approval.json"
@@ -206,6 +207,89 @@ class Preflight(Base):
         r = self.preflight("--tier", "llm", "--llm-config", str(self.cfg), "--approval", ap, env={"CELERIS_RUN_ID": ""})
         self.assertEqual(r.returncode, 2)
         self.assertIn("approved max_trials", r.stdout)
+
+    def test_approval_without_id_expiry_or_scope_is_refused(self):
+        env = {"CELERIS_RUN_ID": ""}
+        for key in ("id", "expires_at", "scope"):
+            ap = json.loads(pathlib.Path(self.approval()).read_text())
+            del ap[key]
+            (self.dir / "approval.json").write_text(json.dumps(ap))
+            r = self.preflight("--tier", "llm", "--llm-config", str(self.cfg), "--approval",
+                               str(self.dir / "approval.json"), env=env)
+            self.assertEqual(r.returncode, 2, key)
+            self.assertIn(f"approval: {key} is missing", r.stdout, key)
+
+    def test_expired_approval_is_refused(self):
+        r = self.preflight("--tier", "llm", "--llm-config", str(self.cfg), "--approval",
+                           self.approval(expires_at="2026-11-05T01:00:00Z"), env={"CELERIS_RUN_ID": ""})
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("approval expired at", r.stdout)
+
+    def test_approval_window(self):
+        ap = {"approved_at": "2026-11-05T00:00:00Z", "expires_at": "2026-11-06T00:00:00Z"}
+        at = compare.parse_utc("2026-11-05T12:00:00Z")
+        self.assertEqual(compare.approval_window_problems(ap, now=at), [])
+        self.assertIn("approval expired at 2026-11-06T00:00:00Z",
+                      compare.approval_window_problems(ap, now=compare.parse_utc("2026-11-06T00:00:00Z")))
+        self.assertIn("approval.approved_at is in the future",
+                      compare.approval_window_problems(ap, now=compare.parse_utc("2026-11-04T00:00:00Z")))
+        self.assertIn("approval.expires_at must be after approved_at",
+                      compare.approval_window_problems({**ap, "expires_at": ap["approved_at"]}, now=at))
+        self.assertIn("approval.expires_at is not an ISO 8601 UTC time",
+                      compare.approval_window_problems({**ap, "expires_at": "2026-11-06"}, now=at))
+
+    def test_pair_approval_does_not_cover_the_whole_plan(self):
+        """1 対（seq 7,8）だけの承認で、--only なしの 32 試行や範囲の外の試行は流せない。"""
+        env = {k: v for k, v in os.environ.items() if k != "CELERIS_RUN_ID"}
+        ap = self.approval(scope={"seqs": [7, 8]}, limits={"max_trials": 2, "max_wall_secs": 1200, "max_usd": 2})
+
+        def pf(*extra):
+            return subprocess.run([sys.executable, str(SCRIPT), "preflight", "--tier", "llm", "--manifest",
+                                   str(self.dir / "m.json"), "--plan", str(self.dir / "p.json"), "--out",
+                                   str(self.dir / "out"), "--llm-config", str(self.cfg), "--approval", ap, *extra],
+                                  capture_output=True, text=True, env=env, check=False)
+        r = pf()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("outside the approved scope.seqs [7, 8]", r.stdout)
+        self.assertIn("selected trials exceed approved max_trials 2", r.stdout)
+        r = pf("--only", "7,8,9,10")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("trials [9, 10] are outside", r.stdout)
+        r = pf("--only", "7")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("not old/new pairs", r.stdout)
+        r = pf("--only", "7,8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_run_llm_refuses_trials_outside_the_scope(self):
+        """run --tier llm も preflight と同じ検査を通す（daemon・LLM は起こさない）。"""
+        env = {k: v for k, v in os.environ.items() if k != "CELERIS_RUN_ID"}
+        ap = self.approval(scope={"seqs": [7, 8]}, limits={"max_trials": 2, "max_wall_secs": 1200, "max_usd": 2})
+        r = subprocess.run([sys.executable, str(SCRIPT), "run", "--tier", "llm", "--manifest", str(self.dir / "m.json"),
+                            "--plan", str(self.dir / "p.json"), "--out", str(self.dir / "out"), "--llm-config",
+                            str(self.cfg), "--approval", ap, "--only", "9,10"],
+                           capture_output=True, text=True, env=env, check=False)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("outside the approved scope.seqs", r.stderr)
+        self.assertFalse((self.dir / "out" / "raw").exists())
+
+    def test_config_check_reports_a_daemon_that_cannot_load(self):
+        """config-check は daemon が config を読めずに終われば loaded=false・exit 1。claude_dir は一時 dir に差し替える。"""
+        for b in (self.old_bin, self.new_bin):
+            b.write_text("#!/bin/sh\necho 'unknown field' >&2\nexit 2\n")
+            b.chmod(0o755)
+        self.pin()
+        self.cfg.write_text('[accounts]\nclaude_dir = "/home/x/.local/celeris/claude-accounts"\n')
+        r = cli("config-check", "--tier", "llm", "--manifest", str(self.dir / "m.json"), "--plan",
+                str(self.dir / "p.json"), "--out", str(self.dir / "cc"), "--llm-config", str(self.cfg),
+                "--state-root", str(self.dir))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        rep = json.loads((self.dir / "cc" / "config-check.json").read_text())
+        for arm in ("old", "new"):
+            self.assertFalse(rep["arms"][arm]["loaded"])
+            self.assertIn("unknown field", rep["arms"][arm]["error"])
+            self.assertEqual(rep["arms"][arm]["claude_dir_replaced"], 1)
+            self.assertEqual(rep["arms"][arm]["sandbox"]["production_paths_in_config"], [])
 
     def test_changed_binary_or_cases_is_refused(self):
         self.new_bin.write_text("rebuilt")

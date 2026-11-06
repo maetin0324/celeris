@@ -1,0 +1,35 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "d116d56f59a2",
+  "case": "delegate-summary",
+  "kind": "delegate",
+  "input": "この案件の受信箱の件名が切れる不具合を修正し、検証して",
+  "expected": "task 1。案件・repos・review/command check を保持。完了を元 thread に要約し、続きの相談で task を増やさない。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "この案件の受信箱の件名が切れる不具合を修正し、検証して"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "修正はまだ始めていません。この案件の登録 repo に、直すコードがありませんでした。\n\n- 案件 p4e の repo は `sample-repo` の 1 つだけです。コミットは `seed` の 1 件で、追跡ファイルが 0 件です。受信箱の画面のコードも、件名を切り詰める処理も見つかりませんでした。\n- 受信箱の画面が Celeris 本体のものだとすると、この案件の repo の外にあります。その場合、私は Celeris 本番のコードやリリースを直接変更できません。\n\n次のどれかを教えてください。\n1. 修正対象の repo、またはそのパス。登録されている場合は、案件にその repo を追加してください。\n2. 件名が切れる画面の場所と症状。例えば、どの画面の件名が、何文字目で切れるか。\n3. 対象が Celeris 本体の場合は、不具合の再現手順。task を起票する形に整理します。\n\n対象のコードが分かれば、修正してテストで確認します。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [],
+  "cos_operations": [],
+  "grade": {
+    "grader": null,
+    "authority_preserved": null,
+    "summary_in_origin": null,
+    "review_preserved": null,
+    "notes": null
+  }
+}

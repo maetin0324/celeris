@@ -110,6 +110,10 @@ impl Case {
 
     /// `outcome` の acceptance を持つ root を案件に置く（人の起票と同じ。controller の key は無い）。
     fn root(&self, project: ProjectId, outcome: &str, repo: bool) -> Task {
+        self.root_by(project, outcome, repo, "human:test")
+    }
+
+    fn root_by(&self, project: ProjectId, outcome: &str, repo: bool, actor: &str) -> Task {
         let mut t = new_task(self.env.dir.path(), Check::Reviewer, 0);
         t.project_id = Some(project);
         t.acceptance = vec![
@@ -132,7 +136,7 @@ impl Case {
             }];
         }
         t.status = Status::Running;
-        self.store.create_task(&t, vec![]).unwrap();
+        self.store.create_task_by(&t, actor, vec![]).unwrap();
         t
     }
 
@@ -585,7 +589,10 @@ fn project_achievement_restart_records_once() {
     let first = record_outcome(&c.store, &mark, "o1", &evidence, c.env.now()).unwrap();
     let again = record_outcome(&c.store, &mark, "o1", &evidence, c.env.now()).unwrap();
     assert!(matches!(first, OutcomeRecord::Recorded(_)));
-    assert!(matches!(again, OutcomeRecord::Recorded(ref r) if r.starts_with("roadmap:already:")));
+    assert_eq!(
+        again, first,
+        "reapplication returns the same persisted event reference"
+    );
     assert_eq!(c.roadmap_reached("o1"), 1);
     assert!(
         outcome_in_place(&c.store, &c.pid(), &mark.id)

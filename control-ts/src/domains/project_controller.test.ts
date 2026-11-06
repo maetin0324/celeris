@@ -114,6 +114,20 @@ function decision(
 }
 
 describe("project_controller", () => {
+  it("refreshes roadmap evidence after reattainment and then stays idempotent", () => {
+    const s = snapshot();
+    s.roots = [root("old", "outcome:o1:1", { stale_outcome_ids: ["o1"] }), root("fresh", "outcome:o1:2")];
+    s.decisions = [decision("mark_milestone", { outcome_id: "o1" })];
+    s.roadmap = { outcomes: [{ id: "o1", status: "reached", evidence: ["task:old"] }] };
+    expect(decide(s).action).toEqual({kind: "mark_milestone", outcome_id: "o1", evidence_refs: ["task:fresh"]});
+    s.roadmap = { outcomes: [{ id: "o1", status: "reached", evidence: ["task:fresh"] }] };
+    expect(decide(s).action.kind).toBe("launch_root");
+    s.controller.mode = "shadow";
+    s.roadmap = { outcomes: [{ id: "o1", status: "open", evidence: [] }] };
+    s.decisions = [decision("mark_milestone", { outcome_id: "o1", effect_state: "suppressed" })];
+    expect(decide(s).action.kind).toBe("launch_root");
+  });
+
   it("launches the first outcome with its acceptance verbatim", () => {
     const p = decide(snapshot());
     expect(p.action.kind).toBe("launch_root");

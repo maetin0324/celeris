@@ -1,0 +1,112 @@
+{
+  "schema": "celeris.general-cos-compare-manifest/1",
+  "dataset": "p4e-v1",
+  "cases_sha256": "f20c76d8fbdba6f42d74afe509ca54771746dd47b6f5e14f5cefa88f5bdd157f",
+  "arms": {
+    "old": {
+      "rev": "286a7ab199b27fe2524c07d5eb501abd5be567fa",
+      "subject": "a2: runner の不変条件の関数型に別名を付ける（clippy）、進捗の件数を直す",
+      "skills": {
+        "config/skills/cos-operator": {
+          "sha256": "d45913d29dc2510d7698eb40a628754d097d1020e2fb77a928b54089f20bfefa",
+          "files": {
+            "config/skills/cos-operator/SKILL.md": "7fb064147b2cf883c0840cb5a204652d502dca1a1d53d33c811a28e0e7779614",
+            "config/skills/cos-operator/SOURCE.md": "7d6d1ad35bbbf36a1833644afe801ad5c15945dd8e9a3d266ed6e3f5dd6c6ac0",
+            "config/skills/cos-operator/attachments.md": "ee0516fde63c6fa38f2bf4256a0045aaa7ddc4d6a66674060281ced4b54e1533",
+            "config/skills/cos-operator/deploy.md": "3d0165b6c99d2f7702c8f94677da466099f04f7dd182edd08d3e21c0c6923b06",
+            "config/skills/cos-operator/explaining.md": "5757f9363741d5e3c2b999f1d2f9bef6956bba7fe2464fa02731becc75a0c87a",
+            "config/skills/cos-operator/operations.md": "3ad06f39997f43fc91ab0c6866659374128824379a6244bc274e48321b5d0a1b",
+            "config/skills/cos-operator/production.md": "6a4f216dcef82aedfdbdb0f63d77b6f20f3bfa66a660dba5d7a5c16f1f123a85"
+          }
+        },
+        "config/skills/cos-inbox-triage": {
+          "sha256": "73b317ffcad542bd3ec41c502e0ac9a50faa86ff5d77254c69e92b14204a66f2",
+          "files": {
+            "config/skills/cos-inbox-triage/SKILL.md": "20d41dd78bd57cc9fdd1e1ec36a95fb0735900d67e37dfde3a1ef1be3e44dac6",
+            "config/skills/cos-inbox-triage/SOURCE.md": "d906fbd704f008cb72541c7b0405c8ef67ac71085361835019ac05c8011c18ba"
+          }
+        }
+      },
+      "prompt_sources": {
+        "crates/task-worker/src/cos_chat.rs": {
+          "sha256": "bb7e55371490c29f7c6a5351486e65bbd81d28c83dcc0d0f0b2e10b5c4721f20",
+          "files": {
+            "crates/task-worker/src/cos_chat.rs": "227a5bd8a67434367d753853e193ccca586fbdac24ca02b2d7c1466399035dbc"
+          }
+        },
+        "crates/task-worker/src/preamble.rs": {
+          "sha256": "9d90308a438a4aacbd4e992d1d3131db4468aa1501d8742934324a0a0dc8be27",
+          "files": {
+            "crates/task-worker/src/preamble.rs": "c511e5848d4c778e84922f84b97b095743d207826c09aa8ee845a462890ce8b8"
+          }
+        },
+        "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": {
+          "sha256": "05213c1de1873dbb19c5b56e786813d86b5bbb716bf4e043e1e404d672ea4641",
+          "files": {
+            "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "38a18572adfc152a32ef255a2993a04c416e2db8dfb384d2778e6fcb3ee95acc"
+          }
+        }
+      },
+      "binary": {
+        "path": "$TMPDIR/n3b/bin/old-celeris",
+        "sha256": "e2b1e780200842c77426735f4387045c5ec57a08f59ea1f00eeff076c24a7ef4"
+      }
+    },
+    "new": {
+      "rev": "40a8d89763efc5cbf902d0f43072a9e319ba287f",
+      "subject": "n3: 進捗に検査の結果を書く",
+      "skills": {
+        "config/skills/cos-operator": {
+          "sha256": "aab69d2ef5a30af7c56075c3ee9bbfab7b5700fd3b392bac7203699ae3fb290d",
+          "files": {
+            "config/skills/cos-operator/SKILL.md": "337f47272822d9d24f472efdedae704a02007e71433d5b0f2ab2a776b97761b6",
+            "config/skills/cos-operator/SOURCE.md": "466f32dbc74335cb5c2a7158e5eb66dcf2953ae041bb11582a8e11f306b2f643",
+            "config/skills/cos-operator/attachments.md": "ee0516fde63c6fa38f2bf4256a0045aaa7ddc4d6a66674060281ced4b54e1533",
+            "config/skills/cos-operator/consult.md": "224d8e685c16172bd4833e4c83a87bc556382661305b1cc18d5212398e97774e",
+            "config/skills/cos-operator/deploy.md": "3d0165b6c99d2f7702c8f94677da466099f04f7dd182edd08d3e21c0c6923b06",
+            "config/skills/cos-operator/explaining.md": "5757f9363741d5e3c2b999f1d2f9bef6956bba7fe2464fa02731becc75a0c87a",
+            "config/skills/cos-operator/operations.md": "03fde0ab8141863b2939e11aaec04011de39c4404fd29eec45ea6a608d9ed90b",
+            "config/skills/cos-operator/production.md": "6a4f216dcef82aedfdbdb0f63d77b6f20f3bfa66a660dba5d7a5c16f1f123a85",
+            "config/skills/cos-operator/project-controller.md": "9bc0fe27bd5bf1f18b377e0213c8d15aede3c8c5927e3a553cb7abd17147b501"
+          }
+        },
+        "config/skills/cos-inbox-triage": {
+          "sha256": "e17d148121b43ad81534565ef9bcf841139d207395f05f7519ec92df4459e969",
+          "files": {
+            "config/skills/cos-inbox-triage/SKILL.md": "97f535a2d970f84d85f85327d880fe18285fcccd8a2f139de8992a91a959a21b",
+            "config/skills/cos-inbox-triage/SOURCE.md": "e1ff9747eedbd505716305c13a996293ceef8f679a1abafd02d40e58fd50d112"
+          }
+        }
+      },
+      "prompt_sources": {
+        "crates/task-worker/src/cos_chat.rs": {
+          "sha256": "df24c1df4ec3751c3facf8039a6f4f54f24c32044ec3ba97df22d876b01fef34",
+          "files": {
+            "crates/task-worker/src/cos_chat.rs": "f4467446fbda36568c893fe7b6d598180cda501ebbf75ca239d14a87b8b130c9"
+          }
+        },
+        "crates/task-worker/src/preamble.rs": {
+          "sha256": "22a118396990bb443c6b2de07d8fdbaf6bf1a1e5683b681fd71ceb3b29465b73",
+          "files": {
+            "crates/task-worker/src/preamble.rs": "4c003a8803afdd7634b314c80f5a2ddd7b590846b06d03b261287cd432163263"
+          }
+        },
+        "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": {
+          "sha256": "20c61936c8533eaee79bc54bd49150b58505fcd588426b7a56dd0d789d67c4ac",
+          "files": {
+            "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "48c79e4114e7543c6b77b229fddd398571ca7b0a1641114412d9fc16e35201b6"
+          }
+        }
+      },
+      "binary": {
+        "path": "$TMPDIR/n3b/bin/new-celeris",
+        "sha256": "67342b1bdaabcdd1ed9656fe013be0e68dfbbc8707d7ed5a05adf924aae30ddc"
+      }
+    }
+  },
+  "differs": {
+    "skills": true,
+    "prompt_sources": true,
+    "binary": true
+  }
+}

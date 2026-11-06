@@ -1739,7 +1739,10 @@ fn script_generation_rejected_rows_migrate_to_invalid() {
         let store = SqliteStore::open(&path).unwrap();
         let conn = store.lock().unwrap();
         conn.execute_batch(
-            "DROP TABLE script_guard_state; DROP TABLE script_generation_events; \
+            "DROP TRIGGER IF EXISTS task_roadmap_specs_capture; DROP TABLE IF EXISTS task_roadmap_specs; \
+             DROP TRIGGER IF EXISTS script_compare_log_keep_max; DROP TRIGGER IF EXISTS project_wakes_keep_max; \
+             DROP TRIGGER IF EXISTS project_controller_decisions_keep_max; \
+             DROP TABLE script_guard_state; DROP TABLE script_generation_events; \
              DROP TABLE script_compare_log; DROP TABLE script_domain_events; \
              DROP TABLE script_domain_modes; DROP TABLE script_generations; \
              DELETE FROM schema_migrations WHERE version >= 103;",

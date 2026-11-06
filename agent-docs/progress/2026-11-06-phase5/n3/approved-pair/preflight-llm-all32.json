@@ -1,0 +1,19 @@
+{
+  "tier": "llm",
+  "ok": false,
+  "problems": [
+    "refusing real LLM runs inside a Celeris worker run (CELERIS_RUN_ID is set)",
+    "trials [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32] are outside the approved scope.seqs [7, 8] (use --only)",
+    "selected trials exceed approved max_trials 2"
+  ],
+  "limits": {
+    "schema": "celeris.general-cos-limits/1",
+    "note": "人に示す上限の候補（P1-H の提案と同じ）。どれかに達したら残りの試行を始めない。usd は CoS と worker・reviewer の全 run の usage.cost_usd（task_core の静的単価表の推定。実際の請求額は確認していない）の累計で比べ、cost_usd の無い run を含む試行が 1 件でもあれば残りの試行を始めない（usd_unknown）。tokens は input+output+cache read+cache creation の合計で数える（数え方は人が決める。p4e.md の次の gate）。",
+    "max_trials": 32,
+    "repeats": 2,
+    "max_tokens": 1000000,
+    "max_wall_secs": 7200,
+    "max_usd": 20,
+    "per_trial_wall_secs": 600
+  }
+}

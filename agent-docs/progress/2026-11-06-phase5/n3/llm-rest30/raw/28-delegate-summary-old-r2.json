@@ -1,0 +1,118 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "llm",
+  "seq": 28,
+  "case": "delegate-summary",
+  "kind": "delegate",
+  "arm": "old",
+  "repeat": 2,
+  "rev": "286a7ab199b27fe2524c07d5eb501abd5be567fa",
+  "binary_sha256": "e2b1e780200842c77426735f4387045c5ec57a08f59ea1f00eeff076c24a7ef4",
+  "skills_sha256": {
+    "config/skills/cos-operator": "d45913d29dc2510d7698eb40a628754d097d1020e2fb77a928b54089f20bfefa",
+    "config/skills/cos-inbox-triage": "73b317ffcad542bd3ec41c502e0ac9a50faa86ff5d77254c69e92b14204a66f2"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "bb7e55371490c29f7c6a5351486e65bbd81d28c83dcc0d0f0b2e10b5c4721f20",
+    "crates/task-worker/src/preamble.rs": "9d90308a438a4aacbd4e992d1d3131db4468aa1501d8742934324a0a0dc8be27",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "05213c1de1873dbb19c5b56e786813d86b5bbb716bf4e043e1e404d672ea4641"
+  },
+  "llm_config_sha256": "c4fbbc7e3a8bc501d1f89967e3450fb0a502acb603796a97dd9d3121df96690b",
+  "input": "この案件の受信箱の件名が切れる不具合を修正し、検証して",
+  "seed_task_ids": [],
+  "project": "01M6R2ZXDJ83Z2K87SHPN55PDK",
+  "transcript": [
+    {
+      "id": "01M6R300VB0JTZ71WJQT1VDDZD",
+      "seq": 1,
+      "role": "user",
+      "text": "この案件の受信箱の件名が切れる不具合を修正し、検証して",
+      "state": "completed",
+      "created_at": "2026-11-06T09:28:19.050Z",
+      "run_id": "01M6R300YRYBRVQ62WM9J1JW7C",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6R300YSW1CCN0NKPQ4H5G1H",
+      "seq": 2,
+      "role": "assistant",
+      "text": "修正はまだ始めていません。この案件の repo に修正するコードが無いためです。どの repo かを教えてください。\n\n案件 p4e の登録 repo は `sample-repo`（`/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t/sample-repo`）だけです。確認した結果は次のとおりです。\n- git の履歴は `seed` コミット 1 件だけです。\n- 追跡ファイルは 0 個で、受信箱の画面のコードも件名を表示する処理もありません。\n- この案件にはまだ task がありません。\n\n存在しないコードの修正は検証できないので、task も起票していません。\n\n次のどれかを教えてください。\n1. 受信箱の画面のコードがある別の repo やパスを、この案件に登録する。\n2. 実コードが入ったブランチを `sample-repo` に取り込む。\n3. 不具合の再現手順（どの画面で、どの件名が、どう切れるか）を教える。\n\n教えてもらえれば、修正と検証の task を起票します。",
+      "state": "completed",
+      "created_at": "2026-11-06T09:28:19.160Z",
+      "run_id": "01M6R300YRYBRVQ62WM9J1JW7C",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6R300Z56RVJGASV627CPQ9J",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5",
+      "state": "completed",
+      "created_at": "2026-11-06T09:28:19.160Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6R2ZYVZHTW4MCYNHSKT8TQS": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_creation_tokens": 0
+  },
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 1202,
+    "cache_read_tokens": 98396,
+    "cache_creation_tokens": 16397
+  },
+  "usage_null_runs": 0,
+  "usage_missing_reason": null,
+  "cost_usd": 0.072712,
+  "cost_unknown_runs": 0,
+  "cos_operations": [],
+  "stub_log": [],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.607,
+  "wall_seconds": 26.936,
+  "ended_by": "no_task",
+  "trial_secs": 39.542,
+  "ops": [
+    {
+      "step": "seed_project",
+      "at": 1793957295.541,
+      "project": "01M6R2ZXDJ83Z2K87SHPN55PDK"
+    },
+    {
+      "step": "seed_tasks",
+      "at": 1793957295.541,
+      "ids": [],
+      "statuses": []
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793957297.035,
+      "thread": "01M6R2ZYVZHTW4MCYNHSKT8TQS",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793957299.049,
+      "pre_chat_runs": 0,
+      "pre_runs": 0,
+      "pre_tasks": 0
+    },
+    {
+      "step": "human_message",
+      "at": 1793957299.149,
+      "thread": "01M6R2ZYVZHTW4MCYNHSKT8TQS"
+    }
+  ]
+}

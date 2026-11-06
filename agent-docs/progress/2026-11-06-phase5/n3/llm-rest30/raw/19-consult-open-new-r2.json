@@ -1,0 +1,113 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "llm",
+  "seq": 19,
+  "case": "consult-open",
+  "kind": "consult",
+  "arm": "new",
+  "repeat": 2,
+  "rev": "4f41c2bfbe9fa5768379b5058d3921f2f949ab94",
+  "binary_sha256": "6d9e1c8b4cef9379a11ba108af5cdbf8c745f40be76f318dd58e94851e717464",
+  "skills_sha256": {
+    "config/skills/cos-operator": "aab69d2ef5a30af7c56075c3ee9bbfab7b5700fd3b392bac7203699ae3fb290d",
+    "config/skills/cos-inbox-triage": "e17d148121b43ad81534565ef9bcf841139d207395f05f7519ec92df4459e969"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "df24c1df4ec3751c3facf8039a6f4f54f24c32044ec3ba97df22d876b01fef34",
+    "crates/task-worker/src/preamble.rs": "22a118396990bb443c6b2de07d8fdbaf6bf1a1e5683b681fd71ceb3b29465b73",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "20c61936c8533eaee79bc54bd49150b58505fcd588426b7a56dd0d789d67c4ac"
+  },
+  "llm_config_sha256": "c4fbbc7e3a8bc501d1f89967e3450fb0a502acb603796a97dd9d3121df96690b",
+  "input": "クラスタのジョブ待ちが長い。何から調べればいい？",
+  "seed_task_ids": [],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6R255BD6VJF9562CQZN166R",
+      "seq": 1,
+      "role": "user",
+      "text": "クラスタのジョブ待ちが長い。何から調べればいい？",
+      "state": "completed",
+      "created_at": "2026-11-06T09:13:38.925Z",
+      "run_id": "01M6R255CCA24SJ5HFGT7FNN6K",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6R255CC7NFQPE6VQ987ATT1",
+      "seq": 2,
+      "role": "assistant",
+      "text": "まず、遅いのが「キュー待ち」か「実行」かを切り分けてください。クラスタ側の設定は未確認で、一般的な調べ方として書いています。\n\n**調べる順番**\n\n1. **待ちの内訳を測る。** ジョブごとに、投入から開始までの時間と、開始から終了までの時間を分けて見ます。前者が長ければキュー待ちで、後者が長ければ実行が遅いので、調べる先が変わります。いつから悪化したか、特定の日・時間帯・ユーザー・キューに偏っていないかも確認します。\n2. **pending の理由を見る。** Slurm なら `squeue -j <id> -o \"%i %T %r\"` と `scontrol show job <id>` です。PBS なら `qstat -f`、Kubernetes なら `kubectl describe pod` の Events を見ます。理由は主に次のどれかです。\n   - Resources: 空き待ち\n   - Priority: 他のジョブが優先されている\n   - QOS やアカウントの上限\n   - 依存関係\n   - パーティションやノードの制約\n3. **資源の空きを見る。** 全体の稼働率と、障害や drain で落ちているノード数を確認します(`sinfo -R` など)。ノードが減ると待ちが増えます。空きがあるのに走らないなら、要求した CPU・メモリ・GPU・ノード数に合うノードが無い可能性があります。\n4. **要求の大きさを見直す。** 時間制限・メモリ・GPU 数を実使用量より大きく要求すると、バックフィルに入れず待ちが長くなります。実使用量と比べて減らせないか確認します。\n5. **優先度の設定を見る。** fairshare、ユーザー別の上限、少数ユーザーによる占有を `sprio` と `sshare` で確認します。\n6. **無駄な投入を確認する。** 失敗ジョブの再投入や、大量の小さな配列ジョブがキューを圧迫していないか見ます。\n\n**教えてほしいこと**\n\n- スケジューラの種類(Slurm、PBS、Kubernetes など)\n- 待ちが長いジョブ 1 件の pending 理由(手順 2 の出力)\n\nこの 2 つがあれば原因をかなり絞れます。Celeris 自身のジョブ待ち(task や run が進まない)のことなら、どの task や run かを教えてください。そちらは私が状態を確認します。",
+      "state": "completed",
+      "created_at": "2026-11-06T09:13:38.956Z",
+      "run_id": "01M6R255CCA24SJ5HFGT7FNN6K",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6R255KJVBGPWZQVVTQA450R",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5",
+      "state": "completed",
+      "created_at": "2026-11-06T09:13:38.956Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6R253C84JHY9WZ8WRPQ9V04": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_creation_tokens": 0
+  },
+  "usage": {
+    "input_tokens": 4,
+    "output_tokens": 2131,
+    "cache_read_tokens": 30301,
+    "cache_creation_tokens": 16711
+  },
+  "usage_null_runs": 0,
+  "usage_missing_reason": null,
+  "cost_usd": 0.069156,
+  "cost_unknown_runs": 0,
+  "cos_operations": [],
+  "stub_log": [],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.517,
+  "wall_seconds": 20.848,
+  "ended_by": "reply",
+  "trial_secs": 29.891,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793956416.226,
+      "ids": [],
+      "statuses": []
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793956416.907,
+      "thread": "01M6R253C84JHY9WZ8WRPQ9V04",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793956418.923,
+      "pre_chat_runs": 0,
+      "pre_runs": 0,
+      "pre_tasks": 0
+    },
+    {
+      "step": "human_message",
+      "at": 1793956418.934,
+      "thread": "01M6R253C84JHY9WZ8WRPQ9V04"
+    }
+  ]
+}

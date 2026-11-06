@@ -1,0 +1,113 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "llm",
+  "seq": 17,
+  "case": "consult-priority",
+  "kind": "consult",
+  "arm": "new",
+  "repeat": 2,
+  "rev": "4f41c2bfbe9fa5768379b5058d3921f2f949ab94",
+  "binary_sha256": "6d9e1c8b4cef9379a11ba108af5cdbf8c745f40be76f318dd58e94851e717464",
+  "skills_sha256": {
+    "config/skills/cos-operator": "aab69d2ef5a30af7c56075c3ee9bbfab7b5700fd3b392bac7203699ae3fb290d",
+    "config/skills/cos-inbox-triage": "e17d148121b43ad81534565ef9bcf841139d207395f05f7519ec92df4459e969"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "df24c1df4ec3751c3facf8039a6f4f54f24c32044ec3ba97df22d876b01fef34",
+    "crates/task-worker/src/preamble.rs": "22a118396990bb443c6b2de07d8fdbaf6bf1a1e5683b681fd71ceb3b29465b73",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "20c61936c8533eaee79bc54bd49150b58505fcd588426b7a56dd0d789d67c4ac"
+  },
+  "llm_config_sha256": "c4fbbc7e3a8bc501d1f89967e3450fb0a502acb603796a97dd9d3121df96690b",
+  "input": "締切が明日の障害報告と、締切が来月の機能追加、先にどちらを進めるべき？",
+  "seed_task_ids": [],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6R23K8AJC7RRNF8M47JERBG",
+      "seq": 1,
+      "role": "user",
+      "text": "締切が明日の障害報告と、締切が来月の機能追加、先にどちらを進めるべき？",
+      "state": "completed",
+      "created_at": "2026-11-06T09:12:47.296Z",
+      "run_id": "01M6R23KBJHF1RH32VEV2DXE8Z",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6R23KBJ4PZD9DNWN14HFPW4",
+      "seq": 2,
+      "role": "assistant",
+      "text": "障害報告を先に進めてください。締切が明日で、遅れると影響が大きいためです。機能追加は締切まで約 1 か月あるので、報告の後でも間に合います。\n\n障害報告は、提出が遅れると信頼を損ないやすい作業です。範囲が限られているので短時間で終わることが多く、先に片付ければ機能追加の時間も確保できます。\n\n進め方は次のとおりです。\n1. 今日中に障害報告を出します。内容は影響範囲、原因、暫定対応、再発防止策です。原因が未確定なら「調査中」と書き、現時点で分かっている事実だけを出します。続報の予定日も添えてください。\n2. 提出したら機能追加に着手します。\n3. 障害対応で追加の調査や修正が出たら、機能追加の予定を組み直します。\n\n例外として、機能追加の締切が外部との契約やリリース日程で固定されている場合は、今日のうちに設計の確認や見積もりの見直しを少し進めてください。\n\n障害の重大度や機能追加の工数が分かれば、もっと具体的に答えられます。この回答は、その内容を知らない状態での一般論です。",
+      "state": "completed",
+      "created_at": "2026-11-06T09:12:47.730Z",
+      "run_id": "01M6R23KBJHF1RH32VEV2DXE8Z",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6R23KC1XZS6WTF78FSY68ED",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5",
+      "state": "completed",
+      "created_at": "2026-11-06T09:12:47.730Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6R23GYEGB95XXZZHMNK3H4C": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_creation_tokens": 0
+  },
+  "usage": {
+    "input_tokens": 4,
+    "output_tokens": 1327,
+    "cache_read_tokens": 30317,
+    "cache_creation_tokens": 16354
+  },
+  "usage_null_runs": 0,
+  "usage_missing_reason": null,
+  "cost_usd": 0.060226,
+  "cost_unknown_runs": 0,
+  "cos_operations": [],
+  "stub_log": [],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.846,
+  "wall_seconds": 16.604,
+  "ended_by": "reply",
+  "trial_secs": 26.511,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793956363.518,
+      "ids": [],
+      "statuses": []
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793956365.265,
+      "thread": "01M6R23GYEGB95XXZZHMNK3H4C",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793956367.295,
+      "pre_chat_runs": 0,
+      "pre_runs": 0,
+      "pre_tasks": 0
+    },
+    {
+      "step": "human_message",
+      "at": 1793956367.632,
+      "thread": "01M6R23GYEGB95XXZZHMNK3H4C"
+    }
+  ]
+}

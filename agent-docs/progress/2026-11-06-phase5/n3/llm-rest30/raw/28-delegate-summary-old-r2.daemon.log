@@ -1,0 +1,41 @@
+[2m2026-11-06T09:28:13.126745Z[0m [32m INFO[0m [2mceleris::daemon::run[0m[2m:[0m promotion gate: skipped (release `p4e-old` is not under releases_dir (unmanaged)) [3mrelease[0m[2m=[0mp4e-old
+[2m2026-11-06T09:28:13.286293Z[0m [32m INFO[0m [2mceleris::daemon::browser_ledger_path[0m[2m:[0m browser conformance ledger path [3mpath[0m[2m=[0m/local/celeris/data/scratch/p4e/browser/conformance.json [3mrelease[0m[2m=[0mSome("p4e-old")
+[2m2026-11-06T09:28:14.427986Z[0m [32m INFO[0m [2mtask_dispatch::dispatcher[0m[2m:[0m scratch pool enabled (ADR-0075) [3mdir[0m[2m=[0m/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t/scratch
+[2m2026-11-06T09:28:15.136832Z[0m [32m INFO[0m [2mtask_dispatch::dispatcher[0m[2m:[0m container runtime detected [3mruntime[0m[2m=[0m"podman" [3mpreference[0m[2m=[0mauto [3mimage_default[0m[2m=[0mceleris-worker:latest
+[2m2026-11-06T09:28:15.150067Z[0m [33m WARN[0m [2mceleris::daemon::bootstrap[0m[2m:[0m the daemon does not use the production DB/token; worker db guard not installed (ADR-0126) [3mdb[0m[2m=[0m/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t/celeris.sqlite3
+[2m2026-11-06T09:28:15.158157Z[0m [32m INFO[0m [2mceleris::daemon::bootstrap[0m[2m:[0m worker runs see the db directory read-only (ADR-0095) [3mdb[0m[2m=[0m/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t/celeris.sqlite3 [3mdir[0m[2m=[0m/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t
+[2m2026-11-06T09:28:15.158742Z[0m [32m INFO[0m [2mceleris::instance[0m[2m:[0m instance registered (ADR-0040 D4) [3minstance_id[0m[2m=[0m01M6R2ZV261GA7BZTYD1CGVQ6Y [3mrelease[0m[2m=[0mp4e-old [3mpid[0m[2m=[0m3159985 [3mrole[0m[2m=[0mactive
+[2m2026-11-06T09:28:15.189609Z[0m [32m INFO[0m [2mceleris::daemon::api[0m[2m:[0m api listening [3maddr[0m[2m=[0m127.0.0.1:54051 [3mauth_required[0m[2m=[0mtrue
+[2m2026-11-06T09:28:15.189837Z[0m [32m INFO[0m [2mtask_api[0m[2m:[0m celeris API listening [3maddr[0m[2m=[0m127.0.0.1:54051
+[2m2026-11-06T09:28:15.275454Z[0m [32m INFO[0m [2mceleris::daemon::tick_loop[0m[2m:[0m celeris started [3mdb[0m[2m=[0m/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t/celeris.sqlite3 [3mworkspace_root[0m[2m=[0m/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t/ws [3mmax_concurrency[0m[2m=[0m2 [3mtick_ms[0m[2m=[0m100 [3mrole[0m[2m=[0mactive
+[2m2026-11-06T09:28:15.277128Z[0m [32m INFO[0m [2mceleris::daemon::tick_loop[0m[2m:[0m jev: classification stage disabled
+[2m2026-11-06T09:28:15.278385Z[0m [33m WARN[0m [2mtask_dispatch::dispatcher::housekeeping[0m[2m:[0m scratch: 実効上限 70 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+[2m2026-11-06T09:28:15.544726Z[0m [32m INFO[0m [2mceleris::daemon::tick_loop[0m[2m:[0m SIGTERM; exiting
+[2m2026-11-06T09:28:15.545551Z[0m [32m INFO[0m [2mceleris::daemon::run[0m[2m:[0m shutdown: the runs in hand were stopped and recorded (Phase F5-fix6) [3mrecorded[0m[2m=[0m0
+[2m2026-11-06T09:28:15.548083Z[0m [32m INFO[0m [2mceleris::daemon::api[0m[2m:[0m api stopped
+[2m2026-11-06T09:28:15.548853Z[0m [32m INFO[0m [2mceleris::db_maintenance[0m[2m:[0m db maintenance task stopped [3mtask[0m[2m=[0m"chat_gc"
+[2m2026-11-06T09:28:15.548984Z[0m [32m INFO[0m [2mceleris::db_maintenance[0m[2m:[0m db maintenance task stopped [3mtask[0m[2m=[0m"checkpoint"
+[2m2026-11-06T09:28:15.549247Z[0m [32m INFO[0m [2mceleris::instance[0m[2m:[0m instance row removed [3minstance_id[0m[2m=[0m01M6R2ZV261GA7BZTYD1CGVQ6Y
+[2m2026-11-06T09:28:15.549419Z[0m [32m INFO[0m [2mceleris[0m[2m:[0m celeris stopped [3mexit[0m[2m=[0mSignal
+[2m2026-11-06T09:28:16.428764Z[0m [32m INFO[0m [2mceleris::daemon::run[0m[2m:[0m promotion gate: skipped (release `p4e-old` is not under releases_dir (unmanaged)) [3mrelease[0m[2m=[0mp4e-old
+[2m2026-11-06T09:28:16.445843Z[0m [32m INFO[0m [2mceleris::daemon::browser_ledger_path[0m[2m:[0m browser conformance ledger path [3mpath[0m[2m=[0m/local/celeris/data/scratch/p4e/browser/conformance.json [3mrelease[0m[2m=[0mSome("p4e-old")
+[2m2026-11-06T09:28:16.456680Z[0m [32m INFO[0m [2mtask_dispatch::dispatcher[0m[2m:[0m scratch pool enabled (ADR-0075) [3mdir[0m[2m=[0m/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t/scratch
+[2m2026-11-06T09:28:16.936090Z[0m [32m INFO[0m [2mtask_dispatch::dispatcher[0m[2m:[0m container runtime detected [3mruntime[0m[2m=[0m"podman" [3mpreference[0m[2m=[0mauto [3mimage_default[0m[2m=[0mceleris-worker:latest
+[2m2026-11-06T09:28:16.943463Z[0m [33m WARN[0m [2mceleris::daemon::bootstrap[0m[2m:[0m the daemon does not use the production DB/token; worker db guard not installed (ADR-0126) [3mdb[0m[2m=[0m/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t/celeris.sqlite3
+[2m2026-11-06T09:28:16.950791Z[0m [32m INFO[0m [2mceleris::daemon::bootstrap[0m[2m:[0m worker runs see the db directory read-only (ADR-0095) [3mdb[0m[2m=[0m/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t/celeris.sqlite3 [3mdir[0m[2m=[0m/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t
+[2m2026-11-06T09:28:16.965155Z[0m [32m INFO[0m [2mceleris::instance[0m[2m:[0m instance registered (ADR-0040 D4) [3minstance_id[0m[2m=[0m01M6R2ZY9CHR45HJX19JEAFF7V [3mrelease[0m[2m=[0mp4e-old [3mpid[0m[2m=[0m3161803 [3mrole[0m[2m=[0mactive
+[2m2026-11-06T09:28:17.002880Z[0m [32m INFO[0m [2mceleris::daemon::api[0m[2m:[0m api listening [3maddr[0m[2m=[0m127.0.0.1:54051 [3mauth_required[0m[2m=[0mtrue
+[2m2026-11-06T09:28:17.003084Z[0m [32m INFO[0m [2mtask_api[0m[2m:[0m celeris API listening [3maddr[0m[2m=[0m127.0.0.1:54051
+[2m2026-11-06T09:28:17.082790Z[0m [32m INFO[0m [2mceleris::daemon::tick_loop[0m[2m:[0m celeris started [3mdb[0m[2m=[0m/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t/celeris.sqlite3 [3mworkspace_root[0m[2m=[0m/local/celeris/data/scratch/p4e/state2/p4e-28-pi4izp_t/ws [3mmax_concurrency[0m[2m=[0m2 [3mtick_ms[0m[2m=[0m100 [3mrole[0m[2m=[0mactive
+[2m2026-11-06T09:28:17.085285Z[0m [32m INFO[0m [2mceleris::daemon::tick_loop[0m[2m:[0m jev: classification stage disabled
+[2m2026-11-06T09:28:17.094527Z[0m [33m WARN[0m [2mtask_dispatch::dispatcher::housekeeping[0m[2m:[0m scratch: 実効上限 71 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+[2m2026-11-06T09:28:17.496427Z[0m [32m INFO[0m [2mceleris::model_discovery[0m[2m:[0m model discovery: ok [3msource[0m[2m=[0mclaude-oauth [3mcount[0m[2m=[0m14 [3madded[0m[2m=[0m14 [3mremoved[0m[2m=[0m0 [3mrestored[0m[2m=[0m0
+[2m2026-11-06T09:28:19.551067Z[0m [33m WARN[0m [2mtask_dispatch::dispatcher::housekeeping[0m[2m:[0m scratch: 実効上限 72 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+[2m2026-11-06T09:28:22.386376Z[0m [33m WARN[0m [2mtask_dispatch::dispatcher::housekeeping[0m[2m:[0m scratch: 実効上限 73 GB（設定 200 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+[2m2026-11-06T09:28:49.997776Z[0m [32m INFO[0m [2mceleris::daemon::tick_loop[0m[2m:[0m SIGTERM; exiting
+[2m2026-11-06T09:28:49.998573Z[0m [32m INFO[0m [2mceleris::daemon::run[0m[2m:[0m shutdown: the runs in hand were stopped and recorded (Phase F5-fix6) [3mrecorded[0m[2m=[0m0
+[2m2026-11-06T09:28:50.000142Z[0m [32m INFO[0m [2mceleris::daemon::api[0m[2m:[0m api stopped
+[2m2026-11-06T09:28:50.001080Z[0m [32m INFO[0m [2mceleris::db_maintenance[0m[2m:[0m db maintenance task stopped [3mtask[0m[2m=[0m"chat_gc"
+[2m2026-11-06T09:28:50.001174Z[0m [32m INFO[0m [2mceleris::db_maintenance[0m[2m:[0m db maintenance task stopped [3mtask[0m[2m=[0m"checkpoint"
+[2m2026-11-06T09:28:50.001340Z[0m [32m INFO[0m [2mceleris::instance[0m[2m:[0m instance row removed [3minstance_id[0m[2m=[0m01M6R2ZY9CHR45HJX19JEAFF7V
+[2m2026-11-06T09:28:50.001533Z[0m [32m INFO[0m [2mceleris[0m[2m:[0m celeris stopped [3mexit[0m[2m=[0mSignal

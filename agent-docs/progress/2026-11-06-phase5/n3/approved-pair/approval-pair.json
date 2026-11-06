@@ -1,0 +1,12 @@
+{
+ "id": "p4e-pair-20261106-1",
+ "approved_by": "human:rmaeda",
+ "approved_at": "2026-11-05T22:56:19Z",
+ "expires_at": "2026-11-08T00:00:00Z",
+ "account": "claude_max_personal",
+ "model": "claude-sonnet-5-5",
+ "harness": "claude_code",
+ "scope": {"seqs": [7, 8]},
+ "limits": {"max_trials": 2, "max_wall_secs": 1200, "max_usd": 3},
+ "note": "P4-E の 1 対（read-three の旧新、seq 7・8）だけ。人（rmaeda）が 2026-11-05 22:56Z ごろ operator の質問に「先に 1 対だけ」と答えた承認（全体の枠: 32 試行・2 時間・20 USD 相当、claude_max_personal・claude-sonnet-5-5・claude_code）を、operator（claude-code-ops-session）が N3 の雛形の形に書き直した。上限 2 試行・1,200 秒・3 USD はその枠の内。残り 30 試行は別の id の承認で流す。"
+}

@@ -349,7 +349,7 @@ pub enum OutcomeRecord {
 
 /// 第 3 フェーズ I2・I3・I11: `mark_milestone` の効果。根拠の root を今の store から確かめ直す（人の
 /// `POST …/roadmap/outcomes/{oid}/status` と同じ `check_status`）。approved の Roadmap があれば、書き込みの tx で
-/// 効果の門を読み、Outcome の最後の状態が既に `reached` なら書かず、そうでなければ `record_status_tx` で書く
+/// 効果の門を読み、`record_status_tx` で新しい根拠を追記する。同じ版・同じ根拠は重複させない
 /// （`reason` は判断の id で、再起動の後に [`outcome_in_place`] が読む）。
 pub fn record_outcome(
     store: &SqliteStore,
@@ -384,11 +384,6 @@ pub fn record_outcome(
     match store.write_tx::<_, task_core::store::RoadmapWriteError, _>(|tx| {
         if !SqliteStore::roadmap_effect_gate_open_tx(tx, &d.project_id, d.human_epoch)? {
             return Ok(OutcomeRecord::GateClosed);
-        }
-        if let Some((task_core::roadmap::OutcomeStatus::Reached, reason)) =
-            SqliteStore::roadmap_last_status_tx(tx, &d.project_id, outcome_id)?
-        {
-            return Ok(OutcomeRecord::Recorded(format!("roadmap:already:{reason}")));
         }
         // 検査に落ちれば Err で tx ごと戻す（root の対応だけが残ることもない）。
         let id = task_ops::roadmap::record_status_tx(

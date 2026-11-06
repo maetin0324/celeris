@@ -572,6 +572,7 @@ fn build_questions(
     store: &dyn TaskStore,
     all_tasks: &[Task],
     focus: Option<&HashSet<TaskId>>,
+    blocked_attention: &mut read::BlockedAttention,
 ) -> Result<Vec<QuestionItem>, OpsError> {
     // A phase integration request has its own inbox item. Its blocked integration WU must not
     // also appear as a generic question, even though the task uses the blocked status.
@@ -613,14 +614,24 @@ fn build_questions(
         .map(|w| w.task_id)
         .collect();
     let mut items = Vec::new();
-    for t in all_tasks.iter().filter(|t| {
-        t.status == Status::Blocked
-            && in_focus(focus, t)
-            && !browser_waiting.contains(&t.id)
-            && !cluster_waiting.contains(&t.id)
-    }) {
+    for t in all_tasks
+        .iter()
+        .filter(|t| t.status == Status::Blocked && in_focus(focus, t))
+    {
         let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
         let events = view::seq_pairs(&rows);
+        if let Some(item) = phase_checkpoint_item(store, t, &rows, &events)? {
+            blocked_attention.phases.push(item);
+        }
+        if let Some(item) = browser_prerequisite_item(t, &rows, &events) {
+            blocked_attention.prerequisites.push(item);
+        }
+        if let Some(item) = plan_approval_item(store, t, &rows, &events)? {
+            blocked_attention.plans.push(item);
+        }
+        if browser_waiting.contains(&t.id) || cluster_waiting.contains(&t.id) {
+            continue;
+        }
         // ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認は質問ではない（attention に出す）。
         // ADR-0079 D8（Phase R3b）: root の計画の承認待ちも同じ（attention の `plan_approval`）。
         if crate::plan_gate::is_human_gate(t, &events) {
@@ -1073,6 +1084,7 @@ fn plan_approval_item(
 }
 
 /// (a) 24h 以内に `failed`、(b) `ready` で連続 requeue が上限近く、(c) スナップショットの `unroutable`。
+#[allow(clippy::too_many_arguments)]
 fn build_attention(
     store: &dyn TaskStore,
     all_tasks: &[Task],
@@ -1081,6 +1093,7 @@ fn build_attention(
     ctx: &ViewContext,
     now: OffsetDateTime,
     focus: Option<&HashSet<TaskId>>,
+    blocked_attention: read::BlockedAttention,
 ) -> Result<Vec<AttentionItem>, OpsError> {
     let mut items = Vec::new();
     let cutoff = now - time::Duration::hours(24);
@@ -1137,30 +1150,10 @@ fn build_attention(
         });
     }
 
-    // blocked の task の 3 種（途中確認・browser の前提・計画の承認）は、task ごとに event を 1 回だけ読んで判定する
-    // （P4-C: 以前は種類ごとに読み直し、blocked の数の 3 倍読んでいた）。並びは以前と同じ（種類ごとの列を順に足す）。
-    let mut phase_items = Vec::new();
-    let mut prerequisite_items = Vec::new();
-    let mut plan_items = Vec::new();
-    for t in all_tasks
-        .iter()
-        .filter(|t| t.status == Status::Blocked && in_focus(focus, t))
-    {
-        let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
-        let events = view::seq_pairs(&rows);
-        if let Some(item) = phase_checkpoint_item(store, t, &rows, &events)? {
-            phase_items.push(item);
-        }
-        if let Some(item) = browser_prerequisite_item(t, &rows, &events) {
-            prerequisite_items.push(item);
-        }
-        if let Some(item) = plan_approval_item(store, t, &rows, &events)? {
-            plan_items.push(item);
-        }
-    }
-    items.extend(phase_items);
-    items.extend(prerequisite_items);
-    items.extend(plan_items);
+    // Questions and gates were derived together, one Task's event history at a time.
+    items.extend(blocked_attention.phases);
+    items.extend(blocked_attention.prerequisites);
+    items.extend(blocked_attention.plans);
 
     // ADR-0121 D3: 完了した root で取り込みを見送ったもの。期限は設けない（成果が main に入っていない）。
     let latest_skipped = store.latest_delivery_skipped_rows()?;
@@ -1415,105 +1408,12 @@ pub fn inbox(
     now: OffsetDateTime,
     evidence: &dyn Fn(&Task, &str) -> Vec<EvidenceView>,
 ) -> Result<Inbox, OpsError> {
-    inbox_parts(store, snapshot, ctx, now, evidence, None).map(|(inbox, _)| inbox)
+    InboxTaskSnapshot::read(store)?.parts(snapshot, ctx, now, evidence, None)
 }
 
-/// [`inbox`] の本体。task の一覧（`by_id`）も返す（`human_inbox` が読み直さない）。`touching` があれば、
-/// task ごとの走査をその task に触れる項目の分だけにする（[`focus_of`]。範囲外の項目は欠けたり違ったりする）。
-pub(crate) fn inbox_parts(
-    store: &dyn TaskStore,
-    snapshot: Option<&DaemonSnapshot>,
-    ctx: &ViewContext,
-    now: OffsetDateTime,
-    evidence: &dyn Fn(&Task, &str) -> Vec<EvidenceView>,
-    touching: Option<&BTreeSet<TaskId>>,
-) -> Result<(Inbox, HashMap<TaskId, Task>), OpsError> {
-    let all_tasks = store.list(None)?;
-    let by_id: HashMap<TaskId, Task> = all_tasks.iter().map(|t| (t.id, t.clone())).collect();
-    let focus = touching.map(|t| focus_of(&all_tasks, t));
-    let focus = focus.as_ref();
-
-    let approvals = build_approvals(store, &all_tasks, &by_id, evidence)?;
-    let questions = build_questions(store, &all_tasks, focus)?;
-    let drafts = build_drafts(store, &all_tasks, &by_id, ctx, now)?;
-    let mut suppressed = BTreeMap::new();
-    let attention = build_attention(store, &all_tasks, &by_id, snapshot, ctx, now, focus)?
-        .into_iter()
-        .filter(|item| {
-            let rule = attention_task(item)
-                .and_then(|id| by_id.get(&id))
-                .and_then(|task| attention_suppression(task, &by_id));
-            if let Some(rule) = rule {
-                *suppressed.entry(rule.key().to_string()).or_insert(0) += 1;
-                false
-            } else {
-                true
-            }
-        })
-        .collect::<Vec<_>>();
-    let browser_waits = crate::browser::pending_items(store, &by_id)?;
-
-    let by_status = store
-        .count_by_status()?
-        .into_iter()
-        .map(|(s, n)| (view::status_key(s).to_string(), n))
-        .collect();
-
-    // ADR-0079 D7（Phase R3a）: 未回答の決定の要求（決定を出した節点が終端でないもの。古い順）。
-    let decisions = crate::decision::inbox_items(store, now)?;
-
-    // ADR 2026-10-07-build-tmp-hygiene D4.3: `critical` に下がるまでの間だけ受信箱に出る（派生）。
-    let disk_full = store
-        .disk_watch_states()?
-        .into_iter()
-        .filter(|s| s.level == task_core::DiskLevel::Critical)
-        .collect();
-
-    // 1 回の短い読み（`credential_waits` は開いている行だけの小さな表。events は走査しない）。
-    let credential_waits = store
-        .credential_waits_list_waiting()?
-        .into_iter()
-        .filter(|w| {
-            matches!(
-                w.state,
-                task_core::CredentialWaitState::Waiting | task_core::CredentialWaitState::Rejected
-            )
-        })
-        .collect();
-
-    // 付記 S5-7: 開いている行だけの小さな表（daemon の script-guard が event から作る）。
-    let script_control = store.script_inbox_open()?;
-
-    let counts = InboxCounts {
-        approvals: approvals.len() as u32,
-        questions: questions.len() as u32,
-        // グループ数ではなく draft タスクの件数（バッジ表示用。Phase 9 監査）。
-        drafts: drafts.iter().map(|g| g.drafts.len() as u32).sum(),
-        attention: attention.len() as u32,
-        browser_waits: browser_waits.len() as u32,
-        decisions: decisions.len() as u32,
-        by_status,
-    };
-
-    Ok((
-        Inbox {
-            approvals,
-            questions,
-            drafts,
-            attention,
-            suppressed,
-            browser_waits,
-            decisions,
-            counts,
-            disk_full,
-            credential_waits,
-            script_control,
-            stagnation: snapshot.map(|s| s.stagnation.clone()).unwrap_or_default(),
-            stagnation_policy: snapshot.and_then(|s| s.stagnation_policy),
-        },
-        by_id,
-    ))
-}
+mod read;
+pub use read::InboxTaskSnapshot;
+pub(crate) use read::question_for_task;
 
 #[cfg(test)]
 mod tests;

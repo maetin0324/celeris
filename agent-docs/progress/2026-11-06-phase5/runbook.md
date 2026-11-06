@@ -66,6 +66,7 @@ acceptance）は変えない。この file は、その条件を数値の合否�
    `/local/celeris/data/scratch/p4e/approval.json`（2026-11-05T22:56:19Z、`max_tokens` 1,000,000 を含む、期限の欄なし）は
    そのままでは使えない。人が USD だけの上限（`max_trials`・`max_wall_secs`・`max_usd`）と期限で書き直すまで「承認待ち」。
    N3 の task の objective にある「100 万 token（cache 込み）」の上限は、今の道具では強制できないので、記録だけにする。
+   N3 で承認に `id`・`expires_at`・`scope.seqs` を必須にした（[n3.md](n3.md)）。旧腕の config は `compare.py config-check` で LLM なしに確かめる。
 3. 承認があるときだけ operator が `compare.py run --tier llm --only 7,8 --approval <file> …` で 1 対を流す。
 
 | 合否の項目 | 合格の数値 |

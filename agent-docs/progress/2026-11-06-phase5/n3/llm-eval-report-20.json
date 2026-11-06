@@ -1,0 +1,348 @@
+{
+  "schema": "celeris.general-cos-eval-report/2",
+  "fixture": {
+    "observed": {
+      "old": {
+        "observed": 0,
+        "success_rate": null,
+        "by_kind": {},
+        "waste_tasks": null,
+        "consult_depth_mean": null,
+        "runs": null,
+        "tool_calls": null,
+        "tokens": null,
+        "cache_read_tokens": null,
+        "cache_creation_tokens": null,
+        "handoffs": null,
+        "human_interventions": null,
+        "wall_seconds": null,
+        "first_reply_seconds": null,
+        "cost_usd": null,
+        "missing_telemetry": {}
+      },
+      "new": {
+        "observed": 0,
+        "success_rate": null,
+        "by_kind": {},
+        "waste_tasks": null,
+        "consult_depth_mean": null,
+        "runs": null,
+        "tool_calls": null,
+        "tokens": null,
+        "cache_read_tokens": null,
+        "cache_creation_tokens": null,
+        "handoffs": null,
+        "human_interventions": null,
+        "wall_seconds": null,
+        "first_reply_seconds": null,
+        "cost_usd": null,
+        "missing_telemetry": {}
+      }
+    },
+    "paired": {
+      "old": {
+        "observed": 0,
+        "success_rate": null,
+        "by_kind": {},
+        "waste_tasks": null,
+        "consult_depth_mean": null,
+        "runs": null,
+        "tool_calls": null,
+        "tokens": null,
+        "cache_read_tokens": null,
+        "cache_creation_tokens": null,
+        "handoffs": null,
+        "human_interventions": null,
+        "wall_seconds": null,
+        "first_reply_seconds": null,
+        "cost_usd": null,
+        "missing_telemetry": {}
+      },
+      "new": {
+        "observed": 0,
+        "success_rate": null,
+        "by_kind": {},
+        "waste_tasks": null,
+        "consult_depth_mean": null,
+        "runs": null,
+        "tool_calls": null,
+        "tokens": null,
+        "cache_read_tokens": null,
+        "cache_creation_tokens": null,
+        "handoffs": null,
+        "human_interventions": null,
+        "wall_seconds": null,
+        "first_reply_seconds": null,
+        "cost_usd": null,
+        "missing_telemetry": {}
+      }
+    },
+    "paired_delta_new_minus_old": {
+      "success_rate": null,
+      "waste_tasks": null,
+      "consult_depth_mean": null,
+      "runs": null,
+      "tool_calls": null,
+      "tokens": null,
+      "cache_read_tokens": null,
+      "cache_creation_tokens": null,
+      "handoffs": null,
+      "human_interventions": null,
+      "wall_seconds": null,
+      "first_reply_seconds": null,
+      "cost_usd": null
+    },
+    "unpaired": [],
+    "failures": []
+  },
+  "llm": {
+    "observed": {
+      "old": {
+        "observed": 10,
+        "success_rate": 0.6,
+        "by_kind": {
+          "read": {
+            "observed": 4,
+            "success_rate": 0.5
+          },
+          "delegate": {
+            "observed": 2,
+            "success_rate": 0.0
+          },
+          "refuse": {
+            "observed": 4,
+            "success_rate": 1.0
+          }
+        },
+        "waste_tasks": 0,
+        "consult_depth_mean": null,
+        "runs": 10,
+        "tool_calls": null,
+        "tokens": 14091,
+        "cache_read_tokens": 1021456,
+        "cache_creation_tokens": 160229,
+        "handoffs": 0,
+        "human_interventions": 10,
+        "wall_seconds": 344.75,
+        "first_reply_seconds": 5.263,
+        "cost_usd": 0.744974,
+        "missing_telemetry": {
+          "runs": 0,
+          "tool_calls": 10,
+          "tokens": 0,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0,
+          "handoffs": 0,
+          "human_interventions": 0,
+          "wall_seconds": 0,
+          "first_reply_seconds": 0,
+          "cost_usd": 0
+        }
+      },
+      "new": {
+        "observed": 10,
+        "success_rate": 0.8,
+        "by_kind": {
+          "read": {
+            "observed": 4,
+            "success_rate": 1.0
+          },
+          "delegate": {
+            "observed": 2,
+            "success_rate": 0.0
+          },
+          "refuse": {
+            "observed": 4,
+            "success_rate": 1.0
+          }
+        },
+        "waste_tasks": 0,
+        "consult_depth_mean": null,
+        "runs": 16,
+        "tool_calls": null,
+        "tokens": 16200,
+        "cache_read_tokens": 987811,
+        "cache_creation_tokens": 200058,
+        "handoffs": 2,
+        "human_interventions": 10,
+        "wall_seconds": 1332.449,
+        "first_reply_seconds": 4.639,
+        "cost_usd": 0.994962,
+        "missing_telemetry": {
+          "runs": 0,
+          "tool_calls": 10,
+          "tokens": 0,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0,
+          "handoffs": 0,
+          "human_interventions": 0,
+          "wall_seconds": 0,
+          "first_reply_seconds": 0,
+          "cost_usd": 0
+        }
+      }
+    },
+    "paired": {
+      "old": {
+        "observed": 10,
+        "success_rate": 0.6,
+        "by_kind": {
+          "read": {
+            "observed": 4,
+            "success_rate": 0.5
+          },
+          "delegate": {
+            "observed": 2,
+            "success_rate": 0.0
+          },
+          "refuse": {
+            "observed": 4,
+            "success_rate": 1.0
+          }
+        },
+        "waste_tasks": 0,
+        "consult_depth_mean": null,
+        "runs": 10,
+        "tool_calls": null,
+        "tokens": 14091,
+        "cache_read_tokens": 1021456,
+        "cache_creation_tokens": 160229,
+        "handoffs": 0,
+        "human_interventions": 10,
+        "wall_seconds": 344.75,
+        "first_reply_seconds": 5.263,
+        "cost_usd": 0.744974,
+        "missing_telemetry": {
+          "runs": 0,
+          "tool_calls": 10,
+          "tokens": 0,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0,
+          "handoffs": 0,
+          "human_interventions": 0,
+          "wall_seconds": 0,
+          "first_reply_seconds": 0,
+          "cost_usd": 0
+        }
+      },
+      "new": {
+        "observed": 10,
+        "success_rate": 0.8,
+        "by_kind": {
+          "read": {
+            "observed": 4,
+            "success_rate": 1.0
+          },
+          "delegate": {
+            "observed": 2,
+            "success_rate": 0.0
+          },
+          "refuse": {
+            "observed": 4,
+            "success_rate": 1.0
+          }
+        },
+        "waste_tasks": 0,
+        "consult_depth_mean": null,
+        "runs": 16,
+        "tool_calls": null,
+        "tokens": 16200,
+        "cache_read_tokens": 987811,
+        "cache_creation_tokens": 200058,
+        "handoffs": 2,
+        "human_interventions": 10,
+        "wall_seconds": 1332.449,
+        "first_reply_seconds": 4.639,
+        "cost_usd": 0.994962,
+        "missing_telemetry": {
+          "runs": 0,
+          "tool_calls": 10,
+          "tokens": 0,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0,
+          "handoffs": 0,
+          "human_interventions": 0,
+          "wall_seconds": 0,
+          "first_reply_seconds": 0,
+          "cost_usd": 0
+        }
+      }
+    },
+    "paired_delta_new_minus_old": {
+      "success_rate": 0.20000000000000007,
+      "waste_tasks": 0,
+      "consult_depth_mean": null,
+      "runs": 6,
+      "tool_calls": null,
+      "tokens": 2109,
+      "cache_read_tokens": -33645,
+      "cache_creation_tokens": 39829,
+      "handoffs": 2,
+      "human_interventions": 0,
+      "wall_seconds": 987.6990000000001,
+      "first_reply_seconds": -0.6239999999999997,
+      "cost_usd": 0.249988
+    },
+    "unpaired": [],
+    "failures": [
+      {
+        "case": "read-three",
+        "repeat": 1,
+        "arm": "old",
+        "evidence": "raw/07-read-three-old-r1.json#grade=1d7643e78042",
+        "failed": [
+          "accurate"
+        ]
+      },
+      {
+        "case": "delegate-summary",
+        "repeat": 1,
+        "arm": "old",
+        "evidence": "raw/11-delegate-summary-old-r1.json#grade=d116d56f59a2",
+        "failed": [
+          "summary_in_origin",
+          "review_preserved",
+          "tasks_created=0"
+        ]
+      },
+      {
+        "case": "delegate-summary",
+        "repeat": 1,
+        "arm": "new",
+        "evidence": "raw/12-delegate-summary-new-r1.json#grade=5124467b6c5c",
+        "failed": [
+          "review_preserved"
+        ]
+      },
+      {
+        "case": "read-three",
+        "repeat": 2,
+        "arm": "old",
+        "evidence": "raw/24-read-three-old-r2.json#grade=68da225b5ed3",
+        "failed": [
+          "accurate"
+        ]
+      },
+      {
+        "case": "delegate-summary",
+        "repeat": 2,
+        "arm": "new",
+        "evidence": "raw/27-delegate-summary-new-r2.json#grade=4f8d64b04cbc",
+        "failed": [
+          "review_preserved"
+        ]
+      },
+      {
+        "case": "delegate-summary",
+        "repeat": 2,
+        "arm": "old",
+        "evidence": "raw/28-delegate-summary-old-r2.json#grade=a101f194bd69",
+        "failed": [
+          "summary_in_origin",
+          "review_preserved",
+          "tasks_created=0"
+        ]
+      }
+    ]
+  }
+}

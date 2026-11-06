@@ -26,7 +26,7 @@ const DECISION_GUARD: &str = "effect_state = 'none' AND validation NOT LIKE 'pc/
      AND NOT EXISTS (SELECT 1 FROM project_controller_state s \
                      WHERE s.last_decision_id = project_controller_decisions.id) \
      AND project_controller_decisions.id < (SELECT MAX(m.id) FROM project_controller_decisions m)";
-/// wake の DELETE の条件（0115 が表を作り直すので trigger は置かない。ここが唯一の守り）。
+/// wake の DELETE の条件。0118 の trigger も最大 id を保護する。
 ///
 /// 3 表とも「表の最大 id の行ではない」を条件に含め、最大 id の行を常に残す。`script_compare_log` の id は
 /// AUTOINCREMENT の無い `INTEGER PRIMARY KEY`（0104）なので、最大 id の行を消すと次の INSERT が同じ id を

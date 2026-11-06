@@ -1,0 +1,37 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "1209fabeecf3",
+  "case": "consult-no-question",
+  "kind": "consult",
+  "input": "予算は今月まで、追加購入は不可。まず既存ノードの利用率を見る案でよい？",
+  "expected": "task 0。制約を踏まえた分析と具体案。同じ予算を聞き直すだけは不合格。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "予算は今月まで、追加購入は不可。まず既存ノードの利用率を見る案でよい？"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "結論: 既存ノードの利用率を先に見る案でよいです。追加購入ができない以上、先にやることとして妥当です。ただしこの thread には案の前提が書かれていないので、案の中身まで確認したわけではありません。\n\n- **見る指標:** CPU、メモリ、GPU(あれば)、ディスクの、ピーク値と平均値を最低 1〜2 週間分。平均だけだと、ピーク時の不足を見逃します。\n- **判断の分け方:** 余裕のあるノードがあれば、負荷の移し替えや配置の見直しで足ります。全ノードが高利用率なら、今月中の購入ができないので、優先度の低い負荷を止める、または期限を延ばす判断が要ります。\n- **今月末までの順序:** 購入の選択肢が消えるので、計測は早めに始め、結果が出た時点で次の手を決めるのがよいです。\n\n次の 3 点を教えてください。\n1. 対象のノードは何か(どのクラスタか、台数)。\n2. 利用率を見たあとに決めたいことは何か(増設の要否、負荷の移し替え、契約の見直しなど)。\n3. 利用率のデータはどこで取れるか(監視ツールの有無)。\n\n答えをもらえれば、確認項目と判断基準を表にして出します。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [],
+  "cos_operations": [],
+  "grade": {
+    "grader": null,
+    "authority_preserved": null,
+    "analysis": null,
+    "proposal": null,
+    "followup_appropriate": null,
+    "consult_depth": null,
+    "notes": null
+  }
+}

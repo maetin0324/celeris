@@ -1,0 +1,113 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "llm",
+  "seq": 26,
+  "case": "read-empty",
+  "kind": "read",
+  "arm": "old",
+  "repeat": 2,
+  "rev": "286a7ab199b27fe2524c07d5eb501abd5be567fa",
+  "binary_sha256": "e2b1e780200842c77426735f4387045c5ec57a08f59ea1f00eeff076c24a7ef4",
+  "skills_sha256": {
+    "config/skills/cos-operator": "d45913d29dc2510d7698eb40a628754d097d1020e2fb77a928b54089f20bfefa",
+    "config/skills/cos-inbox-triage": "73b317ffcad542bd3ec41c502e0ac9a50faa86ff5d77254c69e92b14204a66f2"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "bb7e55371490c29f7c6a5351486e65bbd81d28c83dcc0d0f0b2e10b5c4721f20",
+    "crates/task-worker/src/preamble.rs": "9d90308a438a4aacbd4e992d1d3131db4468aa1501d8742934324a0a0dc8be27",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "05213c1de1873dbb19c5b56e786813d86b5bbb716bf4e043e1e404d672ea4641"
+  },
+  "llm_config_sha256": "c4fbbc7e3a8bc501d1f89967e3450fb0a502acb603796a97dd9d3121df96690b",
+  "input": "直近の失敗 task を数えて",
+  "seed_task_ids": [],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6R2CJVBDX4R6YKEPQSDYH5N",
+      "seq": 1,
+      "role": "user",
+      "text": "直近の失敗 task を数えて",
+      "state": "completed",
+      "created_at": "2026-11-06T09:17:42.123Z",
+      "run_id": "01M6R2CJXHEG9D03KA3ZFDJQYX",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6R2CJXJBM1R1WQRHW200R0S",
+      "seq": 2,
+      "role": "assistant",
+      "text": "失敗した task は 0 件です。\n\ntasks API に `status=failed` で問い合わせると、`total` が 0 で `items` は空でした。絞り込みなしでも `total` は 0 で、`counts_by_status` も空でした。つまり、この環境から見える task はそもそも 1 件もありません。\n\n`celerisctl ls` は SQLite を直接開く作りで、この thread には DB が無いため使えませんでした。数えたのは API の結果だけです。\n\n別の project や期間を指定して数えたい場合は、条件を教えてください。",
+      "state": "completed",
+      "created_at": "2026-11-06T09:17:42.193Z",
+      "run_id": "01M6R2CJXHEG9D03KA3ZFDJQYX",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6R2CJY1P1JZF8G635VYP282",
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5",
+      "state": "completed",
+      "created_at": "2026-11-06T09:17:42.193Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6R2CGWDMAGRKVPZV4HG5FFB": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_creation_tokens": 0
+  },
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 1021,
+    "cache_read_tokens": 125617,
+    "cache_creation_tokens": 17642
+  },
+  "usage_null_runs": 0,
+  "usage_missing_reason": null,
+  "cost_usd": 0.079462,
+  "cost_unknown_runs": 0,
+  "cos_operations": [],
+  "stub_log": [],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.511,
+  "wall_seconds": 14.181,
+  "ended_by": "reply",
+  "trial_secs": 24.433,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793956659.422,
+      "ids": [],
+      "statuses": []
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793956660.111,
+      "thread": "01M6R2CGWDMAGRKVPZV4HG5FFB",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793956662.121,
+      "pre_chat_runs": 0,
+      "pre_runs": 0,
+      "pre_tasks": 0
+    },
+    {
+      "step": "human_message",
+      "at": 1793956662.126,
+      "thread": "01M6R2CGWDMAGRKVPZV4HG5FFB"
+    }
+  ]
+}

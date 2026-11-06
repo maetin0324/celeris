@@ -1355,6 +1355,7 @@ fn delivery_skip_no_commits_is_not_attention() {
             &view_ctx(),
             OffsetDateTime::now_utc(),
             None,
+            read::BlockedAttention::default(),
         )
         .expect("attention")
         .into_iter()
@@ -1891,6 +1892,7 @@ fn delivery_skip_attention_names_waiting_dependents() {
         &view_ctx(),
         OffsetDateTime::now_utc(),
         None,
+        read::BlockedAttention::default(),
     )
     .expect("attention")
     .into_iter()
@@ -2027,11 +2029,30 @@ fn human_inbox_touching_equals_full_inbox_filtered_by_touched_tasks() {
     .iter()
     .map(|t| t.id)
     .collect();
+    for id in &all {
+        let point =
+            crate::human_inbox::question_for_task(&store, *id, now).expect("point question");
+        let expected = full
+            .items
+            .iter()
+            .find(|item| {
+                item.kind == crate::human_inbox::InboxKind::Question
+                    && item.task.as_ref().is_some_and(|task| task.id == *id)
+            })
+            .cloned();
+        assert_eq!(point, expected, "point question {id}");
+    }
+    assert!(
+        crate::human_inbox::question_for_task(&store, TaskId::new(), now)
+            .expect("missing")
+            .is_none()
+    );
     let mut sets: Vec<Vec<TaskId>> = all.iter().map(|id| vec![*id]).collect();
     sets.push(Vec::new());
     sets.push(all.clone());
     sets.push(vec![child.id, lone.id]);
     sets.push(vec![TaskId::new()]);
+    let snapshot = crate::inbox::InboxTaskSnapshot::read(&store).expect("snapshot");
     for set in sets {
         let touching: BTreeSet<TaskId> = set.into_iter().collect();
         let scoped = crate::human_inbox::human_inbox_touching(
@@ -2049,6 +2070,10 @@ fn human_inbox_touching_equals_full_inbox_filtered_by_touched_tasks() {
             .filter(|i| i.task_ids().any(|id| touching.contains(&id)))
             .cloned()
             .collect();
+        let cached = snapshot
+            .human_inbox_touching(None, &ctx, now, &no_evidence, &touching)
+            .expect("shared snapshot inbox");
+        assert_eq!(cached.items, expected, "snapshot touching {touching:?}");
         assert_eq!(scoped.items, expected, "touching {touching:?}");
         assert_eq!(scoped.counts.total as usize, expected.len());
     }
@@ -2065,4 +2090,129 @@ fn human_inbox_touching_equals_full_inbox_filtered_by_touched_tasks() {
         "{:?}",
         scoped.items.iter().map(|i| &i.id).collect::<Vec<_>>()
     );
+}
+
+/// N4: adding unrelated blocked roots costs one event read each, shared by questions and gates.
+#[test]
+fn inbox_blocked_events_are_read_once_per_build() {
+    let reads = |n| {
+        let store = SqliteStore::open_in_memory().expect("store");
+        for _ in 0..n {
+            let task = sample_task(TaskKind::Execute, Status::Blocked);
+            store.insert(&task).expect("insert");
+            ask(&store, &task, "waiting");
+        }
+        let before = store.lock_counts();
+        let result = inbox(
+            &store,
+            None,
+            &view_ctx(),
+            OffsetDateTime::now_utc(),
+            &no_evidence,
+        )
+        .expect("inbox");
+        assert_eq!(result.questions.len(), n);
+        store.lock_counts().since(before).reader
+    };
+    assert_eq!(reads(11) - reads(1), 10);
+}
+
+/// A shared Task list saves a read on each subsequent page and is discarded before a new pass.
+#[test]
+fn inbox_task_snapshot_is_pass_scoped() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let task = sample_task(TaskKind::Execute, Status::Blocked);
+    store.insert(&task).expect("insert");
+    ask(&store, &task, "waiting");
+    let ctx = view_ctx();
+    let now = OffsetDateTime::now_utc();
+    let touching = [task.id].into_iter().collect();
+    let snapshot = InboxTaskSnapshot::read(&store).expect("snapshot");
+    let before = store.lock_counts();
+    let shared = snapshot
+        .human_inbox_touching(None, &ctx, now, &no_evidence, &touching)
+        .expect("shared");
+    let shared_reads = store.lock_counts().since(before).reader;
+    let before = store.lock_counts();
+    let fresh =
+        crate::human_inbox::human_inbox_touching(&store, None, &ctx, now, &no_evidence, &touching)
+            .expect("fresh");
+    assert_eq!(store.lock_counts().since(before).reader, shared_reads + 1);
+    assert_eq!(shared, fresh);
+    drop(snapshot);
+    let next = sample_task(TaskKind::Execute, Status::Blocked);
+    store.insert(&next).expect("new root");
+    ask(&store, &next, "next pass");
+    let next_snapshot = InboxTaskSnapshot::read(&store).expect("next snapshot");
+    let items = next_snapshot
+        .human_inbox(None, &ctx, now, &no_evidence)
+        .expect("next inbox");
+    assert_eq!(
+        items
+            .items
+            .iter()
+            .filter(|i| i.kind == crate::human_inbox::InboxKind::Question)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn point_question_disappears_after_answer_and_defers_authorization() {
+    use task_core::approval::{Approval, ApprovalId, ApprovalStore};
+    let store = SqliteStore::open_in_memory().expect("store");
+    let task = sample_task(TaskKind::Execute, Status::Blocked);
+    store.insert(&task).expect("insert");
+    ask(&store, &task, "waiting");
+    let now = OffsetDateTime::now_utc();
+    let point = |id| crate::human_inbox::question_for_task(&store, id, now).expect("question");
+    assert!(point(task.id).is_some());
+    crate::gate::answer(&store, task.id, "answer".into(), "human:test", None).expect("answer");
+    assert!(point(task.id).is_none());
+    let authorization = sample_task(TaskKind::Execute, Status::Blocked);
+    store.insert(&authorization).expect("insert authorization");
+    ask(&store, &authorization, "permission");
+    store
+        .approval_append(&Approval {
+            id: ApprovalId::new(),
+            project_id: None,
+            node_id: "cluster-hpc".into(),
+            task_id: Some(authorization.id),
+            question: "permission".into(),
+            decision: None,
+            answer: None,
+            created_at: now,
+            decided_at: None,
+        })
+        .expect("approval");
+    assert!(point(authorization.id).is_none());
+    let full = crate::human_inbox::human_inbox(&store, None, &view_ctx(), now, &no_evidence)
+        .expect("full");
+    assert!(
+        full.items
+            .iter()
+            .any(|i| i.kind == crate::human_inbox::InboxKind::Authorization)
+    );
+}
+
+#[test]
+fn point_question_reads_do_not_scale_with_unrelated_blocked_roots() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let task = sample_task(TaskKind::Execute, Status::Blocked);
+    store.insert(&task).expect("insert");
+    ask(&store, &task, "waiting");
+    let now = OffsetDateTime::now_utc();
+    let read = || {
+        let start = store.lock_counts();
+        let item = crate::human_inbox::question_for_task(&store, task.id, now).expect("question");
+        (item, store.lock_counts().since(start))
+    };
+    let before = read();
+    for _ in 0..100 {
+        store
+            .insert(&sample_task(TaskKind::Execute, Status::Blocked))
+            .expect("unrelated root");
+    }
+    let after = read();
+    assert_eq!(after, before);
 }

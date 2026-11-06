@@ -1,0 +1,128 @@
+{
+  "schema": "celeris.general-cos-compare-raw/1",
+  "tier": "llm",
+  "seq": 24,
+  "case": "read-three",
+  "kind": "read",
+  "arm": "old",
+  "repeat": 2,
+  "rev": "286a7ab199b27fe2524c07d5eb501abd5be567fa",
+  "binary_sha256": "e2b1e780200842c77426735f4387045c5ec57a08f59ea1f00eeff076c24a7ef4",
+  "skills_sha256": {
+    "config/skills/cos-operator": "d45913d29dc2510d7698eb40a628754d097d1020e2fb77a928b54089f20bfefa",
+    "config/skills/cos-inbox-triage": "73b317ffcad542bd3ec41c502e0ac9a50faa86ff5d77254c69e92b14204a66f2"
+  },
+  "prompt_sha256": {
+    "crates/task-worker/src/cos_chat.rs": "bb7e55371490c29f7c6a5351486e65bbd81d28c83dcc0d0f0b2e10b5c4721f20",
+    "crates/task-worker/src/preamble.rs": "9d90308a438a4aacbd4e992d1d3131db4468aa1501d8742934324a0a0dc8be27",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": "05213c1de1873dbb19c5b56e786813d86b5bbb716bf4e043e1e404d672ea4641"
+  },
+  "llm_config_sha256": "c4fbbc7e3a8bc501d1f89967e3450fb0a502acb603796a97dd9d3121df96690b",
+  "input": "直近 3 件の task の状態を比較して",
+  "seed_task_ids": [
+    "01M6R2A1WDC99DT46J702XZKH4",
+    "01M6R2A3F08KY7Z1VTSV27Z79N",
+    "01M6R2A51XHHP1MWSCMDGDP3TS",
+    "01M6R2A65HCKHGGXH9535XJFRK"
+  ],
+  "project": null,
+  "transcript": [
+    {
+      "id": "01M6R2AZ0J7VT96MGZGWW7WDGJ",
+      "seq": 10,
+      "role": "user",
+      "text": "直近 3 件の task の状態を比較して",
+      "state": "completed",
+      "created_at": "2026-11-06T09:16:49.042Z",
+      "run_id": "01M6R2AZ2E59Y5SP7FQCFHK5FK",
+      "metadata_json": "{\"attachment_ids\":[],\"author\":\"human:p4e\",\"interrupt\":false,\"mode\":\"queue\"}"
+    },
+    {
+      "id": "01M6R2AZ2FKH46FK31DB99FX0B",
+      "seq": 11,
+      "role": "assistant",
+      "text": "要約は checkpoint に保存済みです(through_seq 10)。\n\n人が決めることは、seed 2 の失敗にどう答えるかだけです。",
+      "state": "completed",
+      "created_at": "2026-11-06T09:16:49.102Z",
+      "run_id": "01M6R2AZ2E59Y5SP7FQCFHK5FK",
+      "metadata_json": "{}"
+    },
+    {
+      "id": "01M6R2AZ2Y30TQ0T0D5E3BRF1Q",
+      "seq": 12,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5",
+      "state": "completed",
+      "created_at": "2026-11-06T09:16:49.102Z",
+      "run_id": null,
+      "metadata_json": "{\"cards\":[]}"
+    }
+  ],
+  "other_threads": [],
+  "tasks_created": [],
+  "cos_runs": 1,
+  "cos_runs_by_thread": {
+    "01M6R2A2SS3ZHHX6K4CRMQBW9W": 1
+  },
+  "worker_runs": 0,
+  "worker_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_creation_tokens": 0
+  },
+  "usage": {
+    "input_tokens": 8,
+    "output_tokens": 1468,
+    "cache_read_tokens": 98757,
+    "cache_creation_tokens": 5395
+  },
+  "usage_null_runs": 0,
+  "usage_missing_reason": null,
+  "cost_usd": 0.047935,
+  "cost_unknown_runs": 0,
+  "cos_operations": [],
+  "stub_log": [],
+  "handoff_messages": 0,
+  "human_interventions": 1,
+  "first_reply_secs": 0.517,
+  "wall_seconds": 15.243,
+  "ended_by": "reply",
+  "trial_secs": 53.38,
+  "ops": [
+    {
+      "step": "seed_tasks",
+      "at": 1793956585.279,
+      "ids": [
+        "01M6R2A1WDC99DT46J702XZKH4",
+        "01M6R2A3F08KY7Z1VTSV27Z79N",
+        "01M6R2A51XHHP1MWSCMDGDP3TS",
+        "01M6R2A65HCKHGGXH9535XJFRK"
+      ],
+      "statuses": [
+        "done",
+        "failed",
+        "cancelled",
+        "done"
+      ]
+    },
+    {
+      "step": "open_general_thread",
+      "at": 1793956585.963,
+      "thread": "01M6R2A2SS3ZHHX6K4CRMQBW9W",
+      "kind": "general"
+    },
+    {
+      "step": "baseline",
+      "at": 1793956609.04,
+      "pre_chat_runs": 2,
+      "pre_runs": 3,
+      "pre_tasks": 4
+    },
+    {
+      "step": "human_message",
+      "at": 1793956609.045,
+      "thread": "01M6R2A2SS3ZHHX6K4CRMQBW9W"
+    }
+  ]
+}

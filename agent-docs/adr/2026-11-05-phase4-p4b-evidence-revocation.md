@@ -60,3 +60,8 @@
   （誤 achieved 0 を優先）。本番の導入（`docs/ops/project-controller.md` の checklist）は人の操作で未実施のため、本番の既存の行の有無は未確認。
 - 再達成の後も Roadmap の `reached` の evidence は最初の root を指す（新しい root は判断の行の根拠と snapshot にだけ出る）。
 - snapshot が上限で切られた（`truncated`）ときは根拠の root が欠けうるので、数え直しは未達側に倒す（誤 achieved 0 を優先）。
+
+## N5 による改定（2026-11-06）
+
+決定 3 の「Outcome ごとに 1 回」と、未解決の人・CoS root の checks 改版・再達成後の evidence は
+[証跡整合 ADR](2026-11-06-n5-evidence-integrity.md) で置き換えた。旧 reached は履歴として残し、新しい根拠を追記する。

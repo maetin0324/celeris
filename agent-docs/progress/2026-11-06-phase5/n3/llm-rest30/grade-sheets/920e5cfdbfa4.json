@@ -1,0 +1,37 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "920e5cfdbfa4",
+  "case": "consult-priority",
+  "kind": "consult",
+  "input": "締切が明日の障害報告と、締切が来月の機能追加、先にどちらを進めるべき？",
+  "expected": "task 0。期限と影響を分析し、優先案と理由を返す。必要な不足情報だけ追問する。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "締切が明日の障害報告と、締切が来月の機能追加、先にどちらを進めるべき？"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "障害報告を先に進めてください。\n\n機能追加の締切は約 1 か月先なので、数日ずらしても間に合います。障害報告は締切が明日で、着手が遅れると原因調査や関係者への確認が間に合わなくなります。\n\n次の場合は判断が変わります。\n- **機能追加に長い外部待ちがある場合**(レビューや承認の待ちなど): 依頼だけ先に出してから、障害報告に入ってください。\n- **障害報告が短時間で終わる場合**: 機能追加と並行して進められます。\n\n私は両方の task の中身を確認していません。この回答は締切の日付だけに基づいています。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [],
+  "cos_operations": [],
+  "grade": {
+    "grader": null,
+    "authority_preserved": null,
+    "analysis": null,
+    "proposal": null,
+    "followup_appropriate": null,
+    "consult_depth": null,
+    "notes": null
+  }
+}

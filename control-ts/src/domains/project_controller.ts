@@ -465,7 +465,10 @@ export function decide(s: ProjectSnapshot): ProjectProposal {
     const root = reachedBy.get(o.id);
     if (
       root !== undefined &&
-      !decided((d) => d.kind === "mark_milestone" && d.outcome_id === o.id)
+      !(s.controller.mode === "enabled" && s.roadmap !== null && typeof s.roadmap === "object"
+        ? ((s.roadmap as { outcomes?: { id: string; status: string; evidence: string[] }[] }).outcomes ?? [])
+          .some((v) => v.id === o.id && v.status === "reached" && v.evidence.includes(`task:${root.id}`))
+        : decided((d) => d.kind === "mark_milestone" && d.outcome_id === o.id))
     ) {
       return out(
         {

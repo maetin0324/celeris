@@ -777,6 +777,12 @@ mod tests {
     /// ただし止める前に script が書き換えた global の状態が途中のまま残る（不変条件を保てない）。
     #[test]
     fn terminate_then_reuse_keeps_half_written_state() {
+        // 本番の actor と同じく、isolate の生成から破棄まで Tokio の文脈を保つ。
+        let tokio = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let _entered = tokio.enter();
         init_platform();
         let watchdog = Watchdog::spawn().expect("watchdog");
         let mut runtime = JsRuntime::new(RuntimeOptions::default());

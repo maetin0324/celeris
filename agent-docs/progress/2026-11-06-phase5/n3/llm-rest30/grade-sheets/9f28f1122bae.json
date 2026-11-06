@@ -1,0 +1,37 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "9f28f1122bae",
+  "case": "consult-open",
+  "kind": "consult",
+  "input": "クラスタのジョブ待ちが長い。何から調べればいい？",
+  "expected": "task 0。待ち理由・資源要求・混雑の仮説を分け、確認順を提案し、必要なキュー情報を聞く。受付だけは不合格。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "クラスタのジョブ待ちが長い。何から調べればいい？"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "まず、待っているジョブの待ち理由（pending の reason）を確認してください。スケジューラは未確認なので、コマンドは Slurm の例です。\n\n- **待ち理由**: `squeue -u $USER -t PD -o \"%i %P %r %S\"` で reason を見ます。\n  - `Priority`: 優先度が低い状態です。`sprio -j <jobid>` で内訳を見ます。\n  - `Resources`: 要求した資源が空くのを待っています。\n  - `QOSMax…` や `AssocGrpLimit`: 自分やグループの上限に当たっています。\n  - `ReqNodeNotAvail` や `Dependency`: ノード停止か、依存ジョブの未完了です。\n- **要求の大きさ**: ノード数、GPU 数、メモリ、`--time` を確認します。時間制限を実際の実行時間に近づけると、バックフィルで先に動きやすくなります。\n- **クラスタの状態**: `sinfo -o \"%P %a %D %t\"` で、パーティションごとのノード状態を見ます。drain や down が多いなら障害が原因の可能性があります。他のパーティションに空きがないかも見ます。\n- **開始見込み**: `squeue --start -j <jobid>` で開始予定時刻を確認します。\n- **自分の fairshare**: `sshare -u $USER` で、直近の使用量が多くて優先度が下がっていないかを見ます。\n\nreason の値と、要求資源（ノード数、GPU 数、時間）を教えてください。原因をもう一段絞れます。Celeris が管理するクラスタ固有の仕組みの話であれば、その旨も教えてください。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [],
+  "cos_operations": [],
+  "grade": {
+    "grader": null,
+    "authority_preserved": null,
+    "analysis": null,
+    "proposal": null,
+    "followup_appropriate": null,
+    "consult_depth": null,
+    "notes": null
+  }
+}

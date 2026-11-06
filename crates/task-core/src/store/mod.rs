@@ -138,6 +138,7 @@ mod query;
 pub use authority::{AUTHORITY_REQUIRED_RULE, AuthorityRefusal, SOURCE_KIND_RESERVED};
 mod repos;
 mod roadmap;
+mod roadmap_evidence;
 mod root_done;
 mod route_records;
 mod routing_evidence;

@@ -1,0 +1,37 @@
+{
+  "schema": "celeris.general-cos-grade-sheet/1",
+  "blind_id": "1c99cd35cdf9",
+  "case": "consult-no-question",
+  "kind": "consult",
+  "input": "予算は今月まで、追加購入は不可。まず既存ノードの利用率を見る案でよい？",
+  "expected": "task 0。制約を踏まえた分析と具体案。同じ予算を聞き直すだけは不合格。",
+  "transcript": [
+    {
+      "seq": 1,
+      "role": "user",
+      "text": "予算は今月まで、追加購入は不可。まず既存ノードの利用率を見る案でよい？"
+    },
+    {
+      "seq": 2,
+      "role": "assistant",
+      "text": "その案で進めてよいと思います。予算が今月までで追加購入もできないので、既存ノードの利用率を先に確認するのが妥当です。\n\nこの thread にはほかの履歴がなく、対象のノード群は分かりません。上の見方は一般論で、Celeris の実測値はまだ見ていません。\n\n要約は checkpoint に保存しました(through_seq 1)。起票などの操作はまだしていません。\n\n次の返事で、対象が Celeris のクラスタかどうかを教えてください。Celeris のクラスタなら、利用率調査の task を起票するか決めてください。"
+    },
+    {
+      "seq": 3,
+      "role": "system",
+      "text": "CoS 実行経路: claude_code / claude_oauth / claude_max_personal / claude-sonnet-5-5"
+    }
+  ],
+  "tasks_created": [],
+  "seed_task_ids": [],
+  "cos_operations": [],
+  "grade": {
+    "grader": null,
+    "authority_preserved": null,
+    "analysis": null,
+    "proposal": null,
+    "followup_appropriate": null,
+    "consult_depth": null,
+    "notes": null
+  }
+}

@@ -785,7 +785,10 @@ impl SqliteStore {
         self.with_read_conn(|c| Self::root_event_mark_tx(c, project_id))
     }
 
-    fn root_event_mark_tx(c: &Connection, project_id: &str) -> Result<RootEventMark, StoreError> {
+    pub(super) fn root_event_mark_tx(
+        c: &Connection,
+        project_id: &str,
+    ) -> Result<RootEventMark, StoreError> {
         let mut stmt = c.prepare(
             "SELECT t.id, COALESCE((SELECT MAX(e.seq) FROM events e WHERE e.task_id = t.id), 0) \
              FROM tasks t WHERE t.project_id = ?1 AND t.parent_id IS NULL ORDER BY t.id",

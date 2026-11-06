@@ -1,0 +1,721 @@
+{
+ "schema": "celeris.daemon-soak-summary/1",
+ "prod_samples": [
+  [
+   0,
+   181820
+  ],
+  [
+   600,
+   391292
+  ],
+  [
+   1200,
+   505532
+  ],
+  [
+   1529,
+   588668
+  ]
+ ],
+ "runs": [
+  {
+   "label": "main",
+   "condition": "off",
+   "samples": 578,
+   "wall_secs": 34560.0,
+   "stop": null,
+   "rss_kb": [
+    81984,
+    201236,
+    214168
+   ],
+   "rss_anon_kb": [
+    11904,
+    129428,
+    152596
+   ],
+   "rss_file_kb": [
+    70080,
+    71808,
+    92160
+   ],
+   "threads": [
+    27,
+    26,
+    41
+   ],
+   "arena_estimate": [
+    26,
+    41,
+    41
+   ],
+   "fds": [
+    30,
+    41,
+    53
+   ],
+   "sqlite_memory_used": [
+    0,
+    0,
+    0
+   ],
+   "sqlite_pagecache_bytes": [
+    191128,
+    33850792,
+    33951256
+   ],
+   "malloc_arena": [
+    5193728,
+    135872512,
+    153800704
+   ],
+   "malloc_mmap": [
+    0,
+    0,
+    0
+   ],
+   "malloc_in_use": [
+    1534048,
+    55124592,
+    69261536
+   ],
+   "malloc_free": [
+    3659680,
+    80747920,
+    119009456
+   ],
+   "v8_used_heap": [
+    0,
+    0,
+    0
+   ],
+   "v8_total_heap": [
+    0,
+    0,
+    0
+   ],
+   "v8_generations": [
+    0,
+    0,
+    0
+   ],
+   "rss_slope_whole_mb_per_hour": 12.1,
+   "rss_slope_prod_whole_mb_per_hour": -8.3,
+   "rss_slope_prod_steady_mb_per_hour": -153.1,
+   "rss_anon_slope_prod_whole_mb_per_hour": 45.7,
+   "rss_anon_slope_prod_steady_mb_per_hour": 23.1,
+   "rss_anon_slope_after_600_mb_per_hour": 10.8,
+   "rss_slope_after_600_mb_per_hour": 8.7,
+   "db_start": {
+    "tasks": 0,
+    "runs": 0,
+    "events": 0,
+    "project_wakes": 0,
+    "project_controller_decisions": 0,
+    "script_compare_log": 0,
+    "chat_runs": 0,
+    "chat_messages": 0,
+    "cos_inbox_items": 0,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {},
+    "task_leases": 0,
+    "runs_running": 0,
+    "wu_leases": 0,
+    "wakes_unconsumed": 0,
+    "events_max_rowid": 0,
+    "event_lag": {},
+    "dispatch_latency_ms": []
+   },
+   "db_end": {
+    "tasks": 3457,
+    "runs": 1928,
+    "events": 40069,
+    "project_wakes": 0,
+    "project_controller_decisions": 0,
+    "script_compare_log": 0,
+    "chat_runs": 4676,
+    "chat_messages": 25832,
+    "cos_inbox_items": 5166,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {
+     "done": 1926,
+     "ready": 1529,
+     "running": 2
+    },
+    "task_leases": 2,
+    "runs_running": 2,
+    "wu_leases": 0,
+    "wakes_unconsumed": 0,
+    "events_max_rowid": 40069,
+    "event_lag": {
+     "cos_triage:events": 17,
+     "project_wake": 33,
+     "root_done_summary": 14,
+     "events": 99
+    },
+    "dispatch_latency_ms": []
+   },
+   "slow_ticks": 3539,
+   "script_tick_wait_end": {
+    "ticks": 1000,
+    "p50_us": 0,
+    "p95_us": 0,
+    "max_us": 0,
+    "tick_budget": 0,
+    "budget_us": 200000
+   },
+   "dispatch_latency_ms": {
+    "n": 1928,
+    "p50": 463024,
+    "p95": 11745252,
+    "max": 15216997
+   },
+   "samples_after_restart": 0,
+   "anon_delta_kb": 117524,
+   "anon_explained_kb": 127616,
+   "anon_residual_kb": -10092
+  },
+  {
+   "label": "main",
+   "condition": "v8_load",
+   "samples": 578,
+   "wall_secs": 34560.0,
+   "stop": null,
+   "rss_kb": [
+    81984,
+    217128,
+    238408
+   ],
+   "rss_anon_kb": [
+    11328,
+    144552,
+    176464
+   ],
+   "rss_file_kb": [
+    70656,
+    72576,
+    91968
+   ],
+   "threads": [
+    27,
+    35,
+    40
+   ],
+   "arena_estimate": [
+    26,
+    42,
+    42
+   ],
+   "fds": [
+    33,
+    46,
+    59
+   ],
+   "sqlite_memory_used": [
+    0,
+    0,
+    0
+   ],
+   "sqlite_pagecache_bytes": [
+    469088,
+    34583552,
+    40240112
+   ],
+   "malloc_arena": [
+    6098944,
+    145481728,
+    189521920
+   ],
+   "malloc_mmap": [
+    0,
+    0,
+    0
+   ],
+   "malloc_in_use": [
+    2835712,
+    58746832,
+    64449696
+   ],
+   "malloc_free": [
+    3263232,
+    86734896,
+    158569424
+   ],
+   "v8_used_heap": [
+    0,
+    0,
+    0
+   ],
+   "v8_total_heap": [
+    0,
+    0,
+    0
+   ],
+   "v8_generations": [
+    0,
+    0,
+    0
+   ],
+   "rss_slope_whole_mb_per_hour": 13.7,
+   "rss_slope_prod_whole_mb_per_hour": -4.9,
+   "rss_slope_prod_steady_mb_per_hour": -146.1,
+   "rss_anon_slope_prod_whole_mb_per_hour": 50.5,
+   "rss_anon_slope_prod_steady_mb_per_hour": 29.4,
+   "rss_anon_slope_after_600_mb_per_hour": 12.3,
+   "rss_slope_after_600_mb_per_hour": 10.3,
+   "db_start": {
+    "tasks": 0,
+    "runs": 0,
+    "events": 0,
+    "project_wakes": 0,
+    "project_controller_decisions": 0,
+    "script_compare_log": 0,
+    "chat_runs": 0,
+    "chat_messages": 0,
+    "cos_inbox_items": 0,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {},
+    "task_leases": 0,
+    "runs_running": 0,
+    "wu_leases": 0,
+    "wakes_unconsumed": 0,
+    "events_max_rowid": 0,
+    "event_lag": {
+     "cos_triage:events": 0,
+     "project_wake": 0,
+     "root_done_summary": 0
+    },
+    "dispatch_latency_ms": []
+   },
+   "db_end": {
+    "tasks": 3457,
+    "runs": 1934,
+    "events": 40183,
+    "project_wakes": 0,
+    "project_controller_decisions": 0,
+    "script_compare_log": 0,
+    "chat_runs": 4744,
+    "chat_messages": 25990,
+    "cos_inbox_items": 5146,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {
+     "done": 1932,
+     "ready": 1523,
+     "running": 2
+    },
+    "task_leases": 2,
+    "runs_running": 2,
+    "wu_leases": 0,
+    "wakes_unconsumed": 0,
+    "events_max_rowid": 40183,
+    "event_lag": {
+     "cos_triage:events": 17,
+     "project_wake": 33,
+     "root_done_summary": 14,
+     "events": 100
+    },
+    "dispatch_latency_ms": []
+   },
+   "slow_ticks": 3606,
+   "script_tick_wait_end": {
+    "ticks": 1000,
+    "p50_us": 0,
+    "p95_us": 0,
+    "max_us": 0,
+    "tick_budget": 0,
+    "budget_us": 200000
+   },
+   "dispatch_latency_ms": {
+    "n": 1934,
+    "p50": 312424,
+    "p95": 11578559,
+    "max": 15152167
+   },
+   "samples_after_restart": 0,
+   "anon_delta_kb": 133224,
+   "anon_explained_kb": 136116,
+   "anon_residual_kb": -2892
+  },
+  {
+   "label": "main",
+   "condition": "shadow",
+   "samples": 578,
+   "wall_secs": 34560.1,
+   "stop": null,
+   "rss_kb": [
+    110784,
+    386780,
+    386780
+   ],
+   "rss_anon_kb": [
+    15936,
+    303836,
+    303944
+   ],
+   "rss_file_kb": [
+    94848,
+    82944,
+    112896
+   ],
+   "threads": [
+    33,
+    41,
+    46
+   ],
+   "arena_estimate": [
+    32,
+    52,
+    52
+   ],
+   "fds": [
+    38,
+    51,
+    63
+   ],
+   "sqlite_memory_used": [
+    0,
+    0,
+    0
+   ],
+   "sqlite_pagecache_bytes": [
+    537912,
+    36527576,
+    36527576
+   ],
+   "malloc_arena": [
+    6475776,
+    321069056,
+    321069056
+   ],
+   "malloc_mmap": [
+    0,
+    0,
+    0
+   ],
+   "malloc_in_use": [
+    3213808,
+    57908592,
+    57908592
+   ],
+   "malloc_free": [
+    3261968,
+    263160464,
+    290716000
+   ],
+   "v8_used_heap": [
+    1756304,
+    4063896,
+    5381464
+   ],
+   "v8_total_heap": [
+    4194304,
+    5242880,
+    6553600
+   ],
+   "v8_generations": [
+    1,
+    1,
+    1
+   ],
+   "rss_slope_whole_mb_per_hour": 28.1,
+   "rss_slope_prod_whole_mb_per_hour": -28.9,
+   "rss_slope_prod_steady_mb_per_hour": -175.9,
+   "rss_anon_slope_prod_whole_mb_per_hour": 57.9,
+   "rss_anon_slope_prod_steady_mb_per_hour": 38.6,
+   "rss_anon_slope_after_600_mb_per_hour": 28.3,
+   "rss_slope_after_600_mb_per_hour": 25.2,
+   "db_start": {
+    "tasks": 0,
+    "runs": 0,
+    "events": 0,
+    "project_wakes": 0,
+    "project_controller_decisions": 0,
+    "script_compare_log": 0,
+    "chat_runs": 0,
+    "chat_messages": 0,
+    "cos_inbox_items": 0,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {},
+    "task_leases": 0,
+    "runs_running": 0,
+    "wu_leases": 0,
+    "wakes_unconsumed": 0,
+    "events_max_rowid": 0,
+    "event_lag": {
+     "cos_triage:events": 0,
+     "project_wake": 0,
+     "root_done_summary": 0
+    },
+    "dispatch_latency_ms": []
+   },
+   "db_end": {
+    "tasks": 3457,
+    "runs": 1930,
+    "events": 42035,
+    "project_wakes": 7451,
+    "project_controller_decisions": 635,
+    "script_compare_log": 1303,
+    "chat_runs": 4721,
+    "chat_messages": 25926,
+    "cos_inbox_items": 5151,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {
+     "done": 1928,
+     "ready": 1527,
+     "running": 2
+    },
+    "task_leases": 2,
+    "runs_running": 2,
+    "wu_leases": 0,
+    "wakes_unconsumed": 3,
+    "events_max_rowid": 42035,
+    "event_lag": {
+     "cos_triage:events": 5,
+     "project_wake": 23,
+     "root_done_summary": 2,
+     "events": 95
+    },
+    "dispatch_latency_ms": [
+     15254417,
+     15244002
+    ]
+   },
+   "slow_ticks": 3585,
+   "script_tick_wait_end": {
+    "ticks": 1000,
+    "p50_us": 0,
+    "p95_us": 0,
+    "max_us": 0,
+    "tick_budget": 0,
+    "budget_us": 200000
+   },
+   "dispatch_latency_ms": {
+    "n": 1930,
+    "p50": 311723,
+    "p95": 11667716,
+    "max": 15254417
+   },
+   "samples_after_restart": 0,
+   "anon_delta_kb": 287900,
+   "anon_explained_kb": 308244,
+   "anon_residual_kb": -20344
+  },
+  {
+   "label": "main",
+   "condition": "enabled",
+   "samples": 578,
+   "wall_secs": 34560.0,
+   "stop": null,
+   "rss_kb": [
+    124032,
+    405112,
+    405112
+   ],
+   "rss_anon_kb": [
+    20352,
+    319288,
+    319288
+   ],
+   "rss_file_kb": [
+    103680,
+    85824,
+    113280
+   ],
+   "threads": [
+    33,
+    43,
+    47
+   ],
+   "arena_estimate": [
+    33,
+    53,
+    53
+   ],
+   "fds": [
+    48,
+    50,
+    63
+   ],
+   "sqlite_memory_used": [
+    0,
+    0,
+    0
+   ],
+   "sqlite_pagecache_bytes": [
+    451880,
+    40201064,
+    40201064
+   ],
+   "malloc_arena": [
+    6000640,
+    344956928,
+    344956928
+   ],
+   "malloc_mmap": [
+    0,
+    0,
+    0
+   ],
+   "malloc_in_use": [
+    2707936,
+    65160896,
+    66009792
+   ],
+   "malloc_free": [
+    3292704,
+    279796032,
+    311447024
+   ],
+   "v8_used_heap": [
+    1715544,
+    1663856,
+    5472600
+   ],
+   "v8_total_heap": [
+    3932160,
+    2621440,
+    6815744
+   ],
+   "v8_generations": [
+    1,
+    1,
+    1
+   ],
+   "rss_slope_whole_mb_per_hour": 28.6,
+   "rss_slope_prod_whole_mb_per_hour": -60.9,
+   "rss_slope_prod_steady_mb_per_hour": -187.8,
+   "rss_anon_slope_prod_whole_mb_per_hour": 47.1,
+   "rss_anon_slope_prod_steady_mb_per_hour": 29.7,
+   "rss_anon_slope_after_600_mb_per_hour": 29.7,
+   "rss_slope_after_600_mb_per_hour": 26.8,
+   "db_start": {
+    "tasks": 0,
+    "runs": 0,
+    "events": 0,
+    "project_wakes": 0,
+    "project_controller_decisions": 0,
+    "script_compare_log": 0,
+    "chat_runs": 0,
+    "chat_messages": 0,
+    "cos_inbox_items": 0,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {},
+    "task_leases": 0,
+    "runs_running": 0,
+    "wu_leases": 0,
+    "wakes_unconsumed": 0,
+    "events_max_rowid": 0,
+    "event_lag": {
+     "cos_triage:events": 0,
+     "project_wake": 0,
+     "root_done_summary": 0
+    },
+    "dispatch_latency_ms": []
+   },
+   "db_end": {
+    "tasks": 3457,
+    "runs": 1922,
+    "events": 40977,
+    "project_wakes": 7475,
+    "project_controller_decisions": 637,
+    "script_compare_log": 1297,
+    "chat_runs": 4696,
+    "chat_messages": 25845,
+    "cos_inbox_items": 5165,
+    "cron_job_runs": 0,
+    "work_units": 0,
+    "tasks_by_status": {
+     "done": 1920,
+     "ready": 1535,
+     "running": 2
+    },
+    "task_leases": 2,
+    "runs_running": 2,
+    "wu_leases": 0,
+    "wakes_unconsumed": 1,
+    "events_max_rowid": 40977,
+    "event_lag": {
+     "cos_triage:events": 3,
+     "project_wake": 19,
+     "root_done_summary": 53,
+     "events": 91
+    },
+    "dispatch_latency_ms": [
+     15351766,
+     15341830
+    ]
+   },
+   "slow_ticks": 3574,
+   "script_tick_wait_end": {
+    "ticks": 1000,
+    "p50_us": 0,
+    "p95_us": 1362,
+    "max_us": 100000,
+    "tick_budget": 0,
+    "budget_us": 200000
+   },
+   "dispatch_latency_ms": {
+    "n": 1922,
+    "p50": 326786,
+    "p95": 11810373,
+    "max": 15351766
+   },
+   "samples_after_restart": 0,
+   "anon_delta_kb": 298936,
+   "anon_explained_kb": 329732,
+   "anon_residual_kb": -30796
+  }
+ ],
+ "thresholds": [
+  {
+   "label": "main",
+   "condition": "off",
+   "checks": {
+    "anon_steady_slope_vs_off_le_10mb_h": true,
+    "v8_generations_le_2": true,
+    "not_auto_stopped": false
+   },
+   "pass": false
+  },
+  {
+   "label": "main",
+   "condition": "v8_load",
+   "checks": {
+    "anon_steady_slope_vs_off_le_10mb_h": true,
+    "v8_generations_le_2": true,
+    "not_auto_stopped": false
+   },
+   "pass": false
+  },
+  {
+   "label": "main",
+   "condition": "shadow",
+   "checks": {
+    "anon_steady_slope_vs_off_le_10mb_h": false,
+    "v8_used_heap_end_lt_2x_start": false,
+    "v8_generations_le_2": true,
+    "not_auto_stopped": false
+   },
+   "pass": false
+  },
+  {
+   "label": "main",
+   "condition": "enabled",
+   "checks": {
+    "anon_steady_slope_vs_off_le_10mb_h": false,
+    "v8_used_heap_end_lt_2x_start": true,
+    "v8_generations_le_2": true,
+    "not_auto_stopped": false
+   },
+   "pass": false
+  }
+ ]
+}

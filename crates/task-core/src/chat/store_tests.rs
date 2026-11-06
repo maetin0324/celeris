@@ -1918,3 +1918,75 @@ fn queued_thread_enumeration_cost_is_flat_while_full_scan_grows_with_rows() {
     );
     assert!(new_big * 20 < old_big, "{samples:?}");
 }
+
+/// ADR 2026-11-06-cos-chat-launch-scaling D3-c: 取り次ぎの候補 SQL は部分 index `idx_chat_messages_relay` を
+/// 引き、escalated 項目 20 件の thread に取り次ぎでない message を 100 → 400 → 1600 件足しても VM 命令数が
+/// 一定である。同じ行で index を外すと（修正前の経路）命令数は message 数に比例して増える。時計も負荷も使わない。
+#[test]
+fn relay_candidate_cost_is_flat_in_thread_messages_with_the_relay_index() {
+    let s = store();
+    let t = create(&s, "inbox", "inbox", 0);
+    let judged = post(&s, &t.id, "judged", "claim", 0);
+    s.with_read_conn(|conn| {
+        conn.execute(
+            "UPDATE chat_messages SET role='system',state='completed' WHERE id=?1",
+            params![judged.id],
+        )?;
+        for i in 0..20 {
+            conn.execute(
+                "INSERT INTO cos_inbox_items(id,source_kind,source_key,source_revision,thread_id,\
+                 message_id,state,policy_version,created_at,updated_at) \
+                 VALUES(?1,'question',?1,'r','' || ?2,?3,'escalated','p','2000-01-01T00:00:00Z','2000-01-01T00:00:00Z')",
+                params![format!("item-{i}"), t.id, judged.id],
+            )?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let sql = super::relay_rejudge::RELAY_CANDIDATE_SQL;
+    let mut made = 0;
+    let mut samples: Vec<(i64, i64, i64)> = Vec::new();
+    for target in [100, 400, 1600] {
+        while made < target {
+            let m = post(&s, &t.id, &format!("m{made}"), "hello", made + 1);
+            s.with_read_conn(|conn| {
+                conn.execute(
+                    "UPDATE chat_messages SET state='completed' WHERE id=?1",
+                    params![m.id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+            made += 1;
+        }
+        s.with_read_conn(|conn| {
+            let plan: Vec<String> = conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?
+                .query_map([], |r| r.get::<_, String>(3))?
+                .collect::<Result<_, _>>()?;
+            assert!(
+                plan.join("\n").contains("idx_chat_messages_relay"),
+                "{plan:?}"
+            );
+            let new = vm_steps(conn, sql);
+            conn.execute_batch("SAVEPOINT noidx; DROP INDEX idx_chat_messages_relay;")?;
+            let old = vm_steps(conn, sql);
+            conn.execute_batch("ROLLBACK TO noidx; RELEASE noidx;")?;
+            samples.push((i64::from(target), old, new));
+            Ok(())
+        })
+        .unwrap();
+    }
+    eprintln!("(messages, no_index_vm_steps, relay_index_vm_steps) = {samples:?}");
+    let (_, old_small, new_small) = samples[0];
+    let (_, old_big, new_big) = samples[2];
+    assert!(
+        old_big >= old_small * 8,
+        "without the index the cost grows: {samples:?}"
+    );
+    assert!(
+        new_big <= new_small + 20,
+        "with the index the cost stays flat: {samples:?}"
+    );
+    assert!(new_big * 20 < old_big, "{samples:?}");
+}

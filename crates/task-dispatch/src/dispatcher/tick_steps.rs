@@ -2,8 +2,8 @@
 //! blocked の task の数に比例して伸びる段を特定するための計測の口で、判断には使わない
 //! （`TickReport::step_us`、`crates/celeris/tests/tick_scale_baseline.rs`）。遅い tick の警告もこの値を出す。
 
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 /// 段ごとの glibc `mallinfo2` 差分を log に出す計測（daemon-rss 2026-11-06）。環境変数 `CELERIS_TICK_MALLOC_TRACE=1`

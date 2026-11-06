@@ -43,3 +43,9 @@ V8 heap は 3.4 MB、sqlite の pagecache は 4〜28 MB で主因ではない。
 A（確保元の削減）を先に狙う方針だったが、本番規模の DB の写しでの 240 秒 soak では確保元を特定できなかった（tick 段の `mallinfo2` 差分は未計測。時間の重なりでは `tick_cos_chat_launch` と `prune_and_sweep` が候補）。確保元の特定を待つと本番の RSS 増加（930 MB まで）が続くため、基準の「A だけで足りない場合」に進み、B+C+D を暫定で採った。E と F は採っていない。
 根拠（同じ DB の写し・同じ config・240 秒、各 2 回）: rss_anon は before 130〜133 MB、after 85〜90 MB。malloc_free は before 99〜119 MB、after 63〜65 MB。tick 数は before 46〜100、after 77〜85 で、after は before の揺れの範囲内に収まった。slow tick の total_ms 中央値は before 2945 ms、after 2276 ms。したがって採否の基準（tick が揺れを超えて悪化しない）に反する証拠は無い。ただし 240 秒・各 2 回で、dispatch 遅延の分布の比較は未実施（標本あたり 0〜2 件で比較にならない）。
 限界: 起動 1 分以内の arena の跳ねは after でも残り、mallopt は大きさを約 3 割抑えるだけで根治ではない。本番の傾きは 240 秒では再現していない。本番で効果が足りなければ A（確保元の特定）を続ける。数値の raw は `agent-docs/progress/2026-11-06-daemon-rss/`。
+
+## 確保元の特定の結果（2026-11-06 追記）
+tick 段別の `mallinfo2` 差分（`CELERIS_TICK_MALLOC_TRACE=1` で有効、既定は無効）と、API を 1 本ずつ送る soak で測った（進捗 `2026-11-06-daemon-rss.md` の「確保元の特定」）。
+- 基準（tick のみ）で arena は 1 分後 100 MB。広げた段は `tick_cos_chat_launch`（+34 MB、最大 +32 MB）。
+- 読み取りの GET を 1 秒に 1 本足すと、`GET /inbox` と `GET /projects` が arena を約 200 MB（基準の約 2 倍、使用中は 20〜36 MB）まで広げ、`GET /tasks` は 128 MB。
+- A（確保元の削減）は `task_ops::inbox::inbox` と projects の集計の全走査の見直しで、複数 crate にまたがるため本 ADR では入れない。決定は変わらず、B+C+D を暫定のまま採り、A は別 task（進捗の「提案」）に回す。計測用の環境変数は性能の理由で既定を無効にした。

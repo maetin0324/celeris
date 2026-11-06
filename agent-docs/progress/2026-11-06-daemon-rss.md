@@ -153,3 +153,36 @@ raw は `before/samples-2.jsonl`・`before/ops-2.jsonl`。
 - tick/分は before 自身が 11.1〜24.6 と揺れ、after（18.9〜22.1）はその範囲の中にある。悪化と言える差ではない。
 - 新しい dispatch 遅延は after の方が小さい（中央値 872〜2,849 ms 対 2,931〜3,728 ms）。件数は 1 標本 6〜10 件と少なく、差を改善とは言わない。測定の揺れを超える悪化は見えない。
 - 限界: 標本が各 2 回・約 4 分と短い。本番の 930 MB に至る傾きは再現していない。確保元の tick 段は未特定（「未解決」）。
+
+## 確保元の特定（Run #18、tick 段別の mallinfo2 差分と GET 負荷）
+道具: `crates/task-dispatch/src/dispatcher/tick_steps.rs` に、環境変数 `CELERIS_TICK_MALLOC_TRACE=1` のときだけ、tick の各段の前後で `mallinfo2` を読み、arena が動いた段と、前の tick の終わりからの増分（tick の外＝API・バックグラウンド）を `tick malloc phases` の info 行に出す計測を足した（既定は無効。`mallinfo2` は arena の lock を取るため本番では使わない）。`daemon_soak.py` に `--malloc-trace`、`--get-interval`、`--get-paths` を足した。raw は `2026-11-06-daemon-rss/trace/`（daemon.log から `process_memory` と `tick malloc phases` の行だけ。DB の写しは含まない）。条件は同じ本番規模 DB の写し（task 2,203・events 813,462）、`mallopt` 入りの binary、fake harness、127.0.0.1 のみ。`mallinfo2` は process 全体の値なので、段の増分には同時に動く他の thread の確保も入る（段への帰属は近似）。
+
+### 1. tick だけ（240 秒、GET なし。`trace/tick.log`）
+- 1 分後の arena は 100 MB（使用中 25 / 空き 74）。以後 108 MB 前後で横ばい。2 回の run（Run #18 の 1 回目は旧計測版）とも、arena を広げたのは起動後の最初の数 tick に集中した。
+- arena を広げた段（ログに出た 4 tick の合計 +37.6 MB）: `tick_cos_chat_launch` が合計 +34.2 MB（最大 +32.2 MB、3 tick）、`prune_and_sweep` が +3.4 MB（1 tick）。tick の外の増分は合計 +0.2 MB。1 回目の版でも `tick_cos_chat_launch` の最初の tick が +20.9 MB だった。
+- 差し引き（tick の段の合計 +37.6 MB と、1 分で +96 MB）が合わない分は、tick の計測に入らない起動処理（DB の open・migration・store 初期化など）が占めると推定する。起動前後の arena の差は取っていない（未確認）。
+
+### 2. web UI 相当の GET を 1 秒に 1 本足す（240 秒、`trace/get-all.log`）
+inbox・tasks・threads・events・projects を順に送った（応答が遅く、1 path 28 回ずつ。`projects/{pid}/tasks` は 404）。
+- 1 分後の arena は 187 MB、4 分後 202 MB（使用中 12〜41 MB、空き 159〜190 MB）。tick だけの 100 MB の約 2 倍。
+- tick の外の増分は合計 +36.1 MB（最大 +32.3 MB）。段の増分は `prune_and_sweep` 合計 +63.9 MB（最大 +23.2 MB、11 tick）、`check_liveness_and_stagnation` +34.5 MB（1 tick）、`tick_cos_chat_launch` +19.4 MB。GET が同時に走るため、段の値には API 側の確保が混ざる。
+
+### 3. API を 1 本ずつ（150 秒、1 秒に 1 回。`trace/get-*.log`）
+| 送った GET | 1 分後の arena（使用中 / 空き） | 2 分後 | 備考 |
+|---|---|---|---|
+| なし（tick のみ） | 100 MB（25 / 74） | 100 MB | 基準 |
+| `/api/v1/tasks` | 128 MB（29 / 98） | 128 MB | 基準 +28 MB |
+| `/api/v1/inbox` | 200 MB（20 / 180） | 199 MB | 基準 +100 MB。1 回 0.6〜3.4 秒 |
+| `/api/v1/projects` | 203 MB（36 / 166） | 206 MB | 基準 +103 MB。1 回 0.7〜2.1 秒 |
+- arena の跳ねに最も効く API は `GET /inbox` と `GET /projects`（それぞれ基準の約 2 倍）。`GET /tasks` は +28 MB。`threads`・`events` は 10〜25 ms で応答し、跳ねの原因とは見えない（単独の run は未実施）。
+- 3 つとも使用中は 20〜36 MB で、空きが 98〜180 MB。本番の「使用中 20〜90 MB・空き 922 MB」と同じ形。API が多重に走るほど arena が複数に分かれて広がる、という本番の傾きの説明になる。
+- 本番の 930 MB までは再現していない。写しでは GET を 1 秒に 1 本（1 本ずつ直列）送って最大 206 MB。本番は web UI の複数画面・複数の接続が並行して同じ重い GET を送ると推定する（未確認）。条件: DB 1.4 GB、threads 26〜29、240 秒以内。
+
+### 4. 確保を減らす直し（A）について
+`GET /inbox` は `task_ops::inbox::inbox`（task 全件・events 走査）、`GET /projects` は案件ごとの集計を作る。いずれも task 約 2,200 件・events 81 万件の全走査型で、1 回 0.6〜3.4 秒かかる。絞り込み・差分化は task-ops と task-api の複数の関数にまたがり、「狭い範囲」には収まらないので、この run では入れず、「提案」に回す。B+C+D（mallopt）のままで提出する。
+- 新しい計測を足した binary（`CELERIS_TICK_MALLOC_TRACE` 無効時）は、`mallinfo2` を呼ばない。無効時の追加コストは tick ごとの `Instant` と環境変数の 1 回読みだけ。
+
+## 提案（追記）
+- 次の task: `GET /inbox`・`GET /projects` の確保を減らす（task 全件・events 全走査の削減、結果の短い cache・差分化）。before/after は `--get-interval 1 --get-paths /api/v1/inbox,/api/v1/projects` で 150 秒測る（arena 200 MB が下がるか）。
+- `tick_cos_chat_launch` の最初の tick の +20〜32 MB（CoS 一次対応の human_inbox の組み立て）も続けて削る。
+- 本番の傾きの再現には、複数の接続から同時に GET を送る条件（直列でない）が要る。CPU を焼かない範囲で、同時 2〜4 接続・1 秒に 1 本ずつを次に試す。

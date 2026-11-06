@@ -873,7 +873,8 @@ async fn run_claude_code(
         }
         (None, Some(meta)) => {
             let mut outcome = if req.requires_result_file()
-                && let Some(error) = crate::result_location::misplaced_result(
+                && let Some(error) = crate::result_location::misplaced_report(
+                    crate::result_location::RESULT_FILE_NAME,
                     &req.artifacts_dir,
                     req.cwd(),
                     run_started,

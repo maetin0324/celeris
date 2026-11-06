@@ -819,7 +819,8 @@ pub(super) async fn run_worker(
                     ..
                 })
         )
-        && let Some(terminal) = task_worker::result_location::misplaced_result(
+        && let Some(terminal) = task_worker::result_location::misplaced_report(
+            task_worker::result_location::RESULT_FILE_NAME,
             &result_artifacts,
             &result_cwd,
             run_started,

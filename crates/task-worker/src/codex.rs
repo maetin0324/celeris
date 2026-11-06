@@ -1024,7 +1024,8 @@ async fn run_codex(
             // A conversation can answer directly; work orders still require their artifacts.
             // A CoS chat run (transient task without `conversation`) also replies in the chat.
             let terminal = if req.requires_result_file()
-                && let Some(error) = crate::result_location::misplaced_result(
+                && let Some(error) = crate::result_location::misplaced_report(
+                    crate::result_location::RESULT_FILE_NAME,
                     &req.artifacts_dir,
                     req.cwd(),
                     run_started,

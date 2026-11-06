@@ -249,10 +249,19 @@ def criteria(stage, facts, scope):
     elif pf is None:
         add("G7", "実 LLM pilot の再実行で cos_usage_null 0", "pending",
             "pilot の facts（--pilot-facts）が無い。operator の再実行（--cos-route 付き）待ち")
+    elif pf.get("schema") != "celeris.long-horizon-pilot-gate/1":
+        # pilot_gate.py judge --pilot-facts の出力だけを受ける（driver の facts や手書きの JSON で通さない）。
+        add("G7", "実 LLM pilot の再実行で cos_usage_null 0", "fail",
+            "pilot の facts が pilot_gate.py の出力でない（scripts/dev/long-horizon-pilot/pilot_gate.py judge --pilot-facts）")
+    elif pf.get("g7") == "pending":
+        add("G7", "実 LLM pilot の再実行で cos_usage_null 0", "pending",
+            f"実 LLM の facts でない（missing={pf.get('missing')}）。operator の再実行（--cos-route 付き）待ち")
     else:
-        nulls = [m for m in pf.get("missing", []) if "cos_usage_null" in str(m)]
-        add("G7", "実 LLM pilot の再実行で cos_usage_null 0", "fail" if nulls or not pf.get("cos_runs") else "pass",
-            f"cos_runs={pf.get('cos_runs')} cos_usage_null={len(nulls)}")
+        # g7 は pilot_gate.py が実 LLM の facts で決める（usage・cache・USD の欠測 0、CoS の run が 1 本以上）。
+        ok = pf.get("g7") == "pass" and pf.get("cos_usage_null") == 0 and (pf.get("cos_runs") or 0) >= 1
+        add("G7", "実 LLM pilot の再実行で cos_usage_null 0", "pass" if ok else "fail",
+            f"g7={pf.get('g7')} cos_runs={pf.get('cos_runs')} cos_usage_null={pf.get('cos_usage_null')} "
+            f"missing={pf.get('missing')}")
     return rows
 
 

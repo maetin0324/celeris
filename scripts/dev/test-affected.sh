@@ -374,6 +374,16 @@ if grep -q -E '^scripts/dev/daemon-soak/' "$changed"; then
   ran=1
 fi
 
+# 長時間 pilot の driver・測定の契約の判定（N1。ADR 2026-11-06-phase5-n1-pilot-measurement-contract）の単体試験。
+# daemon も cargo も使わない（実 daemon の経路は scripts/dev/test-long-horizon-pilot.sh）。
+if grep -q -E '^scripts/dev/long-horizon-pilot/' "$changed"; then
+  echo "test-affected: long-horizon-pilot の単体試験を走らせる（理由: pilot の driver・判定の変更）" >&2
+  for t in test_driver_usage.py test_pilot_gate.py test_pilot_effect.py; do
+    python3 -I -W ignore::ResourceWarning "scripts/dev/long-horizon-pilot/$t"
+  done
+  ran=1
+fi
+
 if [ -n "$tsv_reason" ]; then
   # runner を作り直し（cargo を使う）、$TMPDIR の写しで ts-only の経路と意図的な破壊の検出を確かめる。
   echo "test-affected: bash scripts/dev/test-ts-verify.sh を走らせる（理由: $tsv_reason）" >&2

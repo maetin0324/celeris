@@ -2746,3 +2746,46 @@ async fn codex_run_fails_when_tracked_required_rules_are_missing() {
     assert!(err.to_string().contains("missing"), "{err}");
     assert!(!started.exists());
 }
+
+/// ADR 2026-11-06-misplaced-report-recovery-generalized D5: codex の reviewer run にも
+/// review.json / result.json の絶対パスの注意が出る（`claude_code::work_dir_note` の再利用）。
+#[tokio::test]
+async fn reviewer_prompt_states_absolute_review_and_result_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = stub_codex(
+        dir.path(),
+        r#"
+artifact_root=''
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '--add-dir' ]; then shift; [ -n "$artifact_root" ] || artifact_root="$1"; fi
+    shift
+done
+mkdir -p "$artifact_root"
+printf '%s' '{"summary":"ok","evidence":[]}' > "$artifact_root/result.json"
+echo '{"type":"turn.completed"}'
+"#,
+    );
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.task.kind = task_core::TaskKind::Review;
+    let _ = CodexAdapter::new(config)
+        .run(
+            req,
+            "run-rv-note",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await;
+    let prompt = std::fs::read_to_string(dir.path().join("runs/run-rv-note/prompt.txt")).unwrap();
+    let a = dir.path().join("artifacts");
+    let a = a.display();
+    assert!(
+        prompt.contains("（レビュー対象タスクの作業場所）"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains(&format!("review.json は必ず `{a}/review.json` に")),
+        "{prompt}"
+    );
+    assert!(prompt.contains(&format!("result.json は必ず `{a}/result.json` に書く")));
+    assert!(prompt.contains(&format!("Write your verdicts to `{a}/review.json`")));
+}

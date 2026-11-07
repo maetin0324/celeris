@@ -101,7 +101,24 @@ fn init_tracing(format: LogFormat) {
 /// 直後の `std::process::exit` で OS が片付ける）。
 const SHUTDOWN_BOUND: Duration = Duration::from_secs(10);
 
+/// glibc malloc の保持を抑える（ADR `2026-11-06-daemon-rss-malloc-arena`）。thread ごとの arena の乱立を 2 に絞り、
+/// 128 KiB 以上の確保は mmap にして解放時に OS へ返し、top の空きは 1 MiB を超えたら返す。
+/// 環境変数を使わず起動時に設定する（systemd unit を変えない）。glibc 以外の libc では何もしない。
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn tune_malloc() {
+    // SAFETY: `mallopt` は thread を起こす前（main の先頭）に値を設定するだけで、返り値（失敗時 0）は無視してよい。
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 2);
+        libc::mallopt(libc::M_MMAP_THRESHOLD, 128 * 1024);
+        libc::mallopt(libc::M_TRIM_THRESHOLD, 1024 * 1024);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn tune_malloc() {}
+
 fn main() {
+    tune_malloc();
     let cli = Cli::parse();
     init_tracing(cli.log_format);
     // ADR-0045 D2: 既定値も人が書いた `--config ~/...` も同じ規則で展開する。

@@ -1,12 +1,17 @@
 //! Diagnose misplaced reports without adopting their untrusted contents.
-//! See docs/adr/2026-10-17-wu-result-location.md.
+//! See docs/adr/2026-10-17-wu-result-location.md and
+//! agent-docs/adr/2026-11-06-misplaced-report-recovery-generalized.md (one rule for every report).
 
 use std::path::Path;
 
 use crate::Terminal;
 
 /// Stable diagnostic marker used to prevent automatic replan of the same path error.
+/// It is the message prefix `misplaced_report` produces for `RESULT_FILE_NAME`.
 pub const MISPLACED_RESULT_MARKER: &str = "result.json misplaced:";
+
+/// The worker's report file name (the expected path is `<artifacts_dir>/result.json`).
+pub const RESULT_FILE_NAME: &str = "result.json";
 
 /// Only the expected report is authoritative. Search the current artifact root and
 /// cwd, never follow symlinks or inspect adapter run records / dependency trees.
@@ -19,12 +24,21 @@ pub const MISPLACED_RESULT_MARKER: &str = "result.json misplaced:";
 /// ADR 2026-10-18-result-location-scope: the task root's `wu/` (other WUs' canonical reports) is
 /// not searched and files older than `since` are not candidates. Zero candidates is "no result"
 /// (`None`, the normal retryable missing-report path); only several fresh candidates are misplaced.
-pub async fn misplaced_result(
+///
+/// ADR 2026-11-06-misplaced-report-recovery-generalized: the same rule serves every report;
+/// `file_name` is the report's plain file name (`result.json`, `review.json`) and only files of
+/// that name are candidates.
+pub async fn misplaced_report(
+    file_name: &str,
     artifacts_dir: &Path,
     cwd: &Path,
     since: std::time::SystemTime,
 ) -> Option<Terminal> {
-    let expected = artifacts_dir.join("result.json");
+    debug_assert!(
+        !file_name.is_empty() && !file_name.contains(std::path::is_separator),
+        "report file name must be a plain name: {file_name}"
+    );
+    let expected = artifacts_dir.join(file_name);
     if !matches!(tokio::fs::symlink_metadata(&expected).await,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound)
     {
@@ -63,7 +77,7 @@ pub async fn misplaced_result(
                 {
                     pending.push(entry.path());
                 }
-            } else if kind.is_file() && name == "result.json" {
+            } else if kind.is_file() && name == file_name {
                 found.push(entry.path());
             }
         }
@@ -95,7 +109,7 @@ pub async fn misplaced_result(
     }
     Some(Terminal::Error {
         message: format!(
-            "{MISPLACED_RESULT_MARKER} expected {}; found {}; reports were not adopted",
+            "{file_name} misplaced: expected {}; found {}; reports were not adopted",
             expected.display(),
             found
                 .iter()
@@ -129,7 +143,11 @@ mod tests {
             std::fs::write(wu.join("result.json"), "{}").unwrap();
         }
         let since = std::time::SystemTime::UNIX_EPOCH;
-        assert!(misplaced_result(&artifacts, &cwd, since).await.is_none());
+        assert!(
+            misplaced_report(RESULT_FILE_NAME, &artifacts, &cwd, since)
+                .await
+                .is_none()
+        );
         assert!(!artifacts.join("result.json").exists());
     }
 
@@ -153,23 +171,35 @@ mod tests {
         std::os::unix::fs::symlink(&sibling, cwd.join("linked")).unwrap();
         let stale = std::time::SystemTime::now() + std::time::Duration::from_secs(7200);
         let fresh = std::time::SystemTime::UNIX_EPOCH;
-        assert!(misplaced_result(&artifacts, &cwd, stale).await.is_none());
+        assert!(
+            misplaced_report(RESULT_FILE_NAME, &artifacts, &cwd, stale)
+                .await
+                .is_none()
+        );
         // Other WUs' canonical reports under the task root's wu/ are never candidates.
         let other_wu = root.join("wu/other-wu/artifacts");
         std::fs::create_dir_all(&other_wu).unwrap();
         std::fs::write(other_wu.join("result.json"), "{}").unwrap();
-        assert!(misplaced_result(&artifacts, &cwd, fresh).await.is_none());
+        assert!(
+            misplaced_report(RESULT_FILE_NAME, &artifacts, &cwd, fresh)
+                .await
+                .is_none()
+        );
         let stray = root.join("repos/artifacts");
         std::fs::create_dir_all(&stray).unwrap();
         std::fs::write(stray.join("result.json"), "not even JSON").unwrap();
         // Older than the run start: not this run's, so no result rather than misplaced.
-        assert!(misplaced_result(&artifacts, &cwd, stale).await.is_none());
+        assert!(
+            misplaced_report(RESULT_FILE_NAME, &artifacts, &cwd, stale)
+                .await
+                .is_none()
+        );
         std::fs::write(root.join("repos/result.json"), "{}").unwrap();
         let Some(Terminal::Error {
             message,
             retryable: false,
             ..
-        }) = misplaced_result(&artifacts, &cwd, fresh).await
+        }) = misplaced_report(RESULT_FILE_NAME, &artifacts, &cwd, fresh).await
         else {
             panic!("misplacement must be permanent");
         };
@@ -178,15 +208,160 @@ mod tests {
         assert!(message.contains(&artifacts.join("result.json").display().to_string()));
         // A second stray is ambiguous: never guess.
         std::fs::write(root.join("repos/result.json"), "{}").unwrap();
-        assert!(misplaced_result(&artifacts, &cwd, fresh).await.is_some());
+        assert!(
+            misplaced_report(RESULT_FILE_NAME, &artifacts, &cwd, fresh)
+                .await
+                .is_some()
+        );
         std::fs::remove_file(root.join("repos/result.json")).unwrap();
         // A single stray written during the run is copied to the expected path (reviewer or worker).
         std::fs::write(stray.join("result.json"), r#"{"summary":"ok"}"#).unwrap();
-        assert!(misplaced_result(&artifacts, &cwd, fresh).await.is_none());
+        assert!(
+            misplaced_report(RESULT_FILE_NAME, &artifacts, &cwd, fresh)
+                .await
+                .is_none()
+        );
         assert_eq!(
             std::fs::read_to_string(artifacts.join("result.json")).unwrap(),
             r#"{"summary":"ok"}"#
         );
         assert!(stray.join("result.json").exists());
+    }
+
+    const REVIEW: &str = "review.json";
+
+    /// A reviewer task dir (cwd = artifacts' parent) with the repo worktree under it.
+    fn reviewer_layout() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let artifacts = root.join("artifacts");
+        std::fs::create_dir_all(&artifacts).unwrap();
+        std::fs::create_dir_all(root.join("repos/agent-platform")).unwrap();
+        (dir, root, artifacts)
+    }
+
+    /// 01M6QZ031R: the reviewer wrote result.json to the expected path but review.json with
+    /// `cat > artifacts/review.json` inside the repo. The single fresh stray is recovered.
+    #[tokio::test]
+    async fn a_review_json_written_in_the_repo_is_recovered() {
+        let (_dir, root, artifacts) = reviewer_layout();
+        let cwd = root.clone();
+        std::fs::write(artifacts.join(RESULT_FILE_NAME), "{}").unwrap();
+        let stray = root.join("repos/agent-platform/artifacts");
+        std::fs::create_dir_all(&stray).unwrap();
+        let body = r#"{"criteria":[{"index":3,"pass":true}]}"#;
+        std::fs::write(stray.join(REVIEW), body).unwrap();
+        let since = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        assert!(
+            misplaced_report(REVIEW, &artifacts, &cwd, since)
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read_to_string(artifacts.join(REVIEW)).unwrap(),
+            body
+        );
+        assert!(
+            stray.join(REVIEW).exists(),
+            "the stray itself is left in place"
+        );
+    }
+
+    #[tokio::test]
+    async fn review_json_zero_stale_and_multiple_strays_are_not_adopted() {
+        let (_dir, root, artifacts) = reviewer_layout();
+        let cwd = root.clone();
+        let fresh = std::time::SystemTime::UNIX_EPOCH;
+        let stale = std::time::SystemTime::now() + std::time::Duration::from_secs(7200);
+        // Zero candidates: no review, the caller's missing-report path fails as before.
+        assert!(
+            misplaced_report(REVIEW, &artifacts, &cwd, fresh)
+                .await
+                .is_none()
+        );
+        assert!(!artifacts.join(REVIEW).exists());
+        // One stray older than the run start: not this run's, never copied.
+        let stray = root.join("repos/agent-platform/artifacts");
+        std::fs::create_dir_all(&stray).unwrap();
+        std::fs::write(stray.join(REVIEW), "{}").unwrap();
+        assert!(
+            misplaced_report(REVIEW, &artifacts, &cwd, stale)
+                .await
+                .is_none()
+        );
+        assert!(!artifacts.join(REVIEW).exists());
+        // Several fresh strays are ambiguous: permanent error, nothing copied.
+        std::fs::write(root.join("repos/review.json"), "{}").unwrap();
+        let Some(Terminal::Error {
+            message,
+            retryable: false,
+            ..
+        }) = misplaced_report(REVIEW, &artifacts, &cwd, fresh).await
+        else {
+            panic!("ambiguous review.json strays must be a permanent error");
+        };
+        assert!(message.starts_with("review.json misplaced:"), "{message}");
+        assert!(message.contains(&stray.join(REVIEW).display().to_string()));
+        assert!(message.contains(&root.join("repos/review.json").display().to_string()));
+        assert!(message.contains(&artifacts.join(REVIEW).display().to_string()));
+        assert!(!artifacts.join(REVIEW).exists());
+    }
+
+    #[tokio::test]
+    async fn the_expected_review_json_wins_over_strays() {
+        let (_dir, root, artifacts) = reviewer_layout();
+        let cwd = root.clone();
+        std::fs::write(artifacts.join(REVIEW), "expected").unwrap();
+        for stray in ["repos/agent-platform/artifacts", "repos"] {
+            let path = root.join(stray);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join(REVIEW), "stray").unwrap();
+        }
+        let fresh = std::time::SystemTime::UNIX_EPOCH;
+        assert!(
+            misplaced_report(REVIEW, &artifacts, &cwd, fresh)
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read_to_string(artifacts.join(REVIEW)).unwrap(),
+            "expected"
+        );
+    }
+
+    /// Only files of the requested name are candidates: a stray result.json is never taken as
+    /// review.json (and the reverse), and the result.json message keeps its replan marker.
+    #[tokio::test]
+    async fn candidates_are_matched_by_the_requested_file_name() {
+        let (_dir, root, artifacts) = reviewer_layout();
+        let cwd = root.clone();
+        let fresh = std::time::SystemTime::UNIX_EPOCH;
+        let stray = root.join("repos/agent-platform/artifacts");
+        std::fs::create_dir_all(&stray).unwrap();
+        std::fs::write(stray.join(RESULT_FILE_NAME), "result").unwrap();
+        assert!(
+            misplaced_report(REVIEW, &artifacts, &cwd, fresh)
+                .await
+                .is_none()
+        );
+        assert!(!artifacts.join(REVIEW).exists());
+        std::fs::write(stray.join(REVIEW), "review").unwrap();
+        assert!(
+            misplaced_report(REVIEW, &artifacts, &cwd, fresh)
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read_to_string(artifacts.join(REVIEW)).unwrap(),
+            "review"
+        );
+        assert!(!artifacts.join(RESULT_FILE_NAME).exists());
+        std::fs::write(root.join("repos/result.json"), "second").unwrap();
+        let Some(Terminal::Error { message, .. }) =
+            misplaced_report(RESULT_FILE_NAME, &artifacts, &cwd, fresh).await
+        else {
+            panic!("two fresh result.json strays are ambiguous");
+        };
+        assert!(message.starts_with(MISPLACED_RESULT_MARKER), "{message}");
     }
 }

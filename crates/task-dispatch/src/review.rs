@@ -1120,6 +1120,8 @@ async fn run_reviewer_inner(
         },
     };
     let tag = format!("reviewer({})", run.run_id);
+    // ADR 2026-11-06-misplaced-report-recovery-generalized D3: 誤配置した review.json の回収の基準時刻。
+    let run_started = std::time::SystemTime::now();
     // reviewer の process にも run 専用の `TMPDIR` を与える（この関数を抜けると消える）。
     let (adapter, _run_tmp) = with_run_tmpdir(&run.adapter, workspace_dir, &run.run_id);
     run.sink
@@ -1246,6 +1248,19 @@ async fn run_reviewer_inner(
                 ),
             });
         }
+    }
+    // ADR 2026-11-06-misplaced-report-recovery-generalized D3: 期待 path に無く、run 中に書かれた
+    // review.json が探索範囲にちょうど 1 件あれば期待 path へ copy して下の通常の検証にかける。
+    // 0 件・古い 1 件は期待 path が空のまま（下の not found）、複数件は推測せず不合格。
+    if let Some(Terminal::Error { message, .. }) = task_worker::result_location::misplaced_report(
+        REVIEW_FILE_NAME,
+        artifacts_dir,
+        workspace_dir,
+        run_started,
+    )
+    .await
+    {
+        return fail_all(format!("{tag}: {message}"));
     }
     let text = match std::fs::read_to_string(&review_path) {
         Ok(t) => t,

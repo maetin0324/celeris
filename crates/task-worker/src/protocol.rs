@@ -1118,9 +1118,12 @@ impl RunRequest {
     /// - 成果物が workspace の外（reviewer run 等）: 相対 `artifacts/` は cwd 直下を指して誤配置になるので絶対パス。
     /// - worktree（cwd != workspace。ADR-0041 D1）: 成果物は作業ツリーの**外**にあるので絶対パス。
     ///   `..` を書かせない（`artifact.path` の規則 ADR-0003 D5 と衝突させない）。
+    /// - reviewer run（`TaskKind::Review`）: 判定のため `repos/<name>` へ cd するので絶対パス
+    ///   （ADR 2026-11-06-misplaced-report-recovery-generalized D5）。
     pub fn artifacts_rel(&self) -> String {
         if self.work_dir.is_some()
             || self.context.work_unit.is_some()
+            || self.task.kind == task_core::TaskKind::Review
             || !self.artifacts_dir.starts_with(&self.workspace)
         {
             return self.artifacts_dir.to_string_lossy().into_owned();

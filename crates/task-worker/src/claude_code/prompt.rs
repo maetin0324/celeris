@@ -30,19 +30,28 @@ pub const BROWSER_ALLOWED_DOMAINS_GUIDANCE: &str = "**Browser child-task origins
 /// 絶対パスを返す）が、その絶対パスの指示を読み飛ばして相対 `artifacts/` を書いてしまう事故があったため、
 /// 冒頭で明示的に注意する。`work_dir` が無い・`workspace` と同じなら何も足さない（既存の文面は
 /// 1 バイトも変わらない）。純粋関数。
-pub(crate) fn work_dir_note(
-    work_dir: Option<&Path>,
-    workspace: &Path,
-    artifacts_dir: &Path,
-) -> String {
-    match work_dir {
-        Some(wd) if wd != workspace => format!(
-            "cwd は `{}`（リポジトリの worktree）。成果物ディレクトリは `{}`。\
+///
+/// ADR 2026-11-06-misplaced-report-recovery-generalized D5: reviewer run（`TaskKind::Review`）は
+/// `work_dir` を持たず対象タスクの作業場所で動くが、判定のために `repos/<name>` へ cd した後の相対
+/// `artifacts/` は repo の中を指す（01M6QZ031R）。reviewer にも同じ注意を出し、review.json と
+/// result.json の絶対パスを書く。
+pub(crate) fn work_dir_note(req: &RunRequest) -> String {
+    let artifacts_dir = req.artifacts_dir.display();
+    if req.task.kind == task_core::TaskKind::Review {
+        return format!(
+            "cwd は `{}`（レビュー対象タスクの作業場所）。成果物ディレクトリは `{artifacts_dir}`。\
+             リポジトリ（`repos/` の下）へ cd した後の相対 `artifacts/` はリポジトリの中を指すので使わない。\
+             review.json は必ず `{artifacts_dir}/review.json` に、result.json は必ず `{artifacts_dir}/result.json` に書く。\
+             親ディレクトリを推測した相対パスも使わない。\n\n",
+            req.cwd().display()
+        );
+    }
+    match req.work_dir.as_deref() {
+        Some(wd) if wd != req.workspace => format!(
+            "cwd は `{}`（リポジトリの worktree）。成果物ディレクトリは `{artifacts_dir}`。\
              相対 `artifacts/` はリポジトリの中を指すので使わない。\
-             result.json は必ず `{}/result.json` に書く。親ディレクトリを推測した相対パスも使わない。\n\n",
-            wd.display(),
-            artifacts_dir.display(),
-            artifacts_dir.display()
+             result.json は必ず `{artifacts_dir}/result.json` に書く。親ディレクトリを推測した相対パスも使わない。\n\n",
+            wd.display()
         ),
         _ => String::new(),
     }

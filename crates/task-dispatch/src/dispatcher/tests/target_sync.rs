@@ -930,6 +930,13 @@ async fn pre_review_sync_halted_review_resumes_when_target_is_quiet() {
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
+    // ADR-0125 (b): 上限で止まるまで（halted event が出るまで）待つ。tick の回数は成立条件にしない。
+    assert!(
+        run_until_state(&mut d, || events_of(&store, &task)
+            .iter()
+            .any(|e| matches!(e, Event::ReviewResyncHalted { .. })))
+        .await
+    );
     run_until_idle(&mut d, 100).await;
     assert_eq!(
         events_of(&store, &task)
@@ -996,6 +1003,13 @@ async fn pre_review_sync_halted_without_reviewer_resumes_by_rereview_and_lands()
     assert!(
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
+    );
+    // ADR-0125 (b): 上限で止まるまで（halted event が出るまで）待つ。tick の回数は成立条件にしない。
+    assert!(
+        run_until_state(&mut d, || events_of(&store, &task)
+            .iter()
+            .any(|e| matches!(e, Event::ReviewResyncHalted { .. })))
+        .await
     );
     run_until_idle(&mut d, 100).await;
     assert_eq!(

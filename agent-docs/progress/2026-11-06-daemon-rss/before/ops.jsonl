@@ -1,0 +1,4 @@
+{"schema": "celeris.daemon-soak/1", "step": "gate", "at": -0.0, "condition": "off", "label": "before", "ok": true, "reason": "short", "approval": null}
+{"schema": "celeris.daemon-soak/1", "step": "setup", "at": 1.7, "condition": "off", "label": "before", "project": "01M6QZ7XDZ403QZ0T0H5DHM9E5", "script_modes": {}, "controller": "off", "port": 37469, "pid": 3873078, "celeris": "/local/celeris/data/scratch/targets/task-01M6QZ031RC9YK3E6T12ESCR80/target/debug/celeris"}
+{"schema": "celeris.daemon-soak/1", "step": "start", "at": 0.0, "condition": "off", "label": "before", "secs": 240, "limits": {"max_rss_mb": 4096, "min_free_mb": 5120, "max_db_mb": 4096, "max_api_failures": 3}, "task_interval": 30.0, "chat_interval": 300.0}
+{"schema": "celeris.daemon-soak/1", "step": "stop", "at": 244.0, "condition": "off", "label": "before", "reason": "wall", "tasks": 9, "chats": 0, "wakes": 0}

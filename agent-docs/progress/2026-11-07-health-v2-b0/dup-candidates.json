@@ -1,5 +1,5 @@
 {
- "schema": "celeris.health-v2-b0.dup-candidates/1",
+ "schema": "celeris.health-v2-b0.dup-candidates/2",
  "base_sha": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
  "base_note": "着手時の git merge-base HEAD main。capability-map.json の base_sha と同じ",
  "generator": "agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates-build.py",
@@ -15,10 +15,10 @@
  },
  "summary": {
   "candidates": 55,
-  "by_judgment": {
-   "統合": 5,
-   "削除": 35,
-   "維持": 15
+  "by_decision": {
+   "merge": 5,
+   "delete": 35,
+   "keep": 15
   }
  },
  "candidates": [
@@ -38,7 +38,8 @@
     "crates/celerisctl/src/commands/models.rs:16",
     "crates/celerisctl/src/commands/script.rs:31"
    ],
-   "judgment": "統合",
+   "decision": "merge",
+   "decision_ja": "統合",
    "reason": "6 つの subcommand が「config を読む → [api] listen から http://<listen>/api/v1 → client_token()」を同じ手順で書き写している。既定 path の定数 DEFAULT_CONFIG も 5 file（cron・integration・knowledge・models・script）に別々にあり、cos_ops は同じ文字列を直書きする。cos_ops だけが CELERIS_CONFIG を見て、browser_doctor は文言が違う（'API listen missing'）。接続先の決め方を変えると 6 か所を同時に直す必要があり、既に食い違いが出ている。",
    "evidence": {
     "same_invariant": "同じ: CLI が叩く API の base URL と token は config の [api] から決まる",
@@ -62,7 +63,8 @@
     "crates/celeris/src/accounts_admin.rs:637",
     "crates/celeris/src/accounts_admin.rs:646"
    ],
-   "judgment": "統合",
+   "decision": "merge",
+   "decision_ja": "統合",
    "reason": "同じ 4 値（ok・auth_failed・throttled・spawn_failed）の enum が task-api と task-worker にあり、celeris が 1 対 1 の写像（map_check_result）と名前の関数（account_check_result_name、serde の snake_case と同じ文字列）を手で持つ。値を 1 つ足すと 3 file を同時に直す。",
    "evidence": {
     "same_invariant": "同じ: account の疎通確認の結果の語彙（ADR-0024 D6）",
@@ -87,7 +89,8 @@
     "crates/task-dispatch/src/dispatcher/eval_trials.rs:87",
     "crates/task-dispatch/src/dispatcher/eval_trials.rs:919"
    ],
-   "judgment": "統合",
+   "decision": "merge",
+   "decision_ja": "統合",
    "reason": "route_features.hash（内容アドレス）の材料 {schema, template, brief, aux} と 'sha256:' + hex の書式を、route_record の FeatureBody とeval_trials の EvalFeatureBody が別々に持つ。eval 側の doc comment が「FeatureBody と同じ形」と書いて手で合わせている。片方の欄順・書式が変わると同じ特徴量が別 hash になる。",
    "evidence": {
     "same_invariant": "同じ: 同じ特徴量は同じ hash（route_features の内容アドレス）",
@@ -108,7 +111,8 @@
     "crates/task-worker/src/scratch.rs:22",
     "crates/task-api/src/handlers/tests.rs:247"
    ],
-   "judgment": "統合",
+   "decision": "merge",
+   "decision_ja": "統合",
    "reason": "`celeris.scratch-status/1` の定数が task-ops（SCRATCH_STATUS_SCHEMA）と task-worker（STATUS_SCHEMA）に 2 つある。task-worker 側は workspace で参照されない。",
    "evidence": {
     "same_invariant": "同じ: scratch status の wire schema 名（ADR-0075 D6）",
@@ -130,7 +134,8 @@
     "crates/task-worker/src/browser_runtime.rs:29",
     "crates/task-worker/src/browser_runtime.rs:359"
    ],
-   "judgment": "統合",
+   "decision": "merge",
+   "decision_ja": "統合",
    "reason": "sandbox の内側の UID 1000 を SANDBOX_UID（pub、未参照）と INNER_ID（private、使われている）の 2 つの定数で持つ。同じ file・同じ意味（ADR-0105）。",
    "evidence": {
     "same_invariant": "同じ: sandbox 内の UID/GID",
@@ -152,7 +157,8 @@
     "crates/celeris/src/config/execution.rs:302",
     "config/celeris.example.toml:629"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "`[execution] cheap_local_first` は読み込むが crates の中で 1 度も読まれない（ADR-0132 L7 の切替。ADR が挙げる試験 dispatcher::tests::cheap_local_first は現存しない）。書いても挙動が変わらない欄で、CLAUDE.md の「警告だけ出して無視を残さない」に反する。",
    "evidence": {
     "same_invariant": null,
@@ -171,7 +177,8 @@
    "files": [
     "crates/celeris/src/config/scratch.rs:29"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "`[scratch] l1_max_gb` は読まれない。L1 cache server（webdav）は ADR-0129 で廃止され、ADR-0075 付記 12 は「G2 まで使わない」と書いた。書いても効かない欄である。",
    "evidence": {
     "same_invariant": null,
@@ -192,7 +199,8 @@
     "crates/task-ops/src/daemon.rs:213",
     "crates/task-ops/src/daemon.rs:217"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "ScratchCacheView.stats は「廃止（ADR-0129）。型だけ残す（値は常に None）」と doc comment に書かれた API 欄。SCRATCH_CACHE_STATS_SCHEMA は未参照、web/api/generated/schema.json に型が残る。旧い仕組みの残りで、常に null の API 欄である。",
    "evidence": {
     "same_invariant": null,
@@ -215,7 +223,8 @@
     "crates/task-core/src/route_record.rs:276",
     "crates/task-core/src/route_select/trace.rs:157"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "route_record::RouteDecision と DecisionSubject は互いの欄以外から参照されない。route_decisions 行の正本は route_select::trace::RouteDecision（store の書き込みも dispatcher もこちらを使う）。同じ記録の型が 2 つあり、片方は使われていない。",
    "evidence": {
     "same_invariant": "同じ: route_decisions の 1 行（schema celeris.route-decision/1）",
@@ -234,7 +243,8 @@
    "files": [
     "scripts/scratch/u5/stats.py:1"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "sccache の stats JSON を印字する 6 行の使い捨て script。どの file からも呼ばれず、試験も無い。",
    "evidence": {
     "same_invariant": null,
@@ -256,7 +266,8 @@
     "crates/task-core/src/chat/digest.rs:357",
     "crates/task-core/src/chat/triage.rs:501"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "CosTriage*・CosDigest* の 8 型が同じ欄で 2 か所にある。ただし script-runtime（TS の host API）は本体で task-core に依存しない境界（付記 S4-12）で、host API の DTO は Option 欄の必須化（Option::deserialize）など別の wire 規則を持つ。tests/dto.rs が fixture の全行で両方を往復させて一致を確かめる。security 境界の独立検証として維持する。",
    "evidence": {
     "same_invariant": "同じ形だが wire 規則が違う",
@@ -282,7 +293,8 @@
     "crates/task-core/src/chat/digest.rs:268",
     "control-ts/src/domains/cos_digest.ts:370"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "lane 規則・route 優先・execution gate・cos digest の判断が Rust と TS の両方にある。ADR 2026-11-02-ts-control-layer-boundary の移行（mode rust→compare→canary→ts）で、Rust は参照実装として compare の照合に要る。移行の途中の二重化で、旧い仕組みの残りではない。停止条件: 領域の mode が本番で ts に固定され、fallback の要件を ADR で外したら、その領域の Rust の判定を同じ差分で消す（S4-17 と同じ規則）。project_controller は TS だけで Rust の参照実装が無い（project_controller.ts:4）ので対象外。",
    "evidence": {
     "same_invariant": "同じ（compare が一致を検査する）",
@@ -311,7 +323,8 @@
     "crates/task-core/src/route_select/task_override.rs:142",
     "crates/llm-proxy/src/routing_context.rs:75"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "名前が似ているだけ。direct_route は planner を通すかの判定、trace は route_decisions の記録、routing.rs は harness の候補列、browser_backend は browser backend の選択、model_policy::LaneDecision は規則表の結果と監査、lane::LaneDecision は decision-assisted の lane 選択、task_override::ResolvedRouting は routing mode、llm-proxy の ResolvedRouting は要求 1 件の context と相関 ID。不変条件も変更理由も違う。",
    "evidence": {
     "same_invariant": null,
@@ -328,7 +341,8 @@
     "crates/task-core/src/model_policy.rs:42",
     "crates/task-core/src/route_record.rs:18"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "model_policy::TaskFeatures は lane を決める 9 軸の順序尺度、route_record::TaskFeatures は route 記録の brief と内容 hash。route_record は前者を LaneFeatures の別名で取り込んで使っており、別物として扱われている。",
    "evidence": {
     "same_invariant": null,
@@ -351,7 +365,8 @@
     "crates/task-api/src/memory.rs:23",
     "crates/task-ops/src/memory.rs:31"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "MCP の TaskSummary・SkillSummaryView は MCP tool の出力（欄を絞った公開契約）で、task-ops/task-api の view とは公開先が違う。MemoryView は task-ops（PathBuf を持つ内部値）→ task-api（JSON の文字列）の層の写しで、API の型を内部に漏らさないため。名前が同じだけで統合しない。",
    "evidence": {
     "same_invariant": null,
@@ -371,7 +386,8 @@
     "crates/celeris/src/config/workspace.rs:15",
     "crates/task-core/src/workspace_config.rs:35"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "daemon config の [workspace]（worktree の branch 接頭辞・build cache）と、repo の中の .config/celeris/workspace.toml（検査コマンド・成果物の置き場）。読む file も規則（daemon は deny_unknown_fields で拒否、repo の file は warn して既定）も違う。",
    "evidence": {
     "same_invariant": null,
@@ -391,7 +407,8 @@
     "crates/llm-proxy/src/reservation.rs:20",
     "crates/script-runtime/src/generation.rs:62"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "SystemClock の名前が 4 つあるが、trait の操作が違う（sleep だけ、now_unix+sleep_until、Send+Sync の now など）。crate ごとの試験の注入点で、共通の crate に寄せると依存が増えるだけ。",
    "evidence": {
     "same_invariant": null,
@@ -410,7 +427,8 @@
     "crates/task-core/src/route_select/escalation.rs:8",
     "crates/task-ops/src/derive.rs:326"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "FailureClass が 4 つあるが、採点の失敗分類・provider fallback の HTTP 失敗分類・escalation の run 失敗分類・表示用の導出で、値の集合も使い道も違う。llm-proxy の分類は provider 固有の wire 仕様に依る。",
    "evidence": {
     "same_invariant": null,
@@ -429,7 +447,8 @@
     "crates/celeris-credentiald/src/injection_ipc.rs:123",
     "crates/task-worker/src/browser_cdp_sink.rs:141"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "InjectionReceipt は IPC の応答（deny_unknown_fields、秘密を含まない欄だけ）と、注入器の内部の commit 結果で欄が違う。InjectionRequest は credentiald の IPC と worker の CDP sink の要求。security 境界の両側で独立に検証する型なので共通化しない。",
    "evidence": {
     "same_invariant": null,
@@ -449,7 +468,8 @@
     "crates/task-worker/src/protocol.rs:997",
     "crates/task-core/src/execution.rs:572"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "protocol 側は review.json の wire（hint の自由記述込み、serde）、task-core 側は分類に使う scope・class だけの値。分類が自由記述を見ないことを型で保つ層の分離。",
    "evidence": {
     "same_invariant": null,
@@ -466,7 +486,8 @@
     "crates/celerisctl/src/commands/routing.rs:123",
     "crates/task-core/src/route_select/stage.rs:6"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "CLI の値（shadow・enforce・eval。clap の ValueEnum）と記録の stage（shadow・enforce）。CLI は eval を足した上位集合で、記録の enum に eval を入れると route_decisions.stage の語彙が変わる。",
    "evidence": {
     "same_invariant": null,
@@ -482,7 +503,8 @@
    "files": [
     "crates/task-core/src/route_select/task_override.rs:139"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "evidence_mode の無い旧い routing_resolved event を pinned/latest と読む規則。events は追記専用で書き換えないので、旧い event を読む経路は残す（CLAUDE.md の禁止事項）。",
    "evidence": {
     "same_invariant": null,
@@ -498,7 +520,8 @@
    "files": [
     "crates/celeris-credentiald/src/lib.rs:1377"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `from_result` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -515,7 +538,8 @@
    "files": [
     "crates/celeris/src/config/cos.rs:377"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `cos_harness_capability_warnings` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -532,7 +556,8 @@
    "files": [
     "crates/llm-proxy/src/sources/codex.rs:257"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `from_responses_body` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -549,7 +574,8 @@
    "files": [
     "crates/llm-proxy/src/sources/mod.rs:46"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `retryable_before_any_bytes` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -566,7 +592,8 @@
    "files": [
     "crates/task-api/src/types.rs:817"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub struct `AccountLimitPatchBody` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -583,7 +610,8 @@
    "files": [
     "crates/task-core/src/accounts.rs:91"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `is_on` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -600,7 +628,8 @@
    "files": [
     "crates/task-core/src/browser.rs:725"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `normalize_host_pattern` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -617,7 +646,8 @@
    "files": [
     "crates/task-core/src/chat/credential.rs:53"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `cos_run_credential_issue` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -634,7 +664,8 @@
    "files": [
     "crates/task-core/src/knowledge/layout.rs:32"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub const `TOP_DIRS` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -651,7 +682,8 @@
    "files": [
     "crates/task-core/src/knowledge/layout.rs:92"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `project_slugs` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -668,7 +700,8 @@
    "files": [
     "crates/task-core/src/model_router/cost.rs:78"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub struct `ScoreBreakdown` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -685,7 +718,8 @@
    "files": [
     "crates/task-core/src/project_proposal.rs:23"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "snapshot の wire schema 名。定数は未参照だが、値 'celeris.project-snapshot/1' もどこにも書かれていない。schema 欄を持たせるか消すかは project controller の owner が決める（未確認のまま削除にしない）",
    "evidence": {
     "same_invariant": null,
@@ -702,7 +736,8 @@
    "files": [
     "crates/task-core/src/project_proposal.rs:25"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "同上（proposal）",
    "evidence": {
     "same_invariant": null,
@@ -719,7 +754,8 @@
    "files": [
     "crates/task-core/src/provider_source.rs:34"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `to_key` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -736,7 +772,8 @@
    "files": [
     "crates/task-core/src/routing_shadow_history.rs:6"
    ],
-   "judgment": "維持",
+   "decision": "keep",
+   "decision_ja": "維持",
    "reason": "shadow 記録の版。記録の形を変えたときに上げる約束の定数で、読み出しは無い。記録側が版を書いていないので、書くか消すかを routing の owner が決める",
    "evidence": {
     "same_invariant": null,
@@ -753,7 +790,8 @@
    "files": [
     "crates/task-core/src/store/authority.rs:761"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `authority_audit_record_tx` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -770,7 +808,8 @@
    "files": [
     "crates/task-core/src/store/legacy.rs:41"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `chat_legacy_reply` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -787,7 +826,8 @@
    "files": [
     "crates/task-core/src/store/roadmap.rs:188"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `roadmap_last_status_tx` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -804,7 +844,8 @@
    "files": [
     "crates/task-core/src/store/route_records.rs:137"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `insert_route_judgment` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -821,7 +862,8 @@
    "files": [
     "crates/task-core/src/store/route_records.rs:199"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `route_decision_get` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -838,7 +880,8 @@
    "files": [
     "crates/task-core/src/store/route_records.rs:203"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `route_outcome_get` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -855,7 +898,8 @@
    "files": [
     "crates/task-core/src/store/route_records.rs:207"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `route_judgment_get` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -872,7 +916,8 @@
    "files": [
     "crates/task-core/src/store/route_records.rs:212"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `route_judgments_for_hashes` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -889,7 +934,8 @@
    "files": [
     "crates/task-core/src/tree/gate.rs:167"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `task_unit_leaf_shortfalls` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -906,7 +952,8 @@
    "files": [
     "crates/task-ops/src/knowledge.rs:541"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `page_file` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -923,7 +970,8 @@
    "files": [
     "crates/task-ops/src/matching.rs:39"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `unroutable_question` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -940,7 +988,8 @@
    "files": [
     "crates/task-ops/src/milestone_review.rs:74"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `has_reply` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -957,7 +1006,8 @@
    "files": [
     "crates/task-ops/src/project_plan.rs:74"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `next_version` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -974,7 +1024,8 @@
    "files": [
     "crates/task-ops/src/routing_audit.rs:54"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `task_routing_audit` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -991,7 +1042,8 @@
    "files": [
     "crates/task-worker/src/browser_live.rs:356"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `close_and_join` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -1008,7 +1060,8 @@
    "files": [
     "crates/task-worker/src/preamble.rs:715"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `worktree_note` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -1025,7 +1078,8 @@
    "files": [
     "crates/task-worker/src/scratch/gc.rs:565"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `replace_owner` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,
@@ -1042,7 +1096,8 @@
    "files": [
     "crates/task-worker/src/scratch/gc.rs:622"
    ],
-   "judgment": "削除",
+   "decision": "delete",
+   "decision_ja": "削除",
    "reason": "pub fn `unique_bytes` は定義の行の外で workspace（crates・web・control-ts・scripts）に 1 度も出ない。試験からも呼ばれない。",
    "evidence": {
     "same_invariant": null,

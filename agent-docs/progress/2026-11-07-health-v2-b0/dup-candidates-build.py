@@ -19,6 +19,8 @@ REF_SEARCH = (
 )
 
 D, I, K = "削除", "統合", "維持"
+# JSON の decision は delete/merge/keep（WU check と後続の機械処理が読む）。日本語は decision_ja に残す
+DECISION_EN = {D: "delete", I: "merge", K: "keep"}
 
 C = []
 
@@ -29,7 +31,8 @@ def cand(id, category, files, judgment, reason, canonical, tests, same_invariant
         "id": id,
         "category": category,
         "files": files,
-        "judgment": judgment,
+        "decision": DECISION_EN[judgment],
+        "decision_ja": judgment,
         "reason": reason,
         "evidence": {
             "same_invariant": same_invariant,
@@ -290,9 +293,9 @@ if bad:
 base = subprocess.run(["git", "merge-base", "HEAD", "main"], capture_output=True, text=True, check=True).stdout.strip()
 counts = {}
 for c in C:
-    counts[c["judgment"]] = counts.get(c["judgment"], 0) + 1
+    counts[c["decision"]] = counts.get(c["decision"], 0) + 1
 out = {
-    "schema": "celeris.health-v2-b0.dup-candidates/1",
+    "schema": "celeris.health-v2-b0.dup-candidates/2",
     "base_sha": base,
     "base_note": "着手時の git merge-base HEAD main。capability-map.json の base_sha と同じ",
     "generator": f"{HERE}/dup-candidates-build.py",
@@ -303,7 +306,7 @@ out = {
         "config_fields": "crates/celeris/src/config/*.rs の `pub <欄>:` ごとに `\\.<欄>\\b` を試験以外の crates/**/*.rs で検索し、0 件の欄を候補にした",
         "limits": "co_change（同時に変わったか）は git log -S が 2 分を超えたため多くを未確認とした。名前の違う重複（同じ規則を別名で持つもの）は走査で拾えず、読んだ範囲だけ",
     },
-    "summary": {"candidates": len(C), "by_judgment": counts},
+    "summary": {"candidates": len(C), "by_decision": counts},
     "candidates": C,
 }
 with open(os.path.join(HERE, "dup-candidates.json"), "w", encoding="utf-8") as f:

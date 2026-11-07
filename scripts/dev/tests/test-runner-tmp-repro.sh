@@ -3,7 +3,7 @@
 # （/tmp/celeris-test-affected.* / /tmp/celeris-test-parallel.*）の寿命を、通常終了と signal 終了で比べて観測する
 # （agent-docs/adr/2026-11-06-test-runner-tmp-lifecycle.md の「観測」節の根拠）。引数なしで呼ぶ。
 #
-# 実 cargo・LLM・ネットワーク・userns は使わない。小さな git fixture に**この checkout の runner の写し**を置き、
+# 実 cargo・LLM・ネットワーク・userns は使わない。小さな git fixture に**helper 導入前の runner の固定した写し**（scripts/dev/testdata/runner-tmp-repro）を置き、
 # PATH の先頭の偽 cargo が `cargo nextest run` の中で ready を FIFO に書いて release の FIFO を読むまで止まる。
 # 待ちはすべて FIFO の出来事待ち（保険は timeout 60 秒）で、sleep の時間当てや busy loop は使わない。
 #
@@ -15,6 +15,8 @@
 # 期待表（EXPECT）と 1 件でも違えば exit 1。最後に偽 cargo・runner の process group と、この試験が作った一時 dir
 # （偽 cargo が記録した path のうち prefix と所有者が合う物だけ）・fixture を必ず回収する。
 set -euo pipefail
+# fixture の runner が配線済みの検査（test-affected.sh の scripts/dev 変更時の検査）を再び呼ばないための guard。
+export CELERIS_RUNNER_TMP_TEST=1
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/runner-tmp-repro.XXXXXX")"
@@ -52,7 +54,10 @@ trap 'exit 129' HUP
 # ---- fixture: runner の写しを持つ小さな git repo -------------------------------------------------------------
 fx="$work/fx"
 mkdir -p "$fx/scripts/dev" "$fx/crates/foo/src" "$fx/tools/nextest" "$work/bin"
-cp "$here/scripts/dev/test-affected.sh" "$here/scripts/dev/test-parallel.sh" "$fx/scripts/dev/"
+# 観測対象は helper 導入前の runner。変更後の runner ではなく、固定した写し（testdata/runner-tmp-repro）を使う。
+cp "$here/scripts/dev/testdata/runner-tmp-repro/test-affected.sh.pinned" "$fx/scripts/dev/test-affected.sh"
+cp "$here/scripts/dev/testdata/runner-tmp-repro/test-parallel.sh.pinned" "$fx/scripts/dev/test-parallel.sh"
+chmod +x "$fx/scripts/dev/test-affected.sh" "$fx/scripts/dev/test-parallel.sh"
 cp "$here/tools/nextest/VERSION" "$fx/tools/nextest/VERSION"
 printf '#!/bin/sh\nexit 0\n' >"$fx/scripts/dev/check-health.sh"
 printf '[package]\nname = "foo"\n' >"$fx/crates/foo/Cargo.toml"

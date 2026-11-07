@@ -50,3 +50,81 @@ updated: 2026-11-06
   runner の trap が後片付けできる機会が増える。別の task で判断する。
 - 実装の unit は、ADR の D1〜D5 を共通 helper にまとめ、両 runner を切り替える。
   その際に `test-runner-tmp-repro.sh` の期待表を新しい挙動へ書き換える。新しい挙動では、SIGKILL の後の次回起動で回収されること、子の使用中は消さないことを確かめる。
+
+## 実装 unit の結論（2026-11-06、実装は scripts/dev 内だけ）
+- 共通 helper `scripts/dev/lib/test-tmp-lifecycle.sh` を置き、`test-affected.sh` と `test-parallel.sh` の旧 mktemp/trap の経路を消して置き換えた。
+  `crates/`・worker・release gate には差分がない（`git diff $CELERIS_WU_BASE -- crates` は空）。
+- 再現試験 `tests/test-runner-tmp-repro.sh` は、helper 導入前の runner の固定した写し（`scripts/dev/testdata/runner-tmp-repro/*.pinned`）を観測する。
+  runner を変えても観測は変わらない。新しい runner の期待は `tests/test-runner-tmp-lifecycle.sh` に置いた。
+- `test-runner-tmp-lifecycle.sh` は偽 cargo と小さな git fixture だけで両 runner を通す。実 cargo・全体試験・負荷台本は使わない。
+  通常終了・非 0 終了・INT/TERM/HUP、次回回収、稼働中 owner と子の保持、PID 再利用相当、若い dir、初期化途中、owner 不明、並行回収、symlink・別 UID、実 Unix socket の bind、test-parallel の exit code・summary・leftovers 診断を確かめる。
+- 配線: `test-affected.sh` に、変更 path が helper・両 runner・両試験・固定 fixture のどれかに当たるとき lifecycle と repro を走らせる検査を足した。
+  両試験は `CELERIS_RUNNER_TMP_TEST=1` を export し、fixture 内の runner の写しが同じ検査を再び呼ばない（再帰しない）。
+
+## 証拠（提出時の HEAD で実行。最後の同期の後に再実行していない）
+- `bash scripts/dev/tests/test-runner-tmp-lifecycle.sh && bash scripts/dev/tests/test-runner-tmp-repro.sh` → exit 0（repro は 18 case 一致、子が使用中の TMPDIR を trap が消した case は 0）。
+- `sh scripts/dev/tests/test-affected-list.sh`・`bash scripts/dev/test-cli-binary-preparation.sh`・`bash scripts/dev/tests/test-parallel-fail-names.sh` → いずれも exit 0。
+- `bash scripts/dev/test-affected.sh` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。Rust の変更はないので clippy は対象外（実行していない）。
+- commit（件名）: `phase 4: 一時領域の回帰試験を test-affected.sh の scripts/dev 検査へ配線し再入を防ぐ`。この進捗の commit も別件名で続く。
+
+## 実装後の未解決
+- SIGKILL 直後の即時削除は約束しない。残りは次回起動時の回収で消える（条件は lifecycle 試験で固定）。
+- fd を閉じて別 session へ抜けた子孫は、session の走査でも見えず、稼働中保護が効かない場合がある。限界として残す。
+- 旧い残骸（`/tmp/celeris-test-affected.*`・`/tmp/celeris-test-parallel.*`）は ADR の D6 の人の手順で消す。agent は消していない。
+
+## pin-wire-record の再実行（前回 check の不合格の原因）
+- 前回の `bash scripts/dev/test-affected.sh` は exit 100 だった。落ちたのは `celeris-campaign::launcher` の
+  `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid`（daemon が healthy になる前に終了）で、
+  scripts/dev の変更とは関係しない。同じ試験は変更なしの再実行で通った。負荷または環境起因の flake と判断した（原因の特定は未確認）。
+- 提出時の HEAD で再実行: `bash scripts/dev/test-affected.sh` → exit 0。lifecycle 試験・repro 試験・`test-affected-list.sh`・`test-cli-binary-preparation.sh`・`test-parallel-fail-names.sh` → いずれも exit 0。
+  `cargo fmt --all -- --check` → exit 0。`git diff $CELERIS_WU_BASE -- crates` は空なので clippy は対象外（実行していない）。`progress-index.sh --check` → exit 0。
+
+## pin-wire-record の再々実行（2 回目の check 不合格）
+- 2 回目の `bash scripts/dev/test-affected.sh` は exit 100 だった。落ちたのは `task-dispatch` の
+  `dispatcher::tests::work_units::an_interrupted_integration_is_redone_idempotently_after_restart`（Blocked が Done にならない）。
+  `crates/` に差分はなく、scripts/dev の変更とは関係しない。変更なしの再実行で通ったため、負荷起因の flake と判断した（原因の特定は未確認）。
+- 提出時の HEAD で再実行: `bash scripts/dev/test-affected.sh` → exit 0。`git diff $CELERIS_WU_BASE -- crates` は空。
+
+## pin-wire-record の再々実行（sandbox では userns 試験が走らない）
+- 提出時の HEAD で `bash scripts/dev/test-affected.sh` を 2 回走らせ、どちらも exit 100 だった。落ちたのは同じ 1 件
+  （`celeris-campaign::launcher a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid`、約 1 秒で失敗）で、他の 3540 件は通った。
+- この試験を単体で `cargo nextest run -p celeris-campaign --test launcher a_swapped_daemon` と走らせると通る。全体の並走の中だけで落ちる。
+  worker sandbox では userns を要する試験が走らない（または不安定）ためと見ており、原因の特定は未確認。
+- `scripts/dev/test-affected.sh` 自体を変えると「検証の道具の変更」として celeris-script とその逆依存（campaign を含む）が選ばれる。
+  このため、scripts/dev だけの変更でも `test-affected.sh` の check は sandbox でこの試験に当たる。この unit の変更とは関係しない。
+- この試験は WU の check に入れない。userns を使える環境（release gate）で確かめる。
+
+## pin-wire-record の再計画 v3（test-affected.sh を引数なしで実行しない）
+- この unit では `bash scripts/dev/test-affected.sh` を引数なしで実行しない。`test-affected.sh` 自体を変える差分は検証の道具の変更として
+  celeris-script の逆依存 crate を選び、worker sandbox の userns 制約で `celeris-campaign` の
+  `a_swapped_daemon_binary_is_rejected_on_every_path…` が落ちる（単体では通る）。この unit の変更とは関係しない。
+- 代わりに `bash scripts/dev/test-affected.sh --list` で対象を確認し、lifecycle 試験・repro 試験・`test-affected-list.sh`・`test-cli-binary-preparation.sh`・
+  `test-parallel-fail-names.sh` を個別に実行した（結果は下の実行ログのとおり、提出時の HEAD で実行）。`crates/` に差分はなく、clippy・fmt は Rust 差分がないので省いた。
+- 未解決: 引数なしの `bash scripts/dev/test-affected.sh` は release gate と sandbox 外の操作に回す。sandbox では userns 試験が走らない。
+
+## verify-rerun: test-affected.sh の再実行（提出時 HEAD で実行）
+
+- 実行: `bash scripts/dev/test-affected.sh` を foreground で 1 回。exit 0。出力の末尾は「test-affected: 試験対象の変更なし（docs のみ等）」。この WU の base（`$CELERIS_WU_BASE`）と HEAD が同じで差分が無いため、cargo の試験は 0 件で、前回 check で落ちた launcher 試験は走っていない。
+- そのため `cargo nextest run -p celeris-campaign --test launcher a_swapped_daemon_binary` の単独実行は行っていない（今回は失敗が無く、対象外）。
+- flaky の疑い（原因は未確認）: 前回 check で `crates/campaign/tests/launcher.rs` の `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid` だけが落ちた。メッセージは「pid … is not the daemon this launcher started (starttime/cmdline/image differ)」で daemon が healthy になる前に終了していた。この試験は `scripts/dev` の変更とは無関係で、再現と原因の切り分けはしていない。
+- 範囲外のため未変更: `crates/` 以下の Rust、worker、release gate は変更していない。この WU の変更は本進捗ファイルだけ。
+- 未解決: 上記 launcher 試験の flaky 原因の調査（別 task で扱う）。最終 check は main 取り込み後の HEAD で再実行が要る。
+
+## record-flaky: launcher 試験の flaky の記録
+
+### 未解決
+- `crates/campaign/tests/launcher.rs` の `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid` が、`bash scripts/dev/test-affected.sh` の全体実行（引数なし、約 3541 件の並走）で落ちた。同じ試験を `cargo nextest run -p celeris-campaign --test launcher a_swapped_daemon` で単独実行すると 1 passed だった。
+- 失敗時のメッセージ: `start: measure-launcher: pid … is not the daemon this launcher started (starttime/cmdline/image differ): not signalling` と `daemon exited before becoming healthy`（launcher.rs:598）。daemon が healthy になる前に終了している。
+- 原因は未確認。並走の負荷、sandbox の userns 制限、試験内の時間依存のどれかは切り分けていない。この task の範囲外で、Rust は変更していない。`scripts/dev` の一時領域管理とも関係は確認していない。
+
+### 提案
+- 別 task で、この launcher 試験の flaky を調べて直す。手順の案は次のとおり。
+  1. 負荷を焼かず、`SIGSTOP`/`SIGCONT` や注入した遅延で daemon 起動前後の競合を決定的に再現する（`agent-docs/guides/testing.md`）。
+  2. daemon の終了理由を `daemon.log` から読み、待ちを「出来事待ち」に直す。
+  3. 直したら、単独実行と全体実行の両方で確かめる。
+
+### 検査（提出時の HEAD で実行。最後の同期の後には再実行していない）
+- `bash scripts/dev/tests/test-runner-tmp-lifecycle.sh && bash scripts/dev/tests/test-runner-tmp-repro.sh`: exit 0。
+- `sh scripts/dev/tests/test-affected-list.sh && bash scripts/dev/test-cli-binary-preparation.sh && bash scripts/dev/tests/test-parallel-fail-names.sh`: exit 0。
+- `git diff $CELERIS_WU_BASE -- crates scripts`: 差分なし。

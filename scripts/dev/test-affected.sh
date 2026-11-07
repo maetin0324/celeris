@@ -384,6 +384,17 @@ if grep -q -E '^scripts/dev/long-horizon-pilot/' "$changed"; then
   ran=1
 fi
 
+# 試験 runner の一時領域の寿命管理（ADR 2026-11-06-test-runner-tmp-lifecycle）の回帰試験。偽 cargo と小さな git fixture だけを使い、
+# 実 cargo・全体試験は走らせない。試験は fixture の中でこの script の写しを動かすので、CELERIS_RUNNER_TMP_TEST を立てて
+# 再入（この検査の中でこの検査をもう一度走らせること）を防ぐ。
+if [ -z "${CELERIS_RUNNER_TMP_TEST:-}" ] &&
+  grep -q -E '^scripts/dev/(lib/test-tmp-lifecycle\.sh|test-affected\.sh|test-parallel\.sh|tests/test-runner-tmp-(lifecycle|repro)\.sh|testdata/runner-tmp-repro/.*)$' "$changed"; then
+  echo "test-affected: bash scripts/dev/tests/test-runner-tmp-lifecycle.sh と test-runner-tmp-repro.sh を走らせる（理由: 試験 runner の一時領域の変更）" >&2
+  CELERIS_RUNNER_TMP_TEST=1 bash scripts/dev/tests/test-runner-tmp-lifecycle.sh
+  CELERIS_RUNNER_TMP_TEST=1 bash scripts/dev/tests/test-runner-tmp-repro.sh
+  ran=1
+fi
+
 if [ -n "$tsv_reason" ]; then
   # runner を作り直し（cargo を使う）、$TMPDIR の写しで ts-only の経路と意図的な破壊の検出を確かめる。
   echo "test-affected: bash scripts/dev/test-ts-verify.sh を走らせる（理由: $tsv_reason）" >&2

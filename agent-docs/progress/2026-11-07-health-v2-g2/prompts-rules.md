@@ -47,6 +47,7 @@ WorkUnit `rules-brief`。[ADR 2026-11-07 health-review-integration](../../adr/20
 - `bash scripts/dev/test-affected.sh` → exit 0、約 12 分。nextest 5626 passed（19 slow）、22 skipped。doc test は全 crate で失敗なし。
 - 先頭の check-health: `repo-health: verdict=pass exit=0 fail_grade=0 new=2 worsened=0`。new の 2 件は `dup.contract`（warning）の `OwnerRow`・`DiffStat` で、どちらも先行の protocol の unit が足した `crates/task-worker/src/protocol/health.rs` の型と既存の型の同名。この unit の変更からは出ていない。
 - 実行したのはコードの commit の後。その後の commit はこの進捗ファイルだけを変える。
+- 進捗の commit の後に再実行 → exit 100。nextest 5626 件中 5625 passed、1 failed。落ちたのは `task-dispatch dispatcher::tests::work_units::an_interrupted_integration_is_redone_idempotently_after_restart`（work_units.rs:2994、`Blocked` と `Done` の不一致）。単独の再実行（`cargo nextest run -p task-dispatch -E 'test(an_interrupted_integration_is_redone_idempotently_after_restart)'`）では passed で、1 回目の全体の実行でも passed だった。この unit は task-dispatch を変えていない。
 
 ## 判断
 - ADR D1.1 は `section()` の見出しを `## 変更の規約（汎用）` と書くが、task の Objective（generic.md の 1 行目を見出しにし、二重にしない）に従い、generic.md をそのまま出した。prompt の中の本文が generic.md と 1 バイトも違わないので、試験は `GENERIC_RULES` の部分一致で 1 回を確かめられる。
@@ -54,6 +55,7 @@ WorkUnit `rules-brief`。[ADR 2026-11-07 health-review-integration](../../adr/20
 - adapter ごとの配布の試験は、各 adapter の既存の試験 file に置いた。adapter の stub と request の helper を再利用でき、ほぼ同じ内容の小さい試験 file を 4 つ作らない（repo health の `dup.test-fixture` を避ける）。
 
 ## 未解決事項
+- 上の task-dispatch の試験 1 件は全体の実行でだけ落ちることがある（原因は未確認）。
 - review 方針（`review_policy`）は今は planner の context にだけある。worker・reviewer の run には repo 固有の節が出ない。dispatcher が base 側の方針を読んで `review_policy` を埋める配線（`planner_flow.rs` は今 `None`）は dispatch の unit の範囲。
 - Aider には CLAUDE.md が届かない（ADR D1.6）。汎用規約は `build_prompt` を通るので Aider にも届く。
 

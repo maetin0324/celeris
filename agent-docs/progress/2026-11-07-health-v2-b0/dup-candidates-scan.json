@@ -1,0 +1,779 @@
+{
+ "schema": "celeris.health-v2-b0.dup-candidates-scan/1",
+ "rs_files": 1652,
+ "ts_files": 509,
+ "same_name_types": {
+  "AccountCheckResult": [
+   "crates/task-api/src/admin.rs:161",
+   "crates/task-worker/src/claude_account.rs:32"
+  ],
+  "Action": [
+   "crates/task-ops/src/docs_maintenance.rs:78",
+   "crates/task-ops/src/knowledge_curation.rs:76",
+   "crates/task-ops/src/view.rs:817"
+  ],
+  "Admission": [
+   "crates/campaign/src/global_ledger.rs:285",
+   "crates/celeris-credentiald/src/injection_ipc.rs:352",
+   "crates/llm-proxy/src/fallback.rs:255",
+   "crates/task-core/src/llm_route.rs:460"
+  ],
+  "Answer": [
+   "crates/jev-classifier/src/question.rs:55",
+   "crates/task-worker/src/protocol.rs:110"
+  ],
+  "AnswerArgs": [
+   "crates/celeris-mcp/src/tools/decisions.rs:100",
+   "crates/celeris-mcp/src/tools/tasks.rs:341",
+   "crates/celerisctl/src/commands/gate.rs:34"
+  ],
+  "ApiConfig": [
+   "crates/celeris/src/config/api.rs:12",
+   "crates/celerisctl/src/commands/cron.rs:78"
+  ],
+  "ApplyOutcome": [
+   "crates/task-ops/src/knowledge.rs:1399",
+   "crates/task-ops/src/knowledge_curation.rs:123"
+  ],
+  "Approval": [
+   "crates/campaign/src/dagbench/pbs/approval.rs:34",
+   "crates/campaign/src/global_ledger.rs:949",
+   "crates/task-core/src/approval.rs:131"
+  ],
+  "ApproveArgs": [
+   "crates/celeris-mcp/src/tools/tasks.rs:567",
+   "crates/celerisctl/src/commands/browser.rs:72",
+   "crates/celerisctl/src/commands/gate.rs:18"
+  ],
+  "AttemptRecord": [
+   "crates/campaign/src/human_ops.rs:229",
+   "crates/task-core/src/retry_policy.rs:39"
+  ],
+  "Attribution": [
+   "crates/campaign/src/jev_smoke.rs:19",
+   "crates/campaign/src/ops_r1_attr.rs:162"
+  ],
+  "Budget": [
+   "crates/campaign/src/manifest.rs:187",
+   "crates/task-core/src/model.rs:191"
+  ],
+  "BudgetKind": [
+   "crates/task-core/src/execution.rs:27",
+   "crates/task-ops/src/project_budget.rs:61"
+  ],
+  "CancelArgs": [
+   "crates/celeris-mcp/src/tools/tasks.rs:506",
+   "crates/celerisctl/src/commands/cancel.rs:17"
+  ],
+  "Candidate": [
+   "crates/celeris/src/notify.rs:147",
+   "crates/routing-eval/src/candidates.rs:4",
+   "crates/task-core/src/knowledge.rs:990",
+   "crates/task-core/src/llm_route.rs:321",
+   "crates/task-core/src/route_record.rs:281",
+   "crates/task-worker/src/paperqa.rs:870"
+  ],
+  "Capability": [
+   "crates/campaign/src/cases.rs:80",
+   "crates/script-runtime/src/dto.rs:29",
+   "crates/task-core/src/browser_backend.rs:15"
+  ],
+  "Caps": [
+   "crates/campaign/src/dagbench/celeris_side.rs:76",
+   "crates/campaign/src/global_ledger.rs:72"
+  ],
+  "Category": [
+   "crates/campaign/src/operator_usage.rs:11",
+   "crates/task-ops/src/docs_maintenance.rs:12"
+  ],
+  "Cell": [
+   "crates/campaign/src/aggregate.rs:38",
+   "crates/campaign/src/cells_validity.rs:634",
+   "crates/campaign/src/success.rs:116"
+  ],
+  "ChatMessage": [
+   "crates/llm-proxy/src/openai.rs:57",
+   "crates/task-core/src/chat/mod.rs:207"
+  ],
+  "Class": [
+   "crates/task-ops/src/stranded/reintegrate.rs:25",
+   "crates/task-worker/src/scratch/gc.rs:25"
+  ],
+  "ClusterConnectStart": [
+   "crates/task-api/src/types.rs:965",
+   "crates/task-worker/src/cluster_login.rs:101"
+  ],
+  "Config": [
+   "crates/campaign/src/manifest.rs:41",
+   "crates/celeris/src/config/mod.rs:96"
+  ],
+  "Conflict": [
+   "crates/llm-proxy/src/reservation.rs:96",
+   "crates/task-dispatch/src/integration.rs:347"
+  ],
+  "ContinuationFacts": [
+   "crates/task-dispatch/src/execution_scheduler.rs:60",
+   "crates/task-dispatch/src/sessions.rs:286"
+  ],
+  "ControlCommand": [
+   "crates/campaign/src/dagbench/fault.rs:106",
+   "crates/task-core/src/browser_control.rs:39"
+  ],
+  "ControlRequest": [
+   "crates/celeris-credentiald/src/ipc.rs:24",
+   "crates/task-core/src/browser_control.rs:59"
+  ],
+  "CosDigestInput": [
+   "crates/script-runtime/src/dto.rs:368",
+   "crates/task-core/src/chat/digest.rs:28"
+  ],
+  "CosDigestListRunsReply": [
+   "crates/script-runtime/src/dto.rs:295",
+   "crates/task-core/src/chat/digest.rs:371"
+  ],
+  "CosDigestListRunsRequest": [
+   "crates/script-runtime/src/dto.rs:281",
+   "crates/task-core/src/chat/digest.rs:357"
+  ],
+  "CosDigestReadRunRequest": [
+   "crates/script-runtime/src/dto.rs:302",
+   "crates/task-core/src/chat/digest.rs:378"
+  ],
+  "CosDigestRunRef": [
+   "crates/script-runtime/src/dto.rs:286",
+   "crates/task-core/src/chat/digest.rs:362"
+  ],
+  "CosTriageDecision": [
+   "crates/script-runtime/src/dto.rs:322",
+   "crates/task-core/src/chat/triage.rs:511"
+  ],
+  "CosTriageItemReport": [
+   "crates/script-runtime/src/dto.rs:340",
+   "crates/task-core/src/chat/triage.rs:527"
+  ],
+  "CosTriageOption": [
+   "crates/script-runtime/src/dto.rs:311",
+   "crates/task-core/src/chat/triage.rs:501"
+  ],
+  "CredentialRef": [
+   "crates/celeris-credentiald/src/lib.rs:117",
+   "crates/task-core/src/browser_wait.rs:127"
+  ],
+  "EmptyBody": [
+   "crates/task-api/src/inbox_notifications.rs:614",
+   "crates/task-api/src/lifecycle.rs:42"
+  ],
+  "Entry": [
+   "crates/campaign/src/dagbench/ext.rs:57",
+   "crates/celeris/src/knowledge_curation.rs:92"
+  ],
+  "Env": [
+   "crates/campaign/src/dagbench/pbs/backend.rs:93",
+   "crates/celeris/tests/support/script_compare.rs:421"
+  ],
+  "Error": [
+   "crates/campaign/src/dagbench/baseline.rs:157",
+   "crates/celeris-credentiald/src/lib.rs:21"
+  ],
+  "ExecResult": [
+   "crates/campaign/src/executor.rs:48",
+   "crates/task-worker/src/workspace.rs:34"
+  ],
+  "FailureClass": [
+   "crates/campaign/src/grader.rs:1409",
+   "crates/llm-proxy/src/fallback.rs:21",
+   "crates/task-core/src/route_select/escalation.rs:8",
+   "crates/task-ops/src/derive.rs:326"
+  ],
+  "Fixture": [
+   "crates/campaign/tests/ablation_application_support/mod.rs:465",
+   "crates/celeris/tests/ops_r1/trace_fixture.rs:37",
+   "crates/task-dispatch/src/dispatcher/tests/cos_launch_wire.rs:16"
+  ],
+  "FrontMatter": [
+   "crates/task-core/src/knowledge.rs:82",
+   "crates/task-ops/src/docs.rs:158"
+  ],
+  "Gate": [
+   "crates/campaign/src/budget.rs:124",
+   "crates/campaign/src/dagbench/pbs/entry.rs:305"
+  ],
+  "GetArgs": [
+   "crates/celeris-mcp/src/tools/knowledge.rs:161",
+   "crates/celeris-mcp/src/tools/org.rs:105",
+   "crates/celeris-mcp/src/tools/projects.rs:98",
+   "crates/celeris-mcp/src/tools/skills.rs:83",
+   "crates/celeris-mcp/src/tools/tasks.rs:163",
+   "crates/celerisctl/src/commands/knowledge.rs:116"
+  ],
+  "GetOutput": [
+   "crates/celeris-mcp/src/tools/knowledge.rs:166",
+   "crates/celeris-mcp/src/tools/projects.rs:103",
+   "crates/celeris-mcp/src/tools/skills.rs:88",
+   "crates/celeris-mcp/src/tools/tasks.rs:175"
+  ],
+  "Grader": [
+   "crates/campaign/src/dagbench/pbs/backend.rs:86",
+   "crates/campaign/src/long_horizon.rs:67"
+  ],
+  "HarnessSpec": [
+   "crates/task-core/src/harness.rs:93",
+   "crates/task-core/src/llm_route.rs:71"
+  ],
+  "HumanDecision": [
+   "crates/task-core/src/browser_wait.rs:573",
+   "crates/task-ops/src/knowledge_curation.rs:109"
+  ],
+  "InboxItem": [
+   "crates/task-ops/src/human_inbox.rs:197",
+   "crates/task-ops/src/knowledge.rs:984"
+  ],
+  "InjectionReceipt": [
+   "crates/celeris-credentiald/src/injection.rs:106",
+   "crates/celeris-credentiald/src/injection_ipc.rs:151"
+  ],
+  "InjectionRequest": [
+   "crates/celeris-credentiald/src/injection_ipc.rs:123",
+   "crates/task-worker/src/browser_cdp_sink.rs:141"
+  ],
+  "Intake": [
+   "crates/campaign/src/ops_r1_conditions.rs:19",
+   "crates/campaign/src/ops_r1_trace.rs:300"
+  ],
+  "JobState": [
+   "crates/campaign/src/cells_validity.rs:66",
+   "crates/campaign/src/dagbench/ext.rs:72"
+  ],
+  "LaneDecision": [
+   "crates/task-core/src/model_policy.rs:483",
+   "crates/task-core/src/route_select/lane.rs:128"
+  ],
+  "Lease": [
+   "crates/task-core/src/model.rs:204",
+   "crates/task-worker/src/scratch.rs:504"
+  ],
+  "LedgerState": [
+   "crates/campaign/src/global_ledger.rs:326",
+   "crates/campaign/src/ledger.rs:23"
+  ],
+  "LegacyRow": [
+   "crates/campaign/src/global_ledger.rs:107",
+   "crates/task-dispatch/src/scratch_gc.rs:49"
+  ],
+  "Limits": [
+   "crates/campaign/src/dagbench/pbs/backend.rs:100",
+   "crates/campaign/src/dagbench/process.rs:80"
+  ],
+  "ListArgs": [
+   "crates/celeris-mcp/src/tools/decisions.rs:25",
+   "crates/celeris-mcp/src/tools/knowledge.rs:38",
+   "crates/celeris-mcp/src/tools/org.rs:22",
+   "crates/celeris-mcp/src/tools/projects.rs:19",
+   "crates/celeris-mcp/src/tools/skills.rs:28",
+   "crates/celeris-mcp/src/tools/tasks.rs:66",
+   "crates/celerisctl/src/commands/integration.rs:37",
+   "crates/celerisctl/src/commands/models.rs:27"
+  ],
+  "ListOutput": [
+   "crates/celeris-mcp/src/tools/knowledge.rs:48",
+   "crates/celeris-mcp/src/tools/org.rs:39",
+   "crates/celeris-mcp/src/tools/projects.rs:34",
+   "crates/celeris-mcp/src/tools/skills.rs:37",
+   "crates/celeris-mcp/src/tools/tasks.rs:88"
+  ],
+  "LoginResult": [
+   "crates/task-worker/src/browser_launcher/protocol.rs:100",
+   "crates/task-worker/src/claude_account.rs:297"
+  ],
+  "Mapping": [
+   "crates/campaign/src/operator_usage.rs:24",
+   "crates/task-worker/src/browser_launcher/userns.rs:20"
+  ],
+  "MemoryView": [
+   "crates/task-api/src/memory.rs:23",
+   "crates/task-ops/src/memory.rs:31"
+  ],
+  "MergeOutcome": [
+   "crates/task-ops/src/changes.rs:781",
+   "crates/task-ops/src/stranded.rs:343"
+  ],
+  "Missing": [
+   "crates/campaign/src/dagbench/pbs/raw.rs:204",
+   "crates/campaign/src/preflight.rs:305"
+  ],
+  "Mode": [
+   "crates/campaign/src/ops_r1_intake.rs:40",
+   "crates/task-ops/src/docs_maintenance.rs:27"
+  ],
+  "MountKind": [
+   "crates/campaign/src/cap_probe.rs:611",
+   "crates/task-core/src/knowledge.rs:658"
+  ],
+  "Notice": [
+   "crates/campaign/src/dagbench/ext.rs:115",
+   "crates/task-core/src/feed.rs:155"
+  ],
+  "Observation": [
+   "crates/campaign/src/jev_smoke.rs:30",
+   "crates/task-worker/src/browser_launcher/protocol.rs:445"
+  ],
+  "Options": [
+   "crates/campaign/src/ops_r1_intake.rs:580",
+   "crates/celerisctl/src/commands/cos_ops.rs:17",
+   "crates/routing-eval/src/recheck.rs:88"
+  ],
+  "Outcome": [
+   "crates/campaign/src/aggregate.rs:10",
+   "crates/campaign/src/cells_validity.rs:452",
+   "crates/campaign/src/dagbench/baseline.rs:150",
+   "crates/campaign/src/env_lock.rs:376",
+   "crates/campaign/src/ops_r1_trace.rs:575",
+   "crates/celeris/src/delivery/auto_resolve.rs:34",
+   "crates/task-core/src/project_proposal.rs:78",
+   "crates/task-core/src/transition.rs:196",
+   "crates/task-ops/src/integrate_task.rs:156",
+   "crates/task-ops/src/stranded/reintegrate.rs:130",
+   "crates/task-worker/src/browser_launcher/protocol.rs:338"
+  ],
+  "OutcomeCheck": [
+   "crates/campaign/src/long_horizon.rs:57",
+   "crates/task-core/src/project_proposal.rs:101"
+  ],
+  "PageEdit": [
+   "crates/task-ops/src/docs.rs:650",
+   "crates/task-ops/src/knowledge.rs:577"
+  ],
+  "Params": [
+   "crates/campaign/tests/dagbench_harness.rs:77",
+   "crates/task-api/src/handlers.rs:303"
+  ],
+  "PathError": [
+   "crates/task-core/src/knowledge.rs:389",
+   "crates/task-ops/src/docs.rs:38"
+  ],
+  "Phase": [
+   "crates/campaign/src/dagbench/baseline.rs:94",
+   "crates/celeris/src/knowledge_curation.rs:74"
+  ],
+  "Problem": [
+   "crates/routing-eval/src/manifest.rs:54",
+   "crates/task-api/src/types.rs:57"
+  ],
+  "ProjectAction": [
+   "crates/task-core/src/project_proposal.rs:417",
+   "crates/task-ops/src/lifecycle.rs:318"
+  ],
+  "PruneArgs": [
+   "crates/celerisctl/src/commands/build_cache.rs:24",
+   "crates/celerisctl/src/commands/workspace.rs:123"
+  ],
+  "QuotaWindow": [
+   "crates/task-core/src/model_router/profiles.rs:97",
+   "crates/task-core/src/quota.rs:28"
+  ],
+  "Reachability": [
+   "crates/task-core/src/model_router/profiles.rs:90",
+   "crates/task-worker/src/probe.rs:39"
+  ],
+  "Registry": [
+   "crates/task-api/src/cos/ops/mod.rs:23",
+   "crates/task-core/src/llm_route.rs:107",
+   "crates/task-worker/src/browser_launcher/registry.rs:35"
+  ],
+  "RejectArgs": [
+   "crates/celeris-mcp/src/tools/tasks.rs:612",
+   "crates/celerisctl/src/commands/gate.rs:26"
+  ],
+  "Report": [
+   "crates/campaign/src/human_ops_report.rs:644",
+   "crates/campaign/src/ops_r1_trace.rs:659",
+   "crates/campaign/src/preflight.rs:311",
+   "crates/task-core/src/report.rs:154"
+  ],
+  "Request": [
+   "crates/campaign/src/dagbench/ipc.rs:110",
+   "crates/task-worker/src/browser_launcher/protocol.rs:150"
+  ],
+  "Reserved": [
+   "crates/campaign/src/global_ledger.rs:237",
+   "crates/llm-proxy/src/reservation.rs:215"
+  ],
+  "Resolved": [
+   "crates/celerisctl/src/commands/curation.rs:49",
+   "crates/task-core/src/local_machine.rs:32"
+  ],
+  "ResolvedRouting": [
+   "crates/llm-proxy/src/routing_context.rs:75",
+   "crates/task-core/src/route_select/task_override.rs:142"
+  ],
+  "Resources": [
+   "crates/campaign/src/dagbench/baseline.rs:45",
+   "crates/campaign/src/dagbench/celeris_side.rs:89",
+   "crates/campaign/src/dagbench/pbs/backend.rs:68"
+  ],
+  "Response": [
+   "crates/campaign/src/dagbench/ipc.rs:167",
+   "crates/task-worker/src/browser_launcher/protocol.rs:455"
+  ],
+  "RetryArgs": [
+   "crates/celeris-mcp/src/tools/tasks.rs:392",
+   "crates/celerisctl/src/commands/retry.rs:23"
+  ],
+  "ReviewRepairHint": [
+   "crates/task-core/src/execution.rs:572",
+   "crates/task-worker/src/protocol.rs:997"
+  ],
+  "RouteDecision": [
+   "crates/task-core/src/direct_route.rs:26",
+   "crates/task-core/src/route_record.rs:261",
+   "crates/task-core/src/route_select/trace.rs:157"
+  ],
+  "RoutingDecision": [
+   "crates/task-core/src/browser_backend.rs:335",
+   "crates/task-core/src/routing.rs:88"
+  ],
+  "RoutingStage": [
+   "crates/celerisctl/src/commands/routing.rs:123",
+   "crates/task-core/src/route_select/stage.rs:6"
+  ],
+  "Row": [
+   "crates/campaign/src/dagbench/overhead.rs:627",
+   "crates/campaign/src/ops_r1_attr.rs:75"
+  ],
+  "RunOptions": [
+   "crates/campaign/src/runner.rs:35",
+   "crates/celeris/src/lib.rs:138"
+  ],
+  "RuntimeProbe": [
+   "crates/campaign/src/runtime_probe.rs:23",
+   "crates/task-worker/src/container.rs:144"
+  ],
+  "Scenario": [
+   "crates/campaign/src/dagbench/baseline.rs:38",
+   "crates/campaign/src/dagbench/celeris_side.rs:82"
+  ],
+  "ScenarioFile": [
+   "crates/campaign/src/dagbench/baseline.rs:33",
+   "crates/campaign/src/dagbench/celeris_side.rs:61"
+  ],
+  "Scope": [
+   "crates/task-api/src/console.rs:210",
+   "crates/task-ops/src/approval.rs:21"
+  ],
+  "Scripted": [
+   "crates/campaign/src/dagbench/pbs/transport.rs:949",
+   "crates/task-dispatch/src/dispatcher/tests/credential_e2e.rs:21"
+  ],
+  "SearchArgs": [
+   "crates/celeris-mcp/src/tools/knowledge.rs:108",
+   "crates/celerisctl/src/commands/knowledge.rs:99"
+  ],
+  "SendOutcome": [
+   "crates/celeris/src/notify.rs:167",
+   "crates/llm-proxy/src/sources/mod.rs:51"
+  ],
+  "ServerHandle": [
+   "crates/campaign/src/dagbench/ipc.rs:187",
+   "crates/task-worker/src/browser_launcher/server.rs:210"
+  ],
+  "SkillSummaryView": [
+   "crates/celeris-mcp/src/tools/skills.rs:31",
+   "crates/task-api/src/skills.rs:56"
+  ],
+  "SkipReason": [
+   "crates/task-ops/src/knowledge/skill_import.rs:18",
+   "crates/task-worker/src/target_sweep.rs:128"
+  ],
+  "Source": [
+   "crates/campaign/src/grader.rs:105",
+   "crates/campaign/src/ops_r1_intake.rs:82"
+  ],
+  "SourceKind": [
+   "crates/campaign/src/ops_r1_intake.rs:50",
+   "crates/llm-proxy/src/naming.rs:8",
+   "crates/task-core/src/authority.rs:100"
+  ],
+  "StaleCandidate": [
+   "crates/task-dispatch/src/dispatcher/stale_priority.rs:33",
+   "crates/task-dispatch/src/integration.rs:337"
+  ],
+  "Started": [
+   "crates/celeris/src/instance.rs:434",
+   "crates/script-runtime/src/actor.rs:85"
+  ],
+  "Stat": [
+   "crates/campaign/src/dagbench/metrics.rs:298",
+   "crates/campaign/src/l1_owner.rs:20",
+   "crates/task-core/src/decision_log_export.rs:35"
+  ],
+  "State": [
+   "crates/campaign/src/dagbench/baseline.rs:128",
+   "crates/celeris/src/knowledge_curation.rs:122"
+  ],
+  "Status": [
+   "crates/campaign/src/dagbench/baseline.rs:80",
+   "crates/campaign/src/grader.rs:1345",
+   "crates/task-core/src/model.rs:56"
+  ],
+  "Supervisor": [
+   "crates/campaign/src/dagbench/process.rs:373",
+   "crates/celeris/src/instance.rs:460",
+   "crates/task-worker/src/browser_supervisor.rs:134"
+  ],
+  "SystemClock": [
+   "crates/campaign/src/dagbench/pbs/intent.rs:411",
+   "crates/campaign/src/watch.rs:22",
+   "crates/jev-classifier/src/time.rs:10",
+   "crates/llm-proxy/src/reservation.rs:26"
+  ],
+  "Target": [
+   "crates/campaign/src/dagbench/pbs/raw.rs:128",
+   "crates/campaign/src/human_ops.rs:98"
+  ],
+  "TaskFeatures": [
+   "crates/task-core/src/model_policy.rs:42",
+   "crates/task-core/src/route_record.rs:18"
+  ],
+  "TaskRef": [
+   "crates/campaign/src/ledger.rs:75",
+   "crates/task-ops/src/view.rs:68"
+  ],
+  "TaskSummary": [
+   "crates/celeris-mcp/src/tools/tasks.rs:76",
+   "crates/task-ops/src/view.rs:78"
+  ],
+  "Terminal": [
+   "crates/campaign/src/global_ledger.rs:297",
+   "crates/task-worker/src/adapter.rs:19"
+  ],
+  "Termination": [
+   "crates/campaign/src/dagbench/pbs/backend.rs:134",
+   "crates/campaign/src/manifest.rs:226"
+  ],
+  "TokenUsage": [
+   "crates/campaign/src/manifest.rs:144",
+   "crates/campaign/src/ops_r1_a_raw.rs:47"
+  ],
+  "Toolchain": [
+   "crates/campaign/src/harness_exec.rs:239",
+   "crates/script-runtime/src/manifest.rs:34"
+  ],
+  "TrialKey": [
+   "crates/campaign/src/ledger.rs:42",
+   "crates/campaign/src/observe.rs:364"
+  ],
+  "Usage": [
+   "crates/campaign/src/executor.rs:42",
+   "crates/campaign/src/global_ledger.rs:190",
+   "crates/llm-proxy/src/openai.rs:128",
+   "crates/task-core/src/model.rs:772"
+  ],
+  "ValidatedPlan": [
+   "crates/task-core/src/execution_plan/validation.rs:802",
+   "crates/task-ops/src/knowledge_curation.rs:116"
+  ],
+  "Verdict": [
+   "crates/campaign/src/grader.rs:1418",
+   "crates/campaign/src/jev_smoke.rs:46",
+   "crates/task-dispatch/src/review.rs:33"
+  ],
+  "WorkspaceConfig": [
+   "crates/celeris/src/config/workspace.rs:15",
+   "crates/task-core/src/workspace_config.rs:35"
+  ],
+  "WriteOutcome": [
+   "crates/task-ops/src/docs.rs:628",
+   "crates/task-ops/src/knowledge.rs:591"
+  ]
+ },
+ "unreferenced_pub": [
+  {
+   "name": "from_result",
+   "kind": "fn",
+   "at": "crates/celeris-credentiald/src/lib.rs:1377"
+  },
+  {
+   "name": "cos_harness_capability_warnings",
+   "kind": "fn",
+   "at": "crates/celeris/src/config/cos.rs:377"
+  },
+  {
+   "name": "from_responses_body",
+   "kind": "fn",
+   "at": "crates/llm-proxy/src/sources/codex.rs:257"
+  },
+  {
+   "name": "retryable_before_any_bytes",
+   "kind": "fn",
+   "at": "crates/llm-proxy/src/sources/mod.rs:46"
+  },
+  {
+   "name": "AccountLimitPatchBody",
+   "kind": "struct",
+   "at": "crates/task-api/src/types.rs:817"
+  },
+  {
+   "name": "is_on",
+   "kind": "fn",
+   "at": "crates/task-core/src/accounts.rs:91"
+  },
+  {
+   "name": "normalize_host_pattern",
+   "kind": "fn",
+   "at": "crates/task-core/src/browser.rs:725"
+  },
+  {
+   "name": "cos_run_credential_issue",
+   "kind": "fn",
+   "at": "crates/task-core/src/chat/credential.rs:53"
+  },
+  {
+   "name": "TOP_DIRS",
+   "kind": "const",
+   "at": "crates/task-core/src/knowledge/layout.rs:32"
+  },
+  {
+   "name": "project_slugs",
+   "kind": "fn",
+   "at": "crates/task-core/src/knowledge/layout.rs:92"
+  },
+  {
+   "name": "ScoreBreakdown",
+   "kind": "struct",
+   "at": "crates/task-core/src/model_router/cost.rs:78"
+  },
+  {
+   "name": "PROJECT_SNAPSHOT_SCHEMA",
+   "kind": "const",
+   "at": "crates/task-core/src/project_proposal.rs:23"
+  },
+  {
+   "name": "PROJECT_PROPOSAL_SCHEMA",
+   "kind": "const",
+   "at": "crates/task-core/src/project_proposal.rs:25"
+  },
+  {
+   "name": "to_key",
+   "kind": "fn",
+   "at": "crates/task-core/src/provider_source.rs:34"
+  },
+  {
+   "name": "SHADOW_RECORD_VERSION",
+   "kind": "const",
+   "at": "crates/task-core/src/routing_shadow_history.rs:6"
+  },
+  {
+   "name": "authority_audit_record_tx",
+   "kind": "fn",
+   "at": "crates/task-core/src/store/authority.rs:761"
+  },
+  {
+   "name": "chat_legacy_reply",
+   "kind": "fn",
+   "at": "crates/task-core/src/store/legacy.rs:41"
+  },
+  {
+   "name": "roadmap_last_status_tx",
+   "kind": "fn",
+   "at": "crates/task-core/src/store/roadmap.rs:188"
+  },
+  {
+   "name": "insert_route_judgment",
+   "kind": "fn",
+   "at": "crates/task-core/src/store/route_records.rs:137"
+  },
+  {
+   "name": "route_decision_get",
+   "kind": "fn",
+   "at": "crates/task-core/src/store/route_records.rs:199"
+  },
+  {
+   "name": "route_outcome_get",
+   "kind": "fn",
+   "at": "crates/task-core/src/store/route_records.rs:203"
+  },
+  {
+   "name": "route_judgment_get",
+   "kind": "fn",
+   "at": "crates/task-core/src/store/route_records.rs:207"
+  },
+  {
+   "name": "route_judgments_for_hashes",
+   "kind": "fn",
+   "at": "crates/task-core/src/store/route_records.rs:212"
+  },
+  {
+   "name": "task_unit_leaf_shortfalls",
+   "kind": "fn",
+   "at": "crates/task-core/src/tree/gate.rs:167"
+  },
+  {
+   "name": "SCRATCH_CACHE_STATS_SCHEMA",
+   "kind": "const",
+   "at": "crates/task-ops/src/daemon.rs:213"
+  },
+  {
+   "name": "page_file",
+   "kind": "fn",
+   "at": "crates/task-ops/src/knowledge.rs:541"
+  },
+  {
+   "name": "unroutable_question",
+   "kind": "fn",
+   "at": "crates/task-ops/src/matching.rs:39"
+  },
+  {
+   "name": "has_reply",
+   "kind": "fn",
+   "at": "crates/task-ops/src/milestone_review.rs:74"
+  },
+  {
+   "name": "next_version",
+   "kind": "fn",
+   "at": "crates/task-ops/src/project_plan.rs:74"
+  },
+  {
+   "name": "task_routing_audit",
+   "kind": "fn",
+   "at": "crates/task-ops/src/routing_audit.rs:54"
+  },
+  {
+   "name": "close_and_join",
+   "kind": "fn",
+   "at": "crates/task-worker/src/browser_live.rs:356"
+  },
+  {
+   "name": "SANDBOX_UID",
+   "kind": "const",
+   "at": "crates/task-worker/src/browser_runtime.rs:29"
+  },
+  {
+   "name": "worktree_note",
+   "kind": "fn",
+   "at": "crates/task-worker/src/preamble.rs:715"
+  },
+  {
+   "name": "STATUS_SCHEMA",
+   "kind": "const",
+   "at": "crates/task-worker/src/scratch.rs:22"
+  },
+  {
+   "name": "replace_owner",
+   "kind": "fn",
+   "at": "crates/task-worker/src/scratch/gc.rs:565"
+  },
+  {
+   "name": "unique_bytes",
+   "kind": "fn",
+   "at": "crates/task-worker/src/scratch/gc.rs:622"
+  }
+ ],
+ "unreferenced_scripts": [
+  "scripts/dev/tests/jev_live_evidence/test_live_approval_check.py",
+  "scripts/dev/tests/jev_live_evidence/test_live_source_reader.py",
+  "scripts/host-sccache/test-wrapper.sh",
+  "scripts/model-routing/test_routellm_sidecar.py",
+  "scripts/scratch/u5/stats.py",
+  "scripts/tests/test_browser_conformance_release.py"
+ ]
+}

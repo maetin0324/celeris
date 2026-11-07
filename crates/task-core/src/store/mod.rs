@@ -138,9 +138,11 @@ pub(crate) mod project_wake_effect;
 mod projects;
 mod query;
 pub use authority::{AUTHORITY_REQUIRED_RULE, AuthorityRefusal, SOURCE_KIND_RESERVED};
+mod lock_wait;
 mod repos;
 mod roadmap;
 mod roadmap_evidence;
+pub use lock_wait::store_lock_wait;
 mod root_done;
 mod route_records;
 mod routing_evidence;
@@ -564,6 +566,8 @@ pub struct SqliteStore {
 struct LockCounters {
     writer: std::sync::atomic::AtomicU64,
     reader: std::sync::atomic::AtomicU64,
+    /// ADR 2026-11-07-root-done-tick-phase-timing D2: 書き込み接続の `Mutex` を今待っている thread の数。
+    writer_waiting: std::sync::atomic::AtomicU64,
 }
 
 /// `SqliteStore::lock_counts` の値。`writer` は書き込み接続（`Mutex`）を取った回数、
@@ -953,15 +957,21 @@ impl SqliteStore {
         self.counters
             .reader
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // ADR 2026-11-07-root-done-tick-phase-timing D2: 接続を借りるまでの時間をこの thread の待ちに足す。
+        let started = std::time::Instant::now();
         match &self.read_pool {
             Some(pool) => {
-                let conn = pool.checkout()?;
+                let conn = pool.checkout();
+                lock_wait::add_since(started);
+                let conn = conn?;
                 let result = f(&conn);
                 pool.checkin(conn);
                 result
             }
             None => {
-                let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
+                let conn = self.conn.lock();
+                lock_wait::add_since(started);
+                let conn = conn.map_err(|_| StoreError::Poisoned)?;
                 f(&conn)
             }
         }
@@ -1044,7 +1054,17 @@ impl SqliteStore {
         self.counters
             .writer
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.conn.lock().map_err(|_| StoreError::Poisoned)
+        // ADR 2026-11-07-root-done-tick-phase-timing D2: Mutex を取るまでの時間をこの thread の待ちに足す。
+        let started = std::time::Instant::now();
+        self.counters
+            .writer_waiting
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let guard = self.conn.lock();
+        self.counters
+            .writer_waiting
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        lock_wait::add_since(started);
+        guard.map_err(|_| StoreError::Poisoned)
     }
 
     /// 書き込みの transaction を 1 つ開いて `write` を走らせ、`Ok` なら commit する。`Err` なら rollback。
@@ -1077,6 +1097,14 @@ impl SqliteStore {
                 .reader
                 .load(std::sync::atomic::Ordering::Relaxed),
         }
+    }
+
+    /// ADR 2026-11-07-root-done-tick-phase-timing D2: 書き込み接続の `Mutex` を今待っている thread の数
+    /// （試験と診断用の観測値）。
+    pub fn writer_waiters(&self) -> u64 {
+        self.counters
+            .writer_waiting
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 非終端（`done` / `failed` / `cancelled` 以外）の task を選ぶ SQL 断片（領域ファイル共通）。

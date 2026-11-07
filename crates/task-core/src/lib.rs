@@ -267,7 +267,7 @@ pub use store::{
     ModelCatalogStore, NewConfigEvent, Page, ProjectPlanApply, ProjectPlanMilestoneChange,
     RootDoneState, RootDoneSummary, SCHEMA_VERSION, SqliteStore, StoreError, StoreOptions,
     TaskStore, TerminalSessionEvent, TreeAdoption, backup_database, event_row_schema_value,
-    integrity_check, is_busy_error, is_readonly_error,
+    integrity_check, is_busy_error, is_readonly_error, store_lock_wait,
 };
 pub use transition::{InvalidTransition, Outcome, StateView, Trigger, transition};
 // ---- ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation ----

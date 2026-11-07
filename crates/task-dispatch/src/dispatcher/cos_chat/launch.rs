@@ -233,6 +233,9 @@ pub(crate) struct CosChatLaunch {
     /// ADR 2026-11-04-project-controller A1: 案件の controller（`set_project_controller` で入る）。
     pub(crate) project_controller:
         Option<crate::dispatcher::cron_tick::project_wake::ProjectControllerRuntime>,
+    /// ADR 2026-11-07-root-done-tick-phase-timing D3/D4: `root_done_tick` がこれ以上かかった tick だけ
+    /// `cos.root_done.*` の内訳を出す。試験だけが差し替える。
+    pub(crate) root_done_probe_threshold: std::time::Duration,
 }
 
 /// Which durable claim binds the new run to its input message.
@@ -257,6 +260,7 @@ impl Dispatcher {
             route_reservations: HashMap::new(),
             triage: super::triage::CosTriageState::default(),
             project_controller: None,
+            root_done_probe_threshold: super::root_done_probe::ROOT_DONE_PROBE_THRESHOLD,
         });
     }
 
@@ -313,7 +317,8 @@ impl Dispatcher {
         launch.triage_ingest(self);
         lap("cos.triage_ingest");
         // ADR 2026-10-15-root-done-cos-summary: root task done → a summary thread and one CoS run.
-        launch.root_done_tick(self);
+        // ADR 2026-11-07-root-done-tick-phase-timing D3: the breakdown is non-empty only for a slow pass.
+        let root_done_parts = launch.root_done_tick(self);
         lap("cos.root_done_tick");
         if self.accepting_new_work && self.disk_ready && launch.config.enabled {
             if let Err(error) = launch.claim_queued(self) {
@@ -346,6 +351,7 @@ impl Dispatcher {
             });
         }
         self.cos_chat_launch = Some(launch);
+        parts.extend(root_done_parts);
         parts
     }
 }

@@ -27,6 +27,7 @@ use task_ops::root_done::{self, ChildFact, RootDoneFacts, RootDoneInputs};
 use time::OffsetDateTime;
 
 use super::launch::CosChatLaunch;
+use super::root_done_probe::{FactsProbe, RootDoneProbe, us};
 use crate::dispatcher::Dispatcher;
 
 /// `feed_cursor` の名前。
@@ -66,9 +67,16 @@ fn truncate(text: &str, max: usize) -> String {
 }
 
 /// 統合 commit の tree（delivery の head）から、この task を `tasks:` に持つ進捗ファイルを探して本文を返す。
-/// 読めなければ `None`（事実には「不明」と出る）。
-fn progress_markdown(repo: &std::path::Path, head: &str, task_id: TaskId) -> Option<String> {
-    let git = |args: &[&str]| -> Option<String> {
+/// 読めなければ `None`（事実には「不明」と出る）。`git_calls` に起こした git の process の数を足す
+/// （ADR 2026-11-07-root-done-tick-phase-timing D1）。
+fn progress_markdown(
+    repo: &std::path::Path,
+    head: &str,
+    task_id: TaskId,
+    git_calls: &mut u64,
+) -> Option<String> {
+    let mut git = |args: &[&str]| -> Option<String> {
+        *git_calls += 1;
         let out = Command::new("git")
             .arg("-C")
             .arg(repo)
@@ -100,22 +108,41 @@ fn progress_markdown(repo: &std::path::Path, head: &str, task_id: TaskId) -> Opt
 
 impl CosChatLaunch {
     /// One pass: detect, start, finish. Errors are logged and retried next tick (the rows are durable).
-    pub(crate) fn root_done_tick(&mut self, dispatcher: &Dispatcher) {
+    /// ADR 2026-11-07-root-done-tick-phase-timing D3: returns the `cos.root_done.*` breakdown only when
+    /// the pass took at least `root_done_probe_threshold`; otherwise an empty list.
+    pub(crate) fn root_done_tick(&mut self, dispatcher: &Dispatcher) -> Vec<(&'static str, u64)> {
+        let started = std::time::Instant::now();
+        let mut probe = RootDoneProbe::default();
         let now = dispatcher.now_utc();
-        if let Err(error) = self.root_done_ingest(now) {
-            tracing::warn!(%error, "root-done intake failed");
-            return;
+        let ingest = self.root_done_ingest(now, &mut probe);
+        probe.ingest_us = us(started.elapsed());
+        match ingest {
+            Err(error) => tracing::warn!(%error, "root-done intake failed"),
+            Ok(()) => {
+                let at = std::time::Instant::now();
+                if let Err(error) = self.root_done_advance_all(now, &mut probe) {
+                    tracing::warn!(%error, "root-done summary pass failed");
+                }
+                probe.advance_us = us(at.elapsed());
+            }
         }
-        if let Err(error) = self.root_done_advance_all(now) {
-            tracing::warn!(%error, "root-done summary pass failed");
+        if started.elapsed() >= self.root_done_probe_threshold {
+            probe.parts()
+        } else {
+            Vec::new()
         }
     }
 
     /// D2: root の done 遷移を行にする。cursor は入れた後に進める（入れ直しは `INSERT OR IGNORE`）。
-    fn root_done_ingest(&mut self, now: OffsetDateTime) -> Result<(), String> {
+    fn root_done_ingest(
+        &mut self,
+        now: OffsetDateTime,
+        probe: &mut RootDoneProbe,
+    ) -> Result<(), String> {
         let store = self.store.clone();
-        let Some(raw) = store
-            .feed_cursor_get(ROOT_DONE_CURSOR)
+        let Some(raw) = probe
+            .cursor_get
+            .time(|| store.feed_cursor_get(ROOT_DONE_CURSOR))
             .map_err(|e| e.to_string())?
         else {
             // 導入時: 過去に done になった root を遡って鳴らさない。
@@ -128,9 +155,11 @@ impl CosChatLaunch {
             .parse()
             .map_err(|_| format!("invalid root-done cursor {raw}"))?;
         for _ in 0..EVENT_PAGES_PER_TICK {
-            let rows = store
-                .events_since(cursor, EVENT_BATCH)
+            let rows = probe
+                .events_since
+                .time(|| store.events_since(cursor, EVENT_BATCH))
                 .map_err(|e| e.to_string())?;
+            probe.events_since_rows += rows.len() as u64;
             let Some(last) = rows.last().map(|r| r.id) else {
                 break;
             };
@@ -146,23 +175,35 @@ impl CosChatLaunch {
                 {
                     continue;
                 }
-                let Some(task) = store.get(row.task_id).map_err(|e| e.to_string())? else {
+                probe.candidate_rows += 1;
+                let Some(task) = probe
+                    .candidate_get
+                    .time(|| store.get(row.task_id))
+                    .map_err(|e| e.to_string())?
+                else {
                     continue;
                 };
                 if !root_done::is_root_done(&task) {
                     continue;
                 }
-                let events = store.events_for(task.id).map_err(|e| e.to_string())?;
+                let events = probe
+                    .candidate_events_for
+                    .time(|| store.events_for(task.id))
+                    .map_err(|e| e.to_string())?;
+                probe.candidate_events_for_max =
+                    probe.candidate_events_for_max.max(events.len() as u64);
                 if let Some(seq) = root_done::done_transition_seq(&events)
-                    && store
-                        .root_done_insert(task.id, seq, now)
+                    && probe
+                        .insert
+                        .time(|| store.root_done_insert(task.id, seq, now))
                         .map_err(|e| e.to_string())?
                 {
                     tracing::info!(task = %task.id, seq, "root task done: summary queued");
                 }
             }
-            store
-                .feed_cursor_set(ROOT_DONE_CURSOR, &last.to_string())
+            probe
+                .cursor_set
+                .time(|| store.feed_cursor_set(ROOT_DONE_CURSOR, &last.to_string()))
                 .map_err(|e| e.to_string())?;
             cursor = last;
             if rows.len() < EVENT_BATCH {
@@ -172,29 +213,59 @@ impl CosChatLaunch {
         Ok(())
     }
 
-    fn root_done_advance_all(&mut self, now: OffsetDateTime) -> Result<(), String> {
-        for row in self.store.root_done_open().map_err(|e| e.to_string())? {
-            if let Err(error) = self.root_done_advance(&row, now) {
+    fn root_done_advance_all(
+        &mut self,
+        now: OffsetDateTime,
+        probe: &mut RootDoneProbe,
+    ) -> Result<(), String> {
+        let store = self.store.clone();
+        let rows = probe
+            .open
+            .time(|| store.root_done_open())
+            .map_err(|e| e.to_string())?;
+        probe.open_rows = rows.len() as u64;
+        let row_threshold = us(self.root_done_probe_threshold);
+        for row in rows {
+            let mut facts = FactsProbe::default();
+            if let Err(error) = self.root_done_advance(&row, now, &mut facts) {
                 let key = message_key(row.task_id, row.done_seq);
                 if self.triage.root_done_warned.insert(key) {
                     tracing::warn!(%error, task = %row.task_id, "root-done summary step failed (retrying)");
                 }
             }
+            if facts.get.calls > 0 && facts.total_us() >= row_threshold {
+                RootDoneProbe::warn_row(row.task_id, row.state.as_str(), &facts);
+            }
+            probe.add_row(&facts);
         }
         Ok(())
     }
 
-    /// D4: DB の行と進捗ファイルだけから事実を集める。
-    fn root_done_facts(&self, task_id: TaskId) -> Result<RootDoneFacts, String> {
+    /// D4: DB の行と進捗ファイルだけから事実を集める。段の時間は `probe` に足す
+    /// （ADR 2026-11-07-root-done-tick-phase-timing D1）。
+    fn root_done_facts(
+        &self,
+        task_id: TaskId,
+        probe: &mut FactsProbe,
+    ) -> Result<RootDoneFacts, String> {
         let store = &self.store;
-        let task = store
-            .get(task_id)
+        let task = probe
+            .get
+            .time(|| store.get(task_id))
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("task {task_id} is gone"))?;
-        let events = store.events_for(task_id).map_err(|e| e.to_string())?;
-        let delivery = store.delivery_get(task_id).map_err(|e| e.to_string())?;
-        let children: Vec<ChildFact> = store
-            .children(task_id)
+        let events = probe
+            .events_for
+            .time(|| store.events_for(task_id))
+            .map_err(|e| e.to_string())?;
+        probe.events_for_max = probe.events_for_max.max(events.len() as u64);
+        let delivery = probe
+            .delivery_get
+            .time(|| store.delivery_get(task_id))
+            .map_err(|e| e.to_string())?;
+        let children: Vec<ChildFact> = probe
+            .children
+            .time(|| store.children(task_id))
             .map_err(|e| e.to_string())?
             .into_iter()
             .map(|c| ChildFact {
@@ -203,12 +274,19 @@ impl CosChatLaunch {
             })
             .collect();
         let progress = delivery.as_ref().and_then(|d| {
-            let repo = store.repo_get(d.repo_id).ok().flatten()?;
+            let repo = probe
+                .repo_get
+                .time(|| store.repo_get(d.repo_id))
+                .ok()
+                .flatten()?;
             let path: PathBuf = match repo.location {
                 WorkspaceSpec::Local { path, .. } => path,
                 _ => return None,
             };
-            progress_markdown(&path, &d.head, task_id)
+            let started = std::time::Instant::now();
+            let text = progress_markdown(&path, &d.head, task_id, &mut probe.progress_git_calls);
+            probe.progress_us = probe.progress_us.saturating_add(us(started.elapsed()));
+            text
         });
         Ok(root_done::collect(RootDoneInputs {
             task: &task,
@@ -223,11 +301,12 @@ impl CosChatLaunch {
         &mut self,
         row: &RootDoneSummary,
         now: OffsetDateTime,
+        probe: &mut FactsProbe,
     ) -> Result<(), String> {
         let age = (now - row.created_at).whole_seconds();
         match row.state {
             RootDoneState::New => {
-                let facts = self.root_done_facts(row.task_id)?;
+                let facts = self.root_done_facts(row.task_id, probe)?;
                 // 取り込み・release 準備が動いている間は、統合 commit・release が出るのを待つ（上限あり）。
                 if matches!(
                     facts.delivery_state,
@@ -323,7 +402,7 @@ impl CosChatLaunch {
                                 .map_err(|e| e.to_string())?,
                             None => String::new(),
                         };
-                        let facts = self.root_done_facts(row.task_id)?;
+                        let facts = self.root_done_facts(row.task_id, probe)?;
                         if text.trim().is_empty() {
                             return self.root_done_fallback(row, &facts, Some(thread_id), now);
                         }
@@ -333,7 +412,7 @@ impl CosChatLaunch {
                         ChatRunState::Failed | ChatRunState::Stopped | ChatRunState::Interrupted,
                         _,
                     )) => {
-                        let facts = self.root_done_facts(row.task_id)?;
+                        let facts = self.root_done_facts(row.task_id, probe)?;
                         self.root_done_fallback(row, &facts, Some(thread_id), now)
                     }
                     Some(_) => Ok(()),
@@ -345,7 +424,7 @@ impl CosChatLaunch {
                         }
                         // 未着手のまま待ちすぎた（容量待ち・停止）: 入力を取り下げて決定的な短文に切り替える。
                         let _ = self.store.chat_message_cancel(thread_id, input_id, now);
-                        let facts = self.root_done_facts(row.task_id)?;
+                        let facts = self.root_done_facts(row.task_id, probe)?;
                         self.root_done_fallback(row, &facts, Some(thread_id), now)
                     }
                 }

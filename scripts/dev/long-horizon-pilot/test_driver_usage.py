@@ -23,7 +23,9 @@ def db():
         "CREATE TABLE tasks (id TEXT, project_id TEXT);"
         "CREATE TABLE runs (task_id TEXT, role TEXT, started_at TEXT, usage_json TEXT);"
         "CREATE TABLE chat_threads (id TEXT, project_id TEXT);"
-        "CREATE TABLE chat_runs (thread_id TEXT, started_at TEXT, usage_json TEXT);"
+        "CREATE TABLE chat_runs (thread_id TEXT, started_at TEXT, usage_json TEXT, "
+        "run_id TEXT DEFAULT (lower(hex(randomblob(4)))), state TEXT, reason TEXT, finished_at TEXT, "
+        "launched_at TEXT, prelaunch_reason TEXT, launch_tracked INTEGER);"
         "INSERT INTO tasks VALUES ('T1','P1'),('T2','OTHER');"
         "INSERT INTO chat_threads VALUES ('H1','P1'),('H2','OTHER');")
     return c
@@ -43,8 +45,8 @@ class CollectUsage(unittest.TestCase):
         c = db()
         c.execute("INSERT INTO runs VALUES ('T1','worker','2026-01-01T00:00:10Z',?)", (u(100, 10, 5, 7),))
         c.execute("INSERT INTO runs VALUES ('T2','worker','2026-01-01T00:00:11Z',?)", (u(9999, 9999),))
-        c.execute("INSERT INTO chat_runs VALUES ('H1','2026-01-01T00:00:05Z',?)", (u(40, 4, 1, 2),))
-        c.execute("INSERT INTO chat_runs VALUES ('H2','2026-01-01T00:00:06Z',?)", (u(9999, 9999),))
+        c.execute("INSERT INTO chat_runs (thread_id, started_at, usage_json) VALUES ('H1','2026-01-01T00:00:05Z',?)", (u(40, 4, 1, 2),))
+        c.execute("INSERT INTO chat_runs (thread_id, started_at, usage_json) VALUES ('H2','2026-01-01T00:00:06Z',?)", (u(9999, 9999),))
         inv, tokens, cache, usd, missing = driver.collect_usage(c, PID, "claude-code", secs)
         self.assertEqual((tokens, cache, missing), (154, 15, None))
         self.assertAlmostEqual(usd, 0.2)  # 他の案件の行（T2・H2）は足さない
@@ -62,22 +64,22 @@ class CollectUsage(unittest.TestCase):
     def test_null_cos_usage_sets_missing_and_tokens_null(self):
         c = db()
         c.execute("INSERT INTO runs VALUES ('T1','worker','2026-01-01T00:00:10Z',?)", (u(1, 1),))
-        c.execute("INSERT INTO chat_runs VALUES ('H1','2026-01-01T00:00:05Z',NULL)")
-        c.execute("INSERT INTO chat_runs VALUES ('H1','2026-01-01T00:00:06Z',NULL)")
+        c.execute("INSERT INTO chat_runs (thread_id, started_at, usage_json) VALUES ('H1','2026-01-01T00:00:05Z',NULL)")
+        c.execute("INSERT INTO chat_runs (thread_id, started_at, usage_json) VALUES ('H1','2026-01-01T00:00:06Z',NULL)")
         _, tokens, cache, usd, missing = driver.collect_usage(c, PID, "claude-code", secs)
         self.assertEqual((tokens, cache, usd, missing), (None, None, None, "cos_usage_null:2"))
 
     def test_null_run_usage_and_both_reasons(self):
         c = db()
         c.execute("INSERT INTO runs VALUES ('T1','worker','2026-01-01T00:00:10Z',NULL)")
-        c.execute("INSERT INTO chat_runs VALUES ('H1','2026-01-01T00:00:05Z',NULL)")
+        c.execute("INSERT INTO chat_runs (thread_id, started_at, usage_json) VALUES ('H1','2026-01-01T00:00:05Z',NULL)")
         _, tokens, _, _, missing = driver.collect_usage(c, PID, "claude-code", secs)
         self.assertIsNone(tokens)
         self.assertEqual(missing, "run_usage_null:1,cos_usage_null:1")
 
     def test_stub_keeps_tier_stub(self):
         c = db()
-        c.execute("INSERT INTO chat_runs VALUES ('H1','2026-01-01T00:00:05Z',NULL)")
+        c.execute("INSERT INTO chat_runs (thread_id, started_at, usage_json) VALUES ('H1','2026-01-01T00:00:05Z',NULL)")
         _, tokens, _, _, missing = driver.collect_usage(c, PID, "stub", secs)
         self.assertEqual((tokens, missing), (None, "tier=stub"))
 
@@ -89,6 +91,67 @@ class CollectUsage(unittest.TestCase):
                                "cache_creation_tokens": 0, "cost_usd": None}),))
         _, tokens, cache, usd, missing = driver.collect_usage(c, PID, "claude-code", secs)
         self.assertEqual((tokens, cache, usd, missing), (None, None, None, "usd_missing:1"))
+
+
+def chat(c, run, started, usage=None, finished=None, launched=None, reason=None, tracked=1, thread="H1"):
+    c.execute("INSERT INTO chat_runs (run_id, thread_id, started_at, usage_json, finished_at, launched_at, "
+              "prelaunch_reason, launch_tracked) VALUES (?,?,?,?,?,?,?,?)",
+              (run, thread, started, usage, finished, launched, reason, tracked))
+
+
+class CollectLaunchBoundary(unittest.TestCase):
+    """ADR 2026-11-06-cos-run-launch-accounting-and-drain D1・D5-3: 起動前に終わった run だけを欠測から外す。"""
+
+    def test_prelaunch_run_is_not_a_cos_usage_null(self):
+        c = db()
+        chat(c, "a", "2026-01-01T00:00:05Z", u(40, 4), finished="2026-01-01T00:00:08Z", launched="2026-01-01T00:00:06Z")
+        chat(c, "b", "2026-01-01T00:00:09Z", finished="2026-01-01T00:00:09Z", reason="route_unavailable")
+        inv, tokens, _, usd, missing = driver.collect_usage(c, PID, "claude-code", secs)
+        self.assertEqual((tokens, missing), (44, None))
+        self.assertAlmostEqual(usd, 0.1)
+        by = {i["at"]: i for i in inv}
+        self.assertEqual((by[5]["launch"], by[5]["slot_wait_secs"]), ("launched", 1))
+        self.assertEqual((by[9]["launch"], by[9]["prelaunch_reason"], by[9]["usage"]),
+                         ("not_launched", "route_unavailable", None))
+
+    def test_started_run_with_null_usage_still_counts(self):
+        c = db()
+        chat(c, "a", "2026-01-01T00:00:05Z", finished="2026-01-01T00:00:08Z", launched="2026-01-01T00:00:06Z")
+        _, tokens, _, _, missing = driver.collect_usage(c, PID, "claude-code", secs)
+        self.assertEqual((tokens, missing), (None, "cos_usage_null:1"))
+
+    def test_old_rows_and_unknown_reasons_stay_unknown(self):
+        c = db()
+        chat(c, "old", "2026-01-01T00:00:05Z", finished="2026-01-01T00:00:06Z", tracked=0, reason="route_unavailable")
+        chat(c, "odd", "2026-01-01T00:00:07Z", finished="2026-01-01T00:00:08Z", reason="made_up")
+        chat(c, "none", "2026-01-01T00:00:09Z", finished="2026-01-01T00:00:09Z")
+        inv, _, _, _, missing = driver.collect_usage(c, PID, "claude-code", secs)
+        self.assertEqual(missing, "cos_usage_null:3")
+        self.assertEqual({i["launch"] for i in inv}, {"unrecorded"})
+
+    def test_drain_timeout_is_counted_separately_and_includes_unstarted_rows(self):
+        c = db()
+        chat(c, "late", "2026-01-01T00:00:05Z", launched="2026-01-01T00:00:06Z")  # 終わっていない
+        chat(c, "queued", None)
+        inv, tokens, cache, usd, missing = driver.collect_usage(c, PID, "claude-code", secs, {"late", "queued"})
+        self.assertEqual((tokens, cache, usd, missing), (None, None, None, "cos_drain_timeout:2"))
+        self.assertTrue(all(i.get("drain_timeout") for i in inv))
+        # stub でも timeout は数える（stub は tier=stub と並ぶ）。
+        self.assertEqual(driver.collect_usage(c, PID, "stub", secs, {"late"})[4], "tier=stub,cos_drain_timeout:1")
+
+    def test_old_db_without_launch_columns_reads_as_unrecorded(self):
+        c = sqlite3.connect(":memory:")
+        c.row_factory = sqlite3.Row
+        c.executescript(
+            "CREATE TABLE tasks (id TEXT, project_id TEXT);"
+            "CREATE TABLE runs (task_id TEXT, role TEXT, started_at TEXT, usage_json TEXT);"
+            "CREATE TABLE chat_threads (id TEXT, project_id TEXT);"
+            "CREATE TABLE chat_runs (run_id TEXT, thread_id TEXT, state TEXT, reason TEXT, started_at TEXT, "
+            "finished_at TEXT, usage_json TEXT);"
+            "INSERT INTO chat_threads VALUES ('H1','P1');"
+            "INSERT INTO chat_runs VALUES ('x','H1','failed','r','2026-01-01T00:00:05Z','2026-01-01T00:00:06Z',NULL);")
+        inv, _, _, _, missing = driver.collect_usage(c, PID, "claude-code", secs)
+        self.assertEqual((missing, inv[0]["launch"]), ("cos_usage_null:1", "unrecorded"))
 
 
 class AppendOnly(unittest.TestCase):
@@ -129,11 +192,10 @@ class CosSkills(unittest.TestCase):
 
     def test_failed_cos_runs_are_counted_by_reason(self):
         c = db()
-        c.execute("ALTER TABLE chat_runs ADD COLUMN state TEXT")
-        c.execute("ALTER TABLE chat_runs ADD COLUMN reason TEXT")
-        c.execute("INSERT INTO chat_runs VALUES ('H1','2026-01-01T00:00:05Z',NULL,'failed',"
-                  "'CoS skills unavailable: cos-operator')")
-        c.execute("INSERT INTO chat_runs VALUES ('H2','2026-01-01T00:00:05Z',NULL,'failed','x')")
+        c.execute("INSERT INTO chat_runs (thread_id, started_at, usage_json, state, reason) VALUES "
+                  "('H1','2026-01-01T00:00:05Z',NULL,'failed','CoS skills unavailable: cos-operator')")
+        c.execute("INSERT INTO chat_runs (thread_id, started_at, usage_json, state, reason) VALUES "
+                  "('H2','2026-01-01T00:00:05Z',NULL,'failed','x')")
         self.assertEqual(driver.cos_run_failures(c, PID), {"CoS skills unavailable: cos-operator": 1})
 
 

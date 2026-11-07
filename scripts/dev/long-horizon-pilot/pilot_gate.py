@@ -80,15 +80,26 @@ def num(v):
 
 
 def invocation_gaps(facts):
-    """invocations を数え直す（facts の usage.missing だけを信じない。修正前の driver は CoS の null を見落とした）。"""
-    gaps = {"run_usage_null": 0, "cos_usage_null": 0, "cache_missing": 0, "usd_missing": 0}
+    """invocations を数え直す（facts の usage.missing だけを信じない。修正前の driver は CoS の null を見落とした）。
+
+    CoS の行は `launch`（launched・not_launched・unrecorded）で分ける（ADR 2026-11-06-cos-run-launch-accounting-and-drain D5）。
+    欄の無い旧 raw は unrecorded（起動済み）として読むので、旧 raw の判定は変わらない。not_launched は課金対象の起動ではない
+    ので roles["cos"]・欠測に数えず、roles["cos_not_launched"] に数える。drain が待ちきれなかった行（drain_timeout）の usage
+    欠測は cos_drain_timeout に数える。"""
+    gaps = {"run_usage_null": 0, "cos_usage_null": 0, "cos_drain_timeout": 0, "cache_missing": 0, "usd_missing": 0}
     roles = {}
     for i in facts.get("invocations") or []:
         role = i.get("role") or "?"
+        if role == "cos" and i.get("launch") == "not_launched":
+            roles["cos_not_launched"] = roles.get("cos_not_launched", 0) + 1
+            continue
         roles[role] = roles.get(role, 0) + 1
         u = i.get("usage")
         if not u:
-            gaps["cos_usage_null" if role == "cos" else "run_usage_null"] += 1
+            if role != "cos":
+                gaps["run_usage_null"] += 1
+            else:
+                gaps["cos_drain_timeout" if i.get("drain_timeout") else "cos_usage_null"] += 1
             continue
         if not all(isinstance(u.get(k), int) and not isinstance(u.get(k), bool) for k in CACHE_KEYS):
             gaps["cache_missing"] += 1
@@ -118,6 +129,21 @@ def judge_trial(facts, ops, grade):
     add("usage_complete", "unknown" if reasons else "pass", ",".join(reasons) or "usage・cache・USD が全起動にある")
     cos = roles.get("cos", 0)
     add("cos_runs", "pass" if cos >= 1 else "fail", f"cos_runs={cos}")
+    # 起動前に終わった CoS run は費用不明ではない。ただし CoS が返事をしなかったので、G7 は pass にしない。
+    not_launched = roles.get("cos_not_launched", 0)
+    add("cos_not_launched", "pass" if not_launched == 0 else "fail", f"cos_not_launched={not_launched}")
+    drain = facts.get("drain")
+    if not isinstance(drain, dict):
+        add("drain", "info", "not recorded (old raw)")
+    else:
+        late = drain.get("timed_out")
+        if not num(late):
+            add("drain", "unknown", f"drain.timed_out={late}")
+        elif late > 0 or drain.get("wall_limit_hit"):
+            why = f"timed_out={late}" if late else "wall limit reached before the controller stopped"
+            add("drain", "unknown", f"{why} deadline_at={drain.get('deadline_at')} waited_secs={drain.get('waited_secs')}")
+        else:
+            add("drain", "pass", f"waited_secs={drain.get('waited_secs')} deadline_at={drain.get('deadline_at')}")
     for role in ("worker", "reviewer"):
         n = roles.get(role, 0)
         add(f"{role}_runs", "pass" if n >= 1 else "unknown", f"{role}_runs={n}")
@@ -180,7 +206,7 @@ def judge(raw, approval=None, now=None):
                 g = json.loads(line)
                 grades[g.get("trial")] = g
     trials = []
-    tot = {"usd": 0.0, "wall_secs": 0, "cache_creation_tokens": 0, "cos_runs": 0}
+    tot = {"usd": 0.0, "wall_secs": 0, "cache_creation_tokens": 0, "cos_runs": 0, "cos_not_launched": 0}
     usd_known = wall_known = True
     gap_total = {}
     all_real = True
@@ -204,6 +230,7 @@ def judge(raw, approval=None, now=None):
         else:
             wall_known = False
         tot["cos_runs"] += roles.get("cos", 0)
+        tot["cos_not_launched"] += roles.get("cos_not_launched", 0)
         tot["cache_creation_tokens"] += sum(int((i.get("usage") or {}).get("cache_creation_tokens") or 0)
                                             for i in facts.get("invocations") or [])
         trials.append({"trial": trial, "case": facts.get("case"), "arm": (ops or {}).get("arm"),
@@ -240,12 +267,14 @@ def judge(raw, approval=None, now=None):
         g7 = "pending"
     else:
         g7_states = [c["state"] for t in trials for c in t["checks"]
-                     if c["name"] in ("usage_complete", "cos_runs")]
-        g7 = "pass" if tot["cos_runs"] >= 1 and all(s == "pass" for s in g7_states) else "fail"
+                     if c["name"] in ("usage_complete", "cos_runs", "cos_not_launched", "drain")]
+        g7 = "pass" if tot["cos_runs"] >= 1 and all(s in ("pass", "info") for s in g7_states) else "fail"
     return {
         "schema": SCHEMA, "verdict": verdict, "g7": g7,
         # cos_usage_null は実 LLM の facts があるときだけ数を書く（stub では null）。
         "cos_usage_null": gap_total.get("cos_usage_null", 0) if g7 != "pending" else None,
+        "cos_not_launched": tot["cos_not_launched"] if g7 != "pending" else None,
+        "cos_drain_timeout": gap_total.get("cos_drain_timeout", 0) if g7 != "pending" else None,
         "real_llm": bool(trials) and all_real,
         "approval": None if approval is None else {k: approval.get(k) for k in (
             "approval_id", "approved_by", "approved_at", "expires_at", "scope", "limits", "account", "model",
@@ -263,7 +292,8 @@ def pilot_facts(gate):
     if not gate["real_llm"]:
         missing.append("not_real_llm")
     return {"schema": SCHEMA, "g7": gate["g7"], "verdict": gate["verdict"], "cos_runs": gate["totals"]["cos_runs"],
-            "cos_usage_null": gate["cos_usage_null"], "missing": missing,
+            "cos_usage_null": gate["cos_usage_null"], "cos_not_launched": gate["cos_not_launched"],
+            "cos_drain_timeout": gate["cos_drain_timeout"], "missing": missing,
             "approval_id": (gate["approval"] or {}).get("approval_id")}
 
 
@@ -289,7 +319,7 @@ def main(argv=None):
             return 2
         problems = check_approval(ap, a.cases.split(","), a.arms.split(","), a.max_wall_secs)
         print(json.dumps({"ok": not problems, "problems": problems, "approval_id": ap.get("approval_id"),
-                          "max_usd": (ap.get("limits") or {}).get("max_usd"),
+                          "max_usd": (ap.get("limits") or {}).get("max_usd"), "expires_at": ap.get("expires_at"),
                           "max_wall_secs": (ap.get("limits") or {}).get("max_wall_secs")}, ensure_ascii=False))
         return 2 if problems else 0
     approval = load(a.approval) if a.approval else None

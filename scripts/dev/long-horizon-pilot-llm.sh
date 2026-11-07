@@ -39,7 +39,7 @@ set -euo pipefail
 
 usage() { sed -n '3,6p' "$0" >&2; exit 2; }
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-harness="" out="" cases="C08" arms="new,old.passive" llm_config="" cos_route="[]" state_root="" max_wall="" approval=""
+harness="" out="" cases="C08" arms="new,old.passive" llm_config="" cos_route="[]" state_root="" max_wall="" approval="" total_wall="" expires_at=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --harness) harness="$2"; shift 2 ;;
@@ -50,6 +50,7 @@ while [ $# -gt 0 ]; do
         --cos-route) cos_route="$2"; shift 2 ;;
         --state-root) state_root="$2"; shift 2 ;;
         --max-wall-secs) max_wall="$2"; shift 2 ;;
+        --total-wall-secs) total_wall="$2"; shift 2 ;;
         --approval) approval="$2"; shift 2 ;;
         *) usage ;;
     esac
@@ -80,6 +81,9 @@ case "$harness" in
         [ "$cos_route" != "[]" ] || { echo "long-horizon-pilot-llm: --cos-route must not be empty for --harness config" >&2; exit 2; }
         out="${out:-$llm_dir}"
         max_wall="${max_wall:-$(printf %s "$check" | python3 -I -c 'import json,sys; print(int(json.load(sys.stdin)["max_wall_secs"]))')}"
+        # 承認の max_wall_secs は承認全体の総量（試行ごとにリセットしない。judge の wall_cap は全試行の wall の和と比べる）。
+        total_wall="$(printf %s "$check" | python3 -I -c 'import json,sys; print(int(json.load(sys.stdin)["max_wall_secs"]))')"
+        expires_at="$(printf %s "$check" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["expires_at"])')"
         max_usd="$(printf %s "$check" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["max_usd"])')"
         echo "long-horizon-pilot-llm: approval $(printf %s "$check" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["approval_id"])') max_usd=$max_usd max_wall_secs=$max_wall" >&2
         ;;
@@ -123,14 +127,21 @@ if [ "$harness" = config ]; then
 elif [ "$harness" = config-stub ]; then
     # 実 LLM の代わりの agent を config harness の TOML として書く（LLM は呼ばない）。
     agent="$root/scripts/dev/long-horizon-pilot/stub_harness.py"
+    # 試験用の絞り（config-stub だけ）: CoS の返事を遅らせる秒数と、account の同時 run 数（worker・reviewer と CoS の重なりを作る）。
+    delay_arg=""
+    [ -z "${LONG_HORIZON_PILOT_STUB_COS_DELAY:-}" ] || delay_arg=", \"--cos-delay-secs\", \"$LONG_HORIZON_PILOT_STUB_COS_DELAY\""
+    [ -z "${LONG_HORIZON_PILOT_STUB_WORKER_DELAY:-}" ] || delay_arg="$delay_arg, \"--worker-delay-secs\", \"$LONG_HORIZON_PILOT_STUB_WORKER_DELAY\""
+    max_runs_line=""
+    [ -z "${LONG_HORIZON_PILOT_STUB_MAX_RUNS:-}" ] || max_runs_line="max_runs = $LONG_HORIZON_PILOT_STUB_MAX_RUNS"
     cat >"$work/config-stub.toml" <<TOML
 [adapters.fake]
-command = ["python3", "-I", "$agent", "--from-objective"$forge_arg]
+command = ["python3", "-I", "$agent", "--from-objective"$delay_arg$forge_arg]
 
 [llm_sources.local]
 kind = "fake"
 accounts = ["a1"]
 models = ["model-1"]
+$max_runs_line
 
 [harnesses.claude_code]
 kind = "fake"
@@ -160,12 +171,18 @@ else
     [ "${LONG_HORIZON_PILOT_STUB_NO_OUTPUT:-}" != 1 ] || set -- "$@" --stub-no-output
 fi
 [ "${LONG_HORIZON_PILOT_STUB_FORGE:-}" != 1 ] || set -- "$@" --forge
+# 共有の期限（ADR 2026-11-06-cos-run-launch-accounting-and-drain D3）: 最初の試行の開始から数え、全試行が同じ総量を分け合う。
+deadline_args=""
+if [ -n "$total_wall" ]; then
+    deadline_args="--approval-started-at $(date +%s.%N) --approval-wall-secs $total_wall"
+    [ -z "$expires_at" ] || deadline_args="$deadline_args --approval-expires-at $expires_at"
+fi
 for case in $(printf %s "$cases" | tr , " "); do
     for arm in $(printf %s "$arms" | tr , " "); do
         echo "long-horizon-pilot-llm: case $case arm $arm" >&2
         python3 -I "$root/scripts/dev/long-horizon-pilot/driver.py" --state "$work/$case-$arm" --out "$out" \
             --fixtures "$root/tests/fixtures/long-horizon" --bundle "$work/bundle" --celeris "$bin/celeris" \
-            --script-deploy "$bin/script-deploy" --case "$case" --arm "$arm" --max-wall-secs "$max_wall" "$@" \
+            --script-deploy "$bin/script-deploy" --case "$case" --arm "$arm" --max-wall-secs "$max_wall" $deadline_args "$@" \
             >"$work/$case-$arm.log" 2>&1 || { tail -40 "$work/$case-$arm.log" >&2; fail "trial $case $arm failed"; }
         cp "$work/$case-$arm.log" "$out/ops/$case-$arm.log"
     done

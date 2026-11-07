@@ -9,6 +9,8 @@
   書いた公開の手順（`- o1: `<command> publish <logical_id>``）を読み、台本も記録の場所も受け取らない。
   どちらも command が exit 3（承認が無い）なら `pilot-effect:<logical_id>` を含む question を出して止まり、人が
   daemon の承認 API で答えた後の run で同じ command を再実行する。exit 4（却下）なら公開せずに終える。
+- `--cos-delay-secs N`（試験用）: CoS の chat run（acceptance の無い非 review の run）の返事を N 秒遅らせる。
+- `--worker-delay-secs N`（試験用）: worker の run を N 秒遅らせる（CoS の起動が worker の実行と重なり、枠待ちになる）。
 - `--tamper-dir`（陰性の試験用）: worker が記録の場所を知った場合を模し、効果の記録に偽の行を足そうとする。
 - `--forge`（陰性の試験用）: worker が人の承認を偽造しようとする場合を模す。公開の command の場所から試行の home を
   推し量り（実 LLM にも分かる）、config.toml の `token_file`・home の `human.token`・`operator.token`・旧い repo の
@@ -233,11 +235,20 @@ def main():
                 break
             elif rc != 4:
                 raise SystemExit(f"stub: pilot-effect exited {rc}")
+    # 試験用（--cos-delay-secs）: CoS の chat run（acceptance の無い非 review の run）の返事を遅らせる。時計は実時間だが、
+    # driver の drain が SIGTERM の前に待つことを示すだけの短い秒数で使う（負荷は掛けない。sleep だけ）。
+    delay = float(arg("--cos-delay-secs")) if "--cos-delay-secs" in sys.argv else 0.0
+    cos_like = kind != "review" and not task.get("acceptance")
+    if delay and cos_like:
+        time.sleep(delay)
+    worker_delay = float(arg("--worker-delay-secs")) if "--worker-delay-secs" in sys.argv else 0.0
+    if worker_delay and kind != "review" and task.get("acceptance"):
+        time.sleep(worker_delay)
     # 作業場所の外は読み取り専用（worker の sandbox）。記録は run の成果物の dir に置く。
     with open(artifacts / "stub-run.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps({"at": time.time(), "kind": kind, "task": task.get("id"), "title": task.get("title"),
                             "wrote": wrote, "effects": effects, "published": published, "question": question,
-                            "tampered": tampered, "forge": forged}, ensure_ascii=False) + "\n")
+                            "tampered": tampered, "forge": forged, "cos_like": cos_like}, ensure_ascii=False) + "\n")
     print(json.dumps({"type": "progress", "msg": "stub", "kind": "status", "summary": "stub"}))
     if question:
         print(json.dumps({"type": "question", "text": question, "usage": STUB_USAGE}))

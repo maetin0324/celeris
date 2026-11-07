@@ -23,8 +23,10 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import pilot_drain  # noqa: E402
 import pilot_effect  # noqa: E402  （同じ dir。python3 -I では script の dir が sys.path に無い）
 
 ACTIVE = {"draft", "ready", "running", "blocked", "reviewing"}
@@ -35,23 +37,28 @@ CACHE_KEYS = ("cache_read_tokens", "cache_creation_tokens")
 LAUNCH_REJECTED = "launches its next root"
 
 
-def collect_usage(conn, pid, harness, secs):
+def collect_usage(conn, pid, harness, secs, timed_out=()):
     """案件の runs と案件 CoS thread の chat_runs から invocations と消費を集める（ADR 2026-11-05-phase3-p0f-usage-counting、
-    ADR 2026-11-06-phase5-n1-pilot-measurement-contract D1）。
+    ADR 2026-11-06-phase5-n1-pilot-measurement-contract D1、ADR 2026-11-06-cos-run-launch-accounting-and-drain D3・D5）。
 
     戻り値は (invocations, tokens, cache_tokens, usd, missing)。tokens は daemon の予算（task_ops::project_budget）と同じ
     input+output、cache は別欄、usd は保存値 `cost_usd` の和。実 LLM の harness で次のどれかが 1 件でもあれば missing に
     理由と件数を書き、tokens・cache_tokens・usd を null にする（欠測を 0 として足さない。fail closed）:
     usage が null（run_usage_null・cos_usage_null）、cache 欄（cache_read_tokens・cache_creation_tokens）が無い
     （cache_missing）、`cost_usd` が数でない（usd_missing）。
+
+    CoS の chat run は起動の状態（launch）を invocation に残す。起動前に確かに終わった run（not_launched）は usage が無くても
+    cos_usage_null に数えない（課金対象の起動ではない）。起動後・旧記録・境界不明の run は起動済みとして数え、usage が無ければ欠測。
+    `timed_out`（drain が期限までに待ちきれなかった run_id）の usage 欠測は cos_drain_timeout として数える（stub でも数える）。
     """
     real = harness != "stub"
+    timed_out = set(timed_out)
     invocations = []
     tokens = cache_tokens = 0
     usd = 0.0
-    gaps = {"run_usage_null": 0, "cos_usage_null": 0, "cache_missing": 0, "usd_missing": 0}
+    gaps = {"run_usage_null": 0, "cos_usage_null": 0, "cos_drain_timeout": 0, "cache_missing": 0, "usd_missing": 0}
 
-    def add(role, started_at, raw, kind):
+    def add(role, started_at, raw, gap_kind, extra=None):
         nonlocal tokens, cache_tokens, usd
         usage = json.loads(raw) if raw else None
         if usage:
@@ -65,18 +72,27 @@ def collect_usage(conn, pid, harness, secs):
                 usd += cost
             elif real:
                 gaps["usd_missing"] += 1
-        elif real:
-            gaps[f"{kind}_usage_null"] += 1
-        invocations.append({"at": secs(started_at), "role": role, "usage": usage})
+        elif real or gap_kind == "cos_drain_timeout":
+            gaps[gap_kind] += 1
+        invocations.append({"at": secs(started_at), "role": role, "usage": usage, **(extra or {})})
 
     for r in conn.execute("SELECT r.role, r.started_at, r.usage_json FROM runs r JOIN tasks t ON t.id = r.task_id "
                           "WHERE t.project_id = ? ORDER BY r.started_at", (pid,)):
-        add(r["role"] or "worker", r["started_at"], r["usage_json"], "run")
-    threads = [x["id"] for x in conn.execute("SELECT id FROM chat_threads WHERE project_id = ?", (pid,))]
-    for th in threads:
-        for r in conn.execute("SELECT started_at, usage_json FROM chat_runs WHERE thread_id = ? "
-                              "AND started_at IS NOT NULL ORDER BY started_at", (th,)):
-            add("cos", r["started_at"], r["usage_json"], "cos")
+        add(r["role"] or "worker", r["started_at"], r["usage_json"], "run_usage_null")
+    for r in pilot_drain.read_chat_runs(conn, pid):
+        if not r["started_at"] and r["run_id"] not in timed_out:
+            continue
+        launch = pilot_drain.launch_state(r)
+        if launch == pilot_drain.NOT_LAUNCHED:
+            invocations.append({"at": secs(r["started_at"]), "role": "cos", "usage": None, "launch": launch,
+                                "prelaunch_reason": r["prelaunch_reason"], "slot_wait_secs": None})
+            continue
+        wait = (max(0, secs(r["launched_at"]) - secs(r["started_at"])) if r["launched_at"] and r["started_at"] else None)
+        extra = {"launch": launch, "prelaunch_reason": None, "slot_wait_secs": wait}
+        if r["run_id"] in timed_out:
+            extra["drain_timeout"] = True
+        add("cos", r["started_at"], r["usage_json"], "cos_drain_timeout" if r["run_id"] in timed_out else "cos_usage_null",
+            extra)
     invocations.sort(key=lambda i: i["at"])
     reasons = [] if real else ["tier=stub"]
     reasons += [f"{k}:{n}" for k, n in gaps.items() if n]
@@ -204,6 +220,9 @@ class Trial:
         self.out = pathlib.Path(a.out).resolve()
         self.proc = None
         self.t0 = None
+        self.deadline = None
+        self.wall_limit_hit = False
+        self.drain_result = {"waited_secs": 0.0, "timed_out": [], "rounds": 0}
         self.seen_events = {}
         # API の token（人・operator）は試行ごとの乱数で、driver の memory にだけ持つ。daemon と broker が起動時に
         # 読む file は試行の home（worker が読み書きできる）の外の私的な dir（0700）に置き、読み終えたら消す
@@ -260,6 +279,22 @@ class Trial:
 
     def logical_id(self, outcome):
         return f"{self.a.case}:{outcome}:{self.effect_kinds[outcome]}"
+
+    # ---- 共有の期限 ----
+    def make_deadline(self):
+        """試行の開始・承認の残り・承認の期限から共有の期限を決める（D3-1）。wait_end・枠待ち・drain が同じ期限を使う。"""
+        a = self.a
+        expires = None
+        if a.approval_expires_at:
+            expires = datetime.fromisoformat(a.approval_expires_at.replace("Z", "+00:00")).timestamp()
+        self.deadline = pilot_drain.compute_deadline(self.t0, a.max_wall_secs, a.approval_started_at,
+                                                     a.approval_wall_secs, expires)
+
+    def cos_wall(self):
+        """[cos] max_wall_secs: CoS run の期限が共有の期限を超えない（deadline が決まる前は引数のまま）。"""
+        if self.deadline is None:
+            return self.a.cos_max_wall
+        return max(1, min(self.a.cos_max_wall, int(self.deadline - time.time())))
 
     # ---- daemon ----
     def write_config(self, allowed):
@@ -338,7 +373,7 @@ token_file = {json.dumps(str(self.operator_token_file))}
 [cos]
 enabled = true
 max_turns = {a.cos_max_turns}
-max_wall_secs = {a.cos_max_wall}
+max_wall_secs = {self.cos_wall()}
 route_candidates = {route}
 
 [knowledge]
@@ -508,6 +543,7 @@ max_usd_per_day = {a.max_usd_per_day}
         self.write_config([])
         self.start()
         self.t0 = time.time()
+        self.make_deadline()
         project = self.api("POST", "/api/v1/projects", {
             "title": f"pilot:{a.case}-{a.seed}", "request": self.request,
             "workspace": {"kind": "local", "path": str(self.repo)}})
@@ -579,7 +615,7 @@ max_usd_per_day = {a.max_usd_per_day}
 
     def wait_end(self):
         """到達・停止・上限のどれかまで待つ（出来事を DB と API で読む。負荷は掛けない）。"""
-        deadline = time.time() + self.a.max_wall_secs
+        deadline = self.deadline
         last = None
         quiet_since = time.time()
         while time.time() < deadline:
@@ -601,7 +637,8 @@ max_usd_per_day = {a.max_usd_per_day}
                     r["status"] in ACTIVE for r in roots):
                 return
             time.sleep(1)
-        self.op("wall_limit", secs=self.a.max_wall_secs)
+        self.wall_limit_hit = True
+        self.op("wall_limit", secs=self.a.max_wall_secs, deadline_in=round(deadline - time.time(), 1))
 
     def watch_events(self):
         """試行中に新しく追記された events の行を覚える（終わりに消えた・書き換わった行を数えるため。D1）。"""
@@ -664,8 +701,22 @@ max_usd_per_day = {a.max_usd_per_day}
             view = self.controller()
             self.op("after_off", decisions_at_end=d0, decisions_after=d1, mode=view["state"]["mode"],
                     pending_wakes=len(view["pending_wakes"]))
+        self.run_drain()
         self.stop()
         self.stop_broker()
+
+    def run_drain(self):
+        """最後の操作の後、daemon に SIGTERM を送る前に、案件の CoS run が終わって usage が書かれるまで待つ（D3-2）。
+        DB の読み取りだけ（1 秒間隔）。共有の期限を過ぎて残る run は collect が cos_drain_timeout にする。"""
+        def pending():
+            conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            try:
+                return pilot_drain.unsettled(pilot_drain.read_chat_runs(conn, self.pid))
+            finally:
+                conn.close()
+        self.drain_result = pilot_drain.drain(pending, deadline=self.deadline, settle_secs=self.a.drain_settle_secs)
+        self.op("drain", waited_secs=self.drain_result["waited_secs"], timed_out=self.drain_result["timed_out"])
 
     def check_forge(self):
         """陰性の試験（--forge）: worker（stub）が人の token を探して承認を偽造しようとした記録を読む。
@@ -687,9 +738,6 @@ max_usd_per_day = {a.max_usd_per_day}
         conn = sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         t0_iso = time.gmtime(self.t0)
-        import calendar
-        from datetime import datetime
-
         def secs(iso):
             if not iso:
                 return 0
@@ -722,7 +770,8 @@ max_usd_per_day = {a.max_usd_per_day}
             reviews.append({"root": r["id"], "outcome": outcome, **row["review"]})
             roots.append(row)
             by_id[r["id"]] = row
-        invocations, tokens, cache_tokens, usd, missing = collect_usage(conn, self.pid, a.harness, secs)
+        timed_out = {d["run_id"] for d in self.drain_result["timed_out"]}
+        invocations, tokens, cache_tokens, usd, missing = collect_usage(conn, self.pid, a.harness, secs, timed_out)
         gone, changed = append_only_violations(self.seen_events, events_digest(conn))
         ops_rejected, launch_rejected = cos_rejections(conn, self.pid)
         cos_failures = cos_run_failures(conn, self.pid)
@@ -789,6 +838,9 @@ max_usd_per_day = {a.max_usd_per_day}
             "events_append_only": gone == 0 and changed == 0 and bool(self.seen_events),
             "events_checked": {"seen": len(self.seen_events), "gone": gone, "changed": changed}, "usage": usage,
             "virtual_secs_to_reach": achieved_at,
+            "drain": {"deadline_at": datetime.fromtimestamp(self.deadline, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                      "waited_secs": self.drain_result["waited_secs"], "timed_out": len(self.drain_result["timed_out"]),
+                      "timed_out_runs": self.drain_result["timed_out"], "wall_limit_hit": self.wall_limit_hit},
         }
         for sub in ("facts", "arm-map", "trials"):
             (self.out / sub).mkdir(parents=True, exist_ok=True)
@@ -862,6 +914,12 @@ def main():
     p.add_argument("--stub-no-output", action="store_true",
                    help="陰性の試験: stub の worker が成果を書かず commit もしない")
     p.add_argument("--old-quiet-secs", type=int, default=10)
+    p.add_argument("--approval-started-at", type=float,
+                   help="承認の最初の試行を始めた時刻（epoch 秒。runner が渡す）。承認の wall の総量は試行ごとにリセットしない")
+    p.add_argument("--approval-wall-secs", type=float, help="承認の limits.max_wall_secs（全試行の総量）")
+    p.add_argument("--approval-expires-at", help="承認の expires_at（ISO 8601）。共有の期限はこれを超えない")
+    p.add_argument("--drain-settle-secs", type=float, default=2.0,
+                   help="drain: 未完了の run が 0 になってから、新しい run が現れないのを確かめる秒数")
     a = p.parse_args()
     trial = Trial(a)
     try:

@@ -317,5 +317,73 @@ class Approval(unittest.TestCase):
         self.assertTrue(self.problems(approval(limits={"max_wall_secs": 7200})))
 
 
+def with_invocations(extra, drain=None, **kw):
+    f = complete_facts()
+    f["invocations"] = f["invocations"] + extra
+    if drain is not None:
+        f["drain"] = drain
+    f.update(kw)
+    return f
+
+
+CLEAN_DRAIN = {"deadline_at": "2026-11-06T12:05:00Z", "waited_secs": 3.0, "timed_out": 0, "wall_limit_hit": False}
+
+
+class DrainAndLaunch(unittest.TestCase):
+    """ADR 2026-11-06-cos-run-launch-accounting-and-drain D5-4: judge の起動前・drain の扱い。"""
+
+    def judge(self, facts):
+        return Raw().add("t1", facts).judge(approval())
+
+    def test_clean_facts_with_drain_pass_g7(self):
+        gate = self.judge(with_invocations([], CLEAN_DRAIN))
+        self.assertEqual((gate["verdict"], gate["g7"], gate["cos_usage_null"], gate["cos_not_launched"],
+                          gate["cos_drain_timeout"]), ("pass", "pass", 0, 0, 0))
+        self.assertEqual(check(gate, "t1", "drain"), "pass")
+
+    def test_not_launched_cos_run_is_not_unknown_cost_but_fails_g7(self):
+        nl = {"at": 4, "role": "cos", "usage": None, "launch": "not_launched", "prelaunch_reason": "route_unavailable"}
+        gate = self.judge(with_invocations([nl], CLEAN_DRAIN))
+        self.assertEqual(check(gate, "t1", "usage_complete"), "pass")
+        self.assertEqual(check(gate, "t1", "cos_runs"), "pass")  # 起動した CoS run の数に入れない（1 本のまま）
+        self.assertEqual(gate["trials"][0]["roles"]["cos"], 1)
+        self.assertEqual(check(gate, "t1", "cos_not_launched"), "fail")
+        self.assertEqual(next(c for c in gate["checks"] if c["name"] == "cost_cap")["state"], "pass")
+        self.assertEqual((gate["g7"], gate["cos_not_launched"], gate["cos_usage_null"]), ("fail", 1, 0))
+
+    def test_drain_timeout_is_unknown_and_g7_fails_without_zero_usd(self):
+        late = {"at": 4, "role": "cos", "usage": None, "launch": "launched", "drain_timeout": True}
+        drain = {**CLEAN_DRAIN, "timed_out": 1}
+        gate = self.judge(with_invocations([late], drain))
+        self.assertEqual(gate["verdict"], "unknown")
+        self.assertEqual((gate["g7"], gate["cos_drain_timeout"], gate["cos_usage_null"]), ("fail", 1, 0))
+        self.assertEqual(check(gate, "t1", "drain"), "unknown")
+        self.assertIsNone(gate["totals"]["usd"])
+        self.assertEqual(next(c for c in gate["checks"] if c["name"] == "cost_cap")["state"], "unknown")
+
+    def test_wall_limit_hit_is_unknown_even_without_open_runs(self):
+        gate = self.judge(with_invocations([], {**CLEAN_DRAIN, "wall_limit_hit": True}))
+        self.assertEqual((gate["verdict"], check(gate, "t1", "drain")), ("unknown", "unknown"))
+
+    def test_unrecorded_launch_counts_as_launched_usage_null(self):
+        null = {"at": 4, "role": "cos", "usage": None, "launch": "unrecorded"}
+        gate = self.judge(with_invocations([null], CLEAN_DRAIN))
+        self.assertEqual((gate["verdict"], gate["cos_usage_null"]), ("unknown", 1))
+
+    def test_old_raw_without_launch_or_drain_reads_as_before(self):
+        null = {"at": 4, "role": "cos", "usage": None}
+        facts = with_invocations([null, dict(null, at=5), dict(null, at=6)])
+        gate = self.judge(facts)
+        self.assertEqual((gate["verdict"], gate["g7"], gate["cos_usage_null"]), ("unknown", "fail", 3))
+        self.assertEqual(check(gate, "t1", "drain"), "info")
+
+    def test_config_stub_stays_pending_with_drain_fields_null(self):
+        gate = Raw().add("t1", with_invocations([], CLEAN_DRAIN), label="config-stub").judge(approval())
+        self.assertEqual((gate["g7"], gate["cos_usage_null"], gate["cos_not_launched"], gate["cos_drain_timeout"]),
+                         ("pending", None, None, None))
+        pf = g.pilot_facts(gate)
+        self.assertEqual((pf["g7"], pf["cos_usage_null"], pf["cos_drain_timeout"]), ("pending", None, None))
+
+
 if __name__ == "__main__":
     unittest.main()

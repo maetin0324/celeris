@@ -44,7 +44,7 @@ out="$(cd "$out" && pwd)"
 case "$out" in
     /local/celeris/data/db*|/local/celeris/state*) fail "--out must not be under the production state" ;;
 esac
-rm -rf "${out:?}/virtual" "${out:?}/stub" "${out:?}/stub-c06" "${out:?}/config-c06" "${out:?}/stub-c06-tamper" "${out:?}/stub-no-output" \
+rm -rf "${out:?}/drain" "${out:?}/virtual" "${out:?}/stub" "${out:?}/stub-c06" "${out:?}/config-c06" "${out:?}/stub-c06-tamper" "${out:?}/stub-no-output" \
     "${out:?}/bundle" "${out:?}"/*.log
 mkdir -p "$out/virtual"
 
@@ -327,4 +327,7 @@ if grep -nE 'use .*\b(Trigger|transition)\b' crates/task-dispatch/src/dispatcher
     crates/task-dispatch/src/dispatcher/project_decider_ts.rs crates/task-dispatch/src/project_controller.rs; then
     fail "the controller imports the task state machine"
 fi
+# 4. pilot の drain と共有の期限（ADR 2026-11-06-cos-run-launch-accounting-and-drain D3）。config-stub（LLM 0）で
+#    遅い CoS の usage 回収・枠待ち・期限超過 unknown・全体 wall の総量を実 driver → DB → judge で検査する。G7 は pending のまま。
+bash scripts/dev/long-horizon-pilot/test-pilot-drain.sh --out "$out/drain" || fail "pilot drain test failed"
 echo "test-long-horizon-pilot: ok (out: $out)"

@@ -72,6 +72,10 @@ class RepoHealthCoreTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="rh-core-", dir=os.environ.get("TMPDIR")))
         self.tool = self.tmp / "tool"
         shutil.copytree(TOOL_SRC, self.tool, ignore=shutil.ignore_patterns("__pycache__"))
+        # 中核の試験は試験用の rule で回す。本物の rule（rules-* WorkUnit）は同じ ID を二重登録にするので外す
+        for real in (self.tool / "rules").glob("*.py"):
+            if real.name != "policy_changed.py":
+                real.unlink()
         (self.tool / "rules" / "zz_test_rules.py").write_text(TEST_RULES, encoding="utf-8")
         self.bin = self.tmp / "bin"
         self.bin.mkdir()

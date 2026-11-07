@@ -32,13 +32,18 @@ WorkUnit `core`（G1 の工程「中核の実装」）。基準は `$CELERIS_WU_
 ## 変更（commit の件名）
 - `phase G1: repo_health.py の中核（snapshot・profile・言語 adapter・diff・rule 登録口・集約）と試験`
 - `phase G1: core の進捗`
+- `phase G1: core の試験の文書 path を docs 参照検査に掛からない名前にする`（試験の文字列 docs/… を check-doc-links が実在検査したため）
 
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
 - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → exit 0（22 tests。core 18 件: 決定性・dirty・shallow（`git clone --depth 1 file://`）・doc-only・policy 弱化・bootstrap・tool 欠如（PATH 差し替え）・git 欠如・non-Git・版不一致・existing/new/worsened・例外・候補・adapter 欠如・crash/unknown・実装の無い rule・未知の profile 項目・`--rules`・submodule・分類）
 - `python3 -I scripts/dev/repo-health/repo_health.py --repo . --base $CELERIS_WU_BASE --head HEAD --policy-version 1 --profile scripts/dev/repo-health/profiles/default.toml --out <artifacts>/self-head.json` → exit 0（policy=bootstrap、policy.changed は warning 1 件）。`validate_report.py` → 1 valid
 - `git diff --name-only $CELERIS_WU_BASE -- crates web` → 空
 - `git diff --name-only $CELERIS_WU_BASE | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set G1 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → write-set G1: ok
-- 必須検査（test-affected・clippy・fmt・check-health・文書検査）の結果は完了報告に書く。
+- `bash scripts/dev/check-health.sh` → exit 0
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0
+- `bash scripts/dev/test-affected.sh` → exit 0（crate の変更なし。scripts の unittest 60 件 OK）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
 
 ## 未解決
 - D2 の「検査器も base 側で読む」は、実行するのは手元の検査器で、検査器の file を head が変えれば `policy.changed` が fail になる形で守る。base の検査器 code を取り出して実行する仕組みは置いていない。

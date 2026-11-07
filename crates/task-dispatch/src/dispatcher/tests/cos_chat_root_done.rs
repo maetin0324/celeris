@@ -468,3 +468,184 @@ async fn root_done_probe_parts_reach_the_tick_steps_only_over_the_threshold() {
     );
     assert!(probe_value(&report.step_us, "tick_cos_chat_launch").is_some());
 }
+
+/// `git -C <dir> <args...>` の stdout（trim 済み）。commit の作者は引数で渡す。失敗したら panic。
+fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+        .args(["-c", "commit.gpgsign=false"])
+        .args(args)
+        .output()
+        .expect("git");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// ADR 2026-11-07-root-done-tick-fix の試験の 1 回分: 進捗ファイルを `fillers + 2` 件持つ repo と、Reviewing の
+/// delivery を持つ root の new 行を作り、待ちの pass を 3 回、delivery を Ready にした後の pass を 1 回まわす。
+/// 返すのは待ちの pass の内訳 3 つと、待ちが終わった pass の内訳。
+fn root_done_row_waiting_on_delivery(
+    fillers: usize,
+) -> (Vec<Vec<(&'static str, u64)>>, Vec<(&'static str, u64)>) {
+    use task_core::DeliveryStore;
+    let mut f = fixture(false);
+    f.tick(); // 導入: cursor は現在の末尾から
+    f.d.cos_chat_launch
+        .as_mut()
+        .expect("launch")
+        .root_done_probe_threshold = std::time::Duration::ZERO;
+    crate::test_support::project_cos_thread(&f.store, "案件A");
+    let project: String = f.count_text("SELECT project_id FROM chat_threads WHERE kind='project'");
+    let project: task_core::ProjectId = project.parse().expect("project id");
+    let root = f.done_task_in(None, Some(project));
+
+    // 進捗ファイル: 別の task の file を `fillers` 件（名前順で前）、本文だけでこの id に触れる file、
+    // 名前順の最後にこの task の file（『本番への移行』に中身がある）。
+    let repo = f.dir.path().join("repo");
+    let progress = repo.join("agent-docs/progress");
+    std::fs::create_dir_all(&progress).expect("progress dir");
+    let other = TaskId::new();
+    for i in 0..fillers {
+        std::fs::write(
+            progress.join(format!("2026-01-01-filler-{i:03}.md")),
+            format!("---\ntasks: [{other}]\n---\n# filler {i}\n"),
+        )
+        .expect("filler");
+    }
+    std::fs::write(
+        progress.join("2026-06-01-mentions.md"),
+        format!(
+            "---\ntasks: [{other}]\n---\n# 前の task {} の続き\n",
+            root.id
+        ),
+    )
+    .expect("mentions");
+    std::fs::write(
+        progress.join("2026-12-31-root.md"),
+        format!(
+            "---\ntitle: root\ntasks: [{}]\n---\n# root\n## 本番への移行\n- 本番 config に欄を足す\n",
+            root.id
+        ),
+    )
+    .expect("root progress");
+    git_in(&repo, &["init", "-q"]);
+    git_in(&repo, &["add", "-A"]);
+    git_in(&repo, &["commit", "-q", "-m", "progress"]);
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    let repo_row = task_core::ProjectRepo {
+        id: task_core::RepoId::new(),
+        project_id: project,
+        name: "r".into(),
+        kind: task_core::RepoKind::Git,
+        location: task_core::WorkspaceSpec::local(repo.clone()),
+        default_branch: Some("main".into()),
+        sync: None,
+        run: task_core::RepoRun::Auto,
+        is_primary: true,
+        created_at: OffsetDateTime::now_utc(),
+    };
+    f.store.repo_create(&repo_row).expect("repo");
+    let delivery = task_core::Delivery {
+        task_id: root.id,
+        project_id: project,
+        repo_id: repo_row.id,
+        repo: "r".into(),
+        branch: format!("celeris/{}", root.id),
+        base: head.clone(),
+        head: head.clone(),
+        target_sha: None,
+        reviewed_sha: None,
+        merge_candidate_sha: None,
+        default_branch: "main".into(),
+        department: "software-engineering".into(),
+        review_run: "review".into(),
+        worker_run: "worker".into(),
+        criterion_idx: 0,
+        decision: None,
+        state: task_core::DeliveryState::Reviewing,
+        detail: String::new(),
+        release: None,
+        prepare_pid: None,
+        notification: None,
+        pushed_at: None,
+        push_error: None,
+    };
+    assert!(f.store.delivery_save(None, &delivery).expect("delivery"));
+
+    let mut waiting = Vec::new();
+    for _ in 0..3 {
+        f.advance(1);
+        waiting.push(f.d.tick_cos_chat_launch());
+        assert_eq!(
+            f.count_text("SELECT state FROM root_done_summaries"),
+            "new".to_string()
+        );
+    }
+    let ready = task_core::Delivery {
+        state: task_core::DeliveryState::Ready,
+        ..delivery.clone()
+    };
+    assert!(
+        f.store
+            .delivery_save(Some(&delivery), &ready)
+            .expect("ready")
+    );
+    f.advance(1);
+    let after = f.d.tick_cos_chat_launch();
+    assert_eq!(
+        f.count_text("SELECT state FROM root_done_summaries"),
+        "fallback".to_string()
+    );
+    // 名前順で最後の、この task の進捗ファイルを読んだ（『本番への移行』に中身がある）。
+    let bodies = f.summary_notifications();
+    assert_eq!(bodies.len(), 1, "{bodies:?}");
+    assert!(bodies[0].contains("本番への移行: あり"), "{}", bodies[0]);
+    (waiting, after)
+}
+
+/// ADR 2026-11-07-root-done-tick-fix D1/D2/D4: delivery の待ち（Reviewing）の間、new の行は delivery を 1 回
+/// 読むだけで事実を作らず、git を起こさない。待ちが終わった pass に事実を 1 回作り、git は grep 1 回 +
+/// 候補の show 1 回。進捗ファイルが 3 件でも 60 件でも、待ちの pass が何回でも回数は同じ（file 数・tick 数に
+/// 比例しない）。時間は試験の時計だけを進め、sleep・負荷は使わない。
+#[tokio::test]
+async fn root_done_row_waiting_on_delivery_skips_facts_and_reads_progress_with_two_git_calls() {
+    let expect_waiting = [
+        ("cos.root_done.open_rows", 1),
+        ("cos.root_done.delivery_wait_rows", 1),
+        ("cos.root_done.facts.delivery_get_calls", 1),
+        ("cos.root_done.facts_calls", 0),
+        ("cos.root_done.facts.progress_git_calls", 0),
+    ];
+    let expect_after = [
+        ("cos.root_done.open_rows", 1),
+        ("cos.root_done.delivery_wait_rows", 0),
+        ("cos.root_done.facts.delivery_get_calls", 1),
+        ("cos.root_done.facts_calls", 1),
+        ("cos.root_done.facts.progress_git_calls", 2),
+    ];
+    for fillers in [1, 58] {
+        let (waiting, after) = root_done_row_waiting_on_delivery(fillers);
+        for parts in &waiting {
+            for (name, value) in expect_waiting {
+                assert_eq!(
+                    probe_value(parts, name),
+                    Some(value),
+                    "{fillers} fillers, waiting: {name}: {parts:?}"
+                );
+            }
+        }
+        for (name, value) in expect_after {
+            assert_eq!(
+                probe_value(&after, name),
+                Some(value),
+                "{fillers} fillers, after: {name}: {after:?}"
+            );
+        }
+    }
+}

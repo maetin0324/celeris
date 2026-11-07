@@ -18,15 +18,17 @@ use std::collections::HashSet;
 
 use task_core::chat::{ChatPostMessageRequest, ChatRunState, ChatSendMode, cos_thread_label};
 use task_core::{
-    DeliveryState, Event, NoticeStore, NotificationKind, NotificationStore, RootDoneState,
-    RootDoneSummary, TaskId, TaskStore,
+    Event, NoticeStore, NotificationKind, NotificationStore, RootDoneState, RootDoneSummary,
+    TaskId, TaskStore,
 };
 use task_ops::root_done::{self, RootDoneFacts};
 use time::OffsetDateTime;
 
 use super::launch::CosChatLaunch;
 use crate::dispatcher::Dispatcher;
-use crate::root_done_probe::{FactsProbe, RootDoneProbe, collect_facts, us};
+use crate::root_done_probe::{
+    FactsProbe, RootDoneProbe, collect_facts, facts_unless_delivery_waits, us,
+};
 
 /// `feed_cursor` の名前。
 pub const ROOT_DONE_CURSOR: &str = "root_done_summary";
@@ -208,20 +210,14 @@ impl CosChatLaunch {
         let age = (now - row.created_at).whole_seconds();
         match row.state {
             RootDoneState::New => {
-                let facts = collect_facts(&self.store, row.task_id, probe)?;
-                // 取り込み・release 準備が動いている間は、統合 commit・release が出るのを待つ（上限あり）。
-                if matches!(
-                    facts.delivery_state,
-                    Some(
-                        DeliveryState::Reviewing
-                            | DeliveryState::MergeQueued
-                            | DeliveryState::Merging
-                            | DeliveryState::Preparing
-                    )
-                ) && age < DELIVERY_WAIT_SECS
-                {
+                // 取り込み・release 準備が動いている間は、事実を作らずに統合 commit・release が出るのを待つ
+                // （上限あり。ADR 2026-11-07-root-done-tick-fix D1）。
+                let within_wait = age < DELIVERY_WAIT_SECS;
+                let Some(facts) =
+                    facts_unless_delivery_waits(&self.store, row.task_id, within_wait, probe)?
+                else {
                     return Ok(());
-                }
+                };
                 if !self.config.enabled || self.config.unavailable_reason.is_some() {
                     return self.root_done_fallback(row, &facts, None, now);
                 }

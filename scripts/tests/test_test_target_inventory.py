@@ -11,7 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE.parents[1] / "scripts/dev/test-target-inventory.py"
-FIXTURE = HERE / "fixtures/test_target_inventory/metadata.json"
+FIXTURE = HERE / "fixtures/test-target-inventory/metadata.json"
 spec = importlib.util.spec_from_file_location("test_target_inventory", SOURCE)
 tti = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = tti

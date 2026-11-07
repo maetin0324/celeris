@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "celeris.repo-health.report/1",
+  "title": "repo health report v1",
+  "description": "scripts/dev/repo-health/repo_health.py が書く report の形（ADR 2026-11-07-repo-health-contract）。形の外の整合（集約・snapshot の一致・候補の severity など）は validate_report.py の意味規則 S1〜S12 が見る。同じ入力（repo の内容・base・head・policy 版・profile）からは byte 単位で同じ JSON が出る。時刻・絶対 path・乱数を入れる欄は無い。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "tool", "inputs", "snapshot", "policy", "rules", "findings", "summary"],
+  "properties": {
+    "schema": { "const": "celeris.repo-health.report/1" },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "repo_health.py" },
+        "version": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$" }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base", "head", "policy_version", "profile", "mode"],
+      "properties": {
+        "base": { "type": "string", "minLength": 1, "description": "--base に渡した値そのまま（ref 名か sha）" },
+        "head": { "type": "string", "minLength": 1, "description": "--head に渡した値そのまま。作業ツリーは \"worktree\"" },
+        "policy_version": { "type": "string", "minLength": 1 },
+        "profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requested", "resolved", "source"],
+          "properties": {
+            "requested": { "type": ["string", "null"], "description": "--profile の値。無ければ null" },
+            "resolved": { "type": "string", "minLength": 1, "description": "実際に使った profile の名前（組み込みは generic）" },
+            "source": { "enum": ["cli", "repo", "builtin"], "description": "解決順 cli > repo > builtin のどれで決まったか" }
+          }
+        },
+        "mode": { "enum": ["full", "doc-only"] }
+      }
+    },
+    "snapshot": { "$ref": "#/$defs/snapshot" },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "source", "changed", "files"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1, "description": "評価に使った policy の版。inputs.policy_version と同じでなければ report は書かれない（exit 2）" },
+        "source": { "enum": ["base", "bootstrap", "builtin", "unavailable"], "description": "base: base 側の profile・baseline で評価した。bootstrap: base に無く head の内容で評価した初回。builtin: repo に profile が無く組み込み generic。unavailable: base が読めない（shallow）" },
+        "changed": { "type": "boolean", "description": "head が policy の file（profile・baseline・検査器）を base から変えているか" },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "base_blob", "head_blob"],
+            "properties": {
+              "path": { "$ref": "#/$defs/repo_path" },
+              "base_blob": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+              "head_blob": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" }
+            }
+          }
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "required", "status", "reason"],
+        "properties": {
+          "id": { "$ref": "#/$defs/rule_id" },
+          "required": { "type": "boolean", "description": "true の rule の fail は exit 1、error・unknown・unsupported は exit 2 にする" },
+          "status": { "$ref": "#/$defs/status" },
+          "reason": { "type": "string", "description": "pass 以外は空でない。unsupported・error・unknown は機械で読める語 tool_missing:<name>・base_unreachable・adapter_missing:<lang>・crashed:<where>・baseline_unreadable などで始める" },
+          "adapter": { "enum": ["rust", "typescript", "docs", "generic"] },
+          "wraps": { "$ref": "#/$defs/repo_path", "description": "既存検査を包む rule はその script の path" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "exit_code", "reviewable", "counts"],
+      "properties": {
+        "verdict": { "enum": ["pass", "fail", "error"] },
+        "exit_code": { "enum": [0, 1, 2] },
+        "reviewable": { "type": "boolean", "description": "head が commit で、dirty でなく、base に届くときだけ true。false の report は review の証跡にしない" },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["findings", "fail_grade", "new", "worsened", "existing"],
+          "properties": {
+            "findings": { "type": "integer", "minimum": 0 },
+            "fail_grade": { "type": "integer", "minimum": 0, "description": "severity error・delta new/worsened・exception 無し の finding の数" },
+            "new": { "type": "integer", "minimum": 0 },
+            "worsened": { "type": "integer", "minimum": 0 },
+            "existing": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "description": "構造指標（任意）。rule の判定に使った値の写し。key は rule id か profile の指標名",
+      "additionalProperties": { "type": ["number", "integer", "string", "boolean", "object", "array", "null"] }
+    }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "repo_path": { "type": "string", "pattern": "^(?!/)(?!\\.\\./)(?!.*/\\.\\./)(?!.*/\\.\\.$)[^\\x00]+$", "description": "repo root からの相対 path。先頭 / と .. は不可" },
+    "rule_id": {
+      "type": "string",
+      "pattern": "^(deps\\.violation|deps\\.cycle|size\\.responsibility-growth|dup\\.contract|dup\\.state|dup\\.public-surface|link\\.unlinked|dup\\.test-fixture|migration\\.remnant|arch-map\\.(missing_row|missing_test|wrong_owner|missing_invariant|stale|wrong_path)|doc\\.links|adr\\.numbers|progress\\.index|human-text|source-size|policy\\.changed)$"
+    },
+    "status": { "enum": ["pass", "fail", "error", "unknown", "not_applicable", "unsupported"] },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base", "head", "shallow", "submodules"],
+      "properties": {
+        "base": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sha", "reachable"],
+          "properties": {
+            "sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$", "description": "base の commit。shallow で解決できなければ null" },
+            "reachable": { "type": "boolean", "description": "base の tree と base..head の diff が読めるか" }
+          }
+        },
+        "head": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "sha", "dirty"],
+          "properties": {
+            "kind": { "enum": ["commit", "worktree"] },
+            "sha": { "$ref": "#/$defs/sha", "description": "commit なら head、worktree なら HEAD" },
+            "dirty": { "type": "boolean", "description": "worktree に追跡 file の変更か ignore されない未追跡 file がある。commit では false" }
+          }
+        },
+        "shallow": { "type": "boolean" },
+        "submodules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "base_sha", "head_sha"],
+            "properties": {
+              "path": { "$ref": "#/$defs/repo_path" },
+              "base_sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+              "head_sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" }
+            }
+          }
+        }
+      }
+    },
+    "finding_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base", "head", "dirty", "shallow"],
+      "properties": {
+        "base": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+        "head": { "$ref": "#/$defs/sha" },
+        "dirty": { "type": "boolean" },
+        "shallow": { "type": "boolean" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "$ref": "#/$defs/repo_path" },
+        "line": { "type": "integer", "minimum": 1 },
+        "end_line": { "type": "integer", "minimum": 1 },
+        "ref": { "enum": ["base", "head"], "description": "どちらの tree の位置か。省略は head" },
+        "symbol": { "type": "string", "minLength": 1, "description": "module・関数・表の名前など" },
+        "excerpt": { "type": "string", "maxLength": 400 }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule_id", "fingerprint", "severity", "delta", "candidate", "evidence", "snapshot", "scope", "exception", "rationale"],
+      "properties": {
+        "rule_id": { "$ref": "#/$defs/rule_id" },
+        "fingerprint": { "type": "string", "pattern": "^[a-z0-9._-]+:[0-9a-f]{16,64}$", "description": "<rule_id>:<hash>。rule と正規化した evidence（path・symbol。行番号は含めない）から決めた安定な鍵。base との突き合わせに使う" },
+        "severity": { "enum": ["error", "warning", "info"] },
+        "delta": { "enum": ["new", "worsened", "existing"], "description": "base にも同じ fingerprint があれば existing、値が悪化していれば worsened、無ければ new" },
+        "candidate": { "type": "boolean", "description": "静的推定（dup.*・link.unlinked・migration.remnant）は true。候補は削除・書き換えの対象にしない。severity は warning か info" },
+        "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } },
+        "snapshot": { "$ref": "#/$defs/finding_snapshot" },
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": { "enum": ["repo", "crate", "package", "module", "file", "doc"] },
+            "id": { "type": "string", "minLength": 1 }
+          }
+        },
+        "exception": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["reason", "source"],
+          "properties": {
+            "reason": { "type": "string", "minLength": 1 },
+            "source": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "line"],
+              "properties": {
+                "path": { "$ref": "#/$defs/repo_path" },
+                "line": { "type": "integer", "minimum": 1 }
+              }
+            }
+          },
+          "description": "base 側の profile にある例外。null なら例外なし。例外のある finding は fail に数えない"
+        },
+        "rationale": { "type": "string", "minLength": 1, "description": "判定根拠。閾値・baseline の値・比べた対象を含める" },
+        "baseline": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value", "head_value"],
+          "properties": {
+            "value": { "type": "number" },
+            "head_value": { "type": "number" },
+            "threshold": { "type": "number" }
+          },
+          "description": "値の悪化を見る rule（size.responsibility-growth など）の base の値と head の値"
+        }
+      }
+    }
+  }
+}

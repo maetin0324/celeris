@@ -1,0 +1,8 @@
+# この repo（agent-platform）の既定 profile（ADR 2026-11-07-repo-health-contract D2）。
+#
+# 中身は profiles/celeris.toml にある。repo 名・案件名で検査器の適用を分岐せず、この file の extends で選ぶ。
+# Celeris に依らない既定は検査器の組み込み generic（health/profile.py の BUILTIN_GENERIC）。
+# この file は policy の file で、評価には base 側の内容を使う。変えれば policy.changed が fail になる。
+version = "1"
+extends = "celeris"
+description = "agent-platform の既定: celeris profile を使う"

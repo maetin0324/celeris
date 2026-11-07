@@ -1,0 +1,292 @@
+{
+  "schema": "celeris.repo-health.report/1",
+  "tool": {
+    "name": "repo_health.py",
+    "version": "1.0"
+  },
+  "inputs": {
+    "base": "main",
+    "head": "66d9c1dae567",
+    "policy_version": "1",
+    "profile": {
+      "requested": null,
+      "resolved": "celeris",
+      "source": "repo"
+    },
+    "mode": "full"
+  },
+  "snapshot": {
+    "base": {
+      "sha": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
+      "reachable": true
+    },
+    "head": {
+      "kind": "commit",
+      "sha": "66d9c1dae567ffc8b016579ebdb7c4541712ea6f",
+      "dirty": false
+    },
+    "shallow": false,
+    "submodules": [
+      {
+        "path": "crates/script-runtime/vendor/deno_core",
+        "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  },
+  "policy": {
+    "version": "1",
+    "source": "base",
+    "changed": false,
+    "files": [
+      {
+        "path": "scripts/dev/repo-health/profiles/celeris.toml",
+        "base_blob": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head_blob": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "path": "scripts/dev/source-size-baseline.json",
+        "base_blob": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "head_blob": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    ]
+  },
+  "rules": [
+    {
+      "id": "deps.violation",
+      "required": true,
+      "status": "passed",
+      "reason": "",
+      "adapter": "rust"
+    },
+    {
+      "id": "deps.cycle",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "rust"
+    },
+    {
+      "id": "size.responsibility-growth",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "rust"
+    },
+    {
+      "id": "dup.contract",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "rust"
+    },
+    {
+      "id": "dup.state",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "rust"
+    },
+    {
+      "id": "dup.public-surface",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "rust"
+    },
+    {
+      "id": "link.unlinked",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "dup.test-fixture",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "migration.remnant",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "arch-map.missing_row",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.missing_test",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.wrong_owner",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.missing_invariant",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.stale",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.wrong_path",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "docs"
+    },
+    {
+      "id": "doc.links",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-doc-links.sh"
+    },
+    {
+      "id": "adr.numbers",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-adr-numbers.sh"
+    },
+    {
+      "id": "progress.index",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "docs",
+      "wraps": "scripts/dev/progress-index.sh"
+    },
+    {
+      "id": "human-text",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-human-text.py"
+    },
+    {
+      "id": "source-size",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "rust",
+      "wraps": "scripts/dev/check-source-size.py"
+    },
+    {
+      "id": "policy.changed",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "size.responsibility-growth",
+      "fingerprint": "size.responsibility-growth:3f1c2a9d4e5b6c7d",
+      "severity": "error",
+      "delta": "existing",
+      "candidate": false,
+      "evidence": [
+        {
+          "path": "crates/task-core/src/store/task_store.rs",
+          "line": 1,
+          "symbol": "TaskStore"
+        }
+      ],
+      "snapshot": {
+        "base": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
+        "head": "66d9c1dae567ffc8b016579ebdb7c4541712ea6f",
+        "dirty": false,
+        "shallow": false
+      },
+      "scope": {
+        "kind": "module",
+        "id": "task-core::store::task_store"
+      },
+      "exception": null,
+      "rationale": "profile の responsibility.max_fn_decls=150 を超える fn 宣言 193。base も 193 で悪化なし（existing）",
+      "baseline": {
+        "value": 193,
+        "head_value": 193,
+        "threshold": 150
+      }
+    },
+    {
+      "rule_id": "source-size",
+      "fingerprint": "source-size:7a7a7a7a7a7a7a7a",
+      "severity": "error",
+      "delta": "new",
+      "candidate": false,
+      "evidence": [
+        {
+          "path": "crates/task-api/src/types.rs",
+          "line": 1
+        }
+      ],
+      "snapshot": {
+        "base": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
+        "head": "66d9c1dae567ffc8b016579ebdb7c4541712ea6f",
+        "dirty": false,
+        "shallow": false
+      },
+      "scope": {
+        "kind": "file",
+        "id": "crates/task-api/src/types.rs"
+      },
+      "exception": {
+        "reason": "flat API wire-type definitions; also the schemars source for docs/api/v1/*.schema.json",
+        "source": {
+          "path": "scripts/dev/source-size-report.toml",
+          "line": 29
+        }
+      },
+      "rationale": "production_lines 2000 を超える 2412 行。base 側 profile の例外（flat API wire-type）に当たる"
+    }
+  ],
+  "summary": {
+    "verdict": "pass",
+    "exit_code": 0,
+    "reviewable": true,
+    "counts": {
+      "findings": 2,
+      "fail_grade": 0,
+      "new": 1,
+      "worsened": 0,
+      "existing": 1
+    }
+  },
+  "metrics": {
+    "deps.cycle": {
+      "cycles": 0
+    },
+    "size.responsibility-growth": {
+      "task-core::store::task_store": 193
+    }
+  }
+}

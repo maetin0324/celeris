@@ -64,9 +64,10 @@ def evaluate(report, baseline, previous):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", default=".")
+    parser.add_argument("--root", required=True, help="checked tree (repo_health.py passes the snapshot's head)")
     parser.add_argument("--baseline", default=BASELINE)
-    parser.add_argument("--base", help="comparison commit (default CELERIS_WU_BASE or merge-base HEAD main)")
+    parser.add_argument("--base", required=True,
+                        help="comparison commit, resolved by repo_health.py's snapshot (no default here)")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     root = os.path.abspath(args.root)
@@ -77,8 +78,7 @@ def main(argv=None):
         sha = ssr.git(root, "rev-parse", "--verify", baseline["sha"] + "^{commit}").strip()
         if sha != baseline["sha"]:
             raise ValueError("baseline must record a full commit SHA")
-        base = args.base or os.environ.get("CELERIS_WU_BASE") or ssr.git(root, "merge-base", "HEAD", "main").strip()
-        base = ssr.git(root, "rev-parse", "--verify", base + "^{commit}").strip()
+        base = ssr.git(root, "rev-parse", "--verify", args.base + "^{commit}").strip()
         prod, inline, exceptions = ssr.load_config(None, root)
         if baseline["thresholds"] != {"production_lines": prod, "inline_test_lines": inline}:
             raise ValueError("threshold change requires explicit baseline review")

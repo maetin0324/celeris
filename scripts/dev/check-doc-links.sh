@@ -4,6 +4,7 @@
 #   sh scripts/dev/check-doc-links.sh              リポジトリ全体
 #   sh scripts/dev/check-doc-links.sh <path>...    その範囲だけ（ディレクトリ可）
 #   sh scripts/dev/check-doc-links.sh --self-test  scripts/dev/testdata/doc-links/ の fixture を検査
+#   先頭に --root <dir> を付けると、その dir を repo の root として検査する（既定は .）
 #
 # (1) 追跡されている全 .md の Markdown 相対リンク [..](target) の実在
 # (2) 生きた参照（CLAUDE.md, AGENTS.md, crates/**/*.rs, scripts/**, .claude/**,
@@ -279,10 +280,15 @@ self_test() {
     return "$fail"
 }
 
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
-    echo "check-doc-links: not in a git repository" >&2
-    exit 2
-}
+# root は呼び出し側が決める（repo_health.py の snapshot が --root で渡す。単独で走らせるときは repo の root で
+# 実行し、既定の . を使う）。この script は root を自分で探さない（ADR 2026-11-07-repo-health-celeris-profile D1）。
+ROOT=.
+if [ "${1:-}" = --root ]; then
+    [ $# -ge 2 ] || { echo "check-doc-links: --root に dir が無い" >&2; exit 2; }
+    ROOT=$2
+    shift 2
+fi
+ROOT=$(cd "$ROOT" 2>/dev/null && pwd) || { echo "check-doc-links: --root の dir に入れない" >&2; exit 2; }
 
 if [ "${1:-}" = "--self-test" ]; then
     self_test

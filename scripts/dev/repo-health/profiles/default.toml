@@ -6,3 +6,7 @@
 version = "1"
 extends = "celeris"
 description = "agent-platform の既定: celeris profile を使う"
+
+# 設計 review の方針（ADR 2026-11-07-health-review-integration D2）。値は extends の celeris にだけ置く。
+# 下位項目を書かない空の節で、merge の結果は celeris の [review] と同じになる（値を写さない）。
+[review]

@@ -33,6 +33,15 @@ profile の項目（未知の項目は読み込みエラー。破壊的変更の
         [[rules."<id>".exceptions]]    # 例外。reason 必須、fingerprint か path（正規表現）のどちらか
         fingerprint = "<rule_id>:<hash>" / path = "<regex>"
         reason = "..."
+    [review]                           # 任意。repo 固有の設計 review の方針（ADR 2026-11-07-health-review-integration D2）
+        owner_map = "<repo path>"      # 変更 path の owner 行を引く file（地図の表の行）
+        [[review.high_risk]]           # 高 risk の path class。class は空でない文字列で重複不可
+        class = "<name>"
+        paths = ["<regex>", ...]       # 1 件以上
+        [review.invariants]            # 保護する不変条件の名前 → 根拠の file（repo path）
+        <name> = "<repo path>"
+        # 下位項目はこの 3 つだけ（未知の項目は読み込みエラー）。extends では節を丸ごと置き換えず、
+        # 下位項目ごとに子が勝つ（_merge の表の扱い）。子の空の [review] は親の値をそのまま使う
 """
 
 from __future__ import annotations
@@ -59,7 +68,8 @@ BUILTIN_GENERIC: dict = {
 }
 
 _TOP_KEYS = {"version", "extends", "description", "policy_paths", "exclude_paths", "doc_only", "adapters",
-             "classes", "arch_map", "metrics", "rules"}
+             "classes", "arch_map", "metrics", "rules", "review"}
+_REVIEW_KEYS = {"owner_map", "high_risk", "invariants"}
 _RULE_ID = re.compile(
     r"^(deps\.violation|deps\.cycle|size\.responsibility-growth|dup\.contract|dup\.state|dup\.public-surface|"
     r"link\.unlinked|dup\.test-fixture|migration\.remnant|arch-map\.(missing_row|missing_test|wrong_owner|"
@@ -195,6 +205,8 @@ def validate(data: dict, where: str) -> None:
                 not all(isinstance(v, str) for v in m.values()) or "path" not in m or "item" not in m:
             raise _err(where, f"metrics.{name} は path・item（必須）・start・end・source の文字列だけ")
         _check_regexes(f"{where}:metrics.{name}", [m[k] for k in ("item", "start", "end") if k in m])
+    if "review" in data:
+        _validate_review(data["review"], where)
     for rid, cfg in data.get("rules", {}).items():
         if not _RULE_ID.match(rid):
             raise _err(where, f"未知の rule {rid}")
@@ -214,6 +226,40 @@ def validate(data: dict, where: str) -> None:
                 _check_regexes(f"{where}:rules.{rid}.exceptions[{i}].path", [exc["path"]])
         if rid == "policy.changed" and cfg.get("exceptions"):
             raise _err(where, "policy.changed には例外を置けない")
+
+
+def _validate_review(rv, where: str) -> None:
+    if not isinstance(rv, dict):
+        raise _err(where, "review は表")
+    unknown = sorted(set(rv) - _REVIEW_KEYS)
+    if unknown:
+        raise _err(where, f"review に未知の項目 {unknown}（使えるのは {sorted(_REVIEW_KEYS)}）")
+    if "owner_map" in rv and (not isinstance(rv["owner_map"], str) or not rv["owner_map"].strip()):
+        raise _err(where, "review.owner_map は空でない文字列")
+    if "high_risk" in rv:
+        hr = rv["high_risk"]
+        if not isinstance(hr, list):
+            raise _err(where, "review.high_risk は表の配列")
+        seen: set[str] = set()
+        for i, c in enumerate(hr):
+            if not isinstance(c, dict):
+                raise _err(where, f"review.high_risk[{i}] は表")
+            if set(c) - {"class", "paths"}:
+                raise _err(where, f"review.high_risk[{i}] は class・paths だけ")
+            cls = c.get("class")
+            if not isinstance(cls, str) or not cls.strip():
+                raise _err(where, f"review.high_risk[{i}].class は空でない文字列")
+            if cls in seen:
+                raise _err(where, f"review.high_risk の class {cls!r} が重複")
+            seen.add(cls)
+            if not c.get("paths"):
+                raise _err(where, f"review.high_risk[{i}].paths は 1 件以上")
+            _check_regexes(f"{where}:review.high_risk[{i}].paths", c["paths"])
+    if "invariants" in rv:
+        inv = rv["invariants"]
+        if not isinstance(inv, dict) or not all(isinstance(v, str) and v.strip() for v in inv.values()) or \
+                not all(str(k).strip() for k in inv):
+            raise _err(where, "review.invariants は名前 → 根拠の file（空でない文字列）の表")
 
 
 def _parse(text: str, where: str) -> dict:

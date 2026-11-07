@@ -26,13 +26,15 @@ unit `profiles`（G2 の工程 write「汎用規約本文と Celeris profile の
 - `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0（Python と TOML だけの変更で、Rust は変えていない）。
 - 試算（2 回目の run）: main の tree にこの branch の `health/profile.py`・`profiles/celeris.toml`・`profiles/default.toml`・`scripts/tests/test_repo_health_review_policy.py` を重ねた仮の commit（`git commit-tree` で作り、ref は作っていない）を base にして `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base <仮の commit> --head worktree --policy-version 1` → exit 0、verdict pass、`policy.changed` は pass（fail_grade=0）。policy の commit が main に入れば、この branch の検査は `policy.changed` で落ちなくなる。
 - 試算の続き: 同じ仮の commit を detach した一時の worktree（検査後に削除）で、`python3 -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → 62 件 OK、`bash scripts/dev/check-health.sh --base <仮の commit>` → exit 0（fail_grade=0）。main にこの 4 file だけを入れても main の検査は通る。
+- `bash scripts/dev/check-health.sh --base HEAD`（この branch の HEAD の tree を base にする。branch を main に merge した後の main に当たる）→ exit 0（fail_grade=0）。
 
 ## 未解決
 - 必須の repo 検査が通らない（2 回目の run で確認）。`.config/celeris/workspace.toml` の `[commands].check` は `bash scripts/dev/test-affected.sh` を必須にし、その最初の `check-health.sh` は policy の file を変えた branch で必ず exit 1 になる。1 回目の review は受け入れ条件 0〜3 と clippy・fmt が合格で、この検査だけが不合格だった。main は 1 回目から進んでおらず、取り込む commit は無い。
   - 必須検査の結果は候補の SHA に束ねて記録され、配送の前に照合される（`crates/task-core/src/required_checks.rs`）。人の承認でこの検査を外す仕組みは無い。
   - ADR D6.6 は「U2 の最初の branch は人の承認で通す」と書くが、必須検査はそのまま残る。D6.2 を入れても、この branch の差分には試験 1 件・進捗・親 task の ADR と survey（`agent-docs/`）が入るので、「変更 path が全部 policy の file」の条件を満たさない。
   - さらにこの branch は親 task の branch に入る。ADR の U 分けでは G2 の根の branch に Rust の変更（U3〜U6）と policy の file の変更（U2）が両方入る予定なので、根を main へ配送するときにも同じ検査で落ちる見込み（D6.1 の policy_mixed。未確認）。
-  - 人に決定 `policy-branch-required-check` を出した（推奨: 人が件名「G2 profiles: profile の [review] 節と検査」と「G2 profiles: 試験の仮の地図 path を doc-links に当たらない名前にする」の 2 commit を main に手で入れる。進捗の commit は入れない（main にまだ無い親の ADR に link している）。次の run で main を取り込めば policy の file の差分が消え、`check-health.sh` は `policy.changed` を出さなくなる。上の「試算」で確かめた）。
+  - 人に決定 `policy-branch-required-check` を出した（推奨: 人がこの task の branch を main に手で merge する。branch の先端が main の祖先になり、`git merge-base HEAD main` からの差分に policy の file が残らない。代わりに件名「G2 profiles: profile の [review] 節と検査」と「G2 profiles: 試験の仮の地図 path を doc-links に当たらない名前にする」の 2 commit だけを cherry-pick する方法もあるが、その場合は次の run がこの branch に main を merge して merge-base を動かす必要がある。選択肢の詳細は成果物 profile-review.md）。
+- G2 の残りの policy の変更（`--print-review-policy`、`check-health.sh` の D6.2・D7.3）も同じ必須検査で落ちるので、同じ扱いが要る。
 - `git merge-base HEAD main` から HEAD の差分には、親 task の ADR と survey（`agent-docs/` の 3 file）も入る。親がまだ main に入っていないため。
 - D6.2 の「変更 path が全部 policy の file」の条件では、`scripts/tests/test_repo_health_review_policy.py` とこの進捗は policy の file に入らない。U2 で `check-health.sh` に D6.2 を入れるとき、試験と進捗を policy の branch に含めてよいかを決める必要がある。
 

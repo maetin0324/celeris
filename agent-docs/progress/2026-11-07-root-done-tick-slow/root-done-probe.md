@@ -91,4 +91,10 @@ delivery の head の tree の進捗ファイルは 1,564〜1,584 件で、こ�
   - "slow root-done row" の警告の task・state で、どの root が待ちの状態に残っているかが分かる。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-（検査の後に追記する）
+提出時の HEAD は commit「root-done-probe: 計測の code を crate 直下の module へ移す（repo health の巨大 module を増やさない）」（main の取り込み・rebase はしていない）。
+- `bash scripts/dev/test-affected.sh` → exit 0。repo-health は verdict=pass・worsened 0。nextest は 7,846 件 passed・23 件 skipped。web unit は 104 file・711 件 passed。test-ts-verify は 20 passed。
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `sh scripts/dev/progress-index.sh --check` → ok
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` が出す path は、ADR・この進捗ファイル・`crates/task-core/src/{lib.rs,lock_wait.rs,store/mod.rs}`・`crates/task-dispatch/src/{lib.rs,root_done_probe.rs}`・`crates/task-dispatch/src/dispatcher/cos_chat/{launch.rs,root_done.rs}`・`crates/task-dispatch/src/dispatcher/tests/cos_chat_root_done.rs` だけ。
+- 本番写しの測定: `TICK_PROD_DB=$TMPDIR/prod/{copy,one,three}.sqlite3 TICK_PROD_TICKS={3,3,1} cargo nextest run -p celeris --test tick_prod_copy_steps --run-ignored all --no-capture` → 3 回とも exit 0（値は上の表）。測定の時点の code は commit「root-done-probe: root_done_tick の段別計測を slow tick の内訳に出す（cos.root_done.*、store の待ちと処理を分ける）」。後の commit は code を別の module へ移しただけで、測る段は変えていない。

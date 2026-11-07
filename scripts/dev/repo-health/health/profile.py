@@ -21,6 +21,11 @@ profile の項目（未知の項目は読み込みエラー。破壊的変更の
     [arch_map] path = "<repo path>"    # architecture-map の path（rules/arch_map.py が読む）
                reference = "<repo path>"  # 任意。地図と比べる capability の所在の JSON（policy の側で読む）
                stale_status = "<regex>"   # 任意。ADR の状態行がこれに当たれば arch-map.stale
+    [metrics."<name>"]                 # 構造指標（report の metrics.structural。判定には使わない）
+        path = "<repo path>"           # 数える file
+        item = "<regex>"               # 数える行
+        start = "<regex>" / end = "<regex>"  # 任意。start に当たった行の次から end に当たる行の前までだけ数える
+        source = "..."                 # 任意。指標の出典（数え方を決めた記録）
     [rules."<id>"]                     # rule ごとの設定
         enabled = true|false           # false なら not_applicable（disabled_by_profile）
         required = true|false          # 既定は rule の既定
@@ -54,7 +59,7 @@ BUILTIN_GENERIC: dict = {
 }
 
 _TOP_KEYS = {"version", "extends", "description", "policy_paths", "exclude_paths", "doc_only", "adapters",
-             "classes", "arch_map", "rules"}
+             "classes", "arch_map", "metrics", "rules"}
 _RULE_ID = re.compile(
     r"^(deps\.violation|deps\.cycle|size\.responsibility-growth|dup\.contract|dup\.state|dup\.public-surface|"
     r"link\.unlinked|dup\.test-fixture|migration\.remnant|arch-map\.(missing_row|missing_test|wrong_owner|"
@@ -129,6 +134,10 @@ class Profile:
         cfg.pop("exceptions", None)
         return cfg
 
+    @property
+    def metrics(self) -> dict[str, dict]:
+        return dict(self.data.get("metrics", {}))
+
     def mentioned_rules(self) -> list[str]:
         return sorted(self.data.get("rules", {}))
 
@@ -181,6 +190,11 @@ def validate(data: dict, where: str) -> None:
             raise _err(where, "arch_map の値は文字列")
         if "stale_status" in am:
             _check_regexes(f"{where}:arch_map.stale_status", [am["stale_status"]])
+    for name, m in data.get("metrics", {}).items():
+        if not isinstance(m, dict) or set(m) - {"path", "item", "start", "end", "source"} or \
+                not all(isinstance(v, str) for v in m.values()) or "path" not in m or "item" not in m:
+            raise _err(where, f"metrics.{name} は path・item（必須）・start・end・source の文字列だけ")
+        _check_regexes(f"{where}:metrics.{name}", [m[k] for k in ("item", "start", "end") if k in m])
     for rid, cfg in data.get("rules", {}).items():
         if not _RULE_ID.match(rid):
             raise _err(where, f"未知の rule {rid}")

@@ -1,22 +1,8 @@
-# repo health の汎用 profile（ADR 2026-11-07-repo-health-contract D2）。
+# この repo（agent-platform）の既定 profile（ADR 2026-11-07-repo-health-contract D2）。
 #
-# repo 名・案件名に依らない既定。Celeris 固有の名前・上限は profiles/celeris.toml にだけ書く
-# （celeris-profile WorkUnit がこの file を `extends = "celeris"` に替える）。
-# 項目の正本は health/profile.py の docstring。未知の項目は読み込みエラー。
+# 中身は profiles/celeris.toml にある。repo 名・案件名で検査器の適用を分岐せず、この file の extends で選ぶ。
+# Celeris に依らない既定は検査器の組み込み generic（health/profile.py の BUILTIN_GENERIC）。
 # この file は policy の file で、評価には base 側の内容を使う。変えれば policy.changed が fail になる。
 version = "1"
-description = "generic: Git 管理下のソフトウェア repo 一般の既定"
-
-# policy とみなす path。検査器・profile・rule をまとめて含む。
-policy_paths = ['^scripts/dev/repo-health/']
-
-[doc_only]
-# 変更が全部これに当たれば doc-only（構造 rule は not_applicable、文書 rule と policy.changed だけ評価）。
-paths = ['\.md$', '^docs/', '^agent-docs/']
-
-[adapters]
-# 使う言語 adapter。adapter の無い言語（go・java など）のコードが diff に入れば構造 rule は unsupported。
-enabled = ["rust", "python", "shell", "typescript", "markdown"]
-
-[rules."policy.changed"]
-required = true
+extends = "celeris"
+description = "agent-platform の既定: celeris profile を使う"

@@ -4,6 +4,8 @@
 #   sh scripts/dev/check-adr-numbers.sh          作業ツリーの ADR を検査
 #   sh scripts/dev/check-adr-numbers.sh --refs   この branch で足した ADR と、main・celeris/*・celeris-wu/* の
 #                                                tree にある ADR とで番号・日付+slug が重なるものを出す
+#                                                （--refs --base <sha> で基準を渡す。無ければ repo_health.py --print-base）
+#   先頭に --root <dir> を付けると、その dir を repo の root として検査する（既定は .）
 #
 # 名前空間ごとに新旧のディレクトリを合わせて 1 つとして数える:
 #   main: agent-docs/adr/ + docs/adr/   gui: agent-docs/gui/adr/ + docs/gui/adr/   web: agent-docs/web/adr/ + docs/web/adr/
@@ -167,10 +169,7 @@ all_adr_dirs() {
 }
 
 check_refs() {
-    base=$(git merge-base HEAD refs/heads/main 2>/dev/null) || {
-        echo "check-adr-numbers: refs/heads/main との merge-base が取れない" >&2
-        return 2
-    }
+    base=${BASE:-$(python3 scripts/dev/repo-health/repo_health.py --repo . --print-base)} || return 2
     dirs=$(all_adr_dirs)
     # shellcheck disable=SC2086
     added=$( {
@@ -245,10 +244,15 @@ check_refs() {
     [ "$n" -eq 0 ]
 }
 
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
-    echo "check-adr-numbers: not in a git repository" >&2
-    exit 2
-}
+# root は呼び出し側が決める（repo_health.py の snapshot が --root で渡す。単独で走らせるときは repo の root で
+# 実行し、既定の . を使う）。この script は root を自分で探さない（ADR 2026-11-07-repo-health-celeris-profile D1）。
+ROOT=.
+if [ "${1:-}" = --root ]; then
+    [ $# -ge 2 ] || { echo "check-adr-numbers: --root に dir が無い" >&2; exit 2; }
+    ROOT=$2
+    shift 2
+fi
+ROOT=$(cd "$ROOT" 2>/dev/null && pwd) || { echo "check-adr-numbers: --root の dir に入れない" >&2; exit 2; }
 cd "$ROOT" || exit 2
 
 if [ ! -f "$ALLOWED_LIST_FILE" ]; then
@@ -266,13 +270,15 @@ case "${1:-}" in
         exit 1
         ;;
     --refs)
+        BASE=""
+        if [ "${2:-}" = --base ]; then BASE=${3:-}; fi
         check_refs
         rc=$?
         [ "$rc" -eq 0 ] && echo "check-adr-numbers --refs: ok" >&2
         exit "$rc"
         ;;
     *)
-        echo "usage: sh scripts/dev/check-adr-numbers.sh [--refs]" >&2
+        echo "usage: sh scripts/dev/check-adr-numbers.sh [--root <dir>] [--refs [--base <sha>]]" >&2
         exit 2
         ;;
 esac

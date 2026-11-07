@@ -3,6 +3,9 @@
 - 1 回の実行は 1 つの Git 作業ツリー。submodule（gitlink）は両側の sha を記録するだけで中に入らない。
 - base が解決できず repo が shallow なら base は不達（reachable=false）。shallow でなければ使い方誤り。
 - head は commit（ref・sha）か `worktree`（未 commit の変更と ignore されない未追跡 file を含む）。
+- base の既定（`--base auto`）はここ 1 か所で決める: `git merge-base HEAD refs/heads/main`（承認済みの main 側。
+  ADR 2026-11-07-repo-health-celeris-profile D1）。既存検査の script は自分で root・base を解決せず、
+  `--root`・`--base` を受け取る（単独で走らせるときは `repo_health.py --print-base` を呼ぶ）。
 """
 
 from __future__ import annotations
@@ -17,6 +20,8 @@ from dataclasses import dataclass, field
 from .gitio import BlobReader, GitError, git, git_ok, git_text
 
 WORKTREE = "worktree"
+AUTO = "auto"
+DEFAULT_TARGET = "refs/heads/main"
 
 
 class UsageError(Exception):
@@ -138,6 +143,18 @@ def find_root(path: str) -> str:
     return root
 
 
+def default_base(root: str) -> str:
+    """`--base auto` の解決: HEAD と main の merge-base。取れなければ使い方誤り（推測で base を決めない）。"""
+    try:
+        sha = git_text(root, "merge-base", "HEAD", DEFAULT_TARGET)
+    except GitError:
+        sha = ""
+    if not sha:
+        raise UsageError(f"base_not_found: --base auto は HEAD と {DEFAULT_TARGET} の merge-base が取れない。"
+                         "--base に commit を明示する")
+    return sha
+
+
 def _resolve_commit(root: str, rev: str) -> str | None:
     if not git_ok(root, "rev-parse", "--verify", "-q", f"{rev}^{{commit}}"):
         return None
@@ -214,6 +231,7 @@ def resolve(repo: str, base: str, head: str) -> Snapshot:
     root = find_root(repo)
     shallow = git_text(root, "rev-parse", "--is-shallow-repository") == "true"
     reader = BlobReader(root)
+    base_rev = default_base(root) if base == AUTO else base
 
     if head == WORKTREE:
         head_sha = _resolve_commit(root, "HEAD")
@@ -233,7 +251,7 @@ def resolve(repo: str, base: str, head: str) -> Snapshot:
         dirty = False
         kind = "commit"
 
-    base_sha = _resolve_commit(root, base)
+    base_sha = _resolve_commit(root, base_rev)
     if base_sha is None and not shallow:
         raise UsageError(f"base_not_found: --base {base} が commit に解決できない")
     reachable = base_sha is not None

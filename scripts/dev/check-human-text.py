@@ -8,8 +8,11 @@ network). A warn/error finding fails the check unless `scripts/dev/human-text-li
 (`rule<TAB>snippet<TAB>reason`). Literals are fragments of format strings, so a finding that only
 exists because of the cut (e.g. a label before a list) goes to the allow list with its reason.
 
-  python3 scripts/dev/check-human-text.py              check FILES
-  python3 scripts/dev/check-human-text.py --self-test  the checker finds a known bad sample
+  python3 scripts/dev/check-human-text.py [--root DIR]              check FILES
+  python3 scripts/dev/check-human-text.py [--root DIR] --self-test  the checker finds a known bad sample
+
+The root is given by the caller (repo_health.py passes the snapshot's tree; default "."). This script
+does not locate the repository itself (ADR 2026-11-07-repo-health-celeris-profile D1).
 """
 
 import json
@@ -19,9 +22,16 @@ import subprocess
 import sys
 import tempfile
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-LINT = os.path.join(ROOT, "config", "skills", "yomiyasu", "scripts", "yomiyasu_lint.py")
-ALLOW = os.path.join(ROOT, "scripts", "dev", "human-text-lint.allow")
+ROOT = "."
+LINT = ""
+ALLOW = ""
+
+
+def set_root(root):
+    global ROOT, LINT, ALLOW
+    ROOT = os.path.abspath(root)
+    LINT = os.path.join(ROOT, "config", "skills", "yomiyasu", "scripts", "yomiyasu_lint.py")
+    ALLOW = os.path.join(ROOT, "scripts", "dev", "human-text-lint.allow")
 
 # Fixed texts a person reads: notifications (Discord), the root completion summary, inbox items,
 # the notice feed, the matching question, bundled decisions, plan gate, CoS triage, and the
@@ -100,11 +110,18 @@ def self_test():
 
 
 def main():
-    if sys.argv[1:] == ["--self-test"]:
+    args = sys.argv[1:]
+    root = "."
+    if args[:1] == ["--root"]:
+        if len(args) < 2:
+            sys.exit("usage: check-human-text.py [--root DIR] [--self-test]")
+        root, args = args[1], args[2:]
+    set_root(root)
+    if args == ["--self-test"]:
         self_test()
         return
-    if sys.argv[1:]:
-        sys.exit("usage: check-human-text.py [--self-test]")
+    if args:
+        sys.exit("usage: check-human-text.py [--root DIR] [--self-test]")
     allowed = allow_list()
     used = set()
     bad = []

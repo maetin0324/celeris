@@ -34,6 +34,8 @@ repo="$root/repo"
 d=agent-docs/progress
 mkdir -p "$repo/scripts/dev" "$repo/$d"
 cp "$repo_root/scripts/dev/progress-index.sh" "$repo/scripts/dev/"
+# 単独の --check は基準を repo_health.py --print-base に聞く（ADR 2026-11-07-repo-health-celeris-profile D1）。
+cp -R "$repo_root/scripts/dev/repo-health" "$repo/scripts/dev/"
 cd "$repo"
 git init -q -b main
 fm() {

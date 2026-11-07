@@ -44,7 +44,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# root は呼び出し側が決める（--root、既定は .）。この script は repo を自分で探さない
+# （ADR 2026-11-07-repo-health-celeris-profile D1）。main() が --root で置き換える。
+REPO_ROOT = Path(".").resolve()
 DOC_PATH = REPO_ROOT / "docs" / "architecture-map.md"
 
 TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
@@ -351,7 +353,11 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--diffs", action="store_true", help="食い違いを種類別に JSON 行で出す（exit 0）")
     ap.add_argument("--reference", help="--diffs の対照（repo の path の JSON）")
+    ap.add_argument("--root", default=".", help="repo の root（既定は .）")
     args = ap.parse_args(argv)
+    global REPO_ROOT, DOC_PATH
+    REPO_ROOT = Path(args.root).resolve()
+    DOC_PATH = REPO_ROOT / "docs" / "architecture-map.md"
     if not DOC_PATH.exists():
         print(f"NG: {DOC_PATH} が存在しない", file=sys.stderr)
         return 1

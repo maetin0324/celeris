@@ -99,7 +99,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | `context.interrupt` | string | –（省略可。Phase 53, ADR-0044 D2） | **直前の run を人のコメントで止めた**とき、そのコメントの本文。前置きのいちばん先に「**人からの割り込み**: …」として出る。割り込みの直後の run にだけ載る（その run が終わったら消える） |
 | `context.comments_enabled` | bool | –（省略可。既定 false。Phase 53, ADR-0044 D2） | この run は `comment` を書ける。true のときだけ前置きに「短い進捗や判断の記録はコメントに書け」が出る。**仕事の run は true、対話 run（Phase 28 の「返事だけをする」run）とレビュー run は false** |
 | `context.recent_work` | array | –（省略可。空なら省略。Phase 33, ADR-0033 D4 追記） | 対話 run にだけ、担当の直近の仕事（最大 10 件、更新の新しい順。案件を選んでいればその案件のものを先に。対話・まとめ・承認・レビューは除く）。`RecentWork`: `{task_id, title, project_title?, status, finished_at?, outcome?, artifacts: string[]}`。`outcome` は終端の要約（`done` なら summary の 1 行目、`failed` なら理由、`blocked` なら質問）で、ストアのタスクとイベントから決定的に組む（LLM は使わない） |
-| `context.review` | object | –（省略可） | Review run だけ。`ReviewRequest`: `{summary, evidence, criteria, decisions?, answers?, checks?}`（§10.2） |
+| `context.review` | object | –（省略可） | Review run だけ。`ReviewRequest`: `{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?}`（§10.2） |
 | `context.available_genres` | array | –（省略可。空なら省略。v3） | 分解・委譲できる run に渡す分野の一覧。`GenreContext`: `{id, description, capabilities?, input_artifacts?, output_artifacts?, roles?, harness?}` |
 | `context.subject_genre` | object | –（省略可） | レビュー対象の仕事の分野（`GenreContext`） |
 | `context.clusters` | array | –（省略可。空なら省略） | 使えるクラスタ。`{id, connected, work_dir?}` |
@@ -114,6 +114,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | `context.continuation` | object | –（省略可） | 続きの run（yield・予算切れ・wait の後）だけ。`{run_seq, previous_end, checkpoint, prior_runs?, cluster_jobs?}` |
 | `context.work_unit` | object | –（省略可） | WorkUnit の run だけ。`{key, title, objective, done_when?, task_objective_excerpt, dependency_summaries?, plan_overview?, branch?, parallel_siblings?, human_decisions?, previous_check_failures?}` |
 | `context.execution_planner` | object | –（省略可） | 実行計画を書く planner run だけ。上限・gate の結果・replan の情報（`ExecutionPlannerContext`。欄は schema を参照） |
+| `context.execution_planner.review_policy` | object | –（省略可。ADR 2026-11-07-health-review-integration D2.4） | repo 固有の review 方針（base（target）側の profile の `[review]` 節の写し）。`ReviewPolicy`: `{owner_map?, high_risk?: [{class, paths: string[]}], invariants?: {名前: 根拠の file}, definition_sha256}`。`paths` は repo 相対 path に当てる正規表現。planner は高 risk の class を変える計画に設計 brief を書く。dispatcher が base 側から読めた repo だけに載り、`[review]` の無い repo では省略 |
 | `context.decision_requests` | bool | –（省略可。既定 false） | true なら結果ファイルに人への決定の要求（`decisions`）を書ける |
 | `context.browser` / `context.browser_policy` | object | –（省略可） | browser capability を使う run だけ（`crate::browser::BrowserContext` / `task_core::BrowserTaskPolicy`） |
 
@@ -740,9 +741,10 @@ task.acceptance.len()`。`celerisctl plan` が作る Plan は `acceptance = []` 
 `Check::Reviewer` 条件を判定する際、ディスパッチャは対象タスクとは別の run を起動する。
 `RunRequest.task` は永続化されない合成タスク（`kind = "review"`、`title = "Review: <対象 title>"`、
 `objective`/`acceptance`/`workspace`/`budget` は対象タスクと同じ）。`RunRequest.context.review` に
-`ReviewRequest{summary, evidence, criteria, decisions?, answers?, checks?}` が入る（`criteria` は判定すべき `task.acceptance` の
+`ReviewRequest{summary, evidence, criteria, decisions?, answers?, checks?, policy_violations?, health?}` が入る（`criteria` は判定すべき `task.acceptance` の
 インデックス一覧、`summary`/`evidence` は対象 run の `done` の内容、`decisions` / `answers` は人の決定と回答、
-`checks` は daemon が走らせた決定的な検査の結果）。`context.inputs` には対象 run の
+`checks` は daemon が走らせた決定的な検査の結果、`policy_violations` は検出した subagent・別 LLM の起動、
+`health` は final review にだけ渡す健全性の材料）。`context.inputs` には対象 run の
 `ArtifactProduced` が入る。run は対象タスクと同じ作業ディレクトリで実行される（成果物を直接読めるように
 するため。ワーカーには読み取り専用で振る舞うよう指示するが強制はしない。既知の制約）。
 
@@ -755,6 +757,34 @@ task.acceptance.len()`。`celerisctl plan` が作る Plan は `acceptance = []` 
 
 不合格の verdict には局所修復のヒント `repair: {scope, class, hint?}` を任意で添えられる（`scope = "local"`
 だけが認識され、`class` は `format` / `lint` / `test` / `doc` / `other`。ADR-0072 D16）。
+
+#### health の材料と構造化 health verdict（ADR 2026-11-07-health-review-integration (4)・(5)）
+
+`ReviewRequest.health`（`HealthReviewInput`）は dispatcher が candidate SHA ごとに 1 回だけ作り、final review
+にだけ載せる（WU の review・review 方針の無い repo では省略）。形は `{repos: [HealthRepoInput]}` で、1 repo は
+`{repo_id, target_sha, reviewed_sha, diff: {files, insertions, deletions, paths: [{path, insertions, deletions}]},
+owner_rows: [{path, row}], findings: {verdict, reviewable, counts: {findings, fail_grade, new, worsened, existing},
+new: [{rule_id, fingerprint, severity, delta, path?}], truncated}, policy: {source, changed, files}, invariants}`。
+`findings.new` は repo health の report のうち `delta` が `new`・`worsened` で例外の無いもの（上限 50 件。超えた数が
+`truncated`）、`diff.paths` と `owner_rows` は上限 40 件。`findings` と `policy` の値は repo health の report
+（`scripts/dev/repo-health/schema/report-v1.schema.json`）の値をそのまま写す。
+
+`health` を渡された reviewer は `review.json` に `health` を必ず書く（無い・壊れていれば dispatcher は全条件を不合格にする。ADR D5.2）:
+
+```json
+{"verdicts":[{"criterion":0,"pass":true,"reason":"…"}],
+ "health":{"findings":[{"kind":"removal_missing","severity":"blocking","path":"crates/a.rs","reason":"旧経路が残る","repair":{"scope":"local","class":"other"}}],
+           "policy":{"approved":true,"reason":"…"}}}
+```
+
+- `kind` は固定 7 種: `symptom_fix_outside_owner` / `duplicate_implementation` / `local_hook_in_shared_interface` /
+  `dual_source_of_truth` / `unapproved_fallback_or_switch` / `removal_missing` / `test_change_unjustified`。
+  未知の `kind` と `severity` は `review.json` の読み込みエラーになる。
+- `severity` は `blocking`（合否に使う）か `advisory`（記録と次の run の `prior_review` だけ）。
+- `repair.scope = "local"` で局所修復に写るのは `removal_missing` と `test_change_unjustified` の blocking だけ。
+  ほかの blocking は replan になる。
+- `policy` は `health.repos[].policy.changed = true` のときに必ず書く。`approved = true` でも人の承認を待つ。
+- `findings` と `policy` は省略できる（`"health":{}` は finding 無し）。
 
 `criteria` に列挙された各インデックスについて `verdicts` に必ず 1 件対応するエントリが必要。次はすべて
 該当する `Reviewer` 条件を `pass=false`（理由に原因を記録）として扱う: run の終端が `done` 以外

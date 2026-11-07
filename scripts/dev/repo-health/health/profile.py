@@ -1,12 +1,9 @@
-"""profile の解決と読み込み（ADR D2）。
+"""profile の解決と読み込み。
 
-解決順: `--profile` > repo の既定 `scripts/dev/repo-health/profiles/default.toml` > 組み込み `generic`。
-名前は対象 repo の `scripts/dev/repo-health/profiles/<name>.toml` を先に、無ければ検査器自身の
-`profiles/<name>.toml` を見る。path は repo 内の相対 path に限る（例外の出典を repo の path で書くため）。
-
-policy は base 側で読む: repo 内の profile は `git show <base>:<path>` の内容。base に無く head に
-あれば bootstrap（head の内容で評価し、policy.changed は warning）。検査器自身の profile と組み込みは
-builtin。
+解決順・名前の探し方・base 側で読むこと（bootstrap・builtin）は ADR 2026-11-07-repo-health-contract D2。
+解釈はこの module の 1 つだけにする: report（`resolve`）も review policy の出力（`resolve_base`・
+`Profile.review_policy`。ADR 2026-11-07-health-review-integration D2.3）もここを通る。path は repo 内の
+相対 path に限る（例外の出典を repo の path で書くため）。
 
 profile の項目（未知の項目は読み込みエラー。破壊的変更の方針で旧い欄を黙って無視しない）:
     version = "1"                      # 必須。--policy-version と一致しなければ exit 2
@@ -42,10 +39,18 @@ profile の項目（未知の項目は読み込みエラー。破壊的変更の
         <name> = "<repo path>"
         # 下位項目はこの 3 つだけ（未知の項目は読み込みエラー）。extends では節を丸ごと置き換えず、
         # 下位項目ごとに子が勝つ（_merge の表の扱い）。子の空の [review] は親の値をそのまま使う
+
+review policy（`--print-review-policy` の JSON、schema/review-policy-v1.schema.json）:
+    source = base|builtin|absent       # [review] が無ければ absent（owner_map は null、配列と表は空）
+    definition_sha256                  # 解決に使った profile の内容（子、extends の親の順）の sha256。
+                                       # 1 file ごとに `<path>\\0<byte 数>\\0<内容>` を続けて hash する。
+                                       # 組み込み generic は path `builtin:generic`、内容は sort 済みの JSON
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import tomllib
@@ -58,6 +63,7 @@ REPO_PROFILE_DIR = "scripts/dev/repo-health/profiles"
 TOOL_PROFILE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profiles")
 DEFAULT_NAME = "default"
 BUILTIN_NAME = "generic"
+REVIEW_POLICY_SCHEMA = "celeris.repo-health.review-policy/1"
 
 BUILTIN_GENERIC: dict = {
     "version": "1",
@@ -105,6 +111,7 @@ class Profile:
     data: dict
     files: list[str] = field(default_factory=list)  # repo 内の profile file（extends 先を含む）
     exceptions: dict[str, list[Exception_]] = field(default_factory=dict)
+    definition: list[tuple[str, bytes]] = field(default_factory=list)  # 解決に使った (path, 内容)。子、親の順
 
     @property
     def version(self) -> str:
@@ -150,6 +157,24 @@ class Profile:
 
     def mentioned_rules(self) -> list[str]:
         return sorted(self.data.get("rules", {}))
+
+    def definition_sha256(self) -> str:
+        h = hashlib.sha256()
+        for path, raw in self.definition:
+            h.update(path.encode("utf-8") + b"\0" + str(len(raw)).encode() + b"\0" + raw)
+        return h.hexdigest()
+
+    def review_policy(self) -> dict:
+        """review policy の JSON（ADR 2026-11-07-health-review-integration D2.3）。"""
+        rv = self.data.get("review")
+        return {
+            "schema": REVIEW_POLICY_SCHEMA,
+            "source": "absent" if rv is None else self.policy_source,
+            "owner_map": None if rv is None else rv.get("owner_map"),
+            "high_risk": [{"class": c["class"], "paths": list(c["paths"])} for c in (rv or {}).get("high_risk", [])],
+            "invariants": dict(sorted((rv or {}).get("invariants", {}).items())),
+            "definition_sha256": self.definition_sha256(),
+        }
 
 
 def _err(where: str, msg: str) -> UsageError:
@@ -306,28 +331,26 @@ def _exception_lines(text: str, rid: str, exceptions: list[dict], path: str) -> 
 
 
 class _Source:
-    """profile の file を探す場所。base（不達なら None）・head・検査器自身の dir の順。"""
+    """profile の file を探す場所。base（不達なら None）・head（読まないなら None）・検査器自身の dir の順。"""
 
-    def __init__(self, base: Tree | None, head: Tree) -> None:
+    def __init__(self, base: Tree | None, head: Tree | None) -> None:
         self.base = base
         self.head = head
 
-    def find(self, ref: str, by_name: bool) -> tuple[str, str, str] | None:
-        """(text, repo の path, policy の出所 base|bootstrap|builtin)"""
+    def find(self, ref: str, by_name: bool) -> tuple[str, str, str, bytes] | None:
+        """(text, repo の path, policy の出所 base|bootstrap|builtin, 内容の byte 列)"""
         path = f"{REPO_PROFILE_DIR}/{ref}.toml" if by_name else ref
-        if self.base is not None and self.base.has(path):
-            text = self.base.read_text(path)
-            if text is not None:
-                return text, path, "base"
-        if self.head.has(path):
-            text = self.head.read_text(path)
-            if text is not None:
-                return text, path, "bootstrap"
+        for tree, source in ((self.base, "base"), (self.head, "bootstrap")):
+            if tree is not None and tree.has(path):
+                text, raw = tree.read_text(path), tree.read_bytes(path)
+                if text is not None and raw is not None:
+                    return text, path, source, raw
         if by_name:
             tool_path = os.path.join(TOOL_PROFILE_DIR, f"{ref}.toml")
             if os.path.isfile(tool_path):
-                with open(tool_path, encoding="utf-8") as fh:
-                    return fh.read(), path, "builtin"
+                with open(tool_path, "rb") as fh:
+                    raw = fh.read()
+                return raw.decode("utf-8"), path, "builtin", raw
         return None
 
 
@@ -336,13 +359,22 @@ def _is_name(ref: str) -> bool:
 
 
 def resolve(snap: Snapshot, requested: str | None) -> Profile:
-    src = _Source(snap.base_tree, snap.head_tree)
+    """report 用。base に無ければ head（bootstrap）、検査器自身の profile の順に探す。"""
+    return _resolve(snap.root, _Source(snap.base_tree, snap.head_tree), requested)
+
+
+def resolve_base(root: str, base: Tree, requested: str | None) -> Profile:
+    """review policy 用。head・作業ツリーは読まない（base か検査器自身の profile だけ）。"""
+    return _resolve(root, _Source(base, None), requested)
+
+
+def _resolve(root: str, src: _Source, requested: str | None) -> Profile:
     if requested is not None:
         by_name = _is_name(requested)
         ref = requested
         if not by_name:
-            full = os.path.realpath(os.path.join(snap.root, requested) if not os.path.isabs(requested) else requested)
-            rel = os.path.relpath(full, os.path.realpath(snap.root))
+            full = os.path.realpath(os.path.join(root, requested) if not os.path.isabs(requested) else requested)
+            rel = os.path.relpath(full, os.path.realpath(root))
             if rel.startswith(".."):
                 raise UsageError(f"profile_outside_repo: --profile {requested} は repo の外")
             ref = rel.replace(os.sep, "/")
@@ -357,13 +389,16 @@ def resolve(snap: Snapshot, requested: str | None) -> Profile:
             found = None  # 検査器自身の default.toml は repo の既定ではない
         if found is None:
             validate(BUILTIN_GENERIC, "builtin:generic")
-            return Profile(BUILTIN_NAME, None, "builtin", "builtin", dict(BUILTIN_GENERIC))
+            raw = json.dumps(BUILTIN_GENERIC, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            return Profile(BUILTIN_NAME, None, "builtin", "builtin", dict(BUILTIN_GENERIC),
+                           definition=[("builtin:generic", raw)])
         source = "repo"
         name = DEFAULT_NAME
 
-    text, path, policy_source = found
+    text, path, policy_source, raw = found
     data = _parse(text, path)
     files = [path] if policy_source != "builtin" else []
+    definition = [(path, raw)]
     exceptions = {rid: _exception_lines(text, rid, cfg.get("exceptions", []), path)
                   for rid, cfg in data.get("rules", {}).items() if cfg.get("exceptions")}
     if "extends" in data:
@@ -371,8 +406,9 @@ def resolve(snap: Snapshot, requested: str | None) -> Profile:
         parent = src.find(parent_ref, True)
         if parent is None:
             raise _err(path, f"extends の {parent_ref} が見つからない")
-        ptext, ppath, psource = parent
+        ptext, ppath, psource, praw = parent
         pdata = _parse(ptext, ppath)
+        definition.append((ppath, praw))
         if "extends" in pdata:
             raise _err(ppath, "extends は 1 段だけ")
         for rid, cfg in pdata.get("rules", {}).items():
@@ -386,4 +422,4 @@ def resolve(snap: Snapshot, requested: str | None) -> Profile:
         data = _merge(pdata, data)
     if "version" not in data:
         raise _err(path, "version が無い")
-    return Profile(name, requested, source, policy_source, data, sorted(set(files)), exceptions)
+    return Profile(name, requested, source, policy_source, data, sorted(set(files)), exceptions, definition)

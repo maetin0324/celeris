@@ -322,6 +322,7 @@ fn department_fallback_planner_assignee() {
         work_units: vec![],
         phases: vec![],
         children: vec![],
+        design_brief: None,
     };
     store
         .execution_plans_replace(

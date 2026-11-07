@@ -4249,6 +4249,7 @@ fn sample_plan_spec() -> ExecutionPlanSpec {
         ],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     }
 }
 
@@ -5819,6 +5820,7 @@ fn review_repair_apply_materializes_main_and_the_repair_work_unit_for_an_atomic_
             work_units: vec![main_spec, repair_spec(&task)],
             phases: Vec::new(),
             children: Vec::new(),
+            design_brief: None,
         },
         created_at: now.clone(),
         superseded_at: None,
@@ -5909,6 +5911,7 @@ fn delivery_repair_apply_reopens_and_materializes_atomically() {
         work_units: vec![main.clone(), repair.clone()],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     let plan = ExecutionPlanRow {
         id: plan_id.clone(),

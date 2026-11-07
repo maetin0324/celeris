@@ -53,6 +53,7 @@ fn plan(env: &TestEnv, task: &Task, units: &[U<'_>]) {
         stages: vec![],
         units: vec![],
         decisions: vec![],
+        design_brief: None,
     };
     let rows = units
         .iter()

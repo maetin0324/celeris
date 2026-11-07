@@ -788,11 +788,11 @@ impl Dispatcher {
             },
             max_children: limits.max_children,
             previous_attempt_errors,
-            tree: if tree_planner {
-                Some(self.tree_planner_context(task)?)
-            } else {
-                None
-            },
+            tree: tree_planner
+                .then(|| self.tree_planner_context(task))
+                .transpose()?,
+            // ADR 2026-11-07-health-review-integration D2.3: base 側の方針を読む配線は後続の dispatch unit。
+            review_policy: None,
         })
     }
 

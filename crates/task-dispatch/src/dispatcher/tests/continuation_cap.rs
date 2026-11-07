@@ -131,6 +131,7 @@ async fn work_unit_with_progress_asks_only_at_the_hard_limit_and_resumes_after_a
         work_units: vec![wu_spec("implement", &[])],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     task_ops::execution::adopt_plan(
         store.as_ref(),

@@ -977,6 +977,23 @@ struct ReviewHumanContext {
     policy_violations: Vec<ReviewPolicyViolation>,
 }
 
+impl ReviewHumanContext {
+    /// reviewer run の `context.review`。対象 run の `done` の内容と人の文脈を 1 つにする。
+    fn into_request(self, subject: &ReviewSubject, criteria: &[usize]) -> ReviewRequest {
+        ReviewRequest {
+            summary: subject.summary.clone(),
+            evidence: subject.evidence.clone(),
+            criteria: criteria.to_vec(),
+            decisions: self.decisions,
+            answers: self.answers,
+            checks: self.checks,
+            policy_violations: self.policy_violations,
+            // ADR 2026-11-07-health-review-integration D4.2: 材料を作る配線は後続の dispatch unit。
+            health: None,
+        }
+    }
+}
+
 /// Reviewer run を実行し、判定と、その run 自身の結果（`WorkerFinished` 用。ADR-0014 D1）を返す。
 #[allow(clippy::too_many_arguments)]
 async fn run_reviewer(
@@ -1094,15 +1111,7 @@ async fn run_reviewer_inner(
             inputs: produced.to_vec(),
             // ADR-0117 D1: `RunContext.answers` は worker run 用。人の回答は `ReviewRequest.answers` に載せる。
             answers: vec![],
-            review: Some(ReviewRequest {
-                summary: subject.summary.clone(),
-                evidence: subject.evidence.clone(),
-                criteria: criteria.to_vec(),
-                decisions: human_context.decisions,
-                answers: human_context.answers,
-                checks: human_context.checks,
-                policy_violations: human_context.policy_violations,
-            }),
+            review: Some(human_context.into_request(subject, criteria)),
             role: None,
             children: Vec::new(),
             // ADR-0027 D1: Reviewer run は委譲しない（M8 相当）。

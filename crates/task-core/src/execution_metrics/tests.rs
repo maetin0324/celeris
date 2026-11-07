@@ -122,6 +122,7 @@ fn work_units_and_replans_are_derived_from_execution_planned_and_transitions() {
         ],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     let plan2 = ExecutionPlanSpec {
         stages: Vec::new(),
@@ -136,6 +137,7 @@ fn work_units_and_replans_are_derived_from_execution_planned_and_transitions() {
         ],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     let events = vec![
         Event::ExecutionPlanned {
@@ -192,6 +194,7 @@ fn repairs_are_classified_from_the_execution_planned_spec_when_available() {
         ],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     let events = vec![Event::ExecutionPlanned {
         plan_id: "p1".to_string(),
@@ -269,6 +272,7 @@ fn planner_authored_repair_work_units_are_classified_as_planner() {
         )],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     let events = vec![
         Event::ExecutionPlanned {

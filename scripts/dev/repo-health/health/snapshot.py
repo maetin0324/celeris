@@ -227,6 +227,22 @@ def _changed_lines(diff: bytes) -> dict[str, list[tuple[int, int]]]:
     return lines
 
 
+def resolve_base(repo: str, base: str) -> tuple[str, str, Tree]:
+    """base 側だけを読む（review policy の出力。head・作業ツリーは見ない）。(root, base の sha, base の Tree)。
+
+    base に届かない（shallow を含む）なら使い方誤り。review policy は base が読めなければ出さない。
+    """
+    root = find_root(repo)
+    base_rev = default_base(root) if base == AUTO else base
+    base_sha = _resolve_commit(root, base_rev)
+    if base_sha is None:
+        shallow = git_text(root, "rev-parse", "--is-shallow-repository") == "true"
+        raise UsageError(f"base_not_found: --base {base} が commit に解決できない"
+                         f"{'（shallow で base に届かない）' if shallow else ''}")
+    files, _subs = _ls_tree(root, base_sha)
+    return root, base_sha, Tree("base", root, dict(files), BlobReader(root))
+
+
 def resolve(repo: str, base: str, head: str) -> Snapshot:
     root = find_root(repo)
     shallow = git_text(root, "rev-parse", "--is-shallow-repository") == "true"

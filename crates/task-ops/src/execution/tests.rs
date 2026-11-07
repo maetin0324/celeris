@@ -33,6 +33,7 @@ fn spec() -> ExecutionPlanSpec {
         work_units: vec![wu("a", &[]), wu("b", &["a"]), wu("c", &["b"])],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     }
 }
 
@@ -166,6 +167,7 @@ fn spec_v2_two_phases() -> ExecutionPlanSpec {
             phase("build", WorkUnitKind::Implement),
         ],
         children: Vec::new(),
+        design_brief: None,
     }
 }
 

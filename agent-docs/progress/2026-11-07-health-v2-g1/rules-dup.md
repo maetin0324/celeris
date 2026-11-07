@@ -29,17 +29,25 @@ WorkUnit `rules-dup`（G1 の工程「rule の実装」）。基準は `$CELERIS
 ## 変更（commit の件名）
 - `phase G1: 候補 rule 6 本（dup.contract・dup.state・dup.public-surface・link.unlinked・dup.test-fixture・migration.remnant）と試験`
 - `phase G1: rules-dup の進捗`
+- `phase G1: rules-dup の試験の文書 path を docs 参照検査に掛からない名前にする`（check-doc-links が試験の文字列 docs/… を実在検査したため。core と同じ対処）
 - core の試験（`scripts/tests/test_repo_health_core.py`）は検査器の写しに試験用の `link.unlinked` を足すため、本物の rule が入ると二重登録で落ちた。写しから `policy_changed.py` 以外の本物の rule を外す 4 行を足した（上の 1 つ目の commit に含む）。
 
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
 - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → exit 0（37 tests。うち dup 15 件: 6 rule の正例・負例、例外 5 件（path 4・fingerprint 1）、existing・worsened、候補の file を書き換えない（内容の hash・git status・HEAD が変わらない）、必須化、設定の誤りは error（crashed:dup.state:ConfigError、exit 2）、doc-only は not_applicable）
 - `python3 -I scripts/dev/repo-health/repo_health.py --repo . --base $CELERIS_WU_BASE --head HEAD --policy-version 1 --profile scripts/dev/repo-health/profiles/default.toml --rules dup.contract,dup.state,dup.public-surface,link.unlinked,dup.test-fixture,migration.remnant --out <artifacts>/self-a.json` → exit 1（6 rule とも pass・optional。findings 601: dup.contract 211、dup.state 24、dup.public-surface 92、link.unlinked 188、dup.test-fixture 4、migration.remnant 81、policy.changed 1。exit 1 は policy.changed の fail で、この WorkUnit が `scripts/dev/repo-health/` を変えたため。設計どおり）。所要約 27 秒。
 - 同じ呼び出しを 2 回 → `cmp` で byte 一致。`validate_report.py` → 1 valid
-- 検査の結果は下の「必須検査」に書く
+- `git diff --name-only $CELERIS_WU_BASE | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set G1 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → write-set G1: ok。`sh "$CELERIS_WU_SCOPE_PATHS"` の path は rules/・health/scan.py・2 つの試験・この進捗だけ
+- `bash scripts/dev/check-health.sh` → exit 0（source-size gate 0 failure）
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0
+- `bash scripts/dev/test-affected.sh` → exit 0（crate の変更なし。check-health の scripts 試験 60 件 OK。test-affected は `test_repo_health*` を走らせないので、上の unittest を別に実行した）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
 
 ## 未解決
 - 候補の誤検出: rules/ の module（engine が dir から読む）は名前で参照されないので link.unlinked の script 候補になる。migration.remnant は自分の語彙の定義を拾う。どちらも celeris-profile で `ignore_paths` か例外に理由を付けて扱う。
 - dup.public-surface の http は router の prefix（nest）を解かない。同じ相対 path を別の prefix に付けた route も候補になる。
+
+- test-affected・check-health.sh は `scripts/tests/test_repo_health*.py` を走らせない。check-health.sh への接続は celeris-profile WorkUnit の範囲。
 
 ## 提案
 - celeris-profile WorkUnit で `profiles/celeris.toml` に次を置く: dup.contract の `ignore_names`（Args・Error など慣習の名前）、dup.state の `ignore_tables` と TaskStore 以外の書き手の例外（理由付き）、link.unlinked の `ignore_paths = ['^scripts/dev/repo-health/rules/']`、migration.remnant の `retired_paths`（消した config 欄・旧 script）。

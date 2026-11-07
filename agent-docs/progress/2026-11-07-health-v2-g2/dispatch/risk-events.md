@@ -12,7 +12,7 @@ completed: 2026-11-07
 WorkUnit `risk-events`。基準は `$CELERIS_WU_BASE`。設計は [ADR 2026-11-07 健全性を設計と review に組み込む](../../../adr/2026-11-07-health-review-integration.md) の D3.3・D3.5・D4.1・D4.3・D4.4。dispatcher の配線はしていない（後続の policy-load・design-gate・health-input・health-verdict・design-verdict）。
 
 ## 変更
-件名「G2 risk-events: assess_risk・設計 review と health の event・設計 review の wire 型」「G2 risk-events: design_review を task-core の module の循環から外す」の commit。
+件名「G2 risk-events: assess_risk・設計 review と health の event・設計 review の wire 型」「G2 risk-events: design_review を task-core の module の循環から外す」「G2 risk-events: web の realtime の event 種類に設計 review と health の 4 種を足す」「G2 risk-events: 設計 review の依頼と brief を Box にして RunContext を大きくしない」の commit。
 - `crates/task-core/src/design_review.rs`: `ReviewPolicyState`（`Present(ReviewPolicy)`・`Absent`・`Unavailable(理由)`）、`RiskLevel`（`none`・`low`・`high`・`unknown`、`needs_design_review` は high・unknown で true）、`RiskAssessment { level, reasons }`、`high_risk_classes(policy, write_paths)`（合う class の名前を方針の順で返す）、`assess_risk(&ReviewPolicyState, write_paths, brief)`。`DesignBrief`・`DesignOption`（plan-brief unit が `execution_plan.rs` に置いた型）をここへ移し、`execution_plan` は `pub use` で同じ path（`task_core::execution_plan::DesignBrief`）のまま出す。型の中身・serde・schema は変えていない。
   - 規則は D3.3 のとおり: `Absent` → `none`（`review_policy_absent`）、`Unavailable` → `unknown`（`review_policy_unavailable:<最初の行、200 文字まで>`）、高 risk の class に合う path かつ brief が `new_state`・`new_branch`・`new_fallback`・`new_port` のどれかを宣言 → `high`（class と欄の組ごとに `path_class:<class>+<欄>`）、`new_fallback` は path に依らず `high`（`new_fallback`）、class に合い brief が無い → `low`（`brief_absent_human_plan`）、ほか → 理由なしの `low`。
   - path の当て方は `profile.py` と同じ `re.search`（`regex::Regex::is_match` は部分一致）。task-core に `regex = "1"` を足した（Cargo.lock に既にある 1.13.1。crate の依存の向きは変えていない）。
@@ -20,6 +20,8 @@ WorkUnit `risk-events`。基準は `$CELERIS_WU_BASE`。設計は [ADR 2026-11-0
 - `crates/task-core/src/model/events.rs`: `Event::DesignReviewRequested { plan_sha256, plan, risk, policy_sha256? }`・`DesignReviewed { plan_sha256, review_run, pass, findings? }`・`HealthReviewInputBuilt { review_run, repo_id, target_sha, reviewed_sha, definition_sha256, input }`・`HealthReviewInputSkipped { review_run, repo_id, reason }`。どれも状態を変えない（`replay` は無視）。
 - `crates/task-api/src/query.rs`: `event_type_name` と `EVENT_TYPES`（86 → 90 語）に 4 つの type 名を足した。
 - `crates/task-worker/src/protocol/design_review.rs`（新規）: `DesignReviewRequest { brief?, plan_summary, risk, review_policy? }`・`DesignVerdictOut { pass, findings? }`（finding は health verdict と同じ `HealthFindingOut`）。`protocol.rs` に `ReviewRequest.design`・`ReviewOutput.design`、`protocol/health.rs` に `HealthReviewInput.brief`。新しい欄はすべて `serde(default, skip_serializing_if)`、`PROTOCOL_VERSION` は 4 のまま。`lib.rs` の再公開に 2 型を足した。
+- `ReviewRequest.design` は `Option<Box<DesignReviewRequest>>`、`HealthReviewInput.brief` は `Option<Box<DesignBrief>>`（wire の形・schema は変わらない）。inline のままでは `RunContext` が 4,848 byte（Box で 4,224 byte）になり、task-dispatch の `remote_runs_deduplicate_by_path_and_hash_across_wait_question_and_done` が stack overflow（SIGABRT）で落ちた。
+- `web/api/realtime/event-kinds.ts`・`invalidation-map.ts`: 4 つの type 名を `EVENT_KINDS` と無効化の表（`T`・`E`）に足した（`invalidation-map.test.ts` の schema との突き合わせ）。
 - `crates/task-dispatch/src/review.rs`: `ReviewHumanContext::into_request` の literal に `design: None`（final review の要求）。
 - 再生成: `docs/protocol/worker-protocol.schema.json`・`docs/api/v1/api-v1.schema.json`・`docs/api/v1/event.schema.json`（`UPDATE_SCHEMA=1`）、`web/api/generated/{schema.json,types.ts}`（`node web/scripts/gen-types.mjs`）。`docs/protocol/worker-protocol.md`（`context.review` の欄、§10.2 の `HealthReviewInput.brief` と「採用前の設計 review」）と `docs/api/v1/api.md`（`types` の語彙と 4 つの event の形）を書き足した。
 - 試験: task-core `crates/task-core/src/design_review/tests.rs`（prefix `health_review_risk_`、9 件: D3.3 の 6 つの場合を 1 件ずつ、write path と class の集め方、risk の JSON と `plan_sha256`、4 つの event の往復と任意欄の無い JSON の読み込み）。task-worker `crates/task-worker/src/protocol/design_review/tests.rs`（prefix `health_review_design_protocol_`、4 件: 依頼の往復、verdict の往復と未知の kind の拒否、旧い JSON の読み込みと新しい欄の非出力、schema に型が載ること）。task-api `health_review_event_types_match_their_serde_names`（type 名の一致）。
@@ -33,13 +35,11 @@ WorkUnit `risk-events`。基準は `$CELERIS_WU_BASE`。設計は [ADR 2026-11-0
 - ADR の「brief の無い人の計画」は origin を引数に取らずに判定する。planner の計画は採用前の `require_design_brief` で差し戻されるので、class に合い brief の無い計画が `assess_risk` に来るのは planner 以外の計画だけ。daemon の repair の計画（/1）に `assess_risk` を使うかは design-gate の unit が決める。
 
 ## 証拠（提出時の HEAD で実行）
-- `cargo nextest run -p task-core -E 'test(health_review_risk_)'` → 9 passed
-- `cargo nextest run -p task-worker -E 'test(/health_review_design_protocol_|health_protocol_/)'` → 10 passed（新規 4 件と既存の health_protocol_ 6 件）
-- `cargo nextest run -p task-api -p task-worker -p task-core -E 'test(/schema/)'`（更新モード無し）→ 37 passed（`committed_schema_matches_generated` を含む）
-- `node web/scripts/gen-types.mjs` の後の `git status` で生成物の差分が commit に入っていることを確認
-- `bash scripts/dev/test-affected.sh` → 未実行（下で更新する）
+- `cargo nextest run -p task-worker -p task-api -p task-core -E 'test(/schema/) | test(/health_review_/)'`（更新モード無し）→ 50 passed（`health_review_risk_` 9 件、`health_review_design_protocol_` 4 件、`committed_schema_matches_generated` を含む schema の試験）
+- `bash scripts/dev/test-affected.sh`（Cargo.lock が変わったので全 crate と web）→ exit 100。check-health は verdict=pass・new=0・worsened=0、web は 104 file・711 件 passed、test-ts-verify 20 passed、nextest は 7,913 件中 7,912 passed・1 failed。落ちたのは celeris-campaign `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid`（daemon が healthy になる前に終わった）で、単独の再実行（`cargo nextest run -p celeris-campaign -E 'test(a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid)'`）は 1 passed。この変更の型に触れない試験で、全体実行の負荷でだけ落ちた。
+- その前の全体実行（Box にする前）で落ちた task-dispatch の 2 件は、Box の後の単独の再実行で 2 passed（`an_interrupted_integration_is_redone_idempotently_after_restart` は Box の前の単独実行でも通った）。
 - `cargo clippy --workspace -- -D warnings` → exit 0
-- `cargo fmt --all -- --check` → 未実行（下で更新する）
+- `cargo fmt --all -- --check` → exit 0
 
 ## 未解決
 - `re.search` で当てるので、計画の write path が class より広い接頭辞（例 `crates/task-core/`）だと `^crates/task-core/src/store/` などの class に合わない。広い path を書いた計画は高 risk にならない。

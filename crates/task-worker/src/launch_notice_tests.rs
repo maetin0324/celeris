@@ -101,6 +101,8 @@ fn adapters(dir: &Path, log: &Path, missing: bool) -> Vec<(&'static str, Box<dyn
     } else {
         write_stub(dir, log).to_string_lossy().into_owned()
     };
+    let ext = dir.join("ext.js");
+    std::fs::write(&ext, "// stub extension\n").unwrap();
     vec![
         (
             "fake",
@@ -124,6 +126,9 @@ fn adapters(dir: &Path, log: &Path, missing: bool) -> Vec<(&'static str, Box<dyn
             "pi",
             Box::new(crate::PiAdapter::new(crate::PiConfig {
                 command: program,
+                model: Some("stub/model".into()),
+                extensions: vec![ext],
+                tools: vec!["read".into()],
                 ..Default::default()
             })),
         ),

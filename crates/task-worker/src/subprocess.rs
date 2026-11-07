@@ -121,6 +121,21 @@ pub(crate) fn feed_stdin(
     }))
 }
 
+/// 起動前通知（`EventSink::before_spawn`）を送ってから `command` を spawn する。**process を spawn する
+/// 全 adapter は `command.spawn()` を直接呼ばず、同じ関数の中でこれを呼ぶ**（通知→spawn の順を 1 か所で固定する）。
+/// 通知が `Err` なら spawn しない（`AdapterError::Other`）。spawn が失敗しても通知は取り消さない。
+pub(crate) fn spawn_after_notice(
+    sink: &dyn EventSink,
+    command: &mut Command,
+) -> Result<Child, AdapterError> {
+    sink.before_spawn().map_err(|reason| {
+        AdapterError::Other(format!(
+            "launch notice failed, worker not spawned: {reason}"
+        ))
+    })?;
+    command.spawn().map_err(AdapterError::Spawn)
+}
+
 pub async fn run_subprocess(
     spec: &SubprocessSpec,
     req: &RunRequest,
@@ -151,7 +166,7 @@ pub async fn run_subprocess(
     #[cfg(unix)]
     command.process_group(0);
 
-    let mut child = command.spawn().map_err(AdapterError::Spawn)?;
+    let mut child = spawn_after_notice(sink, &mut command)?;
     let _process_group = crate::process_group::ProcessGroup::register(run_id, child.id());
 
     let payload = serde_json::to_string(req)?;

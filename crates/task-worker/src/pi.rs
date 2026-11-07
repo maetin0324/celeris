@@ -331,7 +331,7 @@ async fn run_pi(
     command.process_group(0);
     crate::subprocess::check_arg_lengths(PiAdapter::ID, &command)?;
 
-    let mut child = command.spawn().map_err(AdapterError::Spawn)?;
+    let mut child = crate::subprocess::spawn_after_notice(sink, &mut command)?;
     let _process_group = crate::process_group::ProcessGroup::register(run_id, child.id());
 
     let mut stdin = child

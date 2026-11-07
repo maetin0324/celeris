@@ -992,7 +992,7 @@ async fn run_acp(
     #[cfg(unix)]
     command.process_group(0);
 
-    let mut child = command.spawn().map_err(AdapterError::Spawn)?;
+    let mut child = crate::subprocess::spawn_after_notice(sink, &mut command)?;
     // ADR-0044 §5 Phase 53 追記（Phase 55）: この run のプロセスグループを覚える（`kill_tree` の入口）。
     let _process_group = crate::process_group::ProcessGroup::register(run_id, child.id());
 

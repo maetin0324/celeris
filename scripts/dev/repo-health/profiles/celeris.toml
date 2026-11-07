@@ -161,3 +161,95 @@ commands = [
      "--baseline", "scripts/dev/source-size-baseline.json"],
     ["python3", "-m", "unittest", "discover", "-s", "scripts/tests", "-p", "test_source_size*.py"],
 ]
+
+# ---------------------------------------------------------------- 設計 review の方針
+# ADR 2026-11-07-health-review-integration (2)。dispatcher は base 側のこの節を読み、変更 path の risk・owner 行・
+# 保護する不変条件を reviewer に渡す。path は docs/architecture-map.md の行と B0 の capability-map.json の
+# owners から決めた（どれも実在する file か dir の先頭一致）。
+
+[review]
+owner_map = "docs/architecture-map.md"
+
+# credential の値・待ち・注入（capability credential-broker-resume、地図の celeris-credentiald 行。ADR-0080）
+[[review.high_risk]]
+class = "credential"
+paths = [
+    '^crates/celeris-credentiald/',
+    '^crates/task-core/src/store/credential_wait',
+    '^crates/task-dispatch/src/dispatcher/credential_gate\.rs$',
+    '^crates/task-dispatch/src/credential_resume',
+    '^crates/task-api/src/handlers/secrets\.rs$',
+]
+
+# worker の子 process の隔離・DB の読み取り専用・道具の検出（capability sandbox-db-guard。ADR-0095）
+[[review.high_risk]]
+class = "sandbox"
+paths = [
+    '^crates/task-worker/src/db_guard',
+    '^crates/task-worker/src/subprocess',
+    '^crates/task-worker/src/tool_policy\.rs$',
+]
+
+# 状態の正本（SQLite）の store と migration（CLAUDE.md「禁止」、地図の task-core::store 行）
+[[review.high_risk]]
+class = "store"
+paths = [
+    '^crates/task-core/src/store/',
+    '^crates/task-core/migrations/',
+]
+
+# 追記専用の events の型と書き込み（地図の Event 行・task-core::model 行。ADR-0001）
+[[review.high_risk]]
+class = "events"
+paths = [
+    '^crates/task-core/src/model/events\.rs$',
+    '^crates/task-core/src/store/events\.rs$',
+]
+
+# run の lease・孤児の回収・daemon の active の引き継ぎ（capability run-claim-lease・orphan-takeover）
+[[review.high_risk]]
+class = "lease"
+paths = [
+    '^crates/task-dispatch/src/dispatcher/leases\.rs$',
+    '^crates/task-dispatch/src/dispatcher/ownerless_runs\.rs$',
+    '^crates/task-dispatch/src/orphan\.rs$',
+    '^crates/task-core/src/instance\.rs$',
+    '^crates/celeris/src/instance\.rs$',
+]
+
+# 予算・単価・quota（capability budget-pricing・accounts-quota。ADR 2026-11-06-budget-usd-caps）
+[[review.high_risk]]
+class = "budget"
+paths = [
+    '^crates/task-core/src/pricing',
+    '^crates/task-core/src/quota',
+    '^crates/task-ops/src/project_budget',
+    '^crates/task-dispatch/src/dispatcher/token_budget\.rs$',
+    '^crates/task-dispatch/src/dispatcher/quota_book\.rs$',
+]
+
+# release の作成・昇格・rollback（capability release-selfdeploy-wiring、地図の self-deploy 行。docs/ops/selfdeploy.md）
+[[review.high_risk]]
+class = "selfdeploy"
+paths = [
+    '^scripts/selfdeploy/',
+    '^crates/celeris/src/releases',
+    '^crates/celeris/src/config/selfdeploy\.rs$',
+    '^crates/task-api/src/releases\.rs$',
+]
+
+# 保護する不変条件の名前 → 根拠の file。
+[review.invariants]
+task-state-in-sqlite = "CLAUDE.md"
+events-append-only = "CLAUDE.md"
+no-llm-in-dispatcher = "CLAUDE.md"
+no-unwrap-outside-tests = "CLAUDE.md"
+completion-not-self-reported = "CLAUDE.md"
+no-data-loss = "CLAUDE.md"
+remove-superseded-mechanism = "agent-docs/adr/2026-10-11-breaking-changes-by-default.md"
+worker-db-read-only = "agent-docs/adr/0095-worker-runs-see-the-db-read-only.md"
+credential-stays-in-broker = "agent-docs/adr/0080-browser-phase2-policy-broker-approval.md"
+lease-single-holder = "agent-docs/adr/2026-10-03-ownerless-running-runs.md"
+budget-unknown-cost-stops = "agent-docs/adr/2026-11-06-budget-usd-caps.md"
+unpromoted-release-no-takeover = "docs/ops/selfdeploy.md"
+worker-no-subagents = "agent-docs/adr/2026-10-07-worker-no-subagents-no-llm-cli.md"

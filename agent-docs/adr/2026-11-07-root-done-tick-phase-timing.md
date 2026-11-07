@@ -33,3 +33,11 @@ tasks: [01M6VQH1GY87Q79J406DFNQP6G]
 
 ## 付記（2026-11-07）: 置き場所
 - repo health の size.responsibility-growth が、閾値を超えている既存の単位（task-dispatch の `dispatcher` module、task-core の `store` module、`SqliteStore` の method 数）の増加を worsened として落とす。計測の code は crate 直下の新しい module に置く: `crates/task-core/src/lock_wait.rs`（`store_lock_wait`・`store_writer_waiters`。`SqliteStore` は接続を取る 3 か所でここを呼ぶだけで、method を足さない）と `crates/task-dispatch/src/root_done_probe.rs`（`RootDoneProbe` と、測りながら事実を集める `collect_facts`・`progress_markdown`。root_done.rs から移す）。
+
+## 付記（2026-11-07）: 待ちと処理の分け方を thread の CPU 時間に変える（D2 の改定）
+- この WU の変更範囲は `crates/task-dispatch/`・`crates/celeris/tests/`・`agent-docs/` に限られ、task-core を変えられない。前の付記の `crates/task-core/src/lock_wait.rs`（`store_lock_wait`・`store_writer_waiters`）と `SqliteStore` の 3 か所の変更は消す。
+- D2 を次に置き換える。store の呼び出しの「処理」（`work_us`）は、その呼び出しの間にこの thread が CPU を使った時間（`clock_gettime(CLOCK_THREAD_CPUTIME_ID)` の差）とする。「待ち」（`wait_us`）は経過時間から処理を引いた残り、つまり thread が CPU を使わずに止まっていた時間とする。測るのは `crates/task-dispatch/src/root_done_probe.rs` の `StoreSpan::time` だけで、task-core は変えない。
+- 待ちには次のものが入る: 書き込み接続の `Mutex` の待ち、読み取りプールの待ち、SQLite の `busy_timeout` の待ち（他の接続・process が file lock を持つとき）、disk の読み書きの待ち、CPU の空きを待つ時間（run queue）。前の D2 では `busy_timeout` の待ちが処理の側に入っていたが、この方式では待ちの側に入る。代わりに、disk の I/O と run queue の待ちも待ちの側に入り、lock の待ちだけを取り出すことはできない。本番で `wait_us` が大きいときは、同じ tick の他の段の `wait_us`（store を呼ばない段は無い）と host の負荷を合わせて読む。
+- 費用: store の呼び出しごとに `clock_gettime` を 2 回（Linux では system call、1 回あたり 1 µs 未満）と `Instant::now()` を 2 回呼ぶ。閾値を超えない tick にも同じ費用がかかるが、root_done_tick の store の呼び出しは 1 tick に数回（open の行ごとに 5 回増える）なので、D4 の「通常 tick に負荷を足さない」の範囲に収まる。
+- `progress_markdown` の時間（`facts.progress_us`）は経過時間のままとする。git の process の CPU 時間は呼んだ thread の CPU 時間に入らないので、この段を待ちと処理に分けても意味が無い。
+- 試験: `StoreSpan::time` の閉包の中で thread を 20 ms 眠らせると、待ちが 10 ms 以上・処理が 10 ms 未満になることを確かめる。眠る時間は下限としてだけ使うので、負荷で遅れても結果は変わらない（負荷はこの thread の CPU 時間を増やさない）。CPU を焼く閉包の試験は置かない。

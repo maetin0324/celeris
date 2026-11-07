@@ -138,6 +138,9 @@ fallback を消すと、Celeris 外の host で runner が動かなくなる。
 - build の一時 file と試験の残り物は、scratch LVM に置く。scratch の無い host では `/tmp` に置く。
 - 回収は、PID 再利用・再起動・初期化の途中・並行する掃除・symlink・別 UID のどれでも、判定できなければ残す方に倒す。
 
+## 実装済みの付記（2026-11-07）
+実装は `scripts/dev/lib/test-tmp-lifecycle.sh` にあり、`scripts/dev/test-affected.sh` と `scripts/dev/test-parallel.sh` が使う。D1〜D5 の決定（TMPDIR 47 byte 以下、候補 3 つの順、owner metadata と flock、次回起動時の回収、setsid と 30 秒待ち）と実装は一致している。SIGKILL の後始末は次回起動時の回収である。D6 の旧い残骸は人の手順のままで、自動回収は実装していない。
+
 ## 範囲外
 - daemon 側の check の timeout を、SIGTERM → SIGKILL の 2 段に変えること（`workspace.rs`）。別の判断として task の提案に書く。
 - js_step（web・control-ts の段）の一時 file。これらは `TMPDIR` の下に作られ、exec の `TMPDIR` と一緒に消える。

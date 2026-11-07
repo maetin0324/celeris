@@ -59,6 +59,17 @@ WorkUnit `rules-brief`。[ADR 2026-11-07 health-review-integration](../../adr/20
 - 再実行 2 回目（件名「G2 rules-brief: 進捗に再実行 1 回目の不合格を書く」の HEAD、load average 約 22）: `bash scripts/dev/test-affected.sh` → exit 0、約 9 分 10 秒。nextest 5626 passed（22 slow）、22 skipped。doc test は失敗なし。check-health は `verdict=pass exit=0 fail_grade=0 new=0 worsened=0`、repo_health_gate は全件 OK。続けて `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0、`cargo nextest run -p task-worker -E 'test(change_rules_)'` → 11 passed。この後の commit はこの進捗ファイルだけを変える。
 - 全体の実行で落ちた試験は 3 回とも別の試験で、どれも単独では通った（task-dispatch の work_units、task-worker の browser、celeris-campaign の launcher）。`.config/nextest.toml` は `retries = 0`。
 
+## 3 回目の run（check の 2 回目の不合格の確認）
+- 2 回目の run の後に celeris が走らせた同じ check が exit 100 で落ちた。check-health は `verdict=pass new=0 worsened=0`、repo_health_gate は全件 OK。落ちたのは、再実行 1 回目と同じ celeris-campaign の `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid`（launcher.rs:598）。`start` が「daemon exited before becoming healthy」で失敗し、片付けの `stop_owned` は「pid … is not the daemon this launcher started」で signal を送らなかった。daemon.log は空。
+- 読んだこと: measure-launcher.sh の health 待ちは 0.1 秒ごとに `owned_alive`（starttime と `/proc/<pid>/cmdline` の照合）を見る。起動直後の exec 待ち（件名「fix-launcher-flaky: launcher 起動直後の exec 完了を待ってから identity 照合する」）は、最初に `--config` を含む cmdline が見えた時点で抜ける。その時点の process は `nohup` で、その後に wrapper の sh、さらに試験 binary へ exec が 2 回続く。
+- 原因の推定（未確認）: (a) 後の 2 回の exec の途中で cmdline が一時的に空に見え、`owned_alive` が偽になる。(b) daemon が何も書かずに終わり、zombie として残る。どちらでも `/proc/<pid>` は残るので、`stop_owned` の文言と合う。どちらなのかは確かめていない。
+- 成果は直さず、同じ check を 3 回目の run の HEAD（件名「G2 rules-brief: 進捗に再実行 2 回目の結果を書く」、開始時の load average 約 42）で再実行した。
+  - `bash scripts/dev/test-affected.sh` → exit 0、約 10 分 25 秒。nextest 5626 passed（21 slow）、22 skipped。check-health は `verdict=pass exit=0 fail_grade=0 new=0 worsened=0`、repo_health_gate は全件 OK。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+  - `cargo nextest run -p task-worker -E 'test(change_rules_)'` → 11 passed。
+  - `sh "$CELERIS_WU_SCOPE_PATHS"` → crates/task-worker の 9 file とこの進捗ファイルだけ。
+  - この後の commit はこの進捗ファイルだけを変える。
+
 ## 判断
 - ADR D1.1 は `section()` の見出しを `## 変更の規約（汎用）` と書くが、task の Objective（generic.md の 1 行目を見出しにし、二重にしない）に従い、generic.md をそのまま出した。prompt の中の本文が generic.md と 1 バイトも違わないので、試験は `GENERIC_RULES` の部分一致で 1 回を確かめられる。
 - repo 固有の節の見出しは generic.md の H1 と同じ階層の `# 変更の規約（この repo 固有）` にした。
@@ -67,9 +78,10 @@ WorkUnit `rules-brief`。[ADR 2026-11-07 health-review-integration](../../adr/20
 ## 未解決事項
 - 上の task-dispatch の試験 1 件は全体の実行でだけ落ちることがある（原因は未確認）。
 - task-worker の browser 試験 `launcher_credential_login_forged_sink_frame_never_reaches_chrome` は高負荷の全体実行でだけ落ちることがある（原因は上の推定で、未確認）。
-- celeris-campaign の `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid` も全体の実行でだけ落ちることがある（daemon が healthy になる前に終わる。原因は未確認）。
+- celeris-campaign の `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid` も全体の実行でだけ落ちることがある。2 回続けて落ちた（再実行 1 回目と、2 回目の run の後の check）。daemon が healthy になる前に `owned_alive` が偽になる。原因は上の推定で、未確認。
 - review 方針（`review_policy`）は今は planner の context にだけある。worker・reviewer の run には repo 固有の節が出ない。dispatcher が base 側の方針を読んで `review_policy` を埋める配線（`planner_flow.rs` は今 `None`）は dispatch の unit の範囲。
 - Aider には CLAUDE.md が届かない（ADR D1.6）。汎用規約は `build_prompt` を通るので Aider にも届く。
 
 ## 提案
 - browser の担当で `launcher_credential_login_forged_sink_frame_never_reaches_chrome` を決定的にする。案: `run_login` の Err の code が偽 broker の経路のもの（`Unauthorized`）であることを確かめ、偽 broker の `start` が呼ばれたことを別の印で待つ。task-worker を変える WU は、この試験の揺れで必須検査が落ちうる。
+- campaign の担当で measure-launcher.sh の起動の照合を直す。案: health 待ちの間は cmdline の照合を 1 回の偽で「落ちた」と判定しない。`/proc/<pid>/stat` の状態が Z・X か、pid が消えたときだけ落ちたと判定し、cmdline と実行像の照合は health が答えた後に行う。試験は、exec の途中で止めたまま health 待ちを回し、偽の「落ちた」が出ないことを決定的に確かめる（SIGSTOP か試験用の遅延フックを使う）。task-worker を変える WU は、この試験の揺れでも必須検査が落ちうる（この WU の全体実行 7 回のうち 2 回が、この試験で落ちた）。

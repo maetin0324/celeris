@@ -14,7 +14,7 @@ WorkUnit `rules-structure`（G1 の工程「rule の実装」）。基準は `$C
 ## 結論
 - `scripts/dev/repo-health/rules/deps.py` に `deps.violation`・`deps.cycle`、`rules/size_growth.py` に `size.responsibility-growth` を置いた。3 つとも必須（既定 required）で、静的推定の候補ではない（candidate=false）。
 - 依存の辺は `health/lang_deps.py` が作る。B0 の `module-deps-measure.py` の方法（use の展開・src 直下の module 単位・Tarjan）を汎用化した。B0 の file は変えていない。
-- 構造指標の本体の行・試験の範囲・block の終わりは `scripts/dev/source-size-report.py` の関数を `health/source_size.py` から import して使う（二重実装なし）。そのため `source-size-report.py` の `analyze_rust_file` から `rust_test_mask` を切り出した。出力は変わらない（`--format json` の出力を変更前と `cmp` して一致、`test_source_size*` 60 件 OK）。
+- 構造指標の本体の行・試験の範囲・block の終わりは `scripts/dev/source-size-report.py` の関数を `health/source_size.py` から import して使う（二重実装なし）。`source-size-report.py` は WU の範囲外なので変えない（初回の提出で `rust_test_mask` を切り出したが、範囲の check が `scripts/dev/source-size-report.py` を範囲外として落としたため戻した）。行ごとの `#[cfg(test)]` mask は `analyze_rust_file` が返さないので、`health/source_size.py` が同じ判定（`CFG_TEST_RE`・`MOD_DECL_RE`・`block_end` は import）で作り、試験の行数が `analyze_rust_file(lines).inline_test_lines` と一致することを毎回確かめる。食い違えば `Unsupported(source_size_mask_mismatch)` にする。
 - この repo への実行（既定 profile）: deps.violation は not_applicable（層の宣言が無い）、deps.cycle は existing 18 件で pass、size.responsibility-growth は existing 104 件で pass。
 
 ## rule の決めごと
@@ -33,6 +33,7 @@ WorkUnit `rules-structure`（G1 の工程「rule の実装」）。基準は `$C
 ## 変更（commit の件名）
 - `phase G1: rule deps.violation・deps.cycle・size.responsibility-growth と試験`
 - `phase G1: rules-structure の進捗`
+- `phase G1: source-size-report.py を戻し、cfg(test) の mask を repo-health 側で作って行数を照合する`
 
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
 - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → exit 0（32 tests。structure 10 件: Python 循環の新規（path と行）、既存循環の放置（existing・pass）、循環の拡大（worsened）、Rust の module 循環と再 export・cfg(test) の除外、層違反の new/existing と層なしの not_applicable、Cargo の層違反と crate 循環・dev 依存の除外、設定誤りの unknown、閾値の new/worsened/existing、分割だけの見かけの改善（同じ fingerprint の existing）と分割＋悪化（worsened）、inline 試験の除外）
@@ -50,5 +51,6 @@ WorkUnit `rules-structure`（G1 の工程「rule の実装」）。基準は `$C
 - この変更での `test-affected.sh` の実行には `test_repo_health*.py` が入らなかった（走ったのは scripts の unittest 60 件など）。上の unittest を別に実行した。
 
 ## 提案
+- `source-size-report.py` に行ごとの mask を返す関数（`rust_test_mask`）を置き、`health/source_size.py` の写しの判定を消す（write_set に source-size-report.py を含む task で行う）。
 - celeris-profile WorkUnit で、`profiles/celeris.toml` に crate の層（B0 の module-deps.json の crate_deps に合う向き）と size の上限を書き、`policy_paths` に `scripts/dev/source-size-report.py` を足す（rule がこの file の分類を使うため）。
 - `test-affected.sh` の対象に `scripts/dev/repo-health/` の変更 → `test_repo_health*.py` を足す（G1 の write_set の外なので別 task）。

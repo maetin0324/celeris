@@ -2,7 +2,7 @@
 
 size.responsibility-growth と deps.* は、本体の行・試験の行の分け方を source-size-report.py から import して
 使う（二重に実装しない）: path の粗い分類 `classify_path`、外部試験 `is_external_rust_test`・`is_ts_test`、
-Rust の文字列・注釈の範囲 `rust_string_mask`、`#[cfg(test)]` の範囲 `rust_test_mask`、
+Rust の文字列・注釈の範囲 `rust_string_mask`、`#[cfg(test)]` の範囲（`analyze_rust_file` と同じ判定で行ごとの mask を作り、行数を照合する）、
 rustfmt 前提の block の終わり `block_end`。
 
 読み込むのは検査器と同じ checkout の file（`<検査器の dir>/../source-size-report.py`）。無ければ
@@ -45,7 +45,38 @@ def rust_string_mask(lines: list[str]) -> list[bool]:
 
 
 def rust_test_mask(lines: list[str], str_mask: list[bool] | None = None) -> list[bool]:
-    return module().rust_test_mask(lines, str_mask)[0]
+    """`#[cfg(test)]` の範囲の行の mask。
+
+    source-size-report.py の `analyze_rust_file` は行数だけを返し、行ごとの mask を返さない。この WorkUnit は
+    source-size-report.py を変えられないので、同じ判定（`CFG_TEST_RE`・`MOD_DECL_RE`・`block_end` は
+    source-size-report.py のもの）で mask を作り、試験の行数が `analyze_rust_file(lines).inline_test_lines`
+    と一致することを毎回確かめる。食い違えば Unsupported にして、黙って別の数え方をしない。"""
+    mod = module()
+    if str_mask is None:
+        str_mask = mod.rust_string_mask(lines)
+    n = len(lines)
+    mask = [False] * n
+    for i, l in enumerate(lines):
+        if not mod.CFG_TEST_RE.match(l):
+            continue
+        j = i + 1
+        while j < n and (lines[j].strip().startswith("#[") or not lines[j].strip()):
+            j += 1
+        if j >= n:
+            continue
+        m = mod.MOD_DECL_RE.match(lines[j])
+        if m and m.group(3) == "{":
+            end = mod.block_end(lines, j + 1, len(m.group(1)), str_mask)
+        elif m and m.group(3) == ";":
+            end = j
+        else:
+            indent = len(lines[j]) - len(lines[j].lstrip())
+            end = j if lines[j].rstrip().endswith(";") else mod.block_end(lines, j + 1, indent, str_mask)
+        for k in range(i, end + 1):
+            mask[k] = True
+    if sum(mask) != mod.analyze_rust_file(lines).inline_test_lines:
+        raise Unsupported("source_size_mask_mismatch")
+    return mask
 
 
 @functools.lru_cache(maxsize=None)

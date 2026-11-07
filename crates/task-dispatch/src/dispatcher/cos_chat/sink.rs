@@ -269,6 +269,9 @@ impl ChatRunSink {
         });
     }
 
+    /// (stub: 接続前) attempt ごとの usage を永続化する。
+    pub(crate) fn record_attempt_usage(&self, _usage: Option<Usage>) {}
+
     /// run 途中の session の出来事の写し。
     pub(crate) fn signals(&self) -> ChatSessionSignals {
         self.state().signals.clone()

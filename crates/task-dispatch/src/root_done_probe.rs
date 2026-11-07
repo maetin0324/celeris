@@ -6,12 +6,16 @@
 //! 名前の末尾が `_rows`・`_calls`・`_max`。store の呼び出しは処理（この thread の CPU 時間）と待ち（経過時間の
 //! 残り。lock・`busy_timeout`・disk・run queue の待ち）に分ける（D2、付記「thread の CPU 時間」）。
 //! 測りながら事実を集める `collect_facts`（root_done の D4）と、そこから呼ぶ `progress_markdown` もここに置く。
+//! new の行の delivery の待ち（`facts_unless_delivery_waits`）と `progress_markdown` の git の起動回数は
+//! ADR 2026-11-07-root-done-tick-fix で決めた（待ちの間は事実を作らない・候補を git grep で絞る）。
 
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use task_core::{DeliveryStore, SqliteStore, TaskId, TaskStore, WorkspaceSpec};
+use task_core::{
+    Delivery, DeliveryState, DeliveryStore, SqliteStore, TaskId, TaskStore, WorkspaceSpec,
+};
 use task_ops::root_done::{self, ChildFact, RootDoneFacts, RootDoneInputs};
 
 /// これを超えた `root_done_tick` だけ内訳を出す（D3）。`CosChatLaunch::root_done_probe_threshold` の既定値。
@@ -89,6 +93,8 @@ pub(crate) struct FactsProbe {
     /// `progress_markdown` の時間（git の process を含む）と git の起動回数。
     pub(crate) progress_us: u64,
     pub(crate) progress_git_calls: u64,
+    /// delivery の待ちで事実を作らずに戻った行の数（ADR 2026-11-07-root-done-tick-fix D4）。
+    pub(crate) delivery_wait_rows: u64,
 }
 
 impl FactsProbe {
@@ -116,6 +122,9 @@ impl FactsProbe {
         self.progress_git_calls = self
             .progress_git_calls
             .saturating_add(other.progress_git_calls);
+        self.delivery_wait_rows = self
+            .delivery_wait_rows
+            .saturating_add(other.delivery_wait_rows);
     }
 }
 
@@ -219,6 +228,7 @@ impl RootDoneProbe {
             ("cos.root_done.open_rows", self.open_rows),
             ("cos.root_done.open.wait_us", self.open.wait_us),
             ("cos.root_done.open.work_us", self.open.work_us),
+            ("cos.root_done.delivery_wait_rows", f.delivery_wait_rows),
             ("cos.root_done.facts_calls", f.get.calls),
             ("cos.root_done.facts.get.wait_us", f.get.wait_us),
             ("cos.root_done.facts.get.work_us", f.get.work_us),
@@ -231,6 +241,10 @@ impl RootDoneProbe {
                 f.events_for.work_us,
             ),
             ("cos.root_done.facts.events_for_max", f.events_for_max),
+            (
+                "cos.root_done.facts.delivery_get_calls",
+                f.delivery_get.calls,
+            ),
             (
                 "cos.root_done.facts.delivery_get.wait_us",
                 f.delivery_get.wait_us,
@@ -257,6 +271,10 @@ impl RootDoneProbe {
 /// 統合 commit の tree（delivery の head）から、この task を `tasks:` に持つ進捗ファイルを探して本文を返す。
 /// 読めなければ `None`（事実には「不明」と出る）。`git_calls` に起こした git の process の数を足す
 /// （ADR 2026-11-07-root-done-tick-phase-timing D1）。
+///
+/// ADR 2026-11-07-root-done-tick-fix D2/D3: `git grep` 1 回で `tasks:` の行にこの id を持つ file だけを候補にし、
+/// 候補を tree の名前順に `git show` して front matter を確かめる。git の起動は「1 + 候補の数」で、
+/// 進捗ファイルの数に比例しない。返す file は名前順で最初に `tasks:` にこの id を持つ file（今までと同じ）。
 fn progress_markdown(
     repo: &std::path::Path,
     head: &str,
@@ -275,15 +293,25 @@ fn progress_markdown(
             .success()
             .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
     };
+    let pattern = format!("^[[:space:]]*tasks:.*{task_id}");
     let listing = git(&[
-        "ls-tree",
-        "-r",
-        "--name-only",
+        "grep",
+        "-l",
+        "-z",
+        "-E",
+        "--no-color",
+        "-e",
+        &pattern,
         head,
         "--",
         "agent-docs/progress",
     ])?;
-    for path in listing.lines().filter(|p| p.ends_with(".md")) {
+    let prefix = format!("{head}:");
+    for path in listing
+        .split('\0')
+        .filter_map(|entry| entry.strip_prefix(&prefix))
+        .filter(|p| p.ends_with(".md"))
+    {
         let Some(text) = git(&["show", &format!("{head}:{path}")]) else {
             continue;
         };
@@ -294,11 +322,54 @@ fn progress_markdown(
     None
 }
 
+/// ADR 2026-11-07-root-done-tick-fix D1: new の行は先に delivery だけを読む。delivery が待ちの状態
+/// （取り込み・release 準備）で `within_wait`（待ちの上限の前）なら、事実を作らずに `None` を返す。
+/// 待ちでなければ、読んだ delivery をそのまま使って事実を 1 回作る。
+pub(crate) fn facts_unless_delivery_waits(
+    store: &SqliteStore,
+    task_id: TaskId,
+    within_wait: bool,
+    probe: &mut FactsProbe,
+) -> Result<Option<RootDoneFacts>, String> {
+    let delivery = probe
+        .delivery_get
+        .time(|| store.delivery_get(task_id))
+        .map_err(|e| e.to_string())?;
+    let waiting = matches!(
+        delivery.as_ref().map(|d| d.state),
+        Some(
+            DeliveryState::Reviewing
+                | DeliveryState::MergeQueued
+                | DeliveryState::Merging
+                | DeliveryState::Preparing
+        )
+    );
+    if waiting && within_wait {
+        probe.delivery_wait_rows += 1;
+        return Ok(None);
+    }
+    facts_with_delivery(store, task_id, delivery, probe).map(Some)
+}
+
 /// D4: DB の行と進捗ファイルだけから事実を集める。段の時間は `probe` に足す
 /// （ADR 2026-11-07-root-done-tick-phase-timing D1）。
 pub(crate) fn collect_facts(
     store: &SqliteStore,
     task_id: TaskId,
+    probe: &mut FactsProbe,
+) -> Result<RootDoneFacts, String> {
+    let delivery = probe
+        .delivery_get
+        .time(|| store.delivery_get(task_id))
+        .map_err(|e| e.to_string())?;
+    facts_with_delivery(store, task_id, delivery, probe)
+}
+
+/// `collect_facts` の残り（delivery は呼び出し側が読んだもの）。
+fn facts_with_delivery(
+    store: &SqliteStore,
+    task_id: TaskId,
+    delivery: Option<Delivery>,
     probe: &mut FactsProbe,
 ) -> Result<RootDoneFacts, String> {
     let task = probe
@@ -311,10 +382,6 @@ pub(crate) fn collect_facts(
         .time(|| store.events_for(task_id))
         .map_err(|e| e.to_string())?;
     probe.events_for_max = probe.events_for_max.max(events.len() as u64);
-    let delivery = probe
-        .delivery_get
-        .time(|| store.delivery_get(task_id))
-        .map_err(|e| e.to_string())?;
     let children: Vec<ChildFact> = probe
         .children
         .time(|| store.children(task_id))
@@ -368,6 +435,76 @@ mod tests {
         assert!(slept.wait_us + slept.work_us >= 20_000, "elapsed {slept:?}");
         assert!(slept.wait_us >= 10_000, "{slept:?}");
         assert!(slept.work_us < 10_000, "{slept:?}");
+    }
+
+    fn git(dir: &std::path::Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    /// ADR 2026-11-07-root-done-tick-fix D2: `tasks:` の行にこの id を持つ file だけを候補にして、名前順で最初に
+    /// front matter の `tasks:` がこの id を持つ file を返す。本文だけで触れる file・別の id の file・`.md` 以外は
+    /// show しない。git の起動は grep 1 回 + 候補の数で、別の task の file の数に依らない。
+    #[test]
+    fn progress_markdown_shows_only_files_whose_tasks_line_has_the_id() {
+        let dir = crate::test_support::WritableTempDir::new();
+        let repo = dir.path();
+        let progress = repo.join("agent-docs/progress");
+        std::fs::create_dir_all(progress.join("2026-11-07-wu")).expect("dirs");
+        let id = TaskId::new();
+        let other = TaskId::new();
+        let write = |name: &str, body: String| {
+            std::fs::write(progress.join(name), body).expect("write");
+        };
+        for i in 0..40 {
+            write(
+                &format!("2026-01-01-other-{i:02}.md"),
+                format!("---\ntasks: [{other}]\n---\n# other\n"),
+            );
+        }
+        write(
+            "2026-02-01-body.md",
+            format!("---\ntasks: [{other}]\n---\n# 前の task {id} の続き\n"),
+        );
+        // 候補だが front matter の外: show して外す。
+        write(
+            "2026-03-01-outside.md",
+            format!("---\ntasks: [{other}]\n---\n例:\ntasks: [{id}]\n"),
+        );
+        write("2026-04-01-notes.txt", format!("tasks: [{id}]\n"));
+        write(
+            "2026-11-07-wu/a.md",
+            format!("---\ntasks: [\"{id}\"]\n---\n# 最初の file\n"),
+        );
+        write(
+            "2026-12-31-later.md",
+            format!("---\ntasks: [{id}]\n---\n# 後の file\n"),
+        );
+        git(repo, &["init", "-q"]);
+        git(repo, &["add", "-A"]);
+        git(repo, &["commit", "-q", "-m", "progress"]);
+        let head = git(repo, &["rev-parse", "HEAD"]);
+
+        let mut calls = 0;
+        let text = progress_markdown(repo, &head, id, &mut calls).expect("found");
+        assert!(text.contains("# 最初の file"), "{text}");
+        assert_eq!(calls, 3, "grep + outside.md + 2026-11-07-wu/a.md");
+
+        let mut calls = 0;
+        assert!(progress_markdown(repo, &head, TaskId::new(), &mut calls).is_none());
+        assert_eq!(calls, 1, "grep only");
+
+        let mut calls = 0;
+        assert!(progress_markdown(repo, "0000000", id, &mut calls).is_none());
+        assert_eq!(calls, 1, "a head git cannot read");
     }
 
     #[test]

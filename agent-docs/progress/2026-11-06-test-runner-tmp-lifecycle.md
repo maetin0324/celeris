@@ -175,3 +175,14 @@ updated: 2026-11-07
 ### 提案（追加）
 - daemon の決定的 check の timeout を SIGTERM → grace → SIGKILL の 2 段にする案は、上の「提案」のとおり別 task で判断する（設計変更なので、ここでは実装しない）。
 - release gate の後に、`tr-<uid>` 配下の残存数を見る検査を足すかは、人が移行手順の運用結果を見て決める。
+
+## verify-record: 再実行（2026-11-07、提出時の HEAD で実行）
+
+追加実装が無いことの確認は `$CELERIS_WU_BASE` を基準にする。`git diff --quiet $CELERIS_WU_BASE -- crates/ scripts/ web/` → exit 0（差分は `agent-docs/` だけ）。
+`git merge-base HEAD main` は前 phase で統合済みの scripts/ の差分を含むため、差分検査には使わず、記録用の基準としてだけ書く。
+
+- 回帰試験: `bash scripts/dev/tests/test-runner-tmp-lifecycle.sh && bash scripts/dev/tests/test-runner-tmp-repro.sh` → exit 0（repro は 18 case 一致、残るのは SIGKILL の 4 case）。
+- 軽量試験: `sh scripts/dev/tests/test-affected-list.sh && bash scripts/dev/test-cli-binary-preparation.sh && bash scripts/dev/tests/test-parallel-fail-names.sh` → exit 0。
+- 必須検査: `bash scripts/dev/test-affected.sh` → exit 0（試験対象の変更なし）、`cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。
+- 文書検査: `check-doc-links.sh`・`check-adr-numbers.sh`・`progress-index.sh --check` → いずれも exit 0。
+- SIGKILL は捕捉できないため、その場では消えず、次回の runner 起動時の回収で消える（上の「残る限界」のとおり）。

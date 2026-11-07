@@ -1,0 +1,35 @@
+{
+  "workspace_root": "@ROOT@",
+  "workspace_members": ["alpha 0.1.0 (path+file://@ROOT@/crates/alpha)", "beta 0.1.0 (path+file://@ROOT@/crates/beta)"],
+  "packages": [
+    {
+      "id": "alpha 0.1.0 (path+file://@ROOT@/crates/alpha)",
+      "name": "alpha",
+      "manifest_path": "@ROOT@/crates/alpha/Cargo.toml",
+      "targets": [
+        {"kind": ["lib"], "crate_types": ["lib"], "name": "alpha", "src_path": "@ROOT@/crates/alpha/src/lib.rs", "test": true},
+        {"kind": ["bin"], "crate_types": ["bin"], "name": "alpha-cli", "src_path": "@ROOT@/crates/alpha/src/main.rs", "test": true},
+        {"kind": ["example"], "crate_types": ["bin"], "name": "demo", "src_path": "@ROOT@/crates/alpha/examples/demo.rs", "test": false},
+        {"kind": ["bench"], "crate_types": ["bin"], "name": "speed", "src_path": "@ROOT@/crates/alpha/benches/speed.rs", "test": false},
+        {"kind": ["test"], "crate_types": ["bin"], "name": "api", "src_path": "@ROOT@/crates/alpha/tests/api.rs", "test": true},
+        {"kind": ["test"], "crate_types": ["bin"], "name": "store", "src_path": "@ROOT@/crates/alpha/tests/store.rs", "test": true},
+        {"kind": ["test"], "crate_types": ["bin"], "name": "nested", "src_path": "@ROOT@/crates/alpha/tests/nested/main.rs", "test": true}
+      ]
+    },
+    {
+      "id": "beta 0.1.0 (path+file://@ROOT@/crates/beta)",
+      "name": "beta",
+      "manifest_path": "@ROOT@/crates/beta/Cargo.toml",
+      "targets": [
+        {"kind": ["proc-macro"], "crate_types": ["proc-macro"], "name": "beta", "src_path": "@ROOT@/crates/beta/src/lib.rs", "test": true},
+        {"kind": ["custom-build"], "crate_types": ["bin"], "name": "build-script-build", "src_path": "@ROOT@/crates/beta/build.rs", "test": false}
+      ]
+    },
+    {
+      "id": "dep 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+      "name": "dep",
+      "manifest_path": "/elsewhere/dep/Cargo.toml",
+      "targets": [{"kind": ["lib"], "crate_types": ["lib"], "name": "dep", "src_path": "/elsewhere/dep/src/lib.rs", "test": true}]
+    }
+  ]
+}

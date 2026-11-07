@@ -172,7 +172,7 @@ pub use route_launch::{
 pub use route_select::{
     RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for, route_select,
 };
-pub use route_select::{account_adapter_for_source_kind, slot_only_wait, source_account_pool};
+pub use route_select::{account_adapter_for_source_kind, source_account_pool};
 pub use snapshot::SnapshotPublisher;
 
 #[cfg(test)]

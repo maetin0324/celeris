@@ -39,3 +39,7 @@ completed: 2026-11-07
 
 ## 提案
 - slot-wait unit は `slot_only_wait(&failure, &trace)` を routes.rs の失敗分岐で呼び、`supply_failure` の文字列判定とは分ける。`max_cos_runs` に達した CoS run は route_select の前に `CosRunLimit` 相当で待つ。
+
+## 範囲 check の修正（再実行）
+- `slot_only_wait` の `dispatcher.rs`・`lib.rs` への再公開は範囲外（check が dispatcher.rs を弾く）ため外した。試験は `crate::dispatcher::route_select::slot_only_wait` を直接使う。再公開は後続 unit（slot-wait）が行う。非 test build の dead_code は `cfg_attr(not(test), allow(dead_code))` で抑えた。
+- 提出時の HEAD で `cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`test-affected.sh` 7794 passed / 0 failed。範囲外 path なし。

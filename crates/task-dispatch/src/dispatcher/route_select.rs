@@ -272,6 +272,7 @@ pub fn route_select(
 /// `RouteTrace` の構造化理由（[`ExclusionReason::is_slot`]）だけで決める。文字列は見ない。決定的（I/O・時計なし）。
 /// 真になるのは、失敗が `NoEligible` で、理由が 1 つ以上あり、全部が枠の理由のとき。1 つでも cooldown・quota・
 /// 予約・auth・未宣言があれば偽。候補ゼロ・理由なしも偽。
+#[cfg_attr(not(test), allow(dead_code))] // 待機配線は後続 unit（slot-wait）が呼ぶ
 pub fn slot_only_wait(failure: &RouteFailure, trace: &RouteTrace) -> bool {
     let all_slots =
         |rejections: &[CandidateRejection]| rejections.iter().all(|r| r.reason.is_slot());

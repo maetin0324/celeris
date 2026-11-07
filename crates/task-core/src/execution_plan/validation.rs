@@ -430,9 +430,7 @@ impl std::fmt::Display for PlanValidationError {
                     "invalid work unit key: {key:?} (must match [a-z0-9-]{{1,32}})"
                 )
             }
-            Self::DuplicateKey { key } => {
-                write!(f, "duplicate work unit key: {key}")
-            }
+            Self::DuplicateKey { key } => write!(f, "duplicate work unit key: {key}"),
             Self::UnknownDependency { key, depends_on } => {
                 write!(f, "work unit {key} depends on unknown key {depends_on}")
             }
@@ -509,21 +507,15 @@ impl std::fmt::Display for PlanValidationError {
             Self::PhasesNotAllowedInV1 => {
                 write!(f, "phases must be empty in {EXECUTION_PLAN_SCHEMA}")
             }
-            Self::NoPhases => {
-                write!(f, "phases must not be empty in {EXECUTION_PLAN_SCHEMA_V2}")
-            }
-            Self::TooManyPhases { count, max } => {
-                write!(f, "too many phases: {count} > {max}")
-            }
+            Self::NoPhases => write!(f, "phases must not be empty in {EXECUTION_PLAN_SCHEMA_V2}"),
+            Self::TooManyPhases { count, max } => write!(f, "too many phases: {count} > {max}"),
             Self::InvalidPhaseKey { key } => {
                 write!(
                     f,
                     "invalid phase key: {key:?} (must match [a-z0-9-]{{1,32}})"
                 )
             }
-            Self::DuplicatePhaseKey { key } => {
-                write!(f, "duplicate phase key: {key}")
-            }
+            Self::DuplicatePhaseKey { key } => write!(f, "duplicate phase key: {key}"),
             Self::WorkUnitPhaseNotAllowedInV1 { key } => {
                 write!(
                     f,
@@ -558,18 +550,14 @@ impl std::fmt::Display for PlanValidationError {
                     "children are only allowed in {EXECUTION_PLAN_SCHEMA_V2} (must be empty in v1)"
                 )
             }
-            Self::TooManyChildren { count, max } => {
-                write!(f, "too many children: {count} > {max}")
-            }
+            Self::TooManyChildren { count, max } => write!(f, "too many children: {count} > {max}"),
             Self::InvalidChildKey { key } => {
                 write!(
                     f,
                     "invalid child key: {key:?} (must match [a-z0-9-]{{1,32}})"
                 )
             }
-            Self::DuplicateChildKey { key } => {
-                write!(f, "duplicate child key: {key}")
-            }
+            Self::DuplicateChildKey { key } => write!(f, "duplicate child key: {key}"),
             Self::UnknownChildDependency { key, depends_on } => {
                 write!(f, "child {key} depends on unknown child {depends_on}")
             }
@@ -579,9 +567,7 @@ impl std::fmt::Display for PlanValidationError {
             Self::ChildNoAcceptance { key } => {
                 write!(f, "child {key}: acceptance must not be empty")
             }
-            Self::ChildInvalidAcceptance { key, detail } => {
-                write!(f, "child {key}: {detail}")
-            }
+            Self::ChildInvalidAcceptance { key, detail } => write!(f, "child {key}: {detail}"),
             Self::ReservedKind { key } => {
                 write!(
                     f,
@@ -620,26 +606,18 @@ impl std::fmt::Display for PlanValidationError {
                     "{field} is not allowed in {EXECUTION_PLAN_SCHEMA_V3} ({hint})"
                 )
             }
-            Self::NoStages => {
-                write!(f, "stages must not be empty in {EXECUTION_PLAN_SCHEMA_V3}")
-            }
-            Self::TooManyStages { count, max } => {
-                write!(f, "too many stages: {count} > {max}")
-            }
+            Self::NoStages => write!(f, "stages must not be empty in {EXECUTION_PLAN_SCHEMA_V3}"),
+            Self::TooManyStages { count, max } => write!(f, "too many stages: {count} > {max}"),
             Self::InvalidStageKey { key } => write!(
                 f,
                 "invalid stage key: {key:?} (must match [a-z0-9-]{{1,32}})"
             ),
-            Self::DuplicateStageKey { key } => {
-                write!(f, "duplicate stage key: {key}")
-            }
+            Self::DuplicateStageKey { key } => write!(f, "duplicate stage key: {key}"),
             Self::InvalidStageKind { key } => write!(
                 f,
                 "stage {key}: kind \"task\" / \"integrate\" cannot be used for a stage"
             ),
-            Self::NoUnits => {
-                write!(f, "units must not be empty in {EXECUTION_PLAN_SCHEMA_V3}")
-            }
+            Self::NoUnits => write!(f, "units must not be empty in {EXECUTION_PLAN_SCHEMA_V3}"),
             Self::UnknownUnitStage { key, stage } => {
                 write!(f, "unit {key}: unknown stage {stage:?}")
             }
@@ -685,9 +663,7 @@ impl std::fmt::Display for PlanValidationError {
                 f,
                 "unit {key}: a unit with kind \"task\" must have at least one acceptance criterion"
             ),
-            Self::TaskUnitInvalidAcceptance { key, detail } => {
-                write!(f, "unit {key}: {detail}")
-            }
+            Self::TaskUnitInvalidAcceptance { key, detail } => write!(f, "unit {key}: {detail}"),
             Self::TaskUnitFieldNotAllowed { key, field } => write!(
                 f,
                 "unit {key}: a unit with kind \"task\" must not set {field} (the child task decides it)"
@@ -717,9 +693,7 @@ impl std::fmt::Display for PlanValidationError {
                 "unit {key}: adopt is only allowed in a plan written by a human (origin human) (a done unit copied verbatim from the previous version may keep its adopt)"
             ),
             Self::InvalidDecision { detail } => write!(f, "{detail}"),
-            Self::DuplicateDecisionKey { key } => {
-                write!(f, "duplicate decision key: {key}")
-            }
+            Self::DuplicateDecisionKey { key } => write!(f, "duplicate decision key: {key}"),
             Self::UnknownNeededBefore { key, target } => write!(
                 f,
                 "decision {key}: needed_before {target:?} is neither a unit key nor stage:<key> of this plan"

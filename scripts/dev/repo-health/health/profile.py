@@ -18,7 +18,9 @@ profile の項目（未知の項目は読み込みエラー。破壊的変更の
     [adapters] enabled = [...]         # 使う言語 adapter（既定は全部）。外した言語は adapter 無し扱い
                ignore_languages = [...]  # adapter の無い言語でも unsupported にしない言語（理由は profile のコメント）
     [classes] test = ["<regex>"] ...   # 種類の path 規則の追加（generated・fixture・migration・test・docs）
-    [arch_map] path = "<repo path>"    # architecture-map の path（rules-archmap が読む）
+    [arch_map] path = "<repo path>"    # architecture-map の path（rules/arch_map.py が読む）
+               reference = "<repo path>"  # 任意。地図と比べる capability の所在の JSON（policy の側で読む）
+               stale_status = "<regex>"   # 任意。ADR の状態行がこれに当たれば arch-map.stale
     [rules."<id>"]                     # rule ごとの設定
         enabled = true|false           # false なら not_applicable（disabled_by_profile）
         required = true|false          # 既定は rule の既定
@@ -171,8 +173,14 @@ def validate(data: dict, where: str) -> None:
             raise _err(where, f"classes に未知の種類 {bad}")
         for k, v in data["classes"].items():
             _check_regexes(f"{where}:classes.{k}", v)
-    if "arch_map" in data and set(data["arch_map"]) - {"path"}:
-        raise _err(where, "arch_map は path だけ")
+    if "arch_map" in data:
+        am = data["arch_map"]
+        if set(am) - {"path", "reference", "stale_status"}:
+            raise _err(where, "arch_map は path・reference・stale_status だけ")
+        if not all(isinstance(v, str) for v in am.values()):
+            raise _err(where, "arch_map の値は文字列")
+        if "stale_status" in am:
+            _check_regexes(f"{where}:arch_map.stale_status", [am["stale_status"]])
     for rid, cfg in data.get("rules", {}).items():
         if not _RULE_ID.match(rid):
             raise _err(where, f"未知の rule {rid}")

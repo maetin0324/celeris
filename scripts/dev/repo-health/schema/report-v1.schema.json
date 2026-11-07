@@ -189,7 +189,7 @@
       "required": ["rule_id", "fingerprint", "severity", "delta", "candidate", "evidence", "snapshot", "scope", "exception", "rationale"],
       "properties": {
         "rule_id": { "$ref": "#/$defs/rule_id" },
-        "fingerprint": { "type": "string", "pattern": "^[a-z0-9.-]+:[0-9a-f]{16,64}$", "description": "<rule_id>:<hash>。rule と正規化した evidence（path・symbol。行番号は含めない）から決めた安定な鍵。base との突き合わせに使う" },
+        "fingerprint": { "type": "string", "pattern": "^[a-z0-9._-]+:[0-9a-f]{16,64}$", "description": "<rule_id>:<hash>。rule と正規化した evidence（path・symbol。行番号は含めない）から決めた安定な鍵。base との突き合わせに使う" },
         "severity": { "enum": ["error", "warning", "info"] },
         "delta": { "enum": ["new", "worsened", "existing"], "description": "base にも同じ fingerprint があれば existing、値が悪化していれば worsened、無ければ new" },
         "candidate": { "type": "boolean", "description": "静的推定（dup.*・link.unlinked・migration.remnant）は true。候補は削除・書き換えの対象にしない。severity は warning か info" },

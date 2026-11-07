@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from . import TOOL_VERSION
 from .adapters import Classifier, FileInfo
 from .profile import Exception_, Profile
-from .rule import Hit, Rule, Unknown, Unsupported
+from .rule import Hit, NotApplicable, Rule, Unknown, Unsupported
 from .snapshot import Snapshot, Tree, UsageError
 
 TOOL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -209,6 +209,8 @@ def evaluate_rule(rule: Rule, ctx: Context) -> tuple[str, str, list[dict]]:
         base_hits: dict[str, Hit] = {}
         if not rule.head_only and snap.base_tree is not None:
             base_hits = _collect(rule, ctx, snap.base_tree)
+    except NotApplicable as exc:
+        return "not_applicable", str(exc.args[0] if exc.args else "not_applicable"), []
     except Unknown as exc:
         return "unknown", str(exc.args[0] if exc.args else "unknown"), []
     except Unsupported as exc:

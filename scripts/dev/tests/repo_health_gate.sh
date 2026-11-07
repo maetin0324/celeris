@@ -6,6 +6,8 @@
 #   (3) 欠測: shallow clone で base に届かなければ exit 2（全 rule unsupported）
 #   (4) policy の弱化（必須 rule を外す・包んだ検査を exit 0 に書き換える）で exit 1（policy.changed）
 #   (5) doc-only の変更は軽量経路: 構造の rule（source-size）の command を起こさず、unit 試験も走らせず exit 0
+#   (6) policy の file だけの変更（作業ツリー・commit 済み）は exit 0 で `policy review required: <files>` を出し、
+#       report の verdict は fail のまま。policy の file 以外も変えれば exit 1（ADR 2026-11-07-health-review-integration D6.2）
 # 外部ネットワークに出ない。CPU を焼く負荷はかけない。
 set -eu
 
@@ -120,5 +122,22 @@ run 0 "(5) doc-only"
 [ ! -f "$GATE_MARK" ] || fail "(5) doc-only で構造の検査が走った"
 grep -q 'doc-only（検査器の unit 試験を省く）' "$tmp/log" || fail "(5) 軽量経路で終わっていない"
 echo "OK (5) doc-only change takes the light path"
+
+# (6) policy の file だけの変更: 作業ツリーでも commit 済みでも exit 0。verdict は fail のまま。ほかの file も変えれば exit 1
+git checkout -q -- README.md
+rm guide.md
+echo '# 注記だけ足す' >>scripts/dev/check-bad.sh
+run 0 "(6a) policy-only worktree"
+grep -qx 'policy review required: scripts/dev/check-bad.sh' "$tmp/log" || { cat "$tmp/log" >&2; fail "(6a) policy review required が出ていない"; }
+[ "$(field 'r["summary"]["verdict"]')" = fail ] || fail "(6a) report の verdict が fail でない"
+[ "$(field 'r["policy"]["changed"]')" = True ] || fail "(6a) policy.changed が立っていない"
+git commit -qam "policy only"
+run 0 "(6b) policy-only commit"
+grep -qx 'policy review required: scripts/dev/check-bad.sh' "$tmp/log" || fail "(6b) policy review required が出ていない"
+echo 'print("z")' >app.py
+run 1 "(6c) policy and code"
+! grep -q 'policy review required' "$tmp/log" || fail "(6c) policy 以外も変えたのに policy review required が出た"
+git checkout -q -- app.py
+echo "OK (6) policy-only change -> exit 0 with 'policy review required', mixed change -> exit 1"
 
 echo "repo_health_gate: all checks passed"

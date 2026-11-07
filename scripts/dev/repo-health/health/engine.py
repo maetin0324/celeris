@@ -168,6 +168,24 @@ def is_fail_grade(f: dict) -> bool:
     return f["severity"] == "error" and f["delta"] in ("new", "worsened") and f["exception"] is None
 
 
+def policy_review_files(report: dict, changed: list[str]) -> list[str] | None:
+    """policy の file だけの変更か（ADR 2026-11-07-health-review-integration D6.2）。
+
+    verdict が fail で、fail 級の finding が policy.changed だけ、変更 path（changed。base と head の差分の全部）が
+    全部 policy.files にあるとき、変えた policy の file を返す。ほかは None（report の verdict は変えない）。
+    """
+    if report["summary"]["verdict"] != "fail" or not changed:
+        return None
+    if any(r["required"] and r["status"] == "fail" and r["id"] != "policy.changed" for r in report["rules"]):
+        return None
+    if any(is_fail_grade(f) and f["rule_id"] != "policy.changed" for f in report["findings"]):
+        return None
+    policy_paths = {f["path"] for f in report["policy"]["files"]}
+    if not report["policy"]["changed"] or not set(changed) <= policy_paths:
+        return None
+    return sorted(changed)
+
+
 def _adapter_gap(rule: Rule, ctx: Context) -> str | None:
     """構造 rule の対象 diff に adapter の無い言語があれば adapter_missing:<lang,...>。"""
     if rule.kind != "structure":

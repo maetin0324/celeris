@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "celeris.repo-health.review-policy/1",
+  "title": "repo health review policy v1",
+  "description": "repo_health.py --print-review-policy が stdout に出す JSON（ADR 2026-11-07-health-review-integration D2.3）。base の commit の profile（extends を解決した結果）の [review] だけを写す。head・作業ツリーの profile は読まない。解釈は health/profile.py の 1 つだけ。同じ base・profile からは byte 単位で同じ JSON が出る（invariants は名前の順）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "source", "owner_map", "high_risk", "invariants", "definition_sha256"],
+  "properties": {
+    "schema": { "const": "celeris.repo-health.review-policy/1" },
+    "source": {
+      "enum": ["base", "bootstrap", "builtin", "absent"],
+      "description": "base: base の commit の profile の [review]。builtin: base に profile が無く検査器自身の profile の [review]。absent: 解決した profile に [review] が無い（owner_map は null、high_risk と invariants は空）。bootstrap は report の policy.source と同じ語彙として置くが、この出力は head を読まないので出ない"
+    },
+    "owner_map": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "変更 path の owner 行を引く file（repo の path）。[review] に owner_map が無い・absent なら null"
+    },
+    "high_risk": {
+      "type": "array",
+      "description": "高 risk の path class。profile の並びのまま",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["class", "paths"],
+        "properties": {
+          "class": { "type": "string", "minLength": 1 },
+          "paths": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1, "description": "repo の path に当てる正規表現（Python re.search）" }
+          }
+        }
+      }
+    },
+    "invariants": {
+      "type": "object",
+      "description": "保護する不変条件の名前 → 根拠の file（repo の path）",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "definition_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "解決に使った profile の内容の sha256。子、extends の親の順に 1 file ごとに `<path>\\0<byte 数>\\0<内容>` を続けて hash する。組み込み generic は path `builtin:generic`、内容は sort 済みの JSON"
+    }
+  }
+}

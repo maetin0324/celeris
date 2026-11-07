@@ -28,6 +28,7 @@ fn plan(work_units: Vec<WorkUnitSpec>) -> ExecutionPlanSpec {
         work_units,
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     }
 }
 
@@ -57,6 +58,7 @@ fn plan_v2(phases: Vec<PhaseSpec>, work_units: Vec<WorkUnitSpec>) -> ExecutionPl
         work_units,
         phases,
         children: Vec::new(),
+        design_brief: None,
     }
 }
 

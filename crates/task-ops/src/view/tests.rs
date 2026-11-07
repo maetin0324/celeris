@@ -1368,6 +1368,7 @@ fn plan_spec(work_units: Vec<task_core::WorkUnitSpec>) -> task_core::ExecutionPl
         work_units,
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     }
 }
 
@@ -1923,6 +1924,7 @@ fn stage_gate_plan(schema: &str, review_human: bool) -> task_core::ExecutionPlan
             work_units: Vec::new(),
             phases: Vec::new(),
             children: Vec::new(),
+            design_brief: None,
         },
         created_at: "2026-10-11T00:00:00Z".to_string(),
         superseded_at: None,

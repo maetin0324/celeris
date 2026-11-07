@@ -2023,6 +2023,25 @@ export type DeliverySkipReason = "no_project" | "project_not_enabled" | "support
 
 export type DeliveryState = "reviewing" | "merge_queued" | "merging" | "preparing" | "ready" | "blocked";
 
+export type DesignBrief = {
+  "invariants"?: Array<string>;
+  "new_branch"?: Array<string>;
+  "new_fallback"?: Array<string>;
+  "new_port"?: Array<string>;
+  "new_state"?: Array<string>;
+  "options": Array<DesignOption>;
+  "owner": string;
+  "removals"?: Array<string>;
+  "reuse"?: Array<string>;
+  "root_cause": string;
+};
+
+export type DesignOption = {
+  "chosen": boolean;
+  "name": string;
+  "reason": string;
+};
+
 export type DeviceClaims = {
   "actor_id": string;
   "device_id"?: string | null;
@@ -3160,6 +3179,7 @@ export type ExecutionPlanOverview = {
 export type ExecutionPlanSpec = {
   "children"?: Array<ExecutionChildSpec>;
   "decisions"?: Array<DecisionSpec>;
+  "design_brief"?: DesignBrief | null;
   "phases"?: Array<PhaseSpec>;
   "rationale": string;
   "schema": string;

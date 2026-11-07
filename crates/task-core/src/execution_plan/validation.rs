@@ -264,9 +264,18 @@ pub enum PlanValidationError {
         key: String,
     },
     // ---- ADR-0079（Phase R1a）: /1・/2 に /3 の欄・語彙が書かれている ----
-    /// `stages` / `units` / `decisions` は /3 だけ。
+    /// `stages` / `units` / `decisions` / `design_brief` は /3 だけ。
     V3FieldNotAllowed {
         field: &'static str,
+    },
+    /// ADR 2026-11-07-health-review-integration D3.2: 設計 brief の形の誤り。
+    DesignBrief {
+        field: &'static str,
+        reason: String,
+    },
+    /// D3.3: 高 risk の path class を変える planner の計画に設計 brief が無い。
+    DesignBriefMissing {
+        classes: Vec<String>,
     },
     /// `kind = task` は /3 だけ。
     TaskKindRequiresV3 {
@@ -587,6 +596,14 @@ impl std::fmt::Display for PlanValidationError {
             PlanValidationError::V3FieldNotAllowed { field } => write!(
                 f,
                 "{field} is only allowed in {EXECUTION_PLAN_SCHEMA_V3} (must be empty in v1/v2)"
+            ),
+            PlanValidationError::DesignBrief { field, reason } => {
+                write!(f, "design_brief.{field}: {reason}")
+            }
+            PlanValidationError::DesignBriefMissing { classes } => write!(
+                f,
+                "design_brief is required: the plan writes high-risk path classes {} (write root_cause, owner, options, new_* and removals)",
+                classes.join(", ")
             ),
             PlanValidationError::TaskKindRequiresV3 { key } => write!(
                 f,
@@ -1045,6 +1062,7 @@ pub fn validate_with(
         ("stages", !spec.stages.is_empty()),
         ("units", !spec.units.is_empty()),
         ("decisions", !spec.decisions.is_empty()),
+        ("design_brief", spec.design_brief.is_some()),
     ] {
         if present {
             errors.push(PlanValidationError::V3FieldNotAllowed { field });
@@ -1829,7 +1847,11 @@ fn validate_v3(
             }
         }
     }
-    // Only the planner portion consumes the per-plan JSON budget.
+    // ADR 2026-11-07-health-review-integration D3.2: brief があるときだけ形を見る。
+    if let Some(brief) = &spec.design_brief {
+        errors.extend(super::design_brief::brief_shape_errors(brief));
+    }
+    // Only the planner portion consumes the per-plan JSON budget (the brief included).
     if planner_bytes > limits.max_plan_json_bytes_v3 {
         errors.push(PlanValidationError::PlanTooLarge {
             bytes: planner_bytes,

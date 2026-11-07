@@ -97,6 +97,7 @@ fn adopt_single_checked_unit(
         work_units: vec![unit],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     task_ops::execution::adopt_plan(
         store.as_ref(),

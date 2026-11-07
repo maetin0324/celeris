@@ -924,6 +924,7 @@ impl Dispatcher {
                     work_units: vec![main_spec, spec],
                     phases: Vec::new(),
                     children: Vec::new(),
+                    design_brief: None,
                 };
                 let plan_row = task_core::ExecutionPlanRow {
                     id: plan_id.clone(),

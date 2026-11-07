@@ -1790,6 +1790,7 @@ async fn final_review_repair_includes_all_unit_paths_and_task_diff_checks() {
             work_units: vec![main],
             phases: Vec::new(),
             children: Vec::new(),
+            design_brief: None,
         },
         task_core::PlanOrigin::Fixture,
         None,

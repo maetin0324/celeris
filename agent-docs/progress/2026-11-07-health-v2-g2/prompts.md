@@ -20,7 +20,7 @@ task 01M6VTFGWFVE57YXDKHR2E436G のまとめ。[ADR 2026-11-07 health-review-int
   - コマンド: `cargo nextest run -p task-worker -E 'test(change_rules_)'`
   - 要点: 16 passed。全 harness の配布は `change_rules_generic_reaches_codex_once_beside_required_rules`・`…_pi_…`・`…_acp_…`・`change_rules_generic_reaches_claude_code_once_without_a_rules_copy`。health 無しの review prompt は `change_rules_review_without_health_keeps_the_legacy_prompt`。planner の brief 節は `change_rules_planner_brief_section_with_a_review_policy`・`change_rules_planner_brief_section_without_a_review_policy`。
 - 1. affected 試験・clippy・fmt が通る
-  - `bash scripts/dev/test-affected.sh` → 未実行（この後に実行して追記する）。
+  - `bash scripts/dev/test-affected.sh` → exit 0、約 11 分（657 秒、開始時の load average 約 25）。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker。nextest 5631 passed（15 slow）、22 skipped。doc test は失敗なし。先頭の check-health は `verdict=pass exit=0 fail_grade=0 new=0 worsened=0`、repo_health_gate は全件 OK。実行したのは件名「G2 review-health: 進捗 prompts-review.md と task のまとめ prompts.md」の HEAD で、この後の commit は進捗 2 file だけを変える。
   - `cargo clippy --workspace -- -D warnings` → exit 0。
   - `cargo fmt --all -- --check` → exit 0。
 - 2. prompt に入る規約本文の正本が generic.md 1 つで、CLAUDE.md と矛盾する写しが無い
@@ -29,7 +29,7 @@ task 01M6VTFGWFVE57YXDKHR2E436G のまとめ。[ADR 2026-11-07 health-review-int
 
 ## WorkUnit review-health の受け入れ条件
 - 0〜2 → [prompts-review.md](prompts-review.md) の「受け入れ条件ごとの証拠」。
-- 3. 検査 → 上の 1 と、文書検査 3 本（`bash scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`sh scripts/dev/progress-index.sh --check`）→ 未実行（この後に実行して追記する）。
+- 3. 検査 → 上の 1 と、文書検査 3 本（`bash scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`sh scripts/dev/progress-index.sh --check`） → 3 本とも exit 0。最後の進捗の commit の後に再実行した。
 - 4. この file。
 
 ## 未解決事項

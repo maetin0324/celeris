@@ -38,8 +38,8 @@ WorkUnit `review-health`。[ADR 2026-11-07 health-review-integration](../../adr/
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
 - `bash scripts/dev/check-health.sh` → exit 0。`repo-health: verdict=pass exit=0 fail_grade=0 new=0 worsened=0`、repo_health_gate は全件 OK。
-- `bash scripts/dev/test-affected.sh` → 未実行（この後に実行して追記する）。
-- 文書検査 3 本（`bash scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`sh scripts/dev/progress-index.sh --check`）→ 未実行（この後に実行して追記する）。
+- `bash scripts/dev/test-affected.sh` → exit 0、約 11 分（657 秒、開始時の load average 約 25）。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker。nextest 5631 passed（15 slow）、22 skipped。doc test は失敗なし。先頭の check-health は `verdict=pass exit=0 fail_grade=0 new=0 worsened=0`、repo_health_gate は全件 OK。実行したのは件名「G2 review-health: 進捗 prompts-review.md と task のまとめ prompts.md」の HEAD で、この後の commit は進捗 2 file だけを変える。
+- 文書検査 3 本（`bash scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`sh scripts/dev/progress-index.sh --check`） → 3 本とも exit 0（`check-doc-links: ok`・`check-doc-layout: ok`・`progress-index --check: ok`）。最後の進捗の commit の後に再実行した。
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は crates/task-worker の 4 file（`change_rules.rs`・`change_rules/review.rs`・`change_rules/review/tests.rs`・`claude_code/prompt.rs`）と、この進捗ファイル・prompts.md。
 
 ## 判断

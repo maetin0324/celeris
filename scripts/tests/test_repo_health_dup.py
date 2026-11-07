@@ -139,7 +139,7 @@ class RepoHealthDupTests(unittest.TestCase):
         self.write("api/handler.rs", 'fn b() { q("UPDATE tasks SET state = ? WHERE id = ?"); }\n')
         self.write("store/events.rs", 'fn c() { q("INSERT INTO events (k) VALUES (?)"); }\n')
         self.write("migrations/0001.rs", 'fn m() { q("DELETE FROM events"); }\n')
-        self.write("docs/x.rs", "// update events set later\nfn d() {}\n")
+        self.write("doc/x.rs", "// update events set later\nfn d() {}\n")
         self.commit("head")
         r = self.run_tool(b)
         fs = self.findings(r, "dup.state")
@@ -205,14 +205,18 @@ class RepoHealthDupTests(unittest.TestCase):
 
     # ------------------------------------------------------------ link.unlinked
     def test_unlinked_items_scripts_docs(self):
-        b = self.base()
+        # 文書の dir は manual/（docs/ は repo の文書 link 検査が試験の文字列まで実在を確かめるため）
+        b = self.base("""
+            [rules."link.unlinked"]
+            doc_paths = ['^manual/']
+        """)
         self.write("src/lib.rs", "pub fn used_fn() {}\npub fn orphan_fn() {}\nfn call() { used_fn(); }\n")
         self.write("scripts/run-all.sh", "#!/bin/sh\nsh scripts/linked-one.sh\n")
         self.write("scripts/linked-one.sh", "#!/bin/sh\necho hi\n")
         self.write("scripts/lonely-tool.sh", "#!/bin/sh\necho hi\n")
-        self.write("docs/guide.md", "# g\nsee [other](other.md)\n")
-        self.write("docs/other.md", "# o\n")
-        self.write("docs/README.md", "# index\n")
+        self.write("manual/guide.md", "# g\nsee [other](other.md)\n")
+        self.write("manual/other.md", "# o\n")
+        self.write("manual/README.md", "# index\n")
         self.commit("head")
         r = self.run_tool(b)
         fs = self.findings(r, "link.unlinked")
@@ -220,8 +224,8 @@ class RepoHealthDupTests(unittest.TestCase):
         self.assertIn(("file", "src/lib.rs", ("orphan_fn",)), keys)
         paths = {e["path"] for f in fs for e in f["evidence"]}
         self.assertIn("scripts/lonely-tool.sh", paths)
-        self.assertIn("docs/guide.md", paths)
-        for neg in ("scripts/linked-one.sh", "docs/other.md", "docs/README.md"):
+        self.assertIn("manual/guide.md", paths)
+        for neg in ("scripts/linked-one.sh", "manual/other.md", "manual/README.md"):
             self.assertNotIn(neg, paths)
         self.assertNotIn("used_fn", {e.get("symbol") for f in fs for e in f["evidence"]})
         for f in fs:
@@ -286,7 +290,7 @@ class RepoHealthDupTests(unittest.TestCase):
         self.write("src/a.rs", "#[deprecated]\npub fn old() {}\n// legacy path kept\n")
         self.write("src/b.py", "if cfg.use_new_router:\n    pass\nsubprocess.run(['scripts/old-deploy.sh'])\n")
         self.write("src/clean.rs", "pub fn fresh() {}\n")
-        self.write("docs/adr.md", "deprecated legacy\n")
+        self.write("doc/adr.md", "deprecated legacy\n")
         self.write("tests/t.rs", "// legacy\n")
         self.commit("head")
         r = self.run_tool(b)
@@ -364,7 +368,7 @@ class RepoHealthDupTests(unittest.TestCase):
     def test_doc_only_is_not_applicable(self):
         self.write("src/lib.rs", RUST_A)
         b = self.base()
-        self.write("docs/a.md", "# a\n")
+        self.write("notes.md", "# a\n")
         self.commit("head")
         r = self.run_tool(b)
         for rid in RULES.split(","):

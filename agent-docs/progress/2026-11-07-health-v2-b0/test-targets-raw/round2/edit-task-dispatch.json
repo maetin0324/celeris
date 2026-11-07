@@ -1,0 +1,22 @@
+{
+ "mode": "edit",
+ "crate": "task-dispatch",
+ "edited_file": "crates/task-dispatch/src/lib.rs",
+ "list_exit": 0,
+ "list_secs": 0.12,
+ "affected_crates": 5,
+ "affected": [
+  "celeris",
+  "celeris-campaign",
+  "celerisctl",
+  "llm-proxy",
+  "task-dispatch"
+ ],
+ "extra_checks": [],
+ "rebuild_exit": 0,
+ "rebuild_secs": 94.88,
+ "edit_to_verify_secs": 95.0,
+ "compiled_units": 8,
+ "loadavg_before": "31.15 26.84 17.65",
+ "loadavg_after": "20.26 24.40 17.67"
+}

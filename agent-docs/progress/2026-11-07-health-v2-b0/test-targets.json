@@ -1,0 +1,945 @@
+{
+ "schema": "celeris.health-v2-b0.test-targets/1",
+ "base": {
+  "rule": "git merge-base HEAD main at start",
+  "sha": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93"
+ },
+ "host": {
+  "hostname": "home-dev",
+  "nproc": 24,
+  "kernel": "6.8.12-9-pve",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "nextest": "cargo-nextest 0.9.146 (8af696ddc 2026-09-21)",
+  "cargo_target_dir": "/local/celeris/data/scratch/targets/task-01M6TYVJSPEYA2P8B7G56HSQ73/wu-01M6TZ1FTFP7EGMZ5EK5G6GDZC/target",
+  "target_dir_size_before": "1.3G (deps partly cold)",
+  "loadavg_note": "loadavg は /proc/loadavg の 1/5/15 分。計測中の cargo 自身の並列 build を含む（他 process と分けていない）"
+ },
+ "inventory_totals": {
+  "lib": 14,
+  "bin": 13,
+  "test": 352,
+  "bench": 0,
+  "example": 9,
+  "proc-macro": 0,
+  "custom-build": 0,
+  "test_targets": 352,
+  "expected_test_binaries": 379,
+  "tests_dir_rs_files": 373,
+  "tests_dir_support_files": 21,
+  "naive_minus_targets": 21
+ },
+ "inventory_crates": {
+  "celeris": {
+   "targets": {
+    "lib": 1,
+    "bin": 1,
+    "test": 55,
+    "bench": 0,
+    "example": 1,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 55,
+   "expected_test_binaries": 57,
+   "tests_dir_rs_files": 61,
+   "tests_dir_support_files": 6,
+   "support_file_paths": [
+    "actor_trace/support.rs",
+    "daemon_port/mod.rs",
+    "ops_r1/attr_fixture.rs",
+    "ops_r1/trace_fixture.rs",
+    "support/mod.rs",
+    "support/script_compare.rs"
+   ]
+  },
+  "celeris-campaign": {
+   "targets": {
+    "lib": 1,
+    "bin": 1,
+    "test": 111,
+    "bench": 0,
+    "example": 0,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 111,
+   "expected_test_binaries": 113,
+   "tests_dir_rs_files": 122,
+   "tests_dir_support_files": 11,
+   "support_file_paths": [
+    "ablation_application_support/mod.rs",
+    "common/dagbench_durable.rs",
+    "common/dagbench_durable_backend.rs",
+    "common/dagbench_durable_checks.rs",
+    "common/dagbench_grading.rs",
+    "common/dagbench_pbs_controller.rs",
+    "common/mod.rs",
+    "daemon_identity/mod.rs",
+    "preflight_input_archive/real.rs",
+    "preflight_setup/mod.rs",
+    "support_cases/mod.rs"
+   ]
+  },
+  "celeris-credentiald": {
+   "targets": {
+    "lib": 1,
+    "bin": 1,
+    "test": 7,
+    "bench": 0,
+    "example": 0,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 7,
+   "expected_test_binaries": 9,
+   "tests_dir_rs_files": 7,
+   "tests_dir_support_files": 0,
+   "support_file_paths": []
+  },
+  "celeris-mcp": {
+   "targets": {
+    "lib": 1,
+    "bin": 0,
+    "test": 1,
+    "bench": 0,
+    "example": 0,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 1,
+   "expected_test_binaries": 2,
+   "tests_dir_rs_files": 1,
+   "tests_dir_support_files": 0,
+   "support_file_paths": []
+  },
+  "celeris-script": {
+   "targets": {
+    "lib": 1,
+    "bin": 5,
+    "test": 7,
+    "bench": 0,
+    "example": 0,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 7,
+   "expected_test_binaries": 13,
+   "tests_dir_rs_files": 7,
+   "tests_dir_support_files": 0,
+   "support_file_paths": []
+  },
+  "celerisctl": {
+   "targets": {
+    "lib": 0,
+    "bin": 1,
+    "test": 18,
+    "bench": 0,
+    "example": 0,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 18,
+   "expected_test_binaries": 19,
+   "tests_dir_rs_files": 19,
+   "tests_dir_support_files": 1,
+   "support_file_paths": [
+    "common/mod.rs"
+   ]
+  },
+  "e2e": {
+   "targets": {
+    "lib": 1,
+    "bin": 0,
+    "test": 10,
+    "bench": 0,
+    "example": 0,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 10,
+   "expected_test_binaries": 11,
+   "tests_dir_rs_files": 10,
+   "tests_dir_support_files": 0,
+   "support_file_paths": []
+  },
+  "jev-classifier": {
+   "targets": {
+    "lib": 1,
+    "bin": 0,
+    "test": 1,
+    "bench": 0,
+    "example": 0,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 1,
+   "expected_test_binaries": 2,
+   "tests_dir_rs_files": 1,
+   "tests_dir_support_files": 0,
+   "support_file_paths": []
+  },
+  "llm-proxy": {
+   "targets": {
+    "lib": 1,
+    "bin": 0,
+    "test": 2,
+    "bench": 0,
+    "example": 0,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 2,
+   "expected_test_binaries": 3,
+   "tests_dir_rs_files": 2,
+   "tests_dir_support_files": 0,
+   "support_file_paths": []
+  },
+  "routing-eval": {
+   "targets": {
+    "lib": 1,
+    "bin": 1,
+    "test": 1,
+    "bench": 0,
+    "example": 0,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 1,
+   "expected_test_binaries": 3,
+   "tests_dir_rs_files": 1,
+   "tests_dir_support_files": 0,
+   "support_file_paths": []
+  },
+  "task-api": {
+   "targets": {
+    "lib": 1,
+    "bin": 0,
+    "test": 113,
+    "bench": 0,
+    "example": 0,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 113,
+   "expected_test_binaries": 114,
+   "tests_dir_rs_files": 115,
+   "tests_dir_support_files": 2,
+   "support_file_paths": [
+    "common/cos_ops.rs",
+    "common/mod.rs"
+   ]
+  },
+  "task-core": {
+   "targets": {
+    "lib": 1,
+    "bin": 0,
+    "test": 2,
+    "bench": 0,
+    "example": 7,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 2,
+   "expected_test_binaries": 3,
+   "tests_dir_rs_files": 2,
+   "tests_dir_support_files": 0,
+   "support_file_paths": []
+  },
+  "task-dispatch": {
+   "targets": {
+    "lib": 1,
+    "bin": 0,
+    "test": 1,
+    "bench": 0,
+    "example": 0,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 1,
+   "expected_test_binaries": 2,
+   "tests_dir_rs_files": 1,
+   "tests_dir_support_files": 0,
+   "support_file_paths": []
+  },
+  "task-ops": {
+   "targets": {
+    "lib": 1,
+    "bin": 0,
+    "test": 2,
+    "bench": 0,
+    "example": 0,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 2,
+   "expected_test_binaries": 3,
+   "tests_dir_rs_files": 2,
+   "tests_dir_support_files": 0,
+   "support_file_paths": []
+  },
+  "task-worker": {
+   "targets": {
+    "lib": 1,
+    "bin": 3,
+    "test": 21,
+    "bench": 0,
+    "example": 1,
+    "proc-macro": 0,
+    "custom-build": 0
+   },
+   "test_targets": 21,
+   "expected_test_binaries": 25,
+   "tests_dir_rs_files": 22,
+   "tests_dir_support_files": 1,
+   "support_file_paths": [
+    "userns_gate/mod.rs"
+   ]
+  }
+ },
+ "past_tally_comparison": {
+  "source_size_report_rust_external_test_files": 788,
+  "source_size_report_rust_external_test_lines": 432245,
+  "breakdown": {
+   "tests_dir_test_targets": 352,
+   "tests_dir_support_files": 21,
+   "src_test_modules_compiled_into_lib_or_bin_unittests": 412,
+   "root_tests_support_files": 3
+  },
+  "find_crates_star_tests_rs": 381,
+  "find_note": "find crates -path '*/tests/*' -name '*.rs' -not -path '*/src/*' は fixtures/repo/tests・vendor/deno_core/runtime/tests の 8 file を含み tests/e2e を含まない"
+ },
+ "build_no_run": {
+  "task-core": {
+   "mode": "build",
+   "crate": "task-core",
+   "exit": 0,
+   "secs": 44.52,
+   "test_binaries": 3,
+   "compiled_units": 39,
+   "loadavg_before": "2.08 1.87 2.31",
+   "loadavg_after": "3.36 2.23 2.41",
+   "expected_test_binaries": 3,
+   "test_targets": 2
+  },
+  "task-dispatch": {
+   "mode": "build",
+   "crate": "task-dispatch",
+   "exit": 0,
+   "secs": 91.41,
+   "test_binaries": 2,
+   "compiled_units": 43,
+   "loadavg_before": "3.17 2.21 2.41",
+   "loadavg_after": "4.95 3.03 2.68",
+   "expected_test_binaries": 2,
+   "test_targets": 1
+  },
+  "task-api": {
+   "mode": "build",
+   "crate": "task-api",
+   "exit": 0,
+   "secs": 84.93,
+   "test_binaries": 114,
+   "compiled_units": 69,
+   "loadavg_before": "4.95 3.03 2.68",
+   "loadavg_after": "25.50 8.47 4.53",
+   "expected_test_binaries": 114,
+   "test_targets": 113
+  },
+  "task-worker": {
+   "mode": "build",
+   "crate": "task-worker",
+   "exit": 0,
+   "secs": 54.74,
+   "test_binaries": 25,
+   "compiled_units": 13,
+   "loadavg_before": "21.96 8.27 4.50",
+   "loadavg_after": "10.38 7.32 4.40",
+   "expected_test_binaries": 25,
+   "test_targets": 21
+  },
+  "celeris": {
+   "mode": "build",
+   "crate": "celeris",
+   "exit": 0,
+   "secs": 82.24,
+   "test_binaries": 57,
+   "compiled_units": 16,
+   "loadavg_before": "10.38 7.32 4.40",
+   "loadavg_after": "11.31 7.87 4.81",
+   "expected_test_binaries": 57,
+   "test_targets": 55
+  }
+ },
+ "edit_verify": {
+  "round1": {
+   "task-core": {
+    "mode": "edit",
+    "crate": "task-core",
+    "edited_file": "crates/task-core/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.11,
+    "affected_crates": 14,
+    "affected": [
+     "celeris",
+     "celeris-campaign",
+     "celeris-credentiald",
+     "celeris-mcp",
+     "celeris-script",
+     "celerisctl",
+     "e2e",
+     "llm-proxy",
+     "routing-eval",
+     "task-api",
+     "task-core",
+     "task-dispatch",
+     "task-ops",
+     "task-worker"
+    ],
+    "rebuild_exit": 0,
+    "rebuild_secs": 143.97,
+    "edit_to_verify_secs": 144.08,
+    "compiled_units": 14,
+    "loadavg_before": "21.86 19.32 11.27",
+    "loadavg_after": "34.73 24.15 14.05",
+    "compiled": [
+     "task-core",
+     "e2e",
+     "celeris-script",
+     "celeris-credentiald",
+     "task-ops",
+     "routing-eval",
+     "task-worker",
+     "task-api",
+     "celeris-mcp",
+     "task-dispatch",
+     "celeris-campaign",
+     "llm-proxy",
+     "celeris",
+     "celerisctl"
+    ]
+   },
+   "task-dispatch": {
+    "mode": "edit",
+    "crate": "task-dispatch",
+    "edited_file": "crates/task-dispatch/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.11,
+    "affected_crates": 5,
+    "affected": [
+     "celeris",
+     "celeris-campaign",
+     "celerisctl",
+     "llm-proxy",
+     "task-dispatch"
+    ],
+    "rebuild_exit": 0,
+    "rebuild_secs": 86.66,
+    "edit_to_verify_secs": 86.77,
+    "compiled_units": 8,
+    "loadavg_before": "27.23 19.48 10.54",
+    "loadavg_after": "21.86 19.32 11.27",
+    "compiled": [
+     "celeris-credentiald",
+     "task-worker",
+     "task-api",
+     "task-dispatch",
+     "celeris-campaign",
+     "llm-proxy",
+     "celeris",
+     "celerisctl"
+    ]
+   },
+   "task-api": {
+    "mode": "edit",
+    "crate": "task-api",
+    "edited_file": "crates/task-api/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.1,
+    "affected_crates": 7,
+    "affected": [
+     "celeris",
+     "celeris-campaign",
+     "celerisctl",
+     "llm-proxy",
+     "task-api",
+     "task-dispatch",
+     "task-worker"
+    ],
+    "rebuild_exit": 0,
+    "rebuild_secs": 112.97,
+    "edit_to_verify_secs": 113.07,
+    "compiled_units": 7,
+    "loadavg_before": "23.01 15.48 8.30",
+    "loadavg_after": "27.23 19.48 10.54",
+    "compiled": [
+     "task-api",
+     "task-worker",
+     "task-dispatch",
+     "celeris-campaign",
+     "llm-proxy",
+     "celeris",
+     "celerisctl"
+    ]
+   },
+   "task-worker": {
+    "mode": "edit",
+    "crate": "task-worker",
+    "edited_file": "crates/task-worker/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.1,
+    "affected_crates": 7,
+    "affected": [
+     "celeris",
+     "celeris-campaign",
+     "celerisctl",
+     "llm-proxy",
+     "task-api",
+     "task-dispatch",
+     "task-worker"
+    ],
+    "rebuild_exit": 0,
+    "rebuild_secs": 135.66,
+    "edit_to_verify_secs": 135.76,
+    "compiled_units": 13,
+    "loadavg_before": "20.91 10.40 5.78",
+    "loadavg_after": "26.82 15.94 8.37",
+    "compiled": [
+     "task-core",
+     "celeris-script",
+     "celeris-credentiald",
+     "task-ops",
+     "routing-eval",
+     "task-worker",
+     "task-api",
+     "celeris-mcp",
+     "task-dispatch",
+     "celeris-campaign",
+     "llm-proxy",
+     "celeris",
+     "celerisctl"
+    ]
+   },
+   "celeris": {
+    "mode": "edit",
+    "crate": "celeris",
+    "edited_file": "crates/celeris/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.13,
+    "affected_crates": 2,
+    "affected": [
+     "celeris",
+     "celerisctl"
+    ],
+    "rebuild_exit": 0,
+    "rebuild_secs": 32.68,
+    "edit_to_verify_secs": 32.81,
+    "compiled_units": 2,
+    "loadavg_before": "10.18 7.75 4.80",
+    "loadavg_after": "20.91 10.40 5.78",
+    "compiled": [
+     "celeris",
+     "celerisctl"
+    ]
+   }
+  },
+  "round2": {
+   "task-core": {
+    "mode": "edit",
+    "crate": "task-core",
+    "edited_file": "crates/task-core/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.12,
+    "affected_crates": 14,
+    "affected": [
+     "celeris",
+     "celeris-campaign",
+     "celeris-credentiald",
+     "celeris-mcp",
+     "celeris-script",
+     "celerisctl",
+     "e2e",
+     "llm-proxy",
+     "routing-eval",
+     "task-api",
+     "task-core",
+     "task-dispatch",
+     "task-ops",
+     "task-worker"
+    ],
+    "extra_checks": [
+     "web: typecheck+unit (理由: web の型の元になる crate の変更: task-core)",
+     "ts-verify: test-ts-verify (理由: runner の cache key の入力の変更)"
+    ],
+    "rebuild_exit": 0,
+    "rebuild_secs": 139.32,
+    "edit_to_verify_secs": 139.44,
+    "compiled_units": 14,
+    "loadavg_before": "20.26 24.40 17.67",
+    "loadavg_after": "36.12 28.43 19.99",
+    "compiled": [
+     "task-core",
+     "celeris-credentiald",
+     "task-ops",
+     "routing-eval",
+     "task-worker",
+     "celeris-script",
+     "e2e",
+     "task-api",
+     "celeris-mcp",
+     "task-dispatch",
+     "celeris-campaign",
+     "llm-proxy",
+     "celeris",
+     "celerisctl"
+    ]
+   },
+   "task-dispatch": {
+    "mode": "edit",
+    "crate": "task-dispatch",
+    "edited_file": "crates/task-dispatch/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.12,
+    "affected_crates": 5,
+    "affected": [
+     "celeris",
+     "celeris-campaign",
+     "celerisctl",
+     "llm-proxy",
+     "task-dispatch"
+    ],
+    "extra_checks": [],
+    "rebuild_exit": 0,
+    "rebuild_secs": 94.88,
+    "edit_to_verify_secs": 95.0,
+    "compiled_units": 8,
+    "loadavg_before": "31.15 26.84 17.65",
+    "loadavg_after": "20.26 24.40 17.67",
+    "compiled": [
+     "celeris-credentiald",
+     "task-worker",
+     "task-api",
+     "task-dispatch",
+     "celeris-campaign",
+     "llm-proxy",
+     "celeris",
+     "celerisctl"
+    ]
+   },
+   "task-api": {
+    "mode": "edit",
+    "crate": "task-api",
+    "edited_file": "crates/task-api/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.12,
+    "affected_crates": 7,
+    "affected": [
+     "celeris",
+     "celeris-campaign",
+     "celerisctl",
+     "llm-proxy",
+     "task-api",
+     "task-dispatch",
+     "task-worker"
+    ],
+    "extra_checks": [
+     "web: typecheck+unit (理由: web の型の元になる crate の変更: task-api)"
+    ],
+    "rebuild_exit": 0,
+    "rebuild_secs": 105.42,
+    "edit_to_verify_secs": 105.54,
+    "compiled_units": 7,
+    "loadavg_before": "30.79 23.29 15.49",
+    "loadavg_after": "31.15 26.84 17.65",
+    "compiled": [
+     "task-api",
+     "task-worker",
+     "task-dispatch",
+     "celeris-campaign",
+     "llm-proxy",
+     "celeris",
+     "celerisctl"
+    ]
+   },
+   "task-worker": {
+    "mode": "edit",
+    "crate": "task-worker",
+    "edited_file": "crates/task-worker/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.12,
+    "affected_crates": 7,
+    "affected": [
+     "celeris",
+     "celeris-campaign",
+     "celerisctl",
+     "llm-proxy",
+     "task-api",
+     "task-dispatch",
+     "task-worker"
+    ],
+    "extra_checks": [],
+    "rebuild_exit": 0,
+    "rebuild_secs": 134.64,
+    "edit_to_verify_secs": 134.77,
+    "compiled_units": 12,
+    "loadavg_before": "14.19 19.49 13.38",
+    "loadavg_after": "33.38 23.67 15.57",
+    "compiled": [
+     "task-core",
+     "celeris-credentiald",
+     "task-ops",
+     "routing-eval",
+     "task-worker",
+     "task-api",
+     "celeris-mcp",
+     "task-dispatch",
+     "celeris-campaign",
+     "llm-proxy",
+     "celeris",
+     "celerisctl"
+    ]
+   },
+   "celeris": {
+    "mode": "edit",
+    "crate": "celeris",
+    "edited_file": "crates/celeris/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.11,
+    "affected_crates": 2,
+    "affected": [
+     "celeris",
+     "celerisctl"
+    ],
+    "extra_checks": [],
+    "rebuild_exit": 0,
+    "rebuild_secs": 81.68,
+    "edit_to_verify_secs": 81.8,
+    "compiled_units": 12,
+    "loadavg_before": "27.62 23.09 13.87",
+    "loadavg_after": "14.19 19.49 13.38",
+    "compiled": [
+     "task-core",
+     "celeris-credentiald",
+     "task-ops",
+     "routing-eval",
+     "task-worker",
+     "celeris-mcp",
+     "task-api",
+     "task-dispatch",
+     "llm-proxy",
+     "celeris-campaign",
+     "celeris",
+     "celerisctl"
+    ]
+   }
+  },
+  "round3_after_settle": {
+   "task-core": {
+    "mode": "edit",
+    "crate": "task-core",
+    "edited_file": "crates/task-core/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.14,
+    "affected_crates": 14,
+    "affected": [
+     "celeris",
+     "celeris-campaign",
+     "celeris-credentiald",
+     "celeris-mcp",
+     "celeris-script",
+     "celerisctl",
+     "e2e",
+     "llm-proxy",
+     "routing-eval",
+     "task-api",
+     "task-core",
+     "task-dispatch",
+     "task-ops",
+     "task-worker"
+    ],
+    "extra_checks": [
+     "web: typecheck+unit (理由: web の型の元になる crate の変更: task-core)",
+     "ts-verify: test-ts-verify (理由: runner の cache key の入力の変更)"
+    ],
+    "rebuild_exit": 0,
+    "rebuild_secs": 142.11,
+    "edit_to_verify_secs": 142.25,
+    "compiled_units": 14,
+    "loadavg_before": "25.42 26.07 21.90",
+    "loadavg_after": "30.30 26.59 22.56",
+    "compiled": [
+     "task-core",
+     "celeris-credentiald",
+     "task-ops",
+     "routing-eval",
+     "task-worker",
+     "celeris-script",
+     "e2e",
+     "task-api",
+     "celeris-mcp",
+     "task-dispatch",
+     "celeris-campaign",
+     "llm-proxy",
+     "celeris",
+     "celerisctl"
+    ]
+   },
+   "task-dispatch": {
+    "mode": "edit",
+    "crate": "task-dispatch",
+    "edited_file": "crates/task-dispatch/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.13,
+    "affected_crates": 5,
+    "affected": [
+     "celeris",
+     "celeris-campaign",
+     "celerisctl",
+     "llm-proxy",
+     "task-dispatch"
+    ],
+    "extra_checks": [],
+    "rebuild_exit": 0,
+    "rebuild_secs": 79.71,
+    "edit_to_verify_secs": 79.84,
+    "compiled_units": 8,
+    "loadavg_before": "15.78 23.18 19.86",
+    "loadavg_after": "16.02 21.43 19.51",
+    "compiled": [
+     "celeris-credentiald",
+     "task-worker",
+     "task-api",
+     "task-dispatch",
+     "celeris-campaign",
+     "llm-proxy",
+     "celeris",
+     "celerisctl"
+    ]
+   },
+   "task-api": {
+    "mode": "edit",
+    "crate": "task-api",
+    "edited_file": "crates/task-api/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.13,
+    "affected_crates": 7,
+    "affected": [
+     "celeris",
+     "celeris-campaign",
+     "celerisctl",
+     "llm-proxy",
+     "task-api",
+     "task-dispatch",
+     "task-worker"
+    ],
+    "extra_checks": [
+     "web: typecheck+unit (理由: web の型の元になる crate の変更: task-api)"
+    ],
+    "rebuild_exit": 0,
+    "rebuild_secs": 113.33,
+    "edit_to_verify_secs": 113.46,
+    "compiled_units": 7,
+    "loadavg_before": "33.37 26.24 21.41",
+    "loadavg_after": "25.42 26.07 21.90",
+    "compiled": [
+     "task-api",
+     "task-worker",
+     "task-dispatch",
+     "celeris-campaign",
+     "llm-proxy",
+     "celeris",
+     "celerisctl"
+    ]
+   },
+   "task-worker": {
+    "mode": "edit",
+    "crate": "task-worker",
+    "edited_file": "crates/task-worker/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.13,
+    "affected_crates": 7,
+    "affected": [
+     "celeris",
+     "celeris-campaign",
+     "celerisctl",
+     "llm-proxy",
+     "task-api",
+     "task-dispatch",
+     "task-worker"
+    ],
+    "extra_checks": [],
+    "rebuild_exit": 0,
+    "rebuild_secs": 97.99,
+    "edit_to_verify_secs": 98.13,
+    "compiled_units": 7,
+    "loadavg_before": "16.02 21.43 19.51",
+    "loadavg_after": "33.37 26.24 21.41",
+    "compiled": [
+     "task-worker",
+     "task-dispatch",
+     "task-api",
+     "celeris-campaign",
+     "llm-proxy",
+     "celeris",
+     "celerisctl"
+    ]
+   },
+   "celeris": {
+    "mode": "edit",
+    "crate": "celeris",
+    "edited_file": "crates/celeris/src/lib.rs",
+    "list_exit": 0,
+    "list_secs": 0.15,
+    "affected_crates": 2,
+    "affected": [
+     "celeris",
+     "celerisctl"
+    ],
+    "extra_checks": [],
+    "rebuild_exit": 0,
+    "rebuild_secs": 84.9,
+    "edit_to_verify_secs": 85.06,
+    "compiled_units": 12,
+    "loadavg_before": "31.00 27.79 20.92",
+    "loadavg_after": "15.78 23.18 19.86",
+    "compiled": [
+     "task-core",
+     "celeris-credentiald",
+     "task-ops",
+     "routing-eval",
+     "task-worker",
+     "task-api",
+     "celeris-mcp",
+     "task-dispatch",
+     "llm-proxy",
+     "celeris-campaign",
+     "celeris",
+     "celerisctl"
+    ]
+   }
+  },
+  "settle_secs": 144,
+  "order": {
+   "round1": [
+    "celeris",
+    "task-worker",
+    "task-api",
+    "task-dispatch",
+    "task-core"
+   ],
+   "round2": [
+    "celeris",
+    "task-worker",
+    "task-api",
+    "task-dispatch",
+    "task-core"
+   ],
+   "round3_after_settle": [
+    "celeris",
+    "task-dispatch",
+    "task-worker",
+    "task-api",
+    "task-core"
+   ]
+  }
+ }
+}

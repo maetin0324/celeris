@@ -1,0 +1,18 @@
+{
+ "mode": "edit",
+ "crate": "celeris",
+ "edited_file": "crates/celeris/src/lib.rs",
+ "list_exit": 0,
+ "list_secs": 0.13,
+ "affected_crates": 2,
+ "affected": [
+  "celeris",
+  "celerisctl"
+ ],
+ "rebuild_exit": 0,
+ "rebuild_secs": 32.68,
+ "edit_to_verify_secs": 32.81,
+ "compiled_units": 2,
+ "loadavg_before": "10.18 7.75 4.80",
+ "loadavg_after": "20.91 10.40 5.78"
+}

@@ -35,7 +35,7 @@ unit `review-policy-cli`（段 base「dispatcher: risk 判定・高 risk 設計 
 
 ## 未解決
 - 人の承認と取り込み（受け入れ条件 4）を待つ。手順と確認方法は成果物 policy-review.md。取り込みの後の run で `test-affected.sh` が exit 0 になることを確かめ、この節と status を更新する。
-- `main..HEAD` には、この unit の commit のほかに親 task の branch の 11 commit（G2 の guideline/generic・plan-brief・protocol・profiles の進捗・guide。Rust の変更を含む）がある。branch 全体を main に取り込むと、それらも親 task の final review の前に main に入る。
+- `main..HEAD` には、この unit の 3 commit のほかに親 task の branch の 17 commit（merge でない 11 件: G2 の guideline/generic・plan-brief・protocol・profiles の進捗・guide。段の統合の merge 6 件。Rust の変更を含む）がある。branch 全体を main に取り込むと、それらも親 task の final review の前に main に入る。
 - D6.2 の条件「変更 path が全部 policy.files」では、進捗 file（`agent-docs/progress/`）と検査器の試験（`scripts/tests/test_repo_health*.py`・`scripts/dev/tests/repo_health_gate.sh`）は policy の file に入らない。Celeris の task は必ず進捗 file を書くので、今のままでは D6.2 が Celeris の branch で働くことはほぼ無い（この branch も対象外）。
 - D6.4（policy の変更に人の承認を要求する dispatcher の経路）は U5 の範囲で、まだ無い。D6.2 が働く branch（policy の file だけを変え、進捗 file を書かない branch）は、U5 が入るまで check-health を exit 0 で通り、reviewer の合格だけで配送されうる。
 - check-health.sh は作業ツリーの版が走る。候補が check-health.sh を変えれば D6.2 の判定も変えられる（`policy.changed` は出る）。この点は D6.2 の前から同じ。

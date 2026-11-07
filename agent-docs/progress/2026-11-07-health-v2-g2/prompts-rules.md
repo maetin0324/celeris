@@ -39,11 +39,14 @@ WorkUnit `rules-brief`。[ADR 2026-11-07 health-review-integration](../../adr/20
 - `cargo nextest run -p task-worker --lib change_rules_` → 7 passed（adapter の 4 件は上の全体の実行に含まれる）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
-- `bash scripts/dev/test-affected.sh` → 結果は下の「test-affected の結果」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（下の「test-affected の結果」）。
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は crates/task-worker の 9 file とこの進捗ファイルだけ。
 
 ## test-affected の結果
-（実行後に追記する）
+- 対象（`--list`）: celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker。
+- `bash scripts/dev/test-affected.sh` → exit 0、約 12 分。nextest 5626 passed（19 slow）、22 skipped。doc test は全 crate で失敗なし。
+- 先頭の check-health: `repo-health: verdict=pass exit=0 fail_grade=0 new=2 worsened=0`。new の 2 件は `dup.contract`（warning）の `OwnerRow`・`DiffStat` で、どちらも先行の protocol の unit が足した `crates/task-worker/src/protocol/health.rs` の型と既存の型の同名。この unit の変更からは出ていない。
+- 実行したのはコードの commit の後。その後の commit はこの進捗ファイルだけを変える。
 
 ## 判断
 - ADR D1.1 は `section()` の見出しを `## 変更の規約（汎用）` と書くが、task の Objective（generic.md の 1 行目を見出しにし、二重にしない）に従い、generic.md をそのまま出した。prompt の中の本文が generic.md と 1 バイトも違わないので、試験は `GENERIC_RULES` の部分一致で 1 回を確かめられる。

@@ -44,6 +44,8 @@ pub mod cron;
 /// ADR-0079 D7（Phase R1a）: 人への決定の要求の型と検証（純粋）。
 pub mod decision;
 pub mod delegate;
+/// ADR 2026-11-07-health-review-integration D2.4: repo 固有の review 方針（profile `[review]`）の型。
+pub mod design_review;
 /// ADR-0124: atomic coding task の決定的な直行経路判定。
 pub mod direct_route;
 /// ADR 2026-10-07-build-tmp-hygiene D4.4: ディスク使用率の監視の状態。

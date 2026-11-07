@@ -9723,6 +9723,103 @@
       ],
       "type": "string"
     },
+    "DesignBrief": {
+      "additionalProperties": false,
+      "description": "ADR 2026-11-07-health-review-integration D3.1: 実装前に短く整理する設計 brief。risk の判定\n（`design_review::assess_risk`）は `new_*` の宣言と write path から決まる（D3.3）。",
+      "properties": {
+        "invariants": {
+          "description": "守る不変条件（名前は自由文）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "new_branch": {
+          "description": "新しく足す分岐。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "new_fallback": {
+          "description": "新しく足す fallback・新旧切替（宣言すれば path に依らず高 risk。D3.3）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "new_port": {
+          "description": "新しく足す外への口（CLI・API・wire の欄）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "new_state": {
+          "description": "新しく足す状態（表・列・event・メモリ上の状態）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "options": {
+          "description": "比べた選択肢。2 件以上、`chosen = true` はちょうど 1 件。",
+          "items": {
+            "$ref": "#/$defs/DesignOption"
+          },
+          "type": "array"
+        },
+        "owner": {
+          "description": "原因を直す責務の owner（module・file・subsystem）。空にできない。",
+          "type": "string"
+        },
+        "removals": {
+          "description": "同じ変更で消す旧い仕組み（コード経路・config 欄・API・試験・文書）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reuse": {
+          "description": "再利用する既存の仕組み。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "root_cause": {
+          "description": "症状ではなく直す原因。空にできない。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root_cause",
+        "owner",
+        "options"
+      ],
+      "type": "object"
+    },
+    "DesignOption": {
+      "additionalProperties": false,
+      "description": "ADR 2026-11-07-health-review-integration D3.1: brief の選択肢。",
+      "properties": {
+        "chosen": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "chosen",
+        "reason"
+      ],
+      "type": "object"
+    },
     "DeviceClaims": {
       "additionalProperties": false,
       "description": "web が署名する assertion の `payload`（ADR D2）。未知の欄は拒否する。",
@@ -15707,6 +15804,17 @@
             "$ref": "#/$defs/DecisionSpec"
           },
           "type": "array"
+        },
+        "design_brief": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignBrief"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-07-health-review-integration D3.1: /3 の設計 brief（計画に 1 つ）。/1・/2 で書けば\n`V3FieldNotAllowed`。形は `validate_v3` が見る（D3.2）。無いとき（`None`）は JSON に出さない。"
         },
         "phases": {
           "default": [],

@@ -1303,6 +1303,7 @@ async fn a_v1_plan_stays_serial_without_work_unit_worktrees() {
         work_units: vec![wu_spec("a", &[]), wu_spec("b", &[]), wu_spec("c", &[])],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     task_ops::execution::adopt_plan(
         store.as_ref(),

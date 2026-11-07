@@ -553,6 +553,7 @@ fn make_repair(
             work_units: vec![main, spec],
             phases: Vec::new(),
             children: Vec::new(),
+            design_brief: None,
         };
         let plan = task_core::ExecutionPlanRow {
             id: plan_id.clone(),

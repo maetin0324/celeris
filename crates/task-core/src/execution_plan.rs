@@ -222,6 +222,86 @@ pub struct ExecutionPlanSpec {
     /// ADR-0079 D2 / D7: /3 の決定（人に選んでもらう点）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decisions: Vec<crate::decision::DecisionSpec>,
+    /// ADR 2026-11-07-health-review-integration D3.1: /3 の設計 brief（計画に 1 つ）。/1・/2 で書けば
+    /// `V3FieldNotAllowed`。形は `validate_v3` が見る（D3.2）。無いとき（`None`）は JSON に出さない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_brief: Option<DesignBrief>,
+}
+
+impl ExecutionPlanSpec {
+    /// `celeris.execution-plan/1` の計画（`work_units` だけを持つ。daemon が作る repair の計画など）。
+    pub fn v1(rationale: String, work_units: Vec<WorkUnitSpec>) -> Self {
+        ExecutionPlanSpec {
+            schema: EXECUTION_PLAN_SCHEMA.to_string(),
+            rationale,
+            phases: Vec::new(),
+            work_units,
+            children: Vec::new(),
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
+            design_brief: None,
+        }
+    }
+}
+
+/// ADR 2026-11-07-health-review-integration D3.1: 実装前に短く整理する設計 brief。risk の判定
+/// （`design_review::assess_risk`）は `new_*` の宣言と write path から決まる（D3.3）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DesignBrief {
+    /// 症状ではなく直す原因。空にできない。
+    pub root_cause: String,
+    /// 原因を直す責務の owner（module・file・subsystem）。空にできない。
+    pub owner: String,
+    /// 再利用する既存の仕組み。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reuse: Vec<String>,
+    /// 比べた選択肢。2 件以上、`chosen = true` はちょうど 1 件。
+    pub options: Vec<DesignOption>,
+    /// 新しく足す状態（表・列・event・メモリ上の状態）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_state: Vec<String>,
+    /// 新しく足す分岐。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_branch: Vec<String>,
+    /// 新しく足す fallback・新旧切替（宣言すれば path に依らず高 risk。D3.3）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_fallback: Vec<String>,
+    /// 新しく足す外への口（CLI・API・wire の欄）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_port: Vec<String>,
+    /// 同じ変更で消す旧い仕組み（コード経路・config 欄・API・試験・文書）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removals: Vec<String>,
+    /// 守る不変条件（名前は自由文）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invariants: Vec<String>,
+}
+
+impl DesignBrief {
+    /// D3.3: 宣言した新しい仕組みの種類（`new_state`・`new_branch`・`new_fallback`・`new_port` のうち空でないもの）。
+    pub fn declared_new(&self) -> Vec<&'static str> {
+        [
+            ("new_state", &self.new_state),
+            ("new_branch", &self.new_branch),
+            ("new_fallback", &self.new_fallback),
+            ("new_port", &self.new_port),
+        ]
+        .into_iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(name, _)| name)
+        .collect()
+    }
+}
+
+/// ADR 2026-11-07-health-review-integration D3.1: brief の選択肢。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DesignOption {
+    pub name: String,
+    pub chosen: bool,
+    pub reason: String,
 }
 
 /// ADR-0079 D2 / D5: 段階の後の人の確認（`review: human` は ADR-0074 D2 の `pause_after` をその段階に
@@ -423,6 +503,7 @@ pub fn internal_view(spec: &ExecutionPlanSpec) -> std::borrow::Cow<'_, Execution
         stages: Vec::new(),
         units: Vec::new(),
         decisions: Vec::new(),
+        design_brief: spec.design_brief.clone(),
     })
 }
 
@@ -650,13 +731,16 @@ pub fn apply_delta(
         stages: base.stages.clone(),
         units: base.units.clone(),
         decisions: base.decisions.clone(),
+        design_brief: base.design_brief.clone(),
     })
 }
 
+mod design_brief;
 mod plan_limits;
 mod scheduling;
 mod validation;
 
+pub use design_brief::require_design_brief;
 pub use plan_limits::counted_plan_stages;
 pub use scheduling::*;
 pub use validation::*;

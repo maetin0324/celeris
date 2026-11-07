@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# repo health の単一入口（ADR 2026-11-07-repo-health-celeris-profile）。全体の試験は release gate だけで走る。
+# repo health の単一入口。root と base（既定 auto）を snapshot が決めること・既存検査を rule として呼ぶことは
+# ADR 2026-11-07-repo-health-celeris-profile（D1・D2・D4）、report の形と exit code は ADR 2026-11-07-repo-health-contract。
 #
 #   bash scripts/dev/check-health.sh [--base <rev>] [--out <report.json>]
 #
-# repo_health.py に作業ツリー（未 commit の変更を含む）を渡し、report JSON（celeris.repo-health.report/1）を
-# --out（既定 ${TMPDIR:-/tmp}/check-health.<pid>.json）に書いて、その path を出す。既存検査（source-size・
-# architecture-map・doc-links・adr-numbers・human-text・progress-index）は profile（profiles/celeris.toml）の
-# rule として repo_health.py が呼ぶ。root と base（既定 auto = git merge-base HEAD main）は repo_health.py の
-# snapshot が 1 か所で決める。この script は root も base も解決しない。
-# 必須 rule が pass（か not_applicable）以外なら repo_health.py の exit code（1 fail、2 error・欠測）で終わる。
-# 続けて検査器自身の試験（repo_health・architecture-map の unit 試験とゲートの試験）を走らせる（doc-only の変更では走らせない）。
+# 作業ツリー（未 commit の変更を含む）を repo_health.py に渡し、report を --out（既定
+# ${TMPDIR:-/tmp}/check-health.<pid>.json）に書いてその path を出す。exit は repo_health.py の exit code。
+# ただし policy の file だけの変更は exit 0 にして `policy review required: <files>` を出す（report の verdict は
+# fail のまま。ADR 2026-11-07-health-review-integration D6.2）。合格の後、doc-only でなければ検査器自身の
+# unit 試験とゲートの試験を走らせる。全体の試験は release gate だけで走る。
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 base=auto
@@ -30,6 +29,32 @@ if [ ! -f "$out" ]; then
   exit "$rc"
 fi
 echo "check-health: report=$out"
+if [ "$rc" -eq 1 ]; then
+  # D6.2: fail 級の finding が policy.changed だけで、base と作業ツリーの差分の path が全部 policy.files にある。
+  # 差分の path は report と同じ snapshot（report の base の sha）で取る。
+  policy_files=$(python3 -I - "$here/repo-health" "$here" "$out" <<'PY'
+import json
+import sys
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+from health import engine, snapshot  # noqa: E402
+
+with open(sys.argv[3], encoding="utf-8") as fh:
+    report = json.load(fh)
+snap = snapshot.resolve(sys.argv[2], report["snapshot"]["base"]["sha"], snapshot.WORKTREE)
+snap.head_tree.reader.close()
+files = engine.policy_review_files(report, snap.changed)
+if files:
+    print(", ".join(files))
+PY
+  )
+  if [ -n "$policy_files" ]; then
+    echo "policy review required: $policy_files"
+    echo "check-health: policy の file だけの変更。report の verdict は fail のまま、policy の変更は人の承認で通す"
+    rc=0
+  fi
+fi
 if [ "$rc" -ne 0 ]; then
   echo "check-health: 必須 rule が pass でない（exit $rc）" >&2
   exit "$rc"

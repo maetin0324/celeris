@@ -116,6 +116,7 @@ async fn a_failing_work_unit_check_retries_the_work_unit_then_completes() {
         work_units: vec![a],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     task_ops::execution::adopt_plan(
         store.as_ref(),
@@ -3729,6 +3730,7 @@ fn adopt_plan_with_b_check(store: &Arc<dyn TaskStore>, task_id: TaskId, b_check:
         work_units: vec![wu_spec("a", &[]), b, wu_spec("c", &["b"])],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     task_ops::execution::adopt_plan(
         store.as_ref(),

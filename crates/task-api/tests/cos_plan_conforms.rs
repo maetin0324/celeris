@@ -53,6 +53,7 @@ fn spec(stages: &[(&str, bool)]) -> ExecutionPlanSpec {
             .collect(),
         units: Vec::new(),
         decisions: Vec::new(),
+        design_brief: None,
     }
 }
 

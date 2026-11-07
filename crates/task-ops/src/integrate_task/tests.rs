@@ -374,6 +374,7 @@ fn phase_request_task(
             title: "build".into(),
         }],
         children: Vec::new(),
+        design_brief: None,
     };
     crate::execution::adopt_plan(
         store,

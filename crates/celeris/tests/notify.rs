@@ -1711,6 +1711,7 @@ fn empty_plan_spec() -> task_core::ExecutionPlanSpec {
         }],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     }
 }
 

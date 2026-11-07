@@ -662,6 +662,7 @@ mod tests {
             work_units: Vec::new(),
             phases: Vec::new(),
             children: Vec::new(),
+            design_brief: None,
         }
     }
 

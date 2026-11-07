@@ -127,6 +127,7 @@ fn implement_only_task(dir: &std::path::Path, store: &Arc<dyn TaskStore>) -> Tas
         work_units: vec![wu_spec("implement", &[])],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     task_ops::execution::adopt_plan(
         store.as_ref(),

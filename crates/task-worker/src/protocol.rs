@@ -62,6 +62,11 @@ pub struct ReviewRequest {
     /// 起動（dispatcher が `Event::WorkerPolicyViolation` から集める。LLM は関与しない）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub policy_violations: Vec<ReviewPolicyViolation>,
+    /// ADR 2026-11-07-health-review-integration D4.1: base（target）→ candidate の diff 統計・owner 地図の行・
+    /// repo health の new findings の要約。dispatcher が candidate SHA ごとに 1 回だけ作り、final review
+    /// にだけ渡す。`None`（WU の review・review 方針の無い repo・旧 daemon）の `request.json` は従来と同じ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<HealthReviewInput>,
 }
 
 /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: reviewer に見せる検出 1 件（`Event::WorkerPolicyViolation` の写し）。
@@ -761,6 +766,12 @@ pub struct ExecutionPlannerContext {
     /// プロンプトは R2b より前と 1 バイトも変わらない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<TreePlannerContext>,
+    /// ADR 2026-11-07-health-review-integration D2.4・D3.4: repo 固有の review 方針（base（target）側の
+    /// profile の `[review]` 節の写し。owner 地図・高 risk の path class・不変条件）。planner は高 risk の
+    /// class を変える計画に設計 brief を書く。dispatcher が base 側から読めた repo だけ `Some`。`[review]` の
+    /// 無い repo・旧 daemon では `None` で `request.json` は従来と同じ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_policy: Option<task_core::design_review::ReviewPolicy>,
 }
 
 /// `context.execution_planner.tree`（ADR-0079 D4 (2) / D12。Phase R2b）: /3 の planner に渡す木の中の位置・
@@ -1017,6 +1028,10 @@ pub struct ReviewVerdictOut {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewOutput {
     pub verdicts: Vec<ReviewVerdictOut>,
+    /// ADR 2026-11-07-health-review-integration D5.1: 構造化 health verdict。`ReviewRequest.health` を渡した
+    /// review では必須（無ければ不合格。I7）。旧 reviewer の `review.json` は省略で読める。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<HealthVerdictOut>,
 }
 
 /// celeris → ワーカーの `run` メッセージ（1 行）。`{"type":"run", ...}`。
@@ -1329,6 +1344,12 @@ pub fn schema_value() -> serde_json::Value {
 
 mod campaign;
 pub use campaign::{CampaignRunPin, CampaignSelected};
+mod health;
+pub use health::{
+    DiffStat, HealthFindingCounts, HealthFindingKind, HealthFindingOut, HealthFindingsSummary,
+    HealthPolicyState, HealthRepoInput, HealthReportFinding, HealthReviewInput, HealthSeverity,
+    HealthVerdictOut, OwnerRow, PathStat, PolicyVerdictOut,
+};
 mod cos_chat;
 pub use cos_chat::{
     COS_CHAT_IMAGE_MEDIA_TYPES, COS_RUN_CREDENTIAL_ENV, CosChatAttachment, CosChatContext,

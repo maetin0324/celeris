@@ -210,6 +210,7 @@ fn gate_plan(schema: &str, review: task_core::StageReview) -> task_core::Executi
             work_units: Vec::new(),
             phases: Vec::new(),
             children: Vec::new(),
+            design_brief: None,
         },
         created_at: "2026-10-11T00:00:00Z".to_string(),
         superseded_at: None,

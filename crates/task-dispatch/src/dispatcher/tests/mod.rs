@@ -1983,6 +1983,7 @@ fn adopt_three_step_plan(
         ],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     task_ops::execution::adopt_plan(
         store.as_ref(),
@@ -2060,6 +2061,7 @@ fn plan_json(work_units: Vec<task_core::WorkUnitSpec>) -> String {
         work_units,
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     serde_json::to_string(&spec).unwrap()
 }
@@ -2437,6 +2439,7 @@ fn adopt_v2_plan(
             })
             .collect(),
         children: Vec::new(),
+        design_brief: None,
     };
     task_ops::execution::adopt_plan(
         store.as_ref(),
@@ -2753,6 +2756,7 @@ fn adopt_gate_plan(store: &Arc<dyn TaskStore>, task_id: TaskId, flag: &Path, sle
             title: "gate".to_string(),
         }],
         children: Vec::new(),
+        design_brief: None,
     };
     task_ops::execution::adopt_plan(
         store.as_ref(),

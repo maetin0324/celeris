@@ -375,3 +375,96 @@ async fn general_cos_consult_done_summary_returns_to_the_origin_thread() {
         .expect("raw record");
     }
 }
+
+fn probe_value(parts: &[(&'static str, u64)], name: &str) -> Option<u64> {
+    parts.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
+}
+
+/// ADR 2026-11-07-root-done-tick-phase-timing D3/D4: `cos.root_done.*` の内訳は、root_done_tick が閾値を
+/// 超えた pass だけ tick_cos_chat_launch の内訳と `TickReport::step_us`（slow tick の警告が出す列）に載る。
+/// 閾値は試験で 0 と最大に差し替え、時計・sleep・負荷は使わない。
+#[tokio::test]
+async fn root_done_probe_parts_reach_the_tick_steps_only_over_the_threshold() {
+    let mut f = fixture(false);
+    f.tick(); // 導入: cursor は現在の末尾から
+    let set_threshold = |f: &mut Fixture, t: std::time::Duration| {
+        f.d.cos_chat_launch
+            .as_mut()
+            .expect("launch")
+            .root_done_probe_threshold = t;
+    };
+    // 閾値を超えない pass には足さない（通常の tick は今までと同じ列）。
+    set_threshold(&mut f, std::time::Duration::MAX);
+    f.done_task(None);
+    f.advance(1);
+    let parts = f.d.tick_cos_chat_launch();
+    assert!(
+        parts.iter().all(|(n, _)| !n.starts_with("cos.root_done.")),
+        "{parts:?}"
+    );
+    assert!(probe_value(&parts, "cos.root_done_tick").is_some());
+    assert_eq!(f.summary_rows(), 1);
+
+    // 閾値 0: 取り込みと前進の段が全部出る。
+    set_threshold(&mut f, std::time::Duration::ZERO);
+    f.done_task(None);
+    f.advance(1);
+    let parts = f.d.tick_cos_chat_launch();
+    assert_eq!(f.summary_rows(), 2);
+    for name in [
+        "cos.root_done.ingest_us",
+        "cos.root_done.cursor_get.wait_us",
+        "cos.root_done.cursor_get.work_us",
+        "cos.root_done.events_since.wait_us",
+        "cos.root_done.events_since.work_us",
+        "cos.root_done.candidate_get.work_us",
+        "cos.root_done.candidate_events_for.work_us",
+        "cos.root_done.insert.work_us",
+        "cos.root_done.cursor_set.work_us",
+        "cos.root_done.advance_us",
+        "cos.root_done.open.wait_us",
+        "cos.root_done.open.work_us",
+        "cos.root_done.facts.get.work_us",
+        "cos.root_done.facts.events_for.work_us",
+        "cos.root_done.facts.delivery_get.work_us",
+        "cos.root_done.facts.children.work_us",
+        "cos.root_done.facts.progress_us",
+        "cos.root_done.facts.row_max_us",
+        "cos.root_done.advance_other_us",
+    ] {
+        assert!(
+            probe_value(&parts, name).is_some(),
+            "{name} missing: {parts:?}"
+        );
+    }
+    // 件数: この pass で読んだ event は done 遷移を含み、done の root 1 件を候補にして 1 行入れた。
+    assert!(probe_value(&parts, "cos.root_done.events_since_rows").expect("rows") >= 1);
+    assert_eq!(
+        probe_value(&parts, "cos.root_done.events_since_calls"),
+        Some(1)
+    );
+    assert_eq!(probe_value(&parts, "cos.root_done.candidate_rows"), Some(1));
+    assert!(probe_value(&parts, "cos.root_done.candidate_events_for_max").expect("max") >= 1);
+    assert_eq!(probe_value(&parts, "cos.root_done.insert_calls"), Some(1));
+    // CoS 無効: 新しい行は同じ pass で事実を作って fallback へ進む（open の行は 1、事実づくり 1 回）。
+    assert_eq!(probe_value(&parts, "cos.root_done.open_rows"), Some(1));
+    assert_eq!(probe_value(&parts, "cos.root_done.facts_calls"), Some(1));
+    assert!(probe_value(&parts, "cos.root_done.facts.events_for_max").expect("max") >= 1);
+    // delivery が無いので進捗ファイルは読まず、git は起こさない。
+    assert_eq!(
+        probe_value(&parts, "cos.root_done.facts.progress_git_calls"),
+        Some(0)
+    );
+
+    // 通常の tick でも同じ項目が `step_us` に載る（"slow tick phases" はこの列を出す）。
+    f.done_task(None);
+    f.advance(1);
+    let report = f.d.tick().expect("tick");
+    assert_eq!(
+        probe_value(&report.step_us, "cos.root_done.candidate_rows"),
+        Some(1),
+        "{:?}",
+        report.step_us
+    );
+    assert!(probe_value(&report.step_us, "tick_cos_chat_launch").is_some());
+}

@@ -49,6 +49,13 @@ WorkUnit `rules-brief`。[ADR 2026-11-07 health-review-integration](../../adr/20
 - 実行したのはコードの commit の後。その後の commit はこの進捗ファイルだけを変える。
 - 進捗の commit の後に再実行 → exit 100。nextest 5626 件中 5625 passed、1 failed。落ちたのは `task-dispatch dispatcher::tests::work_units::an_interrupted_integration_is_redone_idempotently_after_restart`（work_units.rs:2994、`Blocked` と `Done` の不一致）。単独の再実行（`cargo nextest run -p task-dispatch -E 'test(an_interrupted_integration_is_redone_idempotently_after_restart)'`）では passed で、1 回目の全体の実行でも passed だった。この unit は task-dispatch を変えていない。
 
+## 2 回目の run（check の不合格の確認）
+- 1 回目の run の後に celeris が走らせた check（`bash scripts/dev/test-affected.sh && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`）が exit 100 で落ちた。先頭の check-health は `verdict=pass exit=0 new=0 worsened=0`、repo_health_gate も全件 OK。
+- 落ちたのは nextest の 1 件 `task-worker browser::launcher_run::tests::launcher_login::launcher_credential_login_forged_sink_frame_never_reaches_chrome`（browser_launcher_run_tests.rs:3338、「the sink closed without a CDP reply」、`left: None`）。
+- 単独の再実行（`cargo nextest run -p task-worker -E 'test(launcher_credential_login_forged_sink_frame_never_reaches_chrome)'`）は 1 passed。実行時の load average は約 55。
+- 原因の推定（未確認）: `run_login`（browser_launcher/backend.rs）は偽の broker を呼ぶ `inject` の前に、時間上限のある CDP の手順（login の navigation 15 秒、login の deadline）を踏む。高負荷でそのどれかが失敗すると、`broker.start` が呼ばれないまま `run_login` が Err を返す。試験の `result.is_err()` は通り、broker の thread が書く `reply` は `None` のまま残る。どの手順で落ちたかは確かめていない。
+- この unit の変更は prompt の組み立てだけで、browser の経路を変えていない。task-worker を変えたので test-affected が task-worker の全試験を走らせ、この試験が対象に入った。成果は直さず、同じ check を再実行した（結果は下の「2 回目の run の再実行」）。
+
 ## 判断
 - ADR D1.1 は `section()` の見出しを `## 変更の規約（汎用）` と書くが、task の Objective（generic.md の 1 行目を見出しにし、二重にしない）に従い、generic.md をそのまま出した。prompt の中の本文が generic.md と 1 バイトも違わないので、試験は `GENERIC_RULES` の部分一致で 1 回を確かめられる。
 - repo 固有の節の見出しは generic.md の H1 と同じ階層の `# 変更の規約（この repo 固有）` にした。
@@ -56,8 +63,9 @@ WorkUnit `rules-brief`。[ADR 2026-11-07 health-review-integration](../../adr/20
 
 ## 未解決事項
 - 上の task-dispatch の試験 1 件は全体の実行でだけ落ちることがある（原因は未確認）。
+- task-worker の browser 試験 `launcher_credential_login_forged_sink_frame_never_reaches_chrome` は高負荷の全体実行でだけ落ちることがある（原因は上の推定で、未確認）。
 - review 方針（`review_policy`）は今は planner の context にだけある。worker・reviewer の run には repo 固有の節が出ない。dispatcher が base 側の方針を読んで `review_policy` を埋める配線（`planner_flow.rs` は今 `None`）は dispatch の unit の範囲。
 - Aider には CLAUDE.md が届かない（ADR D1.6）。汎用規約は `build_prompt` を通るので Aider にも届く。
 
 ## 提案
-- 無し。
+- browser の担当で `launcher_credential_login_forged_sink_frame_never_reaches_chrome` を決定的にする。案: `run_login` の Err の code が偽 broker の経路のもの（`Unauthorized`）であることを確かめ、偽 broker の `start` が呼ばれたことを別の印で待つ。task-worker を変える WU は、この試験の揺れで必須検査が落ちうる。

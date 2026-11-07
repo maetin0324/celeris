@@ -120,10 +120,7 @@ completed: 2026-11-07
 | drain の timeout が `cos_drain_timeout`・旧 raw の judge の結果 | 本 task の範囲外（D3 の driver・judge/drain。変更していない） | — |
 
 ### 修正前の不合格と接続後の合格
-本番コードに不備は無く、試験は最初から合格した（接続済みの先行 unit の実装を横断で確かめる試験のため）。試験が実装を見張っていることを、実装を一時的に壊して確かめた（試験を適用した状態で壊し、確認後に `git checkout --` で戻した。戻した後の合格は下の「修正後」）。
-- 壊し方 1: `ChatRunSink::before_spawn` から `chat_run_mark_launched` を外す（通知せずに spawn）。コマンド `cargo test -p task-dispatch --lib cos_launch_cross`、exit 101、1 passed / 7 failed（通知失敗の試験は spawn marker が作られて落ちる。ほか 6 件は `launched_at` が無く落ちる）。
-- 壊し方 2: `slot_only_wait` を常に偽にする。同コマンド、exit 101、4 passed / 4 failed（worker・reviewer・実 account・再起動の 4 件。枠だけの失敗が即 Failed になる）。
-- 修正後（元の実装に戻して同じコマンド）: 8 passed, 0 failed。
+本番コードに不備があって試験が落ちた、という経過ではない（接続済みの先行 unit を横断で確かめる試験）。修正前の不合格は、末尾「修正前の不合格と修正後の合格」節の表（cross の行）にまとめた。「試験は最初から合格した」という旧記述は、この表に置き換えた。
 - 試験を書く途中で落ちた 6 件は試験側の誤りで、実装の不備ではない: ① 既知 usage の予算は model の単価が要る（model `m` の単価を試験で与えた）、② `launched_at` は worker が `before_spawn` を呼んだ後に書かれるので join 後に確かめる、③ `tick` は CoS launch tick を含み task 完了の triage run も同じ枠を使うため、解放後は他の CoS run の終わりを待ってから tick する。
 
 ### 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
@@ -138,3 +135,30 @@ completed: 2026-11-07
 
 ### 提案
 - CoS 同士の枠の取り合いを効かせる別 task（launch tick の間も `route_reservations` を `route_state` に渡す）。
+
+## 修正前の不合格と修正後の合格
+
+追記日: 2026-11-07（regress-log unit。実装は足していない。回帰試験の file は現 HEAD のまま、守る本番 code だけを一時的に戻して実行し、`git checkout -- crates` で戻して同じコマンドで合格を確認した）。
+
+### 方法
+- 試験 file（`crates/**/tests/`）は一切触らない。戻す対象は本番 code だけ。
+- 戻し方は 3 通り。(A) 守る関数・条件を壊す（stub 化・条件を外す）。(B) 修正 commit の本番 code を逆適用する。(C) 修正前 commit（`126fb1a1`）の `cos_chat/` と `task-core/src/chat/triage.rs` を一時的に当て、`slot_wait.rs` を消す。
+- (B) が成立しない箇所（新しい field・型を追加した修正）は、試験が compile できず落ちる。その場合は表に「compile error」と書いた。
+
+### 表（全コマンドは `cargo test -p task-dispatch --lib -- <filter>`。以下 `<filter>` だけ記す）
+| 回帰 | 試験名 | 修正前（戻し方・filter・結果） | 修正後（同じ filter・結果） |
+| --- | --- | --- | --- |
+| reason（`slot_only_wait`・暗黙 account の +1・auth の分類・失敗時 trace.candidates） | `route_select::slot_wait::{every_candidate_excluded_by_slots_only_waits, closed_enumeration_of_reasons, implicit_account_gets_no_extra_cos_slot, same_input_gives_the_same_order_and_result}` と `cos_slot_wait::{slot_only_wait_keeps_the_run_waiting_then_launches_the_same_run, slot_wait_expires_at_the_run_deadline_and_is_not_extended, stop_closes_a_waiting_run_before_launch}` | (A) `route_select.rs` で `slot_only_wait` を常に false・暗黙 account にも +1・auth を quota 枠扱い・candidates を残さない。filter `slot_wait::`。exit 101、14 件中 7 件失敗（左の 7 試験） | 同じ filter。exit 0、14 passed, 0 failed |
+| launch-wire（起動直前の永続通知・attempt usage・prelaunch 閉鎖・回収・stop・triage の `launch_tracked`） | `cos_launch_wire` の 12 件すべて | (C) 修正前の `cos_chat/`（launch・routes・control・sink・rollover・mod）と `triage.rs`。filter `cos_launch_wire::`。exit 101、12 件中 12 件失敗（`run.launched_at.is_some()`、`the known attempt's usage is kept`、`a_launch_record_failure_prevents_the_spawn`＝通知失敗でも spawn される、など） | 同じ filter。exit 0、12 passed, 0 failed |
+| launch-wire の部分（sink・rollover・triage だけ戻す。(C) との切り分け） | 同上 12 件のうち 7 件 | (B) `15008b41` の `sink.rs`・`rollover.rs`・`triage.rs` だけ逆適用。同 filter。exit 101、12 件中 7 件失敗（launched_at 系 5、attempt usage 系 2）。残り 5 件（route 失敗・skill 不可・回収・stop 2）は `launch.rs`・`routes.rs`・`control.rs` の修正が守るため、この戻し方では合格する | 同上 |
+| slot-wait（枠待ちの Waiting 保持・期限・stop） | `cos_slot_wait` の 5 件のうち `slot_only_wait_keeps_the_run_waiting_then_launches_the_same_run`、`slot_wait_expires_at_the_run_deadline_and_is_not_extended`、`stop_closes_a_waiting_run_before_launch` | (A) `routes.rs` の枠待ち分岐を `if false && …` にして常に失敗扱い。filter `cos_slot_wait::`。exit 101、5 件中 3 件失敗（`claim stays` ほか。残り 2 件は枠待ちに依らない `cooldown_does_not_wait` と `cos_reservation_closes_with_route_unavailable_without_waiting`）。(C) まで戻すと 1 passed / 4 failed | 同じ filter。exit 0、5 passed, 0 failed |
+| cross（起動通知 → dispatch → 予算の和） | `cos_launch_cross` の 8 件 | 本番 code の修正は無く、試験は先行 unit の接続を横断で確かめる。そこで先行 unit の修正前を当てた。(C)（launch-wire と slot-wait の修正前）: filter `cos_launch_cross::`、exit 101、8 件中 8 件失敗。(B) sink・rollover・triage だけ: exit 101、8 件中 7 件失敗（合格したのは `route_failure_run_is_not_launched_…`）。(A) 枠待ち分岐だけ: exit 101、8 件中 4 件失敗（worker・reviewer・実 account・再起動の各試験）。`max_cos_runs_…` と通知失敗の試験は合格のまま（枠待ちに依らない既存の capacity 側・通知経路のため。通知失敗は (B) で落ちる） | 同じ filter。exit 0、8 passed, 0 failed |
+| cos-reserve（Claude 予約を `route_select` へ配線） | `route_select::slot_wait::cos_reservation_is_traced_and_never_a_slot_wait`、`route_select::worker_is_excluded_from_the_cos_five_hour_reserve_but_cos_is_not`、`cos_slot_wait::cos_reservation_closes_with_route_unavailable_without_waiting` | (B) `596a05d7` の本番 code（`llm_route.rs`・`accounts.rs`・`dispatcher.rs`・`route_select.rs`）を逆適用。filter `cos_reservation cos_five_hour_reserve`。exit 101、compile error（`no field cos_reserved on type QuotaSnapshot`、`no field test_cos_reserved_sources on Dispatcher`。7 件）。新しい field を足した修正のため、振る舞いの不合格ではなく試験が build できない | 同じ filter。exit 0、3 passed, 0 failed |
+
+### 戻せなかった・弱い箇所
+- cos-reserve の修正前は compile error で、assertion の不合格ではない。field を足す修正を stub で戻すと試験の側を変える必要があるため、本 unit では行わない（試験 file は現 HEAD のまま）。
+- cross の `max_cos_runs_…`（(A)(B) で合格）と通知失敗の試験（(A) で合格）は、それぞれ守る修正が別の経路にある。(C) では 8 件とも落ちる。
+- reason の戻し方 (A) は修正前 commit の再現ではなく、守る条件を個別に壊したもの。
+
+### 後片付けの確認
+- 戻した後に `git status --short` と `git diff --stat` が空（`crates/` に差分なし）。上の「修正後」は戻した後の HEAD で実行した。

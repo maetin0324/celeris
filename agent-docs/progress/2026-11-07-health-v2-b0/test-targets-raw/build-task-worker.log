@@ -1,0 +1,14 @@
+   Compiling tokio v1.53.1
+   Compiling tokio-util v0.7.19
+   Compiling tower v0.5.3
+   Compiling tokio-rustls v0.26.5
+   Compiling tower-http v0.6.11
+   Compiling h2 v0.4.19
+   Compiling hyper v1.11.1
+   Compiling hyper-util v0.1.20
+   Compiling hyper-rustls v0.27.9
+   Compiling axum v0.8.9
+   Compiling reqwest v0.13.5
+   Compiling task-worker v0.1.0 (/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/wu/test-targets/repos/agent-platform/crates/task-worker)
+   Compiling task-api v0.1.0 (/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/wu/test-targets/repos/agent-platform/crates/task-api)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 53.47s

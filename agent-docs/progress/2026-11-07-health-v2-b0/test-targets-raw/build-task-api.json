@@ -1,0 +1,10 @@
+{
+ "mode": "build",
+ "crate": "task-api",
+ "exit": 0,
+ "secs": 84.93,
+ "test_binaries": 114,
+ "compiled_units": 69,
+ "loadavg_before": "4.95 3.03 2.68",
+ "loadavg_after": "25.50 8.47 4.53"
+}

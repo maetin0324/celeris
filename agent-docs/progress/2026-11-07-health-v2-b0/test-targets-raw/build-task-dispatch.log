@@ -1,0 +1,53 @@
+   Compiling form_urlencoded v1.2.2
+   Compiling indexmap v2.14.2
+   Compiling serde_json v1.0.151
+   Compiling num-traits v0.2.19
+   Compiling serde v1.0.229
+   Compiling tracing-core v0.1.36
+   Compiling resb v0.1.2
+   Compiling rusqlite v0.32.1
+   Compiling tower v0.5.3
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling tracing v0.1.44
+   Compiling url v2.5.8
+   Compiling zoneinfo64 v0.3.0
+   Compiling ulid v1.2.1
+   Compiling debugid v0.8.0
+   Compiling h2 v0.4.19
+   Compiling timezone_provider v0.2.6
+   Compiling num-integer v0.1.47
+   Compiling schemars v1.2.2
+   Compiling temporal_rs v0.2.6
+   Compiling tower-http v0.6.11
+   Compiling deno_error v0.7.1
+   Compiling sourcemap v9.3.2
+   Compiling num-bigint v0.4.8
+   Compiling wasm_dep_analyzer v0.4.0
+   Compiling deno_path_util v0.6.4
+   Compiling task-core v0.1.0 (/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/wu/test-targets/repos/agent-platform/crates/task-core)
+   Compiling temporal_capi v0.2.6
+   Compiling v8 v150.4.0
+   Compiling hyper v1.11.1
+   Compiling hyper-util v0.1.20
+   Compiling hyper-rustls v0.27.9
+   Compiling deno_v8 v0.5.0
+   Compiling serde_v8 v0.322.0
+   Compiling reqwest v0.13.5
+   Compiling deno_core v0.413.0 (/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/wu/test-targets/repos/agent-platform/crates/script-runtime/vendor/deno_core)
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+   Compiling celeris-script v0.1.0 (/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/wu/test-targets/repos/agent-platform/crates/script-runtime)
+warning: `deno_core` (lib) generated 1 warning
+   Compiling celeris-credentiald v0.1.0 (/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/wu/test-targets/repos/agent-platform/crates/celeris-credentiald)
+   Compiling task-ops v0.1.0 (/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/wu/test-targets/repos/agent-platform/crates/task-ops)
+   Compiling routing-eval v0.1.0 (/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/wu/test-targets/repos/agent-platform/crates/routing-eval)
+   Compiling task-worker v0.1.0 (/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/wu/test-targets/repos/agent-platform/crates/task-worker)
+   Compiling task-dispatch v0.1.0 (/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/wu/test-targets/repos/agent-platform/crates/task-dispatch)
+   Compiling celeris-campaign v0.1.0 (/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/wu/test-targets/repos/agent-platform/crates/campaign)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 31s

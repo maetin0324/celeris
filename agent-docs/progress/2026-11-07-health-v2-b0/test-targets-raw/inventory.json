@@ -1,0 +1,833 @@
+{
+  "schema": "celeris.test-target-inventory/1",
+  "source": "cargo metadata --no-deps --format-version 1",
+  "crates": [
+    {
+      "name": "celeris",
+      "manifest_dir": "crates/celeris",
+      "targets": {
+        "lib": 1,
+        "bin": 1,
+        "test": 55,
+        "bench": 0,
+        "example": 1,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 55,
+      "test_targets_by_location": {
+        "tests_top": 55
+      },
+      "expected_test_binaries": 57,
+      "tests_dir": {
+        "rs_files": 61,
+        "top_level_rs_files": 55,
+        "target_files": 55,
+        "support_files": 6,
+        "support_file_paths": [
+          "actor_trace/support.rs",
+          "daemon_port/mod.rs",
+          "ops_r1/attr_fixture.rs",
+          "ops_r1/trace_fixture.rs",
+          "support/mod.rs",
+          "support/script_compare.rs"
+        ],
+        "non_rs_files": 0
+      },
+      "naive_minus_targets": 6,
+      "test_target_names": [
+        "actor_trace_flow1",
+        "actor_trace_flow2",
+        "actor_trace_flow3",
+        "actor_trace_flow4",
+        "actor_trace_flow5",
+        "bin_smoke",
+        "browser_startup_reap",
+        "campaign_acceptance_e2e",
+        "campaign_lock_e2e",
+        "campaign_wiring_e2e",
+        "cap_probe_real_daemon",
+        "cluster_login_script",
+        "cos_chat_stagnation_notify",
+        "cos_chat_triage_notify",
+        "cos_chat_triage_scenarios",
+        "credential_wait_notify",
+        "daemon_ready_wait",
+        "daily_curation",
+        "deployment_audit",
+        "evidence_mode_e2e",
+        "fake_http",
+        "instance_handoff",
+        "integration_api",
+        "legacy_event_startup",
+        "long_run_soak",
+        "notify",
+        "ops_r1_attr",
+        "ops_r1_measure",
+        "ops_r1_pipeline",
+        "ops_r1_trace",
+        "project_controller_e2e",
+        "project_controller_replay",
+        "project_cos_shadow",
+        "releases_api",
+        "root_done_summary",
+        "routing_eval_run",
+        "script_compare_cos_digest",
+        "script_compare_execution_gate",
+        "script_compare_lane_rules",
+        "script_compare_report",
+        "script_compare_route_priority",
+        "script_exhaustive",
+        "script_generation_daemon",
+        "script_generation_e2e",
+        "script_runtime",
+        "stranded_default_branch",
+        "stranded_integration",
+        "tick_prod_copy_steps",
+        "tick_scale_baseline",
+        "trial_context_canary_e2e",
+        "ui_ux_skills_delivery",
+        "unpromoted_release",
+        "variant_propagation",
+        "worker_db_guard_refuse",
+        "workspace_roots"
+      ]
+    },
+    {
+      "name": "celeris-campaign",
+      "manifest_dir": "crates/campaign",
+      "targets": {
+        "lib": 1,
+        "bin": 1,
+        "test": 111,
+        "bench": 0,
+        "example": 0,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 111,
+      "test_targets_by_location": {
+        "tests_top": 111
+      },
+      "expected_test_binaries": 113,
+      "tests_dir": {
+        "rs_files": 122,
+        "top_level_rs_files": 111,
+        "target_files": 111,
+        "support_files": 11,
+        "support_file_paths": [
+          "ablation_application_support/mod.rs",
+          "common/dagbench_durable.rs",
+          "common/dagbench_durable_backend.rs",
+          "common/dagbench_durable_checks.rs",
+          "common/dagbench_grading.rs",
+          "common/dagbench_pbs_controller.rs",
+          "common/mod.rs",
+          "daemon_identity/mod.rs",
+          "preflight_input_archive/real.rs",
+          "preflight_setup/mod.rs",
+          "support_cases/mod.rs"
+        ],
+        "non_rs_files": 1
+      },
+      "naive_minus_targets": 11,
+      "test_target_names": [
+        "a_arm_hardening",
+        "a_program_pin_and_watch",
+        "ablation_application",
+        "ablation_contract",
+        "arm_isolation",
+        "arm_set_cli_normal",
+        "arm_set_e2e",
+        "budget_cap",
+        "budget_reserve",
+        "campaign_lock",
+        "cap_probe",
+        "cases_load",
+        "celeris_exec",
+        "cli_dryrun",
+        "cli_executor",
+        "dagbench_accept",
+        "dagbench_baseline",
+        "dagbench_celeris",
+        "dagbench_ext",
+        "dagbench_fault",
+        "dagbench_graded",
+        "dagbench_harness",
+        "dagbench_ipc",
+        "dagbench_metrics",
+        "dagbench_overhead",
+        "dagbench_pbs_backend",
+        "dagbench_pbs_e2e",
+        "dagbench_pbs_intent",
+        "dagbench_pbs_raw",
+        "dagbench_pbs_transport",
+        "dagbench_process",
+        "denominator",
+        "dependency_wait",
+        "dispatch_unused_arm",
+        "env_check",
+        "env_lock",
+        "experiment_sets_exec",
+        "final_accounting",
+        "final_resolved",
+        "global_ledger_atomic",
+        "grade_binding",
+        "grade_case_gen",
+        "grade_env_marker",
+        "grade_failure_class",
+        "grader_independent",
+        "grader_input_archive",
+        "harness_exec",
+        "human_ops",
+        "human_ops_cli",
+        "human_ops_join",
+        "human_ops_report",
+        "inner_symlink",
+        "inputs_delivery",
+        "isolation",
+        "jev_smoke",
+        "jev_stages",
+        "k2_pin",
+        "k2_scope",
+        "k4_cells_validity",
+        "k_case_judged_scope",
+        "k_cases_grade",
+        "launcher",
+        "ledger_async",
+        "lock_cli",
+        "lock_execution",
+        "lock_grading",
+        "long_horizon_bench",
+        "long_horizon_public_contract",
+        "measure_daemon_example",
+        "measure_e2e",
+        "mock_e2e",
+        "nested_asset",
+        "operator_usage",
+        "ops_r1_intake",
+        "ops_r1_pipeline_assemble",
+        "ops_r1_pipeline_manifest",
+        "ops_r1_pipeline_raw",
+        "ops_r2_b_start",
+        "ops_r2_probe",
+        "ops_r2_seed",
+        "ops_r2_session",
+        "ops_r2_socket",
+        "ops_r2_ssh_config",
+        "ops_r2_trial_a_command",
+        "pilot_fixtures",
+        "pilot_wiring",
+        "preflight",
+        "preflight_contract",
+        "preflight_deny_file",
+        "preflight_input_archive",
+        "preflight_ops_r2",
+        "public_case_materials",
+        "real_asset_grade",
+        "routing_eval_identity",
+        "routing_pin",
+        "runner_checker",
+        "runner_shared_admission",
+        "runtime_probe",
+        "set_fixed_observed",
+        "short_ml_assets",
+        "short_ml_observation",
+        "side_budget",
+        "success_contract",
+        "trial_inputs",
+        "trial_state_cli_e2e",
+        "unexecuted_incomplete",
+        "usage_report",
+        "variant_pin_b1c1",
+        "variant_preflight",
+        "variant_submit",
+        "watch_driver"
+      ]
+    },
+    {
+      "name": "celeris-credentiald",
+      "manifest_dir": "crates/celeris-credentiald",
+      "targets": {
+        "lib": 1,
+        "bin": 1,
+        "test": 7,
+        "bench": 0,
+        "example": 0,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 7,
+      "test_targets_by_location": {
+        "tests_top": 7
+      },
+      "expected_test_binaries": 9,
+      "tests_dir": {
+        "rs_files": 7,
+        "top_level_rs_files": 7,
+        "target_files": 7,
+        "support_files": 0,
+        "support_file_paths": [],
+        "non_rs_files": 0
+      },
+      "naive_minus_targets": 0,
+      "test_target_names": [
+        "broker",
+        "browser_doctor",
+        "injection_ipc",
+        "injection_peer_uid",
+        "installed_unit",
+        "policy_selector",
+        "prod_admission"
+      ]
+    },
+    {
+      "name": "celeris-mcp",
+      "manifest_dir": "crates/celeris-mcp",
+      "targets": {
+        "lib": 1,
+        "bin": 0,
+        "test": 1,
+        "bench": 0,
+        "example": 0,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 1,
+      "test_targets_by_location": {
+        "tests_top": 1
+      },
+      "expected_test_binaries": 2,
+      "tests_dir": {
+        "rs_files": 1,
+        "top_level_rs_files": 1,
+        "target_files": 1,
+        "support_files": 0,
+        "support_file_paths": [],
+        "non_rs_files": 0
+      },
+      "naive_minus_targets": 0,
+      "test_target_names": [
+        "mcp_integration"
+      ]
+    },
+    {
+      "name": "celeris-script",
+      "manifest_dir": "crates/script-runtime",
+      "targets": {
+        "lib": 1,
+        "bin": 5,
+        "test": 7,
+        "bench": 0,
+        "example": 0,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 7,
+      "test_targets_by_location": {
+        "tests_top": 7
+      },
+      "expected_test_binaries": 13,
+      "tests_dir": {
+        "rs_files": 7,
+        "top_level_rs_files": 7,
+        "target_files": 7,
+        "support_files": 0,
+        "support_file_paths": [],
+        "non_rs_files": 2
+      },
+      "naive_minus_targets": 0,
+      "test_target_names": [
+        "cos_digest_ops",
+        "dto",
+        "generation",
+        "manifest",
+        "runtime",
+        "script_deploy",
+        "script_host_runner"
+      ]
+    },
+    {
+      "name": "celerisctl",
+      "manifest_dir": "crates/celerisctl",
+      "targets": {
+        "lib": 0,
+        "bin": 1,
+        "test": 18,
+        "bench": 0,
+        "example": 0,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 18,
+      "test_targets_by_location": {
+        "tests_top": 18
+      },
+      "expected_test_binaries": 19,
+      "tests_dir": {
+        "rs_files": 19,
+        "top_level_rs_files": 18,
+        "target_files": 18,
+        "support_files": 1,
+        "support_file_paths": [
+          "common/mod.rs"
+        ],
+        "non_rs_files": 0
+      },
+      "naive_minus_targets": 1,
+      "test_target_names": [
+        "bin_smoke",
+        "browser_doctor",
+        "browser_ledger_release",
+        "campaign_connected",
+        "campaign_export",
+        "cli_resolution",
+        "cos_ops",
+        "eval_requests",
+        "followups",
+        "mcp_client_scopes",
+        "no_migrate",
+        "org_migrate_v2",
+        "pipe",
+        "routing_cli",
+        "skills_import",
+        "terminal_pty",
+        "worker_run",
+        "worker_run_signal"
+      ]
+    },
+    {
+      "name": "e2e",
+      "manifest_dir": "tests/e2e",
+      "targets": {
+        "lib": 1,
+        "bin": 0,
+        "test": 10,
+        "bench": 0,
+        "example": 0,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 10,
+      "test_targets_by_location": {
+        "tests_top": 10
+      },
+      "expected_test_binaries": 11,
+      "tests_dir": {
+        "rs_files": 10,
+        "top_level_rs_files": 10,
+        "target_files": 10,
+        "support_files": 0,
+        "support_file_paths": [],
+        "non_rs_files": 0
+      },
+      "naive_minus_targets": 0,
+      "test_target_names": [
+        "account_pool_scenarios",
+        "api_scenarios",
+        "cluster_scenarios",
+        "codex_account_pool_scenarios",
+        "delegation_scenarios",
+        "multi_account_scenarios",
+        "phase7_scenarios",
+        "plan_scenarios",
+        "scenarios",
+        "worker_db_read_only"
+      ]
+    },
+    {
+      "name": "jev-classifier",
+      "manifest_dir": "crates/jev-classifier",
+      "targets": {
+        "lib": 1,
+        "bin": 0,
+        "test": 1,
+        "bench": 0,
+        "example": 0,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 1,
+      "test_targets_by_location": {
+        "tests_top": 1
+      },
+      "expected_test_binaries": 2,
+      "tests_dir": {
+        "rs_files": 1,
+        "top_level_rs_files": 1,
+        "target_files": 1,
+        "support_files": 0,
+        "support_file_paths": [],
+        "non_rs_files": 0
+      },
+      "naive_minus_targets": 0,
+      "test_target_names": [
+        "jev_fake_server"
+      ]
+    },
+    {
+      "name": "llm-proxy",
+      "manifest_dir": "crates/llm-proxy",
+      "targets": {
+        "lib": 1,
+        "bin": 0,
+        "test": 2,
+        "bench": 0,
+        "example": 0,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 2,
+      "test_targets_by_location": {
+        "tests_top": 2
+      },
+      "expected_test_binaries": 3,
+      "tests_dir": {
+        "rs_files": 2,
+        "top_level_rs_files": 2,
+        "target_files": 2,
+        "support_files": 0,
+        "support_file_paths": [],
+        "non_rs_files": 0
+      },
+      "naive_minus_targets": 0,
+      "test_target_names": [
+        "proxy_integration",
+        "proxy_routing_context"
+      ]
+    },
+    {
+      "name": "routing-eval",
+      "manifest_dir": "crates/routing-eval",
+      "targets": {
+        "lib": 1,
+        "bin": 1,
+        "test": 1,
+        "bench": 0,
+        "example": 0,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 1,
+      "test_targets_by_location": {
+        "tests_top": 1
+      },
+      "expected_test_binaries": 3,
+      "tests_dir": {
+        "rs_files": 1,
+        "top_level_rs_files": 1,
+        "target_files": 1,
+        "support_files": 0,
+        "support_file_paths": [],
+        "non_rs_files": 0
+      },
+      "naive_minus_targets": 0,
+      "test_target_names": [
+        "pipeline_stub"
+      ]
+    },
+    {
+      "name": "task-api",
+      "manifest_dir": "crates/task-api",
+      "targets": {
+        "lib": 1,
+        "bin": 0,
+        "test": 113,
+        "bench": 0,
+        "example": 0,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 113,
+      "test_targets_by_location": {
+        "tests_top": 113
+      },
+      "expected_test_binaries": 114,
+      "tests_dir": {
+        "rs_files": 115,
+        "top_level_rs_files": 113,
+        "target_files": 113,
+        "support_files": 2,
+        "support_file_paths": [
+          "common/cos_ops.rs",
+          "common/mod.rs"
+        ],
+        "non_rs_files": 5
+      },
+      "naive_minus_targets": 2,
+      "test_target_names": [
+        "api_principals",
+        "approvals",
+        "auth_and_guards",
+        "authority_ledger",
+        "browser_doctor",
+        "browser_e2e",
+        "browser_h3_injection",
+        "browser_live",
+        "browser_live_cross",
+        "browser_restore_deliver",
+        "browser_restore_live_session",
+        "browser_site_policy_db",
+        "browser_waits",
+        "campaign_ident",
+        "campaign_variant_atomic",
+        "changes",
+        "chat_api",
+        "chat_attachments",
+        "chat_stream",
+        "cluster_connect_admin",
+        "cluster_settings_admin",
+        "concurrency",
+        "console",
+        "console_instruct",
+        "conversation",
+        "cos_auth",
+        "cos_chat_attach_handoff_kb",
+        "cos_chat_attach_pin",
+        "cos_chat_triage_scenarios",
+        "cos_integrate_task",
+        "cos_job_wait_extend",
+        "cos_live_fix_d1",
+        "cos_live_fix_d2",
+        "cos_operations",
+        "cos_operations_domains",
+        "cos_operations_review_report",
+        "cos_ops_admin_config",
+        "cos_ops_mutations",
+        "cos_ops_ops_surface",
+        "cos_ops_projects_cron",
+        "cos_ops_projects_cron_changes",
+        "cos_ops_projects_cron_docs",
+        "cos_ops_registry",
+        "cos_plan_conforms",
+        "cos_plan_conforms_guards",
+        "cos_review_rework",
+        "cos_routine_answers",
+        "cos_triage",
+        "cos_triage_override",
+        "cron_jobs",
+        "daemon_clusters_config",
+        "decisions",
+        "docs",
+        "execution",
+        "files",
+        "general_cos_consult",
+        "genres",
+        "inbox_notifications",
+        "integration_api",
+        "integration_principals",
+        "integration_repair",
+        "knowledge",
+        "legacy_routing_events",
+        "lifecycle",
+        "list_and_detail",
+        "llm_accounts_admin",
+        "llm_routes_admin",
+        "llm_sources",
+        "local_machine_settings",
+        "local_settings_admin",
+        "long_horizon_pilot",
+        "mcp_admin",
+        "memory",
+        "model_catalog",
+        "notify",
+        "operations",
+        "organization",
+        "project_auto_integrate",
+        "project_brief",
+        "project_controller",
+        "project_cos_guard",
+        "project_plan",
+        "project_roadmap",
+        "project_wake_human",
+        "project_wake_human_chat",
+        "relayed_instructions",
+        "reports",
+        "repos",
+        "repository_required",
+        "request_lock_counts",
+        "roles",
+        "routing",
+        "routing_eval",
+        "routing_source_state",
+        "routing_stage",
+        "saved_credentials",
+        "script_domains",
+        "script_exhaustive",
+        "script_generations",
+        "secrets_admin",
+        "single_human_window",
+        "skills",
+        "standby",
+        "stream",
+        "task_idempotency",
+        "task_list_with",
+        "task_management",
+        "task_tree",
+        "task_wait_api",
+        "terminals",
+        "tree_adopt",
+        "trusted_devices",
+        "unblocks"
+      ]
+    },
+    {
+      "name": "task-core",
+      "manifest_dir": "crates/task-core",
+      "targets": {
+        "lib": 1,
+        "bin": 0,
+        "test": 2,
+        "bench": 0,
+        "example": 7,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 2,
+      "test_targets_by_location": {
+        "tests_top": 2
+      },
+      "expected_test_binaries": 3,
+      "tests_dir": {
+        "rs_files": 2,
+        "top_level_rs_files": 2,
+        "target_files": 2,
+        "support_files": 0,
+        "support_file_paths": [],
+        "non_rs_files": 0
+      },
+      "naive_minus_targets": 0,
+      "test_target_names": [
+        "project_retention_scale",
+        "script_fixtures"
+      ]
+    },
+    {
+      "name": "task-dispatch",
+      "manifest_dir": "crates/task-dispatch",
+      "targets": {
+        "lib": 1,
+        "bin": 0,
+        "test": 1,
+        "bench": 0,
+        "example": 0,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 1,
+      "test_targets_by_location": {
+        "tests_top": 1
+      },
+      "expected_test_binaries": 2,
+      "tests_dir": {
+        "rs_files": 1,
+        "top_level_rs_files": 1,
+        "target_files": 1,
+        "support_files": 0,
+        "support_file_paths": [],
+        "non_rs_files": 0
+      },
+      "naive_minus_targets": 0,
+      "test_target_names": [
+        "policy_close"
+      ]
+    },
+    {
+      "name": "task-ops",
+      "manifest_dir": "crates/task-ops",
+      "targets": {
+        "lib": 1,
+        "bin": 0,
+        "test": 2,
+        "bench": 0,
+        "example": 0,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 2,
+      "test_targets_by_location": {
+        "tests_top": 2
+      },
+      "expected_test_binaries": 3,
+      "tests_dir": {
+        "rs_files": 2,
+        "top_level_rs_files": 2,
+        "target_files": 2,
+        "support_files": 0,
+        "support_file_paths": [],
+        "non_rs_files": 1
+      },
+      "naive_minus_targets": 0,
+      "test_target_names": [
+        "browser_policy_autoattach",
+        "feed_measure"
+      ]
+    },
+    {
+      "name": "task-worker",
+      "manifest_dir": "crates/task-worker",
+      "targets": {
+        "lib": 1,
+        "bin": 3,
+        "test": 21,
+        "bench": 0,
+        "example": 1,
+        "proc-macro": 0,
+        "custom-build": 0
+      },
+      "test_targets": 21,
+      "test_targets_by_location": {
+        "tests_top": 21
+      },
+      "expected_test_binaries": 25,
+      "tests_dir": {
+        "rs_files": 22,
+        "top_level_rs_files": 21,
+        "target_files": 21,
+        "support_files": 1,
+        "support_file_paths": [
+          "userns_gate/mod.rs"
+        ],
+        "non_rs_files": 5
+      },
+      "naive_minus_targets": 1,
+      "test_target_names": [
+        "browser_action_recovery",
+        "browser_cdp_sink",
+        "browser_control_gate_wire",
+        "browser_egress_process",
+        "browser_egress_relay",
+        "browser_h3_wire",
+        "browser_injection_attacks",
+        "browser_injection_wire",
+        "browser_launcher_ptrace",
+        "browser_live_cross",
+        "browser_loopback_prod_build",
+        "browser_prod_admission",
+        "browser_restore_deliver",
+        "browser_runtime_isolated",
+        "browser_runtime_supervisor",
+        "browser_sandbox_artifacts",
+        "browser_shared_cdp",
+        "browser_shared_cdp_events",
+        "reap_finished_children",
+        "ssh_cluster_manual",
+        "ssh_localhost"
+      ]
+    }
+  ],
+  "totals": {
+    "lib": 14,
+    "bin": 13,
+    "test": 352,
+    "bench": 0,
+    "example": 9,
+    "proc-macro": 0,
+    "custom-build": 0,
+    "test_targets": 352,
+    "expected_test_binaries": 379,
+    "tests_dir_rs_files": 373,
+    "tests_dir_support_files": 21,
+    "naive_minus_targets": 21
+  }
+}

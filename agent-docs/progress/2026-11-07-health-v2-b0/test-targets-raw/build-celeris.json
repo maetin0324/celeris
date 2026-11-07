@@ -1,0 +1,10 @@
+{
+ "mode": "build",
+ "crate": "celeris",
+ "exit": 0,
+ "secs": 82.24,
+ "test_binaries": 57,
+ "compiled_units": 16,
+ "loadavg_before": "10.38 7.32 4.40",
+ "loadavg_after": "11.31 7.87 4.81"
+}

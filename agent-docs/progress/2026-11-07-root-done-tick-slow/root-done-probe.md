@@ -98,10 +98,16 @@ delivery の head の tree の進捗ファイルは 1,564〜1,584 件で、こ�
   - "slow root-done row" の警告の task・state で、どの root が待ちの状態に残っているかが分かる。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-Run #2 で、commit「root-done-probe: 検査の結果を進捗に書く」の時点の HEAD で全部を再実行した（main は動いておらず、取り込み・rebase はしていない）。その後の commit はこの進捗ファイルだけを変える。
-- `bash scripts/dev/test-affected.sh` → exit 0。repo-health は verdict=pass・worsened 0。nextest は 7,846 件 passed・23 件 skipped（321 秒）。web unit は 104 file・711 件 passed。test-ts-verify は 20 passed。
+Run #3 で、commit「root-done-probe: Run #3 の測り方の変更と再測定を進捗に書く」の時点の HEAD で全部を再実行した（取り込み・rebase はしていない）。その後の commit はこの進捗ファイルだけを変える。
+- Run #2 の後の check の不合格 2 件の原因:
+  - 範囲 check: `crates/task-core/src/{lib.rs,lock_wait.rs,store/mod.rs}` が WU の範囲外だった。Run #3 で task-core の変更を消し、待ちの測り方を task-dispatch の中に移した（ADR の付記）。
+  - `bash scripts/dev/test-affected.sh` の exit 100: celeris-campaign の `launcher::a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid` が「daemon exited before becoming healthy」（daemon.log は空）で落ちた。この試験の daemon は試験 binary の写しで、root_done_tick の code を通らない。Run #2 の手元の実行と Run #3 の実行ではこの試験は通ったので、check の実行時の負荷による一時的な失敗と見る（原因は未確認）。
+- 範囲 check（計画の check と同じコマンド）→ exit 0（範囲外の path なし）。`sh "$CELERIS_WU_SCOPE_PATHS"` が出す path は、ADR・この進捗ファイル・`crates/task-dispatch/src/{lib.rs,root_done_probe.rs}`・`crates/task-dispatch/src/dispatcher/cos_chat/{launch.rs,root_done.rs}`・`crates/task-dispatch/src/dispatcher/tests/cos_chat_root_done.rs` だけ。
+- `bash scripts/dev/test-affected.sh` → exit 0（対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）。repo-health は verdict=pass・worsened 0。nextest は 3,502 件 passed・11 件 skipped（462 秒）。上の launcher の試験も通った。
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 - `sh scripts/dev/progress-index.sh --check` → ok
-- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` が出す path は、ADR・この進捗ファイル・`crates/task-core/src/{lib.rs,lock_wait.rs,store/mod.rs}`・`crates/task-dispatch/src/{lib.rs,root_done_probe.rs}`・`crates/task-dispatch/src/dispatcher/cos_chat/{launch.rs,root_done.rs}`・`crates/task-dispatch/src/dispatcher/tests/cos_chat_root_done.rs` だけ。
-- 本番写しの測定: `TICK_PROD_DB=$TMPDIR/prod/{copy,one,three}.sqlite3 TICK_PROD_TICKS={3,3,1} cargo nextest run -p celeris --test tick_prod_copy_steps --run-ignored all --no-capture` → 3 回とも exit 0（値は上の表）。測定の時点の code は commit「root-done-probe: root_done_tick の段別計測を slow tick の内訳に出す（cos.root_done.*、store の待ちと処理を分ける）」。後の commit は code を別の module へ移しただけで、測る段は変えていない。
+- `cargo nextest run -p task-dispatch -E 'test(root_done) | test(store_span)'` → 11 件 passed（`root_done_probe_parts_reach_the_tick_steps_only_over_the_threshold`・`store_span_counts_calls_and_splits_off_cpu_wait_from_cpu_work`・`parts_are_prefixed_and_unique` を含む）
+- 本番写しの測定:
+  - Run #1: `TICK_PROD_DB=$TMPDIR/prod/{copy,one,three}.sqlite3 TICK_PROD_TICKS={3,3,1} cargo nextest run -p celeris --test tick_prod_copy_steps --run-ignored all --no-capture` → 3 回とも exit 0。測定の時点の code は commit「root-done-probe: root_done_tick の段別計測を slow tick の内訳に出す（cos.root_done.*、store の待ちと処理を分ける）」。
+  - Run #3: `TICK_PROD_DB=$TMPDIR/prod/one.sqlite3 TICK_PROD_TICKS=2 cargo nextest run -p celeris --test tick_prod_copy_steps --run-ignored all --no-capture` → exit 0（1 passed、27.2 秒）。測定の時点の code は commit「root-done-probe: store の待ちと処理を thread の CPU 時間で分け、task-core の変更を戻す」。値は上の表の「one（Run #3）」。

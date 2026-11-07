@@ -37,14 +37,17 @@ completed: 2026-11-07
   missing_paths 0 件。
 - `python3 agent-docs/progress/2026-11-07-health-v2-b0/capability-map-render.py <親 task の artifacts/b0/capability-map.md>` → exit 0。
 - task の受け入れ 0 の python 一行（capability 8 個以上・tests の path 実在）→ exit 0、欠け `[]`。
+- 再計画 v2 の WU check 相当（fragment の id 41 件がすべて統合 JSON にある、各 capability に owners・invariants・public_ports・tests・test_costs がある、tests は実在 path の文字列、test_costs は実在 path と build_link_secs を持つ）→ exit 0、`ok 41 52 51`（capability 41、multi_writer_state 52、arch_map_diffs 51）。
 - `sh scripts/dev/check-doc-links.sh` → exit 0
 - `sh scripts/dev/check-adr-numbers.sh` → exit 0
 - `sh scripts/dev/progress-index.sh --check` → exit 0
 - `git diff --quiet $(git merge-base HEAD main) -- crates/ web/ control-ts/` → exit 0
 - 文書と JSON だけの変更なので、test-affected・clippy・fmt は対象の crate が無い（未実行）。
 
+## 解決済み
+- WU check と task の受け入れ条件 0 は `tests` の形で食い違っていた（WU check は object、task 条件は path 文字列を読む）。再計画 v2 で WU check を直し、`tests` は path 文字列、試験コストは `test_costs`（path・build_link_secs）に置く形に揃えた。データは変えていない。
+
 ## 未解決
-- assemble の WU check と task の受け入れ条件 0 が `tests` の形で食い違う。WU check は `t['path']`・`t['build_link_secs']` を読む（要素は object）。task 条件 0 は `os.path.exists(t)` を読む（要素は path 文字列）。両方を満たす JSON は無い。統合 JSON は task 条件に合わせて `tests` を path 文字列にし、費用は `test_costs`（path・build_link_secs）に置いた。WU check を `test_costs` を読む形に直すよう plan_issue で申告した（2026-11-07、attempt 1）。
 - 試験コストが未計測の試験が 56 件ある。段 1 で build を測ったのは task-core・task-dispatch・task-api・
   task-worker・celeris の 5 crate だけで、task-ops・llm-proxy・campaign・script-runtime・celerisctl・web・
   control-ts は測っていない。

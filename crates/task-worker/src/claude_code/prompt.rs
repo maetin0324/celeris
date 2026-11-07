@@ -1769,6 +1769,7 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
                 ));
             }
             out.push('\n');
+            out.push_str(&crate::change_rules::review::health_section(review));
         }
         None => {
             out.push_str("## Review context\nno review context\n\n");
@@ -1785,13 +1786,9 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
         ));
     }
     out.push('\n');
-    out.push_str(&format!(
-        "## Result\n\
-         Write your verdicts to `{artifacts}/review.json` (create the `{artifacts}/` directory if it does \
-         not exist yet) as a single JSON object of exactly this shape: \
-         `{{\"verdicts\":[{{\"criterion\":<index>,\"pass\":<bool>,\"reason\":\"...\"}}]}}`. You must write \
-         exactly one verdict for each criterion listed under \"Criteria you must judge in this run\" \
-         above.\n\n"
+    out.push_str(&crate::change_rules::review::result_section(
+        context.review.as_ref(),
+        artifacts,
     ));
     out.push_str(&result_json_instructions(artifacts));
     out

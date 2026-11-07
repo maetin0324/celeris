@@ -8,12 +8,15 @@
 //! - repo 固有の規約（`repo_section`）は `RunContext` が持つ review 方針（いまは planner の
 //!   `ExecutionPlannerContext.review_policy`）から、汎用規約の直後に出す。無ければ何も出さない。
 //! - `design_brief_section` は /3 の planner に設計 brief（`ExecutionPlanSpec.design_brief`）の書き方を示す（D3.4）。
+//! - reviewer prompt の health の材料と Result 節は `review`（D4.1・D5.4・D6.3）。
 //!
 //! ここは純粋関数だけで、I/O も LLM も無い。
 
 use task_core::design_review::ReviewPolicy;
 
 use crate::protocol::{ExecutionPlannerContext, RunContext};
+
+pub mod review;
 
 /// D1.1: 汎用規約の正本（binary に埋め込む。本文の見出しは 1 行目）。
 pub const GENERIC_RULES: &str = include_str!("change_rules/generic.md");

@@ -1,0 +1,45 @@
+[
+ {"name": "<data>/runs/<run_id>/result.json",
+  "note": "run の終端 message（WorkerMessage）。worker が書き、daemon は WorkUnit の合成終端を書く。daemon は lease 切れの回収で読む",
+  "writers": [
+   {"crate": "task-worker", "module": "subprocess", "path": "crates/task-worker/src/subprocess.rs"},
+   {"crate": "task-dispatch", "module": "dispatcher", "path": "crates/task-dispatch/src/dispatcher/work_units.rs"}],
+  "readers": ["crates/task-dispatch/src/dispatcher.rs"]},
+ {"name": "<artifacts_dir>/result.json",
+  "note": "run の agent が書く。研究系 harness は worker が書き直し・消す。stray な置き場所の写しは worker。CoS の再試行の前に daemon が消す",
+  "external_writers": ["run の agent（LLM）"],
+  "writers": [
+   {"crate": "task-worker", "module": "result_location", "path": "crates/task-worker/src/result_location.rs"},
+   {"crate": "task-worker", "module": "langmem", "path": "crates/task-worker/src/langmem.rs"},
+   {"crate": "task-worker", "module": "paperqa", "path": "crates/task-worker/src/paperqa.rs"},
+   {"crate": "task-worker", "module": "local_deep_research", "path": "crates/task-worker/src/local_deep_research.rs"},
+   {"crate": "task-dispatch", "module": "dispatcher", "path": "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs"}],
+  "readers": ["crates/task-dispatch/src/review.rs", "crates/task-dispatch/src/dispatcher/tree_units.rs", "crates/task-worker/src/result_report.rs", "crates/celeris/src/delivery.rs"]},
+ {"name": "<artifacts_dir>/checkpoint.json",
+  "note": "run の agent だけが書く。worker（claude_code の headless checkpoint）と daemon（task-dispatch checkpoint）は読むだけ。複数書き手ではない",
+  "external_writers": ["run の agent（LLM）"],
+  "writers": [],
+  "readers": ["crates/task-dispatch/src/checkpoint.rs", "crates/task-worker/src/claude_code.rs"]},
+ {"name": "<artifacts_dir>/delegate.json",
+  "note": "run の agent が書き、worker が run の前に消し、終わりに読んで転送する",
+  "external_writers": ["run の agent（LLM）"],
+  "writers": [
+   {"crate": "task-worker", "module": "delegate_file", "path": "crates/task-worker/src/delegate_file.rs"}],
+  "readers": ["crates/task-worker/src/delegate_file.rs"]},
+ {"name": "<artifacts_dir>/followups.json",
+  "note": "run の中の celerisctl add と agent が追記し、run の終わりに daemon が読んで draft task を作り、消す",
+  "external_writers": ["run の agent（LLM）"],
+  "writers": [
+   {"crate": "celerisctl", "module": "commands", "path": "crates/celerisctl/src/commands/add.rs"},
+   {"crate": "task-dispatch", "module": "dispatcher", "path": "crates/task-dispatch/src/dispatcher/followups.rs"}],
+  "readers": ["crates/task-dispatch/src/dispatcher/followups.rs"]},
+ {"name": "<scratch root>/<lease>（scratch pool の CARGO_TARGET_DIR・.lock・lease）",
+  "note": "lease の実装は task-worker scratch。daemon の GC は .deleting-* へ rename して消す。worker の外の owner（release gate・agent）は celerisctl scratch で lease を作る。直列化は同じ .lock",
+  "external_writers": ["run の中の cargo（target の中身）"],
+  "writers": [
+   {"crate": "task-worker", "module": "scratch", "path": "crates/task-worker/src/scratch.rs"},
+   {"crate": "task-dispatch", "module": "scratch_gc", "path": "crates/task-dispatch/src/scratch_gc.rs"},
+   {"crate": "task-dispatch", "module": "target_sweep", "path": "crates/task-dispatch/src/target_sweep.rs"},
+   {"crate": "celerisctl", "module": "commands", "path": "crates/celerisctl/src/commands/scratch.rs"}],
+  "readers": []}
+]

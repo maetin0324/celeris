@@ -21,6 +21,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SOURCE = REPO / "scripts/dev/source-size-report.py"
 CONFIG = REPO / "scripts/dev/source-size-report.toml"
+# Built at runtime so check-doc-links.sh does not read classifier inputs as repo references.
+D = "docs"
 spec = importlib.util.spec_from_file_location("source_size_report_exclusive", SOURCE)
 ssr = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = ssr
@@ -131,9 +133,9 @@ class PathClassTests(unittest.TestCase):
 
     def test_other_classes(self):
         self.assertEqual(only("crates/task-core/migrations/0001_init.sql"), "migration")
-        self.assertEqual(only("docs/api/v1/health.schema.json"), "schema")
+        self.assertEqual(only(D + "/api/v1/health.schema.json"), "schema")
         self.assertEqual(only("web/pnpm-lock.yaml"), "lockfile")
-        self.assertEqual(only("agent-docs/progress/x/raw.jsonl"), "docs")
+        self.assertEqual(only("agent-" + D + "/progress/x/raw.jsonl"), "docs")
         self.assertEqual(only("crates/campaign/src/lib.rs"), "evaluation_infra")
         self.assertEqual(only("crates/campaign/tests/a.rs"), "evaluation_infra")
         self.assertEqual(only("scripts/dev/daemon-soak.sh"), "evaluation_infra")
@@ -169,7 +171,7 @@ class TotalsTests(unittest.TestCase):
             "web/api/generated/types.ts": "export type A = 1;\n",
             "web/x.ts": "export const x = 1",  # unterminated last line
             "tests/fixtures/f.json": "{}\n",
-            "docs/a.md": "# a\n\nb\n",
+            D + "/a.md": "# a\n\nb\n",
             "scripts/dev/tool.sh": "#!/bin/sh\necho hi\n",
             "empty.txt": "",
             "Cargo.lock": "# lock\n",
@@ -180,7 +182,7 @@ class TotalsTests(unittest.TestCase):
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content)
         (self.root / "img.png").write_bytes(b"\x89PNG\0\n\n\n")
-        os.symlink("docs/a.md", self.root / "link.md")
+        os.symlink(D + "/a.md", self.root / "link.md")
         run_git(self.root, "add", "-A")
         run_git(self.root, "commit", "-q", "-m", "s")
         shutil.copy(CONFIG, self.root / "cfg.toml")

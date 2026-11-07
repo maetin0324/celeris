@@ -81,8 +81,10 @@ git grep -I -c '' "$(git merge-base HEAD main)" | awk -F: '{s+=$NF} END{print s}
 ## 変更
 - `phase 1: source-size-report に全追跡行の排他的 class 分類を足す` — `--exclusive-classes`・`--rev`・`--files`、
   toml の `[exclusive_classes]`、unittest 22 件、この進捗と loc-baseline.json。
-- `phase 1: 排他的分類の試験の入力 path を doc link 検査の対象から外す` — 新しい試験の `docs/…` は分類器の入力値なので
-  `scripts/dev/check-doc-links.sh` の FOREIGN_DOCS に足した（既存の test_source_size_report.py と同じ扱い）。
+- `phase 1: 排他的分類の試験の入力 path を doc link 検査の対象から外す` — 当初は check-doc-links.sh の FOREIGN_DOCS に
+  足したが、この WU の範囲外の file だったため取り消した。
+- `phase 1: 排他的分類の試験の docs path を実行時に組み立てる` — 試験の docs の path を `D + "/a.md"` の形で組み立て、
+  check-doc-links.sh を変えずに検査を通す。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - `python3 -m unittest discover -s scripts/tests -p 'test_source_size*.py'` → exit 0（60 tests OK、うち新規 22）

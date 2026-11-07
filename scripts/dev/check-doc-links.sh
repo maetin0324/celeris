@@ -27,11 +27,10 @@ ALWAYS_EXCLUDE="crates/script-runtime/vendor/ scripts/dev/testdata/ scripts/dev/
 # classify.rs の旧 docs パスも分類器の入力値で、この repo の参照ではない。
 # sink_tests.rs の docs/SKILL.md も試験の入力値（skill 配送の fixture 文字列）で、この repo の参照ではない。
 # execution_plan/tests.rs の docs/ops/x.md も試験の入力値（計画検証の fixture 文字列）で、この repo の参照ではない。
-# test_source_size_exclusive.py の docs/… も分類器の入力 path（行数分類の正負例）で、この repo の参照ではない。
 FOREIGN_DOCS="crates/task-api/src/docs.rs crates/task-api/tests/docs.rs crates/task-ops/src/docs.rs
 crates/task-ops/src/docs/ crates/task-ops/src/docs_maintenance/ crates/celeris/src/doc_gardener/tests.rs
 crates/task-dispatch/src/undeclared_artifacts/tests.rs crates/task-worker/src/preamble/tests.rs
-crates/task-core/src/execution/tests.rs crates/task-core/src/execution_plan/tests.rs scripts/tests/test_source_size_report.py scripts/tests/test_source_size_exclusive.py
+crates/task-core/src/execution/tests.rs crates/task-core/src/execution_plan/tests.rs scripts/tests/test_source_size_report.py
 crates/celeris/src/delivery/tests.rs crates/task-dispatch/src/auto_resolve/classify.rs
 crates/task-dispatch/src/dispatcher/cos_chat/sink_tests.rs
 crates/task-dispatch/src/auto_resolve/tests.rs

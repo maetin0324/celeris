@@ -550,7 +550,7 @@ fn health_review_event_types_match_their_serde_names() {
     let plan = task_core::execution_plan::ExecutionPlanSpec::v1("r".into(), Vec::new());
     let events = vec![
         Event::DesignReviewRequested {
-            plan_sha256: task_core::design_review::plan_sha256(&plan),
+            plan_sha256: task_core::execution_plan::plan_sha256(&plan),
             plan: Box::new(plan),
             risk: task_core::design_review::RiskAssessment {
                 level: task_core::design_review::RiskLevel::Unknown,

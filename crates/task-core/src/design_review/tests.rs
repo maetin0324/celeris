@@ -3,7 +3,7 @@
 use serde_json::json;
 
 use super::*;
-use crate::execution_plan::DesignOption;
+use crate::execution_plan::{ExecutionPlanSpec, assess_plan_risk, plan_sha256, plan_write_paths};
 
 /// celeris.toml の `[review]` と同じ形の方針（events・store の 2 class）。
 fn policy() -> ReviewPolicyState {

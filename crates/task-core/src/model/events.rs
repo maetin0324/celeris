@@ -428,7 +428,7 @@ pub enum Event {
         pass: bool,
     },
     /// ADR 2026-11-07-health-review-integration D3.5: risk が `high`・`unknown` の計画を採用の前に設計 review に
-    /// 回した。`plan` は計画の本文、`plan_sha256` はその JSON の SHA-256（`design_review::plan_sha256`）。
+    /// 回した。`plan` は計画の本文、`plan_sha256` はその JSON の SHA-256（`execution_plan::plan_sha256`）。
     /// 同じ `plan_sha256` の `DesignReviewed` が無い間が「設計 review 待ち」で、ほかの表・列は持たない（I9）。
     /// `policy_sha256` は判定に使った review 方針の `definition_sha256`（方針を読めない `unknown` では無い）。
     /// 状態は変えない（`replay` は無視する）。

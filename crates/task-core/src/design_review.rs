@@ -6,16 +6,17 @@
 //! （`celeris.repo-health.review-policy/1`）を読んでこの型にする。Rust では TOML を読まない。
 //! 型は worker protocol の `ExecutionPlannerContext.review_policy` にそのまま載る（planner の prompt への写し）。
 //!
-//! D3.3 の risk の判定（[`assess_risk`]）もここに置く。入力（review 方針の状態・計画の write path・設計 brief）
-//! だけで決まる純粋関数で、LLM も I/O も使わない（I4）。
+//! D3.1 の設計 brief の型（[`DesignBrief`]。`execution_plan` が再公開する）と D3.3 の risk の判定（[`assess_risk`]）も
+//! ここに置く。判定は入力（review 方針の状態・write path・設計 brief）だけで決まる純粋関数で、LLM も I/O も使わない
+//! （I4）。計画から write path を集める関数（`execution_plan::plan_write_paths`）・計画 1 つの判定
+//! （`execution_plan::assess_plan_risk`）は計画の側に置く。この module は計画の型を使わない（task-core の module の
+//! 循環に入れないため）。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-use crate::execution_plan::{DesignBrief, ExecutionPlanSpec};
 
 /// D2.4: 解決済みの review 方針。`source = absent`（base に `[review]` が無い）の repo では作らない
 /// （`ExecutionPlannerContext.review_policy = None`）。
@@ -39,6 +40,65 @@ pub struct ReviewPolicy {
 pub struct PathClass {
     pub class: String,
     pub paths: Vec<String>,
+}
+
+/// ADR 2026-11-07-health-review-integration D3.1: 実装前に短く整理する設計 brief。risk の判定
+/// （`design_review::assess_risk`）は `new_*` の宣言と write path から決まる（D3.3）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DesignBrief {
+    /// 症状ではなく直す原因。空にできない。
+    pub root_cause: String,
+    /// 原因を直す責務の owner（module・file・subsystem）。空にできない。
+    pub owner: String,
+    /// 再利用する既存の仕組み。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reuse: Vec<String>,
+    /// 比べた選択肢。2 件以上、`chosen = true` はちょうど 1 件。
+    pub options: Vec<DesignOption>,
+    /// 新しく足す状態（表・列・event・メモリ上の状態）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_state: Vec<String>,
+    /// 新しく足す分岐。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_branch: Vec<String>,
+    /// 新しく足す fallback・新旧切替（宣言すれば path に依らず高 risk。D3.3）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_fallback: Vec<String>,
+    /// 新しく足す外への口（CLI・API・wire の欄）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_port: Vec<String>,
+    /// 同じ変更で消す旧い仕組み（コード経路・config 欄・API・試験・文書）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removals: Vec<String>,
+    /// 守る不変条件（名前は自由文）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invariants: Vec<String>,
+}
+
+impl DesignBrief {
+    /// D3.3: 宣言した新しい仕組みの種類（`new_state`・`new_branch`・`new_fallback`・`new_port` のうち空でないもの）。
+    pub fn declared_new(&self) -> Vec<&'static str> {
+        [
+            ("new_state", &self.new_state),
+            ("new_branch", &self.new_branch),
+            ("new_fallback", &self.new_fallback),
+            ("new_port", &self.new_port),
+        ]
+        .into_iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(name, _)| name)
+        .collect()
+    }
+}
+
+/// ADR 2026-11-07-health-review-integration D3.1: brief の選択肢。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DesignOption {
+    pub name: String,
+    pub chosen: bool,
+    pub reason: String,
 }
 
 /// D3.3: dispatcher が base（target）側から review 方針を読んだ結果。`Absent` と `Unavailable` を分け、
@@ -116,22 +176,6 @@ fn summarize(why: &str) -> String {
     line.chars().take(200).collect()
 }
 
-/// D3.3: 計画の write path。全 unit（/3 の `units`）の `expected_write_paths` と leaf の `context.paths`、
-/// /1・/2 の `work_units` の `context.paths` の和（重複を除き昇順）。
-pub fn plan_write_paths(spec: &ExecutionPlanSpec) -> Vec<String> {
-    let mut paths = BTreeSet::new();
-    for unit in &spec.units {
-        paths.extend(unit.expected_write_paths.iter().flatten().cloned());
-        if !unit.is_task() {
-            paths.extend(unit.context.paths.iter().cloned());
-        }
-    }
-    for wu in &spec.work_units {
-        paths.extend(wu.context.paths.iter().cloned());
-    }
-    paths.into_iter().collect()
-}
-
 /// D3.3: write path のどれかに合う高 risk の class の名前（review 方針の順）。当て方は `profile.py` と同じ
 /// `re.search`（path のどこかに合えばよい。`^` で先頭に固定する）。Rust の `regex` で読めない正規表現が
 /// あれば、その class と式を返す（呼び出し側は方針を読めないものとして扱う）。
@@ -165,7 +209,7 @@ pub fn high_risk_classes(
 ///   どれかを宣言 → `High`（class と欄の組ごとに `path_class:<class>+<欄>`）。
 /// - brief が `new_fallback` を宣言 → path に依らず `High`（`new_fallback`）。
 /// - 高 risk の class に合い brief が無い → `Low`（`brief_absent_human_plan`）。planner の計画は採用前の検証
-///   （`execution_plan::require_design_brief`）で差し戻されるので、ここに来るのは人の計画だけ。
+///   （`execution_plan::require_design_brief`）で差し戻されるので、ここに来るのは planner 以外の計画だけ。
 /// - それ以外 → `Low`（理由なし）。
 pub fn assess_risk(
     policy: &ReviewPolicyState,
@@ -202,17 +246,6 @@ pub fn assess_risk(
         return RiskAssessment::new(RiskLevel::Low, vec!["brief_absent_human_plan".to_string()]);
     }
     RiskAssessment::new(RiskLevel::Low, Vec::new())
-}
-
-/// D3.3・D3.5: 計画 1 つの risk（[`plan_write_paths`] と計画の `design_brief` で [`assess_risk`] を呼ぶ）。
-pub fn assess_plan_risk(policy: &ReviewPolicyState, spec: &ExecutionPlanSpec) -> RiskAssessment {
-    assess_risk(policy, &plan_write_paths(spec), spec.design_brief.as_ref())
-}
-
-/// D3.5: `Event::DesignReviewRequested.plan_sha256`・`Event::DesignReviewed.plan_sha256` の値（計画の JSON の
-/// SHA-256 の 16 進）。設計 review の待ちは同じ値の 2 つの event の有無だけで表す（I9）。
-pub fn plan_sha256(spec: &ExecutionPlanSpec) -> String {
-    crate::project_proposal::sha256_hex(&serde_json::to_string(spec).unwrap_or_default())
 }
 
 #[cfg(test)]

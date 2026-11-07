@@ -1,7 +1,7 @@
 //! ADR 2026-11-07-health-review-integration D3.2・D3.3: 設計 brief の形の検証と、高 risk の計画での必須判定。
 //!
-//! 純粋関数だけを置く。どの write path が高 risk の class に合うかは review policy を読む呼び出し側
-//! （dispatcher の risk 判定、`design_review::assess_risk`）が決め、ここには合った class の名前だけを渡す。
+//! 純粋関数だけを置く。どの write path が高 risk の class に合うかは `design_review::high_risk_classes` が決める。
+//! 計画から write path を集める関数と計画 1 つの risk の判定（`design_review::assess_risk` を呼ぶ）もここに置く。
 
 use super::*;
 
@@ -79,6 +79,36 @@ pub fn require_design_brief(
     Err(PlanValidationError::DesignBriefMissing {
         classes: classes.into_iter().collect(),
     })
+}
+
+/// D3.3: 計画の write path。全 unit（/3 の `units`）の `expected_write_paths` と leaf の `context.paths`、
+/// /1・/2 の `work_units` の `context.paths` の和（重複を除き昇順）。
+pub fn plan_write_paths(spec: &ExecutionPlanSpec) -> Vec<String> {
+    let mut paths = BTreeSet::new();
+    for unit in &spec.units {
+        paths.extend(unit.expected_write_paths.iter().flatten().cloned());
+        if !unit.is_task() {
+            paths.extend(unit.context.paths.iter().cloned());
+        }
+    }
+    for wu in &spec.work_units {
+        paths.extend(wu.context.paths.iter().cloned());
+    }
+    paths.into_iter().collect()
+}
+
+/// D3.3・D3.5: 計画 1 つの risk（[`plan_write_paths`] と計画の `design_brief` で `design_review::assess_risk` を呼ぶ）。
+pub fn assess_plan_risk(
+    policy: &crate::design_review::ReviewPolicyState,
+    spec: &ExecutionPlanSpec,
+) -> crate::design_review::RiskAssessment {
+    crate::design_review::assess_risk(policy, &plan_write_paths(spec), spec.design_brief.as_ref())
+}
+
+/// D3.5: `Event::DesignReviewRequested.plan_sha256`・`Event::DesignReviewed.plan_sha256` の値（計画の JSON の
+/// SHA-256 の 16 進）。設計 review の待ちは同じ値の 2 つの event の有無だけで表す（I9）。
+pub fn plan_sha256(spec: &ExecutionPlanSpec) -> String {
+    crate::project_proposal::sha256_hex(&serde_json::to_string(spec).unwrap_or_default())
 }
 
 #[cfg(test)]

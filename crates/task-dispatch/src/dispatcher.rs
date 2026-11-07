@@ -128,6 +128,7 @@ mod ownerless_runs;
 mod phase_integration;
 mod planner_flow;
 mod quota_book;
+mod ready_phases;
 mod review_spawn;
 mod review_verdict;
 mod route_failure;
@@ -1297,6 +1298,8 @@ pub struct Dispatcher {
     /// 無い M1〜M6・M9。`dispatch_ready` の先頭で空にし、同じ task の 2 件目は上書きしない）。snapshot の
     /// `task_waits` に載る。
     dispatch_waits: HashMap<TaskId, task_core::TaskWait>,
+    /// ADR 2026-11-07-dispatch-ready-phase-timing: この tick の `dispatch_ready` の内側の段。
+    dispatch_ready_parts: ready_phases::ReadyPhases,
     /// ADR-0044 D2（Phase 53）: **この tick で run を打ち切った**タスク。次の tick まで dispatch しない。
     /// 打ち切りは `handle.abort()`（= 子プロセスへの SIGKILL）で、**孫プロセスは即死しない**ので、
     /// 同じ tick で同じ worktree に次の run を入れると 2 つの書き手が重なる（Phase 53 の監査で発見）。
@@ -1635,6 +1638,7 @@ impl Dispatcher {
             write_set_hold_seq: 0,
             unroutable: std::collections::HashSet::new(),
             dispatch_waits: HashMap::new(),
+            dispatch_ready_parts: Default::default(),
             cluster_waiting: std::collections::HashSet::new(),
             integrated_deps: std::collections::BTreeSet::new(),
             awaiting_human: std::collections::HashSet::new(),
@@ -2405,7 +2409,7 @@ impl Dispatcher {
         } else {
             0
         };
-        steps.mark("dispatch_ready");
+        steps.mark_with("dispatch_ready", self.dispatch_ready_parts.take());
         // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D3:
         // 評価 run は本番を先に配った後の予約枠（`[routing_eval] reserved_runs`）の中だけで起こす。
         if self.accepting_new_work && self.disk_ready {
@@ -2575,6 +2579,7 @@ impl Dispatcher {
         self.unroutable.clear();
         self.cluster_waiting.clear();
         self.dispatch_waits.clear();
+        self.dispatch_ready_parts.take();
         // ADR-0089（Phase R6-5）: 非 CoS の枠が埋まっていても、CoS の対話 run の枠が空いていれば走査する。
         if !self.run_load().any_slot() {
             // 容量切れで照合しなかった tick: write-set の待機の数えを戻さない（2026-10-03-write-set-no-starvation）。
@@ -2590,6 +2595,8 @@ impl Dispatcher {
         let ready_started = Instant::now();
         let candidates = self.eligible_ready_tasks(window)?;
         log_slow_step("ready_tasks", ready_started);
+        self.dispatch_ready_parts
+            .add("dispatch_ready.ready_tasks", ready_started);
         // ADR-0130 D3: 終わった run の予約を捨て、長く待たされた候補を先に照合する。
         self.prune_write_set_state();
         let candidates = self.order_write_set_starved_first(candidates);
@@ -2607,24 +2614,18 @@ impl Dispatcher {
                 // 全部の枠が尽きたら残りは照合しない（理由だけ付ける）。
                 continue;
             }
-            // ADR 2026-10-17-root-dependency-waits-for-integration: root 間の依存先の成果が既定 branch に入るまで待つ。
-            if let Some(wait) = task_ops::dep_integration::integration_wait(
-                self.store.as_ref(),
-                &task,
-                &mut self.integrated_deps,
-            )? {
-                self.note_dispatch_wait(task.id, wait);
+            let gates_started = Instant::now();
+            let held = self.ready_candidate_held(&task);
+            self.dispatch_ready_parts
+                .add("dispatch_ready.gates", gates_started);
+            if held? {
                 continue;
             }
-            // ADR 2026-10-18-parent-waits-for-children: 委譲した子が未完了・再実行待ちの間、親は起こさない。
-            if self.parent_waits_for_children(&task)? {
-                continue;
-            }
-            // ADR 2026-10-07-build-tmp-hygiene D1.4: 手動実行・queued から作られた保守 task も worker に渡さない。
-            if self.run_maintenance_task(&task)? {
-                continue;
-            }
-            if self.dispatch_one(task, None, now)? {
+            let one_started = Instant::now();
+            let one = self.dispatch_one(task, None, now);
+            self.dispatch_ready_parts
+                .add("dispatch_ready.dispatch_one", one_started);
+            if one? {
                 dispatched += 1;
             }
         }

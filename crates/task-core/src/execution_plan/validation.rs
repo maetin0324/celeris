@@ -1,5 +1,6 @@
 //! Plan validation, limits, and deterministic topological ordering.
 
+use super::design_brief::missing_message;
 use super::plan_limits::planner_portion_v3;
 use super::*;
 
@@ -412,78 +413,78 @@ pub enum PlanValidationError {
 impl std::fmt::Display for PlanValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PlanValidationError::PlanLimitAccounting { detail } => f.write_str(detail),
-            PlanValidationError::WrongSchema { found } => {
+            Self::PlanLimitAccounting { detail } => f.write_str(detail),
+            Self::WrongSchema { found } => {
                 write!(
                     f,
                     "schema must be {EXECUTION_PLAN_SCHEMA}, {EXECUTION_PLAN_SCHEMA_V2} or {EXECUTION_PLAN_SCHEMA_V3}, found {found}"
                 )
             }
-            PlanValidationError::NoWorkUnits => write!(f, "work_units must not be empty"),
-            PlanValidationError::TooManyWorkUnits { count, max } => {
+            Self::NoWorkUnits => write!(f, "work_units must not be empty"),
+            Self::TooManyWorkUnits { count, max } => {
                 write!(f, "too many work_units: {count} > {max}")
             }
-            PlanValidationError::InvalidKey { key } => {
+            Self::InvalidKey { key } => {
                 write!(
                     f,
                     "invalid work unit key: {key:?} (must match [a-z0-9-]{{1,32}})"
                 )
             }
-            PlanValidationError::DuplicateKey { key } => {
+            Self::DuplicateKey { key } => {
                 write!(f, "duplicate work unit key: {key}")
             }
-            PlanValidationError::UnknownDependency { key, depends_on } => {
+            Self::UnknownDependency { key, depends_on } => {
                 write!(f, "work unit {key} depends on unknown key {depends_on}")
             }
-            PlanValidationError::CyclicDependency { cycle } => {
+            Self::CyclicDependency { cycle } => {
                 write!(f, "cyclic dependency: {}", cycle.join(" -> "))
             }
-            PlanValidationError::DuplicateWorkUnit { a, b, reason } => {
+            Self::DuplicateWorkUnit { a, b, reason } => {
                 write!(f, "work units {a} and {b} look like duplicates ({reason})")
             }
-            PlanValidationError::DoneWorkUnitChanged { key } => {
+            Self::DoneWorkUnitChanged { key } => {
                 write!(
                     f,
                     "done work unit {key} must not change on replan（done の WU は差分に書かない・全体形式なら旧版のまま写す。{DAEMON_ADDED_HINT}。planner が done の WU で直せるのは `checks` だけ〈段階の統合で再実行される。ADR-0079 R7-3〉。それ以外の欄の誤りを直す必要があるなら、planner は直さずに質問で人に伝える: 人は `PUT /tasks/{{id}}/execution-plan`〈origin human の replan〉で done の WU の spec を上書きできる〈ADR-0079 R5b-fix1〉）"
                 )
             }
-            PlanValidationError::DoneWorkUnitStructureChanged { key, field } => {
+            Self::DoneWorkUnitStructureChanged { key, field } => {
                 write!(
                     f,
                     "done work unit {key}: {field} must not change on replan (a human replan may override the spec of a done work unit, but not its kind / phase / stage / depends_on, and may not remove it; ADR-0079 R5b-fix1)"
                 )
             }
-            PlanValidationError::InvalidFeatures { key, detail } => {
+            Self::InvalidFeatures { key, detail } => {
                 write!(
                     f,
                     "work unit {key}: features must parse as TaskFeatureHints: {detail}"
                 )
             }
-            PlanValidationError::InvalidWritePaths { key, detail } => {
+            Self::InvalidWritePaths { key, detail } => {
                 write!(f, "work unit {key}: expected_write_paths: {detail}")
             }
-            PlanValidationError::RationaleTooLong { len, max } => {
+            Self::RationaleTooLong { len, max } => {
                 write!(f, "rationale is too long: {len} > {max} characters")
             }
-            PlanValidationError::TitleTooLong { key, len, max } => {
+            Self::TitleTooLong { key, len, max } => {
                 write!(
                     f,
                     "work unit {key}: title is too long: {len} > {max} characters"
                 )
             }
-            PlanValidationError::ObjectiveTooLong { key, len, max } => {
+            Self::ObjectiveTooLong { key, len, max } => {
                 write!(
                     f,
                     "work unit {key}: objective is too long: {len} > {max} characters"
                 )
             }
-            PlanValidationError::TooManyDoneWhen { key, count, max } => {
+            Self::TooManyDoneWhen { key, count, max } => {
                 write!(
                     f,
                     "work unit {key}: too many done_when items: {count} > {max}"
                 )
             }
-            PlanValidationError::DoneWhenItemTooLong {
+            Self::DoneWhenItemTooLong {
                 key,
                 index,
                 len,
@@ -494,10 +495,10 @@ impl std::fmt::Display for PlanValidationError {
                     "work unit {key}: done_when[{index}] is too long: {len} > {max} characters"
                 )
             }
-            PlanValidationError::TooManyChecks { key, count, max } => {
+            Self::TooManyChecks { key, count, max } => {
                 write!(f, "work unit {key}: too many checks: {count} > {max}")
             }
-            PlanValidationError::PlanTooLarge { bytes, max } => {
+            Self::PlanTooLarge { bytes, max } => {
                 // ADR-0079 R7-2: planner が何を削ればよいかを添える（拒否の文は次の試行の planner に渡る）。
                 write!(
                     f,
@@ -505,116 +506,110 @@ impl std::fmt::Display for PlanValidationError {
                      (objective は要点だけにし、詳細は artifacts / 知識ベースのパスで参照してください)"
                 )
             }
-            PlanValidationError::PhasesNotAllowedInV1 => {
+            Self::PhasesNotAllowedInV1 => {
                 write!(f, "phases must be empty in {EXECUTION_PLAN_SCHEMA}")
             }
-            PlanValidationError::NoPhases => {
+            Self::NoPhases => {
                 write!(f, "phases must not be empty in {EXECUTION_PLAN_SCHEMA_V2}")
             }
-            PlanValidationError::TooManyPhases { count, max } => {
+            Self::TooManyPhases { count, max } => {
                 write!(f, "too many phases: {count} > {max}")
             }
-            PlanValidationError::InvalidPhaseKey { key } => {
+            Self::InvalidPhaseKey { key } => {
                 write!(
                     f,
                     "invalid phase key: {key:?} (must match [a-z0-9-]{{1,32}})"
                 )
             }
-            PlanValidationError::DuplicatePhaseKey { key } => {
+            Self::DuplicatePhaseKey { key } => {
                 write!(f, "duplicate phase key: {key}")
             }
-            PlanValidationError::WorkUnitPhaseNotAllowedInV1 { key } => {
+            Self::WorkUnitPhaseNotAllowedInV1 { key } => {
                 write!(
                     f,
                     "work unit {key}: phase must not be set in {EXECUTION_PLAN_SCHEMA}"
                 )
             }
-            PlanValidationError::WorkUnitMissingPhase { key } => {
+            Self::WorkUnitMissingPhase { key } => {
                 write!(
                     f,
                     "work unit {key}: phase is required in {EXECUTION_PLAN_SCHEMA_V2}"
                 )
             }
-            PlanValidationError::UnknownWorkUnitPhase { key, phase } => {
+            Self::UnknownWorkUnitPhase { key, phase } => {
                 write!(f, "work unit {key}: unknown phase {phase:?}")
             }
-            PlanValidationError::DependencyInLaterPhase { key, depends_on } => {
+            Self::DependencyInLaterPhase { key, depends_on } => {
                 write!(
                     f,
                     "work unit {key}: depends on {depends_on}, which is in a later phase"
                 )
             }
-            PlanValidationError::TooManyIntraPhaseDependencies { key, phase } => {
+            Self::TooManyIntraPhaseDependencies { key, phase } => {
                 write!(
                     f,
                     "work unit {key}: depends on more than one work unit within phase {phase} \
                      (at most one intra-phase dependency is allowed)"
                 )
             }
-            PlanValidationError::NonEmptyChildren => {
+            Self::NonEmptyChildren => {
                 write!(
                     f,
                     "children are only allowed in {EXECUTION_PLAN_SCHEMA_V2} (must be empty in v1)"
                 )
             }
-            PlanValidationError::TooManyChildren { count, max } => {
+            Self::TooManyChildren { count, max } => {
                 write!(f, "too many children: {count} > {max}")
             }
-            PlanValidationError::InvalidChildKey { key } => {
+            Self::InvalidChildKey { key } => {
                 write!(
                     f,
                     "invalid child key: {key:?} (must match [a-z0-9-]{{1,32}})"
                 )
             }
-            PlanValidationError::DuplicateChildKey { key } => {
+            Self::DuplicateChildKey { key } => {
                 write!(f, "duplicate child key: {key}")
             }
-            PlanValidationError::UnknownChildDependency { key, depends_on } => {
+            Self::UnknownChildDependency { key, depends_on } => {
                 write!(f, "child {key} depends on unknown child {depends_on}")
             }
-            PlanValidationError::CyclicChildDependency { cycle } => {
+            Self::CyclicChildDependency { cycle } => {
                 write!(f, "cyclic child dependency: {}", cycle.join(" -> "))
             }
-            PlanValidationError::ChildNoAcceptance { key } => {
+            Self::ChildNoAcceptance { key } => {
                 write!(f, "child {key}: acceptance must not be empty")
             }
-            PlanValidationError::ChildInvalidAcceptance { key, detail } => {
+            Self::ChildInvalidAcceptance { key, detail } => {
                 write!(f, "child {key}: {detail}")
             }
-            PlanValidationError::ReservedKind { key } => {
+            Self::ReservedKind { key } => {
                 write!(
                     f,
                     "work unit {key}: kind \"integrate\" is reserved for daemon-created integration work units（{DAEMON_ADDED_HINT}）"
                 )
             }
-            PlanValidationError::ReservedKey { key } => {
+            Self::ReservedKey { key } => {
                 write!(
                     f,
                     "work unit {key}: keys starting with \"{INTEGRATE_KEY_PREFIX}\" are reserved for daemon-created integration work units（{DAEMON_ADDED_HINT}）"
                 )
             }
-            PlanValidationError::V3FieldNotAllowed { field } => write!(
+            Self::V3FieldNotAllowed { field } => write!(
                 f,
                 "{field} is only allowed in {EXECUTION_PLAN_SCHEMA_V3} (must be empty in v1/v2)"
             ),
-            PlanValidationError::DesignBrief { field, reason } => {
-                write!(f, "design_brief.{field}: {reason}")
-            }
-            PlanValidationError::DesignBriefMissing { classes } => write!(
-                f,
-                "design_brief is required: the plan writes high-risk path classes {} (write root_cause, owner, options, new_* and removals)",
-                classes.join(", ")
-            ),
-            PlanValidationError::TaskKindRequiresV3 { key } => write!(
+            Self::DesignBrief { field, reason } => write!(f, "design_brief.{field}: {reason}"),
+            Self::DesignBriefMissing { classes } => f.write_str(&missing_message(classes)),
+            Self::TaskKindRequiresV3 { key } => write!(
                 f,
                 "work unit {key}: kind \"task\" (a child task unit) is only allowed in {EXECUTION_PLAN_SCHEMA_V3}"
             ),
-            PlanValidationError::TreeDisabled => write!(
+            Self::TreeDisabled => write!(
                 f,
                 "{EXECUTION_PLAN_SCHEMA_V3} (recursive task decomposition, ADR-0079) is disabled: \
                  set [execution.tree] enabled = true to adopt it, or write a {EXECUTION_PLAN_SCHEMA_V2} plan"
             ),
-            PlanValidationError::V2FieldInV3 { field } => {
+            Self::V2FieldInV3 { field } => {
                 let hint = match *field {
                     "children" => "use units with kind \"task\" instead",
                     "phases" => "use stages instead",
@@ -625,56 +620,56 @@ impl std::fmt::Display for PlanValidationError {
                     "{field} is not allowed in {EXECUTION_PLAN_SCHEMA_V3} ({hint})"
                 )
             }
-            PlanValidationError::NoStages => {
+            Self::NoStages => {
                 write!(f, "stages must not be empty in {EXECUTION_PLAN_SCHEMA_V3}")
             }
-            PlanValidationError::TooManyStages { count, max } => {
+            Self::TooManyStages { count, max } => {
                 write!(f, "too many stages: {count} > {max}")
             }
-            PlanValidationError::InvalidStageKey { key } => write!(
+            Self::InvalidStageKey { key } => write!(
                 f,
                 "invalid stage key: {key:?} (must match [a-z0-9-]{{1,32}})"
             ),
-            PlanValidationError::DuplicateStageKey { key } => {
+            Self::DuplicateStageKey { key } => {
                 write!(f, "duplicate stage key: {key}")
             }
-            PlanValidationError::InvalidStageKind { key } => write!(
+            Self::InvalidStageKind { key } => write!(
                 f,
                 "stage {key}: kind \"task\" / \"integrate\" cannot be used for a stage"
             ),
-            PlanValidationError::NoUnits => {
+            Self::NoUnits => {
                 write!(f, "units must not be empty in {EXECUTION_PLAN_SCHEMA_V3}")
             }
-            PlanValidationError::UnknownUnitStage { key, stage } => {
+            Self::UnknownUnitStage { key, stage } => {
                 write!(f, "unit {key}: unknown stage {stage:?}")
             }
-            PlanValidationError::TooManyUnitsInStage { stage, count, max } => write!(
+            Self::TooManyUnitsInStage { stage, count, max } => write!(
                 f,
                 "stage {stage}: too many units: {count} > {max} (leaf + task; units already done and adopt units do not count; split the stage or group units into a child task)"
             ),
-            PlanValidationError::TooManyChildTasks { count, max } => {
+            Self::TooManyChildTasks { count, max } => {
                 write!(f, "too many units with kind \"task\": {count} > {max}")
             }
-            PlanValidationError::RetiredKeyReused { key, stage: None } => write!(
+            Self::RetiredKeyReused { key, stage: None } => write!(
                 f,
                 "work unit key {key:?} was used by a superseded work unit and cannot be reused; choose a new key（superseded の unit の key は再利用できない。新しい key を選ぶこと。ADR-0079 R7-3）"
             ),
-            PlanValidationError::RetiredKeyReused {
+            Self::RetiredKeyReused {
                 key,
                 stage: Some(stage),
             } => write!(
                 f,
                 "stage key {stage:?} was used by a stage removed in an earlier plan version (its integration work unit {key} is superseded) and cannot be reused; choose a new stage key（前の版で消した段階の key は再利用できない。新しい段階の key を選ぶこと。ADR-0079 R7-3）"
             ),
-            PlanValidationError::DependencyWithoutRow { key, depends_on } => write!(
+            Self::DependencyWithoutRow { key, depends_on } => write!(
                 f,
                 "work unit {key} depends on {depends_on}, which has no live work unit row (superseded, cancelled or never created); it would wait forever（{key} の依存 {depends_on} に有効な行が無く、満たされない。ADR 2026-10-23-stage-order-and-plan-stall D3）"
             ),
-            PlanValidationError::DaemonAddedKeyReused { key } => write!(
+            Self::DaemonAddedKeyReused { key } => write!(
                 f,
                 "work unit key {key:?} belongs to a work unit the daemon added (a delivery / final-review / integration repair work unit, not in the plan); do not write it — the daemon carries it over（{key} は daemon が足した WU〈計画に無い repair WU〉なので計画に書かない。daemon が持ち越す。ADR-0079 R7-12）"
             ),
-            PlanValidationError::ChildTaskTooDeep {
+            Self::ChildTaskTooDeep {
                 key,
                 depth,
                 max_depth,
@@ -682,60 +677,60 @@ impl std::fmt::Display for PlanValidationError {
                 f,
                 "unit {key}: a task at depth {depth} cannot have child task units (max_depth = {max_depth} task levels); make it a leaf"
             ),
-            PlanValidationError::ChildDependencyNotAllowed { key, depends_on } => write!(
+            Self::ChildDependencyNotAllowed { key, depends_on } => write!(
                 f,
                 "unit {key}: depends_on {depends_on:?} uses the {EXECUTION_PLAN_SCHEMA_V2} \"{CHILD_DEP_PREFIX}\" prefix; depend on the key of a unit with kind \"task\" instead"
             ),
-            PlanValidationError::TaskUnitNoAcceptance { key } => write!(
+            Self::TaskUnitNoAcceptance { key } => write!(
                 f,
                 "unit {key}: a unit with kind \"task\" must have at least one acceptance criterion"
             ),
-            PlanValidationError::TaskUnitInvalidAcceptance { key, detail } => {
+            Self::TaskUnitInvalidAcceptance { key, detail } => {
                 write!(f, "unit {key}: {detail}")
             }
-            PlanValidationError::TaskUnitFieldNotAllowed { key, field } => write!(
+            Self::TaskUnitFieldNotAllowed { key, field } => write!(
                 f,
                 "unit {key}: a unit with kind \"task\" must not set {field} (the child task decides it)"
             ),
-            PlanValidationError::LeafFieldNotAllowed { key, field } => write!(
+            Self::LeafFieldNotAllowed { key, field } => write!(
                 f,
                 "unit {key}: {field} is only allowed on a unit with kind \"task\""
             ),
-            PlanValidationError::LeafWithoutChecks { key } => write!(
+            Self::LeafWithoutChecks { key } => write!(
                 f,
                 "unit {key}: a leaf must have at least one mechanical check (make it a unit with kind \"task\" or add checks)"
             ),
-            PlanValidationError::OperatorScriptCheck { key, script } => write!(
+            Self::OperatorScriptCheck { key, script } => write!(
                 f,
                 "unit {key}: a check must not run {script} (release/verify/promote are operator procedures and a worker sandbox cannot run them; check the code, tests and docs instead, and write the release steps for the human in the progress file)"
             ),
-            PlanValidationError::LeafMultipleRepos { key, count } => write!(
+            Self::LeafMultipleRepos { key, count } => write!(
                 f,
                 "unit {key}: a leaf works in at most one repository, found {count} in context.repo (make it a unit with kind \"task\" or split it)"
             ),
-            PlanValidationError::LeafBudgetOverLimit { key, detail } => write!(
+            Self::LeafBudgetOverLimit { key, detail } => write!(
                 f,
                 "unit {key}: {detail} exceeds what one run can do (make it a unit with kind \"task\" or shrink it)"
             ),
-            PlanValidationError::AdoptNotAllowed { key } => write!(
+            Self::AdoptNotAllowed { key } => write!(
                 f,
                 "unit {key}: adopt is only allowed in a plan written by a human (origin human) (a done unit copied verbatim from the previous version may keep its adopt)"
             ),
-            PlanValidationError::InvalidDecision { detail } => write!(f, "{detail}"),
-            PlanValidationError::DuplicateDecisionKey { key } => {
+            Self::InvalidDecision { detail } => write!(f, "{detail}"),
+            Self::DuplicateDecisionKey { key } => {
                 write!(f, "duplicate decision key: {key}")
             }
-            PlanValidationError::UnknownNeededBefore { key, target } => write!(
+            Self::UnknownNeededBefore { key, target } => write!(
                 f,
                 "decision {key}: needed_before {target:?} is neither a unit key nor stage:<key> of this plan"
             ),
-            PlanValidationError::UnknownNeedsDecision { key, decision } => {
+            Self::UnknownNeedsDecision { key, decision } => {
                 write!(
                     f,
                     "unit {key}: needs_decisions names unknown decision {decision}"
                 )
             }
-            PlanValidationError::TooManyDecisions { count, max } => {
+            Self::TooManyDecisions { count, max } => {
                 write!(f, "too many decisions in one plan: {count} > {max}")
             }
         }
@@ -745,6 +740,37 @@ impl std::fmt::Display for PlanValidationError {
 impl std::error::Error for PlanValidationError {}
 
 /// operator だけが実行する selfdeploy script（ADR 2026-10-16）。
+/// ADR-0079（Phase R1a）: /1・/2 に書かれた /3 の欄（`design_brief` は ADR 2026-11-07-health-review-integration D3.1）。
+fn v3_fields_in_v1_v2(spec: &ExecutionPlanSpec) -> Vec<PlanValidationError> {
+    [
+        ("stages", !spec.stages.is_empty()),
+        ("units", !spec.units.is_empty()),
+        ("decisions", !spec.decisions.is_empty()),
+        ("design_brief", spec.design_brief.is_some()),
+    ]
+    .into_iter()
+    .filter(|(_, present)| *present)
+    .map(|(field, _)| PlanValidationError::V3FieldNotAllowed { field })
+    .collect()
+}
+
+/// /3 に書かれた /1・/2 の欄と、/3 の設計 brief の形（brief があるときだけ。D3.2）。
+fn v3_plan_field_errors(spec: &ExecutionPlanSpec) -> Vec<PlanValidationError> {
+    let mut errors: Vec<_> = [
+        ("phases", !spec.phases.is_empty()),
+        ("work_units", !spec.work_units.is_empty()),
+        ("children", !spec.children.is_empty()),
+    ]
+    .into_iter()
+    .filter(|(_, present)| *present)
+    .map(|(field, _)| PlanValidationError::V2FieldInV3 { field })
+    .collect();
+    if let Some(brief) = &spec.design_brief {
+        errors.extend(super::design_brief::brief_shape_errors(brief));
+    }
+    errors
+}
+
 const OPERATOR_SCRIPTS: [&str; 3] = ["release.sh", "verify.sh", "promote.sh"];
 
 /// check の cmd が operator script を**実行**するなら、その script 名。`test -f scripts/selfdeploy/release.sh` や
@@ -1058,16 +1084,7 @@ pub fn validate_with(
         }
     }
     // ADR-0079（Phase R1a）: /3 の欄は /1・/2 では空（`serde(default)` で読めるが採用しない）。
-    for (field, present) in [
-        ("stages", !spec.stages.is_empty()),
-        ("units", !spec.units.is_empty()),
-        ("decisions", !spec.decisions.is_empty()),
-        ("design_brief", spec.design_brief.is_some()),
-    ] {
-        if present {
-            errors.push(PlanValidationError::V3FieldNotAllowed { field });
-        }
-    }
+    errors.extend(v3_fields_in_v1_v2(spec));
 
     // ADR-0074 D1.1（Phase F2）: WorkUnit の `phase` は v2 で必須・既知の工程を指す、v1 で禁止。
     let phase_index: BTreeMap<&str, usize> = spec
@@ -1458,15 +1475,7 @@ fn validate_v3(
         serde_json::to_vec(&planner).expect("plan serializes").len() + changed_check_bytes;
     let total_bytes = serde_json::to_vec(spec).expect("plan serializes").len();
 
-    for (field, present) in [
-        ("phases", !spec.phases.is_empty()),
-        ("work_units", !spec.work_units.is_empty()),
-        ("children", !spec.children.is_empty()),
-    ] {
-        if present {
-            errors.push(PlanValidationError::V2FieldInV3 { field });
-        }
-    }
+    errors.extend(v3_plan_field_errors(spec));
 
     // 段階。
     if spec.stages.is_empty() {
@@ -1846,10 +1855,6 @@ fn validate_v3(
                 });
             }
         }
-    }
-    // ADR 2026-11-07-health-review-integration D3.2: brief があるときだけ形を見る。
-    if let Some(brief) = &spec.design_brief {
-        errors.extend(super::design_brief::brief_shape_errors(brief));
     }
     // Only the planner portion consumes the per-plan JSON budget (the brief included).
     if planner_bytes > limits.max_plan_json_bytes_v3 {

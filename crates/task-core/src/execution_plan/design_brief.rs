@@ -54,6 +54,14 @@ pub(super) fn brief_shape_errors(brief: &DesignBrief) -> Vec<PlanValidationError
     errors
 }
 
+/// `DesignBriefMissing` の文（`PlanValidationError` の `Display`）。
+pub(super) fn missing_message(classes: &[String]) -> String {
+    format!(
+        "design_brief is required: the plan writes high-risk path classes {} (write root_cause, owner, options, new_* and removals)",
+        classes.join(", ")
+    )
+}
+
 /// D3.3: 高 risk の path class（`high_risk_classes`、呼び出し側が review policy から求めた名前）を変える
 /// planner の計画に brief が無ければ `DesignBriefMissing` で差し戻す（既存の検証失敗の再試行と同じ経路）。
 /// planner 以外の計画（人の計画 `PlanOrigin::Human` など）は brief を必須にしない（risk 判定が `brief_absent_human_plan` で `Low` にする）。

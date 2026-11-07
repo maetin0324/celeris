@@ -228,6 +228,23 @@ pub struct ExecutionPlanSpec {
     pub design_brief: Option<DesignBrief>,
 }
 
+impl ExecutionPlanSpec {
+    /// `celeris.execution-plan/1` の計画（`work_units` だけを持つ。daemon が作る repair の計画など）。
+    pub fn v1(rationale: String, work_units: Vec<WorkUnitSpec>) -> Self {
+        ExecutionPlanSpec {
+            schema: EXECUTION_PLAN_SCHEMA.to_string(),
+            rationale,
+            phases: Vec::new(),
+            work_units,
+            children: Vec::new(),
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
+            design_brief: None,
+        }
+    }
+}
+
 /// ADR 2026-11-07-health-review-integration D3.1: 実装前に短く整理する設計 brief。risk の判定
 /// （`design_review::assess_risk`）は `new_*` の宣言と write path から決まる（D3.3）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

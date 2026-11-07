@@ -911,21 +911,14 @@ impl Dispatcher {
                     task_core::WorkUnitStatus::Ready,
                     now.clone(),
                 );
-                let plan_spec = task_core::ExecutionPlanSpec {
-                    stages: Vec::new(),
-                    units: Vec::new(),
-                    decisions: Vec::new(),
-                    schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
-                    rationale: if integration.is_some() {
+                let plan_spec = task_core::ExecutionPlanSpec::v1(
+                    if integration.is_some() {
                         "integration repair: 暗黙の WorkUnit を実体化".to_string()
                     } else {
                         "reviewer repair: 暗黙の WorkUnit を実体化".to_string()
                     },
-                    work_units: vec![main_spec, spec],
-                    phases: Vec::new(),
-                    children: Vec::new(),
-                    design_brief: None,
-                };
+                    vec![main_spec, spec],
+                );
                 let plan_row = task_core::ExecutionPlanRow {
                     id: plan_id.clone(),
                     task_id: task_id.to_string(),

@@ -583,6 +583,35 @@ async fn required_rules_reach_pi_from_a_fresh_worktree() {
     }
 }
 
+/// ADR 2026-11-07-health-review-integration D1.2・D1.5: pi が受け取る prompt（stdin）に、CLAUDE.md の必須規則の
+/// 写しと汎用規約（generic.md）がそれぞれ 1 回ずつ、別の節として入る。
+#[tokio::test]
+async fn change_rules_generic_reaches_pi_once_beside_required_rules() {
+    use crate::test_support::*;
+    let root = tempfile::tempdir().unwrap();
+    let wt = fresh_worktree_with_rules(root.path(), AgentsMdFixture::Absent);
+    let ws = root.path().join("ws");
+    std::fs::create_dir(&ws).unwrap();
+    let seen = root.path().join("seen.txt");
+    let cfg = config(root.path(), "");
+    crate::test_support::write_executable(
+        std::path::Path::new(&cfg.command),
+        &format!(
+            "#!/bin/sh\ncat > '{}'\nmkdir -p '{a}'\nprintf '%s' '{{\"summary\":\"ok\",\"evidence\":[]}}' > '{a}/result.json'\nprintf '%s\\n' '{{\"type\":\"agent_end\",\"messages\":[]}}'\n",
+            seen.display(),
+            a = ws.join("artifacts").display()
+        ),
+    );
+    let mut req = request(&ws);
+    req.work_dir = Some(wt);
+    let result = PiAdapter::new(cfg)
+        .run(req, "change-rules", limits(), &NullSink)
+        .await
+        .unwrap();
+    assert!(matches!(result.terminal, Terminal::Done { .. }));
+    assert_generic_rules_beside_required_rules(&std::fs::read_to_string(&seen).unwrap());
+}
+
 /// 必須規則が読めない作業場所（空の CLAUDE.md）では pi を起動せずに run が落ちる。
 #[tokio::test]
 async fn pi_run_fails_when_required_rules_are_unreadable() {

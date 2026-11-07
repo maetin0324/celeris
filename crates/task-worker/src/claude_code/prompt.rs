@@ -158,6 +158,9 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
     // ADR-0033 D4 / D6（Phase 24）: 役職と brief → 永続の認可 → 記憶 → 直近のやり取り → 役割の指示文。
     // 前置きは `crate::preamble` が 1 か所で組む（`RunContext` が空なら 1 バイトも増えない）。
     out.push_str(&crate::preamble::render(context, artifacts));
+    // ADR 2026-11-07-health-review-integration D1.2: 汎用規約（generic.md）と repo 固有の規約を 1 回だけ。
+    out.push_str(&crate::change_rules::section());
+    out.push_str(&crate::change_rules::repo_section(context));
     if let Some(genre_id) = &task.genre
         && let Some(genre) = context.available_genres.iter().find(|g| &g.id == genre_id)
     {
@@ -967,6 +970,8 @@ fn build_execution_plan_prompt(
     if let (Some(planner), Some(tree)) = (context.execution_planner.as_ref(), tree) {
         // ADR-0079 D4 (2)（Phase R2b）: 木の節点の planner は /3（段階・unit = leaf | 子 task・決定）を書く。
         out.push_str(&tree_plan_shape_section(planner, tree, artifacts));
+        // ADR 2026-11-07-health-review-integration D3.4: /3 の設計 brief の書き方。
+        out.push_str(&crate::change_rules::design_brief_section(planner));
     } else {
         out.push_str(&format!(
         "Write your plan to `{artifacts}/execution-plan.json` (create the `{artifacts}/` directory if it \

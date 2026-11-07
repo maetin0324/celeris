@@ -184,6 +184,31 @@ pub(crate) fn assert_required_rules_in(prompt: &str) {
     assert!(prompt.contains("`unwrap()`（テスト以外）"), "{prompt}");
 }
 
+/// ADR 2026-11-07-health-review-integration D1.2: 汎用規約（`change_rules::GENERIC_RULES`）の本文と見出し
+/// （generic.md の 1 行目）が prompt にちょうど 1 回ずつ入っている。
+pub(crate) fn assert_generic_rules_once(prompt: &str) {
+    let generic = crate::change_rules::GENERIC_RULES.trim_end();
+    assert_eq!(prompt.matches(generic).count(), 1, "{prompt}");
+    let heading = generic.lines().next().unwrap_or_default();
+    assert_eq!(prompt.matches(heading).count(), 1, "{prompt}");
+}
+
+/// D1.5: 必須規則の写し（`assert_required_rules_in`）と汎用規約がそれぞれ 1 回ずつ、別の節として入っている
+/// （汎用規約は `CLAUDE.md` の写しの外、その後ろ）。
+pub(crate) fn assert_generic_rules_beside_required_rules(prompt: &str) {
+    assert_required_rules_in(prompt);
+    assert_generic_rules_once(prompt);
+    let rules = repo_claude_md();
+    let rules_end = prompt
+        .find(rules.trim_end())
+        .map(|at| at + rules.trim_end().len())
+        .unwrap_or_else(|| panic!("no CLAUDE.md copy: {prompt}"));
+    let generic_at = prompt
+        .find(crate::change_rules::GENERIC_RULES.trim_end())
+        .unwrap_or_else(|| panic!("no generic rules: {prompt}"));
+    assert!(generic_at > rules_end, "{prompt}");
+}
+
 /// Unix socket を置く試験用の一時 dir。socket の path は `sun_path`（108 byte）に収まる必要があり、
 /// run の `TMPDIR` のような深い path の下では bind できないので、そのときは `/tmp` に作る。
 pub(crate) fn short_tempdir() -> std::io::Result<tempfile::TempDir> {

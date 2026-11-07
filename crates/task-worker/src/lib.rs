@@ -23,6 +23,8 @@ pub mod browser_supervisor;
 /// ADR-0066 D1（Phase 110b）: 同一リポジトリの worktree 間で cargo のビルドキャッシュを共有する。
 pub mod build_cache;
 pub mod campaign_pin;
+/// ADR 2026-11-07-health-review-integration D1: 変更の汎用規約（generic.md）と repo 固有の規約を prompt に配る。
+pub mod change_rules;
 pub mod claude_account;
 pub mod claude_code;
 pub mod cluster_login;

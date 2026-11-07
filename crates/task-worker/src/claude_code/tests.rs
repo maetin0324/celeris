@@ -1810,8 +1810,9 @@ fn available_genres_section_omits_lines_whose_list_is_empty() {
         ..RunContext::default()
     };
     let prompt = build_prompt(&task, &context, "run-avail-omit", "artifacts");
-    assert!(!prompt.contains("できること"));
-    assert!(!prompt.contains("渡すもの"));
+    // 行の形で見る（prompt には汎用規約の本文〈generic.md の「…検出できることを示す」〉も入る）。
+    assert!(!prompt.contains("  できること: "));
+    assert!(!prompt.contains("  渡すもの: "));
     assert!(prompt.contains("- coding: write and fix code\n  役割: implementer\n"));
 }
 
@@ -4561,6 +4562,40 @@ async fn required_rules_reach_claude_code_from_a_fresh_worktree() {
         );
         assert_eq!(worktree_changes(&wt), "", "{fixture:?}");
     }
+}
+
+/// ADR 2026-11-07-health-review-integration D1.2・D1.5: claude が受け取る prompt（stdin）に汎用規約（generic.md）が
+/// ちょうど 1 回入る。必須規則は claude が作業場所の CLAUDE.md を直接読むので、prompt には写さない。
+#[tokio::test]
+async fn change_rules_generic_reaches_claude_code_once_without_a_rules_copy() {
+    use crate::test_support::*;
+    let root = tempfile::tempdir().unwrap();
+    let wt = fresh_worktree_with_rules(root.path(), AgentsMdFixture::Absent);
+    let ws = root.path().join("ws");
+    let seen = root.path().join("prompt");
+    let script = format!(
+        "cat > '{}'\nmkdir -p '{a}'\nprintf '%s' '{{\"summary\":\"ok\",\"evidence\":[]}}' > '{a}/result.json'\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}}'\n",
+        seen.display(),
+        a = ws.join("artifacts").display()
+    );
+    let mut req = sample_req(ws);
+    req.work_dir = Some(wt);
+    ClaudeCodeAdapter::new(stub_claude(root.path(), &script))
+        .run(
+            req,
+            "run-change-rules",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    let prompt = std::fs::read_to_string(&seen).unwrap();
+    assert_generic_rules_once(&prompt);
+    assert!(
+        !prompt.contains(crate::required_rules::RULES_HEADING),
+        "{prompt}"
+    );
+    assert!(!prompt.contains(repo_claude_md().trim_end()), "{prompt}");
 }
 
 /// ADR 2026-11-06-misplaced-report-recovery-generalized D5（01M6QZ031R）: reviewer run は `work_dir`

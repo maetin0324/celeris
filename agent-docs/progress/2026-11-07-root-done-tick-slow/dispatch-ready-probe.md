@@ -54,3 +54,4 @@ completed: 2026-11-07
 - この変更（dispatch_ready の計測）との関係: 無い。試験は dispatch_ready の計測を見ず、base 側でも同じ構造。単独で 3 回流して 3 回 pass、task-dispatch 全体の nextest を 2 回流して 1464 件 pass（落ちず）。つまりこの変更で決定的に落ちるのではなく、負荷でだけ落ちる。
 - 原因（コードの読みによる推定。落ちた現場の再現は未確認）: 落とした daemon（d1）の統合は `spawn_blocking` の git merge で、d1 を drop しても止まらない。試験は `sleep(200ms)` だけ待って d2 を作るので、負荷で旧い merge が終わっていないと、d2 の再統合と同じ worktree で git が競合し、統合が失敗して task が Blocked になる。待ち時間を 0 に縮めても手元では再現しなかった（競合は git の実行時機に依存する）。
 - 直し（ADR-0125 の出来事待ち）: sleep をやめ、task branch に 2 件目の merge commit が載る（旧い統合の git 操作が終わる）まで、壁時計の保険（STATE_WAIT_GUARD、60 秒）つきで待つ。CPU 負荷や sleep の延長はしない。変更は `crates/task-dispatch/src/dispatcher/tests/work_units.rs` の当該試験だけ。直後に 3 回単独で流して 3 回 pass。
+- 再試行後の提出時 HEAD で `bash scripts/dev/test-affected.sh` exit 0（3500 件 pass）、`cargo clippy --workspace -- -D warnings` と `cargo fmt --all -- --check` は exit 0。

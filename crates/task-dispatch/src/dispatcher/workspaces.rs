@@ -303,18 +303,11 @@ impl Dispatcher {
                 root.join(path)
             };
             let dir = task_dir.join(task_worker::REPOS_DIR_NAME).join(&row.name);
-            let git_started = std::time::Instant::now();
             let wants_worktree = row.kind == task_core::RepoKind::Git
                 && mode.unwrap_or_default() == task_core::WorkspaceMode::Worktree
                 && task_worker::is_git_repo(&source);
-            self.dispatch_ready_parts
-                .add("dispatch_ready.workspaces.is_git_repo", git_started);
             let base = if wants_worktree {
-                let base_started = std::time::Instant::now();
-                let base = self.worktree_base_for(task, &source);
-                self.dispatch_ready_parts
-                    .add("dispatch_ready.workspaces.worktree_base", base_started);
-                base
+                crate::phase_timing::worktree_base(|| self.worktree_base_for(task, &source))
             } else {
                 None
             };

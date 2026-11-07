@@ -35,12 +35,12 @@ async fn tick_reports_dispatch_ready_phases_and_resets_each_tick() {
     );
     assert!(!names.contains(&"dispatch_ready.dispatch_one"));
 
-    // ready の task が 1 件あれば、候補ごとの段（gates・dispatch_one）も出る。
+    // ready の task が 1 件あれば、候補ごとの段（dispatch_one）も出る。
     let task = new_task(tmp.path(), Check::Reviewer, 0);
     store.insert(&task).unwrap();
     let busy = d.tick().unwrap();
     let names = parts(&busy);
-    for want in ["dispatch_ready.gates", "dispatch_ready.dispatch_one"] {
+    for want in ["dispatch_ready.dispatch_one"] {
         assert!(names.contains(&want), "{want} missing: {names:?}");
     }
     // 名前は 1 tick に 1 回だけ（候補が増えても合計される）。

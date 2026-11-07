@@ -1,0 +1,1581 @@
+{
+ "schema": "celeris.health-v2-b0.capability-map-fragment/1",
+ "base_sha": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
+ "group": "cap-cos-delivery",
+ "capabilities": [
+  {
+   "id": "cos-chat-threads-runs",
+   "name": "CoS chat threads/messages/runs（durable queue の claim・session・streaming・添付・GC）",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "chat",
+     "path": "crates/task-core/src/chat/mod.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::run_store",
+     "path": "crates/task-core/src/chat/run_store.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::session",
+     "path": "crates/task-core/src/chat/session.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::attachments",
+     "path": "crates/task-core/src/chat/attachments.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::cos_chat",
+     "path": "crates/task-dispatch/src/dispatcher/cos_chat/mod.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "sessions::cos_chat",
+     "path": "crates/task-dispatch/src/sessions/cos_chat.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "cos_chat",
+     "path": "crates/task-worker/src/cos_chat.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "chat",
+     "path": "crates/task-api/src/chat/mod.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "chat_gc",
+     "path": "crates/celeris/src/chat_gc.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "daemon::cos_launch",
+     "path": "crates/celeris/src/daemon/cos_launch.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "lease_exclusion",
+     "text": "chat run は durable queue（chat_runs）から 1 回だけ claim して worker を起動する（chat_run_claim_next）",
+     "evidence_path": "crates/task-core/src/chat/run_store.rs"
+    },
+    {
+     "kind": "restart_replay",
+     "text": "停止・割り込み・daemon 再起動で queued message を失わず、終端 run は takeover しない",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/cos_chat/control.rs"
+    },
+    {
+     "kind": "credential_sandbox",
+     "text": "CoS run の credential は環境変数名の参照だけを prompt に渡し、値は入れない",
+     "evidence_path": "crates/task-worker/src/cos_chat.rs"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "thread・message・run・chat_events は SQLite が正で、sink が chat_events を追記する",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/cos_chat/sink.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "/api/v1/chat/threads（+ /{t}/runs, /{t}/stop, /{t}/resume-queue, /{t}/read, /{t}/relays, /{t}/forwards, /{t}/proposals）",
+     "path": "crates/task-api/src/chat/mod.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/chat/threads/{t}/stream・/{t}/runs/{r}/events（SSE）",
+     "path": "crates/task-api/src/chat/stream.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/chat/attachments/{a}/content・/preview",
+     "path": "crates/task-api/src/chat/attachments.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "chat_run_claim_next",
+     "path": "crates/task-core/src/chat/run_store.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/cos/threads/{t}/checkpoint",
+     "path": "crates/task-api/src/cos/mod.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-core/src/chat/store_tests.rs",
+     "target": "task-core:lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-core/src/chat/session_tests.rs",
+     "target": "task-core:lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/cos_chat_launch.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/cos_chat_rollover.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/cos_chat/sink_tests.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-api/tests/chat_api.rs",
+     "target": "task-api:test:chat_api",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/chat_stream.rs",
+     "target": "task-api:test:chat_stream",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/chat_attachments.rs",
+     "target": "task-api:test:chat_attachments",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/celeris/src/chat_gc_tests.rs",
+     "target": "celeris:lib",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    }
+   ]
+  },
+  {
+   "id": "cos-inbox-triage-operations-audit",
+   "name": "CoS 受信箱一次対応（cos_inbox_items）と /cos/operations の監査付き操作",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "chat::triage",
+     "path": "crates/task-core/src/chat/triage.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::operations",
+     "path": "crates/task-core/src/chat/operations.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::credential",
+     "path": "crates/task-core/src/chat/credential.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::cos_chat::triage",
+     "path": "crates/task-dispatch/src/dispatcher/cos_chat/triage.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::cos_chat::fallback",
+     "path": "crates/task-dispatch/src/dispatcher/cos_chat/fallback.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "cos::operations",
+     "path": "crates/task-api/src/cos/operations.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "cos::inbox",
+     "path": "crates/task-api/src/cos/inbox.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "cos::triage_view",
+     "path": "crates/task-api/src/cos/triage_view.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "human_authority",
+     "text": "/cos/inbox/{i}/resolve と /cos/operations は CoS run credential だけを受け、人は /api/v1/inbox で答える（actor=human の詐称を拒否）",
+     "evidence_path": "crates/task-api/src/cos/inbox.rs"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "domain の書き込みと cos_operations の監査行・Event::CosOperation は同じ transaction で書く",
+     "evidence_path": "crates/task-core/src/chat/operations.rs"
+    },
+    {
+     "kind": "credential_sandbox",
+     "text": "CoS run credential は SHA-256 だけを cos_run_credentials に保存する",
+     "evidence_path": "crates/task-core/src/chat/credential.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "triage item の解決は state が pending/running の 1 行だけを更新し、既に解決済みなら Conflict にする",
+     "evidence_path": "crates/task-api/src/cos/triage_view.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "/api/v1/cos/operations・/{o}・/{o}/override",
+     "path": "crates/task-api/src/cos/operations.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/cos/inbox・/{i}/resolve",
+     "path": "crates/task-api/src/cos/inbox.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/cos/review-report・/review-thread",
+     "path": "crates/task-api/src/cos/review.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "CosOperation",
+     "path": "crates/task-core/src/model/events.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-core/src/chat/triage_tests.rs",
+     "target": "task-core:lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-core/src/chat/operations_tests.rs",
+     "target": "task-core:lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-core/src/chat/credential_tests.rs",
+     "target": "task-core:lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/cos_chat_triage.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/cos_chat_triage_fallback.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-api/tests/cos_triage.rs",
+     "target": "task-api:test:cos_triage",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/cos_operations.rs",
+     "target": "task-api:test:cos_operations",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/cos_ops_registry.rs",
+     "target": "task-api:test:cos_ops_registry",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/cos_auth.rs",
+     "target": "task-api:test:cos_auth",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/celeris/tests/cos_chat_triage_scenarios.rs",
+     "target": "celeris:test:cos_chat_triage_scenarios",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    }
+   ]
+  },
+  {
+   "id": "notifications",
+   "name": "受信箱と通知の 2 系統・Discord 送出・root done 要約",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "notify",
+     "path": "crates/task-core/src/notify.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "feed",
+     "path": "crates/task-core/src/feed.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "inbox",
+     "path": "crates/task-ops/src/inbox.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "human_inbox",
+     "path": "crates/task-ops/src/human_inbox.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "notify_feed",
+     "path": "crates/task-ops/src/notify_feed.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "root_done",
+     "path": "crates/task-ops/src/root_done.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::root_done",
+     "path": "crates/task-core/src/store/root_done.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "notify",
+     "path": "crates/celeris/src/notify.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "notify::triage",
+     "path": "crates/celeris/src/notify/triage.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "inbox_notifications",
+     "path": "crates/task-api/src/inbox_notifications.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "human_authority",
+     "text": "人の判断は受信箱、知らせは通知に分け、Discord 送出は escalation・不在退避・明示 test の経路だけ",
+     "evidence_path": "crates/celeris/src/notify.rs"
+    },
+    {
+     "kind": "restart_replay",
+     "text": "未解決の待ちは再起動後も対象で、終端 event の走査位置は notification_scan_state に永続化する",
+     "evidence_path": "crates/task-core/src/notify.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "送信直前に解決済みかを再確認し、解決済みなら送らない（withdraw_if_resolved）",
+     "evidence_path": "crates/celeris/src/notify/triage.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "/api/v1/inbox・/api/v1/inbox/items・/{id}/answer",
+     "path": "crates/task-api/src/inbox_notifications.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/notifications",
+     "path": "crates/task-api/src/inbox_notifications.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/reports/notified",
+     "path": "crates/task-api/src/reports.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "notify::spawn_send / post_webhook",
+     "path": "crates/celeris/src/notify.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-ops/src/inbox/tests.rs",
+     "target": "task-ops:lib",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-ops/src/notify_feed/tests.rs",
+     "target": "task-ops:lib",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-api/tests/inbox_notifications.rs",
+     "target": "task-api:test:inbox_notifications",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/celeris/src/notify/tests.rs",
+     "target": "celeris:lib",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/celeris/tests/notify.rs",
+     "target": "celeris:test:notify",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/celeris/tests/root_done_summary.rs",
+     "target": "celeris:test:root_done_summary",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/cos_chat_root_done.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    }
+   ]
+  },
+  {
+   "id": "review-runs-final-review",
+   "name": "reviewer run と final review（決定的 check → 別 run の reviewer、合格の再利用）",
+   "owners": [
+    {
+     "crate": "task-dispatch",
+     "module": "review",
+     "path": "crates/task-dispatch/src/review.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "review::required",
+     "path": "crates/task-dispatch/src/review/required.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_spawn",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_verdict",
+     "path": "crates/task-dispatch/src/dispatcher/review_verdict.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "human_authority",
+     "text": "完了は reviewer か決定的 check が決め、Command は worker の自己申告を信じず workspace で再実行する",
+     "evidence_path": "crates/task-dispatch/src/review.rs"
+    },
+    {
+     "kind": "reviewed_candidate_identity",
+     "text": "review は target と同期した候補 SHA に対して行い、target が進めば ReviewTargetAdvanced で再 sync・再 review する",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "reviewer run は決定的条件が全て pass のときだけ起動し、review.json の判定を採る",
+     "evidence_path": "crates/task-dispatch/src/review.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "event_kind",
+     "name": "ReviewVerdict・ReviewCommandChecked・RequiredChecksEvaluated・ReviewerPassed",
+     "path": "crates/task-dispatch/src/dispatcher/review_verdict.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "ReviewTargetSynced・ReviewTargetAdvanced・ReviewResyncHalted・ReviewResyncResumed・ReviewerPassReused",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "task_ops::comment::rereview",
+     "path": "crates/task-ops/src/comment.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-dispatch/src/review/tests.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/review.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/review_route.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/review_check_wins.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/target_sync.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    }
+   ]
+  },
+  {
+   "id": "delivery-merge-candidate",
+   "name": "delivery（部署レビュアー承認 → merge candidate の固定 → merge → release 準備）",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "delivery",
+     "path": "crates/task-core/src/delivery.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "delivery",
+     "path": "crates/task-ops/src/delivery.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "delivery",
+     "path": "crates/celeris/src/delivery.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "config::delivery",
+     "path": "crates/celeris/src/config/delivery.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::task_integration_state",
+     "path": "crates/task-core/src/store/task_integration_state.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "reviewed_candidate_identity",
+     "text": "merge するのは merge_candidate_sha が head と一致し reviewed/target SHA が揃った delivery だけで、target が進めば候補を消して再 review に戻す",
+     "evidence_path": "crates/celeris/src/delivery.rs"
+    },
+    {
+     "kind": "restart_replay",
+     "text": "Merging 中の daemon 再起動では外部操作を自動で再実行せず Blocked にして git と承認 SHA の照合を求める",
+     "evidence_path": "crates/celeris/src/delivery.rs"
+    },
+    {
+     "kind": "lease_exclusion",
+     "text": "delivery_save は読み出した行（claimed）との比較で保存し、競合した更新を捨てる",
+     "evidence_path": "crates/task-core/src/delivery.rs"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "root を delivery にしない場合は DeliverySkipped を理由付きで 1 回だけ追記する",
+     "evidence_path": "crates/task-ops/src/delivery.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "trait",
+     "name": "DeliveryStore（delivery_get・delivery_list・delivery_save）",
+     "path": "crates/task-core/src/delivery.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "task_ops::delivery::begin",
+     "path": "crates/task-ops/src/delivery.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "celeris::delivery::tick",
+     "path": "crates/celeris/src/delivery.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/deliveries",
+     "path": "crates/task-api/src/releases.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/integrations・/api/v1/tasks/{id}/integrations/{repo}/merge・/hold",
+     "path": "crates/task-api/src/integrations.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "DeliverySkipped・IntegrationMerged",
+     "path": "crates/task-core/src/model/events.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/celeris/src/delivery/tests.rs",
+     "target": "celeris:lib",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/task-ops/src/delivery/tests.rs",
+     "target": "task-ops:lib",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-core/src/delivery.rs",
+     "target": "task-core:lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/celeris/tests/integration_api.rs",
+     "target": "celeris:test:integration_api",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/task-api/tests/integration_api.rs",
+     "target": "task-api:test:integration_api",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/project_auto_integrate.rs",
+     "target": "task-api:test:project_auto_integrate",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    }
+   ]
+  },
+  {
+   "id": "pre-review-sync-auto-resolve-integration-repair",
+   "name": "pre-review sync・並列取り込みの auto_resolve・IntegrationRepair・integrate task・done 後の再取り込み",
+   "owners": [
+    {
+     "crate": "task-dispatch",
+     "module": "auto_resolve",
+     "path": "crates/task-dispatch/src/auto_resolve.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "integration",
+     "path": "crates/task-dispatch/src/integration.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::phase_integration",
+     "path": "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "delivery::auto_resolve",
+     "path": "crates/celeris/src/delivery/auto_resolve.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "changes",
+     "path": "crates/task-ops/src/changes.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "integrate_task",
+     "path": "crates/task-ops/src/integrate_task.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "stranded::reintegrate",
+     "path": "crates/task-ops/src/stranded/reintegrate.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::events（integration request）",
+     "path": "crates/task-core/src/store/events.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "integrate_task",
+     "path": "crates/task-api/src/integrate_task.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "reviewed_candidate_identity",
+     "text": "auto_resolve で task branch を進めたら新しい base/head を固定して MergeQueued に戻し、旧 release の gate 結果を使わない",
+     "evidence_path": "crates/celeris/src/delivery/auto_resolve.rs"
+    },
+    {
+     "kind": "budget",
+     "text": "target 再進行の自動再 sync は初回に加え最大 2 回、IntegrationRepair は 1 task につき最大 2 回",
+     "evidence_path": "crates/task-ops/src/delivery.rs"
+    },
+    {
+     "kind": "human_authority",
+     "text": "自動で解くのは機械的な衝突（記録・番号・生成物）だけで、残りは統合の依頼として受信箱か integrate task に回す",
+     "evidence_path": "crates/task-dispatch/src/auto_resolve.rs"
+    },
+    {
+     "kind": "credential_sandbox",
+     "text": "auto_resolve は scratch の worktree で merge し、本番の checkout には触らず task branch の ref だけを動かす",
+     "evidence_path": "crates/celeris/src/delivery/auto_resolve.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "store_fn",
+     "name": "integration_request_record",
+     "path": "crates/task-core/src/store/events.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "task_dispatch::auto_resolve::resolve",
+     "path": "crates/task-dispatch/src/auto_resolve.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "task_ops::changes::sync_onto_target",
+     "path": "crates/task-ops/src/changes.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "POST /api/v1/tasks/{id}/integration-requests/{request}/integrate-task",
+     "path": "crates/task-api/src/integrate_task.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "IntegrationRequested・IntegrationRepairScheduled・IntegrationRepairResolved・IntegrationRepairExhausted・MergeCandidateStale・IntegrateTaskSettled・DoneReintegrationStarted",
+     "path": "crates/task-core/src/model/events.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-dispatch/src/auto_resolve/tests.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/integration/tests.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/dep_integration.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/integration_ready_race.rs",
+     "target": "task-dispatch:lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-api/tests/integration_repair.rs",
+     "target": "task-api:test:integration_repair",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/cos_integrate_task.rs",
+     "target": "task-api:test:cos_integrate_task",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/celeris/tests/stranded_integration.rs",
+     "target": "celeris:test:stranded_integration",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    }
+   ]
+  },
+  {
+   "id": "release-selfdeploy-wiring",
+   "name": "celeris daemon の release/selfdeploy 結線（instance handoff・releases 一覧と昇格・release notes・prepare 起動）",
+   "owners": [
+    {
+     "crate": "celeris",
+     "module": "instance",
+     "path": "crates/celeris/src/instance.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "instance",
+     "path": "crates/task-core/src/instance.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::instances",
+     "path": "crates/task-core/src/store/instances.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "releases",
+     "path": "crates/celeris/src/releases.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "releases::audit",
+     "path": "crates/celeris/src/releases/audit.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "release_notes",
+     "path": "crates/celeris/src/release_notes.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "config::selfdeploy",
+     "path": "crates/celeris/src/config/selfdeploy.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "releases",
+     "path": "crates/task-api/src/releases.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "lease_exclusion",
+     "text": "昇格は新プロセスが同じ DB に active を引き継ぎ、旧プロセスは handoff_requested_at で draining になる。live な active は 1 つだけ",
+     "evidence_path": "crates/celeris/src/instance.rs"
+    },
+    {
+     "kind": "human_authority",
+     "text": "どの release を昇格するかは人が GUI か shell で決め、releases は読むだけの純粋な関数",
+     "evidence_path": "crates/celeris/src/releases.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "昇格していない release の daemon は本番を引き継がない（promotion evidence を読んで判定）",
+     "evidence_path": "crates/celeris/src/instance.rs"
+    },
+    {
+     "kind": "reviewed_candidate_identity",
+     "text": "delivery の prepare は承認した head を引数に current/scripts/prepare.sh を起動し、gate/verify/manifest の一致を見て Ready にする",
+     "evidence_path": "crates/celeris/src/delivery.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "/api/v1/releases・/api/v1/releases/{sha12}/promote",
+     "path": "crates/task-api/src/releases.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "instance::decide_startup・decide_promotion・decide_tick",
+     "path": "crates/celeris/src/instance.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "release_notes::generate・aggregate",
+     "path": "crates/celeris/src/release_notes.rs"
+    },
+    {
+     "kind": "file",
+     "name": "<releases_dir>/<sha12>/{gate,verify,manifest,notes}.json・promote.lock・promote.log（読み取り）",
+     "path": "crates/celeris/src/releases.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/celeris/src/instance/tests.rs",
+     "target": "celeris:lib",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/celeris/src/releases/tests.rs",
+     "target": "celeris:lib",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/celeris/tests/instance_handoff.rs",
+     "target": "celeris:test:instance_handoff",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/celeris/tests/unpromoted_release.rs",
+     "target": "celeris:test:unpromoted_release",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/celeris/tests/releases_api.rs",
+     "target": "celeris:test:releases_api",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/celeris/tests/deployment_audit.rs",
+     "target": "celeris:test:deployment_audit",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    }
+   ]
+  }
+ ],
+ "shared_state": [
+  {
+   "kind": "sqlite_table",
+   "name": "chat_threads",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::store",
+     "path": "crates/task-core/src/chat/store.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::triage",
+     "path": "crates/task-core/src/chat/triage.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::review",
+     "path": "crates/task-core/src/chat/review.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::credential",
+     "path": "crates/task-core/src/chat/credential.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::legacy",
+     "path": "crates/task-core/src/store/legacy.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "chat_messages",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::store",
+     "path": "crates/task-core/src/chat/store.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::run_store",
+     "path": "crates/task-core/src/chat/run_store.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::triage",
+     "path": "crates/task-core/src/chat/triage.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::legacy",
+     "path": "crates/task-core/src/store/legacy.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "chat_runs",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::run_store",
+     "path": "crates/task-core/src/chat/run_store.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::session",
+     "path": "crates/task-core/src/chat/session.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::triage",
+     "path": "crates/task-core/src/chat/triage.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "chat_events",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::run_store",
+     "path": "crates/task-core/src/chat/run_store.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::store",
+     "path": "crates/task-core/src/chat/store.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "chat_attachments",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::attachments",
+     "path": "crates/task-core/src/chat/attachments.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "chat_attachment_refs",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::attachments",
+     "path": "crates/task-core/src/chat/attachments.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::store",
+     "path": "crates/task-core/src/chat/store.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "chat_client_requests",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::attachments",
+     "path": "crates/task-core/src/chat/attachments.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "chat::attachments",
+     "path": "crates/task-api/src/chat/attachments.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "node_sessions",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "node_session",
+     "path": "crates/task-core/src/node_session.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::session",
+     "path": "crates/task-core/src/chat/session.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::legacy",
+     "path": "crates/task-core/src/store/legacy.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "cos_inbox_items",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::triage",
+     "path": "crates/task-core/src/chat/triage.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "cos::triage_view",
+     "path": "crates/task-api/src/cos/triage_view.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "cos_operations",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::operations",
+     "path": "crates/task-core/src/chat/operations.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "cos_run_credentials",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::credential",
+     "path": "crates/task-core/src/chat/credential.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "cos_notification_routes",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::triage",
+     "path": "crates/task-core/src/chat/triage.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "cos_legacy_notification_links",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::triage",
+     "path": "crates/task-core/src/chat/triage.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "notifications",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "notify",
+     "path": "crates/task-core/src/notify.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::triage",
+     "path": "crates/task-core/src/chat/triage.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "notification_scan_state",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "notify",
+     "path": "crates/task-core/src/notify.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "feed_notices",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "feed",
+     "path": "crates/task-core/src/feed.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "root_done_summaries",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::root_done",
+     "path": "crates/task-core/src/store/root_done.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "deliveries",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "delivery",
+     "path": "crates/task-core/src/delivery.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "task_integrations",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::task_integration_state",
+     "path": "crates/task-core/src/store/task_integration_state.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "daemon_instances",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "instance",
+     "path": "crates/task-core/src/instance.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::instances",
+     "path": "crates/task-core/src/store/instances.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "ReviewTargetAdvanced",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_spawn",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "delivery",
+     "path": "crates/celeris/src/delivery.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "ReviewTargetSynced",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_spawn",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "ReviewResyncHalted",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_spawn",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "ReviewResyncResumed",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_spawn",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "comment",
+     "path": "crates/task-ops/src/comment.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "ReviewerPassReused",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_spawn",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "ReviewVerdict",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_verdict",
+     "path": "crates/task-dispatch/src/dispatcher/review_verdict.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "ReviewerPassed",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_verdict",
+     "path": "crates/task-dispatch/src/dispatcher/review_verdict.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "IntegrationRepairScheduled",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_verdict",
+     "path": "crates/task-dispatch/src/dispatcher/review_verdict.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "IntegrationRepairResolved",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_spawn",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "IntegrationRepairExhausted",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_spawn",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::worker_finish",
+     "path": "crates/task-dispatch/src/dispatcher/worker_finish.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "MergeCandidateStale",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::phase_integration",
+     "path": "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "DeliverySkipped",
+   "writers": [
+    {
+     "crate": "task-ops",
+     "module": "delivery",
+     "path": "crates/task-ops/src/delivery.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "IntegrationRequested",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::events（integration_request_record、呼び手は celeris::delivery::auto_resolve・task-dispatch::dispatcher::phase_integration・task-ops::stranded）",
+     "path": "crates/task-core/src/store/events.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "IntegrationMerged",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::task_integration_state（task_integration_upsert、呼び手は celeris::delivery・task-ops::stranded::reintegrate・task-ops::op_writes・task-api::changes）",
+     "path": "crates/task-core/src/store/task_integration_state.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "IntegrateTaskSettled",
+   "writers": [
+    {
+     "crate": "task-ops",
+     "module": "integrate_task",
+     "path": "crates/task-ops/src/integrate_task.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "DoneReintegrationStarted",
+   "writers": [
+    {
+     "crate": "task-ops",
+     "module": "stranded::reintegrate",
+     "path": "crates/task-ops/src/stranded/reintegrate.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "CosOperation",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::operations",
+     "path": "crates/task-core/src/chat/operations.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "<selfdeploy.releases_dir>/.deliveries/<task>/<head>/prepare.log",
+   "writers": [
+    {
+     "crate": "celeris",
+     "module": "delivery",
+     "path": "crates/celeris/src/delivery.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "CoS chat 添付の本体（stage から final_path への rename）",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::attachments",
+     "path": "crates/task-core/src/chat/attachments.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "CoS chat run の artifacts dir",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::cos_chat::launch",
+     "path": "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "auto_resolve の scratch worktree root",
+   "writers": [
+    {
+     "crate": "celeris",
+     "module": "delivery::auto_resolve",
+     "path": "crates/celeris/src/delivery/auto_resolve.rs"
+    }
+   ]
+  }
+ ],
+ "arch_map_diffs": [
+  {
+   "arch_map_line": 148,
+   "kind": "missing_row",
+   "observed": "delivery の状態機械（crates/task-core/src/delivery.rs の deliveries 表、crates/task-ops/src/delivery.rs の begin・再 sync 上限、crates/celeris/src/delivery.rs の tick・merge・prepare 起動）を owner とする行が地図に無い。selfdeploy の行（148）にも delivery.rs は無い"
+  },
+  {
+   "arch_map_line": 148,
+   "kind": "missing_row",
+   "observed": "crates/task-api/src/releases.rs（GET /api/v1/releases・GET /api/v1/deliveries・POST /api/v1/releases/{sha12}/promote）と crates/task-api/src/integrations.rs（/api/v1/integrations と merge/hold）を挙げる行が無い"
+  },
+  {
+   "arch_map_line": 148,
+   "kind": "wrong_owner",
+   "observed": "行は celeris だけを owner とするが、crates/celeris/src/release_notes.rs（notes の generate・aggregate）、crates/celeris/src/releases/audit.rs、daemon_instances 表の書き手 crates/task-core/src/instance.rs・crates/task-core/src/store/instances.rs が載っていない"
+  },
+  {
+   "arch_map_line": 148,
+   "kind": "missing_test",
+   "observed": "crates/celeris/tests/releases_api.rs と crates/celeris/tests/deployment_audit.rs が関連試験に無い"
+  },
+  {
+   "arch_map_line": 78,
+   "kind": "wrong_owner",
+   "observed": "auto_resolve の行は task-dispatch だけを挙げるが、配送の merge_base 失敗で scratch worktree に merge して task branch を進める呼び手 crates/celeris/src/delivery/auto_resolve.rs（試験 crates/celeris/src/delivery/tests.rs）が無い"
+  },
+  {
+   "arch_map_line": 65,
+   "kind": "wrong_owner",
+   "observed": "Event::ReviewTargetAdvanced の書き手は crates/task-dispatch/src/dispatcher/review_spawn.rs の他に crates/celeris/src/delivery.rs がある（delivery 中に target が進んだとき）。行の owner は task-dispatch だけ"
+  },
+  {
+   "arch_map_line": 65,
+   "kind": "missing_test",
+   "observed": "crates/task-dispatch/src/dispatcher/tests/review_check_wins.rs が関連試験に無い"
+  },
+  {
+   "arch_map_line": 135,
+   "kind": "missing_invariant",
+   "observed": "不変条件は『API は store を通して書く』だが、crates/task-api/src/cos/triage_view.rs の mark_tx は cos_inbox_items を task-api の中で直接 UPDATE する（operations と同じ transaction）。crates/task-api/src/cos/review.rs（/cos/review-report・/cos/review-thread）と cos/goal_guard.rs・cos/basis も行の path に無い"
+  },
+  {
+   "arch_map_line": 44,
+   "kind": "wrong_owner",
+   "observed": "chat_threads・chat_messages・node_sessions は crates/task-core/src/store/legacy.rs（旧 thread の互換 facade）も書くが、行は chat/ だけを挙げる。chat_threads は chat/review.rs・chat/credential.rs・chat/triage.rs も書く"
+  },
+  {
+   "arch_map_line": 120,
+   "kind": "wrong_owner",
+   "observed": "notifications 表は crates/task-core/src/notify.rs の他に crates/task-core/src/chat/triage.rs も書く。feed_notices 表の書き手 crates/task-core/src/feed.rs が地図のどの行にも無い"
+  },
+  {
+   "arch_map_line": 152,
+   "kind": "stale",
+   "observed": "crates/celeris/src/notify.rs の旧 scan・schedule・schedule_routes は daemon から呼ばれず crates/celeris/tests/notify.rs だけが使う（module 冒頭に『互換試験用に残す』）。破壊的変更の方針では消す対象で、行は送信経路を 3 つと書くが旧経路の残りに触れていない"
+  }
+ ]
+}

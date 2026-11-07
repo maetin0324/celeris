@@ -1,0 +1,1635 @@
+{
+ "schema": "celeris.health-v2-b0.capability-map-fragment/1",
+ "base_sha": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
+ "group": "cap-routing-budget",
+ "capabilities": [
+  {
+   "id": "routing-lane-route",
+   "name": "モデル/harness の lane・route 選択（lane 規則・候補・escalation・execution class）",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "route_select",
+     "path": "crates/task-core/src/route_select/mod.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "model_policy",
+     "path": "crates/task-core/src/model_policy.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "routing",
+     "path": "crates/task-core/src/routing.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "llm_route",
+     "path": "crates/task-core/src/llm_route.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::route_select",
+     "path": "crates/task-dispatch/src/dispatcher/route_select.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::dispatch_run",
+     "path": "crates/task-dispatch/src/dispatcher/dispatch_run.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::routing_context",
+     "path": "crates/task-dispatch/src/dispatcher/routing_context.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "other",
+     "text": "担当と lane は celeris が決定的に選び、worker の申告では選ばない（ADR-0069）。dispatcher は LLM を呼ばない",
+     "evidence_path": "agent-docs/adr/0069-routing-four-layers.md"
+    },
+    {
+     "kind": "restart_replay",
+     "text": "lane の決定は routing_decided event（policy_version 付き）として run ごとに追記し、後から再生・監査できる",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/dispatch_run.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "宣言された route 候補がどれも使えないときは run を起こさない（no declared route candidate ... is eligible）",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/route_failure.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "event_kind",
+     "name": "routing_decided",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "llm_route_selected",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "routing_features_recorded",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "execution_routed",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "route_select::lane / availability / escalation",
+     "path": "crates/task-core/src/route_select/lane.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "GET/PUT /api/v1/routing…",
+     "path": "crates/task-api/tests/routing.rs"
+    },
+    {
+     "kind": "ts_module",
+     "name": "lane_rules（TS 判定の口。compare 領域）",
+     "path": "control-ts/src/domains/lane_rules.ts"
+    },
+    {
+     "kind": "ts_module",
+     "name": "route_priority",
+     "path": "control-ts/src/domains/route_priority.ts"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-core/src/model_policy/tests.rs",
+     "target": "lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-core/src/route_select/assist_tests.rs",
+     "target": "lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-core/src/route_select/mlsys_policy_tests.rs",
+     "target": "lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/route_select.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/route_launch.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/route_failure_escalation.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/lane_assist.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/routing_context.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-api/tests/routing.rs",
+     "target": "test:routing",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "control-ts/src/domains/lane_rules.test.ts",
+     "target": "vitest",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "control-ts/src/domains/route_priority.test.ts",
+     "target": "vitest",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    }
+   ]
+  },
+  {
+   "id": "accounts-quota",
+   "name": "account・source の選択と quota 見積り（5 時間/週の窓・実測残量・認証切れ除外）",
+   "owners": [
+    {
+     "crate": "task-dispatch",
+     "module": "accounts",
+     "path": "crates/task-dispatch/src/accounts.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::quota_book",
+     "path": "crates/task-dispatch/src/dispatcher/quota_book.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "quota",
+     "path": "crates/task-core/src/quota.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "accounts",
+     "path": "crates/task-core/src/accounts.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::account_limits",
+     "path": "crates/task-core/src/store/account_limits.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "opencode_account",
+     "path": "crates/task-worker/src/opencode_account.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "accounts_admin",
+     "path": "crates/celeris/src/accounts_admin.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "budget",
+     "text": "quota 見積りを超える account に割り当てない。見積りは measured → apportioned → estimated → unknown の順で決定的に選ぶ（ADR-0074 D4）",
+     "evidence_path": "crates/task-core/src/quota.rs"
+    },
+    {
+     "kind": "credential_sandbox",
+     "text": "credential は消さない（ADR-0017）。認証切れ account は再ログイン/check 成功まで routing から外す",
+     "evidence_path": "crates/celeris/src/accounts_admin.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "event_kind",
+     "name": "quota_estimated",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "account_limits（store）",
+     "path": "crates/task-core/src/store/account_limits.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/llm/accounts（admin）",
+     "path": "crates/task-api/tests/llm_accounts_admin.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "accounts::measured_remaining",
+     "path": "crates/task-dispatch/src/accounts.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-dispatch/src/accounts/tests.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/accounts/routing_tests.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/accounts/quota_activity_tests.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/accounts/quota_calibration_tests.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/account_auth_failure.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-core/src/quota/tests.rs",
+     "target": "lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-core/src/accounts/tests.rs",
+     "target": "lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-worker/src/opencode_account/tests.rs",
+     "target": "lib",
+     "build_link_secs": 54.74,
+     "cost_source": "test-targets.json build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-api/tests/llm_accounts_admin.rs",
+     "target": "test:llm_accounts_admin",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    }
+   ]
+  },
+  {
+   "id": "budget-pricing",
+   "name": "予算・単価（USD 換算・案件 controller の日次上限・task 木の token 予算）",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "pricing",
+     "path": "crates/task-core/src/pricing.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "project_budget",
+     "path": "crates/task-ops/src/project_budget.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::token_budget",
+     "path": "crates/task-dispatch/src/dispatcher/token_budget.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "budget",
+     "text": "単価が引けない model と usage の無い終わった run は費用不明として BudgetKind::UsdUnknown で止める（ADR 2026-11-06-budget-usd-caps D2）",
+     "evidence_path": "crates/task-ops/src/project_budget.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "単価表に一致しない model は None（費用不明）で、0 円と偽らない",
+     "evidence_path": "crates/task-core/src/pricing.rs"
+    },
+    {
+     "kind": "budget",
+     "text": "task 木の token 予算（Budget.max_tokens）を run 途中の累積 usage で watch し、continuation・retry・reviewer の前に消費 ≥ 上限を判定する",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/token_budget.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "fn",
+     "name": "pricing::budget_cost / run_budget_cost / estimate_cost_usd",
+     "path": "crates/task-core/src/pricing.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "project_budget::usage / exceeded / severity",
+     "path": "crates/task-ops/src/project_budget.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "dispatcher::token_budget",
+     "path": "crates/task-dispatch/src/dispatcher/token_budget.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-core/src/pricing/budget_ttl_tests.rs",
+     "target": "lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-ops/src/project_budget_tests.rs",
+     "target": "lib",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/token_budget.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/planner_budget.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-core/src/store/project_guard_usage_tests.rs",
+     "target": "lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    }
+   ]
+  },
+  {
+   "id": "llm-proxy",
+   "name": "llm-proxy（ローカル LLM 供給プロキシ・要求内 fallback/breaker・枠の予約・要求 log）",
+   "owners": [
+    {
+     "crate": "llm-proxy",
+     "module": "server",
+     "path": "crates/llm-proxy/src/server.rs"
+    },
+    {
+     "crate": "llm-proxy",
+     "module": "fallback",
+     "path": "crates/llm-proxy/src/fallback.rs"
+    },
+    {
+     "crate": "llm-proxy",
+     "module": "selection",
+     "path": "crates/llm-proxy/src/selection.rs"
+    },
+    {
+     "crate": "llm-proxy",
+     "module": "reservation",
+     "path": "crates/llm-proxy/src/reservation.rs"
+    },
+    {
+     "crate": "llm-proxy",
+     "module": "credentials",
+     "path": "crates/llm-proxy/src/credentials.rs"
+    },
+    {
+     "crate": "llm-proxy",
+     "module": "log",
+     "path": "crates/llm-proxy/src/log.rs"
+    },
+    {
+     "crate": "llm-proxy",
+     "module": "routing_context",
+     "path": "crates/llm-proxy/src/routing_context.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "other",
+     "text": "proxy は 127.0.0.1 で待ち受け、source・model は dispatcher の RoutePolicy の決定を使い proxy で選び直さない（ADR-0053 D1・ADR 2026-10-04）",
+     "evidence_path": "agent-docs/adr/0053-llm-source-proxy.md"
+    },
+    {
+     "kind": "lease_exclusion",
+     "text": "枠（account・共有 GPU）の予約は全枠をまとめて取るか 1 つも取らない。競合時の選び直しは 1 回だけ",
+     "evidence_path": "crates/llm-proxy/src/reservation.rs"
+    },
+    {
+     "kind": "credential_sandbox",
+     "text": "CLI が書いた OAuth 認証情報 file をそのまま読み、更新は同じ file に tmp+rename で書き戻す。DB や別の場所に写さず、値を Debug/log に出さない",
+     "evidence_path": "crates/llm-proxy/src/credentials.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "proxy の OpenAI/Anthropic 互換 endpoint",
+     "path": "crates/llm-proxy/src/server.rs"
+    },
+    {
+     "kind": "file",
+     "name": "CLI の OAuth 認証情報 file（読み書き）",
+     "path": "crates/llm-proxy/src/credentials.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "log::insert / insert_routed（llm_proxy_requests）",
+     "path": "crates/llm-proxy/src/log.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "routing_request_decided（proxy の要求判断。daemon services が追記）",
+     "path": "crates/task-core/src/model/events.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/llm-proxy/tests/proxy_integration.rs",
+     "target": "test:proxy_integration",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/llm-proxy/tests/proxy_routing_context.rs",
+     "target": "test:proxy_routing_context",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/llm-proxy/src/fallback_tests.rs",
+     "target": "lib",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/llm-proxy/src/selection_tests.rs",
+     "target": "lib",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/llm-proxy/src/reservation_tests.rs",
+     "target": "lib",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    }
+   ]
+  },
+  {
+   "id": "routing-eval",
+   "name": "routing 評価（評価集合 manifest・recheck・評価 run の試行・aggregate・routing_evidence と stage）",
+   "owners": [
+    {
+     "crate": "routing-eval",
+     "module": "manifest",
+     "path": "crates/routing-eval/src/manifest.rs"
+    },
+    {
+     "crate": "routing-eval",
+     "module": "aggregate",
+     "path": "crates/routing-eval/src/aggregate.rs"
+    },
+    {
+     "crate": "routing-eval",
+     "module": "recheck",
+     "path": "crates/routing-eval/src/recheck.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "routing_eval_trial",
+     "path": "crates/task-core/src/routing_eval_trial.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::eval_trials",
+     "path": "crates/task-core/src/store/eval_trials.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::routing_evidence",
+     "path": "crates/task-core/src/store/routing_evidence.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "completion_outcome",
+     "path": "crates/task-core/src/completion_outcome.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::eval_trials",
+     "path": "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "routing_eval",
+     "path": "crates/task-api/src/routing_eval.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "routing_stage",
+     "path": "crates/task-ops/src/routing_stage.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "atomic_state_event",
+     "text": "試行の投入は冪等で、claim は二重にしない（ADR 2026-10-11）",
+     "evidence_path": "crates/task-core/src/store/eval_trials.rs"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "routing stage の変更は routing_stage 表と routing_stage_changed event を同じ store 呼び出しで書く",
+     "evidence_path": "crates/task-core/src/store/routing_evidence.rs"
+    },
+    {
+     "kind": "other",
+     "text": "評価集合は manifest の hash で固定し recheck で確かめる。API 応答に check_cmd を返さない",
+     "evidence_path": "crates/routing-eval/src/manifest.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "cli",
+     "name": "celeris-routing-eval",
+     "path": "crates/routing-eval/src/main.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "POST/GET /api/v1/routing-eval/trials, POST …/{trial_id}/cancel",
+     "path": "crates/task-api/src/routing_eval.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "replace_routing_evidence / set_routing_stage",
+     "path": "crates/task-core/src/store/routing_evidence.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "routing_stage_changed",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "file",
+     "name": "aggregate の出力 evidence.json / evidence.md",
+     "path": "crates/routing-eval/src/aggregate.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/routing-eval/tests/pipeline_stub.rs",
+     "target": "test:pipeline_stub",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/celeris/tests/routing_eval_run.rs",
+     "target": "test:routing_eval_run",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/task-api/tests/routing_eval.rs",
+     "target": "test:routing_eval",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/routing_stage.rs",
+     "target": "test:routing_stage",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/eval_trial_dispatch.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    }
+   ]
+  },
+  {
+   "id": "routing-audit-outcome",
+   "name": "routing の特徴量・結果・監査・export（route_records・completion outcome）",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "model_router::feedback",
+     "path": "crates/task-core/src/model_router/feedback.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::route_records",
+     "path": "crates/task-core/src/store/route_records.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::routing_log",
+     "path": "crates/task-core/src/store/routing_log.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "routing_outcome",
+     "path": "crates/task-ops/src/routing_outcome.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "routing_audit",
+     "path": "crates/task-ops/src/routing_audit.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "routing_export",
+     "path": "crates/task-ops/src/routing_export.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "daemon::services",
+     "path": "crates/celeris/src/daemon/services.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "restart_replay",
+     "text": "proxy の要求判断 event は request_id・decision_id が既にあれば追記しない（再送で二重にしない）",
+     "evidence_path": "crates/celeris/src/daemon/services.rs"
+    },
+    {
+     "kind": "other",
+     "text": "監査・export は DB を書き換えない（ADR 2026-10-11 D8）",
+     "evidence_path": "crates/task-ops/src/routing_audit.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "event_kind",
+     "name": "routing_outcome_recorded",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "routing_request_decided",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "cli",
+     "name": "celerisctl routing export",
+     "path": "crates/celerisctl/src/commands/routing.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "route_records（route_decisions/options/features/judgments/outcomes）",
+     "path": "crates/task-core/src/store/route_records.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-core/src/model_router/feedback/tests.rs",
+     "target": "lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-ops/src/routing_outcome/tests.rs",
+     "target": "lib",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-ops/src/routing_audit_tests.rs",
+     "target": "lib",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/celerisctl/tests/routing_cli.rs",
+     "target": "test:routing_cli",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-api/tests/legacy_routing_events.rs",
+     "target": "test:legacy_routing_events",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    }
+   ]
+  },
+  {
+   "id": "project-controller",
+   "name": "Project Controller（wake・lease・TS 判定・効果・guard・retention）",
+   "owners": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::project_wake",
+     "path": "crates/task-dispatch/src/dispatcher/project_wake.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::project_decider_ts",
+     "path": "crates/task-dispatch/src/dispatcher/project_decider_ts.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::project_guard",
+     "path": "crates/task-dispatch/src/dispatcher/project_guard.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::project_resume",
+     "path": "crates/task-dispatch/src/dispatcher/project_resume.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "project_controller",
+     "path": "crates/task-dispatch/src/project_controller.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::project_wake",
+     "path": "crates/task-core/src/store/project_wake.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::project_wake_effect",
+     "path": "crates/task-core/src/store/project_wake_effect.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::project_guard",
+     "path": "crates/task-core/src/store/project_guard.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::project_retention",
+     "path": "crates/task-core/src/store/project_retention.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "project_controller_view",
+     "path": "crates/task-ops/src/project_controller_view.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "other",
+     "text": "判定は TS、状態遷移・予算・安全は Rust。controller は task の遷移を直接行わない（ADR 2026-11-04-project-controller D3・I14）",
+     "evidence_path": "agent-docs/adr/2026-11-04-project-controller.md"
+    },
+    {
+     "kind": "human_authority",
+     "text": "blocked の自動の再開は原因の解消の根拠がある時だけで、pause・cancel・未回答の問い・危険な予算超過は解かない（付記 P1-G）",
+     "evidence_path": "agent-docs/adr/2026-11-05-phase3-p1g.md"
+    },
+    {
+     "kind": "budget",
+     "text": "案件の日次上限（USD・root 数・CoS 入力数）を超えたら guard が止める",
+     "evidence_path": "crates/task-ops/src/project_budget.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "GET/PUT /api/v1/projects/{id}/controller",
+     "path": "crates/task-api/src/handlers/project_controller.rs"
+    },
+    {
+     "kind": "ts_module",
+     "name": "project_controller（判定）",
+     "path": "control-ts/src/domains/project_controller.ts"
+    },
+    {
+     "kind": "store_fn",
+     "name": "project_wakes / project_controller_state / project_controller_decisions",
+     "path": "crates/task-core/src/store/project_wake.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/project_wake.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/project_wake_effects.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/project_recovery.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/project_controller_replay.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/project_achievement.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-api/tests/project_controller.rs",
+     "target": "test:project_controller",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-core/src/store/project_retention_tests.rs",
+     "target": "lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "control-ts/src/domains/project_controller.test.ts",
+     "target": "vitest",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    }
+   ]
+  },
+  {
+   "id": "script-runtime",
+   "name": "TS 制御層（celeris-script の埋込み ScriptRuntime・bundle 検証/配備・generation・compare/canary/guard）",
+   "owners": [
+    {
+     "crate": "script-runtime",
+     "module": "handle",
+     "path": "crates/script-runtime/src/handle.rs"
+    },
+    {
+     "crate": "script-runtime",
+     "module": "actor",
+     "path": "crates/script-runtime/src/actor.rs"
+    },
+    {
+     "crate": "script-runtime",
+     "module": "ops",
+     "path": "crates/script-runtime/src/ops.rs"
+    },
+    {
+     "crate": "script-runtime",
+     "module": "manifest",
+     "path": "crates/script-runtime/src/manifest.rs"
+    },
+    {
+     "crate": "script-runtime",
+     "module": "generation",
+     "path": "crates/script-runtime/src/generation.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "daemon::script_layer",
+     "path": "crates/celeris/src/daemon/script_layer.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "daemon::script_guard",
+     "path": "crates/celeris/src/daemon/script_guard.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::script_compare",
+     "path": "crates/task-dispatch/src/dispatcher/script_compare.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::script_domains",
+     "path": "crates/task-core/src/store/script_domains.rs"
+    },
+    {
+     "crate": "control-ts",
+     "module": "main",
+     "path": "control-ts/src/main.ts"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "fail_closed",
+     "text": "hash・schema・host API の検証に通らない bundle を load しない。op は store を持たず host sink へ送るだけ",
+     "evidence_path": "crates/script-runtime/src/manifest.rs"
+    },
+    {
+     "kind": "human_authority",
+     "text": "→canary・canary_bps 変更・→ts は人の API token の主体だけ。自動で昇格する経路は無い",
+     "evidence_path": "crates/task-api/src/script_domains.rs"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "script-guard の戻しは mode の CAS と同じ transaction で書き、script_guard_state の計数は再起動後も残す",
+     "evidence_path": "crates/task-core/src/store/script_guard.rs"
+    },
+    {
+     "kind": "restart_replay",
+     "text": "起動時は mode の行が指す generation を load し直し、使えない領域は system:script-startup で rust に戻す",
+     "evidence_path": "crates/celeris/src/daemon/script_layer.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "ts_module",
+     "name": "celeris:host v1（host.d.ts）",
+     "path": "control-ts/src/host.d.ts"
+    },
+    {
+     "kind": "ts_module",
+     "name": "domains（execution_gate / lane_rules / route_priority / cos_digest / project_controller）",
+     "path": "control-ts/src/domains/index.ts"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/script/domains, /api/v1/script/generations",
+     "path": "crates/task-api/src/script_domains.rs"
+    },
+    {
+     "kind": "cli",
+     "name": "celerisctl script",
+     "path": "crates/celerisctl/src/commands/script.rs"
+    },
+    {
+     "kind": "cli",
+     "name": "script-deploy",
+     "path": "crates/script-runtime/src/bin/script-deploy.rs"
+    },
+    {
+     "kind": "file",
+     "name": "<state_dir>/script-bundles/<bundle_sha256>/",
+     "path": "crates/script-runtime/src/manifest.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "script_compare_recorded",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "script_domain_mode_changed",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "trait",
+     "name": "ScriptHandle",
+     "path": "crates/script-runtime/src/handle.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/script-runtime/tests/runtime.rs",
+     "target": "test:runtime",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/script-runtime/tests/manifest.rs",
+     "target": "test:manifest",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/script-runtime/tests/generation.rs",
+     "target": "test:generation",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/script-runtime/tests/script_deploy.rs",
+     "target": "test:script_deploy",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/celeris/tests/script_runtime.rs",
+     "target": "test:script_runtime",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/celeris/src/daemon/script_guard_tests.rs",
+     "target": "lib",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/script_compare.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/script_canary.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-core/src/store/script_domains_tests.rs",
+     "target": "lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-api/tests/script_generations.rs",
+     "target": "test:script_generations",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "control-ts/src/domains/domains.test.ts",
+     "target": "vitest",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "control-ts/src/domains/execution_gate.test.ts",
+     "target": "vitest",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    }
+   ]
+  },
+  {
+   "id": "cron-jobs",
+   "name": "定期実行（cron job）・tick の cron 段",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "cron",
+     "path": "crates/task-core/src/cron.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "cron::store",
+     "path": "crates/task-core/src/cron/store.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "cron_jobs",
+     "path": "crates/task-ops/src/cron_jobs.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::cron_tick",
+     "path": "crates/task-dispatch/src/dispatcher/cron_tick.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "other",
+     "text": "cron job は tick の段で決定的に起動し、dispatcher から LLM を呼ばない（ADR-0131）",
+     "evidence_path": "agent-docs/adr/0131-cron-jobs.md"
+    },
+    {
+     "kind": "restart_replay",
+     "text": "cos_review は周期ごとに冪等キー付きの入力を 1 件だけ積み、再起動後も重複しない（ADR 2026-10-27-cron-cos-review D3）",
+     "evidence_path": "crates/task-ops/src/cron_jobs.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "/api/v1/cron/jobs…",
+     "path": "crates/task-api/tests/cron_jobs.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "cron_jobs / cron_job_runs（cron::store）",
+     "path": "crates/task-core/src/cron/store.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "cron_jobs（executor の登録・検証）",
+     "path": "crates/task-ops/src/cron_jobs.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-core/src/cron/tests.rs",
+     "target": "lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-core/src/cron/store_tests.rs",
+     "target": "lib",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-ops/src/cron_jobs/tests.rs",
+     "target": "lib",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/cron_jobs.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/cron_cos_review.rs",
+     "target": "lib",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-api/tests/cron_jobs.rs",
+     "target": "test:cron_jobs",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    }
+   ]
+  }
+ ],
+ "shared_state": [
+  {
+   "kind": "sqlite_table",
+   "name": "llm_proxy_requests",
+   "writers": [
+    {
+     "crate": "llm-proxy",
+     "module": "log",
+     "path": "crates/llm-proxy/src/log.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::routing_log",
+     "path": "crates/task-core/src/store/routing_log.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "project_controller_state",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::project_wake",
+     "path": "crates/task-core/src/store/project_wake.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::project_wake_effect",
+     "path": "crates/task-core/src/store/project_wake_effect.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::project_guard",
+     "path": "crates/task-core/src/store/project_guard.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::project_briefs",
+     "path": "crates/task-core/src/store/project_briefs.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::authority",
+     "path": "crates/task-core/src/store/authority.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "project_controller_decisions",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::project_wake",
+     "path": "crates/task-core/src/store/project_wake.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::project_wake_effect",
+     "path": "crates/task-core/src/store/project_wake_effect.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::project_guard",
+     "path": "crates/task-core/src/store/project_guard.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "project_wakes",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::project_wake",
+     "path": "crates/task-core/src/store/project_wake.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::project_guard",
+     "path": "crates/task-core/src/store/project_guard.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "routing_stage",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::routing_evidence",
+     "path": "crates/task-core/src/store/routing_evidence.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "routing_evidence",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::routing_evidence",
+     "path": "crates/task-core/src/store/routing_evidence.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "eval_trials",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::eval_trials",
+     "path": "crates/task-core/src/store/eval_trials.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "route_decisions / route_options / route_features / route_judgments / route_outcomes",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::route_records",
+     "path": "crates/task-core/src/store/route_records.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "task_routing_overrides",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::routing_overrides",
+     "path": "crates/task-core/src/store/routing_overrides.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "account_limits",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::account_limits",
+     "path": "crates/task-core/src/store/account_limits.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "cron_jobs / cron_job_runs",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "cron::store",
+     "path": "crates/task-core/src/cron/store.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "script_domain_modes / script_domain_events / script_generations / script_generation_events / script_compare_log",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::script_domains",
+     "path": "crates/task-core/src/store/script_domains.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "script_guard_state",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::script_guard",
+     "path": "crates/task-core/src/store/script_guard.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "script_inbox_items / script_inbox_cursors",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "script_inbox",
+     "path": "crates/task-core/src/script_inbox.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "cos_digest_shadow_outbox",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::cos_digest_apply",
+     "path": "crates/task-core/src/store/cos_digest_apply.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "model_catalog / model_catalog_discovery / model_catalog_overrides",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::model_catalog",
+     "path": "crates/task-core/src/store/model_catalog.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "routing_decided",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::dispatch_run",
+     "path": "crates/task-dispatch/src/dispatcher/dispatch_run.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "routing_features_recorded",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::routing_context",
+     "path": "crates/task-dispatch/src/dispatcher/routing_context.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "daemon::services",
+     "path": "crates/celeris/src/daemon/services.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "routing_request_decided",
+   "writers": [
+    {
+     "crate": "celeris",
+     "module": "daemon::services",
+     "path": "crates/celeris/src/daemon/services.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "routing_outcome_recorded",
+   "writers": [
+    {
+     "crate": "task-ops",
+     "module": "routing_outcome",
+     "path": "crates/task-ops/src/routing_outcome.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "routing_stage_changed",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::routing_evidence",
+     "path": "crates/task-core/src/store/routing_evidence.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "llm_route_selected",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::route_select",
+     "path": "crates/task-dispatch/src/dispatcher/route_select.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "quota_estimated",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::quota_book",
+     "path": "crates/task-dispatch/src/dispatcher/quota_book.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "execution_routed",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::work_units",
+     "path": "crates/task-dispatch/src/dispatcher/work_units.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "script_compare_recorded",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::script_domains",
+     "path": "crates/task-core/src/store/script_domains.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "script_domain_mode_changed",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::script_domains",
+     "path": "crates/task-core/src/store/script_domains.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "model_catalog_changed",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::model_catalog",
+     "path": "crates/task-core/src/store/model_catalog.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "CLI の OAuth 認証情報 file（Claude .credentials.json・Codex auth.json）",
+   "writers": [
+    {
+     "crate": "llm-proxy",
+     "module": "credentials",
+     "path": "crates/llm-proxy/src/credentials.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "<state_dir>/script-bundles/<bundle_sha256>/",
+   "writers": [
+    {
+     "crate": "script-runtime",
+     "module": "manifest",
+     "path": "crates/script-runtime/src/manifest.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "routing-eval の出力 dir（manifest・recheck・dry-run・evidence.json/md・export jsonl）",
+   "writers": [
+    {
+     "crate": "routing-eval",
+     "module": "manifest",
+     "path": "crates/routing-eval/src/manifest.rs"
+    },
+    {
+     "crate": "routing-eval",
+     "module": "recheck",
+     "path": "crates/routing-eval/src/recheck.rs"
+    },
+    {
+     "crate": "routing-eval",
+     "module": "dryrun",
+     "path": "crates/routing-eval/src/dryrun.rs"
+    },
+    {
+     "crate": "routing-eval",
+     "module": "run",
+     "path": "crates/routing-eval/src/run.rs"
+    },
+    {
+     "crate": "routing-eval",
+     "module": "aggregate",
+     "path": "crates/routing-eval/src/aggregate.rs"
+    },
+    {
+     "crate": "routing-eval",
+     "module": "export",
+     "path": "crates/routing-eval/src/export.rs"
+    }
+   ]
+  }
+ ],
+ "arch_map_diffs": [
+  {
+   "arch_map_line": 35,
+   "kind": "stale",
+   "observed": "行は quota を task-core::quota だけに置くが、quota の見積り event（quota_estimated）の構築と account 選択は task-dispatch::dispatcher::quota_book・task-dispatch::accounts にある（59 行と重なる）。試験列に task-core/src/accounts/tests.rs・route_select の試験が無い"
+  },
+  {
+   "arch_map_line": 51,
+   "kind": "wrong_owner",
+   "observed": "owner は task-dispatch::dispatcher だけだが、状態表 project_wakes・project_controller_state・project_controller_decisions の書き手は task-core::store::{project_wake,project_wake_effect,project_guard}（project_controller_state は store::{project_briefs,authority} も書く）。予算の数え方は task-ops::project_budget、判定 TS は control-ts/src/domains/project_controller.ts。どれも path 列に無い"
+  },
+  {
+   "arch_map_line": 51,
+   "kind": "missing_test",
+   "observed": "試験列に crates/task-dispatch/src/dispatcher/tests/{project_wake_effects,project_controller_replay,project_achievement}.rs、crates/task-api/tests/project_controller.rs、crates/task-ops/src/project_budget_tests.rs、control-ts/src/domains/project_controller.test.ts が無い"
+  },
+  {
+   "arch_map_line": 51,
+   "kind": "missing_row",
+   "observed": "予算・単価（task-core::pricing の USD 換算・task-ops::project_budget の日次上限と UsdUnknown の fail-closed・task-dispatch::dispatcher::token_budget の task 木 token 予算）の行が地図に無い（pricing・project_budget・token_budget を grep して 0 件）"
+  },
+  {
+   "arch_map_line": 132,
+   "kind": "stale",
+   "observed": "行は routing-eval が『aggregate と routing_evidence 書き込み』をすると書くが、crates/routing-eval/src に routing_evidence 表への書き込み（replace_routing_evidence 呼び出し・INSERT）は無い（grep）。aggregate は evidence.json/evidence.md を出力 dir に書くだけ。表を書くのは task-core::completion_outcome::refresh_routing_evidence（celeris::daemon::completion_evidence_tick から）と task-core::store::routing_evidence"
+  },
+  {
+   "arch_map_line": 132,
+   "kind": "missing_invariant",
+   "observed": "routing_stage の変更は celeris::daemon::routing_guardrail と task-ops::routing_stage の 2 か所から set_routing_stage で行われるが、行に書き手と不変条件（stage 表と routing_stage_changed を同じ呼び出しで書く）が無い"
+  },
+  {
+   "arch_map_line": 163,
+   "kind": "missing_invariant",
+   "observed": "llm-proxy::credentials は CLI の OAuth 認証情報 file を tmp+rename で同じ path に書き戻す（ADR-0053 D1）が、行の不変条件は待ち受けと source 選択だけで credential の扱いを書いていない"
+  },
+  {
+   "arch_map_line": 163,
+   "kind": "missing_row",
+   "observed": "llm_proxy_requests 表は llm-proxy::log（INSERT）と task-core::store::routing_log（UPDATE で decision_id・run_id を付ける）の 2 crate が書くが、どの行にも無い。llm-proxy::reservation（枠の全取り/全無し・選び直し 1 回）も行に無い"
+  },
+  {
+   "arch_map_line": 164,
+   "kind": "missing_test",
+   "observed": "試験列に crates/llm-proxy/src/reservation_tests.rs が無い"
+  },
+  {
+   "arch_map_line": 168,
+   "kind": "wrong_path",
+   "observed": "path 列は control-ts/src/main.ts だけで、判定の領域 control-ts/src/domains/{execution_gate,lane_rules,route_priority,cos_digest,project_controller}.ts と host.d.ts が無い。試験列にも lane_rules・route_priority・execution_gate・project_controller の *.test.ts が無い"
+  },
+  {
+   "arch_map_line": 39,
+   "kind": "missing_test",
+   "observed": "試験列に crates/task-api/tests/cron_jobs.rs（API の試験）が無い"
+  }
+ ]
+}

@@ -1,0 +1,1111 @@
+{
+ "schema": "celeris.health-v2-b0.capability-map-fragment/1",
+ "base_sha": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
+ "group": "cap-run-worker",
+ "capabilities": [
+  {
+   "id": "run-claim-lease",
+   "name": "run の claim と task/WU lease（取得・更新・解放・drain の打ち切り）",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "store::tasks",
+     "path": "crates/task-core/src/store/tasks.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::task_store",
+     "path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::runs",
+     "path": "crates/task-core/src/store/execution/runs.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::dispatch_run",
+     "path": "crates/task-dispatch/src/dispatcher/dispatch_run.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::leases",
+     "path": "crates/task-dispatch/src/dispatcher/leases.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "lease_exclusion",
+     "text": "task の lease は条件付き UPDATE で 1 run だけが取得でき、renew は status と lease_worker_run_id が一致する行だけ延長する",
+     "evidence_path": "crates/task-core/src/store/tasks.rs"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "acquire_lease は running への遷移と Transitioned event を同じ transaction で書く（試験 acquire_lease_appends_transitioned_event_atomically）",
+     "evidence_path": "crates/task-core/src/store/tests.rs"
+    },
+    {
+     "kind": "restart_replay",
+     "text": "drain の打ち切りは DB の状態を変えず、lease の失効で新しい active が拾う。lease を持たない reviewer/eval run は runs 行を cancelled で閉じる",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/leases.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "trait",
+     "name": "TaskStore::{acquire_lease,renew_lease,release_lease,acquire_work_unit_lease,extend_task_lease}",
+     "path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "TaskStore::{run_index_start,run_index_finish,runs_running,close_runs_of_terminal_tasks}",
+     "path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "worker_started",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "Dispatcher::{abort_all_runs,interrupt_runs_on_shutdown}",
+     "path": "crates/task-dispatch/src/dispatcher/leases.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-core/src/store/tests.rs",
+     "target": "task-core (lib unittests)",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/tick_and_dispatch.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/drain_hand_off.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    }
+   ]
+  },
+  {
+   "id": "orphan-takeover",
+   "name": "孤児 run の回収と持ち主の居ない running の runs 行の回収",
+   "owners": [
+    {
+     "crate": "task-dispatch",
+     "module": "orphan",
+     "path": "crates/task-dispatch/src/orphan.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::ownerless_runs",
+     "path": "crates/task-dispatch/src/dispatcher/ownerless_runs.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::leases",
+     "path": "crates/task-dispatch/src/dispatcher/leases.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "lease_exclusion",
+     "text": "再起動直後の takeover は holder_gone（旧インスタンスの freshness と pid の生存）で持ち主が居ないと確かめた run だけ。旧が生きていれば lease 失効まで横取りしない",
+     "evidence_path": "crates/task-dispatch/src/orphan.rs"
+    },
+    {
+     "kind": "restart_replay",
+     "text": "lease を持たない running の runs 行は ownerless_run_decision で期限超過を確かめてから WorkerFinished{end:cancelled} で閉じる",
+     "evidence_path": "agent-docs/adr/2026-10-03-ownerless-running-runs.md"
+    },
+    {
+     "kind": "other",
+     "text": "orphan.rs は純粋関数と設定だけで DB にも LLM にも触れない",
+     "evidence_path": "crates/task-dispatch/src/orphan.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "fn",
+     "name": "orphan::{holder_gone,instance_alive,ownerless_run_decision,proc_pid_alive}",
+     "path": "crates/task-dispatch/src/orphan.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "worker_finished",
+     "path": "crates/task-core/src/model/events.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-dispatch/src/orphan/tests.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/orphan_takeover.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/ownerless_runs.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/orphan_work_units.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    }
+   ]
+  },
+  {
+   "id": "continuation-session-resume",
+   "name": "continuation・checkpoint・session resume",
+   "owners": [
+    {
+     "crate": "task-dispatch",
+     "module": "sessions",
+     "path": "crates/task-dispatch/src/sessions.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::continuation_session",
+     "path": "crates/task-dispatch/src/dispatcher/continuation_session.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "checkpoint",
+     "path": "crates/task-dispatch/src/checkpoint.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::worker_finish",
+     "path": "crates/task-dispatch/src/dispatcher/worker_finish.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "node_session",
+     "path": "crates/task-core/src/node_session.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "restart_replay",
+     "text": "resume できない（拒否・adapter 非対応）ときは checkpoint から新しい session で続け、失敗した session は retire する",
+     "evidence_path": "agent-docs/adr/0140-claude-session-resume.md"
+    },
+    {
+     "kind": "other",
+     "text": "継続 session は node / WU 単位で DB（node_sessions）に記録し、worker のメモリに持たない",
+     "evidence_path": "crates/task-core/src/node_session.rs"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "checkpoint は worker_finish が CheckpointSaved event として run の終わりの記録に添える",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/worker_finish.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "fn",
+     "name": "sessions::{decide_continuation,decide,new_session_id}",
+     "path": "crates/task-dispatch/src/sessions.rs"
+    },
+    {
+     "kind": "trait",
+     "name": "NodeSessionStore::{node_session_*,work_unit_session_create,work_unit_session_retire}",
+     "path": "crates/task-core/src/node_session.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "checkpoint_saved",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "file",
+     "name": "artifacts/checkpoint.json（schema）",
+     "path": "docs/protocol/checkpoint.schema.json"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-dispatch/src/sessions/tests.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/session_resume.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/continuation_cap.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/checkpoint/tests.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-core/src/node_session/tests.rs",
+     "target": "task-core (lib unittests)",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    }
+   ]
+  },
+  {
+   "id": "worker-protocol-adapters",
+   "name": "worker protocol と adapter（RunRequest・EventSink・WorkerAdapter・各 harness）",
+   "owners": [
+    {
+     "crate": "task-worker",
+     "module": "protocol",
+     "path": "crates/task-worker/src/protocol.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "adapter",
+     "path": "crates/task-worker/src/adapter.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "route",
+     "path": "crates/task-worker/src/route.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "claude_code",
+     "path": "crates/task-worker/src/claude_code.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "codex",
+     "path": "crates/task-worker/src/codex.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "acp",
+     "path": "crates/task-worker/src/acp.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "pi",
+     "path": "crates/task-worker/src/pi.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::sinks",
+     "path": "crates/task-dispatch/src/dispatcher/sinks.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::worker_task",
+     "path": "crates/task-dispatch/src/dispatcher/worker_task.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "other",
+     "text": "adapter は結果を RunOutcome に正規化して返すだけで、状態遷移の判断はしない（task-dispatch の責務）",
+     "evidence_path": "crates/task-worker/src/adapter.rs"
+    },
+    {
+     "kind": "other",
+     "text": "worker は stateless。入力は RunRequest、出力は result.json と events。完了は check か reviewer が決める",
+     "evidence_path": "agent-docs/adr/0003-worker-protocol.md"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "run 途中の event は sink から store へ追記するだけ（worker_progress・worker_policy_violation・artifact_produced）",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/sinks.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "trait",
+     "name": "WorkerAdapter / EventSink",
+     "path": "crates/task-worker/src/adapter.rs"
+    },
+    {
+     "kind": "file",
+     "name": "worker-protocol.schema.json",
+     "path": "docs/protocol/worker-protocol.schema.json"
+    },
+    {
+     "kind": "event_kind",
+     "name": "worker_progress / worker_policy_violation / artifact_produced",
+     "path": "crates/task-core/src/model/events.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-worker/src/protocol/tests.rs",
+     "target": "task-worker (lib unittests)",
+     "build_link_secs": 54.74,
+     "cost_source": "test-targets.json build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-worker/src/route/tests.rs",
+     "target": "task-worker (lib unittests)",
+     "build_link_secs": 54.74,
+     "cost_source": "test-targets.json build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-worker/src/claude_code/tests.rs",
+     "target": "task-worker (lib unittests)",
+     "build_link_secs": 54.74,
+     "cost_source": "test-targets.json build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-worker/src/codex/tests.rs",
+     "target": "task-worker (lib unittests)",
+     "build_link_secs": 54.74,
+     "cost_source": "test-targets.json build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/route_launch.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    }
+   ]
+  },
+  {
+   "id": "sandbox-db-guard",
+   "name": "worker run の sandbox と db_guard（DB 読み取り専用 namespace）",
+   "owners": [
+    {
+     "crate": "task-worker",
+     "module": "db_guard",
+     "path": "crates/task-worker/src/db_guard.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "subprocess",
+     "path": "crates/task-worker/src/subprocess.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "tool_policy",
+     "path": "crates/task-worker/src/tool_policy.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "credential_sandbox",
+     "text": "adapter・check の子 process は pre_exec で user+mount namespace に入り、DB 本体と -wal/-shm/-journal を読み取り専用にする（container 実行を除く）",
+     "evidence_path": "crates/task-worker/src/db_guard.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "本番 DB を守れない起動は拒否する（celeris の worker_db_guard_refuse 試験）",
+     "evidence_path": "crates/celeris/tests/worker_db_guard_refuse.rs"
+    },
+    {
+     "kind": "credential_sandbox",
+     "text": "host config（~/.config/celeris 等）を run から ro bind で見せる（host_config_read_only_paths）",
+     "evidence_path": "crates/task-worker/src/db_guard.rs"
+    },
+    {
+     "kind": "other",
+     "text": "worker の subagent・別 LLM CLI・LLM API の起動は決定的に検出して WorkerPolicyViolation に残す。検出は警告で run は止めない",
+     "evidence_path": "crates/task-worker/src/tool_policy.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "fn",
+     "name": "DbGuard::{new,with_home,with_releases_dir,host_config_read_only_paths,writable_children} / sync_ssh_shadow",
+     "path": "crates/task-worker/src/db_guard.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "worker_policy_violation",
+     "path": "crates/task-core/src/model/events.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-worker/src/db_guard_tests.rs",
+     "target": "task-worker (lib unittests)",
+     "build_link_secs": 54.74,
+     "cost_source": "test-targets.json build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/celeris/tests/worker_db_guard_refuse.rs",
+     "target": "celeris --test worker_db_guard_refuse",
+     "build_link_secs": 82.24,
+     "cost_source": "test-targets.json build_no_run[celeris].secs"
+    },
+    {
+     "path": "tests/e2e/tests/worker_db_read_only.rs",
+     "target": "e2e --test worker_db_read_only",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-worker/src/subprocess/tests.rs",
+     "target": "task-worker (lib unittests)",
+     "build_link_secs": 54.74,
+     "cost_source": "test-targets.json build_no_run[task-worker].secs"
+    }
+   ]
+  },
+  {
+   "id": "required-rules-delivery",
+   "name": "必須規則（CLAUDE.md）の prompt 先頭への配送",
+   "owners": [
+    {
+     "crate": "task-worker",
+     "module": "required_rules",
+     "path": "crates/task-worker/src/required_rules.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "codex",
+     "path": "crates/task-worker/src/codex.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "pi",
+     "path": "crates/task-worker/src/pi.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "acp",
+     "path": "crates/task-worker/src/acp.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "fail_closed",
+     "text": "git が追跡する CLAUDE.md が欠落・読めない・空なら harness を起動せず run を落とす",
+     "evidence_path": "agent-docs/adr/2026-10-23-required-rules-prompt-delivery.md"
+    },
+    {
+     "kind": "other",
+     "text": "Codex・Pi・ACP は preamble_for_run の全文を prompt 先頭に 1 度だけ置き、作業ツリーには書かない。Claude Code は CLAUDE.md を直接読む",
+     "evidence_path": "crates/task-worker/src/required_rules.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "fn",
+     "name": "required_rules::{preamble,preamble_for_run}",
+     "path": "crates/task-worker/src/required_rules.rs"
+    },
+    {
+     "kind": "file",
+     "name": "CLAUDE.md",
+     "path": "CLAUDE.md"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-worker/src/required_rules/tests.rs",
+     "target": "task-worker (lib unittests)",
+     "build_link_secs": 54.74,
+     "cost_source": "test-targets.json build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-worker/src/pi/tests.rs",
+     "target": "task-worker (lib unittests)",
+     "build_link_secs": 54.74,
+     "cost_source": "test-targets.json build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-worker/src/acp/tests.rs",
+     "target": "task-worker (lib unittests)",
+     "build_link_secs": 54.74,
+     "cost_source": "test-targets.json build_no_run[task-worker].secs"
+    }
+   ]
+  },
+  {
+   "id": "credential-broker-resume",
+   "name": "credential broker（celeris-credentiald）と credential 待ちの検証・一度だけの再開",
+   "owners": [
+    {
+     "crate": "celeris-credentiald",
+     "module": "lib",
+     "path": "crates/celeris-credentiald/src/lib.rs"
+    },
+    {
+     "crate": "celeris-credentiald",
+     "module": "ipc",
+     "path": "crates/celeris-credentiald/src/ipc.rs"
+    },
+    {
+     "crate": "celeris-credentiald",
+     "module": "injection_ipc",
+     "path": "crates/celeris-credentiald/src/injection_ipc.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::credential_wait",
+     "path": "crates/task-core/src/store/credential_wait.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::credential_gate",
+     "path": "crates/task-dispatch/src/dispatcher/credential_gate.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "credential_resume",
+     "path": "crates/task-dispatch/src/credential_resume.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "handlers::secrets",
+     "path": "crates/task-api/src/handlers/secrets.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "credential_sandbox",
+     "text": "credential の値は broker の外に出さず、相手 process の uid を確かめて渡す",
+     "evidence_path": "agent-docs/adr/0080-browser-phase2-policy-broker-approval.md"
+    },
+    {
+     "kind": "credential_sandbox",
+     "text": "credential_waits のどの列にも秘密の値を置かない（secret_id と fingerprint だけ）",
+     "evidence_path": "crates/task-core/src/store/credential_wait.rs"
+    },
+    {
+     "kind": "lease_exclusion",
+     "text": "credential 待ちは waiting|rejected → verified → resumed の一方向の条件付き UPDATE で、claim_resume は一度だけ true を返す",
+     "evidence_path": "crates/task-core/src/store/credential_wait.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "未登録の credential を宣言した source は worker 起動前にその WU だけを blocked(waiting_for_auth) にする",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/credential_gate.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "fn",
+     "name": "Broker / ipc::{serve,serve_attested,call,resolve_socket}",
+     "path": "crates/celeris-credentiald/src/ipc.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "Store::{credential_wait_enter,credential_record_secret_saved,credential_wait_mark_verified,credential_wait_claim_resume,credential_wait_cancel}",
+     "path": "crates/task-core/src/store/credential_wait.rs"
+    },
+    {
+     "kind": "trait",
+     "name": "CredentialVerifier",
+     "path": "crates/task-dispatch/src/credential_resume.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "secrets handlers（秘密の保存 → credential_record_secret_saved）",
+     "path": "crates/task-api/src/handlers/secrets.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/celeris-credentiald/tests/broker.rs",
+     "target": "celeris-credentiald --test broker",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/celeris-credentiald/tests/injection_peer_uid.rs",
+     "target": "celeris-credentiald --test injection_peer_uid",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-core/src/store/credential_wait_tests.rs",
+     "target": "task-core (lib unittests)",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/credential_resume_tests.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/credential_gate.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/credential_e2e.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    }
+   ]
+  },
+  {
+   "id": "scratch-build-cache-disk-guard",
+   "name": "scratch pool・build cache・disk guard と GC",
+   "owners": [
+    {
+     "crate": "task-worker",
+     "module": "scratch",
+     "path": "crates/task-worker/src/scratch.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "scratch::gc",
+     "path": "crates/task-worker/src/scratch/gc.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "build_cache",
+     "path": "crates/task-worker/src/build_cache.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "run_tmpdir",
+     "path": "crates/task-worker/src/run_tmpdir.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "scratch_gc",
+     "path": "crates/task-dispatch/src/scratch_gc.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::housekeeping",
+     "path": "crates/task-dispatch/src/dispatcher/housekeeping.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "disk_watch",
+     "path": "crates/task-dispatch/src/disk_watch.rs"
+    },
+    {
+     "crate": "celerisctl",
+     "module": "commands::scratch",
+     "path": "crates/celerisctl/src/commands/scratch.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "lease_exclusion",
+     "text": "scratch の owner は lease.json（mtime が生存の合図）と .lock の flock で持ち、走っている run の scratch は消さない",
+     "evidence_path": "crates/task-worker/src/scratch.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "空きが min_free_disk_mb を割るか検査できないときは新しい run を開始しない（check_disk_space）。空き不足の間は scratch GC を緊急モードで回す",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/housekeeping.rs"
+    },
+    {
+     "kind": "other",
+     "text": "分類・plan_gc・adopt の選択は task-worker の純粋関数、走査と削除・測定 thread は task-dispatch の scratch_gc（LLM は呼ばない）",
+     "evidence_path": "crates/task-dispatch/src/scratch_gc.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "fn",
+     "name": "scratch::{allocate,allocate_with_seed,touch,set_ttl,release,write_lease,cargo_env}",
+     "path": "crates/task-worker/src/scratch.rs"
+    },
+    {
+     "kind": "file",
+     "name": "<scratch>/targets/<owner>/lease.json（celeris.scratch-lease/1）",
+     "path": "crates/task-worker/src/scratch.rs"
+    },
+    {
+     "kind": "cli",
+     "name": "celerisctl scratch {status,gc}",
+     "path": "crates/celerisctl/src/commands/scratch.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "workspace_pruned",
+     "path": "crates/task-core/src/model/events.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-worker/src/scratch/tests.rs",
+     "target": "task-worker (lib unittests)",
+     "build_link_secs": 54.74,
+     "cost_source": "test-targets.json build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/scratch_gc/tests.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/build_cache.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/cleanup_and_disk.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/disk_watch/tests.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    }
+   ]
+  }
+ ],
+ "shared_state": [
+  {
+   "kind": "sqlite_table",
+   "name": "tasks（lease_worker_run_id・lease_expires_at 列）",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::tasks",
+     "path": "crates/task-core/src/store/tasks.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::transition",
+     "path": "crates/task-core/src/store/transition.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::credential_wait",
+     "path": "crates/task-core/src/store/credential_wait.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "delivery",
+     "path": "crates/task-core/src/delivery.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "work_units（lease_run_id・lease_expires_at 列）",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::execution::work_units",
+     "path": "crates/task-core/src/store/execution/work_units.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::tasks",
+     "path": "crates/task-core/src/store/tasks.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::write_sets",
+     "path": "crates/task-core/src/store/write_sets.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::events",
+     "path": "crates/task-core/src/store/events.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "runs",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::execution::runs",
+     "path": "crates/task-core/src/store/execution/runs.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::events",
+     "path": "crates/task-core/src/store/events.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "node_sessions",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "node_session",
+     "path": "crates/task-core/src/node_session.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::session",
+     "path": "crates/task-core/src/chat/session.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::legacy",
+     "path": "crates/task-core/src/store/legacy.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "credential_waits",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::credential_wait",
+     "path": "crates/task-core/src/store/credential_wait.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "disk_watch_state",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "disk_watch",
+     "path": "crates/task-core/src/disk_watch.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "worker_started",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::dispatch_run",
+     "path": "crates/task-dispatch/src/dispatcher/dispatch_run.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_spawn",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "worker_finished",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::worker_finish",
+     "path": "crates/task-dispatch/src/dispatcher/worker_finish.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::leases",
+     "path": "crates/task-dispatch/src/dispatcher/leases.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_verdict",
+     "path": "crates/task-dispatch/src/dispatcher/review_verdict.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::cluster_job_wait",
+     "path": "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "comment",
+     "path": "crates/task-ops/src/comment.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "worker_progress",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::sinks",
+     "path": "crates/task-dispatch/src/dispatcher/sinks.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::dispatch_run",
+     "path": "crates/task-dispatch/src/dispatcher/dispatch_run.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::auto_leaf",
+     "path": "crates/task-dispatch/src/dispatcher/auto_leaf.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "worker_policy_violation",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::sinks",
+     "path": "crates/task-dispatch/src/dispatcher/sinks.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_spawn",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "checkpoint_saved",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::worker_finish",
+     "path": "crates/task-dispatch/src/dispatcher/worker_finish.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "workspace_pruned",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::housekeeping",
+     "path": "crates/task-dispatch/src/dispatcher/housekeeping.rs"
+    },
+    {
+     "crate": "celerisctl",
+     "module": "commands::workspace",
+     "path": "crates/celerisctl/src/commands/workspace.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "<scratch>/targets/<owner>/lease.json",
+   "writers": [
+    {
+     "crate": "task-worker",
+     "module": "scratch",
+     "path": "crates/task-worker/src/scratch.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "scratch_gc",
+     "path": "crates/task-dispatch/src/scratch_gc.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher",
+     "path": "crates/task-dispatch/src/dispatcher.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::eval_trials",
+     "path": "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    },
+    {
+     "crate": "celerisctl",
+     "module": "commands::scratch",
+     "path": "crates/celerisctl/src/commands/scratch.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "credentiald の vault・audit（~/.local/celeris/credentiald または CELERIS_CREDENTIALD_DATA_DIR）",
+   "writers": [
+    {
+     "crate": "celeris-credentiald",
+     "module": "lib",
+     "path": "crates/celeris-credentiald/src/lib.rs"
+    }
+   ]
+  }
+ ],
+ "arch_map_diffs": [
+  {
+   "arch_map_line": 80,
+   "kind": "stale",
+   "observed": "行 80 の不変条件は『孤児 run は lease の期限切れを確かめてから回収』だが、crates/task-dispatch/src/orphan.rs（Phase F5-fix6、ADR-0070 付記）は holder_gone で持ち主不在を確かめれば lease の失効を待たずに回収する。ADR 欄に ADR-0070 が無い"
+  },
+  {
+   "arch_map_line": 80,
+   "kind": "wrong_owner",
+   "observed": "行 80 は orphan.rs と sessions.rs・approvals・policy を 1 行に束ね、行 79 も orphan.rs を owner に挙げる。continuation の判定（sessions.rs）は行 29 にもあり、owner が 2 行に重複している"
+  },
+  {
+   "arch_map_line": 64,
+   "kind": "missing_row",
+   "observed": "run の claim と task/WU lease（crates/task-core/src/store/tasks.rs の acquire_lease_impl・renew_lease_impl、crates/task-dispatch/src/dispatcher/leases.rs の abort_all_runs・interrupt_runs_on_shutdown、dispatch_run.rs の acquire_lease）の行が無い。dispatcher/leases.rs は地図のどの行にも出ない"
+  },
+  {
+   "arch_map_line": 76,
+   "kind": "missing_row",
+   "observed": "credential 待ちと一度だけの再開（crates/task-dispatch/src/dispatcher/credential_gate.rs、crates/task-dispatch/src/credential_resume.rs、crates/task-core/src/store/credential_wait.rs、表 credential_waits、ADR 2026-10-15-mlsys-min-decision-assisted D4）の行が無い"
+  },
+  {
+   "arch_map_line": 72,
+   "kind": "missing_invariant",
+   "observed": "行 72 は disk guard を名に含むが、min_free_disk_mb を割ったときの dispatch 停止と緊急 GC（housekeeping.rs）を不変条件に書いていない"
+  },
+  {
+   "arch_map_line": 98,
+   "kind": "wrong_path",
+   "observed": "行 98 は『GC は別責務』としつつ task-worker の scratch/gc.rs を owner path に挙げる。実際は scratch/gc.rs が分類・plan_gc（純粋関数）、走査・削除は crates/task-dispatch/src/scratch_gc.rs。lease.json の書き手は task-worker と task-dispatch・celerisctl scratch の複数で、行に出ない"
+  },
+  {
+   "arch_map_line": 166,
+   "kind": "missing_test",
+   "observed": "行 166 の試験は tests/{broker,injection_peer_uid,prod_admission}.rs だけで、crates/celeris-credentiald/tests/{injection_ipc,policy_selector,installed_unit,browser_doctor}.rs が出ない"
+  },
+  {
+   "arch_map_line": 86,
+   "kind": "missing_invariant",
+   "observed": "行 86 は docs/protocol/worker-protocol.schema.json と型の一致検査（ADR-0003 D6、protocol/tests.rs）を不変条件・port に書いていない"
+  }
+ ]
+}

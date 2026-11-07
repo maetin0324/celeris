@@ -1,0 +1,1175 @@
+{
+ "schema": "celeris.health-v2-b0.capability-map-fragment/1",
+ "base_sha": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
+ "group": "cap-browser-eval-surface",
+ "capabilities": [
+  {
+   "id": "browser-policy-broker-approval",
+   "name": "Browser の policy broker・承認待ち・credential 越境",
+   "owners": [
+    {
+     "crate": "task-worker",
+     "module": "browser_policy",
+     "path": "crates/task-worker/src/browser_policy.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "browser_auth",
+     "path": "crates/task-worker/src/browser_auth.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "browser_credential",
+     "path": "crates/task-worker/src/browser_credential.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "browser",
+     "path": "crates/task-api/src/browser.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "browser_wait",
+     "path": "crates/task-core/src/browser_wait/sql.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "human_authority",
+     "text": "承認待ちは DB の待ち状態（browser_waits）として持ち、人の承認なしに越境しない",
+     "evidence_path": "agent-docs/adr/0080-browser-phase2-policy-broker-approval.md"
+    },
+    {
+     "kind": "credential_sandbox",
+     "text": "credential の値は worker に渡さず broker（celeris-credentiald）が注入する",
+     "evidence_path": "agent-docs/adr/0080-browser-phase2-policy-broker-approval.md"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "実効の許可 origin は task ∩ grant。egress の許可 list も同じ積（browser_policy::egress_allow）",
+     "evidence_path": "crates/task-worker/src/browser_policy.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "GET/PUT /api/v1/tasks/{id}/browser/policy",
+     "path": "crates/task-api/src/browser.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "GET /api/v1/tasks/{id}/browser/waits・POST …/waits/{wait_id}/credential",
+     "path": "crates/task-api/src/browser.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "SqliteStore::browser_wait_register_also / browser_wait_decide_also / browser_task_policy_set",
+     "path": "crates/task-core/src/browser_wait/sql.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-worker/src/browser_tests.rs",
+     "target": "task-worker (lib)",
+     "build_link_secs": 54.74,
+     "cost_source": "build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-api/tests/browser_waits.rs",
+     "target": "task-api test browser_waits",
+     "build_link_secs": 84.93,
+     "cost_source": "build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/celeris-credentiald/tests/broker.rs",
+     "target": "celeris-credentiald test broker",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    }
+   ]
+  },
+  {
+   "id": "browser-launcher",
+   "name": "Browser 権限分離 launcher（userns owner 分離・固定 IPC・本番 admission）",
+   "owners": [
+    {
+     "crate": "task-worker",
+     "module": "browser_launcher",
+     "path": "crates/task-worker/src/browser_launcher/mod.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "browser_launcher_run",
+     "path": "crates/task-worker/src/browser_launcher_run.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "bin celeris-browser-launcher",
+     "path": "crates/task-worker/src/bin/celeris-browser-launcher.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "credential_sandbox",
+     "text": "userns の持ち主は daemon でなく launcher（daemon に ptrace させない）",
+     "evidence_path": "agent-docs/adr/0115-browser-ptrace-owner-ns-launcher.md"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "CredentialUse・IdentityRestore は launcher の session 証明があるときだけ解放（無ければ拒否）",
+     "evidence_path": "agent-docs/adr/0138-browser-prod-admission-confidential-release.md"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "fn",
+     "name": "browser_launcher::{Request,Response,PROTOCOL_VERSION}（launcher protocol v9）",
+     "path": "crates/task-worker/src/browser_launcher/mod.rs"
+    },
+    {
+     "kind": "cli",
+     "name": "celeris-browser-launcher",
+     "path": "crates/task-worker/src/bin/celeris-browser-launcher.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-worker/src/browser_launcher/tests.rs",
+     "target": "task-worker (lib)",
+     "build_link_secs": 54.74,
+     "cost_source": "build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-worker/tests/browser_launcher_ptrace.rs",
+     "target": "task-worker test browser_launcher_ptrace",
+     "build_link_secs": 54.74,
+     "cost_source": "build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-worker/tests/browser_prod_admission.rs",
+     "target": "task-worker test browser_prod_admission",
+     "build_link_secs": 54.74,
+     "cost_source": "build_no_run[task-worker].secs"
+    }
+   ]
+  },
+  {
+   "id": "browser-egress-runtime",
+   "name": "Browser 隔離 runtime・supervisor・egress relay",
+   "owners": [
+    {
+     "crate": "task-worker",
+     "module": "browser_egress",
+     "path": "crates/task-worker/src/browser_egress.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "browser_runtime",
+     "path": "crates/task-worker/src/browser_runtime.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "browser_supervisor",
+     "path": "crates/task-worker/src/browser_supervisor.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "browser_relay",
+     "path": "crates/task-worker/src/browser_relay.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "credential_sandbox",
+     "text": "browser は隔離 runtime で動かし、外への通信は egress relay（CONNECT と GET/HEAD の forward）だけを通す",
+     "evidence_path": "agent-docs/adr/0104-browser-egress-transport.md"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "egress は許可 list の host:port に合わない接続を拒否し記録する",
+     "evidence_path": "agent-docs/adr/2026-10-06-egress-http-forward-get.md"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "fn",
+     "name": "browser_egress（bounded CONNECT transport）",
+     "path": "crates/task-worker/src/browser_egress.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "browser_runtime（隔離 runtime の起動）",
+     "path": "crates/task-worker/src/browser_runtime.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-worker/tests/browser_egress_relay.rs",
+     "target": "task-worker test browser_egress_relay",
+     "build_link_secs": 54.74,
+     "cost_source": "build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-worker/tests/browser_egress_process.rs",
+     "target": "task-worker test browser_egress_process",
+     "build_link_secs": 54.74,
+     "cost_source": "build_no_run[task-worker].secs"
+    },
+    {
+     "path": "crates/task-worker/tests/browser_runtime_isolated.rs",
+     "target": "task-worker test browser_runtime_isolated",
+     "build_link_secs": 54.74,
+     "cost_source": "build_no_run[task-worker].secs"
+    }
+   ]
+  },
+  {
+   "id": "browser-live-view-control",
+   "name": "Browser Live View・制御 lease・identity（API と web gateway）",
+   "owners": [
+    {
+     "crate": "task-api",
+     "module": "browser_live",
+     "path": "crates/task-api/src/browser_live.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "browser_control",
+     "path": "crates/task-api/src/browser_control.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "browser_live",
+     "path": "crates/task-worker/src/browser_live.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "browser_control_ops",
+     "path": "crates/task-core/src/browser_control_ops.rs"
+    },
+    {
+     "crate": "web",
+     "module": "server/browser-live",
+     "path": "web/server/browser-live.js"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "lease_exclusion",
+     "text": "制御は lease の持ち主だけが行う",
+     "evidence_path": "agent-docs/adr/0099-browser-phase3-control-lease.md"
+    },
+    {
+     "kind": "human_authority",
+     "text": "Live View は ACL を通った者だけ、credential session の frame は owner 本人だけに届け、保存しない",
+     "evidence_path": "agent-docs/adr/2026-10-10-browser-launcher-live-view-frames.md"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "/api/v1/tasks/{id}/browser/live/{run}/{session}/{grant,check,events,read,frames}",
+     "path": "crates/task-api/src/browser_live.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/tasks/{id}/browser/control/{run}/{session}",
+     "path": "crates/task-api/src/browser_control.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "SqliteStore::browser_control_mutate",
+     "path": "crates/task-core/src/browser_control_ops.rs"
+    },
+    {
+     "kind": "ts_module",
+     "name": "createBrowserLive（register・resumeDevice・registerDevice）",
+     "path": "web/server/browser-live.js"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-api/tests/browser_live.rs",
+     "target": "task-api test browser_live",
+     "build_link_secs": 84.93,
+     "cost_source": "build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/browser_live_cross.rs",
+     "target": "task-api test browser_live_cross",
+     "build_link_secs": 84.93,
+     "cost_source": "build_no_run[task-api].secs"
+    },
+    {
+     "path": "web/server/browser-live.test.mjs",
+     "target": "web node test (server)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    }
+   ]
+  },
+  {
+   "id": "browser-site-policy-trusted-devices",
+   "name": "Browser site policy（DB 正本）・信頼端末・本番の有効化",
+   "owners": [
+    {
+     "crate": "task-api",
+     "module": "browser_site_policies",
+     "path": "crates/task-api/src/browser_site_policies.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "browser_trusted_devices",
+     "path": "crates/task-api/src/browser_trusted_devices.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::site_policies",
+     "path": "crates/task-core/src/store/site_policies.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::trusted_devices",
+     "path": "crates/task-core/src/store/trusted_devices.rs"
+    },
+    {
+     "crate": "task-worker",
+     "module": "browser_conformance",
+     "path": "crates/task-worker/src/browser_conformance.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "credential_sandbox",
+     "text": "DeviceClaims は Ed25519 で検証し、通らない端末は登録しない",
+     "evidence_path": "agent-docs/adr/2026-10-07-browser-trusted-devices.md"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "site policy の変更は browser_site_policies と browser_site_policy_events を同じ store 関数で書く",
+     "evidence_path": "crates/task-core/src/store/site_policies.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "適合台帳と前提 gate を満たさない backend には browser task を配らない",
+     "evidence_path": "agent-docs/adr/2026-10-08-browser-prod-enablement.md"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "/api/v1/browser/site-policies[/{policy_id}]",
+     "path": "crates/task-api/src/browser_site_policies.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "/api/v1/browser/trusted-devices[/verify|/{id}]",
+     "path": "crates/task-api/src/browser_trusted_devices.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "SqliteStore::browser_site_policy_upsert / trusted_device_register / trusted_device_verify_and_rotate",
+     "path": "crates/task-core/src/store/site_policies.rs"
+    },
+    {
+     "kind": "cli",
+     "name": "celerisctl browser doctor",
+     "path": "crates/celerisctl/src/commands/browser_doctor.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-api/tests/browser_site_policy_db.rs",
+     "target": "task-api test browser_site_policy_db",
+     "build_link_secs": 84.93,
+     "cost_source": "build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/trusted_devices.rs",
+     "target": "task-api test trusted_devices",
+     "build_link_secs": 84.93,
+     "cost_source": "build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/celerisctl/tests/browser_doctor.rs",
+     "target": "celerisctl test browser_doctor",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    }
+   ]
+  },
+  {
+   "id": "campaign-eval",
+   "name": "campaign 評価基盤（manifest・runner・grader・checker・lock・台帳・export）",
+   "owners": [
+    {
+     "crate": "celeris-campaign",
+     "module": "manifest",
+     "path": "crates/campaign/src/manifest.rs"
+    },
+    {
+     "crate": "celeris-campaign",
+     "module": "runner",
+     "path": "crates/campaign/src/runner.rs"
+    },
+    {
+     "crate": "celeris-campaign",
+     "module": "grader",
+     "path": "crates/campaign/src/grader.rs"
+    },
+    {
+     "crate": "celeris-campaign",
+     "module": "checker",
+     "path": "crates/campaign/src/checker.rs"
+    },
+    {
+     "crate": "celeris-campaign",
+     "module": "lock_exec",
+     "path": "crates/campaign/src/lock_exec.rs"
+    },
+    {
+     "crate": "celeris-campaign",
+     "module": "global_ledger",
+     "path": "crates/campaign/src/global_ledger.rs"
+    },
+    {
+     "crate": "celeris-campaign",
+     "module": "export",
+     "path": "crates/campaign/src/export.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "budget",
+     "text": "試行は予算上限（cap・予約）の内でだけ起動する",
+     "evidence_path": "agent-docs/adr/2026-10-16-campaign-budget-cap.md"
+    },
+    {
+     "kind": "reviewed_candidate_identity",
+     "text": "campaign lock で固定した binary・case・grader の hash が変われば同じ測定の再開を拒否する",
+     "evidence_path": "agent-docs/adr/2026-10-17-campaign-lock.md"
+    },
+    {
+     "kind": "other",
+     "text": "欠測は 0 で埋めず件数として数える（final-accounting の observed_partial）",
+     "evidence_path": "crates/campaign/src/export.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "cli",
+     "name": "celeris-campaign",
+     "path": "crates/campaign/src/main.rs"
+    },
+    {
+     "kind": "file",
+     "name": "<out>/records.jsonl・summary.json・final-accounting.json・global-ledger.jsonl",
+     "path": "crates/campaign/src/record.rs"
+    },
+    {
+     "kind": "cli",
+     "name": "celerisctl campaign export <campaign-id> --out <dir>",
+     "path": "crates/celerisctl/src/commands/campaign.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/campaign/tests/runner_checker.rs",
+     "target": "celeris-campaign test runner_checker",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/campaign/tests/campaign_lock.rs",
+     "target": "celeris-campaign test campaign_lock",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/campaign/tests/global_ledger_atomic.rs",
+     "target": "celeris-campaign test global_ledger_atomic",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/campaign/tests/final_accounting.rs",
+     "target": "celeris-campaign test final_accounting",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    }
+   ]
+  },
+  {
+   "id": "jev-classifier",
+   "name": "Jev 要求分類 adapter（decision-assisted の分類段）",
+   "owners": [
+    {
+     "crate": "jev-classifier",
+     "module": "client",
+     "path": "crates/jev-classifier/src/client.rs"
+    },
+    {
+     "crate": "jev-classifier",
+     "module": "breaker",
+     "path": "crates/jev-classifier/src/breaker.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "daemon::classify_tick",
+     "path": "crates/celeris/src/daemon/classify_tick.rs"
+    },
+    {
+     "crate": "celeris",
+     "module": "config::jev",
+     "path": "crates/celeris/src/config/jev.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "fail_closed",
+     "text": "dispatcher・store からは呼ばない。失敗は FallbackToFixed で fixed 方策へ戻り、401/403 は JevError::Auth で credential 待ちへ",
+     "evidence_path": "crates/jev-classifier/src/lib.rs"
+    },
+    {
+     "kind": "credential_sandbox",
+     "text": "config は鍵の値を持たず secret_id（secrets dir の名前）だけを持つ",
+     "evidence_path": "crates/celeris/src/config/jev.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "trait",
+     "name": "ApiKeyProvider",
+     "path": "crates/jev-classifier/src/client.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "JevClassifier・ClassifyOutcome・CircuitBreaker",
+     "path": "crates/jev-classifier/src/lib.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/jev-classifier/tests/jev_fake_server.rs",
+     "target": "jev-classifier test jev_fake_server",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/celeris/src/daemon/classify_tick/e2e.rs",
+     "target": "celeris (bin unit)",
+     "build_link_secs": 82.24,
+     "cost_source": "build_no_run[celeris].secs"
+    },
+    {
+     "path": "crates/campaign/tests/jev_stages.rs",
+     "target": "celeris-campaign test jev_stages",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    }
+   ]
+  },
+  {
+   "id": "http-api-auth-principals",
+   "name": "HTTP API（/api/v1）の router・認証・token 主体",
+   "owners": [
+    {
+     "crate": "task-api",
+     "module": "handlers",
+     "path": "crates/task-api/src/handlers.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "middleware",
+     "path": "crates/task-api/src/middleware.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "principal",
+     "path": "crates/task-api/src/principal.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "human_authority",
+     "text": "config の token が名乗れるのは human: と operator: だけ。mcp・cos の主体は daemon が作る",
+     "evidence_path": "crates/task-api/src/principal.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "token の無い構成（Unauthenticated）では管理系を受けない（require_admin が 401）",
+     "evidence_path": "crates/task-api/src/middleware.rs"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "task 作成は冪等キー・unblocks・添付 pin・link event を同じ transaction で書く",
+     "evidence_path": "crates/task-api/src/handlers/tasks.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "/api/v1/*（router facade）",
+     "path": "crates/task-api/src/handlers.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "Principal::parse_token_principal・Caller",
+     "path": "crates/task-api/src/principal.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "review_resync_resumed（POST rereview）",
+     "path": "crates/task-api/src/handlers/task_actions.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-api/tests/api_principals.rs",
+     "target": "task-api test api_principals",
+     "build_link_secs": 84.93,
+     "cost_source": "build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/auth_and_guards.rs",
+     "target": "task-api test auth_and_guards",
+     "build_link_secs": 84.93,
+     "cost_source": "build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/cos_auth.rs",
+     "target": "task-api test cos_auth",
+     "build_link_secs": 84.93,
+     "cost_source": "build_no_run[task-api].secs"
+    }
+   ]
+  },
+  {
+   "id": "celerisctl-cli",
+   "name": "celerisctl（CLI。migration をしない open_client）",
+   "owners": [
+    {
+     "crate": "celerisctl",
+     "module": "main",
+     "path": "crates/celerisctl/src/main.rs"
+    },
+    {
+     "crate": "celerisctl",
+     "module": "commands",
+     "path": "crates/celerisctl/src/commands/mod.rs"
+    },
+    {
+     "crate": "celerisctl",
+     "module": "commands::workspace",
+     "path": "crates/celerisctl/src/commands/workspace.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "other",
+     "text": "celerisctl は migration をしない",
+     "evidence_path": "agent-docs/adr/0095-worker-runs-see-the-db-read-only.md"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "workspace prune は削除の後に workspace_pruned event を追記する（dispatcher の housekeeping と同じ event kind）",
+     "evidence_path": "crates/celerisctl/src/commands/workspace.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "cli",
+     "name": "celerisctl <subcommand>",
+     "path": "crates/celerisctl/src/main.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "workspace_pruned",
+     "path": "crates/celerisctl/src/commands/workspace.rs"
+    },
+    {
+     "kind": "cli",
+     "name": "celerisctl eval requests",
+     "path": "crates/celerisctl/src/commands/eval.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/celerisctl/tests/no_migrate.rs",
+     "target": "celerisctl test no_migrate",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/celerisctl/tests/bin_smoke.rs",
+     "target": "celerisctl test bin_smoke",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/celerisctl/tests/campaign_export.rs",
+     "target": "celerisctl test campaign_export",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    }
+   ]
+  },
+  {
+   "id": "celeris-mcp",
+   "name": "celeris-mcp（外部エージェント向け MCP）",
+   "owners": [
+    {
+     "crate": "celeris-mcp",
+     "module": "rpc",
+     "path": "crates/celeris-mcp/src/rpc.rs"
+    },
+    {
+     "crate": "celeris-mcp",
+     "module": "tools::db",
+     "path": "crates/celeris-mcp/src/tools/db.rs"
+    },
+    {
+     "crate": "celeris-mcp",
+     "module": "auth",
+     "path": "crates/celeris-mcp/src/auth.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "human_authority",
+     "text": "外部が作る案件・タスクは CoS に渡して直接作らない",
+     "evidence_path": "agent-docs/adr/0056-mcp-server.md"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "DB は open_read_only で開き、読み取り以外の文を拒否する",
+     "evidence_path": "agent-docs/adr/2026-10-23-mcp-read-only-db-and-api.md"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "fn",
+     "name": "MCP JSON-RPC（stdio・http）",
+     "path": "crates/celeris-mcp/src/rpc.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "tools::db::open_read_only",
+     "path": "crates/celeris-mcp/src/tools/db.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/celeris-mcp/tests/mcp_integration.rs",
+     "target": "celeris-mcp test mcp_integration",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/celeris-mcp/src/tools/db_tests.rs",
+     "target": "celeris-mcp (lib)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-api/tests/relayed_instructions.rs",
+     "target": "task-api test relayed_instructions",
+     "build_link_secs": 84.93,
+     "cost_source": "build_no_run[task-api].secs"
+    }
+   ]
+  },
+  {
+   "id": "web-gateway",
+   "name": "web gateway（API 中継・owner session・origin 判定）",
+   "owners": [
+    {
+     "crate": "web",
+     "module": "server/relay",
+     "path": "web/server/relay.js"
+    },
+    {
+     "crate": "web",
+     "module": "server/auth",
+     "path": "web/server/auth.js"
+    },
+    {
+     "crate": "web",
+     "module": "server/origin",
+     "path": "web/server/origin.js"
+    },
+    {
+     "crate": "web",
+     "module": "server/app",
+     "path": "web/server/app.js"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "credential_sandbox",
+     "text": "daemon の token は gateway → daemon の Authorization にだけ付け、ブラウザの Authorization・Cookie は転送せず、応答に紛れた token は [redacted] にする",
+     "evidence_path": "web/server/relay.js"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "前段経由の https は CELERIS_WEB_PUBLIC_ORIGINS・loopback 接続元・Host 一致のときだけ受ける",
+     "evidence_path": "agent-docs/adr/2026-10-28-web-https-front-pwa.md"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "ts_module",
+     "name": "relay（/api/* → /api/v1/*）",
+     "path": "web/server/relay.js"
+    },
+    {
+     "kind": "ts_module",
+     "name": "createOriginPolicy・parsePublicOrigins",
+     "path": "web/server/origin.js"
+    },
+    {
+     "kind": "ts_module",
+     "name": "auth（owner session）",
+     "path": "web/server/auth.js"
+    }
+   ],
+   "tests": [
+    {
+     "path": "web/server/relay.test.mjs",
+     "target": "web node test (server)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "web/server/auth.test.mjs",
+     "target": "web node test (server)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "web/server/origin.test.mjs",
+     "target": "web node test (server)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    }
+   ]
+  },
+  {
+   "id": "web-spa",
+   "name": "web SPA（API client・route・browser 画面）",
+   "owners": [
+    {
+     "crate": "web",
+     "module": "api/client",
+     "path": "web/api/client.ts"
+    },
+    {
+     "crate": "web",
+     "module": "routeTree",
+     "path": "web/routeTree.gen.ts"
+    },
+    {
+     "crate": "web",
+     "module": "features/browser",
+     "path": "web/features/browser/browser-query.ts"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "other",
+     "text": "画面は daemon の API を通して読み、状態を自分で持たない。route は生成した routeTree.gen.ts を使う",
+     "evidence_path": "agent-docs/adr/0081-web-spa-frontend.md"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "ts_module",
+     "name": "api/client（生成型 api/generated/types.ts）",
+     "path": "web/api/client.ts"
+    },
+    {
+     "kind": "ts_module",
+     "name": "routeTree.gen",
+     "path": "web/routeTree.gen.ts"
+    }
+   ],
+   "tests": [
+    {
+     "path": "web/api/client.test.ts",
+     "target": "web vitest",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "web/test/routes.test.ts",
+     "target": "web vitest",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "web/features/browser/browser-query.test.ts",
+     "target": "web vitest",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    }
+   ]
+  }
+ ],
+ "shared_state": [
+  {
+   "kind": "sqlite_table",
+   "name": "cos_inbox_items",
+   "writers": [
+    {
+     "crate": "task-api",
+     "module": "cos::triage_view",
+     "path": "crates/task-api/src/cos/triage_view.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::triage",
+     "path": "crates/task-core/src/chat/triage.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "chat_client_requests",
+   "writers": [
+    {
+     "crate": "task-api",
+     "module": "chat::attachments",
+     "path": "crates/task-api/src/chat/attachments.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::attachments",
+     "path": "crates/task-core/src/chat/attachments.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "browser_task_policies",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "browser_wait::sql",
+     "path": "crates/task-core/src/browser_wait/sql.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::browser_policy_auto",
+     "path": "crates/task-core/src/store/browser_policy_auto.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "browser（browser_task_policy_set の呼び手）",
+     "path": "crates/task-api/src/browser.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "browser_waits",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "browser_wait::sql",
+     "path": "crates/task-core/src/browser_wait/sql.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::site_policies",
+     "path": "crates/task-core/src/store/site_policies.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "browser_control_state",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "browser_control_ops",
+     "path": "crates/task-core/src/browser_control_ops.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "browser_store",
+     "path": "crates/task-core/src/browser_store.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "browser_site_policies",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::site_policies",
+     "path": "crates/task-core/src/store/site_policies.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "browser_trusted_devices",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::trusted_devices",
+     "path": "crates/task-core/src/store/trusted_devices.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "review_resync_resumed",
+   "writers": [
+    {
+     "crate": "task-api",
+     "module": "handlers::task_actions",
+     "path": "crates/task-api/src/handlers/task_actions.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_spawn",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "workspace_pruned",
+   "writers": [
+    {
+     "crate": "celerisctl",
+     "module": "commands::workspace",
+     "path": "crates/celerisctl/src/commands/workspace.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::housekeeping",
+     "path": "crates/task-dispatch/src/dispatcher/housekeeping.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "<out>/summary.json（campaign・long-horizon・decision log export）",
+   "writers": [
+    {
+     "crate": "celeris-campaign",
+     "module": "runner",
+     "path": "crates/campaign/src/runner.rs"
+    },
+    {
+     "crate": "celeris-campaign",
+     "module": "long_horizon",
+     "path": "crates/campaign/src/long_horizon.rs"
+    },
+    {
+     "crate": "celerisctl",
+     "module": "commands::campaign",
+     "path": "crates/celerisctl/src/commands/campaign.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "<out>/final-accounting.json",
+   "writers": [
+    {
+     "crate": "celeris-campaign",
+     "module": "export",
+     "path": "crates/campaign/src/export.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "global-ledger.jsonl",
+   "writers": [
+    {
+     "crate": "celeris-campaign",
+     "module": "global_ledger",
+     "path": "crates/campaign/src/global_ledger.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "human-ops.jsonl",
+   "writers": [
+    {
+     "crate": "celeris-campaign",
+     "module": "human_ops",
+     "path": "crates/campaign/src/human_ops.rs"
+    }
+   ]
+  }
+ ],
+ "arch_map_diffs": [
+  {
+   "arch_map_line": 128,
+   "kind": "wrong_path",
+   "observed": "path 欄が glob の `crates/task-api/src/handlers/*.rs` で、実在の path として検査できない（実体は handlers/ の 17 file）"
+  },
+  {
+   "arch_map_line": 127,
+   "kind": "missing_row",
+   "observed": "token 主体（Principal: human/operator/mcp/cos/Unauthenticated、[[api.tokens]]、require_admin）を持つ crates/task-api/src/{principal,middleware}.rs の行が無い。ADR 2026-10-27-api-principals も地図のどこからも参照されていない"
+  },
+  {
+   "arch_map_line": 135,
+   "kind": "missing_invariant",
+   "observed": "task-api の chat::attachments（chat_client_requests）と cos::triage_view（cos_inbox_items の UPDATE）が task-core の store を通らず SQL を直接書く。行の不変条件はこの書き手の重複に触れていない"
+  },
+  {
+   "arch_map_line": 165,
+   "kind": "missing_invariant",
+   "observed": "celeris-mcp の DB を open_read_only で開く不変条件（ADR 2026-10-23-mcp-read-only-db-and-api、crates/celeris-mcp/src/tools/db.rs）が無い。owner も rpc.rs だけ"
+  },
+  {
+   "arch_map_line": 162,
+   "kind": "missing_invariant",
+   "observed": "celerisctl の workspace prune が workspace_pruned event を追記する（dispatcher の housekeeping と同じ event の 2 つ目の書き手）ことが書かれていない"
+  },
+  {
+   "arch_map_line": 133,
+   "kind": "missing_row",
+   "observed": "campaign の lock（lock_exec・lock_tree・env_lock）・global_ledger・final_accounting の行が無い。lock・予算の不変条件（ADR 2026-10-17-campaign-lock、2026-10-16-campaign-budget-cap）も地図に無い"
+  },
+  {
+   "arch_map_line": 133,
+   "kind": "missing_row",
+   "observed": "crates/jev-classifier と celeris::daemon::classify_tick（ADR 2026-10-15-mlsys-min-decision-assisted）の行が無い"
+  },
+  {
+   "arch_map_line": 94,
+   "kind": "missing_test",
+   "observed": "crates/task-worker/tests/browser_egress_process.rs が関連試験に無い"
+  },
+  {
+   "arch_map_line": 97,
+   "kind": "missing_test",
+   "observed": "crates/task-worker/tests/browser_prod_admission.rs と crates/task-worker/src/browser_launcher_run.rs（launcher 経路の run 側）が無い"
+  },
+  {
+   "arch_map_line": 134,
+   "kind": "missing_test",
+   "observed": "crates/task-api/tests/browser_live_cross.rs が関連試験に無い（31 行目にだけある）"
+  },
+  {
+   "arch_map_line": 181,
+   "kind": "missing_row",
+   "observed": "web gateway の API 中継 web/server/relay.js（token の付与・redact・path 検査）と SPA の API client web/api/client.ts の行が無い"
+  }
+ ]
+}

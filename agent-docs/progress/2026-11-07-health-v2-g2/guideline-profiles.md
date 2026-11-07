@@ -1,13 +1,12 @@
 ---
 title: 健全性v2 G2 profiles — profile の [review] 節
 tasks: [01M6VCXJCXEPBQCR5PNR195JCH]
-status: done
+status: blocked
 updated: 2026-11-07
-completed: 2026-11-07
 ---
 # 健全性v2 G2 profiles — profile の [review] 節
 
-完了日: 2026-11-07
+完了日: 未。実装と人の承認（受け入れ条件 3）は済んだが、必須の repo 検査 `test-affected.sh` が `policy.changed` で落ち、人の決定を待つ（下の「未解決」）。
 
 unit `profiles`（G2 の工程 write「汎用規約本文と Celeris profile の [review] 節を書く」の子）。[ADR 2026-11-07 健全性を設計と review に組み込む](../../adr/2026-11-07-health-review-integration.md) の D2.1・D2.2・D6.6 に従う。基準は `git merge-base HEAD main`。policy の file だけの branch（D6.1）で、受け入れには人の承認（`{"type":"human"}`）が要る。`--print-review-policy` は作っていない（U2 の別の範囲）。
 
@@ -24,9 +23,16 @@ unit `profiles`（G2 の工程 write「汎用規約本文と Celeris profile の
 - `python3 -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → 62 件 OK、exit 0
 - `bash scripts/dev/check-health.sh` → exit 1。report の要点: verdict fail、`fail_grade=1 new=1 worsened=0 existing=716`。fail の rule は `policy.changed` だけで、変わった policy の file は `health/profile.py`・`profiles/celeris.toml`・`profiles/default.toml` の 3 件。ほかの必須 rule（arch-map.*・doc.links・adr.numbers・progress.index・human-text・source-size）は pass。
 - `bash scripts/dev/test-affected.sh` → exit 1。最初に `check-health.sh` を呼び、同じ `policy.changed` で止まる（`--list` の対象 crate は 0 件）。
-- Python と TOML だけの変更なので cargo の clippy・fmt は走らせていない。
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0（Python と TOML だけの変更で、Rust は変えていない）。
+- 試算（2 回目の run）: main の tree にこの branch の `health/profile.py`・`profiles/celeris.toml`・`profiles/default.toml`・`scripts/tests/test_repo_health_review_policy.py` を重ねた仮の commit（`git commit-tree` で作り、ref は作っていない）を base にして `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base <仮の commit> --head worktree --policy-version 1` → exit 0、verdict pass、`policy.changed` は pass（fail_grade=0）。policy の commit が main に入れば、この branch の検査は `policy.changed` で落ちなくなる。
+- 試算の続き: 同じ仮の commit を detach した一時の worktree（検査後に削除）で、`python3 -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → 62 件 OK、`bash scripts/dev/check-health.sh --base <仮の commit>` → exit 0（fail_grade=0）。main にこの 4 file だけを入れても main の検査は通る。
 
 ## 未解決
+- 必須の repo 検査が通らない（2 回目の run で確認）。`.config/celeris/workspace.toml` の `[commands].check` は `bash scripts/dev/test-affected.sh` を必須にし、その最初の `check-health.sh` は policy の file を変えた branch で必ず exit 1 になる。1 回目の review は受け入れ条件 0〜3 と clippy・fmt が合格で、この検査だけが不合格だった。main は 1 回目から進んでおらず、取り込む commit は無い。
+  - 必須検査の結果は候補の SHA に束ねて記録され、配送の前に照合される（`crates/task-core/src/required_checks.rs`）。人の承認でこの検査を外す仕組みは無い。
+  - ADR D6.6 は「U2 の最初の branch は人の承認で通す」と書くが、必須検査はそのまま残る。D6.2 を入れても、この branch の差分には試験 1 件・進捗・親 task の ADR と survey（`agent-docs/`）が入るので、「変更 path が全部 policy の file」の条件を満たさない。
+  - さらにこの branch は親 task の branch に入る。ADR の U 分けでは G2 の根の branch に Rust の変更（U3〜U6）と policy の file の変更（U2）が両方入る予定なので、根を main へ配送するときにも同じ検査で落ちる見込み（D6.1 の policy_mixed。未確認）。
+  - 人に決定 `policy-branch-required-check` を出した（推奨: 人が件名「G2 profiles: profile の [review] 節と検査」と「G2 profiles: 試験の仮の地図 path を doc-links に当たらない名前にする」の 2 commit を main に手で入れる。進捗の commit は入れない（main にまだ無い親の ADR に link している）。次の run で main を取り込めば policy の file の差分が消え、`check-health.sh` は `policy.changed` を出さなくなる。上の「試算」で確かめた）。
 - `git merge-base HEAD main` から HEAD の差分には、親 task の ADR と survey（`agent-docs/` の 3 file）も入る。親がまだ main に入っていないため。
 - D6.2 の「変更 path が全部 policy の file」の条件では、`scripts/tests/test_repo_health_review_policy.py` とこの進捗は policy の file に入らない。U2 で `check-health.sh` に D6.2 を入れるとき、試験と進捗を policy の branch に含めてよいかを決める必要がある。
 

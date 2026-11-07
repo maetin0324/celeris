@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -269,6 +270,40 @@ def _metrics(snap: Snapshot, ctx: Context) -> dict:
     }
 
 
+def count_metric(tree: Tree | None, spec: dict) -> int | None:
+    """profile の構造指標 1 つを数える。file が無ければ None。"""
+    if tree is None:
+        return None
+    text = tree.read_text(spec["path"])
+    if text is None:
+        return None
+    item = re.compile(spec["item"])
+    start = re.compile(spec["start"]) if "start" in spec else None
+    end = re.compile(spec["end"]) if "end" in spec else None
+    inside = start is None
+    n = 0
+    for line in text.splitlines():
+        if not inside:
+            inside = bool(start.search(line))
+            continue
+        if end is not None and start is not None and end.search(line):
+            break
+        if item.search(line):
+            n += 1
+    return n
+
+
+def _structural(snap: Snapshot, profile: Profile) -> dict:
+    out = {}
+    for name, spec in sorted(profile.metrics.items()):
+        entry = {"path": spec["path"], "base": count_metric(snap.base_tree, spec),
+                 "head": count_metric(snap.head_tree, spec)}
+        if "source" in spec:
+            entry["source"] = spec["source"]
+        out[name] = entry
+    return out
+
+
 def _summary(rules: list[dict], findings: list[dict], snap: Snapshot) -> dict:
     required = [r for r in rules if r["required"]]
     if any(r["status"] in ("error", "unknown", "unsupported") for r in required):
@@ -342,6 +377,8 @@ def build_report(snap: Snapshot, profile: Profile | None, policy_version: str, r
             rules_out.append(_rule_entry(rid, required, status, reason, rule))
             findings.extend(fs)
         metrics = _metrics(snap, Context(snap, profile, {}, changed, changed_lines, policy_files, classifier, mode))
+        if profile.metrics:
+            metrics["structural"] = _structural(snap, profile)
     findings.sort(key=lambda f: f["fingerprint"])
     report = {
         "schema": "celeris.repo-health.report/1",

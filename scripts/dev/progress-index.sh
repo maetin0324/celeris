@@ -9,24 +9,39 @@
 #                                             commit hash らしい hex（7〜40 桁、数字と a-f を両方含む）が
 #                                             main 側の commit（merge-base の祖先）でなければ「path:行: 理由」で失敗
 #                                             （agent-docs/adr/2026-10-23-commit-refs-by-subject.md）
+#   --check --base <sha>                      基準を明示する（repo_health.py が渡す）。無ければ
+#                                             repo_health.py --print-base（git merge-base HEAD main）を使う
+#   先頭に --root <dir> を付けると、その dir を repo の root として扱う（既定は .）
 #
 # agent-docs/progress/ が無ければ何も出さずに exit 0。旧ファイル（phase-*.md など）は --check の対象外。
 set -u
 
 DIR=agent-docs/progress
 
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
-    echo "progress-index: not in a git repository" >&2
-    exit 2
-}
+# root は呼び出し側が決める（repo_health.py の snapshot が --root で渡す。単独で走らせるときは repo の root で
+# 実行し、既定の . を使う）。この script は root を自分で探さない（ADR 2026-11-07-repo-health-celeris-profile D1）。
+ROOT=.
+if [ "${1:-}" = --root ]; then
+    [ $# -ge 2 ] || { echo "progress-index: --root に dir が無い" >&2; exit 2; }
+    ROOT=$2
+    shift 2
+fi
+ROOT=$(cd "$ROOT" 2>/dev/null && pwd) || { echo "progress-index: --root の dir に入れない" >&2; exit 2; }
 cd "$ROOT" || exit 2
 
 mode=list
+BASE=""
 case "${1:-}" in
     "") ;;
-    --check) mode=check ;;
+    --check)
+        mode=check
+        if [ "${2:-}" = --base ]; then
+            BASE=${3:-}
+            [ -n "$BASE" ] || { echo "progress-index: --base に commit が無い" >&2; exit 2; }
+        fi
+        ;;
     *)
-        echo "usage: sh scripts/dev/progress-index.sh [--check]" >&2
+        echo "usage: sh scripts/dev/progress-index.sh [--root <dir>] [--check [--base <sha>]]" >&2
         exit 2
         ;;
 esac
@@ -68,7 +83,11 @@ hex_words() {
 # main が無い（release bundle など）ときは検査しない。
 check_commit_hashes() {
     git rev-parse -q --verify 'main^{commit}' >/dev/null || return 0
-    mb=$(git merge-base HEAD main) || return 0
+    if [ -n "$BASE" ]; then
+        mb=$BASE
+    else
+        mb=$(python3 scripts/dev/repo-health/repo_health.py --repo . --print-base) || return 0
+    fi
     {
         git diff --name-only "$mb" -- "$DIR"
         git ls-files --others --exclude-standard -- "$DIR"

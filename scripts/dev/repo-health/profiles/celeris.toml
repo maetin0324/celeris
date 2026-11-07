@@ -2,9 +2,53 @@
 #
 # Celeris 固有の所在・名前・上限はこの file にだけ書く。検査器のコードは repo 名・案件名で分岐しない。
 # 項目の正本は health/profile.py の docstring。この file は policy の file で、評価には base 側の内容を使う。
-# rules-archmap WorkUnit が [arch_map] と arch-map.* を置いた。他の項目は celeris-profile WorkUnit が足す。
+# 入口は scripts/dev/check-health.sh（repo_health.py --base auto --head worktree --profile default）。
 version = "1"
 description = "celeris: agent-platform（Celeris）の repo profile"
+
+# policy とみなす path。検査器・profile と、包んだ既存検査の script・baseline・地図の対照・source-size の分類。
+# head がこれを変えれば policy.changed（必須）が fail になり、別の review に回す。
+policy_paths = [
+    '^scripts/dev/repo-health/',
+    '^scripts/dev/check-health\.sh$',
+    '^scripts/dev/(check-source-size|check-architecture-map|check-human-text)\.py$',
+    '^scripts/dev/source-size-report\.(py|toml)$',
+    '^scripts/dev/source-size-baseline\.json$',
+    '^scripts/dev/(check-doc-links|check-adr-numbers|progress-index)\.sh$',
+    '^scripts/dev/(adr-allowed-duplicates\.txt|human-text-lint\.allow)$',
+    '^agent-docs/progress/2026-11-07-health-v2-b0/capability-map\.json$',
+]
+
+# crates.io の deno_core の写し（ADR 2026-11-02-deno-core-vendored-serde-json-features）。この repo の設計の対象でない。
+exclude_paths = ['^crates/script-runtime/vendor/']
+
+[doc_only]
+# 変更が全部これに当たれば doc-only（構造 rule と source-size は not_applicable、cargo を起こさない）。
+paths = ['\.md$', '^docs/', '^agent-docs/']
+
+[adapters]
+enabled = ["rust", "python", "shell", "typescript", "markdown"]
+
+# 構造指標（report の metrics.structural。判定には使わない）。数え方は健全性v2 B0 の slices.json の
+# structural_metrics の command と同じ（grep・awk の式を正規表現にしたもの）。
+[metrics.task_store_fn_decls]
+path = "crates/task-core/src/store/task_store.rs"
+item = '^    fn '
+source = "agent-docs/progress/2026-11-07-health-v2-b0/slices.json#structural_metrics.task_store_fn_decls"
+
+[metrics.task_store_supertraits]
+path = "crates/task-core/src/store/task_store.rs"
+start = '^pub trait TaskStore:'
+end = '^\{'
+item = '\+ crate::'
+source = "agent-docs/progress/2026-11-07-health-v2-b0/slices.json#structural_metrics.task_store_supertraits"
+
+[metrics.dispatcher_fields]
+path = "crates/task-dispatch/src/dispatcher.rs"
+start = '^pub struct Dispatcher *\{'
+end = '^\}'
+item = '^    [a-z_0-9]+:'
+source = "agent-docs/progress/2026-11-07-health-v2-b0/slices.json#structural_metrics.dispatcher_fields"
 
 [arch_map]
 # 地図。scripts/dev/check-architecture-map.py の既定の検査と同じ file。
@@ -29,3 +73,91 @@ required = true
 
 [rules."arch-map.wrong_path"]
 required = true
+
+# ---------------------------------------------------------------- 構造 rule
+
+# crate の層と許可する依存の向き（Cargo.toml の [dependencies] の向きに合わせた。下の層ほど依存が少ない）。
+# 層の外の path（scripts/・web/ など）の辺は見ない。
+[[rules."deps.violation".layers]]
+name = "core"
+paths = ['^crates/task-core/', '^crates/jev-classifier/', '^crates/script-runtime/']
+allow = []
+
+[[rules."deps.violation".layers]]
+name = "services"
+paths = ['^crates/task-ops/', '^crates/celeris-credentiald/', '^crates/routing-eval/']
+allow = ["core"]
+
+[[rules."deps.violation".layers]]
+name = "runtime"
+paths = ['^crates/task-worker/']
+allow = ["core", "services"]
+
+[[rules."deps.violation".layers]]
+name = "control"
+paths = ['^crates/task-dispatch/']
+allow = ["core", "services", "runtime"]
+
+[[rules."deps.violation".layers]]
+name = "edge"
+paths = ['^crates/task-api/', '^crates/celeris-mcp/', '^crates/llm-proxy/']
+allow = ["core", "services", "runtime", "control"]
+
+[[rules."deps.violation".layers]]
+name = "bin"
+paths = ['^crates/celeris/', '^crates/celerisctl/', '^crates/campaign/']
+allow = ["core", "services", "runtime", "control", "edge"]
+
+# 巨大責務の上限。TaskStore（crates/task-core/src/store/task_store.rs）と Dispatcher
+# （crates/task-dispatch/src/dispatcher.rs）は base で上限を超えている既存負債（B0: fn 宣言 193・field 115）で、
+# 増えれば worsened として fail になる。file_lines は source-size の production 閾値（source-size-report.toml）に合わせる。
+[rules."size.responsibility-growth"]
+file_lines = 2000
+module_lines = 8000
+type_methods = 60
+type_fields = 40
+fn_lines = 200
+
+# ---------------------------------------------------------------- 候補 rule の例外
+
+[[rules."link.unlinked".exceptions]]
+path = '^scripts/dev/repo-health/rules/'
+reason = "rule の module は engine が rules/ の dir から名前順に読む（health/rule.py）。名前で参照されないのは仕様"
+
+[[rules."migration.remnant".exceptions]]
+path = '^scripts/dev/repo-health/rules/migration_remnant\.py$'
+reason = "移行残骸の語彙を定義する rule 自身。語彙の定義を残骸として拾う"
+
+# ---------------------------------------------------------------- 既存検査の包み（rules/existing_checks.py）
+# {root} は head の tree、{base} は snapshot の base（--base auto なら git merge-base HEAD main）。
+# 各 script の自己試験も同じ rule の command に並べる（検査器が壊れていれば同じ rule が落ちる）。
+
+[rules."doc.links"]
+commands = [
+    ["sh", "scripts/dev/check-doc-links.sh", "--root", "{root}"],
+    ["sh", "scripts/dev/check-doc-links.sh", "--root", "{root}", "--self-test"],
+]
+
+[rules."adr.numbers"]
+commands = [["sh", "scripts/dev/check-adr-numbers.sh", "--root", "{root}"]]
+
+[rules."progress.index"]
+commands = [
+    ["sh", "scripts/dev/progress-index.sh", "--root", "{root}", "--check", "--base", "{base}"],
+    ["sh", "scripts/dev/tests/progress_index_commit_hashes.sh"],
+]
+
+[rules."human-text"]
+commands = [
+    ["python3", "scripts/dev/check-human-text.py", "--root", "{root}"],
+    ["python3", "scripts/dev/check-human-text.py", "--root", "{root}", "--self-test"],
+]
+
+# source-size の閾値と例外は scripts/dev/source-size-report.toml、凍結した baseline は
+# scripts/dev/source-size-baseline.json（ADR-0083。検査は書き換えない）。
+[rules."source-size"]
+commands = [
+    ["python3", "scripts/dev/check-source-size.py", "--root", "{root}", "--base", "{base}",
+     "--baseline", "scripts/dev/source-size-baseline.json"],
+    ["python3", "-m", "unittest", "discover", "-s", "scripts/tests", "-p", "test_source_size*.py"],
+]

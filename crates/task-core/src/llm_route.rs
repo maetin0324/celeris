@@ -443,6 +443,8 @@ pub struct QuotaSnapshot {
     pub cooling_down: BTreeSet<(SourceId, AccountId)>,
     /// 認証失敗で除外された account（quota 枯渇とは別の理由で残す）。
     pub auth_failed: BTreeSet<(SourceId, AccountId)>,
+    /// CoS の 5 時間枠の予約に入っていて、この要求（worker）が使えない account（`CosReservation`）。
+    pub cos_reserved: BTreeSet<(SourceId, AccountId)>,
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReservationSnapshot {
@@ -481,6 +483,10 @@ pub fn admit_source(
         }
         if quota.auth_failed.contains(&key) {
             reasons.push(ExclusionReason::AuthFailed);
+            continue;
+        }
+        if quota.cos_reserved.contains(&key) {
+            reasons.push(ExclusionReason::CosReservation);
             continue;
         }
         if quota

@@ -244,6 +244,53 @@ async fn cooldown_does_not_wait() {
     assert_eq!(runs(&store, &t).len(), 1, "no retry run");
 }
 
+/// Claude 予約（CosReservation）で候補が除外された CoS run は、待たずに route_unavailable で閉じる。
+/// 実経路（tick_cos_chat_launch → select_cos_route_from → route_select）で確かめる。
+#[tokio::test]
+async fn cos_reservation_closes_with_route_unavailable_without_waiting() {
+    let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
+    d.test_cos_reserved_sources.insert("p1".into());
+    let t = thread(&store, "reserved");
+    post(&store, &t, "one");
+    d.tick_cos_chat_launch();
+    let run = run_of(&store, &t);
+    // (a) 実経路の RouteTrace に CosReservation が入る。
+    let input = crate::dispatcher::route_select::RouteInput {
+        task_id: run.id.clone(),
+        harness: task_core::llm_route::HarnessRequest {
+            harness: Some("claude_code".into()),
+            ..Default::default()
+        },
+        cos: true,
+        ..Default::default()
+    };
+    let (outcome, trace) = d.select_route(&input);
+    let failure = outcome.expect_err("reserved");
+    assert!(
+        trace
+            .rejections
+            .iter()
+            .any(|r| r.reason == task_core::llm_route::ExclusionReason::CosReservation),
+        "{:?}",
+        trace.rejections
+    );
+    // (b) 枠のみの待ちではない。
+    assert!(!crate::dispatcher::route_select::slot_only_wait(
+        &failure, &trace
+    ));
+    // (c) 待たずに route_unavailable（起動前の失敗）で閉じる。
+    assert_eq!(run.state, ChatRunState::Failed);
+    assert!(run.launched_at.is_none());
+    assert_eq!(
+        run.prelaunch_reason,
+        Some(ChatPrelaunchReason::RouteUnavailable)
+    );
+    assert_eq!(waiting_notices(&store, &t, &run.id), 0, "not a slot wait");
+    advance(&d, 1);
+    d.tick_cos_chat_launch();
+    assert_eq!(runs(&store, &t).len(), 1, "no retry run");
+}
+
 /// 受け入れ 2: 期限は `started_at + max_wall_secs`。設定を後から延ばしても延びない。到達で
 /// `slot_wait_expired`（起動前）で閉じ、その後に起動もしない。
 #[tokio::test]

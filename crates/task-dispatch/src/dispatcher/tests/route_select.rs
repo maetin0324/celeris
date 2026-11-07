@@ -1225,6 +1225,61 @@ fn route_state_fills_source_remaining_and_headroom_from_the_account_book() {
     assert!((remaining - 0.4).abs() < 1e-6, "remaining {remaining}");
 }
 
+/// `[cos] worker_reserve_five_hour` 以上を使った Claude account は worker に CosReservation で除外され、CoS には効かない。
+#[test]
+fn worker_is_excluded_from_the_cos_five_hour_reserve_but_cos_is_not() {
+    use task_core::{AccountAdapter, RateLimitObservation, RateWindow};
+    let dir = accounts_fixture();
+    let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let mut d = pool_dispatcher(store, done_adapter(), None, dir.path().to_path_buf(), 2, 2);
+    d.set_cos_chat_launch(
+        sqlite,
+        crate::dispatcher::cos_chat::launch::CosChatLaunchConfig {
+            enabled: true,
+            worker_reserve_five_hour: 0.90,
+            harness: "fake".into(),
+            max_turns: 2,
+            max_wall_secs: 30,
+            inline_read_max_commands: 20,
+            unavailable_reason: None,
+            data_dir: dir.path().to_path_buf(),
+            db_path: dir.path().join("celeris.db"),
+            attachment_limits: Default::default(),
+            api_base_url: "http://127.0.0.1:7700/api/v1".into(),
+            web_base_url: None,
+            triage: Default::default(),
+        },
+    );
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let observe = |five_hour: f64| RateLimitObservation {
+        five_hour: Some(RateWindow {
+            utilization: five_hour,
+            resets_at: now + 3_600,
+        }),
+        seven_day: None,
+        one_month: None,
+        status: None,
+        resets_at: None,
+        observed_at: now,
+    };
+    {
+        let book = d.account_book(AccountAdapter::ClaudeCode).expect("book");
+        let mut book = book.lock().unwrap();
+        book.record_observation("a", observe(0.95), crate::accounts::ObservationSource::Run);
+        book.record_observation("b", observe(0.60), crate::accounts::ObservationSource::Run);
+    }
+    let source: SourceId = AccountAdapter::ClaudeCode.as_str().into();
+    let worker = d.route_state(false);
+    assert_eq!(
+        worker.quota.cos_reserved,
+        [(source.clone(), AccountId::from("a"))]
+            .into_iter()
+            .collect()
+    );
+    assert!(d.route_state(true).quota.cos_reserved.is_empty());
+}
+
 /// 付記 S5-3（P1-C、S5 未解決 5）: `route_priority` の canary・ts の TS の候補列（`priority_override`）は、選んだ harness と
 /// 同じ harness の列だけを置き換える。違う harness の列・CoS の選択には効かない。admission（空きの無い source）は上書き後も
 /// fail-closed で次の候補へ進む。
@@ -1359,6 +1414,62 @@ mod slot_wait {
             let (result, trace) = route_select(&cos_input(), &r, &state);
             let failure = result.expect_err(name);
             assert!(!slot_only_wait(&failure, &trace), "{name}: {trace:?}");
+        }
+    }
+
+    /// ADR 2026-11-06-cos-run-launch-accounting-and-drain D2-3: Claude 予約で除外された CoS run は枠待ちにしない。
+    /// (a) RouteTrace に CosReservation が入る (b) slot_only_wait が偽 (c) 全候補が予約なら待たず閉じる
+    /// (d) 枠の理由と予約の理由が混在しても偽。
+    #[test]
+    fn cos_reservation_is_traced_and_never_a_slot_wait() {
+        let r = cos_registry();
+        // 全候補が予約。
+        let mut reserved = full_state(&r);
+        for (s, a) in [
+            ("claude_oauth", "ca"),
+            ("claude_oauth", "cb"),
+            ("codex_oauth", "xa"),
+        ] {
+            reserved.quota.cos_reserved.insert(pair(s, a));
+        }
+        let (result, trace) = route_select(&cos_input(), &r, &reserved);
+        let failure = result.expect_err("every candidate is reserved");
+        assert!(
+            trace
+                .rejections
+                .iter()
+                .any(|x| x.reason == ExclusionReason::CosReservation),
+            "(a) {:?}",
+            trace.rejections
+        );
+        assert!(!slot_only_wait(&failure, &trace), "(b)/(c) {trace:?}");
+        // (d) 1 つの候補は枠（codex は満杯）、もう 1 つは予約（claude の全 account）。
+        let mut mixed = full_state(&r);
+        mixed.quota.cos_reserved.insert(pair("claude_oauth", "ca"));
+        mixed.quota.cos_reserved.insert(pair("claude_oauth", "cb"));
+        let (result, trace) = route_select(&cos_input(), &r, &mixed);
+        let failure = result.expect_err("slot plus reservation");
+        let reasons: Vec<_> = trace.rejections.iter().map(|x| x.reason.clone()).collect();
+        assert!(
+            reasons.contains(&ExclusionReason::CosReservation),
+            "{reasons:?}"
+        );
+        assert!(
+            reasons.contains(&ExclusionReason::AccountConcurrency),
+            "{reasons:?}"
+        );
+        assert!(!slot_only_wait(&failure, &trace), "(d) {reasons:?}");
+        // 予約の account が先に並んでも、枠の account が先に並んでも結果は同じ。
+        for order in [["ca", "cb"], ["cb", "ca"]] {
+            let mut state = full_state(&r);
+            state.accounts.available.insert(
+                "claude_oauth".into(),
+                order.iter().map(|a| (*a).into()).collect(),
+            );
+            state.quota.cos_reserved.insert(pair("claude_oauth", "cb"));
+            let (result, trace) = route_select(&cos_input(), &r, &state);
+            let failure = result.expect_err("full");
+            assert!(!slot_only_wait(&failure, &trace), "{order:?}: {trace:?}");
         }
     }
 

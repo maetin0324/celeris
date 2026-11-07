@@ -758,6 +758,12 @@ impl Dispatcher {
         let registry = Arc::clone(&self.llm_route_registry);
         let now = (self.now_unix_fn)();
         let mut state = RouteState::default();
+        // `[cos] worker_reserve_five_hour`（CoS が有効なときだけ。既定 0.90）。
+        let worker_reserve = self
+            .cos_chat_launch
+            .as_ref()
+            .filter(|launch| launch.config.enabled)
+            .map(|launch| launch.config.worker_reserve_five_hour);
         for entry in self.running.values() {
             if let Some((source, account)) = &entry.route {
                 // A leaf run's admission does not count CoS chat runs (they hold their own slot).
@@ -877,6 +883,19 @@ impl Dispatcher {
                         };
                         let evaluation =
                             evaluate(&candidate, book.state(account.as_ref()), usize::MAX, now);
+                        // ADR 2026-11-06-cos-run-launch-accounting-and-drain: 5 時間枠の使用率が
+                        // `[cos] worker_reserve_five_hour` 以上の Claude account は CoS の予約分で、worker は入れない。
+                        if !cos
+                            && adapter == task_core::AccountAdapter::ClaudeCode
+                            && worker_reserve.is_some_and(|reserve| {
+                                crate::accounts::five_hour_utilization(
+                                    book.state(account.as_ref()),
+                                    now,
+                                ) >= reserve
+                            })
+                        {
+                            state.quota.cos_reserved.insert(key.clone());
+                        }
                         match evaluation.excluded {
                             Some(ExcludedReason::Cooldown) => {
                                 state.quota.cooling_down.insert(key);
@@ -940,6 +959,15 @@ impl Dispatcher {
                     state
                         .account_max_runs
                         .insert(key, u32::try_from(limit).unwrap_or(u32::MAX));
+                }
+            }
+            #[cfg(test)]
+            if self.test_cos_reserved_sources.contains(source_id) {
+                for account in &accounts {
+                    state
+                        .quota
+                        .cos_reserved
+                        .insert((source_id.clone(), account.clone()));
                 }
             }
             if !accounts.is_empty() {

@@ -272,6 +272,14 @@ fn effective_utilization(w: RateWindow, now: i64) -> f64 {
     }
 }
 
+/// 5 時間枠の使用率（0..=1）。観測が無い・窓が過ぎていれば 0（予約の判定では「まだ使っていない」とみなす）。
+pub fn five_hour_utilization(state: Option<&AccountState>, now: i64) -> f64 {
+    state
+        .and_then(|s| s.usage.as_ref())
+        .and_then(|obs| obs.five_hour)
+        .map_or(0.0, |w| effective_utilization(w, now))
+}
+
 /// アカウントの残量（0..=1）: 観測できた窓のうち最も逼迫した窓の残り割合（`1 - 実効使用率` の最小）。
 /// 観測が無ければ 1.0（まだ何も使っていないとみなす。値の捏造ではなく「観測なし」の既定）。
 /// source の `QuotaSnapshot.source_remaining` の元（ADR 2026-10-22 D1）。

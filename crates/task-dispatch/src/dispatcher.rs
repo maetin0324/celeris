@@ -1188,6 +1188,9 @@ pub struct Dispatcher {
     target_sweep_scope: crate::target_sweep::SweepScope,
     #[cfg(test)]
     test_now: Option<Arc<StdMutex<OffsetDateTime>>>,
+    /// 試験専用: この source の全 account を Claude 予約（`CosReservation`）として扱う（CoS の経路でも再現する）。
+    #[cfg(test)]
+    test_cos_reserved_sources: std::collections::BTreeSet<task_core::llm_route::SourceId>,
     /// 試験専用: WU の遷移を書いた直後に run の終了処理を打ち切る（その後の event が書かれる前の kill を再現）。
     #[cfg(test)]
     test_halt_after_wu_transition: bool,
@@ -1578,6 +1581,8 @@ impl Dispatcher {
             target_sweep_scope: crate::target_sweep::SweepScope::default(),
             #[cfg(test)]
             test_now: None,
+            #[cfg(test)]
+            test_cos_reserved_sources: Default::default(),
             #[cfg(test)]
             test_halt_after_wu_transition: false,
             #[cfg(test)]

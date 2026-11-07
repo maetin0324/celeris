@@ -44,6 +44,7 @@ completed: 2026-11-07
 - 文書と JSON だけの変更なので、test-affected・clippy・fmt は対象の crate が無い（未実行）。
 
 ## 未解決
+- assemble の WU check と task の受け入れ条件 0 が `tests` の形で食い違う。WU check は `t['path']`・`t['build_link_secs']` を読む（要素は object）。task 条件 0 は `os.path.exists(t)` を読む（要素は path 文字列）。両方を満たす JSON は無い。統合 JSON は task 条件に合わせて `tests` を path 文字列にし、費用は `test_costs`（path・build_link_secs）に置いた。WU check を `test_costs` を読む形に直すよう plan_issue で申告した（2026-11-07、attempt 1）。
 - 試験コストが未計測の試験が 56 件ある。段 1 で build を測ったのは task-core・task-dispatch・task-api・
   task-worker・celeris の 5 crate だけで、task-ops・llm-proxy・campaign・script-runtime・celerisctl・web・
   control-ts は測っていない。

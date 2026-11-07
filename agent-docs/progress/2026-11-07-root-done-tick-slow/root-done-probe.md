@@ -91,8 +91,8 @@ delivery の head の tree の進捗ファイルは 1,564〜1,584 件で、こ�
   - "slow root-done row" の警告の task・state で、どの root が待ちの状態に残っているかが分かる。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-提出時の HEAD は commit「root-done-probe: 計測の code を crate 直下の module へ移す（repo health の巨大 module を増やさない）」（main の取り込み・rebase はしていない）。
-- `bash scripts/dev/test-affected.sh` → exit 0。repo-health は verdict=pass・worsened 0。nextest は 7,846 件 passed・23 件 skipped。web unit は 104 file・711 件 passed。test-ts-verify は 20 passed。
+Run #2 で、commit「root-done-probe: 検査の結果を進捗に書く」の時点の HEAD で全部を再実行した（main は動いておらず、取り込み・rebase はしていない）。その後の commit はこの進捗ファイルだけを変える。
+- `bash scripts/dev/test-affected.sh` → exit 0。repo-health は verdict=pass・worsened 0。nextest は 7,846 件 passed・23 件 skipped（321 秒）。web unit は 104 file・711 件 passed。test-ts-verify は 20 passed。
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 - `sh scripts/dev/progress-index.sh --check` → ok
